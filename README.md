@@ -97,44 +97,6 @@ It is the default manager, and can be set with the values `dpdk` or `default`.
 
 Use the `examples/daqiri_bench_*.yaml` configs to build and run the sample applications with DPDK (default).
 
-#### DOCA GPUNetIO
-
-NVIDIA DOCA brings together a wide range of powerful APIs, libraries, and frameworks for programming and accelerating modern data center infrastructures​. [DOCA GPUNetIO](https://docs.nvidia.com/doca/sdk/doca+gpunetio/index.html) is one of the libraries included in the DOCA SDK. It enables the GPU to control, from a CUDA kernel, network communications directly interacting with the network card and completely removing the CPU from the critical data path.
-
-If the application wants to enable GPU communications, it must chose `gpunetio` as backend. The behavior of the GPUNetIO backend is similar to the DPDK one except that the receive and send are executed by CUDA kernels. Specifically:
-
-- Receive: a persistent CUDA kernel is running on a dedicated stream and keeps receiving packets, providing packets' info to the application level. Due to the nature of the operator, the CUDA receiver kernel now is responsible only to receive packets but in a real-world application, it can be extended to receive and process in real-time network packets (DPI, filtering, decrypting, byte modification, etc..) before forwarding packets to the application.
-- Send: every time the application wants to send packets it launches one or more CUDA kernels to prepare data and create Ethernet packets and then (without the need of synchronizing) forward the send request to the operator. The operator then launches another CUDA kernel that in turn sends the packets (still no need to synchronize with the CPU). The whole pipeline is executed on the GPU. Due to the nature of the operator, the packets' creation and packets' send must be split in two CUDA kernels but in a real-word application, they can be merged into a single CUDA kernel responsible for both packet processing and packet sending.
-
-Please refer to the [DOCA GPUNetIO](https://docs.nvidia.com/doca/sdk/doca+gpunetio/index.html) programming guide to correctly configure your system before using this transport layer.
-
-The GPUNetIO manager does not support the `split-boundary` option.
-
-Use the `examples/daqiri_bench_*.yaml` configs to build and run the sample applications with DOCA GPUNetIO support.
-
-##### RIVERMAX
-
-NVIDIA Rivermax SDK
-Optimized networking SDK for media and data streaming applications.
-NVIDIA® Rivermax® offers a unique IP-based solution for any media and data streaming use case.
-Rivermax together with NVIDIA GPU accelerated computing technologies unlocks innovation for a wide range of applications in Media and Entertainment (M&E), Broadcast, Healthcare, Smart Cities and more.
-Rivermax leverages NVIDIA ConnectX® and BlueField® DPU hardware-streaming acceleration technology that enables direct data transfers to and from the GPU,
-delivering best-in-class throughput and latency with minimal CPU utilization for streaming workloads.
-Rivermax is the only fully-virtualized streaming solution that complies with the stringent timing and traffic flow requirements of the SMPTE ST 2110-21 specification.
-Rivermax enables the future of cloud-based software-defined broadcasting.
-Product release highlights, documentation, platform support, installation and usage guides can be found in the [Rivermax SDK Page](https://developer.nvidia.com/networking/rivermax-getting-started).
-Frequently asked questions, customers product highlights, Video link and more are available on the [Rivermax Product Page](https://developer.nvidia.com/networking/rivermax).
-
-To build and run the Dockerfile with `Rivermax` support, follow these steps:
-
-- Visit the [Rivermax SDK Page](https://developer.nvidia.com/networking/rivermax-getting-started) to download the Rivermax Release SDK.
-- Obtain a Rivermax developer license from the same page. This is necessary for using the SDK.
-- Copy the downloaded SDK tar file (e.g., `rivermax_ubuntu2404_1.70.32.tar.gz`) into your current working directory.
-  - You can adjust the path using the `RIVERMAX_SDK_ZIP_PATH` build argument if needed.
-  - Modify the version using the `RIVERMAX_VERSION` build argument if you're using a different SDK version.
-- Place the obtained Rivermax developer license file (`rivermax.lic`) into the `/opt/mellanox/rivermax/` directory.
-- Build the operator and sample application with Rivermax support using the `examples/daqiri_bench_*.yaml` configs.
-
 #### Configuration Parameters
 
 ##### Common Configuration
