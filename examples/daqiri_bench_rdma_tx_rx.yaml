@@ -1,0 +1,85 @@
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    manager: "rdma"
+    master_core: 3
+    debug: false
+    log_level: "info"
+
+    memory_regions:
+    - name: "DATA_RX_GPU_SERVER"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 20
+      buf_size: 9000000
+    - name: "DATA_TX_GPU_SERVER"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 20
+      buf_size: 9000000
+    - name: "DATA_TX_GPU_CLIENT"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 20
+      buf_size: 90000000
+    - name: "DATA_RX_GPU_CLIENT"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 20
+      buf_size: 90000000
+
+    interfaces:
+    - name: my_client
+      rdma_config:
+        mode: client
+        transport_mode: RC
+      address: 10.100.1.1
+      tx:
+        queues:
+        - name: "Client_TX_Queue"
+          id: 0
+          batch_size: 1
+          cpu_core: 7
+      rx:
+        queues:
+        - name: "Client_RX_Queue"
+          id: 0
+          cpu_core: 7
+          batch_size: 1
+    - name: my_server
+      rdma_config:
+        mode: server
+        transport_mode: RC
+        port: 4096
+      address: 10.100.3.1
+      rx:
+        queues:
+        - name: "Server_RX_Queue"
+          id: 0
+          cpu_core: 8
+          batch_size: 1
+      tx:
+        queues:
+        - name: "Server_TX_Queue"
+          id: 0
+          cpu_core: 8
+          batch_size: 1
+
+rdma_bench_server:
+  server_address: 10.100.3.1
+  server_port: 4096
+  message_size: 8000000
+  send: true
+  receive: true
+  server: true
+
+rdma_bench_client:
+  message_size: 8000000
+  client_address: 
+  server_address: 10.100.3.1
+  server_port: 4096
+  receive: true
+  send: true
+  server: false

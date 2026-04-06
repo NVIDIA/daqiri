@@ -1,0 +1,67 @@
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    manager: "dpdk"
+    master_core: 3
+    debug: false
+    log_level: "info"
+    loopback: "sw"
+
+    memory_regions:
+    - name: "Data_TX_GPU"
+      kind: "device"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 1064
+    - name: "Data_RX_GPU"
+      kind: "device"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 1064
+
+    interfaces:
+    - name: "loopback_ports"
+      address: "loopback"
+      tx:
+        queues:
+        - name: "tx_q_0"
+          id: 0
+          batch_size: 10240
+          cpu_core: 11
+          timeout_us: 1000
+          memory_regions:
+            - "Data_TX_GPU"
+          offloads:
+            - "tx_eth_src"
+      rx:
+        queues:
+        - name: "rq_q_0"
+          id: 0
+          cpu_core: 9
+          timeout_us: 1000
+          batch_size: 10240
+          memory_regions:
+            - "Data_RX_GPU"
+
+bench_rx:
+  interface_name: "loopback_ports"
+  gpu_direct: true
+  split_boundary: false
+  batch_size: 10240
+  max_packet_size: 1064
+  header_size: 64
+
+bench_tx:
+  interface_name: "loopback_ports"
+  gpu_direct: true
+  split_boundary: false
+  batch_size: 10240
+  payload_size: 1000
+  header_size: 64
+  eth_dst_addr: 00:00:00:00:00:00
+  ip_src_addr: 000.000.000.0
+  ip_dst_addr: 000.000.000.0
+  udp_src_port: 4096
+  udp_dst_port: 4096
