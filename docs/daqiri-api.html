@@ -1,0 +1,958 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>API Guide — DAQIRI</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --nv-green:    #76b900;
+      --nv-green-d:  #5a8f00;
+      --nv-green-l:  #a0d000;
+      --bg-dark:     #0a0a0a;
+      --bg-card:     #111111;
+      --bg-card2:    #161616;
+      --border:      #222222;
+      --text-primary:#f0f0f0;
+      --text-muted:  #888888;
+      --text-dim:    #555555;
+      --font-sans:   'Inter', 'Segoe UI', sans-serif;
+      --font-mono:   'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+      --radius:      8px;
+      --transition:  0.2s ease;
+      --nav-h:       64px;
+      --sidebar-w:   260px;
+    }
+
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg-dark);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      font-size: 16px;
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
+    h2 { font-size: clamp(1.5rem, 2.5vw, 2rem); }
+    h3 { font-size: 1.2rem; }
+    h4 { font-size: 0.95rem; font-weight: 600; }
+    p  { color: var(--text-muted); line-height: 1.7; }
+    a  { color: var(--nv-green); text-decoration: none; transition: color var(--transition); }
+    a:hover { color: var(--nv-green-l); }
+    code {
+      font-family: var(--font-mono);
+      font-size: 0.85em;
+      background: #1a1a1a;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 2px 6px;
+      color: var(--nv-green-l);
+    }
+    pre {
+      background: #0d0d0d;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.25rem 1.5rem;
+      overflow-x: auto;
+      font-family: var(--font-mono);
+      font-size: 0.82rem;
+      line-height: 1.65;
+      color: #ccc;
+    }
+    pre .kw  { color: #c792ea; }
+    pre .fn  { color: #82aaff; }
+    pre .str { color: #c3e88d; }
+    pre .cm  { color: #546e7a; font-style: italic; }
+    pre .nm  { color: var(--nv-green-l); }
+    pre .tp  { color: #ffcb6b; }
+
+    /* ─── NAVBAR ─────────────────────────────────────────────── */
+    #navbar {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
+      height: var(--nav-h);
+      display: flex; align-items: center;
+      background: rgba(10,10,10,0.95);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+      box-shadow: 0 4px 40px rgba(0,0,0,0.5);
+    }
+    .nav-inner {
+      width: 100%; max-width: 100%; padding: 0 2rem;
+      display: flex; align-items: center; gap: 2rem;
+    }
+    .nav-logo {
+      display: flex; align-items: center; gap: 0.75rem; flex-shrink: 0;
+      text-decoration: none;
+    }
+    .nav-logo-icon {
+      width: 32px; height: 32px;
+      background: var(--nv-green); border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 900; font-size: 0.8rem; color: #000; letter-spacing: -0.05em;
+    }
+    .nav-logo-text { font-weight: 800; font-size: 1.1rem; color: var(--text-primary); letter-spacing: 0.05em; }
+    .nav-logo-badge {
+      font-size: 0.65rem; font-weight: 700; padding: 2px 6px;
+      background: rgba(118,185,0,0.15); color: var(--nv-green);
+      border: 1px solid rgba(118,185,0,0.3); border-radius: 99px; letter-spacing: 0.08em;
+    }
+    .nav-divider { width: 1px; height: 20px; background: var(--border); }
+    .nav-page-title { font-size: 0.875rem; font-weight: 600; color: var(--text-muted); }
+    .nav-links { display: flex; align-items: center; gap: 0.25rem; margin-left: auto; }
+    .nav-links a {
+      color: var(--text-muted); font-size: 0.875rem; font-weight: 500;
+      padding: 0.4rem 0.75rem; border-radius: var(--radius);
+      transition: color var(--transition), background var(--transition);
+    }
+    .nav-links a:hover { color: var(--text-primary); background: rgba(255,255,255,0.05); }
+    .btn {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      font-size: 0.875rem; font-weight: 600; padding: 0.5rem 1.25rem;
+      border-radius: var(--radius); border: 1.5px solid transparent;
+      cursor: pointer; transition: all var(--transition); text-decoration: none;
+    }
+    .btn-outline {
+      background: transparent; color: var(--text-muted); border-color: var(--border);
+    }
+    .btn-outline:hover { color: var(--text-primary); border-color: #444; background: rgba(255,255,255,0.04); }
+
+    /* ─── PAGE LAYOUT ────────────────────────────────────────── */
+    .page-wrap {
+      display: flex;
+      padding-top: var(--nav-h);
+      min-height: 100vh;
+    }
+
+    /* ─── LEFT SIDEBAR ───────────────────────────────────────── */
+    .api-sidebar {
+      width: var(--sidebar-w);
+      flex-shrink: 0;
+      position: fixed;
+      top: var(--nav-h);
+      left: 0;
+      bottom: 0;
+      overflow-y: auto;
+      background: #0c0c0c;
+      border-right: 1px solid var(--border);
+      padding: 1.75rem 0;
+    }
+    .api-sidebar::-webkit-scrollbar { width: 4px; }
+    .api-sidebar::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 99px; }
+    .sidebar-search {
+      padding: 0 1.25rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 1rem;
+    }
+    .sidebar-search input {
+      width: 100%;
+      background: #161616; border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 0.5rem 0.75rem;
+      color: var(--text-primary); font-size: 0.82rem; font-family: var(--font-sans);
+      outline: none; transition: border-color var(--transition);
+    }
+    .sidebar-search input:focus { border-color: rgba(118,185,0,0.5); }
+    .sidebar-search input::placeholder { color: var(--text-dim); }
+    .sidebar-group { margin-bottom: 1.5rem; }
+    .sidebar-group-label {
+      font-size: 0.68rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.12em;
+      color: var(--text-dim); padding: 0 1.25rem; margin-bottom: 0.35rem;
+    }
+    .sidebar-link {
+      display: flex; align-items: center; gap: 0.5rem;
+      padding: 0.38rem 1.25rem;
+      font-size: 0.84rem; color: var(--text-muted);
+      border-left: 2px solid transparent;
+      transition: all var(--transition);
+      text-decoration: none;
+    }
+    .sidebar-link:hover { color: var(--text-primary); background: rgba(255,255,255,0.03); border-left-color: #333; }
+    .sidebar-link.active { color: var(--nv-green); border-left-color: var(--nv-green); background: rgba(118,185,0,0.06); }
+    .sidebar-link .link-badge {
+      font-size: 0.62rem; font-weight: 700; padding: 1px 5px; border-radius: 4px; margin-left: auto;
+    }
+    .lb-class  { background: rgba(130,170,255,0.12); color: #82aaff; }
+    .lb-fn     { background: rgba(118,185,0,0.12);   color: var(--nv-green); }
+    .lb-enum   { background: rgba(255,203,107,0.12); color: #ffcb6b; }
+    .lb-type   { background: rgba(199,146,234,0.12); color: #c792ea; }
+
+    /* ─── MAIN CONTENT ───────────────────────────────────────── */
+    .api-main {
+      margin-left: var(--sidebar-w);
+      flex: 1;
+      min-width: 0;
+      padding: 3rem 3rem 6rem;
+      max-width: 900px;
+    }
+
+    /* ─── PAGE HEADER ────────────────────────────────────────── */
+    .page-header { margin-bottom: 3rem; padding-bottom: 2rem; border-bottom: 1px solid var(--border); }
+    .page-header-eyebrow {
+      font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em;
+      color: var(--nv-green); margin-bottom: 0.75rem;
+    }
+    .page-header h1 { font-size: 2.25rem; color: var(--text-primary); margin-bottom: 0.75rem; }
+    .page-header p  { font-size: 1rem; color: var(--text-muted); max-width: 580px; }
+    .page-header-meta {
+      display: flex; align-items: center; gap: 1.25rem; margin-top: 1.5rem; flex-wrap: wrap;
+    }
+    .meta-badge {
+      font-size: 0.75rem; font-weight: 600; padding: 0.3rem 0.75rem;
+      border-radius: 99px; border: 1px solid var(--border); color: var(--text-muted);
+    }
+
+    /* ─── MODULE SECTIONS ────────────────────────────────────── */
+    .api-module {
+      margin-bottom: 4rem;
+      scroll-margin-top: calc(var(--nav-h) + 1.5rem);
+    }
+    .module-header {
+      display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+      margin-bottom: 0.75rem;
+    }
+    .module-name { font-size: 1.5rem; font-weight: 700; color: var(--text-primary); }
+    .module-badge {
+      font-size: 0.72rem; font-weight: 700; padding: 3px 10px; border-radius: 99px; letter-spacing: 0.05em;
+    }
+    .mb-class   { background: rgba(130,170,255,0.1);  color: #82aaff; border: 1px solid rgba(130,170,255,0.2); }
+    .mb-fn      { background: rgba(118,185,0,0.1);    color: var(--nv-green); border: 1px solid rgba(118,185,0,0.2); }
+    .mb-enum    { background: rgba(255,203,107,0.1);  color: #ffcb6b; border: 1px solid rgba(255,203,107,0.2); }
+    .mb-type    { background: rgba(199,146,234,0.1);  color: #c792ea; border: 1px solid rgba(199,146,234,0.2); }
+    .module-desc { color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.75rem; }
+    .module-signature {
+      background: #0d0d0d; border: 1px solid var(--border);
+      border-left: 3px solid var(--nv-green);
+      border-radius: var(--radius); padding: 1rem 1.25rem;
+      font-family: var(--font-mono); font-size: 0.85rem;
+      color: #ccc; margin-bottom: 1.75rem; overflow-x: auto;
+    }
+
+    /* ─── METHOD CARDS ───────────────────────────────────────── */
+    .methods-list { display: flex; flex-direction: column; gap: 1px; margin-bottom: 2rem; }
+    .method-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--radius); overflow: hidden;
+    }
+    .method-header {
+      padding: 0.9rem 1.25rem; background: #111;
+      border-bottom: 1px solid transparent;
+      display: flex; align-items: center; gap: 0.75rem;
+      cursor: pointer; flex-wrap: wrap;
+      transition: background var(--transition);
+    }
+    .method-header:hover { background: #141414; }
+    .method-header.open { border-bottom-color: var(--border); }
+    .method-tag {
+      font-size: 0.68rem; font-weight: 700; padding: 2px 7px; border-radius: 4px;
+      font-family: var(--font-mono); letter-spacing: 0.03em;
+    }
+    .mt-method { background: rgba(118,185,0,0.1); color: var(--nv-green); border: 1px solid rgba(118,185,0,0.2); }
+    .mt-property { background: rgba(130,170,255,0.1); color: #82aaff; border: 1px solid rgba(130,170,255,0.2); }
+    .mt-static { background: rgba(255,203,107,0.1); color: #ffcb6b; border: 1px solid rgba(255,203,107,0.2); }
+    .mt-async { background: rgba(199,146,234,0.1); color: #c792ea; border: 1px solid rgba(199,146,234,0.2); }
+    .method-name { font-family: var(--font-mono); font-size: 0.9rem; color: #82aaff; font-weight: 600; }
+    .method-params { font-family: var(--font-mono); font-size: 0.82rem; color: var(--text-muted); }
+    .method-returns { font-family: var(--font-mono); font-size: 0.78rem; color: var(--nv-green-l); margin-left: auto; }
+    .method-expand { color: var(--text-dim); margin-left: 0.5rem; font-size: 0.75rem; transition: transform 0.2s; }
+    .method-header.open .method-expand { transform: rotate(180deg); }
+    .method-body {
+      padding: 1.5rem; display: none;
+      border-top: 1px solid var(--border);
+    }
+    .method-body.open { display: block; }
+    .method-desc { font-size: 0.875rem; color: var(--text-muted); margin-bottom: 1.25rem; }
+
+    /* ─── PARAM TABLE ────────────────────────────────────────── */
+    .params-section { margin-bottom: 1.5rem; }
+    .params-title {
+      font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em;
+      color: var(--text-dim); margin-bottom: 0.75rem;
+    }
+    .params-table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+    .params-table th {
+      text-align: left; padding: 0.45rem 0.75rem;
+      font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+      color: var(--text-dim); border-bottom: 1px solid var(--border);
+    }
+    .params-table td { padding: 0.55rem 0.75rem; border-bottom: 1px solid #181818; vertical-align: top; }
+    .params-table tr:last-child td { border-bottom: none; }
+    .p-name { font-family: var(--font-mono); color: #c792ea; font-size: 0.82rem; white-space: nowrap; }
+    .p-type { font-family: var(--font-mono); color: var(--nv-green-l); font-size: 0.8rem; white-space: nowrap; }
+    .p-desc { color: var(--text-muted); }
+    .p-default { font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-dim); }
+    .badge-req {
+      font-size: 0.62rem; font-weight: 700; padding: 1px 5px; border-radius: 4px;
+      background: rgba(255,80,80,0.1); color: #ff8080; border: 1px solid rgba(255,80,80,0.2);
+    }
+    .badge-opt {
+      font-size: 0.62rem; font-weight: 700; padding: 1px 5px; border-radius: 4px;
+      background: rgba(118,185,0,0.08); color: var(--nv-green); border: 1px solid rgba(118,185,0,0.2);
+    }
+
+    /* ─── EXAMPLE BLOCK ──────────────────────────────────────── */
+    .example-block { margin-top: 1.25rem; }
+    .example-block-title {
+      font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em;
+      color: var(--text-dim); margin-bottom: 0.6rem;
+    }
+
+    /* ─── RAISES / RETURNS ───────────────────────────────────── */
+    .returns-block, .raises-block { margin-top: 1.25rem; }
+    .returns-block .params-title { color: var(--nv-green); }
+    .raises-block .params-title  { color: #ff8080; }
+
+    /* ─── SECTION DIVIDER ────────────────────────────────────── */
+    .section-divider {
+      border: none; border-top: 1px solid var(--border);
+      margin: 3rem 0;
+    }
+
+    /* ─── CALLOUT ────────────────────────────────────────────── */
+    .callout {
+      border-radius: var(--radius); padding: 1rem 1.25rem;
+      font-size: 0.875rem; display: flex; gap: 0.75rem;
+      margin: 1.25rem 0;
+    }
+    .callout-info { background: rgba(130,170,255,0.07); border: 1px solid rgba(130,170,255,0.2); color: #aac4ff; }
+    .callout-warn { background: rgba(255,203,107,0.07); border: 1px solid rgba(255,203,107,0.2); color: #ffd97d; }
+    .callout-note { background: rgba(118,185,0,0.07);   border: 1px solid rgba(118,185,0,0.2);  color: #9dcc44; }
+    .callout-icon { font-size: 1rem; flex-shrink: 0; }
+    .callout p { color: inherit; }
+
+    /* ─── ENUM TABLE ─────────────────────────────────────────── */
+    .enum-table { width: 100%; border-collapse: collapse; font-size: 0.84rem; margin: 1rem 0; }
+    .enum-table th { text-align: left; padding: 0.45rem 0.75rem; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); border-bottom: 1px solid var(--border); }
+    .enum-table td { padding: 0.55rem 0.75rem; border-bottom: 1px solid #181818; vertical-align: top; }
+    .enum-table tr:last-child td { border-bottom: none; }
+    .enum-val { font-family: var(--font-mono); color: #ffcb6b; font-size: 0.82rem; }
+
+    /* ─── SCROLLBAR ──────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg-dark); }
+    ::-webkit-scrollbar-thumb { background: #333; border-radius: 99px; }
+    ::-webkit-scrollbar-thumb:hover { background: #444; }
+
+    /* ─── RESPONSIVE ─────────────────────────────────────────── */
+    @media (max-width: 900px) {
+      .api-sidebar { display: none; }
+      .api-main    { margin-left: 0; padding: 2rem 1.5rem 4rem; }
+    }
+    @media (max-width: 640px) {
+      .nav-links { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ─── NAVBAR ──────────────────────────────────────────── -->
+  <nav id="navbar">
+    <div class="nav-inner">
+      <a class="nav-logo" href="daqiri.html">
+        <div class="nav-logo-icon">DAQ</div>
+        <span class="nav-logo-text">DAQIRI</span>
+        <span class="nav-logo-badge">NVIDIA</span>
+      </a>
+      <div class="nav-divider"></div>
+      <span class="nav-page-title">API Guide</span>
+      <div class="nav-links">
+        <a href="daqiri.html#features">Features</a>
+        <a href="daqiri.html#getting-started">Getting Started</a>
+        <a href="daqiri.html#tutorials">Tutorials</a>
+        <a href="daqiri.html#publications">Publications</a>
+      </div>
+      <a href="https://github.com/NVIDIA/daqiri" class="btn btn-outline" target="_blank" style="margin-left:1rem;">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+    </div>
+  </nav>
+
+  <div class="page-wrap">
+
+    <!-- ─── LEFT SIDEBAR ──────────────────────────────────── -->
+    <aside class="api-sidebar">
+      <div class="sidebar-search">
+        <input type="text" placeholder="Search API…" id="sidebarSearch" />
+      </div>
+
+      <div class="sidebar-group">
+        <div class="sidebar-group-label">Overview</div>
+        <a href="#overview" class="sidebar-link active">Introduction</a>
+        <a href="#installation" class="sidebar-link">Installation</a>
+        <a href="#versioning" class="sidebar-link">Versioning &amp; Stability</a>
+      </div>
+
+      <div class="sidebar-group">
+        <div class="sidebar-group-label">Core</div>
+        <a href="#daqiri-context" class="sidebar-link">
+          DAQIRIContext <span class="link-badge lb-class">class</span>
+        </a>
+        <a href="#sensor-source" class="sidebar-link">
+          SensorSource <span class="link-badge lb-class">class</span>
+        </a>
+        <a href="#sensor-frame" class="sidebar-link">
+          SensorFrame <span class="link-badge lb-type">type</span>
+        </a>
+        <a href="#source-handle" class="sidebar-link">
+          SourceHandle <span class="link-badge lb-class">class</span>
+        </a>
+      </div>
+
+      <div class="sidebar-group">
+        <div class="sidebar-group-label">Ingestion</div>
+        <a href="#gpu-ingestion-pipeline" class="sidebar-link">
+          GPUIngestionPipeline <span class="link-badge lb-class">class</span>
+        </a>
+        <a href="#zero-copy-transport" class="sidebar-link">
+          ZeroCopyTransport <span class="link-badge lb-class">class</span>
+        </a>
+        <a href="#timestamp-aligner" class="sidebar-link">
+          TimestampAligner <span class="link-badge lb-class">class</span>
+        </a>
+      </div>
+
+      <div class="sidebar-group">
+        <div class="sidebar-group-label">Built-in Sources</div>
+        <a href="#camera-source" class="sidebar-link">CameraSource</a>
+        <a href="#lidar-source" class="sidebar-link">LiDARSource</a>
+        <a href="#rdma-source" class="sidebar-link">RDMASource</a>
+        <a href="#network-source" class="sidebar-link">NetworkSource</a>
+      </div>
+
+      <div class="sidebar-group">
+        <div class="sidebar-group-label">Plugins</div>
+        <a href="#plugin-registry" class="sidebar-link">
+          PluginRegistry <span class="link-badge lb-class">class</span>
+        </a>
+        <a href="#sensor-adapter-base" class="sidebar-link">
+          SensorAdapterBase <span class="link-badge lb-class">class</span>
+        </a>
+      </div>
+
+      <div class="sidebar-group">
+        <div class="sidebar-group-label">Integration</div>
+        <a href="#holoscan-operator" class="sidebar-link">daqiri.holoscan</a>
+        <a href="#deepstream-adapter" class="sidebar-link">daqiri.deepstream</a>
+        <a href="#rapids-bridge" class="sidebar-link">daqiri.rapids</a>
+      </div>
+
+      <div class="sidebar-group">
+        <div class="sidebar-group-label">Observability</div>
+        <a href="#metrics-exporter" class="sidebar-link">
+          MetricsExporter <span class="link-badge lb-class">class</span>
+        </a>
+        <a href="#trace-context" class="sidebar-link">
+          TraceContext <span class="link-badge lb-class">class</span>
+        </a>
+      </div>
+
+      <div class="sidebar-group">
+        <div class="sidebar-group-label">Enumerations</div>
+        <a href="#sync-strategy" class="sidebar-link">
+          SyncStrategy <span class="link-badge lb-enum">enum</span>
+        </a>
+        <a href="#transport-mode" class="sidebar-link">
+          TransportMode <span class="link-badge lb-enum">enum</span>
+        </a>
+      </div>
+
+      <div class="sidebar-group">
+        <div class="sidebar-group-label">C++ API</div>
+        <a href="#cpp-context" class="sidebar-link">daqiri::Context</a>
+        <a href="#cpp-frame" class="sidebar-link">daqiri::Frame</a>
+        <a href="#cpp-rdma" class="sidebar-link">daqiri::RDMASource</a>
+      </div>
+    </aside>
+
+    <!-- ─── MAIN CONTENT ──────────────────────────────────── -->
+    <main class="api-main">
+
+      <!-- PAGE HEADER -->
+      <div class="page-header" id="overview">
+        <div class="page-header-eyebrow">DAQIRI · NVIDIA</div>
+        <h1>API Guide</h1>
+        <p>Complete reference for the DAQIRI Python and C++ APIs. All public classes, methods, parameters, return types, and usage examples are documented here.</p>
+        <div class="page-header-meta">
+          <span class="meta-badge">Python ≥ 3.10</span>
+          <span class="meta-badge">CUDA ≥ 12.0</span>
+          <span class="meta-badge">C++17</span>
+          <span class="meta-badge">Apache 2.0</span>
+        </div>
+      </div>
+
+      <!-- INSTALLATION -->
+      <div class="api-module" id="installation">
+        <div class="module-header">
+          <span class="module-name">Installation</span>
+        </div>
+        <p class="module-desc">Install via pip (recommended) or build from source. CUDA drivers and a compatible GPU are required.</p>
+        <pre><span class="cm"># Latest stable release</span>
+<span class="fn">pip install</span> nvidia-daqiri
+
+<span class="cm"># With optional extras</span>
+<span class="fn">pip install</span> <span class="str">"nvidia-daqiri[holoscan,deepstream,rapids]"</span>
+
+<span class="cm"># From source</span>
+<span class="fn">git clone</span> https://github.com/NVIDIA/daqiri && cd daqiri
+<span class="fn">pip install</span> -e <span class="str">".[dev]"</span></pre>
+        <div class="callout callout-note">
+          <span class="callout-icon">💡</span>
+          <p>For C++ usage, install via the CMake FetchContent or vcpkg package. See the <a href="https://github.com/NVIDIA/daqiri">GitHub README</a> for CMake integration instructions.</p>
+        </div>
+      </div>
+
+      <hr class="section-divider" />
+
+      <!-- ═══════════════════════════════════════════════ -->
+      <!--  CORE                                          -->
+      <!-- ═══════════════════════════════════════════════ -->
+
+      <!-- DAQIRIContext -->
+      <div class="api-module" id="daqiri-context">
+        <div class="module-header">
+          <span class="module-name">DAQIRIContext</span>
+          <span class="module-badge mb-class">class</span>
+        </div>
+        <p class="module-desc">
+          The top-level runtime context for DAQIRI. Manages GPU device assignment, plugin loading,
+          and the full lifecycle of all sensor sources registered within a session.
+          Typically one context per process, though multiple isolated contexts on different GPU
+          devices are supported.
+        </p>
+        <div class="module-signature">
+<span class="kw">class</span> daqiri.<span class="fn">DAQIRIContext</span>(
+    gpu_id: <span class="tp">int</span> = <span class="nm">0</span>,
+    plugin_paths: <span class="tp">list[str]</span> | <span class="kw">None</span> = <span class="kw">None</span>,
+    enable_metrics: <span class="tp">bool</span> = <span class="kw">True</span>,
+    log_level: <span class="tp">str</span> = <span class="str">"WARNING"</span>
+)</div>
+
+        <div class="methods-list">
+
+          <div class="method-card">
+            <div class="method-header open" onclick="toggleMethod(this)">
+              <span class="method-tag mt-method">method</span>
+              <span class="method-name">register_source</span>
+              <span class="method-params">(source, name)</span>
+              <span class="method-returns">→ SourceHandle</span>
+              <span class="method-expand">▼</span>
+            </div>
+            <div class="method-body open">
+              <p class="method-desc">Registers a sensor source with this context. Returns a <code>SourceHandle</code> which can be used to pause, resume, or deregister the source later.</p>
+              <div class="params-section">
+                <div class="params-title">Parameters</div>
+                <table class="params-table">
+                  <thead><tr><th>Name</th><th>Type</th><th>Description</th><th>Default</th></tr></thead>
+                  <tbody>
+                    <tr><td class="p-name">source</td><td class="p-type">SensorSource</td><td class="p-desc">An instantiated sensor source or plugin adapter. Must implement the <code>SensorSource</code> interface.</td><td><span class="badge-req">required</span></td></tr>
+                    <tr><td class="p-name">name</td><td class="p-type">str</td><td class="p-desc">Unique string identifier for this source within the context. Used to reference the source in bundles and logs.</td><td><span class="badge-req">required</span></td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="returns-block">
+                <div class="params-title">Returns</div>
+                <p style="font-size:0.875rem;color:var(--text-muted);">A <code>SourceHandle</code> object bound to the registered source.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="method-card">
+            <div class="method-header" onclick="toggleMethod(this)">
+              <span class="method-tag mt-method">method</span>
+              <span class="method-name">start</span>
+              <span class="method-params">()</span>
+              <span class="method-returns">→ None</span>
+              <span class="method-expand">▼</span>
+            </div>
+            <div class="method-body">
+              <p class="method-desc">Begins streaming from all registered sources. Non-blocking — returns immediately after acquisition threads are launched. Raises <code>RuntimeError</code> if called on an already-running context.</p>
+              <div class="callout callout-warn">
+                <span class="callout-icon">⚠️</span>
+                <p>Sources must be registered before calling <code>start()</code>. Sources registered after <code>start()</code> must be individually activated via their <code>SourceHandle.activate()</code> method.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="method-card">
+            <div class="method-header" onclick="toggleMethod(this)">
+              <span class="method-tag mt-method">method</span>
+              <span class="method-name">stop</span>
+              <span class="method-params">(timeout_ms=5000)</span>
+              <span class="method-returns">→ None</span>
+              <span class="method-expand">▼</span>
+            </div>
+            <div class="method-body">
+              <p class="method-desc">Gracefully stops all active streams and releases GPU resources. Blocks until all acquisition threads have terminated or the timeout elapses.</p>
+              <div class="params-section">
+                <div class="params-title">Parameters</div>
+                <table class="params-table">
+                  <thead><tr><th>Name</th><th>Type</th><th>Description</th><th>Default</th></tr></thead>
+                  <tbody>
+                    <tr><td class="p-name">timeout_ms</td><td class="p-type">int</td><td class="p-desc">Maximum milliseconds to wait for streams to drain before forcing shutdown.</td><td class="p-default">5000</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="method-card">
+            <div class="method-header" onclick="toggleMethod(this)">
+              <span class="method-tag mt-property">property</span>
+              <span class="method-name">metrics</span>
+              <span class="method-params"></span>
+              <span class="method-returns">→ MetricsExporter</span>
+              <span class="method-expand">▼</span>
+            </div>
+            <div class="method-body">
+              <p class="method-desc">Read-only property. Returns the <code>MetricsExporter</code> instance attached to this context. Available even before <code>start()</code> is called.</p>
+            </div>
+          </div>
+
+        </div><!-- /methods-list -->
+
+        <div class="example-block">
+          <div class="example-block-title">Example</div>
+          <pre><span class="kw">import</span> daqiri
+
+ctx = daqiri.<span class="fn">DAQIRIContext</span>(
+    gpu_id=<span class="nm">0</span>,
+    plugin_paths=[<span class="str">"/opt/my-sensor-plugins"</span>],
+    enable_metrics=<span class="kw">True</span>,
+    log_level=<span class="str">"INFO"</span>
+)
+
+cam = daqiri.sources.<span class="fn">CameraSource</span>(device=<span class="str">"/dev/video0"</span>)
+handle = ctx.<span class="fn">register_source</span>(cam, <span class="str">"front_cam"</span>)
+
+ctx.<span class="fn">start</span>()
+<span class="cm"># ... stream from cam ...</span>
+ctx.<span class="fn">stop</span>()</pre>
+        </div>
+      </div><!-- /DAQIRIContext -->
+
+      <hr class="section-divider" />
+
+      <!-- SensorSource -->
+      <div class="api-module" id="sensor-source">
+        <div class="module-header">
+          <span class="module-name">SensorSource</span>
+          <span class="module-badge mb-class">abstract class</span>
+        </div>
+        <p class="module-desc">
+          Abstract base class for all sensor adapters. Subclass this to integrate custom hardware
+          or software sources. Implement at minimum <code>read_frame()</code> or <code>stream()</code>.
+        </p>
+        <div class="module-signature">
+<span class="kw">class</span> daqiri.<span class="fn">SensorSource</span>(ABC):</div>
+
+        <div class="methods-list">
+          <div class="method-card">
+            <div class="method-header open" onclick="toggleMethod(this)">
+              <span class="method-tag mt-method">abstract method</span>
+              <span class="method-name">read_frame</span>
+              <span class="method-params">(timeout_ms=1000)</span>
+              <span class="method-returns">→ SensorFrame</span>
+              <span class="method-expand">▼</span>
+            </div>
+            <div class="method-body open">
+              <p class="method-desc">Reads the next available frame from the sensor. Blocks until a frame arrives or the timeout elapses. Override this method in your subclass.</p>
+              <div class="params-section">
+                <div class="params-title">Parameters</div>
+                <table class="params-table">
+                  <thead><tr><th>Name</th><th>Type</th><th>Description</th><th>Default</th></tr></thead>
+                  <tbody>
+                    <tr><td class="p-name">timeout_ms</td><td class="p-type">int</td><td class="p-desc">Max wait time in milliseconds. Raises <code>TimeoutError</code> on expiry.</td><td class="p-default">1000</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="raises-block">
+                <div class="params-title">Raises</div>
+                <table class="params-table">
+                  <thead><tr><th>Exception</th><th>When</th></tr></thead>
+                  <tbody>
+                    <tr><td class="p-name">TimeoutError</td><td class="p-desc">No frame received within <code>timeout_ms</code>.</td></tr>
+                    <tr><td class="p-name">SensorDisconnectedError</td><td class="p-desc">Underlying hardware was disconnected.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="method-card">
+            <div class="method-header" onclick="toggleMethod(this)">
+              <span class="method-tag mt-async">async method</span>
+              <span class="method-name">stream</span>
+              <span class="method-params">()</span>
+              <span class="method-returns">→ AsyncIterator[SensorFrame]</span>
+              <span class="method-expand">▼</span>
+            </div>
+            <div class="method-body">
+              <p class="method-desc">Returns an async generator that yields frames indefinitely. Internally calls <code>read_frame()</code> in a thread pool executor. Override for a fully async implementation.</p>
+              <div class="example-block">
+                <div class="example-block-title">Example</div>
+                <pre><span class="kw">async for</span> frame <span class="kw">in</span> my_source.<span class="fn">stream</span>():
+    tensor = frame.gpu_tensor  <span class="cm"># CuPy array on GPU</span>
+    <span class="fn">process</span>(tensor)</pre>
+              </div>
+            </div>
+          </div>
+
+          <div class="method-card">
+            <div class="method-header" onclick="toggleMethod(this)">
+              <span class="method-tag mt-property">property</span>
+              <span class="method-name">metadata</span>
+              <span class="method-params"></span>
+              <span class="method-returns">→ SourceMetadata</span>
+              <span class="method-expand">▼</span>
+            </div>
+            <div class="method-body">
+              <p class="method-desc">Returns a <code>SourceMetadata</code> dataclass with static information about the source: sensor type, model string, native sample rate, and data shape.</p>
+            </div>
+          </div>
+        </div>
+      </div><!-- /SensorSource -->
+
+      <hr class="section-divider" />
+
+      <!-- SensorFrame -->
+      <div class="api-module" id="sensor-frame">
+        <div class="module-header">
+          <span class="module-name">SensorFrame</span>
+          <span class="module-badge mb-type">dataclass</span>
+        </div>
+        <p class="module-desc">Immutable dataclass representing a single acquired sample from a sensor. Carries both the data payload and associated metadata.</p>
+
+        <div class="params-section" style="margin-top:1.5rem;">
+          <div class="params-title">Fields</div>
+          <table class="params-table">
+            <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td class="p-name">gpu_tensor</td><td class="p-type">cupy.ndarray</td><td class="p-desc">The data payload as a CuPy array residing in GPU memory. Also DLPack-compatible for zero-copy interop with PyTorch, JAX, and TensorRT.</td></tr>
+              <tr><td class="p-name">timestamp_ns</td><td class="p-type">int</td><td class="p-desc">Hardware or software capture timestamp in nanoseconds since the UNIX epoch.</td></tr>
+              <tr><td class="p-name">source_name</td><td class="p-type">str</td><td class="p-desc">The registered name of the <code>SensorSource</code> that produced this frame.</td></tr>
+              <tr><td class="p-name">frame_id</td><td class="p-type">int</td><td class="p-desc">Monotonically increasing counter local to the source. Resets on source restart.</td></tr>
+              <tr><td class="p-name">dtype</td><td class="p-type">str</td><td class="p-desc">NumPy-compatible dtype string, e.g. <code>"float32"</code>, <code>"uint16"</code>.</td></tr>
+              <tr><td class="p-name">shape</td><td class="p-type">tuple[int, ...]</td><td class="p-desc">Shape of the tensor (H × W × C for image data, N × 4 for point clouds, etc.).</td></tr>
+              <tr><td class="p-name">metadata</td><td class="p-type">dict</td><td class="p-desc">Source-specific metadata dictionary. Contents vary by sensor type.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout callout-info">
+          <span class="callout-icon">ℹ️</span>
+          <p><code>gpu_tensor</code> supports the <strong>__dlpack__</strong> protocol. Pass it directly to <code>torch.from_dlpack()</code>, <code>jax.dlpack.from_dlpack()</code>, or TensorRT's Python API without any data copy.</p>
+        </div>
+      </div><!-- /SensorFrame -->
+
+      <hr class="section-divider" />
+
+      <!-- ═══════════════════════════════════════════════ -->
+      <!--  INGESTION                                     -->
+      <!-- ═══════════════════════════════════════════════ -->
+
+      <!-- TimestampAligner -->
+      <div class="api-module" id="timestamp-aligner">
+        <div class="module-header">
+          <span class="module-name">TimestampAligner</span>
+          <span class="module-badge mb-class">class</span>
+        </div>
+        <p class="module-desc">Synchronizes frames from multiple asynchronous sensor sources into aligned bundles using configurable time-windowing strategies.</p>
+        <div class="module-signature">
+<span class="kw">class</span> daqiri.sync.<span class="fn">TimestampAligner</span>(
+    sources: <span class="tp">list[SensorSource]</span>,
+    window_ns: <span class="tp">int</span> = <span class="nm">5_000</span>,
+    strategy: <span class="tp">SyncStrategy</span> | <span class="tp">str</span> = <span class="str">"nearest"</span>,
+    require_all: <span class="tp">bool</span> = <span class="kw">True</span>,
+    max_queue_depth: <span class="tp">int</span> = <span class="nm">32</span>
+)</div>
+
+        <div class="params-section" style="margin-top:1.5rem;">
+          <div class="params-title">Constructor Parameters</div>
+          <table class="params-table">
+            <thead><tr><th>Name</th><th>Type</th><th>Description</th><th>Default</th></tr></thead>
+            <tbody>
+              <tr><td class="p-name">sources</td><td class="p-type">list[SensorSource]</td><td class="p-desc">List of sources to synchronize. All sources must be registered with the same context.</td><td><span class="badge-req">required</span></td></tr>
+              <tr><td class="p-name">window_ns</td><td class="p-type">int</td><td class="p-desc">Maximum timestamp delta (in nanoseconds) allowed between frames in a bundle.</td><td class="p-default">5_000</td></tr>
+              <tr><td class="p-name">strategy</td><td class="p-type">SyncStrategy | str</td><td class="p-desc">Alignment strategy. One of <code>"nearest"</code>, <code>"interpolate"</code>, or <code>"drop_oldest"</code>.</td><td class="p-default">"nearest"</td></tr>
+              <tr><td class="p-name">require_all</td><td class="p-type">bool</td><td class="p-desc">If <code>True</code>, only emit bundles when all sources contribute a frame. If <code>False</code>, emit partial bundles with <code>None</code> for missing sources.</td><td class="p-default">True</td></tr>
+              <tr><td class="p-name">max_queue_depth</td><td class="p-type">int</td><td class="p-desc">Per-source internal buffer depth. Increase for bursty sensors; decrease to reduce memory usage.</td><td class="p-default">32</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="methods-list" style="margin-top:1.5rem;">
+          <div class="method-card">
+            <div class="method-header open" onclick="toggleMethod(this)">
+              <span class="method-tag mt-async">async method</span>
+              <span class="method-name">stream</span>
+              <span class="method-params">()</span>
+              <span class="method-returns">→ AsyncIterator[FrameBundle]</span>
+              <span class="method-expand">▼</span>
+            </div>
+            <div class="method-body open">
+              <p class="method-desc">Yields aligned <code>FrameBundle</code> objects. Each bundle is a dict-like object mapping source names to <code>SensorFrame</code> instances with timestamps within <code>window_ns</code> of each other.</p>
+              <div class="example-block">
+                <div class="example-block-title">Example</div>
+                <pre><span class="kw">async for</span> bundle <span class="kw">in</span> aligner.<span class="fn">stream</span>():
+    cam_frame   = bundle[<span class="str">"camera"</span>]
+    lidar_frame = bundle[<span class="str">"lidar"</span>]
+    delta_ns = cam_frame.timestamp_ns - lidar_frame.timestamp_ns
+    <span class="fn">fuse</span>(cam_frame.gpu_tensor, lidar_frame.gpu_tensor)</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div><!-- /TimestampAligner -->
+
+      <hr class="section-divider" />
+
+      <!-- ═══════════════════════════════════════════════ -->
+      <!--  ENUMERATIONS                                  -->
+      <!-- ═══════════════════════════════════════════════ -->
+
+      <!-- SyncStrategy -->
+      <div class="api-module" id="sync-strategy">
+        <div class="module-header">
+          <span class="module-name">SyncStrategy</span>
+          <span class="module-badge mb-enum">enum</span>
+        </div>
+        <p class="module-desc">Defines how the <code>TimestampAligner</code> selects or constructs frames when timestamps from different sources do not exactly coincide.</p>
+        <table class="enum-table">
+          <thead><tr><th>Value</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td class="enum-val">NEAREST</td><td class="p-desc">Select the frame from each source whose timestamp is closest to the reference timestamp of the bundle. Default strategy.</td></tr>
+            <tr><td class="enum-val">INTERPOLATE</td><td class="p-desc">Linearly interpolate between adjacent frames from each source to produce a synthetic frame at the exact reference timestamp. GPU-accelerated when tensors are float types.</td></tr>
+            <tr><td class="enum-val">DROP_OLDEST</td><td class="p-desc">If no frame arrives within <code>window_ns</code>, drop the oldest pending frame from each source queue and retry.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- TransportMode -->
+      <div class="api-module" id="transport-mode">
+        <div class="module-header">
+          <span class="module-name">TransportMode</span>
+          <span class="module-badge mb-enum">enum</span>
+        </div>
+        <p class="module-desc">Specifies the memory transport path used by a source to deliver data to GPU memory.</p>
+        <table class="enum-table">
+          <thead><tr><th>Value</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td class="enum-val">CPU_COPY</td><td class="p-desc">Data is acquired to CPU memory and then copied to GPU using <code>cudaMemcpy</code>. Simplest mode; lower throughput.</td></tr>
+            <tr><td class="enum-val">PINNED</td><td class="p-desc">Data is acquired into CUDA pinned (page-locked) CPU memory, enabling DMA transfers that bypass the OS paging system.</td></tr>
+            <tr><td class="enum-val">ZERO_COPY</td><td class="p-desc">Data is written directly into GPU memory via PCIe or NVLink. Requires GPUDirect-compatible hardware.</td></tr>
+            <tr><td class="enum-val">RDMA</td><td class="p-desc">Data arrives over network (InfiniBand or RoCE) directly into GPU memory using GPUDirect RDMA, bypassing both CPU and host memory entirely.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <hr class="section-divider" />
+
+      <!-- ═══════════════════════════════════════════════ -->
+      <!--  C++ API                                       -->
+      <!-- ═══════════════════════════════════════════════ -->
+
+      <div class="api-module" id="cpp-context">
+        <div class="module-header">
+          <span class="module-name">daqiri::Context</span>
+          <span class="module-badge mb-class">C++ class</span>
+        </div>
+        <p class="module-desc">C++17 equivalent of <code>DAQIRIContext</code>. Factory-constructed via <code>Context::create()</code>. Header: <code>&lt;daqiri/context.hpp&gt;</code></p>
+        <div class="module-signature">
+<span class="kw">#include</span> <span class="str">&lt;daqiri/context.hpp&gt;</span>
+
+std::shared_ptr&lt;daqiri::<span class="tp">Context</span>&gt; ctx =
+    daqiri::<span class="fn">Context</span>::<span class="fn">create</span>({
+        .gpu_id        = <span class="nm">0</span>,
+        .rdma_enabled  = <span class="kw">true</span>,
+        .log_level     = daqiri::<span class="tp">LogLevel</span>::<span class="nm">INFO</span>
+    });</div>
+
+        <div class="methods-list" style="margin-top:1.5rem;">
+          <div class="method-card">
+            <div class="method-header open" onclick="toggleMethod(this)">
+              <span class="method-tag mt-static">static</span>
+              <span class="method-name">Context::create</span>
+              <span class="method-params">(const ContextConfig&)</span>
+              <span class="method-returns">→ shared_ptr&lt;Context&gt;</span>
+              <span class="method-expand">▼</span>
+            </div>
+            <div class="method-body open">
+              <p class="method-desc">Factory method. Returns a <code>shared_ptr</code> to a newly constructed context. Throws <code>daqiri::InitError</code> if the GPU device is unavailable.</p>
+            </div>
+          </div>
+          <div class="method-card">
+            <div class="method-header" onclick="toggleMethod(this)">
+              <span class="method-tag mt-method">method</span>
+              <span class="method-name">start</span>
+              <span class="method-params">(FrameCallback callback)</span>
+              <span class="method-returns">→ void</span>
+              <span class="method-expand">▼</span>
+            </div>
+            <div class="method-body">
+              <p class="method-desc">Starts all registered sources and invokes <code>callback</code> for each arriving <code>daqiri::Frame</code> on a dedicated thread pool. The callback receives a <code>Frame</code> by value; <code>frame.device_ptr</code> is a raw CUDA device pointer valid for the callback's duration.</p>
+              <div class="example-block">
+                <div class="example-block-title">Example</div>
+                <pre>ctx-&gt;<span class="fn">start</span>([](daqiri::<span class="tp">Frame</span> f) {
+    <span class="cm">// f.device_ptr: void* on GPU</span>
+    <span class="cm">// f.size:       bytes</span>
+    <span class="cm">// f.timestamp_ns: uint64_t</span>
+    my::<span class="fn">process</span>(f.device_ptr, f.size);
+});</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div><!-- /cpp-context -->
+
+      <!-- Footer nav -->
+      <div style="margin-top:4rem;padding-top:2rem;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
+        <a href="daqiri.html" style="font-size:0.875rem;color:var(--text-muted);">← Back to Home</a>
+        <div style="display:flex;gap:1rem;">
+          <a href="daqiri.html#tutorials" style="font-size:0.875rem;color:var(--text-muted);">Tutorials</a>
+          <a href="https://github.com/NVIDIA/daqiri" style="font-size:0.875rem;color:var(--text-muted);" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+
+    </main>
+  </div><!-- /page-wrap -->
+
+  <script>
+    // Accordion toggle
+    function toggleMethod(header) {
+      header.classList.toggle('open');
+      const body = header.nextElementSibling;
+      body.classList.toggle('open');
+    }
+
+    // Sidebar active on scroll
+    const modules = document.querySelectorAll('.api-module[id]');
+    const sidebarLinks = document.querySelectorAll('.sidebar-link');
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          const id = e.target.id;
+          sidebarLinks.forEach(l => l.classList.toggle('active', l.getAttribute('href') === `#${id}`));
+        }
+      });
+    }, { rootMargin: '-20% 0px -70% 0px' });
+    modules.forEach(m => observer.observe(m));
+
+    // Sidebar search filter
+    document.getElementById('sidebarSearch').addEventListener('input', function() {
+      const q = this.value.toLowerCase();
+      sidebarLinks.forEach(link => {
+        const text = link.textContent.toLowerCase();
+        link.style.display = (!q || text.includes(q)) ? '' : 'none';
+      });
+      document.querySelectorAll('.sidebar-group').forEach(group => {
+        const visible = [...group.querySelectorAll('.sidebar-link')].some(l => l.style.display !== 'none');
+        group.style.display = visible ? '' : 'none';
+      });
+    });
+  </script>
+
+</body>
+</html>

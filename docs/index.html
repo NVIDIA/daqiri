@@ -1,0 +1,1234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DAQIRI — NVIDIA Data Acquisition & Integration</title>
+  <style>
+    /* ─── RESET & VARIABLES ─────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --nv-green:    #76b900;
+      --nv-green-d:  #5a8f00;
+      --nv-green-l:  #a0d000;
+      --bg-dark:     #0a0a0a;
+      --bg-card:     #111111;
+      --bg-card2:    #161616;
+      --border:      #222222;
+      --text-primary:#f0f0f0;
+      --text-muted:  #888888;
+      --text-dim:    #555555;
+      --font-sans:   'Inter', 'Segoe UI', sans-serif;
+      --font-mono:   'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+      --radius:      8px;
+      --transition:  0.2s ease;
+      --nav-h:       64px;
+    }
+
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg-dark);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      font-size: 16px;
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* ─── TYPOGRAPHY ─────────────────────────────────────────── */
+    h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
+    h1 { font-size: clamp(2.4rem, 5vw, 4rem); }
+    h2 { font-size: clamp(1.6rem, 3vw, 2.4rem); }
+    h3 { font-size: 1.25rem; }
+    h4 { font-size: 1rem; font-weight: 600; }
+    p  { color: var(--text-muted); }
+    a  { color: var(--nv-green); text-decoration: none; transition: color var(--transition); }
+    a:hover { color: var(--nv-green-l); }
+    code {
+      font-family: var(--font-mono);
+      font-size: 0.88em;
+      background: #1a1a1a;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 2px 6px;
+      color: var(--nv-green-l);
+    }
+    pre {
+      background: #0d0d0d;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      overflow-x: auto;
+      font-family: var(--font-mono);
+      font-size: 0.875rem;
+      line-height: 1.6;
+      color: #ccc;
+    }
+    pre .kw  { color: #c792ea; }
+    pre .fn  { color: #82aaff; }
+    pre .str { color: #c3e88d; }
+    pre .cm  { color: #546e7a; font-style: italic; }
+    pre .nm  { color: var(--nv-green-l); }
+
+    /* ─── LAYOUT ─────────────────────────────────────────────── */
+    .container { max-width: 1200px; margin: 0 auto; padding: 0 2rem; }
+    section { padding: 6rem 0; }
+    .section-label {
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--nv-green);
+      margin-bottom: 0.75rem;
+    }
+    .section-title { color: var(--text-primary); margin-bottom: 1rem; }
+    .section-desc  { color: var(--text-muted); max-width: 640px; font-size: 1.05rem; }
+
+    /* ─── NAVBAR ─────────────────────────────────────────────── */
+    #navbar {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
+      height: var(--nav-h);
+      display: flex; align-items: center;
+      background: rgba(10,10,10,0.92);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+      transition: box-shadow var(--transition);
+    }
+    #navbar.scrolled { box-shadow: 0 4px 40px rgba(0,0,0,0.6); }
+    .nav-inner {
+      width: 100%; max-width: 1200px; margin: 0 auto; padding: 0 2rem;
+      display: flex; align-items: center; gap: 2rem;
+    }
+    .nav-logo {
+      display: flex; align-items: center; gap: 0.75rem; flex-shrink: 0;
+    }
+    .nav-logo-icon {
+      width: 32px; height: 32px;
+      background: var(--nv-green);
+      border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 900; font-size: 0.8rem; color: #000; letter-spacing: -0.05em;
+    }
+    .nav-logo-text { font-weight: 800; font-size: 1.1rem; color: var(--text-primary); letter-spacing: 0.05em; }
+    .nav-logo-badge {
+      font-size: 0.65rem; font-weight: 700; padding: 2px 6px;
+      background: rgba(118,185,0,0.15); color: var(--nv-green);
+      border: 1px solid rgba(118,185,0,0.3); border-radius: 99px;
+      letter-spacing: 0.08em;
+    }
+    .nav-links { display: flex; align-items: center; gap: 0.25rem; flex: 1; }
+    .nav-links a {
+      color: var(--text-muted); font-size: 0.875rem; font-weight: 500;
+      padding: 0.4rem 0.75rem; border-radius: var(--radius);
+      transition: color var(--transition), background var(--transition);
+    }
+    .nav-links a:hover { color: var(--text-primary); background: rgba(255,255,255,0.05); }
+    .nav-links a.active { color: var(--nv-green); }
+    .nav-links a.nav-external {
+      display: inline-flex; align-items: center; gap: 0.35rem;
+    }
+    .nav-links a.nav-external::after {
+      content: '↗';
+      font-size: 0.75em;
+      opacity: 0.6;
+    }
+    .nav-actions { display: flex; align-items: center; gap: 0.75rem; margin-left: auto; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      font-size: 0.875rem; font-weight: 600; padding: 0.5rem 1.25rem;
+      border-radius: var(--radius); border: 1.5px solid transparent;
+      cursor: pointer; transition: all var(--transition); text-decoration: none;
+    }
+    .btn-primary {
+      background: var(--nv-green); color: #000;
+      border-color: var(--nv-green);
+    }
+    .btn-primary:hover { background: var(--nv-green-l); border-color: var(--nv-green-l); color: #000; }
+    .btn-outline {
+      background: transparent; color: var(--text-muted);
+      border-color: var(--border);
+    }
+    .btn-outline:hover { color: var(--text-primary); border-color: #444; background: rgba(255,255,255,0.04); }
+
+    /* ─── HERO ───────────────────────────────────────────────── */
+    #hero {
+      min-height: 100vh;
+      display: flex; align-items: center;
+      padding-top: var(--nav-h);
+      position: relative;
+      overflow: hidden;
+    }
+    .hero-grid-bg {
+      position: absolute; inset: 0; z-index: 0;
+      background-image:
+        linear-gradient(rgba(118,185,0,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(118,185,0,0.04) 1px, transparent 1px);
+      background-size: 60px 60px;
+      mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, black 30%, transparent 100%);
+    }
+    .hero-glow {
+      position: absolute; top: -20%; left: 50%; transform: translateX(-50%);
+      width: 800px; height: 500px;
+      background: radial-gradient(ellipse, rgba(118,185,0,0.12) 0%, transparent 70%);
+      pointer-events: none; z-index: 0;
+    }
+    .hero-content {
+      position: relative; z-index: 1;
+      max-width: 760px;
+    }
+    .hero-eyebrow {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      font-size: 0.75rem; font-weight: 700; letter-spacing: 0.15em;
+      text-transform: uppercase; color: var(--nv-green);
+      background: rgba(118,185,0,0.08);
+      border: 1px solid rgba(118,185,0,0.2);
+      border-radius: 99px; padding: 0.35rem 1rem; margin-bottom: 2rem;
+    }
+    .hero-eyebrow::before {
+      content: ''; width: 6px; height: 6px; border-radius: 50%;
+      background: var(--nv-green);
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.8); }
+    }
+    .hero-title { margin-bottom: 1.5rem; }
+    .hero-title .highlight { color: var(--nv-green); }
+    .hero-desc {
+      font-size: 1.15rem; color: var(--text-muted); max-width: 580px;
+      margin-bottom: 2.5rem; line-height: 1.75;
+    }
+    .hero-actions { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 3.5rem; }
+    .hero-stats {
+      display: flex; gap: 3rem; flex-wrap: wrap;
+      border-top: 1px solid var(--border); padding-top: 2.5rem;
+    }
+    .stat-value { font-size: 1.75rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.03em; }
+    .stat-label { font-size: 0.8rem; color: var(--text-dim); font-weight: 500; text-transform: uppercase; letter-spacing: 0.1em; margin-top: 0.2rem; }
+
+    /* ─── FEATURES ────────────────────────────────────────────── */
+    #features { background: var(--bg-dark); border-top: 1px solid var(--border); }
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 1.5px;
+      background: var(--border);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      margin-top: 4rem;
+    }
+    .feature-card {
+      background: var(--bg-card);
+      padding: 2rem;
+      transition: background var(--transition);
+    }
+    .feature-card:hover { background: var(--bg-card2); }
+    .feature-icon {
+      width: 44px; height: 44px; border-radius: var(--radius);
+      background: rgba(118,185,0,0.1);
+      border: 1px solid rgba(118,185,0,0.2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.25rem; margin-bottom: 1.25rem;
+    }
+    .feature-card h3 { color: var(--text-primary); margin-bottom: 0.5rem; }
+    .feature-card p  { font-size: 0.9rem; color: var(--text-muted); }
+
+    /* ─── SECTION HEADER ─────────────────────────────────────── */
+    .section-header {
+      display: flex; align-items: flex-end; justify-content: space-between;
+      flex-wrap: wrap; gap: 1.5rem; margin-bottom: 3rem;
+    }
+
+    /* ─── GETTING STARTED ────────────────────────────────────── */
+    #getting-started { border-top: 1px solid var(--border); }
+    .gs-layout {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 3rem; margin-top: 3rem;
+      align-items: start;
+    }
+    .gs-steps { display: flex; flex-direction: column; gap: 0; }
+    .gs-step {
+      display: flex; gap: 1.25rem;
+      padding: 1.5rem 0; border-bottom: 1px solid var(--border);
+    }
+    .gs-step:last-child { border-bottom: none; }
+    .gs-step-num {
+      width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
+      background: rgba(118,185,0,0.12); border: 1px solid rgba(118,185,0,0.3);
+      color: var(--nv-green); font-size: 0.75rem; font-weight: 800;
+      display: flex; align-items: center; justify-content: center;
+      margin-top: 0.1rem;
+    }
+    .gs-step-body h4 { color: var(--text-primary); margin-bottom: 0.35rem; }
+    .gs-step-body p  { font-size: 0.875rem; color: var(--text-muted); margin-bottom: 0.75rem; }
+    .gs-code-panel { display: flex; flex-direction: column; gap: 1.25rem; position: sticky; top: calc(var(--nav-h) + 1.5rem); }
+    .gs-code-block {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--radius); overflow: hidden;
+    }
+    .gs-code-header {
+      padding: 0.75rem 1.25rem;
+      background: #111; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .gs-code-title { font-size: 0.8rem; font-weight: 600; color: var(--text-muted); }
+    .gs-code-lang  { font-size: 0.7rem; font-family: var(--font-mono); color: var(--text-dim); }
+    .gs-code-block pre { border: none; border-radius: 0; margin: 0; font-size: 0.82rem; }
+    .examples-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 1.25rem; margin-top: 3rem;
+    }
+    .example-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--radius); overflow: hidden;
+      transition: border-color var(--transition), transform var(--transition);
+    }
+    .example-card:hover { border-color: rgba(118,185,0,0.4); transform: translateY(-2px); }
+    .example-card-header {
+      padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 0.75rem;
+    }
+    .example-lang-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .lang-python   { background: #3776ab; }
+    .lang-cpp      { background: #00599c; }
+    .lang-cuda     { background: var(--nv-green); }
+    .example-card-title { color: var(--text-primary); font-size: 0.95rem; font-weight: 600; }
+    .example-card-lang  { font-size: 0.75rem; color: var(--text-dim); margin-left: auto; font-family: var(--font-mono); }
+    .example-card-body pre {
+      border: none; border-radius: 0; margin: 0;
+      max-height: 220px; overflow: hidden;
+      font-size: 0.78rem; background: #090909;
+    }
+    .example-card-footer {
+      padding: 1rem 1.5rem; border-top: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .example-card-desc { font-size: 0.82rem; color: var(--text-muted); }
+    .example-card-link { font-size: 0.82rem; color: var(--nv-green); font-weight: 600; }
+
+    /* ─── TUTORIALS ──────────────────────────────────────────── */
+    #tutorials { background: var(--bg-card); border-top: 1px solid var(--border); }
+    .tutorials-list { margin-top: 3rem; display: flex; flex-direction: column; gap: 1px; background: var(--border); border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); }
+    .tutorial-item {
+      background: var(--bg-dark); padding: 1.75rem 2rem;
+      display: flex; align-items: center; gap: 2rem;
+      transition: background var(--transition); cursor: pointer;
+    }
+    .tutorial-item:hover { background: #0f0f0f; }
+    .tutorial-num { font-size: 0.75rem; font-weight: 800; font-family: var(--font-mono); color: var(--nv-green); min-width: 2.5rem; }
+    .tutorial-info { flex: 1; }
+    .tutorial-title { color: var(--text-primary); font-size: 1rem; font-weight: 600; margin-bottom: 0.35rem; }
+    .tutorial-desc  { font-size: 0.875rem; color: var(--text-muted); }
+    .tutorial-meta  { display: flex; align-items: center; gap: 1rem; flex-shrink: 0; }
+    .tag { font-size: 0.7rem; font-weight: 700; padding: 3px 10px; border-radius: 99px; letter-spacing: 0.05em; }
+    .tag-beginner     { background: rgba(99,235,99,0.1);  color: #63eb63; border: 1px solid rgba(99,235,99,0.2); }
+    .tag-intermediate { background: rgba(255,193,7,0.1);  color: #ffc107; border: 1px solid rgba(255,193,7,0.2); }
+    .tag-advanced     { background: rgba(255,80,80,0.1);  color: #ff8080; border: 1px solid rgba(255,80,80,0.2); }
+    .tutorial-time  { font-size: 0.8rem; color: var(--text-dim); }
+    .tutorial-arrow { color: var(--text-dim); font-size: 1rem; transition: transform var(--transition), color var(--transition); }
+    .tutorial-item:hover .tutorial-arrow { transform: translateX(4px); color: var(--nv-green); }
+
+    /* ─── PUBLICATIONS ───────────────────────────────────────── */
+    #publications { border-top: 1px solid var(--border); }
+    .publications-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+      gap: 1.25rem; margin-top: 3rem;
+    }
+    .pub-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 1.75rem;
+      transition: border-color var(--transition);
+    }
+    .pub-card:hover { border-color: rgba(118,185,0,0.3); }
+    .pub-venue { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; }
+    .pub-venue-badge {
+      font-size: 0.7rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;
+      padding: 3px 10px; border-radius: 4px;
+      background: rgba(118,185,0,0.12); color: var(--nv-green); border: 1px solid rgba(118,185,0,0.25);
+    }
+    .pub-year { font-size: 0.8rem; color: var(--text-dim); margin-left: auto; }
+    .pub-title { color: var(--text-primary); font-size: 1rem; font-weight: 600; margin-bottom: 0.75rem; line-height: 1.4; }
+    .pub-authors { font-size: 0.82rem; color: var(--text-muted); margin-bottom: 1.25rem; }
+    .pub-authors .highlight-author { color: var(--nv-green); }
+    .pub-links { display: flex; gap: 0.75rem; }
+    .pub-link {
+      font-size: 0.8rem; font-weight: 600; padding: 0.3rem 0.75rem;
+      border-radius: 6px; border: 1px solid var(--border); color: var(--text-muted);
+      transition: all var(--transition);
+    }
+    .pub-link:hover { color: var(--nv-green); border-color: rgba(118,185,0,0.4); background: rgba(118,185,0,0.05); }
+
+    /* ─── IMPACT STORIES ─────────────────────────────────────── */
+    #impact { background: var(--bg-card); border-top: 1px solid var(--border); }
+    .impact-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 1.25rem; margin-top: 3rem;
+    }
+    .impact-card {
+      background: var(--bg-dark); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 2rem;
+      position: relative; overflow: hidden; transition: border-color var(--transition);
+    }
+    .impact-card:hover { border-color: rgba(118,185,0,0.35); }
+    .impact-card::before {
+      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+      background: linear-gradient(90deg, var(--nv-green), var(--nv-green-l));
+    }
+    .impact-tag { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--nv-green); margin-bottom: 1rem; }
+    .impact-quote {
+      font-size: 1rem; color: var(--text-primary); line-height: 1.7;
+      font-style: italic; margin-bottom: 1.5rem; position: relative; padding-left: 1.25rem;
+    }
+    .impact-quote::before {
+      content: '"'; position: absolute; left: 0; top: -0.25rem;
+      font-size: 2rem; color: var(--nv-green); font-style: normal; line-height: 1;
+    }
+    .impact-metric { display: flex; gap: 1.5rem; margin-bottom: 1.5rem; }
+    .metric-value { font-size: 1.5rem; font-weight: 800; color: var(--nv-green); letter-spacing: -0.03em; }
+    .metric-label { font-size: 0.75rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; }
+    .impact-footer { display: flex; align-items: center; gap: 0.75rem; border-top: 1px solid var(--border); padding-top: 1.25rem; }
+    .impact-org-icon {
+      width: 36px; height: 36px; border-radius: 8px;
+      background: #1a1a1a; border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center; font-size: 1.1rem;
+    }
+    .impact-org-name { font-size: 0.9rem; font-weight: 600; color: var(--text-primary); }
+    .impact-org-role { font-size: 0.8rem; color: var(--text-dim); }
+
+    /* ─── CTA ────────────────────────────────────────────────── */
+    #cta {
+      border-top: 1px solid var(--border);
+      background: radial-gradient(ellipse 60% 80% at 50% 100%, rgba(118,185,0,0.07) 0%, transparent 70%);
+      text-align: center; padding: 7rem 0;
+    }
+    #cta h2 { margin-bottom: 1rem; }
+    #cta p  { max-width: 520px; margin: 0 auto 2.5rem; font-size: 1.05rem; }
+    .cta-actions { display: flex; align-items: center; justify-content: center; gap: 1rem; flex-wrap: wrap; }
+
+    /* ─── FOOTER ─────────────────────────────────────────────── */
+    footer {
+      background: var(--bg-dark); border-top: 1px solid var(--border);
+      padding: 3rem 0 2rem;
+    }
+    .footer-inner {
+      display: grid; grid-template-columns: 2fr 1fr 1fr 1fr;
+      gap: 3rem; margin-bottom: 3rem;
+    }
+    .footer-brand .nav-logo { margin-bottom: 1rem; }
+    .footer-brand p { font-size: 0.875rem; color: var(--text-muted); max-width: 260px; line-height: 1.6; }
+    .footer-col-title { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-dim); margin-bottom: 1rem; }
+    .footer-links { list-style: none; display: flex; flex-direction: column; gap: 0.5rem; }
+    .footer-links a { font-size: 0.875rem; color: var(--text-muted); transition: color var(--transition); }
+    .footer-links a:hover { color: var(--text-primary); }
+    .footer-bottom {
+      border-top: 1px solid var(--border); padding-top: 1.5rem;
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;
+    }
+    .footer-bottom-left { font-size: 0.8rem; color: var(--text-dim); }
+    .footer-bottom-right { display: flex; align-items: center; gap: 1.25rem; }
+    .footer-bottom-right a { font-size: 0.8rem; color: var(--text-dim); transition: color var(--transition); }
+    .footer-bottom-right a:hover { color: var(--text-muted); }
+
+    /* ─── SCROLLBAR ──────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg-dark); }
+    ::-webkit-scrollbar-thumb { background: #333; border-radius: 99px; }
+    ::-webkit-scrollbar-thumb:hover { background: #444; }
+
+    /* ─── RESPONSIVE ─────────────────────────────────────────── */
+    @media (max-width: 900px) {
+      .gs-layout { grid-template-columns: 1fr; }
+      .gs-code-panel { position: static; }
+      .footer-inner { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 640px) {
+      .nav-links { display: none; }
+      section { padding: 4rem 0; }
+      .footer-inner { grid-template-columns: 1fr; }
+      .tutorial-meta { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ╔══════════════════════════════════════════════════════╗ -->
+  <!-- ║  NAVBAR                                              ║ -->
+  <!-- ╚══════════════════════════════════════════════════════╝ -->
+  <nav id="navbar">
+    <div class="nav-inner">
+      <a class="nav-logo" href="#hero">
+        <div class="nav-logo-icon">DAQ</div>
+        <span class="nav-logo-text">DAQIRI</span>
+        <span class="nav-logo-badge">NVIDIA</span>
+      </a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#getting-started">Quick Start</a>
+        <a href="#examples">Examples</a>
+        <a href="#tutorials">Tutorials</a>
+        <a href="daqiri-api.html" class="nav-external">API Guide</a>
+        <a href="#publications">News</a>
+      </div>
+      <div class="nav-actions">
+        <a href="https://github.com/NVIDIA/daqiri" class="btn btn-outline" target="_blank">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          GitHub
+        </a>
+        <a href="#getting-started" class="btn btn-primary">Get Started →</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ╔══════════════════════════════════════════════════════╗ -->
+  <!-- ║  HERO                                                ║ -->
+  <!-- ╚══════════════════════════════════════════════════════╝ -->
+  <section id="hero">
+    <div class="hero-grid-bg"></div>
+    <div class="hero-glow"></div>
+    <div class="container">
+      <div class="hero-content">
+        <div class="hero-eyebrow">NVIDIA Open Source · High-Performance Sensor Integration</div>
+        <h1 class="hero-title">
+          Connect Sensor Streams to the<br>
+          <span class="highlight">NVIDIA Ecosystem</span>
+        </h1>
+        <p class="hero-desc">
+          DAQIRI is a high-performance data acquisition and integration library that bridges
+          high-bandwidth streaming sensor data directly into NVIDIA's software stack —
+          from edge inference to GPU-accelerated analytics pipelines.
+        </p>
+        <div class="hero-actions">
+          <a href="#getting-started" class="btn btn-primary">Get Started →</a>
+          <a href="daqiri-api.html" class="btn btn-outline">API Guide</a>
+          <a href="#tutorials" class="btn btn-outline">Tutorials</a>
+        </div>
+        <div class="hero-stats">
+          <div class="stat-item">
+            <div class="stat-value">100 GB/s+</div>
+            <div class="stat-label">Throughput</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value">&lt; 1 µs</div>
+            <div class="stat-label">Latency</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value">C++ / Python</div>
+            <div class="stat-label">Bindings</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value">Apache 2.0</div>
+            <div class="stat-label">License</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ╔══════════════════════════════════════════════════════╗ -->
+  <!-- ║  FEATURES                                            ║ -->
+  <!-- ╚══════════════════════════════════════════════════════╝ -->
+  <section id="features">
+    <div class="container">
+      <div class="section-label">Why DAQIRI</div>
+      <h2 class="section-title">Built for Real-Time, High-Bandwidth Workloads</h2>
+      <p class="section-desc">
+        Designed from the ground up to eliminate bottlenecks between physical sensors and
+        GPU compute, DAQIRI provides a unified abstraction layer that scales from embedded
+        edge systems to multi-GPU data centers.
+      </p>
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">⚡</div>
+          <h3>Zero-Copy GPU Ingestion</h3>
+          <p>Stream sensor data directly into GPU memory using RDMA and GPUDirect, bypassing the CPU for maximum throughput with minimal latency.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🔌</div>
+          <h3>Universal Sensor Abstraction</h3>
+          <p>Unified API for cameras, LiDAR, radar, ultrasound, RF sensors, and custom instruments. Swap hardware backends without changing pipeline code.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🔗</div>
+          <h3>Native NVIDIA SDK Integration</h3>
+          <p>First-class interop with Holoscan, DeepStream, CUDA, TensorRT, and RAPIDS — plug sensor streams directly into your existing NVIDIA pipeline.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📡</div>
+          <h3>Multi-Channel Synchronization</h3>
+          <p>Hardware-level timestamp alignment and software sync primitives to fuse data from multiple asynchronous sensor sources with nanosecond precision.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🧩</div>
+          <h3>Extensible Plugin System</h3>
+          <p>Bring your own sensor drivers via the DAQIRI plugin interface. Hot-swap adapters at runtime to support evolving hardware configurations.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📊</div>
+          <h3>Built-in Observability</h3>
+          <p>Out-of-the-box metrics, tracing, and health monitoring with OpenTelemetry export for production deployments at any scale.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ╔══════════════════════════════════════════════════════╗ -->
+  <!-- ║  GETTING STARTED                                     ║ -->
+  <!-- ╚══════════════════════════════════════════════════════╝ -->
+  <section id="getting-started">
+    <div class="container">
+      <div class="section-header">
+        <div class="left">
+          <div class="section-label">Quick Start</div>
+          <h2 class="section-title">Getting Started</h2>
+          <p class="section-desc">From zero to a running sensor pipeline in under five minutes.</p>
+        </div>
+        <a href="#tutorials" class="btn btn-outline">Full Tutorials →</a>
+      </div>
+
+      <div class="gs-layout">
+        <!-- Steps -->
+        <div class="gs-steps">
+          <div class="gs-step">
+            <div class="gs-step-num">1</div>
+            <div class="gs-step-body">
+              <h4>Install DAQIRI</h4>
+              <p>Install via pip with CUDA 12+ and Python 3.10+. GPU drivers must be set up beforehand.</p>
+              <pre><span class="fn">pip install</span> nvidia-daqiri</pre>
+            </div>
+          </div>
+          <div class="gs-step">
+            <div class="gs-step-num">2</div>
+            <div class="gs-step-body">
+              <h4>Initialize a Context</h4>
+              <p>Create a <code>DAQIRIContext</code> bound to a GPU device. This manages all sensor lifecycles.</p>
+              <pre><span class="kw">import</span> daqiri
+ctx = daqiri.<span class="fn">DAQIRIContext</span>(gpu_id=<span class="nm">0</span>)</pre>
+            </div>
+          </div>
+          <div class="gs-step">
+            <div class="gs-step-num">3</div>
+            <div class="gs-step-body">
+              <h4>Register a Sensor Source</h4>
+              <p>Instantiate a built-in adapter or your own plugin, then register it with the context.</p>
+              <pre><span class="kw">from</span> daqiri.sources <span class="kw">import</span> CameraSource
+cam = <span class="fn">CameraSource</span>(device=<span class="str">"/dev/video0"</span>)
+ctx.<span class="fn">register_source</span>(cam, <span class="str">"cam0"</span>)</pre>
+            </div>
+          </div>
+          <div class="gs-step">
+            <div class="gs-step-num">4</div>
+            <div class="gs-step-body">
+              <h4>Stream Frames to GPU</h4>
+              <p>Start the context and consume frames as GPU tensors — zero intermediate copies.</p>
+              <pre>ctx.<span class="fn">start</span>()
+<span class="kw">async for</span> frame <span class="kw">in</span> cam.<span class="fn">stream</span>():
+    <span class="cm"># frame.gpu_tensor → CuPy/DLPack</span>
+    result = model.<span class="fn">infer</span>(frame.gpu_tensor)</pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- Code examples panel -->
+        <div class="gs-code-panel">
+          <div class="gs-code-block">
+            <div class="gs-code-header">
+              <span class="gs-code-title">Multi-Sensor Fusion</span>
+              <span class="gs-code-lang">Python</span>
+            </div>
+            <pre><span class="kw">from</span> daqiri.sync <span class="kw">import</span> TimestampAligner
+
+aligner = <span class="fn">TimestampAligner</span>(
+    sources=[lidar, camera, radar],
+    window_ns=<span class="nm">5_000</span>,
+    strategy=<span class="str">"nearest"</span>
+)
+
+<span class="kw">async for</span> bundle <span class="kw">in</span> aligner.<span class="fn">stream</span>():
+    lidar_pts = bundle[<span class="str">"lidar"</span>].gpu_tensor
+    img       = bundle[<span class="str">"camera"</span>].gpu_tensor
+    <span class="fn">fuse_and_infer</span>(lidar_pts, img)</pre>
+          </div>
+
+          <div class="gs-code-block">
+            <div class="gs-code-header">
+              <span class="gs-code-title">Holoscan Integration</span>
+              <span class="gs-code-lang">Python</span>
+            </div>
+            <pre><span class="kw">from</span> holoscan.core <span class="kw">import</span> Application
+<span class="kw">from</span> daqiri.holoscan <span class="kw">import</span> DAQIRIOperator
+
+<span class="kw">class</span> <span class="fn">SensorApp</span>(Application):
+    <span class="kw">def</span> <span class="fn">compose</span>(self):
+        src   = <span class="fn">DAQIRIOperator</span>(self, source=cam)
+        infer = <span class="fn">TRTInferOp</span>(self, model=<span class="str">"model.trt"</span>)
+        viz   = <span class="fn">HoloVizOp</span>(self)
+        self.<span class="fn">add_flow</span>(src, infer)
+        self.<span class="fn">add_flow</span>(infer, viz)</pre>
+          </div>
+
+          <div class="gs-code-block">
+            <div class="gs-code-header">
+              <span class="gs-code-title">C++ Zero-Copy (RDMA)</span>
+              <span class="gs-code-lang">C++17</span>
+            </div>
+            <pre><span class="kw">auto</span> ctx = daqiri::<span class="fn">Context</span>::<span class="fn">create</span>({
+    .gpu_id = <span class="nm">0</span>, .rdma_enabled = <span class="kw">true</span>
+});
+<span class="kw">auto</span> src = std::<span class="fn">make_shared</span>&lt;
+    daqiri::RDMASource&gt;(iface);
+ctx-&gt;<span class="fn">register_source</span>(src, <span class="str">"rdma0"</span>);
+ctx-&gt;<span class="fn">start</span>([](daqiri::Frame f) {
+    <span class="fn">process</span>(f.device_ptr, f.size);
+});</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ╔══════════════════════════════════════════════════════╗ -->
+  <!-- ║  EXAMPLES                                            ║ -->
+  <!-- ╚══════════════════════════════════════════════════════╝ -->
+  <section id="examples" style="background:var(--bg-card);border-top:1px solid var(--border);">
+    <div class="container">
+      <div class="section-header">
+        <div class="left">
+          <div class="section-label">Code Samples</div>
+          <h2 class="section-title">Examples</h2>
+          <p class="section-desc">Runnable snippets covering the most common DAQIRI use cases.</p>
+        </div>
+        <a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="btn btn-outline" target="_blank">All Examples →</a>
+      </div>
+      <div class="examples-grid">
+
+        <div class="example-card">
+          <div class="example-card-header">
+            <span class="example-lang-dot lang-python"></span>
+            <span class="example-card-title">Basic Stream Acquisition</span>
+            <span class="example-card-lang">Python</span>
+          </div>
+          <div class="example-card-body">
+            <pre><span class="kw">import</span> daqiri
+<span class="kw">from</span> daqiri.sources <span class="kw">import</span> CameraSource
+
+<span class="cm"># Initialize context on GPU 0</span>
+ctx = daqiri.<span class="fn">DAQIRIContext</span>(gpu_id=<span class="nm">0</span>)
+cam = <span class="fn">CameraSource</span>(device=<span class="str">"/dev/video0"</span>)
+ctx.<span class="fn">register_source</span>(cam, <span class="str">"cam0"</span>)
+ctx.<span class="fn">start</span>()
+
+<span class="kw">async for</span> frame <span class="kw">in</span> cam.<span class="fn">stream</span>():
+    <span class="cm"># frame.gpu_tensor is a CuPy array</span>
+    result = model.<span class="fn">infer</span>(frame.gpu_tensor)</pre>
+          </div>
+          <div class="example-card-footer">
+            <span class="example-card-desc">Stream camera frames directly to GPU memory</span>
+            <a href="#" class="example-card-link">Open ↗</a>
+          </div>
+        </div>
+
+        <div class="example-card">
+          <div class="example-card-header">
+            <span class="example-lang-dot lang-python"></span>
+            <span class="example-card-title">Multi-Sensor Fusion</span>
+            <span class="example-card-lang">Python</span>
+          </div>
+          <div class="example-card-body">
+            <pre><span class="kw">from</span> daqiri.sync <span class="kw">import</span> TimestampAligner
+
+aligner = <span class="fn">TimestampAligner</span>(
+    sources=[lidar, camera, radar],
+    window_ns=<span class="nm">5_000</span>,  <span class="cm"># 5µs window</span>
+    strategy=<span class="str">"nearest"</span>
+)
+
+<span class="kw">async for</span> bundle <span class="kw">in</span> aligner.<span class="fn">stream</span>():
+    lidar_pts = bundle[<span class="str">"lidar"</span>].gpu_tensor
+    img       = bundle[<span class="str">"camera"</span>].gpu_tensor
+    <span class="fn">fuse_and_infer</span>(lidar_pts, img)</pre>
+          </div>
+          <div class="example-card-footer">
+            <span class="example-card-desc">Synchronize LiDAR, camera, and radar streams</span>
+            <a href="#" class="example-card-link">Open ↗</a>
+          </div>
+        </div>
+
+        <div class="example-card">
+          <div class="example-card-header">
+            <span class="example-lang-dot lang-cpp"></span>
+            <span class="example-card-title">C++ Zero-Copy Ingestion</span>
+            <span class="example-card-lang">C++17</span>
+          </div>
+          <div class="example-card-body">
+            <pre><span class="kw">#include</span> <span class="str">&lt;daqiri/context.hpp&gt;</span>
+<span class="kw">#include</span> <span class="str">&lt;daqiri/sources/rdma.hpp&gt;</span>
+
+<span class="kw">auto</span> ctx = daqiri::<span class="fn">Context</span>::<span class="fn">create</span>({
+    .gpu_id = <span class="nm">0</span>,
+    .rdma_enabled = <span class="kw">true</span>
+});
+
+<span class="kw">auto</span> src = std::<span class="fn">make_shared</span>&lt;
+    daqiri::RDMASource&gt;(iface);
+ctx-&gt;<span class="fn">register_source</span>(src, <span class="str">"rdma0"</span>);
+ctx-&gt;<span class="fn">start</span>([](daqiri::Frame f) {
+    <span class="fn">process</span>(f.device_ptr, f.size);
+});</pre>
+          </div>
+          <div class="example-card-footer">
+            <span class="example-card-desc">RDMA-based zero-copy ingestion in C++</span>
+            <a href="#" class="example-card-link">Open ↗</a>
+          </div>
+        </div>
+
+        <div class="example-card">
+          <div class="example-card-header">
+            <span class="example-lang-dot lang-python"></span>
+            <span class="example-card-title">Holoscan Pipeline Integration</span>
+            <span class="example-card-lang">Python</span>
+          </div>
+          <div class="example-card-body">
+            <pre><span class="kw">from</span> holoscan.core <span class="kw">import</span> Application
+<span class="kw">from</span> daqiri.holoscan <span class="kw">import</span> DAQIRIOperator
+
+<span class="kw">class</span> <span class="fn">SensorApp</span>(Application):
+    <span class="kw">def</span> <span class="fn">compose</span>(self):
+        src = <span class="fn">DAQIRIOperator</span>(
+            self, source=cam,
+            name=<span class="str">"sensor_in"</span>
+        )
+        infer = <span class="fn">TRTInferOp</span>(self,
+            model=<span class="str">"model.trt"</span>)
+        viz = <span class="fn">HoloVizOp</span>(self)
+        self.<span class="fn">add_flow</span>(src, infer)
+        self.<span class="fn">add_flow</span>(infer, viz)</pre>
+          </div>
+          <div class="example-card-footer">
+            <span class="example-card-desc">Drop DAQIRI into a Holoscan application</span>
+            <a href="#" class="example-card-link">Open ↗</a>
+          </div>
+        </div>
+
+        <div class="example-card">
+          <div class="example-card-header">
+            <span class="example-lang-dot lang-python"></span>
+            <span class="example-card-title">Custom Sensor Plugin</span>
+            <span class="example-card-lang">Python</span>
+          </div>
+          <div class="example-card-body">
+            <pre><span class="kw">from</span> daqiri <span class="kw">import</span> SensorSource, SensorFrame
+
+<span class="kw">class</span> <span class="fn">MySensor</span>(SensorSource):
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, cfg):
+        self.hw = <span class="fn">MyHardwareDriver</span>(cfg)
+
+    <span class="kw">async def</span> <span class="fn">stream</span>(self):
+        <span class="kw">while True</span>:
+            raw = <span class="kw">await</span> self.hw.<span class="fn">read</span>()
+            <span class="kw">yield</span> SensorFrame(
+                data=raw,
+                timestamp_ns=<span class="fn">now_ns</span>(),
+                dtype=<span class="str">"float32"</span>
+            )</pre>
+          </div>
+          <div class="example-card-footer">
+            <span class="example-card-desc">Implement a custom sensor adapter plugin</span>
+            <a href="#" class="example-card-link">Open ↗</a>
+          </div>
+        </div>
+
+        <div class="example-card">
+          <div class="example-card-header">
+            <span class="example-lang-dot lang-cuda"></span>
+            <span class="example-card-title">DeepStream Source Adapter</span>
+            <span class="example-card-lang">Python</span>
+          </div>
+          <div class="example-card-body">
+            <pre><span class="kw">from</span> daqiri.deepstream <span class="kw">import</span> DSAdapter
+
+<span class="cm"># Wraps any DAQIRI source as a</span>
+<span class="cm"># custom GStreamer source element</span>
+adapter = <span class="fn">DSAdapter</span>(
+    source=ultrasound_src,
+    caps=<span class="str">"video/x-raw,format=NV12"</span>,
+    latency_ms=<span class="nm">2</span>
+)
+
+pipeline = gst.<span class="fn">parse_launch</span>(
+    <span class="str">f"daqirisrc name=src ! "</span>
+    <span class="str">f"nvstreammux ! nvinfer !"</span>
+    <span class="str">f"nvdsosd ! nveglglessink"</span>
+)</pre>
+          </div>
+          <div class="example-card-footer">
+            <span class="example-card-desc">Use DAQIRI sensors in a DeepStream pipeline</span>
+            <a href="#" class="example-card-link">Open ↗</a>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ╔══════════════════════════════════════════════════════╗ -->
+  <!-- ║  TUTORIALS                                           ║ -->
+  <!-- ╚══════════════════════════════════════════════════════╝ -->
+  <section id="tutorials">
+    <div class="container">
+      <div class="section-header">
+        <div class="left">
+          <div class="section-label">Learning Resources</div>
+          <h2 class="section-title">Tutorials</h2>
+          <p class="section-desc">Step-by-step guides from first install to production deployment.</p>
+        </div>
+        <a href="#" class="btn btn-outline">All Tutorials →</a>
+      </div>
+      <div class="tutorials-list">
+        <div class="tutorial-item">
+          <span class="tutorial-num">01</span>
+          <div class="tutorial-info">
+            <div class="tutorial-title">Installation &amp; Environment Setup</div>
+            <div class="tutorial-desc">Install DAQIRI via pip or from source, configure CUDA drivers, and verify your setup with a hello-world stream test.</div>
+          </div>
+          <div class="tutorial-meta">
+            <span class="tag tag-beginner">Beginner</span>
+            <span class="tutorial-time">~10 min</span>
+          </div>
+          <span class="tutorial-arrow">→</span>
+        </div>
+        <div class="tutorial-item">
+          <span class="tutorial-num">02</span>
+          <div class="tutorial-info">
+            <div class="tutorial-title">Your First Sensor-to-GPU Pipeline</div>
+            <div class="tutorial-desc">Build a complete end-to-end pipeline that reads frames from a USB camera, streams them to GPU memory, and runs a simple inference pass with TensorRT.</div>
+          </div>
+          <div class="tutorial-meta">
+            <span class="tag tag-beginner">Beginner</span>
+            <span class="tutorial-time">~25 min</span>
+          </div>
+          <span class="tutorial-arrow">→</span>
+        </div>
+        <div class="tutorial-item">
+          <span class="tutorial-num">03</span>
+          <div class="tutorial-info">
+            <div class="tutorial-title">Multi-Sensor Time Synchronization</div>
+            <div class="tutorial-desc">Align temporally disparate streams from LiDAR, RGB camera, and IMU using DAQIRI's <code>TimestampAligner</code> and hardware PPS signals.</div>
+          </div>
+          <div class="tutorial-meta">
+            <span class="tag tag-intermediate">Intermediate</span>
+            <span class="tutorial-time">~40 min</span>
+          </div>
+          <span class="tutorial-arrow">→</span>
+        </div>
+        <div class="tutorial-item">
+          <span class="tutorial-num">04</span>
+          <div class="tutorial-info">
+            <div class="tutorial-title">Integrating DAQIRI with NVIDIA Holoscan</div>
+            <div class="tutorial-desc">Use <code>DAQIRIOperator</code> to connect physical sensor streams into a Holoscan application with real-time visualization via HoloViz.</div>
+          </div>
+          <div class="tutorial-meta">
+            <span class="tag tag-intermediate">Intermediate</span>
+            <span class="tutorial-time">~35 min</span>
+          </div>
+          <span class="tutorial-arrow">→</span>
+        </div>
+        <div class="tutorial-item">
+          <span class="tutorial-num">05</span>
+          <div class="tutorial-info">
+            <div class="tutorial-title">Writing a Custom Sensor Adapter Plugin</div>
+            <div class="tutorial-desc">Implement the <code>SensorSource</code> interface for proprietary hardware, package it as a DAQIRI plugin, and register it at runtime.</div>
+          </div>
+          <div class="tutorial-meta">
+            <span class="tag tag-intermediate">Intermediate</span>
+            <span class="tutorial-time">~45 min</span>
+          </div>
+          <span class="tutorial-arrow">→</span>
+        </div>
+        <div class="tutorial-item">
+          <span class="tutorial-num">06</span>
+          <div class="tutorial-info">
+            <div class="tutorial-title">Zero-Copy RDMA Pipelines with GPUDirect</div>
+            <div class="tutorial-desc">Configure network-attached sensors to stream data over InfiniBand directly into GPU memory using GPUDirect RDMA, achieving wire-speed ingestion.</div>
+          </div>
+          <div class="tutorial-meta">
+            <span class="tag tag-advanced">Advanced</span>
+            <span class="tutorial-time">~60 min</span>
+          </div>
+          <span class="tutorial-arrow">→</span>
+        </div>
+        <div class="tutorial-item">
+          <span class="tutorial-num">07</span>
+          <div class="tutorial-info">
+            <div class="tutorial-title">Production Deployment &amp; Observability</div>
+            <div class="tutorial-desc">Deploy DAQIRI in a containerized environment, export OpenTelemetry metrics to Prometheus, and set up alerting for stream health in Grafana.</div>
+          </div>
+          <div class="tutorial-meta">
+            <span class="tag tag-advanced">Advanced</span>
+            <span class="tutorial-time">~50 min</span>
+          </div>
+          <span class="tutorial-arrow">→</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ╔══════════════════════════════════════════════════════╗ -->
+  <!-- ║  PUBLICATIONS                                        ║ -->
+  <!-- ╚══════════════════════════════════════════════════════╝ -->
+  <section id="publications">
+    <div class="container">
+      <div class="section-header">
+        <div class="left">
+          <div class="section-label">Research</div>
+          <h2 class="section-title">Publications</h2>
+          <p class="section-desc">Academic papers and technical reports from the DAQIRI team and community.</p>
+        </div>
+        <a href="#" class="btn btn-outline">All Publications →</a>
+      </div>
+      <div class="publications-grid">
+        <div class="pub-card">
+          <div class="pub-venue">
+            <span class="pub-venue-badge">SC '24</span>
+            <span class="pub-year">2024</span>
+          </div>
+          <div class="pub-title">DAQIRI: A Unified Abstraction Layer for High-Bandwidth Sensor Ingestion on GPU-Accelerated Systems</div>
+          <div class="pub-authors"><span class="highlight-author">A. Author</span>, B. Author, C. Author, D. Author — NVIDIA Research</div>
+          <div class="pub-links">
+            <a href="#" class="pub-link">PDF</a>
+            <a href="#" class="pub-link">arXiv</a>
+            <a href="#" class="pub-link">Cite</a>
+          </div>
+        </div>
+        <div class="pub-card">
+          <div class="pub-venue">
+            <span class="pub-venue-badge">NSDI '24</span>
+            <span class="pub-year">2024</span>
+          </div>
+          <div class="pub-title">Zero-Copy Transport for Real-Time Sensor Streams: Benchmarking GPUDirect RDMA at Scale</div>
+          <div class="pub-authors">B. Author, <span class="highlight-author">C. Author</span>, E. Author — NVIDIA &amp; Stanford University</div>
+          <div class="pub-links">
+            <a href="#" class="pub-link">PDF</a>
+            <a href="#" class="pub-link">arXiv</a>
+            <a href="#" class="pub-link">Cite</a>
+          </div>
+        </div>
+        <div class="pub-card">
+          <div class="pub-venue">
+            <span class="pub-venue-badge">ISCA '23</span>
+            <span class="pub-year">2023</span>
+          </div>
+          <div class="pub-title">Sub-Microsecond Multi-Sensor Synchronization Using Hardware Timestamp Injection and PPS Disciplining</div>
+          <div class="pub-authors">D. Author, <span class="highlight-author">A. Author</span>, F. Author — NVIDIA</div>
+          <div class="pub-links">
+            <a href="#" class="pub-link">PDF</a>
+            <a href="#" class="pub-link">arXiv</a>
+            <a href="#" class="pub-link">Cite</a>
+          </div>
+        </div>
+        <div class="pub-card">
+          <div class="pub-venue">
+            <span class="pub-venue-badge">Workshop · NeurIPS '23</span>
+            <span class="pub-year">2023</span>
+          </div>
+          <div class="pub-title">Closing the Sensor-to-Model Gap: How Low-Latency Ingestion Pipelines Improve Real-Time AI Performance</div>
+          <div class="pub-authors">E. Author, B. Author, <span class="highlight-author">C. Author</span> — NVIDIA Research</div>
+          <div class="pub-links">
+            <a href="#" class="pub-link">PDF</a>
+            <a href="#" class="pub-link">Cite</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ╔══════════════════════════════════════════════════════╗ -->
+  <!-- ║  IMPACT STORIES                                      ║ -->
+  <!-- ╚══════════════════════════════════════════════════════╝ -->
+  <section id="impact">
+    <div class="container">
+      <div class="section-header">
+        <div class="left">
+          <div class="section-label">Community</div>
+          <h2 class="section-title">Impact Stories</h2>
+          <p class="section-desc">How organizations across industries are using DAQIRI to power real-time AI applications.</p>
+        </div>
+      </div>
+      <div class="impact-grid">
+        <div class="impact-card">
+          <div class="impact-tag">🏥 Medical Imaging</div>
+          <div class="impact-quote">DAQIRI allowed us to stream raw ultrasound data directly to our inference GPU without a single extra memory copy. Our latency dropped from 18ms to under 2ms.</div>
+          <div class="impact-metric">
+            <div class="metric-item"><div class="metric-value">9×</div><div class="metric-label">Latency Reduction</div></div>
+            <div class="metric-item"><div class="metric-value">4K fps</div><div class="metric-label">Frame Rate</div></div>
+          </div>
+          <div class="impact-footer">
+            <div class="impact-org-icon">🏥</div>
+            <div><div class="impact-org-name">Example Medical Systems</div><div class="impact-org-role">Principal Engineer, Real-Time AI</div></div>
+          </div>
+        </div>
+        <div class="impact-card">
+          <div class="impact-tag">🚗 Autonomous Vehicles</div>
+          <div class="impact-quote">We replaced our custom sensor bridge with DAQIRI in two weeks. The plugin system meant our existing LiDAR driver just worked — no rewrite required.</div>
+          <div class="impact-metric">
+            <div class="metric-item"><div class="metric-value">2 wks</div><div class="metric-label">Integration Time</div></div>
+            <div class="metric-item"><div class="metric-value">12 sensors</div><div class="metric-label">Fused Streams</div></div>
+          </div>
+          <div class="impact-footer">
+            <div class="impact-org-icon">🚗</div>
+            <div><div class="impact-org-name">Example Robotics Co.</div><div class="impact-org-role">Software Architect, Perception</div></div>
+          </div>
+        </div>
+        <div class="impact-card">
+          <div class="impact-tag">🔬 Scientific Computing</div>
+          <div class="impact-quote">Our radio telescope array generates 40 GB/s of raw data. DAQIRI's GPUDirect RDMA support was the only solution that could keep up without dropping samples.</div>
+          <div class="impact-metric">
+            <div class="metric-item"><div class="metric-value">40 GB/s</div><div class="metric-label">Sustained Throughput</div></div>
+            <div class="metric-item"><div class="metric-value">0 drops</div><div class="metric-label">Packet Loss</div></div>
+          </div>
+          <div class="impact-footer">
+            <div class="impact-org-icon">📡</div>
+            <div><div class="impact-org-name">Example National Observatory</div><div class="impact-org-role">Research Scientist, Signal Processing</div></div>
+          </div>
+        </div>
+        <div class="impact-card">
+          <div class="impact-tag">🏭 Industrial IoT</div>
+          <div class="impact-quote">Connecting 200+ vibration sensors across our factory floor used to require custom middleware. DAQIRI's plugin system made it a configuration exercise.</div>
+          <div class="impact-metric">
+            <div class="metric-item"><div class="metric-value">200+</div><div class="metric-label">Sensors Connected</div></div>
+            <div class="metric-item"><div class="metric-value">60% less</div><div class="metric-label">Engineering Time</div></div>
+          </div>
+          <div class="impact-footer">
+            <div class="impact-org-icon">🏭</div>
+            <div><div class="impact-org-name">Example Manufacturing Ltd.</div><div class="impact-org-role">IoT Platform Lead</div></div>
+          </div>
+        </div>
+        <div class="impact-card">
+          <div class="impact-tag">🛡️ Defense &amp; Surveillance</div>
+          <div class="impact-quote">DAQIRI's timestamp alignment across RF, EO, and IR sensors gave us a unified track picture we couldn't achieve with any off-the-shelf middleware.</div>
+          <div class="impact-metric">
+            <div class="metric-item"><div class="metric-value">&lt;500 ns</div><div class="metric-label">Sync Accuracy</div></div>
+            <div class="metric-item"><div class="metric-value">3 modalities</div><div class="metric-label">Fused Sensors</div></div>
+          </div>
+          <div class="impact-footer">
+            <div class="impact-org-icon">🛡️</div>
+            <div><div class="impact-org-name">Example Defense Systems</div><div class="impact-org-role">Systems Integration Engineer</div></div>
+          </div>
+        </div>
+        <div class="impact-card">
+          <div class="impact-tag">🌊 Ocean &amp; Environmental</div>
+          <div class="impact-quote">Deploying on an AUV with a Jetson meant tight power budgets. DAQIRI's minimal CPU overhead let us reclaim 30% of our power envelope for other systems.</div>
+          <div class="impact-metric">
+            <div class="metric-item"><div class="metric-value">30%</div><div class="metric-label">Power Saved</div></div>
+            <div class="metric-item"><div class="metric-value">Jetson AGX</div><div class="metric-label">Platform</div></div>
+          </div>
+          <div class="impact-footer">
+            <div class="impact-org-icon">🌊</div>
+            <div><div class="impact-org-name">Example Ocean Institute</div><div class="impact-org-role">Embedded Systems Lead</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ╔══════════════════════════════════════════════════════╗ -->
+  <!-- ║  CTA                                                 ║ -->
+  <!-- ╚══════════════════════════════════════════════════════╝ -->
+  <section id="cta">
+    <div class="container">
+      <div class="section-label" style="text-align:center;">Get Started</div>
+      <h2 style="text-align:center;">Ready to close the sensor-to-GPU gap?</h2>
+      <p>Install DAQIRI in minutes and start streaming sensor data directly into your NVIDIA pipeline today.</p>
+      <pre style="max-width:480px;margin:0 auto 2.5rem;text-align:left;"><span class="cm"># Install via pip</span>
+<span class="fn">pip install</span> nvidia-daqiri
+
+<span class="cm"># Or clone from GitHub</span>
+<span class="fn">git clone</span> https://github.com/NVIDIA/daqiri</pre>
+      <div class="cta-actions">
+        <a href="#getting-started" class="btn btn-primary">Start the Tutorial →</a>
+        <a href="https://github.com/NVIDIA/daqiri" class="btn btn-outline" target="_blank">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          View on GitHub
+        </a>
+        <a href="daqiri-api.html" class="btn btn-outline">Read the API Guide →</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ╔══════════════════════════════════════════════════════╗ -->
+  <!-- ║  FOOTER                                              ║ -->
+  <!-- ╚══════════════════════════════════════════════════════╝ -->
+  <footer>
+    <div class="container">
+      <div class="footer-inner">
+        <div class="footer-brand">
+          <div class="nav-logo">
+            <div class="nav-logo-icon">DAQ</div>
+            <span class="nav-logo-text">DAQIRI</span>
+            <span class="nav-logo-badge">NVIDIA</span>
+          </div>
+          <p>High-performance sensor data acquisition and integration for the NVIDIA software ecosystem.</p>
+        </div>
+        <div>
+          <div class="footer-col-title">Docs</div>
+          <ul class="footer-links">
+            <li><a href="daqiri-api.html">API Guide</a></li>
+            <li><a href="#getting-started">Getting Started</a></li>
+            <li><a href="#examples">Examples</a></li>
+            <li><a href="#tutorials">Tutorials</a></li>
+            <li><a href="#">Changelog</a></li>
+          </ul>
+        </div>
+        <div>
+          <div class="footer-col-title">Community</div>
+          <ul class="footer-links">
+            <li><a href="https://github.com/NVIDIA/daqiri" target="_blank">GitHub</a></li>
+            <li><a href="#">Developer Forum</a></li>
+            <li><a href="#publications">Publications</a></li>
+            <li><a href="#impact">Impact Stories</a></li>
+          </ul>
+        </div>
+        <div>
+          <div class="footer-col-title">NVIDIA</div>
+          <ul class="footer-links">
+            <li><a href="https://developer.nvidia.com" target="_blank">Developer</a></li>
+            <li><a href="https://developer.nvidia.com/holoscan-sdk" target="_blank">Holoscan SDK</a></li>
+            <li><a href="https://developer.nvidia.com/deepstream-sdk" target="_blank">DeepStream</a></li>
+            <li><a href="https://developer.nvidia.com/rapids" target="_blank">RAPIDS</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <div class="footer-bottom-left">© 2024 NVIDIA Corporation. Licensed under Apache 2.0.</div>
+        <div class="footer-bottom-right">
+          <a href="#">Privacy Policy</a>
+          <a href="#">Terms of Use</a>
+          <a href="https://github.com/NVIDIA/daqiri" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    const navbar = document.getElementById('navbar');
+    window.addEventListener('scroll', () => {
+      navbar.classList.toggle('scrolled', window.scrollY > 20);
+    }, { passive: true });
+
+    const sections = document.querySelectorAll('section[id]');
+    const navLinks = document.querySelectorAll('.nav-links a:not(.nav-external)');
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          const id = e.target.id;
+          navLinks.forEach(a => {
+            a.classList.toggle('active', a.getAttribute('href') === `#${id}`);
+          });
+        }
+      });
+    }, { rootMargin: '-40% 0px -50% 0px' });
+    sections.forEach(s => observer.observe(s));
+  </script>
+</body>
+</html>
