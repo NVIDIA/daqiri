@@ -44,7 +44,7 @@ bool RdmaMgr::set_config_and_initialize(const NetworkConfig& cfg) {
   return initialized_;
 }
 
-// Common ANO functions
+// Common DAQIRI functions
 Status RdmaMgr::set_packet_lengths(BurstParams* burst, int idx,
                                    const std::initializer_list<int>& lens) {
   assert(lens.size() == 1);  // Split not supported yet
@@ -1500,7 +1500,7 @@ void RdmaMgr::initialize() {
 }
 
 void RdmaMgr::shutdown() {
-  DAQIRI_LOG_INFO("RDMA ANO manager shutting down");
+  DAQIRI_LOG_INFO("RDMA manager shutting down");
   rdma_force_quit.store(true);
 
   DAQIRI_LOG_INFO("Waiting for main thread to complete");

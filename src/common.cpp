@@ -33,11 +33,11 @@
 #endif
 
 #define ASSERT_DAQIRI_MGR_INITIALIZED() \
-  assert(g_ano_mgr != nullptr && "Advanced Network Manager is not initialized")
+  assert(g_daqiri_mgr != nullptr && "DAQIRI Manager is not initialized")
 namespace daqiri {
 
 // Declare a static global variable for the manager
-static Manager* g_ano_mgr = nullptr;
+static Manager* g_daqiri_mgr = nullptr;
 
 const std::unordered_map<LogLevel::Level, std::string> LogLevel::level_to_string_map = {
     {TRACE, "trace"},
@@ -61,20 +61,20 @@ const std::unordered_map<std::string, LogLevel::Level> LogLevel::string_to_level
 
 [[deprecated("Use create_tx_burst_params() instead")]] BurstParams* create_burst_params() {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->create_tx_burst_params();
+  return g_daqiri_mgr->create_tx_burst_params();
 }
 
 BurstParams* create_tx_burst_params() {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->create_tx_burst_params();
+  return g_daqiri_mgr->create_tx_burst_params();
 }
 
 void initialize_manager(Manager* manager) {
-  g_ano_mgr = manager;
+  g_daqiri_mgr = manager;
 }
 
 Manager* get_active_manager() {
-  return g_ano_mgr;
+  return g_daqiri_mgr;
 }
 
 ManagerType get_manager_type() {
@@ -88,60 +88,60 @@ ManagerType get_manager_type(const Config& config) {
 
 void free_packet(BurstParams* burst, int pkt) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_ano_mgr->free_packet(burst, pkt);
+  g_daqiri_mgr->free_packet(burst, pkt);
 }
 
 void free_packet_segment(BurstParams* burst, int seg, int pkt) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_ano_mgr->free_packet_segment(burst, seg, pkt);
+  g_daqiri_mgr->free_packet_segment(burst, seg, pkt);
 }
 
 uint32_t get_packet_length(BurstParams* burst, int idx) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->get_packet_length(burst, idx);
+  return g_daqiri_mgr->get_packet_length(burst, idx);
 }
 
 uint16_t get_packet_flow_id(BurstParams* burst, int idx) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->get_packet_flow_id(burst, idx);
+  return g_daqiri_mgr->get_packet_flow_id(burst, idx);
 }
 
 uint64_t get_burst_tot_byte(BurstParams* burst) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->get_burst_tot_byte(burst);
+  return g_daqiri_mgr->get_burst_tot_byte(burst);
 }
 
 uint32_t get_segment_packet_length(BurstParams* burst, int seg, int idx) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->get_segment_packet_length(burst, seg, idx);
+  return g_daqiri_mgr->get_segment_packet_length(burst, seg, idx);
 }
 
 void free_all_segment_packets(BurstParams* burst, int seg) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_ano_mgr->free_all_segment_packets(burst, seg);
+  g_daqiri_mgr->free_all_segment_packets(burst, seg);
 }
 
 void free_all_burst_packets(BurstParams* burst) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_ano_mgr->free_all_packets(burst);
+  g_daqiri_mgr->free_all_packets(burst);
 }
 
 void free_all_packets_and_burst_rx(BurstParams* burst) {
   free_all_burst_packets(burst);
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_ano_mgr->free_rx_burst(burst);
+  g_daqiri_mgr->free_rx_burst(burst);
 }
 
 void free_all_packets_and_burst_tx(BurstParams* burst) {
   free_all_burst_packets(burst);
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_ano_mgr->free_tx_burst(burst);
+  g_daqiri_mgr->free_tx_burst(burst);
 }
 
 void free_segment_packets_and_burst(BurstParams* burst, int seg) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_ano_mgr->free_all_segment_packets(burst, seg);
-  g_ano_mgr->free_rx_burst(burst);
+  g_daqiri_mgr->free_all_segment_packets(burst, seg);
+  g_daqiri_mgr->free_rx_burst(burst);
 }
 
 void format_eth_addr(char* dst, std::string addr) {
@@ -162,65 +162,65 @@ void format_eth_addr(char* dst, std::string addr) {
 
 Status get_mac_addr(int port, char* mac) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->get_mac_addr(port, mac);
+  return g_daqiri_mgr->get_mac_addr(port, mac);
 }
 
 Status drop_all_traffic(int port) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->drop_all_traffic(port);
+  return g_daqiri_mgr->drop_all_traffic(port);
 }
 
 Status allow_all_traffic(int port) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->allow_all_traffic(port);
+  return g_daqiri_mgr->allow_all_traffic(port);
 }
 
 bool is_tx_burst_available(BurstParams* burst) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->is_tx_burst_available(burst);
+  return g_daqiri_mgr->is_tx_burst_available(burst);
 }
 
 int get_port_id(const std::string& key) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->get_port_id(key);
+  return g_daqiri_mgr->get_port_id(key);
 }
 
 Status get_tx_packet_burst(BurstParams* burst) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  if (!g_ano_mgr->is_tx_burst_available(burst)) return Status::NO_FREE_BURST_BUFFERS;
-  return g_ano_mgr->get_tx_packet_burst(burst);
+  if (!g_daqiri_mgr->is_tx_burst_available(burst)) return Status::NO_FREE_BURST_BUFFERS;
+  return g_daqiri_mgr->get_tx_packet_burst(burst);
 }
 
 Status set_eth_header(BurstParams* burst, int idx, char* dst_addr) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->set_eth_header(burst, idx, dst_addr);
+  return g_daqiri_mgr->set_eth_header(burst, idx, dst_addr);
 }
 
 Status set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint8_t proto,
                        unsigned int src_host, unsigned int dst_host) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->set_ipv4_header(burst, idx, ip_len, proto, src_host, dst_host);
+  return g_daqiri_mgr->set_ipv4_header(burst, idx, ip_len, proto, src_host, dst_host);
 }
 
 Status set_udp_header(BurstParams* burst, int idx, int udp_len, uint16_t src_port,
                       uint16_t dst_port) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->set_udp_header(burst, idx, udp_len, src_port, dst_port);
+  return g_daqiri_mgr->set_udp_header(burst, idx, udp_len, src_port, dst_port);
 }
 
 Status set_udp_payload(BurstParams* burst, int idx, void* data, int len) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->set_udp_payload(burst, idx, data, len);
+  return g_daqiri_mgr->set_udp_payload(burst, idx, data, len);
 }
 
 Status set_packet_lengths(BurstParams* burst, int idx, const std::initializer_list<int>& lens) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->set_packet_lengths(burst, idx, lens);
+  return g_daqiri_mgr->set_packet_lengths(burst, idx, lens);
 }
 
 Status set_packet_tx_time(BurstParams* burst, int idx, uint64_t time) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->set_packet_tx_time(burst, idx, time);
+  return g_daqiri_mgr->set_packet_tx_time(burst, idx, time);
 }
 
 int64_t get_num_packets(BurstParams* burst) {
@@ -247,77 +247,77 @@ void set_header(BurstParams* burst, uint16_t port, uint16_t q, int64_t num, int 
 
 void free_tx_burst(BurstParams* burst) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_ano_mgr->free_tx_burst(burst);
+  g_daqiri_mgr->free_tx_burst(burst);
 }
 
 void free_tx_metadata(BurstParams* burst) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_ano_mgr->free_tx_metadata(burst);
+  g_daqiri_mgr->free_tx_metadata(burst);
 }
 
 void free_rx_burst(BurstParams* burst) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_ano_mgr->free_rx_burst(burst);
+  g_daqiri_mgr->free_rx_burst(burst);
 }
 
 void free_rx_metadata(BurstParams* burst) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_ano_mgr->free_rx_metadata(burst);
+  g_daqiri_mgr->free_rx_metadata(burst);
 }
 
 void* get_segment_packet_ptr(BurstParams* burst, int seg, int idx) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->get_segment_packet_ptr(burst, seg, idx);
+  return g_daqiri_mgr->get_segment_packet_ptr(burst, seg, idx);
 }
 
 void* get_packet_ptr(BurstParams* burst, int idx) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->get_packet_ptr(burst, idx);
+  return g_daqiri_mgr->get_packet_ptr(burst, idx);
 }
 
 void shutdown() {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_ano_mgr->shutdown();
+  g_daqiri_mgr->shutdown();
 }
 
 Status send_tx_burst(BurstParams* burst) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->send_tx_burst(burst);
+  return g_daqiri_mgr->send_tx_burst(burst);
 }
 
 Status get_rx_burst(BurstParams** burst, int port, int q) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->get_rx_burst(burst, port, q);
+  return g_daqiri_mgr->get_rx_burst(burst, port, q);
 }
 
 Status get_rx_burst(BurstParams** burst, int port) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->get_rx_burst(burst, port);
+  return g_daqiri_mgr->get_rx_burst(burst, port);
 }
 
 Status get_rx_burst(BurstParams** burst) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->get_rx_burst(burst);
+  return g_daqiri_mgr->get_rx_burst(burst);
 }
 
 Status get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->get_rx_burst(burst, conn_id, server);
+  return g_daqiri_mgr->get_rx_burst(burst, conn_id, server);
 }
 
 uint16_t get_num_rx_queues(int port_id) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->get_num_rx_queues(port_id);
+  return g_daqiri_mgr->get_num_rx_queues(port_id);
 }
 
 void flush_port_queue(int port, int queue) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_ano_mgr->flush_port_queue(port, queue);
+  g_daqiri_mgr->flush_port_queue(port, queue);
 }
 
 void print_stats() {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_ano_mgr->print_stats();
+  g_daqiri_mgr->print_stats();
 }
 
 Status daqiri_init(NetworkConfig& config) {
@@ -441,36 +441,36 @@ Status daqiri_init(const std::string& yaml_string_or_path) {
 Status rdma_connect_to_server(const std::string& server_addr, uint16_t server_port,
                               uintptr_t* conn_id) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->rdma_connect_to_server(server_addr, server_port, conn_id);
+  return g_daqiri_mgr->rdma_connect_to_server(server_addr, server_port, conn_id);
 }
 
 Status rdma_connect_to_server(const std::string& server_addr, uint16_t server_port,
                               const std::string& src_addr, uintptr_t* conn_id) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->rdma_connect_to_server(server_addr, server_port, src_addr, conn_id);
+  return g_daqiri_mgr->rdma_connect_to_server(server_addr, server_port, src_addr, conn_id);
 }
 
 Status rdma_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->rdma_get_port_queue(conn_id, port, queue);
+  return g_daqiri_mgr->rdma_get_port_queue(conn_id, port, queue);
 }
 
 Status rdma_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
                                uintptr_t* conn_id) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->rdma_get_server_conn_id(server_addr, server_port, conn_id);
+  return g_daqiri_mgr->rdma_get_server_conn_id(server_addr, server_port, conn_id);
 }
 
 Status rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id, bool is_server,
                        int num_pkts, uint64_t wr_id, const std::string& local_mr_name) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->rdma_set_header(
+  return g_daqiri_mgr->rdma_set_header(
       burst, op_code, conn_id, is_server, num_pkts, wr_id, local_mr_name);
 }
 
 RDMAOpCode rdma_get_opcode(BurstParams* burst) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_ano_mgr->rdma_get_opcode(burst);
+  return g_daqiri_mgr->rdma_get_opcode(burst);
 }
 
 };  // namespace daqiri

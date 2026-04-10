@@ -1,12 +1,5 @@
 # DAQIRI networking library
 
-> [!NOTE]
-> The DAQIRI library previously included standard operators for transmitting and receiving packets
-> to/from the NIC, also referred to as the Advanced Network Operator (ANO). These operators were removed to
-> lower overhead, as aggregation/disaggregation of the packets still needed to be done in separate operators.
-> We plan to provide more full-fledged generic operators in the future. In the meantime, you can continue to use
-> this library to develop Holoscan operators adapted to your use case, now including direct packet transaction
-> with the NIC. Referred to the [Benchmarking sample application](/examples/daqiri_bench_default_tx_rx.yaml) for an example.
 > [!WARNING]
 > The library is undergoing large improvements as we aim to better support it as an NVIDIA product.
 > API breakages might be more frequent until we reach version 1.0.
@@ -15,7 +8,7 @@
 > instructions to configure your system and test the DAQIRI library.
 
 The DAQIRI library provides a way for users to achieve the highest throughput and lowest latency
-for transmitting and receiving Ethernet frames out of and into Holoscan operators. Direct access to the NIC hardware
+for transmitting and receiving Ethernet frames. Direct access to the NIC hardware
 is available in userspace, thus bypassing the kernel's networking stack entirely.
 
 ## Build quickstart
@@ -54,7 +47,7 @@ BASE_TARGET=dpdk DAQIRI_MGR="dpdk rdma" scripts/build-container.sh
 - **Low Latency**: With direct access to the NIC's ring buffers, most latency incurred is only PCIe latency
   - Since the kernel's networking stack is bypassed, the user is responsible for defining the protocols used
   over the network. In most cases Ethernet, IP, and UDP are ideal for this type of processing because of their
-  simplicity, but any type of protocol can be implemented or used. The advanced network library
+  simplicity, but any type of protocol can be implemented or used. The DAQIRI library
   gives the option to use several primitives to remove the need for filling out these headers for basic packet types,
   but raw headers can also be constructed.
 - **GPUDirect**: Optionally send data directly from the NIC to GPU, or directly from the GPU to NIC. GPUDirect has two modes:
@@ -76,18 +69,18 @@ The limitations below will be removed in a future release.
 
 ### Managers
 
-Internally the advanced network library is implemented by different backends, each offering different features.
+Internally the DAQIRI library is implemented by different backends, each offering different features.
 
 It is specified with the `manager` parameter, passed to the `daqiri::daqiri_init` function before starting an application, along with all of the NIC parameters. This step allocates all packet buffers, initializes the queues on the NIC, and starts the appropriate number of internal threads to take packets off or put packets onto the NIC as fast as possible, using the backend-specific implementation.
 
-Developers can then use the rest of the Advanced Network library API to send and receive packets, and do any
+Developers can then use the rest of the DAQIRI API to send and receive packets, and do any
 additional processing needed (e.g. aggregate, reorder, etc.), as described in the [API Structures](#api-structures) section.
 
 > [!NOTE]
 > To achieve zero copy throughout the whole pipeline only pointers are passed between each entity above. When the user
 > receives the packets from the network library it's using the same buffers that the NIC wrote to either CPU or GPU
 > memory. This architecture also implies that the user must explicitly decide when to free any buffers it's owning.
-> Failure to free buffers will result in errors in the advanced network library not being able to allocate buffers.
+> Failure to free buffers will result in errors in the DAQIRI library not being able to allocate buffers.
 
 #### DPDK
 
@@ -478,7 +471,7 @@ The Rivermax TX configuration enables hardware-assisted SMPTE 2110-20 compliant 
 
 #### API Structures
 
-The Advanced Network library uses a common structure named `BurstParams` to pass data to/from other operators. `BurstParams` provides pointers to packet memory locations (e.g., CPU or GPU) and contains metadata needed by any operator to track allocations. Interacting with `BurstParams` should only be done with the helper functions described below.
+The DAQIRI library uses a common structure named `BurstParams` to pass data to/from other operators. `BurstParams` provides pointers to packet memory locations (e.g., CPU or GPU) and contains metadata needed by any operator to track allocations. Interacting with `BurstParams` should only be done with the helper functions described below.
 
 #### Example API Usage
 

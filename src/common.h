@@ -836,7 +836,7 @@ struct YAML::convert<daqiri::NetworkConfig> {
         return false;
       }
 
-      DAQIRI_LOG_INFO("Finished reading Advanced Network configuration");
+      DAQIRI_LOG_INFO("Finished reading DAQIRI configuration");
 
       return true;
     } catch (const std::exception& e) {

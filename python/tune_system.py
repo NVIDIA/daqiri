@@ -40,7 +40,7 @@ def parse_args():
     Parses command-line arguments.
     """
     parser = argparse.ArgumentParser(
-        description="Check system tuning for Advanced Network performance",
+        description="Check system tuning for DAQIRI performance",
         epilog=(
             "Examples:\n"
             f"  python {sys.argv[0]} --check cpu-freq    # Check CPU frequency governor\n"

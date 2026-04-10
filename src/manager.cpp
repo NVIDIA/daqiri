@@ -34,6 +34,7 @@
 #include <unistd.h>
 #endif
 
+#include <cuda.h>
 #include "src/logging.hpp"
 
 namespace daqiri {
@@ -50,7 +51,7 @@ ManagerType ManagerFactory::get_default_manager_type() {
 #elif DAQIRI_MGR_RDMA
   return ManagerType::RDMA;
 #else
-#error "No Advanced Network manager defined"
+#error "No DAQIRI manager defined"
 #endif
 }
 

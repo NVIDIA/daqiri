@@ -1649,7 +1649,7 @@ void DpdkMgr::run() {
   int secondary_id = 0;
   int icore;
 
-  DAQIRI_LOG_INFO("Starting advanced network workers");
+  DAQIRI_LOG_INFO("Starting DAQIRI workers");
   // determine the correct process types for input/output
   int (*rx_worker)(void*);
   int (*tx_worker)(void*);
