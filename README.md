@@ -1,4 +1,4 @@
-# DAQIRI networking library
+# DAQIRI - Data Acquisition for Integrated Real-time Instruments
 
 > [!WARNING]
 > The library is undergoing large improvements as we aim to better support it as an NVIDIA product.
