@@ -1,16 +1,12 @@
 # DAQIRI networking library
 
-**From wire to GPU at line rate.** DAQIRI bypasses the Linux kernel to move raw sensor data directly into GPU memory at hundreds of gigabits per second.
+**Connecting DAQ Frontends to GPU compute at line rate.** DAQIRI (Data Acquisition for Integrated Real-time Instruments) helps developers seamlessly connect their data acquisition systems to NVIDIA GPUs for real-time processing and AI, paving the way for autonomy of the next-generation of scintific and industrial instruments.
 
 > [!WARNING]
 > The library is undergoing large improvements as we aim to better support it as an NVIDIA product.
 > API breakages might be more frequent until we reach version 1.0.
 
-DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux kernel
-network stack to achieve the highest possible throughput and lowest latency for Ethernet
-frame transmission and reception. It targets NVIDIA ConnectX-6 Dx and later NICs and
-supports GPU direct memory access (GPUDirect) for zero-copy data paths between the NIC
-and GPU.
+DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux kernel network stack to achieve the highest possible throughput and lowest latency for Ethernet frame transmission and reception. It targets NVIDIA ConnectX-6 Dx and later NICs and supports GPU direct memory access (GPUDirect) for zero-copy data paths between the NIC and GPU.
 
 ## Features
 
