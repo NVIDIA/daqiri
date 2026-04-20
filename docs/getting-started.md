@@ -15,6 +15,9 @@
   - NVIDIA optimized kernels (IGX OS, DGX BaseOS)
   - OFED drivers from [DOCA-Host](https://developer.nvidia.com/doca-archive) 2.8 or later
     (install the `mlnx-ofed-kernel-dkms` package or the `doca-ofed` meta-package)
+
+  > **Note:** If you use the DPDK bundled in the DAQIRI container, it is patched with
+  > dmabuf support and **peermem is not required**.
 - **DPDK** (for the DPDK backend) — userspace libraries are included in the
   [Dockerfile](../Dockerfile). Inspect it if building on bare metal.
 - **libibverbs** and **librdmacm** (for the RDMA backend)

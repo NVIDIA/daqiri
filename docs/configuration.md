@@ -1,7 +1,9 @@
 # Configuration Reference
 
-DAQIRI is configured through a YAML file that defines memory regions, NIC interfaces,
-TX/RX queues, and flow rules. The configuration is passed to `daqiri_init()` at startup.
+DAQIRI is configured through a YAML file or a `NetworkConfig` struct built in code.
+Either form defines memory regions, NIC interfaces, TX/RX queues, and flow rules, and
+is passed to `daqiri_init()` at startup. The struct form is useful for customers who
+want to interoperate with existing configuration code.
 
 See `examples/daqiri_bench_*.yaml` for complete working examples.
 

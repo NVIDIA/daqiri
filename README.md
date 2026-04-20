@@ -1,6 +1,6 @@
 # DAQIRI networking library
 
-**Connecting DAQ Frontends to GPU compute at line rate.** DAQIRI (Data Acquisition for Integrated Real-time Instruments) helps developers seamlessly connect their data acquisition systems to NVIDIA GPUs for real-time processing and AI, paving the way for autonomy of the next-generation of scintific and industrial instruments.
+**Send and receive Ethernet packets into CPU and GPU memory at hundreds of Gbps with a simple API.** DAQIRI (Data Acquisition for Integrated Real-time Instruments) connects data acquisition systems to NVIDIA GPUs for real-time processing and AI, paving the way for autonomy of the next generation of scientific and industrial instruments.
 
 > [!WARNING]
 > The library is undergoing large improvements as we aim to better support it as an NVIDIA product.

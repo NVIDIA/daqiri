@@ -12,7 +12,7 @@ grouped together for efficient transfer between the NIC and the application.
 
 `BurstParams` provides:
 - Pointers to packet buffers (CPU or GPU memory)
-- Metadata: packet count, port/queue IDs, segment count, byte totals
+- Packet metadata: packet count, port/queue IDs, segment count, byte totals
 - Per-packet lengths and flow IDs
 
 Interact with `BurstParams` only through the helper functions described below — the
@@ -30,8 +30,11 @@ return `NO_FREE_BURST_BUFFERS` or `NO_FREE_PACKET_BUFFERS` errors.
 
 ### Segments
 
-A packet can span multiple memory segments. The most common case is header-data split
-(HDS), where:
+A **segment** is a contiguous memory region (in CPU or GPU memory) that holds part
+of a packet. A single packet can span multiple segments, which lets different parts
+of the packet live in different memory domains.
+
+The most common case is header-data split (HDS), where:
 - Segment 0 = headers (CPU memory)
 - Segment 1 = payload (GPU memory)
 
@@ -45,9 +48,9 @@ For CPU-only or batched-GPU modes, there is a single segment (segment 0).
 // Initialize from a YAML config file
 auto status = daqiri::daqiri_init("path/to/config.yaml");
 
-// Or from a pre-parsed config struct
+// Or build the configuration in code
 daqiri::NetworkConfig config;
-daqiri::parse_network_config("path/to/config.yaml", config);
+// Populate configuration struct
 auto status = daqiri::daqiri_init(config);
 ```
 
@@ -169,7 +172,7 @@ if (daqiri::is_tx_burst_available(burst)) {
 
 ### Step 2: Fill packets
 
-Use the header helpers for standard UDP packets:
+Use the header helper functions for standard UDP packets:
 
 ```cpp
 for (int i = 0; i < daqiri::get_num_packets(burst); i++) {
