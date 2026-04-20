@@ -14,7 +14,7 @@ is available in userspace, thus bypassing the kernel's networking stack entirely
 ## Build quickstart
 
 ```bash
-cmake -S . -B build -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MGR="dpdk rdma"
+cmake -S . -B build -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MGR="dpdk socket"
 cmake --build build -j
 cmake --install build --prefix /opt/daqiri
 ```
@@ -22,7 +22,7 @@ cmake --install build --prefix /opt/daqiri
 Container build helper:
 
 ```bash
-BASE_TARGET=dpdk DAQIRI_MGR="dpdk rdma" scripts/build-container.sh
+BASE_TARGET=dpdk DAQIRI_MGR="dpdk socket" scripts/build-container.sh
 ```
 
 ## Requirements
@@ -71,7 +71,7 @@ The limitations below will be removed in a future release.
 
 Internally the DAQIRI library is implemented by different backends, each offering different features.
 
-It is specified with the `manager` parameter, passed to the `daqiri::daqiri_init` function before starting an application, along with all of the NIC parameters. This step allocates all packet buffers, initializes the queues on the NIC, and starts the appropriate number of internal threads to take packets off or put packets onto the NIC as fast as possible, using the backend-specific implementation.
+It is selected with `stream_type` (and `protocol` for socket streams), passed to `daqiri::daqiri_init` before starting an application, along with all NIC and queue parameters. This step allocates packet buffers, initializes queues, and starts backend worker paths.
 
 Developers can then use the rest of the DAQIRI API to send and receive packets, and do any
 additional processing needed (e.g. aggregate, reorder, etc.), as described in the [API Structures](#api-structures) section.
@@ -86,7 +86,21 @@ additional processing needed (e.g. aggregate, reorder, etc.), as described in th
 
 DPDK is an open-source userspace packet processing library supported across platforms and vendors.
 
-It is the default manager, and can be set with the values `dpdk` or `default`.
+Use `stream_type: raw` for the DPDK raw Ethernet data path.
+
+#### Socket Streams
+
+Use `stream_type: socket` with:
+
+- `protocol: tcp` for POSIX TCP sockets
+- `protocol: udp` for POSIX UDP sockets
+- `protocol: roce` for RoCE transport (RDMA path wrapped by the socket manager)
+
+For `stream_type: socket`, endpoint settings are configured in `interfaces[].socket_config`.
+For `protocol: roce`, add `interfaces[].roce_config`.
+Legacy `manager` and `rdma_config` keys are rejected.
+
+`protocol: tcp` and `protocol: udp` only support non-device memory regions (`host`, `host_pinned`, `huge`).
 
 Use the `examples/daqiri_bench_*.yaml` configs to build and run the sample applications with DPDK (default).
 
@@ -101,7 +115,9 @@ These common configurations are used by both TX and RX:
 - **`master_core`**: Master core used to fork and join network threads. This core is not used for packet processing and can be
 bound to a non-isolated core. Should differ from isolated cores in queues below.
   - type: `integer`
-- **`manager`**: Backend networking library. default: `dpdk`. Other: `doca` (GPUNet IO), `rivermax`
+- **`stream_type`**: Top-level stream path selector. Valid: `raw`, `socket`
+  - type: `string`
+- **`protocol`**: Required when `stream_type: socket`. Valid: `tcp`, `udp`, `roce`
   - type: `string`
 - **`log_level`**: Backend log level. default: `warn`. Other: `trace` , `debug`, `info`, `error`, `critical`, `off`
   - type: `string`
@@ -136,6 +152,9 @@ Too low means risk of dropped packets from NIC having nowhere to write (Rx) or h
     - type: `string`
   - **`address`**: PCIe BDF address (lspci) or linux interface name for DPDK/GPUNetIO/RiverMax or IP address for RDMA
     - type: `string`
+  - **`socket_config`**: Required for `stream_type: socket`. Shared socket endpoint config with:
+    `mode` (`client` or `server`), `local_ip`, `local_port`, `remote_ip`, `remote_port`.
+  - **`roce_config`**: Required only when `protocol: roce`. Contains `transport_mode` (`RC`, `UC`, or `UD`).
   - **`rx|tx`** category of queues below
  full path: `cfg\interfaces\[rx|tx]`
 

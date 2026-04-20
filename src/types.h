@@ -156,6 +156,63 @@ enum MemoryAccess {
   MEM_ACCESS_RDMA_READ = 1U << 2
 };
 
+enum class StreamType {
+  RAW,
+  SOCKET,
+  INVALID,
+};
+
+static constexpr const char* DAQIRI_STREAM_TYPE_STR__RAW = "raw";
+static constexpr const char* DAQIRI_STREAM_TYPE_STR__SOCKET = "socket";
+
+inline StreamType stream_type_from_string(const std::string& str) {
+  if (str == DAQIRI_STREAM_TYPE_STR__RAW) { return StreamType::RAW; }
+  if (str == DAQIRI_STREAM_TYPE_STR__SOCKET) { return StreamType::SOCKET; }
+  return StreamType::INVALID;
+}
+
+inline std::string stream_type_to_string(StreamType type) {
+  switch (type) {
+    case StreamType::RAW:
+      return DAQIRI_STREAM_TYPE_STR__RAW;
+    case StreamType::SOCKET:
+      return DAQIRI_STREAM_TYPE_STR__SOCKET;
+    default:
+      return "invalid";
+  }
+}
+
+enum class SocketProtocol {
+  TCP,
+  UDP,
+  ROCE,
+  INVALID,
+};
+
+static constexpr const char* DAQIRI_SOCKET_PROTOCOL_STR__TCP = "tcp";
+static constexpr const char* DAQIRI_SOCKET_PROTOCOL_STR__UDP = "udp";
+static constexpr const char* DAQIRI_SOCKET_PROTOCOL_STR__ROCE = "roce";
+
+inline SocketProtocol socket_protocol_from_string(const std::string& str) {
+  if (str == DAQIRI_SOCKET_PROTOCOL_STR__TCP) { return SocketProtocol::TCP; }
+  if (str == DAQIRI_SOCKET_PROTOCOL_STR__UDP) { return SocketProtocol::UDP; }
+  if (str == DAQIRI_SOCKET_PROTOCOL_STR__ROCE) { return SocketProtocol::ROCE; }
+  return SocketProtocol::INVALID;
+}
+
+inline std::string socket_protocol_to_string(SocketProtocol proto) {
+  switch (proto) {
+    case SocketProtocol::TCP:
+      return DAQIRI_SOCKET_PROTOCOL_STR__TCP;
+    case SocketProtocol::UDP:
+      return DAQIRI_SOCKET_PROTOCOL_STR__UDP;
+    case SocketProtocol::ROCE:
+      return DAQIRI_SOCKET_PROTOCOL_STR__ROCE;
+    default:
+      return "invalid";
+  }
+}
+
 inline MemoryKind GetMemoryKindFromString(const std::string& mode_str) {
   if (mode_str == "host") {
     return MemoryKind::HOST;
@@ -225,10 +282,12 @@ enum class ManagerType {
   UNKNOWN = -1,
   DEFAULT,
   DPDK,
+  SOCKET,
   RDMA,
 };
 
 static constexpr const char* DAQIRI_MGR_STR__DPDK = "dpdk";
+static constexpr const char* DAQIRI_MGR_STR__SOCKET = "socket";
 static constexpr const char* DAQIRI_MGR_STR__RDMA = "rdma";
 static constexpr const char* DAQIRI_MGR_STR__DEFAULT = "default";
 /**
@@ -248,6 +307,13 @@ inline ManagerType manager_type_from_string(const std::string& str) {
   available_managers += std::string(DAQIRI_MGR_STR__DPDK) + " ";
 #else
   if (str == DAQIRI_MGR_STR__DPDK) is_known_but_unavailable = true;
+#endif
+
+#if DAQIRI_MGR_SOCKET
+  if (str == DAQIRI_MGR_STR__SOCKET) return ManagerType::SOCKET;
+  available_managers += std::string(DAQIRI_MGR_STR__SOCKET) + " ";
+#else
+  if (str == DAQIRI_MGR_STR__SOCKET) is_known_but_unavailable = true;
 #endif
 
 
@@ -303,6 +369,8 @@ inline RDMATransportMode GetRDMATransportModeFromString(const std::string& mode_
     return RDMATransportMode::RC;
   } else if (mode_str == "UC") {
     return RDMATransportMode::UC;
+  } else if (mode_str == "UD") {
+    return RDMATransportMode::UD;
   }
 
   return RDMATransportMode::INVALID;
@@ -324,12 +392,25 @@ inline std::string manager_type_to_string(ManagerType type) {
   switch (type) {
     case ManagerType::DPDK:
       return DAQIRI_MGR_STR__DPDK;
+    case ManagerType::SOCKET:
+      return DAQIRI_MGR_STR__SOCKET;
     case ManagerType::RDMA:
       return DAQIRI_MGR_STR__RDMA;
     case ManagerType::DEFAULT:
       return DAQIRI_MGR_STR__DEFAULT;
   }
   return "unknown";
+}
+
+inline ManagerType manager_type_from_stream_type(StreamType stream_type) {
+  switch (stream_type) {
+    case StreamType::RAW:
+      return ManagerType::DPDK;
+    case StreamType::SOCKET:
+      return ManagerType::SOCKET;
+    default:
+      return ManagerType::UNKNOWN;
+  }
 }
 class LogLevel {
  public:
@@ -485,8 +566,38 @@ struct CommonConfig {
   int version;
   int master_core_;
   Direction dir;
+  StreamType stream_type = StreamType::INVALID;
+  SocketProtocol protocol = SocketProtocol::INVALID;
   ManagerType manager_type;
   LoopbackType loopback_;
+};
+
+enum class SocketMode {
+  CLIENT,
+  SERVER,
+  INVALID,
+};
+
+inline SocketMode GetSocketModeFromString(const std::string& mode_str) {
+  if (mode_str == "client") { return SocketMode::CLIENT; }
+  if (mode_str == "server") { return SocketMode::SERVER; }
+  return SocketMode::INVALID;
+}
+
+struct SocketConfig {
+  SocketMode mode_ = SocketMode::INVALID;
+  std::string local_ip_;
+  std::string remote_ip_;
+  uint16_t local_port_ = 0;
+  uint16_t remote_port_ = 0;
+  uint16_t max_payload_size_ = 0;
+  uint64_t max_burst_interval_ms_ = 0;
+  uint32_t min_ipg_ns_ = 0;
+  int32_t retry_connect_s_ = 1;
+};
+
+struct RoCEConfig {
+  RDMATransportMode transport_mode_ = RDMATransportMode::INVALID;
 };
 
 struct FlexItemConfig {
@@ -513,6 +624,8 @@ struct InterfaceConfig {
   std::string name_;
   std::string address_;
   uint16_t port_id_;
+  SocketConfig socket_;
+  RoCEConfig roce_;
   RDMAConfig rdma_;
   RxConfig rx_;
   TxConfig tx_;
@@ -537,11 +650,18 @@ auto get_rdma_configs_enabled(const Config& config) {
 
   auto& yaml_nodes = config.yaml_nodes();
   for (const auto& yaml_node : yaml_nodes) {
-    auto interfaces_node = yaml_node["daqiri"]["cfg"]["interfaces"];
+    auto cfg_node = yaml_node["daqiri"]["cfg"];
+    auto stream_type = cfg_node["stream_type"].template as<std::string>("");
+    auto protocol = cfg_node["protocol"].template as<std::string>("");
+    if (stream_type != DAQIRI_STREAM_TYPE_STR__SOCKET ||
+        protocol != DAQIRI_SOCKET_PROTOCOL_STR__ROCE) {
+      continue;
+    }
+    auto interfaces_node = cfg_node["interfaces"];
     for (const auto& intf : interfaces_node) {
-      auto rdma_config_node = intf["rdma_config"];
-      if (rdma_config_node.IsDefined()) {
-        std::string mode = rdma_config_node["mode"].template as<std::string>();
+      auto socket_config_node = intf["socket_config"];
+      if (socket_config_node.IsDefined()) {
+        std::string mode = socket_config_node["mode"].template as<std::string>();
         if (mode == "server") {
           server = true;
         } else if (mode == "client") {

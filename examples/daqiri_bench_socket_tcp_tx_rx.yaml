@@ -1,0 +1,92 @@
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "socket"
+    protocol: "tcp"
+    master_core: 3
+    debug: false
+    log_level: "info"
+
+    memory_regions:
+    - name: "DATA_SOCKET_SERVER"
+      kind: "host"
+      affinity: 0
+      num_bufs: 4096
+      buf_size: 2048
+    - name: "DATA_SOCKET_CLIENT"
+      kind: "host"
+      affinity: 0
+      num_bufs: 4096
+      buf_size: 2048
+
+    interfaces:
+    - name: tcp_server
+      address: 127.0.0.1
+      socket_config:
+        mode: server
+        local_ip: 127.0.0.1
+        local_port: 6001
+        max_payload_size: 2048
+      rx:
+        queues:
+        - name: "Server_RX_Queue"
+          id: 0
+          cpu_core: 8
+          batch_size: 1
+          memory_regions:
+            - "DATA_SOCKET_SERVER"
+      tx:
+        queues:
+        - name: "Server_TX_Queue"
+          id: 0
+          cpu_core: 8
+          batch_size: 1
+          memory_regions:
+            - "DATA_SOCKET_SERVER"
+
+    - name: tcp_client
+      address: 127.0.0.1
+      socket_config:
+        mode: client
+        local_ip: 127.0.0.1
+        local_port: 6002
+        remote_ip: 127.0.0.1
+        remote_port: 6001
+        max_payload_size: 2048
+      rx:
+        queues:
+        - name: "Client_RX_Queue"
+          id: 0
+          cpu_core: 7
+          batch_size: 1
+          memory_regions:
+            - "DATA_SOCKET_CLIENT"
+      tx:
+        queues:
+        - name: "Client_TX_Queue"
+          id: 0
+          cpu_core: 7
+          batch_size: 1
+          memory_regions:
+            - "DATA_SOCKET_CLIENT"
+
+socket_bench_server:
+  server: true
+  send: true
+  receive: true
+  iterations: 1000
+  message_size: 1024
+  server_address: 127.0.0.1
+  server_port: 6001
+
+socket_bench_client:
+  server: false
+  send: true
+  receive: true
+  iterations: 1000
+  message_size: 1024
+  server_address: 127.0.0.1
+  client_address: 127.0.0.1
+  server_port: 6001

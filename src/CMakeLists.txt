@@ -129,11 +129,24 @@ endif()
 # Backend libraries
 if(NOT DEFINED DAQIRI_MGR)
     # Initialize DAQIRI_MGR with a default if not provided
-    # Default: dpdk only (no DOCA dependency)
-    set(DAQIRI_MGR "dpdk rdma" CACHE STRING "Manager type(s) list")
+    # Default: raw + socket backends
+    set(DAQIRI_MGR "dpdk socket" CACHE STRING "Manager type(s) list")
 endif()
-set_property(CACHE DAQIRI_MGR PROPERTY STRINGS "dpdk" "rdma")
+set_property(CACHE DAQIRI_MGR PROPERTY STRINGS "dpdk" "socket" "rdma")
 separate_arguments(DAQIRI_MGR_LIST UNIX_COMMAND ${DAQIRI_MGR})
+
+# Socket backend reuses RoCE transport from the RDMA implementation.
+# Ensure rdma backend is built first whenever socket is requested.
+list(FIND DAQIRI_MGR_LIST "socket" DAQIRI_HAS_SOCKET_IDX)
+if(NOT DAQIRI_HAS_SOCKET_IDX EQUAL -1)
+  list(FIND DAQIRI_MGR_LIST "rdma" DAQIRI_HAS_RDMA_IDX)
+  if(DAQIRI_HAS_RDMA_IDX EQUAL -1)
+    list(APPEND DAQIRI_MGR_LIST "rdma")
+  endif()
+  list(REMOVE_ITEM DAQIRI_MGR_LIST "rdma")
+  list(INSERT DAQIRI_MGR_LIST 0 "rdma")
+endif()
+list(REMOVE_DUPLICATES DAQIRI_MGR_LIST)
 
 # Define targets for each manager type
 foreach(MGR IN LISTS DAQIRI_MGR_LIST)

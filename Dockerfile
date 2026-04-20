@@ -16,7 +16,7 @@
 # limitations under the License.
 
 ARG DAQIRI_BASE_TARGET=dpdk
-ARG DAQIRI_MGR="dpdk rdma"
+ARG DAQIRI_MGR="dpdk socket"
 ARG DAQIRI_BUILD_PYTHON=OFF
 ARG BUILD_SHARED_LIBS=ON
 

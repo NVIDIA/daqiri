@@ -3,7 +3,8 @@
 daqiri:
   cfg:
     version: 1
-    manager: "rdma"
+    stream_type: "socket"
+    protocol: "roce"
     master_core: 3
     debug: false
     log_level: "info"
@@ -32,10 +33,13 @@ daqiri:
 
     interfaces:
     - name: my_client
-      rdma_config:
-        mode: client
-        transport_mode: RC
       address: 10.100.1.1
+      socket_config:
+        mode: client
+        remote_ip: 10.100.3.1
+        remote_port: 4096
+      roce_config:
+        transport_mode: RC
       tx:
         queues:
         - name: "Client_TX_Queue"
@@ -49,11 +53,13 @@ daqiri:
           cpu_core: 7
           batch_size: 1
     - name: my_server
-      rdma_config:
-        mode: server
-        transport_mode: RC
-        port: 4096
       address: 10.100.3.1
+      socket_config:
+        mode: server
+        local_ip: 10.100.3.1
+        local_port: 4096
+      roce_config:
+        transport_mode: RC
       rx:
         queues:
         - name: "Server_RX_Queue"

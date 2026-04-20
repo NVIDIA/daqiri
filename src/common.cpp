@@ -321,6 +321,49 @@ void print_stats() {
 }
 
 Status daqiri_init(NetworkConfig& config) {
+  if (config.common_.manager_type == ManagerType::UNKNOWN &&
+      config.common_.stream_type != StreamType::INVALID) {
+    config.common_.manager_type = manager_type_from_stream_type(config.common_.stream_type);
+  }
+
+  if (config.common_.stream_type == StreamType::SOCKET &&
+      (config.common_.protocol == SocketProtocol::TCP ||
+       config.common_.protocol == SocketProtocol::UDP)) {
+    std::unordered_set<std::string> gpu_mrs;
+    for (const auto& intf : config.ifs_) {
+      for (const auto& q : intf.rx_.queues_) {
+        for (const auto& mr_name : q.common_.mrs_) {
+          const auto it = config.mrs_.find(mr_name);
+          if (it != config.mrs_.end() && it->second.kind_ == MemoryKind::DEVICE) {
+            gpu_mrs.emplace(mr_name);
+          }
+        }
+      }
+      for (const auto& q : intf.tx_.queues_) {
+        for (const auto& mr_name : q.common_.mrs_) {
+          const auto it = config.mrs_.find(mr_name);
+          if (it != config.mrs_.end() && it->second.kind_ == MemoryKind::DEVICE) {
+            gpu_mrs.emplace(mr_name);
+          }
+        }
+      }
+    }
+
+    if (!gpu_mrs.empty()) {
+      std::string joined;
+      for (const auto& mr_name : gpu_mrs) {
+        if (!joined.empty()) { joined += ", "; }
+        joined += mr_name;
+      }
+      DAQIRI_LOG_ERROR(
+          "GPU memory regions are not supported for protocol '{}'. Offending "
+          "memory_regions: {}",
+          socket_protocol_to_string(config.common_.protocol),
+          joined);
+      return Status::INVALID_PARAMETER;
+    }
+  }
+
   ManagerFactory::set_manager_type(config.common_.manager_type);
 
   auto mgr = &(ManagerFactory::get_active_manager());
@@ -435,6 +478,30 @@ Status daqiri_init(const std::string& yaml_string_or_path) {
   const Status parse_status = parse_network_config(yaml_string_or_path, config);
   if (parse_status != Status::SUCCESS) { return parse_status; }
   return daqiri_init(config);
+}
+
+// Generic socket functions
+Status socket_connect_to_server(const std::string& server_addr, uint16_t server_port,
+                                uintptr_t* conn_id) {
+  ASSERT_DAQIRI_MGR_INITIALIZED();
+  return g_daqiri_mgr->socket_connect_to_server(server_addr, server_port, conn_id);
+}
+
+Status socket_connect_to_server(const std::string& server_addr, uint16_t server_port,
+                                const std::string& src_addr, uintptr_t* conn_id) {
+  ASSERT_DAQIRI_MGR_INITIALIZED();
+  return g_daqiri_mgr->socket_connect_to_server(server_addr, server_port, src_addr, conn_id);
+}
+
+Status socket_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) {
+  ASSERT_DAQIRI_MGR_INITIALIZED();
+  return g_daqiri_mgr->socket_get_port_queue(conn_id, port, queue);
+}
+
+Status socket_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
+                                 uintptr_t* conn_id) {
+  ASSERT_DAQIRI_MGR_INITIALIZED();
+  return g_daqiri_mgr->socket_get_server_conn_id(server_addr, server_port, conn_id);
 }
 
 // RDMA Functions
@@ -615,27 +682,64 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_memory_region_config(
   return true;
 }
 
-/**
- * @brief Parse RDMA configuration from a YAML node.
- *
- * @param rdma_item The YAML node containing the RDMA configuration.
- * @param rdma The RDMAConfig object to populate.
- * @return true if parsing was successful, false otherwise.
- */
-bool YAML::convert<daqiri::NetworkConfig>::parse_rdma_config(
-    const YAML::Node& rdma_item, daqiri::RDMAConfig& rdma) {
+bool YAML::convert<daqiri::NetworkConfig>::parse_socket_config(
+    const YAML::Node& socket_item, daqiri::SocketConfig& socket_cfg) {
   try {
-    rdma.mode_ = daqiri::GetRDMAModeFromString(
-      rdma_item["mode"].template as<std::string>());
-    rdma.xmode_ = daqiri::GetRDMATransportModeFromString(
-      rdma_item["transport_mode"].template as<std::string>());
-    if (rdma_item["port"].IsDefined()) {  // Port is optional
-      rdma.port_ = rdma_item["port"].as<uint16_t>();
+    socket_cfg.mode_ = daqiri::GetSocketModeFromString(
+        socket_item["mode"].template as<std::string>());
+    if (socket_cfg.mode_ == daqiri::SocketMode::INVALID) {
+      DAQIRI_LOG_ERROR("Invalid socket mode '{}'. Valid values: client, server",
+                       socket_item["mode"].template as<std::string>());
+      return false;
+    }
+
+    socket_cfg.local_ip_ = socket_item["local_ip"].template as<std::string>("");
+    socket_cfg.remote_ip_ = socket_item["remote_ip"].template as<std::string>("");
+    socket_cfg.local_port_ = socket_item["local_port"].as<uint16_t>(0);
+    socket_cfg.remote_port_ = socket_item["remote_port"].as<uint16_t>(0);
+    socket_cfg.max_payload_size_ = socket_item["max_payload_size"].as<uint16_t>(0);
+    socket_cfg.max_burst_interval_ms_ = socket_item["max_burst_interval_ms"].as<uint64_t>(0);
+    socket_cfg.min_ipg_ns_ = socket_item["min_ipg_ns"].as<uint32_t>(0);
+    socket_cfg.retry_connect_s_ = socket_item["retry_connect_s"].as<int32_t>(1);
+
+    if (socket_cfg.mode_ == daqiri::SocketMode::SERVER) {
+      if (socket_cfg.local_ip_.empty()) {
+        DAQIRI_LOG_ERROR("socket_config.local_ip is required for server mode");
+        return false;
+      }
+      if (socket_cfg.local_port_ == 0) {
+        DAQIRI_LOG_ERROR("socket_config.local_port is required for server mode");
+        return false;
+      }
     } else {
-      rdma.port_ = 0;
+      if (socket_cfg.remote_ip_.empty()) {
+        DAQIRI_LOG_ERROR("socket_config.remote_ip is required for client mode");
+        return false;
+      }
+      if (socket_cfg.remote_port_ == 0) {
+        DAQIRI_LOG_ERROR("socket_config.remote_port is required for client mode");
+        return false;
+      }
     }
   } catch (const std::exception& e) {
-    DAQIRI_LOG_ERROR("Error parsing RDMAConfig: {}", e.what());
+    DAQIRI_LOG_ERROR("Error parsing SocketConfig: {}", e.what());
+    return false;
+  }
+  return true;
+}
+
+bool YAML::convert<daqiri::NetworkConfig>::parse_roce_config(
+    const YAML::Node& roce_item, daqiri::RoCEConfig& roce_cfg) {
+  try {
+    roce_cfg.transport_mode_ = daqiri::GetRDMATransportModeFromString(
+        roce_item["transport_mode"].template as<std::string>());
+    if (roce_cfg.transport_mode_ == daqiri::RDMATransportMode::INVALID) {
+      DAQIRI_LOG_ERROR("Invalid roce_config.transport_mode '{}'. Valid values: RC, UC, UD",
+                       roce_item["transport_mode"].template as<std::string>());
+      return false;
+    }
+  } catch (const std::exception& e) {
+    DAQIRI_LOG_ERROR("Error parsing RoCEConfig: {}", e.what());
     return false;
   }
   return true;
@@ -660,7 +764,7 @@ bool parse_common_queue_config(const YAML::Node& q_item,
     common.extra_queue_config_ = nullptr;
     if (q_item["memory_regions"].IsDefined()) {
       if (!parse_memory_regions) {
-        DAQIRI_LOG_WARN("Memory regions in queue section not used in RDMA backend for queue: {}",
+        DAQIRI_LOG_WARN("Memory regions in queue section not used in RoCE backend for queue: {}",
           common.name_);
       }
       else {

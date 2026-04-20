@@ -87,6 +87,14 @@ class Manager {
   virtual uint16_t get_num_rx_queues(int port_id) const;
   virtual void flush_port_queue(int port, int queue);
 
+  virtual Status socket_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
+                                          uintptr_t* conn_id);
+  virtual Status socket_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
+                                          const std::string& src_addr, uintptr_t* conn_id);
+  virtual Status socket_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue);
+  virtual Status socket_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
+                                           uintptr_t* conn_id);
+
   virtual Status rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
                                         uintptr_t* conn_id);
   virtual Status rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
