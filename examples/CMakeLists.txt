@@ -9,18 +9,18 @@ else()
 endif()
 
 set(DAQIRI_BENCH_CONFIGS
-  daqiri_bench_default_tx_rx.yaml
-  daqiri_bench_default_tx_rx_hds.yaml
-  daqiri_bench_default_rx_multi_q.yaml
-  daqiri_bench_default_sw_loopback.yaml
+  daqiri_bench_raw_tx_rx.yaml
+  daqiri_bench_raw_tx_rx_hds.yaml
+  daqiri_bench_raw_rx_multi_q.yaml
+  daqiri_bench_raw_sw_loopback.yaml
   daqiri_bench_rdma_tx_rx.yaml
   daqiri_bench_socket_udp_tx_rx.yaml
   daqiri_bench_socket_tcp_tx_rx.yaml
 )
 
-add_executable(daqiri_bench_default default_bench.cpp)
-target_compile_features(daqiri_bench_default PRIVATE cxx_std_17)
-target_link_libraries(daqiri_bench_default PRIVATE daqiri::daqiri ${DAQIRI_EXAMPLE_YAML_TARGET})
+add_executable(daqiri_bench_raw raw_bench.cpp)
+target_compile_features(daqiri_bench_raw PRIVATE cxx_std_17)
+target_link_libraries(daqiri_bench_raw PRIVATE daqiri::daqiri ${DAQIRI_EXAMPLE_YAML_TARGET})
 
 add_executable(daqiri_bench_rdma rdma_bench.cpp)
 target_compile_features(daqiri_bench_rdma PRIVATE cxx_std_17)
