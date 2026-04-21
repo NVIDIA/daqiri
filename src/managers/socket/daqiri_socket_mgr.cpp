@@ -15,6 +15,10 @@
  * limitations under the License.
  */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "daqiri_socket_mgr.h"
 
 #include <arpa/inet.h>
@@ -25,6 +29,7 @@
 #include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -236,47 +241,56 @@ Status SocketMgr::get_tx_packet_burst(BurstParams* burst) {
 }
 
 Status SocketMgr::set_eth_header(BurstParams* burst, int idx, char* dst_addr) {
-  if (burst == nullptr || dst_addr == nullptr || burst->pkts[0] == nullptr || idx < 0 ||
-      idx >= static_cast<int>(burst->hdr.hdr.num_pkts)) {
-    return Status::INVALID_PARAMETER;
+  if (is_roce_protocol()) {
+#if DAQIRI_MGR_RDMA
+    return roce_mgr_ != nullptr ? roce_mgr_->set_eth_header(burst, idx, dst_addr)
+                                : roce_not_initialized("set_eth_header");
+#else
+    return roce_not_initialized("set_eth_header");
+#endif
   }
 
-  auto* pkt = reinterpret_cast<UDPIPV4Pkt*>(burst->pkts[0][idx]);
-  std::memcpy(pkt->eth.h_dest, dst_addr, ETH_ALEN);
-  pkt->eth.h_proto = htons(ETH_P_IP);
-  return Status::SUCCESS;
+  DAQIRI_LOG_ERROR(
+      "set_eth_header is not supported for stream_type=socket with protocol={}; "
+      "kernel sockets own L2/L3/L4 headers",
+      socket_protocol_to_string(cfg_.common_.protocol));
+  return Status::NOT_SUPPORTED;
 }
 
 Status SocketMgr::set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint8_t proto,
                                   unsigned int src_host, unsigned int dst_host) {
-  if (burst == nullptr || burst->pkts[0] == nullptr || idx < 0 ||
-      idx >= static_cast<int>(burst->hdr.hdr.num_pkts)) {
-    return Status::INVALID_PARAMETER;
+  if (is_roce_protocol()) {
+#if DAQIRI_MGR_RDMA
+    return roce_mgr_ != nullptr ? roce_mgr_->set_ipv4_header(burst, idx, ip_len, proto, src_host, dst_host)
+                                : roce_not_initialized("set_ipv4_header");
+#else
+    return roce_not_initialized("set_ipv4_header");
+#endif
   }
 
-  auto* pkt = reinterpret_cast<UDPIPV4Pkt*>(burst->pkts[0][idx]);
-  pkt->ip.version = 4;
-  pkt->ip.ihl = 5;
-  pkt->ip.protocol = proto;
-  pkt->ip.tot_len = htons(static_cast<uint16_t>(ip_len + static_cast<int>(sizeof(iphdr))));
-  pkt->ip.saddr = htonl(src_host);
-  pkt->ip.daddr = htonl(dst_host);
-  return Status::SUCCESS;
+  DAQIRI_LOG_ERROR(
+      "set_ipv4_header is not supported for stream_type=socket with protocol={}; "
+      "kernel sockets own L2/L3/L4 headers",
+      socket_protocol_to_string(cfg_.common_.protocol));
+  return Status::NOT_SUPPORTED;
 }
 
 Status SocketMgr::set_udp_header(BurstParams* burst, int idx, int udp_len, uint16_t src_port,
                                  uint16_t dst_port) {
-  if (burst == nullptr || burst->pkts[0] == nullptr || idx < 0 ||
-      idx >= static_cast<int>(burst->hdr.hdr.num_pkts)) {
-    return Status::INVALID_PARAMETER;
+  if (is_roce_protocol()) {
+#if DAQIRI_MGR_RDMA
+    return roce_mgr_ != nullptr ? roce_mgr_->set_udp_header(burst, idx, udp_len, src_port, dst_port)
+                                : roce_not_initialized("set_udp_header");
+#else
+    return roce_not_initialized("set_udp_header");
+#endif
   }
 
-  auto* pkt = reinterpret_cast<UDPIPV4Pkt*>(burst->pkts[0][idx]);
-  pkt->udp.source = htons(src_port);
-  pkt->udp.dest = htons(dst_port);
-  pkt->udp.check = 0;
-  pkt->udp.len = htons(static_cast<uint16_t>(udp_len + static_cast<int>(sizeof(udphdr))));
-  return Status::SUCCESS;
+  DAQIRI_LOG_ERROR(
+      "set_udp_header is not supported for stream_type=socket with protocol={}; "
+      "kernel sockets own L2/L3/L4 headers",
+      socket_protocol_to_string(cfg_.common_.protocol));
+  return Status::NOT_SUPPORTED;
 }
 
 Status SocketMgr::set_udp_payload(BurstParams* burst, int idx, void* data, int len) {
@@ -631,54 +645,142 @@ const SocketMgr::EndpointState* SocketMgr::endpoint_for_port(uint16_t port) cons
   return nullptr;
 }
 
-bool SocketMgr::send_tcp_packet(int fd, const void* data, size_t size) {
-  const auto* ptr = reinterpret_cast<const uint8_t*>(data);
-  size_t total_sent = 0;
+bool SocketMgr::send_tcp_burst(int fd, BurstParams* burst, size_t* sent_pkts,
+                               uint64_t* sent_bytes) {
+  if (sent_pkts != nullptr) { *sent_pkts = 0; }
+  if (sent_bytes != nullptr) { *sent_bytes = 0; }
+  if (burst == nullptr || burst->pkts[0] == nullptr || burst->pkt_lens[0] == nullptr) { return false; }
 
-  while (total_sent < size) {
-    const ssize_t sent = ::send(fd, ptr + total_sent, size - total_sent, 0);
-    if (sent <= 0) {
+  const size_t num_pkts = burst->hdr.hdr.num_pkts;
+  if (num_pkts == 0) { return true; }
+
+  std::vector<iovec> iovs;
+  iovs.reserve(num_pkts);
+  size_t zero_len_pkts = 0;
+  for (size_t i = 0; i < num_pkts; ++i) {
+    const auto len = static_cast<size_t>(burst->pkt_lens[0][i]);
+    if (len == 0) {
+      ++zero_len_pkts;
+      continue;
+    }
+    iovec iov{};
+    iov.iov_base = burst->pkts[0][i];
+    iov.iov_len = len;
+    iovs.push_back(iov);
+  }
+  if (sent_pkts != nullptr) { *sent_pkts += zero_len_pkts; }
+  if (iovs.empty()) { return true; }
+
+  size_t iov_idx = 0;
+  size_t iov_off = 0;
+  constexpr size_t kMaxIovPerWrite = 1024;
+
+  while (iov_idx < iovs.size()) {
+    const size_t batch_n = std::min(kMaxIovPerWrite, iovs.size() - iov_idx);
+    std::vector<iovec> batch(batch_n);
+    for (size_t j = 0; j < batch_n; ++j) {
+      batch[j] = iovs[iov_idx + j];
+    }
+    if (iov_off > 0) {
+      auto* ptr = static_cast<uint8_t*>(batch[0].iov_base);
+      batch[0].iov_base = ptr + iov_off;
+      batch[0].iov_len -= iov_off;
+    }
+
+    const ssize_t sent = ::writev(fd, batch.data(), static_cast<int>(batch_n));
+    if (sent < 0) {
       if (errno == EINTR) { continue; }
-      DAQIRI_LOG_ERROR("TCP send failed: {}", strerror(errno));
+      DAQIRI_LOG_ERROR("TCP writev failed: {}", strerror(errno));
       return false;
     }
-    total_sent += static_cast<size_t>(sent);
+    if (sent == 0) {
+      DAQIRI_LOG_ERROR("TCP writev returned zero without progress");
+      return false;
+    }
+
+    size_t remaining = static_cast<size_t>(sent);
+    if (sent_bytes != nullptr) { *sent_bytes += remaining; }
+
+    while (remaining > 0 && iov_idx < iovs.size()) {
+      const size_t cur_remaining = iovs[iov_idx].iov_len - iov_off;
+      if (remaining < cur_remaining) {
+        iov_off += remaining;
+        remaining = 0;
+      } else {
+        remaining -= cur_remaining;
+        iov_off = 0;
+        ++iov_idx;
+        if (sent_pkts != nullptr) { ++(*sent_pkts); }
+      }
+    }
   }
 
   return true;
 }
 
-bool SocketMgr::send_udp_packet(EndpointState& ep, const void* data, size_t size) {
-  if (ep.socket_cfg.mode_ == SocketMode::CLIENT) {
-    const ssize_t sent = ::send(ep.udp_fd, data, size, 0);
-    if (sent < 0) {
-      DAQIRI_LOG_ERROR("UDP send failed: {}", strerror(errno));
-      return false;
-    }
-    return static_cast<size_t>(sent) == size;
-  }
+bool SocketMgr::send_udp_burst(EndpointState& ep, BurstParams* burst, size_t* sent_pkts,
+                               uint64_t* sent_bytes) {
+  if (sent_pkts != nullptr) { *sent_pkts = 0; }
+  if (sent_bytes != nullptr) { *sent_bytes = 0; }
+  if (burst == nullptr || burst->pkts[0] == nullptr || burst->pkt_lens[0] == nullptr) { return false; }
 
+  const size_t num_pkts = burst->hdr.hdr.num_pkts;
+  if (num_pkts == 0) { return true; }
+
+  bool use_sendto = false;
   sockaddr_in peer{};
-  {
+  if (ep.socket_cfg.mode_ == SocketMode::SERVER) {
     std::lock_guard<std::mutex> lock(state_mutex_);
     if (!ep.udp_peer_valid) {
       DAQIRI_LOG_ERROR("UDP server has no learned peer yet; cannot transmit");
       return false;
     }
     peer = ep.udp_peer_addr;
+    use_sendto = true;
   }
 
-  const ssize_t sent = ::sendto(ep.udp_fd,
-                                data,
-                                size,
-                                0,
-                                reinterpret_cast<const sockaddr*>(&peer),
-                                sizeof(peer));
-  if (sent < 0) {
-    DAQIRI_LOG_ERROR("UDP sendto failed: {}", strerror(errno));
-    return false;
+  std::vector<mmsghdr> msgs(num_pkts);
+  std::vector<iovec> iovs(num_pkts);
+  std::vector<sockaddr_in> peers;
+  if (use_sendto) { peers.assign(num_pkts, peer); }
+
+  for (size_t i = 0; i < num_pkts; ++i) {
+    iovs[i].iov_base = burst->pkts[0][i];
+    iovs[i].iov_len = static_cast<size_t>(burst->pkt_lens[0][i]);
+
+    std::memset(&msgs[i], 0, sizeof(mmsghdr));
+    msgs[i].msg_hdr.msg_iov = &iovs[i];
+    msgs[i].msg_hdr.msg_iovlen = 1;
+    if (use_sendto) {
+      msgs[i].msg_hdr.msg_name = &peers[i];
+      msgs[i].msg_hdr.msg_namelen = sizeof(sockaddr_in);
+    }
   }
-  return static_cast<size_t>(sent) == size;
+
+  size_t offset = 0;
+  while (offset < num_pkts) {
+    auto* batch = msgs.data() + offset;
+    const auto remaining = static_cast<unsigned int>(num_pkts - offset);
+    const int sent = ::sendmmsg(ep.udp_fd, batch, remaining, 0);
+    if (sent < 0) {
+      if (errno == EINTR) { continue; }
+      DAQIRI_LOG_ERROR("UDP sendmmsg failed: {}", strerror(errno));
+      return false;
+    }
+    if (sent == 0) {
+      DAQIRI_LOG_ERROR("UDP sendmmsg returned zero without progress");
+      return false;
+    }
+
+    for (int i = 0; i < sent; ++i) {
+      if (sent_pkts != nullptr) { ++(*sent_pkts); }
+      if (sent_bytes != nullptr) { *sent_bytes += static_cast<uint64_t>(batch[i].msg_len); }
+    }
+
+    offset += static_cast<size_t>(sent);
+  }
+
+  return true;
 }
 
 Status SocketMgr::send_tx_burst(BurstParams* burst) {
@@ -723,29 +825,27 @@ Status SocketMgr::send_tx_burst(BurstParams* burst) {
 
   Status status = Status::SUCCESS;
 
-  for (size_t i = 0; i < burst->hdr.hdr.num_pkts; ++i) {
-    const void* data = burst->pkts[0][i];
-    const size_t len = burst->pkt_lens[0][i];
-
-    bool sent_ok = false;
-    if (cfg_.common_.protocol == SocketProtocol::TCP) {
-      if (conn == nullptr) {
-        DAQIRI_LOG_ERROR("No active TCP connection for port {}", ep->port);
-        sent_ok = false;
-      } else {
-        sent_ok = send_tcp_packet(conn->fd, data, len);
-      }
-    } else if (cfg_.common_.protocol == SocketProtocol::UDP) {
-      sent_ok = send_udp_packet(*ep, data, len);
-    }
-
-    if (!sent_ok) {
+  if (cfg_.common_.protocol == SocketProtocol::UDP) {
+    size_t sent_pkts = 0;
+    uint64_t sent_bytes = 0;
+    if (!send_udp_burst(*ep, burst, &sent_pkts, &sent_bytes)) {
       status = Status::CONNECT_FAILURE;
-      break;
     }
-
-    tx_pkts_.fetch_add(1);
-    tx_bytes_.fetch_add(len);
+    if (sent_pkts > 0) { tx_pkts_.fetch_add(sent_pkts); }
+    if (sent_bytes > 0) { tx_bytes_.fetch_add(sent_bytes); }
+  } else if (cfg_.common_.protocol == SocketProtocol::TCP) {
+    if (conn == nullptr) {
+      DAQIRI_LOG_ERROR("No active TCP connection for port {}", ep->port);
+      status = Status::CONNECT_FAILURE;
+    } else {
+      size_t sent_pkts = 0;
+      uint64_t sent_bytes = 0;
+      if (!send_tcp_burst(conn->fd, burst, &sent_pkts, &sent_bytes)) {
+        status = Status::CONNECT_FAILURE;
+      }
+      if (sent_pkts > 0) { tx_pkts_.fetch_add(sent_pkts); }
+      if (sent_bytes > 0) { tx_bytes_.fetch_add(sent_bytes); }
+    }
   }
 
   free_all_packets(burst);
@@ -1144,47 +1244,62 @@ void SocketMgr::udp_rx_loop(int if_index) {
 
   if (ep->udp_fd < 0) { return; }
 
-  std::vector<uint8_t> tmp(ep->max_packet_size);
+  constexpr size_t kUdpRxBatch = 32;
+  std::vector<uint8_t> rx_storage(ep->max_packet_size * kUdpRxBatch);
+  std::vector<mmsghdr> msgs(kUdpRxBatch);
+  std::vector<iovec> iovs(kUdpRxBatch);
+  std::vector<sockaddr_in> peers(kUdpRxBatch);
+
+  for (size_t i = 0; i < kUdpRxBatch; ++i) {
+    iovs[i].iov_base = rx_storage.data() + (i * ep->max_packet_size);
+    iovs[i].iov_len = ep->max_packet_size;
+    std::memset(&msgs[i], 0, sizeof(mmsghdr));
+    msgs[i].msg_hdr.msg_iov = &iovs[i];
+    msgs[i].msg_hdr.msg_iovlen = 1;
+    msgs[i].msg_hdr.msg_name = &peers[i];
+    msgs[i].msg_hdr.msg_namelen = sizeof(sockaddr_in);
+  }
 
   while (running_.load()) {
-    sockaddr_in peer_addr{};
-    socklen_t peer_len = sizeof(peer_addr);
-    const ssize_t rx = ::recvfrom(ep->udp_fd,
-                                  tmp.data(),
-                                  tmp.size(),
-                                  0,
-                                  reinterpret_cast<sockaddr*>(&peer_addr),
-                                  &peer_len);
-    if (rx < 0) {
+    for (size_t i = 0; i < kUdpRxBatch; ++i) {
+      msgs[i].msg_hdr.msg_namelen = sizeof(sockaddr_in);
+    }
+
+    const int received = ::recvmmsg(ep->udp_fd, msgs.data(), static_cast<unsigned int>(kUdpRxBatch), 0, nullptr);
+    if (received < 0) {
       if (errno == EINTR) { continue; }
       if (!running_.load()) { break; }
-      DAQIRI_LOG_WARN("UDP recvfrom failed on port {}: {}", ep->port, strerror(errno));
+      DAQIRI_LOG_WARN("UDP recvmmsg failed on port {}: {}", ep->port, strerror(errno));
       continue;
     }
+    if (received == 0) { continue; }
 
     if (ep->socket_cfg.mode_ == SocketMode::SERVER) {
       std::lock_guard<std::mutex> lock(state_mutex_);
-      ep->udp_peer_addr = peer_addr;
+      ep->udp_peer_addr = peers[static_cast<size_t>(received - 1)];
       ep->udp_peer_valid = true;
     }
 
-    auto* burst = create_tx_burst_params();
-    burst->hdr.hdr.port_id = ep->port;
-    burst->hdr.hdr.q_id = ep->rx_queue;
-    burst->hdr.hdr.num_pkts = 1;
-    burst->hdr.hdr.num_segs = 1;
-    burst->pkts[0] = new void*[1];
-    burst->pkt_lens[0] = new uint32_t[1];
+    for (int i = 0; i < received; ++i) {
+      const auto rx = static_cast<size_t>(msgs[static_cast<size_t>(i)].msg_len);
+      auto* burst = create_tx_burst_params();
+      burst->hdr.hdr.port_id = ep->port;
+      burst->hdr.hdr.q_id = ep->rx_queue;
+      burst->hdr.hdr.num_pkts = 1;
+      burst->hdr.hdr.num_segs = 1;
+      burst->pkts[0] = new void*[1];
+      burst->pkt_lens[0] = new uint32_t[1];
 
-    auto* payload = new uint8_t[static_cast<size_t>(rx)];
-    std::memcpy(payload, tmp.data(), static_cast<size_t>(rx));
-    burst->pkts[0][0] = payload;
-    burst->pkt_lens[0][0] = static_cast<uint32_t>(rx);
-    burst->rdma_hdr.conn_id = ep->primary_conn_id;
+      auto* payload = new uint8_t[rx];
+      std::memcpy(payload, iovs[static_cast<size_t>(i)].iov_base, rx);
+      burst->pkts[0][0] = payload;
+      burst->pkt_lens[0][0] = static_cast<uint32_t>(rx);
+      burst->rdma_hdr.conn_id = ep->primary_conn_id;
 
-    push_rx_burst(ep->rx_queue_state, burst);
-    rx_pkts_.fetch_add(1);
-    rx_bytes_.fetch_add(static_cast<uint64_t>(rx));
+      push_rx_burst(ep->rx_queue_state, burst);
+      rx_pkts_.fetch_add(1);
+      rx_bytes_.fetch_add(static_cast<uint64_t>(rx));
+    }
   }
 }
 

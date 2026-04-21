@@ -185,8 +185,9 @@ class SocketMgr : public Manager {
   void close_all_connections();
   void clear_rx_queues();
 
-  bool send_tcp_packet(int fd, const void* data, size_t size);
-  bool send_udp_packet(EndpointState& ep, const void* data, size_t size);
+  bool send_tcp_burst(int fd, BurstParams* burst, size_t* sent_pkts, uint64_t* sent_bytes);
+  bool send_udp_burst(EndpointState& ep, BurstParams* burst, size_t* sent_pkts,
+                      uint64_t* sent_bytes);
 
   std::atomic<bool> running_{false};
   std::atomic<uintptr_t> next_conn_id_{1};
