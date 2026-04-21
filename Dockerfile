@@ -51,7 +51,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ==============================================================
-# base-deps: base dependencies for the advanced network lib
+# base-deps: base dependencies for the DAQIRI lib
 # ==============================================================
 FROM base AS base-deps
 
