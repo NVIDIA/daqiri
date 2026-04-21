@@ -36,8 +36,8 @@ In this context, Kernel Bypass refers to bypassing the operating system's kernel
 
     The Holoscan Advanced Network library integration testing infrastructure is under active development. As such:
 
-    - The **DPDK** backend is supported and distributed with the `holoscan-networking` package, and is the only backend actively tested at this time.
-    - The **DOCA GPUNetIO** backend is supported and distributed with the `holoscan-networking` package, with testing infrastructure under development.
+    - The **DPDK** backend is supported and distributed with the DAQIRI library, and is the only backend actively tested at this time.
+    - The **DOCA GPUNetIO** backend is supported and distributed with the DAQIRI library, with testing infrastructure under development.
     - The **NVIDIA Rivermax** backend is supported for Rx only when building from source, but not yet distributed nor actively tested. Tx support is under development.
     - The **RDMA** backend is under active development and should be available soon.
 
@@ -61,9 +61,9 @@ Which backend is best for your use case will depend on multiple factors, such as
         - Supported by all MOFED drivers (requires rebuilding nvidia-dkms drivers afterwards).
     - [`DMA Buf`](https://docs.kernel.org/driver-api/dma-buf.html), supported on Linux kernels 5.12+ with NVIDIA open-source drivers 515+ and CUDA toolkit 11.7+.
 
-## 1. Installing Holoscan Networking
+## 1. Building the DAQIRI Library
 
-We'll start with installing the `holoscan-networking` package, as it provides some utilities to help tune the system, and requires some dependencies which will help us with the system setup.
+We'll start with building the DAQIRI library, which provides the high performance networking capabilities and includes utilities to help tune the system.
 
 First, add the [DOCA apt repository](https://developer.nvidia.com/doca-downloads?deployment_platform=Host-Server&deployment_package=DOCA-Host&target_os=Linux) which holds some of its dependencies:
 
@@ -105,32 +105,33 @@ First, add the [DOCA apt repository](https://developer.nvidia.com/doca-downloads
     sudo apt update
     ```
 
-You can then install `holoscan-networking`:
+You can then build the DAQIRI library:
 
-=== "Debian installation"
+=== "Container build (recommended)"
 
-    ```bash
-    sudo apt install -y holoscan-networking
-    ```
-
-=== "From source"
-
-    You can build the Holoscan Networking libraries and sample applications from source on HoloHub:
+    The container approach bundles all user-space libraries for each networking backend, avoiding dependency issues on the host:
 
     ```bash
-    git clone git@github.com:nvidia-holoscan/holohub.git
-    cd holohub
-    ./holohub install holoscan-networking   # Installed in ./install
+    git clone git@github.com:nvidia-holoscan/daqiri.git
+    cd daqiri
+    BASE_TARGET=dpdk DAQIRI_MGR="dpdk rdma" scripts/build-container.sh
     ```
 
-    If you'd like to generate the debian package from source and install it to ensure all dependencies are then present on your system, you can run:
+=== "CMake build (bare-metal)"
 
     ```bash
-    ./holohub install holoscan-networking
-    sudo apt-get install ./holoscan-networking_*.deb        # Installed in /opt/nvidia/holoscan
+    git clone git@github.com:nvidia-holoscan/daqiri.git
+    cd daqiri
+    cmake -S . -B build -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MGR="dpdk rdma"
+    cmake --build build -j
+    cmake --install build --prefix /opt/daqiri
     ```
 
-    Refer to the [HoloHub README](https://github.com/nvidia-holoscan/holohub/blob/main/README.md) for more information.
+    !!! note
+
+        Inspect the [Dockerfile](https://github.com/nvidia-holoscan/daqiri/blob/main/Dockerfile) to see the full list of user-space dependencies needed for a bare-metal build.
+
+Refer to the [DAQIRI README](https://github.com/nvidia-holoscan/daqiri/blob/main/README.md) for more information on configuration and API usage.
 
 ## 2. Required System Setup
 
@@ -151,7 +152,7 @@ lsmod | grep ib_core
     mlx_compat             20480  11 rdma_cm,ib_ipoib,mlxdevm,iw_cm,ib_umad,ib_core,rdma_ucm,ib_uverbs,mlx5_ib,ib_cm,mlx5_core
     ```
 
-If this is empty, install the latest OFED drivers from DOCA (the DOCA APT repository should already be configured from the [Holoscan Networking installation above](#1-installing-holoscan-networking)), and reboot your system:
+If this is empty, install the latest OFED drivers from DOCA (the DOCA APT repository should already be configured from the [DAQIRI build setup above](#1-building-the-daqiri-library)), and reboot your system:
 
 ```bash
 sudo apt update
@@ -188,6 +189,10 @@ To identify the current mode, run `ibstat` or `ibv_devinfo` and look for the `Li
 ```bash
 ibv_devinfo
 ```
+
+??? note "Warning about `libvmw_pvrdma-rdmav34.so`"
+
+    If you see a warning like `couldn't load driver 'libvmw_pvrdma-rdmav34.so'`, this is harmless. It refers to a VMware paravirtual RDMA driver that is not relevant on bare-metal systems and can be safely ignored.
 
 ??? failure "Couldn't load driver 'libmlx5-rdmav34.so'"
 
@@ -470,7 +475,7 @@ If it's not loaded, run the following command, then check again:
 
 While the configurations above are the minimum requirements to get a NIC and a NVIDIA GPU to communicate while bypassing the OS kernel stack, performance can be further improved in most scenarios by tuning the system as described below.
 
-Before diving in each of the setups below, we provide a utility script as part of the `holoscan-networking` package which provides an overview of the configurations that potentially need to be tuned on your system.
+Before diving in each of the setups below, we provide a utility script as part of the DAQIRI library which provides an overview of the configurations that potentially need to be tuned on your system.
 
 ??? example "Work In Progress"
 
@@ -1478,7 +1483,7 @@ You can set the MTU for each interface like so, for a given `if_name` name ident
 
 Holoscan Networking provides a benchmarking application named `adv_networking_bench` that can be used to test the performance of the networking configuration. In this section, we'll walk you through the steps needed to configure the application for your NIC for Tx and Rx, and run a loopback test between the two interfaces with a [physical SFP cable](https://www.nvidia.com/en-us/networking/interconnect/) connecting them.
 
-Make sure to install [`holoscan-networking`](#1-installing-holoscan-networking) beforehand.
+Make sure to [build the DAQIRI library](#1-building-the-daqiri-library) beforehand.
 
 ### 4.1 Update the loopback configuration
 
@@ -1974,7 +1979,7 @@ sudo mlnx_perf -i $if_name
 
 ## 5. Building your own application
 
-This section will guide you through building your own application using the `adv_networking_bench` as an example. Make sure to install [`holoscan-networking`](#1-installing-holoscan-networking) first.
+This section will guide you through building your own application using the `adv_networking_bench` as an example. Make sure to [build the DAQIRI library](#1-building-the-daqiri-library) first.
 
 ### 5.1 Understand the configuration parameters
 
