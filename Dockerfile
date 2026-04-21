@@ -161,6 +161,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 FROM dpdk AS rdma
 
 # ==============================================================
+# doca_eth: Add DOCA SDK packages for DOCA Ethernet support
+# ==============================================================
+FROM dpdk AS doca_eth
+
+# Install DOCA SDK packages required for DOCA Ethernet / DOCA Flow.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        mlnx-dpdk-dev \
+        libdoca-sdk-eth-dev \
+        libdoca-sdk-flow-dev \
+        mlnx-ofed-kernel-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# ==============================================================
 # gpunetio: Add DOCA SDK packages for GPUNetIO support
 # ==============================================================
 FROM dpdk AS gpunetio

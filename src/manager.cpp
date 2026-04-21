@@ -20,6 +20,9 @@
 #if DAQIRI_MGR_DPDK
 #include "src/managers/dpdk/daqiri_dpdk_mgr.h"
 #endif
+#if DAQIRI_MGR_DOCA_ETH
+#include "src/managers/doca_eth/daqiri_doca_eth_mgr.h"
+#endif
 #if DAQIRI_MGR_RDMA
 #include "src/managers/rdma/daqiri_rdma_mgr.h"
 #endif
@@ -48,6 +51,8 @@ extern void initialize_manager(Manager* _manager);
 ManagerType ManagerFactory::get_default_manager_type() {
 #if DAQIRI_MGR_DPDK
   return ManagerType::DPDK;
+#elif DAQIRI_MGR_DOCA_ETH
+  return ManagerType::DOCA_ETH;
 #elif DAQIRI_MGR_RDMA
   return ManagerType::RDMA;
 #else
@@ -61,6 +66,11 @@ std::unique_ptr<Manager> ManagerFactory::create_instance(ManagerType type) {
 #if DAQIRI_MGR_DPDK
     case ManagerType::DPDK:
       _manager = std::make_unique<DpdkMgr>();
+      break;
+#endif
+#if DAQIRI_MGR_DOCA_ETH
+    case ManagerType::DOCA_ETH:
+      _manager = std::make_unique<DocaEthMgr>();
       break;
 #endif
 #if DAQIRI_MGR_RDMA

@@ -44,7 +44,9 @@ PYBIND11_MODULE(_daqiri, m) {
   py::enum_<ManagerType>(m, "ManagerType")
       .value("UNKNOWN", ManagerType::UNKNOWN)
       .value("DEFAULT", ManagerType::DEFAULT)
-      .value("DPDK", ManagerType::DPDK);
+      .value("DPDK", ManagerType::DPDK)
+      .value("DOCA_ETH", ManagerType::DOCA_ETH)
+      .value("RDMA", ManagerType::RDMA);
 
   py::enum_<Direction>(m, "Direction")
       .value("RX", Direction::RX)

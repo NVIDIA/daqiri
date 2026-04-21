@@ -1,0 +1,77 @@
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    manager: "doca_eth"
+    master_core: 3
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    memory_regions:
+    - name: "Data_TX_GPU"
+      kind: "huge"
+      affinity: 0
+      num_bufs: 2048
+      buf_size: 8064
+    - name: "Data_RX_GPU"
+      kind: "huge"
+      affinity: 0
+      num_bufs: 2048
+      buf_size: 8064
+
+    interfaces:
+    - name: "tx_port"
+      address: "0000:01:00.1"
+      tx:
+        queues:
+        - name: "tx_q_0"
+          id: 0
+          batch_size: 1024
+          cpu_core: 11
+          memory_regions:
+            - "Data_TX_GPU"
+          offloads:
+            - "tx_eth_src"
+    - name: "rx_port"
+      address: "0002:01:00.1"
+      rx:
+        flow_isolation: true
+        queues:
+        - name: "rq_q_0"
+          id: 0
+          cpu_core: 9
+          batch_size: 1024
+          memory_regions:
+            - "Data_RX_GPU"
+        flows:
+        - name: "flow_0"
+          id: 0
+          action:
+            type: queue
+            id: 0
+          match:
+            udp_src: 4096
+            udp_dst: 4096
+
+bench_rx:
+  interface_name: "rx_port"
+  gpu_direct: false
+  split_boundary: false
+  batch_size: 1024
+  max_packet_size: 8064
+  header_size: 64
+
+bench_tx:
+  interface_name: "tx_port"
+  gpu_direct: false
+  split_boundary: false
+  batch_size: 1024
+  payload_size: 8000
+  header_size: 64
+  eth_dst_addr: "4c:bb:47:2a:ea:f2"
+  ip_src_addr: "1.2.3.4"
+  ip_dst_addr: "5.6.7.8"
+  udp_src_port: 4096
+  udp_dst_port: 4096

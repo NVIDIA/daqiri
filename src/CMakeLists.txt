@@ -132,8 +132,34 @@ if(NOT DEFINED DAQIRI_MGR)
     # Default: dpdk only (no DOCA dependency)
     set(DAQIRI_MGR "dpdk rdma" CACHE STRING "Manager type(s) list")
 endif()
-set_property(CACHE DAQIRI_MGR PROPERTY STRINGS "dpdk" "rdma")
+set_property(CACHE DAQIRI_MGR PROPERTY STRINGS "dpdk" "rdma" "doca_eth")
 separate_arguments(DAQIRI_MGR_LIST UNIX_COMMAND ${DAQIRI_MGR})
+
+list(FIND DAQIRI_MGR_LIST "doca_eth" _has_doca_eth)
+list(FIND DAQIRI_MGR_LIST "dpdk" _has_dpdk)
+if(_has_doca_eth GREATER -1 AND _has_dpdk EQUAL -1)
+  message(STATUS "doca_eth currently depends on the DPDK manager implementation; enabling dpdk")
+  list(APPEND DAQIRI_MGR_LIST "dpdk")
+endif()
+
+set(_known_mgrs "dpdk" "rdma" "doca_eth")
+foreach(_mgr IN LISTS DAQIRI_MGR_LIST)
+  list(FIND _known_mgrs "${_mgr}" _known_idx)
+  if(_known_idx EQUAL -1)
+    message(FATAL_ERROR
+      "Unknown manager '${_mgr}'. Supported values for DAQIRI_MGR are: dpdk, rdma, doca_eth")
+  endif()
+endforeach()
+
+# Keep deterministic target ordering so dependent managers can link cleanly.
+set(_ordered_mgrs "")
+foreach(_mgr IN ITEMS "dpdk" "rdma" "doca_eth")
+  list(FIND DAQIRI_MGR_LIST "${_mgr}" _mgr_idx)
+  if(NOT _mgr_idx EQUAL -1)
+    list(APPEND _ordered_mgrs "${_mgr}")
+  endif()
+endforeach()
+set(DAQIRI_MGR_LIST ${_ordered_mgrs})
 
 # Define targets for each manager type
 foreach(MGR IN LISTS DAQIRI_MGR_LIST)

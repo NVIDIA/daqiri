@@ -8,7 +8,7 @@ Standalone benchmark applications for testing performance of DAQIRI with various
 Build from repository root:
 
 ```bash
-cmake -S . -B build -DDAQIRI_BUILD_EXAMPLES=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MGR="dpdk rdma"
+cmake -S . -B build -DDAQIRI_BUILD_EXAMPLES=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MGR="dpdk rdma doca_eth"
 cmake --build build -j
 ```
 
@@ -16,13 +16,18 @@ Run:
 
 ```bash
 ./build/examples/daqiri_bench_default ./build/examples/daqiri_bench_default_tx_rx.yaml --seconds 10
+./build/examples/daqiri_bench_default ./build/examples/daqiri_bench_default_tx_rx_doca_eth.yaml --seconds 10
 ./build/examples/daqiri_bench_rdma ./build/examples/daqiri_bench_rdma_tx_rx.yaml --seconds 10 --mode both
 ```
 
 Included configs:
 
 - `daqiri_bench_default_tx_rx.yaml`
+- `daqiri_bench_default_tx_rx_doca_eth.yaml`
 - `daqiri_bench_default_tx_rx_hds.yaml`
+- `daqiri_bench_default_tx_rx_hds_doca_eth.yaml`
 - `daqiri_bench_default_sw_loopback.yaml`
+- `daqiri_bench_default_sw_loopback_doca_eth.yaml`
 - `daqiri_bench_default_rx_multi_q.yaml`
+- `daqiri_bench_default_rx_multi_q_doca_eth.yaml`
 - `daqiri_bench_rdma_tx_rx.yaml`

@@ -14,7 +14,7 @@ is available in userspace, thus bypassing the kernel's networking stack entirely
 ## Build quickstart
 
 ```bash
-cmake -S . -B build -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MGR="dpdk rdma"
+cmake -S . -B build -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MGR="dpdk rdma doca_eth"
 cmake --build build -j
 cmake --install build --prefix /opt/daqiri
 ```
@@ -22,7 +22,7 @@ cmake --install build --prefix /opt/daqiri
 Container build helper:
 
 ```bash
-BASE_TARGET=dpdk DAQIRI_MGR="dpdk rdma" scripts/build-container.sh
+BASE_TARGET=doca_eth DAQIRI_MGR="dpdk rdma doca_eth" scripts/build-container.sh
 ```
 
 ## Requirements
@@ -38,6 +38,9 @@ BASE_TARGET=dpdk DAQIRI_MGR="dpdk rdma" scripts/build-container.sh
 - For GPUNetIO:
   - The [GDRCopy `gdrdrv` kernel module](https://docs.nvidia.com/doca/sdk/doca-gpunetio/index.html#src-4410845379_id-.DOCAGPUNetIOv3.2.0LC-GDRCopyInstallation) must be loaded on the bare-metal system.
   - DOCA-OFED drivers from [DOCA-Host](https://developer.nvidia.com/doca-archive) 3.2.1 or later (install the `doca-ofed` package).
+- For `doca_eth` manager:
+  - DOCA-OFED drivers from [DOCA-Host](https://developer.nvidia.com/doca-archive) 3.2.1 or later.
+  - DOCA packages providing Ethernet/Flow development libraries (`libdoca-sdk-eth-dev`, `libdoca-sdk-flow-dev`).
 
 > User-space libraries are included in the [Dockerfile](./Dockerfile) for each networking backend. Inspect this file if you wish to know what is needed to build and run on baremetal instead.
 
@@ -90,6 +93,13 @@ It is the default manager, and can be set with the values `dpdk` or `default`.
 
 Use the `examples/daqiri_bench_*.yaml` configs to build and run the sample applications with DPDK (default).
 
+#### DOCA Ethernet (`doca_eth`)
+
+The `doca_eth` manager is available for DOCA Ethernet / DOCA Flow based deployments.
+
+Use the `examples/daqiri_bench_*_doca_eth.yaml` configs to run the same benchmark examples with
+`manager: "doca_eth"`.
+
 #### Configuration Parameters
 
 ##### Common Configuration
@@ -101,7 +111,7 @@ These common configurations are used by both TX and RX:
 - **`master_core`**: Master core used to fork and join network threads. This core is not used for packet processing and can be
 bound to a non-isolated core. Should differ from isolated cores in queues below.
   - type: `integer`
-- **`manager`**: Backend networking library. default: `dpdk`. Other: `doca` (GPUNet IO), `rivermax`
+- **`manager`**: Backend networking library. default: `dpdk`. Other: `doca_eth`, `rdma`
   - type: `string`
 - **`log_level`**: Backend log level. default: `warn`. Other: `trace` , `debug`, `info`, `error`, `critical`, `off`
   - type: `string`

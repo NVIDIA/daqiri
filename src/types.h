@@ -225,10 +225,12 @@ enum class ManagerType {
   UNKNOWN = -1,
   DEFAULT,
   DPDK,
+  DOCA_ETH,
   RDMA,
 };
 
 static constexpr const char* DAQIRI_MGR_STR__DPDK = "dpdk";
+static constexpr const char* DAQIRI_MGR_STR__DOCA_ETH = "doca_eth";
 static constexpr const char* DAQIRI_MGR_STR__RDMA = "rdma";
 static constexpr const char* DAQIRI_MGR_STR__DEFAULT = "default";
 /**
@@ -250,6 +252,12 @@ inline ManagerType manager_type_from_string(const std::string& str) {
   if (str == DAQIRI_MGR_STR__DPDK) is_known_but_unavailable = true;
 #endif
 
+#if DAQIRI_MGR_DOCA_ETH
+  if (str == DAQIRI_MGR_STR__DOCA_ETH) return ManagerType::DOCA_ETH;
+  available_managers += std::string(DAQIRI_MGR_STR__DOCA_ETH) + " ";
+#else
+  if (str == DAQIRI_MGR_STR__DOCA_ETH) is_known_but_unavailable = true;
+#endif
 
 #if DAQIRI_MGR_RDMA
   if (str == DAQIRI_MGR_STR__RDMA) return ManagerType::RDMA;
@@ -324,6 +332,8 @@ inline std::string manager_type_to_string(ManagerType type) {
   switch (type) {
     case ManagerType::DPDK:
       return DAQIRI_MGR_STR__DPDK;
+    case ManagerType::DOCA_ETH:
+      return DAQIRI_MGR_STR__DOCA_ETH;
     case ManagerType::RDMA:
       return DAQIRI_MGR_STR__RDMA;
     case ManagerType::DEFAULT:

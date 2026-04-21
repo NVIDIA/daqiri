@@ -20,7 +20,7 @@ include(CMakePackageConfigHelpers)
 
 option(DAQIRI_BUILD_PYTHON "Build Python bindings" OFF)
 option(DAQIRI_BUILD_EXAMPLES "Build standalone examples" ON)
-set(DAQIRI_MGR "dpdk rdma" CACHE STRING "Manager backend list")
+set(DAQIRI_MGR "dpdk rdma" CACHE STRING "Manager backend list (dpdk, rdma, doca_eth)")
 
 add_subdirectory(src)
 

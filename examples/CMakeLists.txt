@@ -10,9 +10,13 @@ endif()
 
 set(DAQIRI_BENCH_CONFIGS
   daqiri_bench_default_tx_rx.yaml
+  daqiri_bench_default_tx_rx_doca_eth.yaml
   daqiri_bench_default_tx_rx_hds.yaml
+  daqiri_bench_default_tx_rx_hds_doca_eth.yaml
   daqiri_bench_default_rx_multi_q.yaml
+  daqiri_bench_default_rx_multi_q_doca_eth.yaml
   daqiri_bench_default_sw_loopback.yaml
+  daqiri_bench_default_sw_loopback_doca_eth.yaml
   daqiri_bench_rdma_tx_rx.yaml
 )
 
