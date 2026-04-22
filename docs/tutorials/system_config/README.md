@@ -1,17 +1,17 @@
-# High Performance Networking with Holoscan
+# System Setup for DAQIRI
 
-This tutorial demonstrates how to use the Advanced Network library (referred to as `advanced_network` in HoloHub) for low latency and high throughput communication through NVIDIA SmartNICs. With a properly tuned system, the Advanced Network library can achieve hundreds of Gbps with latencies in the low microseconds.
+This tutorial demonstrates how to use the DAQIRI library for low latency and high throughput communication through NVIDIA SmartNICs. With a properly tuned system, DAQIRI can achieve hundreds of Gbps with latencies in the low microseconds.
 
 !!! note
 
-    This solution is designed for users who want to create a Holoscan application that will interface with an external system or sensor over Ethernet.
+    This solution is designed for users who want to create an application that interfaces with an external system or sensor over Ethernet.
 
     - For high performance communication with systems also running Holoscan, refer to the [Holoscan distributed application documentation](https://docs.nvidia.com/holoscan/sdk-user-guide/holoscan_create_distributed_app.html) instead.
-    - For JESD-compliant sensor without Ethernet support, consider the [Holoscan Sensor Bridge](https://docs.nvidia.com/holoscan/sensor-bridge/latest/introduction.html) for an FPGA-based interface to Holoscan.
+    - For JESD-compliant sensors without Ethernet support, consider the [Holoscan Sensor Bridge](https://docs.nvidia.com/holoscan/sensor-bridge/latest/introduction.html) for an FPGA-based interface.
 
 ## Prerequisites
 
-Achieving High Performance Networking with Holoscan requires a system with an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking/ethernet-adapters/) and a [**discrete GPU**](https://www.nvidia.com/en-us/design-visualization/desktop-graphics/). That is the case of [NVIDIA Data Center](https://www.nvidia.com/en-us/data-center/) systems, or edge systems like the [NVIDIA IGX](https://www.nvidia.com/en-us/edge-computing/products/igx/) platform and the [NVIDIA Project DIGITS](https://www.nvidia.com/en-us/project-digits/). `x86_64` systems equipped with these components are also supported, though the performance will vary greatly depending on the PCIe topology of the system (more on this [below](#31-ensure-ideal-pcie-topology)).
+Achieving high performance networking with DAQIRI requires a system with an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking/ethernet-adapters/) and a [**discrete GPU**](https://www.nvidia.com/en-us/design-visualization/desktop-graphics/). That is the case of [NVIDIA Data Center](https://www.nvidia.com/en-us/data-center/) systems, or edge systems like the [NVIDIA IGX](https://www.nvidia.com/en-us/edge-computing/products/igx/) platform and the [NVIDIA Project DIGITS](https://www.nvidia.com/en-us/project-digits/). `x86_64` systems equipped with these components are also supported, though the performance will vary greatly depending on the PCIe topology of the system (more on this [below](#31-ensure-ideal-pcie-topology)).
 
 In this tutorial, we will be developing on an **NVIDIA IGX Orin platform** with [IGX SW 1.1](https://docs.nvidia.com/igx-orin/user-guide/latest/base-os.html) and an [NVIDIA RTX 6000 ADA GPU](https://www.nvidia.com/en-us/design-visualization/rtx-6000/), which is the configuration that is currently actively tested. The concepts should be applicable to other systems based on Ubuntu 22.04 as well. It should also work on other Linux distributions with a glibc version of 2.35 or higher by containerizing the dependencies and applications on top of an Ubuntu 22.04 image, but this is not actively tested at this time.
 
@@ -25,7 +25,7 @@ Achieving high performance networking is a complex problem that involves many sy
 
 ### Kernel Bypass
 
-In this context, Kernel Bypass refers to bypassing the operating system's kernel to directly communicate with the network interface (NIC), greatly reducing the latency and overhead of the Linux network stack. There are multiple technologies that achieve this in different fashions. They're all Ethernet-based, but differ in their implementation and features. The goal of the Advanced Network library in Holoscan Networking is to provide a common higher-level interface to all these backends:
+In this context, Kernel Bypass refers to bypassing the operating system's kernel to directly communicate with the network interface (NIC), greatly reducing the latency and overhead of the Linux network stack. There are multiple technologies that achieve this in different fashions. They're all Ethernet-based, but differ in their implementation and features. The goal of the DAQIRI library is to provide a common higher-level interface to all these backends:
 
 - **RDMA**: Remote Direct Memory Access, using the open-source [`rdma-core`](https://github.com/linux-rdma/rdma-core) library. It differs from the other Ethernet-based backends with its server/client model and RoCE (RDMA over Ethernet) protocol. Given the extra cost and complexity to setup on both ends, it offers a simpler user interface, orders packets on arrival, and is the only one to offer a high reliability mode.
 - **DPDK**: the Data Plane Development Kit is an open-source project part of the Linux Foundation with a strong and long-lasting community support. Its RTE Flow capability is generally considered the most flexible solution to split packets ingress and egress data.
@@ -34,14 +34,14 @@ In this context, Kernel Bypass refers to bypassing the operating system's kernel
 
 ??? example "Work In Progress"
 
-    The Holoscan Advanced Network library integration testing infrastructure is under active development. As such:
+    The DAQIRI library integration testing infrastructure is under active development. As such:
 
     - The **DPDK** backend is supported and distributed with the DAQIRI library, and is the only backend actively tested at this time.
     - The **DOCA GPUNetIO** backend is supported and distributed with the DAQIRI library, with testing infrastructure under development.
     - The **NVIDIA Rivermax** backend is supported for Rx only when building from source, but not yet distributed nor actively tested. Tx support is under development.
     - The **RDMA** backend is under active development and should be available soon.
 
-Which backend is best for your use case will depend on multiple factors, such as packet size, batch size, data type, and more. The goal of the Advanced Network library is to abstract the interface to these backends, allowing developers to focus on the application logic and experiment with different configurations to identify the best technology for their use case.
+Which backend is best for your use case will depend on multiple factors, such as packet size, batch size, data type, and more. The goal of the DAQIRI library is to abstract the interface to these backends, allowing developers to focus on the application logic and experiment with different configurations to identify the best technology for their use case.
 
 ### GPUDirect
 
@@ -474,6 +474,10 @@ If it's not loaded, run the following command, then check again:
     The section below is for advanced users looking to extract more performance out of their system. You can choose to skip this section and return to it later if performance if your application is not satisfactory.
 
 While the configurations above are the minimum requirements to get a NIC and a NVIDIA GPU to communicate while bypassing the OS kernel stack, performance can be further improved in most scenarios by tuning the system as described below.
+
+!!! tip "Plan your reboots"
+
+    Several steps below require adding flags to the kernel bootline in `/etc/default/grub` (hugepages in [3.4](#34-enable-huge-pages), CPU isolation in [3.5](#35-isolate-cpu-cores)). We recommend reading through both sections first and adding all the flags at once to avoid multiple reboots. Other items like MRRS, GPU clocks, and MTU can be applied at runtime but reset on reboot — consider scripting them or using a systemd service for persistence.
 
 Before diving in each of the setups below, we provide a utility script as part of the DAQIRI library which provides an overview of the configurations that potentially need to be tuned on your system.
 
@@ -1478,6 +1482,24 @@ You can set the MTU for each interface like so, for a given `if_name` name ident
     $ ip -d link show dev $if_name | grep -oE "maxmtu [0-9]+"
     maxmtu 9978
     ```
+
+### 3.10 Summary
+
+| Step | Description | Tuning Script Flag | Persistent Option Available? |
+|------|-------------|--------------------|-------------|
+| 3.1 | PCIe topology | `--check topo` | N/A (hardware) |
+| 3.2 | PCIe config (MPS/Speed) | `--check mps` | N/A (hardware) |
+| 3.3 | NIC MRRS | `--check mrrs` / `--set mrrs` | No — use a startup script |
+| 3.4 | Hugepages | `--check hugepages` | Yes — kernel bootline or `/etc/fstab` |
+| 3.5 | CPU isolation | `--check cmdline` | Yes — kernel bootline |
+| 3.6 | CPU governor | `--check cpu-freq` | Yes — see persistent option in section |
+| 3.7 | GPU clocks | `--check gpu-clock` | Partial — `nvidia-smi -pm 1` persists driver; clock locks need a startup script |
+| 3.8 | GPU BAR1 size | `--check bar1-size` | Yes — firmware flash |
+| 3.9 | Jumbo frames (MTU) | `--check mtu` | Yes — see persistent option in section |
+
+!!! tip
+
+    Each section above provides both one-time and persistent configuration options. We recommend testing with the one-time commands first, then switching to the persistent options once your configuration is verified. You can check all settings at once with `tune_system.py --check all`.
 
 ## 4. Running a test application
 
