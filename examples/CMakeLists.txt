@@ -27,3 +27,8 @@ target_link_libraries(daqiri_bench_rdma PRIVATE daqiri::daqiri ${DAQIRI_EXAMPLE_
 foreach(cfg IN LISTS DAQIRI_BENCH_CONFIGS)
   configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${cfg} ${CMAKE_CURRENT_BINARY_DIR}/${cfg} COPYONLY)
 endforeach()
+
+install(TARGETS daqiri_bench_default daqiri_bench_rdma
+        RUNTIME DESTINATION bin)
+install(FILES ${DAQIRI_BENCH_CONFIGS}
+        DESTINATION bin)
