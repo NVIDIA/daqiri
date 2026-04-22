@@ -22,15 +22,5 @@ jobs:
       - name: Install dependencies
         run: pip install mkdocs-material
 
-      - name: Build docs
-        run: mkdocs build
-
-      - name: Inject custom homepage
-        run: |
-          cp docs/index.html site/index.html
-          cp docs/daqiri-api.html site/daqiri-api.html
-
-      - name: Deploy to GitHub Pages
-        run: |
-          ghp-import -n -f site
-          git push origin gh-pages --force
+      - name: Build and deploy
+        run: mkdocs gh-deploy --force
