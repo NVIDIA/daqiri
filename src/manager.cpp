@@ -30,10 +30,12 @@
 #if DAQIRI_MGR_DPDK || DAQIRI_MGR_SOCKET || DAQIRI_MGR_RDMA
 #include <rte_common.h>
 #include <rte_malloc.h>
+#include <rte_memory.h>
 #include <rte_mbuf.h>
 #include <rte_ethdev.h>
 #include <rte_ring.h>
 #include <rte_eal.h>
+#include <rte_version.h>
 #include <unistd.h>
 #endif
 
@@ -312,8 +314,17 @@ Status Manager::register_memory_regions() {
         ret = rte_extmem_register(
             ext_mem->buf_ptr, ext_mem->buf_len, NULL, ext_mem->buf_iova, GPU_PAGE_SIZE);
       } else {
+#if RTE_VERSION >= RTE_VERSION_NUM(24, 11, 0, 0)
         ret = rte_extmem_register_dmabuf(
             ext_mem->buf_ptr, ext_mem->buf_len, dmabuf_fd, offset, NULL, 0, GPU_PAGE_SIZE);
+#else
+        DAQIRI_LOG_WARN(
+            "rte_extmem_register_dmabuf unavailable in DPDK {}; falling back to peermem registration",
+            rte_version());
+        close(dmabuf_fd);
+        ret = rte_extmem_register(
+            ext_mem->buf_ptr, ext_mem->buf_len, NULL, ext_mem->buf_iova, GPU_PAGE_SIZE);
+#endif
       }
     }
     if (ret) {
@@ -632,6 +643,24 @@ Status Manager::rdma_get_server_conn_id(const std::string& server_addr, uint16_t
 
 Status Manager::get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server) {
   DAQIRI_LOG_CRITICAL("RDMA get RX burst not implemented");
+  return Status::NOT_SUPPORTED;
+}
+
+Status Manager::set_reorder_cuda_stream(const std::string& interface_name,
+                                        const std::string& reorder_name,
+                                        cudaStream_t stream) {
+  DAQIRI_LOG_ERROR(
+      "set_reorder_cuda_stream not implemented for this manager type "
+      "(interface='{}', reorder='{}')",
+      interface_name,
+      reorder_name);
+  return Status::NOT_SUPPORTED;
+}
+
+Status Manager::get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info) {
+  (void)burst;
+  (void)info;
+  DAQIRI_LOG_ERROR("get_reorder_burst_info not implemented for this manager type");
   return Status::NOT_SUPPORTED;
 }
 

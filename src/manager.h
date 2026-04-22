@@ -75,6 +75,10 @@ class Manager {
   virtual Status get_rx_burst(BurstParams** burst, int port, int q) = 0;
   virtual Status get_rx_burst(BurstParams** burst, int port_id);
   virtual Status get_rx_burst(BurstParams** burst);
+  virtual Status set_reorder_cuda_stream(const std::string& interface_name,
+                                         const std::string& reorder_name,
+                                         cudaStream_t stream);
+  virtual Status get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info);
   virtual void free_rx_metadata(BurstParams* burst) = 0;
   virtual void free_tx_metadata(BurstParams* burst) = 0;
   virtual Status get_tx_metadata_buffer(BurstParams** burst) = 0;

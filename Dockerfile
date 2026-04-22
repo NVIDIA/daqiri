@@ -116,10 +116,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl -fsSL https://fast.dpdk.org/rel/dpdk-${DPDK_VERSION}.tar.xz -o /tmp/dpdk-${DPDK_VERSION}.tar.xz \
     && tar xf /tmp/dpdk-${DPDK_VERSION}.tar.xz -C /tmp \
     && cd /tmp/dpdk-${DPDK_VERSION} \
-    && git apply \
-        --exclude=.mailmap \
-        --exclude=doc/guides/rel_notes/release_26_03.rst \
-        /tmp/dpdk_patches/dmabuf.patch \
+    && for patch in /tmp/dpdk_patches/*.patch; do \
+         patch_name="$(basename "${patch}")"; \
+         echo "Applying DPDK patch: ${patch_name}"; \
+         if [[ "${patch_name}" == "dmabuf.patch" ]]; then \
+           git apply \
+             --exclude=.mailmap \
+             --exclude=doc/guides/rel_notes/release_26_03.rst \
+             "${patch}"; \
+         else \
+           git apply "${patch}"; \
+         fi; \
+       done \
     && meson setup ${DPDK_BUILD_DIR} \
         --prefix=${DPDK_INSTALL_PREFIX} \
         -Dtests=false \

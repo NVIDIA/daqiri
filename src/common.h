@@ -482,6 +482,27 @@ Status get_rx_burst(BurstParams** burst);
 Status get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server);
 
 /**
+ * @brief Set CUDA stream for a configured GPU reorder plan
+ *
+ * @param interface_name Interface name from config
+ * @param reorder_name Reorder config name from interfaces[].rx.reorder_configs[]
+ * @param stream CUDA stream used for this plan. CPU reorder plans do not require a stream.
+ * @return Status indicating success or failure
+ */
+Status set_reorder_cuda_stream(const std::string& interface_name,
+                               const std::string& reorder_name,
+                               cudaStream_t stream);
+
+/**
+ * @brief Get metadata for a reordered RX burst
+ *
+ * @param burst Reordered burst returned by get_rx_burst()
+ * @param info Output reorder metadata. For GPU reorder, this is valid after burst->event completes.
+ * @return Status indicating success or failure
+ */
+Status get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info);
+
+/**
  * @brief Set the header fields in a burst
  *
  * @param burst Burst structure
@@ -591,6 +612,16 @@ struct YAML::convert<daqiri::NetworkConfig> {
    */
   static bool parse_flex_item_config(const YAML::Node& flex_item,
                                      daqiri::FlexItemConfig& flex_item_config);
+
+  /**
+   * @brief Parse reorder configuration from a YAML node.
+   *
+   * @param reorder_item The YAML node containing the reorder configuration.
+   * @param reorder_config The ReorderConfig object to populate.
+   * @return true if parsing was successful, false otherwise.
+   */
+  static bool parse_reorder_config(const YAML::Node& reorder_item,
+                                   daqiri::ReorderConfig& reorder_config);
 
   /**
    * @brief Parse memory region configuration from a YAML node.
@@ -906,6 +937,24 @@ struct YAML::convert<daqiri::NetworkConfig> {
                 rx_cfg.flex_items_.emplace_back(std::move(flex_item_config));
               }
             } catch (const std::exception& e) {}  // No flex_items defined for this interface.
+
+            try {
+              std::unordered_set<std::string> reorder_names;
+              for (const auto& reorder_item : rx["reorder_configs"]) {
+                daqiri::ReorderConfig reorder_cfg;
+                if (!parse_reorder_config(reorder_item, reorder_cfg)) {
+                  DAQIRI_LOG_ERROR("Failed to parse ReorderConfig");
+                  return false;
+                }
+                if (reorder_names.find(reorder_cfg.name_) != reorder_names.end()) {
+                  DAQIRI_LOG_ERROR("Duplicate reorder config name '{}' in interface '{}'",
+                                   reorder_cfg.name_, ifcfg.name_);
+                  return false;
+                }
+                reorder_names.insert(reorder_cfg.name_);
+                rx_cfg.reorder_configs_.emplace_back(std::move(reorder_cfg));
+              }
+            } catch (const std::exception& e) {}  // No reorder_configs defined for this interface.
 
             ifcfg.rx_ = rx_cfg;
           } catch (const std::exception& e) {}  // No RX queues defined for this interface.

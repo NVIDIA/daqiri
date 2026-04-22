@@ -1,0 +1,106 @@
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    manager: "dpdk"
+    master_core: 3
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    memory_regions:
+    - name: "Data_TX_CPU"
+      kind: "huge"
+      affinity: 0
+      num_bufs: 16384
+      buf_size: 2048
+    - name: "Data_RX_CPU"
+      kind: "huge"
+      affinity: 0
+      num_bufs: 16384
+      buf_size: 2048
+    - name: "Reorder_RX_CPU"
+      kind: "huge"
+      affinity: 0
+      num_bufs: 128
+      # Must hold one fully reordered batch:
+      # (source buf_size - payload_byte_offset) * packets_per_batch = (2048 - 64) * 1024 = 2,031,616 bytes.
+      buf_size: 2031616
+
+    interfaces:
+    - name: "tx_port"
+      address: <0000:00:00.0>
+      tx:
+        queues:
+        - name: "tx_q_0"
+          id: 0
+          batch_size: 1024
+          cpu_core: 11
+          memory_regions:
+            - "Data_TX_CPU"
+          offloads:
+            - "tx_eth_src"
+    - name: "rx_port"
+      address: <0000:00:00.0>
+      rx:
+        flow_isolation: true
+        queues:
+        - name: "rx_q_0"
+          id: 0
+          cpu_core: 9
+          batch_size: 1024
+          timeout_us: 2000
+          memory_regions:
+            - "Data_RX_CPU"
+        flows:
+        - name: "flow_0"
+          id: 201
+          action:
+            type: queue
+            id: 0
+          match:
+            udp_src: 5000
+            udp_dst: 5000
+        reorder_configs:
+        - name: "rx_reorder_seq_1024"
+          reorder_type: "cpu"
+          memory_region: "Reorder_RX_CPU"
+          # Copy beginning at payload start for this benchmark template.
+          payload_byte_offset: 64
+          flow_ids:
+            - 201
+          method:
+            seq_packets_per_batch:
+              # 32-bit sequence starts at byte 64 (payload start in this benchmark template).
+              sequence_number:
+                bit_offset: 512
+                bit_width: 32
+              packets_per_batch: 1024
+
+bench_rx:
+  interface_name: "rx_port"
+  gpu_direct: false
+  split_boundary: false
+  batch_size: 1024
+  max_packet_size: 2048
+  header_size: 64
+
+bench_tx:
+  interface_name: "tx_port"
+  gpu_direct: false
+  split_boundary: false
+  batch_size: 1024
+  payload_size: 1000
+  header_size: 64
+  eth_dst_addr: <00:00:00:00:00:00>
+  ip_src_addr: <1.2.3.4>
+  ip_dst_addr: <5.6.7.8>
+  udp_src_port: 5000
+  udp_dst_port: 5000
+
+  # Writes a monotonic network-order uint32 into UDP payload bytes [0:4]
+  # for each transmitted packet.
+  add_sequence_number: true
+  sequence_number_offset: 0
+  sequence_number_start: 0

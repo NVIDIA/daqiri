@@ -16,8 +16,9 @@
   - OFED drivers from [DOCA-Host](https://developer.nvidia.com/doca-archive) 2.8 or later
     (install the `mlnx-ofed-kernel-dkms` package or the `doca-ofed` meta-package)
 
-  > **Note:** If you use the DPDK bundled in the DAQIRI container, it is patched with
-  > dmabuf support and **peermem is not required**.
+  > **Note:** If you use the DPDK bundled in the DAQIRI container, all patches in
+  > [`dpdk_patches/`](../dpdk_patches) are applied at build time (including dma-buf
+  > support), so **peermem is not required**.
 - **DPDK** (for the DPDK backend) — userspace libraries are included in the
   [Dockerfile](../Dockerfile). Inspect it if building on bare metal.
 - **libibverbs** and **librdmacm** (for the RDMA backend)
@@ -74,6 +75,9 @@ Both are config-driven. Example configs are in the `examples/` directory:
 |-------------|-------------|
 | `daqiri_bench_default_tx_rx.yaml` | DPDK TX/RX, CPU-only |
 | `daqiri_bench_default_tx_rx_hds.yaml` | DPDK TX/RX with header-data split (GPUDirect) |
+| `daqiri_bench_default_tx_rx_reorder_seq_1024.yaml` | DPDK TX/RX with GPU RX reorder (1024 packets per batch) using a 32-bit sequence in UDP payload |
+| `daqiri_bench_default_tx_rx_reorder_seq_1024_cpu.yaml` | DPDK TX/RX with CPU RX reorder (1024 packets per batch) using `memcpy` over CPU-accessible buffers |
+| `daqiri_bench_default_sw_loopback_reorder_seq_1024.yaml` | DPDK software-loopback TX/RX with GPU RX reorder (1024 packets per batch) and TX-injected 32-bit UDP payload sequence |
 | `daqiri_bench_default_rx_multi_q.yaml` | DPDK multi-queue RX |
 | `daqiri_bench_default_sw_loopback.yaml` | DPDK software loopback (no physical link needed) |
 | `daqiri_bench_rdma_tx_rx.yaml` | RDMA client/server TX/RX |

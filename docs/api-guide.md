@@ -57,6 +57,51 @@ auto status = daqiri::daqiri_init(config);
 After `daqiri_init()` returns `Status::SUCCESS`, all memory regions are allocated, NIC
 queues are configured, and worker threads are running.
 
+If GPU RX `reorder_configs` are configured (DPDK backend), set one CUDA stream per GPU reorder
+plan before pulling reordered bursts. CPU reorder configs do not use a CUDA stream:
+
+```cpp
+cudaStream_t stream = /* your stream */;
+auto st = daqiri::set_reorder_cuda_stream("rx_port", "rx_reorder_0", stream);
+if (st != daqiri::Status::SUCCESS) {
+    // handle setup error
+}
+```
+
+Reorder batch sizing requirement (v1):
+- Packets within a single reordered batch are expected to be the same size.
+- Mixed packet sizes in the same reorder batch are not supported.
+- Reorder queues must use one RX source memory region. Header-data split RX queues are not
+  supported for reorder in v1.
+- `reorder_type: "gpu"` requires `device` or `host_pinned` packet/output memory.
+- `reorder_type: "cpu"` requires `host`, `host_pinned`, or `huge` packet/output memory.
+
+Reordered RX bursts can be identified from `burst->hdr.hdr.burst_flags`:
+- `DAQIRI_BURST_FLAG_REORDERED` means the burst contains one aggregated reorder buffer.
+- `DAQIRI_BURST_FLAG_REORDER_TIMEOUT` means that aggregate was emitted by the timeout path rather
+  than by filling the configured `packets_per_batch`.
+- For reordered bursts, `burst->hdr.hdr.max_pkt` is the logical number of source packets in the
+  aggregate, while `burst->hdr.hdr.num_pkts` remains `1` because the consumer receives one
+  aggregate buffer.
+- The aggregate batch number is available through `daqiri::get_reorder_burst_info(...)`.
+  For `seq_batch_number`, this is the configured batch-number field. For
+  `seq_packets_per_batch`, it is derived as `sequence_number / packets_per_batch`, so sequence
+  numbers `0..1023` map to batch `0` when `packets_per_batch` is `1024`, `1024..2047` map to
+  batch `1`, and so on.
+
+```cpp
+daqiri::ReorderBurstInfo info{};
+if ((burst->hdr.hdr.burst_flags & daqiri::DAQIRI_BURST_FLAG_REORDERED) != 0U) {
+    if (burst->event != nullptr) {
+        cudaEventSynchronize(burst->event);
+    }
+    auto st = daqiri::get_reorder_burst_info(burst, &info);
+    if (st == daqiri::Status::SUCCESS) {
+        // info.batch_id identifies the aggregate batch.
+    }
+}
+```
+
 ## Receiving Packets
 
 ### Step 1: Get a burst

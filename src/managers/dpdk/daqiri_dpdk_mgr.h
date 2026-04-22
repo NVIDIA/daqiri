@@ -47,10 +47,16 @@
 #include <rte_gpudev.h>
 #include <atomic>
 #include <thread>
+#include <deque>
+#include <mutex>
 #include <unordered_map>
 #include "src/manager.h"
 #include "src/common.h"
 #include "daqiri_dpdk_stats.h"
+
+#ifndef DAQIRI_REORDER_GPU_PROFILE
+#define DAQIRI_REORDER_GPU_PROFILE 0
+#endif
 
 namespace daqiri {
 
@@ -115,6 +121,10 @@ class DpdkMgr : public Manager {
 
   Status get_rx_burst(BurstParams** burst, int port, int q) override;
   using daqiri::Manager::get_rx_burst;  // for overloads
+  Status set_reorder_cuda_stream(const std::string& interface_name,
+                                 const std::string& reorder_name,
+                                 cudaStream_t stream) override;
+  Status get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info) override;
   Status set_packet_tx_time(BurstParams* burst, int idx, uint64_t timestamp);
   void free_rx_metadata(BurstParams* burst) override;
   void free_tx_metadata(BurstParams* burst) override;
@@ -155,6 +165,134 @@ class DpdkMgr : public Manager {
 
   void apply_tx_offloads(int port);
 
+  struct ReorderBatchState {
+    uint64_t first_packet_cycles = 0;
+    uint32_t payload_len = 0;
+    uint32_t packet_count = 0;
+  };
+
+  struct ReorderOutputBufferState {
+    void* ptr = nullptr;
+    bool consumer_done = true;
+    bool event_complete = true;
+    cudaEvent_t event = nullptr;
+    uint64_t* h_batch_id = nullptr;
+    uint64_t* d_batch_id = nullptr;
+    std::vector<struct rte_mbuf*> source_mbufs;
+    uint32_t source_packet_count = 0;
+#if DAQIRI_REORDER_GPU_PROFILE
+    cudaEvent_t kernel_start_event = nullptr;
+    cudaEvent_t kernel_stop_event = nullptr;
+#endif
+  };
+
+  struct ReorderOutputPool {
+    std::string mr_name;
+    std::vector<ReorderOutputBufferState> buffers;
+    size_t next_buffer = 0;
+    int cuda_device_id = 0;
+    bool cuda_events_enabled = false;
+  };
+
+  struct ReorderPendingCopy {
+    std::shared_ptr<ReorderOutputPool> output_pool;
+    size_t buffer_idx = 0;
+  };
+
+#if DAQIRI_REORDER_GPU_PROFILE
+  struct ReorderGpuProfileStats {
+    uint64_t gpu_kernel_samples = 0;
+    double gpu_kernel_total_us = 0.0;
+    double gpu_kernel_max_us = 0.0;
+  };
+#endif
+
+  struct ReorderPlanRuntime {
+    const ReorderConfig* config = nullptr;
+    uint16_t port_id = 0;
+    uint16_t queue_id = 0;
+    std::string memory_region_name;
+    std::shared_ptr<ReorderOutputPool> output_pool;
+    uint32_t packets_per_batch = 0;
+    uint32_t payload_byte_offset = 0;
+    uint32_t copy_source_offset = 0;
+    uint32_t slot_stride = 0;
+    uint64_t timeout_cycles = 0;
+    bool use_gpu_backend = false;
+    int cuda_device_id = 0;
+    cudaStream_t stream = nullptr;
+    uint32_t cuda_staging_capacity = 0;
+
+    std::vector<void*> h_input_ptrs;
+    std::vector<struct rte_mbuf*> h_source_mbufs;
+    void** d_input_ptrs = nullptr;
+
+    ReorderBatchState direct_arrival_batch;
+    std::deque<ReorderPendingCopy> pending_copies;
+#if DAQIRI_REORDER_GPU_PROFILE
+    ReorderGpuProfileStats gpu_profile;
+#endif
+  };
+
+  struct ReorderBurstContext {
+    std::string mr_name;
+    std::shared_ptr<ReorderOutputPool> output_pool;
+    size_t buffer_idx = 0;
+    std::array<void*, 1> pkt_ptrs{};
+    std::array<uint32_t, 1> pkt_lens{};
+    ReorderBurstInfo info{};
+    const uint64_t* h_batch_id = nullptr;
+    bool released = false;
+  };
+
+  struct ReorderQueueState {
+    bool enabled = false;
+    bool single_plan_fast_path = false;
+    std::unordered_map<uint16_t, size_t> flow_id_to_plan;
+    std::vector<ReorderPlanRuntime> plans;
+    std::vector<std::vector<int>> plan_pkt_indices;
+    std::vector<size_t> plan_pkt_counts;
+    std::vector<int> unmatched_indices;
+    size_t unmatched_count = 0;
+    std::deque<BurstParams*> ready_outputs;
+  };
+
+  static constexpr uint32_t kBurstFlagDpdkReordered = DAQIRI_BURST_FLAG_REORDERED;
+  static constexpr uint32_t kBurstFlagDpdkReorderTimeout = DAQIRI_BURST_FLAG_REORDER_TIMEOUT;
+
+  bool init_reorder_state();
+  bool init_reorder_queue_state(const InterfaceConfig& intf, const RxQueueConfig& qcfg);
+  void cleanup_reorder_state();
+  Status poll_reorder_events(ReorderPlanRuntime& plan);
+  Status process_burst_for_reorder(uint32_t key, ReorderQueueState& qstate, BurstParams* burst);
+  Status flush_reorder_timeouts(ReorderQueueState& qstate, uint64_t now_cycles);
+  Status flush_reorder_batch(ReorderPlanRuntime& plan,
+                             uint32_t batch_id,
+                             bool timeout_flush,
+                             BurstParams** out_burst);
+  Status create_reorder_output_burst(ReorderPlanRuntime& plan,
+                                     std::shared_ptr<ReorderOutputPool> output_pool,
+                                     size_t buffer_idx,
+                                     void* output_buffer,
+                                     uint32_t aggregate_len,
+                                     uint32_t source_packet_count,
+                                     uint32_t payload_len,
+                                     uint64_t batch_id,
+                                     bool batch_id_ready,
+                                     const uint64_t* h_batch_id,
+                                     cudaEvent_t event,
+                                     bool timeout_flush,
+                                     BurstParams** out_burst);
+  Status acquire_reorder_output_buffer(ReorderPlanRuntime& plan, size_t* buffer_idx, void** output_buffer);
+  void release_reorder_output_buffer(std::shared_ptr<ReorderOutputPool> output_pool,
+                                     size_t buffer_idx);
+  size_t append_reorder_packet(ReorderPlanRuntime& plan,
+                               struct rte_mbuf* mbuf,
+                               void* pkt_ptr,
+                               uint64_t now_cycles);
+  Status get_next_output_or_ready(uint32_t key, ReorderQueueState& qstate, BurstParams** burst);
+  void release_reorder_output_context(BurstParams* burst);
+
   std::array<struct rte_ether_addr, MAX_IFS> mac_addrs;
   std::unordered_map<uint32_t, struct rte_ring*> rx_rings;
   struct rte_ether_addr conf_ports_eth_addr[RTE_MAX_ETHPORTS];
@@ -170,6 +308,9 @@ class DpdkMgr : public Manager {
   struct rte_mempool* rx_flow_id_buffer;
   struct rte_mempool* rx_metadata;
   struct rte_mempool* tx_metadata;
+  std::unordered_map<std::string, std::shared_ptr<ReorderOutputPool>> reorder_output_pools_;
+  std::unordered_map<uint32_t, ReorderQueueState> reorder_queue_states_;
+  std::mutex reorder_lock_;
   std::array<DropTrafficConfig, RTE_MAX_ETHPORTS> drop_all_traffic_flow;
   uint64_t timestamp_mask_{0};
   uint64_t timestamp_offset_{0};
