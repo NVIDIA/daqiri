@@ -31,4 +31,6 @@ jobs:
           cp docs/daqiri-api.html site/daqiri-api.html
 
       - name: Deploy to GitHub Pages
-        run: ghp-import -n -p -f site
+        run: |
+          ghp-import -n -f site
+          git push origin gh-pages --force
