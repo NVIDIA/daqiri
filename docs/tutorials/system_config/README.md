@@ -19,6 +19,26 @@ In this tutorial, we will be developing on an **NVIDIA IGX Orin platform** with 
 
     If you have secure boot enabled on your system, you might need to disable it as a prerequisite to run some of the configurations below ([switching the NIC link layers to Ethernet](#22-switch-your-nic-link-layers-to-ethernet), [updating the MRRS of your NIC ports](#33-maximize-the-nics-max-read-request-size-mrrs), [updating the BAR1 size of your GPU](#38-maximize-gpu-bar1-size)). Secure boot can be re-enabled after the configurations are completed.
 
+!!! Warning "DPDK Hardware Steering (HWS) compatibility"
+
+    The DPDK backend uses Hardware Steering (HWS) via the `dv_flow_en=2` mlx5 device argument. HWS requires compatible versions of both the NIC firmware and the host's MLNX_OFED kernel modules. Per the [DPDK mlx5 documentation](https://doc.dpdk.org/guides/nics/mlx5.html), the minimum requirements are ConnectX-6 Dx or later with firmware `xx.35.1012`+, but the host's OFED/kernel driver must also support the HWS features expected by the DPDK version in use.
+
+    If you encounter the following error:
+
+    ```log
+    mlx5_net: [mlx5dr_action_create_generic_bulk]: Cannot create HWS action since HWS is not supported
+    mlx5_net: Failed to start port 0 <address>: fail to configure port
+    ```
+
+    Check your OFED and firmware versions:
+
+    ```bash
+    cat /sys/module/mlx5_core/version   # Host OFED kernel module version
+    ethtool -i <interface_name> | grep firmware  # NIC firmware version
+    ```
+
+    To resolve, update your NIC firmware and OFED drivers, or contact the DAQIRI team for guidance on compatible version combinations.
+
 ## Background
 
 Achieving high performance networking is a complex problem that involves many system components and configurations which we will cover in this tutorial. Two of the core concepts to achieve this are named Kernel Bypass, and GPUDirect.
@@ -116,6 +136,10 @@ You can then build the DAQIRI library:
     cd daqiri
     BASE_TARGET=dpdk DAQIRI_MGR="dpdk rdma" scripts/build-container.sh
     ```
+
+    !!! note
+
+        Running the container with DPDK and GPU support requires specific flags and host system configuration. See [Running the DAQIRI container](#41-running-the-daqiri-container) in Section 4 for details.
 
 === "CMake build (bare-metal)"
 
@@ -1507,7 +1531,45 @@ Holoscan Networking provides a benchmarking application named `adv_networking_be
 
 Make sure to [build the DAQIRI library](#1-building-the-daqiri-library) beforehand.
 
-### 4.1 Update the loopback configuration
+### 4.1 Running the DAQIRI container
+
+If you built DAQIRI using the container approach, use the following command to launch the container with DPDK and GPU support. The host system must be fully configured (Sections [2](#2-required-system-setup) and [3](#3-performance-tuning)) before the container can access the NIC and GPU hardware.
+
+```bash
+docker run --rm -it --privileged \
+  --runtime=nvidia \
+  --network=host \
+  -v /dev/hugepages:/dev/hugepages \
+  -v /mnt/huge:/mnt/huge \
+  -v /dev/infiniband:/dev/infiniband \
+  daqiri:local bash
+```
+
+??? info "Explanation of container flags"
+
+    | Flag | Purpose |
+    |------|---------|
+    | `--privileged` | DPDK requires raw access to NIC hardware (PCI devices, hugepage files) |
+    | `--runtime=nvidia` | Makes the host GPU visible inside the container via the NVIDIA Container Toolkit |
+    | `--network=host` | Shares the host network namespace so DPDK can discover the physical NIC interfaces and their PCIe topology |
+    | `-v /dev/hugepages:/dev/hugepages` | Mounts the default hugepage filesystem for DPDK memory allocation |
+    | `-v /mnt/huge:/mnt/huge` | Mounts the custom hugepage mount point, if configured |
+    | `-v /dev/infiniband:/dev/infiniband` | Exposes the RDMA/verbs device files required by the mlx5 DPDK driver |
+
+You can also mount a custom YAML configuration file into the container:
+
+```bash
+docker run --rm -it --privileged \
+  --runtime=nvidia --network=host \
+  -v /dev/hugepages:/dev/hugepages \
+  -v /mnt/huge:/mnt/huge \
+  -v /dev/infiniband:/dev/infiniband \
+  -v $(pwd)/my_config.yaml:/opt/daqiri/bin/my_config.yaml \
+  daqiri:local \
+  /opt/daqiri/bin/daqiri_bench_default /opt/daqiri/bin/my_config.yaml
+```
+
+### 4.2 Update the loopback configuration
 
 #### Find the application files
 
@@ -1657,7 +1719,7 @@ bench_tx:
     - We ignore the IP fields (`ip_src_addr`, `ip_dst_addr`) for now, as we are testing on a layer 2 network by just connecting a cable between the two interfaces on our system, therefore having mock values has no impact.
     - You might have noted the lack of a `eth_src_addr` field in this `bench_tx` section. This is because the source Ethernet MAC address can be inferred automatically by the Advanced Network library from the PCIe address of the Tx interface referenced above.
 
-### 4.2 Run the loopback test
+### 4.3 Run the loopback test
 
 After having modified the configuration file, ensure you have connected an SFP cable between the two interfaces of your NIC, then run the application with the command below:
 
@@ -1679,11 +1741,10 @@ After having modified the configuration file, ensure you have connected an SFP c
 
     === "Containerized"
 
+        [Launch the DAQIRI container](#41-running-the-daqiri-container), then inside:
+
         ```bash
-        ./holohub run-container \
-          --img holohub:adv_networking_bench \
-          --docker-opts "-u 0 --privileged" \
-          -- bash -c "./install/examples/adv_networking_bench/adv_networking_bench adv_networking_bench_default_tx_rx.yaml"
+        /opt/daqiri/bin/daqiri_bench_default /opt/daqiri/bin/daqiri_bench_default_tx_rx.yaml
         ```
 
 The application will run indefinitely. You can stop it gracefully with `Ctrl-C`. You can also uncomment and set the `max_duration_ms` field in the `scheduler` section of the configuration file to limit the duration of the run automatically.
@@ -1918,6 +1979,18 @@ sudo mlnx_perf -i $if_name
     ```
 
 ??? tip "Troubleshooting"
+
+    ??? failure "Cannot create HWS action since HWS is not supported"
+
+        Example error:
+
+        ```log
+        mlx5_net: [mlx5dr_action_create_generic_bulk]: Cannot create HWS action since HWS is not supported
+        mlx5_net: Failed to start port 0 0005:03:00.0: fail to configure port
+        [CRITICAL] Cannot start device err=-95, port=0
+        ```
+
+        Your system does not support DPDK Hardware Steering (HWS). This is typically caused by an incompatibility between the DPDK version and the host's OFED kernel modules or NIC firmware. See the [HWS compatibility note](#prerequisites) in the Prerequisites section for details.
 
     ??? failure "EAL: failed to parse device"
 
