@@ -533,6 +533,15 @@ uint16_t get_num_rx_queues(int port_id);
  */
 void flush_port_queue(int port, int queue);
 
+// Generic socket functions
+Status socket_connect_to_server(const std::string& server_addr, uint16_t server_port,
+                                uintptr_t* conn_id);
+Status socket_connect_to_server(const std::string& server_addr, uint16_t server_port,
+                                const std::string& src_addr, uintptr_t* conn_id);
+Status socket_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue);
+Status socket_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
+                                 uintptr_t* conn_id);
+
 // RDMA functions
 Status rdma_connect_to_server(const std::string& server_addr, uint16_t server_port,
                               uintptr_t* conn_id);
@@ -594,14 +603,24 @@ struct YAML::convert<daqiri::NetworkConfig> {
       const YAML::Node& mr, daqiri::MemoryRegionConfig& memory_region);
 
   /**
-   * @brief Parse RDMA configuration from a YAML node.
+   * @brief Parse socket endpoint configuration from a YAML node.
    *
-   * @param rdma_item The YAML node containing the RDMA configuration.
-   * @param rdma The RDMAConfig object to populate.
+   * @param socket_item The YAML node containing socket configuration.
+   * @param socket_cfg The SocketConfig object to populate.
    * @return true if parsing was successful, false otherwise.
    */
-  static bool parse_rdma_config(
-      const YAML::Node& rdma_item, daqiri::RDMAConfig& rdma);
+  static bool parse_socket_config(
+      const YAML::Node& socket_item, daqiri::SocketConfig& socket_cfg);
+
+  /**
+   * @brief Parse RoCE transport configuration from a YAML node.
+   *
+   * @param roce_item The YAML node containing RoCE configuration.
+   * @param roce_cfg The RoCEConfig object to populate.
+   * @return true if parsing was successful, false otherwise.
+   */
+  static bool parse_roce_config(
+      const YAML::Node& roce_item, daqiri::RoCEConfig& roce_cfg);
 
   /**
    * @brief Parse common RX queue configuration from a YAML node.
@@ -674,14 +693,56 @@ struct YAML::convert<daqiri::NetworkConfig> {
 
     // YAML is using exceptions, catch them
     try {
+      if (node["manager"].IsDefined()) {
+        DAQIRI_LOG_ERROR(
+            "Legacy 'manager' is no longer supported. Use 'stream_type' and "
+            "'protocol' instead.");
+        return false;
+      }
+
       input_spec.common_.version = node["version"].as<int32_t>();
       input_spec.common_.master_core_ = node["master_core"].as<int32_t>();
-      try {
-        input_spec.common_.manager_type = daqiri::manager_type_from_string(
-            node["manager"].as<std::string>(daqiri::DAQIRI_MGR_STR__DEFAULT));
-      } catch (const std::exception& e) {
-        input_spec.common_.manager_type = daqiri::ManagerType::DEFAULT;
+
+      if (!node["stream_type"].IsDefined()) {
+        DAQIRI_LOG_ERROR("Missing required field 'stream_type' (valid: 'raw' or 'socket')");
+        return false;
       }
+
+      input_spec.common_.stream_type =
+          daqiri::stream_type_from_string(node["stream_type"].as<std::string>());
+      if (input_spec.common_.stream_type == daqiri::StreamType::INVALID) {
+        DAQIRI_LOG_ERROR("Invalid stream_type '{}'. Valid values: raw, socket",
+                         node["stream_type"].as<std::string>());
+        return false;
+      }
+
+      const bool socket_used = input_spec.common_.stream_type == daqiri::StreamType::SOCKET;
+      if (socket_used) {
+        if (!node["protocol"].IsDefined()) {
+          DAQIRI_LOG_ERROR(
+              "Missing required field 'protocol' for stream_type 'socket' "
+              "(valid: tcp, udp, roce)");
+          return false;
+        }
+
+        input_spec.common_.protocol =
+            daqiri::socket_protocol_from_string(node["protocol"].as<std::string>());
+        if (input_spec.common_.protocol == daqiri::SocketProtocol::INVALID) {
+          DAQIRI_LOG_ERROR("Invalid protocol '{}'. Valid values: tcp, udp, roce",
+                           node["protocol"].as<std::string>());
+          return false;
+        }
+      } else {
+        if (node["protocol"].IsDefined()) {
+          DAQIRI_LOG_ERROR(
+              "Field 'protocol' is only valid when stream_type is 'socket'");
+          return false;
+        }
+        input_spec.common_.protocol = daqiri::SocketProtocol::INVALID;
+      }
+
+      input_spec.common_.manager_type =
+          daqiri::manager_type_from_stream_type(input_spec.common_.stream_type);
 
       input_spec.common_.loopback_ = daqiri::LoopbackType::DISABLED;
       try {
@@ -694,8 +755,8 @@ struct YAML::convert<daqiri::NetworkConfig> {
         }
       } catch (const std::exception& e) {}
 
-      bool rdma_used =
-        input_spec.common_.manager_type == daqiri::ManagerType::RDMA;
+      const bool roce_used = socket_used &&
+                             input_spec.common_.protocol == daqiri::SocketProtocol::ROCE;
 
       try {
         input_spec.debug_ = node["debug"].as<bool>(false);
@@ -750,19 +811,56 @@ struct YAML::convert<daqiri::NetworkConfig> {
           ifcfg.name_ = intf["name"].as<std::string>();
           ifcfg.address_ = intf["address"].as<std::string>();
 
-          // RDMA config (only parsed for RDMA manager)
-          daqiri::RDMAConfig rdma;
-          if (rdma_used) {
-            if (!intf["rdma_config"].IsDefined()) {
-              DAQIRI_LOG_ERROR("Missing 'rdma_config' for interface '{}'", ifcfg.name_);
+          if (intf["rdma_config"].IsDefined()) {
+            DAQIRI_LOG_ERROR(
+                "Legacy 'rdma_config' is no longer supported. Use "
+                "'socket_config' and 'roce_config' instead.");
+            return false;
+          }
+
+          if (socket_used) {
+            if (!intf["socket_config"].IsDefined()) {
+              DAQIRI_LOG_ERROR("Missing 'socket_config' for interface '{}'", ifcfg.name_);
               return false;
             }
-            if (!parse_rdma_config(intf["rdma_config"], rdma)) {
-              DAQIRI_LOG_ERROR("Failed to parse 'rdma_config' for interface '{}'", ifcfg.name_);
+            if (!parse_socket_config(intf["socket_config"], ifcfg.socket_)) {
+              DAQIRI_LOG_ERROR("Failed to parse 'socket_config' for interface '{}'", ifcfg.name_);
+              return false;
+            }
+
+            if (roce_used) {
+              if (!intf["roce_config"].IsDefined()) {
+                DAQIRI_LOG_ERROR(
+                    "Missing 'roce_config' for interface '{}' with protocol roce", ifcfg.name_);
+                return false;
+              }
+
+              if (!parse_roce_config(intf["roce_config"], ifcfg.roce_)) {
+                DAQIRI_LOG_ERROR("Failed to parse 'roce_config' for interface '{}'", ifcfg.name_);
+                return false;
+              }
+
+              ifcfg.rdma_.mode_ = ifcfg.socket_.mode_ == daqiri::SocketMode::SERVER
+                                    ? daqiri::RDMAMode::SERVER
+                                    : daqiri::RDMAMode::CLIENT;
+              ifcfg.rdma_.xmode_ = ifcfg.roce_.transport_mode_;
+              ifcfg.rdma_.port_ = ifcfg.socket_.mode_ == daqiri::SocketMode::SERVER
+                                    ? ifcfg.socket_.local_port_
+                                    : ifcfg.socket_.remote_port_;
+            } else if (intf["roce_config"].IsDefined()) {
+              DAQIRI_LOG_ERROR(
+                  "'roce_config' is only valid when protocol is 'roce' "
+                  "(interface '{}')", ifcfg.name_);
+              return false;
+            }
+          } else {
+            if (intf["socket_config"].IsDefined() || intf["roce_config"].IsDefined()) {
+              DAQIRI_LOG_ERROR(
+                  "'socket_config'/'roce_config' are only valid for stream_type 'socket' "
+                  "(interface '{}')", ifcfg.name_);
               return false;
             }
           }
-          ifcfg.rdma_ = rdma;
 
           try {
             const auto& rx = intf["rx"];
@@ -774,7 +872,10 @@ struct YAML::convert<daqiri::NetworkConfig> {
 
             for (const auto& q_item : rx["queues"]) {
               daqiri::RxQueueConfig q;
-              if (!parse_rx_queue_config(q_item, input_spec.common_.manager_type, q, !rdma_used)) {
+              if (!parse_rx_queue_config(q_item,
+                                         input_spec.common_.manager_type,
+                                         q,
+                                         !roce_used)) {
                 DAQIRI_LOG_ERROR("Failed to parse RxQueueConfig");
                 return false;
               }
@@ -819,7 +920,10 @@ struct YAML::convert<daqiri::NetworkConfig> {
 
             for (const auto& q_item : tx["queues"]) {
               daqiri::TxQueueConfig q;
-              if (!parse_tx_queue_config(q_item, input_spec.common_.manager_type, q, !rdma_used)) {
+              if (!parse_tx_queue_config(q_item,
+                                         input_spec.common_.manager_type,
+                                         q,
+                                         !roce_used)) {
                 DAQIRI_LOG_ERROR("Failed to parse TxQueueConfig");
                 return false;
               }
@@ -834,6 +938,46 @@ struct YAML::convert<daqiri::NetworkConfig> {
       } catch (const std::exception& e) {
         DAQIRI_LOG_ERROR(e.what());
         return false;
+      }
+
+      if (socket_used &&
+          (input_spec.common_.protocol == daqiri::SocketProtocol::TCP ||
+           input_spec.common_.protocol == daqiri::SocketProtocol::UDP)) {
+        std::unordered_set<std::string> gpu_mrs;
+        for (const auto& intf : input_spec.ifs_) {
+          for (const auto& q : intf.rx_.queues_) {
+            for (const auto& mr_name : q.common_.mrs_) {
+              const auto it = input_spec.mrs_.find(mr_name);
+              if (it != input_spec.mrs_.end() &&
+                  it->second.kind_ == daqiri::MemoryKind::DEVICE) {
+                gpu_mrs.insert(mr_name);
+              }
+            }
+          }
+          for (const auto& q : intf.tx_.queues_) {
+            for (const auto& mr_name : q.common_.mrs_) {
+              const auto it = input_spec.mrs_.find(mr_name);
+              if (it != input_spec.mrs_.end() &&
+                  it->second.kind_ == daqiri::MemoryKind::DEVICE) {
+                gpu_mrs.insert(mr_name);
+              }
+            }
+          }
+        }
+
+        if (!gpu_mrs.empty()) {
+          std::string joined;
+          for (const auto& mr_name : gpu_mrs) {
+            if (!joined.empty()) { joined += ", "; }
+            joined += mr_name;
+          }
+          DAQIRI_LOG_ERROR(
+              "GPU memory regions are not supported for protocol '{}'. Offending "
+              "memory_regions: {}",
+              daqiri::socket_protocol_to_string(input_spec.common_.protocol),
+              joined);
+          return false;
+        }
       }
 
       DAQIRI_LOG_INFO("Finished reading DAQIRI configuration");

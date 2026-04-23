@@ -20,11 +20,14 @@
 #if DAQIRI_MGR_DPDK
 #include "src/managers/dpdk/daqiri_dpdk_mgr.h"
 #endif
+#if DAQIRI_MGR_SOCKET
+#include "src/managers/socket/daqiri_socket_mgr.h"
+#endif
 #if DAQIRI_MGR_RDMA
 #include "src/managers/rdma/daqiri_rdma_mgr.h"
 #endif
 
-#if DAQIRI_MGR_DPDK || DAQIRI_MGR_RDMA
+#if DAQIRI_MGR_DPDK || DAQIRI_MGR_SOCKET || DAQIRI_MGR_RDMA
 #include <rte_common.h>
 #include <rte_malloc.h>
 #include <rte_mbuf.h>
@@ -48,6 +51,8 @@ extern void initialize_manager(Manager* _manager);
 ManagerType ManagerFactory::get_default_manager_type() {
 #if DAQIRI_MGR_DPDK
   return ManagerType::DPDK;
+#elif DAQIRI_MGR_SOCKET
+  return ManagerType::SOCKET;
 #elif DAQIRI_MGR_RDMA
   return ManagerType::RDMA;
 #else
@@ -61,6 +66,11 @@ std::unique_ptr<Manager> ManagerFactory::create_instance(ManagerType type) {
 #if DAQIRI_MGR_DPDK
     case ManagerType::DPDK:
       _manager = std::make_unique<DpdkMgr>();
+      break;
+#endif
+#if DAQIRI_MGR_SOCKET
+    case ManagerType::SOCKET:
+      _manager = std::make_unique<SocketMgr>();
       break;
 #endif
 #if DAQIRI_MGR_RDMA
@@ -94,14 +104,16 @@ ManagerType ManagerFactory::get_manager_type(const Config& config) {
   for (const auto& yaml_node : yaml_nodes) {
     try {
       auto node = yaml_node["daqiri"]["cfg"];
-      std::string manager = node["manager"].template as<std::string>(DAQIRI_MGR_STR__DEFAULT);
-      return manager_type_from_string(manager);
+      const std::string stream_type_str = node["stream_type"].template as<std::string>("");
+      const auto stream_type = stream_type_from_string(stream_type_str);
+      if (stream_type == StreamType::INVALID) { continue; }
+      return manager_type_from_stream_type(stream_type);
     } catch (const std::exception& e) {
-      return manager_type_from_string(daqiri::DAQIRI_MGR_STR__DEFAULT);
+      return get_default_manager_type();
     }
   }
 
-  return manager_type_from_string(daqiri::DAQIRI_MGR_STR__DEFAULT);
+  return get_default_manager_type();
 }
 
 size_t Manager::get_alignment(MemoryKind kind) {
@@ -570,6 +582,29 @@ Status Manager::get_rx_burst(BurstParams** burst) {
 
   // If we checked all interfaces and none yielded a burst
   return Status::NULL_PTR;
+}
+
+Status Manager::socket_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
+                                         uintptr_t* conn_id) {
+  DAQIRI_LOG_CRITICAL("Socket connect to server not implemented");
+  return Status::NOT_SUPPORTED;
+}
+
+Status Manager::socket_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
+                                         const std::string& src_addr, uintptr_t* conn_id) {
+  DAQIRI_LOG_CRITICAL("Socket connect to server not implemented");
+  return Status::NOT_SUPPORTED;
+}
+
+Status Manager::socket_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) {
+  DAQIRI_LOG_CRITICAL("Socket get port queue not implemented");
+  return Status::NOT_SUPPORTED;
+}
+
+Status Manager::socket_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
+                                          uintptr_t* conn_id) {
+  DAQIRI_LOG_CRITICAL("Socket get server conn ID not implemented");
+  return Status::NOT_SUPPORTED;
 }
 
 Status Manager::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
