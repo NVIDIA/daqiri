@@ -59,6 +59,9 @@
 
     /* HERO */
     #hero { min-height:100vh; display:flex; align-items:center; padding-top:var(--nav-h); position:relative; overflow:hidden; }
+    .hero-inner { display:grid; grid-template-columns:1fr auto; gap:4rem; align-items:center; }
+    .hero-logo-wrap { display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+    .hero-logo-wrap img { width:320px; max-width:38vw; filter:drop-shadow(0 0 40px rgba(118,185,0,0.18)); }
     .hero-grid { position:absolute; inset:0; z-index:0; background-image:linear-gradient(rgba(118,185,0,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(118,185,0,.04) 1px,transparent 1px); background-size:60px 60px; mask-image:radial-gradient(ellipse 80% 60% at 50% 40%,black 30%,transparent 100%); }
     .hero-glow { position:absolute; top:-20%; left:50%; transform:translateX(-50%); width:800px; height:500px; background:radial-gradient(ellipse,rgba(118,185,0,.11) 0%,transparent 70%); pointer-events:none; z-index:0; }
     .hero-content { position:relative; z-index:1; max-width:780px; }
@@ -180,6 +183,7 @@
     ::-webkit-scrollbar { width:6px; height:6px; }
     ::-webkit-scrollbar-track { background:var(--bg-dark); }
     ::-webkit-scrollbar-thumb { background:#333; border-radius:99px; }
+    @media (max-width:1000px) { .hero-inner { grid-template-columns:1fr; } .hero-logo-wrap { display:none; } }
     @media (max-width:900px) { .gs-layout { grid-template-columns:1fr; } .gs-code-panel { position:static; } .footer-inner { grid-template-columns:1fr 1fr; } }
     @media (max-width:640px) { .nav-links { display:none; } section { padding:4rem 0; } .footer-inner { grid-template-columns:1fr; } .tut-meta { display:none; } }
   </style>
@@ -189,7 +193,7 @@
   <nav id="navbar">
     <div class="nav-inner">
       <a class="nav-logo" href="#hero">
-        <div class="nav-logo-icon">DAQ</div>
+        <img src="logo.svg" alt="DAQIRI" style="height:36px;width:auto;" />
         <span class="nav-logo-text">DAQIRI</span>
         <span class="nav-logo-badge">NVIDIA</span>
       </a>
@@ -216,13 +220,14 @@
     <div class="hero-grid"></div>
     <div class="hero-glow"></div>
     <div class="container">
+      <div class="hero-inner">
       <div class="hero-content">
         <div class="hero-eyebrow">NVIDIA Open Source · Data Acquisition</div>
-        <h1 class="hero-title">Tame the Data Deluge<br>at the <span class="hi">Source</span></h1>
+        <h1 class="hero-title">DAQIRI — Command the<br>Data Deluge at the <span class="hi">Source</span></h1>
         <p class="hero-desc">
           DAQIRI (Data Acquisition for Integrated Real-time Instruments) connects high-bandwidth streaming sensors
-          directly to the NVIDIA software ecosystem. By abstracting DMA data movement from sensor to GPU,
-          DAQIRI puts real-time AI, signal processing, and scientific computing within reach of the next
+          directly to the NVIDIA compute ecosystem. By abstracting zero-copy data movement from sensor to GPU,
+          DAQIRI puts scalable, real-time AI, signal processing, and scientific computing within reach of the next
           generation of instruments.
         </p>
         <div class="warn-banner">
@@ -235,11 +240,14 @@
           <a href="#examples" class="btn btn-outline">Examples</a>
         </div>
         <div class="hero-stats">
-          <div><div class="stat-value">100s Gbps</div><div class="stat-label">Sensor Bandwidth</div></div>
+          <div><div class="stat-value">Gbps – Tbps+</div><div class="stat-label">Sensor Bandwidth</div></div>
           <div><div class="stat-value">Zero-Copy</div><div class="stat-label">Sensor → GPU</div></div>
-          <div><div class="stat-value">C++17</div><div class="stat-label">Language</div></div>
-          <div><div class="stat-value">Apache 2.0</div><div class="stat-label">License</div></div>
+          <div><div class="stat-value">UDP, RoCE</div><div class="stat-label">Protocol</div></div><div><div class="stat-value">C++</div><div class="stat-label">Language</div></div><div><div class="stat-value">Multi-Sensor</div><div class="stat-label">Scalable</div></div><div><div class="stat-value">Minutes</div><div class="stat-label">Time to Deployment</div></div><div><div class="stat-value">Apache 2.0</div><div class="stat-label">License</div></div>
         </div>
+      </div>
+      <div class="hero-logo-wrap">
+        <img src="logo.svg" alt="DAQIRI — sensor connected to GPU infrastructure" />
+      </div>
       </div>
     </div>
   </section>
@@ -638,7 +646,7 @@ cmake --build build -j</pre>
       <div class="footer-inner">
         <div class="footer-brand">
           <div class="nav-logo">
-            <div class="nav-logo-icon">DAQ</div>
+            <img src="logo.svg" alt="DAQIRI" style="height:32px;width:auto;" />
             <span class="nav-logo-text">DAQIRI</span>
             <span class="nav-logo-badge">NVIDIA</span>
           </div>
@@ -695,3 +703,4 @@ cmake --build build -j</pre>
   </script>
 </body>
 </html>
+                               
