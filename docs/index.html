@@ -256,12 +256,12 @@
   <section id="features">
     <div class="container">
       <div class="section-label">Why DAQIRI</div>
-      <h2 class="section-title">From Sensor to NVIDIA Ecosystem — Without the Friction</h2>
-      <p class="section-desc">DAQIRI abstracts the complexity of high-speed DMA, flow steering, and GPU memory management so downstream applications — AI inference, signal processing, scientific analytics — receive clean, ready-to-use data with no custom plumbing required.</p>
+      <h2 class="section-title">Closing the Gap Between Sensor and GPU</h2>
+      <p class="section-desc">Scientific and industrial instruments generate data that is richest at the source — before it is filtered, decimated, or summarized. DAQIRI places NVIDIA GPU hardware directly in that data path, forging a tight bond between upstream sensors, their data converters, and the NVIDIA compute ecosystem. The result is a new foundation for developers: the ability to work with instrument data in its rawest form, at wire speed, and to build a new class of autonomous experiments where AI can observe phenomena directly at the source, augment human analysis, and steer experiments in real time. <span style="color:var(--nv-green);font-style:italic;">Streaming Ethernet data in, GPU tensor out.</span></p>
       <div class="features-grid">
         <div class="feature-card">
           <div class="feature-icon">⚡</div>
-          <h3>High Throughput</h3>
+          <h3>Scalable, High Throughput</h3>
           <p>Hundreds of gigabits per second with proper hardware and CPU/NUMA tuning. Direct access to NIC ring buffers keeps latency at PCIe transit time only.</p>
         </div>
         <div class="feature-card">
@@ -289,17 +289,6 @@
           <h3>Timed Transmission</h3>
           <p>Hardware-timestamped TX scheduling via <code>set_packet_tx_time()</code> for PTP-synchronized, precise packet emission. Requires ConnectX-7 or later.</p>
         </div>
-      </div>
-
-      <div style="margin-top:3rem;">
-        <div class="section-label">Backends</div>
-        <table class="backends-table">
-          <thead><tr><th>Backend</th><th>Config value</th><th>Description</th></tr></thead>
-          <tbody>
-            <tr><td class="bname">DPDK</td><td class="bval">dpdk</td><td>Default. Userspace packet processing with DPDK mbufs and rings. Supports CPU-only, header-data split, and batched GPU receive modes.</td></tr>
-            <tr><td class="bname">RDMA</td><td class="bval">rdma</td><td>InfiniBand RDMA via libibverbs. Client/server model. RC and UC transport. Best for large-message transfers between hosts.</td></tr>
-          </tbody>
-        </table>
       </div>
     </div>
   </section>
