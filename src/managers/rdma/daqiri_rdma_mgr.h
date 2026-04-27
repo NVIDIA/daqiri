@@ -197,7 +197,6 @@ class RdmaMgr : public Manager {
   int setup_pools_and_rings();
   int rdma_register_mr(const MemoryRegionConfig& mr, void* ptr);
   int rdma_register_cfg_mrs();
-  std::string generate_random_string(int len);
   static int set_affinity(int cpu_core);
   void init_client();
   void server_tx(int if_idx, int q);
