@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <limits>
 
 #include "src/manager.h"
 #include "src/common.h"
@@ -303,6 +304,18 @@ Status get_rx_burst(BurstParams** burst) {
 Status get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->get_rx_burst(burst, conn_id, server);
+}
+
+Status set_reorder_cuda_stream(const std::string& interface_name,
+                               const std::string& reorder_name,
+                               cudaStream_t stream) {
+  ASSERT_DAQIRI_MGR_INITIALIZED();
+  return g_daqiri_mgr->set_reorder_cuda_stream(interface_name, reorder_name, stream);
+}
+
+Status get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info) {
+  ASSERT_DAQIRI_MGR_INITIALIZED();
+  return g_daqiri_mgr->get_reorder_burst_info(burst, info);
 }
 
 uint16_t get_num_rx_queues(int port_id) {
@@ -650,6 +663,180 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_flex_item_config(
     DAQIRI_LOG_ERROR("Error parsing FlexItemConfig: {}", e.what());
     return false;
   }
+  return true;
+}
+
+/**
+ * @brief Parse reorder configuration from a YAML node.
+ *
+ * @param reorder_item The YAML node containing the reorder configuration.
+ * @param reorder_config The ReorderConfig object to populate.
+ * @return true if parsing was successful, false otherwise.
+ */
+bool YAML::convert<daqiri::NetworkConfig>::parse_reorder_config(
+    const YAML::Node& reorder_item, daqiri::ReorderConfig& reorder_config) {
+  auto parse_bit_field = [](const YAML::Node& node,
+                            const char* field_name,
+                            daqiri::ReorderBitFieldConfig& field_cfg) -> bool {
+    if (!node[field_name]) {
+      DAQIRI_LOG_ERROR("Missing required bit field '{}'", field_name);
+      return false;
+    }
+
+    try {
+      const auto& bit_field = node[field_name];
+      field_cfg.bit_offset_ = bit_field["bit_offset"].as<uint16_t>();
+      field_cfg.bit_width_ = bit_field["bit_width"].as<uint8_t>();
+    } catch (const std::exception& e) {
+      DAQIRI_LOG_ERROR("Failed to parse bit field '{}': {}", field_name, e.what());
+      return false;
+    }
+
+    if (field_cfg.bit_width_ < 1 || field_cfg.bit_width_ > 32) {
+      DAQIRI_LOG_ERROR("Invalid bit_width {} for '{}'. Supported range is [1, 32]",
+                       field_cfg.bit_width_,
+                       field_name);
+      return false;
+    }
+
+    return true;
+  };
+
+  auto pow2_u64 = [](uint8_t exponent, uint64_t* out) -> bool {
+    if (exponent > 63) { return false; }
+    *out = (1ULL << exponent);
+    return true;
+  };
+
+  try {
+    reorder_config.name_ = reorder_item["name"].as<std::string>();
+    reorder_config.reorder_type_ = reorder_item["reorder_type"].as<std::string>();
+    reorder_config.memory_region_ = reorder_item["memory_region"].as<std::string>();
+    reorder_config.payload_byte_offset_ = reorder_item["payload_byte_offset"].as<uint32_t>();
+
+    if (!reorder_item["flow_ids"] || !reorder_item["flow_ids"].IsSequence()) {
+      DAQIRI_LOG_ERROR("Reorder config '{}' requires a non-empty flow_ids sequence",
+                       reorder_config.name_);
+      return false;
+    }
+
+    for (const auto& flow_id_node : reorder_item["flow_ids"]) {
+      reorder_config.flow_ids_.push_back(flow_id_node.as<uint16_t>());
+    }
+    if (reorder_config.flow_ids_.empty()) {
+      DAQIRI_LOG_ERROR("Reorder config '{}' requires at least one flow ID",
+                       reorder_config.name_);
+      return false;
+    }
+  } catch (const std::exception& e) {
+    DAQIRI_LOG_ERROR("Error parsing ReorderConfig: {}", e.what());
+    return false;
+  }
+
+  if (reorder_config.reorder_type_ != "gpu" && reorder_config.reorder_type_ != "cpu") {
+    DAQIRI_LOG_ERROR("Unsupported reorder_type '{}' in reorder config '{}'. Valid values are 'gpu' and 'cpu'",
+                     reorder_config.reorder_type_,
+                     reorder_config.name_);
+    return false;
+  }
+
+  if (!reorder_item["method"] || !reorder_item["method"].IsMap()) {
+    DAQIRI_LOG_ERROR("Reorder config '{}' requires a method section", reorder_config.name_);
+    return false;
+  }
+
+  const auto& method_node = reorder_item["method"];
+  const bool has_seq_batch_number = method_node["seq_batch_number"].IsDefined();
+  const bool has_seq_packets_per_batch = method_node["seq_packets_per_batch"].IsDefined();
+  if (has_seq_batch_number == has_seq_packets_per_batch) {
+    DAQIRI_LOG_ERROR(
+        "Reorder config '{}' must define exactly one method: seq_batch_number or "
+        "seq_packets_per_batch",
+        reorder_config.name_);
+    return false;
+  }
+
+  if (has_seq_batch_number) {
+    const auto& seq_batch_node = method_node["seq_batch_number"];
+    reorder_config.method_ = daqiri::ReorderMethod::SEQ_BATCH_NUMBER;
+
+    if (!parse_bit_field(seq_batch_node, "sequence_number", reorder_config.seq_batch_number_.sequence_number_)) {
+      return false;
+    }
+    if (!parse_bit_field(seq_batch_node, "batch_number", reorder_config.seq_batch_number_.batch_number_)) {
+      return false;
+    }
+
+    uint64_t total_sequence_numbers = 0;
+    uint64_t total_batches = 0;
+    if (!pow2_u64(reorder_config.seq_batch_number_.sequence_number_.bit_width_, &total_sequence_numbers)
+        || !pow2_u64(reorder_config.seq_batch_number_.batch_number_.bit_width_, &total_batches)) {
+      DAQIRI_LOG_ERROR("Bit width too large in reorder config '{}'", reorder_config.name_);
+      return false;
+    }
+
+    if (total_batches == 0 || (total_sequence_numbers % total_batches) != 0) {
+      DAQIRI_LOG_ERROR(
+          "Derived packets_per_batch is not integral in reorder config '{}' "
+          "(seq_bits={}, batch_bits={})",
+          reorder_config.name_,
+          reorder_config.seq_batch_number_.sequence_number_.bit_width_,
+          reorder_config.seq_batch_number_.batch_number_.bit_width_);
+      return false;
+    }
+
+    const uint64_t derived_packets_per_batch = total_sequence_numbers / total_batches;
+    if (derived_packets_per_batch == 0
+        || derived_packets_per_batch > std::numeric_limits<uint32_t>::max()) {
+      DAQIRI_LOG_ERROR("Derived packets_per_batch is out of range in reorder config '{}'",
+                       reorder_config.name_);
+      return false;
+    }
+    reorder_config.seq_batch_number_.packets_per_batch_ =
+        static_cast<uint32_t>(derived_packets_per_batch);
+  } else {
+    const auto& seq_ppb_node = method_node["seq_packets_per_batch"];
+    reorder_config.method_ = daqiri::ReorderMethod::SEQ_PACKETS_PER_BATCH;
+
+    if (!parse_bit_field(seq_ppb_node, "sequence_number", reorder_config.seq_packets_per_batch_.sequence_number_)) {
+      return false;
+    }
+
+    try {
+      reorder_config.seq_packets_per_batch_.packets_per_batch_ =
+          seq_ppb_node["packets_per_batch"].as<uint32_t>();
+    } catch (const std::exception& e) {
+      DAQIRI_LOG_ERROR("Failed to parse packets_per_batch in reorder config '{}': {}",
+                       reorder_config.name_,
+                       e.what());
+      return false;
+    }
+
+    if (reorder_config.seq_packets_per_batch_.packets_per_batch_ == 0) {
+      DAQIRI_LOG_ERROR("packets_per_batch must be > 0 in reorder config '{}'",
+                       reorder_config.name_);
+      return false;
+    }
+
+    uint64_t total_sequence_numbers = 0;
+    if (!pow2_u64(reorder_config.seq_packets_per_batch_.sequence_number_.bit_width_,
+                  &total_sequence_numbers)) {
+      DAQIRI_LOG_ERROR("Bit width too large in reorder config '{}'", reorder_config.name_);
+      return false;
+    }
+
+    if ((total_sequence_numbers
+         % static_cast<uint64_t>(reorder_config.seq_packets_per_batch_.packets_per_batch_)) != 0) {
+      DAQIRI_LOG_ERROR(
+          "2^seq_bits must be divisible by packets_per_batch in reorder config '{}' "
+          "(seq_bits={}, packets_per_batch={})",
+          reorder_config.name_,
+          reorder_config.seq_packets_per_batch_.sequence_number_.bit_width_,
+          reorder_config.seq_packets_per_batch_.packets_per_batch_);
+      return false;
+    }
+  }
+
   return true;
 }
 

@@ -1,9 +1,10 @@
---- config/arm/meson.build	2023-01-30 15:18:49.413204000 -0800
-+++ config/arm/arm_new.build	2023-01-30 15:20:36.110169000 -0800
-@@ -234,6 +234,24 @@
+diff --git a/config/arm/meson.build b/config/arm/meson.build
+--- a/config/arm/meson.build
++++ b/config/arm/meson.build
+@@ -360,6 +360,23 @@ implementer_phytium = {
      }
  }
-
+ 
 +implementer_nvidia = {
 +    'description': 'NVIDIA',
 +    'flags': [
@@ -21,15 +22,13 @@
 +    }
 +}
 +
-+
-
  implementer_qualcomm = {
      'description': 'Qualcomm',
-@@ -262,6 +280,7 @@
+     'flags': [
+@@ -388,5 +406,6 @@ implementers = {
      '0x41': implementer_arm,
      '0x43': implementer_cavium,
      '0x48': implementer_hisilicon,
 +    '0x4e': implementer_nvidia,
      '0x50': implementer_ampere,
      '0x51': implementer_qualcomm,
-     '0x70': implementer_phytium,

@@ -42,6 +42,17 @@ static inline constexpr uint32_t MAX_NUM_RX_QUEUES = 32;
 static inline constexpr uint32_t MAX_NUM_TX_QUEUES = 32;
 static inline constexpr uint32_t MAX_INTERFACES = 4;
 static inline constexpr int MAX_NUM_SEGS = 4;
+static inline constexpr uint32_t DAQIRI_BURST_FLAG_REORDERED = (1U << 28);
+static inline constexpr uint32_t DAQIRI_BURST_FLAG_REORDER_TIMEOUT = (1U << 29);
+
+struct ReorderBurstInfo {
+  uint64_t batch_id;
+  uint32_t source_packet_count;
+  uint32_t packets_per_batch;
+  uint32_t payload_len;
+  uint32_t aggregate_len;
+  uint32_t burst_flags;
+};
 
 /**
  * @brief Return status codes from communication with the NIC
@@ -607,11 +618,45 @@ struct FlexItemConfig {
   uint16_t offset_;
 };
 
+enum class ReorderMethod {
+  INVALID = 0,
+  SEQ_BATCH_NUMBER,
+  SEQ_PACKETS_PER_BATCH,
+};
+
+struct ReorderBitFieldConfig {
+  uint16_t bit_offset_ = 0;
+  uint8_t bit_width_ = 0;
+};
+
+struct ReorderSeqBatchNumberConfig {
+  ReorderBitFieldConfig sequence_number_;
+  ReorderBitFieldConfig batch_number_;
+  uint32_t packets_per_batch_ = 0;  // Derived from bit widths
+};
+
+struct ReorderSeqPacketsPerBatchConfig {
+  ReorderBitFieldConfig sequence_number_;
+  uint32_t packets_per_batch_ = 0;
+};
+
+struct ReorderConfig {
+  std::string name_;
+  std::string reorder_type_;
+  std::string memory_region_;
+  uint32_t payload_byte_offset_ = 0;
+  std::vector<uint16_t> flow_ids_;
+  ReorderMethod method_ = ReorderMethod::INVALID;
+  ReorderSeqBatchNumberConfig seq_batch_number_;
+  ReorderSeqPacketsPerBatchConfig seq_packets_per_batch_;
+};
+
 struct RxConfig {
   bool flow_isolation_;
   std::vector<RxQueueConfig> queues_;
   std::vector<FlowConfig> flows_;
   std::vector<FlexItemConfig> flex_items_;
+  std::vector<ReorderConfig> reorder_configs_;
 };
 
 struct TxConfig {

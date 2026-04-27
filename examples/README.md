@@ -2,7 +2,7 @@
 
 Standalone benchmark applications for testing performance of DAQIRI with various configurations:
 
-- `daqiri_bench_raw`: raw TX/RX benchmark logic (former `default_bench_op_tx.h` / `default_bench_op_rx.h`)
+- `daqiri_bench_raw`: raw TX/RX benchmark logic
 - `daqiri_bench_rdma`: RDMA benchmark logic (former `rdma_bench.h`)
 - `daqiri_bench_socket`: TCP/UDP socket benchmark logic
 
@@ -26,6 +26,9 @@ Included configs:
 
 - `daqiri_bench_raw_tx_rx.yaml`
 - `daqiri_bench_raw_tx_rx_hds.yaml`
+- `daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml`
+- `daqiri_bench_raw_tx_rx_reorder_seq_1024_cpu.yaml`
+- `daqiri_bench_raw_sw_loopback_reorder_seq_1024.yaml`
 - `daqiri_bench_raw_sw_loopback.yaml`
 - `daqiri_bench_raw_rx_multi_q.yaml`
 - `daqiri_bench_rdma_tx_rx.yaml`

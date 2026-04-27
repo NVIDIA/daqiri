@@ -1,0 +1,68 @@
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    master_core: 3
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    memory_regions:
+    - name: "Data_RX_GPU"
+      kind: "device"
+      affinity: 0
+      num_bufs: 16384
+      buf_size: 2048
+    - name: "Reorder_RX_GPU"
+      kind: "device"
+      affinity: 0
+      num_bufs: 4096
+      buf_size: 262144
+
+    interfaces:
+    - name: "rx_port"
+      address: <0000:00:00.0>
+      rx:
+        flow_isolation: true
+        queues:
+        - name: "rx_q_0"
+          id: 0
+          cpu_core: 9
+          batch_size: 1024
+          timeout_us: 2000
+          memory_regions:
+            - "Data_RX_GPU"
+        flows:
+        - name: "flow_0"
+          id: 100
+          action:
+            type: queue
+            id: 0
+          match:
+            udp_src: 4096
+            udp_dst: 4096
+        reorder_configs:
+        - name: "rx_reorder_seq_batch"
+          reorder_type: "gpu"
+          memory_region: "Reorder_RX_GPU"
+          payload_byte_offset: 64
+          flow_ids:
+            - 100
+          method:
+            seq_batch_number:
+              sequence_number:
+                bit_offset: 128
+                bit_width: 10
+              batch_number:
+                bit_offset: 144
+                bit_width: 2
+
+bench_rx:
+  interface_name: "rx_port"
+  gpu_direct: true
+  split_boundary: false
+  batch_size: 1024
+  max_packet_size: 2048
+  header_size: 64

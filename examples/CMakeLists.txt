@@ -11,6 +11,9 @@ endif()
 set(DAQIRI_BENCH_CONFIGS
   daqiri_bench_raw_tx_rx.yaml
   daqiri_bench_raw_tx_rx_hds.yaml
+  daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml
+  daqiri_bench_raw_tx_rx_reorder_seq_1024_cpu.yaml
+  daqiri_bench_raw_sw_loopback_reorder_seq_1024.yaml
   daqiri_bench_raw_rx_multi_q.yaml
   daqiri_bench_raw_sw_loopback.yaml
   daqiri_bench_rdma_tx_rx.yaml
@@ -21,10 +24,16 @@ set(DAQIRI_BENCH_CONFIGS
 add_executable(daqiri_bench_raw raw_bench.cpp)
 target_compile_features(daqiri_bench_raw PRIVATE cxx_std_17)
 target_link_libraries(daqiri_bench_raw PRIVATE daqiri::daqiri ${DAQIRI_EXAMPLE_YAML_TARGET})
+set_target_properties(daqiri_bench_raw PROPERTIES
+  BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
+)
 
 add_executable(daqiri_bench_rdma rdma_bench.cpp)
 target_compile_features(daqiri_bench_rdma PRIVATE cxx_std_17)
 target_link_libraries(daqiri_bench_rdma PRIVATE daqiri::daqiri ${DAQIRI_EXAMPLE_YAML_TARGET})
+set_target_properties(daqiri_bench_rdma PROPERTIES
+  BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
+)
 
 add_executable(daqiri_bench_socket socket_bench.cpp)
 target_compile_features(daqiri_bench_socket PRIVATE cxx_std_17)
@@ -34,7 +43,7 @@ foreach(cfg IN LISTS DAQIRI_BENCH_CONFIGS)
   configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${cfg} ${CMAKE_CURRENT_BINARY_DIR}/${cfg} COPYONLY)
 endforeach()
 
-install(TARGETS daqiri_bench_default daqiri_bench_rdma
+install(TARGETS daqiri_bench_raw daqiri_bench_rdma
         RUNTIME DESTINATION bin)
 install(FILES ${DAQIRI_BENCH_CONFIGS}
         DESTINATION bin)

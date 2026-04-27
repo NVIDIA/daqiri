@@ -96,17 +96,18 @@ memory_regions:
 
 ### RDMA Configuration
 
-When using the RDMA backend (`manager: rdma`), each interface requires an `rdma_config` block:
+When using RDMA, set `stream_type: "socket"` and `protocol: "roce"`. Each interface then
+uses a `socket_config` block for endpoint role/addressing plus a `roce_config` block for
+RDMA transport settings:
 
-- **`rdma_config`**:
-  - **`mode`**: Connection role.
-    - type: `string`
-    - values: `client`, `server`
-  - **`transport_mode`**: RDMA transport type.
-    - type: `string`
-    - values: `RC` (Reliable Connected), `UC` (Unreliable Connected)
-  - **`port`**: Listening port (server mode only).
-    - type: `integer`
+- **`socket_config.mode`**: Connection role.
+  - type: `string`
+  - values: `client`, `server`
+- **`socket_config.local_ip`** / **`socket_config.local_port`**: Server bind address/port.
+- **`socket_config.remote_ip`** / **`socket_config.remote_port`**: Client peer address/port.
+- **`roce_config.transport_mode`**: RDMA transport type.
+  - type: `string`
+  - values: `RC` (Reliable Connected), `UC` (Unreliable Connected)
 
 ## Receive Configuration (rx)
 
@@ -184,6 +185,64 @@ Unmatched packets are dropped. When `false`, unmatched packets go to a default q
 - type: `boolean`
 - default: `false`
 
+### RX Reorder Configs (DPDK v1)
+
+`rx.reorder_configs:` — Optional automatic packet reordering/aggregation plans. In v1 this is
+implemented for the DPDK backend only. GPU reorder requires CUDA-addressable packet buffers
+(`device` or `host_pinned` memory regions). CPU reorder requires CPU-addressable packet buffers
+(`host`, `host_pinned`, or `huge` memory regions).
+
+v1 source-memory requirement:
+- Reorder queues must use exactly one RX source memory region.
+- Header-data split RX queues are not supported with `rx.reorder_configs`.
+
+v1 batch-size requirement:
+- For each emitted reordered batch, packets are expected to have identical on-wire length.
+- `payload_byte_offset` is applied uniformly to all packets in the batch, so mixed packet sizes
+  in the same reorder batch are not supported.
+- Timeout-flushed reordered bursts set `DAQIRI_BURST_FLAG_REORDER_TIMEOUT` in
+  `burst->hdr.hdr.burst_flags`. All reordered bursts set `DAQIRI_BURST_FLAG_REORDERED`.
+  `burst->hdr.hdr.max_pkt` contains the number of source packets represented by the aggregate.
+- Reordered bursts expose `ReorderBurstInfo::batch_id` via
+  `daqiri::get_reorder_burst_info(...)`. With `seq_batch_number`, the batch ID is copied from
+  the configured batch-number field. With `seq_packets_per_batch`, the batch ID is derived from
+  `sequence_number / packets_per_batch`.
+
+- **`name`**: Reorder config name. Must be unique per interface.
+  - type: `string`
+- **`reorder_type`**: Reorder backend implementation.
+  - type: `string`
+  - values: `gpu`, `cpu`
+- **`memory_region`**: Output memory region where reordered payload is written.
+  - type: `string`
+  - requirements: for `gpu`, must reference a `device` or `host_pinned` memory region; for
+    `cpu`, must reference a `host`, `host_pinned`, or `huge` memory region
+- **`payload_byte_offset`**: Byte offset in each packet where copied payload starts. Bytes before
+  this offset are skipped.
+  - type: `integer`
+- **`flow_ids`**: List of RX flow IDs this reorder config applies to.
+  - type: `list[integer]`
+  - notes: flow IDs cannot overlap across reorder configs on the same interface
+- **`method`**: Exactly one method must be configured:
+  - **`seq_batch_number`**
+    - `sequence_number.bit_offset`
+    - `sequence_number.bit_width` (1..32)
+    - `batch_number.bit_offset`
+    - `batch_number.bit_width` (1..32)
+    - Derived constraint: `2^seq_bits` must be divisible by `2^batch_bits`
+  - **`seq_packets_per_batch`**
+    - `sequence_number.bit_offset`
+    - `sequence_number.bit_width` (1..32)
+    - `packets_per_batch` (>0)
+    - Constraint: `2^seq_bits % packets_per_batch == 0`
+
+After `daqiri_init()`, each GPU reorder config must be assigned a CUDA stream. CPU reorder
+configs do not use CUDA streams:
+
+```cpp
+daqiri::set_reorder_cuda_stream("rx_port", "rx_reorder_0", stream);
+```
+
 ## Transmit Configuration (tx)
 
 ### Queues
@@ -222,7 +281,7 @@ enabled, use `set_packet_tx_time()` to schedule packets. Requires ConnectX-7 or 
 daqiri:
   cfg:
     version: 1
-    manager: "dpdk"
+    stream_type: "raw"
     master_core: 3
     debug: false
     log_level: "info"
@@ -295,7 +354,8 @@ daqiri:
 daqiri:
   cfg:
     version: 1
-    manager: "rdma"
+    stream_type: "socket"
+    protocol: "roce"
     master_core: 3
     debug: false
     log_level: "info"
@@ -314,11 +374,13 @@ daqiri:
 
     interfaces:
     - name: my_server
-      rdma_config:
-        mode: server
-        transport_mode: RC
-        port: 4096
       address: 10.100.3.1
+      socket_config:
+        mode: server
+        local_ip: 10.100.3.1
+        local_port: 4096
+      roce_config:
+        transport_mode: RC
       rx:
         queues:
         - name: "Server_RX_Queue"

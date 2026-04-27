@@ -1,0 +1,100 @@
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    master_core: 3
+    debug: false
+    log_level: "info"
+    loopback: "sw"
+
+    memory_regions:
+    - name: "Data_TX_GPU"
+      kind: "device"
+      affinity: 0
+      num_bufs: 16384
+      buf_size: 2048
+    - name: "Data_RX_GPU"
+      kind: "device"
+      affinity: 0
+      num_bufs: 16384
+      buf_size: 2048
+    - name: "Reorder_RX_GPU"
+      kind: "device"
+      affinity: 0
+      num_bufs: 128
+      # (2048 - 64) * 1024 = 2,031,616 bytes
+      buf_size: 2031616
+
+    interfaces:
+    - name: "loopback_ports"
+      address: "loopback"
+      tx:
+        queues:
+        - name: "tx_q_0"
+          id: 0
+          batch_size: 1024
+          cpu_core: 11
+          timeout_us: 1000
+          memory_regions:
+            - "Data_TX_GPU"
+          offloads:
+            - "tx_eth_src"
+      rx:
+        flow_isolation: true
+        queues:
+        - name: "rx_q_0"
+          id: 0
+          cpu_core: 9
+          timeout_us: 1000
+          batch_size: 1024
+          memory_regions:
+            - "Data_RX_GPU"
+        flows:
+        - name: "flow_0"
+          # SW loopback currently does not populate per-packet flow metadata, so use flow id 0.
+          id: 0
+          action:
+            type: queue
+            id: 0
+          match:
+            udp_src: 5000
+            udp_dst: 5000
+        reorder_configs:
+        - name: "rx_reorder_seq_1024"
+          reorder_type: "gpu"
+          memory_region: "Reorder_RX_GPU"
+          payload_byte_offset: 64
+          flow_ids:
+            - 0
+          method:
+            seq_packets_per_batch:
+              sequence_number:
+                bit_offset: 512
+                bit_width: 32
+              packets_per_batch: 1024
+
+bench_rx:
+  interface_name: "loopback_ports"
+  gpu_direct: true
+  split_boundary: false
+  batch_size: 1024
+  max_packet_size: 2048
+  header_size: 64
+
+bench_tx:
+  interface_name: "loopback_ports"
+  gpu_direct: true
+  split_boundary: false
+  batch_size: 1024
+  payload_size: 1000
+  header_size: 64
+  eth_dst_addr: 00:00:00:00:00:00
+  ip_src_addr: 1.2.3.4
+  ip_dst_addr: 5.6.7.8
+  udp_src_port: 5000
+  udp_dst_port: 5000
+  add_sequence_number: true
+  sequence_number_offset: 0
+  sequence_number_start: 0
