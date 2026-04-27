@@ -96,17 +96,18 @@ memory_regions:
 
 ### RDMA Configuration
 
-When using the RDMA backend (`manager: rdma`), each interface requires an `rdma_config` block:
+When using RDMA, set `stream_type: "socket"` and `protocol: "roce"`. Each interface then
+uses a `socket_config` block for endpoint role/addressing plus a `roce_config` block for
+RDMA transport settings:
 
-- **`rdma_config`**:
-  - **`mode`**: Connection role.
-    - type: `string`
-    - values: `client`, `server`
-  - **`transport_mode`**: RDMA transport type.
-    - type: `string`
-    - values: `RC` (Reliable Connected), `UC` (Unreliable Connected)
-  - **`port`**: Listening port (server mode only).
-    - type: `integer`
+- **`socket_config.mode`**: Connection role.
+  - type: `string`
+  - values: `client`, `server`
+- **`socket_config.local_ip`** / **`socket_config.local_port`**: Server bind address/port.
+- **`socket_config.remote_ip`** / **`socket_config.remote_port`**: Client peer address/port.
+- **`roce_config.transport_mode`**: RDMA transport type.
+  - type: `string`
+  - values: `RC` (Reliable Connected), `UC` (Unreliable Connected)
 
 ## Receive Configuration (rx)
 
@@ -280,7 +281,7 @@ enabled, use `set_packet_tx_time()` to schedule packets. Requires ConnectX-7 or 
 daqiri:
   cfg:
     version: 1
-    manager: "dpdk"
+    stream_type: "raw"
     master_core: 3
     debug: false
     log_level: "info"
@@ -353,7 +354,8 @@ daqiri:
 daqiri:
   cfg:
     version: 1
-    manager: "rdma"
+    stream_type: "socket"
+    protocol: "roce"
     master_core: 3
     debug: false
     log_level: "info"
@@ -372,11 +374,13 @@ daqiri:
 
     interfaces:
     - name: my_server
-      rdma_config:
-        mode: server
-        transport_mode: RC
-        port: 4096
       address: 10.100.3.1
+      socket_config:
+        mode: server
+        local_ip: 10.100.3.1
+        local_port: 4096
+      roce_config:
+        transport_mode: RC
       rx:
         queues:
         - name: "Server_RX_Queue"
