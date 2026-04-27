@@ -64,26 +64,38 @@ BASE_TARGET=dpdk DAQIRI_MGR="dpdk rdma" scripts/build-container.sh
 
 ## Running the Benchmarks
 
-Two benchmark executables are built when `DAQIRI_BUILD_EXAMPLES=ON`:
+Several benchmark executables are built when `DAQIRI_BUILD_EXAMPLES=ON`:
 
-- **`daqiri_bench_raw`** — raw DPDK TX/RX throughput and latency benchmark
+- **`daqiri_bench_raw_gpudirect`** — raw DPDK TX/RX using device packet memory
+- **`daqiri_bench_raw_hds`** — raw DPDK TX/RX with header-data split
+- **`daqiri_bench_raw_reorder_seq`** — raw DPDK RX sequence-number reorder benchmark
 - **`daqiri_bench_rdma`** — RDMA-specific benchmark
+- **`daqiri_bench_socket`** — TCP/UDP socket benchmark
 
-Both are config-driven. Example configs are in the `examples/` directory:
+They are config-driven. Example configs are in the `examples/` directory:
 
-| Config file | Description |
-|-------------|-------------|
-| `daqiri_bench_raw_tx_rx.yaml` | DPDK TX/RX, CPU-only |
-| `daqiri_bench_raw_tx_rx_hds.yaml` | DPDK TX/RX with header-data split (GPUDirect) |
-| `daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml` | DPDK TX/RX with GPU RX reorder (1024 packets per batch) using a 32-bit sequence in UDP payload |
-| `daqiri_bench_raw_tx_rx_reorder_seq_1024_cpu.yaml` | DPDK TX/RX with CPU RX reorder (1024 packets per batch) using `memcpy` over CPU-accessible buffers |
-| `daqiri_bench_raw_sw_loopback_reorder_seq_1024.yaml` | DPDK software-loopback TX/RX with GPU RX reorder (1024 packets per batch) and TX-injected 32-bit UDP payload sequence |
-| `daqiri_bench_raw_rx_multi_q.yaml` | DPDK multi-queue RX |
-| `daqiri_bench_raw_sw_loopback.yaml` | DPDK software loopback (no physical link needed) |
-| `daqiri_bench_rdma_tx_rx.yaml` | RDMA client/server TX/RX |
+| Config file | Benchmark | Description |
+|-------------|-----------|-------------|
+| `daqiri_bench_raw_tx_rx.yaml` | `daqiri_bench_raw_gpudirect` | DPDK TX/RX with one device-memory packet segment |
+| `daqiri_bench_raw_tx_rx_hds.yaml` | `daqiri_bench_raw_hds` | DPDK TX/RX with CPU headers and device payloads |
+| `daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml` | `daqiri_bench_raw_reorder_seq` | DPDK RX GPU reorder with 1024 packets per batch and a 32-bit UDP payload sequence |
+| `daqiri_bench_raw_tx_rx_reorder_seq_1024_cpu.yaml` | `daqiri_bench_raw_reorder_seq` | DPDK RX CPU reorder with 1024 packets per batch |
+| `daqiri_bench_raw_sw_loopback_reorder_seq_1024.yaml` | `daqiri_bench_raw_reorder_seq` | DPDK software-loopback RX CPU reorder |
+| `daqiri_bench_raw_rx_reorder_seq_ppb.yaml` | `daqiri_bench_raw_reorder_seq` | RX-only GPU reorder using sequence packets per batch |
+| `daqiri_bench_raw_rx_reorder_seq_batch.yaml` | `daqiri_bench_raw_reorder_seq` | RX-only GPU reorder using sequence and batch-number fields |
+| `daqiri_bench_raw_rx_multi_q.yaml` | `daqiri_bench_raw_gpudirect` | DPDK multi-queue RX with device packet memory |
+| `daqiri_bench_raw_sw_loopback.yaml` | `daqiri_bench_raw_gpudirect` | DPDK software loopback with device packet memory |
+| `daqiri_bench_rdma_tx_rx.yaml` | `daqiri_bench_rdma` | RDMA client/server TX/RX |
+| `daqiri_bench_socket_udp_tx_rx.yaml` | `daqiri_bench_socket` | UDP socket TX/RX |
+| `daqiri_bench_socket_tcp_tx_rx.yaml` | `daqiri_bench_socket` | TCP socket TX/RX |
 
 Edit the YAML files to match your system (PCIe addresses, CPU cores, IP addresses) before
 running. Fields marked with `<angle brackets>` are placeholders that must be replaced.
+
+Configs named `raw_rx_*` are RX-only. They initialize the RX path and wait for matching
+external traffic; when run by themselves they can exit cleanly with `0` packets. Use the
+TX/RX configs for closed-loop smoke tests. The CPU reorder config is a throughput stress
+case, so dropped-packet counters can increase when TX outruns CPU reorder.
 
 ## Formatting
 

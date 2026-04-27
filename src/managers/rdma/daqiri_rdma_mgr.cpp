@@ -19,6 +19,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <chrono>
 #include <mqueue.h>
 #include <rte_ring.h>
 #include <rte_mempool.h>
@@ -1362,8 +1363,18 @@ void RdmaMgr::free_tx_burst(BurstParams* burst) {
 std::string RdmaMgr::generate_random_string(int len) {
   const char tokens[] = "abcdefghijklmnopqrstuvwxyz";
   std::string tmp;
+  tmp.reserve(static_cast<size_t>(len));
 
-  for (int i = 0; i < len; i++) { tmp += tokens[rand() % (sizeof(tokens) - 1)]; }
+  static std::atomic<uint64_t> counter{0};
+  uint64_t state =
+      static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+  state ^= static_cast<uint64_t>(getpid()) << 32U;
+  state ^= counter.fetch_add(1, std::memory_order_relaxed);
+
+  for (int i = 0; i < len; i++) {
+    state = (state * 2862933555777941757ULL) + 3037000493ULL;
+    tmp += tokens[state % (sizeof(tokens) - 1)];
+  }
 
   return tmp;
 }
