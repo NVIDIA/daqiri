@@ -220,6 +220,15 @@ v1 batch-size requirement:
 - **`payload_byte_offset`**: Byte offset in each packet where copied payload starts. Bytes before
   this offset are skipped.
   - type: `integer`
+- **`data_types`**: Optional payload data type conversion for GPU reorder. If omitted, payload
+  bytes are copied as-is.
+  - `input_type`: On-wire input element type. Values: `int4`, `int8`, `int16`, `int32`
+  - `output_type`: Reordered output element type. Values: `fp16`, `bf16`, `fp32`, `fp64`, `int32`
+  - `endianness`: Optional input byte order. Values: `host`, `network`; default: `host`
+  - requirements: conversion is supported for `reorder_type: "gpu"`; the output memory region
+    buffer must hold the converted batch size
+  - notes: `int4` is interpreted as two signed 4-bit two's-complement values per byte, high
+    nibble first; `network` endianness swaps byte-multiple input types wider than 8 bits
 - **`flow_ids`**: List of RX flow IDs this reorder config applies to.
   - type: `list[integer]`
   - notes: flow IDs cannot overlap across reorder configs on the same interface
@@ -235,6 +244,15 @@ v1 batch-size requirement:
     - `sequence_number.bit_width` (1..32)
     - `packets_per_batch` (>0)
     - Constraint: `2^seq_bits % packets_per_batch == 0`
+
+Example conversion from packed signed 4-bit payload samples to FP16:
+
+```yaml
+data_types:
+  input_type: "int4"
+  output_type: "fp16"
+  endianness: "host"
+```
 
 After `daqiri_init()`, each GPU reorder config must be assigned a CUDA stream. CPU reorder
 configs do not use CUDA streams:

@@ -35,6 +35,49 @@ volatile std::sig_atomic_t g_stop_requested = 0;
 
 }  // namespace
 
+PinnedHostBuffer::PinnedHostBuffer(PinnedHostBuffer&& other) noexcept {
+  ptr_ = other.ptr_;
+  capacity_ = other.capacity_;
+  other.ptr_ = nullptr;
+  other.capacity_ = 0;
+}
+
+PinnedHostBuffer& PinnedHostBuffer::operator=(PinnedHostBuffer&& other) noexcept {
+  if (this != &other) {
+    reset();
+    ptr_ = other.ptr_;
+    capacity_ = other.capacity_;
+    other.ptr_ = nullptr;
+    other.capacity_ = 0;
+  }
+  return *this;
+}
+
+PinnedHostBuffer::~PinnedHostBuffer() { reset(); }
+
+bool PinnedHostBuffer::resize(size_t size) {
+  if (size <= capacity_) { return true; }
+  reset();
+  if (size == 0) { return true; }
+  if (cudaHostAlloc(&ptr_, size, cudaHostAllocDefault) != cudaSuccess) { return false; }
+  capacity_ = size;
+  return true;
+}
+
+void PinnedHostBuffer::reset() {
+  if (ptr_ != nullptr) {
+    cudaFreeHost(ptr_);
+    ptr_ = nullptr;
+    capacity_ = 0;
+  }
+}
+
+uint8_t* PinnedHostBuffer::data() { return static_cast<uint8_t*>(ptr_); }
+
+const uint8_t* PinnedHostBuffer::data() const { return static_cast<const uint8_t*>(ptr_); }
+
+size_t PinnedHostBuffer::capacity() const { return capacity_; }
+
 int parse_run_seconds(int argc, char** argv) {
   int run_seconds = 10;
   for (int i = 2; i + 1 < argc; i += 2) {
@@ -115,6 +158,20 @@ void populate_udp_ipv4_headers(uint8_t* pkt_data,
   pkt->udp.check = 0;
   pkt->udp.len = htons(
       static_cast<uint16_t>(payload_size + header_size - (sizeof(ethhdr) + sizeof(iphdr))));
+}
+
+cudaError_t memcpy_batch_async(const std::vector<void*>& dsts,
+                               const std::vector<const void*>& srcs,
+                               const std::vector<size_t>& sizes,
+                               cudaStream_t stream) {
+  if (dsts.empty()) { return cudaSuccess; }
+
+  cudaMemcpyAttributes attr{};
+  attr.srcAccessOrder = cudaMemcpySrcAccessOrderStream;
+  attr.flags = cudaMemcpyFlagDefault;
+  size_t attr_idx = 0;
+  return cudaMemcpyBatchAsync(
+      dsts.data(), srcs.data(), sizes.data(), dsts.size(), &attr, &attr_idx, 1, stream);
 }
 
 void signal_handler(int signum) {

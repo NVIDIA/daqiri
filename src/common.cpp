@@ -219,6 +219,11 @@ Status set_packet_lengths(BurstParams* burst, int idx, const std::initializer_li
   return g_daqiri_mgr->set_packet_lengths(burst, idx, lens);
 }
 
+Status set_all_packet_lengths(BurstParams* burst, const std::initializer_list<int>& lens) {
+  ASSERT_DAQIRI_MGR_INITIALIZED();
+  return g_daqiri_mgr->set_all_packet_lengths(burst, lens);
+}
+
 Status set_packet_tx_time(BurstParams* burst, int idx, uint64_t time) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->set_packet_tx_time(burst, idx, time);
@@ -738,6 +743,68 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_reorder_config(
                      reorder_config.reorder_type_,
                      reorder_config.name_);
     return false;
+  }
+
+  if (reorder_item["data_types"].IsDefined()) {
+    const auto& data_types_node = reorder_item["data_types"];
+    if (!data_types_node.IsMap()) {
+      DAQIRI_LOG_ERROR("Reorder config '{}' data_types must be a map", reorder_config.name_);
+      return false;
+    }
+
+    const auto input_node =
+        data_types_node["input_type"] ? data_types_node["input_type"] : data_types_node["input"];
+    const auto output_node =
+        data_types_node["output_type"] ? data_types_node["output_type"] : data_types_node["output"];
+    if (!input_node || !output_node) {
+      DAQIRI_LOG_ERROR(
+          "Reorder config '{}' data_types requires input_type and output_type",
+          reorder_config.name_);
+      return false;
+    }
+
+    try {
+      reorder_config.data_types_.input_type_ =
+          daqiri::reorder_data_type_from_string(input_node.as<std::string>());
+      reorder_config.data_types_.output_type_ =
+          daqiri::reorder_data_type_from_string(output_node.as<std::string>());
+      const auto endianness_node = data_types_node["endianness"]
+                                       ? data_types_node["endianness"]
+                                       : data_types_node["input_endianness"];
+      if (endianness_node) {
+        reorder_config.data_types_.input_endianness_ =
+            daqiri::reorder_endianness_from_string(endianness_node.as<std::string>());
+      }
+    } catch (const std::exception& e) {
+      DAQIRI_LOG_ERROR("Failed to parse data_types in reorder config '{}': {}",
+                       reorder_config.name_,
+                       e.what());
+      return false;
+    }
+
+    if (!daqiri::is_reorder_input_data_type(reorder_config.data_types_.input_type_)) {
+      DAQIRI_LOG_ERROR(
+          "Invalid reorder input_type '{}' in config '{}'. Valid values: int4, int8, int16, int32",
+          daqiri::reorder_data_type_to_string(reorder_config.data_types_.input_type_),
+          reorder_config.name_);
+      return false;
+    }
+    if (!daqiri::is_reorder_output_data_type(reorder_config.data_types_.output_type_)) {
+      DAQIRI_LOG_ERROR(
+          "Invalid reorder output_type '{}' in config '{}'. Valid values: fp16, bf16, fp32, fp64, int32",
+          daqiri::reorder_data_type_to_string(reorder_config.data_types_.output_type_),
+          reorder_config.name_);
+      return false;
+    }
+    if (reorder_config.data_types_.input_endianness_ == daqiri::ReorderEndianness::INVALID) {
+      DAQIRI_LOG_ERROR(
+          "Invalid reorder endianness '{}' in config '{}'. Valid values: host, network",
+          daqiri::reorder_endianness_to_string(reorder_config.data_types_.input_endianness_),
+          reorder_config.name_);
+      return false;
+    }
+
+    reorder_config.data_types_.enabled_ = true;
   }
 
   if (!reorder_item["method"] || !reorder_item["method"].IsMap()) {

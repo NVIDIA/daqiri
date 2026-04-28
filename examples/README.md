@@ -5,6 +5,7 @@ Standalone benchmark applications for testing performance of DAQIRI with various
 - `daqiri_bench_raw_gpudirect`: raw TX/RX with one device-memory packet segment
 - `daqiri_bench_raw_hds`: raw TX/RX with header-data split
 - `daqiri_bench_raw_reorder_seq`: raw RX sequence-number reorder benchmark
+- `daqiri_bench_raw_reorder_quantize`: raw RX sequence reorder with payload conversion
 - `daqiri_bench_rdma`: RDMA benchmark logic (former `rdma_bench.h`)
 - `daqiri_bench_socket`: TCP/UDP socket benchmark logic
 
@@ -21,6 +22,7 @@ Run:
 ./build/examples/daqiri_bench_raw_gpudirect ./build/examples/daqiri_bench_raw_tx_rx.yaml --seconds 10
 ./build/examples/daqiri_bench_raw_hds ./build/examples/daqiri_bench_raw_tx_rx_hds.yaml --seconds 10
 ./build/examples/daqiri_bench_raw_reorder_seq ./build/examples/daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml --seconds 10
+./build/examples/daqiri_bench_raw_reorder_quantize ./build/examples/daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml --seconds 10
 ./build/examples/daqiri_bench_rdma ./build/examples/daqiri_bench_rdma_tx_rx.yaml --seconds 10 --mode both
 ./build/examples/daqiri_bench_socket ./build/examples/daqiri_bench_socket_udp_tx_rx.yaml --seconds 10 --mode both
 ./build/examples/daqiri_bench_socket ./build/examples/daqiri_bench_socket_tcp_tx_rx.yaml --seconds 10 --mode both
@@ -39,6 +41,7 @@ Included configs:
 | `daqiri_bench_raw_sw_loopback_reorder_seq_1024.yaml` | `daqiri_bench_raw_reorder_seq` |
 | `daqiri_bench_raw_rx_reorder_seq_ppb.yaml` | `daqiri_bench_raw_reorder_seq` |
 | `daqiri_bench_raw_rx_reorder_seq_batch.yaml` | `daqiri_bench_raw_reorder_seq` |
+| `daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml` | `daqiri_bench_raw_reorder_quantize` |
 | `daqiri_bench_rdma_tx_rx.yaml` | `daqiri_bench_rdma` |
 | `daqiri_bench_socket_udp_tx_rx.yaml` | `daqiri_bench_socket` |
 | `daqiri_bench_socket_tcp_tx_rx.yaml` | `daqiri_bench_socket` |

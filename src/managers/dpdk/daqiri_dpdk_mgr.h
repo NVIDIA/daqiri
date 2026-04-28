@@ -112,6 +112,8 @@ class DpdkMgr : public Manager {
 
   Status set_packet_lengths(BurstParams* burst, int idx,
                             const std::initializer_list<int>& lens) override;
+  Status set_all_packet_lengths(BurstParams* burst,
+                                const std::initializer_list<int>& lens) override;
   void free_all_segment_packets(BurstParams* burst, int seg) override;
   void free_packet_segment(BurstParams* burst, int seg, int pkt) override;
   void free_packet(BurstParams* burst, int pkt) override;
@@ -166,6 +168,7 @@ class DpdkMgr : public Manager {
 
   struct ReorderBatchState {
     uint64_t first_packet_cycles = 0;
+    uint32_t input_payload_len = 0;
     uint32_t payload_len = 0;
     uint32_t packet_count = 0;
   };
@@ -216,6 +219,10 @@ class DpdkMgr : public Manager {
     uint32_t payload_byte_offset = 0;
     uint32_t copy_source_offset = 0;
     uint32_t slot_stride = 0;
+    bool data_type_conversion_enabled = false;
+    ReorderDataType input_data_type = ReorderDataType::SAME;
+    ReorderDataType output_data_type = ReorderDataType::SAME;
+    ReorderEndianness input_endianness = ReorderEndianness::HOST;
     uint64_t timeout_cycles = 0;
     bool use_gpu_backend = false;
     int cuda_device_id = 0;
@@ -285,10 +292,11 @@ class DpdkMgr : public Manager {
   Status acquire_reorder_output_buffer(ReorderPlanRuntime& plan, size_t* buffer_idx, void** output_buffer);
   void release_reorder_output_buffer(std::shared_ptr<ReorderOutputPool> output_pool,
                                      size_t buffer_idx);
-  size_t append_reorder_packet(ReorderPlanRuntime& plan,
+  Status append_reorder_packet(ReorderPlanRuntime& plan,
                                struct rte_mbuf* mbuf,
                                void* pkt_ptr,
-                               uint64_t now_cycles);
+                               uint64_t now_cycles,
+                               size_t* batch_size);
   Status get_next_output_or_ready(uint32_t key, ReorderQueueState& qstate, BurstParams** burst);
   void release_reorder_output_context(BurstParams* burst);
 
