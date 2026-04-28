@@ -1997,8 +1997,6 @@ Annotations are prefixed with a category:
 - :material-wrench:{ title="System-specific" } **System-specific** — must be changed for your hardware (these lines are highlighted in the code block below)
 - :material-package-variant:{ title="Payload-dependent" } **Payload-dependent** — adjust based on your application's packet format and throughput needs
 
-Fields with neither prefix are structural and typically do not need to change.
-
 ```yaml hl_lines="5 28 34 40 46 77 78 79"
 daqiri: # (1)!
   cfg:
@@ -2077,8 +2075,8 @@ bench_tx: # (30)!
   payload_size: 1000
   header_size: 64
   eth_dst_addr: <00:00:00:00:00:00> # Destination MAC address - required when Rx flow_isolation=true
-  ip_src_addr: <1.2.3.4>    # Source IP address - required on layer 3 network
-  ip_dst_addr: <5.6.7.8>    # Destination IP address - required on layer 3 network
+  ip_src_addr: <1.2.3.4>    # Source IP address - only required on layer 3 network
+  ip_dst_addr: <5.6.7.8>    # Destination IP address - only required on layer 3 network
   udp_src_port: 4096        # UDP source port
   udp_dst_port: 4096        # UDP destination port
 ```
