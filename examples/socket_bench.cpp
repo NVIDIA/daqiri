@@ -33,7 +33,9 @@ namespace {
 volatile std::sig_atomic_t g_stop_requested = 0;
 
 void signal_handler(int signum) {
-  if (signum == SIGINT) { g_stop_requested = 1; }
+  if (signum == SIGINT) {
+    g_stop_requested = 1;
+  }
 }
 
 struct SocketBenchConfig {
@@ -52,20 +54,23 @@ struct SocketWorkerStats {
   uint64_t received_packets = 0;
 };
 
-SocketBenchConfig parse_socket_cfg(const YAML::Node& node) {
+SocketBenchConfig parse_socket_cfg(const YAML::Node &node) {
   SocketBenchConfig cfg;
   cfg.server = node["server"].as<bool>(cfg.server);
   cfg.send = node["send"].as<bool>(cfg.send);
   cfg.receive = node["receive"].as<bool>(cfg.receive);
   cfg.message_size = node["message_size"].as<int>(cfg.message_size);
   cfg.iterations = node["iterations"].as<int>(cfg.iterations);
-  cfg.server_address = node["server_address"].as<std::string>(cfg.server_address);
-  cfg.client_address = node["client_address"].as<std::string>(cfg.client_address);
+  cfg.server_address =
+      node["server_address"].as<std::string>(cfg.server_address);
+  cfg.client_address =
+      node["client_address"].as<std::string>(cfg.client_address);
   cfg.server_port = node["server_port"].as<uint16_t>(cfg.server_port);
   return cfg;
 }
 
-void socket_worker(const SocketBenchConfig& cfg, std::atomic<bool>& stop, SocketWorkerStats& stats) {
+void socket_worker(const SocketBenchConfig &cfg, std::atomic<bool> &stop,
+                   SocketWorkerStats &stats) {
   uintptr_t conn_id = 0;
   uint16_t port = 0;
   uint16_t queue = 0;
@@ -74,7 +79,8 @@ void socket_worker(const SocketBenchConfig& cfg, std::atomic<bool>& stop, Socket
     if (conn_id == 0) {
       daqiri::Status s = daqiri::Status::GENERIC_FAILURE;
       if (cfg.server) {
-        s = daqiri::socket_get_server_conn_id(cfg.server_address, cfg.server_port, &conn_id);
+        s = daqiri::socket_get_server_conn_id(cfg.server_address,
+                                              cfg.server_port, &conn_id);
       } else {
         s = daqiri::socket_connect_to_server(
             cfg.server_address, cfg.server_port, cfg.client_address, &conn_id);
@@ -85,24 +91,33 @@ void socket_worker(const SocketBenchConfig& cfg, std::atomic<bool>& stop, Socket
         continue;
       }
 
-      if (daqiri::socket_get_port_queue(conn_id, &port, &queue) != daqiri::Status::SUCCESS) {
+      if (daqiri::socket_get_port_queue(conn_id, &port, &queue) !=
+          daqiri::Status::SUCCESS) {
         conn_id = 0;
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         continue;
       }
     }
 
-    const bool send_done = !cfg.send || stats.sent_packets >= static_cast<uint64_t>(cfg.iterations);
-    const bool recv_done = !cfg.receive || stats.received_packets >= static_cast<uint64_t>(cfg.iterations);
-    if (send_done && recv_done) { break; }
+    const bool send_done =
+        !cfg.send ||
+        stats.sent_packets >= static_cast<uint64_t>(cfg.iterations);
+    const bool recv_done =
+        !cfg.receive ||
+        stats.received_packets >= static_cast<uint64_t>(cfg.iterations);
+    if (send_done && recv_done) {
+      break;
+    }
 
     if (cfg.send && !send_done) {
-      auto* msg = daqiri::create_tx_burst_params();
+      auto *msg = daqiri::create_tx_burst_params();
       daqiri::set_header(msg, port, queue, 1, 1);
 
       if (daqiri::get_tx_packet_burst(msg) == daqiri::Status::SUCCESS) {
-        auto* payload = reinterpret_cast<uint8_t*>(daqiri::get_packet_ptr(msg, 0));
-        std::memset(payload, static_cast<int>(stats.sent_packets & 0xff), cfg.message_size);
+        auto *payload =
+            reinterpret_cast<uint8_t *>(daqiri::get_packet_ptr(msg, 0));
+        std::memset(payload, static_cast<int>(stats.sent_packets & 0xff),
+                    cfg.message_size);
         daqiri::set_packet_lengths(msg, 0, {cfg.message_size});
 
         // Socket transport optionally consumes conn_id from the generic burst header.
@@ -117,10 +132,12 @@ void socket_worker(const SocketBenchConfig& cfg, std::atomic<bool>& stop, Socket
     }
 
     if (cfg.receive && !recv_done) {
-      daqiri::BurstParams* burst = nullptr;
-      if (daqiri::get_rx_burst(&burst, conn_id, cfg.server) == daqiri::Status::SUCCESS &&
+      daqiri::BurstParams *burst = nullptr;
+      if (daqiri::get_rx_burst(&burst, conn_id, cfg.server) ==
+              daqiri::Status::SUCCESS &&
           burst != nullptr) {
-        stats.received_packets += static_cast<uint64_t>(daqiri::get_num_packets(burst));
+        stats.received_packets +=
+            static_cast<uint64_t>(daqiri::get_num_packets(burst));
         daqiri::free_all_packets_and_burst_rx(burst);
       } else {
         std::this_thread::sleep_for(std::chrono::microseconds(100));
@@ -129,9 +146,9 @@ void socket_worker(const SocketBenchConfig& cfg, std::atomic<bool>& stop, Socket
   }
 }
 
-}  // namespace
+} // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0]
               << " <config.yaml> [--seconds N] [--mode server|client|both]\n";
@@ -166,15 +183,13 @@ int main(int argc, char** argv) {
     run_server = true;
     server_thread = std::thread(socket_worker,
                                 parse_socket_cfg(root["socket_bench_server"]),
-                                std::ref(stop),
-                                std::ref(server_stats));
+                                std::ref(stop), std::ref(server_stats));
   }
   if ((mode == "client" || mode == "both") && root["socket_bench_client"]) {
     run_client = true;
     client_thread = std::thread(socket_worker,
                                 parse_socket_cfg(root["socket_bench_client"]),
-                                std::ref(stop),
-                                std::ref(client_stats));
+                                std::ref(stop), std::ref(client_stats));
   }
 
   if (!server_thread.joinable() && !client_thread.joinable()) {
@@ -189,23 +204,31 @@ int main(int argc, char** argv) {
     if (run_seconds > 0) {
       const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
           std::chrono::steady_clock::now() - start);
-      if (elapsed.count() >= run_seconds) { break; }
+      if (elapsed.count() >= run_seconds) {
+        break;
+      }
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
 
   stop.store(true);
 
-  if (server_thread.joinable()) { server_thread.join(); }
-  if (client_thread.joinable()) { client_thread.join(); }
+  if (server_thread.joinable()) {
+    server_thread.join();
+  }
+  if (client_thread.joinable()) {
+    client_thread.join();
+  }
 
   if (run_server) {
     std::cout << "Server sent packets: " << server_stats.sent_packets
-              << ", received packets: " << server_stats.received_packets << '\n';
+              << ", received packets: " << server_stats.received_packets
+              << '\n';
   }
   if (run_client) {
     std::cout << "Client sent packets: " << client_stats.sent_packets
-              << ", received packets: " << client_stats.received_packets << '\n';
+              << ", received packets: " << client_stats.received_packets
+              << '\n';
   }
 
   daqiri::print_stats();

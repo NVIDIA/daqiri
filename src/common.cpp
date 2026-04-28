@@ -15,137 +15,125 @@
  * limitations under the License.
  */
 
-#include <thread>
-#include <unordered_map>
-#include <unordered_set>
-#include <arpa/inet.h>
 #include <algorithm>
+#include <arpa/inet.h>
 #include <cctype>
 #include <filesystem>
 #include <limits>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
 
-#include "src/manager.h"
 #include "src/common.h"
 #include "src/logging.hpp"
+#include "src/manager.h"
 #if DAQIRI_MGR_DPDK
+#include <rte_ethdev.h>
 #include <rte_mbuf.h>
 #include <rte_memcpy.h>
-#include <rte_ethdev.h>
 #endif
 
-#define ASSERT_DAQIRI_MGR_INITIALIZED() \
+#define ASSERT_DAQIRI_MGR_INITIALIZED()                                        \
   assert(g_daqiri_mgr != nullptr && "DAQIRI Manager is not initialized")
 namespace daqiri {
 
 // Declare a static global variable for the manager
-static Manager* g_daqiri_mgr = nullptr;
+static Manager *g_daqiri_mgr = nullptr;
 
-const std::unordered_map<LogLevel::Level, std::string> LogLevel::level_to_string_map = {
-    {TRACE, "trace"},
-    {DEBUG, "debug"},
-    {INFO, "info"},
-    {WARN, "warn"},
-    {ERROR, "error"},
-    {CRITICAL, "critical"},
-    {OFF, "off"},
+const std::unordered_map<LogLevel::Level, std::string>
+    LogLevel::level_to_string_map = {
+        {TRACE, "trace"}, {DEBUG, "debug"}, {INFO, "info"},
+        {WARN, "warn"},   {ERROR, "error"}, {CRITICAL, "critical"},
+        {OFF, "off"},
 };
 
-const std::unordered_map<std::string, LogLevel::Level> LogLevel::string_to_level_map = {
-    {"trace", TRACE},
-    {"debug", DEBUG},
-    {"info", INFO},
-    {"warn", WARN},
-    {"error", ERROR},
-    {"critical", CRITICAL},
-    {"off", OFF},
+const std::unordered_map<std::string, LogLevel::Level>
+    LogLevel::string_to_level_map = {
+        {"trace", TRACE}, {"debug", DEBUG}, {"info", INFO},
+        {"warn", WARN},   {"error", ERROR}, {"critical", CRITICAL},
+        {"off", OFF},
 };
 
-[[deprecated("Use create_tx_burst_params() instead")]] BurstParams* create_burst_params() {
+[[deprecated("Use create_tx_burst_params() instead")]] BurstParams *
+create_burst_params() {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->create_tx_burst_params();
 }
 
-BurstParams* create_tx_burst_params() {
+BurstParams *create_tx_burst_params() {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->create_tx_burst_params();
 }
 
-void initialize_manager(Manager* manager) {
-  g_daqiri_mgr = manager;
-}
+void initialize_manager(Manager *manager) { g_daqiri_mgr = manager; }
 
-Manager* get_active_manager() {
-  return g_daqiri_mgr;
-}
+Manager *get_active_manager() { return g_daqiri_mgr; }
 
-ManagerType get_manager_type() {
-  return ManagerFactory::get_manager_type();
-}
+ManagerType get_manager_type() { return ManagerFactory::get_manager_type(); }
 
-template <typename Config>
-ManagerType get_manager_type(const Config& config) {
+template <typename Config> ManagerType get_manager_type(const Config &config) {
   return ManagerFactory::get_manager_type(config);
 }
 
-void free_packet(BurstParams* burst, int pkt) {
+void free_packet(BurstParams *burst, int pkt) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   g_daqiri_mgr->free_packet(burst, pkt);
 }
 
-void free_packet_segment(BurstParams* burst, int seg, int pkt) {
+void free_packet_segment(BurstParams *burst, int seg, int pkt) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   g_daqiri_mgr->free_packet_segment(burst, seg, pkt);
 }
 
-uint32_t get_packet_length(BurstParams* burst, int idx) {
+uint32_t get_packet_length(BurstParams *burst, int idx) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->get_packet_length(burst, idx);
 }
 
-uint16_t get_packet_flow_id(BurstParams* burst, int idx) {
+uint16_t get_packet_flow_id(BurstParams *burst, int idx) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->get_packet_flow_id(burst, idx);
 }
 
-uint64_t get_burst_tot_byte(BurstParams* burst) {
+uint64_t get_burst_tot_byte(BurstParams *burst) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->get_burst_tot_byte(burst);
 }
 
-uint32_t get_segment_packet_length(BurstParams* burst, int seg, int idx) {
+uint32_t get_segment_packet_length(BurstParams *burst, int seg, int idx) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->get_segment_packet_length(burst, seg, idx);
 }
 
-void free_all_segment_packets(BurstParams* burst, int seg) {
+void free_all_segment_packets(BurstParams *burst, int seg) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   g_daqiri_mgr->free_all_segment_packets(burst, seg);
 }
 
-void free_all_burst_packets(BurstParams* burst) {
+void free_all_burst_packets(BurstParams *burst) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   g_daqiri_mgr->free_all_packets(burst);
 }
 
-void free_all_packets_and_burst_rx(BurstParams* burst) {
+void free_all_packets_and_burst_rx(BurstParams *burst) {
   free_all_burst_packets(burst);
   ASSERT_DAQIRI_MGR_INITIALIZED();
   g_daqiri_mgr->free_rx_burst(burst);
 }
 
-void free_all_packets_and_burst_tx(BurstParams* burst) {
+void free_all_packets_and_burst_tx(BurstParams *burst) {
   free_all_burst_packets(burst);
   ASSERT_DAQIRI_MGR_INITIALIZED();
   g_daqiri_mgr->free_tx_burst(burst);
 }
 
-void free_segment_packets_and_burst(BurstParams* burst, int seg) {
+void free_segment_packets_and_burst(BurstParams *burst, int seg) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   g_daqiri_mgr->free_all_segment_packets(burst, seg);
   g_daqiri_mgr->free_rx_burst(burst);
 }
 
-void format_eth_addr(char* dst, std::string addr) {
+void format_eth_addr(char *dst, std::string addr) {
   std::istringstream iss(addr);
   std::string byteString;
 
@@ -161,7 +149,7 @@ void format_eth_addr(char* dst, std::string addr) {
   }
 }
 
-Status get_mac_addr(int port, char* mac) {
+Status get_mac_addr(int port, char *mac) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->get_mac_addr(port, mac);
 }
@@ -176,74 +164,77 @@ Status allow_all_traffic(int port) {
   return g_daqiri_mgr->allow_all_traffic(port);
 }
 
-bool is_tx_burst_available(BurstParams* burst) {
+bool is_tx_burst_available(BurstParams *burst) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->is_tx_burst_available(burst);
 }
 
-int get_port_id(const std::string& key) {
+int get_port_id(const std::string &key) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->get_port_id(key);
 }
 
-Status get_tx_packet_burst(BurstParams* burst) {
+Status get_tx_packet_burst(BurstParams *burst) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  if (!g_daqiri_mgr->is_tx_burst_available(burst)) return Status::NO_FREE_BURST_BUFFERS;
+  if (!g_daqiri_mgr->is_tx_burst_available(burst))
+    return Status::NO_FREE_BURST_BUFFERS;
   return g_daqiri_mgr->get_tx_packet_burst(burst);
 }
 
-Status set_eth_header(BurstParams* burst, int idx, char* dst_addr) {
+Status set_eth_header(BurstParams *burst, int idx, char *dst_addr) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->set_eth_header(burst, idx, dst_addr);
 }
 
-Status set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint8_t proto,
+Status set_ipv4_header(BurstParams *burst, int idx, int ip_len, uint8_t proto,
                        unsigned int src_host, unsigned int dst_host) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->set_ipv4_header(burst, idx, ip_len, proto, src_host, dst_host);
+  return g_daqiri_mgr->set_ipv4_header(burst, idx, ip_len, proto, src_host,
+                                       dst_host);
 }
 
-Status set_udp_header(BurstParams* burst, int idx, int udp_len, uint16_t src_port,
-                      uint16_t dst_port) {
+Status set_udp_header(BurstParams *burst, int idx, int udp_len,
+                      uint16_t src_port, uint16_t dst_port) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->set_udp_header(burst, idx, udp_len, src_port, dst_port);
 }
 
-Status set_udp_payload(BurstParams* burst, int idx, void* data, int len) {
+Status set_udp_payload(BurstParams *burst, int idx, void *data, int len) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->set_udp_payload(burst, idx, data, len);
 }
 
-Status set_packet_lengths(BurstParams* burst, int idx, const std::initializer_list<int>& lens) {
+Status set_packet_lengths(BurstParams *burst, int idx,
+                          const std::initializer_list<int> &lens) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->set_packet_lengths(burst, idx, lens);
 }
 
-Status set_all_packet_lengths(BurstParams* burst, const std::initializer_list<int>& lens) {
+Status set_all_packet_lengths(BurstParams *burst,
+                              const std::initializer_list<int> &lens) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->set_all_packet_lengths(burst, lens);
 }
 
-Status set_packet_tx_time(BurstParams* burst, int idx, uint64_t time) {
+Status set_packet_tx_time(BurstParams *burst, int idx, uint64_t time) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->set_packet_tx_time(burst, idx, time);
 }
 
-int64_t get_num_packets(BurstParams* burst) {
-  return burst->hdr.hdr.num_pkts;
-}
+int64_t get_num_packets(BurstParams *burst) { return burst->hdr.hdr.num_pkts; }
 
-int64_t get_q_id(BurstParams* burst) {
+int64_t get_q_id(BurstParams *burst) {
   assert(burst != nullptr && "burst is null");
   return burst->hdr.hdr.q_id;
 }
 
-void set_num_packets(BurstParams* burst, int64_t num) {
+void set_num_packets(BurstParams *burst, int64_t num) {
   assert(burst != nullptr && "burst is null");
   burst->hdr.hdr.num_pkts = num;
 }
 
-void set_header(BurstParams* burst, uint16_t port, uint16_t q, int64_t num, int segs) {
+void set_header(BurstParams *burst, uint16_t port, uint16_t q, int64_t num,
+                int segs) {
   assert(burst != nullptr && "burst is null");
   burst->hdr.hdr.num_pkts = num;
   burst->hdr.hdr.port_id = port;
@@ -251,32 +242,32 @@ void set_header(BurstParams* burst, uint16_t port, uint16_t q, int64_t num, int 
   burst->hdr.hdr.num_segs = segs;
 }
 
-void free_tx_burst(BurstParams* burst) {
+void free_tx_burst(BurstParams *burst) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   g_daqiri_mgr->free_tx_burst(burst);
 }
 
-void free_tx_metadata(BurstParams* burst) {
+void free_tx_metadata(BurstParams *burst) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   g_daqiri_mgr->free_tx_metadata(burst);
 }
 
-void free_rx_burst(BurstParams* burst) {
+void free_rx_burst(BurstParams *burst) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   g_daqiri_mgr->free_rx_burst(burst);
 }
 
-void free_rx_metadata(BurstParams* burst) {
+void free_rx_metadata(BurstParams *burst) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   g_daqiri_mgr->free_rx_metadata(burst);
 }
 
-void* get_segment_packet_ptr(BurstParams* burst, int seg, int idx) {
+void *get_segment_packet_ptr(BurstParams *burst, int seg, int idx) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->get_segment_packet_ptr(burst, seg, idx);
 }
 
-void* get_packet_ptr(BurstParams* burst, int idx) {
+void *get_packet_ptr(BurstParams *burst, int idx) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->get_packet_ptr(burst, idx);
 }
@@ -286,39 +277,40 @@ void shutdown() {
   g_daqiri_mgr->shutdown();
 }
 
-Status send_tx_burst(BurstParams* burst) {
+Status send_tx_burst(BurstParams *burst) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->send_tx_burst(burst);
 }
 
-Status get_rx_burst(BurstParams** burst, int port, int q) {
+Status get_rx_burst(BurstParams **burst, int port, int q) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->get_rx_burst(burst, port, q);
 }
 
-Status get_rx_burst(BurstParams** burst, int port) {
+Status get_rx_burst(BurstParams **burst, int port) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->get_rx_burst(burst, port);
 }
 
-Status get_rx_burst(BurstParams** burst) {
+Status get_rx_burst(BurstParams **burst) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->get_rx_burst(burst);
 }
 
-Status get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server) {
+Status get_rx_burst(BurstParams **burst, uintptr_t conn_id, bool server) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->get_rx_burst(burst, conn_id, server);
 }
 
-Status set_reorder_cuda_stream(const std::string& interface_name,
-                               const std::string& reorder_name,
+Status set_reorder_cuda_stream(const std::string &interface_name,
+                               const std::string &reorder_name,
                                cudaStream_t stream) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->set_reorder_cuda_stream(interface_name, reorder_name, stream);
+  return g_daqiri_mgr->set_reorder_cuda_stream(interface_name, reorder_name,
+                                               stream);
 }
 
-Status get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info) {
+Status get_reorder_burst_info(BurstParams *burst, ReorderBurstInfo *info) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->get_reorder_burst_info(burst, info);
 }
@@ -338,29 +330,32 @@ void print_stats() {
   g_daqiri_mgr->print_stats();
 }
 
-Status daqiri_init(NetworkConfig& config) {
+Status daqiri_init(NetworkConfig &config) {
   if (config.common_.manager_type == ManagerType::UNKNOWN &&
       config.common_.stream_type != StreamType::INVALID) {
-    config.common_.manager_type = manager_type_from_stream_type(config.common_.stream_type);
+    config.common_.manager_type =
+        manager_type_from_stream_type(config.common_.stream_type);
   }
 
   if (config.common_.stream_type == StreamType::SOCKET &&
       (config.common_.protocol == SocketProtocol::TCP ||
        config.common_.protocol == SocketProtocol::UDP)) {
     std::unordered_set<std::string> gpu_mrs;
-    for (const auto& intf : config.ifs_) {
-      for (const auto& q : intf.rx_.queues_) {
-        for (const auto& mr_name : q.common_.mrs_) {
+    for (const auto &intf : config.ifs_) {
+      for (const auto &q : intf.rx_.queues_) {
+        for (const auto &mr_name : q.common_.mrs_) {
           const auto it = config.mrs_.find(mr_name);
-          if (it != config.mrs_.end() && it->second.kind_ == MemoryKind::DEVICE) {
+          if (it != config.mrs_.end() &&
+              it->second.kind_ == MemoryKind::DEVICE) {
             gpu_mrs.emplace(mr_name);
           }
         }
       }
-      for (const auto& q : intf.tx_.queues_) {
-        for (const auto& mr_name : q.common_.mrs_) {
+      for (const auto &q : intf.tx_.queues_) {
+        for (const auto &mr_name : q.common_.mrs_) {
           const auto it = config.mrs_.find(mr_name);
-          if (it != config.mrs_.end() && it->second.kind_ == MemoryKind::DEVICE) {
+          if (it != config.mrs_.end() &&
+              it->second.kind_ == MemoryKind::DEVICE) {
             gpu_mrs.emplace(mr_name);
           }
         }
@@ -369,15 +364,16 @@ Status daqiri_init(NetworkConfig& config) {
 
     if (!gpu_mrs.empty()) {
       std::string joined;
-      for (const auto& mr_name : gpu_mrs) {
-        if (!joined.empty()) { joined += ", "; }
+      for (const auto &mr_name : gpu_mrs) {
+        if (!joined.empty()) {
+          joined += ", ";
+        }
         joined += mr_name;
       }
       DAQIRI_LOG_ERROR(
           "GPU memory regions are not supported for protocol '{}'. Offending "
           "memory_regions: {}",
-          socket_protocol_to_string(config.common_.protocol),
-          joined);
+          socket_protocol_to_string(config.common_.protocol), joined);
       return Status::INVALID_PARAMETER;
     }
   }
@@ -386,10 +382,12 @@ Status daqiri_init(NetworkConfig& config) {
 
   auto mgr = &(ManagerFactory::get_active_manager());
 
-  if (!mgr->set_config_and_initialize(config)) { return Status::INTERNAL_ERROR; }
+  if (!mgr->set_config_and_initialize(config)) {
+    return Status::INTERNAL_ERROR;
+  }
 
-  for (const auto& intf : config.ifs_) {
-    const auto& rx = intf.rx_;
+  for (const auto &intf : config.ifs_) {
+    const auto &rx = intf.rx_;
     auto port = mgr->get_port_id(intf.address_);
     if (port < 0) {
       DAQIRI_LOG_ERROR("Failed to get port from name {}", intf.address_);
@@ -402,30 +400,34 @@ Status daqiri_init(NetworkConfig& config) {
 
 namespace {
 
-YAML::Node get_network_node(const YAML::Node& root) {
-  if (root["daqiri"] && root["daqiri"]["cfg"]) { return root["daqiri"]["cfg"]; }
+YAML::Node get_network_node(const YAML::Node &root) {
+  if (root["daqiri"] && root["daqiri"]["cfg"]) {
+    return root["daqiri"]["cfg"];
+  }
   return root;
 }
 
-Status parse_network_config_node(const YAML::Node& root, NetworkConfig& config) {
+Status parse_network_config_node(const YAML::Node &root,
+                                 NetworkConfig &config) {
   try {
     const YAML::Node network_node = get_network_node(root);
     if (!network_node || !network_node.IsMap()) {
-      DAQIRI_LOG_ERROR("Invalid YAML: expected top-level map for network configuration");
+      DAQIRI_LOG_ERROR(
+          "Invalid YAML: expected top-level map for network configuration");
       return Status::INVALID_PARAMETER;
     }
     config = network_node.as<NetworkConfig>();
     return Status::SUCCESS;
-  } catch (const YAML::Exception& e) {
+  } catch (const YAML::Exception &e) {
     DAQIRI_LOG_ERROR("YAML parsing error: {}", e.what());
     return Status::INVALID_PARAMETER;
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     DAQIRI_LOG_ERROR("Failed to parse network configuration: {}", e.what());
     return Status::INTERNAL_ERROR;
   }
 }
 
-bool has_yaml_extension(const std::string& path_str) {
+bool has_yaml_extension(const std::string &path_str) {
   std::filesystem::path path(path_str);
   std::string ext = path.extension().string();
   std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
@@ -434,38 +436,42 @@ bool has_yaml_extension(const std::string& path_str) {
   return ext == ".yaml" || ext == ".yml";
 }
 
-}  // namespace
+} // namespace
 
-Status parse_network_config_from_yaml_string(const std::string& yaml_string, NetworkConfig& config) {
+Status parse_network_config_from_yaml_string(const std::string &yaml_string,
+                                             NetworkConfig &config) {
   try {
     const YAML::Node root = YAML::Load(yaml_string);
     return parse_network_config_node(root, config);
-  } catch (const YAML::Exception& e) {
+  } catch (const YAML::Exception &e) {
     DAQIRI_LOG_ERROR("Failed to parse YAML string: {}", e.what());
     return Status::INVALID_PARAMETER;
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     DAQIRI_LOG_ERROR("Failed to parse YAML string: {}", e.what());
     return Status::INTERNAL_ERROR;
   }
 }
 
-Status parse_network_config_from_yaml_file(const std::string& yaml_path, NetworkConfig& config) {
+Status parse_network_config_from_yaml_file(const std::string &yaml_path,
+                                           NetworkConfig &config) {
   try {
     const YAML::Node root = YAML::LoadFile(yaml_path);
     return parse_network_config_node(root, config);
-  } catch (const YAML::Exception& e) {
+  } catch (const YAML::Exception &e) {
     DAQIRI_LOG_ERROR("Failed to parse YAML file '{}': {}", yaml_path, e.what());
     return Status::INVALID_PARAMETER;
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     DAQIRI_LOG_ERROR("Failed to parse YAML file '{}': {}", yaml_path, e.what());
     return Status::INTERNAL_ERROR;
   }
 }
 
-Status parse_network_config(const std::string& yaml_string_or_path, NetworkConfig& config) {
+Status parse_network_config(const std::string &yaml_string_or_path,
+                            NetworkConfig &config) {
   std::error_code ec;
   const std::filesystem::path path(yaml_string_or_path);
-  if (std::filesystem::exists(path, ec) && std::filesystem::is_regular_file(path, ec)) {
+  if (std::filesystem::exists(path, ec) &&
+      std::filesystem::is_regular_file(path, ec)) {
     return parse_network_config_from_yaml_file(yaml_string_or_path, config);
   }
 
@@ -477,88 +483,107 @@ Status parse_network_config(const std::string& yaml_string_or_path, NetworkConfi
   return parse_network_config_from_yaml_string(yaml_string_or_path, config);
 }
 
-Status daqiri_init_from_yaml_string(const std::string& yaml_string) {
+Status daqiri_init_from_yaml_string(const std::string &yaml_string) {
   NetworkConfig config;
-  const Status parse_status = parse_network_config_from_yaml_string(yaml_string, config);
-  if (parse_status != Status::SUCCESS) { return parse_status; }
+  const Status parse_status =
+      parse_network_config_from_yaml_string(yaml_string, config);
+  if (parse_status != Status::SUCCESS) {
+    return parse_status;
+  }
   return daqiri_init(config);
 }
 
-Status daqiri_init_from_yaml_file(const std::string& yaml_path) {
+Status daqiri_init_from_yaml_file(const std::string &yaml_path) {
   NetworkConfig config;
-  const Status parse_status = parse_network_config_from_yaml_file(yaml_path, config);
-  if (parse_status != Status::SUCCESS) { return parse_status; }
+  const Status parse_status =
+      parse_network_config_from_yaml_file(yaml_path, config);
+  if (parse_status != Status::SUCCESS) {
+    return parse_status;
+  }
   return daqiri_init(config);
 }
 
-Status daqiri_init(const std::string& yaml_string_or_path) {
+Status daqiri_init(const std::string &yaml_string_or_path) {
   NetworkConfig config;
   const Status parse_status = parse_network_config(yaml_string_or_path, config);
-  if (parse_status != Status::SUCCESS) { return parse_status; }
+  if (parse_status != Status::SUCCESS) {
+    return parse_status;
+  }
   return daqiri_init(config);
 }
 
 // Generic socket functions
-Status socket_connect_to_server(const std::string& server_addr, uint16_t server_port,
-                                uintptr_t* conn_id) {
+Status socket_connect_to_server(const std::string &server_addr,
+                                uint16_t server_port, uintptr_t *conn_id) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->socket_connect_to_server(server_addr, server_port, conn_id);
+  return g_daqiri_mgr->socket_connect_to_server(server_addr, server_port,
+                                                conn_id);
 }
 
-Status socket_connect_to_server(const std::string& server_addr, uint16_t server_port,
-                                const std::string& src_addr, uintptr_t* conn_id) {
+Status socket_connect_to_server(const std::string &server_addr,
+                                uint16_t server_port,
+                                const std::string &src_addr,
+                                uintptr_t *conn_id) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->socket_connect_to_server(server_addr, server_port, src_addr, conn_id);
+  return g_daqiri_mgr->socket_connect_to_server(server_addr, server_port,
+                                                src_addr, conn_id);
 }
 
-Status socket_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) {
+Status socket_get_port_queue(uintptr_t conn_id, uint16_t *port,
+                             uint16_t *queue) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->socket_get_port_queue(conn_id, port, queue);
 }
 
-Status socket_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
-                                 uintptr_t* conn_id) {
+Status socket_get_server_conn_id(const std::string &server_addr,
+                                 uint16_t server_port, uintptr_t *conn_id) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->socket_get_server_conn_id(server_addr, server_port, conn_id);
+  return g_daqiri_mgr->socket_get_server_conn_id(server_addr, server_port,
+                                                 conn_id);
 }
 
 // RDMA Functions
-Status rdma_connect_to_server(const std::string& server_addr, uint16_t server_port,
-                              uintptr_t* conn_id) {
+Status rdma_connect_to_server(const std::string &server_addr,
+                              uint16_t server_port, uintptr_t *conn_id) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->rdma_connect_to_server(server_addr, server_port, conn_id);
+  return g_daqiri_mgr->rdma_connect_to_server(server_addr, server_port,
+                                              conn_id);
 }
 
-Status rdma_connect_to_server(const std::string& server_addr, uint16_t server_port,
-                              const std::string& src_addr, uintptr_t* conn_id) {
+Status rdma_connect_to_server(const std::string &server_addr,
+                              uint16_t server_port, const std::string &src_addr,
+                              uintptr_t *conn_id) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->rdma_connect_to_server(server_addr, server_port, src_addr, conn_id);
+  return g_daqiri_mgr->rdma_connect_to_server(server_addr, server_port,
+                                              src_addr, conn_id);
 }
 
-Status rdma_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) {
+Status rdma_get_port_queue(uintptr_t conn_id, uint16_t *port, uint16_t *queue) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->rdma_get_port_queue(conn_id, port, queue);
 }
 
-Status rdma_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
-                               uintptr_t* conn_id) {
+Status rdma_get_server_conn_id(const std::string &server_addr,
+                               uint16_t server_port, uintptr_t *conn_id) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->rdma_get_server_conn_id(server_addr, server_port, conn_id);
+  return g_daqiri_mgr->rdma_get_server_conn_id(server_addr, server_port,
+                                               conn_id);
 }
 
-Status rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id, bool is_server,
-                       int num_pkts, uint64_t wr_id, const std::string& local_mr_name) {
+Status rdma_set_header(BurstParams *burst, RDMAOpCode op_code,
+                       uintptr_t conn_id, bool is_server, int num_pkts,
+                       uint64_t wr_id, const std::string &local_mr_name) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->rdma_set_header(
-      burst, op_code, conn_id, is_server, num_pkts, wr_id, local_mr_name);
+  return g_daqiri_mgr->rdma_set_header(burst, op_code, conn_id, is_server,
+                                       num_pkts, wr_id, local_mr_name);
 }
 
-RDMAOpCode rdma_get_opcode(BurstParams* burst) {
+RDMAOpCode rdma_get_opcode(BurstParams *burst) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->rdma_get_opcode(burst);
 }
 
-};  // namespace daqiri
+}; // namespace daqiri
 
 /**
  * @brief Parse flow configuration from a YAML node.
@@ -568,14 +593,14 @@ RDMAOpCode rdma_get_opcode(BurstParams* burst) {
  * @return true if parsing was successful, false otherwise.
  */
 bool YAML::convert<daqiri::NetworkConfig>::parse_flow_config(
-    const YAML::Node& flow_item, daqiri::FlowConfig& flow) {
+    const YAML::Node &flow_item, daqiri::FlowConfig &flow) {
   struct in_addr addr;
   try {
     flow.name_ = flow_item["name"].as<std::string>();
     flow.id_ = flow_item["id"].as<int>();
     flow.action_.type_ = daqiri::FlowType::QUEUE;
     flow.action_.id_ = flow_item["action"]["id"].as<int>();
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     DAQIRI_LOG_ERROR("Error parsing FlowConfig: {}", e.what());
     return false;
   }
@@ -585,19 +610,19 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_flow_config(
 
   try {
     flow.match_.udp_src_ = flow_item["match"]["udp_src"].as<uint16_t>();
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     flow.match_.udp_src_ = 0;
   }
 
   try {
     flow.match_.udp_dst_ = flow_item["match"]["udp_dst"].as<uint16_t>();
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     flow.match_.udp_dst_ = 0;
   }
 
   try {
     flow.match_.ipv4_len_ = flow_item["match"]["ipv4_len"].as<uint16_t>();
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     flow.match_.ipv4_len_ = 0;
   }
 
@@ -609,7 +634,7 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_flow_config(
     } else {
       flow.match_.ipv4_src_ = addr.s_addr;
     }
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     flow.match_.ipv4_src_ = INADDR_ANY;
   }
 
@@ -621,26 +646,26 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_flow_config(
     } else {
       flow.match_.ipv4_dst_ = addr.s_addr;
     }
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     flow.match_.ipv4_dst_ = INADDR_ANY;
   }
 
   // if none of the normal match criteria are defined, use flex item match
-  if (   flow.match_.udp_src_  == 0
-      && flow.match_.udp_dst_  == 0
-      && flow.match_.ipv4_len_ == 0
-      && flow.match_.ipv4_src_ == INADDR_ANY
-      && flow.match_.ipv4_dst_ == INADDR_ANY
-    ) {
+  if (flow.match_.udp_src_ == 0 && flow.match_.udp_dst_ == 0 &&
+      flow.match_.ipv4_len_ == 0 && flow.match_.ipv4_src_ == INADDR_ANY &&
+      flow.match_.ipv4_dst_ == INADDR_ANY) {
     // No match criteria defined, use flex item match
-    flow.match_.flex_item_match_.flex_item_id_ = flow_item["match"]["flex_item_id"].as<uint16_t>();
-    flow.match_.flex_item_match_.val_ = flow_item["match"]["val"].as<uint32_t>();
-    flow.match_.flex_item_match_.mask_ = flow_item["match"]["mask"].as<uint32_t>();
+    flow.match_.flex_item_match_.flex_item_id_ =
+        flow_item["match"]["flex_item_id"].as<uint16_t>();
+    flow.match_.flex_item_match_.val_ =
+        flow_item["match"]["val"].as<uint32_t>();
+    flow.match_.flex_item_match_.mask_ =
+        flow_item["match"]["mask"].as<uint32_t>();
     flow.match_.type_ = daqiri::FlowMatchType::FLEX_ITEM;
     DAQIRI_LOG_INFO("Using flex item match: flex_item_id={}, val={}, mask={}",
-                       flow.match_.flex_item_match_.flex_item_id_,
-                       flow.match_.flex_item_match_.val_,
-                       flow.match_.flex_item_match_.mask_);
+                    flow.match_.flex_item_match_.flex_item_id_,
+                    flow.match_.flex_item_match_.val_,
+                    flow.match_.flex_item_match_.mask_);
   }
 
   return true;
@@ -654,17 +679,18 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_flow_config(
  * @return true if parsing was successful, false otherwise.
  */
 bool YAML::convert<daqiri::NetworkConfig>::parse_flex_item_config(
-    const YAML::Node& flex_item, daqiri::FlexItemConfig& flex_item_config) {
+    const YAML::Node &flex_item, daqiri::FlexItemConfig &flex_item_config) {
   try {
     flex_item_config.name_ = flex_item["name"].as<std::string>();
     flex_item_config.id_ = flex_item["id"].as<uint16_t>();
     flex_item_config.udp_dst_port_ = flex_item["udp_dst_port"].as<uint16_t>();
     flex_item_config.offset_ = flex_item["offset"].as<uint16_t>();
     if ((flex_item_config.offset_ % 4) != 0 || flex_item_config.offset_ > 28) {
-      DAQIRI_LOG_CRITICAL("Flex item offset (in bytes) must be a multiple of 4 and less than 28");
+      DAQIRI_LOG_CRITICAL("Flex item offset (in bytes) must be a multiple of 4 "
+                          "and less than 28");
       return false;
     }
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     DAQIRI_LOG_ERROR("Error parsing FlexItemConfig: {}", e.what());
     return false;
   }
@@ -679,53 +705,59 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_flex_item_config(
  * @return true if parsing was successful, false otherwise.
  */
 bool YAML::convert<daqiri::NetworkConfig>::parse_reorder_config(
-    const YAML::Node& reorder_item, daqiri::ReorderConfig& reorder_config) {
-  auto parse_bit_field = [](const YAML::Node& node,
-                            const char* field_name,
-                            daqiri::ReorderBitFieldConfig& field_cfg) -> bool {
+    const YAML::Node &reorder_item, daqiri::ReorderConfig &reorder_config) {
+  auto parse_bit_field = [](const YAML::Node &node, const char *field_name,
+                            daqiri::ReorderBitFieldConfig &field_cfg) -> bool {
     if (!node[field_name]) {
       DAQIRI_LOG_ERROR("Missing required bit field '{}'", field_name);
       return false;
     }
 
     try {
-      const auto& bit_field = node[field_name];
+      const auto &bit_field = node[field_name];
       field_cfg.bit_offset_ = bit_field["bit_offset"].as<uint16_t>();
       field_cfg.bit_width_ = bit_field["bit_width"].as<uint8_t>();
-    } catch (const std::exception& e) {
-      DAQIRI_LOG_ERROR("Failed to parse bit field '{}': {}", field_name, e.what());
+    } catch (const std::exception &e) {
+      DAQIRI_LOG_ERROR("Failed to parse bit field '{}': {}", field_name,
+                       e.what());
       return false;
     }
 
     if (field_cfg.bit_width_ < 1 || field_cfg.bit_width_ > 32) {
-      DAQIRI_LOG_ERROR("Invalid bit_width {} for '{}'. Supported range is [1, 32]",
-                       field_cfg.bit_width_,
-                       field_name);
+      DAQIRI_LOG_ERROR(
+          "Invalid bit_width {} for '{}'. Supported range is [1, 32]",
+          field_cfg.bit_width_, field_name);
       return false;
     }
 
     return true;
   };
 
-  auto pow2_u64 = [](uint8_t exponent, uint64_t* out) -> bool {
-    if (exponent > 63) { return false; }
+  auto pow2_u64 = [](uint8_t exponent, uint64_t *out) -> bool {
+    if (exponent > 63) {
+      return false;
+    }
     *out = (1ULL << exponent);
     return true;
   };
 
   try {
     reorder_config.name_ = reorder_item["name"].as<std::string>();
-    reorder_config.reorder_type_ = reorder_item["reorder_type"].as<std::string>();
-    reorder_config.memory_region_ = reorder_item["memory_region"].as<std::string>();
-    reorder_config.payload_byte_offset_ = reorder_item["payload_byte_offset"].as<uint32_t>();
+    reorder_config.reorder_type_ =
+        reorder_item["reorder_type"].as<std::string>();
+    reorder_config.memory_region_ =
+        reorder_item["memory_region"].as<std::string>();
+    reorder_config.payload_byte_offset_ =
+        reorder_item["payload_byte_offset"].as<uint32_t>();
 
     if (!reorder_item["flow_ids"] || !reorder_item["flow_ids"].IsSequence()) {
-      DAQIRI_LOG_ERROR("Reorder config '{}' requires a non-empty flow_ids sequence",
-                       reorder_config.name_);
+      DAQIRI_LOG_ERROR(
+          "Reorder config '{}' requires a non-empty flow_ids sequence",
+          reorder_config.name_);
       return false;
     }
 
-    for (const auto& flow_id_node : reorder_item["flow_ids"]) {
+    for (const auto &flow_id_node : reorder_item["flow_ids"]) {
       reorder_config.flow_ids_.push_back(flow_id_node.as<uint16_t>());
     }
     if (reorder_config.flow_ids_.empty()) {
@@ -733,29 +765,33 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_reorder_config(
                        reorder_config.name_);
       return false;
     }
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     DAQIRI_LOG_ERROR("Error parsing ReorderConfig: {}", e.what());
     return false;
   }
 
-  if (reorder_config.reorder_type_ != "gpu" && reorder_config.reorder_type_ != "cpu") {
-    DAQIRI_LOG_ERROR("Unsupported reorder_type '{}' in reorder config '{}'. Valid values are 'gpu' and 'cpu'",
-                     reorder_config.reorder_type_,
-                     reorder_config.name_);
+  if (reorder_config.reorder_type_ != "gpu" &&
+      reorder_config.reorder_type_ != "cpu") {
+    DAQIRI_LOG_ERROR("Unsupported reorder_type '{}' in reorder config '{}'. "
+                     "Valid values are 'gpu' and 'cpu'",
+                     reorder_config.reorder_type_, reorder_config.name_);
     return false;
   }
 
   if (reorder_item["data_types"].IsDefined()) {
-    const auto& data_types_node = reorder_item["data_types"];
+    const auto &data_types_node = reorder_item["data_types"];
     if (!data_types_node.IsMap()) {
-      DAQIRI_LOG_ERROR("Reorder config '{}' data_types must be a map", reorder_config.name_);
+      DAQIRI_LOG_ERROR("Reorder config '{}' data_types must be a map",
+                       reorder_config.name_);
       return false;
     }
 
-    const auto input_node =
-        data_types_node["input_type"] ? data_types_node["input_type"] : data_types_node["input"];
-    const auto output_node =
-        data_types_node["output_type"] ? data_types_node["output_type"] : data_types_node["output"];
+    const auto input_node = data_types_node["input_type"]
+                                ? data_types_node["input_type"]
+                                : data_types_node["input"];
+    const auto output_node = data_types_node["output_type"]
+                                 ? data_types_node["output_type"]
+                                 : data_types_node["output"];
     if (!input_node || !output_node) {
       DAQIRI_LOG_ERROR(
           "Reorder config '{}' data_types requires input_type and output_type",
@@ -773,34 +809,40 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_reorder_config(
                                        : data_types_node["input_endianness"];
       if (endianness_node) {
         reorder_config.data_types_.input_endianness_ =
-            daqiri::reorder_endianness_from_string(endianness_node.as<std::string>());
+            daqiri::reorder_endianness_from_string(
+                endianness_node.as<std::string>());
       }
-    } catch (const std::exception& e) {
+    } catch (const std::exception &e) {
       DAQIRI_LOG_ERROR("Failed to parse data_types in reorder config '{}': {}",
-                       reorder_config.name_,
-                       e.what());
+                       reorder_config.name_, e.what());
       return false;
     }
 
-    if (!daqiri::is_reorder_input_data_type(reorder_config.data_types_.input_type_)) {
-      DAQIRI_LOG_ERROR(
-          "Invalid reorder input_type '{}' in config '{}'. Valid values: int4, int8, int16, int32",
-          daqiri::reorder_data_type_to_string(reorder_config.data_types_.input_type_),
-          reorder_config.name_);
+    if (!daqiri::is_reorder_input_data_type(
+            reorder_config.data_types_.input_type_)) {
+      DAQIRI_LOG_ERROR("Invalid reorder input_type '{}' in config '{}'. Valid "
+                       "values: int4, int8, int16, int32",
+                       daqiri::reorder_data_type_to_string(
+                           reorder_config.data_types_.input_type_),
+                       reorder_config.name_);
       return false;
     }
-    if (!daqiri::is_reorder_output_data_type(reorder_config.data_types_.output_type_)) {
-      DAQIRI_LOG_ERROR(
-          "Invalid reorder output_type '{}' in config '{}'. Valid values: fp16, bf16, fp32, fp64, int32",
-          daqiri::reorder_data_type_to_string(reorder_config.data_types_.output_type_),
-          reorder_config.name_);
+    if (!daqiri::is_reorder_output_data_type(
+            reorder_config.data_types_.output_type_)) {
+      DAQIRI_LOG_ERROR("Invalid reorder output_type '{}' in config '{}'. Valid "
+                       "values: fp16, bf16, fp32, fp64, int32",
+                       daqiri::reorder_data_type_to_string(
+                           reorder_config.data_types_.output_type_),
+                       reorder_config.name_);
       return false;
     }
-    if (reorder_config.data_types_.input_endianness_ == daqiri::ReorderEndianness::INVALID) {
-      DAQIRI_LOG_ERROR(
-          "Invalid reorder endianness '{}' in config '{}'. Valid values: host, network",
-          daqiri::reorder_endianness_to_string(reorder_config.data_types_.input_endianness_),
-          reorder_config.name_);
+    if (reorder_config.data_types_.input_endianness_ ==
+        daqiri::ReorderEndianness::INVALID) {
+      DAQIRI_LOG_ERROR("Invalid reorder endianness '{}' in config '{}'. Valid "
+                       "values: host, network",
+                       daqiri::reorder_endianness_to_string(
+                           reorder_config.data_types_.input_endianness_),
+                       reorder_config.name_);
       return false;
     }
 
@@ -808,37 +850,44 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_reorder_config(
   }
 
   if (!reorder_item["method"] || !reorder_item["method"].IsMap()) {
-    DAQIRI_LOG_ERROR("Reorder config '{}' requires a method section", reorder_config.name_);
+    DAQIRI_LOG_ERROR("Reorder config '{}' requires a method section",
+                     reorder_config.name_);
     return false;
   }
 
-  const auto& method_node = reorder_item["method"];
+  const auto &method_node = reorder_item["method"];
   const bool has_seq_batch_number = method_node["seq_batch_number"].IsDefined();
-  const bool has_seq_packets_per_batch = method_node["seq_packets_per_batch"].IsDefined();
+  const bool has_seq_packets_per_batch =
+      method_node["seq_packets_per_batch"].IsDefined();
   if (has_seq_batch_number == has_seq_packets_per_batch) {
-    DAQIRI_LOG_ERROR(
-        "Reorder config '{}' must define exactly one method: seq_batch_number or "
-        "seq_packets_per_batch",
-        reorder_config.name_);
+    DAQIRI_LOG_ERROR("Reorder config '{}' must define exactly one method: "
+                     "seq_batch_number or "
+                     "seq_packets_per_batch",
+                     reorder_config.name_);
     return false;
   }
 
   if (has_seq_batch_number) {
-    const auto& seq_batch_node = method_node["seq_batch_number"];
+    const auto &seq_batch_node = method_node["seq_batch_number"];
     reorder_config.method_ = daqiri::ReorderMethod::SEQ_BATCH_NUMBER;
 
-    if (!parse_bit_field(seq_batch_node, "sequence_number", reorder_config.seq_batch_number_.sequence_number_)) {
+    if (!parse_bit_field(seq_batch_node, "sequence_number",
+                         reorder_config.seq_batch_number_.sequence_number_)) {
       return false;
     }
-    if (!parse_bit_field(seq_batch_node, "batch_number", reorder_config.seq_batch_number_.batch_number_)) {
+    if (!parse_bit_field(seq_batch_node, "batch_number",
+                         reorder_config.seq_batch_number_.batch_number_)) {
       return false;
     }
 
     uint64_t total_sequence_numbers = 0;
     uint64_t total_batches = 0;
-    if (!pow2_u64(reorder_config.seq_batch_number_.sequence_number_.bit_width_, &total_sequence_numbers)
-        || !pow2_u64(reorder_config.seq_batch_number_.batch_number_.bit_width_, &total_batches)) {
-      DAQIRI_LOG_ERROR("Bit width too large in reorder config '{}'", reorder_config.name_);
+    if (!pow2_u64(reorder_config.seq_batch_number_.sequence_number_.bit_width_,
+                  &total_sequence_numbers) ||
+        !pow2_u64(reorder_config.seq_batch_number_.batch_number_.bit_width_,
+                  &total_batches)) {
+      DAQIRI_LOG_ERROR("Bit width too large in reorder config '{}'",
+                       reorder_config.name_);
       return false;
     }
 
@@ -852,30 +901,34 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_reorder_config(
       return false;
     }
 
-    const uint64_t derived_packets_per_batch = total_sequence_numbers / total_batches;
-    if (derived_packets_per_batch == 0
-        || derived_packets_per_batch > std::numeric_limits<uint32_t>::max()) {
-      DAQIRI_LOG_ERROR("Derived packets_per_batch is out of range in reorder config '{}'",
-                       reorder_config.name_);
+    const uint64_t derived_packets_per_batch =
+        total_sequence_numbers / total_batches;
+    if (derived_packets_per_batch == 0 ||
+        derived_packets_per_batch > std::numeric_limits<uint32_t>::max()) {
+      DAQIRI_LOG_ERROR(
+          "Derived packets_per_batch is out of range in reorder config '{}'",
+          reorder_config.name_);
       return false;
     }
     reorder_config.seq_batch_number_.packets_per_batch_ =
         static_cast<uint32_t>(derived_packets_per_batch);
   } else {
-    const auto& seq_ppb_node = method_node["seq_packets_per_batch"];
+    const auto &seq_ppb_node = method_node["seq_packets_per_batch"];
     reorder_config.method_ = daqiri::ReorderMethod::SEQ_PACKETS_PER_BATCH;
 
-    if (!parse_bit_field(seq_ppb_node, "sequence_number", reorder_config.seq_packets_per_batch_.sequence_number_)) {
+    if (!parse_bit_field(
+            seq_ppb_node, "sequence_number",
+            reorder_config.seq_packets_per_batch_.sequence_number_)) {
       return false;
     }
 
     try {
       reorder_config.seq_packets_per_batch_.packets_per_batch_ =
           seq_ppb_node["packets_per_batch"].as<uint32_t>();
-    } catch (const std::exception& e) {
-      DAQIRI_LOG_ERROR("Failed to parse packets_per_batch in reorder config '{}': {}",
-                       reorder_config.name_,
-                       e.what());
+    } catch (const std::exception &e) {
+      DAQIRI_LOG_ERROR(
+          "Failed to parse packets_per_batch in reorder config '{}': {}",
+          reorder_config.name_, e.what());
       return false;
     }
 
@@ -886,16 +939,20 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_reorder_config(
     }
 
     uint64_t total_sequence_numbers = 0;
-    if (!pow2_u64(reorder_config.seq_packets_per_batch_.sequence_number_.bit_width_,
-                  &total_sequence_numbers)) {
-      DAQIRI_LOG_ERROR("Bit width too large in reorder config '{}'", reorder_config.name_);
+    if (!pow2_u64(
+            reorder_config.seq_packets_per_batch_.sequence_number_.bit_width_,
+            &total_sequence_numbers)) {
+      DAQIRI_LOG_ERROR("Bit width too large in reorder config '{}'",
+                       reorder_config.name_);
       return false;
     }
 
-    if ((total_sequence_numbers
-         % static_cast<uint64_t>(reorder_config.seq_packets_per_batch_.packets_per_batch_)) != 0) {
+    if ((total_sequence_numbers %
+         static_cast<uint64_t>(
+             reorder_config.seq_packets_per_batch_.packets_per_batch_)) != 0) {
       DAQIRI_LOG_ERROR(
-          "2^seq_bits must be divisible by packets_per_batch in reorder config '{}' "
+          "2^seq_bits must be divisible by packets_per_batch in reorder config "
+          "'{}' "
           "(seq_bits={}, packets_per_batch={})",
           reorder_config.name_,
           reorder_config.seq_packets_per_batch_.sequence_number_.bit_width_,
@@ -915,7 +972,7 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_reorder_config(
  * @return true if parsing was successful, false otherwise.
  */
 bool YAML::convert<daqiri::NetworkConfig>::parse_memory_region_config(
-    const YAML::Node& mr, daqiri::MemoryRegionConfig& tmr) {
+    const YAML::Node &mr, daqiri::MemoryRegionConfig &tmr) {
   try {
     tmr.name_ = mr["name"].as<std::string>();
     tmr.kind_ =
@@ -924,12 +981,12 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_memory_region_config(
     tmr.num_bufs_ = mr["num_bufs"].as<size_t>();
     tmr.affinity_ = mr["affinity"].as<uint32_t>();
     if (mr["access"].IsDefined()) {
-        tmr.access_ = daqiri::GetMemoryAccessPropertiesFromList(mr["access"]);
+      tmr.access_ = daqiri::GetMemoryAccessPropertiesFromList(mr["access"]);
     } else {
       tmr.access_ = daqiri::MEM_ACCESS_LOCAL;
     }
     tmr.owned_ = mr["owned"].template as<bool>(true);
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     DAQIRI_LOG_ERROR("Error parsing MemoryRegionConfig: {}", e.what());
     return false;
   }
@@ -937,7 +994,7 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_memory_region_config(
 }
 
 bool YAML::convert<daqiri::NetworkConfig>::parse_socket_config(
-    const YAML::Node& socket_item, daqiri::SocketConfig& socket_cfg) {
+    const YAML::Node &socket_item, daqiri::SocketConfig &socket_cfg) {
   try {
     socket_cfg.mode_ = daqiri::GetSocketModeFromString(
         socket_item["mode"].template as<std::string>());
@@ -948,11 +1005,14 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_socket_config(
     }
 
     socket_cfg.local_ip_ = socket_item["local_ip"].template as<std::string>("");
-    socket_cfg.remote_ip_ = socket_item["remote_ip"].template as<std::string>("");
+    socket_cfg.remote_ip_ =
+        socket_item["remote_ip"].template as<std::string>("");
     socket_cfg.local_port_ = socket_item["local_port"].as<uint16_t>(0);
     socket_cfg.remote_port_ = socket_item["remote_port"].as<uint16_t>(0);
-    socket_cfg.max_payload_size_ = socket_item["max_payload_size"].as<uint16_t>(0);
-    socket_cfg.max_burst_interval_ms_ = socket_item["max_burst_interval_ms"].as<uint64_t>(0);
+    socket_cfg.max_payload_size_ =
+        socket_item["max_payload_size"].as<uint16_t>(0);
+    socket_cfg.max_burst_interval_ms_ =
+        socket_item["max_burst_interval_ms"].as<uint64_t>(0);
     socket_cfg.min_ipg_ns_ = socket_item["min_ipg_ns"].as<uint32_t>(0);
     socket_cfg.retry_connect_s_ = socket_item["retry_connect_s"].as<int32_t>(1);
 
@@ -962,7 +1022,8 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_socket_config(
         return false;
       }
       if (socket_cfg.local_port_ == 0) {
-        DAQIRI_LOG_ERROR("socket_config.local_port is required for server mode");
+        DAQIRI_LOG_ERROR(
+            "socket_config.local_port is required for server mode");
         return false;
       }
     } else {
@@ -971,11 +1032,12 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_socket_config(
         return false;
       }
       if (socket_cfg.remote_port_ == 0) {
-        DAQIRI_LOG_ERROR("socket_config.remote_port is required for client mode");
+        DAQIRI_LOG_ERROR(
+            "socket_config.remote_port is required for client mode");
         return false;
       }
     }
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     DAQIRI_LOG_ERROR("Error parsing SocketConfig: {}", e.what());
     return false;
   }
@@ -983,16 +1045,17 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_socket_config(
 }
 
 bool YAML::convert<daqiri::NetworkConfig>::parse_roce_config(
-    const YAML::Node& roce_item, daqiri::RoCEConfig& roce_cfg) {
+    const YAML::Node &roce_item, daqiri::RoCEConfig &roce_cfg) {
   try {
     roce_cfg.transport_mode_ = daqiri::GetRDMATransportModeFromString(
         roce_item["transport_mode"].template as<std::string>());
     if (roce_cfg.transport_mode_ == daqiri::RDMATransportMode::INVALID) {
-      DAQIRI_LOG_ERROR("Invalid roce_config.transport_mode '{}'. Valid values: RC, UC, UD",
-                       roce_item["transport_mode"].template as<std::string>());
+      DAQIRI_LOG_ERROR(
+          "Invalid roce_config.transport_mode '{}'. Valid values: RC, UC, UD",
+          roce_item["transport_mode"].template as<std::string>());
       return false;
     }
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     DAQIRI_LOG_ERROR("Error parsing RoCEConfig: {}", e.what());
     return false;
   }
@@ -1007,8 +1070,8 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_roce_config(
  * @param parse_memory_regions True if memory regions should be parsed, false otherwise.
  * @return true if parsing was successful, false otherwise.
  */
-bool parse_common_queue_config(const YAML::Node& q_item,
-                               daqiri::CommonQueueConfig& common,
+bool parse_common_queue_config(const YAML::Node &q_item,
+                               daqiri::CommonQueueConfig &common,
                                bool parse_memory_regions) {
   try {
     common.name_ = q_item["name"].as<std::string>();
@@ -1018,16 +1081,20 @@ bool parse_common_queue_config(const YAML::Node& q_item,
     common.extra_queue_config_ = nullptr;
     if (q_item["memory_regions"].IsDefined()) {
       if (!parse_memory_regions) {
-        DAQIRI_LOG_WARN("Memory regions in queue section not used in RoCE backend for queue: {}",
-          common.name_);
-      }
-      else {
-        const auto& mrs = q_item["memory_regions"];
-        if (mrs.size() > 0) { common.mrs_.reserve(mrs.size()); }
-        for (const auto& mr : mrs) { common.mrs_.push_back(mr.as<std::string>()); }
+        DAQIRI_LOG_WARN("Memory regions in queue section not used in RoCE "
+                        "backend for queue: {}",
+                        common.name_);
+      } else {
+        const auto &mrs = q_item["memory_regions"];
+        if (mrs.size() > 0) {
+          common.mrs_.reserve(mrs.size());
+        }
+        for (const auto &mr : mrs) {
+          common.mrs_.push_back(mr.as<std::string>());
+        }
       }
     }
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     DAQIRI_LOG_ERROR("Error parsing CommonQueueConfig: {}", e.what());
     return false;
   }
@@ -1046,9 +1113,11 @@ bool parse_common_queue_config(const YAML::Node& q_item,
  * @return true if parsing was successful, false otherwise.
  */
 bool YAML::convert<daqiri::NetworkConfig>::parse_rx_queue_common_config(
-    const YAML::Node& q_item, daqiri::RxQueueConfig& q,
+    const YAML::Node &q_item, daqiri::RxQueueConfig &q,
     bool parse_memory_regions) {
-  if (!parse_common_queue_config(q_item, q.common_, parse_memory_regions)) { return false; }
+  if (!parse_common_queue_config(q_item, q.common_, parse_memory_regions)) {
+    return false;
+  }
   return true;
 }
 
@@ -1062,17 +1131,19 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_rx_queue_common_config(
  * @return true if parsing was successful, false otherwise.
  */
 bool YAML::convert<daqiri::NetworkConfig>::parse_rx_queue_config(
-    const YAML::Node& q_item, const daqiri::ManagerType& manager_type,
-    daqiri::RxQueueConfig& q, bool parse_memory_regions) {
+    const YAML::Node &q_item, const daqiri::ManagerType &manager_type,
+    daqiri::RxQueueConfig &q, bool parse_memory_regions) {
   try {
     daqiri::ManagerType _manager_type = manager_type;
 
-    if (!parse_rx_queue_common_config(q_item, q, parse_memory_regions)) { return false; }
+    if (!parse_rx_queue_common_config(q_item, q, parse_memory_regions)) {
+      return false;
+    }
 
     if (manager_type == daqiri::ManagerType::DEFAULT) {
       _manager_type = daqiri::ManagerFactory::get_default_manager_type();
     }
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     DAQIRI_LOG_ERROR("Error parsing RxQueueConfig: {}", e.what());
     return false;
   }
@@ -1087,18 +1158,20 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_rx_queue_config(
  * @return true if parsing was successful, false otherwise.
  */
 bool YAML::convert<daqiri::NetworkConfig>::parse_tx_queue_common_config(
-    const YAML::Node& q_item, daqiri::TxQueueConfig& q,
+    const YAML::Node &q_item, daqiri::TxQueueConfig &q,
     bool parse_memory_regions) {
-  if (!parse_common_queue_config(q_item, q.common_, parse_memory_regions)) { return false; }
+  if (!parse_common_queue_config(q_item, q.common_, parse_memory_regions)) {
+    return false;
+  }
   try {
     if (q_item["offloads"].IsDefined()) {
-      const auto& offload = q_item["offloads"];
+      const auto &offload = q_item["offloads"];
       q.common_.offloads_.reserve(offload.size());
-      for (const auto& off : offload) {
+      for (const auto &off : offload) {
         q.common_.offloads_.push_back(off.as<std::string>());
       }
     }
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     DAQIRI_LOG_ERROR("Error parsing TxQueueConfig: {}", e.what());
     return false;
   }
@@ -1114,8 +1187,8 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_tx_queue_common_config(
  * @return true if parsing was successful, false otherwise.
  */
 bool YAML::convert<daqiri::NetworkConfig>::parse_tx_queue_config(
-    const YAML::Node& q_item, const daqiri::ManagerType& manager_type,
-    daqiri::TxQueueConfig& q, bool parse_memory_regions) {
+    const YAML::Node &q_item, const daqiri::ManagerType &manager_type,
+    daqiri::TxQueueConfig &q, bool parse_memory_regions) {
   try {
     daqiri::ManagerType _manager_type = manager_type;
 
@@ -1123,9 +1196,11 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_tx_queue_config(
       _manager_type = daqiri::ManagerFactory::get_default_manager_type();
     }
 
-    if (!parse_tx_queue_common_config(q_item, q, parse_memory_regions)) { return false; }
+    if (!parse_tx_queue_common_config(q_item, q, parse_memory_regions)) {
+      return false;
+    }
 
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     DAQIRI_LOG_ERROR("Error parsing TxQueueConfig: {}", e.what());
     return false;
   }

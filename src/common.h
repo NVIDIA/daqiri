@@ -16,22 +16,22 @@
  */
 
 #pragma once
-#include <vector>
-#include <string>
-#include <unordered_set>
+#include "src/logging.hpp"
+#include "src/types.h"
 #include <memory>
 #include <optional>
-#include <tuple>
 #include <stdint.h>
+#include <string>
+#include <tuple>
+#include <unordered_set>
+#include <vector>
 #include <yaml-cpp/yaml.h>
-#include "src/types.h"
-#include "src/logging.hpp"
 
 namespace daqiri {
 
 // this part is purely optional, just a helper for the user
-BurstParams* create_burst_params();
-BurstParams* create_tx_burst_params();
+BurstParams *create_burst_params();
+BurstParams *create_tx_burst_params();
 
 enum class ErrorGlobalStats {
   OUT_OF_RX_BUFFERS = 0,
@@ -44,7 +44,7 @@ enum class ErrorGlobalStats {
 static constexpr uint32_t DEFAULT_TX_META_BUFFERS = 1UL << 8;
 static constexpr uint32_t DEFAULT_RX_META_BUFFERS = 1UL << 8;
 namespace detail {
-inline Direction DirectionStringToType(const std::string& dir) {
+inline Direction DirectionStringToType(const std::string &dir) {
   if (dir == "rx") {
     return Direction::RX;
   } else if (dir == "tx") {
@@ -53,7 +53,7 @@ inline Direction DirectionStringToType(const std::string& dir) {
 
   return Direction::TX_RX;
 }
-};  // namespace detail
+}; // namespace detail
 
 /**
  * @brief Determine which directions are enabled
@@ -61,8 +61,10 @@ inline Direction DirectionStringToType(const std::string& dir) {
  * @param dir Direction from config. Either "rx", "tx", or "tx/rx"
  * @return int Number of directions enabled
  */
-inline int EnabledDirections(const std::string& dir) {
-  if (dir == "rx" || dir == "tx") { return 1; }
+inline int EnabledDirections(const std::string &dir) {
+  if (dir == "rx" || dir == "tx") {
+    return 1;
+  }
 
   return 0;
 }
@@ -76,14 +78,17 @@ inline int EnabledDirections(const std::string& dir) {
  *    INVALID_CONFIG: Invalid configuration
  *    INTERNAL_ERROR: Internal error
  */
-Status daqiri_init(NetworkConfig& config);
-Status daqiri_init(const std::string& yaml_string_or_path);
-Status daqiri_init_from_yaml_string(const std::string& yaml_string);
-Status daqiri_init_from_yaml_file(const std::string& yaml_path);
+Status daqiri_init(NetworkConfig &config);
+Status daqiri_init(const std::string &yaml_string_or_path);
+Status daqiri_init_from_yaml_string(const std::string &yaml_string);
+Status daqiri_init_from_yaml_file(const std::string &yaml_path);
 
-Status parse_network_config(const std::string& yaml_string_or_path, NetworkConfig& config);
-Status parse_network_config_from_yaml_string(const std::string& yaml_string, NetworkConfig& config);
-Status parse_network_config_from_yaml_file(const std::string& yaml_path, NetworkConfig& config);
+Status parse_network_config(const std::string &yaml_string_or_path,
+                            NetworkConfig &config);
+Status parse_network_config_from_yaml_string(const std::string &yaml_string,
+                                             NetworkConfig &config);
+Status parse_network_config_from_yaml_file(const std::string &yaml_path,
+                                           NetworkConfig &config);
 
 /**
  * @brief Returns a manager type
@@ -98,8 +103,7 @@ ManagerType get_manager_type();
  * @param config YML Configuration structure (e.g. NetworkConfig)
  * @return Manager type
  */
-template <typename Config>
-ManagerType get_manager_type(const Config& config);
+template <typename Config> ManagerType get_manager_type(const Config &config);
 
 /**
  * @brief Returns a raw packet pointer from a pointer in BurstParams
@@ -113,7 +117,7 @@ ManagerType get_manager_type(const Config& config);
  * @param idx Index of packet
  * @return Pointer to packet data
  */
-void* get_segment_packet_ptr(BurstParams* burst, int seg, int idx);
+void *get_segment_packet_ptr(BurstParams *burst, int seg, int idx);
 
 /**
  * @brief Returns a raw packet pointer from a pointer in BurstParams
@@ -126,7 +130,7 @@ void* get_segment_packet_ptr(BurstParams* burst, int seg, int idx);
  * @param idx Index of packet
  * @return Pointer to packet data
  */
-void* get_packet_ptr(BurstParams* burst, int idx);
+void *get_packet_ptr(BurstParams *burst, int idx);
 
 /**
  * @brief Get packet length of a segment of a packet
@@ -136,7 +140,7 @@ void* get_packet_ptr(BurstParams* burst, int idx);
  * @param idx Index of packet
  * @return uint16_t Length of packet
  */
-uint32_t get_segment_packet_length(BurstParams* burst, int seg, int idx);
+uint32_t get_segment_packet_length(BurstParams *burst, int seg, int idx);
 
 /**
  * @brief Get packet length of an entire packet
@@ -145,7 +149,7 @@ uint32_t get_segment_packet_length(BurstParams* burst, int seg, int idx);
  * @param idx Index of packet
  * @return uint32_t Length of packet
  */
-uint32_t get_packet_length(BurstParams* burst, int idx);
+uint32_t get_packet_length(BurstParams *burst, int idx);
 
 /**
  * @brief Get flow ID of a packet
@@ -157,7 +161,7 @@ uint32_t get_packet_length(BurstParams* burst, int idx);
  * @param idx Index of packet
  * @return uint16_t Flow ID
  */
-uint16_t get_packet_flow_id(BurstParams* burst, int idx);
+uint16_t get_packet_flow_id(BurstParams *burst, int idx);
 
 /**
  * @brief Populate a TX packet burst buffer
@@ -172,7 +176,7 @@ uint16_t get_packet_flow_id(BurstParams* burst, int idx);
  *    NO_FREE_BURST_BUFFERS: No burst buffers to allocate
  *    NO_FREE_CPU_PACKET_BUFFERS: Not enough CPU packet buffers available
  */
-Status get_tx_packet_burst(BurstParams* burst);
+Status get_tx_packet_burst(BurstParams *burst);
 
 /**
  * @brief Set IPv4 header in packet
@@ -183,7 +187,7 @@ Status get_tx_packet_burst(BurstParams* burst);
  * @return Status indicating status. Valid values are:
  *    SUCCESS: Packet populated successfully
  */
-Status set_eth_header(BurstParams* burst, int idx, char* dst_addr);
+Status set_eth_header(BurstParams *burst, int idx, char *dst_addr);
 
 /**
  * @brief Set IPv4 header in packet
@@ -197,7 +201,7 @@ Status set_eth_header(BurstParams* burst, int idx, char* dst_addr);
  * @return Status indicating status. Valid values are:
  *    SUCCESS: Packet populated successfully
  */
-Status set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint8_t proto,
+Status set_ipv4_header(BurstParams *burst, int idx, int ip_len, uint8_t proto,
                        unsigned int src_host, unsigned int dst_host);
 
 /**
@@ -211,8 +215,8 @@ Status set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint8_t proto,
  * @return Status indicating status. Valid values are:
  *    SUCCESS: Packet populated successfully
  */
-Status set_udp_header(BurstParams* burst, int idx, int udp_len, uint16_t src_port,
-                      uint16_t dst_port);
+Status set_udp_header(BurstParams *burst, int idx, int udp_len,
+                      uint16_t src_port, uint16_t dst_port);
 
 /**
  * @brief Set UDP payload in packet
@@ -224,7 +228,7 @@ Status set_udp_header(BurstParams* burst, int idx, int udp_len, uint16_t src_por
  * @return Status indicating status. Valid values are:
  *    SUCCESS: Packet populated successfully
  */
-Status set_udp_payload(BurstParams* burst, int idx, void* data, int len);
+Status set_udp_payload(BurstParams *burst, int idx, void *data, int len);
 
 /**
  * @brief Test if a TX burst is available
@@ -238,7 +242,7 @@ Status set_udp_payload(BurstParams* burst, int idx, void* data, int len);
  * @return true Burst is available
  * @return false Burst is not available
  */
-bool is_tx_burst_available(BurstParams* burst);
+bool is_tx_burst_available(BurstParams *burst);
 
 /**
  * @brief Free all packets and burst from one segment
@@ -248,7 +252,7 @@ bool is_tx_burst_available(BurstParams* burst);
  *
  * @param burst Burst to free
  */
-void free_segment_packets_and_burst(BurstParams* burst, int seg);
+void free_segment_packets_and_burst(BurstParams *burst, int seg);
 
 /**
  * @brief Free all packets and an RX burst
@@ -257,7 +261,7 @@ void free_segment_packets_and_burst(BurstParams* burst, int seg);
  *
  * @param burst Burst structure containing packet lists
  */
-void free_all_packets_and_burst_rx(BurstParams* burst);
+void free_all_packets_and_burst_rx(BurstParams *burst);
 
 /**
  * @brief Free all packets and a TX burst
@@ -266,7 +270,7 @@ void free_all_packets_and_burst_rx(BurstParams* burst);
  *
  * @param burst Burst structure containing packet lists
  */
-void free_all_packets_and_burst_tx(BurstParams* burst);
+void free_all_packets_and_burst_tx(BurstParams *burst);
 
 /**
  * @brief Set packet lengths in metadata
@@ -279,7 +283,8 @@ void free_all_packets_and_burst_tx(BurstParams* burst);
  * @return Status indicating status. Valid values are:
  *    SUCCESS: Packet populated successfully
  */
-Status set_packet_lengths(BurstParams* burst, int idx, const std::initializer_list<int>& lens);
+Status set_packet_lengths(BurstParams *burst, int idx,
+                          const std::initializer_list<int> &lens);
 
 /**
  * @brief Set the same packet lengths for every packet in a burst
@@ -292,7 +297,8 @@ Status set_packet_lengths(BurstParams* burst, int idx, const std::initializer_li
  * @return Status indicating status. Valid values are:
  *    SUCCESS: Packet lengths populated successfully
  */
-Status set_all_packet_lengths(BurstParams* burst, const std::initializer_list<int>& lens);
+Status set_all_packet_lengths(BurstParams *burst,
+                              const std::initializer_list<int> &lens);
 
 /**
  * @brief Set packet TX time
@@ -308,9 +314,9 @@ Status set_all_packet_lengths(BurstParams* burst, const std::initializer_list<in
  * @return Status indicating status. Valid values are:
  *    SUCCESS: Time set successfully
  */
-Status set_packet_tx_time(BurstParams* burst, int idx, uint64_t time);
+Status set_packet_tx_time(BurstParams *burst, int idx, uint64_t time);
 
-uint64_t get_burst_tot_byte(BurstParams* burst);
+uint64_t get_burst_tot_byte(BurstParams *burst);
 
 /**
  * @brief Frees all segments of a single packet
@@ -318,7 +324,7 @@ uint64_t get_burst_tot_byte(BurstParams* burst);
  * @param burst Burst structure containing packet lists
  * @param idx Index of packet
  */
-void free_packet(BurstParams* burst, int idx);
+void free_packet(BurstParams *burst, int idx);
 
 /**
  * @brief Frees a single segment from a single packet
@@ -327,7 +333,7 @@ void free_packet(BurstParams* burst, int idx);
  * @param seg Segment of packet in scatter list
  * @param idx Index of packet
  */
-void free_packet_segment(BurstParams* burst, int seg, int idx);
+void free_packet_segment(BurstParams *burst, int seg, int idx);
 
 /**
  * @brief Free all packets for a single segment in a burst
@@ -336,7 +342,7 @@ void free_packet_segment(BurstParams* burst, int seg, int idx);
  *
  * @param burst Burst structure containing packet lists
  */
-void free_all_segment_packets(BurstParams* burst, int seg);
+void free_all_segment_packets(BurstParams *burst, int seg);
 
 /**
  * @brief Free a receive burst
@@ -346,7 +352,7 @@ void free_all_segment_packets(BurstParams* burst, int seg);
  *
  * @param burst
  */
-void free_rx_burst(BurstParams* burst);
+void free_rx_burst(BurstParams *burst);
 
 /**
  * @brief Free a transmit burst buffer
@@ -356,7 +362,7 @@ void free_rx_burst(BurstParams* burst);
  *
  * @param burst Burst structure to free
  */
-void free_tx_burst(BurstParams* burst);
+void free_tx_burst(BurstParams *burst);
 
 /**
  * @brief Free a receive TX meta buffer
@@ -366,7 +372,7 @@ void free_tx_burst(BurstParams* burst);
  *
  * @param burst Burst structure to free
  */
-void free_tx_metadata(BurstParams* burst);
+void free_tx_metadata(BurstParams *burst);
 
 /**
  * @brief Free a receive RX meta buffer
@@ -376,21 +382,21 @@ void free_tx_metadata(BurstParams* burst);
  *
  * @param burst Burst structure to free
  */
-void free_rx_metadata(BurstParams* burst);
+void free_rx_metadata(BurstParams *burst);
 
 /**
  * @brief Get the number of packets in a burst
  *
  * @param burst Burst structure with packets
  */
-int64_t get_num_packets(BurstParams* burst);
+int64_t get_num_packets(BurstParams *burst);
 
 /**
  * @brief Get the queue ID of a burst
  *
  * @param burst Burst structure with packets
  */
-int64_t get_q_id(BurstParams* burst);
+int64_t get_q_id(BurstParams *burst);
 
 /**
  * @brief Get mac address of an interface
@@ -400,7 +406,7 @@ int64_t get_q_id(BurstParams* burst);
  *
  * @returns Status::SUCCESS on success
  */
-Status get_mac_addr(int port, char* mac);
+Status get_mac_addr(int port, char *mac);
 
 /**
  * @brief Drop all traffic on a port
@@ -433,7 +439,7 @@ Status allow_all_traffic(int port);
  *
  * @returns Port number or -1 for not found
  */
-int get_port_id(const std::string& key);
+int get_port_id(const std::string &key);
 
 /**
  * @brief Set the number of packets in a burst
@@ -441,7 +447,7 @@ int get_port_id(const std::string& key);
  * @param burst Burst structure
  * @param num Number of packets
  */
-void set_num_packets(BurstParams* burst, int64_t num);
+void set_num_packets(BurstParams *burst, int64_t num);
 
 /**
  * @brief Send a TX burst
@@ -450,7 +456,7 @@ void set_num_packets(BurstParams* burst, int64_t num);
  * @return Status indicating status. Valid values are:
  *    SUCCESS: Burst sent successfully
  */
-Status send_tx_burst(BurstParams* burst);
+Status send_tx_burst(BurstParams *burst);
 
 /**
  * @brief Get a RX burst
@@ -462,7 +468,7 @@ Status send_tx_burst(BurstParams* burst);
  *    SUCCESS: Burst received successfully
  *    NULL_PTR: No bursts ready to receive
  */
-Status get_rx_burst(BurstParams** burst, int port, int q);
+Status get_rx_burst(BurstParams **burst, int port, int q);
 
 /**
  * @brief Get a RX burst from any queue on a specific port
@@ -473,7 +479,7 @@ Status get_rx_burst(BurstParams** burst, int port, int q);
  *    SUCCESS: Burst received successfully
  *    NULL_PTR: No bursts ready to receive on any queue for this port
  */
-Status get_rx_burst(BurstParams** burst, int port);
+Status get_rx_burst(BurstParams **burst, int port);
 
 /**
  * @brief Get a RX burst from any queue on any port
@@ -483,7 +489,7 @@ Status get_rx_burst(BurstParams** burst, int port);
  *    SUCCESS: Burst received successfully
  *    NULL_PTR: No bursts ready to receive on any queue on any port
  */
-Status get_rx_burst(BurstParams** burst);
+Status get_rx_burst(BurstParams **burst);
 
 /**
  * @brief Get a RX burst
@@ -492,7 +498,7 @@ Status get_rx_burst(BurstParams** burst);
  * @param conn_id Connection ID representing a unique ID for a client/server connection
  * @param server True if server, false if client. Used to determine which ring to dequeue from.
  */
-Status get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server);
+Status get_rx_burst(BurstParams **burst, uintptr_t conn_id, bool server);
 
 /**
  * @brief Set CUDA stream for a configured GPU reorder plan
@@ -502,8 +508,8 @@ Status get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server);
  * @param stream CUDA stream used for this plan. CPU reorder plans do not require a stream.
  * @return Status indicating success or failure
  */
-Status set_reorder_cuda_stream(const std::string& interface_name,
-                               const std::string& reorder_name,
+Status set_reorder_cuda_stream(const std::string &interface_name,
+                               const std::string &reorder_name,
                                cudaStream_t stream);
 
 /**
@@ -513,7 +519,7 @@ Status set_reorder_cuda_stream(const std::string& interface_name,
  * @param info Output reorder metadata. For GPU reorder, this is valid after burst->event completes.
  * @return Status indicating success or failure
  */
-Status get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info);
+Status get_reorder_burst_info(BurstParams *burst, ReorderBurstInfo *info);
 
 /**
  * @brief Set the header fields in a burst
@@ -524,7 +530,8 @@ Status get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info);
  * @param num Number of packets
  * @param segs Number of segments
  */
-void set_header(BurstParams* burst, uint16_t port, uint16_t q, int64_t num, int segs);
+void set_header(BurstParams *burst, uint16_t port, uint16_t q, int64_t num,
+                int segs);
 
 /**
  * @brief First MAC address string to char buffer
@@ -532,7 +539,7 @@ void set_header(BurstParams* burst, uint16_t port, uint16_t q, int64_t num, int 
  * @param dst Destination buffer
  * @param addr MAC address as string in format xx:xx:xx:xx:xx:xx
  */
-void format_eth_addr(char* dst, std::string addr);
+void format_eth_addr(char *dst, std::string addr);
 
 /**
  * @brief Shut down the daqiri and do any cleanup necessary. Freeing memory is done
@@ -568,31 +575,35 @@ uint16_t get_num_rx_queues(int port_id);
 void flush_port_queue(int port, int queue);
 
 // Generic socket functions
-Status socket_connect_to_server(const std::string& server_addr, uint16_t server_port,
-                                uintptr_t* conn_id);
-Status socket_connect_to_server(const std::string& server_addr, uint16_t server_port,
-                                const std::string& src_addr, uintptr_t* conn_id);
-Status socket_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue);
-Status socket_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
-                                 uintptr_t* conn_id);
+Status socket_connect_to_server(const std::string &server_addr,
+                                uint16_t server_port, uintptr_t *conn_id);
+Status socket_connect_to_server(const std::string &server_addr,
+                                uint16_t server_port,
+                                const std::string &src_addr,
+                                uintptr_t *conn_id);
+Status socket_get_port_queue(uintptr_t conn_id, uint16_t *port,
+                             uint16_t *queue);
+Status socket_get_server_conn_id(const std::string &server_addr,
+                                 uint16_t server_port, uintptr_t *conn_id);
 
 // RDMA functions
-Status rdma_connect_to_server(const std::string& server_addr, uint16_t server_port,
-                              uintptr_t* conn_id);
-Status rdma_connect_to_server(const std::string& server_addr, uint16_t server_port,
-                              const std::string& src_addr, uintptr_t* conn_id);
-Status rdma_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue);
-Status rdma_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
-                               uintptr_t* conn_id);
-Status rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id, bool is_server,
-                       int num_pkts, uint64_t wr_id, const std::string& local_mr_name);
-RDMAOpCode rdma_get_opcode(BurstParams* burst);
+Status rdma_connect_to_server(const std::string &server_addr,
+                              uint16_t server_port, uintptr_t *conn_id);
+Status rdma_connect_to_server(const std::string &server_addr,
+                              uint16_t server_port, const std::string &src_addr,
+                              uintptr_t *conn_id);
+Status rdma_get_port_queue(uintptr_t conn_id, uint16_t *port, uint16_t *queue);
+Status rdma_get_server_conn_id(const std::string &server_addr,
+                               uint16_t server_port, uintptr_t *conn_id);
+Status rdma_set_header(BurstParams *burst, RDMAOpCode op_code,
+                       uintptr_t conn_id, bool is_server, int num_pkts,
+                       uint64_t wr_id, const std::string &local_mr_name);
+RDMAOpCode rdma_get_opcode(BurstParams *burst);
 
-};  // namespace daqiri
+}; // namespace daqiri
 
-template <>
-struct YAML::convert<daqiri::NetworkConfig> {
-  static Node encode(const daqiri::NetworkConfig& input_spec) {
+template <> struct YAML::convert<daqiri::NetworkConfig> {
+  static Node encode(const daqiri::NetworkConfig &input_spec) {
     Node node;
     // node["type"] = inputTypeToString(input_spec.type_);
     // node["name"] = input_spec.tensor_name_;
@@ -613,8 +624,8 @@ struct YAML::convert<daqiri::NetworkConfig> {
    * @param flow The FlowConfig object to populate.
    * @return true if parsing was successful, false otherwise.
    */
-  static bool parse_flow_config(const YAML::Node& flow_item,
-                                daqiri::FlowConfig& flow);
+  static bool parse_flow_config(const YAML::Node &flow_item,
+                                daqiri::FlowConfig &flow);
 
   /**
    * @brief Parse flex item configuration from a YAML node.
@@ -623,8 +634,8 @@ struct YAML::convert<daqiri::NetworkConfig> {
    * @param flex_item_config The FlexItemConfig object to populate.
    * @return true if parsing was successful, false otherwise.
    */
-  static bool parse_flex_item_config(const YAML::Node& flex_item,
-                                     daqiri::FlexItemConfig& flex_item_config);
+  static bool parse_flex_item_config(const YAML::Node &flex_item,
+                                     daqiri::FlexItemConfig &flex_item_config);
 
   /**
    * @brief Parse reorder configuration from a YAML node.
@@ -633,8 +644,8 @@ struct YAML::convert<daqiri::NetworkConfig> {
    * @param reorder_config The ReorderConfig object to populate.
    * @return true if parsing was successful, false otherwise.
    */
-  static bool parse_reorder_config(const YAML::Node& reorder_item,
-                                   daqiri::ReorderConfig& reorder_config);
+  static bool parse_reorder_config(const YAML::Node &reorder_item,
+                                   daqiri::ReorderConfig &reorder_config);
 
   /**
    * @brief Parse memory region configuration from a YAML node.
@@ -643,8 +654,9 @@ struct YAML::convert<daqiri::NetworkConfig> {
    * @param tmr The MemoryRegionConfig object to populate.
    * @return true if parsing was successful, false otherwise.
    */
-  static bool parse_memory_region_config(
-      const YAML::Node& mr, daqiri::MemoryRegionConfig& memory_region);
+  static bool
+  parse_memory_region_config(const YAML::Node &mr,
+                             daqiri::MemoryRegionConfig &memory_region);
 
   /**
    * @brief Parse socket endpoint configuration from a YAML node.
@@ -653,8 +665,8 @@ struct YAML::convert<daqiri::NetworkConfig> {
    * @param socket_cfg The SocketConfig object to populate.
    * @return true if parsing was successful, false otherwise.
    */
-  static bool parse_socket_config(
-      const YAML::Node& socket_item, daqiri::SocketConfig& socket_cfg);
+  static bool parse_socket_config(const YAML::Node &socket_item,
+                                  daqiri::SocketConfig &socket_cfg);
 
   /**
    * @brief Parse RoCE transport configuration from a YAML node.
@@ -663,8 +675,8 @@ struct YAML::convert<daqiri::NetworkConfig> {
    * @param roce_cfg The RoCEConfig object to populate.
    * @return true if parsing was successful, false otherwise.
    */
-  static bool parse_roce_config(
-      const YAML::Node& roce_item, daqiri::RoCEConfig& roce_cfg);
+  static bool parse_roce_config(const YAML::Node &roce_item,
+                                daqiri::RoCEConfig &roce_cfg);
 
   /**
    * @brief Parse common RX queue configuration from a YAML node.
@@ -674,9 +686,9 @@ struct YAML::convert<daqiri::NetworkConfig> {
    * @param parse_memory_regions True if memory regions should be parsed, false otherwise.
    * @return true if parsing was successful, false otherwise.
    */
-  static bool parse_rx_queue_config(const YAML::Node& q_item,
-                                    const daqiri::ManagerType& manager_type,
-                                    daqiri::RxQueueConfig& rx_queue_config,
+  static bool parse_rx_queue_config(const YAML::Node &q_item,
+                                    const daqiri::ManagerType &manager_type,
+                                    daqiri::RxQueueConfig &rx_queue_config,
                                     bool parse_memory_regions = true);
 
   /**
@@ -688,9 +700,10 @@ struct YAML::convert<daqiri::NetworkConfig> {
    * @param parse_memory_regions True if memory regions should be parsed, false otherwise.
    * @return true if parsing was successful, false otherwise.
    */
-  static bool parse_rx_queue_common_config(
-      const YAML::Node& q_item, daqiri::RxQueueConfig& rx_queue_config,
-      bool parse_memory_regions);
+  static bool
+  parse_rx_queue_common_config(const YAML::Node &q_item,
+                               daqiri::RxQueueConfig &rx_queue_config,
+                               bool parse_memory_regions);
 
   /**
    * @brief Parse common TX queue configuration from a YAML node.
@@ -700,9 +713,9 @@ struct YAML::convert<daqiri::NetworkConfig> {
    * @param parse_memory_regions True if memory regions should be parsed, false otherwise.
    * @return true if parsing was successful, false otherwise.
    */
-  static bool parse_tx_queue_config(const YAML::Node& q_item,
-                                    const daqiri::ManagerType& manager_type,
-                                    daqiri::TxQueueConfig& tx_queue_config,
+  static bool parse_tx_queue_config(const YAML::Node &q_item,
+                                    const daqiri::ManagerType &manager_type,
+                                    daqiri::TxQueueConfig &tx_queue_config,
                                     bool parse_memory_regions);
 
   /**
@@ -714,9 +727,10 @@ struct YAML::convert<daqiri::NetworkConfig> {
    * @param parse_memory_regions True if memory regions should be parsed, false otherwise.
    * @return true if parsing was successful, false otherwise.
    */
-  static bool parse_tx_queue_common_config(
-      const YAML::Node& q_item, daqiri::TxQueueConfig& tx_queue_config,
-      bool parse_memory_regions);
+  static bool
+  parse_tx_queue_common_config(const YAML::Node &q_item,
+                               daqiri::TxQueueConfig &tx_queue_config,
+                               bool parse_memory_regions);
 
   /**
    * @brief Decode the YAML node into an NetworkConfig object.
@@ -729,7 +743,7 @@ struct YAML::convert<daqiri::NetworkConfig> {
    * @param input_spec The NetworkConfig object to populate.
    * @return true if decoding was successful, false otherwise.
    */
-  static bool decode(const Node& node, daqiri::NetworkConfig& input_spec) {
+  static bool decode(const Node &node, daqiri::NetworkConfig &input_spec) {
     if (!node.IsMap()) {
       DAQIRI_LOG_ERROR("InputSpec: expected a map");
       return false;
@@ -748,19 +762,21 @@ struct YAML::convert<daqiri::NetworkConfig> {
       input_spec.common_.master_core_ = node["master_core"].as<int32_t>();
 
       if (!node["stream_type"].IsDefined()) {
-        DAQIRI_LOG_ERROR("Missing required field 'stream_type' (valid: 'raw' or 'socket')");
+        DAQIRI_LOG_ERROR(
+            "Missing required field 'stream_type' (valid: 'raw' or 'socket')");
         return false;
       }
 
-      input_spec.common_.stream_type =
-          daqiri::stream_type_from_string(node["stream_type"].as<std::string>());
+      input_spec.common_.stream_type = daqiri::stream_type_from_string(
+          node["stream_type"].as<std::string>());
       if (input_spec.common_.stream_type == daqiri::StreamType::INVALID) {
         DAQIRI_LOG_ERROR("Invalid stream_type '{}'. Valid values: raw, socket",
                          node["stream_type"].as<std::string>());
         return false;
       }
 
-      const bool socket_used = input_spec.common_.stream_type == daqiri::StreamType::SOCKET;
+      const bool socket_used =
+          input_spec.common_.stream_type == daqiri::StreamType::SOCKET;
       if (socket_used) {
         if (!node["protocol"].IsDefined()) {
           DAQIRI_LOG_ERROR(
@@ -769,11 +785,12 @@ struct YAML::convert<daqiri::NetworkConfig> {
           return false;
         }
 
-        input_spec.common_.protocol =
-            daqiri::socket_protocol_from_string(node["protocol"].as<std::string>());
+        input_spec.common_.protocol = daqiri::socket_protocol_from_string(
+            node["protocol"].as<std::string>());
         if (input_spec.common_.protocol == daqiri::SocketProtocol::INVALID) {
-          DAQIRI_LOG_ERROR("Invalid protocol '{}'. Valid values: tcp, udp, roce",
-                           node["protocol"].as<std::string>());
+          DAQIRI_LOG_ERROR(
+              "Invalid protocol '{}'. Valid values: tcp, udp, roce",
+              node["protocol"].as<std::string>());
           return false;
         }
       } else {
@@ -794,43 +811,47 @@ struct YAML::convert<daqiri::NetworkConfig> {
         if (lbstr == "sw") {
           input_spec.common_.loopback_ = daqiri::LoopbackType::LOOPBACK_TYPE_SW;
         } else if (!lbstr.empty()) {
-          DAQIRI_LOG_ERROR("Invalid loopback type: {}. Use 'sw' or empty string ''", lbstr);
+          DAQIRI_LOG_ERROR(
+              "Invalid loopback type: {}. Use 'sw' or empty string ''", lbstr);
           return false;
         }
-      } catch (const std::exception& e) {}
+      } catch (const std::exception &e) {
+      }
 
-      const bool roce_used = socket_used &&
-                             input_spec.common_.protocol == daqiri::SocketProtocol::ROCE;
+      const bool roce_used = socket_used && input_spec.common_.protocol ==
+                                                daqiri::SocketProtocol::ROCE;
 
       try {
         input_spec.debug_ = node["debug"].as<bool>(false);
-      } catch (const std::exception& e) { input_spec.debug_ = false; }
+      } catch (const std::exception &e) {
+        input_spec.debug_ = false;
+      }
 
       try {
-        input_spec.log_level_ = daqiri::LogLevel::from_string(
-            node["log_level"].as<std::string>(daqiri::LogLevel::to_string(
-                daqiri::LogLevel::WARN)));
-      } catch (const std::exception& e) {
+        input_spec.log_level_ =
+            daqiri::LogLevel::from_string(node["log_level"].as<std::string>(
+                daqiri::LogLevel::to_string(daqiri::LogLevel::WARN)));
+      } catch (const std::exception &e) {
         input_spec.log_level_ = daqiri::LogLevel::WARN;
       }
 
       try {
-        input_spec.tx_meta_buffers_ =
-          node["tx_meta_buffers"].as<uint32_t>(daqiri::DEFAULT_TX_META_BUFFERS);
-      } catch (const std::exception& e) { input_spec.tx_meta_buffers_ =
-        daqiri::DEFAULT_TX_META_BUFFERS;
+        input_spec.tx_meta_buffers_ = node["tx_meta_buffers"].as<uint32_t>(
+            daqiri::DEFAULT_TX_META_BUFFERS);
+      } catch (const std::exception &e) {
+        input_spec.tx_meta_buffers_ = daqiri::DEFAULT_TX_META_BUFFERS;
       }
 
       try {
-        input_spec.rx_meta_buffers_ =
-          node["rx_meta_buffers"].as<uint32_t>(daqiri::DEFAULT_RX_META_BUFFERS);
-      } catch (const std::exception& e) {
+        input_spec.rx_meta_buffers_ = node["rx_meta_buffers"].as<uint32_t>(
+            daqiri::DEFAULT_RX_META_BUFFERS);
+      } catch (const std::exception &e) {
         input_spec.rx_meta_buffers_ = daqiri::DEFAULT_RX_META_BUFFERS;
       }
 
       try {
-        const auto& mrs = node["memory_regions"];
-        for (const auto& mr : mrs) {
+        const auto &mrs = node["memory_regions"];
+        for (const auto &mr : mrs) {
           daqiri::MemoryRegionConfig tmr;
           if (!parse_memory_region_config(mr, tmr)) {
             DAQIRI_LOG_ERROR("Failed to parse memory region config");
@@ -842,96 +863,108 @@ struct YAML::convert<daqiri::NetworkConfig> {
           }
           input_spec.mrs_[tmr.name_] = tmr;
         }
-      } catch (const std::exception& e) {
+      } catch (const std::exception &e) {
         DAQIRI_LOG_ERROR("Must define at least one memory type");
         return false;
       }
 
       try {
-        const auto& intfs = node["interfaces"];
-        for (const auto& intf : intfs) {
+        const auto &intfs = node["interfaces"];
+        for (const auto &intf : intfs) {
           daqiri::InterfaceConfig ifcfg;
 
           ifcfg.name_ = intf["name"].as<std::string>();
           ifcfg.address_ = intf["address"].as<std::string>();
 
           if (intf["rdma_config"].IsDefined()) {
-            DAQIRI_LOG_ERROR(
-                "Legacy 'rdma_config' is no longer supported. Use "
-                "'socket_config' and 'roce_config' instead.");
+            DAQIRI_LOG_ERROR("Legacy 'rdma_config' is no longer supported. Use "
+                             "'socket_config' and 'roce_config' instead.");
             return false;
           }
 
           if (socket_used) {
             if (!intf["socket_config"].IsDefined()) {
-              DAQIRI_LOG_ERROR("Missing 'socket_config' for interface '{}'", ifcfg.name_);
+              DAQIRI_LOG_ERROR("Missing 'socket_config' for interface '{}'",
+                               ifcfg.name_);
               return false;
             }
             if (!parse_socket_config(intf["socket_config"], ifcfg.socket_)) {
-              DAQIRI_LOG_ERROR("Failed to parse 'socket_config' for interface '{}'", ifcfg.name_);
+              DAQIRI_LOG_ERROR(
+                  "Failed to parse 'socket_config' for interface '{}'",
+                  ifcfg.name_);
               return false;
             }
 
             if (roce_used) {
               if (!intf["roce_config"].IsDefined()) {
-                DAQIRI_LOG_ERROR(
-                    "Missing 'roce_config' for interface '{}' with protocol roce", ifcfg.name_);
+                DAQIRI_LOG_ERROR("Missing 'roce_config' for interface '{}' "
+                                 "with protocol roce",
+                                 ifcfg.name_);
                 return false;
               }
 
               if (!parse_roce_config(intf["roce_config"], ifcfg.roce_)) {
-                DAQIRI_LOG_ERROR("Failed to parse 'roce_config' for interface '{}'", ifcfg.name_);
+                DAQIRI_LOG_ERROR(
+                    "Failed to parse 'roce_config' for interface '{}'",
+                    ifcfg.name_);
                 return false;
               }
 
-              ifcfg.rdma_.mode_ = ifcfg.socket_.mode_ == daqiri::SocketMode::SERVER
-                                    ? daqiri::RDMAMode::SERVER
-                                    : daqiri::RDMAMode::CLIENT;
+              ifcfg.rdma_.mode_ =
+                  ifcfg.socket_.mode_ == daqiri::SocketMode::SERVER
+                      ? daqiri::RDMAMode::SERVER
+                      : daqiri::RDMAMode::CLIENT;
               ifcfg.rdma_.xmode_ = ifcfg.roce_.transport_mode_;
-              ifcfg.rdma_.port_ = ifcfg.socket_.mode_ == daqiri::SocketMode::SERVER
-                                    ? ifcfg.socket_.local_port_
-                                    : ifcfg.socket_.remote_port_;
+              ifcfg.rdma_.port_ =
+                  ifcfg.socket_.mode_ == daqiri::SocketMode::SERVER
+                      ? ifcfg.socket_.local_port_
+                      : ifcfg.socket_.remote_port_;
             } else if (intf["roce_config"].IsDefined()) {
               DAQIRI_LOG_ERROR(
                   "'roce_config' is only valid when protocol is 'roce' "
-                  "(interface '{}')", ifcfg.name_);
+                  "(interface '{}')",
+                  ifcfg.name_);
               return false;
             }
           } else {
-            if (intf["socket_config"].IsDefined() || intf["roce_config"].IsDefined()) {
-              DAQIRI_LOG_ERROR(
-                  "'socket_config'/'roce_config' are only valid for stream_type 'socket' "
-                  "(interface '{}')", ifcfg.name_);
+            if (intf["socket_config"].IsDefined() ||
+                intf["roce_config"].IsDefined()) {
+              DAQIRI_LOG_ERROR("'socket_config'/'roce_config' are only valid "
+                               "for stream_type 'socket' "
+                               "(interface '{}')",
+                               ifcfg.name_);
               return false;
             }
           }
 
           try {
-            const auto& rx = intf["rx"];
+            const auto &rx = intf["rx"];
             daqiri::RxConfig rx_cfg;
 
             try {
               rx_cfg.flow_isolation_ = rx["flow_isolation"].as<bool>();
-            } catch (const std::exception& e) { rx_cfg.flow_isolation_ = false; }
+            } catch (const std::exception &e) {
+              rx_cfg.flow_isolation_ = false;
+            }
 
-            for (const auto& q_item : rx["queues"]) {
+            for (const auto &q_item : rx["queues"]) {
               daqiri::RxQueueConfig q;
-              if (!parse_rx_queue_config(q_item,
-                                         input_spec.common_.manager_type,
-                                         q,
-                                         !roce_used)) {
+              if (!parse_rx_queue_config(
+                      q_item, input_spec.common_.manager_type, q, !roce_used)) {
                 DAQIRI_LOG_ERROR("Failed to parse RxQueueConfig");
                 return false;
               }
 
               try {
                 q.timeout_us_ = q_item["timeout_us"].as<uint64_t>();
-              } catch (const std::exception& e) { q.timeout_us_ = 0; }
+              } catch (const std::exception &e) {
+                q.timeout_us_ = 0;
+              }
 
               rx_cfg.queues_.emplace_back(std::move(q));
             }
 
-            for (const auto& flow_item : rx["flows"]) {
+            for (const auto &flow_item : rx["flows"]) {
               daqiri::FlowConfig flow;
               if (!parse_flow_config(flow_item, flow)) {
                 DAQIRI_LOG_ERROR("Failed to parse FlowConfig");
@@ -941,7 +974,7 @@ struct YAML::convert<daqiri::NetworkConfig> {
             }
 
             try {
-              for (const auto& flex_item : rx["flex_items"]) {
+              for (const auto &flex_item : rx["flex_items"]) {
                 daqiri::FlexItemConfig flex_item_config;
                 if (!parse_flex_item_config(flex_item, flex_item_config)) {
                   DAQIRI_LOG_ERROR("Failed to parse FlexItemConfig");
@@ -949,43 +982,48 @@ struct YAML::convert<daqiri::NetworkConfig> {
                 }
                 rx_cfg.flex_items_.emplace_back(std::move(flex_item_config));
               }
-            } catch (const std::exception& e) {}  // No flex_items defined for this interface.
+            } catch (const std::exception &e) {
+            } // No flex_items defined for this interface.
 
             try {
               std::unordered_set<std::string> reorder_names;
-              for (const auto& reorder_item : rx["reorder_configs"]) {
+              for (const auto &reorder_item : rx["reorder_configs"]) {
                 daqiri::ReorderConfig reorder_cfg;
                 if (!parse_reorder_config(reorder_item, reorder_cfg)) {
                   DAQIRI_LOG_ERROR("Failed to parse ReorderConfig");
                   return false;
                 }
-                if (reorder_names.find(reorder_cfg.name_) != reorder_names.end()) {
-                  DAQIRI_LOG_ERROR("Duplicate reorder config name '{}' in interface '{}'",
-                                   reorder_cfg.name_, ifcfg.name_);
+                if (reorder_names.find(reorder_cfg.name_) !=
+                    reorder_names.end()) {
+                  DAQIRI_LOG_ERROR(
+                      "Duplicate reorder config name '{}' in interface '{}'",
+                      reorder_cfg.name_, ifcfg.name_);
                   return false;
                 }
                 reorder_names.insert(reorder_cfg.name_);
                 rx_cfg.reorder_configs_.emplace_back(std::move(reorder_cfg));
               }
-            } catch (const std::exception& e) {}  // No reorder_configs defined for this interface.
+            } catch (const std::exception &e) {
+            } // No reorder_configs defined for this interface.
 
             ifcfg.rx_ = rx_cfg;
-          } catch (const std::exception& e) {}  // No RX queues defined for this interface.
+          } catch (const std::exception &e) {
+          } // No RX queues defined for this interface.
 
           try {
-            const auto& tx = intf["tx"];
+            const auto &tx = intf["tx"];
             daqiri::TxConfig tx_cfg;
 
             try {
               tx_cfg.accurate_send_ = tx["accurate_send"].as<bool>();
-            } catch (const std::exception& e) { tx_cfg.accurate_send_ = false; }
+            } catch (const std::exception &e) {
+              tx_cfg.accurate_send_ = false;
+            }
 
-            for (const auto& q_item : tx["queues"]) {
+            for (const auto &q_item : tx["queues"]) {
               daqiri::TxQueueConfig q;
-              if (!parse_tx_queue_config(q_item,
-                                         input_spec.common_.manager_type,
-                                         q,
-                                         !roce_used)) {
+              if (!parse_tx_queue_config(
+                      q_item, input_spec.common_.manager_type, q, !roce_used)) {
                 DAQIRI_LOG_ERROR("Failed to parse TxQueueConfig");
                 return false;
               }
@@ -993,11 +1031,12 @@ struct YAML::convert<daqiri::NetworkConfig> {
             }
 
             ifcfg.tx_ = tx_cfg;
-          } catch (const std::exception& e) {}  // No TX queues defined for this interface.
+          } catch (const std::exception &e) {
+          } // No TX queues defined for this interface.
 
           input_spec.ifs_.push_back(ifcfg);
         }
-      } catch (const std::exception& e) {
+      } catch (const std::exception &e) {
         DAQIRI_LOG_ERROR(e.what());
         return false;
       }
@@ -1006,9 +1045,9 @@ struct YAML::convert<daqiri::NetworkConfig> {
           (input_spec.common_.protocol == daqiri::SocketProtocol::TCP ||
            input_spec.common_.protocol == daqiri::SocketProtocol::UDP)) {
         std::unordered_set<std::string> gpu_mrs;
-        for (const auto& intf : input_spec.ifs_) {
-          for (const auto& q : intf.rx_.queues_) {
-            for (const auto& mr_name : q.common_.mrs_) {
+        for (const auto &intf : input_spec.ifs_) {
+          for (const auto &q : intf.rx_.queues_) {
+            for (const auto &mr_name : q.common_.mrs_) {
               const auto it = input_spec.mrs_.find(mr_name);
               if (it != input_spec.mrs_.end() &&
                   it->second.kind_ == daqiri::MemoryKind::DEVICE) {
@@ -1016,8 +1055,8 @@ struct YAML::convert<daqiri::NetworkConfig> {
               }
             }
           }
-          for (const auto& q : intf.tx_.queues_) {
-            for (const auto& mr_name : q.common_.mrs_) {
+          for (const auto &q : intf.tx_.queues_) {
+            for (const auto &mr_name : q.common_.mrs_) {
               const auto it = input_spec.mrs_.find(mr_name);
               if (it != input_spec.mrs_.end() &&
                   it->second.kind_ == daqiri::MemoryKind::DEVICE) {
@@ -1029,12 +1068,15 @@ struct YAML::convert<daqiri::NetworkConfig> {
 
         if (!gpu_mrs.empty()) {
           std::string joined;
-          for (const auto& mr_name : gpu_mrs) {
-            if (!joined.empty()) { joined += ", "; }
+          for (const auto &mr_name : gpu_mrs) {
+            if (!joined.empty()) {
+              joined += ", ";
+            }
             joined += mr_name;
           }
           DAQIRI_LOG_ERROR(
-              "GPU memory regions are not supported for protocol '{}'. Offending "
+              "GPU memory regions are not supported for protocol '{}'. "
+              "Offending "
               "memory_regions: {}",
               daqiri::socket_protocol_to_string(input_spec.common_.protocol),
               joined);
@@ -1045,7 +1087,7 @@ struct YAML::convert<daqiri::NetworkConfig> {
       DAQIRI_LOG_INFO("Finished reading DAQIRI configuration");
 
       return true;
-    } catch (const std::exception& e) {
+    } catch (const std::exception &e) {
       DAQIRI_LOG_ERROR(e.what());
       return false;
     }

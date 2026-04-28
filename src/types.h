@@ -16,20 +16,20 @@
  */
 
 #pragma once
-#include <array>
-#include <vector>
-#include <string>
-#include <memory>
-#include <optional>
-#include <stdint.h>
-#include <stdexcept>
-#include <unordered_map>
 #include <algorithm>
+#include <array>
 #include <cctype>
-#include <linux/if_ether.h>
-#include <netinet/ip.h>
-#include <linux/udp.h>
 #include <cuda_runtime.h>
+#include <linux/if_ether.h>
+#include <linux/udp.h>
+#include <memory>
+#include <netinet/ip.h>
+#include <optional>
+#include <stdexcept>
+#include <stdint.h>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace daqiri {
 
@@ -99,7 +99,7 @@ struct AdvNetRdmaBurstHdr {
   uintptr_t conn_id;
   char local_mr_name[32];
   char remote_mr_name[32];
-  void* raddr;
+  void *raddr;
   uint64_t dst_key;
   uint32_t imm;
   uint32_t server_addr;
@@ -128,9 +128,9 @@ struct BurstHeader {
   BurstHeaderParams hdr;
 
   // Pad without union to make bindings readable
-  void* extra_burst_data;
-  uint8_t
-      custom_burst_data[ADV_NETWORK_HEADER_SIZE_BYTES - sizeof(void*) - sizeof(BurstHeaderParams)];
+  void *extra_burst_data;
+  uint8_t custom_burst_data[ADV_NETWORK_HEADER_SIZE_BYTES - sizeof(void *) -
+                            sizeof(BurstHeaderParams)];
 };
 
 /**
@@ -145,9 +145,9 @@ struct BurstParams {
     AdvNetRdmaBurstHdr rdma_hdr;
   };
 
-  std::array<void**, MAX_NUM_SEGS> pkts;
-  std::array<uint32_t*, MAX_NUM_SEGS> pkt_lens;
-  void** pkt_extra_info;
+  std::array<void **, MAX_NUM_SEGS> pkts;
+  std::array<uint32_t *, MAX_NUM_SEGS> pkt_lens;
+  void **pkt_extra_info;
   std::shared_ptr<void> custom_pkt_data;
   cudaEvent_t event;
 };
@@ -173,23 +173,27 @@ enum class StreamType {
   INVALID,
 };
 
-static constexpr const char* DAQIRI_STREAM_TYPE_STR__RAW = "raw";
-static constexpr const char* DAQIRI_STREAM_TYPE_STR__SOCKET = "socket";
+static constexpr const char *DAQIRI_STREAM_TYPE_STR__RAW = "raw";
+static constexpr const char *DAQIRI_STREAM_TYPE_STR__SOCKET = "socket";
 
-inline StreamType stream_type_from_string(const std::string& str) {
-  if (str == DAQIRI_STREAM_TYPE_STR__RAW) { return StreamType::RAW; }
-  if (str == DAQIRI_STREAM_TYPE_STR__SOCKET) { return StreamType::SOCKET; }
+inline StreamType stream_type_from_string(const std::string &str) {
+  if (str == DAQIRI_STREAM_TYPE_STR__RAW) {
+    return StreamType::RAW;
+  }
+  if (str == DAQIRI_STREAM_TYPE_STR__SOCKET) {
+    return StreamType::SOCKET;
+  }
   return StreamType::INVALID;
 }
 
 inline std::string stream_type_to_string(StreamType type) {
   switch (type) {
-    case StreamType::RAW:
-      return DAQIRI_STREAM_TYPE_STR__RAW;
-    case StreamType::SOCKET:
-      return DAQIRI_STREAM_TYPE_STR__SOCKET;
-    default:
-      return "invalid";
+  case StreamType::RAW:
+    return DAQIRI_STREAM_TYPE_STR__RAW;
+  case StreamType::SOCKET:
+    return DAQIRI_STREAM_TYPE_STR__SOCKET;
+  default:
+    return "invalid";
   }
 }
 
@@ -200,31 +204,37 @@ enum class SocketProtocol {
   INVALID,
 };
 
-static constexpr const char* DAQIRI_SOCKET_PROTOCOL_STR__TCP = "tcp";
-static constexpr const char* DAQIRI_SOCKET_PROTOCOL_STR__UDP = "udp";
-static constexpr const char* DAQIRI_SOCKET_PROTOCOL_STR__ROCE = "roce";
+static constexpr const char *DAQIRI_SOCKET_PROTOCOL_STR__TCP = "tcp";
+static constexpr const char *DAQIRI_SOCKET_PROTOCOL_STR__UDP = "udp";
+static constexpr const char *DAQIRI_SOCKET_PROTOCOL_STR__ROCE = "roce";
 
-inline SocketProtocol socket_protocol_from_string(const std::string& str) {
-  if (str == DAQIRI_SOCKET_PROTOCOL_STR__TCP) { return SocketProtocol::TCP; }
-  if (str == DAQIRI_SOCKET_PROTOCOL_STR__UDP) { return SocketProtocol::UDP; }
-  if (str == DAQIRI_SOCKET_PROTOCOL_STR__ROCE) { return SocketProtocol::ROCE; }
+inline SocketProtocol socket_protocol_from_string(const std::string &str) {
+  if (str == DAQIRI_SOCKET_PROTOCOL_STR__TCP) {
+    return SocketProtocol::TCP;
+  }
+  if (str == DAQIRI_SOCKET_PROTOCOL_STR__UDP) {
+    return SocketProtocol::UDP;
+  }
+  if (str == DAQIRI_SOCKET_PROTOCOL_STR__ROCE) {
+    return SocketProtocol::ROCE;
+  }
   return SocketProtocol::INVALID;
 }
 
 inline std::string socket_protocol_to_string(SocketProtocol proto) {
   switch (proto) {
-    case SocketProtocol::TCP:
-      return DAQIRI_SOCKET_PROTOCOL_STR__TCP;
-    case SocketProtocol::UDP:
-      return DAQIRI_SOCKET_PROTOCOL_STR__UDP;
-    case SocketProtocol::ROCE:
-      return DAQIRI_SOCKET_PROTOCOL_STR__ROCE;
-    default:
-      return "invalid";
+  case SocketProtocol::TCP:
+    return DAQIRI_SOCKET_PROTOCOL_STR__TCP;
+  case SocketProtocol::UDP:
+    return DAQIRI_SOCKET_PROTOCOL_STR__UDP;
+  case SocketProtocol::ROCE:
+    return DAQIRI_SOCKET_PROTOCOL_STR__ROCE;
+  default:
+    return "invalid";
   }
 }
 
-inline MemoryKind GetMemoryKindFromString(const std::string& mode_str) {
+inline MemoryKind GetMemoryKindFromString(const std::string &mode_str) {
   if (mode_str == "host") {
     return MemoryKind::HOST;
   } else if (mode_str == "host_pinned") {
@@ -239,9 +249,9 @@ inline MemoryKind GetMemoryKindFromString(const std::string& mode_str) {
 }
 
 template <typename T>
-uint32_t GetMemoryAccessPropertiesFromList(const T& list) {
+uint32_t GetMemoryAccessPropertiesFromList(const T &list) {
   uint32_t access = 0;
-  for (const auto& it : list) {
+  for (const auto &it : list) {
     const auto str = it.template as<std::string>();
     if (str == "local") {
       access |= MEM_ACCESS_LOCAL;
@@ -297,68 +307,75 @@ enum class ManagerType {
   RDMA,
 };
 
-static constexpr const char* DAQIRI_MGR_STR__DPDK = "dpdk";
-static constexpr const char* DAQIRI_MGR_STR__SOCKET = "socket";
-static constexpr const char* DAQIRI_MGR_STR__RDMA = "rdma";
-static constexpr const char* DAQIRI_MGR_STR__DEFAULT = "default";
+static constexpr const char *DAQIRI_MGR_STR__DPDK = "dpdk";
+static constexpr const char *DAQIRI_MGR_STR__SOCKET = "socket";
+static constexpr const char *DAQIRI_MGR_STR__RDMA = "rdma";
+static constexpr const char *DAQIRI_MGR_STR__DEFAULT = "default";
 /**
  * @brief Convert string to manager type
  *
  * @param str
  * @return ManagerType
  */
-inline ManagerType manager_type_from_string(const std::string& str) {
-  if (str == DAQIRI_MGR_STR__DEFAULT) return ManagerType::DEFAULT;
+inline ManagerType manager_type_from_string(const std::string &str) {
+  if (str == DAQIRI_MGR_STR__DEFAULT)
+    return ManagerType::DEFAULT;
 
   std::string available_managers;
   bool is_known_but_unavailable = false;
 
 #if DAQIRI_MGR_DPDK
-  if (str == DAQIRI_MGR_STR__DPDK) return ManagerType::DPDK;
+  if (str == DAQIRI_MGR_STR__DPDK)
+    return ManagerType::DPDK;
   available_managers += std::string(DAQIRI_MGR_STR__DPDK) + " ";
 #else
-  if (str == DAQIRI_MGR_STR__DPDK) is_known_but_unavailable = true;
+  if (str == DAQIRI_MGR_STR__DPDK)
+    is_known_but_unavailable = true;
 #endif
 
 #if DAQIRI_MGR_SOCKET
-  if (str == DAQIRI_MGR_STR__SOCKET) return ManagerType::SOCKET;
+  if (str == DAQIRI_MGR_STR__SOCKET)
+    return ManagerType::SOCKET;
   available_managers += std::string(DAQIRI_MGR_STR__SOCKET) + " ";
 #else
-  if (str == DAQIRI_MGR_STR__SOCKET) is_known_but_unavailable = true;
+  if (str == DAQIRI_MGR_STR__SOCKET)
+    is_known_but_unavailable = true;
 #endif
 
-
 #if DAQIRI_MGR_RDMA
-  if (str == DAQIRI_MGR_STR__RDMA) return ManagerType::RDMA;
+  if (str == DAQIRI_MGR_STR__RDMA)
+    return ManagerType::RDMA;
   available_managers += std::string(DAQIRI_MGR_STR__RDMA) + " ";
 #else
-  if (str == DAQIRI_MGR_STR__RDMA) is_known_but_unavailable = true;
+  if (str == DAQIRI_MGR_STR__RDMA)
+    is_known_but_unavailable = true;
 #endif
 
   if (!available_managers.empty()) {
-    available_managers.pop_back();  // Remove trailing space
+    available_managers.pop_back(); // Remove trailing space
   }
 
   if (is_known_but_unavailable) {
-    throw std::invalid_argument(
-        "Manager type '" + str + "' is not available in this build. "
-        "Available managers: " + available_managers + ". "
-        "To enable '" + str + "', rebuild with CMake option: "
-        "-DDAQIRI_MGR=\"" + available_managers + " " + str + "\"");
+    throw std::invalid_argument("Manager type '" + str +
+                                "' is not available in this build. "
+                                "Available managers: " +
+                                available_managers +
+                                ". "
+                                "To enable '" +
+                                str +
+                                "', rebuild with CMake option: "
+                                "-DDAQIRI_MGR=\"" +
+                                available_managers + " " + str + "\"");
   }
 
-  throw std::invalid_argument(
-      "Unknown manager type '" + str + "'. Valid options: " +
-      available_managers + " " + DAQIRI_MGR_STR__DEFAULT);
+  throw std::invalid_argument("Unknown manager type '" + str +
+                              "'. Valid options: " + available_managers + " " +
+                              DAQIRI_MGR_STR__DEFAULT);
 }
 
-enum class RDMAMode {
-  CLIENT,
-  SERVER,
-  INVALID
-};
+enum class RDMAMode { CLIENT, SERVER, INVALID };
 
-inline RDMAMode GetRDMAModeFromString(const std::string& mode_str) {
+inline RDMAMode GetRDMAModeFromString(const std::string &mode_str) {
   if (mode_str == "client") {
     return RDMAMode::CLIENT;
   } else if (mode_str == "server") {
@@ -368,14 +385,10 @@ inline RDMAMode GetRDMAModeFromString(const std::string& mode_str) {
   return RDMAMode::INVALID;
 }
 
-enum class RDMATransportMode {
-  RC,
-  UC,
-  UD,
-  INVALID
-};
+enum class RDMATransportMode { RC, UC, UD, INVALID };
 
-inline RDMATransportMode GetRDMATransportModeFromString(const std::string& mode_str) {
+inline RDMATransportMode
+GetRDMATransportModeFromString(const std::string &mode_str) {
   if (mode_str == "RC") {
     return RDMATransportMode::RC;
   } else if (mode_str == "UC") {
@@ -401,30 +414,30 @@ struct RDMAConfig {
  */
 inline std::string manager_type_to_string(ManagerType type) {
   switch (type) {
-    case ManagerType::DPDK:
-      return DAQIRI_MGR_STR__DPDK;
-    case ManagerType::SOCKET:
-      return DAQIRI_MGR_STR__SOCKET;
-    case ManagerType::RDMA:
-      return DAQIRI_MGR_STR__RDMA;
-    case ManagerType::DEFAULT:
-      return DAQIRI_MGR_STR__DEFAULT;
+  case ManagerType::DPDK:
+    return DAQIRI_MGR_STR__DPDK;
+  case ManagerType::SOCKET:
+    return DAQIRI_MGR_STR__SOCKET;
+  case ManagerType::RDMA:
+    return DAQIRI_MGR_STR__RDMA;
+  case ManagerType::DEFAULT:
+    return DAQIRI_MGR_STR__DEFAULT;
   }
   return "unknown";
 }
 
 inline ManagerType manager_type_from_stream_type(StreamType stream_type) {
   switch (stream_type) {
-    case StreamType::RAW:
-      return ManagerType::DPDK;
-    case StreamType::SOCKET:
-      return ManagerType::SOCKET;
-    default:
-      return ManagerType::UNKNOWN;
+  case StreamType::RAW:
+    return ManagerType::DPDK;
+  case StreamType::SOCKET:
+    return ManagerType::SOCKET;
+  default:
+    return ManagerType::UNKNOWN;
   }
 }
 class LogLevel {
- public:
+public:
   enum Level {
     TRACE,
     DEBUG,
@@ -437,23 +450,26 @@ class LogLevel {
 
   static std::string to_string(Level level) {
     auto it = level_to_string_map.find(level);
-    if (it != level_to_string_map.end()) { return it->second; }
+    if (it != level_to_string_map.end()) {
+      return it->second;
+    }
     return "warn";
   }
 
-  static Level from_string(const std::string& str) {
+  static Level from_string(const std::string &str) {
     std::string lower_str = str;
-    std::transform(lower_str.begin(), lower_str.end(), lower_str.begin(), [](unsigned char c) {
-      return std::tolower(c);
-    });
+    std::transform(lower_str.begin(), lower_str.end(), lower_str.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
 
     auto it = string_to_level_map.find(lower_str);
-    if (it != string_to_level_map.end()) { return it->second; }
-    throw std::logic_error(
-        "Unrecognized log level, available options trace/debug/info/warn/error/critical/off");
+    if (it != string_to_level_map.end()) {
+      return it->second;
+    }
+    throw std::logic_error("Unrecognized log level, available options "
+                           "trace/debug/info/warn/error/critical/off");
   }
 
- private:
+private:
   static const std::unordered_map<Level, std::string> level_to_string_map;
   static const std::unordered_map<std::string, Level> string_to_level_map;
 };
@@ -467,7 +483,7 @@ class LogLevel {
  * the specific command flag strings.
  */
 class ManagerLogLevelCommandBuilder {
- public:
+public:
   /**
    * @brief Virtual destructor for the ManagerLogLevelCommandBuilder class.
    */
@@ -493,7 +509,7 @@ class ManagerLogLevelCommandBuilder {
  * for a specific manager type.
  */
 class ManagerExtraQueueConfig {
- public:
+public:
   /**
    * @brief Virtual destructor for proper cleanup of derived class objects.
    */
@@ -508,7 +524,7 @@ struct CommonQueueConfig {
   std::string cpu_core_;
   std::vector<std::string> mrs_;
   std::vector<std::string> offloads_;
-  ManagerExtraQueueConfig* extra_queue_config_;
+  ManagerExtraQueueConfig *extra_queue_config_;
 };
 
 struct MemoryRegionConfig {
@@ -517,8 +533,8 @@ struct MemoryRegionConfig {
   uint16_t affinity_;
   uint32_t access_;
   size_t buf_size_;
-  size_t adj_size_;  // Populated by driver
-  size_t ttl_size_;  // Populated by driver
+  size_t adj_size_; // Populated by driver
+  size_t ttl_size_; // Populated by driver
   size_t num_bufs_;
   bool owned_;
 };
@@ -570,7 +586,7 @@ struct FlowConfig {
   uint16_t id_;
   FlowAction action_;
   FlowMatch match_;
-  void* backend_config_;  // Filled in by operator
+  void *backend_config_; // Filled in by operator
 };
 
 struct CommonConfig {
@@ -589,9 +605,13 @@ enum class SocketMode {
   INVALID,
 };
 
-inline SocketMode GetSocketModeFromString(const std::string& mode_str) {
-  if (mode_str == "client") { return SocketMode::CLIENT; }
-  if (mode_str == "server") { return SocketMode::SERVER; }
+inline SocketMode GetSocketModeFromString(const std::string &mode_str) {
+  if (mode_str == "client") {
+    return SocketMode::CLIENT;
+  }
+  if (mode_str == "server") {
+    return SocketMode::SERVER;
+  }
   return SocketMode::INVALID;
 }
 
@@ -643,88 +663,109 @@ enum class ReorderEndianness : uint8_t {
   INVALID,
 };
 
-inline ReorderDataType reorder_data_type_from_string(const std::string& str) {
-  if (str == "int4") { return ReorderDataType::INT4; }
-  if (str == "int8") { return ReorderDataType::INT8; }
-  if (str == "int16") { return ReorderDataType::INT16; }
-  if (str == "int32") { return ReorderDataType::INT32; }
-  if (str == "fp16") { return ReorderDataType::FP16; }
-  if (str == "bf16") { return ReorderDataType::BF16; }
-  if (str == "fp32") { return ReorderDataType::FP32; }
-  if (str == "fp64") { return ReorderDataType::FP64; }
+inline ReorderDataType reorder_data_type_from_string(const std::string &str) {
+  if (str == "int4") {
+    return ReorderDataType::INT4;
+  }
+  if (str == "int8") {
+    return ReorderDataType::INT8;
+  }
+  if (str == "int16") {
+    return ReorderDataType::INT16;
+  }
+  if (str == "int32") {
+    return ReorderDataType::INT32;
+  }
+  if (str == "fp16") {
+    return ReorderDataType::FP16;
+  }
+  if (str == "bf16") {
+    return ReorderDataType::BF16;
+  }
+  if (str == "fp32") {
+    return ReorderDataType::FP32;
+  }
+  if (str == "fp64") {
+    return ReorderDataType::FP64;
+  }
   return ReorderDataType::INVALID;
 }
 
 inline std::string reorder_data_type_to_string(ReorderDataType type) {
   switch (type) {
-    case ReorderDataType::SAME:
-      return "same";
-    case ReorderDataType::INT4:
-      return "int4";
-    case ReorderDataType::INT8:
-      return "int8";
-    case ReorderDataType::INT16:
-      return "int16";
-    case ReorderDataType::INT32:
-      return "int32";
-    case ReorderDataType::FP16:
-      return "fp16";
-    case ReorderDataType::BF16:
-      return "bf16";
-    case ReorderDataType::FP32:
-      return "fp32";
-    case ReorderDataType::FP64:
-      return "fp64";
-    default:
-      return "invalid";
+  case ReorderDataType::SAME:
+    return "same";
+  case ReorderDataType::INT4:
+    return "int4";
+  case ReorderDataType::INT8:
+    return "int8";
+  case ReorderDataType::INT16:
+    return "int16";
+  case ReorderDataType::INT32:
+    return "int32";
+  case ReorderDataType::FP16:
+    return "fp16";
+  case ReorderDataType::BF16:
+    return "bf16";
+  case ReorderDataType::FP32:
+    return "fp32";
+  case ReorderDataType::FP64:
+    return "fp64";
+  default:
+    return "invalid";
   }
 }
 
-inline ReorderEndianness reorder_endianness_from_string(const std::string& str) {
-  if (str == "host") { return ReorderEndianness::HOST; }
-  if (str == "network") { return ReorderEndianness::NETWORK; }
+inline ReorderEndianness
+reorder_endianness_from_string(const std::string &str) {
+  if (str == "host") {
+    return ReorderEndianness::HOST;
+  }
+  if (str == "network") {
+    return ReorderEndianness::NETWORK;
+  }
   return ReorderEndianness::INVALID;
 }
 
 inline std::string reorder_endianness_to_string(ReorderEndianness endianness) {
   switch (endianness) {
-    case ReorderEndianness::HOST:
-      return "host";
-    case ReorderEndianness::NETWORK:
-      return "network";
-    default:
-      return "invalid";
+  case ReorderEndianness::HOST:
+    return "host";
+  case ReorderEndianness::NETWORK:
+    return "network";
+  default:
+    return "invalid";
   }
 }
 
 inline bool is_reorder_input_data_type(ReorderDataType type) {
-  return type == ReorderDataType::INT4 || type == ReorderDataType::INT8
-         || type == ReorderDataType::INT16 || type == ReorderDataType::INT32;
+  return type == ReorderDataType::INT4 || type == ReorderDataType::INT8 ||
+         type == ReorderDataType::INT16 || type == ReorderDataType::INT32;
 }
 
 inline bool is_reorder_output_data_type(ReorderDataType type) {
-  return type == ReorderDataType::FP16 || type == ReorderDataType::BF16
-         || type == ReorderDataType::FP32 || type == ReorderDataType::FP64
-         || type == ReorderDataType::INT32;
+  return type == ReorderDataType::FP16 || type == ReorderDataType::BF16 ||
+         type == ReorderDataType::FP32 || type == ReorderDataType::FP64 ||
+         type == ReorderDataType::INT32;
 }
 
 inline uint32_t reorder_data_type_bit_width(ReorderDataType type) {
   switch (type) {
-    case ReorderDataType::INT4:
-      return 4;
-    case ReorderDataType::INT8:
-      return 8;
-    case ReorderDataType::INT16:
-    case ReorderDataType::FP16:
-    case ReorderDataType::BF16:
-      return 16;
-    case ReorderDataType::INT32:
-    case ReorderDataType::FP32:
-      return 32;
-    case ReorderDataType::FP64:
-      return 64;
-    default:
-      return 0;
+  case ReorderDataType::INT4:
+    return 4;
+  case ReorderDataType::INT8:
+    return 8;
+  case ReorderDataType::INT16:
+  case ReorderDataType::FP16:
+  case ReorderDataType::BF16:
+    return 16;
+  case ReorderDataType::INT32:
+  case ReorderDataType::FP32:
+    return 32;
+  case ReorderDataType::FP64:
+    return 64;
+  default:
+    return 0;
   }
 }
 
@@ -736,7 +777,7 @@ struct ReorderBitFieldConfig {
 struct ReorderSeqBatchNumberConfig {
   ReorderBitFieldConfig sequence_number_;
   ReorderBitFieldConfig batch_number_;
-  uint32_t packets_per_batch_ = 0;  // Derived from bit widths
+  uint32_t packets_per_batch_ = 0; // Derived from bit widths
 };
 
 struct ReorderSeqPacketsPerBatchConfig {
@@ -800,13 +841,12 @@ struct NetworkConfig {
   LogLevel::Level log_level_;
 };
 
-template <typename Config>
-auto get_rdma_configs_enabled(const Config& config) {
+template <typename Config> auto get_rdma_configs_enabled(const Config &config) {
   bool server = false;
   bool client = false;
 
-  auto& yaml_nodes = config.yaml_nodes();
-  for (const auto& yaml_node : yaml_nodes) {
+  auto &yaml_nodes = config.yaml_nodes();
+  for (const auto &yaml_node : yaml_nodes) {
     auto cfg_node = yaml_node["daqiri"]["cfg"];
     auto stream_type = cfg_node["stream_type"].template as<std::string>("");
     auto protocol = cfg_node["protocol"].template as<std::string>("");
@@ -815,10 +855,11 @@ auto get_rdma_configs_enabled(const Config& config) {
       continue;
     }
     auto interfaces_node = cfg_node["interfaces"];
-    for (const auto& intf : interfaces_node) {
+    for (const auto &intf : interfaces_node) {
       auto socket_config_node = intf["socket_config"];
       if (socket_config_node.IsDefined()) {
-        std::string mode = socket_config_node["mode"].template as<std::string>();
+        std::string mode =
+            socket_config_node["mode"].template as<std::string>();
         if (mode == "server") {
           server = true;
         } else if (mode == "client") {
@@ -832,20 +873,24 @@ auto get_rdma_configs_enabled(const Config& config) {
 }
 
 template <typename Config>
-auto get_rx_tx_configs_enabled(const Config& config) {
+auto get_rx_tx_configs_enabled(const Config &config) {
   bool rx = false;
   bool tx = false;
 
-  auto& yaml_nodes = config.yaml_nodes();
-  for (const auto& yaml_node : yaml_nodes) {
+  auto &yaml_nodes = config.yaml_nodes();
+  for (const auto &yaml_node : yaml_nodes) {
     auto node = yaml_node["daqiri"]["cfg"]["interfaces"];
-    for (const auto& intf : node) {
-      if (intf["rx"]) { rx = true; }
-      if (intf["tx"]) { tx = true; }
+    for (const auto &intf : node) {
+      if (intf["rx"]) {
+        rx = true;
+      }
+      if (intf["tx"]) {
+        tx = true;
+      }
     }
   }
 
   return std::make_tuple(rx, tx);
 }
 
-};  // namespace daqiri
+}; // namespace daqiri

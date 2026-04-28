@@ -45,50 +45,46 @@ struct RawBenchRxConfig {
 };
 
 class PinnedHostBuffer {
- public:
+public:
   PinnedHostBuffer() = default;
-  PinnedHostBuffer(const PinnedHostBuffer&) = delete;
-  PinnedHostBuffer& operator=(const PinnedHostBuffer&) = delete;
+  PinnedHostBuffer(const PinnedHostBuffer &) = delete;
+  PinnedHostBuffer &operator=(const PinnedHostBuffer &) = delete;
 
-  PinnedHostBuffer(PinnedHostBuffer&& other) noexcept;
-  PinnedHostBuffer& operator=(PinnedHostBuffer&& other) noexcept;
+  PinnedHostBuffer(PinnedHostBuffer &&other) noexcept;
+  PinnedHostBuffer &operator=(PinnedHostBuffer &&other) noexcept;
   ~PinnedHostBuffer();
 
   bool resize(size_t size);
   void reset();
 
-  uint8_t* data();
-  const uint8_t* data() const;
+  uint8_t *data();
+  const uint8_t *data() const;
   size_t capacity() const;
 
- private:
-  void* ptr_ = nullptr;
+private:
+  void *ptr_ = nullptr;
   size_t capacity_ = 0;
 };
 
-int parse_run_seconds(int argc, char** argv);
-bool has_bench_rx(const YAML::Node& root);
-bool has_bench_tx(const YAML::Node& root);
-RawBenchRxConfig parse_rx(const YAML::Node& root);
-RawBenchTxConfig parse_tx(const YAML::Node& root);
-std::vector<uint16_t> parse_udp_ports(const std::string& spec);
+int parse_run_seconds(int argc, char **argv);
+bool has_bench_rx(const YAML::Node &root);
+bool has_bench_tx(const YAML::Node &root);
+RawBenchRxConfig parse_rx(const YAML::Node &root);
+RawBenchTxConfig parse_tx(const YAML::Node &root);
+std::vector<uint16_t> parse_udp_ports(const std::string &spec);
 
-void populate_udp_ipv4_headers(uint8_t* pkt_data,
-                               uint32_t header_size,
-                               uint32_t payload_size,
-                               const char* eth_dst,
-                               uint32_t ip_src_host,
-                               uint32_t ip_dst_host,
-                               uint16_t src_port,
-                               uint16_t dst_port);
+void populate_udp_ipv4_headers(uint8_t *pkt_data, uint32_t header_size,
+                               uint32_t payload_size, const char *eth_dst,
+                               uint32_t ip_src_host, uint32_t ip_dst_host,
+                               uint16_t src_port, uint16_t dst_port);
 
-cudaError_t memcpy_batch_async(const std::vector<void*>& dsts,
-                               const std::vector<const void*>& srcs,
-                               const std::vector<size_t>& sizes,
+cudaError_t memcpy_batch_async(const std::vector<void *> &dsts,
+                               const std::vector<const void *> &srcs,
+                               const std::vector<size_t> &sizes,
                                cudaStream_t stream);
 
 void signal_handler(int signum);
-void wait_for_stop(int run_seconds, std::atomic<bool>& stop);
-void rx_count_worker(const RawBenchRxConfig& cfg, std::atomic<bool>& stop);
+void wait_for_stop(int run_seconds, std::atomic<bool> &stop);
+void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop);
 
-}  // namespace daqiri::bench
+} // namespace daqiri::bench

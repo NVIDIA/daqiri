@@ -15,25 +15,25 @@
  * limitations under the License.
  */
 
-
+#include "src/types.h"
 #include <rte_log.h>
-#include <unordered_map>
+#include <stdexcept>
 #include <string>
 #include <tuple>
-#include <stdexcept>
-#include "src/types.h"
+#include <unordered_map>
 
 namespace daqiri {
 
-
 class DpdkLogLevel {
- public:
+public:
   static constexpr uint32_t OFF = 0;
   // RTE_LOG_EMERG(1) through RTE_LOG_DEBUG(8) used directly from <rte_log.h>
 
   static std::string to_description_string(uint32_t level) {
     auto it = level_to_cmd_map.find(level);
-    if (it != level_to_cmd_map.end()) { return std::get<0>(it->second); }
+    if (it != level_to_cmd_map.end()) {
+      return std::get<0>(it->second);
+    }
     throw std::logic_error(
         "Unrecognized log level, available options "
         "debug/info/notice/warn/error/critical/alert/emergency/off");
@@ -41,7 +41,9 @@ class DpdkLogLevel {
 
   static std::string to_cmd_string(uint32_t level) {
     auto it = level_to_cmd_map.find(level);
-    if (it != level_to_cmd_map.end()) { return std::get<1>(it->second); }
+    if (it != level_to_cmd_map.end()) {
+      return std::get<1>(it->second);
+    }
     throw std::logic_error(
         "Unrecognized log level, available options "
         "debug/info/notice/warn/error/critical/alert/emergency/off");
@@ -49,16 +51,21 @@ class DpdkLogLevel {
 
   static uint32_t from_ano_log_level(LogLevel::Level ano_level) {
     auto it = ano_to_dpdk_log_level_map.find(ano_level);
-    if (it != ano_to_dpdk_log_level_map.end()) { return it->second; }
+    if (it != ano_to_dpdk_log_level_map.end()) {
+      return it->second;
+    }
     return OFF;
   }
 
- private:
+private:
   /**
    * A map of log level to a tuple of the description and command strings.
    */
-  static const std::unordered_map<uint32_t, std::tuple<std::string, std::string>> level_to_cmd_map;
-  static const std::unordered_map<LogLevel::Level, uint32_t> ano_to_dpdk_log_level_map;
+  static const std::unordered_map<uint32_t,
+                                  std::tuple<std::string, std::string>>
+      level_to_cmd_map;
+  static const std::unordered_map<LogLevel::Level, uint32_t>
+      ano_to_dpdk_log_level_map;
 };
 
 /**
@@ -69,7 +76,7 @@ class DpdkLogLevel {
  * specific command flag strings for managing DPDK log levels.
  */
 class DpdkLogLevelCommandBuilder : public ManagerLogLevelCommandBuilder {
- public:
+public:
   /**
    * @brief Constructor for DpdkLogLevelCommandBuilder.
    *
@@ -91,8 +98,8 @@ class DpdkLogLevelCommandBuilder : public ManagerLogLevelCommandBuilder {
             "--log-level=pmd.net.mlx5:" + DpdkLogLevel::to_cmd_string(level_)};
   }
 
- private:
-  uint32_t level_;  ///< The DPDK log level.
+private:
+  uint32_t level_; ///< The DPDK log level.
 };
 
-}  // namespace daqiri
+} // namespace daqiri

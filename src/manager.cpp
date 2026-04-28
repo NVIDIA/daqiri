@@ -29,12 +29,12 @@
 
 #if DAQIRI_MGR_DPDK || DAQIRI_MGR_SOCKET || DAQIRI_MGR_RDMA
 #include <rte_common.h>
-#include <rte_malloc.h>
-#include <rte_memory.h>
-#include <rte_mbuf.h>
-#include <rte_ethdev.h>
-#include <rte_ring.h>
 #include <rte_eal.h>
+#include <rte_ethdev.h>
+#include <rte_malloc.h>
+#include <rte_mbuf.h>
+#include <rte_memory.h>
+#include <rte_ring.h>
 #include <rte_version.h>
 #endif
 
@@ -48,14 +48,17 @@
 namespace daqiri {
 
 // Initialize static members
-std::unique_ptr<Manager> ManagerFactory::ManagerInstance_ = nullptr;  // Initialize static members
+std::unique_ptr<Manager> ManagerFactory::ManagerInstance_ =
+    nullptr; // Initialize static members
 ManagerType ManagerFactory::ManagerType_ = ManagerType::UNKNOWN;
 
-extern void initialize_manager(Manager* _manager);
+extern void initialize_manager(Manager *_manager);
 
 std::string Manager::generate_random_string(int len) {
   constexpr char tokens[] = "abcdefghijklmnopqrstuvwxyz";
-  if (len <= 0) { return {}; }
+  if (len <= 0) {
+    return {};
+  }
 
   std::random_device random_device;
   const auto timestamp = static_cast<uint64_t>(
@@ -72,7 +75,9 @@ std::string Manager::generate_random_string(int len) {
 
   std::string tmp;
   tmp.reserve(static_cast<size_t>(len));
-  for (int i = 0; i < len; i++) { tmp += tokens[dist(rng)]; }
+  for (int i = 0; i < len; i++) {
+    tmp += tokens[dist(rng)];
+  }
 
   return tmp;
 }
@@ -93,27 +98,27 @@ std::unique_ptr<Manager> ManagerFactory::create_instance(ManagerType type) {
   std::unique_ptr<Manager> _manager;
   switch (type) {
 #if DAQIRI_MGR_DPDK
-    case ManagerType::DPDK:
-      _manager = std::make_unique<DpdkMgr>();
-      break;
+  case ManagerType::DPDK:
+    _manager = std::make_unique<DpdkMgr>();
+    break;
 #endif
 #if DAQIRI_MGR_SOCKET
-    case ManagerType::SOCKET:
-      _manager = std::make_unique<SocketMgr>();
-      break;
+  case ManagerType::SOCKET:
+    _manager = std::make_unique<SocketMgr>();
+    break;
 #endif
 #if DAQIRI_MGR_RDMA
-    case ManagerType::RDMA:
-      _manager = std::make_unique<RdmaMgr>();
-      break;
+  case ManagerType::RDMA:
+    _manager = std::make_unique<RdmaMgr>();
+    break;
 #endif
-    case ManagerType::DEFAULT:
-      _manager = create_instance(get_default_manager_type());
-      return _manager;
-    default:
-      throw std::invalid_argument(
-          "Manager type '" + manager_type_to_string(type) +
-          "' is not available in this build");
+  case ManagerType::DEFAULT:
+    _manager = create_instance(get_default_manager_type());
+    return _manager;
+  default:
+    throw std::invalid_argument("Manager type '" +
+                                manager_type_to_string(type) +
+                                "' is not available in this build");
   }
 
   // Initialize the ADV Net Common API
@@ -122,22 +127,26 @@ std::unique_ptr<Manager> ManagerFactory::create_instance(ManagerType type) {
 }
 
 template <typename Config>
-ManagerType ManagerFactory::get_manager_type(const Config& config) {
+ManagerType ManagerFactory::get_manager_type(const Config &config) {
   // Ensure that Config has a method yaml_nodes() that returns a collection
   // of YAML nodes
   static_assert(
       std::is_member_function_pointer<decltype(&Config::yaml_nodes)>::value,
-      "Config type must have a method yaml_nodes() that returns a collection of YAML nodes");
+      "Config type must have a method yaml_nodes() that returns a collection "
+      "of YAML nodes");
 
-  auto& yaml_nodes = config.yaml_nodes();
-  for (const auto& yaml_node : yaml_nodes) {
+  auto &yaml_nodes = config.yaml_nodes();
+  for (const auto &yaml_node : yaml_nodes) {
     try {
       auto node = yaml_node["daqiri"]["cfg"];
-      const std::string stream_type_str = node["stream_type"].template as<std::string>("");
+      const std::string stream_type_str =
+          node["stream_type"].template as<std::string>("");
       const auto stream_type = stream_type_from_string(stream_type_str);
-      if (stream_type == StreamType::INVALID) { continue; }
+      if (stream_type == StreamType::INVALID) {
+        continue;
+      }
       return manager_type_from_stream_type(stream_type);
-    } catch (const std::exception& e) {
+    } catch (const std::exception &e) {
       return get_default_manager_type();
     }
   }
@@ -147,20 +156,21 @@ ManagerType ManagerFactory::get_manager_type(const Config& config) {
 
 size_t Manager::get_alignment(MemoryKind kind) {
   switch (kind) {
-    case MemoryKind::HOST:
-    case MemoryKind::HOST_PINNED:
-    case MemoryKind::HUGE:
-      return 128;  // Twice the size of a cache line on the CPU
-    case MemoryKind::DEVICE:
-      return 256;  // Twice the cache line size on the GPU
-    default:
-      return 128;
+  case MemoryKind::HOST:
+  case MemoryKind::HOST_PINNED:
+  case MemoryKind::HUGE:
+    return 128; // Twice the size of a cache line on the CPU
+  case MemoryKind::DEVICE:
+    return 256; // Twice the cache line size on the GPU
+  default:
+    return 128;
   }
 }
 
-Status Manager::populate_pool(struct rte_ring* ring, const std::string& mr_name) {
+Status Manager::populate_pool(struct rte_ring *ring,
+                              const std::string &mr_name) {
   auto mr = cfg_.mrs_[mr_name];
-  auto base = reinterpret_cast<char*>(ar_[mr_name].ptr_);
+  auto base = reinterpret_cast<char *>(ar_[mr_name].ptr_);
 
   for (size_t i = 0; i < mr.num_bufs_; i++) {
     if (rte_ring_enqueue(ring, base + i * mr.adj_size_) != 0) {
@@ -174,61 +184,65 @@ Status Manager::populate_pool(struct rte_ring* ring, const std::string& mr_name)
 Status Manager::allocate_memory_regions() {
   DAQIRI_LOG_INFO("Registering memory regions");
 #if DAQIRI_MGR_DPDK || DAQIRI_MGR_RDMA
-  for (auto& mr : cfg_.mrs_) {
-    void* ptr;
+  for (auto &mr : cfg_.mrs_) {
+    void *ptr;
     AllocRegion ar;
-    mr.second.ttl_size_ = RTE_ALIGN_CEIL(mr.second.adj_size_ * mr.second.num_bufs_, GPU_PAGE_SIZE);
+    mr.second.ttl_size_ = RTE_ALIGN_CEIL(
+        mr.second.adj_size_ * mr.second.num_bufs_, GPU_PAGE_SIZE);
 
     if (mr.second.owned_) {
       switch (mr.second.kind_) {
-        case MemoryKind::HOST:
-          ptr = malloc(mr.second.ttl_size_);
-          break;
-        case MemoryKind::HOST_PINNED:
-          if (cudaHostAlloc(&ptr, mr.second.ttl_size_, 0) != cudaSuccess) {
-            DAQIRI_LOG_CRITICAL("Failed to allocate CUDA pinned host memory!");
-            return Status::NULL_PTR;
-          }
-          break;
-        case MemoryKind::HUGE:
-          ptr = rte_malloc_socket(nullptr, mr.second.ttl_size_, 0, mr.second.affinity_);
-          break;
-        case MemoryKind::DEVICE: {
-          unsigned int flag = 1;
-          const auto align = RTE_ALIGN_CEIL(mr.second.ttl_size_, GPU_PAGE_SIZE);
-          CUdeviceptr cuptr;
-
-          cudaSetDevice(mr.second.affinity_);
-          cudaFree(0);  // Create primary context if it doesn't exist
-          const auto alloc_res = cuMemAlloc(&cuptr, align);
-
-          if (alloc_res != CUDA_SUCCESS) {
-            const char* err_str = nullptr;
-            cuGetErrorString(alloc_res, &err_str);
-            DAQIRI_LOG_CRITICAL(
-                "Could not allocate {:.2f}MB of GPU memory. Error: {}", align / 1e6, err_str);
-            return Status::NULL_PTR;
-          }
-
-          ptr = reinterpret_cast<void*>(cuptr);
-
-          const auto attr_res =
-              cuPointerSetAttribute(&flag, CU_POINTER_ATTRIBUTE_SYNC_MEMOPS, cuptr);
-          if (attr_res != CUDA_SUCCESS) {
-            DAQIRI_LOG_CRITICAL("Could not set pointer attributes");
-            return Status::NULL_PTR;
-          }
-          break;
+      case MemoryKind::HOST:
+        ptr = malloc(mr.second.ttl_size_);
+        break;
+      case MemoryKind::HOST_PINNED:
+        if (cudaHostAlloc(&ptr, mr.second.ttl_size_, 0) != cudaSuccess) {
+          DAQIRI_LOG_CRITICAL("Failed to allocate CUDA pinned host memory!");
+          return Status::NULL_PTR;
         }
-        default:
-          DAQIRI_LOG_ERROR("Unknown memory type {}!", static_cast<int>(mr.second.kind_));
-          return Status::INVALID_PARAMETER;
+        break;
+      case MemoryKind::HUGE:
+        ptr = rte_malloc_socket(nullptr, mr.second.ttl_size_, 0,
+                                mr.second.affinity_);
+        break;
+      case MemoryKind::DEVICE: {
+        unsigned int flag = 1;
+        const auto align = RTE_ALIGN_CEIL(mr.second.ttl_size_, GPU_PAGE_SIZE);
+        CUdeviceptr cuptr;
+
+        cudaSetDevice(mr.second.affinity_);
+        cudaFree(0); // Create primary context if it doesn't exist
+        const auto alloc_res = cuMemAlloc(&cuptr, align);
+
+        if (alloc_res != CUDA_SUCCESS) {
+          const char *err_str = nullptr;
+          cuGetErrorString(alloc_res, &err_str);
+          DAQIRI_LOG_CRITICAL(
+              "Could not allocate {:.2f}MB of GPU memory. Error: {}",
+              align / 1e6, err_str);
+          return Status::NULL_PTR;
+        }
+
+        ptr = reinterpret_cast<void *>(cuptr);
+
+        const auto attr_res = cuPointerSetAttribute(
+            &flag, CU_POINTER_ATTRIBUTE_SYNC_MEMOPS, cuptr);
+        if (attr_res != CUDA_SUCCESS) {
+          DAQIRI_LOG_CRITICAL("Could not set pointer attributes");
+          return Status::NULL_PTR;
+        }
+        break;
+      }
+      default:
+        DAQIRI_LOG_ERROR("Unknown memory type {}!",
+                         static_cast<int>(mr.second.kind_));
+        return Status::INVALID_PARAMETER;
       }
 
       if (ptr == nullptr) {
         DAQIRI_LOG_CRITICAL("Fatal to allocate {} of type {} for MR",
-                              mr.second.ttl_size_,
-                              static_cast<int>(mr.second.kind_));
+                            mr.second.ttl_size_,
+                            static_cast<int>(mr.second.kind_));
         return Status::NULL_PTR;
       }
     }
@@ -236,13 +250,8 @@ Status Manager::allocate_memory_regions() {
     DAQIRI_LOG_INFO(
         "Successfully allocated memory region {} at {} type {} with {} bytes "
         "({} elements @ {} bytes total {})",
-        mr.second.name_,
-        ptr,
-        (int)mr.second.kind_,
-        mr.second.buf_size_,
-        mr.second.num_bufs_,
-        mr.second.adj_size_,
-        mr.second.ttl_size_);
+        mr.second.name_, ptr, (int)mr.second.kind_, mr.second.buf_size_,
+        mr.second.num_bufs_, mr.second.adj_size_, mr.second.ttl_size_);
     ar_[mr.second.name_] = {mr.second.name_, ptr};
   }
 #endif
@@ -252,30 +261,32 @@ Status Manager::allocate_memory_regions() {
 
 Status Manager::map_memory_regions() {
   // Map every MR to every device for now
-  for (const auto& intf : cfg_.ifs_) {
+  for (const auto &intf : cfg_.ifs_) {
     struct rte_eth_dev_info dev_info;
     int ret = rte_eth_dev_info_get(intf.port_id_, &dev_info);
     if (ret != 0) {
-      DAQIRI_LOG_CRITICAL("Failed to get device info for port {}", intf.port_id_);
+      DAQIRI_LOG_CRITICAL("Failed to get device info for port {}",
+                          intf.port_id_);
       return Status::NULL_PTR;
     }
 
-    for (const auto& ext_mem_el : ext_pktmbufs_) {
-      const auto& ext_mem = ext_mem_el.second;
+    for (const auto &ext_mem_el : ext_pktmbufs_) {
+      const auto &ext_mem = ext_mem_el.second;
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-      ret = rte_dev_dma_map(dev_info.device, ext_mem->buf_ptr, ext_mem->buf_iova, ext_mem->buf_len);
+      ret = rte_dev_dma_map(dev_info.device, ext_mem->buf_ptr,
+                            ext_mem->buf_iova, ext_mem->buf_len);
 #pragma GCC diagnostic pop
 
       if (ret) {
-        DAQIRI_LOG_CRITICAL(
-            "Could not DMA map EXT memory: {} err={}", ret, rte_strerror(rte_errno));
+        DAQIRI_LOG_CRITICAL("Could not DMA map EXT memory: {} err={}", ret,
+                            rte_strerror(rte_errno));
         return Status::NULL_PTR;
       }
 
-      DAQIRI_LOG_INFO(
-          "Mapped external memory descriptor for {} to device {}", ext_mem->buf_ptr, intf.port_id_);
+      DAQIRI_LOG_INFO("Mapped external memory descriptor for {} to device {}",
+                      ext_mem->buf_ptr, intf.port_id_);
     }
   }
 
@@ -285,12 +296,14 @@ Status Manager::map_memory_regions() {
 // Register memory regions with the RTE library. If using DPDK as the backend to create memory
 // regions/pools, this function can register external memory regions (such as GPU memory).
 Status Manager::register_memory_regions() {
-  for (const auto& ar : ar_) {
+  for (const auto &ar : ar_) {
     auto ext_mem = std::make_shared<struct rte_pktmbuf_extmem>();
-    const auto& mr = cfg_.mrs_[ar.second.mr_name_];
+    const auto &mr = cfg_.mrs_[ar.second.mr_name_];
 
     // Hugepages use the normal rte functions that don't require extmem
-    if (mr.kind_ == MemoryKind::HUGE) { continue; }
+    if (mr.kind_ == MemoryKind::HUGE) {
+      continue;
+    }
 
     ext_mem->buf_len = mr.ttl_size_;
     ext_mem->buf_iova = RTE_BAD_IOVA;
@@ -299,69 +312,75 @@ Status Manager::register_memory_regions() {
 
     int flag = 0;
     int ret = 0;
-    CUresult s = cuDeviceGetAttribute(&flag, CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED, mr.affinity_);
+    CUresult s = cuDeviceGetAttribute(
+        &flag, CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED, mr.affinity_);
     if (s != CUDA_SUCCESS) {
-      DAQIRI_LOG_CRITICAL("Failed to get dma-buf supported for device {}", mr.affinity_);
+      DAQIRI_LOG_CRITICAL("Failed to get dma-buf supported for device {}",
+                          mr.affinity_);
       return Status::NULL_PTR;
     }
 
-      if (flag == 0) {
-        DAQIRI_LOG_WARN("dma-buf not supported for device {}. Attempting to use nvidia-peermem", mr.affinity_);
-        // GPUs have the largest page size vs CPUs, so just use that
-        ret = rte_extmem_register(
-            ext_mem->buf_ptr, ext_mem->buf_len, NULL, ext_mem->buf_iova, GPU_PAGE_SIZE);
-      } else {
-        DAQIRI_LOG_INFO("dma-buf supported for device {}", mr.affinity_);
+    if (flag == 0) {
+      DAQIRI_LOG_WARN("dma-buf not supported for device {}. Attempting to use "
+                      "nvidia-peermem",
+                      mr.affinity_);
+      // GPUs have the largest page size vs CPUs, so just use that
+      ret = rte_extmem_register(ext_mem->buf_ptr, ext_mem->buf_len, NULL,
+                                ext_mem->buf_iova, GPU_PAGE_SIZE);
+    } else {
+      DAQIRI_LOG_INFO("dma-buf supported for device {}", mr.affinity_);
 
-        const size_t host_page_size = sysconf(_SC_PAGESIZE);
-        const auto base_addr = reinterpret_cast<uintptr_t>(ext_mem->buf_ptr);
-        const auto aligned_addr = base_addr & ~(static_cast<uintptr_t>(host_page_size) - 1);
-        const auto offset = base_addr - aligned_addr;
-        const auto aligned_size =
-            (ext_mem->buf_len + offset + host_page_size - 1) & ~(host_page_size - 1);
-        const CUdeviceptr aligned_ptr = static_cast<CUdeviceptr>(aligned_addr);
+      const size_t host_page_size = sysconf(_SC_PAGESIZE);
+      const auto base_addr = reinterpret_cast<uintptr_t>(ext_mem->buf_ptr);
+      const auto aligned_addr =
+          base_addr & ~(static_cast<uintptr_t>(host_page_size) - 1);
+      const auto offset = base_addr - aligned_addr;
+      const auto aligned_size =
+          (ext_mem->buf_len + offset + host_page_size - 1) &
+          ~(host_page_size - 1);
+      const CUdeviceptr aligned_ptr = static_cast<CUdeviceptr>(aligned_addr);
 
-        DAQIRI_LOG_INFO("dma-buf GPU buffer address at {} aligned at {} with aligned size {}",
-                        ext_mem->buf_ptr,
-                        reinterpret_cast<void*>(aligned_addr),
-                        aligned_size);
+      DAQIRI_LOG_INFO(
+          "dma-buf GPU buffer address at {} aligned at {} with aligned size {}",
+          ext_mem->buf_ptr, reinterpret_cast<void *>(aligned_addr),
+          aligned_size);
 
-        int dmabuf_fd = 0;
-        CUresult error = cuMemGetHandleForAddressRange(
-            reinterpret_cast<void*>(&dmabuf_fd),
-            aligned_ptr,
-            aligned_size,
-            CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD,
-            0);
+      int dmabuf_fd = 0;
+      CUresult error = cuMemGetHandleForAddressRange(
+          reinterpret_cast<void *>(&dmabuf_fd), aligned_ptr, aligned_size,
+          CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD, 0);
 
       if (error != CUDA_SUCCESS) {
         DAQIRI_LOG_CRITICAL(
-            "cuMemGetHandleForAddressRange error={}. Falling back to peermem", static_cast<int>(error));
+            "cuMemGetHandleForAddressRange error={}. Falling back to peermem",
+            static_cast<int>(error));
         // GPUs have the largest page size vs CPUs, so just use that
-        ret = rte_extmem_register(
-            ext_mem->buf_ptr, ext_mem->buf_len, NULL, ext_mem->buf_iova, GPU_PAGE_SIZE);
+        ret = rte_extmem_register(ext_mem->buf_ptr, ext_mem->buf_len, NULL,
+                                  ext_mem->buf_iova, GPU_PAGE_SIZE);
       } else {
 #if RTE_VERSION >= RTE_VERSION_NUM(24, 11, 0, 0)
-        ret = rte_extmem_register_dmabuf(
-            ext_mem->buf_ptr, ext_mem->buf_len, dmabuf_fd, offset, NULL, 0, GPU_PAGE_SIZE);
+        ret = rte_extmem_register_dmabuf(ext_mem->buf_ptr, ext_mem->buf_len,
+                                         dmabuf_fd, offset, NULL, 0,
+                                         GPU_PAGE_SIZE);
 #else
-        DAQIRI_LOG_WARN(
-            "rte_extmem_register_dmabuf unavailable in DPDK {}; falling back to peermem registration",
-            rte_version());
+        DAQIRI_LOG_WARN("rte_extmem_register_dmabuf unavailable in DPDK {}; "
+                        "falling back to peermem registration",
+                        rte_version());
         close(dmabuf_fd);
-        ret = rte_extmem_register(
-            ext_mem->buf_ptr, ext_mem->buf_len, NULL, ext_mem->buf_iova, GPU_PAGE_SIZE);
+        ret = rte_extmem_register(ext_mem->buf_ptr, ext_mem->buf_len, NULL,
+                                  ext_mem->buf_iova, GPU_PAGE_SIZE);
 #endif
       }
     }
     if (ret) {
-      DAQIRI_LOG_CRITICAL("Unable to register addr {}, ret {} errno {}. Either nvidia-peermem is not running or the memory kind is not supported",
-                            ext_mem->buf_ptr,
-                            ret,
-                            rte_strerror(rte_errno));
+      DAQIRI_LOG_CRITICAL(
+          "Unable to register addr {}, ret {} errno {}. Either nvidia-peermem "
+          "is not running or the memory kind is not supported",
+          ext_mem->buf_ptr, ret, rte_strerror(rte_errno));
       return Status::NULL_PTR;
     } else {
-      DAQIRI_LOG_INFO("Successfully registered external memory for {}", mr.name_);
+      DAQIRI_LOG_INFO("Successfully registered external memory for {}",
+                      mr.name_);
     }
 
     ext_pktmbufs_[mr.name_] = ext_mem;
@@ -370,36 +389,33 @@ Status Manager::register_memory_regions() {
   return Status::SUCCESS;
 }
 
-struct rte_mempool* Manager::create_pktmbuf_pool(const std::string& name,
-                                                 const MemoryRegionConfig& mr) {
-  struct rte_mempool* pool;
+struct rte_mempool *Manager::create_pktmbuf_pool(const std::string &name,
+                                                 const MemoryRegionConfig &mr) {
+  struct rte_mempool *pool;
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
   if (mr.kind_ == MemoryKind::HUGE) {
-    pool =
-        rte_pktmbuf_pool_create(name.c_str(), mr.num_bufs_, 0, 0, mr.adj_size_, numa_from_mem(mr));
+    pool = rte_pktmbuf_pool_create(name.c_str(), mr.num_bufs_, 0, 0,
+                                   mr.adj_size_, numa_from_mem(mr));
   } else {
     auto pktmbuf = ext_pktmbufs_[mr.name_];
-    pool = rte_pktmbuf_pool_create_extbuf(
-        name.c_str(), mr.num_bufs_, 0, 0, mr.adj_size_, numa_from_mem(mr), pktmbuf.get(), 1);
+    pool = rte_pktmbuf_pool_create_extbuf(name.c_str(), mr.num_bufs_, 0, 0,
+                                          mr.adj_size_, numa_from_mem(mr),
+                                          pktmbuf.get(), 1);
   }
 #pragma GCC diagnostic pop
 
   return pool;
 }
 
-struct rte_mempool* Manager::create_generic_pool(const std::string& name,
-                                                 const MemoryRegionConfig& mr) {
-  struct rte_mempool* pool;
+struct rte_mempool *Manager::create_generic_pool(const std::string &name,
+                                                 const MemoryRegionConfig &mr) {
+  struct rte_mempool *pool;
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-  pool = rte_mempool_create_empty(name.c_str(),
-                                  mr.num_bufs_,
-                                  mr.adj_size_,
-                                  0,
+  pool = rte_mempool_create_empty(name.c_str(), mr.num_bufs_, mr.adj_size_, 0,
                                   sizeof(struct rte_pktmbuf_pool_private),
-                                  numa_from_mem(mr),
-                                  0);
+                                  numa_from_mem(mr), 0);
 
   // Now we have to populate the memory pool with the correct memory region buffers
   if (pool == nullptr) {
@@ -412,14 +428,15 @@ struct rte_mempool* Manager::create_generic_pool(const std::string& name,
   auto ar_it = ar_.find(mr.name_);
   if (ar_it == ar_.end()) {
     DAQIRI_LOG_ERROR(
-        "Memory region {} not found in allocated regions for pool {}", mr.name_, name);
+        "Memory region {} not found in allocated regions for pool {}", mr.name_,
+        name);
     rte_mempool_free(pool);
     return nullptr;
   }
 
-  const AllocRegion& alloc_region = ar_it->second;
+  const AllocRegion &alloc_region = ar_it->second;
   size_t total_size = static_cast<size_t>(mr.num_bufs_) * mr.adj_size_;
-  size_t page_size = mr.adj_size_;  // Default to adjusted size (element size)
+  size_t page_size = mr.adj_size_; // Default to adjusted size (element size)
 
   if (mr.kind_ == MemoryKind::DEVICE) {
     page_size = GPU_PAGE_SIZE;
@@ -427,53 +444,43 @@ struct rte_mempool* Manager::create_generic_pool(const std::string& name,
     page_size = 4096;
   }
 
-  DAQIRI_LOG_INFO("Populating mempool {} for MR {} with {} objects of size {} at VA {} ",
-                    name,
-                    mr.name_,
-                    mr.num_bufs_,
-                    mr.adj_size_,
-                    alloc_region.ptr_);
+  DAQIRI_LOG_INFO(
+      "Populating mempool {} for MR {} with {} objects of size {} at VA {} ",
+      name, mr.name_, mr.num_bufs_, mr.adj_size_, alloc_region.ptr_);
   // Check if the allocated size matches the expected total size
   // Note: AllocRegion might store the originally requested size (buf_size_ * num_bufs_)
   // or the adjusted size. Assuming it holds the base pointer to the whole region.
   // We need the IOVA of the start of the buffer.
-  int ret = rte_mempool_populate_iova(pool,
-                                      static_cast<char*>(alloc_region.ptr_),
-                                      RTE_BAD_IOVA,
-                                      total_size,
-                                      nullptr,
-                                      nullptr);  // Opaque data for callback
+  int ret =
+      rte_mempool_populate_iova(pool, static_cast<char *>(alloc_region.ptr_),
+                                RTE_BAD_IOVA, total_size, nullptr,
+                                nullptr); // Opaque data for callback
 
   if (ret < 0) {
-    DAQIRI_LOG_ERROR(
-        "Failed to populate mempool {} for MR {}: {}", name, mr.name_, rte_strerror(rte_errno));
+    DAQIRI_LOG_ERROR("Failed to populate mempool {} for MR {}: {}", name,
+                     mr.name_, rte_strerror(rte_errno));
     rte_mempool_free(pool);
     return nullptr;
   } else if (static_cast<unsigned>(ret) != mr.num_bufs_) {
-    DAQIRI_LOG_WARN("Populated mempool {} for MR {} with {} objects, expected {}",
-                      name,
-                      mr.name_,
-                      ret,
-                      mr.num_bufs_);
+    DAQIRI_LOG_WARN(
+        "Populated mempool {} for MR {} with {} objects, expected {}", name,
+        mr.name_, ret, mr.num_bufs_);
     // This might not be critical depending on how sizes align, but worth noting.
   } else {
-    DAQIRI_LOG_INFO(
-        "Successfully populated generic mempool {} for MR {} with {} objects of size {} at VA {} ",
-        name,
-        mr.name_,
-        ret,
-        mr.adj_size_,
-        alloc_region.ptr_);
+    DAQIRI_LOG_INFO("Successfully populated generic mempool {} for MR {} with "
+                    "{} objects of size {} at VA {} ",
+                    name, mr.name_, ret, mr.adj_size_, alloc_region.ptr_);
   }
 #pragma GCC diagnostic pop
 
   return pool;
 }
 
-int Manager::numa_from_mem(const MemoryRegionConfig& mr) const {
+int Manager::numa_from_mem(const MemoryRegionConfig &mr) const {
   if (mr.kind_ == MemoryKind::DEVICE) {
     int val;
-    if (cudaDeviceGetAttribute(&val, cudaDevAttrHostNumaId, mr.affinity_) != cudaSuccess) {
+    if (cudaDeviceGetAttribute(&val, cudaDevAttrHostNumaId, mr.affinity_) !=
+        cudaSuccess) {
       DAQIRI_LOG_ERROR("Failed to get NUMA node from device {}", mr.affinity_);
       return -1;
     }
@@ -491,10 +498,14 @@ int Manager::numa_from_mem(const MemoryRegionConfig& mr) const {
  * @param key PCIe address, IP address, or config name of the interface to look up
  * @return int Port ID or -1 if not found
  */
-int Manager::get_port_id(const std::string& key) {
-  for (const auto& intf : cfg_.ifs_) {
-    if (intf.address_ == key) { return intf.port_id_; }
-    if (intf.name_ == key) { return intf.port_id_; }
+int Manager::get_port_id(const std::string &key) {
+  for (const auto &intf : cfg_.ifs_) {
+    if (intf.address_ == key) {
+      return intf.port_id_;
+    }
+    if (intf.name_ == key) {
+      return intf.port_id_;
+    }
   }
   return -1;
 }
@@ -505,29 +516,37 @@ bool Manager::validate_config() const {
   std::set<std::string> q_mr_names;
 
   // Verify all memory regions are used in queues and all queue MRs are listed in the MR section
-  for (const auto& mr : cfg_.mrs_) { mr_names.emplace(mr.second.name_); }
+  for (const auto &mr : cfg_.mrs_) {
+    mr_names.emplace(mr.second.name_);
+  }
 
-  for (const auto& intf : cfg_.ifs_) {
-    for (const auto& rxq : intf.rx_.queues_) {
-      for (const auto& mr : rxq.common_.mrs_) { q_mr_names.emplace(mr); }
+  for (const auto &intf : cfg_.ifs_) {
+    for (const auto &rxq : intf.rx_.queues_) {
+      for (const auto &mr : rxq.common_.mrs_) {
+        q_mr_names.emplace(mr);
+      }
     }
-    for (const auto& txq : intf.tx_.queues_) {
-      for (const auto& mr : txq.common_.mrs_) { q_mr_names.emplace(mr); }
+    for (const auto &txq : intf.tx_.queues_) {
+      for (const auto &mr : txq.common_.mrs_) {
+        q_mr_names.emplace(mr);
+      }
     }
   }
 
   // All MRs are in queues
-  for (const auto& mr : mr_names) {
+  for (const auto &mr : mr_names) {
     if (q_mr_names.find(mr) == q_mr_names.end()) {
-      DAQIRI_LOG_WARN("Extra MR section with name {} unused in queues section", mr);
+      DAQIRI_LOG_WARN("Extra MR section with name {} unused in queues section",
+                      mr);
     }
   }
 
   // All queue MRs are in MR list
-  for (const auto& mr : q_mr_names) {
+  for (const auto &mr : q_mr_names) {
     if (mr_names.find(mr) == mr_names.end()) {
-      DAQIRI_LOG_ERROR(
-          "Queue found using MR {}, but that MR doesn't exist in the memory_region config", mr);
+      DAQIRI_LOG_ERROR("Queue found using MR {}, but that MR doesn't exist in "
+                       "the memory_region config",
+                       mr);
       pass = false;
     }
   }
@@ -536,16 +555,18 @@ bool Manager::validate_config() const {
 }
 
 void Manager::init_rx_core_q_map() {
-  for (const auto& intf : cfg_.ifs_) {
+  for (const auto &intf : cfg_.ifs_) {
     // Initialize the round-robin index for this port
     next_queue_index_map_.try_emplace(intf.port_id_, 0);
 
-    for (const auto& q : intf.rx_.queues_) {
+    for (const auto &q : intf.rx_.queues_) {
       int cpu_core = strtol(q.common_.cpu_core_.c_str(), nullptr, 10);
-      rx_core_q_map[cpu_core].push_back(std::make_pair(intf.port_id_, q.common_.id_));
+      rx_core_q_map[cpu_core].push_back(
+          std::make_pair(intf.port_id_, q.common_.id_));
 
       if (rx_core_q_map[cpu_core].size() > MAX_RX_Q_PER_CORE) {
-        DAQIRI_LOG_CRITICAL("Too many RX queues assigned to core {}!", cpu_core);
+        DAQIRI_LOG_CRITICAL("Too many RX queues assigned to core {}!",
+                            cpu_core);
       }
     }
   }
@@ -569,16 +590,16 @@ Status Manager::allow_all_traffic(int port) {
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::get_rx_burst(BurstParams** burst, int port_id) {
+Status Manager::get_rx_burst(BurstParams **burst, int port_id) {
   // Check if the port_id is valid
   if (port_id < 0 || port_id >= static_cast<int>(cfg_.ifs_.size())) {
     DAQIRI_LOG_ERROR("Invalid port_id {} provided to get_rx_burst", port_id);
     return Status::INVALID_PARAMETER;
   }
 
-  const auto& queues = cfg_.ifs_[port_id].rx_.queues_;
+  const auto &queues = cfg_.ifs_[port_id].rx_.queues_;
   size_t num_queues = queues.size();
-  size_t& next_queue_index = next_queue_index_map_[port_id];
+  size_t &next_queue_index = next_queue_index_map_[port_id];
 
   // Check all queues once, starting from the next index
   for (size_t i = 0; i < num_queues; ++i) {
@@ -597,7 +618,7 @@ Status Manager::get_rx_burst(BurstParams** burst, int port_id) {
   return Status::NULL_PTR;
 }
 
-Status Manager::get_rx_burst(BurstParams** burst) {
+Status Manager::get_rx_burst(BurstParams **burst) {
   if (cfg_.ifs_.empty()) {
     DAQIRI_LOG_ERROR("No interfaces configured");
     return Status::NULL_PTR;
@@ -622,95 +643,111 @@ Status Manager::get_rx_burst(BurstParams** burst) {
   return Status::NULL_PTR;
 }
 
-Status Manager::socket_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
-                                         uintptr_t* conn_id) {
+Status Manager::socket_connect_to_server(const std::string &dst_addr,
+                                         uint16_t dst_port,
+                                         uintptr_t *conn_id) {
   DAQIRI_LOG_CRITICAL("Socket connect to server not implemented");
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::socket_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
-                                         const std::string& src_addr, uintptr_t* conn_id) {
+Status Manager::socket_connect_to_server(const std::string &dst_addr,
+                                         uint16_t dst_port,
+                                         const std::string &src_addr,
+                                         uintptr_t *conn_id) {
   DAQIRI_LOG_CRITICAL("Socket connect to server not implemented");
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::socket_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) {
+Status Manager::socket_get_port_queue(uintptr_t conn_id, uint16_t *port,
+                                      uint16_t *queue) {
   DAQIRI_LOG_CRITICAL("Socket get port queue not implemented");
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::socket_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
-                                          uintptr_t* conn_id) {
+Status Manager::socket_get_server_conn_id(const std::string &server_addr,
+                                          uint16_t server_port,
+                                          uintptr_t *conn_id) {
   DAQIRI_LOG_CRITICAL("Socket get server conn ID not implemented");
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
-                                       uintptr_t* conn_id) {
+Status Manager::rdma_connect_to_server(const std::string &dst_addr,
+                                       uint16_t dst_port, uintptr_t *conn_id) {
   DAQIRI_LOG_CRITICAL("RDMA connect to server not implemented");
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
-                                       const std::string& src_addr, uintptr_t* conn_id) {
+Status Manager::rdma_connect_to_server(const std::string &dst_addr,
+                                       uint16_t dst_port,
+                                       const std::string &src_addr,
+                                       uintptr_t *conn_id) {
   DAQIRI_LOG_CRITICAL("RDMA connect to server not implemented");
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::rdma_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) {
+Status Manager::rdma_get_port_queue(uintptr_t conn_id, uint16_t *port,
+                                    uint16_t *queue) {
   DAQIRI_LOG_CRITICAL("RDMA get port queue not implemented");
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::rdma_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
-                                        uintptr_t* conn_id) {
+Status Manager::rdma_get_server_conn_id(const std::string &server_addr,
+                                        uint16_t server_port,
+                                        uintptr_t *conn_id) {
   DAQIRI_LOG_CRITICAL("RDMA get server conn ID not implemented");
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server) {
+Status Manager::get_rx_burst(BurstParams **burst, uintptr_t conn_id,
+                             bool server) {
   DAQIRI_LOG_CRITICAL("RDMA get RX burst not implemented");
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::set_all_packet_lengths(BurstParams* burst,
-                                       const std::initializer_list<int>& lens) {
-  if (burst == nullptr) { return Status::NULL_PTR; }
+Status Manager::set_all_packet_lengths(BurstParams *burst,
+                                       const std::initializer_list<int> &lens) {
+  if (burst == nullptr) {
+    return Status::NULL_PTR;
+  }
   for (size_t idx = 0; idx < burst->hdr.hdr.num_pkts; ++idx) {
     const auto status = set_packet_lengths(burst, static_cast<int>(idx), lens);
-    if (status != Status::SUCCESS) { return status; }
+    if (status != Status::SUCCESS) {
+      return status;
+    }
   }
   return Status::SUCCESS;
 }
 
-Status Manager::set_reorder_cuda_stream(const std::string& interface_name,
-                                        const std::string& reorder_name,
+Status Manager::set_reorder_cuda_stream(const std::string &interface_name,
+                                        const std::string &reorder_name,
                                         cudaStream_t stream) {
   DAQIRI_LOG_ERROR(
       "set_reorder_cuda_stream not implemented for this manager type "
       "(interface='{}', reorder='{}')",
-      interface_name,
-      reorder_name);
+      interface_name, reorder_name);
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info) {
+Status Manager::get_reorder_burst_info(BurstParams *burst,
+                                       ReorderBurstInfo *info) {
   (void)burst;
   (void)info;
-  DAQIRI_LOG_ERROR("get_reorder_burst_info not implemented for this manager type");
+  DAQIRI_LOG_ERROR(
+      "get_reorder_burst_info not implemented for this manager type");
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id,
-                                bool is_server, int num_pkts, uint64_t wr_id,
-                                const std::string& local_mr_name) {
+Status Manager::rdma_set_header(BurstParams *burst, RDMAOpCode op_code,
+                                uintptr_t conn_id, bool is_server, int num_pkts,
+                                uint64_t wr_id,
+                                const std::string &local_mr_name) {
   DAQIRI_LOG_CRITICAL("RDMA set header not implemented");
   return Status::NOT_SUPPORTED;
 }
 
-RDMAOpCode Manager::rdma_get_opcode(BurstParams* burst) {
+RDMAOpCode Manager::rdma_get_opcode(BurstParams *burst) {
   DAQIRI_LOG_CRITICAL("RDMA get opcode not implemented");
   return RDMAOpCode::INVALID;
 }
 
-};  // namespace daqiri
+}; // namespace daqiri

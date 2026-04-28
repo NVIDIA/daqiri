@@ -34,7 +34,8 @@
 
 namespace {
 
-void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg, std::atomic<bool>& stop) {
+void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
+               std::atomic<bool> &stop) {
   const int port_id = daqiri::get_port_id(cfg.interface_name);
   if (port_id < 0) {
     std::cerr << "Invalid TX interface_name: " << cfg.interface_name << "\n";
@@ -62,11 +63,12 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg, std::atomic<bool>& st
     payload_template[i] = static_cast<uint8_t>(i & 0xff);
   }
 
-  std::unordered_set<void*> initialized_tx_buffers;
+  std::unordered_set<void *> initialized_tx_buffers;
 
   while (!stop.load()) {
-    auto* msg = daqiri::create_tx_burst_params();
-    daqiri::set_header(msg, static_cast<uint16_t>(port_id), 0, cfg.batch_size, 1);
+    auto *msg = daqiri::create_tx_burst_params();
+    daqiri::set_header(msg, static_cast<uint16_t>(port_id), 0, cfg.batch_size,
+                       1);
 
     if (!daqiri::is_tx_burst_available(msg)) {
       daqiri::free_tx_metadata(msg);
@@ -87,30 +89,24 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg, std::atomic<bool>& st
       src_idx = (src_idx + 1) % src_ports.size();
       dst_idx = (dst_idx + 1) % dst_ports.size();
 
-      auto* gpu_pkt = daqiri::get_segment_packet_ptr(msg, 0, i);
+      auto *gpu_pkt = daqiri::get_segment_packet_ptr(msg, 0, i);
       if (initialized_tx_buffers.insert(gpu_pkt).second) {
-        std::vector<uint8_t> packet_template(static_cast<size_t>(cfg.header_size) +
-                                             cfg.payload_size);
-        daqiri::bench::populate_udp_ipv4_headers(packet_template.data(),
-                                                 cfg.header_size,
-                                                 cfg.payload_size,
-                                                 eth_dst,
-                                                 ip_src,
-                                                 ip_dst,
-                                                 src_port,
-                                                 dst_port);
-        std::memcpy(packet_template.data() + cfg.header_size, payload_template.data(),
-                    cfg.payload_size);
-        if (cudaMemcpy(
-                gpu_pkt, packet_template.data(), packet_template.size(), cudaMemcpyHostToDevice) !=
-            cudaSuccess) {
+        std::vector<uint8_t> packet_template(
+            static_cast<size_t>(cfg.header_size) + cfg.payload_size);
+        daqiri::bench::populate_udp_ipv4_headers(
+            packet_template.data(), cfg.header_size, cfg.payload_size, eth_dst,
+            ip_src, ip_dst, src_port, dst_port);
+        std::memcpy(packet_template.data() + cfg.header_size,
+                    payload_template.data(), cfg.payload_size);
+        if (cudaMemcpy(gpu_pkt, packet_template.data(), packet_template.size(),
+                       cudaMemcpyHostToDevice) != cudaSuccess) {
           failed = true;
           break;
         }
       }
 
-      if (daqiri::set_packet_lengths(msg, i,
-                                     {static_cast<int>(cfg.header_size + cfg.payload_size)}) !=
+      if (daqiri::set_packet_lengths(
+              msg, i, {static_cast<int>(cfg.header_size + cfg.payload_size)}) !=
           daqiri::Status::SUCCESS) {
         failed = true;
         break;
@@ -125,9 +121,9 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg, std::atomic<bool>& st
   }
 }
 
-}  // namespace
+} // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0] << " <config.yaml> [--seconds N]\n";
     return 1;
@@ -153,17 +149,22 @@ int main(int argc, char** argv) {
   std::thread rx_thread;
 
   if (has_rx) {
-    rx_thread =
-        std::thread(daqiri::bench::rx_count_worker, daqiri::bench::parse_rx(root), std::ref(stop));
+    rx_thread = std::thread(daqiri::bench::rx_count_worker,
+                            daqiri::bench::parse_rx(root), std::ref(stop));
   }
   if (has_tx) {
-    tx_thread = std::thread(tx_worker, daqiri::bench::parse_tx(root), std::ref(stop));
+    tx_thread =
+        std::thread(tx_worker, daqiri::bench::parse_tx(root), std::ref(stop));
   }
 
   daqiri::bench::wait_for_stop(run_seconds, stop);
 
-  if (tx_thread.joinable()) { tx_thread.join(); }
-  if (rx_thread.joinable()) { rx_thread.join(); }
+  if (tx_thread.joinable()) {
+    tx_thread.join();
+  }
+  if (rx_thread.joinable()) {
+    rx_thread.join();
+  }
 
   daqiri::print_stats();
   daqiri::shutdown();

@@ -24,15 +24,16 @@
 namespace daqiri {
 
 const std::unordered_map<uint32_t, std::tuple<std::string, std::string>>
-    DpdkLogLevel::level_to_cmd_map = {{OFF, {"Disabled", "error"}},
-                                      {RTE_LOG_EMERG, {"Emergency", "emergency"}},
-                                      {RTE_LOG_ALERT, {"Alert", "alert"}},
-                                      {RTE_LOG_CRIT, {"Critical", "critical"}},
-                                      {RTE_LOG_ERR, {"Error", "error"}},
-                                      {RTE_LOG_WARNING, {"Warning", "warning"}},
-                                      {RTE_LOG_NOTICE, {"Notice", "notice"}},
-                                      {RTE_LOG_INFO, {"Info", "info"}},
-                                      {RTE_LOG_DEBUG, {"Debug", "debug"}}};
+    DpdkLogLevel::level_to_cmd_map = {
+        {OFF, {"Disabled", "error"}},
+        {RTE_LOG_EMERG, {"Emergency", "emergency"}},
+        {RTE_LOG_ALERT, {"Alert", "alert"}},
+        {RTE_LOG_CRIT, {"Critical", "critical"}},
+        {RTE_LOG_ERR, {"Error", "error"}},
+        {RTE_LOG_WARNING, {"Warning", "warning"}},
+        {RTE_LOG_NOTICE, {"Notice", "notice"}},
+        {RTE_LOG_INFO, {"Info", "info"}},
+        {RTE_LOG_DEBUG, {"Debug", "debug"}}};
 
 const std::unordered_map<LogLevel::Level, uint32_t>
     DpdkLogLevel::ano_to_dpdk_log_level_map = {
@@ -45,4 +46,4 @@ const std::unordered_map<LogLevel::Level, uint32_t>
         {LogLevel::OFF, OFF},
 };
 
-}  // namespace daqiri
+} // namespace daqiri

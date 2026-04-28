@@ -36,6 +36,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-pip \
         git \
         build-essential \
+        clang-format \
     && OS_CODENAME=$(. /etc/os-release && echo "$VERSION_CODENAME") \
     && KW_KEYRING="/usr/share/keyrings/kitware-archive-keyring.gpg" \
     && curl -fsSL "https://apt.kitware.com/keys/kitware-archive-latest.asc" \
