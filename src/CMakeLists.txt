@@ -92,11 +92,11 @@ endif()
 target_link_libraries(daqiri_common
     PUBLIC
         CUDA::cudart
+        CUDA::cuda_driver
+        ${DAQIRI_YAML_TARGET}
         ${DPDK_LDFLAGS_OTHER}
         ${DPDK_LIBRARIES}
     PRIVATE
-        ${DAQIRI_YAML_TARGET}
-        CUDA::cuda_driver
 )
 set_target_properties(daqiri_common PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON

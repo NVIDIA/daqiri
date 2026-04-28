@@ -36,18 +36,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-pip \
         git \
         build-essential \
-    && OS_CODENAME=$(. /etc/os-release && echo "$VERSION_CODENAME") \
-    && KW_KEYRING="/usr/share/keyrings/kitware-archive-keyring.gpg" \
-    && curl -fsSL "https://apt.kitware.com/keys/kitware-archive-latest.asc" \
-        | gpg --dearmor -o "$KW_KEYRING" \
-    && echo "deb [signed-by=$KW_KEYRING] https://apt.kitware.com/ubuntu/ $OS_CODENAME main" \
-        > /etc/apt/sources.list.d/kitware.list \
-    && apt-get update \
-    && rm "$KW_KEYRING" \
-    && apt-get install --no-install-recommends -y \
-        kitware-archive-keyring \
-        cmake="3.*" \
-        cmake-data="3.*" \
+        clang-format \
+        cmake \
+        cmake-data \
     && rm -rf /var/lib/apt/lists/*
 
 # ==============================================================
@@ -72,6 +63,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libmlx5-1 \
         ibverbs-utils \
         python3-dev \
+        pybind11-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # PIP installs

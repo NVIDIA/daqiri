@@ -26,6 +26,10 @@ set(DAQIRI_BENCH_CONFIGS
   daqiri_bench_socket_tcp_tx_rx.yaml
 )
 
+set(DAQIRI_PYTHON_EXAMPLES
+  daqiri_bench_raw_tx_rx.py
+)
+
 function(link_daqiri_bench target)
   target_compile_features(${target} PRIVATE cxx_std_17)
   if(NOT BUILD_SHARED_LIBS AND UNIX AND NOT APPLE)
@@ -74,6 +78,10 @@ foreach(cfg IN LISTS DAQIRI_BENCH_CONFIGS)
   configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${cfg} ${CMAKE_CURRENT_BINARY_DIR}/${cfg} COPYONLY)
 endforeach()
 
+foreach(example IN LISTS DAQIRI_PYTHON_EXAMPLES)
+  configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${example} ${CMAKE_CURRENT_BINARY_DIR}/${example} COPYONLY)
+endforeach()
+
 install(TARGETS
         daqiri_bench_raw_hds
         daqiri_bench_raw_gpudirect
@@ -84,3 +92,8 @@ install(TARGETS
         RUNTIME DESTINATION bin)
 install(FILES ${DAQIRI_BENCH_CONFIGS}
         DESTINATION bin)
+install(FILES ${DAQIRI_PYTHON_EXAMPLES}
+        DESTINATION bin
+        PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
+                    GROUP_EXECUTE GROUP_READ
+                    WORLD_EXECUTE WORLD_READ)

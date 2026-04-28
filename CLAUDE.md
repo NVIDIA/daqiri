@@ -74,3 +74,8 @@ From `CONTRIBUTING.md`:
 - An issue must exist and be approved before coding.
 - Prefer toggling features via new CMake options (with backward-compatible defaults) rather than wrapping entire files in `#if` guards. Use `#if` only for minor in-file changes.
 - Keep PRs narrowly scoped — one concern per PR, dependencies noted in the description.
+
+## Compiling and Running
+
+Compiling should always be done inside of the container built from the project's Dockerfile. The container should be started in privileged mode with all GPUs passed though. Hugepages mounted on the host should be passed through into the container via a volume mount. When compiling the container should be started with the current user. When running the  
+container should run as root.
