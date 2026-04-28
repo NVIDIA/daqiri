@@ -403,7 +403,15 @@ def check_nvidia_gpu_clocks():
         output = result.stdout.strip().splitlines()
 
         for idx, line in enumerate(output):
-            sm_current, sm_max, mem_current, mem_max = map(int, line.split(","))
+            fields = [f.strip() for f in line.split(",")]
+
+            def parse_clock(val):
+                try:
+                    return int(val)
+                except ValueError:
+                    return None
+
+            sm_current, sm_max, mem_current, mem_max = (parse_clock(f) for f in fields)
 
             logging.debug(f"GPU {idx}: Checking clocks...")
 
@@ -417,21 +425,30 @@ def check_nvidia_gpu_clocks():
             #
             # Anecdotally if a user has not set their clocks at all the value will be very low,
             # around 100-300MHz. Having a check within 500MHz should be sufficient to catch this.
-            sm_margin = 500
-            if abs(sm_current - sm_max) > sm_margin:
-                logging.warning(
-                    f"GPU {idx}: SM Clock is set to {sm_current} MHz, but should be within {sm_margin} MHz of the {sm_max} MHz theoretical Max."
-                )
-            elif sm_current < sm_max:
-                logging.info(
-                    f"GPU {idx}: SM Clock is correctly set to {sm_current} MHz (within {sm_margin} of the {sm_max} MHz theoretical Max)."
-                )
+            if sm_max is None:
+                logging.info(f"GPU {idx}: SM clock reported as N/A (not applicable for this GPU).")
+            elif sm_current is None:
+                logging.warning(f"GPU {idx}: SM clock current value is N/A but max is {sm_max} MHz — unexpected.")
             else:
-                logging.info(f"GPU {idx}: SM Clock is correctly set to {sm_current} MHz.")
+                sm_margin = 500
+                if abs(sm_current - sm_max) > sm_margin:
+                    logging.warning(
+                        f"GPU {idx}: SM Clock is set to {sm_current} MHz, but should be within {sm_margin} MHz of the {sm_max} MHz theoretical Max."
+                    )
+                elif sm_current < sm_max:
+                    logging.info(
+                        f"GPU {idx}: SM Clock is correctly set to {sm_current} MHz (within {sm_margin} of the {sm_max} MHz theoretical Max)."
+                    )
+                else:
+                    logging.info(f"GPU {idx}: SM Clock is correctly set to {sm_current} MHz.")
 
             # nvidia-smi has a bug where the memory clock is reported as 1 MHz less than the max in
             # some cases
-            if abs(mem_current - mem_max) > 1:
+            if mem_max is None:
+                logging.info(f"GPU {idx}: Memory clock reported as N/A (not applicable for this GPU).")
+            elif mem_current is None:
+                logging.warning(f"GPU {idx}: Memory clock current value is N/A but max is {mem_max} MHz — unexpected.")
+            elif abs(mem_current - mem_max) > 1:
                 logging.warning(
                     f"GPU {idx}: Memory Clock is set to {mem_current} MHz, but should be {mem_max} MHz."
                 )
