@@ -19,26 +19,6 @@ In this tutorial, we will be developing on an **NVIDIA IGX Orin platform** with 
 
     If you have secure boot enabled on your system, you might need to disable it as a prerequisite to run some of the configurations below ([switching the NIC link layers to Ethernet](#22-switch-your-nic-link-layers-to-ethernet), [updating the MRRS of your NIC ports](#33-maximize-the-nics-max-read-request-size-mrrs), [updating the BAR1 size of your GPU](#38-maximize-gpu-bar1-size)). Secure boot can be re-enabled after the configurations are completed.
 
-!!! Warning "DPDK Hardware Steering (HWS) compatibility"
-
-    The DPDK backend uses Hardware Steering (HWS) via the `dv_flow_en=2` mlx5 device argument. HWS requires compatible versions of both the NIC firmware and the host's MLNX_OFED kernel modules. Per the [DPDK mlx5 documentation](https://doc.dpdk.org/guides/nics/mlx5.html), the minimum requirements are ConnectX-6 Dx or later with firmware `xx.35.1012`+, but the host's OFED/kernel driver must also support the HWS features expected by the DPDK version in use.
-
-    If you encounter the following error:
-
-    ```log
-    mlx5_net: [mlx5dr_action_create_generic_bulk]: Cannot create HWS action since HWS is not supported
-    mlx5_net: Failed to start port 0 <address>: fail to configure port
-    ```
-
-    Check your OFED and firmware versions:
-
-    ```bash
-    cat /sys/module/mlx5_core/version   # Host OFED kernel module version
-    ethtool -i <interface_name> | grep firmware  # NIC firmware version
-    ```
-
-    To resolve, update your NIC firmware and OFED drivers, or contact the DAQIRI team for guidance on compatible version combinations.
-
 ## Background
 
 Achieving high performance networking is a complex problem that involves many system components and configurations which we will cover in this tutorial. Two of the core concepts to achieve this are named Kernel Bypass, and GPUDirect.
@@ -992,7 +972,7 @@ Rerunning the initial commands should now list 4 hugepages of 1GB each. 1GB will
 
 The CPU interacting with the NIC to route packets is sensitive to perturbations, especially with smaller packet/batch sizes requiring more frequent work. Isolating a CPU in Linux prevents unwanted user or kernel threads from running on it, reducing context switching and latency spikes from noisy neighbors.
 
-We recommend isolating the CPU cores you will select to interact with the NIC (defined in the `advanced_network` configuration [described later](#51-understand-the-configuration-parameters) in this tutorial). This is done by setting additional flags on the kernel bootline.
+We recommend isolating the CPU cores you will select to interact with the NIC (defined in the `daqiri` configuration [described later](#5-understanding-the-configuration-parameters) in this tutorial). This is done by setting additional flags on the kernel bootline.
 
 You can first check if any of the recommended flags were already set on the last boot:
 
@@ -1532,7 +1512,7 @@ Make sure to [build the DAQIRI library](#1-building-the-daqiri-library) beforeha
 
 ### 4.1 Running the DAQIRI container
 
-If you built DAQIRI using the container approach, use the following command to launch the container with DPDK and GPU support. The host system must be fully configured (Sections [2](#2-required-system-setup) and [3](#3-performance-tuning)) before the container can access the NIC and GPU hardware.
+If you built DAQIRI using the container approach, use the following command to launch the container with DPDK and GPU support. The host system must be fully configured (Sections [2](#2-required-system-setup) and [3](#3-optimal-system-configurations)) before the container can access the NIC and GPU hardware.
 
 ```bash
 docker run --rm -it --privileged \
@@ -1560,7 +1540,7 @@ The benchmark executables and example YAML configurations are located at:
 | **Container** | `/opt/daqiri/bin/` | `/opt/daqiri/bin/` |
 | **From source** | `./build/examples/` | `./examples/` |
 
-The fields in the YAML configs will be explained in more detail in [a section below](#51-understand-the-configuration-parameters). For now, we'll stick to modifying the strict minimum required fields to run the application as-is on your system.
+The fields in the YAML configs will be explained in more detail in [a section below](#5-understanding-the-configuration-parameters). For now, we'll stick to modifying the strict minimum required fields to run the application as-is on your system.
 
 ##### Identify your NIC's PCIe addresses
 
@@ -1672,7 +1652,11 @@ After having modified the configuration file, ensure you have connected an SFP c
 
 The application will run indefinitely. You can stop it gracefully with `Ctrl-C`. You can also uncomment and set the `max_duration_ms` field in the `scheduler` section of the configuration file to limit the duration of the run automatically.
 
-??? abstract "See an example output"
+??? abstract "See an example output — PLACEHOLDER"
+
+    !!! warning "Placeholder"
+
+        The log output below is from the legacy Advanced Networking Operator and will be updated with DAQIRI output in a future revision. The structure and flow of the output is representative, but binary names, log prefixes (`adv_network_*`, `ANO`), and some configuration details will differ.
 
     ```log
     [info] [fragment.cpp:599] Loading extensions from configs...
@@ -1913,7 +1897,16 @@ sudo mlnx_perf -i $if_name
         [CRITICAL] Cannot start device err=-95, port=0
         ```
 
-        Your system does not support DPDK Hardware Steering (HWS). This is typically caused by an incompatibility between the DPDK version and the host's OFED kernel modules or NIC firmware. See the [HWS compatibility note](#prerequisites) in the Prerequisites section for details.
+        The DPDK backend uses Hardware Steering (HWS) via the `dv_flow_en=2` mlx5 device argument. HWS requires compatible versions of both the NIC firmware and the host's MLNX_OFED kernel modules. Per the [DPDK mlx5 documentation](https://doc.dpdk.org/guides/nics/mlx5.html), the minimum requirements are ConnectX-6 Dx or later with firmware `xx.35.1012`+, but the host's OFED/kernel driver must also support the HWS features expected by the DPDK version in use.
+
+        Check your OFED and firmware versions:
+
+        ```bash
+        cat /sys/module/mlx5_core/version   # Host OFED kernel module version
+        ethtool -i <interface_name> | grep firmware  # NIC firmware version
+        ```
+
+        To resolve, update your NIC firmware and OFED drivers, or contact the DAQIRI team for guidance on compatible version combinations.
 
     ??? failure "EAL: failed to parse device"
 
@@ -1999,7 +1992,14 @@ sudo mlnx_perf -i $if_name
 
 This section walks through the YAML configuration used by the benchmark applications. The annotated example below is based on `daqiri_bench_default_tx_rx.yaml`. Click on the :material-plus-circle: icons to expand explanations for each annotated line.
 
-```yaml
+Annotations are prefixed with a category:
+
+- :material-wrench:{ title="System-specific" } **System-specific** — must be changed for your hardware (these lines are highlighted in the code block below)
+- :material-package-variant:{ title="Payload-dependent" } **Payload-dependent** — adjust based on your application's packet format and throughput needs
+
+Fields with neither prefix are structural and typically do not need to change.
+
+```yaml hl_lines="5 28 34 40 46 77 78 79"
 daqiri: # (1)!
   cfg:
     version: 1
@@ -2085,31 +2085,31 @@ bench_tx: # (30)!
 
 1. The `daqiri` section configures the DAQIRI library, which is responsible for setting up the NIC. It is passed to `daqiri_init(...)` during application startup.
 2. `manager` is the backend networking library. Supported values: `dpdk`, `rdma`.
-3. `master_core` is the ID of the CPU core used for setup. It does not need to be isolated, and is recommended to differ from the `cpu_core` fields below used for polling the NIC.
+3. :material-wrench: `master_core` is the ID of the CPU core used for setup. It does not need to be isolated, and is recommended to differ from the `cpu_core` fields below used for polling the NIC.
 4. The `memory_regions` section lists where the NIC will write/read data from/to when bypassing the OS kernel. Tip: when using GPU buffer regions, keeping the sum of their buffer sizes lower than 80% of your BAR1 size is generally a good rule of thumb.
 5. A descriptive name for that memory region to refer to later in the `interfaces` section.
-6. The type of memory region. Best options are `device` (GPU) or `huge` (hugepages - CPU). Also supported: `host_pinned` (CPU, pinned) and `host` (CPU, unpinned).
-7. The GPU ID for `device` memory regions. The NUMA node ID for CPU memory regions.
-8. The number of buffers in the memory region. A higher value means more time to process the data, but takes additional space on the GPU BAR1. Too low increases the risk of dropping packets from the NIC having nowhere to write (Rx) or higher latency from buffering (Tx). A good starting point is 5x the `batch_size` below.
-9. The size of each buffer in the memory region. These should be equal to your maximum packet size, or less if breaking down packets (e.g. header-data split, see the `rx` queue below).
+6. :material-package-variant: The type of memory region. Best options are `device` (GPU) or `huge` (hugepages - CPU). Also supported: `host_pinned` (CPU, pinned) and `host` (CPU, unpinned). Choose based on whether your application processes packets on the GPU or CPU.
+7. :material-wrench: The GPU ID for `device` memory regions. The NUMA node ID for CPU memory regions.
+8. :material-package-variant: The number of buffers in the memory region. A higher value means more time to process the data, but takes additional space on the GPU BAR1. Too low increases the risk of dropping packets from the NIC having nowhere to write (Rx) or higher latency from buffering (Tx). A good starting point is 5x the `batch_size` below.
+9. :material-package-variant: The size of each buffer in the memory region. These should be equal to your maximum packet size, or less if breaking down packets (e.g. header-data split, see the `rx` queue below).
 10. The `interfaces` section lists the NIC interfaces that will be configured for the application.
 11. A descriptive name for that interface, currently only used for logging.
-12. The PCIe/bus address of that interface, as identified in previous sections.
+12. :material-wrench: The PCIe/bus address of that interface, as identified in previous sections. **Must be changed for your system.**
 13. Each interface can have a `tx` (transmitting) or `rx` (receiving) section, or both if you'd like to configure both Tx and Rx on the same interface.
 14. The `queues` section lists the queues for that interface. Queues are a core concept of NICs: they handle the actual receiving or transmitting of network packets. Rx queues buffer incoming packets until they can be processed by the application, while Tx queues hold outgoing packets waiting to be sent on the network. The simplest setup uses only one receive and one transmit queue. Using more queues allows multiple streams of network traffic to be processed in parallel, as each queue can be assigned to a specific CPU core with its own memory regions.
 15. A descriptive name for that queue, currently only used for logging.
 16. The ID of that queue, which can be referred to later in the `flows` section.
-17. The number of packets per batch (or burst). The Rx path delivers packets to the application in batches of this size. The Tx path should not send more packets than this value per call.
-18. The ID of the CPU core that this queue will use to poll the NIC. Ideally one [isolated core](#35-isolate-cpu-cores) per queue.
+17. :material-package-variant: The number of packets per batch (or burst). The Rx path delivers packets to the application in batches of this size. The Tx path should not send more packets than this value per call.
+18. :material-wrench: The ID of the CPU core that this queue will use to poll the NIC. Ideally one [isolated core](#35-isolate-cpu-cores) per queue. **Must match your system's available cores.**
 19. The list of memory regions where this queue will write/read packets from/to. The order matters: the first memory region will be used first to read/write from until it fills up one buffer (`buf_size`), after which it will move to the next region in the list and so on until the packet is fully written/read. See the `memory_regions` for the `rx` queue below for an example.
 20. The `offloads` section (Tx queues only) lists optional tasks that can be offloaded to the NIC. The only value currently supported is `tx_eth_src`, which lets the NIC insert the ethernet source MAC address in the packet headers. Note: IP, UDP, and Ethernet checksums/CRC are always done by the NIC and are not optional.
-21. Same as for `tx_port`. Each interface in this list should have a unique MAC address. This one will do `rx` per config below.
+21. :material-wrench: Same as for `tx_port`. Each interface in this list should have a unique MAC address. **Must be changed for your system.**
 22. Whether to isolate the Rx flow. If true, any incoming packets that do not match the MAC address of this interface — or are not directed to a queue via the `flows` section below — will be delegated back to Linux for processing (no kernel bypass). This is useful to let this interface handle ARP, ICMP, etc. Otherwise, any packets sent to this interface (e.g. ping) will need to be processed (or dropped) by your application.
-23. This scenario is called HDS (Header-Data Split): the packet will first be written to a buffer in the `Data_RX_CPU` memory region, filling its `buf_size` of 64 bytes — which is consistent with the size of our header — then the rest of the packet will be written to the `Data_RX_GPU` memory region. Its `buf_size` of 1000 bytes is just what we need for the payload.
+23. :material-package-variant: This scenario is called HDS (Header-Data Split): the packet will first be written to a buffer in the `Data_RX_CPU` memory region, filling its `buf_size` of 64 bytes — which is consistent with the size of our header — then the rest of the packet will be written to the `Data_RX_GPU` memory region. Its `buf_size` of 1000 bytes is just what we need for the payload. Adjust the region list and sizes based on your packet structure.
 24. The list of flows. Flows are responsible for routing packets to the correct queue based on various properties. If this field is missing, all packets will be routed to the first queue.
 25. The flow name, currently only used for logging.
 26. The flow `id` is used to tag the packets with what flow it arrived on. This is useful when sending multiple flows to a single queue, as the application can differentiate which flow (i.e. rules) matched the packet based on this ID.
 27. What to do with packets that match this flow. The only supported action currently is `type: queue` to send the packet to a queue given its `id`.
-28. List of rules to match packets against. All rules must be met for a packet to match the flow. Currently supported rules include `udp_src` and `udp_dst` (port numbers) and `ipv4_len` (IP packet length).
-29. The `bench_rx` section is specific to the benchmark application (`default_bench.cpp`). It configures the Rx side: which interface to receive on, whether GPUDirect and header-data split are enabled, and the expected packet geometry. These parameters should align with how `memory_regions` and `queues` were configured for the `rx` interface above.
-30. The `bench_tx` section is specific to the benchmark application (`default_bench.cpp`). It configures the Tx side: which interface to transmit on, packet sizes, and the Ethernet/IP/UDP header fields to embed in outgoing packets. The `eth_dst_addr` is required when `flow_isolation` is enabled on the Rx interface.
+28. :material-package-variant: List of rules to match packets against. All rules must be met for a packet to match the flow. Currently supported rules include `udp_src` and `udp_dst` (port numbers) and `ipv4_len` (IP packet length). **Adjust to match your incoming traffic.**
+29. :material-package-variant: The `bench_rx` section is specific to the benchmark application (`default_bench.cpp`). It configures the Rx side: which interface to receive on, whether GPUDirect and header-data split are enabled, and the expected packet geometry. These parameters should align with how `memory_regions` and `queues` were configured for the `rx` interface above.
+30. :material-package-variant: The `bench_tx` section is specific to the benchmark application (`default_bench.cpp`). It configures the Tx side: which interface to transmit on, packet sizes, and the Ethernet/IP/UDP header fields to embed in outgoing packets. The `eth_dst_addr` is required when `flow_isolation` is enabled on the Rx interface. The `ip_src_addr`/`ip_dst_addr` are only needed when traffic is routed across subnets — for a direct cable loopback, any value works. The `payload_size`, `header_size`, and UDP ports should match your application's packet format.
