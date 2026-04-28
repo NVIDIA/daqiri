@@ -75,6 +75,10 @@ Reorder batch sizing requirement (v1):
   supported for reorder in v1.
 - `reorder_type: "gpu"` requires `device` or `host_pinned` packet/output memory.
 - `reorder_type: "cpu"` requires `host`, `host_pinned`, or `huge` packet/output memory.
+- If a reorder config includes `data_types`, `payload_len` and `aggregate_len` describe the
+  converted output element size, not the on-wire byte count.
+- `data_types.endianness: "network"` interprets byte-multiple input types wider than 8 bits as
+  network byte order before conversion.
 
 Reordered RX bursts can be identified from `burst->hdr.hdr.burst_flags`:
 - `DAQIRI_BURST_FLAG_REORDERED` means the burst contains one aggregated reorder buffer.

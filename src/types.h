@@ -624,6 +624,110 @@ enum class ReorderMethod {
   SEQ_PACKETS_PER_BATCH,
 };
 
+enum class ReorderDataType : uint8_t {
+  SAME = 0,
+  INT4,
+  INT8,
+  INT16,
+  INT32,
+  FP16,
+  BF16,
+  FP32,
+  FP64,
+  INVALID,
+};
+
+enum class ReorderEndianness : uint8_t {
+  HOST = 0,
+  NETWORK,
+  INVALID,
+};
+
+inline ReorderDataType reorder_data_type_from_string(const std::string& str) {
+  if (str == "int4") { return ReorderDataType::INT4; }
+  if (str == "int8") { return ReorderDataType::INT8; }
+  if (str == "int16") { return ReorderDataType::INT16; }
+  if (str == "int32") { return ReorderDataType::INT32; }
+  if (str == "fp16") { return ReorderDataType::FP16; }
+  if (str == "bf16") { return ReorderDataType::BF16; }
+  if (str == "fp32") { return ReorderDataType::FP32; }
+  if (str == "fp64") { return ReorderDataType::FP64; }
+  return ReorderDataType::INVALID;
+}
+
+inline std::string reorder_data_type_to_string(ReorderDataType type) {
+  switch (type) {
+    case ReorderDataType::SAME:
+      return "same";
+    case ReorderDataType::INT4:
+      return "int4";
+    case ReorderDataType::INT8:
+      return "int8";
+    case ReorderDataType::INT16:
+      return "int16";
+    case ReorderDataType::INT32:
+      return "int32";
+    case ReorderDataType::FP16:
+      return "fp16";
+    case ReorderDataType::BF16:
+      return "bf16";
+    case ReorderDataType::FP32:
+      return "fp32";
+    case ReorderDataType::FP64:
+      return "fp64";
+    default:
+      return "invalid";
+  }
+}
+
+inline ReorderEndianness reorder_endianness_from_string(const std::string& str) {
+  if (str == "host") { return ReorderEndianness::HOST; }
+  if (str == "network") { return ReorderEndianness::NETWORK; }
+  return ReorderEndianness::INVALID;
+}
+
+inline std::string reorder_endianness_to_string(ReorderEndianness endianness) {
+  switch (endianness) {
+    case ReorderEndianness::HOST:
+      return "host";
+    case ReorderEndianness::NETWORK:
+      return "network";
+    default:
+      return "invalid";
+  }
+}
+
+inline bool is_reorder_input_data_type(ReorderDataType type) {
+  return type == ReorderDataType::INT4 || type == ReorderDataType::INT8
+         || type == ReorderDataType::INT16 || type == ReorderDataType::INT32;
+}
+
+inline bool is_reorder_output_data_type(ReorderDataType type) {
+  return type == ReorderDataType::FP16 || type == ReorderDataType::BF16
+         || type == ReorderDataType::FP32 || type == ReorderDataType::FP64
+         || type == ReorderDataType::INT32;
+}
+
+inline uint32_t reorder_data_type_bit_width(ReorderDataType type) {
+  switch (type) {
+    case ReorderDataType::INT4:
+      return 4;
+    case ReorderDataType::INT8:
+      return 8;
+    case ReorderDataType::INT16:
+    case ReorderDataType::FP16:
+    case ReorderDataType::BF16:
+      return 16;
+    case ReorderDataType::INT32:
+    case ReorderDataType::FP32:
+      return 32;
+    case ReorderDataType::FP64:
+      return 64;
+    default:
+      return 0;
+  }
+}
+
 struct ReorderBitFieldConfig {
   uint16_t bit_offset_ = 0;
   uint8_t bit_width_ = 0;
@@ -640,6 +744,13 @@ struct ReorderSeqPacketsPerBatchConfig {
   uint32_t packets_per_batch_ = 0;
 };
 
+struct ReorderDataTypesConfig {
+  bool enabled_ = false;
+  ReorderDataType input_type_ = ReorderDataType::SAME;
+  ReorderDataType output_type_ = ReorderDataType::SAME;
+  ReorderEndianness input_endianness_ = ReorderEndianness::HOST;
+};
+
 struct ReorderConfig {
   std::string name_;
   std::string reorder_type_;
@@ -649,6 +760,7 @@ struct ReorderConfig {
   ReorderMethod method_ = ReorderMethod::INVALID;
   ReorderSeqBatchNumberConfig seq_batch_number_;
   ReorderSeqPacketsPerBatchConfig seq_packets_per_batch_;
+  ReorderDataTypesConfig data_types_;
 };
 
 struct RxConfig {

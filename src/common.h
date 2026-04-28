@@ -282,6 +282,19 @@ void free_all_packets_and_burst_tx(BurstParams* burst);
 Status set_packet_lengths(BurstParams* burst, int idx, const std::initializer_list<int>& lens);
 
 /**
+ * @brief Set the same packet lengths for every packet in a burst
+ *
+ * Sets metadata packet lengths for all packets in a burst. This is useful for benchmarks and
+ * fixed-size packet streams where all packets have the same segment lengths.
+ *
+ * @param burst Burst structure containing packet lists
+ * @param lens Lengths of each segment
+ * @return Status indicating status. Valid values are:
+ *    SUCCESS: Packet lengths populated successfully
+ */
+Status set_all_packet_lengths(BurstParams* burst, const std::initializer_list<int>& lens);
+
+/**
  * @brief Set packet TX time
  *
  * Sets the transmit time (in PTP time) to transmit the packet. Every packet transmitted

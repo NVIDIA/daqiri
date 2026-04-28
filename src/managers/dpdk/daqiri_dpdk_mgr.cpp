@@ -15,8 +15,9 @@
  * limitations under the License.
  */
 
-#include <atomic>
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cmath>
 #include <complex>
 #include <chrono>
@@ -138,6 +139,71 @@ static inline uint64_t derive_reorder_batch_id_host(const ReorderConfig& cfg,
                                             get_reorder_seq_bit_offset(cfg),
                                             get_reorder_seq_bit_width(cfg));
   return packets_per_batch == 0 ? 0U : static_cast<uint64_t>(seq / packets_per_batch);
+}
+
+static inline bool reorder_uses_data_type_conversion(const ReorderConfig& cfg) {
+  if (!cfg.data_types_.enabled_) { return false; }
+  if (cfg.data_types_.input_type_ != cfg.data_types_.output_type_) { return true; }
+
+  return cfg.data_types_.input_endianness_ == ReorderEndianness::NETWORK
+         && reorder_data_type_bit_width(cfg.data_types_.input_type_) > 8
+         && (reorder_data_type_bit_width(cfg.data_types_.input_type_) % 8) == 0;
+}
+
+static inline bool compute_reorder_output_payload_len(const ReorderConfig& cfg,
+                                                      uint32_t input_payload_len,
+                                                      uint32_t* output_payload_len) {
+  if (output_payload_len == nullptr) { return false; }
+  if (!reorder_uses_data_type_conversion(cfg)) {
+    *output_payload_len = input_payload_len;
+    return true;
+  }
+
+  const uint32_t input_bits = reorder_data_type_bit_width(cfg.data_types_.input_type_);
+  const uint32_t output_bits = reorder_data_type_bit_width(cfg.data_types_.output_type_);
+  if (input_bits == 0 || output_bits == 0) { return false; }
+
+  const uint64_t total_input_bits = static_cast<uint64_t>(input_payload_len) * 8ULL;
+  if ((total_input_bits % static_cast<uint64_t>(input_bits)) != 0ULL) { return false; }
+
+  const uint64_t element_count = total_input_bits / static_cast<uint64_t>(input_bits);
+  const uint64_t total_output_bits = element_count * static_cast<uint64_t>(output_bits);
+  if ((total_output_bits % 8ULL) != 0ULL) { return false; }
+
+  const uint64_t total_output_bytes = total_output_bits / 8ULL;
+  if (total_output_bytes > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+    return false;
+  }
+
+  *output_payload_len = static_cast<uint32_t>(total_output_bytes);
+  return true;
+}
+
+static inline bool compute_reorder_max_output_payload_len(const ReorderConfig& cfg,
+                                                          uint32_t max_input_payload_len,
+                                                          uint32_t* output_payload_len) {
+  if (output_payload_len == nullptr) { return false; }
+  if (!reorder_uses_data_type_conversion(cfg)) {
+    *output_payload_len = max_input_payload_len;
+    return true;
+  }
+
+  const uint32_t input_bits = reorder_data_type_bit_width(cfg.data_types_.input_type_);
+  const uint32_t output_bits = reorder_data_type_bit_width(cfg.data_types_.output_type_);
+  if (input_bits == 0 || output_bits == 0) { return false; }
+
+  const uint64_t total_input_bits = static_cast<uint64_t>(max_input_payload_len) * 8ULL;
+  const uint64_t element_count = total_input_bits / static_cast<uint64_t>(input_bits);
+  const uint64_t total_output_bits = element_count * static_cast<uint64_t>(output_bits);
+  if ((total_output_bits % 8ULL) != 0ULL) { return false; }
+
+  const uint64_t total_output_bytes = total_output_bits / 8ULL;
+  if (total_output_bytes > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+    return false;
+  }
+
+  *output_payload_len = static_cast<uint32_t>(total_output_bytes);
+  return true;
 }
 
 // --- End Helper Functions ---
@@ -379,18 +445,36 @@ bool DpdkMgr::init_reorder_queue_state(const InterfaceConfig& intf, const RxQueu
 
     const uint32_t slot_stride =
         static_cast<uint32_t>(copy_src_mr->buf_size_ - copy_source_offset);
+    uint32_t output_slot_stride = slot_stride;
+    if (!compute_reorder_max_output_payload_len(reorder_cfg, slot_stride, &output_slot_stride)) {
+      DAQIRI_LOG_ERROR(
+          "Reorder config '{}' cannot convert source slot size {} from {} to {}",
+          reorder_cfg.name_,
+          slot_stride,
+          reorder_data_type_to_string(reorder_cfg.data_types_.input_type_),
+          reorder_data_type_to_string(reorder_cfg.data_types_.output_type_));
+      return false;
+    }
+    const bool use_data_type_conversion = reorder_uses_data_type_conversion(reorder_cfg);
+    if (use_data_type_conversion && !use_gpu_backend) {
+      DAQIRI_LOG_ERROR(
+          "Reorder config '{}' data type conversion is supported only for gpu reorder_type",
+          reorder_cfg.name_);
+      return false;
+    }
+
     const uint64_t min_required_out =
-        static_cast<uint64_t>(slot_stride) * static_cast<uint64_t>(packets_per_batch);
+        static_cast<uint64_t>(output_slot_stride) * static_cast<uint64_t>(packets_per_batch);
     if (min_required_out > out_mr.buf_size_) {
       DAQIRI_LOG_ERROR(
           "Reorder output MR '{}' buffer size {} is too small for config '{}' "
-          "(required at least {} = packets_per_batch {} * slot_stride {})",
+          "(required at least {} = packets_per_batch {} * output_slot_stride {})",
           out_mr.name_,
           out_mr.buf_size_,
           reorder_cfg.name_,
           min_required_out,
           packets_per_batch,
-          slot_stride);
+          output_slot_stride);
       return false;
     }
 
@@ -519,6 +603,10 @@ bool DpdkMgr::init_reorder_queue_state(const InterfaceConfig& intf, const RxQueu
     plan.payload_byte_offset = reorder_cfg.payload_byte_offset_;
     plan.copy_source_offset = copy_source_offset;
     plan.slot_stride = slot_stride;
+    plan.data_type_conversion_enabled = use_data_type_conversion;
+    plan.input_data_type = reorder_cfg.data_types_.input_type_;
+    plan.output_data_type = reorder_cfg.data_types_.output_type_;
+    plan.input_endianness = reorder_cfg.data_types_.input_endianness_;
     plan.use_gpu_backend = use_gpu_backend;
     plan.cuda_staging_capacity = std::max<uint32_t>(
         packets_per_batch, static_cast<uint32_t>(qcfg.common_.batch_size_));
@@ -614,6 +702,7 @@ void DpdkMgr::cleanup_reorder_state() {
                               static_cast<unsigned int>(plan.direct_arrival_batch.packet_count));
       }
       plan.direct_arrival_batch.first_packet_cycles = 0;
+      plan.direct_arrival_batch.input_payload_len = 0;
       plan.direct_arrival_batch.payload_len = 0;
       plan.direct_arrival_batch.packet_count = 0;
 
@@ -784,24 +873,48 @@ Status DpdkMgr::poll_reorder_events(ReorderPlanRuntime& plan) {
   return final_status;
 }
 
-size_t DpdkMgr::append_reorder_packet(ReorderPlanRuntime& plan,
+Status DpdkMgr::append_reorder_packet(ReorderPlanRuntime& plan,
                                       struct rte_mbuf* mbuf,
                                       void* pkt_ptr,
-                                      uint64_t now_cycles) {
+                                      uint64_t now_cycles,
+                                      size_t* batch_size) {
+  if (batch_size == nullptr) { return Status::NULL_PTR; }
+  *batch_size = 0;
+
   auto& batch = plan.direct_arrival_batch;
   const uint32_t packet_idx = batch.packet_count;
+  if (packet_idx >= plan.h_input_ptrs.size() || packet_idx >= plan.h_source_mbufs.size()) {
+    DAQIRI_LOG_ERROR("Reorder packet staging storage is full for config '{}'",
+                     plan.config->name_);
+    return Status::NO_SPACE_AVAILABLE;
+  }
+
   if (packet_idx == 0) {
     batch.first_packet_cycles = now_cycles;
     const uint32_t pkt_len = mbuf != nullptr ? mbuf->pkt_len : 0U;
     uint32_t copy_len = 0;
     if (pkt_len > plan.payload_byte_offset) { copy_len = pkt_len - plan.payload_byte_offset; }
-    batch.payload_len = std::min(copy_len, plan.slot_stride);
+    batch.input_payload_len = std::min(copy_len, plan.slot_stride);
+    if (!compute_reorder_output_payload_len(
+            *(plan.config), batch.input_payload_len, &batch.payload_len)) {
+      DAQIRI_LOG_ERROR(
+          "Reorder config '{}' cannot convert packet payload size {} from {} to {}",
+          plan.config->name_,
+          batch.input_payload_len,
+          reorder_data_type_to_string(plan.input_data_type),
+          reorder_data_type_to_string(plan.output_data_type));
+      batch.first_packet_cycles = 0;
+      batch.input_payload_len = 0;
+      batch.payload_len = 0;
+      return Status::INVALID_PARAMETER;
+    }
   }
 
   plan.h_source_mbufs[packet_idx] = mbuf;
   plan.h_input_ptrs[packet_idx] = pkt_ptr;
   batch.packet_count = packet_idx + 1U;
-  return batch.packet_count;
+  *batch_size = batch.packet_count;
+  return Status::SUCCESS;
 }
 
 Status DpdkMgr::create_reorder_output_burst(ReorderPlanRuntime& plan,
@@ -874,16 +987,18 @@ Status DpdkMgr::flush_reorder_batch(ReorderPlanRuntime& plan,
 
   if (batch->packet_count == 0) {
     batch->first_packet_cycles = 0;
+    batch->input_payload_len = 0;
     batch->payload_len = 0;
     return Status::SUCCESS;
   }
 
-  const uint32_t payload_len = batch->payload_len;
+  const uint32_t input_payload_len = batch->input_payload_len;
+  const uint32_t output_payload_len = batch->payload_len;
 
   const uint32_t num_pkts = batch->packet_count;
   const uint32_t output_slots = plan.packets_per_batch;
   const uint64_t aggregate_len64 =
-      static_cast<uint64_t>(output_slots) * static_cast<uint64_t>(payload_len);
+      static_cast<uint64_t>(output_slots) * static_cast<uint64_t>(output_payload_len);
   if (aggregate_len64 > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
     DAQIRI_LOG_ERROR("Reorder output length {} is too large for config '{}'",
                      aggregate_len64,
@@ -948,7 +1063,8 @@ Status DpdkMgr::flush_reorder_batch(ReorderPlanRuntime& plan,
     packet_reorder_copy_payload_by_sequence(
         output_buffer,
         reinterpret_cast<const void* const*>(plan.d_input_ptrs),
-        payload_len,
+        input_payload_len,
+        output_payload_len,
         plan.copy_source_offset,
         num_pkts,
         get_reorder_seq_bit_offset(cfg),
@@ -958,6 +1074,9 @@ Status DpdkMgr::flush_reorder_batch(ReorderPlanRuntime& plan,
         cfg.method_ == ReorderMethod::SEQ_BATCH_NUMBER ? 1U : 0U,
         plan.packets_per_batch,
         output_slots - 1U,
+        plan.data_type_conversion_enabled ? static_cast<uint8_t>(plan.input_data_type) : 0U,
+        plan.data_type_conversion_enabled ? static_cast<uint8_t>(plan.output_data_type) : 0U,
+        plan.data_type_conversion_enabled ? static_cast<uint8_t>(plan.input_endianness) : 0U,
         output_state.d_batch_id,
         plan.stream);
     if (cudaGetLastError() != cudaSuccess) {
@@ -1013,9 +1132,9 @@ Status DpdkMgr::flush_reorder_batch(ReorderPlanRuntime& plan,
       const uint32_t slot_idx = seq % plan.packets_per_batch;
       if (slot_idx >= output_slots) { continue; }
 
-      std::memcpy(out_bytes + (static_cast<size_t>(slot_idx) * payload_len),
+      std::memcpy(out_bytes + (static_cast<size_t>(slot_idx) * output_payload_len),
                   src_pkt + plan.copy_source_offset,
-                  payload_len);
+                  output_payload_len);
     }
   }
 
@@ -1025,7 +1144,7 @@ Status DpdkMgr::flush_reorder_batch(ReorderPlanRuntime& plan,
                                        output_buffer,
                                        aggregate_len,
                                        num_pkts,
-                                       payload_len,
+                                       output_payload_len,
                                        output_batch_id,
                                        output_batch_id_ready,
                                        output_batch_id_host,
@@ -1047,6 +1166,7 @@ Status DpdkMgr::flush_reorder_batch(ReorderPlanRuntime& plan,
   }
 
   batch->first_packet_cycles = 0;
+  batch->input_payload_len = 0;
   batch->payload_len = 0;
   batch->packet_count = 0;
 
@@ -1106,7 +1226,14 @@ Status DpdkMgr::process_burst_for_reorder(uint32_t key, ReorderQueueState& qstat
 
       void* pkt_ptr = rte_pktmbuf_mtod(mbuf, void*);
 
-      const size_t batch_size = append_reorder_packet(plan, mbuf, pkt_ptr, now_cycles);
+      size_t batch_size = 0;
+      const auto append_status =
+          append_reorder_packet(plan, mbuf, pkt_ptr, now_cycles, &batch_size);
+      if (append_status != Status::SUCCESS) {
+        if (final_status == Status::SUCCESS) { final_status = append_status; }
+        rte_pktmbuf_free(mbuf);
+        continue;
+      }
       if (batch_size >= plan.packets_per_batch) {
         BurstParams* out = nullptr;
         const auto status = flush_reorder_batch(plan, 0, false, &out);
@@ -1181,7 +1308,14 @@ Status DpdkMgr::process_burst_for_reorder(uint32_t key, ReorderQueueState& qstat
       auto* mbuf = reinterpret_cast<rte_mbuf*>(burst->pkts[0][pkt_idx]);
 
       void* pkt_ptr = rte_pktmbuf_mtod(mbuf, void*);
-      const size_t batch_size = append_reorder_packet(plan, mbuf, pkt_ptr, now_cycles);
+      size_t batch_size = 0;
+      const auto append_status =
+          append_reorder_packet(plan, mbuf, pkt_ptr, now_cycles, &batch_size);
+      if (append_status != Status::SUCCESS) {
+        if (final_status == Status::SUCCESS) { final_status = append_status; }
+        rte_pktmbuf_free(mbuf);
+        continue;
+      }
       if (batch_size >= plan.packets_per_batch) {
         BurstParams* out = nullptr;
         status = flush_reorder_batch(plan, 0, false, &out);
@@ -2970,6 +3104,65 @@ bool DpdkMgr::validate_config() const {
             reorder_cfg.name_);
         return false;
       }
+      const bool use_data_type_conversion = reorder_uses_data_type_conversion(reorder_cfg);
+      if (use_data_type_conversion && use_cpu_backend) {
+        DAQIRI_LOG_ERROR(
+            "Reorder config '{}' data type conversion is supported only for gpu reorder_type",
+            reorder_cfg.name_);
+        return false;
+      }
+      if (reorder_cfg.payload_byte_offset_ >= source_mr_it->second.buf_size_) {
+        DAQIRI_LOG_ERROR(
+            "Reorder config '{}' payload_byte_offset {} is out of range for source MR '{}' size {}",
+            reorder_cfg.name_,
+            reorder_cfg.payload_byte_offset_,
+            source_mr_it->second.name_,
+            source_mr_it->second.buf_size_);
+        return false;
+      }
+
+      const size_t source_slot_stride_size =
+          source_mr_it->second.buf_size_ - reorder_cfg.payload_byte_offset_;
+      if (source_slot_stride_size > static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
+        DAQIRI_LOG_ERROR(
+            "Reorder config '{}' source slot size {} is too large",
+            reorder_cfg.name_,
+            source_slot_stride_size);
+        return false;
+      }
+      const auto source_slot_stride = static_cast<uint32_t>(source_slot_stride_size);
+      uint32_t output_slot_stride = 0;
+      if (!compute_reorder_max_output_payload_len(
+              reorder_cfg, source_slot_stride, &output_slot_stride)) {
+        DAQIRI_LOG_ERROR(
+            "Reorder config '{}' cannot convert source slot size {} from {} to {}",
+            reorder_cfg.name_,
+            source_slot_stride,
+            reorder_data_type_to_string(reorder_cfg.data_types_.input_type_),
+            reorder_data_type_to_string(reorder_cfg.data_types_.output_type_));
+        return false;
+      }
+
+      uint32_t packets_per_batch = 0;
+      if (reorder_cfg.method_ == ReorderMethod::SEQ_BATCH_NUMBER) {
+        packets_per_batch = reorder_cfg.seq_batch_number_.packets_per_batch_;
+      } else if (reorder_cfg.method_ == ReorderMethod::SEQ_PACKETS_PER_BATCH) {
+        packets_per_batch = reorder_cfg.seq_packets_per_batch_.packets_per_batch_;
+      }
+      const uint64_t min_required_out =
+          static_cast<uint64_t>(output_slot_stride) * static_cast<uint64_t>(packets_per_batch);
+      if (min_required_out > output_mr_it->second.buf_size_) {
+        DAQIRI_LOG_ERROR(
+            "Reorder output MR '{}' buffer size {} is too small for config '{}' "
+            "(required at least {} = packets_per_batch {} * output_slot_stride {})",
+            output_mr_it->second.name_,
+            output_mr_it->second.buf_size_,
+            reorder_cfg.name_,
+            min_required_out,
+            packets_per_batch,
+            output_slot_stride);
+        return false;
+      }
     }
   }
 
@@ -3846,6 +4039,29 @@ Status DpdkMgr::set_packet_lengths(BurstParams* burst, int idx,
   }
 
   reinterpret_cast<rte_mbuf**>(burst->pkts[0])[idx]->pkt_len = ttl_len;
+
+  return Status::SUCCESS;
+}
+
+Status DpdkMgr::set_all_packet_lengths(BurstParams* burst,
+                                       const std::initializer_list<int>& lens) {
+  if (burst == nullptr) { return Status::NULL_PTR; }
+
+  std::array<uint32_t, MAX_NUM_SEGS> seg_lens{};
+  uint32_t ttl_len = 0;
+  for (int seg = 0; seg < burst->hdr.hdr.num_segs; ++seg) {
+    seg_lens[seg] = static_cast<uint32_t>(*(lens.begin() + seg));
+    ttl_len += seg_lens[seg];
+  }
+
+  const auto num_pkts = static_cast<int>(burst->hdr.hdr.num_pkts);
+  for (int seg = 0; seg < burst->hdr.hdr.num_segs; ++seg) {
+    auto** mbufs = reinterpret_cast<rte_mbuf**>(burst->pkts[seg]);
+    for (int idx = 0; idx < num_pkts; ++idx) { mbufs[idx]->data_len = seg_lens[seg]; }
+  }
+
+  auto** first_seg = reinterpret_cast<rte_mbuf**>(burst->pkts[0]);
+  for (int idx = 0; idx < num_pkts; ++idx) { first_seg[idx]->pkt_len = ttl_len; }
 
   return Status::SUCCESS;
 }

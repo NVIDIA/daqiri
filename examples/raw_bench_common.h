@@ -17,9 +17,11 @@
 
 #pragma once
 
+#include <cuda_runtime.h>
 #include <yaml-cpp/yaml.h>
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -42,6 +44,28 @@ struct RawBenchRxConfig {
   std::string interface_name = "rx_port";
 };
 
+class PinnedHostBuffer {
+ public:
+  PinnedHostBuffer() = default;
+  PinnedHostBuffer(const PinnedHostBuffer&) = delete;
+  PinnedHostBuffer& operator=(const PinnedHostBuffer&) = delete;
+
+  PinnedHostBuffer(PinnedHostBuffer&& other) noexcept;
+  PinnedHostBuffer& operator=(PinnedHostBuffer&& other) noexcept;
+  ~PinnedHostBuffer();
+
+  bool resize(size_t size);
+  void reset();
+
+  uint8_t* data();
+  const uint8_t* data() const;
+  size_t capacity() const;
+
+ private:
+  void* ptr_ = nullptr;
+  size_t capacity_ = 0;
+};
+
 int parse_run_seconds(int argc, char** argv);
 bool has_bench_rx(const YAML::Node& root);
 bool has_bench_tx(const YAML::Node& root);
@@ -57,6 +81,11 @@ void populate_udp_ipv4_headers(uint8_t* pkt_data,
                                uint32_t ip_dst_host,
                                uint16_t src_port,
                                uint16_t dst_port);
+
+cudaError_t memcpy_batch_async(const std::vector<void*>& dsts,
+                               const std::vector<const void*>& srcs,
+                               const std::vector<size_t>& sizes,
+                               cudaStream_t stream);
 
 void signal_handler(int signum);
 void wait_for_stop(int run_seconds, std::atomic<bool>& stop);

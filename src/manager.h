@@ -60,6 +60,8 @@ class Manager {
 
   virtual Status set_packet_lengths(BurstParams* burst, int idx,
                                     const std::initializer_list<int>& lens) = 0;
+  virtual Status set_all_packet_lengths(BurstParams* burst,
+                                        const std::initializer_list<int>& lens);
   virtual void free_all_segment_packets(BurstParams* burst, int seg) = 0;
   virtual void free_all_packets(BurstParams* burst) = 0;
   virtual void free_packet_segment(BurstParams* burst, int seg, int pkt) = 0;

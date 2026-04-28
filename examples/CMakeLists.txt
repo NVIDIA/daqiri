@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.20)
 
 project(daqiri_bench_examples LANGUAGES CXX)
 
+find_package(CUDAToolkit REQUIRED)
+
 if(TARGET yaml-cpp::yaml-cpp)
   set(DAQIRI_EXAMPLE_YAML_TARGET yaml-cpp::yaml-cpp)
 else()
@@ -14,6 +16,7 @@ set(DAQIRI_BENCH_CONFIGS
   daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml
   daqiri_bench_raw_tx_rx_reorder_seq_1024_cpu.yaml
   daqiri_bench_raw_sw_loopback_reorder_seq_1024.yaml
+  daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml
   daqiri_bench_raw_rx_reorder_seq_ppb.yaml
   daqiri_bench_raw_rx_reorder_seq_batch.yaml
   daqiri_bench_raw_rx_multi_q.yaml
@@ -47,6 +50,7 @@ endfunction()
 function(add_daqiri_raw_bench target source)
   add_executable(${target} ${source} raw_bench_common.cpp)
   link_daqiri_bench(${target})
+  target_link_libraries(${target} PRIVATE CUDA::cudart)
   set_target_properties(${target} PROPERTIES
     BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
   )
@@ -55,6 +59,7 @@ endfunction()
 add_daqiri_raw_bench(daqiri_bench_raw_hds raw_hds_bench.cpp)
 add_daqiri_raw_bench(daqiri_bench_raw_gpudirect raw_gpudirect_bench.cpp)
 add_daqiri_raw_bench(daqiri_bench_raw_reorder_seq raw_reorder_seq_bench.cpp)
+add_daqiri_raw_bench(daqiri_bench_raw_reorder_quantize raw_reorder_quantize_bench.cpp)
 
 add_executable(daqiri_bench_rdma rdma_bench.cpp)
 link_daqiri_bench(daqiri_bench_rdma)
@@ -73,6 +78,7 @@ install(TARGETS
         daqiri_bench_raw_hds
         daqiri_bench_raw_gpudirect
         daqiri_bench_raw_reorder_seq
+        daqiri_bench_raw_reorder_quantize
         daqiri_bench_rdma
         daqiri_bench_socket
         RUNTIME DESTINATION bin)

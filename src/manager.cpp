@@ -673,6 +673,16 @@ Status Manager::get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server
   return Status::NOT_SUPPORTED;
 }
 
+Status Manager::set_all_packet_lengths(BurstParams* burst,
+                                       const std::initializer_list<int>& lens) {
+  if (burst == nullptr) { return Status::NULL_PTR; }
+  for (size_t idx = 0; idx < burst->hdr.hdr.num_pkts; ++idx) {
+    const auto status = set_packet_lengths(burst, static_cast<int>(idx), lens);
+    if (status != Status::SUCCESS) { return status; }
+  }
+  return Status::SUCCESS;
+}
+
 Status Manager::set_reorder_cuda_stream(const std::string& interface_name,
                                         const std::string& reorder_name,
                                         cudaStream_t stream) {
