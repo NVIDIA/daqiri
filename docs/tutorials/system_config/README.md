@@ -543,9 +543,9 @@ Before diving in each of the setups below, we provide a utility script as part o
     2025-03-12 14:16:06 - INFO - cx7_1/0005:03:00.1: MRRS is correctly set to 4096.
     2025-03-12 14:16:06 - WARNING - cx7_0/0005:03:00.0: PCIe Max Payload Size is not set to 256 bytes. Found: 128 bytes.
     2025-03-12 14:16:06 - WARNING - cx7_1/0005:03:00.1: PCIe Max Payload Size is not set to 256 bytes. Found: 128 bytes.
-    2025-03-12 14:16:06 - INFO - HugePages_Total: 3
+    2025-03-12 14:16:06 - INFO - HugePages_Total: 4
     2025-03-12 14:16:06 - INFO - HugePage Size: 1024.00 MB
-    2025-03-12 14:16:06 - INFO - Total Allocated HugePage Memory: 3072.00 MB
+    2025-03-12 14:16:06 - INFO - Total Allocated HugePage Memory: 4096.00 MB
     2025-03-12 14:16:06 - INFO - Hugepages are sufficiently allocated with at least 500 MB.
     2025-03-12 14:16:06 - INFO - GPU 0: SM Clock is correctly set to 1920 MHz (within 500 of the 2100 MHz theoretical Max).
     2025-03-12 14:16:06 - INFO - GPU 0: Memory Clock is correctly set to 8000 MHz.
@@ -923,14 +923,14 @@ There are two ways to allocate huge pages:
 - in the kernel bootline (recommended to ensure contiguous memory allocation) or
 - dynamically at runtime (risk of fragmentation for large page sizes)
 
-The example below allocates 3 huge pages of 1GB each.
+The example below allocates 4 huge pages of 1GB each.
 
 === "Kernel bootline"
 
     Add the flags below to the `GRUB_CMDLINE_LINUX` variable in `/etc/default/grub`:
 
     ```bash
-    default_hugepagesz=1G hugepagesz=1G hugepages=3
+    default_hugepagesz=1G hugepagesz=1G hugepages=4
     ```
 
     ??? info "Show explanation"
@@ -948,18 +948,18 @@ The example below allocates 3 huge pages of 1GB each.
 
 === "Runtime"
 
-    Allocate the 3x 1GB huge pages:
+    Allocate the 4x 1GB huge pages:
 
     === "hugeadm"
 
         ```bash
-        sudo hugeadm --pool-pages-min 1073741824:3
+        sudo hugeadm --pool-pages-min 1073741824:4
         ```
 
     === "vanilla"
 
         ```bash
-        echo 3 | sudo tee /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages
+        echo 4 | sudo tee /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages
         ```
 
     Create a mount point to access the 1GB huge pages pool since that is not the default size on that system. We will name it `/mnt/huge` here.
@@ -982,7 +982,7 @@ The example below allocates 3 huge pages of 1GB each.
 
         If you work with containers, remember to mount this directory in your container as well with `-v /mnt/huge:/mnt/huge`.
 
-Rerunning the initial commands should now list 3 hugepages of 1GB each. 1GB will be the default huge page size if updated in the kernel bootline only.
+Rerunning the initial commands should now list 4 hugepages of 1GB each. 1GB will be the default huge page size if updated in the kernel bootline only.
 
 ### 3.5 Isolate CPU cores
 
@@ -1351,7 +1351,7 @@ If your GPU is listed [on this page](https://developer.nvidia.com/displaymodesel
 1. Press `Join Now`.
 2. Once approved, download the `Display Mode Selector` archive.
 3. Unzip the archive.
-4. Access your system without a X-server running, either through SSH or a Virtual Console (`Alt+F1`).
+4. Access your system without an X-server running. SSH into the machine, or switch to a Virtual Console (`Alt+F1`). You do not need to physically disconnect the monitor — the requirement is that no display server (X11/Wayland) is holding a lock on the NVIDIA driver.
 5. Go down the right OS and architecture folder for your system (`linux/aarch64` or `linux/x64`).
 6. Run the `displaymodeselector` command like so:
 
@@ -1405,17 +1405,16 @@ Press `y` to confirm you'd like to continue, then `y` again to apply to all the 
     rmmod nvidia_uvm nvidia_drm nvidia_modeset nvidia_peermem nvidia
     ```
 
-    Try to unload the NVIDIA kernel driver listed in the error message above (list may vary):
-
-    ```bash
-    sudo rmmod nvidia_uvm nvidia_drm nvidia_modeset nvidia_peermem nvidia
-    ```
-
-    If this fails because the drivers are in use, stop the X-server first before trying again:
+    Stop the display server and then unload the NVIDIA kernel modules listed in the error message (the exact list may vary by system):
 
     ```bash
     sudo systemctl isolate multi-user
+    sudo rmmod nvidia_uvm nvidia_drm nvidia_modeset nvidia_peermem nvidia
     ```
+
+    !!! tip "IGX Systems"
+
+        IGX systems may have additional NVIDIA kernel modules (e.g. `nvidia_vrs_pseq`) that must also be unloaded. Check for remaining modules with `lsmod | grep nvidia` and `rmmod` each one before retrying.
 
 ??? failure "/dev/mem: Operation not permitted. Access to physical memory denied"
 
@@ -1527,7 +1526,7 @@ You can set the MTU for each interface like so, for a given `if_name` name ident
 
 ## 4. Running a test application
 
-Holoscan Networking provides a benchmarking application named `adv_networking_bench` that can be used to test the performance of the networking configuration. In this section, we'll walk you through the steps needed to configure the application for your NIC for Tx and Rx, and run a loopback test between the two interfaces with a [physical SFP cable](https://www.nvidia.com/en-us/networking/interconnect/) connecting them.
+DAQIRI provides a benchmarking application named `daqiri_bench_default` that can be used to test the performance of the networking configuration. In this section, we'll walk you through the steps needed to configure the application for your NIC for Tx and Rx, and run a loopback test between the two interfaces with a [physical SFP cable](https://www.nvidia.com/en-us/networking/interconnect/) connecting them.
 
 Make sure to [build the DAQIRI library](#1-building-the-daqiri-library) beforehand.
 
@@ -1540,8 +1539,6 @@ docker run --rm -it --privileged \
   --runtime=nvidia \
   --network=host \
   -v /dev/hugepages:/dev/hugepages \
-  -v /mnt/huge:/mnt/huge \
-  -v /dev/infiniband:/dev/infiniband \
   daqiri:local bash
 ```
 
@@ -1549,87 +1546,21 @@ docker run --rm -it --privileged \
 
     | Flag | Purpose |
     |------|---------|
-    | `--privileged` | DPDK requires raw access to NIC hardware (PCI devices, hugepage files) |
+    | `--privileged` | DPDK requires raw access to NIC hardware (PCI devices, hugepage files). Also covers `/dev/infiniband` for RDMA. |
     | `--runtime=nvidia` | Makes the host GPU visible inside the container via the NVIDIA Container Toolkit |
     | `--network=host` | Shares the host network namespace so DPDK can discover the physical NIC interfaces and their PCIe topology |
-    | `-v /dev/hugepages:/dev/hugepages` | Mounts the default hugepage filesystem for DPDK memory allocation |
-    | `-v /mnt/huge:/mnt/huge` | Mounts the custom hugepage mount point, if configured |
-    | `-v /dev/infiniband:/dev/infiniband` | Exposes the RDMA/verbs device files required by the mlx5 DPDK driver |
-
-You can also mount a custom YAML configuration file into the container:
-
-```bash
-docker run --rm -it --privileged \
-  --runtime=nvidia --network=host \
-  -v /dev/hugepages:/dev/hugepages \
-  -v /mnt/huge:/mnt/huge \
-  -v /dev/infiniband:/dev/infiniband \
-  -v $(pwd)/my_config.yaml:/opt/daqiri/bin/my_config.yaml \
-  daqiri:local \
-  /opt/daqiri/bin/daqiri_bench_default /opt/daqiri/bin/my_config.yaml
-```
+    | `-v /dev/hugepages:/dev/hugepages` | Mounts the hugepage filesystem for DPDK memory allocation (`--privileged` alone does not cover mounted filesystems) |
 
 ### 4.2 Update the loopback configuration
 
-#### Find the application files
+The benchmark executables and example YAML configurations are located at:
 
-Identify the location of the `adv_networking_bench` executable, and of the configuration file named `adv_networking_bench_default_tx_rx.yaml`, for your installation:
+| | Binaries | YAML configs |
+|---|---|---|
+| **Container** | `/opt/daqiri/bin/` | `/opt/daqiri/bin/` |
+| **From source** | `./build/examples/` | `./examples/` |
 
-=== "Debian installation"
-
-    Both located under `/opt/nvidia/holoscan/examples/adv_networking_bench/`:
-
-    ```bash hl_lines="2 5"
-    ls -1 /opt/nvidia/holoscan/examples/adv_networking_bench/
-    adv_networking_bench
-    adv_networking_bench_default_rx_multi_q.yaml
-    adv_networking_bench_default_tx_rx_hds.yaml
-    adv_networking_bench_default_tx_rx.yaml
-    adv_networking_bench_gpunetio_tx_rx.yaml
-    adv_networking_bench_rivermax_rx.yaml
-    CMakeLists.txt
-    default_bench_op_rx.h
-    default_bench_op_tx.h
-    doca_bench_op_rx.h
-    doca_bench_op_tx.h
-    kernels.cu
-    kernels.cuh
-    main.cpp
-    ```
-
-=== "From source"
-
-    Both located under `./install/examples/adv_networking_bench/`
-
-    ```bash hl_lines="2 5"
-    ls -1 ./install/examples/adv_networking_bench
-    adv_networking_bench
-    adv_networking_bench_default_rx_multi_q.yaml
-    adv_networking_bench_default_tx_rx_hds.yaml
-    adv_networking_bench_default_tx_rx.yaml
-    adv_networking_bench_gpunetio_tx_rx.yaml
-    adv_networking_bench.py
-    adv_networking_bench_rivermax_rx.yaml
-    CMakeLists.txt
-    default_bench_op_rx.h
-    default_bench_op_tx.h
-    doca_bench_op_rx.h
-    doca_bench_op_tx.h
-    kernels.cu
-    kernels.cuh
-    main.cpp
-    ```
-
-    !!! warning
-
-        The configuration file is also located alongide the application source code at `applications/adv_networking_bench/adv_networking_bench_default_tx_rx.yaml`.
-        However, modifying this file will not affect the configuration used by the application executable without rebuilding the application.
-
-        For this reason, we recommend using the configuration file located in the install tree.
-
-!!! note
-
-    The fields in this `yaml` file will be explained in more details in [a section below](#51-understand-the-configuration-parameters). For now, we'll stick to modifying the strict minimum required fields to run the application as-is on your system.
+The fields in the YAML configs will be explained in more detail in [a section below](#51-understand-the-configuration-parameters). For now, we'll stick to modifying the strict minimum required fields to run the application as-is on your system.
 
 ##### Identify your NIC's PCIe addresses
 
@@ -1658,7 +1589,7 @@ Retrieve the PCIe addresses of both ports of your NIC. We'll arbitrarily use the
 
 ##### Configure the NIC for Tx and Rx
 
-Set the NIC addresses in the `interfaces` section of the `advanced_network` section, making sure to remove the template brackets `< >`. This configures your NIC independently of your application:
+Set the NIC addresses in the `interfaces` section of the `daqiri` configuration, making sure to remove the template brackets `< >`. This configures your NIC independently of your application:
 
 - Set the `address` field of the `tx_port` interface to one of these addresses. That interface will be able to transmit ethernet packets.
 - Set the `address` field of the `rx_port` interface to the other address. This interface will be able to receive ethernet packets.
@@ -1697,7 +1628,7 @@ To run the benchmarking application to run a loopback on your system, you'll nee
 
 ```yaml hl_lines="4"
 bench_tx:
-    interface_name: "tx_port" # Name of the TX port from the advanced_network config
+    interface_name: "tx_port" # Name of the TX port from the daqiri config
     ...
     eth_dst_addr: <00:00:00:00:00:00> # Destination MAC address - required when Rx flow_isolation=true
     ...
@@ -1707,7 +1638,7 @@ bench_tx:
 
     ```yaml hl_lines="4"
     bench_tx:
-        interface_name: "tx_port" # Name of the TX port from the advanced_network config
+        interface_name: "tx_port" # Name of the TX port from the daqiri config
         ...
         eth_dst_addr: 48:b0:2d:ee:83:ad # Destination MAC address - required when Rx flow_isolation=true
         ...
@@ -1717,35 +1648,27 @@ bench_tx:
 
     - `eth_dst_addr` - the destination ethernet MAC address - will be embedded in the packet headers by the application. This is required here because the Rx interface above has `flow_isolation: true` (explained in more details below). In that configuration, only the packets listing the adequate destination MAC address will be accepted by the Rx interface.
     - We ignore the IP fields (`ip_src_addr`, `ip_dst_addr`) for now, as we are testing on a layer 2 network by just connecting a cable between the two interfaces on our system, therefore having mock values has no impact.
-    - You might have noted the lack of a `eth_src_addr` field in this `bench_tx` section. This is because the source Ethernet MAC address can be inferred automatically by the Advanced Network library from the PCIe address of the Tx interface referenced above.
+    - You might have noted the lack of a `eth_src_addr` field in this `bench_tx` section. This is because the source Ethernet MAC address can be inferred automatically by the DAQIRI library from the PCIe address of the Tx interface referenced above.
 
 ### 4.3 Run the loopback test
 
 After having modified the configuration file, ensure you have connected an SFP cable between the two interfaces of your NIC, then run the application with the command below:
 
-=== "Debian installation"
+=== "Containerized"
+
+    [Launch the DAQIRI container](#41-running-the-daqiri-container), then inside:
 
     ```bash
-    sudo /opt/nvidia/holoscan/examples/adv_networking_bench/adv_networking_bench adv_networking_bench_default_tx_rx.yaml
+    /opt/daqiri/bin/daqiri_bench_default /opt/daqiri/bin/daqiri_bench_default_tx_rx.yaml
     ```
 
 === "From source"
 
-    === "Bare Metal"
+    This assumes you have built DAQIRI and its dependencies locally on your system.
 
-        This assumes you have the required dependencies (holoscan, doca, etc.) installed locally on your system.
-
-        ```bash
-        sudo ./install/examples/adv_networking_bench/adv_networking_bench adv_networking_bench_default_tx_rx.yaml
-        ```
-
-    === "Containerized"
-
-        [Launch the DAQIRI container](#41-running-the-daqiri-container), then inside:
-
-        ```bash
-        /opt/daqiri/bin/daqiri_bench_default /opt/daqiri/bin/daqiri_bench_default_tx_rx.yaml
-        ```
+    ```bash
+    sudo ./build/examples/daqiri_bench_default examples/daqiri_bench_default_tx_rx.yaml
+    ```
 
 The application will run indefinitely. You can stop it gracefully with `Ctrl-C`. You can also uncomment and set the `max_duration_ms` field in the `scheduler` section of the configuration file to limit the duration of the run automatically.
 
@@ -2072,57 +1995,25 @@ sudo mlnx_perf -i $if_name
 
         You might need to kill some of the listed processes to free up GPU VRAM.
 
-## 5. Building your own application
+## 5. Understanding the configuration parameters
 
-This section will guide you through building your own application using the `adv_networking_bench` as an example. Make sure to [build the DAQIRI library](#1-building-the-daqiri-library) first.
-
-### 5.1 Understand the configuration parameters
-
-!!! note
-
-    The configuration below will be analyzed in the context of the application consuming it, as defined in the `main.cpp` file. You can look it up when the "sample application code" is referenced.
-
-    === "Debian installation"
-
-        ```bash
-        /opt/nvidia/holoscan/examples/adv_networking_bench/main.cpp
-        ```
-
-    === "From source"
-
-        ```bash
-        ./applications/adv_networking_bench/cpp/main.cpp
-        ```
-
-    If you are not yet familiar with how Holoscan applications are constructed, please refer to the [Holoscan SDK documentation](https://docs.nvidia.com/holoscan/sdk-user-guide/holoscan_core.html) first.
-
-Let's look at the `adv_networking_bench_default_tx_rx.yaml` file below. Click on the (1) icons below to expand explanations for each annotated line.
-{ .annotate }
-
-1. The cake is a lie :cake:
+This section walks through the YAML configuration used by the benchmark applications. The annotated example below is based on `daqiri_bench_default_tx_rx.yaml`. Click on the :material-plus-circle: icons to expand explanations for each annotated line.
 
 ```yaml
-scheduler: # (1)!
-  check_recession_period_ms: 0
-  worker_thread_number: 5
-  stop_on_deadlock: true
-  stop_on_deadlock_timeout: 500
-  # max_duration_ms: 20000
-
-advanced_network: # (2)!
+daqiri: # (1)!
   cfg:
     version: 1
-    manager: "dpdk" # (3)!
-    master_core: 3 # (4)!
+    manager: "dpdk" # (2)!
+    master_core: 3 # (3)!
     debug: false
     log_level: "info"
 
-    memory_regions: # (5)!
-    - name: "Data_TX_GPU" # (6)!
-      kind: "device" # (7)!
-      affinity: 0 # (8)!
-      num_bufs: 51200 # (9)!
-      buf_size: 1064 # (10)!
+    memory_regions: # (4)!
+    - name: "Data_TX_GPU" # (5)!
+      kind: "device" # (6)!
+      affinity: 0 # (7)!
+      num_bufs: 51200 # (8)!
+      buf_size: 1064 # (9)!
     - name: "Data_RX_GPU"
       kind: "device"
       affinity: 0
@@ -2134,52 +2025,52 @@ advanced_network: # (2)!
       num_bufs: 51200
       buf_size: 64
 
-    interfaces: # (11)!
-    - name: "tx_port" # (12)!
-      address: <0000:00:00.0> # (13)! # The BUS address of the interface doing Tx
-      tx: # (14)!
-        queues: # (15)!
-        - name: "tx_q_0" # (16)!
-          id: 0 # (17)!
-          batch_size: 10240 # (18)!
-          cpu_core: 11 # (19)!
-          memory_regions: # (20)!
+    interfaces: # (10)!
+    - name: "tx_port" # (11)!
+      address: <0000:00:00.0> # (12)! # The BUS address of the interface doing Tx
+      tx: # (13)!
+        queues: # (14)!
+        - name: "tx_q_0" # (15)!
+          id: 0 # (16)!
+          batch_size: 10240 # (17)!
+          cpu_core: 11 # (18)!
+          memory_regions: # (19)!
             - "Data_TX_GPU"
-          offloads: # (21)!
+          offloads: # (20)!
             - "tx_eth_src"
     - name: "rx_port"
-      address: <0000:00:00.0> # (22)! # The BUS address of the interface doing Rx
+      address: <0000:00:00.0> # (21)! # The BUS address of the interface doing Rx
       rx:
-        flow_isolation: true # (23)!
+        flow_isolation: true # (22)!
         queues:
         - name: "rx_q_0"
           id: 0
           cpu_core: 9
           batch_size: 10240
-          memory_regions: # (24)!
+          memory_regions: # (23)!
             - "Data_RX_CPU"
             - "Data_RX_GPU"
-        flows: # (25)!
-        - name: "flow_0" # (26)!
-          id: 0 # (27)!
-          action: # (28)!
+        flows: # (24)!
+        - name: "flow_0" # (25)!
+          id: 0 # (26)!
+          action: # (27)!
             type: queue
             id: 0
-          match: # (29)!
+          match: # (28)!
             udp_src: 4096
             udp_dst: 4096
             ipv4_len: 1050
 
-bench_rx: # (30)!
-  interface_name: "rx_port" # Name of the RX port from the advanced_network config
+bench_rx: # (29)!
+  interface_name: "rx_port" # Name of the RX port from the daqiri config
   gpu_direct: true          # Set to true if using a GPU region for the Rx queues.
   split_boundary: true      # Whether header and data are split for Rx (Header to CPU)
   batch_size: 10240
   max_packet_size: 1064
   header_size: 64
 
-bench_tx: # (31)!
-  interface_name: "tx_port" # Name of the TX port from the advanced_network config
+bench_tx: # (30)!
+  interface_name: "tx_port" # Name of the TX port from the daqiri config
   gpu_direct: true          # Set to true if using a GPU region for the Tx queues.
   split_boundary: 0         # Byte boundary where header and data are split for Tx, 0 if no split
   batch_size: 10240
@@ -2192,209 +2083,33 @@ bench_tx: # (31)!
   udp_dst_port: 4096        # UDP destination port
 ```
 
-1. The `scheduler` section is passed to the multi threaded scheduler we declare in the `#!cpp main()` function of this application. See the [holoscan SDK documentation](https://docs.nvidia.com/holoscan/sdk-user-guide/components/schedulers.html) and [API docs](https://docs.nvidia.com/holoscan/sdk-user-guide/api/cpp/classholoscan_1_1multithreadscheduler.html) for more details. This is related to the Holoscan core library and is not specific to Holoscan Networking.
-2. The `advanced_network` section is passed to the `advanced_network::adv_net_init` which is responsible for setting up the NIC. That function should be called in your `#!cpp Application::compose()` function.
-3. `manager` is the backend networking library. default: `dpdk`. Other: `gpunetio` (DOCA GPUNet IO + DOCA Ethernet & Flow). Coming soon: `rivermax`, `rdma`.
-4. `master_core` is the ID of the CPU core used for setup. It does not need to be isolated, and is recommended to differ differ from the `cpu_core` fields below used for polling the NIC.
-5. The `memory_regions` section lists where the NIC will write/read data from/to when bypassing the OS kernel. Tip: when using GPU buffer regions, keeping the sum of their buffer sizes lower than 80% of your BAR1 size is generally a good rule of thumb 👍.
-6. A descriptive name for that memory region to refer to later in the `interfaces` section.
-7. The type of memory region. Best options are `device` (GPU), or `huge` (pages - CPU). Also supported but not recommended are `malloc` (CPU) and `pinned` (CPU).
-8. The GPU ID for `device` memory regions. The NUMA node ID for CPU memory regions.
-9. The number of buffers in the memory region. A higher value means more time to process the data, but it takes additional space on the GPU BAR1. Too low increases the risk of dropping packets from the NIC having nowhere to write (Rx) or the risk of higher latency from buffering (Tx). Need a rule of thumb 👍? 5x the `batch_size` below is a good starting point.
-10. The size of each buffer in the memory region. These should be equal to your maximum packet size, or less if breaking down packets (ex: header data split, see the `rx` queue below).
-11. The `interfaces` section lists the NIC interfaces that will be configured for the application.
-12. A descriptive name for that interface, currently only used for logging.
-13. The PCIe/bus address of that interface, as identified in previous sections.
-14. Each interface can have a `tx` (transmitting) or `rx` (receiving) section, or both if you'd like to configure both Tx and Rx on the same interface.
-15. The `queues` section lists the queues for that interface. Queues are a core concept of NICs: they handle the actual receiving or transmitting of network packets. Rx queues buffer incoming packets until they can be processed by the application, while Tx queues hold outgoing packets waiting to be sent on the network. The simplest setup uses only one receive and one transmit queue. Using more queues allows multiple streams of network traffic to be processed in parallel, as each queue can be assigned to a specific CPU core, and are assigned their own memory regions that are not shared.
-16. A descriptive name for that queue, currently only used for logging.
-17. The ID of that queue, which can be referred to later in the `flows` section.
-18. The number of packets per batch (or burst). Your Rx operator will have access to packets from the NIC when it receives enough packets for a whole batch/burst. Your Tx operator needs to ensure it does not send more packets than this value on each `#!cpp Operator::compute()` call.
-19. The ID of the CPU core that this queue will use to poll the NIC. Ideally one [isolated core](#35-isolate-cpu-cores) per queue.
-20. The list of memory regions where this queue will write/read packets from/to. The order matters: the first memory region will be used first to read/write from until it fills up one buffer (`buf_size`), after which it will move to the next region in the list and so on until the packet is fully written/read. See the `memory_regions` for the `rx` queue below for an example.
-21. The `offloads` section (Tx queues only) lists optional tasks that can be offloaded to the NIC. The only value currently supported is `tx_eth_src`, that lets the NIC insert the ethernet source mac address in the packet headers. Note: IP, UDP, and Ethernet Checksums or CRC are always done by the NIC currently and are not optional.
-22. Same as for `tx_port`. Each interface in this list should have a unique mac address. This one will do `rx` per config below.
-23. Whether to isolate the Rx flow. If true, any incoming packets that does not match the MAC address of this interface - or isn't directed to a queue when the `flows` section below is used - will be delegated back to Linux for processing (no kernel bypass). This is useful to let this interface handle ARP, ICMP, etc. Otherwise, any packets sent to this interface (ex: ping) will need to be processed (or dropped) by your application.
-24. This scenario is called HDS (Header-Data Split): the packet will first be written to a buffer in the `Data_RX_CPU` memory region, filling its `buf_size` of 64 bytes - which is consistent with the size of our header - then the rest of the packet will be written to the `Data_RX_GPU` memory region. Its `buf_size` of 1000 bytes is just what we need to write the payload size for our application, no byte wasted!
-25. The list of flows. Flows are responsible for routing packets to the correct queue based on various properties. If this field is missing, all packets will be routed to the first queue.
-26. The flow name, currently only used for logging.
-27. The flow `id` is used to tag the packets with what flow it arrived on. This is useful when sending multiple flows to a single queue, as the user application can differentiate which flow (i.e. rules) matched the packet based on this ID.
-28. What to do with packets that match this flow. The only supported action currently is `type: queue` to send the packet to a queue given its `id`.
-29. List of rules to match packets against. All rules must be met for a packet to match the flow. Currently supported rules include `udp_src` and `udp_dst` (port numbers), `ipv4_len` (#TODO#) etc.
-30. The `bench_rx` section is passed to the `AdvNetworkingBenchDefaultRxOp` operator in the `#!cpp Application::compose()` function of the sample application. This operator is a custom operator implemented in `default_bench_op_rx.h` that pulls and aggregates packets received from the NIC, with parameters specific to its own implementation, which can be used as a reference for your own Rx operator. The first parameter, `interface_name`, is used to specify which NIC interface to use for the Rx operation. The following parameters are should align with how `memory_regions` and `queues` were configured for the `rx` interface.
-31. The `bench_tx` section is passed to the `AdvNetworkingBenchDefaultTxOp` operator in the `#!cpp Application::compose()` function of the sample application. This operator is a custom operator implemented in `default_bench_op_tx.h` that generates dummy packets to send to the NIC, with parameters specific to its own implementation, which can be used as a reference for your own Tx operator. The first parameter, `interface_name`, is used to specify which NIC interface to use for the Tx operation. The following parameters up to `header_size` should align with how `memory_regions` and `queues` were configured for the `tx` interface. The remaining parameters are used to fill-in the ethernet header of the packets (ETH, IP, UDP).
-
-### 5.2 Create your own Rx operator
-
-!!! example "Under construction"
-
-    This section is under construction. Refer to the implementation of the `AdvNetworkingBenchDefaultRxOp` for an example.
-
-    === "Debian installation"
-
-        ```bash
-        /opt/nvidia/holoscan/examples/adv_networking_bench/default_bench_op_rx.h
-        ```
-
-    === "From source"
-
-        ```bash
-        ./applications/adv_networking_bench/cpp/default_bench_op_rx.h
-        ```
-
-!!! note
-
-    Design investigations are expected soon for a generic packet aggregator operator.
-
-### 5.3 Create your own Tx operator
-
-!!! example "Under construction"
-
-    This section is under construction. Refer to the implementation of the `AdvNetworkingBenchDefaultTxOp` for an example.
-
-    === "Debian installation"
-
-        ```bash
-        /opt/nvidia/holoscan/examples/adv_networking_bench/default_bench_op_tx.h
-        ```
-
-    === "From source"
-
-        ```bash
-        ./applications/adv_networking_bench/cpp/default_bench_op_tx.h
-        ```
-
-!!! note
-
-    Designs investigations are expected soon for a generic way to prepare packets to send to the NIC.
-
-### 5.4 Build with CMake
-
-=== "Debian installation"
-
-    1. Create a source directory and write your source file(s) for your application and custom operators.
-    2. Create a `CMakeLists.txt` file in your source directory like this one:
-
-        ```cmake
-        cmake_minimum_required(VERSION 3.20)
-        project(my_app CXX) # Add CUDA if writing .cu kernels
-
-        find_package(holoscan 2.6 REQUIRED CONFIG PATHS "/opt/nvidia/holoscan")
-        find_package(holoscan-networking REQUIRED CONFIG PATHS "/opt/nvidia/holoscan")
-
-        # Create an executable
-        add_executable(my_app
-            my_app.cpp
-            ...
-        )
-        target_include_directories(my_app
-            PRIVATE
-                my_include_dirs/
-                ...
-        )
-        target_link_libraries(my_app
-            PRIVATE
-                holoscan::core
-                holoscan::ops::advanced_network_rx
-                holoscan::ops::advanced_network_tx
-                my_other_dependencies
-                ...
-        )
-
-        # Copy the config file to the build directory for convenience referring to it
-        add_custom_target(my_app_config_yaml
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/my_app_config.yaml" ${CMAKE_CURRENT_BINARY_DIR}
-            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/my_app_config.yaml"
-        )
-        add_dependencies(my_app my_app_config_yaml)
-        ```
-
-    3. Build your application like so:
-
-        ```bash
-        # Your chosen paths
-        src_dir="."
-        build_dir="build"
-
-        # Configure the build
-        cmake -S "$src_dir" -B "$build_dir"
-
-        # Build the application
-        cmake --build "$build_dir" -j
-        ```
-
-        ??? failure "Failed to detect a default CUDA architecture."
-
-            Add the path to your installation of `nvcc` to your `PATH`, or pass its to the cmake configuration command like so (adjust to your CUDA/nvcc installation path):
-
-            ```bash
-            cmake -S "$src_dir" -B "$build_dir" -D CMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc
-            ```
-
-    4. Run your application like so:
-
-        ```bash
-        "./$build_dir/my_app my_app_config.yaml"
-        ```
-
-=== "From source"
-
-    1. Create an application directory under [`applications/`](https://github.com/nvidia-holoscan/holohub/tree/main/applications) in your clone of the HoloHub repository, and write your source file(s) for your application and custom operators.
-    2. Add the following to the [`application/CMakeLists.txt`](https://github.com/nvidia-holoscan/holohub/blob/main/applications/adv_networking_bench/CMakeLists.txt) file:
-
-        ```cmake
-        add_holohub_application(my_app DEPENDS OPERATORS advanced_network)
-        ```
-
-    3. Create a `CMakeLists.txt` file in your application directory like this one:
-
-        ```cmake
-        cmake_minimum_required(VERSION 3.20)
-        project(my_app CXX) # Add CUDA if writing .cu kernels
-
-        find_package(holoscan 2.6 REQUIRED CONFIG PATHS "/opt/nvidia/holoscan")
-
-        # Create an executable
-        add_executable(my_app
-            my_app.cpp
-            ...
-        )
-        target_include_directories(my_app
-            PRIVATE
-                my_include_dirs/
-                ...
-        )
-        target_link_libraries(my_app
-            PRIVATE
-                holoscan::core
-                holoscan::ops::advanced_network_rx
-                holoscan::ops::advanced_network_tx
-                my_other_dependencies
-                ...
-        )
-
-        # Copy the config file to the build directory for convenience referring to it
-        add_custom_target(my_app_config_yaml
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/my_app_config.yaml" ${CMAKE_CURRENT_BINARY_DIR}
-            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/my_app_config.yaml"
-        )
-        add_dependencies(my_app my_app_config_yaml)
-        ```
-
-    4. Build your application like so:
-
-        ```bash
-        ./holohub build my_app
-        ```
-
-    5. Run your application like so:
-
-        ```bash
-        ./holohub run --img holohub:my_app --docker-opts "-u 0 --privileged" --bash -c "./build/my_app/applications/my_app my_app_config.yaml"
-        ```
-
-        or, if you have set up a shortcut to run your application with its config file through its `metadata.json` (see other apps for examples):
-
-        ```bash
-        ./holohub run --no-local-build --container_args " -u 0 --privileged"
-        ```
+1. The `daqiri` section configures the DAQIRI library, which is responsible for setting up the NIC. It is passed to `daqiri_init(...)` during application startup.
+2. `manager` is the backend networking library. Supported values: `dpdk`, `rdma`.
+3. `master_core` is the ID of the CPU core used for setup. It does not need to be isolated, and is recommended to differ from the `cpu_core` fields below used for polling the NIC.
+4. The `memory_regions` section lists where the NIC will write/read data from/to when bypassing the OS kernel. Tip: when using GPU buffer regions, keeping the sum of their buffer sizes lower than 80% of your BAR1 size is generally a good rule of thumb.
+5. A descriptive name for that memory region to refer to later in the `interfaces` section.
+6. The type of memory region. Best options are `device` (GPU) or `huge` (hugepages - CPU). Also supported: `host_pinned` (CPU, pinned) and `host` (CPU, unpinned).
+7. The GPU ID for `device` memory regions. The NUMA node ID for CPU memory regions.
+8. The number of buffers in the memory region. A higher value means more time to process the data, but takes additional space on the GPU BAR1. Too low increases the risk of dropping packets from the NIC having nowhere to write (Rx) or higher latency from buffering (Tx). A good starting point is 5x the `batch_size` below.
+9. The size of each buffer in the memory region. These should be equal to your maximum packet size, or less if breaking down packets (e.g. header-data split, see the `rx` queue below).
+10. The `interfaces` section lists the NIC interfaces that will be configured for the application.
+11. A descriptive name for that interface, currently only used for logging.
+12. The PCIe/bus address of that interface, as identified in previous sections.
+13. Each interface can have a `tx` (transmitting) or `rx` (receiving) section, or both if you'd like to configure both Tx and Rx on the same interface.
+14. The `queues` section lists the queues for that interface. Queues are a core concept of NICs: they handle the actual receiving or transmitting of network packets. Rx queues buffer incoming packets until they can be processed by the application, while Tx queues hold outgoing packets waiting to be sent on the network. The simplest setup uses only one receive and one transmit queue. Using more queues allows multiple streams of network traffic to be processed in parallel, as each queue can be assigned to a specific CPU core with its own memory regions.
+15. A descriptive name for that queue, currently only used for logging.
+16. The ID of that queue, which can be referred to later in the `flows` section.
+17. The number of packets per batch (or burst). The Rx path delivers packets to the application in batches of this size. The Tx path should not send more packets than this value per call.
+18. The ID of the CPU core that this queue will use to poll the NIC. Ideally one [isolated core](#35-isolate-cpu-cores) per queue.
+19. The list of memory regions where this queue will write/read packets from/to. The order matters: the first memory region will be used first to read/write from until it fills up one buffer (`buf_size`), after which it will move to the next region in the list and so on until the packet is fully written/read. See the `memory_regions` for the `rx` queue below for an example.
+20. The `offloads` section (Tx queues only) lists optional tasks that can be offloaded to the NIC. The only value currently supported is `tx_eth_src`, which lets the NIC insert the ethernet source MAC address in the packet headers. Note: IP, UDP, and Ethernet checksums/CRC are always done by the NIC and are not optional.
+21. Same as for `tx_port`. Each interface in this list should have a unique MAC address. This one will do `rx` per config below.
+22. Whether to isolate the Rx flow. If true, any incoming packets that do not match the MAC address of this interface — or are not directed to a queue via the `flows` section below — will be delegated back to Linux for processing (no kernel bypass). This is useful to let this interface handle ARP, ICMP, etc. Otherwise, any packets sent to this interface (e.g. ping) will need to be processed (or dropped) by your application.
+23. This scenario is called HDS (Header-Data Split): the packet will first be written to a buffer in the `Data_RX_CPU` memory region, filling its `buf_size` of 64 bytes — which is consistent with the size of our header — then the rest of the packet will be written to the `Data_RX_GPU` memory region. Its `buf_size` of 1000 bytes is just what we need for the payload.
+24. The list of flows. Flows are responsible for routing packets to the correct queue based on various properties. If this field is missing, all packets will be routed to the first queue.
+25. The flow name, currently only used for logging.
+26. The flow `id` is used to tag the packets with what flow it arrived on. This is useful when sending multiple flows to a single queue, as the application can differentiate which flow (i.e. rules) matched the packet based on this ID.
+27. What to do with packets that match this flow. The only supported action currently is `type: queue` to send the packet to a queue given its `id`.
+28. List of rules to match packets against. All rules must be met for a packet to match the flow. Currently supported rules include `udp_src` and `udp_dst` (port numbers) and `ipv4_len` (IP packet length).
+29. The `bench_rx` section is specific to the benchmark application (`default_bench.cpp`). It configures the Rx side: which interface to receive on, whether GPUDirect and header-data split are enabled, and the expected packet geometry. These parameters should align with how `memory_regions` and `queues` were configured for the `rx` interface above.
+30. The `bench_tx` section is specific to the benchmark application (`default_bench.cpp`). It configures the Tx side: which interface to transmit on, packet sizes, and the Ethernet/IP/UDP header fields to embed in outgoing packets. The `eth_dst_addr` is required when `flow_isolation` is enabled on the Rx interface.
