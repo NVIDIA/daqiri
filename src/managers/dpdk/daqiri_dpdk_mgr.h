@@ -144,7 +144,6 @@ class DpdkMgr : public Manager {
 
  private:
   static void PrintDpdkStats(int port);
-  static std::string generate_random_string(int len);
   static int rx_core_worker(void* arg);
   static int rx_core_multi_q_worker(void* arg);
   static int tx_core_worker(void* arg);

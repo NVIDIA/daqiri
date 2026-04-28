@@ -36,10 +36,13 @@
 #include <rte_ring.h>
 #include <rte_eal.h>
 #include <rte_version.h>
-#include <unistd.h>
 #endif
 
+#include <chrono>
 #include <cuda.h>
+#include <random>
+#include <unistd.h>
+
 #include "src/logging.hpp"
 
 namespace daqiri {
@@ -49,6 +52,30 @@ std::unique_ptr<Manager> ManagerFactory::ManagerInstance_ = nullptr;  // Initial
 ManagerType ManagerFactory::ManagerType_ = ManagerType::UNKNOWN;
 
 extern void initialize_manager(Manager* _manager);
+
+std::string Manager::generate_random_string(int len) {
+  constexpr char tokens[] = "abcdefghijklmnopqrstuvwxyz";
+  if (len <= 0) { return {}; }
+
+  std::random_device random_device;
+  const auto timestamp = static_cast<uint64_t>(
+      std::chrono::steady_clock::now().time_since_epoch().count());
+  std::seed_seq seed{
+      random_device(),
+      random_device(),
+      static_cast<uint32_t>(timestamp),
+      static_cast<uint32_t>(timestamp >> 32U),
+      static_cast<uint32_t>(getpid()),
+  };
+  std::mt19937 rng(seed);
+  std::uniform_int_distribution<size_t> dist(0, sizeof(tokens) - 2);
+
+  std::string tmp;
+  tmp.reserve(static_cast<size_t>(len));
+  for (int i = 0; i < len; i++) { tmp += tokens[dist(rng)]; }
+
+  return tmp;
+}
 
 ManagerType ManagerFactory::get_default_manager_type() {
 #if DAQIRI_MGR_DPDK

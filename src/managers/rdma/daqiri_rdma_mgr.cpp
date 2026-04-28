@@ -1359,15 +1359,6 @@ void RdmaMgr::free_tx_burst(BurstParams* burst) {
   rte_mempool_put(tx_meta, burst);
 }
 
-std::string RdmaMgr::generate_random_string(int len) {
-  const char tokens[] = "abcdefghijklmnopqrstuvwxyz";
-  std::string tmp;
-
-  for (int i = 0; i < len; i++) { tmp += tokens[rand() % (sizeof(tokens) - 1)]; }
-
-  return tmp;
-}
-
 void RdmaMgr::initialize() {
   bool server = false;
   bool client = false;

@@ -1445,15 +1445,6 @@ void DpdkMgr::setup_accurate_send_scheduling_mask() {
 }
 
 
-std::string DpdkMgr::generate_random_string(int len) {
-  const char tokens[] = "abcdefghijklmnopqrstuvwxyz";
-  std::string tmp;
-
-  for (int i = 0; i < len; i++) { tmp += tokens[rand() % (sizeof(tokens) - 1)]; }
-
-  return tmp;
-}
-
 // HWS doesn't allow zero queues on an interface, so we make some dummy interfaces here for
 // users that are only doing TX
 void DpdkMgr::create_dummy_rx_q() {
