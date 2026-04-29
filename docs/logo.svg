@@ -63,12 +63,12 @@
   </g>
 
   <!-- ── CABLE ───────────────────────────────── -->
-  <!-- Connector plug at glass end -->
-  <rect x="132" y="88" width="10" height="6" rx="1.5" fill="#555" stroke="#888" stroke-width="0.8"/>
-  <!-- Cable path: curves gracefully to server -->
-  <path d="M 142 91 C 165 91, 155 110, 168 110" stroke="#76b900" stroke-width="3" stroke-linecap="round" fill="none"/>
+  <!-- Connector plug at glass end — close to bowl right edge -->
+  <rect x="100" y="88" width="10" height="6" rx="1.5" fill="#555" stroke="#888" stroke-width="0.8"/>
+  <!-- Cable path: extends from glass to server -->
+  <path d="M 110 91 C 138 91, 152 110, 168 110" stroke="#76b900" stroke-width="3" stroke-linecap="round" fill="none"/>
   <!-- Second thinner cable -->
-  <path d="M 142 93 C 162 93, 153 115, 168 115" stroke="#76b900" stroke-width="1.5" stroke-linecap="round" fill="none" opacity="0.45"/>
+  <path d="M 110 93 C 136 93, 150 115, 168 115" stroke="#76b900" stroke-width="1.5" stroke-linecap="round" fill="none" opacity="0.45"/>
   <!-- Connector plug at server end -->
   <rect x="166" y="107" width="10" height="6" rx="1.5" fill="#555" stroke="#888" stroke-width="0.8"/>
 
