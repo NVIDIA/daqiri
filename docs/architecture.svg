@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 375 510" style="width:100%;max-width:400px;display:block;margin:0 auto;">
+  <defs>
+    <marker id="arr"   markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#555"/></marker>
+    <marker id="arr-g" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#76b900"/></marker>
+    <marker id="arr-fb" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#888"/></marker>
+  </defs>
+
+  <!-- ── TITLE ─────────────────────────────────────────── -->
+  <text x="204" y="14" text-anchor="middle" fill="#f0f0f0" font-weight="800" font-size="13" font-family="Inter,sans-serif">AI Native Data Acquisition and Control</text>
+
+  <g transform="translate(0,10)">
+  <!-- ── DATA CONVERTER ────────────────────────────────── -->
+  <rect x="108" y="26" width="168" height="58" rx="6" fill="#2a2a2a" stroke="#666" stroke-width="1.5"/>
+  <text x="192" y="43" text-anchor="middle" fill="#666" font-size="8" font-weight="700" font-family="Inter,sans-serif" letter-spacing="1">SENSOR FRONT-END</text>
+  <text x="192" y="59" text-anchor="middle" fill="#f0f0f0" font-weight="700" font-size="12" font-family="Inter,sans-serif">Data Converter</text>
+  <text x="192" y="75" text-anchor="middle" fill="#888" font-size="10" font-family="Inter,sans-serif">(ADC/DAC)</text>
+
+  <!-- Arrow 1 -->
+  <line x1="192" y1="84" x2="192" y2="106" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ── FPGA ───────────────────────────────────────────── -->
+  <rect x="108" y="108" width="168" height="66" rx="6" fill="#5c0a0a" stroke="#cc2222" stroke-width="1.5"/>
+  <text x="192" y="125" text-anchor="middle" fill="#883333" font-size="8" font-weight="700" font-family="Inter,sans-serif" letter-spacing="1">CONTROL AND LOW LATENCY</text>
+  <text x="192" y="142" text-anchor="middle" fill="#fff" font-weight="700" font-size="13" font-family="Inter,sans-serif">FPGA</text>
+  <text x="192" y="157" text-anchor="middle" fill="#ffaaaa" font-size="10" font-family="Inter,sans-serif">Control, Triggering,</text>
+  <text x="192" y="169" text-anchor="middle" fill="#ffaaaa" font-size="10" font-family="Inter,sans-serif">I/O Conversion</text>
+
+  <!-- Arrow 2: straight down, passes behind DAQIRI badge -->
+  <line x1="192" y1="174" x2="192" y2="228" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ── FEEDBACK ARROW: moved left to x=28 to clear DAQIRI box ── -->
+  <path d="M 117,346 L 28,346 L 28,141 L 108,141" fill="none" stroke="#888" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr-fb)"/>
+  <text x="18" y="245" text-anchor="middle" fill="#888" font-size="10" font-weight="700" font-family="Inter,sans-serif" transform="rotate(-90,18,245)">FEEDBACK</text>
+
+  <!-- ── DAQIRI REGION ──────────────────────────────────── -->
+  <rect x="44" y="204" width="320" height="286" rx="8" fill="rgba(118,185,0,0.13)" stroke="#76b900" stroke-width="2" stroke-dasharray="6,3"/>
+
+  <!-- DAQIRI badge -->
+  <rect x="52" y="186" width="84" height="22" rx="4" fill="#76b900"/>
+  <text x="94" y="201" text-anchor="middle" fill="#000" font-weight="900" font-size="13" font-family="Inter,sans-serif" letter-spacing="2">DAQIRI</text>
+
+  <!-- ── NIC (GPUDirect RDMA) ──────────────────────────── -->
+  <rect x="118" y="230" width="148" height="56" rx="6" fill="#0d0d0d" stroke="#76b900" stroke-width="1.5"/>
+  <text x="192" y="247" text-anchor="middle" fill="#4a7a00" font-size="8" font-weight="700" font-family="Inter,sans-serif" letter-spacing="1">INGEST</text>
+  <text x="192" y="262" text-anchor="middle" fill="#f0f0f0" font-weight="700" font-size="12" font-family="Inter,sans-serif">NIC</text>
+  <text x="192" y="277" text-anchor="middle" fill="#76b900" font-size="10" font-family="Inter,sans-serif">GPUDirect RDMA</text>
+
+  <!-- Arrow 3: NIC → GPU, green -->
+  <line x1="192" y1="286" x2="192" y2="308" stroke="#76b900" stroke-width="2" marker-end="url(#arr-g)"/>
+
+  <!-- ── GPU ───────────────────────────────────────────── -->
+  <rect x="117" y="310" width="150" height="72" rx="8" fill="#132b06" stroke="#76b900" stroke-width="2"/>
+  <text x="192" y="326" text-anchor="middle" fill="#4a7a00" font-size="7.5" font-weight="700" font-family="Inter,sans-serif" letter-spacing="0.5">COMPUTE AND INFERENCING</text>
+  <text x="192" y="342" text-anchor="middle" fill="#f0f0f0" font-weight="700" font-size="13" font-family="Inter,sans-serif">GPU</text>
+  <text x="192" y="357" text-anchor="middle" fill="#a0d000" font-size="10" font-family="Inter,sans-serif">AI, Signal Processing,</text>
+  <text x="192" y="370" text-anchor="middle" fill="#a0d000" font-size="10" font-family="Inter,sans-serif">Data Processing</text>
+
+  <!-- ── NIC (UCX to HPC) ──────────────────────────────── -->
+  <rect x="285" y="310" width="72" height="72" rx="6" fill="#0d0d0d" stroke="#444" stroke-width="1.5"/>
+  <text x="321" y="326" text-anchor="middle" fill="#555" font-size="7.5" font-weight="700" font-family="Inter,sans-serif" letter-spacing="0.5">EGRESS</text>
+  <text x="321" y="342" text-anchor="middle" fill="#f0f0f0" font-weight="700" font-size="11" font-family="Inter,sans-serif">NIC</text>
+  <text x="321" y="356" text-anchor="middle" fill="#666" font-size="9" font-family="Inter,sans-serif">UCX TX/RX</text>
+  <text x="321" y="369" text-anchor="middle" fill="#666" font-size="9" font-family="Inter,sans-serif">to HPC</text>
+
+  <!-- Arrow GPU right → NIC UCX -->
+  <line x1="267" y1="346" x2="283" y2="346" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Arrow GPU bottom → SSD -->
+  <line x1="192" y1="382" x2="192" y2="404" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ── SSD RECTANGLE — text inside the block ─────────── -->
+  <rect x="126" y="408" width="132" height="66" rx="6" fill="#180a30" stroke="#6a28a0" stroke-width="1.5"/>
+  <text x="192" y="424" text-anchor="middle" fill="#6a3a8a" font-size="8" font-weight="700" font-family="Inter,sans-serif" letter-spacing="1">PERSIST</text>
+  <text x="192" y="441" text-anchor="middle" fill="#f0f0f0" font-weight="700" font-size="13" font-family="Inter,sans-serif">SSD</text>
+  <text x="192" y="458" text-anchor="middle" fill="#9060c0" font-size="10" font-family="Inter,sans-serif">GPUDirect Storage</text>
+  </g>
+</svg>

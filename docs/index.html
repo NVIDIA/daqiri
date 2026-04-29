@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DAQIRI — Data Acquisition for Integrated Real-time Instruments</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --nv-green:#76b900; --nv-green-l:#a0d000;
+      --bg-dark:#0a0a0a; --bg-card:#111111; --bg-card2:#161616;
+      --border:#222222; --text-pri:#f0f0f0; --text-mut:#888888; --text-dim:#555555;
+      --font-sans:'Inter','Segoe UI',sans-serif;
+      --font-mono:'JetBrains Mono','Fira Code','Consolas',monospace;
+      --radius:8px; --ease:0.2s ease; --nav-h:64px;
+    }
+    html { scroll-behavior:smooth; }
+    body { background:var(--bg-dark); color:var(--text-pri); font-family:var(--font-sans); font-size:16px; line-height:1.6; overflow-x:hidden; }
+    h1,h2,h3 { line-height:1.2; font-weight:700; letter-spacing:-0.02em; }
+    h1 { font-size:clamp(2.2rem,5vw,3.75rem); }
+    h2 { font-size:clamp(1.5rem,3vw,2.25rem); }
+    h3 { font-size:1.15rem; }
+    p { color:var(--text-mut); }
+    a { color:var(--nv-green); text-decoration:none; transition:color var(--ease); }
+    a:hover { color:var(--nv-green-l); }
+    code { font-family:var(--font-mono); font-size:.875em; background:#1a1a1a; border:1px solid var(--border); border-radius:4px; padding:2px 6px; color:var(--nv-green-l); }
+    pre { background:#0d0d0d; border:1px solid var(--border); border-radius:var(--radius); padding:1.4rem 1.5rem; overflow-x:auto; font-family:var(--font-mono); font-size:.85rem; line-height:1.65; color:#ccc; }
+    pre .cm { color:#546e7a; font-style:italic; }
+    pre .kw { color:#c792ea; }
+    pre .fn { color:#82aaff; }
+    pre .str { color:#c3e88d; }
+    pre .nm { color:var(--nv-green-l); }
+    .container { max-width:1200px; margin:0 auto; padding:0 2rem; }
+    section { padding:6rem 0; }
+    .section-label { font-size:.72rem; font-weight:700; letter-spacing:.15em; text-transform:uppercase; color:var(--nv-green); margin-bottom:.75rem; }
+    .section-title { color:var(--text-pri); margin-bottom:1rem; }
+    .section-desc { color:var(--text-mut); max-width:640px; font-size:1.05rem; }
+    .section-header { display:flex; align-items:flex-end; justify-content:space-between; flex-wrap:wrap; gap:1.5rem; margin-bottom:3rem; }
+
+    /* NAV */
+    #navbar { position:fixed; top:0; left:0; right:0; z-index:1000; height:var(--nav-h); display:flex; align-items:center; background:rgba(10,10,10,.92); backdrop-filter:blur(16px); border-bottom:1px solid var(--border); transition:box-shadow var(--ease); }
+    #navbar.scrolled { box-shadow:0 4px 40px rgba(0,0,0,.6); }
+    .nav-inner { width:100%; max-width:1200px; margin:0 auto; padding:0 2rem; display:flex; align-items:center; gap:2rem; }
+    .nav-logo { display:flex; align-items:center; gap:.75rem; flex-shrink:0; text-decoration:none; }
+    .nav-logo-icon { width:32px; height:32px; background:var(--nv-green); border-radius:6px; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:.75rem; color:#000; letter-spacing:-.05em; }
+    .nav-logo-text { font-weight:800; font-size:1.1rem; color:var(--text-pri); letter-spacing:.05em; }
+    .nav-logo-badge { font-size:.65rem; font-weight:700; padding:2px 6px; background:rgba(118,185,0,.15); color:var(--nv-green); border:1px solid rgba(118,185,0,.3); border-radius:99px; letter-spacing:.08em; }
+    .nav-links { display:flex; align-items:center; gap:.25rem; flex:1; }
+    .nav-links a { color:var(--text-mut); font-size:.875rem; font-weight:500; padding:.4rem .75rem; border-radius:var(--radius); transition:color var(--ease),background var(--ease); }
+    .nav-links a:hover { color:var(--text-pri); background:rgba(255,255,255,.05); }
+    .nav-links a.active { color:var(--nv-green); }
+    .nav-links a.nav-ext::after { content:'↗'; font-size:.72em; opacity:.55; margin-left:2px; }
+    .nav-actions { display:flex; align-items:center; gap:.75rem; margin-left:auto; }
+    .btn { display:inline-flex; align-items:center; gap:.5rem; font-size:.875rem; font-weight:600; padding:.5rem 1.25rem; border-radius:var(--radius); border:1.5px solid transparent; cursor:pointer; transition:all var(--ease); text-decoration:none; }
+    .btn-primary { background:var(--nv-green); color:#000; border-color:var(--nv-green); }
+    .btn-primary:hover { background:var(--nv-green-l); border-color:var(--nv-green-l); color:#000; }
+    .btn-outline { background:transparent; color:var(--text-mut); border-color:var(--border); }
+    .btn-outline:hover { color:var(--text-pri); border-color:#444; background:rgba(255,255,255,.04); }
+
+    /* HERO */
+    #hero { min-height:100vh; display:flex; align-items:center; padding-top:var(--nav-h); position:relative; overflow:hidden; }
+    .hero-inner { display:grid; grid-template-columns:1fr auto; gap:4rem; align-items:center; }
+    .hero-logo-wrap { display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+    .hero-logo-wrap img { width:320px; max-width:38vw; filter:drop-shadow(0 0 40px rgba(118,185,0,0.18)); }
+    .hero-grid { position:absolute; inset:0; z-index:0; background-image:linear-gradient(rgba(118,185,0,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(118,185,0,.04) 1px,transparent 1px); background-size:60px 60px; mask-image:radial-gradient(ellipse 80% 60% at 50% 40%,black 30%,transparent 100%); }
+    .hero-glow { position:absolute; top:-20%; left:50%; transform:translateX(-50%); width:800px; height:500px; background:radial-gradient(ellipse,rgba(118,185,0,.11) 0%,transparent 70%); pointer-events:none; z-index:0; }
+    .hero-content { position:relative; z-index:1; max-width:780px; }
+    .hero-eyebrow { display:inline-flex; align-items:center; gap:.5rem; font-size:.72rem; font-weight:700; letter-spacing:.15em; text-transform:uppercase; color:var(--nv-green); background:rgba(118,185,0,.08); border:1px solid rgba(118,185,0,.2); border-radius:99px; padding:.35rem 1rem; margin-bottom:2rem; }
+    .hero-eyebrow::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--nv-green); animation:pulse 2s ease-in-out infinite; }
+    @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.8)} }
+    .hero-title { margin-bottom:1.5rem; }
+    .hero-title .hi { color:var(--nv-green); }
+    .hero-desc { font-size:1.15rem; color:var(--text-mut); max-width:620px; margin-bottom:2rem; line-height:1.75; }
+    .hero-actions { display:flex; align-items:center; gap:1rem; flex-wrap:wrap; margin-bottom:3.5rem; }
+    .hero-stats { display:flex; gap:3rem; flex-wrap:wrap; border-top:1px solid var(--border); padding-top:2.5rem; }
+    .stat-value { font-size:1.75rem; font-weight:800; color:var(--text-pri); letter-spacing:-.03em; }
+    .stat-label { font-size:.78rem; color:var(--text-dim); font-weight:500; text-transform:uppercase; letter-spacing:.1em; margin-top:.2rem; }
+
+    /* WARNING BANNER */
+    .warn-banner { background:rgba(255,193,7,.07); border:1px solid rgba(255,193,7,.25); border-radius:var(--radius); padding:.9rem 1.25rem; display:flex; gap:.75rem; align-items:flex-start; margin-bottom:2rem; }
+    .warn-banner p { color:rgba(255,203,107,.85); font-size:.875rem; }
+
+    /* FEATURES */
+    #features { background:var(--bg-dark); border-top:1px solid var(--border); }
+    .features-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:1.5px; background:var(--border); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; margin-top:4rem; }
+    .feature-card { background:var(--bg-card); padding:2rem; transition:background var(--ease); }
+    .feature-card:hover { background:var(--bg-card2); }
+    .feature-icon { width:44px; height:44px; border-radius:var(--radius); background:rgba(118,185,0,.1); border:1px solid rgba(118,185,0,.2); display:flex; align-items:center; justify-content:center; font-size:1.25rem; margin-bottom:1.25rem; }
+    .feature-card h3 { color:var(--text-pri); margin-bottom:.5rem; }
+    .feature-card p { font-size:.9rem; color:var(--text-mut); }
+    .backends-table { width:100%; border-collapse:collapse; margin-top:2rem; font-size:.9rem; }
+    .backends-table th { text-align:left; padding:.6rem 1rem; font-size:.7rem; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--text-dim); border-bottom:1px solid var(--border); }
+    .backends-table td { padding:.85rem 1rem; border-bottom:1px solid #181818; vertical-align:top; color:var(--text-mut); }
+    .backends-table tr:last-child td { border-bottom:none; }
+    .bname { font-family:var(--font-mono); color:var(--nv-green-l); font-weight:600; }
+    .bval  { font-family:var(--font-mono); color:#c792ea; font-size:.82rem; }
+
+    /* QUICK START */
+    #getting-started { border-top:1px solid var(--border); }
+    .gs-layout { display:grid; grid-template-columns:1fr 1fr; gap:3rem; margin-top:3rem; align-items:start; }
+    .gs-steps { display:flex; flex-direction:column; }
+    .gs-step { display:flex; gap:1.25rem; padding:1.5rem 0; border-bottom:1px solid var(--border); }
+    .gs-step:last-child { border-bottom:none; }
+    .gs-step-num { width:28px; height:28px; border-radius:50%; flex-shrink:0; background:rgba(118,185,0,.12); border:1px solid rgba(118,185,0,.3); color:var(--nv-green); font-size:.75rem; font-weight:800; display:flex; align-items:center; justify-content:center; margin-top:.1rem; }
+    .gs-step-body h4 { color:var(--text-pri); font-size:.95rem; font-weight:600; margin-bottom:.35rem; }
+    .gs-step-body p { font-size:.875rem; color:var(--text-mut); margin-bottom:.75rem; }
+    .gs-code-panel { display:flex; flex-direction:column; gap:1.25rem; position:sticky; top:calc(var(--nav-h) + 1.5rem); }
+    .gs-code-block { background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
+    .gs-code-hdr { padding:.7rem 1.25rem; background:#111; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+    .gs-code-title { font-size:.8rem; font-weight:600; color:var(--text-mut); }
+    .gs-code-lang  { font-size:.7rem; font-family:var(--font-mono); color:var(--text-dim); }
+    .gs-code-block pre { border:none; border-radius:0; margin:0; font-size:.8rem; }
+
+    /* EXAMPLES */
+    #examples { background:var(--bg-card); border-top:1px solid var(--border); }
+    .examples-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:1.25rem; margin-top:3rem; }
+    .example-card { background:var(--bg-dark); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; transition:border-color var(--ease),transform var(--ease); }
+    .example-card:hover { border-color:rgba(118,185,0,.4); transform:translateY(-2px); }
+    .ex-hdr { padding:1.1rem 1.5rem; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:.75rem; }
+    .ex-dot { width:10px; height:10px; border-radius:50%; }
+    .dot-cpp  { background:#00599c; }
+    .dot-yaml { background:#cc3e44; }
+    .dot-bash { background:#4caf50; }
+    .ex-title { color:var(--text-pri); font-size:.92rem; font-weight:600; }
+    .ex-lang  { font-size:.72rem; color:var(--text-dim); margin-left:auto; font-family:var(--font-mono); }
+    .ex-body pre { border:none; border-radius:0; margin:0; max-height:210px; overflow:hidden; font-size:.77rem; background:#090909; }
+    .ex-footer { padding:.9rem 1.5rem; border-top:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+    .ex-desc { font-size:.8rem; color:var(--text-mut); }
+    .ex-link { font-size:.8rem; color:var(--nv-green); font-weight:600; }
+
+    /* TUTORIALS */
+    #tutorials { border-top:1px solid var(--border); }
+    .tutorials-list { margin-top:3rem; display:flex; flex-direction:column; gap:1px; background:var(--border); border-radius:var(--radius); overflow:hidden; border:1px solid var(--border); }
+    .tut-item { background:var(--bg-dark); padding:1.75rem 2rem; display:flex; align-items:center; gap:2rem; transition:background var(--ease); cursor:pointer; }
+    .tut-item:hover { background:#0f0f0f; }
+    .tut-num  { font-size:.75rem; font-weight:800; font-family:var(--font-mono); color:var(--nv-green); min-width:2.5rem; }
+    .tut-info { flex:1; }
+    .tut-title { color:var(--text-pri); font-size:1rem; font-weight:600; margin-bottom:.35rem; }
+    .tut-desc  { font-size:.875rem; color:var(--text-mut); }
+    .tut-meta  { display:flex; align-items:center; gap:1rem; flex-shrink:0; }
+    .tag { font-size:.7rem; font-weight:700; padding:3px 10px; border-radius:99px; letter-spacing:.05em; }
+    .tag-beg { background:rgba(99,235,99,.1);  color:#63eb63; border:1px solid rgba(99,235,99,.2); }
+    .tag-int { background:rgba(255,193,7,.1);  color:#ffc107; border:1px solid rgba(255,193,7,.2); }
+    .tag-adv { background:rgba(255,80,80,.1);  color:#ff8080; border:1px solid rgba(255,80,80,.2); }
+    .tut-time  { font-size:.8rem; color:var(--text-dim); }
+    .tut-arrow { color:var(--text-dim); font-size:1rem; transition:transform var(--ease),color var(--ease); }
+    .tut-item:hover .tut-arrow { transform:translateX(4px); color:var(--nv-green); }
+
+    /* NEWS */
+    #publications { background:var(--bg-card); border-top:1px solid var(--border); }
+    .pub-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(360px,1fr)); gap:1.25rem; margin-top:3rem; }
+    .pub-card { background:var(--bg-dark); border:1px solid var(--border); border-radius:var(--radius); padding:1.75rem; transition:border-color var(--ease); }
+    .pub-card:hover { border-color:rgba(118,185,0,.3); }
+    .pub-venue { display:flex; align-items:center; gap:.5rem; margin-bottom:1rem; }
+    .pub-badge { font-size:.7rem; font-weight:800; letter-spacing:.08em; text-transform:uppercase; padding:3px 10px; border-radius:4px; background:rgba(118,185,0,.12); color:var(--nv-green); border:1px solid rgba(118,185,0,.25); }
+    .pub-year  { font-size:.8rem; color:var(--text-dim); margin-left:auto; }
+    .pub-title { color:var(--text-pri); font-size:1rem; font-weight:600; margin-bottom:.75rem; line-height:1.4; }
+    .pub-authors { font-size:.82rem; color:var(--text-mut); margin-bottom:1.25rem; }
+    .pub-links { display:flex; gap:.75rem; }
+    .pub-link { font-size:.8rem; font-weight:600; padding:.3rem .75rem; border-radius:6px; border:1px solid var(--border); color:var(--text-mut); transition:all var(--ease); }
+    .pub-link:hover { color:var(--nv-green); border-color:rgba(118,185,0,.4); background:rgba(118,185,0,.05); }
+
+    /* CTA */
+    #cta { border-top:1px solid var(--border); background:radial-gradient(ellipse 60% 80% at 50% 100%,rgba(118,185,0,.07) 0%,transparent 70%); text-align:center; padding:7rem 0; }
+    #cta h2 { margin-bottom:1rem; }
+    #cta > .container > p { max-width:520px; margin:0 auto 2.5rem; font-size:1.05rem; }
+    .cta-actions { display:flex; align-items:center; justify-content:center; gap:1rem; flex-wrap:wrap; }
+
+    /* FOOTER */
+    footer { background:var(--bg-dark); border-top:1px solid var(--border); padding:3rem 0 2rem; }
+    .footer-inner { display:grid; grid-template-columns:2fr 1fr 1fr 1fr; gap:3rem; margin-bottom:3rem; }
+    .footer-brand p { font-size:.875rem; color:var(--text-mut); max-width:260px; line-height:1.6; margin-top:1rem; }
+    .footer-col-title { font-size:.72rem; font-weight:700; text-transform:uppercase; letter-spacing:.1em; color:var(--text-dim); margin-bottom:1rem; }
+    .footer-links { list-style:none; display:flex; flex-direction:column; gap:.5rem; }
+    .footer-links a { font-size:.875rem; color:var(--text-mut); transition:color var(--ease); }
+    .footer-links a:hover { color:var(--text-pri); }
+    .footer-bottom { border-top:1px solid var(--border); padding-top:1.5rem; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:1rem; }
+    .footer-bottom-l { font-size:.8rem; color:var(--text-dim); }
+    .footer-bottom-r { display:flex; align-items:center; gap:1.25rem; }
+    .footer-bottom-r a { font-size:.8rem; color:var(--text-dim); transition:color var(--ease); }
+    .footer-bottom-r a:hover { color:var(--text-mut); }
+
+    ::-webkit-scrollbar { width:6px; height:6px; }
+    ::-webkit-scrollbar-track { background:var(--bg-dark); }
+    ::-webkit-scrollbar-thumb { background:#333; border-radius:99px; }
+    @media (max-width:1000px) { .hero-inner { grid-template-columns:1fr; } .hero-logo-wrap { display:none; } }
+    @media (max-width:900px) { .gs-layout { grid-template-columns:1fr; } .gs-code-panel { position:static; } .footer-inner { grid-template-columns:1fr 1fr; } }
+    @media (max-width:640px) { .nav-links { display:none; } section { padding:4rem 0; } .footer-inner { grid-template-columns:1fr; } .tut-meta { display:none; } }
+  </style>
+</head>
+<body>
+
+  <nav id="navbar">
+    <div class="nav-inner">
+      <a class="nav-logo" href="#hero">
+        <img src="logo.svg" alt="DAQIRI" style="height:36px;width:auto;" />
+        <span class="nav-logo-text">DAQIRI</span>
+        <span class="nav-logo-badge">NVIDIA</span>
+      </a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#getting-started">Quick Start</a>
+        <a href="#examples">Examples</a>
+        <a href="#tutorials">Tutorials</a>
+        <a href="daqiri-api.html" class="nav-ext">API Guide</a>
+        <a href="#publications">News</a>
+      </div>
+      <div class="nav-actions">
+        <a href="https://github.com/NVIDIA/daqiri" class="btn btn-outline" target="_blank">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          GitHub
+        </a>
+        <a href="#getting-started" class="btn btn-primary">Quick Start →</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- HERO -->
+  <section id="hero">
+    <div class="hero-grid"></div>
+    <div class="hero-glow"></div>
+    <div class="container">
+      <div class="hero-inner">
+      <div class="hero-content">
+        <div class="hero-eyebrow">NVIDIA Open Source · Data Acquisition</div>
+        <h1 class="hero-title">DAQIRI — Command the<br>Data Deluge at the <span class="hi">Source</span></h1>
+        <p class="hero-desc">
+          DAQIRI (Data Acquisition for Integrated Real-time Instruments) connects high-bandwidth streaming sensors
+          directly to the NVIDIA compute ecosystem. By abstracting zero-copy data movement from sensor to GPU,
+          DAQIRI puts scalable, real-time AI, signal processing, and scientific computing within reach of the next
+          generation of instruments.
+        </p>
+        <div class="warn-banner">
+          <span style="font-size:1rem;flex-shrink:0;margin-top:.05rem;">⚠️</span>
+          <p>The library is undergoing large improvements as we aim to better support it as an NVIDIA product. API breakages may be more frequent until version 1.0.</p>
+        </div>
+        <div class="hero-actions">
+          <a href="#getting-started" class="btn btn-primary">Quick Start →</a>
+          <a href="daqiri-api.html" class="btn btn-outline">API Guide</a>
+          <a href="#examples" class="btn btn-outline">Examples</a>
+        </div>
+        <div class="hero-stats">
+          <div><div class="stat-value">Gbps – Tbps+</div><div class="stat-label">Sensor Bandwidth</div></div>
+          <div><div class="stat-value">Zero-Copy</div><div class="stat-label">Sensor → GPU</div></div>
+          <div><div class="stat-value">UDP, RoCE</div><div class="stat-label">Protocol</div></div><div><div class="stat-value">C++</div><div class="stat-label">Language</div></div><div><div class="stat-value">Multi-Sensor</div><div class="stat-label">Scalable</div></div><div><div class="stat-value">Minutes</div><div class="stat-label">Time to Deployment</div></div><div><div class="stat-value">Apache 2.0</div><div class="stat-label">License</div></div>
+        </div>
+      </div>
+      <div class="hero-logo-wrap">
+        <img src="logo.svg" alt="DAQIRI — sensor connected to GPU infrastructure" />
+      </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section id="features">
+    <div class="container">
+      <div class="section-label">Why DAQIRI</div>
+      <h2 class="section-title">Closing the Gap Between Sensor and GPU</h2>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:3rem;align-items:start;margin-bottom:4rem;">
+        <p class="section-desc">Scientific and industrial instruments generate data that is richest at the source — before it is filtered, decimated, or summarized. DAQIRI places NVIDIA GPU hardware directly in that data path, forging a tight bond between upstream sensors, their data converters, and the NVIDIA compute ecosystem. The result is a new foundation for developers: the ability to work with instrument data in its rawest form, at wire speed, and to build a new class of autonomous experiments where AI can observe phenomena directly at the source, augment human analysis, and steer experiments in real time. <span style="color:var(--nv-green);font-style:italic;">Streaming Ethernet data in, GPU tensor out.</span></p>
+
+        <!-- AI Native DAQ Architecture SVG -->
+        <img src="architecture.svg" alt="AI Native DAQ Architecture" style="width:100%;max-width:400px;display:block;margin:0 auto;"/>
+      </div>
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">⚡</div>
+          <h3>Scalable, High Throughput</h3>
+          <p>Hundreds of gigabits per second with proper hardware and CPU/NUMA tuning. Direct access to NIC ring buffers keeps latency at PCIe transit time only.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🚀</div>
+          <h3>GPUDirect Zero-Copy</h3>
+          <p>Two GPU receive modes: <strong style="color:var(--text-pri)">Header-data split</strong> (headers to CPU, payload to GPU — recommended) and <strong style="color:var(--text-pri)">Batched GPU</strong> (entire packets to GPU for maximum bandwidth).</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🔀</div>
+          <h3>Hardware Flow Steering</h3>
+          <p>Route packets to specific queues by UDP port, IPv4 payload length, or custom flex items — all in NIC silicon, before any software runs.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🔗</div>
+          <h3>RDMA Support</h3>
+          <p>InfiniBand RDMA READ, WRITE, and SEND via libibverbs. Client/server model with Reliable Connected (RC) or Unreliable Connected (UC) transport.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🛠️</div>
+          <h3>DPDK Userspace I/O</h3>
+          <p>Bypasses the kernel network stack entirely. The bundled container ships a dmabuf-patched DPDK — no peermem kernel module required inside the container.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">⏱️</div>
+          <h3>Timed Transmission</h3>
+          <p>Hardware-timestamped TX scheduling via <code>set_packet_tx_time()</code> for PTP-synchronized, precise packet emission. Requires ConnectX-7 or later.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- QUICK START -->
+  <section id="getting-started">
+    <div class="container">
+      <div class="section-header">
+        <div>
+          <div class="section-label">Quick Start</div>
+          <h2 class="section-title">Build &amp; Run in Minutes</h2>
+          <p class="section-desc">Requires a ConnectX-6 Dx+ NIC, Linux (kernel 5.4+), and the CUDA Toolkit.</p>
+        </div>
+        <a href="getting-started.md" class="btn btn-outline">Full Guide →</a>
+      </div>
+      <div class="gs-layout">
+        <div class="gs-steps">
+          <div class="gs-step">
+            <div class="gs-step-num">1</div>
+            <div class="gs-step-body">
+              <h4>Install Prerequisites</h4>
+              <p>Install MLNX5/InfiniBand drivers with peermem support (inbox on Ubuntu ≥5.4 and &lt;6.8, or OFED from DOCA-Host 2.8+). Install the CUDA Toolkit.</p>
+            </div>
+          </div>
+          <div class="gs-step">
+            <div class="gs-step-num">2</div>
+            <div class="gs-step-body">
+              <h4>Build from Source</h4>
+              <p>Select backends with <code>DAQIRI_MGR</code>. Valid values: <code>dpdk</code>, <code>rdma</code>.</p>
+              <pre><span class="cm"># Configure, build, install</span>
+cmake -S . -B build \
+  -DBUILD_SHARED_LIBS=ON \
+  -DDAQIRI_BUILD_PYTHON=OFF \
+  -DDAQIRI_MGR=<span class="str">"dpdk rdma"</span>
+cmake --build build -j
+cmake --install build --prefix /opt/daqiri</pre>
+            </div>
+          </div>
+          <div class="gs-step">
+            <div class="gs-step-num">3</div>
+            <div class="gs-step-body">
+              <h4>Or Build the Container</h4>
+              <p>The Dockerfile builds DPDK from source with dmabuf patches — no peermem needed inside the container.</p>
+              <pre>BASE_TARGET=dpdk \
+  DAQIRI_MGR=<span class="str">"dpdk rdma"</span> \
+  scripts/build-container.sh</pre>
+            </div>
+          </div>
+          <div class="gs-step">
+            <div class="gs-step-num">4</div>
+            <div class="gs-step-body">
+              <h4>Tune the System</h4>
+              <p>Isolate CPU cores, enable hugepages, configure NUMA affinity. Run the diagnostic script:</p>
+              <pre>python3 python/tune_system.py</pre>
+            </div>
+          </div>
+          <div class="gs-step">
+            <div class="gs-step-num">5</div>
+            <div class="gs-step-body">
+              <h4>Run a Benchmark</h4>
+              <p>Edit the YAML to match your hardware (PCIe BDF, CPU cores, IPs), then:</p>
+              <pre>./build/examples/daqiri_bench_default \
+  examples/daqiri_bench_default_tx_rx.yaml \
+  --seconds 10</pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="gs-code-panel">
+          <div class="gs-code-block">
+            <div class="gs-code-hdr"><span class="gs-code-title">Initialize &amp; Receive Packets</span><span class="gs-code-lang">C++</span></div>
+            <pre><span class="kw">#include</span> <span class="str">"daqiri/common.h"</span>
+
+<span class="cm">// Init from YAML config</span>
+daqiri::<span class="fn">daqiri_init</span>(<span class="str">"config.yaml"</span>);
+
+<span class="cm">// Non-blocking burst receive</span>
+daqiri::<span class="fn">BurstParams</span> *burst;
+<span class="kw">auto</span> s = daqiri::<span class="fn">get_rx_burst</span>(
+    &amp;burst, port_id, queue_id);
+
+<span class="kw">if</span> (s == daqiri::<span class="fn">Status</span>::<span class="nm">SUCCESS</span>) {
+  <span class="kw">int</span> n = daqiri::<span class="fn">get_num_packets</span>(burst);
+  <span class="kw">for</span> (<span class="kw">int</span> i = <span class="nm">0</span>; i &lt; n; i++) {
+    <span class="kw">void</span>* p = daqiri::<span class="fn">get_packet_ptr</span>(
+        burst, i);
+    <span class="cm">// process p ...</span>
+  }
+  daqiri::<span class="fn">free_all_packets_and_burst_rx</span>(
+      burst);
+}</pre>
+          </div>
+          <div class="gs-code-block">
+            <div class="gs-code-hdr"><span class="gs-code-title">Header-Data Split (GPU payload)</span><span class="gs-code-lang">C++</span></div>
+            <pre><span class="cm">// Seg 0 = headers (CPU)
+// Seg 1 = payload (GPU)</span>
+<span class="kw">for</span> (<span class="kw">int</span> i = <span class="nm">0</span>; i &lt; n; i++) {
+  <span class="kw">void</span>* hdr =
+    daqiri::<span class="fn">get_segment_packet_ptr</span>(
+        burst, <span class="nm">0</span>, i);
+  <span class="kw">void</span>* pay =
+    daqiri::<span class="fn">get_segment_packet_ptr</span>(
+        burst, <span class="nm">1</span>, i); <span class="cm">// GPU ptr</span>
+  uint32_t hlen =
+    daqiri::<span class="fn">get_segment_packet_length</span>(
+        burst, <span class="nm">0</span>, i);
+  uint32_t plen =
+    daqiri::<span class="fn">get_segment_packet_length</span>(
+        burst, <span class="nm">1</span>, i);
+  <span class="cm">// pay is already on GPU — no copy</span>
+}</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- EXAMPLES -->
+  <section id="examples">
+    <div class="container">
+      <div class="section-header">
+        <div>
+          <div class="section-label">Code Samples</div>
+          <h2 class="section-title">Examples</h2>
+          <p class="section-desc">Benchmark executables and YAML configs included in the <code>examples/</code> directory.</p>
+        </div>
+        <a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="btn btn-outline" target="_blank">Browse examples/ →</a>
+      </div>
+      <div class="examples-grid">
+
+        <div class="example-card">
+          <div class="ex-hdr"><span class="ex-dot dot-cpp"></span><span class="ex-title">Transmit a Packet Burst</span><span class="ex-lang">C++</span></div>
+          <div class="ex-body"><pre><span class="kw">auto</span> burst =
+  daqiri::<span class="fn">create_tx_burst_params</span>();
+daqiri::<span class="fn">set_header</span>(burst, port_id,
+    queue_id, batch_size, num_segs);
+daqiri::<span class="fn">get_tx_packet_burst</span>(burst);
+
+<span class="kw">for</span> (<span class="kw">int</span> i = <span class="nm">0</span>; i &lt; batch_size; i++) {
+  daqiri::<span class="fn">set_eth_header</span>(burst,i,dst_mac);
+  daqiri::<span class="fn">set_ipv4_header</span>(burst,i,
+      ip_len,IPPROTO_UDP,src_ip,dst_ip);
+  daqiri::<span class="fn">set_udp_header</span>(burst,i,
+      udp_len,src_port,dst_port);
+  daqiri::<span class="fn">set_udp_payload</span>(burst,i,
+      payload_ptr,payload_size);
+}
+daqiri::<span class="fn">send_tx_burst</span>(burst);</pre></div>
+          <div class="ex-footer"><span class="ex-desc">Build and send a UDP burst via DPDK</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
+        </div>
+
+        <div class="example-card">
+          <div class="ex-hdr"><span class="ex-dot dot-cpp"></span><span class="ex-title">GPU Packet Reorder Kernel</span><span class="ex-lang">C++/CUDA</span></div>
+          <div class="ex-body"><pre><span class="cm">// Batched GPU: packets arrive scattered.
+// Collect device ptrs, then reorder
+// into a flat contiguous output buffer.</span>
+<span class="kw">for</span> (<span class="kw">int</span> p = <span class="nm">0</span>; p &lt; n; p++) {
+  h_dev_ptrs[p] =
+    daqiri::<span class="fn">get_packet_ptr</span>(burst, p);
+}
+
+<span class="cm">// CUDA kernel: src/kernels.cu</span>
+<span class="fn">simple_packet_reorder</span>(
+  output_buf,   <span class="cm">// contiguous GPU buffer</span>
+  h_dev_ptrs,
+  packet_len,
+  num_packets);
+
+daqiri::<span class="fn">free_all_packets_and_burst_rx</span>(
+  burst);</pre></div>
+          <div class="ex-footer"><span class="ex-desc">Scatter→gather reorder on the GPU</span><a href="https://github.com/NVIDIA/daqiri/blob/main/src/kernels.cu" class="ex-link" target="_blank">Open ↗</a></div>
+        </div>
+
+        <div class="example-card">
+          <div class="ex-hdr"><span class="ex-dot dot-yaml"></span><span class="ex-title">Header-Data Split Config</span><span class="ex-lang">YAML</span></div>
+          <div class="ex-body"><pre>daqiri:
+  cfg:
+    version: <span class="nm">1</span>
+    manager: <span class="str">"dpdk"</span>
+    master_core: <span class="nm">3</span>
+    memory_regions:
+    - name: <span class="str">"RX_CPU"</span>
+      kind: <span class="str">"huge"</span>
+      affinity: <span class="nm">0</span>
+      num_bufs: <span class="nm">51200</span>
+      buf_size: <span class="nm">64</span>    <span class="cm"># headers (~42 B)</span>
+    - name: <span class="str">"RX_GPU"</span>
+      kind: <span class="str">"device"</span>
+      affinity: <span class="nm">0</span>
+      num_bufs: <span class="nm">51200</span>
+      buf_size: <span class="nm">1000</span>  <span class="cm"># payload</span></pre></div>
+          <div class="ex-footer"><span class="ex-desc">Two-region HDS: CPU headers + GPU payload</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
+        </div>
+
+        <div class="example-card">
+          <div class="ex-hdr"><span class="ex-dot dot-yaml"></span><span class="ex-title">Hardware Flow Steering</span><span class="ex-lang">YAML</span></div>
+          <div class="ex-body"><pre>rx:
+  flow_isolation: <span class="kw">true</span>
+  queues:
+  - name: <span class="str">"rx_q_0"</span>
+    id: <span class="nm">0</span>
+    cpu_core: <span class="nm">9</span>
+    batch_size: <span class="nm">10240</span>
+    memory_regions:
+      - <span class="str">"Data_RX_CPU"</span>
+      - <span class="str">"Data_RX_GPU"</span>
+  flows:
+  - name: <span class="str">"flow_0"</span>
+    id: <span class="nm">0</span>
+    action: {type: queue, id: <span class="nm">0</span>}
+    match:
+      udp_src: <span class="nm">4096</span>
+      udp_dst: <span class="nm">4096</span>
+      ipv4_len: <span class="nm">1050</span></pre></div>
+          <div class="ex-footer"><span class="ex-desc">Route UDP 4096→4096 to queue 0 in hardware</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
+        </div>
+
+        <div class="example-card">
+          <div class="ex-hdr"><span class="ex-dot dot-bash"></span><span class="ex-title">DPDK Benchmarks</span><span class="ex-lang">bash</span></div>
+          <div class="ex-body"><pre><span class="cm"># Build with examples</span>
+cmake -S . -B build \
+  -DDAQIRI_BUILD_EXAMPLES=ON \
+  -DDAQIRI_MGR=<span class="str">"dpdk rdma"</span>
+cmake --build build -j
+
+<span class="cm"># TX/RX throughput (10 s)</span>
+./build/examples/daqiri_bench_default \
+  examples/daqiri_bench_default_tx_rx.yaml \
+  --seconds <span class="nm">10</span>
+
+<span class="cm"># Header-data split / GPUDirect</span>
+./build/examples/daqiri_bench_default \
+  examples/daqiri_bench_default_tx_rx_hds.yaml \
+  --seconds <span class="nm">10</span></pre></div>
+          <div class="ex-footer"><span class="ex-desc">Run DPDK TX/RX and HDS benchmarks</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
+        </div>
+
+        <div class="example-card">
+          <div class="ex-hdr"><span class="ex-dot dot-bash"></span><span class="ex-title">RDMA &amp; Multi-Queue Benchmarks</span><span class="ex-lang">bash</span></div>
+          <div class="ex-body"><pre><span class="cm"># RDMA client/server (10 s)</span>
+./build/examples/daqiri_bench_rdma \
+  examples/daqiri_bench_rdma_tx_rx.yaml \
+  --seconds <span class="nm">10</span> --mode both
+
+<span class="cm"># Software loopback (no physical link)</span>
+./build/examples/daqiri_bench_default \
+  examples/daqiri_bench_default_sw_loopback.yaml \
+  --seconds <span class="nm">10</span>
+
+<span class="cm"># Multi-queue RX</span>
+./build/examples/daqiri_bench_default \
+  examples/daqiri_bench_default_rx_multi_q.yaml \
+  --seconds <span class="nm">10</span></pre></div>
+          <div class="ex-footer"><span class="ex-desc">RDMA, loopback, and multi-queue benchmarks</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- TUTORIALS -->
+  <section id="tutorials">
+    <div class="container">
+      <div class="section-header">
+        <div>
+          <div class="section-label">Learning Resources</div>
+          <h2 class="section-title">Tutorials</h2>
+          <p class="section-desc">Step-by-step guides from first build to production-grade deployment.</p>
+        </div>
+        <a href="getting-started.md" class="btn btn-outline">Getting Started →</a>
+      </div>
+      <div class="tutorials-list">
+        <div class="tut-item"><span class="tut-num">01</span><div class="tut-info"><div class="tut-title">Requirements &amp; Installation</div><div class="tut-desc">Hardware (ConnectX-6 Dx+), driver setup (OFED from DOCA-Host 2.8+ or inbox on Ubuntu 5.4–6.7), and CUDA Toolkit installation on Linux 5.4+.</div></div><div class="tut-meta"><span class="tag tag-beg">Beginner</span><span class="tut-time">~15 min</span></div><span class="tut-arrow">→</span></div>
+        <div class="tut-item"><span class="tut-num">02</span><div class="tut-info"><div class="tut-title">Building from Source with CMake</div><div class="tut-desc">Configure <code>DAQIRI_MGR</code>, <code>DAQIRI_BUILD_PYTHON</code>, <code>BUILD_SHARED_LIBS</code>, and <code>DAQIRI_BUILD_EXAMPLES</code>. Build for A100/H100 (CUDA arches 80, 90).</div></div><div class="tut-meta"><span class="tag tag-beg">Beginner</span><span class="tut-time">~20 min</span></div><span class="tut-arrow">→</span></div>
+        <div class="tut-item"><span class="tut-num">03</span><div class="tut-info"><div class="tut-title">Container Build with Patched DPDK</div><div class="tut-desc">Build the Docker image with <code>build-container.sh</code>. The container ships a dmabuf-patched DPDK, so peermem is not required.</div></div><div class="tut-meta"><span class="tag tag-beg">Beginner</span><span class="tut-time">~20 min</span></div><span class="tut-arrow">→</span></div>
+        <div class="tut-item"><span class="tut-num">04</span><div class="tut-info"><div class="tut-title">System Tuning for High-Performance Networking</div><div class="tut-desc">Isolate CPU cores, configure hugepages, set NUMA affinity, and run <code>python/tune_system.py</code> to diagnose common configuration issues.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~30 min</span></div><span class="tut-arrow">→</span></div>
+        <div class="tut-item"><span class="tut-num">05</span><div class="tut-info"><div class="tut-title">YAML Configuration Deep Dive</div><div class="tut-desc">Memory regions (<code>huge</code>, <code>device</code>, <code>host_pinned</code>), RX/TX queue setup, flow steering rules, flex items, and RDMA client/server config schemas.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~40 min</span></div><span class="tut-arrow">→</span></div>
+        <div class="tut-item"><span class="tut-num">06</span><div class="tut-info"><div class="tut-title">GPUDirect: Header-Data Split Pipeline</div><div class="tut-desc">Configure a two-region memory layout, access CPU headers and GPU payloads per-packet with <code>get_segment_packet_ptr()</code>, and reorder scattered GPU buffers with the built-in CUDA kernel.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~45 min</span></div><span class="tut-arrow">→</span></div>
+        <div class="tut-item"><span class="tut-num">07</span><div class="tut-info"><div class="tut-title">RDMA Client/Server Setup</div><div class="tut-desc">Configure the RDMA backend with RC transport, assign client and server roles across two hosts, and run <code>daqiri_bench_rdma</code> to validate the connection.</div></div><div class="tut-meta"><span class="tag tag-adv">Advanced</span><span class="tut-time">~50 min</span></div><span class="tut-arrow">→</span></div>
+        <div class="tut-item"><span class="tut-num">08</span><div class="tut-info"><div class="tut-title">Timed TX with ConnectX-7</div><div class="tut-desc">Enable <code>accurate_send</code> in the TX config and use <code>set_packet_tx_time()</code> for PTP-synchronized, hardware-scheduled packet transmission on ConnectX-7+.</div></div><div class="tut-meta"><span class="tag tag-adv">Advanced</span><span class="tut-time">~30 min</span></div><span class="tut-arrow">→</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- NEWS -->
+  <section id="publications">
+    <div class="container">
+      <div class="section-header">
+        <div>
+          <div class="section-label">News &amp; Research</div>
+          <h2 class="section-title">News</h2>
+          <p class="section-desc">Announcements, publications, and community updates about DAQIRI.</p>
+        </div>
+      </div>
+      <div class="pub-grid">
+        <div class="pub-card">
+          <div class="pub-venue"><span class="pub-badge">GitHub</span><span class="pub-year">2025</span></div>
+          <div class="pub-title">DAQIRI Open-Sourced on GitHub</div>
+          <div class="pub-authors">NVIDIA — Initial public release under Apache 2.0, featuring DPDK and RDMA backends with GPUDirect support for ConnectX-6 Dx and later NICs.</div>
+          <div class="pub-links"><a href="https://github.com/NVIDIA/daqiri" class="pub-link" target="_blank">Repository ↗</a></div>
+        </div>
+        <div class="pub-card">
+          <div class="pub-venue"><span class="pub-badge">Release Note</span><span class="pub-year">2025</span></div>
+          <div class="pub-title">Pre-1.0 API Stability Notice</div>
+          <div class="pub-authors">NVIDIA — DAQIRI is undergoing large improvements to become a fully supported NVIDIA product. API breakages may occur before v1.0. Contributions welcome.</div>
+          <div class="pub-links"><a href="https://github.com/NVIDIA/daqiri/blob/main/CONTRIBUTING.md" class="pub-link" target="_blank">Contributing ↗</a></div>
+        </div>
+        <div class="pub-card">
+          <div class="pub-venue"><span class="pub-badge">Roadmap</span><span class="pub-year">Coming Soon</span></div>
+          <div class="pub-title">High-Performance Networking System Tuning Guide</div>
+          <div class="pub-authors">NVIDIA — A comprehensive guide covering CPU isolation, hugepages, and NUMA configuration tuning for DAQIRI workloads will be added to this repository.</div>
+          <div class="pub-links"><a href="getting-started.md" class="pub-link">Getting Started</a></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section id="cta">
+    <div class="container">
+      <div class="section-label" style="text-align:center;">Get Started</div>
+      <h2 style="text-align:center;">Connect Your Sensors to the NVIDIA Ecosystem</h2>
+      <p>Clone the repo, build with CMake, and start streaming sensor data directly into your GPU-accelerated pipeline today.</p>
+      <pre style="max-width:540px;margin:0 auto 2.5rem;text-align:left;"><span class="cm"># Clone and build</span>
+git clone https://github.com/NVIDIA/daqiri
+cmake -S daqiri -B build \
+  -DBUILD_SHARED_LIBS=ON \
+  -DDAQIRI_MGR=<span class="str">"dpdk rdma"</span>
+cmake --build build -j</pre>
+      <div class="cta-actions">
+        <a href="#getting-started" class="btn btn-primary">Quick Start Guide →</a>
+        <a href="https://github.com/NVIDIA/daqiri" class="btn btn-outline" target="_blank">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          View on GitHub
+        </a>
+        <a href="daqiri-api.html" class="btn btn-outline">API Guide →</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer>
+    <div class="container">
+      <div class="footer-inner">
+        <div class="footer-brand">
+          <div class="nav-logo">
+            <img src="logo.svg" alt="DAQIRI" style="height:32px;width:auto;" />
+            <span class="nav-logo-text">DAQIRI</span>
+            <span class="nav-logo-badge">NVIDIA</span>
+          </div>
+          <p>Data Acquisition for Integrated Real-time Instruments — high-bandwidth Ethernet I/O for GPU-accelerated science and industry.</p>
+        </div>
+        <div>
+          <div class="footer-col-title">Docs</div>
+          <ul class="footer-links">
+            <li><a href="daqiri-api.html">API Guide</a></li>
+            <li><a href="getting-started.md">Getting Started</a></li>
+            <li><a href="configuration.md">Configuration</a></li>
+            <li><a href="#examples">Examples</a></li>
+          </ul>
+        </div>
+        <div>
+          <div class="footer-col-title">Project</div>
+          <ul class="footer-links">
+            <li><a href="https://github.com/NVIDIA/daqiri" target="_blank">GitHub</a></li>
+            <li><a href="https://github.com/NVIDIA/daqiri/issues" target="_blank">Issues</a></li>
+            <li><a href="https://github.com/NVIDIA/daqiri/blob/main/CONTRIBUTING.md" target="_blank">Contributing</a></li>
+            <li><a href="https://github.com/NVIDIA/daqiri/blob/main/SECURITY.md" target="_blank">Security</a></li>
+          </ul>
+        </div>
+        <div>
+          <div class="footer-col-title">NVIDIA</div>
+          <ul class="footer-links">
+            <li><a href="https://developer.nvidia.com" target="_blank">Developer</a></li>
+            <li><a href="https://developer.nvidia.com/networking" target="_blank">Networking</a></li>
+            <li><a href="https://developer.nvidia.com/gpudirect" target="_blank">GPUDirect</a></li>
+            <li><a href="https://developer.nvidia.com/doca-archive" target="_blank">DOCA</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <div class="footer-bottom-l">© 2025 NVIDIA Corporation. Licensed under Apache 2.0.</div>
+        <div class="footer-bottom-r">
+          <a href="https://github.com/NVIDIA/daqiri/blob/main/LICENSE" target="_blank">License</a>
+          <a href="https://github.com/NVIDIA/daqiri/blob/main/SECURITY.md" target="_blank">Security</a>
+          <a href="https://github.com/NVIDIA/daqiri" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    const nb = document.getElementById('navbar');
+    window.addEventListener('scroll', () => nb.classList.toggle('scrolled', scrollY > 20), {passive:true});
+    const secs = document.querySelectorAll('section[id]');
+    const links = document.querySelectorAll('.nav-links a:not(.nav-ext)');
+    const io = new IntersectionObserver(e => {
+      e.forEach(x => { if (x.isIntersecting) links.forEach(a => a.classList.toggle('active', a.getAttribute('href') === `#${x.target.id}`)); });
+    }, {rootMargin:'-40% 0px -50% 0px'});
+    secs.forEach(s => io.observe(s));
+  </script>
+</body>
+</html>
