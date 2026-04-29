@@ -451,13 +451,13 @@ sudo mlnx_perf -i $if_name
         EAL: x hugepages of size x reserved, no mounted hugetlbfs found for that size
         ```
 
-        Ensure your [hugepages are mounted](system_configuration.md#enable-huge-pages).
+        Ensure your [hugepages are mounted](system_configuration.md#step-4-enable-huge-pages).
 
         ```log
         EAL: No free x kB hugepages reported on node 0
         ```
 
-        - Ensure you have [allocated hugepages](system_configuration.md#enable-huge-pages).
+        - Ensure you have [allocated hugepages](system_configuration.md#step-4-enable-huge-pages).
         - If you have already, check if they are any free left with `grep Huge /proc/meminfo`.
 
             ??? abstract "See an example output"

@@ -112,7 +112,7 @@ bench_tx: # (30)!
 15. A descriptive name for that queue, currently only used for logging.
 16. The ID of that queue, which can be referred to later in the `flows` section.
 17. :material-package-variant: The number of packets per batch (or burst). The Rx path delivers packets to the application in batches of this size. The Tx path should not send more packets than this value per call.
-18. :material-wrench: The ID of the CPU core that this queue will use to poll the NIC. Ideally one [isolated core](system_configuration.md#isolate-cpu-cores) per queue. **Must match your system's available cores.**
+18. :material-wrench: The ID of the CPU core that this queue will use to poll the NIC. Ideally one [isolated core](system_configuration.md#step-5-isolate-cpu-cores) per queue. **Must match your system's available cores.**
 19. The list of memory regions where this queue will write/read packets from/to. The order matters: the first memory region will be used first to read/write from until it fills up one buffer (`buf_size`), after which it will move to the next region in the list and so on until the packet is fully written/read. See the `memory_regions` for the `rx` queue below for an example.
 20. The `offloads` section (Tx queues only) lists optional tasks that can be offloaded to the NIC. The only value currently supported is `tx_eth_src`, which lets the NIC insert the ethernet source MAC address in the packet headers. Note: IP, UDP, and Ethernet checksums/CRC are always done by the NIC and are not optional.
 21. :material-wrench: Same as for `tx_port`. Each interface in this list should have a unique MAC address. **Must be changed for your system.**

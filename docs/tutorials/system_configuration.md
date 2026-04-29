@@ -17,7 +17,7 @@ In this tutorial, we will be developing on an **NVIDIA IGX Orin platform** with 
 
 !!! Warning "Secure boot conflict"
 
-    If you have secure boot enabled on your system, you might need to disable it as a prerequisite to run some of the configurations below ([switching the NIC link layers to Ethernet](#switch-your-nic-link-layers-to-ethernet), [updating the MRRS of your NIC ports](#maximize-the-nics-max-read-request-size-mrrs), [updating the BAR1 size of your GPU](#maximize-gpu-bar1-size)). Secure boot can be re-enabled after the configurations are completed.
+    If you have secure boot enabled on your system, you might need to disable it as a prerequisite to run some of the configurations below ([switching the NIC link layers to Ethernet](#switch-your-nic-link-layers-to-ethernet), [updating the MRRS of your NIC ports](#step-3-maximize-the-nics-max-read-request-size-mrrs), [updating the BAR1 size of your GPU](#step-8-maximize-gpu-bar1-size)). Secure boot can be re-enabled after the configurations are completed.
 
 ### Check your NIC drivers
 
@@ -361,9 +361,23 @@ If it's not loaded, run the following command, then check again:
 
 While the configurations above are the minimum requirements to get a NIC and a NVIDIA GPU to communicate while bypassing the OS kernel stack, performance can be further improved in most scenarios by tuning the system as described below.
 
+The table below summarizes all optimization steps covered in this section, along with the corresponding `tune_system.py` flags and whether each setting can be made persistent across reboots. Use it as a checklist to track your progress.
+
+| Step | Description | Tuning Script Flag | Persistent Option Available? |
+|------|-------------|--------------------|-------------|
+| 1 | [PCIe topology](#step-1-ensure-ideal-pcie-topology) | `--check topo` | N/A (hardware) |
+| 2 | [PCIe config (MPS/Speed)](#step-2-check-the-nics-pcie-configuration) | `--check mps` | N/A (hardware) |
+| 3 | [NIC MRRS](#step-3-maximize-the-nics-max-read-request-size-mrrs) | `--check mrrs` / `--set mrrs` | No — use a startup script |
+| 4 | [Hugepages](#step-4-enable-huge-pages) | `--check hugepages` | Yes — kernel bootline or `/etc/fstab` |
+| 5 | [CPU isolation](#step-5-isolate-cpu-cores) | `--check cmdline` | Yes — kernel bootline |
+| 6 | [CPU governor](#step-6-prevent-cpu-cores-from-going-idle) | `--check cpu-freq` | Yes — see persistent option in section |
+| 7 | [GPU clocks](#step-7-prevent-the-gpu-from-going-idle) | `--check gpu-clock` | Partial — `nvidia-smi -pm 1` persists driver; clock locks need a startup script |
+| 8 | [GPU BAR1 size](#step-8-maximize-gpu-bar1-size) | `--check bar1-size` | Yes — firmware flash |
+| 9 | [Jumbo frames (MTU)](#step-9-enable-jumbo-frames) | `--check mtu` | Yes — see persistent option in section |
+
 !!! tip "Plan your reboots"
 
-    Several steps below require adding flags to the kernel bootline in `/etc/default/grub` (hugepages in [Enable Huge pages](#enable-huge-pages), CPU isolation in [Isolate CPU cores](#isolate-cpu-cores)). We recommend reading through both sections first and adding all the flags at once to avoid multiple reboots. Other items like MRRS, GPU clocks, and MTU can be applied at runtime but reset on reboot — consider scripting them or using a systemd service for persistence.
+    Several steps below require adding flags to the kernel bootline in `/etc/default/grub` (hugepages in [Enable Huge pages](#step-4-enable-huge-pages), CPU isolation in [Isolate CPU cores](#step-5-isolate-cpu-cores)). We recommend reading through both sections first and adding all the flags at once to avoid multiple reboots. Other items like MRRS, GPU clocks, and MTU can be applied at runtime but reset on reboot — consider scripting them or using a systemd service for persistence.
 
 Before diving in each of the setups below, we provide a utility script as part of the DAQIRI library which provides an overview of the configurations that potentially need to be tuned on your system.
 
@@ -424,7 +438,7 @@ Before diving in each of the setups below, we provide a utility script as part o
 
 Based on the results, you can figure out which of the sections below are appropriate to update configurations on your system.
 
-### Ensure ideal PCIe topology
+### Step 1: Ensure ideal PCIe topology
 
 Kernel bypass and GPUDirect rely on PCIe to communicate between the GPU and the NIC at high speeds. As-such, the topology of the PCIe tree on a system is critical to ensure optimal performance.
 
@@ -513,7 +527,7 @@ lspci -tv
 
     Most x86_64 systems are not designed for this topology as they lack a discrete PCIe switch. In that case, the best connection they can achieve is `NODE`.
 
-### Check the NIC's PCIe configuration
+### Step 2: Check the NIC's PCIe configuration
 
 !!! quote "[Understanding PCIe Configuration for Maximum Performance - May 27, 2022](https://enterprise-support.nvidia.com/s/article/understanding-pcie-configuration-for-maximum-performance)"
 
@@ -617,7 +631,7 @@ sudo lspci -vv -s $nic_pci | awk '/LnkCap/{s=1} /LnkSta/{s=0} /Speed /{match($0,
     Current Speed 32GT/s
     ```
 
-### Maximize the NIC's Max Read Request Size (MRRS)
+### Step 3: Maximize the NIC's Max Read Request Size (MRRS)
 
 !!! quote "[Understanding PCIe Configuration for Maximum Performance - May 27, 2022](https://enterprise-support.nvidia.com/s/article/understanding-pcie-configuration-for-maximum-performance)"
 
@@ -687,7 +701,7 @@ Update MRRS:
 
     Disable secure boot on your system ahead of changing the MRRS of your NIC ports. It can be re-enabled afterwards.
 
-### Enable Huge pages
+### Step 4: Enable Huge pages
 
 Huge pages are a memory management feature that allows the OS to allocate large blocks of memory (typically 2MB or 1GB) instead of the default 4KB pages. This reduces the number of page table entries and the amount of memory used for translation, improving cache performance and reducing TLB (Translation Lookaside Buffer) misses, which leads to lower latencies.
 
@@ -846,7 +860,7 @@ The example below allocates 4 huge pages of 1GB each.
 
 Rerunning the initial commands should now list 4 hugepages of 1GB each. 1GB will be the default huge page size if updated in the kernel bootline only.
 
-### Isolate CPU cores
+### Step 5: Isolate CPU cores
 
 !!! note
 
@@ -930,7 +944,7 @@ sudo reboot
 
 Verify that the flags were properly set after boot by rerunning the check commands above.
 
-### Prevent CPU cores from going idle
+### Step 6: Prevent CPU cores from going idle
 
 When a core goes idle/to sleep, coming back online to poll the NIC can cause latency spikes and dropped packets. To prevent this, **we recommend setting the scaling governor to `performance` for these CPU cores**.
 
@@ -1037,7 +1051,7 @@ Set the governor to `performance` for all cores:
 
 Running the checks above should now list `performance` as the governor for all cores. You can also run `sudo cpupower -c all frequency-info` for more details.
 
-### Prevent the GPU from going idle
+### Step 7: Prevent the GPU from going idle
 
 Similarly to the above, we want to maximize the GPU's clock speed and prevent it from going idle.
 
@@ -1128,7 +1142,7 @@ You can confirm that the clocks are set to the max values by running `nvidia-smi
 
     Some max clocks might not be achievable in certain configurations, or due to boost clocks (SM) or rounding errors (Memory),  despite the lock commands indicating it worked. For example - on IGX - the max non-boot SM clock will be 1920 MHz, and the max memory clock will show 8000 MHz, which are satisfying compared to the initial mode.
 
-### Maximize GPU BAR1 size
+### Step 8: Maximize GPU BAR1 size
 
 The GPU BAR1 memory is the primary resource consumed by `GPUDirect`. It allows other PCIe devices (like the CPU and the NIC) to access the GPU's memory space. The larger the BAR1 size, the more memory the GPU can expose to these devices in a single PCIe transaction, reducing the number of transactions needed and improving performance.
 
@@ -1288,7 +1302,7 @@ Reboot your system, and check the BAR1 size again to confirm the change.
 sudo reboot
 ```
 
-### Enable Jumbo Frames
+### Step 9: Enable Jumbo Frames
 
 Jumbo frames are Ethernet frames that carry a payload larger than the standard 1500 bytes MTU (Maximum Transmission Unit). They can significantly improve network performance when transferring large amounts of data by reducing the overhead of packet headers and the number of packets that need to be processed.
 
@@ -1367,24 +1381,6 @@ You can set the MTU for each interface like so, for a given `if_name` name ident
     $ ip -d link show dev $if_name | grep -oE "maxmtu [0-9]+"
     maxmtu 9978
     ```
-
-### Summary
-
-| Step | Description | Tuning Script Flag | Persistent Option Available? |
-|------|-------------|--------------------|-------------|
-| 1 | PCIe topology | `--check topo` | N/A (hardware) |
-| 2 | PCIe config (MPS/Speed) | `--check mps` | N/A (hardware) |
-| 3 | NIC MRRS | `--check mrrs` / `--set mrrs` | No — use a startup script |
-| 4 | Hugepages | `--check hugepages` | Yes — kernel bootline or `/etc/fstab` |
-| 5 | CPU isolation | `--check cmdline` | Yes — kernel bootline |
-| 6 | CPU governor | `--check cpu-freq` | Yes — see persistent option in section |
-| 7 | GPU clocks | `--check gpu-clock` | Partial — `nvidia-smi -pm 1` persists driver; clock locks need a startup script |
-| 8 | GPU BAR1 size | `--check bar1-size` | Yes — firmware flash |
-| 9 | Jumbo frames (MTU) | `--check mtu` | Yes — see persistent option in section |
-
-!!! tip
-
-    Each section above provides both one-time and persistent configuration options. We recommend testing with the one-time commands first, then switching to the persistent options once your configuration is verified. You can check all settings at once with `tune_system.py --check all`.
 
 ---
 **Next:** [Benchmarking Examples](benchmarking_examples.md) — run your first DAQIRI benchmark
