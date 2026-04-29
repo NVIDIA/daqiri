@@ -6,7 +6,14 @@ repo_name: nvidia/daqiri
 theme:
   name: material
   palette:
-    primary: green
+    scheme: slate
+    primary: black
+    accent: light green
+  font:
+    text: Roboto
+    code: Roboto Mono
+  icon:
+    repo: fontawesome/brands/github
   features:
     - content.code.annotate
     - content.code.copy
@@ -14,7 +21,13 @@ theme:
     - navigation.tabs
     - navigation.sections
     - navigation.top
+    - navigation.footer
     - search.highlight
+    - search.suggest
+    - toc.follow
+
+extra_css:
+  - stylesheets/extra.css
 
 site_dir: site
 
@@ -23,8 +36,10 @@ nav:
   - Configuration: configuration.md
   - API Reference: api-guide.md
   - Tutorials:
-    - Overview: tutorials/index.md
-    - System Configuration: tutorials/system_config/README.md
+    - Background: tutorials/background.md
+    - System Configuration: tutorials/system_configuration.md
+    - Benchmarking Examples: tutorials/benchmarking_examples.md
+    - Configuration File: tutorials/configuration.md
 
 markdown_extensions:
   - admonition

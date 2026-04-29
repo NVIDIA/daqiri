@@ -883,93 +883,57 @@ pipeline = gst.<span class="fn">parse_launch</span>(
           <h2 class="section-title">Tutorials</h2>
           <p class="section-desc">Step-by-step guides from first install to production deployment.</p>
         </div>
-        <a href="tutorials/" class="btn btn-outline">All Tutorials →</a>
+        <a href="tutorials/background/" class="btn btn-outline">All Tutorials →</a>
       </div>
       <div class="tutorials-list">
-        <a href="tutorials/system_config/" class="tutorial-item" style="text-decoration:none;color:inherit;">
+        <a href="getting-started/" class="tutorial-item" style="text-decoration:none;color:inherit;">
           <span class="tutorial-num">01</span>
           <div class="tutorial-info">
-            <div class="tutorial-title">System Configuration</div>
-            <div class="tutorial-desc">Configure your system for high-performance networking — DPDK, RDMA, GPUDirect, and NIC setup on NVIDIA SmartNICs.</div>
-          </div>
-          <div class="tutorial-meta">
-            <span class="tag tag-beginner">Intermediate</span>
-            <span class="tutorial-time">~60 min</span>
-          </div>
-          <span class="tutorial-arrow">→</span>
-        </a>
-        <div class="tutorial-item">
-          <span class="tutorial-num">02</span>
-          <div class="tutorial-info">
-            <div class="tutorial-title">Your First Sensor-to-GPU Pipeline</div>
-            <div class="tutorial-desc">Build a complete end-to-end pipeline that reads frames from a USB camera, streams them to GPU memory, and runs a simple inference pass with TensorRT.</div>
+            <div class="tutorial-title">Getting Started</div>
+            <div class="tutorial-desc">Hardware and software requirements, DOCA repository setup, and building DAQIRI from source via container or CMake.</div>
           </div>
           <div class="tutorial-meta">
             <span class="tag tag-beginner">Beginner</span>
-            <span class="tutorial-time">~25 min</span>
+            <span class="tutorial-time">~15 min</span>
           </div>
           <span class="tutorial-arrow">→</span>
-        </div>
-        <div class="tutorial-item">
-          <span class="tutorial-num">03</span>
+        </a>
+        <a href="tutorials/system_configuration/" class="tutorial-item" style="text-decoration:none;color:inherit;">
+          <span class="tutorial-num">02</span>
           <div class="tutorial-info">
-            <div class="tutorial-title">Multi-Sensor Time Synchronization</div>
-            <div class="tutorial-desc">Align temporally disparate streams from LiDAR, RGB camera, and IMU using DAQIRI's <code>TimestampAligner</code> and hardware PPS signals.</div>
-          </div>
-          <div class="tutorial-meta">
-            <span class="tag tag-intermediate">Intermediate</span>
-            <span class="tutorial-time">~40 min</span>
-          </div>
-          <span class="tutorial-arrow">→</span>
-        </div>
-        <div class="tutorial-item">
-          <span class="tutorial-num">04</span>
-          <div class="tutorial-info">
-            <div class="tutorial-title">Integrating DAQIRI with NVIDIA Holoscan</div>
-            <div class="tutorial-desc">Use <code>DAQIRIOperator</code> to connect physical sensor streams into a Holoscan application with real-time visualization via HoloViz.</div>
-          </div>
-          <div class="tutorial-meta">
-            <span class="tag tag-intermediate">Intermediate</span>
-            <span class="tutorial-time">~35 min</span>
-          </div>
-          <span class="tutorial-arrow">→</span>
-        </div>
-        <div class="tutorial-item">
-          <span class="tutorial-num">05</span>
-          <div class="tutorial-info">
-            <div class="tutorial-title">Writing a Custom Sensor Adapter Plugin</div>
-            <div class="tutorial-desc">Implement the <code>SensorSource</code> interface for proprietary hardware, package it as a DAQIRI plugin, and register it at runtime.</div>
+            <div class="tutorial-title">System Configuration</div>
+            <div class="tutorial-desc">Required system setup and advanced performance tuning — NIC drivers, link layers, GPUDirect, PCIe topology, hugepages, CPU isolation, GPU clocks, and more.</div>
           </div>
           <div class="tutorial-meta">
             <span class="tag tag-intermediate">Intermediate</span>
             <span class="tutorial-time">~45 min</span>
           </div>
           <span class="tutorial-arrow">→</span>
-        </div>
-        <div class="tutorial-item">
-          <span class="tutorial-num">06</span>
+        </a>
+        <a href="tutorials/benchmarking_examples/" class="tutorial-item" style="text-decoration:none;color:inherit;">
+          <span class="tutorial-num">03</span>
           <div class="tutorial-info">
-            <div class="tutorial-title">Zero-Copy RDMA Pipelines with GPUDirect</div>
-            <div class="tutorial-desc">Configure network-attached sensors to stream data over InfiniBand directly into GPU memory using GPUDirect RDMA, achieving wire-speed ingestion.</div>
+            <div class="tutorial-title">Benchmarking Examples</div>
+            <div class="tutorial-desc">Run the DAQIRI benchmark application — container setup, loopback configuration, and verifying your system achieves expected throughput.</div>
           </div>
           <div class="tutorial-meta">
-            <span class="tag tag-advanced">Advanced</span>
-            <span class="tutorial-time">~60 min</span>
+            <span class="tag tag-intermediate">Intermediate</span>
+            <span class="tutorial-time">~30 min</span>
           </div>
           <span class="tutorial-arrow">→</span>
-        </div>
-        <div class="tutorial-item">
-          <span class="tutorial-num">07</span>
+        </a>
+        <a href="tutorials/configuration/" class="tutorial-item" style="text-decoration:none;color:inherit;">
+          <span class="tutorial-num">04</span>
           <div class="tutorial-info">
-            <div class="tutorial-title">Production Deployment &amp; Observability</div>
-            <div class="tutorial-desc">Deploy DAQIRI in a containerized environment, export OpenTelemetry metrics to Prometheus, and set up alerting for stream health in Grafana.</div>
+            <div class="tutorial-title">Understanding the Configuration File</div>
+            <div class="tutorial-desc">Deep dive into the YAML configuration — annotated walkthrough of memory regions, interfaces, queues, flows, and benchmark parameters.</div>
           </div>
           <div class="tutorial-meta">
-            <span class="tag tag-advanced">Advanced</span>
-            <span class="tutorial-time">~50 min</span>
+            <span class="tag tag-beginner">Beginner</span>
+            <span class="tutorial-time">~20 min</span>
           </div>
           <span class="tutorial-arrow">→</span>
-        </div>
+        </a>
       </div>
     </div>
   </section>
