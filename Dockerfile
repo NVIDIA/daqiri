@@ -37,8 +37,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         build-essential \
         clang-format \
-        cmake \
-        cmake-data \
+    && OS_CODENAME=$(. /etc/os-release && echo "$VERSION_CODENAME") \
+    && KW_KEYRING="/usr/share/keyrings/kitware-archive-keyring.gpg" \
+    && curl -fsSL "https://apt.kitware.com/keys/kitware-archive-latest.asc" \
+        | gpg --dearmor -o "$KW_KEYRING" \
+    && echo "deb [signed-by=$KW_KEYRING] https://apt.kitware.com/ubuntu/ $OS_CODENAME main" \
+        > /etc/apt/sources.list.d/kitware.list \
+    && apt-get update \
+    && rm "$KW_KEYRING" \
+    && CMAKE_VERSION="$(apt-cache madison cmake | awk '$3 ~ /^3[.]/ { print $3; exit }')" \
+    && test -n "$CMAKE_VERSION" \
+    && apt-get install --no-install-recommends -y \
+        kitware-archive-keyring \
+        "cmake=${CMAKE_VERSION}" \
     && rm -rf /var/lib/apt/lists/*
 
 # ==============================================================
