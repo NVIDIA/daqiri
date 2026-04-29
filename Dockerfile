@@ -44,10 +44,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         > /etc/apt/sources.list.d/kitware.list \
     && apt-get update \
     && rm "$KW_KEYRING" \
+    && CMAKE_VERSION="$(apt-cache madison cmake | awk '$3 ~ /^3[.]/ { print $3; exit }')" \
+    && test -n "$CMAKE_VERSION" \
     && apt-get install --no-install-recommends -y \
         kitware-archive-keyring \
-        cmake="3.*" \
-        cmake-data="3.*" \
+        "cmake=${CMAKE_VERSION}" \
     && rm -rf /var/lib/apt/lists/*
 
 # ==============================================================
