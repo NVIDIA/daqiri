@@ -76,7 +76,7 @@ def parse_args():
             "  peermem    - Check if the nvidia-peermem module is loaded.\n"
             "  cpu-freq   - Check if the CPU frequency governor is set to 'performance'.\n"
             "  mrrs       - Check if the Maximum Read Request Size (MRRS) of NVIDIA NICs is set to 4096.\n"
-            "  mps        - Check if the Maximum Payload Size is set to 256B.\n"
+            "  mps        - Check if the Maximum Payload Size is set to the NIC's hardware maximum.\n"
             "  hugepages  - Check if hugepages are enabled\n"
             "  gpu-clocks - Check GPU clocks\n"
             "  bar1-size  - Check the BAR1 size of the GPU\n"
@@ -276,8 +276,9 @@ def check_mrrs():
 
 def check_max_payload_size():
     """
-    Checks the Maximum Payload Size (MPS) of NVIDIA Ethernet controllers
-    from the DevCtl section and ensures it is set to 256 bytes.
+    Checks the Maximum Payload Size (MPS) of NVIDIA Ethernet controllers.
+    Reads the hardware-maximum MPS from DevCap and warns if the DevCtl value is less than that.
+    If DevCap cannot be parsed, warns with the current MPS value for manual inspection.
     """
     try:
         nic_info = get_nic_info()
@@ -290,31 +291,53 @@ def check_max_payload_size():
                 ["lspci", "-vv", "-s", pci_address], capture_output=True, text=True, check=True
             )
 
-            # Parse MaxPayload information from the DevCtl section
             lines = mps_result.stdout.splitlines()
+
+            # Parse hardware-maximum MPS from DevCap (appears on the same line)
+            devcap_max = None
+            for line in lines:
+                if "DevCap:" in line and "MaxPayload" in line:
+                    try:
+                        devcap_max = int(line.split("MaxPayload")[1].split("bytes")[0].strip())
+                    except (ValueError, IndexError):
+                        pass
+                    break
+
+            # Parse current MPS from the DevCtl section
             devctl_found = False
             for i, line in enumerate(lines):
                 if "DevCtl:" in line:
                     devctl_found = True
-                    base_indent = len(line) - len(line.lstrip())  # Indentation level of DevCtl
-                    # Look for MaxPayload in subsequent indented lines
+                    base_indent = len(line) - len(line.lstrip())
                     for j in range(i + 1, len(lines)):
                         current_indent = len(lines[j]) - len(lines[j].lstrip())
-                        if current_indent <= base_indent:  # Stop if indentation decreases or ends
+                        if current_indent <= base_indent:
                             break
                         if "MaxPayload" in lines[j]:
-                            # Extract the actual MaxPayload value from the line
                             payload_info = lines[j].strip()
-                            max_payload_value = int(
-                                payload_info.split("MaxPayload")[1].split("bytes")[0].strip()
-                            )
-                            if max_payload_value == 256:
-                                logging.info(
-                                    f"{name}/{pci_address}: PCIe Max Payload Size is correctly set to 256 bytes."
+                            try:
+                                current_mps = int(
+                                    payload_info.split("MaxPayload")[1].split("bytes")[0].strip()
+                                )
+                            except (ValueError, IndexError):
+                                logging.error(
+                                    f"{name}/{pci_address}: Could not parse MaxPayload value under DevCtl."
+                                )
+                                break
+                            if devcap_max is None:
+                                logging.warning(
+                                    f"{name}/{pci_address}: Could not determine hardware-maximum MPS from DevCap."
+                                    f" Current MPS is {current_mps} bytes — verify this is optimal for your system."
+                                )
+                            elif current_mps < devcap_max:
+                                logging.warning(
+                                    f"{name}/{pci_address}: PCIe Max Payload Size is {current_mps} bytes,"
+                                    f" but the NIC supports up to {devcap_max} bytes."
                                 )
                             else:
-                                logging.warning(
-                                    f"{name}/{pci_address}: PCIe Max Payload Size is not set to 256 bytes. Found: {max_payload_value} bytes."
+                                logging.info(
+                                    f"{name}/{pci_address}: PCIe Max Payload Size is correctly set to {current_mps} bytes"
+                                    f" (hardware maximum)."
                                 )
                             break
                     else:
@@ -530,6 +553,8 @@ def check_topology_connections():
         # Parse the output of nvidia-smi topo -m
         topo_output = result.stdout.splitlines()
 
+        ansi_escape = re.compile(r'\x1b\[[0-9;]*m')
+
         # Find the header line (contains GPU/NIC labels)
         header_index = 0
 
@@ -537,17 +562,17 @@ def check_topology_connections():
             logging.error("Could not find topology table in the nvidia-smi output.")
             return
 
-        # Extract labels (e.g., GPU0, NIC0, etc.)
-        header = topo_output[header_index].strip()
+        # Extract labels (e.g., GPU0, NIC0, etc.), stripping ANSI codes first
+        header = ansi_escape.sub('', topo_output[header_index]).strip()
         labels = []
         for label in header.split():
-            if label.startswith("GPU") or label.startswith("NIC"):
+            if re.match(r'^(GPU|NIC)\d+$', label):
                 labels.append(label)
 
         # Parse the topology table rows
         gpu_to_nic_connections = {}
         for row_idx, row in enumerate(topo_output[header_index + 1 :]):
-            row = row.strip()
+            row = ansi_escape.sub('', row).strip()
             if not row:
                 continue  # Skip empty lines
 
