@@ -34,16 +34,16 @@
   <path d="M 68 36 Q 80 32 95 36 Q 110 40 122 36" stroke="#a0dce8" stroke-width="1.2" stroke-linecap="round" fill="none" opacity="0.8"/>
 
   <!-- Bowl outline (inverted triangle) -->
-  <polygon points="60,22 130,22 95,96" stroke="white" stroke-width="2" stroke-linejoin="round" fill="none" opacity="0.9"/>
+  <polygon points="60,22 130,22 95,96" stroke="#5ab8d4" stroke-width="2" stroke-linejoin="round" fill="none" opacity="0.9"/>
 
   <!-- Shine highlight on left face of bowl -->
   <polygon points="62,26 78,26 68,70" fill="url(#glassGrad)" opacity="0.4"/>
 
   <!-- Stem -->
-  <line x1="95" y1="96" x2="95" y2="145" stroke="white" stroke-width="2" stroke-linecap="round" opacity="0.85"/>
+  <line x1="95" y1="96" x2="95" y2="145" stroke="#5ab8d4" stroke-width="2" stroke-linecap="round" opacity="0.85"/>
 
   <!-- Base -->
-  <ellipse cx="95" cy="148" rx="28" ry="6" stroke="white" stroke-width="2" fill="none" opacity="0.85"/>
+  <ellipse cx="95" cy="148" rx="28" ry="6" stroke="#5ab8d4" stroke-width="2" fill="none" opacity="0.85"/>
 
   <!-- ── LIME SLICE ───────────────────────────── -->
   <!-- Lime sits on rim at top-right of glass -->
