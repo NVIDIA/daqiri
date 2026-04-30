@@ -19,7 +19,10 @@ set(MODULE_NAME daqiri)
 
 pybind11_add_module(${MODULE_NAME}_python MODULE daqiri_common_pybind.cpp)
 target_link_libraries(${MODULE_NAME}_python PRIVATE daqiri_common)
-set_target_properties(${MODULE_NAME}_python PROPERTIES OUTPUT_NAME _${MODULE_NAME})
+set_target_properties(${MODULE_NAME}_python PROPERTIES
+  OUTPUT_NAME _${MODULE_NAME}
+  LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/${MODULE_NAME}
+)
 
 install(TARGETS ${MODULE_NAME}_python
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/python/${MODULE_NAME}
@@ -27,7 +30,7 @@ install(TARGETS ${MODULE_NAME}_python
 )
 
 configure_file(
-  ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/pybind11/__init__.py
+  ${CMAKE_CURRENT_LIST_DIR}/pybind11/__init__.py
   ${CMAKE_CURRENT_BINARY_DIR}/${MODULE_NAME}/__init__.py
   COPYONLY
 )
