@@ -868,7 +868,7 @@ Rerunning the initial commands should now list 4 hugepages of 1GB each. 1GB will
 
 The CPU interacting with the NIC to route packets is sensitive to perturbations, especially with smaller packet/batch sizes requiring more frequent work. Isolating a CPU in Linux prevents unwanted user or kernel threads from running on it, reducing context switching and latency spikes from noisy neighbors.
 
-We recommend isolating the CPU cores you will select to interact with the NIC (defined in the `daqiri` configuration [described in the configuration reference](configuration.md) in this tutorial). This is done by setting additional flags on the kernel bootline.
+We recommend isolating the CPU cores you will select to interact with the NIC (defined in the `daqiri` configuration [described in the configuration reference](configuration-walkthrough.md) in this tutorial). This is done by setting additional flags on the kernel bootline.
 
 You can first check if any of the recommended flags were already set on the last boot:
 

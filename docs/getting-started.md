@@ -10,7 +10,7 @@ DAQIRI requires a system with an [**NVIDIA SmartNIC**](https://www.nvidia.com/en
 | **NIC** | NVIDIA ConnectX-6 Dx or later, with MLNX_OFED or inbox drivers |
 | **GPU** | Workstation/Quadro/RTX or Data Center GPU (GPUDirect-capable) |
 | **CUDA** | CUDA Toolkit 11.7+ |
-| **DPDK** | Included in the DAQIRI container; see [Dockerfile](../Dockerfile) for bare-metal deps |
+| **DPDK** | Included in the DAQIRI container; see [Dockerfile](https://github.com/NVIDIA/daqiri/blob/main/Dockerfile) for bare-metal deps |
 | **RDMA** | `libibverbs` and `librdmacm` (for the RDMA backend) |
 
 Supported platforms include [NVIDIA Data Center](https://www.nvidia.com/en-us/data-center/) systems, edge systems like [NVIDIA IGX](https://www.nvidia.com/en-us/edge-computing/products/igx/) and [NVIDIA Project DIGITS](https://www.nvidia.com/en-us/project-digits/), and `x86_64` systems with the above components.
@@ -72,7 +72,7 @@ Then build the DAQIRI library:
     ```bash
     git clone git@github.com:nvidia-holoscan/daqiri.git
     cd daqiri
-    BASE_TARGET=dpdk DAQIRI_MGR="dpdk rdma" scripts/build-container.sh
+    BASE_TARGET=dpdk DAQIRI_MGR="dpdk socket rdma" scripts/build-container.sh
     ```
 
 === "CMake build (bare-metal)"
@@ -80,18 +80,18 @@ Then build the DAQIRI library:
     ```bash
     git clone git@github.com:nvidia-holoscan/daqiri.git
     cd daqiri
-    cmake -S . -B build -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MGR="dpdk rdma"
+    cmake -S . -B build -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MGR="dpdk socket rdma"
     cmake --build build -j
     cmake --install build --prefix /opt/daqiri
     ```
 
-    Inspect the [Dockerfile](https://github.com/nvidia-holoscan/daqiri/blob/main/Dockerfile) to see the full list of user-space dependencies needed for a bare-metal build.
+    Inspect the [Dockerfile](https://github.com/NVIDIA/daqiri/blob/main/Dockerfile) to see the full list of user-space dependencies needed for a bare-metal build.
 
 ### CMake Options
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `DAQIRI_MGR` | `"dpdk rdma"` | Space-separated list of backends to build. Valid values: `dpdk`, `rdma`. |
+| `DAQIRI_MGR` | `"dpdk socket rdma"` | Space-separated list of backends to build. Valid values: `dpdk`, `socket`, `rdma`. |
 | `DAQIRI_BUILD_PYTHON` | `OFF` | Build pybind11 Python bindings. |
 | `DAQIRI_BUILD_EXAMPLES` | `ON` | Build benchmark executables. |
 | `BUILD_SHARED_LIBS` | — | Build as shared library. |
@@ -104,5 +104,5 @@ Once DAQIRI is built, follow the tutorials to configure your system and run your
 
 1. [**Background**](tutorials/background.md) — Kernel Bypass and GPUDirect concepts
 2. [**System Configuration**](tutorials/system_configuration.md) — NIC drivers, link layers, GPUDirect, hugepages, CPU isolation, GPU clocks, and more
-3. [**Benchmarking Examples**](tutorials/benchmarking_examples.md) — run `daqiri_bench_default` with a loopback test
-4. [**Understanding the Configuration File**](tutorials/configuration.md) — annotated YAML walkthrough
+3. [**Benchmarking Examples**](tutorials/benchmarking_examples.md) — run `daqiri_bench_raw_gpudirect` with a loopback test
+4. [**Understanding the Configuration File**](tutorials/configuration-walkthrough.md) — annotated YAML walkthrough

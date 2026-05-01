@@ -4,7 +4,7 @@ hide:
 ---
 # Understanding the Configuration File
 
-This section walks through the YAML configuration used by the benchmark applications. The annotated example below is based on `daqiri_bench_default_tx_rx.yaml`. Click on the :material-plus-circle: icons to expand explanations for each annotated line.
+This section walks through the YAML configuration used by the benchmark applications. The annotated example below is based on `daqiri_bench_raw_tx_rx.yaml`. Click on the :material-plus-circle: icons to expand explanations for each annotated line.
 
 Annotations are prefixed with a category:
 
