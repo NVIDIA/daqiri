@@ -63,5 +63,16 @@ markdown_extensions:
 
 docs_dir: docs
 
+validation:
+  nav:
+    omitted_files: warn
+    not_found: warn
+    absolute_links: warn
+  links:
+    not_found: warn
+    absolute_links: warn
+    unrecognized_links: warn
+    anchors: warn
+
 plugins:
   - search
