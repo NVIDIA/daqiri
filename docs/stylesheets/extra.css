@@ -1,0 +1,52 @@
+/* ── NVIDIA dark theme with green accents ───────────────────────────── */
+
+:root {
+  --nv-green:   #76b900;
+  --nv-green-d: #5a8f00;
+  --nv-green-l: #8fd400;
+
+  --md-accent-fg-color: #76b900;
+  --md-typeset-a-color: #76b900;
+}
+
+/* ── Header: solid black ───────────────────────────────────────────── */
+[data-md-color-scheme="slate"] .md-header {
+  background: #000;
+}
+
+/* ── Tabs bar: dark charcoal ───────────────────────────────────────── */
+[data-md-color-scheme="slate"] .md-tabs {
+  background: #1a1a1a;
+}
+
+/* ── Links: NVIDIA green ───────────────────────────────────────────── */
+[data-md-color-scheme="slate"] .md-typeset a {
+  color: var(--nv-green);
+}
+[data-md-color-scheme="slate"] .md-typeset a:hover {
+  color: var(--nv-green-l);
+}
+
+/* ── Active nav and TOC items ──────────────────────────────────────── */
+[data-md-color-scheme="slate"] .md-nav__link--active {
+  color: var(--nv-green) !important;
+}
+
+/* ── Admonition accent tweaks ──────────────────────────────────────── */
+[data-md-color-scheme="slate"] .md-typeset .admonition.note,
+[data-md-color-scheme="slate"] .md-typeset details.note {
+  border-color: var(--nv-green);
+}
+[data-md-color-scheme="slate"] .md-typeset .note > .admonition-title,
+[data-md-color-scheme="slate"] .md-typeset .note > summary {
+  background-color: rgba(118, 185, 0, 0.1);
+}
+[data-md-color-scheme="slate"] .md-typeset .note > .admonition-title::before,
+[data-md-color-scheme="slate"] .md-typeset .note > summary::before {
+  color: var(--nv-green);
+}
+
+/* ── Footer ────────────────────────────────────────────────────────── */
+[data-md-color-scheme="slate"] .md-footer {
+  background: #111;
+}

@@ -1,47 +1,91 @@
 # Getting Started
 
-## Requirements
+## System Requirements
 
-### Hardware
+DAQIRI requires a system with an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking/ethernet-adapters/) (ConnectX-6 Dx or later) and a [**discrete GPU**](https://www.nvidia.com/en-us/design-visualization/desktop-graphics/).
 
-- An NVIDIA NIC with a **ConnectX-6 Dx or later** chip
+| Component | Requirement |
+|-----------|-------------|
+| **OS** | Linux (kernel 5.4+), Ubuntu 22.04 recommended |
+| **NIC** | NVIDIA ConnectX-6 Dx or later, with MLNX_OFED or inbox drivers |
+| **GPU** | Workstation/Quadro/RTX or Data Center GPU (GPUDirect-capable) |
+| **CUDA** | CUDA Toolkit 11.7+ |
+| **DPDK** | Included in the DAQIRI container; see [Dockerfile](../Dockerfile) for bare-metal deps |
+| **RDMA** | `libibverbs` and `librdmacm` (for the RDMA backend) |
 
-### Software
+Supported platforms include [NVIDIA Data Center](https://www.nvidia.com/en-us/data-center/) systems, edge systems like [NVIDIA IGX](https://www.nvidia.com/en-us/edge-computing/products/igx/) and [NVIDIA Project DIGITS](https://www.nvidia.com/en-us/project-digits/), and `x86_64` systems with the above components.
 
-- **Linux** (kernel 5.4+)
-- **CUDA Toolkit**
-- **MLNX5/InfiniBand drivers** with peermem support, via one of:
-  - Inbox (standard) drivers on Ubuntu kernel versions >= 5.4 and [< 6.8](https://discourse.ubuntu.com/t/nvidia-gpudirect-over-infiniband-migration-paths/44425)
-  - NVIDIA optimized kernels (IGX OS, DGX BaseOS)
-  - OFED drivers from [DOCA-Host](https://developer.nvidia.com/doca-archive) 2.8 or later
-    (install the `mlnx-ofed-kernel-dkms` package or the `doca-ofed` meta-package)
+!!! note
 
-  > **Note:** If you use the DPDK bundled in the DAQIRI container, all patches in
-  > [`dpdk_patches/`](../dpdk_patches) are applied at build time (including dma-buf
-  > support), so **peermem is not required**.
-- **DPDK** (for the DPDK backend) — userspace libraries are included in the
-  [Dockerfile](../Dockerfile). Inspect it if building on bare metal.
-- **libibverbs** and **librdmacm** (for the RDMA backend)
+    If you use the DPDK bundled in the DAQIRI container, it is patched with dmabuf support and the `nvidia-peermem` kernel module is **not required**.
 
-### System Tuning
+For detailed instructions on verifying NIC drivers, configuring link layers, enabling GPUDirect, and tuning your system for maximum performance, see the [System Configuration tutorial](tutorials/system_configuration.md).
 
-For best performance, the system must be tuned for high-performance networking (CPU
-isolation, hugepages, NUMA awareness, etc.).
+## Build the DAQIRI Library
 
-<!-- TODO: Port the high-performance networking tutorial to this repository -->
-> A system tuning guide will be available in a future update.
+First, add the [DOCA apt repository](https://developer.nvidia.com/doca-downloads?deployment_platform=Host-Server&deployment_package=DOCA-Host&target_os=Linux) which holds some of DAQIRI's dependencies:
 
-The `python/tune_system.py` script can help diagnose common configuration issues.
+=== "IGX OS 1.1"
 
-## Building from Source
+    ```bash
+    export DOCA_URL="https://linux.mellanox.com/public/repo/doca/2.8.0/ubuntu22.04/arm64-sbsa/"
+    wget -qO- https://linux.mellanox.com/public/repo/doca/GPG-KEY-Mellanox.pub | gpg --dearmor - | sudo tee /etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub > /dev/null
+    echo "deb [signed-by=/etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub] $DOCA_URL ./"  | sudo tee /etc/apt/sources.list.d/doca.list > /dev/null
 
-### CMake
+    sudo apt update
+    ```
 
-```bash
-cmake -S . -B build -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MGR="dpdk rdma"
-cmake --build build -j
-cmake --install build --prefix /opt/daqiri
-```
+=== "SBSA (Ubuntu 22.04)"
+
+    ```bash
+    export DOCA_URL="https://linux.mellanox.com/public/repo/doca/2.8.0/ubuntu22.04/arm64-sbsa/"
+    wget -qO- https://linux.mellanox.com/public/repo/doca/GPG-KEY-Mellanox.pub | gpg --dearmor - | sudo tee /etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub > /dev/null
+    echo "deb [signed-by=/etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub] $DOCA_URL ./"  | sudo tee /etc/apt/sources.list.d/doca.list > /dev/null
+
+    # Also need the CUDA repository: https://developer.nvidia.com/cuda-downloads?target_os=Linux
+    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/sbsa/cuda-keyring_1.1-1_all.deb
+    sudo dpkg -i cuda-keyring_1.1-1_all.deb
+
+    sudo apt update
+    ```
+
+=== "x86_64 (Ubuntu 22.04)"
+
+    ```bash
+    export DOCA_URL="https://linux.mellanox.com/public/repo/doca/2.8.0/ubuntu22.04/x86_64/"
+    wget -qO- https://linux.mellanox.com/public/repo/doca/GPG-KEY-Mellanox.pub | gpg --dearmor - | sudo tee /etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub > /dev/null
+    echo "deb [signed-by=/etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub] $DOCA_URL ./"  | sudo tee /etc/apt/sources.list.d/doca.list > /dev/null
+
+    # Also need the CUDA repository: https://developer.nvidia.com/cuda-downloads?target_os=Linux
+    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+    sudo dpkg -i cuda-keyring_1.1-1_all.deb
+
+    sudo apt update
+    ```
+
+Then build the DAQIRI library:
+
+=== "Container build (recommended)"
+
+    The container bundles all user-space libraries for each networking backend, avoiding dependency issues on the host:
+
+    ```bash
+    git clone git@github.com:nvidia-holoscan/daqiri.git
+    cd daqiri
+    BASE_TARGET=dpdk DAQIRI_MGR="dpdk rdma" scripts/build-container.sh
+    ```
+
+=== "CMake build (bare-metal)"
+
+    ```bash
+    git clone git@github.com:nvidia-holoscan/daqiri.git
+    cd daqiri
+    cmake -S . -B build -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MGR="dpdk rdma"
+    cmake --build build -j
+    cmake --install build --prefix /opt/daqiri
+    ```
+
+    Inspect the [Dockerfile](https://github.com/nvidia-holoscan/daqiri/blob/main/Dockerfile) to see the full list of user-space dependencies needed for a bare-metal build.
 
 ### CMake Options
 
@@ -54,57 +98,11 @@ cmake --install build --prefix /opt/daqiri
 
 CUDA architectures are hardcoded to `80;90` (A100, H100) in `src/CMakeLists.txt`.
 
-### Container Build
+## Next Steps
 
-The repository includes a Dockerfile and build script that compiles DPDK from source:
+Once DAQIRI is built, follow the tutorials to configure your system and run your first benchmark:
 
-```bash
-BASE_TARGET=dpdk DAQIRI_MGR="dpdk rdma" scripts/build-container.sh
-```
-
-## Running the Benchmarks
-
-Several benchmark executables are built when `DAQIRI_BUILD_EXAMPLES=ON`:
-
-- **`daqiri_bench_raw_gpudirect`** — raw DPDK TX/RX using device packet memory
-- **`daqiri_bench_raw_hds`** — raw DPDK TX/RX with header-data split
-- **`daqiri_bench_raw_reorder_seq`** — raw DPDK RX sequence-number reorder benchmark
-- **`daqiri_bench_rdma`** — RDMA-specific benchmark
-- **`daqiri_bench_socket`** — TCP/UDP socket benchmark
-
-They are config-driven. Example configs are in the `examples/` directory:
-
-| Config file | Benchmark | Description |
-|-------------|-----------|-------------|
-| `daqiri_bench_raw_tx_rx.yaml` | `daqiri_bench_raw_gpudirect` | DPDK TX/RX with one device-memory packet segment |
-| `daqiri_bench_raw_tx_rx_hds.yaml` | `daqiri_bench_raw_hds` | DPDK TX/RX with CPU headers and device payloads |
-| `daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml` | `daqiri_bench_raw_reorder_seq` | DPDK RX GPU reorder with 1024 packets per batch and a 32-bit UDP payload sequence |
-| `daqiri_bench_raw_tx_rx_reorder_seq_1024_cpu.yaml` | `daqiri_bench_raw_reorder_seq` | DPDK RX CPU reorder with 1024 packets per batch |
-| `daqiri_bench_raw_sw_loopback_reorder_seq_1024.yaml` | `daqiri_bench_raw_reorder_seq` | DPDK software-loopback RX CPU reorder |
-| `daqiri_bench_raw_rx_reorder_seq_ppb.yaml` | `daqiri_bench_raw_reorder_seq` | RX-only GPU reorder using sequence packets per batch |
-| `daqiri_bench_raw_rx_reorder_seq_batch.yaml` | `daqiri_bench_raw_reorder_seq` | RX-only GPU reorder using sequence and batch-number fields |
-| `daqiri_bench_raw_rx_multi_q.yaml` | `daqiri_bench_raw_gpudirect` | DPDK multi-queue RX with device packet memory |
-| `daqiri_bench_raw_sw_loopback.yaml` | `daqiri_bench_raw_gpudirect` | DPDK software loopback with device packet memory |
-| `daqiri_bench_rdma_tx_rx.yaml` | `daqiri_bench_rdma` | RDMA client/server TX/RX |
-| `daqiri_bench_socket_udp_tx_rx.yaml` | `daqiri_bench_socket` | UDP socket TX/RX |
-| `daqiri_bench_socket_tcp_tx_rx.yaml` | `daqiri_bench_socket` | TCP socket TX/RX |
-
-Edit the YAML files to match your system (PCIe addresses, CPU cores, IP addresses) before
-running. Fields marked with `<angle brackets>` are placeholders that must be replaced.
-
-Configs named `raw_rx_*` are RX-only. They initialize the RX path and wait for matching
-external traffic; when run by themselves they can exit cleanly with `0` packets. Use the
-TX/RX configs for closed-loop smoke tests. The CPU reorder config is a throughput stress
-case, so dropped-packet counters can increase when TX outruns CPU reorder.
-
-## Formatting
-
-Run clang-format before committing:
-
-```bash
-# Format staged changes
-git-clang-format --style file
-
-# Format specific files
-clang-format -style=file -i -fallback-style=none <files>
-```
+1. [**Background**](tutorials/background.md) — Kernel Bypass and GPUDirect concepts
+2. [**System Configuration**](tutorials/system_configuration.md) — NIC drivers, link layers, GPUDirect, hugepages, CPU isolation, GPU clocks, and more
+3. [**Benchmarking Examples**](tutorials/benchmarking_examples.md) — run `daqiri_bench_default` with a loopback test
+4. [**Understanding the Configuration File**](tutorials/configuration.md) — annotated YAML walkthrough
