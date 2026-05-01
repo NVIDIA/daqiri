@@ -39,6 +39,7 @@
 #endif
 
 #include <chrono>
+#include <cstdlib>
 #include <cuda.h>
 #include <random>
 #include <unistd.h>
@@ -182,9 +183,13 @@ Status Manager::allocate_memory_regions() {
     if (mr.second.owned_) {
       switch (mr.second.kind_) {
         case MemoryKind::HOST:
-          ptr = malloc(mr.second.ttl_size_);
+          if (posix_memalign(&ptr, GPU_PAGE_SIZE, mr.second.ttl_size_) != 0) {
+            DAQIRI_LOG_CRITICAL("Failed to allocate aligned host memory!");
+            return Status::NULL_PTR;
+          }
           break;
         case MemoryKind::HOST_PINNED:
+          cudaSetDevice(mr.second.affinity_);
           if (cudaHostAlloc(&ptr, mr.second.ttl_size_, 0) != cudaSuccess) {
             DAQIRI_LOG_CRITICAL("Failed to allocate CUDA pinned host memory!");
             return Status::NULL_PTR;
@@ -262,6 +267,9 @@ Status Manager::map_memory_regions() {
 
     for (const auto& ext_mem_el : ext_pktmbufs_) {
       const auto& ext_mem = ext_mem_el.second;
+      const auto& mr = cfg_.mrs_[ext_mem_el.first];
+
+      if (mr.kind_ != MemoryKind::DEVICE) { continue; }
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
@@ -360,10 +368,9 @@ Status Manager::register_memory_regions() {
         }
       }
     } else {
-      const long host_page_size = sysconf(_SC_PAGESIZE);
-      const size_t page_size = host_page_size > 0 ? static_cast<size_t>(host_page_size) : 4096;
+      const unsigned int n_pages = static_cast<unsigned int>(ext_mem->buf_len / GPU_PAGE_SIZE);
       ret = rte_extmem_register(
-          ext_mem->buf_ptr, ext_mem->buf_len, NULL, ext_mem->buf_iova, page_size);
+          ext_mem->buf_ptr, ext_mem->buf_len, NULL, n_pages, GPU_PAGE_SIZE);
     }
     if (ret) {
       if (mr.kind_ == MemoryKind::DEVICE) {

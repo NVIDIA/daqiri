@@ -207,7 +207,7 @@ index c62edf5e55..4b8b1c8b59 100644
 +rte_extmem_register(void *va_addr, size_t len, rte_iova_t iova_addrs[],
 +		unsigned int n_pages, size_t page_sz)
 +{
-+	return rte_extmem_register_dmabuf(va_addr, len, -1, 0, iova_addrs, n_pages, page_sz);
++	return extmem_register(va_addr, len, -1, 0, iova_addrs, n_pages, page_sz);
 +}
 +
 +RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_extmem_register_dmabuf, 26.03)
@@ -274,7 +274,7 @@ index 39240c261c..bf986fe654 100644
  	msl->external = 1;
  
 +	/* initialize dma-buf info to "not dma-buf backed" */
-+	eal_memseg_list_set_dmabuf_info(i, -1, 0);
++	eal_memseg_list_set_dmabuf_info(msl - mcfg->memsegs, -1, 0);
 +
 +	return msl;
 +}
