@@ -10,6 +10,10 @@ on:
       - 'mkdocs.yml'
       - '.github/workflows/docs.yml'
       - 'scripts/check_html_links.py'
+      - 'scripts/check_doc_refs.py'
+      - 'examples/CMakeLists.txt'
+      - 'examples/*.yaml'
+      - 'README.md'
 
 permissions:
   contents: write
@@ -32,6 +36,9 @@ jobs:
 
       - name: Verify hand-maintained HTML link targets
         run: python scripts/check_html_links.py site
+
+      - name: Verify benchmark and config references in docs
+        run: python scripts/check_doc_refs.py
 
   deploy:
     needs: check
