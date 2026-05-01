@@ -44,4 +44,4 @@ Which backend is best for your use case will depend on multiple factors, such as
 
 - [System Configuration](system_configuration.md)
 - [Benchmarking Examples](benchmarking_examples.md)
-- [Understanding the Configuration File](configuration.md)
+- [Understanding the Configuration File](configuration-walkthrough.md)

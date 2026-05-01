@@ -6,7 +6,7 @@ hide:
 
 DAQIRI provides a benchmarking application named `daqiri_bench_raw_gpudirect` that can be used to test the performance of the networking configuration. In this section, we'll walk you through the steps needed to configure the application for your NIC for Tx and Rx, and run a loopback test between the two interfaces with a [physical SFP cable](https://www.nvidia.com/en-us/networking/interconnect/) connecting them.
 
-Make sure to [build the DAQIRI library](../getting-started.md#building-from-source) beforehand.
+Make sure to [build the DAQIRI library](../getting-started.md#build-the-daqiri-library) beforehand.
 
 !!! note "Prerequisites"
 
@@ -42,7 +42,7 @@ The benchmark executables and example YAML configurations are located at:
 | **Container** | `/opt/daqiri/bin/` | `/opt/daqiri/bin/` |
 | **From source** | `./build/examples/` | `./examples/` |
 
-The fields in the YAML configs will be explained in more detail in [Understanding the Configuration File](configuration.md). For now, we'll stick to modifying the strict minimum required fields to run the application as-is on your system.
+The fields in the YAML configs will be explained in more detail in [Understanding the Configuration File](configuration-walkthrough.md). For now, we'll stick to modifying the strict minimum required fields to run the application as-is on your system.
 
 ##### Identify your NIC's PCIe addresses
 
@@ -423,4 +423,4 @@ sudo mlnx_perf -i $if_name
 
 ---
 **Previous:** [System Configuration](system_configuration.md)  
-**Next:** [Understanding the Configuration File](configuration.md) — deep dive into the YAML parameters
+**Next:** [Understanding the Configuration File](configuration-walkthrough.md) — deep dive into the YAML parameters

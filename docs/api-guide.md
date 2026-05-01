@@ -1,7 +1,7 @@
 # API Guide
 
 This guide covers the core DAQIRI API for receiving and transmitting packets. For the
-complete function list, see the [`daqiri/common.h`](/src/common.h) header file.
+complete function list, see the [`daqiri/common.h`](https://github.com/NVIDIA/daqiri/blob/main/src/common.h) header file.
 
 ## Key Concepts
 
