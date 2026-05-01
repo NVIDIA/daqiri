@@ -307,15 +307,15 @@ sudo mlnx_perf -i $if_name
 
 ??? abstract "See an example output"
 
-    On IGX with RTX A6000, we are able to hit close to the 100 Gbps linerate with this configuration:
+    On IGX with RTX 6000 Ada Generation, we saturate the 100 Gbps linerate with this configuration:
     ```log
-      rx_vport_unicast_packets: 11,614,900
-        rx_vport_unicast_bytes: 12,358,253,600 Bps   = 98,866.2 Mbps
-                rx_packets_phy: 11,614,847
-                  rx_bytes_phy: 12,404,657,664 Bps   = 99,237.26 Mbps
-     rx_1024_to_1518_bytes_phy: 11,614,936
-                rx_prio0_bytes: 12,404,738,832 Bps   = 99,237.91 Mbps
-              rx_prio0_packets: 11,614,923
+          rx_vport_unicast_packets: 1,562,203
+            rx_vport_unicast_bytes: 12,597,604,992 Bps   = 100,780.83 Mbps
+                    rx_packets_phy: 1,562,198
+                      rx_bytes_phy: 12,603,813,464 Bps   = 100,830.50 Mbps
+         rx_4096_to_8191_bytes_phy: 1,562,186
+                    rx_prio0_bytes: 12,603,256,772 Bps   = 100,826.5 Mbps
+                  rx_prio0_packets: 1,562,128
     ```
 
 ??? tip "Troubleshooting"
