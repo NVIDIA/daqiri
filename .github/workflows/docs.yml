@@ -1,18 +1,48 @@
-name: Deploy Documentation
+name: Documentation
 
 on:
   push:
     branches:
       - main
-      - unified_docs
-      - website
-      - tutorial
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - '.github/workflows/docs.yml'
+      - 'scripts/check_html_links.py'
+      - 'scripts/check_doc_refs.py'
+      - 'examples/CMakeLists.txt'
+      - 'examples/*.yaml'
+      - 'README.md'
 
 permissions:
   contents: write
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: pip install mkdocs-material
+
+      - name: Build site (strict mode)
+        run: mkdocs build --strict
+
+      - name: Verify hand-maintained HTML link targets
+        run: python scripts/check_html_links.py site
+
+      - name: Verify benchmark and config references in docs
+        run: python scripts/check_doc_refs.py
+
   deploy:
+    needs: check
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
