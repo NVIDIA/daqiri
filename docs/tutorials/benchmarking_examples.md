@@ -4,7 +4,7 @@ hide:
 ---
 # Benchmarking Examples
 
-DAQIRI provides a benchmarking application named `daqiri_bench_default` that can be used to test the performance of the networking configuration. In this section, we'll walk you through the steps needed to configure the application for your NIC for Tx and Rx, and run a loopback test between the two interfaces with a [physical SFP cable](https://www.nvidia.com/en-us/networking/interconnect/) connecting them.
+DAQIRI provides a benchmarking application named `daqiri_bench_raw_gpudirect` that can be used to test the performance of the networking configuration. In this section, we'll walk you through the steps needed to configure the application for your NIC for Tx and Rx, and run a loopback test between the two interfaces with a [physical SFP cable](https://www.nvidia.com/en-us/networking/interconnect/) connecting them.
 
 Make sure to [build the DAQIRI library](../getting-started.md#building-from-source) beforehand.
 
@@ -141,7 +141,7 @@ After having modified the configuration file, ensure you have connected an SFP c
     [Launch the DAQIRI container](#running-the-daqiri-container), then inside:
 
     ```bash
-    /opt/daqiri/bin/daqiri_bench_default /opt/daqiri/bin/daqiri_bench_default_tx_rx.yaml
+    /opt/daqiri/bin/daqiri_bench_raw_gpudirect /opt/daqiri/bin/daqiri_bench_raw_tx_rx.yaml
     ```
 
 === "From source"
@@ -149,223 +149,154 @@ After having modified the configuration file, ensure you have connected an SFP c
     This assumes you have built DAQIRI and its dependencies locally on your system.
 
     ```bash
-    sudo ./build/examples/daqiri_bench_default examples/daqiri_bench_default_tx_rx.yaml
+    sudo ./build/examples/daqiri_bench_raw_gpudirect examples/daqiri_bench_raw_tx_rx.yaml
     ```
 
-The application will run indefinitely. You can stop it gracefully with `Ctrl-C`. You can also uncomment and set the `max_duration_ms` field in the `scheduler` section of the configuration file to limit the duration of the run automatically.
+By default the application runs for 10 seconds and then exits. You can change the duration by passing `--seconds <N>` after the YAML path, or stop it gracefully at any time with `Ctrl-C`.
 
-??? abstract "See an example output — PLACEHOLDER"
-
-    !!! warning "Placeholder"
-
-        The log output below is from the legacy Advanced Networking Operator and will be updated with DAQIRI output in a future revision. The structure and flow of the output is representative, but binary names, log prefixes (`adv_network_*`, `ANO`), and some configuration details will differ.
+??? abstract "See an example output"
 
     ```log
-    [info] [fragment.cpp:599] Loading extensions from configs...
-    [info] [gxf_executor.cpp:264] Creating context
-    [info] [main.cpp:35] Initializing advanced network operator
-    [info] [main.cpp:40] Using ANO manager dpdk
-    [info] [adv_network_rx.cpp:35] Adding output port bench_rx_out
-    [info] [adv_network_rx.cpp:51] AdvNetworkOpRx::initialize()
-    [info] [adv_network_common.h:607] Finished reading advanced network operator config
-    [info] [adv_network_dpdk_mgr.cpp:373] Attempting to use 2 ports for high-speed network
-    [info] [adv_network_dpdk_mgr.cpp:382] Setting DPDK log level to: Info
-    [info] [adv_network_dpdk_mgr.cpp:402] DPDK EAL arguments: adv_net_operator --file-prefix=nwlrbbmqbh -l 3,11,9 --log-level=9 --log-level=pmd.net.mlx5:info -a 0005:03:00.0,txq_inline_max=0,dv_flow_en=2 -a 0005:03:00.1,txq_inline_max=0,dv_flow_en=2
-    Log level 9 higher than maximum (8)
-    EAL: Detected CPU lcores: 12
-    EAL: Detected NUMA nodes: 1
-    EAL: Detected shared linkage of DPDK
-    EAL: Multi-process socket /var/run/dpdk/nwlrbbmqbh/mp_socket
-    EAL: Selected IOVA mode 'VA'
-    EAL: 1 hugepages of size 1073741824 reserved, but no mounted hugetlbfs found for that size
-    EAL: Probe PCI driver: mlx5_pci (15b3:1021) device: 0005:03:00.0 (socket -1)
-    mlx5_net: PCI information matches for device "mlx5_0"
-    mlx5_net: enhanced MPS is enabled
-    mlx5_net: port 0 MAC address is 48:B0:2D:EE:83:AC
-    EAL: Probe PCI driver: mlx5_pci (15b3:1021) device: 0005:03:00.1 (socket -1)
-    mlx5_net: PCI information matches for device "mlx5_1"
-    mlx5_net: enhanced MPS is enabled
-    mlx5_net: port 1 MAC address is 48:B0:2D:EE:83:AD
-    TELEMETRY: No legacy callbacks, legacy socket not created
-    [info] [adv_network_dpdk_mgr.cpp:298] Port 0 has no RX queues. Creating dummy queue.
-    [info] [adv_network_dpdk_mgr.cpp:165] Adjusting buffer size to 9228 for headroom
-    [info] [adv_network_dpdk_mgr.cpp:165] Adjusting buffer size to 9128 for headroom
-    [info] [adv_network_dpdk_mgr.cpp:165] Adjusting buffer size to 9128 for headroom
-    [info] [adv_network_mgr.cpp:116] Registering memory regions
-    [info] [adv_network_mgr.cpp:178] Successfully allocated memory region MR_Unused_P0 at 0x100fa0000 type 2 with 9100 bytes (32768 elements @ 9228 bytes total 302383104)
-    [info] [adv_network_mgr.cpp:178] Successfully allocated memory region Data_RX_GPU at 0xffff4fc00000 type 3 with 9000 bytes (51200 elements @ 9128 bytes total 467402752)
-    [info] [adv_network_mgr.cpp:178] Successfully allocated memory region Data_TX_GPU at 0xffff33e00000 type 3 with 9000 bytes (51200 elements @ 9128 bytes total 467402752)
-    [info] [adv_network_mgr.cpp:191] Finished allocating memory regions
-    [info] [adv_network_dpdk_mgr.cpp:223] Successfully registered external memory for Data_TX_GPU
-    [info] [adv_network_dpdk_mgr.cpp:223] Successfully registered external memory for Data_RX_GPU
-    [info] [adv_network_dpdk_mgr.cpp:193] Mapped external memory descriptor for 0xffff4fc00000 to device 0
-    [info] [adv_network_dpdk_mgr.cpp:193] Mapped external memory descriptor for 0xffff33e00000 to device 0
-    [info] [adv_network_dpdk_mgr.cpp:193] Mapped external memory descriptor for 0xffff4fc00000 to device 1
-    [info] [adv_network_dpdk_mgr.cpp:193] Mapped external memory descriptor for 0xffff33e00000 to device 1
-    [info] [adv_network_dpdk_mgr.cpp:454] DPDK init (0005:03:00.0) -- RX: ENABLED TX: ENABLED
-    [info] [adv_network_dpdk_mgr.cpp:464] Configuring RX queue: UNUSED_P0_Q0 (0) on port 0
-    [info] [adv_network_dpdk_mgr.cpp:513] Created mempool RXP_P0_Q0_MR0 : mbufs=32768 elsize=9228 ptr=0x10041c380
-    [info] [adv_network_dpdk_mgr.cpp:523] Max packet size needed for RX: 9100
-    [info] [adv_network_dpdk_mgr.cpp:564] Configuring TX queue: ADC Samples (0) on port 0
-    [info] [adv_network_dpdk_mgr.cpp:607] Created mempool TXP_P0_Q0_MR0 : mbufs=51200 elsize=9000 ptr=0x100c1fc00
-    [info] [adv_network_dpdk_mgr.cpp:621] Max packet size needed with TX: 9100
-    [info] [adv_network_dpdk_mgr.cpp:632] Setting port config for port 0 mtu:9082
-    [info] [adv_network_dpdk_mgr.cpp:663] Initializing port 0 with 1 RX queues and 1 TX queues...
-    mlx5_net: port 0 Tx queues number update: 0 -> 1
-    mlx5_net: port 0 Rx queues number update: 0 -> 1
-    [info] [adv_network_dpdk_mgr.cpp:679] Successfully configured ethdev
-    [info] [adv_network_dpdk_mgr.cpp:689] Successfully set descriptors to 8192/8192
-    [info] [adv_network_dpdk_mgr.cpp:704] Port 0 not in isolation mode
-    [info] [adv_network_dpdk_mgr.cpp:713] Setting up port:0, queue:0, Num scatter:1 pool:0x10041c380
-    [info] [adv_network_dpdk_mgr.cpp:734] Successfully setup RX port 0 queue 0
-    [info] [adv_network_dpdk_mgr.cpp:756] Successfully set up TX queue 0/0
-    [info] [adv_network_dpdk_mgr.cpp:761] Enabling promiscuous mode for port 0
-    mlx5_net: [mlx5dr_cmd_query_caps]: Failed to query wire port regc value
-    mlx5_net: port 0 Rx queues number update: 1 -> 1
-    [info] [adv_network_dpdk_mgr.cpp:775] Successfully started port 0
-    [info] [adv_network_dpdk_mgr.cpp:778] Port 0, MAC address: 48:B0:2D:EE:83:AC
-    [info] [adv_network_dpdk_mgr.cpp:1111] Applying tx_eth_src offload for port 0
-    [info] [adv_network_dpdk_mgr.cpp:454] DPDK init (0005:03:00.1) -- RX: ENABLED TX: DISABLED
-    [info] [adv_network_dpdk_mgr.cpp:464] Configuring RX queue: Data (0) on port 1
-    [info] [adv_network_dpdk_mgr.cpp:513] Created mempool RXP_P1_Q0_MR0 : mbufs=51200 elsize=9128 ptr=0x125a5b940
-    [info] [adv_network_dpdk_mgr.cpp:523] Max packet size needed for RX: 9000
-    [info] [adv_network_dpdk_mgr.cpp:621] Max packet size needed with TX: 9000
-    [info] [adv_network_dpdk_mgr.cpp:632] Setting port config for port 1 mtu:8982
-    [info] [adv_network_dpdk_mgr.cpp:663] Initializing port 1 with 1 RX queues and 0 TX queues...
-    mlx5_net: port 1 Rx queues number update: 0 -> 1
-    [info] [adv_network_dpdk_mgr.cpp:679] Successfully configured ethdev
-    [info] [adv_network_dpdk_mgr.cpp:689] Successfully set descriptors to 8192/8192
-    [info] [adv_network_dpdk_mgr.cpp:701] Port 1 in isolation mode
-    [info] [adv_network_dpdk_mgr.cpp:713] Setting up port:1, queue:0, Num scatter:1 pool:0x125a5b940
-    [info] [adv_network_dpdk_mgr.cpp:734] Successfully setup RX port 1 queue 0
-    [info] [adv_network_dpdk_mgr.cpp:764] Not enabling promiscuous mode on port 1 since flow isolation is enabled
-    mlx5_net: [mlx5dr_cmd_query_caps]: Failed to query wire port regc value
-    mlx5_net: port 1 Rx queues number update: 1 -> 1
-    [info] [adv_network_dpdk_mgr.cpp:775] Successfully started port 1
-    [info] [adv_network_dpdk_mgr.cpp:778] Port 1, MAC address: 48:B0:2D:EE:83:AD
-    [info] [adv_network_dpdk_mgr.cpp:790] Adding RX flow ADC Samples
-    [info] [adv_network_dpdk_mgr.cpp:998] Adding IPv4 length match for 1050
-    [info] [adv_network_dpdk_mgr.cpp:1018] Adding UDP port match for src/dst 4096/4096
-    [info] [adv_network_dpdk_mgr.cpp:814] Setting up RX burst pool with 8191 batches of size 81920
-    [info] [adv_network_dpdk_mgr.cpp:833] Setting up RX burst pool with 8191 batches of size 20480
-    [info] [adv_network_dpdk_mgr.cpp:875] Setting up TX ring TX_RING_P0_Q0
-    [info] [adv_network_dpdk_mgr.cpp:901] Setting up TX burst pool TX_BURST_POOL_P0_Q0 with 10240 pointers at 0x125a0d4c0
-    [info] [adv_network_dpdk_mgr.cpp:1186] Config validated successfully
-    [info] [adv_network_dpdk_mgr.cpp:1199] Starting advanced network workers
-    [info] [adv_network_dpdk_mgr.cpp:1278] Flushing packet on port 1
-    [info] [adv_network_dpdk_mgr.cpp:1478] Starting RX Core 9, port 1, queue 0, socket 0
-    [info] [adv_network_dpdk_mgr.cpp:1268] Done starting workers
-    [info] [default_bench_op_tx.h:79] AdvNetworkingBenchDefaultTxOp::initialize()
-    [info] [adv_network_dpdk_mgr.cpp:1637] Starting TX Core 11, port 0, queue 0 socket 0 using burst pool 0x125a0d4c0 ring 0x127690740
-    [info] [default_bench_op_tx.h:113] Initialized 4 streams and events
-    [info] [default_bench_op_tx.h:130] AdvNetworkingBenchDefaultTxOp::initialize() complete
-    [info] [default_bench_op_rx.h:67] AdvNetworkingBenchDefaultRxOp::initialize()
-    [info] [gxf_executor.cpp:1797] creating input IOSpec named 'burst_in'
-    [info] [default_bench_op_rx.h:104] AdvNetworkingBenchDefaultRxOp::initialize() complete
-    [info] [adv_network_tx.cpp:46] AdvNetworkOpTx::initialize()
-    [info] [gxf_executor.cpp:1797] creating input IOSpec named 'burst_in'
-    [info] [adv_network_common.h:607] Finished reading advanced network operator config
-    [info] [gxf_executor.cpp:2208] Activating Graph...
-    [info] [gxf_executor.cpp:2238] Running Graph...
-    [info] [multi_thread_scheduler.cpp:300] MultiThreadScheduler started worker thread [pool name: default_pool, thread uid: 0]
-    [info] [multi_thread_scheduler.cpp:300] MultiThreadScheduler started worker thread [pool name: default_pool, thread uid: 1]
-    [info] [multi_thread_scheduler.cpp:300] MultiThreadScheduler started worker thread [pool name: default_pool, thread uid: 2]
-    [info] [gxf_executor.cpp:2240] Waiting for completion...
-    [info] [multi_thread_scheduler.cpp:300] MultiThreadScheduler started worker thread [pool name: default_pool, thread uid: 3]
-    [info] [multi_thread_scheduler.cpp:300] MultiThreadScheduler started worker thread [pool name: default_pool, thread uid: 4]
-    ^C[info] [multi_thread_scheduler.cpp:636] Stopping multithread scheduler
-    [info] [multi_thread_scheduler.cpp:694] Stopping all async jobs
-    [info] [multi_thread_scheduler.cpp:218] Dispatcher thread has stopped checking jobs
-    [info] [multi_thread_scheduler.cpp:679] Waiting to join all async threads
-    [info] [multi_thread_scheduler.cpp:316] Worker Thread [pool name: default_pool, thread uid: 1] exiting.
-    [info] [multi_thread_scheduler.cpp:702] *********************** DISPATCHER EXEC TIME : 476345.364000 ms
-
-    [info] [multi_thread_scheduler.cpp:316] Worker Thread [pool name: default_pool, thread uid: 0] exiting.
-    [info] [multi_thread_scheduler.cpp:316] Worker Thread [pool name: default_pool, thread uid: 3] exiting.
-    [info] [multi_thread_scheduler.cpp:371] Event handler thread exiting.
-    [info] [multi_thread_scheduler.cpp:703] *********************** DISPATCHER WAIT TIME : 47339.961000 ms
-
-    [info] [multi_thread_scheduler.cpp:704] *********************** DISPATCHER COUNT : 197630449
-
-    [info] [multi_thread_scheduler.cpp:316] Worker Thread [pool name: default_pool, thread uid: 2] exiting.
-    [info] [multi_thread_scheduler.cpp:705] *********************** WORKER EXEC TIME : 983902.800000 ms
-
-    [info] [multi_thread_scheduler.cpp:706] *********************** WORKER WAIT TIME : 1634522.159000 ms
-
-    [info] [multi_thread_scheduler.cpp:707] *********************** WORKER COUNT : 11817369
-
-    [info] [multi_thread_scheduler.cpp:316] Worker Thread [pool name: default_pool, thread uid: 4] exiting.
-    [info] [multi_thread_scheduler.cpp:688] All async worker threads joined, deactivating all entities
-    [info] [adv_network_rx.cpp:46] AdvNetworkOpRx::stop()
-    [info] [adv_network_dpdk_mgr.cpp:1928] DPDK ANO shutdown called 2
-    [info] [adv_network_tx.cpp:41] AdvNetworkOpTx::stop()
-    [info] [adv_network_dpdk_mgr.cpp:1928] DPDK ANO shutdown called 1
-    [info] [adv_network_dpdk_mgr.cpp:1133] Port 0:
-    [info] [adv_network_dpdk_mgr.cpp:1135]  - Received packets:    0
-    [info] [adv_network_dpdk_mgr.cpp:1136]  - Transmit packets:    6005066864
-    [info] [adv_network_dpdk_mgr.cpp:1137]  - Received bytes:      0
-    [info] [adv_network_dpdk_mgr.cpp:1138]  - Transmit bytes:      6389391347584
-    [info] [adv_network_dpdk_mgr.cpp:1139]  - Missed packets:      0
-    [info] [adv_network_dpdk_mgr.cpp:1140]  - Errored packets:     0
-    [info] [adv_network_dpdk_mgr.cpp:1141]  - RX out of buffers:   0
-    [info] [adv_network_dpdk_mgr.cpp:1143]    ** Extended Stats **
-    [info] [adv_network_dpdk_mgr.cpp:1173]       tx_good_packets:          6005070000
-    [info] [adv_network_dpdk_mgr.cpp:1173]       tx_good_bytes:            6389394480000
-    [info] [adv_network_dpdk_mgr.cpp:1173]       tx_q0_packets:            6005070000
-    [info] [adv_network_dpdk_mgr.cpp:1173]       tx_q0_bytes:              6389394480000
-    [info] [adv_network_dpdk_mgr.cpp:1173]       rx_multicast_bytes:               9589
-    [info] [adv_network_dpdk_mgr.cpp:1173]       rx_multicast_packets:             22
-    [info] [adv_network_dpdk_mgr.cpp:1173]       tx_unicast_bytes:         6389394480000
-    [info] [adv_network_dpdk_mgr.cpp:1173]       tx_multicast_bytes:               9589
-    [info] [adv_network_dpdk_mgr.cpp:1173]       tx_unicast_packets:               6005070000
-    [info] [adv_network_dpdk_mgr.cpp:1173]       tx_multicast_packets:             22
-    [info] [adv_network_dpdk_mgr.cpp:1173]       tx_phy_packets:           6005070022
-    [info] [adv_network_dpdk_mgr.cpp:1173]       rx_phy_packets:           24
-    [info] [adv_network_dpdk_mgr.cpp:1173]       tx_phy_bytes:             6413414769677
-    [info] [adv_network_dpdk_mgr.cpp:1173]       rx_phy_bytes:             9805
-    [info] [adv_network_dpdk_mgr.cpp:1133] Port 1:
-    [info] [adv_network_dpdk_mgr.cpp:1135]  - Received packets:    6004323692
-    [info] [adv_network_dpdk_mgr.cpp:1136]  - Transmit packets:    0
-    [info] [adv_network_dpdk_mgr.cpp:1137]  - Received bytes:      6388600255072
-    [info] [adv_network_dpdk_mgr.cpp:1138]  - Transmit bytes:      0
-    [info] [adv_network_dpdk_mgr.cpp:1139]  - Missed packets:      746308
-    [info] [adv_network_dpdk_mgr.cpp:1140]  - Errored packets:     0
-    [info] [adv_network_dpdk_mgr.cpp:1141]  - RX out of buffers:   5047027287
-    [info] [adv_network_dpdk_mgr.cpp:1143]    ** Extended Stats **
-    [info] [adv_network_dpdk_mgr.cpp:1173]       rx_good_packets:          6004323692
-    [info] [adv_network_dpdk_mgr.cpp:1173]       rx_good_bytes:            6388600255072
-    [info] [adv_network_dpdk_mgr.cpp:1173]       rx_missed_errors:         746308
-    [info] [adv_network_dpdk_mgr.cpp:1173]       rx_mbuf_allocation_errors:                5047027287
-    [info] [adv_network_dpdk_mgr.cpp:1173]       rx_q0_packets:            6004323692
-    [info] [adv_network_dpdk_mgr.cpp:1173]       rx_q0_bytes:              6388600255072
-    [info] [adv_network_dpdk_mgr.cpp:1173]       rx_q0_errors:             5047027287
-    [info] [adv_network_dpdk_mgr.cpp:1173]       rx_unicast_bytes:         6389394480000
-    [info] [adv_network_dpdk_mgr.cpp:1173]       rx_multicast_bytes:               9589
-    [info] [adv_network_dpdk_mgr.cpp:1173]       rx_unicast_packets:               6005070000
-    [info] [adv_network_dpdk_mgr.cpp:1173]       rx_multicast_packets:             22
-    [info] [adv_network_dpdk_mgr.cpp:1173]       tx_multicast_bytes:               9589
-    [info] [adv_network_dpdk_mgr.cpp:1173]       tx_multicast_packets:             22
-    [info] [adv_network_dpdk_mgr.cpp:1173]       tx_phy_packets:           24
-    [info] [adv_network_dpdk_mgr.cpp:1173]       rx_phy_packets:           6005070022
-    [info] [adv_network_dpdk_mgr.cpp:1173]       tx_phy_bytes:             9805
-    [info] [adv_network_dpdk_mgr.cpp:1173]       rx_phy_bytes:             6413414769677
-    [info] [adv_network_dpdk_mgr.cpp:1173]       rx_out_of_buffer:         746308
-    [info] [adv_network_dpdk_mgr.cpp:1935] ANO DPDK manager shutting down
-    [info] [adv_network_dpdk_mgr.cpp:1622] Total packets received by application (port/queue 1/0): 6004323692
-    [info] [adv_network_dpdk_mgr.cpp:1698] Total packets transmitted by application (port/queue 0/0): 6005070000
-    [info] [multi_thread_scheduler.cpp:645] Multithread scheduler stopped.
-    [info] [multi_thread_scheduler.cpp:664] Multithread scheduler finished.
-    [info] [gxf_executor.cpp:2243] Deactivating Graph...
-    [info] [multi_thread_scheduler.cpp:491] TOTAL EXECUTION TIME OF SCHEDULER : 523694.460857 ms
-
-    [info] [gxf_executor.cpp:2251] Graph execution finished.
-    [info] [adv_network_dpdk_mgr.cpp:1928] DPDK ANO shutdown called 0
-    [info] [default_bench_op_tx.h:51] ANO benchmark TX op shutting down
-    [info] [default_bench_op_rx.h:56] Finished receiver with 6388570603520/6004295680 bytes/packets received and 0 packets dropped
-    [info] [default_bench_op_rx.h:61] ANO benchmark RX op shutting down
-    [info] [default_bench_op_rx.h:108] AdvNetworkingBenchDefaultRxOp::freeResources() start
-    [info] [default_bench_op_rx.h:116] AdvNetworkingBenchDefaultRxOp::freeResources() complete
-    [info] [gxf_executor.cpp:294] Destroying context
+    [INFO] /workspace/daqiri/src/../src/common.h:1045: Finished reading DAQIRI configuration
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1732: Attempting to use 2 ports for high-speed network
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1741: Setting DPDK log level to: Info
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1775: DPDK EAL arguments: operator --file-prefix=vwcrlqhfkb -l 3,11,9 --log-level=error --log-level=pmd.net.mlx5:info --iova-mode=va -a 0005:03:00.0,txq_inline_max=0,dv_flow_en=2 -a 0005:03:00.1,txq_inline_max=0,dv_flow_en=2 
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1799: tx_port (0005:03:00.0): identified as port 0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1799: rx_port (0005:03:00.1): identified as port 1
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1809: Creating dummy RX and TX queues
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1591: Port 0 has no RX queues. Creating dummy queue.
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1624: Port 1 has no TX queues. Creating dummy queue.
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1542: Adjusting buffer size to 9228 for headroom
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1542: Adjusting buffer size to 9228 for headroom
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1542: Adjusting buffer size to 8192 for headroom
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1542: Adjusting buffer size to 8192 for headroom
+    [INFO] /workspace/daqiri/src/manager.cpp:175: Registering memory regions
+    [INFO] /workspace/daqiri/src/manager.cpp:236: Successfully allocated memory region MR_Unused_TX_P1 at 0x16d9bf580 type 2 with 9100 bytes (32768 elements @ 9228 bytes total 302383104)
+    [INFO] /workspace/daqiri/src/manager.cpp:236: Successfully allocated memory region MR_Unused_P0 at 0x15b95f500 type 2 with 9100 bytes (32768 elements @ 9228 bytes total 302383104)
+    [INFO] /workspace/daqiri/src/manager.cpp:236: Successfully allocated memory region Data_RX_GPU at 0xffff34000000 type 3 with 8064 bytes (32768 elements @ 8192 bytes total 268435456)
+    [INFO] /workspace/daqiri/src/manager.cpp:236: Successfully allocated memory region Data_TX_GPU at 0xffff24000000 type 3 with 8064 bytes (32768 elements @ 8192 bytes total 268435456)
+    [INFO] /workspace/daqiri/src/manager.cpp:249: Finished allocating memory regions
+    [INFO] /workspace/daqiri/src/manager.cpp:314: dma-buf supported for device 0
+    [INFO] /workspace/daqiri/src/manager.cpp:324: dma-buf GPU buffer address at 0xffff24000000 aligned at 0xffff24000000 with aligned size 268435456
+    [INFO] /workspace/daqiri/src/manager.cpp:364: Successfully registered external memory for Data_TX_GPU
+    [INFO] /workspace/daqiri/src/manager.cpp:314: dma-buf supported for device 0
+    [INFO] /workspace/daqiri/src/manager.cpp:324: dma-buf GPU buffer address at 0xffff34000000 aligned at 0xffff34000000 with aligned size 268435456
+    [INFO] /workspace/daqiri/src/manager.cpp:364: Successfully registered external memory for Data_RX_GPU
+    [INFO] /workspace/daqiri/src/manager.cpp:277: Mapped external memory descriptor for 0xffff34000000 to device 0
+    [INFO] /workspace/daqiri/src/manager.cpp:277: Mapped external memory descriptor for 0xffff24000000 to device 0
+    [INFO] /workspace/daqiri/src/manager.cpp:277: Mapped external memory descriptor for 0xffff34000000 to device 1
+    [INFO] /workspace/daqiri/src/manager.cpp:277: Mapped external memory descriptor for 0xffff24000000 to device 1
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1850: DPDK init (0005:03:00.0) -- RX: ENABLED TX: ENABLED
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1863: Configuring RX queue: UNUSED_P0_Q0 (0) on port 0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1896: Created mempool RXP_P0_Q0_MR0 : mbufs=32768 elsize=9228 ptr=0x17fca4380
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1908: Max packet size needed for RX: 9100
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1955: Configuring TX queue: tx_q_0 (0) on port 0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1981: Created mempool TXP_P0_Q0_MR0 : mbufs=32768 elsize=8064 ptr=0x148cdc980
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1995: Max packet size needed with TX: 9100
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1996: Max packet size needed with RX only: 9100
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2012: Setting port config for port 0 mtu:9082
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2026: Enabling RX scatter offload for single-segment RX queues (min buffer size: 9100)
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2062: Initializing port 0 with 1 RX queues and 1 TX queues...
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2079: Successfully configured ethdev
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2091: Successfully set descriptors to 8192/8192
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2106: Port 0 not in isolation mode
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2115: Setting up port:0, queue:0, Num scatter:1 pool:0x17fca4380
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2136: Successfully setup RX port 0 queue 0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2158: Successfully set up TX queue 0/0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2163: Enabling promiscuous mode for port 0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2177: Successfully started port 0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2180: Port 0, MAC address: 48:B0:2D:F4:04:23
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2891: Applying tx_eth_src offload for port 0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1850: DPDK init (0005:03:00.1) -- RX: ENABLED TX: ENABLED
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1863: Configuring RX queue: rq_q_0 (0) on port 1
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1896: Created mempool RXP_P1_Q0_MR0 : mbufs=32768 elsize=8192 ptr=0x147d6a980
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1908: Max packet size needed for RX: 8064
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1955: Configuring TX queue: UNUSED_TX_P1_Q0 (0) on port 1
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1981: Created mempool TXP_P1_Q0_MR0 : mbufs=32768 elsize=9100 ptr=0x1470e9e00
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1995: Max packet size needed with TX: 9100
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1996: Max packet size needed with RX only: 8064
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2012: Setting port config for port 1 mtu:8046
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2026: Enabling RX scatter offload for single-segment RX queues (min buffer size: 8064)
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2062: Initializing port 1 with 1 RX queues and 1 TX queues...
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2079: Successfully configured ethdev
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2091: Successfully set descriptors to 8192/8192
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2103: Port 1 in isolation mode
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2115: Setting up port:1, queue:0, Num scatter:1 pool:0x147d6a980
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2136: Successfully setup RX port 1 queue 0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2158: Successfully set up TX queue 1/0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2166: Not enabling promiscuous mode on port 1 since flow isolation is enabled
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2177: Successfully started port 1
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2180: Port 1, MAC address: 48:B0:2D:F4:04:24
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2192: Adding RX flow flow_0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2670: Adding UDP port match for src 4096
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2677: Adding UDP port match for dst 4096
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2246: Setting up RX burst pool with 8191 batches of size 81920
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2265: Setting up RX burst pool with 8191 batches of size 20480
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2284: Setting up RX meta pool with 256 buffers
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2307: Setting up TX ring TX_RING_P0_Q0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2333: Setting up TX burst pool TX_BURST_POOL_P0_Q0 with 10240 pointers at 0x14703e380
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2307: Setting up TX ring TX_RING_P1_Q0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2333: Setting up TX burst pool TX_BURST_POOL_P1_Q0 with 10240 pointers at 0x1848bf700
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2340: Setting up TX meta pool with 256 buffers
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:34: Initializing DPDK stats
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:55: Port 0, Queue 0: Memory regions: MR_Unused_P0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:55: Port 1, Queue 0: Memory regions: Data_RX_GPU
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:130: Found rx_q0_errors counter at index 10
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:152: Initialized DPDK xstats for port 0, found 70 stats
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:154: Found rx_missed counter at index 4
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:160: Found mbuf allocation counter at index 7
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:130: Found rx_q0_errors counter at index 10
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:152: Initialized DPDK xstats for port 1, found 70 stats
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:154: Found rx_missed counter at index 4
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:160: Found mbuf allocation counter at index 7
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:169: Initialized DPDK stats
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:3169: Config validated successfully
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:3182: Starting DAQIRI workers
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:201: Starting stats thread on core 3
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:3287: Flushing packet on port 1
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:3525: Starting RX Core 9, port 1, queue 0, socket 0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:3762: Starting TX Core 11, port 0, queue 0 socket 0 using burst pool 0x14703e380 ring 0x1852c8700
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:3277: Done starting workers
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:4239: daqiri DPDK manager stats
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2913: Port 0:
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2915:  - Received packets:    0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2916:  - Transmit packets:    45722624
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2917:  - Received bytes:      0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2918:  - Transmit bytes:      368707239936
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2919:  - Missed packets:      0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2920:  - Errored packets:     0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2921:  - RX out of buffers:   0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2923:    ** Extended Stats **
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       tx_good_packets:		45728768
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       tx_good_bytes:		368756785152
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       tx_q0_packets:		45728768
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       tx_q0_bytes:		368756785152
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       tx_unicast_bytes:		368681991552
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       tx_unicast_packets:		45719493
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       tx_phy_packets:		45719292
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       tx_phy_bytes:		368863334632
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2913: Port 1:
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2915:  - Received packets:    45720948
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2916:  - Transmit packets:    0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2917:  - Received bytes:      368693724672
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2918:  - Transmit bytes:      0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2919:  - Missed packets:      0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2920:  - Errored packets:     0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2921:  - RX out of buffers:   0
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2923:    ** Extended Stats **
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       rx_good_packets:		45726554
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       rx_good_bytes:		368738931456
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       rx_q0_packets:		45726554
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       rx_q0_bytes:		368738931456
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       rx_unicast_bytes:		368729399808
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       rx_unicast_packets:		45725372
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       rx_phy_packets:		45725224
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       rx_phy_bytes:		368911131436
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:4226: daqiri DPDK manager shutdown called 1
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:4229: daqiri DPDK manager shutting down
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:3676: Total packets received by application (port/queue 1/0): 45726776
+    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:3814: Total packets transmitted by application (port/queue 0/0): 45731840
+    RX complete: packets=45711360 bytes=368616407040 bursts=4464
     ```
 
 To inspect the speed the data is moving through the NIC, run `mlnx_perf` on one of the interfaces in a separate terminal, concurrently with the application running:
