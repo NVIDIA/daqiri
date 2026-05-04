@@ -21,6 +21,10 @@ set(DAQIRI_BENCH_CONFIGS
   daqiri_bench_raw_rx_reorder_seq_batch.yaml
   daqiri_bench_raw_rx_multi_q.yaml
   daqiri_bench_raw_sw_loopback.yaml
+  daqiri_example_gds_write_sw_loopback.yaml
+  daqiri_example_gds_write_tx_rx.yaml
+  daqiri_example_pcap_writer_sw_loopback.yaml
+  daqiri_example_pcap_writer_tx_rx.yaml
   daqiri_bench_rdma_tx_rx.yaml
   daqiri_bench_socket_udp_tx_rx.yaml
   daqiri_bench_socket_tcp_tx_rx.yaml
@@ -64,6 +68,8 @@ add_daqiri_raw_bench(daqiri_bench_raw_hds raw_hds_bench.cpp)
 add_daqiri_raw_bench(daqiri_bench_raw_gpudirect raw_gpudirect_bench.cpp)
 add_daqiri_raw_bench(daqiri_bench_raw_reorder_seq raw_reorder_seq_bench.cpp)
 add_daqiri_raw_bench(daqiri_bench_raw_reorder_quantize raw_reorder_quantize_bench.cpp)
+add_daqiri_raw_bench(daqiri_example_gds_write gds_write_example.cpp)
+add_daqiri_raw_bench(daqiri_example_pcap_writer pcap_writer_example.cpp)
 
 add_executable(daqiri_bench_rdma rdma_bench.cpp)
 link_daqiri_bench(daqiri_bench_rdma)
@@ -87,6 +93,8 @@ install(TARGETS
         daqiri_bench_raw_gpudirect
         daqiri_bench_raw_reorder_seq
         daqiri_bench_raw_reorder_quantize
+        daqiri_example_gds_write
+        daqiri_example_pcap_writer
         daqiri_bench_rdma
         daqiri_bench_socket
         RUNTIME DESTINATION bin)

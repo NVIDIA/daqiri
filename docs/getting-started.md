@@ -12,6 +12,7 @@ DAQIRI requires a system with an [**NVIDIA SmartNIC**](https://www.nvidia.com/en
 | **CUDA** | CUDA Toolkit 11.7+ |
 | **DPDK** | Included in the DAQIRI container; see [Dockerfile](https://github.com/NVIDIA/daqiri/blob/main/Dockerfile) for bare-metal deps |
 | **RDMA** | `libibverbs` and `librdmacm` (for the RDMA backend) |
+| **GDS** | Optional `cufile.h` and `libcufile` for file writes from CUDA device memory. Runtime device-memory writes require a working cuFile installation; for regular `nvidia-fs` mode, the `nvidia-fs` kernel module must be loaded and the destination storage stack must be supported. |
 
 Supported platforms include [NVIDIA Data Center](https://www.nvidia.com/en-us/data-center/) systems, edge systems like [NVIDIA IGX](https://www.nvidia.com/en-us/edge-computing/products/igx/) and [NVIDIA Project DIGITS](https://www.nvidia.com/en-us/project-digits/), and `x86_64` systems with the above components.
 
@@ -94,9 +95,24 @@ Then build the DAQIRI library:
 | `DAQIRI_MGR` | `"dpdk socket rdma"` | Space-separated list of backends to build. Valid values: `dpdk`, `socket`, `rdma`. |
 | `DAQIRI_BUILD_PYTHON` | `OFF` | Build pybind11 Python bindings. |
 | `DAQIRI_BUILD_EXAMPLES` | `ON` | Build benchmark executables. |
+| `DAQIRI_ENABLE_GDS` | `OFF` | Enable cuFile-backed burst file writes from CUDA device memory. Host-memory writes use POSIX APIs without GDS. |
 | `BUILD_SHARED_LIBS` | — | Build as shared library. |
 
 CUDA architectures are hardcoded to `80;90` (A100, H100) in `src/CMakeLists.txt`.
+
+When using `DAQIRI_ENABLE_GDS=ON` for CUDA device-memory storage writes, verify the
+runtime stack before running DAQIRI:
+
+```bash
+lsmod | grep nvidia_fs
+/usr/local/cuda/gds/tools/gdscheck.py -p
+```
+
+For regular cuFile/GDS over local NVMe, `gdscheck.py -p` should report `NVMe :
+Supported`, and ext4 destinations must be mounted with `data=ordered` or use another
+GDS-supported filesystem such as XFS. If `nvidia-fs` is not loaded, or the destination
+storage is not supported, DAQIRI returns `NOT_SUPPORTED` for CUDA device-backed burst
+writes. Host-backed burst writes continue to use POSIX APIs and do not require GDS.
 
 ## Next Steps
 

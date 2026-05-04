@@ -759,6 +759,12 @@ PYBIND11_MODULE(_daqiri, m) {
       "burst"_a, "idx"_a,
       "Return (Status, RX timestamp nanoseconds) for a packet");
   m.def("get_burst_tot_byte", &get_burst_tot_byte, "burst"_a);
+  m.def("daqiri_write_raw_to_file", &daqiri_write_raw_to_file, "burst"_a,
+        "absolute_path"_a, "file_prefix"_a, "packet_data_offset"_a,
+        py::call_guard<py::gil_scoped_release>());
+  m.def("daqiri_write_pcap_to_file", &daqiri_write_pcap_to_file, "burst"_a,
+        "absolute_path"_a, "file_prefix"_a,
+        py::call_guard<py::gil_scoped_release>());
 
   m.def("copy_buffer_to_segment_packet", &copy_buffer_to_segment_packet_impl,
         "burst"_a, "seg"_a, "idx"_a, "data"_a, "nbytes"_a = py::none(),

@@ -21,6 +21,8 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 - **GPUDirect** — Receive data directly into GPU memory via two modes:
   - *Header-Data Split*: Headers to CPU, payload to GPU (recommended for most workloads).
   - *Batched GPU*: Entire packets to GPU memory (maximum bandwidth, GPU-side parsing required).
+- **Burst file writes** — Write received bursts as raw packet files or appendable PCAP
+  captures. Host-backed buffers use POSIX writes; CUDA device-backed buffers can use cuFile/GDS.
 - **Flow Steering** — Configure the NIC's hardware flow engine to route packets by UDP
   source/destination port.
 - **RDMA** — RDMA verbs (READ, WRITE, SEND) over RoCE on Ethernet NICs or InfiniBand.
@@ -54,6 +56,21 @@ cmake -S . -B build -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MG
 cmake --build build -j
 cmake --install build --prefix /opt/daqiri
 ```
+
+Host-memory burst file writes do not require GPUDirect Storage. Enable cuFile support for
+CUDA device-memory file writes with `-DDAQIRI_ENABLE_GDS=ON`; this requires `cufile.h`
+and `libcufile` in the build environment. At runtime, regular GDS writes through
+NVIDIA's `nvidia-fs` path require the `nvidia-fs` kernel module to be loaded and the
+target storage stack to be reported as supported by `gdscheck.py -p`.
+
+Container build:
+
+```bash
+BASE_TARGET=dpdk DAQIRI_MGR="dpdk rdma" scripts/build-container.sh
+```
+
+See [Getting Started](docs/getting-started.md) for requirements, CMake options, and
+running the benchmarks.
 
 ## Documentation
 
