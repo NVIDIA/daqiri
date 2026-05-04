@@ -39,6 +39,7 @@
 #endif
 
 #include <chrono>
+#include <cstdlib>
 #include <cuda.h>
 #include <random>
 #include <unistd.h>
@@ -182,9 +183,13 @@ Status Manager::allocate_memory_regions() {
     if (mr.second.owned_) {
       switch (mr.second.kind_) {
         case MemoryKind::HOST:
-          ptr = malloc(mr.second.ttl_size_);
+          if (posix_memalign(&ptr, GPU_PAGE_SIZE, mr.second.ttl_size_) != 0) {
+            DAQIRI_LOG_CRITICAL("Failed to allocate aligned host memory!");
+            return Status::NULL_PTR;
+          }
           break;
         case MemoryKind::HOST_PINNED:
+          cudaSetDevice(mr.second.affinity_);
           if (cudaHostAlloc(&ptr, mr.second.ttl_size_, 0) != cudaSuccess) {
             DAQIRI_LOG_CRITICAL("Failed to allocate CUDA pinned host memory!");
             return Status::NULL_PTR;
@@ -262,6 +267,9 @@ Status Manager::map_memory_regions() {
 
     for (const auto& ext_mem_el : ext_pktmbufs_) {
       const auto& ext_mem = ext_mem_el.second;
+      const auto& mr = cfg_.mrs_[ext_mem_el.first];
+
+      if (mr.kind_ != MemoryKind::DEVICE) { continue; }
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
@@ -286,27 +294,31 @@ Status Manager::map_memory_regions() {
 // regions/pools, this function can register external memory regions (such as GPU memory).
 Status Manager::register_memory_regions() {
   for (const auto& ar : ar_) {
-    auto ext_mem = std::make_shared<struct rte_pktmbuf_extmem>();
     const auto& mr = cfg_.mrs_[ar.second.mr_name_];
 
     // Hugepages use the normal rte functions that don't require extmem
     if (mr.kind_ == MemoryKind::HUGE) { continue; }
 
+    auto ext_mem = std::make_shared<struct rte_pktmbuf_extmem>();
     ext_mem->buf_len = mr.ttl_size_;
     ext_mem->buf_iova = RTE_BAD_IOVA;
     ext_mem->buf_ptr = ar.second.ptr_;
     ext_mem->elt_size = mr.adj_size_;
 
-    int flag = 0;
     int ret = 0;
-    CUresult s = cuDeviceGetAttribute(&flag, CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED, mr.affinity_);
-    if (s != CUDA_SUCCESS) {
-      DAQIRI_LOG_CRITICAL("Failed to get dma-buf supported for device {}", mr.affinity_);
-      return Status::NULL_PTR;
-    }
+    if (mr.kind_ == MemoryKind::DEVICE) {
+      int flag = 0;
+      CUresult s =
+          cuDeviceGetAttribute(&flag, CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED, mr.affinity_);
+      if (s != CUDA_SUCCESS) {
+        DAQIRI_LOG_CRITICAL("Failed to get dma-buf supported for device {}", mr.affinity_);
+        return Status::NULL_PTR;
+      }
 
       if (flag == 0) {
-        DAQIRI_LOG_WARN("dma-buf not supported for device {}. Attempting to use nvidia-peermem", mr.affinity_);
+        DAQIRI_LOG_WARN(
+            "dma-buf not supported for device {}. Attempting to use nvidia-peermem",
+            mr.affinity_);
         // GPUs have the largest page size vs CPUs, so just use that
         ret = rte_extmem_register(
             ext_mem->buf_ptr, ext_mem->buf_len, NULL, ext_mem->buf_iova, GPU_PAGE_SIZE);
@@ -334,31 +346,47 @@ Status Manager::register_memory_regions() {
             CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD,
             0);
 
-      if (error != CUDA_SUCCESS) {
-        DAQIRI_LOG_CRITICAL(
-            "cuMemGetHandleForAddressRange error={}. Falling back to peermem", static_cast<int>(error));
-        // GPUs have the largest page size vs CPUs, so just use that
-        ret = rte_extmem_register(
-            ext_mem->buf_ptr, ext_mem->buf_len, NULL, ext_mem->buf_iova, GPU_PAGE_SIZE);
-      } else {
+        if (error != CUDA_SUCCESS) {
+          DAQIRI_LOG_CRITICAL("cuMemGetHandleForAddressRange error={}. Falling back to peermem",
+                              static_cast<int>(error));
+          // GPUs have the largest page size vs CPUs, so just use that
+          ret = rte_extmem_register(
+              ext_mem->buf_ptr, ext_mem->buf_len, NULL, ext_mem->buf_iova, GPU_PAGE_SIZE);
+        } else {
 #if RTE_VERSION >= RTE_VERSION_NUM(24, 11, 0, 0)
-        ret = rte_extmem_register_dmabuf(
-            ext_mem->buf_ptr, ext_mem->buf_len, dmabuf_fd, offset, NULL, 0, GPU_PAGE_SIZE);
+          ret = rte_extmem_register_dmabuf(
+              ext_mem->buf_ptr, ext_mem->buf_len, dmabuf_fd, offset, NULL, 0, GPU_PAGE_SIZE);
 #else
-        DAQIRI_LOG_WARN(
-            "rte_extmem_register_dmabuf unavailable in DPDK {}; falling back to peermem registration",
-            rte_version());
-        close(dmabuf_fd);
-        ret = rte_extmem_register(
-            ext_mem->buf_ptr, ext_mem->buf_len, NULL, ext_mem->buf_iova, GPU_PAGE_SIZE);
+          DAQIRI_LOG_WARN(
+              "rte_extmem_register_dmabuf unavailable in DPDK {}; falling back to peermem "
+              "registration",
+              rte_version());
+          close(dmabuf_fd);
+          ret = rte_extmem_register(
+              ext_mem->buf_ptr, ext_mem->buf_len, NULL, ext_mem->buf_iova, GPU_PAGE_SIZE);
 #endif
+        }
       }
+    } else {
+      const unsigned int n_pages = static_cast<unsigned int>(ext_mem->buf_len / GPU_PAGE_SIZE);
+      ret = rte_extmem_register(
+          ext_mem->buf_ptr, ext_mem->buf_len, NULL, n_pages, GPU_PAGE_SIZE);
     }
     if (ret) {
-      DAQIRI_LOG_CRITICAL("Unable to register addr {}, ret {} errno {}. Either nvidia-peermem is not running or the memory kind is not supported",
+      if (mr.kind_ == MemoryKind::DEVICE) {
+        DAQIRI_LOG_CRITICAL(
+            "Unable to register addr {}, ret {} errno {}. Either nvidia-peermem is not running "
+            "or the memory kind is not supported",
+            ext_mem->buf_ptr,
+            ret,
+            rte_strerror(rte_errno));
+      } else {
+        DAQIRI_LOG_CRITICAL("Unable to register addr {}, ret {} errno {} for memory kind {}",
                             ext_mem->buf_ptr,
                             ret,
-                            rte_strerror(rte_errno));
+                            rte_strerror(rte_errno),
+                            static_cast<int>(mr.kind_));
+      }
       return Status::NULL_PTR;
     } else {
       DAQIRI_LOG_INFO("Successfully registered external memory for {}", mr.name_);
