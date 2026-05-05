@@ -12,30 +12,30 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 
 📖 **Live documentation: [nvidia.github.io/daqiri](https://nvidia.github.io/daqiri/)**
 
-**Requires** an NVIDIA SmartNIC (ConnectX-6 Dx or later) and a discrete GPU. Tested on the NVIDIA DGX Spark, NVIDIA IGX platform, and an x86_64 RTX Pro server. See [Getting Started](docs/getting-started.md) for the full requirements list.
+**Requires** an NVIDIA SmartNIC (ConnectX-6 Dx or later) and a GPUDirect-capable NVIDIA GPU. Tested on the NVIDIA DGX Spark, NVIDIA IGX platform, and an x86_64 RTX Pro server. See [Getting Started](docs/getting-started.md) for the full requirements list.
 
 ## Features
 
-- **High Throughput** — Hundreds of gigabits per second with proper hardware and tuning.
+- **High Throughput** — Sustained line rate with proper hardware and tuning.
 - **Low Latency** — Direct access to NIC ring buffers; most latency is PCIe transit only.
 - **GPUDirect** — Receive data directly into GPU memory via two modes:
-  - *Header-data split*: Headers to CPU, payload to GPU (recommended for most workloads).
+  - *Header-Data Split*: Headers to CPU, payload to GPU (recommended for most workloads).
   - *Batched GPU*: Entire packets to GPU memory (maximum bandwidth, GPU-side parsing required).
 - **Flow Steering** — Configure the NIC's hardware flow engine to route packets by UDP
   source/destination port.
-- **RDMA** — InfiniBand RDMA operations (READ, WRITE, SEND) via the RDMA backend.
+- **RDMA** — RDMA verbs (READ, WRITE, SEND) over RoCE on Ethernet NICs or InfiniBand.
 
 ### Backends
 
 | Backend | Config value | Description |
 |---------|-------------|-------------|
 | DPDK | `dpdk` | Userspace packet processing with DPDK mbufs and rings. |
-| RDMA | `rdma` | InfiniBand RDMA via libibverbs (client/server model). |
+| RDMA | `rdma` | RDMA verbs via libibverbs over RoCE or InfiniBand (client/server model). |
 | Socket | `socket` | Linux kernel sockets (UDP/TCP), plus a RoCE path that delegates to the RDMA backend. Selecting `socket` automatically builds `rdma`. |
 
 ### Limitations
 
-- Only UDP fill mode is currently supported.
+- TX header-fill helpers currently support UDP only.
 
 ## Quick Start
 
