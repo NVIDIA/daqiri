@@ -30,6 +30,7 @@ option(DAQIRI_REORDER_GPU_PROFILE "Enable CUDA event timing for DPDK reorder ker
 if(DAQIRI_REORDER_GPU_PROFILE)
   add_compile_definitions(DAQIRI_REORDER_GPU_PROFILE=1)
 endif()
+option(DAQIRI_ENABLE_GDS "Enable cuFile-backed burst file writes from CUDA device memory" OFF)
 set(DOCA_PATH /opt/mellanox/doca)
 
 if(NOT TARGET yaml-cpp AND NOT TARGET yaml-cpp::yaml-cpp)
@@ -69,6 +70,7 @@ endif()
 # Common library
 add_library(daqiri_common
   common.cpp
+  common_gds.cpp
   dpdk_log.cpp
   kernels.cu
   manager.cpp
@@ -98,6 +100,37 @@ target_link_libraries(daqiri_common
         ${DPDK_LIBRARIES}
     PRIVATE
 )
+if(DAQIRI_ENABLE_GDS)
+  find_path(DAQIRI_CUFILE_INCLUDE_DIR
+            NAMES cufile.h
+            HINTS
+              ${CUDAToolkit_INCLUDE_DIRS}
+              ${CUDAToolkit_TARGET_DIR}/include)
+  if(NOT DAQIRI_CUFILE_INCLUDE_DIR)
+    message(FATAL_ERROR "DAQIRI_ENABLE_GDS=ON requires cufile.h")
+  endif()
+
+  if(TARGET CUDA::cuFile)
+    set(DAQIRI_CUFILE_TARGET CUDA::cuFile)
+  else()
+    find_library(DAQIRI_CUFILE_LIBRARY
+                 NAMES cufile
+                 HINTS
+                   ${CUDAToolkit_LIBRARY_DIR}
+                   ${CUDAToolkit_TARGET_DIR}/lib64
+                   ${CUDAToolkit_TARGET_DIR}/lib)
+    if(NOT DAQIRI_CUFILE_LIBRARY)
+      message(FATAL_ERROR "DAQIRI_ENABLE_GDS=ON requires libcufile")
+    endif()
+    set(DAQIRI_CUFILE_TARGET ${DAQIRI_CUFILE_LIBRARY})
+  endif()
+
+  target_compile_definitions(daqiri_common PUBLIC DAQIRI_ENABLE_GDS=1)
+  target_include_directories(daqiri_common PRIVATE ${DAQIRI_CUFILE_INCLUDE_DIR})
+  target_link_libraries(daqiri_common PRIVATE ${DAQIRI_CUFILE_TARGET})
+else()
+  target_compile_definitions(daqiri_common PUBLIC DAQIRI_ENABLE_GDS=0)
+endif()
 set_target_properties(daqiri_common PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_RESOLVE_DEVICE_SYMBOLS ON

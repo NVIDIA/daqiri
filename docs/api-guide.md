@@ -210,6 +210,86 @@ simple_packet_reorder(output_buffer, h_dev_ptrs, packet_len, num_packets);
 daqiri::free_all_packets_and_burst_rx(burst);
 ```
 
+## Writing Bursts to Storage
+
+Received bursts can be written to local storage either as raw packet data or as a classic
+pcap capture. Raw writes create one output file per packet named
+`<file_prefix>_<packet_index>` and truncate existing files. PCAP writes append full
+packets to `<file_prefix>.pcap`; DAQIRI writes the pcap headers directly and does not
+depend on `libpcap`.
+
+Host-backed packet segments use standard POSIX file writes and do not require GPUDirect
+Storage. CUDA device-backed packet segments require `DAQIRI_ENABLE_GDS=ON` and working
+NVIDIA cuFile support. If a device-backed segment is encountered without GDS support,
+DAQIRI logs a warning and returns `NOT_SUPPORTED`.
+
+For regular cuFile/GDS mode, the runtime system must also have the `nvidia-fs` kernel
+module loaded and the destination storage stack supported by cuFile. Check with:
+
+```bash
+lsmod | grep nvidia_fs
+/usr/local/cuda/gds/tools/gdscheck.py -p
+```
+
+The target filesystem must pass cuFile validation before DAQIRI can register the output
+file. For local NVMe, `gdscheck.py -p` should report `NVMe : Supported`; ext4 mounts
+must expose `data=ordered`, while XFS is also supported by GDS.
+
+For raw writes, the `packet_data_offset` argument skips bytes from the logical packet
+before writing. For header-data split bursts, DAQIRI walks segment 0, segment 1, and any
+later segments as one contiguous packet, so an offset that skips the CPU header can write
+only the GPU payload.
+
+```cpp
+auto st = daqiri::daqiri_write_raw_to_file(
+    burst,
+    "/mnt/nvme/capture",
+    "packet_group_0",
+    60);
+if (st != daqiri::Status::SUCCESS) {
+    // handle write error
+}
+```
+
+PCAP writes always include full logical packets and append packet records by default. If
+the pcap file does not exist or is empty, DAQIRI writes a classic pcap v2.4 global
+header first. If it already exists, it must contain a compatible Ethernet,
+microsecond-resolution pcap header.
+
+```cpp
+auto st = daqiri::daqiri_write_pcap_to_file(
+    burst,
+    "/mnt/nvme/capture",
+    "packet_group_0");
+```
+
+For asynchronous writes, keep the burst and its packet buffers alive until the file-write
+handle completes:
+
+```cpp
+daqiri::FileWriteHandle *handle = nullptr;
+auto st = daqiri::daqiri_write_raw_to_file_async(
+    burst, "/mnt/nvme/capture", "packet_group_0", 60, &handle);
+
+daqiri::FileWriteStatus status{};
+if (st == daqiri::Status::SUCCESS) {
+    st = daqiri::daqiri_file_write_wait(handle, &status);
+    daqiri::daqiri_file_write_destroy(handle);
+}
+```
+
+The async API is a DAQIRI handle rather than a CUDA stream because one burst can fan out
+to many file offsets and, for device-backed segments, cuFile handles. Host-backed
+segments may complete during submission. Device-backed segments use cuFile batch I/O,
+which is submitted and polled with a `CUfileBatchHandle_t`.
+
+See `examples/gds_write_example.cpp` for a sample that sends one deterministic burst and
+writes raw or pcap output with the synchronous API, the asynchronous API, or both. Use
+`daqiri_example_gds_write_sw_loopback.yaml` for local software loopback, or
+`daqiri_example_gds_write_tx_rx.yaml` after replacing its PCIe, MAC, and IP placeholders
+to send real Ethernet/IPv4/UDP frames out of a NIC and receive them back through a
+hardware RX port.
+
 ## Transmitting Packets
 
 ### Step 1: Allocate a burst
@@ -302,7 +382,7 @@ All functions that can fail return `daqiri::Status`:
 | `NOT_READY` | System not yet initialized |
 | `INVALID_PARAMETER` | Invalid argument passed |
 | `NO_SPACE_AVAILABLE` | Ring or queue is full |
-| `NOT_SUPPORTED` | Operation not supported by the current backend |
+| `NOT_SUPPORTED` | Operation not supported by the current backend or build options |
 | `GENERIC_FAILURE` | Unspecified failure |
 | `CONNECT_FAILURE` | RDMA connection failed |
 | `INTERNAL_ERROR` | Internal error in the backend |
