@@ -1,0 +1,89 @@
+# DGX Spark (GB10) ready-to-run config for daqiri_bench_raw_gpudirect.
+# Templated version (with <angle-bracket> placeholders) is in
+# daqiri_bench_raw_tx_rx.yaml.
+#
+# Spark substitutions baked in here:
+#   - PCIe addresses: 0000:01:00.0 (TX, mlx5_0) / 0002:01:00.0 (RX, mlx5_2),
+#     traffic crosses the chassis QSFP loop; see docs/tutorials/system_configuration.md
+#     "DGX Spark" tab for the 4-PFs/2-chips/tied-ports topology.
+#   - kind: host_pinned, NOT device. GB10 has unified memory; nvidia_peermem
+#     does not load and CUDA reports DMA_BUF_SUPPORTED=0. PR #41 made
+#     host_pinned the working GPUDirect path on Spark (~94 Gbps unicast).
+#   - cpu_core: 17/18 from the four big-cluster X925 cores 16-19 isolated by the
+#     daqiri-tuning grub drop-in.
+#   - master_core: 8 (a non-isolated big core; any 0-15 works).
+#   - bench_tx ip_src/ip_dst: match the daqiri-tx / daqiri-rx nmcli profiles
+#     (1.1.1.1/24 and 2.2.2.2/24, MTU 9000).
+#   - eth_dst_addr: per-system, fill from the RX interface MAC:
+#       cat /sys/class/net/enP2p1s0f0np0/address
+#
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    master_core: 8
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    memory_regions:
+    - name: "Data_TX_GPU"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+    - name: "Data_RX_GPU"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+
+    interfaces:
+    - name: "tx_port"
+      address: 0000:01:00.0
+      tx:
+        queues:
+        - name: "tx_q_0"
+          id: 0
+          batch_size: 10240
+          cpu_core: 17
+          memory_regions:
+            - "Data_TX_GPU"
+          offloads:
+            - "tx_eth_src"
+    - name: "rx_port"
+      address: 0002:01:00.0
+      rx:
+        flow_isolation: true
+        queues:
+        - name: "rq_q_0"
+          id: 0
+          cpu_core: 18
+          batch_size: 10240
+          memory_regions:
+            - "Data_RX_GPU"
+        flows:
+        - name: "flow_0"
+          id: 0
+          action:
+            type: queue
+            id: 0
+          match:
+            udp_src: 4096
+            udp_dst: 4096
+
+bench_rx:
+  interface_name: "rx_port"
+
+bench_tx:
+  interface_name: "tx_port"
+  batch_size: 10240
+  payload_size: 8000
+  header_size: 64
+  eth_dst_addr: <00:00:00:00:00:00>  # cat /sys/class/net/enP2p1s0f0np0/address
+  ip_src_addr: 1.1.1.1
+  ip_dst_addr: 2.2.2.2
+  udp_src_port: 4096
+  udp_dst_port: 4096
