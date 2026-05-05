@@ -46,8 +46,11 @@ and their `kind` determines the receive mode (CPU-only, header-data split, or ba
   - type: `string`
   - values:
     - `huge` — CPU hugepages (recommended for CPU buffers)
-    - `device` — GPU VRAM
-    - `host_pinned` — Pinned CPU pages (not recommended for high-throughput RX/TX)
+    - `device` — GPU VRAM (discrete GPUs only; requires GPUDirect via peermem or DMA-BUF)
+    - `host_pinned` — Pinned CPU pages allocated via `cudaHostAlloc`. **Recommended on
+      integrated GPUs (e.g. NVIDIA GB10 / DGX Spark)**, where the NIC cannot peer-DMA
+      into device memory and CUDA reports DMA-BUF unsupported. On discrete-GPU systems,
+      prefer `device` for high-throughput RX/TX paths.
     - `host` — Regular CPU memory (not recommended)
 - **`affinity`**: GPU ID for `device` memory, or NUMA node ID for CPU memory.
   - type: `integer`
