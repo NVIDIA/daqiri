@@ -71,6 +71,11 @@ struct DropTrafficConfig {
   struct rte_flow *drop;
 };
 
+struct RxTimestampConversion {
+  bool valid = false;
+  uint64_t ticks_per_second = 0;
+};
+
 class DpdkMgr : public Manager {
  public:
   static_assert(MAX_INTERFACES <= RTE_MAX_ETHPORTS, "Too many interfaces configured");
@@ -100,6 +105,7 @@ class DpdkMgr : public Manager {
   uint32_t get_segment_packet_length(BurstParams* burst, int seg, int idx) override;
   uint32_t get_packet_length(BurstParams* burst, int idx) override;
   uint16_t get_packet_flow_id(BurstParams* burst, int idx) override;
+  Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) override;
   void* get_packet_extra_info(BurstParams* burst, int idx) override;
   Status get_tx_packet_burst(BurstParams* burst) override;
   Status set_eth_header(BurstParams* burst, int idx, char* dst_addr) override;
@@ -152,7 +158,9 @@ class DpdkMgr : public Manager {
   static int rx_lb_worker(void* arg);
   static int tx_lb_worker(void* arg);
   static void flush_packets(int port);
-  void setup_accurate_send_scheduling_mask();
+  bool setup_rx_timestamp_dynfield();
+  bool setup_tx_timestamp_dynfield();
+  bool calibrate_rx_timestamp_clock(uint16_t port_id);
   int setup_pools_and_rings(int max_rx_batch, int max_tx_batch);
   struct rte_flow* add_flow(int port, const FlowConfig& cfg);
   void create_dummy_rx_q();
@@ -168,9 +176,11 @@ class DpdkMgr : public Manager {
 
   struct ReorderBatchState {
     uint64_t first_packet_cycles = 0;
+    uint64_t first_packet_rx_timestamp_ns = 0;
     uint32_t input_payload_len = 0;
     uint32_t payload_len = 0;
     uint32_t packet_count = 0;
+    bool first_packet_rx_timestamp_ns_valid = false;
   };
 
   struct ReorderOutputBufferState {
@@ -248,6 +258,8 @@ class DpdkMgr : public Manager {
     std::array<uint32_t, 1> pkt_lens{};
     ReorderBurstInfo info{};
     const uint64_t* h_batch_id = nullptr;
+    uint64_t rx_timestamp_ns = 0;
+    bool rx_timestamp_ns_valid = false;
     bool released = false;
   };
 
@@ -286,6 +298,8 @@ class DpdkMgr : public Manager {
                                      uint64_t batch_id,
                                      bool batch_id_ready,
                                      const uint64_t* h_batch_id,
+                                     uint64_t rx_timestamp_ns,
+                                     bool rx_timestamp_ns_valid,
                                      cudaEvent_t event,
                                      bool timeout_flush,
                                      BurstParams** out_burst);
@@ -319,8 +333,10 @@ class DpdkMgr : public Manager {
   std::unordered_map<uint32_t, ReorderQueueState> reorder_queue_states_;
   std::mutex reorder_lock_;
   std::array<DropTrafficConfig, RTE_MAX_ETHPORTS> drop_all_traffic_flow;
-  uint64_t timestamp_mask_{0};
-  uint64_t timestamp_offset_{0};
+  int timestamp_dynfield_offset_{-1};
+  uint64_t rx_timestamp_dynflag_mask_{0};
+  uint64_t tx_timestamp_dynflag_mask_{0};
+  std::array<RxTimestampConversion, RTE_MAX_ETHPORTS> rx_timestamp_conversions_{};
   std::array<struct rte_eth_conf, MAX_INTERFACES> local_port_conf;
   DpdkStats stats_;
   struct rte_ring* loopback_ring;

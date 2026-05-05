@@ -160,6 +160,25 @@ uint32_t get_packet_length(BurstParams* burst, int idx);
 uint16_t get_packet_flow_id(BurstParams* burst, int idx);
 
 /**
+ * @brief Get the hardware RX timestamp of a packet in nanoseconds
+ *
+ * Retrieves the 64-bit receive timestamp for a packet when the DPDK backend
+ * was configured with rx.hardware_timestamps enabled and the NIC provided a
+ * timestamp for this packet. The value is converted to nanoseconds in the NIC
+ * timestamp clock domain; it is not converted to wall-clock or PTP time.
+ *
+ * @param burst Burst structure containing packets
+ * @param idx Index of packet
+ * @param timestamp_ns Output pointer for the RX timestamp in nanoseconds
+ * @return Status indicating status. Valid values are:
+ *    SUCCESS: Timestamp retrieved
+ *    NULL_PTR: Burst or output pointer is null
+ *    INVALID_PARAMETER: Packet index is out of range
+ *    NOT_SUPPORTED: Timestamp is unavailable for this packet/backend
+ */
+Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns);
+
+/**
  * @brief Populate a TX packet burst buffer
  *
  * Populates a transmit packet burst buffer with allocated packets. The user can take these
@@ -913,6 +932,10 @@ struct YAML::convert<daqiri::NetworkConfig> {
             try {
               rx_cfg.flow_isolation_ = rx["flow_isolation"].as<bool>();
             } catch (const std::exception& e) { rx_cfg.flow_isolation_ = false; }
+
+            try {
+              rx_cfg.hardware_timestamps_ = rx["hardware_timestamps"].as<bool>();
+            } catch (const std::exception& e) { rx_cfg.hardware_timestamps_ = false; }
 
             for (const auto& q_item : rx["queues"]) {
               daqiri::RxQueueConfig q;

@@ -107,6 +107,11 @@ uint16_t get_packet_flow_id(BurstParams* burst, int idx) {
   return g_daqiri_mgr->get_packet_flow_id(burst, idx);
 }
 
+Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) {
+  ASSERT_DAQIRI_MGR_INITIALIZED();
+  return g_daqiri_mgr->get_packet_rx_timestamp(burst, idx, timestamp_ns);
+}
+
 uint64_t get_burst_tot_byte(BurstParams* burst) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->get_burst_tot_byte(burst);

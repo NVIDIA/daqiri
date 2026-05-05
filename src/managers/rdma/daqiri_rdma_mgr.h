@@ -100,6 +100,12 @@ class RdmaMgr : public Manager {
   void* get_packet_ptr(BurstParams* burst, int idx) override;
   uint32_t get_packet_length(BurstParams* burst, int idx) override;
   uint16_t get_packet_flow_id(BurstParams* burst, int idx) override { return 0; }
+  Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) override {
+    (void)burst;
+    (void)idx;
+    (void)timestamp_ns;
+    return Status::NOT_SUPPORTED;
+  }
   void* get_packet_extra_info(BurstParams* burst, int idx) override { return nullptr; }
   void* get_segment_packet_ptr(BurstParams* burst, int seg, int idx) override;
   uint32_t get_segment_packet_length(BurstParams* burst, int seg, int idx) override;
