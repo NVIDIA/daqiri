@@ -22,7 +22,7 @@ find_package(yaml-cpp QUIET)
 enable_language(CUDA)
 
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --diag-suppress 1217")
-set(CMAKE_CUDA_ARCHITECTURES "80;90")
+set(CMAKE_CUDA_ARCHITECTURES "80;90;121")
 
 add_compile_definitions(ALLOW_EXPERIMENTAL_API)
 add_compile_definitions(DOCA_ALLOW_EXPERIMENTAL_API)
