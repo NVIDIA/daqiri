@@ -96,7 +96,7 @@ Then build the DAQIRI library:
 | `DAQIRI_BUILD_EXAMPLES` | `ON` | Build benchmark executables. |
 | `BUILD_SHARED_LIBS` | — | Build as shared library. |
 
-CUDA architectures are hardcoded to `80;90` (A100, H100) in `src/CMakeLists.txt`.
+CUDA architectures are hardcoded to `80;90;121` (A100, H100, GB10) in `src/CMakeLists.txt`.
 
 ## Next Steps
 
