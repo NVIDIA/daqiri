@@ -57,10 +57,8 @@ and their `kind` determines the receive mode (CPU-only, header-data split, or ba
 - **`num_bufs`**: Number of buffers in this region. Higher values give more processing
   headroom but consume more memory (GPU BAR1 for `device`). Too low risks dropped packets
   on RX or higher latency on TX. Rule of thumb: 3x-5x `batch_size`. For the DPDK
-  backend, `num_bufs` must additionally be at least 1.5x the NIC descriptor ring size
-  (12288 with the default 8192 descriptors); smaller pools deadlock the worker once the
-  ring fills, so `daqiri_init` auto-bumps any below-threshold MR to 3x the ring size
-  (24576) and emits a `WARN` naming the MR, the requested value, and the adjusted value.
+  backend, `num_bufs` below 1.5x the NIC ring size deadlocks the worker; `daqiri_init`
+  auto-bumps such MRs to 3x the ring (24576 with the default 8192) and logs a `WARN`.
   - type: `integer`
 - **`buf_size`**: Size of each buffer in bytes. Should match the expected packet size, or
   the segment size when using header-data split.
