@@ -1875,9 +1875,12 @@ void DpdkMgr::initialize() {
         const auto& mr = cfg_.mrs_[q.common_.mrs_[mr_num]];
 
         if (loopback_ != LoopbackType::LOOPBACK_TYPE_SW) {  // Loopback needs no RX pools
-          if (mr.num_bufs_ < default_num_rx_desc) {
-            DAQIRI_LOG_CRITICAL("Must have at least {} buffers in each RX MR",
-                                  default_num_rx_desc);
+          const uint32_t min_required = (default_num_rx_desc * 3) / 2;  // 1.5x ring size
+          if (mr.num_bufs_ < min_required) {
+            DAQIRI_LOG_CRITICAL(
+                "RX MR '{}' has num_bufs={} but at least {} required (1.5x the {} RX descriptors). "
+                "Smaller pools deadlock the worker once the ring fills.",
+                mr.name_, mr.num_bufs_, min_required, default_num_rx_desc);
               return;
           }
 
@@ -1966,8 +1969,12 @@ void DpdkMgr::initialize() {
         std::string pool_name = std::string("TXP") + append;
         const auto& mr = cfg_.mrs_[q.common_.mrs_[mr_num]];
 
-        if (mr.num_bufs_ < default_num_tx_desc) {
-          DAQIRI_LOG_CRITICAL("Must have at least {} buffers in each TX MR", default_num_tx_desc);
+        const uint32_t min_required = (default_num_tx_desc * 3) / 2;  // 1.5x ring size
+        if (mr.num_bufs_ < min_required) {
+          DAQIRI_LOG_CRITICAL(
+              "TX MR '{}' has num_bufs={} but at least {} required (1.5x the {} TX descriptors). "
+              "Smaller pools deadlock the worker once the ring fills.",
+              mr.name_, mr.num_bufs_, min_required, default_num_tx_desc);
           return;
         }
 
