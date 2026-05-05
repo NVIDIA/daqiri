@@ -56,7 +56,10 @@ and their `kind` determines the receive mode (CPU-only, header-data split, or ba
   - values: `local`, `rdma_read`, `rdma_write`
 - **`num_bufs`**: Number of buffers in this region. Higher values give more processing
   headroom but consume more memory (GPU BAR1 for `device`). Too low risks dropped packets
-  on RX or higher latency on TX. Rule of thumb: at least 3x `batch_size`.
+  on RX or higher latency on TX. Rule of thumb: 3x-5x `batch_size`. For the DPDK
+  backend, `num_bufs` must additionally be at least 1.5x the NIC descriptor ring size
+  (12288 with the default 8192 descriptors); smaller pools deadlock the worker once the
+  ring fills, and `daqiri_init` rejects them at startup.
   - type: `integer`
 - **`buf_size`**: Size of each buffer in bytes. Should match the expected packet size, or
   the segment size when using header-data split.
