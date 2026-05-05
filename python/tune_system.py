@@ -96,6 +96,32 @@ def parse_args():
     return parser.parse_args()
 
 
+def is_any_integrated_gpu():
+    """
+    Returns True if any visible CUDA device reports CU_DEVICE_ATTRIBUTE_INTEGRATED == 1.
+    Integrated GPUs (e.g. NVIDIA GB10 / DGX Spark) share memory with the CPU and
+    several discrete-GPU tuning checks (peermem, GPUDirect-RDMA-supported,
+    PIX/PXB topology, BAR1 size) do not apply to them.
+    """
+    try:
+        libcuda = CDLL("libcuda.so")
+        if libcuda.cuInit(0) != 0:
+            return False
+        cuDevAttrIntegrated = 18  # CU_DEVICE_ATTRIBUTE_INTEGRATED
+        count = c_int()
+        libcuda.cuDeviceGetCount(byref(count))
+        for i in range(count.value):
+            dev = c_int()
+            libcuda.cuDeviceGet(byref(dev), i)
+            flag = c_int()
+            libcuda.cuDeviceGetAttribute(byref(flag), cuDevAttrIntegrated, dev)
+            if flag.value == 1:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def check_peermem_kernel():
     """
     Check if the nvidia-peermem module for GPUDirect is loaded in the kernel.
@@ -111,6 +137,12 @@ def check_peermem_kernel():
 
         if bool(result.stdout.strip()):
             logging.info("nvidia-peermem module is loaded.")
+        elif is_any_integrated_gpu():
+            logging.info(
+                "nvidia-peermem module is not loaded, but the platform has an integrated GPU "
+                "(e.g. GB10 / DGX Spark) where peermem does not apply. Use kind: host_pinned "
+                "in the daqiri YAML for GPUDirect on this platform."
+            )
         else:
             logging.warning("nvidia-peermem module is not loaded. GPUDirect may not work.")
 
@@ -127,6 +159,7 @@ def check_gpudirect_support():
     libcuda = CDLL("libcuda.so")
 
     cudaDevAttrGPUDirectRDMASupported = 116
+    cuDevAttrIntegrated = 18
 
     result = libcuda.cuInit(0)
     if result != 0:
@@ -145,8 +178,17 @@ def check_gpudirect_support():
         supported = c_int()
         libcuda.cuDeviceGetAttribute(byref(supported), cudaDevAttrGPUDirectRDMASupported, device)
 
+        integrated = c_int()
+        libcuda.cuDeviceGetAttribute(byref(integrated), cuDevAttrIntegrated, device)
+
         if bool(supported.value):
             logging.info(f"GPU {i}: {name.value.decode()} has GPUDirect support.")
+        elif bool(integrated.value):
+            logging.info(
+                f"GPU {i}: {name.value.decode()} is integrated (unified memory). "
+                "GPUDirect-RDMA-supported reported as 0 is expected on this platform; "
+                "use kind: host_pinned in the daqiri YAML."
+            )
         else:
             logging.warning(f"GPU {i}: {name.value.decode()} does not have GPUDirect support.")
 
@@ -491,6 +533,12 @@ def check_bar1_size():
     Checks the BAR1 size of all NVIDIA GPUs using nvidia-smi.
     Logs the BAR1 size for each GPU and ensures it is non-zero.
     """
+    if is_any_integrated_gpu():
+        logging.info(
+            "BAR1 size check skipped: integrated GPU detected (unified memory). "
+            "There is no resizable BAR1 to enlarge on platforms like GB10 / DGX Spark."
+        )
+        return
     try:
         # Run nvidia-smi to get BAR1 memory information
         result = subprocess.run(
@@ -544,6 +592,13 @@ def check_topology_connections():
     Executes `nvidia-smi topo -m`, parses its output, and ensures that every GPU has at least one PIX or PXB connection to a NIC.
     If not, logs an error specifying the GPU, NIC, and the actual connection type.
     """
+    if is_any_integrated_gpu():
+        logging.info(
+            "Skipping PIX/PXB topology requirement: integrated GPU detected. "
+            "On single-SoC unified-memory platforms (e.g. GB10 / DGX Spark) there is "
+            "no separable PCIe path GPU↔NIC to optimize."
+        )
+        return
     try:
         # Run nvidia-smi topo -m to get topology information
         result = subprocess.run(
@@ -682,7 +737,9 @@ def check_mtu_size():
 def update_mrrs_for_nvidia_devices():
     """
     Updates the PCIe Maximum Read Request Size (MRRS) to 4096 for all Mellanox devices,
-    preserving the lower 12 bits of the current setting.
+    preserving the lower 12 bits of the current setting. Reads back after the write
+    so a silently-failing setpci (e.g. Secure Boot lockdown) is reported as an error
+    rather than misreported as a success.
     """
     try:
         nic_info = get_nic_info()
@@ -706,9 +763,25 @@ def update_mrrs_for_nvidia_devices():
 
                 # Write the new MRRS value back
                 subprocess.run(["setpci", "-s", pci_address, f"68.w={new_value:04x}"], check=True)
-                logging.info(
-                    f"Successfully updated MRRS to 4096 for device at PCIe address {pci_address}={hex(new_value)}."
+
+                # Read back to verify the write actually landed.
+                verify_result = subprocess.run(
+                    ["setpci", "-s", pci_address, "68.w"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
                 )
+                verified_value = int(verify_result.stdout.strip(), 16)
+                if (verified_value & 0xF000) >> 12 == 5:
+                    logging.info(
+                        f"Successfully updated MRRS to 4096 for device at PCIe address {pci_address}={hex(verified_value)}."
+                    )
+                else:
+                    logging.error(
+                        f"MRRS write to {pci_address} did not take effect (read back {hex(verified_value)}). "
+                        "Most common cause: kernel lockdown from Secure Boot blocks setpci writes "
+                        "silently. Disable Secure Boot in firmware and retry."
+                    )
             except subprocess.CalledProcessError as e:
                 logging.error(
                     f"Failed to update MRRS for device at PCIe address {pci_address}: {e}"
