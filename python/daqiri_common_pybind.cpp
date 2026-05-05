@@ -606,6 +606,7 @@ void bind_config_types(py::module_ &m) {
   py::class_<RxConfig>(m, "RxConfig")
       .def(py::init<>())
       .def_readwrite("flow_isolation", &RxConfig::flow_isolation_)
+      .def_readwrite("hardware_timestamps", &RxConfig::hardware_timestamps_)
       .def_readwrite("queues", &RxConfig::queues_)
       .def_readwrite("flows", &RxConfig::flows_)
       .def_readwrite("flex_items", &RxConfig::flex_items_)
@@ -747,6 +748,16 @@ PYBIND11_MODULE(_daqiri, m) {
         "seg"_a, "idx"_a);
   m.def("get_packet_length", &get_packet_length, "burst"_a, "idx"_a);
   m.def("get_packet_flow_id", &get_packet_flow_id, "burst"_a, "idx"_a);
+  m.def(
+      "get_packet_rx_timestamp",
+      [](BurstParams *burst, int idx) {
+        uint64_t timestamp_ns = 0;
+        const Status status =
+            get_packet_rx_timestamp(burst, idx, &timestamp_ns);
+        return py::make_tuple(status, timestamp_ns);
+      },
+      "burst"_a, "idx"_a,
+      "Return (Status, RX timestamp nanoseconds) for a packet");
   m.def("get_burst_tot_byte", &get_burst_tot_byte, "burst"_a);
 
   m.def("copy_buffer_to_segment_packet", &copy_buffer_to_segment_packet_impl,

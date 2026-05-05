@@ -202,6 +202,13 @@ uint16_t SocketMgr::get_packet_flow_id(BurstParams* burst, int idx) {
   return 0;
 }
 
+Status SocketMgr::get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) {
+  (void)burst;
+  (void)idx;
+  (void)timestamp_ns;
+  return Status::NOT_SUPPORTED;
+}
+
 void* SocketMgr::get_packet_extra_info(BurstParams* burst, int idx) {
   return nullptr;
 }

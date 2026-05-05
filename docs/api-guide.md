@@ -13,7 +13,7 @@ grouped together for efficient transfer between the NIC and the application.
 `BurstParams` provides:
 - Pointers to packet buffers (CPU or GPU memory)
 - Packet metadata: packet count, port/queue IDs, segment count, byte totals
-- Per-packet lengths and flow IDs
+- Per-packet lengths, flow IDs, and optional RX hardware timestamps
 
 Interact with `BurstParams` only through the helper functions described below — the
 internal layout is opaque.
@@ -138,9 +138,22 @@ for (int i = 0; i < daqiri::get_num_packets(burst); i++) {
     void *pkt = daqiri::get_packet_ptr(burst, i);
     uint32_t len = daqiri::get_packet_length(burst, i);
     uint16_t flow = daqiri::get_packet_flow_id(burst, i);
+    uint64_t rx_ts_ns = 0;
+    if (daqiri::get_packet_rx_timestamp(burst, i, &rx_ts_ns) == daqiri::Status::SUCCESS) {
+        // rx_ts_ns is in the NIC timestamp clock domain.
+    }
     // process packet...
 }
 ```
+
+RX hardware timestamps are available only when the DPDK backend is configured with
+`rx.hardware_timestamps: true` and the NIC supports `RTE_ETH_RX_OFFLOAD_TIMESTAMP`.
+DAQIRI converts the NIC timestamp counter to nanoseconds internally using DPDK's
+matching device clock when available, or the PMD's nanosecond timestamp format when
+the driver already supplies nanoseconds. DAQIRI does not expose NIC clock reads or
+convert timestamps to wall-clock time. For reordered aggregate bursts,
+`get_packet_rx_timestamp(burst, 0, &ts)` returns the timestamp of the first source
+packet accepted into the aggregate.
 
 For header-data split (two segments):
 

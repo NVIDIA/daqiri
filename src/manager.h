@@ -48,6 +48,7 @@ class Manager {
   virtual void* get_segment_packet_ptr(BurstParams* burst, int seg, int idx) = 0;
   virtual uint32_t get_segment_packet_length(BurstParams* burst, int seg, int idx) = 0;
   virtual uint16_t get_packet_flow_id(BurstParams* burst, int idx) = 0;
+  virtual Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) = 0;
   virtual void* get_packet_extra_info(BurstParams* burst, int idx) = 0;
   virtual Status get_tx_packet_burst(BurstParams* burst) = 0;
   virtual Status set_eth_header(BurstParams* burst, int idx, char* dst_addr) = 0;

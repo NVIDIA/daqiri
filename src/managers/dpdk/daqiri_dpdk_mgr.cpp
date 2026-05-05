@@ -36,6 +36,8 @@
 #include <memory>
 #include <utility>
 
+#include <rte_mbuf_dyn.h>
+
 #include "src/dpdk_log.h"
 #include "daqiri_dpdk_mgr.h"
 #include "src/kernels.h"
@@ -233,6 +235,10 @@ struct RxWorkerParams {
   uint64_t timeout_us;
   uint32_t batch_size;
   int rx_meta_pool_size;
+  bool hardware_timestamps;
+  int timestamp_offset;
+  uint64_t timestamp_mask;
+  RxTimestampConversion timestamp_conversion;
   struct rte_ring* ring;
   struct rte_ring* lb_ring;
   struct rte_mempool* flowid_pool;
@@ -248,6 +254,10 @@ struct RxWorkerMultiQPerQParams {
   int num_segs;
   int batch_size;
   uint64_t timeout_us;
+  bool hardware_timestamps;
+  int timestamp_offset;
+  uint64_t timestamp_mask;
+  RxTimestampConversion timestamp_conversion;
   struct rte_ring* ring;
   struct rte_ring* lb_ring;
 };
@@ -275,7 +285,32 @@ struct UDPPkt {
 
 struct ExtraRxPacketInfo {
   uint16_t flow_id;
+  uint64_t rx_timestamp_ns;
+  bool rx_timestamp_ns_valid;
 };
+
+static inline uint64_t convert_rx_timestamp_ticks_to_ns(uint64_t timestamp,
+                                                        const RxTimestampConversion& conversion) {
+  if (!conversion.valid || conversion.ticks_per_second == 0) { return 0; }
+  const auto ns = (static_cast<unsigned __int128>(timestamp) * 1000000000ULL) /
+                  conversion.ticks_per_second;
+  return static_cast<uint64_t>(ns);
+}
+
+static inline bool extract_mbuf_rx_timestamp_ns(struct rte_mbuf* mbuf,
+                                                int timestamp_offset,
+                                                uint64_t timestamp_mask,
+                                                const RxTimestampConversion& conversion,
+                                                uint64_t* timestamp_ns) {
+  if (mbuf == nullptr || timestamp_ns == nullptr || timestamp_offset < 0 || timestamp_mask == 0) {
+    return false;
+  }
+  if (!conversion.valid || conversion.ticks_per_second == 0) { return false; }
+  if ((mbuf->ol_flags & timestamp_mask) == 0) { return false; }
+  const uint64_t timestamp_ticks = *RTE_MBUF_DYNFIELD(mbuf, timestamp_offset, uint64_t*);
+  *timestamp_ns = convert_rx_timestamp_ticks_to_ns(timestamp_ticks, conversion);
+  return true;
+}
 
 bool DpdkMgr::init_reorder_queue_state(const InterfaceConfig& intf, const RxQueueConfig& qcfg) {
   if (intf.rx_.reorder_configs_.empty()) { return true; }
@@ -702,6 +737,8 @@ void DpdkMgr::cleanup_reorder_state() {
                               static_cast<unsigned int>(plan.direct_arrival_batch.packet_count));
       }
       plan.direct_arrival_batch.first_packet_cycles = 0;
+      plan.direct_arrival_batch.first_packet_rx_timestamp_ns = 0;
+      plan.direct_arrival_batch.first_packet_rx_timestamp_ns_valid = false;
       plan.direct_arrival_batch.input_payload_len = 0;
       plan.direct_arrival_batch.payload_len = 0;
       plan.direct_arrival_batch.packet_count = 0;
@@ -891,6 +928,13 @@ Status DpdkMgr::append_reorder_packet(ReorderPlanRuntime& plan,
 
   if (packet_idx == 0) {
     batch.first_packet_cycles = now_cycles;
+    batch.first_packet_rx_timestamp_ns = 0;
+    batch.first_packet_rx_timestamp_ns_valid =
+        extract_mbuf_rx_timestamp_ns(mbuf,
+                                     timestamp_dynfield_offset_,
+                                     rx_timestamp_dynflag_mask_,
+                                     rx_timestamp_conversions_[plan.port_id],
+                                     &batch.first_packet_rx_timestamp_ns);
     const uint32_t pkt_len = mbuf != nullptr ? mbuf->pkt_len : 0U;
     uint32_t copy_len = 0;
     if (pkt_len > plan.payload_byte_offset) { copy_len = pkt_len - plan.payload_byte_offset; }
@@ -904,6 +948,8 @@ Status DpdkMgr::append_reorder_packet(ReorderPlanRuntime& plan,
           reorder_data_type_to_string(plan.input_data_type),
           reorder_data_type_to_string(plan.output_data_type));
       batch.first_packet_cycles = 0;
+      batch.first_packet_rx_timestamp_ns = 0;
+      batch.first_packet_rx_timestamp_ns_valid = false;
       batch.input_payload_len = 0;
       batch.payload_len = 0;
       return Status::INVALID_PARAMETER;
@@ -927,6 +973,8 @@ Status DpdkMgr::create_reorder_output_burst(ReorderPlanRuntime& plan,
                                             uint64_t batch_id,
                                             bool batch_id_ready,
                                             const uint64_t* h_batch_id,
+                                            uint64_t rx_timestamp_ns,
+                                            bool rx_timestamp_ns_valid,
                                             cudaEvent_t event,
                                             bool timeout_flush,
                                             BurstParams** out_burst) {
@@ -958,6 +1006,8 @@ Status DpdkMgr::create_reorder_output_burst(ReorderPlanRuntime& plan,
   ctx->info.aggregate_len = aggregate_len;
   ctx->info.burst_flags = burst->hdr.hdr.burst_flags;
   ctx->h_batch_id = batch_id_ready ? nullptr : h_batch_id;
+  ctx->rx_timestamp_ns = rx_timestamp_ns;
+  ctx->rx_timestamp_ns_valid = rx_timestamp_ns_valid;
   static_assert(sizeof(ReorderBurstInfo)
                 <= ADV_NETWORK_HEADER_SIZE_BYTES - sizeof(void*) - sizeof(BurstHeaderParams),
                 "ReorderBurstInfo must fit in BurstHeader::custom_burst_data");
@@ -987,6 +1037,8 @@ Status DpdkMgr::flush_reorder_batch(ReorderPlanRuntime& plan,
 
   if (batch->packet_count == 0) {
     batch->first_packet_cycles = 0;
+    batch->first_packet_rx_timestamp_ns = 0;
+    batch->first_packet_rx_timestamp_ns_valid = false;
     batch->input_payload_len = 0;
     batch->payload_len = 0;
     return Status::SUCCESS;
@@ -1148,6 +1200,8 @@ Status DpdkMgr::flush_reorder_batch(ReorderPlanRuntime& plan,
                                        output_batch_id,
                                        output_batch_id_ready,
                                        output_batch_id_host,
+                                       batch->first_packet_rx_timestamp_ns,
+                                       batch->first_packet_rx_timestamp_ns_valid,
                                        copy_done,
                                        timeout_flush,
                                        out_burst);
@@ -1166,6 +1220,8 @@ Status DpdkMgr::flush_reorder_batch(ReorderPlanRuntime& plan,
   }
 
   batch->first_packet_cycles = 0;
+  batch->first_packet_rx_timestamp_ns = 0;
+  batch->first_packet_rx_timestamp_ns_valid = false;
   batch->input_payload_len = 0;
   batch->payload_len = 0;
   batch->packet_count = 0;
@@ -1544,38 +1600,135 @@ void DpdkMgr::adjust_memory_regions() {
 }
 
 
-void DpdkMgr::setup_accurate_send_scheduling_mask() {
+bool DpdkMgr::setup_rx_timestamp_dynfield() {
   static bool done = false;
-  if (done) { return; }
+  static int registered_offset = -1;
+  static uint64_t registered_mask = 0;
 
-  static const rte_mbuf_dynfield dynfield_desc = {
-      RTE_MBUF_DYNFIELD_TIMESTAMP_NAME,
-      sizeof(uint64_t),
-      .align = __alignof__(uint64_t),
-  };
-
-  static const rte_mbuf_dynflag dynflag_desc = {
-      RTE_MBUF_DYNFLAG_TX_TIMESTAMP_NAME,
-  };
-
-  timestamp_offset_ = rte_mbuf_dynfield_register(&dynfield_desc);
-  if (timestamp_offset_ < 0) {
-    DAQIRI_LOG_CRITICAL(
-        "{} registration error: {}", RTE_MBUF_DYNFIELD_TIMESTAMP_NAME, rte_strerror(rte_errno));
-    return;
+  if (!done) {
+    if (rte_mbuf_dyn_rx_timestamp_register(&registered_offset, &registered_mask) < 0) {
+      DAQIRI_LOG_CRITICAL("RX timestamp dynamic field registration error: {}",
+                          rte_strerror(rte_errno));
+      return false;
+    }
+    done = true;
   }
 
-  int32_t dynflag_bitnum = rte_mbuf_dynflag_register(&dynflag_desc);
-  if (dynflag_bitnum == -1) {
-    DAQIRI_LOG_CRITICAL(
-        "{} registration error: {}", RTE_MBUF_DYNFLAG_TX_TIMESTAMP_NAME, rte_strerror(rte_errno));
-    return;
+  if (timestamp_dynfield_offset_ >= 0 && timestamp_dynfield_offset_ != registered_offset) {
+    DAQIRI_LOG_CRITICAL("RX timestamp field offset {} does not match existing offset {}",
+                        registered_offset,
+                        timestamp_dynfield_offset_);
+    return false;
   }
 
-  auto dynflag_shift = static_cast<uint8_t>(dynflag_bitnum);
-  timestamp_mask_ = 1ULL << dynflag_shift;
-  DAQIRI_LOG_INFO("Done setting up accurate send scheduling with mask {:x}", timestamp_mask_);
-  done = true;
+  timestamp_dynfield_offset_ = registered_offset;
+  rx_timestamp_dynflag_mask_ = registered_mask;
+  DAQIRI_LOG_INFO("Done setting up RX timestamping with mask {:x}", rx_timestamp_dynflag_mask_);
+  return true;
+}
+
+bool DpdkMgr::calibrate_rx_timestamp_clock(uint16_t port_id) {
+  uint64_t start_clock = 0;
+  int ret = rte_eth_read_clock(port_id, &start_clock);
+  if (ret < 0) {
+    rte_eth_dev_info dev_info{};
+    const int info_ret = rte_eth_dev_info_get(port_id, &dev_info);
+    const std::string driver_name =
+        (info_ret == 0 && dev_info.driver_name != nullptr) ? dev_info.driver_name : "";
+    if (ret == -ENOTSUP && driver_name.find("mlx5") != std::string::npos) {
+      rx_timestamp_conversions_[port_id].valid = true;
+      rx_timestamp_conversions_[port_id].ticks_per_second = 1000000000ULL;
+      DAQIRI_LOG_WARN(
+          "rte_eth_read_clock() is not supported on mlx5 port {}; treating PMD-provided "
+          "RX hardware timestamps as nanoseconds",
+          port_id);
+      return true;
+    }
+
+    DAQIRI_LOG_CRITICAL(
+        "RX hardware timestamps require rte_eth_read_clock() for nanosecond conversion, "
+        "but port {} returned err={} ({})",
+        port_id,
+        ret,
+        rte_strerror(-ret));
+    return false;
+  }
+
+  const auto start_time = std::chrono::steady_clock::now();
+  rte_delay_us_block(100000);
+
+  uint64_t end_clock = 0;
+  ret = rte_eth_read_clock(port_id, &end_clock);
+  if (ret < 0) {
+    DAQIRI_LOG_CRITICAL(
+        "RX hardware timestamp clock calibration failed on port {}: err={} ({})",
+        port_id,
+        ret,
+        rte_strerror(-ret));
+    return false;
+  }
+
+  const auto elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                              std::chrono::steady_clock::now() - start_time)
+                              .count();
+  if (elapsed_ns <= 0 || end_clock <= start_clock) {
+    DAQIRI_LOG_CRITICAL(
+        "RX hardware timestamp clock calibration produced an invalid sample on port {} "
+        "(start={}, end={}, elapsed_ns={})",
+        port_id,
+        start_clock,
+        end_clock,
+        elapsed_ns);
+    return false;
+  }
+
+  const uint64_t delta_ticks = end_clock - start_clock;
+  const auto ticks_per_second =
+      (static_cast<unsigned __int128>(delta_ticks) * 1000000000ULL +
+       static_cast<uint64_t>(elapsed_ns / 2)) /
+      static_cast<uint64_t>(elapsed_ns);
+  if (ticks_per_second == 0 ||
+      ticks_per_second > static_cast<unsigned __int128>(std::numeric_limits<uint64_t>::max())) {
+    DAQIRI_LOG_CRITICAL(
+        "RX hardware timestamp clock calibration produced an invalid frequency on port {}",
+        port_id);
+    return false;
+  }
+
+  rx_timestamp_conversions_[port_id].valid = true;
+  rx_timestamp_conversions_[port_id].ticks_per_second = static_cast<uint64_t>(ticks_per_second);
+  DAQIRI_LOG_INFO("Calibrated RX timestamp clock for port {} at {} ticks/second",
+                  port_id,
+                  rx_timestamp_conversions_[port_id].ticks_per_second);
+  return true;
+}
+
+bool DpdkMgr::setup_tx_timestamp_dynfield() {
+  static bool done = false;
+  static int registered_offset = -1;
+  static uint64_t registered_mask = 0;
+
+  if (!done) {
+    if (rte_mbuf_dyn_tx_timestamp_register(&registered_offset, &registered_mask) < 0) {
+      DAQIRI_LOG_CRITICAL("TX timestamp dynamic field registration error: {}",
+                          rte_strerror(rte_errno));
+      return false;
+    }
+    done = true;
+  }
+
+  if (timestamp_dynfield_offset_ >= 0 && timestamp_dynfield_offset_ != registered_offset) {
+    DAQIRI_LOG_CRITICAL("TX timestamp field offset {} does not match existing offset {}",
+                        registered_offset,
+                        timestamp_dynfield_offset_);
+    return false;
+  }
+
+  timestamp_dynfield_offset_ = registered_offset;
+  tx_timestamp_dynflag_mask_ = registered_mask;
+  DAQIRI_LOG_INFO("Done setting up accurate send scheduling with mask {:x}",
+                  tx_timestamp_dynflag_mask_);
+  return true;
 }
 
 
@@ -1920,6 +2073,9 @@ void DpdkMgr::initialize() {
 
         q_backend->rxconf_qsplit.offloads =
             RTE_ETH_RX_OFFLOAD_SCATTER | RTE_ETH_RX_OFFLOAD_BUFFER_SPLIT;
+        if (rx.hardware_timestamps_) {
+          q_backend->rxconf_qsplit.offloads |= RTE_ETH_RX_OFFLOAD_TIMESTAMP;
+        }
         q_backend->rxconf_qsplit.rx_nseg = q.common_.mrs_.size();
 
         q_backend->rx_useg.resize(q.common_.mrs_.size());
@@ -1946,6 +2102,26 @@ void DpdkMgr::initialize() {
     }
 
     local_port_conf[intf.port_id_].rxmode.offloads |= RTE_ETH_RX_OFFLOAD_CHECKSUM;
+
+    if (rx.hardware_timestamps_) {
+      if (loopback_ == LoopbackType::LOOPBACK_TYPE_SW) {
+        DAQIRI_LOG_CRITICAL(
+            "RX hardware timestamps are enabled for interface '{}', but software loopback "
+            "does not support hardware timestamping",
+            intf.name_);
+        return;
+      }
+      if ((dev_info.rx_offload_capa & RTE_ETH_RX_OFFLOAD_TIMESTAMP) == 0) {
+        DAQIRI_LOG_CRITICAL(
+            "RX hardware timestamps are enabled for interface '{}', but port {} does not "
+            "support RTE_ETH_RX_OFFLOAD_TIMESTAMP",
+            intf.name_,
+            intf.port_id_);
+        return;
+      }
+      if (!setup_rx_timestamp_dynfield()) { return; }
+      local_port_conf[intf.port_id_].rxmode.offloads |= RTE_ETH_RX_OFFLOAD_TIMESTAMP;
+    }
 
     // TX now
     // For now make a single queue. Support more sophisticated TX on next release
@@ -2033,18 +2209,18 @@ void DpdkMgr::initialize() {
     }
 
     if (loopback_ != LoopbackType::LOOPBACK_TYPE_SW && tx.accurate_send_) {
-      setup_accurate_send_scheduling_mask();
+      if (!setup_tx_timestamp_dynfield()) { return; }
 
       if (ret != 0) {
         DAQIRI_LOG_CRITICAL("Failed to get device info for port {}", intf.port_id_);
         return;
       } else {
-        if ((dev_info.tx_offload_capa & RTE_ETH_RX_OFFLOAD_TIMESTAMP) == 0) {
+        if ((dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP) == 0) {
           DAQIRI_LOG_CRITICAL(
               "Accurate send scheduling enabled in config, but not supported by NIC!");
           return;
         } else {
-          local_port_conf[intf.port_id_].txmode.offloads |= RTE_ETH_RX_OFFLOAD_TIMESTAMP;
+          local_port_conf[intf.port_id_].txmode.offloads |= RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP;
         }
       }
     }
@@ -2185,6 +2361,8 @@ void DpdkMgr::initialize() {
                         conf_ports_eth_addr[intf.port_id_].addr_bytes[3],
                         conf_ports_eth_addr[intf.port_id_].addr_bytes[4],
                         conf_ports_eth_addr[intf.port_id_].addr_bytes[5]);
+
+      if (rx.hardware_timestamps_ && !calibrate_rx_timestamp_clock(intf.port_id_)) { return; }
 
       // Start flows
       int flow_num = 0;
@@ -3180,6 +3358,13 @@ void DpdkMgr::run() {
   int icore;
 
   DAQIRI_LOG_INFO("Starting DAQIRI workers");
+  const auto hardware_timestamps_enabled = [this](uint16_t port_id) {
+    for (const auto& intf : cfg_.ifs_) {
+      if (intf.port_id_ == port_id) { return intf.rx_.hardware_timestamps_; }
+    }
+    return false;
+  };
+
   // determine the correct process types for input/output
   int (*rx_worker)(void*);
   int (*tx_worker)(void*);
@@ -3220,6 +3405,10 @@ void DpdkMgr::run() {
       params->batch_size = q->common_.batch_size_;
       params->timeout_us = q->timeout_us_;
       params->rx_meta_pool_size = cfg_.rx_meta_buffers_;
+      params->hardware_timestamps = hardware_timestamps_enabled(port_id);
+      params->timestamp_offset = timestamp_dynfield_offset_;
+      params->timestamp_mask = rx_timestamp_dynflag_mask_;
+      params->timestamp_conversion = rx_timestamp_conversions_[port_id];
       rte_eal_remote_launch(
         rx_worker, (void*)params, strtol(q->common_.cpu_core_.c_str(), NULL, 10));
     } else {
@@ -3236,8 +3425,17 @@ void DpdkMgr::run() {
         const auto &q    = rx_cfg_q_map_[key];
         struct rte_ring* ring_ptr = rx_rings[key];
 
-        params->q_params.push_back({port_id, q_id,
-                    (int)q->common_.mrs_.size(), q->common_.batch_size_, q->timeout_us_, ring_ptr});
+        params->q_params.push_back({port_id,
+                                    q_id,
+                                    (int)q->common_.mrs_.size(),
+                                    q->common_.batch_size_,
+                                    q->timeout_us_,
+                                    hardware_timestamps_enabled(port_id),
+                                    timestamp_dynfield_offset_,
+                                    rx_timestamp_dynflag_mask_,
+                                    rx_timestamp_conversions_[port_id],
+                                    ring_ptr,
+                                    nullptr});
       }
 
       params->rx_burst_pool = rx_burst_buffer;
@@ -3448,14 +3646,23 @@ int DpdkMgr::rx_core_multi_q_worker(void* arg) {
                   &mbuf_arr[cur_idx][cur_pkt_in_batch[cur_idx]], sizeof(rte_mbuf*) * to_copy);
 
     ExtraRxPacketInfo* pkt_info =
-                          reinterpret_cast<ExtraRxPacketInfo*>(bursts[cur_idx]->pkt_extra_info);
+                              reinterpret_cast<ExtraRxPacketInfo*>(bursts[cur_idx]->pkt_extra_info);
     for (int p = 0; p < to_copy; p++) {
-      if (mbuf_arr[cur_idx][cur_pkt_in_batch[cur_idx] + p]->ol_flags & RTE_MBUF_F_RX_FDIR_ID) {
-        pkt_info[bursts[cur_idx]->hdr.hdr.num_pkts + p].flow_id =
-                              mbuf_arr[cur_idx][cur_pkt_in_batch[cur_idx] + p]->hash.fdir.hi;
+      auto* mbuf = mbuf_arr[cur_idx][cur_pkt_in_batch[cur_idx] + p];
+      auto& info = pkt_info[bursts[cur_idx]->hdr.hdr.num_pkts + p];
+      if (mbuf->ol_flags & RTE_MBUF_F_RX_FDIR_ID) {
+        info.flow_id = mbuf->hash.fdir.hi;
       } else {
-        pkt_info[bursts[cur_idx]->hdr.hdr.num_pkts + p].flow_id = 0;
+        info.flow_id = 0;
       }
+      info.rx_timestamp_ns = 0;
+      info.rx_timestamp_ns_valid =
+          tparams->q_params[cur_idx].hardware_timestamps
+          && extract_mbuf_rx_timestamp_ns(mbuf,
+                                          tparams->q_params[cur_idx].timestamp_offset,
+                                          tparams->q_params[cur_idx].timestamp_mask,
+                                          tparams->q_params[cur_idx].timestamp_conversion,
+                                          &info.rx_timestamp_ns);
     }
 
     if (cur_segs > 1) {  // Extra work when buffers are scattered
@@ -3634,12 +3841,21 @@ int DpdkMgr::rx_core_worker(void* arg) {
                                         &mbuf_arr[cur_pkt_in_batch], sizeof(rte_mbuf*) * to_copy);
 
     for (int p = 0; p < to_copy; p++) {
-      if (mbuf_arr[cur_pkt_in_batch + p]->ol_flags & RTE_MBUF_F_RX_FDIR_ID) {
-        pkt_info[burst->hdr.hdr.num_pkts + p].flow_id =
-                                          mbuf_arr[cur_pkt_in_batch + p]->hash.fdir.hi;
+      auto* mbuf = mbuf_arr[cur_pkt_in_batch + p];
+      auto& info = pkt_info[burst->hdr.hdr.num_pkts + p];
+      if (mbuf->ol_flags & RTE_MBUF_F_RX_FDIR_ID) {
+        info.flow_id = mbuf->hash.fdir.hi;
       } else {
-        pkt_info[burst->hdr.hdr.num_pkts + p].flow_id = 0;
+        info.flow_id = 0;
       }
+      info.rx_timestamp_ns = 0;
+      info.rx_timestamp_ns_valid =
+          tparams->hardware_timestamps
+          && extract_mbuf_rx_timestamp_ns(mbuf,
+                                          tparams->timestamp_offset,
+                                          tparams->timestamp_mask,
+                                          tparams->timestamp_conversion,
+                                          &info.rx_timestamp_ns);
     }
 
     if (tparams->num_segs > 1) {  // Extra work when buffers are scattered
@@ -3709,6 +3925,7 @@ int DpdkMgr::rx_lb_worker(void* arg) {
     meta_burst->hdr.hdr.q_id = tparams->queue;
     meta_burst->hdr.hdr.port_id = tparams->port;
     meta_burst->hdr.hdr.num_segs = tparams->num_segs;
+    meta_burst->pkt_extra_info = nullptr;
 
     for (int seg = 0; seg < tparams->num_segs; seg++) {
       if (rte_mempool_get(
@@ -3915,10 +4132,40 @@ uint16_t DpdkMgr::get_packet_flow_id(BurstParams* burst, int idx) {
   return info[idx].flow_id;
 }
 
+Status DpdkMgr::get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) {
+  if (burst == nullptr || timestamp_ns == nullptr) { return Status::NULL_PTR; }
+  *timestamp_ns = 0;
+  if (idx < 0 || idx >= static_cast<int>(burst->hdr.hdr.num_pkts)) {
+    return Status::INVALID_PARAMETER;
+  }
+
+  if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
+    if (idx != 0 || burst->custom_pkt_data == nullptr) { return Status::INVALID_PARAMETER; }
+    auto ctx = std::static_pointer_cast<ReorderBurstContext>(burst->custom_pkt_data);
+    if (!ctx || !ctx->rx_timestamp_ns_valid) { return Status::NOT_SUPPORTED; }
+    *timestamp_ns = ctx->rx_timestamp_ns;
+    return Status::SUCCESS;
+  }
+
+  const ExtraRxPacketInfo* info = reinterpret_cast<ExtraRxPacketInfo*>(burst->pkt_extra_info);
+  if (info == nullptr || !info[idx].rx_timestamp_ns_valid) { return Status::NOT_SUPPORTED; }
+  *timestamp_ns = info[idx].rx_timestamp_ns;
+  return Status::SUCCESS;
+}
+
 Status DpdkMgr::set_packet_tx_time(BurstParams* burst, int idx, uint64_t timestamp) {
-  reinterpret_cast<struct rte_mbuf**>(burst->pkts[0])[idx]->ol_flags |= timestamp_mask_;
+  if (burst == nullptr) { return Status::NULL_PTR; }
+  if (idx < 0 || idx >= static_cast<int>(burst->hdr.hdr.num_pkts)) {
+    return Status::INVALID_PARAMETER;
+  }
+  if (timestamp_dynfield_offset_ < 0 || tx_timestamp_dynflag_mask_ == 0) {
+    return Status::NOT_SUPPORTED;
+  }
+  reinterpret_cast<struct rte_mbuf**>(burst->pkts[0])[idx]->ol_flags |= tx_timestamp_dynflag_mask_;
   *RTE_MBUF_DYNFIELD(
-      reinterpret_cast<rte_mbuf**>(burst->pkts[0])[idx], timestamp_offset_, uint64_t*) = timestamp;
+      reinterpret_cast<rte_mbuf**>(burst->pkts[0])[idx],
+      timestamp_dynfield_offset_,
+      uint64_t*) = timestamp;
 
   return Status::SUCCESS;
 }

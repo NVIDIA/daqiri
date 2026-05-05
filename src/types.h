@@ -764,7 +764,8 @@ struct ReorderConfig {
 };
 
 struct RxConfig {
-  bool flow_isolation_;
+  bool flow_isolation_ = false;
+  bool hardware_timestamps_ = false;
   std::vector<RxQueueConfig> queues_;
   std::vector<FlowConfig> flows_;
   std::vector<FlexItemConfig> flex_items_;

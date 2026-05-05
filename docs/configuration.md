@@ -185,6 +185,17 @@ Unmatched packets are dropped. When `false`, unmatched packets go to a default q
 - type: `boolean`
 - default: `false`
 
+### Hardware Timestamps
+
+`rx.hardware_timestamps:` — Enable per-packet hardware RX timestamps for the DPDK backend.
+When enabled, DAQIRI requires `RTE_ETH_RX_OFFLOAD_TIMESTAMP` support from the NIC/PMD and
+initialization fails if DAQIRI cannot provide nanosecond timestamps for the selected PMD.
+Timestamps are returned by `get_packet_rx_timestamp()` in nanoseconds in the NIC timestamp
+clock domain, not wall-clock time.
+
+- type: `boolean`
+- default: `false`
+
 ### RX Reorder Configs (DPDK v1)
 
 `rx.reorder_configs:` — Optional automatic packet reordering/aggregation plans. In v1 this is
