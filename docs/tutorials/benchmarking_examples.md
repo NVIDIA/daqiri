@@ -395,7 +395,7 @@ sudo mlnx_perf -i $if_name
 
     ??? failure "Insufficient free hugepages: x MiB free, ~y MiB required for this config."
 
-        DAQIRI's preflight check has caught a hugepage shortfall before EAL was initialized, so no files were left in `/dev/hugepages`. The critical log prints a breakdown (kind:HUGE MRs, dummy queues, per-pool overhead, EAL fixed overhead) and the exact `echo N | sudo tee ...` command to allocate enough pages — copy-paste it. See [Configure hugepages first](#configure-hugepages-first) for the full sizing guide and persistent grub recipe.
+        DAQIRI's preflight check has caught a hugepage shortfall before any pages were reserved, so nothing was left behind in `/dev/hugepages`. The critical log prints a per-component breakdown of the requirement and the exact `echo N | sudo tee ...` command to allocate enough pages — copy-paste it. See [Configure hugepages first](#configure-hugepages-first) for the full sizing guide and persistent grub recipe.
 
     ??? failure "EAL: Cannot get hugepage information."
 
