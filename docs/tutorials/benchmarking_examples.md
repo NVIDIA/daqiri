@@ -35,6 +35,13 @@ docker run --rm -it --privileged \
 
 ## Update the loopback configuration
 
+!!! tip "DGX Spark"
+
+    For systems configured per the [DGX Spark profile](system_configuration.md#dgx-spark-profile), use these configs to skip the PCIe/IP/CPU-core edits below:
+
+    - [`daqiri_bench_raw_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark.yaml) for `daqiri_bench_raw_gpudirect` — still set `eth_dst_addr` to the RX MAC: `cat /sys/class/net/enP2p1s0f0np0/address`.
+    - [`daqiri_bench_rdma_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx_spark.yaml) for `daqiri_bench_rdma` — no further edits needed.
+
 The benchmark executables and example YAML configurations are located at:
 
 | | Binaries | YAML configs |
