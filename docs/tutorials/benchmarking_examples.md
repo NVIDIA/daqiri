@@ -12,6 +12,16 @@ Make sure to [build the DAQIRI library](../getting-started.md#build-the-daqiri-l
 
     Before running the benchmarking application, ensure your system has been fully configured per the [System Configuration](system_configuration.md) page.
 
+## Configure hugepages first
+
+Size the hugepage pool to your YAML's `memory_regions` plus DPDK overhead before running. DAQIRI's preflight aborts with an actionable error (and the exact `echo N | sudo tee …` to fix it) if the pool is too small, so the simplest workflow is: run once, copy-paste the recommendation. To check current state:
+
+```bash
+grep Huge /proc/meminfo
+```
+
+For a persistent allocation across reboots, use the grub recipe in [Step 4 of System Configuration](system_configuration.md#step-4-enable-huge-pages).
+
 ## Running the DAQIRI container
 
 If you built DAQIRI using the container approach, use the following command to launch the container with DPDK and GPU support. The host system must be fully configured (see [System Configuration](system_configuration.md)) before the container can access the NIC and GPU hardware.
@@ -395,28 +405,16 @@ sudo mlnx_perf -i $if_name
         EAL: No free x kB hugepages reported on node 0
         ```
 
-        - Ensure you have [allocated hugepages](system_configuration.md#step-4-enable-huge-pages).
-        - If you have already, check if they are any free left with `grep Huge /proc/meminfo`.
+        Reachable only when the in-process preflight is bypassed (e.g. running an older binary against a host with hugepages reserved but not mounted). Mount per [System Configuration: Step 4](system_configuration.md#step-4-enable-huge-pages) and re-run.
 
-            ??? abstract "See an example output"
+    ??? failure "Stale `<file-prefix>map_*` files in /dev/hugepages after a SIGKILL"
 
-                No more space here!
+        Init- and shutdown-path cleanup is automatic. Files only leak if the process is `SIGKILL`ed (OOM, container hard-stop). Symptom: `HugePages_Free: 0` with no bench running.
 
-                ```
-                HugePages_Total:       2
-                HugePages_Free:        0
-                HugePages_Rsvd:        0
-                HugePages_Surp:        0
-                Hugepagesize:    1048576 kB
-                Hugetlb:         2097152 kB
-                ```
-
-        - If not, you can delete dangling hugepages under your hugepage mount point. That happens when your previous application run crashes.
-
-            ```bash
-            sudo rm -rf /dev/hugepages/* # default mount point
-            sudo rm -rf /mnt/huge/*      # custom mount point
-            ```
+        ```bash
+        pgrep -af daqiri_bench   # confirm nothing is running
+        sudo rm -f /dev/hugepages/*map_* /mnt/huge/*map_*
+        ```
 
     ??? failure "Could not allocate x MB of GPU memory [...] Failed to allocate GPU memory"
 

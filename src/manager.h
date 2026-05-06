@@ -128,11 +128,27 @@ class Manager {
   static constexpr uint32_t GPU_PAGE_SIZE = (1UL << GPU_PAGE_SHIFT);
   static constexpr uint32_t JUMBO_FRAME_MAX_SIZE = 0x2600;
   static constexpr uint32_t NON_JUMBO_FRAME_MAX_SIZE = 1518;
+
+  // Per-pool DPDK overhead carried in hugepages even when buffer data is in
+  // extmem (rte_mbuf headers, mempool ring, per-lcore caches, descriptor).
+  // Calibrated against 51200-mbuf extbuf pools at 8 KiB element size.
+  static constexpr size_t DPDK_PER_POOL_HUGEPAGE_OVERHEAD = 32UL * 1024 * 1024;
+  // Fixed DPDK/EAL overhead (services, memzones, ethdev tables, etc.) carried
+  // by every initialized process regardless of pool count.
+  static constexpr size_t DPDK_EAL_FIXED_OVERHEAD = 64UL * 1024 * 1024;
+
   bool initialized_ = false;
   NetworkConfig cfg_;
   std::unordered_map<std::string, AllocRegion> ar_;
   std::unordered_map<std::string, std::shared_ptr<struct rte_pktmbuf_extmem>> ext_pktmbufs_;
   std::unordered_map<uint32_t, std::vector<std::pair<uint16_t, uint16_t>>> rx_core_q_map;
+
+  // Tracks whether rte_eal_init() has succeeded so shutdown/error paths know
+  // to call rte_eal_cleanup() and unlink leftover hugepage files. Mirrors the
+  // --file-prefix= value passed to EAL so cleanup can target only the files
+  // this process owns.
+  bool eal_initialized_ = false;
+  std::string eal_file_prefix_;
 
   // State for round-robin burst retrieval
   size_t next_port_index_ = 0;                            // For get_rx_burst next port check
@@ -144,6 +160,42 @@ class Manager {
   static std::string generate_random_string(int len);
   size_t get_alignment(MemoryKind kind);
   Status populate_pool(struct rte_ring* ring, const std::string& mr_name);
+
+  // Breakdown of the hugepage estimate (all values in bytes). Used by both
+  // the preflight log line and the failure diagnostic so users can see
+  // exactly which knob drives the number they're seeing.
+  struct HugepageEstimate {
+    size_t huge_mr_bytes = 0;        // sum of kind: HUGE memory regions
+    size_t pool_overhead_bytes = 0;  // ~32 MiB per mempool (extbuf or huge)
+    size_t dummy_queue_bytes = 0;    // dummy MR(s) DpdkMgr injects for empty TX/RX
+    size_t eal_fixed_bytes = 0;      // EAL services / memzones / ethdev tables
+    size_t total_bytes = 0;
+    size_t huge_mr_count = 0;        // for diagnostic output
+    size_t extbuf_pool_count = 0;
+    size_t dummy_queue_count = 0;
+  };
+
+  // Estimate hugepage bytes required by the current cfg_. Heuristic;
+  // intentionally errs on the high side.
+  HugepageEstimate estimate_required_hugepages() const;
+
+  // Sum of free hugepages across all pagesizes mounted on this host, in
+  // bytes. Reads /sys/kernel/mm/hugepages/hugepages-*kB. Returns 0 if no
+  // hugepages are configured.
+  static size_t available_hugepage_bytes();
+
+  // Preflight check run before rte_eal_init(). Logs an actionable critical
+  // error and returns false if there is not enough free hugepage memory to
+  // back the configured memory regions plus DPDK overhead. Returning true
+  // does NOT guarantee init will succeed (DPDK has additional, version- and
+  // NIC-specific allocations) but it catches the common kernel-default
+  // 1024 x 2 MiB starvation case before EAL leaves files in /dev/hugepages.
+  bool check_hugepage_availability() const;
+
+  // Best-effort cleanup of EAL state and leftover hugepage files. Safe to
+  // call multiple times and on partial-init failures. Resets
+  // eal_initialized_ to false on the way out.
+  void cleanup_eal();
 };
 
 class ManagerFactory {

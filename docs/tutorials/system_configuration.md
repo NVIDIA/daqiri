@@ -1570,11 +1570,11 @@ The two tabs below are linked across the page (mkdocs-material `content.tabs.lin
 
     ### Step 4: Enable Huge pages — grub drop-in pattern
 
-    Spark composes its `GRUB_CMDLINE_LINUX` from drop-ins under `/etc/default/grub.d/`. Edit a new file rather than `/etc/default/grub` directly so Spark platform updates don't fight your changes:
+    Spark composes its `GRUB_CMDLINE_LINUX` from drop-ins under `/etc/default/grub.d/`. Edit a new file rather than `/etc/default/grub` directly so Spark platform updates don't fight your changes. The shipped `daqiri_bench_raw_tx_rx_spark.yaml` needs ~4 GiB of hugepages (kind: HUGE dummy queues + DPDK per-pool overhead); 4 × 1 GiB pages is enough:
 
     ```bash
     cat << 'EOF' | sudo tee /etc/default/grub.d/daqiri-tuning.cfg
-    GRUB_CMDLINE_LINUX="${GRUB_CMDLINE_LINUX} default_hugepagesz=1G hugepagesz=1G hugepages=3 isolcpus=16-19 nohz_full=16-19 rcu_nocbs=16-19 rcu_nocb_poll irqaffinity=0-15"
+    GRUB_CMDLINE_LINUX="${GRUB_CMDLINE_LINUX} default_hugepagesz=1G hugepagesz=1G hugepages=4 isolcpus=16-19 nohz_full=16-19 rcu_nocbs=16-19 rcu_nocb_poll irqaffinity=0-15"
     EOF
     sudo update-grub
     ```

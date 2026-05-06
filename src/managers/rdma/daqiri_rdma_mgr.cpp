@@ -1364,6 +1364,21 @@ void RdmaMgr::initialize() {
   bool client = false;
   int ret;
 
+  // Cleanup-on-failure guard: mirrors DpdkMgr::initialize(). Any return path
+  // that does not set initialized_ = true triggers rte_eal_cleanup() and
+  // unlinks our --file-prefix=<...>map_* files so the next run can start.
+  struct EalCleanupGuard {
+    RdmaMgr* mgr;
+    ~EalCleanupGuard() {
+      if (!mgr->initialized_) { mgr->cleanup_eal(); }
+    }
+  } cleanup_guard{this};
+
+  if (!check_hugepage_availability()) {
+    DAQIRI_LOG_CRITICAL("Aborting before rte_eal_init() to keep /dev/hugepages clean");
+    return;
+  }
+
   /* Initialize DPDK params */
   constexpr int max_nargs = 32;
   constexpr int max_arg_size = 64;
@@ -1432,8 +1447,9 @@ void RdmaMgr::initialize() {
   cores = cores.substr(0, cores.size() - 1);
 
   strncpy(_argv[arg++], "daqiri_operator", max_arg_size - 1);
+  eal_file_prefix_ = generate_random_string(10);
   strncpy(_argv[arg++],
-          (std::string("--file-prefix=") + generate_random_string(10)).c_str(),
+          (std::string("--file-prefix=") + eal_file_prefix_).c_str(),
           max_arg_size - 1);
   strncpy(_argv[arg++], "-l", max_arg_size - 1);
   strncpy(_argv[arg++], cores.c_str(), max_arg_size - 1);
@@ -1460,6 +1476,7 @@ void RdmaMgr::initialize() {
     DAQIRI_LOG_CRITICAL("Invalid EAL arguments: {}", rte_errno);
     return;
   }
+  eal_initialized_ = true;
 
   // Set up memory region sizes
   for (auto& mr : cfg_.mrs_) {
@@ -1496,6 +1513,34 @@ void RdmaMgr::shutdown() {
 
   DAQIRI_LOG_INFO("Waiting for main thread to complete");
   main_thread_.join();
+
+  // Release DPDK resources BEFORE rte_eal_cleanup(). Pointers owned by EAL
+  // memzones become invalid once cleanup runs, so the destructor must not
+  // touch them after this point.
+  while (!rx_rings_.empty()) {
+    auto ring = rx_rings_.front();
+    rx_rings_.pop();
+    if (ring != nullptr) { rte_ring_free(ring); }
+  }
+  while (!tx_rings_.empty()) {
+    auto ring = tx_rings_.front();
+    tx_rings_.pop();
+    if (ring != nullptr) { rte_ring_free(ring); }
+  }
+  rx_rings_map_.clear();
+  tx_rings_map_.clear();
+
+  if (pkt_len_pool_ != nullptr) { rte_mempool_free(pkt_len_pool_); pkt_len_pool_ = nullptr; }
+  if (rx_meta != nullptr) { rte_mempool_free(rx_meta); rx_meta = nullptr; }
+  if (tx_meta != nullptr) { rte_mempool_free(tx_meta); tx_meta = nullptr; }
+  if (tx_burst_pool_ != nullptr) { rte_mempool_free(tx_burst_pool_); tx_burst_pool_ = nullptr; }
+  for (auto& entry : mem_pools_) {
+    if (entry.second != nullptr) { rte_ring_free(entry.second); }
+  }
+  mem_pools_.clear();
+
+  cleanup_eal();
+  initialized_ = false;
 }
 
 void RdmaMgr::init_client() {
@@ -1650,44 +1695,35 @@ RdmaMgr::~RdmaMgr() {
   }
   pd_map_.clear();
 
-  // Free DPDK pools and rings
-  while (!rx_rings_.empty()) {
-    auto ring = rx_rings_.front();
-    rx_rings_.pop();
-    rte_ring_free(ring);
-  }
-  while (!tx_rings_.empty()) {
-    auto ring = tx_rings_.front();
-    tx_rings_.pop();
-    rte_ring_free(ring);
-  }
-  // Free mapped rings
-  rx_rings_map_.clear();
-  tx_rings_map_.clear();
-
-  // Free DPDK mempools (pkt_len_pool_, rx_meta, tx_meta and those in mem_pools_)
-  if (pkt_len_pool_) {
-    rte_mempool_free(pkt_len_pool_);
-    pkt_len_pool_ = nullptr;
-  }
-  if (rx_meta) {
-    rte_mempool_free(rx_meta);
-    rx_meta = nullptr;
-  }
-  if (tx_meta) {
-    rte_mempool_free(tx_meta);
-    tx_meta = nullptr;
-  }
-  if (tx_burst_pool_) {
-    rte_mempool_free(tx_burst_pool_);
-    tx_burst_pool_ = nullptr;
-  }
-  for (auto& entry : mem_pools_) {
-    if (entry.second) {
-      rte_ring_free(entry.second);
+  // shutdown() releases DPDK rings/mempools BEFORE rte_eal_cleanup(); the
+  // block below covers only the partial-init / no-shutdown path, where EAL
+  // is still alive and these pointers are still valid.
+  if (eal_initialized_) {
+    while (!rx_rings_.empty()) {
+      auto ring = rx_rings_.front();
+      rx_rings_.pop();
+      rte_ring_free(ring);
+    }
+    while (!tx_rings_.empty()) {
+      auto ring = tx_rings_.front();
+      tx_rings_.pop();
+      rte_ring_free(ring);
+    }
+    if (pkt_len_pool_ != nullptr) { rte_mempool_free(pkt_len_pool_); pkt_len_pool_ = nullptr; }
+    if (rx_meta != nullptr) { rte_mempool_free(rx_meta); rx_meta = nullptr; }
+    if (tx_meta != nullptr) { rte_mempool_free(tx_meta); tx_meta = nullptr; }
+    if (tx_burst_pool_ != nullptr) { rte_mempool_free(tx_burst_pool_); tx_burst_pool_ = nullptr; }
+    for (auto& entry : mem_pools_) {
+      if (entry.second != nullptr) { rte_ring_free(entry.second); }
     }
   }
+  rx_rings_map_.clear();
+  tx_rings_map_.clear();
   mem_pools_.clear();
+
+  // Final safety net: if shutdown() never ran (process exiting from a partial
+  // init), still release EAL and unlink any leftover hugepage files.
+  cleanup_eal();
 }
 
 // RDMA-specific functions that were declared but not implemented
