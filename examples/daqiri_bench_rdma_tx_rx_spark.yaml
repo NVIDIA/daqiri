@@ -97,7 +97,7 @@ rdma_bench_server:
 
 rdma_bench_client:
   message_size: 8000000
-  client_address:
+  client_address: 1.1.1.1
   server_address: 2.2.2.2
   server_port: 4096
   receive: true
