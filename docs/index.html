@@ -267,32 +267,32 @@
         <div class="feature-card">
           <div class="feature-icon">⚡</div>
           <h3>Scalable, High Throughput</h3>
-          <p>Hundreds of gigabits per second with proper hardware and CPU/NUMA tuning. Direct access to NIC ring buffers keeps latency at PCIe transit time only.</p>
+          <p>Hundreds of gigabits per second with multi-queue RX and CPU/NUMA-aware worker pinning. Direct NIC ring-buffer access keeps latency at PCIe transit time. Tune batch size and <code>timeout_us</code> to trade throughput for latency on a per-queue basis.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">🚀</div>
           <h3>GPUDirect Zero-Copy</h3>
-          <p>Two GPU receive modes: <strong style="color:var(--text-pri)">Header-data split</strong> (headers to CPU, payload to GPU — recommended) and <strong style="color:var(--text-pri)">Batched GPU</strong> (entire packets to GPU for maximum bandwidth).</p>
+          <p>Two GPU receive modes: <strong style="color:var(--text-pri)">Header-data split</strong> (headers to CPU, payload directly to GPU VRAM — recommended) and <strong style="color:var(--text-pri)">Batched GPU</strong> (whole packets to GPU for maximum bandwidth). A built-in CUDA reorder kernel consolidates scattered GPU buffers into contiguous memory for downstream kernels.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">🔀</div>
           <h3>Hardware Flow Steering</h3>
-          <p>Route packets to specific queues by UDP port, IPv4 payload length, or custom flex items — all in NIC silicon, before any software runs.</p>
+          <p>Route packets to specific queues in NIC silicon before any software runs. Match on UDP source/destination port, IPv4 payload length, or custom <strong style="color:var(--text-pri)">Flex Items</strong> — programmable byte-level offsets into the payload for proprietary protocols. Enable flow isolation to hard-drop all unmatched traffic.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">🔗</div>
           <h3>RDMA Support</h3>
-          <p>InfiniBand RDMA READ, WRITE, and SEND via libibverbs. Client/server model with Reliable Connected (RC) or Unreliable Connected (UC) transport.</p>
+          <p>InfiniBand RDMA READ, WRITE, and SEND operations via libibverbs. Client/server model supports Reliable Connected (RC) and Unreliable Connected (UC) transport modes, with the same <code>BurstParams</code> API used for DPDK paths.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">🛠️</div>
-          <h3>DPDK Userspace I/O</h3>
-          <p>Bypasses the kernel network stack entirely. The bundled container ships a dmabuf-patched DPDK — no peermem kernel module required inside the container.</p>
+          <div class="feature-icon">📋</div>
+          <h3>YAML-Driven Configuration</h3>
+          <p>Declare your entire NIC setup — memory regions, RX/TX queues, flow rules, flex items, and loopback mode — in a single YAML file passed to <code>daqiri_init()</code>. Reconfigure routing and memory layout without recompiling. The same config structs are also buildable in code for integration with existing configuration systems.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">⏱️</div>
-          <h3>Timed Transmission</h3>
-          <p>Hardware-timestamped TX scheduling via <code>set_packet_tx_time()</code> for PTP-synchronized, precise packet emission. Requires ConnectX-7 or later.</p>
+          <div class="feature-icon">📦</div>
+          <h3>Container-Ready Deployment</h3>
+          <p>A single build script produces a container with a dmabuf-patched DPDK compiled from source — no peermem kernel module required for GPUDirect inside the container. Go from clone to running benchmark in minutes. Software loopback mode lets you validate your full pipeline without physical hardware.</p>
         </div>
       </div>
     </div>
