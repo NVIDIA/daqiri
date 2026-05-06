@@ -76,6 +76,12 @@ Then build the DAQIRI library:
     BASE_TARGET=dpdk DAQIRI_MGR="dpdk socket rdma" scripts/build-container.sh
     ```
 
+    Set `BASE_IMAGE=torch` to build on top of NGC PyTorch instead of the default CUDA base — useful for Torch / TensorRT inference workflows that ingest packets directly into GPU memory:
+
+    ```bash
+    BASE_IMAGE=torch BASE_TARGET=dpdk DAQIRI_MGR="dpdk socket rdma" scripts/build-container.sh
+    ```
+
 === "CMake build (bare-metal)"
 
     ```bash

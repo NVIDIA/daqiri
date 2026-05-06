@@ -19,11 +19,12 @@ ARG DAQIRI_BASE_TARGET=dpdk
 ARG DAQIRI_MGR="dpdk socket"
 ARG DAQIRI_BUILD_PYTHON=OFF
 ARG BUILD_SHARED_LIBS=ON
+ARG DAQIRI_OS_BASE_IMAGE=nvcr.io/nvidia/cuda:13.1.0-devel-ubuntu24.04
 
 # ============================================================
 # base: Base layer
 # ============================================================
-FROM nvcr.io/nvidia/cuda:13.1.0-devel-ubuntu24.04 AS base
+FROM ${DAQIRI_OS_BASE_IMAGE} AS base
 SHELL ["/bin/bash", "-eou", "pipefail", "-c"]
 
 # Basic system dependencies
@@ -31,7 +32,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         ca-certificates \
         infiniband-diags \
-        mft \
         gnupg \
         python3-pip \
         git \
@@ -60,10 +60,33 @@ FROM base AS base-deps
 ARG TARGETARCH
 ARG CACHEBUST=1
 ARG DEBIAN_FRONTEND=noninteractive
+ARG DOCA_VERSION=3.2.1
 
 WORKDIR /opt
 
-# APT installs for base dependencies (no DOCA/GPUNetIO packages)
+# Configure the DOCA APT repository so libibverbs / librdmacm / libmlx5
+# (and later mft, mlnx-ofed-kernel-utils in the dpdk stage) resolve to
+# MLNX OFED packages with intact -dev symlinks. Required because some
+# upstream base images (notably nvcr.io/nvidia/pytorch) ship the stock
+# Ubuntu packages with files stripped, leaving dpkg's database in a state
+# where the package is "installed" but the -dev symlinks are missing on
+# disk and the .deb is not re-downloadable.
+RUN if [ "${TARGETARCH}" = "amd64" ]; then \
+        DOCA_ARCH="x86_64"; \
+    elif [ "$TARGETARCH" = "arm64" ]; then \
+        DOCA_ARCH="arm64-sbsa"; \
+    else \
+        echo "Unknown architecture: $TARGETARCH"; \
+        exit 1; \
+    fi \
+    && DISTRO=$(. /etc/os-release && echo ${ID}${VERSION_ID}) \
+    && DOCA_REPO_LINK=https://linux.mellanox.com/public/repo/doca/${DOCA_VERSION}/${DISTRO}/${DOCA_ARCH} \
+    && echo "Using DOCA_REPO_LINK=${DOCA_REPO_LINK}" \
+    && LOCAL_GPG_KEY_PATH="/usr/share/keyrings/mellanox-archive-keyring.gpg" \
+    && curl -fsSL ${DOCA_REPO_LINK}/GPG-KEY-Mellanox.pub | gpg --dearmor | tee ${LOCAL_GPG_KEY_PATH} > /dev/null \
+    && echo "deb [signed-by=${LOCAL_GPG_KEY_PATH}] ${DOCA_REPO_LINK} ./" | tee /etc/apt/sources.list.d/mellanox.list
+
+# APT installs for base dependencies
 # - libibverbs-dev, librdmacm-dev: RDMA/ibverbs support for Mellanox NICs
 # - libmlx5-1: Mellanox ConnectX driver
 # - ibverbs-utils: utilities
@@ -95,13 +118,10 @@ FROM base-deps AS dpdk
 ARG DPDK_VERSION=25.11
 ARG DPDK_BUILD_DIR=/opt/dpdk-build
 ARG DPDK_INSTALL_PREFIX=/usr/local
-ARG DOCA_VERSION=3.2.1
 
 COPY dpdk_patches /tmp/dpdk_patches
 
 
-# - infiniband-diags for IB diagnostics
-# - mft for Mellanox Flex Transport
 # - ninja-build: for cmake build
 # - pkgconf: to import dpdk in CMake
 # - meson: for building DPDK
@@ -143,26 +163,12 @@ RUN curl -fsSL https://fast.dpdk.org/rel/dpdk-${DPDK_VERSION}.tar.xz -o /tmp/dpd
     && ldconfig \
     && rm -rf /tmp/dpdk-${DPDK_VERSION} /tmp/dpdk-${DPDK_VERSION}.tar.xz ${DPDK_BUILD_DIR} /tmp/dpdk_patches
 
-# Configure the DOCA APT repository for mlnx-ofed-kernel-utils
-# (needed for ibdev2netdev utility used by tune_system.py)
-RUN if [ "${TARGETARCH}" = "amd64" ]; then \
-        DOCA_ARCH="x86_64"; \
-    elif [ "$TARGETARCH" = "arm64" ]; then \
-        DOCA_ARCH="arm64-sbsa"; \
-    else \
-        echo "Unknown architecture: $TARGETARCH"; \
-        exit 1; \
-    fi \
-    && DISTRO=$(. /etc/os-release && echo ${ID}${VERSION_ID}) \
-    && DOCA_REPO_LINK=https://linux.mellanox.com/public/repo/doca/${DOCA_VERSION}/${DISTRO}/${DOCA_ARCH} \
-    && echo "Using DOCA_REPO_LINK=${DOCA_REPO_LINK}" \
-    && LOCAL_GPG_KEY_PATH="/usr/share/keyrings/mellanox-archive-keyring.gpg" \
-    && curl -fsSL ${DOCA_REPO_LINK}/GPG-KEY-Mellanox.pub | gpg --dearmor | tee ${LOCAL_GPG_KEY_PATH} > /dev/null \
-    && echo "deb [signed-by=${LOCAL_GPG_KEY_PATH}] ${DOCA_REPO_LINK} ./" | tee /etc/apt/sources.list.d/mellanox.list
-
+# DOCA APT repository is configured in the base-deps stage above.
 # - mlnx-ofed-kernel-utils for utilities including ibdev2netdev used by tune_system.py
+# - mft for Mellanox Firmware Tools (mlxconfig, flint, etc.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     mlnx-ofed-kernel-utils \
+    mft \
     && rm -rf /var/lib/apt/lists/*
 
 # ==============================================================
