@@ -41,7 +41,13 @@
 #include <chrono>
 #include <cstdlib>
 #include <cuda.h>
+#include <dirent.h>
+#include <fstream>
 #include <random>
+#include <regex>
+#include <sstream>
+#include <string>
+#include <sys/types.h>
 #include <unistd.h>
 
 #include "src/logging.hpp"
@@ -171,6 +177,187 @@ Status Manager::populate_pool(struct rte_ring* ring, const std::string& mr_name)
   }
   return Status::SUCCESS;
 }
+
+#if DAQIRI_MGR_DPDK || DAQIRI_MGR_RDMA
+
+Manager::HugepageEstimate Manager::estimate_required_hugepages() const {
+  HugepageEstimate est;
+  est.eal_fixed_bytes = DPDK_EAL_FIXED_OVERHEAD;
+
+  for (const auto& [name, mr] : cfg_.mrs_) {
+    const size_t elt = mr.adj_size_ != 0 ? mr.adj_size_ : mr.buf_size_;
+    if (mr.kind_ == MemoryKind::HUGE) {
+      est.huge_mr_bytes += static_cast<size_t>(mr.num_bufs_) * elt;
+      ++est.huge_mr_count;
+    } else {
+      ++est.extbuf_pool_count;
+    }
+  }
+  est.pool_overhead_bytes =
+      (est.huge_mr_count + est.extbuf_pool_count) * DPDK_PER_POOL_HUGEPAGE_OVERHEAD;
+
+  // DpdkMgr injects a kind: HUGE dummy MR (32768 bufs * JUMBOFRAME_SIZE) for
+  // every interface that has no TX or no RX queue configured. Account for it
+  // here so the preflight matches what initialize() will actually request.
+  // JUMBOFRAME_SIZE lives in DpdkMgr; use a portable upper bound (9100).
+  constexpr size_t kDummyJumboFrameSize = 9100;
+  constexpr size_t kDummyNumBufs = 32768;
+  for (const auto& intf : cfg_.ifs_) {
+    if (intf.rx_.queues_.empty()) {
+      est.dummy_queue_bytes += kDummyNumBufs * kDummyJumboFrameSize;
+      est.pool_overhead_bytes += DPDK_PER_POOL_HUGEPAGE_OVERHEAD;
+      ++est.dummy_queue_count;
+    }
+    if (intf.tx_.queues_.empty()) {
+      est.dummy_queue_bytes += kDummyNumBufs * kDummyJumboFrameSize;
+      est.pool_overhead_bytes += DPDK_PER_POOL_HUGEPAGE_OVERHEAD;
+      ++est.dummy_queue_count;
+    }
+  }
+
+  est.total_bytes = est.eal_fixed_bytes + est.huge_mr_bytes +
+                    est.pool_overhead_bytes + est.dummy_queue_bytes;
+  return est;
+}
+
+size_t Manager::available_hugepage_bytes() {
+  const char kSysHugepageDir[] = "/sys/kernel/mm/hugepages";
+  DIR* dir = opendir(kSysHugepageDir);
+  if (dir == nullptr) { return 0; }
+
+  size_t total = 0;
+  static const std::regex kSizeRe("^hugepages-([0-9]+)kB$");
+  for (struct dirent* ent = readdir(dir); ent != nullptr; ent = readdir(dir)) {
+    std::cmatch m;
+    if (!std::regex_match(ent->d_name, m, kSizeRe)) { continue; }
+    const size_t page_kb = std::stoull(m[1].str());
+
+    std::ifstream fs(std::string(kSysHugepageDir) + "/" + ent->d_name + "/free_hugepages");
+    if (!fs.is_open()) { continue; }
+    size_t free_pages = 0;
+    fs >> free_pages;
+    if (!fs.fail()) { total += free_pages * page_kb * 1024UL; }
+  }
+  closedir(dir);
+  return total;
+}
+
+bool Manager::check_hugepage_availability() const {
+  const HugepageEstimate est = estimate_required_hugepages();
+  const size_t avail = available_hugepage_bytes();
+  const auto mib = [](size_t b) { return b / (1024.0 * 1024.0); };
+
+  if (avail == 0) {
+    DAQIRI_LOG_WARN(
+        "Could not read /sys/kernel/mm/hugepages; skipping hugepage preflight. "
+        "If init fails, verify hugepages are configured per "
+        "docs/tutorials/system_configuration.md");
+    return true;
+  }
+  if (avail >= est.total_bytes) {
+    DAQIRI_LOG_INFO(
+        "Hugepage preflight OK: {:.0f} MiB free, ~{:.0f} MiB required "
+        "({} kind:HUGE MRs={:.0f} MiB, {} dummy queue(s)={:.0f} MiB, "
+        "{} pool overhead={:.0f} MiB, EAL fixed={:.0f} MiB)",
+        mib(avail), mib(est.total_bytes),
+        est.huge_mr_count, mib(est.huge_mr_bytes),
+        est.dummy_queue_count, mib(est.dummy_queue_bytes),
+        est.huge_mr_count + est.extbuf_pool_count + est.dummy_queue_count,
+        mib(est.pool_overhead_bytes),
+        mib(est.eal_fixed_bytes));
+    return true;
+  }
+
+  DAQIRI_LOG_CRITICAL(
+      "Insufficient free hugepages: {:.0f} MiB free, ~{:.0f} MiB required for this config.",
+      mib(avail), mib(est.total_bytes));
+  DAQIRI_LOG_CRITICAL("Breakdown of the requirement:");
+  DAQIRI_LOG_CRITICAL(
+      "  - {} memory_region(s) with kind: HUGE (full size in hugepages): {:.0f} MiB",
+      est.huge_mr_count, mib(est.huge_mr_bytes));
+  DAQIRI_LOG_CRITICAL(
+      "  - {} dummy queue(s) auto-injected for interfaces missing TX or RX "
+      "(32768 bufs x 9100 B each, kind: HUGE): {:.0f} MiB",
+      est.dummy_queue_count, mib(est.dummy_queue_bytes));
+  DAQIRI_LOG_CRITICAL(
+      "  - DPDK per-pool overhead ({} pools x ~{:.0f} MiB = mbuf headers, mempool ring, "
+      "per-lcore caches): {:.0f} MiB",
+      est.huge_mr_count + est.extbuf_pool_count + est.dummy_queue_count,
+      mib(DPDK_PER_POOL_HUGEPAGE_OVERHEAD),
+      mib(est.pool_overhead_bytes));
+  DAQIRI_LOG_CRITICAL(
+      "  - DPDK/EAL fixed overhead (services, memzones, ethdev tables): {:.0f} MiB",
+      mib(est.eal_fixed_bytes));
+  DAQIRI_LOG_CRITICAL(
+      "Tip: lowering memory_regions[*].num_bufs / buf_size in your YAML reduces the "
+      "kind:HUGE total; the dummy-queue cost only applies to interfaces with no TX or "
+      "no RX queues configured.");
+  DAQIRI_LOG_CRITICAL(
+      "Configure more hugepages before starting (see "
+      "docs/tutorials/system_configuration.md \"Enable Huge pages\"), for example:");
+  const size_t need_2mib_pages =
+      (est.total_bytes + (2UL * 1024 * 1024) - 1) / (2UL * 1024 * 1024);
+  const size_t need_1gib_pages =
+      (est.total_bytes + (1024UL * 1024 * 1024) - 1) / (1024UL * 1024 * 1024);
+  DAQIRI_LOG_CRITICAL(
+      "  echo {} | sudo tee /proc/sys/vm/nr_hugepages                                   "
+      "# 2 MiB pool ({} pages x 2 MiB = {:.0f} MiB)",
+      need_2mib_pages, need_2mib_pages, need_2mib_pages * 2.0);
+  DAQIRI_LOG_CRITICAL(
+      "  echo {} | sudo tee /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages   "
+      "# 1 GiB pool ({} pages x 1 GiB = {} MiB)",
+      need_1gib_pages, need_1gib_pages, need_1gib_pages * 1024UL);
+  DAQIRI_LOG_CRITICAL(
+      "Verify with: grep Huge /proc/meminfo");
+  DAQIRI_LOG_CRITICAL(
+      "For a persistent allocation across reboots, add hugepagesz=/hugepages= to the "
+      "kernel cmdline per docs/tutorials/system_configuration.md.");
+  DAQIRI_LOG_CRITICAL(
+      "If a previous run failed mid-init, also remove its leftover files:");
+  DAQIRI_LOG_CRITICAL(
+      "  sudo rm -f /dev/hugepages/*map_* /mnt/huge/*map_*");
+  return false;
+}
+
+void Manager::cleanup_eal() {
+  if (!eal_initialized_) { return; }
+
+  // rte_eal_cleanup() releases EAL state and (on DPDK >= 22.07) unlinks the
+  // per-segment hugepage files this process created. Older DPDK leaves them
+  // behind, so we also do a best-effort unlink targeted at our --file-prefix.
+  rte_eal_cleanup();
+
+  if (!eal_file_prefix_.empty()) {
+    static const char* kHugepageMounts[] = {"/dev/hugepages", "/mnt/huge"};
+    for (const char* mount : kHugepageMounts) {
+      DIR* dir = opendir(mount);
+      if (dir == nullptr) { continue; }
+      for (struct dirent* ent = readdir(dir); ent != nullptr; ent = readdir(dir)) {
+        const std::string name = ent->d_name;
+        if (name.find(eal_file_prefix_) != std::string::npos &&
+            name.find("map_") != std::string::npos) {
+          const std::string full = std::string(mount) + "/" + name;
+          if (unlink(full.c_str()) == 0) {
+            DAQIRI_LOG_INFO("Removed leftover hugepage file {}", full);
+          }
+        }
+      }
+      closedir(dir);
+    }
+  }
+
+  eal_initialized_ = false;
+  eal_file_prefix_.clear();
+}
+
+#else  // !DAQIRI_MGR_DPDK && !DAQIRI_MGR_RDMA
+
+size_t Manager::estimate_required_hugepage_bytes() const { return 0; }
+size_t Manager::available_hugepage_bytes() { return 0; }
+bool Manager::check_hugepage_availability() const { return true; }
+void Manager::cleanup_eal() {}
+
+#endif  // DAQIRI_MGR_DPDK || DAQIRI_MGR_RDMA
 
 Status Manager::allocate_memory_regions() {
   DAQIRI_LOG_INFO("Registering memory regions");

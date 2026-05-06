@@ -1803,6 +1803,22 @@ void DpdkMgr::create_dummy_tx_q() {
 void DpdkMgr::initialize() {
   int ret;
 
+  // Cleanup-on-failure guard: if initialize() returns without setting
+  // initialized_ = true, this will call rte_eal_cleanup() and best-effort
+  // unlink any --file-prefix=<...>map_* files we created. Prevents pinned
+  // hugepages from blocking the next run.
+  struct EalCleanupGuard {
+    DpdkMgr* mgr;
+    ~EalCleanupGuard() {
+      if (!mgr->initialized_) { mgr->cleanup_eal(); }
+    }
+  } cleanup_guard{this};
+
+  if (!check_hugepage_availability()) {
+    DAQIRI_LOG_CRITICAL("Aborting before rte_eal_init() to keep /dev/hugepages clean");
+    return;
+  }
+
   static struct rte_eth_conf conf_eth_port = {
       .rxmode = {
               .mq_mode = RTE_ETH_MQ_RX_RSS,
@@ -1885,8 +1901,9 @@ void DpdkMgr::initialize() {
   DAQIRI_LOG_INFO("Attempting to use {} ports for high-speed network", num_ports);
 
   strncpy(_argv[arg++], "operator", max_arg_size - 1);
+  eal_file_prefix_ = generate_random_string(10);
   strncpy(_argv[arg++],
-          (std::string("--file-prefix=") + generate_random_string(10)).c_str(),
+          (std::string("--file-prefix=") + eal_file_prefix_).c_str(),
           max_arg_size - 1);
   strncpy(_argv[arg++], "-l", max_arg_size - 1);
   strncpy(_argv[arg++], cores.c_str(), max_arg_size - 1);
@@ -1940,6 +1957,7 @@ void DpdkMgr::initialize() {
     }
     return;
   }
+  eal_initialized_ = true;
 
   // Set up the port IDs to map to DPDK port IDs
   for (auto& intf : cfg_.ifs_) {
@@ -3138,20 +3156,25 @@ void DpdkMgr::PrintDpdkStats(int port) {
 DpdkMgr::~DpdkMgr() {
     cleanup_reorder_state();
 
-    // Add cleanup for rings in the map
-    for (auto const& [key, val] : rx_rings) {
-        if (val != nullptr) {
-            rte_ring_free(val);
-        }
+    // shutdown() handles ring cleanup BEFORE rte_eal_cleanup(), so the maps
+    // are empty by the time we get here on the normal exit path. The loops
+    // below cover the partial-init / no-shutdown path, where eal_initialized_
+    // may still be true and the rings (if any were created) are still valid.
+    if (eal_initialized_) {
+      for (auto const& [key, val] : rx_rings) {
+        if (val != nullptr) { rte_ring_free(val); }
+      }
+      for (auto const& [key, val] : tx_rings) {
+        if (val != nullptr) { rte_ring_free(val); }
+      }
     }
     rx_rings.clear();
-
-    for (auto const& [key, val] : tx_rings) {
-        if (val != nullptr) {
-            rte_ring_free(val);
-        }
-    }
     tx_rings.clear();
+
+    // Final safety net: if shutdown() was never called (e.g. process exiting
+    // via std::exit after a partial init), still release EAL and unlink any
+    // leftover hugepage files we own.
+    cleanup_eal();
 }
 
 bool DpdkMgr::validate_config() const {
@@ -4479,6 +4502,21 @@ void DpdkMgr::shutdown() {
 
     stats_.Shutdown();
     stats_thread_.join();
+
+    // Release DPDK resources BEFORE rte_eal_cleanup(). Ring/mempool pointers
+    // are owned by EAL memzones and become invalid once cleanup runs, so the
+    // destructor must not touch them after this point.
+    for (auto const& [key, val] : rx_rings) {
+      if (val != nullptr) { rte_ring_free(val); }
+    }
+    rx_rings.clear();
+    for (auto const& [key, val] : tx_rings) {
+      if (val != nullptr) { rte_ring_free(val); }
+    }
+    tx_rings.clear();
+
+    cleanup_eal();
+    initialized_ = false;
   }
 }
 
