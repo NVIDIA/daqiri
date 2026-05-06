@@ -20,7 +20,7 @@ CMake options (full table in `docs/getting-started.md`):
 - `DAQIRI_BUILD_EXAMPLES` — builds the benchmark executables (default `ON`).
 - `DAQIRI_REORDER_GPU_PROFILE` — enable CUDA event timing in the DPDK reorder kernels (off by default).
 
-CUDA architectures are hardcoded to `80;90` (A100, H100) in `src/CMakeLists.txt:25`. Change this when targeting other GPUs.
+CUDA architectures are hardcoded to `80;90;121` (A100, H100, GB10) in `src/CMakeLists.txt:25`. Change this when targeting other GPUs.
 
 **Socket → RDMA dependency**: the socket backend reuses the RoCE transport from the RDMA implementation, so `src/CMakeLists.txt:144-152` automatically prepends `rdma` to `DAQIRI_MGR_LIST` whenever `socket` is requested. The reverse is not true — listing `rdma` alone does not pull in `socket`.
 
@@ -30,11 +30,11 @@ There is no unit test suite. Verification is done via the benchmark executables 
 
 | Executable | Source | Typical config |
 |---|---|---|
-| `daqiri_bench_raw_gpudirect` | `raw_gpudirect_bench.cpp` | `daqiri_bench_raw_tx_rx.yaml`, `daqiri_bench_raw_sw_loopback.yaml`, `daqiri_bench_raw_rx_multi_q.yaml` |
+| `daqiri_bench_raw_gpudirect` | `raw_gpudirect_bench.cpp` | `daqiri_bench_raw_tx_rx.yaml`, `daqiri_bench_raw_tx_rx_spark.yaml`, `daqiri_bench_raw_sw_loopback.yaml`, `daqiri_bench_raw_rx_multi_q.yaml` |
 | `daqiri_bench_raw_hds` | `raw_hds_bench.cpp` | `daqiri_bench_raw_tx_rx_hds.yaml` |
 | `daqiri_bench_raw_reorder_seq` | `raw_reorder_seq_bench.cpp` | `daqiri_bench_raw_tx_rx_reorder_seq_1024*.yaml`, `daqiri_bench_raw_rx_reorder_seq_*.yaml` |
 | `daqiri_bench_raw_reorder_quantize` | `raw_reorder_quantize_bench.cpp` | `daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml` |
-| `daqiri_bench_rdma` | `rdma_bench.cpp` | `daqiri_bench_rdma_tx_rx.yaml` |
+| `daqiri_bench_rdma` | `rdma_bench.cpp` | `daqiri_bench_rdma_tx_rx.yaml`, `daqiri_bench_rdma_tx_rx_spark.yaml` |
 | `daqiri_bench_socket` | `socket_bench.cpp` | `daqiri_bench_socket_{udp,tcp}_tx_rx.yaml` |
 
 The four `raw_*` benches share `raw_bench_common.{cpp,h}` and accept `--seconds N`. `daqiri_bench_rdma` and `daqiri_bench_socket` also take `--mode {tx,rx,both}`.
