@@ -1592,8 +1592,23 @@ Status DpdkMgr::get_mac_addr(int port, char* mac) {
 }
 
 void DpdkMgr::adjust_memory_regions() {
+  // num_bufs smaller than ~1.5x the NIC descriptor ring deadlock the worker once the ring
+  // fills (the ring holds every buffer in the pool with no replacement available, so the
+  // next rte_pktmbuf_alloc blocks). Bump such MRs to 3x the ring size up-front -- this runs
+  // before allocate_memory_regions(), so the underlying GPU/CPU buffer is sized correctly.
+  const uint32_t ring_size          = std::max(default_num_rx_desc, default_num_tx_desc);
+  const uint32_t deadlock_threshold = (ring_size * 3) / 2;  // 1.5x ring size
+  const uint32_t bumped_num_bufs    = ring_size * 3;        // 3x ring size
+
   for (auto& mr : cfg_.mrs_) {
-    // mr.second.buf_size_ = ((target_el_size + 3) / 4) * 4;
+    if (mr.second.num_bufs_ < deadlock_threshold) {
+      DAQIRI_LOG_WARN(
+          "MR '{}' had num_bufs={} which is below the {} threshold (1.5x the {} NIC descriptors) "
+          "and would deadlock the worker once the ring fills. Bumping to {} (3x ring).",
+          mr.second.name_, mr.second.num_bufs_, deadlock_threshold, ring_size, bumped_num_bufs);
+      mr.second.num_bufs_ = bumped_num_bufs;
+    }
+
     mr.second.adj_size_ = mr.second.buf_size_ + RTE_PKTMBUF_HEADROOM;
     DAQIRI_LOG_INFO("Adjusting buffer size to {} for headroom", mr.second.adj_size_);
   }
@@ -2046,11 +2061,6 @@ void DpdkMgr::initialize() {
         const auto& mr = cfg_.mrs_[q.common_.mrs_[mr_num]];
 
         if (loopback_ != LoopbackType::LOOPBACK_TYPE_SW) {  // Loopback needs no RX pools
-          if (mr.num_bufs_ < default_num_rx_desc) {
-            DAQIRI_LOG_CRITICAL("Must have at least {} buffers in each RX MR",
-                                  default_num_rx_desc);
-              return;
-          }
 
           struct rte_mempool* pool = create_pktmbuf_pool(pool_name, mr);
           if (pool == nullptr) {
@@ -2159,11 +2169,6 @@ void DpdkMgr::initialize() {
                              std::to_string(q.common_.id_) + "_MR" + std::to_string(mr_num);
         std::string pool_name = std::string("TXP") + append;
         const auto& mr = cfg_.mrs_[q.common_.mrs_[mr_num]];
-
-        if (mr.num_bufs_ < default_num_tx_desc) {
-          DAQIRI_LOG_CRITICAL("Must have at least {} buffers in each TX MR", default_num_tx_desc);
-          return;
-        }
 
         struct rte_mempool* pool = create_pktmbuf_pool(pool_name, mr);
         if (pool == nullptr) {
