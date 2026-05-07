@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to coding agents when working with code in this repository.
 
 ## Build & run
 
@@ -103,7 +103,7 @@ The web docs live in `docs/` and are built with [MkDocs Material](https://squidf
 - **Public API** (`src/common.h`, `src/types.h`, `src/manager.h`) — `docs/api-guide.md`, `docs/daqiri-api.html`
 - **Doc reorganization** (any rename in `docs/`) — `docs/index.html` landing page, `mkdocs.yml` nav, README Documentation table
 
-The full mapping with rationale lives in `.claude/rules/docs-sync.md`. Internal-link, anchor, and nav drift is enforced by CI (`.github/workflows/docs.yml`); content drift (stale binary names, defaults) is still a manual check at commit time.
+The full mapping with rationale lives in the docs-sync agent rule. Internal-link, anchor, and nav drift is enforced by CI (`.github/workflows/docs.yml`); content drift (stale binary names, defaults) is still a manual check at commit time.
 
 **Deployment:** `.github/workflows/docs.yml` runs `mkdocs gh-deploy --force` on pushes to `main`, publishing to the `gh-pages` branch. GitHub Pages serves from `gh-pages`.
 
@@ -115,7 +115,7 @@ From `CONTRIBUTING.md`:
 - An issue must exist and be approved before coding.
 - Prefer toggling features via new CMake options (with backward-compatible defaults) rather than wrapping entire files in `#if` guards. Use `#if` only for minor in-file changes.
 - Keep PRs narrowly scoped — one concern per PR, dependencies noted in the description.
-- When opening a PR that touches `src/`, `examples/`, or `mkdocs.yml`, scan the doc-sync mapping in `.claude/rules/docs-sync.md` and update affected docs in the same PR.
+- When opening a PR that touches `src/`, `examples/`, or `mkdocs.yml`, scan the doc-sync agent rule and update affected docs in the same PR.
 
 ## Compiling and Running
 
