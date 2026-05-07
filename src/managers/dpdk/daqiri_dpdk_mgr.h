@@ -324,9 +324,7 @@ class DpdkMgr : public Manager {
   std::unordered_map<uint32_t, DPDKQueueConfig*> tx_dpdk_q_map_;
   std::unordered_map<uint32_t, const RxQueueConfig*> rx_cfg_q_map_;
   std::unordered_map<uint16_t, std::pair<uint16_t, uint16_t>> port_q_num;
-  struct rte_mempool* pkt_len_buffer;
   struct rte_mempool* rx_burst_buffer;
-  struct rte_mempool* rx_flow_id_buffer;
   struct rte_mempool* rx_metadata;
   struct rte_mempool* tx_metadata;
   std::unordered_map<std::string, std::shared_ptr<ReorderOutputPool>> reorder_output_pools_;
