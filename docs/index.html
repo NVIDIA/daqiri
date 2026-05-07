@@ -285,18 +285,18 @@
         </div>
         <div class="feature-card">
           <div class="feature-icon">🔗</div>
-          <h3>RDMA Support</h3>
-          <p>InfiniBand RDMA READ, WRITE, and SEND via libibverbs. Client/server model with Reliable Connected (RC) or Unreliable Connected (UC) transport.</p>
+          <h3>RDMA over Converged Ethernet</h3>
+          <p>Run RDMA READ, WRITE, and SEND over standard Ethernet via <strong style="color:var(--text-pri)">RoCE</strong> — no specialized InfiniBand fabric required. The same libibverbs API also supports InfiniBand for environments where it is available.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">🛠️</div>
-          <h3>DPDK Userspace I/O</h3>
-          <p>Bypasses the kernel network stack entirely. The bundled container ships a dmabuf-patched DPDK — no peermem kernel module required inside the container.</p>
+          <div class="feature-icon">📄</div>
+          <h3>YAML-Driven Configuration</h3>
+          <p>Define memory regions, NIC interfaces, TX/RX queues, and flow rules in a single YAML file — or build the same config in C++ code. Switch backends, memory kinds, and buffer sizes without recompiling.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">⏱️</div>
-          <h3>Timed Transmission</h3>
-          <p>Hardware-timestamped TX scheduling via <code>set_packet_tx_time()</code> for PTP-synchronized, precise packet emission. Requires ConnectX-7 or later.</p>
+          <div class="feature-icon">📦</div>
+          <h3>Containerized Deployment</h3>
+          <p>A ready-to-run container bundles all userspace dependencies including a dmabuf-patched DPDK — no host-side dependency setup, no peermem kernel module. From <code>docker pull</code> to running benchmarks in minutes.</p>
         </div>
       </div>
     </div>
@@ -692,14 +692,4 @@ cmake --build build -j</pre>
   </footer>
 
   <script>
-    const nb = document.getElementById('navbar');
-    window.addEventListener('scroll', () => nb.classList.toggle('scrolled', scrollY > 20), {passive:true});
-    const secs = document.querySelectorAll('section[id]');
-    const links = document.querySelectorAll('.nav-links a:not(.nav-ext)');
-    const io = new IntersectionObserver(e => {
-      e.forEach(x => { if (x.isIntersecting) links.forEach(a => a.classList.toggle('active', a.getAttribute('href') === `#${x.target.id}`)); });
-    }, {rootMargin:'-40% 0px -50% 0px'});
-    secs.forEach(s => io.observe(s));
-  </script>
-</body>
-</html>
+    const nb = document.getElementById
