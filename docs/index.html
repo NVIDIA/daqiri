@@ -340,7 +340,7 @@ cmake --install build --prefix /opt/daqiri</pre>
             <div class="gs-step-num">3</div>
             <div class="gs-step-body">
               <h4>Or Build the Container</h4>
-              <p>The Dockerfile builds DPDK from source with dmabuf patches — no peermem needed inside the container.</p>
+              <p>The Dockerfile builds DPDK from source with dmabuf patches — no peermem needed inside the container. Set <code>BASE_IMAGE=torch</code> to build on top of NGC PyTorch for Torch / TensorRT inference workflows.</p>
               <pre>BASE_TARGET=dpdk \
   DAQIRI_MGR=<span class="str">"dpdk socket rdma"</span> \
   scripts/build-container.sh</pre>
