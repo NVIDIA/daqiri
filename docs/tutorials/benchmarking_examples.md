@@ -8,6 +8,8 @@ DAQIRI provides a benchmarking application named `daqiri_bench_raw_gpudirect` th
 
 Make sure to [build the DAQIRI library](../getting-started.md#build-the-daqiri-library) beforehand.
 
+**Not sure which YAML to start from?** See [Choosing an example config](configuration-walkthrough.md#choosing-an-example-config) in the configuration tutorial — a use-case-driven decision tree from "I just want to verify the build" through reorder, recording, RDMA, and sockets.
+
 !!! note "Prerequisites"
 
     Before running the benchmarking application, ensure your system has been fully configured per the [System Configuration](system_configuration.md) page.
