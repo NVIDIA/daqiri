@@ -138,7 +138,7 @@ The two tabs below are linked across the page (mkdocs-material `content.tabs.lin
                                 link_layer:             InfiniBand
         ```
 
-    **For Holoscan Networking, we want the NIC to use the ETH link layer.** To switch the link layer mode, there are two possible options:
+    **For DAQIRI, we want the NIC to use the ETH link layer.** To switch the link layer mode, there are two possible options:
 
     1. On IGX Orin developer kits, you can switch that setting through the BIOS: [see IGX Orin documentation](https://docs.nvidia.com/igx-orin/user-guide/latest/switch-network-link.html).
     2. On any system with a NVIDIA NIC (including the IGX Orin developer kits), you can run the commands below from a terminal:
@@ -234,7 +234,7 @@ The two tabs below are linked across the page (mkdocs-material `content.tabs.lin
         [ 3712.267103] mlx5_core 0005:03:00.1: Port module event: module 1, Cable plugged
         ```
 
-    The next step is to set a static IP on the interface you'd like to use so you can refer to it in your Holoscan applications. First, check if you already have any addresses configured using the ethernet interface names identified above (in our case, `eth0` and `eth1`):
+    The next step is to set a static IP on the interface you'd like to use so you can refer to it in your DAQIRI applications. First, check if you already have any addresses configured using the ethernet interface names identified above (in our case, `eth0` and `eth1`):
 
     ```bash
     ip -f inet addr show eth0
@@ -299,19 +299,9 @@ The two tabs below are linked across the page (mkdocs-material `content.tabs.lin
 
     === "tune_system.py"
 
-        === "Debian installation"
-
-            ```bash
-            sudo /opt/nvidia/holoscan/bin/tune_system.py --check topo
-            ```
-
-        === "From source"
-
-            ```bash
-            cd holohub
-            sudo ./operators/advanced_network/python/tune_system.py --check topo
-
-            ```
+        ```bash
+        sudo ./python/tune_system.py --check topo
+        ```
 
         ??? abstract "See an example output"
 
@@ -386,24 +376,15 @@ The two tabs below are linked across the page (mkdocs-material `content.tabs.lin
 
         Several steps below require adding flags to the kernel bootline in `/etc/default/grub` (hugepages in [Enable Huge pages](#step-4-enable-huge-pages), CPU isolation in [Isolate CPU cores](#step-5-isolate-cpu-cores)). We recommend reading through both sections first and adding all the flags at once to avoid multiple reboots. Other items like MRRS, GPU clocks, and MTU can be applied at runtime but reset on reboot — consider scripting them or using a systemd service for persistence.
 
-    Before diving in each of the setups below, we provide a utility script as part of the DAQIRI library which provides an overview of the configurations that potentially need to be tuned on your system.
+    Before diving in each of the setups below, we provide a utility script as part of the DAQIRI library which provides an overview of the configurations that potentially need to be tuned on your system. The script (`python/tune_system.py`) is run on the host from a clone of the DAQIRI repo — it touches host PCIe/sysfs and is not intended to run inside the build container.
 
     ??? example "Work In Progress"
 
         This utility script is under active development and will be updated in future releases with additional checks, more actionable recommendations, and automated tuning.
 
-    === "Debian installation"
-
-        ```bash
-        sudo /opt/nvidia/holoscan/bin/tune_system.py --check all
-        ```
-
-    === "From source"
-
-        ```bash
-        cd holohub
-        sudo ./operators/advanced_network/python/tune_system.py --check all
-        ```
+    ```bash
+    sudo ./python/tune_system.py --check all
+    ```
 
     ??? abstract "See an example output"
 
@@ -453,18 +434,9 @@ The two tabs below are linked across the page (mkdocs-material `content.tabs.lin
 
     === "tune_system.py"
 
-        === "Debian installation"
-
-            ```bash
-            sudo /opt/nvidia/holoscan/bin/tune_system.py --check topo
-            ```
-
-        === "From source"
-
-            ```bash
-            cd holohub
-            sudo ./operators/advanced_network/python/tune_system.py --check topo
-            ```
+        ```bash
+        sudo ./python/tune_system.py --check topo
+        ```
 
         ??? abstract "See an example output"
 
@@ -546,18 +518,9 @@ The two tabs below are linked across the page (mkdocs-material `content.tabs.lin
 
     === "tune_system.py"
 
-        === "Debian installation"
-
-            ```bash
-            sudo /opt/nvidia/holoscan/bin/tune_system.py --check mps
-            ```
-
-        === "From source"
-
-            ```bash
-            cd holohub
-            sudo ./operators/advanced_network/python/tune_system.py --check mps
-            ```
+        ```bash
+        sudo ./python/tune_system.py --check mps
+        ```
 
         ??? abstract "See an example output"
 
@@ -648,18 +611,9 @@ The two tabs below are linked across the page (mkdocs-material `content.tabs.lin
 
     === "tune_system.py"
 
-        === "Debian installation"
-
-            ```bash
-            sudo /opt/nvidia/holoscan/bin/tune_system.py --check mrrs
-            ```
-
-        === "From source"
-
-            ```bash
-            cd holohub
-            sudo ./operators/advanced_network/python/tune_system.py --check mrrs
-            ```
+        ```bash
+        sudo ./python/tune_system.py --check mrrs
+        ```
 
     === "manual"
 
@@ -687,18 +641,9 @@ The two tabs below are linked across the page (mkdocs-material `content.tabs.lin
 
     Update MRRS:
 
-    === "Debian installation"
-
-        ```bash
-        sudo /opt/nvidia/holoscan/bin/tune_system.py --set mrrs
-        ```
-
-    === "From source"
-
-        ```bash
-        cd holohub
-        sudo ./operators/advanced_network/python/tune_system.py --set mrrs
-        ```
+    ```bash
+    sudo ./python/tune_system.py --set mrrs
+    ```
 
     !!! note
 
@@ -881,18 +826,9 @@ The two tabs below are linked across the page (mkdocs-material `content.tabs.lin
 
     === "tune_system.py"
 
-        === "Debian installation"
-
-            ```bash
-            sudo /opt/nvidia/holoscan/bin/tune_system.py --check cmdline
-            ```
-
-        === "From source"
-
-            ```bash
-            cd holohub
-            sudo ./operators/advanced_network/python/tune_system.py --check cmdline
-            ```
+        ```bash
+        sudo ./python/tune_system.py --check cmdline
+        ```
 
     === "manual"
 
@@ -967,18 +903,9 @@ The two tabs below are linked across the page (mkdocs-material `content.tabs.lin
 
     === "tune_system.py"
 
-        === "Debian installation"
-
-            ```bash
-            sudo /opt/nvidia/holoscan/bin/tune_system.py --check cpu-freq
-            ```
-
-        === "From source"
-
-            ```bash
-            cd holohub
-            sudo ./operators/advanced_network/python/tune_system.py --check cpu-freq
-            ```
+        ```bash
+        sudo ./python/tune_system.py --check cpu-freq
+        ```
 
         ??? abstract "See an example output"
 
@@ -1157,18 +1084,9 @@ The two tabs below are linked across the page (mkdocs-material `content.tabs.lin
 
     === "tune_system.py"
 
-        === "Debian installation"
-
-            ```bash
-            sudo /opt/nvidia/holoscan/bin/tune_system.py --check bar1-size
-            ```
-
-        === "From source"
-
-            ```bash
-            cd holohub
-            sudo ./operators/advanced_network/python/tune_system.py --check bar1-size
-            ```
+        ```bash
+        sudo ./python/tune_system.py --check bar1-size
+        ```
 
         ??? abstract "See an example output"
 
@@ -1317,18 +1235,9 @@ The two tabs below are linked across the page (mkdocs-material `content.tabs.lin
 
     === "tune_system.py"
 
-        === "Debian installation"
-
-            ```bash
-            sudo /opt/nvidia/holoscan/bin/tune_system.py --check mtu
-            ```
-
-        === "From source"
-
-            ```bash
-            cd holohub
-            sudo ./operators/advanced_network/python/tune_system.py --check mtu
-            ```
+        ```bash
+        sudo ./python/tune_system.py --check mtu
+        ```
 
         ??? abstract "See an example output"
 

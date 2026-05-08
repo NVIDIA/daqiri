@@ -71,7 +71,7 @@ Then build the DAQIRI library:
     The container bundles all user-space libraries for each networking backend, avoiding dependency issues on the host:
 
     ```bash
-    git clone git@github.com:nvidia-holoscan/daqiri.git
+    git clone git@github.com:NVIDIA/daqiri.git
     cd daqiri
     BASE_TARGET=dpdk DAQIRI_MGR="dpdk socket rdma" scripts/build-container.sh
     ```
@@ -85,7 +85,7 @@ Then build the DAQIRI library:
 === "CMake build (bare-metal)"
 
     ```bash
-    git clone git@github.com:nvidia-holoscan/daqiri.git
+    git clone git@github.com:NVIDIA/daqiri.git
     cd daqiri
     cmake -S . -B build -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MGR="dpdk socket rdma"
     cmake --build build -j
