@@ -235,13 +235,8 @@ struct RxWorkerParams {
   uint64_t timeout_us;
   uint32_t batch_size;
   int rx_meta_pool_size;
-  bool hardware_timestamps;
-  int timestamp_offset;
-  uint64_t timestamp_mask;
-  RxTimestampConversion timestamp_conversion;
   struct rte_ring* ring;
   struct rte_ring* lb_ring;
-  struct rte_mempool* flowid_pool;
   struct rte_mempool* rx_burst_pool;
   struct rte_mempool* tx_burst_pool;
   struct rte_mempool* rx_meta_pool;
@@ -254,17 +249,12 @@ struct RxWorkerMultiQPerQParams {
   int num_segs;
   int batch_size;
   uint64_t timeout_us;
-  bool hardware_timestamps;
-  int timestamp_offset;
-  uint64_t timestamp_mask;
-  RxTimestampConversion timestamp_conversion;
   struct rte_ring* ring;
   struct rte_ring* lb_ring;
 };
 
 struct RxWorkerMultiQParams {
   std::vector<RxWorkerMultiQPerQParams> q_params;
-  struct rte_mempool* flowid_pool;
   struct rte_mempool* rx_burst_pool;  // Pool used to pull out bursts from RX pool
   struct rte_mempool* tx_burst_pool;  // Pool used for loopback mode to return transmitted bursts
   struct rte_mempool* rx_meta_pool;   // Pool used for RX metadata structures
@@ -282,12 +272,6 @@ struct UDPPkt {
   struct rte_udp_hdr udp;
   uint8_t payload[];
 } __attribute__((packed));
-
-struct ExtraRxPacketInfo {
-  uint16_t flow_id;
-  uint64_t rx_timestamp_ns;
-  bool rx_timestamp_ns_valid;
-};
 
 static inline uint64_t convert_rx_timestamp_ticks_to_ns(uint64_t timestamp,
                                                         const RxTimestampConversion& conversion) {
@@ -1387,14 +1371,11 @@ Status DpdkMgr::process_burst_for_reorder(uint32_t key, ReorderQueueState& qstat
 
   const int unmatched_count = static_cast<int>(qstate.unmatched_count);
   if (unmatched_count > 0) {
-    auto* flow_info = reinterpret_cast<ExtraRxPacketInfo*>(burst->pkt_extra_info);
-
     for (int out_idx = 0; out_idx < unmatched_count; ++out_idx) {
       const int in_idx = unmatched_indices[out_idx];
       for (int seg = 0; seg < burst->hdr.hdr.num_segs; ++seg) {
         burst->pkts[seg][out_idx] = burst->pkts[seg][in_idx];
       }
-      if (flow_info != nullptr) { flow_info[out_idx] = flow_info[in_idx]; }
     }
     burst->hdr.hdr.num_pkts = unmatched_count;
     qstate.ready_outputs.push_back(burst);
@@ -2463,25 +2444,6 @@ int DpdkMgr::setup_pools_and_rings(int max_rx_batch, int max_tx_batch) {
     return -1;
   }
 
-  DAQIRI_LOG_INFO("Setting up RX burst pool with {} batches of size {}",
-                    num_rx_ptrs_buffers,
-                    sizeof(ExtraRxPacketInfo) * max_rx_batch);
-  rx_flow_id_buffer = rte_mempool_create("RX_FLOWID_POOL",
-                                       num_rx_ptrs_buffers,
-                                       sizeof(ExtraRxPacketInfo) * max_rx_batch,
-                                       0,
-                                       0,
-                                       nullptr,
-                                       nullptr,
-                                       nullptr,
-                                       nullptr,
-                                       rte_socket_id(),
-                                       0);
-  if (rx_flow_id_buffer == nullptr) {
-    DAQIRI_LOG_CRITICAL("Failed to allocate RX burst pool!");
-    return -1;
-  }
-
   DAQIRI_LOG_INFO("Setting up RX meta pool with {} buffers", cfg_.rx_meta_buffers_);
   rx_metadata = rte_mempool_create("RX_META_POOL",
                                cfg_.rx_meta_buffers_ - 1U,
@@ -3386,12 +3348,6 @@ void DpdkMgr::run() {
   int icore;
 
   DAQIRI_LOG_INFO("Starting DAQIRI workers");
-  const auto hardware_timestamps_enabled = [this](uint16_t port_id) {
-    for (const auto& intf : cfg_.ifs_) {
-      if (intf.port_id_ == port_id) { return intf.rx_.hardware_timestamps_; }
-    }
-    return false;
-  };
 
   // determine the correct process types for input/output
   int (*rx_worker)(void*);
@@ -3427,16 +3383,11 @@ void DpdkMgr::run() {
       params->queue = q_id;
       params->rx_burst_pool = rx_burst_buffer;
       params->tx_burst_pool = tx_burst_buffers[0];
-      params->flowid_pool = rx_flow_id_buffer;
       params->rx_meta_pool = rx_metadata;
       params->tx_meta_pool = tx_metadata;
       params->batch_size = q->common_.batch_size_;
       params->timeout_us = q->timeout_us_;
       params->rx_meta_pool_size = cfg_.rx_meta_buffers_;
-      params->hardware_timestamps = hardware_timestamps_enabled(port_id);
-      params->timestamp_offset = timestamp_dynfield_offset_;
-      params->timestamp_mask = rx_timestamp_dynflag_mask_;
-      params->timestamp_conversion = rx_timestamp_conversions_[port_id];
       rte_eal_remote_launch(
         rx_worker, (void*)params, strtol(q->common_.cpu_core_.c_str(), NULL, 10));
     } else {
@@ -3458,16 +3409,11 @@ void DpdkMgr::run() {
                                     (int)q->common_.mrs_.size(),
                                     q->common_.batch_size_,
                                     q->timeout_us_,
-                                    hardware_timestamps_enabled(port_id),
-                                    timestamp_dynfield_offset_,
-                                    rx_timestamp_dynflag_mask_,
-                                    rx_timestamp_conversions_[port_id],
                                     ring_ptr,
                                     nullptr});
       }
 
       params->rx_burst_pool = rx_burst_buffer;
-      params->flowid_pool = rx_flow_id_buffer;
       params->rx_meta_pool = rx_metadata;
       params->rx_meta_pool_size = cfg_.rx_meta_buffers_;
       rte_eal_remote_launch(rx_core_multi_q_worker, (void*)params, el.first);
@@ -3594,11 +3540,6 @@ int DpdkMgr::rx_core_multi_q_worker(void* arg) {
             rte_pktmbuf_free(reinterpret_cast<rte_mbuf**>(bursts[i]->pkts[0])[p]);
           }
 
-          // Free the pkt_extra_info buffer back to the pool
-          if (bursts[i]->pkt_extra_info != nullptr) {
-            rte_mempool_put(tparams->flowid_pool, bursts[i]->pkt_extra_info);
-          }
-
           // Free the segment buffers back to the burst pool
           for (int seg = 0; seg < bursts[i]->hdr.hdr.num_segs; seg++) {
             rte_mempool_put(tparams->rx_burst_pool, (void*)bursts[i]->pkts[seg]);
@@ -3625,6 +3566,7 @@ int DpdkMgr::rx_core_multi_q_worker(void* arg) {
       bursts[cur_idx]->hdr.hdr.port_id  = cur_port;
       bursts[cur_idx]->hdr.hdr.num_segs = cur_segs;
       bursts[cur_idx]->hdr.hdr.num_pkts = 0;
+      bursts[cur_idx]->pkt_extra_info = nullptr;
 
       for (int seg = 0; seg < cur_segs; seg++) {
         if (rte_mempool_get(tparams->rx_burst_pool,
@@ -3633,12 +3575,6 @@ int DpdkMgr::rx_core_multi_q_worker(void* arg) {
               "Processing function falling behind. No free RX bursts!");
           continue;
         }
-      }
-
-      if (rte_mempool_get(
-            tparams->flowid_pool, reinterpret_cast<void**>(&bursts[cur_idx]->pkt_extra_info)) < 0) {
-        DAQIRI_LOG_ERROR("Processing function falling behind. No free CPU buffers for packets!");
-        continue;
       }
     }
 
@@ -3672,26 +3608,6 @@ int DpdkMgr::rx_core_multi_q_worker(void* arg) {
                         cur_batch_size - bursts[cur_idx]->hdr.hdr.num_pkts);
     memcpy(&bursts[cur_idx]->pkts[0][bursts[cur_idx]->hdr.hdr.num_pkts],
                   &mbuf_arr[cur_idx][cur_pkt_in_batch[cur_idx]], sizeof(rte_mbuf*) * to_copy);
-
-    ExtraRxPacketInfo* pkt_info =
-                              reinterpret_cast<ExtraRxPacketInfo*>(bursts[cur_idx]->pkt_extra_info);
-    for (int p = 0; p < to_copy; p++) {
-      auto* mbuf = mbuf_arr[cur_idx][cur_pkt_in_batch[cur_idx] + p];
-      auto& info = pkt_info[bursts[cur_idx]->hdr.hdr.num_pkts + p];
-      if (mbuf->ol_flags & RTE_MBUF_F_RX_FDIR_ID) {
-        info.flow_id = mbuf->hash.fdir.hi;
-      } else {
-        info.flow_id = 0;
-      }
-      info.rx_timestamp_ns = 0;
-      info.rx_timestamp_ns_valid =
-          tparams->q_params[cur_idx].hardware_timestamps
-          && extract_mbuf_rx_timestamp_ns(mbuf,
-                                          tparams->q_params[cur_idx].timestamp_offset,
-                                          tparams->q_params[cur_idx].timestamp_mask,
-                                          tparams->q_params[cur_idx].timestamp_conversion,
-                                          &info.rx_timestamp_ns);
-    }
 
     if (cur_segs > 1) {  // Extra work when buffers are scattered
       for (int p = 0; p < to_copy; p++) {
@@ -3765,7 +3681,6 @@ int DpdkMgr::rx_core_worker(void* arg) {
   int nb_rx = 0;
   int cur_pkt_in_batch = 0;
   BurstParams* burst = nullptr;
-  ExtraRxPacketInfo *pkt_info;
   //
   //  run loop
   //
@@ -3788,11 +3703,6 @@ int DpdkMgr::rx_core_worker(void* arg) {
         // Free all packet mbufs stored in the burst
         for (int p = 0; p < burst->hdr.hdr.num_pkts; p++) {
           rte_pktmbuf_free(reinterpret_cast<rte_mbuf**>(burst->pkts[0])[p]);
-        }
-
-        // Free the pkt_extra_info buffer back to the pool
-        if (burst->pkt_extra_info != nullptr) {
-          rte_mempool_put(tparams->flowid_pool, burst->pkt_extra_info);
         }
 
         // Free the segment buffers back to the burst pool
@@ -3820,6 +3730,7 @@ int DpdkMgr::rx_core_worker(void* arg) {
       burst->hdr.hdr.port_id  = tparams->port;
       burst->hdr.hdr.num_segs = tparams->num_segs;
       burst->hdr.hdr.num_pkts = 0;
+      burst->pkt_extra_info = nullptr;
 
       for (int seg = 0; seg < tparams->num_segs; seg++) {
         if (rte_mempool_get(tparams->rx_burst_pool,
@@ -3829,14 +3740,6 @@ int DpdkMgr::rx_core_worker(void* arg) {
           continue;
         }
       }
-
-      if (rte_mempool_get(
-            tparams->flowid_pool, reinterpret_cast<void**>(&burst->pkt_extra_info)) < 0) {
-        DAQIRI_LOG_ERROR("Processing function falling behind. No free CPU buffers for packets!");
-        continue;
-      }
-
-      pkt_info = reinterpret_cast<ExtraRxPacketInfo*>(burst->pkt_extra_info);
     }
 
     // Check if we need to get more packets
@@ -3867,24 +3770,6 @@ int DpdkMgr::rx_core_worker(void* arg) {
                                     tparams->batch_size - burst->hdr.hdr.num_pkts);
     memcpy(&burst->pkts[0][burst->hdr.hdr.num_pkts],
                                         &mbuf_arr[cur_pkt_in_batch], sizeof(rte_mbuf*) * to_copy);
-
-    for (int p = 0; p < to_copy; p++) {
-      auto* mbuf = mbuf_arr[cur_pkt_in_batch + p];
-      auto& info = pkt_info[burst->hdr.hdr.num_pkts + p];
-      if (mbuf->ol_flags & RTE_MBUF_F_RX_FDIR_ID) {
-        info.flow_id = mbuf->hash.fdir.hi;
-      } else {
-        info.flow_id = 0;
-      }
-      info.rx_timestamp_ns = 0;
-      info.rx_timestamp_ns_valid =
-          tparams->hardware_timestamps
-          && extract_mbuf_rx_timestamp_ns(mbuf,
-                                          tparams->timestamp_offset,
-                                          tparams->timestamp_mask,
-                                          tparams->timestamp_conversion,
-                                          &info.rx_timestamp_ns);
-    }
 
     if (tparams->num_segs > 1) {  // Extra work when buffers are scattered
       for (int p = 0; p < to_copy; p++) {
@@ -4155,9 +4040,12 @@ uint32_t DpdkMgr::get_packet_length(BurstParams* burst, int idx) {
 uint16_t DpdkMgr::get_packet_flow_id(BurstParams* burst, int idx) {
   if (burst == nullptr || idx < 0) { return 0; }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) { return 0; }
-  const ExtraRxPacketInfo* info = reinterpret_cast<ExtraRxPacketInfo*>(burst->pkt_extra_info);
-  if (info == nullptr) { return 0; }
-  return info[idx].flow_id;
+  if (idx >= static_cast<int>(burst->hdr.hdr.num_pkts) || burst->pkts[0] == nullptr) {
+    return 0;
+  }
+  const auto* mbuf = reinterpret_cast<const rte_mbuf*>(burst->pkts[0][idx]);
+  if (mbuf == nullptr || (mbuf->ol_flags & RTE_MBUF_F_RX_FDIR_ID) == 0) { return 0; }
+  return mbuf->hash.fdir.hi;
 }
 
 Status DpdkMgr::get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) {
@@ -4175,9 +4063,19 @@ Status DpdkMgr::get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* t
     return Status::SUCCESS;
   }
 
-  const ExtraRxPacketInfo* info = reinterpret_cast<ExtraRxPacketInfo*>(burst->pkt_extra_info);
-  if (info == nullptr || !info[idx].rx_timestamp_ns_valid) { return Status::NOT_SUPPORTED; }
-  *timestamp_ns = info[idx].rx_timestamp_ns;
+  if (burst->pkts[0] == nullptr) { return Status::INVALID_PARAMETER; }
+  auto* mbuf = reinterpret_cast<rte_mbuf*>(burst->pkts[0][idx]);
+  if (mbuf == nullptr || burst->hdr.hdr.port_id >= rx_timestamp_conversions_.size()) {
+    return Status::INVALID_PARAMETER;
+  }
+
+  if (!extract_mbuf_rx_timestamp_ns(mbuf,
+                                    timestamp_dynfield_offset_,
+                                    rx_timestamp_dynflag_mask_,
+                                    rx_timestamp_conversions_[burst->hdr.hdr.port_id],
+                                    timestamp_ns)) {
+    return Status::NOT_SUPPORTED;
+  }
   return Status::SUCCESS;
 }
 
@@ -4406,10 +4304,6 @@ void DpdkMgr::free_rx_burst(BurstParams* burst) {
     burst->custom_pkt_data.reset();
     delete burst;
     return;
-  }
-
-  if (burst->pkt_extra_info != nullptr) {
-    rte_mempool_put(rx_flow_id_buffer, (void*)burst->pkt_extra_info);
   }
 
   for (int seg = 0; seg < burst->hdr.hdr.num_segs; seg++) {

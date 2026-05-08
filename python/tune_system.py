@@ -16,12 +16,71 @@
 # limitations under the License.
 
 import argparse
+import html
 import logging
 import os
 import re
+import shlex
 import subprocess
 import sys
+import textwrap
+from collections import Counter, defaultdict
 from ctypes import CDLL, byref, c_int, create_string_buffer
+from dataclasses import dataclass, field
+
+
+PCI_SYSFS_DEVICES = "/sys/bus/pci/devices"
+PCI_BDF_RE = re.compile(
+    r"^([0-9a-fA-F]{4,8}):([0-9a-fA-F]{2}):([0-9a-fA-F]{2})\.([0-7])$"
+)
+PCI_ROOT_RE = re.compile(r"^pci[0-9a-fA-F]{4}:[0-9a-fA-F]{2}$")
+OPTIMAL_TOPOLOGY_CONNECTIONS = {"PIX", "PXB"}
+PCIE_EFFECTIVE_GB_PER_SEC_PER_LANE = {
+    2.5: 0.250,
+    5.0: 0.500,
+    8.0: 0.985,
+    16.0: 1.969,
+    32.0: 3.938,
+    64.0: 7.563,
+}
+
+
+@dataclass
+class PciDevice:
+    bdf: str
+    class_code: int
+    vendor_id: str
+    class_name: str
+    description: str
+    kind: str
+    numa_node: int
+    root: str
+    parent_bdf: str
+    link_speed: str = ""
+    link_width: str = ""
+    max_link_speed: str = ""
+    max_link_width: str = ""
+    path_chain: list = field(default_factory=list)
+    label: str = ""
+    net_names: list = field(default_factory=list)
+    rdma_names: list = field(default_factory=list)
+    block_names: list = field(default_factory=list)
+    notes: list = field(default_factory=list)
+
+
+@dataclass
+class SchematicNode:
+    key: str
+    lines: list
+    kind: str
+    depth: int
+    link_label: str = ""
+    children: list = field(default_factory=list)
+    render_lines: list = field(default_factory=list)
+    x: int = 0
+    y: int = 0
+    width: int = 0
+    height: int = 0
 
 
 def setup_logging():
@@ -46,6 +105,8 @@ def parse_args():
             f"  python {sys.argv[0]} --check cpu-freq    # Check CPU frequency governor\n"
             f"  python {sys.argv[0]} --check mrrs        # Check MRRS settings for NVIDIA NICs\n"
             f"  python {sys.argv[0]} --check mps         # Check max payload size settings\n"
+            f"  python {sys.argv[0]} --check schematic   # Write PCIe topology image\n"
+            f"  python {sys.argv[0]} --check schematic --schematic-output topo.svg\n"
             f"  python {sys.argv[0]} --set mrrs          # Set PCIe MRRS\n\n"
         ),
         formatter_class=argparse.RawTextHelpFormatter,
@@ -66,6 +127,7 @@ def parse_args():
             "gpu-clocks",
             "bar1-size",
             "topo",
+            "schematic",
             "cmdline",
             "mtu",
         ],
@@ -81,12 +143,21 @@ def parse_args():
             "  gpu-clocks - Check GPU clocks\n"
             "  bar1-size  - Check the BAR1 size of the GPU\n"
             "  topo       - Check the GPU and NIC topology\n"
+            "  schematic  - Write a PCIe topology image with link speed labels\n"
             "  cmdline    - Check the kernel boot parameters\n"
             "  mtu        - Check MTU of each NVIDIA interface\n"
         ),
     )
 
     group.add_argument("--set", choices=["mrrs"], help=("  mrrs      - Update MRRS of NICs\n"))
+    parser.add_argument(
+        "--schematic-output",
+        default="pcie_schematic.png",
+        help=(
+            "Output path for --check schematic. Supported extensions are .png and .svg "
+            "(default: pcie_schematic.png)."
+        ),
+    )
 
     # Check if no arguments are provided
     if len(sys.argv) == 1:
@@ -587,6 +658,1167 @@ def check_bar1_size():
         logging.error(f"An unexpected error occurred: {e}")
 
 
+def read_text_file(path, default=""):
+    """
+    Reads a small text file and returns a stripped string. Missing sysfs/procfs
+    entries are common on different platforms, so callers can provide a default.
+    """
+    try:
+        with open(path, "r") as file:
+            return file.read().strip()
+    except (FileNotFoundError, PermissionError, OSError):
+        return default
+
+
+def normalize_pci_address(address):
+    """
+    Normalizes a PCI BDF to the Linux sysfs form, e.g. 0000:17:00.0.
+    nvidia-smi can report an 8-hex-digit domain, so keep the low 16 bits.
+    """
+    match = PCI_BDF_RE.match(os.path.basename(address.strip()))
+    if not match:
+        return None
+
+    domain, bus, device, function = match.groups()
+    return f"{domain[-4:].lower()}:{bus.lower()}:{device.lower()}.{function}"
+
+
+def pci_bdfs_from_path(path):
+    """
+    Extracts the PCI BDF chain from a sysfs path.
+    """
+    bdfs = []
+    for part in os.path.realpath(path).split(os.sep):
+        bdf = normalize_pci_address(part)
+        if bdf is not None and (not bdfs or bdfs[-1] != bdf):
+            bdfs.append(bdf)
+    return bdfs
+
+
+def pci_root_from_path(path):
+    """
+    Extracts the sysfs PCI root identifier, e.g. pci0000:00.
+    """
+    for part in os.path.realpath(path).split(os.sep):
+        if PCI_ROOT_RE.match(part):
+            return part.lower()
+    return "pci????:??"
+
+
+def class_name_for_code(class_code):
+    """
+    Returns a readable PCI class fallback when lspci is unavailable.
+    """
+    base = (class_code >> 16) & 0xFF
+    subclass = (class_code >> 8) & 0xFF
+
+    if base == 0x01 and subclass == 0x08:
+        return "Non-Volatile memory controller"
+    if base == 0x01:
+        return "Mass storage controller"
+    if base == 0x02:
+        return "Network controller"
+    if base == 0x03:
+        return "Display controller"
+    if base == 0x06 and subclass == 0x00:
+        return "Host bridge"
+    if base == 0x06 and subclass == 0x04:
+        return "PCI bridge"
+    return f"PCI class 0x{class_code:06x}"
+
+
+def classify_pci_kind(class_code, vendor_id=""):
+    """
+    Classifies a PCI device into the kinds shown in the schematic.
+    """
+    base = (class_code >> 16) & 0xFF
+    subclass = (class_code >> 8) & 0xFF
+
+    if base == 0x03 and vendor_id.lower() == "0x10de":
+        return "GPU"
+    if base == 0x03:
+        return "DISPLAY"
+    if base == 0x02:
+        return "NIC"
+    if base == 0x01 and subclass == 0x08:
+        return "NVME"
+    if base == 0x01:
+        return "DISK"
+    if base == 0x06 and subclass == 0x00:
+        return "HOST"
+    if base == 0x06 and subclass == 0x04:
+        return "BRIDGE"
+    return "OTHER"
+
+
+def get_lspci_descriptions():
+    """
+    Gets machine-readable lspci descriptions keyed by normalized BDF.
+    """
+    descriptions = {}
+    try:
+        result = subprocess.run(["lspci", "-Dmm"], capture_output=True, text=True, check=True)
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return descriptions
+
+    for line in result.stdout.splitlines():
+        try:
+            parts = shlex.split(line)
+        except ValueError:
+            continue
+
+        if len(parts) < 4:
+            continue
+
+        bdf = normalize_pci_address(parts[0])
+        if bdf is None:
+            continue
+
+        class_name = parts[1]
+        description = " ".join(part for part in parts[2:4] if part)
+        descriptions[bdf] = (class_name, description)
+
+    return descriptions
+
+
+def get_lspci_link_info():
+    """
+    Gets PCIe link status/capability data keyed by normalized BDF.
+    """
+    link_info = {}
+    try:
+        result = subprocess.run(["lspci", "-Dvv"], capture_output=True, text=True, check=True)
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return link_info
+
+    current_bdf = None
+    for line in result.stdout.splitlines():
+        header_match = re.match(r"^([0-9a-fA-F:.]+)\s+", line)
+        if header_match:
+            current_bdf = normalize_pci_address(header_match.group(1))
+            if current_bdf is not None:
+                link_info.setdefault(current_bdf, {})
+            continue
+
+        if current_bdf is None:
+            continue
+
+        stripped = line.strip()
+        if stripped.startswith("LnkCap:"):
+            speed, width = parse_lspci_link_line(stripped)
+            if speed:
+                link_info.setdefault(current_bdf, {})["max_speed"] = speed
+            if width:
+                link_info.setdefault(current_bdf, {})["max_width"] = width
+        elif stripped.startswith("LnkSta:"):
+            speed, width = parse_lspci_link_line(stripped)
+            if speed:
+                link_info.setdefault(current_bdf, {})["speed"] = speed
+            if width:
+                link_info.setdefault(current_bdf, {})["width"] = width
+
+    return link_info
+
+
+def parse_lspci_link_line(line):
+    """
+    Parses speed and width from an lspci LnkCap/LnkSta line.
+    """
+    speed = ""
+    width = ""
+
+    speed_match = re.search(r"Speed\s+([0-9.]+GT/s)", line)
+    if speed_match:
+        speed = speed_match.group(1)
+
+    width_match = re.search(r"Width\s+x([0-9]+)", line)
+    if width_match:
+        width = f"x{width_match.group(1)}"
+
+    return speed, width
+
+
+def parse_pcie_speed_gtps(speed):
+    match = re.search(r"([0-9.]+)\s*GT/s", speed or "")
+    if not match:
+        return None
+
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
+
+
+def parse_pcie_width(width):
+    match = re.search(r"x([0-9]+)", width or "")
+    if not match:
+        return None
+
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def pcie_generation(speed):
+    gtps = parse_pcie_speed_gtps(speed)
+    if gtps is None:
+        return ""
+
+    generation_by_speed = {
+        2.5: "Gen1",
+        5.0: "Gen2",
+        8.0: "Gen3",
+        16.0: "Gen4",
+        32.0: "Gen5",
+        64.0: "Gen6",
+    }
+    closest = min(generation_by_speed, key=lambda candidate: abs(candidate - gtps))
+    if abs(closest - gtps) < 0.2:
+        return generation_by_speed[closest]
+    return f"{gtps:g}GT/s"
+
+
+def pcie_bandwidth_gb_per_sec(speed, width):
+    gtps = parse_pcie_speed_gtps(speed)
+    lanes = parse_pcie_width(width)
+    if gtps is None or lanes is None:
+        return None
+
+    closest = min(
+        PCIE_EFFECTIVE_GB_PER_SEC_PER_LANE,
+        key=lambda candidate: abs(candidate - gtps),
+    )
+    if abs(closest - gtps) >= 0.2:
+        return None
+
+    return PCIE_EFFECTIVE_GB_PER_SEC_PER_LANE[closest] * lanes
+
+
+def format_pcie_link_label(device):
+    """
+    Formats the upstream link from a device's parent bridge to the device.
+    """
+    speed = device.max_link_speed or device.link_speed
+    width = device.max_link_width or device.link_width
+    if not speed or not width:
+        return "link unknown"
+
+    generation = pcie_generation(speed)
+    bandwidth = pcie_bandwidth_gb_per_sec(speed, width)
+    label = f"{generation} {width}"
+    if bandwidth is not None:
+        label += f"\n{bandwidth:.1f} GB/s"
+
+    if (
+        device.link_speed
+        and device.link_width
+        and (device.link_speed != speed or device.link_width != width)
+    ):
+        current_generation = pcie_generation(device.link_speed)
+        label += f"\ncurrent {current_generation} {device.link_width}"
+
+    return label
+
+
+def get_nvidia_gpu_info_by_bdf():
+    """
+    Gets nvidia-smi GPU labels and names keyed by normalized BDF.
+    """
+    gpus = {}
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,pci.bus_id,name",
+                "--format=csv,noheader",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return gpus
+
+    for line in result.stdout.splitlines():
+        parts = [part.strip() for part in line.split(",", 2)]
+        if len(parts) != 3:
+            continue
+
+        index, bus_id, name = parts
+        bdf = normalize_pci_address(bus_id)
+        if bdf is None:
+            continue
+
+        gpus[bdf] = {"label": f"GPU{index}", "name": name}
+
+    return gpus
+
+
+def collect_names_by_pci_bdf(sysfs_dir, skip_names=None):
+    """
+    Maps sysfs objects such as netdevs, RDMA devices, or block devices to PCI BDFs.
+    """
+    names_by_bdf = defaultdict(list)
+    skip_names = set(skip_names or [])
+
+    if not os.path.isdir(sysfs_dir):
+        return names_by_bdf
+
+    for name in sorted(os.listdir(sysfs_dir)):
+        if name in skip_names:
+            continue
+
+        path = os.path.join(sysfs_dir, name)
+        chain = pci_bdfs_from_path(path)
+        if chain:
+            names_by_bdf[chain[-1]].append(name)
+
+    return names_by_bdf
+
+
+def collect_cpu_nodes():
+    """
+    Reads NUMA CPU node cpulists from sysfs.
+    """
+    nodes = {}
+    node_dir = "/sys/devices/system/node"
+
+    if os.path.isdir(node_dir):
+        for name in sorted(os.listdir(node_dir)):
+            if not name.startswith("node") or not name[4:].isdigit():
+                continue
+
+            node_id = int(name[4:])
+            cpulist = read_text_file(os.path.join(node_dir, name, "cpulist"), "unknown")
+            nodes[node_id] = cpulist or "unknown"
+
+    if not nodes:
+        nodes[0] = read_text_file("/sys/devices/system/cpu/online", "unknown") or "unknown"
+
+    return nodes
+
+
+def next_unused_label(prefix, used_labels):
+    """
+    Returns the next prefixN label not already in use.
+    """
+    index = 0
+    while f"{prefix}{index}" in used_labels:
+        index += 1
+
+    label = f"{prefix}{index}"
+    used_labels.add(label)
+    return label
+
+
+def assign_topology_labels(devices, gpu_info_by_bdf):
+    """
+    Assigns readable labels to GPUs, NICs, and storage endpoints.
+    """
+    used_gpu_labels = set()
+    for bdf, gpu_info in gpu_info_by_bdf.items():
+        if bdf not in devices or devices[bdf].kind != "GPU":
+            continue
+
+        devices[bdf].label = gpu_info["label"]
+        used_gpu_labels.add(gpu_info["label"])
+        if gpu_info.get("name"):
+            devices[bdf].description = gpu_info["name"]
+
+    for device in sorted(
+        [device for device in devices.values() if device.kind == "GPU"],
+        key=lambda item: item.bdf,
+    ):
+        if not device.label:
+            device.label = next_unused_label("GPU", used_gpu_labels)
+
+    used_nic_labels = set()
+    for device in sorted(
+        [device for device in devices.values() if device.kind == "NIC"],
+        key=lambda item: item.bdf,
+    ):
+        if device.net_names:
+            label = device.net_names[0]
+        elif device.rdma_names:
+            label = device.rdma_names[0]
+        else:
+            device.label = next_unused_label("NIC", used_nic_labels)
+            continue
+
+        if label in used_nic_labels:
+            label = f"{label}/{device.bdf}"
+        device.label = label
+        used_nic_labels.add(label)
+
+    for prefix, kind in [("NVME", "NVME"), ("DISK", "DISK")]:
+        used_labels = set()
+        for device in sorted(
+            [device for device in devices.values() if device.kind == kind],
+            key=lambda item: item.bdf,
+        ):
+            device.label = next_unused_label(prefix, used_labels)
+
+
+def collect_pci_devices():
+    """
+    Collects PCI devices from sysfs and annotates them with useful endpoint aliases.
+    """
+    devices = {}
+    if not os.path.isdir(PCI_SYSFS_DEVICES):
+        return devices
+
+    lspci_descriptions = get_lspci_descriptions()
+    lspci_link_info = get_lspci_link_info()
+    gpu_info_by_bdf = get_nvidia_gpu_info_by_bdf()
+    net_names_by_bdf = collect_names_by_pci_bdf("/sys/class/net", skip_names={"lo"})
+    rdma_names_by_bdf = collect_names_by_pci_bdf("/sys/class/infiniband")
+    block_names_by_bdf = collect_names_by_pci_bdf(
+        "/sys/block",
+        skip_names={"loop0", "loop1", "loop2", "loop3", "loop4", "loop5", "loop6", "loop7"},
+    )
+
+    for entry in sorted(os.listdir(PCI_SYSFS_DEVICES)):
+        bdf = normalize_pci_address(entry)
+        if bdf is None:
+            continue
+
+        device_path = os.path.join(PCI_SYSFS_DEVICES, entry)
+        class_text = read_text_file(os.path.join(device_path, "class"), "0x000000")
+        try:
+            class_code = int(class_text, 16)
+        except ValueError:
+            class_code = 0
+
+        class_name, description = lspci_descriptions.get(
+            bdf, (class_name_for_code(class_code), "")
+        )
+        vendor_id = read_text_file(os.path.join(device_path, "vendor"), "").lower()
+        path_chain = pci_bdfs_from_path(device_path)
+        parent_bdf = path_chain[-2] if len(path_chain) >= 2 else ""
+        numa_text = read_text_file(os.path.join(device_path, "numa_node"), "-1")
+        try:
+            numa_node = int(numa_text)
+        except ValueError:
+            numa_node = -1
+        link_info = lspci_link_info.get(bdf, {})
+
+        devices[bdf] = PciDevice(
+            bdf=bdf,
+            class_code=class_code,
+            vendor_id=vendor_id,
+            class_name=class_name,
+            description=description,
+            kind=classify_pci_kind(class_code, vendor_id),
+            numa_node=numa_node,
+            root=pci_root_from_path(device_path),
+            parent_bdf=parent_bdf,
+            link_speed=link_info.get("speed", ""),
+            link_width=link_info.get("width", ""),
+            max_link_speed=link_info.get("max_speed", ""),
+            max_link_width=link_info.get("max_width", ""),
+            path_chain=path_chain,
+            net_names=net_names_by_bdf.get(bdf, []),
+            rdma_names=rdma_names_by_bdf.get(bdf, []),
+            block_names=block_names_by_bdf.get(bdf, []),
+        )
+
+    assign_topology_labels(devices, gpu_info_by_bdf)
+    return devices
+
+
+def topology_endpoint_devices(devices):
+    """
+    Returns the endpoint devices shown in the schematic.
+    """
+    return sorted(
+        [
+            device
+            for device in devices.values()
+            if device.kind in {"GPU", "NIC", "NVME"}
+            or (device.kind == "DISK" and device.block_names)
+        ],
+        key=lambda item: (item.kind, item.bdf),
+    )
+
+
+def infer_root_numa_nodes(devices, cpu_nodes=None):
+    """
+    Infers each PCI root's NUMA node from child devices.
+    """
+    root_numa_nodes = {}
+    cpu_nodes = cpu_nodes or {}
+    fallback_numa_node = next(iter(cpu_nodes.keys())) if len(cpu_nodes) == 1 else -1
+    roots = sorted({device.root for device in devices.values()})
+
+    for root in roots:
+        candidates = [
+            device.numa_node
+            for device in devices.values()
+            if device.root == root and device.numa_node >= 0
+        ]
+        if candidates:
+            root_numa_nodes[root] = Counter(candidates).most_common(1)[0][0]
+        else:
+            root_numa_nodes[root] = fallback_numa_node
+
+    return root_numa_nodes
+
+
+def included_topology_bdfs(devices, endpoints):
+    """
+    Includes each endpoint and its PCI bridge ancestry.
+    """
+    included = set()
+    for endpoint in endpoints:
+        for bdf in endpoint.path_chain:
+            if bdf in devices:
+                included.add(bdf)
+    return included
+
+
+def common_prefix_length(left, right):
+    """
+    Counts matching items at the start of two lists.
+    """
+    count = 0
+    for left_item, right_item in zip(left, right):
+        if left_item != right_item:
+            break
+        count += 1
+    return count
+
+
+def common_pci_ancestor(left, right):
+    """
+    Returns the deepest common PCI BDF in two endpoint paths.
+    """
+    shared_depth = common_prefix_length(left.path_chain, right.path_chain)
+    if shared_depth <= 0:
+        return ""
+    return left.path_chain[shared_depth - 1]
+
+
+def classify_topology_connection(left, right, devices, root_numa_nodes):
+    """
+    Classifies two PCI endpoints using nvidia-smi topo -m nomenclature.
+    """
+    if left.bdf == right.bdf:
+        return "X"
+
+    if left.root == right.root:
+        shared_depth = common_prefix_length(left.path_chain, right.path_chain)
+        if shared_depth > 0:
+            common_bdf = common_pci_ancestor(left, right)
+            common_device = devices.get(common_bdf)
+            if shared_depth == 1 and common_device is not None and common_device.kind == "HOST":
+                return "PHB"
+            hops_below_common_bridge = (
+                len(left.path_chain) - shared_depth + len(right.path_chain) - shared_depth
+            )
+            return "PIX" if hops_below_common_bridge <= 2 else "PXB"
+        return "PHB"
+
+    left_numa = left.numa_node if left.numa_node >= 0 else root_numa_nodes.get(left.root, -1)
+    right_numa = right.numa_node if right.numa_node >= 0 else root_numa_nodes.get(right.root, -1)
+
+    if left_numa >= 0 and left_numa == right_numa:
+        return "NODE"
+    return "SYS"
+
+
+def connection_description(connection_type):
+    """
+    Describes the nvidia-smi topo -m connection class.
+    """
+    return {
+        "X": "same device",
+        "PIX": "traverses at most one PCIe bridge",
+        "PXB": "traverses multiple PCIe bridges without crossing a host bridge",
+        "PHB": "crosses a PCIe host bridge",
+        "NODE": "crosses PCIe host bridges within one NUMA node",
+        "SYS": "crosses NUMA nodes or CPU sockets",
+    }.get(connection_type, "unknown topology class")
+
+
+def render_topology_connection_summary(devices, root_numa_nodes):
+    """
+    Renders optimal and suboptimal GPU-to-I/O connection lines.
+    """
+    gpus = sorted(
+        [device for device in devices.values() if device.kind == "GPU"],
+        key=lambda item: item.label,
+    )
+    io_devices = sorted(
+        [
+            device
+            for device in devices.values()
+            if device.kind in {"NIC", "NVME"}
+            or (device.kind == "DISK" and device.block_names)
+        ],
+        key=lambda item: (item.kind, item.label),
+    )
+
+    lines = [
+        "",
+        "Topology connection classes:",
+        "  PIX  " + connection_description("PIX"),
+        "  PXB  " + connection_description("PXB"),
+        "  PHB  " + connection_description("PHB"),
+        "  NODE " + connection_description("NODE"),
+        "  SYS  " + connection_description("SYS"),
+        "",
+    ]
+
+    if not gpus:
+        lines.append("No GPUs were found for GPU-to-I/O connection classification.")
+        return lines
+    if not io_devices:
+        lines.append("No NICs, NVMe devices, or PCIe disks were found for classification.")
+        return lines
+
+    optimal = []
+    suboptimal = []
+    for gpu in gpus:
+        for io_device in io_devices:
+            connection_type = classify_topology_connection(
+                gpu, io_device, devices, root_numa_nodes
+            )
+            line = (
+                f"  {gpu.label} <-> {io_device.label}: {connection_type} - "
+                f"{connection_description(connection_type)} "
+                f"({gpu.bdf} <-> {io_device.bdf})"
+            )
+            if connection_type in OPTIMAL_TOPOLOGY_CONNECTIONS:
+                optimal.append(line)
+            else:
+                suboptimal.append(line)
+
+    lines.append("Optimal connections (PIX/PXB):")
+    if optimal:
+        lines.extend(optimal)
+    else:
+        lines.append("  None found.")
+
+    lines.append("")
+    lines.append("Suboptimal connections (PHB/NODE/SYS):")
+    if suboptimal:
+        lines.extend(suboptimal)
+    else:
+        lines.append("  None found.")
+
+    return lines
+
+
+def annotate_optimal_peer_fabrics(devices, root_numa_nodes):
+    """
+    Marks shared PCIe switch/bridge ancestors for optimal GPU-to-I/O peer paths.
+    """
+    for device in devices.values():
+        device.notes = []
+
+    gpus = sorted(
+        [device for device in devices.values() if device.kind == "GPU"],
+        key=lambda item: item.label,
+    )
+    io_devices = sorted(
+        [
+            device
+            for device in devices.values()
+            if device.kind in {"NIC", "NVME"}
+            or (device.kind == "DISK" and device.block_names)
+        ],
+        key=lambda item: (item.kind, item.label),
+    )
+
+    peer_fabrics = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+    for gpu in gpus:
+        for io_device in io_devices:
+            connection_type = classify_topology_connection(
+                gpu, io_device, devices, root_numa_nodes
+            )
+            if connection_type not in OPTIMAL_TOPOLOGY_CONNECTIONS:
+                continue
+
+            common_bdf = common_pci_ancestor(gpu, io_device)
+            if common_bdf not in devices:
+                continue
+
+            peer_fabrics[common_bdf][gpu.label][connection_type].append(io_device.label)
+
+    for common_bdf, gpu_map in peer_fabrics.items():
+        device = devices[common_bdf]
+        if device.kind not in {"BRIDGE", "HOST"}:
+            continue
+
+        for gpu_label, connection_map in sorted(gpu_map.items()):
+            for connection_type, io_labels in sorted(connection_map.items()):
+                device.notes.append(
+                    f"{connection_type} peer fabric: {gpu_label} <-> {','.join(sorted(io_labels))}"
+                )
+
+
+def device_schematic_lines(device):
+    """
+    Returns compact box text for one PCI device.
+    """
+    if device.kind == "GPU":
+        first_line = f"{device.label} GPU"
+    elif device.kind == "NIC":
+        first_line = f"{device.label} NIC"
+    elif device.kind == "NVME":
+        first_line = f"{device.label} NVMe"
+    elif device.kind == "DISK":
+        first_line = f"{device.label} Disk"
+    elif device.kind == "BRIDGE":
+        if "ConnectX" in device.description:
+            first_line = "ConnectX PCIe Switch"
+        elif "Switch" in device.description:
+            first_line = "PCIe Switch"
+        else:
+            first_line = "PCIe Bridge / Root Port"
+    elif device.kind == "HOST":
+        first_line = "Host Bridge"
+    else:
+        first_line = device.class_name
+
+    lines = [first_line, device.bdf]
+    if device.description:
+        lines.append(device.description)
+
+    aliases = []
+    if device.net_names:
+        net_aliases = [name for name in device.net_names if name != device.label]
+        if net_aliases:
+            aliases.append("net " + ",".join(net_aliases))
+    if device.rdma_names:
+        aliases.append("rdma " + ",".join(device.rdma_names))
+    if device.block_names:
+        aliases.append("block " + ",".join(device.block_names))
+    if aliases:
+        lines.append("; ".join(aliases))
+    lines.extend(device.notes)
+    if device.numa_node >= 0:
+        lines.append(f"NUMA node {device.numa_node}")
+
+    return lines
+
+
+def schematic_node_width(kind):
+    return {
+        "CPU": 260,
+        "HOST": 270,
+        "BRIDGE": 340,
+        "GPU": 360,
+        "NIC": 360,
+        "NVME": 360,
+        "DISK": 360,
+    }.get(kind, 320)
+
+
+def build_schematic_forest(devices, cpu_nodes, root_numa_nodes):
+    """
+    Builds a visual tree: CPU node -> host bridge -> PCIe bridge/switch -> endpoint.
+    """
+    endpoints = topology_endpoint_devices(devices)
+    included = included_topology_bdfs(devices, endpoints)
+    children_by_parent = defaultdict(list)
+    roots = set()
+
+    for bdf in included:
+        device = devices[bdf]
+        roots.add(device.root)
+        parent = device.parent_bdf if device.parent_bdf in included else device.root
+        children_by_parent[parent].append(bdf)
+
+    roots_by_numa = defaultdict(list)
+    unknown_roots = []
+    for root in sorted(roots):
+        numa_node = root_numa_nodes.get(root, -1)
+        if numa_node >= 0:
+            roots_by_numa[numa_node].append(root)
+        else:
+            unknown_roots.append(root)
+
+    def build_device_node(bdf, depth):
+        device = devices[bdf]
+        node = SchematicNode(
+            key=bdf,
+            lines=device_schematic_lines(device),
+            kind=device.kind,
+            depth=depth,
+            link_label=format_pcie_link_label(device),
+        )
+        node.children = [
+            build_device_node(child_bdf, depth + 1)
+            for child_bdf in sorted(children_by_parent.get(bdf, []))
+        ]
+        return node
+
+    def build_host_node(root, depth):
+        node = SchematicNode(
+            key=root,
+            lines=["Host Bridge", root],
+            kind="HOST",
+            depth=depth,
+            link_label="root complex",
+        )
+        node.children = [
+            build_device_node(child_bdf, depth + 1)
+            for child_bdf in sorted(children_by_parent.get(root, []))
+        ]
+        return node
+
+    forest = []
+    for node_id in sorted(roots_by_numa):
+        cpus = cpu_nodes.get(node_id, "unknown")
+        cpu_node = SchematicNode(
+            key=f"cpu-node-{node_id}",
+            lines=[f"CPU/SoC NODE{node_id}", f"CPUs {cpus}"],
+            kind="CPU",
+            depth=0,
+        )
+        cpu_node.children = [
+            build_host_node(root, 1) for root in sorted(roots_by_numa[node_id])
+        ]
+        forest.append(cpu_node)
+
+    if unknown_roots:
+        cpu_node = SchematicNode(
+            key="cpu-node-unknown",
+            lines=["CPU/SoC NODE?", "NUMA unknown"],
+            kind="CPU",
+            depth=0,
+        )
+        cpu_node.children = [build_host_node(root, 1) for root in sorted(unknown_roots)]
+        forest.append(cpu_node)
+
+    return forest
+
+
+def flatten_schematic_nodes(forest):
+    rows = []
+
+    def visit(node):
+        rows.append(node)
+        for child in node.children:
+            visit(child)
+
+    for root in forest:
+        visit(root)
+
+    return rows
+
+
+def wrap_schematic_lines(lines, width):
+    max_chars = max(18, int((width - 28) / 7.4))
+    wrapped = []
+    for line in lines:
+        wrapped.extend(textwrap.wrap(line, width=max_chars) or [""])
+    return wrapped
+
+
+def layout_schematic_nodes(forest):
+    """
+    Assigns node boxes to a left-to-right tree layout.
+    """
+    rows = flatten_schematic_nodes(forest)
+    margin_x = 40
+    margin_y = 88
+    x_step = 540
+    line_height = 18
+    vertical_padding = 24
+    leaf_step = 140
+
+    for node in rows:
+        node.width = schematic_node_width(node.kind)
+        node.render_lines = wrap_schematic_lines(node.lines, node.width)
+        node.height = max(64, vertical_padding + line_height * len(node.render_lines))
+        node.x = margin_x + node.depth * x_step
+
+    next_leaf = 0
+
+    def assign_y(node):
+        nonlocal next_leaf
+        if not node.children:
+            node.y = margin_y + next_leaf * leaf_step
+            next_leaf += 1
+            return node.y + node.height / 2
+
+        child_centers = [assign_y(child) for child in node.children]
+        center = (min(child_centers) + max(child_centers)) / 2
+        node.y = int(center - node.height / 2)
+        return center
+
+    for root in forest:
+        assign_y(root)
+
+    width = max((node.x + node.width for node in rows), default=640) + margin_x
+    height = max((node.y + node.height for node in rows), default=360) + 40
+    return rows, width, height
+
+
+def schematic_edges(forest):
+    edges = []
+
+    def visit(parent):
+        for child in parent.children:
+            edges.append((parent, child))
+            visit(child)
+
+    for root in forest:
+        visit(root)
+
+    return edges
+
+
+def schematic_colors(node):
+    colors = {
+        "CPU": ("#dcecff", "#5c7fa6"),
+        "HOST": ("#eceff4", "#8a95a5"),
+        "BRIDGE": ("#f4f0e6", "#b88a35"),
+        "GPU": ("#e5f6de", "#5f9d3b"),
+        "NIC": ("#e2f4f7", "#3b91a3"),
+        "NVME": ("#efe7fb", "#8b65b7"),
+        "DISK": ("#efe7fb", "#8b65b7"),
+    }
+    fill, outline = colors.get(node.kind, ("#f7f7f7", "#aaaaaa"))
+    if any("peer fabric" in line for line in node.lines):
+        return "#f0fdf4", "#16a34a"
+    return fill, outline
+
+
+def split_label_lines(label):
+    return [line for line in (label or "").splitlines() if line]
+
+
+def edge_label_geometry(parent, child, label_lines):
+    """
+    Places edge labels in the left side of the inter-box gap so multi-line labels
+    do not run underneath the destination box.
+    """
+    x1 = parent.x + parent.width
+    x2 = child.x
+    y2 = child.y + child.height / 2
+    label_width = 156
+    label_height = 10 + len(label_lines) * 14
+    gap = x2 - x1
+
+    if gap > label_width + 32:
+        label_x = x1 + max(12, (gap * 0.28) - label_width / 2)
+        label_x = min(label_x, x2 - label_width - 16)
+    else:
+        label_x = x1 + 8
+
+    label_y = y2 - label_height / 2
+    return label_x, label_y, label_width, label_height
+
+
+def draw_pil_multiline_center(draw, lines, x, y, width, font, fill):
+    line_height = 14
+    for index, line in enumerate(lines):
+        bbox = draw.textbbox((0, 0), line, font=font)
+        text_width = bbox[2] - bbox[0]
+        draw.text((x + (width - text_width) / 2, y + index * line_height), line, font=font, fill=fill)
+
+
+def write_schematic_png(output_path, forest, width, height):
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return False
+
+    image = Image.new("RGB", (width, height), "#ffffff")
+    draw = ImageDraw.Draw(image)
+
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 13)
+        bold_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 15)
+        small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
+        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
+    except OSError:
+        font = ImageFont.load_default()
+        bold_font = font
+        small_font = font
+        title_font = font
+
+    draw.text((40, 28), "PCIe Topology Schematic", font=title_font, fill="#1f2937")
+    draw.text(
+        (40, 56),
+        "Root complexes show PCIe enumeration; highlighted switch boxes show PIX/PXB peer fabrics.",
+        font=small_font,
+        fill="#4b5563",
+    )
+
+    for parent, child in schematic_edges(forest):
+        x1 = parent.x + parent.width
+        y1 = parent.y + parent.height / 2
+        x2 = child.x
+        y2 = child.y + child.height / 2
+        mid_x = (x1 + x2) / 2
+        draw.line([(x1, y1), (mid_x, y1), (mid_x, y2), (x2, y2)], fill="#6b7280", width=2)
+
+        label_lines = split_label_lines(child.link_label)
+        if label_lines:
+            label_x, label_y, label_width, label_height = edge_label_geometry(
+                parent, child, label_lines
+            )
+            draw.rounded_rectangle(
+                (label_x, label_y, label_x + label_width, label_y + label_height),
+                radius=6,
+                fill="#ffffff",
+                outline="#d1d5db",
+            )
+            draw_pil_multiline_center(
+                draw, label_lines, label_x, label_y + 5, label_width, small_font, "#374151"
+            )
+
+    for node in flatten_schematic_nodes(forest):
+        fill, outline = schematic_colors(node)
+        draw.rounded_rectangle(
+            (node.x, node.y, node.x + node.width, node.y + node.height),
+            radius=8,
+            fill=fill,
+            outline=outline,
+            width=2,
+        )
+        text_y = node.y + 12
+        for index, line in enumerate(node.render_lines):
+            current_font = bold_font if index == 0 else font
+            draw.text((node.x + 14, text_y), line, font=current_font, fill="#111827")
+            text_y += 19 if index == 0 else 17
+
+    image.save(output_path)
+    return True
+
+
+def svg_text(x, y, text, size=13, weight="400", fill="#111827"):
+    return (
+        f'<text x="{x}" y="{y}" font-family="DejaVu Sans, Arial, sans-serif" '
+        f'font-size="{size}" font-weight="{weight}" fill="{fill}">'
+        f"{html.escape(text)}</text>"
+    )
+
+
+def write_schematic_svg(output_path, forest, width, height):
+    elements = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}">',
+        '<rect width="100%" height="100%" fill="#ffffff"/>',
+        svg_text(40, 45, "PCIe Topology Schematic", size=22, weight="700", fill="#1f2937"),
+        svg_text(
+            40,
+            68,
+            "Root complexes show PCIe enumeration; highlighted switch boxes show PIX/PXB peer fabrics.",
+            size=11,
+            fill="#4b5563",
+        ),
+    ]
+
+    for parent, child in schematic_edges(forest):
+        x1 = parent.x + parent.width
+        y1 = parent.y + parent.height / 2
+        x2 = child.x
+        y2 = child.y + child.height / 2
+        mid_x = (x1 + x2) / 2
+        points = f"{x1},{y1} {mid_x},{y1} {mid_x},{y2} {x2},{y2}"
+        elements.append(
+            f'<polyline points="{points}" fill="none" stroke="#6b7280" stroke-width="2"/>'
+        )
+
+        label_lines = split_label_lines(child.link_label)
+        if label_lines:
+            label_x, label_y, label_width, label_height = edge_label_geometry(
+                parent, child, label_lines
+            )
+            elements.append(
+                f'<rect x="{label_x}" y="{label_y}" width="{label_width}" '
+                f'height="{label_height}" rx="6" fill="#ffffff" stroke="#d1d5db"/>'
+            )
+            for index, line in enumerate(label_lines):
+                elements.append(
+                    svg_text(
+                        label_x + label_width / 2,
+                        label_y + 16 + index * 14,
+                        line,
+                        size=11,
+                        fill="#374151",
+                    ).replace("<text ", '<text text-anchor="middle" ')
+                )
+
+    for node in flatten_schematic_nodes(forest):
+        fill, outline = schematic_colors(node)
+        elements.append(
+            f'<rect x="{node.x}" y="{node.y}" width="{node.width}" height="{node.height}" '
+            f'rx="8" fill="{fill}" stroke="{outline}" stroke-width="2"/>'
+        )
+        text_y = node.y + 25
+        for index, line in enumerate(node.render_lines):
+            elements.append(
+                svg_text(
+                    node.x + 14,
+                    text_y,
+                    line,
+                    size=15 if index == 0 else 13,
+                    weight="700" if index == 0 else "400",
+                )
+            )
+            text_y += 19 if index == 0 else 17
+
+    elements.append("</svg>")
+    with open(output_path, "w") as file:
+        file.write("\n".join(elements))
+
+
+def write_schematic_image(output_path, forest):
+    rows, width, height = layout_schematic_nodes(forest)
+    if not rows:
+        logging.warning("No PCIe devices found for schematic output.")
+        return None
+
+    output_path = os.path.abspath(output_path)
+    output_dir = os.path.dirname(output_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
+    extension = os.path.splitext(output_path)[1].lower()
+    if extension == ".svg":
+        write_schematic_svg(output_path, forest, width, height)
+        return output_path
+
+    if extension != ".png":
+        logging.warning(
+            f"Unsupported schematic extension '{extension}'. Writing SVG instead."
+        )
+        output_path = os.path.splitext(output_path)[0] + ".svg"
+        write_schematic_svg(output_path, forest, width, height)
+        return output_path
+
+    if write_schematic_png(output_path, forest, width, height):
+        return output_path
+
+    fallback_path = os.path.splitext(output_path)[0] + ".svg"
+    logging.warning("Pillow is not installed; writing SVG schematic instead of PNG.")
+    write_schematic_svg(fallback_path, forest, width, height)
+    return fallback_path
+
+
+def check_topology_schematic(output_path="pcie_schematic.png"):
+    """
+    Writes a pictorial PCIe topology schematic and classifies GPU-to-I/O paths.
+    """
+    devices = collect_pci_devices()
+    cpu_nodes = collect_cpu_nodes()
+    root_numa_nodes = infer_root_numa_nodes(devices, cpu_nodes)
+    annotate_optimal_peer_fabrics(devices, root_numa_nodes)
+    forest = build_schematic_forest(devices, cpu_nodes, root_numa_nodes)
+    schematic_path = write_schematic_image(output_path, forest)
+    if schematic_path:
+        logging.info(f"Wrote PCIe topology schematic to {schematic_path}")
+
+    print("\n".join(render_topology_connection_summary(devices, root_numa_nodes)))
+
+
 def check_topology_connections():
     """
     Executes `nvidia-smi topo -m`, parses its output, and ensures that every GPU has at least one PIX or PXB connection to a NIC.
@@ -816,6 +2048,8 @@ def main():
             check_bar1_size()
         if args.check == "all" or args.check == "topo":
             check_topology_connections()
+        if args.check == "all" or args.check == "schematic":
+            check_topology_schematic(args.schematic_output)
         if args.check == "all" or args.check == "cmdline":
             check_kernel_cmdline()
         if args.check == "all" or args.check == "mtu":
@@ -830,7 +2064,7 @@ def main():
 
 
 if __name__ == "__main__":
-    if os.geteuid() != 0:
+    if os.geteuid() != 0 and not any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
         sys.exit("This script must be run as root! Please use 'sudo' to execute it.")
 
     main()
