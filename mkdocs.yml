@@ -35,6 +35,8 @@ nav:
   - Getting Started: getting-started.md
   - Configuration: configuration.md
   - API Reference: api-guide.md
+  - Performance:
+    - DGX Spark: performance-dgx-spark.md
   - Tutorials:
     - Background: tutorials/background.md
     - System Configuration: tutorials/system_configuration.md

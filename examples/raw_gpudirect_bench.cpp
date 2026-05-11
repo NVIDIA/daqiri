@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <unordered_set>
@@ -35,6 +36,7 @@
 namespace {
 
 void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
+               daqiri::bench::TokenBucketPacer &pacer,
                std::atomic<bool> &stop) {
   const int port_id = daqiri::get_port_id(cfg.interface_name);
   if (port_id < 0) {
@@ -66,6 +68,12 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
   }
 
   std::unordered_set<void *> initialized_tx_buffers;
+
+  uint64_t tx_packets = 0;
+  uint64_t tx_bytes = 0;
+  uint64_t tx_bursts = 0;
+  const auto t0 = std::chrono::steady_clock::now();
+  const uint32_t pkt_bytes = cfg.header_size + cfg.payload_size;
 
   while (!stop.load()) {
     auto *msg = daqiri::create_tx_burst_params();
@@ -109,7 +117,7 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
       }
 
       if (daqiri::set_packet_lengths(
-              msg, i, {static_cast<int>(cfg.header_size + cfg.payload_size)}) !=
+              msg, i, {static_cast<int>(pkt_bytes)}) !=
           daqiri::Status::SUCCESS) {
         failed = true;
         break;
@@ -121,18 +129,34 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
       continue;
     }
     daqiri::send_tx_burst(msg);
+    const uint64_t burst_bytes =
+        static_cast<uint64_t>(num_pkts) * pkt_bytes;
+    tx_packets += static_cast<uint64_t>(num_pkts);
+    tx_bytes += burst_bytes;
+    ++tx_bursts;
+    pacer.wait_for_bytes(burst_bytes, stop);
   }
+  const double secs =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
+          .count();
+  // Single-write print so concurrent RX worker output doesn't interleave.
+  std::ostringstream oss;
+  oss << "TX complete: packets=" << tx_packets << " bytes=" << tx_bytes
+      << " bursts=" << tx_bursts << " seconds=" << secs << "\n";
+  std::cout << oss.str() << std::flush;
 }
 
 } // namespace
 
 int main(int argc, char **argv) {
   if (argc < 2) {
-    std::cerr << "Usage: " << argv[0] << " <config.yaml> [--seconds N]\n";
+    std::cerr << "Usage: " << argv[0]
+              << " <config.yaml> [--seconds N] [--target-gbps G]\n";
     return 1;
   }
 
   const int run_seconds = daqiri::bench::parse_run_seconds(argc, argv);
+  const double target_gbps = daqiri::bench::parse_target_gbps(argc, argv);
   const auto root = YAML::LoadFile(argv[1]);
   if (daqiri::daqiri_init(argv[1]) != daqiri::Status::SUCCESS) {
     std::cerr << "daqiri_init failed\n";
@@ -150,14 +174,15 @@ int main(int argc, char **argv) {
   std::atomic<bool> stop{false};
   std::thread tx_thread;
   std::thread rx_thread;
+  daqiri::bench::TokenBucketPacer tx_pacer(target_gbps);
 
   if (has_rx) {
     rx_thread = std::thread(daqiri::bench::rx_count_worker,
                             daqiri::bench::parse_rx(root), std::ref(stop));
   }
   if (has_tx) {
-    tx_thread =
-        std::thread(tx_worker, daqiri::bench::parse_tx(root), std::ref(stop));
+    tx_thread = std::thread(tx_worker, daqiri::bench::parse_tx(root),
+                            std::ref(tx_pacer), std::ref(stop));
   }
 
   daqiri::bench::wait_for_stop(run_seconds, stop);

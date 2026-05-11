@@ -81,6 +81,7 @@ Reference material for the DAQIRI codebase:
 - [Getting Started](docs/getting-started.md) — System requirements, build/install instructions, and CMake options
 - [Configuration Reference](docs/configuration.md) — Full YAML config reference for all backends
 - [API Guide](docs/api-guide.md) — BurstParams, RX/TX workflows, buffer lifecycle, status codes
+- [Performance: DGX Spark](docs/performance-dgx-spark.md) — Per-platform throughput, drop, and utilization numbers for all backends
 - [Contributing](CONTRIBUTING.md) — Contribution guidelines, coding standards, DCO sign-off
 
 ## Tutorials
