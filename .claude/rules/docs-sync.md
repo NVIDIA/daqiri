@@ -32,7 +32,7 @@ When the user is committing, pushing, or otherwise wrapping up a change that tou
 ### Benchmark and example changes (medium impact)
 - `examples/*.cpp` or `examples/*.yaml` — new benchmarks, changed CLI flags, or new YAML config keys may need updating in:
   - `docs/tutorials/benchmarking_examples.md`
-  - `docs/tutorials/configuration-walkthrough.md`
+  - `docs/tutorials/configuration-walkthrough.md` — when adding or removing a YAML, add or remove a leaf in the **"Choosing an example config"** decision tree (`#choosing-an-example-config`). CI's `scripts/check_doc_refs.py` enforces that every YAML in `examples/` is referenced in this file; a new config without a tree leaf will fail the check.
   - `CLAUDE.md` (benchmark table)
 - When adding or removing a benchmark executable, also update the benchmark table in `CLAUDE.md`.
 
