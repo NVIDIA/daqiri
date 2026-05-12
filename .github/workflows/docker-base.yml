@@ -1,0 +1,59 @@
+name: Docker base stage
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'Dockerfile'
+      - '.github/workflows/docker-base.yml'
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - '.github/workflows/docker-base.yml'
+  schedule:
+    # Daily 06:00 UTC drift check against upstream apt repos (Kitware, Ubuntu).
+    # Runs no-cache so cmake / cmake-data and similar pinning regressions are
+    # caught within ~24 hours of an upstream re-upload.
+    - cron: '0 6 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build base (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build base stage (cached, PR/push)
+        if: github.event_name != 'schedule'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: base
+          push: false
+          build-args: |
+            DAQIRI_OS_BASE_IMAGE=nvcr.io/nvidia/cuda:13.1.0-devel-ubuntu24.04
+          cache-from: type=gha,scope=base-${{ matrix.runner }}
+          cache-to: type=gha,mode=max,scope=base-${{ matrix.runner }}
+
+      - name: Build base stage (no-cache, scheduled drift check)
+        if: github.event_name == 'schedule'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: base
+          push: false
+          no-cache: true
+          build-args: |
+            DAQIRI_OS_BASE_IMAGE=nvcr.io/nvidia/cuda:13.1.0-devel-ubuntu24.04

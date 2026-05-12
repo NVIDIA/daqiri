@@ -50,6 +50,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install --no-install-recommends -y \
         kitware-archive-keyring \
         "cmake=${CMAKE_VERSION}" \
+        "cmake-data=${CMAKE_VERSION}" \
     && rm -rf /var/lib/apt/lists/*
 
 # ==============================================================
