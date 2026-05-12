@@ -1581,8 +1581,19 @@ void DpdkMgr::adjust_memory_regions() {
   const uint32_t deadlock_threshold = (ring_size * 3) / 2;  // 1.5x ring size
   const uint32_t bumped_num_bufs    = ring_size * 3;        // 3x ring size
 
+  std::unordered_set<std::string> queue_backed_mrs;
+  for (const auto& intf : cfg_.ifs_) {
+    for (const auto& q : intf.rx_.queues_) {
+      for (const auto& n : q.common_.mrs_) { queue_backed_mrs.insert(n); }
+    }
+    for (const auto& q : intf.tx_.queues_) {
+      for (const auto& n : q.common_.mrs_) { queue_backed_mrs.insert(n); }
+    }
+  }
+
   for (auto& mr : cfg_.mrs_) {
-    if (mr.second.num_bufs_ < deadlock_threshold) {
+    if (queue_backed_mrs.count(mr.second.name_) &&
+        mr.second.num_bufs_ < deadlock_threshold) {
       DAQIRI_LOG_WARN(
           "MR '{}' had num_bufs={} which is below the {} threshold (1.5x the {} NIC descriptors) "
           "and would deadlock the worker once the ring fills. Bumping to {} (3x ring).",
