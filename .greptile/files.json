@@ -1,0 +1,47 @@
+{
+  "files": [
+    {
+      "path": "AGENTS.md",
+      "description": "Authoritative developer onboarding for DAQIRI: build commands, the benchmarks-as-tests model, the Manager/BurstParams architecture, the DPDK build dependency, the CMake socket->rdma rule, current public-API limitations, and the doc-sync drift hotspots. Read this first."
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "description": "Project contribution rules: clang-format, DCO sign-off, '#<Issue Number> - <Title>' commit format, prefer-CMake-over-ifdef policy, narrow PRs, fork-and-PR workflow."
+    },
+    {
+      "path": ".claude/rules/docs-sync.md",
+      "description": "Source-of-truth mapping from source-file changes to the docs that must be updated in the same PR. Use this to decide whether a code-change PR also needs doc updates.",
+      "scope": ["src/**", "examples/**", "mkdocs.yml", "README.md", "AGENTS.md", "docs/**"]
+    },
+    {
+      "path": "src/common.h",
+      "description": "Public C++ free-function API (get_rx_burst, get_tx_burst, get_packet_ptr, set_udp_header, free helpers, ...) operating on the opaque BurstParams* batch type. Application code should only ever touch this surface and src/types.h.",
+      "scope": ["src/**", "examples/**", "python/**"]
+    },
+    {
+      "path": "src/types.h",
+      "description": "Public types: BurstParams, Status, NetworkConfig, MemoryKind, Direction, SocketProtocol. Field changes / new enum values are an API change and trigger doc-sync against docs/api-guide.md, docs/daqiri-api.html, and AGENTS.md.",
+      "scope": ["src/**", "examples/**", "python/**"]
+    },
+    {
+      "path": "src/manager.h",
+      "description": "daqiri::Manager virtual interface and ManagerFactory singleton. Every backend lives behind this vtable. Adding a new backend means adding a src/managers/<name>/ subclass, NOT branching on backend type at call sites.",
+      "scope": ["src/**", "examples/**"]
+    },
+    {
+      "path": "src/CMakeLists.txt",
+      "description": "Build system for the common library and the per-backend libraries. Owns DAQIRI_MGR, the socket->rdma prepend rule (around DAQIRI_HAS_SOCKET_IDX), the DAQIRI_MGR_<NAME>=1 compile definitions, and the hardcoded CUDA arch list (80;90;121).",
+      "scope": ["src/**", "CMakeLists.txt", "**/CMakeLists.txt", "examples/CMakeLists.txt"]
+    },
+    {
+      "path": "docs/api-guide.md",
+      "description": "Markdown reference for the public C++ API and the BurstParams free contract. Update in sync with src/common.h, src/types.h, src/manager.h.",
+      "scope": ["src/common.h", "src/common.cpp", "src/types.h", "src/manager.h"]
+    },
+    {
+      "path": "README.md",
+      "description": "Top-level project overview: Quick Start build commands, Backends table, Documentation table, Features list, Limitations. Update in sync with src/managers/*, src/CMakeLists.txt, src/common.h, and any docs/* renames.",
+      "scope": ["src/**", "examples/**", "docs/**", "mkdocs.yml"]
+    }
+  ]
+}

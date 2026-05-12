@@ -1,0 +1,92 @@
+{
+  "strictness": 2,
+  "commentTypes": ["logic", "syntax", "style", "info"],
+  "triggerOnUpdates": true,
+  "statusCheck": true,
+  "fileChangeLimit": 200,
+  "excludeAuthors": ["dependabot[bot]", "*-bot"],
+  "excludeBranches": ["gh-pages"],
+  "ignorePatterns": "build/**\nlogs/**\nsite/**\nthird_party/**\ndpdk_patches/**\n**/*.svg\n**/*.png\n**/*.log\n**/*.pcap\n**/*.generated.*",
+  "summarySection": {
+    "included": true,
+    "collapsible": true,
+    "defaultOpen": false
+  },
+  "issuesTableSection": {
+    "included": true,
+    "collapsible": false
+  },
+  "instructions": "DAQIRI is a single C++/CUDA shared library (libdaqiri.so) for GPU-direct packet I/O over DPDK, RDMA, and sockets. The full reviewer context lives in .greptile/rules.md and the linked context files in .greptile/files.json (AGENTS.md, CONTRIBUTING.md, .claude/rules/docs-sync.md, src/common.h, src/manager.h, src/types.h). Always read them before commenting. Prefer few high-signal comments over many nits; this is a low-level networking library where idiomatic-looking code is often deliberate.",
+  "rules": [
+    {
+      "id": "dco-signoff",
+      "rule": "Every commit in the PR must contain a 'Signed-off-by: Name <email>' trailer (DCO). If any commit is missing the trailer, flag it and tell the contributor to amend with `git commit -s --amend` or to rebase with `git rebase --signoff`. See CONTRIBUTING.md 'Signing Your Work'.",
+      "severity": "high"
+    },
+    {
+      "id": "commit-title-format",
+      "rule": "Commit titles must use imperative mood and be prefixed with the GitHub issue number, e.g. `#123 - Add X`. PRs without an associated approved issue should be flagged. See CONTRIBUTING.md 'Coding Guidelines'.",
+      "severity": "medium"
+    },
+    {
+      "id": "clang-format",
+      "rule": "C/C++/CUDA changes (.c, .cc, .cpp, .h, .hpp, .cu, .cuh) must be clang-format clean against the repo's .clang-format. If diff hunks contain obvious style violations (indentation, brace placement, line length, trailing whitespace, mixed tabs/spaces), tell the contributor to run `git-clang-format --style file` or `clang-format -style=file -i -fallback-style=none <files>`.",
+      "scope": ["**/*.c", "**/*.cc", "**/*.cpp", "**/*.h", "**/*.hpp", "**/*.cu", "**/*.cuh"],
+      "severity": "medium"
+    },
+    {
+      "id": "burstparams-free-contract",
+      "rule": "BurstParams is a zero-copy batch — the caller MUST explicitly free every burst it receives or sends, otherwise the mempool drains and the NIC reports NO_FREE_BURST_BUFFERS / NO_FREE_PACKET_BUFFERS and starts dropping packets. In any new code path that calls get_rx_burst, get_tx_burst, create_burst_params, or create_tx_burst_params, verify there is a matching free on every exit path (success, error, early return, exception). Flag missing frees as high severity. See docs/api-guide.md and src/common.h.",
+      "scope": ["src/**", "examples/**", "python/**"],
+      "severity": "high"
+    },
+    {
+      "id": "manager-vtable",
+      "rule": "All packet I/O flows through the daqiri::Manager virtual interface in src/manager.h, dispatched by ManagerFactory. New backends or capabilities must be added by extending Manager and a src/managers/<name>/ directory, NOT by branching on backend type at call sites or by reaching into backend-specific structs from common code. Application code must only touch the BurstParams/free-function API in src/common.h.",
+      "scope": ["src/**", "examples/**"],
+      "severity": "high"
+    },
+    {
+      "id": "daqiri-mgr-socket-rdma",
+      "rule": "The socket backend reuses the RoCE transport from the rdma backend, so src/CMakeLists.txt must always prepend `rdma` to DAQIRI_MGR_LIST whenever `socket` is requested (the reverse is not required). If a change touches the DAQIRI_MGR handling block in src/CMakeLists.txt (around the `DAQIRI_HAS_SOCKET_IDX` / `DAQIRI_HAS_RDMA_IDX` logic), confirm this invariant still holds and that DAQIRI_MGR_<NAME>=1 compile definitions are still emitted for every selected backend.",
+      "scope": ["src/CMakeLists.txt", "CMakeLists.txt", "src/managers/**"],
+      "severity": "high"
+    },
+    {
+      "id": "cmake-option-not-ifdef",
+      "rule": "Per CONTRIBUTING.md, new optional features should be gated behind a new CMake option with a backward-compatible default; whole-file inclusion/exclusion is done in CMakeLists.txt rather than wrapping entire files in `#if` guards. Use `#if` only for minor in-file changes. Flag PRs that wrap entire bodies in `#ifdef` blocks instead of using CMake.",
+      "scope": ["src/**", "examples/**", "CMakeLists.txt", "**/CMakeLists.txt"],
+      "severity": "medium"
+    },
+    {
+      "id": "doc-sync",
+      "rule": "DAQIRI has no automated doc-sync gate beyond mkdocs/strict link checks. When a PR changes any of the files listed in .claude/rules/docs-sync.md, the matching docs must be updated in the same PR. Specifically: src/common.h | src/types.h | src/manager.h => docs/api-guide.md + docs/daqiri-api.html + AGENTS.md (Architecture); src/managers/* => docs/getting-started.md + docs/configuration.md + docs/tutorials/configuration-walkthrough.md + README.md (Backends) + AGENTS.md; src/CMakeLists.txt => docs/getting-started.md + AGENTS.md (Build & run) + README.md (Quick Start); src/kernels.cu => docs/tutorials/benchmarking_examples.md + AGENTS.md; examples/*.{cpp,yaml} => docs/tutorials/benchmarking_examples.md + docs/tutorials/configuration-walkthrough.md + AGENTS.md (benchmark table). If the PR touches code in these paths but does not update the matching docs, flag it as medium severity and list the specific docs to update.",
+      "scope": ["src/**", "examples/**", "mkdocs.yml", "README.md", "AGENTS.md", "docs/**"],
+      "severity": "medium"
+    },
+    {
+      "id": "third-party-vendored",
+      "rule": "third_party/yaml-cpp and third_party/spdlog are git submodules. Direct edits to files inside third_party/ are almost always a mistake — the right fix is either upstreaming a patch or wrapping the dependency. Flag any in-place edits inside third_party/ as high severity and ask the contributor to confirm the intent.",
+      "scope": ["third_party/**"],
+      "severity": "high"
+    },
+    {
+      "id": "cuda-arch-list",
+      "rule": "src/CMakeLists.txt hardcodes CUDA architectures to `80;90;121` (A100, H100, GB10). If a PR touches the CUDA arch list, requires a newer arch (e.g. for new PTX intrinsics), or adds a kernel that won't compile on these targets, call it out so reviewers can decide whether to bump the list or document the new requirement.",
+      "scope": ["src/**/*.cu", "src/**/*.cuh", "src/CMakeLists.txt"],
+      "severity": "medium"
+    },
+    {
+      "id": "tx-fill-udp-only",
+      "rule": "Per AGENTS.md 'Current limitations', set_udp_header / TX header-fill helpers currently support UDP only. If a PR extends TX header fill to TCP/IP/etc., the limitations section in both AGENTS.md and README.md should be updated in the same PR.",
+      "scope": ["src/common.cpp", "src/common.h", "src/managers/**"],
+      "severity": "low"
+    },
+    {
+      "id": "yaml-config-placeholders",
+      "rule": "examples/*.yaml configs contain `<angle-bracket>` placeholders (PCIe addresses, CPU cores, MACs, IPs) that the user must replace per host. New example YAMLs should follow the same convention (placeholders, not hard-coded production values), and any new placeholder key should be documented in docs/configuration.md or docs/tutorials/configuration-walkthrough.md.",
+      "scope": ["examples/*.yaml"],
+      "severity": "low"
+    }
+  ]
+}
