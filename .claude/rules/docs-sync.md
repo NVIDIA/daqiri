@@ -2,7 +2,7 @@
 
 These rules ensure documentation stays in sync with code changes in the DAQIRI repository.
 
-> **Path freshness.** The doc paths listed below (e.g. `docs/api-guide.md`, `docs/getting-started.md`, `docs/tutorials/*.md`) reflect the repo layout at the time of writing. If a doc has been renamed, moved, or split, treat the path as a starting point: confirm the current location with `grep -r` or by reading `mkdocs.yml`'s nav before acting on it. The CI gate in `.github/workflows/docs.yml` enforces internal-link/anchor/nav correctness on every PR.
+> **Path freshness.** The doc paths listed below (e.g. `docs/api-reference/*.md`, `docs/getting-started.md`, `docs/tutorials/*.md`) reflect the repo layout at the time of writing. If a doc has been renamed, moved, or split, treat the path as a starting point: confirm the current location with `grep -r` or by reading `mkdocs.yml`'s nav before acting on it. The CI gate in `.github/workflows/docs.yml` enforces internal-link/anchor/nav correctness on every PR.
 
 ## When to check for doc impact
 
@@ -10,16 +10,18 @@ When the user is committing, pushing, or otherwise wrapping up a change that tou
 
 ### API surface changes (high impact)
 - `src/common.h` — public free-function API (`get_rx_burst`, `get_packet_ptr`, `set_udp_header`, etc.). Any signature change, new function, removed function, or changed parameter semantics may need updating in:
-  - `docs/api-guide.md` (markdown reference)
+  - `docs/api-reference/cpp.md` (C++ markdown reference)
+  - `docs/api-reference/python.md` (Python bindings reference — update when the binding surface changes alongside the C++ API)
   - `docs/daqiri-api.html` (standalone HTML API page)
   - `CLAUDE.md` (Architecture section's API summary)
-- `src/types.h` — public types (`BurstParams`, `Status`, `NetworkConfig`, enums like `MemoryKind`, `Direction`, `SocketProtocol`). Struct field changes, new enum values, or renamed types may need updating in the API docs and `CLAUDE.md` (Architecture / BurstParams discussion).
-- `src/manager.h` — `Manager` virtual interface and `ManagerFactory`. Changes here affect the backend abstraction docs in `docs/api-guide.md` and the Manager-abstraction subsection in `CLAUDE.md`.
+- `src/types.h` — public types (`BurstParams`, `Status`, `NetworkConfig`, enums like `MemoryKind`, `Direction`, `SocketProtocol`). Struct field changes, new enum values, or renamed types may need updating in the API docs (`docs/api-reference/cpp.md`, `docs/api-reference/python.md`, `docs/daqiri-api.html`) and `CLAUDE.md` (Architecture / BurstParams discussion).
+- `src/manager.h` — `Manager` virtual interface and `ManagerFactory`. Changes here affect the backend abstraction docs in `docs/api-reference/cpp.md` and the Manager-abstraction subsection in `CLAUDE.md`.
+- `python/daqiri_common_pybind.cpp` — pybind11 binding surface. Any added/removed/renamed `m.def(...)`, changed pybind signature, new enum/class binding, or changed GIL-release behavior may need updating in `docs/api-reference/python.md` (function reference tables, enums/classes tables, GIL Behavior section).
 
 ### Backend and build changes (medium impact)
 - `src/managers/*/` — adding a new backend or changing backend behavior may need updating in:
   - `docs/getting-started.md` (build instructions, backend selection)
-  - `docs/configuration.md` (YAML config options)
+  - `docs/api-reference/configuration.md` (YAML config options)
   - `docs/tutorials/configuration-walkthrough.md` (tutorial config walkthrough)
   - `README.md` (Backends table)
   - `CLAUDE.md` (Manager abstraction / backend descriptions)
@@ -64,13 +66,15 @@ When the user is committing, pushing, or otherwise wrapping up a change that tou
 
 | Source file | Docs to check |
 |---|---|
-| `src/common.h` | `docs/api-guide.md`, `docs/daqiri-api.html`, `CLAUDE.md` |
-| `src/types.h` | `docs/api-guide.md`, `docs/daqiri-api.html`, `CLAUDE.md` |
-| `src/manager.h` | `docs/api-guide.md`, `CLAUDE.md` |
-| `src/managers/*/` | `docs/getting-started.md`, `docs/configuration.md`, `docs/tutorials/configuration-walkthrough.md`, `README.md`, `CLAUDE.md` |
+| `src/common.h` | `docs/api-reference/cpp.md`, `docs/api-reference/python.md`, `docs/daqiri-api.html`, `CLAUDE.md` |
+| `src/types.h` | `docs/api-reference/cpp.md`, `docs/api-reference/python.md`, `docs/daqiri-api.html`, `CLAUDE.md` |
+| `src/manager.h` | `docs/api-reference/cpp.md`, `CLAUDE.md` |
+| `src/managers/*/` | `docs/getting-started.md`, `docs/api-reference/configuration.md`, `docs/tutorials/configuration-walkthrough.md`, `README.md`, `CLAUDE.md` |
 | `src/CMakeLists.txt` | `docs/getting-started.md`, `CLAUDE.md`, `README.md` |
 | `src/kernels.cu` | `docs/tutorials/benchmarking_examples.md`, `CLAUDE.md` |
+| `python/daqiri_common_pybind.cpp` | `docs/api-reference/python.md`, `CLAUDE.md` |
 | `examples/*.cpp` | `docs/tutorials/benchmarking_examples.md`, `docs/tutorials/configuration-walkthrough.md`, `CLAUDE.md` |
 | `examples/*.yaml` | `docs/tutorials/benchmarking_examples.md`, `docs/tutorials/configuration-walkthrough.md`, `CLAUDE.md` |
+| `examples/*.py` | `docs/api-reference/python.md`, `CLAUDE.md` |
 | `mkdocs.yml` | `docs/index.html` (nav links) |
 | Any `docs/*` rename/move | `README.md` (Documentation table), `CLAUDE.md` (Documentation section), `mkdocs.yml`, `docs/index.html` |
