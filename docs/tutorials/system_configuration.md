@@ -5,12 +5,12 @@ hide:
 
 # System Configuration
 
-DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking/ethernet-adapters/) (ConnectX-6 Dx or later) and a CUDA-capable GPU. Two reference platforms are documented in this tutorial — pick yours below:
+DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking/ethernet-adapters/) (ConnectX-6 Dx or later) and a CUDA-capable GPU. Two reference platforms are documented in this tutorial — pick the one closest to yours below:
 
 - **IGX Orin** with a discrete GPU (e.g. [RTX 6000 Ada](https://www.nvidia.com/en-us/design-visualization/rtx-6000/)): peermem-based GPUDirect, a separate GPU BAR1, and a discrete-PCIe path between GPU and NIC. The originally-supported reference platform.
-- **DGX Spark** (Grace Blackwell **GB10** superchip): unified CPU/GPU memory via NVLink-C2C, integrated **ConnectX-7**, no peermem, and GPUDirect via `kind: host_pinned` data buffers (see [PR #41](https://github.com/nvidia/daqiri/pull/41)).
+- **DGX Spark** (Grace Blackwell **GB10** superchip): unified CPU/GPU memory via NVLink-C2C, integrated **ConnectX-7**, no peermem, and GPUDirect via `kind: host_pinned` data buffers.
 
-The two tabs below are linked across the page (mkdocs-material `content.tabs.link`), so other same-named sub-tabs (`tune_system.py` vs `manual`, `One-time` vs `Persistent`, etc.) will switch in lockstep as you toggle the platform.
+<div class="platform-tabs" markdown="1">
 
 === "IGX Orin"
 
@@ -1560,4 +1560,6 @@ The two tabs below are linked across the page (mkdocs-material `content.tabs.lin
 
     ---
     **Next:** [Benchmarking Examples](benchmarking_examples.md) — run your first DAQIRI benchmark
+
+</div>
 
