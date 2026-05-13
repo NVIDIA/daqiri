@@ -2,10 +2,12 @@
   "strictness": 2,
   "commentTypes": ["logic", "syntax", "style", "info"],
   "triggerOnUpdates": true,
+  "triggerOnDrafts": false,
   "statusCheck": true,
   "fileChangeLimit": 200,
   "excludeAuthors": ["dependabot[bot]", "*-bot"],
   "excludeBranches": ["gh-pages"],
+  "ignoreKeywords": "[WIP]\n[wip]\nWIP:\nwip:",
   "ignorePatterns": "build/**\nlogs/**\nsite/**\nthird_party/**\ndpdk_patches/**\n**/*.svg\n**/*.png\n**/*.log\n**/*.pcap\n**/*.generated.*",
   "summarySection": {
     "included": true,

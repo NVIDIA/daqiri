@@ -112,7 +112,7 @@ Workflow expectations:
 - Greptile runs on every push to a PR (`triggerOnUpdates: true`), so you can iterate and watch its comments update.
 - It posts a GitHub status check rather than a "X files reviewed, no comments" message — a green check means it ran and had nothing critical to say.
 - Greptile comments are advisory. A human DAQIRI engineer still owns merge approval. If you disagree with a Greptile comment, reply on the thread and a maintainer will arbitrate.
-- If you want to skip Greptile on a particular PR (e.g. a pure docs typo), open it as a draft — by default Greptile does not review draft PRs.
+- To suppress Greptile while a PR is in flight, use the existing `[WIP]` title prefix from the Pull Requests section above — `.greptile/config.json` lists `[WIP]` / `WIP:` (case variants) under `ignoreKeywords`, so titled PRs are skipped until the prefix is removed. Draft PRs are also skipped (`triggerOnDrafts: false`) for contributors who prefer GitHub's draft mechanism.
 
 If you are adding a new project-wide convention, please update `.greptile/rules.md` (or add a structured rule to `.greptile/config.json`) in the same PR so the bot keeps up with the humans.
 
