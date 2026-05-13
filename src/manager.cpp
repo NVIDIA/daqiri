@@ -38,15 +38,19 @@
 #include <rte_version.h>
 #endif
 
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <cuda.h>
 #include <dirent.h>
+#include <exception>
 #include <fstream>
+#include <iomanip>
 #include <random>
 #include <regex>
 #include <sstream>
 #include <string>
+#include <sys/random.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -60,28 +64,58 @@ ManagerType ManagerFactory::ManagerType_ = ManagerType::UNKNOWN;
 
 extern void initialize_manager(Manager* _manager);
 
-std::string Manager::generate_random_string(int len) {
-  constexpr char tokens[] = "abcdefghijklmnopqrstuvwxyz";
-  if (len <= 0) { return {}; }
+namespace {
 
-  std::random_device random_device;
-  const auto timestamp = static_cast<uint64_t>(
+uint64_t generate_prefix_nonce() {
+  static std::atomic<uint64_t> sequence{0};
+
+  uint64_t nonce = 0;
+  const ssize_t bytes = getrandom(&nonce, sizeof(nonce), GRND_NONBLOCK);
+  if (bytes == static_cast<ssize_t>(sizeof(nonce))) {
+    return nonce ^ sequence.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  try {
+    std::random_device random_device;
+    nonce = (static_cast<uint64_t>(random_device()) << 32U) ^ random_device();
+  } catch (const std::exception&) {
+    nonce = 0;
+  }
+
+  const auto steady_timestamp = static_cast<uint64_t>(
       std::chrono::steady_clock::now().time_since_epoch().count());
+  const auto system_timestamp = static_cast<uint64_t>(
+      std::chrono::system_clock::now().time_since_epoch().count());
+  const auto seq = sequence.fetch_add(1, std::memory_order_relaxed);
+  const auto pid = static_cast<uint64_t>(getpid());
+  const auto ppid = static_cast<uint64_t>(getppid());
+
   std::seed_seq seed{
-      random_device(),
-      random_device(),
-      static_cast<uint32_t>(timestamp),
-      static_cast<uint32_t>(timestamp >> 32U),
-      static_cast<uint32_t>(getpid()),
+      static_cast<uint32_t>(nonce),
+      static_cast<uint32_t>(nonce >> 32U),
+      static_cast<uint32_t>(steady_timestamp),
+      static_cast<uint32_t>(steady_timestamp >> 32U),
+      static_cast<uint32_t>(system_timestamp),
+      static_cast<uint32_t>(system_timestamp >> 32U),
+      static_cast<uint32_t>(seq),
+      static_cast<uint32_t>(seq >> 32U),
+      static_cast<uint32_t>(pid),
+      static_cast<uint32_t>(pid >> 32U),
+      static_cast<uint32_t>(ppid),
+      static_cast<uint32_t>(ppid >> 32U),
   };
-  std::mt19937 rng(seed);
-  std::uniform_int_distribution<size_t> dist(0, sizeof(tokens) - 2);
+  std::mt19937_64 rng(seed);
+  return rng();
+}
 
-  std::string tmp;
-  tmp.reserve(static_cast<size_t>(len));
-  for (int i = 0; i < len; i++) { tmp += tokens[dist(rng)]; }
+}  // namespace
 
-  return tmp;
+std::string Manager::generate_eal_file_prefix() {
+  std::ostringstream prefix;
+  prefix << "daqiri_" << static_cast<unsigned long long>(getpid()) << "_"
+         << std::hex << std::setw(16) << std::setfill('0') << generate_prefix_nonce();
+
+  return prefix.str();
 }
 
 ManagerType ManagerFactory::get_default_manager_type() {

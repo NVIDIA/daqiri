@@ -1916,7 +1916,7 @@ void DpdkMgr::initialize() {
   DAQIRI_LOG_INFO("Attempting to use {} ports for high-speed network", num_ports);
 
   strncpy(_argv[arg++], "operator", max_arg_size - 1);
-  eal_file_prefix_ = generate_random_string(10);
+  eal_file_prefix_ = generate_eal_file_prefix();
   strncpy(_argv[arg++],
           (std::string("--file-prefix=") + eal_file_prefix_).c_str(),
           max_arg_size - 1);

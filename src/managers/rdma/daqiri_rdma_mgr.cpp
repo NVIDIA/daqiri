@@ -1447,7 +1447,7 @@ void RdmaMgr::initialize() {
   cores = cores.substr(0, cores.size() - 1);
 
   strncpy(_argv[arg++], "daqiri_operator", max_arg_size - 1);
-  eal_file_prefix_ = generate_random_string(10);
+  eal_file_prefix_ = generate_eal_file_prefix();
   strncpy(_argv[arg++],
           (std::string("--file-prefix=") + eal_file_prefix_).c_str(),
           max_arg_size - 1);
