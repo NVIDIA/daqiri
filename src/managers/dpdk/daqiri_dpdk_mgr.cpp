@@ -41,7 +41,7 @@
 #include "src/dpdk_log.h"
 #include "daqiri_dpdk_mgr.h"
 #include "src/kernels.h"
-#include "src/logging.hpp"
+#include <daqiri/logging.hpp>
 
 using namespace std::chrono;
 

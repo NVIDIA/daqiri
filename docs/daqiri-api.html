@@ -229,7 +229,7 @@
       <div class="page-hdr" id="overview">
         <div class="page-hdr-eye">DAQIRI · NVIDIA</div>
         <h1>API Guide</h1>
-        <p>Complete C++ API reference for DAQIRI. For the full function list, see <a href="https://github.com/NVIDIA/daqiri/blob/main/src/common.h" target="_blank"><code>src/common.h</code></a>. All symbols live in the <code>daqiri::</code> namespace.</p>
+        <p>Complete C++ API reference for DAQIRI. Include the canonical public header, <a href="https://github.com/NVIDIA/daqiri/blob/main/include/daqiri/daqiri.h" target="_blank"><code>daqiri/daqiri.h</code></a>. All symbols live in the <code>daqiri::</code> namespace.</p>
         <div class="page-hdr-meta">
           <span class="meta-badge">C++17</span>
           <span class="meta-badge">CUDA ≥ 12.0</span>
@@ -268,7 +268,7 @@
 <span class="cm">// From struct built in code</span>
 <span class="tp">Status</span> daqiri::<span class="fn">daqiri_init</span>(<span class="kw">const</span> <span class="tp">NetworkConfig</span>&amp; config);</div>
 
-          <pre><span class="kw">#include</span> <span class="str">"daqiri/common.h"</span>
+          <pre><span class="kw">#include</span> <span class="str">&lt;daqiri/daqiri.h&gt;</span>
 
 <span class="kw">auto</span> status = daqiri::<span class="fn">daqiri_init</span>(<span class="str">"path/to/config.yaml"</span>);
 <span class="kw">if</span> (status != daqiri::<span class="tp">Status</span>::<span class="nm">SUCCESS</span>) {
@@ -556,7 +556,7 @@ daqiri::<span class="fn">shutdown</span>();</pre>
         <div style="display:flex;gap:1rem;">
           <a href="getting-started/" style="font-size:.875rem;color:var(--text-mut);">Getting Started</a>
           <a href="configuration/" style="font-size:.875rem;color:var(--text-mut);">Configuration</a>
-          <a href="https://github.com/NVIDIA/daqiri/blob/main/src/common.h" style="font-size:.875rem;color:var(--text-mut);" target="_blank">common.h ↗</a>
+          <a href="https://github.com/NVIDIA/daqiri/blob/main/include/daqiri/daqiri.h" style="font-size:.875rem;color:var(--text-mut);" target="_blank">daqiri.h ↗</a>
         </div>
       </div>
 

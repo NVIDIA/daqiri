@@ -1,0 +1,13 @@
+prefix=@DAQIRI_PC_PREFIX@
+exec_prefix=${prefix}
+libdir=@DAQIRI_PKGCONFIG_LIBDIR@
+includedir=@DAQIRI_PKGCONFIG_INCLUDEDIR@
+
+Name: daqiri
+Description: Data Acquisition for Integrated Real-time Instruments
+Version: @CMAKE_PROJECT_VERSION@
+Requires: @DAQIRI_PC_REQUIRES@
+Requires.private: @DAQIRI_PC_REQUIRES_PRIVATE@
+Libs: -L${libdir} -ldaqiri @DAQIRI_PC_LIBS@
+Libs.private: @DAQIRI_PC_LIBS_PRIVATE@
+Cflags: -I${includedir}@DAQIRI_PC_EXTRA_CFLAGS@

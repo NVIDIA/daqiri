@@ -29,7 +29,7 @@
 #include <infiniband/verbs.h>
 #include <rdma/rdma_cma.h>
 #include "src/manager.h"
-#include "src/common.h"
+#include <daqiri/daqiri.h>
 #include <mutex>
 
 namespace daqiri {

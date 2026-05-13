@@ -59,7 +59,7 @@ clang-format -style=file -i -fallback-style=none <files>
 
 ## Architecture
 
-**Single C++/CUDA shared library** (`libdaqiri.so`) exposing a C++ API declared in `src/common.h`. The public surface is intentionally flat free-function helpers (`get_rx_burst`, `get_packet_ptr`, `set_udp_header`, …) that all operate on an opaque `BurstParams*`. Applications never touch backend types directly.
+**Single C++/CUDA shared library** (`libdaqiri.so`) exposing a C++ API through `#include <daqiri/daqiri.h>`. The public surface is intentionally flat free-function helpers (`get_rx_burst`, `get_packet_ptr`, `set_udp_header`, …) that all operate on an opaque `BurstParams*`. Applications never touch backend types directly.
 
 ### Manager abstraction
 `src/manager.h` defines `daqiri::Manager` — an (almost) ABC with ~50 virtual methods covering init, RX/TX burst dequeue/enqueue, header-fill helpers, buffer free, and RDMA connection setup. Backends live in `src/managers/<name>/` (`dpdk/`, `rdma/`, `socket/`) and are selected at CMake configure time via `DAQIRI_MGR`. Each backend produces its own static library (`daqiri_dpdk`, `daqiri_rdma`, `daqiri_socket`) linked into `daqiri_common`, and each adds a `DAQIRI_MGR_<NAME>=1` compile definition (see `src/CMakeLists.txt:156-183`).
@@ -100,7 +100,7 @@ The web docs live in `docs/` and are built with [MkDocs Material](https://squidf
 - **Backend list** (`src/managers/*/`) — README Backends table, `docs/getting-started.md`, `docs/configuration.md`
 - **CMake options / `DAQIRI_MGR` default** (`src/CMakeLists.txt:137`) — README Quick Start, `docs/getting-started.md`, this file's Build & run section
 - **Benchmark binary or YAML names** (`examples/`) — the benchmark table above, `docs/tutorials/benchmarking_examples.md`, and the "Choosing an example config" decision tree in `docs/tutorials/configuration-walkthrough.md` (every YAML must have a leaf; CI's `scripts/check_doc_refs.py` enforces coverage)
-- **Public API** (`src/common.h`, `src/types.h`, `src/manager.h`) — `docs/api-guide.md`, `docs/daqiri-api.html`
+- **Public API include** (`#include <daqiri/daqiri.h>`; source files under `include/daqiri/`) — `docs/api-guide.md`, `docs/daqiri-api.html`
 - **Doc reorganization** (any rename in `docs/`) — `docs/index.html` landing page, `mkdocs.yml` nav, README Documentation table
 
 The full mapping with rationale lives in the docs-sync agent rule. Internal-link, anchor, and nav drift is enforced by CI (`.github/workflows/docs.yml`); content drift (stale binary names, defaults) is still a manual check at commit time.

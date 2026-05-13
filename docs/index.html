@@ -369,7 +369,7 @@ cmake --install build --prefix /opt/daqiri</pre>
         <div class="gs-code-panel">
           <div class="gs-code-block">
             <div class="gs-code-hdr"><span class="gs-code-title">Initialize &amp; Receive Packets</span><span class="gs-code-lang">C++</span></div>
-            <pre><span class="kw">#include</span> <span class="str">"daqiri/common.h"</span>
+            <pre><span class="kw">#include</span> <span class="str">&lt;daqiri/daqiri.h&gt;</span>
 
 <span class="cm">// Init from YAML config</span>
 daqiri::<span class="fn">daqiri_init</span>(<span class="str">"config.yaml"</span>);

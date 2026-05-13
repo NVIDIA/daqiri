@@ -176,7 +176,7 @@ By default the application runs for 10 seconds and then exits. You can change th
 ??? abstract "See an example output"
 
     ```log
-    [INFO] /workspace/daqiri/src/../src/common.h:1045: Finished reading DAQIRI configuration
+    [INFO] /workspace/daqiri/src/../include/daqiri/common.h:1045: Finished reading DAQIRI configuration
     [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1732: Attempting to use 2 ports for high-speed network
     [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1741: Setting DPDK log level to: Info
     [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1775: DPDK EAL arguments: operator --file-prefix=vwcrlqhfkb -l 3,11,9 --log-level=error --log-level=pmd.net.mlx5:info --iova-mode=va -a 0005:03:00.0,txq_inline_max=0,dv_flow_en=2 -a 0005:03:00.1,txq_inline_max=0,dv_flow_en=2 
