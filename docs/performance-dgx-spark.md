@@ -11,6 +11,15 @@ against the YAML configs in `examples/`, with the system state captured by
 [`examples/bench_capture_environment.sh`](https://github.com/nvidia/daqiri/blob/main/examples/bench_capture_environment.sh)
 alongside each result set.
 
+**Contents**
+
+- [Summary](#summary)
+- [Introduction](#introduction) — system under test, methodology
+- [C++ Results](#c-results) — DPDK, RoCE, Socket, workload variants
+- [Python Results](#python-results)
+- [Reproduce these results](#reproduce-these-results)
+- [TODO: Not Yet Implemented / Known Limitations](#todo-not-yet-implemented-known-limitations)
+
 ## Summary
 
 Two headline tables. **Native-shape peak** reports each backend at its
@@ -47,33 +56,9 @@ that table since it has no operation boundary.
     The matched 8 KB table makes the cross-backend comparison honest; the
     native-shape table shows each backend's design ceiling.
 
-## Known limitations on this platform
+## Introduction
 
-- **HDS (Header–Data Split) is deferred.** The generic HDS configuration uses
-  `kind: device` for GPU memory regions. Spark / GB10 cannot use device memory
-  for GPUDirect — `nvidia_peermem` does not load and DMA-BUF is unreachable —
-  so DAQIRI uses `host_pinned` instead. Under `host_pinned`, the HDS layout no
-  longer changes the memory path; it only changes the segment partition,
-  which makes "HDS vs. plain GPUDirect" a non-distinction on this platform.
-  HDS is characterized when this report extends to IGX and x86-server
-  platforms where device memory works. See
-  [issue #15](https://github.com/NVIDIA/daqiri/issues/15) for tracking.
-- **RoCE single-host loopback is deferred from this report.** See footnote [^1]
-  on the headline tables. The wrapper currently runs `daqiri_bench_rdma` in
-  `--mode both` from a single process; on Spark, with both 1.1.1.1 (mlx5_0)
-  and 2.2.2.2 (mlx5_2) bound in the root namespace, the kernel shortcuts the
-  RC connection through `lo` and the QSFP cable carries no traffic. A
-  follow-up will land the two-netns + two-process orchestration and re-fill
-  the RoCE rows.
-- **Socket UDP / TCP results are deferred.** See footnotes [^2] and [^3].
-  Both are bench-side bugs uncovered during PR 1 verification on Spark:
-  UDP `--mode both` deadlocks on peer learning; TCP `--mode both` aborts with
-  a glibc heap-corruption assertion on init. Follow-up issues track each.
-- **p99/p999 latency is not in v1.** The bench output captures throughput,
-  drops, and resource utilization. Per-burst RX timestamping and percentile
-  aggregation are deferred to a follow-up issue.
-
-## System under test
+### System under test
 
 The reproducibility appendix has the full capture. Key fields:
 
@@ -89,9 +74,9 @@ The reproducibility appendix has the full capture. Key fields:
 | DPDK              | patched per `dpdk_patches/` (container build) |
 | DAQIRI commit     | _captured in `environment.txt`_      |
 
-## Methodology
+### Methodology
 
-### Bench commands
+#### Bench commands
 
 Each backend has a dedicated bench executable in `examples/`. The DPDK
 numbers in this report come from the first command; the RoCE and Socket
@@ -104,12 +89,12 @@ future fill of those rows.
     examples/daqiri_bench_raw_tx_rx_spark.yaml \
     --seconds 30 [--target-gbps G]
 
-# RoCE — same NIC, two ports (deferred; see Known limitations)
+# RoCE — same NIC, two ports (deferred; see TODO / Known Limitations)
 ./build/examples/daqiri_bench_rdma \
     examples/daqiri_bench_rdma_tx_rx_spark.yaml \
     --seconds 30 --mode both [--target-gbps G]
 
-# Socket UDP / TCP — localhost (deferred; see Known limitations)
+# Socket UDP / TCP — localhost (deferred; see TODO / Known Limitations)
 ./build/examples/daqiri_bench_socket \
     examples/daqiri_bench_socket_udp_tx_rx.yaml \
     --seconds 30 --mode both [--target-gbps G]
@@ -121,7 +106,7 @@ The DPDK YAML expects `eth_dst_addr` filled from the RX iface MAC:
 ETH_DST_ADDR="$(cat /sys/class/net/<rx-iface>/address)"
 ```
 
-### Per-backend sweep dimensions
+#### Per-backend sweep dimensions
 
 **Payload** is the user-data bytes in one packet (DPDK / Socket UDP),
 one RDMA message, or one TCP send. **Batch** is how many packets DAQIRI
@@ -142,14 +127,14 @@ backend has its own sweep:
 | Socket UDP         | payload_size ∈ {64, 256, 1024, 1472} B (MTU-bound)     | batch_size ∈ {1, 32, 256}              | (1472, 256)          | (1472, 256) — closest to 8 K under MTU cap |
 | Socket TCP         | message_size ∈ {1 K, 64 K, 1 M} B                      | n/a (single stream)                    | (64 K)               | n/a                    |
 
-### "No-drop" threshold
+#### "No-drop" threshold
 
 A run is **drop-free** when reported `drops == 0` over a `--seconds 30` run.
 The headline tables report the highest target rate at which a run was still
 drop-free under this threshold. The methodology does not use a percentile cap
 — either there are drops or there are not.
 
-### Drop-curve sweep
+#### Drop-curve sweep
 
 The drop curve sweeps `--target-gbps` while holding the native-shape cell
 constant. The token-bucket pacer in the bench TX worker (`raw_bench_common`)
@@ -158,7 +143,7 @@ due to OS sleep granularity and scheduler jitter. Hardware TX pacing (DPDK
 `accurate_send`) is unused but would tighten DPDK-only precision; deferred to
 a follow-up.
 
-### Drop sources per backend
+#### Drop sources per backend
 
 - **DPDK** — `imissed + ierrors + rx_nombuf` parsed from `DAQIRI_LOG_INFO`
   output (the bench's stderr).
@@ -169,7 +154,7 @@ a follow-up.
   `TcpRetransSegs` / `TcpInErrs`. TCP has no clean "drops" semantic; this is
   the closest proxy.
 
-### External captures per run
+#### External captures per run
 
 Each run records, alongside the bench:
 
@@ -188,13 +173,15 @@ Slow-moving state (kernel, OFED, NIC firmware, PCIe link, NUMA,
 hugepages, GPU state, DAQIRI commit) is captured once per result set by
 `bench_capture_environment.sh`.
 
-## Results — DPDK GPUDirect
+## C++ Results
+
+### DPDK GPUDirect
 
 Native shape on Spark is 8 KB payload, batch 10240 — the configuration the
 DPDK backend was designed around. All cells below ran for 30 s with
 `drops == 0`.
 
-### Drop curve at native shape
+#### Drop curve at native shape
 
 Hold (payload=8000, batch=10240) constant; sweep `--target-gbps`. The
 token-bucket pacer tracks target within ±0.02 Gbps until the link saturates
@@ -213,7 +200,104 @@ rate (visible in the CPU table below).
 | 100         | 96.370        | 1,493,823 | 0     | 91.6      | 91.6      |
 | unpaced     | 95.897        | 1,486,498 | 0     | 91.6      | 90.5      |
 
-### Payload × batch matrix
+#### Payload × target_gbps matrix
+
+Holds batch=10240 constant; sweeps payload and `--target-gbps`
+together. Each cell shows the achieved Gbps and drops over a 30 s
+run. Coloring is relative to the **effective target**
+`min(target_gbps, 96 Gbps link cap)`; the "unpaced" column uses the
+link cap as its effective target:
+
+<div class="perf-legend" markdown="0">
+  <span class="cell-green">green — no drops, achieved ≥ 95% of effective target</span>
+  <span class="cell-yellow">yellow — no drops, achieved ≥ 70% of effective target</span>
+  <span class="cell-red">red — drops, or achieved &lt; 70% of effective target</span>
+</div>
+
+<table class="perf-matrix" markdown="0">
+  <thead>
+    <tr>
+      <th rowspan="2">payload</th>
+      <th colspan="8">target Gbps</th>
+    </tr>
+    <tr>
+      <th>1</th><th>5</th><th>10</th><th>25</th><th>50</th><th>75</th><th>100</th><th>unpaced</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>8000 B</th>
+      <td class="cell-green">1.0 Gbps<small>0 drops</small></td>
+      <td class="cell-green">5.0 Gbps<small>0 drops</small></td>
+      <td class="cell-green">10.0 Gbps<small>0 drops</small></td>
+      <td class="cell-green">25.0 Gbps<small>0 drops</small></td>
+      <td class="cell-green">50.0 Gbps<small>0 drops</small></td>
+      <td class="cell-green">75.0 Gbps<small>0 drops</small></td>
+      <td class="cell-green">95.9 Gbps<small>0 drops</small></td>
+      <td class="cell-green">96.4 Gbps<small>0 drops</small></td>
+    </tr>
+    <tr>
+      <th>4096 B</th>
+      <td class="cell-green">1.0 Gbps<small>0 drops</small></td>
+      <td class="cell-green">5.0 Gbps<small>0 drops</small></td>
+      <td class="cell-green">10.0 Gbps<small>0 drops</small></td>
+      <td class="cell-green">25.0 Gbps<small>0 drops</small></td>
+      <td class="cell-green">50.0 Gbps<small>0 drops</small></td>
+      <td class="cell-green">75.0 Gbps<small>0 drops</small></td>
+      <td class="cell-green">100.0 Gbps<small>0 drops</small></td>
+      <td class="cell-green">102.7 Gbps<small>0 drops</small></td>
+    </tr>
+    <tr>
+      <th>1024 B</th>
+      <td class="cell-green">1.0 Gbps<small>0 drops</small></td>
+      <td class="cell-green">5.0 Gbps<small>0 drops</small></td>
+      <td class="cell-green">10.0 Gbps<small>0 drops</small></td>
+      <td class="cell-green">24.9 Gbps<small>0 drops</small></td>
+      <td class="cell-green">49.8 Gbps<small>0 drops</small></td>
+      <td class="cell-green">74.2 Gbps<small>0 drops</small></td>
+      <td class="cell-green">94.0 Gbps<small>0 drops</small></td>
+      <td class="cell-yellow">68.2 Gbps<small>0 drops</small></td>
+    </tr>
+    <tr>
+      <th>256 B</th>
+      <td class="cell-green">1.0 Gbps<small>0 drops</small></td>
+      <td class="cell-green">5.0 Gbps<small>0 drops</small></td>
+      <td class="cell-green">10.0 Gbps<small>0 drops</small></td>
+      <td class="cell-green">24.7 Gbps<small>0 drops</small></td>
+      <td class="cell-red">21.1 Gbps<small>0 drops</small></td>
+      <td class="cell-red">21.2 Gbps<small>0 drops</small></td>
+      <td class="cell-red">21.2 Gbps<small>0 drops</small></td>
+      <td class="cell-red">21.6 Gbps<small>0 drops</small></td>
+    </tr>
+    <tr>
+      <th>64 B</th>
+      <td class="cell-green">1.0 Gbps<small>0 drops</small></td>
+      <td class="cell-green">5.0 Gbps<small>0 drops</small></td>
+      <td class="cell-green">9.9 Gbps<small>0 drops</small></td>
+      <td class="cell-red">8.9 Gbps<small>0 drops</small></td>
+      <td class="cell-red">8.9 Gbps<small>0 drops</small></td>
+      <td class="cell-red">13.7 Gbps<small>0 drops</small></td>
+      <td class="cell-red">8.9 Gbps<small>0 drops</small></td>
+      <td class="cell-red">8.7 Gbps<small>0 drops</small></td>
+    </tr>
+  </tbody>
+</table>
+
+**Reading the matrix.** The token-bucket pacer tracks target within
+sub-Gbps at payloads ≥ 1 KB right up to the link cap. The PPS
+ceiling for each payload (~21 Gbps at 256 B, ~9 Gbps at 64 B) shows
+up as a horizontal saturation band: once `target_gbps` crosses that
+ceiling, increasing it further produces no additional throughput.
+The 64 B / target=75 cell (13.7 Gbps) is a pacer transient when the
+requested rate is well above achievable — the next cell at
+target=100 falls back to the PPS ceiling. The 1024 B / unpaced cell
+(68.2 Gbps, yellow) sits below its own paced cells; 1024 B is the
+size where the master loop transitions from idle to fully busy
+(`cpu_master_pct` jumps from ~3% to ~93% in the corresponding
+unpaced run), and per-cell numbers in this regime carry roughly
+±5 Gbps of run-to-run variance.
+
+#### Payload × batch matrix
 
 Each cell shows the achieved Gbps and drops over a 30 s unpaced run.
 Coloring is relative to the global max across the matrix (here
@@ -284,7 +368,7 @@ link ceiling regardless of batch. Run-to-run variance on the unpaced
 cells is ~0.5 Gbps; row-internal Gbps differences smaller than that
 should be treated as noise.
 
-### CPU and GPU utilization (headline cell, payload 8000 B / batch 10240, unpaced)
+#### CPU and GPU utilization (headline cell, payload 8000 B / batch 10240, unpaced)
 
 | Resource             | Value | Note                                       |
 | -------------------- | ----- | ------------------------------------------ |
@@ -302,18 +386,20 @@ payload sizes (1 KB and below) it occasionally hits 90%+ as more bursts
 flow through the orchestration path. That asymmetry is data, not a bug,
 and is captured in the per-cell artifacts under `bench-results/`.
 
-## Results — RoCE
+### RoCE
 
 **Deferred from this report.** See [headline-table footnote 1](#fn:1) and
-the Known limitations section. Single-host RoCE loopback on Spark requires a
-two-netns + two-process orchestration that the wrapper does not yet
-implement. The RoCE rows will be filled when the follow-up issue lands.
+the [TODO / Known Limitations](#todo-not-yet-implemented-known-limitations)
+section. Single-host RoCE loopback on Spark requires a two-netns +
+two-process orchestration that the wrapper does not yet implement. The RoCE
+rows will be filled when the follow-up issue lands.
 
-## Results — Socket
+### Socket
 
 **Deferred from this report.** See [headline-table footnotes 2 and 3](#fn:2)
-and the Known limitations section. Both backends produced unusable data on
-Spark during PR 1 verification:
+and the [TODO / Known Limitations](#todo-not-yet-implemented-known-limitations)
+section. Both backends produced unusable data on Spark during PR 1
+verification:
 
 - **Socket UDP** in `--mode both` deadlocks on peer learning — both ends try
   to transmit before either has received, only ~1000 packets per 30 s get
@@ -328,7 +414,7 @@ Spark during PR 1 verification:
 Both are tracked as separate follow-up issues; the Socket rows here will be
 filled once the underlying bench bugs are fixed.
 
-## Workload variants (FFT, GEMM)
+### Workload variants (FFT, GEMM)
 
 The post-process layer ([PR 2](https://github.com/NVIDIA/daqiri/issues/15))
 adds a `--post-process {fft,gemm}` flag to the bench, runs `cuFFT` /
@@ -340,18 +426,18 @@ throughput delta and GPU utilization.
 - FFT: 1D complex-to-complex, length 1024.
 - GEMM: fp32 square, N = 44 (largest tile that fits in an 8 KB payload).
 
-### DPDK GPUDirect
+#### DPDK GPUDirect — FFT/GEMM
 
 _TBD (PR 2)._
 
-### RoCE
+#### RoCE — FFT/GEMM
 
 _TBD (PR 2)._ Note the unit-of-work mismatch when comparing across backends:
 RoCE applies the post-process kernel once per ~8 MB SEND; DPDK applies it
 once per packet. The throughput numbers are comparable; "operations per
 burst" is not.
 
-## Python results
+## Python Results
 
 The Python benches ([PR 3](https://github.com/NVIDIA/daqiri/issues/16)) mirror
 the C++ benches' CLI and stdout format, using the existing pybind11 bindings.
@@ -364,7 +450,7 @@ _TBD (PR 3)._
 
 _TBD (PR 4)._
 
-## Reproducibility appendix
+## Reproduce these results
 
 ### Container
 
@@ -417,7 +503,7 @@ per-backend result directories:
 The script defaults to `dpdk socket-udp socket-tcp` if invoked with no
 arguments; on Spark, the socket backends will fail their own pre-flight
 once the follow-up issues land. RDMA is currently rejected by the
-pre-flight (see Known limitations).
+pre-flight (see [TODO / Known Limitations](#todo-not-yet-implemented-known-limitations)).
 
 ### Per-backend wrapper invocations
 
@@ -452,3 +538,29 @@ System tuning is required before the numbers in this report are
 reproducible. See
 [`docs/tutorials/system_configuration.md`](tutorials/system_configuration.md)
 for the DGX Spark tab — isolated cores, hugepages, governor, IRQ affinity.
+
+## TODO: Not Yet Implemented / Known Limitations
+
+- **HDS (Header–Data Split) is deferred.** The generic HDS configuration uses
+  `kind: device` for GPU memory regions. Spark / GB10 cannot use device memory
+  for GPUDirect — `nvidia_peermem` does not load and DMA-BUF is unreachable —
+  so DAQIRI uses `host_pinned` instead. Under `host_pinned`, the HDS layout no
+  longer changes the memory path; it only changes the segment partition,
+  which makes "HDS vs. plain GPUDirect" a non-distinction on this platform.
+  HDS is characterized when this report extends to IGX and x86-server
+  platforms where device memory works. See
+  [issue #15](https://github.com/NVIDIA/daqiri/issues/15) for tracking.
+- **RoCE single-host loopback is deferred from this report.** See footnote [^1]
+  on the headline tables. The wrapper currently runs `daqiri_bench_rdma` in
+  `--mode both` from a single process; on Spark, with both 1.1.1.1 (mlx5_0)
+  and 2.2.2.2 (mlx5_2) bound in the root namespace, the kernel shortcuts the
+  RC connection through `lo` and the QSFP cable carries no traffic. A
+  follow-up will land the two-netns + two-process orchestration and re-fill
+  the RoCE rows.
+- **Socket UDP / TCP results are deferred.** See footnotes [^2] and [^3].
+  Both are bench-side bugs uncovered during PR 1 verification on Spark:
+  UDP `--mode both` deadlocks on peer learning; TCP `--mode both` aborts with
+  a glibc heap-corruption assertion on init. Follow-up issues track each.
+- **p99/p999 latency is not in v1.** The bench output captures throughput,
+  drops, and resource utilization. Per-burst RX timestamping and percentile
+  aggregation are deferred to a follow-up issue.

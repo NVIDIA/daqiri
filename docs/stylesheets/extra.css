@@ -58,8 +58,8 @@
      yellow = no drops AND Gbps ≥ 70% of max
      red    = any drops OR Gbps < 70% of max                            */
 .md-typeset table.perf-matrix {
-  width: 85%;
-  table-layout: fixed;
+  width: 100%;
+  table-layout: auto;
   border-collapse: separate;
   border-spacing: 5px;
   font-size: 0.64rem;
@@ -69,8 +69,9 @@
   text-align: center;
   vertical-align: middle;
   font-variant-numeric: tabular-nums;
-  padding: 0.55em 0.6em;
+  padding: 0.55em 0.5em;
   border-radius: 4px;
+  white-space: nowrap;
 }
 .md-typeset table.perf-matrix td small {
   display: block;
