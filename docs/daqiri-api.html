@@ -203,7 +203,6 @@
         <a href="#get-packet-flow-id" class="sb-link">get_packet_flow_id <span class="lb lb-fn">fn</span></a>
         <a href="#get-segment-packet-ptr" class="sb-link">get_segment_packet_ptr <span class="lb lb-fn">fn</span></a>
         <a href="#free-buffers" class="sb-link">Free Buffers <span class="lb lb-fn">fn</span></a>
-        <a href="#gpu-reorder" class="sb-link">GPU Reorder Kernel <span class="lb lb-fn">fn</span></a>
       </div>
 
       <div class="sb-group">
@@ -396,27 +395,6 @@ daqiri::<span class="fn">free_rx_burst</span>(burst);</pre>
           </div>
         </div>
 
-        <div class="method-card" id="gpu-reorder">
-          <div class="method-hdr" onclick="toggleMethod(this)">
-            <span class="m-tag mt-fn">fn</span>
-            <span class="m-name">simple_packet_reorder</span>
-            <span class="m-params">(output_buf, dev_ptrs, pkt_len, num_pkts)</span>
-            <span class="mt-ret">→ void (CUDA)</span>
-            <span class="m-expand">▼</span>
-          </div>
-          <div class="method-body">
-            <p class="m-desc">CUDA kernel (defined in <code>src/kernels.cu</code>) that copies scattered per-packet GPU pointers into a single flat contiguous GPU buffer. Useful in batched GPU mode where packets arrive at non-contiguous addresses.</p>
-            <pre><span class="cm">// Collect device pointers from the burst</span>
-<span class="kw">for</span> (<span class="kw">int</span> p = <span class="nm">0</span>; p &lt; n; p++)
-    h_dev_ptrs[p] = daqiri::<span class="fn">get_packet_ptr</span>(burst, p);
-
-<span class="cm">// Reorder into a contiguous output buffer (async)</span>
-<span class="fn">simple_packet_reorder</span>(output_buf, h_dev_ptrs, packet_len, n);
-
-<span class="cm">// Free once kernel completes</span>
-daqiri::<span class="fn">free_all_packets_and_burst_rx</span>(burst);</pre>
-          </div>
-        </div>
       </div>
 
       <hr class="divider" />

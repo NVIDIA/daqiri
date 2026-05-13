@@ -59,7 +59,7 @@ clang-format -style=file -i -fallback-style=none <files>
 
 ## Architecture
 
-**Single C++/CUDA shared library** (`libdaqiri.so`) exposing a C++ API through `#include <daqiri/daqiri.h>`. The public surface is intentionally flat free-function helpers (`get_rx_burst`, `get_packet_ptr`, `set_udp_header`, …) that all operate on an opaque `BurstParams*`. Applications never touch backend types directly.
+**Single C++/CUDA shared library** (`libdaqiri.so`) exposing a C++ API through `#include <daqiri/daqiri.h>`. The public surface is intentionally flat free-function helpers (`get_rx_burst`, `get_packet_ptr`, `set_udp_header`, …) that all operate on opaque DAQIRI-owned buffers. Applications never touch backend types directly.
 
 ### Manager abstraction
 `src/manager.h` defines `daqiri::Manager` — an (almost) ABC with ~50 virtual methods covering init, RX/TX burst dequeue/enqueue, header-fill helpers, buffer free, and RDMA connection setup. Backends live in `src/managers/<name>/` (`dpdk/`, `rdma/`, `socket/`) and are selected at CMake configure time via `DAQIRI_MGR`. Each backend produces its own static library (`daqiri_dpdk`, `daqiri_rdma`, `daqiri_socket`) linked into `daqiri_common`, and each adds a `DAQIRI_MGR_<NAME>=1` compile definition (see `src/CMakeLists.txt:156-183`).

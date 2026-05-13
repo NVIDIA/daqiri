@@ -139,6 +139,7 @@ set_target_properties(daqiri_common PROPERTIES
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
     OUTPUT_NAME "daqiri"
     EXPORT_NAME "daqiri"
+    INSTALL_RPATH "$ORIGIN"
 )
 install(
     TARGETS daqiri_common
@@ -212,6 +213,7 @@ foreach(MGR IN LISTS DAQIRI_MGR_LIST)
     set_target_properties(${MGR_TARGET} PROPERTIES
         OUTPUT_NAME "daqiri_${MGR_LOWER}"
         EXPORT_NAME "${MGR_LOWER}"
+        INSTALL_RPATH "$ORIGIN"
     )
     install(TARGETS ${MGR_TARGET}
         EXPORT daqiriTargets
