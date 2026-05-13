@@ -21,20 +21,24 @@ that table since it has no operation boundary.
 
 ### Native-shape peak — max no-drop throughput (Gbps)
 
-| Backend / Stack       | C++ loopback | C++ + FFT      | C++ + GEMM     | Python loopback | Python + FFT   | Python + GEMM  |
-| --------------------- | ------------ | -------------- | -------------- | --------------- | -------------- | -------------- |
-| DPDK GPUDirect (8 KB) | _TBD (PR 1)_ | _TBD (PR 2)_   | _TBD (PR 2)_   | _TBD (PR 3)_    | _TBD (PR 4)_   | _TBD (PR 4)_   |
-| RoCE (8 MB SEND)      | _TBD (PR 1)_ | _TBD (PR 2)_   | _TBD (PR 2)_   | _TBD (PR 3)_    | _TBD (PR 4)_   | _TBD (PR 4)_   |
-| Socket UDP (MTU)      | _TBD (PR 1)_ | n/a            | n/a            | _TBD (PR 3)_    | n/a            | n/a            |
-| Socket TCP (stream)   | _TBD (PR 1)_ | n/a            | n/a            | _TBD (PR 3)_    | n/a            | n/a            |
+| Backend / Stack       | C++ loopback   | C++ + FFT      | C++ + GEMM     | Python loopback | Python + FFT   | Python + GEMM  |
+| --------------------- | -------------- | -------------- | -------------- | --------------- | -------------- | -------------- |
+| DPDK GPUDirect (8 KB) | **96.4**       | _TBD (PR 2)_   | _TBD (PR 2)_   | _TBD (PR 3)_    | _TBD (PR 4)_   | _TBD (PR 4)_   |
+| RoCE (8 MB SEND)      | _deferred_[^1] | _TBD (PR 2)_   | _TBD (PR 2)_   | _TBD (PR 3)_    | _TBD (PR 4)_   | _TBD (PR 4)_   |
+| Socket UDP (MTU)      | _deferred_[^2] | n/a            | n/a            | _TBD (PR 3)_    | n/a            | n/a            |
+| Socket TCP (stream)   | _deferred_[^3] | n/a            | n/a            | _TBD (PR 3)_    | n/a            | n/a            |
 
 ### Matched 8 KB operation — cross-backend Gbps
 
-| Backend / Stack          | C++ loopback | C++ + FFT      | C++ + GEMM     | Python loopback | Python + FFT   | Python + GEMM  |
-| ------------------------ | ------------ | -------------- | -------------- | --------------- | -------------- | -------------- |
-| DPDK GPUDirect           | _TBD (PR 1)_ | _TBD (PR 2)_   | _TBD (PR 2)_   | _TBD (PR 3)_    | _TBD (PR 4)_   | _TBD (PR 4)_   |
-| RoCE                     | _TBD (PR 1)_ | _TBD (PR 2)_   | _TBD (PR 2)_   | _TBD (PR 3)_    | _TBD (PR 4)_   | _TBD (PR 4)_   |
-| Socket UDP (1472 B, MTU) | _TBD (PR 1)_ | n/a            | n/a            | _TBD (PR 3)_    | n/a            | n/a            |
+| Backend / Stack          | C++ loopback   | C++ + FFT      | C++ + GEMM     | Python loopback | Python + FFT   | Python + GEMM  |
+| ------------------------ | -------------- | -------------- | -------------- | --------------- | -------------- | -------------- |
+| DPDK GPUDirect           | **96.4**       | _TBD (PR 2)_   | _TBD (PR 2)_   | _TBD (PR 3)_    | _TBD (PR 4)_   | _TBD (PR 4)_   |
+| RoCE                     | _deferred_[^1] | _TBD (PR 2)_   | _TBD (PR 2)_   | _TBD (PR 3)_    | _TBD (PR 4)_   | _TBD (PR 4)_   |
+| Socket UDP (1472 B, MTU) | _deferred_[^2] | n/a            | n/a            | _TBD (PR 3)_    | n/a            | n/a            |
+
+[^1]: RoCE single-host loopback is deferred from PR 1 — the bench's `--mode both` runs both ends in one process; with both IPs locally bound, the kernel shortcuts RC connection setup through `lo` rather than the cable. Real loopback measurement requires two netns (one per port), `rdma system set netns exclusive`, RDMA-device netns transfer, a YAML split, and two-process orchestration. Tracked in a follow-up issue.
+[^2]: Socket UDP `--mode both` deadlocks on peer learning: both server and client try to transmit before either has received, so neither side learns its peer. Only ~1000 packets / 30 s trickle through. Tracked in a follow-up issue.
+[^3]: Socket TCP `--mode both` aborts with a glibc heap-corruption assertion (`malloc.c:2599`) immediately after the second TCP connection accept. Bench is unrunnable. Tracked in a follow-up issue.
 
 !!! note "Why two tables"
     A single Gbps number isn't enough to compare backends fairly. A DPDK
@@ -54,6 +58,17 @@ that table since it has no operation boundary.
   HDS is characterized when this report extends to IGX and x86-server
   platforms where device memory works. See
   [issue #15](https://github.com/NVIDIA/daqiri/issues/15) for tracking.
+- **RoCE single-host loopback is deferred from this report.** See footnote [^1]
+  on the headline tables. The wrapper currently runs `daqiri_bench_rdma` in
+  `--mode both` from a single process; on Spark, with both 1.1.1.1 (mlx5_0)
+  and 2.2.2.2 (mlx5_2) bound in the root namespace, the kernel shortcuts the
+  RC connection through `lo` and the QSFP cable carries no traffic. A
+  follow-up will land the two-netns + two-process orchestration and re-fill
+  the RoCE rows.
+- **Socket UDP / TCP results are deferred.** See footnotes [^2] and [^3].
+  Both are bench-side bugs uncovered during PR 1 verification on Spark:
+  UDP `--mode both` deadlocks on peer learning; TCP `--mode both` aborts with
+  a glibc heap-corruption assertion on init. Follow-up issues track each.
 - **p99/p999 latency is not in v1.** The bench output captures throughput,
   drops, and resource utilization. Per-burst RX timestamping and percentile
   aggregation are deferred to a follow-up issue.
@@ -78,21 +93,23 @@ The reproducibility appendix has the full capture. Key fields:
 
 ### Bench commands
 
-Each backend has a dedicated bench executable in `examples/`. PR 1 numbers
-come from these:
+Each backend has a dedicated bench executable in `examples/`. The DPDK
+numbers in this report come from the first command; the RoCE and Socket
+commands are listed here for documentation and will be the basis for the
+future fill of those rows.
 
 ```bash
-# DPDK GPUDirect — physical loopback
+# DPDK GPUDirect — physical loopback (used in this report)
 ./build/examples/daqiri_bench_raw_gpudirect \
     examples/daqiri_bench_raw_tx_rx_spark.yaml \
     --seconds 30 [--target-gbps G]
 
-# RoCE — same NIC, two ports
+# RoCE — same NIC, two ports (deferred; see Known limitations)
 ./build/examples/daqiri_bench_rdma \
     examples/daqiri_bench_rdma_tx_rx_spark.yaml \
     --seconds 30 --mode both [--target-gbps G]
 
-# Socket UDP / TCP — localhost
+# Socket UDP / TCP — localhost (deferred; see Known limitations)
 ./build/examples/daqiri_bench_socket \
     examples/daqiri_bench_socket_udp_tx_rx.yaml \
     --seconds 30 --mode both [--target-gbps G]
@@ -105,6 +122,15 @@ ETH_DST_ADDR="$(cat /sys/class/net/<rx-iface>/address)"
 ```
 
 ### Per-backend sweep dimensions
+
+**Payload** is the user-data bytes in one packet (DPDK / Socket UDP),
+one RDMA message, or one TCP send. **Batch** is how many packets DAQIRI
+hands to (or pulls from) the NIC in one `rte_eth_tx_burst` /
+`rte_eth_rx_burst` call — the burst size knob, not a packet-size knob.
+Larger batches amortize doorbell and API overhead per packet; smaller
+batches keep per-call latency lower. Batch only matters when the bench
+is not yet at the link ceiling — at saturation, the NIC is the
+bottleneck and batch size has near-zero effect.
 
 The "payload × batch" sweep doesn't map uniformly across backends. Each
 backend has its own sweep:
@@ -145,81 +171,162 @@ a follow-up.
 
 ### External captures per run
 
-Each run records, in parallel with the bench:
+Each run records, alongside the bench:
 
-- `mpstat -P ALL 1 <N>` — per-core CPU busy%.
-- `nvidia-smi dmon -s pucvmet -c <N>` — GPU SM%, mem%, DRAM bandwidth.
+- `/proc/stat` snapshots before and after the bench process. The wrapper
+  computes per-core busy% for the master / TX / RX cores (cores 8 / 17 / 18
+  on Spark) by delta over the run window. `mpstat` is not used — it is
+  often missing from minimal containers, and the per-core CPUs we care
+  about are pinned by the YAML so a targeted delta is more meaningful
+  than a system-wide average.
+- `nvidia-smi dmon -s pucvmet -c <N>` — GPU SM%, mem-controller%, and
+  PCIe rxpci / txpci columns (the latter are reported as `-` on the
+  current Spark driver; SM% and mem% are near zero for plain GPUDirect
+  because the GPU is a DMA target, not a compute engine).
 
-Slow-moving state (kernel, OFED, NIC firmware, PCIe link, NUMA, hugepages,
-GPU state, DAQIRI commit) is captured once per result set by
+Slow-moving state (kernel, OFED, NIC firmware, PCIe link, NUMA,
+hugepages, GPU state, DAQIRI commit) is captured once per result set by
 `bench_capture_environment.sh`.
 
 ## Results — DPDK GPUDirect
 
-_PR 1: this section is populated after the first sweep run._
+Native shape on Spark is 8 KB payload, batch 10240 — the configuration the
+DPDK backend was designed around. All cells below ran for 30 s with
+`drops == 0`.
 
 ### Drop curve at native shape
 
-| target_gbps | achieved Gbps | RX pps  | drops |
-| ----------- | ------------- | ------- | ----- |
-| _TBD (PR 1)_ |               |         |       |
+Hold (payload=8000, batch=10240) constant; sweep `--target-gbps`. The
+token-bucket pacer tracks target within ±0.02 Gbps until the link saturates
+near 96 Gbps. Beyond that, target=100 and unpaced both report the
+achievable ceiling. TX and RX cores spin in poll-mode regardless of target
+rate (visible in the CPU table below).
 
-### Payload × batch sweep
+| target Gbps | achieved Gbps | RX pps    | drops | TX core % | RX core % |
+| ----------- | ------------- | --------- | ----- | --------- | --------- |
+| 1           | 1.011         |    15,678 | 0     | 92.0      | 92.0      |
+| 5           | 5.012         |    77,697 | 0     | 91.8      | 91.8      |
+| 10          | 10.001        |   155,032 | 0     | 92.5      | 92.5      |
+| 25          | 25.008        |   387,650 | 0     | 91.9      | 91.9      |
+| 50          | 50.001        |   775,062 | 0     | 92.8      | 92.8      |
+| 75          | 74.999        | 1,162,551 | 0     | 91.7      | 91.7      |
+| 100         | 96.370        | 1,493,823 | 0     | 91.6      | 91.6      |
+| unpaced     | 95.897        | 1,486,498 | 0     | 91.6      | 90.5      |
 
-| payload | batch | Gbps | pps | drops |
-| ------- | ----- | ---- | --- | ----- |
-| _TBD (PR 1)_ |    |      |     |       |
+### Payload × batch matrix
 
-### CPU and GPU utilization (headline cell)
+Each cell shows the achieved Gbps and drops over a 30 s unpaced run.
+Coloring is relative to the global max across the matrix (here
+**104.989 Gbps** at payload 4096 B, batch 4096):
 
-| Resource        | Value           |
-| --------------- | --------------- |
-| Master core %   | _TBD_           |
-| TX core %       | _TBD_           |
-| RX core %       | _TBD_           |
-| GPU SM %        | _TBD (near 0; GPU is DMA target, not compute)_ |
-| GPU mem BW %    | _TBD_           |
+<div class="perf-legend" markdown="0">
+  <span class="cell-green">green — no drops, Gbps ≥ 90% of max</span>
+  <span class="cell-yellow">yellow — no drops, Gbps ≥ 70% of max</span>
+  <span class="cell-red">red — drops, or Gbps &lt; 70% of max</span>
+</div>
+
+<table class="perf-matrix" markdown="0">
+  <thead>
+    <tr>
+      <th rowspan="2">payload</th>
+      <th colspan="4">batch (packets per burst)</th>
+    </tr>
+    <tr>
+      <th>256</th><th>1024</th><th>4096</th><th>10240</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>8000 B</th>
+      <td class="cell-green">96.4 Gbps<small>0 drops</small></td>
+      <td class="cell-green">96.4 Gbps<small>0 drops</small></td>
+      <td class="cell-green">96.4 Gbps<small>0 drops</small></td>
+      <td class="cell-green">95.9 Gbps<small>0 drops</small></td>
+    </tr>
+    <tr>
+      <th>4096 B</th>
+      <td class="cell-green">104.9 Gbps<small>0 drops</small></td>
+      <td class="cell-green">104.9 Gbps<small>0 drops</small></td>
+      <td class="cell-green">105.0 Gbps<small>0 drops</small></td>
+      <td class="cell-green">103.0 Gbps<small>0 drops</small></td>
+    </tr>
+    <tr>
+      <th>1024 B</th>
+      <td class="cell-red">64.9 Gbps<small>0 drops</small></td>
+      <td class="cell-yellow">86.2 Gbps<small>0 drops</small></td>
+      <td class="cell-red">71.0 Gbps<small>0 drops</small></td>
+      <td class="cell-red">72.7 Gbps<small>0 drops</small></td>
+    </tr>
+    <tr>
+      <th>256 B</th>
+      <td class="cell-red">24.5 Gbps<small>0 drops</small></td>
+      <td class="cell-red">24.8 Gbps<small>0 drops</small></td>
+      <td class="cell-red">29.3 Gbps<small>0 drops</small></td>
+      <td class="cell-red">21.1 Gbps<small>0 drops</small></td>
+    </tr>
+    <tr>
+      <th>64 B</th>
+      <td class="cell-red">10.1 Gbps<small>0 drops</small></td>
+      <td class="cell-red">10.3 Gbps<small>0 drops</small></td>
+      <td class="cell-red">9.8 Gbps<small>0 drops</small></td>
+      <td class="cell-red">10.3 Gbps<small>0 drops</small></td>
+    </tr>
+  </tbody>
+</table>
+
+**Reading the matrix.** At payload ≥ 4 KB the link saturates (~96–105
+Gbps) and batch size barely moves the number, so every cell is green.
+The 1 KB row is the transition: pps and Gbps both matter, batch size
+starts to influence which side dominates, and most cells fall under 70%
+of the global max. At ≤ 256 B the bottleneck is packets-per-second
+(~10 M pps ceiling at 64 B), so effective Gbps stays well below the
+link ceiling regardless of batch. Run-to-run variance on the unpaced
+cells is ~0.5 Gbps; row-internal Gbps differences smaller than that
+should be treated as noise.
+
+### CPU and GPU utilization (headline cell, payload 8000 B / batch 10240, unpaced)
+
+| Resource             | Value | Note                                       |
+| -------------------- | ----- | ------------------------------------------ |
+| Master core (CPU 8)  |  3.3% | Mostly idle; orchestration only            |
+| TX core (CPU 17)     | 91.4% | Poll-mode spin; rate-independent           |
+| RX core (CPU 18)     | 91.4% | Poll-mode spin; rate-independent           |
+| GPU SM %             |  0.0% | GPU is a DMA target, no compute            |
+| GPU mem-ctrl %       |  0.0% | Payload writes traverse PCIe, not the GPU memory controller |
+
+The TX/RX cores stay at ~92% across every drop-curve step from 1 Gbps to
+line rate — characteristic of DPDK's poll-mode driver, which spins waiting
+for descriptors regardless of offered load. The master core handles
+configuration only and idles below 5 % at the headline shape; at smaller
+payload sizes (1 KB and below) it occasionally hits 90%+ as more bursts
+flow through the orchestration path. That asymmetry is data, not a bug,
+and is captured in the per-cell artifacts under `bench-results/`.
 
 ## Results — RoCE
 
-_PR 1: this section is populated after the first sweep run._
-
-### Drop curve at native shape
-
-| target_gbps | achieved Gbps | completions/s | drops (CQ errors) |
-| ----------- | ------------- | ------------- | ----------------- |
-| _TBD (PR 1)_ |               |               |                   |
-
-### Message-size × batch sweep
-
-| message_size | batch | Gbps | completions/s | drops |
-| ------------ | ----- | ---- | ------------- | ----- |
-| _TBD (PR 1)_ |       |      |               |       |
-
-### CPU and GPU utilization (headline cell)
-
-| Resource        | Value |
-| --------------- | ----- |
-| Server core %   | _TBD_ |
-| Client core %   | _TBD_ |
-| GPU SM %        | _TBD_ |
-| GPU mem BW %    | _TBD_ |
+**Deferred from this report.** See [headline-table footnote 1](#fn:1) and
+the Known limitations section. Single-host RoCE loopback on Spark requires a
+two-netns + two-process orchestration that the wrapper does not yet
+implement. The RoCE rows will be filled when the follow-up issue lands.
 
 ## Results — Socket
 
-_PR 1: this section is populated after the first sweep run. GPU rows N/A._
+**Deferred from this report.** See [headline-table footnotes 2 and 3](#fn:2)
+and the Known limitations section. Both backends produced unusable data on
+Spark during PR 1 verification:
 
-### UDP — payload × batch sweep
+- **Socket UDP** in `--mode both` deadlocks on peer learning — both ends try
+  to transmit before either has received, only ~1000 packets per 30 s get
+  through (≈ 390 kbps). Visible as repeated
+  `[ERROR] UDP server has no learned peer yet; cannot transmit` lines in
+  the bench's stderr.
+- **Socket TCP** in `--mode both` aborts with a glibc heap-corruption
+  assertion (`Fatal glibc error: malloc.c:2599 (sysmalloc)`) immediately
+  after the second TCP connection accept. The bench crashes before any
+  send / recv completes, so no completion line is printed.
 
-| payload | batch | Gbps | pps | drops |
-| ------- | ----- | ---- | --- | ----- |
-| _TBD (PR 1)_ |    |      |     |       |
-
-### TCP — message-size sweep
-
-| message_size | Gbps | retrans/inerrs |
-| ------------ | ---- | -------------- |
-| _TBD (PR 1)_ |      |                |
+Both are tracked as separate follow-up issues; the Socket rows here will be
+filled once the underlying bench bugs are fixed.
 
 ## Workload variants (FFT, GEMM)
 
@@ -261,45 +368,79 @@ _TBD (PR 4)._
 
 ### Container
 
-All commands below assume execution inside the project container, as required
-by [`AGENTS.md`](https://github.com/nvidia/daqiri/blob/main/AGENTS.md). The
-container must be started in privileged mode with all GPUs and hugepage
-mounts passed through.
-
-### Full result regeneration
+All commands below assume execution inside the project container, as
+required by [`AGENTS.md`](https://github.com/nvidia/daqiri/blob/main/AGENTS.md).
+On the host, launch the container in privileged mode with all GPUs,
+hugepage mounts, and `/sys` passed through, and bind-mount the repo at
+`/workspace`:
 
 ```bash
-# 1. Build inside the container (root).
+# RX-side NIC; auto-injects ETH_DST_ADDR for the DPDK bench wrappers.
+RX_IFACE="${RX_IFACE:-enP2p1s0f0np0}"
+sudo docker run --rm -it \
+  --net host --ipc=host \
+  --runtime=nvidia --gpus all \
+  --privileged \
+  --ulimit memlock=-1 --ulimit stack=67108864 \
+  -v "$(pwd):/workspace" \
+  -v /dev/hugepages:/dev/hugepages \
+  -v /mnt/huge:/mnt/huge \
+  -v /sys:/sys \
+  -w /workspace \
+  -e ETH_DST_ADDR="$(cat /sys/class/net/$RX_IFACE/address)" \
+  -e RX_IFACE="$RX_IFACE" \
+  daqiri:local \
+  bash
+```
+
+### Build
+
+Inside the container:
+
+```bash
 cmake -S . -B build -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=ON \
     -DDAQIRI_MGR="dpdk socket rdma"
 cmake --build build -j
-
-# 2. Snapshot environment + run the sweeps.
-export DAQIRI_BUILD_DIR="$PWD/build"
-export ETH_DST_ADDR="$(cat /sys/class/net/<rx-iface>/address)"
-
-# Native-shape headline cell:
-./examples/run_spark_bench.sh dpdk       smoke
-./examples/run_spark_bench.sh rdma       smoke
-./examples/run_spark_bench.sh socket-udp smoke
-./examples/run_spark_bench.sh socket-tcp smoke
-
-# Full payload × batch sweep:
-./examples/run_spark_bench.sh dpdk       sweep
-./examples/run_spark_bench.sh rdma       sweep
-./examples/run_spark_bench.sh socket-udp sweep
-./examples/run_spark_bench.sh socket-tcp sweep
-
-# Drop curve (sweeps --target-gbps):
-./examples/run_spark_bench.sh dpdk       drop-curve
-./examples/run_spark_bench.sh rdma       drop-curve
-./examples/run_spark_bench.sh socket-udp drop-curve
-./examples/run_spark_bench.sh socket-tcp drop-curve
 ```
+
+### One-shot driver
+
+The whole DPDK matrix (sweep + drop-curve) is driven by a single script
+which handles pre-flight checks (hugepage availability, RX iface MAC,
+link state), orphan-hugepage cleanup between cells, and a final summary of
+per-backend result directories:
+
+```bash
+./scripts/spark_data_fill.sh dpdk
+```
+
+The script defaults to `dpdk socket-udp socket-tcp` if invoked with no
+arguments; on Spark, the socket backends will fail their own pre-flight
+once the follow-up issues land. RDMA is currently rejected by the
+pre-flight (see Known limitations).
+
+### Per-backend wrapper invocations
+
+For ad-hoc runs of a single cell or a single mode:
+
+```bash
+export DAQIRI_BUILD_DIR="$PWD/build"
+export ETH_DST_ADDR="$(cat /sys/class/net/<rx-iface>/address)"   # DPDK only
+
+./examples/run_spark_bench.sh dpdk smoke         # native-shape headline cell
+./examples/run_spark_bench.sh dpdk sweep         # full payload × batch matrix
+./examples/run_spark_bench.sh dpdk drop-curve    # sweep --target-gbps
+```
+
+Each invocation emits `bench-results/<timestamp>-dpdk-<mode>/` containing
+one subdirectory per cell (stdout / stderr / config / dmon / cpu_stat
+captures), an `environment.txt` snapshot, and a `runs.csv` aggregating
+the cell-level metrics.
 
 ### Environment-only capture
 
-Useful for filing a bug report or comparing two Spark units:
+Useful for filing a bug report or comparing two Spark units without
+running the bench:
 
 ```bash
 ./examples/bench_capture_environment.sh /tmp/spark-env
@@ -307,6 +448,7 @@ Useful for filing a bug report or comparing two Spark units:
 
 ### Tuning prerequisites
 
-System tuning is required before the numbers in this report are reproducible.
-See [`docs/tutorials/system_configuration.md`](tutorials/system_configuration.md)
+System tuning is required before the numbers in this report are
+reproducible. See
+[`docs/tutorials/system_configuration.md`](tutorials/system_configuration.md)
 for the DGX Spark tab — isolated cores, hugepages, governor, IRQ affinity.
