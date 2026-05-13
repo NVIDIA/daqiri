@@ -82,10 +82,10 @@ target_include_directories(daqiri_common
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
         $<BUILD_INTERFACE:${DAQIRI_SPDLOG_INCLUDE_DIR}>
-        $<INSTALL_INTERFACE:include>
-        ${DPDK_INCLUDE_DIRS}
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${DPDK_INCLUDE_DIRS}
 )
 add_library(daqiri::daqiri ALIAS daqiri_common)
 target_link_directories(daqiri_common PUBLIC ${DPDK_LIBRARY_DIRS})
@@ -156,7 +156,7 @@ install(
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/spdlog/include/spdlog/spdlog.h")
   install(
     DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/spdlog/include/spdlog
-    DESTINATION include
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     COMPONENT daqiri-cpp
   )
 endif()

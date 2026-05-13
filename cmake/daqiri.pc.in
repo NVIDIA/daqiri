@@ -6,8 +6,8 @@ includedir=@DAQIRI_PKGCONFIG_INCLUDEDIR@
 Name: daqiri
 Description: Data Acquisition for Integrated Real-time Instruments
 Version: @CMAKE_PROJECT_VERSION@
-Requires: @DAQIRI_PC_REQUIRES@
-Requires.private: @DAQIRI_PC_REQUIRES_PRIVATE@
+@DAQIRI_PC_REQUIRES_LINE@
+@DAQIRI_PC_REQUIRES_PRIVATE_LINE@
 Libs: -L${libdir} -ldaqiri @DAQIRI_PC_LIBS@
 Libs.private: @DAQIRI_PC_LIBS_PRIVATE@
 Cflags: -I${includedir}@DAQIRI_PC_EXTRA_CFLAGS@
