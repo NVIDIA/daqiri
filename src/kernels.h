@@ -17,7 +17,8 @@
 
 #pragma once
 
-#include <daqiri/daqiri.h>
+#include <cuda_runtime.h>
+#include <stdint.h>
 
 #if __cplusplus
 extern "C" {

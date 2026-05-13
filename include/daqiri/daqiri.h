@@ -18,17 +18,3 @@
 #pragma once
 
 #include <daqiri/common.h>
-
-#if __cplusplus
-extern "C" {
-#endif
-
-__attribute__((__visibility__("default"))) void simple_packet_reorder(void* out,
-                                                                      const void* const* const in,
-                                                                      uint16_t pkt_len,
-                                                                      uint32_t num_pkts,
-                                                                      cudaStream_t stream);
-
-#if __cplusplus
-}
-#endif

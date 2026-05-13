@@ -450,25 +450,23 @@ daqiri::<span class="fn">send_tx_burst</span>(burst);</pre></div>
         </div>
 
         <div class="example-card">
-          <div class="ex-hdr"><span class="ex-dot dot-cpp"></span><span class="ex-title">GPU Packet Reorder Kernel</span><span class="ex-lang">C++/CUDA</span></div>
-          <div class="ex-body"><pre><span class="cm">// Batched GPU: packets arrive scattered.
-// Collect device ptrs, then reorder
-// into a flat contiguous output buffer.</span>
-<span class="kw">for</span> (<span class="kw">int</span> p = <span class="nm">0</span>; p &lt; n; p++) {
-  h_dev_ptrs[p] =
-    daqiri::<span class="fn">get_packet_ptr</span>(burst, p);
+          <div class="ex-hdr"><span class="ex-dot dot-cpp"></span><span class="ex-title">GPU Packet Processing</span><span class="ex-lang">C++/CUDA</span></div>
+          <div class="ex-body"><pre><span class="cm">// Batched GPU: packets arrive in
+// CUDA-addressable buffers. Reordering
+// is configured with rx.reorder_configs.</span>
+<span class="kw">__global__</span> <span class="kw">void</span> noop_packet_kernel(<span class="kw">void</span>* pkt) {
+  (<span class="kw">void</span>)pkt;
 }
 
-<span class="cm">// Declared by &lt;daqiri/daqiri.h&gt;</span>
-<span class="fn">simple_packet_reorder</span>(
-  output_buf,   <span class="cm">// contiguous GPU buffer</span>
-  h_dev_ptrs,
-  packet_len,
-  num_packets);
+<span class="kw">if</span> (daqiri::<span class="fn">get_num_packets</span>(burst) &gt; <span class="nm">0</span>) {
+  <span class="kw">void</span>* pkt =
+    daqiri::<span class="fn">get_packet_ptr</span>(burst, <span class="nm">0</span>);
+  noop_packet_kernel&lt;&lt;&lt;<span class="nm">1</span>, <span class="nm">1</span>, <span class="nm">0</span>, stream&gt;&gt;&gt;(pkt);
+}
 
 daqiri::<span class="fn">free_all_packets_and_burst_rx</span>(
   burst);</pre></div>
-          <div class="ex-footer"><span class="ex-desc">Scatter→gather reorder on the GPU</span><a href="https://github.com/NVIDIA/daqiri/blob/main/src/kernels.cu" class="ex-link" target="_blank">Open ↗</a></div>
+          <div class="ex-footer"><span class="ex-desc">Launch custom GPU work on packet buffers</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
         </div>
 
         <div class="example-card">
