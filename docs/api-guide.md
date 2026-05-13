@@ -194,8 +194,8 @@ daqiri::free_rx_burst(burst);
 
 When using batched GPU mode, packets arrive in scattered buffers — each at an arbitrary
 GPU address. For workloads that need contiguous data, DAQIRI provides a CUDA reorder
-kernel (`simple_packet_reorder` in `src/kernels.cu`) that copies scattered packets into
-a flat output buffer:
+kernel declared by `<daqiri/daqiri.h>` (`simple_packet_reorder`, implemented in
+`src/kernels.cu`) that copies scattered packets into a flat output buffer:
 
 ```cpp
 // Collect GPU pointers from the burst

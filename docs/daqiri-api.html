@@ -405,7 +405,7 @@ daqiri::<span class="fn">free_rx_burst</span>(burst);</pre>
             <span class="m-expand">▼</span>
           </div>
           <div class="method-body">
-            <p class="m-desc">CUDA kernel (defined in <code>src/kernels.cu</code>) that copies scattered per-packet GPU pointers into a single flat contiguous GPU buffer. Useful in batched GPU mode where packets arrive at non-contiguous addresses.</p>
+            <p class="m-desc">CUDA kernel declared by <code>&lt;daqiri/daqiri.h&gt;</code> and implemented in <code>src/kernels.cu</code>. It copies scattered per-packet GPU pointers into a single flat contiguous GPU buffer, which is useful in batched GPU mode where packets arrive at non-contiguous addresses.</p>
             <pre><span class="cm">// Collect device pointers from the burst</span>
 <span class="kw">for</span> (<span class="kw">int</span> p = <span class="nm">0</span>; p &lt; n; p++)
     h_dev_ptrs[p] = daqiri::<span class="fn">get_packet_ptr</span>(burst, p);
