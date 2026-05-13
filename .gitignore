@@ -2,5 +2,8 @@ build*/
 site/
 bench-results/
 
+# tune_system.py default output
+pcie_schematic.png
+
 # macOS
 .DS_Store
