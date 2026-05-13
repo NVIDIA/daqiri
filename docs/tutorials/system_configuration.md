@@ -1274,7 +1274,7 @@ The two tabs below are linked across the page (mkdocs-material `content.tabs.lin
         === "NetworkManager"
 
             ```bash
-            sudo nmcli connection modify $if_name ipv4.mtu 9000
+            sudo nmcli connection modify $if_name ethernet.mtu 9000
             sudo nmcli connection up $if_name
             ```
 
@@ -1370,10 +1370,10 @@ The two tabs below are linked across the page (mkdocs-material `content.tabs.lin
 
     ```bash
     sudo nmcli connection add type ethernet ifname enp1s0f0np0   con-name daqiri-tx \
-        ipv4.addresses 1.1.1.1/24 ipv4.method manual ipv4.mtu 9000 \
+        ipv4.addresses 1.1.1.1/24 ipv4.method manual ethernet.mtu 9000 \
         ipv4.gateway "" ipv6.method ignore
     sudo nmcli connection add type ethernet ifname enP2p1s0f0np0 con-name daqiri-rx \
-        ipv4.addresses 2.2.2.2/24 ipv4.method manual ipv4.mtu 9000 \
+        ipv4.addresses 2.2.2.2/24 ipv4.method manual ethernet.mtu 9000 \
         ipv4.gateway "" ipv6.method ignore
     sudo nmcli connection up daqiri-tx
     sudo nmcli connection up daqiri-rx
@@ -1536,15 +1536,14 @@ The two tabs below are linked across the page (mkdocs-material `content.tabs.lin
 
     ### Step 7: Prevent the GPU from going idle
 
-    The IGX [`gpu-max-clocks.service`](#step-7-prevent-the-gpu-from-going-idle) systemd-unit recipe works unchanged on Spark; query and lock at runtime:
+    The IGX [`gpu-max-clocks.service`](#step-7-prevent-the-gpu-from-going-idle) systemd-unit recipe works on Spark with one item dropped: GB10's unified CPU/GPU memory has no separate VRAM clock domain, so `clocks.max.mem` reports `N/A` and `nvidia-smi -lmc` fails. Lock only the SM clock at runtime:
 
     ```bash
     sudo nvidia-smi -pm 1
     sudo nvidia-smi -lgc=$(nvidia-smi --query-gpu=clocks.max.sm --format=csv,noheader,nounits)
-    sudo nvidia-smi -lmc=$(nvidia-smi --query-gpu=clocks.max.mem --format=csv,noheader,nounits)
     ```
 
-    On a production GB10 the locked SM clock is 3003 MHz. If `nvidia-smi -pm 1` reports persistence mode is unsupported on this platform, the lock-clocks calls still take effect for the current driver session — fold them into a unit and start it after reboot.
+    On a production GB10 the locked SM clock is 3003 MHz. If `nvidia-smi -pm 1` reports persistence mode is unsupported on this platform, the lock-clocks call still takes effect for the current driver session — fold it into a unit (omitting the `--lock-memory-clocks` line from the IGX recipe) and start it after reboot.
 
     ### Step 8: GPU BAR1 size — N/A on Spark
 
@@ -1552,7 +1551,7 @@ The two tabs below are linked across the page (mkdocs-material `content.tabs.lin
 
     ### Step 9: Enable Jumbo frames — already covered
 
-    The `daqiri-tx` / `daqiri-rx` nmcli profiles created in [Configure the IP addresses](#configure-the-ip-addresses-of-the-nic-ports_1) already pin `ipv4.mtu 9000`, so this step is a no-op on Spark. Verify:
+    The `daqiri-tx` / `daqiri-rx` nmcli profiles created in [Configure the IP addresses](#configure-the-ip-addresses-of-the-nic-ports_1) already pin `ethernet.mtu 9000`, so this step is a no-op on Spark. Verify:
 
     ```bash
     ip link show enp1s0f0np0   | grep -oE "mtu [0-9]+"
