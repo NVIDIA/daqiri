@@ -33,13 +33,19 @@ site_dir: site
 
 nav:
   - Getting Started: getting-started.md
-  - Configuration: configuration.md
-  - API Reference: api-guide.md
+  - API Reference:
+    - C++ API Reference: api-reference/cpp.md
+    - Python API Reference: api-reference/python.md
+    - Configuration YAML Reference: api-reference/configuration.md
   - Tutorials:
     - Background: tutorials/background.md
     - System Configuration: tutorials/system_configuration.md
     - Benchmarking Examples: tutorials/benchmarking_examples.md
     - Configuration File: tutorials/configuration-walkthrough.md
+
+not_in_nav: |
+  /api-guide.md
+  /configuration.md
 
 markdown_extensions:
   - admonition
