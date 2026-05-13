@@ -92,6 +92,30 @@ git push -u origin <local-branch>:<remote-branch>
 
 4. Since there is no CI/CD process in place yet, the PR will be accepted and the corresponding issue closed only after adequate testing has been completed, manually, by the developer and/or DAQIRI engineer reviewing the code.
 
+#### Automated PR Review (Greptile)
+
+Every pull request to `NVIDIA/daqiri` is reviewed automatically by [Greptile](https://www.greptile.com/) before a human reviewer picks it up. Greptile reads the project rules in `.greptile/` (`config.json`, `rules.md`, `files.json`) and posts inline review comments and a summary on the PR.
+
+What Greptile is configured to flag (non-exhaustive — see `.greptile/config.json` and `.greptile/rules.md` for the full list):
+
+- Commits missing a `Signed-off-by:` trailer (DCO).
+- Commit titles that do not follow `#<Issue Number> - <Title>`.
+- C/C++/CUDA changes that are not `clang-format` clean against the repo's `.clang-format`.
+- Code paths that allocate a `BurstParams` (`get_rx_burst`, `get_tx_burst`, `create_*_burst_params`) but miss a matching free on some exit path — this drains the mempool and causes silent NIC drops.
+- New backend logic that branches on backend type or reaches into backend-specific structs from `src/common*` instead of going through the `daqiri::Manager` virtual interface.
+- Changes to the `DAQIRI_MGR` socket → rdma rule in `src/CMakeLists.txt` that break the invariant.
+- New optional features wrapped in whole-file `#ifdef` blocks instead of being gated behind a CMake option (per the rule above in this file).
+- Code changes under `src/`, `examples/`, or `mkdocs.yml` that do not also update the matching docs (the mapping comes from `.claude/rules/docs-sync.md`).
+
+Workflow expectations:
+
+- Greptile runs on every push to a PR (`triggerOnUpdates: true`), so you can iterate and watch its comments update.
+- It posts a GitHub status check rather than a "X files reviewed, no comments" message — a green check means it ran and had nothing critical to say.
+- Greptile comments are advisory. A human DAQIRI engineer still owns merge approval. If you disagree with a Greptile comment, reply on the thread and a maintainer will arbitrate.
+- To suppress Greptile while a PR is in flight, use the existing `[WIP]` title prefix from the Pull Requests section above — `.greptile/config.json` lists `[WIP]` / `WIP:` (case variants) under `ignoreKeywords`, so titled PRs are skipped until the prefix is removed. Draft PRs are also skipped (`triggerOnDrafts: false`) for contributors who prefer GitHub's draft mechanism.
+
+If you are adding a new project-wide convention, please update `.greptile/rules.md` (or add a structured rule to `.greptile/config.json`) in the same PR so the bot keeps up with the humans.
+
 #### Signing Your Work
 
 * We require that all contributors "sign-off" on their commits. This certifies that the contribution is your original work, or you have rights to submit it under the same license, or a compatible license.
