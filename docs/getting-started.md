@@ -94,6 +94,27 @@ Then build the DAQIRI library:
 
     Inspect the [Dockerfile](https://github.com/NVIDIA/daqiri/blob/main/Dockerfile) to see the full list of user-space dependencies needed for a bare-metal build.
 
+### Use an Installed Library
+
+After installation, CMake consumers can link against the exported target:
+
+```cmake
+find_package(daqiri REQUIRED)
+target_link_libraries(my_app PRIVATE daqiri::daqiri)
+```
+
+Pkg-config consumers can use the installed `daqiri.pc` file:
+
+```bash
+c++ my_app.cpp -o my_app $(pkg-config --cflags --libs daqiri)
+```
+
+Both methods use the same public C++ include:
+
+```cpp
+#include <daqiri/daqiri.h>
+```
+
 ### CMake Options
 
 | Option | Default | Description |

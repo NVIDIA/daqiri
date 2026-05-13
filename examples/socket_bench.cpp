@@ -26,7 +26,7 @@
 #include <string>
 #include <thread>
 
-#include "src/common.h"
+#include <daqiri/daqiri.h>
 
 namespace {
 

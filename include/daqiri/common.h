@@ -16,8 +16,8 @@
  */
 
 #pragma once
-#include "src/logging.hpp"
-#include "src/types.h"
+#include <daqiri/logging.hpp>
+#include <daqiri/types.h>
 #include <memory>
 #include <optional>
 #include <stdint.h>

@@ -33,9 +33,11 @@ endif()
 option(DAQIRI_ENABLE_GDS "Enable cuFile-backed burst file writes from CUDA device memory" OFF)
 set(DOCA_PATH /opt/mellanox/doca)
 
+set(DAQIRI_USING_VENDORED_YAML_CPP OFF)
 if(NOT TARGET yaml-cpp AND NOT TARGET yaml-cpp::yaml-cpp)
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/yaml-cpp/CMakeLists.txt")
     message(STATUS "Using vendored yaml-cpp from third_party/yaml-cpp")
+    set(DAQIRI_USING_VENDORED_YAML_CPP ON)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../third_party/yaml-cpp
                      ${CMAKE_CURRENT_BINARY_DIR}/third_party/yaml-cpp)
   else()
@@ -78,11 +80,12 @@ add_library(daqiri_common
 )
 target_include_directories(daqiri_common
     PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..> # so we can find it under #include "src/..."
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
         $<BUILD_INTERFACE:${DAQIRI_SPDLOG_INCLUDE_DIR}>
         $<INSTALL_INTERFACE:include>
         ${DPDK_INCLUDE_DIRS}
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
 )
 add_library(daqiri::daqiri ALIAS daqiri_common)
 target_link_directories(daqiri_common PUBLIC ${DPDK_LIBRARY_DIRS})
@@ -143,23 +146,27 @@ install(
     COMPONENT daqiri-cpp
 )
 install(
-    DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/
-    DESTINATION include/src
+    DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../include/daqiri
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    COMPONENT daqiri-cpp
     FILES_MATCHING
       PATTERN "*.h"
       PATTERN "*.hpp"
-)
-install(
-    FILES
-        ${CMAKE_CURRENT_SOURCE_DIR}/logging.hpp
-    DESTINATION include/src
-    COMPONENT daqiri-cpp
 )
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/spdlog/include/spdlog/spdlog.h")
   install(
     DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/spdlog/include/spdlog
     DESTINATION include
     COMPONENT daqiri-cpp
+  )
+endif()
+if(DAQIRI_USING_VENDORED_YAML_CPP)
+  install(
+    DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/yaml-cpp/include/yaml-cpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    COMPONENT daqiri-cpp
+    FILES_MATCHING
+      PATTERN "*.h"
   )
 endif()
 

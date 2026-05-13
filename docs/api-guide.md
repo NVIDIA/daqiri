@@ -1,7 +1,7 @@
 # API Guide
 
-This guide covers the core DAQIRI API for receiving and transmitting packets. For the
-complete function list, see the [`daqiri/common.h`](https://github.com/NVIDIA/daqiri/blob/main/src/common.h) header file.
+This guide covers the core DAQIRI API for receiving and transmitting packets. Include
+the canonical public header, [`daqiri/daqiri.h`](https://github.com/NVIDIA/daqiri/blob/main/include/daqiri/daqiri.h), in C++ applications.
 
 ## Key Concepts
 
@@ -43,7 +43,7 @@ For CPU-only or batched-GPU modes, there is a single segment (segment 0).
 ## Initialization
 
 ```cpp
-#include "daqiri/common.h"
+#include <daqiri/daqiri.h>
 
 // Initialize from a YAML config file
 auto status = daqiri::daqiri_init("path/to/config.yaml");

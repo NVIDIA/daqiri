@@ -37,7 +37,7 @@
 #include <stdexcept>
 #include <vector>
 
-#include "src/logging.hpp"
+#include <daqiri/logging.hpp>
 
 #if DAQIRI_MGR_RDMA
 #include "src/managers/rdma/daqiri_rdma_mgr.h"

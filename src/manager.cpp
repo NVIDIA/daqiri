@@ -50,7 +50,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "src/logging.hpp"
+#include <daqiri/logging.hpp>
 
 namespace daqiri {
 
