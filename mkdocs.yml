@@ -29,6 +29,9 @@ theme:
 extra_css:
   - stylesheets/extra.css
 
+extra_javascript:
+  - javascripts/platform-tab-toc.js
+
 site_dir: site
 
 nav:
