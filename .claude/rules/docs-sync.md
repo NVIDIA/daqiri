@@ -35,6 +35,10 @@ When the user is committing, pushing, or otherwise wrapping up a change that tou
   - `docs/tutorials/configuration-walkthrough.md` — when adding or removing a YAML, add or remove a leaf in the **"Choosing an example config"** decision tree (`#choosing-an-example-config`). CI's `scripts/check_doc_refs.py` enforces that every YAML in `examples/` is referenced in this file; a new config without a tree leaf will fail the check.
   - `CLAUDE.md` (benchmark table)
 - When adding or removing a benchmark executable, also update the benchmark table in `CLAUDE.md`.
+- **Annotated walkthrough pairing.** Three YAMLs in `examples/` are reproduced (in full or as diff snippets) inside the **"Annotated walkthrough"** section of `docs/tutorials/configuration-walkthrough.md`. Any edit to one of these files needs a paired edit to the walkthrough so the two stay in sync:
+  - `examples/daqiri_bench_raw_tx_rx.yaml` ↔ `### Base TX+RX config` (full-file reproduction; CI's `check_doc_refs.py` does a structural equality check after stripping `# (N)!` annotation markers — any drift fails the build).
+  - `examples/daqiri_bench_raw_tx_rx_hds.yaml` ↔ `### Header-data split (HDS)` (diff-only snippets; not enforced by CI — review by hand).
+  - `examples/daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml` ↔ `### Packet reordering on the GPU` (diff-only snippets; not enforced by CI — review by hand).
 
 ### Landing page and navigation (low frequency, high visibility)
 - `mkdocs.yml` — nav entries should match actual files in `docs/` (the CI gate enforces this; the rule is here for awareness).
