@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-#include "src/logging.hpp"
+#include <daqiri/logging.hpp>
 
 #include <algorithm>
 #include <cctype>

@@ -25,8 +25,8 @@
 #include <limits>
 
 #include "src/manager.h"
-#include "src/common.h"
-#include "src/logging.hpp"
+#include <daqiri/daqiri.h>
+#include <daqiri/logging.hpp>
 #if DAQIRI_MGR_DPDK
 #include <rte_mbuf.h>
 #include <rte_memcpy.h>

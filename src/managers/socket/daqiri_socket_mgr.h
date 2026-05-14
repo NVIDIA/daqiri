@@ -27,7 +27,7 @@
 #include <vector>
 #include <netinet/in.h>
 
-#include "src/common.h"
+#include <daqiri/daqiri.h>
 #include "src/manager.h"
 
 namespace daqiri {

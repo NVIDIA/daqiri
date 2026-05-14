@@ -19,7 +19,7 @@
 
 #include <rte_ring.h>
 #include <rte_mbuf.h>
-#include "src/types.h"
+#include <daqiri/types.h>
 #include <optional>
 
 namespace daqiri {

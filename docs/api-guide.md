@@ -1,7 +1,7 @@
 # API Guide
 
-This guide covers the core DAQIRI API for receiving and transmitting packets. For the
-complete function list, see the [`daqiri/common.h`](https://github.com/NVIDIA/daqiri/blob/main/src/common.h) header file.
+This guide covers the core DAQIRI API for receiving and transmitting packets. Include
+the canonical public header, [`daqiri/daqiri.h`](https://github.com/NVIDIA/daqiri/blob/main/include/daqiri/daqiri.h), in C++ applications.
 
 ## Key Concepts
 
@@ -43,7 +43,7 @@ For CPU-only or batched-GPU modes, there is a single segment (segment 0).
 ## Initialization
 
 ```cpp
-#include "daqiri/common.h"
+#include <daqiri/daqiri.h>
 
 // Initialize from a YAML config file
 auto status = daqiri::daqiri_init("path/to/config.yaml");
@@ -190,21 +190,23 @@ daqiri::free_all_segment_packets(burst, seg);
 daqiri::free_rx_burst(burst);
 ```
 
-### GPU Packet Aggregation
+### GPU Packet Processing
 
-When using batched GPU mode, packets arrive in scattered buffers — each at an arbitrary
-GPU address. For workloads that need contiguous data, DAQIRI provides a CUDA reorder
-kernel (`simple_packet_reorder` in `src/kernels.cu`) that copies scattered packets into
-a flat output buffer:
+When using batched GPU mode, packets arrive in CUDA-addressable buffers — each at an
+arbitrary GPU address. Launch your own CUDA work directly on the packet pointers. Packet
+reordering and aggregation should be configured through `rx.reorder_configs`; see
+`raw_reorder_seq_bench.cpp` and `raw_reorder_quantize_bench.cpp` for complete examples
+that consume DAQIRI's built-in reordered bursts.
 
 ```cpp
-// Collect GPU pointers from the burst
-for (int p = 0; p < daqiri::get_num_packets(burst); p++) {
-    h_dev_ptrs[p] = daqiri::get_packet_ptr(burst, p);
+__global__ void noop_packet_kernel(void *packet) {
+    (void)packet;
 }
 
-// Reorder into a contiguous GPU buffer
-simple_packet_reorder(output_buffer, h_dev_ptrs, packet_len, num_packets);
+if (daqiri::get_num_packets(burst) > 0) {
+    void *packet = daqiri::get_packet_ptr(burst, 0);
+    noop_packet_kernel<<<1, 1, 0, stream>>>(packet);
+}
 
 // Free once the kernel completes
 daqiri::free_all_packets_and_burst_rx(burst);

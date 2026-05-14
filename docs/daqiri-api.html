@@ -203,7 +203,6 @@
         <a href="#get-packet-flow-id" class="sb-link">get_packet_flow_id <span class="lb lb-fn">fn</span></a>
         <a href="#get-segment-packet-ptr" class="sb-link">get_segment_packet_ptr <span class="lb lb-fn">fn</span></a>
         <a href="#free-buffers" class="sb-link">Free Buffers <span class="lb lb-fn">fn</span></a>
-        <a href="#gpu-reorder" class="sb-link">GPU Reorder Kernel <span class="lb lb-fn">fn</span></a>
       </div>
 
       <div class="sb-group">
@@ -229,7 +228,7 @@
       <div class="page-hdr" id="overview">
         <div class="page-hdr-eye">DAQIRI · NVIDIA</div>
         <h1>API Guide</h1>
-        <p>Complete C++ API reference for DAQIRI. For the full function list, see <a href="https://github.com/NVIDIA/daqiri/blob/main/src/common.h" target="_blank"><code>src/common.h</code></a>. All symbols live in the <code>daqiri::</code> namespace.</p>
+        <p>Complete C++ API reference for DAQIRI. Include the canonical public header, <a href="https://github.com/NVIDIA/daqiri/blob/main/include/daqiri/daqiri.h" target="_blank"><code>daqiri/daqiri.h</code></a>. All symbols live in the <code>daqiri::</code> namespace.</p>
         <div class="page-hdr-meta">
           <span class="meta-badge">C++17</span>
           <span class="meta-badge">CUDA ≥ 12.0</span>
@@ -268,7 +267,7 @@
 <span class="cm">// From struct built in code</span>
 <span class="tp">Status</span> daqiri::<span class="fn">daqiri_init</span>(<span class="kw">const</span> <span class="tp">NetworkConfig</span>&amp; config);</div>
 
-          <pre><span class="kw">#include</span> <span class="str">"daqiri/common.h"</span>
+          <pre><span class="kw">#include</span> <span class="str">&lt;daqiri/daqiri.h&gt;</span>
 
 <span class="kw">auto</span> status = daqiri::<span class="fn">daqiri_init</span>(<span class="str">"path/to/config.yaml"</span>);
 <span class="kw">if</span> (status != daqiri::<span class="tp">Status</span>::<span class="nm">SUCCESS</span>) {
@@ -396,27 +395,6 @@ daqiri::<span class="fn">free_rx_burst</span>(burst);</pre>
           </div>
         </div>
 
-        <div class="method-card" id="gpu-reorder">
-          <div class="method-hdr" onclick="toggleMethod(this)">
-            <span class="m-tag mt-fn">fn</span>
-            <span class="m-name">simple_packet_reorder</span>
-            <span class="m-params">(output_buf, dev_ptrs, pkt_len, num_pkts)</span>
-            <span class="mt-ret">→ void (CUDA)</span>
-            <span class="m-expand">▼</span>
-          </div>
-          <div class="method-body">
-            <p class="m-desc">CUDA kernel (defined in <code>src/kernels.cu</code>) that copies scattered per-packet GPU pointers into a single flat contiguous GPU buffer. Useful in batched GPU mode where packets arrive at non-contiguous addresses.</p>
-            <pre><span class="cm">// Collect device pointers from the burst</span>
-<span class="kw">for</span> (<span class="kw">int</span> p = <span class="nm">0</span>; p &lt; n; p++)
-    h_dev_ptrs[p] = daqiri::<span class="fn">get_packet_ptr</span>(burst, p);
-
-<span class="cm">// Reorder into a contiguous output buffer (async)</span>
-<span class="fn">simple_packet_reorder</span>(output_buf, h_dev_ptrs, packet_len, n);
-
-<span class="cm">// Free once kernel completes</span>
-daqiri::<span class="fn">free_all_packets_and_burst_rx</span>(burst);</pre>
-          </div>
-        </div>
       </div>
 
       <hr class="divider" />
@@ -556,7 +534,7 @@ daqiri::<span class="fn">shutdown</span>();</pre>
         <div style="display:flex;gap:1rem;">
           <a href="getting-started/" style="font-size:.875rem;color:var(--text-mut);">Getting Started</a>
           <a href="configuration/" style="font-size:.875rem;color:var(--text-mut);">Configuration</a>
-          <a href="https://github.com/NVIDIA/daqiri/blob/main/src/common.h" style="font-size:.875rem;color:var(--text-mut);" target="_blank">common.h ↗</a>
+          <a href="https://github.com/NVIDIA/daqiri/blob/main/include/daqiri/daqiri.h" style="font-size:.875rem;color:var(--text-mut);" target="_blank">daqiri.h ↗</a>
         </div>
       </div>
 

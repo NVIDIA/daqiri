@@ -5,12 +5,12 @@ hide:
 
 # System Configuration
 
-DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking/ethernet-adapters/) (ConnectX-6 Dx or later) and a CUDA-capable GPU. Two reference platforms are documented in this tutorial — pick yours below:
+DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking/ethernet-adapters/) (ConnectX-6 Dx or later) and a CUDA-capable GPU. Two reference platforms are documented in this tutorial — pick the one closest to yours below:
 
 - **IGX Orin** with a discrete GPU (e.g. [RTX 6000 Ada](https://www.nvidia.com/en-us/design-visualization/rtx-6000/)): peermem-based GPUDirect, a separate GPU BAR1, and a discrete-PCIe path between GPU and NIC. The originally-supported reference platform.
-- **DGX Spark** (Grace Blackwell **GB10** superchip): unified CPU/GPU memory via NVLink-C2C, integrated **ConnectX-7**, no peermem, and GPUDirect via `kind: host_pinned` data buffers (see [PR #41](https://github.com/nvidia/daqiri/pull/41)).
+- **DGX Spark** (Grace Blackwell **GB10** superchip): unified CPU/GPU memory via NVLink-C2C, integrated **ConnectX-7**, no peermem, and GPUDirect via `kind: host_pinned` data buffers.
 
-The two tabs below are linked across the page (mkdocs-material `content.tabs.link`), so other same-named sub-tabs (`tune_system.py` vs `manual`, `One-time` vs `Persistent`, etc.) will switch in lockstep as you toggle the platform.
+<div class="platform-tabs" markdown="1">
 
 === "IGX Orin"
 
@@ -1274,7 +1274,7 @@ The two tabs below are linked across the page (mkdocs-material `content.tabs.lin
         === "NetworkManager"
 
             ```bash
-            sudo nmcli connection modify $if_name ipv4.mtu 9000
+            sudo nmcli connection modify $if_name ethernet.mtu 9000
             sudo nmcli connection up $if_name
             ```
 
@@ -1370,10 +1370,10 @@ The two tabs below are linked across the page (mkdocs-material `content.tabs.lin
 
     ```bash
     sudo nmcli connection add type ethernet ifname enp1s0f0np0   con-name daqiri-tx \
-        ipv4.addresses 1.1.1.1/24 ipv4.method manual ipv4.mtu 9000 \
+        ipv4.addresses 1.1.1.1/24 ipv4.method manual ethernet.mtu 9000 \
         ipv4.gateway "" ipv6.method ignore
     sudo nmcli connection add type ethernet ifname enP2p1s0f0np0 con-name daqiri-rx \
-        ipv4.addresses 2.2.2.2/24 ipv4.method manual ipv4.mtu 9000 \
+        ipv4.addresses 2.2.2.2/24 ipv4.method manual ethernet.mtu 9000 \
         ipv4.gateway "" ipv6.method ignore
     sudo nmcli connection up daqiri-tx
     sudo nmcli connection up daqiri-rx
@@ -1536,15 +1536,14 @@ The two tabs below are linked across the page (mkdocs-material `content.tabs.lin
 
     ### Step 7: Prevent the GPU from going idle
 
-    The IGX [`gpu-max-clocks.service`](#step-7-prevent-the-gpu-from-going-idle) systemd-unit recipe works unchanged on Spark; query and lock at runtime:
+    The IGX [`gpu-max-clocks.service`](#step-7-prevent-the-gpu-from-going-idle) systemd-unit recipe works on Spark with one item dropped: GB10's unified CPU/GPU memory has no separate VRAM clock domain, so `clocks.max.mem` reports `N/A` and `nvidia-smi -lmc` fails. Lock only the SM clock at runtime:
 
     ```bash
     sudo nvidia-smi -pm 1
     sudo nvidia-smi -lgc=$(nvidia-smi --query-gpu=clocks.max.sm --format=csv,noheader,nounits)
-    sudo nvidia-smi -lmc=$(nvidia-smi --query-gpu=clocks.max.mem --format=csv,noheader,nounits)
     ```
 
-    On a production GB10 the locked SM clock is 3003 MHz. If `nvidia-smi -pm 1` reports persistence mode is unsupported on this platform, the lock-clocks calls still take effect for the current driver session — fold them into a unit and start it after reboot.
+    On a production GB10 the locked SM clock is 3003 MHz. If `nvidia-smi -pm 1` reports persistence mode is unsupported on this platform, the lock-clocks call still takes effect for the current driver session — fold it into a unit (omitting the `--lock-memory-clocks` line from the IGX recipe) and start it after reboot.
 
     ### Step 8: GPU BAR1 size — N/A on Spark
 
@@ -1552,7 +1551,7 @@ The two tabs below are linked across the page (mkdocs-material `content.tabs.lin
 
     ### Step 9: Enable Jumbo frames — already covered
 
-    The `daqiri-tx` / `daqiri-rx` nmcli profiles created in [Configure the IP addresses](#configure-the-ip-addresses-of-the-nic-ports_1) already pin `ipv4.mtu 9000`, so this step is a no-op on Spark. Verify:
+    The `daqiri-tx` / `daqiri-rx` nmcli profiles created in [Configure the IP addresses](#configure-the-ip-addresses-of-the-nic-ports_1) already pin `ethernet.mtu 9000`, so this step is a no-op on Spark. Verify:
 
     ```bash
     ip link show enp1s0f0np0   | grep -oE "mtu [0-9]+"
@@ -1561,4 +1560,6 @@ The two tabs below are linked across the page (mkdocs-material `content.tabs.lin
 
     ---
     **Next:** [Benchmarking Examples](benchmarking_examples.md) — run your first DAQIRI benchmark
+
+</div>
 

@@ -50,3 +50,22 @@
 [data-md-color-scheme="slate"] .md-footer {
   background: #111;
 }
+
+/* ── Platform tabs (IGX Orin / DGX Spark) — enlarged labels ────────── */
+/* Scoped to the .platform-tabs wrapper in system_configuration.md and  */
+/* limited to the wrapper's direct tabbed-set so nested sub-tabs        */
+/* (tune_system.py / manual, One-time / Persistent, …) are unaffected.  */
+.md-typeset .platform-tabs > .tabbed-set > .tabbed-labels > label {
+  font-size: 1rem;
+  font-weight: 700;
+  padding: 0.6em 1.2em;
+}
+
+/* ── Right-hand TOC: hide entries that belong to the inactive platform tab. */
+/* JS (platform-tab-toc.js) tags each [data-tab] link and mirrors the active */
+/* tab onto <body data-active-tab="...">. We hide the link's containing <li> */
+/* (via :has()) so the surrounding indentation collapses too.                */
+body[data-active-tab="igx-orin"] .md-nav--secondary li:has(> a[data-tab="dgx-spark"]),
+body[data-active-tab="dgx-spark"] .md-nav--secondary li:has(> a[data-tab="igx-orin"]) {
+  display: none;
+}
