@@ -96,7 +96,12 @@ void socket_worker(const SocketBenchConfig& cfg, std::atomic<bool>& stop, Socket
     const bool recv_done = !cfg.receive || stats.received_packets >= static_cast<uint64_t>(cfg.iterations);
     if (send_done && recv_done) { break; }
 
-    if (cfg.send && !send_done) {
+    // UDP servers must learn the peer address from an inbound packet before
+    // they can transmit, so withhold the server's first send until at least
+    // one RX packet has arrived. The client always transmits eagerly.
+    const bool waiting_for_peer = cfg.server && cfg.receive && stats.received_packets == 0;
+
+    if (cfg.send && !send_done && !waiting_for_peer) {
       auto* msg = daqiri::create_tx_burst_params();
       daqiri::set_header(msg, port, queue, 1, 1);
 

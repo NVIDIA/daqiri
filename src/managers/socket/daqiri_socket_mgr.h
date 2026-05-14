@@ -146,6 +146,7 @@ class SocketMgr : public Manager {
     std::shared_ptr<RxQueueState> rx_queue_state;
     sockaddr_in udp_peer_addr{};
     bool udp_peer_valid = false;
+    bool udp_peer_missing_logged = false;
     uintptr_t primary_conn_id = 0;
   };
 

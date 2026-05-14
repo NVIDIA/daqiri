@@ -739,7 +739,10 @@ bool SocketMgr::send_udp_burst(EndpointState& ep, BurstParams* burst, size_t* se
   if (ep.socket_cfg.mode_ == SocketMode::SERVER) {
     std::lock_guard<std::mutex> lock(state_mutex_);
     if (!ep.udp_peer_valid) {
-      DAQIRI_LOG_ERROR("UDP server has no learned peer yet; cannot transmit");
+      if (!ep.udp_peer_missing_logged) {
+        DAQIRI_LOG_DEBUG("UDP server has no learned peer yet; cannot transmit");
+        ep.udp_peer_missing_logged = true;
+      }
       return false;
     }
     peer = ep.udp_peer_addr;
@@ -1285,6 +1288,7 @@ void SocketMgr::udp_rx_loop(int if_index) {
       std::lock_guard<std::mutex> lock(state_mutex_);
       ep->udp_peer_addr = peers[static_cast<size_t>(received - 1)];
       ep->udp_peer_valid = true;
+      ep->udp_peer_missing_logged = false;
     }
 
     for (int i = 0; i < received; ++i) {
