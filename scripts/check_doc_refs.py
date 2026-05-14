@@ -50,7 +50,12 @@ import re
 import sys
 from pathlib import Path
 
-import yaml
+# PyYAML is imported inside base_walkthrough_drift() so the rest of the
+# script (the reference and decision-tree-coverage checks) still runs in
+# environments without PyYAML installed. CI gets PyYAML transitively via
+# mkdocs-material; a developer running the script locally without the
+# mkdocs venv would otherwise see an unhelpful ModuleNotFoundError for
+# checks that don't need it.
 
 REPO = Path(__file__).resolve().parent.parent
 EXAMPLES = REPO / "examples"
@@ -110,7 +115,7 @@ def doc_files() -> list[Path]:
     return files
 
 
-def base_walkthrough_drift() -> list[str]:
+def base_walkthrough_drift() -> tuple[bool, list[str]]:
     """The annotated ```yaml block under '### Base TX+RX config' in
     configuration-walkthrough.md must parse to the same structure as
     examples/daqiri_bench_raw_tx_rx.yaml on disk. Drift here means the
@@ -118,21 +123,35 @@ def base_walkthrough_drift() -> list[str]:
 
     Only the base walkthrough is checked; the HDS and reorder snippets
     are intentional fragments.
+
+    Returns (check_ran, errors). check_ran is False only when PyYAML
+    is unavailable and the check was skipped with a warning.
     """
+    try:
+        import yaml  # noqa: PLC0415  (deliberately local — see module-top comment)
+    except ImportError:
+        print(
+            "WARNING: PyYAML not installed; skipping base walkthrough "
+            "drift check. The other checks in this script ran. Install "
+            "PyYAML (or `pip install mkdocs-material`, which depends on "
+            "it) to enable this check.",
+            file=sys.stderr,
+        )
+        return False, []
     if not DECISION_TREE.exists():
-        return [
+        return True, [
             f"{DECISION_TREE.relative_to(REPO)}: file not found "
             f"(base walkthrough drift cannot be checked)"
         ]
     if not BASE_WALKTHROUGH_YAML.exists():
-        return [
+        return True, [
             f"{BASE_WALKTHROUGH_YAML.relative_to(REPO)}: file not found "
             f"(base walkthrough drift cannot be checked)"
         ]
     md = DECISION_TREE.read_text(encoding="utf-8")
     match = BASE_WALKTHROUGH_BLOCK_RE.search(md)
     if not match:
-        return [
+        return True, [
             f"{DECISION_TREE.relative_to(REPO)}: could not locate the "
             f"```yaml block under '### Base TX+RX config'. Check that "
             f"the section heading and code fence are intact."
@@ -143,12 +162,12 @@ def base_walkthrough_drift() -> list[str]:
         walkthrough_data = yaml.safe_load(walkthrough_text)
         source_data = yaml.safe_load(source_text)
     except yaml.YAMLError as e:
-        return [
+        return True, [
             f"{DECISION_TREE.relative_to(REPO)}: could not parse YAML "
             f"(walkthrough block or source file): {e}"
         ]
     if walkthrough_data == source_data:
-        return []
+        return True, []
 
     # Build a unified diff between normalized YAML dumps so the failure
     # message points at the exact divergence.
@@ -164,7 +183,7 @@ def base_walkthrough_drift() -> list[str]:
             n=2,
         )
     )
-    return [
+    return True, [
         f"{DECISION_TREE.relative_to(REPO)}: base walkthrough YAML block "
         f"has drifted from {BASE_WALKTHROUGH_YAML.relative_to(REPO)}. "
         f"Update the walkthrough block or the YAML so they agree.\n{diff}"
@@ -231,7 +250,7 @@ def main() -> int:
 
     errors = sorted(set(errors))
     coverage_errors = decision_tree_coverage(yamls)
-    walkthrough_errors = base_walkthrough_drift()
+    walkthrough_check_ran, walkthrough_errors = base_walkthrough_drift()
 
     if errors or coverage_errors or walkthrough_errors:
         if errors:
@@ -248,12 +267,17 @@ def main() -> int:
                 print(f"  {e}", file=sys.stderr)
         return 1
 
-    print(
-        f"All daqiri_(bench|example)_* references resolve, the decision "
-        f"tree covers every YAML, and the base walkthrough YAML block "
-        f"matches its source. Checked {len(bins)} binaries and "
-        f"{len(yamls)} YAML configs across {len(doc_files())} doc files."
+    summary = (
+        "All daqiri_(bench|example)_* references resolve and the "
+        "decision tree covers every YAML"
     )
+    if walkthrough_check_ran:
+        summary += ", and the base walkthrough YAML block matches its source"
+    summary += (
+        f". Checked {len(bins)} binaries and {len(yamls)} YAML configs "
+        f"across {len(doc_files())} doc files."
+    )
+    print(summary)
     return 0
 
 

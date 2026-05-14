@@ -42,7 +42,7 @@ nav:
     - Background: tutorials/background.md
     - System Configuration: tutorials/system_configuration.md
     - Benchmarking Examples: tutorials/benchmarking_examples.md
-    - Configuration File: tutorials/configuration-walkthrough.md
+    - Configuration YAML Walkthrough: tutorials/configuration-walkthrough.md
 
 markdown_extensions:
   - admonition
