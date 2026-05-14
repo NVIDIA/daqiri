@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+    <url>
+         <loc>https://nvidia.github.io/daqiri/api-guide/</loc>
+         <lastmod>2026-05-14</lastmod>
+    </url>
+    <url>
+         <loc>https://nvidia.github.io/daqiri/configuration/</loc>
+         <lastmod>2026-05-14</lastmod>
+    </url>
+    <url>
+         <loc>https://nvidia.github.io/daqiri/getting-started/</loc>
+         <lastmod>2026-05-14</lastmod>
+    </url>
+    <url>
+         <loc>https://nvidia.github.io/daqiri/tutorials/background/</loc>
+         <lastmod>2026-05-14</lastmod>
+    </url>
+    <url>
+         <loc>https://nvidia.github.io/daqiri/tutorials/benchmarking_examples/</loc>
+         <lastmod>2026-05-14</lastmod>
+    </url>
+    <url>
+         <loc>https://nvidia.github.io/daqiri/tutorials/configuration-walkthrough/</loc>
+         <lastmod>2026-05-14</lastmod>
+    </url>
+    <url>
+         <loc>https://nvidia.github.io/daqiri/tutorials/system_configuration/</loc>
+         <lastmod>2026-05-14</lastmod>
+    </url>
+</urlset>

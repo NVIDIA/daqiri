@@ -1,0 +1,71 @@
+/* ── NVIDIA dark theme with green accents ───────────────────────────── */
+
+:root {
+  --nv-green:   #76b900;
+  --nv-green-d: #5a8f00;
+  --nv-green-l: #8fd400;
+
+  --md-accent-fg-color: #76b900;
+  --md-typeset-a-color: #76b900;
+}
+
+/* ── Header: solid black ───────────────────────────────────────────── */
+[data-md-color-scheme="slate"] .md-header {
+  background: #000;
+}
+
+/* ── Tabs bar: dark charcoal ───────────────────────────────────────── */
+[data-md-color-scheme="slate"] .md-tabs {
+  background: #1a1a1a;
+}
+
+/* ── Links: NVIDIA green ───────────────────────────────────────────── */
+[data-md-color-scheme="slate"] .md-typeset a {
+  color: var(--nv-green);
+}
+[data-md-color-scheme="slate"] .md-typeset a:hover {
+  color: var(--nv-green-l);
+}
+
+/* ── Active nav and TOC items ──────────────────────────────────────── */
+[data-md-color-scheme="slate"] .md-nav__link--active {
+  color: var(--nv-green) !important;
+}
+
+/* ── Admonition accent tweaks ──────────────────────────────────────── */
+[data-md-color-scheme="slate"] .md-typeset .admonition.note,
+[data-md-color-scheme="slate"] .md-typeset details.note {
+  border-color: var(--nv-green);
+}
+[data-md-color-scheme="slate"] .md-typeset .note > .admonition-title,
+[data-md-color-scheme="slate"] .md-typeset .note > summary {
+  background-color: rgba(118, 185, 0, 0.1);
+}
+[data-md-color-scheme="slate"] .md-typeset .note > .admonition-title::before,
+[data-md-color-scheme="slate"] .md-typeset .note > summary::before {
+  color: var(--nv-green);
+}
+
+/* ── Footer ────────────────────────────────────────────────────────── */
+[data-md-color-scheme="slate"] .md-footer {
+  background: #111;
+}
+
+/* ── Platform tabs (IGX Orin / DGX Spark) — enlarged labels ────────── */
+/* Scoped to the .platform-tabs wrapper in system_configuration.md and  */
+/* limited to the wrapper's direct tabbed-set so nested sub-tabs        */
+/* (tune_system.py / manual, One-time / Persistent, …) are unaffected.  */
+.md-typeset .platform-tabs > .tabbed-set > .tabbed-labels > label {
+  font-size: 1rem;
+  font-weight: 700;
+  padding: 0.6em 1.2em;
+}
+
+/* ── Right-hand TOC: hide entries that belong to the inactive platform tab. */
+/* JS (platform-tab-toc.js) tags each [data-tab] link and mirrors the active */
+/* tab onto <body data-active-tab="...">. We hide the link's containing <li> */
+/* (via :has()) so the surrounding indentation collapses too.                */
+body[data-active-tab="igx-orin"] .md-nav--secondary li:has(> a[data-tab="dgx-spark"]),
+body[data-active-tab="dgx-spark"] .md-nav--secondary li:has(> a[data-tab="igx-orin"]) {
+  display: none;
+}
