@@ -34,8 +34,8 @@
 [data-md-color-scheme="slate"] .md-header {
   background: #000;
 }
-/* Render the DAQIRI logo (docs/logo.svg) at the same 36px height the     */
-/* custom HTML pages use, rather than Material's smaller default.         */
+/* Render the DAQIRI logo (docs/images/logo.svg) at the same 36px height  */
+/* the custom HTML pages use, rather than Material's smaller default.     */
 .md-header__button.md-logo img,
 .md-header__button.md-logo svg {
   height: 36px;
@@ -64,25 +64,25 @@
   font-size: 0.72rem;
 }
 [data-md-color-scheme="slate"] .md-typeset h1 {
-  font-size: clamp(1.8rem, 4vw, 3rem);
+  font-size: clamp(1.26rem, 2.8vw, 2.1rem);
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.2;
   color: var(--nv-text-pri);
 }
 [data-md-color-scheme="slate"] .md-typeset h2 {
-  font-size: clamp(1.3rem, 2.5vw, 1.9rem);
+  font-size: clamp(0.91rem, 1.75vw, 1.33rem);
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.2;
 }
 [data-md-color-scheme="slate"] .md-typeset h3 {
-  font-size: 1.05rem;
+  font-size: 0.85rem;
   font-weight: 700;
   letter-spacing: -0.02em;
 }
 [data-md-color-scheme="slate"] .md-typeset h4 {
-  font-size: 0.9rem;
+  font-size: 0.78rem;
   font-weight: 600;
 }
 
@@ -110,7 +110,7 @@
   border: 1px solid var(--nv-border);
   border-radius: var(--nv-radius);
   color: #cccccc;
-  font-size: 0.82rem;
+  font-size: 0.72rem;
   line-height: 1.65;
 }
 [data-md-color-scheme="slate"] .md-typeset .highlight > pre,
