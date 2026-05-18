@@ -145,7 +145,7 @@ writes. Host-backed burst writes continue to use POSIX APIs and do not require G
 
 Once DAQIRI is built, follow the tutorials to configure your system and run your first benchmark:
 
-1. [**Background**](tutorials/background.md) — Kernel Bypass and GPUDirect concepts
+1. [**API Guide**](api-reference/index.md) — configuration-first API model, kernel-bypass backends, GPUDirect, and burst concepts
 2. [**System Configuration**](tutorials/system_configuration.md) — NIC drivers, link layers, GPUDirect, hugepages, CPU isolation, GPU clocks, and more
 3. [**Benchmarking Examples**](tutorials/benchmarking_examples.md) — run `daqiri_bench_raw_gpudirect` with a loopback test
 4. [**Understanding the Configuration File**](tutorials/configuration-walkthrough.md) — annotated YAML walkthrough

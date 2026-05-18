@@ -95,7 +95,7 @@ The web docs live in `docs/` and are built with [MkDocs Material](https://squidf
 - `docs/api-reference/index.md` — API guide and shared packet concepts
 - `docs/api-reference/configuration.md`, `docs/api-reference/cpp.md` — configuration and C++ API docs
 - `docs/getting-started.md` — core getting-started docs
-- `docs/tutorials/` — tutorial walkthroughs (background, system config, benchmarking, config files)
+- `docs/tutorials/` — tutorial walkthroughs (system config, benchmarking, config files)
 - `docs/stylesheets/extra.css` — custom theme overrides
 
 **Keeping docs in sync with code:** before committing changes, scan for the recurring drift hotspots:

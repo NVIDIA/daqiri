@@ -40,6 +40,37 @@ reorder aggregation are enabled.
 The C++ API initializes from this configuration, then exposes operations on the
 configured data path.
 
+### Kernel Bypass Backends
+
+DAQIRI targets high-throughput kernel-bypass networking, where applications exchange
+packets with the NIC without routing every packet through the Linux kernel network
+stack. The first-release backends are:
+
+- **DPDK**: Data Plane Development Kit networking with flexible flow steering through
+  RTE Flow.
+- **RDMA**: Remote Direct Memory Access over Ethernet through `rdma-core` and RoCE,
+  with a client/server connection model.
+- **Socket/RoCE transport**: A socket-oriented interface that reuses the RoCE transport
+  path for endpoint setup and queue routing.
+
+The C++ API hides most backend-specific details behind the same burst-oriented
+interface. Backend choice, protocol mode, interfaces, queues, and flow steering are
+selected in YAML.
+
+### GPUDirect and Memory Placement
+
+GPUDirect allows supported NICs to transfer packet data directly to or from
+GPU-accessible memory, reducing CPU copies and making GPU processing pipelines more
+direct. This is why DAQIRI configuration includes explicit memory regions and why
+packet segments matter.
+
+For GPU payload processing, a queue can use GPU memory directly or use header-data
+split: segment 0 holds headers in CPU memory, while segment 1 holds payload data in GPU
+memory. System setup for GPUDirect depends on the host kernel, GPU driver, NIC driver,
+and whether the deployment uses `nvidia-peermem` or dma-buf. See the
+[System Configuration tutorial](../tutorials/system_configuration.md#enable-gpudirect)
+for setup details.
+
 ### BurstParams
 
 All packet data flows through `BurstParams`. A burst is a batch of packets grouped

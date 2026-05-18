@@ -52,7 +52,6 @@ nav:
     - Configuration YAML Reference: api-reference/configuration.md
     - C++ API Usage: api-reference/cpp.md
   - Tutorials:
-    - Background: tutorials/background.md
     - System Configuration: tutorials/system_configuration.md
     - Benchmarking Examples: tutorials/benchmarking_examples.md
     - Configuration YAML Walkthrough: tutorials/configuration-walkthrough.md

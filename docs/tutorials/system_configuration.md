@@ -344,9 +344,12 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
         sudo modprobe nvidia_peermem
         ```
 
-    ??? info "Why peermem and not dma buf?"
+    ??? info "What about dma-buf?"
 
-        `peermem` is currently the only GPUDirect interface supported by all our [networking backends](background.md#kernel-bypass). This section will therefore provide instructions for `peermem` and not `dma buf`.
+        DAQIRI supports GPUDirect setups based on either `nvidia-peermem` or dma-buf.
+        The right interface depends on your kernel, NVIDIA driver, NIC driver, and
+        deployment environment. The container build uses a dmabuf-patched DPDK path,
+        while some host builds and driver stacks still use `nvidia-peermem`.
 
     ---
 
@@ -1562,4 +1565,3 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     **Next:** [Benchmarking Examples](benchmarking_examples.md) — run your first DAQIRI benchmark
 
 </div>
-

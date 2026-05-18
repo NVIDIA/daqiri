@@ -88,7 +88,6 @@ Reference material for the DAQIRI codebase:
 
 Step-by-step walkthroughs to get hands-on:
 
-- [Background](docs/tutorials/background.md) — Kernel-bypass and GPUDirect concepts
 - [System Configuration](docs/tutorials/system_configuration.md) — NIC drivers, link layers, GPUDirect, hugepages, CPU isolation, GPU clocks
 - [Benchmarking Examples](docs/tutorials/benchmarking_examples.md) — run `daqiri_bench_raw_gpudirect` with a loopback test
 - [Understanding the Configuration File](docs/tutorials/configuration-walkthrough.md) — annotated YAML walkthrough
