@@ -10,8 +10,8 @@ theme:
     primary: black
     accent: light green
   font:
-    text: Roboto
-    code: Roboto Mono
+    text: Inter
+    code: JetBrains Mono
   icon:
     repo: fontawesome/brands/github
   features:

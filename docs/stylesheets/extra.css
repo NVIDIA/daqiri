@@ -1,25 +1,85 @@
-/* ── NVIDIA dark theme with green accents ───────────────────────────── */
+/* ── NVIDIA dark theme — Material override sheet ────────────────────── */
+/* Mirrors the palette and typography of docs/daqiri-api.html and       */
+/* docs/index.html so Material-rendered pages share their visual style. */
 
 :root {
   --nv-green:   #76b900;
   --nv-green-d: #5a8f00;
-  --nv-green-l: #8fd400;
+  --nv-green-l: #a0d000;
 
-  --md-accent-fg-color: #76b900;
-  --md-typeset-a-color: #76b900;
+  --nv-bg-dark:   #0a0a0a;
+  --nv-bg-card:   #111111;
+  --nv-bg-card2:  #161616;
+  --nv-border:    #222222;
+  --nv-text-pri:  #f0f0f0;
+  --nv-text-mut:  #888888;
+  --nv-text-dim:  #555555;
+  --nv-radius:    8px;
 }
 
-/* ── Header: solid black ───────────────────────────────────────────── */
+/* ── Map design tokens onto Material's documented variables ──────────── */
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color:           var(--nv-bg-dark);
+  --md-default-fg-color:           var(--nv-text-pri);
+  --md-default-fg-color--light:    var(--nv-text-mut);
+  --md-default-fg-color--lighter:  var(--nv-text-dim);
+  --md-code-bg-color:              #0d0d0d;
+  --md-code-fg-color:              #cccccc;
+  --md-primary-fg-color:           #000000;
+  --md-accent-fg-color:            var(--nv-green);
+  --md-typeset-a-color:            var(--nv-green);
+}
+
+/* ── Header / Tabs / Footer ──────────────────────────────────────────── */
 [data-md-color-scheme="slate"] .md-header {
   background: #000;
 }
-
-/* ── Tabs bar: dark charcoal ───────────────────────────────────────── */
 [data-md-color-scheme="slate"] .md-tabs {
   background: #1a1a1a;
 }
+[data-md-color-scheme="slate"] .md-tabs__link {
+  color: var(--nv-text-mut);
+  opacity: 1;
+}
+[data-md-color-scheme="slate"] .md-tabs__link:hover,
+[data-md-color-scheme="slate"] .md-tabs__link--active {
+  color: var(--nv-text-pri);
+}
+[data-md-color-scheme="slate"] .md-footer {
+  background: var(--nv-bg-card);
+  border-top: 1px solid var(--nv-border);
+}
 
-/* ── Links: NVIDIA green ───────────────────────────────────────────── */
+/* ── Typography ──────────────────────────────────────────────────────── */
+/* Shrink the typeset baseline (Material's default is 0.8em). Headings    */
+/* are sized in rem (absolute) so they reduce independently below.        */
+[data-md-color-scheme="slate"] .md-typeset {
+  font-size: 0.72rem;
+}
+[data-md-color-scheme="slate"] .md-typeset h1 {
+  font-size: clamp(1.8rem, 4vw, 3rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--nv-text-pri);
+}
+[data-md-color-scheme="slate"] .md-typeset h2 {
+  font-size: clamp(1.3rem, 2.5vw, 1.9rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+[data-md-color-scheme="slate"] .md-typeset h3 {
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+[data-md-color-scheme="slate"] .md-typeset h4 {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+/* ── Links ───────────────────────────────────────────────────────────── */
 [data-md-color-scheme="slate"] .md-typeset a {
   color: var(--nv-green);
 }
@@ -27,12 +87,92 @@
   color: var(--nv-green-l);
 }
 
-/* ── Active nav and TOC items ──────────────────────────────────────── */
-[data-md-color-scheme="slate"] .md-nav__link--active {
-  color: var(--nv-green) !important;
+/* ── Code (inline only — don't double-decorate code inside <pre>) ────── */
+[data-md-color-scheme="slate"] .md-typeset :not(pre) > code {
+  background: #1a1a1a;
+  border: 1px solid var(--nv-border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  color: var(--nv-green-l);
+  font-size: 0.85em;
 }
 
-/* ── Admonition accent tweaks ──────────────────────────────────────── */
+/* ── Code blocks ─────────────────────────────────────────────────────── */
+[data-md-color-scheme="slate"] .md-typeset pre > code {
+  background: #0d0d0d;
+  border: 1px solid var(--nv-border);
+  border-radius: var(--nv-radius);
+  color: #cccccc;
+  font-size: 0.82rem;
+  line-height: 1.65;
+}
+[data-md-color-scheme="slate"] .md-typeset .highlight > pre,
+[data-md-color-scheme="slate"] .md-typeset .highlighttable .linenodiv pre {
+  background: #0d0d0d;
+}
+
+/* ── Tables ──────────────────────────────────────────────────────────── */
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) {
+  border: 1px solid var(--nv-border);
+  background: var(--nv-bg-card);
+}
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) th {
+  background: var(--nv-bg-card2);
+  color: var(--nv-text-dim);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border-bottom: 1px solid var(--nv-border);
+}
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) td {
+  border-bottom: 1px solid #181818;
+  color: var(--nv-text-mut);
+}
+
+/* ── Sidebar / Navigation ────────────────────────────────────────────── */
+[data-md-color-scheme="slate"] .md-nav__link {
+  color: var(--nv-text-mut);
+  border-left: 2px solid transparent;
+  transition: color 0.2s ease, background 0.2s ease;
+}
+[data-md-color-scheme="slate"] .md-nav__link:hover {
+  color: var(--nv-text-pri);
+  background: rgba(255, 255, 255, 0.03);
+}
+[data-md-color-scheme="slate"] .md-nav__link--active {
+  color: var(--nv-green) !important;
+  border-left: 2px solid var(--nv-green);
+  background: rgba(118, 185, 0, 0.06);
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────── */
+[data-md-color-scheme="slate"] .md-typeset .md-button {
+  background: transparent;
+  color: var(--nv-text-pri);
+  border: 1.5px solid var(--nv-border);
+  border-radius: var(--nv-radius);
+  padding: 0.5rem 1.25rem;
+  transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+[data-md-color-scheme="slate"] .md-typeset .md-button:hover {
+  border-color: #444;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--nv-text-pri);
+}
+[data-md-color-scheme="slate"] .md-typeset .md-button--primary {
+  background: var(--nv-green);
+  color: #000;
+  border-color: var(--nv-green);
+}
+[data-md-color-scheme="slate"] .md-typeset .md-button--primary:hover {
+  background: var(--nv-green-l);
+  border-color: var(--nv-green-l);
+  color: #000;
+}
+
+/* ── Admonitions ─────────────────────────────────────────────────────── */
+/* note (existing, kept) */
 [data-md-color-scheme="slate"] .md-typeset .admonition.note,
 [data-md-color-scheme="slate"] .md-typeset details.note {
   border-color: var(--nv-green);
@@ -46,12 +186,41 @@
   color: var(--nv-green);
 }
 
-/* ── Footer ────────────────────────────────────────────────────────── */
-[data-md-color-scheme="slate"] .md-footer {
-  background: #111;
+/* warning — amber */
+[data-md-color-scheme="slate"] .md-typeset .admonition.warning,
+[data-md-color-scheme="slate"] .md-typeset details.warning {
+  border-color: rgba(255, 193, 7, 0.4);
+}
+[data-md-color-scheme="slate"] .md-typeset .warning > .admonition-title,
+[data-md-color-scheme="slate"] .md-typeset .warning > summary {
+  background-color: rgba(255, 193, 7, 0.07);
+}
+[data-md-color-scheme="slate"] .md-typeset .warning > .admonition-title::before,
+[data-md-color-scheme="slate"] .md-typeset .warning > summary::before {
+  color: #ffcb6b;
 }
 
-/* ── Platform tabs (IGX Orin / DGX Spark) — enlarged labels ────────── */
+/* info / tip — soft blue */
+[data-md-color-scheme="slate"] .md-typeset .admonition.info,
+[data-md-color-scheme="slate"] .md-typeset details.info,
+[data-md-color-scheme="slate"] .md-typeset .admonition.tip,
+[data-md-color-scheme="slate"] .md-typeset details.tip {
+  border-color: rgba(130, 170, 255, 0.4);
+}
+[data-md-color-scheme="slate"] .md-typeset .info > .admonition-title,
+[data-md-color-scheme="slate"] .md-typeset .info > summary,
+[data-md-color-scheme="slate"] .md-typeset .tip > .admonition-title,
+[data-md-color-scheme="slate"] .md-typeset .tip > summary {
+  background-color: rgba(130, 170, 255, 0.07);
+}
+[data-md-color-scheme="slate"] .md-typeset .info > .admonition-title::before,
+[data-md-color-scheme="slate"] .md-typeset .info > summary::before,
+[data-md-color-scheme="slate"] .md-typeset .tip > .admonition-title::before,
+[data-md-color-scheme="slate"] .md-typeset .tip > summary::before {
+  color: #aac4ff;
+}
+
+/* ── Platform tabs (IGX Orin / DGX Spark) — enlarged labels ─────────── */
 /* Scoped to the .platform-tabs wrapper in system_configuration.md and  */
 /* limited to the wrapper's direct tabbed-set so nested sub-tabs        */
 /* (tune_system.py / manual, One-time / Persistent, …) are unaffected.  */
