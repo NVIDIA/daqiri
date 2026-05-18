@@ -105,15 +105,15 @@ headers from payloads.
 
 ### RX GPU Packet Aggregation and Reorder
 
-DAQIRI offers options for packet aggregation or reorder:
+DAQIRI offers RX-side packet aggregation and reorder through `rx.reorder_configs`:
 
-- GPU packet aggregation helpers, such as the C++ `simple_packet_reorder` kernel, copy
-  scattered packet buffers into a contiguous GPU output buffer after a burst has been
-  received.
-- RX reorder aggregation is configured in YAML with `rx.reorder_configs`. It groups
-  packets into reordered aggregate bursts before the application consumes them. See the
-  [Configuration YAML Reference](configuration.md#rx-reorder-configs-dpdk-v1) for the
-  constraints and the language API pages for consuming reordered bursts.
+- GPU reorder configs copy selected packet payloads into a configured output memory
+  region and deliver the result as one reordered aggregate burst.
+- CPU reorder configs provide the same aggregate-burst model for CPU-addressable
+  packet and output memory.
+
+See the [Configuration YAML Reference](configuration.md#rx-reorder-configs-dpdk-v1)
+for constraints and the language API pages for consuming reordered bursts.
 
 ## C++ API
 

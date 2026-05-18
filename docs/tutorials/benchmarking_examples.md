@@ -379,7 +379,9 @@ sudo mlnx_perf -i $if_name
         [critical] [adv_network_dpdk_mgr.cpp:430] Failed to map MRs
         ```
 
-        [Make sure that `nvidia-peermem` is loaded](system_configuration.md#enable-gpudirect).
+        Check the [GPUDirect setup](system_configuration.md#enable-gpudirect) for your
+        deployment. Some host builds use `nvidia-peermem`; the container path uses
+        dma-buf support from the patched DPDK build.
 
     ??? failure "EAL: Couldn't get fd on hugepage file [..] error allocating rte services array"
 
