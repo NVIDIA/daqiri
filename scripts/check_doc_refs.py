@@ -21,10 +21,10 @@ Catches:
 Scope:
   * docs/**/*.md, docs/**/*.html
   * README.md
-  * (CLAUDE.md is intentionally skipped — its benchmark table uses
+  * (AGENTS.md is intentionally skipped — its benchmark table uses
     wildcards and brace expansion that literal grep would mis-flag.
-    The .claude/rules/docs-sync.md rule covers CLAUDE.md drift via a
-    soft commit-time check for Claude Code users.)
+    The .claude/rules/docs-sync.md rule covers AGENTS.md drift via a
+    soft commit-time check for coding agents.)
 
 Sources of truth:
   * Binary names: add_executable() and add_daqiri_raw_bench() calls in
