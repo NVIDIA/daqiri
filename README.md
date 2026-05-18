@@ -79,8 +79,9 @@ running the benchmarks.
 Reference material for the DAQIRI codebase:
 
 - [Getting Started](docs/getting-started.md) — System requirements, build/install instructions, and CMake options
-- [Configuration Reference](docs/configuration.md) — Full YAML config reference for all backends
-- [API Guide](docs/api-guide.md) — BurstParams, RX/TX workflows, buffer lifecycle, status codes
+- [API Guide](docs/api-reference/index.md) — API overview, configuration-first application model, and core packet concepts
+- [Configuration YAML Reference](docs/api-reference/configuration.md) — Full YAML config reference for all backends
+- [C++ API Usage](docs/api-reference/cpp.md) — C++ RX/TX workflows, buffer lifecycle, file writing, utilities, and status codes
 - [Contributing](CONTRIBUTING.md) — Contribution guidelines, coding standards, DCO sign-off
 
 ## Tutorials

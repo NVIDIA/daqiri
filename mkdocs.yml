@@ -33,8 +33,10 @@ site_dir: site
 
 nav:
   - Getting Started: getting-started.md
-  - Configuration: configuration.md
-  - API Reference: api-guide.md
+  - API Reference:
+    - API Guide: api-reference/index.md
+    - Configuration YAML Reference: api-reference/configuration.md
+    - C++ API Usage: api-reference/cpp.md
   - Tutorials:
     - Background: tutorials/background.md
     - System Configuration: tutorials/system_configuration.md

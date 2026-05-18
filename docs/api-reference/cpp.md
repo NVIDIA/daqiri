@@ -1,44 +1,10 @@
-# API Guide
+# C++ API Usage
 
-This guide covers the core DAQIRI API for receiving and transmitting packets. For the
-complete function list, see the [`daqiri/common.h`](https://github.com/NVIDIA/daqiri/blob/main/src/common.h) header file.
+This guide covers C++ initialization, RX/TX workflows, buffer lifecycle calls, file
+writing, utility helpers, and status codes. For the complete function list, see the
+[`daqiri/common.h`](https://github.com/NVIDIA/daqiri/blob/main/src/common.h) header file.
 
-## Key Concepts
-
-### BurstParams
-
-All packet data flows through the `BurstParams` structure. A burst is a batch of packets
-grouped together for efficient transfer between the NIC and the application.
-
-`BurstParams` provides:
-- Pointers to packet buffers (CPU or GPU memory)
-- Packet metadata: packet count, port/queue IDs, segment count, byte totals
-- Per-packet lengths, flow IDs, and optional RX hardware timestamps
-
-Interact with `BurstParams` only through the helper functions described below — the
-internal layout is opaque.
-
-### Zero-Copy Design
-
-Only pointers are passed between the NIC, DAQIRI internals, and the application. When
-you receive packets, you are reading the same buffers the NIC DMA'd into — no copies
-are made.
-
-This means **you must explicitly free buffers** when done processing. Failure to free
-buffers will exhaust the memory pool, causing the NIC to drop packets and DAQIRI to
-return `NO_FREE_BURST_BUFFERS` or `NO_FREE_PACKET_BUFFERS` errors.
-
-### Segments
-
-A **segment** is a contiguous memory region (in CPU or GPU memory) that holds part
-of a packet. A single packet can span multiple segments, which lets different parts
-of the packet live in different memory domains.
-
-The most common case is header-data split (HDS), where:
-- Segment 0 = headers (CPU memory)
-- Segment 1 = payload (GPU memory)
-
-For CPU-only or batched-GPU modes, there is a single segment (segment 0).
+For the conceptual entry point, see the [API Guide](index.md).
 
 ## Initialization
 
@@ -57,52 +23,16 @@ auto status = daqiri::daqiri_init(config);
 After `daqiri_init()` returns `Status::SUCCESS`, all memory regions are allocated, NIC
 queues are configured, and worker threads are running.
 
-If GPU RX `reorder_configs` are configured (DPDK backend), set one CUDA stream per GPU reorder
-plan before pulling reordered bursts. CPU reorder configs do not use a CUDA stream:
+If GPU RX `reorder_configs` are configured for the DPDK backend, set one CUDA stream
+per GPU reorder plan before pulling reordered bursts. CPU reorder configs do not use a
+CUDA stream. See the [Configuration YAML Reference](configuration.md#rx-reorder-configs-dpdk-v1)
+for reorder configuration constraints.
 
 ```cpp
 cudaStream_t stream = /* your stream */;
 auto st = daqiri::set_reorder_cuda_stream("rx_port", "rx_reorder_0", stream);
 if (st != daqiri::Status::SUCCESS) {
     // handle setup error
-}
-```
-
-Reorder batch sizing requirement (v1):
-- Packets within a single reordered batch are expected to be the same size.
-- Mixed packet sizes in the same reorder batch are not supported.
-- Reorder queues must use one RX source memory region. Header-data split RX queues are not
-  supported for reorder in v1.
-- `reorder_type: "gpu"` requires `device` or `host_pinned` packet/output memory.
-- `reorder_type: "cpu"` requires `host`, `host_pinned`, or `huge` packet/output memory.
-- If a reorder config includes `data_types`, `payload_len` and `aggregate_len` describe the
-  converted output element size, not the on-wire byte count.
-- `data_types.endianness: "network"` interprets byte-multiple input types wider than 8 bits as
-  network byte order before conversion.
-
-Reordered RX bursts can be identified from `burst->hdr.hdr.burst_flags`:
-- `DAQIRI_BURST_FLAG_REORDERED` means the burst contains one aggregated reorder buffer.
-- `DAQIRI_BURST_FLAG_REORDER_TIMEOUT` means that aggregate was emitted by the timeout path rather
-  than by filling the configured `packets_per_batch`.
-- For reordered bursts, `burst->hdr.hdr.max_pkt` is the logical number of source packets in the
-  aggregate, while `burst->hdr.hdr.num_pkts` remains `1` because the consumer receives one
-  aggregate buffer.
-- The aggregate batch number is available through `daqiri::get_reorder_burst_info(...)`.
-  For `seq_batch_number`, this is the configured batch-number field. For
-  `seq_packets_per_batch`, it is derived as `sequence_number / packets_per_batch`, so sequence
-  numbers `0..1023` map to batch `0` when `packets_per_batch` is `1024`, `1024..2047` map to
-  batch `1`, and so on.
-
-```cpp
-daqiri::ReorderBurstInfo info{};
-if ((burst->hdr.hdr.burst_flags & daqiri::DAQIRI_BURST_FLAG_REORDERED) != 0U) {
-    if (burst->event != nullptr) {
-        cudaEventSynchronize(burst->event);
-    }
-    auto st = daqiri::get_reorder_burst_info(burst, &info);
-    if (st == daqiri::Status::SUCCESS) {
-        // info.batch_id identifies the aggregate batch.
-    }
 }
 ```
 
@@ -188,6 +118,34 @@ daqiri::free_packet_segment(burst, seg, idx);
 // Free all packets for one segment, then the burst
 daqiri::free_all_segment_packets(burst, seg);
 daqiri::free_rx_burst(burst);
+```
+
+### Reordered RX bursts
+
+Reordered RX bursts can be identified from `burst->hdr.hdr.burst_flags`:
+- `DAQIRI_BURST_FLAG_REORDERED` means the burst contains one aggregated reorder buffer.
+- `DAQIRI_BURST_FLAG_REORDER_TIMEOUT` means that aggregate was emitted by the timeout path rather
+  than by filling the configured `packets_per_batch`.
+- For reordered bursts, `burst->hdr.hdr.max_pkt` is the logical number of source packets in the
+  aggregate, while `burst->hdr.hdr.num_pkts` remains `1` because the consumer receives one
+  aggregate buffer.
+- The aggregate batch number is available through `daqiri::get_reorder_burst_info(...)`.
+  For `seq_batch_number`, this is the configured batch-number field. For
+  `seq_packets_per_batch`, it is derived as `sequence_number / packets_per_batch`, so sequence
+  numbers `0..1023` map to batch `0` when `packets_per_batch` is `1024`, `1024..2047` map to
+  batch `1`, and so on.
+
+```cpp
+daqiri::ReorderBurstInfo info{};
+if ((burst->hdr.hdr.burst_flags & daqiri::DAQIRI_BURST_FLAG_REORDERED) != 0U) {
+    if (burst->event != nullptr) {
+        cudaEventSynchronize(burst->event);
+    }
+    auto st = daqiri::get_reorder_burst_info(burst, &info);
+    if (st == daqiri::Status::SUCCESS) {
+        // info.batch_id identifies the aggregate batch.
+    }
+}
 ```
 
 ### GPU Packet Aggregation
@@ -368,6 +326,120 @@ daqiri::print_stats();
 // Shutdown and cleanup
 daqiri::shutdown();
 ```
+
+## Function Reference
+
+This section summarizes the C++ functions declared in `src/common.h`. The workflow
+sections above show the common call order and ownership rules.
+
+### Initialization, Parsing, and Lifecycle
+
+| Function | Purpose |
+| --- | --- |
+| `daqiri_init(NetworkConfig &config)` | Initialize DAQIRI from an already-populated config object. |
+| `daqiri_init(const std::string &yaml_string_or_path)` | Initialize from a YAML string or YAML file path. |
+| `daqiri_init_from_yaml_string(const std::string &yaml_string)` | Initialize from YAML content. |
+| `daqiri_init_from_yaml_file(const std::string &yaml_path)` | Initialize from a YAML file path. |
+| `parse_network_config(...)` | Parse YAML into `NetworkConfig` without starting the manager. |
+| `get_manager_type()` | Return the active manager type after initialization. |
+| `get_manager_type(config)` | Return the manager type selected by a config object. |
+| `shutdown()` | Stop DAQIRI and release manager-owned resources. |
+| `print_stats()` | Print manager/backend statistics. |
+
+### Burst Metadata
+
+| Function | Purpose |
+| --- | --- |
+| `create_burst_params()` | Allocate generic burst metadata. |
+| `create_tx_burst_params()` | Allocate TX burst metadata. |
+| `set_header(burst, port, q, num, segs)` | Set burst port, queue, packet count, and segment count metadata. |
+| `set_num_packets(burst, num)` / `get_num_packets(burst)` | Set or read the number of packets in a burst. |
+| `get_q_id(burst)` | Return the queue ID recorded on a burst. |
+| `get_burst_tot_byte(burst)` | Return the burst total-byte counter. |
+
+### Packet and Segment Access
+
+| Function | Purpose |
+| --- | --- |
+| `get_packet_ptr(burst, idx)` | Return the segment-0 packet pointer. |
+| `get_segment_packet_ptr(burst, seg, idx)` | Return a packet pointer for a specific segment. |
+| `get_packet_length(burst, idx)` | Return the logical packet length. |
+| `get_segment_packet_length(burst, seg, idx)` | Return the length of one packet segment. |
+| `get_packet_flow_id(burst, idx)` | Return the matched flow ID, or `0` when no flow matched. |
+| `get_packet_rx_timestamp(burst, idx, &timestamp_ns)` | Return the hardware RX timestamp when enabled and available. |
+
+### RX and Reorder
+
+| Function | Purpose |
+| --- | --- |
+| `get_rx_burst(&burst, port, q)` | Dequeue a burst from a specific port and queue. |
+| `get_rx_burst(&burst, port)` | Dequeue from any queue on a specific port. |
+| `get_rx_burst(&burst)` | Dequeue from any queue on any port. |
+| `get_rx_burst(&burst, conn_id, server)` | Dequeue from an RDMA/socket connection ring. |
+| `set_reorder_cuda_stream(interface_name, reorder_name, stream)` | Set the CUDA stream for a configured GPU reorder plan. |
+| `get_reorder_burst_info(burst, &info)` | Read metadata for a reordered aggregate burst. |
+
+### TX and Header Fill
+
+| Function | Purpose |
+| --- | --- |
+| `is_tx_burst_available(burst)` | Check whether buffers are available for a TX burst. |
+| `get_tx_packet_burst(burst)` | Populate a TX burst with packet buffers. |
+| `send_tx_burst(burst)` | Enqueue a populated TX burst. |
+| `set_packet_lengths(burst, idx, lens)` | Set segment lengths for one packet. |
+| `set_all_packet_lengths(burst, lens)` | Set segment lengths for every packet in a burst. |
+| `set_packet_tx_time(burst, idx, time)` | Set scheduled transmit time for one packet. |
+| `set_eth_header(burst, idx, dst_addr)` | Fill the Ethernet destination header. |
+| `set_ipv4_header(burst, idx, ip_len, proto, src_host, dst_host)` | Fill an IPv4 header. |
+| `set_udp_header(burst, idx, udp_len, src_port, dst_port)` | Fill a UDP header. |
+| `set_udp_payload(burst, idx, data, len)` | Copy UDP payload bytes. |
+| `rdma_set_header(burst, op_code, conn_id, is_server, num_pkts, wr_id, local_mr_name)` | Fill RDMA TX metadata. |
+| `rdma_get_opcode(burst)` | Return the RDMA operation code recorded on a burst. |
+
+### Buffer Release
+
+| Function | Purpose |
+| --- | --- |
+| `free_packet(burst, idx)` | Free all segments for one packet. |
+| `free_packet_segment(burst, seg, idx)` | Free one segment for one packet. |
+| `free_all_segment_packets(burst, seg)` | Free one segment across all packets in a burst. |
+| `free_segment_packets_and_burst(burst, seg)` | Free one segment across all packets and free burst metadata. |
+| `free_all_packets_and_burst_rx(burst)` | Free all RX packet buffers and RX burst metadata. |
+| `free_all_packets_and_burst_tx(burst)` | Free all TX packet buffers and TX burst metadata. |
+| `free_rx_burst(burst)` / `free_tx_burst(burst)` | Free burst metadata only. |
+| `free_rx_metadata(burst)` / `free_tx_metadata(burst)` | Free RX or TX metadata only. |
+
+### File I/O
+
+| Function | Purpose |
+| --- | --- |
+| `daqiri_write_raw_to_file(burst, absolute_path, file_prefix, packet_data_offset)` | Write each packet to a separate raw binary file. |
+| `daqiri_write_raw_to_file_async(..., &handle)` | Submit asynchronous raw packet writes. |
+| `daqiri_write_pcap_to_file(burst, absolute_path, file_prefix)` | Append burst packets to a classic pcap file. |
+| `daqiri_write_pcap_to_file_async(..., &handle)` | Submit asynchronous pcap writes. |
+| `daqiri_file_write_poll(handle, &status)` | Poll an asynchronous file-write handle. |
+| `daqiri_file_write_wait(handle, &status)` | Wait for asynchronous file writes to complete. |
+| `daqiri_file_write_destroy(handle)` | Release asynchronous file-write resources. |
+
+### Ports, Traffic, Socket, and RDMA
+
+| Function | Purpose |
+| --- | --- |
+| `get_mac_addr(port, mac)` | Copy a port MAC address into a six-byte buffer. |
+| `format_eth_addr(dst, addr)` | Convert a MAC address string into a six-byte buffer. |
+| `get_port_id(key)` | Resolve an interface name or PCIe address to a port ID. |
+| `get_num_rx_queues(port_id)` | Return the configured or backend-reported RX queue count. |
+| `drop_all_traffic(port)` | Install a high-priority drop rule on a port. |
+| `allow_all_traffic(port)` | Remove a drop rule installed by `drop_all_traffic()`. |
+| `flush_port_queue(port, queue)` | Drain stale packets from a port queue. |
+| `socket_connect_to_server(server_addr, server_port, &conn_id)` | Connect a socket client to a server. |
+| `socket_connect_to_server(server_addr, server_port, src_addr, &conn_id)` | Connect a socket client using an explicit source address. |
+| `socket_get_port_queue(conn_id, &port, &queue)` | Resolve a socket connection to port/queue routing. |
+| `socket_get_server_conn_id(server_addr, server_port, &conn_id)` | Look up a server-side socket connection ID. |
+| `rdma_connect_to_server(server_addr, server_port, &conn_id)` | Connect an RDMA client to a server. |
+| `rdma_connect_to_server(server_addr, server_port, src_addr, &conn_id)` | Connect an RDMA client using an explicit source address. |
+| `rdma_get_port_queue(conn_id, &port, &queue)` | Resolve an RDMA connection to port/queue routing. |
+| `rdma_get_server_conn_id(server_addr, server_port, &conn_id)` | Look up a server-side RDMA connection ID. |
 
 ## Status Codes
 
