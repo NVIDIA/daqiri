@@ -9,11 +9,11 @@ These rules ensure documentation stays in sync with code changes in the DAQIRI r
 When the user is committing, pushing, or otherwise wrapping up a change that touches the files below, consider whether the related docs may need updating. The intent is a single check at the commit/PR checkpoint, not after every individual edit.
 
 ### API surface changes (high impact)
-- `src/common.h` — public free-function API (`get_rx_burst`, `get_packet_ptr`, `set_udp_header`, etc.). Any signature change, new function, removed function, or changed parameter semantics may need updating in:
+- `include/daqiri/common.h` / `include/daqiri/daqiri.h` — public free-function API (`get_rx_burst`, `get_packet_ptr`, `set_udp_header`, etc.). Any signature change, new function, removed function, or changed parameter semantics may need updating in:
   - `docs/api-reference/index.md` (shared API guide and packet concepts)
   - `docs/api-reference/cpp.md` (C++ API usage guide and function reference)
   - `AGENTS.md` (Architecture section's API summary)
-- `src/types.h` — public types (`BurstParams`, `Status`, `NetworkConfig`, enums like `MemoryKind`, `Direction`, `SocketProtocol`). Struct field changes, new enum values, or renamed types may need updating in the API docs and `AGENTS.md` (Architecture / BurstParams discussion).
+- `include/daqiri/types.h` — public types (`BurstParams`, `Status`, `NetworkConfig`, enums like `MemoryKind`, `Direction`, `SocketProtocol`). Struct field changes, new enum values, or renamed types may need updating in the API docs and `AGENTS.md` (Architecture / BurstParams discussion).
 - `src/manager.h` — `Manager` virtual interface and `ManagerFactory`. Changes here affect the backend abstraction docs in `docs/api-reference/cpp.md` and the Manager-abstraction subsection in `AGENTS.md`.
 
 ### Backend and build changes (medium impact)
@@ -50,7 +50,7 @@ When the user is committing, pushing, or otherwise wrapping up a change that tou
 - A backend is added or removed under `src/managers/*/` — update the **Backends** table.
 - CMake options change in `src/CMakeLists.txt` — update the **Quick Start** commands.
 - A doc file is added/removed/renamed in `docs/` — update the **Documentation** table.
-- A major user-facing capability is added/removed (typically a public-API change in `src/common.h`) — update the **Features** list.
+- A major user-facing capability is added/removed (typically a public-API change in `include/daqiri/common.h`) — update the **Features** list.
 - TX-fill mode or backend support changes — update the **Limitations** section.
 
 ### AGENTS.md (always-loaded developer onboarding)
@@ -58,7 +58,7 @@ When the user is committing, pushing, or otherwise wrapping up a change that tou
 `AGENTS.md` is the developer-facing onboarding doc that coding agents load automatically into every session in this repo. It typically needs updating when:
 - CMake options or `DAQIRI_MGR` default change in `src/CMakeLists.txt` — update the **Build & run** section.
 - A benchmark executable or its typical config is added/removed under `examples/` — update the **Benchmarks** table.
-- Public API or types change in `src/common.h` / `src/types.h` / `src/manager.h` — update the **Architecture** section (Manager abstraction, BurstParams, public-API summary).
+- Public API or types change in `include/daqiri/common.h` / `include/daqiri/types.h` / `src/manager.h` — update the **Architecture** section (Manager abstraction, BurstParams, public-API summary).
 - A backend is added or its semantics change under `src/managers/*/` — update the Manager-abstraction discussion in **Architecture**.
 - Reorder or quantize kernels change in `src/kernels.cu` — update the **Reorder & quantize kernels** subsection.
 - A doc file is added/removed/renamed in `docs/` — update the **Documentation** section's layout list and the drift-hotspot paths.
@@ -68,8 +68,8 @@ When the user is committing, pushing, or otherwise wrapping up a change that tou
 
 | Source file | Docs to check |
 |---|---|
-| `src/common.h` | `docs/api-reference/index.md`, `docs/api-reference/cpp.md`, `AGENTS.md` |
-| `src/types.h` | `docs/api-reference/index.md`, `docs/api-reference/cpp.md`, `AGENTS.md` |
+| `include/daqiri/common.h` / `include/daqiri/daqiri.h` | `docs/api-reference/index.md`, `docs/api-reference/cpp.md`, `AGENTS.md` |
+| `include/daqiri/types.h` | `docs/api-reference/index.md`, `docs/api-reference/cpp.md`, `AGENTS.md` |
 | `src/manager.h` | `docs/api-reference/cpp.md`, `AGENTS.md` |
 | `src/managers/*/` | `docs/getting-started.md`, `docs/api-reference/configuration.md`, `docs/tutorials/configuration-walkthrough.md`, `README.md`, `AGENTS.md` |
 | `src/CMakeLists.txt` | `docs/getting-started.md`, `AGENTS.md`, `README.md` |
