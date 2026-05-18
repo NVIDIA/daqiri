@@ -34,6 +34,13 @@
 [data-md-color-scheme="slate"] .md-header {
   background: #000;
 }
+/* Render the DAQIRI logo (docs/logo.svg) at the same 36px height the     */
+/* custom HTML pages use, rather than Material's smaller default.         */
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg {
+  height: 36px;
+  width: auto;
+}
 [data-md-color-scheme="slate"] .md-tabs {
   background: #1a1a1a;
 }
