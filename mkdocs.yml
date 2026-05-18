@@ -5,13 +5,24 @@ repo_name: nvidia/daqiri
 
 theme:
   name: material
+  logo: images/logo.svg
+  favicon: images/logo.png
   palette:
-    scheme: slate
-    primary: black
-    accent: light green
+    - scheme: slate
+      primary: black
+      accent: light green
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: black
+      accent: light green
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
   font:
-    text: Roboto
-    code: Roboto Mono
+    text: Inter
+    code: JetBrains Mono
   icon:
     repo: fontawesome/brands/github
   features:
