@@ -6,8 +6,10 @@ network backend, interfaces, RX and TX queues, memory regions, flow steering rul
 flow isolation, header-data split, and optional reorder plans. After initialization,
 the C++ API works with those configured ports, queues, buffers, and flows.
 
-For the full configuration schema and worked examples, see the
-[Configuration YAML Reference](configuration.md).
+For the full configuration schema, see the
+[Configuration YAML Reference](configuration.md). For an annotated end-to-end
+example, see the
+[configuration walkthrough tutorial](../tutorials/configuration-walkthrough.md).
 
 ## Application Model
 
