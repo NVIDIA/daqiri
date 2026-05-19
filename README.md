@@ -1,6 +1,6 @@
 # DAQIRI - Data Acquisition for Integrated Real-time Instruments
 
-<img src="docs/logo.svg" alt="DAQIRI" width="220"/>
+<img src="docs/images/logo.svg" alt="DAQIRI" width="220"/>
 
 **Send and receive Ethernet packets into CPU and GPU memory at hundreds of Gbps with a simple API.** DAQIRI (Data Acquisition for Integrated Real-time Instruments) connects data acquisition systems to NVIDIA GPUs for real-time processing and AI, paving the way for autonomy of the next generation of scientific and industrial instruments.
 

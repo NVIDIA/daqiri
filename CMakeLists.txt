@@ -17,6 +17,7 @@ project(daqiri VERSION 0.1.0 LANGUAGES C CXX CUDA)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
+find_package(CUDAToolkit REQUIRED)
 
 option(DAQIRI_BUILD_PYTHON "Build Python bindings" OFF)
 option(DAQIRI_BUILD_EXAMPLES "Build standalone examples" ON)
@@ -58,9 +59,75 @@ write_basic_package_version_file(
   COMPATIBILITY SameMajorVersion
 )
 
+if(IS_ABSOLUTE "${CMAKE_INSTALL_LIBDIR}")
+  set(DAQIRI_PC_PREFIX "${CMAKE_INSTALL_PREFIX}")
+  set(DAQIRI_PKGCONFIG_LIBDIR "${CMAKE_INSTALL_LIBDIR}")
+else()
+  set(DAQIRI_PC_PREFIX_FROM_PCFILEDIR "..")
+  string(REPLACE "/" ";" DAQIRI_PC_LIBDIR_COMPONENTS "${CMAKE_INSTALL_LIBDIR}")
+  foreach(component IN LISTS DAQIRI_PC_LIBDIR_COMPONENTS)
+    if(NOT component STREQUAL "")
+      string(APPEND DAQIRI_PC_PREFIX_FROM_PCFILEDIR "/..")
+    endif()
+  endforeach()
+  set(DAQIRI_PC_PREFIX "\${pcfiledir}/${DAQIRI_PC_PREFIX_FROM_PCFILEDIR}")
+  set(DAQIRI_PKGCONFIG_LIBDIR "\${pcfiledir}/..")
+endif()
+
+if(IS_ABSOLUTE "${CMAKE_INSTALL_INCLUDEDIR}")
+  set(DAQIRI_PKGCONFIG_INCLUDEDIR "${CMAKE_INSTALL_INCLUDEDIR}")
+else()
+  set(DAQIRI_PKGCONFIG_INCLUDEDIR "\${prefix}/${CMAKE_INSTALL_INCLUDEDIR}")
+endif()
+
+set(DAQIRI_PC_REQUIRES "")
+set(DAQIRI_PC_REQUIRES_PRIVATE "libdpdk")
+set(DAQIRI_PC_LIBS "-lyaml-cpp")
+separate_arguments(DAQIRI_PC_MGR_LIST UNIX_COMMAND "${DAQIRI_MGR}")
+list(FIND DAQIRI_PC_MGR_LIST "socket" DAQIRI_PC_HAS_SOCKET_IDX)
+list(FIND DAQIRI_PC_MGR_LIST "rdma" DAQIRI_PC_HAS_RDMA_IDX)
+if(NOT DAQIRI_PC_HAS_SOCKET_IDX EQUAL -1 OR NOT DAQIRI_PC_HAS_RDMA_IDX EQUAL -1)
+  string(APPEND DAQIRI_PC_REQUIRES_PRIVATE " libibverbs librdmacm")
+endif()
+
+set(DAQIRI_PC_REQUIRES_LINE "")
+if(DAQIRI_PC_REQUIRES)
+  set(DAQIRI_PC_REQUIRES_LINE "Requires: ${DAQIRI_PC_REQUIRES}")
+endif()
+
+set(DAQIRI_PC_REQUIRES_PRIVATE_LINE "")
+if(DAQIRI_PC_REQUIRES_PRIVATE)
+  set(DAQIRI_PC_REQUIRES_PRIVATE_LINE "Requires.private: ${DAQIRI_PC_REQUIRES_PRIVATE}")
+endif()
+
+set(DAQIRI_PC_EXTRA_CFLAGS "")
+foreach(include_dir IN LISTS CUDAToolkit_INCLUDE_DIRS)
+  if(include_dir)
+    string(APPEND DAQIRI_PC_EXTRA_CFLAGS " -I${include_dir}")
+  endif()
+endforeach()
+
+set(DAQIRI_PC_LIBS_PRIVATE "-lcudart -lcuda")
+if(CUDAToolkit_LIBRARY_DIR)
+  string(PREPEND DAQIRI_PC_LIBS_PRIVATE "-L${CUDAToolkit_LIBRARY_DIR} ")
+endif()
+
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/cmake/daqiri.pc.in
+  ${CMAKE_CURRENT_BINARY_DIR}/daqiri.pc
+  @ONLY
+)
+
 install(
   FILES
     ${CMAKE_CURRENT_BINARY_DIR}/daqiriConfig.cmake
     ${CMAKE_CURRENT_BINARY_DIR}/daqiriConfigVersion.cmake
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/daqiri
+)
+
+install(
+  FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/daqiri.pc
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig
+  COMPONENT daqiri-cpp
 )

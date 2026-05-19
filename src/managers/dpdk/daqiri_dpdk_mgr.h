@@ -51,7 +51,7 @@
 #include <mutex>
 #include <unordered_map>
 #include "src/manager.h"
-#include "src/common.h"
+#include <daqiri/daqiri.h>
 #include "daqiri_dpdk_stats.h"
 
 #ifndef DAQIRI_REORDER_GPU_PROFILE

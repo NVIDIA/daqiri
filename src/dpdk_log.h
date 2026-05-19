@@ -21,7 +21,7 @@
 #include <string>
 #include <tuple>
 #include <stdexcept>
-#include "src/types.h"
+#include <daqiri/types.h>
 
 namespace daqiri {
 

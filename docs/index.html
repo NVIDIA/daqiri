@@ -197,7 +197,7 @@
   <nav id="navbar">
     <div class="nav-inner">
       <a class="nav-logo" href="#hero">
-        <img src="logo.svg" alt="DAQIRI" style="height:36px;width:auto;" />
+        <img src="images/logo.svg" alt="DAQIRI" style="height:36px;width:auto;" />
         <span class="nav-logo-text">DAQIRI</span>
         <span class="nav-logo-badge">NVIDIA</span>
       </a>
@@ -250,7 +250,7 @@
         </div>
       </div>
       <div class="hero-logo-wrap">
-        <img src="logo.svg" alt="DAQIRI — sensor connected to GPU infrastructure" />
+        <img src="images/logo.svg" alt="DAQIRI — sensor connected to GPU infrastructure" />
       </div>
       </div>
     </div>
@@ -265,7 +265,7 @@
         <p class="section-desc">Scientific and industrial instruments generate data that is richest at the source — before it is filtered, decimated, or summarized. DAQIRI places NVIDIA GPU hardware directly in that data path, forging a tight bond between upstream sensors, their data converters, and the NVIDIA compute ecosystem. The result is a new foundation for developers: the ability to work with instrument data in its rawest form, at wire speed, and to build a new class of autonomous experiments where AI can observe phenomena directly at the source, augment human analysis, and steer experiments in real time. <span style="color:var(--nv-green);font-style:italic;">Streaming Ethernet data in, GPU tensor out.</span></p>
 
         <!-- AI Native DAQ Architecture SVG -->
-        <img src="architecture.svg" alt="AI Native DAQ Architecture" style="width:100%;max-width:400px;display:block;margin:0 auto;"/>
+        <img src="images/architecture.svg" alt="AI Native DAQ Architecture" style="width:100%;max-width:400px;display:block;margin:0 auto;"/>
       </div>
       <div class="features-grid">
         <div class="feature-card">
@@ -369,7 +369,7 @@ cmake --install build --prefix /opt/daqiri</pre>
         <div class="gs-code-panel">
           <div class="gs-code-block">
             <div class="gs-code-hdr"><span class="gs-code-title">Initialize &amp; Receive Packets</span><span class="gs-code-lang">C++</span></div>
-            <pre><span class="kw">#include</span> <span class="str">"daqiri/common.h"</span>
+            <pre><span class="kw">#include</span> <span class="str">&lt;daqiri/daqiri.h&gt;</span>
 
 <span class="cm">// Init from YAML config</span>
 daqiri::<span class="fn">daqiri_init</span>(<span class="str">"config.yaml"</span>);
@@ -450,25 +450,23 @@ daqiri::<span class="fn">send_tx_burst</span>(burst);</pre></div>
         </div>
 
         <div class="example-card">
-          <div class="ex-hdr"><span class="ex-dot dot-cpp"></span><span class="ex-title">GPU Packet Reorder Kernel</span><span class="ex-lang">C++/CUDA</span></div>
-          <div class="ex-body"><pre><span class="cm">// Batched GPU: packets arrive scattered.
-// Collect device ptrs, then reorder
-// into a flat contiguous output buffer.</span>
-<span class="kw">for</span> (<span class="kw">int</span> p = <span class="nm">0</span>; p &lt; n; p++) {
-  h_dev_ptrs[p] =
-    daqiri::<span class="fn">get_packet_ptr</span>(burst, p);
+          <div class="ex-hdr"><span class="ex-dot dot-cpp"></span><span class="ex-title">GPU Packet Processing</span><span class="ex-lang">C++/CUDA</span></div>
+          <div class="ex-body"><pre><span class="cm">// Batched GPU: packets arrive in
+// CUDA-addressable buffers. Reordering
+// is configured with rx.reorder_configs.</span>
+<span class="kw">__global__</span> <span class="kw">void</span> noop_packet_kernel(<span class="kw">void</span>* pkt) {
+  (<span class="kw">void</span>)pkt;
 }
 
-<span class="cm">// CUDA kernel: src/kernels.cu</span>
-<span class="fn">simple_packet_reorder</span>(
-  output_buf,   <span class="cm">// contiguous GPU buffer</span>
-  h_dev_ptrs,
-  packet_len,
-  num_packets);
+<span class="kw">if</span> (daqiri::<span class="fn">get_num_packets</span>(burst) &gt; <span class="nm">0</span>) {
+  <span class="kw">void</span>* pkt =
+    daqiri::<span class="fn">get_packet_ptr</span>(burst, <span class="nm">0</span>);
+  noop_packet_kernel&lt;&lt;&lt;<span class="nm">1</span>, <span class="nm">1</span>, <span class="nm">0</span>, stream&gt;&gt;&gt;(pkt);
+}
 
 daqiri::<span class="fn">free_all_packets_and_burst_rx</span>(
   burst);</pre></div>
-          <div class="ex-footer"><span class="ex-desc">Scatter→gather reorder on the GPU</span><a href="https://github.com/NVIDIA/daqiri/blob/main/src/kernels.cu" class="ex-link" target="_blank">Open ↗</a></div>
+          <div class="ex-footer"><span class="ex-desc">Launch custom GPU work on packet buffers</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
         </div>
 
         <div class="example-card">
@@ -652,7 +650,7 @@ cmake --build build -j</pre>
       <div class="footer-inner">
         <div class="footer-brand">
           <div class="nav-logo">
-            <img src="logo.svg" alt="DAQIRI" style="height:32px;width:auto;" />
+            <img src="images/logo.svg" alt="DAQIRI" style="height:32px;width:auto;" />
             <span class="nav-logo-text">DAQIRI</span>
             <span class="nav-logo-badge">NVIDIA</span>
           </div>

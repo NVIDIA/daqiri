@@ -27,7 +27,7 @@
 #include <thread>
 
 #include "raw_bench_common.h"
-#include "src/common.h"
+#include <daqiri/daqiri.h>
 
 namespace {
 

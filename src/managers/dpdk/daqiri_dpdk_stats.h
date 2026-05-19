@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-#include "src/common.h"
+#include <daqiri/daqiri.h>
 #include <rte_ethdev.h>
 #include <unordered_map>
 #include <string>

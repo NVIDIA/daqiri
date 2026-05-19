@@ -16,7 +16,7 @@
  */
 
 #include "daqiri_dpdk_stats.h"
-#include "src/logging.hpp"
+#include <daqiri/logging.hpp>
 #include <thread>
 #include <chrono>
 

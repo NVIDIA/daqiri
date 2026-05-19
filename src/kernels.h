@@ -16,19 +16,13 @@
  */
 
 #pragma once
-#include <stdint.h>
-#include <assert.h>
+
 #include <cuda_runtime.h>
+#include <stdint.h>
 
 #if __cplusplus
 extern "C" {
 #endif
-
-__attribute__((__visibility__("default"))) void simple_packet_reorder(void* out,
-                                                                      const void* const* const in,
-                                                                      uint16_t pkt_len,
-                                                                      uint32_t num_pkts,
-                                                                      cudaStream_t stream);
 
 __attribute__((__visibility__("default"))) void packet_reorder_copy_payload_by_sequence(
     void* out,
