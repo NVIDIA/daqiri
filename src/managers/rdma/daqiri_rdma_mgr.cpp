@@ -342,10 +342,10 @@ inline int RdmaMgr::set_affinity(int cpu_core) {
 Status RdmaMgr::send_tx_burst(BurstParams* burst) {
   struct rte_ring* ring;
 
-  auto ri = tx_rings_map_.find(reinterpret_cast<struct rdma_cm_id*>(burst->rdma_hdr.conn_id));
+  const auto conn_id = get_connection_id(burst);
+  auto ri = tx_rings_map_.find(reinterpret_cast<struct rdma_cm_id*>(conn_id));
   if (ri == tx_rings_map_.end()) {
-    DAQIRI_LOG_ERROR("Invalid server connection ID in send_tx_burst: {}",
-                       burst->rdma_hdr.conn_id);
+    DAQIRI_LOG_ERROR("Invalid server connection ID in send_tx_burst: {}", conn_id);
     return Status::INVALID_PARAMETER;
   }
 
@@ -423,11 +423,13 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
 
         msg = it->second;
 
-        if (msg->rdma_hdr.conn_id != reinterpret_cast<uintptr_t>(tparams->client_id)) {
+        const auto conn_id = get_connection_id(msg);
+        const auto expected_conn_id = reinterpret_cast<uintptr_t>(tparams->client_id);
+        if (conn_id != expected_conn_id) {
           DAQIRI_LOG_CRITICAL("Wrong connection ID in receive completion {}: {} != {}",
                                 wc.wr_id,
-                                msg->rdma_hdr.conn_id,
-                                reinterpret_cast<uintptr_t>(tparams->client_id));
+                                conn_id,
+                                expected_conn_id);
         }
 
         outstanding_receive_wr_ids.erase(it);
@@ -436,13 +438,13 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
       }
 
       // Only populate a header to indicate which burst needs to be freed
-      // msg->rdma_hdr.opcode  = ibv_opcode_to_daqiri_opcode(wc.opcode);
-      msg->rdma_hdr.status =
+      // msg->transport_hdr.opcode  = ibv_opcode_to_daqiri_opcode(wc.opcode);
+      msg->transport_hdr.status =
           wc.status == IBV_WC_SUCCESS ? Status::SUCCESS : Status::GENERIC_FAILURE;
-      // msg->rdma_hdr.conn_id = reinterpret_cast<uintptr_t>(tparams->client_id);
-      msg->rdma_hdr.server = is_server;
-      msg->rdma_hdr.tx = false;
-      // msg->rdma_hdr.wr_id   = wc.wr_id;
+      // set_connection_id(msg, reinterpret_cast<uintptr_t>(tparams->client_id));
+      msg->transport_hdr.server = is_server;
+      msg->transport_hdr.tx = false;
+      // msg->transport_hdr.wr_id   = wc.wr_id;
 
       if (rte_ring_enqueue(rx_ring, reinterpret_cast<void*>(msg)) != 0) {
         DAQIRI_LOG_CRITICAL("Failed to enqueue RX completion message");
@@ -477,11 +479,13 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
 
         msg = it->second;
 
-        if (msg->rdma_hdr.conn_id != reinterpret_cast<uintptr_t>(tparams->client_id)) {
+        const auto conn_id = get_connection_id(msg);
+        const auto expected_conn_id = reinterpret_cast<uintptr_t>(tparams->client_id);
+        if (conn_id != expected_conn_id) {
           DAQIRI_LOG_CRITICAL("Wrong connection ID in send completion {}: {} != {}",
                                 wc.wr_id,
-                                msg->rdma_hdr.conn_id,
-                                reinterpret_cast<uintptr_t>(tparams->client_id));
+                                conn_id,
+                                expected_conn_id);
         }
 
         outstanding_send_wr_ids.erase(it);
@@ -490,13 +494,13 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
       }
 
       // Only populate a header to indicate which burst needs to be freed
-      // msg->rdma_hdr.opcode  = ibv_opcode_to_daqiri_opcode(wc.opcode);
-      msg->rdma_hdr.tx = true;
-      msg->rdma_hdr.status =
+      // msg->transport_hdr.opcode  = ibv_opcode_to_daqiri_opcode(wc.opcode);
+      msg->transport_hdr.tx = true;
+      msg->transport_hdr.status =
           wc.status == IBV_WC_SUCCESS ? Status::SUCCESS : Status::GENERIC_FAILURE;
-      // msg->rdma_hdr.conn_id = reinterpret_cast<uintptr_t>(tparams->client_id);
-      msg->rdma_hdr.server = is_server;
-      // msg->rdma_hdr.wr_id   = wc.wr_id;
+      // set_connection_id(msg, reinterpret_cast<uintptr_t>(tparams->client_id));
+      msg->transport_hdr.server = is_server;
+      // msg->transport_hdr.wr_id   = wc.wr_id;
 
       if (rte_ring_enqueue(rx_ring, reinterpret_cast<void*>(msg)) != 0) {
         DAQIRI_LOG_CRITICAL("Failed to enqueue RX completion message");
@@ -515,15 +519,15 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
       continue;
     }
 
-    const auto local_mr = mrs_.find(std::string(burst->rdma_hdr.local_mr_name));
+    const auto local_mr = mrs_.find(std::string(burst->transport_hdr.local_mr_name));
     if (local_mr == mrs_.end()) {
       DAQIRI_LOG_CRITICAL("Couldn't find MR with name {} in registry",
-                            burst->rdma_hdr.local_mr_name);
+                            burst->transport_hdr.local_mr_name);
       free_tx_burst(burst);
       continue;
     }
 
-    switch (burst->rdma_hdr.opcode) {
+    switch (burst->transport_hdr.opcode) {
       case RDMAOpCode::SEND: {
         // Get lkey for this PD
         auto pd = pd_map_.find(tparams->client_id->verbs);
@@ -537,12 +541,12 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
         auto lkey = local_mr->second.ctx_mr_map_.find(pd->second);
         if (lkey == local_mr->second.ctx_mr_map_.end()) {
           DAQIRI_LOG_CRITICAL("Couldn't find MR with name {} in registry",
-                                burst->rdma_hdr.local_mr_name);
+                                burst->transport_hdr.local_mr_name);
           free_tx_burst(burst);
           continue;
         }
 
-        for (int p = 0; p < burst->rdma_hdr.num_pkts; p++) {
+        for (int p = 0; p < burst->transport_hdr.num_pkts; p++) {
           ibv_send_wr wr;
           ibv_send_wr* bad_wr;
           ibv_sge sge;
@@ -551,7 +555,7 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
           sge.addr = (uint64_t)burst->pkts[0][p];
           sge.length = (uint32_t)burst->pkt_lens[0][p];
           sge.lkey = lkey->second->lkey;
-          wr.wr_id = burst->rdma_hdr.wr_id + p;  // Auto-increment wr_id to be unique
+          wr.wr_id = burst->transport_hdr.wr_id + p;  // Auto-increment wr_id to be unique
           wr.sg_list = &sge;
           wr.num_sge = 1;
           wr.opcode = IBV_WR_SEND;
@@ -564,7 +568,7 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
             continue;
           }
 
-          outstanding_send_wr_ids[burst->rdma_hdr.wr_id + p] = burst;
+          outstanding_send_wr_ids[burst->transport_hdr.wr_id + p] = burst;
         }
 
         break;
@@ -582,12 +586,12 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
         auto lkey = local_mr->second.ctx_mr_map_.find(pd->second);
         if (lkey == local_mr->second.ctx_mr_map_.end()) {
           DAQIRI_LOG_CRITICAL("Couldn't find MR with name {} in registry",
-                                burst->rdma_hdr.local_mr_name);
+                                burst->transport_hdr.local_mr_name);
           free_tx_burst(burst);
           continue;
         }
 
-        for (int p = 0; p < burst->rdma_hdr.num_pkts; p++) {
+        for (int p = 0; p < burst->transport_hdr.num_pkts; p++) {
           struct ibv_recv_wr recv_wr;
           struct ibv_sge sge;
           struct ibv_recv_wr* bad_wr = NULL;
@@ -601,7 +605,7 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
 
           // Prepare Receive Work Request
           memset(&recv_wr, 0, sizeof(recv_wr));
-          recv_wr.wr_id = burst->rdma_hdr.wr_id + p;
+          recv_wr.wr_id = burst->transport_hdr.wr_id + p;
           recv_wr.next = NULL;
           recv_wr.sg_list = &sge;
           recv_wr.num_sge = 1;
@@ -614,7 +618,7 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
             continue;
           }
 
-          outstanding_receive_wr_ids[burst->rdma_hdr.wr_id + p] = burst;
+          outstanding_receive_wr_ids[burst->transport_hdr.wr_id + p] = burst;
         }
         break;
       }
@@ -638,20 +642,20 @@ Status RdmaMgr::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst
 }
 
 RDMAOpCode RdmaMgr::rdma_get_opcode(BurstParams* burst) {
-  return burst->rdma_hdr.opcode;
+  return burst->transport_hdr.opcode;
 }
 
 Status RdmaMgr::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id,
                                 bool is_server, int num_pkts, uint64_t wr_id,
                                 const std::string& local_mr_name) {
-  burst->rdma_hdr.opcode = op_code;
-  burst->rdma_hdr.conn_id = conn_id;
-  burst->rdma_hdr.server = is_server;
-  burst->rdma_hdr.num_pkts = num_pkts;
-  burst->rdma_hdr.num_segs = 1;
-  burst->rdma_hdr.wr_id = wr_id;
-  snprintf(burst->rdma_hdr.local_mr_name,
-           sizeof(burst->rdma_hdr.local_mr_name),
+  burst->transport_hdr.opcode = op_code;
+  set_connection_id(burst, conn_id);
+  burst->transport_hdr.server = is_server;
+  burst->transport_hdr.num_pkts = num_pkts;
+  burst->transport_hdr.num_segs = 1;
+  burst->transport_hdr.wr_id = wr_id;
+  snprintf(burst->transport_hdr.local_mr_name,
+           sizeof(burst->transport_hdr.local_mr_name),
            "%s",
            local_mr_name.c_str());
   return Status::SUCCESS;
@@ -917,12 +921,12 @@ Status RdmaMgr::rdma_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t*
 
 Status RdmaMgr::get_tx_packet_burst(BurstParams* burst) {
   // RDMA isn't allowing split segments yet
-  assert(burst->rdma_hdr.num_segs == 1);
-  assert(burst->rdma_hdr.num_pkts <= MAX_RDMA_BATCH);
-  auto burst_pool = mem_pools_.find(burst->rdma_hdr.local_mr_name);
+  assert(burst->transport_hdr.num_segs == 1);
+  assert(burst->transport_hdr.num_pkts <= MAX_RDMA_BATCH);
+  auto burst_pool = mem_pools_.find(burst->transport_hdr.local_mr_name);
   if (burst_pool == mem_pools_.end()) {
     DAQIRI_LOG_ERROR("Failed to look up burst pool name for MR {}",
-                       burst->rdma_hdr.local_mr_name);
+                       burst->transport_hdr.local_mr_name);
     return Status::INVALID_PARAMETER;
   }
 
@@ -933,13 +937,13 @@ Status RdmaMgr::get_tx_packet_burst(BurstParams* burst) {
 
   int rx = rte_ring_dequeue_bulk(burst_pool->second,
                                  reinterpret_cast<void**>(burst->pkts[0]),
-                                 burst->rdma_hdr.num_pkts,
+                                 burst->transport_hdr.num_pkts,
                                  nullptr);
-  if (rx != burst->rdma_hdr.num_pkts) {
-    DAQIRI_LOG_ERROR("Asked for {} packets, got {}", burst->rdma_hdr.num_pkts, rx);
+  if (rx != burst->transport_hdr.num_pkts) {
+    DAQIRI_LOG_ERROR("Asked for {} packets, got {}", burst->transport_hdr.num_pkts, rx);
     rte_ring_enqueue_bulk(burst_pool->second,
                           reinterpret_cast<void**>(burst->pkts[0]),
-                          burst->rdma_hdr.num_pkts,
+                          burst->transport_hdr.num_pkts,
                           nullptr);
     return Status::NO_FREE_BURST_BUFFERS;
   }
@@ -955,14 +959,14 @@ Status RdmaMgr::get_tx_packet_burst(BurstParams* burst) {
 }
 
 bool RdmaMgr::is_tx_burst_available(BurstParams* burst) {
-  auto burst_pool = mem_pools_.find(burst->rdma_hdr.local_mr_name);
+  auto burst_pool = mem_pools_.find(burst->transport_hdr.local_mr_name);
   if (burst_pool == mem_pools_.end()) {
     DAQIRI_LOG_ERROR("Failed to look up burst pool name for MR {}",
-                       burst->rdma_hdr.local_mr_name);
+                       burst->transport_hdr.local_mr_name);
     return false;
   }
 
-  if (rte_ring_count(burst_pool->second) < burst->rdma_hdr.num_pkts) { return false; }
+  if (rte_ring_count(burst_pool->second) < burst->transport_hdr.num_pkts) { return false; }
 
   return true;
 }
@@ -1341,21 +1345,21 @@ void RdmaMgr::free_rx_burst(BurstParams* burst) {
 }
 
 void RdmaMgr::free_tx_burst(BurstParams* burst) {
-  auto burst_pool = mem_pools_.find(burst->rdma_hdr.local_mr_name);
+  auto burst_pool = mem_pools_.find(burst->transport_hdr.local_mr_name);
   if (burst_pool != mem_pools_.end()) {
     int ret = rte_ring_enqueue_bulk(burst_pool->second,
                                     reinterpret_cast<void**>(burst->pkts[0]),
-                                    burst->rdma_hdr.num_pkts,
+                                    burst->transport_hdr.num_pkts,
                                     nullptr);
-    if (ret != burst->rdma_hdr.num_pkts) {
+    if (ret != burst->transport_hdr.num_pkts) {
       DAQIRI_LOG_CRITICAL(
-          "Asked to free {} packets, only enqueued {}", burst->rdma_hdr.num_pkts, ret);
+          "Asked to free {} packets, only enqueued {}", burst->transport_hdr.num_pkts, ret);
     }
   }
 
   rte_mempool_put(tx_burst_pool_, (void*)burst->pkts[0]);
   rte_mempool_put(pkt_len_pool_, (void*)burst->pkt_lens[0]);
-  burst->rdma_hdr.num_pkts = 0;
+  burst->transport_hdr.num_pkts = 0;
   rte_mempool_put(tx_meta, burst);
 }
 

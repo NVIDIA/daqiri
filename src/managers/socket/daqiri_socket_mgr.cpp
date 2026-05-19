@@ -815,7 +815,7 @@ Status SocketMgr::send_tx_burst(BurstParams* burst) {
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
 
-    auto requested_id = burst->rdma_hdr.conn_id;
+    auto requested_id = get_connection_id(burst);
     if (requested_id != 0) {
       auto it = connections_.find(requested_id);
       if (it != connections_.end()) { conn = it->second; }
@@ -1230,7 +1230,7 @@ void SocketMgr::tcp_rx_loop(std::shared_ptr<ConnectionState> conn) {
     std::memcpy(payload, tmp.data(), static_cast<size_t>(rx));
     burst->pkts[0][0] = payload;
     burst->pkt_lens[0][0] = static_cast<uint32_t>(rx);
-    burst->rdma_hdr.conn_id = conn->conn_id;
+    set_connection_id(burst, conn->conn_id);
 
     push_rx_burst(conn->rx_queue, burst);
     rx_pkts_.fetch_add(1);
@@ -1301,7 +1301,7 @@ void SocketMgr::udp_rx_loop(int if_index) {
       std::memcpy(payload, iovs[static_cast<size_t>(i)].iov_base, rx);
       burst->pkts[0][0] = payload;
       burst->pkt_lens[0][0] = static_cast<uint32_t>(rx);
-      burst->rdma_hdr.conn_id = ep->primary_conn_id;
+      set_connection_id(burst, ep->primary_conn_id);
 
       push_rx_burst(ep->rx_queue_state, burst);
       rx_pkts_.fetch_add(1);
