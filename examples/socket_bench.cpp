@@ -105,8 +105,7 @@ void socket_worker(const SocketBenchConfig& cfg, std::atomic<bool>& stop, Socket
         std::memset(payload, static_cast<int>(stats.sent_packets & 0xff), cfg.message_size);
         daqiri::set_packet_lengths(msg, 0, {cfg.message_size});
 
-        // Socket transport optionally consumes conn_id from the generic burst header.
-        msg->rdma_hdr.conn_id = conn_id;
+        daqiri::set_connection_id(msg, conn_id);
 
         if (daqiri::send_tx_burst(msg) == daqiri::Status::SUCCESS) {
           stats.sent_packets++;

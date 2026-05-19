@@ -198,6 +198,7 @@
         <div class="sb-group-label">Receive (RX)</div>
         <a href="#get-rx-burst" class="sb-link">get_rx_burst <span class="lb lb-fn">fn</span></a>
         <a href="#get-num-packets" class="sb-link">get_num_packets <span class="lb lb-fn">fn</span></a>
+        <a href="#connection-id" class="sb-link">connection ID <span class="lb lb-fn">fn</span></a>
         <a href="#get-packet-ptr" class="sb-link">get_packet_ptr <span class="lb lb-fn">fn</span></a>
         <a href="#get-packet-length" class="sb-link">get_packet_length <span class="lb lb-fn">fn</span></a>
         <a href="#get-packet-flow-id" class="sb-link">get_packet_flow_id <span class="lb lb-fn">fn</span></a>
@@ -325,6 +326,20 @@ daqiri::<span class="fn">get_rx_burst</span>(&amp;burst);</pre>
           </div>
           <div class="method-body">
             <p class="m-desc">Returns the number of packets in the burst. Always call this before iterating — do not assume <code>batch_size</code>.</p>
+          </div>
+        </div>
+
+        <div class="method-card" id="connection-id">
+          <div class="method-hdr" onclick="toggleMethod(this)">
+            <span class="m-tag mt-fn">fn</span>
+            <span class="m-name">set_connection_id / get_connection_id</span>
+            <span class="m-params">(burst, conn_id?)</span>
+            <span class="m-expand">▼</span>
+          </div>
+          <div class="method-body">
+            <p class="m-desc">Sets or reads the transport connection ID carried by a burst. Connection-oriented transports use this to select a peer for TX and identify the peer that produced an RX burst.</p>
+            <pre>daqiri::<span class="fn">set_connection_id</span>(burst, conn_id);
+uintptr_t rx_conn_id = daqiri::<span class="fn">get_connection_id</span>(rx_burst);</pre>
           </div>
         </div>
 

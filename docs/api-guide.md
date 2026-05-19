@@ -312,6 +312,15 @@ if (daqiri::is_tx_burst_available(burst)) {
 }
 ```
 
+For connection-oriented transports such as TCP socket mode, attach the connection ID before
+sending when you need to target a specific peer. RX bursts from those transports can be
+inspected with the matching getter:
+
+```cpp
+daqiri::set_connection_id(burst, conn_id);
+auto rx_conn_id = daqiri::get_connection_id(rx_burst);
+```
+
 ### Step 2: Fill packets
 
 Use the header helper functions for standard UDP packets:

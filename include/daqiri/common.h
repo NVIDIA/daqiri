@@ -538,6 +538,21 @@ int64_t get_num_packets(BurstParams *burst);
 int64_t get_q_id(BurstParams *burst);
 
 /**
+ * @brief Get the transport connection ID associated with a burst
+ *
+ * @param burst Burst structure with transport metadata
+ */
+uintptr_t get_connection_id(const BurstParams *burst);
+
+/**
+ * @brief Set the transport connection ID associated with a burst
+ *
+ * @param burst Burst structure with transport metadata
+ * @param conn_id Connection ID representing a unique client/server connection
+ */
+void set_connection_id(BurstParams *burst, uintptr_t conn_id);
+
+/**
  * @brief Get mac address of an interface
  *
  * @param port Port number of interface

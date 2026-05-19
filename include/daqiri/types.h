@@ -85,7 +85,7 @@ enum class RDMAOpCode {
 
 enum class RDMACompletionType { RX, TX, INVALID };
 
-struct AdvNetRdmaBurstHdr {
+struct BurstTransportHeader {
   uint8_t version;
   RDMAOpCode opcode;
   Status status;
@@ -142,7 +142,7 @@ struct BurstHeader {
 struct BurstParams {
   union {
     BurstHeader hdr;
-    AdvNetRdmaBurstHdr rdma_hdr;
+    BurstTransportHeader transport_hdr;
   };
 
   std::array<void**, MAX_NUM_SEGS> pkts;
