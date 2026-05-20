@@ -4403,6 +4403,11 @@ Status DpdkMgr::send_tx_burst(BurstParams* burst) {
 }
 
 void DpdkMgr::shutdown() {
+  // Idempotency guard: shutdown() may be invoked a second time via ~DpdkMgr
+  // during C++ __cxa_finalize, by which point the spdlog default logger has
+  // already been destroyed and any DAQIRI_LOG_INFO here crashes inside
+  // spdlog::sink_it_. Skip the body (and the log calls) if already torn down.
+  if (!initialized_) { return; }
   DAQIRI_LOG_INFO("daqiri DPDK manager shutdown called {}", num_init);
 
   if (--num_init == 0) {

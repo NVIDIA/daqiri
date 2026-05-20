@@ -466,6 +466,12 @@ void SocketMgr::clear_rx_queues() {
 }
 
 void SocketMgr::shutdown() {
+  // Idempotency guard: shutdown() may be invoked a second time via
+  // ~SocketMgr during C++ __cxa_finalize, after the spdlog default logger
+  // has been destroyed. Any DAQIRI_LOG_INFO from the cascade (here, the
+  // RoCE branch, or the manager method this delegates to) would then crash
+  // inside spdlog::sink_it_. Skip the whole body on subsequent calls.
+  if (!initialized_) { return; }
   if (is_roce_protocol()) {
 #if DAQIRI_MGR_RDMA
     if (roce_mgr_ != nullptr) {
