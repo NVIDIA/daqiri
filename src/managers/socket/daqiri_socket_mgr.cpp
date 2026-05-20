@@ -471,7 +471,16 @@ void SocketMgr::shutdown() {
   // has been destroyed. Any DAQIRI_LOG_INFO from the cascade (here, the
   // RoCE branch, or the manager method this delegates to) would then crash
   // inside spdlog::sink_it_. Skip the whole body on subsequent calls.
-  if (!initialized_) { return; }
+  //
+  // The guard checks BOTH flags because initialize() sets initialized_=false
+  // and running_=true before running setup, then sets initialized_=true on
+  // success. If setup throws, the catch block calls shutdown() with
+  // initialized_=false and running_=true to clean up any threads/sockets
+  // that were spawned partway. Guarding on initialized_ alone would skip
+  // that cleanup. Both flags are only cleared together after a successful
+  // shutdown() body, so the post-shutdown re-entry from __cxa_finalize is
+  // the only case where the guard fires.
+  if (!initialized_ && !running_.load()) { return; }
   if (is_roce_protocol()) {
 #if DAQIRI_MGR_RDMA
     if (roce_mgr_ != nullptr) {
@@ -481,8 +490,6 @@ void SocketMgr::shutdown() {
 #endif
     return;
   }
-
-  if (!initialized_ && !running_.load()) { return; }
 
   running_.store(false);
 
