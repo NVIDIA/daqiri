@@ -1512,6 +1512,12 @@ void RdmaMgr::initialize() {
 }
 
 void RdmaMgr::shutdown() {
+  // Idempotency guard: shutdown() runs explicitly from the caller AND again
+  // from ~RdmaMgr / ~SocketMgr during C++ __cxa_finalize. By the second call
+  // the spdlog default logger (a function-local static created lazily on the
+  // first DAQIRI_LOG_INFO) has already been destroyed, so any logging here
+  // crashes inside spdlog::sink_it_. Skip the whole body on subsequent calls.
+  if (!initialized_) { return; }
   DAQIRI_LOG_INFO("RDMA manager shutting down");
   rdma_force_quit.store(true);
 
