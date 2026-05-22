@@ -79,7 +79,8 @@ running the benchmarks.
 Reference material for the DAQIRI codebase:
 
 - [Getting Started](docs/getting-started.md) — System requirements, build/install instructions, and CMake options
-- [API Guide](docs/api-reference/index.md) — API overview, configuration-first application model, and core packet concepts
+- [Concepts](docs/concepts.md) — Glossary of DAQIRI terminology (kernel bypass, GPUDirect, packet/burst/segment, flow/queue, memory region, zero-copy ownership, RX reorder). Meant to be opened in parallel with the rest of the docs.
+- [API Guide](docs/api-reference/index.md) — Six-step DAQIRI application lifecycle and configuration-first model
 - [Configuration YAML Reference](docs/api-reference/configuration.md) — Full YAML config reference for all backends
 - [C++ API Usage](docs/api-reference/cpp.md) — C++ RX/TX workflows, buffer lifecycle, file writing, utilities, and status codes
 - [Contributing](CONTRIBUTING.md) — Contribution guidelines, coding standards, DCO sign-off

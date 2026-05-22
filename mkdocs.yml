@@ -47,6 +47,7 @@ site_dir: site
 
 nav:
   - Getting Started: getting-started.md
+  - Concepts: concepts.md
   - API Reference:
     - API Guide: api-reference/index.md
     - Configuration YAML Reference: api-reference/configuration.md

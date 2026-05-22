@@ -1,11 +1,15 @@
 # C++ API Usage
 
 This guide covers C++ initialization, RX/TX workflows, buffer lifecycle calls, file
-writing, utility helpers, and status codes. Include the canonical public header,
+writing, utility helpers, and status codes. The function calls below follow the
+six-step lifecycle introduced in the [API Guide](index.md): init → RX/TX → access
+→ free → shutdown. Include the canonical public header,
 [`daqiri/daqiri.h`](https://github.com/NVIDIA/daqiri/blob/main/include/daqiri/daqiri.h),
 in C++ applications.
 
-For the conceptual entry point, see the [API Guide](index.md).
+For the terminology used here (*burst*, *segment*, *flow*, *queue*, *memory
+region*, *zero-copy ownership*, *RX reorder*), keep the
+[Concepts](../concepts.md) page open in a second tab.
 
 ## Initialization
 
@@ -39,7 +43,7 @@ if (st != daqiri::Status::SUCCESS) {
 
 ## Receiving Packets
 
-### Step 1: Get a burst
+### RX Step 1 — Get a burst
 
 ```cpp
 daqiri::BurstParams *burst;
@@ -60,7 +64,7 @@ daqiri::get_rx_burst(&burst, 0);
 daqiri::get_rx_burst(&burst);
 ```
 
-### Step 2: Access packet data
+### RX Step 2 — Access packet data
 
 For a single-segment configuration (CPU-only or batched GPU):
 
@@ -97,7 +101,7 @@ for (int i = 0; i < daqiri::get_num_packets(burst); i++) {
 }
 ```
 
-### Step 3: Free buffers
+### RX Step 3 — Free buffers
 
 When you are done processing, free the burst to return buffers to the pool:
 
@@ -121,12 +125,17 @@ daqiri::free_all_segment_packets(burst, seg);
 daqiri::free_rx_burst(burst);
 ```
 
-### Reordered RX bursts
+## Reordered RX Bursts
+
+For an overview of what RX reorder is and when to use it, see
+[Concepts → RX Packet Aggregation and Reorder](../concepts.md#rx-packet-aggregation-and-reorder).
+This section covers how to consume reordered bursts from C++.
 
 Reordered RX bursts can be identified from `burst->hdr.hdr.burst_flags`:
+
 - `DAQIRI_BURST_FLAG_REORDERED` means the burst contains one aggregated reorder buffer.
-- `DAQIRI_BURST_FLAG_REORDER_TIMEOUT` means that aggregate was emitted by the timeout path rather
-  than by filling the configured `packets_per_batch`.
+- `DAQIRI_BURST_FLAG_REORDER_TIMEOUT` means that aggregate was emitted by the timeout path
+  rather than by filling the configured `packets_per_batch`.
 - For reordered bursts, `burst->hdr.hdr.max_pkt` is the logical number of source packets in the
   aggregate, while `burst->hdr.hdr.num_pkts` remains `1` because the consumer receives one
   aggregate buffer.
@@ -149,7 +158,7 @@ if ((burst->hdr.hdr.burst_flags & daqiri::DAQIRI_BURST_FLAG_REORDERED) != 0U) {
 }
 ```
 
-### GPU Packet Processing
+### GPU packet processing on reordered bursts
 
 When using batched GPU mode, packets arrive in CUDA-addressable buffers — each at an
 arbitrary GPU address. Launch your own CUDA work directly on the packet pointers. Packet
@@ -169,6 +178,61 @@ if (daqiri::get_num_packets(burst) > 0) {
 
 // Free once the kernel completes
 daqiri::free_all_packets_and_burst_rx(burst);
+```
+
+## Transmitting Packets
+
+### TX Step 1 — Allocate a burst
+
+```cpp
+auto burst = daqiri::create_tx_burst_params();
+daqiri::set_header(burst, port_id, queue_id, batch_size, num_segments);
+
+auto status = daqiri::get_tx_packet_burst(burst);
+if (status != daqiri::Status::SUCCESS) {
+    // No buffers available — retry later
+}
+```
+
+You can check availability before allocating:
+
+```cpp
+if (daqiri::is_tx_burst_available(burst)) {
+    daqiri::get_tx_packet_burst(burst);
+}
+```
+
+### TX Step 2 — Fill packets
+
+Use the header helper functions for standard UDP packets:
+
+```cpp
+for (int i = 0; i < daqiri::get_num_packets(burst); i++) {
+    daqiri::set_eth_header(burst, i, dst_mac);
+    daqiri::set_ipv4_header(burst, i, ip_payload_len, IPPROTO_UDP, src_ip, dst_ip);
+    daqiri::set_udp_header(burst, i, udp_payload_len, src_port, dst_port);
+    daqiri::set_udp_payload(burst, i, payload_ptr, payload_size);
+    daqiri::set_packet_lengths(burst, i, {total_pkt_len});
+}
+```
+
+Or construct raw packets by writing directly into the packet buffer returned by
+`get_packet_ptr()`.
+
+### TX Step 3 — Send
+
+```cpp
+daqiri::send_tx_burst(burst);
+```
+
+The burst is enqueued to the TX worker thread, which sends it to the NIC via DMA.
+
+### Timed Transmission
+
+For precise packet scheduling (requires ConnectX-7+):
+
+```cpp
+daqiri::set_packet_tx_time(burst, idx, ptp_timestamp);
 ```
 
 ## Writing Bursts to Storage
@@ -250,61 +314,6 @@ writes raw or pcap output with the synchronous API, the asynchronous API, or bot
 `daqiri_example_gds_write_tx_rx.yaml` after replacing its PCIe, MAC, and IP placeholders
 to send real Ethernet/IPv4/UDP frames out of a NIC and receive them back through a
 hardware RX port.
-
-## Transmitting Packets
-
-### Step 1: Allocate a burst
-
-```cpp
-auto burst = daqiri::create_tx_burst_params();
-daqiri::set_header(burst, port_id, queue_id, batch_size, num_segments);
-
-auto status = daqiri::get_tx_packet_burst(burst);
-if (status != daqiri::Status::SUCCESS) {
-    // No buffers available — retry later
-}
-```
-
-You can check availability before allocating:
-
-```cpp
-if (daqiri::is_tx_burst_available(burst)) {
-    daqiri::get_tx_packet_burst(burst);
-}
-```
-
-### Step 2: Fill packets
-
-Use the header helper functions for standard UDP packets:
-
-```cpp
-for (int i = 0; i < daqiri::get_num_packets(burst); i++) {
-    daqiri::set_eth_header(burst, i, dst_mac);
-    daqiri::set_ipv4_header(burst, i, ip_payload_len, IPPROTO_UDP, src_ip, dst_ip);
-    daqiri::set_udp_header(burst, i, udp_payload_len, src_port, dst_port);
-    daqiri::set_udp_payload(burst, i, payload_ptr, payload_size);
-    daqiri::set_packet_lengths(burst, i, {total_pkt_len});
-}
-```
-
-Or construct raw packets by writing directly into the packet buffer returned by
-`get_packet_ptr()`.
-
-### Step 3: Send
-
-```cpp
-daqiri::send_tx_burst(burst);
-```
-
-The burst is enqueued to the TX worker thread, which sends it to the NIC via DMA.
-
-### Timed Transmission
-
-For precise packet scheduling (requires ConnectX-7+):
-
-```cpp
-daqiri::set_packet_tx_time(burst, idx, ptp_timestamp);
-```
 
 ## Utility Functions
 
