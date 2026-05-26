@@ -466,6 +466,21 @@ void SocketMgr::clear_rx_queues() {
 }
 
 void SocketMgr::shutdown() {
+  // Idempotency guard: shutdown() may be invoked a second time via
+  // ~SocketMgr during C++ __cxa_finalize, after the spdlog default logger
+  // has been destroyed. Any DAQIRI_LOG_INFO from the cascade (here, the
+  // RoCE branch, or the manager method this delegates to) would then crash
+  // inside spdlog::sink_it_. Skip the whole body on subsequent calls.
+  //
+  // The guard checks BOTH flags because initialize() sets initialized_=false
+  // and running_=true before running setup, then sets initialized_=true on
+  // success. If setup throws, the catch block calls shutdown() with
+  // initialized_=false and running_=true to clean up any threads/sockets
+  // that were spawned partway. Guarding on initialized_ alone would skip
+  // that cleanup. Both flags are only cleared together after a successful
+  // shutdown() body, so the post-shutdown re-entry from __cxa_finalize is
+  // the only case where the guard fires.
+  if (!initialized_ && !running_.load()) { return; }
   if (is_roce_protocol()) {
 #if DAQIRI_MGR_RDMA
     if (roce_mgr_ != nullptr) {
@@ -475,8 +490,6 @@ void SocketMgr::shutdown() {
 #endif
     return;
   }
-
-  if (!initialized_ && !running_.load()) { return; }
 
   running_.store(false);
 
@@ -815,7 +828,7 @@ Status SocketMgr::send_tx_burst(BurstParams* burst) {
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
 
-    auto requested_id = burst->rdma_hdr.conn_id;
+    auto requested_id = get_connection_id(burst);
     if (requested_id != 0) {
       auto it = connections_.find(requested_id);
       if (it != connections_.end()) { conn = it->second; }
@@ -1230,7 +1243,7 @@ void SocketMgr::tcp_rx_loop(std::shared_ptr<ConnectionState> conn) {
     std::memcpy(payload, tmp.data(), static_cast<size_t>(rx));
     burst->pkts[0][0] = payload;
     burst->pkt_lens[0][0] = static_cast<uint32_t>(rx);
-    burst->rdma_hdr.conn_id = conn->conn_id;
+    set_connection_id(burst, conn->conn_id);
 
     push_rx_burst(conn->rx_queue, burst);
     rx_pkts_.fetch_add(1);
@@ -1301,7 +1314,7 @@ void SocketMgr::udp_rx_loop(int if_index) {
       std::memcpy(payload, iovs[static_cast<size_t>(i)].iov_base, rx);
       burst->pkts[0][0] = payload;
       burst->pkt_lens[0][0] = static_cast<uint32_t>(rx);
-      burst->rdma_hdr.conn_id = ep->primary_conn_id;
+      set_connection_id(burst, ep->primary_conn_id);
 
       push_rx_burst(ep->rx_queue_state, burst);
       rx_pkts_.fetch_add(1);

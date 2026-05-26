@@ -202,6 +202,15 @@ if (daqiri::is_tx_burst_available(burst)) {
 }
 ```
 
+For connection-oriented transports such as TCP socket mode, attach the connection ID before
+sending when you need to target a specific peer. RX bursts from those transports can be
+inspected with the matching getter:
+
+```cpp
+daqiri::set_connection_id(burst, conn_id);
+auto rx_conn_id = daqiri::get_connection_id(rx_burst);
+```
+
 ### TX Step 2 — Fill packets
 
 Use the header helper functions for standard UDP packets:
@@ -388,6 +397,7 @@ workflow sections above show the common call order and ownership rules.
 | `get_rx_burst(&burst, port)` | Dequeue from any queue on a specific port. |
 | `get_rx_burst(&burst)` | Dequeue from any queue on any port. |
 | `get_rx_burst(&burst, conn_id, server)` | Dequeue from an RDMA/socket connection ring. |
+| `get_connection_id(burst)` | Read the transport connection ID recorded on an RX burst. |
 | `set_reorder_cuda_stream(interface_name, reorder_name, stream)` | Set the CUDA stream for a configured GPU reorder plan. |
 | `get_reorder_burst_info(burst, &info)` | Read metadata for a reordered aggregate burst. |
 
@@ -397,6 +407,7 @@ workflow sections above show the common call order and ownership rules.
 | --- | --- |
 | `is_tx_burst_available(burst)` | Check whether buffers are available for a TX burst. |
 | `get_tx_packet_burst(burst)` | Populate a TX burst with packet buffers. |
+| `set_connection_id(burst, conn_id)` | Attach a transport connection ID to a TX burst (socket/RDMA). |
 | `send_tx_burst(burst)` | Enqueue a populated TX burst. |
 | `set_packet_lengths(burst, idx, lens)` | Set segment lengths for one packet. |
 | `set_all_packet_lengths(burst, lens)` | Set segment lengths for every packet in a burst. |

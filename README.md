@@ -12,7 +12,7 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 
 📖 **Live documentation: [nvidia.github.io/daqiri](https://nvidia.github.io/daqiri/)**
 
-**Requires** an NVIDIA SmartNIC (ConnectX-6 Dx or later) and a GPUDirect-capable NVIDIA GPU. Tested on the NVIDIA DGX Spark, NVIDIA IGX platform, and an x86_64 RTX Pro server. See [Getting Started](docs/getting-started.md) for the full requirements list.
+**Requires** an NVIDIA SmartNIC (ConnectX-6 Dx or later) and a GPUDirect-capable NVIDIA GPU. Tested on the NVIDIA DGX Spark, NVIDIA IGX platform, and an x86_64 RTX Pro server. See [Getting Started](https://nvidia.github.io/daqiri/getting-started/) for the full requirements list.
 
 ## Features
 
@@ -71,27 +71,27 @@ Container build:
 BASE_TARGET=dpdk DAQIRI_MGR="dpdk rdma" scripts/build-container.sh
 ```
 
-See [Getting Started](docs/getting-started.md) for requirements, CMake options, and
+See [Getting Started](https://nvidia.github.io/daqiri/getting-started/) for requirements, CMake options, and
 running the benchmarks.
 
 ## Documentation
 
 Reference material for the DAQIRI codebase:
 
-- [Getting Started](docs/getting-started.md) — System requirements, build/install instructions, and CMake options
-- [Concepts](docs/concepts.md) — Glossary of DAQIRI terminology (kernel bypass, GPUDirect, packet/burst/segment, flow/queue, memory region, zero-copy ownership, RX reorder). Meant to be opened in parallel with the rest of the docs.
-- [API Guide](docs/api-reference/index.md) — Six-step DAQIRI application lifecycle and configuration-first model
-- [Configuration YAML Reference](docs/api-reference/configuration.md) — Full YAML config reference for all backends
-- [C++ API Usage](docs/api-reference/cpp.md) — C++ RX/TX workflows, buffer lifecycle, file writing, utilities, and status codes
+- [Getting Started](https://nvidia.github.io/daqiri/getting-started/) — System requirements, build/install instructions, and CMake options
+- [Concepts](https://nvidia.github.io/daqiri/concepts/) — Glossary of DAQIRI terminology (kernel bypass, GPUDirect, packet/burst/segment, flow/queue, memory region, zero-copy ownership, RX reorder). Meant to be opened in parallel with the rest of the docs.
+- [API Guide](https://nvidia.github.io/daqiri/api-reference/) — Six-step DAQIRI application lifecycle and configuration-first model
+- [Configuration YAML Reference](https://nvidia.github.io/daqiri/api-reference/configuration/) — Full YAML config reference for all backends
+- [C++ API Usage](https://nvidia.github.io/daqiri/api-reference/cpp/) — C++ RX/TX workflows, buffer lifecycle, file writing, utilities, and status codes
 - [Contributing](CONTRIBUTING.md) — Contribution guidelines, coding standards, DCO sign-off
 
 ## Tutorials
 
 Step-by-step walkthroughs to get hands-on:
 
-- [System Configuration](docs/tutorials/system_configuration.md) — NIC drivers, link layers, GPUDirect, hugepages, CPU isolation, GPU clocks
-- [Benchmarking Examples](docs/tutorials/benchmarking_examples.md) — run `daqiri_bench_raw_gpudirect` with a loopback test
-- [Understanding the Configuration File](docs/tutorials/configuration-walkthrough.md) — annotated YAML walkthrough
+- [System Configuration](https://nvidia.github.io/daqiri/tutorials/system_configuration/) — NIC drivers, link layers, GPUDirect, hugepages, CPU isolation, GPU clocks
+- [Benchmarking Examples](https://nvidia.github.io/daqiri/tutorials/benchmarking_examples/) — run `daqiri_bench_raw_gpudirect` with a loopback test
+- [Understanding the Configuration File](https://nvidia.github.io/daqiri/tutorials/configuration-walkthrough/) — annotated YAML walkthrough
 
 ## License
 

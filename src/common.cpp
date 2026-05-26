@@ -243,6 +243,16 @@ int64_t get_q_id(BurstParams* burst) {
   return burst->hdr.hdr.q_id;
 }
 
+uintptr_t get_connection_id(const BurstParams* burst) {
+  assert(burst != nullptr && "burst is null");
+  return burst->transport_hdr.conn_id;
+}
+
+void set_connection_id(BurstParams* burst, uintptr_t conn_id) {
+  assert(burst != nullptr && "burst is null");
+  burst->transport_hdr.conn_id = conn_id;
+}
+
 void set_num_packets(BurstParams* burst, int64_t num) {
   assert(burst != nullptr && "burst is null");
   burst->hdr.hdr.num_pkts = num;

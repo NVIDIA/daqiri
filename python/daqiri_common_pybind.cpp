@@ -448,16 +448,16 @@ void bind_config_types(py::module_ &m) {
       .def(py::init<>())
       .def_readwrite("hdr", &BurstParams::hdr)
       .def_property(
-          "rdma_conn_id",
-          [](const BurstParams &burst) { return burst.rdma_hdr.conn_id; },
+          "connection_id",
+          [](const BurstParams &burst) { return get_connection_id(&burst); },
           [](BurstParams &burst, uintptr_t conn_id) {
-            burst.rdma_hdr.conn_id = conn_id;
+            set_connection_id(&burst, conn_id);
           })
       .def_property(
           "rdma_wr_id",
-          [](const BurstParams &burst) { return burst.rdma_hdr.wr_id; },
+          [](const BurstParams &burst) { return burst.transport_hdr.wr_id; },
           [](BurstParams &burst, uint64_t wr_id) {
-            burst.rdma_hdr.wr_id = wr_id;
+            burst.transport_hdr.wr_id = wr_id;
           });
 
   py::class_<RDMAConfig>(m, "RDMAConfig")
@@ -728,6 +728,8 @@ PYBIND11_MODULE(_daqiri, m) {
   m.def("set_num_packets", &set_num_packets, "burst"_a, "num"_a);
   m.def("get_num_packets", &get_num_packets, "burst"_a);
   m.def("get_q_id", &get_q_id, "burst"_a);
+  m.def("set_connection_id", &set_connection_id, "burst"_a, "conn_id"_a);
+  m.def("get_connection_id", &get_connection_id, "burst"_a);
 
   m.def(
       "get_segment_packet_ptr",
