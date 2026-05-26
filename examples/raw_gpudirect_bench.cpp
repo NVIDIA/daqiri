@@ -37,6 +37,7 @@
 namespace {
 
 void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
+               daqiri::bench::TokenBucketPacer &pacer,
                std::atomic<bool> &stop) {
   const int port_id = daqiri::get_port_id(cfg.interface_name);
   if (port_id < 0) {
@@ -71,6 +72,7 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
   daqiri::bench::RawBenchQueueStats stats;
   const auto packet_size =
       static_cast<uint64_t>(cfg.header_size) + cfg.payload_size;
+  const auto t0 = std::chrono::steady_clock::now();
 
   while (!stop.load()) {
     auto *msg = daqiri::create_tx_burst_params();
@@ -114,7 +116,7 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
       }
 
       if (daqiri::set_packet_lengths(
-              msg, i, {static_cast<int>(cfg.header_size + cfg.payload_size)}) !=
+              msg, i, {static_cast<int>(packet_size)}) !=
           daqiri::Status::SUCCESS) {
         failed = true;
         break;
@@ -127,26 +129,33 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
     }
     if (daqiri::send_tx_burst(msg) == daqiri::Status::SUCCESS) {
       stats.packets += static_cast<uint64_t>(num_pkts);
-      stats.bytes += static_cast<uint64_t>(num_pkts) * packet_size;
+      const uint64_t burst_bytes = static_cast<uint64_t>(num_pkts) * packet_size;
+      stats.bytes += burst_bytes;
       ++stats.bursts;
+      pacer.wait_for_bytes(burst_bytes, stop);
     }
   }
 
+  const double secs =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
+          .count();
   daqiri::bench::print_queue_stats("TX", cfg.interface_name, cfg.queue_id,
-                                   stats);
+                                   stats, secs);
 }
 
 } // namespace
 
 int main(int argc, char **argv) {
   if (argc < 2) {
-    std::cerr << "Usage: " << argv[0] << " <config.yaml> [--seconds N]\n";
+    std::cerr << "Usage: " << argv[0]
+              << " <config.yaml> [--seconds N] [--target-gbps G]\n";
     return 1;
   }
 
   const auto prometheus_metrics =
       daqiri::bench::grafana::init_prometheus_metrics_from_env();
   const int run_seconds = daqiri::bench::parse_run_seconds(argc, argv);
+  const double target_gbps = daqiri::bench::parse_target_gbps(argc, argv);
   const auto root = YAML::LoadFile(argv[1]);
 
   std::vector<daqiri::bench::RawBenchRxConfig> rx_configs;
@@ -172,6 +181,7 @@ int main(int argc, char **argv) {
   std::atomic<bool> stop{false};
   std::vector<std::thread> tx_threads;
   std::vector<std::thread> rx_threads;
+  daqiri::bench::TokenBucketPacer tx_pacer(target_gbps);
 
   rx_threads.reserve(rx_configs.size());
   for (const auto &cfg : rx_configs) {
@@ -180,7 +190,7 @@ int main(int argc, char **argv) {
   }
   tx_threads.reserve(tx_configs.size());
   for (const auto &cfg : tx_configs) {
-    tx_threads.emplace_back(tx_worker, cfg, std::ref(stop));
+    tx_threads.emplace_back(tx_worker, cfg, std::ref(tx_pacer), std::ref(stop));
   }
 
   daqiri::bench::wait_for_stop(run_seconds, stop);
