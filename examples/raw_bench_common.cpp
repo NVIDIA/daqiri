@@ -19,10 +19,12 @@
 
 #include <arpa/inet.h>
 
+#include <algorithm>
 #include <chrono>
 #include <csignal>
 #include <cstring>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 #include <thread>
 
@@ -95,6 +97,44 @@ int parse_run_seconds(int argc, char **argv) {
     }
   }
   return run_seconds;
+}
+
+double parse_target_gbps(int argc, char **argv) {
+  double target_gbps = 0.0;
+  for (int i = 2; i + 1 < argc; i += 2) {
+    if (std::string(argv[i]) == "--target-gbps") {
+      target_gbps = std::stod(argv[i + 1]);
+    }
+  }
+  return target_gbps;
+}
+
+TokenBucketPacer::TokenBucketPacer(double target_gbps)
+    : target_bps_(target_gbps > 0.0 ? target_gbps * 1e9 : 0.0),
+      t0_(std::chrono::steady_clock::now()) {}
+
+void TokenBucketPacer::wait_for_bytes(size_t bytes, std::atomic<bool> &stop) {
+  if (target_bps_ <= 0.0) {
+    return;
+  }
+  total_bytes_ += bytes;
+  const double scheduled_secs = (total_bytes_ * 8.0) / target_bps_;
+  const auto scheduled = t0_ + std::chrono::duration_cast<
+                                   std::chrono::steady_clock::duration>(
+                                   std::chrono::duration<double>(scheduled_secs));
+  // Slice the wait into 10 ms chunks so a stop flag (--seconds expiry or
+  // Ctrl-C) can break us out promptly. The total slept across the slices
+  // accumulates to the scheduled deadline, so pacing remains accurate.
+  constexpr auto kSlice = std::chrono::milliseconds(10);
+  while (!stop.load()) {
+    const auto now = std::chrono::steady_clock::now();
+    if (scheduled <= now) {
+      return;
+    }
+    const auto remaining = scheduled - now;
+    std::this_thread::sleep_for(
+        std::min<std::chrono::steady_clock::duration>(remaining, kSlice));
+  }
 }
 
 bool has_bench_rx(const YAML::Node &root) {
@@ -287,6 +327,7 @@ void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
   uint64_t pkts = 0;
   uint64_t bytes = 0;
   uint64_t bursts = 0;
+  const auto t0 = std::chrono::steady_clock::now();
   while (!stop.load()) {
     const auto num_rx_queues =
         static_cast<int>(daqiri::get_num_rx_queues(port_id));
@@ -307,9 +348,17 @@ void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
       std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
   }
+  const double secs =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
+          .count();
 
-  std::cout << "RX complete: packets=" << pkts << " bytes=" << bytes
-            << " bursts=" << bursts << "\n";
+  // Build the line in a stringstream so the print to stdout is a single
+  // write(). RX and TX workers race at end-of-run and naive `cout <<` can
+  // interleave their output (corrupting downstream parsers).
+  std::ostringstream oss;
+  oss << "RX complete: packets=" << pkts << " bytes=" << bytes
+      << " bursts=" << bursts << " seconds=" << secs << "\n";
+  std::cout << oss.str() << std::flush;
 }
 
 } // namespace daqiri::bench

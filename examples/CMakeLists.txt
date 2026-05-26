@@ -71,14 +71,19 @@ add_daqiri_raw_bench(daqiri_bench_raw_reorder_quantize raw_reorder_quantize_benc
 add_daqiri_raw_bench(daqiri_example_gds_write gds_write_example.cpp)
 add_daqiri_raw_bench(daqiri_example_pcap_writer pcap_writer_example.cpp)
 
-add_executable(daqiri_bench_rdma rdma_bench.cpp)
+add_executable(daqiri_bench_rdma rdma_bench.cpp raw_bench_common.cpp)
 link_daqiri_bench(daqiri_bench_rdma)
+target_link_libraries(daqiri_bench_rdma PRIVATE CUDA::cudart)
 set_target_properties(daqiri_bench_rdma PROPERTIES
   BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
 )
 
-add_executable(daqiri_bench_socket socket_bench.cpp)
+add_executable(daqiri_bench_socket socket_bench.cpp raw_bench_common.cpp)
 link_daqiri_bench(daqiri_bench_socket)
+target_link_libraries(daqiri_bench_socket PRIVATE CUDA::cudart)
+set_target_properties(daqiri_bench_socket PROPERTIES
+  BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
+)
 
 foreach(cfg IN LISTS DAQIRI_BENCH_CONFIGS)
   configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${cfg} ${CMAKE_CURRENT_BINARY_DIR}/${cfg} COPYONLY)
