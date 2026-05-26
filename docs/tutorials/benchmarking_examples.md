@@ -1,7 +1,3 @@
----
-hide:
-  - navigation
----
 # Benchmarking Examples
 
 DAQIRI provides a benchmarking application named `daqiri_bench_raw_gpudirect` that can be used to test the performance of the networking configuration. In this section, we'll walk you through the steps needed to configure the application for your NIC for Tx and Rx, and run a loopback test between the two interfaces with a [physical SFP cable](https://www.nvidia.com/en-us/networking/interconnect/) connecting them.
