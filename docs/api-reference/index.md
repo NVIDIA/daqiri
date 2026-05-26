@@ -1,8 +1,8 @@
 # API Guide
 
-DAQIRI is a kernel-bypass packet I/O library that moves bursts of packets
-between NICs and CPU or GPU memory with zero copies, configured from a
-single YAML file.
+DAQIRI is a library that moves bursts of packets between NICs and CPU or
+GPU memory with zero copies, configured from a YAML file or an equivalent
+C++ `NetworkConfig` struct.
 
 This page is the orientation for the API: it covers DAQIRI's
 configuration-first model and the lifecycle every application follows.
@@ -22,8 +22,9 @@ on those configured ports, queues, buffers, and flows.
 
 The language APIs do **not** discover queues, memory, or flow steering
 rules on their own. They are runtime handles over the topology declared
-in YAML. Keep the configuration as the source of truth for queue IDs,
-memory placement, protocol/backend selection, and flow routing.
+in the configuration (YAML file or `NetworkConfig` struct). The
+configuration is the source of truth for queue IDs, memory placement,
+protocol/backend selection, and flow routing.
 
 The configuration schema lives in the
 [Configuration YAML Reference](configuration.md). For an annotated

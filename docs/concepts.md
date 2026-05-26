@@ -37,7 +37,7 @@ features, and footprint:
   model and **RoCE** (RDMA over Converged Ethernet) protocol. It costs more
   to set up on both ends but offers a simpler user interface, orders packets
   on arrival, and is the only backend with a high-reliability mode.
-- **Socket / RoCE transport** — a socket-oriented interface (UDP and TCP via
+- **Socket** — a socket-oriented interface (UDP and TCP via
   the Linux kernel, plus a RoCE path that delegates to the RDMA backend).
   Useful as a comparison baseline against DPDK and RDMA, and as a path to
   first results when no NVIDIA NIC is available.
@@ -235,6 +235,11 @@ on RX through `rx.reorder_configs`:
 This is the path to use when packets arrive out of order (e.g. across
 multiple NIC queues) and need to be reassembled into a single, contiguous
 GPU buffer before downstream processing.
+
+Each reorder config currently operates on a single memory domain, either GPU-only or
+CPU-only. Reordering packets whose segments span two memory regions
+(for example, an HDS pair with CPU-side headers and GPU-side payloads) is
+not yet supported, but it will be in the future.
 
 See [Configuration YAML Reference → RX Reorder Configs](api-reference/configuration.md#rx-reorder-configs-dpdk-v1)
 for the configuration constraints and
