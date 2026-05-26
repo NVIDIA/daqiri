@@ -49,6 +49,8 @@ nav:
   - Getting Started: getting-started.md
   - Configuration: configuration.md
   - API Reference: api-guide.md
+  - Performance:
+    - DGX Spark: performance-dgx-spark.md
   - Tutorials:
     - Background: tutorials/background.md
     - System Configuration: tutorials/system_configuration.md
@@ -59,6 +61,7 @@ markdown_extensions:
   - admonition
   - attr_list
   - def_list
+  - footnotes
   - md_in_html
   - tables
   - toc:

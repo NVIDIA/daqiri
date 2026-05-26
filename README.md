@@ -81,6 +81,7 @@ Reference material for the DAQIRI codebase:
 - [Getting Started](https://nvidia.github.io/daqiri/getting-started/) — System requirements, build/install instructions, and CMake options
 - [Configuration Reference](https://nvidia.github.io/daqiri/configuration/) — Full YAML config reference for all backends
 - [API Guide](https://nvidia.github.io/daqiri/api-guide/) — BurstParams, RX/TX workflows, buffer lifecycle, status codes
+- [Performance: DGX Spark](https://nvidia.github.io/daqiri/performance-dgx-spark/) — Per-platform throughput, drop, and utilization numbers for all backends
 - [Contributing](CONTRIBUTING.md) — Contribution guidelines, coding standards, DCO sign-off
 
 ## Tutorials
