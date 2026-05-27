@@ -376,9 +376,11 @@ configuration on each side:
 - **(1,1)** — base configuration. One TX queue feeding one RX queue, one
   CPU thread per side.
 - **(1,2)** — config-only multi-queue: 2 RX queues with flow steering on
-  UDP dst port (4096→q0, 4097→q1). The single `rx_count_worker` thread
-  polls both queues round-robin. Measures **NIC queue depth**, not
-  multi-CPU scaling.
+  UDP dst port (4096→q0, 4097→q1). A **single unpinned `rx_count_worker`
+  thread** polls both queues round-robin — the YAML's per-queue
+  `cpu_core` fields are advisory metadata to DPDK (NUMA / lcore), not a
+  hint that the bench spawns one thread per queue. Measures **NIC queue
+  depth**, not multi-CPU scaling.
 - **(2,1)** and **(2,2)** — _deferred_. The bench's `tx_worker` hardcodes
   `queue_id=0` in `daqiri::set_header` (`examples/raw_gpudirect_bench.cpp`),
   so TX queues beyond 0 sit idle. Filling these rows requires a
@@ -392,6 +394,7 @@ unpaced, 30 s each. The (1,1) column reuses the batch=10240 column of the
 the same five payloads against the 2-RX-queue YAML in
 [Reproduce these results > 2-RX-queue test](#reproduce-these-results).
 
+<div markdown="0">
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" style="display:block;max-width:720px;margin:1em auto;font-family:sans-serif">
   <text x="360" y="22" text-anchor="middle" font-size="14" font-weight="bold" fill="currentColor">Achieved Gbps vs. payload size (unpaced, 30 s)</text>
 
@@ -461,6 +464,7 @@ the same five payloads against the 2-RX-queue YAML in
     <text x="50" y="42">(1 TX, 2 RX queues)</text>
   </g>
 </svg>
+</div>
 
 | payload | (1,1) Gbps | (1,2) Gbps | Δ Gbps |
 | --- | ---: | ---: | ---: |
