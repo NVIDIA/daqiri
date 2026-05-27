@@ -46,7 +46,8 @@ SequenceTxConfig parse_sequence_tx(const YAML::Node& root) {
   SequenceTxConfig cfg;
   cfg.packet = daqiri::bench::parse_tx(root);
   if (!root["bench_tx"]) { return cfg; }
-  const auto tx = root["bench_tx"];
+  const auto bench_tx = root["bench_tx"];
+  const auto tx = bench_tx.IsSequence() && bench_tx.size() > 0 ? bench_tx[0] : bench_tx;
   cfg.sequence_number_offset =
       tx["sequence_number_offset"].as<uint32_t>(cfg.sequence_number_offset);
   cfg.sequence_number_start =
@@ -117,7 +118,9 @@ void tx_worker(const SequenceTxConfig& cfg, std::atomic<bool>& stop) {
 
   while (!stop.load()) {
     auto* msg = daqiri::create_tx_burst_params();
-    daqiri::set_header(msg, static_cast<uint16_t>(port_id), 0, cfg.packet.batch_size, 1);
+    daqiri::set_header(msg, static_cast<uint16_t>(port_id),
+                       static_cast<uint16_t>(cfg.packet.queue_id),
+                       cfg.packet.batch_size, 1);
 
     if (!daqiri::is_tx_burst_available(msg)) {
       daqiri::free_tx_metadata(msg);

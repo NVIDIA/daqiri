@@ -1,0 +1,196 @@
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    master_core: 3
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    memory_regions:
+    - name: "Data_TX_GPU_0"
+      kind: "device"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+    - name: "Data_TX_GPU_1"
+      kind: "device"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+    - name: "Data_TX_GPU_2"
+      kind: "device"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+    - name: "Data_TX_GPU_3"
+      kind: "device"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+    - name: "Data_RX_GPU_0"
+      kind: "device"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+    - name: "Data_RX_GPU_1"
+      kind: "device"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+    - name: "Data_RX_GPU_2"
+      kind: "device"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+    - name: "Data_RX_GPU_3"
+      kind: "device"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+
+    interfaces:
+    - name: "tx_port"
+      address: <0000:00:00.0>
+      tx:
+        queues:
+        - name: "tx_q_0"
+          id: 0
+          batch_size: 10240
+          cpu_core: 11
+          memory_regions:
+            - "Data_TX_GPU_0"
+          offloads:
+            - "tx_eth_src"
+        - name: "tx_q_1"
+          id: 1
+          batch_size: 10240
+          cpu_core: 12
+          memory_regions:
+            - "Data_TX_GPU_1"
+          offloads:
+            - "tx_eth_src"
+        - name: "tx_q_2"
+          id: 2
+          batch_size: 10240
+          cpu_core: 13
+          memory_regions:
+            - "Data_TX_GPU_2"
+          offloads:
+            - "tx_eth_src"
+        - name: "tx_q_3"
+          id: 3
+          batch_size: 10240
+          cpu_core: 14
+          memory_regions:
+            - "Data_TX_GPU_3"
+          offloads:
+            - "tx_eth_src"
+    - name: "rx_port"
+      address: <0000:00:00.0>
+      rx:
+        flow_isolation: true
+        queues:
+        - name: "rx_q_0"
+          id: 0
+          cpu_core: 15
+          batch_size: 10240
+          memory_regions:
+            - "Data_RX_GPU_0"
+        - name: "rx_q_1"
+          id: 1
+          cpu_core: 16
+          batch_size: 10240
+          memory_regions:
+            - "Data_RX_GPU_1"
+        - name: "rx_q_2"
+          id: 2
+          cpu_core: 17
+          batch_size: 10240
+          memory_regions:
+            - "Data_RX_GPU_2"
+        - name: "rx_q_3"
+          id: 3
+          cpu_core: 18
+          batch_size: 10240
+          memory_regions:
+            - "Data_RX_GPU_3"
+        flows:
+        - name: "flow_0"
+          id: 0
+          action:
+            type: queue
+            id: 0
+          match:
+            udp_src: 4096
+            udp_dst: 4096
+        - name: "flow_1"
+          id: 1
+          action:
+            type: queue
+            id: 1
+          match:
+            udp_src: 4097
+            udp_dst: 4097
+        - name: "flow_2"
+          id: 2
+          action:
+            type: queue
+            id: 2
+          match:
+            udp_src: 4098
+            udp_dst: 4098
+        - name: "flow_3"
+          id: 3
+          action:
+            type: queue
+            id: 3
+          match:
+            udp_src: 4099
+            udp_dst: 4099
+
+bench_rx:
+- interface_name: "rx_port"
+- interface_name: "rx_port"
+- interface_name: "rx_port"
+- interface_name: "rx_port"
+
+bench_tx:
+- interface_name: "tx_port"
+  batch_size: 10240
+  payload_size: 8000
+  header_size: 64
+  eth_dst_addr: <00:00:00:00:00:00>
+  ip_src_addr: <1.2.3.4>
+  ip_dst_addr: <5.6.7.8>
+  udp_src_port: 4096
+  udp_dst_port: 4096
+- interface_name: "tx_port"
+  batch_size: 10240
+  payload_size: 8000
+  header_size: 64
+  eth_dst_addr: <00:00:00:00:00:00>
+  ip_src_addr: <1.2.3.5>
+  ip_dst_addr: <5.6.7.9>
+  udp_src_port: 4097
+  udp_dst_port: 4097
+- interface_name: "tx_port"
+  batch_size: 10240
+  payload_size: 8000
+  header_size: 64
+  eth_dst_addr: <00:00:00:00:00:00>
+  ip_src_addr: <1.2.3.6>
+  ip_dst_addr: <5.6.7.10>
+  udp_src_port: 4098
+  udp_dst_port: 4098
+- interface_name: "tx_port"
+  batch_size: 10240
+  payload_size: 8000
+  header_size: 64
+  eth_dst_addr: <00:00:00:00:00:00>
+  ip_src_addr: <1.2.3.7>
+  ip_dst_addr: <5.6.7.11>
+  udp_src_port: 4099
+  udp_dst_port: 4099

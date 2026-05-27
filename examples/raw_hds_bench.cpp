@@ -66,7 +66,8 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg, std::atomic<bool>& st
 
   while (!stop.load()) {
     auto* msg = daqiri::create_tx_burst_params();
-    daqiri::set_header(msg, static_cast<uint16_t>(port_id), 0, cfg.batch_size, 2);
+    daqiri::set_header(msg, static_cast<uint16_t>(port_id),
+                       static_cast<uint16_t>(cfg.queue_id), cfg.batch_size, 2);
 
     if (!daqiri::is_tx_burst_available(msg)) {
       daqiri::free_tx_metadata(msg);

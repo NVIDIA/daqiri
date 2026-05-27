@@ -408,8 +408,12 @@ struct PcapTxConfig {
 PcapTxConfig parse_pcap_tx_config(const YAML::Node& root) {
   PcapTxConfig cfg;
   cfg.raw = daqiri::bench::parse_tx(root);
-  if (root["bench_tx"] && root["bench_tx"]["eth_src_addr"]) {
-    cfg.eth_src_addr = root["bench_tx"]["eth_src_addr"].as<std::string>();
+  const auto bench_tx = root["bench_tx"];
+  const auto tx = bench_tx && bench_tx.IsSequence() && bench_tx.size() > 0
+                      ? bench_tx[0]
+                      : bench_tx;
+  if (tx && tx["eth_src_addr"]) {
+    cfg.eth_src_addr = tx["eth_src_addr"].as<std::string>();
   }
   return cfg;
 }
@@ -429,7 +433,9 @@ void tx_worker(PcapTxConfig cfg, std::atomic<bool>* stop) {
 
   while (!stop->load(std::memory_order_relaxed)) {
     auto* msg = daqiri::create_tx_burst_params();
-    daqiri::set_header(msg, static_cast<uint16_t>(port_id), 0, cfg.raw.batch_size, 1);
+    daqiri::set_header(msg, static_cast<uint16_t>(port_id),
+                       static_cast<uint16_t>(cfg.raw.queue_id),
+                       cfg.raw.batch_size, 1);
 
     if (!daqiri::is_tx_burst_available(msg)) {
       daqiri::free_tx_metadata(msg);
