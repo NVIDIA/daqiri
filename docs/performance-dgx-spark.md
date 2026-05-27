@@ -368,6 +368,122 @@ link ceiling regardless of batch. Run-to-run variance on the unpaced
 cells is ~0.5 Gbps; row-internal Gbps differences smaller than that
 should be treated as noise.
 
+#### Achieved Gbps vs. payload size by queue configuration
+
+The notation **(N TX queues, M RX queues)** describes the NIC queue
+configuration on each side:
+
+- **(1,1)** — base configuration. One TX queue feeding one RX queue, one
+  CPU thread per side.
+- **(1,2)** — config-only multi-queue: 2 RX queues with flow steering on
+  UDP dst port (4096→q0, 4097→q1). The single `rx_count_worker` thread
+  polls both queues round-robin. Measures **NIC queue depth**, not
+  multi-CPU scaling.
+- **(2,1)** and **(2,2)** — _deferred_. The bench's `tx_worker` hardcodes
+  `queue_id=0` in `daqiri::set_header` (`examples/raw_gpudirect_bench.cpp`),
+  so TX queues beyond 0 sit idle. Filling these rows requires a
+  thread-per-queue worker model in the bench binary, which would also
+  give a true multi-CPU-consumer story for (*,2).
+
+Sweep payload size (the same five values as the *Payload × batch matrix*:
+8000 / 4096 / 1024 / 256 / 64 B) under each fillable configuration,
+unpaced, 30 s each. The (1,1) column reuses the batch=10240 column of the
+*Payload × batch matrix* above; the (1,2) column comes from re-running
+the same five payloads against the 2-RX-queue YAML in
+[Reproduce these results > 2-RX-queue test](#reproduce-these-results).
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" style="display:block;max-width:720px;margin:1em auto;font-family:sans-serif">
+  <text x="360" y="22" text-anchor="middle" font-size="14" font-weight="bold" fill="currentColor">Achieved Gbps vs. payload size (unpaced, 30 s)</text>
+
+  <g stroke="currentColor" stroke-opacity="0.15" stroke-dasharray="2 2">
+    <line x1="60" y1="69"  x2="660" y2="69"/>
+    <line x1="60" y1="127" x2="660" y2="127"/>
+    <line x1="60" y1="185" x2="660" y2="185"/>
+    <line x1="60" y1="243" x2="660" y2="243"/>
+    <line x1="60" y1="301" x2="660" y2="301"/>
+  </g>
+
+  <g stroke="currentColor" stroke-opacity="0.5" fill="none">
+    <line x1="60" y1="40" x2="60" y2="360"/>
+    <line x1="60" y1="360" x2="660" y2="360"/>
+    <line x1="60"  y1="360" x2="60"  y2="365"/>
+    <line x1="231" y1="360" x2="231" y2="365"/>
+    <line x1="403" y1="360" x2="403" y2="365"/>
+    <line x1="574" y1="360" x2="574" y2="365"/>
+    <line x1="657" y1="360" x2="657" y2="365"/>
+  </g>
+
+  <g font-size="11" fill="currentColor" text-anchor="end">
+    <text x="54" y="73">100</text>
+    <text x="54" y="131">80</text>
+    <text x="54" y="189">60</text>
+    <text x="54" y="247">40</text>
+    <text x="54" y="305">20</text>
+    <text x="54" y="363">0</text>
+  </g>
+
+  <g font-size="11" fill="currentColor" text-anchor="middle">
+    <text x="60"  y="380">64</text>
+    <text x="231" y="380">256</text>
+    <text x="403" y="380">1024</text>
+    <text x="574" y="380">4096</text>
+    <text x="657" y="380">8000</text>
+  </g>
+
+  <text x="360" y="402" font-size="12" text-anchor="middle" fill="currentColor">payload (bytes, log scale)</text>
+  <text x="18" y="200" font-size="12" text-anchor="middle" fill="currentColor" transform="rotate(-90 18 200)">achieved Gbps</text>
+
+  <polyline points="60,330 231,299 403,149 574,60 657,81" stroke="#1976d2" stroke-width="2.5" fill="none"/>
+  <g fill="#1976d2">
+    <circle cx="60"  cy="330" r="3.5"/>
+    <circle cx="231" cy="299" r="3.5"/>
+    <circle cx="403" cy="149" r="3.5"/>
+    <circle cx="574" cy="60"  r="3.5"/>
+    <circle cx="657" cy="81"  r="3.5"/>
+  </g>
+
+  <polyline points="60,314 231,217 403,58 574,54 657,77" stroke="#f57c00" stroke-width="2.5" fill="none"/>
+  <g fill="#f57c00">
+    <circle cx="60"  cy="314" r="3.5"/>
+    <circle cx="231" cy="217" r="3.5"/>
+    <circle cx="403" cy="58"  r="3.5"/>
+    <circle cx="574" cy="54"  r="3.5"/>
+    <circle cx="657" cy="77"  r="3.5"/>
+  </g>
+
+  <g transform="translate(440, 280)" font-size="12" fill="currentColor">
+    <rect x="0" y="0" width="200" height="50" fill="none" stroke="currentColor" stroke-opacity="0.3"/>
+    <line x1="10" y1="18" x2="40" y2="18" stroke="#1976d2" stroke-width="2.5"/>
+    <circle cx="25" cy="18" r="3.5" fill="#1976d2"/>
+    <text x="50" y="22">(1 TX, 1 RX queue)</text>
+    <line x1="10" y1="38" x2="40" y2="38" stroke="#f57c00" stroke-width="2.5"/>
+    <circle cx="25" cy="38" r="3.5" fill="#f57c00"/>
+    <text x="50" y="42">(1 TX, 2 RX queues)</text>
+  </g>
+</svg>
+
+| payload | (1,1) Gbps | (1,2) Gbps | Δ Gbps |
+| --- | ---: | ---: | ---: |
+|  8000 B |  95.9 |  97.4 |  +1.5 |
+|  4096 B | 103.0 | 105.3 |  +2.3 |
+|  1024 B |  72.7 | 103.8 | **+31.1** |
+|   256 B |  21.1 |  49.2 | **+28.1** |
+|    64 B |  10.3 |  15.7 |  +5.4 |
+
+**Observation.** At payloads ≥ 4 KB both configurations sit at the link
+cap and the second RX queue adds no measurable headroom. At payloads
+≤ 1024 B — where (1,1) loses ground to per-thread pps overhead rather
+than link bandwidth — a second NIC RX queue recovers a substantial
+fraction of the gap to the link cap: 1024 B jumps from 72.7 to 103.8
+Gbps, 256 B from 21.1 to 49.2 Gbps, 64 B from 10.3 to 15.7 Gbps. The lift
+comes entirely from NIC-side parallelism (two hardware queues with flow
+steering ingesting in parallel); the CPU consumer is still the same
+single `rx_count_worker` thread polling both queues round-robin. This
+identifies the small-payload cells as the headline benefit case for the
+deferred (2,*) configurations — adding a second TX queue plus a second
+RX consumer thread (a thread-per-queue refactor) is the natural next
+step, especially at 64 B where (1,2) still falls well short of link cap.
+
 #### CPU and GPU utilization (headline cell, payload 8000 B / batch 10240, unpaced)
 
 | Resource             | Value | Note                                       |
@@ -556,6 +672,79 @@ Each invocation emits `bench-results/<timestamp>-dpdk-<mode>/` containing
 one subdirectory per cell (stdout / stderr / config / dmon / cpu_stat
 captures), an `environment.txt` snapshot, and a `runs.csv` aggregating
 the cell-level metrics.
+
+### 2-RX-queue test
+
+Reproduces the (1 TX queue, 2 RX queues) cell of the cores matrix above.
+The YAML is not committed to `examples/` (one-off; would otherwise trigger
+the `check_doc_refs.py` walkthrough-sync gate). Inside the container:
+
+```bash
+# 1. Drop the 2-RX-queue YAML into /tmp (diff vs. the base 1Q YAML is:
+#    +1 memory_region, +1 rx queue, +1 flow rule, udp_dst_port range "4096-4097").
+cat > /tmp/spark_2rxq.yaml <<'YAML'
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    master_core: 8
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    memory_regions:
+    - { name: "Data_TX_GPU",  kind: "host_pinned", affinity: 0, num_bufs: 51200, buf_size: 8064 }
+    - { name: "Data_RX_GPU1", kind: "host_pinned", affinity: 0, num_bufs: 51200, buf_size: 8064 }
+    - { name: "Data_RX_GPU2", kind: "host_pinned", affinity: 0, num_bufs: 51200, buf_size: 8064 }
+
+    interfaces:
+    - name: "tx_port"
+      address: 0000:01:00.0
+      tx:
+        queues:
+        - { name: "tx_q_0", id: 0, batch_size: 10240, cpu_core: 17,
+            memory_regions: ["Data_TX_GPU"], offloads: ["tx_eth_src"] }
+    - name: "rx_port"
+      address: 0002:01:00.0
+      rx:
+        flow_isolation: true
+        queues:
+        - { name: "rx_q_0", id: 0, cpu_core: 18, batch_size: 10240,
+            memory_regions: ["Data_RX_GPU1"] }
+        - { name: "rx_q_1", id: 1, cpu_core: 16, batch_size: 10240,
+            memory_regions: ["Data_RX_GPU2"] }
+        flows:
+        - { name: "flow_4096", id: 0, action: { type: queue, id: 0 }, match: { udp_dst: 4096 } }
+        - { name: "flow_4097", id: 1, action: { type: queue, id: 1 }, match: { udp_dst: 4097 } }
+
+bench_rx:
+  interface_name: "rx_port"
+
+bench_tx:
+  interface_name: "tx_port"
+  batch_size: 10240
+  payload_size: 8000
+  header_size: 64
+  eth_dst_addr: PLACEHOLDER_MAC
+  ip_src_addr: 1.1.1.1
+  ip_dst_addr: 2.2.2.2
+  udp_src_port: 4096
+  udp_dst_port: "4096-4097"
+YAML
+
+# 2. Substitute the RX MAC (the bench binary does not expand env vars).
+sed -i "s|PLACEHOLDER_MAC|$ETH_DST_ADDR|" /tmp/spark_2rxq.yaml
+
+# 3. Headline cell (unpaced, 30 s). Repeat with --target-gbps {1,5,...,200}
+#    if you want the full drop curve for the (1,2) row.
+./build/examples/daqiri_bench_raw_gpudirect /tmp/spark_2rxq.yaml --seconds 30
+```
+
+The `RX complete:` line (stdout) and the `imissed/ierrors/rx_nombuf` counters
+(stderr) populate the (1,2) cell. Single `rx_count_worker` thread polls both
+queues — measures NIC queue depth, not multi-CPU scaling.
 
 ### Environment-only capture
 
