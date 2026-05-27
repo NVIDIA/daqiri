@@ -665,8 +665,8 @@ void tx_worker(const BenchConfig &cfg, const ReorderPlanConfig &plan,
 
   while (!stop.load()) {
     auto *msg = daqiri::create_tx_burst_params();
-    daqiri::set_header(msg, static_cast<uint16_t>(port_id), cfg.queue_id,
-                       cfg.batch_size, 1);
+    daqiri::set_header(msg, static_cast<uint16_t>(port_id),
+                       static_cast<uint16_t>(cfg.queue_id), cfg.batch_size, 1);
 
     if (!daqiri::is_tx_burst_available(msg)) {
       daqiri::free_tx_metadata(msg);
