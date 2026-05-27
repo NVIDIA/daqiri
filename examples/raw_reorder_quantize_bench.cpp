@@ -507,7 +507,8 @@ BenchConfig parse_bench_config(const YAML::Node &root,
   cfg.input_endianness = plan.input_endianness;
 
   if (tx && tx["interface_name"]) {
-    cfg.interface_name = tx["interface_name"].as<std::string>(cfg.interface_name);
+    cfg.interface_name =
+        tx["interface_name"].as<std::string>(cfg.interface_name);
   } else {
     cfg.interface_name = plan.interface_name;
   }

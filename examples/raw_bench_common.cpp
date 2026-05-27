@@ -92,13 +92,11 @@ void validate_queue_id(int queue_id, const std::vector<int> &queue_ids,
                              interface_name);
   }
 
-  if (!queue_ids.empty() &&
-      std::find(queue_ids.begin(), queue_ids.end(), queue_id) ==
-          queue_ids.end()) {
+  if (!queue_ids.empty() && std::find(queue_ids.begin(), queue_ids.end(),
+                                      queue_id) == queue_ids.end()) {
     throw std::runtime_error(bench_key + " queue_id " +
                              std::to_string(queue_id) +
-                             " does not exist on interface " +
-                             interface_name);
+                             " does not exist on interface " + interface_name);
   }
 }
 
@@ -126,19 +124,17 @@ int assign_queue_id(const YAML::Node &root, const YAML::Node &item,
   } else {
     const size_t idx = next_queue_idx[interface_name]++;
     if (idx >= queue_ids.size()) {
-      throw std::runtime_error(std::string(bench_key) +
-                               " has more entries for interface '" +
-                               interface_name + "' than DAQIRI " + direction +
-                               " queues");
+      throw std::runtime_error(
+          std::string(bench_key) + " has more entries for interface '" +
+          interface_name + "' than DAQIRI " + direction + " queues");
     }
     queue_id = queue_ids[idx];
   }
 
   if (!assigned_queue_ids[interface_name].insert(queue_id).second) {
-    throw std::runtime_error(std::string(bench_key) + " queue_id " +
-                             std::to_string(queue_id) +
-                             " is configured more than once for interface '" +
-                             interface_name + "'");
+    throw std::runtime_error(
+        std::string(bench_key) + " queue_id " + std::to_string(queue_id) +
+        " is configured more than once for interface '" + interface_name + "'");
   }
   return queue_id;
 }
@@ -150,12 +146,11 @@ void validate_bench_list_sizes(
     const auto queue_ids =
         queue_ids_for_interface(root, interface_name, direction);
     if (!queue_ids.empty() && count != queue_ids.size()) {
-      throw std::runtime_error(std::string(bench_key) + " entries for interface '" +
-                               interface_name + "' must match the DAQIRI " +
-                               direction + " queue count (" +
-                               std::to_string(count) + " entries, " +
-                               std::to_string(queue_ids.size()) +
-                               " queues)");
+      throw std::runtime_error(
+          std::string(bench_key) + " entries for interface '" + interface_name +
+          "' must match the DAQIRI " + direction + " queue count (" +
+          std::to_string(count) + " entries, " +
+          std::to_string(queue_ids.size()) + " queues)");
     }
   }
 }
@@ -294,9 +289,8 @@ std::vector<RawBenchRxConfig> parse_rx_configs(const YAML::Node &root) {
           "bench_rx list entries must be maps with interface_name");
     }
     auto cfg = parse_rx_item(item);
-    cfg.queue_id = assign_queue_id(root, item, "rx", "bench_rx",
-                                   next_queue_idx, entry_counts,
-                                   assigned_queue_ids);
+    cfg.queue_id = assign_queue_id(root, item, "rx", "bench_rx", next_queue_idx,
+                                   entry_counts, assigned_queue_ids);
     configs.push_back(std::move(cfg));
   }
   validate_bench_list_sizes(root, "rx", "bench_rx", entry_counts);
@@ -325,9 +319,8 @@ std::vector<RawBenchTxConfig> parse_tx_configs(const YAML::Node &root) {
           "bench_tx list entries must be maps with interface_name");
     }
     auto cfg = parse_tx_item(item);
-    cfg.queue_id = assign_queue_id(root, item, "tx", "bench_tx",
-                                   next_queue_idx, entry_counts,
-                                   assigned_queue_ids);
+    cfg.queue_id = assign_queue_id(root, item, "tx", "bench_tx", next_queue_idx,
+                                   entry_counts, assigned_queue_ids);
     configs.push_back(std::move(cfg));
   }
   validate_bench_list_sizes(root, "tx", "bench_tx", entry_counts);
@@ -530,8 +523,8 @@ void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
   } else {
     std::cout << " queues=all";
   }
-  std::cout << " packets=" << pkts << " bytes=" << bytes
-            << " bursts=" << bursts << "\n";
+  std::cout << " packets=" << pkts << " bytes=" << bytes << " bursts=" << bursts
+            << "\n";
 }
 
 } // namespace daqiri::bench
