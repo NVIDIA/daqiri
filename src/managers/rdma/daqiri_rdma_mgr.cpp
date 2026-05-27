@@ -21,7 +21,6 @@
 #include <unistd.h>
 #include <mqueue.h>
 #include <algorithm>
-#include <chrono>
 #include <cstdlib>
 #include <map>
 #include <rte_ring.h>
@@ -399,46 +398,12 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
   struct ibv_wc wc;
   int num_comp;
   BurstParams* msg;
-  struct RdmaThreadProfile {
-    uint64_t loop_iters = 0;
-    uint64_t rx_cq_poll_calls = 0;
-    uint64_t rx_cq_completions = 0;
-    uint64_t rx_cq_poll_ns = 0;
-    uint64_t tx_cq_poll_calls = 0;
-    uint64_t tx_cq_completions = 0;
-    uint64_t tx_cq_poll_ns = 0;
-    uint64_t rx_ring_enqueue_ns = 0;
-    uint64_t rx_ring_enqueues = 0;
-    uint64_t tx_ring_dequeue_ns = 0;
-    uint64_t tx_ring_dequeues = 0;
-    uint64_t tx_ring_empty = 0;
-    uint64_t send_requests = 0;
-    uint64_t recv_requests = 0;
-    uint64_t send_request_ns = 0;
-    uint64_t recv_request_ns = 0;
-    uint64_t post_send_calls = 0;
-    uint64_t post_send_signaled = 0;
-    uint64_t post_send_unsignaled = 0;
-    uint64_t post_send_ns = 0;
-    uint64_t post_recv_calls = 0;
-    uint64_t post_recv_ns = 0;
-    uint64_t max_outstanding_send = 0;
-    uint64_t max_outstanding_recv = 0;
-  } profile_stats;
-  const bool profile_enabled = std::getenv("DAQIRI_RDMA_PROFILE") != nullptr;
   int send_signal_every = 1;
   if (const char* env = std::getenv("DAQIRI_RDMA_SEND_SIGNAL_EVERY")) {
     const long parsed = strtol(env, nullptr, 10);
     if (parsed > 0) { send_signal_every = static_cast<int>(parsed); }
   }
   uint64_t sends_since_signal = 0;
-  const auto thread_start = std::chrono::steady_clock::now();
-  auto elapsed_ns = [](std::chrono::steady_clock::time_point start) {
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now() - start)
-            .count());
-  };
   const auto& qref = cfg_.ifs_[tparams->if_idx].tx_.queues_[tparams->queue_idx];
   const long cpu_core = strtol(qref.common_.cpu_core_.c_str(), NULL, 10);
   struct rte_ring* tx_ring = tparams->qp_params.tx_ring;
@@ -452,42 +417,14 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
   }
 
   DAQIRI_LOG_INFO("Affined {} RDMA thread to core {}", is_server ? "Server" : "Client", cpu_core);
-  if (profile_enabled) {
-    ibv_qp_attr qp_attr = {};
-    ibv_qp_init_attr qp_init_attr = {};
-    if (ibv_query_qp(tparams->client_id->qp,
-                     &qp_attr,
-                     IBV_QP_STATE | IBV_QP_PATH_MTU,
-                     &qp_init_attr) == 0) {
-      DAQIRI_LOG_INFO("RDMA_QP_PROFILE role={} core={} qp_state={} path_mtu={}",
-                        is_server ? "server" : "client",
-                        cpu_core,
-                        static_cast<int>(qp_attr.qp_state),
-                        static_cast<int>(qp_attr.path_mtu));
-    } else {
-      DAQIRI_LOG_WARN("Failed to query QP profile for role={} core={}: {}",
-                       is_server ? "server" : "client",
-                       cpu_core,
-                       strerror(errno));
-    }
-  }
 
   // Main TX loop. Wait for send requests from the transmitters to arrive for sending. Also
   // periodically poll the CQ.
   while (!rdma_force_quit.load()) {
-    if (profile_enabled) { profile_stats.loop_iters++; }
     // Check RQ first to reduce latency
     while (true) {
-      auto poll_start = std::chrono::steady_clock::now();
       num_comp = ibv_poll_cq(tparams->qp_params.rx_cq, 1, &wc);
-      if (profile_enabled) {
-        profile_stats.rx_cq_poll_calls++;
-        profile_stats.rx_cq_poll_ns += elapsed_ns(poll_start);
-      }
       if (num_comp == 0) { break; }
-      if (profile_enabled) {
-        profile_stats.rx_cq_completions += static_cast<uint64_t>(num_comp);
-      }
       DAQIRI_LOG_DEBUG("GOT RX COMPLETION in thread {} core {} wrid {}",
                          (void*)tparams->client_id,
                          cpu_core,
@@ -532,31 +469,18 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
       msg->transport_hdr.tx = false;
       // msg->transport_hdr.wr_id   = wc.wr_id;
 
-      auto enqueue_start = std::chrono::steady_clock::now();
       if (rte_ring_enqueue(rx_ring, reinterpret_cast<void*>(msg)) != 0) {
         DAQIRI_LOG_CRITICAL("Failed to enqueue RX completion message");
         free_tx_burst(msg);
         free_tx_metadata(msg);
         return;
       }
-      if (profile_enabled) {
-        profile_stats.rx_ring_enqueue_ns += elapsed_ns(enqueue_start);
-        profile_stats.rx_ring_enqueues++;
-      }
     }
 
     // Check TX CQ for completion
     while (true) {
-      auto poll_start = std::chrono::steady_clock::now();
       num_comp = ibv_poll_cq(tparams->qp_params.tx_cq, 1, &wc);
-      if (profile_enabled) {
-        profile_stats.tx_cq_poll_calls++;
-        profile_stats.tx_cq_poll_ns += elapsed_ns(poll_start);
-      }
       if (num_comp == 0) { break; }
-      if (profile_enabled) {
-        profile_stats.tx_cq_completions += static_cast<uint64_t>(num_comp);
-      }
       DAQIRI_LOG_DEBUG("GOT TX COMPLETION in thread {} core {} wrid {}",
                          (void*)tparams->client_id,
                          cpu_core,
@@ -598,16 +522,11 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
               wc.status == IBV_WC_SUCCESS ? Status::SUCCESS : Status::GENERIC_FAILURE;
           msg->transport_hdr.server = is_server;
 
-          auto enqueue_start = std::chrono::steady_clock::now();
           if (rte_ring_enqueue(rx_ring, reinterpret_cast<void*>(msg)) != 0) {
             DAQIRI_LOG_CRITICAL("Failed to enqueue RX completion message");
             free_tx_burst(msg);
             free_tx_metadata(msg);
             return;
-          }
-          if (profile_enabled) {
-            profile_stats.rx_ring_enqueue_ns += elapsed_ns(enqueue_start);
-            profile_stats.rx_ring_enqueues++;
           }
         }
         continue;
@@ -624,16 +543,11 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
       msg->transport_hdr.server = is_server;
       // msg->transport_hdr.wr_id   = wc.wr_id;
 
-      auto enqueue_start = std::chrono::steady_clock::now();
       if (rte_ring_enqueue(rx_ring, reinterpret_cast<void*>(msg)) != 0) {
         DAQIRI_LOG_CRITICAL("Failed to enqueue RX completion message");
         free_tx_burst(msg);
         free_tx_metadata(msg);
         return;
-      }
-      if (profile_enabled) {
-        profile_stats.rx_ring_enqueue_ns += elapsed_ns(enqueue_start);
-        profile_stats.rx_ring_enqueues++;
       }
     }
 
@@ -642,18 +556,7 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
 
     // ssize_t bytes = mq_receive(tparams.tx_mq, reinterpret_cast<char*>(&burst), sizeof(burst),
     // nullptr);
-    auto dequeue_start = std::chrono::steady_clock::now();
-    if (rte_ring_dequeue(tparams->qp_params.tx_ring, reinterpret_cast<void**>(&burst)) != 0) {
-      if (profile_enabled) {
-        profile_stats.tx_ring_dequeue_ns += elapsed_ns(dequeue_start);
-        profile_stats.tx_ring_empty++;
-      }
-      continue;
-    }
-    if (profile_enabled) {
-      profile_stats.tx_ring_dequeue_ns += elapsed_ns(dequeue_start);
-      profile_stats.tx_ring_dequeues++;
-    }
+    if (rte_ring_dequeue(tx_ring, reinterpret_cast<void**>(&burst)) != 0) { continue; }
 
     const auto local_mr = mrs_.find(std::string(burst->transport_hdr.local_mr_name));
     if (local_mr == mrs_.end()) {
@@ -665,8 +568,6 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
 
     switch (burst->transport_hdr.opcode) {
       case RDMAOpCode::SEND: {
-        const auto request_start = std::chrono::steady_clock::now();
-        if (profile_enabled) { profile_stats.send_requests++; }
         // Get lkey for this PD
         auto pd = pd_map_.find(tparams->client_id->verbs);
         if (pd == pd_map_.end()) {
@@ -704,12 +605,7 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
                                    outstanding_send_wr_ids.size() >= 15;
           wr.send_flags = signal_send ? IBV_SEND_SIGNALED : 0;
 
-          auto post_start = std::chrono::steady_clock::now();
           int ret = ibv_post_send(tparams->client_id->qp, &wr, &bad_wr);
-          if (profile_enabled) {
-            profile_stats.post_send_calls++;
-            profile_stats.post_send_ns += elapsed_ns(post_start);
-          }
           if (ret != 0) {
             DAQIRI_LOG_CRITICAL("Failed to post SEND request, errno: {}", strerror(errno));
             free_tx_burst(burst);
@@ -717,26 +613,16 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
           }
           if (signal_send) {
             sends_since_signal = 0;
-            if (profile_enabled) { profile_stats.post_send_signaled++; }
           } else {
             sends_since_signal++;
-            if (profile_enabled) { profile_stats.post_send_unsignaled++; }
           }
 
           outstanding_send_wr_ids[burst->transport_hdr.wr_id + p] = burst;
-        }
-        if (profile_enabled) {
-          profile_stats.max_outstanding_send = std::max<uint64_t>(
-              profile_stats.max_outstanding_send,
-              static_cast<uint64_t>(outstanding_send_wr_ids.size()));
-          profile_stats.send_request_ns += elapsed_ns(request_start);
         }
 
         break;
       }
       case RDMAOpCode::RECEIVE: {
-        const auto request_start = std::chrono::steady_clock::now();
-        if (profile_enabled) { profile_stats.recv_requests++; }
         // Get lkey for this PD
         auto pd = pd_map_.find(tparams->client_id->verbs);
         if (pd == pd_map_.end()) {
@@ -774,12 +660,7 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
           recv_wr.num_sge = 1;
 
           // Post the receive request
-          auto post_start = std::chrono::steady_clock::now();
           ret = ibv_post_recv(tparams->client_id->qp, &recv_wr, &bad_wr);
-          if (profile_enabled) {
-            profile_stats.post_recv_calls++;
-            profile_stats.post_recv_ns += elapsed_ns(post_start);
-          }
           if (ret) {
             DAQIRI_LOG_CRITICAL("ibv_post_recv failed: {}", strerror(errno));
             free_tx_burst(burst);
@@ -787,12 +668,6 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
           }
 
           outstanding_receive_wr_ids[burst->transport_hdr.wr_id + p] = burst;
-        }
-        if (profile_enabled) {
-          profile_stats.max_outstanding_recv = std::max<uint64_t>(
-              profile_stats.max_outstanding_recv,
-              static_cast<uint64_t>(outstanding_receive_wr_ids.size()));
-          profile_stats.recv_request_ns += elapsed_ns(request_start);
         }
         break;
       }
@@ -805,57 +680,6 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
         break;
       }
     }
-  }
-
-  if (profile_enabled) {
-    const double elapsed_s =
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - thread_start).count();
-    DAQIRI_LOG_INFO(
-        "RDMA_THREAD_PROFILE role={} core={} elapsed_s={:.6f} loop_iters={} tx_ring_empty={} "
-        "tx_ring_dequeues={} rx_cq_poll_calls={} rx_cq_completions={} tx_cq_poll_calls={} "
-        "tx_cq_completions={} rx_ring_enqueues={} send_requests={} recv_requests={} "
-        "post_send_calls={} post_send_signaled={} post_send_unsignaled={} post_recv_calls={} "
-        "max_outstanding_send={} max_outstanding_recv={} send_signal_every={} "
-        "tx_ring_dequeue_avg_ns={} rx_cq_poll_avg_ns={} tx_cq_poll_avg_ns={} "
-        "rx_ring_enqueue_avg_ns={} send_request_avg_ns={} recv_request_avg_ns={} "
-        "post_send_avg_ns={} post_recv_avg_ns={}",
-        is_server ? "server" : "client",
-        cpu_core,
-        elapsed_s,
-        profile_stats.loop_iters,
-        profile_stats.tx_ring_empty,
-        profile_stats.tx_ring_dequeues,
-        profile_stats.rx_cq_poll_calls,
-        profile_stats.rx_cq_completions,
-        profile_stats.tx_cq_poll_calls,
-        profile_stats.tx_cq_completions,
-        profile_stats.rx_ring_enqueues,
-        profile_stats.send_requests,
-        profile_stats.recv_requests,
-        profile_stats.post_send_calls,
-        profile_stats.post_send_signaled,
-        profile_stats.post_send_unsignaled,
-        profile_stats.post_recv_calls,
-        profile_stats.max_outstanding_send,
-        profile_stats.max_outstanding_recv,
-        send_signal_every,
-        (profile_stats.tx_ring_dequeues + profile_stats.tx_ring_empty) == 0
-            ? 0
-            : profile_stats.tx_ring_dequeue_ns /
-                  (profile_stats.tx_ring_dequeues + profile_stats.tx_ring_empty),
-        profile_stats.rx_cq_poll_calls == 0
-            ? 0
-            : profile_stats.rx_cq_poll_ns / profile_stats.rx_cq_poll_calls,
-        profile_stats.tx_cq_poll_calls == 0
-            ? 0
-            : profile_stats.tx_cq_poll_ns / profile_stats.tx_cq_poll_calls,
-        profile_stats.rx_ring_enqueues == 0
-            ? 0
-            : profile_stats.rx_ring_enqueue_ns / profile_stats.rx_ring_enqueues,
-        profile_stats.send_requests == 0 ? 0 : profile_stats.send_request_ns / profile_stats.send_requests,
-        profile_stats.recv_requests == 0 ? 0 : profile_stats.recv_request_ns / profile_stats.recv_requests,
-        profile_stats.post_send_calls == 0 ? 0 : profile_stats.post_send_ns / profile_stats.post_send_calls,
-        profile_stats.post_recv_calls == 0 ? 0 : profile_stats.post_recv_ns / profile_stats.post_recv_calls);
   }
 
   DAQIRI_LOG_INFO("{} RDMA thread exiting on core {}", is_server ? "Server" : "Client", cpu_core);
