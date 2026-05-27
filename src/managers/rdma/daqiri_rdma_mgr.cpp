@@ -353,7 +353,6 @@ Status RdmaMgr::send_tx_burst(BurstParams* burst) {
 
   if (rte_ring_enqueue(ring, reinterpret_cast<void*>(burst)) != 0) {
     free_tx_burst(burst);
-    free_tx_metadata(burst);
     DAQIRI_LOG_CRITICAL("Failed to enqueue TX work");
     return Status::NO_SPACE_AVAILABLE;
   }
@@ -449,7 +448,6 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
       if (rte_ring_enqueue(rx_ring, reinterpret_cast<void*>(msg)) != 0) {
         DAQIRI_LOG_CRITICAL("Failed to enqueue RX completion message");
         free_tx_burst(msg);
-        free_tx_metadata(msg);
         return;
       }
     }
@@ -505,7 +503,6 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
       if (rte_ring_enqueue(rx_ring, reinterpret_cast<void*>(msg)) != 0) {
         DAQIRI_LOG_CRITICAL("Failed to enqueue RX completion message");
         free_tx_burst(msg);
-        free_tx_metadata(msg);
         return;
       }
     }
