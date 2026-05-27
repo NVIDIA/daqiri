@@ -992,23 +992,23 @@ Status RdmaMgr::get_tx_packet_burst(BurstParams* burst) {
     return Status::NO_FREE_BURST_BUFFERS;
   }
 
-  int rx = rte_ring_dequeue_bulk(burst_pool->second,
-                                 reinterpret_cast<void**>(burst->pkts[0]),
-                                 burst->transport_hdr.num_pkts,
-                                 nullptr);
-  if (rx != burst->transport_hdr.num_pkts) {
-    DAQIRI_LOG_ERROR("Asked for {} packets, got {}", burst->transport_hdr.num_pkts, rx);
-    rte_ring_enqueue_bulk(burst_pool->second,
-                          reinterpret_cast<void**>(burst->pkts[0]),
-                          burst->transport_hdr.num_pkts,
-                          nullptr);
+  const unsigned num_pkts = static_cast<unsigned>(burst->transport_hdr.num_pkts);
+  const unsigned rx =
+      rte_ring_dequeue_bulk(burst_pool->second, reinterpret_cast<void**>(burst->pkts[0]), num_pkts, nullptr);
+  if (rx != num_pkts) {
+    DAQIRI_LOG_ERROR("Asked for {} packets, got {}", num_pkts, rx);
+    rte_mempool_put(tx_burst_pool_, reinterpret_cast<void*>(burst->pkts[0]));
+    burst->pkts[0] = nullptr;
     return Status::NO_FREE_BURST_BUFFERS;
   }
 
   // Allocate packet length buffer
   if (rte_mempool_get(pkt_len_pool_, reinterpret_cast<void**>(&burst->pkt_lens[0])) != 0) {
     DAQIRI_LOG_ERROR("Failed to get packet length buffer");
+    rte_ring_enqueue_bulk(
+        burst_pool->second, reinterpret_cast<void**>(burst->pkts[0]), num_pkts, nullptr);
     rte_mempool_put(tx_burst_pool_, reinterpret_cast<void*>(burst->pkts[0]));
+    burst->pkts[0] = nullptr;
     return Status::NO_FREE_PACKET_BUFFERS;
   }
 

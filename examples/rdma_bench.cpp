@@ -67,12 +67,10 @@ RdmaBenchConfig parse_rdma_cfg(const YAML::Node& node) {
 
 void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pacer,
                  std::atomic<bool>& stop, RdmaWorkerStats& stats) {
-  // Matches the per-MR num_bufs in the YAML configs. Higher values deadlock
-  // the bench: post_req blocks in get_tx_packet_burst when the pool is empty,
-  // but free_tx_burst (which refills it) only runs later in the same loop
-  // iteration via get_rx_burst. Until the loop is refactored to interleave
-  // drain with post, this constant must stay <= num_bufs.
-  static constexpr int kMaxOutstanding = 20;
+  // Application credit limit. Buffer exhaustion is handled as backpressure so
+  // this can be larger than a memory region's num_bufs: post_req returns to the
+  // outer loop, which drains completions and releases buffers before retrying.
+  static constexpr int kMaxOutstanding = 64;
   int outstanding_send = 0;
   int outstanding_recv = 0;
   uint64_t send_wr_id = 0x1234;
@@ -103,15 +101,12 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
       auto* msg = daqiri::create_burst_params();
       if (daqiri::rdma_set_header(msg, op, conn_id, cfg.server, 1, wr_id, mr_name) !=
           daqiri::Status::SUCCESS) {
-        daqiri::free_tx_burst(msg);
+        daqiri::free_tx_metadata(msg);
         return false;
       }
 
-      while (daqiri::get_tx_packet_burst(msg) != daqiri::Status::SUCCESS && !stop.load()) {
-        std::this_thread::sleep_for(std::chrono::microseconds(50));
-      }
-      if (stop.load()) {
-        daqiri::free_tx_burst(msg);
+      if (daqiri::get_tx_packet_burst(msg) != daqiri::Status::SUCCESS) {
+        daqiri::free_tx_metadata(msg);
         return false;
       }
 
