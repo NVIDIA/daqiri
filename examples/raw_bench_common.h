@@ -47,6 +47,12 @@ struct RawBenchRxConfig {
   int queue_id = -1;
 };
 
+struct RawBenchQueueStats {
+  uint64_t packets = 0;
+  uint64_t bytes = 0;
+  uint64_t bursts = 0;
+};
+
 class PinnedHostBuffer {
 public:
   PinnedHostBuffer() = default;
@@ -93,6 +99,8 @@ cudaError_t memcpy_batch_async(const std::vector<void *> &dsts,
 
 void signal_handler(int signum);
 void wait_for_stop(int run_seconds, std::atomic<bool> &stop);
+void print_queue_stats(const char *direction, const std::string &interface_name,
+                       int queue_id, const RawBenchQueueStats &stats);
 void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop);
 
 } // namespace daqiri::bench

@@ -37,6 +37,7 @@ import daqiri
 ETH_HEADER_LEN = 14
 IPV4_HEADER_LEN = 20
 IPPROTO_UDP = 17
+PRINT_LOCK = threading.Lock()
 
 
 @dataclass
@@ -341,12 +342,15 @@ def tx_worker(cfg: RawTxConfig, stop: threading.Event) -> None:
             sent_bytes += num_pkts * packet_size
 
     elapsed = max(time.monotonic() - start, 1e-9)
-    print(
-        "TX complete: "
-        f"packets={sent_packets} bytes={sent_bytes} bursts={sent_bursts} "
-        f"seconds={elapsed:.3f} pps={sent_packets / elapsed:.3f} "
-        f"gbps={sent_bytes * 8 / elapsed / 1e9:.3f}"
-    )
+    with PRINT_LOCK:
+        print(
+            "TX complete: "
+            f"interface={cfg.interface_name} queue={cfg.queue_id} "
+            f"packets={sent_packets} bytes={sent_bytes} bursts={sent_bursts} "
+            f"seconds={elapsed:.3f} pps={sent_packets / elapsed:.3f} "
+            f"gbps={sent_bytes * 8 / elapsed / 1e9:.3f}",
+            flush=True,
+        )
 
 
 def rx_worker(cfg: RawRxConfig, stop: threading.Event) -> None:
@@ -368,9 +372,10 @@ def rx_worker(cfg: RawRxConfig, stop: threading.Event) -> None:
         else list(range(daqiri.get_num_rx_queues(port_id)))
     )
 
-    packets = 0
-    total_bytes = 0
-    bursts = 0
+    queue_stats = {
+        queue_id: {"packets": 0, "bytes": 0, "bursts": 0}
+        for queue_id in queue_ids
+    }
     start = time.monotonic()
 
     while not stop.is_set():
@@ -381,21 +386,44 @@ def rx_worker(cfg: RawRxConfig, stop: threading.Event) -> None:
                 continue
 
             got_any = True
-            packets += daqiri.get_num_packets(burst)
-            total_bytes += daqiri.get_burst_tot_byte(burst)
-            bursts += 1
+            stats = queue_stats[queue_id]
+            stats["packets"] += daqiri.get_num_packets(burst)
+            stats["bytes"] += daqiri.get_burst_tot_byte(burst)
+            stats["bursts"] += 1
             daqiri.free_all_packets_and_burst_rx(burst)
 
         if not got_any:
             time.sleep(0.0001)
 
     elapsed = max(time.monotonic() - start, 1e-9)
-    print(
-        "RX complete: "
-        f"packets={packets} bytes={total_bytes} bursts={bursts} "
-        f"seconds={elapsed:.3f} pps={packets / elapsed:.3f} "
-        f"gbps={total_bytes * 8 / elapsed / 1e9:.3f}"
-    )
+    with PRINT_LOCK:
+        total_packets = 0
+        total_bytes = 0
+        total_bursts = 0
+        for queue_id in queue_ids:
+            stats = queue_stats[queue_id]
+            total_packets += stats["packets"]
+            total_bytes += stats["bytes"]
+            total_bursts += stats["bursts"]
+            print(
+                "RX complete: "
+                f"interface={cfg.interface_name} queue={queue_id} "
+                f"packets={stats['packets']} bytes={stats['bytes']} "
+                f"bursts={stats['bursts']} seconds={elapsed:.3f} "
+                f"pps={stats['packets'] / elapsed:.3f} "
+                f"gbps={stats['bytes'] * 8 / elapsed / 1e9:.3f}",
+                flush=True,
+            )
+        if len(queue_ids) > 1:
+            print(
+                "RX complete: "
+                f"interface={cfg.interface_name} queues=all "
+                f"packets={total_packets} bytes={total_bytes} "
+                f"bursts={total_bursts} seconds={elapsed:.3f} "
+                f"pps={total_packets / elapsed:.3f} "
+                f"gbps={total_bytes * 8 / elapsed / 1e9:.3f}",
+                flush=True,
+            )
 
 
 def should_run_rx(mode: str, root: dict) -> bool:

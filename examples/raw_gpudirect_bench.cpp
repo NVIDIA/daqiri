@@ -67,6 +67,9 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
   }
 
   std::unordered_set<void *> initialized_tx_buffers;
+  daqiri::bench::RawBenchQueueStats stats;
+  const auto packet_size =
+      static_cast<uint64_t>(cfg.header_size) + cfg.payload_size;
 
   while (!stop.load()) {
     auto *msg = daqiri::create_tx_burst_params();
@@ -121,8 +124,15 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
       daqiri::free_all_packets_and_burst_tx(msg);
       continue;
     }
-    daqiri::send_tx_burst(msg);
+    if (daqiri::send_tx_burst(msg) == daqiri::Status::SUCCESS) {
+      stats.packets += static_cast<uint64_t>(num_pkts);
+      stats.bytes += static_cast<uint64_t>(num_pkts) * packet_size;
+      ++stats.bursts;
+    }
   }
+
+  daqiri::bench::print_queue_stats("TX", cfg.interface_name, cfg.queue_id,
+                                   stats);
 }
 
 } // namespace

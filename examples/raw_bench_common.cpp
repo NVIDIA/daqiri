@@ -25,6 +25,7 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <thread>
 #include <unordered_map>
@@ -37,6 +38,7 @@ namespace daqiri::bench {
 namespace {
 
 volatile std::sig_atomic_t g_stop_requested = 0;
+std::mutex g_stats_print_mutex;
 
 bool has_bench_config(const YAML::Node &root, const char *key) {
   const auto node = root[key];
@@ -469,6 +471,19 @@ void wait_for_stop(int run_seconds, std::atomic<bool> &stop) {
   stop.store(true);
 }
 
+void print_queue_stats(const char *direction, const std::string &interface_name,
+                       int queue_id, const RawBenchQueueStats &stats) {
+  std::lock_guard<std::mutex> lock(g_stats_print_mutex);
+  std::cout << direction << " complete: interface=" << interface_name;
+  if (queue_id >= 0) {
+    std::cout << " queue=" << queue_id;
+  } else {
+    std::cout << " queues=all";
+  }
+  std::cout << " packets=" << stats.packets << " bytes=" << stats.bytes
+            << " bursts=" << stats.bursts << std::endl;
+}
+
 void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
   const int port_id = daqiri::get_port_id(cfg.interface_name);
   if (port_id < 0) {
@@ -495,9 +510,7 @@ void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
     }
   }
 
-  uint64_t pkts = 0;
-  uint64_t bytes = 0;
-  uint64_t bursts = 0;
+  std::vector<RawBenchQueueStats> queue_stats(num_rx_queues);
   while (!stop.load()) {
     bool got_any = false;
     for (int q : queue_ids) {
@@ -507,9 +520,10 @@ void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
         continue;
       }
       got_any = true;
-      pkts += static_cast<uint64_t>(daqiri::get_num_packets(burst));
-      bytes += daqiri::get_burst_tot_byte(burst);
-      ++bursts;
+      auto &stats = queue_stats[static_cast<size_t>(q)];
+      stats.packets += static_cast<uint64_t>(daqiri::get_num_packets(burst));
+      stats.bytes += daqiri::get_burst_tot_byte(burst);
+      ++stats.bursts;
       daqiri::free_all_packets_and_burst_rx(burst);
     }
     if (!got_any) {
@@ -517,14 +531,18 @@ void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
     }
   }
 
-  std::cout << "RX complete: interface=" << cfg.interface_name;
-  if (cfg.queue_id >= 0) {
-    std::cout << " queue=" << cfg.queue_id;
-  } else {
-    std::cout << " queues=all";
+  RawBenchQueueStats total;
+  for (int q : queue_ids) {
+    const auto &stats = queue_stats[static_cast<size_t>(q)];
+    total.packets += stats.packets;
+    total.bytes += stats.bytes;
+    total.bursts += stats.bursts;
+    print_queue_stats("RX", cfg.interface_name, q, stats);
   }
-  std::cout << " packets=" << pkts << " bytes=" << bytes << " bursts=" << bursts
-            << "\n";
+
+  if (queue_ids.size() > 1) {
+    print_queue_stats("RX", cfg.interface_name, -1, total);
+  }
 }
 
 } // namespace daqiri::bench
