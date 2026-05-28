@@ -46,8 +46,8 @@ The typical DAQIRI application lifecycle has six steps:
 6. **Shut down DAQIRI** before process exit (`shutdown`).
 
 Each step maps directly to a section of the
-[C++ API Usage](cpp.md) page. The buffer-release step in particular is
-load-bearing — see
+[C++ API Usage](cpp.md) and [Python API Usage](python.md) pages. The
+buffer-release step in particular is load-bearing — see
 [Zero-Copy Ownership](../concepts.md#zero-copy-ownership) on the
 Concepts page for why missed frees cause queue drops.
 
@@ -59,5 +59,8 @@ Concepts page for why missed frees cause queue drops.
   type, and its valid values.
 - [C++ API Usage](cpp.md) — initialization, RX/TX workflows, buffer
   lifecycle, file writing, utilities, and the full C++ function reference.
+- [Python API Usage](python.md) — the same workflow through the pybind11
+  bindings, including GIL behavior, tuple return shapes, and the full
+  Python function reference.
 - [Configuration walkthrough tutorial](../tutorials/configuration-walkthrough.md)
   — annotated YAML walkthrough with a use-case decision tree.

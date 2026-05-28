@@ -23,7 +23,11 @@ For a complete executable Python benchmark, see
 
 ## Building and Importing
 
-Enable `DAQIRI_BUILD_PYTHON` when configuring DAQIRI:
+Follow the build flow in [Getting Started](../getting-started.md) — container
+or bare-metal — and add `-DDAQIRI_BUILD_PYTHON=ON` to the CMake configure step
+(the default is `OFF`). The container path is recommended; it already provides
+`pybind11` and the rest of the build dependencies. For example, inside the
+container:
 
 ```bash
 cmake -S . -B build \
@@ -34,9 +38,12 @@ cmake --build build -j
 cmake --install build --prefix /opt/daqiri
 ```
 
-The Python build requires `pybind11`. The installed package is placed under the
-configured library directory, in `python/daqiri`. Add the parent directory (for
-example `/opt/daqiri/lib/python`) to `PYTHONPATH` before importing:
+A bare-metal build uses the same commands but additionally requires `pybind11`
+on the host.
+
+The installed package is placed under the configured library directory, in
+`python/daqiri`. Add the parent directory (for example
+`/opt/daqiri/lib/python`) to `PYTHONPATH` before importing:
 
 ```python
 import daqiri
