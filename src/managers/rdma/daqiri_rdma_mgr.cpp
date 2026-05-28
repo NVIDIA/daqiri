@@ -481,6 +481,44 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
       }
     }
 
+    auto complete_send_wrs = [&](uint64_t wr_id, Status status) -> bool {
+      auto completed_end = outstanding_send_wr_ids.upper_bound(wr_id);
+      if (completed_end == outstanding_send_wr_ids.begin()) {
+        DAQIRI_LOG_CRITICAL("WR ID {} not found in outstanding SEND WR IDs", wr_id);
+        return true;
+      }
+      if (outstanding_send_wr_ids.find(wr_id) == outstanding_send_wr_ids.end()) {
+        DAQIRI_LOG_CRITICAL("WR ID {} not found in outstanding SEND WR IDs", wr_id);
+      }
+
+      for (auto completed_it = outstanding_send_wr_ids.begin(); completed_it != completed_end;) {
+        msg = completed_it->second;
+
+        const auto conn_id = get_connection_id(msg);
+        const auto expected_conn_id = reinterpret_cast<uintptr_t>(tparams->client_id);
+        if (conn_id != expected_conn_id) {
+          DAQIRI_LOG_CRITICAL("Wrong connection ID in send completion {}: {} != {}",
+                                completed_it->first,
+                                conn_id,
+                                expected_conn_id);
+        }
+
+        completed_it = outstanding_send_wr_ids.erase(completed_it);
+
+        msg->transport_hdr.tx = true;
+        msg->transport_hdr.status = status;
+        msg->transport_hdr.server = is_server;
+
+        if (rte_ring_enqueue(rx_ring, reinterpret_cast<void*>(msg)) != 0) {
+          DAQIRI_LOG_CRITICAL("Failed to enqueue RX completion message");
+          free_tx_burst(msg);
+          return false;
+        }
+      }
+
+      return true;
+    };
+
     // Check TX CQ for completion
     while (true) {
       num_comp = ibv_poll_cq(tparams->qp_params.tx_cq, 1, &wc);
@@ -496,42 +534,15 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
                            (int)wc.status,
                            (int64_t)wc.wr_id,
                            (int)wc.opcode);
+        if (wc.opcode == IBV_WC_SEND &&
+            !complete_send_wrs(wc.wr_id, Status::GENERIC_FAILURE)) {
+          return;
+        }
         continue;
       }
 
       if (wc.opcode == IBV_WC_SEND) {
-        auto it = outstanding_send_wr_ids.find(wc.wr_id);
-        if (it == outstanding_send_wr_ids.end()) {
-          DAQIRI_LOG_CRITICAL("WR ID {} not found in outstanding SEND WR IDs", wc.wr_id);
-          continue;
-        }
-
-        auto completed_end = outstanding_send_wr_ids.upper_bound(wc.wr_id);
-        for (auto completed_it = outstanding_send_wr_ids.begin(); completed_it != completed_end;) {
-          msg = completed_it->second;
-
-          const auto conn_id = get_connection_id(msg);
-          const auto expected_conn_id = reinterpret_cast<uintptr_t>(tparams->client_id);
-          if (conn_id != expected_conn_id) {
-            DAQIRI_LOG_CRITICAL("Wrong connection ID in send completion {}: {} != {}",
-                                  completed_it->first,
-                                  conn_id,
-                                  expected_conn_id);
-          }
-
-          completed_it = outstanding_send_wr_ids.erase(completed_it);
-
-          msg->transport_hdr.tx = true;
-          msg->transport_hdr.status =
-              wc.status == IBV_WC_SUCCESS ? Status::SUCCESS : Status::GENERIC_FAILURE;
-          msg->transport_hdr.server = is_server;
-
-          if (rte_ring_enqueue(rx_ring, reinterpret_cast<void*>(msg)) != 0) {
-            DAQIRI_LOG_CRITICAL("Failed to enqueue RX completion message");
-            free_tx_burst(msg);
-            return;
-          }
-        }
+        if (!complete_send_wrs(wc.wr_id, Status::SUCCESS)) { return; }
         continue;
       } else {
         msg = create_burst_params();
