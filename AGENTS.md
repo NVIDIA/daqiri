@@ -94,7 +94,7 @@ The web docs live in `docs/` and are built with [MkDocs Material](https://squidf
 - `docs/getting-started.md` — system requirements, build instructions, CMake options
 - `docs/concepts.md` — terminology glossary (kernel bypass, GPUDirect, packet/burst/segment, flow/queue, memory region, zero-copy ownership, RX reorder). Meant to be opened in parallel with the rest of the docs.
 - `docs/api-reference/index.md` — API guide (6-step application lifecycle, configuration-first model)
-- `docs/api-reference/configuration.md`, `docs/api-reference/cpp.md` — YAML schema and C++ API docs
+- `docs/api-reference/configuration.md`, `docs/api-reference/cpp.md`, `docs/api-reference/python.md` — YAML schema, C++ API, and Python bindings docs
 - `docs/tutorials/` — tutorial walkthroughs (system config, benchmarking, config files)
 - `docs/stylesheets/extra.css` — custom theme overrides
 
@@ -102,7 +102,8 @@ The web docs live in `docs/` and are built with [MkDocs Material](https://squidf
 - **Backend list** (`src/managers/*/`) — README Backends table, `docs/getting-started.md`, `docs/concepts.md` (Kernel Bypass section + Backend Maturity admonition), `docs/api-reference/configuration.md`
 - **CMake options / `DAQIRI_MGR` default** (`src/CMakeLists.txt:137`) — README Quick Start, `docs/getting-started.md`, this file's Build & run section
 - **Benchmark binary or YAML names** (`examples/`) — the benchmark table above, `docs/tutorials/benchmarking_examples.md`, and the "Choosing an example config" decision tree in `docs/tutorials/configuration-walkthrough.md` (every YAML must have a leaf; CI's `scripts/check_doc_refs.py` enforces coverage)
-- **Public API include** (`#include <daqiri/daqiri.h>`; source files under `include/daqiri/`) — `docs/api-reference/index.md`, `docs/api-reference/cpp.md`; if the change adds or renames a user-facing concept, also `docs/concepts.md`
+- **Public API include** (`#include <daqiri/daqiri.h>`; source files under `include/daqiri/`) — `docs/api-reference/index.md`, `docs/api-reference/cpp.md`, `docs/api-reference/python.md`; if the change adds or renames a user-facing concept, also `docs/concepts.md`
+- **Python bindings** (`python/daqiri_common_pybind.cpp`) — `docs/api-reference/python.md` (function reference tables, enums/classes tables, GIL Behavior section)
 - **Doc reorganization** (any rename in `docs/`) — `docs/index.html` landing page, `mkdocs.yml` nav, README Documentation table
 
 The full mapping with rationale lives in the docs-sync agent rule. Internal-link, anchor, and nav drift is enforced by CI (`.github/workflows/docs.yml`); content drift (stale binary names, defaults) is still a manual check at commit time.

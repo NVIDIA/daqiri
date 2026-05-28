@@ -12,10 +12,12 @@ When the user is committing, pushing, or otherwise wrapping up a change that tou
 - `include/daqiri/common.h` / `include/daqiri/daqiri.h` — public free-function API (`get_rx_burst`, `get_packet_ptr`, `set_udp_header`, etc.). Any signature change, new function, removed function, or changed parameter semantics may need updating in:
   - `docs/api-reference/index.md` (API guide: 6-step application lifecycle)
   - `docs/api-reference/cpp.md` (C++ API usage guide and function reference)
+  - `docs/api-reference/python.md` (Python bindings reference — when the binding surface changes alongside the C++ API)
   - `docs/concepts.md` (when the change introduces or renames a user-facing concept — burst, segment, flow, queue, memory region, etc.)
   - `AGENTS.md` (Architecture section's API summary)
-- `include/daqiri/types.h` — public types (`BurstParams`, `Status`, `NetworkConfig`, enums like `MemoryKind`, `Direction`, `SocketProtocol`). Struct field changes, new enum values, or renamed types may need updating in the API docs, `docs/concepts.md` (terminology), and `AGENTS.md` (Architecture / BurstParams discussion).
+- `include/daqiri/types.h` — public types (`BurstParams`, `Status`, `NetworkConfig`, enums like `MemoryKind`, `Direction`, `SocketProtocol`). Struct field changes, new enum values, or renamed types may need updating in the API docs (`docs/api-reference/cpp.md`, `docs/api-reference/python.md`), `docs/concepts.md` (terminology), and `AGENTS.md` (Architecture / BurstParams discussion).
 - `src/manager.h` — `Manager` virtual interface and `ManagerFactory`. Changes here affect the backend abstraction docs in `docs/api-reference/cpp.md`, the backends section of `docs/concepts.md`, and the Manager-abstraction subsection in `AGENTS.md`.
+- `python/daqiri_common_pybind.cpp` — pybind11 binding surface. Any added/removed/renamed `m.def(...)`, changed pybind signature, new enum/class binding, or changed GIL-release behavior may need updating in `docs/api-reference/python.md` (function reference tables, enums/classes tables, GIL Behavior section).
 
 ### Backend and build changes (medium impact)
 - `src/managers/*/` — adding a new backend or changing backend behavior may need updating in:
@@ -70,13 +72,15 @@ When the user is committing, pushing, or otherwise wrapping up a change that tou
 
 | Source file | Docs to check |
 |---|---|
-| `include/daqiri/common.h` / `include/daqiri/daqiri.h` | `docs/api-reference/index.md`, `docs/api-reference/cpp.md`, `docs/concepts.md`, `AGENTS.md` |
-| `include/daqiri/types.h` | `docs/api-reference/index.md`, `docs/api-reference/cpp.md`, `docs/concepts.md`, `AGENTS.md` |
+| `include/daqiri/common.h` / `include/daqiri/daqiri.h` | `docs/api-reference/index.md`, `docs/api-reference/cpp.md`, `docs/api-reference/python.md`, `docs/concepts.md`, `AGENTS.md` |
+| `include/daqiri/types.h` | `docs/api-reference/index.md`, `docs/api-reference/cpp.md`, `docs/api-reference/python.md`, `docs/concepts.md`, `AGENTS.md` |
 | `src/manager.h` | `docs/api-reference/cpp.md`, `docs/concepts.md`, `AGENTS.md` |
 | `src/managers/*/` | `docs/getting-started.md`, `docs/concepts.md` (backend list + maturity), `docs/api-reference/configuration.md`, `docs/tutorials/configuration-walkthrough.md`, `README.md`, `AGENTS.md` |
 | `src/CMakeLists.txt` | `docs/getting-started.md`, `AGENTS.md`, `README.md` |
 | `src/kernels.cu` | `docs/tutorials/benchmarking_examples.md`, `AGENTS.md` |
+| `python/daqiri_common_pybind.cpp` | `docs/api-reference/python.md`, `AGENTS.md` |
 | `examples/*.cpp` | `docs/tutorials/benchmarking_examples.md`, `docs/tutorials/configuration-walkthrough.md`, `AGENTS.md` |
 | `examples/*.yaml` | `docs/tutorials/benchmarking_examples.md`, `docs/tutorials/configuration-walkthrough.md`, `AGENTS.md` |
+| `examples/*.py` | `docs/api-reference/python.md`, `AGENTS.md` |
 | `mkdocs.yml` | `docs/index.html` (nav links) |
 | Any `docs/*` rename/move | `README.md` (Documentation table), `AGENTS.md` (Documentation section), `mkdocs.yml`, `docs/index.html` |
