@@ -206,7 +206,7 @@
         <a href="#getting-started">Quick Start</a>
         <a href="#examples">Examples</a>
         <a href="#tutorials">Tutorials</a>
-        <a href="daqiri-api.html" class="nav-ext">API Guide</a>
+        <a href="api-reference/" class="nav-ext">API Reference</a>
         <a href="#publications">News</a>
       </div>
       <div class="nav-actions">
@@ -240,7 +240,8 @@
         </div>
         <div class="hero-actions">
           <a href="#getting-started" class="btn btn-primary">Quick Start →</a>
-          <a href="daqiri-api.html" class="btn btn-outline">API Guide</a>
+          <a href="concepts/" class="btn btn-outline">Key Concepts</a>
+          <a href="api-reference/" class="btn btn-outline">API Reference</a>
           <a href="#examples" class="btn btn-outline">Examples</a>
         </div>
         <div class="hero-stats">
@@ -568,16 +569,15 @@ cmake --build build -j
         <a href="getting-started/" class="btn btn-outline">Getting Started →</a>
       </div>
       <div class="tutorials-list">
-        <a href="tutorials/background/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">01</span><div class="tut-info"><div class="tut-title">Advanced Networking Background</div><div class="tut-desc">Kernel-bypass networking and GPUDirect concepts — what they are, why they matter, and how DAQIRI builds on them.</div></div><div class="tut-meta"><span class="tag tag-beg">Beginner</span><span class="tut-time">~10 min</span></div><span class="tut-arrow">→</span></a>
-        <a href="getting-started/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">02</span><div class="tut-info"><div class="tut-title">Requirements &amp; Installation</div><div class="tut-desc">Hardware (ConnectX-6 Dx+), driver setup (OFED from DOCA-Host 2.8+ or inbox on Ubuntu 5.4–6.7), and CUDA Toolkit installation on Linux 5.4+.</div></div><div class="tut-meta"><span class="tag tag-beg">Beginner</span><span class="tut-time">~15 min</span></div><span class="tut-arrow">→</span></a>
-        <div class="tut-item tut-soon"><span class="tut-num">03</span><div class="tut-info"><div class="tut-title">Building from Source with CMake</div><div class="tut-desc">Configure <code>DAQIRI_MGR</code>, <code>DAQIRI_BUILD_PYTHON</code>, <code>BUILD_SHARED_LIBS</code>, and <code>DAQIRI_BUILD_EXAMPLES</code>. Build for A100/H100 (CUDA arches 80, 90).</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
-        <div class="tut-item tut-soon"><span class="tut-num">04</span><div class="tut-info"><div class="tut-title">Container Build with Patched DPDK</div><div class="tut-desc">Build the Docker image with <code>build-container.sh</code>. The container ships a dmabuf-patched DPDK, so peermem is not required.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
-        <a href="tutorials/system_configuration/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">05</span><div class="tut-info"><div class="tut-title">System Tuning for High-Performance Networking</div><div class="tut-desc">Isolate CPU cores, configure hugepages, set NUMA affinity, and run <code>python/tune_system.py</code> to diagnose common configuration issues.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~30 min</span></div><span class="tut-arrow">→</span></a>
-        <a href="tutorials/benchmarking_examples/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">06</span><div class="tut-info"><div class="tut-title">Benchmarking Examples</div><div class="tut-desc">Run a TX/RX loopback test to validate your setup, and walk through interpreting throughput results.</div></div><div class="tut-meta"><span class="tag tag-beg">Beginner</span><span class="tut-time">~20 min</span></div><span class="tut-arrow">→</span></a>
-        <a href="tutorials/configuration-walkthrough/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">07</span><div class="tut-info"><div class="tut-title">YAML Configuration Deep Dive</div><div class="tut-desc">Memory regions (<code>huge</code>, <code>device</code>, <code>host_pinned</code>), RX/TX queue setup, flow steering rules, flex items, and RDMA client/server config schemas.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~40 min</span></div><span class="tut-arrow">→</span></a>
-        <div class="tut-item tut-soon"><span class="tut-num">08</span><div class="tut-info"><div class="tut-title">GPUDirect: Header-Data Split Pipeline</div><div class="tut-desc">Configure a two-region memory layout, access CPU headers and GPU payloads per-packet with <code>get_segment_packet_ptr()</code>, and reorder scattered GPU buffers with the built-in CUDA kernel.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
-        <div class="tut-item tut-soon"><span class="tut-num">09</span><div class="tut-info"><div class="tut-title">RDMA Client/Server Setup</div><div class="tut-desc">Configure the RDMA backend with RC transport, assign client and server roles across two hosts, and run <code>daqiri_bench_rdma</code> to validate the connection.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
-        <div class="tut-item tut-soon"><span class="tut-num">10</span><div class="tut-info"><div class="tut-title">Timed TX with ConnectX-7</div><div class="tut-desc">Enable <code>accurate_send</code> in the TX config and use <code>set_packet_tx_time()</code> for PTP-synchronized, hardware-scheduled packet transmission on ConnectX-7+.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
+        <a href="getting-started/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">01</span><div class="tut-info"><div class="tut-title">Requirements &amp; Installation</div><div class="tut-desc">Hardware (ConnectX-6 Dx+), driver setup (OFED from DOCA-Host 2.8+ or inbox on Ubuntu 5.4–6.7), and CUDA Toolkit installation on Linux 5.4+.</div></div><div class="tut-meta"><span class="tag tag-beg">Beginner</span><span class="tut-time">~15 min</span></div><span class="tut-arrow">→</span></a>
+        <div class="tut-item tut-soon"><span class="tut-num">02</span><div class="tut-info"><div class="tut-title">Building from Source with CMake</div><div class="tut-desc">Configure <code>DAQIRI_MGR</code>, <code>DAQIRI_BUILD_PYTHON</code>, <code>BUILD_SHARED_LIBS</code>, and <code>DAQIRI_BUILD_EXAMPLES</code>. Build for A100/H100 (CUDA arches 80, 90).</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
+        <div class="tut-item tut-soon"><span class="tut-num">03</span><div class="tut-info"><div class="tut-title">Container Build with Patched DPDK</div><div class="tut-desc">Build the Docker image with <code>build-container.sh</code>. The container ships a dmabuf-patched DPDK, so peermem is not required.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
+        <a href="tutorials/system_configuration/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">04</span><div class="tut-info"><div class="tut-title">System Tuning for High-Performance Networking</div><div class="tut-desc">Isolate CPU cores, configure hugepages, set NUMA affinity, and run <code>python/tune_system.py</code> to diagnose common configuration issues.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~30 min</span></div><span class="tut-arrow">→</span></a>
+        <a href="tutorials/benchmarking_examples/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">05</span><div class="tut-info"><div class="tut-title">Benchmarking Examples</div><div class="tut-desc">Run a TX/RX loopback test to validate your setup, and walk through interpreting throughput results.</div></div><div class="tut-meta"><span class="tag tag-beg">Beginner</span><span class="tut-time">~20 min</span></div><span class="tut-arrow">→</span></a>
+        <a href="tutorials/configuration-walkthrough/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">06</span><div class="tut-info"><div class="tut-title">YAML Configuration Deep Dive</div><div class="tut-desc">Memory regions (<code>huge</code>, <code>device</code>, <code>host_pinned</code>), RX/TX queue setup, flow steering rules, flex items, and RDMA client/server config schemas.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~40 min</span></div><span class="tut-arrow">→</span></a>
+        <div class="tut-item tut-soon"><span class="tut-num">07</span><div class="tut-info"><div class="tut-title">GPUDirect: Header-Data Split Pipeline</div><div class="tut-desc">Configure a two-region memory layout, access CPU headers and GPU payloads per-packet with <code>get_segment_packet_ptr()</code>, and reorder scattered GPU buffers with the built-in CUDA kernel.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
+        <div class="tut-item tut-soon"><span class="tut-num">08</span><div class="tut-info"><div class="tut-title">RDMA Client/Server Setup</div><div class="tut-desc">Configure the RDMA backend with RC transport, assign client and server roles across two hosts, and run <code>daqiri_bench_rdma</code> to validate the connection.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
+        <div class="tut-item tut-soon"><span class="tut-num">09</span><div class="tut-info"><div class="tut-title">Timed TX with ConnectX-7</div><div class="tut-desc">Enable <code>accurate_send</code> in the TX config and use <code>set_packet_tx_time()</code> for PTP-synchronized, hardware-scheduled packet transmission on ConnectX-7+.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
       </div>
     </div>
   </section>
@@ -633,7 +633,7 @@ cmake --build build -j</pre>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
           View on GitHub
         </a>
-        <a href="daqiri-api.html" class="btn btn-outline">API Guide →</a>
+        <a href="api-reference/" class="btn btn-outline">API Reference →</a>
       </div>
     </div>
   </section>
@@ -653,9 +653,10 @@ cmake --build build -j</pre>
         <div>
           <div class="footer-col-title">Docs</div>
           <ul class="footer-links">
-            <li><a href="daqiri-api.html">API Guide</a></li>
+            <li><a href="api-reference/">API Guide</a></li>
+            <li><a href="api-reference/configuration/">Configuration</a></li>
+            <li><a href="api-reference/cpp/">C++ API Usage</a></li>
             <li><a href="getting-started/">Getting Started</a></li>
-            <li><a href="configuration/">Configuration</a></li>
             <li><a href="#examples">Examples</a></li>
           </ul>
         </div>

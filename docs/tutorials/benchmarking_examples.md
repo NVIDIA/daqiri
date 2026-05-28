@@ -1,7 +1,3 @@
----
-hide:
-  - navigation
----
 # Benchmarking Examples
 
 DAQIRI provides a benchmarking application named `daqiri_bench_raw_gpudirect` that can be used to test the performance of the networking configuration. In this section, we'll walk you through the steps needed to configure the application for your NIC for Tx and Rx, and run a loopback test between the two interfaces with a [physical SFP cable](https://www.nvidia.com/en-us/networking/interconnect/) connecting them.
@@ -379,7 +375,9 @@ sudo mlnx_perf -i $if_name
         [critical] [adv_network_dpdk_mgr.cpp:430] Failed to map MRs
         ```
 
-        [Make sure that `nvidia-peermem` is loaded](system_configuration.md#enable-gpudirect).
+        Check the [GPUDirect setup](system_configuration.md#enable-gpudirect) for your
+        deployment. Some host builds use `nvidia-peermem`; the container path uses
+        dma-buf support from the patched DPDK build.
 
     ??? failure "EAL: Couldn't get fd on hugepage file [..] error allocating rte services array"
 

@@ -1,4 +1,4 @@
-# Configuration Reference
+# Configuration YAML Reference
 
 DAQIRI is configured through a YAML file or a `NetworkConfig` struct built in code.
 Either form defines memory regions, NIC interfaces, TX/RX queues, and flow rules, and
@@ -17,9 +17,13 @@ These settings apply globally to both TX and RX:
   for packet processing and can be bound to a non-isolated core. Should differ from isolated
   cores assigned to queues.
   - type: `integer`
-- **`manager`**: Backend networking library.
+- **`stream_type`**: Packet I/O stream class.
   - type: `string`
-  - values: `dpdk` (default), `rdma`
+  - values: `raw`, `socket`
+- **`protocol`**: Socket stream protocol. Required when `stream_type: "socket"` and invalid
+  for `stream_type: "raw"`.
+  - type: `string`
+  - values: `tcp`, `udp`, `roce`
 - **`log_level`**: Backend log level.
   - type: `string`
   - values: `trace`, `debug`, `info`, `warn` (default), `error`, `critical`, `off`

@@ -2,10 +2,10 @@
 """Verify that hand-maintained HTML pages link only to existing locations
 in the rendered MkDocs site.
 
-The hand-maintained HTML files (docs/index.html, docs/daqiri-api.html) are
-not part of the MkDocs link graph, so `mkdocs build --strict` does not
-check their hrefs. This script does, by walking each href and confirming
-the target resolves under site/.
+The hand-maintained HTML landing page (docs/index.html) is not part of the
+MkDocs link graph, so `mkdocs build --strict` does not check its hrefs.
+This script does, by walking each href and confirming the target resolves
+under site/.
 
 Usage: python scripts/check_html_links.py [SITE_DIR]
        (default SITE_DIR is ./site, the output of `mkdocs build`)
@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 from urllib.parse import urldefrag, urlparse
 
-HTML_PAGES = ("index.html", "daqiri-api.html")
+HTML_PAGES = ("index.html",)
 HREF_RE = re.compile(r'href="([^"]+)"')
 
 
