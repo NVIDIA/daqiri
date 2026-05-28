@@ -5,49 +5,45 @@ hide:
 
 # Concepts
 
-This page is the DAQIRI glossary. It defines the terminology used everywhere
-else in the docs — **kernel bypass**, **GPUDirect**, **packet / burst /
-segment**, **flow / queue**, **memory region**, **zero-copy ownership**, and
-**RX reorder** — and explains how those pieces fit together.
-
-It is not a tutorial. There is no plot to follow. Keep this page open in a
-second tab while you read the [API Guide](api-reference/index.md), the
-[Configuration YAML Reference](api-reference/configuration.md), or the
-[tutorials](tutorials/system_configuration.md), and jump back here whenever a
-term needs grounding.
+This page is the DAQIRI glossary. It defines the terms used across the
+[API Guide](api-reference/index.md),
+[Configuration Reference](api-reference/configuration.md), and
+[tutorials](tutorials/system_configuration.md): **kernel bypass**,
+**GPUDirect**, **packet / burst / segment**, **flow / queue**,
+**memory region**, **zero-copy ownership**, and **RX reorder**.
 
 ## Kernel Bypass
 
-In this context, **kernel bypass** means bypassing the operating system's
-kernel to talk directly to the network interface (NIC). That removes the
-latency and overhead of the Linux network stack and lets the application work
-with NIC ring buffers in user space.
+**Kernel bypass** means bypassing the operating system's kernel to talk
+directly to the network interface (NIC). That removes the latency and
+overhead of the Linux network stack and lets the application work with NIC
+ring buffers in user space.
 
 DAQIRI is a thin, common interface over multiple kernel-bypass technologies.
 All of its backends are Ethernet-based, but they differ in their model,
 features, and footprint:
 
-- **DPDK** — the [Data Plane Development Kit](https://www.dpdk.org/) is a
+- **DPDK**: the [Data Plane Development Kit](https://www.dpdk.org/) is a
   Linux Foundation project with strong, long-running community support. Its
   RTE Flow capability is generally considered the most flexible solution for
   splitting ingress and egress data into per-queue streams.
-- **RDMA** — Remote Direct Memory Access, using the open-source
+- **RDMA**: Remote Direct Memory Access, using the open-source
   [`rdma-core`](https://github.com/linux-rdma/rdma-core) library. RDMA
   differs from the other Ethernet-based backends with its server/client
   model and **RoCE** (RDMA over Converged Ethernet) protocol. It costs more
   to set up on both ends but offers a simpler user interface, orders packets
-  on arrival, and is the only backend with a high-reliability mode.
-- **Socket** — a socket-oriented interface (UDP and TCP via
+  on arrival, and provides a NIC-level reliable transport mode (RC).
+- **Socket**: a socket-oriented interface (UDP and TCP via
   the Linux kernel, plus a RoCE path that delegates to the RDMA backend).
   Useful as a comparison baseline against DPDK and RDMA, and as a path to
   first results when no NVIDIA NIC is available.
 
-Which backend is best for your use case depends on multiple factors — packet
+Which backend is best for your use case depends on multiple factors: packet
 size, batch size, data type, whether you need ordering or reliability, and
 whether both ends of the link are under your control. DAQIRI's goal is to
 abstract the interface to these backends so developers can focus on
 application logic and experiment with different configurations to find the
-best technology for their use case.
+best technology for their workload.
 
 ??? example "Backend maturity"
 
@@ -99,14 +95,14 @@ For step-by-step system setup, see the
 
 ## Packets, Bursts, and Segments
 
-These three terms are the unit of data that flows through DAQIRI. They show
-up in every code path, every configuration option, and every API call.
+These three terms describe the units of data that flow through DAQIRI.
+They appear throughout the API, configuration, and code paths.
 
 ### Packet
 
-A **packet** is a single Ethernet frame the way the wire and the NIC see it
-— headers and payload, as one logical unit. DAQIRI never delivers packets
-one at a time; the unit of delivery is a *burst*.
+A **packet** is a single Ethernet frame including headers and payload as one
+logical unit. DAQIRI never delivers packets one at a time; the unit of
+delivery is a *burst*.
 
 ### Burst (`BurstParams`)
 
@@ -122,7 +118,7 @@ The C++ type for a burst is `BurstParams`. A burst carries:
 - Flow IDs (when flow steering is configured)
 - Optional RX hardware timestamps
 
-`BurstParams` is meant to be opaque — applications use helper functions
+`BurstParams` is meant to be opaque. Applications use helper functions
 (`get_packet_ptr`, `get_packet_length`, `get_num_packets`, ...) to inspect
 or modify it rather than touching its fields directly.
 
@@ -132,9 +128,9 @@ A **segment** is one contiguous memory region inside a packet. A packet can
 have one segment or multiple segments. The number of segments a packet has
 is set by the receive mode configured in the YAML:
 
-- **Single segment** — used for CPU-only or batched-GPU paths that do not
+- **Single segment**: used for CPU-only or batched-GPU paths that do not
   split headers from payloads.
-- **Two segments (header-data split)** — segment 0 holds headers in CPU
+- **Two segments (header-data split)**: segment 0 holds headers in CPU
   memory, segment 1 holds payload data in GPU memory.
 
 ### Header-Data Split (HDS)
@@ -144,41 +140,40 @@ headers go to CPU memory (segment 0), payload goes to GPU memory
 (segment 1). This keeps the GPU payload path zero-copy for downstream GPU
 workloads while still letting the CPU parse and steer on the headers.
 
-HDS is what makes "Ethernet straight to GPU" practical for protocols where
-the application logic needs to look at headers (UDP source/destination
-ports, sequence numbers in the application layer, etc.) but the bulk of
-the data is meant for the GPU.
+Use HDS when the application needs to inspect headers (UDP
+source/destination ports, application-layer sequence numbers, etc.) but
+the bulk of the data is meant for the GPU.
 
 ## Flows and Queues
 
-These two terms describe how packets get routed from the wire into the
+These two terms describe how packets are routed from the wire into the
 right application buffer.
 
 ### Queue
 
-A **queue** is the NIC-side buffer that an application reads from (RX) or
-writes to (TX). Each queue is bound to a CPU core in the YAML and is the
-unit of parallelism: more queues mean more cores can do packet work in
-parallel.
+A **queue** is a NIC-side buffer that an application reads from (RX) or
+writes to (TX). Each queue is assigned a CPU core in the YAML to poll
+it, but queues and cores are not strictly one-to-one: one core can poll
+multiple queues, and a TX queue can be fed from multiple cores.
 
-A queue points at one or more *memory regions* — that is where its packet
-buffers actually live (CPU hugepages, GPU device memory, or pinned host
-memory).
+A queue points at one or more *memory regions*, which hold its packet
+buffers (CPU hugepages, GPU device memory, or pinned host memory).
 
 ### Flow
 
-A **flow** is a rule that tells the NIC "packets matching *this pattern*
-should go to *this queue*". A flow has a match (e.g. UDP destination port
-4096, IPv4 length 1050) and an action (e.g. *queue 0*). Flows are
-configured under `rx.flows` in the YAML.
+A **flow** is a rule that maps packets matching a given pattern to a
+specific queue. A flow has a match (e.g. UDP destination port 4096,
+IPv4 length 1050) and an action (e.g. *queue 0*). Multiple flows can
+target the same queue; the matching flow's ID is available at runtime
+so the application can distinguish them. Flows are configured under
+`rx.flows` in the YAML.
 
 ### Flow Steering
 
 **Flow steering** is the NIC-level mechanism that classifies an incoming
 packet against the configured flows and writes it into the matching
-queue's buffer — all in NIC silicon, before any software runs. It is what
-makes multi-queue RX scale: each flow can be pinned to its own queue (and
-therefore its own core).
+queue's buffer, entirely in hardware. Multi-queue RX works by routing
+each flow to a separate queue for parallel processing.
 
 For DPDK, flow steering is implemented on top of RTE Flow. The YAML
 options are documented in
@@ -193,13 +188,13 @@ from each queue.
 The kind of a memory region determines whether packet data ends up on the
 CPU or the GPU:
 
-- `huge` — CPU hugepages (recommended for CPU buffers).
-- `device` — GPU VRAM (discrete GPUs; requires GPUDirect via peermem or
+- `huge`: CPU hugepages (recommended for CPU buffers).
+- `device`: GPU VRAM (discrete GPUs; requires GPUDirect via peermem or
   DMA-BUF).
-- `host_pinned` — pinned CPU pages allocated via `cudaHostAlloc`.
+- `host_pinned`: pinned CPU pages allocated via `cudaHostAlloc`.
   Recommended on integrated GPUs (NVIDIA GB10 / DGX Spark), where the NIC
   cannot peer-DMA into device memory.
-- `host` — regular CPU memory (not recommended for hot paths).
+- `host`: regular CPU memory (not recommended for hot paths).
 
 Combining memory regions on a single queue is how *header-data split* is
 expressed in the YAML: queue 0's first memory region is a `huge` CPU pool
@@ -210,7 +205,7 @@ payload, segment 1).
 
 DAQIRI is designed around zero-copy packet delivery. When a receive API
 returns packet data, the application is reading the buffers the NIC DMA'd
-into — the API passes pointers and metadata, not copies.
+into; the API passes pointers and metadata, not copies.
 
 That zero-copy model makes **buffer release part of the API contract**.
 Applications must free RX bursts after processing and free or send TX
@@ -218,7 +213,7 @@ bursts after allocation. Holding bursts indefinitely drains DAQIRI's
 buffer pools and can lead to `NO_FREE_BURST_BUFFERS`,
 `NO_FREE_PACKET_BUFFERS`, queue drops, or stalled TX.
 
-The mechanics — which `free_*` function to call when — live in the
+When to call each `free_*` function is documented in the
 [C++ API Usage page](api-reference/cpp.md#rx-step-3-free-buffers).
 
 ## RX Packet Aggregation and Reorder
@@ -236,10 +231,10 @@ This is the path to use when packets arrive out of order (e.g. across
 multiple NIC queues) and need to be reassembled into a single, contiguous
 GPU buffer before downstream processing.
 
-Each reorder config currently operates on a single memory domain, either GPU-only or
-CPU-only. Reordering packets whose segments span two memory regions
-(for example, an HDS pair with CPU-side headers and GPU-side payloads) is
-not yet supported, but it will be in the future.
+Each reorder config currently operates on a single memory domain, either
+GPU-only or CPU-only. Reordering packets whose segments span two memory
+regions (for example, an HDS pair with CPU-side headers and GPU-side
+payloads) is not yet supported but is planned.
 
 See [Configuration YAML Reference → RX Reorder Configs](api-reference/configuration.md#rx-reorder-configs-dpdk-v1)
 for the configuration constraints and
@@ -248,12 +243,11 @@ for how to consume them from C++.
 
 ## See also
 
-- [API Guide](api-reference/index.md) — the 6-step DAQIRI application
+- [API Guide](api-reference/index.md): the 6-step DAQIRI application
   lifecycle, with links into the language API.
-- [Configuration YAML Reference](api-reference/configuration.md) — every
+- [Configuration YAML Reference](api-reference/configuration.md): every
   YAML key, its type, and its valid values.
-- [C++ API Usage](api-reference/cpp.md) — initialization, RX/TX, file
+- [C++ API Usage](api-reference/cpp.md): initialization, RX/TX, file
   writes, utilities, and the C++ function reference.
-- [System Configuration tutorial](tutorials/system_configuration.md) —
-  the real-world hardware and OS setup that makes the concepts above
-  actually work.
+- [System Configuration tutorial](tutorials/system_configuration.md):
+  the hardware and OS setup the concepts above depend on.
