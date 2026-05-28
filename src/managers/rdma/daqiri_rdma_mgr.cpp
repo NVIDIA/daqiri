@@ -459,6 +459,7 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
       } else {
         msg = create_burst_params();
       }
+      const bool msg_owns_packets = wc.opcode == IBV_WC_RECV;
 
       // Only populate a header to indicate which burst needs to be freed
       // msg->transport_hdr.opcode  = ibv_opcode_to_daqiri_opcode(wc.opcode);
@@ -471,8 +472,11 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
 
       if (rte_ring_enqueue(rx_ring, reinterpret_cast<void*>(msg)) != 0) {
         DAQIRI_LOG_CRITICAL("Failed to enqueue RX completion message");
-        free_tx_burst(msg);
-        free_tx_metadata(msg);
+        if (msg_owns_packets) {
+          free_tx_burst(msg);
+        } else {
+          free_tx_metadata(msg);
+        }
         return;
       }
     }
@@ -525,7 +529,6 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
           if (rte_ring_enqueue(rx_ring, reinterpret_cast<void*>(msg)) != 0) {
             DAQIRI_LOG_CRITICAL("Failed to enqueue RX completion message");
             free_tx_burst(msg);
-            free_tx_metadata(msg);
             return;
           }
         }
@@ -545,7 +548,6 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
 
       if (rte_ring_enqueue(rx_ring, reinterpret_cast<void*>(msg)) != 0) {
         DAQIRI_LOG_CRITICAL("Failed to enqueue RX completion message");
-        free_tx_burst(msg);
         free_tx_metadata(msg);
         return;
       }
@@ -1302,6 +1304,10 @@ int RdmaMgr::setup_pools_and_rings() {
   // RX rings
   DAQIRI_LOG_INFO("Setting up TX/RX per-queue rings");
 
+  // Each connection ring is single-producer/single-consumer by design: one
+  // rdma_thread owns the manager side and one application thread owns the API
+  // side for a given conn_id. If multi-threaded app access per conn_id is ever
+  // allowed, these rings must go back to MP/MC-safe flags.
   for (int i = 0; i < MAX_RDMA_CONNECTIONS; i++) {
     std::string ring_name = "RX_RING_" + std::to_string(i);
     DAQIRI_LOG_DEBUG("Setting up RX ring {}", ring_name);
