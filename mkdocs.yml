@@ -42,6 +42,7 @@ extra_css:
 
 extra_javascript:
   - javascripts/platform-tab-toc.js
+  - javascripts/tab-dropdowns.js
 
 site_dir: site
 

@@ -22,7 +22,9 @@ choice is configured per-application in YAML by two keys:
 - `protocol` — required when `stream_type: "socket"`; selects the
   socket-level protocol.
 
-### Raw Ethernet — `stream_type: "raw"`
+### Raw Ethernet
+
+*YAML:* `stream_type: "raw"`.
 
 Kernel-bypass raw Ethernet. The application talks directly to NIC ring
 buffers in user space, skipping the Linux network stack entirely. This
@@ -33,9 +35,10 @@ detail, not a user-facing concept.
 
 Requires an NVIDIA SmartNIC (ConnectX-6 Dx or later).
 
-### Socket — `stream_type: "socket"`
+### Socket
 
-Socket-style interfaces. The specific transport is chosen by `protocol`:
+*YAML:* `stream_type: "socket"`. The specific transport is chosen by
+`protocol`:
 
 - **`protocol: "udp"`** / **`protocol: "tcp"`** — Linux kernel UDP and
   TCP sockets. No NIC privileges required, no special hardware. Useful
@@ -50,7 +53,9 @@ Socket-style interfaces. The specific transport is chosen by `protocol`:
   speaks RoCE. When both peers run DAQIRI, prefer an upper-layer
   library such as MPI, NCCL, or UCX rather than wiring RoCE directly.
 
-### PCIe — `stream_type: "pcie"` *(future)*
+### PCIe (future)
+
+*YAML:* `stream_type: "pcie"`.
 
 Placeholder for an upcoming direct-PCIe stream type. Not implemented
 yet.
@@ -68,7 +73,7 @@ sockets), see
 [Choosing an example config](tutorials/configuration-walkthrough.md#choosing-an-example-config)
 in the configuration walkthrough.
 
-??? example "Maturity"
+??? example "Support and testing"
 
     The DAQIRI library integration testing infrastructure is under active
     development. As such:

@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # Understanding the Configuration File
 
 ## Choosing an example config

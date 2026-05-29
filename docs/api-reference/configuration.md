@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # Configuration YAML Reference
 
 DAQIRI is configured through a YAML file or a `NetworkConfig` struct built in code.

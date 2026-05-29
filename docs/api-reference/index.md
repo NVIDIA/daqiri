@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # API Guide
 
 DAQIRI is a library that moves bursts of packets between NICs and CPU or

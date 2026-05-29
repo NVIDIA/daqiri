@@ -46,10 +46,19 @@
     .nav-logo-text { font-weight:800; font-size:1.1rem; color:var(--text-pri); letter-spacing:.05em; }
     .nav-logo-badge { font-size:.65rem; font-weight:700; padding:2px 6px; background:rgba(118,185,0,.15); color:var(--nv-green); border:1px solid rgba(118,185,0,.3); border-radius:99px; letter-spacing:.08em; }
     .nav-links { display:flex; align-items:center; gap:.1rem; flex:1; }
-    .nav-links a { color:var(--text-mut); font-size:.875rem; font-weight:500; padding:.4rem .65rem; border-radius:var(--radius); transition:color var(--ease),background var(--ease); white-space:nowrap; }
-    .nav-links a:hover { color:var(--text-pri); background:rgba(255,255,255,.05); }
+    .nav-links > a, .nav-item > a { color:var(--text-mut); font-size:.875rem; font-weight:500; padding:.4rem .65rem; border-radius:var(--radius); transition:color var(--ease),background var(--ease); white-space:nowrap; display:inline-block; }
+    .nav-links > a:hover, .nav-item > a:hover { color:var(--text-pri); background:rgba(255,255,255,.05); }
     .nav-links a.active { color:var(--nv-green); }
-    .nav-links a.nav-ext::after { content:'↗'; font-size:.72em; opacity:.55; margin-left:2px; }
+    /* Dropdown for nav items that map to a multi-page section (Tutorials, */
+    /* API Reference). Hover/focus reveals a popover with sub-page links.   */
+    .nav-item { position:relative; }
+    .nav-item.nav-has-dropdown > a::after { content:'▾'; font-size:.7em; opacity:.55; margin-left:.3em; }
+    .nav-dropdown { display:none; position:absolute; top:100%; left:0; margin:0; padding:.4rem 0; list-style:none; min-width:14rem; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius); box-shadow:0 6px 28px rgba(0,0,0,.55); z-index:1100; }
+    .nav-dropdown::before { content:''; position:absolute; top:-.5rem; left:0; right:0; height:.5rem; }
+    .nav-item:hover > .nav-dropdown, .nav-item:focus-within > .nav-dropdown { display:block; }
+    .nav-dropdown li { list-style:none; margin:0; }
+    .nav-dropdown a { display:block; padding:.5rem 1rem; font-size:.825rem; font-weight:500; color:var(--text-mut); text-decoration:none; white-space:nowrap; transition:color var(--ease),background var(--ease); }
+    .nav-dropdown a:hover { color:var(--text-pri); background:rgba(118,185,0,.1); }
     .nav-actions { display:flex; align-items:center; gap:.5rem; margin-left:auto; flex-shrink:0; }
     .btn { display:inline-flex; align-items:center; gap:.5rem; font-size:.875rem; font-weight:600; padding:.5rem 1.25rem; border-radius:var(--radius); border:1.5px solid transparent; cursor:pointer; transition:all var(--ease); text-decoration:none; white-space:nowrap; }
     .btn-primary { background:var(--nv-green); color:#000; border-color:var(--nv-green); }
@@ -124,9 +133,9 @@
     .ex-title { color:var(--text-pri); font-size:.92rem; font-weight:600; }
     .ex-lang  { font-size:.72rem; color:var(--text-dim); margin-left:auto; font-family:var(--font-mono); }
     .ex-body pre { border:none; border-radius:0; margin:0; max-height:210px; overflow:hidden; font-size:.77rem; background:#090909; }
-    .ex-footer { padding:.9rem 1.5rem; border-top:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
-    .ex-desc { font-size:.8rem; color:var(--text-mut); }
-    .ex-link { font-size:.8rem; color:var(--nv-green); font-weight:600; }
+    .ex-footer { padding:.9rem 1.5rem; border-top:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; gap:1rem; }
+    .ex-desc { font-size:.8rem; color:var(--text-mut); min-width:0; }
+    .ex-link { font-size:.8rem; color:var(--nv-green); font-weight:600; white-space:nowrap; flex-shrink:0; }
 
     /* TUTORIALS */
     #tutorials { border-top:1px solid var(--border); }
@@ -161,7 +170,7 @@
     .pub-title { color:var(--text-pri); font-size:1rem; font-weight:600; margin-bottom:.75rem; line-height:1.4; }
     .pub-authors { font-size:.82rem; color:var(--text-mut); margin-bottom:1.25rem; }
     .pub-links { display:flex; gap:.75rem; }
-    .pub-link { font-size:.8rem; font-weight:600; padding:.3rem .75rem; border-radius:6px; border:1px solid var(--border); color:var(--text-mut); transition:all var(--ease); }
+    .pub-link { font-size:.8rem; font-weight:600; padding:.3rem .75rem; border-radius:6px; border:1px solid var(--border); color:var(--text-mut); transition:all var(--ease); white-space:nowrap; }
     .pub-link:hover { color:var(--nv-green); border-color:rgba(118,185,0,.4); background:rgba(118,185,0,.05); }
 
     /* CTA */
@@ -207,8 +216,21 @@
         <a href="concepts/" class="nav-ext">Concepts</a>
         <a href="tutorials/benchmarking_examples/" class="nav-ext">Benchmarks</a>
         <a href="#examples">Examples</a>
-        <a href="#tutorials">Tutorials</a>
-        <a href="api-reference/" class="nav-ext">API Reference</a>
+        <div class="nav-item nav-has-dropdown">
+          <a href="#tutorials">Tutorials</a>
+          <ul class="nav-dropdown">
+            <li><a href="tutorials/system_configuration/">System Configuration</a></li>
+            <li><a href="tutorials/configuration-walkthrough/">Configuration YAML Walkthrough</a></li>
+          </ul>
+        </div>
+        <div class="nav-item nav-has-dropdown">
+          <a href="api-reference/" class="nav-ext">API Reference</a>
+          <ul class="nav-dropdown">
+            <li><a href="api-reference/">API Guide</a></li>
+            <li><a href="api-reference/configuration/">Configuration YAML Reference</a></li>
+            <li><a href="api-reference/cpp/">C++ API Usage</a></li>
+          </ul>
+        </div>
         <a href="#publications">News</a>
       </div>
       <div class="nav-actions">

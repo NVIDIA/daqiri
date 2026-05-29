@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # C++ API Usage
 
 This guide covers C++ initialization, RX/TX workflows, buffer lifecycle calls, file

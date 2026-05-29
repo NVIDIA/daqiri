@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # System Configuration
 
 DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking/ethernet-adapters/) (ConnectX-6 Dx or later) and a CUDA-capable GPU. Two reference platforms are documented in this tutorial — pick the one closest to yours below:
