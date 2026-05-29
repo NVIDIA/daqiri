@@ -56,12 +56,12 @@ volatile std::sig_atomic_t g_stop_requested = 0;
 
 void signal_handler(int) { g_stop_requested = 1; }
 
-void store_be16(uint8_t* dst, uint16_t value) {
+void store_be16(uint8_t *dst, uint16_t value) {
   dst[0] = static_cast<uint8_t>(value >> 8);
   dst[1] = static_cast<uint8_t>(value & 0xff);
 }
 
-uint32_t checksum_add(uint32_t sum, const uint8_t* data, size_t len) {
+uint32_t checksum_add(uint32_t sum, const uint8_t *data, size_t len) {
   while (len > 1) {
     sum += static_cast<uint16_t>((data[0] << 8) | data[1]);
     data += 2;
@@ -80,15 +80,15 @@ uint16_t checksum_finish(uint32_t sum) {
   return static_cast<uint16_t>(~sum);
 }
 
-uint16_t ipv4_checksum(const uint8_t* ip_header) {
+uint16_t ipv4_checksum(const uint8_t *ip_header) {
   return checksum_finish(checksum_add(0, ip_header, kIpv4HeaderLen));
 }
 
-uint16_t udp_checksum(const std::vector<uint8_t>& packet) {
-  const uint8_t* ip = packet.data() + kEthernetHeaderLen;
-  const uint8_t* udp = ip + kIpv4HeaderLen;
-  const uint16_t udp_len =
-      static_cast<uint16_t>(packet.size() - kEthernetHeaderLen - kIpv4HeaderLen);
+uint16_t udp_checksum(const std::vector<uint8_t> &packet) {
+  const uint8_t *ip = packet.data() + kEthernetHeaderLen;
+  const uint8_t *udp = ip + kIpv4HeaderLen;
+  const uint16_t udp_len = static_cast<uint16_t>(
+      packet.size() - kEthernetHeaderLen - kIpv4HeaderLen);
 
   uint32_t sum = 0;
   sum = checksum_add(sum, ip + 12, 8);
@@ -99,12 +99,12 @@ uint16_t udp_checksum(const std::vector<uint8_t>& packet) {
   return result == 0 ? 0xffff : result;
 }
 
-bool parse_ipv4(const std::string& text, std::array<uint8_t, 4>* out) {
-  in_addr addr {};
+bool parse_ipv4(const std::string &text, std::array<uint8_t, 4> *out) {
+  in_addr addr{};
   if (inet_pton(AF_INET, text.c_str(), &addr) != 1) {
     return false;
   }
-  const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&addr.s_addr);
+  const uint8_t *bytes = reinterpret_cast<const uint8_t *>(&addr.s_addr);
   (*out)[0] = bytes[0];
   (*out)[1] = bytes[1];
   (*out)[2] = bytes[2];
@@ -112,8 +112,9 @@ bool parse_ipv4(const std::string& text, std::array<uint8_t, 4>* out) {
   return true;
 }
 
-std::vector<uint8_t> make_udp_packet_template(const daqiri::bench::RawBenchTxConfig& cfg,
-                                              const std::string& eth_src_addr) {
+std::vector<uint8_t>
+make_udp_packet_template(const daqiri::bench::RawBenchTxConfig &cfg,
+                         const std::string &eth_src_addr) {
   if (cfg.header_size < kUdpIpv4EthernetHeaderLen) {
     throw std::runtime_error("bench_tx.header_size must be at least 42 bytes");
   }
@@ -126,8 +127,8 @@ std::vector<uint8_t> make_udp_packet_template(const daqiri::bench::RawBenchTxCon
     throw std::runtime_error("packet is too large for IPv4");
   }
 
-  std::array<uint8_t, 4> src_ip {};
-  std::array<uint8_t, 4> dst_ip {};
+  std::array<uint8_t, 4> src_ip{};
+  std::array<uint8_t, 4> dst_ip{};
   if (!parse_ipv4(cfg.ip_src_addr, &src_ip)) {
     throw std::runtime_error("invalid bench_tx.ip_src_addr");
   }
@@ -147,7 +148,7 @@ std::vector<uint8_t> make_udp_packet_template(const daqiri::bench::RawBenchTxCon
   std::memcpy(packet.data() + 6, src_mac, sizeof(src_mac));
   store_be16(packet.data() + 12, kEtherTypeIpv4);
 
-  uint8_t* ip = packet.data() + kEthernetHeaderLen;
+  uint8_t *ip = packet.data() + kEthernetHeaderLen;
   ip[0] = 0x45;
   ip[1] = 0;
   store_be16(ip + 2, static_cast<uint16_t>(packet_len - kEthernetHeaderLen));
@@ -158,11 +159,11 @@ std::vector<uint8_t> make_udp_packet_template(const daqiri::bench::RawBenchTxCon
   std::memcpy(ip + 12, src_ip.data(), src_ip.size());
   std::memcpy(ip + 16, dst_ip.data(), dst_ip.size());
 
-  uint8_t* udp = ip + kIpv4HeaderLen;
+  uint8_t *udp = ip + kIpv4HeaderLen;
   store_be16(udp, src_ports.front());
   store_be16(udp + 2, dst_ports.front());
-  store_be16(udp + 4,
-             static_cast<uint16_t>(packet_len - kEthernetHeaderLen - kIpv4HeaderLen));
+  store_be16(udp + 4, static_cast<uint16_t>(packet_len - kEthernetHeaderLen -
+                                            kIpv4HeaderLen));
 
   for (uint32_t i = kUdpIpv4EthernetHeaderLen; i < packet_len; ++i) {
     packet[i] = static_cast<uint8_t>((i - kUdpIpv4EthernetHeaderLen) & 0xff);
@@ -173,22 +174,23 @@ std::vector<uint8_t> make_udp_packet_template(const daqiri::bench::RawBenchTxCon
   return packet;
 }
 
-bool is_device_pointer(const void* ptr) {
-  cudaPointerAttributes attrs {};
+bool is_device_pointer(const void *ptr) {
+  cudaPointerAttributes attrs{};
   cudaError_t err = cudaPointerGetAttributes(&attrs, ptr);
   if (err != cudaSuccess) {
     cudaGetLastError();
     return false;
   }
 #if CUDART_VERSION >= 10000
-  return attrs.type == cudaMemoryTypeDevice || attrs.type == cudaMemoryTypeManaged;
+  return attrs.type == cudaMemoryTypeDevice ||
+         attrs.type == cudaMemoryTypeManaged;
 #else
   return attrs.memoryType == cudaMemoryTypeDevice;
 #endif
 }
 
-bool write_all(int fd, const void* data, size_t len) {
-  const uint8_t* cursor = static_cast<const uint8_t*>(data);
+bool write_all(int fd, const void *data, size_t len) {
+  const uint8_t *cursor = static_cast<const uint8_t *>(data);
   while (len > 0) {
     ssize_t written = ::write(fd, cursor, len);
     if (written < 0) {
@@ -224,8 +226,9 @@ struct PcapPacketHeader {
 };
 
 class PcapWriter {
- public:
-  explicit PcapWriter(std::string output_path) : output_path_(std::move(output_path)) {}
+public:
+  explicit PcapWriter(std::string output_path)
+      : output_path_(std::move(output_path)) {}
 
   ~PcapWriter() {
     if (copy_stream_ != nullptr) {
@@ -237,32 +240,30 @@ class PcapWriter {
   }
 
   void open_file() {
-    fd_ = ::open(output_path_.c_str(), O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
+    fd_ = ::open(output_path_.c_str(), O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC,
+                 0644);
     if (fd_ < 0) {
-      throw std::runtime_error("failed to open " + output_path_ + ": " + std::strerror(errno));
+      throw std::runtime_error("failed to open " + output_path_ + ": " +
+                               std::strerror(errno));
     }
 
-    PcapGlobalHeader header {
-        kPcapMagicUsec,
-        2,
-        4,
-        0,
-        0,
-        kPcapSnaplen,
-        kPcapLinkTypeEthernet,
+    PcapGlobalHeader header{
+        kPcapMagicUsec, 2, 4, 0, 0, kPcapSnaplen, kPcapLinkTypeEthernet,
     };
     if (!write_all(fd_, &header, sizeof(header))) {
-      throw std::runtime_error("failed to write pcap header: " + std::string(std::strerror(errno)));
+      throw std::runtime_error("failed to write pcap header: " +
+                               std::string(std::strerror(errno)));
     }
 
-    cudaError_t err = cudaStreamCreateWithFlags(&copy_stream_, cudaStreamNonBlocking);
+    cudaError_t err =
+        cudaStreamCreateWithFlags(&copy_stream_, cudaStreamNonBlocking);
     if (err != cudaSuccess) {
       throw std::runtime_error("failed to create CUDA copy stream: " +
                                std::string(cudaGetErrorString(err)));
     }
   }
 
-  bool write_burst(daqiri::BurstParams* burst) {
+  bool write_burst(daqiri::BurstParams *burst) {
     if (burst == nullptr) {
       std::cerr << "received null burst\n";
       return false;
@@ -280,10 +281,10 @@ class PcapWriter {
   uint64_t packets() const { return packets_; }
   uint64_t bytes() const { return bytes_; }
   uint64_t bursts() const { return bursts_; }
-  const std::string& output_path() const { return output_path_; }
+  const std::string &output_path() const { return output_path_; }
 
- private:
-  uint32_t packet_length(daqiri::BurstParams* burst, int packet) const {
+private:
+  uint32_t packet_length(daqiri::BurstParams *burst, int packet) const {
     uint64_t total = 0;
     for (int seg = 0; seg < burst->hdr.hdr.num_segs; ++seg) {
       total += daqiri::get_segment_packet_length(burst, seg, packet);
@@ -294,7 +295,7 @@ class PcapWriter {
     return static_cast<uint32_t>(total);
   }
 
-  bool write_segment(const void* data, size_t len) {
+  bool write_segment(const void *data, size_t len) {
     if (len == 0) {
       return true;
     }
@@ -308,8 +309,8 @@ class PcapWriter {
         return false;
       }
     }
-    cudaError_t err =
-        cudaMemcpyAsync(staging_.data(), data, len, cudaMemcpyDeviceToHost, copy_stream_);
+    cudaError_t err = cudaMemcpyAsync(staging_.data(), data, len,
+                                      cudaMemcpyDeviceToHost, copy_stream_);
     if (err != cudaSuccess) {
       std::cerr << "cudaMemcpyAsync failed while staging packet data: "
                 << cudaGetErrorString(err) << "\n";
@@ -324,35 +325,38 @@ class PcapWriter {
     return write_all(fd_, staging_.data(), len);
   }
 
-  bool write_packet(daqiri::BurstParams* burst, int packet) {
+  bool write_packet(daqiri::BurstParams *burst, int packet) {
     uint32_t len = 0;
     try {
       len = packet_length(burst, packet);
-    } catch (const std::exception& e) {
+    } catch (const std::exception &e) {
       std::cerr << e.what() << "\n";
       return false;
     }
 
     auto now = std::chrono::system_clock::now();
-    auto epoch_usec =
-        std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+    auto epoch_usec = std::chrono::duration_cast<std::chrono::microseconds>(
+                          now.time_since_epoch())
+                          .count();
 
-    PcapPacketHeader packet_header {
+    PcapPacketHeader packet_header{
         static_cast<uint32_t>(epoch_usec / 1000000),
         static_cast<uint32_t>(epoch_usec % 1000000),
         len,
         len,
     };
     if (!write_all(fd_, &packet_header, sizeof(packet_header))) {
-      std::cerr << "failed to write pcap packet header: " << std::strerror(errno) << "\n";
+      std::cerr << "failed to write pcap packet header: "
+                << std::strerror(errno) << "\n";
       return false;
     }
 
     for (int seg = 0; seg < burst->hdr.hdr.num_segs; ++seg) {
-      auto* data = daqiri::get_segment_packet_ptr(burst, seg, packet);
+      auto *data = daqiri::get_segment_packet_ptr(burst, seg, packet);
       auto seg_len = daqiri::get_segment_packet_length(burst, seg, packet);
       if (!write_segment(data, seg_len)) {
-        std::cerr << "failed to write packet data: " << std::strerror(errno) << "\n";
+        std::cerr << "failed to write packet data: " << std::strerror(errno)
+                  << "\n";
         return false;
       }
     }
@@ -377,12 +381,12 @@ struct CliArgs {
   bool start_tx = false;
 };
 
-void print_usage(const char* argv0) {
+void print_usage(const char *argv0) {
   std::cerr << "Usage: " << argv0 << " <config.yaml> <output.pcap> [--tx]\n"
             << "  --tx  start the built-in demo transmitter from bench_tx\n";
 }
 
-bool parse_args(int argc, char** argv, CliArgs* args) {
+bool parse_args(int argc, char **argv, CliArgs *args) {
   if (argc < 3) {
     return false;
   }
@@ -405,31 +409,38 @@ struct PcapTxConfig {
   std::string eth_src_addr = "02:00:00:00:00:01";
 };
 
-PcapTxConfig parse_pcap_tx_config(const YAML::Node& root) {
+PcapTxConfig parse_pcap_tx_config(const YAML::Node &root) {
   PcapTxConfig cfg;
   cfg.raw = daqiri::bench::parse_tx(root);
-  if (root["bench_tx"] && root["bench_tx"]["eth_src_addr"]) {
-    cfg.eth_src_addr = root["bench_tx"]["eth_src_addr"].as<std::string>();
+  const auto bench_tx = root["bench_tx"];
+  const auto tx = bench_tx && bench_tx.IsSequence() && bench_tx.size() > 0
+                      ? bench_tx[0]
+                      : bench_tx;
+  if (tx && tx["eth_src_addr"]) {
+    cfg.eth_src_addr = tx["eth_src_addr"].as<std::string>();
   }
   return cfg;
 }
 
-void tx_worker(PcapTxConfig cfg, std::atomic<bool>* stop) {
+void tx_worker(PcapTxConfig cfg, std::atomic<bool> *stop) {
   const int port_id = daqiri::get_port_id(cfg.raw.interface_name);
   if (port_id < 0) {
-    std::cerr << "Invalid TX interface_name: " << cfg.raw.interface_name << "\n";
+    std::cerr << "Invalid TX interface_name: " << cfg.raw.interface_name
+              << "\n";
     stop->store(true, std::memory_order_relaxed);
     return;
   }
 
   auto packet_template = make_udp_packet_template(cfg.raw, cfg.eth_src_addr);
-  std::unordered_set<void*> initialized_buffers;
+  std::unordered_set<void *> initialized_buffers;
   uint64_t bursts = 0;
   uint64_t packets = 0;
 
   while (!stop->load(std::memory_order_relaxed)) {
-    auto* msg = daqiri::create_tx_burst_params();
-    daqiri::set_header(msg, static_cast<uint16_t>(port_id), 0, cfg.raw.batch_size, 1);
+    auto *msg = daqiri::create_tx_burst_params();
+    daqiri::set_header(msg, static_cast<uint16_t>(port_id),
+                       static_cast<uint16_t>(cfg.raw.queue_id),
+                       cfg.raw.batch_size, 1);
 
     if (!daqiri::is_tx_burst_available(msg)) {
       daqiri::free_tx_metadata(msg);
@@ -446,19 +457,22 @@ void tx_worker(PcapTxConfig cfg, std::atomic<bool>* stop) {
     bool failed = false;
 
     for (int i = 0; i < num_packets; ++i) {
-      auto* dst = daqiri::get_segment_packet_ptr(msg, 0, i);
+      auto *dst = daqiri::get_segment_packet_ptr(msg, 0, i);
       if (initialized_buffers.insert(dst).second) {
         cudaError_t err =
-            cudaMemcpy(dst, packet_template.data(), packet_template.size(), cudaMemcpyHostToDevice);
+            cudaMemcpy(dst, packet_template.data(), packet_template.size(),
+                       cudaMemcpyHostToDevice);
         if (err != cudaSuccess) {
-          std::cerr << "TX cudaMemcpy failed: " << cudaGetErrorString(err) << "\n";
+          std::cerr << "TX cudaMemcpy failed: " << cudaGetErrorString(err)
+                    << "\n";
           failed = true;
           break;
         }
       }
 
       if (daqiri::set_packet_lengths(
-              msg, i, {static_cast<int>(cfg.raw.header_size + cfg.raw.payload_size)}) !=
+              msg, i,
+              {static_cast<int>(cfg.raw.header_size + cfg.raw.payload_size)}) !=
           daqiri::Status::SUCCESS) {
         failed = true;
         break;
@@ -481,12 +495,12 @@ void tx_worker(PcapTxConfig cfg, std::atomic<bool>* stop) {
     packets += static_cast<uint64_t>(num_packets);
   }
 
-  std::cout << "TX stopped after " << bursts << " bursts and " << packets << " packets\n";
+  std::cout << "TX stopped after " << bursts << " bursts and " << packets
+            << " packets\n";
 }
 
-void rx_pcap_loop(const daqiri::bench::RawBenchRxConfig& rx_cfg,
-                  PcapWriter* writer,
-                  std::atomic<bool>* stop) {
+void rx_pcap_loop(const daqiri::bench::RawBenchRxConfig &rx_cfg,
+                  PcapWriter *writer, std::atomic<bool> *stop) {
   const int port_id = daqiri::get_port_id(rx_cfg.interface_name);
   if (port_id < 0) {
     std::cerr << "Invalid RX interface_name: " << rx_cfg.interface_name << "\n";
@@ -504,8 +518,9 @@ void rx_pcap_loop(const daqiri::bench::RawBenchRxConfig& rx_cfg,
     bool got_work = false;
     int num_queues = daqiri::get_num_rx_queues(port_id);
     for (int queue_id = 0; queue_id < num_queues; ++queue_id) {
-      daqiri::BurstParams* burst = nullptr;
-      if (daqiri::get_rx_burst(&burst, port_id, queue_id) != daqiri::Status::SUCCESS ||
+      daqiri::BurstParams *burst = nullptr;
+      if (daqiri::get_rx_burst(&burst, port_id, queue_id) !=
+              daqiri::Status::SUCCESS ||
           burst == nullptr) {
         continue;
       }
@@ -518,8 +533,9 @@ void rx_pcap_loop(const daqiri::bench::RawBenchRxConfig& rx_cfg,
 
     auto now = std::chrono::steady_clock::now();
     if (now - last_report >= std::chrono::seconds(2)) {
-      std::cout << "captured " << writer->packets() << " packets, " << writer->bytes()
-                << " bytes into " << writer->output_path() << "\n";
+      std::cout << "captured " << writer->packets() << " packets, "
+                << writer->bytes() << " bytes into " << writer->output_path()
+                << "\n";
       last_report = now;
     }
     if (!got_work) {
@@ -528,9 +544,9 @@ void rx_pcap_loop(const daqiri::bench::RawBenchRxConfig& rx_cfg,
   }
 }
 
-}  // namespace
+} // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
   CliArgs args;
   if (!parse_args(argc, argv, &args)) {
     print_usage(argv[0]);
@@ -552,7 +568,8 @@ int main(int argc, char** argv) {
       return 1;
     }
     if (!args.start_tx && daqiri::bench::has_bench_tx(root)) {
-      std::cout << "bench_tx is present but disabled; pass --tx to start the demo transmitter\n";
+      std::cout << "bench_tx is present but disabled; pass --tx to start the "
+                   "demo transmitter\n";
     }
 
     auto rx_cfg = daqiri::bench::parse_rx(root);
@@ -570,13 +587,14 @@ int main(int argc, char** argv) {
     PcapWriter writer(args.output_path);
     writer.open_file();
 
-    std::atomic<bool> stop {false};
+    std::atomic<bool> stop{false};
     std::thread tx_thread;
     if (tx_cfg) {
       tx_thread = std::thread(tx_worker, *tx_cfg, &stop);
     }
 
-    std::cout << "Capturing to " << args.output_path << ". Press Ctrl+C to stop.\n";
+    std::cout << "Capturing to " << args.output_path
+              << ". Press Ctrl+C to stop.\n";
     rx_pcap_loop(rx_cfg, &writer, &stop);
 
     stop.store(true, std::memory_order_relaxed);
@@ -590,7 +608,7 @@ int main(int argc, char** argv) {
     daqiri::shutdown();
     daqiri_initialized = false;
     return 0;
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     std::cerr << "pcap writer failed: " << e.what() << "\n";
     if (daqiri_initialized) {
       daqiri::shutdown();

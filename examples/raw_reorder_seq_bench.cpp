@@ -22,8 +22,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <cstring>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -42,11 +42,15 @@ struct SequenceTxConfig {
   uint32_t sequence_number_start = 0;
 };
 
-SequenceTxConfig parse_sequence_tx(const YAML::Node& root) {
+SequenceTxConfig parse_sequence_tx(const YAML::Node &root) {
   SequenceTxConfig cfg;
   cfg.packet = daqiri::bench::parse_tx(root);
-  if (!root["bench_tx"]) { return cfg; }
-  const auto tx = root["bench_tx"];
+  if (!root["bench_tx"]) {
+    return cfg;
+  }
+  const auto bench_tx = root["bench_tx"];
+  const auto tx =
+      bench_tx.IsSequence() && bench_tx.size() > 0 ? bench_tx[0] : bench_tx;
   cfg.sequence_number_offset =
       tx["sequence_number_offset"].as<uint32_t>(cfg.sequence_number_offset);
   cfg.sequence_number_start =
@@ -54,41 +58,51 @@ SequenceTxConfig parse_sequence_tx(const YAML::Node& root) {
   return cfg;
 }
 
-std::vector<std::pair<std::string, std::string>> parse_gpu_reorder_plans(
-    const YAML::Node& root) {
+std::vector<std::pair<std::string, std::string>>
+parse_gpu_reorder_plans(const YAML::Node &root) {
   std::vector<std::pair<std::string, std::string>> plans;
   std::unordered_set<std::string> dedup;
 
   const auto cfg = root["daqiri"]["cfg"];
   const auto interfaces = cfg["interfaces"];
-  if (!interfaces || !interfaces.IsSequence()) { return plans; }
+  if (!interfaces || !interfaces.IsSequence()) {
+    return plans;
+  }
 
-  for (const auto& intf : interfaces) {
+  for (const auto &intf : interfaces) {
     const auto interface_name = intf["name"].as<std::string>("");
     const auto rx_node = intf["rx"];
-    if (!rx_node || !rx_node.IsMap()) { continue; }
+    if (!rx_node || !rx_node.IsMap()) {
+      continue;
+    }
     const auto reorder_configs = rx_node["reorder_configs"];
-    if (interface_name.empty() || !reorder_configs || !reorder_configs.IsSequence()) {
+    if (interface_name.empty() || !reorder_configs ||
+        !reorder_configs.IsSequence()) {
       continue;
     }
 
-    for (const auto& reorder_cfg : reorder_configs) {
+    for (const auto &reorder_cfg : reorder_configs) {
       const auto reorder_name = reorder_cfg["name"].as<std::string>("");
       const auto reorder_type = reorder_cfg["reorder_type"].as<std::string>("");
-      if (reorder_name.empty() || reorder_type != "gpu") { continue; }
+      if (reorder_name.empty() || reorder_type != "gpu") {
+        continue;
+      }
 
       const std::string key = interface_name + ":" + reorder_name;
-      if (dedup.insert(key).second) { plans.emplace_back(interface_name, reorder_name); }
+      if (dedup.insert(key).second) {
+        plans.emplace_back(interface_name, reorder_name);
+      }
     }
   }
 
   return plans;
 }
 
-void tx_worker(const SequenceTxConfig& cfg, std::atomic<bool>& stop) {
+void tx_worker(const SequenceTxConfig &cfg, std::atomic<bool> &stop) {
   const int port_id = daqiri::get_port_id(cfg.packet.interface_name);
   if (port_id < 0) {
-    std::cerr << "Invalid TX interface_name: " << cfg.packet.interface_name << "\n";
+    std::cerr << "Invalid TX interface_name: " << cfg.packet.interface_name
+              << "\n";
     stop.store(true);
     return;
   }
@@ -109,15 +123,19 @@ void tx_worker(const SequenceTxConfig& cfg, std::atomic<bool>& stop) {
   ip_src = ntohl(ip_src);
   ip_dst = ntohl(ip_dst);
 
-  const auto src_ports = daqiri::bench::parse_udp_ports(cfg.packet.udp_src_port);
-  const auto dst_ports = daqiri::bench::parse_udp_ports(cfg.packet.udp_dst_port);
+  const auto src_ports =
+      daqiri::bench::parse_udp_ports(cfg.packet.udp_src_port);
+  const auto dst_ports =
+      daqiri::bench::parse_udp_ports(cfg.packet.udp_dst_port);
   size_t src_idx = 0;
   size_t dst_idx = 0;
   uint32_t next_sequence = cfg.sequence_number_start;
 
   while (!stop.load()) {
-    auto* msg = daqiri::create_tx_burst_params();
-    daqiri::set_header(msg, static_cast<uint16_t>(port_id), 0, cfg.packet.batch_size, 1);
+    auto *msg = daqiri::create_tx_burst_params();
+    daqiri::set_header(msg, static_cast<uint16_t>(port_id),
+                       static_cast<uint16_t>(cfg.packet.queue_id),
+                       cfg.packet.batch_size, 1);
 
     if (!daqiri::is_tx_burst_available(msg)) {
       daqiri::free_tx_metadata(msg);
@@ -140,36 +158,34 @@ void tx_worker(const SequenceTxConfig& cfg, std::atomic<bool>& stop) {
 
       if (daqiri::set_eth_header(msg, i, eth_dst) != daqiri::Status::SUCCESS ||
           daqiri::set_ipv4_header(
-              msg,
-              i,
-              static_cast<int>(cfg.packet.payload_size + cfg.packet.header_size - (14 + 20)),
-              17,
-              ip_src,
-              ip_dst) != daqiri::Status::SUCCESS ||
+              msg, i,
+              static_cast<int>(cfg.packet.payload_size +
+                               cfg.packet.header_size - (14 + 20)),
+              17, ip_src, ip_dst) != daqiri::Status::SUCCESS ||
           daqiri::set_udp_header(
-              msg,
-              i,
-              static_cast<int>(
-                  cfg.packet.payload_size + cfg.packet.header_size - (14 + 20 + 8)),
-              src_port,
-              dst_port) != daqiri::Status::SUCCESS) {
+              msg, i,
+              static_cast<int>(cfg.packet.payload_size +
+                               cfg.packet.header_size - (14 + 20 + 8)),
+              src_port, dst_port) != daqiri::Status::SUCCESS) {
         failed = true;
         break;
       }
 
-      auto* pkt_data = static_cast<uint8_t*>(daqiri::get_segment_packet_ptr(msg, 0, i));
+      auto *pkt_data =
+          static_cast<uint8_t *>(daqiri::get_segment_packet_ptr(msg, 0, i));
       if (pkt_data == nullptr) {
         failed = true;
         break;
       }
       const uint32_t sequence_network_order = htonl(next_sequence++);
-      std::memcpy(pkt_data + cfg.packet.header_size + cfg.sequence_number_offset,
-                  &sequence_network_order,
-                  sizeof(sequence_network_order));
+      std::memcpy(pkt_data + cfg.packet.header_size +
+                      cfg.sequence_number_offset,
+                  &sequence_network_order, sizeof(sequence_network_order));
 
       if (daqiri::set_packet_lengths(
               msg, i,
-              {static_cast<int>(cfg.packet.header_size + cfg.packet.payload_size)}) !=
+              {static_cast<int>(cfg.packet.header_size +
+                                cfg.packet.payload_size)}) !=
           daqiri::Status::SUCCESS) {
         failed = true;
         break;
@@ -184,7 +200,8 @@ void tx_worker(const SequenceTxConfig& cfg, std::atomic<bool>& stop) {
   }
 }
 
-void rx_reorder_worker(const daqiri::bench::RawBenchRxConfig& cfg, std::atomic<bool>& stop) {
+void rx_reorder_worker(const daqiri::bench::RawBenchRxConfig &cfg,
+                       std::atomic<bool> &stop) {
   const int port_id = daqiri::get_port_id(cfg.interface_name);
   if (port_id < 0) {
     std::cerr << "Invalid RX interface_name: " << cfg.interface_name << "\n";
@@ -205,22 +222,25 @@ void rx_reorder_worker(const daqiri::bench::RawBenchRxConfig& cfg, std::atomic<b
   uint64_t first_batch_id = 0;
   uint64_t last_batch_id = 0;
   bool have_batch_id = false;
-  const bool check_reorder_info = std::getenv("DAQIRI_BENCH_CHECK_REORDER_INFO") != nullptr;
+  const bool check_reorder_info =
+      std::getenv("DAQIRI_BENCH_CHECK_REORDER_INFO") != nullptr;
   while (!stop.load()) {
-    const auto num_rx_queues = static_cast<int>(daqiri::get_num_rx_queues(port_id));
+    const auto num_rx_queues =
+        static_cast<int>(daqiri::get_num_rx_queues(port_id));
     bool got_any = false;
     for (int q = 0; q < num_rx_queues; ++q) {
-      daqiri::BurstParams* burst = nullptr;
+      daqiri::BurstParams *burst = nullptr;
       if (daqiri::get_rx_burst(&burst, port_id, q) != daqiri::Status::SUCCESS ||
           burst == nullptr) {
         continue;
       }
       got_any = true;
       const auto burst_size = daqiri::get_num_packets(burst);
-      const bool reordered =
-          (burst->hdr.hdr.burst_flags & daqiri::DAQIRI_BURST_FLAG_REORDERED) != 0U;
+      const bool reordered = (burst->hdr.hdr.burst_flags &
+                              daqiri::DAQIRI_BURST_FLAG_REORDERED) != 0U;
       const bool timeout_flush =
-          (burst->hdr.hdr.burst_flags & daqiri::DAQIRI_BURST_FLAG_REORDER_TIMEOUT) != 0U;
+          (burst->hdr.hdr.burst_flags &
+           daqiri::DAQIRI_BURST_FLAG_REORDER_TIMEOUT) != 0U;
       const uint64_t logical_packets =
           reordered ? static_cast<uint64_t>(burst->hdr.hdr.max_pkt)
                     : static_cast<uint64_t>(burst_size);
@@ -229,10 +249,14 @@ void rx_reorder_worker(const daqiri::bench::RawBenchRxConfig& cfg, std::atomic<b
       bytes += daqiri::get_burst_tot_byte(burst);
       if (reordered) {
         ++aggregated_batches;
-        if (timeout_flush) { ++timeout_batches; }
+        if (timeout_flush) {
+          ++timeout_batches;
+        }
         aggregated_packets += logical_packets;
         if (check_reorder_info) {
-          if (burst->event != nullptr) { cudaEventSynchronize(burst->event); }
+          if (burst->event != nullptr) {
+            cudaEventSynchronize(burst->event);
+          }
           daqiri::ReorderBurstInfo info{};
           const auto info_status = daqiri::get_reorder_burst_info(burst, &info);
           if (info_status == daqiri::Status::SUCCESS) {
@@ -253,10 +277,13 @@ void rx_reorder_worker(const daqiri::bench::RawBenchRxConfig& cfg, std::atomic<b
       }
       daqiri::free_all_packets_and_burst_rx(burst);
     }
-    if (!got_any) { std::this_thread::sleep_for(std::chrono::microseconds(100)); }
+    if (!got_any) {
+      std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
   }
 
-  std::cout << "RX complete: packets=" << pkts << " bytes=" << bytes << " bursts=" << bursts
+  std::cout << "RX complete: packets=" << pkts << " bytes=" << bytes
+            << " bursts=" << bursts
             << " aggregated_batches=" << aggregated_batches
             << " timeout_batches=" << timeout_batches
             << " aggregated_packets=" << aggregated_packets
@@ -265,14 +292,15 @@ void rx_reorder_worker(const daqiri::bench::RawBenchRxConfig& cfg, std::atomic<b
     std::cout << " reorder_info_success=" << reorder_info_success
               << " reorder_info_not_ready=" << reorder_info_not_ready
               << " reorder_info_errors=" << reorder_info_errors
-              << " first_batch_id=" << first_batch_id << " last_batch_id=" << last_batch_id;
+              << " first_batch_id=" << first_batch_id
+              << " last_batch_id=" << last_batch_id;
   }
   std::cout << "\n";
 }
 
-}  // namespace
+} // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0] << " <config.yaml> [--seconds N]\n";
     return 1;
@@ -296,12 +324,12 @@ int main(int argc, char** argv) {
     }
     reorder_stream_initialized = true;
 
-    for (const auto& [interface_name, reorder_name] : reorder_plans) {
-      const auto st =
-          daqiri::set_reorder_cuda_stream(interface_name, reorder_name, reorder_stream);
+    for (const auto &[interface_name, reorder_name] : reorder_plans) {
+      const auto st = daqiri::set_reorder_cuda_stream(
+          interface_name, reorder_name, reorder_stream);
       if (st != daqiri::Status::SUCCESS) {
-        std::cerr << "set_reorder_cuda_stream failed for interface=" << interface_name
-                  << " reorder_name=" << reorder_name
+        std::cerr << "set_reorder_cuda_stream failed for interface="
+                  << interface_name << " reorder_name=" << reorder_name
                   << " status_code=" << static_cast<int>(st) << "\n";
         cudaStreamDestroy(reorder_stream);
         daqiri::shutdown();
@@ -314,7 +342,9 @@ int main(int argc, char** argv) {
   const bool has_tx = daqiri::bench::has_bench_tx(root);
   if (!has_rx && !has_tx) {
     std::cerr << "Config must define at least one of bench_rx or bench_tx\n";
-    if (reorder_stream_initialized) { cudaStreamDestroy(reorder_stream); }
+    if (reorder_stream_initialized) {
+      cudaStreamDestroy(reorder_stream);
+    }
     daqiri::shutdown();
     return 1;
   }
@@ -324,17 +354,26 @@ int main(int argc, char** argv) {
   std::thread rx_thread;
 
   if (has_rx) {
-    rx_thread = std::thread(rx_reorder_worker, daqiri::bench::parse_rx(root), std::ref(stop));
+    rx_thread = std::thread(rx_reorder_worker, daqiri::bench::parse_rx(root),
+                            std::ref(stop));
   }
-  if (has_tx) { tx_thread = std::thread(tx_worker, parse_sequence_tx(root), std::ref(stop)); }
+  if (has_tx) {
+    tx_thread = std::thread(tx_worker, parse_sequence_tx(root), std::ref(stop));
+  }
 
   daqiri::bench::wait_for_stop(run_seconds, stop);
 
-  if (tx_thread.joinable()) { tx_thread.join(); }
-  if (rx_thread.joinable()) { rx_thread.join(); }
+  if (tx_thread.joinable()) {
+    tx_thread.join();
+  }
+  if (rx_thread.joinable()) {
+    rx_thread.join();
+  }
 
   daqiri::print_stats();
-  if (reorder_stream_initialized) { cudaStreamDestroy(reorder_stream); }
+  if (reorder_stream_initialized) {
+    cudaStreamDestroy(reorder_stream);
+  }
   daqiri::shutdown();
   return 0;
 }

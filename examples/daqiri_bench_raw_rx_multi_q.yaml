@@ -35,7 +35,7 @@ daqiri:
             - "Data_RX_GPU1"
         - name: "rx_q_1"
           id: 1
-          cpu_core: 9
+          cpu_core: 10
           batch_size: 10240
           memory_regions:
             - "Data_RX_GPU2"
@@ -58,4 +58,7 @@ daqiri:
             udp_dst: 4095
 
 bench_rx:
-  interface_name: "rx_port"
+- interface_name: "rx_port"
+  queue_id: 0
+- interface_name: "rx_port"
+  queue_id: 1

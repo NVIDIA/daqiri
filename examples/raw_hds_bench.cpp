@@ -34,7 +34,8 @@
 
 namespace {
 
-void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg, std::atomic<bool>& stop) {
+void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
+               std::atomic<bool> &stop) {
   const int port_id = daqiri::get_port_id(cfg.interface_name);
   if (port_id < 0) {
     std::cerr << "Invalid TX interface_name: " << cfg.interface_name << "\n";
@@ -62,11 +63,12 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg, std::atomic<bool>& st
     payload_template[i] = static_cast<uint8_t>(i & 0xff);
   }
 
-  std::unordered_set<void*> initialized_payload_buffers;
+  std::unordered_set<void *> initialized_payload_buffers;
 
   while (!stop.load()) {
-    auto* msg = daqiri::create_tx_burst_params();
-    daqiri::set_header(msg, static_cast<uint16_t>(port_id), 0, cfg.batch_size, 2);
+    auto *msg = daqiri::create_tx_burst_params();
+    daqiri::set_header(msg, static_cast<uint16_t>(port_id),
+                       static_cast<uint16_t>(cfg.queue_id), cfg.batch_size, 2);
 
     if (!daqiri::is_tx_burst_available(msg)) {
       daqiri::free_tx_metadata(msg);
@@ -89,28 +91,30 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg, std::atomic<bool>& st
 
       if (daqiri::set_eth_header(msg, i, eth_dst) != daqiri::Status::SUCCESS ||
           daqiri::set_ipv4_header(
-              msg, i, static_cast<int>(cfg.payload_size + cfg.header_size - (14 + 20)), 17,
-              ip_src, ip_dst) != daqiri::Status::SUCCESS ||
+              msg, i,
+              static_cast<int>(cfg.payload_size + cfg.header_size - (14 + 20)),
+              17, ip_src, ip_dst) != daqiri::Status::SUCCESS ||
           daqiri::set_udp_header(
-              msg, i, static_cast<int>(cfg.payload_size + cfg.header_size - (14 + 20 + 8)),
+              msg, i,
+              static_cast<int>(cfg.payload_size + cfg.header_size -
+                               (14 + 20 + 8)),
               src_port, dst_port) != daqiri::Status::SUCCESS) {
         failed = true;
         break;
       }
 
-      auto* gpu_payload = daqiri::get_segment_packet_ptr(msg, 1, i);
+      auto *gpu_payload = daqiri::get_segment_packet_ptr(msg, 1, i);
       if (initialized_payload_buffers.insert(gpu_payload).second) {
-        if (cudaMemcpy(gpu_payload,
-                       payload_template.data(),
-                       cfg.payload_size,
+        if (cudaMemcpy(gpu_payload, payload_template.data(), cfg.payload_size,
                        cudaMemcpyHostToDevice) != cudaSuccess) {
           failed = true;
           break;
         }
       }
 
-      if (daqiri::set_packet_lengths(
-              msg, i, {static_cast<int>(cfg.header_size), static_cast<int>(cfg.payload_size)}) !=
+      if (daqiri::set_packet_lengths(msg, i,
+                                     {static_cast<int>(cfg.header_size),
+                                      static_cast<int>(cfg.payload_size)}) !=
           daqiri::Status::SUCCESS) {
         failed = true;
         break;
@@ -125,9 +129,9 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg, std::atomic<bool>& st
   }
 }
 
-}  // namespace
+} // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0] << " <config.yaml> [--seconds N]\n";
     return 1;
@@ -153,17 +157,22 @@ int main(int argc, char** argv) {
   std::thread rx_thread;
 
   if (has_rx) {
-    rx_thread =
-        std::thread(daqiri::bench::rx_count_worker, daqiri::bench::parse_rx(root), std::ref(stop));
+    rx_thread = std::thread(daqiri::bench::rx_count_worker,
+                            daqiri::bench::parse_rx(root), std::ref(stop));
   }
   if (has_tx) {
-    tx_thread = std::thread(tx_worker, daqiri::bench::parse_tx(root), std::ref(stop));
+    tx_thread =
+        std::thread(tx_worker, daqiri::bench::parse_tx(root), std::ref(stop));
   }
 
   daqiri::bench::wait_for_stop(run_seconds, stop);
 
-  if (tx_thread.joinable()) { tx_thread.join(); }
-  if (rx_thread.joinable()) { rx_thread.join(); }
+  if (tx_thread.joinable()) {
+    tx_thread.join();
+  }
+  if (rx_thread.joinable()) {
+    rx_thread.join();
+  }
 
   daqiri::print_stats();
   daqiri::shutdown();

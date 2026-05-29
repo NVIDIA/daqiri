@@ -45,6 +45,7 @@ Run:
 
 ```bash
 ./build/examples/daqiri_bench_raw_gpudirect ./build/examples/daqiri_bench_raw_tx_rx.yaml --seconds 10
+./build/examples/daqiri_bench_raw_gpudirect ./build/examples/daqiri_bench_raw_tx_rx_4q.yaml --seconds 10
 ./build/examples/daqiri_bench_raw_hds ./build/examples/daqiri_bench_raw_tx_rx_hds.yaml --seconds 10
 ./build/examples/daqiri_bench_raw_reorder_seq ./build/examples/daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml --seconds 10
 ./build/examples/daqiri_bench_raw_reorder_quantize ./build/examples/daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml --seconds 10
@@ -69,6 +70,7 @@ Included configs:
 | Config file | Benchmark |
 |-------------|-----------|
 | `daqiri_bench_raw_tx_rx.yaml` | `daqiri_bench_raw_gpudirect` |
+| `daqiri_bench_raw_tx_rx_4q.yaml` | `daqiri_bench_raw_gpudirect` |
 | `daqiri_bench_raw_sw_loopback.yaml` | `daqiri_bench_raw_gpudirect` |
 | `daqiri_example_gds_write_sw_loopback.yaml` | `daqiri_example_gds_write` |
 | `daqiri_example_gds_write_tx_rx.yaml` | `daqiri_example_gds_write` |
@@ -112,8 +114,8 @@ contained:
 ```
 
 For a tcpdump-like RX-only utility, remove the `bench_tx` block from the config or omit
-`--tx`, point `bench_rx.interface_name` at the RX port, and leave the process running
-until you press Ctrl+C:
+`--tx`, point the `bench_rx` entry at the RX port, and leave the process running until
+you press Ctrl+C:
 
 ```bash
 ./build/examples/daqiri_example_pcap_writer \

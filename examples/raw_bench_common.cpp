@@ -19,12 +19,18 @@
 
 #include <arpa/inet.h>
 
+#include <algorithm>
 #include <chrono>
 #include <csignal>
 #include <cstring>
 #include <iostream>
+#include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
 
 #include <daqiri/daqiri.h>
 
@@ -32,6 +38,148 @@ namespace daqiri::bench {
 namespace {
 
 volatile std::sig_atomic_t g_stop_requested = 0;
+std::mutex g_stats_print_mutex;
+
+bool has_bench_config(const YAML::Node &root, const char *key) {
+  const auto node = root[key];
+  if (!node) {
+    return false;
+  }
+  if (node.IsSequence()) {
+    for (const auto &item : node) {
+      if (item && item.IsMap() && item["interface_name"]) {
+        return true;
+      }
+    }
+    return false;
+  }
+  return node.IsMap() && node["interface_name"];
+}
+
+std::vector<int> queue_ids_for_interface(const YAML::Node &root,
+                                         const std::string &interface_name,
+                                         const char *direction) {
+  const auto cfg = root["daqiri"]["cfg"];
+  const auto interfaces = cfg["interfaces"];
+  if (!interfaces || !interfaces.IsSequence()) {
+    return {};
+  }
+
+  for (const auto &intf : interfaces) {
+    if (intf["name"].as<std::string>("") != interface_name) {
+      continue;
+    }
+
+    std::vector<int> queue_ids;
+    const auto queues = intf[direction]["queues"];
+    if (!queues || !queues.IsSequence()) {
+      return queue_ids;
+    }
+
+    queue_ids.reserve(queues.size());
+    for (const auto &queue : queues) {
+      queue_ids.push_back(queue["id"].as<int>());
+    }
+    return queue_ids;
+  }
+
+  return {};
+}
+
+void validate_queue_id(int queue_id, const std::vector<int> &queue_ids,
+                       const std::string &bench_key,
+                       const std::string &interface_name) {
+  if (queue_id < 0 || queue_id > std::numeric_limits<uint16_t>::max()) {
+    throw std::runtime_error(bench_key + " queue_id is out of range for " +
+                             interface_name);
+  }
+
+  if (!queue_ids.empty() && std::find(queue_ids.begin(), queue_ids.end(),
+                                      queue_id) == queue_ids.end()) {
+    throw std::runtime_error(bench_key + " queue_id " +
+                             std::to_string(queue_id) +
+                             " does not exist on interface " + interface_name);
+  }
+}
+
+int assign_queue_id(const YAML::Node &root, const YAML::Node &item,
+                    const char *direction, const char *bench_key,
+                    std::unordered_map<std::string, size_t> &next_queue_idx,
+                    std::unordered_map<std::string, size_t> &entry_counts,
+                    std::unordered_map<std::string, std::unordered_set<int>>
+                        &assigned_queue_ids) {
+  const auto interface_name = item["interface_name"].as<std::string>();
+  const auto queue_ids =
+      queue_ids_for_interface(root, interface_name, direction);
+  if (queue_ids.empty()) {
+    throw std::runtime_error(std::string(bench_key) +
+                             " references interface '" + interface_name +
+                             "' with no DAQIRI " + direction + " queues");
+  }
+
+  ++entry_counts[interface_name];
+
+  int queue_id = 0;
+  if (item["queue_id"]) {
+    queue_id = item["queue_id"].as<int>();
+    validate_queue_id(queue_id, queue_ids, bench_key, interface_name);
+  } else {
+    const size_t idx = next_queue_idx[interface_name]++;
+    if (idx >= queue_ids.size()) {
+      throw std::runtime_error(
+          std::string(bench_key) + " has more entries for interface '" +
+          interface_name + "' than DAQIRI " + direction + " queues");
+    }
+    queue_id = queue_ids[idx];
+  }
+
+  if (!assigned_queue_ids[interface_name].insert(queue_id).second) {
+    throw std::runtime_error(
+        std::string(bench_key) + " queue_id " + std::to_string(queue_id) +
+        " is configured more than once for interface '" + interface_name + "'");
+  }
+  return queue_id;
+}
+
+void validate_bench_list_sizes(
+    const YAML::Node &root, const char *direction, const char *bench_key,
+    const std::unordered_map<std::string, size_t> &entry_counts) {
+  for (const auto &[interface_name, count] : entry_counts) {
+    const auto queue_ids =
+        queue_ids_for_interface(root, interface_name, direction);
+    if (!queue_ids.empty() && count != queue_ids.size()) {
+      throw std::runtime_error(
+          std::string(bench_key) + " entries for interface '" + interface_name +
+          "' must match the DAQIRI " + direction + " queue count (" +
+          std::to_string(count) + " entries, " +
+          std::to_string(queue_ids.size()) + " queues)");
+    }
+  }
+}
+
+RawBenchRxConfig parse_rx_item(const YAML::Node &rx) {
+  RawBenchRxConfig cfg;
+  cfg.interface_name = rx["interface_name"].as<std::string>(cfg.interface_name);
+  cfg.queue_id = rx["queue_id"].as<int>(cfg.queue_id);
+  return cfg;
+}
+
+RawBenchTxConfig parse_tx_item(const YAML::Node &tx) {
+  RawBenchTxConfig cfg;
+  cfg.interface_name = tx["interface_name"].as<std::string>(cfg.interface_name);
+  cfg.queue_id = tx["queue_id"].as<int>(cfg.queue_id);
+  cfg.batch_size = tx["batch_size"].as<uint32_t>(cfg.batch_size);
+  cfg.payload_size = tx["payload_size"].as<uint32_t>(cfg.payload_size);
+  cfg.header_size = tx["header_size"].as<uint32_t>(cfg.header_size);
+  cfg.udp_src_port = tx["udp_src_port"].as<std::string>(cfg.udp_src_port);
+  cfg.udp_dst_port = tx["udp_dst_port"].as<std::string>(cfg.udp_dst_port);
+  cfg.ip_src_addr = tx["ip_src_addr"].as<std::string>(cfg.ip_src_addr);
+  cfg.ip_dst_addr = tx["ip_dst_addr"].as<std::string>(cfg.ip_dst_addr);
+  cfg.eth_src_addr = tx["eth_src_addr"].as<std::string>(cfg.eth_src_addr);
+  cfg.eth_dst_addr = tx["eth_dst_addr"].as<std::string>(cfg.eth_dst_addr);
+  validate_queue_id(cfg.queue_id, {}, "bench_tx", cfg.interface_name);
+  return cfg;
+}
 
 } // namespace
 
@@ -98,40 +246,87 @@ int parse_run_seconds(int argc, char **argv) {
 }
 
 bool has_bench_rx(const YAML::Node &root) {
-  return root["bench_rx"] && root["bench_rx"]["interface_name"];
+  return has_bench_config(root, "bench_rx");
 }
 
 bool has_bench_tx(const YAML::Node &root) {
-  return root["bench_tx"] && root["bench_tx"]["interface_name"];
+  return has_bench_config(root, "bench_tx");
 }
 
 RawBenchRxConfig parse_rx(const YAML::Node &root) {
-  RawBenchRxConfig cfg;
-  if (!root["bench_rx"]) {
-    return cfg;
+  const auto configs = parse_rx_configs(root);
+  if (configs.empty()) {
+    return {};
   }
-  const auto rx = root["bench_rx"];
-  cfg.interface_name = rx["interface_name"].as<std::string>(cfg.interface_name);
-  return cfg;
+  return configs.front();
 }
 
 RawBenchTxConfig parse_tx(const YAML::Node &root) {
-  RawBenchTxConfig cfg;
-  if (!root["bench_tx"]) {
-    return cfg;
+  const auto configs = parse_tx_configs(root);
+  if (configs.empty()) {
+    return {};
   }
-  const auto tx = root["bench_tx"];
-  cfg.interface_name = tx["interface_name"].as<std::string>(cfg.interface_name);
-  cfg.batch_size = tx["batch_size"].as<uint32_t>(cfg.batch_size);
-  cfg.payload_size = tx["payload_size"].as<uint32_t>(cfg.payload_size);
-  cfg.header_size = tx["header_size"].as<uint32_t>(cfg.header_size);
-  cfg.udp_src_port = tx["udp_src_port"].as<std::string>(cfg.udp_src_port);
-  cfg.udp_dst_port = tx["udp_dst_port"].as<std::string>(cfg.udp_dst_port);
-  cfg.ip_src_addr = tx["ip_src_addr"].as<std::string>(cfg.ip_src_addr);
-  cfg.ip_dst_addr = tx["ip_dst_addr"].as<std::string>(cfg.ip_dst_addr);
-  cfg.eth_src_addr = tx["eth_src_addr"].as<std::string>(cfg.eth_src_addr);
-  cfg.eth_dst_addr = tx["eth_dst_addr"].as<std::string>(cfg.eth_dst_addr);
-  return cfg;
+  return configs.front();
+}
+
+std::vector<RawBenchRxConfig> parse_rx_configs(const YAML::Node &root) {
+  std::vector<RawBenchRxConfig> configs;
+  const auto bench_rx = root["bench_rx"];
+  if (!bench_rx) {
+    return configs;
+  }
+
+  if (!bench_rx.IsSequence()) {
+    configs.push_back(parse_rx_item(bench_rx));
+    return configs;
+  }
+
+  std::unordered_map<std::string, size_t> next_queue_idx;
+  std::unordered_map<std::string, size_t> entry_counts;
+  std::unordered_map<std::string, std::unordered_set<int>> assigned_queue_ids;
+  configs.reserve(bench_rx.size());
+  for (const auto &item : bench_rx) {
+    if (!item || !item.IsMap() || !item["interface_name"]) {
+      throw std::runtime_error(
+          "bench_rx list entries must be maps with interface_name");
+    }
+    auto cfg = parse_rx_item(item);
+    cfg.queue_id = assign_queue_id(root, item, "rx", "bench_rx", next_queue_idx,
+                                   entry_counts, assigned_queue_ids);
+    configs.push_back(std::move(cfg));
+  }
+  validate_bench_list_sizes(root, "rx", "bench_rx", entry_counts);
+  return configs;
+}
+
+std::vector<RawBenchTxConfig> parse_tx_configs(const YAML::Node &root) {
+  std::vector<RawBenchTxConfig> configs;
+  const auto bench_tx = root["bench_tx"];
+  if (!bench_tx) {
+    return configs;
+  }
+
+  if (!bench_tx.IsSequence()) {
+    configs.push_back(parse_tx_item(bench_tx));
+    return configs;
+  }
+
+  std::unordered_map<std::string, size_t> next_queue_idx;
+  std::unordered_map<std::string, size_t> entry_counts;
+  std::unordered_map<std::string, std::unordered_set<int>> assigned_queue_ids;
+  configs.reserve(bench_tx.size());
+  for (const auto &item : bench_tx) {
+    if (!item || !item.IsMap() || !item["interface_name"]) {
+      throw std::runtime_error(
+          "bench_tx list entries must be maps with interface_name");
+    }
+    auto cfg = parse_tx_item(item);
+    cfg.queue_id = assign_queue_id(root, item, "tx", "bench_tx", next_queue_idx,
+                                   entry_counts, assigned_queue_ids);
+    configs.push_back(std::move(cfg));
+  }
+  validate_bench_list_sizes(root, "tx", "bench_tx", entry_counts);
+  return configs;
 }
 
 std::vector<uint16_t> parse_udp_ports(const std::string &spec) {
@@ -276,6 +471,19 @@ void wait_for_stop(int run_seconds, std::atomic<bool> &stop) {
   stop.store(true);
 }
 
+void print_queue_stats(const char *direction, const std::string &interface_name,
+                       int queue_id, const RawBenchQueueStats &stats) {
+  std::lock_guard<std::mutex> lock(g_stats_print_mutex);
+  std::cout << direction << " complete: interface=" << interface_name;
+  if (queue_id >= 0) {
+    std::cout << " queue=" << queue_id;
+  } else {
+    std::cout << " queues=all";
+  }
+  std::cout << " packets=" << stats.packets << " bytes=" << stats.bytes
+            << " bursts=" << stats.bursts << std::endl;
+}
+
 void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
   const int port_id = daqiri::get_port_id(cfg.interface_name);
   if (port_id < 0) {
@@ -284,23 +492,38 @@ void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
     return;
   }
 
-  uint64_t pkts = 0;
-  uint64_t bytes = 0;
-  uint64_t bursts = 0;
-  while (!stop.load()) {
-    const auto num_rx_queues =
-        static_cast<int>(daqiri::get_num_rx_queues(port_id));
-    bool got_any = false;
+  std::vector<int> queue_ids;
+  const auto num_rx_queues =
+      static_cast<int>(daqiri::get_num_rx_queues(port_id));
+  if (cfg.queue_id >= 0) {
+    if (cfg.queue_id >= num_rx_queues) {
+      std::cerr << "Invalid RX queue_id " << cfg.queue_id
+                << " for interface_name: " << cfg.interface_name << "\n";
+      stop.store(true);
+      return;
+    }
+    queue_ids.push_back(cfg.queue_id);
+  } else {
+    queue_ids.reserve(num_rx_queues);
     for (int q = 0; q < num_rx_queues; ++q) {
+      queue_ids.push_back(q);
+    }
+  }
+
+  std::vector<RawBenchQueueStats> queue_stats(num_rx_queues);
+  while (!stop.load()) {
+    bool got_any = false;
+    for (int q : queue_ids) {
       daqiri::BurstParams *burst = nullptr;
       if (daqiri::get_rx_burst(&burst, port_id, q) != daqiri::Status::SUCCESS ||
           burst == nullptr) {
         continue;
       }
       got_any = true;
-      pkts += static_cast<uint64_t>(daqiri::get_num_packets(burst));
-      bytes += daqiri::get_burst_tot_byte(burst);
-      ++bursts;
+      auto &stats = queue_stats[static_cast<size_t>(q)];
+      stats.packets += static_cast<uint64_t>(daqiri::get_num_packets(burst));
+      stats.bytes += daqiri::get_burst_tot_byte(burst);
+      ++stats.bursts;
       daqiri::free_all_packets_and_burst_rx(burst);
     }
     if (!got_any) {
@@ -308,8 +531,18 @@ void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
     }
   }
 
-  std::cout << "RX complete: packets=" << pkts << " bytes=" << bytes
-            << " bursts=" << bursts << "\n";
+  RawBenchQueueStats total;
+  for (int q : queue_ids) {
+    const auto &stats = queue_stats[static_cast<size_t>(q)];
+    total.packets += stats.packets;
+    total.bytes += stats.bytes;
+    total.bursts += stats.bursts;
+    print_queue_stats("RX", cfg.interface_name, q, stats);
+  }
+
+  if (queue_ids.size() > 1) {
+    print_queue_stats("RX", cfg.interface_name, -1, total);
+  }
 }
 
 } // namespace daqiri::bench

@@ -498,18 +498,22 @@ BenchConfig parse_bench_config(const YAML::Node &root,
                                const ReorderPlanConfig &plan) {
   BenchConfig cfg;
   const auto bench = root["bench_reorder_quantize"];
+  const auto bench_tx = root["bench_tx"];
+  const auto tx = bench_tx && bench_tx.IsSequence() && bench_tx.size() > 0
+                      ? bench_tx[0]
+                      : bench_tx;
   cfg.input_type = plan.input_type;
   cfg.output_type = plan.output_type;
   cfg.input_endianness = plan.input_endianness;
 
-  if (root["bench_tx"] && root["bench_tx"]["interface_name"]) {
+  if (tx && tx["interface_name"]) {
     cfg.interface_name =
-        root["bench_tx"]["interface_name"].as<std::string>(cfg.interface_name);
+        tx["interface_name"].as<std::string>(cfg.interface_name);
   } else {
     cfg.interface_name = plan.interface_name;
   }
-  if (root["bench_tx"]) {
-    const auto tx = root["bench_tx"];
+  if (tx) {
+    cfg.queue_id = tx["queue_id"].as<uint32_t>(cfg.queue_id);
     cfg.batch_size = tx["batch_size"].as<uint32_t>(cfg.batch_size);
     cfg.payload_size = tx["payload_size"].as<uint32_t>(cfg.payload_size);
     cfg.header_size = tx["header_size"].as<uint32_t>(cfg.header_size);
@@ -661,8 +665,8 @@ void tx_worker(const BenchConfig &cfg, const ReorderPlanConfig &plan,
 
   while (!stop.load()) {
     auto *msg = daqiri::create_tx_burst_params();
-    daqiri::set_header(msg, static_cast<uint16_t>(port_id), cfg.queue_id,
-                       cfg.batch_size, 1);
+    daqiri::set_header(msg, static_cast<uint16_t>(port_id),
+                       static_cast<uint16_t>(cfg.queue_id), cfg.batch_size, 1);
 
     if (!daqiri::is_tx_burst_available(msg)) {
       daqiri::free_tx_metadata(msg);

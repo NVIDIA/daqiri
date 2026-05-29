@@ -30,6 +30,7 @@ namespace daqiri::bench {
 
 struct RawBenchTxConfig {
   std::string interface_name = "tx_port";
+  int queue_id = 0;
   uint32_t batch_size = 1024;
   uint32_t payload_size = 1000;
   uint32_t header_size = 64;
@@ -43,6 +44,13 @@ struct RawBenchTxConfig {
 
 struct RawBenchRxConfig {
   std::string interface_name = "rx_port";
+  int queue_id = -1;
+};
+
+struct RawBenchQueueStats {
+  uint64_t packets = 0;
+  uint64_t bytes = 0;
+  uint64_t bursts = 0;
 };
 
 class PinnedHostBuffer {
@@ -72,6 +80,8 @@ bool has_bench_rx(const YAML::Node &root);
 bool has_bench_tx(const YAML::Node &root);
 RawBenchRxConfig parse_rx(const YAML::Node &root);
 RawBenchTxConfig parse_tx(const YAML::Node &root);
+std::vector<RawBenchRxConfig> parse_rx_configs(const YAML::Node &root);
+std::vector<RawBenchTxConfig> parse_tx_configs(const YAML::Node &root);
 std::vector<uint16_t> parse_udp_ports(const std::string &spec);
 
 void populate_udp_ipv4_headers(uint8_t *pkt_data, uint32_t header_size,
@@ -89,6 +99,8 @@ cudaError_t memcpy_batch_async(const std::vector<void *> &dsts,
 
 void signal_handler(int signum);
 void wait_for_stop(int run_seconds, std::atomic<bool> &stop);
+void print_queue_stats(const char *direction, const std::string &interface_name,
+                       int queue_id, const RawBenchQueueStats &stats);
 void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop);
 
 } // namespace daqiri::bench

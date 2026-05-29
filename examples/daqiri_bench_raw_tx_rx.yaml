@@ -56,10 +56,10 @@ daqiri:
             udp_dst: 4096
 
 bench_rx:
-  interface_name: "rx_port"
+- interface_name: "rx_port"
 
 bench_tx:
-  interface_name: "tx_port"
+- interface_name: "tx_port"
   batch_size: 10240
   payload_size: 8000
   header_size: 64

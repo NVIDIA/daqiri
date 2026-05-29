@@ -37,11 +37,13 @@ import daqiri
 ETH_HEADER_LEN = 14
 IPV4_HEADER_LEN = 20
 IPPROTO_UDP = 17
+PRINT_LOCK = threading.Lock()
 
 
 @dataclass
 class RawTxConfig:
     interface_name: str = "tx_port"
+    queue_id: int = 0
     batch_size: int = 1024
     payload_size: int = 1000
     header_size: int = 64
@@ -55,6 +57,7 @@ class RawTxConfig:
 @dataclass
 class RawRxConfig:
     interface_name: str = "rx_port"
+    queue_id: int = -1
 
 
 def parse_args() -> argparse.Namespace:
@@ -77,15 +80,98 @@ def load_yaml(path: str) -> dict:
         return yaml.safe_load(fh) or {}
 
 
-def parse_rx(root: dict) -> RawRxConfig:
-    data = root.get("bench_rx") or {}
-    return RawRxConfig(interface_name=str(data.get("interface_name", "rx_port")))
+def has_bench_config(root: dict, key: str) -> bool:
+    data = root.get(key)
+    if isinstance(data, list):
+        return any(
+            isinstance(item, dict) and item.get("interface_name") for item in data
+        )
+    return isinstance(data, dict) and bool(data.get("interface_name"))
 
 
-def parse_tx(root: dict) -> RawTxConfig:
-    data = root.get("bench_tx") or {}
-    return RawTxConfig(
+def queue_ids_for_interface(
+    root: dict, interface_name: str, direction: str
+) -> list[int]:
+    cfg = (root.get("daqiri") or {}).get("cfg") or {}
+    for interface in cfg.get("interfaces") or []:
+        if interface.get("name") != interface_name:
+            continue
+        queues = ((interface.get(direction) or {}).get("queues")) or []
+        return [int(queue["id"]) for queue in queues]
+    return []
+
+
+def validate_queue_id(
+    queue_id: int, queue_ids: list[int], bench_key: str, interface_name: str
+) -> None:
+    if queue_id < 0 or queue_id > 0xFFFF:
+        raise ValueError(f"{bench_key} queue_id is out of range for {interface_name}")
+    if queue_ids and queue_id not in queue_ids:
+        raise ValueError(
+            f"{bench_key} queue_id {queue_id} does not exist on interface {interface_name}"
+        )
+
+
+def assign_queue_ids(
+    root: dict, entries: list[dict], direction: str, bench_key: str
+) -> None:
+    next_queue_idx: dict[str, int] = {}
+    entry_counts: dict[str, int] = {}
+    assigned_queue_ids: dict[str, set[int]] = {}
+
+    for entry in entries:
+        interface_name = str(entry.get("interface_name"))
+        queue_ids = queue_ids_for_interface(root, interface_name, direction)
+        if not queue_ids:
+            raise ValueError(
+                f"{bench_key} references interface '{interface_name}' with no "
+                f"DAQIRI {direction} queues"
+            )
+        entry_counts[interface_name] = entry_counts.get(interface_name, 0) + 1
+
+        if "queue_id" in entry:
+            queue_id = int(entry["queue_id"])
+            validate_queue_id(queue_id, queue_ids, bench_key, interface_name)
+            entry["queue_id"] = queue_id
+        else:
+            idx = next_queue_idx.get(interface_name, 0)
+            if idx >= len(queue_ids):
+                raise ValueError(
+                    f"{bench_key} has more entries for interface '{interface_name}' "
+                    f"than DAQIRI {direction} queues"
+                )
+            queue_id = queue_ids[idx]
+            entry["queue_id"] = queue_id
+            next_queue_idx[interface_name] = idx + 1
+
+        assigned = assigned_queue_ids.setdefault(interface_name, set())
+        if queue_id in assigned:
+            raise ValueError(
+                f"{bench_key} queue_id {queue_id} is configured more than once "
+                f"for interface '{interface_name}'"
+            )
+        assigned.add(queue_id)
+
+    for interface_name, count in entry_counts.items():
+        queue_ids = queue_ids_for_interface(root, interface_name, direction)
+        if queue_ids and count != len(queue_ids):
+            raise ValueError(
+                f"{bench_key} entries for interface '{interface_name}' must match the DAQIRI "
+                f"{direction} queue count ({count} entries, {len(queue_ids)} queues)"
+            )
+
+
+def parse_rx_item(data: dict) -> RawRxConfig:
+    return RawRxConfig(
+        interface_name=str(data.get("interface_name", "rx_port")),
+        queue_id=int(data.get("queue_id", -1)),
+    )
+
+
+def parse_tx_item(data: dict) -> RawTxConfig:
+    cfg = RawTxConfig(
         interface_name=str(data.get("interface_name", "tx_port")),
+        queue_id=int(data.get("queue_id", 0)),
         batch_size=int(data.get("batch_size", 1024)),
         payload_size=int(data.get("payload_size", 1000)),
         header_size=int(data.get("header_size", 64)),
@@ -95,6 +181,48 @@ def parse_tx(root: dict) -> RawTxConfig:
         ip_dst_addr=str(data.get("ip_dst_addr", "5.6.7.8")),
         eth_dst_addr=str(data.get("eth_dst_addr", "00:00:00:00:00:00")),
     )
+    validate_queue_id(cfg.queue_id, [], "bench_tx", cfg.interface_name)
+    return cfg
+
+
+def parse_rx_configs(root: dict) -> list[RawRxConfig]:
+    data = root.get("bench_rx")
+    if not data:
+        return []
+    if isinstance(data, list):
+        entries = []
+        for item in data:
+            if not isinstance(item, dict) or not item.get("interface_name"):
+                raise ValueError("bench_rx list entries must be maps with interface_name")
+            entries.append(dict(item))
+        assign_queue_ids(root, entries, "rx", "bench_rx")
+        return [parse_rx_item(item) for item in entries]
+    return [parse_rx_item(data)]
+
+
+def parse_tx_configs(root: dict) -> list[RawTxConfig]:
+    data = root.get("bench_tx")
+    if not data:
+        return []
+    if isinstance(data, list):
+        entries = []
+        for item in data:
+            if not isinstance(item, dict) or not item.get("interface_name"):
+                raise ValueError("bench_tx list entries must be maps with interface_name")
+            entries.append(dict(item))
+        assign_queue_ids(root, entries, "tx", "bench_tx")
+        return [parse_tx_item(item) for item in entries]
+    return [parse_tx_item(data)]
+
+
+def parse_rx(root: dict) -> RawRxConfig:
+    configs = parse_rx_configs(root)
+    return configs[0] if configs else RawRxConfig()
+
+
+def parse_tx(root: dict) -> RawTxConfig:
+    configs = parse_tx_configs(root)
+    return configs[0] if configs else RawTxConfig()
 
 
 def parse_udp_ports(spec: str) -> list[int]:
@@ -161,7 +289,7 @@ def tx_worker(cfg: RawTxConfig, stop: threading.Event) -> None:
 
     while not stop.is_set():
         burst = daqiri.create_tx_burst_params()
-        daqiri.set_header(burst, port_id, 0, cfg.batch_size, 1)
+        daqiri.set_header(burst, port_id, cfg.queue_id, cfg.batch_size, 1)
 
         if not daqiri.is_tx_burst_available(burst):
             daqiri.free_tx_metadata(burst)
@@ -214,12 +342,15 @@ def tx_worker(cfg: RawTxConfig, stop: threading.Event) -> None:
             sent_bytes += num_pkts * packet_size
 
     elapsed = max(time.monotonic() - start, 1e-9)
-    print(
-        "TX complete: "
-        f"packets={sent_packets} bytes={sent_bytes} bursts={sent_bursts} "
-        f"seconds={elapsed:.3f} pps={sent_packets / elapsed:.3f} "
-        f"gbps={sent_bytes * 8 / elapsed / 1e9:.3f}"
-    )
+    with PRINT_LOCK:
+        print(
+            "TX complete: "
+            f"interface={cfg.interface_name} queue={cfg.queue_id} "
+            f"packets={sent_packets} bytes={sent_bytes} bursts={sent_bursts} "
+            f"seconds={elapsed:.3f} pps={sent_packets / elapsed:.3f} "
+            f"gbps={sent_bytes * 8 / elapsed / 1e9:.3f}",
+            flush=True,
+        )
 
 
 def rx_worker(cfg: RawRxConfig, stop: threading.Event) -> None:
@@ -228,59 +359,101 @@ def rx_worker(cfg: RawRxConfig, stop: threading.Event) -> None:
         print(f"Invalid RX interface_name: {cfg.interface_name}", file=sys.stderr)
         stop.set()
         return
+    if cfg.queue_id >= daqiri.get_num_rx_queues(port_id):
+        print(
+            f"Invalid RX queue_id {cfg.queue_id} for interface_name: {cfg.interface_name}",
+            file=sys.stderr,
+        )
+        stop.set()
+        return
+    queue_ids = (
+        [cfg.queue_id]
+        if cfg.queue_id >= 0
+        else list(range(daqiri.get_num_rx_queues(port_id)))
+    )
 
-    packets = 0
-    total_bytes = 0
-    bursts = 0
+    queue_stats = {
+        queue_id: {"packets": 0, "bytes": 0, "bursts": 0}
+        for queue_id in queue_ids
+    }
     start = time.monotonic()
 
     while not stop.is_set():
         got_any = False
-        for queue_id in range(daqiri.get_num_rx_queues(port_id)):
+        for queue_id in queue_ids:
             status, burst = daqiri.get_rx_burst(port_id, queue_id)
             if status != daqiri.Status.SUCCESS or burst is None:
                 continue
 
             got_any = True
-            packets += daqiri.get_num_packets(burst)
-            total_bytes += daqiri.get_burst_tot_byte(burst)
-            bursts += 1
+            stats = queue_stats[queue_id]
+            stats["packets"] += daqiri.get_num_packets(burst)
+            stats["bytes"] += daqiri.get_burst_tot_byte(burst)
+            stats["bursts"] += 1
             daqiri.free_all_packets_and_burst_rx(burst)
 
         if not got_any:
             time.sleep(0.0001)
 
     elapsed = max(time.monotonic() - start, 1e-9)
-    print(
-        "RX complete: "
-        f"packets={packets} bytes={total_bytes} bursts={bursts} "
-        f"seconds={elapsed:.3f} pps={packets / elapsed:.3f} "
-        f"gbps={total_bytes * 8 / elapsed / 1e9:.3f}"
-    )
+    with PRINT_LOCK:
+        total_packets = 0
+        total_bytes = 0
+        total_bursts = 0
+        for queue_id in queue_ids:
+            stats = queue_stats[queue_id]
+            total_packets += stats["packets"]
+            total_bytes += stats["bytes"]
+            total_bursts += stats["bursts"]
+            print(
+                "RX complete: "
+                f"interface={cfg.interface_name} queue={queue_id} "
+                f"packets={stats['packets']} bytes={stats['bytes']} "
+                f"bursts={stats['bursts']} seconds={elapsed:.3f} "
+                f"pps={stats['packets'] / elapsed:.3f} "
+                f"gbps={stats['bytes'] * 8 / elapsed / 1e9:.3f}",
+                flush=True,
+            )
+        if len(queue_ids) > 1:
+            print(
+                "RX complete: "
+                f"interface={cfg.interface_name} queues=all "
+                f"packets={total_packets} bytes={total_bytes} "
+                f"bursts={total_bursts} seconds={elapsed:.3f} "
+                f"pps={total_packets / elapsed:.3f} "
+                f"gbps={total_bytes * 8 / elapsed / 1e9:.3f}",
+                flush=True,
+            )
 
 
 def should_run_rx(mode: str, root: dict) -> bool:
-    return mode in ("both", "receiver", "rx") and bool((root.get("bench_rx") or {}).get("interface_name"))
+    return mode in ("both", "receiver", "rx") and has_bench_config(root, "bench_rx")
 
 
 def should_run_tx(mode: str, root: dict) -> bool:
-    return mode in ("both", "sender", "tx") and bool((root.get("bench_tx") or {}).get("interface_name"))
+    return mode in ("both", "sender", "tx") and has_bench_config(root, "bench_tx")
 
 
 def main() -> int:
     args = parse_args()
     root = load_yaml(args.config)
 
-    status = daqiri.daqiri_init(args.config)
-    if status != daqiri.Status.SUCCESS:
-        print(f"daqiri_init failed: {status}", file=sys.stderr)
-        return 1
-
     run_rx = should_run_rx(args.mode, root)
     run_tx = should_run_tx(args.mode, root)
     if not run_rx and not run_tx:
         print("Config and mode did not select bench_rx or bench_tx", file=sys.stderr)
-        daqiri.shutdown()
+        return 1
+
+    try:
+        rx_configs = parse_rx_configs(root) if run_rx else []
+        tx_configs = parse_tx_configs(root) if run_tx else []
+    except ValueError as exc:
+        print(f"Invalid benchmark config: {exc}", file=sys.stderr)
+        return 1
+
+    status = daqiri.daqiri_init(args.config)
+    if status != daqiri.Status.SUCCESS:
+        print(f"daqiri_init failed: {status}", file=sys.stderr)
         return 1
 
     stop = threading.Event()
@@ -291,10 +464,10 @@ def main() -> int:
 
     signal.signal(signal.SIGINT, request_stop)
     threads: list[threading.Thread] = []
-    if run_rx:
-        threads.append(threading.Thread(target=rx_worker, args=(parse_rx(root), stop), daemon=True))
-    if run_tx:
-        threads.append(threading.Thread(target=tx_worker, args=(parse_tx(root), stop), daemon=True))
+    for cfg in rx_configs:
+        threads.append(threading.Thread(target=rx_worker, args=(cfg, stop), daemon=True))
+    for cfg in tx_configs:
+        threads.append(threading.Thread(target=tx_worker, args=(cfg, stop), daemon=True))
 
     for thread in threads:
         thread.start()

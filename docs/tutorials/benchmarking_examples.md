@@ -125,20 +125,20 @@ To run the benchmarking application to run a loopback on your system, you'll nee
 
 ```yaml hl_lines="4"
 bench_tx:
-    interface_name: "tx_port" # Name of the TX port from the daqiri config
-    ...
-    eth_dst_addr: <00:00:00:00:00:00> # Destination MAC address - required when Rx flow_isolation=true
-    ...
+- interface_name: "tx_port" # Name of the TX port from the daqiri config
+  ...
+  eth_dst_addr: <00:00:00:00:00:00> # Destination MAC address - required when Rx flow_isolation=true
+  ...
 ```
 
 ???+ abstract "See an example yaml"
 
     ```yaml hl_lines="4"
     bench_tx:
-        interface_name: "tx_port" # Name of the TX port from the daqiri config
-        ...
-        eth_dst_addr: 48:b0:2d:ee:83:ad # Destination MAC address - required when Rx flow_isolation=true
-        ...
+    - interface_name: "tx_port" # Name of the TX port from the daqiri config
+      ...
+      eth_dst_addr: 48:b0:2d:ee:83:ad # Destination MAC address - required when Rx flow_isolation=true
+      ...
     ```
 
 ??? info "Show explanation"

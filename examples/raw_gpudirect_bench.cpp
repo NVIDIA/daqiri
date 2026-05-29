@@ -23,6 +23,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -66,11 +67,14 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
   }
 
   std::unordered_set<void *> initialized_tx_buffers;
+  daqiri::bench::RawBenchQueueStats stats;
+  const auto packet_size =
+      static_cast<uint64_t>(cfg.header_size) + cfg.payload_size;
 
   while (!stop.load()) {
     auto *msg = daqiri::create_tx_burst_params();
-    daqiri::set_header(msg, static_cast<uint16_t>(port_id), 0, cfg.batch_size,
-                       1);
+    daqiri::set_header(msg, static_cast<uint16_t>(port_id),
+                       static_cast<uint16_t>(cfg.queue_id), cfg.batch_size, 1);
 
     if (!daqiri::is_tx_burst_available(msg)) {
       daqiri::free_tx_metadata(msg);
@@ -120,8 +124,15 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
       daqiri::free_all_packets_and_burst_tx(msg);
       continue;
     }
-    daqiri::send_tx_burst(msg);
+    if (daqiri::send_tx_burst(msg) == daqiri::Status::SUCCESS) {
+      stats.packets += static_cast<uint64_t>(num_pkts);
+      stats.bytes += static_cast<uint64_t>(num_pkts) * packet_size;
+      ++stats.bursts;
+    }
   }
+
+  daqiri::bench::print_queue_stats("TX", cfg.interface_name, cfg.queue_id,
+                                   stats);
 }
 
 } // namespace
@@ -134,39 +145,52 @@ int main(int argc, char **argv) {
 
   const int run_seconds = daqiri::bench::parse_run_seconds(argc, argv);
   const auto root = YAML::LoadFile(argv[1]);
+
+  std::vector<daqiri::bench::RawBenchRxConfig> rx_configs;
+  std::vector<daqiri::bench::RawBenchTxConfig> tx_configs;
+  try {
+    rx_configs = daqiri::bench::parse_rx_configs(root);
+    tx_configs = daqiri::bench::parse_tx_configs(root);
+  } catch (const std::exception &e) {
+    std::cerr << "Invalid benchmark config: " << e.what() << "\n";
+    return 1;
+  }
+
+  if (rx_configs.empty() && tx_configs.empty()) {
+    std::cerr << "Config must define at least one of bench_rx or bench_tx\n";
+    return 1;
+  }
+
   if (daqiri::daqiri_init(argv[1]) != daqiri::Status::SUCCESS) {
     std::cerr << "daqiri_init failed\n";
     return 1;
   }
 
-  const bool has_rx = daqiri::bench::has_bench_rx(root);
-  const bool has_tx = daqiri::bench::has_bench_tx(root);
-  if (!has_rx && !has_tx) {
-    std::cerr << "Config must define at least one of bench_rx or bench_tx\n";
-    daqiri::shutdown();
-    return 1;
-  }
-
   std::atomic<bool> stop{false};
-  std::thread tx_thread;
-  std::thread rx_thread;
+  std::vector<std::thread> tx_threads;
+  std::vector<std::thread> rx_threads;
 
-  if (has_rx) {
-    rx_thread = std::thread(daqiri::bench::rx_count_worker,
-                            daqiri::bench::parse_rx(root), std::ref(stop));
+  rx_threads.reserve(rx_configs.size());
+  for (const auto &cfg : rx_configs) {
+    rx_threads.emplace_back(daqiri::bench::rx_count_worker, cfg,
+                            std::ref(stop));
   }
-  if (has_tx) {
-    tx_thread =
-        std::thread(tx_worker, daqiri::bench::parse_tx(root), std::ref(stop));
+  tx_threads.reserve(tx_configs.size());
+  for (const auto &cfg : tx_configs) {
+    tx_threads.emplace_back(tx_worker, cfg, std::ref(stop));
   }
 
   daqiri::bench::wait_for_stop(run_seconds, stop);
 
-  if (tx_thread.joinable()) {
-    tx_thread.join();
+  for (auto &thread : tx_threads) {
+    if (thread.joinable()) {
+      thread.join();
+    }
   }
-  if (rx_thread.joinable()) {
-    rx_thread.join();
+  for (auto &thread : rx_threads) {
+    if (thread.joinable()) {
+      thread.join();
+    }
   }
 
   daqiri::print_stats();

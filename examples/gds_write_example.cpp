@@ -129,7 +129,8 @@ bool fill_and_send_one_burst(const daqiri::bench::RawBenchTxConfig &cfg,
       static_cast<size_t>(cfg.header_size) + cfg.payload_size;
 
   auto *msg = daqiri::create_tx_burst_params();
-  daqiri::set_header(msg, static_cast<uint16_t>(port_id), 0, cfg.batch_size, 1);
+  daqiri::set_header(msg, static_cast<uint16_t>(port_id),
+                     static_cast<uint16_t>(cfg.queue_id), cfg.batch_size, 1);
 
   if (!daqiri::is_tx_burst_available(msg)) {
     std::cerr << "No TX burst is available\n";
