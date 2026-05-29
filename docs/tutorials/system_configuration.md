@@ -1317,9 +1317,9 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     The hotplug behavior is implemented as a power/thermal management policy and coordinates with `nvidia-spark-mlnx-firmware-manager.service`. If you need the NIC alive without a cable for software-only testing, the override point is the scripts under `/opt/nvidia/dgx-spark-mlnx-hotplug` — read them before disabling.
 
-    ### Port topology: 4 PFs, 2 chips, tied chassis sockets
+    ### Port topology: 4 PFs, 2 ports, tied chassis sockets
 
-    `lspci -d 15b3:` on Spark shows **four** CX-7 PFs across **two** PCIe domains, fronting two chips that share a single internal fabric:
+    `lspci -d 15b3:` on Spark shows **four** CX-7 PFs across **two** PCIe domains. This is **one** ConnectX-7 ASIC with **two physical ports** (p0, p1); each port is dual-homed across both PCIe segments (socket-direct), which is why a single card appears as four PFs:
 
     ```text
     0000:01:00.0  →  mlx5_0  →  enp1s0f0np0
@@ -1328,7 +1328,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     0002:01:00.1  →  mlx5_3  →  enP2p1s0f1np1
     ```
 
-    The two chassis QSFPs are **tied** through the internal fabric. Pulling **just one end** of a loopback cable drops `carrier` to 0 on **all four** PFs simultaneously, which is the reliable diagnostic for confirming the topology:
+    The two chassis QSFPs are bridged by a single loopback cable. Pulling **just one end** drops `carrier` to 0 on **all four** PFs simultaneously, confirming the cable is present and the loop is intact:
 
     ```bash
     for i in /sys/class/net/{enp1s0f0np0,enp1s0f1np1,enP2p1s0f0np0,enP2p1s0f1np1}; do
@@ -1336,9 +1336,34 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     done
     ```
 
-    Practical consequence for daqiri loopback benchmarks: any pair of PFs forms a working loopback. There is no "wrong pair" — pick TX/RX based on what your YAML expects. The Spark example YAMLs use `mlx5_0` (TX) ↔ `mlx5_2` (RX), so traffic crosses the cable.
+    !!! important "Same physical port = on-chip test; different ports = over-the-wire test"
 
-    `ethtool -m` reports identical `Connector: 0x23 No separable connector` on all 4 PFs and is **not** useful for distinguishing them; use the cable-yank test.
+        Which PF pair you choose decides **what you are actually measuring**. Because each physical port is exposed over both PCIe segments, two of the four BDFs map to the *same* physical port. Identify them on your own system with `phys_port_name`:
+
+        ```bash
+        for d in /sys/class/net/*/device; do n=${d%/device}; n=${n##*/}; \
+            printf '%-16s port=%s pci=%s\n' "$n" \
+            "$(cat /sys/class/net/$n/phys_port_name 2>/dev/null)" \
+            "$(basename "$(readlink "$d")")"; done
+        ```
+
+        Example output:
+
+        ```text
+        enp1s0f0np0      port=p0  pci=0000:01:00.0   # mlx5_0
+        enp1s0f1np1      port=p1  pci=0000:01:00.1   # mlx5_1
+        enP2p1s0f0np0    port=p0  pci=0002:01:00.0   # mlx5_2
+        enP2p1s0f1np1    port=p1  pci=0002:01:00.1   # mlx5_3
+        ```
+
+        Here two BDFs share each physical port (`mlx5_0` and `mlx5_2` are both **p0**). The two pairings measure different things:
+
+        - **Same physical port** (e.g. `mlx5_0` ↔ `mlx5_2`, both p0) → TX/RX loop **on-chip** through the eswitch; traffic never reaches the cable. `tx_phy_packets` / `rx_phy_packets` stay flat while the vport counters (`tx_good_packets` / `rx_good_packets`) run at line rate. This is a software-path test.
+        - **Different physical ports** (e.g. `mlx5_0` p0 ↔ `mlx5_3` p1 `0002:01:00.1`, or `mlx5_0` ↔ `mlx5_1`) → TX/RX loop **over the wire**; `tx_phy_packets` / `rx_phy_packets` rise to match the TX/RX counts. This is an over-the-wire test.
+
+        Confirm which case you got from the **`tx_phy_packets` / `rx_phy_packets`** lines in the [daqiri bench](benchmarking_examples.md)'s "Extended Stats" output: near zero for on-chip, matching the TX/RX packet counts for over-the-wire. (`ethtool -S` lists the same wire counters as `tx_packets_phy` / `rx_packets_phy`.)
+
+    `ethtool -m` reports identical `Connector: 0x23 No separable connector` on all 4 PFs and is **not** useful for distinguishing them; use `phys_port_name` above (the cable-yank carrier test confirms a cable is present but does **not** distinguish ports).
 
     ## System Setup for DAQIRI
 
