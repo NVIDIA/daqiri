@@ -91,18 +91,25 @@ void rdma_worker(const RdmaBenchConfig& cfg, std::atomic<bool>& stop, RdmaWorker
                         const std::string& mr_name) {
       if (outstanding >= kMaxOutstanding) { return; }
 
-      auto* msg = daqiri::create_burst_params();
+      auto* msg = daqiri::create_tx_burst_params();
+      if (msg == nullptr) { return; }
+
       if (daqiri::rdma_set_header(msg, op, conn_id, cfg.server, 1, wr_id, mr_name) !=
           daqiri::Status::SUCCESS) {
-        daqiri::free_tx_burst(msg);
+        daqiri::free_tx_metadata(msg);
         return;
       }
 
-      while (daqiri::get_tx_packet_burst(msg) != daqiri::Status::SUCCESS && !stop.load()) {
+      bool has_packets = false;
+      while (!stop.load()) {
+        if (daqiri::get_tx_packet_burst(msg) == daqiri::Status::SUCCESS) {
+          has_packets = true;
+          break;
+        }
         std::this_thread::sleep_for(std::chrono::microseconds(50));
       }
-      if (stop.load()) {
-        daqiri::free_tx_burst(msg);
+      if (!has_packets) {
+        daqiri::free_tx_metadata(msg);
         return;
       }
 
@@ -110,10 +117,7 @@ void rdma_worker(const RdmaBenchConfig& cfg, std::atomic<bool>& stop, RdmaWorker
         daqiri::free_tx_burst(msg);
         return;
       }
-      if (daqiri::send_tx_burst(msg) != daqiri::Status::SUCCESS) {
-        daqiri::free_tx_burst(msg);
-        return;
-      }
+      if (daqiri::send_tx_burst(msg) != daqiri::Status::SUCCESS) { return; }
       outstanding++;
       wr_id++;
     };

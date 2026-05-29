@@ -36,6 +36,20 @@
 namespace daqiri {
 std::atomic<bool> rdma_force_quit = false;
 
+namespace {
+
+void reset_rdma_burst_metadata(BurstParams* burst) {
+  if (burst == nullptr) { return; }
+
+  burst->transport_hdr = BurstTransportHeader{};
+  burst->pkts.fill(nullptr);
+  burst->pkt_lens.fill(nullptr);
+  burst->pkt_extra_info = nullptr;
+  burst->event = nullptr;
+}
+
+}  // namespace
+
 bool RdmaMgr::set_config_and_initialize(const NetworkConfig& cfg) {
   DAQIRI_LOG_INFO("Setting up RDMA manager");
   cfg_ = cfg;
@@ -95,7 +109,14 @@ uint64_t RdmaMgr::get_burst_tot_byte(BurstParams* burst) {
 }
 
 BurstParams* RdmaMgr::create_tx_burst_params() {
-  return new BurstParams();
+  BurstParams* burst = nullptr;
+  if (rte_mempool_get(tx_meta, reinterpret_cast<void**>(&burst)) != 0) {
+    DAQIRI_LOG_CRITICAL("Failed to get RDMA TX meta descriptor");
+    return nullptr;
+  }
+
+  reset_rdma_burst_metadata(burst);
+  return burst;
 }
 
 bool RdmaMgr::get_ip_from_interface(const std::string_view& if_name, sockaddr_in& addr) {
@@ -154,6 +175,9 @@ int RdmaMgr::mr_access_to_ibv(uint32_t access) {
   if (access & MEM_ACCESS_LOCAL) { ibv_access |= IBV_ACCESS_LOCAL_WRITE; }
   if (access & MEM_ACCESS_RDMA_READ) { ibv_access |= IBV_ACCESS_REMOTE_READ; }
   if (access & MEM_ACCESS_RDMA_WRITE) { ibv_access |= IBV_ACCESS_REMOTE_WRITE; }
+#ifdef IBV_ACCESS_RELAXED_ORDERING
+  ibv_access |= IBV_ACCESS_RELAXED_ORDERING;
+#endif
 
   return ibv_access;
 }
@@ -340,12 +364,15 @@ inline int RdmaMgr::set_affinity(int cpu_core) {
 }
 
 Status RdmaMgr::send_tx_burst(BurstParams* burst) {
+  if (burst == nullptr) { return Status::INVALID_PARAMETER; }
+
   struct rte_ring* ring;
 
   const auto conn_id = get_connection_id(burst);
   auto ri = tx_rings_map_.find(reinterpret_cast<struct rdma_cm_id*>(conn_id));
   if (ri == tx_rings_map_.end()) {
     DAQIRI_LOG_ERROR("Invalid server connection ID in send_tx_burst: {}", conn_id);
+    free_tx_burst(burst);
     return Status::INVALID_PARAMETER;
   }
 
@@ -353,7 +380,6 @@ Status RdmaMgr::send_tx_burst(BurstParams* burst) {
 
   if (rte_ring_enqueue(ring, reinterpret_cast<void*>(burst)) != 0) {
     free_tx_burst(burst);
-    free_tx_metadata(burst);
     DAQIRI_LOG_CRITICAL("Failed to enqueue TX work");
     return Status::NO_SPACE_AVAILABLE;
   }
@@ -449,7 +475,6 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
       if (rte_ring_enqueue(rx_ring, reinterpret_cast<void*>(msg)) != 0) {
         DAQIRI_LOG_CRITICAL("Failed to enqueue RX completion message");
         free_tx_burst(msg);
-        free_tx_metadata(msg);
         return;
       }
     }
@@ -505,7 +530,6 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
       if (rte_ring_enqueue(rx_ring, reinterpret_cast<void*>(msg)) != 0) {
         DAQIRI_LOG_CRITICAL("Failed to enqueue RX completion message");
         free_tx_burst(msg);
-        free_tx_metadata(msg);
         return;
       }
     }
@@ -920,6 +944,8 @@ Status RdmaMgr::rdma_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t*
 }
 
 Status RdmaMgr::get_tx_packet_burst(BurstParams* burst) {
+  if (burst == nullptr) { return Status::INVALID_PARAMETER; }
+
   // RDMA isn't allowing split segments yet
   assert(burst->transport_hdr.num_segs == 1);
   assert(burst->transport_hdr.num_pkts <= MAX_RDMA_BATCH);
@@ -941,17 +967,20 @@ Status RdmaMgr::get_tx_packet_burst(BurstParams* burst) {
                                  nullptr);
   if (rx != burst->transport_hdr.num_pkts) {
     DAQIRI_LOG_ERROR("Asked for {} packets, got {}", burst->transport_hdr.num_pkts, rx);
-    rte_ring_enqueue_bulk(burst_pool->second,
-                          reinterpret_cast<void**>(burst->pkts[0]),
-                          burst->transport_hdr.num_pkts,
-                          nullptr);
+    rte_mempool_put(tx_burst_pool_, reinterpret_cast<void*>(burst->pkts[0]));
+    burst->pkts[0] = nullptr;
     return Status::NO_FREE_BURST_BUFFERS;
   }
 
   // Allocate packet length buffer
   if (rte_mempool_get(pkt_len_pool_, reinterpret_cast<void**>(&burst->pkt_lens[0])) != 0) {
     DAQIRI_LOG_ERROR("Failed to get packet length buffer");
+    rte_ring_enqueue_bulk(burst_pool->second,
+                          reinterpret_cast<void**>(burst->pkts[0]),
+                          burst->transport_hdr.num_pkts,
+                          nullptr);
     rte_mempool_put(tx_burst_pool_, reinterpret_cast<void*>(burst->pkts[0]));
+    burst->pkts[0] = nullptr;
     return Status::NO_FREE_PACKET_BUFFERS;
   }
 
@@ -1341,12 +1370,16 @@ int RdmaMgr::setup_pools_and_rings() {
 }
 
 void RdmaMgr::free_rx_burst(BurstParams* burst) {
+  if (burst == nullptr) { return; }
   rte_mempool_put(rx_meta, burst);
 }
 
 void RdmaMgr::free_tx_burst(BurstParams* burst) {
+  if (burst == nullptr) { return; }
+
   auto burst_pool = mem_pools_.find(burst->transport_hdr.local_mr_name);
-  if (burst_pool != mem_pools_.end()) {
+  if (burst->transport_hdr.num_pkts > 0 && burst->pkts[0] != nullptr &&
+      burst_pool != mem_pools_.end()) {
     int ret = rte_ring_enqueue_bulk(burst_pool->second,
                                     reinterpret_cast<void**>(burst->pkts[0]),
                                     burst->transport_hdr.num_pkts,
@@ -1357,9 +1390,13 @@ void RdmaMgr::free_tx_burst(BurstParams* burst) {
     }
   }
 
-  rte_mempool_put(tx_burst_pool_, (void*)burst->pkts[0]);
-  rte_mempool_put(pkt_len_pool_, (void*)burst->pkt_lens[0]);
-  burst->transport_hdr.num_pkts = 0;
+  if (burst->pkts[0] != nullptr) {
+    rte_mempool_put(tx_burst_pool_, reinterpret_cast<void*>(burst->pkts[0]));
+  }
+  if (burst->pkt_lens[0] != nullptr) {
+    rte_mempool_put(pkt_len_pool_, reinterpret_cast<void*>(burst->pkt_lens[0]));
+  }
+  reset_rdma_burst_metadata(burst);
   rte_mempool_put(tx_meta, burst);
 }
 
@@ -1583,15 +1620,21 @@ Status RdmaMgr::get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server
 }
 
 void RdmaMgr::free_rx_metadata(BurstParams* burst) {
+  if (burst == nullptr) { return; }
+  reset_rdma_burst_metadata(burst);
   rte_mempool_put(rx_meta, burst);
 }
 
 void RdmaMgr::free_tx_metadata(BurstParams* burst) {
+  if (burst == nullptr) { return; }
+  reset_rdma_burst_metadata(burst);
   rte_mempool_put(tx_meta, burst);
 }
 
 Status RdmaMgr::get_tx_metadata_buffer(BurstParams** burst) {
-  // TODO: Implement get_tx_meta_buf
+  if (burst == nullptr) { return Status::INVALID_PARAMETER; }
+  *burst = create_tx_burst_params();
+  if (*burst == nullptr) { return Status::NO_FREE_BURST_BUFFERS; }
   return Status::SUCCESS;
 }
 
