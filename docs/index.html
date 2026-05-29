@@ -40,18 +40,18 @@
     /* NAV */
     #navbar { position:fixed; top:0; left:0; right:0; z-index:1000; height:var(--nav-h); display:flex; align-items:center; background:rgba(10,10,10,.92); backdrop-filter:blur(16px); border-bottom:1px solid var(--border); transition:box-shadow var(--ease); }
     #navbar.scrolled { box-shadow:0 4px 40px rgba(0,0,0,.6); }
-    .nav-inner { width:100%; max-width:1200px; margin:0 auto; padding:0 2rem; display:flex; align-items:center; gap:2rem; }
+    .nav-inner { width:100%; max-width:1200px; margin:0 auto; padding:0 2rem; display:flex; align-items:center; gap:1.25rem; }
     .nav-logo { display:flex; align-items:center; gap:.75rem; flex-shrink:0; text-decoration:none; }
     .nav-logo-icon { width:32px; height:32px; background:var(--nv-green); border-radius:6px; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:.75rem; color:#000; letter-spacing:-.05em; }
     .nav-logo-text { font-weight:800; font-size:1.1rem; color:var(--text-pri); letter-spacing:.05em; }
     .nav-logo-badge { font-size:.65rem; font-weight:700; padding:2px 6px; background:rgba(118,185,0,.15); color:var(--nv-green); border:1px solid rgba(118,185,0,.3); border-radius:99px; letter-spacing:.08em; }
-    .nav-links { display:flex; align-items:center; gap:.25rem; flex:1; }
-    .nav-links a { color:var(--text-mut); font-size:.875rem; font-weight:500; padding:.4rem .75rem; border-radius:var(--radius); transition:color var(--ease),background var(--ease); }
+    .nav-links { display:flex; align-items:center; gap:.1rem; flex:1; }
+    .nav-links a { color:var(--text-mut); font-size:.875rem; font-weight:500; padding:.4rem .65rem; border-radius:var(--radius); transition:color var(--ease),background var(--ease); white-space:nowrap; }
     .nav-links a:hover { color:var(--text-pri); background:rgba(255,255,255,.05); }
     .nav-links a.active { color:var(--nv-green); }
     .nav-links a.nav-ext::after { content:'↗'; font-size:.72em; opacity:.55; margin-left:2px; }
-    .nav-actions { display:flex; align-items:center; gap:.75rem; margin-left:auto; }
-    .btn { display:inline-flex; align-items:center; gap:.5rem; font-size:.875rem; font-weight:600; padding:.5rem 1.25rem; border-radius:var(--radius); border:1.5px solid transparent; cursor:pointer; transition:all var(--ease); text-decoration:none; }
+    .nav-actions { display:flex; align-items:center; gap:.5rem; margin-left:auto; flex-shrink:0; }
+    .btn { display:inline-flex; align-items:center; gap:.5rem; font-size:.875rem; font-weight:600; padding:.5rem 1.25rem; border-radius:var(--radius); border:1.5px solid transparent; cursor:pointer; transition:all var(--ease); text-decoration:none; white-space:nowrap; }
     .btn-primary { background:var(--nv-green); color:#000; border-color:var(--nv-green); }
     .btn-primary:hover { background:var(--nv-green-l); border-color:var(--nv-green-l); color:#000; }
     .btn-outline { background:transparent; color:var(--text-mut); border-color:var(--border); }
@@ -187,9 +187,10 @@
     ::-webkit-scrollbar { width:6px; height:6px; }
     ::-webkit-scrollbar-track { background:var(--bg-dark); }
     ::-webkit-scrollbar-thumb { background:#333; border-radius:99px; }
+    @media (max-width:1100px) { .nav-links { display:none; } }
     @media (max-width:1000px) { .hero-inner { grid-template-columns:1fr; } .hero-logo-wrap { display:none; } }
     @media (max-width:900px) { .gs-layout { grid-template-columns:1fr; } .gs-code-panel { position:static; } .footer-inner { grid-template-columns:1fr 1fr; } }
-    @media (max-width:640px) { .nav-links { display:none; } section { padding:4rem 0; } .footer-inner { grid-template-columns:1fr; } .tut-meta { display:none; } }
+    @media (max-width:640px) { section { padding:4rem 0; } .footer-inner { grid-template-columns:1fr; } .tut-meta { display:none; } .nav-actions .btn-outline { display:none; } }
   </style>
 </head>
 <body>
@@ -203,7 +204,8 @@
       </a>
       <div class="nav-links">
         <a href="#features">Features</a>
-        <a href="#getting-started">Quick Start</a>
+        <a href="concepts/" class="nav-ext">Concepts</a>
+        <a href="tutorials/benchmarking_examples/" class="nav-ext">Benchmarks</a>
         <a href="#examples">Examples</a>
         <a href="#tutorials">Tutorials</a>
         <a href="api-reference/" class="nav-ext">API Reference</a>
@@ -263,7 +265,7 @@
       <div class="section-label">Why DAQIRI</div>
       <h2 class="section-title">Closing the Gap Between Sensor and GPU</h2>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:3rem;align-items:start;margin-bottom:4rem;">
-        <p class="section-desc">Scientific and industrial instruments generate data that is richest at the source — before it is filtered, decimated, or summarized. DAQIRI places NVIDIA GPU hardware directly in that data path, forging a tight bond between upstream sensors, their data converters, and the NVIDIA compute ecosystem. The result is a new foundation for developers: the ability to work with instrument data in its rawest form, at wire speed, and to build a new class of autonomous experiments where AI can observe phenomena directly at the source, augment human analysis, and steer experiments in real time. <span style="color:var(--nv-green);font-style:italic;">Streaming Ethernet data in, GPU tensor out.</span></p>
+        <p class="section-desc">Scientific and industrial instruments generate data that is richest at the source — before it is filtered, decimated, or summarized. DAQIRI places NVIDIA GPU hardware directly in that data path, forging a tight bond between upstream sensors, their data converters, and the NVIDIA compute ecosystem. The result is a new foundation for developers: the ability to work with instrument data in its rawest form, at wire speed, and to build a new class of autonomous experiments where AI can observe phenomena directly at the source, augment human analysis, and steer experiments in real time. <span style="color:var(--nv-green);font-style:italic;">Stream data into and out of GPUs efficiently while leveraging common tensor-compute libraries.</span></p>
 
         <!-- AI Native DAQ Architecture SVG -->
         <img src="images/architecture.svg" alt="AI Native DAQ Architecture" style="width:100%;max-width:400px;display:block;margin:0 auto;"/>
@@ -282,7 +284,7 @@
         <div class="feature-card">
           <div class="feature-icon">🔀</div>
           <h3>Hardware Flow Steering</h3>
-          <p>Route packets to specific queues by UDP port, IPv4 payload length, or custom flex items — all in NIC silicon, before any software runs.</p>
+          <p>Route packets based on header matching to steer different streams to different GPUs or CPUs — entirely in NIC silicon, before any software runs.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">🔗</div>
@@ -292,7 +294,7 @@
         <div class="feature-card">
           <div class="feature-icon">📄</div>
           <h3>YAML-Driven Configuration</h3>
-          <p>Define memory regions, NIC interfaces, TX/RX queues, and flow rules in a single YAML file — or build the same config in C++ code. Switch backends, memory kinds, and buffer sizes without recompiling.</p>
+          <p>Define memory regions, NIC interfaces, TX/RX queues, and flow rules in a single YAML file — or build the same config in C++ code. Switch stream types, memory kinds, and buffer sizes without recompiling.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">📦</div>
@@ -310,7 +312,7 @@
         <div>
           <div class="section-label">Quick Start</div>
           <h2 class="section-title">Build &amp; Run in Minutes</h2>
-          <p class="section-desc">Requires a ConnectX-6 Dx+ NIC, Linux (kernel 5.4+), and the CUDA Toolkit.</p>
+          <p class="section-desc">Runs on Linux (kernel 5.4+) with the CUDA Toolkit 12.2+. The kernel-bypass and GPUDirect paths additionally require an NVIDIA ConnectX-6 Dx (or newer) NIC.</p>
         </div>
         <a href="getting-started/" class="btn btn-outline">Full Guide →</a>
       </div>
@@ -320,14 +322,15 @@
             <div class="gs-step-num">1</div>
             <div class="gs-step-body">
               <h4>Install Prerequisites</h4>
-              <p>Install MLNX5/InfiniBand drivers with peermem support (inbox on Ubuntu ≥5.4 and &lt;6.8, or OFED from DOCA-Host 2.8+). Install the CUDA Toolkit.</p>
+              <p>Install the CUDA Toolkit (12.2 or newer).</p>
+              <p>For the Raw Ethernet / GPUDirect / RoCE path, you also need an NVIDIA ConnectX-6 Dx (or newer) NIC. The default Ubuntu kernel drivers are sufficient; we recommend additionally installing <code>doca-ofed</code> for the diagnostic utilities (<code>ibstat</code>, <code>ibv_devinfo</code>, <code>mlxconfig</code>, <code>mlnx_perf</code>, …).</p>
             </div>
           </div>
           <div class="gs-step">
             <div class="gs-step-num">2</div>
             <div class="gs-step-body">
               <h4>Build from Source</h4>
-              <p>Select backends with <code>DAQIRI_MGR</code>. Valid values: <code>dpdk</code>, <code>rdma</code>.</p>
+              <p>Select implementations with <code>DAQIRI_MGR</code>. Valid values: <code>dpdk</code>, <code>socket</code>, <code>rdma</code>.</p>
               <pre><span class="cm"># Configure, build, install</span>
 cmake -S . -B build \
   -DBUILD_SHARED_LIBS=ON \
@@ -351,8 +354,8 @@ cmake --install build --prefix /opt/daqiri</pre>
             <div class="gs-step-num">4</div>
             <div class="gs-step-body">
               <h4>Tune the System</h4>
-              <p>Isolate CPU cores, enable hugepages, configure NUMA affinity. Run the diagnostic script:</p>
-              <pre>python3 python/tune_system.py</pre>
+              <p>Run the diagnostic script to surface common networking bottlenecks (CPU governor, hugepages, MRRS, NUMA, GPU clocks, MTU, BAR1, PCIe topology):</p>
+              <pre>sudo python3 python/tune_system.py --check all</pre>
             </div>
           </div>
           <div class="gs-step">
@@ -447,7 +450,7 @@ daqiri::<span class="fn">get_tx_packet_burst</span>(burst);
       payload_ptr,payload_size);
 }
 daqiri::<span class="fn">send_tx_burst</span>(burst);</pre></div>
-          <div class="ex-footer"><span class="ex-desc">Build and send a UDP burst via DPDK</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
+          <div class="ex-footer"><span class="ex-desc">Build and send a UDP burst over Raw Ethernet</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
         </div>
 
         <div class="example-card">
@@ -501,21 +504,27 @@ daqiri::<span class="fn">free_all_packets_and_burst_rx</span>(
     cpu_core: <span class="nm">9</span>
     batch_size: <span class="nm">10240</span>
     memory_regions:
-      - <span class="str">"Data_RX_CPU"</span>
       - <span class="str">"Data_RX_GPU"</span>
+  - name: <span class="str">"rx_q_1"</span>
+    id: <span class="nm">1</span>
+    cpu_core: <span class="nm">10</span>
+    batch_size: <span class="nm">10240</span>
+    memory_regions:
+      - <span class="str">"Data_RX_GPU_2"</span>
   flows:
-  - name: <span class="str">"flow_0"</span>
+  - name: <span class="str">"udp_4096"</span>
     id: <span class="nm">0</span>
     action: {type: queue, id: <span class="nm">0</span>}
-    match:
-      udp_src: <span class="nm">4096</span>
-      udp_dst: <span class="nm">4096</span>
-      ipv4_len: <span class="nm">1050</span></pre></div>
-          <div class="ex-footer"><span class="ex-desc">Route UDP 4096→4096 to queue 0 in hardware</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
+    match: {udp_dst: <span class="nm">4096</span>}
+  - name: <span class="str">"udp_4097"</span>
+    id: <span class="nm">1</span>
+    action: {type: queue, id: <span class="nm">1</span>}
+    match: {udp_dst: <span class="nm">4097</span>}</pre></div>
+          <div class="ex-footer"><span class="ex-desc">Steer UDP 4096 → GPU 0, UDP 4097 → GPU 1 in hardware</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
         </div>
 
         <div class="example-card">
-          <div class="ex-hdr"><span class="ex-dot dot-bash"></span><span class="ex-title">DPDK Benchmarks</span><span class="ex-lang">bash</span></div>
+          <div class="ex-hdr"><span class="ex-dot dot-bash"></span><span class="ex-title">Raw Ethernet Benchmarks</span><span class="ex-lang">bash</span></div>
           <div class="ex-body"><pre><span class="cm"># Build with examples</span>
 cmake -S . -B build \
   -DDAQIRI_BUILD_EXAMPLES=ON \
@@ -531,7 +540,7 @@ cmake --build build -j
 ./build/examples/daqiri_bench_raw_hds \
   examples/daqiri_bench_raw_tx_rx_hds.yaml \
   --seconds <span class="nm">10</span></pre></div>
-          <div class="ex-footer"><span class="ex-desc">Run DPDK TX/RX and HDS benchmarks</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
+          <div class="ex-footer"><span class="ex-desc">Run Raw Ethernet TX/RX and HDS benchmarks</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
         </div>
 
         <div class="example-card">
@@ -569,14 +578,14 @@ cmake --build build -j
         <a href="getting-started/" class="btn btn-outline">Getting Started →</a>
       </div>
       <div class="tutorials-list">
-        <a href="getting-started/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">01</span><div class="tut-info"><div class="tut-title">Requirements &amp; Installation</div><div class="tut-desc">Hardware (ConnectX-6 Dx+), driver setup (OFED from DOCA-Host 2.8+ or inbox on Ubuntu 5.4–6.7), and CUDA Toolkit installation on Linux 5.4+.</div></div><div class="tut-meta"><span class="tag tag-beg">Beginner</span><span class="tut-time">~15 min</span></div><span class="tut-arrow">→</span></a>
+        <a href="getting-started/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">01</span><div class="tut-info"><div class="tut-title">Requirements &amp; Installation</div><div class="tut-desc">Hardware (NVIDIA ConnectX-6 Dx or newer for kernel-bypass and GPUDirect), default Ubuntu kernel drivers plus optional <code>doca-ofed</code> for diagnostics, and CUDA Toolkit 12.2+ on Linux 5.4+.</div></div><div class="tut-meta"><span class="tag tag-beg">Beginner</span><span class="tut-time">~15 min</span></div><span class="tut-arrow">→</span></a>
         <div class="tut-item tut-soon"><span class="tut-num">02</span><div class="tut-info"><div class="tut-title">Building from Source with CMake</div><div class="tut-desc">Configure <code>DAQIRI_MGR</code>, <code>DAQIRI_BUILD_PYTHON</code>, <code>BUILD_SHARED_LIBS</code>, and <code>DAQIRI_BUILD_EXAMPLES</code>. Build for A100/H100 (CUDA arches 80, 90).</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
         <div class="tut-item tut-soon"><span class="tut-num">03</span><div class="tut-info"><div class="tut-title">Container Build with Patched DPDK</div><div class="tut-desc">Build the Docker image with <code>build-container.sh</code>. The container ships a dmabuf-patched DPDK, so peermem is not required.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
         <a href="tutorials/system_configuration/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">04</span><div class="tut-info"><div class="tut-title">System Tuning for High-Performance Networking</div><div class="tut-desc">Isolate CPU cores, configure hugepages, set NUMA affinity, and run <code>python/tune_system.py</code> to diagnose common configuration issues.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~30 min</span></div><span class="tut-arrow">→</span></a>
         <a href="tutorials/benchmarking_examples/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">05</span><div class="tut-info"><div class="tut-title">Benchmarking Examples</div><div class="tut-desc">Run a TX/RX loopback test to validate your setup, and walk through interpreting throughput results.</div></div><div class="tut-meta"><span class="tag tag-beg">Beginner</span><span class="tut-time">~20 min</span></div><span class="tut-arrow">→</span></a>
         <a href="tutorials/configuration-walkthrough/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">06</span><div class="tut-info"><div class="tut-title">YAML Configuration Deep Dive</div><div class="tut-desc">Memory regions (<code>huge</code>, <code>device</code>, <code>host_pinned</code>), RX/TX queue setup, flow steering rules, flex items, and RDMA client/server config schemas.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~40 min</span></div><span class="tut-arrow">→</span></a>
         <div class="tut-item tut-soon"><span class="tut-num">07</span><div class="tut-info"><div class="tut-title">GPUDirect: Header-Data Split Pipeline</div><div class="tut-desc">Configure a two-region memory layout, access CPU headers and GPU payloads per-packet with <code>get_segment_packet_ptr()</code>, and reorder scattered GPU buffers with the built-in CUDA kernel.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
-        <div class="tut-item tut-soon"><span class="tut-num">08</span><div class="tut-info"><div class="tut-title">RDMA Client/Server Setup</div><div class="tut-desc">Configure the RDMA backend with RC transport, assign client and server roles across two hosts, and run <code>daqiri_bench_rdma</code> to validate the connection.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
+        <div class="tut-item tut-soon"><span class="tut-num">08</span><div class="tut-info"><div class="tut-title">RoCE (RDMA) Client/Server Setup</div><div class="tut-desc">Configure <code>stream_type: socket</code>, <code>protocol: roce</code> with RC transport, assign client and server roles across two hosts, and run <code>daqiri_bench_rdma</code> to validate the connection.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
         <div class="tut-item tut-soon"><span class="tut-num">09</span><div class="tut-info"><div class="tut-title">Timed TX with ConnectX-7</div><div class="tut-desc">Enable <code>accurate_send</code> in the TX config and use <code>set_packet_tx_time()</code> for PTP-synchronized, hardware-scheduled packet transmission on ConnectX-7+.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
       </div>
     </div>
@@ -596,7 +605,7 @@ cmake --build build -j
         <div class="pub-card">
           <div class="pub-venue"><span class="pub-badge">GitHub</span><span class="pub-year">2025</span></div>
           <div class="pub-title">DAQIRI Open-Sourced on GitHub</div>
-          <div class="pub-authors">NVIDIA — Initial public release under Apache 2.0, featuring DPDK and RDMA backends with GPUDirect support for ConnectX-6 Dx and later NICs.</div>
+          <div class="pub-authors">NVIDIA — Initial public release under Apache 2.0, featuring Raw Ethernet and RoCE stream types with GPUDirect support for ConnectX-6 Dx and later NICs.</div>
           <div class="pub-links"><a href="https://github.com/NVIDIA/daqiri" class="pub-link" target="_blank">Repository ↗</a></div>
         </div>
         <div class="pub-card">

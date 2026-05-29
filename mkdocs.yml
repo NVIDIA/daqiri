@@ -48,6 +48,7 @@ site_dir: site
 nav:
   - Getting Started: getting-started.md
   - Concepts: concepts.md
+  - Benchmarks: tutorials/benchmarking_examples.md
   - API Reference:
     - API Guide: api-reference/index.md
     - Configuration YAML Reference: api-reference/configuration.md
@@ -55,7 +56,6 @@ nav:
     - Python API Usage: api-reference/python.md
   - Tutorials:
     - System Configuration: tutorials/system_configuration.md
-    - Benchmarking Examples: tutorials/benchmarking_examples.md
     - Configuration YAML Walkthrough: tutorials/configuration-walkthrough.md
 
 markdown_extensions:

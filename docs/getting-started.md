@@ -7,23 +7,19 @@ hide:
 
 ## System Requirements
 
-DAQIRI requires a system with an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking/ethernet-adapters/) (ConnectX-6 Dx or later) and a [**discrete GPU**](https://www.nvidia.com/en-us/design-visualization/desktop-graphics/).
+DAQIRI's baseline requirements depend on which [stream type](concepts.md#stream-types) you plan to use. The Linux Sockets path (`stream_type: "socket"`, `protocol: "udp"`/`"tcp"`) runs on any modern Linux box. The Raw Ethernet kernel-bypass path and GPUDirect impose additional hardware requirements, listed below.
 
 | Component | Requirement |
 |-----------|-------------|
 | **OS** | Linux (kernel 5.4+), Ubuntu 22.04 recommended |
-| **NIC** | NVIDIA ConnectX-6 Dx or later, with MLNX_OFED or inbox drivers |
-| **GPU** | Workstation/Quadro/RTX or Data Center GPU (GPUDirect-capable) |
-| **CUDA** | CUDA Toolkit 11.7+ |
-| **DPDK** | Included in the DAQIRI container; see [Dockerfile](https://github.com/NVIDIA/daqiri/blob/main/Dockerfile) for bare-metal deps |
-| **RDMA** | `libibverbs` and `librdmacm` (for the RDMA backend) |
+| **CUDA** | CUDA Toolkit 12.2+ (the container ships CUDA 13.1) |
+| **NIC** *(Raw Ethernet / GPUDirect / RoCE only)* | NVIDIA ConnectX-6 Dx or later. Default Ubuntu kernel drivers (inbox) are sufficient; we recommend also installing `doca-ofed` for the diagnostic utilities (`ibstat`, `ibv_devinfo`, `ibdev2netdev`, `mlnx_perf`, `mlxconfig`, …). |
+| **GPU** *(GPUDirect only)* | RTX or Data Center GPU. GeForce is not supported. |
+| **DPDK** | Included in the DAQIRI container (patched for dma-buf, so `nvidia-peermem` is **not required** inside the container); see [bare-metal dependencies](#bare-metal-dependencies) below for the host build. |
+| **RoCE** | `libibverbs` and `librdmacm` (for `stream_type: "socket"`, `protocol: "roce"`). |
 | **GDS** | Optional `cufile.h` and `libcufile` for file writes from CUDA device memory. Runtime device-memory writes require a working cuFile installation; for regular `nvidia-fs` mode, the `nvidia-fs` kernel module must be loaded and the destination storage stack must be supported. |
 
-Supported platforms include [NVIDIA Data Center](https://www.nvidia.com/en-us/data-center/) systems, edge systems like [NVIDIA IGX](https://www.nvidia.com/en-us/edge-computing/products/igx/) and [NVIDIA Project DIGITS](https://www.nvidia.com/en-us/project-digits/), and `x86_64` systems with the above components.
-
-!!! note
-
-    If you use the DPDK bundled in the DAQIRI container, it is patched with dmabuf support and the `nvidia-peermem` kernel module is **not required**.
+Supported platforms include [NVIDIA Data Center](https://www.nvidia.com/en-us/data-center/) systems, edge systems like [NVIDIA IGX](https://www.nvidia.com/en-us/edge-computing/products/igx/) and [NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/workstations/dgx-spark/), and `x86_64` systems with the above components.
 
 For detailed instructions on verifying NIC drivers, configuring link layers, enabling GPUDirect, and tuning your system for maximum performance, see the [System Configuration tutorial](tutorials/system_configuration.md).
 
@@ -73,7 +69,7 @@ Then build the DAQIRI library:
 
 === "Container build (recommended)"
 
-    The container bundles all user-space libraries for each networking backend, avoiding dependency issues on the host:
+    The container bundles all user-space libraries for each stream type, avoiding dependency issues on the host:
 
     ```bash
     git clone git@github.com:NVIDIA/daqiri.git
@@ -95,6 +91,8 @@ Then build the DAQIRI library:
 
 === "CMake build (bare-metal)"
 
+    Install the dependencies listed under [Bare-metal dependencies](#bare-metal-dependencies) below first, then:
+
     ```bash
     git clone git@github.com:NVIDIA/daqiri.git
     cd daqiri
@@ -103,7 +101,27 @@ Then build the DAQIRI library:
     cmake --install build --prefix /opt/daqiri
     ```
 
-    Inspect the [Dockerfile](https://github.com/NVIDIA/daqiri/blob/main/Dockerfile) to see the full list of user-space dependencies needed for a bare-metal build.
+### Bare-metal dependencies
+
+The Ubuntu apt packages mirror the Dockerfile. Build DPDK from source with the patches under `dpdk_patches/` if you want GPUDirect without the `nvidia-peermem` kernel module.
+
+```bash
+# Core build deps
+sudo apt install -y \
+    build-essential cmake git curl ca-certificates gnupg \
+    pkgconf ninja-build meson python3-pip python3-dev python3-pyelftools
+
+# Raw Ethernet (DPDK) build deps
+sudo apt install -y libnuma-dev
+
+# RoCE / RDMA + diagnostic utilities (from the DOCA APT repo, see above)
+sudo apt install -y \
+    libibverbs-dev librdmacm-dev libmlx5-1 ibverbs-utils infiniband-diags \
+    mlnx-ofed-kernel-utils mft
+
+# Python bindings (only if -DDAQIRI_BUILD_PYTHON=ON)
+sudo apt install -y pybind11-dev
+```
 
 ### Use an Installed Library
 
@@ -130,7 +148,7 @@ Both methods use the same public C++ include:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `DAQIRI_MGR` | `"dpdk socket rdma"` | Space-separated list of backends to build. Valid values: `dpdk`, `socket`, `rdma`. |
+| `DAQIRI_MGR` | `"dpdk socket rdma"` | Space-separated list of manager implementations to compile in. Valid values: `dpdk` (Raw Ethernet), `socket` (Linux UDP/TCP sockets), `rdma` (RoCE). |
 | `DAQIRI_BUILD_PYTHON` | `OFF` | Build pybind11 Python bindings. |
 | `DAQIRI_BUILD_EXAMPLES` | `ON` | Build benchmark executables. |
 | `DAQIRI_ENABLE_GDS` | `OFF` | Enable cuFile-backed burst file writes from CUDA device memory. Host-memory writes use POSIX APIs without GDS. |
@@ -164,7 +182,7 @@ must configure the OpenTelemetry C++ SDK before or during DAQIRI initialization.
 
 Once DAQIRI is built, follow the tutorials to configure your system and run your first benchmark:
 
-1. [**Concepts**](concepts.md) — terminology (packet, burst, segment, flow, queue, memory region), kernel-bypass backends, GPUDirect, and zero-copy ownership. Keep this open in a second tab.
+1. [**Concepts**](concepts.md) — terminology (stream types and protocols, packet, burst, segment, flow, queue, memory region), GPUDirect, and zero-copy ownership. Keep this open in a second tab.
 2. [**API Guide**](api-reference/index.md) — the six-step DAQIRI application lifecycle and configuration-first model
 3. [**System Configuration**](tutorials/system_configuration.md) — NIC drivers, link layers, GPUDirect, hugepages, CPU isolation, GPU clocks, and more
 4. [**Benchmarking Examples**](tutorials/benchmarking_examples.md) — run `daqiri_bench_raw_gpudirect` with a loopback test

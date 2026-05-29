@@ -8,71 +8,111 @@ hide:
 This page is the DAQIRI glossary. It defines the terms used across the
 [API Guide](api-reference/index.md),
 [Configuration Reference](api-reference/configuration.md), and
-[tutorials](tutorials/system_configuration.md): **kernel bypass**,
-**GPUDirect**, **packet / burst / segment**, **flow / queue**,
-**memory region**, **zero-copy ownership**, and **RX reorder**.
+[tutorials](tutorials/system_configuration.md): **stream types and
+protocols**, **GPUDirect**, **packet / burst / segment**,
+**flow / queue**, **memory region**, **zero-copy ownership**, and
+**RX reorder**.
 
-## Kernel Bypass
+## Stream Types
 
-**Kernel bypass** means bypassing the operating system's kernel to talk
-directly to the network interface (NIC). That removes the latency and
-overhead of the Linux network stack and lets the application work with NIC
-ring buffers in user space.
+DAQIRI exposes a single C++ API on top of several packet-I/O stacks. The
+choice is configured per-application in YAML by two keys:
 
-DAQIRI is a thin, common interface over multiple kernel-bypass technologies.
-All of its backends are Ethernet-based, but they differ in their model,
-features, and footprint:
+- `stream_type` — the I/O stack family.
+- `protocol` — required when `stream_type: "socket"`; selects the
+  socket-level protocol.
 
-- **DPDK**: the [Data Plane Development Kit](https://www.dpdk.org/) is a
-  Linux Foundation project with strong, long-running community support. Its
-  RTE Flow capability is generally considered the most flexible solution for
-  splitting ingress and egress data into per-queue streams.
-- **RDMA**: Remote Direct Memory Access, using the open-source
-  [`rdma-core`](https://github.com/linux-rdma/rdma-core) library. RDMA
-  differs from the other Ethernet-based backends with its server/client
-  model and **RoCE** (RDMA over Converged Ethernet) protocol. It costs more
-  to set up on both ends but offers a simpler user interface, orders packets
-  on arrival, and provides a NIC-level reliable transport mode (RC).
-- **Socket**: a socket-oriented interface (UDP and TCP via
-  the Linux kernel, plus a RoCE path that delegates to the RDMA backend).
-  Useful as a comparison baseline against DPDK and RDMA, and as a path to
-  first results when no NVIDIA NIC is available.
+### Raw Ethernet — `stream_type: "raw"`
 
-Which backend is best for your use case depends on multiple factors: packet
-size, batch size, data type, whether you need ordering or reliability, and
-whether both ends of the link are under your control. DAQIRI's goal is to
-abstract the interface to these backends so developers can focus on
-application logic and experiment with different configurations to find the
-best technology for their workload.
+Kernel-bypass raw Ethernet. The application talks directly to NIC ring
+buffers in user space, skipping the Linux network stack entirely. This
+is the highest-performance path and the only one with hardware flow
+steering (see [Flows](#flow) below). Currently implemented on top of
+[DPDK](https://www.dpdk.org/); the DPDK dependency is an implementation
+detail, not a user-facing concept.
 
-??? example "Backend maturity"
+Requires an NVIDIA SmartNIC (ConnectX-6 Dx or later).
+
+### Socket — `stream_type: "socket"`
+
+Socket-style interfaces. The specific transport is chosen by `protocol`:
+
+- **`protocol: "udp"`** / **`protocol: "tcp"`** — Linux kernel UDP and
+  TCP sockets. No NIC privileges required, no special hardware. Useful
+  as a comparison baseline against the kernel-bypass paths and as a way
+  to get first results on a system without an NVIDIA NIC.
+- **`protocol: "roce"`** — RDMA over Converged Ethernet, using the
+  open-source [`rdma-core`](https://github.com/linux-rdma/rdma-core)
+  library. A server/client connection model, NIC-level reliable
+  transport (RC), and in-order delivery. Primarily intended for
+  workloads where **one** endpoint is a third-party device (an FPGA, an
+  instrument, or another customer-supplied black box) that already
+  speaks RoCE. When both peers run DAQIRI, prefer an upper-layer
+  library such as MPI, NCCL, or UCX rather than wiring RoCE directly.
+
+### PCIe — `stream_type: "pcie"` *(future)*
+
+Placeholder for an upcoming direct-PCIe stream type. Not implemented
+yet.
+
+### Choosing a stream type
+
+The right choice depends on packet size, batch size, latency target,
+whether you need ordering or hardware reliability, and what the other
+end of the link looks like. DAQIRI's job is to make swapping among them
+a configuration change rather than a code change.
+
+For a use-case-driven decision tree (baseline throughput, GPU reorder,
+header-data split, multi-queue flow steering, packet recording, RDMA,
+sockets), see
+[Choosing an example config](tutorials/configuration-walkthrough.md#choosing-an-example-config)
+in the configuration walkthrough.
+
+??? example "Maturity"
 
     The DAQIRI library integration testing infrastructure is under active
     development. As such:
 
-    - The **DPDK** backend is supported and distributed with the DAQIRI
-      library, and is the only backend actively tested at this time.
-    - The **RDMA / RoCE** backend is supported and distributed with the
-      DAQIRI library; integration testing is under development.
-    - The **Socket** backend (UDP/TCP via the Linux kernel, plus the RoCE
-      path that delegates to RDMA) is supported and distributed; integration
+    - **Raw Ethernet** (`stream_type: "raw"`) is supported, distributed
+      with the DAQIRI library, and is the only stream type actively
+      tested at this time.
+    - **Socket — UDP / TCP** (`stream_type: "socket"`, `protocol: "udp"`
+      / `"tcp"`) is supported and distributed; integration testing is
+      under development.
+    - **Socket — RoCE** (`stream_type: "socket"`,
+      `protocol: "roce"`) is supported and distributed; integration
       testing is under development.
 
 ## GPUDirect
 
-**GPUDirect** allows the NIC to read and write data from/to a GPU without
-having to first stage it through system memory. That decreases CPU overhead
-and significantly reduces latency. An implementation of GPUDirect is
-supported by every DAQIRI backend.
+**GPUDirect** allows the NIC to read and write data from/to a GPU
+without staging it through system memory first. That decreases CPU
+overhead and significantly reduces latency. An implementation of
+GPUDirect is supported by every DAQIRI stream type.
+
+The two paths look like this:
+
+```mermaid
+flowchart LR
+    subgraph withGPUDirect [With GPUDirect]
+        nicA[NIC] -->|"PCIe peer-to-peer DMA"| gpuA[GPU memory]
+    end
+    subgraph withoutGPUDirect [Without GPUDirect]
+        nicB[NIC] -->|"DMA"| cpuB[CPU staging buffer] -->|"cudaMemcpy"| gpuB[GPU memory]
+    end
+```
+
+The GPUDirect path skips the CPU-side staging buffer and the
+`cudaMemcpy` that goes with it.
 
 !!! warning
 
-    GPUDirect is only supported on Workstation/Quadro/RTX GPUs and Data
-    Center GPUs. It is not supported on GeForce cards.
+    GPUDirect is only supported on RTX GPUs and Data Center GPUs. It is
+    not supported on GeForce cards.
 
 ??? info "How does that relate to peermem or dma-buf?"
 
-    There are two interfaces to enable GPUDirect:
+    There are two kernel interfaces to enable GPUDirect:
 
     - The [`nvidia-peermem`](https://docs.nvidia.com/cuda/gpudirect-rdma/)
       kernel module, distributed with the NVIDIA DKMS GPU drivers.
@@ -95,50 +135,46 @@ For step-by-step system setup, see the
 
 ## Packets, Bursts, and Segments
 
-These three terms describe the units of data that flow through DAQIRI.
-They appear throughout the API, configuration, and code paths.
+DAQIRI is a batch processing library. Packets are received from DAQIRI
+and sent to DAQIRI in batches called **bursts**. Larger bursts can
+increase throughput at the expense of latency; smaller bursts decrease
+latency but cap total throughput because of the per-burst processing
+overhead. The terms below appear throughout the API, configuration, and
+code paths.
 
 ### Packet
 
-A **packet** is a single Ethernet frame including headers and payload as one
-logical unit. DAQIRI never delivers packets one at a time; the unit of
-delivery is a *burst*.
+A **packet** is a single, contiguous block of memory representing
+either received data or data to transmit. Packets can be far larger
+than an Ethernet MTU in some cases (for example with `protocol: "roce"`
+or `protocol: "tcp"`/`"udp"`); the underlying stack fragments and
+reassembles them on the wire transparently.
 
 ### Burst (`BurstParams`)
 
-A **burst** is a batch of packets grouped together for efficient transfer
-between DAQIRI internals and the application. Bursts are the way the
-application receives, transmits, and frees packets.
-
-The C++ type for a burst is `BurstParams`. A burst carries:
-
-- Pointers to the underlying packet buffers
-- Packet count, port ID, queue ID, segment count
-- Per-packet byte totals and lengths
-- Flow IDs (when flow steering is configured)
-- Optional RX hardware timestamps
-
-`BurstParams` is meant to be opaque. Applications use helper functions
-(`get_packet_ptr`, `get_packet_length`, `get_num_packets`, ...) to inspect
-or modify it rather than touching its fields directly.
+A **burst** is the metadata container DAQIRI uses to describe a batch
+of packets being transmitted or received. The C++ type for a burst is
+`BurstParams`. It is intentionally opaque — applications use helper
+functions (`get_packet_ptr`, `get_packet_length`, `get_num_packets`,
+...) to inspect or modify it rather than touching its fields directly.
 
 ### Segment
 
-A **segment** is one contiguous memory region inside a packet. A packet can
-have one segment or multiple segments. The number of segments a packet has
-is set by the receive mode configured in the YAML:
+A **segment** is one contiguous memory region inside a packet. A packet
+can have one segment or multiple segments:
 
-- **Single segment**: used for CPU-only or batched-GPU paths that do not
-  split headers from payloads.
-- **Two segments (header-data split)**: segment 0 holds headers in CPU
-  memory, segment 1 holds payload data in GPU memory.
+- **Single segment**: the whole packet fills one contiguous region.
+- **Multiple segments**: each segment is assigned to a different memory
+  region. The memory regions can be of any kind (CPU or GPU) in any
+  order. A common use case is *header-data split* (HDS) below.
 
 ### Header-Data Split (HDS)
 
-**Header-data split** is the most common multi-segment configuration:
+**Header-data split** is the canonical multi-segment configuration:
 headers go to CPU memory (segment 0), payload goes to GPU memory
-(segment 1). This keeps the GPU payload path zero-copy for downstream GPU
-workloads while still letting the CPU parse and steer on the headers.
+(segment 1). This keeps the GPU payload path zero-copy for downstream
+GPU workloads while still letting the CPU parse and steer on the
+headers.
 
 Use HDS when the application needs to inspect headers (UDP
 source/destination ports, application-layer sequence numbers, etc.) but
@@ -161,51 +197,64 @@ buffers (CPU hugepages, GPU device memory, or pinned host memory).
 
 ### Flow
 
-A **flow** is a rule that maps packets matching a given pattern to a
-specific queue. A flow has a match (e.g. UDP destination port 4096,
-IPv4 length 1050) and an action (e.g. *queue 0*). Multiple flows can
-target the same queue; the matching flow's ID is available at runtime
-so the application can distinguish them. Flows are configured under
-`rx.flows` in the YAML.
+A **flow** is a match pattern paired with an action. The common action
+is to steer matching packets into a specific queue. For example, all
+UDP-destination-port-4096 packets can be routed into a queue backed by
+GPU memory. Matching and the resulting action both run entirely in NIC
+hardware.
+
+Flow rules are only available in Raw Ethernet (`stream_type: "raw"`).
+
+A flow's match can combine fields such as `udp_src`, `udp_dst`, and
+`ipv4_len`; multiple flows can target the same queue, and the matching
+flow's ID is available at runtime so the application can distinguish
+them. Flows are configured under `rx.flows` in the YAML.
 
 ### Flow Steering
 
-**Flow steering** is the NIC-level mechanism that classifies an incoming
-packet against the configured flows and writes it into the matching
-queue's buffer, entirely in hardware. Multi-queue RX works by routing
-each flow to a separate queue for parallel processing.
+**Flow steering** is the NIC-level mechanism that classifies an
+incoming packet against the configured flows and writes it into the
+matching queue's buffer, entirely in hardware. Multi-queue RX works by
+routing each flow to a separate queue for parallel processing.
 
-For DPDK, flow steering is implemented on top of RTE Flow. The YAML
-options are documented in
+For Raw Ethernet, flow steering is implemented on top of RTE Flow. The
+YAML options are documented in
 [Configuration YAML Reference → Flows](api-reference/configuration.md#flows).
 
 ## Memory Regions
 
 A **memory region** is a named pool of buffers where packet data lives.
-Memory regions are declared at the top of the YAML and referenced by name
-from each queue.
+Memory regions are declared at the top of the YAML and referenced by
+name from each queue.
 
-The kind of a memory region determines whether packet data ends up on the
-CPU or the GPU:
+The kind of a memory region determines whether packet data ends up on
+the CPU or the GPU:
 
 - `huge`: CPU hugepages (recommended for CPU buffers).
 - `device`: GPU VRAM (discrete GPUs; requires GPUDirect via peermem or
   DMA-BUF).
 - `host_pinned`: pinned CPU pages allocated via `cudaHostAlloc`.
-  Recommended on integrated GPUs (NVIDIA GB10 / DGX Spark), where the NIC
-  cannot peer-DMA into device memory.
+  Recommended on integrated GPUs (NVIDIA GB10 / DGX Spark), where the
+  NIC cannot peer-DMA into device memory.
 - `host`: regular CPU memory (not recommended for hot paths).
 
-Combining memory regions on a single queue is how *header-data split* is
-expressed in the YAML: queue 0's first memory region is a `huge` CPU pool
-(for headers, segment 0); its second region is a `device` GPU pool (for
-payload, segment 1).
+The size of the memory region (`buf_size`) dictates the largest
+contiguous chunk that can be stored in a single *segment*. For example,
+with a 60-byte region the first 60 bytes of each packet land in that
+segment before the remainder spills into the next region in the
+queue's list. Region buffers can be much larger than a single Ethernet
+frame for fragmented transports (for example, `protocol: "roce"`).
+
+Combining memory regions on a single queue is how *header-data split*
+is expressed in the YAML: queue 0's first memory region is a `huge` CPU
+pool (for headers, segment 0); its second region is a `device` GPU pool
+(for payload, segment 1).
 
 ## Zero-Copy Ownership
 
 DAQIRI is designed around zero-copy packet delivery. When a receive API
-returns packet data, the application is reading the buffers the NIC DMA'd
-into; the API passes pointers and metadata, not copies.
+returns packet data, the application is reading the buffers the NIC
+DMA'd into; the API passes pointers and metadata, not copies.
 
 That zero-copy model makes **buffer release part of the API contract**.
 Applications must free RX bursts after processing and free or send TX
@@ -236,7 +285,7 @@ GPU-only or CPU-only. Reordering packets whose segments span two memory
 regions (for example, an HDS pair with CPU-side headers and GPU-side
 payloads) is not yet supported but is planned.
 
-See [Configuration YAML Reference → RX Reorder Configs](api-reference/configuration.md#rx-reorder-configs-dpdk-v1)
+See [Configuration YAML Reference → RX Reorder Configs](api-reference/configuration.md#rx-reorder-configs)
 for the configuration constraints and
 [C++ API Usage → Reordered RX bursts](api-reference/cpp.md#reordered-rx-bursts)
 for how to consume them from C++.

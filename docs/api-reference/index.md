@@ -15,16 +15,17 @@ For the terminology and conceptual background it relies on
 
 A DAQIRI application starts from a YAML configuration file (or an
 equivalent `NetworkConfig` struct built in code). The configuration
-defines the active backend, NIC interfaces, RX and TX queues, memory
-regions, flow steering rules, flow isolation, header-data split, and
-optional reorder plans. After initialization, the language API operates
-on those configured ports, queues, buffers, and flows.
+defines the active stream type and protocol, NIC interfaces, RX and TX
+queues, memory regions, flow steering rules, flow isolation,
+header-data split, and optional reorder plans. After initialization,
+the language API operates on those configured ports, queues, buffers,
+and flows.
 
 The language APIs do **not** discover queues, memory, or flow steering
 rules on their own. They are runtime handles over the topology declared
 in the configuration (YAML file or `NetworkConfig` struct). The
 configuration is the source of truth for queue IDs, memory placement,
-protocol/backend selection, and flow routing.
+stream-type / protocol selection, and flow routing.
 
 The configuration schema lives in the
 [Configuration YAML Reference](configuration.md). For an annotated

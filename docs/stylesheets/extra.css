@@ -118,6 +118,15 @@
   background: #0d0d0d;
 }
 
+/* ── Content width ───────────────────────────────────────────────────── */
+/* Material defaults to ~61rem of content width; combined with the smaller   */
+/* 0.72rem typeset baseline above, tables with monospace cells (CMake-options*/
+/* table in getting-started.md) wrap mid-token. Widen the grid for the slate */
+/* theme so wide tables breathe.                                             */
+[data-md-color-scheme="slate"] .md-grid {
+  max-width: 76rem;
+}
+
 /* ── Tables ──────────────────────────────────────────────────────────── */
 [data-md-color-scheme="slate"] .md-typeset table:not([class]) {
   border: 1px solid var(--nv-border);
@@ -135,6 +144,16 @@
 [data-md-color-scheme="slate"] .md-typeset table:not([class]) td {
   border-bottom: 1px solid #181818;
   color: var(--nv-text-mut);
+  /* Prefer word-boundary wrapping over mid-word breaks, which were */
+  /* producing single-character orphans in narrow columns.          */
+  word-break: normal;
+  overflow-wrap: anywhere;
+  hyphens: none;
+}
+/* Keep monospace tokens (CMake options, YAML keys) together. */
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) td > code,
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) th > code {
+  white-space: nowrap;
 }
 
 /* ── Sidebar / Navigation ────────────────────────────────────────────── */
