@@ -20,7 +20,7 @@ CMake options (full table in `docs/getting-started.md`):
 - `DAQIRI_BUILD_EXAMPLES` — builds the benchmark executables (default `ON`).
 - `DAQIRI_REORDER_GPU_PROFILE` — enable CUDA event timing in the DPDK reorder kernels (off by default).
 
-CUDA architectures are hardcoded to `80;90;121` (A100, H100, GB10) in `src/CMakeLists.txt:25`. Change this when targeting other GPUs.
+CUDA architectures default to `80;90` (A100, H100), with `121` (GB10) added when configuring with CUDA Toolkit 13.0 or newer. Override `CMAKE_CUDA_ARCHITECTURES` when targeting other GPUs.
 
 **Socket → RDMA dependency**: the socket backend reuses the RoCE transport from the RDMA implementation, so `src/CMakeLists.txt:144-152` automatically prepends `rdma` to `DAQIRI_MGR_LIST` whenever `socket` is requested. The reverse is not true — listing `rdma` alone does not pull in `socket`.
 

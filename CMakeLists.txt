@@ -13,11 +13,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 cmake_minimum_required(VERSION 3.20)
+
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+  set(CMAKE_CUDA_ARCHITECTURES 80 90)
+  set(DAQIRI_USING_DEFAULT_CUDA_ARCHITECTURES ON)
+endif()
+
 project(daqiri VERSION 0.1.0 LANGUAGES C CXX CUDA)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 find_package(CUDAToolkit REQUIRED)
+
+if(DAQIRI_USING_DEFAULT_CUDA_ARCHITECTURES AND
+   CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 13.0)
+  list(APPEND CMAKE_CUDA_ARCHITECTURES 121)
+endif()
 
 option(DAQIRI_BUILD_PYTHON "Build Python bindings" OFF)
 option(DAQIRI_BUILD_EXAMPLES "Build standalone examples" ON)

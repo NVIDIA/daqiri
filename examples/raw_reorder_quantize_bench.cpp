@@ -802,6 +802,11 @@ void rx_worker(const BenchConfig &cfg, const ReorderPlanConfig &plan,
       continue;
     }
 
+    if (cfg.verify_batches == 0) {
+      daqiri::free_all_packets_and_burst_rx(burst);
+      continue;
+    }
+
     if (burst->event != nullptr) {
       cudaEventSynchronize(burst->event);
     }

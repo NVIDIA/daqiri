@@ -212,7 +212,9 @@ bool PinnedHostBuffer::resize(size_t size) {
   if (size == 0) {
     return true;
   }
-  if (cudaHostAlloc(&ptr_, size, cudaHostAllocDefault) != cudaSuccess) {
+  // Batched TX copies may launch a CUDA kernel that reads from this staging
+  // buffer, so pinned host allocations must be device-mappable.
+  if (cudaHostAlloc(&ptr_, size, cudaHostAllocMapped) != cudaSuccess) {
     return false;
   }
   capacity_ = size;
@@ -431,22 +433,6 @@ void finalize_udp_ipv4_checksums(uint8_t *pkt_data) {
   if (pkt->udp.check == 0) {
     pkt->udp.check = 0xffffU;
   }
-}
-
-cudaError_t memcpy_batch_async(const std::vector<void *> &dsts,
-                               const std::vector<const void *> &srcs,
-                               const std::vector<size_t> &sizes,
-                               cudaStream_t stream) {
-  if (dsts.empty()) {
-    return cudaSuccess;
-  }
-
-  cudaMemcpyAttributes attr{};
-  attr.srcAccessOrder = cudaMemcpySrcAccessOrderStream;
-  attr.flags = cudaMemcpyFlagDefault;
-  size_t attr_idx = 0;
-  return cudaMemcpyBatchAsync(dsts.data(), srcs.data(), sizes.data(),
-                              dsts.size(), &attr, &attr_idx, 1, stream);
 }
 
 void signal_handler(int signum) {
