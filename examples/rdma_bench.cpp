@@ -117,13 +117,7 @@ void rdma_worker(const RdmaBenchConfig& cfg, std::atomic<bool>& stop, RdmaWorker
         daqiri::free_tx_burst(msg);
         return;
       }
-      const auto send_status = daqiri::send_tx_burst(msg);
-      if (send_status != daqiri::Status::SUCCESS) {
-        if (send_status != daqiri::Status::NO_SPACE_AVAILABLE) {
-          daqiri::free_tx_burst(msg);
-        }
-        return;
-      }
+      if (daqiri::send_tx_burst(msg) != daqiri::Status::SUCCESS) { return; }
       outstanding++;
       wr_id++;
     };

@@ -364,12 +364,15 @@ inline int RdmaMgr::set_affinity(int cpu_core) {
 }
 
 Status RdmaMgr::send_tx_burst(BurstParams* burst) {
+  if (burst == nullptr) { return Status::INVALID_PARAMETER; }
+
   struct rte_ring* ring;
 
   const auto conn_id = get_connection_id(burst);
   auto ri = tx_rings_map_.find(reinterpret_cast<struct rdma_cm_id*>(conn_id));
   if (ri == tx_rings_map_.end()) {
     DAQIRI_LOG_ERROR("Invalid server connection ID in send_tx_burst: {}", conn_id);
+    free_tx_burst(burst);
     return Status::INVALID_PARAMETER;
   }
 
