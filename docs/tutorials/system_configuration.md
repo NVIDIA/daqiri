@@ -1391,13 +1391,13 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     ### Configure the IP addresses of the NIC ports
 
-    Spark uses NetworkManager. Create persistent `daqiri-tx` / `daqiri-rx` profiles that pin both the IP and the MTU (so [Step 9: Jumbo frames](#step-9-enable-jumbo-frames-already-covered) is folded in here):
+    Spark uses NetworkManager. Create persistent `daqiri-tx` / `daqiri-rx` profiles that pin both the IP and the MTU (so [Step 9: Jumbo frames](#step-9-enable-jumbo-frames-already-covered) is folded in here). `daqiri-tx` is p0 (`enp1s0f0np0`) and `daqiri-rx` is p1 (`enP2p1s0f1np1`) — different physical ports, matching the over-the-wire benchmark example:
 
     ```bash
     sudo nmcli connection add type ethernet ifname enp1s0f0np0   con-name daqiri-tx \
         ipv4.addresses 1.1.1.1/24 ipv4.method manual ethernet.mtu 9000 \
         ipv4.gateway "" ipv6.method ignore
-    sudo nmcli connection add type ethernet ifname enP2p1s0f0np0 con-name daqiri-rx \
+    sudo nmcli connection add type ethernet ifname enP2p1s0f1np1 con-name daqiri-rx \
         ipv4.addresses 2.2.2.2/24 ipv4.method manual ethernet.mtu 9000 \
         ipv4.gateway "" ipv6.method ignore
     sudo nmcli connection up daqiri-tx
@@ -1408,9 +1408,9 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     ```bash
     ip -f inet addr show enp1s0f0np0
-    ip -f inet addr show enP2p1s0f0np0
+    ip -f inet addr show enP2p1s0f1np1
     ip link show enp1s0f0np0   | grep -oE "mtu [0-9]+"
-    ip link show enP2p1s0f0np0 | grep -oE "mtu [0-9]+"
+    ip link show enP2p1s0f1np1 | grep -oE "mtu [0-9]+"
     ```
 
     ### Enable GPUDirect
@@ -1580,7 +1580,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     ```bash
     ip link show enp1s0f0np0   | grep -oE "mtu [0-9]+"
-    ip link show enP2p1s0f0np0 | grep -oE "mtu [0-9]+"
+    ip link show enP2p1s0f1np1 | grep -oE "mtu [0-9]+"
     ```
 
     ---
