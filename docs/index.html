@@ -60,6 +60,15 @@
     .nav-dropdown a { display:block; padding:.5rem 1rem; font-size:.825rem; font-weight:500; color:var(--text-mut); text-decoration:none; white-space:nowrap; transition:color var(--ease),background var(--ease); }
     .nav-dropdown a:hover { color:var(--text-pri); background:rgba(118,185,0,.1); }
     .nav-actions { display:flex; align-items:center; gap:.5rem; margin-left:auto; flex-shrink:0; }
+    /* Hamburger button: hidden by default; shown at <1100px via media query   */
+    /* below. Toggles the .is-open class on .nav-links to reveal a vertical   */
+    /* drawer for tablet / mobile viewports.                                  */
+    .nav-hamburger { display:none; background:transparent; border:1px solid var(--border); color:var(--text-pri); width:38px; height:38px; border-radius:var(--radius); cursor:pointer; padding:0; align-items:center; justify-content:center; transition:color var(--ease),background var(--ease),border-color var(--ease); flex-shrink:0; }
+    .nav-hamburger:hover { background:rgba(255,255,255,.05); color:var(--nv-green); border-color:rgba(118,185,0,.4); }
+    .nav-hamburger svg { width:18px; height:18px; display:block; }
+    .nav-hamburger .icon-close { display:none; }
+    .nav-hamburger.is-open .icon-menu { display:none; }
+    .nav-hamburger.is-open .icon-close { display:block; }
     .btn { display:inline-flex; align-items:center; gap:.5rem; font-size:.875rem; font-weight:600; padding:.5rem 1.25rem; border-radius:var(--radius); border:1.5px solid transparent; cursor:pointer; transition:all var(--ease); text-decoration:none; white-space:nowrap; }
     .btn-primary { background:var(--nv-green); color:#000; border-color:var(--nv-green); }
     .btn-primary:hover { background:var(--nv-green-l); border-color:var(--nv-green-l); color:#000; }
@@ -196,7 +205,54 @@
     ::-webkit-scrollbar { width:6px; height:6px; }
     ::-webkit-scrollbar-track { background:var(--bg-dark); }
     ::-webkit-scrollbar-thumb { background:#333; border-radius:99px; }
-    @media (max-width:1100px) { .nav-links { display:none; } }
+    @media (max-width:1100px) {
+      /* Collapse the inline nav strip; surface a hamburger that opens the    */
+      /* same links as a full-width vertical drawer underneath the navbar.   */
+      .nav-links { display:none; }
+      .nav-hamburger { display:inline-flex; }
+      .nav-links.is-open {
+        display:flex;
+        position:fixed;
+        top:var(--nav-h);
+        left:0;
+        right:0;
+        flex-direction:column;
+        align-items:stretch;
+        gap:0;
+        background:rgba(10,10,10,.98);
+        backdrop-filter:blur(16px);
+        border-bottom:1px solid var(--border);
+        padding:.5rem 0;
+        max-height:calc(100vh - var(--nav-h));
+        overflow-y:auto;
+        z-index:999;
+        box-shadow:0 8px 32px rgba(0,0,0,.5);
+      }
+      .nav-links.is-open > a,
+      .nav-links.is-open .nav-item > a {
+        padding:.75rem 2rem;
+        border-radius:0;
+        font-size:.95rem;
+      }
+      /* Inside the drawer dropdowns flatten into an indented sub-list -- no */
+      /* hover popover, no chevron, just always-visible sub-page links.     */
+      .nav-links.is-open .nav-item { position:static; }
+      .nav-links.is-open .nav-item.nav-has-dropdown > a::after { content:''; margin:0; }
+      .nav-links.is-open .nav-dropdown {
+        display:block;
+        position:static;
+        background:transparent;
+        border:none;
+        box-shadow:none;
+        padding:0 0 .25rem;
+        min-width:0;
+      }
+      .nav-links.is-open .nav-dropdown::before { display:none; }
+      .nav-links.is-open .nav-dropdown a {
+        padding:.45rem 2rem .45rem 3.25rem;
+        font-size:.85rem;
+      }
+    }
     @media (max-width:1000px) { .hero-inner { grid-template-columns:1fr; } .hero-logo-wrap { display:none; } }
     @media (max-width:900px) { .gs-layout { grid-template-columns:1fr; } .gs-code-panel { position:static; } .footer-inner { grid-template-columns:1fr 1fr; } }
     @media (max-width:640px) { section { padding:4rem 0; } .footer-inner { grid-template-columns:1fr; } .tut-meta { display:none; } .nav-actions .btn-outline { display:none; } }
@@ -211,7 +267,7 @@
         <span class="nav-logo-text">DAQIRI</span>
         <span class="nav-logo-badge">NVIDIA</span>
       </a>
-      <div class="nav-links">
+      <div class="nav-links" id="nav-links">
         <a href="#features">Features</a>
         <a href="concepts/" class="nav-ext">Concepts</a>
         <a href="tutorials/benchmarking_examples/" class="nav-ext">Benchmarks</a>
@@ -240,6 +296,10 @@
         </a>
         <a href="#getting-started" class="btn btn-primary">Quick Start →</a>
       </div>
+      <button type="button" class="nav-hamburger" aria-label="Toggle navigation" aria-controls="nav-links" aria-expanded="false">
+        <svg class="icon-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        <svg class="icon-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
     </div>
   </nav>
 
@@ -723,4 +783,38 @@ cmake --build build -j</pre>
   </footer>
 
   <script>
-    const nb = document.getElementById
+    // Toggle .scrolled on #navbar once the user has scrolled a few pixels --
+    // CSS at the top of <style> uses this to drop a soft shadow under the bar.
+    const nb = document.getElementById('navbar');
+    if (nb) {
+      const updateScrolled = () => nb.classList.toggle('scrolled', window.scrollY > 8);
+      updateScrolled();
+      window.addEventListener('scroll', updateScrolled, { passive: true });
+    }
+
+    // Hamburger drawer for tablet / mobile viewports (<1100px). The button
+    // is hidden via CSS on wider viewports, so the listener is harmless
+    // there.
+    const ham   = document.querySelector('.nav-hamburger');
+    const links = document.querySelector('.nav-links');
+    if (ham && links) {
+      const setOpen = (open) => {
+        links.classList.toggle('is-open', open);
+        ham.classList.toggle('is-open', open);
+        ham.setAttribute('aria-expanded', String(open));
+      };
+      ham.addEventListener('click', () => setOpen(!links.classList.contains('is-open')));
+      // Tapping any link inside the drawer should dismiss it -- otherwise the
+      // drawer stays pinned over the page that the link scrolled / navigated
+      // to.
+      links.addEventListener('click', (e) => {
+        if (e.target.closest('a')) setOpen(false);
+      });
+      // Same when the viewport grows back past the breakpoint.
+      window.addEventListener('resize', () => {
+        if (window.innerWidth > 1100 && links.classList.contains('is-open')) setOpen(false);
+      });
+    }
+  </script>
+</body>
+</html>
