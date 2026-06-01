@@ -108,23 +108,6 @@ __global__ void memcpy_batch_inline_kernel(const MemcpyOp *ops, size_t count) {
   }
 }
 
-cudaError_t memcpy_async_loop(const std::vector<void *> &dsts,
-                              const std::vector<const void *> &srcs,
-                              const std::vector<size_t> &sizes,
-                              cudaStream_t stream) {
-  for (size_t i = 0; i < dsts.size(); ++i) {
-    if (sizes[i] == 0) {
-      continue;
-    }
-    const cudaError_t status =
-        cudaMemcpyAsync(dsts[i], srcs[i], sizes[i], cudaMemcpyDefault, stream);
-    if (status != cudaSuccess) {
-      return status;
-    }
-  }
-  return cudaSuccess;
-}
-
 cudaError_t memcpy_2d_async_if_strided(const std::vector<void *> &dsts,
                                        const std::vector<const void *> &srcs,
                                        const std::vector<size_t> &sizes,
@@ -232,7 +215,6 @@ cudaError_t memcpy_batch_async(const std::vector<void *> &dsts,
 
   std::vector<MemcpyOp> ops;
   ops.reserve(dsts.size());
-  bool use_kernel = true;
   size_t max_size = 0;
   for (size_t i = 0; i < dsts.size(); ++i) {
     if (sizes[i] == 0) {
@@ -244,20 +226,19 @@ cudaError_t memcpy_batch_async(const std::vector<void *> &dsts,
 
     MemcpyOp op{};
     const void *kernel_dst = nullptr;
-    if (kernel_accessible_pointer(dsts[i], &kernel_dst) != cudaSuccess) {
-      use_kernel = false;
-      break;
+    cudaError_t status = kernel_accessible_pointer(dsts[i], &kernel_dst);
+    if (status != cudaSuccess) {
+      return status;
     }
     op.dst = static_cast<uint8_t *>(const_cast<void *>(kernel_dst));
     op.size = sizes[i];
 
     const void *kernel_src = nullptr;
-    if (kernel_accessible_pointer(srcs[i], &kernel_src) != cudaSuccess) {
-      use_kernel = false;
-      break;
-    } else {
-      op.src = static_cast<const uint8_t *>(kernel_src);
+    status = kernel_accessible_pointer(srcs[i], &kernel_src);
+    if (status != cudaSuccess) {
+      return status;
     }
+    op.src = static_cast<const uint8_t *>(kernel_src);
 
     ops.push_back(op);
     max_size = std::max(max_size, sizes[i]);
@@ -267,16 +248,12 @@ cudaError_t memcpy_batch_async(const std::vector<void *> &dsts,
     return cudaSuccess;
   }
 
-  if (!use_kernel) {
-    return memcpy_async_loop(dsts, srcs, sizes, stream);
-  }
-
   thread_local std::unordered_map<cudaStream_t, DeviceMemcpyOps>
       device_ops_by_stream;
   DeviceMemcpyOps &device_ops = device_ops_by_stream[stream];
   cudaError_t status = device_ops.reserve(ops.size());
   if (status != cudaSuccess) {
-    return memcpy_async_loop(dsts, srcs, sizes, stream);
+    return status;
   }
 
   status = cudaMemcpyAsync(device_ops.data(), ops.data(),
