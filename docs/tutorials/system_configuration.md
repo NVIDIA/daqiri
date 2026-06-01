@@ -1315,9 +1315,9 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     The hotplug behavior is implemented as a power/thermal management policy and coordinates with `nvidia-spark-mlnx-firmware-manager.service`. If you need the NIC alive without a cable for software-only testing, the override point is the scripts under `/opt/nvidia/dgx-spark-mlnx-hotplug` — read them before disabling.
 
-    ### Port topology: 4 PFs, 2 chips, tied chassis sockets
+    ### Port topology: 4 PFs, 2 ports, tied chassis sockets
 
-    `lspci -d 15b3:` on Spark shows **four** CX-7 PFs across **two** PCIe domains, fronting two chips that share a single internal fabric:
+    `lspci -d 15b3:` on Spark shows **four** CX-7 PFs across **two** PCIe domains. This is **one** ConnectX-7 ASIC with **two physical ports** (p0, p1); each port is dual-homed across both PCIe segments (socket-direct), which is why a single card appears as four PFs. The PCIe address is also called a BDF (bus-device-function); in the examples below, `0002:01:00.1` is PCI domain `0002`, bus `01`, device `00`, function `1`.
 
     ```text
     0000:01:00.0  →  mlx5_0  →  enp1s0f0np0
@@ -1326,7 +1326,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     0002:01:00.1  →  mlx5_3  →  enP2p1s0f1np1
     ```
 
-    The two chassis QSFPs are **tied** through the internal fabric. Pulling **just one end** of a loopback cable drops `carrier` to 0 on **all four** PFs simultaneously, which is the reliable diagnostic for confirming the topology:
+    The two chassis QSFPs are bridged by a single loopback cable. Pulling **just one end** drops `carrier` to 0 on **all four** PFs simultaneously, confirming the cable is present and the loop is intact:
 
     ```bash
     for i in /sys/class/net/{enp1s0f0np0,enp1s0f1np1,enP2p1s0f0np0,enP2p1s0f1np1}; do
@@ -1334,9 +1334,36 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     done
     ```
 
-    Practical consequence for daqiri loopback benchmarks: any pair of PFs forms a working loopback. There is no "wrong pair" — pick TX/RX based on what your YAML expects. The Spark example YAMLs use `mlx5_0` (TX) ↔ `mlx5_2` (RX), so traffic crosses the cable.
+    !!! important "Single-machine loopback: same physical port = on-chip test; different ports = over-the-wire test"
 
-    `ethtool -m` reports identical `Connector: 0x23 No separable connector` on all 4 PFs and is **not** useful for distinguishing them; use the cable-yank test.
+        This distinction matters when you run a loopback benchmark within one DGX Spark, where TX and RX are two PFs on the same integrated CX-7. For two-device tests, pick ports according to the external cabling and the peer system's topology; the on-chip shortcut described here is specific to same-machine loopback.
+
+        Which PF pair you choose decides **what you are actually measuring**. Because each physical port is exposed over both PCIe segments, two of the four BDFs map to the *same* physical port. Identify them on your own system with `phys_port_name`:
+
+        ```bash
+        for d in /sys/class/net/*/device; do n=${d%/device}; n=${n##*/}; \
+            printf '%-16s port=%s pci=%s\n' "$n" \
+            "$(cat /sys/class/net/$n/phys_port_name 2>/dev/null)" \
+            "$(basename "$(readlink "$d")")"; done
+        ```
+
+        Example output:
+
+        ```text
+        enp1s0f0np0      port=p0  pci=0000:01:00.0   # mlx5_0
+        enp1s0f1np1      port=p1  pci=0000:01:00.1   # mlx5_1
+        enP2p1s0f0np0    port=p0  pci=0002:01:00.0   # mlx5_2
+        enP2p1s0f1np1    port=p1  pci=0002:01:00.1   # mlx5_3
+        ```
+
+        Here two BDFs share each physical port (`mlx5_0` and `mlx5_2` are both **p0**). The two pairings measure different things:
+
+        - **Same physical port** (e.g. `mlx5_0` ↔ `mlx5_2`, both p0) → TX/RX loop **on-chip** through the eswitch; traffic never reaches the cable. Physical-link packet counters stay flat while the vport counters (`tx_good_packets` / `rx_good_packets`) run at line rate. This is a software-path test.
+        - **Different physical ports** (e.g. `mlx5_0` p0 ↔ `mlx5_3` p1 `0002:01:00.1`, or `mlx5_0` ↔ `mlx5_1`) → TX/RX loop **over the wire**; physical-link packet counters rise to match the TX/RX counts. This is an over-the-wire test.
+
+        Confirm which case you got from the physical-link packet counters: near zero for on-chip, matching the TX/RX packet counts for over-the-wire. These counters count packets that reached the SerDes/QSFP side of the NIC rather than packets switched internally by the eswitch. The [daqiri bench](benchmarking_examples.md)'s DPDK "Extended Stats" output reports them as `tx_phy_packets` / `rx_phy_packets`; `ethtool -S` and `mlnx_perf` report the same wire counters as `tx_packets_phy` / `rx_packets_phy`.
+
+    `ethtool -m` reports identical `Connector: 0x23 No separable connector` on all 4 PFs and is **not** useful for distinguishing them; use `phys_port_name` above (the cable-yank carrier test confirms a cable is present but does **not** distinguish ports).
 
     ## System Setup for DAQIRI
 
@@ -1364,13 +1391,13 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     ### Configure the IP addresses of the NIC ports
 
-    Spark uses NetworkManager. Create persistent `daqiri-tx` / `daqiri-rx` profiles that pin both the IP and the MTU (so [Step 9: Jumbo frames](#step-9-enable-jumbo-frames-already-covered) is folded in here):
+    Spark uses NetworkManager. Create persistent `daqiri-tx` / `daqiri-rx` profiles that pin both the IP and the MTU (so [Step 9: Jumbo frames](#step-9-enable-jumbo-frames-already-covered) is folded in here). `daqiri-tx` is p0 (`enp1s0f0np0`) and `daqiri-rx` is p1 (`enP2p1s0f1np1`) — different physical ports, matching the over-the-wire benchmark example:
 
     ```bash
     sudo nmcli connection add type ethernet ifname enp1s0f0np0   con-name daqiri-tx \
         ipv4.addresses 1.1.1.1/24 ipv4.method manual ethernet.mtu 9000 \
         ipv4.gateway "" ipv6.method ignore
-    sudo nmcli connection add type ethernet ifname enP2p1s0f0np0 con-name daqiri-rx \
+    sudo nmcli connection add type ethernet ifname enP2p1s0f1np1 con-name daqiri-rx \
         ipv4.addresses 2.2.2.2/24 ipv4.method manual ethernet.mtu 9000 \
         ipv4.gateway "" ipv6.method ignore
     sudo nmcli connection up daqiri-tx
@@ -1381,9 +1408,9 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     ```bash
     ip -f inet addr show enp1s0f0np0
-    ip -f inet addr show enP2p1s0f0np0
+    ip -f inet addr show enP2p1s0f1np1
     ip link show enp1s0f0np0   | grep -oE "mtu [0-9]+"
-    ip link show enP2p1s0f0np0 | grep -oE "mtu [0-9]+"
+    ip link show enP2p1s0f1np1 | grep -oE "mtu [0-9]+"
     ```
 
     ### Enable GPUDirect
@@ -1553,7 +1580,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     ```bash
     ip link show enp1s0f0np0   | grep -oE "mtu [0-9]+"
-    ip link show enP2p1s0f0np0 | grep -oE "mtu [0-9]+"
+    ip link show enP2p1s0f1np1 | grep -oE "mtu [0-9]+"
     ```
 
     ---

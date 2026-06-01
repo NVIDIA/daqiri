@@ -47,7 +47,7 @@ docker run --rm -it --privileged \
 
     For systems configured per the [DGX Spark profile](system_configuration.md#dgx-spark-profile), use these configs to skip the PCIe/IP/CPU-core edits below:
 
-    - [`daqiri_bench_raw_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark.yaml) for `daqiri_bench_raw_gpudirect` — still set `eth_dst_addr` to the RX MAC: `cat /sys/class/net/enP2p1s0f0np0/address`.
+    - [`daqiri_bench_raw_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark.yaml) for `daqiri_bench_raw_gpudirect` — still set `eth_dst_addr` to the RX MAC. The rx_port is `0002:01:00.1` (physical port p1), so read its MAC: `cat /sys/class/net/enP2p1s0f1np1/address`. This p0-to-p1 pairing is intentional for an over-the-wire single-machine loopback; using two PFs that map to the same physical port exercises the on-chip eswitch path instead.
     - [`daqiri_bench_rdma_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx_spark.yaml) for `daqiri_bench_rdma` — no further edits needed.
 
 The benchmark executables and example YAML configurations are located at:
@@ -319,6 +319,8 @@ To inspect the speed the data is moving through the NIC, run `mlnx_perf` on one 
 ```bash
 sudo mlnx_perf -i $if_name
 ```
+
+The `*_packets_phy` and `*_bytes_phy` counters are physical-link counters. They increase when packets cross the wire through the QSFP/SerDes side of the NIC. If a DGX Spark same-machine loopback uses two PFs that map to the same physical port, traffic can be switched on-chip and the vport counters may rise while the physical counters stay flat.
 
 ??? abstract "See an example output"
 
