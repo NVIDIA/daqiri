@@ -17,12 +17,11 @@
 
 #include "metrics.h"
 
-#if DAQIRI_ENABLE_OTEL_METRICS
-
 #include <array>
 #include <atomic>
 #include <mutex>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <opentelemetry/common/attribute_value.h>
@@ -42,6 +41,8 @@ namespace otel = opentelemetry;
 
 using IntObserver =
     otel::nostd::shared_ptr<otel::metrics::ObserverResultT<int64_t>>;
+using ObservableInstrumentPtr =
+    otel::nostd::shared_ptr<otel::metrics::ObservableInstrument>;
 
 struct DropCounter {
   std::string reason;
@@ -157,23 +158,31 @@ class Registry {
   }
 
   void shutdown() {
-    std::lock_guard<std::mutex> guard(mutex_);
-    if (rx_packets_) { rx_packets_->RemoveCallback(&Registry::observe_rx_packets, this); }
-    if (tx_packets_) { tx_packets_->RemoveCallback(&Registry::observe_tx_packets, this); }
-    if (rx_bytes_) { rx_bytes_->RemoveCallback(&Registry::observe_rx_bytes, this); }
-    if (tx_bytes_) { tx_bytes_->RemoveCallback(&Registry::observe_tx_bytes, this); }
-    if (dropped_packets_) {
-      dropped_packets_->RemoveCallback(&Registry::observe_dropped_packets, this);
+    ObservableInstrumentPtr rx_packets;
+    ObservableInstrumentPtr tx_packets;
+    ObservableInstrumentPtr rx_bytes;
+    ObservableInstrumentPtr tx_bytes;
+    ObservableInstrumentPtr dropped_packets;
+
+    {
+      std::lock_guard<std::mutex> guard(mutex_);
+      rx_packets = std::move(rx_packets_);
+      tx_packets = std::move(tx_packets_);
+      rx_bytes = std::move(rx_bytes_);
+      tx_bytes = std::move(tx_bytes_);
+      dropped_packets = std::move(dropped_packets_);
+      counters_.clear();
+      by_key_.clear();
+      initialized_ = false;
     }
 
-    rx_packets_.reset();
-    tx_packets_.reset();
-    rx_bytes_.reset();
-    tx_bytes_.reset();
-    dropped_packets_.reset();
-    counters_.clear();
-    by_key_.clear();
-    initialized_ = false;
+    if (rx_packets) { rx_packets->RemoveCallback(&Registry::observe_rx_packets, this); }
+    if (tx_packets) { tx_packets->RemoveCallback(&Registry::observe_tx_packets, this); }
+    if (rx_bytes) { rx_bytes->RemoveCallback(&Registry::observe_rx_bytes, this); }
+    if (tx_bytes) { tx_bytes->RemoveCallback(&Registry::observe_tx_bytes, this); }
+    if (dropped_packets) {
+      dropped_packets->RemoveCallback(&Registry::observe_dropped_packets, this);
+    }
   }
 
  private:
@@ -276,11 +285,11 @@ class Registry {
   std::mutex mutex_;
   std::vector<std::shared_ptr<CounterSet>> counters_;
   std::unordered_map<std::string, std::shared_ptr<CounterSet>> by_key_;
-  otel::nostd::shared_ptr<otel::metrics::ObservableInstrument> rx_packets_;
-  otel::nostd::shared_ptr<otel::metrics::ObservableInstrument> tx_packets_;
-  otel::nostd::shared_ptr<otel::metrics::ObservableInstrument> rx_bytes_;
-  otel::nostd::shared_ptr<otel::metrics::ObservableInstrument> tx_bytes_;
-  otel::nostd::shared_ptr<otel::metrics::ObservableInstrument> dropped_packets_;
+  ObservableInstrumentPtr rx_packets_;
+  ObservableInstrumentPtr tx_packets_;
+  ObservableInstrumentPtr rx_bytes_;
+  ObservableInstrumentPtr tx_bytes_;
+  ObservableInstrumentPtr dropped_packets_;
 };
 
 Registry& registry() {
@@ -348,5 +357,3 @@ void shutdown() {
 }
 
 }  // namespace daqiri::metrics
-
-#endif  // DAQIRI_ENABLE_OTEL_METRICS

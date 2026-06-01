@@ -24,6 +24,10 @@ With a backend in mind, read down the questions below and stop at the first one 
     - **DGX Spark / GB10** (prefilled) — [`daqiri_bench_raw_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark.yaml). `kind: host_pinned` for the integrated GPU; cores, PCIe addresses, and IPs are prefilled. See the [Spark profile callout](benchmarking_examples.md#update-the-loopback-configuration) for run details.
     - **No physical NIC available** — [`daqiri_bench_raw_sw_loopback.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_sw_loopback.yaml). `loopback: "sw"`, no NIC required. Useful for first-time build verification, not representative of production performance.
 
+    To watch the same raw loopback benchmark with live Prometheus and Grafana
+    counters, use the Grafana compose stack described in
+    [Watch live OpenTelemetry metrics in Grafana](benchmarking_examples.md#watch-live-opentelemetry-metrics-in-grafana).
+
     **RDMA / RoCE** — runs on `daqiri_bench_rdma` (use `--mode {tx,rx,both}`). Configs use `kind: host_pinned` regardless of platform.
 
     - **Generic** (template — replace IPs) — [`daqiri_bench_rdma_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx.yaml).
