@@ -1360,10 +1360,10 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
         Here two BDFs share each physical port (`mlx5_0` and `mlx5_2` are both **p0**). The two pairings measure different things:
 
-        - **Same physical port** (e.g. `mlx5_0` ↔ `mlx5_2`, both p0) → TX/RX loop **on-chip** through the eswitch; traffic never reaches the cable. `tx_phy_packets` / `rx_phy_packets` stay flat while the vport counters (`tx_good_packets` / `rx_good_packets`) run at line rate. This is a software-path test.
-        - **Different physical ports** (e.g. `mlx5_0` p0 ↔ `mlx5_3` p1 `0002:01:00.1`, or `mlx5_0` ↔ `mlx5_1`) → TX/RX loop **over the wire**; `tx_phy_packets` / `rx_phy_packets` rise to match the TX/RX counts. This is an over-the-wire test.
+        - **Same physical port** (e.g. `mlx5_0` ↔ `mlx5_2`, both p0) → TX/RX loop **on-chip** through the eswitch; traffic never reaches the cable. Physical-link packet counters stay flat while the vport counters (`tx_good_packets` / `rx_good_packets`) run at line rate. This is a software-path test.
+        - **Different physical ports** (e.g. `mlx5_0` p0 ↔ `mlx5_3` p1 `0002:01:00.1`, or `mlx5_0` ↔ `mlx5_1`) → TX/RX loop **over the wire**; physical-link packet counters rise to match the TX/RX counts. This is an over-the-wire test.
 
-        Confirm which case you got from the **`tx_phy_packets` / `rx_phy_packets`** lines in the [daqiri bench](benchmarking_examples.md)'s "Extended Stats" output: near zero for on-chip, matching the TX/RX packet counts for over-the-wire. These are physical-link counters, so they count packets that reached the SerDes/QSFP side of the NIC rather than packets switched internally by the eswitch. (`ethtool -S` lists the same wire counters as `tx_packets_phy` / `rx_packets_phy`; `mlnx_perf` reports them as `tx_packets_phy` / `rx_packets_phy`.)
+        Confirm which case you got from the physical-link packet counters: near zero for on-chip, matching the TX/RX packet counts for over-the-wire. These counters count packets that reached the SerDes/QSFP side of the NIC rather than packets switched internally by the eswitch. The [daqiri bench](benchmarking_examples.md)'s DPDK "Extended Stats" output reports them as `tx_phy_packets` / `rx_phy_packets`; `ethtool -S` and `mlnx_perf` report the same wire counters as `tx_packets_phy` / `rx_packets_phy`.
 
     `ethtool -m` reports identical `Connector: 0x23 No separable connector` on all 4 PFs and is **not** useful for distinguishing them; use `phys_port_name` above (the cable-yank carrier test confirms a cable is present but does **not** distinguish ports).
 
