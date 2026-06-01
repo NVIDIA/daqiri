@@ -199,30 +199,6 @@ RUN if [ "${DAQIRI_ENABLE_OTEL_METRICS}" = "ON" ]; then \
 # ==============================================================
 FROM dpdk AS rdma
 
-# ==============================================================
-# gpunetio: Add DOCA SDK packages for GPUNetIO support
-# ==============================================================
-FROM rdma AS gpunetio
-
-# Install DOCA SDK packages required for GPUNetIO
-# (DOCA repo is already configured in dpdk stage)
-# - libdoca-sdk-gpunetio-dev: for gpunetio backend (doca-gpunetio module)
-# - libdoca-sdk-eth-dev: for gpunetio backend (doca-eth module)
-# - libdoca-sdk-flow-dev: for gpunetio backend (doca-flow module)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        mlnx-dpdk-dev \
-        libdoca-sdk-gpunetio-dev \
-        libdoca-sdk-eth-dev \
-        libdoca-sdk-flow-dev \
-        mlnx-ofed-kernel-utils \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN git clone https://github.com/NVIDIA/gdrcopy.git /opt/mellanox/gdrcopy \
-    && cd /opt/mellanox/gdrcopy \
-    && make lib
-
-ENV GDRCOPY_PATH_L=/opt/mellanox/gdrcopy/src
-
 # ==============================
 # Rivermax Target
 # This stage is only built when --target rivermax is specified. It installs and configures Rivermax SDK.

@@ -96,12 +96,12 @@
       },
       "targets": [
         {
-          "expr": "(sum by (daqiri_backend, daqiri_interface_name, daqiri_queue_id) (rate(daqiri_rx_bytes_total{daqiri_queue_id!=\"all\"}[5s])) != 0) * 8 / 1000000000",
+          "expr": "(sum by (daqiri_backend, daqiri_interface_name, daqiri_queue_id) (rate(daqiri_rx_bytes_total{daqiri_queue_id!=\"all\"}[30s])) != 0) * 8 / 1000000000",
           "legendFormat": "rx {{daqiri_backend}} {{daqiri_interface_name}} q{{daqiri_queue_id}}",
           "refId": "A"
         },
         {
-          "expr": "(sum by (daqiri_backend, daqiri_interface_name, daqiri_queue_id) (rate(daqiri_tx_bytes_total{daqiri_queue_id!=\"all\"}[5s])) != 0) * 8 / 1000000000",
+          "expr": "(sum by (daqiri_backend, daqiri_interface_name, daqiri_queue_id) (rate(daqiri_tx_bytes_total{daqiri_queue_id!=\"all\"}[30s])) != 0) * 8 / 1000000000",
           "legendFormat": "tx {{daqiri_backend}} {{daqiri_interface_name}} q{{daqiri_queue_id}}",
           "refId": "B"
         }
