@@ -25,6 +25,7 @@
 #include <rte_errno.h>
 #include <rte_mbuf.h>
 #include "src/dpdk_log.h"
+#include "src/metrics.h"
 #include "daqiri_rdma_mgr.h"
 
 /* The ordering of most RDMA/CM setup follows the ordering specified here:
@@ -46,6 +47,43 @@ void reset_rdma_burst_metadata(BurstParams* burst) {
   burst->pkt_lens.fill(nullptr);
   burst->pkt_extra_info = nullptr;
   burst->event = nullptr;
+}
+
+std::shared_ptr<metrics::CounterSet> get_rdma_metrics(const NetworkConfig& cfg,
+                                                      const rdma_thread_params& params) {
+  if (params.if_idx < 0 || params.if_idx >= static_cast<int>(cfg.ifs_.size())) { return nullptr; }
+
+  const auto& intf = cfg.ifs_[params.if_idx];
+  auto queue_id = params.queue_idx;
+  if (params.queue_idx >= 0 && params.queue_idx < static_cast<int>(intf.tx_.queues_.size())) {
+    queue_id = intf.tx_.queues_[params.queue_idx].common_.id_;
+  }
+
+  return metrics::get_or_create_queue("rdma",
+                                      intf.name_.empty() ? intf.address_ : intf.name_,
+                                      intf.port_id_,
+                                      std::to_string(queue_id));
+}
+
+std::shared_ptr<metrics::CounterSet> get_rdma_metrics_for_connection(
+    const NetworkConfig& cfg,
+    const std::unordered_map<struct rdma_cm_id*, rdma_thread_params>& client_params,
+    const std::unordered_map<struct rdma_cm_id*, std::vector<rdma_thread_params>>& server_params,
+    struct rdma_cm_id* conn_id,
+    bool is_server) {
+  if (is_server) {
+    for (const auto& [server_id, params_list] : server_params) {
+      (void)server_id;
+      for (const auto& params : params_list) {
+        if (params.client_id == conn_id) { return get_rdma_metrics(cfg, params); }
+      }
+    }
+    return nullptr;
+  }
+
+  const auto params = client_params.find(conn_id);
+  if (params == client_params.end()) { return nullptr; }
+  return get_rdma_metrics(cfg, params->second);
 }
 
 }  // namespace
@@ -379,6 +417,13 @@ Status RdmaMgr::send_tx_burst(BurstParams* burst) {
   ring = ri->second;
 
   if (rte_ring_enqueue(ring, reinterpret_cast<void*>(burst)) != 0) {
+    auto counters = get_rdma_metrics_for_connection(cfg_,
+                                                    client_q_params_,
+                                                    server_q_params_,
+                                                    reinterpret_cast<struct rdma_cm_id*>(conn_id),
+                                                    burst->transport_hdr.server);
+    const auto dropped_packets = burst->transport_hdr.num_pkts > 0 ? burst->transport_hdr.num_pkts : 1;
+    metrics::add_dropped(counters, "tx_enqueue_failure", dropped_packets);
     free_tx_burst(burst);
     DAQIRI_LOG_CRITICAL("Failed to enqueue TX work");
     return Status::NO_SPACE_AVAILABLE;
@@ -415,6 +460,14 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
   struct rte_ring* rx_ring = tparams->qp_params.rx_ring;
   std::unordered_map<uint64_t, BurstParams*> outstanding_send_wr_ids;
   std::unordered_map<uint64_t, BurstParams*> outstanding_receive_wr_ids;
+  auto counters = get_rdma_metrics(cfg_, *tparams);
+  auto packet_length_for_wr = [](BurstParams* burst, uint64_t wr_id) -> uint64_t {
+    if (burst == nullptr || burst->pkt_lens[0] == nullptr) { return 0; }
+    if (wr_id < burst->transport_hdr.wr_id) { return 0; }
+    const auto idx = static_cast<size_t>(wr_id - burst->transport_hdr.wr_id);
+    if (idx >= burst->transport_hdr.num_pkts) { return 0; }
+    return burst->pkt_lens[0][idx];
+  };
 
   if (set_affinity(cpu_core) != 0) {
     DAQIRI_LOG_CRITICAL("Failed to set RDMA core affinity");
@@ -437,6 +490,7 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
                            (int)wc.status,
                            (int64_t)wc.wr_id,
                            (int)wc.opcode);
+        metrics::add_dropped(counters, "rx_completion_error", 1);
         continue;
       }
 
@@ -444,10 +498,12 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
         auto it = outstanding_receive_wr_ids.find(wc.wr_id);
         if (it == outstanding_receive_wr_ids.end()) {
           DAQIRI_LOG_CRITICAL("WR ID {} not found in outstanding RECEIVE WR IDs", wc.wr_id);
+          metrics::add_dropped(counters, "rx_unknown_wr_id", 1);
           continue;
         }
 
         msg = it->second;
+        metrics::add_rx(counters, 1, static_cast<uint64_t>(wc.byte_len));
 
         const auto conn_id = get_connection_id(msg);
         const auto expected_conn_id = reinterpret_cast<uintptr_t>(tparams->client_id);
@@ -474,6 +530,7 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
 
       if (rte_ring_enqueue(rx_ring, reinterpret_cast<void*>(msg)) != 0) {
         DAQIRI_LOG_CRITICAL("Failed to enqueue RX completion message");
+        metrics::add_dropped(counters, "rx_completion_enqueue_failure", 1);
         free_tx_burst(msg);
         return;
       }
@@ -492,6 +549,7 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
                            (int)wc.status,
                            (int64_t)wc.wr_id,
                            (int)wc.opcode);
+        metrics::add_dropped(counters, "tx_completion_error", 1);
         continue;
       }
 
@@ -499,10 +557,12 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
         auto it = outstanding_send_wr_ids.find(wc.wr_id);
         if (it == outstanding_send_wr_ids.end()) {
           DAQIRI_LOG_CRITICAL("WR ID {} not found in outstanding SEND WR IDs", wc.wr_id);
+          metrics::add_dropped(counters, "tx_unknown_wr_id", 1);
           continue;
         }
 
         msg = it->second;
+        metrics::add_tx(counters, 1, packet_length_for_wr(msg, wc.wr_id));
 
         const auto conn_id = get_connection_id(msg);
         const auto expected_conn_id = reinterpret_cast<uintptr_t>(tparams->client_id);
@@ -529,6 +589,7 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
 
       if (rte_ring_enqueue(rx_ring, reinterpret_cast<void*>(msg)) != 0) {
         DAQIRI_LOG_CRITICAL("Failed to enqueue RX completion message");
+        metrics::add_dropped(counters, "tx_completion_enqueue_failure", 1);
         free_tx_burst(msg);
         return;
       }
@@ -547,6 +608,7 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
     if (local_mr == mrs_.end()) {
       DAQIRI_LOG_CRITICAL("Couldn't find MR with name {} in registry",
                             burst->transport_hdr.local_mr_name);
+      metrics::add_dropped(counters, "missing_memory_region", burst->transport_hdr.num_pkts);
       free_tx_burst(burst);
       continue;
     }
@@ -557,6 +619,7 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
         auto pd = pd_map_.find(tparams->client_id->verbs);
         if (pd == pd_map_.end()) {
           DAQIRI_LOG_CRITICAL("Couldn't find PD for client");
+          metrics::add_dropped(counters, "missing_protection_domain", burst->transport_hdr.num_pkts);
           free_tx_burst(burst);
           continue;
         }
@@ -566,6 +629,7 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
         if (lkey == local_mr->second.ctx_mr_map_.end()) {
           DAQIRI_LOG_CRITICAL("Couldn't find MR with name {} in registry",
                                 burst->transport_hdr.local_mr_name);
+          metrics::add_dropped(counters, "missing_memory_key", burst->transport_hdr.num_pkts);
           free_tx_burst(burst);
           continue;
         }
@@ -588,6 +652,7 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
           int ret = ibv_post_send(tparams->client_id->qp, &wr, &bad_wr);
           if (ret != 0) {
             DAQIRI_LOG_CRITICAL("Failed to post SEND request, errno: {}", strerror(errno));
+            metrics::add_dropped(counters, "tx_post_failure", 1);
             free_tx_burst(burst);
             continue;
           }
@@ -602,6 +667,7 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
         auto pd = pd_map_.find(tparams->client_id->verbs);
         if (pd == pd_map_.end()) {
           DAQIRI_LOG_CRITICAL("Couldn't find PD for client");
+          metrics::add_dropped(counters, "missing_protection_domain", burst->transport_hdr.num_pkts);
           free_tx_burst(burst);
           continue;
         }
@@ -611,6 +677,7 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
         if (lkey == local_mr->second.ctx_mr_map_.end()) {
           DAQIRI_LOG_CRITICAL("Couldn't find MR with name {} in registry",
                                 burst->transport_hdr.local_mr_name);
+          metrics::add_dropped(counters, "missing_memory_key", burst->transport_hdr.num_pkts);
           free_tx_burst(burst);
           continue;
         }
@@ -638,6 +705,7 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
           ret = ibv_post_recv(tparams->client_id->qp, &recv_wr, &bad_wr);
           if (ret) {
             DAQIRI_LOG_CRITICAL("ibv_post_recv failed: {}", strerror(errno));
+            metrics::add_dropped(counters, "rx_post_failure", 1);
             free_tx_burst(burst);
             continue;
           }

@@ -26,6 +26,8 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 - **Flow Steering** — Configure the NIC's hardware flow engine to route packets by UDP
   source/destination port.
 - **RDMA** — RDMA verbs (READ, WRITE, SEND) over RoCE on Ethernet NICs or InfiniBand.
+- **Optional OpenTelemetry metrics** — Expose per-interface or per-queue packet,
+  byte, and drop counters when built with `DAQIRI_ENABLE_OTEL_METRICS=ON`.
 
 ### Backends
 
@@ -70,6 +72,11 @@ Container build:
 ```bash
 BASE_TARGET=dpdk DAQIRI_MGR="dpdk rdma" scripts/build-container.sh
 ```
+
+OpenTelemetry metrics are opt-in. Build with `-DDAQIRI_ENABLE_OTEL_METRICS=ON`
+for CMake builds or `DAQIRI_ENABLE_OTEL_METRICS=ON` for container builds. DAQIRI
+registers the instruments, while applications configure the OpenTelemetry SDK and
+exporters.
 
 See [Getting Started](https://nvidia.github.io/daqiri/getting-started/) for requirements, CMake options, and
 running the benchmarks.

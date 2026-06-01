@@ -348,6 +348,26 @@ daqiri::print_stats();
 daqiri::shutdown();
 ```
 
+## OpenTelemetry Metrics
+
+OpenTelemetry metrics are disabled by default and add no runtime instrumentation when
+DAQIRI is built without `DAQIRI_ENABLE_OTEL_METRICS=ON`. Metrics-enabled builds register
+observable counters through the OpenTelemetry C++ API:
+
+| Metric | Unit |
+| --- | --- |
+| `daqiri.rx.packets` | `{packet}` |
+| `daqiri.tx.packets` | `{packet}` |
+| `daqiri.rx.bytes` | `By` |
+| `daqiri.tx.bytes` | `By` |
+| `daqiri.dropped.packets` | `{packet}` |
+
+All metrics include `daqiri.backend`, `daqiri.interface.name`, `daqiri.port.id`, and
+`daqiri.queue.id`. Drop metrics also include `daqiri.drop.reason`.
+
+DAQIRI only owns library instrumentation. Applications remain responsible for
+configuring the OpenTelemetry C++ SDK, metric readers, and exporters.
+
 ## Function Reference
 
 This section summarizes the C++ functions available through `daqiri/daqiri.h`. The

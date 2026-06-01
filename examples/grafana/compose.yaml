@@ -1,0 +1,51 @@
+services:
+  daqiri:
+    image: daqiri:local
+    container_name: daqiri-grafana-bench
+    depends_on:
+      - prometheus
+    runtime: nvidia
+    privileged: true
+    network_mode: host
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "all"
+      NVIDIA_DRIVER_CAPABILITIES: "all"
+      DAQIRI_OTEL_PROMETHEUS_ENDPOINT: "0.0.0.0:9464"
+      DAQIRI_SECONDS: "${DAQIRI_SECONDS:-60}"
+      DAQIRI_CONFIG: "${DAQIRI_CONFIG:-/workspace/daqiri/examples/daqiri_bench_raw_tx_rx.yaml}"
+      DAQIRI_BIN: "${DAQIRI_BIN:-/opt/daqiri/bin/daqiri_bench_raw_gpudirect}"
+    volumes:
+      - /dev/hugepages:/dev/hugepages
+      - ../..:/workspace/daqiri:ro
+    working_dir: /workspace/daqiri
+    command: ["bash", "/workspace/daqiri/examples/grafana/run-benchmark.sh"]
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: daqiri-grafana-prometheus
+    network_mode: host
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--web.listen-address=0.0.0.0:9090"
+      - "--storage.tsdb.retention.time=2h"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: daqiri-grafana
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: daqiri
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_MIN_REFRESH_INTERVAL: 1s
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro

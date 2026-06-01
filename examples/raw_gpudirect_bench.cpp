@@ -30,6 +30,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "grafana/otel_prometheus.h"
 #include "raw_bench_common.h"
 #include <daqiri/daqiri.h>
 
@@ -143,6 +144,8 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  const auto prometheus_metrics =
+      daqiri::bench::grafana::init_prometheus_metrics_from_env();
   const int run_seconds = daqiri::bench::parse_run_seconds(argc, argv);
   const auto root = YAML::LoadFile(argv[1]);
 
@@ -195,5 +198,8 @@ int main(int argc, char **argv) {
 
   daqiri::print_stats();
   daqiri::shutdown();
+  if (prometheus_metrics) {
+    daqiri::bench::grafana::shutdown_prometheus_metrics();
+  }
   return 0;
 }

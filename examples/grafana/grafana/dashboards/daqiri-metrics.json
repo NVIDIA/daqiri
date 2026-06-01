@@ -1,0 +1,215 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "pps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (daqiri_backend, daqiri_interface_name, daqiri_queue_id) (rate(daqiri_rx_packets_total[5s]))",
+          "legendFormat": "rx {{daqiri_backend}} {{daqiri_interface_name}} q{{daqiri_queue_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (daqiri_backend, daqiri_interface_name, daqiri_queue_id) (rate(daqiri_tx_packets_total[5s]))",
+          "legendFormat": "tx {{daqiri_backend}} {{daqiri_interface_name}} q{{daqiri_queue_id}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Packet Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "gbps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (daqiri_backend, daqiri_interface_name, daqiri_queue_id) (rate(daqiri_rx_bytes_total[5s])) * 8 / 1000000000",
+          "legendFormat": "rx {{daqiri_backend}} {{daqiri_interface_name}} q{{daqiri_queue_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (daqiri_backend, daqiri_interface_name, daqiri_queue_id) (rate(daqiri_tx_bytes_total[5s])) * 8 / 1000000000",
+          "legendFormat": "tx {{daqiri_backend}} {{daqiri_interface_name}} q{{daqiri_queue_id}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Throughput",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "pps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (daqiri_backend, daqiri_interface_name, daqiri_queue_id, daqiri_drop_reason) (rate(daqiri_dropped_packets_total[5s]))",
+          "legendFormat": "{{daqiri_backend}} {{daqiri_interface_name}} q{{daqiri_queue_id}} {{daqiri_drop_reason}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Drop Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 4,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (daqiri_backend, daqiri_interface_name, daqiri_queue_id) (daqiri_rx_packets_total)",
+          "legendFormat": "rx {{daqiri_backend}} {{daqiri_interface_name}} q{{daqiri_queue_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (daqiri_backend, daqiri_interface_name, daqiri_queue_id) (daqiri_tx_packets_total)",
+          "legendFormat": "tx {{daqiri_backend}} {{daqiri_interface_name}} q{{daqiri_queue_id}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Total Packets",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "1s",
+  "schemaVersion": 39,
+  "tags": [
+    "daqiri",
+    "opentelemetry"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-5m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "DAQIRI OpenTelemetry Metrics",
+  "uid": "daqiri-otel-metrics",
+  "version": 1,
+  "weekStart": ""
+}

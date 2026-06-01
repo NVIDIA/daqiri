@@ -87,6 +87,12 @@ Then build the DAQIRI library:
     BASE_IMAGE=torch BASE_TARGET=dpdk DAQIRI_MGR="dpdk socket rdma" scripts/build-container.sh
     ```
 
+    OpenTelemetry metrics are optional. Enable them with:
+
+    ```bash
+    DAQIRI_ENABLE_OTEL_METRICS=ON BASE_TARGET=dpdk DAQIRI_MGR="dpdk socket rdma" scripts/build-container.sh
+    ```
+
 === "CMake build (bare-metal)"
 
     ```bash
@@ -128,6 +134,7 @@ Both methods use the same public C++ include:
 | `DAQIRI_BUILD_PYTHON` | `OFF` | Build pybind11 Python bindings. |
 | `DAQIRI_BUILD_EXAMPLES` | `ON` | Build benchmark executables. |
 | `DAQIRI_ENABLE_GDS` | `OFF` | Enable cuFile-backed burst file writes from CUDA device memory. Host-memory writes use POSIX APIs without GDS. |
+| `DAQIRI_ENABLE_OTEL_METRICS` | `OFF` | Enable OpenTelemetry C++ metrics instrumentation. When enabled, OpenTelemetry C++ API package metadata must be available to CMake. |
 | `BUILD_SHARED_LIBS` | — | Build as shared library. |
 
 CUDA architectures are hardcoded to `80;90;121` (A100, H100, GB10) in `src/CMakeLists.txt`.
@@ -145,6 +152,11 @@ Supported`, and ext4 destinations must be mounted with `data=ordered` or use ano
 GDS-supported filesystem such as XFS. If `nvidia-fs` is not loaded, or the destination
 storage is not supported, DAQIRI returns `NOT_SUPPORTED` for CUDA device-backed burst
 writes. Host-backed burst writes continue to use POSIX APIs and do not require GDS.
+
+OpenTelemetry metrics builds register observable counters for received packets,
+transmitted packets, received bytes, transmitted bytes, and dropped packets. DAQIRI
+does not configure an SDK reader or exporter; applications that want exported data
+must configure the OpenTelemetry C++ SDK before or during DAQIRI initialization.
 
 ## Next Steps
 

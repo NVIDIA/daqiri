@@ -25,6 +25,8 @@ namespace daqiri {
 void DpdkStats::Init(const NetworkConfig &cfg) {
   cfg_ = cfg;
   init_ = true;
+  port_metrics_.clear();
+  queue_metrics_.clear();
 
   if (cfg_.common_.loopback_ == LoopbackType::LOOPBACK_TYPE_SW) {
     DAQIRI_LOG_INFO("Skipping DPDK stats initialization for software loopback mode");
@@ -37,6 +39,8 @@ void DpdkStats::Init(const NetworkConfig &cfg) {
   port_queue_memory_regions_.clear();
   for (const auto &intf : cfg_.ifs_) {
     int port_id = intf.port_id_;
+    port_metrics_[port_id] =
+        metrics::get_or_create_queue("dpdk", intf.name_, port_id, "all");
 
     // Process RX queues
     for (const auto &q : intf.rx_.queues_) {
@@ -52,8 +56,19 @@ void DpdkStats::Init(const NetworkConfig &cfg) {
       }
 
       port_queue_memory_regions_[key] = mr_names;
+      queue_metrics_[key] =
+          metrics::get_or_create_queue("dpdk", intf.name_, port_id,
+                                       std::to_string(q.common_.id_));
       DAQIRI_LOG_INFO("Port {}, Queue {}: Memory regions: {}",
                         port_id, q.common_.id_, mr_names);
+    }
+
+    for (const auto &q : intf.tx_.queues_) {
+      uint32_t key = (port_id << 16) | q.common_.id_;
+      queue_metrics_.try_emplace(
+          key,
+          metrics::get_or_create_queue("dpdk", intf.name_, port_id,
+                                       std::to_string(q.common_.id_)));
     }
   }
 
@@ -115,21 +130,33 @@ void DpdkStats::Init(const NetworkConfig &cfg) {
         port_stats.rx_mbuf_allocation_errors_idx = i;
       }
 
-      // Check for rx_q*_errors counters (queue-specific error counters)
-      const char* rx_q_errors_prefix = "rx_q";
-      const char* rx_q_errors_suffix = "_errors";
-      if (strncmp(xstats_names[i].name, rx_q_errors_prefix, strlen(rx_q_errors_prefix)) == 0) {
-        const char* queue_num_str = xstats_names[i].name + strlen(rx_q_errors_prefix);
-        char* endptr;
-        int queue_id = strtol(queue_num_str, &endptr, 10);
+      const std::string xstat_name = xstats_names[i].name;
+      auto parse_queue_xstat = [&xstat_name](const char* prefix,
+                                             const char* suffix,
+                                             int* queue_id) {
+        if (strncmp(xstat_name.c_str(), prefix, strlen(prefix)) != 0) { return false; }
+        const char* queue_num_str = xstat_name.c_str() + strlen(prefix);
+        char* endptr = nullptr;
+        const long parsed_queue = strtol(queue_num_str, &endptr, 10);
+        if (endptr == queue_num_str || strcmp(endptr, suffix) != 0) { return false; }
+        if (parsed_queue < 0 || parsed_queue >= PortXStats::MAX_QUEUE_COUNT) { return false; }
+        *queue_id = static_cast<int>(parsed_queue);
+        return true;
+      };
 
-        // Verify this is a valid rx_q*_errors counter
-        if (endptr != queue_num_str && strcmp(endptr, rx_q_errors_suffix) == 0) {
-          if (queue_id >= 0 && queue_id < port_stats.MAX_QUEUE_COUNT) {
-            port_stats.rx_queue_errors_idx[queue_id] = i;
-            DAQIRI_LOG_INFO("Found rx_q{}_errors counter at index {}", queue_id, i);
-          }
-        }
+      int queue_id = -1;
+      if (parse_queue_xstat("rx_q", "_errors", &queue_id)) {
+        port_stats.rx_queue_errors_idx[queue_id] = i;
+        port_stats.queue_xstats[queue_id].rx_errors_idx = i;
+        DAQIRI_LOG_INFO("Found rx_q{}_errors counter at index {}", queue_id, i);
+      } else if (parse_queue_xstat("rx_q", "_packets", &queue_id)) {
+        port_stats.queue_xstats[queue_id].rx_packets_idx = i;
+      } else if (parse_queue_xstat("tx_q", "_packets", &queue_id)) {
+        port_stats.queue_xstats[queue_id].tx_packets_idx = i;
+      } else if (parse_queue_xstat("rx_q", "_bytes", &queue_id)) {
+        port_stats.queue_xstats[queue_id].rx_bytes_idx = i;
+      } else if (parse_queue_xstat("tx_q", "_bytes", &queue_id)) {
+        port_stats.queue_xstats[queue_id].tx_bytes_idx = i;
       }
     }
 
@@ -226,10 +253,59 @@ void DpdkStats::Run() {
         continue;
       }
 
+      struct rte_eth_stats eth_stats {};
+      const bool eth_stats_valid = rte_eth_stats_get(port_id, &eth_stats) == 0;
+      const auto port_metrics = port_metrics_[port_id];
+      bool has_queue_rx_packets = false;
+      bool has_queue_tx_packets = false;
+      bool has_queue_rx_bytes = false;
+      bool has_queue_tx_bytes = false;
+
+      for (const auto& [queue_id, xstats] : port_stats.queue_xstats) {
+        const uint32_t key = (port_id << 16) | queue_id;
+        const auto metrics_it = queue_metrics_.find(key);
+        if (metrics_it == queue_metrics_.end()) { continue; }
+
+        const auto& queue_metrics = metrics_it->second;
+        if (xstats.rx_packets_idx >= 0) {
+          metrics::set_rx_packets(queue_metrics, port_stats.xstats[xstats.rx_packets_idx].value);
+          has_queue_rx_packets = true;
+        }
+        if (xstats.tx_packets_idx >= 0) {
+          metrics::set_tx_packets(queue_metrics, port_stats.xstats[xstats.tx_packets_idx].value);
+          has_queue_tx_packets = true;
+        }
+        if (xstats.rx_bytes_idx >= 0) {
+          metrics::set_rx_bytes(queue_metrics, port_stats.xstats[xstats.rx_bytes_idx].value);
+          has_queue_rx_bytes = true;
+        }
+        if (xstats.tx_bytes_idx >= 0) {
+          metrics::set_tx_bytes(queue_metrics, port_stats.xstats[xstats.tx_bytes_idx].value);
+          has_queue_tx_bytes = true;
+        }
+        if (xstats.rx_errors_idx >= 0) {
+          metrics::set_dropped(queue_metrics,
+                               "rx_queue_errors",
+                               port_stats.xstats[xstats.rx_errors_idx].value);
+        }
+      }
+
+      if (eth_stats_valid) {
+        if (!has_queue_rx_packets) { metrics::set_rx_packets(port_metrics, eth_stats.ipackets); }
+        if (!has_queue_tx_packets) { metrics::set_tx_packets(port_metrics, eth_stats.opackets); }
+        if (!has_queue_rx_bytes) { metrics::set_rx_bytes(port_metrics, eth_stats.ibytes); }
+        if (!has_queue_tx_bytes) { metrics::set_tx_bytes(port_metrics, eth_stats.obytes); }
+        metrics::set_dropped(port_metrics, "rx_missed", eth_stats.imissed);
+        metrics::set_dropped(port_metrics, "rx_nombuf", eth_stats.rx_nombuf);
+        metrics::set_dropped(port_metrics, "rx_errors", eth_stats.ierrors);
+        metrics::set_dropped(port_metrics, "tx_errors", eth_stats.oerrors);
+      }
+
       // Check if rx_mbuf_alloc_err counter has increased
       if (port_stats.rx_mbuf_allocation_errors_idx >= 0) {
         uint64_t rx_mbuf_alloc_err =
           port_stats.xstats[port_stats.rx_mbuf_allocation_errors_idx].value;
+        metrics::set_dropped(port_metrics, "rx_mbuf_allocation_errors", rx_mbuf_alloc_err);
         uint64_t old_rx_mbuf_alloc_err =
           port_stats.old_xstats[port_stats.rx_mbuf_allocation_errors_idx].value;
 
