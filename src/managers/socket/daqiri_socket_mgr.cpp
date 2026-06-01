@@ -873,7 +873,7 @@ Status SocketMgr::send_tx_burst(BurstParams* burst) {
       status = Status::CONNECT_FAILURE;
     }
   } else if (cfg_.common_.protocol == SocketProtocol::TCP) {
-    if (conn == nullptr) {
+    if (conn == nullptr || !conn->running.load()) {
       DAQIRI_LOG_ERROR("No active TCP connection for port {}", ep->port);
       status = Status::CONNECT_FAILURE;
     } else {
@@ -1376,7 +1376,8 @@ Status SocketMgr::socket_connect_to_server(const std::string& dst_addr, uint16_t
           ep->socket_cfg.remote_port_ == dst_port &&
           (src_addr.empty() || src_addr == ep->socket_cfg.local_ip_)) {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        if (connections_.find(ep->primary_conn_id) != connections_.end()) {
+        const auto it = connections_.find(ep->primary_conn_id);
+        if (it != connections_.end() && it->second != nullptr && it->second->running.load()) {
           *conn_id = ep->primary_conn_id;
           return Status::SUCCESS;
         }
