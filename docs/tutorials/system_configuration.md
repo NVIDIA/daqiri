@@ -1319,7 +1319,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     ### Port topology: 4 PFs, 2 ports, tied chassis sockets
 
-    `lspci -d 15b3:` on Spark shows **four** CX-7 PFs across **two** PCIe domains. This is **one** ConnectX-7 ASIC with **two physical ports** (p0, p1); each port is dual-homed across both PCIe segments (socket-direct), which is why a single card appears as four PFs:
+    `lspci -d 15b3:` on Spark shows **four** CX-7 PFs across **two** PCIe domains. This is **one** ConnectX-7 ASIC with **two physical ports** (p0, p1); each port is dual-homed across both PCIe segments (socket-direct), which is why a single card appears as four PFs. The PCIe address is also called a BDF (bus-device-function); in the examples below, `0002:01:00.1` is PCI domain `0002`, bus `01`, device `00`, function `1`.
 
     ```text
     0000:01:00.0  →  mlx5_0  →  enp1s0f0np0
@@ -1336,7 +1336,9 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     done
     ```
 
-    !!! important "Same physical port = on-chip test; different ports = over-the-wire test"
+    !!! important "Single-machine loopback: same physical port = on-chip test; different ports = over-the-wire test"
+
+        This distinction matters when you run a loopback benchmark within one DGX Spark, where TX and RX are two PFs on the same integrated CX-7. For two-device tests, pick ports according to the external cabling and the peer system's topology; the on-chip shortcut described here is specific to same-machine loopback.
 
         Which PF pair you choose decides **what you are actually measuring**. Because each physical port is exposed over both PCIe segments, two of the four BDFs map to the *same* physical port. Identify them on your own system with `phys_port_name`:
 
@@ -1361,7 +1363,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
         - **Same physical port** (e.g. `mlx5_0` ↔ `mlx5_2`, both p0) → TX/RX loop **on-chip** through the eswitch; traffic never reaches the cable. `tx_phy_packets` / `rx_phy_packets` stay flat while the vport counters (`tx_good_packets` / `rx_good_packets`) run at line rate. This is a software-path test.
         - **Different physical ports** (e.g. `mlx5_0` p0 ↔ `mlx5_3` p1 `0002:01:00.1`, or `mlx5_0` ↔ `mlx5_1`) → TX/RX loop **over the wire**; `tx_phy_packets` / `rx_phy_packets` rise to match the TX/RX counts. This is an over-the-wire test.
 
-        Confirm which case you got from the **`tx_phy_packets` / `rx_phy_packets`** lines in the [daqiri bench](benchmarking_examples.md)'s "Extended Stats" output: near zero for on-chip, matching the TX/RX packet counts for over-the-wire. (`ethtool -S` lists the same wire counters as `tx_packets_phy` / `rx_packets_phy`.)
+        Confirm which case you got from the **`tx_phy_packets` / `rx_phy_packets`** lines in the [daqiri bench](benchmarking_examples.md)'s "Extended Stats" output: near zero for on-chip, matching the TX/RX packet counts for over-the-wire. These are physical-link counters, so they count packets that reached the SerDes/QSFP side of the NIC rather than packets switched internally by the eswitch. (`ethtool -S` lists the same wire counters as `tx_packets_phy` / `rx_packets_phy`; `mlnx_perf` reports them as `tx_packets_phy` / `rx_packets_phy`.)
 
     `ethtool -m` reports identical `Connector: 0x23 No separable connector` on all 4 PFs and is **not** useful for distinguishing them; use `phys_port_name` above (the cable-yank carrier test confirms a cable is present but does **not** distinguish ports).
 
@@ -1587,4 +1589,3 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     **Next:** [Benchmarking Examples](benchmarking_examples.md) — run your first DAQIRI benchmark
 
 </div>
-
