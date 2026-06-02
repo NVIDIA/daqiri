@@ -201,6 +201,10 @@ cmake -S . -B build \
     -DDAQIRI_BUILD_PYTHON=OFF
 ```
 
+!!! warning "Deactivate conda before configuring"
+
+    If a conda environment (including `(base)`) is active, `find_package(yaml-cpp)` may silently pick up conda's vendored yaml-cpp 0.8 at configure time and then fail at link time with `cannot find -lyaml-cpp`. Run `conda deactivate` (or invoke CMake under `env -i PATH=/usr/bin:/bin /usr/bin/cmake ...`) before the configure step. The same `(base)` contamination also breaks `meson setup` for DPDK in [Step 3.3](#33-configure-build-and-install).
+
 The sections below explain each option you might want to flip from the default, with an explicit "when to use" guidance. The full reference is the [CMake Options table](../getting-started.md#cmake-options).
 
 ### `DAQIRI_MGR` — backend selection
