@@ -391,7 +391,9 @@ if status == daqiri.Status.SUCCESS:
     if daqiri.get_tx_packet_burst(tx_burst) == daqiri.Status.SUCCESS:
         daqiri.copy_buffer_to_packet(tx_burst, 0, b"hello")
         daqiri.set_packet_lengths(tx_burst, 0, [5])
-        daqiri.send_tx_burst(tx_burst)
+        status = daqiri.send_tx_burst(tx_burst)
+        if status != daqiri.Status.SUCCESS:
+            daqiri.free_all_packets_and_burst_tx(tx_burst)
     else:
         daqiri.free_tx_metadata(tx_burst)
 ```
