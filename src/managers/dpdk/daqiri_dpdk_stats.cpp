@@ -256,10 +256,6 @@ void DpdkStats::Run() {
       struct rte_eth_stats eth_stats {};
       const bool eth_stats_valid = rte_eth_stats_get(port_id, &eth_stats) == 0;
       const auto port_metrics = port_metrics_[port_id];
-      bool has_queue_rx_packets = false;
-      bool has_queue_tx_packets = false;
-      bool has_queue_rx_bytes = false;
-      bool has_queue_tx_bytes = false;
 
       for (const auto& [queue_id, xstats] : port_stats.queue_xstats) {
         const uint32_t key = (port_id << 16) | queue_id;
@@ -269,19 +265,15 @@ void DpdkStats::Run() {
         const auto& queue_metrics = metrics_it->second;
         if (xstats.rx_packets_idx >= 0) {
           metrics::set_rx_packets(queue_metrics, port_stats.xstats[xstats.rx_packets_idx].value);
-          has_queue_rx_packets = true;
         }
         if (xstats.tx_packets_idx >= 0) {
           metrics::set_tx_packets(queue_metrics, port_stats.xstats[xstats.tx_packets_idx].value);
-          has_queue_tx_packets = true;
         }
         if (xstats.rx_bytes_idx >= 0) {
           metrics::set_rx_bytes(queue_metrics, port_stats.xstats[xstats.rx_bytes_idx].value);
-          has_queue_rx_bytes = true;
         }
         if (xstats.tx_bytes_idx >= 0) {
           metrics::set_tx_bytes(queue_metrics, port_stats.xstats[xstats.tx_bytes_idx].value);
-          has_queue_tx_bytes = true;
         }
         if (xstats.rx_errors_idx >= 0) {
           metrics::set_dropped(queue_metrics,
@@ -291,10 +283,10 @@ void DpdkStats::Run() {
       }
 
       if (eth_stats_valid) {
-        if (!has_queue_rx_packets) { metrics::set_rx_packets(port_metrics, eth_stats.ipackets); }
-        if (!has_queue_tx_packets) { metrics::set_tx_packets(port_metrics, eth_stats.opackets); }
-        if (!has_queue_rx_bytes) { metrics::set_rx_bytes(port_metrics, eth_stats.ibytes); }
-        if (!has_queue_tx_bytes) { metrics::set_tx_bytes(port_metrics, eth_stats.obytes); }
+        metrics::set_rx_packets(port_metrics, eth_stats.ipackets);
+        metrics::set_tx_packets(port_metrics, eth_stats.opackets);
+        metrics::set_rx_bytes(port_metrics, eth_stats.ibytes);
+        metrics::set_tx_bytes(port_metrics, eth_stats.obytes);
         metrics::set_dropped(port_metrics, "rx_missed", eth_stats.imissed);
         metrics::set_dropped(port_metrics, "rx_nombuf", eth_stats.rx_nombuf);
         metrics::set_dropped(port_metrics, "rx_errors", eth_stats.ierrors);
