@@ -1,0 +1,112 @@
+# DGX Spark (GB10) cross-host config for daqiri_bench_rdma.
+# Adapts the single-host daqiri_bench_rdma_tx_rx_spark.yaml to a two-host
+# setup with each side's p0 cross-cabled to the peer's p0. Both hosts must
+# be configured per the DGX Spark profile in
+# docs/tutorials/system_configuration.md, except the IP assignment is
+# split across hosts: put 1.1.1.1/24 on the client host's p0 and 2.2.2.2/24
+# on the server host's p0 (instead of both addresses on one machine).
+#
+# Run with --mode client on the TX host and --mode server on the RX host:
+#   server (RX): sudo ./daqiri_bench_rdma <this.yaml> --mode server --seconds 30
+#   client (TX): sudo ./daqiri_bench_rdma <this.yaml> --mode client --seconds 30
+#
+# This config is the regression test for the RDMA cross-host receive-
+# provisioning bug fixed in issue #113. Before the fix, the server-side
+# worker thread crashed on launch and no receives were ever posted.
+#
+# Spark substitutions baked in here:
+#   - IPs: 1.1.1.1 (client/TX p0) and 2.2.2.2 (server/RX p0)
+#   - cpu_core values from isolated big-cluster X925 16-19; master_core: 8
+#   - kind: host_pinned (required upstream on GB10; peermem N/A, dma-buf used)
+#
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "socket"
+    protocol: "roce"
+    master_core: 8
+    debug: false
+    log_level: "info"
+
+    memory_regions:
+    - name: "DATA_RX_GPU_SERVER"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 20
+      buf_size: 9000000
+    - name: "DATA_TX_GPU_SERVER"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 20
+      buf_size: 9000000
+    - name: "DATA_TX_GPU_CLIENT"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 20
+      buf_size: 90000000
+    - name: "DATA_RX_GPU_CLIENT"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 20
+      buf_size: 90000000
+
+    interfaces:
+    - name: my_client
+      address: 1.1.1.1
+      socket_config:
+        mode: client
+        remote_ip: 2.2.2.2
+        remote_port: 4096
+      roce_config:
+        transport_mode: RC
+      tx:
+        queues:
+        - name: "Client_TX_Queue"
+          id: 0
+          batch_size: 1
+          cpu_core: 17
+      rx:
+        queues:
+        - name: "Client_RX_Queue"
+          id: 0
+          cpu_core: 18
+          batch_size: 1
+    - name: my_server
+      address: 2.2.2.2
+      socket_config:
+        mode: server
+        local_ip: 2.2.2.2
+        local_port: 4096
+      roce_config:
+        transport_mode: RC
+      rx:
+        queues:
+        - name: "Server_RX_Queue"
+          id: 0
+          cpu_core: 19
+          batch_size: 1
+      tx:
+        queues:
+        - name: "Server_TX_Queue"
+          id: 0
+          cpu_core: 16
+          batch_size: 1
+
+rdma_bench_server:
+  server_address: 2.2.2.2
+  server_port: 4096
+  message_size: 8000000
+  send: true
+  receive: true
+  server: true
+
+rdma_bench_client:
+  message_size: 8000000
+  client_address: 1.1.1.1
+  server_address: 2.2.2.2
+  server_port: 4096
+  receive: true
+  send: true
+  server: false

@@ -51,7 +51,9 @@ struct rdma_thread_params {
   rdma_qp_params qp_params;
   int if_idx;
   int queue_idx;
-  bool ready_to_exit;
+  // Per-connection exit flag (set by DISCONNECTED handler, polled by
+  // rdma_thread). Default-initialised so a fresh vector element is safe.
+  bool ready_to_exit = false;
 };
 
 // Used to spawn a new server thread for a particular client
