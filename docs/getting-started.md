@@ -130,7 +130,9 @@ Both methods use the same public C++ include:
 | `DAQIRI_ENABLE_GDS` | `OFF` | Enable cuFile-backed burst file writes from CUDA device memory. Host-memory writes use POSIX APIs without GDS. |
 | `BUILD_SHARED_LIBS` | — | Build as shared library. |
 
-CUDA architectures are hardcoded to `80;90;121` (A100, H100, GB10) in `src/CMakeLists.txt`.
+CUDA architectures default to `80;90` (A100, H100), with `121` (GB10) added
+when configuring with CUDA Toolkit 13.0 or newer. Override
+`CMAKE_CUDA_ARCHITECTURES` when targeting other GPUs.
 
 When using `DAQIRI_ENABLE_GDS=ON` for CUDA device-memory storage writes, verify the
 runtime stack before running DAQIRI:

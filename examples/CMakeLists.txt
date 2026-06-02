@@ -1,8 +1,20 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(daqiri_bench_examples LANGUAGES CXX)
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+  set(CMAKE_CUDA_ARCHITECTURES 80 90)
+  set(DAQIRI_EXAMPLES_USING_DEFAULT_CUDA_ARCHITECTURES ON)
+endif()
+
+project(daqiri_bench_examples LANGUAGES CXX CUDA)
 
 find_package(CUDAToolkit REQUIRED)
+
+if(DAQIRI_EXAMPLES_USING_DEFAULT_CUDA_ARCHITECTURES AND
+   CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 13.0)
+  list(APPEND CMAKE_CUDA_ARCHITECTURES 121)
+endif()
+
+set(DAQIRI_EXAMPLES_CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
 
 if(TARGET yaml-cpp::yaml-cpp)
   set(DAQIRI_EXAMPLE_YAML_TARGET yaml-cpp::yaml-cpp)
@@ -57,10 +69,11 @@ function(link_daqiri_bench target)
 endfunction()
 
 function(add_daqiri_raw_bench target source)
-  add_executable(${target} ${source} raw_bench_common.cpp)
+  add_executable(${target} ${source} raw_bench_common.cpp raw_bench_common_cuda.cu)
   link_daqiri_bench(${target})
   target_link_libraries(${target} PRIVATE CUDA::cudart)
   set_target_properties(${target} PROPERTIES
+    CUDA_ARCHITECTURES "${DAQIRI_EXAMPLES_CUDA_ARCHITECTURES}"
     BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
   )
 endfunction()
