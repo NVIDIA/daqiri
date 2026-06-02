@@ -70,10 +70,11 @@ BASE_WALKTHROUGH_YAML = EXAMPLES / "daqiri_bench_raw_tx_rx.yaml"
 YAML_RE = re.compile(r"\b(daqiri_(?:bench|example)_\w+\.yaml)\b")
 
 # Match daqiri_(bench|example)_<name> as a binary. Anchored by word
-# boundary on both sides; the negative lookahead prevents a YAML
-# basename from being treated as a binary (the "\b" before ".yaml"
-# would otherwise allow the binary regex to match the same characters).
-BIN_RE = re.compile(r"\b(daqiri_(?:bench|example)_\w+)\b(?!\.yaml)")
+# boundary on both sides; the negative lookahead prevents YAML and Python
+# script basenames from being treated as binaries (the "\b" before the
+# extension would otherwise allow the binary regex to match the same
+# characters).
+BIN_RE = re.compile(r"\b(daqiri_(?:bench|example)_\w+)\b(?!(?:\.yaml|\.py))")
 
 # Lines in examples/CMakeLists.txt that declare a benchmark binary,
 # either via the helper add_daqiri_raw_bench(name ...) or directly via
