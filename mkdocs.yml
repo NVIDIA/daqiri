@@ -57,6 +57,7 @@ nav:
     - Python API Usage: api-reference/python.md
   - Tutorials:
     - System Configuration: tutorials/system_configuration.md
+    - Bare-Metal CMake Build: tutorials/bare-metal-cmake-build.md
     - Configuration YAML Walkthrough: tutorials/configuration-walkthrough.md
 
 markdown_extensions:
