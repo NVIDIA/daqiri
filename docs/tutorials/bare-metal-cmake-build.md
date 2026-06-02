@@ -1,12 +1,12 @@
 # Bare-Metal CMake Build
 
-This tutorial walks you through a complete bare-metal DAQIRI build on a Linux host — from verifying the kernel, driver, NIC, and CUDA prerequisites, through building a patched DPDK from source, configuring DAQIRI with CMake, installing the library, and recovering from the most common failure modes.
+This tutorial walks you through a complete bare-metal DAQIRI build on a Linux host, from verifying the kernel, driver, NIC, and CUDA prerequisites, through building a patched DPDK from source, configuring DAQIRI with CMake, installing the library, and recovering from the most common failure modes.
 
 It is the long-form companion to the five-line `cmake` snippet in [Getting Started](../getting-started.md#build-the-daqiri-library).
 
 !!! tip "Prefer the container build"
 
-    The [container build](../getting-started.md#build-the-daqiri-library) ships a dmabuf-patched DPDK and all user-space dependencies pre-installed. It is the recommended path for almost everyone. Use this bare-metal tutorial when:
+    The [container build](../getting-started.md#build-the-daqiri-library) ships a dmabuf-patched DPDK and all user-space dependencies pre-installed. It is the recommended path for most users. Use this bare-metal tutorial when:
 
     - your host distribution or CUDA stack is fixed and you cannot run a container;
     - you are packaging DAQIRI into another product that already provides a runtime image;
@@ -29,11 +29,11 @@ Before installing anything, run the checks below and resolve any failures. They 
 
 ??? failure "`nvidia-smi: command not found`"
 
-    Install the NVIDIA driver. On Ubuntu the simplest path is `sudo ubuntu-drivers install`. The driver must be a recent branch with GPUDirect support — see the [system requirements table](../getting-started.md#system-requirements).
+    Install the NVIDIA driver. On Ubuntu the simplest path is `sudo ubuntu-drivers install`. The driver must be a recent branch with GPUDirect support; see the [system requirements table](../getting-started.md#system-requirements).
 
 ??? failure "`nvcc: command not found` (but `nvidia-smi` works)"
 
-    The runtime driver is installed but the CUDA Toolkit is not. Add the CUDA APT repository for your distribution from [NVIDIA's CUDA downloads page](https://developer.nvidia.com/cuda-downloads?target_os=Linux) and `sudo apt install cuda-toolkit`. Then ensure `nvcc` is on `PATH` (typically `/usr/local/cuda/bin`).
+    The runtime driver is installed but the CUDA Toolkit is not. Add the CUDA APT repository for your distribution from [NVIDIA's CUDA downloads page](https://developer.nvidia.com/cuda-downloads?target_os=Linux) and `sudo apt install cuda-toolkit`. Then put `nvcc` on `PATH` (typically `/usr/local/cuda/bin`).
 
 ??? failure "`lsmod | grep ib_core` is empty"
 
@@ -41,7 +41,7 @@ Before installing anything, run the checks below and resolve any failures. They 
 
 ??? failure "`ibv_devinfo` prints `libvmw_pvrdma-rdmav34.so` warning"
 
-    `couldn't load driver 'libvmw_pvrdma-rdmav34.so'` is harmless — it refers to a VMware paravirtual RDMA userspace provider that is not relevant on bare-metal systems. As long as `ibv_devinfo` still lists your `mlx5_*` HCAs after the warning, you can ignore it. See [System Configuration → Warning about `libvmw_pvrdma-rdmav34.so`](system_configuration.md#check-your-nic-drivers) for more context.
+    `couldn't load driver 'libvmw_pvrdma-rdmav34.so'` is harmless. It refers to a VMware paravirtual RDMA userspace provider that is not relevant on bare-metal systems. As long as `ibv_devinfo` still lists your `mlx5_*` HCAs after the warning, you can ignore it. See [System Configuration → Warning about `libvmw_pvrdma-rdmav34.so`](system_configuration.md#check-your-nic-drivers) for more context.
 
 ??? failure "`/proc/config.gz` does not exist"
 
@@ -49,7 +49,7 @@ Before installing anything, run the checks below and resolve any failures. They 
 
 ## Step 1: Configure the DOCA APT repository
 
-DAQIRI's RDMA/ibverbs dependencies (`libibverbs-dev`, `librdmacm-dev`, `libmlx5-1`, `mlnx-ofed-kernel-utils`, `mft`) come from the DOCA repository. The exact apt setup commands for IGX OS 1.1, SBSA Ubuntu 22.04, and x86_64 Ubuntu 22.04 are in [Getting Started → Build the DAQIRI library](../getting-started.md#build-the-daqiri-library) — run the tab that matches your platform, then return here.
+DAQIRI's RDMA/ibverbs dependencies (`libibverbs-dev`, `librdmacm-dev`, `libmlx5-1`, `mlnx-ofed-kernel-utils`, `mft`) come from the DOCA repository. The exact apt setup commands for IGX OS 1.1, SBSA Ubuntu 22.04, and x86_64 Ubuntu 22.04 are in [Getting Started → Build the DAQIRI library](../getting-started.md#build-the-daqiri-library). Run the tab that matches your platform, then return here.
 
 !!! note
 
@@ -81,7 +81,7 @@ sudo apt install -y --no-install-recommends \
 
 !!! note "apt may select `ibverbs-providers` instead of `libmlx5-1`"
 
-    On some host configurations apt resolves `libmlx5-1` to the `ibverbs-providers` virtual package (the inbox bundle of mlx5/mlx4 user-space providers). This is fine — `libmlx5.so.1` ends up installed either way and DAQIRI links against it through `libibverbs`. If you want the DOCA-provided build specifically, install `libmlx5-1` and `libmlx5-dev` after the DOCA repo from [Step 1](#step-1-configure-the-doca-apt-repository) is configured.
+    On some host configurations apt resolves `libmlx5-1` to the `ibverbs-providers` virtual package (the inbox bundle of mlx5/mlx4 user-space providers). This is fine: `libmlx5.so.1` ends up installed either way and DAQIRI links against it through `libibverbs`. If you want the DOCA-provided build specifically, install `libmlx5-1` and `libmlx5-dev` after the DOCA repo from [Step 1](#step-1-configure-the-doca-apt-repository) is configured.
 
 DAQIRI's top-level CMake requires version 3.20 or newer (see [CMakeLists.txt](https://github.com/NVIDIA/daqiri/blob/main/CMakeLists.txt)). On Ubuntu 22.04 the distribution package is too old; install a current build from the Kitware APT repository:
 
@@ -139,8 +139,8 @@ cd /tmp/dpdk-${DPDK_VERSION}
 
 # `git apply` is used instead of `patch -p1` because:
 #   1. `dmabuf.patch` carries `.mailmap` and release-notes hunks that conflict on
-#      a stock tarball, and we need to exclude them. GNU `patch` 2.7.x does not
-#      accept `--exclude=` — only `git apply` does.
+#      a stock tarball, and they must be excluded. GNU `patch` 2.7.x does not
+#      accept `--exclude=`; only `git apply` does.
 #   2. `git apply` does not actually require the working directory to be a git
 #      repo, so it works on an extracted tarball as-is.
 git apply \
@@ -205,31 +205,31 @@ cmake -S . -B build \
 
     If a conda environment (including `(base)`) is active, `find_package(yaml-cpp)` may silently pick up conda's vendored yaml-cpp 0.8 at configure time and then fail at link time with `cannot find -lyaml-cpp`. Run `conda deactivate` (or invoke CMake under `env -i PATH=/usr/bin:/bin /usr/bin/cmake ...`) before the configure step. The same `(base)` contamination also breaks `meson setup` for DPDK in [Step 3.3](#33-configure-build-and-install).
 
-The sections below explain each option you might want to flip from the default, with an explicit "when to use" guidance. The full reference is the [CMake Options table](../getting-started.md#cmake-options).
+The sections below explain each option you can flip from the default, with explicit "when to use" guidance. The full reference is the [CMake Options table](../getting-started.md#cmake-options).
 
-### `DAQIRI_MGR` — backend selection
+### `DAQIRI_MGR`: backend selection
 
-`DAQIRI_MGR` is a space-separated list controlling which backends are compiled into `libdaqiri.so`. Three recipes cover almost all use cases:
+`DAQIRI_MGR` is a space-separated list controlling which backends are compiled into `libdaqiri.so`. Three recipes cover most use cases:
 
 | Recipe | What you get | When to use |
 |---|---|---|
 | `-DDAQIRI_MGR="dpdk"` | DPDK raw Ethernet only | DPDK-only deployments; smallest build |
-| `-DDAQIRI_MGR="dpdk socket"` | DPDK + kernel UDP/TCP (and RoCE-over-RDMA — see note) | Adds a no-NIC comparison baseline |
+| `-DDAQIRI_MGR="dpdk socket"` | DPDK + kernel UDP/TCP (and RoCE-over-RDMA; see note) | Adds a no-NIC comparison baseline |
 | `-DDAQIRI_MGR="dpdk socket rdma"` | DPDK + sockets + ibverbs RDMA | Recommended default; matches the container |
 
 !!! note "`socket` implicitly pulls in `rdma`"
 
-    The socket backend reuses the RoCE transport from the RDMA implementation, so requesting `socket` also builds `rdma`. The logic lives in [`src/CMakeLists.txt`](https://github.com/NVIDIA/daqiri/blob/main/src/CMakeLists.txt) (search for `DAQIRI_HAS_SOCKET_IDX`). The reverse is not true — listing `rdma` alone does **not** pull in `socket`.
+    The socket backend reuses the RoCE transport from the RDMA implementation, so requesting `socket` also builds `rdma`. The logic lives in [`src/CMakeLists.txt`](https://github.com/NVIDIA/daqiri/blob/main/src/CMakeLists.txt) (search for `DAQIRI_HAS_SOCKET_IDX`). The reverse is not true: listing `rdma` alone does **not** pull in `socket`.
 
-### `DAQIRI_BUILD_PYTHON` — pybind11 bindings
+### `DAQIRI_BUILD_PYTHON`: pybind11 bindings
 
 `-DDAQIRI_BUILD_PYTHON=ON` builds the `daqiri` Python module from `python/`. It requires the `python3-dev` and `pybind11-dev` packages from the optional step in [Step 2](#step-2-install-build-tooling-and-rdma-libraries). Leave it `OFF` (the default) if you only consume DAQIRI from C++.
 
-### `DAQIRI_ENABLE_GDS` — cuFile burst writes
+### `DAQIRI_ENABLE_GDS`: cuFile burst writes
 
 `-DDAQIRI_ENABLE_GDS=ON` enables the `cuFile`-backed file-write path for bursts whose payload lives in CUDA device memory. The build requires `cufile.h` and `libcufile` (both shipped with the CUDA Toolkit). At runtime you also need the `nvidia-fs` kernel module loaded and a GDS-supported destination filesystem; verify with the snippet in [Getting Started](../getting-started.md#cmake-options). Without this flag, device-memory burst writes return `NOT_SUPPORTED`; host-memory writes are unaffected.
 
-### `CMAKE_CUDA_ARCHITECTURES` — GPU compute capability
+### `CMAKE_CUDA_ARCHITECTURES`: GPU compute capability
 
 The default CUDA architectures DAQIRI compiles for are `80;90` (A100, H100), with `121` (GB10) appended automatically when the configuring CUDA compiler is 13.0 or newer. The logic lives in [`src/CMakeLists.txt`](https://github.com/NVIDIA/daqiri/blob/main/src/CMakeLists.txt) (search for `CMAKE_CUDA_ARCHITECTURES`).
 
@@ -246,7 +246,7 @@ cmake -S . -B build ... -DCMAKE_CUDA_ARCHITECTURES="80;89;90"
 cmake -S . -B build ... -DCMAKE_CUDA_ARCHITECTURES=100
 ```
 
-The override is honored because `src/CMakeLists.txt` only sets `CMAKE_CUDA_ARCHITECTURES` when it is not already defined — a user-supplied `-D` value takes precedence. Common values:
+The override is honored because `src/CMakeLists.txt` only sets `CMAKE_CUDA_ARCHITECTURES` when it is not already defined; a user-supplied `-D` value takes precedence. Common values:
 
 | GPU family | Architecture |
 |---|---|
@@ -267,9 +267,9 @@ The override is honored because `src/CMakeLists.txt` only sets `CMAKE_CUDA_ARCHI
 
 ### Other flags
 
-- `-DBUILD_SHARED_LIBS=ON` — produces `libdaqiri.so` (recommended). With `OFF`, you get a static library.
-- `-DDAQIRI_BUILD_EXAMPLES=ON` — builds the `daqiri_bench_*` executables under `build/examples/`. Required for the smoke test in [Step 5.3](#53-smoke-test). On by default.
-- `-DDAQIRI_REORDER_GPU_PROFILE=ON` — instruments the CUDA reorder kernels with CUDA event timing. Off by default; turn on only when profiling.
+- `-DBUILD_SHARED_LIBS=ON`: produces `libdaqiri.so` (recommended). With `OFF`, you get a static library.
+- `-DDAQIRI_BUILD_EXAMPLES=ON`: builds the `daqiri_bench_*` executables under `build/examples/`. Required for the smoke test in [Step 5.3](#53-smoke-test). On by default.
+- `-DDAQIRI_REORDER_GPU_PROFILE=ON`: instruments the CUDA reorder kernels with CUDA event timing. Off by default; turn on only when profiling.
 
 ## Step 5: Build, install, and verify
 
@@ -315,11 +315,11 @@ A successful run prints a stream of `[INFO]` lines followed by an RX/TX rate sum
 
 !!! tip "DGX Spark"
 
-    On DGX Spark, use the prefilled `daqiri_bench_raw_tx_rx_spark.yaml` instead — only `eth_dst_addr` needs an edit. See the [DGX Spark profile callout](benchmarking_examples.md#update-the-loopback-configuration) for the exact MAC-lookup command.
+    On DGX Spark, use the prefilled `daqiri_bench_raw_tx_rx_spark.yaml` instead; only `eth_dst_addr` needs an edit. See the [DGX Spark profile callout](benchmarking_examples.md#update-the-loopback-configuration) for the exact MAC-lookup command.
 
 !!! note "No NIC available?"
 
-    If you don't have a NIC at all and just want to verify the binary starts cleanly, you can substitute [`daqiri_bench_raw_sw_loopback.yaml`](https://github.com/NVIDIA/daqiri/blob/main/examples/daqiri_bench_raw_sw_loopback.yaml) — it runs an in-process TX/RX through DPDK's software loopback with no hardware required. It is **not** representative of production performance and should not replace the real loopback above for build acceptance.
+    If you don't have a NIC at all and just want to verify the binary starts cleanly, you can substitute [`daqiri_bench_raw_sw_loopback.yaml`](https://github.com/NVIDIA/daqiri/blob/main/examples/daqiri_bench_raw_sw_loopback.yaml). It runs an in-process TX/RX through DPDK's software loopback with no hardware required. It is **not** representative of production performance and should not replace the real loopback above for build acceptance.
 
 ## Step 6: Troubleshooting
 
@@ -331,7 +331,7 @@ A successful run prints a stream of `[INFO]` lines followed by an RX/TX rate sum
     export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig
     ```
 
-    or, if you installed DPDK from MLNX_OFED to `/opt/mellanox/dpdk`, rely on the fallback in [`src/CMakeLists.txt`](https://github.com/NVIDIA/daqiri/blob/main/src/CMakeLists.txt) (search for `mellanox`) — no extra environment variable needed, but the path must exist.
+    or, if you installed DPDK from MLNX_OFED to `/opt/mellanox/dpdk`, rely on the fallback in [`src/CMakeLists.txt`](https://github.com/NVIDIA/daqiri/blob/main/src/CMakeLists.txt) (search for `mellanox`); no extra environment variable is needed, but the path must exist.
 
 ??? failure "CMake: `Could not find libibverbs` / `librdmacm`"
 
@@ -359,7 +359,7 @@ A successful run prints a stream of `[INFO]` lines followed by an RX/TX rate sum
 
 ??? failure "Runtime: `EAL: No free hugepages reported`"
 
-    DPDK could not allocate hugepages because none are reserved. Hugepage configuration is part of system setup, not the build — follow [System Configuration → Step 4: Enable Huge pages](system_configuration.md#step-4-enable-huge-pages) to add a persistent reservation, or reserve some temporarily with:
+    DPDK could not allocate hugepages because none are reserved. Hugepage configuration is part of system setup, not the build. Follow [System Configuration → Step 4: Enable Huge pages](system_configuration.md#step-4-enable-huge-pages) to add a persistent reservation, or reserve some temporarily with:
 
     ```bash
     echo 1024 | sudo tee /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
@@ -374,7 +374,7 @@ A successful run prints a stream of `[INFO]` lines followed by an RX/TX rate sum
     /usr/local/cuda/gds/tools/gdscheck.py -p
     ```
 
-    Full setup notes are in [Getting Started → CMake Options](../getting-started.md#cmake-options). If `nvidia-fs` cannot be loaded on this host, drop `-DDAQIRI_ENABLE_GDS=ON` from the CMake configure step — host-memory burst writes do not require it.
+    Full setup notes are in [Getting Started → CMake Options](../getting-started.md#cmake-options). If `nvidia-fs` cannot be loaded on this host, drop `-DDAQIRI_ENABLE_GDS=ON` from the CMake configure step; host-memory burst writes do not require it.
 
 ??? failure "`pkg-config: command not found`"
 
@@ -392,19 +392,19 @@ A successful run prints a stream of `[INFO]` lines followed by an RX/TX rate sum
 
 ??? failure "Build succeeds but `ibv_devinfo` reports `0 HCAs found`"
 
-    The user-space libraries are installed but the kernel drivers are not — `lsmod | grep mlx5` will be empty. Follow [Check your NIC drivers](system_configuration.md#check-your-nic-drivers) to install `doca-ofed` and reboot.
+    The user-space libraries are installed but the kernel drivers are not; `lsmod | grep mlx5` will be empty. Follow [Check your NIC drivers](system_configuration.md#check-your-nic-drivers) to install `doca-ofed` and reboot.
 
 ## Platform-specific notes
 
-The build recipe above is the same on every supported host. The notes below cover the few places where defaults or expectations diverge — open the tab that matches your hardware.
+The build recipe above is the same on every supported host. The notes below cover the few places where defaults or expectations diverge. Open the tab that matches your hardware.
 
 === "DGX Spark (GB10)"
 
     - The integrated **ConnectX-7** appears in `ibv_devinfo` as one or two `mlx5_*` HCAs depending on link configuration; no separate driver install beyond the [DOCA repository setup](#step-1-configure-the-doca-apt-repository) is needed.
-    - GB10 is **compute capability 12.1** (`sm_121`). DAQIRI's default arch list adds `121` automatically when configuring with **CUDA Toolkit 13.0 or newer** — on those toolkits no override is needed. On older toolkits, GB10 is not supported.
+    - GB10 is **compute capability 12.1** (`sm_121`). DAQIRI's default arch list adds `121` automatically when configuring with **CUDA Toolkit 13.0 or newer**; on those toolkits no override is needed. On older toolkits, GB10 is not supported.
     - DGX Spark uses **NVLink-C2C unified memory** and has no separate GPU BAR1, so data buffers in YAML configs use `kind: host_pinned` rather than `kind: device`. The DGX-Spark-prefilled YAMLs in `examples/*_spark.yaml` already encode this.
     - `nvidia-peermem` is not used; GPUDirect goes through the dma-buf path enabled by the DPDK patches in [Step 3](#step-3-build-dpdk-with-daqiri-patches).
-    - For a runnable end-to-end test after the build completes, follow the [DGX Spark profile callout](benchmarking_examples.md#update-the-loopback-configuration) in Benchmarking Examples — the prefilled `daqiri_bench_raw_tx_rx_spark.yaml` and `daqiri_bench_rdma_tx_rx_spark.yaml` need only an `eth_dst_addr` edit.
+    - For a runnable end-to-end test after the build completes, follow the [DGX Spark profile callout](benchmarking_examples.md#update-the-loopback-configuration) in Benchmarking Examples: the prefilled `daqiri_bench_raw_tx_rx_spark.yaml` and `daqiri_bench_rdma_tx_rx_spark.yaml` need only an `eth_dst_addr` edit.
 
 === "IGX Orin + dGPU"
 
@@ -423,24 +423,24 @@ The build recipe above is the same on every supported host. The notes below cove
         export PKG_CONFIG_PATH=/usr/local/lib/aarch64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}
         ```
 
-    - The IGX/Tegra kernel does not expose `/proc/config.gz` — use the `/boot/config-$(uname -r)` fallback shown in [Prerequisite verification](#prerequisite-verification) to confirm `CONFIG_DMA_SHARED_BUFFER=y`.
+    - The IGX/Tegra kernel does not expose `/proc/config.gz`; use the `/boot/config-$(uname -r)` fallback shown in [Prerequisite verification](#prerequisite-verification) to confirm `CONFIG_DMA_SHARED_BUFFER=y`.
 
 === "x86_64 RTX Pro Server"
 
-    - "RTX Pro Server" covers any `x86_64` workstation or server with a ConnectX-6 Dx (or later) NIC and an RTX Pro / Workstation GPU. Confirm `nvidia-smi` reports a GPUDirect-capable GPU (any RTX Pro / Quadro / Data Center class card; **not** GeForce — see the warning in [Concepts → GPUDirect](../concepts.md#gpudirect)).
+    - "RTX Pro Server" covers any `x86_64` workstation or server with a ConnectX-6 Dx (or later) NIC and an RTX Pro / Workstation GPU. Confirm `nvidia-smi` reports a GPUDirect-capable GPU (any RTX Pro / Quadro / Data Center class card; **not** GeForce; see the warning in [Concepts → GPUDirect](../concepts.md#gpudirect)).
     - Set `-DCMAKE_CUDA_ARCHITECTURES` to match the installed card. RTX Pro 6000 Blackwell is `100`; RTX 6000 Ada is `89`; RTX A6000 is `86`:
 
         ```bash
         cmake -S . -B build ... -DCMAKE_CUDA_ARCHITECTURES=100
         ```
 
-    - x86_64 hosts use `/usr/local/lib/x86_64-linux-gnu/pkgconfig` for the DPDK `.pc` file — that's the default `PKG_CONFIG_PATH` entry shown in [Step 3.4](#34-verify).
+    - x86_64 hosts use `/usr/local/lib/x86_64-linux-gnu/pkgconfig` for the DPDK `.pc` file; that's the default `PKG_CONFIG_PATH` entry shown in [Step 3.4](#34-verify).
     - All other steps are identical to the generic recipe above.
 
 ## Next steps
 
 Once `libdaqiri.so` is installed and the [smoke test](#53-smoke-test) passes:
 
-1. [**System Configuration**](system_configuration.md) — tune the host (hugepages, NIC link layer, GPU BAR1, CPU isolation) for production performance.
-2. [**Benchmarking Examples**](benchmarking_examples.md) — run `daqiri_bench_raw_gpudirect` over a physical loopback.
-3. [**Understanding the Configuration File**](configuration-walkthrough.md) — pick the right starter YAML for your use case from the decision tree.
+1. [**System Configuration**](system_configuration.md): tune the host (hugepages, NIC link layer, GPU BAR1, CPU isolation) for production performance.
+2. [**Benchmarking Examples**](benchmarking_examples.md): run `daqiri_bench_raw_gpudirect` over a physical loopback.
+3. [**Understanding the Configuration File**](configuration-walkthrough.md): pick the right starter YAML for your use case from the decision tree.
