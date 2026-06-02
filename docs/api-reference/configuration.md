@@ -7,6 +7,11 @@ want to interoperate with existing configuration code.
 
 See `examples/daqiri_bench_*.yaml` for complete working examples.
 
+OpenTelemetry metrics do not add YAML fields. Metrics-enabled builds use the
+same interface, queue, and flow names from the active configuration as metric
+labels, and applications are still responsible for configuring the OpenTelemetry
+SDK/exporter before running DAQIRI.
+
 ## Common Configuration
 
 These settings apply globally to both TX and RX:

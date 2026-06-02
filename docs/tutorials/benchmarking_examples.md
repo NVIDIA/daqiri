@@ -169,6 +169,35 @@ After having modified the configuration file, ensure you have connected an SFP c
 
 By default the application runs for 10 seconds and then exits. You can change the duration by passing `--seconds <N>` after the YAML path, or stop it gracefully at any time with `Ctrl-C`.
 
+## Watch live OpenTelemetry metrics in Grafana
+
+DAQIRI can expose the raw benchmark counters through OpenTelemetry when metrics
+support is enabled at build time. The Grafana example uses the same benchmark
+binary and YAML files as the loopback test above, then starts Prometheus and
+Grafana beside the benchmark process.
+
+Build the container with metrics enabled:
+
+```bash
+DAQIRI_ENABLE_OTEL_METRICS=ON DAQIRI_MGR="dpdk socket rdma" scripts/build-container.sh
+```
+
+Before starting the stack, fill in the required `<placeholders>` in the benchmark
+YAML you plan to run. You can also pass a machine-local copy through
+`DAQIRI_CONFIG` so the tracked example YAML keeps its placeholder syntax.
+
+```bash
+cd examples/grafana
+DAQIRI_CONFIG=/workspace/daqiri/examples/daqiri_bench_raw_tx_rx.yaml \
+DAQIRI_SECONDS=60 \
+docker compose up
+```
+
+Prometheus scrapes `http://localhost:9464/metrics`, and Grafana serves the
+`DAQIRI OpenTelemetry Metrics` dashboard at `http://localhost:3000`. The
+throughput panel reports payload counter rates in `Gb/s` for each active
+interface and queue.
+
 ??? abstract "See an example output"
 
     ```log

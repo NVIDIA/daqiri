@@ -29,6 +29,7 @@
 
 #include <daqiri/daqiri.h>
 #include "src/manager.h"
+#include "src/metrics.h"
 
 namespace daqiri {
 
@@ -127,6 +128,7 @@ class SocketMgr : public Manager {
     std::atomic<bool> running{false};
     std::thread rx_thread;
     std::shared_ptr<RxQueueState> rx_queue;
+    std::shared_ptr<metrics::CounterSet> rx_metrics;
   };
 
   struct EndpointState {
@@ -144,6 +146,8 @@ class SocketMgr : public Manager {
     std::thread accept_thread;
     std::thread io_thread;
     std::shared_ptr<RxQueueState> rx_queue_state;
+    std::shared_ptr<metrics::CounterSet> rx_metrics;
+    std::shared_ptr<metrics::CounterSet> tx_metrics;
     sockaddr_in udp_peer_addr{};
     bool udp_peer_valid = false;
     uintptr_t primary_conn_id = 0;

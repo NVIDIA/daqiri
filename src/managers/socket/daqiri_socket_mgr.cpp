@@ -142,6 +142,16 @@ void SocketMgr::initialize() {
       ep->tx_batch_size = select_batch_size(if_cfg.tx_.queues_);
       ep->max_packet_size = static_cast<size_t>(std::max(1, select_max_packet_size(if_cfg)));
       ep->rx_queue_state = get_or_create_rx_queue(ep->port, ep->rx_queue);
+      ep->rx_metrics = metrics::get_or_create_queue("socket",
+                                                     if_cfg.name_.empty() ? if_cfg.address_
+                                                                          : if_cfg.name_,
+                                                     ep->port,
+                                                     std::to_string(ep->rx_queue));
+      ep->tx_metrics = metrics::get_or_create_queue("socket",
+                                                     if_cfg.name_.empty() ? if_cfg.address_
+                                                                          : if_cfg.name_,
+                                                     ep->port,
+                                                     std::to_string(ep->tx_queue));
       endpoints_.push_back(std::move(ep));
     }
 
@@ -844,28 +854,33 @@ Status SocketMgr::send_tx_burst(BurstParams* burst) {
   }
 
   Status status = Status::SUCCESS;
+  size_t sent_pkts = 0;
+  uint64_t sent_bytes = 0;
+  const auto requested_pkts = static_cast<uint64_t>(burst->hdr.hdr.num_pkts);
 
   if (cfg_.common_.protocol == SocketProtocol::UDP) {
-    size_t sent_pkts = 0;
-    uint64_t sent_bytes = 0;
     if (!send_udp_burst(*ep, burst, &sent_pkts, &sent_bytes)) {
       status = Status::CONNECT_FAILURE;
     }
-    if (sent_pkts > 0) { tx_pkts_.fetch_add(sent_pkts); }
-    if (sent_bytes > 0) { tx_bytes_.fetch_add(sent_bytes); }
   } else if (cfg_.common_.protocol == SocketProtocol::TCP) {
     if (conn == nullptr) {
       DAQIRI_LOG_ERROR("No active TCP connection for port {}", ep->port);
       status = Status::CONNECT_FAILURE;
     } else {
-      size_t sent_pkts = 0;
-      uint64_t sent_bytes = 0;
       if (!send_tcp_burst(conn->fd, burst, &sent_pkts, &sent_bytes)) {
         status = Status::CONNECT_FAILURE;
       }
-      if (sent_pkts > 0) { tx_pkts_.fetch_add(sent_pkts); }
-      if (sent_bytes > 0) { tx_bytes_.fetch_add(sent_bytes); }
     }
+  }
+
+  if (sent_pkts > 0) {
+    tx_pkts_.fetch_add(sent_pkts);
+    metrics::add_tx(ep->tx_metrics, sent_pkts, sent_bytes);
+  }
+  if (sent_bytes > 0) { tx_bytes_.fetch_add(sent_bytes); }
+  if (status != Status::SUCCESS) {
+    const uint64_t dropped = requested_pkts > sent_pkts ? requested_pkts - sent_pkts : 1;
+    metrics::add_dropped(ep->tx_metrics, "send_failure", dropped);
   }
 
   free_all_packets(burst);
@@ -970,6 +985,14 @@ std::shared_ptr<SocketMgr::ConnectionState> SocketMgr::register_connection(
   conn->is_udp = is_udp;
   conn->rx_queue = rx_queue;
   conn->running.store(start_rx_thread);
+  if (if_index >= 0 && if_index < static_cast<int>(cfg_.ifs_.size())) {
+    const auto& if_cfg = cfg_.ifs_[if_index];
+    conn->rx_metrics = metrics::get_or_create_queue("socket",
+                                                     if_cfg.name_.empty() ? if_cfg.address_
+                                                                          : if_cfg.name_,
+                                                     port,
+                                                     std::to_string(queue));
+  }
 
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
@@ -1248,6 +1271,7 @@ void SocketMgr::tcp_rx_loop(std::shared_ptr<ConnectionState> conn) {
     push_rx_burst(conn->rx_queue, burst);
     rx_pkts_.fetch_add(1);
     rx_bytes_.fetch_add(static_cast<uint64_t>(rx));
+    metrics::add_rx(conn->rx_metrics, 1, static_cast<uint64_t>(rx));
   }
 
   conn->running.store(false);
@@ -1319,6 +1343,7 @@ void SocketMgr::udp_rx_loop(int if_index) {
       push_rx_burst(ep->rx_queue_state, burst);
       rx_pkts_.fetch_add(1);
       rx_bytes_.fetch_add(static_cast<uint64_t>(rx));
+      metrics::add_rx(ep->rx_metrics, 1, static_cast<uint64_t>(rx));
     }
   }
 }

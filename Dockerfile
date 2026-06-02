@@ -19,6 +19,7 @@ ARG DAQIRI_BASE_TARGET=dpdk
 ARG DAQIRI_MGR="dpdk socket"
 ARG DAQIRI_BUILD_PYTHON=OFF
 ARG BUILD_SHARED_LIBS=ON
+ARG DAQIRI_ENABLE_OTEL_METRICS=OFF
 ARG DAQIRI_OS_BASE_IMAGE=nvcr.io/nvidia/cuda:13.1.0-devel-ubuntu24.04
 
 # ============================================================
@@ -172,35 +173,31 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     mft \
     && rm -rf /var/lib/apt/lists/*
 
+ARG DAQIRI_ENABLE_OTEL_METRICS
+ARG OPENTELEMETRY_CPP_VERSION=v1.27.0
+RUN if [ "${DAQIRI_ENABLE_OTEL_METRICS}" = "ON" ]; then \
+      git clone --depth 1 --branch "${OPENTELEMETRY_CPP_VERSION}" \
+        https://github.com/open-telemetry/opentelemetry-cpp.git /tmp/opentelemetry-cpp \
+      && cmake -S /tmp/opentelemetry-cpp -B /tmp/opentelemetry-cpp-build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DBUILD_TESTING=OFF \
+        -DWITH_EXAMPLES=OFF \
+        -DWITH_OTLP=OFF \
+        -DWITH_PROMETHEUS=ON \
+        -DWITH_ZIPKIN=OFF \
+        -DWITH_ABSEIL=OFF \
+        -DWITH_STL=CXX17 \
+      && cmake --build /tmp/opentelemetry-cpp-build --target install -j "$(nproc)" \
+      && ldconfig \
+      && rm -rf /tmp/opentelemetry-cpp /tmp/opentelemetry-cpp-build; \
+    fi
+
 # ==============================================================
 # rdma: Named target for consistent per-manager container builds.
 # Identical to dpdk (which already includes RDMA/ibverbs deps).
 # ==============================================================
 FROM dpdk AS rdma
-
-# ==============================================================
-# gpunetio: Add DOCA SDK packages for GPUNetIO support
-# ==============================================================
-FROM dpdk AS gpunetio
-
-# Install DOCA SDK packages required for GPUNetIO
-# (DOCA repo is already configured in dpdk stage)
-# - libdoca-sdk-gpunetio-dev: for gpunetio backend (doca-gpunetio module)
-# - libdoca-sdk-eth-dev: for gpunetio backend (doca-eth module)
-# - libdoca-sdk-flow-dev: for gpunetio backend (doca-flow module)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        mlnx-dpdk-dev \
-        libdoca-sdk-gpunetio-dev \
-        libdoca-sdk-eth-dev \
-        libdoca-sdk-flow-dev \
-        mlnx-ofed-kernel-utils \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN git clone https://github.com/NVIDIA/gdrcopy.git /opt/mellanox/gdrcopy \
-    && cd /opt/mellanox/gdrcopy \
-    && make lib
-
-ENV GDRCOPY_PATH_L=/opt/mellanox/gdrcopy/src
 
 # ==============================
 # Rivermax Target
@@ -281,6 +278,7 @@ FROM ${DAQIRI_BASE_TARGET} AS daqiri-build
 ARG DAQIRI_MGR
 ARG DAQIRI_BUILD_PYTHON
 ARG BUILD_SHARED_LIBS
+ARG DAQIRI_ENABLE_OTEL_METRICS
 
 WORKDIR /workspace/daqiri
 COPY . .
@@ -292,6 +290,7 @@ RUN cmake -S . -B build \
       -DCMAKE_CUDA_ARCHITECTURES=all-major \
       -DBUILD_SHARED_LIBS=${BUILD_SHARED_LIBS} \
       -DDAQIRI_BUILD_PYTHON=${DAQIRI_BUILD_PYTHON} \
+      -DDAQIRI_ENABLE_OTEL_METRICS=${DAQIRI_ENABLE_OTEL_METRICS} \
       -DDAQIRI_MGR="${DAQIRI_MGR}" \
     && cmake --build build -j "$(nproc)" \
     && cmake --install build
@@ -304,4 +303,5 @@ FROM ${DAQIRI_BASE_TARGET} AS runtime
 COPY --from=daqiri-build /opt/daqiri /opt/daqiri
 ENV CMAKE_PREFIX_PATH=/opt/daqiri
 ENV LD_LIBRARY_PATH=/opt/daqiri/lib
+EXPOSE 9464
 WORKDIR /opt/daqiri

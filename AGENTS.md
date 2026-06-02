@@ -18,6 +18,7 @@ CMake options (full table in `docs/getting-started.md`):
 - `DAQIRI_MGR` — space-separated backend list. Valid values: `dpdk`, `socket`, `rdma`. Default in `src/CMakeLists.txt:137` is `"dpdk socket"` (which, due to the rule below, effectively builds all three).
 - `DAQIRI_BUILD_PYTHON` — builds `pybind11` bindings from `python/`.
 - `DAQIRI_BUILD_EXAMPLES` — builds the benchmark executables (default `ON`).
+- `DAQIRI_ENABLE_OTEL_METRICS` — enables OpenTelemetry metrics instrumentation (default `OFF`).
 - `DAQIRI_REORDER_GPU_PROFILE` — enable CUDA event timing in the DPDK reorder kernels (off by default).
 
 CUDA architectures default to `80;90` (A100, H100), with `121` (GB10) added when configuring with CUDA Toolkit 13.0 or newer. Override `CMAKE_CUDA_ARCHITECTURES` when targeting other GPUs.

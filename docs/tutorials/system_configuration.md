@@ -812,10 +812,6 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     ### Step 5: Isolate CPU cores
 
-    !!! note
-
-        This optimization is less impactful when using the `gpunetio` backend since the GPU polls the NIC.
-
     The CPU interacting with the NIC to route packets is sensitive to perturbations, especially with smaller packet/batch sizes requiring more frequent work. Isolating a CPU in Linux prevents unwanted user or kernel threads from running on it, reducing context switching and latency spikes from noisy neighbors.
 
     We recommend isolating the CPU cores you will select to interact with the NIC (defined in the `daqiri` configuration [described in the configuration reference](configuration-walkthrough.md) in this tutorial). This is done by setting additional flags on the kernel bootline.
