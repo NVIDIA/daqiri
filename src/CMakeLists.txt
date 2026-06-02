@@ -115,10 +115,7 @@ target_link_libraries(daqiri_common
     PRIVATE
 )
 if(DAQIRI_ENABLE_OTEL_METRICS)
-  target_compile_definitions(daqiri_common PUBLIC DAQIRI_ENABLE_OTEL_METRICS=1)
   target_link_libraries(daqiri_common PRIVATE opentelemetry-cpp::api)
-else()
-  target_compile_definitions(daqiri_common PUBLIC DAQIRI_ENABLE_OTEL_METRICS=0)
 endif()
 if(DAQIRI_ENABLE_GDS)
   find_path(DAQIRI_CUFILE_INCLUDE_DIR
