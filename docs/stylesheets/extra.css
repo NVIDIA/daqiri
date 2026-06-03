@@ -368,3 +368,64 @@ body[data-active-tab="igx-orin"] .md-nav--secondary li:has(> a[data-tab="dgx-spa
 body[data-active-tab="dgx-spark"] .md-nav--secondary li:has(> a[data-tab="igx-orin"]) {
   display: none;
 }
+
+/* ── Performance-report heatmap cells ───────────────────────────────── */
+/* Used by the payload×batch and payload×target_gbps matrices in
+   docs/performance-*.md. Threshold logic (vs. matrix-global max):
+     green  = no drops AND Gbps ≥ 90% of max
+     yellow = no drops AND Gbps ≥ 70% of max
+     red    = any drops OR Gbps < 70% of max                            */
+.md-typeset table.perf-matrix {
+  width: 100%;
+  table-layout: auto;
+  border-collapse: separate;
+  border-spacing: 5px;
+  font-size: 0.64rem;
+}
+.md-typeset table.perf-matrix th,
+.md-typeset table.perf-matrix td {
+  text-align: center;
+  vertical-align: middle;
+  font-variant-numeric: tabular-nums;
+  padding: 0.55em 0.5em;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.md-typeset table.perf-matrix td small {
+  display: block;
+  opacity: 0.75;
+  font-size: 0.85em;
+  margin-top: 0.25em;
+}
+.md-typeset table.perf-matrix td.cell-green {
+  background-color: rgba(118, 185, 0, 0.28);
+  color: inherit;
+}
+.md-typeset table.perf-matrix td.cell-yellow {
+  background-color: rgba(255, 196, 0, 0.32);
+  color: inherit;
+}
+.md-typeset table.perf-matrix td.cell-red {
+  background-color: rgba(220, 60, 60, 0.32);
+  color: inherit;
+}
+.md-typeset table.perf-matrix th {
+  background-color: rgba(255, 255, 255, 0.05);
+  font-weight: 600;
+}
+/* Compact legend chips that pair with the matrix. */
+.md-typeset .perf-legend {
+  display: flex;
+  gap: 0.75em;
+  margin: 0.5em 0 1em 0;
+  font-size: 0.85em;
+  flex-wrap: wrap;
+}
+.md-typeset .perf-legend span {
+  padding: 0.1em 0.55em;
+  border-radius: 0.25em;
+  white-space: nowrap;
+}
+.md-typeset .perf-legend .cell-green  { background-color: rgba(118, 185, 0, 0.28); }
+.md-typeset .perf-legend .cell-yellow { background-color: rgba(255, 196, 0, 0.32); }
+.md-typeset .perf-legend .cell-red    { background-color: rgba(220, 60, 60, 0.32); }

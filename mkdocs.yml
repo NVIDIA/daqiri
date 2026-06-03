@@ -50,6 +50,8 @@ nav:
   - Getting Started: getting-started.md
   - Concepts: concepts.md
   - Benchmarks: tutorials/benchmarking_examples.md
+  - Performance:
+    - DGX Spark: performance-dgx-spark.md
   - API Reference:
     - API Guide: api-reference/index.md
     - Configuration YAML Reference: api-reference/configuration.md
@@ -64,6 +66,7 @@ markdown_extensions:
   - admonition
   - attr_list
   - def_list
+  - footnotes
   - md_in_html
   - tables
   - toc:
