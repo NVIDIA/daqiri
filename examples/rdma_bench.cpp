@@ -25,6 +25,7 @@
 #include <string>
 #include <thread>
 
+#include "raw_bench_common.h"
 #include <daqiri/daqiri.h>
 
 namespace {
@@ -48,6 +49,8 @@ struct RdmaBenchConfig {
 struct RdmaWorkerStats {
   uint64_t send_completions = 0;
   uint64_t recv_completions = 0;
+  uint64_t send_bytes = 0;
+  uint64_t recv_bytes = 0;
 };
 
 RdmaBenchConfig parse_rdma_cfg(const YAML::Node& node) {
@@ -62,7 +65,8 @@ RdmaBenchConfig parse_rdma_cfg(const YAML::Node& node) {
   return cfg;
 }
 
-void rdma_worker(const RdmaBenchConfig& cfg, std::atomic<bool>& stop, RdmaWorkerStats& stats) {
+void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pacer,
+                 std::atomic<bool>& stop, RdmaWorkerStats& stats) {
   static constexpr int kMaxOutstanding = 5;
   int outstanding_send = 0;
   int outstanding_recv = 0;
@@ -120,6 +124,10 @@ void rdma_worker(const RdmaBenchConfig& cfg, std::atomic<bool>& stop, RdmaWorker
       if (daqiri::send_tx_burst(msg) != daqiri::Status::SUCCESS) { return; }
       outstanding++;
       wr_id++;
+      // Only meter actual byte transmissions (SENDs), not RECEIVE-side posts.
+      if (op == daqiri::RDMAOpCode::SEND) {
+        pacer.wait_for_bytes(static_cast<size_t>(cfg.message_size), stop);
+      }
     };
 
     if (cfg.send) { post_req(outstanding_send, send_wr_id, daqiri::RDMAOpCode::SEND, send_mr); }
@@ -131,10 +139,12 @@ void rdma_worker(const RdmaBenchConfig& cfg, std::atomic<bool>& stop, RdmaWorker
       if (daqiri::rdma_get_opcode(completion) == daqiri::RDMAOpCode::SEND && outstanding_send > 0) {
         outstanding_send--;
         stats.send_completions++;
+        stats.send_bytes += static_cast<uint64_t>(cfg.message_size);
       } else if (daqiri::rdma_get_opcode(completion) == daqiri::RDMAOpCode::RECEIVE &&
                  outstanding_recv > 0) {
         outstanding_recv--;
         stats.recv_completions++;
+        stats.recv_bytes += static_cast<uint64_t>(cfg.message_size);
       }
       daqiri::free_tx_burst(completion);
     } else {
@@ -147,17 +157,21 @@ void rdma_worker(const RdmaBenchConfig& cfg, std::atomic<bool>& stop, RdmaWorker
 
 int main(int argc, char** argv) {
   if (argc < 2) {
-    std::cerr << "Usage: " << argv[0] << " <config.yaml> [--seconds N] [--mode server|client|both]\n";
+    std::cerr << "Usage: " << argv[0]
+              << " <config.yaml> [--seconds N] [--mode server|client|both] [--target-gbps G]\n";
     return 1;
   }
 
   int run_seconds = 10;
+  double target_gbps = 0.0;
   std::string mode = "both";
   for (int i = 2; i + 1 < argc; i += 2) {
     if (std::string(argv[i]) == "--seconds") {
       run_seconds = std::stoi(argv[i + 1]);
     } else if (std::string(argv[i]) == "--mode") {
       mode = argv[i + 1];
+    } else if (std::string(argv[i]) == "--target-gbps") {
+      target_gbps = std::stod(argv[i + 1]);
     }
   }
 
@@ -172,18 +186,22 @@ int main(int argc, char** argv) {
   std::thread client_thread;
   RdmaWorkerStats server_stats;
   RdmaWorkerStats client_stats;
+  daqiri::bench::TokenBucketPacer server_pacer(target_gbps);
+  daqiri::bench::TokenBucketPacer client_pacer(target_gbps);
   bool run_server = false;
   bool run_client = false;
 
   if ((mode == "server" || mode == "both") && root["rdma_bench_server"]) {
     run_server = true;
     server_thread = std::thread(
-        rdma_worker, parse_rdma_cfg(root["rdma_bench_server"]), std::ref(stop), std::ref(server_stats));
+        rdma_worker, parse_rdma_cfg(root["rdma_bench_server"]),
+        std::ref(server_pacer), std::ref(stop), std::ref(server_stats));
   }
   if ((mode == "client" || mode == "both") && root["rdma_bench_client"]) {
     run_client = true;
     client_thread = std::thread(
-        rdma_worker, parse_rdma_cfg(root["rdma_bench_client"]), std::ref(stop), std::ref(client_stats));
+        rdma_worker, parse_rdma_cfg(root["rdma_bench_client"]),
+        std::ref(client_pacer), std::ref(stop), std::ref(client_stats));
   }
 
   if (!server_thread.joinable() && !client_thread.joinable()) {
@@ -207,11 +225,23 @@ int main(int argc, char** argv) {
   if (server_thread.joinable()) { server_thread.join(); }
   if (client_thread.joinable()) { client_thread.join(); }
 
+  const double secs =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
+          .count();
+
   if (run_server) {
-    std::cout << "Server received messages: " << server_stats.recv_completions << '\n';
+    std::cout << "Server complete: send_completions=" << server_stats.send_completions
+              << " recv_completions=" << server_stats.recv_completions
+              << " send_bytes=" << server_stats.send_bytes
+              << " recv_bytes=" << server_stats.recv_bytes
+              << " seconds=" << secs << '\n';
   }
   if (run_client) {
-    std::cout << "Client received messages: " << client_stats.recv_completions << '\n';
+    std::cout << "Client complete: send_completions=" << client_stats.send_completions
+              << " recv_completions=" << client_stats.recv_completions
+              << " send_bytes=" << client_stats.send_bytes
+              << " recv_bytes=" << client_stats.recv_bytes
+              << " seconds=" << secs << '\n';
   }
 
   daqiri::print_stats();

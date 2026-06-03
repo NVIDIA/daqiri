@@ -21,12 +21,43 @@
 #include <yaml-cpp/yaml.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
 namespace daqiri::bench {
+
+// Software token-bucket pacer used by the bench TX workers. When
+// target_gbps == 0 the wait_for_bytes() call is a no-op early return, so the
+// pacer adds no overhead when --target-gbps is unset.
+//
+// Accuracy: ~5% at high rates due to Linux nanosleep granularity and scheduler
+// jitter. Acceptable for drop-curve sweeps; tighter pacing would require
+// hardware TX timestamping (DAQIRI's accurate_send YAML flag), deferred.
+class TokenBucketPacer {
+public:
+  TokenBucketPacer() = default;
+  explicit TokenBucketPacer(double target_gbps);
+
+  // Call after each TX burst. Sleeps in short slices until the pacer's notion
+  // of "time the configured target rate would have taken to send the
+  // accumulated bytes" catches up, OR `stop` flips true. Slicing keeps the
+  // bench responsive to --seconds expiry / Ctrl-C without truncating the total
+  // sleep (which would silently break pacing for low target rates).
+  void wait_for_bytes(size_t bytes, std::atomic<bool> &stop);
+
+  bool enabled() const { return target_bps_ > 0.0; }
+  double target_gbps() const { return target_bps_ / 1e9; }
+
+private:
+  double target_bps_ = 0.0;  // 0 means disabled
+  uint64_t total_bytes_ = 0;
+  std::chrono::steady_clock::time_point t0_;
+  std::mutex mutex_;
+};
 
 struct RawBenchTxConfig {
   std::string interface_name = "tx_port";
@@ -76,6 +107,7 @@ private:
 };
 
 int parse_run_seconds(int argc, char **argv);
+double parse_target_gbps(int argc, char **argv);
 bool has_bench_rx(const YAML::Node &root);
 bool has_bench_tx(const YAML::Node &root);
 RawBenchRxConfig parse_rx(const YAML::Node &root);
@@ -100,7 +132,8 @@ cudaError_t memcpy_batch_async(const std::vector<void *> &dsts,
 void signal_handler(int signum);
 void wait_for_stop(int run_seconds, std::atomic<bool> &stop);
 void print_queue_stats(const char *direction, const std::string &interface_name,
-                       int queue_id, const RawBenchQueueStats &stats);
+                       int queue_id, const RawBenchQueueStats &stats,
+                       double seconds);
 void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop);
 
 } // namespace daqiri::bench
