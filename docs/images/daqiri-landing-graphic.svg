@@ -210,8 +210,6 @@
   <g class="label">
     <rect x="270" y="330" width="58" height="24" rx="6" fill="#061216" stroke="#2e7180"/>
     <text x="299" y="346" text-anchor="middle" class="mono" fill="#5dd8f2" font-size="10" font-weight="800">PCIe</text>
-    <rect x="586" y="270" width="82" height="22" rx="6" fill="#101909" stroke="#76b900"/>
-    <text x="627" y="284" text-anchor="middle" class="mono" fill="#a0d000" font-size="9.5" font-weight="800">zero-copy</text>
   </g>
 
   <!-- Data paths -->
@@ -236,16 +234,16 @@
   <!-- Activity dots -->
   <g filter="url(#softGlow)">
     <circle class="travel-dot" r="3.2" fill="#82aaff">
-      <animateMotion dur="2.9s" repeatCount="indefinite" path="M252 238 H346"/>
+      <animateMotion dur="3.2s" repeatCount="indefinite" calcMode="linear" keyPoints="0;1;0" keyTimes="0;0.5;1" path="M252 238 H346"/>
     </circle>
     <circle class="travel-dot" r="3.2" fill="#5dd8f2">
-      <animateMotion dur="3.1s" repeatCount="indefinite" path="M252 378 C286 378 314 362 346 362"/>
+      <animateMotion dur="3.4s" repeatCount="indefinite" calcMode="linear" keyPoints="0;1;0" keyTimes="0;0.5;1" path="M252 378 C286 378 314 362 346 362"/>
     </circle>
     <circle class="travel-dot" r="3.4" fill="#76b900">
-      <animateMotion dur="2.6s" repeatCount="indefinite" path="M488 236 C505 218 520 218 552 225"/>
+      <animateMotion dur="3s" repeatCount="indefinite" calcMode="linear" keyPoints="0;1;0" keyTimes="0;0.5;1" path="M488 236 C505 218 520 218 552 225"/>
     </circle>
     <circle class="travel-dot" r="3.2" fill="#b8e85a">
-      <animateMotion dur="2.8s" repeatCount="indefinite" path="M488 318 C506 332 522 336 552 338"/>
+      <animateMotion dur="3.2s" repeatCount="indefinite" calcMode="linear" keyPoints="0;1;0" keyTimes="0;0.5;1" path="M488 318 C506 332 522 336 552 338"/>
     </circle>
     <circle class="pulse pulse-4" cx="706" cy="225" r="3" fill="#ffcb6b"/>
   </g>
