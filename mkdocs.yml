@@ -49,7 +49,10 @@ site_dir: site
 nav:
   - Getting Started: getting-started.md
   - Concepts: concepts.md
-  - Benchmarks: tutorials/benchmarking_examples.md
+  - Benchmarking:
+    - Overview: benchmarks/benchmarks.md
+    - Socket and RDMA Benchmarking: benchmarks/socket_benchmarking.md
+    - Raw Ethernet Benchmarking: benchmarks/raw_benchmarking.md
   - API Reference:
     - API Guide: api-reference/index.md
     - Configuration YAML Reference: api-reference/configuration.md
@@ -58,10 +61,6 @@ nav:
   - Tutorials:
     - System Configuration: tutorials/system_configuration.md
     - Bare-Metal CMake Build: tutorials/bare-metal-cmake-build.md
-    - Benchmarking:
-      - Overview: tutorials/benchmarking.md
-      - Socket and RDMA: tutorials/socket_benchmarking.md
-      - Raw Ethernet: tutorials/benchmarking_examples.md
     - Configuration YAML Walkthrough: tutorials/configuration-walkthrough.md
 
 markdown_extensions:
