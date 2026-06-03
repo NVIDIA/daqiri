@@ -18,7 +18,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     ## System Setup for DAQIRI
 
-    This section covers the essential system setup steps needed before using DAQIRI. Complete this setup before moving on to [System Optimization](#system-optimization) or [running benchmarks](benchmarking_examples.md).
+    This section covers the essential system setup steps needed before using DAQIRI. Complete this setup before moving on to [System Optimization](#system-optimization) or [running benchmarks](benchmarking.md).
 
     In this tutorial, we will be developing on an **NVIDIA IGX Orin platform** with [IGX SW 1.1](https://docs.nvidia.com/igx-orin/user-guide/latest/base-os.html) and an [NVIDIA RTX 6000 ADA GPU](https://www.nvidia.com/en-us/design-visualization/rtx-6000/), which is the configuration that is currently actively tested. The concepts should be applicable to other systems based on Ubuntu 22.04 as well. It should also work on other Linux distributions with a glibc version of 2.35 or higher by containerizing the dependencies and applications on top of an Ubuntu 22.04 image, but this is not actively tested at this time.
 
@@ -1298,7 +1298,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
         ```
 
     ---
-    **Next:** [Benchmarking Examples](benchmarking_examples.md) — run your first DAQIRI benchmark
+    **Next:** [Benchmarking](benchmarking.md) — choose and run your first DAQIRI benchmark
 
 === "DGX Spark"
 
@@ -1585,6 +1585,6 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     ```
 
     ---
-    **Next:** [Benchmarking Examples](benchmarking_examples.md) — run your first DAQIRI benchmark
+    **Next:** [Benchmarking](benchmarking.md) — choose and run your first DAQIRI benchmark
 
 </div>

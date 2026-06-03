@@ -58,6 +58,10 @@ nav:
   - Tutorials:
     - System Configuration: tutorials/system_configuration.md
     - Bare-Metal CMake Build: tutorials/bare-metal-cmake-build.md
+    - Benchmarking:
+      - Overview: tutorials/benchmarking.md
+      - Socket and RDMA: tutorials/socket_benchmarking.md
+      - Raw Ethernet: tutorials/benchmarking_examples.md
     - Configuration YAML Walkthrough: tutorials/configuration-walkthrough.md
 
 markdown_extensions:

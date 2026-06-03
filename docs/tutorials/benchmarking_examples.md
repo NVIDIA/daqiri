@@ -3,13 +3,13 @@ hide:
   - navigation
 ---
 
-# Benchmarking Examples
+# Raw Ethernet Benchmarking
 
-DAQIRI provides a benchmarking application named `daqiri_bench_raw_gpudirect` that can be used to test the performance of the networking configuration. In this section, we'll walk you through the steps needed to configure the application for your NIC for Tx and Rx, and run a loopback test between the two interfaces with a [physical SFP cable](https://www.nvidia.com/en-us/networking/interconnect/) connecting them.
+DAQIRI provides raw Ethernet benchmark applications that use DPDK to drive an NVIDIA NIC directly. This page walks through `daqiri_bench_raw_gpudirect`, the TX/RX loopback config, and the raw Ethernet checks needed before interpreting throughput results.
 
 Make sure to [build the DAQIRI library](../getting-started.md#build-the-daqiri-library) beforehand.
 
-**Not sure which YAML to start from?** See [Choosing an example config](configuration-walkthrough.md#choosing-an-example-config) in the configuration tutorial — a use-case-driven decision tree from "I just want to verify the build" through reorder, recording, RDMA, and sockets.
+**Not sure which backend to benchmark?** Start with the [Benchmarking overview](benchmarking.md). Use this page after you have chosen the raw Ethernet backend. Use [Socket and RDMA Benchmarking](socket_benchmarking.md) for TCP, UDP, and RoCE/RDMA runs.
 
 !!! note "Prerequisites"
 
@@ -41,7 +41,7 @@ docker run --rm -it --privileged \
 
     | Flag | Purpose |
     |------|---------|
-    | `--privileged` | DPDK requires raw access to NIC hardware (PCI devices, hugepage files). Also covers `/dev/infiniband` for RDMA. |
+    | `--privileged` | DPDK requires raw access to NIC hardware, PCI devices, and hugepage files. |
     | `--runtime=nvidia` | Makes the host GPU visible inside the container via the NVIDIA Container Toolkit |
     | `--network=host` | Shares the host network namespace so DPDK can discover the physical NIC interfaces and their PCIe topology |
     | `-v /dev/hugepages:/dev/hugepages` | Mounts the hugepage filesystem for DPDK memory allocation (`--privileged` alone does not cover mounted filesystems) |
@@ -478,5 +478,5 @@ The `*_packets_phy` and `*_bytes_phy` counters are physical-link counters. They 
         You might need to kill some of the listed processes to free up GPU VRAM.
 
 ---
-**Previous:** [System Configuration](system_configuration.md)  
+**Previous:** [Benchmarking](benchmarking.md)<br>
 **Next:** [Understanding the Configuration File](configuration-walkthrough.md) — deep dive into the YAML parameters
