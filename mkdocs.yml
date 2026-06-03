@@ -68,6 +68,7 @@ nav:
     - System Configuration: tutorials/system_configuration.md
     - Bare-Metal CMake Build: tutorials/bare-metal-cmake-build.md
     - Configuration YAML Walkthrough: tutorials/configuration-walkthrough.md
+    - DAQIRI + Holoscan Integration: tutorials/daqiri-holoscan-integration.md
 
 markdown_extensions:
   - admonition
