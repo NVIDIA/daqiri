@@ -174,6 +174,21 @@ After having modified the configuration file, ensure you have connected an SFP c
 
 By default the application runs for 10 seconds and then exits. You can change the duration by passing `--seconds <N>` after the YAML path, or stop it gracefully at any time with `Ctrl-C`.
 
+## Tune RDMA SEND completion signaling
+
+The RDMA manager signals every SEND work request by default. For `daqiri_bench_rdma`
+runs where CQ polling overhead is part of the bottleneck investigation, set
+`DAQIRI_RDMA_SEND_SIGNAL_EVERY=N` to request one signaled SEND every `N` posts:
+
+```bash
+DAQIRI_RDMA_SEND_SIGNAL_EVERY=16 \
+  /opt/daqiri/bin/daqiri_bench_rdma /opt/daqiri/bin/daqiri_bench_rdma_tx_rx.yaml
+```
+
+Larger values reduce SEND completion traffic, but completions also drive
+application credits and buffer recycling in the benchmark. Keep the variable
+unset, or set it to `1`, for baseline measurements.
+
 ## Watch live OpenTelemetry metrics in Grafana
 
 DAQIRI can expose the raw benchmark counters through OpenTelemetry when metrics
