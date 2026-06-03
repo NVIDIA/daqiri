@@ -67,7 +67,12 @@ RdmaBenchConfig parse_rdma_cfg(const YAML::Node& node) {
 
 void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pacer,
                  std::atomic<bool>& stop, RdmaWorkerStats& stats) {
-  static constexpr int kMaxOutstanding = 5;
+  // Matches the per-MR num_bufs in the YAML configs. Higher values deadlock
+  // the bench: post_req blocks in get_tx_packet_burst when the pool is empty,
+  // but free_tx_burst (which refills it) only runs later in the same loop
+  // iteration via get_rx_burst. Until the loop is refactored to interleave
+  // drain with post, this constant must stay <= num_bufs.
+  static constexpr int kMaxOutstanding = 20;
   int outstanding_send = 0;
   int outstanding_recv = 0;
   uint64_t send_wr_id = 0x1234;
