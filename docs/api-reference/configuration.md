@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # Configuration YAML Reference
 
 DAQIRI is configured through a YAML file or a `NetworkConfig` struct built in code.
@@ -68,9 +73,10 @@ and their `kind` determines the receive mode (CPU-only, header-data split, or ba
   - values: `local`, `rdma_read`, `rdma_write`
 - **`num_bufs`**: Number of buffers in this region. Higher values give more processing
   headroom but consume more memory (GPU BAR1 for `device`). Too low risks dropped packets
-  on RX or higher latency on TX. Rule of thumb: 3x-5x `batch_size`. For the DPDK
-  backend, `num_bufs` below 1.5x the NIC ring size deadlocks the worker; `daqiri_init`
-  auto-bumps such MRs to 3x the ring (24576 with the default 8192) and logs a `WARN`.
+  on RX or higher latency on TX. Rule of thumb: 3x-5x `batch_size`. For Raw Ethernet
+  (`stream_type: "raw"`), `num_bufs` below 1.5x the NIC ring size deadlocks the worker;
+  `daqiri_init` auto-bumps such MRs to 3x the ring (24576 with the default 8192) and
+  logs a `WARN`.
   - type: `integer`
 - **`buf_size`**: Size of each buffer in bytes. Should match the expected packet size, or
   the segment size when using header-data split.
@@ -104,8 +110,9 @@ memory_regions:
 
 - **`name`**: Interface name. Used to look up port IDs at runtime via `get_port_id()`.
   - type: `string`
-- **`address`**: PCIe BDF address (from `lspci`) or Linux interface name for DPDK, or IP
-  address for RDMA.
+- **`address`**: PCIe BDF address (from `lspci`) or Linux interface name for Raw Ethernet
+  (`stream_type: "raw"`), or IP address for RoCE (`stream_type: "socket"`,
+  `protocol: "roce"`).
   - type: `string`
 
 ### RDMA Configuration
@@ -201,7 +208,8 @@ Unmatched packets are dropped. When `false`, unmatched packets go to a default q
 
 ### Hardware Timestamps
 
-`rx.hardware_timestamps:` — Enable per-packet hardware RX timestamps for the DPDK backend.
+`rx.hardware_timestamps:` — Enable per-packet hardware RX timestamps for Raw Ethernet
+(`stream_type: "raw"`).
 When enabled, DAQIRI requires `RTE_ETH_RX_OFFLOAD_TIMESTAMP` support from the NIC/PMD and
 initialization fails if DAQIRI cannot provide nanosecond timestamps for the selected PMD.
 Timestamps are returned by `get_packet_rx_timestamp()` in nanoseconds in the NIC timestamp
@@ -210,12 +218,12 @@ clock domain, not wall-clock time.
 - type: `boolean`
 - default: `false`
 
-### RX Reorder Configs (DPDK v1)
+### RX Reorder Configs
 
-`rx.reorder_configs:` — Optional automatic packet reordering/aggregation plans. In v1 this is
-implemented for the DPDK backend only. GPU reorder requires CUDA-addressable packet buffers
-(`device` or `host_pinned` memory regions). CPU reorder requires CPU-addressable packet buffers
-(`host`, `host_pinned`, or `huge` memory regions).
+`rx.reorder_configs:` — Optional automatic packet reordering/aggregation plans. Implemented
+for Raw Ethernet (`stream_type: "raw"`) only in v1. GPU reorder requires CUDA-addressable
+packet buffers (`device` or `host_pinned` memory regions). CPU reorder requires CPU-addressable
+packet buffers (`host`, `host_pinned`, or `huge` memory regions).
 
 v1 source-memory requirement:
 - Reorder queues must use exactly one RX source memory region.
@@ -316,7 +324,7 @@ enabled, use `set_packet_tx_time()` to schedule packets. Requires ConnectX-7 or 
 - type: `boolean`
 - default: `false`
 
-## Complete Example (DPDK, Header-Data Split)
+## Complete Example (Raw Ethernet, Header-Data Split)
 
 ```yaml
 %YAML 1.2

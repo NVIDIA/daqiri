@@ -40,18 +40,36 @@
     /* NAV */
     #navbar { position:fixed; top:0; left:0; right:0; z-index:1000; height:var(--nav-h); display:flex; align-items:center; background:rgba(10,10,10,.92); backdrop-filter:blur(16px); border-bottom:1px solid var(--border); transition:box-shadow var(--ease); }
     #navbar.scrolled { box-shadow:0 4px 40px rgba(0,0,0,.6); }
-    .nav-inner { width:100%; max-width:1200px; margin:0 auto; padding:0 2rem; display:flex; align-items:center; gap:2rem; }
+    .nav-inner { width:100%; max-width:1200px; margin:0 auto; padding:0 2rem; display:flex; align-items:center; gap:1.25rem; }
     .nav-logo { display:flex; align-items:center; gap:.75rem; flex-shrink:0; text-decoration:none; }
     .nav-logo-icon { width:32px; height:32px; background:var(--nv-green); border-radius:6px; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:.75rem; color:#000; letter-spacing:-.05em; }
     .nav-logo-text { font-weight:800; font-size:1.1rem; color:var(--text-pri); letter-spacing:.05em; }
     .nav-logo-badge { font-size:.65rem; font-weight:700; padding:2px 6px; background:rgba(118,185,0,.15); color:var(--nv-green); border:1px solid rgba(118,185,0,.3); border-radius:99px; letter-spacing:.08em; }
-    .nav-links { display:flex; align-items:center; gap:.25rem; flex:1; }
-    .nav-links a { color:var(--text-mut); font-size:.875rem; font-weight:500; padding:.4rem .75rem; border-radius:var(--radius); transition:color var(--ease),background var(--ease); }
-    .nav-links a:hover { color:var(--text-pri); background:rgba(255,255,255,.05); }
+    .nav-links { display:flex; align-items:center; gap:.1rem; flex:1; }
+    .nav-links > a, .nav-item > a { color:var(--text-mut); font-size:.875rem; font-weight:500; padding:.4rem .65rem; border-radius:var(--radius); transition:color var(--ease),background var(--ease); white-space:nowrap; display:inline-block; }
+    .nav-links > a:hover, .nav-item > a:hover { color:var(--text-pri); background:rgba(255,255,255,.05); }
     .nav-links a.active { color:var(--nv-green); }
-    .nav-links a.nav-ext::after { content:'↗'; font-size:.72em; opacity:.55; margin-left:2px; }
-    .nav-actions { display:flex; align-items:center; gap:.75rem; margin-left:auto; }
-    .btn { display:inline-flex; align-items:center; gap:.5rem; font-size:.875rem; font-weight:600; padding:.5rem 1.25rem; border-radius:var(--radius); border:1.5px solid transparent; cursor:pointer; transition:all var(--ease); text-decoration:none; }
+    /* Dropdown for nav items that map to a multi-page section (Tutorials, */
+    /* API Reference). Hover/focus reveals a popover with sub-page links.   */
+    .nav-item { position:relative; }
+    .nav-item.nav-has-dropdown > a::after { content:'▾'; font-size:.7em; opacity:.55; margin-left:.3em; }
+    .nav-dropdown { display:none; position:absolute; top:100%; left:0; margin:0; padding:.4rem 0; list-style:none; min-width:14rem; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius); box-shadow:0 6px 28px rgba(0,0,0,.55); z-index:1100; }
+    .nav-dropdown::before { content:''; position:absolute; top:-.5rem; left:0; right:0; height:.5rem; }
+    .nav-item:hover > .nav-dropdown, .nav-item:focus-within > .nav-dropdown { display:block; }
+    .nav-dropdown li { list-style:none; margin:0; }
+    .nav-dropdown a { display:block; padding:.5rem 1rem; font-size:.825rem; font-weight:500; color:var(--text-mut); text-decoration:none; white-space:nowrap; transition:color var(--ease),background var(--ease); }
+    .nav-dropdown a:hover { color:var(--text-pri); background:rgba(118,185,0,.1); }
+    .nav-actions { display:flex; align-items:center; gap:.5rem; margin-left:auto; flex-shrink:0; }
+    /* Hamburger button: hidden by default; shown at <1100px via media query   */
+    /* below. Toggles the .is-open class on .nav-links to reveal a vertical   */
+    /* drawer for tablet / mobile viewports.                                  */
+    .nav-hamburger { display:none; background:transparent; border:1px solid var(--border); color:var(--text-pri); width:38px; height:38px; border-radius:var(--radius); cursor:pointer; padding:0; align-items:center; justify-content:center; transition:color var(--ease),background var(--ease),border-color var(--ease); flex-shrink:0; }
+    .nav-hamburger:hover { background:rgba(255,255,255,.05); color:var(--nv-green); border-color:rgba(118,185,0,.4); }
+    .nav-hamburger svg { width:18px; height:18px; display:block; }
+    .nav-hamburger .icon-close { display:none; }
+    .nav-hamburger.is-open .icon-menu { display:none; }
+    .nav-hamburger.is-open .icon-close { display:block; }
+    .btn { display:inline-flex; align-items:center; gap:.5rem; font-size:.875rem; font-weight:600; padding:.5rem 1.25rem; border-radius:var(--radius); border:1.5px solid transparent; cursor:pointer; transition:all var(--ease); text-decoration:none; white-space:nowrap; }
     .btn-primary { background:var(--nv-green); color:#000; border-color:var(--nv-green); }
     .btn-primary:hover { background:var(--nv-green-l); border-color:var(--nv-green-l); color:#000; }
     .btn-outline { background:transparent; color:var(--text-mut); border-color:var(--border); }
@@ -124,9 +142,9 @@
     .ex-title { color:var(--text-pri); font-size:.92rem; font-weight:600; }
     .ex-lang  { font-size:.72rem; color:var(--text-dim); margin-left:auto; font-family:var(--font-mono); }
     .ex-body pre { border:none; border-radius:0; margin:0; max-height:210px; overflow:hidden; font-size:.77rem; background:#090909; }
-    .ex-footer { padding:.9rem 1.5rem; border-top:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
-    .ex-desc { font-size:.8rem; color:var(--text-mut); }
-    .ex-link { font-size:.8rem; color:var(--nv-green); font-weight:600; }
+    .ex-footer { padding:.9rem 1.5rem; border-top:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; gap:1rem; }
+    .ex-desc { font-size:.8rem; color:var(--text-mut); min-width:0; }
+    .ex-link { font-size:.8rem; color:var(--nv-green); font-weight:600; white-space:nowrap; flex-shrink:0; }
 
     /* TUTORIALS */
     #tutorials { border-top:1px solid var(--border); }
@@ -161,7 +179,7 @@
     .pub-title { color:var(--text-pri); font-size:1rem; font-weight:600; margin-bottom:.75rem; line-height:1.4; }
     .pub-authors { font-size:.82rem; color:var(--text-mut); margin-bottom:1.25rem; }
     .pub-links { display:flex; gap:.75rem; }
-    .pub-link { font-size:.8rem; font-weight:600; padding:.3rem .75rem; border-radius:6px; border:1px solid var(--border); color:var(--text-mut); transition:all var(--ease); }
+    .pub-link { font-size:.8rem; font-weight:600; padding:.3rem .75rem; border-radius:6px; border:1px solid var(--border); color:var(--text-mut); transition:all var(--ease); white-space:nowrap; }
     .pub-link:hover { color:var(--nv-green); border-color:rgba(118,185,0,.4); background:rgba(118,185,0,.05); }
 
     /* CTA */
@@ -187,9 +205,57 @@
     ::-webkit-scrollbar { width:6px; height:6px; }
     ::-webkit-scrollbar-track { background:var(--bg-dark); }
     ::-webkit-scrollbar-thumb { background:#333; border-radius:99px; }
+    @media (max-width:1100px) {
+      /* Collapse the inline nav strip; surface a hamburger that opens the    */
+      /* same links as a full-width vertical drawer underneath the navbar.   */
+      .nav-links { display:none; }
+      .nav-hamburger { display:inline-flex; }
+      .nav-links.is-open {
+        display:flex;
+        position:fixed;
+        top:var(--nav-h);
+        left:0;
+        right:0;
+        flex-direction:column;
+        align-items:stretch;
+        gap:0;
+        background:rgba(10,10,10,.98);
+        backdrop-filter:blur(16px);
+        border-bottom:1px solid var(--border);
+        padding:.5rem 0;
+        max-height:calc(100vh - var(--nav-h));
+        overflow-y:auto;
+        z-index:999;
+        box-shadow:0 8px 32px rgba(0,0,0,.5);
+      }
+      .nav-links.is-open > a,
+      .nav-links.is-open .nav-item > a {
+        padding:.75rem 2rem;
+        border-radius:0;
+        font-size:.95rem;
+      }
+      /* Inside the drawer dropdowns flatten into an indented sub-list -- no */
+      /* hover popover, no chevron, just always-visible sub-page links.     */
+      .nav-links.is-open .nav-item { position:static; }
+      .nav-links.is-open .nav-item.nav-has-dropdown > a::after { content:''; margin:0; }
+      .nav-links.is-open .nav-dropdown {
+        display:block;
+        position:static;
+        background:transparent;
+        border:none;
+        box-shadow:none;
+        padding:0 0 .25rem;
+        min-width:0;
+      }
+      .nav-links.is-open .nav-dropdown::before { display:none; }
+      .nav-links.is-open .nav-dropdown a {
+        padding:.45rem 2rem .45rem 3.25rem;
+        font-size:.85rem;
+      }
+    }
     @media (max-width:1000px) { .hero-inner { grid-template-columns:1fr; } .hero-logo-wrap { display:none; } }
     @media (max-width:900px) { .gs-layout { grid-template-columns:1fr; } .gs-code-panel { position:static; } .footer-inner { grid-template-columns:1fr 1fr; } }
-    @media (max-width:640px) { .nav-links { display:none; } section { padding:4rem 0; } .footer-inner { grid-template-columns:1fr; } .tut-meta { display:none; } }
+    @media (max-width:640px) { section { padding:4rem 0; } .footer-inner { grid-template-columns:1fr; } .tut-meta { display:none; } .nav-actions .btn-outline { display:none; } }
   </style>
 </head>
 <body>
@@ -201,12 +267,26 @@
         <span class="nav-logo-text">DAQIRI</span>
         <span class="nav-logo-badge">NVIDIA</span>
       </a>
-      <div class="nav-links">
+      <div class="nav-links" id="nav-links">
         <a href="#features">Features</a>
-        <a href="#getting-started">Quick Start</a>
+        <a href="concepts/" class="nav-ext">Concepts</a>
+        <a href="tutorials/benchmarking_examples/" class="nav-ext">Benchmarks</a>
         <a href="#examples">Examples</a>
-        <a href="#tutorials">Tutorials</a>
-        <a href="api-reference/" class="nav-ext">API Reference</a>
+        <div class="nav-item nav-has-dropdown">
+          <a href="#tutorials">Tutorials</a>
+          <ul class="nav-dropdown">
+            <li><a href="tutorials/system_configuration/">System Configuration</a></li>
+            <li><a href="tutorials/configuration-walkthrough/">Configuration YAML Walkthrough</a></li>
+          </ul>
+        </div>
+        <div class="nav-item nav-has-dropdown">
+          <a href="api-reference/" class="nav-ext">API Reference</a>
+          <ul class="nav-dropdown">
+            <li><a href="api-reference/">API Guide</a></li>
+            <li><a href="api-reference/configuration/">Configuration YAML Reference</a></li>
+            <li><a href="api-reference/cpp/">C++ API Usage</a></li>
+          </ul>
+        </div>
         <a href="#publications">News</a>
       </div>
       <div class="nav-actions">
@@ -216,6 +296,10 @@
         </a>
         <a href="#getting-started" class="btn btn-primary">Quick Start →</a>
       </div>
+      <button type="button" class="nav-hamburger" aria-label="Toggle navigation" aria-controls="nav-links" aria-expanded="false">
+        <svg class="icon-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        <svg class="icon-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
     </div>
   </nav>
 
@@ -263,7 +347,7 @@
       <div class="section-label">Why DAQIRI</div>
       <h2 class="section-title">Closing the Gap Between Sensor and GPU</h2>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:3rem;align-items:start;margin-bottom:4rem;">
-        <p class="section-desc">Scientific and industrial instruments generate data that is richest at the source — before it is filtered, decimated, or summarized. DAQIRI places NVIDIA GPU hardware directly in that data path, forging a tight bond between upstream sensors, their data converters, and the NVIDIA compute ecosystem. The result is a new foundation for developers: the ability to work with instrument data in its rawest form, at wire speed, and to build a new class of autonomous experiments where AI can observe phenomena directly at the source, augment human analysis, and steer experiments in real time. <span style="color:var(--nv-green);font-style:italic;">Streaming Ethernet data in, GPU tensor out.</span></p>
+        <p class="section-desc">Scientific and industrial instruments generate data that is richest at the source — before it is filtered, decimated, or summarized. DAQIRI places NVIDIA GPU hardware directly in that data path, forging a tight bond between upstream sensors, their data converters, and the NVIDIA compute ecosystem. The result is a new foundation for developers: the ability to work with instrument data in its rawest form, at wire speed, and to build a new class of autonomous experiments where AI can observe phenomena directly at the source, augment human analysis, and steer experiments in real time. <span style="color:var(--nv-green);font-style:italic;">Stream data into and out of GPUs efficiently while leveraging common tensor-compute libraries.</span></p>
 
         <!-- AI Native DAQ Architecture SVG -->
         <img src="images/architecture.svg" alt="AI Native DAQ Architecture" style="width:100%;max-width:400px;display:block;margin:0 auto;"/>
@@ -282,7 +366,7 @@
         <div class="feature-card">
           <div class="feature-icon">🔀</div>
           <h3>Hardware Flow Steering</h3>
-          <p>Route packets to specific queues by UDP port, IPv4 payload length, or custom flex items — all in NIC silicon, before any software runs.</p>
+          <p>Route packets based on header matching to steer different streams to different GPUs or CPUs — entirely in NIC silicon, before any software runs.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">🔗</div>
@@ -292,7 +376,7 @@
         <div class="feature-card">
           <div class="feature-icon">📄</div>
           <h3>YAML-Driven Configuration</h3>
-          <p>Define memory regions, NIC interfaces, TX/RX queues, and flow rules in a single YAML file — or build the same config in C++ code. Switch backends, memory kinds, and buffer sizes without recompiling.</p>
+          <p>Define memory regions, NIC interfaces, TX/RX queues, and flow rules in a single YAML file — or build the same config in C++ code. Switch stream types, memory kinds, and buffer sizes without recompiling.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">📦</div>
@@ -310,7 +394,7 @@
         <div>
           <div class="section-label">Quick Start</div>
           <h2 class="section-title">Build &amp; Run in Minutes</h2>
-          <p class="section-desc">Requires a ConnectX-6 Dx+ NIC, Linux (kernel 5.4+), and the CUDA Toolkit.</p>
+          <p class="section-desc">Runs on Linux (kernel 5.4+) with the CUDA Toolkit 12.2+. The kernel-bypass and GPUDirect paths additionally require an NVIDIA ConnectX-6 Dx (or newer) NIC.</p>
         </div>
         <a href="getting-started/" class="btn btn-outline">Full Guide →</a>
       </div>
@@ -320,14 +404,15 @@
             <div class="gs-step-num">1</div>
             <div class="gs-step-body">
               <h4>Install Prerequisites</h4>
-              <p>Install MLNX5/InfiniBand drivers with peermem support (inbox on Ubuntu ≥5.4 and &lt;6.8, or OFED from DOCA-Host 2.8+). Install the CUDA Toolkit.</p>
+              <p>Install the CUDA Toolkit (12.2 or newer).</p>
+              <p>For the Raw Ethernet / GPUDirect / RoCE path, you also need an NVIDIA ConnectX-6 Dx (or newer) NIC. The default Ubuntu kernel drivers are sufficient; we recommend additionally installing <code>doca-ofed</code> for the diagnostic utilities (<code>ibstat</code>, <code>ibv_devinfo</code>, <code>mlxconfig</code>, <code>mlnx_perf</code>, …).</p>
             </div>
           </div>
           <div class="gs-step">
             <div class="gs-step-num">2</div>
             <div class="gs-step-body">
               <h4>Build from Source</h4>
-              <p>Select backends with <code>DAQIRI_MGR</code>. Valid values: <code>dpdk</code>, <code>rdma</code>.</p>
+              <p>Select implementations with <code>DAQIRI_MGR</code>. Valid values: <code>dpdk</code>, <code>socket</code>, <code>rdma</code>.</p>
               <pre><span class="cm"># Configure, build, install</span>
 cmake -S . -B build \
   -DBUILD_SHARED_LIBS=ON \
@@ -351,8 +436,8 @@ cmake --install build --prefix /opt/daqiri</pre>
             <div class="gs-step-num">4</div>
             <div class="gs-step-body">
               <h4>Tune the System</h4>
-              <p>Isolate CPU cores, enable hugepages, configure NUMA affinity. Run the diagnostic script:</p>
-              <pre>python3 python/tune_system.py</pre>
+              <p>Run the diagnostic script to surface common networking bottlenecks (CPU governor, hugepages, MRRS, NUMA, GPU clocks, MTU, BAR1, PCIe topology):</p>
+              <pre>sudo python3 python/tune_system.py --check all</pre>
             </div>
           </div>
           <div class="gs-step">
@@ -447,7 +532,7 @@ daqiri::<span class="fn">get_tx_packet_burst</span>(burst);
       payload_ptr,payload_size);
 }
 daqiri::<span class="fn">send_tx_burst</span>(burst);</pre></div>
-          <div class="ex-footer"><span class="ex-desc">Build and send a UDP burst via DPDK</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
+          <div class="ex-footer"><span class="ex-desc">Build and send a UDP burst over Raw Ethernet</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
         </div>
 
         <div class="example-card">
@@ -501,21 +586,27 @@ daqiri::<span class="fn">free_all_packets_and_burst_rx</span>(
     cpu_core: <span class="nm">9</span>
     batch_size: <span class="nm">10240</span>
     memory_regions:
-      - <span class="str">"Data_RX_CPU"</span>
       - <span class="str">"Data_RX_GPU"</span>
+  - name: <span class="str">"rx_q_1"</span>
+    id: <span class="nm">1</span>
+    cpu_core: <span class="nm">10</span>
+    batch_size: <span class="nm">10240</span>
+    memory_regions:
+      - <span class="str">"Data_RX_GPU_2"</span>
   flows:
-  - name: <span class="str">"flow_0"</span>
+  - name: <span class="str">"udp_4096"</span>
     id: <span class="nm">0</span>
     action: {type: queue, id: <span class="nm">0</span>}
-    match:
-      udp_src: <span class="nm">4096</span>
-      udp_dst: <span class="nm">4096</span>
-      ipv4_len: <span class="nm">1050</span></pre></div>
-          <div class="ex-footer"><span class="ex-desc">Route UDP 4096→4096 to queue 0 in hardware</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
+    match: {udp_dst: <span class="nm">4096</span>}
+  - name: <span class="str">"udp_4097"</span>
+    id: <span class="nm">1</span>
+    action: {type: queue, id: <span class="nm">1</span>}
+    match: {udp_dst: <span class="nm">4097</span>}</pre></div>
+          <div class="ex-footer"><span class="ex-desc">Steer UDP 4096 → GPU 0, UDP 4097 → GPU 1 in hardware</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
         </div>
 
         <div class="example-card">
-          <div class="ex-hdr"><span class="ex-dot dot-bash"></span><span class="ex-title">DPDK Benchmarks</span><span class="ex-lang">bash</span></div>
+          <div class="ex-hdr"><span class="ex-dot dot-bash"></span><span class="ex-title">Raw Ethernet Benchmarks</span><span class="ex-lang">bash</span></div>
           <div class="ex-body"><pre><span class="cm"># Build with examples</span>
 cmake -S . -B build \
   -DDAQIRI_BUILD_EXAMPLES=ON \
@@ -531,7 +622,7 @@ cmake --build build -j
 ./build/examples/daqiri_bench_raw_hds \
   examples/daqiri_bench_raw_tx_rx_hds.yaml \
   --seconds <span class="nm">10</span></pre></div>
-          <div class="ex-footer"><span class="ex-desc">Run DPDK TX/RX and HDS benchmarks</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
+          <div class="ex-footer"><span class="ex-desc">Run Raw Ethernet TX/RX and HDS benchmarks</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
         </div>
 
         <div class="example-card">
@@ -569,14 +660,14 @@ cmake --build build -j
         <a href="getting-started/" class="btn btn-outline">Getting Started →</a>
       </div>
       <div class="tutorials-list">
-        <a href="getting-started/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">01</span><div class="tut-info"><div class="tut-title">Requirements &amp; Installation</div><div class="tut-desc">Hardware (ConnectX-6 Dx+), driver setup (OFED from DOCA-Host 2.8+ or inbox on Ubuntu 5.4–6.7), and CUDA Toolkit installation on Linux 5.4+.</div></div><div class="tut-meta"><span class="tag tag-beg">Beginner</span><span class="tut-time">~15 min</span></div><span class="tut-arrow">→</span></a>
+        <a href="getting-started/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">01</span><div class="tut-info"><div class="tut-title">Requirements &amp; Installation</div><div class="tut-desc">Hardware (NVIDIA ConnectX-6 Dx or newer for kernel-bypass and GPUDirect), default Ubuntu kernel drivers plus optional <code>doca-ofed</code> for diagnostics, and CUDA Toolkit 12.2+ on Linux 5.4+.</div></div><div class="tut-meta"><span class="tag tag-beg">Beginner</span><span class="tut-time">~15 min</span></div><span class="tut-arrow">→</span></a>
         <div class="tut-item tut-soon"><span class="tut-num">02</span><div class="tut-info"><div class="tut-title">Building from Source with CMake</div><div class="tut-desc">Configure <code>DAQIRI_MGR</code>, <code>DAQIRI_BUILD_PYTHON</code>, <code>BUILD_SHARED_LIBS</code>, and <code>DAQIRI_BUILD_EXAMPLES</code>. Build for A100/H100 (CUDA arches 80, 90).</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
         <div class="tut-item tut-soon"><span class="tut-num">03</span><div class="tut-info"><div class="tut-title">Container Build with Patched DPDK</div><div class="tut-desc">Build the Docker image with <code>build-container.sh</code>. The container ships a dmabuf-patched DPDK, so peermem is not required.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
         <a href="tutorials/system_configuration/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">04</span><div class="tut-info"><div class="tut-title">System Tuning for High-Performance Networking</div><div class="tut-desc">Isolate CPU cores, configure hugepages, set NUMA affinity, and run <code>python/tune_system.py</code> to diagnose common configuration issues.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~30 min</span></div><span class="tut-arrow">→</span></a>
         <a href="tutorials/benchmarking_examples/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">05</span><div class="tut-info"><div class="tut-title">Benchmarking Examples</div><div class="tut-desc">Run a TX/RX loopback test to validate your setup, and walk through interpreting throughput results.</div></div><div class="tut-meta"><span class="tag tag-beg">Beginner</span><span class="tut-time">~20 min</span></div><span class="tut-arrow">→</span></a>
         <a href="tutorials/configuration-walkthrough/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">06</span><div class="tut-info"><div class="tut-title">YAML Configuration Deep Dive</div><div class="tut-desc">Memory regions (<code>huge</code>, <code>device</code>, <code>host_pinned</code>), RX/TX queue setup, flow steering rules, flex items, and RDMA client/server config schemas.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~40 min</span></div><span class="tut-arrow">→</span></a>
         <div class="tut-item tut-soon"><span class="tut-num">07</span><div class="tut-info"><div class="tut-title">GPUDirect: Header-Data Split Pipeline</div><div class="tut-desc">Configure a two-region memory layout, access CPU headers and GPU payloads per-packet with <code>get_segment_packet_ptr()</code>, and reorder scattered GPU buffers with the built-in CUDA kernel.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
-        <div class="tut-item tut-soon"><span class="tut-num">08</span><div class="tut-info"><div class="tut-title">RDMA Client/Server Setup</div><div class="tut-desc">Configure the RDMA backend with RC transport, assign client and server roles across two hosts, and run <code>daqiri_bench_rdma</code> to validate the connection.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
+        <div class="tut-item tut-soon"><span class="tut-num">08</span><div class="tut-info"><div class="tut-title">RoCE (RDMA) Client/Server Setup</div><div class="tut-desc">Configure <code>stream_type: socket</code>, <code>protocol: roce</code> with RC transport, assign client and server roles across two hosts, and run <code>daqiri_bench_rdma</code> to validate the connection.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
         <div class="tut-item tut-soon"><span class="tut-num">09</span><div class="tut-info"><div class="tut-title">Timed TX with ConnectX-7</div><div class="tut-desc">Enable <code>accurate_send</code> in the TX config and use <code>set_packet_tx_time()</code> for PTP-synchronized, hardware-scheduled packet transmission on ConnectX-7+.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
       </div>
     </div>
@@ -596,7 +687,7 @@ cmake --build build -j
         <div class="pub-card">
           <div class="pub-venue"><span class="pub-badge">GitHub</span><span class="pub-year">2025</span></div>
           <div class="pub-title">DAQIRI Open-Sourced on GitHub</div>
-          <div class="pub-authors">NVIDIA — Initial public release under Apache 2.0, featuring DPDK and RDMA backends with GPUDirect support for ConnectX-6 Dx and later NICs.</div>
+          <div class="pub-authors">NVIDIA — Initial public release under Apache 2.0, featuring Raw Ethernet and RoCE stream types with GPUDirect support for ConnectX-6 Dx and later NICs.</div>
           <div class="pub-links"><a href="https://github.com/NVIDIA/daqiri" class="pub-link" target="_blank">Repository ↗</a></div>
         </div>
         <div class="pub-card">
@@ -692,4 +783,38 @@ cmake --build build -j</pre>
   </footer>
 
   <script>
-    const nb = document.getElementById
+    // Toggle .scrolled on #navbar once the user has scrolled a few pixels --
+    // CSS at the top of <style> uses this to drop a soft shadow under the bar.
+    const nb = document.getElementById('navbar');
+    if (nb) {
+      const updateScrolled = () => nb.classList.toggle('scrolled', window.scrollY > 8);
+      updateScrolled();
+      window.addEventListener('scroll', updateScrolled, { passive: true });
+    }
+
+    // Hamburger drawer for tablet / mobile viewports (<1100px). The button
+    // is hidden via CSS on wider viewports, so the listener is harmless
+    // there.
+    const ham   = document.querySelector('.nav-hamburger');
+    const links = document.querySelector('.nav-links');
+    if (ham && links) {
+      const setOpen = (open) => {
+        links.classList.toggle('is-open', open);
+        ham.classList.toggle('is-open', open);
+        ham.setAttribute('aria-expanded', String(open));
+      };
+      ham.addEventListener('click', () => setOpen(!links.classList.contains('is-open')));
+      // Tapping any link inside the drawer should dismiss it -- otherwise the
+      // drawer stays pinned over the page that the link scrolled / navigated
+      // to.
+      links.addEventListener('click', (e) => {
+        if (e.target.closest('a')) setOpen(false);
+      });
+      // Same when the viewport grows back past the breakpoint.
+      window.addEventListener('resize', () => {
+        if (window.innerWidth > 1100 && links.classList.contains('is-open')) setOpen(false);
+      });
+    }
+  </script>
+</body>
+</html>

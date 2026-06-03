@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # Benchmarking Examples
 
 DAQIRI provides a benchmarking application named `daqiri_bench_raw_gpudirect` that can be used to test the performance of the networking configuration. In this section, we'll walk you through the steps needed to configure the application for your NIC for Tx and Rx, and run a loopback test between the two interfaces with a [physical SFP cable](https://www.nvidia.com/en-us/networking/interconnect/) connecting them.
@@ -22,7 +27,7 @@ For a persistent allocation across reboots, use the grub recipe in [Step 4 of Sy
 
 ## Running the DAQIRI container
 
-If you built DAQIRI using the container approach, use the following command to launch the container with DPDK and GPU support. The host system must be fully configured (see [System Configuration](system_configuration.md)) before the container can access the NIC and GPU hardware.
+If you built DAQIRI using the container approach, use the following command to launch the container with Raw Ethernet (DPDK) and GPU support. The host system must be fully configured (see [System Configuration](system_configuration.md)) before the container can access the NIC and GPU hardware.
 
 ```bash
 docker run --rm -it --privileged \
@@ -376,7 +381,7 @@ The `*_packets_phy` and `*_bytes_phy` counters are physical-link counters. They 
         [CRITICAL] Cannot start device err=-95, port=0
         ```
 
-        The DPDK backend uses Hardware Steering (HWS) via the `dv_flow_en=2` mlx5 device argument. HWS requires compatible versions of both the NIC firmware and the host's MLNX_OFED kernel modules. Per the [DPDK mlx5 documentation](https://doc.dpdk.org/guides/nics/mlx5.html), the minimum requirements are ConnectX-6 Dx or later with firmware `xx.35.1012`+, but the host's OFED/kernel driver must also support the HWS features expected by the DPDK version in use.
+        Raw Ethernet (DPDK-backed) uses Hardware Steering (HWS) via the `dv_flow_en=2` mlx5 device argument. HWS requires compatible versions of both the NIC firmware and the host's MLNX_OFED kernel modules. Per the [DPDK mlx5 documentation](https://doc.dpdk.org/guides/nics/mlx5.html), the minimum requirements are ConnectX-6 Dx or later with firmware `xx.35.1012`+, but the host's OFED/kernel driver must also support the HWS features expected by the DPDK version in use.
 
         Check your OFED and firmware versions:
 

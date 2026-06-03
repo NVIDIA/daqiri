@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # C++ API Usage
 
 This guide covers C++ initialization, RX/TX workflows, buffer lifecycle calls, file
@@ -28,9 +33,9 @@ auto status = daqiri::daqiri_init(config);
 After `daqiri_init()` returns `Status::SUCCESS`, all memory regions are allocated, NIC
 queues are configured, and worker threads are running.
 
-If GPU RX `reorder_configs` are configured for the DPDK backend, set one CUDA stream
-per GPU reorder plan before pulling reordered bursts. CPU reorder configs do not use a
-CUDA stream. See the [Configuration YAML Reference](configuration.md#rx-reorder-configs-dpdk-v1)
+If GPU RX `reorder_configs` are configured for Raw Ethernet (`stream_type: "raw"`), set
+one CUDA stream per GPU reorder plan before pulling reordered bursts. CPU reorder configs do not use a
+CUDA stream. See the [Configuration YAML Reference](configuration.md#rx-reorder-configs)
 for reorder configuration constraints.
 
 ```cpp
@@ -81,11 +86,11 @@ for (int i = 0; i < daqiri::get_num_packets(burst); i++) {
 }
 ```
 
-RX hardware timestamps are available only when the DPDK backend is configured with
-`rx.hardware_timestamps: true` and the NIC supports `RTE_ETH_RX_OFFLOAD_TIMESTAMP`.
-DAQIRI converts the NIC timestamp counter to nanoseconds internally using DPDK's
-matching device clock when available, or the PMD's nanosecond timestamp format when
-the driver already supplies nanoseconds. DAQIRI does not expose NIC clock reads or
+RX hardware timestamps are available only when Raw Ethernet (`stream_type: "raw"`) is
+configured with `rx.hardware_timestamps: true` and the NIC supports
+`RTE_ETH_RX_OFFLOAD_TIMESTAMP`. DAQIRI converts the NIC timestamp counter to nanoseconds
+internally using the matching device clock when available, or the PMD's nanosecond
+timestamp format when the driver already supplies nanoseconds. DAQIRI does not expose NIC clock reads or
 convert timestamps to wall-clock time. For reordered aggregate bursts,
 `get_packet_rx_timestamp(burst, 0, &ts)` returns the timestamp of the first source
 packet accepted into the aggregate.
