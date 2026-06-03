@@ -243,8 +243,8 @@ cmake -S . -B build ... -DCMAKE_CUDA_ARCHITECTURES=89
 # Example: A100 + Ada + Hopper, skip GB10
 cmake -S . -B build ... -DCMAKE_CUDA_ARCHITECTURES="80;89;90"
 
-# Example: RTX Pro 6000 Blackwell only
-cmake -S . -B build ... -DCMAKE_CUDA_ARCHITECTURES=100
+# Example: RTX PRO 6000 Blackwell Server/Workstation Edition only (sm_120)
+cmake -S . -B build ... -DCMAKE_CUDA_ARCHITECTURES=120
 ```
 
 The override is honored because `src/CMakeLists.txt` only sets `CMAKE_CUDA_ARCHITECTURES` when it is not already defined; a user-supplied `-D` value takes precedence. Common values:
@@ -255,12 +255,13 @@ The override is honored because `src/CMakeLists.txt` only sets `CMAKE_CUDA_ARCHI
 | RTX 30xx, A40 | `86` |
 | RTX 40xx, RTX 6000 Ada, L40 | `89` |
 | H100, H200 | `90` |
-| Blackwell datacenter (RTX Pro 6000 Blackwell) | `100` |
+| Blackwell datacenter (B100, B200, GB100, GB200) | `100` |
+| Blackwell consumer / workstation (RTX PRO 6000 Blackwell, RTX 5090) | `120` |
 | GB10 (DGX Spark) | `121` |
 
-!!! warning "Default list omits sm_86, sm_89, and sm_100"
+!!! warning "Default list omits sm_86, sm_89, sm_100, and sm_120"
 
-    If your GPU is Ampere (RTX 30xx, A40), Ada (RTX 40xx, RTX 6000 Ada), or RTX Pro 6000 Blackwell, the default build will not contain native code for your card. The binary may still load via PTX JIT for some architectures, but for production use pass the matching `sm_*` value via `-DCMAKE_CUDA_ARCHITECTURES=...`.
+    If your GPU is Ampere (RTX 30xx, A40), Ada (RTX 40xx, RTX 6000 Ada), datacenter Blackwell (B100, B200, GB100, GB200), or workstation Blackwell (RTX PRO 6000 Blackwell, RTX 5090), the default build will not contain native code for your card. The binary may still load via PTX JIT for some architectures, but for production use pass the matching `sm_*` value via `-DCMAKE_CUDA_ARCHITECTURES=...`.
 
 !!! warning "`sm_121` requires a recent CUDA Toolkit"
 
@@ -429,10 +430,10 @@ The build recipe above is the same on every supported host. The notes below cove
 === "x86_64 RTX Pro Server"
 
     - "RTX Pro Server" covers any `x86_64` workstation or server with a ConnectX-6 Dx (or later) NIC and an RTX Pro / Workstation GPU. Confirm `nvidia-smi` reports a GPUDirect-capable GPU (any RTX Pro / Quadro / Data Center class card; **not** GeForce; see the warning in [Concepts → GPUDirect](../concepts.md#gpudirect)).
-    - Set `-DCMAKE_CUDA_ARCHITECTURES` to match the installed card. RTX Pro 6000 Blackwell is `100`; RTX 6000 Ada is `89`; RTX A6000 is `86`:
+    - Set `-DCMAKE_CUDA_ARCHITECTURES` to match the installed card. RTX PRO 6000 Blackwell Server/Workstation Edition is `120` (workstation Blackwell, `sm_120`); RTX 6000 Ada is `89`; RTX A6000 is `86`. Confirm with `nvidia-smi --query-gpu=compute_cap --format=csv,noheader` (e.g. `12.0` → `120`):
 
         ```bash
-        cmake -S . -B build ... -DCMAKE_CUDA_ARCHITECTURES=100
+        cmake -S . -B build ... -DCMAKE_CUDA_ARCHITECTURES=120
         ```
 
     - x86_64 hosts use `/usr/local/lib/x86_64-linux-gnu/pkgconfig` for the DPDK `.pc` file; that's the default `PKG_CONFIG_PATH` entry shown in [Step 3.4](#34-verify).
