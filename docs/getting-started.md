@@ -65,6 +65,22 @@ First, add the [DOCA apt repository](https://developer.nvidia.com/doca-downloads
     sudo apt update
     ```
 
+=== "x86_64 (Ubuntu 24.04)"
+
+    ```bash
+    export DOCA_URL="https://linux.mellanox.com/public/repo/doca/3.2.1/ubuntu24.04/x86_64/"
+    wget -qO- https://linux.mellanox.com/public/repo/doca/GPG-KEY-Mellanox.pub | gpg --dearmor - | sudo tee /etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub > /dev/null
+    echo "deb [signed-by=/etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub] $DOCA_URL ./"  | sudo tee /etc/apt/sources.list.d/doca.list > /dev/null
+
+    # Also need the CUDA repository: https://developer.nvidia.com/cuda-downloads?target_os=Linux
+    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+    sudo dpkg -i cuda-keyring_1.1-1_all.deb
+
+    sudo apt update
+    ```
+
+    DOCA `3.2.1` matches the `Dockerfile`'s `DOCA_VERSION`, so the bare-metal recipe stays in lockstep with the container build. Earlier DOCA releases that publish an `ubuntu24.04/x86_64` directory also work.
+
 Then build the DAQIRI library:
 
 === "Container build (recommended)"
