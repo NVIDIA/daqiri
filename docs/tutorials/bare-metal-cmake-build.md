@@ -66,6 +66,7 @@ sudo apt install -y --no-install-recommends \
     git \
     curl \
     ca-certificates \
+    gnupg \
     pkg-config \
     ninja-build \
     meson \
@@ -81,7 +82,7 @@ sudo apt install -y --no-install-recommends \
 
 !!! note "apt may select `ibverbs-providers` instead of `libmlx5-1`"
 
-    On some host configurations apt resolves `libmlx5-1` to the `ibverbs-providers` virtual package (the inbox bundle of mlx5/mlx4 user-space providers). This is fine: `libmlx5.so.1` ends up installed either way and DAQIRI links against it through `libibverbs`. If you want the DOCA-provided build specifically, install `libmlx5-1` and `libmlx5-dev` after the DOCA repo from [Step 1](#step-1-configure-the-doca-apt-repository) is configured.
+    On many host configurations (always on Ubuntu 24.04 with DOCA 3.2.1, where `libmlx5-1` has no DOCA candidate) apt resolves `libmlx5-1` to the `ibverbs-providers` virtual package (the inbox bundle of mlx5/mlx4 user-space providers). This is fine: `libmlx5.so.1` ends up installed either way and DAQIRI links against it through `libibverbs`. If you want the DOCA-provided build specifically, install `libmlx5-1` and `libmlx5-dev` after the DOCA repo from [Step 1](#step-1-configure-the-doca-apt-repository) is configured.
 
 DAQIRI's top-level CMake requires version 3.20 or newer (see [CMakeLists.txt](https://github.com/NVIDIA/daqiri/blob/main/CMakeLists.txt)). On Ubuntu 22.04 the distribution package is too old; install a current build from the Kitware APT repository:
 
@@ -357,9 +358,9 @@ A successful run prints a stream of `[INFO]` lines followed by an RX/TX rate sum
 
     The default in `src/CMakeLists.txt` already suppresses the `121` auto-append on CUDA < 13.0, so this error generally only appears when the override was provided explicitly. See the [GPU compute capability table](#cmake_cuda_architectures-gpu-compute-capability) for valid values.
 
-??? failure "Runtime: `EAL: No free hugepages reported`"
+??? failure "Runtime: `EAL: Cannot get hugepage information` or `EAL: No free hugepages reported`"
 
-    DPDK could not allocate hugepages because none are reserved. Hugepage configuration is part of system setup, not the build. Follow [System Configuration → Step 4: Enable Huge pages](system_configuration.md#step-4-enable-huge-pages) to add a persistent reservation, or reserve some temporarily with:
+    DPDK could not allocate hugepages because none are reserved (`Cannot get hugepage information` when `nr_hugepages` is zero, or `No free hugepages reported` when the reserved pool is exhausted). Hugepage configuration is part of system setup, not the build. Follow [System Configuration → Step 4: Enable Huge pages](system_configuration.md#step-4-enable-huge-pages) to add a persistent reservation, or reserve some temporarily with:
 
     ```bash
     echo 1024 | sudo tee /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
