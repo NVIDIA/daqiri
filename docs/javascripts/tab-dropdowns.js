@@ -18,6 +18,7 @@
     ],
     "Tutorials": [
       { label: "System Configuration",          path: "tutorials/system_configuration/" },
+      { label: "Bare-Metal CMake Build",        path: "tutorials/bare-metal-cmake-build/" },
       { label: "Configuration YAML Walkthrough", path: "tutorials/configuration-walkthrough/" }
     ]
   };
