@@ -139,6 +139,31 @@ sudo apt install -y \
 sudo apt install -y pybind11-dev
 ```
 
+### Uninstall
+
+To remove DAQIRI's container image or bare-metal install without touching the build prerequisites (DPDK, DOCA libraries, CUDA, hugepages, NIC drivers), use [`scripts/uninstall.sh`](https://github.com/NVIDIA/daqiri/blob/main/scripts/uninstall.sh):
+
+=== "Container"
+
+    ```bash
+    scripts/uninstall.sh container             # interactive
+    scripts/uninstall.sh container --dry-run   # show what would be removed
+    ```
+
+    Override `IMAGE_TAG=` if you built with a non-default tag.
+
+=== "CMake build (bare-metal)"
+
+    ```bash
+    scripts/uninstall.sh cmake             # interactive, manifest-driven
+    scripts/uninstall.sh cmake --dry-run   # show what would be removed
+    scripts/uninstall.sh cmake --yes       # non-interactive
+    ```
+
+    See [Step 7: Uninstall](tutorials/bare-metal-cmake-build.md#step-7-uninstall) in the bare-metal tutorial for manifest semantics, the `DAQIRI_PREFIX` override, and verification details.
+
+Pass `all` instead of `container` or `cmake` to remove both.
+
 ### Use an Installed Library
 
 After installation, CMake consumers can link against the exported target:

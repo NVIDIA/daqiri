@@ -396,6 +396,20 @@ A successful run prints a stream of `[INFO]` lines followed by an RX/TX rate sum
 
     The user-space libraries are installed but the kernel drivers are not; `lsmod | grep mlx5` will be empty. Follow [Check your NIC drivers](system_configuration.md#check-your-nic-drivers) to install `doca-ofed` and reboot.
 
+## Step 7: Uninstall
+
+To remove the CMake install while keeping every prerequisite (DPDK, DOCA libraries, CUDA, hugepages, NIC drivers) in place, run [`scripts/uninstall.sh`](https://github.com/NVIDIA/daqiri/blob/main/scripts/uninstall.sh) with the `cmake` target:
+
+```bash
+scripts/uninstall.sh cmake             # interactive, with manifest preview
+scripts/uninstall.sh cmake --dry-run   # show what would be removed
+scripts/uninstall.sh cmake --yes       # non-interactive
+```
+
+The script reads `build/install_manifest.txt` (written by [Step 5.2](#52-install)) for the canonical list of installed paths. Override the install prefix with `DAQIRI_PREFIX=...` if you installed somewhere other than `/opt/daqiri`, or `BUILD_DIR=...` if your build tree is named something other than `build`. When the manifest is missing, the script falls back to a name-scoped scan that auto-removes only DAQIRI-owned artifacts and flags vendored `spdlog/`, `yaml-cpp/`, and `libyaml-cpp.so*` for manual review. The final step runs verification (`ls /opt/daqiri`, `pkg-config --modversion daqiri`, `ldconfig -p | grep daqiri`) and exits non-zero if any DAQIRI artifact is still present.
+
+Pass `all` instead of `cmake` to also remove the container image (`docker image rm "$IMAGE_TAG"`) in the same run.
+
 ## Platform-specific notes
 
 The build recipe above is the same on every supported host. The notes below cover the few places where defaults or expectations diverge. Open the tab that matches your hardware.
