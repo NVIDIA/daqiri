@@ -78,10 +78,10 @@
 
     /* HERO */
     #hero { min-height:calc(100vh - 24px); display:flex; align-items:center; padding:calc(var(--nav-h) + 3rem) 0 4rem; position:relative; overflow:hidden; }
-    .hero-inner { display:grid; grid-template-columns:minmax(0,1fr) minmax(460px,650px); column-gap:2rem; row-gap:2rem; align-items:center; }
+    .hero-inner { display:grid; grid-template-columns:minmax(0,1fr) minmax(460px,700px); column-gap:2rem; row-gap:2rem; align-items:center; }
     .hero-visual { position:relative; z-index:1; grid-column:2; grid-row:1 / span 3; display:flex; align-items:center; justify-content:center; }
     .hero-visual::before { content:''; position:absolute; inset:-5% -8% -2%; background:radial-gradient(ellipse,rgba(118,185,0,.28) 0%,transparent 68%); filter:blur(20px); z-index:-1; }
-    .hero-visual-link { display:block; width:min(100%,650px); padding:.45rem; border-radius:20px; appearance:none; background:linear-gradient(135deg,rgba(118,185,0,.34),rgba(93,216,242,.18)); border:1px solid rgba(160,208,0,.38); box-shadow:0 24px 70px rgba(0,0,0,.58),0 0 0 1px rgba(255,255,255,.05) inset; transition:transform var(--ease),border-color var(--ease),box-shadow var(--ease); cursor:zoom-in; }
+    .hero-visual-link { display:block; width:min(100%,700px); padding:.45rem; border-radius:20px; appearance:none; background:linear-gradient(135deg,rgba(118,185,0,.34),rgba(93,216,242,.18)); border:1px solid rgba(160,208,0,.38); box-shadow:0 24px 70px rgba(0,0,0,.58),0 0 0 1px rgba(255,255,255,.05) inset; transition:transform var(--ease),border-color var(--ease),box-shadow var(--ease); cursor:zoom-in; }
     .hero-visual-link:hover { transform:translateY(-2px); border-color:rgba(160,208,0,.68); box-shadow:0 30px 90px rgba(0,0,0,.65),0 0 34px rgba(118,185,0,.16); }
     .hero-visual-link:focus-visible { outline:2px solid var(--nv-green); outline-offset:4px; }
     .hero-visual img { width:100%; display:block; border-radius:16px; filter:contrast(1.08) brightness(1.08) saturate(1.12) drop-shadow(0 0 44px rgba(118,185,0,0.18)); }
@@ -91,7 +91,7 @@
     .hero-eyebrow { display:inline-flex; align-items:center; gap:.5rem; font-size:.72rem; font-weight:700; letter-spacing:.15em; text-transform:uppercase; color:var(--nv-green); background:rgba(118,185,0,.08); border:1px solid rgba(118,185,0,.2); border-radius:99px; padding:.35rem 1rem; margin-bottom:2rem; }
     .hero-eyebrow::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--nv-green); animation:pulse 2s ease-in-out infinite; }
     @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.8)} }
-    .hero-title { font-size:clamp(1.9rem,3.3vw,2.65rem); margin-bottom:1.5rem; }
+    .hero-title { font-size:clamp(1.85rem,2.8vw,2.35rem); margin-bottom:1.5rem; }
     .hero-title .hi { color:var(--nv-green); }
     .hero-desc { font-size:1.15rem; color:var(--text-mut); max-width:620px; margin-bottom:0; line-height:1.75; }
     .hero-actions { position:relative; z-index:1; grid-column:1; display:flex; align-items:center; gap:1rem; flex-wrap:wrap; }
@@ -345,11 +345,12 @@
             DAQIRI (Data Acquisition for Integrated Real-time Instruments) moves high-bandwidth data between external
             sensors and CPU or NVIDIA GPU memory. Streams can arrive from PCIe devices such as FPGAs or from network-capable sensors
             over Raw Ethernet (UDP/TCP) or RoCE/RDMA, giving applications one zero-copy path for ingest and egress.
+            GPU-resident data can also write out through GPUDirect Storage.
           </p>
         </div>
         <div class="hero-visual">
           <button class="hero-visual-link" type="button" data-graphic-open aria-controls="daqiri-graphic-overlay" aria-label="Open the DAQIRI sensor data path graphic overlay">
-            <img src="images/daqiri-landing-graphic.svg" alt="DAQIRI moves PCIe FPGA and network sensor data into or out of CPU or NVIDIA GPU memory" />
+            <img src="images/daqiri-landing-graphic.svg" alt="DAQIRI moves PCIe FPGA and network sensor data into or out of CPU or NVIDIA GPU memory, then writes GPU data to storage through GPUDirect Storage" />
           </button>
         </div>
         <div class="warn-banner">
@@ -818,14 +819,14 @@ cmake --build build -j</pre>
     <div class="graphic-overlay-backdrop" data-graphic-close></div>
     <div class="graphic-overlay-panel" role="dialog" aria-modal="true" aria-labelledby="daqiri-graphic-title">
       <div class="graphic-overlay-bar">
-        <h2 class="graphic-overlay-title" id="daqiri-graphic-title">DAQIRI Sensor Data Paths</h2>
+        <h2 class="graphic-overlay-title" id="daqiri-graphic-title">DAQIRI Sensor Data and Storage Paths</h2>
         <button class="graphic-overlay-close" type="button" data-graphic-close aria-label="Close graphic overlay">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
           </svg>
         </button>
       </div>
-      <img class="graphic-overlay-img" src="images/daqiri-landing-graphic.svg" alt="DAQIRI moves PCIe FPGA and network sensor data into or out of CPU or NVIDIA GPU memory" />
+      <img class="graphic-overlay-img" src="images/daqiri-landing-graphic.svg" alt="DAQIRI moves PCIe FPGA and network sensor data into or out of CPU or NVIDIA GPU memory, then writes GPU data to storage through GPUDirect Storage" />
     </div>
   </div>
 
