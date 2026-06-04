@@ -172,11 +172,15 @@ RDMA transport settings:
 
 ### Flows
 
-`rx.flows:` — Flow rules that steer packets to specific queues based on match criteria.
+`rx.flows:` — Static startup flow rules that steer packets to specific queues based on
+match criteria. This sequence may be omitted; a queues-only RX config can add DPDK RX
+flows later with the dynamic flow API.
 
 - **`name`**: Flow name.
   - type: `string`
-- **`id`**: Flow ID. Retrievable at runtime via `get_packet_flow_id()`.
+- **`id`**: Non-zero static flow ID. Retrievable at runtime via `get_packet_flow_id()`.
+  Static IDs are reserved for the lifetime of the process and are not deletable through
+  the dynamic flow API.
   - type: `integer`
 - **`action`**: What to do with matched packets.
   - **`type`**: Action type. Only `queue` is currently supported.
@@ -201,10 +205,22 @@ RDMA transport settings:
 ### Flow Isolation
 
 `rx.flow_isolation:` — When `true`, only packets matching an explicit flow rule are delivered.
-Unmatched packets are dropped. When `false`, unmatched packets go to a default queue.
+Unmatched packets are dropped. When `false`, unmatched packets go to a default queue. A
+queues-only config can set `flow_isolation: true` and then install dynamic RX flows after
+`daqiri_init()`.
 
 - type: `boolean`
 - default: `false`
+
+### Dynamic Flow Capacity
+
+`rx.dynamic_flow_capacity:` — DPDK template-table capacity reserved for dynamic RX flow
+rules on this interface. DAQIRI uses this when the DPDK template/async fast path is
+available; legacy fallback paths still accept dynamic RX flow operations but do not use a
+template table.
+
+- type: `integer`
+- default: `1024`
 
 ### Hardware Timestamps
 

@@ -48,8 +48,10 @@
 #include <atomic>
 #include <thread>
 #include <deque>
+#include <queue>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include "src/manager.h"
 #include <daqiri/daqiri.h>
 #include "daqiri_dpdk_stats.h"
@@ -104,7 +106,7 @@ class DpdkMgr : public Manager {
   void* get_packet_ptr(BurstParams* burst, int idx) override;
   uint32_t get_segment_packet_length(BurstParams* burst, int seg, int idx) override;
   uint32_t get_packet_length(BurstParams* burst, int idx) override;
-  uint16_t get_packet_flow_id(BurstParams* burst, int idx) override;
+  FlowId get_packet_flow_id(BurstParams* burst, int idx) override;
   Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) override;
   void* get_packet_extra_info(BurstParams* burst, int idx) override;
   Status get_tx_packet_burst(BurstParams* burst) override;
@@ -141,6 +143,9 @@ class DpdkMgr : public Manager {
   Status get_mac_addr(int port, char* mac) override;
   Status drop_all_traffic(int port) override;
   Status allow_all_traffic(int port) override;
+  Status add_rx_flow_async(int port, const FlowRuleConfig& flow, FlowOpId* op_id) override;
+  Status delete_flow_async(FlowId flow_id, FlowOpId* op_id) override;
+  Status poll_flow_op(FlowOpResult* result) override;
   void shutdown() override;
   void print_stats() override;
   void adjust_memory_regions() override;
@@ -163,6 +168,7 @@ class DpdkMgr : public Manager {
   bool calibrate_rx_timestamp_clock(uint16_t port_id);
   int setup_pools_and_rings(int max_rx_batch, int max_tx_batch);
   struct rte_flow* add_flow(int port, const FlowConfig& cfg);
+  bool ensure_rx_flow_jump_rule(uint16_t port);
   void create_dummy_rx_q();
   void create_dummy_tx_q();
   struct rte_flow* add_modify_flow_set(int port, int queue, const char* buf, int len,
@@ -170,7 +176,73 @@ class DpdkMgr : public Manager {
 
   static struct rte_flow_item_flex_handle *create_flex_flow_rule(
     int port, int offset, struct rte_flow_item *udp_item, struct rte_flow_item *end_pattern);
-  struct rte_flow* add_flex_item_flow(int port, const FlexItemMatch& match, uint16_t queue_id);
+  struct rte_flow* add_flex_item_flow(int port,
+                                      const FlexItemMatch& match,
+                                      uint16_t queue_id,
+                                      FlowId mark_id = 0);
+
+  enum class DynamicFlowBackend {
+    LEGACY,
+    TEMPLATE,
+  };
+
+  enum class DynamicFlowState {
+    ADDING,
+    ACTIVE,
+    DELETING,
+  };
+
+  struct DynamicFlowEntry {
+    FlowId flow_id = 0;
+    uint16_t port = 0;
+    uint16_t queue = 0;
+    struct rte_flow* flow = nullptr;
+    DynamicFlowBackend backend = DynamicFlowBackend::LEGACY;
+    DynamicFlowState state = DynamicFlowState::ADDING;
+    uint32_t flow_queue_id = 0;
+  };
+
+  struct PendingFlowOp {
+    FlowOpResult result;
+    FlowId flow_id = 0;
+  };
+
+  struct PortFlowTemplateState {
+    bool configured = false;
+    bool templates_ready = false;
+    uint32_t flow_queue_id = 0;
+    uint32_t capacity = DEFAULT_DYNAMIC_FLOW_CAPACITY;
+    struct rte_flow_template_table* normal_table = nullptr;
+    std::vector<struct rte_flow_pattern_template*> normal_pattern_templates;
+    struct rte_flow_actions_template* mark_queue_actions_template = nullptr;
+  };
+
+  FlowOpId allocate_flow_op_id();
+  FlowId allocate_dynamic_flow_id();
+  bool reserve_static_flow_ids();
+  bool validate_dynamic_rx_flow(int port, const FlowRuleConfig& flow) const;
+  bool is_valid_rx_queue(int port, uint16_t queue_id) const;
+  bool is_normal_flow_match(const FlowMatch& match) const;
+  uint8_t normal_flow_pattern_index(const FlowMatch& match) const;
+  void build_normal_flow_pattern(const FlowMatch& match, struct rte_flow_item pattern[]) const;
+  void build_mark_queue_actions(FlowId flow_id, uint16_t queue_id, struct rte_flow_action action[]) const;
+  Status enqueue_software_flow_completion(const FlowOpResult& result);
+  Status add_rx_flow_legacy_locked(int port,
+                                   const FlowRuleConfig& flow,
+                                   FlowId flow_id,
+                                   FlowOpId op_id);
+  Status add_rx_flow_template_locked(int port,
+                                     const FlowRuleConfig& flow,
+                                     FlowId flow_id,
+                                     FlowOpId op_id);
+  Status delete_flow_legacy_locked(DynamicFlowEntry& entry, FlowOpId op_id);
+  Status delete_flow_template_locked(DynamicFlowEntry& entry, FlowOpId op_id);
+  bool configure_flow_api_for_port(uint16_t port, uint32_t capacity);
+  bool ensure_normal_flow_template_table(uint16_t port);
+  void poll_dpdk_flow_completions_locked();
+  void cleanup_dynamic_flows();
+  static void* flow_op_user_data(FlowOpId op_id);
+  static FlowOpId flow_op_id_from_user_data(void* user_data);
 
   void apply_tx_offloads(int port);
 
@@ -266,7 +338,7 @@ class DpdkMgr : public Manager {
   struct ReorderQueueState {
     bool enabled = false;
     bool single_plan_fast_path = false;
-    std::unordered_map<uint16_t, size_t> flow_id_to_plan;
+    std::unordered_map<FlowId, size_t> flow_id_to_plan;
     std::vector<ReorderPlanRuntime> plans;
     std::vector<std::vector<int>> plan_pkt_indices;
     std::vector<size_t> plan_pkt_counts;
@@ -315,6 +387,8 @@ class DpdkMgr : public Manager {
   void release_reorder_output_context(BurstParams* burst);
 
   std::array<struct rte_ether_addr, MAX_IFS> mac_addrs;
+  std::array<struct rte_flow*, RTE_MAX_ETHPORTS> rx_flow_jump_rules_{};
+  std::array<PortFlowTemplateState, RTE_MAX_ETHPORTS> flow_template_states_{};
   std::unordered_map<uint32_t, struct rte_ring*> rx_rings;
   struct rte_ether_addr conf_ports_eth_addr[RTE_MAX_ETHPORTS];
   std::unordered_map<uint16_t, struct rte_flow_item_flex_handle*> flex_item_handles_;
@@ -331,6 +405,13 @@ class DpdkMgr : public Manager {
   std::unordered_map<uint32_t, ReorderQueueState> reorder_queue_states_;
   std::mutex reorder_lock_;
   std::array<DropTrafficConfig, RTE_MAX_ETHPORTS> drop_all_traffic_flow;
+  std::mutex flow_lock_;
+  FlowId next_dynamic_flow_id_ = 1;
+  FlowOpId next_flow_op_id_ = 1;
+  std::unordered_set<FlowId> static_flow_ids_;
+  std::unordered_map<FlowId, DynamicFlowEntry> dynamic_flows_;
+  std::unordered_map<FlowOpId, PendingFlowOp> pending_flow_ops_;
+  std::queue<FlowOpResult> ready_flow_ops_;
   int timestamp_dynfield_offset_{-1};
   uint64_t rx_timestamp_dynflag_mask_{0};
   uint64_t tx_timestamp_dynflag_mask_{0};

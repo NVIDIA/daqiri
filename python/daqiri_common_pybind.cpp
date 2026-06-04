@@ -377,6 +377,10 @@ void bind_enums(py::module_ &m) {
       .value("NORMAL", FlowMatchType::NORMAL)
       .value("FLEX_ITEM", FlowMatchType::FLEX_ITEM);
 
+  py::enum_<FlowOpType>(m, "FlowOpType")
+      .value("ADD_RX", FlowOpType::ADD_RX)
+      .value("DELETE", FlowOpType::DELETE);
+
   py::enum_<ReorderMethod>(m, "ReorderMethod")
       .value("INVALID", ReorderMethod::INVALID)
       .value("SEQ_BATCH_NUMBER", ReorderMethod::SEQ_BATCH_NUMBER)
@@ -525,6 +529,19 @@ void bind_config_types(py::module_ &m) {
       .def_readwrite("action", &FlowConfig::action_)
       .def_readwrite("match", &FlowConfig::match_);
 
+  py::class_<FlowRuleConfig>(m, "FlowRuleConfig")
+      .def(py::init<>())
+      .def_readwrite("name", &FlowRuleConfig::name_)
+      .def_readwrite("action", &FlowRuleConfig::action_)
+      .def_readwrite("match", &FlowRuleConfig::match_);
+
+  py::class_<FlowOpResult>(m, "FlowOpResult")
+      .def(py::init<>())
+      .def_readwrite("op_id", &FlowOpResult::op_id_)
+      .def_readwrite("type", &FlowOpResult::type_)
+      .def_readwrite("status", &FlowOpResult::status_)
+      .def_readwrite("flow_id", &FlowOpResult::flow_id_);
+
   py::class_<CommonConfig>(m, "CommonConfig")
       .def(py::init<>())
       .def_readwrite("version", &CommonConfig::version)
@@ -607,6 +624,8 @@ void bind_config_types(py::module_ &m) {
       .def(py::init<>())
       .def_readwrite("flow_isolation", &RxConfig::flow_isolation_)
       .def_readwrite("hardware_timestamps", &RxConfig::hardware_timestamps_)
+      .def_readwrite("dynamic_flow_capacity",
+                     &RxConfig::dynamic_flow_capacity_)
       .def_readwrite("queues", &RxConfig::queues_)
       .def_readwrite("flows", &RxConfig::flows_)
       .def_readwrite("flex_items", &RxConfig::flex_items_)
@@ -929,6 +948,29 @@ PYBIND11_MODULE(_daqiri, m) {
   m.def("get_port_id", &get_port_id, "key"_a);
   m.def("drop_all_traffic", &drop_all_traffic, "port"_a);
   m.def("allow_all_traffic", &allow_all_traffic, "port"_a);
+  m.def(
+      "add_rx_flow_async",
+      [](int port, const FlowRuleConfig &flow) {
+        FlowOpId op_id = 0;
+        const Status status = add_rx_flow_async(port, flow, &op_id);
+        return py::make_tuple(status, op_id);
+      },
+      "port"_a, "flow"_a);
+  m.def(
+      "delete_flow_async",
+      [](FlowId flow_id) {
+        FlowOpId op_id = 0;
+        const Status status = delete_flow_async(flow_id, &op_id);
+        return py::make_tuple(status, op_id);
+      },
+      "flow_id"_a);
+  m.def(
+      "poll_flow_op",
+      []() {
+        FlowOpResult result;
+        const Status status = poll_flow_op(&result);
+        return py::make_tuple(status, result);
+      });
   m.def("get_num_rx_queues", &get_num_rx_queues, "port_id"_a);
   m.def("flush_port_queue", &flush_port_queue, "port"_a, "queue"_a);
 

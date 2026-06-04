@@ -48,7 +48,7 @@ class SocketMgr : public Manager {
   uint32_t get_packet_length(BurstParams* burst, int idx) override;
   void* get_segment_packet_ptr(BurstParams* burst, int seg, int idx) override;
   uint32_t get_segment_packet_length(BurstParams* burst, int seg, int idx) override;
-  uint16_t get_packet_flow_id(BurstParams* burst, int idx) override;
+  FlowId get_packet_flow_id(BurstParams* burst, int idx) override;
   Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) override;
   void* get_packet_extra_info(BurstParams* burst, int idx) override;
 
