@@ -16,6 +16,7 @@
 # limitations under the License.
 
 import argparse
+import functools
 import html
 import logging
 import os
@@ -193,6 +194,40 @@ def is_any_integrated_gpu():
     return False
 
 
+def _dmabuf_gpu_path_available():
+    """
+    Returns True if the kernel exposes the dma-buf path that recent NVIDIA drivers
+    use for GPUDirect in place of nvidia-peermem. The patched DPDK shipped with
+    this repo (dpdk_patches/dmabuf.patch) takes this path on platforms that
+    expose it, which is why peermem is not required there.
+    """
+    return os.path.exists("/dev/dma_heap/system")
+
+
+def _gpu_name_by_bdf():
+    """
+    Returns {pci_bdf: product_name} for every visible NVIDIA GPU, or {} if
+    nvidia-smi is unavailable. Used by per-GPU checks (e.g. check_bar1_size)
+    to apply Blackwell-specific thresholds only to the Blackwell GPU(s) in a
+    heterogeneous system rather than to every GPU in the box.
+    """
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=pci.bus_id,name", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return {}
+    names = {}
+    for line in result.stdout.splitlines():
+        parts = line.split(",", 1)
+        if len(parts) == 2:
+            names[parts[0].strip()] = parts[1].strip()
+    return names
+
+
 def check_peermem_kernel():
     """
     Check if the nvidia-peermem module for GPUDirect is loaded in the kernel.
@@ -213,6 +248,14 @@ def check_peermem_kernel():
                 "nvidia-peermem module is not loaded, but the platform has an integrated GPU "
                 "(e.g. GB10 / DGX Spark) where peermem does not apply. Use kind: host_pinned "
                 "in the daqiri YAML for GPUDirect on this platform."
+            )
+        elif _dmabuf_gpu_path_available():
+            logging.info(
+                "nvidia-peermem module is not loaded, but /dev/dma_heap/system is "
+                "available. The patched DPDK shipped with this repo "
+                "(dpdk_patches/dmabuf.patch) takes the dma-buf GPUDirect path on "
+                "platforms that expose it and does not need peermem. If you are "
+                "building DAQIRI against stock DPDK, load nvidia-peermem."
             )
         else:
             logging.warning("nvidia-peermem module is not loaded. GPUDirect may not work.")
@@ -264,10 +307,15 @@ def check_gpudirect_support():
             logging.warning(f"GPU {i}: {name.value.decode()} does not have GPUDirect support.")
 
 
+@functools.lru_cache(maxsize=1)
 def get_nic_info():
     """
     Parses the output of `ibdev2netdev -v` to extract and return a list of tuples,
     where each tuple contains the interface name and its PCIe address.
+
+    Cached with lru_cache so --check all (which calls this from check_mrrs,
+    check_max_payload_size, and check_mtu_size) only invokes ibdev2netdev once
+    and only emits the "ibdev2netdev not found" warning once per run.
 
     Returns:
         List[Tuple[str, str]]: A list of tuples containing the IF name and PCIe address
@@ -288,16 +336,17 @@ def get_nic_info():
         return vals
 
     except FileNotFoundError:
-        print(
-            "The ibdev2netdev command is not found. Ensure that it is installed and available in your PATH."
+        logging.warning(
+            "The ibdev2netdev command is not found (try: apt install infiniband-diags). "
+            "Skipping NIC-dependent checks (mrrs, mps, mtu)."
         )
-        return [], []
+        return []
     except subprocess.CalledProcessError as e:
-        print(f"Error while executing ibdev2netdev: {e}")
-        return [], []
+        logging.error(f"Error while executing ibdev2netdev: {e}")
+        return []
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-        return [], []
+        logging.error(f"Unexpected error while running ibdev2netdev: {e}")
+        return []
 
 
 def get_online_cpus():
@@ -328,29 +377,48 @@ def get_online_cpus():
 def check_cpu_governor():
     """
     Checks if the CPU frequency governor is set to 'performance' for all online CPUs.
+    Output is bucketed by result so a 256-core system does not emit 256 lines when
+    every CPU is in the same state. Per-CPU detail still surfaces if results vary.
     """
     online_cpus = get_online_cpus()
+    total = len(online_cpus)
+
+    by_governor = defaultdict(list)
+    missing = []
+    permission_denied = []
 
     for cpu in online_cpus:
         scaling_governor_path = f"/sys/devices/system/cpu/cpu{cpu}/cpufreq/scaling_governor"
-
         try:
             with open(scaling_governor_path, "r") as f:
-                governor = f.read().strip()
-
-            if governor == "performance":
-                logging.info(f"CPU {cpu}: Governor is correctly set to 'performance'.")
-            else:
-                logging.warning(f"CPU {cpu}: Governor is set to '{governor}', not 'performance'.")
-
+                by_governor[f.read().strip()].append(cpu)
         except FileNotFoundError:
-            logging.error(
-                f"CPU {cpu}: Scaling governor file not found. This CPU may not support frequency scaling."
-            )
+            missing.append(cpu)
         except PermissionError:
-            logging.error(
-                f"CPU {cpu}: Permission denied while accessing scaling governor file. Run as root."
+            permission_denied.append(cpu)
+
+    for governor, cpus in sorted(by_governor.items()):
+        if governor == "performance":
+            logging.info(
+                f"CPU governor: {len(cpus)}/{total} online CPUs set to 'performance'."
             )
+        else:
+            logging.warning(
+                f"CPU governor: {len(cpus)}/{total} online CPUs set to '{governor}', "
+                "expected 'performance'."
+            )
+
+    if missing:
+        logging.error(
+            f"CPU governor: scaling_governor file not found on {len(missing)}/{total} "
+            "online CPUs. The cpufreq driver may not be loaded (e.g. amd-pstate, "
+            "intel_pstate, or cppc_cpufreq). Performance scaling cannot be checked."
+        )
+    if permission_denied:
+        logging.error(
+            f"CPU governor: permission denied reading scaling_governor on "
+            f"{len(permission_denied)}/{total} online CPUs. Run as root."
+        )
 
 
 def check_mrrs():
@@ -610,6 +678,17 @@ def check_bar1_size():
             "There is no resizable BAR1 to enlarge on platforms like GB10 / DGX Spark."
         )
         return
+    # On RTX PRO 6000 Blackwell Server Edition (96 GB GDDR7) the generic
+    # > 1024 MiB threshold passes trivially even with Resizable BAR disabled
+    # (the card still exposes a multi-GiB BAR1 in some platform configs).
+    # 32 GiB is the conservative "rebar is fully unlocked" floor: well below
+    # the 96 GB card capacity but high enough that any platform exposing less
+    # is almost certainly missing Resizable BAR / Above 4G Decoding in BIOS.
+    # The threshold is applied per-GPU via gpu_names below so heterogeneous
+    # boxes (e.g. RTX PRO 6000 + H100) only get the Blackwell rule on the
+    # Blackwell card.
+    BAR1_BLACKWELL_MIN_MIB = 32768  # 32 GiB
+    gpu_names = _gpu_name_by_bdf()
     try:
         # Run nvidia-smi to get BAR1 memory information
         result = subprocess.run(
@@ -640,7 +719,17 @@ def check_bar1_size():
 
             # Once BAR1 size is found, log it
             if current_gpu is not None and bar1_total is not None:
-                if bar1_total > 1024:
+                gpu_name = gpu_names.get(current_gpu, "")
+                gpu_is_blackwell = "Blackwell Server Edition" in gpu_name
+                if gpu_is_blackwell and bar1_total < BAR1_BLACKWELL_MIN_MIB:
+                    logging.warning(
+                        f"GPU {current_gpu} ({gpu_name}): BAR1 size is {bar1_total} MiB. "
+                        f"Expected at least {BAR1_BLACKWELL_MIN_MIB} MiB "
+                        f"({BAR1_BLACKWELL_MIN_MIB // 1024} GiB) with Resizable BAR fully "
+                        "enabled. Check the system BIOS for the Resizable BAR / Above 4G "
+                        "Decoding settings."
+                    )
+                elif bar1_total > 1024:
                     logging.info(f"GPU {current_gpu}: BAR1 size is {bar1_total} MiB.")
                 else:
                     logging.warning(
