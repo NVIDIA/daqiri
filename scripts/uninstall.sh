@@ -119,11 +119,14 @@ remove_cmake_via_manifest() {
         return 1
     }
 
+    # xargs -d '\n' (not the default whitespace splitting) so an install
+    # prefix containing spaces does not get carved up into wrong rm
+    # arguments. CMake writes one absolute path per line in
+    # install_manifest.txt, so newline is the only safe delimiter.
     run "sudo xargs -d '\\n' rm -v < '$manifest'"
 
     info "Removing now-empty directories under $DAQIRI_PREFIX"
     run "sudo find '$DAQIRI_PREFIX' -depth -type d -empty -delete 2>/dev/null || true"
-    run "sudo ldconfig"
 }
 
 remove_cmake_via_scan() {
@@ -187,11 +190,11 @@ remove_cmake_via_scan() {
 
     info "Removing now-empty directories under $DAQIRI_PREFIX"
     run "sudo find '$DAQIRI_PREFIX' -depth -type d -empty -delete 2>/dev/null || true"
-    run "sudo ldconfig"
 }
 
 action_cmake() {
     info "Target: cmake (prefix=$DAQIRI_PREFIX, build=$BUILD_DIR)"
+    local removed=0
     if [[ ! -e "$DAQIRI_PREFIX" ]]; then
         info "$DAQIRI_PREFIX does not exist; nothing to remove."
     else
@@ -204,6 +207,17 @@ action_cmake() {
             warn "  cmake --install $BUILD_DIR --prefix $DAQIRI_PREFIX"
             remove_cmake_via_scan || return 1
         fi
+        removed=1
+    fi
+
+    # Refresh the linker cache once, after either removal path. Without
+    # this, verify_cmake's `ldconfig -p | grep daqiri` check trips a
+    # spurious WARN on hosts that registered the install prefix in
+    # /etc/ld.so.conf.d/. Skipped when nothing was removed so the script
+    # stays a no-op on a clean system.
+    if [[ $removed -eq 1 ]]; then
+        info "Refreshing dynamic linker cache."
+        run "sudo ldconfig"
     fi
 
     if [[ $CLEAN_BUILD -eq 1 ]]; then
