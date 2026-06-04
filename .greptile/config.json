@@ -1,9 +1,10 @@
 {
-  "strictness": 2,
-  "commentTypes": ["logic", "syntax", "style", "info"],
+  "strictness": 3,
+  "commentTypes": ["logic", "syntax", "info"],
   "triggerOnUpdates": true,
   "triggerOnDrafts": false,
   "statusCheck": true,
+  "updateSummaryOnly": true,
   "fileChangeLimit": 200,
   "excludeAuthors": ["dependabot[bot]", "*-bot"],
   "excludeBranches": ["gh-pages"],
@@ -17,6 +18,12 @@
   "issuesTableSection": {
     "included": true,
     "collapsible": false
+  },
+  "sequenceDiagramSection": {
+    "included": false
+  },
+  "confidenceScoreSection": {
+    "included": true
   },
   "instructions": "DAQIRI is a single C++/CUDA shared library (libdaqiri.so) for GPU-direct packet I/O over DPDK, RDMA, and sockets. The full reviewer context lives in .greptile/rules.md and the linked context files in .greptile/files.json (AGENTS.md, CONTRIBUTING.md, .claude/rules/docs-sync.md, src/common.h, src/manager.h, src/types.h). Always read them before commenting. Prefer few high-signal comments over many nits; this is a low-level networking library where idiomatic-looking code is often deliberate.",
   "rules": [
