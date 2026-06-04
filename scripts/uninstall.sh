@@ -187,6 +187,7 @@ remove_cmake_via_scan() {
 
     info "Removing now-empty directories under $DAQIRI_PREFIX"
     run "sudo find '$DAQIRI_PREFIX' -depth -type d -empty -delete 2>/dev/null || true"
+    run "sudo ldconfig"
 }
 
 action_cmake() {
