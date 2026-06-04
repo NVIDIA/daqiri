@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # System Configuration
 
 DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking/ethernet-adapters/) (ConnectX-6 Dx or later) and a CUDA-capable GPU. Two reference platforms are documented in this tutorial — pick the one closest to yours below:
@@ -13,7 +18,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     ## System Setup for DAQIRI
 
-    This section covers the essential system setup steps needed before using DAQIRI. Complete this setup before moving on to [System Optimization](#system-optimization) or [running benchmarks](benchmarking_examples.md).
+    This section covers the essential system setup steps needed before using DAQIRI. Complete this setup before moving on to [System Optimization](#system-optimization) or [running benchmarks](../benchmarks/benchmarks.md).
 
     In this tutorial, we will be developing on an **NVIDIA IGX Orin platform** with [IGX SW 1.1](https://docs.nvidia.com/igx-orin/user-guide/latest/base-os.html) and an [NVIDIA RTX 6000 ADA GPU](https://www.nvidia.com/en-us/design-visualization/rtx-6000/), which is the configuration that is currently actively tested. The concepts should be applicable to other systems based on Ubuntu 22.04 as well. It should also work on other Linux distributions with a glibc version of 2.35 or higher by containerizing the dependencies and applications on top of an Ubuntu 22.04 image, but this is not actively tested at this time.
 
@@ -812,10 +817,6 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     ### Step 5: Isolate CPU cores
 
-    !!! note
-
-        This optimization is less impactful when using the `gpunetio` backend since the GPU polls the NIC.
-
     The CPU interacting with the NIC to route packets is sensitive to perturbations, especially with smaller packet/batch sizes requiring more frequent work. Isolating a CPU in Linux prevents unwanted user or kernel threads from running on it, reducing context switching and latency spikes from noisy neighbors.
 
     We recommend isolating the CPU cores you will select to interact with the NIC (defined in the `daqiri` configuration [described in the configuration reference](configuration-walkthrough.md) in this tutorial). This is done by setting additional flags on the kernel bootline.
@@ -1297,7 +1298,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
         ```
 
     ---
-    **Next:** [Benchmarking Examples](benchmarking_examples.md) — run your first DAQIRI benchmark
+    **Next:** [Benchmarking](../benchmarks/benchmarks.md) — choose and run your first DAQIRI benchmark
 
 === "DGX Spark"
 
@@ -1361,7 +1362,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
         - **Same physical port** (e.g. `mlx5_0` ↔ `mlx5_2`, both p0) → TX/RX loop **on-chip** through the eswitch; traffic never reaches the cable. Physical-link packet counters stay flat while the vport counters (`tx_good_packets` / `rx_good_packets`) run at line rate. This is a software-path test.
         - **Different physical ports** (e.g. `mlx5_0` p0 ↔ `mlx5_3` p1 `0002:01:00.1`, or `mlx5_0` ↔ `mlx5_1`) → TX/RX loop **over the wire**; physical-link packet counters rise to match the TX/RX counts. This is an over-the-wire test.
 
-        Confirm which case you got from the physical-link packet counters: near zero for on-chip, matching the TX/RX packet counts for over-the-wire. These counters count packets that reached the SerDes/QSFP side of the NIC rather than packets switched internally by the eswitch. The [daqiri bench](benchmarking_examples.md)'s DPDK "Extended Stats" output reports them as `tx_phy_packets` / `rx_phy_packets`; `ethtool -S` and `mlnx_perf` report the same wire counters as `tx_packets_phy` / `rx_packets_phy`.
+        Confirm which case you got from the physical-link packet counters: near zero for on-chip, matching the TX/RX packet counts for over-the-wire. These counters count packets that reached the SerDes/QSFP side of the NIC rather than packets switched internally by the eswitch. The [daqiri bench](../benchmarks/raw_benchmarking.md)'s DPDK "Extended Stats" output reports them as `tx_phy_packets` / `rx_phy_packets`; `ethtool -S` and `mlnx_perf` report the same wire counters as `tx_packets_phy` / `rx_packets_phy`.
 
     `ethtool -m` reports identical `Connector: 0x23 No separable connector` on all 4 PFs and is **not** useful for distinguishing them; use `phys_port_name` above (the cable-yank carrier test confirms a cable is present but does **not** distinguish ports).
 
@@ -1415,11 +1416,15 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     ### Enable GPUDirect
 
-    !!! warning "Skip `nvidia_peermem` on GB10"
+    **No GPUDirect kernel-module setup is required on GB10.** Set `kind: "host_pinned"` in the YAML and you're done — there is no system-side step to perform. Buffers are allocated by DAQIRI via `cudaHostAlloc` (so they are CUDA-addressable) and registered with DPDK via `rte_extmem_register`. End-to-end TX↔RX over the QSFP loop with `kind: "host_pinned"`, `num_bufs: 51200`, `batch_size: 10240` reaches **~94 Gbps** unicast (verified against `main` 9ebd729, which contains [PR #41](https://github.com/nvidia/daqiri/pull/41)).
+
+    `kind: "huge"` works as a fallback at the same rate. `kind: "device"` does **not** work on GB10.
+
+    See the ready-to-run [`examples/daqiri_bench_raw_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark.yaml) for the complete config.
+
+    ??? info "Why peermem and DMA-BUF don't apply on GB10"
 
         `sudo modprobe nvidia_peermem` returns `Invalid argument` (EINVAL, exit=1) on GB10. The module file ships in `/lib/modules/$(uname -r)/kernel/nvidia-580-open/nvidia-peermem.ko`, but loading fails by design: peermem maps the NIC into a separate GPU BAR1, and GB10's NVLink-C2C unified memory has no separate BAR1.
-
-    !!! note "DMA-BUF is also unreachable as of CUDA 13.1"
 
         The Open kernel module on Grace platforms expects the standard Linux **DMA-BUF** path instead of peermem, but as of CUDA 13.1 / driver 580.142 the device-attribute query reports `flag=0`:
 
@@ -1429,11 +1434,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
         cuDeviceGetAttribute(CU_DEVICE_ATTRIBUTE_INTEGRATED, 0)                → SUCCESS, flag=1
         ```
 
-        DAQIRI's CUDA-DMA-BUF code path is therefore unreachable on Spark; `dpdk_patches/dmabuf.patch` still ships and is mandatory for the build, but the daqiri-side dma-buf branch never fires.
-
-    **The right configuration on Spark is `kind: "host_pinned"` in the YAML** — there is no system-side step. Buffers are allocated by daqiri via `cudaHostAlloc` (so they are CUDA-addressable) and registered with DPDK via `rte_extmem_register`. End-to-end TX↔RX over the QSFP loop with `kind: "host_pinned"`, `num_bufs: 51200`, `batch_size: 10240` reaches **~94 Gbps** unicast (verified against `main` 9ebd729, which contains [PR #41](https://github.com/nvidia/daqiri/pull/41)). `kind: "huge"` works as a fallback at the same rate; `kind: "device"` does **not** work and is not expected to on GB10.
-
-    See the ready-to-run [`examples/daqiri_bench_raw_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark.yaml) for the complete config.
+        DAQIRI's CUDA-DMA-BUF code path is therefore unreachable on Spark; `dpdk_patches/dmabuf.patch` still ships and is mandatory for the build, but the daqiri-side dma-buf branch never fires. The `host_pinned` path above sidesteps both interfaces entirely.
 
     ---
 
@@ -1584,6 +1585,6 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     ```
 
     ---
-    **Next:** [Benchmarking Examples](benchmarking_examples.md) — run your first DAQIRI benchmark
+    **Next:** [Benchmarking](../benchmarks/benchmarks.md) — choose and run your first DAQIRI benchmark
 
 </div>

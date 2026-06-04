@@ -42,12 +42,17 @@ extra_css:
 
 extra_javascript:
   - javascripts/platform-tab-toc.js
+  - javascripts/tab-dropdowns.js
 
 site_dir: site
 
 nav:
   - Getting Started: getting-started.md
   - Concepts: concepts.md
+  - Benchmarking:
+    - Overview: benchmarks/benchmarks.md
+    - Socket and RDMA Benchmarking: benchmarks/socket_benchmarking.md
+    - Raw Ethernet Benchmarking: benchmarks/raw_benchmarking.md
   - API Reference:
     - API Guide: api-reference/index.md
     - Configuration YAML Reference: api-reference/configuration.md
@@ -55,7 +60,7 @@ nav:
     - Python API Usage: api-reference/python.md
   - Tutorials:
     - System Configuration: tutorials/system_configuration.md
-    - Benchmarking Examples: tutorials/benchmarking_examples.md
+    - Bare-Metal CMake Build: tutorials/bare-metal-cmake-build.md
     - Configuration YAML Walkthrough: tutorials/configuration-walkthrough.md
 
 markdown_extensions:

@@ -133,7 +133,7 @@ if status == daqiri.Status.SUCCESS:
 If GPU RX `reorder_configs` are configured for the DPDK backend, set one CUDA
 stream per GPU reorder plan before pulling reordered bursts. Pass the CUDA
 stream as an integer address; pass `0` to use the default stream. See the
-[Configuration YAML Reference](configuration.md#rx-reorder-configs-dpdk-v1)
+[Configuration YAML Reference](configuration.md#rx-reorder-configs)
 for reorder configuration constraints.
 
 ```python

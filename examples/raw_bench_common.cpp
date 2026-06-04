@@ -247,6 +247,45 @@ int parse_run_seconds(int argc, char **argv) {
   return run_seconds;
 }
 
+double parse_target_gbps(int argc, char **argv) {
+  double target_gbps = 0.0;
+  for (int i = 2; i + 1 < argc; i += 2) {
+    if (std::string(argv[i]) == "--target-gbps") {
+      target_gbps = std::stod(argv[i + 1]);
+    }
+  }
+  return target_gbps;
+}
+
+TokenBucketPacer::TokenBucketPacer(double target_gbps)
+    : target_bps_(target_gbps > 0.0 ? target_gbps * 1e9 : 0.0),
+      t0_(std::chrono::steady_clock::now()) {}
+
+void TokenBucketPacer::wait_for_bytes(size_t bytes, std::atomic<bool> &stop) {
+  if (target_bps_ <= 0.0) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  total_bytes_ += bytes;
+  const double scheduled_secs = (total_bytes_ * 8.0) / target_bps_;
+  const auto scheduled = t0_ + std::chrono::duration_cast<
+                                   std::chrono::steady_clock::duration>(
+                                   std::chrono::duration<double>(scheduled_secs));
+  // Slice the wait into 10 ms chunks so a stop flag (--seconds expiry or
+  // Ctrl-C) can break us out promptly. The total slept across the slices
+  // accumulates to the scheduled deadline, so pacing remains accurate.
+  constexpr auto kSlice = std::chrono::milliseconds(10);
+  while (!stop.load()) {
+    const auto now = std::chrono::steady_clock::now();
+    if (scheduled <= now) {
+      return;
+    }
+    const auto remaining = scheduled - now;
+    std::this_thread::sleep_for(
+        std::min<std::chrono::steady_clock::duration>(remaining, kSlice));
+  }
+}
+
 bool has_bench_rx(const YAML::Node &root) {
   return has_bench_config(root, "bench_rx");
 }
@@ -458,7 +497,8 @@ void wait_for_stop(int run_seconds, std::atomic<bool> &stop) {
 }
 
 void print_queue_stats(const char *direction, const std::string &interface_name,
-                       int queue_id, const RawBenchQueueStats &stats) {
+                       int queue_id, const RawBenchQueueStats &stats,
+                       double seconds) {
   std::lock_guard<std::mutex> lock(g_stats_print_mutex);
   std::cout << direction << " complete: interface=" << interface_name;
   if (queue_id >= 0) {
@@ -467,7 +507,8 @@ void print_queue_stats(const char *direction, const std::string &interface_name,
     std::cout << " queues=all";
   }
   std::cout << " packets=" << stats.packets << " bytes=" << stats.bytes
-            << " bursts=" << stats.bursts << std::endl;
+            << " bursts=" << stats.bursts << " seconds=" << seconds
+            << std::endl;
 }
 
 void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
@@ -497,6 +538,7 @@ void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
   }
 
   std::vector<RawBenchQueueStats> queue_stats(num_rx_queues);
+  const auto t0 = std::chrono::steady_clock::now();
   while (!stop.load()) {
     bool got_any = false;
     for (int q : queue_ids) {
@@ -516,6 +558,9 @@ void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
       std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
   }
+  const double secs =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
+          .count();
 
   RawBenchQueueStats total;
   for (int q : queue_ids) {
@@ -523,11 +568,11 @@ void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
     total.packets += stats.packets;
     total.bytes += stats.bytes;
     total.bursts += stats.bursts;
-    print_queue_stats("RX", cfg.interface_name, q, stats);
+    print_queue_stats("RX", cfg.interface_name, q, stats, secs);
   }
 
   if (queue_ids.size() > 1) {
-    print_queue_stats("RX", cfg.interface_name, -1, total);
+    print_queue_stats("RX", cfg.interface_name, -1, total, secs);
   }
 }
 

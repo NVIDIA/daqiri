@@ -170,11 +170,11 @@ class RdmaMgr : public Manager {
 
  private:
   static constexpr int MAX_RDMA_CONNECTIONS = 128;
-  static constexpr int MAX_CQ = 16;
+  static constexpr int MAX_CQ = 1024;
   static constexpr int NUM_SGE_ELS = 1024;
   static constexpr int NUM_SGE_BUFS = 256;
   static constexpr int MAX_NUM_MR = 16;  // Maximum number of memory registers to exchange
-  static constexpr int MAX_OUSTANDING_WR = 64;
+  static constexpr int MAX_OUSTANDING_WR = 1024;
   static constexpr int MAX_NUM_PORTS = 4;
   static constexpr int MAX_RDMA_BATCH = 1024;
 

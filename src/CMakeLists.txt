@@ -39,7 +39,15 @@ if(DAQIRI_REORDER_GPU_PROFILE)
   add_compile_definitions(DAQIRI_REORDER_GPU_PROFILE=1)
 endif()
 option(DAQIRI_ENABLE_GDS "Enable cuFile-backed burst file writes from CUDA device memory" OFF)
+option(DAQIRI_ENABLE_OTEL_METRICS "Enable OpenTelemetry metrics instrumentation" OFF)
 set(DOCA_PATH /opt/mellanox/doca)
+
+if(DAQIRI_ENABLE_OTEL_METRICS)
+  add_compile_definitions(DAQIRI_ENABLE_OTEL_METRICS=1)
+  find_package(opentelemetry-cpp CONFIG REQUIRED COMPONENTS api)
+else()
+  add_compile_definitions(DAQIRI_ENABLE_OTEL_METRICS=0)
+endif()
 
 set(DAQIRI_USING_VENDORED_YAML_CPP OFF)
 if(NOT TARGET yaml-cpp AND NOT TARGET yaml-cpp::yaml-cpp)
@@ -86,6 +94,9 @@ add_library(daqiri_common
   manager.cpp
   logging.cpp
 )
+if(DAQIRI_ENABLE_OTEL_METRICS)
+  target_sources(daqiri_common PRIVATE metrics.cpp)
+endif()
 target_include_directories(daqiri_common
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
@@ -111,6 +122,9 @@ target_link_libraries(daqiri_common
         ${DPDK_LIBRARIES}
     PRIVATE
 )
+if(DAQIRI_ENABLE_OTEL_METRICS)
+  target_link_libraries(daqiri_common PRIVATE opentelemetry-cpp::api)
+endif()
 if(DAQIRI_ENABLE_GDS)
   find_path(DAQIRI_CUFILE_INCLUDE_DIR
             NAMES cufile.h

@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 #include <array>
+#include "src/metrics.h"
 
 namespace daqiri {
 
@@ -62,6 +63,15 @@ class DpdkStats {
       static constexpr int MAX_QUEUE_COUNT = 128;        // Maximum number of queues supported
       std::unordered_map<int, int> rx_queue_errors_idx;  // Indices for rx_q*_errors counters
 
+      struct QueueXStats {
+        int rx_packets_idx = -1;
+        int tx_packets_idx = -1;
+        int rx_bytes_idx = -1;
+        int tx_bytes_idx = -1;
+        int rx_errors_idx = -1;
+      };
+      std::unordered_map<int, QueueXStats> queue_xstats;
+
       PortXStats() : len(0), xstats(nullptr), old_xstats(nullptr),
                     rx_missed_idx(-1), rx_mbuf_allocation_errors_idx(-1) {
         // No need to initialize the map, it starts empty
@@ -78,6 +88,8 @@ class DpdkStats {
     // Map to store memory region names for each port/queue combination
     // Key: (port_id << 16) | queue_id, Value: comma-separated list of memory region names
     std::unordered_map<uint32_t, std::string> port_queue_memory_regions_;
+    std::unordered_map<int, std::shared_ptr<metrics::CounterSet>> port_metrics_;
+    std::unordered_map<uint32_t, std::shared_ptr<metrics::CounterSet>> queue_metrics_;
 };
 
 }  // namespace daqiri

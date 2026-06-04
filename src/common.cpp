@@ -25,6 +25,7 @@
 #include <limits>
 
 #include "src/manager.h"
+#include "src/metrics.h"
 #include <daqiri/daqiri.h>
 #include <daqiri/logging.hpp>
 #if DAQIRI_MGR_DPDK
@@ -299,6 +300,7 @@ void* get_packet_ptr(BurstParams* burst, int idx) {
 void shutdown() {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   g_daqiri_mgr->shutdown();
+  metrics::shutdown();
 }
 
 Status send_tx_burst(BurstParams* burst) {

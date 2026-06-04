@@ -118,7 +118,32 @@
   background: #0d0d0d;
 }
 
+/* ── Content width ───────────────────────────────────────────────────── */
+/* Material defaults to ~61rem of content width; combined with the smaller   */
+/* 0.72rem typeset baseline above, tables with monospace cells (CMake-options*/
+/* table in getting-started.md) wrap mid-token. Widen the grid to give wide  */
+/* tables room. Universal — applies to both color schemes.                   */
+.md-grid {
+  max-width: 76rem;
+}
+
 /* ── Tables ──────────────────────────────────────────────────────────── */
+/* Structural rules (wrapping, monospace nowrap) are universal so the table */
+/* layout looks the same in light and dark. Color rules below are slate-     */
+/* only since they reference dark-mode tokens.                               */
+.md-typeset table:not([class]) td {
+  /* Prefer word-boundary wrapping over mid-word breaks, which were */
+  /* producing single-character orphans in narrow columns.          */
+  word-break: normal;
+  overflow-wrap: anywhere;
+  hyphens: none;
+}
+/* Keep monospace tokens (CMake options, YAML keys) together. */
+.md-typeset table:not([class]) td > code,
+.md-typeset table:not([class]) th > code {
+  white-space: nowrap;
+}
+/* Slate-only color overrides for tables. */
 [data-md-color-scheme="slate"] .md-typeset table:not([class]) {
   border: 1px solid var(--nv-border);
   background: var(--nv-bg-card);
@@ -151,6 +176,104 @@
   color: var(--nv-green) !important;
   border-left: 2px solid var(--nv-green);
   background: rgba(118, 185, 0, 0.06);
+}
+
+/* ── Top-tab dropdowns (added by tab-dropdowns.js) ──────────────────── */
+/* JS injects <ul class="nv-tab-dropdown"> into tab <li> for sections    */
+/* with multiple sub-pages. CSS turns it into a hover/focus popover so    */
+/* you can hop sub-page to sub-page without bouncing through the section  */
+/* index. Sub-page list is hard-coded in tab-dropdowns.js (kept in sync   */
+/* with mkdocs.yml nav).                                                  */
+
+/* Material defaults `.md-tabs` and `.md-tabs__list` to `overflow: auto`  */
+/* (for horizontal scroll on narrow viewports) and `contain: content` on  */
+/* the list (paint clipping). Both clip our absolutely-positioned         */
+/* dropdown. Override here. With 5 tabs the strip fits comfortably on    */
+/* desktop; on narrow viewports the tabs already collapse (handled by    */
+/* Material's responsive nav).                                            */
+.md-tabs,
+.md-tabs__list {
+  overflow: visible !important;
+}
+.md-tabs__list {
+  contain: none !important;
+}
+.md-tabs__item.nv-has-dropdown {
+  position: relative;
+}
+/* Chevron indicator on tabs that have a dropdown. */
+.md-tabs__item.nv-has-dropdown > .md-tabs__link::after {
+  content: " ▾";
+  margin-left: 0.25rem;
+  font-size: 0.7em;
+  opacity: 0.55;
+}
+.nv-tab-dropdown {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin: 0;
+  padding: 0.4rem 0;
+  list-style: none;
+  min-width: 16rem;
+  /* Use Material's color tokens so this picks up the right surface in    */
+  /* both light and dark schemes (in slate these resolve to dark cards;   */
+  /* in default they resolve to white cards with a subtle border).        */
+  background: var(--md-default-bg-color);
+  border: 1px solid var(--md-default-fg-color--lightest, rgba(0, 0, 0, 0.12));
+  border-radius: var(--nv-radius);
+  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.25);
+  z-index: 100;
+}
+/* Slightly stronger shadow in slate to read against the dark surface. */
+[data-md-color-scheme="slate"] .nv-tab-dropdown {
+  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.55);
+}
+/* Invisible bridge so the cursor can cross from tab to dropdown without
+   the gap (top: 100% leaves no room for the cursor to slip through).    */
+.nv-tab-dropdown::before {
+  content: "";
+  position: absolute;
+  top: -0.5rem;
+  left: 0;
+  right: 0;
+  height: 0.5rem;
+}
+.md-tabs__item.nv-has-dropdown:hover .nv-tab-dropdown,
+.md-tabs__item.nv-has-dropdown:focus-within .nv-tab-dropdown {
+  display: block;
+}
+.nv-tab-dropdown li {
+  margin: 0;
+}
+.nv-tab-dropdown a {
+  display: block;
+  padding: 0.45rem 1rem;
+  color: var(--md-default-fg-color--light);
+  text-decoration: none;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.nv-tab-dropdown a:hover,
+.nv-tab-dropdown a:focus {
+  color: var(--md-default-fg-color);
+  background: rgba(118, 185, 0, 0.1);
+  outline: none;
+}
+
+/* ── Right-hand TOC: a touch of breathing room between items ─────────── */
+/* Material's default item spacing crowds the entries; add explicit         */
+/* margin-bottom (single side, so adjacent margins don't silently collapse */
+/* and halve the gap). Scoped to .md-nav--secondary so the left sidebar    */
+/* (already tuned) is unaffected. Universal so light and dark schemes      */
+/* share the same TOC density.                                              */
+.md-nav--secondary .md-nav__item {
+  margin-bottom: 0.35rem;
+}
+.md-nav--secondary .md-nav__item:last-child {
+  margin-bottom: 0;
 }
 
 /* ── Buttons ─────────────────────────────────────────────────────────── */

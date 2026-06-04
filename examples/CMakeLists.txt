@@ -80,19 +80,37 @@ endfunction()
 
 add_daqiri_raw_bench(daqiri_bench_raw_hds raw_hds_bench.cpp)
 add_daqiri_raw_bench(daqiri_bench_raw_gpudirect raw_gpudirect_bench.cpp)
+if(DAQIRI_ENABLE_OTEL_METRICS)
+  find_package(opentelemetry-cpp CONFIG QUIET COMPONENTS sdk exporters_prometheus)
+  if(TARGET opentelemetry-cpp::prometheus_exporter)
+    target_sources(daqiri_bench_raw_gpudirect PRIVATE grafana/otel_prometheus.cpp)
+    target_compile_definitions(daqiri_bench_raw_gpudirect PRIVATE DAQIRI_GRAFANA_PROMETHEUS=1)
+    target_link_libraries(daqiri_bench_raw_gpudirect PRIVATE
+      opentelemetry-cpp::sdk
+      opentelemetry-cpp::prometheus_exporter
+    )
+  else()
+    message(STATUS "OpenTelemetry Prometheus exporter not found; Grafana live metrics example disabled")
+  endif()
+endif()
 add_daqiri_raw_bench(daqiri_bench_raw_reorder_seq raw_reorder_seq_bench.cpp)
 add_daqiri_raw_bench(daqiri_bench_raw_reorder_quantize raw_reorder_quantize_bench.cpp)
 add_daqiri_raw_bench(daqiri_example_gds_write gds_write_example.cpp)
 add_daqiri_raw_bench(daqiri_example_pcap_writer pcap_writer_example.cpp)
 
-add_executable(daqiri_bench_rdma rdma_bench.cpp)
+add_executable(daqiri_bench_rdma rdma_bench.cpp raw_bench_common.cpp)
 link_daqiri_bench(daqiri_bench_rdma)
+target_link_libraries(daqiri_bench_rdma PRIVATE CUDA::cudart)
 set_target_properties(daqiri_bench_rdma PROPERTIES
   BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
 )
 
-add_executable(daqiri_bench_socket socket_bench.cpp)
+add_executable(daqiri_bench_socket socket_bench.cpp raw_bench_common.cpp)
 link_daqiri_bench(daqiri_bench_socket)
+target_link_libraries(daqiri_bench_socket PRIVATE CUDA::cudart)
+set_target_properties(daqiri_bench_socket PROPERTIES
+  BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
+)
 
 foreach(cfg IN LISTS DAQIRI_BENCH_CONFIGS)
   configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${cfg} ${CMAKE_CURRENT_BINARY_DIR}/${cfg} COPYONLY)
