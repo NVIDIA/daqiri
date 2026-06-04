@@ -446,3 +446,19 @@ Once `libdaqiri.so` is installed and the [smoke test](#53-smoke-test) passes:
 1. [**System Configuration**](system_configuration.md): tune the host (hugepages, NIC link layer, GPU BAR1, CPU isolation) for production performance.
 2. [**Raw Ethernet Benchmarking**](../benchmarks/raw_benchmarking.md): run `daqiri_bench_raw_gpudirect` over a physical loopback.
 3. [**Understanding the Configuration File**](configuration-walkthrough.md): pick the right starter YAML for your use case from the decision tree.
+
+---
+
+## Cleanup
+
+To remove the CMake install while keeping every prerequisite (DPDK, DOCA libraries, CUDA, hugepages, NIC drivers) in place, run [`scripts/cleanup.sh`](https://github.com/NVIDIA/daqiri/blob/main/scripts/cleanup.sh) with the `cmake` target:
+
+```bash
+scripts/cleanup.sh cmake             # interactive, with manifest preview
+scripts/cleanup.sh cmake --dry-run   # show what would be removed
+scripts/cleanup.sh cmake --yes       # non-interactive
+```
+
+The script reads `build/install_manifest.txt` (written by [Step 5.2](#52-install)) for the canonical list of installed paths, then refuses to remove anything unless every manifest entry is under `DAQIRI_PREFIX`. Manifest entries that are already absent are reported and skipped so cleanup can be rerun after a partial removal; verification still runs and decides the final exit status. Override the install prefix with `DAQIRI_PREFIX=...` if you installed somewhere other than `/opt/daqiri`, or `BUILD_DIR=...` if your build tree is named something other than `build`. When the manifest is missing, the script falls back to a name-scoped scan that auto-removes only DAQIRI-owned artifacts and flags vendored `spdlog/`, `yaml-cpp/`, and `libyaml-cpp.so*` for manual review. The final step runs verification (`ls /opt/daqiri`, `pkg-config --modversion daqiri`, `ldconfig -p | grep daqiri`) and exits non-zero if any DAQIRI artifact is still present.
+
+Pass `all` instead of `cmake` to also remove the container image (`docker image rm "$IMAGE_TAG"`) in the same run.
