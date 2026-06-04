@@ -103,9 +103,29 @@ uint32_t get_packet_length(BurstParams* burst, int idx) {
   return g_daqiri_mgr->get_packet_length(burst, idx);
 }
 
-uint16_t get_packet_flow_id(BurstParams* burst, int idx) {
+FlowId get_packet_flow_id(BurstParams* burst, int idx) {
   ASSERT_DAQIRI_MGR_INITIALIZED();
   return g_daqiri_mgr->get_packet_flow_id(burst, idx);
+}
+
+Status add_rx_flow_async(int port, const FlowRuleConfig& flow, FlowOpId* op_id) {
+  ASSERT_DAQIRI_MGR_INITIALIZED();
+  return g_daqiri_mgr->add_rx_flow_async(port, flow, op_id);
+}
+
+Status add_rx_flows_async(int port, const std::vector<FlowRuleConfig>& flows, FlowOpId* op_id) {
+  ASSERT_DAQIRI_MGR_INITIALIZED();
+  return g_daqiri_mgr->add_rx_flows_async(port, flows, op_id);
+}
+
+Status delete_flow_async(FlowId flow_id, FlowOpId* op_id) {
+  ASSERT_DAQIRI_MGR_INITIALIZED();
+  return g_daqiri_mgr->delete_flow_async(flow_id, op_id);
+}
+
+Status poll_flow_op(FlowOpResult* result) {
+  ASSERT_DAQIRI_MGR_INITIALIZED();
+  return g_daqiri_mgr->poll_flow_op(result);
 }
 
 Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) {
@@ -589,7 +609,7 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_flow_config(
   struct in_addr addr;
   try {
     flow.name_ = flow_item["name"].as<std::string>();
-    flow.id_ = flow_item["id"].as<int>();
+    flow.id_ = flow_item["id"].as<daqiri::FlowId>();
     flow.action_.type_ = daqiri::FlowType::QUEUE;
     flow.action_.id_ = flow_item["action"]["id"].as<int>();
   } catch (const std::exception& e) {
@@ -598,7 +618,7 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_flow_config(
   }
 
   memset(&flow.match_, 0, sizeof(flow.match_));
-  flow.match_.type_ = daqiri::FlowMatchType::NORMAL;
+  flow.match_.type_ = daqiri::FlowMatchType::IPV4_UDP;
 
   try {
     flow.match_.udp_src_ = flow_item["match"]["udp_src"].as<uint16_t>();
@@ -743,7 +763,7 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_reorder_config(
     }
 
     for (const auto& flow_id_node : reorder_item["flow_ids"]) {
-      reorder_config.flow_ids_.push_back(flow_id_node.as<uint16_t>());
+      reorder_config.flow_ids_.push_back(flow_id_node.as<daqiri::FlowId>());
     }
     if (reorder_config.flow_ids_.empty()) {
       DAQIRI_LOG_ERROR("Reorder config '{}' requires at least one flow ID",

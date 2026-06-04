@@ -96,8 +96,9 @@ For a shorter backend-selection guide, start with the [Benchmarking overview](..
 ??? question "4. I need flow-based load balancing across multiple RX queues"
     - **Closed-loop TX+RX with four queues** — [`daqiri_bench_raw_tx_rx_4q.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_4q.yaml) (runs on `daqiri_bench_raw_gpudirect`).
     - [`daqiri_bench_raw_rx_multi_q.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_rx_multi_q.yaml) (runs on `daqiri_bench_raw_gpudirect`).
+    - **Dynamic RX flow lifecycle** — [`daqiri_example_dynamic_rx_flow.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_example_dynamic_rx_flow.yaml) (runs on `daqiri_example_dynamic_rx_flow`). Starts with `flow_isolation: true` and no configured flows, then dynamically routes one UDP flow to RX queue 0 and queue 1 in sequence.
 
-    The four-queue TX+RX config is self-contained and maps each `bench_tx`/`bench_rx` list entry to the matching DAQIRI queue. The RX-only config is for an external traffic source. Both demonstrate flow-rule-based routing across multiple RX queues, each pinned to its own CPU core.
+    The four-queue TX+RX config is self-contained and maps each `bench_tx`/`bench_rx` list entry to the matching DAQIRI queue. The RX-only config is for an external traffic source. The dynamic-flow example demonstrates queues-only startup and runtime flow insertion/deletion. All three demonstrate flow-rule-based routing across multiple RX queues, each pinned to its own CPU core.
 
     *Requires: Raw Ethernet build (`DAQIRI_MGR` includes `dpdk`) + NVIDIA ConnectX-class NIC. The RX-only config also requires a separate TX traffic source.*
 
@@ -368,7 +369,7 @@ flows:
     udp_dst: 5000
 ```
 
-1. **`id`** · `integer` · *required* — Flow tag attached to matching packets. Set to a non-zero value here so the `reorder_configs:` block below can reference it via `flow_ids:` to select which packets to reorder.
+1. **`id`** · `integer` · *required* — Static flow tag attached to matching packets. Set to a non-zero value here so the `reorder_configs:` block below can reference it via `flow_ids:` to select which packets to reorder. Dynamic RX flows are added after initialization and are not attached to reorder configs in v1.
 
 **The `reorder_configs:` block.** The core of the feature — sits inside the `rx:` section alongside `queues` and `flows`.
 

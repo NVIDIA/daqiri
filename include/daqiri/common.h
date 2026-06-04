@@ -167,9 +167,58 @@ uint32_t get_packet_length(BurstParams *burst, int idx);
  *
  * @param burst Burst structure containing packets
  * @param idx Index of packet
- * @return uint16_t Flow ID
+ * @return FlowId Flow ID, or 0 when no flow matched
  */
-uint16_t get_packet_flow_id(BurstParams* burst, int idx);
+FlowId get_packet_flow_id(BurstParams* burst, int idx);
+
+/**
+ * @brief Enqueue creation of a dynamic RX flow rule.
+ *
+ * The flow ID is allocated by DAQIRI and returned in the completion result from
+ * poll_flow_op(). Packets matching the dynamic rule are marked with the same
+ * ID, so get_packet_flow_id() can be used to identify and later delete the rule.
+ *
+ * @param port Port ID of interface
+ * @param flow Rule match and queue action to install
+ * @param op_id Output operation ID used to track completion
+ * @return Status indicating whether the operation was accepted
+ */
+Status add_rx_flow_async(int port, const FlowRuleConfig &flow, FlowOpId *op_id);
+
+/**
+ * @brief Enqueue creation of multiple dynamic RX flow rules.
+ *
+ * The batch add completion is delivered as a single FlowOpResult. On success,
+ * FlowOpResult::flow_ids_ contains one FlowId per input rule, in input order.
+ * If the batch completion fails, nonzero entries in flow_ids_ were installed
+ * and can be deleted with delete_flow_async(); zero entries were not installed.
+ *
+ * @param port Port ID of interface
+ * @param flows Rule matches and queue actions to install
+ * @param op_id Output operation ID used to track completion
+ * @return Status indicating whether the operation was accepted
+ */
+Status add_rx_flows_async(int port, const std::vector<FlowRuleConfig> &flows, FlowOpId *op_id);
+
+/**
+ * @brief Enqueue deletion of a dynamic flow rule.
+ *
+ * Only flows created by add_rx_flow_async() or add_rx_flows_async() are
+ * deletable through this API.
+ *
+ * @param flow_id Dynamic flow ID returned by an add completion
+ * @param op_id Output operation ID used to track completion
+ * @return Status indicating whether the operation was accepted
+ */
+Status delete_flow_async(FlowId flow_id, FlowOpId *op_id);
+
+/**
+ * @brief Poll one dynamic flow operation completion.
+ *
+ * @param result Output completion details
+ * @return SUCCESS when a completion was returned, NOT_READY when none are ready
+ */
+Status poll_flow_op(FlowOpResult *result);
 
 /**
  * @brief Get the hardware RX timestamp of a packet in nanoseconds
@@ -1111,6 +1160,13 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
               rx_cfg.flow_isolation_ = rx["flow_isolation"].as<bool>();
             } catch (const std::exception& e) { rx_cfg.flow_isolation_ = false; }
 
+            try {
+              rx_cfg.dynamic_flow_capacity_ =
+                  rx["dynamic_flow_capacity"].as<uint32_t>();
+            } catch (const std::exception& e) {
+              rx_cfg.dynamic_flow_capacity_ = daqiri::DEFAULT_DYNAMIC_FLOW_CAPACITY;
+            }
+
             for (const auto &q_item : rx["queues"]) {
               daqiri::RxQueueConfig q;
               if (!parse_rx_queue_config(
@@ -1128,13 +1184,20 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
               rx_cfg.queues_.emplace_back(std::move(q));
             }
 
-            for (const auto &flow_item : rx["flows"]) {
-              daqiri::FlowConfig flow;
-              if (!parse_flow_config(flow_item, flow)) {
-                DAQIRI_LOG_ERROR("Failed to parse FlowConfig");
+            if (rx["flows"].IsDefined()) {
+              if (!rx["flows"].IsSequence()) {
+                DAQIRI_LOG_ERROR("'rx.flows' must be a sequence for interface '{}'",
+                                 ifcfg.name_);
                 return false;
               }
-              rx_cfg.flows_.emplace_back(std::move(flow));
+              for (const auto &flow_item : rx["flows"]) {
+                daqiri::FlowConfig flow;
+                if (!parse_flow_config(flow_item, flow)) {
+                  DAQIRI_LOG_ERROR("Failed to parse FlowConfig");
+                  return false;
+                }
+                rx_cfg.flows_.emplace_back(std::move(flow));
+              }
             }
 
             try {

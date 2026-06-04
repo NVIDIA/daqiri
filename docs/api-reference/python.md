@@ -573,6 +573,10 @@ The workflow sections above show the common call order and ownership rules.
 | `drop_all_traffic(port)` | Install a high-priority drop rule on a port. |
 | `allow_all_traffic(port)` | Remove a drop rule installed by `drop_all_traffic`. |
 | `flush_port_queue(port, queue)` | Drain stale packets from a port queue. |
+| `add_rx_flow_async(port, flow)` | Return `(Status, op_id)` after enqueueing one dynamic RX flow create. |
+| `add_rx_flows_async(port, flows)` | Return `(Status, op_id)` after enqueueing a dynamic RX flow batch create. One completion returns `flow_ids` in input order. |
+| `delete_flow_async(flow_id)` | Return `(Status, op_id)` after enqueueing deletion of one dynamic flow. |
+| `poll_flow_op()` | Return `(Status, FlowOpResult)`, or `NOT_READY` when no dynamic flow operation has completed. |
 | `socket_connect_to_server(server_addr, server_port[, src_addr])` | Return `(Status, conn_id)`. |
 | `socket_get_port_queue(conn_id)` | Return `(Status, port, queue)`. |
 | `socket_get_server_conn_id(server_addr, server_port)` | Return `(Status, conn_id)`. |
@@ -614,7 +618,8 @@ The workflow sections above show the common call order and ownership rules.
 | `RDMATransportMode` | `RC`, `UC`, `UD`, `INVALID` |
 | `SocketMode` | `CLIENT`, `SERVER`, `INVALID` |
 | `FlowType` | `QUEUE` |
-| `FlowMatchType` | `NORMAL`, `FLEX_ITEM` |
+| `FlowMatchType` | `IPV4_UDP`, `FLEX_ITEM` |
+| `FlowOpType` | `ADD_RX`, `ADD_RX_BATCH`, `DELETE` |
 | `ReorderMethod` | `INVALID`, `SEQ_BATCH_NUMBER`, `SEQ_PACKETS_PER_BATCH` |
 | `ReorderDataType` | `SAME`, `INT4`, `INT8`, `INT16`, `INT32`, `FP16`, `BF16`, `FP32`, `FP64`, `INVALID` |
 | `ReorderEndianness` | `HOST`, `NETWORK`, `INVALID` |
@@ -647,6 +652,8 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `FlowAction` | Flow action type and target ID. |
 | `FlowMatch` | Flow match fields for UDP, IPv4, and flex item matching. |
 | `FlowConfig` | Named flow rule combining action and match. |
+| `FlowRuleConfig` | Dynamic flow rule match and action. |
+| `FlowOpResult` | Dynamic flow operation completion. Batch adds return `flow_ids` in input order. |
 | `FlexItemConfig` | Flexible parser item configuration. |
 | `FlexItemMatch` | Flexible parser match value and mask. |
 | `SocketConfig` | Socket client/server endpoint and timing settings. |

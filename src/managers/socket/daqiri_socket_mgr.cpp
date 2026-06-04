@@ -210,7 +210,7 @@ uint32_t SocketMgr::get_segment_packet_length(BurstParams* burst, int seg, int i
   return burst->pkt_lens[seg][idx];
 }
 
-uint16_t SocketMgr::get_packet_flow_id(BurstParams* burst, int idx) {
+FlowId SocketMgr::get_packet_flow_id(BurstParams* burst, int idx) {
   return 0;
 }
 
