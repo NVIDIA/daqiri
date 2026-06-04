@@ -222,7 +222,14 @@ Flow rules are only available in Raw Ethernet (`stream_type: "raw"`).
 A flow's match can combine fields such as `udp_src`, `udp_dst`, and
 `ipv4_len`; multiple flows can target the same queue, and the matching
 flow's ID is available at runtime so the application can distinguish
-them. Flows are configured under `rx.flows` in the YAML.
+them.
+
+Flows can be static or dynamic. Static flows are configured under
+`rx.flows` in the YAML and keep their configured IDs for the process lifetime.
+Dynamic RX flows are added after `daqiri_init()` with `add_rx_flow_async()`;
+their non-zero `FlowId` is allocated by DAQIRI, returned in the add completion,
+and used as the packet mark returned by `get_packet_flow_id()`. Only dynamic
+flows can be deleted dynamically. TX dynamic flows are not part of v1.
 
 ### Flow Steering
 

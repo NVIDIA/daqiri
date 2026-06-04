@@ -47,7 +47,7 @@ class Manager {
   virtual uint32_t get_packet_length(BurstParams* burst, int idx) = 0;
   virtual void* get_segment_packet_ptr(BurstParams* burst, int seg, int idx) = 0;
   virtual uint32_t get_segment_packet_length(BurstParams* burst, int seg, int idx) = 0;
-  virtual uint16_t get_packet_flow_id(BurstParams* burst, int idx) = 0;
+  virtual FlowId get_packet_flow_id(BurstParams* burst, int idx) = 0;
   virtual Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) = 0;
   virtual void* get_packet_extra_info(BurstParams* burst, int idx) = 0;
   virtual Status get_tx_packet_burst(BurstParams* burst) = 0;
@@ -89,6 +89,9 @@ class Manager {
   virtual Status get_mac_addr(int port, char* mac) = 0;
   virtual Status drop_all_traffic(int port);
   virtual Status allow_all_traffic(int port);
+  virtual Status add_rx_flow_async(int port, const FlowRuleConfig& flow, FlowOpId* op_id);
+  virtual Status delete_flow_async(FlowId flow_id, FlowOpId* op_id);
+  virtual Status poll_flow_op(FlowOpResult* result);
   virtual int get_port_id(const std::string& key) final;  // NOLINT(readability/inheritance)
   virtual bool validate_config() const;
   virtual uint16_t get_num_rx_queues(int port_id) const;

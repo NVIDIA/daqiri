@@ -368,7 +368,7 @@ flows:
     udp_dst: 5000
 ```
 
-1. **`id`** · `integer` · *required* — Flow tag attached to matching packets. Set to a non-zero value here so the `reorder_configs:` block below can reference it via `flow_ids:` to select which packets to reorder.
+1. **`id`** · `integer` · *required* — Static flow tag attached to matching packets. Set to a non-zero value here so the `reorder_configs:` block below can reference it via `flow_ids:` to select which packets to reorder. Dynamic RX flows are added after initialization and are not attached to reorder configs in v1.
 
 **The `reorder_configs:` block.** The core of the feature — sits inside the `rx:` section alongside `queues` and `flows`.
 
