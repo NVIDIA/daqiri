@@ -192,7 +192,9 @@ engine.
 
 ### Flows
 
-`rx.flows:` — Flow rules that steer packets to specific queues based on match criteria.
+`rx.flows:` — Static startup flow rules that steer packets to specific queues based on
+match criteria. This sequence may be omitted; a queues-only RX config can add DPDK RX
+flows later with the dynamic flow API.
 
 - **`name`**: Flow name.
   - type: `string`
@@ -232,13 +234,25 @@ Both classes install conflicting DPDK group-0 jump rules, so only one is reachab
 ### Flow Isolation
 
 `rx.flow_isolation:` — When `true`, only packets matching an explicit flow rule are delivered
-to the application. Unmatched packets are steered back to the Linux kernel via a
-send-to-kernel fallback rule. When `false`, unmatched packets go to a default queue.
-With `flow_isolation: true`, send-to-kernel fallbacks are installed per flow class
-(standard or flex-item); mixing both classes on one interface is not supported.
+to the application. Static startup flows install send-to-kernel fallback rules per flow class
+(standard or flex-item), so unmatched traffic in those classes is steered back to the Linux
+kernel. Queues-only configs can set `flow_isolation: true` and then install dynamic RX flows
+after `daqiri_init()`; until a dynamic rule is added, application traffic is not delivered to
+DAQIRI RX queues. When `false`, unmatched packets go to a default queue. Mixing standard and
+flex-item flow classes on one interface is not supported.
 
 - type: `boolean`
 - default: `false`
+
+### Dynamic Flow Capacity
+
+`rx.dynamic_flow_capacity:` — DPDK template-table capacity reserved for dynamic RX flow
+rules on this interface. `0` disables DPDK template/async setup on startup. Set a positive
+value to opt in to the template fast path when it is available; legacy fallback paths still
+accept dynamic RX flow operations but do not use a template table.
+
+- type: `integer`
+- default: `0`
 
 ### Hardware Timestamps
 

@@ -450,6 +450,36 @@ Status Engine::allow_all_traffic(int port) {
   return Status::NOT_SUPPORTED;
 }
 
+Status Engine::add_rx_flow_async(int port, const FlowRuleConfig& flow, FlowOpId* op_id) {
+  (void)port;
+  (void)flow;
+  (void)op_id;
+  DAQIRI_LOG_ERROR("add_rx_flow_async not implemented for this engine type");
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::add_rx_flows_async(int port,
+                                  const std::vector<FlowRuleConfig>& flows,
+                                  FlowOpId* op_id) {
+  (void)port;
+  (void)flows;
+  (void)op_id;
+  DAQIRI_LOG_ERROR("add_rx_flows_async not implemented for this engine type");
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::delete_flow_async(FlowId flow_id, FlowOpId* op_id) {
+  (void)flow_id;
+  (void)op_id;
+  DAQIRI_LOG_ERROR("delete_flow_async not implemented for this engine type");
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::poll_flow_op(FlowOpResult* result) {
+  (void)result;
+  return Status::NOT_SUPPORTED;
+}
+
 Status Engine::get_rx_burst(BurstParams** burst, int port_id) {
   // Check if the port_id is valid
   if (port_id < 0 || port_id >= static_cast<int>(cfg_.ifs_.size())) {

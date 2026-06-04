@@ -215,7 +215,7 @@ uint32_t SocketEngine::get_segment_packet_length(BurstParams* burst, int seg, in
   return burst->pkt_lens[seg][idx];
 }
 
-uint16_t SocketEngine::get_packet_flow_id(BurstParams* burst, int idx) {
+FlowId SocketEngine::get_packet_flow_id(BurstParams* burst, int idx) {
   return 0;
 }
 

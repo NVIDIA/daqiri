@@ -1,0 +1,77 @@
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    master_core: 3
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    memory_regions:
+    - name: "Data_TX_GPU"
+      kind: "device"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 1064
+    - name: "Data_RX_GPU_0"
+      kind: "device"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 1064
+    - name: "Data_RX_GPU_1"
+      kind: "device"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 1064
+
+    interfaces:
+    - name: "tx_port"
+      address: <0000:00:00.0>
+      tx:
+        queues:
+        - name: "tx_q_0"
+          id: 0
+          batch_size: 1024
+          cpu_core: 4
+          memory_regions:
+            - "Data_TX_GPU"
+          offloads:
+            - "tx_eth_src"
+    - name: "rx_port"
+      address: <0000:00:00.0>
+      rx:
+        flow_isolation: true
+        dynamic_flow_capacity: 1024
+        queues:
+        - name: "rx_q_0"
+          id: 0
+          cpu_core: 8
+          batch_size: 1024
+          memory_regions:
+            - "Data_RX_GPU_0"
+        - name: "rx_q_1"
+          id: 1
+          cpu_core: 9
+          batch_size: 1024
+          memory_regions:
+            - "Data_RX_GPU_1"
+
+bench_rx:
+- interface_name: "rx_port"
+  queue_id: 0
+- interface_name: "rx_port"
+  queue_id: 1
+
+bench_tx:
+- interface_name: "tx_port"
+  queue_id: 0
+  batch_size: 1024
+  payload_size: 1000
+  header_size: 64
+  eth_dst_addr: <00:00:00:00:00:00>
+  ip_src_addr: <1.2.3.4>
+  ip_dst_addr: <5.6.7.8>
+  udp_src_port: 4096
+  udp_dst_port: 4096

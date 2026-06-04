@@ -1504,8 +1504,8 @@ void IbverbsEngine::initialize() {
   DAQIRI_LOG_INFO("ibverbs backend initialized with {} RX queue(s), {} TX queue(s)",
                   rx_queues_.size(), tx_queues_.size());
 
-  // Backends self-start their workers at the end of initialize() (mirrors
-  // DpdkMgr); daqiri_init does not call run() explicitly.
+  // Engines self-start their workers at the end of initialize() (mirrors
+  // DpdkEngine); daqiri_init does not call run() explicitly.
   run();
 }
 
@@ -1832,7 +1832,7 @@ Status IbverbsEngine::init_reorder(IbvRxQueue& q, const InterfaceConfig& intf,
   const auto& src_mr = cfg_.mrs_[q.mr_name];
 
   // flow id -> queue, to find which reorder configs belong to this queue.
-  std::unordered_map<uint16_t, uint16_t> flow_to_queue;
+  std::unordered_map<FlowId, uint16_t> flow_to_queue;
   for (const auto& fl : intf.rx_.flows_) {
     flow_to_queue[fl.id_] = fl.action_.id_;
   }
@@ -1844,7 +1844,7 @@ Status IbverbsEngine::init_reorder(IbvRxQueue& q, const InterfaceConfig& intf,
     }
     // Does this reorder config map to this queue?
     bool mine = false;
-    for (uint16_t fid : rc.flow_ids_) {
+    for (FlowId fid : rc.flow_ids_) {
       auto it = flow_to_queue.find(fid);
       if (it != flow_to_queue.end() && it->second == static_cast<uint16_t>(q.queue_id)) {
         mine = true;
@@ -1905,7 +1905,7 @@ Status IbverbsEngine::init_reorder(IbvRxQueue& q, const InterfaceConfig& intf,
 
     const size_t plan_idx = st->plans.size();
     st->plans.push_back(std::move(plan));
-    for (uint16_t fid : rc.flow_ids_) {
+    for (FlowId fid : rc.flow_ids_) {
       if (flow_to_queue[fid] == static_cast<uint16_t>(q.queue_id)) {
         st->flow_to_plan[fid] = plan_idx;
       }
@@ -2306,13 +2306,13 @@ uint32_t IbverbsEngine::get_segment_packet_length(BurstParams* burst, int seg, i
   return burst->pkt_lens[seg][idx];
 }
 
-uint16_t IbverbsEngine::get_packet_flow_id(BurstParams* burst, int idx) {
+FlowId IbverbsEngine::get_packet_flow_id(BurstParams* burst, int idx) {
   // Per-packet MARK tag captured from the CQE (set by the flow's tag action).
   // Distinguishes flows that share a queue. Falls back to the per-queue flow_id
   // for untagged packets (tag 0), e.g. catch-all traffic or single-flow configs.
   const uint32_t tag = burst_flowtag_arr(burst)[idx];
   if (tag != 0) {
-    return static_cast<uint16_t>(tag);
+    return tag;
   }
   IbvRxQueue* q = find_rx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
   return q ? q->flow_id : 0;

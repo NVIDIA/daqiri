@@ -44,6 +44,10 @@ static inline constexpr uint32_t MAX_INTERFACES = 4;
 static inline constexpr int MAX_NUM_SEGS = 4;
 static inline constexpr uint32_t DAQIRI_BURST_FLAG_REORDERED = (1U << 28);
 static inline constexpr uint32_t DAQIRI_BURST_FLAG_REORDER_TIMEOUT = (1U << 29);
+static inline constexpr uint32_t DEFAULT_DYNAMIC_FLOW_CAPACITY = 0;
+
+using FlowId = uint32_t;
+using FlowOpId = uint64_t;
 
 struct ReorderBurstInfo {
   uint64_t batch_id;
@@ -640,36 +644,57 @@ struct TxQueueConfig {
 enum class FlowType { QUEUE };
 
 struct FlowAction {
-  FlowType type_;
-  uint16_t id_;
+  FlowType type_ = FlowType::QUEUE;
+  uint16_t id_ = 0;
 };
 
 struct FlexItemMatch {
-  uint16_t flex_item_id_;
-  uint32_t val_;
-  uint32_t mask_;
+  uint16_t flex_item_id_ = 0;
+  uint32_t val_ = 0;
+  uint32_t mask_ = 0;
 };
 
 enum class FlowMatchType {
-  NORMAL,
+  IPV4_UDP,
   FLEX_ITEM,
 };
 
 struct FlowMatch {
-  FlowMatchType type_;
-  uint16_t udp_src_;
-  uint16_t udp_dst_;
-  uint16_t ipv4_len_;
-  in_addr_t ipv4_src_;
-  in_addr_t ipv4_dst_;
+  FlowMatchType type_ = FlowMatchType::IPV4_UDP;
+  uint16_t udp_src_ = 0;
+  uint16_t udp_dst_ = 0;
+  uint16_t ipv4_len_ = 0;
+  in_addr_t ipv4_src_ = INADDR_ANY;
+  in_addr_t ipv4_dst_ = INADDR_ANY;
   FlexItemMatch flex_item_match_;
 };
 struct FlowConfig {
   std::string name_;
-  uint16_t id_;
+  FlowId id_ = 0;
   FlowAction action_;
   FlowMatch match_;
-  void* backend_config_;  // Filled in by operator
+  void* backend_config_ = nullptr;  // Filled in by operator
+};
+
+struct FlowRuleConfig {
+  std::string name_;
+  FlowAction action_;
+  FlowMatch match_;
+  void* backend_config_ = nullptr;  // Filled in by operator
+};
+
+enum class FlowOpType {
+  ADD_RX,
+  ADD_RX_BATCH,
+  DELETE,
+};
+
+struct FlowOpResult {
+  FlowOpId op_id_ = 0;
+  FlowOpType type_ = FlowOpType::ADD_RX;
+  Status status_ = Status::NOT_READY;
+  FlowId flow_id_ = 0;
+  std::vector<FlowId> flow_ids_;
 };
 
 struct CommonConfig {
@@ -858,7 +883,7 @@ struct ReorderConfig {
   std::string reorder_type_;
   std::string memory_region_;
   uint32_t payload_byte_offset_ = 0;
-  std::vector<uint16_t> flow_ids_;
+  std::vector<FlowId> flow_ids_;
   ReorderMethod method_ = ReorderMethod::INVALID;
   ReorderSeqBatchNumberConfig seq_batch_number_;
   ReorderSeqPacketsPerBatchConfig seq_packets_per_batch_;
@@ -868,6 +893,7 @@ struct ReorderConfig {
 struct RxConfig {
   bool flow_isolation_ = false;
   bool hardware_timestamps_ = false;
+  uint32_t dynamic_flow_capacity_ = DEFAULT_DYNAMIC_FLOW_CAPACITY;
   std::vector<RxQueueConfig> queues_;
   std::vector<FlowConfig> flows_;
   std::vector<FlexItemConfig> flex_items_;

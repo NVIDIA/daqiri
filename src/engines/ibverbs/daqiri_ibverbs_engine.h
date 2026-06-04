@@ -85,7 +85,7 @@ struct IbvReorderState {
   bool enabled = false;
   bool single_plan = false;
   std::vector<IbvReorderPlan> plans;
-  std::unordered_map<uint16_t, size_t> flow_to_plan;
+  std::unordered_map<FlowId, size_t> flow_to_plan;
   std::deque<BurstParams*> ready;
   std::mutex lock;
 };
@@ -126,7 +126,7 @@ struct IbvRxQueue {
   // Flow id reported for packets on this queue. When a single configured flow
   // steers to this queue, get_packet_flow_id returns its id (per-queue fallback
   // for the flow_tag/MARK the DPDK backend used).
-  uint16_t flow_id = 0;
+  FlowId flow_id = 0;
 
   // When false, a DevX *regular* (cyclic) RQ is used instead of MPRQ: one WQE
   // per packet, each WQE a multi-segment scatter list. Selected for physical HDS
@@ -329,7 +329,7 @@ class IbverbsEngine : public Engine {
   uint32_t get_packet_length(BurstParams* burst, int idx) override;
   void* get_segment_packet_ptr(BurstParams* burst, int seg, int idx) override;
   uint32_t get_segment_packet_length(BurstParams* burst, int seg, int idx) override;
-  uint16_t get_packet_flow_id(BurstParams* burst, int idx) override;
+  FlowId get_packet_flow_id(BurstParams* burst, int idx) override;
   Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) override;
   void* get_packet_extra_info(BurstParams* burst, int idx) override;
 
