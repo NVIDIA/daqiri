@@ -14,6 +14,7 @@ ASSUME_YES=0
 DRY_RUN=0
 CLEAN_BUILD=0
 TARGET=""
+CMAKE_REMOVED=0
 
 if [[ -t 1 ]]; then
     C_RED=$'\033[31m'; C_YELLOW=$'\033[33m'; C_GREEN=$'\033[32m'
@@ -88,14 +89,17 @@ done
 
 run() {
     if [[ $DRY_RUN -eq 1 ]]; then
-        printf '%s[dry-run]%s %s\n' "${C_DIM}" "${C_RESET}" "$*"
+        printf '%s[dry-run]%s' "${C_DIM}" "${C_RESET}"
+        printf ' %q' "$@"
+        printf '\n'
     else
-        # shellcheck disable=SC2294
-        # eval is intentional here: callers pass pre-quoted command strings
-        # that include shell redirection (e.g. "sudo xargs rm < '$manifest'")
-        # which has to be re-parsed by the shell.
-        eval "$@"
+        "$@"
     fi
+}
+
+require_sudo() {
+    [[ $DRY_RUN -eq 1 ]] && return 0
+    run sudo -v
 }
 
 confirm() {
@@ -108,25 +112,65 @@ confirm() {
 
 remove_cmake_via_manifest() {
     local manifest="$1"
-    local count
-    count=$(wc -l < "$manifest")
-    info "Manifest: $manifest ($count files)"
-    printf '%sPreview (first 5 entries):%s\n' "${C_DIM}" "${C_RESET}"
-    head -5 "$manifest" | sed 's/^/  /'
+    local prefix_abs
+    prefix_abs=$(realpath -m "$DAQIRI_PREFIX")
 
-    confirm "Remove these $count files (sudo required)?" || {
+    local -a present_paths=()
+    local -a missing_paths=()
+    local path path_abs
+    while IFS= read -r path || [[ -n "$path" ]]; do
+        if [[ -z "$path" ]]; then
+            fail "manifest contains an empty path: $manifest"
+            return 1
+        fi
+        path_abs=$(realpath -m "$path")
+        if [[ "$path_abs" != "$prefix_abs"/* ]]; then
+            fail "manifest path is outside DAQIRI_PREFIX ($DAQIRI_PREFIX): $path"
+            fail "Set DAQIRI_PREFIX/BUILD_DIR to the matching install, or remove via the fallback scan."
+            return 1
+        fi
+        if [[ -e "$path" || -L "$path" ]]; then
+            present_paths+=("$path")
+        else
+            missing_paths+=("$path")
+        fi
+    done < "$manifest"
+
+    local count=$(( ${#present_paths[@]} + ${#missing_paths[@]} ))
+    info "Manifest: $manifest ($count files, prefix=$prefix_abs)"
+    if [[ $count -eq 0 ]]; then
+        info "Manifest is empty; verification will still run."
+        return 0
+    fi
+
+    if [[ ${#missing_paths[@]} -gt 0 ]]; then
+        local missing_label="entries are"
+        [[ ${#missing_paths[@]} -eq 1 ]] && missing_label="entry is"
+        warn "${#missing_paths[@]} manifest ${missing_label} already absent; continuing with remaining files."
+    fi
+    if [[ ${#present_paths[@]} -eq 0 ]]; then
+        info "No manifest entries remain on disk; verification will still run."
+        return 0
+    fi
+
+    printf '%sPreview (first 5 entries):%s\n' "${C_DIM}" "${C_RESET}"
+    printf '  %s\n' "${present_paths[@]:0:5}"
+
+    confirm "Remove these ${#present_paths[@]} files (sudo required)?" || {
         warn "Aborted by user."
         return 1
     }
 
-    # xargs -d '\n' (not the default whitespace splitting) so an install
-    # prefix containing spaces does not get carved up into wrong rm
-    # arguments. CMake writes one absolute path per line in
-    # install_manifest.txt, so newline is the only safe delimiter.
-    run "sudo xargs -d '\\n' rm -v < '$manifest'"
+    require_sudo || return 1
+    run sudo rm -v -- "${present_paths[@]}" || return 1
+    CMAKE_REMOVED=1
 
     info "Removing now-empty directories under $DAQIRI_PREFIX"
-    run "sudo find '$DAQIRI_PREFIX' -depth -type d -empty -delete 2>/dev/null || true"
+    if [[ $DRY_RUN -eq 1 ]]; then
+        run sudo find "$DAQIRI_PREFIX" -depth -type d -empty -delete
+    else
+        sudo find "$DAQIRI_PREFIX" -depth -type d -empty -delete 2>/dev/null || true
+    fi
 }
 
 remove_cmake_via_scan() {
@@ -183,18 +227,25 @@ remove_cmake_via_scan() {
         return 1
     }
 
+    require_sudo || return 1
+
     local entry
     for entry in "${candidates[@]}"; do
-        run "sudo rm -rfv '$entry'"
+        run sudo rm -rfv -- "$entry" || return 1
     done
+    CMAKE_REMOVED=1
 
     info "Removing now-empty directories under $DAQIRI_PREFIX"
-    run "sudo find '$DAQIRI_PREFIX' -depth -type d -empty -delete 2>/dev/null || true"
+    if [[ $DRY_RUN -eq 1 ]]; then
+        run sudo find "$DAQIRI_PREFIX" -depth -type d -empty -delete
+    else
+        sudo find "$DAQIRI_PREFIX" -depth -type d -empty -delete 2>/dev/null || true
+    fi
 }
 
 action_cmake() {
     info "Target: cmake (prefix=$DAQIRI_PREFIX, build=$BUILD_DIR)"
-    local removed=0
+    CMAKE_REMOVED=0
     if [[ ! -e "$DAQIRI_PREFIX" ]]; then
         info "$DAQIRI_PREFIX does not exist; nothing to remove."
     else
@@ -207,7 +258,6 @@ action_cmake() {
             warn "  cmake --install $BUILD_DIR --prefix $DAQIRI_PREFIX"
             remove_cmake_via_scan || return 1
         fi
-        removed=1
     fi
 
     # Refresh the linker cache once, after either removal path. Without
@@ -215,14 +265,17 @@ action_cmake() {
     # spurious WARN on hosts that registered the install prefix in
     # /etc/ld.so.conf.d/. Skipped when nothing was removed so the script
     # stays a no-op on a clean system.
-    if [[ $removed -eq 1 ]]; then
+    if [[ $CMAKE_REMOVED -eq 1 ]]; then
         info "Refreshing dynamic linker cache."
-        run "sudo ldconfig"
+        require_sudo || return 1
+        run sudo ldconfig || return 1
     fi
 
     if [[ $CLEAN_BUILD -eq 1 ]]; then
         if [[ -d "$BUILD_DIR" ]]; then
-            confirm "Also remove the build directory $BUILD_DIR?" && run "rm -rf '$BUILD_DIR'"
+            if confirm "Also remove the build directory $BUILD_DIR?"; then
+                run rm -rf -- "$BUILD_DIR" || return 1
+            fi
         else
             info "Build directory $BUILD_DIR not present."
         fi
@@ -249,14 +302,20 @@ action_container() {
         docker ps -a --filter "ancestor=$IMAGE_TAG" \
             --format '  {{.ID}}  {{.Names}}  ({{.Status}})'
         if confirm "Stop and remove these containers?"; then
-            run "docker rm -f $(echo "$containers" | tr '\n' ' ')"
+            local -a container_ids=()
+            while IFS= read -r container_id; do
+                [[ -n "$container_id" ]] && container_ids+=("$container_id")
+            done <<< "$containers"
+            run docker rm -f "${container_ids[@]}" || return 1
         fi
     else
         info "No containers found for $IMAGE_TAG."
     fi
 
     if docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
-        confirm "Remove image $IMAGE_TAG?" && run "docker image rm '$IMAGE_TAG'"
+        if confirm "Remove image $IMAGE_TAG?"; then
+            run docker image rm "$IMAGE_TAG" || return 1
+        fi
     else
         info "Image $IMAGE_TAG not present."
     fi
@@ -330,7 +389,7 @@ verify_container() {
         printf '  %sOK%s    docker not installed; nothing to verify\n' "${C_GREEN}" "${C_RESET}"
         return 0
     fi
-    if docker images --format '{{.Repository}}:{{.Tag}}' | grep -q "^${IMAGE_TAG}$"; then
+    if docker images --format '{{.Repository}}:{{.Tag}}' | grep -Fxq "$IMAGE_TAG"; then
         printf '  %sFAIL%s  %s still present\n' "${C_RED}" "${C_RESET}" "$IMAGE_TAG"
         return 1
     fi
@@ -362,6 +421,12 @@ case "$TARGET" in
         ;;
 esac
 
-[[ $DRY_RUN -eq 1 ]] && info "Dry run complete. No changes were made."
+if [[ $DRY_RUN -eq 1 ]]; then
+    if [[ $overall_status -eq 0 ]]; then
+        info "Dry run complete. No changes were made."
+    else
+        warn "Dry run failed. No changes were made."
+    fi
+fi
 
 exit "$overall_status"
