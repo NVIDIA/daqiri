@@ -139,15 +139,15 @@ sudo apt install -y \
 sudo apt install -y pybind11-dev
 ```
 
-### Uninstall
+### Cleanup
 
-To remove DAQIRI's container image or bare-metal install without touching the build prerequisites (DPDK, DOCA libraries, CUDA, hugepages, NIC drivers), use [`scripts/uninstall.sh`](https://github.com/NVIDIA/daqiri/blob/main/scripts/uninstall.sh):
+To remove DAQIRI's container image or bare-metal install without touching the build prerequisites (DPDK, DOCA libraries, CUDA, hugepages, NIC drivers), use [`scripts/cleanup.sh`](https://github.com/NVIDIA/daqiri/blob/main/scripts/cleanup.sh):
 
 === "Container"
 
     ```bash
-    scripts/uninstall.sh container             # interactive
-    scripts/uninstall.sh container --dry-run   # show what would be removed
+    scripts/cleanup.sh container             # interactive
+    scripts/cleanup.sh container --dry-run   # show what would be removed
     ```
 
     Override `IMAGE_TAG=` if you built with a non-default tag.
@@ -155,12 +155,12 @@ To remove DAQIRI's container image or bare-metal install without touching the bu
 === "CMake build (bare-metal)"
 
     ```bash
-    scripts/uninstall.sh cmake             # interactive, manifest-driven
-    scripts/uninstall.sh cmake --dry-run   # show what would be removed
-    scripts/uninstall.sh cmake --yes       # non-interactive
+    scripts/cleanup.sh cmake             # interactive, manifest-driven
+    scripts/cleanup.sh cmake --dry-run   # show what would be removed
+    scripts/cleanup.sh cmake --yes       # non-interactive
     ```
 
-    See [Step 7: Uninstall](tutorials/bare-metal-cmake-build.md#step-7-uninstall) in the bare-metal tutorial for manifest semantics, the `DAQIRI_PREFIX` override, and verification details.
+    See [Step 7: Cleanup](tutorials/bare-metal-cmake-build.md#step-7-cleanup) in the bare-metal tutorial for manifest semantics, the `DAQIRI_PREFIX` override, and verification details.
 
 Pass `all` instead of `container` or `cmake` to remove both.
 

@@ -269,7 +269,7 @@ verify_cmake() {
         info "Verification skipped (dry run)."
         return 0
     fi
-    info "Verifying CMake uninstall:"
+    info "Verifying CMake cleanup:"
     local rc=0
 
     # Check for DAQIRI-specific artifacts under the prefix. Vendored
@@ -325,7 +325,7 @@ verify_container() {
         info "Verification skipped (dry run)."
         return 0
     fi
-    info "Verifying container uninstall:"
+    info "Verifying container cleanup:"
     if ! command -v docker >/dev/null 2>&1; then
         printf '  %sOK%s    docker not installed; nothing to verify\n' "${C_GREEN}" "${C_RESET}"
         return 0
