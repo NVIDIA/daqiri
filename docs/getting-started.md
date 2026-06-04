@@ -160,7 +160,7 @@ To remove DAQIRI's container image or bare-metal install without touching the bu
     scripts/cleanup.sh cmake --yes       # non-interactive
     ```
 
-    See [Step 7: Cleanup](tutorials/bare-metal-cmake-build.md#step-7-cleanup) in the bare-metal tutorial for manifest semantics, the `DAQIRI_PREFIX` override, and verification details.
+    See [Cleanup](tutorials/bare-metal-cmake-build.md#cleanup) in the bare-metal tutorial for manifest semantics, the `DAQIRI_PREFIX` override, and verification details.
 
 Pass `all` instead of `container` or `cmake` to remove both.
 
