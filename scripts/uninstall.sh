@@ -319,6 +319,21 @@ verify_container() {
         return 1
     fi
     printf '  %sOK%s    %s absent\n' "${C_GREEN}" "${C_RESET}" "$IMAGE_TAG"
+
+    # Surface partial-build leftovers (e.g. an interrupted `docker build` of
+    # this image leaves dangling intermediates and an exited build container,
+    # neither of which carries the $IMAGE_TAG reference). These are not removed
+    # automatically because they can also legitimately come from unrelated
+    # builds on the same host; flag them so the user can decide.
+    local dangling_count exited_count
+    dangling_count=$(docker images -q --filter dangling=true 2>/dev/null | wc -l)
+    exited_count=$(docker ps -aq --filter status=exited 2>/dev/null | wc -l)
+    if [[ $dangling_count -gt 0 || $exited_count -gt 0 ]]; then
+        printf '  %sINFO%s  %d dangling image(s) and %d exited container(s) remain\n' \
+            "${C_CYAN}" "${C_RESET}" "$dangling_count" "$exited_count"
+        printf '         (likely from an interrupted build of %s; reclaim with:\n' "$IMAGE_TAG"
+        printf '          docker container prune -f && docker image prune -f)\n'
+    fi
 }
 
 overall_status=0
