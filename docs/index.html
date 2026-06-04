@@ -31,6 +31,7 @@
     pre .str { color:#c3e88d; }
     pre .nm { color:var(--nv-green-l); }
     .container { max-width:1200px; margin:0 auto; padding:0 2rem; }
+    #hero .container { max-width:1360px; }
     section { padding:6rem 0; }
     .section-label { font-size:.72rem; font-weight:700; letter-spacing:.15em; text-transform:uppercase; color:var(--nv-green); margin-bottom:.75rem; }
     .section-title { color:var(--text-pri); margin-bottom:1rem; }
@@ -76,26 +77,45 @@
     .btn-outline:hover { color:var(--text-pri); border-color:#444; background:rgba(255,255,255,.04); }
 
     /* HERO */
-    #hero { min-height:100vh; display:flex; align-items:center; padding-top:var(--nav-h); position:relative; overflow:hidden; }
-    .hero-inner { display:grid; grid-template-columns:1fr auto; gap:4rem; align-items:center; }
-    .hero-logo-wrap { display:flex; align-items:center; justify-content:center; flex-shrink:0; }
-    .hero-logo-wrap img { width:320px; max-width:38vw; filter:drop-shadow(0 0 40px rgba(118,185,0,0.18)); }
+    #hero { min-height:calc(100vh - 24px); display:flex; align-items:center; padding:calc(var(--nav-h) + 3rem) 0 4rem; position:relative; overflow:hidden; }
+    .hero-inner { display:grid; grid-template-columns:minmax(0,1fr) minmax(460px,700px); column-gap:2rem; row-gap:2rem; align-items:center; }
+    .hero-visual { position:relative; z-index:1; grid-column:2; grid-row:1 / span 3; display:flex; align-items:center; justify-content:center; }
+    .hero-visual::before { content:''; position:absolute; inset:-5% -8% -2%; background:radial-gradient(ellipse,rgba(118,185,0,.28) 0%,transparent 68%); filter:blur(20px); z-index:-1; }
+    .hero-visual-link { display:block; width:min(100%,700px); padding:.45rem; border-radius:20px; appearance:none; background:linear-gradient(135deg,rgba(118,185,0,.34),rgba(93,216,242,.18)); border:1px solid rgba(160,208,0,.38); box-shadow:0 24px 70px rgba(0,0,0,.58),0 0 0 1px rgba(255,255,255,.05) inset; transition:transform var(--ease),border-color var(--ease),box-shadow var(--ease); cursor:zoom-in; }
+    .hero-visual-link:hover { transform:translateY(-2px); border-color:rgba(160,208,0,.68); box-shadow:0 30px 90px rgba(0,0,0,.65),0 0 34px rgba(118,185,0,.16); }
+    .hero-visual-link:focus-visible { outline:2px solid var(--nv-green); outline-offset:4px; }
+    .hero-visual img { width:100%; display:block; border-radius:16px; filter:contrast(1.08) brightness(1.08) saturate(1.12) drop-shadow(0 0 44px rgba(118,185,0,0.18)); }
     .hero-grid { position:absolute; inset:0; z-index:0; background-image:linear-gradient(rgba(118,185,0,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(118,185,0,.04) 1px,transparent 1px); background-size:60px 60px; mask-image:radial-gradient(ellipse 80% 60% at 50% 40%,black 30%,transparent 100%); }
     .hero-glow { position:absolute; top:-20%; left:50%; transform:translateX(-50%); width:800px; height:500px; background:radial-gradient(ellipse,rgba(118,185,0,.11) 0%,transparent 70%); pointer-events:none; z-index:0; }
-    .hero-content { position:relative; z-index:1; max-width:780px; }
+    .hero-content { position:relative; z-index:1; grid-column:1; max-width:760px; }
     .hero-eyebrow { display:inline-flex; align-items:center; gap:.5rem; font-size:.72rem; font-weight:700; letter-spacing:.15em; text-transform:uppercase; color:var(--nv-green); background:rgba(118,185,0,.08); border:1px solid rgba(118,185,0,.2); border-radius:99px; padding:.35rem 1rem; margin-bottom:2rem; }
     .hero-eyebrow::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--nv-green); animation:pulse 2s ease-in-out infinite; }
     @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.8)} }
-    .hero-title { margin-bottom:1.5rem; }
+    .hero-title { font-size:clamp(1.85rem,2.8vw,2.35rem); margin-bottom:1.5rem; }
     .hero-title .hi { color:var(--nv-green); }
-    .hero-desc { font-size:1.15rem; color:var(--text-mut); max-width:620px; margin-bottom:2rem; line-height:1.75; }
-    .hero-actions { display:flex; align-items:center; gap:1rem; flex-wrap:wrap; margin-bottom:3.5rem; }
-    .hero-stats { display:flex; gap:3rem; flex-wrap:wrap; border-top:1px solid var(--border); padding-top:2.5rem; }
-    .stat-value { font-size:1.75rem; font-weight:800; color:var(--text-pri); letter-spacing:-.03em; }
+    .hero-desc { font-size:1.15rem; color:var(--text-mut); max-width:620px; margin-bottom:0; line-height:1.75; }
+    .hero-actions { position:relative; z-index:1; grid-column:1; display:flex; align-items:center; gap:1rem; flex-wrap:wrap; }
+    .hero-stats { grid-column:1 / -1; display:flex; gap:3rem; flex-wrap:wrap; border-top:1px solid var(--border); padding-top:2.5rem; }
+    .stat-value { font-size:1.45rem; font-weight:800; color:var(--text-pri); letter-spacing:-.03em; }
     .stat-label { font-size:.78rem; color:var(--text-dim); font-weight:500; text-transform:uppercase; letter-spacing:.1em; margin-top:.2rem; }
 
+    /* GRAPHIC OVERLAY */
+    body.graphic-overlay-open { overflow:hidden; }
+    .graphic-overlay { position:fixed; inset:calc(var(--nav-h) + 1rem) 1.5rem 1.5rem; z-index:2000; display:grid; place-items:center; opacity:0; visibility:hidden; pointer-events:none; transition:opacity var(--ease),visibility var(--ease); }
+    .graphic-overlay.is-open { opacity:1; visibility:visible; pointer-events:auto; }
+    .graphic-overlay-backdrop { position:absolute; inset:0; border-radius:22px; background:rgba(4,7,4,.74); border:1px solid rgba(118,185,0,.22); box-shadow:0 24px 120px rgba(0,0,0,.72); backdrop-filter:blur(6px); }
+    .graphic-overlay-panel { position:relative; width:min(1120px,calc(100vw - 6rem)); max-height:calc(100vh - var(--nav-h) - 4.5rem); display:flex; flex-direction:column; border-radius:18px; background:#070907; border:1px solid rgba(160,208,0,.5); box-shadow:0 0 0 1px rgba(255,255,255,.05) inset,0 0 48px rgba(118,185,0,.16); overflow:hidden; transform:translateY(8px) scale(.985); transition:transform var(--ease); }
+    .graphic-overlay.is-open .graphic-overlay-panel { transform:translateY(0) scale(1); }
+    .graphic-overlay-bar { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:.85rem 1rem; border-bottom:1px solid rgba(118,185,0,.2); background:rgba(17,22,13,.96); }
+    .graphic-overlay-title { margin:0; color:var(--text-pri); font-size:.95rem; font-weight:800; letter-spacing:0; }
+    .graphic-overlay-close { width:36px; height:36px; display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; border-radius:8px; border:1px solid rgba(255,255,255,.14); background:rgba(255,255,255,.05); color:var(--text-pri); cursor:pointer; transition:background var(--ease),border-color var(--ease),color var(--ease); }
+    .graphic-overlay-close:hover { background:rgba(118,185,0,.14); border-color:rgba(160,208,0,.5); color:var(--nv-green-l); }
+    .graphic-overlay-close:focus-visible { outline:2px solid var(--nv-green); outline-offset:3px; }
+    .graphic-overlay-close svg { width:18px; height:18px; display:block; }
+    .graphic-overlay-img { width:100%; height:auto; max-height:calc(100vh - var(--nav-h) - 8.5rem); display:block; object-fit:contain; background:#050705; }
+
     /* WARNING BANNER */
-    .warn-banner { background:rgba(255,193,7,.07); border:1px solid rgba(255,193,7,.25); border-radius:var(--radius); padding:.9rem 1.25rem; display:flex; gap:.75rem; align-items:flex-start; margin-bottom:2rem; }
+    .warn-banner { position:relative; z-index:1; grid-column:1; background:rgba(255,193,7,.07); border:1px solid rgba(255,193,7,.25); border-radius:var(--radius); padding:.9rem 1.25rem; display:flex; gap:.75rem; align-items:flex-start; }
     .warn-banner p { color:rgba(255,203,107,.85); font-size:.875rem; }
 
     /* FEATURES */
@@ -253,9 +273,9 @@
         font-size:.85rem;
       }
     }
-    @media (max-width:1000px) { .hero-inner { grid-template-columns:1fr; } .hero-logo-wrap { display:none; } }
+    @media (max-width:1000px) { #hero .container { max-width:1200px; } .hero-inner { grid-template-columns:1fr; } .hero-content { grid-column:auto; order:1; } .hero-visual { grid-column:auto; grid-row:auto; order:2; margin:.5rem 0; } .warn-banner { grid-column:auto; order:3; } .hero-actions { grid-column:auto; order:4; } .hero-stats { order:5; } .hero-visual-link { width:min(100%,720px); } }
     @media (max-width:900px) { .gs-layout { grid-template-columns:1fr; } .gs-code-panel { position:static; } .footer-inner { grid-template-columns:1fr 1fr; } }
-    @media (max-width:640px) { section { padding:4rem 0; } .footer-inner { grid-template-columns:1fr; } .tut-meta { display:none; } .nav-actions .btn-outline { display:none; } }
+    @media (max-width:640px) { section { padding:4rem 0; } .hero-stats { gap:1.5rem 2rem; } .stat-value { font-size:1.2rem; } .footer-inner { grid-template-columns:1fr; } .tut-meta { display:none; } .nav-actions .btn-outline { display:none; } .graphic-overlay { inset:calc(var(--nav-h) + .5rem) .5rem .5rem; } .graphic-overlay-panel { width:100%; max-height:calc(100vh - var(--nav-h) - 1rem); } .graphic-overlay-img { max-height:calc(100vh - var(--nav-h) - 5rem); } }
   </style>
 </head>
 <body>
@@ -269,13 +289,21 @@
       </a>
       <div class="nav-links" id="nav-links">
         <a href="#features">Features</a>
+        <a href="#getting-started">Quick Start</a>
         <a href="concepts/" class="nav-ext">Concepts</a>
-        <a href="tutorials/benchmarking_examples/" class="nav-ext">Benchmarks</a>
-        <a href="#examples">Examples</a>
+        <div class="nav-item nav-has-dropdown">
+          <a href="benchmarks/benchmarks/" class="nav-ext">Benchmarking</a>
+          <ul class="nav-dropdown">
+            <li><a href="benchmarks/benchmarks/">Overview</a></li>
+            <li><a href="benchmarks/socket_benchmarking/">Socket and RDMA Benchmarking</a></li>
+            <li><a href="benchmarks/raw_benchmarking/">Raw Ethernet Benchmarking</a></li>
+          </ul>
+        </div>
         <div class="nav-item nav-has-dropdown">
           <a href="#tutorials">Tutorials</a>
           <ul class="nav-dropdown">
             <li><a href="tutorials/system_configuration/">System Configuration</a></li>
+            <li><a href="tutorials/bare-metal-cmake-build/">Bare-Metal CMake Build</a></li>
             <li><a href="tutorials/configuration-walkthrough/">Configuration YAML Walkthrough</a></li>
           </ul>
         </div>
@@ -285,6 +313,7 @@
             <li><a href="api-reference/">API Guide</a></li>
             <li><a href="api-reference/configuration/">Configuration YAML Reference</a></li>
             <li><a href="api-reference/cpp/">C++ API Usage</a></li>
+            <li><a href="api-reference/python/">Python API Usage</a></li>
           </ul>
         </div>
         <a href="#publications">News</a>
@@ -309,15 +338,21 @@
     <div class="hero-glow"></div>
     <div class="container">
       <div class="hero-inner">
-      <div class="hero-content">
-        <div class="hero-eyebrow">NVIDIA Open Source · Data Acquisition</div>
-        <h1 class="hero-title">DAQIRI — Command the<br>Data Deluge at the <span class="hi">Source</span></h1>
-        <p class="hero-desc">
-          DAQIRI (Data Acquisition for Integrated Real-time Instruments) connects high-bandwidth streaming sensors
-          directly to the NVIDIA compute ecosystem. By abstracting zero-copy data movement from sensor to GPU,
-          DAQIRI puts scalable, real-time AI, signal processing, and scientific computing within reach of the next
-          generation of instruments.
-        </p>
+        <div class="hero-content">
+          <div class="hero-eyebrow">NVIDIA Open Source · Data Acquisition</div>
+          <h1 class="hero-title">DAQIRI for Sensor Data<br>in <span class="hi">CPU or NVIDIA GPU Memory</span></h1>
+          <p class="hero-desc">
+            DAQIRI (Data Acquisition for Integrated Real-time Instruments) moves high-bandwidth data between external
+            sensors and CPU or NVIDIA GPU memory. Streams can arrive from PCIe devices such as FPGAs or from network-capable sensors
+            over Raw Ethernet (UDP/TCP) or RoCE/RDMA, giving applications one zero-copy path for ingest and egress.
+            GPU-resident data can also write out through GPUDirect Storage.
+          </p>
+        </div>
+        <div class="hero-visual">
+          <button class="hero-visual-link" type="button" data-graphic-open aria-controls="daqiri-graphic-overlay" aria-label="Open the DAQIRI sensor data path graphic overlay">
+            <img src="images/daqiri-landing-graphic.svg" alt="DAQIRI moves PCIe FPGA and network sensor data into or out of CPU or NVIDIA GPU memory, then writes GPU data to storage through GPUDirect Storage" />
+          </button>
+        </div>
         <div class="warn-banner">
           <span style="font-size:1rem;flex-shrink:0;margin-top:.05rem;">⚠️</span>
           <p>The library is undergoing large improvements as we aim to better support it as an NVIDIA product. API breakages may be more frequent until version 1.0.</p>
@@ -326,17 +361,15 @@
           <a href="#getting-started" class="btn btn-primary">Quick Start →</a>
           <a href="concepts/" class="btn btn-outline">Key Concepts</a>
           <a href="api-reference/" class="btn btn-outline">API Reference</a>
-          <a href="#examples" class="btn btn-outline">Examples</a>
+          <a href="benchmarks/benchmarks/" class="btn btn-outline">Benchmarking</a>
         </div>
         <div class="hero-stats">
-          <div><div class="stat-value">Gbps – Tbps+</div><div class="stat-label">Sensor Bandwidth</div></div>
-          <div><div class="stat-value">Zero-Copy</div><div class="stat-label">Sensor → GPU</div></div>
-          <div><div class="stat-value">UDP, RoCE</div><div class="stat-label">Protocol</div></div><div><div class="stat-value">C++</div><div class="stat-label">Language</div></div><div><div class="stat-value">Multi-Sensor</div><div class="stat-label">Scalable</div></div><div><div class="stat-value">Minutes</div><div class="stat-label">Time to Deployment</div></div><div><div class="stat-value">Apache 2.0</div><div class="stat-label">License</div></div>
+          <div><div class="stat-value">PCIe + Ethernet</div><div class="stat-label">Sensor Paths</div></div>
+          <div><div class="stat-value">Ingest + Egress</div><div class="stat-label">Data Direction</div></div>
+          <div><div class="stat-value">Zero-Copy</div><div class="stat-label">CPU/GPU Memory</div></div>
+          <div><div class="stat-value">Raw Ethernet, RoCE</div><div class="stat-label">Protocols</div></div>
+          <div><div class="stat-value">C++ / Python</div><div class="stat-label">Application API</div></div>
         </div>
-      </div>
-      <div class="hero-logo-wrap">
-        <img src="images/logo.svg" alt="DAQIRI — sensor connected to GPU infrastructure" />
-      </div>
       </div>
     </div>
   </section>
@@ -664,11 +697,11 @@ cmake --build build -j
         <a href="tutorials/bare-metal-cmake-build/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">02</span><div class="tut-info"><div class="tut-title">Bare-Metal CMake Build</div><div class="tut-desc">End-to-end bare-metal build: verify prerequisites, install RDMA libraries, build patched DPDK 25.11 from source, configure <code>DAQIRI_MGR</code> / <code>DAQIRI_BUILD_PYTHON</code> / <code>CMAKE_CUDA_ARCHITECTURES</code>, install, smoke-test, troubleshoot.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~45 min</span></div><span class="tut-arrow">→</span></a>
         <div class="tut-item tut-soon"><span class="tut-num">03</span><div class="tut-info"><div class="tut-title">Container Build with Patched DPDK</div><div class="tut-desc">Build the Docker image with <code>build-container.sh</code>. The container ships a dmabuf-patched DPDK, so peermem is not required.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
         <a href="tutorials/system_configuration/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">04</span><div class="tut-info"><div class="tut-title">System Tuning for High-Performance Networking</div><div class="tut-desc">Isolate CPU cores, configure hugepages, set NUMA affinity, and run <code>python/tune_system.py</code> to diagnose common configuration issues.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~30 min</span></div><span class="tut-arrow">→</span></a>
-        <a href="tutorials/benchmarking_examples/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">05</span><div class="tut-info"><div class="tut-title">Benchmarking Examples</div><div class="tut-desc">Run a TX/RX loopback test to validate your setup, and walk through interpreting throughput results.</div></div><div class="tut-meta"><span class="tag tag-beg">Beginner</span><span class="tut-time">~20 min</span></div><span class="tut-arrow">→</span></a>
-        <a href="tutorials/configuration-walkthrough/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">06</span><div class="tut-info"><div class="tut-title">YAML Configuration Deep Dive</div><div class="tut-desc">Memory regions (<code>huge</code>, <code>device</code>, <code>host_pinned</code>), RX/TX queue setup, flow steering rules, flex items, and RDMA client/server config schemas.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~40 min</span></div><span class="tut-arrow">→</span></a>
-        <div class="tut-item tut-soon"><span class="tut-num">07</span><div class="tut-info"><div class="tut-title">GPUDirect: Header-Data Split Pipeline</div><div class="tut-desc">Configure a two-region memory layout, access CPU headers and GPU payloads per-packet with <code>get_segment_packet_ptr()</code>, and reorder scattered GPU buffers with the built-in CUDA kernel.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
-        <div class="tut-item tut-soon"><span class="tut-num">08</span><div class="tut-info"><div class="tut-title">RoCE (RDMA) Client/Server Setup</div><div class="tut-desc">Configure <code>stream_type: socket</code>, <code>protocol: roce</code> with RC transport, assign client and server roles across two hosts, and run <code>daqiri_bench_rdma</code> to validate the connection.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
-        <div class="tut-item tut-soon"><span class="tut-num">09</span><div class="tut-info"><div class="tut-title">Timed TX with ConnectX-7</div><div class="tut-desc">Enable <code>accurate_send</code> in the TX config and use <code>set_packet_tx_time()</code> for PTP-synchronized, hardware-scheduled packet transmission on ConnectX-7+.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
+        <a href="benchmarks/socket_benchmarking/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">05</span><div class="tut-info"><div class="tut-title">Socket and RDMA Benchmarking</div><div class="tut-desc">Run TCP/UDP sockets and RoCE/RDMA with matching namespace isolation and PHY-counter checks.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~30 min</span></div><span class="tut-arrow">→</span></a>
+        <a href="benchmarks/raw_benchmarking/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">06</span><div class="tut-info"><div class="tut-title">Raw Ethernet Benchmarking</div><div class="tut-desc">Run a DPDK raw Ethernet TX/RX loopback test and interpret NIC throughput counters.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~20 min</span></div><span class="tut-arrow">→</span></a>
+        <a href="tutorials/configuration-walkthrough/" class="tut-item" style="text-decoration:none;color:inherit;"><span class="tut-num">07</span><div class="tut-info"><div class="tut-title">YAML Configuration Deep Dive</div><div class="tut-desc">Memory regions (<code>huge</code>, <code>device</code>, <code>host_pinned</code>), RX/TX queue setup, flow steering rules, flex items, and RDMA client/server config schemas.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~40 min</span></div><span class="tut-arrow">→</span></a>
+        <div class="tut-item tut-soon"><span class="tut-num">08</span><div class="tut-info"><div class="tut-title">GPUDirect: Header-Data Split Pipeline</div><div class="tut-desc">Configure a two-region memory layout, access CPU headers and GPU payloads per-packet with <code>get_segment_packet_ptr()</code>, and reorder scattered GPU buffers with the built-in CUDA kernel.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
+        <div class="tut-item tut-soon"><span class="tut-num">10</span><div class="tut-info"><div class="tut-title">Timed TX with ConnectX-7</div><div class="tut-desc">Enable <code>accurate_send</code> in the TX config and use <code>set_packet_tx_time()</code> for PTP-synchronized, hardware-scheduled packet transmission on ConnectX-7+.</div></div><div class="tut-meta"><span class="tag tag-soon">Coming Soon</span></div><span class="tut-arrow">→</span></div>
       </div>
     </div>
   </section>
@@ -749,7 +782,7 @@ cmake --build build -j</pre>
             <li><a href="api-reference/cpp/">C++ API Usage</a></li>
             <li><a href="api-reference/python/">Python API Usage</a></li>
             <li><a href="getting-started/">Getting Started</a></li>
-            <li><a href="#examples">Examples</a></li>
+            <li><a href="benchmarks/benchmarks/">Benchmarking</a></li>
           </ul>
         </div>
         <div>
@@ -782,38 +815,112 @@ cmake --build build -j</pre>
     </div>
   </footer>
 
+  <div class="graphic-overlay" id="daqiri-graphic-overlay" aria-hidden="true">
+    <div class="graphic-overlay-backdrop" data-graphic-close></div>
+    <div class="graphic-overlay-panel" role="dialog" aria-modal="true" aria-labelledby="daqiri-graphic-title">
+      <div class="graphic-overlay-bar">
+        <h2 class="graphic-overlay-title" id="daqiri-graphic-title">DAQIRI Sensor Data and Storage Paths</h2>
+        <button class="graphic-overlay-close" type="button" data-graphic-close aria-label="Close graphic overlay">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+      <img class="graphic-overlay-img" src="images/daqiri-landing-graphic.svg" alt="DAQIRI moves PCIe FPGA and network sensor data into or out of CPU or NVIDIA GPU memory, then writes GPU data to storage through GPUDirect Storage" />
+    </div>
+  </div>
+
   <script>
-    // Toggle .scrolled on #navbar once the user has scrolled a few pixels --
-    // CSS at the top of <style> uses this to drop a soft shadow under the bar.
     const nb = document.getElementById('navbar');
-    if (nb) {
-      const updateScrolled = () => nb.classList.toggle('scrolled', window.scrollY > 8);
-      updateScrolled();
-      window.addEventListener('scroll', updateScrolled, { passive: true });
+    const navLinks = Array.from(document.querySelectorAll('.nav-links a[href^="#"]'));
+    const navTargets = navLinks
+      .map((link) => document.querySelector(link.getAttribute('href')))
+      .filter(Boolean);
+
+    function updateNav() {
+      if (nb) nb.classList.toggle('scrolled', window.scrollY > 8);
+
+      const active = navTargets
+        .slice()
+        .reverse()
+        .find((section) => section.getBoundingClientRect().top <= 96);
+
+      navLinks.forEach((link) => {
+        link.classList.toggle('active', active && link.getAttribute('href') === `#${active.id}`);
+      });
     }
+
+    updateNav();
+    window.addEventListener('scroll', updateNav, { passive:true });
 
     // Hamburger drawer for tablet / mobile viewports (<1100px). The button
     // is hidden via CSS on wider viewports, so the listener is harmless
     // there.
     const ham   = document.querySelector('.nav-hamburger');
-    const links = document.querySelector('.nav-links');
-    if (ham && links) {
+    const navLinksContainer = document.querySelector('.nav-links');
+    if (ham && navLinksContainer) {
       const setOpen = (open) => {
-        links.classList.toggle('is-open', open);
+        navLinksContainer.classList.toggle('is-open', open);
         ham.classList.toggle('is-open', open);
         ham.setAttribute('aria-expanded', String(open));
       };
-      ham.addEventListener('click', () => setOpen(!links.classList.contains('is-open')));
+      ham.addEventListener('click', () => setOpen(!navLinksContainer.classList.contains('is-open')));
       // Tapping any link inside the drawer should dismiss it -- otherwise the
       // drawer stays pinned over the page that the link scrolled / navigated
       // to.
-      links.addEventListener('click', (e) => {
+      navLinksContainer.addEventListener('click', (e) => {
         if (e.target.closest('a')) setOpen(false);
       });
       // Same when the viewport grows back past the breakpoint.
       window.addEventListener('resize', () => {
-        if (window.innerWidth > 1100 && links.classList.contains('is-open')) setOpen(false);
+        if (window.innerWidth > 1100 && navLinksContainer.classList.contains('is-open')) setOpen(false);
       });
+    }
+
+    const graphicOpen = document.querySelector('[data-graphic-open]');
+    const graphicOverlay = document.getElementById('daqiri-graphic-overlay');
+    const graphicCloseControls = Array.from(document.querySelectorAll('[data-graphic-close]'));
+    const graphicCloseButton = document.querySelector('.graphic-overlay-close');
+    let graphicPreviousFocus = null;
+
+    function openGraphicOverlay() {
+      if (!graphicOverlay) return;
+      graphicPreviousFocus = document.activeElement;
+      graphicOverlay.classList.add('is-open');
+      graphicOverlay.setAttribute('aria-hidden', 'false');
+      document.body.classList.add('graphic-overlay-open');
+      if (graphicCloseButton) graphicCloseButton.focus();
+    }
+
+    function closeGraphicOverlay() {
+      if (!graphicOverlay) return;
+      graphicOverlay.classList.remove('is-open');
+      graphicOverlay.setAttribute('aria-hidden', 'true');
+      document.body.classList.remove('graphic-overlay-open');
+      if (window.location.hash === '#graphic') {
+        history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+      }
+      if (graphicPreviousFocus && typeof graphicPreviousFocus.focus === 'function') {
+        graphicPreviousFocus.focus();
+      }
+    }
+
+    if (graphicOpen) {
+      graphicOpen.addEventListener('click', openGraphicOverlay);
+    }
+
+    graphicCloseControls.forEach((control) => {
+      control.addEventListener('click', closeGraphicOverlay);
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && graphicOverlay && graphicOverlay.classList.contains('is-open')) {
+        closeGraphicOverlay();
+      }
+    });
+
+    if (window.location.hash === '#graphic') {
+      window.requestAnimationFrame(openGraphicOverlay);
     }
   </script>
 </body>

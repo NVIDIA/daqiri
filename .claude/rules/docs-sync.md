@@ -31,11 +31,11 @@ When the user is committing, pushing, or otherwise wrapping up a change that tou
   - `docs/getting-started.md` (build instructions)
   - `AGENTS.md` (build section)
   - `README.md` (Quick Start commands)
-- `src/kernels.cu` / `src/kernels.h` — reorder or quantize kernel changes affect `docs/tutorials/benchmarking_examples.md` and the Reorder & quantize kernels subsection in `AGENTS.md`.
+- `src/kernels.cu` / `src/kernels.h` — reorder or quantize kernel changes affect `docs/benchmarks/raw_benchmarking.md` and the Reorder & quantize kernels subsection in `AGENTS.md`.
 
 ### Benchmark and example changes (medium impact)
 - `examples/*.cpp` or `examples/*.yaml` — new benchmarks, changed CLI flags, or new YAML config keys may need updating in:
-  - `docs/tutorials/benchmarking_examples.md`
+  - `docs/benchmarks/raw_benchmarking.md`
   - `docs/tutorials/configuration-walkthrough.md` — when adding or removing a YAML, add or remove a leaf in the **"Choosing an example config"** decision tree (`#choosing-an-example-config`). CI's `scripts/check_doc_refs.py` enforces that every YAML in `examples/` is referenced in this file; a new config without a tree leaf will fail the check.
   - `AGENTS.md` (benchmark table)
 - When adding or removing a benchmark executable, also update the benchmark table in `AGENTS.md`.
@@ -77,10 +77,10 @@ When the user is committing, pushing, or otherwise wrapping up a change that tou
 | `src/manager.h` | `docs/api-reference/cpp.md`, `docs/concepts.md`, `AGENTS.md` |
 | `src/managers/*/` | `docs/getting-started.md`, `docs/concepts.md` (backend list + maturity), `docs/api-reference/configuration.md`, `docs/tutorials/configuration-walkthrough.md`, `README.md`, `AGENTS.md` |
 | `src/CMakeLists.txt` | `docs/getting-started.md`, `AGENTS.md`, `README.md` |
-| `src/kernels.cu` | `docs/tutorials/benchmarking_examples.md`, `AGENTS.md` |
+| `src/kernels.cu` | `docs/benchmarks/raw_benchmarking.md`, `AGENTS.md` |
 | `python/daqiri_common_pybind.cpp` | `docs/api-reference/python.md`, `AGENTS.md` |
-| `examples/*.cpp` | `docs/tutorials/benchmarking_examples.md`, `docs/tutorials/configuration-walkthrough.md`, `AGENTS.md` |
-| `examples/*.yaml` | `docs/tutorials/benchmarking_examples.md`, `docs/tutorials/configuration-walkthrough.md`, `AGENTS.md` |
+| `examples/*.cpp` | `docs/benchmarks/raw_benchmarking.md`, `docs/tutorials/configuration-walkthrough.md`, `AGENTS.md` |
+| `examples/*.yaml` | `docs/benchmarks/raw_benchmarking.md`, `docs/tutorials/configuration-walkthrough.md`, `AGENTS.md` |
 | `examples/*.py` | `docs/api-reference/python.md`, `AGENTS.md` |
 | `mkdocs.yml` | `docs/index.html` (nav links) |
 | Any `docs/*` rename/move | `README.md` (Documentation table), `AGENTS.md` (Documentation section), `mkdocs.yml`, `docs/index.html` |

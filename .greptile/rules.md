@@ -106,8 +106,8 @@ The mapping (mirrored from `.claude/rules/docs-sync.md`):
 | `src/manager.h` | `docs/api-guide.md`, `AGENTS.md` (Manager abstraction) |
 | `src/managers/*/` | `docs/getting-started.md`, `docs/configuration.md`, `docs/tutorials/configuration-walkthrough.md`, `README.md` (Backends), `AGENTS.md` |
 | `src/CMakeLists.txt` (CMake options, `DAQIRI_MGR` default, CUDA arch) | `docs/getting-started.md`, `AGENTS.md` (Build & run), `README.md` (Quick Start) |
-| `src/kernels.cu` / `src/kernels.h` | `docs/tutorials/benchmarking_examples.md`, `AGENTS.md` (Reorder & quantize kernels) |
-| `examples/*.cpp`, `examples/*.yaml` (new bench, new CLI flag, new YAML key) | `docs/tutorials/benchmarking_examples.md`, `docs/tutorials/configuration-walkthrough.md`, `AGENTS.md` (benchmark table) |
+| `src/kernels.cu` / `src/kernels.h` | `docs/benchmarks/raw_benchmarking.md`, `AGENTS.md` (Reorder & quantize kernels) |
+| `examples/*.cpp`, `examples/*.yaml` (new bench, new CLI flag, new YAML key) | `docs/benchmarks/raw_benchmarking.md`, `docs/tutorials/configuration-walkthrough.md`, `AGENTS.md` (benchmark table) |
 | `mkdocs.yml` nav | `docs/index.html` (landing page links) |
 | Any `docs/*` rename or move | `README.md` (Documentation table), `AGENTS.md` (Documentation section), `mkdocs.yml`, `docs/index.html` |
 

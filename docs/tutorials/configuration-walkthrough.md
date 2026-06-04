@@ -19,7 +19,7 @@ If you don't have any NIC at all, the `*_sw_loopback*` variants of the Raw Ether
 
 (`DAQIRI_MGR` at the CMake layer is the inverse selector: it tells the build which manager implementations to compile in — `dpdk` enables `stream_type: "raw"`, `socket` enables `stream_type: "socket"` with `protocol: "udp"`/`"tcp"`, and `rdma` enables `protocol: "roce"`. The default build enables all three.)
 
-With a stream type in mind, read down the questions below and stop at the first one that matches what you're trying to do. Each section names the YAML, the binary that consumes it, and any platform-specific notes.
+For a shorter backend-selection guide, start with the [Benchmarking overview](../benchmarks/benchmarks.md). With a stream type in mind, read down the questions below and stop at the first one that matches what you're trying to do. Each section names the YAML, the binary that consumes it, and any platform-specific notes.
 
 ??? question "1. I want to measure baseline throughput"
     Pick the stream type that matches your stack (see the [overview](#choosing-the-appropriate-daqiri-stream-type-for-your-setup) above), then the hardware or protocol variant.
@@ -28,19 +28,19 @@ With a stream type in mind, read down the questions below and stop at the first 
 
     - **Generic discrete GPU** (template — replace `<placeholders>`) — [`daqiri_bench_raw_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx.yaml). This is the file annotated line-by-line in the [walkthrough below](#annotated-walkthrough).
     - **Four queue closed-loop TX+RX** (template — replace `<placeholders>`) — [`daqiri_bench_raw_tx_rx_4q.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_4q.yaml). Uses one application worker per TX/RX queue, with each `bench_tx` entry sending a different UDP flow.
-    - **DGX Spark / GB10** (prefilled) — [`daqiri_bench_raw_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark.yaml). `kind: host_pinned` for the integrated GPU; cores, PCIe addresses, and IPs are prefilled. See the [Spark profile callout](benchmarking_examples.md#update-the-loopback-configuration) for run details.
+    - **DGX Spark / GB10** (prefilled) — [`daqiri_bench_raw_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark.yaml). `kind: host_pinned` for the integrated GPU; cores, PCIe addresses, and IPs are prefilled. See the [Spark profile callout](../benchmarks/raw_benchmarking.md#update-the-loopback-configuration) for run details.
     - **No physical NIC available** — [`daqiri_bench_raw_sw_loopback.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_sw_loopback.yaml). `loopback: "sw"`, no NIC required. Useful for first-time build verification, not representative of production performance.
 
     To watch the same raw loopback benchmark with live Prometheus and Grafana
     counters, use the Grafana compose stack described in
-    [Watch live OpenTelemetry metrics in Grafana](benchmarking_examples.md#watch-live-opentelemetry-metrics-in-grafana).
+    [Watch live OpenTelemetry metrics in Grafana](../benchmarks/raw_benchmarking.md#watch-live-opentelemetry-metrics-in-grafana).
 
     **Socket — RoCE (RDMA)** (`stream_type: "socket"`, `protocol: "roce"`) — runs on `daqiri_bench_rdma` (use `--mode {tx,rx,both}`). Configs use `kind: host_pinned` regardless of platform.
 
     - **Generic** (template — replace IPs) — [`daqiri_bench_rdma_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx.yaml).
-    - **DGX Spark** (prefilled) — [`daqiri_bench_rdma_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx_spark.yaml). See the [Spark profile callout](benchmarking_examples.md#update-the-loopback-configuration) for run details.
+    - **DGX Spark** (prefilled) — [`daqiri_bench_rdma_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx_spark.yaml). See [Socket and RDMA Benchmarking](../benchmarks/socket_benchmarking.md#run-the-rdma-roce-benchmark) for namespace and wire-counter run details.
 
-    **Socket — UDP / TCP** (`stream_type: "socket"`, `protocol: "udp"` or `"tcp"`) — runs on `daqiri_bench_socket`. Both bind to `127.0.0.1`.
+    **Socket — UDP / TCP** (`stream_type: "socket"`, `protocol: "udp"` or `"tcp"`) — runs on `daqiri_bench_socket`. The shipped smoke-test configs bind to `127.0.0.1`; see [Socket and RDMA Benchmarking](../benchmarks/socket_benchmarking.md) for namespace-based wire tests.
 
     - **UDP** — [`daqiri_bench_socket_udp_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_socket_udp_tx_rx.yaml).
     - **TCP** — [`daqiri_bench_socket_tcp_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_socket_tcp_tx_rx.yaml).
@@ -418,4 +418,4 @@ The reorder bench runs on `daqiri_bench_raw_reorder_seq`:
 Other reorder variants are listed under [question 2 of the decision tree above](#choosing-an-example-config): the CPU-kernel variant, the RX-only variants, and the `seq_batch_number` algorithm with in-kernel int4 → fp32 type conversion (runs on `daqiri_bench_raw_reorder_quantize`).
 
 ---
-**Previous:** [Benchmarking Examples](benchmarking_examples.md)
+**Previous:** [Raw Ethernet Benchmarking](../benchmarks/raw_benchmarking.md)

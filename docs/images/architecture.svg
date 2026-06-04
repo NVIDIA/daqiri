@@ -42,7 +42,7 @@
   <!-- ── NIC (GPUDirect RDMA) ──────────────────────────── -->
   <rect x="118" y="230" width="148" height="56" rx="6" fill="#0d0d0d" stroke="#76b900" stroke-width="1.5"/>
   <text x="192" y="247" text-anchor="middle" fill="#4a7a00" font-size="8" font-weight="700" font-family="Inter,sans-serif" letter-spacing="1">INGEST</text>
-  <text x="192" y="262" text-anchor="middle" fill="#f0f0f0" font-weight="700" font-size="12" font-family="Inter,sans-serif">NIC</text>
+  <text x="192" y="262" text-anchor="middle" fill="#f0f0f0" font-weight="700" font-size="12" font-family="Inter,sans-serif">NIC/PCIe</text>
   <text x="192" y="277" text-anchor="middle" fill="#76b900" font-size="10" font-family="Inter,sans-serif">GPUDirect RDMA</text>
 
   <!-- Arrow 3: NIC → GPU, green -->
