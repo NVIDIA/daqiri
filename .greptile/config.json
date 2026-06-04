@@ -5,7 +5,6 @@
   "triggerOnDrafts": false,
   "statusCheck": true,
   "updateSummaryOnly": true,
-  "fixWithAI": true,
   "fileChangeLimit": 200,
   "excludeAuthors": ["dependabot[bot]", "*-bot"],
   "excludeBranches": ["gh-pages"],
