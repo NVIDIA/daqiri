@@ -123,6 +123,7 @@ remove_cmake_via_manifest() {
 
     info "Removing now-empty directories under $DAQIRI_PREFIX"
     run "sudo find '$DAQIRI_PREFIX' -depth -type d -empty -delete 2>/dev/null || true"
+    run "sudo ldconfig"
 }
 
 remove_cmake_via_scan() {
