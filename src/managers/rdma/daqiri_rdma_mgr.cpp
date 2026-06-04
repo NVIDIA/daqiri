@@ -499,8 +499,9 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
   DAQIRI_LOG_INFO("Affined {} RDMA thread to core {}", is_server ? "Server" : "Client", cpu_core);
 
   // Main TX loop. Wait for send requests from the transmitters to arrive for sending. Also
-  // periodically poll the CQ.
-  while (!rdma_force_quit.load()) {
+  // periodically poll the CQ. Exit on either the global force-quit or the per-connection
+  // ready_to_exit signal (set by the DISCONNECTED CM handler).
+  while (!rdma_force_quit.load() && !tparams->ready_to_exit.load()) {
     // Check RQ first to reduce latency
     while (true) {
       num_comp = ibv_poll_cq(tparams->qp_params.rx_cq, 1, &wc);
@@ -1196,8 +1197,12 @@ void RdmaMgr::run() {
     pd_params_[s_id].server_id = s_id;
     pd_params_[s_id].if_idx = intf.port_id_;
 
-    auto& vec = server_q_params_[s_id];
-    vec.resize(intf.rx_.queues_.size());
+    // try_emplace constructs the vector in place via vector(size_t n), which
+    // value-initialises n elements without ever moving them. We can't use the
+    // operator[] + resize() pattern any more: rdma_thread_params now holds an
+    // std::atomic<bool> and is therefore non-movable, and libstdc++'s resize()
+    // instantiates the move-if-noexcept path even when starting from empty.
+    server_q_params_.try_emplace(s_id, intf.rx_.queues_.size());
 
     DAQIRI_LOG_INFO("Created RDMA server on {}:{} successfully with listener_id {}",
                       intf.address_,
@@ -1298,9 +1303,12 @@ void RdmaMgr::run() {
 
           auto& params = server_iter->second[queue_idx];
           params.active = false;
+          params.ready_to_exit.store(false);  // Reset in case this slot was used by a previous client.
           params.client_id = cm_event->id;
           params.pd = pd_map_[cm_event->id->verbs];
-          params.if_idx = cm_event->id->port_num;
+          // Use the listener's cfg-interface index, not cm_event->id->port_num
+          // (IB hardware port, different domain than cfg_.ifs_ indices)
+          params.if_idx = listen_iter->second.if_idx;
           params.queue_idx = queue_idx;
 
           setup_thread_params(&params, true);
@@ -1364,36 +1372,54 @@ void RdmaMgr::run() {
       case RDMA_CM_EVENT_DISCONNECTED: {
         DAQIRI_LOG_INFO("Received disconnected event for client ID {}", (void*)cm_event->id);
 
+        // Avoid the deadlock that print_stats() exposes:
+        // (1) signal the worker via ready_to_exit;
+        // (2) move its thread handle out of worker_threads_ under threads_mutex_;
+        // (3) release the mutex, then join (so a concurrent print_stats(),
+        //     which also takes threads_mutex_, doesn't sit behind a join that
+        //     can only finish once we've signalled exit);
+        // (4) only after the worker has actually stopped, push its rings back
+        //     to the pool and clear the slot. The original code returned the
+        //     rings after the join too, and the worker may still be polling
+        //     tparams->qp_params.{tx,rx}_ring up until the moment it exits.
         bool found = false;
+        std::thread worker_to_join;
+        rdma_thread_params* tparams_to_clear = nullptr;
         for (auto& sp : server_q_params_) {
           for (auto& thread_params : sp.second) {
             if (thread_params.client_id == cm_event->id) {
-              threads_mutex_.lock();
-              worker_threads_[cm_event->id].join();
-              worker_threads_.erase(cm_event->id);
-              threads_mutex_.unlock();
-
-              // Return the TX and RX rings to the pool
-              if (thread_params.qp_params.tx_ring != nullptr) {
-                tx_rings_.push(thread_params.qp_params.tx_ring);
-                tx_rings_map_.erase(cm_event->id);
+              thread_params.ready_to_exit.store(true);
+              {
+                std::lock_guard<std::mutex> lock(threads_mutex_);
+                auto it = worker_threads_.find(cm_event->id);
+                if (it != worker_threads_.end()) {
+                  worker_to_join = std::move(it->second);
+                  worker_threads_.erase(it);
+                }
               }
-
-              if (thread_params.qp_params.rx_ring != nullptr) {
-                rx_rings_.push(thread_params.qp_params.rx_ring);
-                rx_rings_map_.erase(cm_event->id);
-              }
-
-              thread_params.client_id = nullptr;
-              thread_params.active = false;
-              DAQIRI_LOG_INFO("Joined and removed client thread for ID {}", (void*)cm_event->id);
+              tparams_to_clear = &thread_params;
               found = true;
               break;
             }
           }
+          if (found) { break; }
         }
 
-        if (!found) {
+        if (worker_to_join.joinable()) { worker_to_join.join(); }
+
+        if (tparams_to_clear != nullptr) {
+          if (tparams_to_clear->qp_params.tx_ring != nullptr) {
+            tx_rings_.push(tparams_to_clear->qp_params.tx_ring);
+            tx_rings_map_.erase(cm_event->id);
+          }
+          if (tparams_to_clear->qp_params.rx_ring != nullptr) {
+            rx_rings_.push(tparams_to_clear->qp_params.rx_ring);
+            rx_rings_map_.erase(cm_event->id);
+          }
+          tparams_to_clear->client_id = nullptr;
+          tparams_to_clear->active = false;
+          DAQIRI_LOG_INFO("Joined and removed client thread for ID {}", (void*)cm_event->id);
+        } else {
           DAQIRI_LOG_CRITICAL("Received disconnected event for unknown client ID {}",
                                 (void*)cm_event->id);
         }

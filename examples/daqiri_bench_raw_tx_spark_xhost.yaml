@@ -1,0 +1,58 @@
+# DGX Spark (GB10) cross-host TX-side config for daqiri_bench_raw_gpudirect.
+# Companion to daqiri_bench_raw_rx_spark_xhost.yaml on the peer RX host. Both
+# hosts must be configured per the DGX Spark profile in
+# docs/tutorials/system_configuration.md, with the chosen p0 port cross-cabled
+# host-to-host (no chassis QSFP loop).
+#
+# Spark substitutions baked in here:
+#   - tx_port BDF = 0000:01:00.0 (p0); change if your p0 sits elsewhere
+#   - kind: host_pinned (GB10 dma-buf path; nvidia-peermem N/A on Spark)
+#   - master_core: 8; cpu_core: 17 (isolated big-cluster X925 16-19)
+#   - eth_dst_addr is the *peer* RX port's MAC -- replace with your own:
+#       cat /sys/class/net/<peer rx ifname>/address  # on the RX host
+#   - ip_src/ip_dst: arbitrary 1.1.1.1 -> 2.2.2.2 (kernel stack bypassed by
+#     the DPDK PMD; only the UDP src/dst ports below are matched by the RX
+#     flow rule in daqiri_bench_raw_rx_spark_xhost.yaml)
+#
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    master_core: 8
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    memory_regions:
+    - name: "Data_TX_GPU"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+
+    interfaces:
+    - name: "tx_port"
+      address: 0000:01:00.0
+      tx:
+        queues:
+        - name: "tx_q_0"
+          id: 0
+          batch_size: 10240
+          cpu_core: 17
+          memory_regions:
+            - "Data_TX_GPU"
+          offloads:
+            - "tx_eth_src"
+
+bench_tx:
+  interface_name: "tx_port"
+  batch_size: 10240
+  payload_size: 8000
+  header_size: 64
+  eth_dst_addr: <00:00:00:00:00:00>
+  ip_src_addr: 1.1.1.1
+  ip_dst_addr: 2.2.2.2
+  udp_src_port: 4096
+  udp_dst_port: 4096
