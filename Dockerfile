@@ -18,8 +18,10 @@
 ARG DAQIRI_BASE_TARGET=dpdk
 ARG DAQIRI_MGR="dpdk socket"
 ARG DAQIRI_BUILD_PYTHON=OFF
+ARG DAQIRI_ENABLE_S3=OFF
 ARG BUILD_SHARED_LIBS=ON
 ARG DAQIRI_ENABLE_OTEL_METRICS=OFF
+ARG AWS_SDK_CPP_VERSION=1.11.822
 ARG DAQIRI_OS_BASE_IMAGE=nvcr.io/nvidia/cuda:13.1.0-devel-ubuntu24.04
 
 # ============================================================
@@ -63,6 +65,7 @@ ARG TARGETARCH
 ARG CACHEBUST=1
 ARG DEBIAN_FRONTEND=noninteractive
 ARG DOCA_VERSION=3.2.1
+ARG AWS_SDK_CPP_VERSION
 
 WORKDIR /opt
 
@@ -100,7 +103,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ibverbs-utils \
         python3-dev \
         pybind11-dev \
+        libcurl4-openssl-dev \
+        libssl-dev \
+        uuid-dev \
+        zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Build only the AWS SDK for C++ S3 component. DAQIRI links this SDK only when
+# configured with -DDAQIRI_ENABLE_S3=ON, but installing it here keeps the
+# recommended container build path self-contained.
+RUN git clone --depth 1 --branch "${AWS_SDK_CPP_VERSION}" \
+        https://github.com/aws/aws-sdk-cpp.git /tmp/aws-sdk-cpp \
+    && cmake -S /tmp/aws-sdk-cpp -B /tmp/aws-sdk-cpp/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DBUILD_ONLY=s3 \
+        -DBUILD_SHARED_LIBS=ON \
+        -DENABLE_TESTING=OFF \
+        -DAUTORUN_UNIT_TESTS=OFF \
+        -DCUSTOM_MEMORY_MANAGEMENT=OFF \
+    && cmake --build /tmp/aws-sdk-cpp/build -j "$(nproc)" \
+    && cmake --install /tmp/aws-sdk-cpp/build \
+    && ldconfig \
+    && rm -rf /tmp/aws-sdk-cpp
 
 # PIP installs
 # - pytest: test harness
@@ -277,6 +302,7 @@ FROM ${DAQIRI_BASE_TARGET} AS daqiri-build
 
 ARG DAQIRI_MGR
 ARG DAQIRI_BUILD_PYTHON
+ARG DAQIRI_ENABLE_S3
 ARG BUILD_SHARED_LIBS
 ARG DAQIRI_ENABLE_OTEL_METRICS
 
@@ -291,6 +317,7 @@ RUN cmake -S . -B build \
       -DBUILD_SHARED_LIBS=${BUILD_SHARED_LIBS} \
       -DDAQIRI_BUILD_PYTHON=${DAQIRI_BUILD_PYTHON} \
       -DDAQIRI_ENABLE_OTEL_METRICS=${DAQIRI_ENABLE_OTEL_METRICS} \
+      -DDAQIRI_ENABLE_S3=${DAQIRI_ENABLE_S3} \
       -DDAQIRI_MGR="${DAQIRI_MGR}" \
     && cmake --build build -j "$(nproc)" \
     && cmake --install build

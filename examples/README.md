@@ -29,6 +29,13 @@ cmake -S . -B build -DDAQIRI_BUILD_EXAMPLES=ON -DDAQIRI_ENABLE_GDS=ON -DDAQIRI_M
 cmake --build build -j
 ```
 
+Build with S3 raw object upload support:
+
+```bash
+cmake -S . -B build -DDAQIRI_BUILD_EXAMPLES=ON -DDAQIRI_ENABLE_S3=ON -DDAQIRI_MGR="dpdk socket"
+cmake --build build -j
+```
+
 For CUDA device-memory output, the runtime must have a working cuFile/GDS stack. In
 regular `nvidia-fs` mode, verify that the kernel module is loaded and the destination
 storage is supported before running the example:

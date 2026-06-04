@@ -49,6 +49,25 @@ struct FileWriteStatus {
   uint64_t bytes_written = 0;
 };
 
+struct S3Writer;
+struct S3WriteHandle;
+
+struct S3WriterConfig {
+  std::string bucket;
+  std::string region;
+  std::string endpoint_override;
+  bool path_style = false;
+  bool aws_sdk_already_initialized = false;
+  uint32_t max_inflight_uploads = 8;
+  uint64_t max_staged_bytes = 1ULL << 30;
+};
+
+struct S3WriteStatus {
+  uint32_t completed_objects = 0;
+  uint32_t failed_objects = 0;
+  uint64_t bytes_uploaded = 0;
+};
+
 static constexpr uint32_t DEFAULT_TX_META_BUFFERS = 1UL << 8;
 static constexpr uint32_t DEFAULT_RX_META_BUFFERS = 1UL << 8;
 namespace detail {
@@ -456,6 +475,83 @@ Status daqiri_file_write_wait(FileWriteHandle *handle, FileWriteStatus *status);
  * @return SUCCESS when resources are released or an error status
  */
 Status daqiri_file_write_destroy(FileWriteHandle *handle);
+
+/**
+ * @brief Create an S3 raw object writer.
+ *
+ * Credentials are resolved by the AWS SDK provider chain. endpoint_override and
+ * path_style are only needed for S3-compatible services that require them.
+ * Returns NOT_SUPPORTED when DAQIRI was built without DAQIRI_ENABLE_S3=ON.
+ *
+ * @param config S3 writer configuration
+ * @param writer Output writer handle
+ * @return Status indicating success or failure
+ */
+Status daqiri_s3_writer_create(const S3WriterConfig &config,
+                               S3Writer **writer);
+
+/**
+ * @brief Asynchronously write each packet in a burst to a separate S3 object.
+ *
+ * Object keys are object_prefix_<packet_index>. The write path stages each
+ * packet's logical bytes into DAQIRI-owned host memory before returning, so the
+ * caller may free the burst after successful submission. No multipart upload is
+ * performed; objects larger than the S3 single-PUT limit are not supported.
+ *
+ * @param writer Writer returned by daqiri_s3_writer_create()
+ * @param burst Burst structure containing packets
+ * @param object_prefix Prefix used for each S3 object key
+ * @param packet_data_offset Bytes to skip from the start of each logical packet
+ * @param handle Output handle for polling, waiting, and cleanup
+ * @return Status indicating whether submission succeeded
+ */
+Status daqiri_write_raw_to_s3_objects_async(S3Writer *writer,
+                                            BurstParams *burst,
+                                            const std::string &object_prefix,
+                                            uint64_t packet_data_offset,
+                                            S3WriteHandle **handle);
+
+/**
+ * @brief Poll an asynchronous S3 write.
+ *
+ * @param handle Handle returned by daqiri_write_raw_to_s3_objects_async()
+ * @param status Optional output status summary
+ * @return SUCCESS when all uploads are complete, NOT_READY while pending, or an
+ * error status
+ */
+Status daqiri_s3_write_poll(S3WriteHandle *handle, S3WriteStatus *status);
+
+/**
+ * @brief Wait for asynchronous S3 writes to complete.
+ *
+ * @param handle Handle returned by daqiri_write_raw_to_s3_objects_async()
+ * @param status Optional output status summary
+ * @return SUCCESS when all uploads are complete or an error status
+ */
+Status daqiri_s3_write_wait(S3WriteHandle *handle, S3WriteStatus *status);
+
+/**
+ * @brief Destroy an asynchronous S3 write handle.
+ *
+ * If uploads are still pending, this call waits for completion before
+ * releasing staging buffers and request resources.
+ *
+ * @param handle Handle returned by daqiri_write_raw_to_s3_objects_async()
+ * @return SUCCESS when resources are released or an error status
+ */
+Status daqiri_s3_write_destroy(S3WriteHandle *handle);
+
+/**
+ * @brief Destroy an S3 raw object writer.
+ *
+ * The caller must not use the writer after this call. S3WriteHandle instances
+ * keep their own client references, so destroying a writer does not invalidate
+ * already submitted asynchronous writes.
+ *
+ * @param writer Writer returned by daqiri_s3_writer_create()
+ * @return SUCCESS when resources are released
+ */
+Status daqiri_s3_writer_destroy(S3Writer *writer);
 
 /**
  * @brief Frees all segments of a single packet
