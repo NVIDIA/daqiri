@@ -1,9 +1,10 @@
 {
-  "strictness": 2,
-  "commentTypes": ["logic", "syntax", "style", "info"],
+  "strictness": 3,
+  "commentTypes": ["logic", "syntax", "info"],
   "triggerOnUpdates": true,
   "triggerOnDrafts": false,
   "statusCheck": true,
+  "updateSummaryOnly": true,
   "fileChangeLimit": 200,
   "excludeAuthors": ["dependabot[bot]", "*-bot"],
   "excludeBranches": ["gh-pages"],
@@ -17,6 +18,12 @@
   "issuesTableSection": {
     "included": true,
     "collapsible": false
+  },
+  "sequenceDiagramSection": {
+    "included": false
+  },
+  "confidenceScoreSection": {
+    "included": true
   },
   "instructions": "DAQIRI is a single C++/CUDA shared library (libdaqiri.so) for GPU-direct packet I/O over DPDK, RDMA, and sockets. The full reviewer context lives in .greptile/rules.md and the linked context files in .greptile/files.json (AGENTS.md, CONTRIBUTING.md, .claude/rules/docs-sync.md, src/common.h, src/manager.h, src/types.h). Always read them before commenting. Prefer few high-signal comments over many nits; this is a low-level networking library where idiomatic-looking code is often deliberate.",
   "rules": [
@@ -62,7 +69,7 @@
     },
     {
       "id": "doc-sync",
-      "rule": "DAQIRI has no automated doc-sync gate beyond mkdocs/strict link checks. When a PR changes any of the files listed in .claude/rules/docs-sync.md, the matching docs must be updated in the same PR. Specifically: src/common.h | src/types.h | src/manager.h => docs/api-guide.md + docs/daqiri-api.html + AGENTS.md (Architecture); src/managers/* => docs/getting-started.md + docs/configuration.md + docs/tutorials/configuration-walkthrough.md + README.md (Backends) + AGENTS.md; src/CMakeLists.txt => docs/getting-started.md + AGENTS.md (Build & run) + README.md (Quick Start); src/kernels.cu => docs/tutorials/benchmarking_examples.md + AGENTS.md; examples/*.{cpp,yaml} => docs/tutorials/benchmarking_examples.md + docs/tutorials/configuration-walkthrough.md + AGENTS.md (benchmark table). If the PR touches code in these paths but does not update the matching docs, flag it as medium severity and list the specific docs to update.",
+      "rule": "DAQIRI has no automated doc-sync gate beyond mkdocs/strict link checks. When a PR changes any of the files listed in .claude/rules/docs-sync.md, the matching docs must be updated in the same PR. Specifically: src/common.h | src/types.h | src/manager.h => docs/api-guide.md + docs/daqiri-api.html + AGENTS.md (Architecture); src/managers/* => docs/getting-started.md + docs/configuration.md + docs/tutorials/configuration-walkthrough.md + README.md (Backends) + AGENTS.md; src/CMakeLists.txt => docs/getting-started.md + AGENTS.md (Build & run) + README.md (Quick Start); src/kernels.cu => docs/benchmarks/raw_benchmarking.md + AGENTS.md; examples/*.{cpp,yaml} => docs/benchmarks/raw_benchmarking.md + docs/tutorials/configuration-walkthrough.md + AGENTS.md (benchmark table). If the PR touches code in these paths but does not update the matching docs, flag it as medium severity and list the specific docs to update.",
       "scope": ["src/**", "examples/**", "mkdocs.yml", "README.md", "AGENTS.md", "docs/**"],
       "severity": "medium"
     },

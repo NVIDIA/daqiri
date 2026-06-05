@@ -18,7 +18,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     ## System Setup for DAQIRI
 
-    This section covers the essential system setup steps needed before using DAQIRI. Complete this setup before moving on to [System Optimization](#system-optimization) or [running benchmarks](benchmarking_examples.md).
+    This section covers the essential system setup steps needed before using DAQIRI. Complete this setup before moving on to [System Optimization](#system-optimization) or [running benchmarks](../benchmarks/benchmarks.md).
 
     In this tutorial, we will be developing on an **NVIDIA IGX Orin platform** with [IGX SW 1.1](https://docs.nvidia.com/igx-orin/user-guide/latest/base-os.html) and an [NVIDIA RTX 6000 ADA GPU](https://www.nvidia.com/en-us/design-visualization/rtx-6000/), which is the configuration that is currently actively tested. The concepts should be applicable to other systems based on Ubuntu 22.04 as well. It should also work on other Linux distributions with a glibc version of 2.35 or higher by containerizing the dependencies and applications on top of an Ubuntu 22.04 image, but this is not actively tested at this time.
 
@@ -1298,7 +1298,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
         ```
 
     ---
-    **Next:** [Benchmarking Examples](benchmarking_examples.md) — run your first DAQIRI benchmark
+    **Next:** [Benchmarking](../benchmarks/benchmarks.md) — choose and run your first DAQIRI benchmark
 
 === "DGX Spark"
 
@@ -1362,7 +1362,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
         - **Same physical port** (e.g. `mlx5_0` ↔ `mlx5_2`, both p0) → TX/RX loop **on-chip** through the eswitch; traffic never reaches the cable. Physical-link packet counters stay flat while the vport counters (`tx_good_packets` / `rx_good_packets`) run at line rate. This is a software-path test.
         - **Different physical ports** (e.g. `mlx5_0` p0 ↔ `mlx5_3` p1 `0002:01:00.1`, or `mlx5_0` ↔ `mlx5_1`) → TX/RX loop **over the wire**; physical-link packet counters rise to match the TX/RX counts. This is an over-the-wire test.
 
-        Confirm which case you got from the physical-link packet counters: near zero for on-chip, matching the TX/RX packet counts for over-the-wire. These counters count packets that reached the SerDes/QSFP side of the NIC rather than packets switched internally by the eswitch. The [daqiri bench](benchmarking_examples.md)'s DPDK "Extended Stats" output reports them as `tx_phy_packets` / `rx_phy_packets`; `ethtool -S` and `mlnx_perf` report the same wire counters as `tx_packets_phy` / `rx_packets_phy`.
+        Confirm which case you got from the physical-link packet counters: near zero for on-chip, matching the TX/RX packet counts for over-the-wire. These counters count packets that reached the SerDes/QSFP side of the NIC rather than packets switched internally by the eswitch. The [daqiri bench](../benchmarks/raw_benchmarking.md)'s DPDK "Extended Stats" output reports them as `tx_phy_packets` / `rx_phy_packets`; `ethtool -S` and `mlnx_perf` report the same wire counters as `tx_packets_phy` / `rx_packets_phy`.
 
     `ethtool -m` reports identical `Connector: 0x23 No separable connector` on all 4 PFs and is **not** useful for distinguishing them; use `phys_port_name` above (the cable-yank carrier test confirms a cable is present but does **not** distinguish ports).
 
@@ -1585,6 +1585,6 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     ```
 
     ---
-    **Next:** [Benchmarking Examples](benchmarking_examples.md) — run your first DAQIRI benchmark
+    **Next:** [Benchmarking](../benchmarks/benchmarks.md) — choose and run your first DAQIRI benchmark
 
 </div>

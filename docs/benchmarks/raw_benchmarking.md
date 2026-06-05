@@ -1,19 +1,14 @@
----
-hide:
-  - navigation
----
+# Raw Ethernet Benchmarking
 
-# Benchmarking Examples
-
-DAQIRI provides a benchmarking application named `daqiri_bench_raw_gpudirect` that can be used to test the performance of the networking configuration. In this section, we'll walk you through the steps needed to configure the application for your NIC for Tx and Rx, and run a loopback test between the two interfaces with a [physical SFP cable](https://www.nvidia.com/en-us/networking/interconnect/) connecting them.
+DAQIRI provides raw Ethernet benchmark applications that use DPDK to drive an NVIDIA NIC directly. This page walks through `daqiri_bench_raw_gpudirect`, the TX/RX loopback config, and the raw Ethernet checks needed before interpreting throughput results.
 
 Make sure to [build the DAQIRI library](../getting-started.md#build-the-daqiri-library) beforehand.
 
-**Not sure which YAML to start from?** See [Choosing an example config](configuration-walkthrough.md#choosing-an-example-config) in the configuration tutorial — a use-case-driven decision tree from "I just want to verify the build" through reorder, recording, RDMA, and sockets.
+**Not sure which backend to benchmark?** Start with the [Benchmarking overview](benchmarks.md). Use this page after you have chosen the raw Ethernet backend. Use [Socket and RDMA Benchmarking](socket_benchmarking.md) for TCP, UDP, and RoCE/RDMA runs.
 
 !!! note "Prerequisites"
 
-    Before running the benchmarking application, ensure your system has been fully configured per the [System Configuration](system_configuration.md) page.
+    Before running the benchmarking application, ensure your system has been fully configured per the [System Configuration](../tutorials/system_configuration.md) page.
 
 ## Configure hugepages first
 
@@ -23,11 +18,11 @@ Size the hugepage pool to your YAML's `memory_regions` plus DPDK overhead before
 grep Huge /proc/meminfo
 ```
 
-For a persistent allocation across reboots, use the grub recipe in [Step 4 of System Configuration](system_configuration.md#step-4-enable-huge-pages).
+For a persistent allocation across reboots, use the grub recipe in [Step 4 of System Configuration](../tutorials/system_configuration.md#step-4-enable-huge-pages).
 
 ## Running the DAQIRI container
 
-If you built DAQIRI using the container approach, use the following command to launch the container with Raw Ethernet (DPDK) and GPU support. The host system must be fully configured (see [System Configuration](system_configuration.md)) before the container can access the NIC and GPU hardware.
+If you built DAQIRI using the container approach, use the following command to launch the container with Raw Ethernet (DPDK) and GPU support. The host system must be fully configured (see [System Configuration](../tutorials/system_configuration.md)) before the container can access the NIC and GPU hardware.
 
 ```bash
 docker run --rm -it --privileged \
@@ -41,7 +36,7 @@ docker run --rm -it --privileged \
 
     | Flag | Purpose |
     |------|---------|
-    | `--privileged` | DPDK requires raw access to NIC hardware (PCI devices, hugepage files). Also covers `/dev/infiniband` for RDMA. |
+    | `--privileged` | DPDK requires raw access to NIC hardware, PCI devices, and hugepage files. |
     | `--runtime=nvidia` | Makes the host GPU visible inside the container via the NVIDIA Container Toolkit |
     | `--network=host` | Shares the host network namespace so DPDK can discover the physical NIC interfaces and their PCIe topology |
     | `-v /dev/hugepages:/dev/hugepages` | Mounts the hugepage filesystem for DPDK memory allocation (`--privileged` alone does not cover mounted filesystems) |
@@ -50,10 +45,38 @@ docker run --rm -it --privileged \
 
 !!! tip "DGX Spark"
 
-    For systems configured per the [DGX Spark profile](system_configuration.md#dgx-spark-profile), use these configs to skip the PCIe/IP/CPU-core edits below:
+    For systems configured per the [DGX Spark profile](../tutorials/system_configuration.md#dgx-spark-profile), use these configs to skip the PCIe/IP/CPU-core edits below:
 
     - [`daqiri_bench_raw_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark.yaml) for `daqiri_bench_raw_gpudirect` — still set `eth_dst_addr` to the RX MAC. The rx_port is `0002:01:00.1` (physical port p1), so read its MAC: `cat /sys/class/net/enP2p1s0f1np1/address`. This p0-to-p1 pairing is intentional for an over-the-wire single-machine loopback; using two PFs that map to the same physical port exercises the on-chip eswitch path instead.
     - [`daqiri_bench_rdma_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx_spark.yaml) for `daqiri_bench_rdma` — no further edits needed.
+
+#### Cross-host two-DGX-Spark loopback
+
+If you have two DGX Sparks cross-cabled p0↔p0 instead of a chassis QSFP loop on one machine, use the `_xhost` configs. Each host runs only its own role, so the YAML on each side configures one port instead of two. Both hosts must already be set up per the [DGX Spark profile](../tutorials/system_configuration.md#dgx-spark-profile), with one adjustment: the `daqiri-tx` (`1.1.1.1/24`) and `daqiri-rx` (`2.2.2.2/24`) nmcli profiles are *split across* the two hosts — bring up `daqiri-tx` on the TX host's p0 and `daqiri-rx` on the RX host's p0, instead of both on one box.
+
+**Raw GPUDirect.** Start the RX side first so the flow rule is installed before any traffic arrives:
+
+```bash
+# RX host
+sudo ./daqiri_bench_raw_gpudirect daqiri_bench_raw_rx_spark_xhost.yaml --seconds 30
+
+# TX host (set eth_dst_addr to the RX host p0's MAC first: cat /sys/class/net/enp1s0f0np0/address on the RX host)
+sudo ./daqiri_bench_raw_gpudirect daqiri_bench_raw_tx_spark_xhost.yaml --seconds 30
+```
+
+Verify both sides report non-zero packet counts and no `NO_FREE_BURST_BUFFERS` / `NO_FREE_PACKET_BUFFERS` errors.
+
+**RDMA.** Start the server side first:
+
+```bash
+# RX (server) host
+sudo ./daqiri_bench_rdma daqiri_bench_rdma_tx_rx_spark_xhost.yaml --mode server --seconds 30
+
+# TX (client) host
+sudo ./daqiri_bench_rdma daqiri_bench_rdma_tx_rx_spark_xhost.yaml --mode client --seconds 30
+```
+
+Verify both sides report non-zero send/receive completions. The server-side `Couldn't find server params for address …` log line that may appear once between the listener-create log and the "RDMA server successfully started" log is a benign startup race (the application thread polls for the listener before the CM thread finishes inserting it); subsequent lookups succeed.
 
 The benchmark executables and example YAML configurations are located at:
 
@@ -62,7 +85,7 @@ The benchmark executables and example YAML configurations are located at:
 | **Container** | `/opt/daqiri/bin/` | `/opt/daqiri/bin/` |
 | **From source** | `./build/examples/` | `./examples/` |
 
-The fields in the YAML configs will be explained in more detail in [Understanding the Configuration File](configuration-walkthrough.md). For now, we'll stick to modifying the strict minimum required fields to run the application as-is on your system.
+The fields in the YAML configs will be explained in more detail in [Understanding the Configuration File](../tutorials/configuration-walkthrough.md). For now, we'll stick to modifying the strict minimum required fields to run the application as-is on your system.
 
 ##### Identify your NIC's PCIe addresses
 
@@ -426,7 +449,7 @@ The `*_packets_phy` and `*_bytes_phy` counters are physical-link counters. They 
         [critical] [adv_network_dpdk_mgr.cpp:430] Failed to map MRs
         ```
 
-        Check the [GPUDirect setup](system_configuration.md#enable-gpudirect) for your
+        Check the [GPUDirect setup](../tutorials/system_configuration.md#enable-gpudirect) for your
         deployment. Some host builds use `nvidia-peermem`; the container path uses
         dma-buf support from the patched DPDK build.
 
@@ -450,13 +473,13 @@ The `*_packets_phy` and `*_bytes_phy` counters are physical-link counters. They 
         EAL: x hugepages of size x reserved, no mounted hugetlbfs found for that size
         ```
 
-        Ensure your [hugepages are mounted](system_configuration.md#step-4-enable-huge-pages).
+        Ensure your [hugepages are mounted](../tutorials/system_configuration.md#step-4-enable-huge-pages).
 
         ```log
         EAL: No free x kB hugepages reported on node 0
         ```
 
-        Reachable only when the in-process preflight is bypassed (e.g. running an older binary against a host with hugepages reserved but not mounted). Mount per [System Configuration: Step 4](system_configuration.md#step-4-enable-huge-pages) and re-run.
+        Reachable only when the in-process preflight is bypassed (e.g. running an older binary against a host with hugepages reserved but not mounted). Mount per [System Configuration: Step 4](../tutorials/system_configuration.md#step-4-enable-huge-pages) and re-run.
 
     ??? failure "Stale `<file-prefix>map_*` files in /dev/hugepages after a SIGKILL"
 
@@ -478,5 +501,5 @@ The `*_packets_phy` and `*_bytes_phy` counters are physical-link counters. They 
         You might need to kill some of the listed processes to free up GPU VRAM.
 
 ---
-**Previous:** [System Configuration](system_configuration.md)  
-**Next:** [Understanding the Configuration File](configuration-walkthrough.md) — deep dive into the YAML parameters
+**Previous:** [Benchmarking](benchmarks.md)<br>
+**Next:** [Understanding the Configuration File](../tutorials/configuration-walkthrough.md) — deep dive into the YAML parameters

@@ -139,6 +139,31 @@ sudo apt install -y \
 sudo apt install -y pybind11-dev
 ```
 
+### Cleanup
+
+To remove DAQIRI's container image or bare-metal install without touching the build prerequisites (DPDK, DOCA libraries, CUDA, hugepages, NIC drivers), use [`scripts/cleanup.sh`](https://github.com/NVIDIA/daqiri/blob/main/scripts/cleanup.sh):
+
+=== "Container"
+
+    ```bash
+    scripts/cleanup.sh container             # interactive
+    scripts/cleanup.sh container --dry-run   # show what would be removed
+    ```
+
+    Override `IMAGE_TAG=` if you built with a non-default tag.
+
+=== "CMake build (bare-metal)"
+
+    ```bash
+    scripts/cleanup.sh cmake             # interactive, manifest-driven
+    scripts/cleanup.sh cmake --dry-run   # show what would be removed
+    scripts/cleanup.sh cmake --yes       # non-interactive
+    ```
+
+    See [Cleanup](tutorials/bare-metal-cmake-build.md#cleanup) in the bare-metal tutorial for manifest semantics, the `DAQIRI_PREFIX` override, and verification details.
+
+Pass `all` instead of `container` or `cmake` to remove both.
+
 ### Use an Installed Library
 
 After installation, CMake consumers can link against the exported target:
@@ -201,5 +226,5 @@ Once DAQIRI is built, follow the tutorials to configure your system and run your
 1. [**Concepts**](concepts.md) — terminology (stream types and protocols, packet, burst, segment, flow, queue, memory region), GPUDirect, and zero-copy ownership. Keep this open in a second tab.
 2. [**API Guide**](api-reference/index.md) — the six-step DAQIRI application lifecycle and configuration-first model
 3. [**System Configuration**](tutorials/system_configuration.md) — NIC drivers, link layers, GPUDirect, hugepages, CPU isolation, GPU clocks, and more
-4. [**Benchmarking Examples**](tutorials/benchmarking_examples.md) — run `daqiri_bench_raw_gpudirect` with a loopback test
+4. [**Benchmarking**](benchmarks/benchmarks.md) — choose a backend, then run socket/RDMA or raw Ethernet benchmarks
 5. [**Understanding the Configuration File**](tutorials/configuration-walkthrough.md) — annotated YAML walkthrough

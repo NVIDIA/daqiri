@@ -70,7 +70,7 @@ target storage stack to be reported as supported by `gdscheck.py -p`.
 Container build:
 
 ```bash
-BASE_TARGET=dpdk DAQIRI_MGR="dpdk rdma" scripts/build-container.sh
+BASE_TARGET=dpdk DAQIRI_MGR="dpdk socket rdma" scripts/build-container.sh
 ```
 
 OpenTelemetry metrics are opt-in. Build with `-DDAQIRI_ENABLE_OTEL_METRICS=ON`
@@ -80,6 +80,30 @@ exporters.
 
 See [Getting Started](https://nvidia.github.io/daqiri/getting-started/) for requirements, CMake options, and
 running the benchmarks.
+
+## Benchmarking
+
+Start with the [Benchmarking overview](https://nvidia.github.io/daqiri/benchmarks/benchmarks/) to choose between Linux sockets, RoCE/RDMA, and raw Ethernet.
+
+For Spark-style on-wire tests, use the same client/server namespace shape for Linux sockets and RDMA/RoCE: put the client-facing NIC in one namespace, the server-facing NIC in another, pin routes and neighbors to those interfaces, then verify `tx_packets_phy` on the client and `rx_packets_phy` on the server before trusting bandwidth numbers.
+
+```bash
+# Linux TCP/UDP sockets, split by namespace
+ip netns exec dq_wire_server ./build/examples/daqiri_bench_socket \
+  /tmp/socket-server.yaml --seconds 10 --mode server &
+ip netns exec dq_wire_client ./build/examples/daqiri_bench_socket \
+  /tmp/socket-client.yaml --seconds 10 --mode client
+wait
+
+# RoCE/RDMA, using the same namespace pair
+ip netns exec dq_wire_server ./build/examples/daqiri_bench_rdma \
+  /tmp/rdma-server.yaml --seconds 10 --mode server &
+ip netns exec dq_wire_client ./build/examples/daqiri_bench_rdma \
+  /tmp/rdma-client.yaml --seconds 10 --mode client
+wait
+```
+
+See [Socket and RDMA Benchmarking](https://nvidia.github.io/daqiri/benchmarks/socket_benchmarking/) for the full namespace setup and YAML templates. See [Raw Ethernet Benchmarking](https://nvidia.github.io/daqiri/benchmarks/raw_benchmarking/) for DPDK/raw Ethernet loopback tests.
 
 ## Documentation
 
@@ -99,7 +123,9 @@ Reference material for the DAQIRI codebase:
 Step-by-step walkthroughs to get hands-on:
 
 - [System Configuration](https://nvidia.github.io/daqiri/tutorials/system_configuration/) — NIC drivers, link layers, GPUDirect, hugepages, CPU isolation, GPU clocks
-- [Benchmarking Examples](https://nvidia.github.io/daqiri/tutorials/benchmarking_examples/) — run `daqiri_bench_raw_gpudirect` with a loopback test
+- [Benchmarking Overview](https://nvidia.github.io/daqiri/benchmarks/benchmarks/) — choose between Linux sockets, RoCE/RDMA, and raw Ethernet benchmarks
+- [Socket and RDMA Benchmarking](https://nvidia.github.io/daqiri/benchmarks/socket_benchmarking/) — run TCP/UDP sockets and RoCE/RDMA with matching namespace isolation
+- [Raw Ethernet Benchmarking](https://nvidia.github.io/daqiri/benchmarks/raw_benchmarking/) — run `daqiri_bench_raw_gpudirect` with a physical loopback test
 - [Understanding the Configuration File](https://nvidia.github.io/daqiri/tutorials/configuration-walkthrough/) — annotated YAML walkthrough
 
 ## License

@@ -47,6 +47,8 @@ namespace daqiri {
 
 namespace {
 
+constexpr size_t kMaxUdpPayloadBytes = 65507;
+
 bool parse_ipv4_addr(const std::string& ip, uint16_t port, sockaddr_in* addr) {
   if (addr == nullptr) { return false; }
 
@@ -769,6 +771,14 @@ bool SocketMgr::send_udp_burst(EndpointState& ep, BurstParams* burst, size_t* se
     use_sendto = true;
   }
 
+  for (size_t i = 0; i < num_pkts; ++i) {
+    const auto len = static_cast<size_t>(burst->pkt_lens[0][i]);
+    if (len > kMaxUdpPayloadBytes) {
+      DAQIRI_LOG_ERROR("UDP payload length {} exceeds maximum {} bytes", len, kMaxUdpPayloadBytes);
+      return false;
+    }
+  }
+
   std::vector<mmsghdr> msgs(num_pkts);
   std::vector<iovec> iovs(num_pkts);
   std::vector<sockaddr_in> peers;
@@ -863,7 +873,7 @@ Status SocketMgr::send_tx_burst(BurstParams* burst) {
       status = Status::CONNECT_FAILURE;
     }
   } else if (cfg_.common_.protocol == SocketProtocol::TCP) {
-    if (conn == nullptr) {
+    if (conn == nullptr || !conn->running.load()) {
       DAQIRI_LOG_ERROR("No active TCP connection for port {}", ep->port);
       status = Status::CONNECT_FAILURE;
     } else {
@@ -1276,9 +1286,6 @@ void SocketMgr::tcp_rx_loop(std::shared_ptr<ConnectionState> conn) {
 
   conn->running.store(false);
   close_fd(conn->fd);
-
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  connections_.erase(conn->conn_id);
 }
 
 void SocketMgr::udp_rx_loop(int if_index) {
@@ -1365,6 +1372,17 @@ Status SocketMgr::socket_connect_to_server(const std::string& dst_addr, uint16_t
     if (ep == nullptr || ep->socket_cfg.mode_ != SocketMode::CLIENT) { continue; }
 
     if (cfg_.common_.protocol == SocketProtocol::TCP) {
+      if (ep->primary_conn_id != 0 && ep->socket_cfg.remote_ip_ == dst_addr &&
+          ep->socket_cfg.remote_port_ == dst_port &&
+          (src_addr.empty() || src_addr == ep->socket_cfg.local_ip_)) {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        const auto it = connections_.find(ep->primary_conn_id);
+        if (it != connections_.end() && it->second != nullptr && it->second->running.load()) {
+          *conn_id = ep->primary_conn_id;
+          return Status::SUCCESS;
+        }
+      }
+
       auto conn = create_tcp_client_connection(*ep, dst_addr, dst_port, src_addr, 0, true);
       if (conn == nullptr) { return Status::CONNECT_FAILURE; }
       *conn_id = conn->conn_id;

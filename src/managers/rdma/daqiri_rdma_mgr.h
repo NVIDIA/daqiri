@@ -51,7 +51,15 @@ struct rdma_thread_params {
   rdma_qp_params qp_params;
   int if_idx;
   int queue_idx;
-  bool ready_to_exit;
+  // Per-connection exit flag, set by the DISCONNECTED CM handler and polled
+  // by rdma_thread() in its hot loop. std::atomic so the worker actually
+  // observes the write (a plain bool would race under the C++ memory model
+  // and the compiler is free to hoist the read into a register). Matches
+  // the style of rdma_force_quit. std::atomic is non-copyable/non-movable,
+  // which makes rdma_thread_params non-copyable too; the only containers
+  // holding it (server_q_params_ vectors and client_q_params_) construct
+  // elements in place via resize() / try_emplace(), so this is fine.
+  std::atomic<bool> ready_to_exit{false};
 };
 
 // Used to spawn a new server thread for a particular client

@@ -12,7 +12,7 @@ It is the long-form companion to the five-line `cmake` snippet in [Getting Start
     - you are packaging DAQIRI into another product that already provides a runtime image;
     - you are debugging a build problem inside the container's `daqiri-build` stage and need to reproduce it on the host.
 
-    If none of those apply, follow [System Configuration](system_configuration.md) and then [Benchmarking Examples](benchmarking_examples.md) instead.
+    If none of those apply, follow [System Configuration](system_configuration.md) and then [Raw Ethernet Benchmarking](../benchmarks/raw_benchmarking.md) instead.
 
 ## Prerequisite verification
 
@@ -305,7 +305,7 @@ ldd /opt/daqiri/lib/libdaqiri.so | head
 
 ### 5.3 Smoke test
 
-Verify the build with the standard two-port TX/RX loopback. This requires a NIC with two ports connected to each other by a physical SFP cable, and that you replace the `<angle-bracket>` placeholders in the YAML (PCIe BDFs, CPU cores, destination MAC) for your system. The walkthrough for those edits lives in [Benchmarking Examples → Update the loopback configuration](benchmarking_examples.md#update-the-loopback-configuration); do that first, then run:
+Verify the build with the standard two-port TX/RX loopback. This requires a NIC with two ports connected to each other by a physical SFP cable, and that you replace the `<angle-bracket>` placeholders in the YAML (PCIe BDFs, CPU cores, destination MAC) for your system. The walkthrough for those edits lives in [Raw Ethernet Benchmarking → Update the loopback configuration](../benchmarks/raw_benchmarking.md#update-the-loopback-configuration); do that first, then run:
 
 ```bash
 sudo ./build/examples/daqiri_bench_raw_gpudirect \
@@ -317,7 +317,7 @@ A successful run prints a stream of `[INFO]` lines followed by an RX/TX rate sum
 
 !!! tip "DGX Spark"
 
-    On DGX Spark, use the prefilled `daqiri_bench_raw_tx_rx_spark.yaml` instead; only `eth_dst_addr` needs an edit. See the [DGX Spark profile callout](benchmarking_examples.md#update-the-loopback-configuration) for the exact MAC-lookup command.
+    On DGX Spark, use the prefilled `daqiri_bench_raw_tx_rx_spark.yaml` instead; only `eth_dst_addr` needs an edit. See the [DGX Spark profile callout](../benchmarks/raw_benchmarking.md#update-the-loopback-configuration) for the exact MAC-lookup command.
 
 !!! note "No NIC available?"
 
@@ -406,7 +406,7 @@ The build recipe above is the same on every supported host. The notes below cove
     - GB10 is **compute capability 12.1** (`sm_121`). DAQIRI's default arch list adds `121` automatically when configuring with **CUDA Toolkit 13.0 or newer**; on those toolkits no override is needed. On older toolkits, GB10 is not supported.
     - DGX Spark uses **NVLink-C2C unified memory** and has no separate GPU BAR1, so data buffers in YAML configs use `kind: host_pinned` rather than `kind: device`. The DGX-Spark-prefilled YAMLs in `examples/*_spark.yaml` already encode this.
     - `nvidia-peermem` is not used; GPUDirect goes through the dma-buf path enabled by the DPDK patches in [Step 3](#step-3-build-dpdk-with-daqiri-patches).
-    - For a runnable end-to-end test after the build completes, follow the [DGX Spark profile callout](benchmarking_examples.md#update-the-loopback-configuration) in Benchmarking Examples: the prefilled `daqiri_bench_raw_tx_rx_spark.yaml` and `daqiri_bench_rdma_tx_rx_spark.yaml` need only an `eth_dst_addr` edit.
+    - For a runnable end-to-end test after the build completes, follow the [DGX Spark profile callout](../benchmarks/raw_benchmarking.md#update-the-loopback-configuration) in Raw Ethernet Benchmarking: the prefilled `daqiri_bench_raw_tx_rx_spark.yaml` and `daqiri_bench_rdma_tx_rx_spark.yaml` need only an `eth_dst_addr` edit.
 
 === "IGX Orin + dGPU"
 
@@ -444,5 +444,21 @@ The build recipe above is the same on every supported host. The notes below cove
 Once `libdaqiri.so` is installed and the [smoke test](#53-smoke-test) passes:
 
 1. [**System Configuration**](system_configuration.md): tune the host (hugepages, NIC link layer, GPU BAR1, CPU isolation) for production performance.
-2. [**Benchmarking Examples**](benchmarking_examples.md): run `daqiri_bench_raw_gpudirect` over a physical loopback.
+2. [**Raw Ethernet Benchmarking**](../benchmarks/raw_benchmarking.md): run `daqiri_bench_raw_gpudirect` over a physical loopback.
 3. [**Understanding the Configuration File**](configuration-walkthrough.md): pick the right starter YAML for your use case from the decision tree.
+
+---
+
+## Cleanup
+
+To remove the CMake install while keeping every prerequisite (DPDK, DOCA libraries, CUDA, hugepages, NIC drivers) in place, run [`scripts/cleanup.sh`](https://github.com/NVIDIA/daqiri/blob/main/scripts/cleanup.sh) with the `cmake` target:
+
+```bash
+scripts/cleanup.sh cmake             # interactive, with manifest preview
+scripts/cleanup.sh cmake --dry-run   # show what would be removed
+scripts/cleanup.sh cmake --yes       # non-interactive
+```
+
+The script reads `build/install_manifest.txt` (written by [Step 5.2](#52-install)) for the canonical list of installed paths, then refuses to remove anything unless every manifest entry is under `DAQIRI_PREFIX`. Manifest entries that are already absent are reported and skipped so cleanup can be rerun after a partial removal; verification still runs and decides the final exit status. Override the install prefix with `DAQIRI_PREFIX=...` if you installed somewhere other than `/opt/daqiri`, or `BUILD_DIR=...` if your build tree is named something other than `build`. When the manifest is missing, the script falls back to a name-scoped scan that auto-removes only DAQIRI-owned artifacts and flags vendored `spdlog/`, `yaml-cpp/`, and `libyaml-cpp.so*` for manual review. The final step runs verification (`ls /opt/daqiri`, `pkg-config --modversion daqiri`, `ldconfig -p | grep daqiri`) and exits non-zero if any DAQIRI artifact is still present.
+
+Pass `all` instead of `cmake` to also remove the container image (`docker image rm "$IMAGE_TAG"`) in the same run.

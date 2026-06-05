@@ -1,0 +1,54 @@
+# DGX Spark (GB10) cross-host RX-side config for daqiri_bench_raw_gpudirect.
+# Companion to daqiri_bench_raw_tx_spark_xhost.yaml on the peer TX host. Both
+# hosts must be configured per the DGX Spark profile in
+# docs/tutorials/system_configuration.md, with the chosen p0 port cross-cabled
+# host-to-host (no chassis QSFP loop).
+#
+# Spark substitutions baked in here:
+#   - rx_port BDF = 0000:01:00.0 (p0); change if your p0 sits elsewhere
+#   - kind: host_pinned (GB10 dma-buf path; nvidia-peermem N/A on Spark)
+#   - master_core: 8; cpu_core: 18 (isolated big-cluster X925 16-19)
+#   - flow match: udp_src/dst = 4096 -- same UDP tuple the TX side sends to
+#
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    master_core: 8
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    memory_regions:
+    - name: "Data_RX_GPU"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+
+    interfaces:
+    - name: "rx_port"
+      address: 0000:01:00.0
+      rx:
+        flow_isolation: true
+        queues:
+        - name: "rq_q_0"
+          id: 0
+          cpu_core: 18
+          batch_size: 10240
+          memory_regions:
+            - "Data_RX_GPU"
+        flows:
+        - name: "flow_0"
+          id: 0
+          action:
+            type: queue
+            id: 0
+          match:
+            udp_src: 4096
+            udp_dst: 4096
+
+bench_rx:
+  interface_name: "rx_port"

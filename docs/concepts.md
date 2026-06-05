@@ -22,6 +22,11 @@ choice is configured per-application in YAML by two keys:
 - `protocol` — required when `stream_type: "socket"`; selects the
   socket-level protocol.
 
+The shipped Ethernet stream types use NICs as their hardware endpoint.
+The planned PCIe programmable-sensor path uses the same DAQIRI model for
+devices that sit directly on the PCIe bus, such as FPGAs, frame grabbers,
+or custom acquisition cards.
+
 ### Raw Ethernet
 
 *YAML:* `stream_type: "raw"`.
@@ -57,8 +62,11 @@ Requires an NVIDIA SmartNIC (ConnectX-6 Dx or later).
 
 *YAML:* `stream_type: "pcie"`.
 
-Placeholder for an upcoming direct-PCIe stream type. Not implemented
-yet.
+Coming-soon path for sensors that appear directly on the PCIe bus, such
+as FPGAs, frame grabbers, or custom acquisition cards. The goal is to
+move data into or out of CPU or NVIDIA GPU memory through the same
+DAQIRI C++/Python API while avoiding unnecessary copies. This stream
+type does not currently ship with a runnable benchmark or example YAML.
 
 ### Choosing a stream type
 
@@ -87,6 +95,7 @@ in the configuration walkthrough.
     - **Socket — RoCE** (`stream_type: "socket"`,
       `protocol: "roce"`) is supported and distributed; integration
       testing is under development.
+    - The **PCIe programmable-sensor** path is under development.
 
 ## GPUDirect
 
