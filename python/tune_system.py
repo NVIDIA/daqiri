@@ -44,6 +44,7 @@ PCIE_EFFECTIVE_GB_PER_SEC_PER_LANE = {
     32.0: 3.938,
     64.0: 7.563,
 }
+BAR1_BLACKWELL_MIN_MIB = 32768  # 32 GiB
 
 
 @dataclass
@@ -204,30 +205,6 @@ def _dmabuf_gpu_path_available():
     return os.path.exists("/dev/dma_heap/system")
 
 
-def _gpu_name_by_bdf():
-    """
-    Returns {pci_bdf: product_name} for every visible NVIDIA GPU, or {} if
-    nvidia-smi is unavailable. Used by per-GPU checks (e.g. check_bar1_size)
-    to apply Blackwell-specific thresholds only to the Blackwell GPU(s) in a
-    heterogeneous system rather than to every GPU in the box.
-    """
-    try:
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=pci.bus_id,name", "--format=csv,noheader"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        return {}
-    names = {}
-    for line in result.stdout.splitlines():
-        parts = line.split(",", 1)
-        if len(parts) == 2:
-            names[parts[0].strip()] = parts[1].strip()
-    return names
-
-
 def check_peermem_kernel():
     """
     Check if the nvidia-peermem module for GPUDirect is loaded in the kernel.
@@ -377,8 +354,9 @@ def get_online_cpus():
 def check_cpu_governor():
     """
     Checks if the CPU frequency governor is set to 'performance' for all online CPUs.
-    Output is bucketed by result so a 256-core system does not emit 256 lines when
-    every CPU is in the same state. Per-CPU detail still surfaces if results vary.
+    Aggregates results by governor value and logs one summary line per distinct
+    governor (e.g. 256/256 online CPUs set to 'performance'), plus separate counts
+    for CPUs whose scaling_governor file is missing or unreadable.
     """
     online_cpus = get_online_cpus()
     total = len(online_cpus)
@@ -684,11 +662,10 @@ def check_bar1_size():
     # 32 GiB is the conservative "rebar is fully unlocked" floor: well below
     # the 96 GB card capacity but high enough that any platform exposing less
     # is almost certainly missing Resizable BAR / Above 4G Decoding in BIOS.
-    # The threshold is applied per-GPU via gpu_names below so heterogeneous
+    # The threshold is applied per-GPU via gpu_info below so heterogeneous
     # boxes (e.g. RTX PRO 6000 + H100) only get the Blackwell rule on the
     # Blackwell card.
-    BAR1_BLACKWELL_MIN_MIB = 32768  # 32 GiB
-    gpu_names = _gpu_name_by_bdf()
+    gpu_info_by_bdf = get_nvidia_gpu_info_by_bdf()
     try:
         # Run nvidia-smi to get BAR1 memory information
         result = subprocess.run(
@@ -719,7 +696,8 @@ def check_bar1_size():
 
             # Once BAR1 size is found, log it
             if current_gpu is not None and bar1_total is not None:
-                gpu_name = gpu_names.get(current_gpu, "")
+                gpu_bdf = normalize_pci_address(current_gpu) or current_gpu
+                gpu_name = gpu_info_by_bdf.get(gpu_bdf, {}).get("name", "")
                 gpu_is_blackwell = "Blackwell Server Edition" in gpu_name
                 if gpu_is_blackwell and bar1_total < BAR1_BLACKWELL_MIN_MIB:
                     logging.warning(
