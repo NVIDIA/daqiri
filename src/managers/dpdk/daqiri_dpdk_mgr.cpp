@@ -2261,6 +2261,7 @@ void DpdkMgr::initialize() {
         ret = rte_flow_isolate(intf.port_id_, 1, &error);
         if (ret < 0) {
           DAQIRI_LOG_CRITICAL("Failed to set flow isolation");
+          return;
         } else {
           DAQIRI_LOG_INFO("Port {} in isolation mode", intf.port_id_);
         }
