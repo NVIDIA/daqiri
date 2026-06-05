@@ -110,6 +110,45 @@ Adding UDP port match for dst 42337
 RX complete: interface=rx_port queue=0 packets=0 bytes=0 bursts=0 seconds=30.0421
 ```
 
+## Candidate Fix Verification
+
+The branch was updated to install an explicit low-priority kernel fallback flow
+after the DAQIRI queue flows:
+
+```text
+group 3, priority 100, pattern ETH -> SEND_TO_KERNEL
+```
+
+This preserves DAQIRI's higher-priority UDP queue rules while routing
+non-matching traffic, such as ARP and ICMP, back to the Linux kernel.
+
+With that change, the same one-queue repro no longer breaks ping while DAQIRI is
+running:
+
+```text
+5 packets transmitted, 5 received, 0% packet loss, time 4132ms
+rtt min/avg/max/mdev = 0.207/0.470/0.564/0.135 ms
+```
+
+Matching UDP traffic still reaches DAQIRI while ping remains healthy. Sending
+2000 UDP packets from spark2 to `169.254.101.10:42337` produced:
+
+```text
+rx_q0_packets: 2000
+Total packets received by application (port/queue 0/0): 2000
+```
+
+A two-queue check also passed. A temporary config routed UDP destination
+`42337` to queue 0 and `42338` to queue 1. Ping still had 0% packet loss while
+DAQIRI was running, and both queues received their matching traffic:
+
+```text
+rx_q0_packets: 2000
+rx_q1_packets: 2000
+Total packets received by application (port/queue 0/0): 2000
+Total packets received by application (port/queue 0/1): 2000
+```
+
 ## Minimal Config
 
 See `scripts/repro/rx_flow_isolation.yaml`.
