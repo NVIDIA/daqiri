@@ -2256,6 +2256,18 @@ void DpdkMgr::initialize() {
                       intf.tx_.queues_.size());
 
     if (loopback_ != LoopbackType::LOOPBACK_TYPE_SW) {
+      if (intf.rx_.flow_isolation_) {
+        struct rte_flow_error error;
+        ret = rte_flow_isolate(intf.port_id_, 1, &error);
+        if (ret < 0) {
+          DAQIRI_LOG_CRITICAL("Failed to set flow isolation");
+        } else {
+          DAQIRI_LOG_INFO("Port {} in isolation mode", intf.port_id_);
+        }
+      } else {
+        DAQIRI_LOG_INFO("Port {} not in isolation mode", intf.port_id_);
+      }
+
       ret = rte_eth_dev_configure(intf.port_id_,
                                   intf.rx_.queues_.size(),
                                   intf.tx_.queues_.size(),
@@ -2284,18 +2296,6 @@ void DpdkMgr::initialize() {
       }
 
       rte_eth_macaddr_get(intf.port_id_, &conf_ports_eth_addr[intf.port_id_]);
-
-      if (intf.rx_.flow_isolation_) {
-        struct rte_flow_error error;
-        ret = rte_flow_isolate(intf.port_id_, 1, &error);
-        if (ret < 0) {
-          DAQIRI_LOG_CRITICAL("Failed to set flow isolation");
-        } else {
-          DAQIRI_LOG_INFO("Port {} in isolation mode", intf.port_id_);
-        }
-      } else {
-        DAQIRI_LOG_INFO("Port {} not in isolation mode", intf.port_id_);
-      }
 
       for (const auto& q : rx.queues_) {
         // Assume one core for now
