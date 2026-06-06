@@ -2260,7 +2260,10 @@ void DpdkMgr::initialize() {
         struct rte_flow_error error;
         ret = rte_flow_isolate(intf.port_id_, 1, &error);
         if (ret < 0) {
-          DAQIRI_LOG_CRITICAL("Failed to set flow isolation");
+          DAQIRI_LOG_CRITICAL("Failed to set flow isolation on port {}: {} ({})",
+                              intf.port_id_,
+                              error.message ? error.message : "unknown error",
+                              rte_strerror(rte_errno));
           return;
         } else {
           DAQIRI_LOG_INFO("Port {} in isolation mode", intf.port_id_);
