@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # Performance: DGX Spark
 
 Measured C++-loopback throughput for each stream/protocol on a single DGX Spark
