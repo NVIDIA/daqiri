@@ -694,10 +694,12 @@ void set_header(BurstParams *burst, uint16_t port, uint16_t q, int64_t num,
                 int segs);
 
 /**
- * @brief First MAC address string to char buffer
+ * @brief Format MAC address string to char buffer
  *
- * @param dst Destination buffer
- * @param addr MAC address as string in format xx:xx:xx:xx:xx:xx
+ * @param dst Destination buffer of at least six bytes. Invalid input zeroes
+ * the six-byte destination.
+ * @param addr MAC address as string in format xx:xx:xx:xx:xx:xx, with exactly
+ * two hexadecimal digits per octet.
  */
 void format_eth_addr(char *dst, std::string addr);
 

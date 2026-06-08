@@ -572,7 +572,7 @@ The workflow sections above show the common call order and ownership rules.
 | Function | Purpose |
 | --- | --- |
 | `get_mac_addr(port)` | Return `(Status, "aa:bb:cc:dd:ee:ff")`. |
-| `format_eth_addr(addr)` | Return six MAC-address bytes. |
+| `format_eth_addr(addr)` | Return six MAC-address bytes from a `xx:xx:xx:xx:xx:xx` MAC string; invalid input returns zero bytes. |
 | `get_port_id(key)` | Resolve an interface name or PCIe address to a port ID. |
 | `get_num_rx_queues(port_id)` | Return configured RX queue count for a port. |
 | `drop_all_traffic(port)` | Install a high-priority drop rule on a port. |

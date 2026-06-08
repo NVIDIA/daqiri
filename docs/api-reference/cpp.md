@@ -474,7 +474,7 @@ workflow sections above show the common call order and ownership rules.
 | Function | Purpose |
 | --- | --- |
 | `get_mac_addr(port, mac)` | Copy a port MAC address into a six-byte buffer. |
-| `format_eth_addr(dst, addr)` | Convert a MAC address string into a six-byte buffer. |
+| `format_eth_addr(dst, addr)` | Convert a `xx:xx:xx:xx:xx:xx` MAC string into a six-byte buffer; invalid input zeroes the buffer. |
 | `get_port_id(key)` | Resolve an interface name or PCIe address to a port ID. |
 | `get_num_rx_queues(port_id)` | Return the configured or backend-reported RX queue count. |
 | `drop_all_traffic(port)` | Install a high-priority drop rule on a port. |
