@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # Benchmarking
 
 DAQIRI ships with several backends to handle different types of incoming and outgoing streams. Choosing the stream type depends on the type of sensor being used and its capabilities. The `stream_type` is decided from the decision tree below:

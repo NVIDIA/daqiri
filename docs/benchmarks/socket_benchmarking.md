@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # Socket and RDMA Benchmarking
 
 Use this page when the peer protocol is TCP, UDP, or RoCE/RDMA. These benchmarks use the Linux networking stack for TCP/UDP and RDMA verbs for RoCE, so the same client/server namespace shape is useful for proving that traffic leaves the host through the expected NIC path.

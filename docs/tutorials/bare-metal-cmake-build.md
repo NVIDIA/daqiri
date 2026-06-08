@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # Bare-Metal CMake Build
 
 This tutorial walks you through a complete bare-metal DAQIRI build on a Linux host, from verifying the kernel, driver, NIC, and CUDA prerequisites, through building a patched DPDK from source, configuring DAQIRI with CMake, installing the library, and recovering from the most common failure modes.
