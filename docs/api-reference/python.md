@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # Python API Usage
 
 This guide covers Python initialization, RX/TX workflows, buffer lifecycle calls,
