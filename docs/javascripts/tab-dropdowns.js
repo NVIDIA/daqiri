@@ -4,24 +4,16 @@
 // without this script there's no way to hop directly between sibling
 // pages without bouncing through the section's index.
 //
-// Sub-page list is mirrored from `mkdocs.yml` nav. Keep them in sync when
-// adding/removing entries.
+// The section/sub-page list is NOT hand-maintained here: the
+// `hooks/nav_dropdowns.py` MkDocs hook serializes the real nav from
+// mkdocs.yml into `window.NV_NAV` at build time, so the dropdowns stay in
+// sync with the nav automatically. Each entry's `url` is already
+// site-root-relative (e.g. "api-reference/python/").
 
 (function () {
   "use strict";
 
-  const SECTIONS = {
-    "API Reference": [
-      { label: "API Guide",                    path: "api-reference/" },
-      { label: "Configuration YAML Reference", path: "api-reference/configuration/" },
-      { label: "C++ API Usage",                path: "api-reference/cpp/" }
-    ],
-    "Tutorials": [
-      { label: "System Configuration",          path: "tutorials/system_configuration/" },
-      { label: "Bare-Metal CMake Build",        path: "tutorials/bare-metal-cmake-build/" },
-      { label: "Configuration YAML Walkthrough", path: "tutorials/configuration-walkthrough/" }
-    ]
-  };
+  const SECTIONS = window.NV_NAV || {};
 
   function getSiteBase() {
     // Material's site logo link in the header always points to the site
@@ -56,7 +48,7 @@
       subpages.forEach((sub) => {
         const li = document.createElement("li");
         const a  = document.createElement("a");
-        a.href = base + sub.path;
+        a.href = base + sub.url;
         a.textContent = sub.label;
         li.appendChild(a);
         dd.appendChild(li);

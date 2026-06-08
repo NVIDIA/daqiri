@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # Raw Ethernet Benchmarking
 
 DAQIRI provides raw Ethernet benchmark applications that use DPDK to drive an NVIDIA NIC directly. This page walks through `daqiri_bench_raw_gpudirect`, the TX/RX loopback config, and the raw Ethernet checks needed before interpreting throughput results.

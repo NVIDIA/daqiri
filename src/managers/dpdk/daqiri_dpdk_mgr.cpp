@@ -2256,6 +2256,22 @@ void DpdkMgr::initialize() {
                       intf.tx_.queues_.size());
 
     if (loopback_ != LoopbackType::LOOPBACK_TYPE_SW) {
+      if (intf.rx_.flow_isolation_) {
+        struct rte_flow_error error;
+        ret = rte_flow_isolate(intf.port_id_, 1, &error);
+        if (ret < 0) {
+          DAQIRI_LOG_CRITICAL("Failed to set flow isolation on port {}: {} ({})",
+                              intf.port_id_,
+                              error.message ? error.message : "unknown error",
+                              rte_strerror(rte_errno));
+          return;
+        } else {
+          DAQIRI_LOG_INFO("Port {} in isolation mode", intf.port_id_);
+        }
+      } else {
+        DAQIRI_LOG_INFO("Port {} not in isolation mode", intf.port_id_);
+      }
+
       ret = rte_eth_dev_configure(intf.port_id_,
                                   intf.rx_.queues_.size(),
                                   intf.tx_.queues_.size(),
@@ -2284,18 +2300,6 @@ void DpdkMgr::initialize() {
       }
 
       rte_eth_macaddr_get(intf.port_id_, &conf_ports_eth_addr[intf.port_id_]);
-
-      if (intf.rx_.flow_isolation_) {
-        struct rte_flow_error error;
-        ret = rte_flow_isolate(intf.port_id_, 1, &error);
-        if (ret < 0) {
-          DAQIRI_LOG_CRITICAL("Failed to set flow isolation");
-        } else {
-          DAQIRI_LOG_INFO("Port {} in isolation mode", intf.port_id_);
-        }
-      } else {
-        DAQIRI_LOG_INFO("Port {} not in isolation mode", intf.port_id_);
-      }
 
       for (const auto& q : rx.queues_) {
         // Assume one core for now
@@ -2380,14 +2384,22 @@ void DpdkMgr::initialize() {
       if (rx.hardware_timestamps_ && !calibrate_rx_timestamp_clock(intf.port_id_)) { return; }
 
       // Start flows
-      int flow_num = 0;
+      bool has_standard_flows = false;
+      bool has_flex_item_flows = false;
       for (const auto& flow : rx.flows_) {
         DAQIRI_LOG_INFO("Adding RX flow {}", flow.name_);
         if (flow.match_.type_ == FlowMatchType::FLEX_ITEM) {
           add_flex_item_flow(intf.port_id_, flow.match_.flex_item_match_, flow.action_.id_);
+          has_flex_item_flows = true;
         } else {
           add_flow(intf.port_id_, flow);
+          has_standard_flows = true;
         }
+      }
+
+      if (intf.rx_.flow_isolation_) {
+        if (has_standard_flows && !add_send_to_kernel_fallback(intf.port_id_, 3)) { return; }
+        if (has_flex_item_flows && !add_send_to_kernel_fallback(intf.port_id_, 1)) { return; }
       }
 
       apply_tx_offloads(intf.port_id_);
@@ -2870,6 +2882,52 @@ struct rte_flow* DpdkMgr::add_flow(int port, const FlowConfig& cfg) {
 
   flow = rte_flow_create(port, &attr, pattern, action, &error);
   return flow;
+}
+
+bool DpdkMgr::add_send_to_kernel_fallback(int port, uint32_t group) {
+  struct rte_flow_attr attr;
+  struct rte_flow_item pattern[MAX_PATTERN_NUM];
+  struct rte_flow_action action[MAX_ACTION_NUM];
+  struct rte_flow_error error;
+
+  memset(&attr, 0, sizeof(attr));
+  memset(pattern, 0, sizeof(pattern));
+  memset(action, 0, sizeof(action));
+  memset(&error, 0, sizeof(error));
+
+  attr.ingress = 1;
+  attr.group = group;
+  attr.priority = 100;
+
+  pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
+  pattern[1].type = RTE_FLOW_ITEM_TYPE_END;
+
+  action[0].type = RTE_FLOW_ACTION_TYPE_SEND_TO_KERNEL;
+  action[1].type = RTE_FLOW_ACTION_TYPE_END;
+
+  DAQIRI_LOG_INFO("Adding send-to-kernel fallback on port {} group {}", port, group);
+
+  int ret = rte_flow_validate(port, &attr, pattern, action, &error);
+  if (ret != 0) {
+    DAQIRI_LOG_CRITICAL("Failed to validate send-to-kernel fallback on port {} group {}: {} ({})",
+                        port,
+                        group,
+                        error.message ? error.message : "unknown error",
+                        rte_strerror(rte_errno));
+    return false;
+  }
+
+  struct rte_flow* flow = rte_flow_create(port, &attr, pattern, action, &error);
+  if (flow == nullptr) {
+    DAQIRI_LOG_CRITICAL("Failed to create send-to-kernel fallback on port {} group {}: {} ({})",
+                        port,
+                        group,
+                        error.message ? error.message : "unknown error",
+                        rte_strerror(rte_errno));
+    return false;
+  }
+
+  return true;
 }
 
 Status DpdkMgr::drop_all_traffic(int port) {

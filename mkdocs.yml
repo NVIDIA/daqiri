@@ -105,5 +105,8 @@ validation:
     unrecognized_links: warn
     anchors: warn
 
+hooks:
+  - hooks/nav_dropdowns.py
+
 plugins:
   - search
