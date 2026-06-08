@@ -56,7 +56,7 @@ Set `BASE_IMAGE=torch` to build on top of NGC PyTorch instead of the default CUD
 **Bare-metal CMake build** — use if you have all dependencies installed on the host (see the [Dockerfile](Dockerfile) for the full list):
 
 ```bash
-cmake -S . -B build -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MGR="dpdk socket rdma"
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MGR="dpdk socket rdma"
 cmake --build build -j
 cmake --install build --prefix /opt/daqiri
 ```

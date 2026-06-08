@@ -6,7 +6,7 @@ This file provides guidance to coding agents when working with code in this repo
 
 ```bash
 # Configure and build
-cmake -S . -B build -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MGR="dpdk socket rdma"
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MGR="dpdk socket rdma"
 cmake --build build -j
 cmake --install build --prefix /opt/daqiri
 

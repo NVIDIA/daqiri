@@ -1,0 +1,69 @@
+# DGX Spark (GB10) UDP socket bench -- server-only config for the netns wire loopback.
+# Pair with daqiri_bench_socket_udp_tx_rx_netns_client.yaml (run in parallel, each in
+# its own network namespace via setup_spark_wire_loopback_netns.sh).
+#
+# Run inside dq_wire_server namespace:
+#   ip netns exec dq_wire_server daqiri_bench_socket <this_file> --seconds N --mode server
+#
+# Derived from examples/daqiri_bench_socket_udp_tx_rx.yaml (the 127.0.0.1 loopback
+# smoke config) per docs/benchmarks/socket_benchmarking.md "on-wire namespace test".
+# Deviations from that tutorial's inline UDP template are intentional and documented in
+# the PR: wire IPs 10.250.0.1/2 and iterations bumped to 1e9 so a timed --seconds run does
+# not exhaust early. This file is pair 0 of the run_spark_bench.sh socket sweep: every
+# queue pins to one isolated core (16), and the matching client pins to the same core, so
+# the send and receive sides time-slice one CPU and self-pace (App TX ~= App RX). The
+# sweep assigns cores 16-19 across its four pairs. buf_size and max_payload_size are
+# 65536/65535 (>= the 65507 max UDP datagram the sweep sends): the bench memsets a full
+# message_size into one TX buffer, so a smaller buf_size overflows the heap on larger sizes.
+#
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "socket"
+    protocol: "udp"
+    master_core: 8
+    debug: false
+    log_level: "info"
+
+    memory_regions:
+    - name: "DATA_SOCKET_SERVER"
+      kind: "host"
+      affinity: 0
+      num_bufs: 1024
+      buf_size: 65536
+
+    interfaces:
+    - name: udp_server
+      address: 10.250.0.2
+      socket_config:
+        mode: server
+        local_ip: 10.250.0.2
+        local_port: 5001
+        max_payload_size: 65535
+      rx:
+        queues:
+        - name: "Server_RX_Queue"
+          id: 0
+          cpu_core: 16
+          batch_size: 1
+          memory_regions:
+            - "DATA_SOCKET_SERVER"
+      tx:
+        queues:
+        - name: "Server_TX_Queue"
+          id: 0
+          cpu_core: 16
+          batch_size: 1
+          memory_regions:
+            - "DATA_SOCKET_SERVER"
+
+socket_bench_server:
+  server: true
+  send: false
+  receive: true
+  iterations: 1000000000
+  message_size: 1024
+  server_address: 10.250.0.2
+  server_port: 5001

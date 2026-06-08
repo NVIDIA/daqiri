@@ -378,8 +378,7 @@ body[data-active-tab="dgx-spark"] .md-nav--secondary li:has(> a[data-tab="igx-or
 .md-typeset table.perf-matrix {
   width: 100%;
   table-layout: auto;
-  border-collapse: separate;
-  border-spacing: 5px;
+  border-collapse: collapse;
   font-size: 0.64rem;
 }
 .md-typeset table.perf-matrix th,
@@ -387,8 +386,8 @@ body[data-active-tab="dgx-spark"] .md-nav--secondary li:has(> a[data-tab="igx-or
   text-align: center;
   vertical-align: middle;
   font-variant-numeric: tabular-nums;
-  padding: 0.55em 0.5em;
-  border-radius: 4px;
+  padding: 0.55em 0.6em;
+  border: 1px solid var(--md-default-fg-color--light);
   white-space: nowrap;
 }
 .md-typeset table.perf-matrix td small {

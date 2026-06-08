@@ -112,7 +112,7 @@ Then build the DAQIRI library:
     ```bash
     git clone git@github.com:NVIDIA/daqiri.git
     cd daqiri
-    cmake -S . -B build -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MGR="dpdk socket rdma"
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MGR="dpdk socket rdma"
     cmake --build build -j
     cmake --install build --prefix /opt/daqiri
     ```

@@ -1,0 +1,64 @@
+# DGX Spark (GB10) RDMA bench — server-only config for the netns wire loopback.
+# Pair with daqiri_bench_rdma_tx_rx_spark_netns_client.yaml (run in parallel,
+# each in its own network namespace via setup_spark_wire_loopback_netns.sh).
+#
+# Run inside dq_wire_server namespace:
+#   ip netns exec dq_wire_server daqiri_bench_rdma <this_file> --seconds N --mode server
+#
+# IPs / RDMA devices match setup_spark_wire_loopback_netns.sh defaults:
+#   SERVER_IP=10.250.0.2  SERVER_NS=dq_wire_server  SERVER_RDMA=roceP2p1s0f1
+#
+# cpu_core values use the isolated X925 big-cluster cores 16-19 (isolcpus).
+#
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "socket"
+    protocol: "roce"
+    master_core: 8
+    debug: false
+    log_level: "info"
+
+    memory_regions:
+    - name: "DATA_RX_GPU_SERVER"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 20
+      buf_size: 9000000
+    - name: "DATA_TX_GPU_SERVER"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 20
+      buf_size: 9000000
+
+    interfaces:
+    - name: my_server
+      address: 10.250.0.2
+      socket_config:
+        mode: server
+        local_ip: 10.250.0.2
+        local_port: 4096
+      roce_config:
+        transport_mode: RC
+      rx:
+        queues:
+        - name: "Server_RX_Queue"
+          id: 0
+          cpu_core: 19
+          batch_size: 1
+      tx:
+        queues:
+        - name: "Server_TX_Queue"
+          id: 0
+          cpu_core: 16
+          batch_size: 1
+
+rdma_bench_server:
+  server_address: 10.250.0.2
+  server_port: 4096
+  message_size: 8000000
+  send: true
+  receive: true
+  server: true

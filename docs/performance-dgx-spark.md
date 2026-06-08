@@ -32,22 +32,22 @@ has no operation boundary.
 
 | Stream / Protocol              | C++ loopback   | C++ + FFT        | C++ + GEMM       | Python loopback   | Python + FFT     | Python + GEMM    |
 | ------------------------------ | -------------- | ---------------- | ---------------- | ----------------- | ---------------- | ---------------- |
-| Raw Ethernet / GPUDirect (8 KB) | **96.4**       | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ |
-| Socket / RoCE (8 MB SEND)      | **83.4**[^1]   | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ |
-| Socket / UDP (MTU)             | _deferred_[^2] | n/a              | n/a              | _TBD (follow-up)_ | n/a              | n/a              |
-| Socket / TCP (stream)          | _deferred_[^3] | n/a              | n/a              | _TBD (follow-up)_ | n/a              | n/a              |
+| Raw Ethernet / GPUDirect (8 KB) | **98.5**       | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ |
+| Socket / RoCE (8 MB SEND)      | **94.8**[^1]   | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ |
+| Socket / UDP (8 KB, 4 pairs)   | **34.0**[^2]   | n/a              | n/a              | _TBD (follow-up)_ | n/a              | n/a              |
+| Socket / TCP (8 KB, 4 pairs)   | **87.6**[^3]   | n/a              | n/a              | _TBD (follow-up)_ | n/a              | n/a              |
 
 ### Matched 8 KB operation — cross-transport Gbps
 
 | Stream / Protocol               | C++ loopback   | C++ + FFT        | C++ + GEMM       | Python loopback   | Python + FFT     | Python + GEMM    |
 | ------------------------------- | -------------- | ---------------- | ---------------- | ----------------- | ---------------- | ---------------- |
-| Raw Ethernet / GPUDirect        | **96.4**       | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ |
-| Socket / RoCE                   | 0.006[^1]      | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ |
-| Socket / UDP (1472 B, MTU)      | _deferred_[^2] | n/a              | n/a              | _TBD (follow-up)_ | n/a              | n/a              |
+| Raw Ethernet / GPUDirect        | **98.5**       | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ |
+| Socket / RoCE                   | 0.004[^1]      | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ |
+| Socket / UDP (8 KB, 4 pairs)    | 34.0[^2]       | n/a              | n/a              | _TBD (follow-up)_ | n/a              | n/a              |
 
-[^1]: RoCE single-host loopback on Spark requires host network prereqs before the bench can use the cable — see [Tuning prerequisites](#tuning-prerequisites). The native-shape 8 MB cell saturates at ~83 Gbps single-stream (single QP, batch 1); the matched 8 KB cell comes from the original Spark data set and should be treated as pending refresh rather than a final platform limit after the current RDMA bench changes. The aggregate bidirectional rate at native shape on the same run was ~175 Gbps (server TX 89.2 + client TX 83.4).
-[^2]: Socket UDP rows are pending re-run of `./examples/run_spark_bench.sh socket-udp sweep` with the current wrapper-side fix that maps `sent_packets`/`sent_bytes` from `socket_bench` (the previous wrapper only knew the RDMA `send_completions`/`send_bytes` keys and zero-filled the CSV for socket runs). The earlier "peer-learning deadlock" diagnosis was a red herring — bench behaves correctly; the CSV was bogus because of the wrapper bug. Re-run tracked outside this PR.
-[^3]: Socket TCP rows are pending re-run for the same reason as Socket UDP (see [^2]). The earlier "glibc heap-corruption" diagnosis was also a red herring; the bench exits cleanly under ASan across 20+ runs.
+[^1]: RoCE single-host loopback on Spark requires host network prereqs before the bench can use the cable — see [Tuning prerequisites](#tuning-prerequisites). The native-shape 8 MB cell saturates at ~94.8 Gbps one-way (single QP, batch 1, drop-free); the matched 8 KB cell (~0.004 Gbps) is deep in the small-message cliff that sets in below ~1 MB and is not a platform limit for large transfers.
+[^2]: Socket UDP value is the four-pair aggregate App RX (receiver goodput) at 8000 B from `bench-results/20260608T165358Z-socket-udp-sweep`. UDP is unpaced (no flow control), so each sender outruns its receiver and the cell carries ~57% app-level loss — an inherent property of unpaced UDP, not a fault. Goodput scales with the pair count (one isolated core per pair). See the [Socket](#socket) section for the full message-size × pairs matrix.
+[^3]: Socket TCP value is the four-pair aggregate at 8000 B from `bench-results/20260608T190527Z-socket-tcp-sweep`. TCP self-paces via flow control, so App TX = App RX with ~0 loss. The earlier "glibc heap-corruption" was **not** a red herring: `socket_bench` memsets a full `message_size` into a `buf_size` TX buffer, so any `message_size > buf_size` overflows the heap (`SIGABRT`). It is avoided here by sizing `buf_size >= message_size` in the netns configs; the bench-validation gap is captured in `socket-bench-bufsize-issue.md`.
 
 !!! note "Why two tables"
     A single Gbps number isn't enough to compare stream/protocol combinations
@@ -94,7 +94,8 @@ documentation and will be the basis for the future fill of those rows.
     examples/daqiri_bench_rdma_tx_rx_spark.yaml \
     --seconds 30 --mode both [--target-gbps G]
 
-# Socket UDP / TCP — localhost (deferred; see TODO / Known Limitations)
+# Socket UDP / TCP — localhost smoke; the on-wire matrix uses
+# run_spark_bench.sh socket-{udp,tcp} over the netns loopback (see Socket section)
 ./build/examples/daqiri_bench_socket \
     examples/daqiri_bench_socket_udp_tx_rx.yaml \
     --seconds 30 --mode both [--target-gbps G]
@@ -187,7 +188,9 @@ Hold (payload=8000, batch=10240) constant; sweep `--target-gbps`. The
 token-bucket pacer tracks target within ±0.02 Gbps until the link saturates
 near 96 Gbps. Beyond that, target=100 and unpaced both report the
 achievable ceiling. TX and RX cores spin in poll-mode regardless of target
-rate (visible in the CPU table below).
+rate (visible in the CPU table below). This drop-curve run topped out at
+~96 Gbps at the headline shape; the unpaced payload×batch sweep below
+measured ~98.5 Gbps for the same cell — a ~2% run-to-run spread.
 
 | target Gbps | achieved Gbps | RX pps    | drops | TX core % | RX core % |
 | ----------- | ------------- | --------- | ----- | --------- | --------- |
@@ -301,7 +304,7 @@ unpaced run), and per-cell numbers in this regime carry roughly
 
 Each cell shows the achieved Gbps and drops over a 30 s unpaced run.
 Coloring is relative to the global max across the matrix (here
-**104.989 Gbps** at payload 4096 B, batch 4096):
+**106.4 Gbps** at payload 4096 B, batch 4096):
 
 <div class="perf-legend" markdown="0">
   <span class="cell-green">green — no drops, Gbps ≥ 90% of max</span>
@@ -322,59 +325,57 @@ Coloring is relative to the global max across the matrix (here
   <tbody>
     <tr>
       <th>8000 B</th>
-      <td class="cell-green">96.4 Gbps<small>0 drops</small></td>
-      <td class="cell-green">96.4 Gbps<small>0 drops</small></td>
-      <td class="cell-green">96.4 Gbps<small>0 drops</small></td>
-      <td class="cell-green">95.9 Gbps<small>0 drops</small></td>
+      <td class="cell-green">98.2 Gbps<small>0 drops</small></td>
+      <td class="cell-green">98.6 Gbps<small>0 drops</small></td>
+      <td class="cell-green">98.6 Gbps<small>0 drops</small></td>
+      <td class="cell-green">98.5 Gbps<small>0 drops</small></td>
     </tr>
     <tr>
       <th>4096 B</th>
-      <td class="cell-green">104.9 Gbps<small>0 drops</small></td>
-      <td class="cell-green">104.9 Gbps<small>0 drops</small></td>
-      <td class="cell-green">105.0 Gbps<small>0 drops</small></td>
-      <td class="cell-green">103.0 Gbps<small>0 drops</small></td>
+      <td class="cell-green">106.3 Gbps<small>0 drops</small></td>
+      <td class="cell-green">104.8 Gbps<small>0 drops</small></td>
+      <td class="cell-green">106.4 Gbps<small>0 drops</small></td>
+      <td class="cell-green">106.2 Gbps<small>0 drops</small></td>
     </tr>
     <tr>
       <th>1024 B</th>
-      <td class="cell-red">64.9 Gbps<small>0 drops</small></td>
-      <td class="cell-yellow">86.2 Gbps<small>0 drops</small></td>
-      <td class="cell-red">71.0 Gbps<small>0 drops</small></td>
-      <td class="cell-red">72.7 Gbps<small>0 drops</small></td>
+      <td class="cell-yellow">80.4 Gbps<small>0 drops</small></td>
+      <td class="cell-yellow">75.5 Gbps<small>0 drops</small></td>
+      <td class="cell-yellow">82.8 Gbps<small>0 drops</small></td>
+      <td class="cell-yellow">90.9 Gbps<small>0 drops</small></td>
     </tr>
     <tr>
       <th>256 B</th>
-      <td class="cell-red">24.5 Gbps<small>0 drops</small></td>
-      <td class="cell-red">24.8 Gbps<small>0 drops</small></td>
-      <td class="cell-red">29.3 Gbps<small>0 drops</small></td>
-      <td class="cell-red">21.1 Gbps<small>0 drops</small></td>
+      <td class="cell-red">20.3 Gbps<small>0 drops</small></td>
+      <td class="cell-red">19.5 Gbps<small>0 drops</small></td>
+      <td class="cell-red">20.7 Gbps<small>0 drops</small></td>
+      <td class="cell-red">21.3 Gbps<small>0 drops</small></td>
     </tr>
     <tr>
       <th>64 B</th>
-      <td class="cell-red">10.1 Gbps<small>0 drops</small></td>
-      <td class="cell-red">10.3 Gbps<small>0 drops</small></td>
-      <td class="cell-red">9.8 Gbps<small>0 drops</small></td>
-      <td class="cell-red">10.3 Gbps<small>0 drops</small></td>
+      <td class="cell-red">8.3 Gbps<small>0 drops</small></td>
+      <td class="cell-red">10.5 Gbps<small>0 drops</small></td>
+      <td class="cell-red">11.3 Gbps<small>0 drops</small></td>
+      <td class="cell-red">10.0 Gbps<small>0 drops</small></td>
     </tr>
   </tbody>
 </table>
 
-**Reading the matrix.** At payload ≥ 4 KB the link saturates (~96–105
+**Reading the matrix.** At payload ≥ 4 KB the link saturates (~98–106
 Gbps) and batch size barely moves the number, so every cell is green.
-The 1 KB row is the transition: pps and Gbps both matter, batch size
-starts to influence which side dominates, and most cells fall under 70%
-of the global max. At ≤ 256 B the bottleneck is packets-per-second
-(~10 M pps ceiling at 64 B), so effective Gbps stays well below the
-link ceiling regardless of batch. Run-to-run variance on the unpaced
-cells is ~0.5 Gbps; row-internal Gbps differences smaller than that
-should be treated as noise.
+The 1 KB row is the transition: pps and Gbps both matter and throughput
+sits at ~70–90% of the global max (yellow). At ≤ 256 B the bottleneck is
+packets-per-second (~10 M pps ceiling at 64 B), so effective Gbps stays
+well below the link ceiling regardless of batch. The 256 B and 64 B rows
+are CPU-bound and noisy run-to-run (±20%); treat them as order-of-magnitude.
 
 #### CPU and GPU utilization (headline cell, payload 8000 B / batch 10240, unpaced)
 
 | Resource             | Value | Note                                       |
 | -------------------- | ----- | ------------------------------------------ |
-| Master core (CPU 8)  |  3.3% | Mostly idle; orchestration only            |
-| TX core (CPU 17)     | 91.4% | Poll-mode spin; rate-independent           |
-| RX core (CPU 18)     | 91.4% | Poll-mode spin; rate-independent           |
+| Master core (CPU 8)  |  3.1% | Mostly idle; orchestration only            |
+| TX core (CPU 17)     | 93.4% | Poll-mode spin; rate-independent           |
+| RX core (CPU 18)     | 93.4% | Poll-mode spin; rate-independent           |
 | GPU SM %             |  0.0% | GPU is a DMA target, no compute            |
 | GPU mem-ctrl %       |  0.0% | Payload writes traverse PCIe, not the GPU memory controller |
 
@@ -388,42 +389,36 @@ and is captured in the per-cell artifacts under `bench-results/`.
 
 ### RoCE
 
-Native shape on Spark is an 8 MB SEND, batch 1, single QP — the
-configuration `daqiri_bench_rdma_tx_rx_spark.yaml` is built around. The
-bench runs `--mode both` (one client, one server) in a single process; both
-endpoints are on the host, but RoCE bypasses kernel routing on the data
-path so traffic actually crosses the QSFP loopback cable. The aggregate
-rate at native shape was **~175 Gbps** bidirectional (server-TX 89.2 +
-client-TX 83.4 single-direction).
+Native shape on Spark is an 8 MB SEND, batch 1, single QP. The bench runs
+split server/client processes in the `dq_wire_*` namespaces so traffic crosses
+the QSFP loopback cable one-way (client → server) rather than short-cutting
+through the kernel's local routing.
 
 #### Payload sweep at native batch
 
-All cells: batch 1, unpaced, 30 s, `drops == 0`. These numbers are carried
-forward from the original Spark data set and should be refreshed in a follow-up
-hardware run after the current RDMA bench changes.
+All cells: batch 1, unpaced, 30 s, `drops == 0`.
 
 | message_size | Pkts/s | Gbps   | Notes                                |
 | ------------ | -----: | -----: | ------------------------------------ |
-| 8 MB         |  1,303 | **83.4** | Native shape; saturates single QP. |
-| 1 MB         |  9,859 |   82.7 | Same wire ceiling, more pps.         |
-| 64 KB        |    255 |  0.134 | Pending current-main refresh.[^1]    |
-| 8 KB         |     88 |  0.006 | Matched cell; pending refresh.[^1]   |
-| 4 KB         |     39 |  0.001 | Pending current-main refresh.[^1]    |
+| 8 MB         |  1,481 | **94.8** | Native shape; saturates single QP. |
+| 1 MB         | 11,253 |   94.4 | Same wire ceiling, more pps.         |
+| 64 KB        |    207 |  0.109 | Small-message cliff begins.          |
+| 8 KB         |     61 |  0.004 | Matched cell; deep in the cliff.     |
+| 4 KB         |     13 |  0.000 | Small-message cliff.                 |
 
-The 1 MB → 64 KB step is a 39× pps drop for a 16× smaller payload — well
-out of line with what handshake-bound RC on a 200G link should do. The data
-points are preserved here as historical Spark measurements, but the bench has
-changed since they were captured. Treat the small-payload diagnosis as pending
-refresh until the RoCE sweep is rerun on hardware with the current
-`examples/rdma_bench.cpp` and RDMA manager.
+Large messages (≥1 MB) hold the full ~95 Gbps wire ceiling. Below ~1 MB
+throughput collapses: the 1 MB → 64 KB step is a >50× pps drop for a 16×
+smaller payload, far out of line with what handshake-bound RC on a ~100–200G
+link should do. This small-message cliff is RDMA-path-specific and reproduces
+on the Release build.
 
 #### CPU and GPU utilization (headline cell, message 8 MB, batch 1, unpaced)
 
 | Channel              | Busy% | Note                                       |
 | -------------------- | ----: | ------------------------------------------ |
-| Master core (CPU 8)  |  6.6% | Orchestration only                         |
-| Client TX (CPU 17)   | 90.3% | Post-and-poll spin, rate-independent       |
-| Server RX (CPU 18)   |  2.6% | HCA writes directly to memory; CPU is idle for RDMA writes |
+| Master core (CPU 8)  |  7.3% | Orchestration only                         |
+| Client TX (CPU 17)   | 77.3% | Post-and-poll spin, rate-independent       |
+| Server RX (CPU 18)   |  0.0% | HCA writes directly to memory; CPU is idle for RDMA writes |
 | GPU SM %             |  0.0% | GPU is a DMA target, not a compute engine  |
 | GPU mem-ctrl %       |  0.0% | Payload writes go through PCIe, not the GPU mem-controller |
 
@@ -436,13 +431,85 @@ the configured TX core; the RX cores are unused.
 
 ### Socket
 
-**Data-fill pending.** Both UDP and TCP rows are blocked on a re-run of
-`./examples/run_spark_bench.sh socket-{udp,tcp} sweep` with the current
-wrapper parser — see footnotes [^2] / [^3] and the
-[TODO / Known Limitations](#todo-not-yet-implemented-known-limitations)
-section. The bench itself runs cleanly on Spark; the earlier "UDP
-peer-learning deadlock" and "TCP glibc heap-corruption" diagnoses were
-both closed as red herrings.
+Linux socket runs use the netns wire loopback (`dq_wire_client` →
+`dq_wire_server` over the cabled `enp1s0f0np0` ↔ `enP2p1s0f1np1` pair, MTU
+9000) with **N independent one-way client/server process pairs**. Each pair
+pins both its sender and receiver to a single isolated core (pairs 0–3 →
+cores 16–19), so N pairs occupy N cores and aggregate throughput scales with
+the pair count — this matches the reference four-pair methodology. App TX is
+the summed client send rate, App RX the summed datagrams the servers
+delivered to the application, and loss is `(App TX − App RX) / App TX`.
+
+#### UDP — message size × client/server pairs
+
+UDP has no flow control, so the sender is never throttled by the receiver:
+each client sends as fast as its core allows and the receiver drops whatever
+it cannot drain. The matrix below is therefore **unpaced**, which is the
+intended UDP operating point — the loss column is a real property of the
+protocol, not a fault. The sweep stops at 8000 B (single-frame); larger UDP
+datagrams fragment above the ~8972 B MTU payload and are excluded (see note).
+
+Provenance: `bench-results/20260608T165358Z-socket-udp-sweep` (Release build,
+30 s/cell, one-way).
+
+**App RX — receiver goodput (Gb/s)**
+
+| Message size | 1 pair | 2 pairs | 4 pairs |
+| ------------ | -----: | ------: | ------: |
+| 1000 B       | 4.37   | 9.53    | **14.13** |
+| 8000 B       | 12.94  | 22.72   | **34.01** |
+
+**App-level loss (%)**
+
+| Message size | 1 pair | 2 pairs | 4 pairs |
+| ------------ | -----: | ------: | ------: |
+| 1000 B       | 11%    | 24%     | 23%    |
+| 8000 B       | 57%    | 59%     | 57%    |
+
+(App TX — the raw unpaced sender rate — is recorded in the run's `runs.csv`
+`gbps` column; e.g. 8000 B at 4 pairs sends 79.9 Gb/s on the wire to deliver
+34.0 Gb/s of goodput.) Goodput scales cleanly with pair count (one core per
+pair). The gap between App TX and App RX is the unpaced-UDP loss, which is an
+inherent property of UDP on this path — a drop-curve sweep
+(`bench-results/20260608T185800Z-socket-udp-drop-curve`, 8000 B / 4 pairs,
+per-pair `--target-gbps`) shows **App RX saturates at ~35–37 Gb/s** regardless
+of how hard the senders are driven, and that pacing trades offered rate for
+loss without eliminating it (~17% loss even at 4 Gb/s aggregate offered, the
+token-bucket pacer's bursts overflowing the small UDP socket buffer). This
+loss level matches the reference 8000 B UDP figure (~22%).
+
+!!! note "Why the UDP sweep stops at 8000 B"
+    Datagrams larger than the ~8972 B MTU payload (e.g. 65507 B) are split
+    into ~8 IP fragments, and reassembly is all-or-nothing out of a single
+    fixed-size per-namespace pool (`net.ipv4.ipfrag_high_thresh`). Under
+    multi-pair unpaced load several senders overrun that shared pool,
+    half-assembled datagrams are evicted, and delivery cascades toward zero
+    (measured ~100% loss at 4 pairs). No MTU avoids it — 65507 B exceeds the
+    NIC's max jumbo frame (≈9978 B) — so fragmented UDP isn't a meaningful
+    steady-state operating point and is excluded from the matrix.
+
+#### TCP — message size × client/server pairs
+
+TCP self-paces via its own flow control: the sender blocks when the receiver
+falls behind, so App TX equals App RX and there is effectively no app-level
+loss — the opposite of the unpaced UDP behaviour above. `message_size` here
+is the per-send byte count of a stream (not a datagram), so there is no
+fragmentation and no MTU ceiling.
+
+Provenance: `bench-results/20260608T190527Z-socket-tcp-sweep` (Release build,
+30 s/cell, one-way).
+
+**Throughput — App TX = App RX (Gb/s)**
+
+| Message size | 1 pair | 2 pairs | 4 pairs |
+| ------------ | -----: | ------: | ------: |
+| 1000 B       | 16.91  | 32.81   | **59.99** |
+| 8000 B       | 28.65  | 79.22   | **87.63** |
+| 1 MiB        | 37.30  | 72.22   | **84.45** |
+
+App-level loss is ~0 across the matrix (TCP flow control); the `drops` column
+(`nstat` retransmits + in-errors) stays in the single digits over 30 s. As
+with UDP, throughput scales with the pair count (one core per pair).
 
 ### Workload variants (FFT, GEMM)
 
@@ -593,20 +660,16 @@ data-plane ports `enp1s0f0np0` (1.1.1.1) and `enP2p1s0f0np0` (2.2.2.2).
   HDS is characterized when this report extends to IGX and x86-server
   platforms where device memory works. See
   [issue #15](https://github.com/NVIDIA/daqiri/issues/15) for tracking.
-- **RoCE small-payload pps needs a refresh on current main.** The carried-forward
-  Spark data saturates single-stream at ~83 Gbps for 8 MB and 1 MB messages,
-  but 64 KB and below collapse out of proportion to payload size (4 KB at
-  0.001 Gbps). The bench and RDMA manager changed after those numbers were
-  captured, so the matched 8 KB RoCE cell is footnoted [^1] until a follow-up
-  hardware run refreshes the sweep.
-- **Socket UDP / TCP results are pending re-run** with the wrapper-side
-  parse fix now on main. The previous sweep CSVs are zero-filled
-  because `run_spark_bench.sh`'s fallback only knew RDMA's
-  `send_completions`/`send_bytes` keys; `socket_bench` actually emits
-  `sent_packets`/`sent_bytes`. With that fixed, both socket transports are
-  expected to produce real numbers — neither of the earlier "deadlock" / "heap
-  corruption" diagnoses held up under investigation (both red herrings,
-  closed not-a-bug). See footnotes [^2] / [^3].
+- **RoCE small-message cliff.** Large messages (≥1 MB) hold the ~95 Gbps wire
+  ceiling, but throughput collapses below ~1 MB (8 KB ≈ 0.004 Gbps). This
+  RDMA-path-specific cliff is characterized in the [RoCE](#roce) section; large
+  transfers are unaffected.
+- **Socket UDP loss is inherent; the bench needs a buf_size guard.** Unpaced UDP
+  drops whatever the receiver cannot drain — an intrinsic property of the
+  protocol, not a fault — so the loss in the [Socket](#socket) UDP matrix is
+  expected. Separately, `daqiri_bench_socket` overruns its TX buffer when
+  `message_size > buf_size`; this is sized around in the netns configs, with the
+  bench-validation gap noted in `socket-bench-bufsize-issue.md`.
 - **p99/p999 latency is not in v1.** The bench output captures throughput,
   drops, and resource utilization. Per-burst RX timestamping and percentile
   aggregation are deferred to a follow-up issue.
