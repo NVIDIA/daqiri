@@ -26,12 +26,12 @@ daqiri:
       kind: "host_pinned"
       affinity: 0
       num_bufs: 20
-      buf_size: 9000000
+      buf_size: 90000000
     - name: "DATA_TX_GPU_SERVER"
       kind: "host_pinned"
       affinity: 0
       num_bufs: 20
-      buf_size: 9000000
+      buf_size: 90000000
 
     interfaces:
     - name: my_server
