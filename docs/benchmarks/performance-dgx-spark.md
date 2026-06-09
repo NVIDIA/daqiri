@@ -9,6 +9,12 @@ Measured C++-loopback throughput for each stream/protocol on a single DGX Spark
 (GB10), driven over a physical cabled loopback on one ConnectX-7. Numbers are
 from a Release build via `examples/run_spark_bench.sh` (30 s per cell).
 
+For the loopback setup these numbers depend on and the per-transport
+benchmarking procedure, see [Socket and RDMA Benchmarking](socket_benchmarking.md)
+(the `dq_wire_*` network-namespace wire loopback used by RoCE and sockets) and
+[Raw Ethernet Benchmarking](raw_benchmarking.md) (the two-physical-port DPDK
+loopback). The exact commands are collected under [Reproduce](#reproduce) below.
+
 ## System under test
 
 | Component | Detail |
@@ -39,9 +45,8 @@ RoCE collapses at 8 KB and TCP has no operation boundary.
 
 Physical port-to-port loopback, GPU-resident payloads. Native 8 KB packets run
 at **98.5 Gb/s** drop-free across all batch sizes; the throughput peak is
-**106.4 Gb/s** at a 4 KB payload. The TX and RX poll-mode cores run ~93% busy
-(CPU-bound packet handling), and the GPU sits near-idle (it is a DMA target, not
-a compute engine).
+**106.4 Gb/s** at a 4 KB payload. Packet handling is CPU-bound (see the CPU
+utilization table below).
 
 Achieved Gb/s, unpaced, 0 drops in every cell:
 
@@ -71,6 +76,19 @@ rate — pacing the sender below it simply hits the target with zero drops, so a
 paced payload × rate sweep adds nothing here (unlike UDP, which drops as offered
 rate climbs).
 
+**CPU utilization** (headline cell, 8000 B / batch 10240, unpaced):
+
+| Core               | Busy% | Note                                  |
+| ------------------ | ----: | ------------------------------------- |
+| Master (CPU 8)     |  3.1% | Orchestration only; mostly idle       |
+| TX core (CPU 17)   | 93.4% | Poll-mode spin; rate-independent      |
+| RX core (CPU 18)   | 93.4% | Poll-mode spin; rate-independent      |
+
+The TX/RX cores stay near 93% across every drop-curve step from 1 Gb/s to line
+rate — DPDK's poll-mode driver spins regardless of offered load. The GPU stays
+idle (SM and memory-controller utilization both ~0%): it is a DMA target for the
+payload, not a compute engine.
+
 ## Socket / RoCE
 
 RoCE SEND over the netns wire loopback, single queue-pair, batch 1. Large
@@ -88,7 +106,20 @@ cliff (sweep below).
 | 4 KB  | 0.000 |
 
 Large messages (≥1 MB) hold the ~95 Gb/s wire ceiling; below ~1 MB the
-RDMA-path small-message cliff collapses throughput.
+RDMA-path small-message cliff collapses throughput. This cliff is RDMA-path
+specific and under investigation ([issue #126](https://github.com/NVIDIA/daqiri/issues/126)).
+
+**CPU utilization** (headline cell, 8 MB message, batch 1, unpaced):
+
+| Core                | Busy% | Note                                            |
+| ------------------- | ----: | ----------------------------------------------- |
+| Master (CPU 8)      |  7.3% | Orchestration only                              |
+| Client TX (CPU 17)  | 77.3% | Post-and-poll spin; rate-independent            |
+| Server RX (CPU 18)  |  0.0% | HCA writes straight to memory; CPU uninvolved   |
+
+The idle RX core is the expected RoCE RC signature — the HCA places incoming
+data directly into registered memory with no CPU involvement. The GPU stays
+idle here too (SM and memory-controller ~0%; DMA target, not a compute engine).
 
 ## Socket / TCP
 
@@ -160,16 +191,29 @@ mounted), as root. Build with `-DCMAKE_BUILD_TYPE=Release` and
 ```bash
 export DAQIRI_BUILD_DIR=./build
 export LD_LIBRARY_PATH=/opt/daqiri/lib:${LD_LIBRARY_PATH:-}
+```
 
-# Raw Ethernet / GPUDirect — physical port loopback (netns must be torn down)
+**Raw Ethernet / GPUDirect (DPDK)** drives the two physical ports directly, so
+the `dq_wire_*` namespaces must **not** be up — they capture the ports and
+hide them from DPDK. Tear them down first (no-op if they were never created):
+
+```bash
+./scripts/setup_spark_wire_loopback_netns.sh down       # ensure netns is torn down
 export ETH_DST_ADDR=$(cat /sys/class/net/<rx-iface>/address)
 ./examples/run_spark_bench.sh dpdk sweep
+```
 
-# Socket / RoCE and sockets — bring up the netns wire loopback first
-./scripts/setup_spark_wire_loopback_netns.sh up
+**Socket / RoCE and sockets** cross the cable through the `dq_wire_client` →
+`dq_wire_server` namespaces. Bring the loopback up and confirm PHY counters move
+before running; tear it down when finished:
+
+```bash
+./scripts/setup_spark_wire_loopback_netns.sh up         # create the namespaces
+./scripts/setup_spark_wire_loopback_netns.sh verify      # confirm wire traffic
 ./examples/run_spark_bench.sh rdma sweep
 ./examples/run_spark_bench.sh socket-tcp sweep
 ./examples/run_spark_bench.sh socket-udp sweep
+./scripts/setup_spark_wire_loopback_netns.sh down        # tear down when done
 ```
 
 Each run writes `bench-results/<timestamp>-<backend>-<mode>/runs.csv`. See
