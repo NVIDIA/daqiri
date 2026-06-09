@@ -1773,27 +1773,26 @@ void RdmaMgr::init_client() {
 }
 
 Status RdmaMgr::get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server) {
-  if (server) {
-    const auto ring = rx_rings_map_[reinterpret_cast<struct rdma_cm_id*>(conn_id)];
-    if (ring == nullptr) {
-      DAQIRI_LOG_CRITICAL("No server RX ring found for conn_id {:#x}", conn_id);
-      return Status::INVALID_PARAMETER;
-    }
-
-    if (rte_ring_dequeue(ring, reinterpret_cast<void**>(burst)) != 0) { return Status::NOT_READY; }
-
-    return Status::SUCCESS;
-  } else {
-    const auto ring = rx_rings_map_[reinterpret_cast<struct rdma_cm_id*>(conn_id)];
-    if (ring == nullptr) {
-      DAQIRI_LOG_CRITICAL("No client RX ring found for conn_id {:#x}", conn_id);
-      return Status::INVALID_PARAMETER;
-    }
-
-    if (rte_ring_dequeue(ring, reinterpret_cast<void**>(burst)) != 0) { return Status::NOT_READY; }
-
-    return Status::SUCCESS;
+  // Look the ring up with find() rather than operator[]: a miss must not insert a
+  // null-valued entry into rx_rings_map_. Such an entry would make the
+  // rx_rings_map_.find(client_id) gate in rdma_get_server_conn_id() succeed for a
+  // connection whose ring does not actually exist, handing back a dead conn_id and
+  // guaranteeing every subsequent lookup misses again.
+  const auto it = rx_rings_map_.find(reinterpret_cast<struct rdma_cm_id*>(conn_id));
+  if (it == rx_rings_map_.end() || it->second == nullptr) {
+    // A legitimately-absent ring is a transient (polled before the ring is wired up),
+    // not a fatal error. Report it quietly so the caller can retry rather than emitting
+    // a CRITICAL on the hot path.
+    DAQIRI_LOG_DEBUG(
+      "No {} RX ring found for conn_id {:#x}", server ? "server" : "client", conn_id);
+    return Status::NOT_READY;
   }
+
+  if (rte_ring_dequeue(it->second, reinterpret_cast<void**>(burst)) != 0) {
+    return Status::NOT_READY;
+  }
+
+  return Status::SUCCESS;
 }
 
 void RdmaMgr::free_rx_metadata(BurstParams* burst) {
