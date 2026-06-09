@@ -33,7 +33,7 @@ aggregate is shown.
 | Stream / Protocol | Best case | Throughput | Drops |
 | ----------------- | --------- | ---------: | ----- |
 | Raw Ethernet / GPUDirect | 4 KB packet | **106.4 Gb/s** (98.5 at 8 KB native) | 0 |
-| Socket / RoCE (SEND) | 8 MB message | **101.3 Gb/s** | 0 |
+| Socket / RoCE (SEND) | 8 MB message | **101.8 Gb/s** | 0 |
 | Socket / TCP | 8 KB × 4 pairs | **87.6 Gb/s** | ~0 (flow-controlled) |
 | Socket / UDP | 8 KB × 4 pairs | **34.0 Gb/s** goodput | unpaced, ~57% app-loss |
 
@@ -93,22 +93,23 @@ payload, not a compute engine.
 ## Socket / RoCE
 
 RoCE SEND over the netns wire loopback, single queue-pair, batch 1. Large
-messages saturate the path; smaller messages are bound by per-operation software
-overhead, but op-rate keeps climbing as they shrink.
+messages saturate the wire; with the queue depth sized to keep the in-flight
+window full, 64 KB now nearly saturates it too, and the smallest messages are
+bound by per-operation software overhead.
 
 **Message-size sweep (single QP, batch 1, 0 drops)**
 
 | Message size | Gb/s | pps |
 | ------------ | ---: | ---: |
-| 8 MB  | **101.3** | 1,583 |
-| 1 MB  | 100.8 | 12,022 |
-| 64 KB | 10.79 | 20,580 |
-| 8 KB  | 0.935 | 14,272 |
-| 4 KB  | 0.475 | 14,484 |
+| 8 MB  | **101.8** | 1,590 |
+| 1 MB  | 100.9 | 12,028 |
+| 64 KB | 95.7 | 182,592 |
+| 8 KB  | 3.41 | 51,976 |
+| 4 KB  | 1.29 | 39,219 |
 
-Large messages (≥1 MB) hold the ~100 Gb/s wire ceiling. Below that, throughput
-is set by the operation rate, which *rises* as messages shrink (pps climbs to
-~14–20k where per-op software overhead dominates) — every cell is drop-free.
+Messages ≥64 KB hold ~96–102 Gb/s at the wire ceiling. Below that, throughput
+is operation-rate-bound — pps plateaus near ~40–52k where per-op software
+overhead dominates — and every cell is drop-free.
 
 **CPU utilization** (headline cell, 8 MB message, batch 1, unpaced):
 
