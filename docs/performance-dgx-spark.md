@@ -585,6 +585,7 @@ Inside the container:
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
     -DDAQIRI_BUILD_PYTHON=ON -DDAQIRI_MGR="dpdk socket rdma"
 cmake --build build -j
+cmake --install build --prefix /opt/daqiri
 ```
 
 ### One-shot driver
