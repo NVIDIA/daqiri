@@ -510,8 +510,20 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
   if (tparams->client_id != nullptr && tparams->client_id->qp != nullptr) {
     int rnr_timer = 12;  // IB min_rnr_timer encoding: 12 == 0.64 ms
     if (const char* env = std::getenv("DAQIRI_RDMA_MIN_RNR_TIMER")) {
-      const long parsed = strtol(env, nullptr, 10);
-      if (parsed >= 0 && parsed <= 31) { rnr_timer = static_cast<int>(parsed); }
+      char* end = nullptr;
+      const long parsed = strtol(env, &end, 10);
+      // Require the whole string to parse as a valid 0-31 code. A bare strtol
+      // would map non-numeric input (e.g. "abc") to 0, which is itself a valid
+      // code meaning 655.36 ms -- silently reintroducing the very stall this
+      // override exists to prevent. Reject and keep the default instead.
+      if (end != env && *end == '\0' && parsed >= 0 && parsed <= 31) {
+        rnr_timer = static_cast<int>(parsed);
+      } else {
+        DAQIRI_LOG_WARN(
+          "Ignoring invalid DAQIRI_RDMA_MIN_RNR_TIMER='{}' (expected integer 0-31); "
+          "using default {}",
+          env, rnr_timer);
+      }
     }
     struct ibv_qp_attr mod = {};
     mod.min_rnr_timer = static_cast<uint8_t>(rnr_timer);
