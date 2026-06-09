@@ -33,13 +33,14 @@ aggregate is shown.
 | Stream / Protocol | Best case | Throughput | Drops |
 | ----------------- | --------- | ---------: | ----- |
 | Raw Ethernet / GPUDirect | 4 KB packet | **106.4 Gb/s** (98.5 at 8 KB native) | 0 |
-| Socket / RoCE (SEND) | 8 MB message | **94.8 Gb/s** | 0 |
+| Socket / RoCE (SEND) | 8 MB message | **101.3 Gb/s** | 0 |
 | Socket / TCP | 8 KB × 4 pairs | **87.6 Gb/s** | ~0 (flow-controlled) |
 | Socket / UDP | 8 KB × 4 pairs | **34.0 Gb/s** goodput | unpaced, ~57% app-loss |
 
 Each transport is best read at its own native operation size (see the per-transport
 tables below); a single cross-transport unit of work isn't meaningful here, since
-RoCE collapses at 8 KB and TCP has no operation boundary.
+RoCE at 8 KB is op-rate-bound well below its large-message peak and TCP has no
+operation boundary.
 
 ## Raw Ethernet / GPUDirect (DPDK)
 
@@ -92,22 +93,22 @@ payload, not a compute engine.
 ## Socket / RoCE
 
 RoCE SEND over the netns wire loopback, single queue-pair, batch 1. Large
-messages saturate the path; below ~1 MB throughput falls off a small-message
-cliff (sweep below).
+messages saturate the path; smaller messages are bound by per-operation software
+overhead, but op-rate keeps climbing as they shrink.
 
 **Message-size sweep (single QP, batch 1, 0 drops)**
 
-| Message size | Gb/s |
-| ------------ | ---: |
-| 8 MB  | **94.8** |
-| 1 MB  | 94.4 |
-| 64 KB | 0.109 |
-| 8 KB  | 0.004 |
-| 4 KB  | 0.000 |
+| Message size | Gb/s | pps |
+| ------------ | ---: | ---: |
+| 8 MB  | **101.3** | 1,583 |
+| 1 MB  | 100.8 | 12,022 |
+| 64 KB | 10.79 | 20,580 |
+| 8 KB  | 0.935 | 14,272 |
+| 4 KB  | 0.475 | 14,484 |
 
-Large messages (≥1 MB) hold the ~95 Gb/s wire ceiling; below ~1 MB the
-RDMA-path small-message cliff collapses throughput. This cliff is RDMA-path
-specific and under investigation ([issue #126](https://github.com/NVIDIA/daqiri/issues/126)).
+Large messages (≥1 MB) hold the ~100 Gb/s wire ceiling. Below that, throughput
+is set by the operation rate, which *rises* as messages shrink (pps climbs to
+~14–20k where per-op software overhead dominates) — every cell is drop-free.
 
 **CPU utilization** (headline cell, 8 MB message, batch 1, unpaced):
 
@@ -192,6 +193,17 @@ mounted), as root. Build with `-DCMAKE_BUILD_TYPE=Release` and
 export DAQIRI_BUILD_DIR=./build
 export LD_LIBRARY_PATH=/opt/daqiri/lib:${LD_LIBRARY_PATH:-}
 ```
+
+The base container does not ship the network tools the setup scripts and RoCE
+baseline depend on; install them first, or
+`scripts/setup_spark_wire_loopback_netns.sh` fails with `ip: command not found`:
+
+```bash
+apt-get update
+apt-get install -y iproute2 iputils-ping ethtool iperf3 rdma-core ibverbs-utils perftest
+```
+
+These provide `ip`/`nstat` (`iproute2`), `ethtool`, and `ib_send_bw` (`perftest`).
 
 **Raw Ethernet / GPUDirect (DPDK)** drives the two physical ports directly, so
 the `dq_wire_*` namespaces must **not** be up — they capture the ports and
