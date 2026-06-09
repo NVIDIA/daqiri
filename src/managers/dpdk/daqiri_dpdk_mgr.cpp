@@ -356,6 +356,9 @@ static bool populate_split_packet_segments(BurstParams* burst,
     mbuf = mbuf->next;
     if (mbuf == nullptr) {
       log_rx_incomplete_split_packet_drop(port, queue, expected_segs, seg);
+      for (int clear_seg = 0; clear_seg < seg; ++clear_seg) {
+        burst->pkts[clear_seg][pkt_idx] = nullptr;
+      }
       return false;
     }
     burst->pkts[seg][pkt_idx] = mbuf;
@@ -3794,7 +3797,7 @@ int DpdkMgr::rx_core_multi_q_worker(void* arg) {
       rte_ring_enqueue(tparams->q_params[cur_idx].ring, reinterpret_cast<void*>(bursts[cur_idx]));
       last_cycles[cur_idx] = rte_get_tsc_cycles();
       bursts[cur_idx] = nullptr;
-    } else if (cur_timeout_cycles > 0) {
+    } else if (bursts[cur_idx]->hdr.hdr.num_pkts > 0 && cur_timeout_cycles > 0) {
       const auto cur_cycles = rte_get_tsc_cycles();
 
       // We hit our timeout. Send the partial batch immediately
@@ -3963,7 +3966,7 @@ int DpdkMgr::rx_core_worker(void* arg) {
       rte_ring_enqueue(tparams->ring, reinterpret_cast<void*>(burst));
       last_cycles = rte_get_tsc_cycles();
       burst = nullptr;
-    } else if (timeout_cycles > 0) {
+    } else if (burst->hdr.hdr.num_pkts > 0 && timeout_cycles > 0) {
       const auto cur_cycles = rte_get_tsc_cycles();
 
       // We hit our timeout. Send the partial batch immediately
