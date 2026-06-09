@@ -498,6 +498,44 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
 
   DAQIRI_LOG_INFO("Affined {} RDMA thread to core {}", is_server ? "Server" : "Client", cpu_core);
 
+  // rdma_cm leaves min_rnr_timer at 0, which the IB spec defines as 655.36 ms,
+  // and sets rnr_retry to 7 (infinite). So a single RECV-queue underrun -- which
+  // happens intermittently on fast small messages, where the sender briefly
+  // outruns the responder's RECV reposting -- stalls the sender for 655 ms with
+  // no CQE error and no drop. That is the intermittent small-message throughput
+  // cliff (#126). Lower min_rnr_timer (as responder) so a transient underrun
+  // costs sub-millisecond, not ~0.65 s. Env-overridable for tuning; the default
+  // 12 == 0.64 ms is comfortably above the peer's RECV-repost latency, so it
+  // avoids an RNR-retry storm while keeping any stall negligible.
+  if (tparams->client_id != nullptr && tparams->client_id->qp != nullptr) {
+    int rnr_timer = 12;  // IB min_rnr_timer encoding: 12 == 0.64 ms
+    if (const char* env = std::getenv("DAQIRI_RDMA_MIN_RNR_TIMER")) {
+      const long parsed = strtol(env, nullptr, 10);
+      if (parsed >= 0 && parsed <= 31) { rnr_timer = static_cast<int>(parsed); }
+    }
+    struct ibv_qp_attr mod = {};
+    mod.min_rnr_timer = static_cast<uint8_t>(rnr_timer);
+    if (ibv_modify_qp(tparams->client_id->qp, &mod, IBV_QP_MIN_RNR_TIMER) != 0) {
+      DAQIRI_LOG_WARN("Failed to set min_rnr_timer on {} QP: {}",
+                        is_server ? "server" : "client", strerror(errno));
+    }
+
+    // Confirm the negotiated retry/timeout attributes after the override.
+    struct ibv_qp_attr qattr;
+    struct ibv_qp_init_attr qinit;
+    const int qmask =
+      IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY | IBV_QP_MIN_RNR_TIMER;
+    if (ibv_query_qp(tparams->client_id->qp, &qattr, qmask, &qinit) == 0) {
+      const double ack_us = qattr.timeout == 0 ? 0.0 : 4.096 * (1U << qattr.timeout);
+      DAQIRI_LOG_INFO(
+        "[rdma-qp {}] timeout={} (local-ack ~{} us; 0=infinite) retry_cnt={} "
+        "rnr_retry={} min_rnr_timer={}",
+        is_server ? "server" : "client", static_cast<int>(qattr.timeout), ack_us,
+        static_cast<int>(qattr.retry_cnt), static_cast<int>(qattr.rnr_retry),
+        static_cast<int>(qattr.min_rnr_timer));
+    }
+  }
+
   // Main TX loop. Wait for send requests from the transmitters to arrive for sending. Also
   // periodically poll the CQ. Exit on either the global force-quit or the per-connection
   // ready_to_exit signal (set by the DISCONNECTED CM handler).
