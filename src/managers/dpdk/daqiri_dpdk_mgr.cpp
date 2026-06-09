@@ -224,6 +224,7 @@ static bool should_log_bounded(uint64_t count) {
 static std::atomic<uint64_t> rx_burst_array_allocation_failures{0};
 static std::atomic<uint64_t> rx_incomplete_split_packet_drops{0};
 static std::atomic<uint64_t> rx_controlled_packet_drops{0};
+static std::atomic<uint64_t> rx_controlled_packet_drop_events{0};
 
 static void log_rx_burst_array_allocation_failure(int port, int queue, int seg, int num_segs) {
   const uint64_t total =
@@ -262,7 +263,9 @@ static void log_rx_controlled_packet_drop(int port,
                                           uint64_t dropped) {
   const uint64_t total =
       rx_controlled_packet_drops.fetch_add(dropped, std::memory_order_relaxed) + dropped;
-  if (!should_log_bounded(total)) { return; }
+  const uint64_t events =
+      rx_controlled_packet_drop_events.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (!should_log_bounded(events)) { return; }
   DAQIRI_LOG_WARN("Dropped {} RX packet(s) on port {} queue {}: {} (total controlled drops: {})",
                   dropped,
                   port,
