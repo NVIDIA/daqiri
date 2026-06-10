@@ -79,11 +79,13 @@ SocketMgr::~SocketMgr() {
 }
 
 bool SocketMgr::is_roce_protocol() const {
-  return cfg_.common_.stream_type == StreamType::SOCKET && cfg_.common_.protocol == SocketProtocol::ROCE;
+  return cfg_.common_.stream_type == StreamType::SOCKET &&
+         cfg_.common_.protocol == SocketProtocol::ROCE;
 }
 
 Status SocketMgr::roce_not_initialized(const char* op_name) const {
-  DAQIRI_LOG_ERROR("{} is only supported when protocol=roce and RoCE manager is initialized", op_name);
+  DAQIRI_LOG_ERROR("{} is only supported with roce:// endpoints and an initialized RDMA engine",
+                   op_name);
   return Status::NOT_SUPPORTED;
 }
 
@@ -100,7 +102,8 @@ bool SocketMgr::set_config_and_initialize(const NetworkConfig& cfg) {
     initialized_ = roce_mgr_->set_config_and_initialize(cfg_);
     return initialized_;
 #else
-    DAQIRI_LOG_ERROR("Socket backend built without RDMA support; protocol=roce is unavailable");
+    DAQIRI_LOG_ERROR(
+        "Socket manager built without RDMA support; roce:// endpoints are unavailable");
     initialized_ = false;
     return false;
 #endif
@@ -1446,38 +1449,48 @@ Status SocketMgr::socket_get_server_conn_id(const std::string& server_addr, uint
 
 Status SocketMgr::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
                                          uintptr_t* conn_id) {
-  if (!is_roce_protocol() || roce_mgr_ == nullptr) { return roce_not_initialized("rdma_connect_to_server"); }
+  if (!is_roce_protocol() || roce_mgr_ == nullptr) {
+    return roce_not_initialized("rdma_connect_to_server");
+  }
   return roce_mgr_->rdma_connect_to_server(dst_addr, dst_port, conn_id);
 }
 
 Status SocketMgr::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
                                          const std::string& src_addr, uintptr_t* conn_id) {
-  if (!is_roce_protocol() || roce_mgr_ == nullptr) { return roce_not_initialized("rdma_connect_to_server"); }
+  if (!is_roce_protocol() || roce_mgr_ == nullptr) {
+    return roce_not_initialized("rdma_connect_to_server");
+  }
   return roce_mgr_->rdma_connect_to_server(dst_addr, dst_port, src_addr, conn_id);
 }
 
 Status SocketMgr::rdma_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) {
-  if (!is_roce_protocol() || roce_mgr_ == nullptr) { return roce_not_initialized("rdma_get_port_queue"); }
+  if (!is_roce_protocol() || roce_mgr_ == nullptr) {
+    return roce_not_initialized("rdma_get_port_queue");
+  }
   return roce_mgr_->rdma_get_port_queue(conn_id, port, queue);
 }
 
 Status SocketMgr::rdma_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
                                           uintptr_t* conn_id) {
-  if (!is_roce_protocol() || roce_mgr_ == nullptr) { return roce_not_initialized("rdma_get_server_conn_id"); }
+  if (!is_roce_protocol() || roce_mgr_ == nullptr) {
+    return roce_not_initialized("rdma_get_server_conn_id");
+  }
   return roce_mgr_->rdma_get_server_conn_id(server_addr, server_port, conn_id);
 }
 
 Status SocketMgr::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id,
                                   bool is_server, int num_pkts, uint64_t wr_id,
                                   const std::string& local_mr_name) {
-  if (!is_roce_protocol() || roce_mgr_ == nullptr) { return roce_not_initialized("rdma_set_header"); }
+  if (!is_roce_protocol() || roce_mgr_ == nullptr) {
+    return roce_not_initialized("rdma_set_header");
+  }
   return roce_mgr_->rdma_set_header(
       burst, op_code, conn_id, is_server, num_pkts, wr_id, local_mr_name);
 }
 
 RDMAOpCode SocketMgr::rdma_get_opcode(BurstParams* burst) {
   if (!is_roce_protocol() || roce_mgr_ == nullptr) {
-    DAQIRI_LOG_ERROR("rdma_get_opcode is only valid with protocol=roce");
+    DAQIRI_LOG_ERROR("rdma_get_opcode is only valid with roce:// endpoints");
     return RDMAOpCode::INVALID;
   }
   return roce_mgr_->rdma_get_opcode(burst);

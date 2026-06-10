@@ -4,7 +4,6 @@ daqiri:
   cfg:
     version: 1
     stream_type: "socket"
-    protocol: "tcp"
     master_core: 3
     debug: false
     log_level: "info"
@@ -26,8 +25,7 @@ daqiri:
       address: 127.0.0.1
       socket_config:
         mode: server
-        local_ip: 127.0.0.1
-        local_port: 6001
+        local_addr: "tcp://127.0.0.1:6001"
         max_payload_size: 2048
       rx:
         queues:
@@ -50,10 +48,8 @@ daqiri:
       address: 127.0.0.1
       socket_config:
         mode: client
-        local_ip: 127.0.0.1
-        local_port: 6002
-        remote_ip: 127.0.0.1
-        remote_port: 6001
+        local_addr: "tcp://127.0.0.1:6002"
+        remote_addr: "tcp://127.0.0.1:6001"
         max_payload_size: 2048
       rx:
         queues:

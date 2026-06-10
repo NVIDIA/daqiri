@@ -532,12 +532,15 @@ void bind_config_types(py::module_ &m) {
       .def_readwrite("direction", &CommonConfig::dir)
       .def_readwrite("stream_type", &CommonConfig::stream_type)
       .def_readwrite("protocol", &CommonConfig::protocol)
+      .def_readwrite("engine", &CommonConfig::engine)
       .def_readwrite("manager_type", &CommonConfig::manager_type)
       .def_readwrite("loopback", &CommonConfig::loopback_);
 
   py::class_<SocketConfig>(m, "SocketConfig")
       .def(py::init<>())
       .def_readwrite("mode", &SocketConfig::mode_)
+      .def_readwrite("local_addr", &SocketConfig::local_addr_)
+      .def_readwrite("remote_addr", &SocketConfig::remote_addr_)
       .def_readwrite("local_ip", &SocketConfig::local_ip_)
       .def_readwrite("remote_ip", &SocketConfig::remote_ip_)
       .def_readwrite("local_port", &SocketConfig::local_port_)

@@ -29,13 +29,13 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 - **Optional OpenTelemetry metrics** — Expose per-interface or per-queue packet,
   byte, and drop counters when built with `DAQIRI_ENABLE_OTEL_METRICS=ON`.
 
-### Backends
+### Engines
 
-| Backend | Config value | Description |
+| Engine | Config selector | Description |
 |---------|-------------|-------------|
-| DPDK | `dpdk` | Userspace packet processing with DPDK mbufs and rings. |
-| RDMA | `rdma` | RDMA verbs via libibverbs over RoCE or InfiniBand (client/server model). |
-| Socket | `socket` | Linux kernel sockets (UDP/TCP), plus a RoCE path that delegates to the RDMA backend. Selecting `socket` automatically builds `rdma`. |
+| DPDK | `stream_type: "raw"` (optional `engine: "dpdk"`) | Userspace packet processing with DPDK mbufs and rings. |
+| Socket | `stream_type: "socket"` with `tcp://` or `udp://` endpoints | Linux kernel sockets for TCP/UDP. |
+| RDMA | `stream_type: "socket"` and `roce://` endpoints | RDMA verbs via libibverbs over RoCE or InfiniBand (client/server model). |
 
 ### Limitations
 
@@ -112,7 +112,7 @@ Reference material for the DAQIRI codebase:
 - [Getting Started](https://nvidia.github.io/daqiri/getting-started/) — System requirements, build/install instructions, and CMake options
 - [Concepts](https://nvidia.github.io/daqiri/concepts/) — Glossary of DAQIRI terminology (kernel bypass, GPUDirect, packet/burst/segment, flow/queue, memory region, zero-copy ownership, RX reorder). Meant to be opened in parallel with the rest of the docs.
 - [API Guide](https://nvidia.github.io/daqiri/api-reference/) — Six-step DAQIRI application lifecycle and configuration-first model
-- [Configuration YAML Reference](https://nvidia.github.io/daqiri/api-reference/configuration/) — Full YAML config reference for all backends
+- [Configuration YAML Reference](https://nvidia.github.io/daqiri/api-reference/configuration/) — Full YAML config reference for all engines
 - [C++ API Usage](https://nvidia.github.io/daqiri/api-reference/cpp/) — C++ RX/TX workflows, buffer lifecycle, file writing, utilities, and status codes
 - [Python API Usage](https://nvidia.github.io/daqiri/api-reference/python/) — Python bindings, workflow examples, enums, config classes, and helper functions
 - [Contributing](CONTRIBUTING.md) — Contribution guidelines, coding standards, DCO sign-off

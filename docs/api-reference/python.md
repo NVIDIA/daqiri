@@ -132,10 +132,10 @@ Parse without starting the manager:
 ```python
 status, parsed = daqiri.parse_network_config("daqiri_bench_raw_tx_rx.yaml")
 if status == daqiri.Status.SUCCESS:
-    print(parsed.common.manager_type)
+    print(parsed.common.engine)
 ```
 
-If GPU RX `reorder_configs` are configured for the DPDK backend, set one CUDA
+If GPU RX `reorder_configs` are configured for the DPDK engine, set one CUDA
 stream per GPU reorder plan before pulling reordered bursts. Pass the CUDA
 stream as an integer address; pass `0` to use the default stream. See the
 [Configuration YAML Reference](configuration.md#rx-reorder-configs)
@@ -198,7 +198,7 @@ flow    = daqiri.get_packet_flow_id(burst, idx)
 status, rx_ts_ns = daqiri.get_packet_rx_timestamp(burst, idx)
 ```
 
-RX hardware timestamps are available only when the DPDK backend is configured
+RX hardware timestamps are available only when the DPDK engine is configured
 with `rx.hardware_timestamps: true` and the NIC supports
 `RTE_ETH_RX_OFFLOAD_TIMESTAMP`. See
 [C++ API Usage → Receiving Packets](cpp.md#receiving-packets) for the clock
@@ -491,7 +491,6 @@ The workflow sections above show the common call order and ownership rules.
 | --- | --- |
 | `manager_type_from_string(str)` / `manager_type_to_string(type)` | Convert manager types. |
 | `stream_type_from_string(str)` / `stream_type_to_string(type)` | Convert stream types. |
-| `socket_protocol_from_string(str)` / `socket_protocol_to_string(protocol)` | Convert socket protocols. |
 | `reorder_data_type_from_string(str)` / `reorder_data_type_to_string(type)` | Convert reorder data types. |
 | `reorder_endianness_from_string(str)` / `reorder_endianness_to_string(endianness)` | Convert reorder endianness values. |
 | `log_level_from_string(str)` / `log_level_to_string(level)` | Convert log levels. |
@@ -599,7 +598,6 @@ The workflow sections above show the common call order and ownership rules.
 | `MEM_ACCESS_LOCAL` | Local memory access flag. |
 | `MEM_ACCESS_RDMA_WRITE` | RDMA write memory access flag. |
 | `MEM_ACCESS_RDMA_READ` | RDMA read memory access flag. |
-| `IPPROTO_UDP` | UDP IP protocol number used by header helpers. |
 
 ## Enums
 
@@ -613,7 +611,6 @@ The workflow sections above show the common call order and ownership rules.
 | `BufferLocation` | `CPU`, `GPU`, `CPU_GPU_SPLIT` |
 | `MemoryKind` | `HOST`, `HOST_PINNED`, `HUGE`, `DEVICE`, `INVALID` |
 | `StreamType` | `RAW`, `SOCKET`, `INVALID` |
-| `SocketProtocol` | `TCP`, `UDP`, `ROCE`, `INVALID` |
 | `LoopbackType` | `DISABLED`, `LOOPBACK_TYPE_SW` |
 | `RDMAMode` | `CLIENT`, `SERVER`, `INVALID` |
 | `RDMATransportMode` | `RC`, `UC`, `UD`, `INVALID` |
@@ -641,7 +638,7 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `BurstHeaderParams` | Burst metadata: packet count, port, queue, segment count, byte totals, and reorder flags. |
 | `ReorderBurstInfo` | Metadata for reordered aggregate bursts. |
 | `NetworkConfig` | Top-level parsed DAQIRI configuration. |
-| `CommonConfig` | Global manager, direction, stream, protocol, loopback, and core settings. |
+| `CommonConfig` | Global manager, engine, direction, stream, loopback, and core settings. |
 | `InterfaceConfig` | Per-interface address, socket/RoCE/RDMA, RX, and TX configuration. |
 | `RxConfig` | RX flow isolation, timestamps, queues, flows, flex items, and reorder configs. |
 | `TxConfig` | TX accurate-send flag, queues, and flows. |
@@ -654,7 +651,7 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `FlowConfig` | Named flow rule combining action and match. |
 | `FlexItemConfig` | Flexible parser item configuration. |
 | `FlexItemMatch` | Flexible parser match value and mask. |
-| `SocketConfig` | Socket client/server endpoint and timing settings. |
+| `SocketConfig` | Socket client/server endpoint URI, legacy IP/port, and timing settings. |
 | `RoCEConfig` | RoCE transport settings. |
 | `RDMAConfig` | RDMA mode, transport mode, and port. |
 | `ReorderConfig` | Reorder name, type, memory region, payload offset, flows, method, and data type conversion. |

@@ -60,6 +60,22 @@ ManagerType ManagerFactory::ManagerType_ = ManagerType::UNKNOWN;
 
 extern void initialize_manager(Manager* _manager);
 
+namespace {
+
+SocketProtocol protocol_from_endpoint_addr(const std::string& addr) {
+  const auto scheme_end = addr.find("://");
+  if (scheme_end == std::string::npos) { return SocketProtocol::INVALID; }
+  const auto scheme = addr.substr(0, scheme_end);
+  if (scheme == DAQIRI_SOCKET_PROTOCOL_STR__TCP) { return SocketProtocol::TCP; }
+  if (scheme == DAQIRI_SOCKET_PROTOCOL_STR__UDP) { return SocketProtocol::UDP; }
+  if (scheme == DAQIRI_MGR_STR__RDMA || scheme == DAQIRI_SOCKET_PROTOCOL_STR__ROCE) {
+    return SocketProtocol::ROCE;
+  }
+  return SocketProtocol::INVALID;
+}
+
+}  // namespace
+
 std::string Manager::generate_random_string(int len) {
   constexpr char tokens[] = "abcdefghijklmnopqrstuvwxyz";
   if (len <= 0) { return {}; }
@@ -143,7 +159,30 @@ ManagerType ManagerFactory::get_manager_type(const Config& config) {
       const std::string stream_type_str = node["stream_type"].template as<std::string>("");
       const auto stream_type = stream_type_from_string(stream_type_str);
       if (stream_type == StreamType::INVALID) { continue; }
-      return manager_type_from_stream_type(stream_type);
+
+      const std::string engine_str = node["engine"].template as<std::string>("");
+      if (!engine_str.empty() && engine_str != DAQIRI_MGR_STR__DEFAULT) {
+        return config_engine_from_string(engine_str);
+      }
+
+      SocketProtocol protocol = socket_protocol_from_string(
+          node["protocol"].template as<std::string>(""));
+      if (protocol == SocketProtocol::INVALID) {
+        auto interfaces_node = node["interfaces"];
+        for (const auto& intf : interfaces_node) {
+          auto socket_config_node = intf["socket_config"];
+          if (!socket_config_node.IsDefined()) { continue; }
+          protocol = protocol_from_endpoint_addr(
+              socket_config_node["local_addr"].template as<std::string>(""));
+          if (protocol == SocketProtocol::INVALID) {
+            protocol = protocol_from_endpoint_addr(
+                socket_config_node["remote_addr"].template as<std::string>(""));
+          }
+          if (protocol != SocketProtocol::INVALID) { break; }
+        }
+      }
+
+      return manager_type_from_stream_type(stream_type, protocol);
     } catch (const std::exception& e) {
       return get_default_manager_type();
     }

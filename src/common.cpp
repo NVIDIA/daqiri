@@ -356,9 +356,35 @@ void print_stats() {
 }
 
 Status daqiri_init(NetworkConfig& config) {
-  if (config.common_.manager_type == ManagerType::UNKNOWN &&
-      config.common_.stream_type != StreamType::INVALID) {
-    config.common_.manager_type = manager_type_from_stream_type(config.common_.stream_type);
+  if (config.common_.manager_type == ManagerType::UNKNOWN) {
+    if (is_explicit_manager_type(config.common_.engine)) {
+      config.common_.manager_type = config.common_.engine;
+    } else if (config.common_.stream_type != StreamType::INVALID) {
+      config.common_.manager_type =
+          manager_type_from_stream_type(config.common_.stream_type, config.common_.protocol);
+      config.common_.engine = config.common_.manager_type;
+    }
+  }
+
+  if (config.common_.stream_type != StreamType::INVALID &&
+      is_explicit_manager_type(config.common_.manager_type) &&
+      !manager_type_supports_stream_type(config.common_.manager_type,
+                                         config.common_.stream_type)) {
+    DAQIRI_LOG_ERROR("engine '{}' is not valid for stream_type '{}'",
+                     config_engine_to_string(config.common_.manager_type),
+                     stream_type_to_string(config.common_.stream_type));
+    return Status::INVALID_PARAMETER;
+  }
+
+  if (config.common_.stream_type == StreamType::SOCKET &&
+      config.common_.protocol != SocketProtocol::INVALID &&
+      is_explicit_manager_type(config.common_.manager_type) &&
+      !manager_type_supports_socket_protocol(config.common_.manager_type,
+                                             config.common_.protocol)) {
+    DAQIRI_LOG_ERROR("engine '{}' is not valid for transport '{}'",
+                     config_engine_to_string(config.common_.manager_type),
+                     socket_protocol_to_string(config.common_.protocol));
+    return Status::INVALID_PARAMETER;
   }
 
   if (config.common_.stream_type == StreamType::SOCKET &&
@@ -953,8 +979,188 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_memory_region_config(
   return true;
 }
 
+namespace {
+
+struct ParsedEndpointAddress {
+  daqiri::SocketProtocol protocol = daqiri::SocketProtocol::INVALID;
+  std::string host;
+  uint16_t port = 0;
+};
+
+constexpr const char* kRoceEngineIbverbs = "ibverbs";
+
+daqiri::SocketProtocol protocol_from_endpoint_scheme(const std::string& scheme) {
+  if (scheme == "tcp") { return daqiri::SocketProtocol::TCP; }
+  if (scheme == "udp") { return daqiri::SocketProtocol::UDP; }
+  if (scheme == "rdma" || scheme == "roce") { return daqiri::SocketProtocol::ROCE; }
+  return daqiri::SocketProtocol::INVALID;
+}
+
+std::string endpoint_scheme_from_protocol(daqiri::SocketProtocol protocol) {
+  switch (protocol) {
+    case daqiri::SocketProtocol::TCP:
+      return "tcp";
+    case daqiri::SocketProtocol::UDP:
+      return "udp";
+    case daqiri::SocketProtocol::ROCE:
+      return "roce";
+    default:
+      return "";
+  }
+}
+
+bool parse_endpoint_query(const std::string& query,
+                          daqiri::SocketProtocol protocol,
+                          const char* field_name) {
+  if (query.empty()) { return true; }
+  if (protocol != daqiri::SocketProtocol::ROCE) {
+    DAQIRI_LOG_ERROR("{} query parameters are only supported for RoCE endpoints",
+                     field_name);
+    return false;
+  }
+
+  size_t start = 0;
+  while (start <= query.size()) {
+    const auto sep = query.find('&', start);
+    const std::string item =
+        query.substr(start, sep == std::string::npos ? std::string::npos : sep - start);
+    const auto eq = item.find('=');
+    if (eq == std::string::npos || eq == 0 || eq + 1 >= item.size()) {
+      DAQIRI_LOG_ERROR("{} has invalid query parameter '{}'", field_name, item);
+      return false;
+    }
+
+    const std::string key = item.substr(0, eq);
+    const std::string value = item.substr(eq + 1);
+    if (key != "engine") {
+      DAQIRI_LOG_ERROR("{} only supports the 'engine' query parameter", field_name);
+      return false;
+    }
+    if (value != kRoceEngineIbverbs) {
+      DAQIRI_LOG_ERROR("{} engine '{}' is not supported. Valid value: {}",
+                       field_name,
+                       value,
+                       kRoceEngineIbverbs);
+      return false;
+    }
+
+    if (sep == std::string::npos) { break; }
+    start = sep + 1;
+  }
+
+  return true;
+}
+
+bool parse_endpoint_addr(const std::string& value,
+                         const char* field_name,
+                         bool allow_missing_roce_port,
+                         ParsedEndpointAddress& parsed) {
+  const auto scheme_end = value.find("://");
+  if (scheme_end == std::string::npos || scheme_end == 0) {
+    DAQIRI_LOG_ERROR("{} must use '<scheme>://<ipv4>[:<port>]'", field_name);
+    return false;
+  }
+
+  const std::string scheme = value.substr(0, scheme_end);
+  parsed.protocol = protocol_from_endpoint_scheme(scheme);
+  if (parsed.protocol == daqiri::SocketProtocol::INVALID) {
+    DAQIRI_LOG_ERROR("Invalid scheme '{}' in {}. Valid schemes: tcp, udp, roce",
+                     scheme,
+                     field_name);
+    return false;
+  }
+
+  const std::string endpoint = value.substr(scheme_end + 3);
+  const auto query_sep = endpoint.find('?');
+  const std::string authority = endpoint.substr(0, query_sep);
+  const std::string query =
+      query_sep == std::string::npos ? "" : endpoint.substr(query_sep + 1);
+  if (!parse_endpoint_query(query, parsed.protocol, field_name)) { return false; }
+
+  if (authority.empty() || authority.find('/') != std::string::npos) {
+    DAQIRI_LOG_ERROR("{} must use '<scheme>://<ipv4>[:<port>]'", field_name);
+    return false;
+  }
+
+  const auto port_sep = authority.rfind(':');
+  if (port_sep == std::string::npos) {
+    if (allow_missing_roce_port &&
+        parsed.protocol == daqiri::SocketProtocol::ROCE) {
+      parsed.host = authority;
+      return true;
+    }
+    DAQIRI_LOG_ERROR("{} must include an IPv4 address and port", field_name);
+    return false;
+  }
+  if (port_sep == 0 || port_sep + 1 >= authority.size()) {
+    DAQIRI_LOG_ERROR("{} must include an IPv4 address and port", field_name);
+    return false;
+  }
+
+  parsed.host = authority.substr(0, port_sep);
+  const std::string port_str = authority.substr(port_sep + 1);
+  try {
+    const unsigned long port = std::stoul(port_str);
+    if (port > std::numeric_limits<uint16_t>::max() ||
+        (port == 0 &&
+         !(allow_missing_roce_port &&
+           parsed.protocol == daqiri::SocketProtocol::ROCE))) {
+      DAQIRI_LOG_ERROR("{} port '{}' is out of range", field_name, port_str);
+      return false;
+    }
+    parsed.port = static_cast<uint16_t>(port);
+  } catch (const std::exception&) {
+    DAQIRI_LOG_ERROR("{} port '{}' is not a valid integer", field_name, port_str);
+    return false;
+  }
+
+  return true;
+}
+
+bool apply_endpoint_addr(const std::string& value,
+                         const char* field_name,
+                         bool allow_missing_roce_port,
+                         daqiri::SocketProtocol& protocol,
+                         std::string& ip,
+                         uint16_t& port) {
+  ParsedEndpointAddress parsed;
+  if (!parse_endpoint_addr(value, field_name, allow_missing_roce_port, parsed)) {
+    return false;
+  }
+
+  if (protocol == daqiri::SocketProtocol::INVALID) {
+    protocol = parsed.protocol;
+  } else if (protocol != parsed.protocol) {
+    DAQIRI_LOG_ERROR("{} scheme '{}' conflicts with inferred protocol '{}'",
+                     field_name,
+                     value.substr(0, value.find("://")),
+                     daqiri::socket_protocol_to_string(protocol));
+    return false;
+  }
+
+  ip = parsed.host;
+  port = parsed.port;
+  return true;
+}
+
+std::string make_endpoint_addr(daqiri::SocketProtocol protocol,
+                               const std::string& ip,
+                               uint16_t port) {
+  const std::string scheme = endpoint_scheme_from_protocol(protocol);
+  if (scheme.empty() || ip.empty()) { return ""; }
+  if (protocol == daqiri::SocketProtocol::ROCE && port == 0) {
+    return scheme + "://" + ip;
+  }
+  if (port == 0) { return ""; }
+  return scheme + "://" + ip + ":" + std::to_string(port);
+}
+
+}  // namespace
+
 bool YAML::convert<daqiri::NetworkConfig>::parse_socket_config(
-    const YAML::Node& socket_item, daqiri::SocketConfig& socket_cfg) {
+    const YAML::Node& socket_item,
+    daqiri::SocketConfig& socket_cfg,
+    daqiri::SocketProtocol& protocol) {
   try {
     socket_cfg.mode_ = daqiri::GetSocketModeFromString(
         socket_item["mode"].template as<std::string>());
@@ -964,31 +1170,100 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_socket_config(
       return false;
     }
 
+    socket_cfg.local_addr_ = socket_item["local_addr"].template as<std::string>("");
+    socket_cfg.remote_addr_ = socket_item["remote_addr"].template as<std::string>("");
+    const bool has_local_addr = !socket_cfg.local_addr_.empty();
+    const bool has_remote_addr = !socket_cfg.remote_addr_.empty();
+    const bool has_legacy_local = socket_item["local_ip"].IsDefined() ||
+                                  socket_item["local_port"].IsDefined();
+    const bool has_legacy_remote = socket_item["remote_ip"].IsDefined() ||
+                                   socket_item["remote_port"].IsDefined();
+
+    if (has_local_addr && has_legacy_local) {
+      DAQIRI_LOG_ERROR(
+          "socket_config.local_addr cannot be combined with local_ip/local_port");
+      return false;
+    }
+    if (has_remote_addr && has_legacy_remote) {
+      DAQIRI_LOG_ERROR(
+          "socket_config.remote_addr cannot be combined with remote_ip/remote_port");
+      return false;
+    }
+
     socket_cfg.local_ip_ = socket_item["local_ip"].template as<std::string>("");
     socket_cfg.remote_ip_ = socket_item["remote_ip"].template as<std::string>("");
     socket_cfg.local_port_ = socket_item["local_port"].as<uint16_t>(0);
     socket_cfg.remote_port_ = socket_item["remote_port"].as<uint16_t>(0);
+
+    if (has_local_addr &&
+        !apply_endpoint_addr(socket_cfg.local_addr_,
+                             "socket_config.local_addr",
+                             socket_cfg.mode_ == daqiri::SocketMode::CLIENT,
+                             protocol,
+                             socket_cfg.local_ip_,
+                             socket_cfg.local_port_)) {
+      return false;
+    }
+    if (has_remote_addr &&
+        !apply_endpoint_addr(socket_cfg.remote_addr_,
+                             "socket_config.remote_addr",
+                             false,
+                             protocol,
+                             socket_cfg.remote_ip_,
+                             socket_cfg.remote_port_)) {
+      return false;
+    }
+
+    if (protocol == daqiri::SocketProtocol::INVALID) {
+      DAQIRI_LOG_ERROR(
+          "Socket configs must set protocol or use local_addr/remote_addr URI "
+          "schemes");
+      return false;
+    }
+
+    if (!has_local_addr) {
+      socket_cfg.local_addr_ = make_endpoint_addr(
+          protocol, socket_cfg.local_ip_, socket_cfg.local_port_);
+    }
+    if (!has_remote_addr) {
+      socket_cfg.remote_addr_ = make_endpoint_addr(
+          protocol, socket_cfg.remote_ip_, socket_cfg.remote_port_);
+    }
+
     socket_cfg.max_payload_size_ = socket_item["max_payload_size"].as<uint16_t>(0);
     socket_cfg.max_burst_interval_ms_ = socket_item["max_burst_interval_ms"].as<uint64_t>(0);
     socket_cfg.min_ipg_ns_ = socket_item["min_ipg_ns"].as<uint32_t>(0);
     socket_cfg.retry_connect_s_ = socket_item["retry_connect_s"].as<int32_t>(1);
 
+    const bool roce_client = socket_cfg.mode_ == daqiri::SocketMode::CLIENT &&
+                             protocol == daqiri::SocketProtocol::ROCE;
+    if (roce_client && (has_remote_addr || has_legacy_remote)) {
+      DAQIRI_LOG_ERROR("RoCE client peer endpoints belong in application config, "
+                       "not socket_config.remote_addr");
+      return false;
+    }
+
     if (socket_cfg.mode_ == daqiri::SocketMode::SERVER) {
       if (socket_cfg.local_ip_.empty()) {
-        DAQIRI_LOG_ERROR("socket_config.local_ip is required for server mode");
+        DAQIRI_LOG_ERROR("socket_config.local_addr is required for server mode");
         return false;
       }
       if (socket_cfg.local_port_ == 0) {
-        DAQIRI_LOG_ERROR("socket_config.local_port is required for server mode");
+        DAQIRI_LOG_ERROR("socket_config.local_addr must include a non-zero port");
+        return false;
+      }
+    } else if (roce_client) {
+      if (socket_cfg.local_ip_.empty()) {
+        DAQIRI_LOG_ERROR("socket_config.local_addr is required for RoCE client mode");
         return false;
       }
     } else {
       if (socket_cfg.remote_ip_.empty()) {
-        DAQIRI_LOG_ERROR("socket_config.remote_ip is required for client mode");
+        DAQIRI_LOG_ERROR("socket_config.remote_addr is required for client mode");
         return false;
       }
       if (socket_cfg.remote_port_ == 0) {
-        DAQIRI_LOG_ERROR("socket_config.remote_port is required for client mode");
+        DAQIRI_LOG_ERROR("socket_config.remote_addr must include a non-zero port");
         return false;
       }
     }

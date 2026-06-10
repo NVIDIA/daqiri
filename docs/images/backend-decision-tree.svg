@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1200" role="img" aria-labelledby="title desc">
-  <title id="title">DAQIRI networking backend decision tree</title>
-  <desc id="desc">Choose the coming-soon PCIe path for programmable PCIe sensors, socket TCP or UDP for non-NVIDIA NICs, socket RoCE for NVIDIA NICs talking to an RDMA endpoint, or raw Ethernet for NVIDIA NICs without an existing RoCE endpoint.</desc>
+  <title id="title">DAQIRI networking engine decision tree</title>
+  <desc id="desc">Choose the coming-soon PCIe path for programmable PCIe sensors, socket TCP or UDP endpoint URIs for non-NVIDIA NICs, RoCE endpoint URIs for NVIDIA NICs talking to an RDMA endpoint, or raw Ethernet for NVIDIA NICs without an existing RoCE endpoint.</desc>
   <defs>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
       <feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="#1f2937" flood-opacity="0.16"/>
@@ -14,8 +14,8 @@
   <rect width="1600" height="138" fill="#0b1017"/>
   <rect y="132" width="1600" height="7" fill="#76b900"/>
   <rect x="64" y="42" width="82" height="48" rx="6" fill="#76b900"/>
-  <text x="164" y="69" fill="#ffffff" font-family="Inter, Arial, sans-serif" font-size="42" font-weight="800">DAQIRI Networking Backend Decision Tree</text>
-  <text x="164" y="102" fill="#c7d0dd" font-family="Inter, Arial, sans-serif" font-size="21">Choose the backend that matches the local sensor, NIC, and peer protocol.</text>
+  <text x="164" y="69" fill="#ffffff" font-family="Inter, Arial, sans-serif" font-size="42" font-weight="800">DAQIRI Networking Engine Decision Tree</text>
+  <text x="164" y="102" fill="#c7d0dd" font-family="Inter, Arial, sans-serif" font-size="21">Choose the stream type and endpoint scheme that match the sensor, NIC, and peer.</text>
 
   <!-- Connectors -->
   <g fill="none" stroke="#2f3b4f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
@@ -64,13 +64,14 @@
   <g filter="url(#shadow)">
     <rect x="20" y="515" width="380" height="130" rx="14" fill="#eef2ff" stroke="#4f46e5" stroke-width="3"/>
     <text x="210" y="570" text-anchor="middle" fill="#121827" font-family="Inter, Arial, sans-serif" font-size="26" font-weight="800">stream_type = socket,</text>
-    <text x="210" y="608" text-anchor="middle" fill="#121827" font-family="Inter, Arial, sans-serif" font-size="26" font-weight="800">protocol = tcp/udp</text>
+    <text x="210" y="608" text-anchor="middle" fill="#121827" font-family="Inter, Arial, sans-serif" font-size="26" font-weight="800">tcp:// or udp://</text>
   </g>
 
   <g filter="url(#shadow)">
     <rect x="1225" y="805" width="355" height="140" rx="14" fill="#ecfdf3" stroke="#16a34a" stroke-width="3"/>
-    <text x="1402" y="873" text-anchor="middle" fill="#121827" font-family="Inter, Arial, sans-serif" font-size="25" font-weight="800">stream_type = socket,</text>
-    <text x="1402" y="910" text-anchor="middle" fill="#121827" font-family="Inter, Arial, sans-serif" font-size="25" font-weight="800">protocol = roce</text>
+    <text x="1402" y="873" text-anchor="middle" fill="#121827" font-family="Inter, Arial, sans-serif" font-size="25" font-weight="800">stream_type = socket</text>
+    <text x="1402" y="906" text-anchor="middle" fill="#121827" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="800">roce:// endpoints</text>
+    <text x="1402" y="932" text-anchor="middle" fill="#121827" font-family="Inter, Arial, sans-serif" font-size="20" font-weight="800">ibverbs default</text>
   </g>
 
   <g filter="url(#shadow)">

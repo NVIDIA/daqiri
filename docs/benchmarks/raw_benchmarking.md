@@ -9,7 +9,7 @@ DAQIRI provides raw Ethernet benchmark applications that use DPDK to drive an NV
 
 Make sure to [build the DAQIRI library](../getting-started.md#build-the-daqiri-library) beforehand.
 
-**Not sure which backend to benchmark?** Start with the [Benchmarking overview](benchmarks.md). Use this page after you have chosen the raw Ethernet backend. Use [Socket and RDMA Benchmarking](socket_benchmarking.md) for TCP, UDP, and RoCE/RDMA runs.
+**Not sure which engine to benchmark?** Start with the [Benchmarking overview](benchmarks.md). Use this page after you have chosen Raw Ethernet. Use [Socket and RDMA Benchmarking](socket_benchmarking.md) for TCP, UDP, and RoCE/RDMA runs.
 
 !!! note "Prerequisites"
 

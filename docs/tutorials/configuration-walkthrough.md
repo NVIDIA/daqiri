@@ -9,20 +9,20 @@ hide:
 
 ### Choosing the appropriate DAQIRI stream type for your setup
 
-DAQIRI exposes a single API on top of multiple packet I/O stacks, selected at runtime via two YAML keys — `stream_type` and (when `stream_type: "socket"`) `protocol`. Pick the row that matches your hardware and the role of the other endpoint:
+DAQIRI exposes a single API on top of multiple packet I/O stacks, selected at runtime with `stream_type` and endpoint URI schemes such as `udp://`, `tcp://`, and `roce://`. Pick the row that matches your hardware and the role of the other endpoint:
 
 - **Raw Ethernet** — `stream_type: "raw"`. Kernel-bypass with GPUDirect zero-copy. Highest performance. Requires an [NVIDIA ConnectX-class NIC](https://www.nvidia.com/en-us/networking/ethernet-adapters/); `tx_port` and `rx_port` can share one physical NIC for a single-host closed-loop bench, or be split across two hosts.
-- **Socket — UDP / TCP** — `stream_type: "socket"`, `protocol: "udp"` or `"tcp"`. Plain Linux kernel sockets. No NIC, no privileges, no special CMake flags. Useful as a comparison baseline and as a path to first results on a system without an NVIDIA NIC.
-- **Socket — RoCE (RDMA)** — `stream_type: "socket"`, `protocol: "roce"`. RDMA verbs over Ethernet, with a server/client connection model and a NIC-level reliable transport. Primarily intended for setups where **one** endpoint is a third-party RoCE implementation (FPGA, instrument, customer black box). When both peers run DAQIRI, prefer an upper-layer library such as MPI / NCCL / UCX instead.
+- **Socket — UDP / TCP** — `stream_type: "socket"` with `udp://` or `tcp://` endpoints. Plain Linux kernel sockets. No NIC, no privileges, no special CMake flags. Useful as a comparison baseline and as a path to first results on a system without an NVIDIA NIC.
+- **Socket — RoCE (RDMA)** — `stream_type: "socket"` and `roce://` endpoints. RDMA verbs over Ethernet, with a server/client connection model and a NIC-level reliable transport. Primarily intended for setups where **one** endpoint is a third-party RoCE implementation (FPGA, instrument, customer black box). When both peers run DAQIRI, prefer an upper-layer library such as MPI / NCCL / UCX instead.
 
 If you don't have any NIC at all, the `*_sw_loopback*` variants of the Raw Ethernet configs need no hardware — useful for first-time build verification.
 
-(`DAQIRI_MGR` at the CMake layer is the inverse selector: it tells the build which manager implementations to compile in — `dpdk` enables `stream_type: "raw"`, `socket` enables `stream_type: "socket"` with `protocol: "udp"`/`"tcp"`, and `rdma` enables `protocol: "roce"`. The default build enables all three.)
+(`DAQIRI_MGR` at the CMake layer is the inverse selector: it tells the build which manager implementations to compile in — `dpdk` enables Raw Ethernet, `socket` enables `tcp://`/`udp://`, and `rdma` enables `roce://`. The default build enables all three.)
 
-For a shorter backend-selection guide, start with the [Benchmarking overview](../benchmarks/benchmarks.md). With a stream type in mind, read down the questions below and stop at the first one that matches what you're trying to do. Each section names the YAML, the binary that consumes it, and any platform-specific notes.
+For a shorter selection guide, start with the [Benchmarking overview](../benchmarks/benchmarks.md). With a stream type in mind, read down the questions below and stop at the first one that matches what you're trying to do. Each section names the YAML, the binary that consumes it, and any platform-specific notes.
 
 ??? question "1. I want to measure baseline throughput"
-    Pick the stream type that matches your stack (see the [overview](#choosing-the-appropriate-daqiri-stream-type-for-your-setup) above), then the hardware or protocol variant.
+    Pick the stream type that matches your stack (see the [overview](#choosing-the-appropriate-daqiri-stream-type-for-your-setup) above), then the hardware or transport variant.
 
     **Raw Ethernet** (`stream_type: "raw"`) — runs on `daqiri_bench_raw_gpudirect`.
 
@@ -36,13 +36,13 @@ For a shorter backend-selection guide, start with the [Benchmarking overview](..
     counters, use the Grafana compose stack described in
     [Watch live OpenTelemetry metrics in Grafana](../benchmarks/raw_benchmarking.md#watch-live-opentelemetry-metrics-in-grafana).
 
-    **Socket — RoCE (RDMA)** (`stream_type: "socket"`, `protocol: "roce"`) — runs on `daqiri_bench_rdma` (use `--mode {tx,rx,both}`). Configs use `kind: host_pinned` regardless of platform.
+    **Socket — RoCE (RDMA)** (`stream_type: "socket"`, `roce://` endpoints) — runs on `daqiri_bench_rdma` (use `--mode {tx,rx,both}`). Configs use `kind: host_pinned` regardless of platform.
 
     - **Generic** (template — replace IPs) — [`daqiri_bench_rdma_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx.yaml).
     - **DGX Spark** (prefilled) — [`daqiri_bench_rdma_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx_spark.yaml). See [Socket and RDMA Benchmarking](../benchmarks/socket_benchmarking.md#run-the-rdma-roce-benchmark) for namespace and wire-counter run details.
     - **DGX Spark cross-host** (prefilled, runs on two Sparks) — [`daqiri_bench_rdma_tx_rx_spark_xhost.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx_spark_xhost.yaml). Run with `--mode server` on the RX host and `--mode client` on the TX host. See the [Cross-host two-DGX-Spark loopback](../benchmarks/raw_benchmarking.md#cross-host-two-dgx-spark-loopback) section for run details.
 
-    **Socket — UDP / TCP** (`stream_type: "socket"`, `protocol: "udp"` or `"tcp"`) — runs on `daqiri_bench_socket`. The shipped smoke-test configs bind to `127.0.0.1`; see [Socket and RDMA Benchmarking](../benchmarks/socket_benchmarking.md) for namespace-based wire tests.
+    **Socket — UDP / TCP** (`stream_type: "socket"` with `udp://` or `tcp://` endpoints) — runs on `daqiri_bench_socket`. The shipped smoke-test configs bind to `127.0.0.1`; see [Socket and RDMA Benchmarking](../benchmarks/socket_benchmarking.md) for namespace-based wire tests.
 
     - **UDP** — [`daqiri_bench_socket_udp_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_socket_udp_tx_rx.yaml).
     - **TCP** — [`daqiri_bench_socket_tcp_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_socket_tcp_tx_rx.yaml).
@@ -52,8 +52,8 @@ For a shorter backend-selection guide, start with the [Benchmarking overview](..
 
     **2.1 Which algorithm matches how your packets encode batches?**
 
-    - *"My protocol sends a fixed N packets per logical batch; the seqno identifies position within the batch"* — `seq_packets_per_batch`.
-    - *"My protocol identifies the batch index in the seqno; packets-per-batch is fixed at the protocol level"* — `seq_batch_number`.
+    - *"My wire format sends a fixed N packets per logical batch; the seqno identifies position within the batch"* — `seq_packets_per_batch`.
+    - *"My wire format identifies the batch index in the seqno; packets-per-batch is fixed for the stream"* — `seq_batch_number`.
 
     **2.2 Where should the reorder run?**
 
@@ -205,7 +205,7 @@ bench_tx: # (25)!
 ```
 
 1. The `daqiri` section configures the DAQIRI library, which is responsible for setting up the NIC. It is passed to `daqiri_init(...)` during application startup. Within this section, `name:` fields on interfaces, queues, flows, and memory regions are used only for logging — pick any descriptive string.
-2. **`stream_type`** · `string` · *required* — High-level transport family selected for this config. **Supported:** `"raw"` (Raw Ethernet via kernel bypass, used here), `"socket"` (kernel sockets and RoCE; the specific protocol is then set via a separate `protocol:` field). The implementation backing each stream type is chosen at build time via `DAQIRI_MGR` — `stream_type` only picks among the implementations you built.
+2. **`stream_type`** · `string` · *required* — High-level transport family selected for this config. **Supported:** `"raw"` (Raw Ethernet via kernel bypass, used here), `"socket"` (kernel sockets and RDMA). Use endpoint URI schemes such as `tcp://`, `udp://`, and `roce://` for socket-style transports.
 3. :material-wrench: **`master_core`** · `integer (CPU core ID)` · *required* — Core used for DAQIRI setup. Does not need to be isolated; recommended to differ from the `cpu_core` fields below that poll the NIC.
 4. **`loopback`** · `string` · *default: `""`* — Loopback mode. **Supported:** `""` (no loopback; use the physical NIC), `"sw"` (software loopback — no NIC required, used by the `*_sw_loopback*` configs for first-time build verification).
 5. The `memory_regions` section lists where the NIC will write/read data from/to when bypassing the OS kernel. Tip: when using GPU buffer regions, keeping the sum of their buffer sizes below 80% of your BAR1 size is generally a good rule of thumb.

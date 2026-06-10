@@ -9,18 +9,18 @@ This page is the DAQIRI glossary. It defines the terms used across the
 [API Guide](api-reference/index.md),
 [Configuration Reference](api-reference/configuration.md), and
 [tutorials](tutorials/system_configuration.md): **stream types and
-protocols**, **GPUDirect**, **packet / burst / segment**,
+endpoint URI schemes**, **GPUDirect**, **packet / burst / segment**,
 **flow / queue**, **memory region**, **zero-copy ownership**, and
 **RX reorder**.
 
 ## Stream Types
 
 DAQIRI exposes a single C++ API on top of several packet-I/O stacks. The
-choice is configured per-application in YAML by two keys:
+choice is configured per-application in YAML with:
 
 - `stream_type` — the I/O stack family.
-- `protocol` — required when `stream_type: "socket"`; selects the
-  socket-level protocol.
+- endpoint URI schemes — `tcp://`, `udp://`, or `roce://` in
+  `socket_config.local_addr` and `socket_config.remote_addr`.
 
 The shipped Ethernet stream types use NICs as their hardware endpoint.
 The planned PCIe programmable-sensor path uses the same DAQIRI model for
@@ -42,14 +42,14 @@ Requires an NVIDIA SmartNIC (ConnectX-6 Dx or later).
 
 ### Socket
 
-*YAML:* `stream_type: "socket"`. The specific transport is chosen by
-`protocol`:
+*YAML:* `stream_type: "socket"`. The specific transport is chosen by endpoint
+URI schemes:
 
-- **`protocol: "udp"`** / **`protocol: "tcp"`** — Linux kernel UDP and
-  TCP sockets. No NIC privileges required, no special hardware. Useful
+- **`udp://`** / **`tcp://`** — Linux kernel UDP and TCP sockets. No NIC
+  privileges required, no special hardware. Useful
   as a comparison baseline against the kernel-bypass paths and as a way
   to get first results on a system without an NVIDIA NIC.
-- **`protocol: "roce"`** — RDMA over Converged Ethernet, using the
+- **`roce://` endpoints** — RDMA over Converged Ethernet, using the
   open-source [`rdma-core`](https://github.com/linux-rdma/rdma-core)
   library. A server/client connection model, NIC-level reliable
   transport (RC), and in-order delivery. Primarily intended for
@@ -89,11 +89,11 @@ in the configuration walkthrough.
     - **Raw Ethernet** (`stream_type: "raw"`) is supported, distributed
       with the DAQIRI library, and is the only stream type actively
       tested at this time.
-    - **Socket — UDP / TCP** (`stream_type: "socket"`, `protocol: "udp"`
-      / `"tcp"`) is supported and distributed; integration testing is
+    - **Socket — UDP / TCP** (`stream_type: "socket"` with `udp://` /
+      `tcp://` endpoints) is supported and distributed; integration testing is
       under development.
-    - **Socket — RoCE** (`stream_type: "socket"`,
-      `protocol: "roce"`) is supported and distributed; integration
+    - **Socket — RoCE** (`stream_type: "socket"` and
+      `roce://` endpoints) is supported and distributed; integration
       testing is under development.
     - The **PCIe programmable-sensor** path is under development.
 
@@ -160,8 +160,8 @@ code paths.
 
 A **packet** is a single, contiguous block of memory representing
 either received data or data to transmit. Packets can be far larger
-than an Ethernet MTU in some cases (for example with `protocol: "roce"`
-or `protocol: "tcp"`/`"udp"`); the underlying stack fragments and
+than an Ethernet MTU in some cases (for example with `roce://`, `tcp://`, or
+`udp://` endpoints); the underlying stack fragments and
 reassembles them on the wire transparently.
 
 ### Burst (`BurstParams`)
@@ -257,7 +257,7 @@ contiguous chunk that can be stored in a single *segment*. For example,
 with a 60-byte region the first 60 bytes of each packet land in that
 segment before the remainder spills into the next region in the
 queue's list. Region buffers can be much larger than a single Ethernet
-frame for fragmented transports (for example, `protocol: "roce"`).
+frame for fragmented transports (for example, `roce://`).
 
 Combining memory regions on a single queue is how *header-data split*
 is expressed in the YAML: queue 0's first memory region is a `huge` CPU

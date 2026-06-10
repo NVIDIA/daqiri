@@ -824,10 +824,12 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
    *
    * @param socket_item The YAML node containing socket configuration.
    * @param socket_cfg The SocketConfig object to populate.
+   * @param protocol The inferred socket/RDMA transport protocol.
    * @return true if parsing was successful, false otherwise.
    */
   static bool parse_socket_config(const YAML::Node &socket_item,
-                                  daqiri::SocketConfig &socket_cfg);
+                                  daqiri::SocketConfig &socket_cfg,
+                                  daqiri::SocketProtocol &protocol);
 
   /**
    * @brief Parse RoCE transport configuration from a YAML node.
@@ -920,7 +922,7 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
       if (node["manager"].IsDefined()) {
         DAQIRI_LOG_ERROR(
             "Legacy 'manager' is no longer supported. Use 'stream_type' and "
-            "'protocol' instead.");
+            "'engine' instead.");
         return false;
       }
 
@@ -943,23 +945,52 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
 
       const bool socket_used =
           input_spec.common_.stream_type == daqiri::StreamType::SOCKET;
-      if (socket_used) {
-        if (!node["protocol"].IsDefined()) {
-          DAQIRI_LOG_ERROR(
-              "Missing required field 'protocol' for stream_type 'socket' "
-              "(valid: tcp, udp, roce)");
-          return false;
-        }
-
-        input_spec.common_.protocol = daqiri::socket_protocol_from_string(
-            node["protocol"].as<std::string>());
-        if (input_spec.common_.protocol == daqiri::SocketProtocol::INVALID) {
-          DAQIRI_LOG_ERROR(
-              "Invalid protocol '{}'. Valid values: tcp, udp, roce",
-              node["protocol"].as<std::string>());
+      const bool raw_used =
+          input_spec.common_.stream_type == daqiri::StreamType::RAW;
+      if (node["engine"].IsDefined()) {
+        input_spec.common_.engine =
+            daqiri::config_engine_from_string(node["engine"].as<std::string>());
+        if (input_spec.common_.engine != daqiri::ManagerType::DEFAULT &&
+            !daqiri::manager_type_supports_stream_type(
+                input_spec.common_.engine, input_spec.common_.stream_type)) {
+          DAQIRI_LOG_ERROR("engine '{}' is not valid for stream_type '{}'",
+                           node["engine"].as<std::string>(),
+                           daqiri::stream_type_to_string(
+                               input_spec.common_.stream_type));
           return false;
         }
       } else {
+        input_spec.common_.engine = daqiri::ManagerType::DEFAULT;
+      }
+
+      if (socket_used) {
+        if (node["protocol"].IsDefined()) {
+          input_spec.common_.protocol = daqiri::socket_protocol_from_string(
+              node["protocol"].as<std::string>());
+          if (input_spec.common_.protocol == daqiri::SocketProtocol::INVALID) {
+            DAQIRI_LOG_ERROR(
+                "Invalid protocol '{}'. Valid values: tcp, udp, roce",
+                node["protocol"].as<std::string>());
+            return false;
+          }
+        } else if (input_spec.common_.engine == daqiri::ManagerType::RDMA) {
+          input_spec.common_.protocol = daqiri::SocketProtocol::ROCE;
+        } else {
+          input_spec.common_.protocol = daqiri::SocketProtocol::INVALID;
+        }
+
+        if (daqiri::is_explicit_manager_type(input_spec.common_.engine) &&
+            input_spec.common_.protocol != daqiri::SocketProtocol::INVALID &&
+            !daqiri::manager_type_supports_socket_protocol(
+                input_spec.common_.engine, input_spec.common_.protocol)) {
+          DAQIRI_LOG_ERROR("engine '{}' is not valid for transport '{}'",
+                           daqiri::config_engine_to_string(
+                               input_spec.common_.engine),
+                           daqiri::socket_protocol_to_string(
+                               input_spec.common_.protocol));
+          return false;
+        }
+      } else if (raw_used) {
         if (node["protocol"].IsDefined()) {
           DAQIRI_LOG_ERROR(
               "Field 'protocol' is only valid when stream_type is 'socket'");
@@ -968,8 +999,30 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
         input_spec.common_.protocol = daqiri::SocketProtocol::INVALID;
       }
 
-      input_spec.common_.manager_type =
-          daqiri::manager_type_from_stream_type(input_spec.common_.stream_type);
+      auto resolve_manager_type = [&input_spec, socket_used]() -> bool {
+        if (daqiri::is_explicit_manager_type(input_spec.common_.engine)) {
+          input_spec.common_.manager_type = input_spec.common_.engine;
+          return true;
+        }
+
+        if (socket_used &&
+            input_spec.common_.protocol == daqiri::SocketProtocol::INVALID) {
+          input_spec.common_.manager_type = daqiri::ManagerType::UNKNOWN;
+          return true;
+        }
+
+        input_spec.common_.manager_type = daqiri::manager_type_from_stream_type(
+            input_spec.common_.stream_type, input_spec.common_.protocol);
+        input_spec.common_.engine = input_spec.common_.manager_type;
+        return input_spec.common_.manager_type != daqiri::ManagerType::UNKNOWN;
+      };
+
+      if (!resolve_manager_type()) {
+        DAQIRI_LOG_ERROR("Unable to infer engine for stream_type '{}'",
+                         daqiri::stream_type_to_string(
+                             input_spec.common_.stream_type));
+        return false;
+      }
 
       input_spec.common_.loopback_ = daqiri::LoopbackType::DISABLED;
       try {
@@ -983,9 +1036,6 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
         }
       } catch (const std::exception &e) {
       }
-
-      const bool roce_used = socket_used && input_spec.common_.protocol ==
-                                                daqiri::SocketProtocol::ROCE;
 
       try {
         input_spec.debug_ = node["debug"].as<bool>(false);
@@ -1048,23 +1098,43 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
             return false;
           }
 
+          bool roce_used = false;
           if (socket_used) {
             if (!intf["socket_config"].IsDefined()) {
               DAQIRI_LOG_ERROR("Missing 'socket_config' for interface '{}'",
                                ifcfg.name_);
               return false;
             }
-            if (!parse_socket_config(intf["socket_config"], ifcfg.socket_)) {
+            if (!parse_socket_config(intf["socket_config"],
+                                     ifcfg.socket_,
+                                     input_spec.common_.protocol)) {
               DAQIRI_LOG_ERROR(
                   "Failed to parse 'socket_config' for interface '{}'",
                   ifcfg.name_);
               return false;
             }
+            if (!resolve_manager_type()) {
+              DAQIRI_LOG_ERROR("Unable to infer engine for interface '{}'",
+                               ifcfg.name_);
+              return false;
+            }
+            if (daqiri::is_explicit_manager_type(input_spec.common_.engine) &&
+                !daqiri::manager_type_supports_socket_protocol(
+                    input_spec.common_.engine, input_spec.common_.protocol)) {
+              DAQIRI_LOG_ERROR("engine '{}' is not valid for address scheme "
+                               "on interface '{}'",
+                               daqiri::config_engine_to_string(
+                                   input_spec.common_.engine),
+                               ifcfg.name_);
+              return false;
+            }
 
+            roce_used =
+                input_spec.common_.protocol == daqiri::SocketProtocol::ROCE;
             if (roce_used) {
               if (!intf["roce_config"].IsDefined()) {
                 DAQIRI_LOG_ERROR("Missing 'roce_config' for interface '{}' "
-                                 "with protocol roce",
+                                 "with roce:// endpoint",
                                  ifcfg.name_);
                 return false;
               }
@@ -1081,13 +1151,14 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
                       ? daqiri::RDMAMode::SERVER
                       : daqiri::RDMAMode::CLIENT;
               ifcfg.rdma_.xmode_ = ifcfg.roce_.transport_mode_;
-              ifcfg.rdma_.port_ =
-                  ifcfg.socket_.mode_ == daqiri::SocketMode::SERVER
-                      ? ifcfg.socket_.local_port_
-                      : ifcfg.socket_.remote_port_;
+              ifcfg.rdma_.port_ = ifcfg.socket_.local_port_;
+              if (ifcfg.socket_.mode_ == daqiri::SocketMode::CLIENT &&
+                  ifcfg.rdma_.port_ == 0) {
+                ifcfg.rdma_.port_ = ifcfg.socket_.remote_port_;
+              }
             } else if (intf["roce_config"].IsDefined()) {
               DAQIRI_LOG_ERROR(
-                  "'roce_config' is only valid when protocol is 'roce' "
+                  "'roce_config' is only valid with a roce:// endpoint "
                   "(interface '{}')",
                   ifcfg.name_);
               return false;
@@ -1202,6 +1273,13 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
         }
       } catch (const std::exception &e) {
         DAQIRI_LOG_ERROR(e.what());
+        return false;
+      }
+
+      if (socket_used &&
+          input_spec.common_.protocol == daqiri::SocketProtocol::INVALID) {
+        DAQIRI_LOG_ERROR(
+            "Missing socket protocol. Use local_addr/remote_addr URI schemes.");
         return false;
       }
 
