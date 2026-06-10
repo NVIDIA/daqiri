@@ -157,7 +157,7 @@ class DpdkMgr : public Manager {
   static int tx_core_worker(void* arg);
   static int rx_lb_worker(void* arg);
   static int tx_lb_worker(void* arg);
-  static void flush_packets(int port);
+  static void flush_port_queue_impl(int port, int queue);
   bool setup_rx_timestamp_dynfield();
   bool setup_tx_timestamp_dynfield();
   bool calibrate_rx_timestamp_clock(uint16_t port_id);
