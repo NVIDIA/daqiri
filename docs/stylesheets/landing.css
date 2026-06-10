@@ -514,8 +514,38 @@ body.graphic-overlay-open {
   font-size: 0.875rem;
 }
 
+.daqiri-landing .warn-banner-icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+  margin-top: 0.05rem;
+}
+
 .daqiri-landing #features {
   border-top: 1px solid var(--border);
+}
+
+.daqiri-landing .features-intro {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3rem;
+  align-items: start;
+  margin-bottom: 4rem;
+}
+
+.daqiri-landing .features-intro img {
+  width: 100%;
+  max-width: 400px;
+  display: block;
+  margin: 0 auto;
+}
+
+.daqiri-landing .features-highlight {
+  color: var(--accent-label);
+  font-style: italic;
+}
+
+.daqiri-landing .feature-card strong {
+  color: var(--text-pri);
 }
 
 .daqiri-landing .features-grid {
@@ -959,6 +989,12 @@ body.graphic-overlay-open {
   font-size: 1.05rem;
 }
 
+.daqiri-landing .cta-pre {
+  max-width: 540px;
+  margin: 0 auto 2.5rem;
+  text-align: left;
+}
+
 .daqiri-landing .cta-actions {
   display: flex;
   align-items: center;
@@ -1172,6 +1208,10 @@ body.graphic-overlay-open {
 }
 
 @media (max-width: 900px) {
+  .daqiri-landing .features-intro {
+    grid-template-columns: 1fr;
+  }
+
   .daqiri-landing .gs-layout {
     grid-template-columns: 1fr;
   }

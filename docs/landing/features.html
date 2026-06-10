@@ -3,11 +3,11 @@
     <div class="container">
       <div class="section-label">Why DAQIRI</div>
       <h2 class="section-title">Closing the Gap Between Sensor and GPU</h2>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:3rem;align-items:start;margin-bottom:4rem;">
-        <p class="section-desc">Scientific and industrial instruments generate data that is richest at the source — before it is filtered, decimated, or summarized. DAQIRI places NVIDIA GPU hardware directly in that data path, forging a tight bond between upstream sensors, their data converters, and the NVIDIA compute ecosystem. The result is a new foundation for developers: the ability to work with instrument data in its rawest form, at wire speed, and to build a new class of autonomous experiments where AI can observe phenomena directly at the source, augment human analysis, and steer experiments in real time. <span style="color:var(--accent-label);font-style:italic;">Stream data into and out of GPUs efficiently while leveraging common tensor-compute libraries.</span></p>
+      <div class="features-intro">
+        <p class="section-desc">Scientific and industrial instruments generate data that is richest at the source — before it is filtered, decimated, or summarized. DAQIRI places NVIDIA GPU hardware directly in that data path, forging a tight bond between upstream sensors, their data converters, and the NVIDIA compute ecosystem. The result is a new foundation for developers: the ability to work with instrument data in its rawest form, at wire speed, and to build a new class of autonomous experiments where AI can observe phenomena directly at the source, augment human analysis, and steer experiments in real time. <span class="features-highlight">Stream data into and out of GPUs efficiently while leveraging common tensor-compute libraries.</span></p>
 
         <!-- AI Native DAQ Architecture SVG -->
-        <img src="images/architecture.svg" alt="AI Native DAQ Architecture" style="width:100%;max-width:400px;display:block;margin:0 auto;"/>
+        <img src="images/architecture.svg" alt="AI Native DAQ Architecture" />
       </div>
       <div class="features-grid">
         <div class="feature-card">
@@ -18,7 +18,7 @@
         <div class="feature-card">
           <div class="feature-icon">🚀</div>
           <h3>GPUDirect Zero-Copy</h3>
-          <p>Two GPU receive modes: <strong style="color:var(--text-pri)">Header-data split</strong> (headers to CPU, payload to GPU — recommended) and <strong style="color:var(--text-pri)">Batched GPU</strong> (entire packets to GPU for maximum bandwidth).</p>
+          <p>Two GPU receive modes: <strong>Header-data split</strong> (headers to CPU, payload to GPU — recommended) and <strong>Batched GPU</strong> (entire packets to GPU for maximum bandwidth).</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">🔀</div>
@@ -28,7 +28,7 @@
         <div class="feature-card">
           <div class="feature-icon">🔗</div>
           <h3>RDMA over Converged Ethernet</h3>
-          <p>Run RDMA READ, WRITE, and SEND over standard Ethernet via <strong style="color:var(--text-pri)">RoCE</strong> — no specialized InfiniBand fabric required. The same libibverbs API also supports InfiniBand for environments where it is available.</p>
+          <p>Run RDMA READ, WRITE, and SEND over standard Ethernet via <strong>RoCE</strong> — no specialized InfiniBand fabric required. The same libibverbs API also supports InfiniBand for environments where it is available.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">📄</div>

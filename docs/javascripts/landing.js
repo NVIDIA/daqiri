@@ -1,18 +1,26 @@
 (function () {
   "use strict";
 
-  var bound = false;
+  var overlayState = {
+    overlay: null,
+    closeButton: null,
+    previousFocus: null,
+  };
+  var keydownBound = false;
 
-  function openGraphicOverlay(overlay, closeButton, previousFocusRef) {
+  function openGraphicOverlay() {
+    var overlay = overlayState.overlay;
+    var closeButton = overlayState.closeButton;
     if (!overlay) return;
-    previousFocusRef.current = document.activeElement;
+    overlayState.previousFocus = document.activeElement;
     overlay.classList.add("is-open");
     overlay.setAttribute("aria-hidden", "false");
     document.body.classList.add("graphic-overlay-open");
     if (closeButton) closeButton.focus();
   }
 
-  function closeGraphicOverlay(overlay, previousFocusRef) {
+  function closeGraphicOverlay() {
+    var overlay = overlayState.overlay;
     if (!overlay) return;
     overlay.classList.remove("is-open");
     overlay.setAttribute("aria-hidden", "true");
@@ -24,60 +32,60 @@
         `${window.location.pathname}${window.location.search}`
       );
     }
-    var prev = previousFocusRef.current;
+    var prev = overlayState.previousFocus;
     if (prev && typeof prev.focus === "function") {
       prev.focus();
     }
   }
 
+  function bindOnce(el, event, handler) {
+    if (!el || el.dataset.landingBound === "1") return;
+    el.dataset.landingBound = "1";
+    el.addEventListener(event, handler);
+  }
+
+  function maybeOpenFromHash() {
+    if (window.location.hash !== "#graphic") return;
+    window.requestAnimationFrame(openGraphicOverlay);
+  }
+
   function initLandingGraphic() {
     var root = document.querySelector(".daqiri-landing");
-    if (!root) return;
+    if (!root) {
+      overlayState.overlay = null;
+      overlayState.closeButton = null;
+      return;
+    }
 
     var graphicOpen = root.querySelector("[data-graphic-open]");
     var graphicOverlay = document.getElementById("daqiri-graphic-overlay");
-    if (!graphicOpen || !graphicOverlay) return;
+    if (!graphicOpen || !graphicOverlay) {
+      overlayState.overlay = null;
+      overlayState.closeButton = null;
+      return;
+    }
 
-    if (graphicOpen.dataset.landingBound === "1") return;
-    graphicOpen.dataset.landingBound = "1";
+    overlayState.overlay = graphicOverlay;
+    overlayState.closeButton = root.querySelector(".graphic-overlay-close");
 
-    var graphicCloseControls = Array.from(
-      root.querySelectorAll("[data-graphic-close]")
-    );
-    var graphicCloseButton = root.querySelector(".graphic-overlay-close");
-    var previousFocusRef = { current: null };
+    bindOnce(graphicOpen, "click", openGraphicOverlay);
 
-    graphicOpen.addEventListener("click", function () {
-      openGraphicOverlay(graphicOverlay, graphicCloseButton, previousFocusRef);
+    root.querySelectorAll("[data-graphic-close]").forEach(function (control) {
+      bindOnce(control, "click", closeGraphicOverlay);
     });
 
-    graphicCloseControls.forEach(function (control) {
-      control.addEventListener("click", function () {
-        closeGraphicOverlay(graphicOverlay, previousFocusRef);
-      });
-    });
-
-    if (!bound) {
+    if (!keydownBound) {
       document.addEventListener("keydown", function (event) {
-        if (
-          event.key === "Escape" &&
-          graphicOverlay.classList.contains("is-open")
-        ) {
-          closeGraphicOverlay(graphicOverlay, previousFocusRef);
-        }
+        if (event.key !== "Escape") return;
+        var overlay = overlayState.overlay;
+        if (!overlay || !overlay.isConnected) return;
+        if (!overlay.classList.contains("is-open")) return;
+        closeGraphicOverlay();
       });
-      bound = true;
+      keydownBound = true;
     }
 
-    if (window.location.hash === "#graphic") {
-      window.requestAnimationFrame(function () {
-        openGraphicOverlay(
-          graphicOverlay,
-          graphicCloseButton,
-          previousFocusRef
-        );
-      });
-    }
+    maybeOpenFromHash();
   }
 
   function setup() {
