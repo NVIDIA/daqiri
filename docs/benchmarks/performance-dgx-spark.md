@@ -72,9 +72,7 @@ Achieved Gb/s, unpaced, 0 drops in every cell:
 At ≥4 KB the link saturates (~98–106 Gb/s) regardless of batch; the 1 KB row is
 the transition; ≤256 B is packet-rate-bound (~10 M pps ceiling) and noisy
 run-to-run. Every cell is drop-free, so the achieved rate is also the no-drop
-rate — pacing the sender below it simply hits the target with zero drops, so a
-paced payload × rate sweep adds nothing here (unlike UDP, which drops as offered
-rate climbs).
+rate — *pacing the sender below it simply hits the target with zero drops*.
 
 **CPU utilization** (headline cell, 8000 B / batch 10240, unpaced):
 
