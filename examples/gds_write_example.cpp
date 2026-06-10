@@ -257,10 +257,18 @@ bool run_one_capture(const daqiri::bench::RawBenchTxConfig &tx_cfg,
                      const daqiri::bench::RawBenchRxConfig &rx_cfg,
                      const CliConfig &cli, const std::string &prefix,
                      bool async_write) {
+  if (!daqiri::bench::set_current_thread_affinity(tx_cfg.cpu_core,
+                                                  "bench_tx")) {
+    return false;
+  }
   if (!fill_and_send_one_burst(tx_cfg, cli.offset)) {
     return false;
   }
 
+  if (!daqiri::bench::set_current_thread_affinity(rx_cfg.cpu_core,
+                                                  "bench_rx")) {
+    return false;
+  }
   daqiri::BurstParams *rx_burst = wait_for_rx_burst(rx_cfg, cli.timeout_ms);
   if (rx_burst == nullptr) {
     std::cerr << "Timed out waiting for RX burst\n";

@@ -423,6 +423,12 @@ PcapTxConfig parse_pcap_tx_config(const YAML::Node &root) {
 }
 
 void tx_worker(PcapTxConfig cfg, std::atomic<bool> *stop) {
+  if (!daqiri::bench::set_current_thread_affinity(cfg.raw.cpu_core,
+                                                  "bench_tx")) {
+    stop->store(true, std::memory_order_relaxed);
+    return;
+  }
+
   const int port_id = daqiri::get_port_id(cfg.raw.interface_name);
   if (port_id < 0) {
     std::cerr << "Invalid TX interface_name: " << cfg.raw.interface_name
@@ -501,6 +507,12 @@ void tx_worker(PcapTxConfig cfg, std::atomic<bool> *stop) {
 
 void rx_pcap_loop(const daqiri::bench::RawBenchRxConfig &rx_cfg,
                   PcapWriter *writer, std::atomic<bool> *stop) {
+  if (!daqiri::bench::set_current_thread_affinity(rx_cfg.cpu_core,
+                                                  "bench_rx")) {
+    stop->store(true, std::memory_order_relaxed);
+    return;
+  }
+
   const int port_id = daqiri::get_port_id(rx_cfg.interface_name);
   if (port_id < 0) {
     std::cerr << "Invalid RX interface_name: " << rx_cfg.interface_name << "\n";

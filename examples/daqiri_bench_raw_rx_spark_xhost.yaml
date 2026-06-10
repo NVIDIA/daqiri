@@ -7,7 +7,8 @@
 # Spark substitutions baked in here:
 #   - rx_port BDF = 0000:01:00.0 (p0); change if your p0 sits elsewhere
 #   - kind: host_pinned (GB10 dma-buf path; nvidia-peermem N/A on Spark)
-#   - master_core: 8; cpu_core: 18 (isolated big-cluster X925 16-19)
+#   - master_core: 8; cpu_core: 18 for both the DAQIRI RX queue and the app RX
+#     worker (isolated big-cluster X925 16-19)
 #   - flow match: udp_src/dst = 4096 -- same UDP tuple the TX side sends to
 #
 %YAML 1.2
@@ -52,3 +53,4 @@ daqiri:
 
 bench_rx:
   interface_name: "rx_port"
+  cpu_core: 18

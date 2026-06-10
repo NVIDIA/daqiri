@@ -99,6 +99,12 @@ parse_gpu_reorder_plans(const YAML::Node &root) {
 }
 
 void tx_worker(const SequenceTxConfig &cfg, std::atomic<bool> &stop) {
+  if (!daqiri::bench::set_current_thread_affinity(cfg.packet.cpu_core,
+                                                  "bench_tx")) {
+    stop.store(true);
+    return;
+  }
+
   const int port_id = daqiri::get_port_id(cfg.packet.interface_name);
   if (port_id < 0) {
     std::cerr << "Invalid TX interface_name: " << cfg.packet.interface_name
@@ -202,6 +208,11 @@ void tx_worker(const SequenceTxConfig &cfg, std::atomic<bool> &stop) {
 
 void rx_reorder_worker(const daqiri::bench::RawBenchRxConfig &cfg,
                        std::atomic<bool> &stop) {
+  if (!daqiri::bench::set_current_thread_affinity(cfg.cpu_core, "bench_rx")) {
+    stop.store(true);
+    return;
+  }
+
   const int port_id = daqiri::get_port_id(cfg.interface_name);
   if (port_id < 0) {
     std::cerr << "Invalid RX interface_name: " << cfg.interface_name << "\n";

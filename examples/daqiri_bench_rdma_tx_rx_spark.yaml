@@ -6,8 +6,9 @@
 #   - IPs: 1.1.1.1 (client/TX) and 2.2.2.2 (server/RX), matching the
 #     daqiri-tx / daqiri-rx nmcli profiles documented in the system
 #     configuration tutorial DGX Spark tab.
-#   - cpu_core values pulled from the isolated big-cluster X925 cores
-#     16-19 (see grub drop-in /etc/default/grub.d/daqiri-tuning.cfg).
+#   - cpu_core values for DAQIRI queue threads and benchmark app role threads
+#     are pulled from the isolated big-cluster X925 cores 16-19 (see grub
+#     drop-in /etc/default/grub.d/daqiri-tuning.cfg).
 #   - master_core: 8 (non-isolated big core).
 #   - kind: host_pinned (already correct upstream and required on GB10
 #     where peermem is N/A and DMA-BUF is unreachable).
@@ -93,6 +94,7 @@ rdma_bench_server:
   message_size: 8000000
   send: true
   receive: true
+  cpu_core: 19
   server: true
 
 rdma_bench_client:
@@ -102,4 +104,5 @@ rdma_bench_client:
   server_port: 4096
   receive: true
   send: true
+  cpu_core: 17
   server: false

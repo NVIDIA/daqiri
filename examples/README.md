@@ -65,6 +65,11 @@ MAC if the backend fills it. The generated Ethernet/IPv4/UDP headers include Eth
 `0x0800`, TTL `64`, correct IPv4 total length/checksum, UDP length/checksum, and the
 configured addresses and ports.
 
+The app-level `bench_tx.cpu_core`, `bench_rx.cpu_core`,
+`socket_bench_*.cpu_core`, and `rdma_bench_*.cpu_core` fields pin the benchmark
+application threads. These are separate from the DAQIRI queue `cpu_core` values that
+pin the library's worker threads.
+
 Included configs:
 
 | Config file | Benchmark |
