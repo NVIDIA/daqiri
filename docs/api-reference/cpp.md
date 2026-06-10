@@ -357,6 +357,10 @@ if (st == daqiri::Status::SUCCESS) {
         "runs/run42/packet",
         60,
         &handle);
+    if (st == daqiri::Status::SUCCESS) {
+        daqiri::free_all_packets_and_burst_rx(burst);
+        burst = nullptr;
+    }
 }
 
 daqiri::S3WriteStatus s3_status{};
@@ -364,7 +368,12 @@ if (st == daqiri::Status::SUCCESS) {
     st = daqiri::daqiri_s3_write_wait(handle, &s3_status);
     daqiri::daqiri_s3_write_destroy(handle);
 }
-daqiri::daqiri_s3_writer_destroy(writer);
+if (burst != nullptr) {
+    daqiri::free_all_packets_and_burst_rx(burst);
+}
+if (writer != nullptr) {
+    daqiri::daqiri_s3_writer_destroy(writer);
+}
 ```
 
 Object keys mirror raw file naming: `object_prefix_<packet_index>`. DAQIRI
@@ -384,12 +393,15 @@ cfg.bucket = "daqiri-captures"
 cfg.region = "us-west-2"
 
 writer = daqiri.S3Writer(cfg)
-status = writer.write_raw_objects(
-    burst,
-    "runs/run42/packet",
-    packet_data_offset=60,
-)
-writer.destroy()
+try:
+    status = writer.write_raw_objects(
+        burst,
+        "runs/run42/packet",
+        packet_data_offset=60,
+    )
+finally:
+    daqiri.free_all_packets_and_burst_rx(burst)
+    writer.destroy()
 ```
 
 ## Utility Functions

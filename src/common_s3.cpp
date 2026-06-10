@@ -105,13 +105,21 @@ struct HostStagingBuffer {
       return;
     }
 
+    release_memory();
+    size = 0;
+  }
+
+  void release_memory() {
+    if (data == nullptr) {
+      return;
+    }
+
     const cudaError_t err = cudaFreeHost(data);
     if (err != cudaSuccess) {
       DAQIRI_LOG_ERROR("cudaFreeHost for S3 staging failed: {}",
                        cudaGetErrorString(err));
     }
     data = nullptr;
-    size = 0;
   }
 };
 
@@ -451,6 +459,12 @@ Status prepare_s3_request(S3Writer &writer, S3UploadEntry &entry) {
   if (entry.staging.size != 0) {
     entry.body->write(reinterpret_cast<const char *>(entry.staging.data),
                       static_cast<std::streamsize>(entry.staging.size));
+    if (!entry.body->good()) {
+      DAQIRI_LOG_ERROR("Failed to copy S3 object {} into request body",
+                       entry.key);
+      return Status::GENERIC_FAILURE;
+    }
+    entry.staging.release_memory();
   }
   entry.body->seekg(0);
 
@@ -525,6 +539,7 @@ Status daqiri_write_raw_to_s3_objects_async(S3Writer *writer,
   }
 
   uint64_t staged_bytes = 0;
+  uint64_t largest_object_len = 0;
   for (uint32_t pkt = 0; pkt < num_packets; ++pkt) {
     const uint64_t object_len =
         packet_length_after_offset(burst, pkt, packet_data_offset);
@@ -534,10 +549,18 @@ Status daqiri_write_raw_to_s3_objects_async(S3Writer *writer,
     }
     if (object_len > writer->config.max_staged_bytes ||
         staged_bytes > writer->config.max_staged_bytes - object_len) {
-      DAQIRI_LOG_ERROR("S3 staging bytes exceed configured limit");
+      DAQIRI_LOG_ERROR("S3 request body bytes exceed configured limit");
       return Status::NO_SPACE_AVAILABLE;
     }
     staged_bytes += object_len;
+    largest_object_len = std::max(largest_object_len, object_len);
+  }
+
+  if (largest_object_len > writer->config.max_staged_bytes ||
+      staged_bytes > writer->config.max_staged_bytes - largest_object_len) {
+    DAQIRI_LOG_ERROR(
+        "S3 request body and staging bytes exceed configured limit");
+    return Status::NO_SPACE_AVAILABLE;
   }
 
   auto handle = std::make_unique<S3WriteHandle>();

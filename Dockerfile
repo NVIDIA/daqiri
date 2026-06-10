@@ -112,7 +112,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Build only the AWS SDK for C++ S3 component. DAQIRI links this SDK only when
 # configured with -DDAQIRI_ENABLE_S3=ON, but installing it here keeps the
 # recommended container build path self-contained.
-RUN git clone --depth 1 --branch "${AWS_SDK_CPP_VERSION}" \
+RUN git clone --depth 1 --recurse-submodules --shallow-submodules \
+        --branch "${AWS_SDK_CPP_VERSION}" \
         https://github.com/aws/aws-sdk-cpp.git /tmp/aws-sdk-cpp \
     && cmake -S /tmp/aws-sdk-cpp -B /tmp/aws-sdk-cpp/build \
         -DCMAKE_BUILD_TYPE=Release \
