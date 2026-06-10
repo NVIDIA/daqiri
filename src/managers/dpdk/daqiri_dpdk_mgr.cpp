@@ -278,6 +278,55 @@ static bool is_valid_segment_count(int num_segs) {
   return num_segs > 0 && num_segs <= MAX_NUM_SEGS;
 }
 
+// Preflight check: every Raw Ethernet RX/TX queue must reference between 1 and
+// MAX_NUM_SEGS memory regions (each MR becomes one packet segment). Running this
+// before initialize() turns an otherwise-obscure DPDK init failure into a clear,
+// immediate error.
+static bool validate_queue_segment_counts(const NetworkConfig& cfg) {
+  const auto check_queue = [](const char* dir, const CommonQueueConfig& common) {
+    const size_t num_mrs = common.mrs_.size();
+    if (num_mrs == 0 || num_mrs > static_cast<size_t>(MAX_NUM_SEGS)) {
+      DAQIRI_LOG_ERROR("Raw Ethernet {} queue '{}' references {} memory regions; maximum is {}.",
+                       dir,
+                       common.name_,
+                       num_mrs,
+                       MAX_NUM_SEGS);
+      return false;
+    }
+    return true;
+  };
+
+  for (const auto& intf : cfg.ifs_) {
+    for (const auto& q : intf.rx_.queues_) {
+      if (!check_queue("RX", q.common_)) { return false; }
+    }
+    for (const auto& q : intf.tx_.queues_) {
+      if (!check_queue("TX", q.common_)) { return false; }
+    }
+  }
+  return true;
+}
+
+// Free the packet chain at index `pkt` in a non-reorder burst, leaving every
+// segment slot nulled afterwards. If the segment-0 head mbuf is present it owns
+// the whole chain (rte_pktmbuf_free walks ->next); otherwise best-effort drain
+// any orphaned segment mbufs left behind by a partially-built split burst.
+static void dpdk_free_packet_chain(BurstParams* burst, int pkt, int num_segs) {
+  if (burst->pkts[0] != nullptr && burst->pkts[0][pkt] != nullptr) {
+    rte_pktmbuf_free(reinterpret_cast<rte_mbuf*>(burst->pkts[0][pkt]));
+    for (int seg = 0; seg < num_segs; ++seg) {
+      if (burst->pkts[seg] != nullptr) { burst->pkts[seg][pkt] = nullptr; }
+    }
+    return;
+  }
+  for (int seg = 1; seg < num_segs; ++seg) {
+    if (burst->pkts[seg] != nullptr && burst->pkts[seg][pkt] != nullptr) {
+      rte_pktmbuf_free_seg(reinterpret_cast<rte_mbuf*>(burst->pkts[seg][pkt]));
+      burst->pkts[seg][pkt] = nullptr;
+    }
+  }
+}
+
 static void release_rx_burst_segment_arrays(BurstParams* burst,
                                             struct rte_mempool* pool,
                                             int num_segs) {
@@ -1681,6 +1730,14 @@ bool DpdkMgr::set_config_and_initialize(const NetworkConfig& cfg) {
 
   if (!this->initialized_) {
     cfg_ = cfg;
+
+    // Preflight: validate_config() is skipped entirely when initialize() fails, so
+    // catch out-of-range queue segment counts here before DPDK setup runs.
+    if (!validate_queue_segment_counts(cfg_)) {
+      DAQIRI_LOG_CRITICAL("Config validation failed");
+      return false;
+    }
+
     cpu_set_t mask;
     long nproc, i;
 
@@ -3310,6 +3367,10 @@ DpdkMgr::~DpdkMgr() {
 bool DpdkMgr::validate_config() const {
   if (!Manager::validate_config()) { return false; }
 
+  // Backstop for the set_config_and_initialize() preflight; also covers the dummy
+  // queues created inside initialize() (each carries exactly one MR, so they pass).
+  if (!validate_queue_segment_counts(cfg_)) { return false; }
+
   for (const auto& intf : cfg_.ifs_) {
     std::unordered_map<uint16_t, uint16_t> flow_to_queue;
     for (const auto& flow : intf.rx_.flows_) {
@@ -4175,40 +4236,69 @@ int DpdkMgr::tx_lb_worker(void* arg) {
 }
 
 /* daqiri interface implementations */
+
+// Resolve the mbuf backing segment `seg`, packet `idx` of a non-reorder burst, or
+// nullptr if any layer of the metadata is out of range or missing. Centralizing the
+// bounds/null checks keeps every accessor a silent, O(1) safe probe. Reorder bursts
+// do not store mbufs and are handled separately by each accessor.
+static rte_mbuf* dpdk_resolve_seg_mbuf(BurstParams* burst, int seg, int idx) {
+  if (burst == nullptr) { return nullptr; }
+  if (idx < 0 || idx >= static_cast<int>(burst->hdr.hdr.num_pkts)) { return nullptr; }
+  if (seg < 0 || seg >= burst->hdr.hdr.num_segs || seg >= MAX_NUM_SEGS) { return nullptr; }
+  if (burst->pkts[seg] == nullptr) { return nullptr; }
+  return reinterpret_cast<rte_mbuf*>(burst->pkts[seg][idx]);
+}
+
 void* DpdkMgr::get_segment_packet_ptr(BurstParams* burst, int seg, int idx) {
-  if (burst == nullptr || idx < 0 || seg < 0 || seg >= MAX_NUM_SEGS) { return nullptr; }
+  if (burst == nullptr) { return nullptr; }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
-    if (seg != 0 || burst->pkts[0] == nullptr) { return nullptr; }
+    if (seg != 0 || idx < 0 || idx >= static_cast<int>(burst->hdr.hdr.num_pkts)
+        || burst->pkts[0] == nullptr) {
+      return nullptr;
+    }
     return burst->pkts[0][idx];
   }
-  return rte_pktmbuf_mtod(reinterpret_cast<rte_mbuf*>(burst->pkts[seg][idx]), void*);
+  auto* mbuf = dpdk_resolve_seg_mbuf(burst, seg, idx);
+  return mbuf == nullptr ? nullptr : rte_pktmbuf_mtod(mbuf, void*);
 }
 
 void* DpdkMgr::get_packet_ptr(BurstParams* burst, int idx) {
-  if (burst == nullptr || idx < 0) { return nullptr; }
+  if (burst == nullptr) { return nullptr; }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
-    if (burst->pkts[0] == nullptr) { return nullptr; }
+    if (idx < 0 || idx >= static_cast<int>(burst->hdr.hdr.num_pkts)
+        || burst->pkts[0] == nullptr) {
+      return nullptr;
+    }
     return burst->pkts[0][idx];
   }
-  return rte_pktmbuf_mtod(reinterpret_cast<rte_mbuf*>(burst->pkts[0][idx]), void*);
+  auto* mbuf = dpdk_resolve_seg_mbuf(burst, 0, idx);
+  return mbuf == nullptr ? nullptr : rte_pktmbuf_mtod(mbuf, void*);
 }
 
 uint32_t DpdkMgr::get_segment_packet_length(BurstParams* burst, int seg, int idx) {
-  if (burst == nullptr || idx < 0 || seg < 0 || seg >= MAX_NUM_SEGS) { return 0; }
+  if (burst == nullptr) { return 0; }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
-    if (seg != 0 || burst->pkt_lens[0] == nullptr) { return 0; }
+    if (seg != 0 || idx < 0 || idx >= static_cast<int>(burst->hdr.hdr.num_pkts)
+        || burst->pkt_lens[0] == nullptr) {
+      return 0;
+    }
     return burst->pkt_lens[0][idx];
   }
-  return reinterpret_cast<rte_mbuf*>(burst->pkts[seg][idx])->data_len;
+  auto* mbuf = dpdk_resolve_seg_mbuf(burst, seg, idx);
+  return mbuf == nullptr ? 0 : mbuf->data_len;
 }
 
 uint32_t DpdkMgr::get_packet_length(BurstParams* burst, int idx) {
-  if (burst == nullptr || idx < 0) { return 0; }
+  if (burst == nullptr) { return 0; }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
-    if (burst->pkt_lens[0] == nullptr) { return 0; }
+    if (idx < 0 || idx >= static_cast<int>(burst->hdr.hdr.num_pkts)
+        || burst->pkt_lens[0] == nullptr) {
+      return 0;
+    }
     return burst->pkt_lens[0][idx];
   }
-  return reinterpret_cast<rte_mbuf*>(burst->pkts[0][idx])->pkt_len;
+  auto* mbuf = dpdk_resolve_seg_mbuf(burst, 0, idx);
+  return mbuf == nullptr ? 0 : mbuf->pkt_len;
 }
 
 uint16_t DpdkMgr::get_packet_flow_id(BurstParams* burst, int idx) {
@@ -4423,7 +4513,12 @@ void DpdkMgr::free_packet_segment(BurstParams* burst, int seg, int pkt) {
     }
     return;
   }
-  rte_pktmbuf_free_seg(reinterpret_cast<rte_mbuf**>(burst->pkts[seg])[pkt]);
+  const int num_segs = std::clamp(static_cast<int>(burst->hdr.hdr.num_segs), 0, MAX_NUM_SEGS);
+  if (seg < 0 || seg >= num_segs || burst->pkts[seg] == nullptr) { return; }
+  if (pkt < 0 || pkt >= static_cast<int>(burst->hdr.hdr.num_pkts)) { return; }
+  if (burst->pkts[seg][pkt] == nullptr) { return; }
+  rte_pktmbuf_free_seg(reinterpret_cast<rte_mbuf*>(burst->pkts[seg][pkt]));
+  burst->pkts[seg][pkt] = nullptr;
 }
 
 void DpdkMgr::free_all_segment_packets(BurstParams* burst, int seg) {
@@ -4435,8 +4530,12 @@ void DpdkMgr::free_all_segment_packets(BurstParams* burst, int seg) {
     }
     return;
   }
-  for (int p = 0; p < burst->hdr.hdr.num_pkts; p++) {
-    rte_pktmbuf_free_seg(reinterpret_cast<rte_mbuf**>(burst->pkts[seg])[p]);
+  const int num_segs = std::clamp(static_cast<int>(burst->hdr.hdr.num_segs), 0, MAX_NUM_SEGS);
+  if (seg < 0 || seg >= num_segs || burst->pkts[seg] == nullptr) { return; }
+  for (int p = 0; p < static_cast<int>(burst->hdr.hdr.num_pkts); p++) {
+    if (burst->pkts[seg][p] == nullptr) { continue; }
+    rte_pktmbuf_free_seg(reinterpret_cast<rte_mbuf*>(burst->pkts[seg][p]));
+    burst->pkts[seg][p] = nullptr;
   }
 }
 
@@ -4449,7 +4548,9 @@ void DpdkMgr::free_packet(BurstParams* burst, int pkt) {
     }
     return;
   }
-  rte_pktmbuf_free(reinterpret_cast<rte_mbuf**>(burst->pkts[0])[pkt]);
+  if (pkt < 0 || pkt >= static_cast<int>(burst->hdr.hdr.num_pkts)) { return; }
+  const int num_segs = std::clamp(static_cast<int>(burst->hdr.hdr.num_segs), 0, MAX_NUM_SEGS);
+  dpdk_free_packet_chain(burst, pkt, num_segs);
 }
 
 void DpdkMgr::free_all_packets(BurstParams* burst) {
@@ -4461,8 +4562,9 @@ void DpdkMgr::free_all_packets(BurstParams* burst) {
     }
     return;
   }
-  for (int p = 0; p < burst->hdr.hdr.num_pkts; p++) {
-    rte_pktmbuf_free(reinterpret_cast<rte_mbuf**>(burst->pkts[0])[p]);
+  const int num_segs = std::clamp(static_cast<int>(burst->hdr.hdr.num_segs), 0, MAX_NUM_SEGS);
+  for (int p = 0; p < static_cast<int>(burst->hdr.hdr.num_pkts); p++) {
+    dpdk_free_packet_chain(burst, p, num_segs);
   }
 }
 
@@ -4480,9 +4582,7 @@ void DpdkMgr::free_rx_burst(BurstParams* burst) {
     return;
   }
 
-  for (int seg = 0; seg < burst->hdr.hdr.num_segs; seg++) {
-    rte_mempool_put(rx_burst_buffer, (void*)burst->pkts[seg]);
-  }
+  release_rx_burst_segment_arrays(burst, rx_burst_buffer, burst->hdr.hdr.num_segs);
 
   burst->hdr.hdr.num_pkts = 0;
   burst->pkt_extra_info = nullptr;
