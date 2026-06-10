@@ -1,0 +1,22 @@
+{# Landing page: Material header/tabs; section bodies from docs/index.md snippets #}
+{% extends "main.html" %}
+
+{% block styles %}
+  {{ super() }}
+  <link rel="stylesheet" href="{{ 'stylesheets/landing.css' | url }}">
+{% endblock %}
+
+{% block scripts %}
+  {{ super() }}
+  <script src="{{ 'javascripts/landing.js' | url }}"></script>
+{% endblock %}
+
+{% block content %}
+  <div class="daqiri-landing">
+    {{ page.content }}
+  </div>
+{% endblock %}
+
+{% block footer %}
+  {# Custom footer lives in docs/landing/footer.html (included via index.md) #}
+{% endblock %}

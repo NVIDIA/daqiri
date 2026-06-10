@@ -1,0 +1,146 @@
+<!-- EXAMPLES -->
+  <section id="examples">
+    <div class="container">
+      <div class="section-header">
+        <div>
+          <div class="section-label">Code Samples</div>
+          <h2 class="section-title">Examples</h2>
+          <p class="section-desc">Benchmark executables and YAML configs included in the <code>examples/</code> directory.</p>
+        </div>
+        <a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="btn btn-outline" target="_blank">Browse examples/ →</a>
+      </div>
+      <div class="examples-grid">
+
+        <div class="example-card">
+          <div class="ex-hdr"><span class="ex-dot dot-cpp"></span><span class="ex-title">Transmit a Packet Burst</span><span class="ex-lang">C++</span></div>
+          <div class="ex-body"><pre><span class="kw">auto</span> burst =
+  daqiri::<span class="fn">create_tx_burst_params</span>();
+daqiri::<span class="fn">set_header</span>(burst, port_id,
+    queue_id, batch_size, num_segs);
+daqiri::<span class="fn">get_tx_packet_burst</span>(burst);
+
+<span class="kw">for</span> (<span class="kw">int</span> i = <span class="nm">0</span>; i &lt; batch_size; i++) {
+  daqiri::<span class="fn">set_eth_header</span>(burst,i,dst_mac);
+  daqiri::<span class="fn">set_ipv4_header</span>(burst,i,
+      ip_len,IPPROTO_UDP,src_ip,dst_ip);
+  daqiri::<span class="fn">set_udp_header</span>(burst,i,
+      udp_len,src_port,dst_port);
+  daqiri::<span class="fn">set_udp_payload</span>(burst,i,
+      payload_ptr,payload_size);
+}
+daqiri::<span class="fn">send_tx_burst</span>(burst);</pre></div>
+          <div class="ex-footer"><span class="ex-desc">Build and send a UDP burst over Raw Ethernet</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
+        </div>
+
+        <div class="example-card">
+          <div class="ex-hdr"><span class="ex-dot dot-cpp"></span><span class="ex-title">GPU Packet Processing</span><span class="ex-lang">C++/CUDA</span></div>
+          <div class="ex-body"><pre><span class="cm">// Batched GPU: packets arrive in
+// CUDA-addressable buffers. Reordering
+// is configured with rx.reorder_configs.</span>
+<span class="kw">__global__</span> <span class="kw">void</span> noop_packet_kernel(<span class="kw">void</span>* pkt) {
+  (<span class="kw">void</span>)pkt;
+}
+
+<span class="kw">if</span> (daqiri::<span class="fn">get_num_packets</span>(burst) &gt; <span class="nm">0</span>) {
+  <span class="kw">void</span>* pkt =
+    daqiri::<span class="fn">get_packet_ptr</span>(burst, <span class="nm">0</span>);
+  noop_packet_kernel&lt;&lt;&lt;<span class="nm">1</span>, <span class="nm">1</span>, <span class="nm">0</span>, stream&gt;&gt;&gt;(pkt);
+}
+
+daqiri::<span class="fn">free_all_packets_and_burst_rx</span>(
+  burst);</pre></div>
+          <div class="ex-footer"><span class="ex-desc">Launch custom GPU work on packet buffers</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
+        </div>
+
+        <div class="example-card">
+          <div class="ex-hdr"><span class="ex-dot dot-yaml"></span><span class="ex-title">Header-Data Split Config</span><span class="ex-lang">YAML</span></div>
+          <div class="ex-body"><pre>daqiri:
+  cfg:
+    version: <span class="nm">1</span>
+    manager: <span class="str">"dpdk"</span>
+    master_core: <span class="nm">3</span>
+    memory_regions:
+    - name: <span class="str">"RX_CPU"</span>
+      kind: <span class="str">"huge"</span>
+      affinity: <span class="nm">0</span>
+      num_bufs: <span class="nm">51200</span>
+      buf_size: <span class="nm">64</span>    <span class="cm"># headers (~42 B)</span>
+    - name: <span class="str">"RX_GPU"</span>
+      kind: <span class="str">"device"</span>
+      affinity: <span class="nm">0</span>
+      num_bufs: <span class="nm">51200</span>
+      buf_size: <span class="nm">1000</span>  <span class="cm"># payload</span></pre></div>
+          <div class="ex-footer"><span class="ex-desc">Two-region HDS: CPU headers + GPU payload</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
+        </div>
+
+        <div class="example-card">
+          <div class="ex-hdr"><span class="ex-dot dot-yaml"></span><span class="ex-title">Hardware Flow Steering</span><span class="ex-lang">YAML</span></div>
+          <div class="ex-body"><pre>rx:
+  flow_isolation: <span class="kw">true</span>
+  queues:
+  - name: <span class="str">"rx_q_0"</span>
+    id: <span class="nm">0</span>
+    cpu_core: <span class="nm">9</span>
+    batch_size: <span class="nm">10240</span>
+    memory_regions:
+      - <span class="str">"Data_RX_GPU"</span>
+  - name: <span class="str">"rx_q_1"</span>
+    id: <span class="nm">1</span>
+    cpu_core: <span class="nm">10</span>
+    batch_size: <span class="nm">10240</span>
+    memory_regions:
+      - <span class="str">"Data_RX_GPU_2"</span>
+  flows:
+  - name: <span class="str">"udp_4096"</span>
+    id: <span class="nm">0</span>
+    action: {type: queue, id: <span class="nm">0</span>}
+    match: {udp_dst: <span class="nm">4096</span>}
+  - name: <span class="str">"udp_4097"</span>
+    id: <span class="nm">1</span>
+    action: {type: queue, id: <span class="nm">1</span>}
+    match: {udp_dst: <span class="nm">4097</span>}</pre></div>
+          <div class="ex-footer"><span class="ex-desc">Steer UDP 4096 → GPU 0, UDP 4097 → GPU 1 in hardware</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
+        </div>
+
+        <div class="example-card">
+          <div class="ex-hdr"><span class="ex-dot dot-bash"></span><span class="ex-title">Raw Ethernet Benchmarks</span><span class="ex-lang">bash</span></div>
+          <div class="ex-body"><pre><span class="cm"># Build with examples</span>
+cmake -S . -B build \
+  -DDAQIRI_BUILD_EXAMPLES=ON \
+  -DDAQIRI_MGR=<span class="str">"dpdk socket rdma"</span>
+cmake --build build -j
+
+<span class="cm"># TX/RX throughput (10 s)</span>
+./build/examples/daqiri_bench_raw_gpudirect \
+  examples/daqiri_bench_raw_tx_rx.yaml \
+  --seconds <span class="nm">10</span>
+
+<span class="cm"># Header-data split / GPUDirect</span>
+./build/examples/daqiri_bench_raw_hds \
+  examples/daqiri_bench_raw_tx_rx_hds.yaml \
+  --seconds <span class="nm">10</span></pre></div>
+          <div class="ex-footer"><span class="ex-desc">Run Raw Ethernet TX/RX and HDS benchmarks</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
+        </div>
+
+        <div class="example-card">
+          <div class="ex-hdr"><span class="ex-dot dot-bash"></span><span class="ex-title">RDMA &amp; Multi-Queue Benchmarks</span><span class="ex-lang">bash</span></div>
+          <div class="ex-body"><pre><span class="cm"># RDMA client/server (10 s)</span>
+./build/examples/daqiri_bench_rdma \
+  examples/daqiri_bench_rdma_tx_rx.yaml \
+  --seconds <span class="nm">10</span> --mode both
+
+<span class="cm"># Software loopback (no physical link)</span>
+./build/examples/daqiri_bench_raw_gpudirect \
+  examples/daqiri_bench_raw_sw_loopback.yaml \
+  --seconds <span class="nm">10</span>
+
+<span class="cm"># Multi-queue RX</span>
+./build/examples/daqiri_bench_raw_gpudirect \
+  examples/daqiri_bench_raw_rx_multi_q.yaml \
+  --seconds <span class="nm">10</span></pre></div>
+          <div class="ex-footer"><span class="ex-desc">RDMA, loopback, and multi-queue benchmarks</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
+        </div>
+
+      </div>
+    </div>
+  </section>

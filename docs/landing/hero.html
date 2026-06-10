@@ -1,0 +1,41 @@
+<!-- HERO -->
+  <section id="hero">
+    <div class="hero-grid"></div>
+    <div class="hero-glow"></div>
+    <div class="container">
+      <div class="hero-inner">
+        <div class="hero-content">
+          <div class="hero-eyebrow">NVIDIA Open Source · Data Acquisition</div>
+          <h1 class="hero-title">DAQIRI for Sensor Data<br>in <span class="hi">CPU or NVIDIA GPU Memory</span></h1>
+          <p class="hero-desc">
+            DAQIRI (Data Acquisition for Integrated Real-time Instruments) moves high-bandwidth data between external
+            sensors and CPU or NVIDIA GPU memory. Streams can arrive from PCIe devices such as FPGAs or from network-capable sensors
+            over Raw Ethernet (UDP/TCP) or RoCE/RDMA, giving applications one zero-copy path for ingest and egress.
+            GPU-resident data can also write out through GPUDirect Storage.
+          </p>
+        </div>
+        <div class="hero-visual">
+          <button class="hero-visual-link" type="button" data-graphic-open aria-controls="daqiri-graphic-overlay" aria-label="Open the DAQIRI sensor data path graphic overlay">
+            <img src="images/daqiri-landing-graphic.svg" alt="DAQIRI moves PCIe FPGA and network sensor data into or out of CPU or NVIDIA GPU memory, then writes GPU data to storage through GPUDirect Storage" />
+          </button>
+        </div>
+        <div class="warn-banner">
+          <span style="font-size:1rem;flex-shrink:0;margin-top:.05rem;">⚠️</span>
+          <p>The library is undergoing large improvements as we aim to better support it as an NVIDIA product. API breakages may be more frequent until version 1.0.</p>
+        </div>
+        <div class="hero-actions">
+          <a href="#getting-started" class="btn btn-primary">Quick Start →</a>
+          <a href="concepts/" class="btn btn-outline">Key Concepts</a>
+          <a href="api-reference/" class="btn btn-outline">API Reference</a>
+          <a href="benchmarks/benchmarks/" class="btn btn-outline">Benchmarking</a>
+        </div>
+        <div class="hero-stats">
+          <div><div class="stat-value">PCIe + Ethernet</div><div class="stat-label">Sensor Paths</div></div>
+          <div><div class="stat-value">Ingest + Egress</div><div class="stat-label">Data Direction</div></div>
+          <div><div class="stat-value">Zero-Copy</div><div class="stat-label">CPU/GPU Memory</div></div>
+          <div><div class="stat-value">Raw Ethernet, RoCE</div><div class="stat-label">Protocols</div></div>
+          <div><div class="stat-value">C++ / Python</div><div class="stat-label">Application API</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
