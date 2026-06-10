@@ -217,6 +217,158 @@ std::atomic<bool> force_quit = false;
 // Defaults to seq_cst, so no fences needed.
 std::atomic<bool> flush_rx_queues = false;
 
+static bool should_log_bounded(uint64_t count) {
+  return count <= 8 || (count & (count - 1)) == 0;
+}
+
+static std::atomic<uint64_t> rx_burst_array_allocation_failures{0};
+static std::atomic<uint64_t> rx_incomplete_split_packet_drops{0};
+static std::atomic<uint64_t> rx_controlled_packet_drops{0};
+static std::atomic<uint64_t> rx_controlled_packet_drop_events{0};
+
+static void log_rx_burst_array_allocation_failure(int port, int queue, int seg, int num_segs) {
+  const uint64_t total =
+      rx_burst_array_allocation_failures.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (!should_log_bounded(total)) { return; }
+  DAQIRI_LOG_WARN(
+      "No free RX burst segment arrays for port {} queue {} while allocating segment {}/{} "
+      "(total allocation failures: {})",
+      port,
+      queue,
+      seg,
+      num_segs,
+      total);
+}
+
+static void log_rx_incomplete_split_packet_drop(int port,
+                                                int queue,
+                                                int expected_segs,
+                                                int actual_segs) {
+  const uint64_t total =
+      rx_incomplete_split_packet_drops.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (!should_log_bounded(total)) { return; }
+  DAQIRI_LOG_WARN(
+      "Dropped malformed split RX packet on port {} queue {}: expected {} segment(s), found {} "
+      "(total malformed split drops: {})",
+      port,
+      queue,
+      expected_segs,
+      actual_segs,
+      total);
+}
+
+static void log_rx_controlled_packet_drop(int port,
+                                          int queue,
+                                          const char* reason,
+                                          uint64_t dropped) {
+  const uint64_t total =
+      rx_controlled_packet_drops.fetch_add(dropped, std::memory_order_relaxed) + dropped;
+  const uint64_t events =
+      rx_controlled_packet_drop_events.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (!should_log_bounded(events)) { return; }
+  DAQIRI_LOG_WARN("Dropped {} RX packet(s) on port {} queue {}: {} (total controlled drops: {})",
+                  dropped,
+                  port,
+                  queue,
+                  reason,
+                  total);
+}
+
+static bool is_valid_segment_count(int num_segs) {
+  return num_segs > 0 && num_segs <= MAX_NUM_SEGS;
+}
+
+static void release_rx_burst_segment_arrays(BurstParams* burst,
+                                            struct rte_mempool* pool,
+                                            int num_segs) {
+  if (burst == nullptr || pool == nullptr) { return; }
+  for (int seg = 0; seg < std::clamp(num_segs, 0, MAX_NUM_SEGS); ++seg) {
+    if (burst->pkts[seg] == nullptr) { continue; }
+    rte_mempool_put(pool, static_cast<void*>(burst->pkts[seg]));
+    burst->pkts[seg] = nullptr;
+  }
+}
+
+static bool initialize_rx_burst(BurstParams* burst,
+                                int port,
+                                int queue,
+                                int num_segs,
+                                struct rte_mempool* rx_burst_pool) {
+  if (burst == nullptr || rx_burst_pool == nullptr || !is_valid_segment_count(num_segs)) {
+    DAQIRI_LOG_ERROR("Invalid RX burst metadata for port {} queue {} with {} segment(s)",
+                     port,
+                     queue,
+                     num_segs);
+    return false;
+  }
+
+  burst->hdr.hdr.q_id = queue;
+  burst->hdr.hdr.port_id = port;
+  burst->hdr.hdr.num_segs = num_segs;
+  burst->hdr.hdr.num_pkts = 0;
+  burst->hdr.hdr.nbytes = 0;
+  burst->hdr.hdr.burst_flags = 0;
+  burst->pkt_extra_info = nullptr;
+  burst->event = nullptr;
+
+  for (int seg = 0; seg < MAX_NUM_SEGS; ++seg) {
+    burst->pkts[seg] = nullptr;
+    burst->pkt_lens[seg] = nullptr;
+  }
+
+  for (int seg = 0; seg < num_segs; ++seg) {
+    if (rte_mempool_get(rx_burst_pool, reinterpret_cast<void**>(&burst->pkts[seg])) == 0) {
+      continue;
+    }
+
+    log_rx_burst_array_allocation_failure(port, queue, seg, num_segs);
+    release_rx_burst_segment_arrays(burst, rx_burst_pool, seg);
+    return false;
+  }
+
+  return true;
+}
+
+static void drop_pending_rx_mbufs(struct rte_mbuf** mbufs,
+                                  int start,
+                                  int count,
+                                  int port,
+                                  int queue,
+                                  const char* reason) {
+  if (mbufs == nullptr || count <= 0) { return; }
+
+  uint64_t dropped = 0;
+  for (int i = 0; i < count; ++i) {
+    auto*& mbuf = mbufs[start + i];
+    if (mbuf == nullptr) { continue; }
+    rte_pktmbuf_free(mbuf);
+    mbuf = nullptr;
+    ++dropped;
+  }
+  if (dropped > 0) { log_rx_controlled_packet_drop(port, queue, reason, dropped); }
+}
+
+static bool populate_split_packet_segments(BurstParams* burst,
+                                           struct rte_mbuf* mbuf,
+                                           int pkt_idx,
+                                           int expected_segs,
+                                           int port,
+                                           int queue) {
+  burst->pkts[0][pkt_idx] = mbuf;
+  for (int seg = 1; seg < expected_segs; ++seg) {
+    mbuf = mbuf->next;
+    if (mbuf == nullptr) {
+      log_rx_incomplete_split_packet_drop(port, queue, expected_segs, seg);
+      for (int clear_seg = 0; clear_seg < seg; ++clear_seg) {
+        burst->pkts[clear_seg][pkt_idx] = nullptr;
+      }
+      return false;
+    }
+    burst->pkts[seg][pkt_idx] = mbuf;
+  }
+  return true;
+}
+
 struct TxWorkerParams {
   int port;
   int queue;
@@ -3610,9 +3762,9 @@ int DpdkMgr::rx_core_multi_q_worker(void* arg) {
           }
 
           // Free the segment buffers back to the burst pool
-          for (int seg = 0; seg < bursts[i]->hdr.hdr.num_segs; seg++) {
-            rte_mempool_put(tparams->rx_burst_pool, (void*)bursts[i]->pkts[seg]);
-          }
+          release_rx_burst_segment_arrays(bursts[i],
+                                          tparams->rx_burst_pool,
+                                          bursts[i]->hdr.hdr.num_segs);
 
           // Free the burst metadata back to the meta pool
           rte_mempool_put(tparams->rx_meta_pool, bursts[i]);
@@ -3630,20 +3782,23 @@ int DpdkMgr::rx_core_multi_q_worker(void* arg) {
         exit(1);
       }
 
-      //  Queue ID for receiver to differentiate
-      bursts[cur_idx]->hdr.hdr.q_id     = cur_q;
-      bursts[cur_idx]->hdr.hdr.port_id  = cur_port;
-      bursts[cur_idx]->hdr.hdr.num_segs = cur_segs;
-      bursts[cur_idx]->hdr.hdr.num_pkts = 0;
-      bursts[cur_idx]->pkt_extra_info = nullptr;
-
-      for (int seg = 0; seg < cur_segs; seg++) {
-        if (rte_mempool_get(tparams->rx_burst_pool,
-          reinterpret_cast<void**>(&bursts[cur_idx]->pkts[seg])) < 0) {
-          DAQIRI_LOG_ERROR(
-              "Processing function falling behind. No free RX bursts!");
-          continue;
-        }
+      if (!initialize_rx_burst(bursts[cur_idx],
+                               cur_port,
+                               cur_q,
+                               cur_segs,
+                               tparams->rx_burst_pool)) {
+        rte_mempool_put(tparams->rx_meta_pool, bursts[cur_idx]);
+        bursts[cur_idx] = nullptr;
+        drop_pending_rx_mbufs(mbuf_arr[cur_idx].data(),
+                              cur_pkt_in_batch[cur_idx],
+                              nb_rx[cur_idx],
+                              cur_port,
+                              cur_q,
+                              "no free RX burst metadata for split packet pointers");
+        nb_rx[cur_idx] = 0;
+        cur_pkt_in_batch[cur_idx] = 0;
+        update_cur_idx();
+        continue;
       }
     }
 
@@ -3674,30 +3829,36 @@ int DpdkMgr::rx_core_multi_q_worker(void* arg) {
     // At this point we have some packets to copy either from a new batch or an existing one. Check
     // if we are finishing a batch or copying all packets that came in
     int to_copy = std::min(static_cast<size_t>(nb_rx[cur_idx]),
-                        cur_batch_size - bursts[cur_idx]->hdr.hdr.num_pkts);
-    memcpy(&bursts[cur_idx]->pkts[0][bursts[cur_idx]->hdr.hdr.num_pkts],
-                  &mbuf_arr[cur_idx][cur_pkt_in_batch[cur_idx]], sizeof(rte_mbuf*) * to_copy);
-
-    if (cur_segs > 1) {  // Extra work when buffers are scattered
+                           cur_batch_size - bursts[cur_idx]->hdr.hdr.num_pkts);
+    int appended = 0;
+    if (cur_segs == 1) {
+      memcpy(&bursts[cur_idx]->pkts[0][bursts[cur_idx]->hdr.hdr.num_pkts],
+             &mbuf_arr[cur_idx][cur_pkt_in_batch[cur_idx]],
+             sizeof(rte_mbuf*) * to_copy);
+      bursts[cur_idx]->hdr.hdr.num_pkts += to_copy;
+      appended = to_copy;
+    } else {  // Extra work when buffers are scattered
       for (int p = 0; p < to_copy; p++) {
         struct rte_mbuf* mbuf = mbuf_arr[cur_idx][cur_pkt_in_batch[cur_idx] + p];
-        for (int seg = 1; seg < cur_segs; seg++) {
-          mbuf = mbuf->next;
-          bursts[cur_idx]->pkts[seg][bursts[cur_idx]->hdr.hdr.num_pkts + p] = mbuf;
+        const auto pkt_idx = static_cast<int>(bursts[cur_idx]->hdr.hdr.num_pkts);
+        if (populate_split_packet_segments(bursts[cur_idx], mbuf, pkt_idx, cur_segs, cur_port, cur_q)) {
+          bursts[cur_idx]->hdr.hdr.num_pkts++;
+          appended++;
+          continue;
         }
+        rte_pktmbuf_free(mbuf);
       }
     }
 
     cur_pkt_in_batch[cur_idx]         += to_copy;
-    bursts[cur_idx]->hdr.hdr.num_pkts += to_copy;
     nb_rx[cur_idx]                    -= to_copy;
-    total_pkts[cur_idx]               += to_copy;
+    total_pkts[cur_idx]               += appended;
 
     if (bursts[cur_idx]->hdr.hdr.num_pkts == cur_batch_size) {
       rte_ring_enqueue(tparams->q_params[cur_idx].ring, reinterpret_cast<void*>(bursts[cur_idx]));
       last_cycles[cur_idx] = rte_get_tsc_cycles();
       bursts[cur_idx] = nullptr;
-    } else if (cur_timeout_cycles > 0) {
+    } else if (bursts[cur_idx]->hdr.hdr.num_pkts > 0 && cur_timeout_cycles > 0) {
       const auto cur_cycles = rte_get_tsc_cycles();
 
       // We hit our timeout. Send the partial batch immediately
@@ -3775,9 +3936,7 @@ int DpdkMgr::rx_core_worker(void* arg) {
         }
 
         // Free the segment buffers back to the burst pool
-        for (int seg = 0; seg < burst->hdr.hdr.num_segs; seg++) {
-          rte_mempool_put(tparams->rx_burst_pool, (void*)burst->pkts[seg]);
-        }
+        release_rx_burst_segment_arrays(burst, tparams->rx_burst_pool, burst->hdr.hdr.num_segs);
 
         // Free the burst metadata back to the meta pool
         rte_mempool_put(tparams->rx_meta_pool, burst);
@@ -3794,20 +3953,22 @@ int DpdkMgr::rx_core_worker(void* arg) {
         exit(1);
       }
 
-      //  Queue ID for receiver to differentiate
-      burst->hdr.hdr.q_id     = tparams->queue;
-      burst->hdr.hdr.port_id  = tparams->port;
-      burst->hdr.hdr.num_segs = tparams->num_segs;
-      burst->hdr.hdr.num_pkts = 0;
-      burst->pkt_extra_info = nullptr;
-
-      for (int seg = 0; seg < tparams->num_segs; seg++) {
-        if (rte_mempool_get(tparams->rx_burst_pool,
-          reinterpret_cast<void**>(&burst->pkts[seg])) < 0) {
-          DAQIRI_LOG_ERROR(
-              "Processing function falling behind. No free RX bursts!");
-          continue;
-        }
+      if (!initialize_rx_burst(burst,
+                               tparams->port,
+                               tparams->queue,
+                               tparams->num_segs,
+                               tparams->rx_burst_pool)) {
+        rte_mempool_put(tparams->rx_meta_pool, burst);
+        burst = nullptr;
+        drop_pending_rx_mbufs(mbuf_arr,
+                              cur_pkt_in_batch,
+                              nb_rx,
+                              tparams->port,
+                              tparams->queue,
+                              "no free RX burst metadata for split packet pointers");
+        nb_rx = 0;
+        cur_pkt_in_batch = 0;
+        continue;
       }
     }
 
@@ -3836,30 +3997,37 @@ int DpdkMgr::rx_core_worker(void* arg) {
     // At this point we have some packets to copy either from a new batch or an existing one. Check
     // if we are finishing a batch or copying all packets that came in
     int to_copy = std::min(static_cast<size_t>(nb_rx),
-                                    tparams->batch_size - burst->hdr.hdr.num_pkts);
-    memcpy(&burst->pkts[0][burst->hdr.hdr.num_pkts],
-                                        &mbuf_arr[cur_pkt_in_batch], sizeof(rte_mbuf*) * to_copy);
-
-    if (tparams->num_segs > 1) {  // Extra work when buffers are scattered
+                           tparams->batch_size - burst->hdr.hdr.num_pkts);
+    int appended = 0;
+    if (tparams->num_segs == 1) {
+      memcpy(&burst->pkts[0][burst->hdr.hdr.num_pkts],
+             &mbuf_arr[cur_pkt_in_batch],
+             sizeof(rte_mbuf*) * to_copy);
+      burst->hdr.hdr.num_pkts += to_copy;
+      appended = to_copy;
+    } else {  // Extra work when buffers are scattered
       for (int p = 0; p < to_copy; p++) {
         struct rte_mbuf* mbuf = mbuf_arr[cur_pkt_in_batch + p];
-        for (int seg = 1; seg < tparams->num_segs; seg++) {
-          mbuf = mbuf->next;
-          burst->pkts[seg][burst->hdr.hdr.num_pkts + p] = mbuf;
+        const auto pkt_idx = static_cast<int>(burst->hdr.hdr.num_pkts);
+        if (populate_split_packet_segments(
+                burst, mbuf, pkt_idx, tparams->num_segs, tparams->port, tparams->queue)) {
+          burst->hdr.hdr.num_pkts++;
+          appended++;
+          continue;
         }
+        rte_pktmbuf_free(mbuf);
       }
     }
 
     cur_pkt_in_batch        += to_copy;
-    burst->hdr.hdr.num_pkts += to_copy;
     nb_rx                   -= to_copy;
-    total_pkts              += to_copy;
+    total_pkts              += appended;
 
     if (burst->hdr.hdr.num_pkts == tparams->batch_size) {
       rte_ring_enqueue(tparams->ring, reinterpret_cast<void*>(burst));
       last_cycles = rte_get_tsc_cycles();
       burst = nullptr;
-    } else if (timeout_cycles > 0) {
+    } else if (burst->hdr.hdr.num_pkts > 0 && timeout_cycles > 0) {
       const auto cur_cycles = rte_get_tsc_cycles();
 
       // We hit our timeout. Send the partial batch immediately
@@ -3904,18 +4072,13 @@ int DpdkMgr::rx_lb_worker(void* arg) {
       exit(1);
     }
 
-    meta_burst->hdr.hdr.q_id = tparams->queue;
-    meta_burst->hdr.hdr.port_id = tparams->port;
-    meta_burst->hdr.hdr.num_segs = tparams->num_segs;
-    meta_burst->pkt_extra_info = nullptr;
-
-    for (int seg = 0; seg < tparams->num_segs; seg++) {
-      if (rte_mempool_get(
-            tparams->rx_burst_pool, reinterpret_cast<void**>(&meta_burst->pkts[seg])) < 0) {
-        DAQIRI_LOG_ERROR(
-            "Processing function falling behind. No free flow ID buffers for packets!");
-        continue;
-      }
+    if (!initialize_rx_burst(meta_burst,
+                             tparams->port,
+                             tparams->queue,
+                             tparams->num_segs,
+                             tparams->rx_burst_pool)) {
+      rte_mempool_put(tparams->rx_meta_pool, meta_burst);
+      continue;
     }
 
     BurstParams* tx_burst;
