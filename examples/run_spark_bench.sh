@@ -230,8 +230,35 @@ generate_yaml() {
         "$BASE_YAML" > "$out"
       ;;
     rdma)
-      sed -E "s|^( *message_size: ).*|\1$payload|g" "$BASE_YAML" > "$out"
-      sed -E "s|^( *message_size: ).*|\1$payload|g" "$BASE_YAML_CLIENT" > "${out%.yaml}_client.yaml"
+      # Size the flow-control window per message size (PR #144). buf_size tracks the
+      # payload, and num_bufs / {rx,tx}_depth scale up to the PR-recommended window
+      # (rx 512 / tx 128) but are capped so num_bufs * buf_size stays within a memory
+      # budget per region -- small messages get the full deep window (where RNR NACKs
+      # bite), large messages stay memory-bounded (where window depth is irrelevant).
+      local budget=1073741824   # 1 GiB pinned per memory region
+      local cap=$(( budget / payload )); (( cap < 1 )) && cap=1
+      local rx_nb=512; (( rx_nb > cap )) && rx_nb=$cap
+      local tx_nb=128; (( tx_nb > cap )) && tx_nb=$cap
+      local src dst
+      for src in "$BASE_YAML" "$BASE_YAML_CLIENT"; do
+        if [[ "$src" == "$BASE_YAML" ]]; then dst="$out"; else dst="${out%.yaml}_client.yaml"; fi
+        # name-anchored num_bufs rewrite: RX regions -> rx_nb, TX regions -> tx_nb.
+        # Depths are clamped to their region's num_bufs so the window never exceeds
+        # the buffers backing it.
+        awk -v p="$payload" -v bs="$payload" -v rxnb="$rx_nb" -v txnb="$tx_nb" '
+          /^[[:space:]]*- name:/ { region = $0 }
+          /^[[:space:]]*num_bufs:/ {
+            if (region ~ /RX/)      { sub(/num_bufs:.*/, "num_bufs: " rxnb) }
+            else if (region ~ /TX/) { sub(/num_bufs:.*/, "num_bufs: " txnb) }
+            print; next
+          }
+          /^[[:space:]]*buf_size:/      { sub(/buf_size:.*/,      "buf_size: " bs);   print; next }
+          /^[[:space:]]*message_size:/  { sub(/message_size:.*/,  "message_size: " p); print; next }
+          /^[[:space:]]*rx_depth:/      { sub(/rx_depth:.*/,      "rx_depth: " rxnb); print; next }
+          /^[[:space:]]*tx_depth:/      { sub(/tx_depth:.*/,      "tx_depth: " txnb); print; next }
+          { print }
+        ' "$src" > "$dst"
+      done
       ;;
   esac
 }

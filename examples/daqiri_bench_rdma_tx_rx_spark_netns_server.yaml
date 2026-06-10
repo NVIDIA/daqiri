@@ -21,13 +21,15 @@ daqiri:
     debug: false
     log_level: "info"
 
+    # num_bufs must be >= the flow-control window (rx_depth for RX, tx_depth for
+    # TX) below, or is_tx_burst_available() caps the effective window at num_bufs
+    # and throttles small-message op-rate. buf_size is 10 MB: comfortably above the
+    # 8 MB largest sweep message and symmetric with the client, while bounding
+    # pinned memory (128 * 10 MB * 2 MRs ~= 2.5 GB/process) instead of the ~23 GB a
+    # 90 MB buffer would need at this depth.
+    # run_spark_bench.sh's rdma sweep rewrites num_bufs/buf_size/{rx,tx}_depth per
+    # message size (deep window at small sizes, memory-capped at large ones).
     memory_regions:
-    # num_bufs is sized above the bench's kMaxOutstanding (64) so the RX/TX
-    # queues never starve mid-flight -- a shallow depth (20) caps the in-flight
-    # window and throttles small-message op-rate. buf_size is 10 MB: comfortably
-    # above the 8 MB largest sweep message and symmetric with the client, while
-    # bounding pinned memory (128 * 10 MB * 2 MRs ~= 2.5 GB/process) instead of
-    # the ~23 GB a 90 MB buffer would need at this depth.
     - name: "DATA_RX_GPU_SERVER"
       kind: "host_pinned"
       affinity: 0
@@ -65,6 +67,11 @@ rdma_bench_server:
   server_address: 10.250.0.2
   server_port: 4096
   message_size: 8000000
+  # Flow-control windows (PR #144). Pre-post rx_depth receives before sending and
+  # bound the transmit side by tx_depth so small-message SENDs don't outrun the
+  # peer's posted receives and trigger RNR NACKs. Keep <= the MR num_bufs above.
+  rx_depth: 128
+  tx_depth: 128
   send: true
   receive: true
   server: true
