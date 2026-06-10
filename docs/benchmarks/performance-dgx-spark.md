@@ -249,6 +249,23 @@ export ETH_DST_ADDR=$(cat /sys/class/net/<rx-iface>/address)
 ./examples/run_spark_bench.sh dpdk sweep
 ```
 
+The **multi-queue core-scaling matrix and payload sweep** run on the same
+physical loopback (netns down). Unlike the sweep above, the four multi-queue
+configs read `eth_dst_addr` from the file, so fill it with the rx-iface MAC
+first, then run the sweep and render the plot:
+
+```bash
+ETH_DST_ADDR=$(cat /sys/class/net/<rx-iface>/address)
+sed -i "s/<00:00:00:00:00:00>/$ETH_DST_ADDR/" \
+  examples/daqiri_bench_raw_tx_rx_spark_mq_1t1r.yaml \
+  examples/daqiri_bench_raw_tx_rx_spark_mq_1t2r.yaml \
+  examples/daqiri_bench_raw_tx_rx_spark_mq_2t1r.yaml \
+  examples/daqiri_bench_raw_tx_rx_spark_mq_2t2r.yaml
+./examples/run_spark_mq_bench.sh                       # 4 cells x payload sweep, 30 s each
+# render the line plot (needs matplotlib in a venv -- not a runtime dependency):
+./scripts/plot_mq_payload_sweep.py bench-results/<ts>-dpdk-mq/runs.csv
+```
+
 **Socket / RoCE and sockets** cross the cable through the `dq_wire_client` →
 `dq_wire_server` namespaces. Bring the loopback up and confirm PHY counters move
 before running; tear it down when finished:
