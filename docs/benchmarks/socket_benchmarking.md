@@ -295,6 +295,14 @@ Start from `examples/daqiri_bench_rdma_tx_rx.yaml` or `examples/daqiri_bench_rdm
   --seconds 10 --mode both
 ```
 
+`rdma_bench_server` and `rdma_bench_client` accept optional `tx_depth` and
+`rx_depth` fields. The defaults follow the `ib_send_bw` shape:
+`tx_depth: 128`, `rx_depth: 512`. The benchmark preposts receive work before
+sending, refills receive work after completions, and keeps the transmit side
+bounded by `tx_depth`. For 4 KiB SEND-style stress tests, set the RX/TX
+memory-region `num_bufs` high enough for the chosen windows, for example at
+least `rx_depth` receive buffers and `tx_depth` transmit buffers per side.
+
 For namespace testing, split the file by role just as in the Linux socket test:
 
 - The server YAML keeps the server memory regions, the server interface with `socket_config.mode: server`, and `rdma_bench_server`.

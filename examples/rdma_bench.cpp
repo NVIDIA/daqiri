@@ -41,6 +41,8 @@ struct RdmaBenchConfig {
   bool send = false;
   bool receive = false;
   int message_size = 1024;
+  int tx_depth = 128;
+  int rx_depth = 512;
   std::string server_address = "10.100.1.1";
   std::string client_address = "10.100.4.1";
   uint16_t server_port = 4096;
@@ -59,6 +61,10 @@ RdmaBenchConfig parse_rdma_cfg(const YAML::Node& node) {
   cfg.send = node["send"].as<bool>(cfg.send);
   cfg.receive = node["receive"].as<bool>(cfg.receive);
   cfg.message_size = node["message_size"].as<int>(cfg.message_size);
+  cfg.tx_depth = node["tx_depth"].as<int>(cfg.tx_depth);
+  cfg.rx_depth = node["rx_depth"].as<int>(cfg.rx_depth);
+  if (cfg.tx_depth < 1) { cfg.tx_depth = 1; }
+  if (cfg.rx_depth < 1) { cfg.rx_depth = 1; }
   cfg.server_address = node["server_address"].as<std::string>(cfg.server_address);
   cfg.client_address = node["client_address"].as<std::string>(cfg.client_address);
   cfg.server_port = node["server_port"].as<uint16_t>(cfg.server_port);
@@ -67,10 +73,6 @@ RdmaBenchConfig parse_rdma_cfg(const YAML::Node& node) {
 
 void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pacer,
                  std::atomic<bool>& stop, RdmaWorkerStats& stats) {
-  // Application credit limit. Buffer exhaustion is handled as backpressure so
-  // this can be larger than a memory region's num_bufs: post_req returns to the
-  // outer loop, which drains completions and releases buffers before retrying.
-  static constexpr int kMaxOutstanding = 64;
   int outstanding_send = 0;
   int outstanding_recv = 0;
   uint64_t send_wr_id = 0x1234;
@@ -94,15 +96,20 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
       }
     }
 
-    auto post_req = [&](int& outstanding, uint64_t& wr_id, daqiri::RDMAOpCode op,
+    auto post_req = [&](int& outstanding, int depth, uint64_t& wr_id, daqiri::RDMAOpCode op,
                         const std::string& mr_name) -> bool {
-      if (outstanding >= kMaxOutstanding) { return false; }
+      if (outstanding >= depth) { return false; }
 
       auto* msg = daqiri::create_tx_burst_params();
       if (msg == nullptr) { return false; }
 
       if (daqiri::rdma_set_header(msg, op, conn_id, cfg.server, 1, wr_id, mr_name) !=
           daqiri::Status::SUCCESS) {
+        daqiri::free_tx_metadata(msg);
+        return false;
+      }
+
+      if (!daqiri::is_tx_burst_available(msg)) {
         daqiri::free_tx_metadata(msg);
         return false;
       }
@@ -126,6 +133,17 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
       return true;
     };
 
+    auto refill_receives = [&]() -> bool {
+      bool posted = false;
+      while (cfg.receive && outstanding_recv < cfg.rx_depth &&
+             post_req(outstanding_recv, cfg.rx_depth, recv_wr_id, daqiri::RDMAOpCode::RECEIVE,
+                      recv_mr)) {
+        posted = true;
+      }
+      return posted;
+    };
+
+    bool posted_work = refill_receives();
     bool got_completion = false;
     while (true) {
       daqiri::BurstParams* completion = nullptr;
@@ -133,12 +151,12 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
       if (completion_status != daqiri::Status::SUCCESS || completion == nullptr) { break; }
 
       got_completion = true;
-      if (daqiri::rdma_get_opcode(completion) == daqiri::RDMAOpCode::SEND && outstanding_send > 0) {
+      const auto opcode = daqiri::rdma_get_opcode(completion);
+      if (opcode == daqiri::RDMAOpCode::SEND && outstanding_send > 0) {
         outstanding_send--;
         stats.send_completions++;
         stats.send_bytes += static_cast<uint64_t>(cfg.message_size);
-      } else if (daqiri::rdma_get_opcode(completion) == daqiri::RDMAOpCode::RECEIVE &&
-                 outstanding_recv > 0) {
+      } else if (opcode == daqiri::RDMAOpCode::RECEIVE && outstanding_recv > 0) {
         outstanding_recv--;
         stats.recv_completions++;
         stats.recv_bytes += static_cast<uint64_t>(cfg.message_size);
@@ -146,16 +164,12 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
       daqiri::free_tx_burst(completion);
     }
 
-    bool posted_work = false;
-    if (cfg.receive) {
-      while (outstanding_recv < kMaxOutstanding &&
-             post_req(outstanding_recv, recv_wr_id, daqiri::RDMAOpCode::RECEIVE, recv_mr)) {
-        posted_work = true;
-      }
-    }
-    if (cfg.send) {
-      while (outstanding_send < kMaxOutstanding &&
-             post_req(outstanding_send, send_wr_id, daqiri::RDMAOpCode::SEND, send_mr)) {
+    posted_work = refill_receives() || posted_work;
+    const bool local_receive_window_ready = !cfg.receive || outstanding_recv > 0;
+    if (cfg.send && local_receive_window_ready) {
+      while (outstanding_send < cfg.tx_depth &&
+             post_req(outstanding_send, cfg.tx_depth, send_wr_id, daqiri::RDMAOpCode::SEND,
+                      send_mr)) {
         posted_work = true;
       }
     }
