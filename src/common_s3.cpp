@@ -43,6 +43,8 @@ namespace daqiri {
 
 namespace {
 
+#if DAQIRI_ENABLE_S3
+
 static constexpr uint64_t kMaxSinglePutObjectBytes =
     5ULL * 1024ULL * 1024ULL * 1024ULL;
 
@@ -267,8 +269,6 @@ Status copy_packet_to_staging(BurstParams *burst, uint32_t packet_index,
 
   return Status::SUCCESS;
 }
-
-#if DAQIRI_ENABLE_S3
 
 static constexpr const char *kAwsAllocTag = "daqiri_s3";
 
