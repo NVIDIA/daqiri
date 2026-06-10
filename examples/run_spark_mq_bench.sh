@@ -6,7 +6,8 @@
 # DGX Spark DPDK multi-queue core-scaling sweep (issue #15, "Phase 5").
 #
 # Runs daqiri_bench_raw_gpudirect across the four pre-finalized multi-queue
-# configs to show raw-Ethernet throughput scaling as TX/RX CPU cores are added.
+# configs, at each of a set of payload sizes, to show raw-Ethernet throughput
+# scaling as TX/RX CPU cores are added and how that scaling varies with payload.
 # The matrix cells are (TX cores, RX cores) = (1,1), (1,2), (2,1), (2,2); the
 # goal is to demonstrate (2,2) > (1,1) when a single core is the bottleneck.
 #
@@ -16,16 +17,18 @@
 #   2t1r  daqiri_bench_raw_tx_rx_spark_mq_2t1r.yaml     16,17     18
 #   2t2r  daqiri_bench_raw_tx_rx_spark_mq_2t2r.yaml     16,17     18,19
 #
-# All four use the native 8 KB shape (payload_size 8000 + header_size 64),
-# host_pinned memory, over-the-wire loopback (tx 0000:01:00.0 -> rx
-# 0002:01:00.1), and master_core 8. The configs are already finalized with
-# eth_dst_addr filled in -- this script does NOT edit them.
+# All four use host_pinned memory, an over-the-wire loopback (tx 0000:01:00.0 ->
+# rx 0002:01:00.1), and master_core 8. The native shape is an 8000 B payload;
+# this script sweeps PAYLOADS (default 64..8000 B) by writing a temp copy of each
+# config with payload_size patched -- it NEVER edits the originals, so any
+# per-system eth_dst_addr fill in them is preserved.
 #
-# Per cell it captures: aggregate App TX/RX Gbps and pps (summed across all
-# bench TX/RX queues), DPDK drops (imissed+ierrors+rx_nombuf from the manager
+# Per (cell, payload) it captures: aggregate App RX Gbps and pps (summed across
+# all bench RX queues), DPDK drops (imissed+ierrors+rx_nombuf from the manager
 # log), per-core busy% for cores 8/16/17/18/19, and a wire-traffic check via the
-# NIC *_phy SerDes counters. One combined CSV row per cell is written to
-# bench-results/<ts>-dpdk-mq/runs.csv.
+# NIC *_phy SerDes counters. One combined CSV row per (cell, payload) is written
+# to bench-results/<ts>-dpdk-mq/runs.csv. Render the line plot afterwards with:
+#   scripts/plot_mq_payload_sweep.py bench-results/<ts>-dpdk-mq/runs.csv
 #
 # === RUN AS ROOT IN THE PRIVILEGED PROJECT CONTAINER (per AGENTS.md). ===
 #
@@ -47,7 +50,8 @@
 #
 # Optional environment in the current shell:
 #   DAQIRI_BUILD_DIR — path to the cmake build dir (defaults to ../build).
-#   RUN_SECONDS      — per-cell run length in seconds (default 30).
+#   RUN_SECONDS      — per-(cell,payload) run length in seconds (default 30).
+#   PAYLOADS         — space-separated payload byte sizes (default "64 256 1024 4096 8000").
 
 set -u
 set -o pipefail
@@ -60,6 +64,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="${DAQIRI_BUILD_DIR:-$SCRIPT_DIR/../build}"
 BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_raw_gpudirect"
 RUN_SECONDS="${RUN_SECONDS:-30}"
+PAYLOADS="${PAYLOADS:-64 256 1024 4096 8000}"
 
 # Match run_spark_bench.sh: prefer the installed shared libs, falling back to
 # the build tree. Keep both so a fresh build dir still resolves.
@@ -70,7 +75,7 @@ OUT_DIR="$SCRIPT_DIR/../bench-results/$TS-dpdk-mq"
 mkdir -p "$OUT_DIR"
 
 CSV="$OUT_DIR/runs.csv"
-echo "cell,tx_cores,rx_cores,gbps,pps,drops,cpu8,cpu16,cpu17,cpu18,cpu19" > "$CSV"
+echo "cell,tx_cores,rx_cores,payload,gbps,pps,drops,cpu8,cpu16,cpu17,cpu18,cpu19" > "$CSV"
 
 # Capture slow-moving environment state once per result set (mirrors
 # run_spark_bench.sh). Best-effort -- skip if the helper is unavailable.
@@ -94,12 +99,14 @@ if [[ -z "$RX_NETDEV" ]]; then
   RX_NETDEV="$(ls "/sys/bus/pci/devices/$RX_PCI/net" 2>/dev/null | head -n1 || true)"
 fi
 
-# cell name -> "config-basename tx_cores rx_cores"
+# cell name -> "config-basename tx_cores rx_cores". Multi-core lists use '|' (not
+# ',') so the values stay single CSV fields -- a comma here would split the row
+# and misalign every column after it.
 CELLS=(
   "1t1r daqiri_bench_raw_tx_rx_spark_mq_1t1r.yaml 16 18"
-  "1t2r daqiri_bench_raw_tx_rx_spark_mq_1t2r.yaml 16 18,19"
-  "2t1r daqiri_bench_raw_tx_rx_spark_mq_2t1r.yaml 16,17 18"
-  "2t2r daqiri_bench_raw_tx_rx_spark_mq_2t2r.yaml 16,17 18,19"
+  "1t2r daqiri_bench_raw_tx_rx_spark_mq_1t2r.yaml 16 18|19"
+  "2t1r daqiri_bench_raw_tx_rx_spark_mq_2t1r.yaml 16|17 18"
+  "2t2r daqiri_bench_raw_tx_rx_spark_mq_2t2r.yaml 16|17 18|19"
 )
 
 # Cores to sample busy% for, in CSV column order.
@@ -176,31 +183,36 @@ phy_rx_packets() {
 }
 
 # --------------------------------------------------------------------------
-# Run one cell
+# Run one (cell, payload)
 # --------------------------------------------------------------------------
 
 run_cell() {
-  local cell="$1" cfg_name="$2" tx_cores="$3" rx_cores="$4"
+  local cell="$1" cfg_name="$2" tx_cores="$3" rx_cores="$4" payload="$5"
   local cfg="$SCRIPT_DIR/$cfg_name"
-  local cell_dir="$OUT_DIR/$cell"
-  mkdir -p "$cell_dir"
+  local run_dir="$OUT_DIR/$cell/p$payload"
+  mkdir -p "$run_dir"
 
   if [[ ! -f "$cfg" ]]; then
     echo "ERROR: $cell config not found: $cfg" >&2
     return 1
   fi
 
-  local stdout="$cell_dir/stdout.txt"
-  local stderr="$cell_dir/stderr.txt"
+  # Temp config with payload_size patched -- never touch the original (preserves
+  # its per-system eth_dst_addr). header_size and everything else are unchanged.
+  local tmp_cfg="$run_dir/config.yaml"
+  sed -E "s/^( *payload_size: ).*/\1$payload/" "$cfg" > "$tmp_cfg"
 
-  snapshot_cpu_stat "$cell_dir/cpu_stat.before"
+  local stdout="$run_dir/stdout.txt"
+  local stderr="$run_dir/stderr.txt"
+
+  snapshot_cpu_stat "$run_dir/cpu_stat.before"
   local phy_before; phy_before="$(phy_rx_packets)"
 
   local bench_rc=0
-  "$BENCH_BIN" "$cfg" --seconds "$RUN_SECONDS" > "$stdout" 2> "$stderr" || bench_rc=$?
+  "$BENCH_BIN" "$tmp_cfg" --seconds "$RUN_SECONDS" > "$stdout" 2> "$stderr" || bench_rc=$?
 
   local phy_after; phy_after="$(phy_rx_packets)"
-  snapshot_cpu_stat "$cell_dir/cpu_stat.after"
+  snapshot_cpu_stat "$run_dir/cpu_stat.after"
 
   # Aggregate RX is authoritative throughput; sum across all RX-queue lines.
   local pkts bytes secs
@@ -209,8 +221,8 @@ run_cell() {
   secs="$(max_field 'RX complete' seconds "$stdout")"
 
   if [[ "$bench_rc" -ne 0 || "${pkts:-0}" -eq 0 || -z "${secs:-}" || "$secs" == "0" ]]; then
-    [[ "$bench_rc" -ne 0 ]] && echo "ERROR: $cell bench exited with status $bench_rc" >&2
-    [[ "${pkts:-0}" -eq 0 ]] && echo "ERROR: $cell produced no parseable RX completion stats" >&2
+    [[ "$bench_rc" -ne 0 ]] && echo "ERROR: $cell p$payload bench exited with status $bench_rc" >&2
+    [[ "${pkts:-0}" -eq 0 ]] && echo "ERROR: $cell p$payload produced no parseable RX completion stats" >&2
     echo "       stdout: $stdout" >&2
     echo "       stderr: $stderr" >&2
     return 1
@@ -225,36 +237,40 @@ run_cell() {
   # Wire-traffic confirmation: rx_packets_phy must advance over the run.
   local phy_delta=$(( phy_after - phy_before ))
   if [[ -z "$RX_NETDEV" ]]; then
-    echo "WARN: $cell could not resolve RX netdev for $RX_PCI; skipped wire (*_phy) check" >&2
+    echo "WARN: $cell p$payload could not resolve RX netdev for $RX_PCI; skipped wire (*_phy) check" >&2
   elif [[ "$phy_delta" -le 0 ]]; then
-    echo "WARN: $cell rx_packets_phy did not advance ($phy_delta) -- traffic may not have crossed the wire" >&2
+    echo "WARN: $cell p$payload rx_packets_phy did not advance ($phy_delta) -- traffic may not have crossed the wire" >&2
   else
-    echo "INFO: $cell wire OK -- rx_packets_phy +$phy_delta" >&2
+    echo "INFO: $cell p$payload wire OK -- rx_packets_phy +$phy_delta" >&2
   fi
 
   # Per-core busy% over the bench window, in CSV column order (8,16,17,18,19).
   local cpu_vals=()
   local c
   for c in "${CPU_CORES[@]}"; do
-    cpu_vals+=("$(cpu_busy_pct "$cell_dir/cpu_stat.before" "$cell_dir/cpu_stat.after" "$c")")
+    cpu_vals+=("$(cpu_busy_pct "$run_dir/cpu_stat.before" "$run_dir/cpu_stat.after" "$c")")
   done
 
   local cpu_csv; cpu_csv="$(IFS=,; echo "${cpu_vals[*]}")"
-  echo "$cell,$tx_cores,$rx_cores,$gbps,$pps,$drops,$cpu_csv" | tee -a "$CSV"
+  echo "$cell,$tx_cores,$rx_cores,$payload,$gbps,$pps,$drops,$cpu_csv" | tee -a "$CSV"
 }
 
 # --------------------------------------------------------------------------
 # Driver
 # --------------------------------------------------------------------------
 
-echo "Multi-queue core-scaling sweep -- ${RUN_SECONDS}s per cell"
+echo "Multi-queue payload sweep -- ${RUN_SECONDS}s per (cell, payload)"
+echo "Payloads: $PAYLOADS"
 echo "Build dir: $BUILD_DIR"
 echo "RX netdev for wire (*_phy) check: ${RX_NETDEV:-<unresolved>} ($RX_PCI)"
 echo
 
 for entry in "${CELLS[@]}"; do
   read -r cell cfg_name tx_cores rx_cores <<< "$entry"
-  run_cell "$cell" "$cfg_name" "$tx_cores" "$rx_cores" || FAILURES=$((FAILURES + 1))
+  for payload in $PAYLOADS; do
+    run_cell "$cell" "$cfg_name" "$tx_cores" "$rx_cores" "$payload" \
+      || FAILURES=$((FAILURES + 1))
+  done
 done
 
 # --------------------------------------------------------------------------
@@ -262,17 +278,18 @@ done
 # --------------------------------------------------------------------------
 
 echo
-echo "==================== Multi-queue core scaling ===================="
-printf "%-6s %-9s %-9s %10s %14s %8s\n" "cell" "tx_cores" "rx_cores" "Gbps" "pps" "drops"
-printf "%-6s %-9s %-9s %10s %14s %8s\n" "----" "--------" "--------" "----" "---" "-----"
+echo "==================== Multi-queue payload sweep ===================="
+printf "%-6s %-9s %-9s %8s %10s %14s %8s\n" "cell" "tx_cores" "rx_cores" "payload" "Gbps" "pps" "drops"
+printf "%-6s %-9s %-9s %8s %10s %14s %8s\n" "----" "--------" "--------" "-------" "----" "---" "-----"
 # Re-read the CSV (skip header) so the table reflects exactly what was recorded.
-while IFS=, read -r cell tx_cores rx_cores gbps pps drops _rest; do
-  printf "%-6s %-9s %-9s %10s %14s %8s\n" "$cell" "$tx_cores" "$rx_cores" "$gbps" "$pps" "$drops"
+while IFS=, read -r cell tx_cores rx_cores payload gbps pps drops _rest; do
+  printf "%-6s %-9s %-9s %8s %10s %14s %8s\n" "$cell" "$tx_cores" "$rx_cores" "$payload" "$gbps" "$pps" "$drops"
 done < <(tail -n +2 "$CSV")
-echo "=================================================================="
+echo "==================================================================="
 echo
 echo "Results in: $OUT_DIR"
 echo "CSV:        $CSV"
+echo "Plot:       scripts/plot_mq_payload_sweep.py $CSV"
 
 if [[ "$FAILURES" -ne 0 ]]; then
   echo "Failed cells: $FAILURES" >&2
