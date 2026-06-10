@@ -1060,31 +1060,44 @@ body.graphic-overlay-open {
   white-space: nowrap;
 }
 
-.daqiri-landing .btn-primary {
+[data-md-color-scheme="slate"] .md-typeset .daqiri-landing a.btn-primary,
+[data-md-color-scheme="slate"] .md-typeset .daqiri-landing a.btn-primary:hover,
+[data-md-color-scheme="slate"] .md-typeset .daqiri-landing a.btn-primary:focus,
+[data-md-color-scheme="default"] .md-typeset .daqiri-landing a.btn-primary,
+[data-md-color-scheme="default"] .md-typeset .daqiri-landing a.btn-primary:hover,
+[data-md-color-scheme="default"] .md-typeset .daqiri-landing a.btn-primary:focus {
+  color: #000;
+}
+
+.daqiri-landing a.btn-primary,
+.daqiri-landing a.btn-primary:hover,
+.daqiri-landing a.btn-primary:focus {
   background: var(--nv-green);
   color: #000;
   border-color: var(--nv-green);
 }
 
-.daqiri-landing .btn-primary:hover {
+.daqiri-landing a.btn-primary:hover {
   background: var(--nv-green-l);
   border-color: var(--nv-green-l);
   color: #000;
 }
 
-.daqiri-landing .btn-outline {
+.daqiri-landing a.btn-outline {
   background: transparent;
   color: var(--text-mut);
   border-color: var(--border);
 }
 
-.daqiri-landing .btn-outline:hover {
+.daqiri-landing a.btn-outline:hover,
+.daqiri-landing a.btn-outline:focus {
   color: var(--text-pri);
   border-color: #444;
   background: rgba(255, 255, 255, 0.04);
 }
 
-[data-md-color-scheme="default"] .daqiri-landing .btn-outline:hover {
+[data-md-color-scheme="default"] .daqiri-landing a.btn-outline:hover,
+[data-md-color-scheme="default"] .daqiri-landing a.btn-outline:focus {
   border-color: #bdbdbd;
   background: rgba(0, 0, 0, 0.04);
 }
