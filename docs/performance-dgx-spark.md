@@ -42,10 +42,10 @@ has no operation boundary.
 | Stream / Protocol               | C++ loopback   | C++ + FFT        | C++ + GEMM       | Python loopback   | Python + FFT     | Python + GEMM    |
 | ------------------------------- | -------------- | ---------------- | ---------------- | ----------------- | ---------------- | ---------------- |
 | Raw Ethernet / GPUDirect        | **98.5**       | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ |
-| Socket / RoCE                   | 3.41[^1]       | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ |
+| Socket / RoCE                   | 19.5[^1]       | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ |
 | Socket / UDP (8 KB, 4 pairs)    | 34.0[^2]       | n/a              | n/a              | _TBD (follow-up)_ | n/a              | n/a              |
 
-[^1]: RoCE single-host loopback on Spark requires host network prereqs before the bench can use the cable — see [Tuning prerequisites](#tuning-prerequisites). The native-shape 8 MB cell saturates at ~101 Gbps one-way (single QP, batch 1, drop-free); the matched 8 KB cell (~3.41 Gbps) is op-rate-bound by per-operation software overhead (~52k ops/s), not a platform limit for large transfers. Earlier builds collapsed below ~1 MB to near-zero — a 655 ms RNR-timer stall fixed in [issue #126](https://github.com/NVIDIA/daqiri/issues/126).
+[^1]: RoCE single-host loopback on Spark requires host network prereqs before the bench can use the cable — see [Tuning prerequisites](#tuning-prerequisites). The native-shape 8 MB cell saturates at ~101 Gbps one-way (single QP, batch 1, drop-free); the matched 8 KB cell (~19.5 Gbps) is op-rate-bound by per-operation software overhead (~297k ops/s), not a platform limit for large transfers. Earlier builds collapsed below ~1 MB to near-zero — a 655 ms RNR-timer stall fixed in [issue #126](https://github.com/NVIDIA/daqiri/issues/126), after which the per-message flow-control window ([PR #144](https://github.com/NVIDIA/daqiri/pull/144)) lifted the op-rate ceiling a further ~6× at 4–8 KB (e.g. 8 KB 3.41 → 19.5 Gbps).
 [^2]: Socket UDP value is the four-pair aggregate App RX (receiver goodput) at 8000 B from `bench-results/20260608T165358Z-socket-udp-sweep`. UDP is unpaced (no flow control), so each sender outruns its receiver and the cell carries ~57% app-level loss — an inherent property of unpaced UDP, not a fault. Goodput scales with the pair count (one isolated core per pair). See the [Socket](#socket) section for the full message-size × pairs matrix.
 [^3]: Socket TCP value is the four-pair aggregate at 8000 B from `bench-results/20260608T190527Z-socket-tcp-sweep`. TCP self-paces via flow control, so App TX = App RX with ~0 loss. The earlier "glibc heap-corruption" was **not** a red herring: `socket_bench` memsets a full `message_size` into a `buf_size` TX buffer, so any `message_size > buf_size` overflows the heap (`SIGABRT`). It is avoided here by sizing `buf_size >= message_size` in the netns configs; the bench-validation gap is captured in `socket-bench-bufsize-issue.md`.
 
@@ -446,31 +446,39 @@ All cells: batch 1, unpaced, 30 s, `drops == 0`.
 
 | message_size | Pkts/s | Gbps   | Notes                                |
 | ------------ | -----: | -----: | ------------------------------------ |
-| 8 MB         |   1,590 | **101.8** | Native shape; saturates single QP.   |
-| 1 MB         |  12,028 |  100.9 | Same wire ceiling, more pps.          |
-| 64 KB        | 182,592 |   95.7 | Near wire ceiling once the queue is deep enough. |
-| 8 KB         |  51,976 |   3.41 | Op-rate-bound; per-op overhead.       |
-| 4 KB         |  39,219 |   1.29 | Op-rate-bound, drop-free.             |
+| 8 MB         |   1,586 | **101.5** | Native shape; saturates single QP.   |
+| 1 MB         |  12,117 |  101.6 | Same wire ceiling, more pps.          |
+| 64 KB        | 193,734 |  101.6 | Full wire ceiling with the flow-control window. |
+| 8 KB         | 297,382 |  19.49 | Op-rate-bound; per-op overhead.       |
+| 4 KB         | 309,537 |  10.14 | Op-rate-bound, drop-free.             |
 
-Messages ≥64 KB hold ~96–102 Gbps at the wire ceiling — 64 KB reaches it once
-the RX/TX queue depth (`num_bufs`) is sized above the bench's in-flight window
-so the queue never starves. Below ~64 KB the path is operation-rate-bound rather
-than wire-bound: pps plateaus near ~40–52k ops/s where per-operation software
-overhead (single manager thread, per-op alloc/post/poll/free) dominates. Every
-cell is drop-free.
+Messages ≥64 KB hold ~101–102 Gbps at the wire ceiling — 64 KB now reaches it in
+full once the per-message flow-control window pre-posts receives and sizes the
+RX/TX queue depth (`num_bufs`) above the in-flight window so the queue never
+starves. Below ~64 KB the path is operation-rate-bound rather than wire-bound:
+pps plateaus near ~300k ops/s where per-operation software overhead (single
+manager thread, per-op alloc/post/poll/free) dominates. Every cell is drop-free.
 
-An earlier build collapsed below ~1 MB to near-zero (e.g. 8 KB ≈ 0.004 Gbps):
-rdma_cm negotiated `min_rnr_timer = 0` (655.36 ms) with infinite RNR retry, so a
-transient RECV-queue underrun on fast small messages stalled the sender for
-655 ms with no CQE error and no drop. Lowering `min_rnr_timer` to 0.64 ms fixed
-it ([issue #126](https://github.com/NVIDIA/daqiri/issues/126)).
+Two complementary fixes got the small-message path here. **(1)** An earlier build
+collapsed below ~1 MB to near-zero (e.g. 8 KB ≈ 0.004 Gbps): rdma_cm negotiated
+`min_rnr_timer = 0` (655.36 ms) with infinite RNR retry, so a transient
+RECV-queue underrun on fast small messages stalled the sender for 655 ms with no
+CQE error and no drop. Lowering `min_rnr_timer` to 0.64 ms fixed it
+([issue #126](https://github.com/NVIDIA/daqiri/issues/126)). **(2)** With the
+stall gone, 4–8 KB were still op-rate-bound at ~40–52k ops/s. The per-message
+flow-control window ([PR #144](https://github.com/NVIDIA/daqiri/pull/144)) —
+pre-post `rx_depth` receives before sending, bound the transmit side by
+`tx_depth`, and size `num_bufs` to match per message size — keeps enough in
+flight to amortize per-op overhead, lifting the op-rate ceiling ~6× (8 KB
+3.41 → 19.49 Gbps, 4 KB 1.29 → 10.14 Gbps) and bringing 64 KB to the full
+wire ceiling (95.7 → 101.6 Gbps).
 
 #### CPU and GPU utilization (headline cell, message 8 MB, batch 1, unpaced)
 
 | Channel              | Busy% | Note                                       |
 | -------------------- | ----: | ------------------------------------------ |
-| Master core (CPU 8)  |  7.3% | Orchestration only                         |
-| Client TX (CPU 17)   | 77.3% | Post-and-poll spin, rate-independent       |
+| Master core (CPU 8)  |  5.9% | Orchestration only                         |
+| Client TX (CPU 17)   | 74.9% | Post-and-poll spin, rate-independent       |
 | Server RX (CPU 18)   |  0.0% | HCA writes directly to memory; CPU is idle for RDMA writes |
 | GPU SM %             |  0.0% | GPU is a DMA target, not a compute engine  |
 | GPU mem-ctrl %       |  0.0% | Payload writes go through PCIe, not the GPU mem-controller |
@@ -715,10 +723,13 @@ data-plane ports `enp1s0f0np0` (1.1.1.1) and `enP2p1s0f0np0` (2.2.2.2).
   platforms where device memory works. See
   [issue #15](https://github.com/NVIDIA/daqiri/issues/15) for tracking.
 - **RoCE small messages are op-rate-bound (no longer a cliff).** Messages ≥64 KB
-  reach the ~96–102 Gbps wire ceiling; below ~64 KB throughput is set by the
+  reach the ~101–102 Gbps wire ceiling; below ~64 KB throughput is set by the
   operation rate (per-op software overhead), not a stall, and every cell is
-  drop-free — see the [RoCE](#roce) section. The earlier sub-1 MB collapse was a
-  655 ms RNR-timer stall fixed in [issue #126](https://github.com/NVIDIA/daqiri/issues/126).
+  drop-free — see the [RoCE](#roce) section. Two fixes got it here: the 655 ms
+  RNR-timer stall fixed in [issue #126](https://github.com/NVIDIA/daqiri/issues/126),
+  then the per-message flow-control window ([PR #144](https://github.com/NVIDIA/daqiri/pull/144))
+  that lifted the 4–8 KB op-rate ceiling ~6× (8 KB 3.41 → 19.49 Gbps) and brought
+  64 KB to the full ceiling.
 - **Socket UDP loss is inherent; the bench needs a buf_size guard.** Unpaced UDP
   drops whatever the receiver cannot drain — an intrinsic property of the
   protocol, not a fault — so the loss in the [Socket](#socket) UDP matrix is
