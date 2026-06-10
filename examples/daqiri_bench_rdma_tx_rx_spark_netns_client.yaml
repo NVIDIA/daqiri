@@ -22,16 +22,22 @@ daqiri:
     log_level: "info"
 
     memory_regions:
+    # num_bufs is sized above the bench's kMaxOutstanding (64) so the RX/TX
+    # queues never starve mid-flight -- a shallow depth (20) caps the in-flight
+    # window and throttles small-message op-rate. buf_size is 10 MB: comfortably
+    # above the 8 MB largest sweep message and symmetric with the server, while
+    # bounding pinned memory (128 * 10 MB * 2 MRs ~= 2.5 GB/process) instead of
+    # the ~23 GB a 90 MB buffer would need at this depth.
     - name: "DATA_TX_GPU_CLIENT"
       kind: "host_pinned"
       affinity: 0
-      num_bufs: 20
-      buf_size: 90000000
+      num_bufs: 128
+      buf_size: 10000000
     - name: "DATA_RX_GPU_CLIENT"
       kind: "host_pinned"
       affinity: 0
-      num_bufs: 20
-      buf_size: 90000000
+      num_bufs: 128
+      buf_size: 10000000
 
     interfaces:
     - name: my_client
