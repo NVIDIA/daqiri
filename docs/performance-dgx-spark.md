@@ -387,6 +387,52 @@ payload sizes (1 KB and below) it occasionally hits 90%+ as more bursts
 flow through the orchestration path. That asymmetry is data, not a bug,
 and is captured in the per-cell artifacts under `bench-results/`.
 
+#### Multi-queue core scaling
+
+The raw GPUDirect path is CPU-bound: each TX and RX queue is serviced by a
+single poll-mode core. At the native 8 KB shape (payload 8000 B, batch 10240) a
+single TX core caps throughput near ~98 Gb/s, while one RX core already drains
+the line — so the second TX core is what scales it (97.7 → 110 Gb/s), and a
+second RX core adds little. Each cell uses one isolated core per queue and one
+UDP flow per TX/RX queue pair. The matrix sweeps (TX cores, RX cores) over
+`(1,1)`, `(1,2)`, `(2,1)`, `(2,2)`; `(2,2)` beating `(1,1)` is the scaling
+result.
+
+The four cells map to `examples/daqiri_bench_raw_tx_rx_spark_mq_1t1r.yaml`,
+`examples/daqiri_bench_raw_tx_rx_spark_mq_1t2r.yaml`,
+`examples/daqiri_bench_raw_tx_rx_spark_mq_2t1r.yaml`, and
+`examples/daqiri_bench_raw_tx_rx_spark_mq_2t2r.yaml`
+(TX cores 16,17 ; RX cores 18,19 ; master core 8). Each ran for 30 s via
+`examples/run_spark_mq_bench.sh`; throughput is the aggregate App RX summed
+across all RX queues, and wire transit is confirmed by the RX netdev's
+`rx_packets_phy` counter advancing.
+
+| Cell  | TX cores | RX cores | Achieved Gbps | RX pps      | drops |
+| ----- | -------- | -------- | ------------- | ----------- | ----- |
+| (1,1) | 16       | 18       | 97.7        | 1,514,177 | 0 |
+| (1,2) | 16       | 18,19    | 98.3        | 1,524,248 | 0 |
+| (2,1) | 16,17    | 18       | **110.3**   | 1,709,978 | 0 |
+| (2,2) | 16,17    | 18,19    | **110.1**   | 1,706,411 | 0 |
+
+The 1→2 TX-core step adds ~13% (97.7 → 110 Gb/s; above 100 Gb/s nominal because
+these ConnectX-7 ports run to ~106 Gb/s on this loopback — see the batch-size
+table above), while the 1→2 RX-core step is within run-to-run noise (97.7 → 98.3
+with one TX core; 110.3 → 110.1 with two). Every cell is drop-free.
+
+Per-core busy% over each run (cores not used by a cell idle near 0%; the
+master core 8 handles orchestration only):
+
+| Cell  | Master (CPU 8) | CPU 16      | CPU 17      | CPU 18      | CPU 19      |
+| ----- | -------------- | ----------- | ----------- | ----------- | ----------- |
+| (1,1) | 3.7            | 91.5        | 0.0         | 91.5        | 1.1         |
+| (1,2) | 4.6            | 90.7        | 0.0         | 92.2        | 90.7        |
+| (2,1) | 4.7            | 89.8        | 91.1        | 89.8        | 0.0         |
+| (2,2) | 5.7            | 88.4        | 90.1        | 88.4        | 88.4        |
+
+In poll-mode every assigned core spins near ~90% regardless of useful work —
+note (1,2)'s second RX core (CPU 19) is busy at 90.7% yet adds no throughput, so
+busy% is not a "useful work" signal here; the throughput table is.
+
 ### RoCE
 
 Native shape on Spark is an 8 MB SEND, batch 1, single QP. The bench runs

@@ -1,0 +1,126 @@
+# DGX Spark (GB10) multi-queue core-scaling matrix -- cell (TX=2, RX=1).
+#
+# One of four configs derived from daqiri_bench_raw_tx_rx_4q.yaml to measure how
+# raw-Ethernet throughput scales as TX/RX CPU cores are added. The matrix cells
+# are (TX,RX) = (1,1),(1,2),(2,1),(2,2); see the sibling
+# daqiri_bench_raw_tx_rx_spark_mq_{1t1r,1t2r,2t2r}.yaml files.
+#
+# Shared Spark substitutions (same as daqiri_bench_raw_tx_rx_spark.yaml):
+#   - over-the-wire loopback: tx_port 0000:01:00.0 (p0) -> rx_port 0002:01:00.1
+#     (p1) are different physical ports cross-cabled by the chassis QSFP loop, so
+#     traffic crosses the cable. See the "Port topology" section of the "DGX
+#     Spark" tab in docs/tutorials/system_configuration.md.
+#   - kind: host_pinned (GB10 unified memory; nvidia_peermem does not load).
+#   - isolated big-cluster cores 16-19 (isolcpus): TX -> 16,17 ; RX -> 18,19.
+#   - master_core 8 (a non-isolated big core; any 0-15 works).
+#   - native shape: 8 KB payload (payload_size 8000 + header_size 64).
+#   - eth_dst_addr: your rx_port's (p1) own MAC; fill per-system, e.g.
+#       cat /sys/class/net/enP2p1s0f1np1/address
+#
+# Cell (2,1): two TX queues (cores 16,17) drive a single RX queue (core 18). Each
+# TX worker sends its own UDP flow -- tx_q_0 on (4096,4096) and tx_q_1 on
+# (4097,4097) -- and both flows route to rx_q_0, so the lone RX core absorbs the
+# combined load. Isolates TX-side scaling against a single RX bottleneck.
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    master_core: 8
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    memory_regions:
+    - name: "Data_TX_GPU_0"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+    - name: "Data_TX_GPU_1"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+    - name: "Data_RX_GPU_0"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+
+    interfaces:
+    - name: "tx_port"
+      address: 0000:01:00.0
+      tx:
+        queues:
+        - name: "tx_q_0"
+          id: 0
+          batch_size: 10240
+          cpu_core: 16
+          memory_regions:
+            - "Data_TX_GPU_0"
+          offloads:
+            - "tx_eth_src"
+        - name: "tx_q_1"
+          id: 1
+          batch_size: 10240
+          cpu_core: 17
+          memory_regions:
+            - "Data_TX_GPU_1"
+          offloads:
+            - "tx_eth_src"
+    - name: "rx_port"
+      address: 0002:01:00.1
+      rx:
+        flow_isolation: true
+        queues:
+        - name: "rx_q_0"
+          id: 0
+          cpu_core: 18
+          batch_size: 10240
+          memory_regions:
+            - "Data_RX_GPU_0"
+        flows:
+        - name: "flow_0"
+          id: 0
+          action:
+            type: queue
+            id: 0
+          match:
+            udp_src: 4096
+            udp_dst: 4096
+        - name: "flow_1"
+          id: 1
+          action:
+            type: queue
+            id: 0
+          match:
+            udp_src: 4097
+            udp_dst: 4097
+
+bench_rx:
+- interface_name: "rx_port"
+  queue_id: 0
+
+bench_tx:
+- interface_name: "tx_port"
+  queue_id: 0
+  batch_size: 10240
+  payload_size: 8000
+  header_size: 64
+  eth_dst_addr: <00:00:00:00:00:00>
+  ip_src_addr: 1.1.1.1
+  ip_dst_addr: 2.2.2.2
+  udp_src_port: 4096
+  udp_dst_port: 4096
+- interface_name: "tx_port"
+  queue_id: 1
+  batch_size: 10240
+  payload_size: 8000
+  header_size: 64
+  eth_dst_addr: <00:00:00:00:00:00>
+  ip_src_addr: 1.1.1.1
+  ip_dst_addr: 2.2.2.2
+  udp_src_port: 4097
+  udp_dst_port: 4097
