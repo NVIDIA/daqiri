@@ -149,7 +149,8 @@ RDMA transport settings:
 - **`memory_regions`**: List of memory region names (defined in [Memory Regions](#memory-regions)).
   The order determines segment mapping: first region = segment 0, second = segment 1, etc.
   A single region means all packet data lands in one place; two regions enables header-data
-  split.
+  split. A Raw Ethernet queue may reference at most **four** memory regions (one per packet
+  segment).
   - type: `list`
 - **`timeout_us`**: Timeout in microseconds. A partial batch is delivered if this time elapses
   before `batch_size` packets are collected. Set to `0` to disable (wait for full batch only).
