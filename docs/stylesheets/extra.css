@@ -1,4 +1,4 @@
-/* ── NVIDIA dark theme — Material override sheet ────────────────────── */
+/* ── NVIDIA theme — Material override sheet ─────────────────────────── */
 /* Mirrors the palette and typography of docs/index.html so             */
 /* Material-rendered pages share the landing page's visual style.       */
 
@@ -6,28 +6,66 @@
   --nv-green:   #76b900;
   --nv-green-d: #5a8f00;
   --nv-green-l: #a0d000;
+  --nv-radius:  8px;
+}
 
-  --nv-bg-dark:   #0a0a0a;
+/* Dark tokens (slate) */
+[data-md-color-scheme="slate"] {
+  --nv-bg-page:   #0a0a0a;
   --nv-bg-card:   #111111;
   --nv-bg-card2:  #161616;
   --nv-border:    #222222;
   --nv-text-pri:  #f0f0f0;
   --nv-text-mut:  #888888;
   --nv-text-dim:  #555555;
-  --nv-radius:    8px;
+  --nv-code-bg:   #0d0d0d;
+  --nv-code-inline-bg: #1a1a1a;
+  --nv-code-fg:   #cccccc;
+  --nv-link:      var(--nv-green);
+  --nv-link-hover: var(--nv-green-l);
+  --nv-table-row-border: #181818;
+}
+
+/* Light tokens (default) */
+[data-md-color-scheme="default"] {
+  --nv-bg-page:   #ffffff;
+  --nv-bg-card:   #f5f5f5;
+  --nv-bg-card2:  #eeeeee;
+  --nv-border:    #e0e0e0;
+  --nv-text-pri:  #1a1a1a;
+  --nv-text-mut:  #5c5c5c;
+  --nv-text-dim:  #757575;
+  --nv-code-bg:   #f8f8f8;
+  --nv-code-inline-bg: #f0f0f0;
+  --nv-code-fg:   #1a1a1a;
+  --nv-link:      var(--nv-green-d);
+  --nv-link-hover: var(--nv-green);
+  --nv-table-row-border: #e8e8e8;
 }
 
 /* ── Map design tokens onto Material's documented variables ──────────── */
 [data-md-color-scheme="slate"] {
-  --md-default-bg-color:           var(--nv-bg-dark);
+  --md-default-bg-color:           var(--nv-bg-page);
   --md-default-fg-color:           var(--nv-text-pri);
   --md-default-fg-color--light:    var(--nv-text-mut);
   --md-default-fg-color--lighter:  var(--nv-text-dim);
-  --md-code-bg-color:              #0d0d0d;
-  --md-code-fg-color:              #cccccc;
+  --md-code-bg-color:              var(--nv-code-bg);
+  --md-code-fg-color:              var(--nv-code-fg);
   --md-primary-fg-color:           #000000;
   --md-accent-fg-color:            var(--nv-green);
-  --md-typeset-a-color:            var(--nv-green);
+  --md-typeset-a-color:            var(--nv-link);
+}
+
+[data-md-color-scheme="default"] {
+  --md-default-bg-color:           var(--nv-bg-page);
+  --md-default-fg-color:           var(--nv-text-pri);
+  --md-default-fg-color--light:    var(--nv-text-mut);
+  --md-default-fg-color--lighter:  var(--nv-text-dim);
+  --md-code-bg-color:              var(--nv-code-bg);
+  --md-code-fg-color:              var(--nv-code-fg);
+  --md-primary-fg-color:           #000000;
+  --md-accent-fg-color:            var(--nv-green);
+  --md-typeset-a-color:            var(--nv-link);
 }
 
 /* ── Header / Tabs / Footer ──────────────────────────────────────────── */
@@ -53,6 +91,25 @@
   color: var(--nv-text-pri);
 }
 [data-md-color-scheme="slate"] .md-footer {
+  background: var(--nv-bg-card);
+  border-top: 1px solid var(--nv-border);
+}
+
+[data-md-color-scheme="default"] .md-header {
+  background: #000;
+}
+[data-md-color-scheme="default"] .md-tabs {
+  background: var(--nv-bg-card2);
+}
+[data-md-color-scheme="default"] .md-tabs__link {
+  color: var(--nv-text-mut);
+  opacity: 1;
+}
+[data-md-color-scheme="default"] .md-tabs__link:hover,
+[data-md-color-scheme="default"] .md-tabs__link--active {
+  color: var(--nv-text-pri);
+}
+[data-md-color-scheme="default"] .md-footer {
   background: var(--nv-bg-card);
   border-top: 1px solid var(--nv-border);
 }
@@ -86,17 +143,50 @@
   font-weight: 600;
 }
 
+[data-md-color-scheme="default"] .md-typeset {
+  font-size: 0.72rem;
+}
+[data-md-color-scheme="default"] .md-typeset h1 {
+  font-size: clamp(1.26rem, 2.8vw, 2.1rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--nv-text-pri);
+}
+[data-md-color-scheme="default"] .md-typeset h2 {
+  font-size: clamp(0.91rem, 1.75vw, 1.33rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+[data-md-color-scheme="default"] .md-typeset h3 {
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+[data-md-color-scheme="default"] .md-typeset h4 {
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
 /* ── Links ───────────────────────────────────────────────────────────── */
 [data-md-color-scheme="slate"] .md-typeset a {
-  color: var(--nv-green);
+  color: var(--nv-link);
 }
 [data-md-color-scheme="slate"] .md-typeset a:hover {
-  color: var(--nv-green-l);
+  color: var(--nv-link-hover);
+}
+
+[data-md-color-scheme="default"] .md-typeset a {
+  color: var(--nv-link);
+}
+[data-md-color-scheme="default"] .md-typeset a:hover {
+  color: var(--nv-link-hover);
 }
 
 /* ── Code (inline only — don't double-decorate code inside <pre>) ────── */
 [data-md-color-scheme="slate"] .md-typeset :not(pre) > code {
-  background: #1a1a1a;
+  background: var(--nv-code-inline-bg);
   border: 1px solid var(--nv-border);
   border-radius: 4px;
   padding: 2px 6px;
@@ -104,18 +194,70 @@
   font-size: 0.85em;
 }
 
+[data-md-color-scheme="default"] .md-typeset :not(pre) > code {
+  background: var(--nv-code-inline-bg);
+  border: 1px solid var(--nv-border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  color: var(--nv-green-d);
+  font-size: 0.85em;
+}
+
 /* ── Code blocks ─────────────────────────────────────────────────────── */
 [data-md-color-scheme="slate"] .md-typeset pre > code {
-  background: #0d0d0d;
+  background: var(--nv-code-bg);
   border: 1px solid var(--nv-border);
   border-radius: var(--nv-radius);
-  color: #cccccc;
+  color: var(--nv-code-fg);
   font-size: 0.72rem;
   line-height: 1.65;
 }
 [data-md-color-scheme="slate"] .md-typeset .highlight > pre,
 [data-md-color-scheme="slate"] .md-typeset .highlighttable .linenodiv pre {
-  background: #0d0d0d;
+  background: var(--nv-code-bg);
+}
+
+[data-md-color-scheme="default"] .md-typeset pre > code {
+  background: var(--nv-code-bg);
+  border: 1px solid var(--nv-border);
+  border-radius: var(--nv-radius);
+  color: var(--nv-code-fg);
+  font-size: 0.72rem;
+  line-height: 1.65;
+}
+[data-md-color-scheme="default"] .md-typeset .highlight > pre,
+[data-md-color-scheme="default"] .md-typeset .highlighttable .linenodiv pre {
+  background: var(--nv-code-bg);
+}
+
+/* Light-mode Pygments syntax colors */
+[data-md-color-scheme="default"] .highlight .c,
+[data-md-color-scheme="default"] .highlight .cm,
+[data-md-color-scheme="default"] .highlight .cp {
+  color: #757575;
+  font-style: italic;
+}
+[data-md-color-scheme="default"] .highlight .k,
+[data-md-color-scheme="default"] .highlight .kd,
+[data-md-color-scheme="default"] .highlight .kn,
+[data-md-color-scheme="default"] .highlight .kr {
+  color: #7b1fa2;
+}
+[data-md-color-scheme="default"] .highlight .s,
+[data-md-color-scheme="default"] .highlight .s1,
+[data-md-color-scheme="default"] .highlight .s2,
+[data-md-color-scheme="default"] .highlight .sb {
+  color: #2e7d32;
+}
+[data-md-color-scheme="default"] .highlight .nf,
+[data-md-color-scheme="default"] .highlight .nc,
+[data-md-color-scheme="default"] .highlight .nn {
+  color: #1565c0;
+}
+[data-md-color-scheme="default"] .highlight .m,
+[data-md-color-scheme="default"] .highlight .mi,
+[data-md-color-scheme="default"] .highlight .mf {
+  color: #5a8f00;
 }
 
 /* ── Content width ───────────────────────────────────────────────────── */
@@ -158,7 +300,25 @@
   border-bottom: 1px solid var(--nv-border);
 }
 [data-md-color-scheme="slate"] .md-typeset table:not([class]) td {
-  border-bottom: 1px solid #181818;
+  border-bottom: 1px solid var(--nv-table-row-border);
+  color: var(--nv-text-mut);
+}
+
+[data-md-color-scheme="default"] .md-typeset table:not([class]) {
+  border: 1px solid var(--nv-border);
+  background: var(--nv-bg-card);
+}
+[data-md-color-scheme="default"] .md-typeset table:not([class]) th {
+  background: var(--nv-bg-card2);
+  color: var(--nv-text-dim);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border-bottom: 1px solid var(--nv-border);
+}
+[data-md-color-scheme="default"] .md-typeset table:not([class]) td {
+  border-bottom: 1px solid var(--nv-table-row-border);
   color: var(--nv-text-mut);
 }
 
@@ -176,6 +336,21 @@
   color: var(--nv-green) !important;
   border-left: 2px solid var(--nv-green);
   background: rgba(118, 185, 0, 0.06);
+}
+
+[data-md-color-scheme="default"] .md-nav__link {
+  color: var(--nv-text-mut);
+  border-left: 2px solid transparent;
+  transition: color 0.2s ease, background 0.2s ease;
+}
+[data-md-color-scheme="default"] .md-nav__link:hover {
+  color: var(--nv-text-pri);
+  background: rgba(0, 0, 0, 0.04);
+}
+[data-md-color-scheme="default"] .md-nav__link--active {
+  color: var(--nv-green-d) !important;
+  border-left: 2px solid var(--nv-green);
+  background: rgba(118, 185, 0, 0.08);
 }
 
 /* ── Top-tab dropdowns (added by tab-dropdowns.js) ──────────────────── */
@@ -229,6 +404,9 @@
 /* Slightly stronger shadow in slate to read against the dark surface. */
 [data-md-color-scheme="slate"] .nv-tab-dropdown {
   box-shadow: 0 6px 28px rgba(0, 0, 0, 0.55);
+}
+[data-md-color-scheme="default"] .nv-tab-dropdown {
+  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.12);
 }
 /* Invisible bridge so the cursor can cross from tab to dropdown without
    the gap (top: 100% leaves no room for the cursor to slip through).    */
@@ -301,6 +479,30 @@
   color: #000;
 }
 
+[data-md-color-scheme="default"] .md-typeset .md-button {
+  background: transparent;
+  color: var(--nv-text-pri);
+  border: 1.5px solid var(--nv-border);
+  border-radius: var(--nv-radius);
+  padding: 0.5rem 1.25rem;
+  transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+[data-md-color-scheme="default"] .md-typeset .md-button:hover {
+  border-color: #bdbdbd;
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--nv-text-pri);
+}
+[data-md-color-scheme="default"] .md-typeset .md-button--primary {
+  background: var(--nv-green);
+  color: #000;
+  border-color: var(--nv-green);
+}
+[data-md-color-scheme="default"] .md-typeset .md-button--primary:hover {
+  background: var(--nv-green-l);
+  border-color: var(--nv-green-l);
+  color: #000;
+}
+
 /* ── Admonitions ─────────────────────────────────────────────────────── */
 /* note (existing, kept) */
 [data-md-color-scheme="slate"] .md-typeset .admonition.note,
@@ -348,6 +550,51 @@
 [data-md-color-scheme="slate"] .md-typeset .tip > .admonition-title::before,
 [data-md-color-scheme="slate"] .md-typeset .tip > summary::before {
   color: #aac4ff;
+}
+
+[data-md-color-scheme="default"] .md-typeset .admonition.note,
+[data-md-color-scheme="default"] .md-typeset details.note {
+  border-color: var(--nv-green);
+}
+[data-md-color-scheme="default"] .md-typeset .note > .admonition-title,
+[data-md-color-scheme="default"] .md-typeset .note > summary {
+  background-color: rgba(118, 185, 0, 0.12);
+}
+[data-md-color-scheme="default"] .md-typeset .note > .admonition-title::before,
+[data-md-color-scheme="default"] .md-typeset .note > summary::before {
+  color: var(--nv-green-d);
+}
+
+[data-md-color-scheme="default"] .md-typeset .admonition.warning,
+[data-md-color-scheme="default"] .md-typeset details.warning {
+  border-color: rgba(230, 162, 0, 0.5);
+}
+[data-md-color-scheme="default"] .md-typeset .warning > .admonition-title,
+[data-md-color-scheme="default"] .md-typeset .warning > summary {
+  background-color: rgba(255, 193, 7, 0.12);
+}
+[data-md-color-scheme="default"] .md-typeset .warning > .admonition-title::before,
+[data-md-color-scheme="default"] .md-typeset .warning > summary::before {
+  color: #c77c00;
+}
+
+[data-md-color-scheme="default"] .md-typeset .admonition.info,
+[data-md-color-scheme="default"] .md-typeset details.info,
+[data-md-color-scheme="default"] .md-typeset .admonition.tip,
+[data-md-color-scheme="default"] .md-typeset details.tip {
+  border-color: rgba(21, 101, 192, 0.35);
+}
+[data-md-color-scheme="default"] .md-typeset .info > .admonition-title,
+[data-md-color-scheme="default"] .md-typeset .info > summary,
+[data-md-color-scheme="default"] .md-typeset .tip > .admonition-title,
+[data-md-color-scheme="default"] .md-typeset .tip > summary {
+  background-color: rgba(21, 101, 192, 0.08);
+}
+[data-md-color-scheme="default"] .md-typeset .info > .admonition-title::before,
+[data-md-color-scheme="default"] .md-typeset .info > summary::before,
+[data-md-color-scheme="default"] .md-typeset .tip > .admonition-title::before,
+[data-md-color-scheme="default"] .md-typeset .tip > summary::before {
+  color: #1565c0;
 }
 
 /* ── Platform tabs (IGX Orin / DGX Spark) — enlarged labels ─────────── */
