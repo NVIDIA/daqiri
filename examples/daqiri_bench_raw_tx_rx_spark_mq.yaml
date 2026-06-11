@@ -118,12 +118,15 @@ daqiri:
 bench_rx:
 - interface_name: "rx_port"
   queue_id: 0
+  cpu_core: 18
 - interface_name: "rx_port"
   queue_id: 1
+  cpu_core: 19
 
 bench_tx:
 - interface_name: "tx_port"
   queue_id: 0
+  cpu_core: 16
   batch_size: 10240
   payload_size: 8000
   header_size: 64
@@ -134,6 +137,7 @@ bench_tx:
   udp_dst_port: 4096
 - interface_name: "tx_port"
   queue_id: 1
+  cpu_core: 17
   batch_size: 10240
   payload_size: 8000
   header_size: 64
