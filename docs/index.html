@@ -340,22 +340,18 @@
       <div class="hero-inner">
         <div class="hero-content">
           <div class="hero-eyebrow">NVIDIA Open Source · Data Acquisition</div>
-          <h1 class="hero-title">DAQIRI for Sensor Data<br>in <span class="hi">CPU or NVIDIA GPU Memory</span></h1>
+          <h1 class="hero-title">DAQIRI Connects Sensor Data to the <span class="hi">NVIDIA Compute Ecosystem</span></h1>
           <p class="hero-desc">
             DAQIRI (Data Acquisition for Integrated Real-time Instruments) moves high-bandwidth data between external
-            sensors and CPU or NVIDIA GPU memory. Streams can arrive from PCIe devices such as FPGAs or from network-capable sensors
+            sensors and GPU, CPU, or storage devices. Streams can arrive from PCIe devices such as FPGAs or from network-capable sensors
             over Raw Ethernet (UDP/TCP) or RoCE/RDMA, giving applications one zero-copy path for ingest and egress.
-            GPU-resident data can also write out through GPUDirect Storage.
+            DAQIRI not only accelerates data movement and storage at the instrument but can also be used to connect sensor data to HPC and Cloud systems.
           </p>
         </div>
         <div class="hero-visual">
           <button class="hero-visual-link" type="button" data-graphic-open aria-controls="daqiri-graphic-overlay" aria-label="Open the DAQIRI sensor data path graphic overlay">
-            <img src="images/daqiri-landing-graphic.svg" alt="DAQIRI moves PCIe FPGA and network sensor data into or out of CPU or NVIDIA GPU memory, then writes GPU data to storage through GPUDirect Storage" />
+            <img src="images/daqiri-landing-graphic.svg" alt="DAQIRI moves PCIe FPGA and network sensor data into or out of NVIDIA GPU or CPU memory, then writes GPU data to storage through GPUDirect Storage" />
           </button>
-        </div>
-        <div class="warn-banner">
-          <span style="font-size:1rem;flex-shrink:0;margin-top:.05rem;">⚠️</span>
-          <p>The library is undergoing large improvements as we aim to better support it as an NVIDIA product. API breakages may be more frequent until version 1.0.</p>
         </div>
         <div class="hero-actions">
           <a href="#getting-started" class="btn btn-primary">Quick Start →</a>
@@ -826,7 +822,7 @@ cmake --build build -j</pre>
           </svg>
         </button>
       </div>
-      <img class="graphic-overlay-img" src="images/daqiri-landing-graphic.svg" alt="DAQIRI moves PCIe FPGA and network sensor data into or out of CPU or NVIDIA GPU memory, then writes GPU data to storage through GPUDirect Storage" />
+      <img class="graphic-overlay-img" src="images/daqiri-landing-graphic.svg" alt="DAQIRI moves PCIe FPGA and network sensor data into or out of NVIDIA GPU or CPU memory, then writes GPU data to storage through GPUDirect Storage" />
     </div>
   </div>
 
