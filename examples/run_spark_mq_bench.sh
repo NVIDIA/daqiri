@@ -59,6 +59,8 @@
 #   RUN_SECONDS      — per-(cell,payload) run length in seconds (default 30).
 #   PAYLOADS         — space-separated payload byte sizes (default "64 256 1024 4096 8000").
 #   ETH_DST_ADDR     — rx_port MAC filled into the generated configs (see above).
+#   REPEATS          — repeats per (cell, payload) for error bars (default 1; use 3
+#                      for the published re-run). Each rep is an independent run + row.
 
 set -u
 set -o pipefail
@@ -72,6 +74,10 @@ BUILD_DIR="${DAQIRI_BUILD_DIR:-$SCRIPT_DIR/../build}"
 BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_raw_gpudirect"
 RUN_SECONDS="${RUN_SECONDS:-30}"
 PAYLOADS="${PAYLOADS:-64 256 1024 4096 8000}"
+# Repeats per (cell, payload) for error bars. Each rep is an independent run with
+# its own dir (<cell>/p<payload>/r<rep>) and CSV row; report mean +/- std across
+# reps. Default 1; set REPEATS=3 for the published re-run.
+REPEATS="${REPEATS:-1}"
 
 # Single checked-in base + the generator that prunes it to each cell.
 MQ_BASE="$SCRIPT_DIR/daqiri_bench_raw_tx_rx_spark_mq.yaml"
@@ -86,7 +92,7 @@ OUT_DIR="$SCRIPT_DIR/../bench-results/$TS-dpdk-mq"
 mkdir -p "$OUT_DIR"
 
 CSV="$OUT_DIR/runs.csv"
-echo "cell,tx_cores,rx_cores,payload,gbps,pps,drops,cpu8,cpu16,cpu17,cpu18,cpu19" > "$CSV"
+echo "cell,tx_cores,rx_cores,payload,rep,gbps,pps,drops,cpu8,cpu16,cpu17,cpu18,cpu19" > "$CSV"
 
 # Capture slow-moving environment state once per result set (mirrors
 # run_spark_bench.sh). Best-effort -- skip if the helper is unavailable.
@@ -204,13 +210,13 @@ phy_rx_packets() {
 # --------------------------------------------------------------------------
 
 run_cell() {
-  local cell="$1" tx_count="$2" rx_count="$3" payload="$4"
+  local cell="$1" tx_count="$2" rx_count="$3" payload="$4" rep="${5:-1}"
   # CSV display columns: TX -> 16[,17], RX -> 18[,19] per queue count. '|' keeps
   # multi-core lists in a single CSV field.
   local tx_cores rx_cores
   [[ "$tx_count" == 2 ]] && tx_cores="16|17" || tx_cores="16"
   [[ "$rx_count" == 2 ]] && rx_cores="18|19" || rx_cores="18"
-  local run_dir="$OUT_DIR/$cell/p$payload"
+  local run_dir="$OUT_DIR/$cell/p$payload/r$rep"
   mkdir -p "$run_dir"
 
   # Generate the cell from the single base -- never touch the base. Fill the
@@ -275,7 +281,7 @@ run_cell() {
   done
 
   local cpu_csv; cpu_csv="$(IFS=,; echo "${cpu_vals[*]}")"
-  echo "$cell,$tx_cores,$rx_cores,$payload,$gbps,$pps,$drops,$cpu_csv" | tee -a "$CSV"
+  echo "$cell,$tx_cores,$rx_cores,$payload,$rep,$gbps,$pps,$drops,$cpu_csv" | tee -a "$CSV"
 }
 
 # --------------------------------------------------------------------------
@@ -291,8 +297,10 @@ echo
 for entry in "${CELLS[@]}"; do
   read -r cell tx_count rx_count <<< "$entry"
   for payload in $PAYLOADS; do
-    run_cell "$cell" "$tx_count" "$rx_count" "$payload" \
-      || FAILURES=$((FAILURES + 1))
+    for rep in $(seq 1 "$REPEATS"); do
+      run_cell "$cell" "$tx_count" "$rx_count" "$payload" "$rep" \
+        || FAILURES=$((FAILURES + 1))
+    done
   done
 done
 
@@ -302,11 +310,11 @@ done
 
 echo
 echo "==================== Multi-queue payload sweep ===================="
-printf "%-6s %-9s %-9s %8s %10s %14s %8s\n" "cell" "tx_cores" "rx_cores" "payload" "Gbps" "pps" "drops"
-printf "%-6s %-9s %-9s %8s %10s %14s %8s\n" "----" "--------" "--------" "-------" "----" "---" "-----"
+printf "%-6s %-9s %-9s %8s %4s %10s %14s %8s\n" "cell" "tx_cores" "rx_cores" "payload" "rep" "Gbps" "pps" "drops"
+printf "%-6s %-9s %-9s %8s %4s %10s %14s %8s\n" "----" "--------" "--------" "-------" "---" "----" "---" "-----"
 # Re-read the CSV (skip header) so the table reflects exactly what was recorded.
-while IFS=, read -r cell tx_cores rx_cores payload gbps pps drops _rest; do
-  printf "%-6s %-9s %-9s %8s %10s %14s %8s\n" "$cell" "$tx_cores" "$rx_cores" "$payload" "$gbps" "$pps" "$drops"
+while IFS=, read -r cell tx_cores rx_cores payload rep gbps pps drops _rest; do
+  printf "%-6s %-9s %-9s %8s %4s %10s %14s %8s\n" "$cell" "$tx_cores" "$rx_cores" "$payload" "$rep" "$gbps" "$pps" "$drops"
 done < <(tail -n +2 "$CSV")
 echo "==================================================================="
 echo
