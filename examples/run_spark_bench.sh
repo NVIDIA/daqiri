@@ -22,6 +22,11 @@
 #   DAQIRI_BUILD_DIR — path to the cmake build dir (defaults to ../build).
 #   ETH_DST_ADDR     — required for dpdk backend (the RX iface MAC).
 #
+# Optional (dpdk only): DPDK_{TX,RX}_PCI / DPDK_{TX,RX}_NETDEV override the p0/p1
+# ports used for the per-cell *_phy wire-transit check (defaults p0 0000:01:00.0 /
+# p1 0002:01:00.1). Each dpdk cell warns if rx_packets_phy did not advance -- i.e.
+# traffic stayed on the on-chip eswitch instead of crossing the cable.
+#
 # rdma and socket-{udp,tcp} run split server/client processes inside the
 # dq_wire_server / dq_wire_client namespaces, so bring up the netns wire loopback
 # first (scripts/setup_spark_wire_loopback_netns.sh up). dpdk runs in the default
@@ -78,6 +83,15 @@ case "$BACKEND" in
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_raw_gpudirect"
     CPU_MASTER=8; CPU_TX=17; CPU_RX=18
     : "${ETH_DST_ADDR:?ETH_DST_ADDR must be set for dpdk backend (cat /sys/class/net/<rx-iface>/address)}"
+    # Resolve the tx_port (p0) / rx_port (p1) netdevs so each cell can assert wire
+    # transit via their *_phy SerDes counters -- the MLX5 bifurcated driver keeps
+    # these live even while the DPDK PMD owns the port, so a non-advancing
+    # rx_packets_phy flags the on-chip eswitch short-cut instead of a true cable
+    # loopback. Override DPDK_{TX,RX}_PCI / DPDK_{TX,RX}_NETDEV if auto-detect fails.
+    DPDK_TX_PCI="${DPDK_TX_PCI:-0000:01:00.0}"
+    DPDK_RX_PCI="${DPDK_RX_PCI:-0002:01:00.1}"
+    DPDK_TX_NETDEV="${DPDK_TX_NETDEV:-$(ls "/sys/bus/pci/devices/$DPDK_TX_PCI/net" 2>/dev/null | head -n1 || true)}"
+    DPDK_RX_NETDEV="${DPDK_RX_NETDEV:-$(ls "/sys/bus/pci/devices/$DPDK_RX_PCI/net" 2>/dev/null | head -n1 || true)}"
     ;;
   rdma)
     PAYLOADS_SWEEP=(8000000 1048576 65536 8192 4096)
@@ -216,6 +230,15 @@ cpu_busy_pct() {
       else        printf "0.0"
     }
   ' "$before" "$after"
+}
+
+# Sum a NIC *_phy SerDes counter (proves traffic crossed the cable, not an on-chip
+# eswitch short-cut). Empty netdev -> 0. Mirrors run_spark_mq_bench.sh's phy check.
+phy_counter() {
+  local netdev="$1" key="$2"
+  [[ -z "$netdev" ]] && { echo 0; return; }
+  ethtool -S "$netdev" 2>/dev/null \
+    | awk -F'[: ]+' -v k="$key" '$2 == k { s += $3 } END { printf "%d", s+0 }'
 }
 
 # Substitute payload / batch into the base YAML and write a temp config (dpdk + rdma;
@@ -406,8 +429,23 @@ run_cell() {
   else
     local yaml="$cell_dir/config.yaml"
     generate_yaml "$yaml" "$payload" "$batch"
+    # Snapshot the p0/p1 *_phy counters around the run to assert the packets crossed
+    # the cable (tx_port -> rx_port over the wire), not the on-chip eswitch short-cut.
+    local phy_tx_before phy_rx_before
+    phy_tx_before="$(phy_counter "$DPDK_TX_NETDEV" tx_packets_phy)"
+    phy_rx_before="$(phy_counter "$DPDK_RX_NETDEV" rx_packets_phy)"
     "$BENCH_BIN" "$yaml" --seconds "$RUN_SECONDS" "${bench_extra[@]}" \
         > "$stdout" 2> "$stderr" || bench_rc=$?
+    local phy_tx_delta phy_rx_delta
+    phy_tx_delta=$(( $(phy_counter "$DPDK_TX_NETDEV" tx_packets_phy) - phy_tx_before ))
+    phy_rx_delta=$(( $(phy_counter "$DPDK_RX_NETDEV" rx_packets_phy) - phy_rx_before ))
+    if [[ -z "$DPDK_RX_NETDEV" ]]; then
+      echo "WARN: $cell could not resolve rx_port netdev ($DPDK_RX_PCI); skipped wire (*_phy) check" >&2
+    elif [[ "$phy_rx_delta" -le 0 ]]; then
+      echo "WARN: $cell rx_packets_phy did not advance ($phy_rx_delta) on $DPDK_RX_NETDEV -- traffic may NOT have crossed the wire (on-chip eswitch short-cut?)" >&2
+    else
+      echo "INFO: $cell wire OK -- p0 tx_packets_phy +$phy_tx_delta, p1 rx_packets_phy +$phy_rx_delta" >&2
+    fi
     # For RX-bearing benches "RX complete" is authoritative; fall back to "TX complete".
     pkts="$(extract_field 'RX complete' packets "$stdout")"
     bytes="$(extract_field 'RX complete' bytes   "$stdout")"
