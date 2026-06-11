@@ -34,9 +34,9 @@ aggregate is shown.
 | Stream / Protocol | Best case | Throughput | Drops |
 | ----------------- | --------- | ---------: | ----- |
 | Raw Ethernet / GPUDirect | 4 KB packet | **105.5 Gb/s** (98.5 at 8 KB native) | 0 |
-| Socket / RoCE (SEND) | 8 MB message | **101.8 Gb/s** | 0 |
-| Socket / TCP | 8 KB × 4 pairs | **87.6 Gb/s** | ~0 (flow-controlled) |
-| Socket / UDP | 8 KB × 4 pairs | **34.0 Gb/s** goodput | unpaced, ~57% app-loss |
+| Socket / RoCE (SEND) | 8 MB message | **102.2 Gb/s** | 0 |
+| Socket / TCP | 8 KB × 4 pairs | **97.2 Gb/s** | ~0 (flow-controlled) |
+| Socket / UDP | 8 KB × 4 pairs | **29.8 Gb/s** goodput | unpaced, ~51% app-loss |
 
 Each transport is best read at its own native operation size (see the per-transport
 tables below); a single cross-transport unit of work isn't meaningful here, since
@@ -141,19 +141,22 @@ smallest messages are bound by per-operation software overhead.
 
 | Message size | <span style="text-transform: none">Gb/s</span> |
 | ------------ | ---: |
-| 8 MB  | **101.5** |
-| 1 MB  | 101.6 |
+| 8 MB  | **102.2** |
+| 1 MB  | 101.3 |
 | 64 KB | 101.6 |
-| 8 KB  | 19.49 |
-| 4 KB  | 10.14 |
+| 8 KB  | 60.7 |
+| 4 KB  | 38.0 |
 
 Messages ≥64 KB hold ~101–102 Gb/s at the wire ceiling. Below that, throughput
 is operation-rate-bound rather than wire-bound — per-operation software overhead,
-not a stall — and every cell is drop-free. The small-message path depends on two
-RC settings working together: `min_rnr_timer` is set to 0.64 ms so a transient
-RECV-queue underrun does not stall the sender, and the per-message flow-control
-window pre-posts `rx_depth` receives before sending and bounds the transmit side
-by `tx_depth`, keeping enough operations in flight to amortize per-op overhead.
+not a stall — and every cell is drop-free. The small-message rates roughly tripled
+under the poller/worker split (8 KB 19.5 → 60.7, 4 KB 10.1 → 38.0 Gb/s): putting the
+bench worker on its own core, separate from the RoCE manager thread, frees up the
+op-rate the same way it does for DPDK small packets. The path also depends on two
+RC settings: `min_rnr_timer` set to 0.64 ms so a transient RECV-queue underrun does
+not stall the sender, and the per-message flow-control window pre-posts `rx_depth`
+receives before sending and bounds the transmit side by `tx_depth`, keeping enough
+operations in flight to amortize per-op overhead.
 
 **CPU utilization** (headline cell, 8 MB message, batch 1, unpaced):
 
@@ -187,9 +190,9 @@ Throughput in Gb/s (App TX = App RX):
     </tr>
   </thead>
   <tbody>
-    <tr><th>1000 B</th><td>16.9</td><td>32.8</td><td>60.0</td></tr>
-    <tr><th>8000 B</th><td>28.7</td><td>79.2</td><td>87.6</td></tr>
-    <tr><th>1 MiB</th><td>37.3</td><td>72.2</td><td>84.4</td></tr>
+    <tr><th>1000 B</th><td>13.5</td><td>27.3</td><td>54.8</td></tr>
+    <tr><th>8000 B</th><td>30.8</td><td>68.0</td><td>97.2</td></tr>
+    <tr><th>1 MiB</th><td>31.6</td><td>58.7</td><td>93.7</td></tr>
   </tbody>
 </table>
 
@@ -217,8 +220,8 @@ beneath it:
     </tr>
   </thead>
   <tbody>
-    <tr><th>1000 B</th><td>4.4<small>11% loss</small></td><td>9.5<small>24% loss</small></td><td>14.1<small>23% loss</small></td></tr>
-    <tr><th>8000 B</th><td>12.9<small>57% loss</small></td><td>22.7<small>59% loss</small></td><td>34.0<small>57% loss</small></td></tr>
+    <tr><th>1000 B</th><td>3.6<small>11% loss</small></td><td>7.7<small>16% loss</small></td><td>13.5<small>6% loss</small></td></tr>
+    <tr><th>8000 B</th><td>9.6<small>56% loss</small></td><td>20.9<small>57% loss</small></td><td>29.8<small>51% loss</small></td></tr>
   </tbody>
 </table>
 

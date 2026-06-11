@@ -188,7 +188,11 @@ parse_dpdk_drops() {
 # Count RDMA CQ errors in the manager log.
 parse_rdma_drops() {
   local log="$1"
-  grep -c 'CQ error' "$log" 2>/dev/null || echo 0
+  # `grep -c` already prints 0 on no match (and exits 1); the old `|| echo 0`
+  # appended a SECOND line, embedding a newline in the CSV drops field and
+  # wrapping every rdma row. Capture the count and swallow the exit code instead.
+  local n; n="$(grep -c 'CQ error' "$log" 2>/dev/null)" || true
+  echo "${n:-0}"
 }
 
 # Snapshot socket drops on the kernel side.
