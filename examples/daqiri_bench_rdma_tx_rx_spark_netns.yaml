@@ -100,10 +100,12 @@ daqiri:
           batch_size: 1
 
 rdma_bench_server:
-  # Pin the bench worker thread (PR #149) to the server's big isolated core. The
-  # DAQIRI RoCE mgr thread pins to the queue cpu_core above; RDMA large-message is
-  # line-rate-bound, so co-tenancy here is immaterial.
-  cpu_core: 16
+  # Bench worker thread (PR #149) on a SEPARATE core from the DAQIRI RoCE mgr
+  # thread. The mgr thread pins to the TX queue core (Server_TX_Queue = 16) and
+  # hands off through a ring, so co-locating the worker there livelocks at small
+  # message sizes (same failure mode as DPDK small-batch). Put the worker on the
+  # server's other isolated core (the RX queue core, 19).
+  cpu_core: 19
   server_address: 10.250.0.2
   server_port: 4096
   message_size: 8000000
@@ -117,8 +119,9 @@ rdma_bench_server:
   server: true
 
 rdma_bench_client:
-  # Pin the bench worker thread (PR #149) to the client's big isolated core.
-  cpu_core: 17
+  # Bench worker on a separate core from the mgr thread (Client_TX_Queue = 17);
+  # worker on the client's RX queue core (18). See the server note above.
+  cpu_core: 18
   message_size: 8000000
   # Flow-control windows (PR #144). Pre-post rx_depth receives before sending and
   # bound the transmit side by tx_depth so small-message SENDs don't outrun the
