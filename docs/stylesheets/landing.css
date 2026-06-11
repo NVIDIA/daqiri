@@ -5,7 +5,9 @@
   --font-mono: "JetBrains Mono", "Fira Code", "Consolas", monospace;
   --radius: 8px;
   --ease: 0.2s ease;
-  margin: 0 -0.8rem;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   font-family: var(--font-sans);
   font-size: 16px;
   line-height: 1.6;
@@ -67,6 +69,81 @@
   color: var(--text-pri);
 }
 
+/* Material typeset adds margins/sizes that stretch the old compact layout */
+article.md-content__inner.md-typeset:has(> .daqiri-landing) {
+  margin: 0;
+  padding: 0;
+}
+
+body:has(.daqiri-landing) .md-main__inner {
+  margin-top: 0;
+}
+
+/* Full-width landing content — do not widen header/tabs md-grid (causes clip/overflow) */
+body:has(.daqiri-landing) .md-main__inner.md-grid {
+  display: block;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+}
+
+body:has(.daqiri-landing) .md-content {
+  padding: 0;
+  max-width: none;
+  width: 100%;
+  min-width: 0;
+}
+
+body:has(.daqiri-landing) .md-content__inner {
+  max-width: none;
+  width: 100%;
+  min-width: 0;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+body:has(.daqiri-landing) .md-content__inner::before {
+  display: none;
+}
+
+body:has(.daqiri-landing) {
+  --md-header-height: 3rem;
+  --md-tabs-height: 2.4rem;
+}
+
+body:has(.daqiri-landing) .md-header__inner {
+  height: var(--md-header-height);
+}
+
+body:has(.daqiri-landing) .md-header__button.md-logo img,
+body:has(.daqiri-landing) .md-header__button.md-logo svg {
+  height: 28px;
+}
+
+body:has(.daqiri-landing) .md-header__title {
+  font-size: 0.9rem;
+}
+
+.daqiri-landing .md-typeset :is(h1, h2, h3, h4, p, pre, ul, ol, dl) {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .daqiri-landing :is(h1, h2, h3, h4),
+[data-md-color-scheme="default"] .md-typeset .daqiri-landing :is(h1, h2, h3, h4) {
+  color: var(--text-pri);
+}
+
+.daqiri-landing .md-typeset pre > code {
+  font-size: inherit;
+  line-height: inherit;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+}
+
 .daqiri-landing .md-typeset > :first-child {
   margin-top: 0;
 }
@@ -87,18 +164,7 @@
   line-height: 1.2;
   font-weight: 700;
   letter-spacing: -0.02em;
-}
-
-.daqiri-landing h1 {
-  font-size: clamp(2.2rem, 5vw, 3.75rem);
-}
-
-.daqiri-landing h2 {
-  font-size: clamp(1.5rem, 3vw, 2.25rem);
-}
-
-.daqiri-landing h3 {
-  font-size: 1.15rem;
+  margin: 0;
 }
 
 .daqiri-landing p {
@@ -162,35 +228,51 @@
   max-width: 1200px;
   margin: 0 auto;
   padding: 0 2rem;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .daqiri-landing #hero .container {
-  max-width: 1360px;
+  max-width: min(1480px, 100%);
+  padding: 0 clamp(1.25rem, 3vw, 2.5rem);
 }
 
-.daqiri-landing section {
-  padding: 6rem 0;
+.daqiri-landing section:not(#hero) {
+  padding: 3rem 0;
   background: var(--bg-page);
 }
 
 .daqiri-landing .section-label {
-  font-size: 0.72rem;
+  font-size: 0.65rem;
   font-weight: 700;
-  letter-spacing: 0.15em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--accent-label);
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
 }
 
 .daqiri-landing .section-title {
   color: var(--text-pri);
-  margin-bottom: 1rem;
+  margin-bottom: 0.65rem;
+  font-size: clamp(1.35rem, 2.5vw, 1.85rem);
 }
 
 .daqiri-landing .section-desc {
   color: var(--text-mut);
   max-width: 640px;
-  font-size: 1.05rem;
+  font-size: 0.925rem;
+  line-height: 1.6;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .daqiri-landing .section-title,
+[data-md-color-scheme="default"] .md-typeset .daqiri-landing .section-title {
+  font-size: clamp(1.35rem, 2.5vw, 1.85rem);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .daqiri-landing .section-desc,
+[data-md-color-scheme="default"] .md-typeset .daqiri-landing .section-desc {
+  font-size: 0.925rem;
+  line-height: 1.6;
 }
 
 .daqiri-landing .section-header {
@@ -198,35 +280,71 @@
   align-items: flex-end;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 1.5rem;
-  margin-bottom: 3rem;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
 }
 
 .daqiri-landing #hero {
   min-height: auto;
   display: flex;
-  align-items: center;
-  padding: calc(var(--md-header-height, 3.6rem) + var(--md-tabs-height, 2.4rem) + 3rem) 0 4rem;
+  align-items: flex-start;
+  padding: 1.25rem 0 2rem;
   position: relative;
   overflow: hidden;
 }
 
+.daqiri-landing #hero > .container {
+  width: 100%;
+}
+
 .daqiri-landing .hero-inner {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(460px, 700px);
+  grid-template-columns: minmax(0, 6fr) minmax(0, 5.5fr);
   column-gap: 2rem;
-  row-gap: 2rem;
+  row-gap: 1.15rem;
+  align-items: start;
+  width: 100%;
+  min-width: 0;
+}
+
+.daqiri-landing .hero-eyebrow {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  display: inline-flex;
   align-items: center;
+  gap: 0.4rem;
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--accent-label);
+  background: rgba(118, 185, 0, 0.08);
+  border: 1px solid rgba(118, 185, 0, 0.2);
+  border-radius: 99px;
+  padding: 0.28rem 0.75rem;
+  margin-bottom: 0.35rem;
+  white-space: nowrap;
+  width: fit-content;
+}
+
+.daqiri-landing .hero-content {
+  position: relative;
+  z-index: 1;
+  grid-column: 1;
+  grid-row: 2;
+  align-self: start;
+  max-width: none;
 }
 
 .daqiri-landing .hero-visual {
   position: relative;
   z-index: 1;
   grid-column: 2;
-  grid-row: 1 / span 3;
+  grid-row: 2 / span 3;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
+  align-self: start;
+  padding-top: 0;
 }
 
 .daqiri-landing .hero-visual::before {
@@ -240,7 +358,7 @@
 
 .daqiri-landing .hero-visual-link {
   display: block;
-  width: min(100%, 700px);
+  width: min(100%, 740px);
   padding: 0.45rem;
   border-radius: 20px;
   appearance: none;
@@ -291,33 +409,27 @@
   z-index: 0;
 }
 
-.daqiri-landing .hero-content {
-  position: relative;
-  z-index: 1;
-  grid-column: 1;
-  max-width: 760px;
+.daqiri-landing .hero-eyebrow-part {
+  letter-spacing: 0.07em;
 }
 
-.daqiri-landing .hero-eyebrow {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.15em;
-  text-transform: uppercase;
+.daqiri-landing .hero-eyebrow-sep {
+  letter-spacing: 0;
+  opacity: 0.6;
+  padding: 0 0.45em;
+  font-weight: 400;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .daqiri-landing .hero-eyebrow,
+[data-md-color-scheme="default"] .md-typeset .daqiri-landing .hero-eyebrow {
+  font-size: 0.6rem;
   color: var(--accent-label);
-  background: rgba(118, 185, 0, 0.08);
-  border: 1px solid rgba(118, 185, 0, 0.2);
-  border-radius: 99px;
-  padding: 0.35rem 1rem;
-  margin-bottom: 2rem;
 }
 
 .daqiri-landing .hero-eyebrow::before {
   content: "";
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   background: var(--nv-green);
   animation: daqiri-pulse 2s ease-in-out infinite;
@@ -336,8 +448,17 @@
 }
 
 .daqiri-landing .hero-title {
-  font-size: clamp(1.85rem, 2.8vw, 2.35rem);
-  margin-bottom: 1.5rem;
+  font-size: clamp(1.32rem, 1.95vw, 1.72rem);
+  margin-bottom: 0.85rem;
+  line-height: 1.18;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .daqiri-landing .hero-title,
+[data-md-color-scheme="default"] .md-typeset .daqiri-landing .hero-title {
+  font-size: clamp(1.32rem, 1.95vw, 1.72rem);
+  margin-bottom: 0.85rem;
+  line-height: 1.18;
+  color: var(--text-pri);
 }
 
 .daqiri-landing .hero-title .hi {
@@ -345,41 +466,64 @@
 }
 
 .daqiri-landing .hero-desc {
-  font-size: 1.15rem;
+  font-size: 0.875rem;
   color: var(--text-mut);
-  max-width: 620px;
+  max-width: none;
   margin-bottom: 0;
-  line-height: 1.75;
+  line-height: 1.55;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .daqiri-landing .hero-desc,
+[data-md-color-scheme="default"] .md-typeset .daqiri-landing .hero-desc {
+  font-size: 0.875rem;
+  line-height: 1.55;
+  color: var(--text-mut);
 }
 
 .daqiri-landing .hero-actions {
   position: relative;
   z-index: 1;
   grid-column: 1;
+  grid-row: 4;
   display: flex;
   align-items: center;
-  gap: 1rem;
-  flex-wrap: wrap;
+  gap: 0.6rem;
+  flex-wrap: nowrap;
+  width: 100%;
+  max-width: 100%;
+}
+
+.daqiri-landing .hero-actions .btn,
+[data-md-color-scheme="slate"] .md-typeset .daqiri-landing .hero-actions a.btn,
+[data-md-color-scheme="default"] .md-typeset .daqiri-landing .hero-actions a.btn {
+  font-size: 0.72rem;
+  line-height: 1.2;
+  padding: 0.5rem 0.9rem;
+  min-height: 2.25rem;
+  flex: 1 1 0;
+  justify-content: center;
+  min-width: 0;
 }
 
 .daqiri-landing .hero-stats {
   grid-column: 1 / -1;
+  grid-row: 5;
   display: flex;
-  gap: 3rem;
+  gap: 1.5rem;
   flex-wrap: wrap;
   border-top: 1px solid var(--border);
-  padding-top: 2.5rem;
+  padding-top: 1.25rem;
 }
 
 .daqiri-landing .stat-value {
-  font-size: 1.45rem;
+  font-size: 1rem;
   font-weight: 800;
   color: var(--text-pri);
   letter-spacing: -0.03em;
 }
 
 .daqiri-landing .stat-label {
-  font-size: 0.78rem;
+  font-size: 0.68rem;
   color: var(--text-dim);
   font-weight: 500;
   text-transform: uppercase;
@@ -393,7 +537,7 @@ body.graphic-overlay-open {
 
 .daqiri-landing .graphic-overlay {
   position: fixed;
-  inset: calc(var(--md-header-height, 3.6rem) + var(--md-tabs-height, 2.4rem) + 1rem) 1.5rem 1.5rem;
+  inset: calc(var(--md-header-height, 3rem) + var(--md-tabs-height, 2.4rem) + 1rem) 1.5rem 1.5rem;
   z-index: 2000;
   display: grid;
   place-items: center;
@@ -422,7 +566,7 @@ body.graphic-overlay-open {
 .daqiri-landing .graphic-overlay-panel {
   position: relative;
   width: min(1120px, calc(100vw - 6rem));
-  max-height: calc(100vh - var(--md-header-height, 3.6rem) - var(--md-tabs-height, 2.4rem) - 4.5rem);
+  max-height: calc(100vh - var(--md-header-height, 3rem) - var(--md-tabs-height, 2.4rem) - 4.5rem);
   display: flex;
   flex-direction: column;
   border-radius: 18px;
@@ -490,7 +634,7 @@ body.graphic-overlay-open {
 .daqiri-landing .graphic-overlay-img {
   width: 100%;
   height: auto;
-  max-height: calc(100vh - var(--md-header-height, 3.6rem) - var(--md-tabs-height, 2.4rem) - 8.5rem);
+  max-height: calc(100vh - var(--md-header-height, 3rem) - var(--md-tabs-height, 2.4rem) - 8.5rem);
   display: block;
   object-fit: contain;
   background: var(--overlay-img-bg);
@@ -500,22 +644,24 @@ body.graphic-overlay-open {
   position: relative;
   z-index: 1;
   grid-column: 1;
+  grid-row: 3;
   background: rgba(255, 193, 7, 0.07);
   border: 1px solid rgba(255, 193, 7, 0.25);
   border-radius: var(--radius);
-  padding: 0.9rem 1.25rem;
+  padding: 0.6rem 0.85rem;
   display: flex;
-  gap: 0.75rem;
+  gap: 0.55rem;
   align-items: flex-start;
 }
 
 .daqiri-landing .warn-banner p {
   color: rgba(255, 203, 107, 0.85);
-  font-size: 0.875rem;
+  font-size: 0.72rem;
+  line-height: 1.45;
 }
 
 .daqiri-landing .warn-banner-icon {
-  font-size: 1rem;
+  font-size: 0.8rem;
   flex-shrink: 0;
   margin-top: 0.05rem;
 }
@@ -530,6 +676,12 @@ body.graphic-overlay-open {
   gap: 3rem;
   align-items: start;
   margin-bottom: 4rem;
+}
+
+.daqiri-landing .features-intro .section-desc {
+  max-width: none;
+  font-size: 1.05rem;
+  line-height: 1.6;
 }
 
 .daqiri-landing .features-intro img {
@@ -550,18 +702,22 @@ body.graphic-overlay-open {
 
 .daqiri-landing .features-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(3, 1fr);
   gap: 1.5px;
   background: var(--border);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   margin-top: 4rem;
 }
 
 .daqiri-landing .feature-card {
   background: var(--bg-card);
   padding: 2rem;
+  min-width: 0;
   transition: background var(--ease);
 }
 
@@ -598,15 +754,19 @@ body.graphic-overlay-open {
 
 .daqiri-landing .gs-layout {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 3rem;
   margin-top: 3rem;
   align-items: start;
+  min-width: 0;
 }
 
 .daqiri-landing .gs-steps {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .daqiri-landing .gs-step {
@@ -614,6 +774,7 @@ body.graphic-overlay-open {
   gap: 1.25rem;
   padding: 1.5rem 0;
   border-bottom: 1px solid var(--border);
+  min-width: 0;
 }
 
 .daqiri-landing .gs-step:last-child {
@@ -636,6 +797,12 @@ body.graphic-overlay-open {
   margin-top: 0.1rem;
 }
 
+.daqiri-landing .gs-step-body {
+  flex: 1;
+  min-width: 0;
+  max-width: 100%;
+}
+
 .daqiri-landing .gs-step-body h4 {
   color: var(--text-pri);
   font-size: 0.95rem;
@@ -647,6 +814,17 @@ body.graphic-overlay-open {
   font-size: 0.875rem;
   color: var(--text-mut);
   margin-bottom: 0.75rem;
+  line-height: 1.55;
+}
+
+.daqiri-landing .gs-step-body pre {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  overflow-x: auto;
+  box-sizing: border-box;
 }
 
 .daqiri-landing .gs-code-panel {
@@ -654,7 +832,17 @@ body.graphic-overlay-open {
   flex-direction: column;
   gap: 1.25rem;
   position: sticky;
-  top: calc(var(--md-header-height, 3.6rem) + var(--md-tabs-height, 2.4rem) + 1.5rem);
+  top: calc(var(--md-header-height, 3rem) + var(--md-tabs-height, 2.4rem) + 1.5rem);
+  align-self: start;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  max-height: calc(100vh - var(--md-header-height, 3rem) - var(--md-tabs-height, 2.4rem) - 2rem);
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  z-index: 1;
 }
 
 .daqiri-landing .gs-code-block {
@@ -662,6 +850,7 @@ body.graphic-overlay-open {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
+  min-width: 0;
 }
 
 .daqiri-landing .gs-code-hdr {
@@ -685,11 +874,41 @@ body.graphic-overlay-open {
   color: var(--text-dim);
 }
 
-.daqiri-landing .gs-code-block pre {
+.daqiri-landing .gs-code-block pre,
+.daqiri-landing .md-typeset .gs-code-block pre,
+[data-md-color-scheme="slate"] .md-typeset .daqiri-landing .gs-code-block pre,
+[data-md-color-scheme="default"] .md-typeset .daqiri-landing .gs-code-block pre {
   border: none;
   border-radius: 0;
   margin: 0;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  white-space: pre;
+  box-sizing: border-box;
+  font-family: var(--font-mono);
   font-size: 0.8rem;
+  line-height: 1.65;
+  padding: 1.4rem 1.5rem;
+  background: var(--ex-pre-bg);
+  color: var(--code-fg);
+}
+
+.daqiri-landing .gs-code-block pre > code,
+.daqiri-landing .md-typeset .gs-code-block pre > code,
+[data-md-color-scheme="slate"] .md-typeset .daqiri-landing .gs-code-block pre > code,
+[data-md-color-scheme="default"] .md-typeset .daqiri-landing .gs-code-block pre > code {
+  font-size: inherit;
+  line-height: inherit;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  white-space: inherit;
 }
 
 .daqiri-landing #examples {
@@ -701,7 +920,7 @@ body.graphic-overlay-open {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   gap: 1.25rem;
-  margin-top: 3rem;
+  margin-top: 1.5rem;
 }
 
 .daqiri-landing .example-card {
@@ -718,7 +937,7 @@ body.graphic-overlay-open {
 }
 
 .daqiri-landing .ex-hdr {
-  padding: 1.1rem 1.5rem;
+  padding: 0.95rem 1.25rem;
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
@@ -756,18 +975,40 @@ body.graphic-overlay-open {
   font-family: var(--font-mono);
 }
 
-.daqiri-landing .ex-body pre {
+.daqiri-landing .ex-body pre,
+.daqiri-landing .md-typeset .ex-body pre,
+[data-md-color-scheme="slate"] .md-typeset .daqiri-landing .ex-body pre,
+[data-md-color-scheme="default"] .md-typeset .daqiri-landing .ex-body pre {
   border: none;
   border-radius: 0;
   margin: 0;
   max-height: 210px;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  font-family: var(--font-mono);
   font-size: 0.77rem;
+  line-height: 1.65;
+  padding: 1.4rem 1.5rem;
   background: var(--ex-pre-bg);
+  color: var(--code-fg);
+}
+
+.daqiri-landing .ex-body pre > code,
+.daqiri-landing .md-typeset .ex-body pre > code,
+[data-md-color-scheme="slate"] .md-typeset .daqiri-landing .ex-body pre > code,
+[data-md-color-scheme="default"] .md-typeset .daqiri-landing .ex-body pre > code {
+  font-size: inherit;
+  line-height: inherit;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
 }
 
 .daqiri-landing .ex-footer {
-  padding: 0.9rem 1.5rem;
+  padding: 0.75rem 1.25rem;
   border-top: 1px solid var(--border);
   display: flex;
   align-items: center;
@@ -779,6 +1020,7 @@ body.graphic-overlay-open {
   font-size: 0.8rem;
   color: var(--text-mut);
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .daqiri-landing .ex-link {
@@ -794,7 +1036,7 @@ body.graphic-overlay-open {
 }
 
 .daqiri-landing .tutorials-list {
-  margin-top: 3rem;
+  margin-top: 1.5rem;
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -806,10 +1048,10 @@ body.graphic-overlay-open {
 
 .daqiri-landing .tut-item {
   background: var(--bg-page);
-  padding: 1.75rem 2rem;
+  padding: 1.1rem 1.5rem;
   display: flex;
   align-items: center;
-  gap: 2rem;
+  gap: 1.5rem;
   transition: background var(--ease);
   cursor: pointer;
   text-decoration: none;
@@ -834,14 +1076,15 @@ body.graphic-overlay-open {
 
 .daqiri-landing .tut-title {
   color: var(--text-pri);
-  font-size: 1rem;
+  font-size: 0.925rem;
   font-weight: 600;
-  margin-bottom: 0.35rem;
+  margin-bottom: 0.25rem;
 }
 
 .daqiri-landing .tut-desc {
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
   color: var(--text-mut);
+  line-height: 1.55;
 }
 
 .daqiri-landing .tut-meta {
@@ -896,14 +1139,14 @@ body.graphic-overlay-open {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
   gap: 1.25rem;
-  margin-top: 3rem;
+  margin-top: 1.5rem;
 }
 
 .daqiri-landing .pub-card {
   background: var(--bg-page);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 1.75rem;
+  padding: 1.25rem;
   transition: border-color var(--ease);
 }
 
@@ -915,7 +1158,7 @@ body.graphic-overlay-open {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  margin-bottom: 1rem;
+  margin-bottom: 0.75rem;
 }
 
 .daqiri-landing .pub-badge {
@@ -938,16 +1181,16 @@ body.graphic-overlay-open {
 
 .daqiri-landing .pub-title {
   color: var(--text-pri);
-  font-size: 1rem;
+  font-size: 0.925rem;
   font-weight: 600;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.6rem;
   line-height: 1.4;
 }
 
 .daqiri-landing .pub-authors {
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   color: var(--text-mut);
-  margin-bottom: 1.25rem;
+  margin-bottom: 1rem;
 }
 
 .daqiri-landing .pub-links {
@@ -976,61 +1219,63 @@ body.graphic-overlay-open {
   border-top: 1px solid var(--border);
   background: radial-gradient(ellipse 60% 80% at 50% 100%, rgba(118, 185, 0, 0.07) 0%, transparent 70%);
   text-align: center;
-  padding: 7rem 0;
+  padding: 2.5rem 0;
 }
 
 .daqiri-landing #cta h2 {
-  margin-bottom: 1rem;
+  margin-bottom: 0.75rem;
 }
 
 .daqiri-landing #cta > .container > p {
   max-width: 520px;
-  margin: 0 auto 2.5rem;
-  font-size: 1.05rem;
+  margin: 0 auto 1.75rem;
+  font-size: 0.925rem;
+  line-height: 1.6;
 }
 
 .daqiri-landing .cta-pre {
   max-width: 540px;
-  margin: 0 auto 2.5rem;
+  margin: 0 auto 1.75rem;
   text-align: left;
+  font-size: 0.8125rem;
 }
 
 .daqiri-landing .cta-actions {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 1rem;
+  gap: 0.75rem;
   flex-wrap: wrap;
 }
 
 .daqiri-landing .landing-footer {
   background: var(--bg-page);
   border-top: 1px solid var(--border);
-  padding: 3rem 0 2rem;
+  padding: 2.5rem 0 1.5rem;
 }
 
 .daqiri-landing .footer-inner {
   display: grid;
   grid-template-columns: 2fr 1fr 1fr 1fr;
-  gap: 3rem;
-  margin-bottom: 3rem;
+  gap: 2rem;
+  margin-bottom: 2rem;
 }
 
 .daqiri-landing .footer-brand p {
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
   color: var(--text-mut);
   max-width: 260px;
-  line-height: 1.6;
-  margin-top: 1rem;
+  line-height: 1.55;
+  margin-top: 0.75rem;
 }
 
 .daqiri-landing .footer-col-title {
-  font-size: 0.72rem;
+  font-size: 0.65rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: var(--text-dim);
-  margin-bottom: 1rem;
+  margin-bottom: 0.75rem;
 }
 
 .daqiri-landing .footer-links {
@@ -1053,7 +1298,7 @@ body.graphic-overlay-open {
 
 .daqiri-landing .footer-bottom {
   border-top: 1px solid var(--border);
-  padding-top: 1.5rem;
+  padding-top: 1.25rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1085,9 +1330,9 @@ body.graphic-overlay-open {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
   font-weight: 600;
-  padding: 0.5rem 1.25rem;
+  padding: 0.45rem 1.1rem;
   border-radius: var(--radius);
   border: 1.5px solid transparent;
   cursor: pointer;
@@ -1176,8 +1421,14 @@ body.graphic-overlay-open {
     grid-template-columns: 1fr;
   }
 
+  .daqiri-landing .hero-eyebrow {
+    grid-column: auto;
+    order: 0;
+  }
+
   .daqiri-landing .hero-content {
     grid-column: auto;
+    grid-row: auto;
     order: 1;
   }
 
@@ -1196,6 +1447,11 @@ body.graphic-overlay-open {
   .daqiri-landing .hero-actions {
     grid-column: auto;
     order: 4;
+    flex-wrap: wrap;
+  }
+
+  .daqiri-landing .hero-actions .btn {
+    flex: 0 1 auto;
   }
 
   .daqiri-landing .hero-stats {
@@ -1212,12 +1468,18 @@ body.graphic-overlay-open {
     grid-template-columns: 1fr;
   }
 
+  .daqiri-landing .features-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
   .daqiri-landing .gs-layout {
     grid-template-columns: 1fr;
   }
 
   .daqiri-landing .gs-code-panel {
     position: static;
+    max-height: none;
+    overflow: visible;
   }
 
   .daqiri-landing .footer-inner {
@@ -1226,8 +1488,12 @@ body.graphic-overlay-open {
 }
 
 @media (max-width: 640px) {
-  .daqiri-landing section {
-    padding: 4rem 0;
+  .daqiri-landing section:not(#hero) {
+    padding: 2.25rem 0;
+  }
+
+  .daqiri-landing #cta {
+    padding: 2rem 0;
   }
 
   .daqiri-landing .hero-stats {
@@ -1246,12 +1512,16 @@ body.graphic-overlay-open {
     display: none;
   }
 
+  .daqiri-landing .features-grid {
+    grid-template-columns: 1fr;
+  }
+
   .daqiri-landing .graphic-overlay-panel {
     width: 100%;
-    max-height: calc(100vh - var(--md-header-height, 3.6rem) - var(--md-tabs-height, 2.4rem) - 1rem);
+    max-height: calc(100vh - var(--md-header-height, 3rem) - var(--md-tabs-height, 2.4rem) - 1rem);
   }
 
   .daqiri-landing .graphic-overlay-img {
-    max-height: calc(100vh - var(--md-header-height, 3.6rem) - var(--md-tabs-height, 2.4rem) - 5rem);
+    max-height: calc(100vh - var(--md-header-height, 3rem) - var(--md-tabs-height, 2.4rem) - 5rem);
   }
 }
