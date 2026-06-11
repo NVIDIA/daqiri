@@ -128,6 +128,32 @@ combinations. Each run target has its own sweep:
 | Socket / UDP            | payload_size in {64, 256, 1024, 1472} B (MTU-bound)    | batch_size fixed at 1                  | (1472, 1)            | (1472, 1) — closest to 8 K under MTU cap |
 | Socket / TCP            | message_size in {1 K, 64 K, 1 M} B                     | n/a (single stream)                    | (64 K)               | n/a                    |
 
+#### Core pinning (poller / worker split)
+
+Each DPDK and RoCE direction has **two** busy-spin threads that hand off through a
+bounded ring: the DAQIRI queue **poller** (the EAL lcore for DPDK, the
+`rdma_thread` for RoCE), pinned to the queue's `cpu_core`, and the benchmark
+**application worker** (PR #149's `bench_*.cpu_core`). The single-queue configs
+pin these to **separate** isolated Cortex-X925 cores (16–19):
+
+| Config | TX poller | TX worker | RX poller | RX worker |
+| --- | --- | --- | --- | --- |
+| Raw / GPUDirect (`daqiri_bench_raw_tx_rx_spark.yaml`) | 17 | 16 | 18 | 19 |
+| RoCE netns (`daqiri_bench_rdma_tx_rx_spark_netns.yaml`) | mgr→16 (srv)/17 (cli) | 19 (srv) | — | 18 (cli) |
+
+This split is deliberate. **Co-locating** the poller and worker on one core
+livelocks at small batch/message sizes: the worker fills the small ring, then
+busy-waits for space that the same-core poller can only free once the worker is
+preempted (~one ring per scheduler tick), collapsing throughput to the
+scheduler-tick rate (e.g. DPDK 8000 B / batch 256 fell from ~97 Gb/s to ~2.8 Gb/s
+before the split). Single-queue runs have spare isolated cores, so giving the
+worker its own core is free and also lifts CPU-bound small-payload throughput
+~6%. The **multi-queue matrix** co-locates poller+worker per queue out of
+necessity (4 queues, 4 isolated cores) but runs only at the fixed large batch
+(10240) where co-location is safe. **Socket** pins both bench workers of a pair
+to one core for self-pacing; its manager I/O threads are unpinned and block in
+`recv()`, so the busy-spin livelock does not arise.
+
 #### "No-drop" threshold
 
 A run is **drop-free** when reported `drops == 0` over a `--seconds 30` run.

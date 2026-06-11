@@ -23,6 +23,7 @@ loopback). The exact commands are collected under [Reproduce](#reproduce) below.
 | NIC | ConnectX-7, ports p0 ↔ p1 cross-cabled (single-host loopback), MTU 9000 |
 | Build | Release (`-DCMAKE_BUILD_TYPE=Release`), `DAQIRI_MGR="dpdk socket rdma"` |
 | Loopback | Raw/DPDK uses the two physical ports directly; socket/RoCE use the `dq_wire_*` network-namespace wire loopback |
+| Core pinning | Each direction has a busy-spin queue poller and an app worker (PR #149). Single-queue pins them to **separate** isolated X925 cores (DPDK TX 17/16, RX 18/19); co-locating them livelocks at small batch sizes. Multi-queue co-locates per queue (4 queues, 4 cores) but only at the fixed large batch where it is safe. |
 
 ## Headline — native-shape peak (C++ loopback)
 
