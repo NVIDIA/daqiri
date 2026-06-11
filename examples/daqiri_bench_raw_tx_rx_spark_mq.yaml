@@ -16,8 +16,12 @@
 #     traffic crosses the cable. See the "Port topology" section of the "DGX
 #     Spark" tab in docs/tutorials/system_configuration.md.
 #   - kind: host_pinned (GB10 unified memory; nvidia_peermem does not load).
-#   - isolated big-cluster cores 16-19 (isolcpus): TX -> 16,17 ; RX -> 18,19.
-#   - master_core 8 (a non-isolated big core; any 0-15 works).
+#   - Poller and worker run on SEPARATE isolated X925 cores (co-locating them
+#     livelocks at small batch -- see daqiri_bench_raw_tx_rx_spark.yaml): queue
+#     pollers TX 16,17 / RX 18,19 ; bench workers TX 5,6 / RX 7,9. This needs the
+#     EXPANDED isolcpus=5-9,15-19 (all 10 big cores); the default isolcpus=16-19
+#     only has room to co-locate (and is fine at this config's fixed batch 10240).
+#   - master_core 8 (big core).
 #   - native shape: 8 KB payload (payload_size 8000 + header_size 64).
 #   - eth_dst_addr: your rx_port's (p1) own MAC; fill per-system, e.g.
 #       cat /sys/class/net/enP2p1s0f1np1/address
@@ -118,15 +122,15 @@ daqiri:
 bench_rx:
 - interface_name: "rx_port"
   queue_id: 0
-  cpu_core: 18
+  cpu_core: 7               # RX q0 worker; its queue poller is on 18 (split)
 - interface_name: "rx_port"
   queue_id: 1
-  cpu_core: 19
+  cpu_core: 9               # RX q1 worker; its queue poller is on 19 (split)
 
 bench_tx:
 - interface_name: "tx_port"
   queue_id: 0
-  cpu_core: 16
+  cpu_core: 5               # TX q0 worker; its queue poller is on 16 (split)
   batch_size: 10240
   payload_size: 8000
   header_size: 64
@@ -137,7 +141,7 @@ bench_tx:
   udp_dst_port: 4096
 - interface_name: "tx_port"
   queue_id: 1
-  cpu_core: 17
+  cpu_core: 6               # TX q1 worker; its queue poller is on 17 (split)
   batch_size: 10240
   payload_size: 8000
   header_size: 64

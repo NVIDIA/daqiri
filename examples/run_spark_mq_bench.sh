@@ -92,7 +92,7 @@ OUT_DIR="$SCRIPT_DIR/../bench-results/$TS-dpdk-mq"
 mkdir -p "$OUT_DIR"
 
 CSV="$OUT_DIR/runs.csv"
-echo "cell,tx_cores,rx_cores,payload,rep,gbps,pps,drops,cpu8,cpu16,cpu17,cpu18,cpu19" > "$CSV"
+echo "cell,tx_cores,rx_cores,payload,rep,gbps,pps,drops,cpu8,cpu16,cpu17,cpu18,cpu19,cpu5,cpu6,cpu7,cpu9" > "$CSV"
 
 # Capture slow-moving environment state once per result set (mirrors
 # run_spark_bench.sh). Best-effort -- skip if the helper is unavailable.
@@ -133,7 +133,9 @@ CELLS=(
 )
 
 # Cores to sample busy% for, in CSV column order.
-CPU_CORES=(8 16 17 18 19)
+# Sample master (8), the queue pollers (16-19), and the bench workers (5,6,7,9)
+# under the poller/worker split. Order must match the CSV header above.
+CPU_CORES=(8 16 17 18 19 5 6 7 9)
 
 FAILURES=0
 
