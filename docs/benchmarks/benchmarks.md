@@ -7,7 +7,11 @@ hide:
 
 DAQIRI ships with several backends to handle different types of incoming and outgoing streams. Choosing the stream type depends on the type of sensor being used and its capabilities. The `stream_type` is decided from the decision tree below:
 
-![DAQIRI networking backend decision tree](../images/backend-decision-tree.svg)
+<div class="img-visual-frame" markdown="1">
+![DAQIRI networking backend decision tree](../images/backend-decision-tree.svg){ #dt-thumb }
+</div>
+
+<div id="dt-overlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;background:rgba(0,0,0,.82);align-items:center;justify-content:center;padding:1.5rem;cursor:zoom-out;"><img id="dt-overlay-img" alt="DAQIRI networking backend decision tree" style="max-width:90vw;max-height:90vh;border-radius:8px;box-shadow:0 4px 32px rgba(0,0,0,.5);"/></div>
 
 ## Choose a backend
 

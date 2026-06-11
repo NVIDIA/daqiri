@@ -618,6 +618,38 @@
   color: #1565c0;
 }
 
+/* ── Reusable image frame — matches landing page hero-visual-link ────── */
+.img-visual-frame {
+  display: block;
+  max-width: 740px;
+  margin: 1.5rem 0;
+  padding: 0.45rem;
+  border-radius: 20px;
+  background: linear-gradient(135deg, rgba(118, 185, 0, 0.34), rgba(93, 216, 242, 0.18));
+  border: 1px solid rgba(160, 208, 0, 0.38);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.58), 0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  cursor: zoom-in;
+}
+
+.img-visual-frame:hover {
+  transform: translateY(-2px);
+  border-color: rgba(160, 208, 0, 0.68);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.65), 0 0 34px rgba(118, 185, 0, 0.16);
+}
+
+/* Zero out the <p> margin Python-Markdown adds around the image */
+.img-visual-frame p {
+  margin: 0;
+  line-height: 0;
+}
+
+.img-visual-frame img {
+  width: 100%;
+  display: block;
+  border-radius: 16px;
+}
+
 /* ── Platform tabs (IGX Orin / DGX Spark) — enlarged labels ─────────── */
 /* Scoped to the .platform-tabs wrapper in system_configuration.md and  */
 /* limited to the wrapper's direct tabbed-set so nested sub-tabs        */
