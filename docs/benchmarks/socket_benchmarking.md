@@ -202,7 +202,7 @@ socket_bench_server:
   server: true
   send: false
   receive: true
-  cpu_core: 8
+  cpu_core: 9
   iterations: 1000000000
   message_size: 65507
   server_address: 10.250.0.2
@@ -258,7 +258,7 @@ socket_bench_client:
   server: false
   send: true
   receive: false
-  cpu_core: 7
+  cpu_core: 9
   iterations: 1000000000
   message_size: 65507
   server_address: 10.250.0.2

@@ -1,3 +1,12 @@
+# Four-queue closed-loop TX+RX template.
+#
+# Core budget note: this config runs 8 DAQIRI queue threads (TX cores 4-7,
+# RX cores 8-11) plus 8 benchmark app worker threads, so on a 12-core host
+# each app worker intentionally shares a core with its matching queue (the
+# bench_tx/bench_rx cpu_core values mirror the queue cores). Unlike the
+# single/dual-queue configs -- where the app workers get their own isolated
+# cores -- there are not enough cores here to separate them. Give each app
+# worker its own isolated core if you have more than 12 cores available.
 %YAML 1.2
 ---
 daqiri:

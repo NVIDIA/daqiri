@@ -162,7 +162,7 @@ To run the benchmarking application to run a loopback on your system, you'll nee
 ```yaml hl_lines="3 5"
 bench_tx:
 - interface_name: "tx_port" # Name of the TX port from the daqiri config
-  cpu_core: 11              # Benchmark application TX thread affinity
+  cpu_core: 10              # Benchmark application TX thread affinity
   ...
   eth_dst_addr: <00:00:00:00:00:00> # Destination MAC address - required when Rx flow_isolation=true
   ...
@@ -173,7 +173,7 @@ bench_tx:
     ```yaml hl_lines="3 5"
     bench_tx:
     - interface_name: "tx_port" # Name of the TX port from the daqiri config
-      cpu_core: 11              # Benchmark application TX thread affinity
+      cpu_core: 10              # Benchmark application TX thread affinity
       ...
       eth_dst_addr: 48:b0:2d:ee:83:ad # Destination MAC address - required when Rx flow_isolation=true
       ...
