@@ -202,6 +202,7 @@ socket_bench_server:
   server: true
   send: false
   receive: true
+  cpu_core: 8
   iterations: 1000000000
   message_size: 65507
   server_address: 10.250.0.2
@@ -257,6 +258,7 @@ socket_bench_client:
   server: false
   send: true
   receive: false
+  cpu_core: 7
   iterations: 1000000000
   message_size: 65507
   server_address: 10.250.0.2
@@ -264,7 +266,7 @@ socket_bench_client:
   server_port: 5021
 ```
 
-For TCP, change `protocol: "udp"` to `protocol: "tcp"` in both files. For UDP, keep `message_size` at or below `65507`.
+For TCP, change `protocol: "udp"` to `protocol: "tcp"` in both files. For UDP, keep `message_size` at or below `65507`. The `socket_bench_server.cpu_core` and `socket_bench_client.cpu_core` fields pin the benchmark application's server/client threads; they are separate from the DAQIRI queue `cpu_core` values above.
 
 Run the server and client in their namespaces:
 
@@ -295,8 +297,10 @@ Start from `examples/daqiri_bench_rdma_tx_rx.yaml` or `examples/daqiri_bench_rdm
   --seconds 10 --mode both
 ```
 
-`rdma_bench_server` and `rdma_bench_client` accept optional `tx_depth` and
-`rx_depth` fields. The defaults follow the `ib_send_bw` shape:
+`rdma_bench_server` and `rdma_bench_client` accept `cpu_core` plus optional
+`tx_depth` and `rx_depth` fields. `cpu_core` pins the benchmark application's
+server/client role thread, separately from the DAQIRI queue worker cores. The
+depth defaults follow the `ib_send_bw` shape:
 `tx_depth: 128`, `rx_depth: 512`. The benchmark preposts receive work before
 sending, refills receive work after completions, and keeps the transmit side
 bounded by `tx_depth`. For 4 KiB SEND-style stress tests, set the RX/TX

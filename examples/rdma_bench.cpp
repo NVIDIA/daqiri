@@ -22,6 +22,7 @@
 #include <csignal>
 #include <cstdint>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
@@ -40,6 +41,7 @@ struct RdmaBenchConfig {
   bool server = false;
   bool send = false;
   bool receive = false;
+  int cpu_core = -1;
   int message_size = 1024;
   int tx_depth = 128;
   int rx_depth = 512;
@@ -60,6 +62,10 @@ RdmaBenchConfig parse_rdma_cfg(const YAML::Node& node) {
   cfg.server = node["server"].as<bool>(cfg.server);
   cfg.send = node["send"].as<bool>(cfg.send);
   cfg.receive = node["receive"].as<bool>(cfg.receive);
+  cfg.cpu_core = node["cpu_core"].as<int>(cfg.cpu_core);
+  if (cfg.cpu_core < -1) {
+    throw std::runtime_error("rdma_bench cpu_core is out of range");
+  }
   cfg.message_size = node["message_size"].as<int>(cfg.message_size);
   cfg.tx_depth = node["tx_depth"].as<int>(cfg.tx_depth);
   cfg.rx_depth = node["rx_depth"].as<int>(cfg.rx_depth);
@@ -73,6 +79,13 @@ RdmaBenchConfig parse_rdma_cfg(const YAML::Node& node) {
 
 void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pacer,
                  std::atomic<bool>& stop, RdmaWorkerStats& stats) {
+  const char *thread_name =
+      cfg.server ? "rdma_bench_server" : "rdma_bench_client";
+  if (!daqiri::bench::set_current_thread_affinity(cfg.cpu_core, thread_name)) {
+    stop.store(true);
+    return;
+  }
+
   int outstanding_send = 0;
   int outstanding_recv = 0;
   uint64_t send_wr_id = 0x1234;
@@ -217,18 +230,31 @@ int main(int argc, char** argv) {
   daqiri::bench::TokenBucketPacer client_pacer(target_gbps);
   bool run_server = false;
   bool run_client = false;
+  RdmaBenchConfig server_cfg;
+  RdmaBenchConfig client_cfg;
 
-  if ((mode == "server" || mode == "both") && root["rdma_bench_server"]) {
-    run_server = true;
-    server_thread = std::thread(
-        rdma_worker, parse_rdma_cfg(root["rdma_bench_server"]),
-        std::ref(server_pacer), std::ref(stop), std::ref(server_stats));
+  try {
+    if ((mode == "server" || mode == "both") && root["rdma_bench_server"]) {
+      run_server = true;
+      server_cfg = parse_rdma_cfg(root["rdma_bench_server"]);
+    }
+    if ((mode == "client" || mode == "both") && root["rdma_bench_client"]) {
+      run_client = true;
+      client_cfg = parse_rdma_cfg(root["rdma_bench_client"]);
+    }
+  } catch (const std::exception &e) {
+    std::cerr << "Invalid benchmark config: " << e.what() << "\n";
+    daqiri::shutdown();
+    return 1;
   }
-  if ((mode == "client" || mode == "both") && root["rdma_bench_client"]) {
-    run_client = true;
-    client_thread = std::thread(
-        rdma_worker, parse_rdma_cfg(root["rdma_bench_client"]),
-        std::ref(client_pacer), std::ref(stop), std::ref(client_stats));
+
+  if (run_server) {
+    server_thread = std::thread(rdma_worker, server_cfg, std::ref(server_pacer),
+                                std::ref(stop), std::ref(server_stats));
+  }
+  if (run_client) {
+    client_thread = std::thread(rdma_worker, client_cfg, std::ref(client_pacer),
+                                std::ref(stop), std::ref(client_stats));
   }
 
   if (!server_thread.joinable() && !client_thread.joinable()) {

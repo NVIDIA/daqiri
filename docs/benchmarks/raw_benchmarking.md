@@ -55,6 +55,8 @@ docker run --rm -it --privileged \
     - [`daqiri_bench_raw_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark.yaml) for `daqiri_bench_raw_gpudirect` — still set `eth_dst_addr` to the RX MAC. The rx_port is `0002:01:00.1` (physical port p1), so read its MAC: `cat /sys/class/net/enP2p1s0f1np1/address`. This p0-to-p1 pairing is intentional for an over-the-wire single-machine loopback; using two PFs that map to the same physical port exercises the on-chip eswitch path instead.
     - [`daqiri_bench_rdma_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx_spark.yaml) for `daqiri_bench_rdma` — no further edits needed.
 
+    The Spark configs also pin the benchmark application's `bench_tx.cpu_core` / `bench_rx.cpu_core` fields to the high-frequency Cortex-X925 cores. Keep both the DAQIRI queue cores and the application worker cores on cores 16-19 unless you intentionally want a lower-power core in the measurement.
+
 #### Cross-host two-DGX-Spark loopback
 
 If you have two DGX Sparks cross-cabled p0↔p0 instead of a chassis QSFP loop on one machine, use the `_xhost` configs. Each host runs only its own role, so the YAML on each side configures one port instead of two. Both hosts must already be set up per the [DGX Spark profile](../tutorials/system_configuration.md#dgx-spark-profile), with one adjustment: the `daqiri-tx` (`1.1.1.1/24`) and `daqiri-rx` (`2.2.2.2/24`) nmcli profiles are *split across* the two hosts — bring up `daqiri-tx` on the TX host's p0 and `daqiri-rx` on the RX host's p0, instead of both on one box.
@@ -152,13 +154,15 @@ interfaces:
 
 ##### Configure the application
 
-To run the benchmarking application to run a loopback on your system, you'll need to modify the `bench_tx` section which configures the application itself, to create the packet headers and direct the packets to the NIC. Make sure to remove the template brackets `< >`.
+To run the benchmarking application to run a loopback on your system, you'll need to modify the `bench_tx` section which configures the application itself, to create the packet headers, pin the application TX worker, and direct the packets to the NIC. Make sure to remove the template brackets `< >`.
 
 - `eth_dst_addr` with the MAC address (and not the PCIe address) of the NIC interface you want to use for Rx. You can get the MAC address of your `if_name` interface with `#!bash cat /sys/class/net/$if_name/address`:
+- `cpu_core` with the CPU core for the benchmark application's TX thread. This is separate from the DAQIRI TX queue `cpu_core`; use a different isolated core when you have one, or deliberately share when the machine has a tight core budget.
 
-```yaml hl_lines="4"
+```yaml hl_lines="3 5"
 bench_tx:
 - interface_name: "tx_port" # Name of the TX port from the daqiri config
+  cpu_core: 11              # Benchmark application TX thread affinity
   ...
   eth_dst_addr: <00:00:00:00:00:00> # Destination MAC address - required when Rx flow_isolation=true
   ...
@@ -166,9 +170,10 @@ bench_tx:
 
 ???+ abstract "See an example yaml"
 
-    ```yaml hl_lines="4"
+    ```yaml hl_lines="3 5"
     bench_tx:
     - interface_name: "tx_port" # Name of the TX port from the daqiri config
+      cpu_core: 11              # Benchmark application TX thread affinity
       ...
       eth_dst_addr: 48:b0:2d:ee:83:ad # Destination MAC address - required when Rx flow_isolation=true
       ...
@@ -177,6 +182,7 @@ bench_tx:
 ??? info "Show explanation"
 
     - `eth_dst_addr` - the destination ethernet MAC address - will be embedded in the packet headers by the application. This is required here because the Rx interface above has `flow_isolation: true` (explained in more details below). In that configuration, only the packets listing the adequate destination MAC address will be accepted by the Rx interface.
+    - `cpu_core` - the benchmark application's own TX worker thread affinity. Set the matching `bench_rx.cpu_core` for RX workers too; these app-thread fields are distinct from the DAQIRI queue `cpu_core` values that poll the NIC.
     - We ignore the IP fields (`ip_src_addr`, `ip_dst_addr`) for now, as we are testing on a layer 2 network by just connecting a cable between the two interfaces on our system, therefore having mock values has no impact.
     - You might have noted the lack of a `eth_src_addr` field in this `bench_tx` section. This is because the source Ethernet MAC address can be inferred automatically by the DAQIRI library from the PCIe address of the Tx interface referenced above.
 

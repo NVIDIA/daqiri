@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
+import os
 import signal
 import struct
 import sys
@@ -44,6 +45,7 @@ PRINT_LOCK = threading.Lock()
 class RawTxConfig:
     interface_name: str = "tx_port"
     queue_id: int = 0
+    cpu_core: int = -1
     batch_size: int = 1024
     payload_size: int = 1000
     header_size: int = 64
@@ -58,6 +60,7 @@ class RawTxConfig:
 class RawRxConfig:
     interface_name: str = "rx_port"
     queue_id: int = -1
+    cpu_core: int = -1
 
 
 def parse_args() -> argparse.Namespace:
@@ -162,16 +165,21 @@ def assign_queue_ids(
 
 
 def parse_rx_item(data: dict) -> RawRxConfig:
-    return RawRxConfig(
+    cfg = RawRxConfig(
         interface_name=str(data.get("interface_name", "rx_port")),
         queue_id=int(data.get("queue_id", -1)),
+        cpu_core=int(data.get("cpu_core", -1)),
     )
+    if cfg.cpu_core < -1:
+        raise ValueError(f"bench_rx cpu_core is out of range for {cfg.interface_name}")
+    return cfg
 
 
 def parse_tx_item(data: dict) -> RawTxConfig:
     cfg = RawTxConfig(
         interface_name=str(data.get("interface_name", "tx_port")),
         queue_id=int(data.get("queue_id", 0)),
+        cpu_core=int(data.get("cpu_core", -1)),
         batch_size=int(data.get("batch_size", 1024)),
         payload_size=int(data.get("payload_size", 1000)),
         header_size=int(data.get("header_size", 64)),
@@ -182,6 +190,8 @@ def parse_tx_item(data: dict) -> RawTxConfig:
         eth_dst_addr=str(data.get("eth_dst_addr", "00:00:00:00:00:00")),
     )
     validate_queue_id(cfg.queue_id, [], "bench_tx", cfg.interface_name)
+    if cfg.cpu_core < -1:
+        raise ValueError(f"bench_tx cpu_core is out of range for {cfg.interface_name}")
     return cfg
 
 
@@ -267,7 +277,28 @@ def build_udp_ipv4_packet_template(cfg: RawTxConfig, src_port: int, dst_port: in
     return bytes(packet)
 
 
+def set_current_thread_affinity(cpu_core: int, thread_name: str) -> bool:
+    if cpu_core < 0:
+        return True
+    if not hasattr(os, "sched_setaffinity"):
+        print(f"{thread_name} cpu_core requires os.sched_setaffinity", file=sys.stderr)
+        return False
+    try:
+        os.sched_setaffinity(threading.get_native_id(), {cpu_core})
+    except OSError as exc:
+        print(
+            f"Failed to set {thread_name} affinity to CPU core {cpu_core}: {exc}",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
 def tx_worker(cfg: RawTxConfig, stop: threading.Event) -> None:
+    if not set_current_thread_affinity(cfg.cpu_core, "bench_tx"):
+        stop.set()
+        return
+
     port_id = daqiri.get_port_id(cfg.interface_name)
     if port_id < 0:
         print(f"Invalid TX interface_name: {cfg.interface_name}", file=sys.stderr)
@@ -354,6 +385,10 @@ def tx_worker(cfg: RawTxConfig, stop: threading.Event) -> None:
 
 
 def rx_worker(cfg: RawRxConfig, stop: threading.Event) -> None:
+    if not set_current_thread_affinity(cfg.cpu_core, "bench_rx"):
+        stop.set()
+        return
+
     port_id = daqiri.get_port_id(cfg.interface_name)
     if port_id < 0:
         print(f"Invalid RX interface_name: {cfg.interface_name}", file=sys.stderr)

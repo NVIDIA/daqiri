@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
@@ -41,6 +42,7 @@ struct SocketBenchConfig {
   bool server = false;
   bool send = false;
   bool receive = false;
+  int cpu_core = -1;
   int message_size = 1024;
   int iterations = 1000;
   std::string server_address = "127.0.0.1";
@@ -60,6 +62,10 @@ SocketBenchConfig parse_socket_cfg(const YAML::Node& node) {
   cfg.server = node["server"].as<bool>(cfg.server);
   cfg.send = node["send"].as<bool>(cfg.send);
   cfg.receive = node["receive"].as<bool>(cfg.receive);
+  cfg.cpu_core = node["cpu_core"].as<int>(cfg.cpu_core);
+  if (cfg.cpu_core < -1) {
+    throw std::runtime_error("socket_bench cpu_core is out of range");
+  }
   cfg.message_size = node["message_size"].as<int>(cfg.message_size);
   cfg.iterations = node["iterations"].as<int>(cfg.iterations);
   cfg.server_address = node["server_address"].as<std::string>(cfg.server_address);
@@ -70,6 +76,13 @@ SocketBenchConfig parse_socket_cfg(const YAML::Node& node) {
 
 void socket_worker(const SocketBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pacer,
                    std::atomic<bool>& stop, SocketWorkerStats& stats) {
+  const char *thread_name =
+      cfg.server ? "socket_bench_server" : "socket_bench_client";
+  if (!daqiri::bench::set_current_thread_affinity(cfg.cpu_core, thread_name)) {
+    stop.store(true);
+    return;
+  }
+
   uintptr_t conn_id = 0;
   uint16_t port = 0;
   uint16_t queue = 0;
@@ -179,22 +192,31 @@ int main(int argc, char** argv) {
   daqiri::bench::TokenBucketPacer client_pacer(target_gbps);
   bool run_server = false;
   bool run_client = false;
+  SocketBenchConfig server_cfg;
+  SocketBenchConfig client_cfg;
 
-  if ((mode == "server" || mode == "both") && root["socket_bench_server"]) {
-    run_server = true;
-    server_thread = std::thread(socket_worker,
-                                parse_socket_cfg(root["socket_bench_server"]),
-                                std::ref(server_pacer),
-                                std::ref(stop),
-                                std::ref(server_stats));
+  try {
+    if ((mode == "server" || mode == "both") && root["socket_bench_server"]) {
+      run_server = true;
+      server_cfg = parse_socket_cfg(root["socket_bench_server"]);
+    }
+    if ((mode == "client" || mode == "both") && root["socket_bench_client"]) {
+      run_client = true;
+      client_cfg = parse_socket_cfg(root["socket_bench_client"]);
+    }
+  } catch (const std::exception &e) {
+    std::cerr << "Invalid benchmark config: " << e.what() << "\n";
+    daqiri::shutdown();
+    return 1;
   }
-  if ((mode == "client" || mode == "both") && root["socket_bench_client"]) {
-    run_client = true;
-    client_thread = std::thread(socket_worker,
-                                parse_socket_cfg(root["socket_bench_client"]),
-                                std::ref(client_pacer),
-                                std::ref(stop),
-                                std::ref(client_stats));
+
+  if (run_server) {
+    server_thread = std::thread(socket_worker, server_cfg, std::ref(server_pacer),
+                                std::ref(stop), std::ref(server_stats));
+  }
+  if (run_client) {
+    client_thread = std::thread(socket_worker, client_cfg, std::ref(client_pacer),
+                                std::ref(stop), std::ref(client_stats));
   }
 
   if (!server_thread.joinable() && !client_thread.joinable()) {

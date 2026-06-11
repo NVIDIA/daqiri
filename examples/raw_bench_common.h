@@ -62,6 +62,7 @@ private:
 struct RawBenchTxConfig {
   std::string interface_name = "tx_port";
   int queue_id = 0;
+  int cpu_core = -1;
   uint32_t batch_size = 1024;
   uint32_t payload_size = 1000;
   uint32_t header_size = 64;
@@ -76,6 +77,7 @@ struct RawBenchTxConfig {
 struct RawBenchRxConfig {
   std::string interface_name = "rx_port";
   int queue_id = -1;
+  int cpu_core = -1;
 };
 
 struct RawBenchQueueStats {
@@ -115,6 +117,7 @@ RawBenchTxConfig parse_tx(const YAML::Node &root);
 std::vector<RawBenchRxConfig> parse_rx_configs(const YAML::Node &root);
 std::vector<RawBenchTxConfig> parse_tx_configs(const YAML::Node &root);
 std::vector<uint16_t> parse_udp_ports(const std::string &spec);
+bool set_current_thread_affinity(int cpu_core, const std::string &thread_name);
 
 void populate_udp_ipv4_headers(uint8_t *pkt_data, uint32_t header_size,
                                uint32_t payload_size, const char *eth_src,

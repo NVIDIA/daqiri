@@ -84,6 +84,7 @@ daqiri:
 
 bench_rx:
   interface_name: "rx_port"
+  cpu_core: 9
   gpu_direct: true
   split_boundary: false
   batch_size: 256
@@ -92,6 +93,7 @@ bench_rx:
 
 bench_tx:
   interface_name: "tx_port"
+  cpu_core: 11
   gpu_direct: true
   split_boundary: false
   batch_size: 256

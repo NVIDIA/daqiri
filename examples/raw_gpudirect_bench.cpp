@@ -39,6 +39,11 @@ namespace {
 void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
                daqiri::bench::TokenBucketPacer &pacer,
                std::atomic<bool> &stop) {
+  if (!daqiri::bench::set_current_thread_affinity(cfg.cpu_core, "bench_tx")) {
+    stop.store(true);
+    return;
+  }
+
   const int port_id = daqiri::get_port_id(cfg.interface_name);
   if (port_id < 0) {
     std::cerr << "Invalid TX interface_name: " << cfg.interface_name << "\n";

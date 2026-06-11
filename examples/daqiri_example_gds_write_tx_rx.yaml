@@ -59,9 +59,11 @@ daqiri:
 
 bench_rx:
   interface_name: "rx_port"
+  cpu_core: 9
 
 bench_tx:
   interface_name: "tx_port"
+  cpu_core: 11
   batch_size: 16
   payload_size: 256
   header_size: 60

@@ -97,7 +97,7 @@ For a shorter backend-selection guide, start with the [Benchmarking overview](..
     - **Closed-loop TX+RX with four queues** — [`daqiri_bench_raw_tx_rx_4q.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_4q.yaml) (runs on `daqiri_bench_raw_gpudirect`).
     - [`daqiri_bench_raw_rx_multi_q.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_rx_multi_q.yaml) (runs on `daqiri_bench_raw_gpudirect`).
 
-    The four-queue TX+RX config is self-contained and maps each `bench_tx`/`bench_rx` list entry to the matching DAQIRI queue. The RX-only config is for an external traffic source. Both demonstrate flow-rule-based routing across multiple RX queues, each pinned to its own CPU core.
+    The four-queue TX+RX config is self-contained and maps each `bench_tx`/`bench_rx` list entry to the matching DAQIRI queue. The RX-only config is for an external traffic source. Both demonstrate flow-rule-based routing across multiple RX queues, with explicit CPU cores for both DAQIRI queue workers and benchmark application workers.
 
     *Requires: Raw Ethernet build (`DAQIRI_MGR` includes `dpdk`) + NVIDIA ConnectX-class NIC. The RX-only config also requires a separate TX traffic source.*
 
@@ -133,7 +133,7 @@ In each code block, the lines you're most likely to tune are highlighted: system
 
 The annotated example below is [`daqiri_bench_raw_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx.yaml).
 
-```yaml hl_lines="5 24 30 36 42 64 65 66"
+```yaml hl_lines="5 24 30 36 42 58 62 66 67 68"
 daqiri: # (1)!
   cfg:
     version: 1
@@ -191,9 +191,11 @@ daqiri: # (1)!
 
 bench_rx: # (24)!
 - interface_name: "rx_port"
+  cpu_core: 9
 
 bench_tx: # (25)!
 - interface_name: "tx_port"
+  cpu_core: 11
   batch_size: 10240
   payload_size: 8000
   header_size: 64
@@ -227,8 +229,8 @@ bench_tx: # (25)!
 21. **`id`** · `integer` · *required* — Tag attached to packets that match this flow. Useful when multiple flows route to a single queue and the application needs to distinguish which rule matched.
 22. What to do with packets that match this flow. The only currently supported action is `type: queue` (send the packet to the queue with the given `id`).
 23. :material-package-variant: List of rules to match packets against. **All** rules must hold for a packet to match the flow. Currently supported keys: `udp_src` / `udp_dst` (UDP source/destination port numbers, integer), `ipv4_len` (full IPv4 packet length in bytes, integer). **Adjust to match your incoming traffic.**
-24. The `bench_rx` section is specific to the benchmark application. It is a list of application worker configs; list entries map to DAQIRI RX queues on the named interface, either by explicit `queue_id` or by queue-list order when `queue_id` is omitted. In this base config there is one RX queue, so there is one entry. Other DAQIRI binaries (e.g. the reorder-quantize bench) may add fields here; see those configs for details.
-25. :material-package-variant: The `bench_tx` section configures the TX side of the benchmark: packet sizes and the Ethernet/IP/UDP header fields embedded in outgoing packets. It is a list for the same reason as `bench_rx`: each entry maps to a DAQIRI TX queue on the named interface, either by explicit `queue_id` or by queue-list order when `queue_id` is omitted. The `eth_dst_addr` is required when `flow_isolation` is enabled on the RX interface. The `ip_src_addr` / `ip_dst_addr` are only needed when traffic is routed across subnets — for a direct cable loopback, any value works. The `payload_size`, `header_size`, and UDP ports should match your application's packet format.
+24. The `bench_rx` section is specific to the benchmark application. It is a list of application worker configs; list entries map to DAQIRI RX queues on the named interface, either by explicit `queue_id` or by queue-list order when `queue_id` is omitted. `cpu_core` pins the benchmark application's RX worker thread; it is separate from the DAQIRI queue `cpu_core` above, and can use the same core only when you intentionally want to share. In this base config there is one RX queue, so there is one entry. Other DAQIRI binaries (e.g. the reorder-quantize bench) may add fields here; see those configs for details.
+25. :material-package-variant: The `bench_tx` section configures the TX side of the benchmark: the benchmark application's TX worker core, packet sizes, and the Ethernet/IP/UDP header fields embedded in outgoing packets. It is a list for the same reason as `bench_rx`: each entry maps to a DAQIRI TX queue on the named interface, either by explicit `queue_id` or by queue-list order when `queue_id` is omitted. The `cpu_core` field pins the application TX thread. The `eth_dst_addr` is required when `flow_isolation` is enabled on the RX interface. The `ip_src_addr` / `ip_dst_addr` are only needed when traffic is routed across subnets — for a direct cable loopback, any value works. The `payload_size`, `header_size`, and UDP ports should match your application's packet format.
 
 ### Header-data split (HDS)
 

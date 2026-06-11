@@ -79,6 +79,7 @@ rdma_bench_server:
   message_size: 8000000
   send: true
   receive: true
+  cpu_core: 8
   server: true
 
 rdma_bench_client:
@@ -88,4 +89,5 @@ rdma_bench_client:
   server_port: 4096
   receive: true
   send: true
+  cpu_core: 7
   server: false
