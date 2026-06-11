@@ -86,6 +86,8 @@ struct ReorderPlanConfig {
 struct BenchConfig {
   std::string interface_name = "loopback_ports";
   uint32_t queue_id = 0;
+  int tx_cpu_core = -1;
+  int rx_cpu_core = -1;
   uint32_t batch_size = 256;
   uint32_t payload_size = 256;
   uint32_t header_size = 64;
@@ -498,7 +500,11 @@ BenchConfig parse_bench_config(const YAML::Node &root,
                                const ReorderPlanConfig &plan) {
   BenchConfig cfg;
   const auto bench = root["bench_reorder_quantize"];
+  const auto bench_rx = root["bench_rx"];
   const auto bench_tx = root["bench_tx"];
+  const auto rx = bench_rx && bench_rx.IsSequence() && bench_rx.size() > 0
+                      ? bench_rx[0]
+                      : bench_rx;
   const auto tx = bench_tx && bench_tx.IsSequence() && bench_tx.size() > 0
                       ? bench_tx[0]
                       : bench_tx;
@@ -514,6 +520,7 @@ BenchConfig parse_bench_config(const YAML::Node &root,
   }
   if (tx) {
     cfg.queue_id = tx["queue_id"].as<uint32_t>(cfg.queue_id);
+    cfg.tx_cpu_core = tx["cpu_core"].as<int>(cfg.tx_cpu_core);
     cfg.batch_size = tx["batch_size"].as<uint32_t>(cfg.batch_size);
     cfg.payload_size = tx["payload_size"].as<uint32_t>(cfg.payload_size);
     cfg.header_size = tx["header_size"].as<uint32_t>(cfg.header_size);
@@ -523,6 +530,9 @@ BenchConfig parse_bench_config(const YAML::Node &root,
     cfg.ip_dst_addr = tx["ip_dst_addr"].as<std::string>(cfg.ip_dst_addr);
     cfg.udp_src_port = tx["udp_src_port"].as<uint16_t>(cfg.udp_src_port);
     cfg.udp_dst_port = tx["udp_dst_port"].as<uint16_t>(cfg.udp_dst_port);
+  }
+  if (rx) {
+    cfg.rx_cpu_core = rx["cpu_core"].as<int>(cfg.rx_cpu_core);
   }
 
   if (bench) {
@@ -557,6 +567,9 @@ BenchConfig parse_bench_config(const YAML::Node &root,
   }
   if (cfg.input_endianness == Endianness::INVALID) {
     throw std::runtime_error("Invalid bench endianness");
+  }
+  if (cfg.tx_cpu_core < -1 || cfg.rx_cpu_core < -1) {
+    throw std::runtime_error("bench_tx/bench_rx cpu_core is out of range");
   }
   if (!plan.data_types_defined) {
     throw std::runtime_error(
@@ -598,6 +611,13 @@ BenchConfig parse_bench_config(const YAML::Node &root,
 
 void tx_worker(const BenchConfig &cfg, const ReorderPlanConfig &plan,
                std::atomic<bool> &stop, SharedStats &stats) {
+  if (!daqiri::bench::set_current_thread_affinity(cfg.tx_cpu_core,
+                                                  "bench_tx")) {
+    stats.failures.fetch_add(1);
+    stop.store(true);
+    return;
+  }
+
   const int port_id = daqiri::get_port_id(cfg.interface_name);
   if (port_id < 0) {
     std::cerr << "Invalid TX interface_name: " << cfg.interface_name << "\n";
@@ -778,6 +798,13 @@ void tx_worker(const BenchConfig &cfg, const ReorderPlanConfig &plan,
 
 void rx_worker(const BenchConfig &cfg, const ReorderPlanConfig &plan,
                std::atomic<bool> &stop, SharedStats &stats) {
+  if (!daqiri::bench::set_current_thread_affinity(cfg.rx_cpu_core,
+                                                  "bench_rx")) {
+    stats.failures.fetch_add(1);
+    stop.store(true);
+    return;
+  }
+
   const int port_id = daqiri::get_port_id(plan.interface_name);
   if (port_id < 0) {
     std::cerr << "Invalid RX interface_name: " << plan.interface_name << "\n";

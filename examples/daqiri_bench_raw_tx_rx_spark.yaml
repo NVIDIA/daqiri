@@ -12,8 +12,9 @@
 #   - kind: host_pinned, NOT device. GB10 has unified memory; nvidia_peermem
 #     does not load and CUDA reports DMA_BUF_SUPPORTED=0. PR #41 made
 #     host_pinned the working GPUDirect path on Spark (~94 Gbps unicast).
-#   - cpu_core: 17/18 from the four big-cluster X925 cores 16-19 isolated by the
-#     daqiri-tuning grub drop-in.
+#   - cpu_core: DAQIRI queue threads and benchmark app workers use 17/18 from
+#     the four big-cluster X925 cores 16-19 isolated by the daqiri-tuning grub
+#     drop-in.
 #   - master_core: 8 (a non-isolated big core; any 0-15 works).
 #   - bench_tx ip_src/ip_dst: match the daqiri-tx / daqiri-rx nmcli profiles
 #     (1.1.1.1/24 and 2.2.2.2/24, MTU 9000).
@@ -82,9 +83,11 @@ daqiri:
 
 bench_rx:
   interface_name: "rx_port"
+  cpu_core: 18
 
 bench_tx:
   interface_name: "tx_port"
+  cpu_core: 17
   batch_size: 10240
   payload_size: 8000
   header_size: 64

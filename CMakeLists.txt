@@ -126,6 +126,9 @@ set(DAQIRI_PC_LIBS_PRIVATE "-lcudart -lcuda")
 if(CUDAToolkit_LIBRARY_DIR)
   string(PREPEND DAQIRI_PC_LIBS_PRIVATE "-L${CUDAToolkit_LIBRARY_DIR} ")
 endif()
+if(DAQIRI_ENABLE_S3)
+  string(APPEND DAQIRI_PC_LIBS_PRIVATE " -laws-cpp-sdk-s3 -laws-cpp-sdk-core")
+endif()
 
 configure_file(
   ${CMAKE_CURRENT_SOURCE_DIR}/cmake/daqiri.pc.in

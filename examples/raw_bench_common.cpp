@@ -18,6 +18,8 @@
 #include "raw_bench_common.h"
 
 #include <arpa/inet.h>
+#include <pthread.h>
+#include <sched.h>
 
 #include <algorithm>
 #include <chrono>
@@ -161,6 +163,11 @@ RawBenchRxConfig parse_rx_item(const YAML::Node &rx) {
   RawBenchRxConfig cfg;
   cfg.interface_name = rx["interface_name"].as<std::string>(cfg.interface_name);
   cfg.queue_id = rx["queue_id"].as<int>(cfg.queue_id);
+  cfg.cpu_core = rx["cpu_core"].as<int>(cfg.cpu_core);
+  if (cfg.cpu_core < -1) {
+    throw std::runtime_error("bench_rx cpu_core is out of range for " +
+                             cfg.interface_name);
+  }
   return cfg;
 }
 
@@ -168,6 +175,7 @@ RawBenchTxConfig parse_tx_item(const YAML::Node &tx) {
   RawBenchTxConfig cfg;
   cfg.interface_name = tx["interface_name"].as<std::string>(cfg.interface_name);
   cfg.queue_id = tx["queue_id"].as<int>(cfg.queue_id);
+  cfg.cpu_core = tx["cpu_core"].as<int>(cfg.cpu_core);
   cfg.batch_size = tx["batch_size"].as<uint32_t>(cfg.batch_size);
   cfg.payload_size = tx["payload_size"].as<uint32_t>(cfg.payload_size);
   cfg.header_size = tx["header_size"].as<uint32_t>(cfg.header_size);
@@ -178,6 +186,10 @@ RawBenchTxConfig parse_tx_item(const YAML::Node &tx) {
   cfg.eth_src_addr = tx["eth_src_addr"].as<std::string>(cfg.eth_src_addr);
   cfg.eth_dst_addr = tx["eth_dst_addr"].as<std::string>(cfg.eth_dst_addr);
   validate_queue_id(cfg.queue_id, {}, "bench_tx", cfg.interface_name);
+  if (cfg.cpu_core < -1) {
+    throw std::runtime_error("bench_tx cpu_core is out of range for " +
+                             cfg.interface_name);
+  }
   return cfg;
 }
 
@@ -391,6 +403,31 @@ std::vector<uint16_t> parse_udp_ports(const std::string &spec) {
   return ports;
 }
 
+bool set_current_thread_affinity(int cpu_core,
+                                 const std::string &thread_name) {
+  if (cpu_core < 0) {
+    return true;
+  }
+  if (cpu_core >= CPU_SETSIZE) {
+    std::cerr << thread_name << " cpu_core " << cpu_core
+              << " exceeds CPU_SETSIZE " << CPU_SETSIZE << "\n";
+    return false;
+  }
+
+  cpu_set_t cpuset;
+  CPU_ZERO(&cpuset);
+  CPU_SET(cpu_core, &cpuset);
+  const int status =
+      pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
+  if (status != 0) {
+    std::cerr << "Failed to set " << thread_name
+              << " affinity to CPU core " << cpu_core << ": "
+              << std::strerror(status) << "\n";
+    return false;
+  }
+  return true;
+}
+
 uint32_t add_checksum_bytes(const void *data, size_t len, uint32_t sum) {
   const auto *bytes = static_cast<const uint8_t *>(data);
   for (size_t i = 0; i + 1 < len; i += 2) {
@@ -512,6 +549,11 @@ void print_queue_stats(const char *direction, const std::string &interface_name,
 }
 
 void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
+  if (!set_current_thread_affinity(cfg.cpu_core, "bench_rx")) {
+    stop.store(true);
+    return;
+  }
+
   const int port_id = daqiri::get_port_id(cfg.interface_name);
   if (port_id < 0) {
     std::cerr << "Invalid RX interface_name: " << cfg.interface_name << "\n";

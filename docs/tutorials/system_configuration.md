@@ -1536,7 +1536,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     ### Step 5: Isolate CPU cores
 
-    Spark has 20 cores arranged big.LITTLE-style: cluster 0 is 10 Cortex-A725 LITTLE cores (IDs 0-9 + part of 10-15), cluster 1 is the big Cortex-X925 cores (IDs 16-19 are the four highest-frequency big cores). Pin the daqiri TX/RX/processing threads onto **16, 17, 18, 19**; the rest of the system continues working normally on cores 0-15.
+    Spark has 20 cores arranged big.LITTLE-style: cluster 0 is 10 Cortex-A725 LITTLE cores (IDs 0-9 + part of 10-15), cluster 1 is the big Cortex-X925 cores (IDs 16-19 are the four highest-frequency big cores). Pin both the DAQIRI TX/RX/processing threads and the benchmark application's `bench_tx.cpu_core` / `bench_rx.cpu_core` worker threads onto **16, 17, 18, 19**; otherwise the application side of the benchmark can land on a lower-power core and become the measurement bottleneck. The rest of the system continues working normally on cores 0-15.
 
     The grub drop-in created in [Step 4](#step-4-enable-huge-pages-grub-drop-in-pattern) above already includes:
 

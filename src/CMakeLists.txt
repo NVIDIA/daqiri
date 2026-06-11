@@ -40,6 +40,7 @@ if(DAQIRI_REORDER_GPU_PROFILE)
 endif()
 option(DAQIRI_ENABLE_GDS "Enable cuFile-backed burst file writes from CUDA device memory" OFF)
 option(DAQIRI_ENABLE_OTEL_METRICS "Enable OpenTelemetry metrics instrumentation" OFF)
+option(DAQIRI_ENABLE_S3 "Enable AWS SDK-backed raw packet writes to S3" OFF)
 set(DOCA_PATH /opt/mellanox/doca)
 
 if(DAQIRI_ENABLE_OTEL_METRICS)
@@ -89,6 +90,7 @@ endif()
 add_library(daqiri_common
   common.cpp
   common_gds.cpp
+  common_s3.cpp
   dpdk_log.cpp
   kernels.cu
   manager.cpp
@@ -155,6 +157,14 @@ if(DAQIRI_ENABLE_GDS)
   target_link_libraries(daqiri_common PRIVATE ${DAQIRI_CUFILE_TARGET})
 else()
   target_compile_definitions(daqiri_common PUBLIC DAQIRI_ENABLE_GDS=0)
+endif()
+if(DAQIRI_ENABLE_S3)
+  find_package(AWSSDK REQUIRED COMPONENTS s3)
+  target_compile_definitions(daqiri_common PUBLIC DAQIRI_ENABLE_S3=1)
+  target_include_directories(daqiri_common PRIVATE ${AWSSDK_INCLUDE_DIRS})
+  target_link_libraries(daqiri_common PRIVATE ${AWSSDK_LINK_LIBRARIES})
+else()
+  target_compile_definitions(daqiri_common PUBLIC DAQIRI_ENABLE_S3=0)
 endif()
 set_target_properties(daqiri_common PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON

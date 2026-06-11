@@ -18,6 +18,7 @@ DAQIRI's baseline requirements depend on which [stream type](concepts.md#stream-
 | **DPDK** | Included in the DAQIRI container (patched for dma-buf, so `nvidia-peermem` is **not required** inside the container); see [bare-metal dependencies](#bare-metal-dependencies) below for the host build. |
 | **RoCE** | `libibverbs` and `librdmacm` (for `stream_type: "socket"`, `protocol: "roce"`). |
 | **GDS** | Optional `cufile.h` and `libcufile` for file writes from CUDA device memory. Runtime device-memory writes require a working cuFile installation; for regular `nvidia-fs` mode, the `nvidia-fs` kernel module must be loaded and the destination storage stack must be supported. |
+| **S3** | Optional AWS SDK for C++ with the `s3` component for raw packet uploads to Amazon S3 or S3-compatible object stores. The DAQIRI container builds this SDK from source. |
 
 Supported platforms include [NVIDIA Data Center](https://www.nvidia.com/en-us/data-center/) systems, edge systems like [NVIDIA IGX](https://www.nvidia.com/en-us/edge-computing/products/igx/) and [NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/workstations/dgx-spark/), and `x86_64` systems with the above components.
 
@@ -194,6 +195,7 @@ Both methods use the same public C++ include:
 | `DAQIRI_BUILD_EXAMPLES` | `ON` | Build benchmark executables. |
 | `DAQIRI_ENABLE_GDS` | `OFF` | Enable cuFile-backed burst file writes from CUDA device memory. Host-memory writes use POSIX APIs without GDS. |
 | `DAQIRI_ENABLE_OTEL_METRICS` | `OFF` | Enable OpenTelemetry C++ metrics instrumentation. When enabled, OpenTelemetry C++ API package metadata must be available to CMake. |
+| `DAQIRI_ENABLE_S3` | `OFF` | Enable AWS SDK-backed asynchronous raw packet writes to S3. |
 | `BUILD_SHARED_LIBS` | — | Build as shared library. |
 
 CUDA architectures default to `80;90` (A100, H100), with `121` (GB10) added
@@ -218,6 +220,14 @@ OpenTelemetry metrics builds register observable counters for received packets,
 transmitted packets, received bytes, transmitted bytes, and dropped packets. DAQIRI
 does not configure an SDK reader or exporter; applications that want exported data
 must configure the OpenTelemetry C++ SDK before or during DAQIRI initialization.
+
+When using `DAQIRI_ENABLE_S3=ON`, the container build installs AWS SDK for C++
+with S3 support. Bare-metal builds must provide `aws-cpp-sdk-core` and
+`aws-cpp-sdk-s3` so CMake can resolve `find_package(AWSSDK COMPONENTS s3)`.
+Configure credentials through the AWS SDK provider chain, such as environment
+variables, a shared AWS profile, container credentials, or an EC2 instance role.
+DAQIRI writes one object per packet with a single `PutObject`; multipart uploads
+and PCAP output are not part of the S3 path.
 
 ## Next Steps
 

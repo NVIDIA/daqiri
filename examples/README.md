@@ -29,6 +29,13 @@ cmake -S . -B build -DDAQIRI_BUILD_EXAMPLES=ON -DDAQIRI_ENABLE_GDS=ON -DDAQIRI_M
 cmake --build build -j
 ```
 
+Build with S3 raw object upload support:
+
+```bash
+cmake -S . -B build -DDAQIRI_BUILD_EXAMPLES=ON -DDAQIRI_ENABLE_S3=ON -DDAQIRI_MGR="dpdk socket"
+cmake --build build -j
+```
+
 For CUDA device-memory output, the runtime must have a working cuFile/GDS stack. In
 regular `nvidia-fs` mode, verify that the kernel module is loaded and the destination
 storage is supported before running the example:
@@ -64,6 +71,11 @@ example also enables `tx_eth_src`, so hardware TX will use the actual TX port so
 MAC if the backend fills it. The generated Ethernet/IPv4/UDP headers include EtherType
 `0x0800`, TTL `64`, correct IPv4 total length/checksum, UDP length/checksum, and the
 configured addresses and ports.
+
+The app-level `bench_tx.cpu_core`, `bench_rx.cpu_core`,
+`socket_bench_*.cpu_core`, and `rdma_bench_*.cpu_core` fields pin the benchmark
+application threads. These are separate from the DAQIRI queue `cpu_core` values that
+pin the library's worker threads.
 
 Included configs:
 

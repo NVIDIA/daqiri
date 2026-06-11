@@ -27,6 +27,8 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -287,6 +289,159 @@ Status daqiri_init_from_python(py::object config_obj) {
   }
 }
 
+const char *status_to_string(Status status) {
+  switch (status) {
+  case Status::SUCCESS:
+    return "SUCCESS";
+  case Status::NULL_PTR:
+    return "NULL_PTR";
+  case Status::NO_FREE_BURST_BUFFERS:
+    return "NO_FREE_BURST_BUFFERS";
+  case Status::NO_FREE_PACKET_BUFFERS:
+    return "NO_FREE_PACKET_BUFFERS";
+  case Status::NOT_READY:
+    return "NOT_READY";
+  case Status::INVALID_PARAMETER:
+    return "INVALID_PARAMETER";
+  case Status::NO_SPACE_AVAILABLE:
+    return "NO_SPACE_AVAILABLE";
+  case Status::NOT_SUPPORTED:
+    return "NOT_SUPPORTED";
+  case Status::GENERIC_FAILURE:
+    return "GENERIC_FAILURE";
+  case Status::CONNECT_FAILURE:
+    return "CONNECT_FAILURE";
+  case Status::INTERNAL_ERROR:
+    return "INTERNAL_ERROR";
+  }
+  return "UNKNOWN";
+}
+
+void throw_if_error(Status status, const char *operation) {
+  if (status == Status::SUCCESS) {
+    return;
+  }
+  throw std::runtime_error(std::string(operation) +
+                           " failed with DAQIRI status " +
+                           status_to_string(status));
+}
+
+struct PyS3WriteHandle {
+  S3WriteHandle *handle = nullptr;
+
+  PyS3WriteHandle() = default;
+  explicit PyS3WriteHandle(S3WriteHandle *raw_handle) : handle(raw_handle) {}
+  PyS3WriteHandle(const PyS3WriteHandle &) = delete;
+  PyS3WriteHandle &operator=(const PyS3WriteHandle &) = delete;
+
+  ~PyS3WriteHandle() {
+    if (handle != nullptr) {
+      daqiri_s3_write_destroy(handle);
+      handle = nullptr;
+    }
+  }
+
+  py::tuple poll() {
+    if (handle == nullptr) {
+      throw std::runtime_error("S3 write handle has already been destroyed");
+    }
+    S3WriteStatus status{};
+    const Status rc = daqiri_s3_write_poll(handle, &status);
+    return py::make_tuple(rc, status);
+  }
+
+  S3WriteStatus wait() {
+    if (handle == nullptr) {
+      throw std::runtime_error("S3 write handle has already been destroyed");
+    }
+    S3WriteStatus status{};
+    Status rc = Status::SUCCESS;
+    {
+      py::gil_scoped_release release;
+      rc = daqiri_s3_write_wait(handle, &status);
+    }
+    throw_if_error(rc, "daqiri_s3_write_wait");
+    return status;
+  }
+
+  Status destroy() {
+    if (handle == nullptr) {
+      return Status::SUCCESS;
+    }
+    Status rc = Status::SUCCESS;
+    {
+      py::gil_scoped_release release;
+      rc = daqiri_s3_write_destroy(handle);
+    }
+    handle = nullptr;
+    return rc;
+  }
+};
+
+struct PyS3Writer {
+  S3Writer *writer = nullptr;
+
+  explicit PyS3Writer(const S3WriterConfig &config) {
+    Status rc = Status::SUCCESS;
+    {
+      py::gil_scoped_release release;
+      rc = daqiri_s3_writer_create(config, &writer);
+    }
+    throw_if_error(rc, "daqiri_s3_writer_create");
+  }
+
+  PyS3Writer(const PyS3Writer &) = delete;
+  PyS3Writer &operator=(const PyS3Writer &) = delete;
+
+  ~PyS3Writer() {
+    if (writer != nullptr) {
+      daqiri_s3_writer_destroy(writer);
+      writer = nullptr;
+    }
+  }
+
+  std::unique_ptr<PyS3WriteHandle>
+  write_raw_objects_async(BurstParams *burst, const std::string &object_prefix,
+                          uint64_t packet_data_offset) {
+    if (writer == nullptr) {
+      throw std::runtime_error("S3 writer has already been destroyed");
+    }
+    S3WriteHandle *handle = nullptr;
+    Status rc = Status::SUCCESS;
+    {
+      py::gil_scoped_release release;
+      rc = daqiri_write_raw_to_s3_objects_async(
+          writer, burst, object_prefix, packet_data_offset, &handle);
+    }
+    throw_if_error(rc, "daqiri_write_raw_to_s3_objects_async");
+    return std::make_unique<PyS3WriteHandle>(handle);
+  }
+
+  S3WriteStatus write_raw_objects(BurstParams *burst,
+                                  const std::string &object_prefix,
+                                  uint64_t packet_data_offset) {
+    auto handle =
+        write_raw_objects_async(burst, object_prefix, packet_data_offset);
+    S3WriteStatus status = handle->wait();
+    const Status destroy_status = handle->destroy();
+    throw_if_error(destroy_status, "daqiri_s3_write_destroy");
+    return status;
+  }
+
+  Status destroy() {
+    if (writer == nullptr) {
+      return Status::SUCCESS;
+    }
+    Status rc = Status::SUCCESS;
+    {
+      py::gil_scoped_release release;
+      rc = daqiri_s3_writer_destroy(writer);
+    }
+    writer = nullptr;
+    return rc;
+  }
+};
+
 void bind_enums(py::module_ &m) {
   py::enum_<Status>(m, "Status")
       .value("SUCCESS", Status::SUCCESS)
@@ -459,6 +614,41 @@ void bind_config_types(py::module_ &m) {
           [](BurstParams &burst, uint64_t wr_id) {
             burst.transport_hdr.wr_id = wr_id;
           });
+
+  py::class_<S3WriterConfig>(m, "S3WriterConfig")
+      .def(py::init<>())
+      .def_readwrite("bucket", &S3WriterConfig::bucket)
+      .def_readwrite("region", &S3WriterConfig::region)
+      .def_readwrite("endpoint_override", &S3WriterConfig::endpoint_override)
+      .def_readwrite("path_style", &S3WriterConfig::path_style)
+      .def_readwrite("aws_sdk_already_initialized",
+                     &S3WriterConfig::aws_sdk_already_initialized)
+      .def_readwrite("max_inflight_uploads",
+                     &S3WriterConfig::max_inflight_uploads)
+      .def_readwrite("max_staged_bytes", &S3WriterConfig::max_staged_bytes);
+
+  py::class_<S3WriteStatus>(m, "S3WriteStatus")
+      .def(py::init<>())
+      .def_readwrite("completed_objects", &S3WriteStatus::completed_objects)
+      .def_readwrite("failed_objects", &S3WriteStatus::failed_objects)
+      .def_readwrite("bytes_uploaded", &S3WriteStatus::bytes_uploaded);
+
+  py::class_<PyS3WriteHandle>(m, "S3WriteHandle")
+      .def("poll", &PyS3WriteHandle::poll,
+           "Return (Status, S3WriteStatus) for an asynchronous S3 write")
+      .def("wait", &PyS3WriteHandle::wait,
+           "Wait for asynchronous S3 writes and return S3WriteStatus")
+      .def("destroy", &PyS3WriteHandle::destroy,
+           "Release asynchronous S3 write resources");
+
+  py::class_<PyS3Writer>(m, "S3Writer")
+      .def(py::init<const S3WriterConfig &>(), "config"_a)
+      .def("write_raw_objects_async", &PyS3Writer::write_raw_objects_async,
+           "burst"_a, "object_prefix"_a, "packet_data_offset"_a = 0)
+      .def("write_raw_objects", &PyS3Writer::write_raw_objects, "burst"_a,
+           "object_prefix"_a, "packet_data_offset"_a = 0)
+      .def("destroy", &PyS3Writer::destroy,
+           "Release S3 writer resources");
 
   py::class_<RDMAConfig>(m, "RDMAConfig")
       .def(py::init<>())
