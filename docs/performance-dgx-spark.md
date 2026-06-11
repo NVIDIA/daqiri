@@ -33,21 +33,21 @@ has no operation boundary.
 | Stream / Protocol              | C++ loopback   | C++ + FFT        | C++ + GEMM       | Python loopback   | Python + FFT     | Python + GEMM    |
 | ------------------------------ | -------------- | ---------------- | ---------------- | ----------------- | ---------------- | ---------------- |
 | Raw Ethernet / GPUDirect (8 KB) | **98.5**       | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ |
-| Socket / RoCE (8 MB SEND)      | **101.8**[^1]  | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ |
-| Socket / UDP (8 KB, 4 pairs)   | **34.0**[^2]   | n/a              | n/a              | _TBD (follow-up)_ | n/a              | n/a              |
-| Socket / TCP (8 KB, 4 pairs)   | **87.6**[^3]   | n/a              | n/a              | _TBD (follow-up)_ | n/a              | n/a              |
+| Socket / RoCE (8 MB SEND)      | **102.2**[^1]  | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ |
+| Socket / UDP (8 KB, 4 pairs)   | **29.8**[^2]   | n/a              | n/a              | _TBD (follow-up)_ | n/a              | n/a              |
+| Socket / TCP (8 KB, 4 pairs)   | **97.2**[^3]   | n/a              | n/a              | _TBD (follow-up)_ | n/a              | n/a              |
 
 ### Matched 8 KB operation — cross-transport Gbps
 
 | Stream / Protocol               | C++ loopback   | C++ + FFT        | C++ + GEMM       | Python loopback   | Python + FFT     | Python + GEMM    |
 | ------------------------------- | -------------- | ---------------- | ---------------- | ----------------- | ---------------- | ---------------- |
 | Raw Ethernet / GPUDirect        | **98.5**       | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ |
-| Socket / RoCE                   | 19.5[^1]       | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ |
-| Socket / UDP (8 KB, 4 pairs)    | 34.0[^2]       | n/a              | n/a              | _TBD (follow-up)_ | n/a              | n/a              |
+| Socket / RoCE                   | 60.7[^1]      | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ | _TBD (follow-up)_ |
+| Socket / UDP (8 KB, 4 pairs)    | 29.8[^2]      | n/a              | n/a              | _TBD (follow-up)_ | n/a              | n/a              |
 
-[^1]: RoCE single-host loopback on Spark requires host network prereqs before the bench can use the cable — see [Tuning prerequisites](#tuning-prerequisites). The native-shape 8 MB cell saturates at ~101 Gbps one-way (single QP, batch 1, drop-free); the matched 8 KB cell (~19.5 Gbps) is op-rate-bound by per-operation software overhead (~297k ops/s), not a platform limit for large transfers. Earlier builds collapsed below ~1 MB to near-zero — a 655 ms RNR-timer stall fixed in [issue #126](https://github.com/NVIDIA/daqiri/issues/126), after which the per-message flow-control window ([PR #144](https://github.com/NVIDIA/daqiri/pull/144)) lifted the op-rate ceiling a further ~6× at 4–8 KB (e.g. 8 KB 3.41 → 19.5 Gbps).
-[^2]: Socket UDP value is the four-pair aggregate App RX (receiver goodput) at 8000 B from `bench-results/20260608T165358Z-socket-udp-sweep`. UDP is unpaced (no flow control), so each sender outruns its receiver and the cell carries ~57% app-level loss — an inherent property of unpaced UDP, not a fault. Goodput scales with the pair count (one isolated core per pair). See the [Socket](#socket) section for the full message-size × pairs matrix.
-[^3]: Socket TCP value is the four-pair aggregate at 8000 B from `bench-results/20260608T190527Z-socket-tcp-sweep`. TCP self-paces via flow control, so App TX = App RX with ~0 loss. The earlier "glibc heap-corruption" was **not** a red herring: `socket_bench` memsets a full `message_size` into a `buf_size` TX buffer, so any `message_size > buf_size` overflows the heap (`SIGABRT`). It is avoided here by sizing `buf_size >= message_size` in the netns configs; the bench-validation gap is captured in `socket-bench-bufsize-issue.md`.
+[^1]: RoCE single-host loopback on Spark requires host network prereqs before the bench can use the cable — see [Tuning prerequisites](#tuning-prerequisites). The native-shape 8 MB cell saturates at ~101 Gbps one-way (single QP, batch 1, drop-free); the matched 8 KB cell (~60.7 Gbps) is op-rate-bound by per-operation software overhead (~950k ops/s), not a platform limit for large transfers. Earlier builds collapsed below ~1 MB to near-zero — a 655 ms RNR-timer stall fixed in [issue #126](https://github.com/NVIDIA/daqiri/issues/126), after which the per-message flow-control window ([PR #144](https://github.com/NVIDIA/daqiri/pull/144)) lifted the op-rate ceiling a further ~6× at 4–8 KB (e.g. 8 KB 3.41 → 19.5 Gbps); the poller/worker split — bench worker on its own core, separate from the RoCE manager thread — then ~tripled it again (8 KB → 60.7 Gbps, 4 KB → 38.0 Gbps).
+[^2]: Socket UDP value is the four-pair aggregate App RX (receiver goodput) at 8000 B from `bench-results/20260611T212605Z-socket-udp-sweep`. UDP is unpaced (no flow control), so each sender outruns its receiver and the cell carries ~51% app-level loss — an inherent property of unpaced UDP, not a fault. Goodput scales with the pair count (one isolated core per pair). See the [Socket](#socket) section for the full message-size × pairs matrix.
+[^3]: Socket TCP value is the four-pair aggregate at 8000 B from `bench-results/20260611T213735Z-socket-tcp-sweep`. TCP self-paces via flow control, so App TX = App RX with ~0 loss. The earlier "glibc heap-corruption" was **not** a red herring: `socket_bench` memsets a full `message_size` into a `buf_size` TX buffer, so any `message_size > buf_size` overflows the heap (`SIGABRT`). It is avoided here by sizing `buf_size >= message_size` in the netns configs; the bench-validation gap is captured in `socket-bench-bufsize-issue.md`.
 
 !!! note "Why two tables"
     A single Gbps number isn't enough to compare stream/protocol combinations
@@ -333,6 +333,13 @@ unpaced run), and per-cell numbers in this regime carry roughly
 ±5 Gbps of run-to-run variance.
 
 #### Payload × batch matrix
+
+!!! note
+    This matrix predates the poller/worker split and is **superseded**. With the
+    split, throughput is flat across batch size and the small-payload cells are
+    ~2× higher — e.g. 256 B ~50 Gb/s and 64 B ~20 Gb/s (vs the ~20/~10 below), and
+    batch 256 no longer collapses. See the refreshed payload×batch numbers in the
+    pared-down report; this matrix awaits a re-render.
 
 Each cell shows the achieved Gbps and drops over a 30 s unpaced run.
 Coloring is relative to the global max across the matrix (here
