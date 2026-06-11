@@ -21,6 +21,8 @@
 # Required environment in current shell:
 #   DAQIRI_BUILD_DIR — path to the cmake build dir (defaults to ../build).
 #   ETH_DST_ADDR     — required for dpdk backend (the RX iface MAC).
+#   REPEATS          — repeats per cell for error bars (default 1; use 3 for the
+#                      published re-run). Each rep is an independent run + CSV row.
 #
 # Optional (dpdk only): DPDK_{TX,RX}_PCI / DPDK_{TX,RX}_NETDEV override the p0/p1
 # ports used for the per-cell *_phy wire-transit check (defaults p0 0000:01:00.0 /
@@ -60,12 +62,16 @@ CSV="$OUT_DIR/runs.csv"
 # `pairs` = number of concurrent client/server process pairs (socket backends sweep
 # this; dpdk/rdma are always 1). `gbps` is aggregate App TX, `rx_gbps` aggregate App RX
 # (summed across pairs); App-level loss is (gbps - rx_gbps) / gbps.
-echo "lang,backend,post_process,payload,batch,pairs,target_gbps,seconds,packets,bytes,pps,gbps,rx_gbps,drops,drops_kind,cpu_master_pct,cpu_tx_pct,cpu_rx_pct,gpu_sm_pct,gpu_mem_pct" > "$CSV"
+echo "lang,backend,post_process,payload,batch,pairs,target_gbps,rep,seconds,packets,bytes,pps,gbps,rx_gbps,drops,drops_kind,cpu_master_pct,cpu_tx_pct,cpu_rx_pct,gpu_sm_pct,gpu_mem_pct" > "$CSV"
 
 # Capture slow-moving environment state once per result set.
 "$SCRIPT_DIR/bench_capture_environment.sh" "$OUT_DIR"
 
 RUN_SECONDS=30
+# Repeats per cell for error bars. Each rep is a full independent run with its own
+# capture dir (<cell>-r<rep>) and CSV row; the perf-doc tables report mean +/- std
+# across reps. Default 1; set REPEATS=3 for the published re-run.
+REPEATS="${REPEATS:-1}"
 DRIVER_LOG="$OUT_DIR/last_run.stderr"
 FAILURES=0
 
@@ -325,8 +331,8 @@ generate_socket_yaml() {
 
 # Run one cell. Echoes the CSV row to stdout.
 run_cell() {
-  local lang="$1" payload="$2" batch="$3" pairs="$4" target_gbps="$5"
-  local cell="$lang-$BACKEND-p$payload-b$batch-n$pairs-g$target_gbps"
+  local lang="$1" payload="$2" batch="$3" pairs="$4" target_gbps="$5" rep="${6:-1}"
+  local cell="$lang-$BACKEND-p$payload-b$batch-n$pairs-g$target_gbps-r$rep"
   local cell_dir="$OUT_DIR/$cell"
   mkdir -p "$cell_dir"
 
@@ -526,12 +532,16 @@ run_cell() {
   gpu_mem="$(awk '/^ *[0-9]/ { count++; sum += $6 } END { if (count) printf "%.1f", sum/count; else print 0 }' \
                 "$cell_dir/nvidia_smi_dmon.txt" 2>/dev/null || echo 0)"
 
-  echo "$lang,$BACKEND,none,$payload,$batch,$pairs,$target_gbps,$secs,$pkts,$bytes,$pps,$gbps,$rx_gbps,$drops,$drops_kind,$cpu_master_pct,$cpu_tx_pct,$cpu_rx_pct,$gpu_sm,$gpu_mem" \
+  echo "$lang,$BACKEND,none,$payload,$batch,$pairs,$target_gbps,$rep,$secs,$pkts,$bytes,$pps,$gbps,$rx_gbps,$drops,$drops_kind,$cpu_master_pct,$cpu_tx_pct,$cpu_rx_pct,$gpu_sm,$gpu_mem" \
     | tee -a "$CSV"
 }
 
+# Run a cell REPEATS times (each an independent run + CSV row) for error bars.
 run_cell_or_record_failure() {
-  run_cell "$@" || FAILURES=$((FAILURES + 1))
+  local rep
+  for rep in $(seq 1 "$REPEATS"); do
+    run_cell "$@" "$rep" || FAILURES=$((FAILURES + 1))
+  done
 }
 
 # --------------------------------------------------------------------------

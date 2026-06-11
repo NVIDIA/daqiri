@@ -93,6 +93,10 @@ daqiri:
             - "DATA_SOCKET_CLIENT"
 
 socket_bench_server:
+  # Bench worker thread affinity (PR #149). run_spark_bench.sh rewrites this to the
+  # pair core, so the server worker, client worker, and both queues share one core
+  # per pair -- the deliberate self-pacing setup (App TX ~= App RX).
+  cpu_core: 16
   server: true
   send: false
   receive: true
@@ -102,6 +106,7 @@ socket_bench_server:
   server_port: 6001
 
 socket_bench_client:
+  cpu_core: 16
   server: false
   send: true
   receive: false
