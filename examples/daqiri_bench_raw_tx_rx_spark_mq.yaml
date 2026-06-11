@@ -61,7 +61,7 @@ daqiri:
 
     interfaces:
     - name: "tx_port"
-      address: 0000:01:00.0
+      address: "0000:01:00.0"   # quoted: PyYAML (gen_spark_mq_config.py) else reads the BDF as base-60
       tx:
         queues:
         - name: "tx_q_0"
@@ -81,7 +81,7 @@ daqiri:
           offloads:
             - "tx_eth_src"
     - name: "rx_port"
-      address: 0002:01:00.1
+      address: "0002:01:00.1"   # quoted: PyYAML (gen_spark_mq_config.py) else reads the BDF as base-60
       rx:
         flow_isolation: true
         queues:
