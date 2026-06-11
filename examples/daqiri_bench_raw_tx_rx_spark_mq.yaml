@@ -1,9 +1,14 @@
-# DGX Spark (GB10) multi-queue core-scaling matrix -- cell (TX=1, RX=2).
+# DGX Spark (GB10) multi-queue core-scaling base -- the (TX=2, RX=2) superset.
 #
-# One of four configs derived from daqiri_bench_raw_tx_rx_4q.yaml to measure how
-# raw-Ethernet throughput scales as TX/RX CPU cores are added. The matrix cells
-# are (TX,RX) = (1,1),(1,2),(2,1),(2,2); see the sibling
-# daqiri_bench_raw_tx_rx_spark_mq_{1t1r,2t1r,2t2r}.yaml files.
+# This is the single checked-in config for the multi-queue scaling sweep. The
+# matrix cells (TX,RX) = (1,1),(1,2),(2,1),(2,2) are derived from this file at
+# sweep time by scripts/gen_spark_mq_config.py (invoked by run_spark_mq_bench.sh),
+# which prunes queues/flows/memory-regions/bench entries down to each cell. To
+# run a single cell by hand, e.g. (1,2):
+#   scripts/gen_spark_mq_config.py examples/daqiri_bench_raw_tx_rx_spark_mq.yaml \
+#       --tx 1 --rx 2 --payload 8000 --eth-dst <rx_port MAC> > cell.yaml
+#   daqiri_bench_raw_gpudirect cell.yaml --seconds 30
+# As shown below (no pruning) it is the balanced (2,2) cell.
 #
 # Shared Spark substitutions (same as daqiri_bench_raw_tx_rx_spark.yaml):
 #   - over-the-wire loopback: tx_port 0000:01:00.0 (p0) -> rx_port 0002:01:00.1
@@ -17,11 +22,10 @@
 #   - eth_dst_addr: your rx_port's (p1) own MAC; fill per-system, e.g.
 #       cat /sys/class/net/enP2p1s0f1np1/address
 #
-# Cell (1,2): one TX queue (core 16) feeds two RX queues (cores 18,19). The
-# single bench_tx worker round-robins its UDP ports across the range 4096-4097
-# (see parse_udp_ports in raw_bench_common.cpp), so packets alternate between the
-# two flows: (4096,4096) -> rx_q_0 and (4097,4097) -> rx_q_1. This loads both RX
-# cores from a single TX core, isolating RX-side scaling.
+# Cell (2,2): two TX queues (cores 16,17) feed two RX queues (cores 18,19), one
+# flow per pair -- tx_q_0 on (4096,4096) -> rx_q_0 and tx_q_1 on (4097,4097) ->
+# rx_q_1. Fully balanced; the top of the scaling matrix and should beat (1,1)
+# when a single core is the bottleneck.
 %YAML 1.2
 ---
 daqiri:
@@ -35,6 +39,11 @@ daqiri:
 
     memory_regions:
     - name: "Data_TX_GPU_0"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+    - name: "Data_TX_GPU_1"
       kind: "host_pinned"
       affinity: 0
       num_bufs: 51200
@@ -61,6 +70,14 @@ daqiri:
           cpu_core: 16
           memory_regions:
             - "Data_TX_GPU_0"
+          offloads:
+            - "tx_eth_src"
+        - name: "tx_q_1"
+          id: 1
+          batch_size: 10240
+          cpu_core: 17
+          memory_regions:
+            - "Data_TX_GPU_1"
           offloads:
             - "tx_eth_src"
     - name: "rx_port"
@@ -113,5 +130,15 @@ bench_tx:
   eth_dst_addr: <00:00:00:00:00:00>
   ip_src_addr: 1.1.1.1
   ip_dst_addr: 2.2.2.2
-  udp_src_port: "4096-4097"
-  udp_dst_port: "4096-4097"
+  udp_src_port: 4096
+  udp_dst_port: 4096
+- interface_name: "tx_port"
+  queue_id: 1
+  batch_size: 10240
+  payload_size: 8000
+  header_size: 64
+  eth_dst_addr: <00:00:00:00:00:00>
+  ip_src_addr: 1.1.1.1
+  ip_dst_addr: 2.2.2.2
+  udp_src_port: 4097
+  udp_dst_port: 4097

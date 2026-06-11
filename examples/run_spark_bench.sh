@@ -45,6 +45,8 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="${DAQIRI_BUILD_DIR:-$SCRIPT_DIR/../build}"
+# Splits a combined both-role netns base into a single-role config (rdma + socket).
+NETNS_GEN="$SCRIPT_DIR/../scripts/gen_spark_netns_config.py"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT_DIR="$SCRIPT_DIR/../bench-results/$TS-$BACKEND-$MODE"
 mkdir -p "$OUT_DIR"
@@ -84,11 +86,11 @@ case "$BACKEND" in
     BATCHES_HEADLINE=(1)
     PAIRS_SWEEP=(1)
     PAIRS_HEADLINE=(1)
-    # Split server/client YAMLs with netns IPs (10.250.0.1/2); each process runs
-    # inside its own network namespace so RDMA-CM resolves addresses over the wire
-    # rather than short-cutting through the kernel's local routing table.
-    BASE_YAML="$SCRIPT_DIR/daqiri_bench_rdma_tx_rx_spark_netns_server.yaml"
-    BASE_YAML_CLIENT="$SCRIPT_DIR/daqiri_bench_rdma_tx_rx_spark_netns_client.yaml"
+    # One combined base (both roles, netns IPs 10.250.0.1/2); generate_yaml splits
+    # it per role at run time so each process runs inside its own network namespace
+    # and RDMA-CM resolves addresses over the wire rather than short-cutting through
+    # the kernel's local routing table.
+    BASE_YAML="$SCRIPT_DIR/daqiri_bench_rdma_tx_rx_spark_netns.yaml"
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_rdma"
     CPU_MASTER=8; CPU_TX=17; CPU_RX=18
     ;;
@@ -107,11 +109,11 @@ case "$BACKEND" in
     PAIRS_SWEEP=(1 2 4)
     PAIRS_HEADLINE=(4)
     SRV_PORT_BASE=5001; CLI_PORT_BASE=5101
-    # Split server/client YAMLs with netns IPs (10.250.0.1/2); each process runs
-    # inside its own network namespace so the kernel sends client->server over the
-    # wire instead of short-cutting same-host IPs through the loopback (lo) device.
-    BASE_YAML="$SCRIPT_DIR/daqiri_bench_socket_udp_tx_rx_netns_server.yaml"
-    BASE_YAML_CLIENT="$SCRIPT_DIR/daqiri_bench_socket_udp_tx_rx_netns_client.yaml"
+    # One combined base (both roles, netns IPs 10.250.0.1/2); generate_socket_yaml
+    # splits it per role at run time so each process runs inside its own network
+    # namespace and the kernel sends client->server over the wire instead of short-
+    # cutting same-host IPs through the loopback (lo) device.
+    BASE_YAML="$SCRIPT_DIR/daqiri_bench_socket_udp_tx_rx_spark_netns.yaml"
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_socket"
     # Pair 0 pins to core 16 (see pair_core); report that core's busy% as the per-pair
     # bottleneck. cpu_tx_pct and cpu_rx_pct therefore both refer to the pair-0 core.
@@ -129,9 +131,8 @@ case "$BACKEND" in
     PAIRS_SWEEP=(1 2 4)
     PAIRS_HEADLINE=(4)
     SRV_PORT_BASE=6001; CLI_PORT_BASE=6101
-    # Split server/client YAMLs with netns IPs (10.250.0.1/2); see socket-udp note.
-    BASE_YAML="$SCRIPT_DIR/daqiri_bench_socket_tcp_tx_rx_netns_server.yaml"
-    BASE_YAML_CLIENT="$SCRIPT_DIR/daqiri_bench_socket_tcp_tx_rx_netns_client.yaml"
+    # One combined base (both roles, netns IPs 10.250.0.1/2); see socket-udp note.
+    BASE_YAML="$SCRIPT_DIR/daqiri_bench_socket_tcp_tx_rx_spark_netns.yaml"
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_socket"
     # Pair 0 pins to core 16 (see pair_core); report that core's busy% as the per-pair
     # bottleneck. cpu_tx_pct and cpu_rx_pct therefore both refer to the pair-0 core.
@@ -239,12 +240,15 @@ generate_yaml() {
       local cap=$(( budget / payload )); (( cap < 1 )) && cap=1
       local rx_nb=512; (( rx_nb > cap )) && rx_nb=$cap
       local tx_nb=128; (( tx_nb > cap )) && tx_nb=$cap
-      local src dst
-      for src in "$BASE_YAML" "$BASE_YAML_CLIENT"; do
-        if [[ "$src" == "$BASE_YAML" ]]; then dst="$out"; else dst="${out%.yaml}_client.yaml"; fi
+      # Split the combined base per role, then apply the per-message-size window
+      # rewrite to each. Server -> $out, client -> ${out%.yaml}_client.yaml.
+      local role dst
+      for role in server client; do
+        if [[ "$role" == server ]]; then dst="$out"; else dst="${out%.yaml}_client.yaml"; fi
         # name-anchored num_bufs rewrite: RX regions -> rx_nb, TX regions -> tx_nb.
         # Depths are clamped to their region's num_bufs so the window never exceeds
         # the buffers backing it.
+        python3 "$NETNS_GEN" "$BASE_YAML" --role "$role" | \
         awk -v p="$payload" -v bs="$payload" -v rxnb="$rx_nb" -v txnb="$tx_nb" '
           /^[[:space:]]*- name:/ { region = $0 }
           /^[[:space:]]*num_bufs:/ {
@@ -257,7 +261,7 @@ generate_yaml() {
           /^[[:space:]]*rx_depth:/      { sub(/rx_depth:.*/,      "rx_depth: " rxnb); print; next }
           /^[[:space:]]*tx_depth:/      { sub(/tx_depth:.*/,      "tx_depth: " txnb); print; next }
           { print }
-        ' "$src" > "$dst"
+        ' > "$dst"
       done
       ;;
   esac
@@ -271,26 +275,29 @@ generate_yaml() {
 # matches the reference four-pair methodology and keeps App TX ~= App RX with low loss.
 pair_core() { echo $(( 16 + ($1 % 4) )); }
 
-# Write the server/client YAML pair for socket pair `idx`: substitute message_size,
-# unique ports (SRV/CLI_PORT_BASE + idx), and pin every queue to the pair's core.
+# Write the server/client YAML pair for socket pair `idx`: split the combined base
+# per role, then substitute message_size, unique ports (SRV/CLI_PORT_BASE + idx),
+# and pin every queue to the pair's core.
 generate_socket_yaml() {
   local idx="$1" payload="$2" server_out="$3" client_out="$4"
   local srv_port=$(( SRV_PORT_BASE + idx ))
   local cli_port=$(( CLI_PORT_BASE + idx ))
   local core; core="$(pair_core "$idx")"
+  python3 "$NETNS_GEN" "$BASE_YAML" --role server | \
   sed -E \
     -e "s|^( *message_size: ).*|\1$payload|g" \
     -e "s|^( *local_port: ).*|\1$srv_port|" \
     -e "s|^( *server_port: ).*|\1$srv_port|" \
     -e "s|^( *cpu_core: ).*|\1$core|" \
-    "$BASE_YAML" > "$server_out"
+    > "$server_out"
+  python3 "$NETNS_GEN" "$BASE_YAML" --role client | \
   sed -E \
     -e "s|^( *message_size: ).*|\1$payload|g" \
     -e "s|^( *local_port: ).*|\1$cli_port|" \
     -e "s|^( *remote_port: ).*|\1$srv_port|" \
     -e "s|^( *server_port: ).*|\1$srv_port|" \
     -e "s|^( *cpu_core: ).*|\1$core|" \
-    "$BASE_YAML_CLIENT" > "$client_out"
+    > "$client_out"
 }
 
 # Run one cell. Echoes the CSV row to stdout.

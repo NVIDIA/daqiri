@@ -398,10 +398,9 @@ UDP flow per TX/RX queue pair. The matrix sweeps (TX cores, RX cores) over
 `(1,1)`, `(1,2)`, `(2,1)`, `(2,2)`; `(2,2)` beating `(1,1)` is the scaling
 result.
 
-The four cells map to `examples/daqiri_bench_raw_tx_rx_spark_mq_1t1r.yaml`,
-`examples/daqiri_bench_raw_tx_rx_spark_mq_1t2r.yaml`,
-`examples/daqiri_bench_raw_tx_rx_spark_mq_2t1r.yaml`, and
-`examples/daqiri_bench_raw_tx_rx_spark_mq_2t2r.yaml`
+The four cells are derived from the single base
+`examples/daqiri_bench_raw_tx_rx_spark_mq.yaml` (the balanced 2,2 superset) by
+`scripts/gen_spark_mq_config.py`, which prunes it to each `(TX, RX)` shape
 (TX cores 16,17 ; RX cores 18,19 ; master core 8). Each ran for 30 s via
 `examples/run_spark_mq_bench.sh`; throughput is the aggregate App RX summed
 across all RX queues, and wire transit is confirmed by the RX netdev's

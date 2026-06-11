@@ -1,0 +1,127 @@
+# DGX Spark (GB10) RDMA bench — combined base for the netns wire loopback.
+#
+# This is the single checked-in config for the RoCE wire-loopback sweep. It
+# carries BOTH roles (the my_server / my_client interfaces, their memory regions,
+# and the rdma_bench_server / rdma_bench_client sections). A single process can't
+# run it as-is across namespaces (it would init the peer namespace's IP it does
+# not own), so scripts/gen_spark_netns_config.py splits it to one role at sweep
+# time and run_spark_bench.sh runs each role in its own namespace. To split by
+# hand:
+#   scripts/gen_spark_netns_config.py examples/daqiri_bench_rdma_tx_rx_spark_netns.yaml \
+#       --role server > server.yaml
+#   ip netns exec dq_wire_server daqiri_bench_rdma server.yaml --seconds N --mode server
+#
+# IPs / RDMA devices match setup_spark_wire_loopback_netns.sh defaults:
+#   SERVER_IP=10.250.0.2  SERVER_NS=dq_wire_server  SERVER_RDMA=roceP2p1s0f1
+#   CLIENT_IP=10.250.0.1  CLIENT_NS=dq_wire_client  CLIENT_RDMA=rocep1s0f0
+# cpu_core values use the isolated X925 big-cluster cores 16-19 (isolcpus).
+#
+# num_bufs must be >= the flow-control window (rx_depth for RX, tx_depth for TX)
+# below, or is_tx_burst_available() caps the effective window at num_bufs and
+# throttles small-message op-rate. buf_size is 10 MB: comfortably above the 8 MB
+# largest sweep message, while bounding pinned memory (128 * 10 MB * 2 MRs ~=
+# 2.5 GB/process) instead of the ~23 GB a 90 MB buffer would need at this depth.
+# run_spark_bench.sh's rdma sweep rewrites num_bufs/buf_size/{rx,tx}_depth per
+# message size (deep window at small sizes, memory-capped at large ones).
+#
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "socket"
+    protocol: "roce"
+    master_core: 8
+    debug: false
+    log_level: "info"
+
+    memory_regions:
+    - name: "DATA_RX_GPU_SERVER"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 128
+      buf_size: 10000000
+    - name: "DATA_TX_GPU_SERVER"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 128
+      buf_size: 10000000
+    - name: "DATA_TX_GPU_CLIENT"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 128
+      buf_size: 10000000
+    - name: "DATA_RX_GPU_CLIENT"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 128
+      buf_size: 10000000
+
+    interfaces:
+    - name: my_server
+      address: 10.250.0.2
+      socket_config:
+        mode: server
+        local_ip: 10.250.0.2
+        local_port: 4096
+      roce_config:
+        transport_mode: RC
+      rx:
+        queues:
+        - name: "Server_RX_Queue"
+          id: 0
+          cpu_core: 19
+          batch_size: 1
+      tx:
+        queues:
+        - name: "Server_TX_Queue"
+          id: 0
+          cpu_core: 16
+          batch_size: 1
+    - name: my_client
+      address: 10.250.0.1
+      socket_config:
+        mode: client
+        remote_ip: 10.250.0.2
+        remote_port: 4096
+      roce_config:
+        transport_mode: RC
+      tx:
+        queues:
+        - name: "Client_TX_Queue"
+          id: 0
+          cpu_core: 17
+          batch_size: 1
+      rx:
+        queues:
+        - name: "Client_RX_Queue"
+          id: 0
+          cpu_core: 18
+          batch_size: 1
+
+rdma_bench_server:
+  server_address: 10.250.0.2
+  server_port: 4096
+  message_size: 8000000
+  # Flow-control windows (PR #144). Pre-post rx_depth receives before sending and
+  # bound the transmit side by tx_depth so small-message SENDs don't outrun the
+  # peer's posted receives and trigger RNR NACKs. Keep <= the MR num_bufs above.
+  rx_depth: 128
+  tx_depth: 128
+  send: true
+  receive: true
+  server: true
+
+rdma_bench_client:
+  message_size: 8000000
+  # Flow-control windows (PR #144). Pre-post rx_depth receives before sending and
+  # bound the transmit side by tx_depth so small-message SENDs don't outrun the
+  # peer's posted receives and trigger RNR NACKs. Keep <= the MR num_bufs above.
+  rx_depth: 128
+  tx_depth: 128
+  client_address: 10.250.0.1
+  server_address: 10.250.0.2
+  server_port: 4096
+  receive: true
+  send: true
+  server: false

@@ -5,23 +5,29 @@
 #
 # DGX Spark DPDK multi-queue core-scaling sweep (issue #15, "Phase 5").
 #
-# Runs daqiri_bench_raw_gpudirect across the four pre-finalized multi-queue
-# configs, at each of a set of payload sizes, to show raw-Ethernet throughput
-# scaling as TX/RX CPU cores are added and how that scaling varies with payload.
-# The matrix cells are (TX cores, RX cores) = (1,1), (1,2), (2,1), (2,2); the
-# goal is to demonstrate (2,2) > (1,1) when a single core is the bottleneck.
+# Runs daqiri_bench_raw_gpudirect across the four multi-queue cells, at each of a
+# set of payload sizes, to show raw-Ethernet throughput scaling as TX/RX CPU
+# cores are added and how that scaling varies with payload. The matrix cells are
+# (TX cores, RX cores) = (1,1), (1,2), (2,1), (2,2); the goal is to demonstrate
+# (2,2) > (1,1) when a single core is the bottleneck.
 #
-#   cell  configs (examples/)                          TX cores  RX cores
-#   1t1r  daqiri_bench_raw_tx_rx_spark_mq_1t1r.yaml     16        18
-#   1t2r  daqiri_bench_raw_tx_rx_spark_mq_1t2r.yaml     16        18,19
-#   2t1r  daqiri_bench_raw_tx_rx_spark_mq_2t1r.yaml     16,17     18
-#   2t2r  daqiri_bench_raw_tx_rx_spark_mq_2t2r.yaml     16,17     18,19
+#   cell  TX cores  RX cores
+#   1t1r  16        18
+#   1t2r  16        18,19
+#   2t1r  16,17     18
+#   2t2r  16,17     18,19
 #
-# All four use host_pinned memory, an over-the-wire loopback (tx 0000:01:00.0 ->
-# rx 0002:01:00.1), and master_core 8. The native shape is an 8000 B payload;
-# this script sweeps PAYLOADS (default 64..8000 B) by writing a temp copy of each
-# config with payload_size patched -- it NEVER edits the originals, so any
-# per-system eth_dst_addr fill in them is preserved.
+# All four are derived from the single checked-in base
+# examples/daqiri_bench_raw_tx_rx_spark_mq.yaml (the balanced 2,2 superset) by
+# scripts/gen_spark_mq_config.py, which prunes queues/flows/memory-regions/bench
+# entries down to each cell. They share host_pinned memory, an over-the-wire
+# loopback (tx 0000:01:00.0 -> rx 0002:01:00.1), and master_core 8. The native
+# shape is an 8000 B payload; this script sweeps PAYLOADS (default 64..8000 B),
+# generating a fresh config per (cell, payload) -- it NEVER edits the base.
+#
+# Set ETH_DST_ADDR in the current shell to fill the rx_port MAC into the
+# generated configs (cat /sys/class/net/<rx-iface>/address); the RX queue runs
+# with flow_isolation, so unmatched-MAC packets are dropped.
 #
 # Per (cell, payload) it captures: aggregate App RX Gbps and pps (summed across
 # all bench RX queues), DPDK drops (imissed+ierrors+rx_nombuf from the manager
@@ -52,6 +58,7 @@
 #   DAQIRI_BUILD_DIR — path to the cmake build dir (defaults to ../build).
 #   RUN_SECONDS      — per-(cell,payload) run length in seconds (default 30).
 #   PAYLOADS         — space-separated payload byte sizes (default "64 256 1024 4096 8000").
+#   ETH_DST_ADDR     — rx_port MAC filled into the generated configs (see above).
 
 set -u
 set -o pipefail
@@ -65,6 +72,10 @@ BUILD_DIR="${DAQIRI_BUILD_DIR:-$SCRIPT_DIR/../build}"
 BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_raw_gpudirect"
 RUN_SECONDS="${RUN_SECONDS:-30}"
 PAYLOADS="${PAYLOADS:-64 256 1024 4096 8000}"
+
+# Single checked-in base + the generator that prunes it to each cell.
+MQ_BASE="$SCRIPT_DIR/daqiri_bench_raw_tx_rx_spark_mq.yaml"
+MQ_GEN="$SCRIPT_DIR/../scripts/gen_spark_mq_config.py"
 
 # Match run_spark_bench.sh: prefer the installed shared libs, falling back to
 # the build tree. Keep both so a fresh build dir still resolves.
@@ -90,6 +101,11 @@ if [[ ! -x "$BENCH_BIN" ]]; then
   exit 1
 fi
 
+if [[ ! -f "$MQ_BASE" || ! -f "$MQ_GEN" ]]; then
+  echo "ERROR: multi-queue base/generator missing: $MQ_BASE / $MQ_GEN" >&2
+  exit 1
+fi
+
 # RX netdev whose *_phy counters prove traffic crossed the cable. rx_port is the
 # PCIe address 0002:01:00.1; resolve its netdev name for ethtool -S. Override
 # with RX_NETDEV if auto-detection fails.
@@ -99,14 +115,15 @@ if [[ -z "$RX_NETDEV" ]]; then
   RX_NETDEV="$(ls "/sys/bus/pci/devices/$RX_PCI/net" 2>/dev/null | head -n1 || true)"
 fi
 
-# cell name -> "config-basename tx_cores rx_cores". Multi-core lists use '|' (not
-# ',') so the values stay single CSV fields -- a comma here would split the row
-# and misalign every column after it.
+# cell name -> "tx_queue_count rx_queue_count". The CSV's tx_cores/rx_cores
+# display columns are derived from these counts (TX -> cores 16[,17], RX ->
+# 18[,19]); multi-core lists use '|' (not ',') so they stay single CSV fields --
+# a comma would split the row and misalign every column after it.
 CELLS=(
-  "1t1r daqiri_bench_raw_tx_rx_spark_mq_1t1r.yaml 16 18"
-  "1t2r daqiri_bench_raw_tx_rx_spark_mq_1t2r.yaml 16 18|19"
-  "2t1r daqiri_bench_raw_tx_rx_spark_mq_2t1r.yaml 16|17 18"
-  "2t2r daqiri_bench_raw_tx_rx_spark_mq_2t2r.yaml 16|17 18|19"
+  "1t1r 1 1"
+  "1t2r 1 2"
+  "2t1r 2 1"
+  "2t2r 2 2"
 )
 
 # Cores to sample busy% for, in CSV column order.
@@ -187,20 +204,26 @@ phy_rx_packets() {
 # --------------------------------------------------------------------------
 
 run_cell() {
-  local cell="$1" cfg_name="$2" tx_cores="$3" rx_cores="$4" payload="$5"
-  local cfg="$SCRIPT_DIR/$cfg_name"
+  local cell="$1" tx_count="$2" rx_count="$3" payload="$4"
+  # CSV display columns: TX -> 16[,17], RX -> 18[,19] per queue count. '|' keeps
+  # multi-core lists in a single CSV field.
+  local tx_cores rx_cores
+  [[ "$tx_count" == 2 ]] && tx_cores="16|17" || tx_cores="16"
+  [[ "$rx_count" == 2 ]] && rx_cores="18|19" || rx_cores="18"
   local run_dir="$OUT_DIR/$cell/p$payload"
   mkdir -p "$run_dir"
 
-  if [[ ! -f "$cfg" ]]; then
-    echo "ERROR: $cell config not found: $cfg" >&2
+  # Generate the cell from the single base -- never touch the base. Fill the
+  # rx_port MAC from ETH_DST_ADDR when set (the RX queue runs flow_isolation).
+  local tmp_cfg="$run_dir/config.yaml"
+  local eth_dst_arg=()
+  [[ -n "${ETH_DST_ADDR:-}" ]] && eth_dst_arg=(--eth-dst "$ETH_DST_ADDR")
+  if ! python3 "$MQ_GEN" "$MQ_BASE" --tx "$tx_count" --rx "$rx_count" \
+        --payload "$payload" "${eth_dst_arg[@]}" > "$tmp_cfg" 2> "$run_dir/gen.err"; then
+    echo "ERROR: $cell p$payload config generation failed" >&2
+    cat "$run_dir/gen.err" >&2
     return 1
   fi
-
-  # Temp config with payload_size patched -- never touch the original (preserves
-  # its per-system eth_dst_addr). header_size and everything else are unchanged.
-  local tmp_cfg="$run_dir/config.yaml"
-  sed -E "s/^( *payload_size: ).*/\1$payload/" "$cfg" > "$tmp_cfg"
 
   local stdout="$run_dir/stdout.txt"
   local stderr="$run_dir/stderr.txt"
@@ -266,9 +289,9 @@ echo "RX netdev for wire (*_phy) check: ${RX_NETDEV:-<unresolved>} ($RX_PCI)"
 echo
 
 for entry in "${CELLS[@]}"; do
-  read -r cell cfg_name tx_cores rx_cores <<< "$entry"
+  read -r cell tx_count rx_count <<< "$entry"
   for payload in $PAYLOADS; do
-    run_cell "$cell" "$cfg_name" "$tx_cores" "$rx_cores" "$payload" \
+    run_cell "$cell" "$tx_count" "$rx_count" "$payload" \
       || FAILURES=$((FAILURES + 1))
   done
 done
