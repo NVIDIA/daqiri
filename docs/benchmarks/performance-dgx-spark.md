@@ -33,7 +33,7 @@ aggregate is shown.
 
 | Stream / Protocol | Best case | Throughput | Drops |
 | ----------------- | --------- | ---------: | ----- |
-| Raw Ethernet / GPUDirect | 4 KB packet | **106.4 Gb/s** (98.5 at 8 KB native) | 0 |
+| Raw Ethernet / GPUDirect | 4 KB packet | **105.5 Gb/s** (98.5 at 8 KB native) | 0 |
 | Socket / RoCE (SEND) | 8 MB message | **101.8 Gb/s** | 0 |
 | Socket / TCP | 8 KB × 4 pairs | **87.6 Gb/s** | ~0 (flow-controlled) |
 | Socket / UDP | 8 KB × 4 pairs | **34.0 Gb/s** goodput | unpaced, ~57% app-loss |
@@ -47,10 +47,11 @@ operation boundary.
 
 Physical port-to-port loopback, GPU-resident payloads. Native 8 KB packets run
 at **98.5 Gb/s** drop-free across all batch sizes; the throughput peak is
-**106.4 Gb/s** at a 4 KB payload. Packet handling is CPU-bound (see the CPU
-utilization table below).
+**105.5 Gb/s** at a 4 KB payload. Packet handling is CPU-bound (see the CPU
+utilization table below). With the poller/worker core split, throughput is now
+flat across batch size and stable run-to-run (3 reps per cell, ≤1% spread).
 
-Achieved Gb/s, unpaced, 0 drops in every cell:
+Achieved Gb/s (mean of 3 reps), unpaced, 0 drops in every cell:
 
 <table class="perf-matrix" markdown="0">
   <thead>
@@ -63,31 +64,37 @@ Achieved Gb/s, unpaced, 0 drops in every cell:
     </tr>
   </thead>
   <tbody>
-    <tr><th>8000 B</th><td>98.2</td><td>98.6</td><td>98.6</td><td>98.5</td></tr>
-    <tr><th>4096 B</th><td>106.3</td><td>104.8</td><td>106.4</td><td>106.2</td></tr>
-    <tr><th>1024 B</th><td>80.4</td><td>75.5</td><td>82.8</td><td>90.9</td></tr>
-    <tr><th>256 B</th><td>20.3</td><td>19.5</td><td>20.7</td><td>21.3</td></tr>
-    <tr><th>64 B</th><td>8.3</td><td>10.5</td><td>11.3</td><td>10.0</td></tr>
+    <tr><th>8000 B</th><td>98.5</td><td>98.0</td><td>98.0</td><td>98.5</td></tr>
+    <tr><th>4096 B</th><td>105.2</td><td>105.3</td><td>105.5</td><td>105.1</td></tr>
+    <tr><th>1024 B</th><td>92.1</td><td>91.8</td><td>91.7</td><td>91.7</td></tr>
+    <tr><th>256 B</th><td>50.0</td><td>49.8</td><td>49.8</td><td>49.8</td></tr>
+    <tr><th>64 B</th><td>20.4</td><td>20.5</td><td>20.5</td><td>20.4</td></tr>
   </tbody>
 </table>
 
-At ≥4 KB the link saturates (~98–106 Gb/s) regardless of batch; the 1 KB row is
-the transition; ≤256 B is packet-rate-bound (~10 M pps ceiling) and noisy
-run-to-run. Every cell is drop-free, so the achieved rate is also the no-drop
-rate — *pacing the sender below it simply hits the target with zero drops*.
+At ≥4 KB the link saturates (~98–105 Gb/s) regardless of batch. Below that the
+path is packet-rate-bound: 1 KB ~92 Gb/s (10.5 M pps), 256 B ~50 Gb/s (19.5 M pps),
+64 B ~20 Gb/s (20 M pps) — a ~20 M pps ceiling. With the poller/worker core split
+these small-payload cells are now flat across batch size and stable run-to-run; the
+co-located config (poller and worker sharing a core) ran at roughly half the rate
+and was ±20% noisy here, and livelocked outright at small batch. Every cell is
+drop-free, so the achieved rate is also the no-drop rate — *pacing the sender below
+it simply hits the target with zero drops*.
 
 **CPU utilization** (headline cell, 8000 B / batch 10240, unpaced):
 
-| Core               | Busy% | Note                                  |
-| ------------------ | ----: | ------------------------------------- |
-| Master (CPU 8)     |  3.1% | Orchestration only; mostly idle       |
-| TX core (CPU 17)   | 93.4% | Poll-mode spin; rate-independent      |
-| RX core (CPU 18)   | 93.4% | Poll-mode spin; rate-independent      |
+| Core                     | Busy% | Note                                  |
+| ------------------------ | ----: | ------------------------------------- |
+| Master (CPU 8)           |  3.7% | Orchestration only; mostly idle       |
+| TX queue poller (CPU 17) |  ~92% | Poll-mode spin; rate-independent      |
+| RX queue poller (CPU 18) |  ~92% | Poll-mode spin; rate-independent      |
 
-The TX/RX cores stay near 93% across every drop-curve step from 1 Gb/s to line
-rate — DPDK's poll-mode driver spins regardless of offered load. The GPU stays
-idle (SM and memory-controller utilization both ~0%): it is a DMA target for the
-payload, not a compute engine.
+Under the poller/worker split the benchmark app workers run on their own cores
+(TX 16, RX 19) alongside these pollers; this run sampled only the poller cores.
+The pollers stay near 92% across every drop-curve step from 1 Gb/s to line rate —
+DPDK's poll-mode driver spins regardless of offered load. The GPU stays idle (SM
+and memory-controller utilization both ~0%): it is a DMA target for the payload,
+not a compute engine.
 
 ### Multi-queue core scaling
 

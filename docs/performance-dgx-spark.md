@@ -212,22 +212,22 @@ raw GPUDirect path was designed around. All cells below ran for 30 s with
 
 Hold (payload=8000, batch=10240) constant; sweep `--target-gbps`. The
 token-bucket pacer tracks target within ±0.02 Gbps until the link saturates
-near 96 Gbps. Beyond that, target=100 and unpaced both report the
-achievable ceiling. TX and RX cores spin in poll-mode regardless of target
-rate (visible in the CPU table below). This drop-curve run topped out at
-~96 Gbps at the headline shape; the unpaced payload×batch sweep below
-measured ~98.5 Gbps for the same cell — a ~2% run-to-run spread.
+near 98 Gbps. Beyond that, target=100 and unpaced both report the
+achievable ceiling. The queue-poller cores spin in poll-mode regardless of target
+rate (visible in the CPU table below). This drop-curve run (3 reps/step) topped out
+at ~97.9 Gbps at the headline shape; the unpaced payload×batch sweep below measured
+~98.5 Gbps for the same cell — a ~1% run-to-run spread. Values are the mean of 3 reps.
 
-| target Gbps | achieved Gbps | RX pps    | drops | TX core % | RX core % |
-| ----------- | ------------- | --------- | ----- | --------- | --------- |
-| 1           | 1.011         |    15,678 | 0     | 92.0      | 92.0      |
-| 5           | 5.012         |    77,697 | 0     | 91.8      | 91.8      |
-| 10          | 10.001        |   155,032 | 0     | 92.5      | 92.5      |
-| 25          | 25.008        |   387,650 | 0     | 91.9      | 91.9      |
-| 50          | 50.001        |   775,062 | 0     | 92.8      | 92.8      |
-| 75          | 74.999        | 1,162,551 | 0     | 91.7      | 91.7      |
-| 100         | 96.370        | 1,493,823 | 0     | 91.6      | 91.6      |
-| unpaced     | 95.897        | 1,486,498 | 0     | 91.6      | 90.5      |
+| target Gbps | achieved Gbps | RX pps    | drops | TX poller % | RX poller % |
+| ----------- | ------------- | --------- | ----- | ----------- | ----------- |
+| 1           | 1.012         |    15,679 | 0     | 92.2        | 92.2        |
+| 5           | 5.013         |    77,711 | 0     | 92.3        | 92.6        |
+| 10          | 10.004        |   155,072 | 0     | 91.6        | 91.6        |
+| 25          | 25.001        |   387,538 | 0     | 92.4        | 92.0        |
+| 50          | 49.996        |   774,987 | 0     | 92.0        | 92.0        |
+| 75          | 74.993        | 1,162,475 | 0     | 92.0        | 92.0        |
+| 100         | 97.940        | 1,518,166 | 0     | 92.3        | 92.7        |
+| unpaced     | 97.938        | 1,518,133 | 0     | 92.0        | 92.7        |
 
 #### Payload × target_gbps matrix
 
@@ -236,6 +236,12 @@ together. Each cell shows the achieved Gbps and drops over a 30 s
 run. Coloring is relative to the **effective target**
 `min(target_gbps, 96 Gbps link cap)`; the "unpaced" column uses the
 link cap as its effective target:
+
+!!! note
+    This matrix is from a prior `drop-curve-matrix` run and has **not** been
+    refreshed with the poller/worker split; the current pass re-ran `sweep` and
+    `drop-curve` only. The 8000 B row is superseded by the native-shape drop-curve
+    table above; the sub-8 KB rows await a `drop-curve-matrix` re-run.
 
 <div class="perf-legend" markdown="0">
   <span class="cell-green">green — no drops, achieved ≥ 95% of effective target</span>
@@ -399,14 +405,16 @@ are CPU-bound and noisy run-to-run (±20%); treat them as order-of-magnitude.
 
 | Resource             | Value | Note                                       |
 | -------------------- | ----- | ------------------------------------------ |
-| Master core (CPU 8)  |  3.1% | Mostly idle; orchestration only            |
-| TX core (CPU 17)     | 93.4% | Poll-mode spin; rate-independent           |
-| RX core (CPU 18)     | 93.4% | Poll-mode spin; rate-independent           |
-| GPU SM %             |  0.0% | GPU is a DMA target, no compute            |
-| GPU mem-ctrl %       |  0.0% | Payload writes traverse PCIe, not the GPU memory controller |
+| Master core (CPU 8)      |  3.7% | Mostly idle; orchestration only            |
+| TX queue poller (CPU 17) |  ~92% | Poll-mode spin; rate-independent           |
+| RX queue poller (CPU 18) |  ~92% | Poll-mode spin; rate-independent           |
+| GPU SM %                 |  0.0% | GPU is a DMA target, no compute            |
+| GPU mem-ctrl %           |  0.0% | Payload writes traverse PCIe, not the GPU memory controller |
 
-The TX/RX cores stay at ~92% across every drop-curve step from 1 Gbps to
-line rate — characteristic of DPDK's poll-mode driver, which spins waiting
+Under the poller/worker split the benchmark app workers run on their own isolated
+cores (TX 16, RX 19) alongside these pollers; this run sampled only the poller
+cores (CPU 17/18). The poller cores stay at ~92% across every drop-curve step from
+1 Gbps to line rate — characteristic of DPDK's poll-mode driver, which spins waiting
 for descriptors regardless of offered load. The master core handles
 configuration only and idles below 5 % at the headline shape; at smaller
 payload sizes (1 KB and below) it occasionally hits 90%+ as more bursts
