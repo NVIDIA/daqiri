@@ -1,6 +1,6 @@
 /* ── NVIDIA theme — Material override sheet ─────────────────────────── */
-/* Mirrors the palette and typography of docs/index.html so             */
-/* Material-rendered pages share the landing page's visual style.       */
+/* Mirrors the palette and typography of docs/index.md (landing page)   */
+/* so Material-rendered pages share the landing page's visual style.    */
 
 :root {
   --nv-green:   #76b900;

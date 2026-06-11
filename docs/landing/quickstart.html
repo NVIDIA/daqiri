@@ -1,0 +1,113 @@
+<!-- QUICK START -->
+  <section id="getting-started">
+    <div class="container">
+      <div class="section-header">
+        <div>
+          <div class="section-label">Quick Start</div>
+          <h2 class="section-title">Build &amp; Run in Minutes</h2>
+          <p class="section-desc">Runs on Linux (kernel 5.4+) with the CUDA Toolkit 12.2+. The kernel-bypass and GPUDirect paths additionally require an NVIDIA ConnectX-6 Dx (or newer) NIC.</p>
+        </div>
+        <a href="getting-started/" class="btn btn-outline">Full Guide →</a>
+      </div>
+      <div class="gs-layout">
+        <div class="gs-steps">
+          <div class="gs-step">
+            <div class="gs-step-num">1</div>
+            <div class="gs-step-body">
+              <h4>Install Prerequisites</h4>
+              <p>Install the CUDA Toolkit (12.2 or newer).</p>
+              <p>For the Raw Ethernet / GPUDirect / RoCE path, you also need an NVIDIA ConnectX-6 Dx (or newer) NIC. The default Ubuntu kernel drivers are sufficient; we recommend additionally installing <code>doca-ofed</code> for the diagnostic utilities (<code>ibstat</code>, <code>ibv_devinfo</code>, <code>mlxconfig</code>, <code>mlnx_perf</code>, …).</p>
+            </div>
+          </div>
+          <div class="gs-step">
+            <div class="gs-step-num">2</div>
+            <div class="gs-step-body">
+              <h4>Build from Source</h4>
+              <p>Select implementations with <code>DAQIRI_MGR</code>. Valid values: <code>dpdk</code>, <code>socket</code>, <code>rdma</code>.</p>
+              <pre><span class="cm"># Configure, build, install</span>
+cmake -S . -B build \
+  -DBUILD_SHARED_LIBS=ON \
+  -DDAQIRI_BUILD_PYTHON=OFF \
+  -DDAQIRI_MGR=<span class="str">"dpdk socket rdma"</span>
+cmake --build build -j
+cmake --install build --prefix /opt/daqiri</pre>
+            </div>
+          </div>
+          <div class="gs-step">
+            <div class="gs-step-num">3</div>
+            <div class="gs-step-body">
+              <h4>Or Build the Container</h4>
+              <p>The Dockerfile builds DPDK from source with dmabuf patches — no peermem needed inside the container. Set <code>BASE_IMAGE=torch</code> to build on top of NGC PyTorch for Torch / TensorRT inference workflows.</p>
+              <pre>BASE_TARGET=dpdk \
+  DAQIRI_MGR=<span class="str">"dpdk socket rdma"</span> \
+  scripts/build-container.sh</pre>
+            </div>
+          </div>
+          <div class="gs-step">
+            <div class="gs-step-num">4</div>
+            <div class="gs-step-body">
+              <h4>Tune the System</h4>
+              <p>Run the diagnostic script to surface common networking bottlenecks (CPU governor, hugepages, MRRS, NUMA, GPU clocks, MTU, BAR1, PCIe topology):</p>
+              <pre>sudo python3 python/tune_system.py --check all</pre>
+            </div>
+          </div>
+          <div class="gs-step">
+            <div class="gs-step-num">5</div>
+            <div class="gs-step-body">
+              <h4>Run a Benchmark</h4>
+              <p>Edit the YAML to match your hardware (PCIe BDF, CPU cores, IPs), then:</p>
+              <pre>./build/examples/daqiri_bench_raw_gpudirect \
+  examples/daqiri_bench_raw_tx_rx.yaml \
+  --seconds 10</pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="gs-code-panel">
+          <div class="gs-code-block">
+            <div class="gs-code-hdr"><span class="gs-code-title">Initialize &amp; Receive Packets</span><span class="gs-code-lang">C++</span></div>
+            <pre><span class="kw">#include</span> <span class="str">&lt;daqiri/daqiri.h&gt;</span>
+
+<span class="cm">// Init from YAML config</span>
+daqiri::<span class="fn">daqiri_init</span>(<span class="str">"config.yaml"</span>);
+
+<span class="cm">// Non-blocking burst receive</span>
+daqiri::<span class="fn">BurstParams</span> *burst;
+<span class="kw">auto</span> s = daqiri::<span class="fn">get_rx_burst</span>(
+    &amp;burst, port_id, queue_id);
+
+<span class="kw">if</span> (s == daqiri::<span class="fn">Status</span>::<span class="nm">SUCCESS</span>) {
+  <span class="kw">int</span> n = daqiri::<span class="fn">get_num_packets</span>(burst);
+  <span class="kw">for</span> (<span class="kw">int</span> i = <span class="nm">0</span>; i &lt; n; i++) {
+    <span class="kw">void</span>* p = daqiri::<span class="fn">get_packet_ptr</span>(
+        burst, i);
+    <span class="cm">// process p ...</span>
+  }
+  daqiri::<span class="fn">free_all_packets_and_burst_rx</span>(
+      burst);
+}</pre>
+          </div>
+          <div class="gs-code-block">
+            <div class="gs-code-hdr"><span class="gs-code-title">Header-Data Split (GPU payload)</span><span class="gs-code-lang">C++</span></div>
+            <pre><span class="cm">// Seg 0 = headers (CPU)
+// Seg 1 = payload (GPU)</span>
+<span class="kw">for</span> (<span class="kw">int</span> i = <span class="nm">0</span>; i &lt; n; i++) {
+  <span class="kw">void</span>* hdr =
+    daqiri::<span class="fn">get_segment_packet_ptr</span>(
+        burst, <span class="nm">0</span>, i);
+  <span class="kw">void</span>* pay =
+    daqiri::<span class="fn">get_segment_packet_ptr</span>(
+        burst, <span class="nm">1</span>, i); <span class="cm">// GPU ptr</span>
+  uint32_t hlen =
+    daqiri::<span class="fn">get_segment_packet_length</span>(
+        burst, <span class="nm">0</span>, i);
+  uint32_t plen =
+    daqiri::<span class="fn">get_segment_packet_length</span>(
+        burst, <span class="nm">1</span>, i);
+  <span class="cm">// pay is already on GPU — no copy</span>
+}</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>

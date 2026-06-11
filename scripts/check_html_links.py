@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Verify that hand-maintained HTML pages link only to existing locations
-in the rendered MkDocs site.
+"""Verify that MkDocs-built HTML pages link only to existing locations
+in the rendered site.
 
-The hand-maintained HTML landing page (docs/index.html) is not part of the
-MkDocs link graph, so `mkdocs build --strict` does not check its hrefs.
-This script does, by walking each href and confirming the target resolves
-under site/.
+The landing page (docs/index.md → site/index.html) embeds raw HTML with
+href attributes. MkDocs strict mode does not validate those links, so this
+script walks each href and confirms the target resolves under site/.
 
 Usage: python scripts/check_html_links.py [SITE_DIR]
        (default SITE_DIR is ./site, the output of `mkdocs build`)
