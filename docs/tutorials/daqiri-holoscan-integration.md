@@ -16,7 +16,7 @@ project with a working CMake setup lives in Holohub (see [References](#reference
 To achieve peak IO performance, be sure to review the
 [system configuration](system_configuration.md) tutorial. It is also a good idea to
 confirm the DAQIRI YAML works with the standalone benchmarks in
-[Benchmarking Examples](benchmarking_examples.md) and to review the
+[Raw Ethernet Benchmarking](../benchmarks/raw_benchmarking.md) and to review the
 [configuration walkthrough](configuration-walkthrough.md) before wiring DAQIRI into
 Holoscan.
 
@@ -27,22 +27,38 @@ units of work — connected by data flows and run by a scheduler. DAQIRI owns NI
 setup, packet memory, and RX burst lifetimes; the operators in the graph pull
 received data from DAQIRI and pass it downstream as tensors.
 
-The recommended pattern is to initialize DAQIRI once during application startup,
-configure a GPU reorder/quantize plan in the DAQIRI config, let a Holoscan source
-operator poll the reordered RX bursts, and emit each completed — sequence-ordered
-and quantized — batch as a `holoscan::TensorMap` to downstream operators.
+The recommended Holoscan pattern is to pass one YAML file into the application
+with `app->config(...)`, read Holoscan operator parameters with `from_config(...)`,
+and initialize DAQIRI from the same YAML during graph composition before any
+DAQIRI-backed operators run. DAQIRI handles any configured GPU reorder/quantize
+plan internally; the Holoscan source operator is just the adapter that polls DAQIRI
+and emits completed batches to downstream operators.
 
 ```cpp
 #include <daqiri/daqiri.h>
 #include <holoscan/holoscan.hpp>
 
 #include <filesystem>
+#include <stdexcept>
+#include <utility>
 
 class DaqiriHoloscanApp : public holoscan::Application {
  public:
+  void set_config_path(std::filesystem::path config_path) {
+    config_path_ = std::move(config_path);
+  }
+
   // compose() wires up the operator graph. Holoscan calls it once when the
   // application starts, before the scheduler begins running operators.
   void compose() override {
+    // Initialize DAQIRI from the same YAML file passed to app->config(...). This
+    // sets up the NIC, packet memory pools, RX queues, and any reorder/quantize
+    // plan described in the `daqiri` block before DAQIRI-backed operators run.
+    auto status = daqiri::daqiri_init(config_path_.string());
+    if (status != daqiri::Status::SUCCESS) {
+      throw std::runtime_error("DAQIRI initialization failed");
+    }
+
     // Drive the graph with a multithreaded scheduler. High-bandwidth DAQIRI
     // pipelines must overlap IO with processing: the RX source operator has to keep
     // polling the NIC while downstream operators work on earlier batches. A
@@ -52,14 +68,17 @@ class DaqiriHoloscanApp : public holoscan::Application {
         "multithread", from_config("scheduler")));
 
     // Source operator: polls DAQIRI for completed reordered+quantized batches. Its
-    // parameters come from the `reorder_rx` block of the YAML below.
-    auto rx = make_operator<DaqiriReorderRxOp>("daqiri_rx", from_config("reorder_rx"));
+    // parameters come from the `daqiri_rx` block of the YAML below.
+    auto rx = make_operator<DaqiriRxOp>("daqiri_rx", from_config("daqiri_rx"));
     // Downstream operator that consumes the emitted tensors.
     auto sink = make_operator<TensorSinkOp>("tensor_sink");
 
     // Connect rx's "out" port to sink's "in" port, forming a two-node graph.
     add_flow(rx, sink, {{"out", "in"}});
   }
+
+ private:
+  std::filesystem::path config_path_;
 };
 
 int main(int argc, char** argv) {
@@ -70,18 +89,11 @@ int main(int argc, char** argv) {
 
   const std::filesystem::path config_path{argv[1]};
 
-  // Initialize DAQIRI once, up front: this sets up the NIC, packet memory pools,
-  // RX queues, and the GPU reorder/quantize plan described in the `daqiri` block.
-  // Must happen before the operators (which call into DAQIRI) start running.
-  auto status = daqiri::daqiri_init(config_path.string());
-  if (status != daqiri::Status::SUCCESS) {
-    return 1;
-  }
-
   // Build the Holoscan application and hand it the same YAML file. Holoscan reads
   // its own keys (scheduler, operator parameter blocks) and ignores the `daqiri`
   // block.
   auto app = holoscan::make_application<DaqiriHoloscanApp>();
+  app->set_config_path(config_path);
   app->config(config_path.string());
   // Runs the operator graph until the application is stopped. See "Running and
   // stopping" below for how a polling RX source terminates.
@@ -170,15 +182,15 @@ daqiri:
                     bit_offset: 144
                     bit_width: 2
 
-# Parameters for the DaqiriReorderRxOp operator, read via from_config("reorder_rx").
-reorder_rx:
+# Parameters for the Holoscan DAQIRI source adapter, read via from_config("daqiri_rx").
+daqiri_rx:
   interface_name: rx_port
   reorder_name: rx_reorder_quantize   # must match a reorder_configs[].name above
 ```
 
 Replace the placeholder PCIe address, CPU cores, flow match fields, and bit-field
-offsets with values for your stream. The reorder plan does the heavy lifting; the
-operator's own parameter block (`reorder_rx`) is just the interface name and the
+offsets with values for your stream. The DAQIRI reorder plan does the heavy lifting;
+the operator's own parameter block (`daqiri_rx`) is just the interface name and the
 name of the reorder config whose CUDA stream it drives. See the
 [configuration walkthrough](configuration-walkthrough.md) and
 [Configuration YAML Reference](../api-reference/configuration.md) for the full
@@ -217,19 +229,19 @@ the batch metadata, and emits the reordered+quantized device buffer as a tensor.
 
 // Emits each completed, sequence-ordered, quantized batch from DAQIRI's GPU reorder
 // plan as a Holoscan tensor.
-class DaqiriReorderRxOp : public holoscan::Operator {
+class DaqiriRxOp : public holoscan::Operator {
  public:
   // Boilerplate that lets Holoscan construct the operator from the YAML config.
-  HOLOSCAN_OPERATOR_FORWARD_ARGS(DaqiriReorderRxOp)
+  HOLOSCAN_OPERATOR_FORWARD_ARGS(DaqiriRxOp)
 
   // Release the CUDA stream created in initialize().
-  ~DaqiriReorderRxOp() override {
+  ~DaqiriRxOp() override {
     if (stream_ != nullptr) {
       cudaStreamDestroy(stream_);
     }
   }
 
-  // setup() declares the operator's parameters (read from the `reorder_rx` block)
+  // setup() declares the operator's parameters (read from the `daqiri_rx` block)
   // and its output port. It runs before initialize().
   void setup(holoscan::OperatorSpec& spec) override {
     spec.param(interface_name_, "interface_name", "Interface name",
@@ -241,9 +253,9 @@ class DaqiriReorderRxOp : public holoscan::Operator {
     spec.output<holoscan::TensorMap>("out");
   }
 
-  // initialize() runs once when the graph is composed. DAQIRI is already
-  // initialized in main(), so here we resolve the interface and attach our CUDA
-  // stream to the reorder plan.
+  // initialize() runs once after graph composition. DAQIRI was initialized from
+  // the shared YAML in compose(), so here we resolve the interface and attach
+  // our CUDA stream to the reorder plan.
   void initialize() override {
     holoscan::Operator::initialize();
 
@@ -318,7 +330,7 @@ class DaqiriReorderRxOp : public holoscan::Operator {
       daqiri::BurstParams* burst, void* batch,
       const daqiri::ReorderBurstInfo& info);
 
-  // Parameters populated from the YAML `reorder_rx` block.
+  // Parameters populated from the YAML `daqiri_rx` block.
   holoscan::Parameter<std::string> interface_name_;
   holoscan::Parameter<std::string> reorder_name_;
 
@@ -362,7 +374,7 @@ describes the reordered device buffer with a `DLManagedTensor` and constructs a 
 from it (`DLPack` types come from `dlpack/dlpack.h`, bundled with the Holoscan SDK):
 
 ```cpp
-std::shared_ptr<holoscan::Tensor> DaqiriReorderRxOp::wrap_reorder_output_as_tensor(
+std::shared_ptr<holoscan::Tensor> DaqiriRxOp::wrap_reorder_output_as_tensor(
     daqiri::BurstParams* burst, void* batch,
     const daqiri::ReorderBurstInfo& info) {
   // Reordered, sequence-ordered, fp32 layout: one row per sequence slot, one column
@@ -375,6 +387,7 @@ std::shared_ptr<holoscan::Tensor> DaqiriReorderRxOp::wrap_reorder_output_as_tens
   auto* dl = new DLManagedTensor{};
   dl->dl_tensor.data = batch;                        // DAQIRI-owned device buffer (reorder_gpu)
   dl->dl_tensor.device = DLDevice{kDLCUDA, 0};       // device memory, GPU 0
+  // The DLPack device ordinal must match the DAQIRI memory-region affinity.
   dl->dl_tensor.ndim = 2;
   dl->dl_tensor.dtype = DLDataType{kDLFloat, 32, 1}; // matches output_type: fp32
   dl->dl_tensor.shape = shape;
@@ -450,7 +463,8 @@ class TensorSinkOp : public holoscan::Operator {
   (`examples/raw_reorder_quantize_bench.cpp`, config
   `daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml`) exercises the same
   reorder/quantize path outside Holoscan — a good way to validate the DAQIRI config
-  first. See [Benchmarking Examples](benchmarking_examples.md).
-- [Holohub PR #1553](https://github.com/nvidia-holoscan/holohub/pull/1553) is the current reference while the Holohub example is under review.
-- After merge, the expected Holohub app path is `applications/daqiri_raw_ethernet_bench`.
+  first. See [Raw Ethernet Benchmarking](../benchmarks/raw_benchmarking.md).
+- The landed Holohub reference app is
+  [`applications/daqiri_raw_ethernet_bench`](https://github.com/nvidia-holoscan/holohub/tree/main/applications/daqiri_raw_ethernet_bench).
+  The merge history is in [Holohub PR #1553](https://github.com/nvidia-holoscan/holohub/pull/1553).
 - DAQIRI [configuration walkthrough](configuration-walkthrough.md) and [C++ API Usage](../api-reference/cpp.md) cover the DAQIRI-side configuration, packet access, and cleanup calls.
