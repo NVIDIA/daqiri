@@ -1,4 +1,4 @@
-site_name: DAQIRI Documentation
+site_name: DAQIRI — Data Acquisition for Integrated Real-time Instruments
 site_url: https://nvidia.github.io/daqiri/
 repo_url: https://github.com/nvidia/daqiri
 repo_name: nvidia/daqiri
@@ -48,6 +48,8 @@ extra_javascript:
   - javascripts/tab-dropdowns.js
 
 site_dir: site
+exclude_docs: |
+  landing/
 
 nav:
   - Home: index.md

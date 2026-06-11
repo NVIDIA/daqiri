@@ -116,11 +116,6 @@ body:has(.daqiri-landing) .md-header__inner {
   height: var(--md-header-height);
 }
 
-body:has(.daqiri-landing) .md-header__button.md-logo img,
-body:has(.daqiri-landing) .md-header__button.md-logo svg {
-  height: 28px;
-}
-
 body:has(.daqiri-landing) .md-header__title {
   font-size: 0.9rem;
 }
@@ -1114,6 +1109,12 @@ body.graphic-overlay-open {
   border: 1px solid rgba(255, 193, 7, 0.2);
 }
 
+.daqiri-landing .tag-soon {
+  background: rgba(136, 136, 136, 0.1);
+  color: var(--text-mut);
+  border: 1px solid rgba(136, 136, 136, 0.25);
+}
+
 .daqiri-landing .tut-time {
   font-size: 0.8rem;
   color: var(--text-dim);
@@ -1128,6 +1129,20 @@ body.graphic-overlay-open {
 .daqiri-landing .tut-item:hover .tut-arrow {
   transform: translateX(4px);
   color: var(--accent-label);
+}
+
+.daqiri-landing .tut-soon {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.daqiri-landing .tut-soon:hover {
+  background: var(--bg-page);
+}
+
+.daqiri-landing .tut-soon:hover .tut-arrow {
+  transform: none;
+  color: var(--text-dim);
 }
 
 .daqiri-landing #publications {

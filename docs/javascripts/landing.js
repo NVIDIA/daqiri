@@ -8,6 +8,18 @@
   };
   var keydownBound = false;
 
+  function resetGraphicOverlay() {
+    var overlay = overlayState.overlay;
+    if (overlay && overlay.isConnected) {
+      overlay.classList.remove("is-open");
+      overlay.setAttribute("aria-hidden", "true");
+    }
+    document.body.classList.remove("graphic-overlay-open");
+    overlayState.overlay = null;
+    overlayState.closeButton = null;
+    overlayState.previousFocus = null;
+  }
+
   function openGraphicOverlay() {
     var overlay = overlayState.overlay;
     var closeButton = overlayState.closeButton;
@@ -21,7 +33,10 @@
 
   function closeGraphicOverlay() {
     var overlay = overlayState.overlay;
-    if (!overlay) return;
+    if (!overlay) {
+      resetGraphicOverlay();
+      return;
+    }
     overlay.classList.remove("is-open");
     overlay.setAttribute("aria-hidden", "true");
     document.body.classList.remove("graphic-overlay-open");
@@ -33,6 +48,7 @@
       );
     }
     var prev = overlayState.previousFocus;
+    overlayState.previousFocus = null;
     if (prev && typeof prev.focus === "function") {
       prev.focus();
     }
@@ -52,16 +68,14 @@
   function initLandingGraphic() {
     var root = document.querySelector(".daqiri-landing");
     if (!root) {
-      overlayState.overlay = null;
-      overlayState.closeButton = null;
+      resetGraphicOverlay();
       return;
     }
 
     var graphicOpen = root.querySelector("[data-graphic-open]");
     var graphicOverlay = document.getElementById("daqiri-graphic-overlay");
     if (!graphicOpen || !graphicOverlay) {
-      overlayState.overlay = null;
-      overlayState.closeButton = null;
+      resetGraphicOverlay();
       return;
     }
 
