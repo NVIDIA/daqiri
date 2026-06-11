@@ -288,13 +288,17 @@ class DaqiriRxOp : public holoscan::Operator {
         burst == nullptr) {
       return;  // Nothing ready this tick.
     }
+    auto burst_deleter = [](daqiri::BurstParams* owned_burst) {
+      daqiri::free_all_packets_and_burst_rx(owned_burst);
+    };
+    std::unique_ptr<daqiri::BurstParams, decltype(burst_deleter)> burst_guard(
+        burst, burst_deleter);
 
     // Skip anything that is not a finished reorder batch (e.g. raw passthrough
     // bursts). The flag lives in the burst header.
     const bool reordered =
         (burst->hdr.hdr.burst_flags & daqiri::DAQIRI_BURST_FLAG_REORDERED) != 0U;
     if (!reordered) {
-      daqiri::free_all_packets_and_burst_rx(burst);
       return;
     }
 
@@ -308,7 +312,6 @@ class DaqiriRxOp : public holoscan::Operator {
     // total reordered buffer size.
     daqiri::ReorderBurstInfo info{};
     if (daqiri::get_reorder_burst_info(burst, &info) != daqiri::Status::SUCCESS) {
-      daqiri::free_all_packets_and_burst_rx(burst);
       return;
     }
 
@@ -319,8 +322,11 @@ class DaqiriRxOp : public holoscan::Operator {
     // Wrap that device buffer as a tensor and emit it zero-copy. The tensor takes
     // ownership of the burst and frees it via the DLPack deleter once downstream is
     // done — so we do NOT free the burst here.
+    auto tensor = wrap_reorder_output_as_tensor(burst_guard.get(), batch, info);
+    burst_guard.release();  // Tensor's DLPack deleter now owns the burst.
+
     holoscan::TensorMap out_message;
-    out_message["rx_tensor"] = wrap_reorder_output_as_tensor(burst, batch, info);
+    out_message["rx_tensor"] = tensor;
     op_output.emit(out_message, "out");
   }
 
@@ -380,17 +386,17 @@ std::shared_ptr<holoscan::Tensor> DaqiriRxOp::wrap_reorder_output_as_tensor(
   // Reordered, sequence-ordered, fp32 layout: one row per sequence slot, one column
   // per payload element. shape must outlive the tensor, so the DLManagedTensor owns
   // it and the deleter frees it.
-  auto* shape = new int64_t[2];
+  auto shape = std::make_unique<int64_t[]>(2);
   shape[0] = info.packets_per_batch;            // number of sequence slots in the batch
   shape[1] = info.payload_len / sizeof(float);  // fp32 elements per slot
 
-  auto* dl = new DLManagedTensor{};
+  auto dl = std::make_unique<DLManagedTensor>();
   dl->dl_tensor.data = batch;                        // DAQIRI-owned device buffer (reorder_gpu)
   dl->dl_tensor.device = DLDevice{kDLCUDA, 0};       // device memory, GPU 0
   // The DLPack device ordinal must match the DAQIRI memory-region affinity.
   dl->dl_tensor.ndim = 2;
   dl->dl_tensor.dtype = DLDataType{kDLFloat, 32, 1}; // matches output_type: fp32
-  dl->dl_tensor.shape = shape;
+  dl->dl_tensor.shape = shape.get();
   dl->dl_tensor.strides = nullptr;                   // row-major / contiguous
   dl->dl_tensor.byte_offset = 0;
 
@@ -405,7 +411,11 @@ std::shared_ptr<holoscan::Tensor> DaqiriRxOp::wrap_reorder_output_as_tensor(
     delete self;
   };
 
-  return std::make_shared<holoscan::Tensor>(dl);  // explicit Tensor(DLManagedTensor*)
+  auto tensor = std::make_shared<holoscan::Tensor>(dl.get());
+  // Tensor construction succeeded; its DLPack deleter now owns dl and shape.
+  shape.release();
+  dl.release();
+  return tensor;
 }
 ```
 
