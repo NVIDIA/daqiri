@@ -23,6 +23,8 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
   - *Batched GPU*: Entire packets to GPU memory (maximum bandwidth, GPU-side parsing required).
 - **Burst file writes** — Write received bursts as raw packet files or appendable PCAP
   captures. Host-backed buffers use POSIX writes; CUDA device-backed buffers can use cuFile/GDS.
+- **S3 raw object writes** — Optionally upload raw burst packets to Amazon S3 or an
+  S3-compatible object store through the AWS SDK for C++.
 - **Flow Steering** — Configure the NIC's hardware flow engine to route packets by UDP
   source/destination port.
 - **RDMA** — RDMA verbs (READ, WRITE, SEND) over RoCE on Ethernet NICs or InfiniBand.
@@ -67,10 +69,16 @@ and `libcufile` in the build environment. At runtime, regular GDS writes through
 NVIDIA's `nvidia-fs` path require the `nvidia-fs` kernel module to be loaded and the
 target storage stack to be reported as supported by `gdscheck.py -p`.
 
+Enable raw packet uploads to S3 with `-DDAQIRI_ENABLE_S3=ON`. The recommended
+container build installs AWS SDK for C++ with S3 support; bare-metal builds need
+`aws-cpp-sdk-core` and `aws-cpp-sdk-s3` discoverable by CMake. S3 credentials are
+resolved through the AWS SDK provider chain.
+
 Container build:
 
 ```bash
 BASE_TARGET=dpdk DAQIRI_MGR="dpdk socket rdma" scripts/build-container.sh
+DAQIRI_ENABLE_S3=ON DAQIRI_BUILD_PYTHON=ON BASE_TARGET=dpdk scripts/build-container.sh
 ```
 
 OpenTelemetry metrics are opt-in. Build with `-DDAQIRI_ENABLE_OTEL_METRICS=ON`

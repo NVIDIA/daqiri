@@ -329,6 +329,81 @@ writes raw or pcap output with the synchronous API, the asynchronous API, or bot
 to send real Ethernet/IPv4/UDP frames out of a NIC and receive them back through a
 hardware RX port.
 
+### Writing Raw Packets to S3
+
+Build with `DAQIRI_ENABLE_S3=ON` to upload raw packet objects through AWS SDK
+for C++. This path uses normal S3 `PutObject` requests, so it can target Amazon
+S3 or an S3-compatible service. It is not a cuObject/RDMA path.
+
+Before creating the writer, choose a bucket and region, configure AWS
+credentials through the SDK provider chain, grant `s3:PutObject` on the target
+prefix, and make sure the host can reach the S3 endpoint. For S3-compatible
+stores, set `endpoint_override` and `path_style` if that service requires them.
+
+```cpp
+daqiri::S3WriterConfig cfg;
+cfg.bucket = "daqiri-captures";
+cfg.region = "us-west-2";
+cfg.max_inflight_uploads = 8;
+
+daqiri::S3Writer *writer = nullptr;
+auto st = daqiri::daqiri_s3_writer_create(cfg, &writer);
+
+daqiri::S3WriteHandle *handle = nullptr;
+if (st == daqiri::Status::SUCCESS) {
+    st = daqiri::daqiri_write_raw_to_s3_objects_async(
+        writer,
+        burst,
+        "runs/run42/packet",
+        60,
+        &handle);
+    if (st == daqiri::Status::SUCCESS) {
+        daqiri::free_all_packets_and_burst_rx(burst);
+        burst = nullptr;
+    }
+}
+
+daqiri::S3WriteStatus s3_status{};
+if (st == daqiri::Status::SUCCESS) {
+    st = daqiri::daqiri_s3_write_wait(handle, &s3_status);
+    daqiri::daqiri_s3_write_destroy(handle);
+}
+if (burst != nullptr) {
+    daqiri::free_all_packets_and_burst_rx(burst);
+}
+if (writer != nullptr) {
+    daqiri::daqiri_s3_writer_destroy(writer);
+}
+```
+
+Object keys mirror raw file naming: `object_prefix_<packet_index>`. DAQIRI
+copies each packet's post-offset logical bytes into owned host staging memory
+before submission, so the burst may be released after
+`daqiri_write_raw_to_s3_objects_async()` succeeds. Header-data split and other
+multi-segment packets are concatenated into one object. The first S3 version
+uses one single-part `PutObject` per packet; objects larger than 5 GiB return
+`NOT_SUPPORTED`, and multipart/burst aggregation is future work.
+
+The Python bindings expose the same C++ writer when both
+`DAQIRI_BUILD_PYTHON=ON` and `DAQIRI_ENABLE_S3=ON` are used:
+
+```python
+cfg = daqiri.S3WriterConfig()
+cfg.bucket = "daqiri-captures"
+cfg.region = "us-west-2"
+
+writer = daqiri.S3Writer(cfg)
+try:
+    status = writer.write_raw_objects(
+        burst,
+        "runs/run42/packet",
+        packet_data_offset=60,
+    )
+finally:
+    daqiri.free_all_packets_and_burst_rx(burst)
+    writer.destroy()
+```
+
 ## Utility Functions
 
 ```cpp
@@ -468,6 +543,12 @@ workflow sections above show the common call order and ownership rules.
 | `daqiri_file_write_poll(handle, &status)` | Poll an asynchronous file-write handle. |
 | `daqiri_file_write_wait(handle, &status)` | Wait for asynchronous file writes to complete. |
 | `daqiri_file_write_destroy(handle)` | Release asynchronous file-write resources. |
+| `daqiri_s3_writer_create(config, &writer)` | Create an AWS SDK-backed S3 raw object writer. |
+| `daqiri_write_raw_to_s3_objects_async(writer, burst, object_prefix, packet_data_offset, &handle)` | Submit asynchronous raw packet uploads to S3. |
+| `daqiri_s3_write_poll(handle, &status)` | Poll asynchronous S3 uploads. |
+| `daqiri_s3_write_wait(handle, &status)` | Wait for asynchronous S3 uploads to complete. |
+| `daqiri_s3_write_destroy(handle)` | Release asynchronous S3 upload resources. |
+| `daqiri_s3_writer_destroy(writer)` | Release an S3 writer. |
 
 ### Ports, Traffic, Socket, and RDMA
 
