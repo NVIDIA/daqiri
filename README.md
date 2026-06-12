@@ -26,7 +26,8 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 - **S3 raw object writes** — Optionally upload raw burst packets to Amazon S3 or an
   S3-compatible object store through the AWS SDK for C++.
 - **Flow Steering** — Configure the NIC's hardware flow engine to route packets by UDP
-  source/destination port.
+  source/destination port or flex-item payload fields. Per RX interface, use standard
+  UDP/IP flows or flex-item flows, not both.
 - **RDMA** — RDMA verbs (READ, WRITE, SEND) over RoCE on Ethernet NICs or InfiniBand.
 - **Optional OpenTelemetry metrics** — Expose per-interface or per-queue packet,
   byte, and drop counters when built with `DAQIRI_ENABLE_OTEL_METRICS=ON`.

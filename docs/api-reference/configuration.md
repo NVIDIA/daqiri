@@ -217,10 +217,16 @@ engine.
   - **`mask`**: 32-bit mask applied before matching (with flex items).
     - type: `integer`
 
+A single RX interface must use either standard UDP/IP flows or flex-item flows, not both.
+Both classes install conflicting DPDK group-0 jump rules, so only one is reachable when mixed.
+`daqiri_init` rejects such configs with a clear error.
+
 ### Flow Isolation
 
 `rx.flow_isolation:` — When `true`, only packets matching an explicit flow rule are delivered.
 Unmatched packets are dropped. When `false`, unmatched packets go to a default queue.
+With `flow_isolation: true`, send-to-kernel fallbacks are installed per flow class
+(standard or flex-item); mixing both classes on one interface is not supported.
 
 - type: `boolean`
 - default: `false`
