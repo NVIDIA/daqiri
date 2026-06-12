@@ -330,10 +330,15 @@ inline EngineType engine_type_from_string(const std::string& str) {
 
 
 #if DAQIRI_ENGINE_RDMA
-  if (str == DAQIRI_ENGINE_STR__RDMA) return EngineType::RDMA;
-  available_engines += std::string(DAQIRI_ENGINE_STR__RDMA) + " ";
+  // Accept both the user-facing "ibverbs" and the internal "rdma" name.
+  if (str == DAQIRI_ENGINE_STR__IBVERBS || str == DAQIRI_ENGINE_STR__RDMA) {
+    return EngineType::RDMA;
+  }
+  available_engines += std::string(DAQIRI_ENGINE_STR__IBVERBS) + " ";
 #else
-  if (str == DAQIRI_ENGINE_STR__RDMA) is_known_but_unavailable = true;
+  if (str == DAQIRI_ENGINE_STR__IBVERBS || str == DAQIRI_ENGINE_STR__RDMA) {
+    is_known_but_unavailable = true;
+  }
 #endif
 
   if (!available_engines.empty()) {
