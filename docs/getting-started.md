@@ -84,6 +84,8 @@ First, add the [DOCA apt repository](https://developer.nvidia.com/doca-downloads
 
 Then build the DAQIRI library:
 
+### Container build {#container-build}
+
 === "Container build (recommended)"
 
     The container bundles all user-space libraries for each stream type, avoiding dependency issues on the host:

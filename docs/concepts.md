@@ -86,7 +86,7 @@ URI schemes:
 
 *YAML:* `stream_type: "pcie"`.
 
-Coming-soon path for sensors that appear directly on the PCIe bus, such
+Planned path for sensors that appear directly on the PCIe bus, such
 as FPGAs, frame grabbers, or custom acquisition cards. The goal is to
 move data into or out of CPU or NVIDIA GPU memory through the same
 DAQIRI C++/Python API while avoiding unnecessary copies. This stream
