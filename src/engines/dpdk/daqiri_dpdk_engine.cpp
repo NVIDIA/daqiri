@@ -82,6 +82,21 @@ static inline int get_queue_from_key(uint32_t key) {
     return static_cast<int>(key & 0xFFFF);
 }
 
+static void free_unsubmitted_tx_packets(BurstParams* burst) {
+  if (burst == nullptr) { return; }
+
+  // TX worker chains multi-segment mbufs only after enqueue succeeds.
+  // Before that point, every allocated segment must be freed directly.
+  for (int seg = 0; seg < burst->hdr.hdr.num_segs; seg++) {
+    if (burst->pkts[seg] == nullptr) { continue; }
+
+    auto** pkts = reinterpret_cast<rte_mbuf**>(burst->pkts[seg]);
+    for (size_t pkt = 0; pkt < burst->hdr.hdr.num_pkts; pkt++) {
+      if (pkts[pkt] != nullptr) { rte_pktmbuf_free_seg(pkts[pkt]); }
+    }
+  }
+}
+
 static inline bool is_cuda_accessible_packet_memory(MemoryKind kind) {
   return kind == MemoryKind::DEVICE || kind == MemoryKind::HOST_PINNED;
 }
@@ -4616,6 +4631,7 @@ Status DpdkEngine::send_tx_burst(BurstParams* burst) {
   }
 
   if (rte_ring_enqueue(ring->second, reinterpret_cast<void*>(burst)) != 0) {
+    free_unsubmitted_tx_packets(burst);
     free_tx_burst(burst);
     DAQIRI_LOG_CRITICAL("Failed to enqueue TX work");
     return Status::NO_SPACE_AVAILABLE;

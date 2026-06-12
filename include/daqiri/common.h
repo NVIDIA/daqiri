@@ -701,11 +701,19 @@ int get_port_id(const std::string &key);
 void set_num_packets(BurstParams *burst, int64_t num);
 
 /**
- * @brief Send a TX burst
+ * @brief Send a TX burst.
+ *
+ * Takes ownership of @p burst on SUCCESS and on NO_SPACE_AVAILABLE: on SUCCESS
+ * the TX worker owns it; on NO_SPACE_AVAILABLE (TX ring full) it has already
+ * freed the packets and the burst internally. In both cases the caller must
+ * NOT free or otherwise access @p burst afterwards. NO_SPACE_AVAILABLE is the
+ * only failure a correctly-configured sender hits at runtime.
  *
  * @param burst Burst structure
- * @return Status indicating status. Valid values are:
- *    SUCCESS: Burst sent successfully
+ * @return Status indicating result. Valid values are:
+ *    SUCCESS: burst enqueued to the TX worker (ownership transferred)
+ *    NO_SPACE_AVAILABLE: TX ring full; burst already freed (ownership consumed)
+ *    INVALID_PARAMETER: bad port/queue; burst NOT consumed (see issue #164)
  */
 Status send_tx_burst(BurstParams *burst);
 

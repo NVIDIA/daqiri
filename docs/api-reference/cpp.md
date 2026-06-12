@@ -241,6 +241,13 @@ daqiri::send_tx_burst(burst);
 
 The burst is enqueued to the TX worker thread, which sends it to the NIC via DMA.
 
+`send_tx_burst()` takes ownership of the burst on success and on a full-ring
+failure: on `SUCCESS` the TX worker owns it, and on `NO_SPACE_AVAILABLE` (the TX
+ring is full) it has already freed the packets and the burst internally. In both
+cases the application must **not** free or otherwise access the burst afterwards.
+`NO_SPACE_AVAILABLE` is the only failure a correctly-configured sender encounters
+at runtime.
+
 ### Timed Transmission
 
 For precise packet scheduling (requires ConnectX-7+):

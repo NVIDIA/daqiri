@@ -179,8 +179,10 @@ bool fill_and_send_one_burst(const daqiri::bench::RawBenchTxConfig &cfg,
   }
 
   if (daqiri::send_tx_burst(msg) != daqiri::Status::SUCCESS) {
+    // send_tx_burst() takes ownership of the burst: on success the TX worker
+    // owns it, and on a full-ring failure it has already freed the packets and
+    // burst. The caller must not free or otherwise touch `msg` afterwards.
     std::cerr << "Failed to send TX burst\n";
-    daqiri::free_all_packets_and_burst_tx(msg);
     return false;
   }
 
