@@ -81,7 +81,7 @@
     }
 
     overlayState.overlay = graphicOverlay;
-    overlayState.closeButton = root.querySelector(".graphic-overlay-close");
+    overlayState.closeButton = graphicOverlay.querySelector(".graphic-overlay-close");
 
     bindOnce(graphicOpen, "click", openGraphicOverlay);
 
