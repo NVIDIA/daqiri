@@ -209,7 +209,9 @@ class SocketEngine : public Engine {
   std::atomic<uint64_t> rx_pkts_{0};
   std::atomic<uint64_t> rx_bytes_{0};
 
+#if DAQIRI_ENGINE_RDMA
   std::unique_ptr<RdmaEngine> roce_engine_;
+#endif
 };
 
 }  // namespace daqiri
