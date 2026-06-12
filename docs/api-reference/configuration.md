@@ -31,8 +31,10 @@ These settings apply globally to both TX and RX:
   - type: `string`
   - values: `raw`, `socket`
 - **`engine`**: Optional implementation engine for the selected stream type. Omit this
-  unless you need a specific implementation override. RoCE configs infer `ibverbs`
-  from `roce://` endpoint URIs by default.
+  unless you need a specific implementation override. For `stream_type: "raw"` the
+  default is `dpdk`; set `engine: "ibverbs"` to use the Multi-Packet (striding) Receive
+  Queue engine on Mellanox/mlx5 NICs instead. RoCE configs infer `ibverbs` from
+  `roce://` endpoint URIs by default.
   - type: `string`
   - values: `dpdk`, `socket`, `ibverbs`
 - **`log_level`**: Engine log level.

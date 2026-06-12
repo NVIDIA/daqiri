@@ -190,7 +190,7 @@ Both methods use the same public C++ include:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `DAQIRI_ENGINE` | `"dpdk ibverbs"` | Space-separated list of optional engine implementations to compile in. Valid values: `dpdk` (Raw Ethernet) and `ibverbs` (RDMA/RoCE). Linux UDP/TCP sockets are always built in, so there is no `socket` value. |
+| `DAQIRI_ENGINE` | `"dpdk ibverbs"` | Space-separated list of optional engine implementations to compile in. Valid values: `dpdk` (Raw Ethernet) and `ibverbs`. `ibverbs` builds two libibverbs-based engines: RDMA/RoCE (for `stream_type: "socket"` with `roce://` endpoints) and a Mellanox/mlx5 Multi-Packet (striding) Receive Queue engine for `stream_type: "raw"` (opt in per stream with `engine: "ibverbs"`). Linux UDP/TCP sockets are always built in, so there is no `socket` value. |
 | `DAQIRI_BUILD_PYTHON` | `OFF` | Build pybind11 Python bindings. |
 | `DAQIRI_BUILD_EXAMPLES` | `ON` | Build benchmark executables. |
 | `DAQIRI_ENABLE_GDS` | `OFF` | Enable cuFile-backed burst file writes from CUDA device memory. Host-memory writes use POSIX APIs without GDS. |

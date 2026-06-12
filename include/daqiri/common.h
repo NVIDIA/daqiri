@@ -1042,8 +1042,8 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
       const bool socket_used =
           input_spec.common_.stream_type == daqiri::StreamType::SOCKET;
       if (node["engine"].IsDefined()) {
-        input_spec.common_.engine =
-            daqiri::config_engine_from_string(node["engine"].as<std::string>());
+        input_spec.common_.engine = daqiri::config_engine_from_string(
+            node["engine"].as<std::string>(), input_spec.common_.stream_type);
         if (input_spec.common_.engine != daqiri::EngineType::DEFAULT &&
             !daqiri::engine_type_supports_stream_type(
                 input_spec.common_.engine, input_spec.common_.stream_type)) {
