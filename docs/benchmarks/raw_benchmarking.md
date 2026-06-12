@@ -55,6 +55,8 @@ docker run --rm -it --privileged \
     - [`daqiri_bench_raw_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark.yaml) for `daqiri_bench_raw_gpudirect` — still set `eth_dst_addr` to the RX MAC. The rx_port is `0002:01:00.1` (physical port p1), so read its MAC: `cat /sys/class/net/enP2p1s0f1np1/address`. This p0-to-p1 pairing is intentional for an over-the-wire single-machine loopback; using two PFs that map to the same physical port exercises the on-chip eswitch path instead.
     - [`daqiri_bench_rdma_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx_spark.yaml) for `daqiri_bench_rdma` — no further edits needed.
 
+    For the multi-queue core-scaling matrix, use the single base config [`daqiri_bench_raw_tx_rx_spark_mq.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark_mq.yaml) (the balanced TX=2/RX=2 superset) with `daqiri_bench_raw_gpudirect`, driven by [`run_spark_mq_bench.sh`](https://github.com/nvidia/daqiri/blob/main/examples/run_spark_mq_bench.sh) — it derives the four `(TX, RX)` cells from the base (via `scripts/gen_spark_mq_config.py`) and sweeps the payload.
+
     The Spark configs also pin the benchmark application's `bench_tx.cpu_core` / `bench_rx.cpu_core` fields to the high-frequency Cortex-X925 cores. Keep both the DAQIRI queue cores and the application worker cores on cores 16-19 unless you intentionally want a lower-power core in the measurement.
 
 #### Cross-host two-DGX-Spark loopback

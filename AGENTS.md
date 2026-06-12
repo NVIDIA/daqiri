@@ -6,7 +6,7 @@ This file provides guidance to coding agents when working with code in this repo
 
 ```bash
 # Configure and build
-cmake -S . -B build -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MGR="dpdk socket rdma"
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MGR="dpdk socket rdma"
 cmake --build build -j
 cmake --install build --prefix /opt/daqiri
 
@@ -32,12 +32,12 @@ There is no unit test suite. Verification is done via the benchmark executables 
 
 | Executable | Source | Typical config |
 |---|---|---|
-| `daqiri_bench_raw_gpudirect` | `raw_gpudirect_bench.cpp` | `daqiri_bench_raw_tx_rx.yaml`, `daqiri_bench_raw_tx_rx_4q.yaml`, `daqiri_bench_raw_tx_rx_spark.yaml`, `daqiri_bench_raw_{tx,rx}_spark_xhost.yaml`, `daqiri_bench_raw_sw_loopback.yaml`, `daqiri_bench_raw_rx_multi_q.yaml` |
+| `daqiri_bench_raw_gpudirect` | `raw_gpudirect_bench.cpp` | `daqiri_bench_raw_tx_rx.yaml`, `daqiri_bench_raw_tx_rx_4q.yaml`, `daqiri_bench_raw_tx_rx_spark.yaml`, `daqiri_bench_raw_{tx,rx}_spark_xhost.yaml`, `daqiri_bench_raw_sw_loopback.yaml`, `daqiri_bench_raw_rx_multi_q.yaml`, `daqiri_bench_raw_tx_rx_spark_mq.yaml` (mq base; `run_spark_mq_bench.sh` derives the 4 cells via `scripts/gen_spark_mq_config.py`) |
 | `daqiri_bench_raw_hds` | `raw_hds_bench.cpp` | `daqiri_bench_raw_tx_rx_hds.yaml` |
 | `daqiri_bench_raw_reorder_seq` | `raw_reorder_seq_bench.cpp` | `daqiri_bench_raw_tx_rx_reorder_seq_1024*.yaml`, `daqiri_bench_raw_rx_reorder_seq_*.yaml` |
 | `daqiri_bench_raw_reorder_quantize` | `raw_reorder_quantize_bench.cpp` | `daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml` |
-| `daqiri_bench_rdma` | `rdma_bench.cpp` | `daqiri_bench_rdma_tx_rx.yaml`, `daqiri_bench_rdma_tx_rx_spark.yaml`, `daqiri_bench_rdma_tx_rx_spark_xhost.yaml` |
-| `daqiri_bench_socket` | `socket_bench.cpp` | `daqiri_bench_socket_{udp,tcp}_tx_rx.yaml` |
+| `daqiri_bench_rdma` | `rdma_bench.cpp` | `daqiri_bench_rdma_tx_rx.yaml`, `daqiri_bench_rdma_tx_rx_spark.yaml`, `daqiri_bench_rdma_tx_rx_spark_xhost.yaml`, `daqiri_bench_rdma_tx_rx_spark_netns.yaml` (combined-role netns base; `run_spark_bench.sh` splits per role via `scripts/gen_spark_netns_config.py`) |
+| `daqiri_bench_socket` | `socket_bench.cpp` | `daqiri_bench_socket_{udp,tcp}_tx_rx.yaml`, `daqiri_bench_socket_{udp,tcp}_tx_rx_spark_netns.yaml` (combined-role netns bases) |
 
 The four `raw_*` benches share `raw_bench_common.{cpp,h}` and accept `--seconds N`. `daqiri_bench_rdma` and `daqiri_bench_socket` also take `--mode {tx,rx,both}`.
 
@@ -104,6 +104,7 @@ The web docs live in `docs/` and are built with [MkDocs Material](https://squidf
   - `docs/benchmarks/benchmarks.md` — overview and backend-selection decision tree
   - `docs/benchmarks/socket_benchmarking.md` — "Socket and RDMA Benchmarking" (TCP/UDP and RoCE/RDMA)
   - `docs/benchmarks/raw_benchmarking.md` — "Raw Ethernet Benchmarking" (DPDK `raw_*` benches)
+  - `docs/benchmarks/performance-dgx-spark.md` — per-platform performance report for DGX Spark stream/protocol combinations (the long internal report lives outside the repo in `projects/daqiri-notes/`)
 - `docs/stylesheets/extra.css` — custom theme overrides
 
 **User-facing vocabulary:** docs and the YAML schema use `stream_type` (`raw`, `socket`, future `pcie`) and `protocol` (`udp`, `tcp`, `roce`). The word "backend" is internal-only — accurate for `src/managers/<name>/`, the `Manager` ABC, CMake `DAQIRI_MGR`, and API-reference function blurbs, but should not appear in tutorials, the landing page, or concept pages. The mapping: `stream_type: "raw"` is implemented by the `dpdk` manager; `stream_type: "socket"` with `protocol: "udp"` / `"tcp"` is implemented by the `socket` manager; `stream_type: "socket"` with `protocol: "roce"` is implemented by the `rdma` manager.
@@ -111,9 +112,10 @@ The web docs live in `docs/` and are built with [MkDocs Material](https://squidf
 **Keeping docs in sync with code:** before committing changes, scan for the recurring drift hotspots:
 - **Stream-type list** (`src/managers/*/`) — README Backends table, `docs/getting-started.md`, `docs/concepts.md` (Stream Types section + Support and testing admonition), `docs/api-reference/configuration.md`
 - **CMake options / `DAQIRI_MGR` default** (`src/CMakeLists.txt:137`) — README Quick Start, `docs/getting-started.md`, this file's Build & run section
-- **Benchmark binary or YAML names** (`examples/`) — the benchmark table above, `docs/benchmarks/raw_benchmarking.md`, and the "Choosing an example config" decision tree in `docs/tutorials/configuration-walkthrough.md` (every YAML must have a leaf; CI's `scripts/check_doc_refs.py` enforces coverage)
+- **Benchmark binary or YAML names** (`examples/`) — the benchmark table above, `docs/benchmarks/raw_benchmarking.md`, the "Choosing an example config" decision tree in `docs/tutorials/configuration-walkthrough.md` (every YAML must have a leaf; CI's `scripts/check_doc_refs.py` enforces coverage), and per-platform performance docs (`docs/benchmarks/performance-*.md`)
 - **Public API include** (`#include <daqiri/daqiri.h>`; source files under `include/daqiri/`) — `docs/api-reference/index.md`, `docs/api-reference/cpp.md`, `docs/api-reference/python.md`; if the change adds or renames a user-facing concept, also `docs/concepts.md`
 - **Python bindings** (`python/daqiri_common_pybind.cpp`) — `docs/api-reference/python.md` (function reference tables, enums/classes tables, GIL Behavior section)
+- **Bench CLI flags or output format** (`examples/raw_bench_common.{h,cpp}`, `*_bench.cpp`) — per-platform performance docs' Methodology section, `examples/run_spark_bench.sh` parsing logic
 - **Doc reorganization** (any rename in `docs/`) — `docs/index.md` landing page, `mkdocs.yml` nav, README Documentation table
 
 The full mapping with rationale lives in the docs-sync agent rule. Internal-link, anchor, and nav drift is enforced by CI (`.github/workflows/docs.yml`); content drift (stale binary names, defaults) is still a manual check at commit time.
