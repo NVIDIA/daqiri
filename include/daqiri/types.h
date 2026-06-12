@@ -295,6 +295,7 @@ enum class EngineType {
   DPDK,
   SOCKET,
   RDMA,
+  IBVERBS,  // pure-DevX MPRQ raw-Ethernet engine (stream_type: raw, engine: ibverbs)
 };
 
 static constexpr const char* DAQIRI_ENGINE_STR__DPDK = "dpdk";
@@ -413,6 +414,8 @@ inline std::string engine_type_to_string(EngineType type) {
       return DAQIRI_ENGINE_STR__SOCKET;
     case EngineType::RDMA:
       return DAQIRI_ENGINE_STR__RDMA;
+    case EngineType::IBVERBS:
+      return DAQIRI_ENGINE_STR__IBVERBS;
     case EngineType::DEFAULT:
       return DAQIRI_ENGINE_STR__DEFAULT;
   }
@@ -459,6 +462,20 @@ inline EngineType config_engine_from_string(const std::string& str) {
       DAQIRI_ENGINE_STR__DEFAULT);
 }
 
+// Stream-aware engine resolution. The user-facing name "ibverbs" maps to two
+// different engines depending on the stream type: with `raw` it selects the
+// pure-DevX MPRQ raw-Ethernet engine (EngineType::IBVERBS); with `socket` (a
+// roce:// endpoint) it selects the RoCE/RDMA engine. Every other case defers to
+// the string-only resolver above.
+inline EngineType config_engine_from_string(const std::string& str, StreamType stream_type) {
+#if DAQIRI_ENGINE_IBVERBS
+  if (stream_type == StreamType::RAW && str == DAQIRI_ENGINE_STR__IBVERBS) {
+    return EngineType::IBVERBS;
+  }
+#endif
+  return config_engine_from_string(str);
+}
+
 inline std::string config_engine_to_string(EngineType type) {
   if (type == EngineType::RDMA) { return DAQIRI_ENGINE_STR__IBVERBS; }
   return engine_type_to_string(type);
@@ -484,7 +501,7 @@ inline bool is_explicit_engine_type(EngineType type) {
 inline bool engine_type_supports_stream_type(EngineType type, StreamType stream_type) {
   switch (stream_type) {
     case StreamType::RAW:
-      return type == EngineType::DPDK;
+      return type == EngineType::DPDK || type == EngineType::IBVERBS;
     case StreamType::SOCKET:
       return type == EngineType::SOCKET || type == EngineType::RDMA;
     default:

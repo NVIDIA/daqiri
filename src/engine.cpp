@@ -26,8 +26,11 @@
 #if DAQIRI_ENGINE_RDMA
 #include "src/engines/rdma/daqiri_rdma_engine.h"
 #endif
+#if DAQIRI_ENGINE_IBVERBS
+#include "src/engines/ibverbs/daqiri_ibverbs_engine.h"
+#endif
 
-#if DAQIRI_ENGINE_DPDK || DAQIRI_ENGINE_SOCKET || DAQIRI_ENGINE_RDMA
+#if DAQIRI_ENGINE_DPDK || DAQIRI_ENGINE_SOCKET || DAQIRI_ENGINE_RDMA || DAQIRI_ENGINE_IBVERBS
 #include <rte_common.h>
 #include <rte_malloc.h>
 #include <rte_memory.h>
@@ -130,6 +133,11 @@ std::unique_ptr<Engine> EngineFactory::create_instance(EngineType type) {
       _engine = std::make_unique<RdmaEngine>();
       break;
 #endif
+#if DAQIRI_ENGINE_IBVERBS
+    case EngineType::IBVERBS:
+      _engine = std::make_unique<IbverbsEngine>();
+      break;
+#endif
     case EngineType::DEFAULT:
       _engine = create_instance(get_default_engine_type());
       return _engine;
@@ -162,7 +170,9 @@ EngineType EngineFactory::get_engine_type(const Config& config) {
 
       const std::string engine_str = node["engine"].template as<std::string>("");
       if (!engine_str.empty() && engine_str != DAQIRI_ENGINE_STR__DEFAULT) {
-        return config_engine_from_string(engine_str);
+        // "ibverbs" + raw selects the pure-DevX MPRQ engine; "ibverbs" + socket
+        // resolves to the RoCE/RDMA engine (handled by the stream-aware resolver).
+        return config_engine_from_string(engine_str, stream_type);
       }
 
       // Protocol is derived from the endpoint URI scheme (udp://, tcp://,

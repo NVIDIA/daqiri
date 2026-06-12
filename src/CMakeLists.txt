@@ -224,7 +224,12 @@ foreach(ENGINE IN LISTS DAQIRI_ENGINE_LIST)
   if(ENGINE STREQUAL "dpdk")
     list(APPEND DAQIRI_ENGINE_INTERNAL_LIST "dpdk")
   elseif(ENGINE STREQUAL "ibverbs")
+    # "ibverbs" builds both internal engines that use libibverbs: "rdma"
+    # (RoCE/InfiniBand, used by socket roce:// endpoints) and "ibverbs" (the
+    # pure-DevX MPRQ raw-Ethernet engine selected by stream_type: raw +
+    # engine: ibverbs).
     list(APPEND DAQIRI_ENGINE_INTERNAL_LIST "rdma")
+    list(APPEND DAQIRI_ENGINE_INTERNAL_LIST "ibverbs")
   else()
     message(FATAL_ERROR
       "Invalid DAQIRI_ENGINE value '${ENGINE}'. Valid values: dpdk, ibverbs. "
