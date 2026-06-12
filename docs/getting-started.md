@@ -200,6 +200,11 @@ Both methods use the same public C++ include:
 | `DAQIRI_ENABLE_S3` | `OFF` | Enable AWS SDK-backed asynchronous raw packet writes to S3. |
 | `BUILD_SHARED_LIBS` | — | Build as shared library. |
 
+For Raw Ethernet (`stream_type: "raw"`), `daqiri_init()` validates that each `rx.flows`
+entry's `action.id` matches an `rx.queues` ID on the same interface, then programs flow
+rules into the NIC. Initialization fails if any RX flow rule, send-to-kernel fallback (when
+`flow_isolation: true`), or `tx_eth_src` offload rule cannot be installed.
+
 CUDA architectures default to `80;90` (A100, H100), with `121` (GB10) added
 when configuring with CUDA Toolkit 13.0 or newer. Override
 `CMAKE_CUDA_ARCHITECTURES` when targeting other GPUs.

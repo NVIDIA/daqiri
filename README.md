@@ -38,7 +38,7 @@ An *engine* is the library that implements a [stream type](docs/concepts.md#stre
 
 | `DAQIRI_ENGINE` value | Implements | Description |
 |---------|-------------|-------------|
-| `dpdk` | `stream_type: "raw"` (default) | Userspace kernel-bypass packet processing with DPDK mbufs and rings. |
+| `dpdk` | `stream_type: "raw"` (default) | Userspace kernel-bypass packet processing with DPDK mbufs and rings. Init aborts if RX flow rules or TX offload rules cannot be programmed on the NIC. |
 | `ibverbs` | `stream_type: "raw"` with `engine: "ibverbs"`, and `stream_type: "socket"` with `roce://` endpoints | Two libibverbs-based engines built from one value: a pure-DevX Mellanox/mlx5 Multi-Packet (striding) Receive Queue (MPRQ) engine for raw Ethernet (opt in per stream with `engine: "ibverbs"`), and RDMA verbs over RoCE/InfiniBand for socket `roce://` endpoints (also backs the socket engine's RoCE path). The MPRQ engine eliminates DPDK's per-packet mbuf alloc/free; packets DMA strided into one pre-posted buffer (host or GPU via GPUDirect). |
 | *(built in)* | `stream_type: "socket"` with `tcp://`/`udp://` endpoints | Linux kernel UDP/TCP sockets — always available, no build flag required. |
 
@@ -49,6 +49,7 @@ stream to use the MPRQ engine instead. Build it by including `ibverbs` in `DAQIR
 ### Limitations
 
 - TX header-fill helpers currently support UDP only.
+- Raw Ethernet configs must reference valid RX queue IDs in `rx.flows` `action.id`; init fails if flow rules cannot be installed on the NIC.
 - The `ibverbs` raw (MPRQ) engine requires a Mellanox/mlx5 NIC (ConnectX-6 Dx or
   later, BlueField); it is DevX-based and not portable to other vendors.
 

@@ -200,7 +200,9 @@ engine.
 - **`action`**: What to do with matched packets.
   - **`type`**: Action type. Only `queue` is currently supported.
     - type: `string`
-  - **`id`**: Queue ID to steer matched packets to.
+  - **`id`**: Queue ID to steer matched packets to. Must match the `id` of an entry under
+    `rx.queues` on the same interface. `daqiri_init()` rejects unknown queue IDs during
+    config validation.
     - type: `integer`
 - **`match`**: Criteria for matching packets.
   - **`udp_src`**: UDP source port or port range (e.g., `1000-1010`).
@@ -217,14 +219,20 @@ engine.
   - **`mask`**: 32-bit mask applied before matching (with flex items).
     - type: `integer`
 
+For Raw Ethernet (`stream_type: "raw"`), each flow rule is programmed into the NIC during
+`daqiri_init()`. If any rule cannot be installed, or the send-to-kernel fallback cannot be
+created when `flow_isolation: true`, initialization fails with a critical log and
+`daqiri_init()` returns an error status.
+
 A single RX interface must use either standard UDP/IP flows or flex-item flows, not both.
 Both classes install conflicting DPDK group-0 jump rules, so only one is reachable when mixed.
 `daqiri_init` rejects such configs with a clear error.
 
 ### Flow Isolation
 
-`rx.flow_isolation:` — When `true`, only packets matching an explicit flow rule are delivered.
-Unmatched packets are dropped. When `false`, unmatched packets go to a default queue.
+`rx.flow_isolation:` — When `true`, only packets matching an explicit flow rule are delivered
+to the application. Unmatched packets are steered back to the Linux kernel via a
+send-to-kernel fallback rule. When `false`, unmatched packets go to a default queue.
 With `flow_isolation: true`, send-to-kernel fallbacks are installed per flow class
 (standard or flex-item); mixing both classes on one interface is not supported.
 
@@ -337,7 +345,8 @@ daqiri::set_reorder_cuda_stream("rx_port", "rx_reorder_0", stream);
   - type: `integer`
 - **`memory_regions`**: List of memory region names. Same segment mapping rules as RX.
   - type: `list`
-- **`offloads`**: List of hardware offloads to enable.
+- **`offloads`**: List of hardware offloads to enable. Each offload installs an RTE Flow rule
+  during `daqiri_init()`; initialization fails if the NIC cannot program the rule.
   - type: `list`
   - values: `tx_eth_src` (auto-fill source MAC address)
 

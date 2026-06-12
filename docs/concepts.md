@@ -262,8 +262,9 @@ incoming packet against the configured flows and writes it into the
 matching queue's buffer, entirely in hardware. Multi-queue RX works by
 routing each flow to a separate queue for parallel processing.
 
-For Raw Ethernet, flow steering is implemented on top of RTE Flow. The
-YAML options are documented in
+For Raw Ethernet, flow steering is implemented on top of RTE Flow. Flow
+rules are programmed during `daqiri_init()`; initialization fails if the
+NIC rejects a rule. The YAML options are documented in
 [Configuration YAML Reference → Flows](api-reference/configuration.md#flows).
 
 ## Memory Regions
