@@ -34,6 +34,10 @@ set(DAQIRI_BENCH_CONFIGS
   daqiri_bench_raw_rx_reorder_seq_batch.yaml
   daqiri_bench_raw_rx_multi_q.yaml
   daqiri_bench_raw_sw_loopback.yaml
+  daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml
+  daqiri_bench_raw_tx_rx_rtx_pro_6000.yaml
+  daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml
+  daqiri_bench_raw_tx_rx_rtx_pro_6000_nic_same_port.yaml
   daqiri_example_gds_write_sw_loopback.yaml
   daqiri_example_gds_write_tx_rx.yaml
   daqiri_example_pcap_writer_sw_loopback.yaml
