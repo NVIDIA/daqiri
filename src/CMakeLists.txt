@@ -76,22 +76,39 @@ else()
   endif()
 endif()
 
-# DPDK is needed by the common library (rte rings/mbufs in engine.h, common.cpp, engine.cpp).
-if(NOT PKG_CONFIG_FOUND)
-  message(FATAL_ERROR "pkg-config is required to locate DPDK (libdpdk)")
+# Parse DAQIRI_ENGINE early so we know whether libdpdk is required at all. Only
+# the dpdk engine needs DPDK now: rte_ring/rte_mempool/rte_mbuf usage lives
+# entirely in src/engines/dpdk and src/engine_dpdk.cpp. daqiri_common and the
+# rdma/ibverbs/socket engines use the libdpdk-free daqiri::Ring / ObjectPool.
+if(NOT DEFINED DAQIRI_ENGINE)
+    set(DAQIRI_ENGINE "dpdk ibverbs" CACHE STRING "Optional engine implementations to build: dpdk, ibverbs (Linux sockets are always built in)")
 endif()
-pkg_check_modules(DPDK QUIET libdpdk)
-if(NOT DPDK_FOUND)
-  list(APPEND CMAKE_PREFIX_PATH "/opt/mellanox/dpdk/lib/${CMAKE_HOST_SYSTEM_PROCESSOR}-linux-gnu/")
-  pkg_check_modules(DPDK REQUIRED libdpdk)
+set_property(CACHE DAQIRI_ENGINE PROPERTY STRINGS "dpdk" "ibverbs")
+separate_arguments(DAQIRI_ENGINE_LIST UNIX_COMMAND ${DAQIRI_ENGINE})
+list(FIND DAQIRI_ENGINE_LIST "dpdk" _daqiri_dpdk_idx)
+if(_daqiri_dpdk_idx EQUAL -1)
+  set(DAQIRI_BUILD_DPDK OFF)
+else()
+  set(DAQIRI_BUILD_DPDK ON)
 endif()
 
-# Common library
+if(DAQIRI_BUILD_DPDK)
+  if(NOT PKG_CONFIG_FOUND)
+    message(FATAL_ERROR "pkg-config is required to locate DPDK (libdpdk)")
+  endif()
+  pkg_check_modules(DPDK QUIET libdpdk)
+  if(NOT DPDK_FOUND)
+    list(APPEND CMAKE_PREFIX_PATH "/opt/mellanox/dpdk/lib/${CMAKE_HOST_SYSTEM_PROCESSOR}-linux-gnu/")
+    pkg_check_modules(DPDK REQUIRED libdpdk)
+  endif()
+endif()
+
+# Common library. dpdk_log.cpp and engine_dpdk.cpp hold the only rte_* code left
+# in daqiri_common and are added below only when the dpdk engine is built.
 add_library(daqiri_common
   common.cpp
   common_gds.cpp
   common_s3.cpp
-  dpdk_log.cpp
   kernels.cu
   engine.cpp
   logging.cpp
@@ -106,10 +123,8 @@ target_include_directories(daqiri_common
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/..
-        ${DPDK_INCLUDE_DIRS}
 )
 add_library(daqiri::daqiri ALIAS daqiri_common)
-target_link_directories(daqiri_common PUBLIC ${DPDK_LIBRARY_DIRS})
 if(TARGET yaml-cpp::yaml-cpp)
   set(DAQIRI_YAML_TARGET yaml-cpp::yaml-cpp)
 else()
@@ -120,10 +135,17 @@ target_link_libraries(daqiri_common
         CUDA::cudart
         CUDA::cuda_driver
         ${DAQIRI_YAML_TARGET}
-        ${DPDK_LDFLAGS_OTHER}
-        ${DPDK_LIBRARIES}
     PRIVATE
 )
+# Only the dpdk engine needs libdpdk. dpdk_log.cpp (rte_log) and engine_dpdk.cpp
+# (rte_mbuf/rte_mempool extmem + EAL helpers) are the only rte_* sources in
+# daqiri_common, so compile and link them only in dpdk builds.
+if(DAQIRI_BUILD_DPDK)
+  target_sources(daqiri_common PRIVATE dpdk_log.cpp engine_dpdk.cpp)
+  target_include_directories(daqiri_common PRIVATE ${DPDK_INCLUDE_DIRS})
+  target_link_directories(daqiri_common PUBLIC ${DPDK_LIBRARY_DIRS})
+  target_link_libraries(daqiri_common PUBLIC ${DPDK_LDFLAGS_OTHER} ${DPDK_LIBRARIES})
+endif()
 if(DAQIRI_ENABLE_OTEL_METRICS)
   target_link_libraries(daqiri_common PRIVATE opentelemetry-cpp::api)
 endif()
@@ -210,11 +232,8 @@ endif()
 # and is NOT a DAQIRI_ENGINE value. Valid values:
 #   dpdk    - raw Ethernet via kernel bypass
 #   ibverbs - RDMA/RoCE via libibverbs (also enables the socket RoCE path)
-if(NOT DEFINED DAQIRI_ENGINE)
-    set(DAQIRI_ENGINE "dpdk ibverbs" CACHE STRING "Optional engine implementations to build: dpdk, ibverbs (Linux sockets are always built in)")
-endif()
-set_property(CACHE DAQIRI_ENGINE PROPERTY STRINGS "dpdk" "ibverbs")
-separate_arguments(DAQIRI_ENGINE_LIST UNIX_COMMAND ${DAQIRI_ENGINE})
+# DAQIRI_ENGINE / DAQIRI_ENGINE_LIST / DAQIRI_BUILD_DPDK were already parsed above
+# (before the libdpdk lookup), so they are reused here.
 
 # Translate user-facing engine names to internal engine directories/targets.
 # "ibverbs" is the user-facing name for the RDMA engine, implemented under

@@ -21,13 +21,12 @@
 #include <unistd.h>
 #include <mqueue.h>
 #include <algorithm>
+#include <cassert>
 #include <cstdlib>
+#include <cstring>
 #include <map>
-#include <rte_ring.h>
-#include <rte_mempool.h>
-#include <rte_errno.h>
-#include <rte_mbuf.h>
-#include "src/dpdk_log.h"
+#include "src/daqiri_ring.h"
+#include "src/daqiri_pool.h"
 #include "src/metrics.h"
 #include "daqiri_rdma_engine.h"
 
@@ -141,7 +140,7 @@ Status RdmaEngine::set_udp_header(BurstParams* burst, int idx, int udp_len, uint
 }
 
 Status RdmaEngine::set_udp_payload(BurstParams* burst, int idx, void* data, int len) {
-  rte_memcpy(burst->pkts[0][idx], data, len);
+  memcpy(burst->pkts[0][idx], data, len);
   return Status::SUCCESS;
 }
 
@@ -151,7 +150,7 @@ uint64_t RdmaEngine::get_burst_tot_byte(BurstParams* burst) {
 
 BurstParams* RdmaEngine::create_tx_burst_params() {
   BurstParams* burst = nullptr;
-  if (rte_mempool_get(tx_meta, reinterpret_cast<void**>(&burst)) != 0) {
+  if (!tx_meta->get(reinterpret_cast<void**>(&burst))) {
     DAQIRI_LOG_CRITICAL("Failed to get RDMA TX meta descriptor");
     return nullptr;
   }
@@ -278,9 +277,10 @@ int RdmaEngine::rdma_register_cfg_mrs() {
   }
 
   for (const auto& mr : cfg_.mrs_) {
-    // Allocate 1 more than the user specifies because DPDK can give a capacity of size - 1
-    auto ring = rte_ring_create(
-        mr.second.name_.c_str(), rte_align32pow2(mr.second.num_bufs_ + 1), rte_socket_id(), 0);
+    // Allocate 1 more than the user specifies because the ring usable capacity is size - 1.
+    // Multi-producer/consumer: app threads and the RDMA worker both touch this buffer pool.
+    auto ring = daqiri::Ring::create(mr.second.name_.c_str(), mr.second.num_bufs_ + 1,
+                                     daqiri::RingMode::MPMC);
 
     if (ring == nullptr) {
       DAQIRI_LOG_CRITICAL("Failed to create ring for MR {}", mr.second.name_);
@@ -420,7 +420,7 @@ inline int RdmaEngine::set_affinity(int cpu_core) {
 Status RdmaEngine::send_tx_burst(BurstParams* burst) {
   if (burst == nullptr) { return Status::INVALID_PARAMETER; }
 
-  struct rte_ring* ring;
+  daqiri::Ring* ring;
 
   const auto conn_id = get_connection_id(burst);
   auto ri = tx_rings_map_.find(reinterpret_cast<struct rdma_cm_id*>(conn_id));
@@ -432,7 +432,7 @@ Status RdmaEngine::send_tx_burst(BurstParams* burst) {
 
   ring = ri->second;
 
-  if (rte_ring_enqueue(ring, reinterpret_cast<void*>(burst)) != 0) {
+  if (!ring->enqueue(reinterpret_cast<void*>(burst))) {
     auto counters = get_rdma_metrics_for_connection(cfg_,
                                                     client_q_params_,
                                                     server_q_params_,
@@ -478,8 +478,8 @@ void RdmaEngine::rdma_thread(bool is_server, rdma_thread_params* tparams) {
   uint64_t sends_since_signal = 0;
   const auto& qref = cfg_.ifs_[tparams->if_idx].tx_.queues_[tparams->queue_idx];
   const long cpu_core = strtol(qref.common_.cpu_core_.c_str(), NULL, 10);
-  struct rte_ring* tx_ring = tparams->qp_params.tx_ring;
-  struct rte_ring* rx_ring = tparams->qp_params.rx_ring;
+  daqiri::Ring* tx_ring = tparams->qp_params.tx_ring;
+  daqiri::Ring* rx_ring = tparams->qp_params.rx_ring;
   std::map<uint64_t, BurstParams*> outstanding_send_wr_ids;
   std::unordered_map<uint64_t, BurstParams*> outstanding_receive_wr_ids;
   auto counters = get_rdma_metrics(cfg_, *tparams);
@@ -604,7 +604,7 @@ void RdmaEngine::rdma_thread(bool is_server, rdma_thread_params* tparams) {
       msg->transport_hdr.tx = false;
       // msg->transport_hdr.wr_id   = wc.wr_id;
 
-      if (rte_ring_enqueue(rx_ring, reinterpret_cast<void*>(msg)) != 0) {
+      if (!rx_ring->enqueue(reinterpret_cast<void*>(msg))) {
         DAQIRI_LOG_CRITICAL("Failed to enqueue RX completion message");
         metrics::add_dropped(counters, "rx_completion_enqueue_failure", 1);
         if (msg_owns_packets) {
@@ -649,7 +649,7 @@ void RdmaEngine::rdma_thread(bool is_server, rdma_thread_params* tparams) {
         msg->transport_hdr.status = status;
         msg->transport_hdr.server = is_server;
 
-        if (rte_ring_enqueue(rx_ring, reinterpret_cast<void*>(msg)) != 0) {
+        if (!rx_ring->enqueue(reinterpret_cast<void*>(msg))) {
           DAQIRI_LOG_CRITICAL("Failed to enqueue RX completion message");
           metrics::add_dropped(counters, "tx_completion_enqueue_failure", 1);
           free_tx_burst(msg);
@@ -699,7 +699,7 @@ void RdmaEngine::rdma_thread(bool is_server, rdma_thread_params* tparams) {
       msg->transport_hdr.server = is_server;
       // msg->transport_hdr.wr_id   = wc.wr_id;
 
-      if (rte_ring_enqueue(rx_ring, reinterpret_cast<void*>(msg)) != 0) {
+      if (!rx_ring->enqueue(reinterpret_cast<void*>(msg))) {
         DAQIRI_LOG_CRITICAL("Failed to enqueue RX completion message");
         metrics::add_dropped(counters, "tx_completion_enqueue_failure", 1);
         free_tx_metadata(msg);
@@ -712,7 +712,9 @@ void RdmaEngine::rdma_thread(bool is_server, rdma_thread_params* tparams) {
 
     // ssize_t bytes = mq_receive(tparams.tx_mq, reinterpret_cast<char*>(&burst), sizeof(burst),
     // nullptr);
-    if (rte_ring_dequeue(tx_ring, reinterpret_cast<void**>(&burst)) != 0) { continue; }
+    if (!tx_ring->dequeue(reinterpret_cast<void**>(&burst))) {
+      continue;
+    }
 
     const auto local_mr = mrs_.find(std::string(burst->transport_hdr.local_mr_name));
     if (local_mr == mrs_.end()) {
@@ -1156,27 +1158,26 @@ Status RdmaEngine::get_tx_packet_burst(BurstParams* burst) {
     return Status::INVALID_PARAMETER;
   }
 
-  if (rte_mempool_get(tx_burst_pool_, reinterpret_cast<void**>(&burst->pkts[0])) != 0) {
+  if (!tx_burst_pool_->get(reinterpret_cast<void**>(&burst->pkts[0]))) {
     DAQIRI_LOG_ERROR("Failed to get packet from pool");
     return Status::NO_FREE_BURST_BUFFERS;
   }
 
   const unsigned num_pkts = static_cast<unsigned>(burst->transport_hdr.num_pkts);
   const unsigned rx =
-      rte_ring_dequeue_bulk(burst_pool->second, reinterpret_cast<void**>(burst->pkts[0]), num_pkts, nullptr);
+      burst_pool->second->dequeue_bulk(reinterpret_cast<void**>(burst->pkts[0]), num_pkts);
   if (rx != num_pkts) {
     DAQIRI_LOG_ERROR("Asked for {} packets, got {}", num_pkts, rx);
-    rte_mempool_put(tx_burst_pool_, reinterpret_cast<void*>(burst->pkts[0]));
+    tx_burst_pool_->put(reinterpret_cast<void*>(burst->pkts[0]));
     burst->pkts[0] = nullptr;
     return Status::NO_FREE_BURST_BUFFERS;
   }
 
   // Allocate packet length buffer
-  if (rte_mempool_get(pkt_len_pool_, reinterpret_cast<void**>(&burst->pkt_lens[0])) != 0) {
+  if (!pkt_len_pool_->get(reinterpret_cast<void**>(&burst->pkt_lens[0]))) {
     DAQIRI_LOG_ERROR("Failed to get packet length buffer");
-    rte_ring_enqueue_bulk(
-        burst_pool->second, reinterpret_cast<void**>(burst->pkts[0]), num_pkts, nullptr);
-    rte_mempool_put(tx_burst_pool_, reinterpret_cast<void*>(burst->pkts[0]));
+    burst_pool->second->enqueue_bulk(reinterpret_cast<void**>(burst->pkts[0]), num_pkts);
+    tx_burst_pool_->put(reinterpret_cast<void*>(burst->pkts[0]));
     burst->pkts[0] = nullptr;
     return Status::NO_FREE_PACKET_BUFFERS;
   }
@@ -1192,7 +1193,9 @@ bool RdmaEngine::is_tx_burst_available(BurstParams* burst) {
     return false;
   }
 
-  if (rte_ring_count(burst_pool->second) < burst->transport_hdr.num_pkts) { return false; }
+  if ((burst_pool->second)->count() < burst->transport_hdr.num_pkts) {
+    return false;
+  }
 
   return true;
 }
@@ -1503,8 +1506,7 @@ int RdmaEngine::setup_pools_and_rings() {
   for (int i = 0; i < MAX_RDMA_CONNECTIONS; i++) {
     std::string ring_name = "RX_RING_" + std::to_string(i);
     DAQIRI_LOG_DEBUG("Setting up RX ring {}", ring_name);
-    struct rte_ring* ring =
-        rte_ring_create(ring_name.c_str(), 2048, rte_socket_id(), RING_F_SP_ENQ | RING_F_SC_DEQ);
+    daqiri::Ring* ring = daqiri::Ring::create(ring_name.c_str(), 2048, daqiri::RingMode::SPSC);
     if (ring == nullptr) {
       DAQIRI_LOG_CRITICAL("Failed to allocate RX ring {}!", ring_name);
       return -1;
@@ -1513,8 +1515,7 @@ int RdmaEngine::setup_pools_and_rings() {
 
     ring_name = "TX_RING_" + std::to_string(i);
     DAQIRI_LOG_DEBUG("Setting up TX ring {}", ring_name);
-    ring = rte_ring_create(
-        ring_name.c_str(), 2048, rte_socket_id(), RING_F_SP_ENQ | RING_F_SC_DEQ);
+    ring = daqiri::Ring::create(ring_name.c_str(), 2048, daqiri::RingMode::SPSC);
     if (ring == nullptr) {
       DAQIRI_LOG_CRITICAL("Failed to allocate TX ring {}!", ring_name);
       return -1;
@@ -1524,67 +1525,29 @@ int RdmaEngine::setup_pools_and_rings() {
 
   // Packet length buffers
   DAQIRI_LOG_DEBUG("Setting up RX meta pool");
-  pkt_len_pool_ = rte_mempool_create("PKT_LEN_POOL",
-                                     (1U << 11) - 1U,
-                                     sizeof(uint32_t) * MAX_RDMA_BATCH,
-                                     0,
-                                     0,
-                                     nullptr,
-                                     nullptr,
-                                     nullptr,
-                                     nullptr,
-                                     rte_socket_id(),
-                                     0);
+  pkt_len_pool_ = daqiri::ObjectPool::create("PKT_LEN_POOL", (1U << 11) - 1U,
+                                             sizeof(uint32_t) * MAX_RDMA_BATCH);
   if (pkt_len_pool_ == nullptr) {
     DAQIRI_LOG_CRITICAL("Failed to allocate packet length pool!");
     return -1;
   }
 
   DAQIRI_LOG_DEBUG("Setting up RX meta pool");
-  rx_meta = rte_mempool_create("RX_META_POOL",
-                               (1U << 11) - 1U,
-                               sizeof(BurstParams),
-                               0,
-                               0,
-                               nullptr,
-                               nullptr,
-                               nullptr,
-                               nullptr,
-                               rte_socket_id(),
-                               0);
+  rx_meta = daqiri::ObjectPool::create("RX_META_POOL", (1U << 11) - 1U, sizeof(BurstParams));
   if (rx_meta == nullptr) {
     DAQIRI_LOG_CRITICAL("Failed to allocate RX meta pool!");
     return -1;
   }
 
   DAQIRI_LOG_DEBUG("Setting up TX meta pool");
-  tx_meta = rte_mempool_create("TX_META_POOL",
-                               (1U << 11) - 1U,
-                               sizeof(BurstParams),
-                               0,
-                               0,
-                               nullptr,
-                               nullptr,
-                               nullptr,
-                               nullptr,
-                               rte_socket_id(),
-                               0);
+  tx_meta = daqiri::ObjectPool::create("TX_META_POOL", (1U << 11) - 1U, sizeof(BurstParams));
   if (tx_meta == nullptr) {
     DAQIRI_LOG_CRITICAL("Failed to allocate TX meta pool!");
     return -1;
   }
 
-  tx_burst_pool_ = rte_mempool_create("TX_BURST_POOL",
-                                      (1U << 11) - 1U,
-                                      sizeof(void*) * MAX_RDMA_BATCH,
-                                      0,
-                                      0,
-                                      nullptr,
-                                      nullptr,
-                                      nullptr,
-                                      nullptr,
-                                      rte_socket_id(),
-                                      0);
+  tx_burst_pool_ =
+      daqiri::ObjectPool::create("TX_BURST_POOL", (1U << 11) - 1U, sizeof(void*) * MAX_RDMA_BATCH);
   if (tx_burst_pool_ == nullptr) {
     DAQIRI_LOG_CRITICAL("Failed to allocate TX burst pool!");
     return -1;
@@ -1597,7 +1560,7 @@ int RdmaEngine::setup_pools_and_rings() {
 
 void RdmaEngine::free_rx_burst(BurstParams* burst) {
   if (burst == nullptr) { return; }
-  rte_mempool_put(rx_meta, burst);
+  rx_meta->put(burst);
 }
 
 void RdmaEngine::free_tx_burst(BurstParams* burst) {
@@ -1606,10 +1569,8 @@ void RdmaEngine::free_tx_burst(BurstParams* burst) {
   auto burst_pool = mem_pools_.find(burst->transport_hdr.local_mr_name);
   if (burst->transport_hdr.num_pkts > 0 && burst->pkts[0] != nullptr &&
       burst_pool != mem_pools_.end()) {
-    int ret = rte_ring_enqueue_bulk(burst_pool->second,
-                                    reinterpret_cast<void**>(burst->pkts[0]),
-                                    burst->transport_hdr.num_pkts,
-                                    nullptr);
+    unsigned ret = burst_pool->second->enqueue_bulk(reinterpret_cast<void**>(burst->pkts[0]),
+                                                    burst->transport_hdr.num_pkts);
     if (ret != burst->transport_hdr.num_pkts) {
       DAQIRI_LOG_CRITICAL(
           "Asked to free {} packets, only enqueued {}", burst->transport_hdr.num_pkts, ret);
@@ -1617,60 +1578,18 @@ void RdmaEngine::free_tx_burst(BurstParams* burst) {
   }
 
   if (burst->pkts[0] != nullptr) {
-    rte_mempool_put(tx_burst_pool_, reinterpret_cast<void*>(burst->pkts[0]));
+    tx_burst_pool_->put(reinterpret_cast<void*>(burst->pkts[0]));
   }
   if (burst->pkt_lens[0] != nullptr) {
-    rte_mempool_put(pkt_len_pool_, reinterpret_cast<void*>(burst->pkt_lens[0]));
+    pkt_len_pool_->put(reinterpret_cast<void*>(burst->pkt_lens[0]));
   }
   reset_rdma_burst_metadata(burst);
-  rte_mempool_put(tx_meta, burst);
+  tx_meta->put(burst);
 }
 
 void RdmaEngine::initialize() {
   bool server = false;
   bool client = false;
-  int ret;
-
-  // Cleanup-on-failure guard: mirrors DpdkEngine::initialize(). Any return path
-  // that does not set initialized_ = true triggers rte_eal_cleanup() and
-  // unlinks our --file-prefix=<...>map_* files so the next run can start.
-  struct EalCleanupGuard {
-    RdmaEngine* engine;
-    ~EalCleanupGuard() {
-      if (!engine->initialized_) { engine->cleanup_eal(); }
-    }
-  } cleanup_guard{this};
-
-  if (!check_hugepage_availability()) {
-    DAQIRI_LOG_CRITICAL("Aborting before rte_eal_init() to keep /dev/hugepages clean");
-    return;
-  }
-
-  /* Initialize DPDK params */
-  constexpr int max_nargs = 32;
-  constexpr int max_arg_size = 64;
-  char** _argv;
-  _argv = (char**)malloc(sizeof(char*) * max_nargs);
-  if (_argv == nullptr) {
-    DAQIRI_LOG_CRITICAL("Failed to allocate memory for DPDK arguments");
-    return;
-  }
-
-  for (int i = 0; i < max_nargs; i++) {
-    _argv[i] = (char*)malloc(max_arg_size);
-    if (_argv[i] == nullptr) {
-      DAQIRI_LOG_CRITICAL("Failed to allocate memory for DPDK argument {}", i);
-      for (int j = 0; j < i; j++) {
-        free(_argv[j]);
-      }
-      free(_argv);
-      return;
-    }
-  }
-
-  int arg = 0;
-  std::string cores = std::to_string(cfg_.common_.master_core_) + ",";  // Master core must be first
-  std::set<std::string> ifs;
 
   // Populate pd_map_ with all IB devices and create PDs
   int num_ib_devices;
@@ -1702,53 +1621,18 @@ void RdmaEngine::initialize() {
     pd_map_[device] = pd;
   }
 
-  // Get GPU PCIe BDFs since they're needed to pass to DPDK
+  // Assign each interface a port id. The RDMA engine drives the NIC through
+  // libibverbs directly, so no DPDK EAL initialization is needed -- the rings
+  // and pools are the libdpdk-free daqiri::Ring / daqiri::ObjectPool.
   int if_num = 0;
   for (auto& intf : cfg_.ifs_) {
-    ifs.emplace(intf.address_);
-    for (const auto& q : intf.rx_.queues_) { cores += q.common_.cpu_core_ + ","; }
-    for (const auto& q : intf.tx_.queues_) { cores += q.common_.cpu_core_ + ","; }
     intf.port_id_ = if_num++;
   }
 
-  cores = cores.substr(0, cores.size() - 1);
-
-  strncpy(_argv[arg++], "daqiri_operator", max_arg_size - 1);
-  eal_file_prefix_ = generate_random_string(10);
-  strncpy(_argv[arg++],
-          (std::string("--file-prefix=") + eal_file_prefix_).c_str(),
-          max_arg_size - 1);
-  strncpy(_argv[arg++], "-l", max_arg_size - 1);
-  strncpy(_argv[arg++], cores.c_str(), max_arg_size - 1);
-
-  if (cfg_.debug_) {
-    DAQIRI_LOG_INFO(
-        "Setting DPDK log level to: {}",
-        DpdkLogLevel::to_description_string(DpdkLogLevel::from_ano_log_level(cfg_.log_level_)));
-
-    DpdkLogLevelCommandBuilder cmd(cfg_.log_level_);
-    for (auto& c : cmd.get_cmd_flags_strings()) {
-      strncpy(_argv[arg++], c.c_str(), max_arg_size - 1);
-    }
-  }
-
-  _argv[arg] = nullptr;
-  std::string dpdk_args = "";
-  for (int ac = 0; ac < arg; ac++) { dpdk_args += std::string(_argv[ac]) + " "; }
-
-  DAQIRI_LOG_INFO("DPDK EAL arguments: {}", dpdk_args);
-
-  ret = rte_eal_init(arg, _argv);
-  if (ret < 0) {
-    DAQIRI_LOG_CRITICAL("Invalid EAL arguments: {}", rte_errno);
-    return;
-  }
-  eal_initialized_ = true;
-
-  // Set up memory region sizes
+  // Set up memory region sizes (round buf_size up to the RDMA/GPU alignment).
   for (auto& mr : cfg_.mrs_) {
     const size_t rdma_alignment = std::max<size_t>(get_alignment(mr.second.kind_), GPU_PAGE_SIZE);
-    mr.second.adj_size_ = RTE_ALIGN_CEIL(mr.second.buf_size_, rdma_alignment);
+    mr.second.adj_size_ = (mr.second.buf_size_ + rdma_alignment - 1) & ~(rdma_alignment - 1);
   }
 
   for (const auto& intf : cfg_.ifs_) {
@@ -1788,32 +1672,47 @@ void RdmaEngine::shutdown() {
   DAQIRI_LOG_INFO("Waiting for main thread to complete");
   main_thread_.join();
 
-  // Release DPDK resources BEFORE rte_eal_cleanup(). Pointers owned by EAL
-  // memzones become invalid once cleanup runs, so the destructor must not
-  // touch them after this point.
+  // Release the rings and pools (plain heap allocations now, no EAL memzones).
   while (!rx_rings_.empty()) {
     auto ring = rx_rings_.front();
     rx_rings_.pop();
-    if (ring != nullptr) { rte_ring_free(ring); }
+    if (ring != nullptr) {
+      daqiri::Ring::free(ring);
+    }
   }
   while (!tx_rings_.empty()) {
     auto ring = tx_rings_.front();
     tx_rings_.pop();
-    if (ring != nullptr) { rte_ring_free(ring); }
+    if (ring != nullptr) {
+      daqiri::Ring::free(ring);
+    }
   }
   rx_rings_map_.clear();
   tx_rings_map_.clear();
 
-  if (pkt_len_pool_ != nullptr) { rte_mempool_free(pkt_len_pool_); pkt_len_pool_ = nullptr; }
-  if (rx_meta != nullptr) { rte_mempool_free(rx_meta); rx_meta = nullptr; }
-  if (tx_meta != nullptr) { rte_mempool_free(tx_meta); tx_meta = nullptr; }
-  if (tx_burst_pool_ != nullptr) { rte_mempool_free(tx_burst_pool_); tx_burst_pool_ = nullptr; }
+  if (pkt_len_pool_ != nullptr) {
+    daqiri::ObjectPool::free(pkt_len_pool_);
+    pkt_len_pool_ = nullptr;
+  }
+  if (rx_meta != nullptr) {
+    daqiri::ObjectPool::free(rx_meta);
+    rx_meta = nullptr;
+  }
+  if (tx_meta != nullptr) {
+    daqiri::ObjectPool::free(tx_meta);
+    tx_meta = nullptr;
+  }
+  if (tx_burst_pool_ != nullptr) {
+    daqiri::ObjectPool::free(tx_burst_pool_);
+    tx_burst_pool_ = nullptr;
+  }
   for (auto& entry : mem_pools_) {
-    if (entry.second != nullptr) { rte_ring_free(entry.second); }
+    if (entry.second != nullptr) {
+      daqiri::Ring::free(entry.second);
+    }
   }
   mem_pools_.clear();
 
-  cleanup_eal();
   initialized_ = false;
 }
 
@@ -1838,7 +1737,7 @@ Status RdmaEngine::get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool ser
     return Status::NOT_READY;
   }
 
-  if (rte_ring_dequeue(it->second, reinterpret_cast<void**>(burst)) != 0) {
+  if (!it->second->dequeue(reinterpret_cast<void**>(burst))) {
     return Status::NOT_READY;
   }
 
@@ -1848,13 +1747,13 @@ Status RdmaEngine::get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool ser
 void RdmaEngine::free_rx_metadata(BurstParams* burst) {
   if (burst == nullptr) { return; }
   reset_rdma_burst_metadata(burst);
-  rte_mempool_put(rx_meta, burst);
+  rx_meta->put(burst);
 }
 
 void RdmaEngine::free_tx_metadata(BurstParams* burst) {
   if (burst == nullptr) { return; }
   reset_rdma_burst_metadata(burst);
-  rte_mempool_put(tx_meta, burst);
+  tx_meta->put(burst);
 }
 
 Status RdmaEngine::get_tx_metadata_buffer(BurstParams** burst) {
@@ -1889,10 +1788,14 @@ void RdmaEngine::print_stats() {
   size_t tx_ring_entries = 0;
   size_t rx_ring_entries = 0;
   for (const auto& it : tx_rings_map_) {
-    if (it.second != nullptr) { tx_ring_entries += rte_ring_count(it.second); }
+    if (it.second != nullptr) {
+      tx_ring_entries += (it.second)->count();
+    }
   }
   for (const auto& it : rx_rings_map_) {
-    if (it.second != nullptr) { rx_ring_entries += rte_ring_count(it.second); }
+    if (it.second != nullptr) {
+      rx_ring_entries += (it.second)->count();
+    }
   }
 
   size_t worker_threads = 0;
@@ -1926,24 +1829,20 @@ void RdmaEngine::print_stats() {
                     rx_ring_entries);
 
   if (tx_burst_pool_ != nullptr) {
-    DAQIRI_LOG_INFO("  tx_burst_pool avail={} in_use={}",
-                      rte_mempool_avail_count(tx_burst_pool_),
-                      rte_mempool_in_use_count(tx_burst_pool_));
+    DAQIRI_LOG_INFO("  tx_burst_pool avail={} in_use={}", tx_burst_pool_->avail_count(),
+                    tx_burst_pool_->in_use_count());
   }
   if (rx_meta != nullptr) {
-    DAQIRI_LOG_INFO("  rx_meta_pool avail={} in_use={}",
-                      rte_mempool_avail_count(rx_meta),
-                      rte_mempool_in_use_count(rx_meta));
+    DAQIRI_LOG_INFO("  rx_meta_pool avail={} in_use={}", rx_meta->avail_count(),
+                    rx_meta->in_use_count());
   }
   if (tx_meta != nullptr) {
-    DAQIRI_LOG_INFO("  tx_meta_pool avail={} in_use={}",
-                      rte_mempool_avail_count(tx_meta),
-                      rte_mempool_in_use_count(tx_meta));
+    DAQIRI_LOG_INFO("  tx_meta_pool avail={} in_use={}", tx_meta->avail_count(),
+                    tx_meta->in_use_count());
   }
   if (pkt_len_pool_ != nullptr) {
-    DAQIRI_LOG_INFO("  pkt_len_pool avail={} in_use={}",
-                      rte_mempool_avail_count(pkt_len_pool_),
-                      rte_mempool_in_use_count(pkt_len_pool_));
+    DAQIRI_LOG_INFO("  pkt_len_pool avail={} in_use={}", pkt_len_pool_->avail_count(),
+                    pkt_len_pool_->in_use_count());
   }
 }
 
@@ -1974,35 +1873,42 @@ RdmaEngine::~RdmaEngine() {
   }
   pd_map_.clear();
 
-  // shutdown() releases DPDK rings/mempools BEFORE rte_eal_cleanup(); the
-  // block below covers only the partial-init / no-shutdown path, where EAL
-  // is still alive and these pointers are still valid.
-  if (eal_initialized_) {
-    while (!rx_rings_.empty()) {
-      auto ring = rx_rings_.front();
-      rx_rings_.pop();
-      rte_ring_free(ring);
-    }
-    while (!tx_rings_.empty()) {
-      auto ring = tx_rings_.front();
-      tx_rings_.pop();
-      rte_ring_free(ring);
-    }
-    if (pkt_len_pool_ != nullptr) { rte_mempool_free(pkt_len_pool_); pkt_len_pool_ = nullptr; }
-    if (rx_meta != nullptr) { rte_mempool_free(rx_meta); rx_meta = nullptr; }
-    if (tx_meta != nullptr) { rte_mempool_free(tx_meta); tx_meta = nullptr; }
-    if (tx_burst_pool_ != nullptr) { rte_mempool_free(tx_burst_pool_); tx_burst_pool_ = nullptr; }
-    for (auto& entry : mem_pools_) {
-      if (entry.second != nullptr) { rte_ring_free(entry.second); }
+  // Covers the partial-init / no-shutdown path. shutdown() already releases and
+  // nulls these on the normal path; the null/empty checks make this idempotent.
+  while (!rx_rings_.empty()) {
+    auto ring = rx_rings_.front();
+    rx_rings_.pop();
+    daqiri::Ring::free(ring);
+  }
+  while (!tx_rings_.empty()) {
+    auto ring = tx_rings_.front();
+    tx_rings_.pop();
+    daqiri::Ring::free(ring);
+  }
+  if (pkt_len_pool_ != nullptr) {
+    daqiri::ObjectPool::free(pkt_len_pool_);
+    pkt_len_pool_ = nullptr;
+  }
+  if (rx_meta != nullptr) {
+    daqiri::ObjectPool::free(rx_meta);
+    rx_meta = nullptr;
+  }
+  if (tx_meta != nullptr) {
+    daqiri::ObjectPool::free(tx_meta);
+    tx_meta = nullptr;
+  }
+  if (tx_burst_pool_ != nullptr) {
+    daqiri::ObjectPool::free(tx_burst_pool_);
+    tx_burst_pool_ = nullptr;
+  }
+  for (auto& entry : mem_pools_) {
+    if (entry.second != nullptr) {
+      daqiri::Ring::free(entry.second);
     }
   }
   rx_rings_map_.clear();
   tx_rings_map_.clear();
   mem_pools_.clear();
-
-  // Final safety net: if shutdown() never ran (process exiting from a partial
-  // init), still release EAL and unlink any leftover hugepage files.
-  cleanup_eal();
 }
 
 // RDMA-specific functions that were declared but not implemented

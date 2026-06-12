@@ -31,21 +31,29 @@
 
 #include <cstring>
 #include <map>
+#include <chrono>
 #include <set>
 #include <string>
 #include <vector>
 
-#include <rte_eal.h>
-#include <rte_errno.h>
-#include <rte_ring.h>
-#include <rte_mempool.h>
-#include <rte_lcore.h>
-#include <rte_cycles.h>
-#include <rte_malloc.h>
+#include "src/daqiri_ring.h"
+#include "src/daqiri_pool.h"
 
 #include <daqiri/logging.hpp>
 
 namespace daqiri {
+
+namespace {
+// Monotonic nanosecond clock used for the TX flush timeouts. Replaces DPDK's
+// rte_get_timer_cycles()/rte_get_timer_hz() so the ibverbs engine needs no
+// libdpdk: "cycles" are nanoseconds, so the timer frequency is 1e9.
+constexpr uint64_t ibv_timer_hz = 1'000'000'000ULL;
+inline uint64_t ibv_now_ns() {
+  return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                   std::chrono::steady_clock::now().time_since_epoch())
+                                   .count());
+}
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // mlx5 Multi-Packet RQ CQE decode constants (not exported by mlx5dv.h; these
@@ -218,38 +226,6 @@ bool IbverbsEngine::set_config_and_initialize(const NetworkConfig& cfg) {
   cfg_ = cfg;
   initialize();
   return initialized_;
-}
-
-bool IbverbsEngine::init_eal() {
-  // EAL is needed only for rte_ring / rte_mempool used in the worker->app
-  // handoff; the NIC is driven through ibverbs. Mirrors RdmaMgr::initialize.
-  std::string cores = std::to_string(cfg_.common_.master_core_);
-  std::set<std::string> seen{std::to_string(cfg_.common_.master_core_)};
-  for (const auto& intf : cfg_.ifs_) {
-    for (const auto& q : intf.rx_.queues_) {
-      if (!q.common_.cpu_core_.empty() && seen.insert(q.common_.cpu_core_).second) {
-        cores += "," + q.common_.cpu_core_;
-      }
-    }
-  }
-
-  eal_file_prefix_ = generate_random_string(10);
-  std::vector<std::string> args = {"daqiri_ibverbs", "--file-prefix=" + eal_file_prefix_,
-                                   "--no-pci", "-l", cores};
-  std::vector<char*> argv;
-  for (auto& a : args) {
-    argv.push_back(const_cast<char*>(a.c_str()));
-  }
-
-  DAQIRI_LOG_INFO("Initializing EAL (rings only): {} {} {} {} {}", args[0], args[1], args[2],
-                  args[3], args[4]);
-  int ret = rte_eal_init(static_cast<int>(argv.size()), argv.data());
-  if (ret < 0) {
-    DAQIRI_LOG_CRITICAL("rte_eal_init failed: {}", rte_errno);
-    return false;
-  }
-  eal_initialized_ = true;
-  return true;
 }
 
 // Resolve a configured interface to an ibverbs device context. Matching order:
@@ -1392,7 +1368,7 @@ Status IbverbsEngine::setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf,
   // App-facing burst ring.
   const std::string ring_name =
       "ibv_rx_" + std::to_string(q.port_id) + "_" + std::to_string(q.queue_id);
-  q.ring = rte_ring_create(ring_name.c_str(), 2048, rte_socket_id(), 0);
+  q.ring = daqiri::Ring::create(ring_name.c_str(), 2048, daqiri::RingMode::MPMC);
   if (q.ring == nullptr) {
     DAQIRI_LOG_CRITICAL("Failed to create RX ring {}", ring_name);
     return Status::GENERIC_FAILURE;
@@ -1415,11 +1391,7 @@ void IbverbsEngine::initialize() {
   }
   for (auto& mr : cfg_.mrs_) {
     const size_t align = std::max<size_t>(get_alignment(mr.second.kind_), GPU_PAGE_SIZE);
-    mr.second.adj_size_ = RTE_ALIGN_CEIL(mr.second.buf_size_, align);
-  }
-
-  if (!init_eal()) {
-    return;
+    mr.second.adj_size_ = (mr.second.buf_size_ + align - 1) & ~(align - 1);
   }
 
   if (allocate_memory_regions() != Status::SUCCESS) {
@@ -1443,15 +1415,13 @@ void IbverbsEngine::initialize() {
   }
   g_layout = compute_layout(max_batch_);
   rx_meta_pool_size_ = cfg_.rx_meta_buffers_ ? cfg_.rx_meta_buffers_ : 4096;
-  rx_meta_pool_ = rte_mempool_create("IBV_RX_META", rx_meta_pool_size_ - 1, g_layout.total, 0, 0,
-                                     nullptr, nullptr, nullptr, nullptr, rte_socket_id(), 0);
+  rx_meta_pool_ = daqiri::ObjectPool::create("IBV_RX_META", rx_meta_pool_size_ - 1, g_layout.total);
   if (rx_meta_pool_ == nullptr) {
     DAQIRI_LOG_CRITICAL("Failed to create RX metadata pool");
     return;
   }
   const size_t tx_meta_n = cfg_.tx_meta_buffers_ ? cfg_.tx_meta_buffers_ : 4096;
-  tx_meta_pool_ = rte_mempool_create("IBV_TX_META", tx_meta_n - 1, g_layout.total, 0, 0, nullptr,
-                                     nullptr, nullptr, nullptr, rte_socket_id(), 0);
+  tx_meta_pool_ = daqiri::ObjectPool::create("IBV_TX_META", tx_meta_n - 1, g_layout.total);
   if (tx_meta_pool_ == nullptr) {
     DAQIRI_LOG_CRITICAL("Failed to create TX metadata pool");
     return;
@@ -1582,7 +1552,7 @@ void IbverbsEngine::run() {
 // RX hot path
 // ---------------------------------------------------------------------------
 bool IbverbsEngine::rx_alloc_burst(IbvRxQueue* q) {
-  if (rte_mempool_get(rx_meta_pool_, reinterpret_cast<void**>(&q->cur_burst)) < 0) {
+  if (!rx_meta_pool_->get(reinterpret_cast<void**>(&q->cur_burst))) {
     q->cur_burst = nullptr;
     return false;
   }
@@ -1604,14 +1574,14 @@ void IbverbsEngine::rx_flush_burst(IbvRxQueue* q) {
     return;
   }
   q->cur_burst->hdr.hdr.num_pkts = q->cur_n;
-  if (rte_ring_enqueue(q->ring, q->cur_burst) != 0) {
+  if (!q->ring->enqueue(q->cur_burst)) {
     // Ring full: drop the burst's claims by releasing its strides.
     uint16_t* wqe_arr = burst_wqe_arr(q->cur_burst);
     uint16_t* strd_arr = burst_strd_arr(q->cur_burst);
     for (int i = 0; i < q->cur_n; i++) {
       release_strides(*q, wqe_arr[i], strd_arr[i]);
     }
-    rte_mempool_put(rx_meta_pool_, q->cur_burst);
+    rx_meta_pool_->put(q->cur_burst);
     q->ring_full_bursts++;
     q->ring_full_pkts += static_cast<uint64_t>(q->cur_n);
   }
@@ -1628,8 +1598,7 @@ void IbverbsEngine::rx_poll_queue(IbvRxQueue* q) {
   const uint32_t cqe_size = q->dv_cq.cqe_size;
   uint8_t* cq_buf = static_cast<uint8_t*>(q->dv_cq.buf);
   const uint32_t wqe_mask = q->num_wqe - 1;
-  const uint64_t timeout_cycles =
-      q->timeout_us ? (rte_get_timer_hz() * q->timeout_us) / 1'000'000ULL : 0;
+  const uint64_t timeout_cycles = q->timeout_us ? (ibv_timer_hz * q->timeout_us) / 1'000'000ULL : 0;
 
   if (q->cur_burst == nullptr && !rx_alloc_burst(q)) {
     DAQIRI_LOG_ERROR("RX worker q{}: metadata pool exhausted (increase rx_meta_buffers)",
@@ -1658,15 +1627,14 @@ void IbverbsEngine::rx_poll_queue(IbvRxQueue* q) {
       // CQ drained. Reclaim freed regions and maybe flush a partial burst on
       // timeout, then yield to the next queue.
       devx_advance_producer(*q);
-      if (timeout_cycles && q->cur_n > 0 &&
-          (rte_get_timer_cycles() - q->last_flush_tsc) > timeout_cycles) {
+      if (timeout_cycles && q->cur_n > 0 && (ibv_now_ns() - q->last_flush_tsc) > timeout_cycles) {
         rx_flush_burst(q);
         if (!rx_alloc_burst(q)) {
           return;
         }
         wqe_arr = burst_wqe_arr(q->cur_burst);
         strd_arr = burst_strd_arr(q->cur_burst);
-        q->last_flush_tsc = rte_get_timer_cycles();
+        q->last_flush_tsc = ibv_now_ns();
       }
       break;
     }
@@ -1764,7 +1732,7 @@ void IbverbsEngine::rx_poll_queue(IbvRxQueue* q) {
     burst_flowtag_arr(q->cur_burst)[n] = be32toh(cqe64->sop_drop_qpn) & 0x00ffffffu;
     q->cur_n++;
     if (q->cur_n == 1) {
-      q->last_flush_tsc = rte_get_timer_cycles();
+      q->last_flush_tsc = ibv_now_ns();
     }
 
     if (q->cur_n >= q->batch_size) {
@@ -1818,7 +1786,7 @@ void IbverbsEngine::rx_worker(std::vector<IbvRxQueue*> group) {
   for (auto* q : group) {
     rx_flush_burst(q);
     if (q->cur_burst) {
-      rte_mempool_put(rx_meta_pool_, q->cur_burst);
+      rx_meta_pool_->put(q->cur_burst);
       q->cur_burst = nullptr;
     }
     DAQIRI_LOG_INFO(
@@ -2103,7 +2071,7 @@ void IbverbsEngine::reorder_process_raw(IbvRxQueue& q, BurstParams* raw) {
   }
   // Source strides stay held by reorder state until their kernel completes;
   // return only the raw burst metadata block to the pool.
-  rte_mempool_put(rx_meta_pool_, raw);
+  rx_meta_pool_->put(raw);
 }
 
 Status IbverbsEngine::reorder_get_rx(IbvRxQueue& q, BurstParams** burst) {
@@ -2118,7 +2086,7 @@ Status IbverbsEngine::reorder_get_rx(IbvRxQueue& q, BurstParams** burst) {
     return Status::SUCCESS;
   }
   void* b = nullptr;
-  while (rte_ring_dequeue(q.ring, &b) == 0) {
+  while (q.ring->dequeue(&b)) {
     reorder_process_raw(q, static_cast<BurstParams*>(b));
     if (!st.ready.empty()) {
       *burst = st.ready.front();
@@ -2223,7 +2191,7 @@ Status IbverbsEngine::get_rx_burst(BurstParams** burst, int port, int q) {
     return reorder_get_rx(*rq, burst);
   }
   void* b = nullptr;
-  if (rte_ring_dequeue(rq->ring, &b) != 0) {
+  if (!rq->ring->dequeue(&b)) {
     return Status::NOT_READY;
   }
   *burst = static_cast<BurstParams*>(b);
@@ -2301,7 +2269,7 @@ void IbverbsEngine::free_rx_burst(BurstParams* burst) {
     reorder_release_output(burst);
     return;
   }
-  rte_mempool_put(rx_meta_pool_, burst);
+  rx_meta_pool_->put(burst);
 }
 
 void IbverbsEngine::free_rx_metadata(BurstParams* burst) {
@@ -2312,7 +2280,7 @@ void IbverbsEngine::free_rx_metadata(BurstParams* burst) {
     reorder_release_output(burst);
     return;
   }
-  rte_mempool_put(rx_meta_pool_, burst);
+  rx_meta_pool_->put(burst);
 }
 
 // ---------------------------------------------------------------------------
@@ -2353,8 +2321,8 @@ uint16_t IbverbsEngine::get_packet_flow_id(BurstParams* burst, int idx) {
 uint64_t IbverbsEngine::ts_to_ns(struct ibv_context* ctx, uint64_t raw_ts) {
   std::lock_guard<std::mutex> lk(clock_mtx_);
   ClockCache& c = clock_cache_[ctx];
-  const uint64_t now = rte_get_timer_cycles();
-  if (!c.valid || (now - c.refresh_tsc) > (rte_get_timer_hz() / 2)) {
+  const uint64_t now = ibv_now_ns();
+  if (!c.valid || (now - c.refresh_tsc) > (ibv_timer_hz / 2)) {
     if (mlx5dv_get_clock_info(ctx, &c.info) == 0) {
       c.refresh_tsc = now;
       c.valid = true;
@@ -2630,7 +2598,7 @@ void IbverbsEngine::shutdown() {
       ibv_destroy_cq(q->cq);
     }
     if (q->ring) {
-      rte_ring_free(q->ring);
+      daqiri::Ring::free(q->ring);
     }
   }
   rx_queues_.clear();
@@ -2642,7 +2610,7 @@ void IbverbsEngine::shutdown() {
       ibv_destroy_cq(q->cq);
     }
     if (q->send_ring) {
-      rte_ring_free(q->send_ring);
+      daqiri::Ring::free(q->send_ring);
     }
   }
   tx_queues_.clear();
@@ -2659,16 +2627,12 @@ void IbverbsEngine::shutdown() {
   }
   ctx_map_.clear();
   if (rx_meta_pool_) {
-    rte_mempool_free(rx_meta_pool_);
+    daqiri::ObjectPool::free(rx_meta_pool_);
     rx_meta_pool_ = nullptr;
   }
   if (tx_meta_pool_) {
-    rte_mempool_free(tx_meta_pool_);
+    daqiri::ObjectPool::free(tx_meta_pool_);
     tx_meta_pool_ = nullptr;
-  }
-  if (eal_initialized_) {
-    rte_eal_cleanup();
-    eal_initialized_ = false;
   }
 }
 
@@ -2813,8 +2777,7 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
   // worker dequeues and does the WQE build + doorbell + completion reclaim.
   const std::string send_name =
       "ibv_txsend_" + std::to_string(q.port_id) + "_" + std::to_string(q.queue_id);
-  q.send_ring =
-      rte_ring_create(send_name.c_str(), 4096, rte_socket_id(), RING_F_SP_ENQ | RING_F_SC_DEQ);
+  q.send_ring = daqiri::Ring::create(send_name.c_str(), 4096, daqiri::RingMode::SPSC);
   if (q.send_ring == nullptr) {
     DAQIRI_LOG_CRITICAL("Failed to create TX send ring {}", send_name);
     return Status::GENERIC_FAILURE;
@@ -2886,10 +2849,10 @@ void IbverbsEngine::tx_worker(std::vector<IbvTxQueue*> group) {
          !force_quit_.load(std::memory_order_relaxed)) {
     for (auto* q : group) {
       void* b = nullptr;
-      while (rte_ring_dequeue(q->send_ring, &b) == 0) {
+      while (q->send_ring->dequeue(&b)) {
         auto* burst = static_cast<BurstParams*>(b);
         post_tx_burst(*q, burst);
-        rte_mempool_put(tx_meta_pool_, burst);
+        tx_meta_pool_->put(burst);
       }
       poll_tx_completions(*q);
     }
@@ -2898,7 +2861,7 @@ void IbverbsEngine::tx_worker(std::vector<IbvTxQueue*> group) {
 
 BurstParams* IbverbsEngine::create_tx_burst_params() {
   BurstParams* burst = nullptr;
-  if (rte_mempool_get(tx_meta_pool_, reinterpret_cast<void**>(&burst)) < 0) {
+  if (!tx_meta_pool_->get(reinterpret_cast<void**>(&burst))) {
     return nullptr;
   }
   burst->hdr.hdr.num_pkts = 0;
@@ -3139,7 +3102,7 @@ Status IbverbsEngine::send_tx_burst(BurstParams* burst) {
   if (q == nullptr) {
     return Status::INVALID_PARAMETER;
   }
-  if (rte_ring_enqueue(q->send_ring, burst) != 0) {
+  if (!q->send_ring->enqueue(burst)) {
     // Worker is behind: roll back this (most-recent, unposted) allocation and
     // drop the metadata; caller moves on. Safe because get/send are paired on
     // the fill thread, so these are the last slots handed out and the worker
@@ -3147,7 +3110,7 @@ Status IbverbsEngine::send_tx_burst(BurstParams* burst) {
     q->alloc_head -= static_cast<uint64_t>(burst->hdr.hdr.num_pkts);
     q->handoff_drop_bursts++;
     q->handoff_drop_pkts += static_cast<uint64_t>(burst->hdr.hdr.num_pkts);
-    rte_mempool_put(tx_meta_pool_, burst);
+    tx_meta_pool_->put(burst);
     return Status::NO_SPACE_AVAILABLE;
   }
   return Status::SUCCESS;
@@ -3155,13 +3118,13 @@ Status IbverbsEngine::send_tx_burst(BurstParams* burst) {
 
 void IbverbsEngine::free_tx_burst(BurstParams* burst) {
   if (burst != nullptr) {
-    rte_mempool_put(tx_meta_pool_, burst);
+    tx_meta_pool_->put(burst);
   }
 }
 
 void IbverbsEngine::free_tx_metadata(BurstParams* burst) {
   if (burst != nullptr) {
-    rte_mempool_put(tx_meta_pool_, burst);
+    tx_meta_pool_->put(burst);
   }
 }
 

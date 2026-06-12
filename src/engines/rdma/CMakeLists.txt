@@ -47,18 +47,8 @@ if(NOT IBVERBS_LIBRARIES OR NOT RDMACM_LIBRARIES)
 endif()
 
 
-# DPDK is needed for rings (only used in .cpp, not exposed in public headers)
-pkg_check_modules(DPDK QUIET libdpdk)
-
-if(NOT DPDK_FOUND)
-  message(STATUS "Looking for DPDK in alternative directories")
-  set(ENV{PKG_CONFIG_PATH} /opt/mellanox/dpdk/lib/x86_64-linux-gnu/pkgconfig/)
-  pkg_check_modules(DPDK REQUIRED libdpdk)
-endif()
-
-target_link_directories(${ENGINE_TARGET} PRIVATE ${DPDK_LIBRARY_DIRS})
-target_include_directories(${ENGINE_TARGET} PRIVATE ${DPDK_INCLUDE_DIRS})
-target_compile_options(${ENGINE_TARGET} PRIVATE ${DPDK_CFLAGS_OTHER})
+# The rdma engine no longer depends on DPDK: its rings/pools are the
+# libdpdk-free daqiri::Ring / daqiri::ObjectPool.
 
 # ibverbs/rdmacm: PUBLIC (daqiri_rdma_engine.h includes <infiniband/verbs.h> and <rdma/rdma_cma.h>)
 target_include_directories(${ENGINE_TARGET} PUBLIC ${IBVERBS_INCLUDE_DIRS})
@@ -68,8 +58,4 @@ target_link_libraries(${ENGINE_TARGET}
     PUBLIC
         ${IBVERBS_LIBRARIES}
         ${RDMACM_LIBRARIES}
-    PRIVATE
-        
-        ${DPDK_LDFLAGS_OTHER}
-        ${DPDK_LIBRARIES}
 )
