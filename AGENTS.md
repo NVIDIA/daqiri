@@ -99,7 +99,7 @@ The web docs live in `docs/` and are built with [MkDocs Material](https://squidf
 - `docs/concepts.md` — terminology glossary (stream types and protocols, GPUDirect, packet/burst/segment, flow/queue, memory region, zero-copy ownership, RX reorder). Meant to be opened in parallel with the rest of the docs.
 - `docs/api-reference/index.md` — API guide (6-step application lifecycle, configuration-first model)
 - `docs/api-reference/configuration.md`, `docs/api-reference/cpp.md`, `docs/api-reference/python.md` — YAML schema, C++ API, and Python bindings docs
-- `docs/tutorials/` — tutorial walkthroughs (system config, config-file walkthrough)
+- `docs/tutorials/` — tutorial walkthroughs (system config, config-file walkthrough, Holoscan integration)
 - `docs/benchmarks/` — benchmark guide pages, surfaced as a top-level "Benchmarking" nav section in `mkdocs.yml` and the landing page (`docs/index.md`):
   - `docs/benchmarks/benchmarks.md` — overview and backend-selection decision tree
   - `docs/benchmarks/socket_benchmarking.md` — "Socket and RDMA Benchmarking" (TCP/UDP and RoCE/RDMA)
