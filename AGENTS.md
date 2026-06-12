@@ -50,6 +50,8 @@ YAML files contain `<angle-bracket>` placeholders (PCIe addresses, CPU cores, MA
 
 Configs named `raw_rx_*` are RX-only — they initialize the RX path and wait for external traffic, so a standalone run can exit cleanly with `0` packets. Use the `tx_rx` configs for closed-loop smoke tests.
 
+When determining throughput for a benchmark use the `mlnx_perf` utility in the background to view transmit and receive rates. Using application run time with packet counts is usually not accurate enough due to startup inconsistencies.
+
 ## Formatting
 
 `clang-format` is required for contributions (CONTRIBUTING.md):
