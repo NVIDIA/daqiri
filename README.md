@@ -40,6 +40,7 @@ An *engine* is the library that implements a [stream type](docs/concepts.md#stre
 |---------|-------------|-------------|
 | `dpdk` | `stream_type: "raw"` (default) | Userspace kernel-bypass packet processing with DPDK mbufs and rings. Init aborts if RX flow rules or TX offload rules cannot be programmed on the NIC. |
 | `ibverbs` | `stream_type: "raw"` with `engine: "ibverbs"`, and `stream_type: "socket"` with `roce://` endpoints | Two libibverbs-based engines built from one value: a pure-DevX Mellanox/mlx5 Multi-Packet (striding) Receive Queue (MPRQ) engine for raw Ethernet (opt in per stream with `engine: "ibverbs"`), and RDMA verbs over RoCE/InfiniBand for socket `roce://` endpoints (also backs the socket engine's RoCE path). The MPRQ engine eliminates DPDK's per-packet mbuf alloc/free; packets DMA strided into one pre-posted buffer (host or GPU via GPUDirect). |
+| `efa` | `stream_type: "raw"` with `engine: "efa"` | AWS Elastic Fabric Adapter via libfabric (connectionless SRD), with GPUDirect (FI_HMEM). Two-sided SEND/RECV for EFA-enabled AWS instances. Opt-in: requires libfabric with the EFA provider and the `efa` kernel driver on the host. |
 | *(built in)* | `stream_type: "socket"` with `tcp://`/`udp://` endpoints | Linux kernel UDP/TCP sockets — always available, no build flag required. |
 
 For `stream_type: "raw"` the engine defaults to `dpdk`; set `engine: "ibverbs"` on the

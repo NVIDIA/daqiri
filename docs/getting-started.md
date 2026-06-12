@@ -17,6 +17,7 @@ DAQIRI's baseline requirements depend on which [stream type](concepts.md#stream-
 | **GPU** *(GPUDirect only)* | RTX or Data Center GPU. GeForce is not supported. |
 | **DPDK** | Included in the DAQIRI container (patched for dma-buf, so `nvidia-peermem` is **not required** inside the container); see [bare-metal dependencies](#bare-metal-dependencies) below for the host build. |
 | **RoCE** | `libibverbs` and `librdmacm` (for `stream_type: "socket"` and `roce://` endpoints). |
+| **AWS EFA** *(`engine: "efa"` only)* | An EFA-enabled AWS instance (e.g. p4d/p5) with the `efa` kernel driver loaded, plus libfabric with the EFA provider and CUDA support (the [`aws-efa-installer`](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa-start.html) bundle, or a source build of libfabric `--with-cuda`). Build with `efa` in `DAQIRI_ENGINE`. Verify the device with `fi_info -p efa`. |
 | **GDS** | Optional `cufile.h` and `libcufile` for file writes from CUDA device memory. Runtime device-memory writes require a working cuFile installation; for regular `nvidia-fs` mode, the `nvidia-fs` kernel module must be loaded and the destination storage stack must be supported. |
 | **S3** | Optional AWS SDK for C++ with the `s3` component for raw packet uploads to Amazon S3 or S3-compatible object stores. The DAQIRI container builds this SDK from source. |
 
@@ -192,7 +193,7 @@ Both methods use the same public C++ include:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `DAQIRI_ENGINE` | `"dpdk ibverbs"` | Space-separated list of optional engine implementations to compile in. Valid values: `dpdk` (Raw Ethernet) and `ibverbs`. `ibverbs` builds two libibverbs-based engines: RDMA/RoCE (for `stream_type: "socket"` with `roce://` endpoints) and a Mellanox/mlx5 Multi-Packet (striding) Receive Queue engine for `stream_type: "raw"` (opt in per stream with `engine: "ibverbs"`). Linux UDP/TCP sockets are always built in, so there is no `socket` value. |
+| `DAQIRI_ENGINE` | `"dpdk ibverbs"` | Space-separated list of optional engine implementations to compile in. Valid values: `dpdk` (Raw Ethernet), `ibverbs`, and `efa`. `ibverbs` builds two libibverbs-based engines: RDMA/RoCE (for `stream_type: "socket"` with `roce://` endpoints) and a Mellanox/mlx5 Multi-Packet (striding) Receive Queue engine for `stream_type: "raw"` (opt in per stream with `engine: "ibverbs"`). `efa` builds the libfabric-based AWS Elastic Fabric Adapter engine for `stream_type: "raw"` (opt in per stream with `engine: "efa"`); it requires libfabric with the EFA provider. Linux UDP/TCP sockets are always built in, so there is no `socket` value. |
 | `DAQIRI_BUILD_PYTHON` | `OFF` | Build pybind11 Python bindings. |
 | `DAQIRI_BUILD_EXAMPLES` | `ON` | Build benchmark executables. |
 | `DAQIRI_ENABLE_GDS` | `OFF` | Enable cuFile-backed burst file writes from CUDA device memory. Host-memory writes use POSIX APIs without GDS. |

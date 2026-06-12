@@ -20,6 +20,7 @@ DAQIRI ships with several stream types to handle different types of incoming and
 | Ingest from or egress to a programmable PCIe sensor, such as an FPGA on the PCIe bus. | `stream_type: "pcie"` | — | Under development (see note below). |
 | Compare against normal Linux networking, run on a non-NVIDIA NIC, or test a peer that speaks TCP/UDP sockets. | `stream_type: "socket"` with `tcp://` or `udp://` endpoints | `daqiri_bench_socket` | [Socket and RDMA Benchmarking](socket_benchmarking.md) |
 | Test a peer that already implements RDMA verbs over RoCE. | `stream_type: "socket"` and `roce://` endpoints | `daqiri_bench_rdma` | [Socket and RDMA Benchmarking](socket_benchmarking.md#run-the-rdma-roce-benchmark) |
+| Run on an AWS EFA-enabled instance (kernel-bypass over libfabric/SRD with GPUDirect). | `stream_type: "raw"` with `engine: "efa"` (build with `efa` in `DAQIRI_ENGINE`) | `daqiri_bench_rdma` (reuses the SEND/RECV API) | [Socket and RDMA Benchmarking](socket_benchmarking.md) |
 | Drive raw Ethernet packets directly from an NVIDIA NIC under DAQIRI control. | `stream_type: "raw"` | `daqiri_bench_raw_gpudirect` and the other `raw_*` benches | [Raw Ethernet Benchmarking](raw_benchmarking.md) |
 
 !!! note "PCIe stream type status"

@@ -33,8 +33,10 @@ These settings apply globally to both TX and RX:
 - **`engine`**: Optional implementation engine for the selected stream type. Omit this
   unless you need a specific implementation override. For `stream_type: "raw"` the
   default is `dpdk`; set `engine: "ibverbs"` to use the Multi-Packet (striding) Receive
-  Queue engine on Mellanox/mlx5 NICs instead. RoCE configs infer `ibverbs` from
-  `roce://` endpoint URIs by default.
+  Queue engine on Mellanox/mlx5 NICs, or `engine: "efa"` to use the libfabric-based AWS
+  Elastic Fabric Adapter engine (requires a build with `efa` in `DAQIRI_ENGINE` and an
+  EFA-enabled AWS instance). RoCE configs infer `ibverbs` from `roce://` endpoint URIs
+  by default.
   - type: `string`
   - values: `dpdk`, `socket`, `ibverbs`
 - **`log_level`**: Engine log level.
@@ -148,6 +150,24 @@ engine.
 - **`roce_config.transport_mode`**: RDMA transport type.
   - type: `string`
   - values: `RC` (Reliable Connected), `UC` (Unreliable Connected)
+
+### EFA Configuration (AWS)
+
+When using AWS EFA, set `stream_type: "raw"` and `engine: "efa"` (requires a build with
+`efa` in `DAQIRI_ENGINE`). EFA is connectionless (libfabric `FI_EP_RDM`/SRD); each
+interface carries an `efa_config` block giving its server/client role and the bootstrap
+TCP port used once to exchange opaque EFA addresses. GPU (`kind: device`) memory regions
+are registered with `FI_HMEM` for GPUDirect.
+
+- **`efa_config.mode`**: Connection role.
+  - type: `string`
+  - values: `client`, `server`
+- **`efa_config.local_port`**: Bootstrap TCP port the server binds (bound to the interface
+  `address`). Required for `mode: server`.
+  - type: `integer`
+- **`efa_config.remote_port`**: Bootstrap TCP port the client connects to. Required for
+  `mode: client`.
+  - type: `integer`
 
 ## Receive Configuration (rx)
 

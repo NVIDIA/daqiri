@@ -29,8 +29,12 @@
 #if DAQIRI_ENGINE_IBVERBS
 #include "src/engines/ibverbs/daqiri_ibverbs_engine.h"
 #endif
+#if DAQIRI_ENGINE_EFA
+#include "src/engines/efa/daqiri_efa_engine.h"
+#endif
 
-#if DAQIRI_ENGINE_DPDK || DAQIRI_ENGINE_SOCKET || DAQIRI_ENGINE_RDMA || DAQIRI_ENGINE_IBVERBS
+#if DAQIRI_ENGINE_DPDK || DAQIRI_ENGINE_SOCKET || DAQIRI_ENGINE_RDMA || DAQIRI_ENGINE_IBVERBS || \
+    DAQIRI_ENGINE_EFA
 #include <rte_common.h>
 #include <rte_malloc.h>
 #include <rte_memory.h>
@@ -138,6 +142,11 @@ std::unique_ptr<Engine> EngineFactory::create_instance(EngineType type) {
       _engine = std::make_unique<IbverbsEngine>();
       break;
 #endif
+#if DAQIRI_ENGINE_EFA
+    case EngineType::EFA:
+      _engine = std::make_unique<EfaEngine>();
+      break;
+#endif
     case EngineType::DEFAULT:
       _engine = create_instance(get_default_engine_type());
       return _engine;
@@ -226,7 +235,7 @@ Status Engine::populate_pool(struct rte_ring* ring, const std::string& mr_name) 
   return Status::SUCCESS;
 }
 
-#if DAQIRI_ENGINE_DPDK || DAQIRI_ENGINE_RDMA
+#if DAQIRI_ENGINE_DPDK || DAQIRI_ENGINE_RDMA || DAQIRI_ENGINE_EFA
 
 Engine::HugepageEstimate Engine::estimate_required_hugepages() const {
   HugepageEstimate est;
@@ -405,11 +414,11 @@ size_t Engine::available_hugepage_bytes() { return 0; }
 bool Engine::check_hugepage_availability() const { return true; }
 void Engine::cleanup_eal() {}
 
-#endif  // DAQIRI_ENGINE_DPDK || DAQIRI_ENGINE_RDMA
+#endif  // DAQIRI_ENGINE_DPDK || DAQIRI_ENGINE_RDMA || DAQIRI_ENGINE_EFA
 
 Status Engine::allocate_memory_regions() {
   DAQIRI_LOG_INFO("Registering memory regions");
-#if DAQIRI_ENGINE_DPDK || DAQIRI_ENGINE_RDMA
+#if DAQIRI_ENGINE_DPDK || DAQIRI_ENGINE_RDMA || DAQIRI_ENGINE_EFA
   for (auto& mr : cfg_.mrs_) {
     void* ptr;
     AllocRegion ar;

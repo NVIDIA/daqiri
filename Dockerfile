@@ -225,6 +225,28 @@ RUN if [ "${DAQIRI_ENABLE_OTEL_METRICS}" = "ON" ]; then \
 # ==============================================================
 FROM dpdk AS rdma
 
+# ==============================================================
+# efa: AWS Elastic Fabric Adapter support (libfabric + EFA provider).
+# Build with BASE_TARGET=efa together with DAQIRI_ENGINE="dpdk ibverbs efa"
+# to enable the engine: efa raw backend. We build libfabric from source with
+# the EFA provider and CUDA (FI_HMEM) support; the aws-efa-installer's
+# libfabric1-aws package is runtime-only (no headers/pkgconfig). The efa.ko
+# kernel driver must be present on the AWS host, not in the container.
+# ==============================================================
+FROM dpdk AS efa
+
+ARG LIBFABRIC_VERSION=1.22.0
+RUN curl -fsSL "https://github.com/ofiwg/libfabric/releases/download/v${LIBFABRIC_VERSION}/libfabric-${LIBFABRIC_VERSION}.tar.bz2" \
+        -o /tmp/libfabric.tar.bz2 \
+    && mkdir -p /tmp/libfabric \
+    && tar -xf /tmp/libfabric.tar.bz2 -C /tmp/libfabric --strip-components=1 \
+    && cd /tmp/libfabric \
+    && ./configure --prefix=/usr/local --enable-efa=yes --with-cuda=/usr/local/cuda --enable-cuda-dlopen \
+    && make -j"$(nproc)" \
+    && make install \
+    && ldconfig \
+    && rm -rf /tmp/libfabric /tmp/libfabric.tar.bz2
+
 # ==============================
 # Rivermax Target
 # This stage is only built when --target rivermax is specified. It installs and configures Rivermax SDK.

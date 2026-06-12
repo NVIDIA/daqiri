@@ -1195,6 +1195,10 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
           }
 
           bool roce_used = false;
+          // EFA, like RoCE, manages memory regions at the transport level
+          // rather than per RX/TX queue, so queue parsing skips memory_regions.
+          const bool efa_used =
+              input_spec.common_.engine == daqiri::EngineType::EFA;
           if (socket_used) {
             if (!intf["socket_config"].IsDefined()) {
               DAQIRI_LOG_ERROR("Missing 'socket_config' for interface '{}'",
@@ -1268,6 +1272,42 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
                                ifcfg.name_);
               return false;
             }
+
+            // The EFA engine (engine: "efa") is connection-oriented and needs a
+            // per-interface server/client role plus a bootstrap TCP port to
+            // exchange opaque EFA addresses. Raw interfaces carry no
+            // socket_config, so EFA reads a dedicated 'efa_config' block (parsed
+            // into RDMAConfig, reused by the engine). Other raw engines (dpdk,
+            // ibverbs) take no efa_config.
+            if (efa_used) {
+              if (!intf["efa_config"].IsDefined()) {
+                DAQIRI_LOG_ERROR("Missing 'efa_config' for interface '{}' with "
+                                 "engine 'efa'",
+                                 ifcfg.name_);
+                return false;
+              }
+              const auto &efa = intf["efa_config"];
+              ifcfg.rdma_.mode_ =
+                  daqiri::GetRDMAModeFromString(efa["mode"].as<std::string>(""));
+              if (ifcfg.rdma_.mode_ == daqiri::RDMAMode::INVALID) {
+                DAQIRI_LOG_ERROR("'efa_config.mode' must be 'server' or "
+                                 "'client' (interface '{}')",
+                                 ifcfg.name_);
+                return false;
+              }
+              const uint16_t local_port =
+                  static_cast<uint16_t>(efa["local_port"].as<uint32_t>(0));
+              const uint16_t remote_port =
+                  static_cast<uint16_t>(efa["remote_port"].as<uint32_t>(0));
+              ifcfg.rdma_.port_ =
+                  ifcfg.rdma_.mode_ == daqiri::RDMAMode::SERVER ? local_port
+                                                                : remote_port;
+            } else if (intf["efa_config"].IsDefined()) {
+              DAQIRI_LOG_ERROR("'efa_config' is only valid with engine 'efa' "
+                               "(interface '{}')",
+                               ifcfg.name_);
+              return false;
+            }
           }
 
           try {
@@ -1281,7 +1321,7 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
             for (const auto &q_item : rx["queues"]) {
               daqiri::RxQueueConfig q;
               if (!parse_rx_queue_config(
-                      q_item, input_spec.common_.engine_type, q, !roce_used)) {
+                      q_item, input_spec.common_.engine_type, q, !(roce_used || efa_used))) {
                 DAQIRI_LOG_ERROR("Failed to parse RxQueueConfig");
                 return false;
               }
@@ -1354,7 +1394,7 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
             for (const auto &q_item : tx["queues"]) {
               daqiri::TxQueueConfig q;
               if (!parse_tx_queue_config(
-                      q_item, input_spec.common_.engine_type, q, !roce_used)) {
+                      q_item, input_spec.common_.engine_type, q, !(roce_used || efa_used))) {
                 DAQIRI_LOG_ERROR("Failed to parse TxQueueConfig");
                 return false;
               }

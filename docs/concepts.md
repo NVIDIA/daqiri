@@ -40,6 +40,7 @@ the `stream_type` and the endpoint URI scheme:
 |---|---|---|
 | `stream_type: "raw"` | **`dpdk`** | kernel-bypass raw Ethernet |
 | `stream_type: "raw"` with `engine: "ibverbs"` | **`ibverbs`** (opt-in) | MPRQ raw Ethernet via libibverbs/DevX (Mellanox/mlx5) |
+| `stream_type: "raw"` with `engine: "efa"` | **`efa`** (opt-in) | AWS Elastic Fabric Adapter via libfabric (SRD), with GPUDirect |
 | `stream_type: "socket"` with `udp://`/`tcp://` endpoints | **built-in Linux sockets** | always available, nothing to build |
 | `stream_type: "socket"` with `roce://` endpoints | **`ibverbs`** | RDMA/RoCE via libibverbs |
 
@@ -52,7 +53,7 @@ and a future release could add a DOCA RDMA engine as an alternative for the
 same `roce://` stream.
 
 At build time, `DAQIRI_ENGINE` selects which optional engines are
-compiled in (`dpdk`, `ibverbs`); Linux sockets are always available. See
+compiled in (`dpdk`, `ibverbs`, `efa`); Linux sockets are always available. See
 [Getting Started](getting-started.md) for the build options.
 
 ### Raw Ethernet
@@ -67,9 +68,15 @@ steering (see [Flows](#flow) below). Implemented on top of
 implementation detail, not a user-facing concept. Setting `engine: "ibverbs"`
 on the stream instead uses a pure-libibverbs/DevX Multi-Packet (striding)
 Receive Queue engine on Mellanox/mlx5 NICs, which packs many packets into one
-pre-posted buffer to avoid per-packet allocation.
+pre-posted buffer to avoid per-packet allocation. Setting `engine: "efa"` instead
+runs over the AWS [Elastic Fabric
+Adapter](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa.html) via
+[libfabric](https://ofiwg.github.io/libfabric/) (connectionless SRD transport,
+GPUDirect, two-sided SEND/RECV) on EFA-enabled AWS instances; it needs a build
+with `-DDAQIRI_ENGINE` including `efa` and the `efa` kernel driver on the host.
 
-Requires an NVIDIA SmartNIC (ConnectX-6 Dx or later).
+Requires an NVIDIA SmartNIC (ConnectX-6 Dx or later) for the `dpdk`/`ibverbs`
+engines, or an EFA-enabled AWS instance for the `efa` engine.
 
 ### Socket
 
@@ -126,6 +133,9 @@ in the configuration walkthrough.
     - **Socket — RoCE** (`stream_type: "socket"` and
       `roce://` endpoints) is supported and distributed; integration
       testing is under development.
+    - **Raw — EFA** (`stream_type: "raw"`, `engine: "efa"`) is a new,
+      opt-in AWS path (two-sided SEND/RECV with GPUDirect over libfabric/SRD).
+      Hardware integration testing is pending EFA-instance access.
     - The **PCIe programmable-sensor** path is under development.
 
 ## GPUDirect

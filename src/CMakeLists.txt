@@ -210,10 +210,11 @@ endif()
 # and is NOT a DAQIRI_ENGINE value. Valid values:
 #   dpdk    - raw Ethernet via kernel bypass
 #   ibverbs - RDMA/RoCE via libibverbs (also enables the socket RoCE path)
+#   efa     - AWS Elastic Fabric Adapter via libfabric (stream_type: raw, engine: efa)
 if(NOT DEFINED DAQIRI_ENGINE)
-    set(DAQIRI_ENGINE "dpdk ibverbs" CACHE STRING "Optional engine implementations to build: dpdk, ibverbs (Linux sockets are always built in)")
+    set(DAQIRI_ENGINE "dpdk ibverbs" CACHE STRING "Optional engine implementations to build: dpdk, ibverbs, efa (Linux sockets are always built in)")
 endif()
-set_property(CACHE DAQIRI_ENGINE PROPERTY STRINGS "dpdk" "ibverbs")
+set_property(CACHE DAQIRI_ENGINE PROPERTY STRINGS "dpdk" "ibverbs" "efa")
 separate_arguments(DAQIRI_ENGINE_LIST UNIX_COMMAND ${DAQIRI_ENGINE})
 
 # Translate user-facing engine names to internal engine directories/targets.
@@ -230,9 +231,13 @@ foreach(ENGINE IN LISTS DAQIRI_ENGINE_LIST)
     # engine: ibverbs).
     list(APPEND DAQIRI_ENGINE_INTERNAL_LIST "rdma")
     list(APPEND DAQIRI_ENGINE_INTERNAL_LIST "ibverbs")
+  elseif(ENGINE STREQUAL "efa")
+    # AWS EFA (libfabric) raw-Ethernet engine, selected by
+    # stream_type: raw + engine: efa.
+    list(APPEND DAQIRI_ENGINE_INTERNAL_LIST "efa")
   else()
     message(FATAL_ERROR
-      "Invalid DAQIRI_ENGINE value '${ENGINE}'. Valid values: dpdk, ibverbs. "
+      "Invalid DAQIRI_ENGINE value '${ENGINE}'. Valid values: dpdk, ibverbs, efa. "
       "Linux sockets are always built in (there is no 'socket' value); "
       "use 'ibverbs' for RDMA/RoCE.")
   endif()

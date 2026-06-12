@@ -1,0 +1,102 @@
+%YAML 1.2
+---
+# AWS EFA (Elastic Fabric Adapter) two-sided SEND/RECV benchmark with GPUDirect.
+#
+# EFA is a kernel-bypass engine for raw streams, selected with
+# stream_type: "raw" + engine: "efa" (alongside the default `dpdk` and the
+# `ibverbs` engines). It reuses the same two-sided SEND/RECV burst API as RoCE,
+# so it is driven by the existing daqiri_bench_rdma binary:
+#
+#   ./build/examples/daqiri_bench_rdma ./build/examples/daqiri_bench_efa_tx_rx.yaml \
+#       --seconds 10 --mode both
+#
+# Requirements: an EFA-enabled AWS instance (e.g. p4d/p5) with the efa kernel
+# module loaded and libfabric built with the EFA provider + CUDA. Verify the
+# device with `fi_info -p efa`, and build with -DDAQIRI_ENGINE="dpdk ibverbs efa".
+#
+# Each interface's efa_config gives the server/client role and the bootstrap TCP
+# port used once to exchange opaque EFA addresses; replace the addresses with
+# your instance addresses.
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    engine: "efa"
+    master_core: 3
+    debug: false
+    log_level: "info"
+
+    memory_regions:
+    - name: "DATA_RX_GPU_SERVER"
+      kind: "device"
+      affinity: 0
+      num_bufs: 20
+      buf_size: 9000000
+    - name: "DATA_TX_GPU_SERVER"
+      kind: "device"
+      affinity: 0
+      num_bufs: 20
+      buf_size: 9000000
+    - name: "DATA_TX_GPU_CLIENT"
+      kind: "device"
+      affinity: 0
+      num_bufs: 20
+      buf_size: 90000000
+    - name: "DATA_RX_GPU_CLIENT"
+      kind: "device"
+      affinity: 0
+      num_bufs: 20
+      buf_size: 90000000
+
+    interfaces:
+    - name: my_client
+      address: 10.100.1.1
+      efa_config:
+        mode: client
+        remote_port: 4096
+      tx:
+        queues:
+        - name: "Client_TX_Queue"
+          id: 0
+          batch_size: 1
+          cpu_core: 7
+      rx:
+        queues:
+        - name: "Client_RX_Queue"
+          id: 0
+          cpu_core: 7
+          batch_size: 1
+    - name: my_server
+      address: 10.100.3.1
+      efa_config:
+        mode: server
+        local_port: 4096
+      rx:
+        queues:
+        - name: "Server_RX_Queue"
+          id: 0
+          cpu_core: 8
+          batch_size: 1
+      tx:
+        queues:
+        - name: "Server_TX_Queue"
+          id: 0
+          cpu_core: 8
+          batch_size: 1
+
+rdma_bench_server:
+  server_address: 10.100.3.1
+  server_port: 4096
+  message_size: 8000000
+  send: true
+  receive: true
+  server: true
+
+rdma_bench_client:
+  message_size: 8000000
+  client_address:
+  server_address: 10.100.3.1
+  server_port: 4096
+  receive: true
+  send: true
+  server: false
