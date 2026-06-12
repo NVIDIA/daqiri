@@ -195,13 +195,13 @@ Both methods use the same public C++ include:
 | `DAQIRI_BUILD_EXAMPLES` | `ON` | Build benchmark executables. |
 | `DAQIRI_ENABLE_GDS` | `OFF` | Enable cuFile-backed burst file writes from CUDA device memory. Host-memory writes use POSIX APIs without GDS. |
 | `DAQIRI_ENABLE_OTEL_METRICS` | `OFF` | Enable OpenTelemetry C++ metrics instrumentation. When enabled, OpenTelemetry C++ API package metadata must be available to CMake. |
+| `DAQIRI_ENABLE_S3` | `OFF` | Enable AWS SDK-backed asynchronous raw packet writes to S3. |
+| `BUILD_SHARED_LIBS` | — | Build as shared library. |
 
 For Raw Ethernet (`stream_type: "raw"`), `daqiri_init()` validates that each `rx.flows`
 entry's `action.id` matches an `rx.queues` ID on the same interface, then programs flow
 rules into the NIC. Initialization fails if any RX flow rule, send-to-kernel fallback (when
 `flow_isolation: true`), or `tx_eth_src` offload rule cannot be installed.
-| `DAQIRI_ENABLE_S3` | `OFF` | Enable AWS SDK-backed asynchronous raw packet writes to S3. |
-| `BUILD_SHARED_LIBS` | — | Build as shared library. |
 
 CUDA architectures default to `80;90` (A100, H100), with `121` (GB10) added
 when configuring with CUDA Toolkit 13.0 or newer. Override
