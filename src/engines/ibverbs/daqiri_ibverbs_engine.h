@@ -289,6 +289,15 @@ struct IbvTxQueue {
   uint64_t slots_posted = 0;
   bool send_scheduling = false;  // HCA wait_on_time present + real-time clock
   uint64_t rt_timemask = 0;      // wait segment comparison mask
+  // Packet pacing (worker-owned, used only when send_scheduling is also set):
+  // cap the average TX rate at pacing_mbps by gating each burst behind a single
+  // WAIT-on-time WQE. pace_next_ns is the NIC-clock time the next burst may
+  // start; it advances by the time the burst's bytes take at pacing_mbps.
+  // pace_rem carries the sub-nanosecond division remainder so the average rate
+  // is exact over time. 0 = pacing off.
+  uint64_t pacing_mbps = 0;
+  uint64_t pace_next_ns = 0;
+  uint64_t pace_rem = 0;
   // Hand-off-ring-full drops: send_tx_burst couldn't enqueue (TX worker behind),
   // so the burst was dropped and its slots rolled back. App-thread-written.
   uint64_t handoff_drop_bursts = 0;
@@ -441,7 +450,11 @@ class IbverbsEngine : public Engine {
   Status setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf, const TxQueueConfig& qcfg);
   Status create_tx_raw_qp(IbvTxQueue& q);                 // IBV_QPT_RAW_PACKET, RESET->RTS
   void post_tx_burst(IbvTxQueue& q, BurstParams* burst);  // build send WQEs + ring doorbell
-  void poll_tx_completions(IbvTxQueue& q);                // drain TX CQ, reclaim slot-runs
+  // Build a WAIT-on-time WQE (ctrl + wseg = 1 WQEBB, no slot) at q.sq_pi that
+  // holds the following send(s) until the NIC real-time clock reaches when_ns,
+  // advance sq_pi, and return its ctrl segment (for the BlueFlame doorbell).
+  void* emit_wait_wqe(IbvTxQueue& q, uint64_t when_ns);
+  void poll_tx_completions(IbvTxQueue& q);  // drain TX CQ, reclaim slot-runs
   // One worker services a group of TX queues sharing a cpu_core, round-robin:
   // drains each send_ring (post) + reclaims completions.
   void tx_worker(std::vector<IbvTxQueue*> group);
@@ -481,6 +494,10 @@ class IbverbsEngine : public Engine {
   std::unordered_map<struct ibv_context*, ClockCache> clock_cache_;
   std::mutex clock_mtx_;
   uint64_t ts_to_ns(struct ibv_context* ctx, uint64_t raw_ts);
+  // Current NIC real-time clock in nanoseconds (same domain as ts_to_ns /
+  // get_packet_rx_timestamp), via ibv_query_rt_values_ex. Used by packet pacing
+  // to seed and catch up the per-queue virtual clock. Returns 0 on failure.
+  uint64_t now_nic_ns(struct ibv_context* ctx);
 
   // RX/TX queues, owned here. Pointers handed to worker threads are stable.
   std::vector<std::unique_ptr<IbvRxQueue>> rx_queues_;

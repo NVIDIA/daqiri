@@ -349,6 +349,14 @@ daqiri::set_reorder_cuda_stream("rx_port", "rx_reorder_0", stream);
   during `daqiri_init()`; initialization fails if the NIC cannot program the rule.
   - type: `list`
   - values: `tx_eth_src` (auto-fill source MAC address)
+- **`pacing_mbps`**: Packet-pacing rate cap for this queue, in megabits per second of L2 frame
+  bytes (the data the application transmits, excluding preamble/IFG/FCS). The engine gates each
+  burst behind a single hardware wait-on-time WQE so the long-run average TX rate stays at or
+  below this value; idle gaps do not accumulate burst credit. `0` (the default) disables pacing
+  and sends at line rate. Honored only by the `ibverbs` engine on devices with wait-on-time and a
+  real-time clock (ConnectX-7 or later); ignored with a warning otherwise.
+  - type: `integer`
+  - default: `0`
 
 ### Accurate Send
 

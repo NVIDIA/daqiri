@@ -210,6 +210,27 @@ After having modified the configuration file, ensure you have connected an SFP c
 
 By default the application runs for 10 seconds and then exits. You can change the duration by passing `--seconds <N>` after the YAML path, or stop it gracefully at any time with `Ctrl-C`.
 
+## Cap the transmit rate with packet pacing
+
+To meter the transmit side at a fixed rate in hardware, use the `ibverbs` engine and
+set a per-queue `pacing_mbps` cap. [`daqiri_bench_raw_tx_rx_pacing.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_pacing.yaml)
+is the loopback config above with `engine: "ibverbs"` and `pacing_mbps: 10000` (10 Gbps)
+on the TX queue. The engine emits one wait-on-time WQE per burst, so the queue's average
+TX rate stays at or below the configured value; idle gaps do not accumulate burst credit.
+
+```bash
+/opt/daqiri/bin/daqiri_bench_raw_gpudirect /opt/daqiri/bin/daqiri_bench_raw_tx_rx_pacing.yaml --seconds 10
+```
+
+Validate the cap from the `RX complete:` line: `Gbps = bytes * 8 / seconds / 1e9`. With
+`pacing_mbps: 10000` the achieved rate should sit at or just below 10 Gbps regardless of
+link speed. Change `pacing_mbps` (or set it to `0` to disable pacing and send at line rate)
+and re-run to see the cap move.
+
+Pacing requires a Mellanox/mlx5 NIC with wait-on-time and a real-time clock (ConnectX-7 or
+later). On devices without it, `pacing_mbps` is ignored with a warning at init and TX runs
+at line rate.
+
 ## Tune RDMA SEND completion signaling
 
 The RDMA engine signals every SEND work request by default. For `daqiri_bench_rdma`

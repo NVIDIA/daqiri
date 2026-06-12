@@ -122,6 +122,13 @@ For a shorter selection guide, start with the [Benchmarking overview](../benchma
 
     *Requires: built with `-DDAQIRI_ENABLE_GDS=ON`, NVMe-backed storage, working cuFile / `nvidia_fs` stack, `gdscheck.py -p` reports `NVMe : Supported`.*
 
+??? question "6. I need to cap (pace) the transmit rate in hardware"
+    - **Raw Ethernet packet pacing** — [`daqiri_bench_raw_tx_rx_pacing.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_pacing.yaml) (runs on `daqiri_bench_raw_gpudirect`).
+
+    This is the base TX+RX template on the `ibverbs` engine (`engine: "ibverbs"`) with a per-queue `pacing_mbps` cap added to the TX queue. The engine meters the queue out with one hardware wait-on-time WQE per burst so the average TX rate stays at or below the configured Mbps; idle gaps do not accumulate burst credit. Set `pacing_mbps: 0` (or remove it) to send at line rate. Validate by computing the achieved rate from the benchmark's RX line (`Gbps = bytes * 8 / seconds / 1e9`) and confirming it tracks the configured cap. See [Accurate Send](../api-reference/configuration.md#accurate-send) and the `pacing_mbps` key in the [TX queue configuration](../api-reference/configuration.md#transmit-configuration-tx).
+
+    *Requires: the `ibverbs` engine (`DAQIRI_ENGINE` includes `ibverbs`) + a Mellanox/mlx5 NIC with wait-on-time and a real-time clock (ConnectX-7 or later). On devices without it, `pacing_mbps` is ignored with a warning and TX runs at line rate.*
+
 ## Annotated walkthrough
 
 This section walks through three YAML configurations: the base TX+RX template, followed by diff-style snippets for header-data split (HDS) and GPU packet reordering. Click on the :material-plus-circle: icons to expand explanations for each annotated line.

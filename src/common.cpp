@@ -1441,6 +1441,10 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_tx_queue_common_config(
         q.common_.offloads_.push_back(off.as<std::string>());
       }
     }
+    // Optional per-queue packet-pacing rate in Mbps (0/absent = pacing off).
+    if (q_item["pacing_mbps"].IsDefined()) {
+      q.pacing_mbps_ = q_item["pacing_mbps"].as<uint64_t>();
+    }
   } catch (const std::exception& e) {
     DAQIRI_LOG_ERROR("Error parsing TxQueueConfig: {}", e.what());
     return false;

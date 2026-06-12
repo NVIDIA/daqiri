@@ -1,0 +1,91 @@
+%YAML 1.2
+---
+# Packet-pacing demo: hardware-metered TX rate via wait-on-time WQEs.
+#
+# This is daqiri_bench_raw_tx_rx.yaml on the ibverbs engine (engine: "ibverbs")
+# with a per-queue pacing_mbps cap added to the TX queue. The engine emits one
+# wait-on-time WAIT WQE per burst so the NIC meters the queue out at (at most)
+# the configured rate on average; idle gaps do not accumulate burst credit.
+#
+# Requirements: a Mellanox/mlx5 NIC with wait-on-time + a real-time clock
+# (ConnectX-7 or later). On devices without it, pacing_mbps is ignored with a
+# warning at init and TX runs at line rate.
+#
+# Validate: run daqiri_bench_raw_gpudirect with this config and compute the
+# achieved rate from the RX line's bytes/seconds (Gbps = bytes * 8 / seconds /
+# 1e9). It should sit at or just below pacing_mbps. Re-run with a different
+# pacing_mbps (or 0 to disable) to see the cap move.
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    engine: "ibverbs"
+    master_core: 3
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    memory_regions:
+    - name: "Data_TX_GPU"
+      kind: "device"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+    - name: "Data_RX_GPU"
+      kind: "device"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+
+    interfaces:
+    - name: "tx_port"
+      address: <0000:00:00.0>
+      tx:
+        queues:
+        - name: "tx_q_0"
+          id: 0
+          batch_size: 10240
+          cpu_core: 11
+          # Cap this queue's average TX rate at 10 Gbps of L2 frame bytes.
+          # Set to 0 (or remove) to send at line rate.
+          pacing_mbps: 10000
+          memory_regions:
+            - "Data_TX_GPU"
+          offloads:
+            - "tx_eth_src"
+    - name: "rx_port"
+      address: <0000:00:00.0>
+      rx:
+        flow_isolation: true
+        queues:
+        - name: "rq_q_0"
+          id: 0
+          cpu_core: 9
+          batch_size: 10240
+          memory_regions:
+            - "Data_RX_GPU"
+        flows:
+        - name: "flow_0"
+          id: 0
+          action:
+            type: queue
+            id: 0
+          match:
+            udp_src: 4096
+            udp_dst: 4096
+
+bench_rx:
+- interface_name: "rx_port"
+  cpu_core: 8
+
+bench_tx:
+- interface_name: "tx_port"
+  cpu_core: 10
+  batch_size: 10240
+  payload_size: 8000
+  header_size: 64
+  eth_dst_addr: <00:00:00:00:00:00>
+  ip_src_addr: <1.2.3.4>
+  ip_dst_addr: <5.6.7.8>
+  udp_src_port: 4096
+  udp_dst_port: 4096
