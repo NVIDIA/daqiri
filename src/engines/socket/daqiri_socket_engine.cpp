@@ -121,8 +121,10 @@ void SocketEngine::initialize() {
       initialized_ = roce_engine_->is_initialized();
       return;
     }
-#endif
     initialized_ = roce_engine_ != nullptr;
+#else
+    initialized_ = false;
+#endif
     return;
   }
 
@@ -1449,51 +1451,76 @@ Status SocketEngine::socket_get_server_conn_id(const std::string& server_addr, u
 
 Status SocketEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
                                          uintptr_t* conn_id) {
+#if DAQIRI_ENGINE_RDMA
   if (!is_roce_protocol() || roce_engine_ == nullptr) {
     return roce_not_initialized("rdma_connect_to_server");
   }
   return roce_engine_->rdma_connect_to_server(dst_addr, dst_port, conn_id);
+#else
+  return roce_not_initialized("rdma_connect_to_server");
+#endif
 }
 
 Status SocketEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
                                          const std::string& src_addr, uintptr_t* conn_id) {
+#if DAQIRI_ENGINE_RDMA
   if (!is_roce_protocol() || roce_engine_ == nullptr) {
     return roce_not_initialized("rdma_connect_to_server");
   }
   return roce_engine_->rdma_connect_to_server(dst_addr, dst_port, src_addr, conn_id);
+#else
+  return roce_not_initialized("rdma_connect_to_server");
+#endif
 }
 
 Status SocketEngine::rdma_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) {
+#if DAQIRI_ENGINE_RDMA
   if (!is_roce_protocol() || roce_engine_ == nullptr) {
     return roce_not_initialized("rdma_get_port_queue");
   }
   return roce_engine_->rdma_get_port_queue(conn_id, port, queue);
+#else
+  return roce_not_initialized("rdma_get_port_queue");
+#endif
 }
 
 Status SocketEngine::rdma_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
                                           uintptr_t* conn_id) {
+#if DAQIRI_ENGINE_RDMA
   if (!is_roce_protocol() || roce_engine_ == nullptr) {
     return roce_not_initialized("rdma_get_server_conn_id");
   }
   return roce_engine_->rdma_get_server_conn_id(server_addr, server_port, conn_id);
+#else
+  return roce_not_initialized("rdma_get_server_conn_id");
+#endif
 }
 
 Status SocketEngine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id,
                                   bool is_server, int num_pkts, uint64_t wr_id,
                                   const std::string& local_mr_name) {
+#if DAQIRI_ENGINE_RDMA
   if (!is_roce_protocol() || roce_engine_ == nullptr) {
     return roce_not_initialized("rdma_set_header");
   }
   return roce_engine_->rdma_set_header(
       burst, op_code, conn_id, is_server, num_pkts, wr_id, local_mr_name);
+#else
+  return roce_not_initialized("rdma_set_header");
+#endif
 }
 
 RDMAOpCode SocketEngine::rdma_get_opcode(BurstParams* burst) {
+#if DAQIRI_ENGINE_RDMA
   if (!is_roce_protocol() || roce_engine_ == nullptr) {
     DAQIRI_LOG_ERROR("rdma_get_opcode is only valid with roce:// endpoints");
     return RDMAOpCode::INVALID;
   }
   return roce_engine_->rdma_get_opcode(burst);
+#else
+  DAQIRI_LOG_ERROR("rdma_get_opcode is only valid with roce:// endpoints");
+  return RDMAOpCode::INVALID;
+#endif
 }
 
 }  // namespace daqiri
