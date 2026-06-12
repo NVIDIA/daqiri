@@ -11,11 +11,11 @@
 # (TX cores, RX cores) = (1,1), (1,2), (2,1), (2,2); the goal is to demonstrate
 # (2,2) > (1,1) when a single core is the bottleneck.
 #
-#   cell  TX cores  RX cores
-#   1t1r  16        18
-#   1t2r  16        18,19
-#   2t1r  16,17     18
-#   2t2r  16,17     18,19
+#   cell  TX pollers  RX pollers
+#   1t1r  16          18
+#   1t2r  16          18,9
+#   2t1r  16,19       18
+#   2t2r  16,19       18,9
 #
 # All four are derived from the single checked-in base
 # examples/daqiri_bench_raw_tx_rx_spark_mq.yaml (the balanced 2,2 superset) by
@@ -31,7 +31,7 @@
 #
 # Per (cell, payload) it captures: aggregate App RX Gbps and pps (summed across
 # all bench RX queues), DPDK drops (imissed+ierrors+rx_nombuf from the manager
-# log), per-core busy% for cores 8/16/17/18/19, and a wire-traffic check via the
+# log), per-core busy% for the master/poller/worker cores, and a wire-traffic check via the
 # NIC *_phy SerDes counters. One combined CSV row per (cell, payload) is written
 # to bench-results/<ts>-dpdk-mq/runs.csv. Render the line plot afterwards with:
 #   scripts/plot_mq_payload_sweep.py bench-results/<ts>-dpdk-mq/runs.csv
@@ -92,7 +92,7 @@ OUT_DIR="$SCRIPT_DIR/../bench-results/$TS-dpdk-mq"
 mkdir -p "$OUT_DIR"
 
 CSV="$OUT_DIR/runs.csv"
-echo "cell,tx_cores,rx_cores,payload,rep,gbps,pps,drops,cpu8,cpu16,cpu17,cpu18,cpu19,cpu5,cpu6,cpu7,cpu9" > "$CSV"
+echo "cell,tx_cores,rx_cores,payload,rep,gbps,pps,drops,cpu8,cpu16,cpu15,cpu19,cpu6,cpu18,cpu17,cpu9,cpu7" > "$CSV"
 
 # Capture slow-moving environment state once per result set (mirrors
 # run_spark_bench.sh). Best-effort -- skip if the helper is unavailable.
@@ -132,10 +132,10 @@ CELLS=(
   "2t2r 2 2"
 )
 
-# Cores to sample busy% for, in CSV column order.
-# Sample master (8), the queue pollers (16-19), and the bench workers (5,6,7,9)
-# under the poller/worker split. Order must match the CSV header above.
-CPU_CORES=(8 16 17 18 19 5 6 7 9)
+# Cores to sample busy% for, in CSV column order: master, then each queue's
+# poller+worker pair (TX q0 16/15, TX q1 19/6, RX q0 18/17, RX q1 9/7).
+# Order must match the CSV header above.
+CPU_CORES=(8 16 15 19 6 18 17 9 7)
 
 FAILURES=0
 
@@ -213,11 +213,11 @@ phy_rx_packets() {
 
 run_cell() {
   local cell="$1" tx_count="$2" rx_count="$3" payload="$4" rep="${5:-1}"
-  # CSV display columns: TX -> 16[,17], RX -> 18[,19] per queue count. '|' keeps
-  # multi-core lists in a single CSV field.
+  # CSV display columns show the queue-poller cores: TX -> 16[,19], RX -> 18[,9]
+  # per queue count. '|' keeps multi-core lists in a single CSV field.
   local tx_cores rx_cores
-  [[ "$tx_count" == 2 ]] && tx_cores="16|17" || tx_cores="16"
-  [[ "$rx_count" == 2 ]] && rx_cores="18|19" || rx_cores="18"
+  [[ "$tx_count" == 2 ]] && tx_cores="16|19" || tx_cores="16"
+  [[ "$rx_count" == 2 ]] && rx_cores="18|9" || rx_cores="18"
   local run_dir="$OUT_DIR/$cell/p$payload/r$rep"
   mkdir -p "$run_dir"
 
@@ -275,7 +275,7 @@ run_cell() {
     echo "INFO: $cell p$payload wire OK -- rx_packets_phy +$phy_delta" >&2
   fi
 
-  # Per-core busy% over the bench window, in CSV column order (8,16,17,18,19).
+  # Per-core busy% over the bench window, in CSV column order (see CPU_CORES).
   local cpu_vals=()
   local c
   for c in "${CPU_CORES[@]}"; do

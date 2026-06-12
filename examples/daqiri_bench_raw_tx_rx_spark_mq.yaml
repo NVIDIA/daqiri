@@ -16,17 +16,30 @@
 #     traffic crosses the cable. See the "Port topology" section of the "DGX
 #     Spark" tab in docs/tutorials/system_configuration.md.
 #   - kind: host_pinned (GB10 unified memory; nvidia_peermem does not load).
-#   - Poller and worker run on SEPARATE isolated X925 cores (co-locating them
-#     livelocks at small batch -- see daqiri_bench_raw_tx_rx_spark.yaml): queue
-#     pollers TX 16,17 / RX 18,19 ; bench workers TX 5,6 / RX 7,9. This needs the
-#     EXPANDED isolcpus=5-9,15-19 (all 10 big cores); the default isolcpus=16-19
-#     only has room to co-locate (and is fine at this config's fixed batch 10240).
+#   - Each queue's poller and worker run on SEPARATE isolated X925 cores, kept in
+#     the same hardware cluster where possible so the poller->worker ring handoff
+#     stays in-cluster (a cross-cluster handoff roughly halves the small-payload
+#     op-rate). The two performance clusters are cpu 15-19 and cpu 5-9.
+#     NOTE: queue POLLERS are DPDK EAL lcores and must avoid any core the CUDA
+#     runtime pins helper threads to -- CUDA lands on the low cores of the 5-9
+#     cluster (seen on 5 and 6, unpredictably) and an EAL lcore on a CUDA-occupied
+#     core never launches, hanging the bench. So pollers use only 15-19 + core 9
+#     (never 5/6/8). Bench WORKERS are plain pinned pthreads and coexist with CUDA
+#     fine, so they may use 5/6.
+#       TX q0: poller 16 / worker 15   (cluster 15-19, local)
+#       RX q0: poller 18 / worker 17   (cluster 15-19, local)  -- 1t1r lives here,
+#                                       matching the single-queue config
+#       RX q1: poller 9  / worker 7    (cluster 5-9, local; RX kept local)
+#       TX q1: poller 19 / worker 6    (poller in 15-19, worker in 5-9: this one
+#                                       handoff crosses clusters, but TX is not
+#                                       the small-payload bottleneck so it is ok)
+#     This needs the EXPANDED isolcpus=5-9,15-19 (all 10 big cores).
 #   - master_core 8 (big core).
 #   - native shape: 8 KB payload (payload_size 8000 + header_size 64).
 #   - eth_dst_addr: your rx_port's (p1) own MAC; fill per-system, e.g.
 #       cat /sys/class/net/enP2p1s0f1np1/address
 #
-# Cell (2,2): two TX queues (cores 16,17) feed two RX queues (cores 18,19), one
+# Cell (2,2): two TX queues (pollers 16,19) feed two RX queues (pollers 18,9), one
 # flow per pair -- tx_q_0 on (4096,4096) -> rx_q_0 and tx_q_1 on (4097,4097) ->
 # rx_q_1. Fully balanced; the top of the scaling matrix and should beat (1,1)
 # when a single core is the bottleneck.
@@ -79,7 +92,7 @@ daqiri:
         - name: "tx_q_1"
           id: 1
           batch_size: 10240
-          cpu_core: 17
+          cpu_core: 19
           memory_regions:
             - "Data_TX_GPU_1"
           offloads:
@@ -97,7 +110,7 @@ daqiri:
             - "Data_RX_GPU_0"
         - name: "rx_q_1"
           id: 1
-          cpu_core: 19
+          cpu_core: 9
           batch_size: 10240
           memory_regions:
             - "Data_RX_GPU_1"
@@ -122,15 +135,15 @@ daqiri:
 bench_rx:
 - interface_name: "rx_port"
   queue_id: 0
-  cpu_core: 7               # RX q0 worker; its queue poller is on 18 (split)
+  cpu_core: 17              # RX q0 worker (cluster A); its queue poller is on 18
 - interface_name: "rx_port"
   queue_id: 1
-  cpu_core: 9               # RX q1 worker; its queue poller is on 19 (split)
+  cpu_core: 7               # RX q1 worker (cluster B); its queue poller is on 9
 
 bench_tx:
 - interface_name: "tx_port"
   queue_id: 0
-  cpu_core: 5               # TX q0 worker; its queue poller is on 16 (split)
+  cpu_core: 15              # TX q0 worker (cluster A); its queue poller is on 16
   batch_size: 10240
   payload_size: 8000
   header_size: 64
@@ -141,7 +154,7 @@ bench_tx:
   udp_dst_port: 4096
 - interface_name: "tx_port"
   queue_id: 1
-  cpu_core: 6               # TX q1 worker; its queue poller is on 17 (split)
+  cpu_core: 6               # TX q1 worker (cluster 5-9); its poller is on 19 (cross-cluster)
   batch_size: 10240
   payload_size: 8000
   header_size: 64
