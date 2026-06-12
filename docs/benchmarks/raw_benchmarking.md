@@ -212,14 +212,19 @@ By default the application runs for 10 seconds and then exits. You can change th
 
 ## Cap the transmit rate with packet pacing
 
-To meter the transmit side at a fixed rate in hardware, use the `ibverbs` engine and
-set a per-queue `pacing_mbps` cap. [`daqiri_bench_raw_tx_rx_pacing.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_pacing.yaml)
-is the loopback config above with `engine: "ibverbs"` and `pacing_mbps: 10000` (10 Gbps)
-on the TX queue. The engine emits one wait-on-time WQE per burst, so the queue's average
-TX rate stays at or below the configured value; idle gaps do not accumulate burst credit.
+To meter the transmit side at a fixed rate in hardware, set a per-queue `pacing_mbps` cap
+on the TX queue. Both raw-Ethernet engines support it:
+
+- DPDK engine (default) — [`daqiri_bench_raw_tx_rx_pacing_dpdk.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_pacing_dpdk.yaml). Tags the first mbuf of each burst with the `RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP` offload; daqiri auto-adds the mlx5 `tx_pp` scheduler devarg when pacing is requested.
+- ibverbs engine — [`daqiri_bench_raw_tx_rx_pacing.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_pacing.yaml) (`engine: "ibverbs"`). Emits one wait-on-time WQE per burst.
+
+Each example is the loopback config above with `pacing_mbps: 10000` (10 Gbps) on the TX
+queue. Only the first packet of each burst carries a scheduling point, so the queue's
+average TX rate stays at or below the configured value; idle gaps do not accumulate burst
+credit.
 
 ```bash
-/opt/daqiri/bin/daqiri_bench_raw_gpudirect /opt/daqiri/bin/daqiri_bench_raw_tx_rx_pacing.yaml --seconds 10
+/opt/daqiri/bin/daqiri_bench_raw_gpudirect /opt/daqiri/bin/daqiri_bench_raw_tx_rx_pacing_dpdk.yaml --seconds 10
 ```
 
 Validate the cap from the `RX complete:` line: `Gbps = bytes * 8 / seconds / 1e9`. With
@@ -227,9 +232,8 @@ Validate the cap from the `RX complete:` line: `Gbps = bytes * 8 / seconds / 1e9
 link speed. Change `pacing_mbps` (or set it to `0` to disable pacing and send at line rate)
 and re-run to see the cap move.
 
-Pacing requires a Mellanox/mlx5 NIC with wait-on-time and a real-time clock (ConnectX-7 or
-later). On devices without it, `pacing_mbps` is ignored with a warning at init and TX runs
-at line rate.
+Pacing requires a Mellanox/mlx5 NIC with hardware send scheduling (ConnectX-7 or later). On
+devices without it, `pacing_mbps` is ignored with a warning at init and TX runs at line rate.
 
 ## Tune RDMA SEND completion signaling
 

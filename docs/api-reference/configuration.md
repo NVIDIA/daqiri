@@ -351,10 +351,13 @@ daqiri::set_reorder_cuda_stream("rx_port", "rx_reorder_0", stream);
   - values: `tx_eth_src` (auto-fill source MAC address)
 - **`pacing_mbps`**: Packet-pacing rate cap for this queue, in megabits per second of L2 frame
   bytes (the data the application transmits, excluding preamble/IFG/FCS). The engine gates each
-  burst behind a single hardware wait-on-time WQE so the long-run average TX rate stays at or
+  burst behind a single hardware send-scheduling point so the long-run average TX rate stays at or
   below this value; idle gaps do not accumulate burst credit. `0` (the default) disables pacing
-  and sends at line rate. Honored only by the `ibverbs` engine on devices with wait-on-time and a
-  real-time clock (ConnectX-7 or later); ignored with a warning otherwise.
+  and sends at line rate. Supported by both raw-Ethernet engines on a NIC with hardware send
+  scheduling: the `ibverbs` engine uses a wait-on-time WQE per burst, and the `dpdk` engine tags
+  the first mbuf of each burst with the `RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP` offload (daqiri
+  auto-adds the mlx5 `tx_pp` scheduler devarg when pacing is requested). Requires a ConnectX-7 (or
+  later) class NIC; on devices without send scheduling, `pacing_mbps` is ignored with a warning.
   - type: `integer`
   - default: `0`
 
