@@ -15,19 +15,19 @@
  * limitations under the License.
  */
 
-#include "src/manager.h"
-// Include the appropriate headers based on which DAQIRI_MGR types are defined
-#if DAQIRI_MGR_DPDK
-#include "src/managers/dpdk/daqiri_dpdk_mgr.h"
+#include "src/engine.h"
+// Include the appropriate headers based on which DAQIRI_ENGINE types are defined
+#if DAQIRI_ENGINE_DPDK
+#include "src/engines/dpdk/daqiri_dpdk_engine.h"
 #endif
-#if DAQIRI_MGR_SOCKET
-#include "src/managers/socket/daqiri_socket_mgr.h"
+#if DAQIRI_ENGINE_SOCKET
+#include "src/engines/socket/daqiri_socket_engine.h"
 #endif
-#if DAQIRI_MGR_RDMA
-#include "src/managers/rdma/daqiri_rdma_mgr.h"
+#if DAQIRI_ENGINE_RDMA
+#include "src/engines/rdma/daqiri_rdma_engine.h"
 #endif
 
-#if DAQIRI_MGR_DPDK || DAQIRI_MGR_SOCKET || DAQIRI_MGR_RDMA
+#if DAQIRI_ENGINE_DPDK || DAQIRI_ENGINE_SOCKET || DAQIRI_ENGINE_RDMA
 #include <rte_common.h>
 #include <rte_malloc.h>
 #include <rte_memory.h>
@@ -55,12 +55,28 @@
 namespace daqiri {
 
 // Initialize static members
-std::unique_ptr<Manager> ManagerFactory::ManagerInstance_ = nullptr;  // Initialize static members
-ManagerType ManagerFactory::ManagerType_ = ManagerType::UNKNOWN;
+std::unique_ptr<Engine> EngineFactory::EngineInstance_ = nullptr;  // Initialize static members
+EngineType EngineFactory::EngineType_ = EngineType::UNKNOWN;
 
-extern void initialize_manager(Manager* _manager);
+extern void initialize_engine(Engine* _engine);
 
-std::string Manager::generate_random_string(int len) {
+namespace {
+
+SocketProtocol protocol_from_endpoint_addr(const std::string& addr) {
+  const auto scheme_end = addr.find("://");
+  if (scheme_end == std::string::npos) { return SocketProtocol::INVALID; }
+  const auto scheme = addr.substr(0, scheme_end);
+  if (scheme == DAQIRI_SOCKET_PROTOCOL_STR__TCP) { return SocketProtocol::TCP; }
+  if (scheme == DAQIRI_SOCKET_PROTOCOL_STR__UDP) { return SocketProtocol::UDP; }
+  if (scheme == DAQIRI_ENGINE_STR__RDMA || scheme == DAQIRI_SOCKET_PROTOCOL_STR__ROCE) {
+    return SocketProtocol::ROCE;
+  }
+  return SocketProtocol::INVALID;
+}
+
+}  // namespace
+
+std::string Engine::generate_random_string(int len) {
   constexpr char tokens[] = "abcdefghijklmnopqrstuvwxyz";
   if (len <= 0) { return {}; }
 
@@ -84,52 +100,52 @@ std::string Manager::generate_random_string(int len) {
   return tmp;
 }
 
-ManagerType ManagerFactory::get_default_manager_type() {
-#if DAQIRI_MGR_DPDK
-  return ManagerType::DPDK;
-#elif DAQIRI_MGR_SOCKET
-  return ManagerType::SOCKET;
-#elif DAQIRI_MGR_RDMA
-  return ManagerType::RDMA;
+EngineType EngineFactory::get_default_engine_type() {
+#if DAQIRI_ENGINE_DPDK
+  return EngineType::DPDK;
+#elif DAQIRI_ENGINE_SOCKET
+  return EngineType::SOCKET;
+#elif DAQIRI_ENGINE_RDMA
+  return EngineType::RDMA;
 #else
-#error "No DAQIRI manager defined"
+#error "No DAQIRI engine defined"
 #endif
 }
 
-std::unique_ptr<Manager> ManagerFactory::create_instance(ManagerType type) {
-  std::unique_ptr<Manager> _manager;
+std::unique_ptr<Engine> EngineFactory::create_instance(EngineType type) {
+  std::unique_ptr<Engine> _engine;
   switch (type) {
-#if DAQIRI_MGR_DPDK
-    case ManagerType::DPDK:
-      _manager = std::make_unique<DpdkMgr>();
+#if DAQIRI_ENGINE_DPDK
+    case EngineType::DPDK:
+      _engine = std::make_unique<DpdkEngine>();
       break;
 #endif
-#if DAQIRI_MGR_SOCKET
-    case ManagerType::SOCKET:
-      _manager = std::make_unique<SocketMgr>();
+#if DAQIRI_ENGINE_SOCKET
+    case EngineType::SOCKET:
+      _engine = std::make_unique<SocketEngine>();
       break;
 #endif
-#if DAQIRI_MGR_RDMA
-    case ManagerType::RDMA:
-      _manager = std::make_unique<RdmaMgr>();
+#if DAQIRI_ENGINE_RDMA
+    case EngineType::RDMA:
+      _engine = std::make_unique<RdmaEngine>();
       break;
 #endif
-    case ManagerType::DEFAULT:
-      _manager = create_instance(get_default_manager_type());
-      return _manager;
+    case EngineType::DEFAULT:
+      _engine = create_instance(get_default_engine_type());
+      return _engine;
     default:
       throw std::invalid_argument(
-          "Manager type '" + manager_type_to_string(type) +
+          "Engine type '" + engine_type_to_string(type) +
           "' is not available in this build");
   }
 
   // Initialize the ADV Net Common API
-  initialize_manager(_manager.get());
-  return _manager;
+  initialize_engine(_engine.get());
+  return _engine;
 }
 
 template <typename Config>
-ManagerType ManagerFactory::get_manager_type(const Config& config) {
+EngineType EngineFactory::get_engine_type(const Config& config) {
   // Ensure that Config has a method yaml_nodes() that returns a collection
   // of YAML nodes
   static_assert(
@@ -143,16 +159,38 @@ ManagerType ManagerFactory::get_manager_type(const Config& config) {
       const std::string stream_type_str = node["stream_type"].template as<std::string>("");
       const auto stream_type = stream_type_from_string(stream_type_str);
       if (stream_type == StreamType::INVALID) { continue; }
-      return manager_type_from_stream_type(stream_type);
+
+      const std::string engine_str = node["engine"].template as<std::string>("");
+      if (!engine_str.empty() && engine_str != DAQIRI_ENGINE_STR__DEFAULT) {
+        return config_engine_from_string(engine_str);
+      }
+
+      // Protocol is derived from the endpoint URI scheme (udp://, tcp://,
+      // roce://), not from a config field.
+      SocketProtocol protocol = SocketProtocol::INVALID;
+      auto interfaces_node = node["interfaces"];
+      for (const auto& intf : interfaces_node) {
+        auto socket_config_node = intf["socket_config"];
+        if (!socket_config_node.IsDefined()) { continue; }
+        protocol = protocol_from_endpoint_addr(
+            socket_config_node["local_addr"].template as<std::string>(""));
+        if (protocol == SocketProtocol::INVALID) {
+          protocol = protocol_from_endpoint_addr(
+              socket_config_node["remote_addr"].template as<std::string>(""));
+        }
+        if (protocol != SocketProtocol::INVALID) { break; }
+      }
+
+      return engine_type_from_stream_type(stream_type, protocol);
     } catch (const std::exception& e) {
-      return get_default_manager_type();
+      return get_default_engine_type();
     }
   }
 
-  return get_default_manager_type();
+  return get_default_engine_type();
 }
 
-size_t Manager::get_alignment(MemoryKind kind) {
+size_t Engine::get_alignment(MemoryKind kind) {
   switch (kind) {
     case MemoryKind::HOST:
     case MemoryKind::HOST_PINNED:
@@ -165,7 +203,7 @@ size_t Manager::get_alignment(MemoryKind kind) {
   }
 }
 
-Status Manager::populate_pool(struct rte_ring* ring, const std::string& mr_name) {
+Status Engine::populate_pool(struct rte_ring* ring, const std::string& mr_name) {
   auto mr = cfg_.mrs_[mr_name];
   auto base = reinterpret_cast<char*>(ar_[mr_name].ptr_);
 
@@ -178,9 +216,9 @@ Status Manager::populate_pool(struct rte_ring* ring, const std::string& mr_name)
   return Status::SUCCESS;
 }
 
-#if DAQIRI_MGR_DPDK || DAQIRI_MGR_RDMA
+#if DAQIRI_ENGINE_DPDK || DAQIRI_ENGINE_RDMA
 
-Manager::HugepageEstimate Manager::estimate_required_hugepages() const {
+Engine::HugepageEstimate Engine::estimate_required_hugepages() const {
   HugepageEstimate est;
   est.eal_fixed_bytes = DPDK_EAL_FIXED_OVERHEAD;
 
@@ -196,10 +234,10 @@ Manager::HugepageEstimate Manager::estimate_required_hugepages() const {
   est.pool_overhead_bytes =
       (est.huge_mr_count + est.extbuf_pool_count) * DPDK_PER_POOL_HUGEPAGE_OVERHEAD;
 
-  // DpdkMgr injects a kind: HUGE dummy MR (32768 bufs * JUMBOFRAME_SIZE) for
+  // DpdkEngine injects a kind: HUGE dummy MR (32768 bufs * JUMBOFRAME_SIZE) for
   // every interface that has no TX or no RX queue configured. Account for it
   // here so the preflight matches what initialize() will actually request.
-  // JUMBOFRAME_SIZE lives in DpdkMgr; use a portable upper bound (9100).
+  // JUMBOFRAME_SIZE lives in DpdkEngine; use a portable upper bound (9100).
   constexpr size_t kDummyJumboFrameSize = 9100;
   constexpr size_t kDummyNumBufs = 32768;
   for (const auto& intf : cfg_.ifs_) {
@@ -220,7 +258,7 @@ Manager::HugepageEstimate Manager::estimate_required_hugepages() const {
   return est;
 }
 
-size_t Manager::available_hugepage_bytes() {
+size_t Engine::available_hugepage_bytes() {
   const char kSysHugepageDir[] = "/sys/kernel/mm/hugepages";
   DIR* dir = opendir(kSysHugepageDir);
   if (dir == nullptr) { return 0; }
@@ -242,7 +280,7 @@ size_t Manager::available_hugepage_bytes() {
   return total;
 }
 
-bool Manager::check_hugepage_availability() const {
+bool Engine::check_hugepage_availability() const {
   const HugepageEstimate est = estimate_required_hugepages();
   const size_t avail = available_hugepage_bytes();
   const auto mib = [](size_t b) { return b / (1024.0 * 1024.0); };
@@ -319,7 +357,7 @@ bool Manager::check_hugepage_availability() const {
   return false;
 }
 
-void Manager::cleanup_eal() {
+void Engine::cleanup_eal() {
   if (!eal_initialized_) { return; }
 
   // rte_eal_cleanup() releases EAL state and (on DPDK >= 22.07) unlinks the
@@ -350,18 +388,18 @@ void Manager::cleanup_eal() {
   eal_file_prefix_.clear();
 }
 
-#else  // !DAQIRI_MGR_DPDK && !DAQIRI_MGR_RDMA
+#else  // !DAQIRI_ENGINE_DPDK && !DAQIRI_ENGINE_RDMA
 
-size_t Manager::estimate_required_hugepage_bytes() const { return 0; }
-size_t Manager::available_hugepage_bytes() { return 0; }
-bool Manager::check_hugepage_availability() const { return true; }
-void Manager::cleanup_eal() {}
+size_t Engine::estimate_required_hugepage_bytes() const { return 0; }
+size_t Engine::available_hugepage_bytes() { return 0; }
+bool Engine::check_hugepage_availability() const { return true; }
+void Engine::cleanup_eal() {}
 
-#endif  // DAQIRI_MGR_DPDK || DAQIRI_MGR_RDMA
+#endif  // DAQIRI_ENGINE_DPDK || DAQIRI_ENGINE_RDMA
 
-Status Manager::allocate_memory_regions() {
+Status Engine::allocate_memory_regions() {
   DAQIRI_LOG_INFO("Registering memory regions");
-#if DAQIRI_MGR_DPDK || DAQIRI_MGR_RDMA
+#if DAQIRI_ENGINE_DPDK || DAQIRI_ENGINE_RDMA
   for (auto& mr : cfg_.mrs_) {
     void* ptr;
     AllocRegion ar;
@@ -442,7 +480,7 @@ Status Manager::allocate_memory_regions() {
   return Status::SUCCESS;
 }
 
-Status Manager::map_memory_regions() {
+Status Engine::map_memory_regions() {
   // Map every MR to every device for now
   for (const auto& intf : cfg_.ifs_) {
     struct rte_eth_dev_info dev_info;
@@ -477,9 +515,9 @@ Status Manager::map_memory_regions() {
   return Status::SUCCESS;
 }
 
-// Register memory regions with the RTE library. If using DPDK as the backend to create memory
+// Register memory regions with the RTE library. If using DPDK as the engine to create memory
 // regions/pools, this function can register external memory regions (such as GPU memory).
-Status Manager::register_memory_regions() {
+Status Engine::register_memory_regions() {
   for (const auto& ar : ar_) {
     const auto& mr = cfg_.mrs_[ar.second.mr_name_];
 
@@ -585,7 +623,7 @@ Status Manager::register_memory_regions() {
   return Status::SUCCESS;
 }
 
-struct rte_mempool* Manager::create_pktmbuf_pool(const std::string& name,
+struct rte_mempool* Engine::create_pktmbuf_pool(const std::string& name,
                                                  const MemoryRegionConfig& mr) {
   struct rte_mempool* pool;
 #pragma GCC diagnostic push
@@ -603,7 +641,7 @@ struct rte_mempool* Manager::create_pktmbuf_pool(const std::string& name,
   return pool;
 }
 
-struct rte_mempool* Manager::create_generic_pool(const std::string& name,
+struct rte_mempool* Engine::create_generic_pool(const std::string& name,
                                                  const MemoryRegionConfig& mr) {
   struct rte_mempool* pool;
 #pragma GCC diagnostic push
@@ -685,7 +723,7 @@ struct rte_mempool* Manager::create_generic_pool(const std::string& name,
   return pool;
 }
 
-int Manager::numa_from_mem(const MemoryRegionConfig& mr) const {
+int Engine::numa_from_mem(const MemoryRegionConfig& mr) const {
   if (mr.kind_ == MemoryKind::DEVICE) {
     int val;
     if (cudaDeviceGetAttribute(&val, cudaDevAttrHostNumaId, mr.affinity_) != cudaSuccess) {
@@ -706,7 +744,7 @@ int Manager::numa_from_mem(const MemoryRegionConfig& mr) const {
  * @param key PCIe address, IP address, or config name of the interface to look up
  * @return int Port ID or -1 if not found
  */
-int Manager::get_port_id(const std::string& key) {
+int Engine::get_port_id(const std::string& key) {
   for (const auto& intf : cfg_.ifs_) {
     if (intf.address_ == key) { return intf.port_id_; }
     if (intf.name_ == key) { return intf.port_id_; }
@@ -714,7 +752,7 @@ int Manager::get_port_id(const std::string& key) {
   return -1;
 }
 
-bool Manager::validate_config() const {
+bool Engine::validate_config() const {
   bool pass = true;
   std::set<std::string> mr_names;
   std::set<std::string> q_mr_names;
@@ -750,7 +788,7 @@ bool Manager::validate_config() const {
   return pass;
 }
 
-void Manager::init_rx_core_q_map() {
+void Engine::init_rx_core_q_map() {
   for (const auto& intf : cfg_.ifs_) {
     // Initialize the round-robin index for this port
     next_queue_index_map_.try_emplace(intf.port_id_, 0);
@@ -766,25 +804,25 @@ void Manager::init_rx_core_q_map() {
   }
 }
 
-uint16_t Manager::get_num_rx_queues(int port_id) const {
+uint16_t Engine::get_num_rx_queues(int port_id) const {
   return cfg_.ifs_[port_id].rx_.queues_.size();
 }
 
-void Manager::flush_port_queue(int port, int queue) {
-  DAQIRI_LOG_ERROR("flush_port_queue not implemented for this manager type");
+void Engine::flush_port_queue(int port, int queue) {
+  DAQIRI_LOG_ERROR("flush_port_queue not implemented for this engine type");
 }
 
-Status Manager::drop_all_traffic(int port) {
-  DAQIRI_LOG_ERROR("drop_all_traffic not implemented for this manager type");
+Status Engine::drop_all_traffic(int port) {
+  DAQIRI_LOG_ERROR("drop_all_traffic not implemented for this engine type");
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::allow_all_traffic(int port) {
-  DAQIRI_LOG_ERROR("allow_all_traffic not implemented for this manager type");
+Status Engine::allow_all_traffic(int port) {
+  DAQIRI_LOG_ERROR("allow_all_traffic not implemented for this engine type");
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::get_rx_burst(BurstParams** burst, int port_id) {
+Status Engine::get_rx_burst(BurstParams** burst, int port_id) {
   // Check if the port_id is valid
   if (port_id < 0 || port_id >= static_cast<int>(cfg_.ifs_.size())) {
     DAQIRI_LOG_ERROR("Invalid port_id {} provided to get_rx_burst", port_id);
@@ -812,7 +850,7 @@ Status Manager::get_rx_burst(BurstParams** burst, int port_id) {
   return Status::NULL_PTR;
 }
 
-Status Manager::get_rx_burst(BurstParams** burst) {
+Status Engine::get_rx_burst(BurstParams** burst) {
   if (cfg_.ifs_.empty()) {
     DAQIRI_LOG_ERROR("No interfaces configured");
     return Status::NULL_PTR;
@@ -837,58 +875,58 @@ Status Manager::get_rx_burst(BurstParams** burst) {
   return Status::NULL_PTR;
 }
 
-Status Manager::socket_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
+Status Engine::socket_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
                                          uintptr_t* conn_id) {
   DAQIRI_LOG_CRITICAL("Socket connect to server not implemented");
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::socket_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
+Status Engine::socket_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
                                          const std::string& src_addr, uintptr_t* conn_id) {
   DAQIRI_LOG_CRITICAL("Socket connect to server not implemented");
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::socket_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) {
+Status Engine::socket_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) {
   DAQIRI_LOG_CRITICAL("Socket get port queue not implemented");
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::socket_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
+Status Engine::socket_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
                                           uintptr_t* conn_id) {
   DAQIRI_LOG_CRITICAL("Socket get server conn ID not implemented");
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
+Status Engine::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
                                        uintptr_t* conn_id) {
   DAQIRI_LOG_CRITICAL("RDMA connect to server not implemented");
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
+Status Engine::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
                                        const std::string& src_addr, uintptr_t* conn_id) {
   DAQIRI_LOG_CRITICAL("RDMA connect to server not implemented");
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::rdma_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) {
+Status Engine::rdma_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) {
   DAQIRI_LOG_CRITICAL("RDMA get port queue not implemented");
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::rdma_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
+Status Engine::rdma_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
                                         uintptr_t* conn_id) {
   DAQIRI_LOG_CRITICAL("RDMA get server conn ID not implemented");
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server) {
+Status Engine::get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server) {
   DAQIRI_LOG_CRITICAL("RDMA get RX burst not implemented");
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::set_all_packet_lengths(BurstParams* burst,
+Status Engine::set_all_packet_lengths(BurstParams* burst,
                                        const std::initializer_list<int>& lens) {
   if (burst == nullptr) { return Status::NULL_PTR; }
   for (size_t idx = 0; idx < burst->hdr.hdr.num_pkts; ++idx) {
@@ -898,32 +936,32 @@ Status Manager::set_all_packet_lengths(BurstParams* burst,
   return Status::SUCCESS;
 }
 
-Status Manager::set_reorder_cuda_stream(const std::string& interface_name,
+Status Engine::set_reorder_cuda_stream(const std::string& interface_name,
                                         const std::string& reorder_name,
                                         cudaStream_t stream) {
   DAQIRI_LOG_ERROR(
-      "set_reorder_cuda_stream not implemented for this manager type "
+      "set_reorder_cuda_stream not implemented for this engine type "
       "(interface='{}', reorder='{}')",
       interface_name,
       reorder_name);
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info) {
+Status Engine::get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info) {
   (void)burst;
   (void)info;
-  DAQIRI_LOG_ERROR("get_reorder_burst_info not implemented for this manager type");
+  DAQIRI_LOG_ERROR("get_reorder_burst_info not implemented for this engine type");
   return Status::NOT_SUPPORTED;
 }
 
-Status Manager::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id,
+Status Engine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id,
                                 bool is_server, int num_pkts, uint64_t wr_id,
                                 const std::string& local_mr_name) {
   DAQIRI_LOG_CRITICAL("RDMA set header not implemented");
   return Status::NOT_SUPPORTED;
 }
 
-RDMAOpCode Manager::rdma_get_opcode(BurstParams* burst) {
+RDMAOpCode Engine::rdma_get_opcode(BurstParams* burst) {
   DAQIRI_LOG_CRITICAL("RDMA get opcode not implemented");
   return RDMAOpCode::INVALID;
 }

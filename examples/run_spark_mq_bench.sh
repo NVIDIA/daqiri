@@ -164,7 +164,7 @@ max_field() {
     | awk '{ if ($1+0 > m+0) m = $1 } END { printf "%s", (m == "" ? 0 : m) }'
 }
 
-# Sum DPDK drop counters from the manager log emitted via DAQIRI_LOG_INFO.
+# Sum DPDK drop counters from the engine log emitted via DAQIRI_LOG_INFO.
 parse_dpdk_drops() {
   local log="$1"
   local sum=0 v

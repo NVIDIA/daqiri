@@ -28,7 +28,7 @@
 #include <unordered_map>
 #include <infiniband/verbs.h>
 #include <rdma/rdma_cma.h>
-#include "src/manager.h"
+#include "src/engine.h"
 #include <daqiri/daqiri.h>
 #include <mutex>
 
@@ -95,12 +95,12 @@ struct rdma_work_req {
   rdma_remote_mr_info mr;
 };
 
-class RdmaMgr : public Manager {
+class RdmaEngine : public Engine {
  public:
   static constexpr uint16_t DEFAULT_PORT = 18515;
 
-  RdmaMgr() = default;
-  ~RdmaMgr();
+  RdmaEngine() = default;
+  ~RdmaEngine();
   bool set_config_and_initialize(const NetworkConfig& cfg) override;
   void initialize() override;
   void run() override;

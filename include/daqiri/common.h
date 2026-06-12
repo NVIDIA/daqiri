@@ -97,7 +97,7 @@ inline int EnabledDirections(const std::string &dir) {
 }
 
 /**
- * @brief Initialize the backend manager and any other resources needed
+ * @brief Initialize the engine and any other resources needed
  *
  * @param config YML Configuration structure (e.g. AdvNetConfigYaml)
  * @return AdvNetStatus indicating status. Valid values are:
@@ -118,19 +118,19 @@ Status parse_network_config_from_yaml_file(const std::string &yaml_path,
                                            NetworkConfig &config);
 
 /**
- * @brief Returns a manager type
+ * @brief Returns an engine type
  *
- * @return Manager type
+ * @return Engine type
  */
-ManagerType get_manager_type();
+EngineType get_engine_type();
 
 /**
- * @brief Returns a manager type
+ * @brief Returns an engine type
  *
  * @param config YML Configuration structure (e.g. NetworkConfig)
- * @return Manager type
+ * @return Engine type
  */
-template <typename Config> ManagerType get_manager_type(const Config &config);
+template <typename Config> EngineType get_engine_type(const Config &config);
 
 /**
  * @brief Returns a raw packet pointer from a pointer in BurstParams
@@ -193,7 +193,7 @@ uint16_t get_packet_flow_id(BurstParams* burst, int idx);
 /**
  * @brief Get the hardware RX timestamp of a packet in nanoseconds
  *
- * Retrieves the 64-bit receive timestamp for a packet when the DPDK backend
+ * Retrieves the 64-bit receive timestamp for a packet when the DPDK engine
  * was configured with rx.hardware_timestamps enabled and the NIC provided a
  * timestamp for this packet. The value is converted to nanoseconds in the NIC
  * timestamp clock domain; it is not converted to wall-clock or PTP time.
@@ -205,7 +205,7 @@ uint16_t get_packet_flow_id(BurstParams* burst, int idx);
  *    SUCCESS: Timestamp retrieved
  *    NULL_PTR: Burst or output pointer is null
  *    INVALID_PARAMETER: Packet index is out of range
- *    NOT_SUPPORTED: Timestamp is unavailable for this packet/backend
+ *    NOT_SUPPORTED: Timestamp is unavailable for this packet/engine
  */
 Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns);
 
@@ -799,7 +799,7 @@ void format_eth_addr(char *dst, std::string addr);
 
 /**
  * @brief Shut down the daqiri and do any cleanup necessary. Freeing memory is
- * done in the manager's destructor.
+ * done in the engine's destructor.
  *
  */
 void shutdown();
@@ -811,7 +811,7 @@ void shutdown();
 void print_stats();
 
 /**
- * @brief Get the number of RX queues. May be overridden by the manager if the
+ * @brief Get the number of RX queues. May be overridden by the engine if the
  * number of queues differs from what is defined in the config.
  *
  * @param port_id Port ID of interface
@@ -920,10 +920,12 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
    *
    * @param socket_item The YAML node containing socket configuration.
    * @param socket_cfg The SocketConfig object to populate.
+   * @param protocol The inferred socket/RDMA transport protocol.
    * @return true if parsing was successful, false otherwise.
    */
   static bool parse_socket_config(const YAML::Node &socket_item,
-                                  daqiri::SocketConfig &socket_cfg);
+                                  daqiri::SocketConfig &socket_cfg,
+                                  daqiri::SocketProtocol &protocol);
 
   /**
    * @brief Parse RoCE transport configuration from a YAML node.
@@ -945,7 +947,7 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
    * @return true if parsing was successful, false otherwise.
    */
   static bool parse_rx_queue_config(const YAML::Node &q_item,
-                                    const daqiri::ManagerType &manager_type,
+                                    const daqiri::EngineType &engine_type,
                                     daqiri::RxQueueConfig &rx_queue_config,
                                     bool parse_memory_regions = true);
 
@@ -953,7 +955,7 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
    * @brief Parse RX queue configuration from a YAML node.
    *
    * @param q_item The YAML node containing the RX queue configuration.
-   * @param manager_type The manager type.
+   * @param engine_type The engine type.
    * @param q The RxQueueConfig object to populate.
    * @param parse_memory_regions True if memory regions should be parsed, false
    * otherwise.
@@ -974,7 +976,7 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
    * @return true if parsing was successful, false otherwise.
    */
   static bool parse_tx_queue_config(const YAML::Node &q_item,
-                                    const daqiri::ManagerType &manager_type,
+                                    const daqiri::EngineType &engine_type,
                                     daqiri::TxQueueConfig &tx_queue_config,
                                     bool parse_memory_regions);
 
@@ -982,7 +984,7 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
    * @brief Parse TX queue configuration from a YAML node.
    *
    * @param q_item The YAML node containing the TX queue configuration.
-   * @param manager_type The manager type.
+   * @param engine_type The engine type.
    * @param q The TxQueueConfig object to populate.
    * @param parse_memory_regions True if memory regions should be parsed, false
    * otherwise.
@@ -998,7 +1000,7 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
    *
    * This function parses the provided YAML node and populates the given
    * NetworkConfig object. It handles various configurations such as version,
-   * master core, manager type, debug flag, memory regions, interfaces, RX
+   * master core, engine type, debug flag, memory regions, interfaces, RX
    * queues, TX queues, and flows.
    *
    * @param node The YAML node containing the configuration.
@@ -1016,7 +1018,7 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
       if (node["manager"].IsDefined()) {
         DAQIRI_LOG_ERROR(
             "Legacy 'manager' is no longer supported. Use 'stream_type' and "
-            "'protocol' instead.");
+            "'engine' instead.");
         return false;
       }
 
@@ -1039,33 +1041,74 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
 
       const bool socket_used =
           input_spec.common_.stream_type == daqiri::StreamType::SOCKET;
-      if (socket_used) {
-        if (!node["protocol"].IsDefined()) {
-          DAQIRI_LOG_ERROR(
-              "Missing required field 'protocol' for stream_type 'socket' "
-              "(valid: tcp, udp, roce)");
-          return false;
-        }
-
-        input_spec.common_.protocol = daqiri::socket_protocol_from_string(
-            node["protocol"].as<std::string>());
-        if (input_spec.common_.protocol == daqiri::SocketProtocol::INVALID) {
-          DAQIRI_LOG_ERROR(
-              "Invalid protocol '{}'. Valid values: tcp, udp, roce",
-              node["protocol"].as<std::string>());
+      if (node["engine"].IsDefined()) {
+        input_spec.common_.engine =
+            daqiri::config_engine_from_string(node["engine"].as<std::string>());
+        if (input_spec.common_.engine != daqiri::EngineType::DEFAULT &&
+            !daqiri::engine_type_supports_stream_type(
+                input_spec.common_.engine, input_spec.common_.stream_type)) {
+          DAQIRI_LOG_ERROR("engine '{}' is not valid for stream_type '{}'",
+                           node["engine"].as<std::string>(),
+                           daqiri::stream_type_to_string(
+                               input_spec.common_.stream_type));
           return false;
         }
       } else {
-        if (node["protocol"].IsDefined()) {
-          DAQIRI_LOG_ERROR(
-              "Field 'protocol' is only valid when stream_type is 'socket'");
-          return false;
-        }
-        input_spec.common_.protocol = daqiri::SocketProtocol::INVALID;
+        input_spec.common_.engine = daqiri::EngineType::DEFAULT;
       }
 
-      input_spec.common_.manager_type =
-          daqiri::manager_type_from_stream_type(input_spec.common_.stream_type);
+      // 'protocol' is no longer a config field. The transport is encoded in the
+      // endpoint URI scheme (udp://, tcp://, roce://) and derived per-interface
+      // in parse_socket_config. Reject any leftover 'protocol' key.
+      if (node["protocol"].IsDefined()) {
+        DAQIRI_LOG_ERROR(
+            "Legacy 'protocol' is no longer supported. Encode the transport in "
+            "the endpoint URI scheme (udp://, tcp://, roce://) instead.");
+        return false;
+      }
+
+      // An explicit engine: ibverbs implies RoCE; otherwise the protocol is
+      // derived from the endpoint URI scheme during interface parsing.
+      input_spec.common_.protocol =
+          (socket_used && input_spec.common_.engine == daqiri::EngineType::RDMA)
+              ? daqiri::SocketProtocol::ROCE
+              : daqiri::SocketProtocol::INVALID;
+
+      if (socket_used &&
+          daqiri::is_explicit_engine_type(input_spec.common_.engine) &&
+          input_spec.common_.protocol != daqiri::SocketProtocol::INVALID &&
+          !daqiri::engine_type_supports_socket_protocol(
+              input_spec.common_.engine, input_spec.common_.protocol)) {
+        DAQIRI_LOG_ERROR("engine '{}' is not valid for transport '{}'",
+                         daqiri::config_engine_to_string(input_spec.common_.engine),
+                         daqiri::socket_protocol_to_string(input_spec.common_.protocol));
+        return false;
+      }
+
+      auto resolve_engine_type = [&input_spec, socket_used]() -> bool {
+        if (daqiri::is_explicit_engine_type(input_spec.common_.engine)) {
+          input_spec.common_.engine_type = input_spec.common_.engine;
+          return true;
+        }
+
+        if (socket_used &&
+            input_spec.common_.protocol == daqiri::SocketProtocol::INVALID) {
+          input_spec.common_.engine_type = daqiri::EngineType::UNKNOWN;
+          return true;
+        }
+
+        input_spec.common_.engine_type = daqiri::engine_type_from_stream_type(
+            input_spec.common_.stream_type, input_spec.common_.protocol);
+        input_spec.common_.engine = input_spec.common_.engine_type;
+        return input_spec.common_.engine_type != daqiri::EngineType::UNKNOWN;
+      };
+
+      if (!resolve_engine_type()) {
+        DAQIRI_LOG_ERROR("Unable to infer engine for stream_type '{}'",
+                         daqiri::stream_type_to_string(
+                             input_spec.common_.stream_type));
+        return false;
+      }
 
       input_spec.common_.loopback_ = daqiri::LoopbackType::DISABLED;
       try {
@@ -1079,9 +1122,6 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
         }
       } catch (const std::exception &e) {
       }
-
-      const bool roce_used = socket_used && input_spec.common_.protocol ==
-                                                daqiri::SocketProtocol::ROCE;
 
       try {
         input_spec.debug_ = node["debug"].as<bool>(false);
@@ -1144,23 +1184,43 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
             return false;
           }
 
+          bool roce_used = false;
           if (socket_used) {
             if (!intf["socket_config"].IsDefined()) {
               DAQIRI_LOG_ERROR("Missing 'socket_config' for interface '{}'",
                                ifcfg.name_);
               return false;
             }
-            if (!parse_socket_config(intf["socket_config"], ifcfg.socket_)) {
+            if (!parse_socket_config(intf["socket_config"],
+                                     ifcfg.socket_,
+                                     input_spec.common_.protocol)) {
               DAQIRI_LOG_ERROR(
                   "Failed to parse 'socket_config' for interface '{}'",
                   ifcfg.name_);
               return false;
             }
+            if (!resolve_engine_type()) {
+              DAQIRI_LOG_ERROR("Unable to infer engine for interface '{}'",
+                               ifcfg.name_);
+              return false;
+            }
+            if (daqiri::is_explicit_engine_type(input_spec.common_.engine) &&
+                !daqiri::engine_type_supports_socket_protocol(
+                    input_spec.common_.engine, input_spec.common_.protocol)) {
+              DAQIRI_LOG_ERROR("engine '{}' is not valid for address scheme "
+                               "on interface '{}'",
+                               daqiri::config_engine_to_string(
+                                   input_spec.common_.engine),
+                               ifcfg.name_);
+              return false;
+            }
 
+            roce_used =
+                input_spec.common_.protocol == daqiri::SocketProtocol::ROCE;
             if (roce_used) {
               if (!intf["roce_config"].IsDefined()) {
                 DAQIRI_LOG_ERROR("Missing 'roce_config' for interface '{}' "
-                                 "with protocol roce",
+                                 "with roce:// endpoint",
                                  ifcfg.name_);
                 return false;
               }
@@ -1177,13 +1237,14 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
                       ? daqiri::RDMAMode::SERVER
                       : daqiri::RDMAMode::CLIENT;
               ifcfg.rdma_.xmode_ = ifcfg.roce_.transport_mode_;
-              ifcfg.rdma_.port_ =
-                  ifcfg.socket_.mode_ == daqiri::SocketMode::SERVER
-                      ? ifcfg.socket_.local_port_
-                      : ifcfg.socket_.remote_port_;
+              ifcfg.rdma_.port_ = ifcfg.socket_.local_port_;
+              if (ifcfg.socket_.mode_ == daqiri::SocketMode::CLIENT &&
+                  ifcfg.rdma_.port_ == 0) {
+                ifcfg.rdma_.port_ = ifcfg.socket_.remote_port_;
+              }
             } else if (intf["roce_config"].IsDefined()) {
               DAQIRI_LOG_ERROR(
-                  "'roce_config' is only valid when protocol is 'roce' "
+                  "'roce_config' is only valid with a roce:// endpoint "
                   "(interface '{}')",
                   ifcfg.name_);
               return false;
@@ -1210,7 +1271,7 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
             for (const auto &q_item : rx["queues"]) {
               daqiri::RxQueueConfig q;
               if (!parse_rx_queue_config(
-                      q_item, input_spec.common_.manager_type, q, !roce_used)) {
+                      q_item, input_spec.common_.engine_type, q, !roce_used)) {
                 DAQIRI_LOG_ERROR("Failed to parse RxQueueConfig");
                 return false;
               }
@@ -1283,7 +1344,7 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
             for (const auto &q_item : tx["queues"]) {
               daqiri::TxQueueConfig q;
               if (!parse_tx_queue_config(
-                      q_item, input_spec.common_.manager_type, q, !roce_used)) {
+                      q_item, input_spec.common_.engine_type, q, !roce_used)) {
                 DAQIRI_LOG_ERROR("Failed to parse TxQueueConfig");
                 return false;
               }
@@ -1298,6 +1359,13 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
         }
       } catch (const std::exception &e) {
         DAQIRI_LOG_ERROR(e.what());
+        return false;
+      }
+
+      if (socket_used &&
+          input_spec.common_.protocol == daqiri::SocketProtocol::INVALID) {
+        DAQIRI_LOG_ERROR(
+            "Missing socket protocol. Use local_addr/remote_addr URI schemes.");
         return false;
       }
 

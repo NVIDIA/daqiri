@@ -4,7 +4,7 @@ set -euo pipefail
 IMAGE_TAG="${IMAGE_TAG:-daqiri:local}"
 BASE_TARGET="${BASE_TARGET:-dpdk}"
 BASE_IMAGE="${BASE_IMAGE:-cuda}"
-DAQIRI_MGR="${DAQIRI_MGR:-dpdk socket}"
+DAQIRI_ENGINE="${DAQIRI_ENGINE:-dpdk ibverbs}"
 DAQIRI_BUILD_PYTHON="${DAQIRI_BUILD_PYTHON:-OFF}"
 DAQIRI_ENABLE_S3="${DAQIRI_ENABLE_S3:-OFF}"
 BUILD_SHARED_LIBS="${BUILD_SHARED_LIBS:-ON}"
@@ -28,7 +28,7 @@ docker build \
   --target runtime \
   --build-arg DAQIRI_BASE_TARGET="${BASE_TARGET}" \
   --build-arg DAQIRI_OS_BASE_IMAGE="${DAQIRI_OS_BASE_IMAGE}" \
-  --build-arg DAQIRI_MGR="${DAQIRI_MGR}" \
+  --build-arg DAQIRI_ENGINE="${DAQIRI_ENGINE}" \
   --build-arg DAQIRI_BUILD_PYTHON="${DAQIRI_BUILD_PYTHON}" \
   --build-arg DAQIRI_ENABLE_S3="${DAQIRI_ENABLE_S3}" \
   --build-arg BUILD_SHARED_LIBS="${BUILD_SHARED_LIBS}" \

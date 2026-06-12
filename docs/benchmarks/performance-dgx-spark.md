@@ -21,7 +21,7 @@ loopback). The exact commands are collected under [Reproduce](#reproduce) below.
 | --------- | ------ |
 | Platform | DGX Spark (GB10), 20 cores, isolcpus `16-19` (the multi-queue sweep expands this; see [Multi-queue core scaling](#multi-queue-core-scaling)) |
 | NIC | ConnectX-7, ports p0 ↔ p1 cross-cabled (single-host loopback), MTU 9000 |
-| Build | Release (`-DCMAKE_BUILD_TYPE=Release`), `DAQIRI_MGR="dpdk socket rdma"` |
+| Build | Release (`-DCMAKE_BUILD_TYPE=Release`), `DAQIRI_ENGINE="dpdk ibverbs"` |
 | Loopback | Raw/DPDK uses the two physical ports directly; socket/RoCE use the `dq_wire_*` network-namespace wire loopback |
 | Core pinning | Each direction has a busy-spin queue poller and an app worker on separate isolated X925 cores (PR #149). Single-queue: DPDK pollers 17/18, workers 16/19. Multi-queue: TX pollers 16/19, RX pollers 18/9, each with its own worker core, master 8 (with `isolcpus=5-9,15-19`). |
 
@@ -156,7 +156,7 @@ spread ≤0.8 Gb/s (<2%) in every cell.
 Messages ≥64 KB hold ~101–102 Gb/s at the wire ceiling. Below that the path is
 operation-rate-bound (per-operation software overhead, not a stall) rather than
 wire-bound, and every cell is drop-free. At 8 KB (60.7 Gb/s) and 4 KB (38.0 Gb/s)
-a dedicated bench-worker core, separate from the RoCE manager thread, sustains the
+a dedicated bench-worker core, separate from the RoCE engine thread, sustains the
 operation rate, as it does for small DPDK packets. A per-message flow-control
 window keeps enough operations in flight to amortize that overhead: it pre-posts
 `rx_depth` receives before sending and caps the transmit side at `tx_depth`, each

@@ -16,18 +16,18 @@ When the user is committing, pushing, or otherwise wrapping up a change that tou
   - `docs/concepts.md` (when the change introduces or renames a user-facing concept — burst, segment, flow, queue, memory region, etc.)
   - `AGENTS.md` (Architecture section's API summary)
 - `include/daqiri/types.h` — public types (`BurstParams`, `Status`, `NetworkConfig`, enums like `MemoryKind`, `Direction`, `SocketProtocol`). Struct field changes, new enum values, or renamed types may need updating in the API docs (`docs/api-reference/cpp.md`, `docs/api-reference/python.md`), `docs/concepts.md` (terminology), and `AGENTS.md` (Architecture / BurstParams discussion).
-- `src/manager.h` — `Manager` virtual interface and `ManagerFactory`. Changes here affect the backend abstraction docs in `docs/api-reference/cpp.md`, the backends section of `docs/concepts.md`, and the Manager-abstraction subsection in `AGENTS.md`.
+- `src/engine.h` — `Engine` virtual interface and `EngineFactory`. Changes here affect the engine abstraction docs in `docs/api-reference/cpp.md`, the engines section of `docs/concepts.md`, and the Engine-abstraction subsection in `AGENTS.md`.
 - `python/daqiri_common_pybind.cpp` — pybind11 binding surface. Any added/removed/renamed `m.def(...)`, changed pybind signature, new enum/class binding, or changed GIL-release behavior may need updating in `docs/api-reference/python.md` (function reference tables, enums/classes tables, GIL Behavior section).
 
-### Backend and build changes (medium impact)
-- `src/managers/*/` — adding a new backend or changing backend behavior may need updating in:
-  - `docs/getting-started.md` (build instructions, backend selection)
-  - `docs/concepts.md` (Kernel Bypass section: backend bullet and the Backend Maturity admonition)
+### Engine and build changes (medium impact)
+- `src/engines/*/` — adding a new engine or changing engine behavior may need updating in:
+  - `docs/getting-started.md` (build instructions, engine selection)
+  - `docs/concepts.md` (Kernel Bypass section: engine bullet and the Engine Maturity admonition)
   - `docs/api-reference/configuration.md` (YAML config options)
   - `docs/tutorials/configuration-walkthrough.md` (tutorial config walkthrough)
-  - `README.md` (Backends table)
-  - `AGENTS.md` (Manager abstraction / backend descriptions)
-- `src/CMakeLists.txt` or `CMakeLists.txt` — changes to CMake options (`DAQIRI_MGR`, `DAQIRI_BUILD_PYTHON`, CUDA arch list, new dependencies) may need updating in:
+  - `README.md` (Engines table)
+  - `AGENTS.md` (Engine abstraction / engine descriptions)
+- `src/CMakeLists.txt` or `CMakeLists.txt` — changes to CMake options (`DAQIRI_ENGINE`, `DAQIRI_BUILD_PYTHON`, CUDA arch list, new dependencies) may need updating in:
   - `docs/getting-started.md` (build instructions)
   - `AGENTS.md` (build section)
   - `README.md` (Quick Start commands)
@@ -50,20 +50,20 @@ When the user is committing, pushing, or otherwise wrapping up a change that tou
 
 ### Top-level README (low frequency, high visibility)
 
-`README.md` summarizes the build flow, backend list, and links into the docs. It typically needs updating when:
-- A backend is added or removed under `src/managers/*/` — update the **Backends** table.
+`README.md` summarizes the build flow, engine list, and links into the docs. It typically needs updating when:
+- An engine is added or removed under `src/engines/*/` — update the **Engines** table.
 - CMake options change in `src/CMakeLists.txt` — update the **Quick Start** commands.
 - A doc file is added/removed/renamed in `docs/` — update the **Documentation** table.
 - A major user-facing capability is added/removed (typically a public-API change in `include/daqiri/common.h`) — update the **Features** list.
-- TX-fill mode or backend support changes — update the **Limitations** section.
+- TX-fill mode or engine support changes — update the **Limitations** section.
 
 ### AGENTS.md (always-loaded developer onboarding)
 
 `AGENTS.md` is the developer-facing onboarding doc that coding agents load automatically into every session in this repo. It typically needs updating when:
-- CMake options or `DAQIRI_MGR` default change in `src/CMakeLists.txt` — update the **Build & run** section.
+- CMake options or `DAQIRI_ENGINE` default change in `src/CMakeLists.txt` — update the **Build & run** section.
 - A benchmark executable or its typical config is added/removed under `examples/` — update the **Benchmarks** table.
-- Public API or types change in `include/daqiri/common.h` / `include/daqiri/types.h` / `src/manager.h` — update the **Architecture** section (Manager abstraction, BurstParams, public-API summary).
-- A backend is added or its semantics change under `src/managers/*/` — update the Manager-abstraction discussion in **Architecture**.
+- Public API or types change in `include/daqiri/common.h` / `include/daqiri/types.h` / `src/engine.h` — update the **Architecture** section (Engine abstraction, BurstParams, public-API summary).
+- An engine is added or its semantics change under `src/engines/*/` — update the Engine-abstraction discussion in **Architecture**.
 - Reorder or quantize kernels change in `src/kernels.cu` — update the **Reorder & quantize kernels** subsection.
 - A doc file is added/removed/renamed in `docs/` — update the **Documentation** section's layout list and the drift-hotspot paths.
 - Public-API limitations change (e.g., TX-fill grows beyond UDP) — update the **Current limitations** list.
@@ -74,8 +74,8 @@ When the user is committing, pushing, or otherwise wrapping up a change that tou
 |---|---|
 | `include/daqiri/common.h` / `include/daqiri/daqiri.h` | `docs/api-reference/index.md`, `docs/api-reference/cpp.md`, `docs/api-reference/python.md`, `docs/concepts.md`, `AGENTS.md` |
 | `include/daqiri/types.h` | `docs/api-reference/index.md`, `docs/api-reference/cpp.md`, `docs/api-reference/python.md`, `docs/concepts.md`, `AGENTS.md` |
-| `src/manager.h` | `docs/api-reference/cpp.md`, `docs/concepts.md`, `AGENTS.md` |
-| `src/managers/*/` | `docs/getting-started.md`, `docs/concepts.md` (backend list + maturity), `docs/api-reference/configuration.md`, `docs/tutorials/configuration-walkthrough.md`, `README.md`, `AGENTS.md` |
+| `src/engine.h` | `docs/api-reference/cpp.md`, `docs/concepts.md`, `AGENTS.md` |
+| `src/engines/*/` | `docs/getting-started.md`, `docs/concepts.md` (engine list + maturity), `docs/api-reference/configuration.md`, `docs/tutorials/configuration-walkthrough.md`, `README.md`, `AGENTS.md` |
 | `src/CMakeLists.txt` | `docs/getting-started.md`, `AGENTS.md`, `README.md` |
 | `src/kernels.cu` | `docs/benchmarks/raw_benchmarking.md`, `AGENTS.md` |
 | `python/daqiri_common_pybind.cpp` | `docs/api-reference/python.md`, `AGENTS.md` |

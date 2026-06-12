@@ -14,11 +14,11 @@
 # limitations under the License.
 cmake_minimum_required(VERSION 3.20)
 
-message(STATUS "PROJECT_NAME: ${MGR_TARGET}")
+message(STATUS "PROJECT_NAME: ${ENGINE_TARGET}")
 
-target_include_directories(${MGR_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(${ENGINE_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_sources(${MGR_TARGET} PRIVATE daqiri_dpdk_mgr.cpp daqiri_dpdk_stats.cpp)
+target_sources(${ENGINE_TARGET} PRIVATE daqiri_dpdk_engine.cpp daqiri_dpdk_stats.cpp)
 
 # Try to find DPDK via pkg-config
 # This will find upstream DPDK (installed to /usr/local) or mlnx-dpdk
@@ -35,13 +35,13 @@ if(NOT DPDK_FOUND)
 endif()
 
 # Common DPDK configuration
-target_link_directories(${MGR_TARGET} PUBLIC ${DPDK_LIBRARY_DIRS})
-target_include_directories(${MGR_TARGET} PUBLIC ${DPDK_INCLUDE_DIRS})
-target_compile_options(${MGR_TARGET} PUBLIC ${DPDK_CFLAGS_OTHER})
+target_link_directories(${ENGINE_TARGET} PUBLIC ${DPDK_LIBRARY_DIRS})
+target_include_directories(${ENGINE_TARGET} PUBLIC ${DPDK_INCLUDE_DIRS})
+target_compile_options(${ENGINE_TARGET} PUBLIC ${DPDK_CFLAGS_OTHER})
 
 # Link libraries - add extra libs for Mellanox NIC support
 set(DPDK_EXTRA_LIBS -Wl,--no-whole-archive -lmlx5 -libverbs -pthread -lnuma -ldl)
-target_link_libraries(${MGR_TARGET}
+target_link_libraries(${ENGINE_TARGET}
   PUBLIC
     ${DPDK_LDFLAGS_OTHER}
     ${DPDK_LIBRARIES}
@@ -50,4 +50,4 @@ target_link_libraries(${MGR_TARGET}
     
 )
 
-target_compile_options(${MGR_TARGET}  PUBLIC ${DPDK_CFLAGS})
+target_compile_options(${ENGINE_TARGET}  PUBLIC ${DPDK_CFLAGS})

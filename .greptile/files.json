@@ -2,7 +2,7 @@
   "files": [
     {
       "path": "AGENTS.md",
-      "description": "Authoritative developer onboarding for DAQIRI: build commands, the benchmarks-as-tests model, the Manager/BurstParams architecture, the DPDK build dependency, the CMake socket->rdma rule, current public-API limitations, and the doc-sync drift hotspots. Read this first."
+      "description": "Authoritative developer onboarding for DAQIRI: build commands, the benchmarks-as-tests model, the Engine/BurstParams architecture, the DPDK build dependency, the CMake socket->rdma rule, current public-API limitations, and the doc-sync drift hotspots. Read this first."
     },
     {
       "path": "CONTRIBUTING.md",
@@ -24,23 +24,23 @@
       "scope": ["src/**", "examples/**", "python/**"]
     },
     {
-      "path": "src/manager.h",
-      "description": "daqiri::Manager virtual interface and ManagerFactory singleton. Every backend lives behind this vtable. Adding a new backend means adding a src/managers/<name>/ subclass, NOT branching on backend type at call sites.",
+      "path": "src/engine.h",
+      "description": "daqiri::Engine virtual interface and EngineFactory singleton. Every engine lives behind this vtable. Adding a new engine means adding a src/engines/<name>/ subclass, NOT branching on engine type at call sites.",
       "scope": ["src/**", "examples/**"]
     },
     {
       "path": "src/CMakeLists.txt",
-      "description": "Build system for the common library and the per-backend libraries. Owns DAQIRI_MGR, the socket->rdma prepend rule (around DAQIRI_HAS_SOCKET_IDX), the DAQIRI_MGR_<NAME>=1 compile definitions, and the hardcoded CUDA arch list (80;90;121).",
+      "description": "Build system for the common library and the per-engine libraries. Owns DAQIRI_ENGINE, the socket->rdma prepend rule (around DAQIRI_HAS_SOCKET_IDX), the DAQIRI_ENGINE_<NAME>=1 compile definitions, and the hardcoded CUDA arch list (80;90;121).",
       "scope": ["src/**", "CMakeLists.txt", "**/CMakeLists.txt", "examples/CMakeLists.txt"]
     },
     {
       "path": "docs/api-guide.md",
-      "description": "Markdown reference for the public C++ API and the BurstParams free contract. Update in sync with src/common.h, src/types.h, src/manager.h.",
-      "scope": ["src/common.h", "src/common.cpp", "src/types.h", "src/manager.h"]
+      "description": "Markdown reference for the public C++ API and the BurstParams free contract. Update in sync with src/common.h, src/types.h, src/engine.h.",
+      "scope": ["src/common.h", "src/common.cpp", "src/types.h", "src/engine.h"]
     },
     {
       "path": "README.md",
-      "description": "Top-level project overview: Quick Start build commands, Backends table, Documentation table, Features list, Limitations. Update in sync with src/managers/*, src/CMakeLists.txt, src/common.h, and any docs/* renames.",
+      "description": "Top-level project overview: Quick Start build commands, Engines table, Documentation table, Features list, Limitations. Update in sync with src/engines/*, src/CMakeLists.txt, src/common.h, and any docs/* renames.",
       "scope": ["src/**", "examples/**", "docs/**", "mkdocs.yml"]
     }
   ]

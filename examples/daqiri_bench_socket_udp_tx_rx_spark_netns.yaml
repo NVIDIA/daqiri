@@ -24,7 +24,6 @@ daqiri:
   cfg:
     version: 1
     stream_type: "socket"
-    protocol: "udp"
     master_core: 8
     debug: false
     log_level: "info"
@@ -46,8 +45,7 @@ daqiri:
       address: 10.250.0.2
       socket_config:
         mode: server
-        local_ip: 10.250.0.2
-        local_port: 5001
+        local_addr: "udp://10.250.0.2:5001"
         max_payload_size: 65535
       rx:
         queues:
@@ -69,10 +67,8 @@ daqiri:
       address: 10.250.0.1
       socket_config:
         mode: client
-        local_ip: 10.250.0.1
-        local_port: 5002
-        remote_ip: 10.250.0.2
-        remote_port: 5001
+        local_addr: "udp://10.250.0.1:5002"
+        remote_addr: "udp://10.250.0.2:5001"
         max_payload_size: 65535
       tx:
         queues:

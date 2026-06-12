@@ -23,12 +23,12 @@
             <div class="gs-step-num">2</div>
             <div class="gs-step-body">
               <h4>Build from Source</h4>
-              <p>Select implementations with <code>DAQIRI_MGR</code>. Valid values: <code>dpdk</code>, <code>socket</code>, <code>rdma</code>.</p>
+              <p>Select optional engines with <code>DAQIRI_ENGINE</code>. Valid values: <code>dpdk</code>, <code>ibverbs</code>. Linux sockets are always built in.</p>
               <pre><span class="cm"># Configure, build, install</span>
 cmake -S . -B build \
   -DBUILD_SHARED_LIBS=ON \
   -DDAQIRI_BUILD_PYTHON=OFF \
-  -DDAQIRI_MGR=<span class="str">"dpdk socket rdma"</span>
+  -DDAQIRI_ENGINE=<span class="str">"dpdk ibverbs"</span>
 cmake --build build -j
 cmake --install build --prefix /opt/daqiri</pre>
             </div>
@@ -39,7 +39,7 @@ cmake --install build --prefix /opt/daqiri</pre>
               <h4>Or Build the Container</h4>
               <p>The Dockerfile builds DPDK from source with dmabuf patches — no peermem needed inside the container. Set <code>BASE_IMAGE=torch</code> to build on top of NGC PyTorch for Torch / TensorRT inference workflows.</p>
               <pre>BASE_TARGET=dpdk \
-  DAQIRI_MGR=<span class="str">"dpdk socket rdma"</span> \
+  DAQIRI_ENGINE=<span class="str">"dpdk ibverbs"</span> \
   scripts/build-container.sh</pre>
             </div>
           </div>

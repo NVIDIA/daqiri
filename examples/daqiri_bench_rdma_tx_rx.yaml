@@ -4,7 +4,6 @@ daqiri:
   cfg:
     version: 1
     stream_type: "socket"
-    protocol: "roce"
     master_core: 3
     debug: false
     log_level: "info"
@@ -36,8 +35,7 @@ daqiri:
       address: 10.100.1.1
       socket_config:
         mode: client
-        remote_ip: 10.100.3.1
-        remote_port: 4096
+        local_addr: "roce://10.100.1.1"
       roce_config:
         transport_mode: RC
       tx:
@@ -56,8 +54,7 @@ daqiri:
       address: 10.100.3.1
       socket_config:
         mode: server
-        local_ip: 10.100.3.1
-        local_port: 4096
+        local_addr: "roce://10.100.3.1:4096"
       roce_config:
         transport_mode: RC
       rx:
@@ -84,7 +81,7 @@ rdma_bench_server:
 
 rdma_bench_client:
   message_size: 8000000
-  client_address: 
+  client_address: 10.100.1.1
   server_address: 10.100.3.1
   server_port: 4096
   receive: true

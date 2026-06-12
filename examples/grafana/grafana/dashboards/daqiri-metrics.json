@@ -52,13 +52,13 @@
       },
       "targets": [
         {
-          "expr": "sum by (daqiri_backend, daqiri_interface_name, daqiri_queue_id) (rate(daqiri_rx_packets_total{daqiri_queue_id!=\"all\"}[5s])) != 0",
-          "legendFormat": "rx {{daqiri_backend}} {{daqiri_interface_name}} q{{daqiri_queue_id}}",
+          "expr": "sum by (daqiri_engine, daqiri_interface_name, daqiri_queue_id) (rate(daqiri_rx_packets_total{daqiri_queue_id!=\"all\"}[5s])) != 0",
+          "legendFormat": "rx {{daqiri_engine}} {{daqiri_interface_name}} q{{daqiri_queue_id}}",
           "refId": "A"
         },
         {
-          "expr": "sum by (daqiri_backend, daqiri_interface_name, daqiri_queue_id) (rate(daqiri_tx_packets_total{daqiri_queue_id!=\"all\"}[5s])) != 0",
-          "legendFormat": "tx {{daqiri_backend}} {{daqiri_interface_name}} q{{daqiri_queue_id}}",
+          "expr": "sum by (daqiri_engine, daqiri_interface_name, daqiri_queue_id) (rate(daqiri_tx_packets_total{daqiri_queue_id!=\"all\"}[5s])) != 0",
+          "legendFormat": "tx {{daqiri_engine}} {{daqiri_interface_name}} q{{daqiri_queue_id}}",
           "refId": "B"
         }
       ],
@@ -96,13 +96,13 @@
       },
       "targets": [
         {
-          "expr": "(sum by (daqiri_backend, daqiri_interface_name, daqiri_queue_id) (rate(daqiri_rx_bytes_total{daqiri_queue_id!=\"all\"}[30s])) != 0) * 8 / 1000000000",
-          "legendFormat": "rx {{daqiri_backend}} {{daqiri_interface_name}} q{{daqiri_queue_id}}",
+          "expr": "(sum by (daqiri_engine, daqiri_interface_name, daqiri_queue_id) (rate(daqiri_rx_bytes_total{daqiri_queue_id!=\"all\"}[30s])) != 0) * 8 / 1000000000",
+          "legendFormat": "rx {{daqiri_engine}} {{daqiri_interface_name}} q{{daqiri_queue_id}}",
           "refId": "A"
         },
         {
-          "expr": "(sum by (daqiri_backend, daqiri_interface_name, daqiri_queue_id) (rate(daqiri_tx_bytes_total{daqiri_queue_id!=\"all\"}[30s])) != 0) * 8 / 1000000000",
-          "legendFormat": "tx {{daqiri_backend}} {{daqiri_interface_name}} q{{daqiri_queue_id}}",
+          "expr": "(sum by (daqiri_engine, daqiri_interface_name, daqiri_queue_id) (rate(daqiri_tx_bytes_total{daqiri_queue_id!=\"all\"}[30s])) != 0) * 8 / 1000000000",
+          "legendFormat": "tx {{daqiri_engine}} {{daqiri_interface_name}} q{{daqiri_queue_id}}",
           "refId": "B"
         }
       ],
@@ -140,8 +140,8 @@
       },
       "targets": [
         {
-          "expr": "sum by (daqiri_backend, daqiri_interface_name, daqiri_queue_id, daqiri_drop_reason) (rate(daqiri_dropped_packets_total{daqiri_queue_id!=\"all\"}[5s]))",
-          "legendFormat": "{{daqiri_backend}} {{daqiri_interface_name}} q{{daqiri_queue_id}} {{daqiri_drop_reason}}",
+          "expr": "sum by (daqiri_engine, daqiri_interface_name, daqiri_queue_id, daqiri_drop_reason) (rate(daqiri_dropped_packets_total{daqiri_queue_id!=\"all\"}[5s]))",
+          "legendFormat": "{{daqiri_engine}} {{daqiri_interface_name}} q{{daqiri_queue_id}} {{daqiri_drop_reason}}",
           "refId": "A"
         }
       ],
@@ -179,13 +179,13 @@
       },
       "targets": [
         {
-          "expr": "sum by (daqiri_backend, daqiri_interface_name, daqiri_queue_id) (daqiri_rx_packets_total{daqiri_queue_id!=\"all\"}) != 0",
-          "legendFormat": "rx {{daqiri_backend}} {{daqiri_interface_name}} q{{daqiri_queue_id}}",
+          "expr": "sum by (daqiri_engine, daqiri_interface_name, daqiri_queue_id) (daqiri_rx_packets_total{daqiri_queue_id!=\"all\"}) != 0",
+          "legendFormat": "rx {{daqiri_engine}} {{daqiri_interface_name}} q{{daqiri_queue_id}}",
           "refId": "A"
         },
         {
-          "expr": "sum by (daqiri_backend, daqiri_interface_name, daqiri_queue_id) (daqiri_tx_packets_total{daqiri_queue_id!=\"all\"}) != 0",
-          "legendFormat": "tx {{daqiri_backend}} {{daqiri_interface_name}} q{{daqiri_queue_id}}",
+          "expr": "sum by (daqiri_engine, daqiri_interface_name, daqiri_queue_id) (daqiri_tx_packets_total{daqiri_queue_id!=\"all\"}) != 0",
+          "legendFormat": "tx {{daqiri_engine}} {{daqiri_interface_name}} q{{daqiri_queue_id}}",
           "refId": "B"
         }
       ],

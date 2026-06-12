@@ -30,7 +30,6 @@ daqiri:
   cfg:
     version: 1
     stream_type: "socket"
-    protocol: "roce"
     master_core: 8
     debug: false
     log_level: "info"
@@ -62,8 +61,7 @@ daqiri:
       address: 10.250.0.2
       socket_config:
         mode: server
-        local_ip: 10.250.0.2
-        local_port: 4096
+        local_addr: "roce://10.250.0.2:4096"
       roce_config:
         transport_mode: RC
       rx:
@@ -82,8 +80,7 @@ daqiri:
       address: 10.250.0.1
       socket_config:
         mode: client
-        remote_ip: 10.250.0.2
-        remote_port: 4096
+        remote_addr: "roce://10.250.0.2:4096"
       roce_config:
         transport_mode: RC
       tx:

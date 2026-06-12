@@ -31,7 +31,7 @@ namespace daqiri::metrics {
 
 struct CounterSet;
 
-std::shared_ptr<CounterSet> get_or_create_queue(const std::string& backend,
+std::shared_ptr<CounterSet> get_or_create_queue(const std::string& engine,
                                                 const std::string& interface_name,
                                                 uint16_t port_id,
                                                 const std::string& queue_id);
