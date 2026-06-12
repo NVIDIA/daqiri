@@ -1969,7 +1969,10 @@ void DpdkMgr::initialize() {
   struct EalCleanupGuard {
     DpdkMgr* mgr;
     ~EalCleanupGuard() {
-      if (!mgr->initialized_) { mgr->cleanup_eal(); }
+      if (!mgr->initialized_) {
+        mgr->destroy_eth_jump_rules();
+        mgr->cleanup_eal();
+      }
     }
   } cleanup_guard{this};
 
@@ -2535,18 +2538,22 @@ void DpdkMgr::initialize() {
 
       if (rx.hardware_timestamps_ && !calibrate_rx_timestamp_clock(intf.port_id_)) { return; }
 
-      // Start flows
+      // Standard (group 3) and flex-item (group 1) flows use separate DPDK flow
+      // groups; do not mix them on one interface.
       bool has_standard_flows = false;
       bool has_flex_item_flows = false;
       for (const auto& flow : rx.flows_) {
         DAQIRI_LOG_INFO("Adding RX flow {}", flow.name_);
+        struct rte_flow* created = nullptr;
         if (flow.match_.type_ == FlowMatchType::FLEX_ITEM) {
-          add_flex_item_flow(intf.port_id_, flow.match_.flex_item_match_, flow.action_.id_);
-          has_flex_item_flows = true;
+          created = add_flex_item_flow(
+              intf.port_id_, flow.match_.flex_item_match_, flow.action_.id_);
+          if (created != nullptr) { has_flex_item_flows = true; }
         } else {
-          add_flow(intf.port_id_, flow);
-          has_standard_flows = true;
+          created = add_flow(intf.port_id_, flow);
+          if (created != nullptr) { has_standard_flows = true; }
         }
+        if (created == nullptr) { return; }
       }
 
       if (intf.rx_.flow_isolation_) {
@@ -2554,7 +2561,7 @@ void DpdkMgr::initialize() {
         if (has_flex_item_flows && !add_send_to_kernel_fallback(intf.port_id_, 1)) { return; }
       }
 
-      apply_tx_offloads(intf.port_id_);
+      if (!apply_tx_offloads(intf.port_id_)) { return; }
     } else {
       DAQIRI_LOG_INFO("Software loopback mode configured");
     }
@@ -2708,6 +2715,68 @@ int DpdkMgr::setup_pools_and_rings(int max_rx_batch, int max_tx_batch) {
 #define MAX_PATTERN_NUM 5
 #define MAX_ACTION_NUM 4
 
+static uint64_t eth_jump_key(int port, uint32_t group) {
+  return (static_cast<uint64_t>(static_cast<uint16_t>(port)) << 32) | group;
+}
+
+bool DpdkMgr::ensure_eth_jump_rule(int port, uint32_t group) {
+  const uint64_t key = eth_jump_key(port, group);
+  if (eth_jump_installed_.count(key) != 0) { return true; }
+
+  struct rte_flow_error jump_error;
+  struct rte_flow_attr jump_attr{.group = 0, .ingress = 1};
+  struct rte_flow_action_jump jump_v = {.group = group};
+  struct rte_flow_action jump_actions[] = {
+      {.type = RTE_FLOW_ACTION_TYPE_JUMP, .conf = &jump_v},
+      {.type = RTE_FLOW_ACTION_TYPE_END},
+  };
+  struct rte_flow_item jump_pattern[] = {
+      {.type = RTE_FLOW_ITEM_TYPE_ETH, .spec = 0, .mask = 0},
+      {.type = RTE_FLOW_ITEM_TYPE_END},
+  };
+
+  int res = rte_flow_validate(port, &jump_attr, jump_pattern, jump_actions, &jump_error);
+  if (res != 0) {
+    DAQIRI_LOG_CRITICAL("Failed to validate ETH jump rule on port {} to group {}: {} ({})",
+                        port,
+                        group,
+                        jump_error.message ? jump_error.message : "unknown error",
+                        rte_strerror(rte_errno));
+    return false;
+  }
+
+  struct rte_flow* jump_flow =
+      rte_flow_create(port, &jump_attr, jump_pattern, jump_actions, &jump_error);
+  if (jump_flow == nullptr) {
+    DAQIRI_LOG_CRITICAL("Failed to create ETH jump rule on port {} to group {}: {} ({})",
+                        port,
+                        group,
+                        jump_error.message ? jump_error.message : "unknown error",
+                        rte_strerror(rte_errno));
+    return false;
+  }
+
+  eth_jump_installed_.insert(key);
+  eth_jump_flows_[key] = jump_flow;
+  return true;
+}
+
+void DpdkMgr::destroy_eth_jump_rules() {
+  for (const auto& [key, flow] : eth_jump_flows_) {
+    if (flow == nullptr) { continue; }
+    const int port = static_cast<int>(key >> 32);
+    struct rte_flow_error error;
+    const int ret = rte_flow_destroy(port, flow, &error);
+    if (ret != 0) {
+      DAQIRI_LOG_ERROR("Failed to destroy ETH jump rule on port {}: {}",
+                       port,
+                       error.message ? error.message : "unknown error");
+    }
+  }
+  eth_jump_flows_.clear();
+  eth_jump_installed_.clear();
+}
+
 struct rte_flow_item_flex_handle *DpdkMgr::create_flex_flow_rule(
     int port, int offset, struct rte_flow_item *udp_item, struct rte_flow_item *end_pattern) {
   static struct rte_flow_item_flex_handle *item_handle = NULL;
@@ -2717,35 +2786,7 @@ struct rte_flow_item_flex_handle *DpdkMgr::create_flex_flow_rule(
     return item_handle;
   }
 
-  {
-    struct rte_flow_error jump_error;
-    struct rte_flow_attr jump_attr;
-    jump_attr.group = 0;
-    jump_attr.ingress = 1;
-    struct rte_flow_action_jump jump_v;
-    jump_v.group = 1;
-    struct rte_flow_action jump_actions[2];
-    jump_actions[0].type = RTE_FLOW_ACTION_TYPE_JUMP;
-    jump_actions[0].conf = &jump_v;
-    jump_actions[1].type = RTE_FLOW_ACTION_TYPE_END;
-
-    struct rte_flow_item jump_pattern[2];
-    jump_pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
-    jump_pattern[0].spec = 0;
-    jump_pattern[0].mask = 0;
-    jump_pattern[1].type = RTE_FLOW_ITEM_TYPE_END;
-
-    int res = rte_flow_validate(port, &jump_attr, jump_pattern, jump_actions, &jump_error);
-    if (!res) {
-      struct rte_flow* flow = rte_flow_create(
-          port, &jump_attr, jump_pattern, jump_actions, &jump_error);
-      if (flow == NULL) {
-        printf("rte_flow_create failed");
-      }
-    } else {
-      printf("Failed flow validation: %d\n", res);
-    }
-  }
+  if (!ensure_eth_jump_rule(port, 1)) { return NULL; }
 
   struct rte_flow_item_flex_conf flex_conf;
   flex_conf.tunnel = FLEX_TUNNEL_MODE_SINGLE;
@@ -2777,7 +2818,9 @@ struct rte_flow_item_flex_handle *DpdkMgr::create_flex_flow_rule(
 
   item_handle = rte_flow_flex_item_create(port, &flex_conf, &error);
   if (item_handle == NULL) {
-    printf("Failed to create flex item: %s\n", error.message);
+    DAQIRI_LOG_CRITICAL("Failed to create flex item on port {}: {}",
+                        port,
+                        error.message ? error.message : "unknown error");
     return NULL;
   }
 
@@ -2842,12 +2885,17 @@ struct rte_flow* DpdkMgr::add_flex_item_flow(
   pattern[2] = udp_item;
 
   if (flex_item_handles_.find(match_info.flex_item_id_) == flex_item_handles_.end()) {
-    struct rte_flow_item_flex_handle *item_handle =
-      create_flex_flow_rule(port, flex_item_config.offset_, &udp_item, &pattern[4]);
-    flex_item_handles_[match_info.flex_item_id_] = item_handle;
+    struct rte_flow_item_flex_handle* item_handle =
+        create_flex_flow_rule(port, flex_item_config.offset_, &udp_item, &pattern[4]);
+    if (item_handle != nullptr) {
+      flex_item_handles_[match_info.flex_item_id_] = item_handle;
+    }
   }
 
-  struct rte_flow_item_flex_handle *item_handle = flex_item_handles_[match_info.flex_item_id_];
+  const auto handle_it = flex_item_handles_.find(match_info.flex_item_id_);
+  if (handle_it == flex_item_handles_.end() || handle_it->second == nullptr) { return nullptr; }
+
+  struct rte_flow_item_flex_handle* item_handle = handle_it->second;
 
   /* Define the new protocol header structure */
   struct rte_udp_flex_hdr {
@@ -2885,23 +2933,26 @@ struct rte_flow* DpdkMgr::add_flex_item_flow(
   attr.priority = 0;
   attr.group = 1;
 
-    /* Validate the rule and create it */
-     res = rte_flow_validate(port, &attr, pattern, action, &error);
-    if (!res) {
-        flow = rte_flow_create(port, &attr, pattern, action, &error);
-        if (!flow) {
-            printf("Flow creation failed for match %08x: %s\n",
-                   match_info.val_, error.message);
-        } else {
-            printf("Created flow rule: match %08x -> Queue %u\n",
-                   match_info.val_, queue_id);
-        }
-    } else {
-        printf("Flow validation failed for match %08x: %s\n",
-               match_info.val_, error.message);
-    }
+  res = rte_flow_validate(port, &attr, pattern, action, &error);
+  if (res != 0) {
+    DAQIRI_LOG_CRITICAL("Failed to validate flex-item RX flow on port {} (match {:08x}): {} ({})",
+                        port,
+                        match_info.val_,
+                        error.message ? error.message : "unknown error",
+                        rte_strerror(rte_errno));
+    return nullptr;
+  }
 
-    return flow;
+  flow = rte_flow_create(port, &attr, pattern, action, &error);
+  if (flow == nullptr) {
+    DAQIRI_LOG_CRITICAL("Failed to create flex-item RX flow on port {} (match {:08x}): {} ({})",
+                        port,
+                        match_info.val_,
+                        error.message ? error.message : "unknown error",
+                        rte_strerror(rte_errno));
+  }
+
+  return flow;
 }
 
 
@@ -2921,33 +2972,7 @@ struct rte_flow* DpdkMgr::add_flow(int port, const FlowConfig& cfg) {
   struct rte_flow_item_ipv4  ip_mask;
   int res;
 
-  // HWS requires using a non-zero group, so we make a jump event to group 3 for all ethernet
-  // packets
-  {
-    struct rte_flow_error jump_error;
-    struct rte_flow_attr jump_attr{.group = 0, .ingress = 1};
-    struct rte_flow_action_jump jump_v = {.group = 3};
-    struct rte_flow_action jump_actions[] = {
-      { .type = RTE_FLOW_ACTION_TYPE_JUMP, .conf = &jump_v},
-      { .type = RTE_FLOW_ACTION_TYPE_END}
-    };
-
-    struct rte_flow_item jump_pattern[] = {
-      { .type = RTE_FLOW_ITEM_TYPE_ETH, .spec = 0, .mask = 0},
-      { .type = RTE_FLOW_ITEM_TYPE_END},
-    };
-
-    auto res = rte_flow_validate(port, &jump_attr, jump_pattern, jump_actions, &jump_error);
-    if (!res) {
-      struct rte_flow* flow = rte_flow_create(
-          port, &jump_attr, jump_pattern, jump_actions, &jump_error);
-      if (flow == nullptr) {
-        DAQIRI_LOG_ERROR("rte_flow_create failed");
-      }
-    } else {
-      DAQIRI_LOG_ERROR("Failed flow validation: {}", res);
-    }
-  }
+  if (!ensure_eth_jump_rule(port, 3)) { return nullptr; }
 
   memset(pattern, 0, sizeof(pattern));
   memset(action, 0, sizeof(action));
@@ -3032,7 +3057,24 @@ struct rte_flow* DpdkMgr::add_flow(int port, const FlowConfig& cfg) {
 
   pattern[3].type = RTE_FLOW_ITEM_TYPE_END;
 
+  res = rte_flow_validate(port, &attr, pattern, action, &error);
+  if (res != 0) {
+    DAQIRI_LOG_CRITICAL("Failed to validate RX flow '{}' on port {}: {} ({})",
+                        cfg.name_,
+                        port,
+                        error.message ? error.message : "unknown error",
+                        rte_strerror(rte_errno));
+    return nullptr;
+  }
+
   flow = rte_flow_create(port, &attr, pattern, action, &error);
+  if (flow == nullptr) {
+    DAQIRI_LOG_CRITICAL("Failed to create RX flow '{}' on port {}: {} ({})",
+                        cfg.name_,
+                        port,
+                        error.message ? error.message : "unknown error",
+                        rte_strerror(rte_errno));
+  }
   return flow;
 }
 
@@ -3089,33 +3131,14 @@ Status DpdkMgr::drop_all_traffic(int port) {
   struct rte_flow_action action[MAX_ACTION_NUM];
   struct rte_flow* flow = NULL;
   struct rte_flow_error error;
-  DropTrafficConfig config;
+  DropTrafficConfig config{};
+  config.jump = nullptr;
 
-  // Initialize the jump rule to group 3 (required by HWS)
-  {
-    struct rte_flow_error jump_error;
-    struct rte_flow_attr jump_attr{.group = 0, .ingress = 1};
-    struct rte_flow_action_jump jump_v = {.group = 3};
-    struct rte_flow_action jump_actions[] = {
-      { .type = RTE_FLOW_ACTION_TYPE_JUMP, .conf = &jump_v},
-      { .type = RTE_FLOW_ACTION_TYPE_END}
-    };
-
-    struct rte_flow_item jump_pattern[] = {
-      { .type = RTE_FLOW_ITEM_TYPE_ETH, .spec = 0, .mask = 0},
-      { .type = RTE_FLOW_ITEM_TYPE_END},
-    };
-
-    auto res = rte_flow_validate(port, &jump_attr, jump_pattern, jump_actions, &jump_error);
-    if (!res) {
-      config.jump = rte_flow_create(
-          port, &jump_attr, jump_pattern, jump_actions, &jump_error);
-      if (config.jump == nullptr) {
-        DAQIRI_LOG_ERROR("rte_flow_create failed for jump rule in drop_all_traffic");
-      }
-    } else {
-      DAQIRI_LOG_ERROR("Failed flow validation for jump rule in drop_all_traffic: {}", res);
-    }
+  // Jump to group 3 is shared with init-time RX flows; only the drop rule is owned here.
+  if (!ensure_eth_jump_rule(port, 3)) {
+    DAQIRI_LOG_CRITICAL("Cannot drop all traffic on port {}: ETH jump to group 3 unavailable",
+                        port);
+    return Status::INTERNAL_ERROR;
   }
 
   // Clear all structures
@@ -3137,15 +3160,24 @@ Status DpdkMgr::drop_all_traffic(int port) {
   attr.group = 3;
 
   DAQIRI_LOG_INFO("Creating drop all traffic rule on port {} with priority {}",
-    port, attr.priority);
+                  port,
+                  attr.priority);
 
-  // Create the flow rule
+  int ret = rte_flow_validate(port, &attr, pattern, action, &error);
+  if (ret != 0) {
+    DAQIRI_LOG_CRITICAL("Failed to validate drop-all-traffic rule on port {}: {} ({})",
+                        port,
+                        error.message ? error.message : "unknown error",
+                        rte_strerror(rte_errno));
+    return Status::INTERNAL_ERROR;
+  }
+
   config.drop = rte_flow_create(port, &attr, pattern, action, &error);
 
   if (config.drop == nullptr) {
-    DAQIRI_LOG_ERROR("Failed to create drop all traffic flow rule on port {}: {}",
-                       port, error.message ? error.message : "unknown error");
-    rte_flow_destroy(port, config.jump, &error);
+    DAQIRI_LOG_CRITICAL("Failed to create drop all traffic flow rule on port {}: {}",
+                        port,
+                        error.message ? error.message : "unknown error");
     return Status::INTERNAL_ERROR;
   } else {
     DAQIRI_LOG_INFO("Successfully created drop all traffic rule on port {}", port);
@@ -3166,22 +3198,14 @@ Status DpdkMgr::allow_all_traffic(int port) {
   // Tell the RX threads they can keep processing packets
   flush_rx_queues.store(false);
 
-  struct rte_flow_error jump_error;
+  // ETH jump to group 3 is shared with init-time RX flows and is not destroyed here.
   struct rte_flow_error drop_error;
   int drop_ret = rte_flow_destroy(port, drop_all_traffic_flow[port].drop, &drop_error);
-  int jump_ret = rte_flow_destroy(port, drop_all_traffic_flow[port].jump, &jump_error);
 
   if (drop_ret != 0) {
     DAQIRI_LOG_ERROR("Failed to destroy drop all traffic flow rule on port {}: {}",
-                       port, drop_error.message ? drop_error.message : "unknown error");
-  }
-
-  if (jump_ret != 0) {
-    DAQIRI_LOG_ERROR("Failed to destroy jump all traffic flow rule on port {}: {}",
-                       port, jump_error.message ? jump_error.message : "unknown error");
-  }
-
-  if (drop_ret != 0 || jump_ret != 0) {
+                     port,
+                     drop_error.message ? drop_error.message : "unknown error");
     return Status::INTERNAL_ERROR;
   }
 
@@ -3260,28 +3284,47 @@ struct rte_flow* DpdkMgr::add_modify_flow_set(int port, int queue, const char* b
   pattern[1].type = RTE_FLOW_ITEM_TYPE_END;
 
   res = rte_flow_validate(port, &attr, pattern, action, &error);
-  if (!res) {
-    flow = rte_flow_create(port, &attr, pattern, action, &error);
-    return flow;
+  if (res != 0) {
+    DAQIRI_LOG_CRITICAL("Failed to validate TX modify flow on port {} queue {}: {} ({})",
+                        port,
+                        queue,
+                        error.message ? error.message : "unknown error",
+                        rte_strerror(rte_errno));
+    return nullptr;
   }
 
-  return nullptr;
+  flow = rte_flow_create(port, &attr, pattern, action, &error);
+  if (flow == nullptr) {
+    DAQIRI_LOG_CRITICAL("Failed to create TX modify flow on port {} queue {}: {} ({})",
+                        port,
+                        queue,
+                        error.message ? error.message : "unknown error",
+                        rte_strerror(rte_errno));
+  }
+  return flow;
 }
 
-void DpdkMgr::apply_tx_offloads(int port) {
+bool DpdkMgr::apply_tx_offloads(int port) {
   for (const auto& q : cfg_.ifs_[port].tx_.queues_) {
     for (const auto& off : q.common_.offloads_) {
       if (off == "tx_eth_src") {  // Offload Ethernet source copy
         DAQIRI_LOG_INFO("Applying {} offload for port {}", off, port);
         const auto mac_bytes = mac_addrs[port];
-        add_modify_flow_set(port,
-                            q.common_.id_,
-                            reinterpret_cast<const char*>(&mac_bytes),
-                            sizeof(mac_bytes) * 8,
-                            Direction::TX);
+        if (add_modify_flow_set(port,
+                                q.common_.id_,
+                                reinterpret_cast<const char*>(&mac_bytes),
+                                sizeof(mac_bytes) * 8,
+                                Direction::TX) == nullptr) {
+          DAQIRI_LOG_CRITICAL("Failed to apply {} offload for port {} queue {}",
+                              off,
+                              port,
+                              q.common_.id_);
+          return false;
+        }
       }
     }
   }
+  return true;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -3359,6 +3402,8 @@ DpdkMgr::~DpdkMgr() {
     rx_rings.clear();
     tx_rings.clear();
 
+    destroy_eth_jump_rules();
+
     // Final safety net: if shutdown() was never called (e.g. process exiting
     // via std::exit after a partial init), still release EAL and unlink any
     // leftover hugepage files we own.
@@ -3369,10 +3414,20 @@ bool DpdkMgr::validate_config() const {
   if (!Manager::validate_config()) { return false; }
 
   for (const auto& intf : cfg_.ifs_) {
+    std::unordered_set<uint16_t> rx_queue_ids;
+    for (const auto& q : intf.rx_.queues_) { rx_queue_ids.insert(q.common_.id_); }
+
     std::unordered_map<uint16_t, uint16_t> flow_to_queue;
     for (const auto& flow : intf.rx_.flows_) {
       if (flow_to_queue.find(flow.id_) != flow_to_queue.end()) {
         DAQIRI_LOG_ERROR("Duplicate flow ID {} on interface '{}'", flow.id_, intf.name_);
+        return false;
+      }
+      if (rx_queue_ids.find(flow.action_.id_) == rx_queue_ids.end()) {
+        DAQIRI_LOG_ERROR("Flow '{}' references unknown RX queue {} on interface '{}'",
+                         flow.name_,
+                         flow.action_.id_,
+                         intf.name_);
         return false;
       }
       flow_to_queue.emplace(flow.id_, flow.action_.id_);
@@ -4652,6 +4707,7 @@ void DpdkMgr::shutdown() {
     }
     tx_rings.clear();
 
+    destroy_eth_jump_rules();
     cleanup_eal();
     initialized_ = false;
   }

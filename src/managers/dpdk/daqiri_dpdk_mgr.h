@@ -50,6 +50,7 @@
 #include <deque>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include "src/manager.h"
 #include <daqiri/daqiri.h>
 #include "daqiri_dpdk_stats.h"
@@ -67,8 +68,8 @@ struct DPDKQueueConfig {
 };
 
 struct DropTrafficConfig {
-  struct rte_flow *jump;
-  struct rte_flow *drop;
+  struct rte_flow* jump;  // unused; port jump is owned by ensure_eth_jump_rule()
+  struct rte_flow* drop;
 };
 
 struct RxTimestampConversion {
@@ -163,17 +164,19 @@ class DpdkMgr : public Manager {
   bool calibrate_rx_timestamp_clock(uint16_t port_id);
   int setup_pools_and_rings(int max_rx_batch, int max_tx_batch);
   struct rte_flow* add_flow(int port, const FlowConfig& cfg);
+  bool ensure_eth_jump_rule(int port, uint32_t group);
+  void destroy_eth_jump_rules();
   bool add_send_to_kernel_fallback(int port, uint32_t group);
   void create_dummy_rx_q();
   void create_dummy_tx_q();
   struct rte_flow* add_modify_flow_set(int port, int queue, const char* buf, int len,
                                        Direction direction);
 
-  static struct rte_flow_item_flex_handle *create_flex_flow_rule(
+  struct rte_flow_item_flex_handle *create_flex_flow_rule(
     int port, int offset, struct rte_flow_item *udp_item, struct rte_flow_item *end_pattern);
   struct rte_flow* add_flex_item_flow(int port, const FlexItemMatch& match, uint16_t queue_id);
 
-  void apply_tx_offloads(int port);
+  bool apply_tx_offloads(int port);
 
   struct ReorderBatchState {
     uint64_t first_packet_cycles = 0;
@@ -319,6 +322,8 @@ class DpdkMgr : public Manager {
   std::unordered_map<uint32_t, struct rte_ring*> rx_rings;
   struct rte_ether_addr conf_ports_eth_addr[RTE_MAX_ETHPORTS];
   std::unordered_map<uint16_t, struct rte_flow_item_flex_handle*> flex_item_handles_;
+  std::unordered_set<uint64_t> eth_jump_installed_;
+  std::unordered_map<uint64_t, struct rte_flow*> eth_jump_flows_;
   std::unordered_map<uint32_t, struct rte_ring*> tx_rings;
   std::unordered_map<uint32_t, struct rte_mempool*> tx_burst_buffers;
   std::unordered_map<uint32_t, DPDKQueueConfig*> rx_dpdk_q_map_;
