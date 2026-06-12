@@ -213,18 +213,14 @@ By default the application runs for 10 seconds and then exits. You can change th
 ## Cap the transmit rate with packet pacing
 
 To meter the transmit side at a fixed rate in hardware, set a per-queue `pacing_mbps` cap
-on the TX queue. Both raw-Ethernet engines support it:
-
-- DPDK engine (default) — [`daqiri_bench_raw_tx_rx_pacing_dpdk.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_pacing_dpdk.yaml).
-- ibverbs engine — [`daqiri_bench_raw_tx_rx_pacing.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_pacing.yaml) (`engine: "ibverbs"`).
-
-Each example is the loopback config above with `pacing_mbps: 10000` (10 Gbps) on the TX
-queue. The NIC meters the queue out so its average TX rate stays at or below the configured
-value; the limit is enforced on an average basis and idle gaps do not accumulate burst
-credit.
+on the TX queue. [`daqiri_bench_raw_tx_rx_pacing.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_pacing.yaml)
+is the loopback config above with `pacing_mbps: 10000` (10 Gbps) on the TX queue. It uses
+the default DPDK engine; pacing is also supported on the `ibverbs` engine. The NIC meters
+the queue out so its average TX rate stays at or below the configured value; the limit is
+enforced on an average basis and idle gaps do not accumulate burst credit.
 
 ```bash
-/opt/daqiri/bin/daqiri_bench_raw_gpudirect /opt/daqiri/bin/daqiri_bench_raw_tx_rx_pacing_dpdk.yaml --seconds 10
+/opt/daqiri/bin/daqiri_bench_raw_gpudirect /opt/daqiri/bin/daqiri_bench_raw_tx_rx_pacing.yaml --seconds 10
 ```
 
 Validate the cap from the `RX complete:` line: `Gbps = bytes * 8 / seconds / 1e9`. With

@@ -2,11 +2,12 @@
 ---
 # Packet-pacing demo: hardware-metered TX rate.
 #
-# This is daqiri_bench_raw_tx_rx.yaml on the ibverbs engine (engine: "ibverbs")
-# with a per-queue pacing_mbps cap added to the TX queue. The NIC meters the
-# queue out so its average TX rate stays at or below the configured value; the
-# limit is enforced on an average basis and idle gaps do not accumulate burst
-# credit.
+# This is daqiri_bench_raw_tx_rx.yaml with a per-queue pacing_mbps cap added to
+# the TX queue (no "engine" key, so it uses the default raw engine, DPDK). The
+# NIC meters the queue out so its average TX rate stays at or below the
+# configured value; the limit is enforced on an average basis and idle gaps do
+# not accumulate burst credit. Pacing is also supported on the ibverbs engine
+# (add engine: "ibverbs").
 #
 # Requirements: a Mellanox/mlx5 NIC with hardware send scheduling (ConnectX-7 or
 # later). On devices without it, pacing_mbps is ignored with a warning at init
@@ -20,7 +21,6 @@ daqiri:
   cfg:
     version: 1
     stream_type: "raw"
-    engine: "ibverbs"
     master_core: 3
     debug: false
     log_level: "info"
