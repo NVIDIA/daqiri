@@ -91,7 +91,7 @@ static void free_unsubmitted_tx_packets(BurstParams* burst) {
     if (burst->pkts[seg] == nullptr) { continue; }
 
     auto** pkts = reinterpret_cast<rte_mbuf**>(burst->pkts[seg]);
-    for (int pkt = 0; pkt < burst->hdr.hdr.num_pkts; pkt++) {
+    for (size_t pkt = 0; pkt < burst->hdr.hdr.num_pkts; pkt++) {
       if (pkts[pkt] != nullptr) { rte_pktmbuf_free_seg(pkts[pkt]); }
     }
   }

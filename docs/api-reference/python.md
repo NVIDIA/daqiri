@@ -336,12 +336,15 @@ for idx in range(daqiri.get_num_packets(burst)):
 
 ```python
 status = daqiri.send_tx_burst(burst)
-if status != daqiri.Status.SUCCESS:
-    daqiri.free_all_packets_and_burst_tx(burst)
+# Do not free `burst` after a SUCCESS or NO_SPACE_AVAILABLE return — see the ownership note below.
 ```
 
-After a successful `send_tx_burst()`, the worker thread owns the burst and the
-application must not access it again.
+`send_tx_burst()` takes ownership of the burst on success and on a full-ring
+failure: on `SUCCESS` the worker thread owns it, and on `NO_SPACE_AVAILABLE` (the
+TX ring is full) it has already freed the packets and the burst internally. In
+both cases the application must **not** free or otherwise access the burst
+afterwards. `NO_SPACE_AVAILABLE` is the only failure a correctly-configured
+sender encounters at runtime.
 
 ### Timed Transmission
 
@@ -396,9 +399,9 @@ if status == daqiri.Status.SUCCESS:
     if daqiri.get_tx_packet_burst(tx_burst) == daqiri.Status.SUCCESS:
         daqiri.copy_buffer_to_packet(tx_burst, 0, b"hello")
         daqiri.set_packet_lengths(tx_burst, 0, [5])
-        status = daqiri.send_tx_burst(tx_burst)
-        if status != daqiri.Status.SUCCESS:
-            daqiri.free_all_packets_and_burst_tx(tx_burst)
+        # send_tx_burst() takes ownership of tx_burst on success and on a
+        # full-ring failure, so do not free it here.
+        daqiri.send_tx_burst(tx_burst)
     else:
         daqiri.free_tx_metadata(tx_burst)
 ```
