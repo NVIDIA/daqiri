@@ -618,6 +618,38 @@
   color: #1565c0;
 }
 
+/* ── Reusable image frame — matches landing page hero-visual-link ────── */
+.img-visual-frame {
+  display: block;
+  max-width: 740px;
+  margin: 1.5rem 0;
+  padding: 0.45rem;
+  border-radius: 20px;
+  background: linear-gradient(135deg, rgba(118, 185, 0, 0.34), rgba(93, 216, 242, 0.18));
+  border: 1px solid rgba(160, 208, 0, 0.38);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.58), 0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  cursor: zoom-in;
+}
+
+.img-visual-frame:hover {
+  transform: translateY(-2px);
+  border-color: rgba(160, 208, 0, 0.68);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.65), 0 0 34px rgba(118, 185, 0, 0.16);
+}
+
+/* Zero out the <p> margin Python-Markdown adds around the image */
+.img-visual-frame p {
+  margin: 0;
+  line-height: 0;
+}
+
+.img-visual-frame img {
+  width: 100%;
+  display: block;
+  border-radius: 16px;
+}
+
 /* ── Platform tabs (IGX Orin / DGX Spark) — enlarged labels ─────────── */
 /* Scoped to the .platform-tabs wrapper in system_configuration.md and  */
 /* limited to the wrapper's direct tabbed-set so nested sub-tabs        */
@@ -636,3 +668,63 @@ body[data-active-tab="igx-orin"] .md-nav--secondary li:has(> a[data-tab="dgx-spa
 body[data-active-tab="dgx-spark"] .md-nav--secondary li:has(> a[data-tab="igx-orin"]) {
   display: none;
 }
+
+/* ── Performance-report heatmap cells ───────────────────────────────── */
+/* Used by the payload×batch and payload×target_gbps matrices in
+   docs/performance-*.md. Threshold logic (vs. matrix-global max):
+     green  = no drops AND Gbps ≥ 90% of max
+     yellow = no drops AND Gbps ≥ 70% of max
+     red    = any drops OR Gbps < 70% of max                            */
+.md-typeset table.perf-matrix {
+  width: 100%;
+  table-layout: auto;
+  border-collapse: collapse;
+  font-size: 0.64rem;
+}
+.md-typeset table.perf-matrix th,
+.md-typeset table.perf-matrix td {
+  text-align: center;
+  vertical-align: middle;
+  font-variant-numeric: tabular-nums;
+  padding: 0.55em 0.6em;
+  border: 1px solid var(--md-default-fg-color--light);
+  white-space: nowrap;
+}
+.md-typeset table.perf-matrix td small {
+  display: block;
+  opacity: 0.75;
+  font-size: 0.85em;
+  margin-top: 0.25em;
+}
+.md-typeset table.perf-matrix td.cell-green {
+  background-color: rgba(118, 185, 0, 0.28);
+  color: inherit;
+}
+.md-typeset table.perf-matrix td.cell-yellow {
+  background-color: rgba(255, 196, 0, 0.32);
+  color: inherit;
+}
+.md-typeset table.perf-matrix td.cell-red {
+  background-color: rgba(220, 60, 60, 0.32);
+  color: inherit;
+}
+.md-typeset table.perf-matrix th {
+  background-color: rgba(255, 255, 255, 0.05);
+  font-weight: 600;
+}
+/* Compact legend chips that pair with the matrix. */
+.md-typeset .perf-legend {
+  display: flex;
+  gap: 0.75em;
+  margin: 0.5em 0 1em 0;
+  font-size: 0.85em;
+  flex-wrap: wrap;
+}
+.md-typeset .perf-legend span {
+  padding: 0.1em 0.55em;
+  border-radius: 0.25em;
+  white-space: nowrap;
+}
+.md-typeset .perf-legend .cell-green  { background-color: rgba(118, 185, 0, 0.28); }
+.md-typeset .perf-legend .cell-yellow { background-color: rgba(255, 196, 0, 0.32); }
+.md-typeset .perf-legend .cell-red    { background-color: rgba(220, 60, 60, 0.32); }

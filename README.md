@@ -31,18 +31,26 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 - **Optional OpenTelemetry metrics** — Expose per-interface or per-queue packet,
   byte, and drop counters when built with `DAQIRI_ENABLE_OTEL_METRICS=ON`.
 
-### Backends
+### Engines
 
-| Backend | Config value | Description |
+An *engine* is the library that implements a [stream type](docs/concepts.md#stream-types). You configure the stream type and endpoint URIs; the engine is chosen for you by default. `DAQIRI_ENGINE` selects which **optional** engines are compiled in — Linux sockets are always available and need no engine value.
+
+| `DAQIRI_ENGINE` value | Implements | Description |
 |---------|-------------|-------------|
-| DPDK | `dpdk` | Userspace packet processing with DPDK mbufs and rings. Init aborts if RX flow rules or TX offload rules cannot be programmed on the NIC. |
-| RDMA | `rdma` | RDMA verbs via libibverbs over RoCE or InfiniBand (client/server model). |
-| Socket | `socket` | Linux kernel sockets (UDP/TCP), plus a RoCE path that delegates to the RDMA backend. Selecting `socket` automatically builds `rdma`. |
+| `dpdk` | `stream_type: "raw"` (default) | Userspace kernel-bypass packet processing with DPDK mbufs and rings. Init aborts if RX flow rules or TX offload rules cannot be programmed on the NIC. |
+| `ibverbs` | `stream_type: "raw"` with `engine: "ibverbs"`, and `stream_type: "socket"` with `roce://` endpoints | Two libibverbs-based engines built from one value: a pure-DevX Mellanox/mlx5 Multi-Packet (striding) Receive Queue (MPRQ) engine for raw Ethernet (opt in per stream with `engine: "ibverbs"`), and RDMA verbs over RoCE/InfiniBand for socket `roce://` endpoints (also backs the socket engine's RoCE path). The MPRQ engine eliminates DPDK's per-packet mbuf alloc/free; packets DMA strided into one pre-posted buffer (host or GPU via GPUDirect). |
+| *(built in)* | `stream_type: "socket"` with `tcp://`/`udp://` endpoints | Linux kernel UDP/TCP sockets — always available, no build flag required. |
+
+For `stream_type: "raw"` the engine defaults to `dpdk`; set `engine: "ibverbs"` on the
+stream to use the MPRQ engine instead. Build it by including `ibverbs` in `DAQIRI_ENGINE`
+(the default `"dpdk ibverbs"` already does).
 
 ### Limitations
 
 - TX header-fill helpers currently support UDP only.
 - Raw Ethernet configs must reference valid RX queue IDs in `rx.flows` `action.id`; init fails if flow rules cannot be installed on the NIC.
+- The `ibverbs` raw (MPRQ) engine requires a Mellanox/mlx5 NIC (ConnectX-6 Dx or
+  later, BlueField); it is DevX-based and not portable to other vendors.
 
 ## Quick Start
 
@@ -51,7 +59,7 @@ Pick **one** of the two build paths below.
 **Container build (recommended)** — bundles all user-space dependencies, including a patched DPDK with dmabuf support, so no host-side dependency setup is required:
 
 ```bash
-BASE_TARGET=dpdk DAQIRI_MGR="dpdk socket rdma" scripts/build-container.sh
+BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
 ```
 
 Set `BASE_IMAGE=torch` to build on top of NGC PyTorch instead of the default CUDA base — useful for Torch / TensorRT inference workflows that ingest packets directly into GPU memory.
@@ -59,7 +67,7 @@ Set `BASE_IMAGE=torch` to build on top of NGC PyTorch instead of the default CUD
 **Bare-metal CMake build** — use if you have all dependencies installed on the host (see the [Dockerfile](Dockerfile) for the full list):
 
 ```bash
-cmake -S . -B build -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MGR="dpdk socket rdma"
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_ENGINE="dpdk ibverbs"
 cmake --build build -j
 cmake --install build --prefix /opt/daqiri
 ```
@@ -78,7 +86,7 @@ resolved through the AWS SDK provider chain.
 Container build:
 
 ```bash
-BASE_TARGET=dpdk DAQIRI_MGR="dpdk socket rdma" scripts/build-container.sh
+BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
 DAQIRI_ENABLE_S3=ON DAQIRI_BUILD_PYTHON=ON BASE_TARGET=dpdk scripts/build-container.sh
 ```
 
@@ -121,9 +129,10 @@ Reference material for the DAQIRI codebase:
 - [Getting Started](https://nvidia.github.io/daqiri/getting-started/) — System requirements, build/install instructions, and CMake options
 - [Concepts](https://nvidia.github.io/daqiri/concepts/) — Glossary of DAQIRI terminology (kernel bypass, GPUDirect, packet/burst/segment, flow/queue, memory region, zero-copy ownership, RX reorder). Meant to be opened in parallel with the rest of the docs.
 - [API Guide](https://nvidia.github.io/daqiri/api-reference/) — Six-step DAQIRI application lifecycle and configuration-first model
-- [Configuration YAML Reference](https://nvidia.github.io/daqiri/api-reference/configuration/) — Full YAML config reference for all backends
+- [Configuration YAML Reference](https://nvidia.github.io/daqiri/api-reference/configuration/) — Full YAML config reference for all engines
 - [C++ API Usage](https://nvidia.github.io/daqiri/api-reference/cpp/) — C++ RX/TX workflows, buffer lifecycle, file writing, utilities, and status codes
 - [Python API Usage](https://nvidia.github.io/daqiri/api-reference/python/) — Python bindings, workflow examples, enums, config classes, and helper functions
+- [Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/) — Per-platform throughput, drop, and utilization numbers for stream/protocol combinations on DGX Spark
 - [Contributing](CONTRIBUTING.md) — Contribution guidelines, coding standards, DCO sign-off
 
 ## Tutorials
@@ -135,6 +144,7 @@ Step-by-step walkthroughs to get hands-on:
 - [Socket and RDMA Benchmarking](https://nvidia.github.io/daqiri/benchmarks/socket_benchmarking/) — run TCP/UDP sockets and RoCE/RDMA with matching namespace isolation
 - [Raw Ethernet Benchmarking](https://nvidia.github.io/daqiri/benchmarks/raw_benchmarking/) — run `daqiri_bench_raw_gpudirect` with a physical loopback test
 - [Understanding the Configuration File](https://nvidia.github.io/daqiri/tutorials/configuration-walkthrough/) — annotated YAML walkthrough
+- [DAQIRI + Holoscan Integration](https://nvidia.github.io/daqiri/tutorials/daqiri-holoscan-integration/) — use DAQIRI RX bursts from a Holoscan source operator
 
 ## License
 

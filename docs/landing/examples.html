@@ -57,7 +57,7 @@ daqiri::<span class="fn">free_all_packets_and_burst_rx</span>(
           <div class="ex-body"><pre>daqiri:
   cfg:
     version: <span class="nm">1</span>
-    manager: <span class="str">"dpdk"</span>
+    stream_type: <span class="str">"raw"</span>
     master_core: <span class="nm">3</span>
     memory_regions:
     - name: <span class="str">"RX_CPU"</span>
@@ -107,7 +107,7 @@ daqiri::<span class="fn">free_all_packets_and_burst_rx</span>(
           <div class="ex-body"><pre><span class="cm"># Build with examples</span>
 cmake -S . -B build \
   -DDAQIRI_BUILD_EXAMPLES=ON \
-  -DDAQIRI_MGR=<span class="str">"dpdk socket rdma"</span>
+  -DDAQIRI_ENGINE=<span class="str">"dpdk ibverbs"</span>
 cmake --build build -j
 
 <span class="cm"># TX/RX throughput (10 s)</span>

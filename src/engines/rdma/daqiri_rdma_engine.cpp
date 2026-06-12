@@ -29,7 +29,7 @@
 #include <rte_mbuf.h>
 #include "src/dpdk_log.h"
 #include "src/metrics.h"
-#include "daqiri_rdma_mgr.h"
+#include "daqiri_rdma_engine.h"
 
 /* The ordering of most RDMA/CM setup follows the ordering specified here:
    https://man7.org/linux/man-pages/man7/rdma_cm.7.html
@@ -91,8 +91,8 @@ std::shared_ptr<metrics::CounterSet> get_rdma_metrics_for_connection(
 
 }  // namespace
 
-bool RdmaMgr::set_config_and_initialize(const NetworkConfig& cfg) {
-  DAQIRI_LOG_INFO("Setting up RDMA manager");
+bool RdmaEngine::set_config_and_initialize(const NetworkConfig& cfg) {
+  DAQIRI_LOG_INFO("Setting up RDMA engine");
   cfg_ = cfg;
   initialize();
 
@@ -100,56 +100,56 @@ bool RdmaMgr::set_config_and_initialize(const NetworkConfig& cfg) {
 }
 
 // Common DAQIRI functions
-Status RdmaMgr::set_packet_lengths(BurstParams* burst, int idx,
+Status RdmaEngine::set_packet_lengths(BurstParams* burst, int idx,
                                    const std::initializer_list<int>& lens) {
   assert(lens.size() == 1);  // Split not supported yet
   burst->pkt_lens[0][idx] = lens.begin()[0];
   return Status::SUCCESS;
 }
 
-void* RdmaMgr::get_segment_packet_ptr(BurstParams* burst, int seg, int idx) {
+void* RdmaEngine::get_segment_packet_ptr(BurstParams* burst, int seg, int idx) {
   return burst->pkts[seg][idx];
 }
 
-void* RdmaMgr::get_packet_ptr(BurstParams* burst, int idx) {
+void* RdmaEngine::get_packet_ptr(BurstParams* burst, int idx) {
   return burst->pkts[0][idx];
 }
 
-uint32_t RdmaMgr::get_segment_packet_length(BurstParams* burst, int seg, int idx) {
+uint32_t RdmaEngine::get_segment_packet_length(BurstParams* burst, int seg, int idx) {
   return burst->pkt_lens[seg][idx];
 }
 
-uint32_t RdmaMgr::get_packet_length(BurstParams* burst, int idx) {
+uint32_t RdmaEngine::get_packet_length(BurstParams* burst, int idx) {
   return burst->pkt_lens[0][idx];
 }
 
-Status RdmaMgr::set_eth_header(BurstParams* burst, int idx, char* dst_addr) {
+Status RdmaEngine::set_eth_header(BurstParams* burst, int idx, char* dst_addr) {
   DAQIRI_LOG_CRITICAL("Cannot set Ethernet header in RDMA mode");
   return Status::NOT_SUPPORTED;
 }
 
-Status RdmaMgr::set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint8_t proto,
+Status RdmaEngine::set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint8_t proto,
                                 unsigned int src_host, unsigned int dst_host) {
   DAQIRI_LOG_CRITICAL("Cannot set IPv4 header in RDMA mode");
   return Status::NOT_SUPPORTED;
 }
 
-Status RdmaMgr::set_udp_header(BurstParams* burst, int idx, int udp_len, uint16_t src_port,
+Status RdmaEngine::set_udp_header(BurstParams* burst, int idx, int udp_len, uint16_t src_port,
                                uint16_t dst_port) {
   DAQIRI_LOG_CRITICAL("Cannot set UDP header in RDMA mode");
   return Status::NOT_SUPPORTED;
 }
 
-Status RdmaMgr::set_udp_payload(BurstParams* burst, int idx, void* data, int len) {
+Status RdmaEngine::set_udp_payload(BurstParams* burst, int idx, void* data, int len) {
   rte_memcpy(burst->pkts[0][idx], data, len);
   return Status::SUCCESS;
 }
 
-uint64_t RdmaMgr::get_burst_tot_byte(BurstParams* burst) {
+uint64_t RdmaEngine::get_burst_tot_byte(BurstParams* burst) {
   return 0;
 }
 
-BurstParams* RdmaMgr::create_tx_burst_params() {
+BurstParams* RdmaEngine::create_tx_burst_params() {
   BurstParams* burst = nullptr;
   if (rte_mempool_get(tx_meta, reinterpret_cast<void**>(&burst)) != 0) {
     DAQIRI_LOG_CRITICAL("Failed to get RDMA TX meta descriptor");
@@ -160,7 +160,7 @@ BurstParams* RdmaMgr::create_tx_burst_params() {
   return burst;
 }
 
-bool RdmaMgr::get_ip_from_interface(const std::string_view& if_name, sockaddr_in& addr) {
+bool RdmaEngine::get_ip_from_interface(const std::string_view& if_name, sockaddr_in& addr) {
   struct ifaddrs *ifaddr, *ifa;
   bool found = false;
 
@@ -199,7 +199,7 @@ bool RdmaMgr::get_ip_from_interface(const std::string_view& if_name, sockaddr_in
   return found;
 }
 
-inline bool RdmaMgr::ack_event(rdma_cm_event* cm_event) {
+inline bool RdmaEngine::ack_event(rdma_cm_event* cm_event) {
   int ret = rdma_ack_cm_event(cm_event);
   if (ret != 0) {
     DAQIRI_LOG_ERROR("Failed to acknowledge CM event: {}", ret);
@@ -210,7 +210,7 @@ inline bool RdmaMgr::ack_event(rdma_cm_event* cm_event) {
   return true;
 }
 
-int RdmaMgr::mr_access_to_ibv(uint32_t access) {
+int RdmaEngine::mr_access_to_ibv(uint32_t access) {
   int ibv_access = 0;
 
   if (access & MEM_ACCESS_LOCAL) { ibv_access |= IBV_ACCESS_LOCAL_WRITE; }
@@ -223,7 +223,7 @@ int RdmaMgr::mr_access_to_ibv(uint32_t access) {
   return ibv_access;
 }
 
-int RdmaMgr::rdma_register_mr(const MemoryRegionConfig& mr, void* ptr) {
+int RdmaEngine::rdma_register_mr(const MemoryRegionConfig& mr, void* ptr) {
   rdma_mr_params params{};
   params.params_ = mr;
   params.ptr_ = ptr;
@@ -269,7 +269,7 @@ int RdmaMgr::rdma_register_mr(const MemoryRegionConfig& mr, void* ptr) {
   return 0;
 }
 
-int RdmaMgr::rdma_register_cfg_mrs() {
+int RdmaEngine::rdma_register_cfg_mrs() {
   DAQIRI_LOG_INFO("Registering memory regions");
 
   if (allocate_memory_regions() != Status::SUCCESS) {
@@ -308,14 +308,14 @@ int RdmaMgr::rdma_register_cfg_mrs() {
   return 0;
 }
 
-Status RdmaMgr::wait_on_key_xchg() {
+Status RdmaEngine::wait_on_key_xchg() {
   return Status::SUCCESS;
 }
 
 /**
  * Set up all parameters needed for a newly-connected client
  */
-int RdmaMgr::setup_thread_params(rdma_thread_params* params, bool is_server) {
+int RdmaEngine::setup_thread_params(rdma_thread_params* params, bool is_server) {
   // RX/TX queues should be symmetric with RDMA
   rdma_qp_params qp_params;
   const int port_id = cfg_.ifs_[static_cast<int>(params->if_idx)].port_id_;
@@ -380,7 +380,7 @@ int RdmaMgr::setup_thread_params(rdma_thread_params* params, bool is_server) {
   return 0;
 }
 
-int RdmaMgr::destroy_thread_params(rdma_thread_params* params) {
+int RdmaEngine::destroy_thread_params(rdma_thread_params* params) {
   DAQIRI_LOG_INFO("Destroying thread params for client {}", (void*)params->client_id);
   // First destroy the QP
   if (params->client_id->qp) { rdma_destroy_qp(params->client_id); }
@@ -403,7 +403,7 @@ int RdmaMgr::destroy_thread_params(rdma_thread_params* params) {
   return 0;
 }
 
-inline int RdmaMgr::set_affinity(int cpu_core) {
+inline int RdmaEngine::set_affinity(int cpu_core) {
   // Set the CPU affinity of our thread
   cpu_set_t cpuset;
 
@@ -417,7 +417,7 @@ inline int RdmaMgr::set_affinity(int cpu_core) {
   return 0;
 }
 
-Status RdmaMgr::send_tx_burst(BurstParams* burst) {
+Status RdmaEngine::send_tx_burst(BurstParams* burst) {
   if (burst == nullptr) { return Status::INVALID_PARAMETER; }
 
   struct rte_ring* ring;
@@ -448,7 +448,7 @@ Status RdmaMgr::send_tx_burst(BurstParams* burst) {
   return Status::SUCCESS;
 }
 
-RDMAOpCode RdmaMgr::ibv_opcode_to_daqiri_opcode(ibv_wc_opcode opcode) {
+RDMAOpCode RdmaEngine::ibv_opcode_to_daqiri_opcode(ibv_wc_opcode opcode) {
   switch (opcode) {
     case IBV_WC_SEND:
       return RDMAOpCode::SEND;
@@ -466,7 +466,7 @@ RDMAOpCode RdmaMgr::ibv_opcode_to_daqiri_opcode(ibv_wc_opcode opcode) {
 /**
  * Worker thread for a client or server. Each thread handles one queue pair.
  */
-void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
+void RdmaEngine::rdma_thread(bool is_server, rdma_thread_params* tparams) {
   struct ibv_wc wc;
   int num_comp;
   BurstParams* msg;
@@ -497,6 +497,56 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
   }
 
   DAQIRI_LOG_INFO("Affined {} RDMA thread to core {}", is_server ? "Server" : "Client", cpu_core);
+
+  // rdma_cm leaves min_rnr_timer at 0, which the IB spec defines as 655.36 ms,
+  // and sets rnr_retry to 7 (infinite). So a single RECV-queue underrun -- which
+  // happens intermittently on fast small messages, where the sender briefly
+  // outruns the responder's RECV reposting -- stalls the sender for 655 ms with
+  // no CQE error and no drop. That is the intermittent small-message throughput
+  // cliff (#126). Lower min_rnr_timer (as responder) so a transient underrun
+  // costs sub-millisecond, not ~0.65 s. Env-overridable for tuning; the default
+  // 12 == 0.64 ms is comfortably above the peer's RECV-repost latency, so it
+  // avoids an RNR-retry storm while keeping any stall negligible.
+  if (tparams->client_id != nullptr && tparams->client_id->qp != nullptr) {
+    int rnr_timer = 12;  // IB min_rnr_timer encoding: 12 == 0.64 ms
+    if (const char* env = std::getenv("DAQIRI_RDMA_MIN_RNR_TIMER")) {
+      char* end = nullptr;
+      const long parsed = strtol(env, &end, 10);
+      // Require the whole string to parse as a valid 0-31 code. A bare strtol
+      // would map non-numeric input (e.g. "abc") to 0, which is itself a valid
+      // code meaning 655.36 ms -- silently reintroducing the very stall this
+      // override exists to prevent. Reject and keep the default instead.
+      if (end != env && *end == '\0' && parsed >= 0 && parsed <= 31) {
+        rnr_timer = static_cast<int>(parsed);
+      } else {
+        DAQIRI_LOG_WARN(
+          "Ignoring invalid DAQIRI_RDMA_MIN_RNR_TIMER='{}' (expected integer 0-31); "
+          "using default {}",
+          env, rnr_timer);
+      }
+    }
+    struct ibv_qp_attr mod = {};
+    mod.min_rnr_timer = static_cast<uint8_t>(rnr_timer);
+    if (ibv_modify_qp(tparams->client_id->qp, &mod, IBV_QP_MIN_RNR_TIMER) != 0) {
+      DAQIRI_LOG_WARN("Failed to set min_rnr_timer on {} QP: {}",
+                        is_server ? "server" : "client", strerror(errno));
+    }
+
+    // Confirm the negotiated retry/timeout attributes after the override.
+    struct ibv_qp_attr qattr;
+    struct ibv_qp_init_attr qinit;
+    const int qmask =
+      IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY | IBV_QP_MIN_RNR_TIMER;
+    if (ibv_query_qp(tparams->client_id->qp, &qattr, qmask, &qinit) == 0) {
+      const double ack_us = qattr.timeout == 0 ? 0.0 : 4.096 * (1U << qattr.timeout);
+      DAQIRI_LOG_INFO(
+        "[rdma-qp {}] timeout={} (local-ack ~{} us; 0=infinite) retry_cnt={} "
+        "rnr_retry={} min_rnr_timer={}",
+        is_server ? "server" : "client", static_cast<int>(qattr.timeout), ack_us,
+        static_cast<int>(qattr.retry_cnt), static_cast<int>(qattr.rnr_retry),
+        static_cast<int>(qattr.min_rnr_timer));
+    }
+  }
 
   // Main TX loop. Wait for send requests from the transmitters to arrive for sending. Also
   // periodically poll the CQ. Exit on either the global force-quit or the per-connection
@@ -802,16 +852,16 @@ void RdmaMgr::rdma_thread(bool is_server, rdma_thread_params* tparams) {
   DAQIRI_LOG_INFO("{} RDMA thread exiting on core {}", is_server ? "Server" : "Client", cpu_core);
 }
 
-Status RdmaMgr::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
+Status RdmaEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
                                        uintptr_t* conn_id) {
   return rdma_connect_to_server(dst_addr, dst_port, "", conn_id);
 }
 
-RDMAOpCode RdmaMgr::rdma_get_opcode(BurstParams* burst) {
+RDMAOpCode RdmaEngine::rdma_get_opcode(BurstParams* burst) {
   return burst->transport_hdr.opcode;
 }
 
-Status RdmaMgr::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id,
+Status RdmaEngine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id,
                                 bool is_server, int num_pkts, uint64_t wr_id,
                                 const std::string& local_mr_name) {
   burst->transport_hdr.opcode = op_code;
@@ -827,7 +877,7 @@ Status RdmaMgr::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_
   return Status::SUCCESS;
 }
 
-Status RdmaMgr::rdma_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
+Status RdmaEngine::rdma_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
                                         uintptr_t* conn_id) {
   const auto iter = server_str_to_id_.find(server_addr + ":" + std::to_string(server_port));
   if (iter == server_str_to_id_.end()) {
@@ -871,7 +921,7 @@ Status RdmaMgr::rdma_get_server_conn_id(const std::string& server_addr, uint16_t
   return Status::NO_SPACE_AVAILABLE;
 }
 
-Status RdmaMgr::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
+Status RdmaEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
                                        const std::string& src_addr, uintptr_t* conn_id) {
   struct rdma_cm_id* cm_id = nullptr;
   struct rdma_event_channel* ec = nullptr;
@@ -879,7 +929,7 @@ Status RdmaMgr::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst
   struct rdma_conn_param conn_param = {};
 
   if (!initialized_) {
-    DAQIRI_LOG_WARN("RDMA manager not initialized yet. Not trying to connect to server");
+    DAQIRI_LOG_WARN("RDMA engine not initialized yet. Not trying to connect to server");
     return Status::NOT_READY;
   }
 
@@ -1068,7 +1118,7 @@ Status RdmaMgr::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst
 
   // Store the connection ID for later use
   threads_mutex_.lock();
-  worker_threads_[cm_id] = std::thread(&RdmaMgr::rdma_thread, this, false, &params);
+  worker_threads_[cm_id] = std::thread(&RdmaEngine::rdma_thread, this, false, &params);
   threads_mutex_.unlock();
 
   *conn_id = reinterpret_cast<uintptr_t>(cm_id);
@@ -1079,7 +1129,7 @@ Status RdmaMgr::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst
   return Status::SUCCESS;
 }
 
-Status RdmaMgr::rdma_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) {
+Status RdmaEngine::rdma_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) {
   // Look up connection ID to get port/q
   auto iter = client_q_params_.find(reinterpret_cast<struct rdma_cm_id*>(conn_id));
   if (iter == client_q_params_.end()) {
@@ -1093,7 +1143,7 @@ Status RdmaMgr::rdma_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t*
   return Status::SUCCESS;
 }
 
-Status RdmaMgr::get_tx_packet_burst(BurstParams* burst) {
+Status RdmaEngine::get_tx_packet_burst(BurstParams* burst) {
   if (burst == nullptr) { return Status::INVALID_PARAMETER; }
 
   // RDMA isn't allowing split segments yet
@@ -1134,7 +1184,7 @@ Status RdmaMgr::get_tx_packet_burst(BurstParams* burst) {
   return Status::SUCCESS;
 }
 
-bool RdmaMgr::is_tx_burst_available(BurstParams* burst) {
+bool RdmaEngine::is_tx_burst_available(BurstParams* burst) {
   auto burst_pool = mem_pools_.find(burst->transport_hdr.local_mr_name);
   if (burst_pool == mem_pools_.end()) {
     DAQIRI_LOG_ERROR("Failed to look up burst pool name for MR {}",
@@ -1147,7 +1197,7 @@ bool RdmaMgr::is_tx_burst_available(BurstParams* burst) {
   return true;
 }
 
-void RdmaMgr::run() {
+void RdmaEngine::run() {
   int ret;
 
   DAQIRI_LOG_INFO("Starting RDMA CM main thread");
@@ -1351,7 +1401,7 @@ void RdmaMgr::run() {
 
               threads_mutex_.lock();
               worker_threads_[cm_event->id] =
-                  std::thread(&RdmaMgr::rdma_thread, this, true, &thread_params);
+                  std::thread(&RdmaEngine::rdma_thread, this, true, &thread_params);
               threads_mutex_.unlock();
               found = true;
               break;
@@ -1442,12 +1492,12 @@ void RdmaMgr::run() {
   DAQIRI_LOG_INFO("Finished cleaning up TX/RX workers");
 }
 
-int RdmaMgr::setup_pools_and_rings() {
+int RdmaEngine::setup_pools_and_rings() {
   // RX rings
   DAQIRI_LOG_INFO("Setting up TX/RX per-queue rings");
 
   // Each connection ring is single-producer/single-consumer by design: one
-  // rdma_thread owns the manager side and one application thread owns the API
+  // rdma_thread owns the engine side and one application thread owns the API
   // side for a given conn_id. If multi-threaded app access per conn_id is ever
   // allowed, these rings must go back to MP/MC-safe flags.
   for (int i = 0; i < MAX_RDMA_CONNECTIONS; i++) {
@@ -1545,12 +1595,12 @@ int RdmaMgr::setup_pools_and_rings() {
   return 0;
 }
 
-void RdmaMgr::free_rx_burst(BurstParams* burst) {
+void RdmaEngine::free_rx_burst(BurstParams* burst) {
   if (burst == nullptr) { return; }
   rte_mempool_put(rx_meta, burst);
 }
 
-void RdmaMgr::free_tx_burst(BurstParams* burst) {
+void RdmaEngine::free_tx_burst(BurstParams* burst) {
   if (burst == nullptr) { return; }
 
   auto burst_pool = mem_pools_.find(burst->transport_hdr.local_mr_name);
@@ -1576,18 +1626,18 @@ void RdmaMgr::free_tx_burst(BurstParams* burst) {
   rte_mempool_put(tx_meta, burst);
 }
 
-void RdmaMgr::initialize() {
+void RdmaEngine::initialize() {
   bool server = false;
   bool client = false;
   int ret;
 
-  // Cleanup-on-failure guard: mirrors DpdkMgr::initialize(). Any return path
+  // Cleanup-on-failure guard: mirrors DpdkEngine::initialize(). Any return path
   // that does not set initialized_ = true triggers rte_eal_cleanup() and
   // unlinks our --file-prefix=<...>map_* files so the next run can start.
   struct EalCleanupGuard {
-    RdmaMgr* mgr;
+    RdmaEngine* engine;
     ~EalCleanupGuard() {
-      if (!mgr->initialized_) { mgr->cleanup_eal(); }
+      if (!engine->initialized_) { engine->cleanup_eal(); }
     }
   } cleanup_guard{this};
 
@@ -1719,20 +1769,20 @@ void RdmaMgr::initialize() {
     return;
   }
 
-  main_thread_ = std::thread(&RdmaMgr::run, this);
+  main_thread_ = std::thread(&RdmaEngine::run, this);
 
-  DAQIRI_LOG_INFO("RDMA manager initialized");
+  DAQIRI_LOG_INFO("RDMA engine initialized");
   initialized_ = true;
 }
 
-void RdmaMgr::shutdown() {
+void RdmaEngine::shutdown() {
   // Idempotency guard: shutdown() runs explicitly from the caller AND again
-  // from ~RdmaMgr / ~SocketMgr during C++ __cxa_finalize. By the second call
+  // from ~RdmaEngine / ~SocketEngine during C++ __cxa_finalize. By the second call
   // the spdlog default logger (a function-local static created lazily on the
   // first DAQIRI_LOG_INFO) has already been destroyed, so any logging here
   // crashes inside spdlog::sink_it_. Skip the whole body on subsequent calls.
   if (!initialized_) { return; }
-  DAQIRI_LOG_INFO("RDMA manager shutting down");
+  DAQIRI_LOG_INFO("RDMA engine shutting down");
   rdma_force_quit.store(true);
 
   DAQIRI_LOG_INFO("Waiting for main thread to complete");
@@ -1767,56 +1817,55 @@ void RdmaMgr::shutdown() {
   initialized_ = false;
 }
 
-void RdmaMgr::init_client() {
+void RdmaEngine::init_client() {
   // TODO: Implement client initialization
   // return Status::SUCCESS;
 }
 
-Status RdmaMgr::get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server) {
-  if (server) {
-    const auto ring = rx_rings_map_[reinterpret_cast<struct rdma_cm_id*>(conn_id)];
-    if (ring == nullptr) {
-      DAQIRI_LOG_CRITICAL("No server RX ring found for conn_id {:#x}", conn_id);
-      return Status::INVALID_PARAMETER;
-    }
-
-    if (rte_ring_dequeue(ring, reinterpret_cast<void**>(burst)) != 0) { return Status::NOT_READY; }
-
-    return Status::SUCCESS;
-  } else {
-    const auto ring = rx_rings_map_[reinterpret_cast<struct rdma_cm_id*>(conn_id)];
-    if (ring == nullptr) {
-      DAQIRI_LOG_CRITICAL("No client RX ring found for conn_id {:#x}", conn_id);
-      return Status::INVALID_PARAMETER;
-    }
-
-    if (rte_ring_dequeue(ring, reinterpret_cast<void**>(burst)) != 0) { return Status::NOT_READY; }
-
-    return Status::SUCCESS;
+Status RdmaEngine::get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server) {
+  // Look the ring up with find() rather than operator[]: a miss must not insert a
+  // null-valued entry into rx_rings_map_. Such an entry would make the
+  // rx_rings_map_.find(client_id) gate in rdma_get_server_conn_id() succeed for a
+  // connection whose ring does not actually exist, handing back a dead conn_id and
+  // guaranteeing every subsequent lookup misses again.
+  const auto it = rx_rings_map_.find(reinterpret_cast<struct rdma_cm_id*>(conn_id));
+  if (it == rx_rings_map_.end() || it->second == nullptr) {
+    // A legitimately-absent ring is a transient (polled before the ring is wired up),
+    // not a fatal error. Report it quietly so the caller can retry rather than emitting
+    // a CRITICAL on the hot path.
+    DAQIRI_LOG_DEBUG(
+      "No {} RX ring found for conn_id {:#x}", server ? "server" : "client", conn_id);
+    return Status::NOT_READY;
   }
+
+  if (rte_ring_dequeue(it->second, reinterpret_cast<void**>(burst)) != 0) {
+    return Status::NOT_READY;
+  }
+
+  return Status::SUCCESS;
 }
 
-void RdmaMgr::free_rx_metadata(BurstParams* burst) {
+void RdmaEngine::free_rx_metadata(BurstParams* burst) {
   if (burst == nullptr) { return; }
   reset_rdma_burst_metadata(burst);
   rte_mempool_put(rx_meta, burst);
 }
 
-void RdmaMgr::free_tx_metadata(BurstParams* burst) {
+void RdmaEngine::free_tx_metadata(BurstParams* burst) {
   if (burst == nullptr) { return; }
   reset_rdma_burst_metadata(burst);
   rte_mempool_put(tx_meta, burst);
 }
 
-Status RdmaMgr::get_tx_metadata_buffer(BurstParams** burst) {
+Status RdmaEngine::get_tx_metadata_buffer(BurstParams** burst) {
   if (burst == nullptr) { return Status::INVALID_PARAMETER; }
   *burst = create_tx_burst_params();
   if (*burst == nullptr) { return Status::NO_FREE_BURST_BUFFERS; }
   return Status::SUCCESS;
 }
 
-void RdmaMgr::print_stats() {
-  DAQIRI_LOG_INFO("daqiri RDMA manager stats");
+void RdmaEngine::print_stats() {
+  DAQIRI_LOG_INFO("daqiri RDMA engine stats");
 
   size_t total_server_queues = 0;
   size_t server_queues_with_client = 0;
@@ -1899,7 +1948,7 @@ void RdmaMgr::print_stats() {
 }
 
 // Also need destructor implementation
-RdmaMgr::~RdmaMgr() {
+RdmaEngine::~RdmaEngine() {
   // Ensure all threads are joined
   {
     std::lock_guard<std::mutex> lock(threads_mutex_);
@@ -1957,7 +2006,7 @@ RdmaMgr::~RdmaMgr() {
 }
 
 // RDMA-specific functions that were declared but not implemented
-Status RdmaMgr::register_mr(std::string name, int intf, void* addr, size_t len, int flags) {
+Status RdmaEngine::register_mr(std::string name, int intf, void* addr, size_t len, int flags) {
   // TODO: Implement register_mr
   return Status::SUCCESS;
 }

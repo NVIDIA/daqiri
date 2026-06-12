@@ -1,12 +1,28 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 375 510" style="width:100%;max-width:400px;display:block;margin:0 auto;">
   <defs>
+    <radialGradient id="arch-glow" cx="50%" cy="45%" r="62%">
+      <stop offset="0" stop-color="#76b900" stop-opacity="0.13"/>
+      <stop offset="0.55" stop-color="#76b900" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#76b900" stop-opacity="0"/>
+    </radialGradient>
     <marker id="arr"   markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#555"/></marker>
     <marker id="arr-g" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#76b900"/></marker>
     <marker id="arr-fb" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#888"/></marker>
   </defs>
 
+  <!-- Background -->
+  <rect width="375" height="510" rx="20" fill="#090a09"/>
+  <rect x="1" y="1" width="373" height="508" rx="19" fill="none" stroke="#1d2518"/>
+  <rect width="375" height="510" rx="20" fill="url(#arch-glow)"/>
+
+  <!-- Grid -->
+  <g opacity="0.4">
+    <path d="M0 60 H375 M0 120 H375 M0 180 H375 M0 240 H375 M0 300 H375 M0 360 H375 M0 420 H375 M0 480 H375" stroke="#76b900" stroke-opacity="0.08"/>
+    <path d="M60 0 V510 M120 0 V510 M180 0 V510 M240 0 V510 M300 0 V510 M360 0 V510" stroke="#76b900" stroke-opacity="0.08"/>
+  </g>
+
   <!-- ── TITLE ─────────────────────────────────────────── -->
-  <text x="204" y="14" text-anchor="middle" fill="#f0f0f0" font-weight="800" font-size="13" font-family="Inter,sans-serif">AI Native Data Acquisition and Control</text>
+  <text x="204" y="22" text-anchor="middle" fill="#f0f0f0" font-weight="800" font-size="13" font-family="Inter,sans-serif">AI Native Data Acquisition and Control</text>
 
   <g transform="translate(0,10)">
   <!-- ── DATA CONVERTER ────────────────────────────────── -->

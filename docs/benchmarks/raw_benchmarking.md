@@ -9,7 +9,7 @@ DAQIRI provides raw Ethernet benchmark applications that use DPDK to drive an NV
 
 Make sure to [build the DAQIRI library](../getting-started.md#build-the-daqiri-library) beforehand.
 
-**Not sure which backend to benchmark?** Start with the [Benchmarking overview](benchmarks.md). Use this page after you have chosen the raw Ethernet backend. Use [Socket and RDMA Benchmarking](socket_benchmarking.md) for TCP, UDP, and RoCE/RDMA runs.
+**Not sure which stream type to benchmark?** Start with the [Benchmarking overview](benchmarks.md). Use this page after you have chosen the raw Ethernet stream type. Use [Socket and RDMA Benchmarking](socket_benchmarking.md) for TCP, UDP, and RoCE/RDMA runs.
 
 !!! note "Prerequisites"
 
@@ -54,6 +54,8 @@ docker run --rm -it --privileged \
 
     - [`daqiri_bench_raw_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark.yaml) for `daqiri_bench_raw_gpudirect` — still set `eth_dst_addr` to the RX MAC. The rx_port is `0002:01:00.1` (physical port p1), so read its MAC: `cat /sys/class/net/enP2p1s0f1np1/address`. This p0-to-p1 pairing is intentional for an over-the-wire single-machine loopback; using two PFs that map to the same physical port exercises the on-chip eswitch path instead.
     - [`daqiri_bench_rdma_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx_spark.yaml) for `daqiri_bench_rdma` — no further edits needed.
+
+    For the multi-queue core-scaling matrix, use the single base config [`daqiri_bench_raw_tx_rx_spark_mq.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark_mq.yaml) (the balanced TX=2/RX=2 superset) with `daqiri_bench_raw_gpudirect`, driven by [`run_spark_mq_bench.sh`](https://github.com/nvidia/daqiri/blob/main/examples/run_spark_mq_bench.sh) — it derives the four `(TX, RX)` cells from the base (via `scripts/gen_spark_mq_config.py`) and sweeps the payload.
 
     The Spark configs also pin the benchmark application's `bench_tx.cpu_core` / `bench_rx.cpu_core` fields to the high-frequency Cortex-X925 cores. Keep both the DAQIRI queue cores and the application worker cores on cores 16-19 unless you intentionally want a lower-power core in the measurement.
 
@@ -210,7 +212,7 @@ By default the application runs for 10 seconds and then exits. You can change th
 
 ## Tune RDMA SEND completion signaling
 
-The RDMA manager signals every SEND work request by default. For `daqiri_bench_rdma`
+The RDMA engine signals every SEND work request by default. For `daqiri_bench_rdma`
 runs where CQ polling overhead is part of the bottleneck investigation, set
 `DAQIRI_RDMA_SEND_SIGNAL_EVERY=N` to request one signaled SEND every `N` posts:
 
@@ -233,7 +235,7 @@ Grafana beside the benchmark process.
 Build the container with metrics enabled:
 
 ```bash
-DAQIRI_ENABLE_OTEL_METRICS=ON DAQIRI_MGR="dpdk socket rdma" scripts/build-container.sh
+DAQIRI_ENABLE_OTEL_METRICS=ON DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
 ```
 
 Before starting the stack, fill in the required `<placeholders>` in the benchmark
@@ -256,144 +258,144 @@ interface and queue.
 
     ```log
     [INFO] /workspace/daqiri/src/../include/daqiri/common.h:1045: Finished reading DAQIRI configuration
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1732: Attempting to use 2 ports for high-speed network
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1741: Setting DPDK log level to: Info
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1775: DPDK EAL arguments: operator --file-prefix=vwcrlqhfkb -l 3,11,9 --log-level=error --log-level=pmd.net.mlx5:info --iova-mode=va -a 0005:03:00.0,txq_inline_max=0,dv_flow_en=2 -a 0005:03:00.1,txq_inline_max=0,dv_flow_en=2 
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1799: tx_port (0005:03:00.0): identified as port 0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1799: rx_port (0005:03:00.1): identified as port 1
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1809: Creating dummy RX and TX queues
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1591: Port 0 has no RX queues. Creating dummy queue.
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1624: Port 1 has no TX queues. Creating dummy queue.
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1542: Adjusting buffer size to 9228 for headroom
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1542: Adjusting buffer size to 9228 for headroom
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1542: Adjusting buffer size to 8192 for headroom
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1542: Adjusting buffer size to 8192 for headroom
-    [INFO] /workspace/daqiri/src/manager.cpp:175: Registering memory regions
-    [INFO] /workspace/daqiri/src/manager.cpp:236: Successfully allocated memory region MR_Unused_TX_P1 at 0x16d9bf580 type 2 with 9100 bytes (32768 elements @ 9228 bytes total 302383104)
-    [INFO] /workspace/daqiri/src/manager.cpp:236: Successfully allocated memory region MR_Unused_P0 at 0x15b95f500 type 2 with 9100 bytes (32768 elements @ 9228 bytes total 302383104)
-    [INFO] /workspace/daqiri/src/manager.cpp:236: Successfully allocated memory region Data_RX_GPU at 0xffff34000000 type 3 with 8064 bytes (32768 elements @ 8192 bytes total 268435456)
-    [INFO] /workspace/daqiri/src/manager.cpp:236: Successfully allocated memory region Data_TX_GPU at 0xffff24000000 type 3 with 8064 bytes (32768 elements @ 8192 bytes total 268435456)
-    [INFO] /workspace/daqiri/src/manager.cpp:249: Finished allocating memory regions
-    [INFO] /workspace/daqiri/src/manager.cpp:314: dma-buf supported for device 0
-    [INFO] /workspace/daqiri/src/manager.cpp:324: dma-buf GPU buffer address at 0xffff24000000 aligned at 0xffff24000000 with aligned size 268435456
-    [INFO] /workspace/daqiri/src/manager.cpp:364: Successfully registered external memory for Data_TX_GPU
-    [INFO] /workspace/daqiri/src/manager.cpp:314: dma-buf supported for device 0
-    [INFO] /workspace/daqiri/src/manager.cpp:324: dma-buf GPU buffer address at 0xffff34000000 aligned at 0xffff34000000 with aligned size 268435456
-    [INFO] /workspace/daqiri/src/manager.cpp:364: Successfully registered external memory for Data_RX_GPU
-    [INFO] /workspace/daqiri/src/manager.cpp:277: Mapped external memory descriptor for 0xffff34000000 to device 0
-    [INFO] /workspace/daqiri/src/manager.cpp:277: Mapped external memory descriptor for 0xffff24000000 to device 0
-    [INFO] /workspace/daqiri/src/manager.cpp:277: Mapped external memory descriptor for 0xffff34000000 to device 1
-    [INFO] /workspace/daqiri/src/manager.cpp:277: Mapped external memory descriptor for 0xffff24000000 to device 1
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1850: DPDK init (0005:03:00.0) -- RX: ENABLED TX: ENABLED
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1863: Configuring RX queue: UNUSED_P0_Q0 (0) on port 0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1896: Created mempool RXP_P0_Q0_MR0 : mbufs=32768 elsize=9228 ptr=0x17fca4380
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1908: Max packet size needed for RX: 9100
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1955: Configuring TX queue: tx_q_0 (0) on port 0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1981: Created mempool TXP_P0_Q0_MR0 : mbufs=32768 elsize=8064 ptr=0x148cdc980
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1995: Max packet size needed with TX: 9100
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1996: Max packet size needed with RX only: 9100
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2012: Setting port config for port 0 mtu:9082
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2026: Enabling RX scatter offload for single-segment RX queues (min buffer size: 9100)
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2062: Initializing port 0 with 1 RX queues and 1 TX queues...
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2079: Successfully configured ethdev
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2091: Successfully set descriptors to 8192/8192
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2106: Port 0 not in isolation mode
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2115: Setting up port:0, queue:0, Num scatter:1 pool:0x17fca4380
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2136: Successfully setup RX port 0 queue 0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2158: Successfully set up TX queue 0/0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2163: Enabling promiscuous mode for port 0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2177: Successfully started port 0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2180: Port 0, MAC address: 48:B0:2D:F4:04:23
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2891: Applying tx_eth_src offload for port 0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1850: DPDK init (0005:03:00.1) -- RX: ENABLED TX: ENABLED
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1863: Configuring RX queue: rq_q_0 (0) on port 1
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1896: Created mempool RXP_P1_Q0_MR0 : mbufs=32768 elsize=8192 ptr=0x147d6a980
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1908: Max packet size needed for RX: 8064
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1955: Configuring TX queue: UNUSED_TX_P1_Q0 (0) on port 1
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1981: Created mempool TXP_P1_Q0_MR0 : mbufs=32768 elsize=9100 ptr=0x1470e9e00
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1995: Max packet size needed with TX: 9100
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:1996: Max packet size needed with RX only: 8064
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2012: Setting port config for port 1 mtu:8046
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2026: Enabling RX scatter offload for single-segment RX queues (min buffer size: 8064)
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2062: Initializing port 1 with 1 RX queues and 1 TX queues...
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2079: Successfully configured ethdev
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2091: Successfully set descriptors to 8192/8192
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2103: Port 1 in isolation mode
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2115: Setting up port:1, queue:0, Num scatter:1 pool:0x147d6a980
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2136: Successfully setup RX port 1 queue 0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2158: Successfully set up TX queue 1/0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2166: Not enabling promiscuous mode on port 1 since flow isolation is enabled
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2177: Successfully started port 1
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2180: Port 1, MAC address: 48:B0:2D:F4:04:24
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2192: Adding RX flow flow_0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2670: Adding UDP port match for src 4096
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2677: Adding UDP port match for dst 4096
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2246: Setting up RX burst pool with 8191 batches of size 81920
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2265: Setting up RX burst pool with 8191 batches of size 20480
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2284: Setting up RX meta pool with 256 buffers
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2307: Setting up TX ring TX_RING_P0_Q0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2333: Setting up TX burst pool TX_BURST_POOL_P0_Q0 with 10240 pointers at 0x14703e380
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2307: Setting up TX ring TX_RING_P1_Q0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2333: Setting up TX burst pool TX_BURST_POOL_P1_Q0 with 10240 pointers at 0x1848bf700
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2340: Setting up TX meta pool with 256 buffers
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:34: Initializing DPDK stats
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:55: Port 0, Queue 0: Memory regions: MR_Unused_P0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:55: Port 1, Queue 0: Memory regions: Data_RX_GPU
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:130: Found rx_q0_errors counter at index 10
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:152: Initialized DPDK xstats for port 0, found 70 stats
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:154: Found rx_missed counter at index 4
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:160: Found mbuf allocation counter at index 7
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:130: Found rx_q0_errors counter at index 10
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:152: Initialized DPDK xstats for port 1, found 70 stats
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:154: Found rx_missed counter at index 4
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:160: Found mbuf allocation counter at index 7
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:169: Initialized DPDK stats
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:3169: Config validated successfully
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:3182: Starting DAQIRI workers
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_stats.cpp:201: Starting stats thread on core 3
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:3287: Flushing packet on port 1
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:3525: Starting RX Core 9, port 1, queue 0, socket 0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:3762: Starting TX Core 11, port 0, queue 0 socket 0 using burst pool 0x14703e380 ring 0x1852c8700
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:3277: Done starting workers
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:4239: daqiri DPDK manager stats
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2913: Port 0:
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2915:  - Received packets:    0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2916:  - Transmit packets:    45722624
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2917:  - Received bytes:      0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2918:  - Transmit bytes:      368707239936
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2919:  - Missed packets:      0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2920:  - Errored packets:     0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2921:  - RX out of buffers:   0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2923:    ** Extended Stats **
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       tx_good_packets:		45728768
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       tx_good_bytes:		368756785152
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       tx_q0_packets:		45728768
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       tx_q0_bytes:		368756785152
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       tx_unicast_bytes:		368681991552
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       tx_unicast_packets:		45719493
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       tx_phy_packets:		45719292
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       tx_phy_bytes:		368863334632
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2913: Port 1:
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2915:  - Received packets:    45720948
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2916:  - Transmit packets:    0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2917:  - Received bytes:      368693724672
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2918:  - Transmit bytes:      0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2919:  - Missed packets:      0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2920:  - Errored packets:     0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2921:  - RX out of buffers:   0
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2923:    ** Extended Stats **
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       rx_good_packets:		45726554
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       rx_good_bytes:		368738931456
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       rx_q0_packets:		45726554
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       rx_q0_bytes:		368738931456
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       rx_unicast_bytes:		368729399808
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       rx_unicast_packets:		45725372
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       rx_phy_packets:		45725224
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:2953:       rx_phy_bytes:		368911131436
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:4226: daqiri DPDK manager shutdown called 1
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:4229: daqiri DPDK manager shutting down
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:3676: Total packets received by application (port/queue 1/0): 45726776
-    [INFO] /workspace/daqiri/src/managers/dpdk/daqiri_dpdk_mgr.cpp:3814: Total packets transmitted by application (port/queue 0/0): 45731840
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1732: Attempting to use 2 ports for high-speed network
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1741: Setting DPDK log level to: Info
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1775: DPDK EAL arguments: operator --file-prefix=vwcrlqhfkb -l 3,11,9 --log-level=error --log-level=pmd.net.mlx5:info --iova-mode=va -a 0005:03:00.0,txq_inline_max=0,dv_flow_en=2 -a 0005:03:00.1,txq_inline_max=0,dv_flow_en=2 
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1799: tx_port (0005:03:00.0): identified as port 0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1799: rx_port (0005:03:00.1): identified as port 1
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1809: Creating dummy RX and TX queues
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1591: Port 0 has no RX queues. Creating dummy queue.
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1624: Port 1 has no TX queues. Creating dummy queue.
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1542: Adjusting buffer size to 9228 for headroom
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1542: Adjusting buffer size to 9228 for headroom
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1542: Adjusting buffer size to 8192 for headroom
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1542: Adjusting buffer size to 8192 for headroom
+    [INFO] /workspace/daqiri/src/engine.cpp:175: Registering memory regions
+    [INFO] /workspace/daqiri/src/engine.cpp:236: Successfully allocated memory region MR_Unused_TX_P1 at 0x16d9bf580 type 2 with 9100 bytes (32768 elements @ 9228 bytes total 302383104)
+    [INFO] /workspace/daqiri/src/engine.cpp:236: Successfully allocated memory region MR_Unused_P0 at 0x15b95f500 type 2 with 9100 bytes (32768 elements @ 9228 bytes total 302383104)
+    [INFO] /workspace/daqiri/src/engine.cpp:236: Successfully allocated memory region Data_RX_GPU at 0xffff34000000 type 3 with 8064 bytes (32768 elements @ 8192 bytes total 268435456)
+    [INFO] /workspace/daqiri/src/engine.cpp:236: Successfully allocated memory region Data_TX_GPU at 0xffff24000000 type 3 with 8064 bytes (32768 elements @ 8192 bytes total 268435456)
+    [INFO] /workspace/daqiri/src/engine.cpp:249: Finished allocating memory regions
+    [INFO] /workspace/daqiri/src/engine.cpp:314: dma-buf supported for device 0
+    [INFO] /workspace/daqiri/src/engine.cpp:324: dma-buf GPU buffer address at 0xffff24000000 aligned at 0xffff24000000 with aligned size 268435456
+    [INFO] /workspace/daqiri/src/engine.cpp:364: Successfully registered external memory for Data_TX_GPU
+    [INFO] /workspace/daqiri/src/engine.cpp:314: dma-buf supported for device 0
+    [INFO] /workspace/daqiri/src/engine.cpp:324: dma-buf GPU buffer address at 0xffff34000000 aligned at 0xffff34000000 with aligned size 268435456
+    [INFO] /workspace/daqiri/src/engine.cpp:364: Successfully registered external memory for Data_RX_GPU
+    [INFO] /workspace/daqiri/src/engine.cpp:277: Mapped external memory descriptor for 0xffff34000000 to device 0
+    [INFO] /workspace/daqiri/src/engine.cpp:277: Mapped external memory descriptor for 0xffff24000000 to device 0
+    [INFO] /workspace/daqiri/src/engine.cpp:277: Mapped external memory descriptor for 0xffff34000000 to device 1
+    [INFO] /workspace/daqiri/src/engine.cpp:277: Mapped external memory descriptor for 0xffff24000000 to device 1
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1850: DPDK init (0005:03:00.0) -- RX: ENABLED TX: ENABLED
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1863: Configuring RX queue: UNUSED_P0_Q0 (0) on port 0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1896: Created mempool RXP_P0_Q0_MR0 : mbufs=32768 elsize=9228 ptr=0x17fca4380
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1908: Max packet size needed for RX: 9100
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1955: Configuring TX queue: tx_q_0 (0) on port 0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1981: Created mempool TXP_P0_Q0_MR0 : mbufs=32768 elsize=8064 ptr=0x148cdc980
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1995: Max packet size needed with TX: 9100
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1996: Max packet size needed with RX only: 9100
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2012: Setting port config for port 0 mtu:9082
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2026: Enabling RX scatter offload for single-segment RX queues (min buffer size: 9100)
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2062: Initializing port 0 with 1 RX queues and 1 TX queues...
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2079: Successfully configured ethdev
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2091: Successfully set descriptors to 8192/8192
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2106: Port 0 not in isolation mode
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2115: Setting up port:0, queue:0, Num scatter:1 pool:0x17fca4380
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2136: Successfully setup RX port 0 queue 0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2158: Successfully set up TX queue 0/0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2163: Enabling promiscuous mode for port 0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2177: Successfully started port 0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2180: Port 0, MAC address: 48:B0:2D:F4:04:23
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2891: Applying tx_eth_src offload for port 0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1850: DPDK init (0005:03:00.1) -- RX: ENABLED TX: ENABLED
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1863: Configuring RX queue: rq_q_0 (0) on port 1
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1896: Created mempool RXP_P1_Q0_MR0 : mbufs=32768 elsize=8192 ptr=0x147d6a980
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1908: Max packet size needed for RX: 8064
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1955: Configuring TX queue: UNUSED_TX_P1_Q0 (0) on port 1
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1981: Created mempool TXP_P1_Q0_MR0 : mbufs=32768 elsize=9100 ptr=0x1470e9e00
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1995: Max packet size needed with TX: 9100
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1996: Max packet size needed with RX only: 8064
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2012: Setting port config for port 1 mtu:8046
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2026: Enabling RX scatter offload for single-segment RX queues (min buffer size: 8064)
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2062: Initializing port 1 with 1 RX queues and 1 TX queues...
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2079: Successfully configured ethdev
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2091: Successfully set descriptors to 8192/8192
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2103: Port 1 in isolation mode
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2115: Setting up port:1, queue:0, Num scatter:1 pool:0x147d6a980
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2136: Successfully setup RX port 1 queue 0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2158: Successfully set up TX queue 1/0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2166: Not enabling promiscuous mode on port 1 since flow isolation is enabled
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2177: Successfully started port 1
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2180: Port 1, MAC address: 48:B0:2D:F4:04:24
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2192: Adding RX flow flow_0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2670: Adding UDP port match for src 4096
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2677: Adding UDP port match for dst 4096
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2246: Setting up RX burst pool with 8191 batches of size 81920
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2265: Setting up RX burst pool with 8191 batches of size 20480
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2284: Setting up RX meta pool with 256 buffers
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2307: Setting up TX ring TX_RING_P0_Q0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2333: Setting up TX burst pool TX_BURST_POOL_P0_Q0 with 10240 pointers at 0x14703e380
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2307: Setting up TX ring TX_RING_P1_Q0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2333: Setting up TX burst pool TX_BURST_POOL_P1_Q0 with 10240 pointers at 0x1848bf700
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2340: Setting up TX meta pool with 256 buffers
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:34: Initializing DPDK stats
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:55: Port 0, Queue 0: Memory regions: MR_Unused_P0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:55: Port 1, Queue 0: Memory regions: Data_RX_GPU
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:130: Found rx_q0_errors counter at index 10
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:152: Initialized DPDK xstats for port 0, found 70 stats
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:154: Found rx_missed counter at index 4
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:160: Found mbuf allocation counter at index 7
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:130: Found rx_q0_errors counter at index 10
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:152: Initialized DPDK xstats for port 1, found 70 stats
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:154: Found rx_missed counter at index 4
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:160: Found mbuf allocation counter at index 7
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:169: Initialized DPDK stats
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:3169: Config validated successfully
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:3182: Starting DAQIRI workers
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:201: Starting stats thread on core 3
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:3287: Flushing packet on port 1
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:3525: Starting RX Core 9, port 1, queue 0, socket 0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:3762: Starting TX Core 11, port 0, queue 0 socket 0 using burst pool 0x14703e380 ring 0x1852c8700
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:3277: Done starting workers
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:4239: daqiri DPDK engine stats
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2913: Port 0:
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2915:  - Received packets:    0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2916:  - Transmit packets:    45722624
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2917:  - Received bytes:      0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2918:  - Transmit bytes:      368707239936
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2919:  - Missed packets:      0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2920:  - Errored packets:     0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2921:  - RX out of buffers:   0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2923:    ** Extended Stats **
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       tx_good_packets:		45728768
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       tx_good_bytes:		368756785152
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       tx_q0_packets:		45728768
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       tx_q0_bytes:		368756785152
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       tx_unicast_bytes:		368681991552
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       tx_unicast_packets:		45719493
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       tx_phy_packets:		45719292
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       tx_phy_bytes:		368863334632
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2913: Port 1:
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2915:  - Received packets:    45720948
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2916:  - Transmit packets:    0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2917:  - Received bytes:      368693724672
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2918:  - Transmit bytes:      0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2919:  - Missed packets:      0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2920:  - Errored packets:     0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2921:  - RX out of buffers:   0
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2923:    ** Extended Stats **
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       rx_good_packets:		45726554
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       rx_good_bytes:		368738931456
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       rx_q0_packets:		45726554
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       rx_q0_bytes:		368738931456
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       rx_unicast_bytes:		368729399808
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       rx_unicast_packets:		45725372
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       rx_phy_packets:		45725224
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       rx_phy_bytes:		368911131436
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:4226: daqiri DPDK engine shutdown called 1
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:4229: daqiri DPDK engine shutting down
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:3676: Total packets received by application (port/queue 1/0): 45726776
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:3814: Total packets transmitted by application (port/queue 0/0): 45731840
     RX complete: packets=45711360 bytes=368616407040 bursts=4464
     ```
 

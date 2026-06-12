@@ -17,7 +17,7 @@ Standalone benchmark applications for testing performance of DAQIRI with various
 Build from repository root:
 
 ```bash
-cmake -S . -B build -DDAQIRI_BUILD_EXAMPLES=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MGR="dpdk socket"
+cmake -S . -B build -DDAQIRI_BUILD_EXAMPLES=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_ENGINE="dpdk ibverbs"
 cmake --build build -j
 ```
 
@@ -25,14 +25,14 @@ Build with GPUDirect Storage support for `daqiri_example_gds_write`, whose confi
 RX buffers:
 
 ```bash
-cmake -S . -B build -DDAQIRI_BUILD_EXAMPLES=ON -DDAQIRI_ENABLE_GDS=ON -DDAQIRI_MGR="dpdk socket"
+cmake -S . -B build -DDAQIRI_BUILD_EXAMPLES=ON -DDAQIRI_ENABLE_GDS=ON -DDAQIRI_ENGINE="dpdk ibverbs"
 cmake --build build -j
 ```
 
 Build with S3 raw object upload support:
 
 ```bash
-cmake -S . -B build -DDAQIRI_BUILD_EXAMPLES=ON -DDAQIRI_ENABLE_S3=ON -DDAQIRI_MGR="dpdk socket"
+cmake -S . -B build -DDAQIRI_BUILD_EXAMPLES=ON -DDAQIRI_ENABLE_S3=ON -DDAQIRI_ENGINE="dpdk ibverbs"
 cmake --build build -j
 ```
 
@@ -68,7 +68,7 @@ For real wire traffic, replace the PCIe, MAC, and IP placeholders in
 `daqiri_example_gds_write_tx_rx.yaml`. Set `eth_dst_addr` to the MAC address of the
 port that will receive the frame, and use `eth_src_addr` for the TX port MAC. The
 example also enables `tx_eth_src`, so hardware TX will use the actual TX port source
-MAC if the backend fills it. The generated Ethernet/IPv4/UDP headers include EtherType
+MAC if the engine fills it. The generated Ethernet/IPv4/UDP headers include EtherType
 `0x0800`, TTL `64`, correct IPv4 total length/checksum, UDP length/checksum, and the
 configured addresses and ports.
 

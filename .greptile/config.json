@@ -25,7 +25,7 @@
   "confidenceScoreSection": {
     "included": true
   },
-  "instructions": "DAQIRI is a single C++/CUDA shared library (libdaqiri.so) for GPU-direct packet I/O over DPDK, RDMA, and sockets. The full reviewer context lives in .greptile/rules.md and the linked context files in .greptile/files.json (AGENTS.md, CONTRIBUTING.md, .claude/rules/docs-sync.md, src/common.h, src/manager.h, src/types.h). Always read them before commenting. Prefer few high-signal comments over many nits; this is a low-level networking library where idiomatic-looking code is often deliberate.",
+  "instructions": "DAQIRI is a single C++/CUDA shared library (libdaqiri.so) for GPU-direct packet I/O over DPDK, RDMA, and sockets. The full reviewer context lives in .greptile/rules.md and the linked context files in .greptile/files.json (AGENTS.md, CONTRIBUTING.md, .claude/rules/docs-sync.md, src/common.h, src/engine.h, src/types.h). Always read them before commenting. Prefer few high-signal comments over many nits; this is a low-level networking library where idiomatic-looking code is often deliberate.",
   "rules": [
     {
       "id": "dco-signoff",
@@ -50,15 +50,15 @@
       "severity": "high"
     },
     {
-      "id": "manager-vtable",
-      "rule": "All packet I/O flows through the daqiri::Manager virtual interface in src/manager.h, dispatched by ManagerFactory. New backends or capabilities must be added by extending Manager and a src/managers/<name>/ directory, NOT by branching on backend type at call sites or by reaching into backend-specific structs from common code. Application code must only touch the BurstParams/free-function API in src/common.h.",
+      "id": "engine-vtable",
+      "rule": "All packet I/O flows through the daqiri::Engine virtual interface in src/engine.h, dispatched by EngineFactory. New engines or capabilities must be added by extending Engine and a src/engines/<name>/ directory, NOT by branching on engine type at call sites or by reaching into engine-specific structs from common code. Application code must only touch the BurstParams/free-function API in src/common.h.",
       "scope": ["src/**", "examples/**"],
       "severity": "high"
     },
     {
-      "id": "daqiri-mgr-socket-rdma",
-      "rule": "The socket backend reuses the RoCE transport from the rdma backend, so src/CMakeLists.txt must always prepend `rdma` to DAQIRI_MGR_LIST whenever `socket` is requested (the reverse is not required). If a change touches the DAQIRI_MGR handling block in src/CMakeLists.txt (around the `DAQIRI_HAS_SOCKET_IDX` / `DAQIRI_HAS_RDMA_IDX` logic), confirm this invariant still holds and that DAQIRI_MGR_<NAME>=1 compile definitions are still emitted for every selected backend.",
-      "scope": ["src/CMakeLists.txt", "CMakeLists.txt", "src/managers/**"],
+      "id": "daqiri-engine-socket-rdma",
+      "rule": "The socket engine reuses the RoCE transport from the rdma engine, so src/CMakeLists.txt must always prepend `rdma` to DAQIRI_ENGINE_LIST whenever `socket` is requested (the reverse is not required). If a change touches the DAQIRI_ENGINE handling block in src/CMakeLists.txt (around the `DAQIRI_HAS_SOCKET_IDX` / `DAQIRI_HAS_RDMA_IDX` logic), confirm this invariant still holds and that DAQIRI_ENGINE_<NAME>=1 compile definitions are still emitted for every selected engine.",
+      "scope": ["src/CMakeLists.txt", "CMakeLists.txt", "src/engines/**"],
       "severity": "high"
     },
     {
@@ -69,7 +69,7 @@
     },
     {
       "id": "doc-sync",
-      "rule": "DAQIRI has no automated doc-sync gate beyond mkdocs/strict link checks. When a PR changes any of the files listed in .claude/rules/docs-sync.md, the matching docs must be updated in the same PR. Specifically: src/common.h | src/types.h | src/manager.h => docs/api-guide.md + docs/daqiri-api.html + AGENTS.md (Architecture); src/managers/* => docs/getting-started.md + docs/configuration.md + docs/tutorials/configuration-walkthrough.md + README.md (Backends) + AGENTS.md; src/CMakeLists.txt => docs/getting-started.md + AGENTS.md (Build & run) + README.md (Quick Start); src/kernels.cu => docs/benchmarks/raw_benchmarking.md + AGENTS.md; examples/*.{cpp,yaml} => docs/benchmarks/raw_benchmarking.md + docs/tutorials/configuration-walkthrough.md + AGENTS.md (benchmark table). If the PR touches code in these paths but does not update the matching docs, flag it as medium severity and list the specific docs to update.",
+      "rule": "DAQIRI has no automated doc-sync gate beyond mkdocs/strict link checks. When a PR changes any of the files listed in .claude/rules/docs-sync.md, the matching docs must be updated in the same PR. Specifically: src/common.h | src/types.h | src/engine.h => docs/api-guide.md + docs/daqiri-api.html + AGENTS.md (Architecture); src/engines/* => docs/getting-started.md + docs/configuration.md + docs/tutorials/configuration-walkthrough.md + README.md (Engines) + AGENTS.md; src/CMakeLists.txt => docs/getting-started.md + AGENTS.md (Build & run) + README.md (Quick Start); src/kernels.cu => docs/benchmarks/raw_benchmarking.md + AGENTS.md; examples/*.{cpp,yaml} => docs/benchmarks/raw_benchmarking.md + docs/tutorials/configuration-walkthrough.md + AGENTS.md (benchmark table). If the PR touches code in these paths but does not update the matching docs, flag it as medium severity and list the specific docs to update.",
       "scope": ["src/**", "examples/**", "mkdocs.yml", "README.md", "AGENTS.md", "docs/**"],
       "severity": "medium"
     },
@@ -88,7 +88,7 @@
     {
       "id": "tx-fill-udp-only",
       "rule": "Per AGENTS.md 'Current limitations', set_udp_header / TX header-fill helpers currently support UDP only. If a PR extends TX header fill to TCP/IP/etc., the limitations section in both AGENTS.md and README.md should be updated in the same PR.",
-      "scope": ["src/common.cpp", "src/common.h", "src/managers/**"],
+      "scope": ["src/common.cpp", "src/common.h", "src/engines/**"],
       "severity": "low"
     },
     {

@@ -30,11 +30,14 @@ These settings apply globally to both TX and RX:
 - **`stream_type`**: Packet I/O stream class.
   - type: `string`
   - values: `raw`, `socket`
-- **`protocol`**: Socket stream protocol. Required when `stream_type: "socket"` and invalid
-  for `stream_type: "raw"`.
+- **`engine`**: Optional implementation engine for the selected stream type. Omit this
+  unless you need a specific implementation override. For `stream_type: "raw"` the
+  default is `dpdk`; set `engine: "ibverbs"` to use the Multi-Packet (striding) Receive
+  Queue engine on Mellanox/mlx5 NICs instead. RoCE configs infer `ibverbs` from
+  `roce://` endpoint URIs by default.
   - type: `string`
-  - values: `tcp`, `udp`, `roce`
-- **`log_level`**: Backend log level.
+  - values: `dpdk`, `socket`, `ibverbs`
+- **`log_level`**: Engine log level.
   - type: `string`
   - values: `trace`, `debug`, `info`, `warn` (default), `error`, `critical`, `off`
 - **`loopback`**: Enable software loopback for testing without a physical link.
@@ -111,21 +114,37 @@ memory_regions:
 - **`name`**: Interface name. Used to look up port IDs at runtime via `get_port_id()`.
   - type: `string`
 - **`address`**: PCIe BDF address (from `lspci`) or Linux interface name for Raw Ethernet
-  (`stream_type: "raw"`), or IP address for RoCE (`stream_type: "socket"`,
-  `protocol: "roce"`).
+  (`stream_type: "raw"`), or IP address for RoCE (`stream_type: "socket"` with a
+  `roce://` endpoint).
   - type: `string`
 
-### RDMA Configuration
+### Socket and RDMA Endpoint Configuration
 
-When using RDMA, set `stream_type: "socket"` and `protocol: "roce"`. Each interface then
-uses a `socket_config` block for endpoint role/addressing plus a `roce_config` block for
-RDMA transport settings:
+Socket-style streams use a `socket_config` block for endpoint role and addressing.
+Endpoint addresses are URI strings. Supported schemes are `tcp://`, `udp://`, and
+`roce://` (`rdma://` is still accepted as a legacy alias).
 
 - **`socket_config.mode`**: Connection role.
   - type: `string`
   - values: `client`, `server`
-- **`socket_config.local_ip`** / **`socket_config.local_port`**: Server bind address/port.
-- **`socket_config.remote_ip`** / **`socket_config.remote_port`**: Client peer address/port.
+- **`socket_config.local_addr`**: Local bind endpoint, for example
+  `tcp://127.0.0.1:6001`, `roce://10.100.3.1:4096`, or
+  `roce://10.100.1.1` for a RoCE client whose source port is chosen by RDMA CM.
+  Required for server mode and RoCE client mode.
+- **`socket_config.remote_addr`**: Remote peer endpoint, for example
+  `udp://10.250.0.2:5021`. Required for TCP/UDP client mode. RoCE clients choose
+  the peer in application code (for example by calling `rdma_connect_to_server`),
+  not in DAQIRI config.
+- **`socket_config.local_ip`** / **`socket_config.local_port`** and
+  **`socket_config.remote_ip`** / **`socket_config.remote_port`**: Legacy endpoint
+  fields accepted for older configs when a top-level engine override provides the
+  transport.
+
+When using RoCE, set `stream_type: "socket"` and use `roce://` endpoint addresses
+plus a `roce_config` block for transport settings. A RoCE URI may include
+`?engine=ibverbs`; when omitted, `ibverbs` is the default and only supported RoCE
+engine.
+
 - **`roce_config.transport_mode`**: RDMA transport type.
   - type: `string`
   - values: `RC` (Reliable Connected), `UC` (Unreliable Connected)
@@ -251,7 +270,7 @@ v1 batch-size requirement:
 
 - **`name`**: Reorder config name. Must be unique per interface.
   - type: `string`
-- **`reorder_type`**: Reorder backend implementation.
+- **`reorder_type`**: Reorder implementation (`gpu` or `cpu`).
   - type: `string`
   - values: `gpu`, `cpu`
 - **`memory_region`**: Output memory region where reordered payload is written.
@@ -415,7 +434,6 @@ daqiri:
   cfg:
     version: 1
     stream_type: "socket"
-    protocol: "roce"
     master_core: 3
     debug: false
     log_level: "info"
@@ -437,8 +455,7 @@ daqiri:
       address: 10.100.3.1
       socket_config:
         mode: server
-        local_ip: 10.100.3.1
-        local_port: 4096
+        local_addr: "roce://10.100.3.1:4096"
       roce_config:
         transport_mode: RC
       rx:

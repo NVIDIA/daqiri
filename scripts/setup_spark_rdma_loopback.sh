@@ -37,6 +37,12 @@ table_p1=101
 ip link set "${p0}" up
 ip link set "${p1}" up
 
+# Flush all interfaces to remove any stale addresses from previous runs before
+# re-assigning -- prevents a prior run's address from persisting on the wrong port.
+for iface in "${p0}" "${p1}"; do
+  ip addr flush dev "${iface}" 2>/dev/null || true
+done
+
 ip addr replace "${p0_ip}/24" dev "${p0}"
 ip addr replace "${p1_ip}/24" dev "${p1}"
 

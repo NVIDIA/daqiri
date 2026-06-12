@@ -76,7 +76,7 @@ else()
   endif()
 endif()
 
-# DPDK is needed by the common library (rte rings/mbufs in manager.h, common.cpp, manager.cpp).
+# DPDK is needed by the common library (rte rings/mbufs in engine.h, common.cpp, engine.cpp).
 if(NOT PKG_CONFIG_FOUND)
   message(FATAL_ERROR "pkg-config is required to locate DPDK (libdpdk)")
 endif()
@@ -93,7 +93,7 @@ add_library(daqiri_common
   common_s3.cpp
   dpdk_log.cpp
   kernels.cu
-  manager.cpp
+  engine.cpp
   logging.cpp
 )
 if(DAQIRI_ENABLE_OTEL_METRICS)
@@ -203,55 +203,81 @@ if(DAQIRI_USING_VENDORED_YAML_CPP)
   )
 endif()
 
-# Backend libraries
-if(NOT DEFINED DAQIRI_MGR)
-    # Initialize DAQIRI_MGR with a default if not provided
-    # Default: raw + socket backends
-    set(DAQIRI_MGR "dpdk socket" CACHE STRING "Manager type(s) list")
+# Engine libraries.
+#
+# DAQIRI_ENGINE selects which optional NIC engines are compiled in. Linux
+# sockets (UDP/TCP) are always available, so the socket engine is always built
+# and is NOT a DAQIRI_ENGINE value. Valid values:
+#   dpdk    - raw Ethernet via kernel bypass
+#   ibverbs - RDMA/RoCE via libibverbs (also enables the socket RoCE path)
+if(NOT DEFINED DAQIRI_ENGINE)
+    set(DAQIRI_ENGINE "dpdk ibverbs" CACHE STRING "Optional engine implementations to build: dpdk, ibverbs (Linux sockets are always built in)")
 endif()
-set_property(CACHE DAQIRI_MGR PROPERTY STRINGS "dpdk" "socket" "rdma")
-separate_arguments(DAQIRI_MGR_LIST UNIX_COMMAND ${DAQIRI_MGR})
+set_property(CACHE DAQIRI_ENGINE PROPERTY STRINGS "dpdk" "ibverbs")
+separate_arguments(DAQIRI_ENGINE_LIST UNIX_COMMAND ${DAQIRI_ENGINE})
 
-# Socket backend reuses RoCE transport from the RDMA implementation.
-# Ensure rdma backend is built first whenever socket is requested.
-list(FIND DAQIRI_MGR_LIST "socket" DAQIRI_HAS_SOCKET_IDX)
-if(NOT DAQIRI_HAS_SOCKET_IDX EQUAL -1)
-  list(FIND DAQIRI_MGR_LIST "rdma" DAQIRI_HAS_RDMA_IDX)
-  if(DAQIRI_HAS_RDMA_IDX EQUAL -1)
-    list(APPEND DAQIRI_MGR_LIST "rdma")
+# Translate user-facing engine names to internal engine directories/targets.
+# "ibverbs" is the user-facing name for the RDMA engine, implemented under
+# src/engines/rdma (the daqiri_rdma target / DAQIRI_ENGINE_RDMA define).
+set(DAQIRI_ENGINE_INTERNAL_LIST "")
+foreach(ENGINE IN LISTS DAQIRI_ENGINE_LIST)
+  if(ENGINE STREQUAL "dpdk")
+    list(APPEND DAQIRI_ENGINE_INTERNAL_LIST "dpdk")
+  elseif(ENGINE STREQUAL "ibverbs")
+    # "ibverbs" builds both internal engines that use libibverbs: "rdma"
+    # (RoCE/InfiniBand, used by socket roce:// endpoints) and "ibverbs" (the
+    # pure-DevX MPRQ raw-Ethernet engine selected by stream_type: raw +
+    # engine: ibverbs).
+    list(APPEND DAQIRI_ENGINE_INTERNAL_LIST "rdma")
+    list(APPEND DAQIRI_ENGINE_INTERNAL_LIST "ibverbs")
+  else()
+    message(FATAL_ERROR
+      "Invalid DAQIRI_ENGINE value '${ENGINE}'. Valid values: dpdk, ibverbs. "
+      "Linux sockets are always built in (there is no 'socket' value); "
+      "use 'ibverbs' for RDMA/RoCE.")
   endif()
-  list(REMOVE_ITEM DAQIRI_MGR_LIST "rdma")
-  list(INSERT DAQIRI_MGR_LIST 0 "rdma")
+endforeach()
+
+# The socket engine (Linux UDP/TCP, plus a RoCE path that delegates to the
+# ibverbs/rdma engine when present) is always built.
+list(APPEND DAQIRI_ENGINE_INTERNAL_LIST "socket")
+list(REMOVE_DUPLICATES DAQIRI_ENGINE_INTERNAL_LIST)
+
+# Socket links the rdma engine for its RoCE path, so build rdma first when it
+# is present (its target must exist before the socket subdirectory is added).
+list(FIND DAQIRI_ENGINE_INTERNAL_LIST "rdma" DAQIRI_HAS_RDMA_IDX)
+if(NOT DAQIRI_HAS_RDMA_IDX EQUAL -1)
+  list(REMOVE_ITEM DAQIRI_ENGINE_INTERNAL_LIST "rdma")
+  list(INSERT DAQIRI_ENGINE_INTERNAL_LIST 0 "rdma")
 endif()
-list(REMOVE_DUPLICATES DAQIRI_MGR_LIST)
 
-# Define targets for each manager type
-foreach(MGR IN LISTS DAQIRI_MGR_LIST)
-    string(TOUPPER ${MGR} MGR_UPPER)
-    string(TOLOWER ${MGR} MGR_LOWER)
+# Define targets for each engine
+foreach(ENGINE IN LISTS DAQIRI_ENGINE_INTERNAL_LIST)
+    string(TOUPPER ${ENGINE} ENGINE_UPPER)
+    string(TOLOWER ${ENGINE} ENGINE_LOWER)
 
-    message(STATUS "Adding manager ${MGR_UPPER} to the configuration")
-    set(MGR_TARGET daqiri_${MGR_LOWER})
-    add_library(${MGR_TARGET})
-    add_subdirectory(managers/${MGR_LOWER})
-    target_compile_definitions(${MGR_TARGET} PUBLIC "DAQIRI_MGR_${MGR_UPPER}=1")
-    target_include_directories(${MGR_TARGET}
+    message(STATUS "Adding engine ${ENGINE_UPPER} to the configuration")
+    set(ENGINE_TARGET daqiri_${ENGINE_LOWER})
+    add_library(${ENGINE_TARGET})
+    add_subdirectory(engines/${ENGINE_LOWER})
+    target_compile_definitions(${ENGINE_TARGET} PUBLIC "DAQIRI_ENGINE_${ENGINE_UPPER}=1")
+    target_include_directories(${ENGINE_TARGET}
         PRIVATE
           ${CMAKE_CURRENT_SOURCE_DIR}/..
           ${CMAKE_CURRENT_SOURCE_DIR}/../include
           ${DAQIRI_SPDLOG_INCLUDE_DIR}
     )
-    target_link_libraries(${MGR_TARGET} PRIVATE CUDA::cudart ${DAQIRI_YAML_TARGET})
-    set_target_properties(${MGR_TARGET} PROPERTIES
-        OUTPUT_NAME "daqiri_${MGR_LOWER}"
-        EXPORT_NAME "${MGR_LOWER}"
+    target_link_libraries(${ENGINE_TARGET} PRIVATE CUDA::cudart ${DAQIRI_YAML_TARGET})
+    set_target_properties(${ENGINE_TARGET} PROPERTIES
+        OUTPUT_NAME "daqiri_${ENGINE_LOWER}"
+        EXPORT_NAME "${ENGINE_LOWER}"
         INSTALL_RPATH "$ORIGIN"
     )
-    install(TARGETS ${MGR_TARGET}
+    install(TARGETS ${ENGINE_TARGET}
         EXPORT daqiriTargets
         COMPONENT daqiri-cpp
     )
 
-    target_compile_definitions(daqiri_common PUBLIC "DAQIRI_MGR_${MGR_UPPER}=1")
-    target_link_libraries(daqiri_common PRIVATE ${MGR_TARGET})
+    target_compile_definitions(daqiri_common PUBLIC "DAQIRI_ENGINE_${ENGINE_UPPER}=1")
+    target_link_libraries(daqiri_common PRIVATE ${ENGINE_TARGET})
 endforeach()

@@ -30,10 +30,10 @@ struct AllocRegion {
 };
 
 /**
- * @brief (Almost) ABC representing an interface into an daqiri backend implementation
+ * @brief (Almost) ABC representing an interface into a daqiri engine implementation
  *
  */
-class Manager {
+class Engine {
  public:
   static constexpr size_t MAX_RX_Q_PER_CORE = 16;
 
@@ -119,7 +119,7 @@ class Manager {
   struct rte_mempool* create_pktmbuf_pool(const std::string& name, const MemoryRegionConfig& mr);
   struct rte_mempool* create_generic_pool(const std::string& name, const MemoryRegionConfig& mr);
 
-  virtual ~Manager() = default;
+  virtual ~Engine() = default;
 
  protected:
   static constexpr int MAX_IFS = 4;
@@ -167,7 +167,7 @@ class Manager {
   struct HugepageEstimate {
     size_t huge_mr_bytes = 0;        // sum of kind: HUGE memory regions
     size_t pool_overhead_bytes = 0;  // ~32 MiB per mempool (extbuf or huge)
-    size_t dummy_queue_bytes = 0;    // dummy MR(s) DpdkMgr injects for empty TX/RX
+    size_t dummy_queue_bytes = 0;    // dummy MR(s) DpdkEngine injects for empty TX/RX
     size_t eal_fixed_bytes = 0;      // EAL services / memzones / ethdev tables
     size_t total_bytes = 0;
     size_t huge_mr_count = 0;        // for diagnostic output
@@ -198,42 +198,42 @@ class Manager {
   void cleanup_eal();
 };
 
-class ManagerFactory {
+class EngineFactory {
  public:
-  static void set_manager_type(ManagerType type) {
-    if (ManagerType_ != ManagerType::UNKNOWN && ManagerType_ != type) {
-      throw std::logic_error("Manager type is already set with another manager type.");
+  static void set_engine_type(EngineType type) {
+    if (EngineType_ != EngineType::UNKNOWN && EngineType_ != type) {
+      throw std::logic_error("Engine type is already set with another engine type.");
     }
-    if (type == ManagerType::DEFAULT) {
-      ManagerType_ = get_default_manager_type();
+    if (type == EngineType::DEFAULT) {
+      EngineType_ = get_default_engine_type();
     } else {
-      ManagerType_ = type;
+      EngineType_ = type;
     }
   }
 
-  static ManagerType get_manager_type() { return ManagerType_; }
+  static EngineType get_engine_type() { return EngineType_; }
 
   template <typename Config>
-  static ManagerType get_manager_type(const Config& config);
+  static EngineType get_engine_type(const Config& config);
 
-  static ManagerType get_default_manager_type();
+  static EngineType get_default_engine_type();
 
-  static Manager& get_active_manager() {
-    if (ManagerType_ == ManagerType::UNKNOWN) { throw std::logic_error("ManagerType not set"); }
-    if (!ManagerInstance_) { ManagerInstance_ = create_instance(ManagerType_); }
-    return *ManagerInstance_;
+  static Engine& get_active_engine() {
+    if (EngineType_ == EngineType::UNKNOWN) { throw std::logic_error("EngineType not set"); }
+    if (!EngineInstance_) { EngineInstance_ = create_instance(EngineType_); }
+    return *EngineInstance_;
   }
 
  private:
-  ManagerFactory() = default;
-  ~ManagerFactory() = default;
-  ManagerFactory(const ManagerFactory&) = delete;
-  ManagerFactory& operator=(const ManagerFactory&) = delete;
+  EngineFactory() = default;
+  ~EngineFactory() = default;
+  EngineFactory(const EngineFactory&) = delete;
+  EngineFactory& operator=(const EngineFactory&) = delete;
 
-  static std::unique_ptr<Manager> ManagerInstance_;
-  static ManagerType ManagerType_;
+  static std::unique_ptr<Engine> EngineInstance_;
+  static EngineType EngineType_;
 
-  static std::unique_ptr<Manager> create_instance(ManagerType type);
+  static std::unique_ptr<Engine> create_instance(EngineType type);
 };
 
 };  // namespace daqiri

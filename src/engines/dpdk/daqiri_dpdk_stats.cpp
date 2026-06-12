@@ -203,7 +203,7 @@ void DpdkStats::Shutdown() {
 }
 
 /**
- * @brief Constantly polls and updates the stats for the DPDK manager. The result of this polling
+ * @brief Constantly polls and updates the stats for the DPDK engine. The result of this polling
    can be used by the user's application to check for errors or other issues.
  */
 void DpdkStats::Run() {

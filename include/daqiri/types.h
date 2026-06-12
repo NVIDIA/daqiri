@@ -286,70 +286,77 @@ enum class LoopbackType : uint8_t {
 };
 
 /**
- * @brief Manager Type
+ * @brief Engine Type
  *
  */
-enum class ManagerType {
+enum class EngineType {
   UNKNOWN = -1,
   DEFAULT,
   DPDK,
   SOCKET,
   RDMA,
+  IBVERBS,  // pure-DevX MPRQ raw-Ethernet engine (stream_type: raw, engine: ibverbs)
 };
 
-static constexpr const char* DAQIRI_MGR_STR__DPDK = "dpdk";
-static constexpr const char* DAQIRI_MGR_STR__SOCKET = "socket";
-static constexpr const char* DAQIRI_MGR_STR__RDMA = "rdma";
-static constexpr const char* DAQIRI_MGR_STR__DEFAULT = "default";
+static constexpr const char* DAQIRI_ENGINE_STR__DPDK = "dpdk";
+static constexpr const char* DAQIRI_ENGINE_STR__SOCKET = "socket";
+static constexpr const char* DAQIRI_ENGINE_STR__RDMA = "rdma";
+static constexpr const char* DAQIRI_ENGINE_STR__IBVERBS = "ibverbs";
+static constexpr const char* DAQIRI_ENGINE_STR__DEFAULT = "default";
 /**
- * @brief Convert string to manager type
+ * @brief Convert string to engine type
  *
  * @param str
- * @return ManagerType
+ * @return EngineType
  */
-inline ManagerType manager_type_from_string(const std::string& str) {
-  if (str == DAQIRI_MGR_STR__DEFAULT) return ManagerType::DEFAULT;
+inline EngineType engine_type_from_string(const std::string& str) {
+  if (str == DAQIRI_ENGINE_STR__DEFAULT) return EngineType::DEFAULT;
 
-  std::string available_managers;
+  std::string available_engines;
   bool is_known_but_unavailable = false;
 
-#if DAQIRI_MGR_DPDK
-  if (str == DAQIRI_MGR_STR__DPDK) return ManagerType::DPDK;
-  available_managers += std::string(DAQIRI_MGR_STR__DPDK) + " ";
+#if DAQIRI_ENGINE_DPDK
+  if (str == DAQIRI_ENGINE_STR__DPDK) return EngineType::DPDK;
+  available_engines += std::string(DAQIRI_ENGINE_STR__DPDK) + " ";
 #else
-  if (str == DAQIRI_MGR_STR__DPDK) is_known_but_unavailable = true;
+  if (str == DAQIRI_ENGINE_STR__DPDK) is_known_but_unavailable = true;
 #endif
 
-#if DAQIRI_MGR_SOCKET
-  if (str == DAQIRI_MGR_STR__SOCKET) return ManagerType::SOCKET;
-  available_managers += std::string(DAQIRI_MGR_STR__SOCKET) + " ";
+#if DAQIRI_ENGINE_SOCKET
+  if (str == DAQIRI_ENGINE_STR__SOCKET) return EngineType::SOCKET;
+  available_engines += std::string(DAQIRI_ENGINE_STR__SOCKET) + " ";
 #else
-  if (str == DAQIRI_MGR_STR__SOCKET) is_known_but_unavailable = true;
+  if (str == DAQIRI_ENGINE_STR__SOCKET) is_known_but_unavailable = true;
 #endif
 
 
-#if DAQIRI_MGR_RDMA
-  if (str == DAQIRI_MGR_STR__RDMA) return ManagerType::RDMA;
-  available_managers += std::string(DAQIRI_MGR_STR__RDMA) + " ";
+#if DAQIRI_ENGINE_RDMA
+  // Accept both the user-facing "ibverbs" and the internal "rdma" name.
+  if (str == DAQIRI_ENGINE_STR__IBVERBS || str == DAQIRI_ENGINE_STR__RDMA) {
+    return EngineType::RDMA;
+  }
+  available_engines += std::string(DAQIRI_ENGINE_STR__IBVERBS) + " ";
 #else
-  if (str == DAQIRI_MGR_STR__RDMA) is_known_but_unavailable = true;
+  if (str == DAQIRI_ENGINE_STR__IBVERBS || str == DAQIRI_ENGINE_STR__RDMA) {
+    is_known_but_unavailable = true;
+  }
 #endif
 
-  if (!available_managers.empty()) {
-    available_managers.pop_back();  // Remove trailing space
+  if (!available_engines.empty()) {
+    available_engines.pop_back();  // Remove trailing space
   }
 
   if (is_known_but_unavailable) {
     throw std::invalid_argument(
-        "Manager type '" + str + "' is not available in this build. "
-        "Available managers: " + available_managers + ". "
+        "Engine type '" + str + "' is not available in this build. "
+        "Available engines: " + available_engines + ". "
         "To enable '" + str + "', rebuild with CMake option: "
-        "-DDAQIRI_MGR=\"" + available_managers + " " + str + "\"");
+        "-DDAQIRI_ENGINE=\"" + available_engines + " " + str + "\"");
   }
 
   throw std::invalid_argument(
-      "Unknown manager type '" + str + "'. Valid options: " +
-      available_managers + " " + DAQIRI_MGR_STR__DEFAULT);
+      "Unknown engine type '" + str + "'. Valid options: " +
+      available_engines + " " + DAQIRI_ENGINE_STR__DEFAULT);
 }
 
 enum class RDMAMode {
@@ -394,34 +401,122 @@ struct RDMAConfig {
 };
 
 /**
- * @brief Convert manager type to string
+ * @brief Convert engine type to string
  *
  * @param type
  * @return std::string
  */
-inline std::string manager_type_to_string(ManagerType type) {
+inline std::string engine_type_to_string(EngineType type) {
   switch (type) {
-    case ManagerType::DPDK:
-      return DAQIRI_MGR_STR__DPDK;
-    case ManagerType::SOCKET:
-      return DAQIRI_MGR_STR__SOCKET;
-    case ManagerType::RDMA:
-      return DAQIRI_MGR_STR__RDMA;
-    case ManagerType::DEFAULT:
-      return DAQIRI_MGR_STR__DEFAULT;
+    case EngineType::DPDK:
+      return DAQIRI_ENGINE_STR__DPDK;
+    case EngineType::SOCKET:
+      return DAQIRI_ENGINE_STR__SOCKET;
+    case EngineType::RDMA:
+      return DAQIRI_ENGINE_STR__RDMA;
+    case EngineType::IBVERBS:
+      return DAQIRI_ENGINE_STR__IBVERBS;
+    case EngineType::DEFAULT:
+      return DAQIRI_ENGINE_STR__DEFAULT;
   }
   return "unknown";
 }
 
-inline ManagerType manager_type_from_stream_type(StreamType stream_type) {
+// Parse the optional `engine:` config override. Accepts the user-facing
+// engine names; "rdma" is rejected in favor of "ibverbs". Sockets (UDP/TCP)
+// are always built in, so the socket engine is always available.
+inline EngineType config_engine_from_string(const std::string& str) {
+  if (str == DAQIRI_ENGINE_STR__DEFAULT) return EngineType::DEFAULT;
+
+  bool is_known_but_unavailable = false;
+
+#if DAQIRI_ENGINE_DPDK
+  if (str == DAQIRI_ENGINE_STR__DPDK) return EngineType::DPDK;
+#else
+  if (str == DAQIRI_ENGINE_STR__DPDK) is_known_but_unavailable = true;
+#endif
+
+#if DAQIRI_ENGINE_SOCKET
+  if (str == DAQIRI_ENGINE_STR__SOCKET) return EngineType::SOCKET;
+#endif
+
+#if DAQIRI_ENGINE_RDMA
+  if (str == DAQIRI_ENGINE_STR__IBVERBS) return EngineType::RDMA;
+#else
+  if (str == DAQIRI_ENGINE_STR__IBVERBS) is_known_but_unavailable = true;
+#endif
+
+  if (str == DAQIRI_ENGINE_STR__RDMA) {
+    throw std::invalid_argument(
+        "Engine 'rdma' is not valid in config. Use 'ibverbs' for RoCE.");
+  }
+
+  if (is_known_but_unavailable) {
+    throw std::invalid_argument(
+        "Engine '" + str + "' is not available in this build. Rebuild with "
+        "-DDAQIRI_ENGINE including '" + str + "' (valid values: dpdk, ibverbs).");
+  }
+
+  throw std::invalid_argument(
+      "Unknown engine '" + str + "'. Valid options: dpdk, socket, ibverbs, " +
+      DAQIRI_ENGINE_STR__DEFAULT);
+}
+
+// Stream-aware engine resolution. The user-facing name "ibverbs" maps to two
+// different engines depending on the stream type: with `raw` it selects the
+// pure-DevX MPRQ raw-Ethernet engine (EngineType::IBVERBS); with `socket` (a
+// roce:// endpoint) it selects the RoCE/RDMA engine. Every other case defers to
+// the string-only resolver above.
+inline EngineType config_engine_from_string(const std::string& str, StreamType stream_type) {
+#if DAQIRI_ENGINE_IBVERBS
+  if (stream_type == StreamType::RAW && str == DAQIRI_ENGINE_STR__IBVERBS) {
+    return EngineType::IBVERBS;
+  }
+#endif
+  return config_engine_from_string(str);
+}
+
+inline std::string config_engine_to_string(EngineType type) {
+  if (type == EngineType::RDMA) { return DAQIRI_ENGINE_STR__IBVERBS; }
+  return engine_type_to_string(type);
+}
+
+inline EngineType engine_type_from_stream_type(StreamType stream_type,
+                                               SocketProtocol protocol = SocketProtocol::INVALID) {
   switch (stream_type) {
     case StreamType::RAW:
-      return ManagerType::DPDK;
+      return EngineType::DPDK;
     case StreamType::SOCKET:
-      return ManagerType::SOCKET;
+      if (protocol == SocketProtocol::ROCE) { return EngineType::RDMA; }
+      return EngineType::SOCKET;
     default:
-      return ManagerType::UNKNOWN;
+      return EngineType::UNKNOWN;
   }
+}
+
+inline bool is_explicit_engine_type(EngineType type) {
+  return type != EngineType::UNKNOWN && type != EngineType::DEFAULT;
+}
+
+inline bool engine_type_supports_stream_type(EngineType type, StreamType stream_type) {
+  switch (stream_type) {
+    case StreamType::RAW:
+      return type == EngineType::DPDK || type == EngineType::IBVERBS;
+    case StreamType::SOCKET:
+      return type == EngineType::SOCKET || type == EngineType::RDMA;
+    default:
+      return false;
+  }
+}
+
+inline bool engine_type_supports_socket_protocol(EngineType type, SocketProtocol protocol) {
+  if (protocol == SocketProtocol::ROCE) {
+    return type == EngineType::RDMA || type == EngineType::SOCKET;
+  }
+  if (protocol == SocketProtocol::TCP || protocol == SocketProtocol::UDP) {
+    return type == EngineType::SOCKET;
+  }
+  return false;
 }
 class LogLevel {
  public:
@@ -459,19 +554,19 @@ class LogLevel {
 };
 
 /**
- * @class ManagerLogLevelCommandBuilder
- * @brief Abstract base class for building manager log level commands.
+ * @class EngineLogLevelCommandBuilder
+ * @brief Abstract base class for building engine log level commands.
  *
  * This class defines an interface for building commands that manage log levels.
  * Derived classes must implement the `get_cmd_flags_strings` method to provide
  * the specific command flag strings.
  */
-class ManagerLogLevelCommandBuilder {
+class EngineLogLevelCommandBuilder {
  public:
   /**
-   * @brief Virtual destructor for the ManagerLogLevelCommandBuilder class.
+   * @brief Virtual destructor for the EngineLogLevelCommandBuilder class.
    */
-  virtual ~ManagerLogLevelCommandBuilder() = default;
+  virtual ~EngineLogLevelCommandBuilder() = default;
 
   /**
    * @brief Pure virtual function to get the command flag strings.
@@ -488,16 +583,16 @@ class ManagerLogLevelCommandBuilder {
  * @brief Base class for additional queue configuration.
  *
  * This class serves as a base class for any additional queue configuration
- * that might be needed by different manager types. This class should be
+ * that might be needed by different engine types. This class should be
  * inherited by the derived class that will hold the additional configuration
- * for a specific manager type.
+ * for a specific engine type.
  */
-class ManagerExtraQueueConfig {
+class EngineExtraQueueConfig {
  public:
   /**
    * @brief Virtual destructor for proper cleanup of derived class objects.
    */
-  virtual ~ManagerExtraQueueConfig() = default;
+  virtual ~EngineExtraQueueConfig() = default;
 };
 
 struct CommonQueueConfig {
@@ -508,7 +603,7 @@ struct CommonQueueConfig {
   std::string cpu_core_;
   std::vector<std::string> mrs_;
   std::vector<std::string> offloads_;
-  ManagerExtraQueueConfig* extra_queue_config_;
+  EngineExtraQueueConfig* extra_queue_config_;
 };
 
 struct MemoryRegionConfig {
@@ -579,7 +674,8 @@ struct CommonConfig {
   Direction dir;
   StreamType stream_type = StreamType::INVALID;
   SocketProtocol protocol = SocketProtocol::INVALID;
-  ManagerType manager_type;
+  EngineType engine = EngineType::DEFAULT;        // optional `engine:` override
+  EngineType engine_type = EngineType::UNKNOWN;   // resolved active engine
   LoopbackType loopback_;
 };
 
@@ -597,6 +693,8 @@ inline SocketMode GetSocketModeFromString(const std::string& mode_str) {
 
 struct SocketConfig {
   SocketMode mode_ = SocketMode::INVALID;
+  std::string local_addr_;
+  std::string remote_addr_;
   std::string local_ip_;
   std::string remote_ip_;
   uint16_t local_port_ = 0;
@@ -810,11 +908,24 @@ auto get_rdma_configs_enabled(const Config& config) {
   for (const auto& yaml_node : yaml_nodes) {
     auto cfg_node = yaml_node["daqiri"]["cfg"];
     auto stream_type = cfg_node["stream_type"].template as<std::string>("");
-    auto protocol = cfg_node["protocol"].template as<std::string>("");
-    if (stream_type != DAQIRI_STREAM_TYPE_STR__SOCKET ||
-        protocol != DAQIRI_SOCKET_PROTOCOL_STR__ROCE) {
-      continue;
+    auto engine = cfg_node["engine"].template as<std::string>("");
+    // Protocol is encoded in the endpoint URI scheme (roce://), checked below.
+    bool uses_rdma = engine == DAQIRI_ENGINE_STR__IBVERBS;
+    if (!uses_rdma) {
+      auto interfaces_node = cfg_node["interfaces"];
+      for (const auto& intf : interfaces_node) {
+        auto socket_config_node = intf["socket_config"];
+        if (!socket_config_node.IsDefined()) { continue; }
+        auto local_addr = socket_config_node["local_addr"].template as<std::string>("");
+        auto remote_addr = socket_config_node["remote_addr"].template as<std::string>("");
+        uses_rdma = local_addr.rfind("rdma://", 0) == 0 ||
+                    remote_addr.rfind("rdma://", 0) == 0 ||
+                    local_addr.rfind("roce://", 0) == 0 ||
+                    remote_addr.rfind("roce://", 0) == 0;
+        if (uses_rdma) { break; }
+      }
     }
+    if (stream_type != DAQIRI_STREAM_TYPE_STR__SOCKET || !uses_rdma) { continue; }
     auto interfaces_node = cfg_node["interfaces"];
     for (const auto& intf : interfaces_node) {
       auto socket_config_node = intf["socket_config"];

@@ -16,7 +16,7 @@
 # limitations under the License.
 
 ARG DAQIRI_BASE_TARGET=dpdk
-ARG DAQIRI_MGR="dpdk socket"
+ARG DAQIRI_ENGINE="dpdk ibverbs"
 ARG DAQIRI_BUILD_PYTHON=OFF
 ARG DAQIRI_ENABLE_S3=OFF
 ARG BUILD_SHARED_LIBS=ON
@@ -220,7 +220,7 @@ RUN if [ "${DAQIRI_ENABLE_OTEL_METRICS}" = "ON" ]; then \
     fi
 
 # ==============================================================
-# rdma: Named target for consistent per-manager container builds.
+# rdma: Named target for consistent per-engine container builds.
 # Identical to dpdk (which already includes RDMA/ibverbs deps).
 # ==============================================================
 FROM dpdk AS rdma
@@ -301,7 +301,7 @@ RUN cd rivermax-dev-kit && \
 # ==============================
 FROM ${DAQIRI_BASE_TARGET} AS daqiri-build
 
-ARG DAQIRI_MGR
+ARG DAQIRI_ENGINE
 ARG DAQIRI_BUILD_PYTHON
 ARG DAQIRI_ENABLE_S3
 ARG BUILD_SHARED_LIBS
@@ -319,7 +319,7 @@ RUN cmake -S . -B build \
       -DDAQIRI_BUILD_PYTHON=${DAQIRI_BUILD_PYTHON} \
       -DDAQIRI_ENABLE_OTEL_METRICS=${DAQIRI_ENABLE_OTEL_METRICS} \
       -DDAQIRI_ENABLE_S3=${DAQIRI_ENABLE_S3} \
-      -DDAQIRI_MGR="${DAQIRI_MGR}" \
+      -DDAQIRI_ENGINE="${DAQIRI_ENGINE}" \
     && cmake --build build -j "$(nproc)" \
     && cmake --install build
 

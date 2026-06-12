@@ -5,17 +5,17 @@ hide:
 
 # Socket and RDMA Benchmarking
 
-Use this page when the peer protocol is TCP, UDP, or RoCE/RDMA. These benchmarks use the Linux networking stack for TCP/UDP and RDMA verbs for RoCE, so the same client/server namespace shape is useful for proving that traffic leaves the host through the expected NIC path.
+Use this page when the peer transport is TCP, UDP, or RoCE/RDMA. These benchmarks use the Linux networking stack for TCP/UDP and RDMA verbs for RoCE, so the same client/server namespace shape is useful for proving that traffic leaves the host through the expected NIC path.
 
-Make sure to [build DAQIRI](../getting-started.md#build-the-daqiri-library) with the socket and RDMA backends first.
+Make sure to [build DAQIRI](../getting-started.md#build-the-daqiri-library) with the `ibverbs` engine first (for the RoCE/RDMA benchmark); Linux UDP/TCP sockets are always available.
 
-## Backend choices
+## Protocol choices
 
-| Protocol | YAML selector | Benchmark executable | Typical reason to use it |
+| Transport | YAML selector | Benchmark executable | Typical reason to use it |
 |---|---|---|---|
-| TCP | `stream_type: "socket"`, `protocol: "tcp"` | `daqiri_bench_socket` | Baseline against normal Linux streams or test a TCP-speaking peer. |
-| UDP | `stream_type: "socket"`, `protocol: "udp"` | `daqiri_bench_socket` | Datagram baseline against Linux networking. UDP payloads must be at most `65507` bytes. |
-| RoCE/RDMA | `stream_type: "socket"`, `protocol: "roce"` | `daqiri_bench_rdma` | Compare DAQIRI RDMA verbs against tools such as `ib_send_bw` or `ib_write_bw`. |
+| TCP | `stream_type: "socket"` with `tcp://` endpoint URIs | `daqiri_bench_socket` | Baseline against normal Linux streams or test a TCP-speaking peer. |
+| UDP | `stream_type: "socket"` with `udp://` endpoint URIs | `daqiri_bench_socket` | Datagram baseline against Linux networking. UDP payloads must be at most `65507` bytes. |
+| RoCE/RDMA | `stream_type: "socket"` and `roce://` endpoint URIs | `daqiri_bench_rdma` | Compare DAQIRI RDMA verbs against tools such as `ib_send_bw` or `ib_write_bw`. |
 
 ## Build and launch a test shell
 
@@ -30,7 +30,7 @@ docker run --rm --privileged --network=host --gpus all --ipc=host \
   bash -lc 'cmake -S . -B build-socket-rdma \
     -DBUILD_SHARED_LIBS=ON \
     -DDAQIRI_BUILD_PYTHON=OFF \
-    -DDAQIRI_MGR="dpdk socket rdma" &&
+    -DDAQIRI_ENGINE="dpdk ibverbs" &&
     cmake --build build-socket-rdma \
       --target daqiri_bench_socket daqiri_bench_rdma -j"$(nproc)"'
 ```
@@ -154,7 +154,7 @@ The shipped configs run both endpoints on `127.0.0.1` and are useful for a smoke
   --seconds 10 --mode both
 ```
 
-For an on-wire namespace test, use separate server and client YAML files. The important fields are the protocol, namespace IPs, server port, `max_payload_size`, memory-region `buf_size`, and benchmark `message_size`.
+For an on-wire namespace test, use separate server and client YAML files. The important fields are the endpoint URI scheme, namespace IPs, server port, `max_payload_size`, memory-region `buf_size`, and benchmark `message_size`.
 
 Server-side UDP template:
 
@@ -165,7 +165,6 @@ daqiri:
   cfg:
     version: 1
     stream_type: "socket"
-    protocol: "udp"
     master_core: 3
     debug: false
     log_level: "info"
@@ -180,8 +179,7 @@ daqiri:
       address: 10.250.0.2
       socket_config:
         mode: server
-        local_ip: 10.250.0.2
-        local_port: 5021
+        local_addr: "udp://10.250.0.2:5021"
         max_payload_size: 65535
       rx:
         queues:
@@ -219,7 +217,6 @@ daqiri:
   cfg:
     version: 1
     stream_type: "socket"
-    protocol: "udp"
     master_core: 3
     debug: false
     log_level: "info"
@@ -234,10 +231,8 @@ daqiri:
       address: 10.250.0.1
       socket_config:
         mode: client
-        local_ip: 10.250.0.1
-        local_port: 5121
-        remote_ip: 10.250.0.2
-        remote_port: 5021
+        local_addr: "udp://10.250.0.1:5121"
+        remote_addr: "udp://10.250.0.2:5021"
         max_payload_size: 65535
       rx:
         queues:
@@ -266,7 +261,7 @@ socket_bench_client:
   server_port: 5021
 ```
 
-For TCP, change `protocol: "udp"` to `protocol: "tcp"` in both files. For UDP, keep `message_size` at or below `65507`. The `socket_bench_server.cpu_core` and `socket_bench_client.cpu_core` fields pin the benchmark application's server/client threads; they are separate from the DAQIRI queue `cpu_core` values above.
+For TCP, change each endpoint URI scheme from `udp://` to `tcp://` in both files. For UDP, keep `message_size` at or below `65507`.
 
 Run the server and client in their namespaces:
 
@@ -311,7 +306,8 @@ For namespace testing, split the file by role just as in the Linux socket test:
 
 - The server YAML keeps the server memory regions, the server interface with `socket_config.mode: server`, and `rdma_bench_server`.
 - The client YAML keeps the client memory regions, the client interface with `socket_config.mode: client`, and `rdma_bench_client`.
-- Both files use `stream_type: "socket"` and `protocol: "roce"`.
+- Both files use `stream_type: "socket"` and `roce://` endpoint URIs.
+- The client DAQIRI interface uses its local `roce://` endpoint; `rdma_bench_client.server_address` and `server_port` choose the peer at the app layer.
 - `rdma_bench_client.client_address` should be the client namespace IP.
 
 Run the split RDMA test with the same namespace pair:
