@@ -35,13 +35,14 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 
 | Backend | Config value | Description |
 |---------|-------------|-------------|
-| DPDK | `dpdk` | Userspace packet processing with DPDK mbufs and rings. |
+| DPDK | `dpdk` | Userspace packet processing with DPDK mbufs and rings. Init aborts if RX flow rules or TX offload rules cannot be programmed on the NIC. |
 | RDMA | `rdma` | RDMA verbs via libibverbs over RoCE or InfiniBand (client/server model). |
 | Socket | `socket` | Linux kernel sockets (UDP/TCP), plus a RoCE path that delegates to the RDMA backend. Selecting `socket` automatically builds `rdma`. |
 
 ### Limitations
 
 - TX header-fill helpers currently support UDP only.
+- Raw Ethernet configs must reference valid RX queue IDs in `rx.flows` `action.id`; init fails if flow rules cannot be installed on the NIC.
 
 ## Quick Start
 

@@ -85,6 +85,7 @@ Vendored under `third_party/` as submodules (`.gitmodules`): `yaml-cpp` (config 
 
 ### Current limitations
 - TX header fill currently supports UDP only (see README).
+- Raw Ethernet RX flow `action.id` must match an `rx.queues` ID; `daqiri_init()` aborts if RX flow rules, send-to-kernel fallbacks (`flow_isolation: true`), or `tx_eth_src` offload rules cannot be programmed on the NIC.
 - No CI yet — contributors and reviewers verify manually (CONTRIBUTING.md).
 
 ## Documentation
