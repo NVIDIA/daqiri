@@ -442,7 +442,7 @@ observable counters through the OpenTelemetry C++ API:
 | `daqiri.tx.bytes` | `By` |
 | `daqiri.dropped.packets` | `{packet}` |
 
-All metrics include `daqiri.backend`, `daqiri.interface.name`, `daqiri.port.id`, and
+All metrics include `daqiri.engine`, `daqiri.interface.name`, `daqiri.port.id`, and
 `daqiri.queue.id`. Drop metrics also include `daqiri.drop.reason`.
 
 DAQIRI only owns library instrumentation. Applications remain responsible for
@@ -461,11 +461,11 @@ workflow sections above show the common call order and ownership rules.
 | `daqiri_init(const std::string &yaml_string_or_path)` | Initialize from a YAML string or YAML file path. |
 | `daqiri_init_from_yaml_string(const std::string &yaml_string)` | Initialize from YAML content. |
 | `daqiri_init_from_yaml_file(const std::string &yaml_path)` | Initialize from a YAML file path. |
-| `parse_network_config(...)` | Parse YAML into `NetworkConfig` without starting the manager. |
-| `get_manager_type()` | Return the active manager type after initialization. |
-| `get_manager_type(config)` | Return the manager type selected by a config object. |
-| `shutdown()` | Stop DAQIRI and release manager-owned resources. |
-| `print_stats()` | Print manager/backend statistics. |
+| `parse_network_config(...)` | Parse YAML into `NetworkConfig` without starting the engine. |
+| `get_engine_type()` | Return the active engine type after initialization. |
+| `get_engine_type(config)` | Return the engine type selected by a config object. |
+| `shutdown()` | Stop DAQIRI and release engine-owned resources. |
+| `print_stats()` | Print engine statistics. |
 
 ### Burst Metadata
 
@@ -557,7 +557,7 @@ workflow sections above show the common call order and ownership rules.
 | `get_mac_addr(port, mac)` | Copy a port MAC address into a six-byte buffer. |
 | `format_eth_addr(dst, addr)` | Convert a MAC address string into a six-byte buffer. |
 | `get_port_id(key)` | Resolve an interface name or PCIe address to a port ID. |
-| `get_num_rx_queues(port_id)` | Return the configured or backend-reported RX queue count. |
+| `get_num_rx_queues(port_id)` | Return the configured or engine-reported RX queue count. |
 | `drop_all_traffic(port)` | Install a high-priority drop rule on a port. |
 | `allow_all_traffic(port)` | Remove a drop rule installed by `drop_all_traffic()`. |
 | `flush_port_queue(port, queue)` | Drain stale packets from a port queue. |
@@ -583,7 +583,7 @@ All functions that can fail return `daqiri::Status`:
 | `NOT_READY` | System not yet initialized |
 | `INVALID_PARAMETER` | Invalid argument passed |
 | `NO_SPACE_AVAILABLE` | Ring or queue is full |
-| `NOT_SUPPORTED` | Operation not supported by the current backend or build options |
+| `NOT_SUPPORTED` | Operation not supported by the current engine or build options |
 | `GENERIC_FAILURE` | Unspecified failure |
 | `CONNECT_FAILURE` | RDMA connection failed |
-| `INTERNAL_ERROR` | Internal error in the backend |
+| `INTERNAL_ERROR` | Internal error in the engine |

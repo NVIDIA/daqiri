@@ -19,7 +19,7 @@
 #define _GNU_SOURCE
 #endif
 
-#include "daqiri_socket_mgr.h"
+#include "daqiri_socket_engine.h"
 
 #include <arpa/inet.h>
 #include <cerrno>
@@ -39,8 +39,8 @@
 
 #include <daqiri/logging.hpp>
 
-#if DAQIRI_MGR_RDMA
-#include "src/managers/rdma/daqiri_rdma_mgr.h"
+#if DAQIRI_ENGINE_RDMA
+#include "src/engines/rdma/daqiri_rdma_engine.h"
 #endif
 
 namespace daqiri {
@@ -74,20 +74,22 @@ std::string sockaddr_to_ip(const sockaddr_in& addr) {
 
 }  // namespace
 
-SocketMgr::~SocketMgr() {
+SocketEngine::~SocketEngine() {
   shutdown();
 }
 
-bool SocketMgr::is_roce_protocol() const {
-  return cfg_.common_.stream_type == StreamType::SOCKET && cfg_.common_.protocol == SocketProtocol::ROCE;
+bool SocketEngine::is_roce_protocol() const {
+  return cfg_.common_.stream_type == StreamType::SOCKET &&
+         cfg_.common_.protocol == SocketProtocol::ROCE;
 }
 
-Status SocketMgr::roce_not_initialized(const char* op_name) const {
-  DAQIRI_LOG_ERROR("{} is only supported when protocol=roce and RoCE manager is initialized", op_name);
+Status SocketEngine::roce_not_initialized(const char* op_name) const {
+  DAQIRI_LOG_ERROR("{} is only supported with roce:// endpoints and an initialized RDMA engine",
+                   op_name);
   return Status::NOT_SUPPORTED;
 }
 
-bool SocketMgr::set_config_and_initialize(const NetworkConfig& cfg) {
+bool SocketEngine::set_config_and_initialize(const NetworkConfig& cfg) {
   cfg_ = cfg;
 
   for (size_t i = 0; i < cfg_.ifs_.size(); ++i) {
@@ -95,12 +97,13 @@ bool SocketMgr::set_config_and_initialize(const NetworkConfig& cfg) {
   }
 
   if (is_roce_protocol()) {
-#if DAQIRI_MGR_RDMA
-    roce_mgr_ = std::make_unique<RdmaMgr>();
-    initialized_ = roce_mgr_->set_config_and_initialize(cfg_);
+#if DAQIRI_ENGINE_RDMA
+    roce_engine_ = std::make_unique<RdmaEngine>();
+    initialized_ = roce_engine_->set_config_and_initialize(cfg_);
     return initialized_;
 #else
-    DAQIRI_LOG_ERROR("Socket backend built without RDMA support; protocol=roce is unavailable");
+    DAQIRI_LOG_ERROR(
+        "Socket engine built without RDMA support; roce:// endpoints are unavailable");
     initialized_ = false;
     return false;
 #endif
@@ -110,16 +113,16 @@ bool SocketMgr::set_config_and_initialize(const NetworkConfig& cfg) {
   return initialized_;
 }
 
-void SocketMgr::initialize() {
+void SocketEngine::initialize() {
   if (is_roce_protocol()) {
-#if DAQIRI_MGR_RDMA
-    if (roce_mgr_ != nullptr && !roce_mgr_->is_initialized()) {
-      roce_mgr_->initialize();
-      initialized_ = roce_mgr_->is_initialized();
+#if DAQIRI_ENGINE_RDMA
+    if (roce_engine_ != nullptr && !roce_engine_->is_initialized()) {
+      roce_engine_->initialize();
+      initialized_ = roce_engine_->is_initialized();
       return;
     }
 #endif
-    initialized_ = roce_mgr_ != nullptr;
+    initialized_ = roce_engine_ != nullptr;
     return;
   }
 
@@ -170,31 +173,31 @@ void SocketMgr::initialize() {
     }
 
     initialized_ = true;
-    DAQIRI_LOG_INFO("Socket manager initialized for protocol '{}'", socket_protocol_to_string(cfg_.common_.protocol));
+    DAQIRI_LOG_INFO("Socket engine initialized for protocol '{}'", socket_protocol_to_string(cfg_.common_.protocol));
   } catch (const std::exception& e) {
-    DAQIRI_LOG_ERROR("Socket manager initialization failed: {}", e.what());
+    DAQIRI_LOG_ERROR("Socket engine initialization failed: {}", e.what());
     shutdown();
   }
 }
 
-void SocketMgr::run() {
+void SocketEngine::run() {
   if (is_roce_protocol()) {
-#if DAQIRI_MGR_RDMA
-    if (roce_mgr_ != nullptr) { roce_mgr_->run(); }
+#if DAQIRI_ENGINE_RDMA
+    if (roce_engine_ != nullptr) { roce_engine_->run(); }
 #endif
     return;
   }
 }
 
-void* SocketMgr::get_packet_ptr(BurstParams* burst, int idx) {
+void* SocketEngine::get_packet_ptr(BurstParams* burst, int idx) {
   return get_segment_packet_ptr(burst, 0, idx);
 }
 
-uint32_t SocketMgr::get_packet_length(BurstParams* burst, int idx) {
+uint32_t SocketEngine::get_packet_length(BurstParams* burst, int idx) {
   return get_segment_packet_length(burst, 0, idx);
 }
 
-void* SocketMgr::get_segment_packet_ptr(BurstParams* burst, int seg, int idx) {
+void* SocketEngine::get_segment_packet_ptr(BurstParams* burst, int seg, int idx) {
   if (burst == nullptr || seg < 0 || seg >= MAX_NUM_SEGS || burst->pkts[seg] == nullptr || idx < 0 ||
       idx >= static_cast<int>(burst->hdr.hdr.num_pkts)) {
     return nullptr;
@@ -202,7 +205,7 @@ void* SocketMgr::get_segment_packet_ptr(BurstParams* burst, int seg, int idx) {
   return burst->pkts[seg][idx];
 }
 
-uint32_t SocketMgr::get_segment_packet_length(BurstParams* burst, int seg, int idx) {
+uint32_t SocketEngine::get_segment_packet_length(BurstParams* burst, int seg, int idx) {
   if (burst == nullptr || seg < 0 || seg >= MAX_NUM_SEGS || burst->pkt_lens[seg] == nullptr || idx < 0 ||
       idx >= static_cast<int>(burst->hdr.hdr.num_pkts)) {
     return 0;
@@ -210,25 +213,25 @@ uint32_t SocketMgr::get_segment_packet_length(BurstParams* burst, int seg, int i
   return burst->pkt_lens[seg][idx];
 }
 
-uint16_t SocketMgr::get_packet_flow_id(BurstParams* burst, int idx) {
+uint16_t SocketEngine::get_packet_flow_id(BurstParams* burst, int idx) {
   return 0;
 }
 
-Status SocketMgr::get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) {
+Status SocketEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) {
   (void)burst;
   (void)idx;
   (void)timestamp_ns;
   return Status::NOT_SUPPORTED;
 }
 
-void* SocketMgr::get_packet_extra_info(BurstParams* burst, int idx) {
+void* SocketEngine::get_packet_extra_info(BurstParams* burst, int idx) {
   return nullptr;
 }
 
-Status SocketMgr::get_tx_packet_burst(BurstParams* burst) {
+Status SocketEngine::get_tx_packet_burst(BurstParams* burst) {
   if (is_roce_protocol()) {
-#if DAQIRI_MGR_RDMA
-    return roce_mgr_ != nullptr ? roce_mgr_->get_tx_packet_burst(burst) : roce_not_initialized("get_tx_packet_burst");
+#if DAQIRI_ENGINE_RDMA
+    return roce_engine_ != nullptr ? roce_engine_->get_tx_packet_burst(burst) : roce_not_initialized("get_tx_packet_burst");
 #else
     return roce_not_initialized("get_tx_packet_burst");
 #endif
@@ -259,10 +262,10 @@ Status SocketMgr::get_tx_packet_burst(BurstParams* burst) {
   return Status::SUCCESS;
 }
 
-Status SocketMgr::set_eth_header(BurstParams* burst, int idx, char* dst_addr) {
+Status SocketEngine::set_eth_header(BurstParams* burst, int idx, char* dst_addr) {
   if (is_roce_protocol()) {
-#if DAQIRI_MGR_RDMA
-    return roce_mgr_ != nullptr ? roce_mgr_->set_eth_header(burst, idx, dst_addr)
+#if DAQIRI_ENGINE_RDMA
+    return roce_engine_ != nullptr ? roce_engine_->set_eth_header(burst, idx, dst_addr)
                                 : roce_not_initialized("set_eth_header");
 #else
     return roce_not_initialized("set_eth_header");
@@ -276,11 +279,11 @@ Status SocketMgr::set_eth_header(BurstParams* burst, int idx, char* dst_addr) {
   return Status::NOT_SUPPORTED;
 }
 
-Status SocketMgr::set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint8_t proto,
+Status SocketEngine::set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint8_t proto,
                                   unsigned int src_host, unsigned int dst_host) {
   if (is_roce_protocol()) {
-#if DAQIRI_MGR_RDMA
-    return roce_mgr_ != nullptr ? roce_mgr_->set_ipv4_header(burst, idx, ip_len, proto, src_host, dst_host)
+#if DAQIRI_ENGINE_RDMA
+    return roce_engine_ != nullptr ? roce_engine_->set_ipv4_header(burst, idx, ip_len, proto, src_host, dst_host)
                                 : roce_not_initialized("set_ipv4_header");
 #else
     return roce_not_initialized("set_ipv4_header");
@@ -294,11 +297,11 @@ Status SocketMgr::set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint8
   return Status::NOT_SUPPORTED;
 }
 
-Status SocketMgr::set_udp_header(BurstParams* burst, int idx, int udp_len, uint16_t src_port,
+Status SocketEngine::set_udp_header(BurstParams* burst, int idx, int udp_len, uint16_t src_port,
                                  uint16_t dst_port) {
   if (is_roce_protocol()) {
-#if DAQIRI_MGR_RDMA
-    return roce_mgr_ != nullptr ? roce_mgr_->set_udp_header(burst, idx, udp_len, src_port, dst_port)
+#if DAQIRI_ENGINE_RDMA
+    return roce_engine_ != nullptr ? roce_engine_->set_udp_header(burst, idx, udp_len, src_port, dst_port)
                                 : roce_not_initialized("set_udp_header");
 #else
     return roce_not_initialized("set_udp_header");
@@ -312,7 +315,7 @@ Status SocketMgr::set_udp_header(BurstParams* burst, int idx, int udp_len, uint1
   return Status::NOT_SUPPORTED;
 }
 
-Status SocketMgr::set_udp_payload(BurstParams* burst, int idx, void* data, int len) {
+Status SocketEngine::set_udp_payload(BurstParams* burst, int idx, void* data, int len) {
   if (burst == nullptr || burst->pkts[0] == nullptr || idx < 0 ||
       idx >= static_cast<int>(burst->hdr.hdr.num_pkts) || data == nullptr || len < 0) {
     return Status::INVALID_PARAMETER;
@@ -322,10 +325,10 @@ Status SocketMgr::set_udp_payload(BurstParams* burst, int idx, void* data, int l
   return Status::SUCCESS;
 }
 
-bool SocketMgr::is_tx_burst_available(BurstParams* burst) {
+bool SocketEngine::is_tx_burst_available(BurstParams* burst) {
   if (is_roce_protocol()) {
-#if DAQIRI_MGR_RDMA
-    return roce_mgr_ != nullptr && roce_mgr_->is_tx_burst_available(burst);
+#if DAQIRI_ENGINE_RDMA
+    return roce_engine_ != nullptr && roce_engine_->is_tx_burst_available(burst);
 #else
     return false;
 #endif
@@ -334,11 +337,11 @@ bool SocketMgr::is_tx_burst_available(BurstParams* burst) {
   return true;
 }
 
-Status SocketMgr::set_packet_lengths(BurstParams* burst, int idx,
+Status SocketEngine::set_packet_lengths(BurstParams* burst, int idx,
                                      const std::initializer_list<int>& lens) {
   if (is_roce_protocol()) {
-#if DAQIRI_MGR_RDMA
-    return roce_mgr_ != nullptr ? roce_mgr_->set_packet_lengths(burst, idx, lens)
+#if DAQIRI_ENGINE_RDMA
+    return roce_engine_ != nullptr ? roce_engine_->set_packet_lengths(burst, idx, lens)
                                 : roce_not_initialized("set_packet_lengths");
 #else
     return roce_not_initialized("set_packet_lengths");
@@ -354,7 +357,7 @@ Status SocketMgr::set_packet_lengths(BurstParams* burst, int idx,
   return Status::SUCCESS;
 }
 
-void SocketMgr::free_all_segment_packets(BurstParams* burst, int seg) {
+void SocketEngine::free_all_segment_packets(BurstParams* burst, int seg) {
   if (burst == nullptr || seg < 0 || seg >= MAX_NUM_SEGS || burst->pkts[seg] == nullptr) { return; }
   for (size_t i = 0; i < burst->hdr.hdr.num_pkts; ++i) {
     auto* pkt = reinterpret_cast<uint8_t*>(burst->pkts[seg][i]);
@@ -363,7 +366,7 @@ void SocketMgr::free_all_segment_packets(BurstParams* burst, int seg) {
   }
 }
 
-void SocketMgr::free_all_packets(BurstParams* burst) {
+void SocketEngine::free_all_packets(BurstParams* burst) {
   if (burst == nullptr) { return; }
   const int num_segs = std::clamp(burst->hdr.hdr.num_segs, 0, MAX_NUM_SEGS);
   for (int seg = 0; seg < num_segs; ++seg) {
@@ -371,7 +374,7 @@ void SocketMgr::free_all_packets(BurstParams* burst) {
   }
 }
 
-void SocketMgr::free_packet_segment(BurstParams* burst, int seg, int pkt) {
+void SocketEngine::free_packet_segment(BurstParams* burst, int seg, int pkt) {
   if (burst == nullptr || seg < 0 || seg >= MAX_NUM_SEGS || burst->pkts[seg] == nullptr || pkt < 0 ||
       pkt >= static_cast<int>(burst->hdr.hdr.num_pkts)) {
     return;
@@ -381,11 +384,11 @@ void SocketMgr::free_packet_segment(BurstParams* burst, int seg, int pkt) {
   burst->pkts[seg][pkt] = nullptr;
 }
 
-void SocketMgr::free_packet(BurstParams* burst, int pkt) {
+void SocketEngine::free_packet(BurstParams* burst, int pkt) {
   free_packet_segment(burst, 0, pkt);
 }
 
-void SocketMgr::free_packet_arrays(BurstParams* burst) {
+void SocketEngine::free_packet_arrays(BurstParams* burst) {
   if (burst == nullptr) { return; }
   for (int seg = 0; seg < MAX_NUM_SEGS; ++seg) {
     delete[] burst->pkts[seg];
@@ -395,11 +398,11 @@ void SocketMgr::free_packet_arrays(BurstParams* burst) {
   }
 }
 
-void SocketMgr::free_rx_burst(BurstParams* burst) {
+void SocketEngine::free_rx_burst(BurstParams* burst) {
   if (is_roce_protocol()) {
-#if DAQIRI_MGR_RDMA
-    if (roce_mgr_ != nullptr) {
-      roce_mgr_->free_rx_burst(burst);
+#if DAQIRI_ENGINE_RDMA
+    if (roce_engine_ != nullptr) {
+      roce_engine_->free_rx_burst(burst);
       return;
     }
 #endif
@@ -410,11 +413,11 @@ void SocketMgr::free_rx_burst(BurstParams* burst) {
   delete burst;
 }
 
-void SocketMgr::free_tx_burst(BurstParams* burst) {
+void SocketEngine::free_tx_burst(BurstParams* burst) {
   if (is_roce_protocol()) {
-#if DAQIRI_MGR_RDMA
-    if (roce_mgr_ != nullptr) {
-      roce_mgr_->free_tx_burst(burst);
+#if DAQIRI_ENGINE_RDMA
+    if (roce_engine_ != nullptr) {
+      roce_engine_->free_tx_burst(burst);
       return;
     }
 #endif
@@ -425,11 +428,11 @@ void SocketMgr::free_tx_burst(BurstParams* burst) {
   delete burst;
 }
 
-Status SocketMgr::set_packet_tx_time(BurstParams* burst, int idx, uint64_t time) {
+Status SocketEngine::set_packet_tx_time(BurstParams* burst, int idx, uint64_t time) {
   return Status::NOT_SUPPORTED;
 }
 
-void SocketMgr::close_fd(int& fd) {
+void SocketEngine::close_fd(int& fd) {
   if (fd >= 0) {
     ::shutdown(fd, SHUT_RDWR);
     ::close(fd);
@@ -437,7 +440,7 @@ void SocketMgr::close_fd(int& fd) {
   }
 }
 
-void SocketMgr::close_all_connections() {
+void SocketEngine::close_all_connections() {
   std::vector<std::shared_ptr<ConnectionState>> conn_copy;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
@@ -462,7 +465,7 @@ void SocketMgr::close_all_connections() {
   }
 }
 
-void SocketMgr::clear_rx_queues() {
+void SocketEngine::clear_rx_queues() {
   for (auto& ep : endpoints_) {
     if (ep == nullptr || ep->rx_queue_state == nullptr) { continue; }
     std::lock_guard<std::mutex> lock(ep->rx_queue_state->mutex);
@@ -477,11 +480,11 @@ void SocketMgr::clear_rx_queues() {
   }
 }
 
-void SocketMgr::shutdown() {
+void SocketEngine::shutdown() {
   // Idempotency guard: shutdown() may be invoked a second time via
-  // ~SocketMgr during C++ __cxa_finalize, after the spdlog default logger
+  // ~SocketEngine during C++ __cxa_finalize, after the spdlog default logger
   // has been destroyed. Any DAQIRI_LOG_INFO from the cascade (here, the
-  // RoCE branch, or the manager method this delegates to) would then crash
+  // RoCE branch, or the engine method this delegates to) would then crash
   // inside spdlog::sink_it_. Skip the whole body on subsequent calls.
   //
   // The guard checks BOTH flags because initialize() sets initialized_=false
@@ -494,9 +497,9 @@ void SocketMgr::shutdown() {
   // the only case where the guard fires.
   if (!initialized_ && !running_.load()) { return; }
   if (is_roce_protocol()) {
-#if DAQIRI_MGR_RDMA
-    if (roce_mgr_ != nullptr) {
-      roce_mgr_->shutdown();
+#if DAQIRI_ENGINE_RDMA
+    if (roce_engine_ != nullptr) {
+      roce_engine_->shutdown();
       initialized_ = false;
     }
 #endif
@@ -524,24 +527,24 @@ void SocketMgr::shutdown() {
   initialized_ = false;
 }
 
-void SocketMgr::print_stats() {
+void SocketEngine::print_stats() {
   if (is_roce_protocol()) {
-#if DAQIRI_MGR_RDMA
-    if (roce_mgr_ != nullptr) {
-      roce_mgr_->print_stats();
+#if DAQIRI_ENGINE_RDMA
+    if (roce_engine_ != nullptr) {
+      roce_engine_->print_stats();
       return;
     }
 #endif
   }
 
-  DAQIRI_LOG_INFO("Socket manager stats: tx_pkts={} tx_bytes={} rx_pkts={} rx_bytes={}",
+  DAQIRI_LOG_INFO("Socket engine stats: tx_pkts={} tx_bytes={} rx_pkts={} rx_bytes={}",
                   tx_pkts_.load(),
                   tx_bytes_.load(),
                   rx_pkts_.load(),
                   rx_bytes_.load());
 }
 
-uint64_t SocketMgr::get_burst_tot_byte(BurstParams* burst) {
+uint64_t SocketEngine::get_burst_tot_byte(BurstParams* burst) {
   if (burst == nullptr || burst->pkt_lens[0] == nullptr) { return 0; }
   uint64_t total = 0;
   for (size_t i = 0; i < burst->hdr.hdr.num_pkts; ++i) {
@@ -550,11 +553,11 @@ uint64_t SocketMgr::get_burst_tot_byte(BurstParams* burst) {
   return total;
 }
 
-BurstParams* SocketMgr::create_tx_burst_params() {
+BurstParams* SocketEngine::create_tx_burst_params() {
   return new BurstParams{};
 }
 
-Status SocketMgr::pop_rx_burst(const std::shared_ptr<RxQueueState>& qstate, BurstParams** burst) {
+Status SocketEngine::pop_rx_burst(const std::shared_ptr<RxQueueState>& qstate, BurstParams** burst) {
   if (burst == nullptr || qstate == nullptr) { return Status::INVALID_PARAMETER; }
 
   std::lock_guard<std::mutex> lock(qstate->mutex);
@@ -568,16 +571,16 @@ Status SocketMgr::pop_rx_burst(const std::shared_ptr<RxQueueState>& qstate, Burs
   return Status::SUCCESS;
 }
 
-void SocketMgr::push_rx_burst(const std::shared_ptr<RxQueueState>& qstate, BurstParams* burst) {
+void SocketEngine::push_rx_burst(const std::shared_ptr<RxQueueState>& qstate, BurstParams* burst) {
   if (qstate == nullptr || burst == nullptr) { return; }
   std::lock_guard<std::mutex> lock(qstate->mutex);
   qstate->bursts.push(burst);
 }
 
-Status SocketMgr::get_rx_burst(BurstParams** burst, int port, int q) {
+Status SocketEngine::get_rx_burst(BurstParams** burst, int port, int q) {
   if (is_roce_protocol()) {
-#if DAQIRI_MGR_RDMA
-    return roce_mgr_ != nullptr ? roce_mgr_->get_rx_burst(burst, port, q)
+#if DAQIRI_ENGINE_RDMA
+    return roce_engine_ != nullptr ? roce_engine_->get_rx_burst(burst, port, q)
                                 : roce_not_initialized("get_rx_burst");
 #else
     return roce_not_initialized("get_rx_burst");
@@ -594,10 +597,10 @@ Status SocketMgr::get_rx_burst(BurstParams** burst, int port, int q) {
   return Status::INVALID_PARAMETER;
 }
 
-Status SocketMgr::get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server) {
+Status SocketEngine::get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server) {
   if (is_roce_protocol()) {
-#if DAQIRI_MGR_RDMA
-    return roce_mgr_ != nullptr ? roce_mgr_->get_rx_burst(burst, conn_id, server)
+#if DAQIRI_ENGINE_RDMA
+    return roce_engine_ != nullptr ? roce_engine_->get_rx_burst(burst, conn_id, server)
                                 : roce_not_initialized("get_rx_burst");
 #else
     return roce_not_initialized("get_rx_burst");
@@ -618,11 +621,11 @@ Status SocketMgr::get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool serv
   return pop_rx_burst(conn->rx_queue, burst);
 }
 
-void SocketMgr::free_rx_metadata(BurstParams* burst) {
+void SocketEngine::free_rx_metadata(BurstParams* burst) {
   if (is_roce_protocol()) {
-#if DAQIRI_MGR_RDMA
-    if (roce_mgr_ != nullptr) {
-      roce_mgr_->free_rx_metadata(burst);
+#if DAQIRI_ENGINE_RDMA
+    if (roce_engine_ != nullptr) {
+      roce_engine_->free_rx_metadata(burst);
       return;
     }
 #endif
@@ -633,11 +636,11 @@ void SocketMgr::free_rx_metadata(BurstParams* burst) {
   delete burst;
 }
 
-void SocketMgr::free_tx_metadata(BurstParams* burst) {
+void SocketEngine::free_tx_metadata(BurstParams* burst) {
   if (is_roce_protocol()) {
-#if DAQIRI_MGR_RDMA
-    if (roce_mgr_ != nullptr) {
-      roce_mgr_->free_tx_metadata(burst);
+#if DAQIRI_ENGINE_RDMA
+    if (roce_engine_ != nullptr) {
+      roce_engine_->free_tx_metadata(burst);
       return;
     }
 #endif
@@ -648,10 +651,10 @@ void SocketMgr::free_tx_metadata(BurstParams* burst) {
   delete burst;
 }
 
-Status SocketMgr::get_tx_metadata_buffer(BurstParams** burst) {
+Status SocketEngine::get_tx_metadata_buffer(BurstParams** burst) {
   if (is_roce_protocol()) {
-#if DAQIRI_MGR_RDMA
-    return roce_mgr_ != nullptr ? roce_mgr_->get_tx_metadata_buffer(burst)
+#if DAQIRI_ENGINE_RDMA
+    return roce_engine_ != nullptr ? roce_engine_->get_tx_metadata_buffer(burst)
                                 : roce_not_initialized("get_tx_metadata_buffer");
 #else
     return roce_not_initialized("get_tx_metadata_buffer");
@@ -663,21 +666,21 @@ Status SocketMgr::get_tx_metadata_buffer(BurstParams** burst) {
   return Status::SUCCESS;
 }
 
-SocketMgr::EndpointState* SocketMgr::endpoint_for_port(uint16_t port) {
+SocketEngine::EndpointState* SocketEngine::endpoint_for_port(uint16_t port) {
   for (auto& ep : endpoints_) {
     if (ep != nullptr && ep->port == port) { return ep.get(); }
   }
   return nullptr;
 }
 
-const SocketMgr::EndpointState* SocketMgr::endpoint_for_port(uint16_t port) const {
+const SocketEngine::EndpointState* SocketEngine::endpoint_for_port(uint16_t port) const {
   for (const auto& ep : endpoints_) {
     if (ep != nullptr && ep->port == port) { return ep.get(); }
   }
   return nullptr;
 }
 
-bool SocketMgr::send_tcp_burst(int fd, BurstParams* burst, size_t* sent_pkts,
+bool SocketEngine::send_tcp_burst(int fd, BurstParams* burst, size_t* sent_pkts,
                                uint64_t* sent_bytes) {
   if (sent_pkts != nullptr) { *sent_pkts = 0; }
   if (sent_bytes != nullptr) { *sent_bytes = 0; }
@@ -750,7 +753,7 @@ bool SocketMgr::send_tcp_burst(int fd, BurstParams* burst, size_t* sent_pkts,
   return true;
 }
 
-bool SocketMgr::send_udp_burst(EndpointState& ep, BurstParams* burst, size_t* sent_pkts,
+bool SocketEngine::send_udp_burst(EndpointState& ep, BurstParams* burst, size_t* sent_pkts,
                                uint64_t* sent_bytes) {
   if (sent_pkts != nullptr) { *sent_pkts = 0; }
   if (sent_bytes != nullptr) { *sent_bytes = 0; }
@@ -823,10 +826,10 @@ bool SocketMgr::send_udp_burst(EndpointState& ep, BurstParams* burst, size_t* se
   return true;
 }
 
-Status SocketMgr::send_tx_burst(BurstParams* burst) {
+Status SocketEngine::send_tx_burst(BurstParams* burst) {
   if (is_roce_protocol()) {
-#if DAQIRI_MGR_RDMA
-    return roce_mgr_ != nullptr ? roce_mgr_->send_tx_burst(burst) : roce_not_initialized("send_tx_burst");
+#if DAQIRI_ENGINE_RDMA
+    return roce_engine_ != nullptr ? roce_engine_->send_tx_burst(burst) : roce_not_initialized("send_tx_burst");
 #else
     return roce_not_initialized("send_tx_burst");
 #endif
@@ -898,42 +901,42 @@ Status SocketMgr::send_tx_burst(BurstParams* burst) {
   return status;
 }
 
-Status SocketMgr::get_mac_addr(int port, char* mac) {
+Status SocketEngine::get_mac_addr(int port, char* mac) {
   if (mac == nullptr) { return Status::INVALID_PARAMETER; }
   return Status::NOT_SUPPORTED;
 }
 
-bool SocketMgr::validate_config() const {
+bool SocketEngine::validate_config() const {
   if (is_roce_protocol()) {
-#if DAQIRI_MGR_RDMA
-    return roce_mgr_ != nullptr ? roce_mgr_->validate_config() : false;
+#if DAQIRI_ENGINE_RDMA
+    return roce_engine_ != nullptr ? roce_engine_->validate_config() : false;
 #else
     return false;
 #endif
   }
 
   if (cfg_.common_.stream_type != StreamType::SOCKET) {
-    DAQIRI_LOG_ERROR("Socket manager requires stream_type=socket");
+    DAQIRI_LOG_ERROR("Socket engine requires stream_type=socket");
     return false;
   }
 
   if (cfg_.common_.protocol != SocketProtocol::TCP && cfg_.common_.protocol != SocketProtocol::UDP) {
-    DAQIRI_LOG_ERROR("Socket manager supports tcp/udp directly, or roce via delegation");
+    DAQIRI_LOG_ERROR("Socket engine supports tcp/udp directly, or roce via delegation");
     return false;
   }
 
   return true;
 }
 
-std::string SocketMgr::endpoint_key(const std::string& ip, uint16_t port) const {
+std::string SocketEngine::endpoint_key(const std::string& ip, uint16_t port) const {
   return ip + ":" + std::to_string(port);
 }
 
-uintptr_t SocketMgr::next_conn_id() {
+uintptr_t SocketEngine::next_conn_id() {
   return next_conn_id_.fetch_add(1);
 }
 
-std::shared_ptr<SocketMgr::RxQueueState> SocketMgr::get_or_create_rx_queue(uint16_t port,
+std::shared_ptr<SocketEngine::RxQueueState> SocketEngine::get_or_create_rx_queue(uint16_t port,
                                                                             uint16_t queue) {
   for (auto& ep : endpoints_) {
     if (ep != nullptr && ep->port == port && ep->rx_queue == queue && ep->rx_queue_state != nullptr) {
@@ -947,7 +950,7 @@ std::shared_ptr<SocketMgr::RxQueueState> SocketMgr::get_or_create_rx_queue(uint1
   return qstate;
 }
 
-int SocketMgr::select_max_packet_size(const InterfaceConfig& if_cfg) const {
+int SocketEngine::select_max_packet_size(const InterfaceConfig& if_cfg) const {
   int max_size = static_cast<int>(if_cfg.socket_.max_payload_size_);
 
   auto apply_queue_mr = [&](const auto& queues) {
@@ -967,22 +970,22 @@ int SocketMgr::select_max_packet_size(const InterfaceConfig& if_cfg) const {
   return max_size;
 }
 
-uint16_t SocketMgr::select_queue_id(const std::vector<RxQueueConfig>& queues) const {
+uint16_t SocketEngine::select_queue_id(const std::vector<RxQueueConfig>& queues) const {
   if (queues.empty()) { return 0; }
   return static_cast<uint16_t>(queues.front().common_.id_);
 }
 
-uint16_t SocketMgr::select_queue_id(const std::vector<TxQueueConfig>& queues) const {
+uint16_t SocketEngine::select_queue_id(const std::vector<TxQueueConfig>& queues) const {
   if (queues.empty()) { return 0; }
   return static_cast<uint16_t>(queues.front().common_.id_);
 }
 
-uint32_t SocketMgr::select_batch_size(const std::vector<TxQueueConfig>& queues) const {
+uint32_t SocketEngine::select_batch_size(const std::vector<TxQueueConfig>& queues) const {
   if (queues.empty()) { return 1; }
   return static_cast<uint32_t>(std::max(1, queues.front().common_.batch_size_));
 }
 
-std::shared_ptr<SocketMgr::ConnectionState> SocketMgr::register_connection(
+std::shared_ptr<SocketEngine::ConnectionState> SocketEngine::register_connection(
     int fd, uint16_t port, uint16_t queue, int if_index, bool server_side, bool is_udp,
     const std::shared_ptr<RxQueueState>& rx_queue, bool start_rx_thread) {
   auto conn = std::make_shared<ConnectionState>();
@@ -1010,13 +1013,13 @@ std::shared_ptr<SocketMgr::ConnectionState> SocketMgr::register_connection(
   }
 
   if (start_rx_thread) {
-    conn->rx_thread = std::thread(&SocketMgr::tcp_rx_loop, this, conn);
+    conn->rx_thread = std::thread(&SocketEngine::tcp_rx_loop, this, conn);
   }
 
   return conn;
 }
 
-std::shared_ptr<SocketMgr::ConnectionState> SocketMgr::create_tcp_client_connection(
+std::shared_ptr<SocketEngine::ConnectionState> SocketEngine::create_tcp_client_connection(
     EndpointState& ep, const std::string& dst_addr, uint16_t dst_port, const std::string& src_addr,
     uint16_t src_port, bool set_as_primary) {
   int fd = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -1076,7 +1079,7 @@ std::shared_ptr<SocketMgr::ConnectionState> SocketMgr::create_tcp_client_connect
   return nullptr;
 }
 
-void SocketMgr::setup_tcp_endpoint(EndpointState& ep) {
+void SocketEngine::setup_tcp_endpoint(EndpointState& ep) {
   if (ep.socket_cfg.mode_ == SocketMode::CLIENT) {
     const auto src_ip = ep.socket_cfg.local_ip_;
     const auto src_port = ep.socket_cfg.local_port_;
@@ -1120,7 +1123,7 @@ void SocketMgr::setup_tcp_endpoint(EndpointState& ep) {
 
   ep.listen_fd = fd;
   ep.accept_running.store(true);
-  ep.accept_thread = std::thread(&SocketMgr::tcp_accept_loop, this, ep.if_index);
+  ep.accept_thread = std::thread(&SocketEngine::tcp_accept_loop, this, ep.if_index);
 
   DAQIRI_LOG_INFO("TCP server listening on {}:{} (port={})",
                   ep.socket_cfg.local_ip_,
@@ -1128,7 +1131,7 @@ void SocketMgr::setup_tcp_endpoint(EndpointState& ep) {
                   ep.port);
 }
 
-void SocketMgr::setup_udp_endpoint(EndpointState& ep) {
+void SocketEngine::setup_udp_endpoint(EndpointState& ep) {
   int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
   if (fd < 0) { throw std::runtime_error("failed to create UDP socket"); }
 
@@ -1191,7 +1194,7 @@ void SocketMgr::setup_udp_endpoint(EndpointState& ep) {
     }
   }
 
-  ep.io_thread = std::thread(&SocketMgr::udp_rx_loop, this, ep.if_index);
+  ep.io_thread = std::thread(&SocketEngine::udp_rx_loop, this, ep.if_index);
 
   DAQIRI_LOG_INFO("UDP {} on {}:{} (port={})",
                   ep.socket_cfg.mode_ == SocketMode::SERVER ? "server" : "client",
@@ -1200,7 +1203,7 @@ void SocketMgr::setup_udp_endpoint(EndpointState& ep) {
                   ep.port);
 }
 
-void SocketMgr::tcp_accept_loop(int if_index) {
+void SocketEngine::tcp_accept_loop(int if_index) {
   if (if_index < 0 || if_index >= static_cast<int>(endpoints_.size())) { return; }
   auto* ep = endpoints_[if_index].get();
   if (ep == nullptr) { return; }
@@ -1244,7 +1247,7 @@ void SocketMgr::tcp_accept_loop(int if_index) {
   }
 }
 
-void SocketMgr::tcp_rx_loop(std::shared_ptr<ConnectionState> conn) {
+void SocketEngine::tcp_rx_loop(std::shared_ptr<ConnectionState> conn) {
   if (conn == nullptr) { return; }
 
   size_t max_size = 65536;
@@ -1288,7 +1291,7 @@ void SocketMgr::tcp_rx_loop(std::shared_ptr<ConnectionState> conn) {
   close_fd(conn->fd);
 }
 
-void SocketMgr::udp_rx_loop(int if_index) {
+void SocketEngine::udp_rx_loop(int if_index) {
   if (if_index < 0 || if_index >= static_cast<int>(endpoints_.size())) { return; }
   auto* ep = endpoints_[if_index].get();
   if (ep == nullptr) { return; }
@@ -1355,12 +1358,12 @@ void SocketMgr::udp_rx_loop(int if_index) {
   }
 }
 
-Status SocketMgr::socket_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
+Status SocketEngine::socket_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
                                            uintptr_t* conn_id) {
   return socket_connect_to_server(dst_addr, dst_port, "", conn_id);
 }
 
-Status SocketMgr::socket_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
+Status SocketEngine::socket_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
                                            const std::string& src_addr, uintptr_t* conn_id) {
   if (is_roce_protocol()) {
     return rdma_connect_to_server(dst_addr, dst_port, src_addr, conn_id);
@@ -1406,7 +1409,7 @@ Status SocketMgr::socket_connect_to_server(const std::string& dst_addr, uint16_t
   return Status::INVALID_PARAMETER;
 }
 
-Status SocketMgr::socket_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) {
+Status SocketEngine::socket_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) {
   if (is_roce_protocol()) {
     return rdma_get_port_queue(conn_id, port, queue);
   }
@@ -1422,7 +1425,7 @@ Status SocketMgr::socket_get_port_queue(uintptr_t conn_id, uint16_t* port, uint1
   return Status::SUCCESS;
 }
 
-Status SocketMgr::socket_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
+Status SocketEngine::socket_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
                                             uintptr_t* conn_id) {
   if (is_roce_protocol()) {
     return rdma_get_server_conn_id(server_addr, server_port, conn_id);
@@ -1444,43 +1447,53 @@ Status SocketMgr::socket_get_server_conn_id(const std::string& server_addr, uint
   return Status::NULL_PTR;
 }
 
-Status SocketMgr::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
+Status SocketEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
                                          uintptr_t* conn_id) {
-  if (!is_roce_protocol() || roce_mgr_ == nullptr) { return roce_not_initialized("rdma_connect_to_server"); }
-  return roce_mgr_->rdma_connect_to_server(dst_addr, dst_port, conn_id);
+  if (!is_roce_protocol() || roce_engine_ == nullptr) {
+    return roce_not_initialized("rdma_connect_to_server");
+  }
+  return roce_engine_->rdma_connect_to_server(dst_addr, dst_port, conn_id);
 }
 
-Status SocketMgr::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
+Status SocketEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
                                          const std::string& src_addr, uintptr_t* conn_id) {
-  if (!is_roce_protocol() || roce_mgr_ == nullptr) { return roce_not_initialized("rdma_connect_to_server"); }
-  return roce_mgr_->rdma_connect_to_server(dst_addr, dst_port, src_addr, conn_id);
+  if (!is_roce_protocol() || roce_engine_ == nullptr) {
+    return roce_not_initialized("rdma_connect_to_server");
+  }
+  return roce_engine_->rdma_connect_to_server(dst_addr, dst_port, src_addr, conn_id);
 }
 
-Status SocketMgr::rdma_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) {
-  if (!is_roce_protocol() || roce_mgr_ == nullptr) { return roce_not_initialized("rdma_get_port_queue"); }
-  return roce_mgr_->rdma_get_port_queue(conn_id, port, queue);
+Status SocketEngine::rdma_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) {
+  if (!is_roce_protocol() || roce_engine_ == nullptr) {
+    return roce_not_initialized("rdma_get_port_queue");
+  }
+  return roce_engine_->rdma_get_port_queue(conn_id, port, queue);
 }
 
-Status SocketMgr::rdma_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
+Status SocketEngine::rdma_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
                                           uintptr_t* conn_id) {
-  if (!is_roce_protocol() || roce_mgr_ == nullptr) { return roce_not_initialized("rdma_get_server_conn_id"); }
-  return roce_mgr_->rdma_get_server_conn_id(server_addr, server_port, conn_id);
+  if (!is_roce_protocol() || roce_engine_ == nullptr) {
+    return roce_not_initialized("rdma_get_server_conn_id");
+  }
+  return roce_engine_->rdma_get_server_conn_id(server_addr, server_port, conn_id);
 }
 
-Status SocketMgr::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id,
+Status SocketEngine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id,
                                   bool is_server, int num_pkts, uint64_t wr_id,
                                   const std::string& local_mr_name) {
-  if (!is_roce_protocol() || roce_mgr_ == nullptr) { return roce_not_initialized("rdma_set_header"); }
-  return roce_mgr_->rdma_set_header(
+  if (!is_roce_protocol() || roce_engine_ == nullptr) {
+    return roce_not_initialized("rdma_set_header");
+  }
+  return roce_engine_->rdma_set_header(
       burst, op_code, conn_id, is_server, num_pkts, wr_id, local_mr_name);
 }
 
-RDMAOpCode SocketMgr::rdma_get_opcode(BurstParams* burst) {
-  if (!is_roce_protocol() || roce_mgr_ == nullptr) {
-    DAQIRI_LOG_ERROR("rdma_get_opcode is only valid with protocol=roce");
+RDMAOpCode SocketEngine::rdma_get_opcode(BurstParams* burst) {
+  if (!is_roce_protocol() || roce_engine_ == nullptr) {
+    DAQIRI_LOG_ERROR("rdma_get_opcode is only valid with roce:// endpoints");
     return RDMAOpCode::INVALID;
   }
-  return roce_mgr_->rdma_get_opcode(burst);
+  return roce_engine_->rdma_get_opcode(burst);
 }
 
 }  // namespace daqiri

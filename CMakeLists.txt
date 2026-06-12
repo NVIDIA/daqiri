@@ -33,7 +33,7 @@ endif()
 option(DAQIRI_BUILD_PYTHON "Build Python bindings" OFF)
 option(DAQIRI_BUILD_EXAMPLES "Build standalone examples" ON)
 option(DAQIRI_ENABLE_OTEL_METRICS "Enable OpenTelemetry metrics instrumentation" OFF)
-set(DAQIRI_MGR "dpdk socket" CACHE STRING "Manager backend list")
+set(DAQIRI_ENGINE "dpdk ibverbs" CACHE STRING "Optional engine implementations to build: dpdk, ibverbs (Linux sockets are always built in)")
 
 add_subdirectory(src)
 
@@ -98,10 +98,11 @@ set(DAQIRI_PC_LIBS "-lyaml-cpp")
 if(DAQIRI_ENABLE_OTEL_METRICS)
   string(APPEND DAQIRI_PC_LIBS " -lopentelemetry_api")
 endif()
-separate_arguments(DAQIRI_PC_MGR_LIST UNIX_COMMAND "${DAQIRI_MGR}")
-list(FIND DAQIRI_PC_MGR_LIST "socket" DAQIRI_PC_HAS_SOCKET_IDX)
-list(FIND DAQIRI_PC_MGR_LIST "rdma" DAQIRI_PC_HAS_RDMA_IDX)
-if(NOT DAQIRI_PC_HAS_SOCKET_IDX EQUAL -1 OR NOT DAQIRI_PC_HAS_RDMA_IDX EQUAL -1)
+# The ibverbs engine (and the socket RoCE path it backs) needs libibverbs /
+# librdmacm. Plain Linux UDP/TCP sockets need nothing extra.
+separate_arguments(DAQIRI_PC_ENGINE_LIST UNIX_COMMAND "${DAQIRI_ENGINE}")
+list(FIND DAQIRI_PC_ENGINE_LIST "ibverbs" DAQIRI_PC_HAS_IBVERBS_IDX)
+if(NOT DAQIRI_PC_HAS_IBVERBS_IDX EQUAL -1)
   string(APPEND DAQIRI_PC_REQUIRES_PRIVATE " libibverbs librdmacm")
 endif()
 

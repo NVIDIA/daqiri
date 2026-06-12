@@ -14,11 +14,11 @@
 # limitations under the License.
 cmake_minimum_required(VERSION 3.20)
 
-message(STATUS "PROJECT_NAME: ${MGR_TARGET}")
+message(STATUS "PROJECT_NAME: ${ENGINE_TARGET}")
 
-target_include_directories(${MGR_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(${ENGINE_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_sources(${MGR_TARGET} PRIVATE daqiri_rdma_mgr.cpp)
+target_sources(${ENGINE_TARGET} PRIVATE daqiri_rdma_engine.cpp)
 
 pkg_check_modules(IBVERBS libibverbs)
 pkg_check_modules(RDMACM librdmacm)
@@ -56,15 +56,15 @@ if(NOT DPDK_FOUND)
   pkg_check_modules(DPDK REQUIRED libdpdk)
 endif()
 
-target_link_directories(${MGR_TARGET} PRIVATE ${DPDK_LIBRARY_DIRS})
-target_include_directories(${MGR_TARGET} PRIVATE ${DPDK_INCLUDE_DIRS})
-target_compile_options(${MGR_TARGET} PRIVATE ${DPDK_CFLAGS_OTHER})
+target_link_directories(${ENGINE_TARGET} PRIVATE ${DPDK_LIBRARY_DIRS})
+target_include_directories(${ENGINE_TARGET} PRIVATE ${DPDK_INCLUDE_DIRS})
+target_compile_options(${ENGINE_TARGET} PRIVATE ${DPDK_CFLAGS_OTHER})
 
-# ibverbs/rdmacm: PUBLIC (daqiri_rdma_mgr.h includes <infiniband/verbs.h> and <rdma/rdma_cma.h>)
-target_include_directories(${MGR_TARGET} PUBLIC ${IBVERBS_INCLUDE_DIRS})
-target_link_directories(${MGR_TARGET} PUBLIC ${IBVERBS_LIBRARY_DIRS})
+# ibverbs/rdmacm: PUBLIC (daqiri_rdma_engine.h includes <infiniband/verbs.h> and <rdma/rdma_cma.h>)
+target_include_directories(${ENGINE_TARGET} PUBLIC ${IBVERBS_INCLUDE_DIRS})
+target_link_directories(${ENGINE_TARGET} PUBLIC ${IBVERBS_LIBRARY_DIRS})
 
-target_link_libraries(${MGR_TARGET}
+target_link_libraries(${ENGINE_TARGET}
     PUBLIC
         ${IBVERBS_LIBRARIES}
         ${RDMACM_LIBRARIES}

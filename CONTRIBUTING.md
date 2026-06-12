@@ -102,8 +102,8 @@ What Greptile is configured to flag (non-exhaustive — see `.greptile/config.js
 - Commit titles that do not follow `#<Issue Number> - <Title>`.
 - C/C++/CUDA changes that are not `clang-format` clean against the repo's `.clang-format`.
 - Code paths that allocate a `BurstParams` (`get_rx_burst`, `get_tx_burst`, `create_*_burst_params`) but miss a matching free on some exit path — this drains the mempool and causes silent NIC drops.
-- New backend logic that branches on backend type or reaches into backend-specific structs from `src/common*` instead of going through the `daqiri::Manager` virtual interface.
-- Changes to the `DAQIRI_MGR` socket → rdma rule in `src/CMakeLists.txt` that break the invariant.
+- New engine logic that branches on engine type or reaches into engine-specific structs from `src/common*` instead of going through the `daqiri::Engine` virtual interface.
+- Changes to the `DAQIRI_ENGINE` socket → rdma rule in `src/CMakeLists.txt` that break the invariant.
 - New optional features wrapped in whole-file `#ifdef` blocks instead of being gated behind a CMake option (per the rule above in this file).
 - Code changes under `src/`, `examples/`, or `mkdocs.yml` that do not also update the matching docs (the mapping comes from `.claude/rules/docs-sync.md`).
 

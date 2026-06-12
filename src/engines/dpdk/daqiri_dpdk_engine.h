@@ -50,7 +50,7 @@
 #include <deque>
 #include <mutex>
 #include <unordered_map>
-#include "src/manager.h"
+#include "src/engine.h"
 #include <daqiri/daqiri.h>
 #include "daqiri_dpdk_stats.h"
 
@@ -76,12 +76,12 @@ struct RxTimestampConversion {
   uint64_t ticks_per_second = 0;
 };
 
-class DpdkMgr : public Manager {
+class DpdkEngine : public Engine {
  public:
   static_assert(MAX_INTERFACES <= RTE_MAX_ETHPORTS, "Too many interfaces configured");
 
-  DpdkMgr() = default;
-  ~DpdkMgr();
+  DpdkEngine() = default;
+  ~DpdkEngine();
   bool set_config_and_initialize(const NetworkConfig& cfg) override;
   void initialize() override;
   void run() override;
@@ -128,7 +128,7 @@ class DpdkMgr : public Manager {
   void free_tx_burst(BurstParams* burst) override;
 
   Status get_rx_burst(BurstParams** burst, int port, int q) override;
-  using daqiri::Manager::get_rx_burst;  // for overloads
+  using daqiri::Engine::get_rx_burst;  // for overloads
   Status set_reorder_cuda_stream(const std::string& interface_name,
                                  const std::string& reorder_name,
                                  cudaStream_t stream) override;

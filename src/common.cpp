@@ -24,22 +24,22 @@
 #include <filesystem>
 #include <limits>
 
-#include "src/manager.h"
+#include "src/engine.h"
 #include "src/metrics.h"
 #include <daqiri/daqiri.h>
 #include <daqiri/logging.hpp>
-#if DAQIRI_MGR_DPDK
+#if DAQIRI_ENGINE_DPDK
 #include <rte_mbuf.h>
 #include <rte_memcpy.h>
 #include <rte_ethdev.h>
 #endif
 
-#define ASSERT_DAQIRI_MGR_INITIALIZED() \
-  assert(g_daqiri_mgr != nullptr && "DAQIRI Manager is not initialized")
+#define ASSERT_DAQIRI_ENGINE_INITIALIZED() \
+  assert(g_daqiri_engine != nullptr && "DAQIRI Engine is not initialized")
 namespace daqiri {
 
-// Declare a static global variable for the manager
-static Manager* g_daqiri_mgr = nullptr;
+// Declare a static global variable for the engine
+static Engine* g_daqiri_engine = nullptr;
 
 const std::unordered_map<LogLevel::Level, std::string> LogLevel::level_to_string_map = {
     {TRACE, "trace"},
@@ -62,93 +62,93 @@ const std::unordered_map<std::string, LogLevel::Level> LogLevel::string_to_level
 };
 
 [[deprecated("Use create_tx_burst_params() instead")]] BurstParams* create_burst_params() {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->create_tx_burst_params();
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->create_tx_burst_params();
 }
 
 BurstParams* create_tx_burst_params() {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->create_tx_burst_params();
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->create_tx_burst_params();
 }
 
-void initialize_manager(Manager* manager) {
-  g_daqiri_mgr = manager;
+void initialize_engine(Engine* engine) {
+  g_daqiri_engine = engine;
 }
 
-Manager* get_active_manager() {
-  return g_daqiri_mgr;
+Engine* get_active_engine() {
+  return g_daqiri_engine;
 }
 
-ManagerType get_manager_type() {
-  return ManagerFactory::get_manager_type();
+EngineType get_engine_type() {
+  return EngineFactory::get_engine_type();
 }
 
 template <typename Config>
-ManagerType get_manager_type(const Config& config) {
-  return ManagerFactory::get_manager_type(config);
+EngineType get_engine_type(const Config& config) {
+  return EngineFactory::get_engine_type(config);
 }
 
 void free_packet(BurstParams* burst, int pkt) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_daqiri_mgr->free_packet(burst, pkt);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  g_daqiri_engine->free_packet(burst, pkt);
 }
 
 void free_packet_segment(BurstParams* burst, int seg, int pkt) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_daqiri_mgr->free_packet_segment(burst, seg, pkt);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  g_daqiri_engine->free_packet_segment(burst, seg, pkt);
 }
 
 uint32_t get_packet_length(BurstParams* burst, int idx) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->get_packet_length(burst, idx);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->get_packet_length(burst, idx);
 }
 
 uint16_t get_packet_flow_id(BurstParams* burst, int idx) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->get_packet_flow_id(burst, idx);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->get_packet_flow_id(burst, idx);
 }
 
 Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->get_packet_rx_timestamp(burst, idx, timestamp_ns);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->get_packet_rx_timestamp(burst, idx, timestamp_ns);
 }
 
 uint64_t get_burst_tot_byte(BurstParams* burst) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->get_burst_tot_byte(burst);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->get_burst_tot_byte(burst);
 }
 
 uint32_t get_segment_packet_length(BurstParams* burst, int seg, int idx) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->get_segment_packet_length(burst, seg, idx);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->get_segment_packet_length(burst, seg, idx);
 }
 
 void free_all_segment_packets(BurstParams* burst, int seg) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_daqiri_mgr->free_all_segment_packets(burst, seg);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  g_daqiri_engine->free_all_segment_packets(burst, seg);
 }
 
 void free_all_burst_packets(BurstParams* burst) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_daqiri_mgr->free_all_packets(burst);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  g_daqiri_engine->free_all_packets(burst);
 }
 
 void free_all_packets_and_burst_rx(BurstParams* burst) {
   free_all_burst_packets(burst);
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_daqiri_mgr->free_rx_burst(burst);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  g_daqiri_engine->free_rx_burst(burst);
 }
 
 void free_all_packets_and_burst_tx(BurstParams* burst) {
   free_all_burst_packets(burst);
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_daqiri_mgr->free_tx_burst(burst);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  g_daqiri_engine->free_tx_burst(burst);
 }
 
 void free_segment_packets_and_burst(BurstParams* burst, int seg) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_daqiri_mgr->free_all_segment_packets(burst, seg);
-  g_daqiri_mgr->free_rx_burst(burst);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  g_daqiri_engine->free_all_segment_packets(burst, seg);
+  g_daqiri_engine->free_rx_burst(burst);
 }
 
 void format_eth_addr(char* dst, std::string addr) {
@@ -168,71 +168,71 @@ void format_eth_addr(char* dst, std::string addr) {
 }
 
 Status get_mac_addr(int port, char* mac) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->get_mac_addr(port, mac);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->get_mac_addr(port, mac);
 }
 
 Status drop_all_traffic(int port) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->drop_all_traffic(port);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->drop_all_traffic(port);
 }
 
 Status allow_all_traffic(int port) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->allow_all_traffic(port);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->allow_all_traffic(port);
 }
 
 bool is_tx_burst_available(BurstParams* burst) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->is_tx_burst_available(burst);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->is_tx_burst_available(burst);
 }
 
 int get_port_id(const std::string& key) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->get_port_id(key);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->get_port_id(key);
 }
 
 Status get_tx_packet_burst(BurstParams* burst) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  if (!g_daqiri_mgr->is_tx_burst_available(burst)) return Status::NO_FREE_BURST_BUFFERS;
-  return g_daqiri_mgr->get_tx_packet_burst(burst);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  if (!g_daqiri_engine->is_tx_burst_available(burst)) return Status::NO_FREE_BURST_BUFFERS;
+  return g_daqiri_engine->get_tx_packet_burst(burst);
 }
 
 Status set_eth_header(BurstParams* burst, int idx, char* dst_addr) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->set_eth_header(burst, idx, dst_addr);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->set_eth_header(burst, idx, dst_addr);
 }
 
 Status set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint8_t proto,
                        unsigned int src_host, unsigned int dst_host) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->set_ipv4_header(burst, idx, ip_len, proto, src_host, dst_host);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->set_ipv4_header(burst, idx, ip_len, proto, src_host, dst_host);
 }
 
 Status set_udp_header(BurstParams* burst, int idx, int udp_len, uint16_t src_port,
                       uint16_t dst_port) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->set_udp_header(burst, idx, udp_len, src_port, dst_port);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->set_udp_header(burst, idx, udp_len, src_port, dst_port);
 }
 
 Status set_udp_payload(BurstParams* burst, int idx, void* data, int len) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->set_udp_payload(burst, idx, data, len);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->set_udp_payload(burst, idx, data, len);
 }
 
 Status set_packet_lengths(BurstParams* burst, int idx, const std::initializer_list<int>& lens) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->set_packet_lengths(burst, idx, lens);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->set_packet_lengths(burst, idx, lens);
 }
 
 Status set_all_packet_lengths(BurstParams* burst, const std::initializer_list<int>& lens) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->set_all_packet_lengths(burst, lens);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->set_all_packet_lengths(burst, lens);
 }
 
 Status set_packet_tx_time(BurstParams* burst, int idx, uint64_t time) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->set_packet_tx_time(burst, idx, time);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->set_packet_tx_time(burst, idx, time);
 }
 
 int64_t get_num_packets(BurstParams* burst) {
@@ -268,97 +268,123 @@ void set_header(BurstParams* burst, uint16_t port, uint16_t q, int64_t num, int 
 }
 
 void free_tx_burst(BurstParams* burst) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_daqiri_mgr->free_tx_burst(burst);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  g_daqiri_engine->free_tx_burst(burst);
 }
 
 void free_tx_metadata(BurstParams* burst) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_daqiri_mgr->free_tx_metadata(burst);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  g_daqiri_engine->free_tx_metadata(burst);
 }
 
 void free_rx_burst(BurstParams* burst) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_daqiri_mgr->free_rx_burst(burst);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  g_daqiri_engine->free_rx_burst(burst);
 }
 
 void free_rx_metadata(BurstParams* burst) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_daqiri_mgr->free_rx_metadata(burst);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  g_daqiri_engine->free_rx_metadata(burst);
 }
 
 void* get_segment_packet_ptr(BurstParams* burst, int seg, int idx) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->get_segment_packet_ptr(burst, seg, idx);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->get_segment_packet_ptr(burst, seg, idx);
 }
 
 void* get_packet_ptr(BurstParams* burst, int idx) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->get_packet_ptr(burst, idx);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->get_packet_ptr(burst, idx);
 }
 
 void shutdown() {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_daqiri_mgr->shutdown();
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  g_daqiri_engine->shutdown();
   metrics::shutdown();
 }
 
 Status send_tx_burst(BurstParams* burst) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->send_tx_burst(burst);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->send_tx_burst(burst);
 }
 
 Status get_rx_burst(BurstParams** burst, int port, int q) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->get_rx_burst(burst, port, q);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->get_rx_burst(burst, port, q);
 }
 
 Status get_rx_burst(BurstParams** burst, int port) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->get_rx_burst(burst, port);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->get_rx_burst(burst, port);
 }
 
 Status get_rx_burst(BurstParams** burst) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->get_rx_burst(burst);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->get_rx_burst(burst);
 }
 
 Status get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->get_rx_burst(burst, conn_id, server);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->get_rx_burst(burst, conn_id, server);
 }
 
 Status set_reorder_cuda_stream(const std::string& interface_name,
                                const std::string& reorder_name,
                                cudaStream_t stream) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->set_reorder_cuda_stream(interface_name, reorder_name, stream);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->set_reorder_cuda_stream(interface_name, reorder_name, stream);
 }
 
 Status get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->get_reorder_burst_info(burst, info);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->get_reorder_burst_info(burst, info);
 }
 
 uint16_t get_num_rx_queues(int port_id) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->get_num_rx_queues(port_id);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->get_num_rx_queues(port_id);
 }
 
 void flush_port_queue(int port, int queue) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_daqiri_mgr->flush_port_queue(port, queue);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  g_daqiri_engine->flush_port_queue(port, queue);
 }
 
 void print_stats() {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  g_daqiri_mgr->print_stats();
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  g_daqiri_engine->print_stats();
 }
 
 Status daqiri_init(NetworkConfig& config) {
-  if (config.common_.manager_type == ManagerType::UNKNOWN &&
-      config.common_.stream_type != StreamType::INVALID) {
-    config.common_.manager_type = manager_type_from_stream_type(config.common_.stream_type);
+  if (config.common_.engine_type == EngineType::UNKNOWN) {
+    if (is_explicit_engine_type(config.common_.engine)) {
+      config.common_.engine_type = config.common_.engine;
+    } else if (config.common_.stream_type != StreamType::INVALID) {
+      config.common_.engine_type =
+          engine_type_from_stream_type(config.common_.stream_type, config.common_.protocol);
+      config.common_.engine = config.common_.engine_type;
+    }
+  }
+
+  if (config.common_.stream_type != StreamType::INVALID &&
+      is_explicit_engine_type(config.common_.engine_type) &&
+      !engine_type_supports_stream_type(config.common_.engine_type,
+                                         config.common_.stream_type)) {
+    DAQIRI_LOG_ERROR("engine '{}' is not valid for stream_type '{}'",
+                     config_engine_to_string(config.common_.engine_type),
+                     stream_type_to_string(config.common_.stream_type));
+    return Status::INVALID_PARAMETER;
+  }
+
+  if (config.common_.stream_type == StreamType::SOCKET &&
+      config.common_.protocol != SocketProtocol::INVALID &&
+      is_explicit_engine_type(config.common_.engine_type) &&
+      !engine_type_supports_socket_protocol(config.common_.engine_type,
+                                             config.common_.protocol)) {
+    DAQIRI_LOG_ERROR("engine '{}' is not valid for transport '{}'",
+                     config_engine_to_string(config.common_.engine_type),
+                     socket_protocol_to_string(config.common_.protocol));
+    return Status::INVALID_PARAMETER;
   }
 
   if (config.common_.stream_type == StreamType::SOCKET &&
@@ -399,15 +425,15 @@ Status daqiri_init(NetworkConfig& config) {
     }
   }
 
-  ManagerFactory::set_manager_type(config.common_.manager_type);
+  EngineFactory::set_engine_type(config.common_.engine_type);
 
-  auto mgr = &(ManagerFactory::get_active_manager());
+  auto engine = &(EngineFactory::get_active_engine());
 
-  if (!mgr->set_config_and_initialize(config)) { return Status::INTERNAL_ERROR; }
+  if (!engine->set_config_and_initialize(config)) { return Status::INTERNAL_ERROR; }
 
   for (const auto& intf : config.ifs_) {
     const auto& rx = intf.rx_;
-    auto port = mgr->get_port_id(intf.address_);
+    auto port = engine->get_port_id(intf.address_);
     if (port < 0) {
       DAQIRI_LOG_ERROR("Failed to get port from name {}", intf.address_);
       return Status::INVALID_PARAMETER;
@@ -518,61 +544,61 @@ Status daqiri_init(const std::string& yaml_string_or_path) {
 // Generic socket functions
 Status socket_connect_to_server(const std::string& server_addr, uint16_t server_port,
                                 uintptr_t* conn_id) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->socket_connect_to_server(server_addr, server_port, conn_id);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->socket_connect_to_server(server_addr, server_port, conn_id);
 }
 
 Status socket_connect_to_server(const std::string& server_addr, uint16_t server_port,
                                 const std::string& src_addr, uintptr_t* conn_id) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->socket_connect_to_server(server_addr, server_port, src_addr, conn_id);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->socket_connect_to_server(server_addr, server_port, src_addr, conn_id);
 }
 
 Status socket_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->socket_get_port_queue(conn_id, port, queue);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->socket_get_port_queue(conn_id, port, queue);
 }
 
 Status socket_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
                                  uintptr_t* conn_id) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->socket_get_server_conn_id(server_addr, server_port, conn_id);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->socket_get_server_conn_id(server_addr, server_port, conn_id);
 }
 
 // RDMA Functions
 Status rdma_connect_to_server(const std::string& server_addr, uint16_t server_port,
                               uintptr_t* conn_id) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->rdma_connect_to_server(server_addr, server_port, conn_id);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->rdma_connect_to_server(server_addr, server_port, conn_id);
 }
 
 Status rdma_connect_to_server(const std::string& server_addr, uint16_t server_port,
                               const std::string& src_addr, uintptr_t* conn_id) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->rdma_connect_to_server(server_addr, server_port, src_addr, conn_id);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->rdma_connect_to_server(server_addr, server_port, src_addr, conn_id);
 }
 
 Status rdma_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->rdma_get_port_queue(conn_id, port, queue);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->rdma_get_port_queue(conn_id, port, queue);
 }
 
 Status rdma_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
                                uintptr_t* conn_id) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->rdma_get_server_conn_id(server_addr, server_port, conn_id);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->rdma_get_server_conn_id(server_addr, server_port, conn_id);
 }
 
 Status rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id, bool is_server,
                        int num_pkts, uint64_t wr_id, const std::string& local_mr_name) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->rdma_set_header(
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->rdma_set_header(
       burst, op_code, conn_id, is_server, num_pkts, wr_id, local_mr_name);
 }
 
 RDMAOpCode rdma_get_opcode(BurstParams* burst) {
-  ASSERT_DAQIRI_MGR_INITIALIZED();
-  return g_daqiri_mgr->rdma_get_opcode(burst);
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->rdma_get_opcode(burst);
 }
 
 };  // namespace daqiri
@@ -953,8 +979,188 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_memory_region_config(
   return true;
 }
 
+namespace {
+
+struct ParsedEndpointAddress {
+  daqiri::SocketProtocol protocol = daqiri::SocketProtocol::INVALID;
+  std::string host;
+  uint16_t port = 0;
+};
+
+constexpr const char* kRoceEngineIbverbs = "ibverbs";
+
+daqiri::SocketProtocol protocol_from_endpoint_scheme(const std::string& scheme) {
+  if (scheme == "tcp") { return daqiri::SocketProtocol::TCP; }
+  if (scheme == "udp") { return daqiri::SocketProtocol::UDP; }
+  if (scheme == "rdma" || scheme == "roce") { return daqiri::SocketProtocol::ROCE; }
+  return daqiri::SocketProtocol::INVALID;
+}
+
+std::string endpoint_scheme_from_protocol(daqiri::SocketProtocol protocol) {
+  switch (protocol) {
+    case daqiri::SocketProtocol::TCP:
+      return "tcp";
+    case daqiri::SocketProtocol::UDP:
+      return "udp";
+    case daqiri::SocketProtocol::ROCE:
+      return "roce";
+    default:
+      return "";
+  }
+}
+
+bool parse_endpoint_query(const std::string& query,
+                          daqiri::SocketProtocol protocol,
+                          const char* field_name) {
+  if (query.empty()) { return true; }
+  if (protocol != daqiri::SocketProtocol::ROCE) {
+    DAQIRI_LOG_ERROR("{} query parameters are only supported for RoCE endpoints",
+                     field_name);
+    return false;
+  }
+
+  size_t start = 0;
+  while (start <= query.size()) {
+    const auto sep = query.find('&', start);
+    const std::string item =
+        query.substr(start, sep == std::string::npos ? std::string::npos : sep - start);
+    const auto eq = item.find('=');
+    if (eq == std::string::npos || eq == 0 || eq + 1 >= item.size()) {
+      DAQIRI_LOG_ERROR("{} has invalid query parameter '{}'", field_name, item);
+      return false;
+    }
+
+    const std::string key = item.substr(0, eq);
+    const std::string value = item.substr(eq + 1);
+    if (key != "engine") {
+      DAQIRI_LOG_ERROR("{} only supports the 'engine' query parameter", field_name);
+      return false;
+    }
+    if (value != kRoceEngineIbverbs) {
+      DAQIRI_LOG_ERROR("{} engine '{}' is not supported. Valid value: {}",
+                       field_name,
+                       value,
+                       kRoceEngineIbverbs);
+      return false;
+    }
+
+    if (sep == std::string::npos) { break; }
+    start = sep + 1;
+  }
+
+  return true;
+}
+
+bool parse_endpoint_addr(const std::string& value,
+                         const char* field_name,
+                         bool allow_missing_roce_port,
+                         ParsedEndpointAddress& parsed) {
+  const auto scheme_end = value.find("://");
+  if (scheme_end == std::string::npos || scheme_end == 0) {
+    DAQIRI_LOG_ERROR("{} must use '<scheme>://<ipv4>[:<port>]'", field_name);
+    return false;
+  }
+
+  const std::string scheme = value.substr(0, scheme_end);
+  parsed.protocol = protocol_from_endpoint_scheme(scheme);
+  if (parsed.protocol == daqiri::SocketProtocol::INVALID) {
+    DAQIRI_LOG_ERROR("Invalid scheme '{}' in {}. Valid schemes: tcp, udp, roce",
+                     scheme,
+                     field_name);
+    return false;
+  }
+
+  const std::string endpoint = value.substr(scheme_end + 3);
+  const auto query_sep = endpoint.find('?');
+  const std::string authority = endpoint.substr(0, query_sep);
+  const std::string query =
+      query_sep == std::string::npos ? "" : endpoint.substr(query_sep + 1);
+  if (!parse_endpoint_query(query, parsed.protocol, field_name)) { return false; }
+
+  if (authority.empty() || authority.find('/') != std::string::npos) {
+    DAQIRI_LOG_ERROR("{} must use '<scheme>://<ipv4>[:<port>]'", field_name);
+    return false;
+  }
+
+  const auto port_sep = authority.rfind(':');
+  if (port_sep == std::string::npos) {
+    if (allow_missing_roce_port &&
+        parsed.protocol == daqiri::SocketProtocol::ROCE) {
+      parsed.host = authority;
+      return true;
+    }
+    DAQIRI_LOG_ERROR("{} must include an IPv4 address and port", field_name);
+    return false;
+  }
+  if (port_sep == 0 || port_sep + 1 >= authority.size()) {
+    DAQIRI_LOG_ERROR("{} must include an IPv4 address and port", field_name);
+    return false;
+  }
+
+  parsed.host = authority.substr(0, port_sep);
+  const std::string port_str = authority.substr(port_sep + 1);
+  try {
+    const unsigned long port = std::stoul(port_str);
+    if (port > std::numeric_limits<uint16_t>::max() ||
+        (port == 0 &&
+         !(allow_missing_roce_port &&
+           parsed.protocol == daqiri::SocketProtocol::ROCE))) {
+      DAQIRI_LOG_ERROR("{} port '{}' is out of range", field_name, port_str);
+      return false;
+    }
+    parsed.port = static_cast<uint16_t>(port);
+  } catch (const std::exception&) {
+    DAQIRI_LOG_ERROR("{} port '{}' is not a valid integer", field_name, port_str);
+    return false;
+  }
+
+  return true;
+}
+
+bool apply_endpoint_addr(const std::string& value,
+                         const char* field_name,
+                         bool allow_missing_roce_port,
+                         daqiri::SocketProtocol& protocol,
+                         std::string& ip,
+                         uint16_t& port) {
+  ParsedEndpointAddress parsed;
+  if (!parse_endpoint_addr(value, field_name, allow_missing_roce_port, parsed)) {
+    return false;
+  }
+
+  if (protocol == daqiri::SocketProtocol::INVALID) {
+    protocol = parsed.protocol;
+  } else if (protocol != parsed.protocol) {
+    DAQIRI_LOG_ERROR("{} scheme '{}' conflicts with inferred protocol '{}'",
+                     field_name,
+                     value.substr(0, value.find("://")),
+                     daqiri::socket_protocol_to_string(protocol));
+    return false;
+  }
+
+  ip = parsed.host;
+  port = parsed.port;
+  return true;
+}
+
+std::string make_endpoint_addr(daqiri::SocketProtocol protocol,
+                               const std::string& ip,
+                               uint16_t port) {
+  const std::string scheme = endpoint_scheme_from_protocol(protocol);
+  if (scheme.empty() || ip.empty()) { return ""; }
+  if (protocol == daqiri::SocketProtocol::ROCE && port == 0) {
+    return scheme + "://" + ip;
+  }
+  if (port == 0) { return ""; }
+  return scheme + "://" + ip + ":" + std::to_string(port);
+}
+
+}  // namespace
+
 bool YAML::convert<daqiri::NetworkConfig>::parse_socket_config(
-    const YAML::Node& socket_item, daqiri::SocketConfig& socket_cfg) {
+    const YAML::Node& socket_item,
+    daqiri::SocketConfig& socket_cfg,
+    daqiri::SocketProtocol& protocol) {
   try {
     socket_cfg.mode_ = daqiri::GetSocketModeFromString(
         socket_item["mode"].template as<std::string>());
@@ -964,31 +1170,100 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_socket_config(
       return false;
     }
 
+    socket_cfg.local_addr_ = socket_item["local_addr"].template as<std::string>("");
+    socket_cfg.remote_addr_ = socket_item["remote_addr"].template as<std::string>("");
+    const bool has_local_addr = !socket_cfg.local_addr_.empty();
+    const bool has_remote_addr = !socket_cfg.remote_addr_.empty();
+    const bool has_legacy_local = socket_item["local_ip"].IsDefined() ||
+                                  socket_item["local_port"].IsDefined();
+    const bool has_legacy_remote = socket_item["remote_ip"].IsDefined() ||
+                                   socket_item["remote_port"].IsDefined();
+
+    if (has_local_addr && has_legacy_local) {
+      DAQIRI_LOG_ERROR(
+          "socket_config.local_addr cannot be combined with local_ip/local_port");
+      return false;
+    }
+    if (has_remote_addr && has_legacy_remote) {
+      DAQIRI_LOG_ERROR(
+          "socket_config.remote_addr cannot be combined with remote_ip/remote_port");
+      return false;
+    }
+
     socket_cfg.local_ip_ = socket_item["local_ip"].template as<std::string>("");
     socket_cfg.remote_ip_ = socket_item["remote_ip"].template as<std::string>("");
     socket_cfg.local_port_ = socket_item["local_port"].as<uint16_t>(0);
     socket_cfg.remote_port_ = socket_item["remote_port"].as<uint16_t>(0);
+
+    if (has_local_addr &&
+        !apply_endpoint_addr(socket_cfg.local_addr_,
+                             "socket_config.local_addr",
+                             socket_cfg.mode_ == daqiri::SocketMode::CLIENT,
+                             protocol,
+                             socket_cfg.local_ip_,
+                             socket_cfg.local_port_)) {
+      return false;
+    }
+    if (has_remote_addr &&
+        !apply_endpoint_addr(socket_cfg.remote_addr_,
+                             "socket_config.remote_addr",
+                             false,
+                             protocol,
+                             socket_cfg.remote_ip_,
+                             socket_cfg.remote_port_)) {
+      return false;
+    }
+
+    if (protocol == daqiri::SocketProtocol::INVALID) {
+      DAQIRI_LOG_ERROR(
+          "Socket configs must set protocol or use local_addr/remote_addr URI "
+          "schemes");
+      return false;
+    }
+
+    if (!has_local_addr) {
+      socket_cfg.local_addr_ = make_endpoint_addr(
+          protocol, socket_cfg.local_ip_, socket_cfg.local_port_);
+    }
+    if (!has_remote_addr) {
+      socket_cfg.remote_addr_ = make_endpoint_addr(
+          protocol, socket_cfg.remote_ip_, socket_cfg.remote_port_);
+    }
+
     socket_cfg.max_payload_size_ = socket_item["max_payload_size"].as<uint16_t>(0);
     socket_cfg.max_burst_interval_ms_ = socket_item["max_burst_interval_ms"].as<uint64_t>(0);
     socket_cfg.min_ipg_ns_ = socket_item["min_ipg_ns"].as<uint32_t>(0);
     socket_cfg.retry_connect_s_ = socket_item["retry_connect_s"].as<int32_t>(1);
 
+    const bool roce_client = socket_cfg.mode_ == daqiri::SocketMode::CLIENT &&
+                             protocol == daqiri::SocketProtocol::ROCE;
+    if (roce_client && (has_remote_addr || has_legacy_remote)) {
+      DAQIRI_LOG_ERROR("RoCE client peer endpoints belong in application config, "
+                       "not socket_config.remote_addr");
+      return false;
+    }
+
     if (socket_cfg.mode_ == daqiri::SocketMode::SERVER) {
       if (socket_cfg.local_ip_.empty()) {
-        DAQIRI_LOG_ERROR("socket_config.local_ip is required for server mode");
+        DAQIRI_LOG_ERROR("socket_config.local_addr is required for server mode");
         return false;
       }
       if (socket_cfg.local_port_ == 0) {
-        DAQIRI_LOG_ERROR("socket_config.local_port is required for server mode");
+        DAQIRI_LOG_ERROR("socket_config.local_addr must include a non-zero port");
+        return false;
+      }
+    } else if (roce_client) {
+      if (socket_cfg.local_ip_.empty()) {
+        DAQIRI_LOG_ERROR("socket_config.local_addr is required for RoCE client mode");
         return false;
       }
     } else {
       if (socket_cfg.remote_ip_.empty()) {
-        DAQIRI_LOG_ERROR("socket_config.remote_ip is required for client mode");
+        DAQIRI_LOG_ERROR("socket_config.remote_addr is required for client mode");
         return false;
       }
       if (socket_cfg.remote_port_ == 0) {
-        DAQIRI_LOG_ERROR("socket_config.remote_port is required for client mode");
+        DAQIRI_LOG_ERROR("socket_config.remote_addr must include a non-zero port");
         return false;
       }
     }
@@ -1035,7 +1310,7 @@ bool parse_common_queue_config(const YAML::Node& q_item,
     common.extra_queue_config_ = nullptr;
     if (q_item["memory_regions"].IsDefined()) {
       if (!parse_memory_regions) {
-        DAQIRI_LOG_WARN("Memory regions in queue section not used in RoCE backend for queue: {}",
+        DAQIRI_LOG_WARN("Memory regions in queue section not used in RoCE engine for queue: {}",
           common.name_);
       }
       else {
@@ -1073,21 +1348,21 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_rx_queue_common_config(
  * @brief Parse RX queue configuration from a YAML node.
  *
  * @param q_item The YAML node containing the RX queue configuration.
- * @param manager_type The manager type.
+ * @param engine_type The engine type.
  * @param q The RxQueueConfig object to populate.
  * @param parse_memory_regions True if memory regions should be parsed, false otherwise.
  * @return true if parsing was successful, false otherwise.
  */
 bool YAML::convert<daqiri::NetworkConfig>::parse_rx_queue_config(
-    const YAML::Node& q_item, const daqiri::ManagerType& manager_type,
+    const YAML::Node& q_item, const daqiri::EngineType& engine_type,
     daqiri::RxQueueConfig& q, bool parse_memory_regions) {
   try {
-    daqiri::ManagerType _manager_type = manager_type;
+    daqiri::EngineType _engine_type = engine_type;
 
     if (!parse_rx_queue_common_config(q_item, q, parse_memory_regions)) { return false; }
 
-    if (manager_type == daqiri::ManagerType::DEFAULT) {
-      _manager_type = daqiri::ManagerFactory::get_default_manager_type();
+    if (engine_type == daqiri::EngineType::DEFAULT) {
+      _engine_type = daqiri::EngineFactory::get_default_engine_type();
     }
   } catch (const std::exception& e) {
     DAQIRI_LOG_ERROR("Error parsing RxQueueConfig: {}", e.what());
@@ -1126,18 +1401,18 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_tx_queue_common_config(
  * @brief Parse TX queue configuration from a YAML node.
  *
  * @param q_item The YAML node containing the TX queue configuration.
- * @param manager_type The manager type.
+ * @param engine_type The engine type.
  * @param q The TxQueueConfig object to populate.
  * @return true if parsing was successful, false otherwise.
  */
 bool YAML::convert<daqiri::NetworkConfig>::parse_tx_queue_config(
-    const YAML::Node& q_item, const daqiri::ManagerType& manager_type,
+    const YAML::Node& q_item, const daqiri::EngineType& engine_type,
     daqiri::TxQueueConfig& q, bool parse_memory_regions) {
   try {
-    daqiri::ManagerType _manager_type = manager_type;
+    daqiri::EngineType _engine_type = engine_type;
 
-    if (manager_type == daqiri::ManagerType::DEFAULT) {
-      _manager_type = daqiri::ManagerFactory::get_default_manager_type();
+    if (engine_type == daqiri::EngineType::DEFAULT) {
+      _engine_type = daqiri::EngineFactory::get_default_engine_type();
     }
 
     if (!parse_tx_queue_common_config(q_item, q, parse_memory_regions)) { return false; }

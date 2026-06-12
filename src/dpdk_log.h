@@ -65,10 +65,10 @@ class DpdkLogLevel {
  * @class DpdkLogLevelCommandBuilder
  * @brief Concrete class for building DPDK log level commands.
  *
- * This class implements the ManagerLogLevelCommandBuilder interface to provide
+ * This class implements the EngineLogLevelCommandBuilder interface to provide
  * specific command flag strings for managing DPDK log levels.
  */
-class DpdkLogLevelCommandBuilder : public ManagerLogLevelCommandBuilder {
+class DpdkLogLevelCommandBuilder : public EngineLogLevelCommandBuilder {
  public:
   /**
    * @brief Constructor for DpdkLogLevelCommandBuilder.

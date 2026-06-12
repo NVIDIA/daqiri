@@ -122,7 +122,7 @@ cmake --version   # expect >= 3.20
 
 ## Step 3: Build DPDK with DAQIRI patches
 
-DAQIRI requires DPDK with the two patches in [`dpdk_patches/`](https://github.com/NVIDIA/daqiri/blob/main/dpdk_patches): `dmabuf.patch` enables GPUDirect through the kernel dma-buf interface (so `nvidia-peermem` is **not** required), and `dpdk.nvidia.patch` adds the NVIDIA-specific changes consumed by the DPDK backend. The recipe below is the literal sequence run by the `dpdk` stage of the [Dockerfile](https://github.com/NVIDIA/daqiri/blob/main/Dockerfile).
+DAQIRI requires DPDK with the two patches in [`dpdk_patches/`](https://github.com/NVIDIA/daqiri/blob/main/dpdk_patches): `dmabuf.patch` enables GPUDirect through the kernel dma-buf interface (so `nvidia-peermem` is **not** required), and `dpdk.nvidia.patch` adds the NVIDIA-specific changes consumed by the DPDK engine. The recipe below is the literal sequence run by the `dpdk` stage of the [Dockerfile](https://github.com/NVIDIA/daqiri/blob/main/Dockerfile).
 
 ### 3.1 Clone DAQIRI
 
@@ -202,7 +202,7 @@ From the `daqiri` repository root (the clone you made in [Step 3.1](#31-clone-da
 cmake -S . -B build \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_SHARED_LIBS=ON \
-    -DDAQIRI_MGR="dpdk socket rdma" \
+    -DDAQIRI_ENGINE="dpdk ibverbs" \
     -DDAQIRI_BUILD_EXAMPLES=ON \
     -DDAQIRI_BUILD_PYTHON=OFF
 ```
@@ -213,19 +213,19 @@ cmake -S . -B build \
 
 The sections below explain each option you can flip from the default, with explicit "when to use" guidance. The full reference is the [CMake Options table](../getting-started.md#cmake-options).
 
-### `DAQIRI_MGR`: backend selection
+### `DAQIRI_ENGINE`: engine selection
 
-`DAQIRI_MGR` is a space-separated list controlling which backends are compiled into `libdaqiri.so`. Three recipes cover most use cases:
+`DAQIRI_ENGINE` is a space-separated list controlling which **optional** engines are compiled into `libdaqiri.so`. Linux UDP/TCP sockets are always built in, so the only values are `dpdk` and `ibverbs`. Three recipes cover most use cases:
 
 | Recipe | What you get | When to use |
 |---|---|---|
-| `-DDAQIRI_MGR="dpdk"` | DPDK raw Ethernet only | DPDK-only deployments; smallest build |
-| `-DDAQIRI_MGR="dpdk socket"` | DPDK + kernel UDP/TCP (and RoCE-over-RDMA; see note) | Adds a no-NIC comparison baseline |
-| `-DDAQIRI_MGR="dpdk socket rdma"` | DPDK + sockets + ibverbs RDMA | Recommended default; matches the container |
+| `-DDAQIRI_ENGINE="dpdk"` | Raw Ethernet (DPDK) + built-in UDP/TCP sockets | No RoCE/RDMA; smallest NIC build |
+| `-DDAQIRI_ENGINE="ibverbs"` | RDMA/RoCE (ibverbs) + built-in UDP/TCP sockets | RDMA-only; no raw Ethernet |
+| `-DDAQIRI_ENGINE="dpdk ibverbs"` | Raw Ethernet + RDMA/RoCE + built-in UDP/TCP sockets | Recommended default; matches the container |
 
-!!! note "`socket` implicitly pulls in `rdma`"
+!!! note "Sockets are always available; `ibverbs` backs RoCE"
 
-    The socket backend reuses the RoCE transport from the RDMA implementation, so requesting `socket` also builds `rdma`. The logic lives in [`src/CMakeLists.txt`](https://github.com/NVIDIA/daqiri/blob/main/src/CMakeLists.txt) (search for `DAQIRI_HAS_SOCKET_IDX`). The reverse is not true: listing `rdma` alone does **not** pull in `socket`.
+    The socket engine (Linux UDP/TCP) is always built, so it never appears in `DAQIRI_ENGINE`. Its RoCE path delegates to the `ibverbs` engine, so `roce://` endpoints work only when `ibverbs` is in the list. Internally the ibverbs engine lives under [`src/engines/rdma`](https://github.com/NVIDIA/daqiri/blob/main/src/engines/rdma) (target `daqiri_rdma`); `ibverbs` is just the user-facing name, chosen so an alternative RDMA engine (such as DOCA) could be added later.
 
 ### `DAQIRI_BUILD_PYTHON`: pybind11 bindings
 

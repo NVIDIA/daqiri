@@ -51,12 +51,12 @@ function(link_daqiri_bench target)
   target_compile_features(${target} PRIVATE cxx_std_17)
   if(NOT BUILD_SHARED_LIBS AND UNIX AND NOT APPLE)
     set(DAQIRI_EXAMPLE_STATIC_LIBS daqiri::daqiri)
-    foreach(mgr IN ITEMS dpdk socket rdma)
-      if(TARGET daqiri_${mgr})
-        list(APPEND DAQIRI_EXAMPLE_STATIC_LIBS daqiri_${mgr})
+    foreach(engine IN ITEMS dpdk socket rdma)
+      if(TARGET daqiri_${engine})
+        list(APPEND DAQIRI_EXAMPLE_STATIC_LIBS daqiri_${engine})
       endif()
     endforeach()
-    # Static common/backend archives reference each other; group them so GNU ld rescans.
+    # Static common/engine archives reference each other; group them so GNU ld rescans.
     target_link_libraries(${target} PRIVATE
       "-Wl,--start-group"
       ${DAQIRI_EXAMPLE_STATIC_LIBS}

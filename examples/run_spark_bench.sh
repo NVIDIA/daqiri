@@ -174,7 +174,7 @@ extract_field() {
   grep -E "^$prefix" "$file" | tail -n1 | grep -oE " $field=[^ ]+" | head -n1 | sed -E "s/.*$field=//"
 }
 
-# Sum DPDK drop counters from the manager log emitted via DAQIRI_LOG_INFO.
+# Sum DPDK drop counters from the engine log emitted via DAQIRI_LOG_INFO.
 parse_dpdk_drops() {
   local log="$1"
   local sum=0 v
@@ -185,7 +185,7 @@ parse_dpdk_drops() {
   echo "$sum"
 }
 
-# Count RDMA CQ errors in the manager log.
+# Count RDMA CQ errors in the engine log.
 parse_rdma_drops() {
   local log="$1"
   # `grep -c` already prints 0 on no match (and exits 1); the old `|| echo 0`
@@ -319,15 +319,15 @@ generate_socket_yaml() {
   python3 "$NETNS_GEN" "$BASE_YAML" --role server | \
   sed -E \
     -e "s|^( *message_size: ).*|\1$payload|g" \
-    -e "s|^( *local_port: ).*|\1$srv_port|" \
+    -e "s|^( *local_addr: \"[a-z]+://[0-9.]+:)[0-9]+(\")|\1$srv_port\2|" \
     -e "s|^( *server_port: ).*|\1$srv_port|" \
     -e "s|^( *cpu_core: ).*|\1$core|" \
     > "$server_out"
   python3 "$NETNS_GEN" "$BASE_YAML" --role client | \
   sed -E \
     -e "s|^( *message_size: ).*|\1$payload|g" \
-    -e "s|^( *local_port: ).*|\1$cli_port|" \
-    -e "s|^( *remote_port: ).*|\1$srv_port|" \
+    -e "s|^( *local_addr: \"[a-z]+://[0-9.]+:)[0-9]+(\")|\1$cli_port\2|" \
+    -e "s|^( *remote_addr: \"[a-z]+://[0-9.]+:)[0-9]+(\")|\1$srv_port\2|" \
     -e "s|^( *server_port: ).*|\1$srv_port|" \
     -e "s|^( *cpu_core: ).*|\1$core|" \
     > "$client_out"
