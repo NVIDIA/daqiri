@@ -88,7 +88,7 @@ Vendored under `third_party/` as submodules (`.gitmodules`): `yaml-cpp` (config 
 ### Current limitations
 - TX header fill currently supports UDP only (see README).
 - Raw Ethernet RX flow steering: a single interface cannot mix standard (UDP/IP) and
-  flex-item flows; `DpdkMgr::validate_config()` rejects mixed configs at init.
+  flex-item flows; `DpdkEngine::validate_config()` rejects mixed configs at init.
 - No CI yet — contributors and reviewers verify manually (CONTRIBUTING.md).
 
 ## Documentation
