@@ -97,12 +97,12 @@ The web docs live in `docs/` and are built with [MkDocs Material](https://squidf
 - `docs/concepts.md` — terminology glossary (stream types and protocols, GPUDirect, packet/burst/segment, flow/queue, memory region, zero-copy ownership, RX reorder). Meant to be opened in parallel with the rest of the docs.
 - `docs/api-reference/index.md` — API guide (6-step application lifecycle, configuration-first model)
 - `docs/api-reference/configuration.md`, `docs/api-reference/cpp.md`, `docs/api-reference/python.md` — YAML schema, C++ API, and Python bindings docs
-- `docs/performance-dgx-spark.md` — per-platform performance report for DGX Spark stream/protocol combinations
 - `docs/tutorials/` — tutorial walkthroughs (system config, config-file walkthrough)
 - `docs/benchmarks/` — benchmark guide pages, surfaced as a top-level "Benchmarking" nav section in `mkdocs.yml` and `docs/index.html`:
   - `docs/benchmarks/benchmarks.md` — overview and backend-selection decision tree
   - `docs/benchmarks/socket_benchmarking.md` — "Socket and RDMA Benchmarking" (TCP/UDP and RoCE/RDMA)
   - `docs/benchmarks/raw_benchmarking.md` — "Raw Ethernet Benchmarking" (DPDK `raw_*` benches)
+  - `docs/benchmarks/performance-dgx-spark.md` — per-platform performance report for DGX Spark stream/protocol combinations (the long internal report lives outside the repo in `projects/daqiri-notes/`)
 - `docs/stylesheets/extra.css` — custom theme overrides
 
 **User-facing vocabulary:** docs and the YAML schema use `stream_type` (`raw`, `socket`, future `pcie`) and `protocol` (`udp`, `tcp`, `roce`). The word "backend" is internal-only — accurate for `src/managers/<name>/`, the `Manager` ABC, CMake `DAQIRI_MGR`, and API-reference function blurbs, but should not appear in tutorials, the landing page, or concept pages. The mapping: `stream_type: "raw"` is implemented by the `dpdk` manager; `stream_type: "socket"` with `protocol: "udp"` / `"tcp"` is implemented by the `socket` manager; `stream_type: "socket"` with `protocol: "roce"` is implemented by the `rdma` manager.
@@ -110,7 +110,7 @@ The web docs live in `docs/` and are built with [MkDocs Material](https://squidf
 **Keeping docs in sync with code:** before committing changes, scan for the recurring drift hotspots:
 - **Stream-type list** (`src/managers/*/`) — README Backends table, `docs/getting-started.md`, `docs/concepts.md` (Stream Types section + Support and testing admonition), `docs/api-reference/configuration.md`
 - **CMake options / `DAQIRI_MGR` default** (`src/CMakeLists.txt:137`) — README Quick Start, `docs/getting-started.md`, this file's Build & run section
-- **Benchmark binary or YAML names** (`examples/`) — the benchmark table above, `docs/benchmarks/raw_benchmarking.md`, the "Choosing an example config" decision tree in `docs/tutorials/configuration-walkthrough.md` (every YAML must have a leaf; CI's `scripts/check_doc_refs.py` enforces coverage), and per-platform performance docs (`docs/performance-*.md`)
+- **Benchmark binary or YAML names** (`examples/`) — the benchmark table above, `docs/benchmarks/raw_benchmarking.md`, the "Choosing an example config" decision tree in `docs/tutorials/configuration-walkthrough.md` (every YAML must have a leaf; CI's `scripts/check_doc_refs.py` enforces coverage), and per-platform performance docs (`docs/benchmarks/performance-*.md`)
 - **Public API include** (`#include <daqiri/daqiri.h>`; source files under `include/daqiri/`) — `docs/api-reference/index.md`, `docs/api-reference/cpp.md`, `docs/api-reference/python.md`; if the change adds or renames a user-facing concept, also `docs/concepts.md`
 - **Python bindings** (`python/daqiri_common_pybind.cpp`) — `docs/api-reference/python.md` (function reference tables, enums/classes tables, GIL Behavior section)
 - **Bench CLI flags or output format** (`examples/raw_bench_common.{h,cpp}`, `*_bench.cpp`) — per-platform performance docs' Methodology section, `examples/run_spark_bench.sh` parsing logic

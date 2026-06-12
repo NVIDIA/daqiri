@@ -48,13 +48,6 @@ extra_javascript:
 
 site_dir: site
 
-# The detailed per-platform performance report is kept in the repo for our own
-# reference while the full test matrix is completed, but is NOT published — only the
-# pared-down benchmarks/performance-*.md pages go on the site. exclude_docs drops it
-# from the build entirely (so `mkdocs build --strict` does not flag it either).
-exclude_docs: |
-  /performance-dgx-spark.md
-
 nav:
   - Getting Started: getting-started.md
   - Concepts: concepts.md
