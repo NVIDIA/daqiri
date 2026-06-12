@@ -19,24 +19,24 @@ loopback). The exact commands are collected under [Reproduce](#reproduce) below.
 
 | Component | Detail |
 | --------- | ------ |
-| Platform | DGX Spark (GB10), 20 cores, isolcpus `16-19` |
+| Platform | DGX Spark (GB10), 20 cores, isolcpus `16-19` (the multi-queue sweep expands this; see [Multi-queue core scaling](#multi-queue-core-scaling)) |
 | NIC | ConnectX-7, ports p0 ↔ p1 cross-cabled (single-host loopback), MTU 9000 |
 | Build | Release (`-DCMAKE_BUILD_TYPE=Release`), `DAQIRI_MGR="dpdk socket rdma"` |
 | Loopback | Raw/DPDK uses the two physical ports directly; socket/RoCE use the `dq_wire_*` network-namespace wire loopback |
-| Core pinning | Each direction has a busy-spin queue poller and an app worker (PR #149). Single-queue pins them to **separate** isolated X925 cores (DPDK TX 17/16, RX 18/19); co-locating them livelocks at small batch sizes. Multi-queue co-locates per queue (4 queues, 4 cores) but only at the fixed large batch where it is safe. |
+| Core pinning | Each direction has a busy-spin queue poller and an app worker on separate isolated X925 cores (PR #149). Single-queue: DPDK pollers 17/18, workers 16/19. Multi-queue: TX pollers 16/19, RX pollers 18/9, each with its own worker core, master 8 (with `isolcpus=5-9,15-19`). |
 
-## Headline — native-shape peak (C++ loopback)
+## Results Summary — native-shape peak (C++ loopback)
 
 Each transport at its best-case operation size. Raw/RoCE are single-stream;
 socket TCP/UDP scale with the number of client/server pairs, so the four-pair
 aggregate is shown.
 
-| Stream / Protocol | Best case | Throughput | Drops |
-| ----------------- | --------- | ---------: | ----- |
-| Raw Ethernet / GPUDirect | 4 KB packet | **105.5 Gb/s** (98.5 at 8 KB native) | 0 |
-| Socket / RoCE (SEND) | 8 MB message | **102.2 Gb/s** | 0 |
-| Socket / TCP | 8 KB × 4 pairs | **97.2 Gb/s** | ~0 (flow-controlled) |
-| Socket / UDP | 8 KB × 4 pairs | **29.8 Gb/s** goodput | unpaced, ~51% app-loss |
+| Stream / Protocol | Best case | Throughput | Drops | Notes |
+| ----------------- | --------- | ---------: | ----- | ----- |
+| Raw Ethernet / GPUDirect | 4 KB packet | **105.5 ±0.9 Gb/s** | 0 | 98.5 Gb/s single-queue at the 8 KB native shape |
+| Socket / RoCE (SEND) | 8 MB message | **102.2 ±0.3 Gb/s** | 0 | Single QP, batch 1 |
+| Socket / TCP | 8 KB × 4 pairs | **97.2 ±2.8 Gb/s** | ~0 | Flow-controlled (App TX = App RX) |
+| Socket / UDP | 8 KB × 4 pairs | **29.8 ±0.2 Gb/s** | ~51% loss | Receiver goodput; unpaced sender |
 
 Each transport is best read at its own native operation size (see the per-transport
 tables below); a single cross-transport unit of work isn't meaningful here, since
@@ -48,10 +48,11 @@ operation boundary.
 Physical port-to-port loopback, GPU-resident payloads. Native 8 KB packets run
 at **98.5 Gb/s** drop-free across all batch sizes; the throughput peak is
 **105.5 Gb/s** at a 4 KB payload. Packet handling is CPU-bound (see the CPU
-utilization table below). With the poller/worker core split, throughput is now
-flat across batch size and stable run-to-run (3 reps per cell, ≤1% spread).
+utilization table below). Throughput is flat across batch size and stable
+run-to-run (3 reps per cell, ≤1% spread).
 
-Achieved Gb/s (mean of 3 reps), unpaced, 0 drops in every cell:
+Achieved Gb/s measured at App RX (equal to App TX, since every cell is
+drop-free), unpaced, mean of 3 reps; run-to-run spread ≤0.9 Gb/s (<1%):
 
 <table class="perf-matrix" markdown="0">
   <thead>
@@ -74,12 +75,11 @@ Achieved Gb/s (mean of 3 reps), unpaced, 0 drops in every cell:
 
 At ≥4 KB the link saturates (~98–105 Gb/s) regardless of batch. Below that the
 path is packet-rate-bound: 1 KB ~92 Gb/s (10.5 M pps), 256 B ~50 Gb/s (19.5 M pps),
-64 B ~20 Gb/s (20 M pps) — a ~20 M pps ceiling. With the poller/worker core split
-these small-payload cells are now flat across batch size and stable run-to-run; the
-co-located config (poller and worker sharing a core) ran at roughly half the rate
-and was ±20% noisy here, and livelocked outright at small batch. Every cell is
-drop-free, so the achieved rate is also the no-drop rate — *pacing the sender below
-it simply hits the target with zero drops*.
+64 B ~20 Gb/s (20 M pps) — a ~20 M pps single-queue ceiling (the multi-queue
+section lifts it). Gb/s here is the L2 frame rate including the 64 B header, so
+pps ≈ Gb/s ÷ ((payload + 64) × 8). These small-payload cells are flat across batch
+size and stable run-to-run. Because every cell is drop-free, the achieved rate is
+also the no-drop rate: pacing the sender below it hits the target with zero drops.
 
 **CPU utilization** (headline cell, 8000 B / batch 10240, unpaced):
 
@@ -89,8 +89,8 @@ it simply hits the target with zero drops*.
 | TX queue poller (CPU 17) |  ~92% | Poll-mode spin; rate-independent      |
 | RX queue poller (CPU 18) |  ~92% | Poll-mode spin; rate-independent      |
 
-Under the poller/worker split the benchmark app workers run on their own cores
-(TX 16, RX 19) alongside these pollers; this run sampled only the poller cores.
+The benchmark app workers run on their own cores (TX 16, RX 19) alongside these
+pollers; this run sampled only the poller cores.
 The pollers stay near 92% across every drop-curve step from 1 Gb/s to line rate —
 DPDK's poll-mode driver spins regardless of offered load. The GPU stays idle (SM
 and memory-controller utilization both ~0%): it is a DMA target for the payload,
@@ -99,48 +99,51 @@ not a compute engine.
 ### Multi-queue core scaling
 
 Each packet-handling core spins in poll-mode. At the native 8 KB shape a single
-TX core caps throughput near ~98 Gb/s, while a single RX core already drains the
-line — so adding a second TX core is the lever that scales (98.6 → 110.4 Gb/s),
-and a second RX core adds little. The matrix sweeps (TX cores, RX cores) over
-`(1,1) → (1,2) → (2,1) → (2,2)`; `(2,2)` beating `(1,1)` demonstrates the
-scaling. Each queue runs two busy-spin threads — a poll-mode driver core and a
-separate bench-worker core — because co-locating them on one core livelocks at
-small payloads. The four-queue matrix therefore needs an expanded isolated-core
-budget (`isolcpus=5-9,15-19`): pollers pin to 16/17/18/19, their workers to
-5/6/7/9, and the master to core 8. Configs are derived from the single base
-`daqiri_bench_raw_tx_rx_spark_mq.yaml` (the balanced 2,2 superset) by
-`scripts/gen_spark_mq_config.py`. Generated by
-`examples/run_spark_mq_bench.sh`, 30 s per cell, 0 drops.
+TX core caps throughput near ~98 Gb/s while a single RX core already drains the
+line, so the second TX core is the lever: it scales `(1,1)` to `(2,1)` from
+97.5 to 108.8 Gb/s, while a second RX core adds little. The matrix sweeps
+(TX cores, RX cores) over `(1,1)`, `(1,2)`, `(2,1)`, `(2,2)`.
 
-| Cell | TX cores | RX cores | Achieved <span style="text-transform: none">Gb/s</span> |
-| ---- | -------- | -------- | ------------: |
-| (1,1) | 16    | 18    | 98.6  |
-| (1,2) | 16    | 18,19 | 97.5  |
-| (2,1) | 16,17 | 18    | **110.4** |
-| (2,2) | 16,17 | 18,19 | **110.3** |
+Each queue is served by a poll-mode driver core plus a separate bench-worker
+core, paired within one CPU cluster where possible so the poller→worker handoff
+stays local. The four-queue matrix uses the expanded isolated-core budget
+(`isolcpus=5-9,15-19`): TX pollers on 16/19, RX pollers on 18/9, each with its
+own worker core, and the master on core 8. Configs are derived from the single
+base `daqiri_bench_raw_tx_rx_spark_mq.yaml` (the balanced 2,2 superset) by
+`scripts/gen_spark_mq_config.py`; generated by `examples/run_spark_mq_bench.sh`,
+30 s per cell, 0 drops.
+
+| Cell | TX pollers | RX pollers | Achieved <span style="text-transform: none">Gb/s</span> |
+| ---- | ---------- | ---------- | ------------: |
+| (1,1) | 16    | 18   | 97.5  |
+| (1,2) | 16    | 18,9 | 99.0  |
+| (2,1) | 16,19 | 18   | **108.8** |
+| (2,2) | 16,19 | 18,9 | **108.8** |
 
 Which core is the bottleneck flips with payload size. Sweeping each cell from
 64 B to 8 KB:
 
 ![DPDK multi-queue throughput vs UDP payload size on DGX Spark, one line per (TX,RX) core count](../images/spark-mq-payload-sweep.svg)
 
-At small payloads the path is packet-rate-bound, so **RX cores** are the lever —
-at 64 B a second RX core more than triples throughput (8.4 → 27.0 Gb/s at ~26 M
+At small payloads the path is packet-rate-bound, so **RX cores** are the lever:
+at 64 B a second RX core lifts throughput from 20.3 to 26.8 Gb/s (~20 M → ~26 M
 pps) while a second TX core does nothing. At large payloads it inverts to the
-byte/line-rate-bound regime where **TX cores** are the lever (8 KB: 98.6 → 110.4
-Gb/s, the native-shape result above). The curves cross around 1–4 KB, where the
-link saturates and all four cells converge near ~104–110 Gb/s. Every cell is
-drop-free. Generated by `examples/run_spark_mq_bench.sh` (30 s per point) and
+byte/line-rate-bound regime where **TX cores** are the lever: at 8 KB the second
+TX core takes 97.5 to 108.8 Gb/s (the native-shape result above) while a second
+RX core adds nothing. The curves cross around 1–4 KB, where the link saturates
+and all four cells converge near ~104–109 Gb/s. Every cell is drop-free.
+Generated by `examples/run_spark_mq_bench.sh` (30 s per point) and
 `scripts/plot_mq_payload_sweep.py`.
 
 ## Socket / RoCE
 
-RoCE SEND over the netns wire loopback, single queue-pair, batch 1. Large
-messages up to 64 KB fully saturate the wire — the per-message flow-control
-window sizes the queue depth to keep the in-flight window full — and the
-smallest messages are bound by per-operation software overhead.
+RoCE SEND over the netns wire loopback, single queue-pair, batch 1. Throughput
+is App RX goodput, equal to App TX with 0 drops. Large messages up to 64 KB
+saturate the wire; the smallest messages are bound by per-operation software
+overhead.
 
-**Message-size sweep (single QP, batch 1, 0 drops)**
+**Message-size sweep (single QP, batch 1, 0 drops).** Mean of 3 reps; run-to-run
+spread ≤0.8 Gb/s (<2%) in every cell.
 
 | Message size | <span style="text-transform: none">Gb/s</span> |
 | ------------ | ---: |
@@ -150,16 +153,14 @@ smallest messages are bound by per-operation software overhead.
 | 8 KB  | 60.7 |
 | 4 KB  | 38.0 |
 
-Messages ≥64 KB hold ~101–102 Gb/s at the wire ceiling. Below that, throughput
-is operation-rate-bound rather than wire-bound — per-operation software overhead,
-not a stall — and every cell is drop-free. The small-message rates roughly tripled
-under the poller/worker split (8 KB 19.5 → 60.7, 4 KB 10.1 → 38.0 Gb/s): putting the
-bench worker on its own core, separate from the RoCE manager thread, frees up the
-op-rate the same way it does for DPDK small packets. The path also depends on two
-RC settings: `min_rnr_timer` set to 0.64 ms so a transient RECV-queue underrun does
-not stall the sender, and the per-message flow-control window pre-posts `rx_depth`
-receives before sending and bounds the transmit side by `tx_depth`, keeping enough
-operations in flight to amortize per-op overhead.
+Messages ≥64 KB hold ~101–102 Gb/s at the wire ceiling. Below that the path is
+operation-rate-bound (per-operation software overhead, not a stall) rather than
+wire-bound, and every cell is drop-free. At 8 KB (60.7 Gb/s) and 4 KB (38.0 Gb/s)
+a dedicated bench-worker core, separate from the RoCE manager thread, sustains the
+operation rate, as it does for small DPDK packets. A per-message flow-control
+window keeps enough operations in flight to amortize that overhead: it pre-posts
+`rx_depth` receives before sending and caps the transmit side at `tx_depth`, each
+sized to the message so the in-flight window stays full.
 
 **CPU utilization** (headline cell, 8 MB message, batch 1, unpaced):
 
@@ -180,7 +181,7 @@ pinned to one isolated core (16–19). TCP self-paces via flow control, so App T
 equals App RX with effectively no app-level loss. `message_size` is the per-send
 byte count of a stream (no datagram boundary, no fragmentation).
 
-Throughput in Gb/s (App TX = App RX):
+Throughput in Gb/s (App TX = App RX), mean ± std over 3 reps:
 
 <table class="perf-matrix" markdown="0">
   <thead>
@@ -193,9 +194,9 @@ Throughput in Gb/s (App TX = App RX):
     </tr>
   </thead>
   <tbody>
-    <tr><th>1000 B</th><td>13.5</td><td>27.3</td><td>54.8</td></tr>
-    <tr><th>8000 B</th><td>30.8</td><td>68.0</td><td>97.2</td></tr>
-    <tr><th>1 MiB</th><td>31.6</td><td>58.7</td><td>93.7</td></tr>
+    <tr><th>1000 B</th><td>13.5<small>±0.2</small></td><td>27.3<small>±0.2</small></td><td>54.8<small>±0.2</small></td></tr>
+    <tr><th>8000 B</th><td>30.8<small>±5.8</small></td><td>68.0<small>±9.7</small></td><td>97.2<small>±2.8</small></td></tr>
+    <tr><th>1 MiB</th><td>31.6<small>±0.1</small></td><td>58.7<small>±0.3</small></td><td>93.7<small>±1.3</small></td></tr>
   </tbody>
 </table>
 
@@ -209,8 +210,8 @@ cannot drain — the loss column is an inherent property of unpaced UDP, not a
 fault. App RX is the delivered goodput; App-level loss is `(App TX − App RX) /
 App TX`.
 
-Each cell shows **receiver goodput in Gb/s** with the **app-level loss %** dimmed
-beneath it:
+Each cell shows **receiver goodput in Gb/s** (mean ± std over 3 reps) with the
+**app-level loss %** dimmed beneath it:
 
 <table class="perf-matrix" markdown="0">
   <thead>
@@ -223,8 +224,8 @@ beneath it:
     </tr>
   </thead>
   <tbody>
-    <tr><th>1000 B</th><td>3.6<small>11% loss</small></td><td>7.7<small>16% loss</small></td><td>13.5<small>6% loss</small></td></tr>
-    <tr><th>8000 B</th><td>9.6<small>56% loss</small></td><td>20.9<small>57% loss</small></td><td>29.8<small>51% loss</small></td></tr>
+    <tr><th>1000 B</th><td>3.6 ±0.0<small>11% loss</small></td><td>7.7 ±0.0<small>16% loss</small></td><td>13.5 ±0.1<small>6% loss</small></td></tr>
+    <tr><th>8000 B</th><td>9.6 ±0.5<small>56% loss</small></td><td>20.9 ±1.3<small>57% loss</small></td><td>29.8 ±0.2<small>51% loss</small></td></tr>
   </tbody>
 </table>
 
@@ -258,7 +259,8 @@ These provide `ip`/`nstat` (`iproute2`), `ethtool`, and `ib_send_bw` (`perftest`
 
 **Raw Ethernet / GPUDirect (DPDK)** drives the two physical ports directly, so
 the `dq_wire_*` namespaces must **not** be up — they capture the ports and
-hide them from DPDK. Tear them down first (no-op if they were never created):
+hide them from DPDK. Tear them down first (no-op if they were never created).
+`<rx-iface>` below is the RX physical port (p1 in the p0→p1 loopback):
 
 ```bash
 ./scripts/setup_spark_wire_loopback_netns.sh down       # ensure netns is torn down
@@ -276,7 +278,7 @@ then run the sweep and render the plot:
 export ETH_DST_ADDR=$(cat /sys/class/net/<rx-iface>/address)
 ./examples/run_spark_mq_bench.sh                       # 4 cells x payload sweep, 30 s each
 # render the line plot (needs matplotlib in a venv -- not a runtime dependency):
-./scripts/plot_mq_payload_sweep.py bench-results/<ts>-dpdk-mq/runs.csv
+./scripts/plot_mq_payload_sweep.py bench-results/<timestamp>-dpdk-mq/runs.csv
 ```
 
 **Socket / RoCE and sockets** cross the cable through the `dq_wire_client` →
