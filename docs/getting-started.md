@@ -229,6 +229,12 @@ variables, a shared AWS profile, container credentials, or an EC2 instance role.
 DAQIRI writes one object per packet with a single `PutObject`; multipart uploads
 and PCAP output are not part of the S3 path.
 
+### Raw Ethernet RX flows
+
+On a single RX interface, use either standard UDP/IP flow rules or flex-item flow
+rules, not both. Mixed configs are rejected at `daqiri_init`. See
+[Configuration reference](api-reference/configuration.md#flows).
+
 ## Next Steps
 
 Once DAQIRI is built, follow the tutorials to configure your system and run your first benchmark:

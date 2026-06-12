@@ -1681,6 +1681,12 @@ bool DpdkMgr::set_config_and_initialize(const NetworkConfig& cfg) {
 
   if (!this->initialized_) {
     cfg_ = cfg;
+
+    if (!validate_config()) {
+      DAQIRI_LOG_CRITICAL("Config validation failed");
+      return false;
+    }
+
     cpu_set_t mask;
     long nproc, i;
 
@@ -1697,11 +1703,6 @@ bool DpdkMgr::set_config_and_initialize(const NetworkConfig& cfg) {
 
     stats_.Init(cfg_);
     stats_thread_ = std::thread(&DpdkStats::Run, &stats_);
-
-    if (!validate_config()) {
-      DAQIRI_LOG_CRITICAL("Config validation failed");
-      return false;
-    }
 
     if (!init_reorder_state()) {
       DAQIRI_LOG_CRITICAL("Failed to initialize reorder state");
@@ -2535,7 +2536,8 @@ void DpdkMgr::initialize() {
 
       if (rx.hardware_timestamps_ && !calibrate_rx_timestamp_clock(intf.port_id_)) { return; }
 
-      // Start flows
+      // Standard and flex-item flows use separate DPDK flow groups with conflicting
+      // group-0 jump rules; validate_config() rejects mixed configs per interface.
       bool has_standard_flows = false;
       bool has_flex_item_flows = false;
       for (const auto& flow : rx.flows_) {
@@ -3370,12 +3372,26 @@ bool DpdkMgr::validate_config() const {
 
   for (const auto& intf : cfg_.ifs_) {
     std::unordered_map<uint16_t, uint16_t> flow_to_queue;
+    bool has_standard_flows = false;
+    bool has_flex_item_flows = false;
     for (const auto& flow : intf.rx_.flows_) {
       if (flow_to_queue.find(flow.id_) != flow_to_queue.end()) {
         DAQIRI_LOG_ERROR("Duplicate flow ID {} on interface '{}'", flow.id_, intf.name_);
         return false;
       }
       flow_to_queue.emplace(flow.id_, flow.action_.id_);
+      if (flow.match_.type_ == FlowMatchType::FLEX_ITEM) {
+        has_flex_item_flows = true;
+      } else {
+        has_standard_flows = true;
+      }
+      if (has_standard_flows && has_flex_item_flows) {
+        DAQIRI_LOG_ERROR(
+            "Interface '{}' mixes standard (UDP/IP) and flex-item RX flows, which is not "
+            "supported. Use only one flow class per interface.",
+            intf.name_);
+        return false;
+      }
     }
 
     std::unordered_set<uint16_t> reorder_flow_ids;
