@@ -15,31 +15,32 @@
 
 cmake_minimum_required(VERSION 3.20)
 
-message(STATUS "PROJECT_NAME: ${MGR_TARGET}")
+message(STATUS "PROJECT_NAME: ${ENGINE_TARGET}")
 
-target_include_directories(${MGR_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(${ENGINE_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_sources(${MGR_TARGET} PRIVATE daqiri_socket_mgr.cpp)
+target_sources(${ENGINE_TARGET} PRIVATE daqiri_socket_engine.cpp)
 
-# manager.h includes DPDK ring/mbuf headers.
+# engine.h includes DPDK ring/mbuf headers.
 pkg_check_modules(DPDK QUIET libdpdk)
 if(NOT DPDK_FOUND)
   list(APPEND CMAKE_PREFIX_PATH "/opt/mellanox/dpdk/lib/${CMAKE_HOST_SYSTEM_PROCESSOR}-linux-gnu/")
   pkg_check_modules(DPDK REQUIRED libdpdk)
 endif()
 
-target_link_directories(${MGR_TARGET} PRIVATE ${DPDK_LIBRARY_DIRS})
-target_include_directories(${MGR_TARGET} PRIVATE ${DPDK_INCLUDE_DIRS})
-target_compile_options(${MGR_TARGET} PRIVATE ${DPDK_CFLAGS_OTHER})
+target_link_directories(${ENGINE_TARGET} PRIVATE ${DPDK_LIBRARY_DIRS})
+target_include_directories(${ENGINE_TARGET} PRIVATE ${DPDK_INCLUDE_DIRS})
+target_compile_options(${ENGINE_TARGET} PRIVATE ${DPDK_CFLAGS_OTHER})
 
-target_link_libraries(${MGR_TARGET}
+target_link_libraries(${ENGINE_TARGET}
   PRIVATE
     ${DPDK_LDFLAGS_OTHER}
     ${DPDK_LIBRARIES}
 )
 
-# RoCE-under-socket delegates to the RDMA manager implementation.
-if(NOT TARGET daqiri_rdma)
-  message(FATAL_ERROR "Socket backend requires daqiri_rdma target for RoCE delegation")
+# RoCE-under-socket delegates to the ibverbs/rdma engine when it is built
+# (DAQIRI_ENGINE includes "ibverbs"). Without it, the socket engine still
+# provides UDP/TCP; its RoCE path is compiled out (see DAQIRI_ENGINE_RDMA).
+if(TARGET daqiri_rdma)
+  target_link_libraries(${ENGINE_TARGET} PRIVATE daqiri_rdma)
 endif()
-target_link_libraries(${MGR_TARGET} PRIVATE daqiri_rdma)

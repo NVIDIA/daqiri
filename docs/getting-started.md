@@ -7,7 +7,7 @@ hide:
 
 ## System Requirements
 
-DAQIRI's baseline requirements depend on which [stream type](concepts.md#stream-types) you plan to use. The Linux Sockets path (`stream_type: "socket"`, `protocol: "udp"`/`"tcp"`) runs on any modern Linux box. The Raw Ethernet kernel-bypass path and GPUDirect impose additional hardware requirements, listed below.
+DAQIRI's baseline requirements depend on which [stream type](concepts.md#stream-types) you plan to use. The Linux Sockets path (`stream_type: "socket"` with `udp://` or `tcp://` endpoints) runs on any modern Linux box. The Raw Ethernet kernel-bypass path and GPUDirect impose additional hardware requirements, listed below.
 
 | Component | Requirement |
 |-----------|-------------|
@@ -16,7 +16,7 @@ DAQIRI's baseline requirements depend on which [stream type](concepts.md#stream-
 | **NIC** *(Raw Ethernet / GPUDirect / RoCE only)* | NVIDIA ConnectX-6 Dx or later. Default Ubuntu kernel drivers (inbox) are sufficient; we recommend also installing `doca-ofed` for the diagnostic utilities (`ibstat`, `ibv_devinfo`, `ibdev2netdev`, `mlnx_perf`, `mlxconfig`, …). |
 | **GPU** *(GPUDirect only)* | RTX or Data Center GPU. GeForce is not supported. |
 | **DPDK** | Included in the DAQIRI container (patched for dma-buf, so `nvidia-peermem` is **not required** inside the container); see [bare-metal dependencies](#bare-metal-dependencies) below for the host build. |
-| **RoCE** | `libibverbs` and `librdmacm` (for `stream_type: "socket"`, `protocol: "roce"`). |
+| **RoCE** | `libibverbs` and `librdmacm` (for `stream_type: "socket"` and `roce://` endpoints). |
 | **GDS** | Optional `cufile.h` and `libcufile` for file writes from CUDA device memory. Runtime device-memory writes require a working cuFile installation; for regular `nvidia-fs` mode, the `nvidia-fs` kernel module must be loaded and the destination storage stack must be supported. |
 | **S3** | Optional AWS SDK for C++ with the `s3` component for raw packet uploads to Amazon S3 or S3-compatible object stores. The DAQIRI container builds this SDK from source. |
 
@@ -84,6 +84,8 @@ First, add the [DOCA apt repository](https://developer.nvidia.com/doca-downloads
 
 Then build the DAQIRI library:
 
+### Container build {#container-build}
+
 === "Container build (recommended)"
 
     The container bundles all user-space libraries for each stream type, avoiding dependency issues on the host:
@@ -91,19 +93,19 @@ Then build the DAQIRI library:
     ```bash
     git clone git@github.com:NVIDIA/daqiri.git
     cd daqiri
-    BASE_TARGET=dpdk DAQIRI_MGR="dpdk socket rdma" scripts/build-container.sh
+    BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
     ```
 
     Set `BASE_IMAGE=torch` to build on top of NGC PyTorch instead of the default CUDA base — useful for Torch / TensorRT inference workflows that ingest packets directly into GPU memory:
 
     ```bash
-    BASE_IMAGE=torch BASE_TARGET=dpdk DAQIRI_MGR="dpdk socket rdma" scripts/build-container.sh
+    BASE_IMAGE=torch BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
     ```
 
     OpenTelemetry metrics are optional. Enable them with:
 
     ```bash
-    DAQIRI_ENABLE_OTEL_METRICS=ON BASE_TARGET=dpdk DAQIRI_MGR="dpdk socket rdma" scripts/build-container.sh
+    DAQIRI_ENABLE_OTEL_METRICS=ON BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
     ```
 
 === "CMake build (bare-metal)"
@@ -113,7 +115,7 @@ Then build the DAQIRI library:
     ```bash
     git clone git@github.com:NVIDIA/daqiri.git
     cd daqiri
-    cmake -S . -B build -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_MGR="dpdk socket rdma"
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_ENGINE="dpdk ibverbs"
     cmake --build build -j
     cmake --install build --prefix /opt/daqiri
     ```
@@ -190,7 +192,7 @@ Both methods use the same public C++ include:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `DAQIRI_MGR` | `"dpdk socket rdma"` | Space-separated list of manager implementations to compile in. Valid values: `dpdk` (Raw Ethernet), `socket` (Linux UDP/TCP sockets), `rdma` (RoCE). |
+| `DAQIRI_ENGINE` | `"dpdk ibverbs"` | Space-separated list of optional engine implementations to compile in. Valid values: `dpdk` (Raw Ethernet) and `ibverbs`. `ibverbs` builds two libibverbs-based engines: RDMA/RoCE (for `stream_type: "socket"` with `roce://` endpoints) and a Mellanox/mlx5 Multi-Packet (striding) Receive Queue engine for `stream_type: "raw"` (opt in per stream with `engine: "ibverbs"`). Linux UDP/TCP sockets are always built in, so there is no `socket` value. |
 | `DAQIRI_BUILD_PYTHON` | `OFF` | Build pybind11 Python bindings. |
 | `DAQIRI_BUILD_EXAMPLES` | `ON` | Build benchmark executables. |
 | `DAQIRI_ENABLE_GDS` | `OFF` | Enable cuFile-backed burst file writes from CUDA device memory. Host-memory writes use POSIX APIs without GDS. |
@@ -239,8 +241,8 @@ rules, not both. Mixed configs are rejected at `daqiri_init`. See
 
 Once DAQIRI is built, follow the tutorials to configure your system and run your first benchmark:
 
-1. [**Concepts**](concepts.md) — terminology (stream types and protocols, packet, burst, segment, flow, queue, memory region), GPUDirect, and zero-copy ownership. Keep this open in a second tab.
+1. [**Concepts**](concepts.md) — terminology (stream types, engines, endpoint URI schemes, packet, burst, segment, flow, queue, memory region), GPUDirect, and zero-copy ownership. Keep this open in a second tab.
 2. [**API Guide**](api-reference/index.md) — the six-step DAQIRI application lifecycle and configuration-first model
 3. [**System Configuration**](tutorials/system_configuration.md) — NIC drivers, link layers, GPUDirect, hugepages, CPU isolation, GPU clocks, and more
-4. [**Benchmarking**](benchmarks/benchmarks.md) — choose a backend, then run socket/RDMA or raw Ethernet benchmarks
+4. [**Benchmarking**](benchmarks/benchmarks.md) — choose an engine, then run socket/RDMA or raw Ethernet benchmarks
 5. [**Understanding the Configuration File**](tutorials/configuration-walkthrough.md) — annotated YAML walkthrough

@@ -471,12 +471,12 @@ void bind_enums(py::module_ &m) {
       .value("TX", RDMACompletionType::TX)
       .value("INVALID", RDMACompletionType::INVALID);
 
-  py::enum_<ManagerType>(m, "ManagerType")
-      .value("UNKNOWN", ManagerType::UNKNOWN)
-      .value("DEFAULT", ManagerType::DEFAULT)
-      .value("DPDK", ManagerType::DPDK)
-      .value("SOCKET", ManagerType::SOCKET)
-      .value("RDMA", ManagerType::RDMA);
+  py::enum_<EngineType>(m, "EngineType")
+      .value("UNKNOWN", EngineType::UNKNOWN)
+      .value("DEFAULT", EngineType::DEFAULT)
+      .value("DPDK", EngineType::DPDK)
+      .value("SOCKET", EngineType::SOCKET)
+      .value("RDMA", EngineType::RDMA);
 
   py::enum_<Direction>(m, "Direction")
       .value("RX", Direction::RX)
@@ -722,12 +722,15 @@ void bind_config_types(py::module_ &m) {
       .def_readwrite("direction", &CommonConfig::dir)
       .def_readwrite("stream_type", &CommonConfig::stream_type)
       .def_readwrite("protocol", &CommonConfig::protocol)
-      .def_readwrite("manager_type", &CommonConfig::manager_type)
+      .def_readwrite("engine", &CommonConfig::engine)
+      .def_readwrite("engine_type", &CommonConfig::engine_type)
       .def_readwrite("loopback", &CommonConfig::loopback_);
 
   py::class_<SocketConfig>(m, "SocketConfig")
       .def(py::init<>())
       .def_readwrite("mode", &SocketConfig::mode_)
+      .def_readwrite("local_addr", &SocketConfig::local_addr_)
+      .def_readwrite("remote_addr", &SocketConfig::remote_addr_)
       .def_readwrite("local_ip", &SocketConfig::local_ip_)
       .def_readwrite("remote_ip", &SocketConfig::remote_ip_)
       .def_readwrite("local_port", &SocketConfig::local_port_)
@@ -888,12 +891,12 @@ PYBIND11_MODULE(_daqiri, m) {
       },
       "yaml_path"_a);
 
-  m.def("get_manager_type", static_cast<ManagerType (*)()>(&get_manager_type),
-        "Get the current manager type");
-  m.def("manager_type_from_string", &manager_type_from_string, "str"_a,
-        "Convert a string to a manager type");
-  m.def("manager_type_to_string", &manager_type_to_string, "type"_a,
-        "Convert a manager type to a string");
+  m.def("get_engine_type", static_cast<EngineType (*)()>(&get_engine_type),
+        "Get the current engine type");
+  m.def("engine_type_from_string", &engine_type_from_string, "str"_a,
+        "Convert a string to an engine type");
+  m.def("engine_type_to_string", &engine_type_to_string, "type"_a,
+        "Convert an engine type to a string");
   m.def("stream_type_from_string", &stream_type_from_string, "str"_a);
   m.def("stream_type_to_string", &stream_type_to_string, "type"_a);
   m.def("socket_protocol_from_string", &socket_protocol_from_string, "str"_a);
@@ -1236,8 +1239,8 @@ PYBIND11_MODULE(_daqiri, m) {
         "conn_id"_a, "is_server"_a, "num_pkts"_a, "wr_id"_a, "local_mr_name"_a);
   m.def("rdma_get_opcode", &rdma_get_opcode, "burst"_a);
 
-  m.def("shutdown", &shutdown, "Shut down the active DAQIRI manager");
-  m.def("print_stats", &print_stats, "Print DAQIRI manager statistics");
+  m.def("shutdown", &shutdown, "Shut down the active DAQIRI engine");
+  m.def("print_stats", &print_stats, "Print DAQIRI engine statistics");
 }
 
 } // namespace daqiri

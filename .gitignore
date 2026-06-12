@@ -5,5 +5,10 @@ bench-results/
 # tune_system.py default output
 pcie_schematic.png
 
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
 # macOS
 .DS_Store

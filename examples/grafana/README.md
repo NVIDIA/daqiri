@@ -21,7 +21,7 @@ viewer access is also enabled for the local example.
 Build `daqiri:local` with DAQIRI metrics and the OpenTelemetry Prometheus exporter:
 
 ```bash
-DAQIRI_ENABLE_OTEL_METRICS=ON DAQIRI_MGR="dpdk socket rdma" scripts/build-container.sh
+DAQIRI_ENABLE_OTEL_METRICS=ON DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
 ```
 
 ## Run

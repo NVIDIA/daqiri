@@ -8,9 +8,9 @@ These notes are the long-form context that pairs with the structured rules in
 DAQIRI is a single C++/CUDA shared library (`libdaqiri.so`) that provides
 GPU-direct packet I/O for RF / scientific instrument capture. It exposes a flat
 free-function C++ API (in `src/common.h`) on top of an opaque `BurstParams*`
-batch type, and dispatches to one of three backends (DPDK, RDMA, sockets) via
-the `daqiri::Manager` virtual interface in `src/manager.h`. Applications never
-touch backend types directly.
+batch type, and dispatches to one of three engines (DPDK, RDMA, sockets) via
+the `daqiri::Engine` virtual interface in `src/engine.h`. Applications never
+touch engine types directly.
 
 This is a low-level networking library with hardware dependencies — be biased
 toward fewer, higher-confidence comments. Pieces of code that look "wrong" by
@@ -39,52 +39,63 @@ When reviewing any new code path that calls `get_rx_burst`, `get_tx_burst`,
 a matching free. This is high-severity. See `docs/api-guide.md` and
 `src/common.h`.
 
-### 2. Backend selection lives behind the Manager vtable
+### 2. Engine selection lives behind the Engine vtable
 
-The active backend is chosen at `daqiri_init()` time from `NetworkConfig`, and
-`ManagerFactory` instantiates exactly one `daqiri::Manager` per process. Every
+The active engine is chosen at `daqiri_init()` time from `NetworkConfig`, and
+`EngineFactory` instantiates exactly one `daqiri::Engine` per process. Every
 piece of packet logic — RX/TX dequeue, header fill, segment access, RDMA
 connection setup — is dispatched through that vtable.
 
 Reject PRs that:
 
-- Branch on backend type in common code (`if (backend == "dpdk") …`).
-- Reach into a backend-specific struct (`DpdkManager*`, `RdmaManager*`,
-  `SocketManager*`) from `src/common*` or from application code.
-- Add a new backend by extending `src/common.cpp` instead of adding a
-  `src/managers/<name>/` directory and a new `Manager` subclass.
-- Expose backend types in the public API surface in `src/common.h`.
+- Branch on engine type in common code (`if (engine == "dpdk") …`).
+- Reach into an engine-specific struct (`DpdkEngine*`, `RdmaEngine*`,
+  `SocketEngine*`) from `src/common*` or from application code.
+- Add a new engine by extending `src/common.cpp` instead of adding a
+  `src/engines/<name>/` directory and a new `Engine` subclass.
+- Expose engine types in the public API surface in `src/common.h`.
 
 The point of the abstraction is that an application written against the
-free-function API can switch backends with a config change. New code must
+free-function API can switch engines with a config change. New code must
 preserve that.
 
-### 3. `DAQIRI_MGR` socket → rdma rule
+### 3. `DAQIRI_ENGINE` values and the socket / ibverbs rule
 
-The socket backend reuses the RoCE transport from the rdma backend. As a
-result, `src/CMakeLists.txt` always prepends `rdma` to `DAQIRI_MGR_LIST`
-whenever `socket` is requested:
+`DAQIRI_ENGINE` selects the **optional** engines: valid values are `dpdk`
+and `ibverbs` only. Linux UDP/TCP sockets are always available, so the
+socket engine is always built and `socket` is **not** a value. `rdma` is
+also not a value — `ibverbs` is the user-facing name for that engine
+(internally still `src/engines/rdma`, target `daqiri_rdma`, define
+`DAQIRI_ENGINE_RDMA`).
+
+`src/CMakeLists.txt` translates `ibverbs` → the internal `rdma` engine,
+always appends `socket`, and builds `rdma` first when present (the socket
+engine links it for the RoCE path):
 
 ```cmake
-list(FIND DAQIRI_MGR_LIST "socket" DAQIRI_HAS_SOCKET_IDX)
-if(NOT DAQIRI_HAS_SOCKET_IDX EQUAL -1)
-  list(FIND DAQIRI_MGR_LIST "rdma" DAQIRI_HAS_RDMA_IDX)
-  if(DAQIRI_HAS_RDMA_IDX EQUAL -1)
-    list(APPEND DAQIRI_MGR_LIST "rdma")
+foreach(ENGINE IN LISTS DAQIRI_ENGINE_LIST)
+  if(ENGINE STREQUAL "dpdk")
+    list(APPEND DAQIRI_ENGINE_INTERNAL_LIST "dpdk")
+  elseif(ENGINE STREQUAL "ibverbs")
+    list(APPEND DAQIRI_ENGINE_INTERNAL_LIST "rdma")
+  else()
+    message(FATAL_ERROR "Invalid DAQIRI_ENGINE value '${ENGINE}'...")
   endif()
-  list(REMOVE_ITEM DAQIRI_MGR_LIST "rdma")
-  list(INSERT DAQIRI_MGR_LIST 0 "rdma")
-endif()
+endforeach()
+list(APPEND DAQIRI_ENGINE_INTERNAL_LIST "socket")   # always built
+# ...then move "rdma" first if present so its target exists for socket.
 ```
 
-The reverse is **not** true — listing `rdma` alone does not pull in `socket`.
-The `rdma` entry must be first in the list so it builds first.
+The socket engine links `daqiri_rdma` **conditionally** (`if(TARGET
+daqiri_rdma)`), so `roce://` endpoints are available only when `ibverbs`
+was built; plain UDP/TCP always works.
 
-If a PR touches this block, or refactors how `DAQIRI_MGR_LIST` is consumed
-later (the `foreach` that emits `DAQIRI_MGR_<NAME>=1` compile definitions),
-verify the invariant still holds. A regression here turns into a confusing
-link error in the socket backend that won't reproduce on a `dpdk socket`
-build because the developer happened to have rdma enabled.
+If a PR touches this block, or refactors how `DAQIRI_ENGINE_INTERNAL_LIST`
+is consumed later (the `foreach` that emits `DAQIRI_ENGINE_<NAME>=1`
+compile definitions), verify: valid values stay `{dpdk, ibverbs}`, socket
+is always built, `ibverbs` maps to the rdma engine, and the conditional
+socket→rdma link is preserved. A regression here turns into a confusing
+link error or a silently missing RoCE path.
 
 DPDK is also load-bearing for the common library itself — `src/common.cpp`
 uses `rte_ring` / `rte_mbuf` directly, so DPDK is a build dependency even of
@@ -103,9 +114,9 @@ The mapping (mirrored from `.claude/rules/docs-sync.md`):
 | --- | --- |
 | `src/common.h` | `docs/api-guide.md`, `docs/daqiri-api.html`, `AGENTS.md` (Architecture / API summary) |
 | `src/types.h` | `docs/api-guide.md`, `docs/daqiri-api.html`, `AGENTS.md` (Architecture / BurstParams) |
-| `src/manager.h` | `docs/api-guide.md`, `AGENTS.md` (Manager abstraction) |
-| `src/managers/*/` | `docs/getting-started.md`, `docs/configuration.md`, `docs/tutorials/configuration-walkthrough.md`, `README.md` (Backends), `AGENTS.md` |
-| `src/CMakeLists.txt` (CMake options, `DAQIRI_MGR` default, CUDA arch) | `docs/getting-started.md`, `AGENTS.md` (Build & run), `README.md` (Quick Start) |
+| `src/engine.h` | `docs/api-guide.md`, `AGENTS.md` (Engine abstraction) |
+| `src/engines/*/` | `docs/getting-started.md`, `docs/configuration.md`, `docs/tutorials/configuration-walkthrough.md`, `README.md` (Engines), `AGENTS.md` |
+| `src/CMakeLists.txt` (CMake options, `DAQIRI_ENGINE` default, CUDA arch) | `docs/getting-started.md`, `AGENTS.md` (Build & run), `README.md` (Quick Start) |
 | `src/kernels.cu` / `src/kernels.h` | `docs/benchmarks/raw_benchmarking.md`, `AGENTS.md` (Reorder & quantize kernels) |
 | `examples/*.cpp`, `examples/*.yaml` (new bench, new CLI flag, new YAML key) | `docs/benchmarks/raw_benchmarking.md`, `docs/tutorials/configuration-walkthrough.md`, `AGENTS.md` (benchmark table) |
 | `mkdocs.yml` nav | `docs/index.md`, `docs/landing/` (landing page links) |
@@ -127,7 +138,7 @@ findings. Greptile should catch them so a human reviewer doesn't have to.
   flagging this early saves a round trip.
 
 - **Commit title format.** Imperative mood, prefixed with the GitHub issue
-  number: `#<Issue Number> - <Title>` (e.g. `#42 - Add socket TCP backend`).
+  number: `#<Issue Number> - <Title>` (e.g. `#42 - Add socket TCP engine`).
   An issue must exist and be approved before coding starts; PRs without a
   referenced issue should be flagged.
 
@@ -154,8 +165,8 @@ findings. Greptile should catch them so a human reviewer doesn't have to.
   through the API. This is the BurstParams contract — that's the point.
 - Hardcoded CUDA arch list (`80;90;121`). It's intentional; there's a
   separate rule for callouts when a PR actually requires bumping it.
-- `#if DAQIRI_MGR_<NAME>` guards in backend-specific files. They're how
-  per-backend code is selected at compile time.
+- `#if DAQIRI_ENGINE_<NAME>` guards in engine-specific files. They're how
+  per-engine code is selected at compile time.
 - DPDK-style header-fill APIs (`set_udp_header`, etc.) only supporting UDP.
   Documented limitation; flag only if a PR claims to fix it but forgets to
   update `AGENTS.md` / `README.md`.

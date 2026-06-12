@@ -1,0 +1,18 @@
+# DAQIRI C++ formatting rules.
+#
+# Derived empirically from the existing sources: Google base style with the
+# project's local conventions layered on top:
+#   - 2-space indentation, attached braces (Google defaults)
+#   - ~100-column lines (the codebase wraps near 100, not 80)
+#   - pointers bind to the type (`T* x`), the dominant convention in src/
+#   - existing #include grouping is preserved (no automatic reordering)
+#   - function bodies stay expanded; only empty bodies collapse to `{}`
+#
+# Apply with: clang-format -style=file -i -fallback-style=none <files>
+#         or: git-clang-format --style file
+BasedOnStyle: Google
+ColumnLimit: 100
+PointerAlignment: Left
+DerivePointerAlignment: false
+SortIncludes: false
+AllowShortFunctionsOnASingleLine: Empty

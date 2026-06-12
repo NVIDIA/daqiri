@@ -1,0 +1,112 @@
+# DGX Spark (GB10) UDP socket bench -- combined base for the netns wire loopback.
+#
+# This is the single checked-in config for the UDP wire-loopback sweep. It carries
+# BOTH roles (the udp_server / udp_client interfaces, their memory regions, and the
+# socket_bench_server / socket_bench_client sections). A single process can't run
+# it as-is across namespaces (it would init the peer namespace's IP), so
+# scripts/gen_spark_netns_config.py splits it to one role at sweep time and
+# run_spark_bench.sh runs each role in its own namespace, assigning ports/cores per
+# pair (cores 16-19 across four pairs; the send and receive sides of a pair share
+# one core and self-pace, App TX ~= App RX). To split by hand:
+#   scripts/gen_spark_netns_config.py examples/daqiri_bench_socket_udp_tx_rx_spark_netns.yaml \
+#       --role server > server.yaml
+#   ip netns exec dq_wire_server daqiri_bench_socket server.yaml --seconds N --mode server
+#
+# Derived from examples/daqiri_bench_socket_udp_tx_rx.yaml (the 127.0.0.1 loopback
+# smoke config): wire IPs 10.250.0.1/2 and iterations bumped to 1e9 so a timed
+# --seconds run does not exhaust early. buf_size/max_payload_size are 65536/65535
+# (>= the 65507 max UDP datagram the sweep sends): the bench memsets a full
+# message_size into one TX buffer, so a smaller buf_size overflows the heap.
+#
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "socket"
+    master_core: 8
+    debug: false
+    log_level: "info"
+
+    memory_regions:
+    - name: "DATA_SOCKET_SERVER"
+      kind: "host"
+      affinity: 0
+      num_bufs: 1024
+      buf_size: 65536
+    - name: "DATA_SOCKET_CLIENT"
+      kind: "host"
+      affinity: 0
+      num_bufs: 1024
+      buf_size: 65536
+
+    interfaces:
+    - name: udp_server
+      address: 10.250.0.2
+      socket_config:
+        mode: server
+        local_addr: "udp://10.250.0.2:5001"
+        max_payload_size: 65535
+      rx:
+        queues:
+        - name: "Server_RX_Queue"
+          id: 0
+          cpu_core: 16
+          batch_size: 1
+          memory_regions:
+            - "DATA_SOCKET_SERVER"
+      tx:
+        queues:
+        - name: "Server_TX_Queue"
+          id: 0
+          cpu_core: 16
+          batch_size: 1
+          memory_regions:
+            - "DATA_SOCKET_SERVER"
+    - name: udp_client
+      address: 10.250.0.1
+      socket_config:
+        mode: client
+        local_addr: "udp://10.250.0.1:5002"
+        remote_addr: "udp://10.250.0.2:5001"
+        max_payload_size: 65535
+      tx:
+        queues:
+        - name: "Client_TX_Queue"
+          id: 0
+          cpu_core: 16
+          batch_size: 1
+          memory_regions:
+            - "DATA_SOCKET_CLIENT"
+      rx:
+        queues:
+        - name: "Client_RX_Queue"
+          id: 0
+          cpu_core: 16
+          batch_size: 1
+          memory_regions:
+            - "DATA_SOCKET_CLIENT"
+
+socket_bench_server:
+  # Bench worker thread affinity (PR #149). run_spark_bench.sh rewrites this to the
+  # pair core, so the server worker, client worker, and both queues share one core
+  # per pair -- the deliberate self-pacing setup (App TX ~= App RX).
+  cpu_core: 16
+  server: true
+  send: false
+  receive: true
+  iterations: 1000000000
+  message_size: 1024
+  server_address: 10.250.0.2
+  server_port: 5001
+
+socket_bench_client:
+  cpu_core: 16
+  server: false
+  send: true
+  receive: false
+  iterations: 1000000000
+  message_size: 1024
+  server_address: 10.250.0.2
+  client_address: 10.250.0.1
+  server_port: 5001

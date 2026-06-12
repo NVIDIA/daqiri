@@ -39,7 +39,7 @@
 #include <rte_mbuf_dyn.h>
 
 #include "src/dpdk_log.h"
-#include "daqiri_dpdk_mgr.h"
+#include "daqiri_dpdk_engine.h"
 #include "src/kernels.h"
 #include <daqiri/logging.hpp>
 
@@ -80,6 +80,21 @@ static inline int get_port_from_key(uint32_t key) {
  */
 static inline int get_queue_from_key(uint32_t key) {
     return static_cast<int>(key & 0xFFFF);
+}
+
+static void free_unsubmitted_tx_packets(BurstParams* burst) {
+  if (burst == nullptr) { return; }
+
+  // TX worker chains multi-segment mbufs only after enqueue succeeds.
+  // Before that point, every allocated segment must be freed directly.
+  for (int seg = 0; seg < burst->hdr.hdr.num_segs; seg++) {
+    if (burst->pkts[seg] == nullptr) { continue; }
+
+    auto** pkts = reinterpret_cast<rte_mbuf**>(burst->pkts[seg]);
+    for (size_t pkt = 0; pkt < burst->hdr.hdr.num_pkts; pkt++) {
+      if (pkts[pkt] != nullptr) { rte_pktmbuf_free_seg(pkts[pkt]); }
+    }
+  }
 }
 
 static inline bool is_cuda_accessible_packet_memory(MemoryKind kind) {
@@ -448,7 +463,7 @@ static inline bool extract_mbuf_rx_timestamp_ns(struct rte_mbuf* mbuf,
   return true;
 }
 
-bool DpdkMgr::init_reorder_queue_state(const InterfaceConfig& intf, const RxQueueConfig& qcfg) {
+bool DpdkEngine::init_reorder_queue_state(const InterfaceConfig& intf, const RxQueueConfig& qcfg) {
   if (intf.rx_.reorder_configs_.empty()) { return true; }
 
   const auto key = generate_queue_key(intf.port_id_, qcfg.common_.id_);
@@ -830,7 +845,7 @@ bool DpdkMgr::init_reorder_queue_state(const InterfaceConfig& intf, const RxQueu
   return true;
 }
 
-bool DpdkMgr::init_reorder_state() {
+bool DpdkEngine::init_reorder_state() {
   std::lock_guard<std::mutex> guard(reorder_lock_);
   cleanup_reorder_state();
 
@@ -851,7 +866,7 @@ bool DpdkMgr::init_reorder_state() {
   return true;
 }
 
-void DpdkMgr::cleanup_reorder_state() {
+void DpdkEngine::cleanup_reorder_state() {
   for (auto& [qkey, qstate] : reorder_queue_states_) {
     (void)qkey;
     for (auto& plan : qstate.plans) {
@@ -945,7 +960,7 @@ void DpdkMgr::cleanup_reorder_state() {
   reorder_output_pools_.clear();
 }
 
-Status DpdkMgr::acquire_reorder_output_buffer(ReorderPlanRuntime& plan,
+Status DpdkEngine::acquire_reorder_output_buffer(ReorderPlanRuntime& plan,
                                               size_t* buffer_idx,
                                               void** output_buffer) {
   if (buffer_idx == nullptr || output_buffer == nullptr) { return Status::NULL_PTR; }
@@ -972,7 +987,7 @@ Status DpdkMgr::acquire_reorder_output_buffer(ReorderPlanRuntime& plan,
   return Status::NO_FREE_PACKET_BUFFERS;
 }
 
-void DpdkMgr::release_reorder_output_buffer(std::shared_ptr<ReorderOutputPool> output_pool,
+void DpdkEngine::release_reorder_output_buffer(std::shared_ptr<ReorderOutputPool> output_pool,
                                             size_t buffer_idx) {
   if (output_pool == nullptr || buffer_idx >= output_pool->buffers.size()) { return; }
 
@@ -983,7 +998,7 @@ void DpdkMgr::release_reorder_output_buffer(std::shared_ptr<ReorderOutputPool> o
   }
 }
 
-Status DpdkMgr::poll_reorder_events(ReorderPlanRuntime& plan) {
+Status DpdkEngine::poll_reorder_events(ReorderPlanRuntime& plan) {
   Status final_status = Status::SUCCESS;
 
   for (auto it = plan.pending_copies.begin(); it != plan.pending_copies.end();) {
@@ -1046,7 +1061,7 @@ Status DpdkMgr::poll_reorder_events(ReorderPlanRuntime& plan) {
   return final_status;
 }
 
-Status DpdkMgr::append_reorder_packet(ReorderPlanRuntime& plan,
+Status DpdkEngine::append_reorder_packet(ReorderPlanRuntime& plan,
                                       struct rte_mbuf* mbuf,
                                       void* pkt_ptr,
                                       uint64_t now_cycles,
@@ -1099,7 +1114,7 @@ Status DpdkMgr::append_reorder_packet(ReorderPlanRuntime& plan,
   return Status::SUCCESS;
 }
 
-Status DpdkMgr::create_reorder_output_burst(ReorderPlanRuntime& plan,
+Status DpdkEngine::create_reorder_output_burst(ReorderPlanRuntime& plan,
                                             std::shared_ptr<ReorderOutputPool> output_pool,
                                             size_t buffer_idx,
                                             void* output_buffer,
@@ -1161,7 +1176,7 @@ Status DpdkMgr::create_reorder_output_burst(ReorderPlanRuntime& plan,
   return Status::SUCCESS;
 }
 
-Status DpdkMgr::flush_reorder_batch(ReorderPlanRuntime& plan,
+Status DpdkEngine::flush_reorder_batch(ReorderPlanRuntime& plan,
                                     uint32_t batch_id,
                                     bool timeout_flush,
                                     BurstParams** out_burst) {
@@ -1365,7 +1380,7 @@ Status DpdkMgr::flush_reorder_batch(ReorderPlanRuntime& plan,
   return Status::SUCCESS;
 }
 
-Status DpdkMgr::flush_reorder_timeouts(ReorderQueueState& qstate, uint64_t now_cycles) {
+Status DpdkEngine::flush_reorder_timeouts(ReorderQueueState& qstate, uint64_t now_cycles) {
   Status final_status = Status::SUCCESS;
 
   for (auto& plan : qstate.plans) {
@@ -1392,7 +1407,7 @@ Status DpdkMgr::flush_reorder_timeouts(ReorderQueueState& qstate, uint64_t now_c
   return final_status;
 }
 
-Status DpdkMgr::process_burst_for_reorder(uint32_t key, ReorderQueueState& qstate, BurstParams* burst) {
+Status DpdkEngine::process_burst_for_reorder(uint32_t key, ReorderQueueState& qstate, BurstParams* burst) {
   (void)key;
   if (burst == nullptr) { return Status::NULL_PTR; }
 
@@ -1539,7 +1554,7 @@ Status DpdkMgr::process_burst_for_reorder(uint32_t key, ReorderQueueState& qstat
   return final_status;
 }
 
-Status DpdkMgr::get_next_output_or_ready(uint32_t key, ReorderQueueState& qstate, BurstParams** burst) {
+Status DpdkEngine::get_next_output_or_ready(uint32_t key, ReorderQueueState& qstate, BurstParams** burst) {
   if (burst == nullptr) { return Status::NULL_PTR; }
   *burst = nullptr;
 
@@ -1590,7 +1605,7 @@ Status DpdkMgr::get_next_output_or_ready(uint32_t key, ReorderQueueState& qstate
   return Status::NOT_READY;
 }
 
-void DpdkMgr::release_reorder_output_context(BurstParams* burst) {
+void DpdkEngine::release_reorder_output_context(BurstParams* burst) {
   if (burst == nullptr
       || (burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) == 0U
       || burst->custom_pkt_data == nullptr) {
@@ -1603,7 +1618,7 @@ void DpdkMgr::release_reorder_output_context(BurstParams* burst) {
   ctx->released = true;
 }
 
-Status DpdkMgr::get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info) {
+Status DpdkEngine::get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info) {
   if (burst == nullptr || info == nullptr) { return Status::NULL_PTR; }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) == 0U
       || burst->custom_pkt_data == nullptr) {
@@ -1631,7 +1646,7 @@ Status DpdkMgr::get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* inf
   return Status::SUCCESS;
 }
 
-Status DpdkMgr::set_reorder_cuda_stream(const std::string& interface_name,
+Status DpdkEngine::set_reorder_cuda_stream(const std::string& interface_name,
                                         const std::string& reorder_name,
                                         cudaStream_t stream) {
   std::lock_guard<std::mutex> guard(reorder_lock_);
@@ -1676,7 +1691,7 @@ Status DpdkMgr::set_reorder_cuda_stream(const std::string& interface_name,
 ///  \brief Init
 ///
 ////////////////////////////////////////////////////////////////////////////////
-bool DpdkMgr::set_config_and_initialize(const NetworkConfig& cfg) {
+bool DpdkEngine::set_config_and_initialize(const NetworkConfig& cfg) {
   num_init++;
 
   if (!this->initialized_) {
@@ -1692,7 +1707,7 @@ bool DpdkMgr::set_config_and_initialize(const NetworkConfig& cfg) {
 
     // Start Initialize in a separate thread so it doesn't set the affinity for the
     // whole application
-    std::thread proc_thread(&DpdkMgr::initialize, this);
+    std::thread proc_thread(&DpdkEngine::initialize, this);
     proc_thread.join();
 
     // Our thread should have set the flag if it succeeded
@@ -1715,7 +1730,7 @@ bool DpdkMgr::set_config_and_initialize(const NetworkConfig& cfg) {
   return true;
 }
 
-Status DpdkMgr::get_mac_addr(int port, char* mac) {
+Status DpdkEngine::get_mac_addr(int port, char* mac) {
   if (port > mac_addrs.size()) {
     DAQIRI_LOG_CRITICAL("Port {} out of range in get_mac_addr() lookup");
     return Status::INVALID_PARAMETER;
@@ -1725,7 +1740,7 @@ Status DpdkMgr::get_mac_addr(int port, char* mac) {
   return Status::SUCCESS;
 }
 
-void DpdkMgr::adjust_memory_regions() {
+void DpdkEngine::adjust_memory_regions() {
   // num_bufs smaller than ~1.5x the NIC descriptor ring deadlock the worker once the ring
   // fills (the ring holds every buffer in the pool with no replacement available, so the
   // next rte_pktmbuf_alloc blocks). Bump such MRs to 3x the ring size up-front -- this runs
@@ -1760,7 +1775,7 @@ void DpdkMgr::adjust_memory_regions() {
 }
 
 
-bool DpdkMgr::setup_rx_timestamp_dynfield() {
+bool DpdkEngine::setup_rx_timestamp_dynfield() {
   static bool done = false;
   static int registered_offset = -1;
   static uint64_t registered_mask = 0;
@@ -1787,7 +1802,7 @@ bool DpdkMgr::setup_rx_timestamp_dynfield() {
   return true;
 }
 
-bool DpdkMgr::calibrate_rx_timestamp_clock(uint16_t port_id) {
+bool DpdkEngine::calibrate_rx_timestamp_clock(uint16_t port_id) {
   uint64_t start_clock = 0;
   int ret = rte_eth_read_clock(port_id, &start_clock);
   if (ret < 0) {
@@ -1863,7 +1878,7 @@ bool DpdkMgr::calibrate_rx_timestamp_clock(uint16_t port_id) {
   return true;
 }
 
-bool DpdkMgr::setup_tx_timestamp_dynfield() {
+bool DpdkEngine::setup_tx_timestamp_dynfield() {
   static bool done = false;
   static int registered_offset = -1;
   static uint64_t registered_mask = 0;
@@ -1894,7 +1909,7 @@ bool DpdkMgr::setup_tx_timestamp_dynfield() {
 
 // HWS doesn't allow zero queues on an interface, so we make some dummy interfaces here for
 // users that are only doing TX
-void DpdkMgr::create_dummy_rx_q() {
+void DpdkEngine::create_dummy_rx_q() {
   for (auto& intf : cfg_.ifs_) {
     auto& rx = intf.rx_;
 
@@ -1929,7 +1944,7 @@ void DpdkMgr::create_dummy_rx_q() {
 }
 
 // DPDK 25.11+ requires at least one TX queue per initialized interface.
-void DpdkMgr::create_dummy_tx_q() {
+void DpdkEngine::create_dummy_tx_q() {
   for (auto& intf : cfg_.ifs_) {
     auto& tx = intf.tx_;
 
@@ -1960,7 +1975,7 @@ void DpdkMgr::create_dummy_tx_q() {
   }
 }
 
-void DpdkMgr::initialize() {
+void DpdkEngine::initialize() {
   int ret;
 
   // Cleanup-on-failure guard: if initialize() returns without setting
@@ -1968,9 +1983,9 @@ void DpdkMgr::initialize() {
   // unlink any --file-prefix=<...>map_* files we created. Prevents pinned
   // hugepages from blocking the next run.
   struct EalCleanupGuard {
-    DpdkMgr* mgr;
+    DpdkEngine* engine;
     ~EalCleanupGuard() {
-      if (!mgr->initialized_) { mgr->cleanup_eal(); }
+      if (!engine->initialized_) { engine->cleanup_eal(); }
     }
   } cleanup_guard{this};
 
@@ -2577,7 +2592,7 @@ void DpdkMgr::initialize() {
   this->initialized_ = true;
 }
 
-int DpdkMgr::setup_pools_and_rings(int max_rx_batch, int max_tx_batch) {
+int DpdkEngine::setup_pools_and_rings(int max_rx_batch, int max_tx_batch) {
   DAQIRI_LOG_DEBUG("Setting up RX rings");
   for (int i = 0; i < cfg_.ifs_.size(); i++) {
     int port_id = cfg_.ifs_[i].port_id_;
@@ -2710,7 +2725,7 @@ int DpdkMgr::setup_pools_and_rings(int max_rx_batch, int max_tx_batch) {
 #define MAX_PATTERN_NUM 5
 #define MAX_ACTION_NUM 4
 
-struct rte_flow_item_flex_handle *DpdkMgr::create_flex_flow_rule(
+struct rte_flow_item_flex_handle *DpdkEngine::create_flex_flow_rule(
     int port, int offset, struct rte_flow_item *udp_item, struct rte_flow_item *end_pattern) {
   static struct rte_flow_item_flex_handle *item_handle = NULL;
   struct rte_flow_error error;
@@ -2786,7 +2801,7 @@ struct rte_flow_item_flex_handle *DpdkMgr::create_flex_flow_rule(
   return item_handle;
 }
 
-struct rte_flow* DpdkMgr::add_flex_item_flow(
+struct rte_flow* DpdkEngine::add_flex_item_flow(
     int port, const FlexItemMatch& match_info, uint16_t queue_id) {
   /* Declaring structs being used. 8< */
   struct rte_flow_attr attr;
@@ -2908,7 +2923,7 @@ struct rte_flow* DpdkMgr::add_flex_item_flow(
 
 
 // Taken from flow_block.c DPDK example */
-struct rte_flow* DpdkMgr::add_flow(int port, const FlowConfig& cfg) {
+struct rte_flow* DpdkEngine::add_flow(int port, const FlowConfig& cfg) {
   /* Declaring structs being used. 8< */
   struct rte_flow_attr attr;
   struct rte_flow_item pattern[MAX_PATTERN_NUM];
@@ -3038,7 +3053,7 @@ struct rte_flow* DpdkMgr::add_flow(int port, const FlowConfig& cfg) {
   return flow;
 }
 
-bool DpdkMgr::add_send_to_kernel_fallback(int port, uint32_t group) {
+bool DpdkEngine::add_send_to_kernel_fallback(int port, uint32_t group) {
   struct rte_flow_attr attr;
   struct rte_flow_item pattern[MAX_PATTERN_NUM];
   struct rte_flow_action action[MAX_ACTION_NUM];
@@ -3084,7 +3099,7 @@ bool DpdkMgr::add_send_to_kernel_fallback(int port, uint32_t group) {
   return true;
 }
 
-Status DpdkMgr::drop_all_traffic(int port) {
+Status DpdkEngine::drop_all_traffic(int port) {
   /* Declaring structs being used. */
   struct rte_flow_attr attr;
   struct rte_flow_item pattern[MAX_PATTERN_NUM];
@@ -3159,7 +3174,7 @@ Status DpdkMgr::drop_all_traffic(int port) {
   return Status::SUCCESS;
 }
 
-Status DpdkMgr::allow_all_traffic(int port) {
+Status DpdkEngine::allow_all_traffic(int port) {
   if (drop_all_traffic_flow[port].drop == nullptr) {
     DAQIRI_LOG_ERROR("Cannot remove drop rule: flow pointer is null");
     return Status::INVALID_PARAMETER;
@@ -3195,7 +3210,7 @@ Status DpdkMgr::allow_all_traffic(int port) {
   return Status::SUCCESS;
 }
 
-struct rte_flow* DpdkMgr::add_modify_flow_set(int port, int queue, const char* buf, int len,
+struct rte_flow* DpdkEngine::add_modify_flow_set(int port, int queue, const char* buf, int len,
                                               Direction direction) {
   struct rte_flow_attr attr;
   struct rte_flow_item pattern[MAX_PATTERN_NUM];
@@ -3270,7 +3285,7 @@ struct rte_flow* DpdkMgr::add_modify_flow_set(int port, int queue, const char* b
   return nullptr;
 }
 
-void DpdkMgr::apply_tx_offloads(int port) {
+void DpdkEngine::apply_tx_offloads(int port) {
   for (const auto& q : cfg_.ifs_[port].tx_.queues_) {
     for (const auto& off : q.common_.offloads_) {
       if (off == "tx_eth_src") {  // Offload Ethernet source copy
@@ -3291,7 +3306,7 @@ void DpdkMgr::apply_tx_offloads(int port) {
 ///  \brief
 ///
 ////////////////////////////////////////////////////////////////////////////////
-void DpdkMgr::PrintDpdkStats(int port) {
+void DpdkEngine::PrintDpdkStats(int port) {
   struct rte_eth_stats eth_stats;
   int len, ret;
 
@@ -3343,7 +3358,7 @@ void DpdkMgr::PrintDpdkStats(int port) {
   free(xstats_names);
 }
 
-DpdkMgr::~DpdkMgr() {
+DpdkEngine::~DpdkEngine() {
     cleanup_reorder_state();
 
     // shutdown() handles ring cleanup BEFORE rte_eal_cleanup(), so the maps
@@ -3367,8 +3382,8 @@ DpdkMgr::~DpdkMgr() {
     cleanup_eal();
 }
 
-bool DpdkMgr::validate_config() const {
-  if (!Manager::validate_config()) { return false; }
+bool DpdkEngine::validate_config() const {
+  if (!Engine::validate_config()) { return false; }
 
   for (const auto& intf : cfg_.ifs_) {
     std::unordered_map<uint16_t, uint16_t> flow_to_queue;
@@ -3580,7 +3595,7 @@ bool DpdkMgr::validate_config() const {
 ///  \brief
 ///
 ////////////////////////////////////////////////////////////////////////////////
-void DpdkMgr::run() {
+void DpdkEngine::run() {
   int secondary_id = 0;
   int icore;
 
@@ -3691,13 +3706,13 @@ void DpdkMgr::run() {
 ///  \brief
 ///
 ////////////////////////////////////////////////////////////////////////////////
-void DpdkMgr::flush_port_queue_impl(int port, int queue) {
+void DpdkEngine::flush_port_queue_impl(int port, int queue) {
   struct rte_mbuf* rx_mbuf;
   DAQIRI_LOG_INFO("Flushing packets on port {} queue {}", port, queue);
   while (rte_eth_rx_burst(port, queue, &rx_mbuf, 1) != 0) { rte_pktmbuf_free(rx_mbuf); }
 }
 
-void DpdkMgr::flush_port_queue(int port, int queue) {
+void DpdkEngine::flush_port_queue(int port, int queue) {
   flush_port_queue_impl(port, queue);
 }
 
@@ -3706,7 +3721,7 @@ void DpdkMgr::flush_port_queue(int port, int queue) {
   to segregate traffic by queues, but they don't want to waste extra CPU cores by mapping a
   core per queue.
 */
-int DpdkMgr::rx_core_multi_q_worker(void* arg) {
+int DpdkEngine::rx_core_multi_q_worker(void* arg) {
   RxWorkerMultiQParams* tparams = (RxWorkerMultiQParams*)arg;
 
   int ret = 0;
@@ -3724,12 +3739,12 @@ int DpdkMgr::rx_core_multi_q_worker(void* arg) {
                     pq_str,
                     rte_socket_id());
 
-  std::array<int, Manager::MAX_RX_Q_PER_CORE> nb_rx{};
-  std::array<int, Manager::MAX_RX_Q_PER_CORE> cur_pkt_in_batch{};
-  std::array<BurstParams*, Manager::MAX_RX_Q_PER_CORE> bursts{};
-  std::array<std::array<rte_mbuf*, DEFAULT_NUM_RX_BURST>, Manager::MAX_RX_Q_PER_CORE> mbuf_arr{};
-  std::array<uint64_t, Manager::MAX_RX_Q_PER_CORE> total_pkts{};
-  std::array<uint64_t, Manager::MAX_RX_Q_PER_CORE> last_cycles;
+  std::array<int, Engine::MAX_RX_Q_PER_CORE> nb_rx{};
+  std::array<int, Engine::MAX_RX_Q_PER_CORE> cur_pkt_in_batch{};
+  std::array<BurstParams*, Engine::MAX_RX_Q_PER_CORE> bursts{};
+  std::array<std::array<rte_mbuf*, DEFAULT_NUM_RX_BURST>, Engine::MAX_RX_Q_PER_CORE> mbuf_arr{};
+  std::array<uint64_t, Engine::MAX_RX_Q_PER_CORE> total_pkts{};
+  std::array<uint64_t, Engine::MAX_RX_Q_PER_CORE> last_cycles;
   std::generate(last_cycles.begin(), last_cycles.end(), rte_get_tsc_cycles);
 
   uint16_t cur_idx            = 0;
@@ -3909,7 +3924,7 @@ int DpdkMgr::rx_core_multi_q_worker(void* arg) {
 ///  \brief
 ///
 ////////////////////////////////////////////////////////////////////////////////
-int DpdkMgr::rx_core_worker(void* arg) {
+int DpdkEngine::rx_core_worker(void* arg) {
   RxWorkerParams* tparams = (RxWorkerParams*)arg;
 
   // In the future we may want to periodically update this if the CPU clock drifts
@@ -4065,7 +4080,7 @@ int DpdkMgr::rx_core_worker(void* arg) {
   return 0;
 }
 
-int DpdkMgr::rx_lb_worker(void* arg) {
+int DpdkEngine::rx_lb_worker(void* arg) {
   RxWorkerParams* tparams = (RxWorkerParams*)arg;
   int ret = 0;
   uint64_t freq = rte_get_tsc_hz();
@@ -4132,7 +4147,7 @@ int DpdkMgr::rx_lb_worker(void* arg) {
   return 0;
 }
 
-int DpdkMgr::tx_core_worker(void* arg) {
+int DpdkEngine::tx_core_worker(void* arg) {
   TxWorkerParams* tparams = (TxWorkerParams*)arg;
   uint64_t seq;
   uint64_t ttl_pkts_tx = 0;
@@ -4199,7 +4214,7 @@ int DpdkMgr::tx_core_worker(void* arg) {
   return 0;
 }
 
-int DpdkMgr::tx_lb_worker(void* arg) {
+int DpdkEngine::tx_lb_worker(void* arg) {
   TxWorkerParams* tparams = (TxWorkerParams*)arg;
   uint64_t seq;
   uint64_t ttl_pkts_tx = 0;
@@ -4251,7 +4266,7 @@ int DpdkMgr::tx_lb_worker(void* arg) {
 }
 
 /* daqiri interface implementations */
-void* DpdkMgr::get_segment_packet_ptr(BurstParams* burst, int seg, int idx) {
+void* DpdkEngine::get_segment_packet_ptr(BurstParams* burst, int seg, int idx) {
   if (burst == nullptr || idx < 0 || seg < 0 || seg >= MAX_NUM_SEGS) { return nullptr; }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
     if (seg != 0 || burst->pkts[0] == nullptr) { return nullptr; }
@@ -4260,7 +4275,7 @@ void* DpdkMgr::get_segment_packet_ptr(BurstParams* burst, int seg, int idx) {
   return rte_pktmbuf_mtod(reinterpret_cast<rte_mbuf*>(burst->pkts[seg][idx]), void*);
 }
 
-void* DpdkMgr::get_packet_ptr(BurstParams* burst, int idx) {
+void* DpdkEngine::get_packet_ptr(BurstParams* burst, int idx) {
   if (burst == nullptr || idx < 0) { return nullptr; }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
     if (burst->pkts[0] == nullptr) { return nullptr; }
@@ -4269,7 +4284,7 @@ void* DpdkMgr::get_packet_ptr(BurstParams* burst, int idx) {
   return rte_pktmbuf_mtod(reinterpret_cast<rte_mbuf*>(burst->pkts[0][idx]), void*);
 }
 
-uint32_t DpdkMgr::get_segment_packet_length(BurstParams* burst, int seg, int idx) {
+uint32_t DpdkEngine::get_segment_packet_length(BurstParams* burst, int seg, int idx) {
   if (burst == nullptr || idx < 0 || seg < 0 || seg >= MAX_NUM_SEGS) { return 0; }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
     if (seg != 0 || burst->pkt_lens[0] == nullptr) { return 0; }
@@ -4278,7 +4293,7 @@ uint32_t DpdkMgr::get_segment_packet_length(BurstParams* burst, int seg, int idx
   return reinterpret_cast<rte_mbuf*>(burst->pkts[seg][idx])->data_len;
 }
 
-uint32_t DpdkMgr::get_packet_length(BurstParams* burst, int idx) {
+uint32_t DpdkEngine::get_packet_length(BurstParams* burst, int idx) {
   if (burst == nullptr || idx < 0) { return 0; }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
     if (burst->pkt_lens[0] == nullptr) { return 0; }
@@ -4287,7 +4302,7 @@ uint32_t DpdkMgr::get_packet_length(BurstParams* burst, int idx) {
   return reinterpret_cast<rte_mbuf*>(burst->pkts[0][idx])->pkt_len;
 }
 
-uint16_t DpdkMgr::get_packet_flow_id(BurstParams* burst, int idx) {
+uint16_t DpdkEngine::get_packet_flow_id(BurstParams* burst, int idx) {
   if (burst == nullptr || idx < 0) { return 0; }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) { return 0; }
   if (idx >= static_cast<int>(burst->hdr.hdr.num_pkts) || burst->pkts[0] == nullptr) {
@@ -4298,7 +4313,7 @@ uint16_t DpdkMgr::get_packet_flow_id(BurstParams* burst, int idx) {
   return mbuf->hash.fdir.hi;
 }
 
-Status DpdkMgr::get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) {
+Status DpdkEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) {
   if (burst == nullptr || timestamp_ns == nullptr) { return Status::NULL_PTR; }
   *timestamp_ns = 0;
   if (idx < 0 || idx >= static_cast<int>(burst->hdr.hdr.num_pkts)) {
@@ -4329,7 +4344,7 @@ Status DpdkMgr::get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* t
   return Status::SUCCESS;
 }
 
-Status DpdkMgr::set_packet_tx_time(BurstParams* burst, int idx, uint64_t timestamp) {
+Status DpdkEngine::set_packet_tx_time(BurstParams* burst, int idx, uint64_t timestamp) {
   if (burst == nullptr) { return Status::NULL_PTR; }
   if (idx < 0 || idx >= static_cast<int>(burst->hdr.hdr.num_pkts)) {
     return Status::INVALID_PARAMETER;
@@ -4348,17 +4363,17 @@ Status DpdkMgr::set_packet_tx_time(BurstParams* burst, int idx, uint64_t timesta
 
 //  The number of RX can differ from the configured queues in TX-only mode where we need to create
 //  fake RX queues.
-uint16_t DpdkMgr::get_num_rx_queues(int port_id) const {
+uint16_t DpdkEngine::get_num_rx_queues(int port_id) const {
   return port_q_num.at(static_cast<uint16_t>(port_id)).first;
 }
 
-void* DpdkMgr::get_packet_extra_info(BurstParams* burst, int idx) {
+void* DpdkEngine::get_packet_extra_info(BurstParams* burst, int idx) {
   if (burst == nullptr || idx < 0) { return nullptr; }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) { return nullptr; }
   return nullptr;
 }
 
-Status DpdkMgr::get_tx_packet_burst(BurstParams* burst) {
+Status DpdkEngine::get_tx_packet_burst(BurstParams* burst) {
   const uint32_t key = generate_queue_key(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
   const auto q_it = tx_dpdk_q_map_.find(key);
   if (q_it == tx_dpdk_q_map_.end() || q_it->second == nullptr) {
@@ -4394,7 +4409,7 @@ Status DpdkMgr::get_tx_packet_burst(BurstParams* burst) {
   return Status::SUCCESS;
 }
 
-Status DpdkMgr::set_eth_header(BurstParams* burst, int idx, char* dst_addr) {
+Status DpdkEngine::set_eth_header(BurstParams* burst, int idx, char* dst_addr) {
   auto mbuf = reinterpret_cast<rte_mbuf*>(burst->pkts[0][idx]);
   auto mbuf_data = rte_pktmbuf_mtod(mbuf, UDPPkt*);
   memcpy(reinterpret_cast<void*>(&mbuf_data->eth.dst_addr),
@@ -4405,7 +4420,7 @@ Status DpdkMgr::set_eth_header(BurstParams* burst, int idx, char* dst_addr) {
   return Status::SUCCESS;
 }
 
-Status DpdkMgr::set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint8_t proto,
+Status DpdkEngine::set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint8_t proto,
                                    unsigned int src_host, unsigned int dst_host) {
   auto mbuf = reinterpret_cast<rte_mbuf*>(burst->pkts[0][idx]);
   auto mbuf_data = rte_pktmbuf_mtod(mbuf, UDPPkt*);
@@ -4418,7 +4433,7 @@ Status DpdkMgr::set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint8_t
   return Status::SUCCESS;
 }
 
-Status DpdkMgr::set_udp_header(BurstParams* burst, int idx, int udp_len, uint16_t src_port,
+Status DpdkEngine::set_udp_header(BurstParams* burst, int idx, int udp_len, uint16_t src_port,
                                   uint16_t dst_port) {
   auto mbuf = reinterpret_cast<rte_mbuf*>(burst->pkts[0][idx]);
   auto mbuf_data = rte_pktmbuf_mtod(mbuf, UDPPkt*);
@@ -4430,7 +4445,7 @@ Status DpdkMgr::set_udp_header(BurstParams* burst, int idx, int udp_len, uint16_
   return Status::SUCCESS;
 }
 
-Status DpdkMgr::set_udp_payload(BurstParams* burst, int idx, void* data, int len) {
+Status DpdkEngine::set_udp_payload(BurstParams* burst, int idx, void* data, int len) {
   auto mbuf = reinterpret_cast<rte_mbuf*>(burst->pkts[0][idx]);
   auto mbuf_data = rte_pktmbuf_mtod(mbuf, UDPPkt*);
 
@@ -4438,7 +4453,7 @@ Status DpdkMgr::set_udp_payload(BurstParams* burst, int idx, void* data, int len
   return Status::SUCCESS;
 }
 
-bool DpdkMgr::is_tx_burst_available(BurstParams* burst) {
+bool DpdkEngine::is_tx_burst_available(BurstParams* burst) {
   const uint32_t key = generate_queue_key(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
   const auto item = tx_dpdk_q_map_.find(key);
   if (item == tx_dpdk_q_map_.end()) {
@@ -4453,7 +4468,7 @@ bool DpdkMgr::is_tx_burst_available(BurstParams* burst) {
   return true;
 }
 
-Status DpdkMgr::set_packet_lengths(BurstParams* burst, int idx,
+Status DpdkEngine::set_packet_lengths(BurstParams* burst, int idx,
                                    const std::initializer_list<int>& lens) {
   uint32_t ttl_len = 0;
   for (int seg = 0; seg < burst->hdr.hdr.num_segs; seg++) {
@@ -4466,7 +4481,7 @@ Status DpdkMgr::set_packet_lengths(BurstParams* burst, int idx,
   return Status::SUCCESS;
 }
 
-Status DpdkMgr::set_all_packet_lengths(BurstParams* burst,
+Status DpdkEngine::set_all_packet_lengths(BurstParams* burst,
                                        const std::initializer_list<int>& lens) {
   if (burst == nullptr) { return Status::NULL_PTR; }
 
@@ -4489,7 +4504,7 @@ Status DpdkMgr::set_all_packet_lengths(BurstParams* burst,
   return Status::SUCCESS;
 }
 
-void DpdkMgr::free_packet_segment(BurstParams* burst, int seg, int pkt) {
+void DpdkEngine::free_packet_segment(BurstParams* burst, int seg, int pkt) {
   if (burst == nullptr) { return; }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
     release_reorder_output_context(burst);
@@ -4502,7 +4517,7 @@ void DpdkMgr::free_packet_segment(BurstParams* burst, int seg, int pkt) {
   rte_pktmbuf_free_seg(reinterpret_cast<rte_mbuf**>(burst->pkts[seg])[pkt]);
 }
 
-void DpdkMgr::free_all_segment_packets(BurstParams* burst, int seg) {
+void DpdkEngine::free_all_segment_packets(BurstParams* burst, int seg) {
   if (burst == nullptr) { return; }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
     release_reorder_output_context(burst);
@@ -4516,7 +4531,7 @@ void DpdkMgr::free_all_segment_packets(BurstParams* burst, int seg) {
   }
 }
 
-void DpdkMgr::free_packet(BurstParams* burst, int pkt) {
+void DpdkEngine::free_packet(BurstParams* burst, int pkt) {
   if (burst == nullptr) { return; }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
     release_reorder_output_context(burst);
@@ -4528,7 +4543,7 @@ void DpdkMgr::free_packet(BurstParams* burst, int pkt) {
   rte_pktmbuf_free(reinterpret_cast<rte_mbuf**>(burst->pkts[0])[pkt]);
 }
 
-void DpdkMgr::free_all_packets(BurstParams* burst) {
+void DpdkEngine::free_all_packets(BurstParams* burst) {
   if (burst == nullptr) { return; }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
     release_reorder_output_context(burst);
@@ -4542,7 +4557,7 @@ void DpdkMgr::free_all_packets(BurstParams* burst) {
   }
 }
 
-void DpdkMgr::free_rx_burst(BurstParams* burst) {
+void DpdkEngine::free_rx_burst(BurstParams* burst) {
   if (burst == nullptr) { return; }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
     release_reorder_output_context(burst);
@@ -4565,7 +4580,7 @@ void DpdkMgr::free_rx_burst(BurstParams* burst) {
   rte_mempool_put(rx_metadata, burst);
 }
 
-void DpdkMgr::free_tx_burst(BurstParams* burst) {
+void DpdkEngine::free_tx_burst(BurstParams* burst) {
   const uint32_t key = generate_queue_key(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
   const auto burst_pool = tx_burst_buffers.find(key);
 
@@ -4577,7 +4592,7 @@ void DpdkMgr::free_tx_burst(BurstParams* burst) {
   rte_mempool_put(tx_metadata, burst);
 }
 
-Status DpdkMgr::get_rx_burst(BurstParams** burst, int port, int q) {
+Status DpdkEngine::get_rx_burst(BurstParams** burst, int port, int q) {
   uint32_t key = generate_queue_key(port, q);
   const auto reorder_it = reorder_queue_states_.find(key);
   if (reorder_it != reorder_queue_states_.end() && reorder_it->second.enabled) {
@@ -4596,7 +4611,7 @@ Status DpdkMgr::get_rx_burst(BurstParams** burst, int port, int q) {
   return Status::SUCCESS;
 }
 
-void DpdkMgr::free_rx_metadata(BurstParams* burst) {
+void DpdkEngine::free_rx_metadata(BurstParams* burst) {
   if (burst != nullptr && (burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
     free_rx_burst(burst);
     return;
@@ -4604,11 +4619,11 @@ void DpdkMgr::free_rx_metadata(BurstParams* burst) {
   rte_mempool_put(rx_metadata, burst);
 }
 
-void DpdkMgr::free_tx_metadata(BurstParams* burst) {
+void DpdkEngine::free_tx_metadata(BurstParams* burst) {
   rte_mempool_put(tx_metadata, burst);
 }
 
-Status DpdkMgr::get_tx_metadata_buffer(BurstParams** burst) {
+Status DpdkEngine::get_tx_metadata_buffer(BurstParams** burst) {
   if (rte_mempool_get(tx_metadata, reinterpret_cast<void**>(burst)) != 0) {
     DAQIRI_LOG_CRITICAL("Running out of TX meta buffers due to high rates. Either increase "\
       "your number of metadata buffers (current: {}) with `tx_meta_buffers` (will "\
@@ -4620,7 +4635,7 @@ Status DpdkMgr::get_tx_metadata_buffer(BurstParams** burst) {
   return Status::SUCCESS;
 }
 
-Status DpdkMgr::send_tx_burst(BurstParams* burst) {
+Status DpdkEngine::send_tx_burst(BurstParams* burst) {
   uint32_t key = generate_queue_key(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
   const auto ring = tx_rings.find(key);
 
@@ -4632,6 +4647,7 @@ Status DpdkMgr::send_tx_burst(BurstParams* burst) {
   }
 
   if (rte_ring_enqueue(ring->second, reinterpret_cast<void*>(burst)) != 0) {
+    free_unsubmitted_tx_packets(burst);
     free_tx_burst(burst);
     DAQIRI_LOG_CRITICAL("Failed to enqueue TX work");
     return Status::NO_SPACE_AVAILABLE;
@@ -4640,16 +4656,16 @@ Status DpdkMgr::send_tx_burst(BurstParams* burst) {
   return Status::SUCCESS;
 }
 
-void DpdkMgr::shutdown() {
-  // Idempotency guard: shutdown() may be invoked a second time via ~DpdkMgr
+void DpdkEngine::shutdown() {
+  // Idempotency guard: shutdown() may be invoked a second time via ~DpdkEngine
   // during C++ __cxa_finalize, by which point the spdlog default logger has
   // already been destroyed and any DAQIRI_LOG_INFO here crashes inside
   // spdlog::sink_it_. Skip the body (and the log calls) if already torn down.
   if (!initialized_) { return; }
-  DAQIRI_LOG_INFO("daqiri DPDK manager shutdown called {}", num_init);
+  DAQIRI_LOG_INFO("daqiri DPDK engine shutdown called {}", num_init);
 
   if (--num_init == 0) {
-    DAQIRI_LOG_INFO("daqiri DPDK manager shutting down");
+    DAQIRI_LOG_INFO("daqiri DPDK engine shutting down");
     cleanup_reorder_state();
     force_quit.store(true);
 
@@ -4673,8 +4689,8 @@ void DpdkMgr::shutdown() {
   }
 }
 
-void DpdkMgr::print_stats() {
-  DAQIRI_LOG_INFO("daqiri DPDK manager stats");
+void DpdkEngine::print_stats() {
+  DAQIRI_LOG_INFO("daqiri DPDK engine stats");
   if (loopback_ == LoopbackType::LOOPBACK_TYPE_SW) {
     return;
   }
@@ -4684,7 +4700,7 @@ void DpdkMgr::print_stats() {
   }
 }
 
-uint64_t DpdkMgr::get_burst_tot_byte(BurstParams* burst) {
+uint64_t DpdkEngine::get_burst_tot_byte(BurstParams* burst) {
   if (burst == nullptr) { return 0; }
   uint64_t total = 0;
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
@@ -4702,7 +4718,7 @@ uint64_t DpdkMgr::get_burst_tot_byte(BurstParams* burst) {
   return total;
 }
 
-BurstParams* DpdkMgr::create_tx_burst_params() {
+BurstParams* DpdkEngine::create_tx_burst_params() {
   BurstParams* burst = nullptr;
   if (rte_mempool_get(tx_metadata, reinterpret_cast<void**>(&burst)) != 0) {
     DAQIRI_LOG_CRITICAL("Failed to get TX meta descriptor");

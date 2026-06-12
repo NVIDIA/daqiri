@@ -28,17 +28,17 @@
 #include <netinet/in.h>
 
 #include <daqiri/daqiri.h>
-#include "src/manager.h"
+#include "src/engine.h"
 #include "src/metrics.h"
 
 namespace daqiri {
 
-class RdmaMgr;
+class RdmaEngine;
 
-class SocketMgr : public Manager {
+class SocketEngine : public Engine {
  public:
-  SocketMgr() = default;
-  ~SocketMgr() override;
+  SocketEngine() = default;
+  ~SocketEngine() override;
 
   bool set_config_and_initialize(const NetworkConfig& cfg) override;
   void initialize() override;
@@ -209,7 +209,9 @@ class SocketMgr : public Manager {
   std::atomic<uint64_t> rx_pkts_{0};
   std::atomic<uint64_t> rx_bytes_{0};
 
-  std::unique_ptr<RdmaMgr> roce_mgr_;
+#if DAQIRI_ENGINE_RDMA
+  std::unique_ptr<RdmaEngine> roce_engine_;
+#endif
 };
 
 }  // namespace daqiri

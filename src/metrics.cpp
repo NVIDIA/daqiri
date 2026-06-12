@@ -50,7 +50,7 @@ struct DropCounter {
 };
 
 struct QueueLabels {
-  std::string backend;
+  std::string engine;
   std::string interface_name;
   std::string port_id;
   std::string queue_id;
@@ -63,11 +63,11 @@ std::string normalize_interface_name(const std::string& interface_name, uint16_t
   return "port" + std::to_string(port_id);
 }
 
-std::string make_key(const std::string& backend,
+std::string make_key(const std::string& engine,
                      const std::string& interface_name,
                      uint16_t port_id,
                      const std::string& queue_id) {
-  return backend + "|" + interface_name + "|" + std::to_string(port_id) + "|" + queue_id;
+  return engine + "|" + interface_name + "|" + std::to_string(port_id) + "|" + queue_id;
 }
 
 otel::nostd::string_view view(const std::string& value) {
@@ -108,7 +108,7 @@ struct CounterSet {
     for (const auto& drop : snapshot) {
       if (drop == nullptr) { continue; }
       std::array<std::pair<otel::nostd::string_view, otel::common::AttributeValue>, 5> attrs = {{
-          {"daqiri.backend", view(labels.backend)},
+          {"daqiri.engine", view(labels.engine)},
           {"daqiri.interface.name", view(labels.interface_name)},
           {"daqiri.port.id", view(labels.port_id)},
           {"daqiri.queue.id", view(labels.queue_id)},
@@ -134,7 +134,7 @@ namespace {
 
 class Registry {
  public:
-  std::shared_ptr<CounterSet> get_or_create_queue(const std::string& backend,
+  std::shared_ptr<CounterSet> get_or_create_queue(const std::string& engine,
                                                   const std::string& interface_name,
                                                   uint16_t port_id,
                                                   const std::string& queue_id) {
@@ -142,12 +142,12 @@ class Registry {
     initialize_locked();
 
     const auto normalized_name = normalize_interface_name(interface_name, port_id);
-    const auto key = make_key(backend, normalized_name, port_id, queue_id);
+    const auto key = make_key(engine, normalized_name, port_id, queue_id);
     auto it = by_key_.find(key);
     if (it != by_key_.end()) { return it->second; }
 
     auto counters = std::make_shared<CounterSet>();
-    counters->labels.backend = backend;
+    counters->labels.engine = engine;
     counters->labels.interface_name = normalized_name;
     counters->labels.port_id = std::to_string(port_id);
     counters->labels.queue_id = queue_id;
@@ -200,7 +200,7 @@ class Registry {
     tx_bytes_ = meter->CreateInt64ObservableCounter(
         "daqiri.tx.bytes", "Bytes transmitted by DAQIRI", "By");
     dropped_packets_ = meter->CreateInt64ObservableCounter(
-        "daqiri.dropped.packets", "Packets dropped by DAQIRI or the active backend", "{packet}");
+        "daqiri.dropped.packets", "Packets dropped by DAQIRI or the active engine", "{packet}");
 
     rx_packets_->AddCallback(&Registry::observe_rx_packets, this);
     tx_packets_->AddCallback(&Registry::observe_tx_packets, this);
@@ -269,7 +269,7 @@ class Registry {
         }
 
         std::array<std::pair<otel::nostd::string_view, otel::common::AttributeValue>, 4> attrs = {{
-            {"daqiri.backend", view(counters->labels.backend)},
+            {"daqiri.engine", view(counters->labels.engine)},
             {"daqiri.interface.name", view(counters->labels.interface_name)},
             {"daqiri.port.id", view(counters->labels.port_id)},
             {"daqiri.queue.id", view(counters->labels.queue_id)},
@@ -299,11 +299,11 @@ Registry& registry() {
 
 }  // namespace
 
-std::shared_ptr<CounterSet> get_or_create_queue(const std::string& backend,
+std::shared_ptr<CounterSet> get_or_create_queue(const std::string& engine,
                                                 const std::string& interface_name,
                                                 uint16_t port_id,
                                                 const std::string& queue_id) {
-  return registry().get_or_create_queue(backend, interface_name, port_id, queue_id);
+  return registry().get_or_create_queue(engine, interface_name, port_id, queue_id);
 }
 
 void add_rx(const std::shared_ptr<CounterSet>& counters, uint64_t packets, uint64_t bytes) {

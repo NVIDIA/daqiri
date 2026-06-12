@@ -7,6 +7,7 @@
     previousFocus: null,
   };
   var keydownBound = false;
+  var closeArchOverlay = null; // set by initArchitectureGraphic
 
   function resetGraphicOverlay() {
     var overlay = overlayState.overlay;
@@ -80,7 +81,7 @@
     }
 
     overlayState.overlay = graphicOverlay;
-    overlayState.closeButton = root.querySelector(".graphic-overlay-close");
+    overlayState.closeButton = graphicOverlay.querySelector(".graphic-overlay-close");
 
     bindOnce(graphicOpen, "click", openGraphicOverlay);
 
@@ -91,6 +92,12 @@
     if (!keydownBound) {
       document.addEventListener("keydown", function (event) {
         if (event.key !== "Escape") return;
+        // Architecture overlay takes priority if open
+        var archOverlay = document.getElementById("architecture-graphic-overlay");
+        if (archOverlay && archOverlay.classList.contains("is-open") && closeArchOverlay) {
+          closeArchOverlay();
+          return;
+        }
         var overlay = overlayState.overlay;
         if (!overlay || !overlay.isConnected) return;
         if (!overlay.classList.contains("is-open")) return;
@@ -102,8 +109,40 @@
     maybeOpenFromHash();
   }
 
+  function initArchitectureGraphic() {
+    var root = document.querySelector(".daqiri-landing");
+    if (!root) return;
+    var openBtn = root.querySelector("[data-arch-open]");
+    var overlay = document.getElementById("architecture-graphic-overlay");
+    if (!openBtn || !overlay) return;
+    var closeBtn = overlay.querySelector(".graphic-overlay-close");
+    var prevFocus = null;
+
+    function open() {
+      prevFocus = document.activeElement;
+      overlay.classList.add("is-open");
+      overlay.setAttribute("aria-hidden", "false");
+      document.body.classList.add("graphic-overlay-open");
+      if (closeBtn) closeBtn.focus();
+    }
+    function close() {
+      overlay.classList.remove("is-open");
+      overlay.setAttribute("aria-hidden", "true");
+      document.body.classList.remove("graphic-overlay-open");
+      if (prevFocus && typeof prevFocus.focus === "function") prevFocus.focus();
+    }
+
+    closeArchOverlay = close; // expose for the module-level Escape handler
+
+    bindOnce(openBtn, "click", open);
+    overlay.querySelectorAll("[data-arch-close]").forEach(function (el) {
+      bindOnce(el, "click", close);
+    });
+  }
+
   function setup() {
     initLandingGraphic();
+    initArchitectureGraphic();
   }
 
   if (document.readyState === "loading") {

@@ -46,6 +46,7 @@ extra_css:
 extra_javascript:
   - javascripts/platform-tab-toc.js
   - javascripts/tab-dropdowns.js
+  - javascripts/image-overlay.js
 
 site_dir: site
 exclude_docs: |
@@ -59,6 +60,7 @@ nav:
     - Overview: benchmarks/benchmarks.md
     - Socket and RDMA Benchmarking: benchmarks/socket_benchmarking.md
     - Raw Ethernet Benchmarking: benchmarks/raw_benchmarking.md
+    - "Performance: DGX Spark": benchmarks/performance-dgx-spark.md
   - API Reference:
     - API Guide: api-reference/index.md
     - Configuration YAML Reference: api-reference/configuration.md
@@ -68,11 +70,13 @@ nav:
     - System Configuration: tutorials/system_configuration.md
     - Bare-Metal CMake Build: tutorials/bare-metal-cmake-build.md
     - Configuration YAML Walkthrough: tutorials/configuration-walkthrough.md
+    - DAQIRI + Holoscan Integration: tutorials/daqiri-holoscan-integration.md
 
 markdown_extensions:
   - admonition
   - attr_list
   - def_list
+  - footnotes
   - md_in_html
   - tables
   - toc:
