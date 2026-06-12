@@ -46,6 +46,7 @@ extra_css:
 extra_javascript:
   - javascripts/platform-tab-toc.js
   - javascripts/tab-dropdowns.js
+  - javascripts/image-overlay.js
 
 site_dir: site
 exclude_docs: |
