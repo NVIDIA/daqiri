@@ -224,11 +224,17 @@ For Raw Ethernet (`stream_type: "raw"`), each flow rule is programmed into the N
 created when `flow_isolation: true`, initialization fails with a critical log and
 `daqiri_init()` returns an error status.
 
+A single RX interface must use either standard UDP/IP flows or flex-item flows, not both.
+Both classes install conflicting DPDK group-0 jump rules, so only one is reachable when mixed.
+`daqiri_init` rejects such configs with a clear error.
+
 ### Flow Isolation
 
 `rx.flow_isolation:` — When `true`, only packets matching an explicit flow rule are delivered
 to the application. Unmatched packets are steered back to the Linux kernel via a
 send-to-kernel fallback rule. When `false`, unmatched packets go to a default queue.
+With `flow_isolation: true`, send-to-kernel fallbacks are installed per flow class
+(standard or flex-item); mixing both classes on one interface is not supported.
 
 - type: `boolean`
 - default: `false`
