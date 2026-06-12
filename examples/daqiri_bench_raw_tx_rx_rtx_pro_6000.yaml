@@ -1,0 +1,93 @@
+# RTX PRO 6000 Blackwell dual-NIC hardware loopback TEMPLATE (generic placeholders).
+# For a prefilled single-card dual-port run on the reference dev box, see
+# daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml instead.
+#
+# Requires L2 connectivity between tx_port and rx_port (QSFP cable, loopback optic, or switch).
+# NOT runnable until <placeholders> are replaced for your system.
+#
+# Target topology (Cliff's 800 Gbps vision — two cards or two ports at line rate):
+#   GPU 0 (CUDA affinity 0) --TX buffers--> NIC0 --link--> NIC1 --RX buffers--> GPU 1
+#
+# Hardware limits:
+#   - 800 Gbps aggregate needs two ~400G ports with an active link each; no cable = no wire test.
+#   - This server lacks Spark's dual-PF-per-port on-chip eswitch shortcut (see baseline doc).
+#   - SW loopback (daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml) never touches the NIC.
+#
+# Discovery helpers:
+#   lspci -d 15b3:
+#   ibdev2netdev
+#   cat /sys/class/net/<iface>/address   # eth_dst_addr = rx_port MAC
+#   nvidia-smi topo -m                   # NUMA / PCIe proximity for cpu_core picks
+#
+# Build: same as daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml header.
+#
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    master_core: 3
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    memory_regions:
+    - name: "Data_TX_GPU"
+      kind: "device"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+    - name: "Data_RX_GPU"
+      kind: "device"
+      affinity: 1
+      num_bufs: 51200
+      buf_size: 8064
+
+    interfaces:
+    - name: "tx_port"
+      address: <0000:00:00.0>
+      tx:
+        queues:
+        - name: "tx_q_0"
+          id: 0
+          batch_size: 10240
+          cpu_core: 11
+          memory_regions:
+            - "Data_TX_GPU"
+          offloads:
+            - "tx_eth_src"
+    - name: "rx_port"
+      address: <0000:00:00.1>
+      rx:
+        flow_isolation: true
+        queues:
+        - name: "rq_q_0"
+          id: 0
+          cpu_core: 9
+          batch_size: 10240
+          memory_regions:
+            - "Data_RX_GPU"
+        flows:
+        - name: "flow_0"
+          id: 0
+          action:
+            type: queue
+            id: 0
+          match:
+            udp_src: 4096
+            udp_dst: 4096
+
+bench_rx:
+- interface_name: "rx_port"
+
+bench_tx:
+- interface_name: "tx_port"
+  batch_size: 10240
+  payload_size: 8000
+  header_size: 64
+  eth_dst_addr: <00:00:00:00:00:00>
+  ip_src_addr: <1.2.3.4>
+  ip_dst_addr: <5.6.7.8>
+  udp_src_port: 4096
+  udp_dst_port: 4096
