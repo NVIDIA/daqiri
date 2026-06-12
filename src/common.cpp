@@ -20,6 +20,7 @@
 #include <unordered_set>
 #include <arpa/inet.h>
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <filesystem>
 #include <limits>
@@ -40,6 +41,55 @@ namespace daqiri {
 
 // Declare a static global variable for the engine
 static Engine* g_daqiri_engine = nullptr;
+
+namespace {
+
+constexpr size_t kEthAddrLength = 6;
+constexpr size_t kEthAddrOctetLength = 2;
+
+int hex_digit_value(char digit) {
+  const unsigned char c = static_cast<unsigned char>(digit);
+  if (c >= '0' && c <= '9') { return c - '0'; }
+  if (c >= 'a' && c <= 'f') { return c - 'a' + 10; }
+  if (c >= 'A' && c <= 'F') { return c - 'A' + 10; }
+  return -1;
+}
+
+Status parse_eth_addr(std::array<char, kEthAddrLength>* dst,
+                      const std::string& addr) {
+  if (dst == nullptr) { return Status::NULL_PTR; }
+
+  std::array<char, kEthAddrLength> parsed = {};
+  size_t offset = 0;
+
+  for (size_t octet = 0; octet < kEthAddrLength; ++octet) {
+    if (offset + kEthAddrOctetLength > addr.size()) {
+      return Status::INVALID_PARAMETER;
+    }
+
+    const int high = hex_digit_value(addr[offset]);
+    const int low = hex_digit_value(addr[offset + 1]);
+    if (high < 0 || low < 0) { return Status::INVALID_PARAMETER; }
+
+    parsed[octet] = static_cast<char>((high << 4) | low);
+    offset += kEthAddrOctetLength;
+
+    if (octet + 1 == kEthAddrLength) {
+      if (offset != addr.size()) { return Status::INVALID_PARAMETER; }
+      continue;
+    }
+
+    if (offset >= addr.size() || addr[offset] != ':') {
+      return Status::INVALID_PARAMETER;
+    }
+    ++offset;
+  }
+
+  *dst = parsed;
+  return Status::SUCCESS;
+}
+
+}  // namespace
 
 const std::unordered_map<LogLevel::Level, std::string> LogLevel::level_to_string_map = {
     {TRACE, "trace"},
@@ -152,19 +202,20 @@ void free_segment_packets_and_burst(BurstParams* burst, int seg) {
 }
 
 void format_eth_addr(char* dst, std::string addr) {
-  std::istringstream iss(addr);
-  std::string byteString;
-
-  uint8_t byte_cnt = 0;
-  while (std::getline(iss, byteString, ':')) {
-    if (byteString.length() == 2) {
-      uint16_t byte = std::stoi(byteString, nullptr, 16);
-      dst[byte_cnt++] = static_cast<char>(byte);
-    } else {
-      DAQIRI_LOG_ERROR("Invalid MAC address format: {}", addr);
-      dst[0] = 0x00;
-    }
+  if (dst == nullptr) {
+    DAQIRI_LOG_ERROR("Invalid MAC address destination buffer");
+    return;
   }
+
+  std::array<char, kEthAddrLength> parsed = {};
+  const Status status = parse_eth_addr(&parsed, addr);
+  if (status != Status::SUCCESS) {
+    DAQIRI_LOG_ERROR("Invalid MAC address format: {}", addr);
+    std::fill_n(dst, kEthAddrLength, 0x00);
+    return;
+  }
+
+  std::copy(parsed.begin(), parsed.end(), dst);
 }
 
 Status get_mac_addr(int port, char* mac) {
