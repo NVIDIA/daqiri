@@ -1692,8 +1692,6 @@ Status DpdkEngine::set_reorder_cuda_stream(const std::string& interface_name,
 ///
 ////////////////////////////////////////////////////////////////////////////////
 bool DpdkEngine::set_config_and_initialize(const NetworkConfig& cfg) {
-  num_init++;
-
   if (!this->initialized_) {
     cfg_ = cfg;
 
@@ -1701,6 +1699,8 @@ bool DpdkEngine::set_config_and_initialize(const NetworkConfig& cfg) {
       DAQIRI_LOG_CRITICAL("Config validation failed");
       return false;
     }
+
+    num_init++;
 
     cpu_set_t mask;
     long nproc, i;
@@ -1712,6 +1712,7 @@ bool DpdkEngine::set_config_and_initialize(const NetworkConfig& cfg) {
 
     // Our thread should have set the flag if it succeeded
     if (!this->initialized_) {
+      num_init--;
       DAQIRI_LOG_CRITICAL("Failed to initialize DPDK");
       return false;
     }
@@ -1725,6 +1726,8 @@ bool DpdkEngine::set_config_and_initialize(const NetworkConfig& cfg) {
     }
 
     run();
+  } else {
+    num_init++;
   }
 
   return true;
