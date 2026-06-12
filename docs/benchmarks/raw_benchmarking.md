@@ -59,6 +59,26 @@ docker run --rm -it --privileged \
 
     The Spark configs also pin the benchmark application's `bench_tx.cpu_core` / `bench_rx.cpu_core` fields to the high-frequency Cortex-X925 cores. Keep both the DAQIRI queue cores and the application worker cores on cores 16-19 unless you intentionally want a lower-power core in the measurement.
 
+!!! tip "RTX PRO 6000 Blackwell (x86_64 workstation / server)"
+
+    For discrete Blackwell RTX PRO 6000 systems, build with [`CMAKE_CUDA_ARCHITECTURES=120`](../tutorials/bare-metal-cmake-build.md) and use these configs:
+
+    - [`daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml) — software loopback, no NIC required. Validates the GPUDirect build path; throughput is not wire-rate. See measured numbers in [`examples/rtx_pro_6000_baseline.md`](https://github.com/nvidia/daqiri/blob/main/examples/rtx_pro_6000_baseline.md).
+    - [`daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml) — prefilled dual-port NIC run (dev-box PCIe BDFs; fill `eth_dst_addr` from the rx_port MAC). Port 0 TX on GPU CUDA 0, port 1 RX on GPU CUDA 1. Requires an L2 link between the two ports (QSFP cable, passive loopback optic, or switch). `carrier=1` on both ports does not guarantee they are looped to each other.
+    - [`daqiri_bench_raw_tx_rx_rtx_pro_6000.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_rtx_pro_6000.yaml) — generic `<placeholder>` template for cross-card or custom topology (800 Gbps target once cabled).
+    - [`daqiri_bench_raw_tx_rx_rtx_pro_6000_nic_same_port.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_rtx_pro_6000_nic_same_port.yaml) — experimental same-port TX+RX; failed `daqiri_init` on the reference box.
+
+    Unlike DGX Spark, typical RTX Pro servers expose one PF per physical port — there is no on-chip eswitch shortcut between two PFs on the same port without a link. After a NIC run, confirm whether traffic crossed the wire using `tx_phy_packets` / `rx_phy_packets` in the DPDK extended stats (near zero = on-chip or no wire loop; rising with vport counts = over-the-wire). Full constraints and baseline results: [`rtx_pro_6000_baseline.md`](https://github.com/nvidia/daqiri/blob/main/examples/rtx_pro_6000_baseline.md).
+
+    ```bash
+    sudo ./daqiri_bench_raw_gpudirect \
+      ./examples/daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml --seconds 30
+
+    # Once p0 and p1 are cabled:
+    sudo ./daqiri_bench_raw_gpudirect \
+      ./examples/daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml --seconds 30
+    ```
+
 #### Cross-host two-DGX-Spark loopback
 
 If you have two DGX Sparks cross-cabled p0↔p0 instead of a chassis QSFP loop on one machine, use the `_xhost` configs. Each host runs only its own role, so the YAML on each side configures one port instead of two. Both hosts must already be set up per the [DGX Spark profile](../tutorials/system_configuration.md#dgx-spark-profile), with one adjustment: the `daqiri-tx` (`1.1.1.1/24`) and `daqiri-rx` (`2.2.2.2/24`) nmcli profiles are *split across* the two hosts — bring up `daqiri-tx` on the TX host's p0 and `daqiri-rx` on the RX host's p0, instead of both on one box.
