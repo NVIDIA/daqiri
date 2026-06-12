@@ -17,7 +17,10 @@
 # Spark substitutions baked in here:
 #   - IPs: 1.1.1.1 (client/TX p0) and 2.2.2.2 (server/RX p0)
 #   - cpu_core values for DAQIRI queues and benchmark app role threads from
-#     isolated big-cluster X925 16-19; master_core: 8
+#     isolated big-cluster X925 16-19; master_core: 8. Each host runs only one
+#     role, so the app thread takes a big core its local queues don't use:
+#     client host queues 17/18 -> client app 16; server host queues 16/19 ->
+#     server app 18.
 #   - kind: host_pinned (required upstream on GB10; peermem N/A, dma-buf used)
 #
 %YAML 1.2
@@ -101,7 +104,7 @@ rdma_bench_server:
   message_size: 8000000
   send: true
   receive: true
-  cpu_core: 19
+  cpu_core: 18
   server: true
 
 rdma_bench_client:
@@ -111,5 +114,5 @@ rdma_bench_client:
   server_port: 4096
   receive: true
   send: true
-  cpu_core: 17
+  cpu_core: 16
   server: false

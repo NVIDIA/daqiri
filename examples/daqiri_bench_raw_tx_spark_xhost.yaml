@@ -7,8 +7,9 @@
 # Spark substitutions baked in here:
 #   - tx_port BDF = 0000:01:00.0 (p0); change if your p0 sits elsewhere
 #   - kind: host_pinned (GB10 dma-buf path; nvidia-peermem N/A on Spark)
-#   - master_core: 8; cpu_core: 17 for both the DAQIRI TX queue and the app TX
-#     worker (isolated big-cluster X925 16-19)
+#   - master_core: 8; cpu_core: 17 for the DAQIRI TX queue and 16 for the app
+#     TX worker -- separate cores so they don't contend (isolated big-cluster
+#     X925 16-19)
 #   - eth_dst_addr is the *peer* RX port's MAC -- replace with your own:
 #       cat /sys/class/net/<peer rx ifname>/address  # on the RX host
 #   - ip_src/ip_dst: arbitrary 1.1.1.1 -> 2.2.2.2 (kernel stack bypassed by
@@ -49,7 +50,7 @@ daqiri:
 
 bench_tx:
   interface_name: "tx_port"
-  cpu_core: 17
+  cpu_core: 16
   batch_size: 10240
   payload_size: 8000
   header_size: 64

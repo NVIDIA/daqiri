@@ -835,7 +835,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
         cat /proc/cmdline | grep -e isolcpus -e irqaffinity -e nohz_full -e rcu_nocbs -e rcu_nocb_poll
         ```
 
-    Decide which cores to isolate based on your configuration. We recommend one core per queue as a rule of thumb. First, identify your core IDs:
+    Decide which cores to isolate based on your configuration. We recommend one core per DAQIRI queue, plus one core per benchmark application worker thread (the `bench_tx` / `bench_rx` `cpu_core` fields), as a rule of thumb — these are separate busy-poll threads and should not share a core. First, identify your core IDs:
 
     ```bash
     cat /proc/cpuinfo | grep processor
@@ -859,10 +859,10 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
         processor       # 11
         ```
 
-    As an example, the line below will isolate cores 9, 10 and 11, leaving cores 0-8 free for other tasks and hardware interrupts:
+    As an example, the line below will isolate cores 8, 9, 10 and 11 (enough for the two DAQIRI queues and two application worker threads in the base TX+RX config), leaving cores 0-7 free for other tasks and hardware interrupts:
 
     ```bash
-    isolcpus=9-11 irqaffinity=0-8 nohz_full=9-11 rcu_nocbs=9-11 rcu_nocb_poll
+    isolcpus=8-11 irqaffinity=0-7 nohz_full=8-11 rcu_nocbs=8-11 rcu_nocb_poll
     ```
 
     ??? info "Show explanation"

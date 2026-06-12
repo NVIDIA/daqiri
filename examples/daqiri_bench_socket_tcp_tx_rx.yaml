@@ -76,7 +76,7 @@ socket_bench_server:
   server: true
   send: true
   receive: true
-  cpu_core: 8
+  cpu_core: 9
   iterations: 1000
   message_size: 1024
   server_address: 127.0.0.1
@@ -86,7 +86,7 @@ socket_bench_client:
   server: false
   send: true
   receive: true
-  cpu_core: 7
+  cpu_core: 10
   iterations: 1000
   message_size: 1024
   server_address: 127.0.0.1

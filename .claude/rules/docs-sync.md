@@ -46,7 +46,7 @@ When the user is committing, pushing, or otherwise wrapping up a change that tou
 
 ### Landing page and navigation (low frequency, high visibility)
 - `mkdocs.yml` — nav entries should match actual files in `docs/` (the CI gate enforces this; the rule is here for awareness).
-- `docs/index.html` — the landing page links to tutorials and API docs by relative path. If any doc file is renamed or moved, update the landing page links.
+- `docs/index.md` — landing page orchestrator; includes section bodies from `docs/landing/*.html`. If any doc file is renamed or moved, update landing fragment links in `docs/landing/`.
 
 ### Top-level README (low frequency, high visibility)
 
@@ -82,5 +82,5 @@ When the user is committing, pushing, or otherwise wrapping up a change that tou
 | `examples/*.cpp` | `docs/benchmarks/raw_benchmarking.md`, `docs/tutorials/configuration-walkthrough.md`, `AGENTS.md` |
 | `examples/*.yaml` | `docs/benchmarks/raw_benchmarking.md`, `docs/tutorials/configuration-walkthrough.md`, `AGENTS.md` |
 | `examples/*.py` | `docs/api-reference/python.md`, `AGENTS.md` |
-| `mkdocs.yml` | `docs/index.html` (nav links) |
-| Any `docs/*` rename/move | `README.md` (Documentation table), `AGENTS.md` (Documentation section), `mkdocs.yml`, `docs/index.html` |
+| `mkdocs.yml` | `docs/index.md`, `docs/landing/` (nav links) |
+| Any `docs/*` rename/move | `README.md` (Documentation table), `AGENTS.md` (Documentation section), `mkdocs.yml`, `docs/index.md`, `docs/landing/` |

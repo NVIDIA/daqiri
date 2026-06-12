@@ -195,11 +195,11 @@ daqiri: # (1)!
 
 bench_rx: # (24)!
 - interface_name: "rx_port"
-  cpu_core: 9
+  cpu_core: 8
 
 bench_tx: # (25)!
 - interface_name: "tx_port"
-  cpu_core: 11
+  cpu_core: 10
   batch_size: 10240
   payload_size: 8000
   header_size: 64

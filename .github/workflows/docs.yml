@@ -8,6 +8,7 @@ on:
     paths:
       - 'docs/**'
       - 'mkdocs.yml'
+      - 'overrides/**'
       - '.github/workflows/docs.yml'
       - 'scripts/check_html_links.py'
       - 'scripts/check_doc_refs.py'
@@ -34,7 +35,7 @@ jobs:
       - name: Build site (strict mode)
         run: mkdocs build --strict
 
-      - name: Verify hand-maintained HTML link targets
+      - name: Verify landing page HTML link targets
         run: python scripts/check_html_links.py site
 
       - name: Verify benchmark and config references in docs
