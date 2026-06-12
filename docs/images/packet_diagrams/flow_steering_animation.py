@@ -17,20 +17,21 @@ HEIGHT = 660
 SCALE = 2
 DURATION_MS = 55
 
-GPU_TRAVEL_FRAMES = 72
-PACKET_GAP = 4
-DECIDE_OFFSET = 20
+GPU_TRAVEL_FRAMES = 76
+ARRIVAL_GAP = 14
 
-LAYOUT_SHIFT_Y = 42
+LAYOUT_SHIFT_Y = 0
 
-NIC_RECT = (382, 234, 582, 392)
-HOST_RECT = (772, 112, 1118, 252)
-GPU_RECT = (772, 392, 1118, 532)
-HOST_ROW = (796, 192, 1092, 234)
-GPU_ROW = (796, 472, 1092, 514)
+NIC_RECT = (300, 250, 500, 410)
+HOST_RECT = (670, 86, 1040, 266)
+GPU_RECT = (670, 394, 1040, 574)
+HOST_ROW = (694, 174, 1016, 228)
+GPU_ROW = (694, 482, 1016, 536)
 
-WIRE_Y = 327
-KERNEL_WIDTH = 200
+WIRE_Y = 330
+KERNEL_WIDTH = 130
+HOST_SLOT_COUNT = 3
+GPU_SLOT_COUNT = 6
 
 TRANSPARENT = (0, 0, 0, 0)
 GIF_TRANSPARENCY_INDEX = 255
@@ -97,14 +98,11 @@ COLORS = THEMES["default"]
 @dataclass(frozen=True)
 class PacketSpec:
     num: int
-    dest: str  # "host" (host_flow → queue 0) or "gpu" (gpu_flow → queue 1)
+    dest: str  # "host" for non-matching packets, "gpu" for flow matches.
+    matched: bool
     start: int
     decide: int
     end: int
-
-    @property
-    def matched(self) -> bool:
-        return True
 
 
 def shift_y(y: float) -> float:
@@ -122,8 +120,8 @@ GPU = shift_rect(GPU_RECT)
 HOST_ROW_R = shift_rect(HOST_ROW)
 GPU_ROW_R = shift_rect(GPU_ROW)
 WIRE = shift_y(WIRE_Y)
-KERNEL_CX = ((488 + 688) / 2 + (NIC_RECT[2] + HOST_RECT[0]) / 2) / 2
-KERNEL = shift_rect((KERNEL_CX - KERNEL_WIDTH / 2, 4, KERNEL_CX + KERNEL_WIDTH / 2, 82))
+KERNEL_CX = (NIC_RECT[2] + HOST_RECT[0]) / 2
+KERNEL = shift_rect((KERNEL_CX - KERNEL_WIDTH / 2, 22, KERNEL_CX + KERNEL_WIDTH / 2, 92))
 NIC_CX = (NIC[0] + NIC[2]) / 2
 
 
@@ -386,21 +384,31 @@ def path_total(points: list[tuple[float, float]]) -> float:
 def make_packets() -> tuple[PacketSpec, ...]:
     gpu_len = path_total(PATHS["gpu"])
     host_len = path_total(PATHS["host"])
+    wire_len = path_total(PATHS["wire"])
     px_per_frame = gpu_len / GPU_TRAVEL_FRAMES
+    wire_frames = max(1, int(math.ceil(wire_len / px_per_frame)))
 
     def travel_frames(dest: str) -> int:
         length = host_len if dest == "host" else gpu_len
         return max(1, int(math.ceil(length / px_per_frame)))
 
-    # Packets 1, 4: host_flow match (UDP 5000) → RX queue 0.
-    # Packets 2, 3, 5: gpu_flow match (UDP 4096) → RX queue 1.
-    routing = ((1, "host"), (2, "gpu"), (3, "gpu"), (4, "host"), (5, "gpu"))
+    routing = (
+        (1, "gpu", True),
+        (2, "gpu", True),
+        (3, "host", False),
+        (4, "gpu", True),
+        (5, "gpu", True),
+        (6, "host", False),
+        (7, "gpu", True),
+        (8, "gpu", True),
+        (9, "host", False),
+    )
     packets: list[PacketSpec] = []
     cursor = 8
-    for num, dest in routing:
+    for num, dest, matched in routing:
         duration = travel_frames(dest)
-        packets.append(PacketSpec(num, dest, cursor, cursor + DECIDE_OFFSET, cursor + duration))
-        cursor += duration + PACKET_GAP
+        packets.append(PacketSpec(num, dest, matched, cursor, cursor + wire_frames, cursor + duration))
+        cursor += ARRIVAL_GAP
     return tuple(packets)
 
 
@@ -408,9 +416,9 @@ PACKETS = make_packets()
 FRAMES = max(320, PACKETS[-1].end + 24)
 
 
-def active_packet(frame: int) -> PacketSpec | None:
-    for pkt in PACKETS:
-        if pkt.start <= frame < pkt.end:
+def decision_packet(frame: int) -> PacketSpec | None:
+    for pkt in reversed(PACKETS):
+        if pkt.decide <= frame < pkt.decide + 18:
             return pkt
     return None
 
@@ -467,7 +475,6 @@ def queue_chip_layout(rect: tuple[float, float, float, float], count: int) -> li
     gap = 8
     inner_w = x2 - x1 - 2 * pad
     chip_w = (inner_w - gap * (count - 1)) / count
-    chip_w = min(72, chip_w)
     cy = (y1 + y2) / 2
     slots: list[tuple[float, float, float]] = []
     x = x1 + pad
@@ -489,14 +496,25 @@ def draw_queue_row(
     rect: tuple[float, float, float, float],
     packet_nums: list[int],
     accent: str,
+    slot_count: int,
 ) -> None:
     x1, y1, x2, y2 = rect
     draw.rounded_rectangle(box(rect), radius=s(8), fill=rgba(COLORS["row_bg"], 235), outline=rgba(accent, 145), width=s(2))
-    if not packet_nums:
-        return
-    for num, (cx, cy, chip_w) in zip(packet_nums, queue_chip_layout(rect, len(packet_nums))):
+    slots = queue_chip_layout(rect, slot_count)
+    for idx, (cx, cy, chip_w) in enumerate(slots):
+        slot_rect = (cx - chip_w / 2, cy - 16, cx + chip_w / 2, cy + 16)
+        draw.rounded_rectangle(
+            box(slot_rect),
+            radius=s(7),
+            fill=rgba(COLORS["panel"], 165),
+            outline=rgba(accent, 135),
+            width=s(1),
+        )
+        if idx >= len(packet_nums):
+            continue
+        num = packet_nums[idx]
         color = packet_color(num, packet_dest(num))
-        draw_whole_packet(draw, cx, cy, chip_w, color, label=f"packet {num}")
+        draw_whole_packet(draw, cx, cy, chip_w - 4, color, label=f"P{num}")
 
 
 def draw_host_route(draw: ImageDraw.ImageDraw) -> None:
@@ -515,10 +533,35 @@ def draw_matched_routes(draw: ImageDraw.ImageDraw) -> None:
     draw_polyline(draw, PATHS["gpu_direct"], rgba(COLORS["gpu_pkt"], 255), 3)
 
 
+def nic_status(frame: int) -> tuple[str, str, str, float]:
+    pkt = decision_packet(frame)
+    deciding = pkt is not None
+    pulse = decision_pulse(frame, pkt) if deciding and pkt else 0.0
+    if deciding and pkt:
+        if pkt.matched:
+            return "match -> GPU", COLORS["gpu_pkt"], "#ffffff", pulse
+        return "no match: to kernel", COLORS["host_pkt"], "#ffffff", pulse
+    return "flow match rule", COLORS["nvidia"], COLORS["ink"], pulse
+
+
+def draw_nic_status_pill(draw: ImageDraw.ImageDraw, frame: int) -> None:
+    x1, y1, x2, _ = NIC
+    pill_text, pill_accent, pill_ink, pulse = nic_status(frame)
+    pill = (x1 + 18, y1 + 82, x2 - 18, y1 + 110)
+    draw.rounded_rectangle(
+        box(pill),
+        radius=s(8),
+        fill=rgba(pill_accent, 255),
+        outline=rgba(pill_accent, 220),
+        width=s(2),
+    )
+    centered_text(draw, pill, pill_text, FONTS["badge"], fill=pill_ink)
+
+
 def draw_nic_chip(draw: ImageDraw.ImageDraw, frame: int) -> None:
     x1, y1, x2, y2 = NIC
-    pkt = active_packet(frame)
-    deciding = pkt is not None and pkt.decide <= frame < pkt.decide + 18
+    pkt = decision_packet(frame)
+    deciding = pkt is not None
     pulse = decision_pulse(frame, pkt) if deciding and pkt else 0.0
     accent = COLORS["nvidia"]
 
@@ -534,36 +577,21 @@ def draw_nic_chip(draw: ImageDraw.ImageDraw, frame: int) -> None:
         draw.line((s(x), s(y1 - 12), s(x), s(y1)), fill=rgba(COLORS["line"], 220), width=s(3))
         draw.line((s(x), s(y2), s(x), s(y2 + 12)), fill=rgba(COLORS["line"], 220), width=s(3))
     centered_text(draw, (x1 + 18, y1 + 38, x2 - 18, y1 + 78), "NVIDIA NIC", FONTS["chip"], fill=COLORS["text"])
-
-    pill = (x1 + 18, y1 + 82, x2 - 18, y1 + 110)
-    if deciding and pkt:
-        if pkt.dest == "host":
-            pill_text = "✓  rx queue 0"
-            pill_accent = COLORS["host_pkt"]
-        else:
-            pill_text = "✓  rx queue 1"
-            pill_accent = COLORS["gpu_pkt"]
-        pill_ink = "#ffffff"
-    else:
-        pill_text = "flow match rule"
-        pill_ink = COLORS["ink"]
-        pill_accent = COLORS["nvidia"]
-    draw.rounded_rectangle(box(pill), radius=s(8), fill=rgba(pill_accent, 180 + int(60 * pulse)), outline=rgba(pill_accent, 220), width=s(2))
-    centered_text(draw, pill, pill_text, FONTS["badge"], fill=pill_ink)
+    draw_nic_status_pill(draw, frame)
 
 
 def draw_device_memory(draw: ImageDraw.ImageDraw, frame: int) -> None:
     host_nums, gpu_nums = queued_packets(frame)
     panels = (
-        (HOST, HOST_ROW_R, "RX queue 0", "host_flow · UDP 5000/5000", COLORS["host"], host_nums, COLORS["host_pkt"], "host"),
-        (GPU, GPU_ROW_R, "RX queue 1", "gpu_flow · UDP 4096/4096", COLORS["gpu"], gpu_nums, COLORS["gpu_pkt"], "gpu"),
+        (HOST, HOST_ROW_R, "Host memory", "kernel path packets", COLORS["host"], host_nums, COLORS["host_pkt"], HOST_SLOT_COUNT),
+        (GPU, GPU_ROW_R, "NVIDIA GPU memory", "flow-matched packets", COLORS["gpu"], gpu_nums, COLORS["gpu_pkt"], GPU_SLOT_COUNT),
     )
-    for panel_rect, row_rect, title, subtitle, accent, nums, pkt_color, _dest in panels:
+    for panel_rect, row_rect, title, subtitle, accent, nums, pkt_color, slot_count in panels:
         x1, y1, _, _ = panel_rect
         draw.rounded_rectangle(box(panel_rect), radius=s(18), fill=COLORS["panel_2"], outline=rgba(accent, 170), width=s(3))
         draw_text(draw, (x1 + 22, y1 + 22), title, FONTS["label"], fill=COLORS["text"], anchor="lt")
         draw_text(draw, (x1 + 22, y1 + 46), subtitle, FONTS["small"], fill=COLORS["muted"], anchor="lt")
-        draw_queue_row(draw, row_rect, nums, pkt_color)
+        draw_queue_row(draw, row_rect, nums, pkt_color, slot_count)
 
 
 def draw_wires(draw: ImageDraw.ImageDraw, frame: int) -> None:
@@ -572,7 +600,7 @@ def draw_wires(draw: ImageDraw.ImageDraw, frame: int) -> None:
 
 
 def draw_route_glow(base: Image.Image, frame: int) -> None:
-    pkt = active_packet(frame)
+    pkt = decision_packet(frame)
     if pkt and frame >= pkt.decide:
         glow = progress_linear(frame, pkt.decide, pkt.end)
         if pkt.dest == "host":
@@ -582,18 +610,19 @@ def draw_route_glow(base: Image.Image, frame: int) -> None:
 
 
 def draw_flowing_packets(draw: ImageDraw.ImageDraw, frame: int) -> None:
-    pkt = active_packet(frame)
-    if pkt is None:
-        return
-    path = PATHS["gpu"] if pkt.dest == "gpu" else PATHS["host"]
-    color = str(packet_color(pkt.num, pkt.dest))
-    t = progress_linear(frame, pkt.start, pkt.end)
-    if 0 < t < 1:
-        on_wire = t <= wire_t_end(PATHS["wire"], path)
-        cx, cy, _ = path_point_and_tangent(path, t)
-        if on_wire:
-            cy = center_wire_y(cx, 48, WIRE, frame)
-        draw_whole_packet(draw, cx, cy, 92, color, label=f"packet {pkt.num}")
+    for pkt in PACKETS:
+        if not (pkt.start <= frame < pkt.end):
+            continue
+        path = PATHS["gpu"] if pkt.dest == "gpu" else PATHS["host"]
+        color = str(packet_color(pkt.num, pkt.dest))
+        t = progress_linear(frame, pkt.start, pkt.end)
+        if 0 < t < 1:
+            on_wire = t <= wire_t_end(PATHS["wire"], path)
+            cx, cy, _ = path_point_and_tangent(path, t)
+            if on_wire:
+                cy = center_wire_y(cx, 48, WIRE, frame)
+            inside_nic = NIC[0] <= cx <= NIC[2] and NIC[1] <= cy <= NIC[3]
+            draw_whole_packet(draw, cx, cy, 76, color, label=None if inside_nic else f"P{pkt.num}")
 
 
 def path_lengths(points: list[tuple[float, float]]) -> tuple[list[float], float]:
@@ -645,6 +674,7 @@ def render_frame(frame: int) -> Image.Image:
     draw_matched_routes(draw)
     draw_route_glow(img, frame)
     draw_flowing_packets(draw, frame)
+    draw_nic_status_pill(draw, frame)
     return img.resize((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
 
 
@@ -667,7 +697,7 @@ def render_theme(theme: str) -> None:
         disposal=2,
         transparency=GIF_TRANSPARENCY_INDEX,
     )
-    render_frame(210).save(poster_path, optimize=True)
+    render_frame(min(FRAMES - 1, PACKETS[-1].end + 10)).save(poster_path, optimize=True)
     print(f"Wrote {gif_path}")
     print(f"Wrote {poster_path}")
 

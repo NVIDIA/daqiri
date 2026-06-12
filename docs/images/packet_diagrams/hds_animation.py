@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -14,14 +15,23 @@ OUTPUT_DIR = ROOT / "hds"
 WIDTH = 1180
 HEIGHT = 660
 SCALE = 2
-FRAMES = 136
 DURATION_MS = 55
 
 TOTAL_BYTES = 128
 HEADER_BYTES = 64
 PAYLOAD_BYTES = 64
 
-LAYOUT_SHIFT_Y = 42
+PACKET_COUNT = 5
+WIRE_Y = 330
+WIRE_FRAMES = 34
+ARRIVAL_GAP = 16
+SPLIT_DELAY = 8
+HEADER_TRAVEL_FRAMES = 36
+PAYLOAD_TRAVEL_FRAMES = 42
+PACKET_BAR_WIDTH = 132
+PACKET_BAR_HEIGHT = 34
+
+LAYOUT_SHIFT_Y = 0
 
 
 def dy(y: float) -> float:
@@ -33,14 +43,14 @@ def shift_rect(rect: tuple[float, float, float, float]) -> tuple[float, float, f
     return x1, y1 + LAYOUT_SHIFT_Y, x2, y2 + LAYOUT_SHIFT_Y
 
 
-NIC_RECT = shift_rect((382, 234, 582, 392))
-HOST_RECT = shift_rect((772, 112, 1118, 252))
-KERNEL_WIDTH = 200
-KERNEL_CX = ((488 + 688) / 2 + (NIC_RECT[2] + HOST_RECT[0]) / 2) / 2
-KERNEL_BOX = shift_rect((KERNEL_CX - KERNEL_WIDTH / 2, 4, KERNEL_CX + KERNEL_WIDTH / 2, 82))
-GPU_RECT = shift_rect((772, 392, 1118, 552))
-HEADER_ROW = shift_rect((796, 168, 1092, 210))
-PAYLOAD_ROW = shift_rect((796, 468, 1092, 520))
+NIC_RECT = shift_rect((300, 250, 500, 410))
+HOST_RECT = shift_rect((670, 86, 1040, 266))
+GPU_RECT = shift_rect((670, 394, 1040, 574))
+KERNEL_WIDTH = 130
+KERNEL_CX = (NIC_RECT[2] + HOST_RECT[0]) / 2
+KERNEL_BOX = shift_rect((KERNEL_CX - KERNEL_WIDTH / 2, 22, KERNEL_CX + KERNEL_WIDTH / 2, 92))
+HEADER_ROW = shift_rect((694, 174, 1016, 228))
+PAYLOAD_ROW = shift_rect((694, 482, 1016, 536))
 
 TRANSPARENT = (0, 0, 0, 0)
 GIF_TRANSPARENCY_INDEX = 255
@@ -102,6 +112,35 @@ THEME_OUTPUT_SUFFIX = {
 }
 
 COLORS = THEMES["default"]
+
+
+@dataclass(frozen=True)
+class PacketSpec:
+    num: int
+    start: int
+    nic_arrive: int
+    header_start: int
+    header_end: int
+    payload_start: int
+    payload_end: int
+
+
+def make_packets() -> tuple[PacketSpec, ...]:
+    packets: list[PacketSpec] = []
+    cursor = 8
+    for num in range(PACKET_COUNT):
+        nic_arrive = cursor + WIRE_FRAMES
+        header_start = nic_arrive + SPLIT_DELAY
+        payload_start = nic_arrive + SPLIT_DELAY + 6
+        header_end = header_start + HEADER_TRAVEL_FRAMES
+        payload_end = payload_start + PAYLOAD_TRAVEL_FRAMES
+        packets.append(PacketSpec(num, cursor, nic_arrive, header_start, header_end, payload_start, payload_end))
+        cursor += ARRIVAL_GAP
+    return tuple(packets)
+
+
+PACKETS = make_packets()
+FRAMES = max(190, max(pkt.payload_end for pkt in PACKETS) + 36)
 
 
 def rgb(hex_color: str) -> tuple[int, int, int]:
@@ -201,6 +240,10 @@ def smoothstep(t: float) -> float:
 
 def progress(frame: int, start: int, end: int) -> float:
     return smoothstep((frame - start) / max(1, end - start))
+
+
+def progress_linear(frame: int, start: int, end: int) -> float:
+    return clamp((frame - start) / max(1, end - start))
 
 
 def bezier_point(
@@ -374,9 +417,10 @@ def draw_packet_bar(
     h: float,
     alpha: int = 255,
     label: bool = True,
+    packet_num: int | None = None,
 ) -> None:
     colors = [COLORS["header"], COLORS["payload"]]
-    names = ["Header", "Payload"]
+    names = ["Hdr", "Payload"]
     sizes = [HEADER_BYTES, PAYLOAD_BYTES]
     draw.rounded_rectangle(box((x - 3, y - 3, x + w + 3, y + h + 3)), radius=s(11), fill=rgba(str(COLORS["bar_glow"]), 22 * alpha // 255))
     cursor = x
@@ -388,6 +432,8 @@ def draw_packet_bar(
         if label and seg_w > 52:
             centered_text(draw, rect, name, FONTS["tiny"], fill=rgba(COLORS["ink"], alpha))
         cursor += seg_w
+    if packet_num is not None:
+        draw_text(draw, (x + w / 2, y - 5), f"P{packet_num}", FONTS["tiny"], fill=COLORS["text"], anchor="mb")
 
 
 def draw_memory_row(
@@ -395,16 +441,33 @@ def draw_memory_row(
     rect: tuple[float, float, float, float],
     color: str,
     label: str,
-    fill_progress: float,
-    byte_text: str,
+    completed_slots: set[int],
+    slot_prefix: str,
 ) -> None:
     x1, y1, x2, y2 = rect
+    draw_text(draw, (x1, y1 - 13), label, FONTS["tiny"], fill=COLORS["muted"], anchor="lt")
     draw.rounded_rectangle(box(rect), radius=s(8), fill=rgba(COLORS["row_bg"], 235), outline=rgba(color, 145), width=s(2))
-    if fill_progress > 0:
-        fw = max(14, (x2 - x1) * clamp(fill_progress))
-        draw.rounded_rectangle(box((x1, y1, x1 + fw, y2)), radius=s(8), fill=rgba(color, 215))
-    draw_text(draw, (x1 + 13, (y1 + y2) / 2), label, FONTS["small"], fill=COLORS["text"], anchor="lm")
-    draw_text(draw, (x2 - 12, (y1 + y2) / 2), byte_text, FONTS["small"], fill=COLORS["text"], anchor="rm")
+
+    pad = 8
+    gap = 6
+    inner_w = x2 - x1 - 2 * pad
+    slot_w = (inner_w - gap * (PACKET_COUNT - 1)) / PACKET_COUNT
+    slot_h = y2 - y1 - 14
+    slot_y1 = y1 + 7
+    for idx in range(PACKET_COUNT):
+        sx1 = x1 + pad + idx * (slot_w + gap)
+        slot = (sx1, slot_y1, sx1 + slot_w, slot_y1 + slot_h)
+        filled = idx in completed_slots
+        draw.rounded_rectangle(
+            box(slot),
+            radius=s(7),
+            fill=rgba(color, 220) if filled else rgba(COLORS["panel"], 180),
+            outline=rgba(color, 160) if filled else rgba(COLORS["line"], 170),
+            width=s(1),
+        )
+        text = f"{slot_prefix}{idx}"
+        fill = rgba(COLORS["ink"], 255) if filled else COLORS["muted"]
+        centered_text(draw, slot, text, FONTS["tiny"], fill=fill)
 
 
 def draw_packet_segment(
@@ -453,9 +516,9 @@ def draw_chip(
 
 
 def draw_wire(draw: ImageDraw.ImageDraw, frame: int) -> None:
-    y = dy(327)
+    y = dy(WIRE_Y)
     draw_rx_wire_label(lambda xy, text: draw_text(draw, xy, text, FONTS["label"], fill=COLORS["text"]), y)
-    draw_rx_wire(draw, frame, 48, 48 + 85 * 3.55, y, COLORS["wire"], COLORS["header"], pt, s, rgba, box)
+    draw_rx_wire(draw, frame, 48, NIC_RECT[0], y, COLORS["wire"], COLORS["header"], pt, s, rgba, box)
 
 
 def draw_device_memory(draw: ImageDraw.ImageDraw, frame: int) -> None:
@@ -464,10 +527,10 @@ def draw_device_memory(draw: ImageDraw.ImageDraw, frame: int) -> None:
         draw.rounded_rectangle(box(rect), radius=s(18), fill=COLORS["panel_2"], outline=rgba(accent, 170), width=s(3))
         draw_text(draw, (x1 + 22, y1 + 24), title, FONTS["label"], fill=COLORS["text"], anchor="lt")
 
-    header_arrival = progress(frame, 74, 100)
-    payload_arrival = progress(frame, 80, 106)
-    draw_memory_row(draw, HEADER_ROW, COLORS["header"], "header", header_arrival, f"{HEADER_BYTES} B")
-    draw_memory_row(draw, PAYLOAD_ROW, COLORS["payload"], "payload", payload_arrival, f"{PAYLOAD_BYTES} B")
+    header_slots = {pkt.num for pkt in PACKETS if frame >= pkt.header_end}
+    payload_slots = {pkt.num for pkt in PACKETS if frame >= pkt.payload_end}
+    draw_memory_row(draw, HEADER_ROW, COLORS["header"], "header slots", header_slots, "h")
+    draw_memory_row(draw, PAYLOAD_ROW, COLORS["payload"], "payload slots", payload_slots, "p")
 
 
 def draw_static_background(draw: ImageDraw.ImageDraw) -> None:
@@ -499,8 +562,8 @@ def draw_dma_paths(base: Image.Image, draw: ImageDraw.ImageDraw, frame: int) -> 
     host_in_x = HEADER_ROW[0]
     bend_x = nic_out_x + 88
 
-    nic_header_y = NIC_RECT[1] + 34
-    nic_payload_y = NIC_RECT[3] - 44
+    nic_header_y = NIC_RECT[1] + 38
+    nic_payload_y = NIC_RECT[3] - 38
 
     paths = {
         "header": rectangular_path(
@@ -522,32 +585,31 @@ def draw_dma_paths(base: Image.Image, draw: ImageDraw.ImageDraw, frame: int) -> 
     }
     for key, color in (("header", COLORS["header"]), ("payload", COLORS["payload"])):
         draw_arrow(draw, paths[key], rgba(str(COLORS["arrow"]), 130), 3, 12)
-        active = progress(frame, 52, 114)
-        if active > 0:
-            draw_glow_line(base, paths[key][: max(2, int(len(paths[key]) * active))], color, 75, 9)
     return paths
 
 
-def draw_flowing_segments(draw: ImageDraw.ImageDraw, frame: int, paths: dict[str, list[tuple[float, float]]]) -> None:
-    incoming = progress(frame, 4, 52)
-    if incoming < 1:
-        x = lerp(76, 333, incoming)
-        y = dy(306)
-        draw_packet_bar(draw, x, y, 224, 42, alpha=255)
-        return
+def draw_flowing_segments(
+    base: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    frame: int,
+    paths: dict[str, list[tuple[float, float]]],
+) -> None:
+    for pkt in PACKETS:
+        if pkt.start <= frame < pkt.header_start:
+            incoming = progress_linear(frame, pkt.start, pkt.header_start)
+            x = lerp(58, NIC_RECT[2] - PACKET_BAR_WIDTH + 16, incoming)
+            y = dy(WIRE_Y - PACKET_BAR_HEIGHT / 2)
+            draw_packet_bar(draw, x, y, PACKET_BAR_WIDTH, PACKET_BAR_HEIGHT, alpha=255, packet_num=pkt.num)
 
-    split_flash = 1 - progress(frame, 52, 66)
-    if split_flash > 0:
-        draw_packet_bar(draw, 407, dy(303), 134, 30, alpha=int(220 * split_flash), label=False)
+        header_p = progress_linear(frame, pkt.header_start, pkt.header_end)
+        if 0 < header_p < 1:
+            draw_glow_line(base, paths["header"][: max(2, int(len(paths["header"]) * header_p))], COLORS["header"], 70, 8)
+            draw_packet_segment(draw, point_on_path(paths["header"], header_p), 76, COLORS["header"], f"h{pkt.num}", f"{HEADER_BYTES} B")
 
-    moves = (
-        ("header", 60, 96, COLORS["header"], "header", f"{HEADER_BYTES} B", 110),
-        ("payload", 68, 106, COLORS["payload"], "payload", f"{PAYLOAD_BYTES} B", 138),
-    )
-    for key, start, end, color, label, byte_text, width in moves:
-        p = progress(frame, start, end)
-        if 0 < p < 1:
-            draw_packet_segment(draw, point_on_path(paths[key], p), width, color, label, byte_text)
+        payload_p = progress_linear(frame, pkt.payload_start, pkt.payload_end)
+        if 0 < payload_p < 1:
+            draw_glow_line(base, paths["payload"][: max(2, int(len(paths["payload"]) * payload_p))], COLORS["payload"], 70, 8)
+            draw_packet_segment(draw, point_on_path(paths["payload"], payload_p), 82, COLORS["payload"], f"p{pkt.num}", f"{PAYLOAD_BYTES} B")
 
 
 def rgba_frame_to_palette(frame: Image.Image) -> Image.Image:
@@ -569,8 +631,9 @@ def render_frame(frame: int) -> Image.Image:
     draw_kernel_bypass(draw)
     draw_device_memory(draw, frame)
     paths = draw_dma_paths(img, draw, frame)
-    draw_chip(draw, NIC_RECT, "NVIDIA NIC", "", COLORS["nvidia"], pulse=progress(frame, 22, 50))
-    draw_flowing_segments(draw, frame, paths)
+    nic_active = any(pkt.nic_arrive - 3 <= frame < pkt.payload_start for pkt in PACKETS)
+    draw_chip(draw, NIC_RECT, "NVIDIA NIC", "", COLORS["nvidia"], pulse=0.8 if nic_active else 0.0)
+    draw_flowing_segments(img, draw, frame, paths)
     return img.resize((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
 
 
@@ -593,7 +656,7 @@ def render_theme(theme: str) -> None:
         disposal=2,
         transparency=GIF_TRANSPARENCY_INDEX,
     )
-    render_frame(118).save(poster_path, optimize=True)
+    render_frame(min(FRAMES - 1, max(pkt.payload_end for pkt in PACKETS) + 10)).save(poster_path, optimize=True)
     print(f"Wrote {gif_path}")
     print(f"Wrote {poster_path}")
 
