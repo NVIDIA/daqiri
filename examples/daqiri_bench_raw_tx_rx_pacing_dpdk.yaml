@@ -1,21 +1,16 @@
 %YAML 1.2
 ---
-# Packet-pacing demo on the DPDK engine: hardware-metered TX rate via the mlx5
-# send-on-timestamp scheduler.
+# Packet-pacing demo on the DPDK engine: hardware-metered TX rate.
 #
 # This is daqiri_bench_raw_tx_rx.yaml on the default DPDK engine (no "engine"
-# key) with a per-queue pacing_mbps cap added to the TX queue. The engine tags
-# the first mbuf of each burst with a scheduled TX time (RTE_ETH_TX_OFFLOAD_
-# SEND_ON_TIMESTAMP), so the NIC holds the burst until that time and meters the
-# queue out at (at most) the configured rate on average; idle gaps do not
-# accumulate burst credit. The ibverbs equivalent is
-# daqiri_bench_raw_tx_rx_pacing.yaml.
+# key) with a per-queue pacing_mbps cap added to the TX queue. The NIC meters
+# the queue out so its average TX rate stays at or below the configured value;
+# the limit is enforced on an average basis and idle gaps do not accumulate
+# burst credit. The ibverbs equivalent is daqiri_bench_raw_tx_rx_pacing.yaml.
 #
-# Requirements: a Mellanox/mlx5 NIC that supports the SEND_ON_TIMESTAMP TX
-# offload. daqiri auto-adds the mlx5 tx_pp devarg (the scheduler clock) to the
-# EAL device args whenever a TX queue sets pacing_mbps (or accurate_send is on),
-# so no manual EAL flags are needed. On a NIC without the offload, pacing_mbps
-# is ignored with a warning and TX runs at line rate.
+# Requirements: a Mellanox/mlx5 NIC with hardware send scheduling (ConnectX-7 or
+# later); no manual EAL flags are needed. On devices without it, pacing_mbps is
+# ignored with a warning and TX runs at line rate.
 #
 # Validate: run daqiri_bench_raw_gpudirect with this config and compute the
 # achieved rate from the RX line's bytes/seconds (Gbps = bytes * 8 / seconds /

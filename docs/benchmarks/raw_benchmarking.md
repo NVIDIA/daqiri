@@ -215,12 +215,12 @@ By default the application runs for 10 seconds and then exits. You can change th
 To meter the transmit side at a fixed rate in hardware, set a per-queue `pacing_mbps` cap
 on the TX queue. Both raw-Ethernet engines support it:
 
-- DPDK engine (default) — [`daqiri_bench_raw_tx_rx_pacing_dpdk.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_pacing_dpdk.yaml). Tags the first mbuf of each burst with the `RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP` offload; daqiri auto-adds the mlx5 `tx_pp` scheduler devarg when pacing is requested.
-- ibverbs engine — [`daqiri_bench_raw_tx_rx_pacing.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_pacing.yaml) (`engine: "ibverbs"`). Emits one wait-on-time WQE per burst.
+- DPDK engine (default) — [`daqiri_bench_raw_tx_rx_pacing_dpdk.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_pacing_dpdk.yaml).
+- ibverbs engine — [`daqiri_bench_raw_tx_rx_pacing.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_pacing.yaml) (`engine: "ibverbs"`).
 
 Each example is the loopback config above with `pacing_mbps: 10000` (10 Gbps) on the TX
-queue. Only the first packet of each burst carries a scheduling point, so the queue's
-average TX rate stays at or below the configured value; idle gaps do not accumulate burst
+queue. The NIC meters the queue out so its average TX rate stays at or below the configured
+value; the limit is enforced on an average basis and idle gaps do not accumulate burst
 credit.
 
 ```bash
