@@ -1922,22 +1922,30 @@ bool DpdkEngine::setup_tx_timestamp_dynfield() {
 }
 
 uint64_t DpdkEngine::now_tx_ns(uint16_t port) {
+  // The mlx5 send scheduler (tx_pp / SEND_ON_TIMESTAMP) releases packets when its
+  // own PTP hardware clock reaches the per-packet timestamp. To pace accurately we
+  // MUST seed pace_next_ns from that same clock: any offset between the seed clock
+  // and the NIC clock becomes a fixed per-burst scheduling latency (e.g. seeding
+  // from a host clock that runs ~0.2 s ahead parks every burst ~0.2 s in the NIC's
+  // future, which caps throughput). rte_eth_read_clock() returns exactly that
+  // clock, so prefer it.
   uint64_t clk = 0;
   if (rte_eth_read_clock(port, &clk) == 0) {
     const uint64_t tps =
         (port < rx_timestamp_conversions_.size() && rx_timestamp_conversions_[port].valid)
             ? rx_timestamp_conversions_[port].ticks_per_second
             : 0;
-    if (tps != 0) {
-      return static_cast<uint64_t>(static_cast<unsigned __int128>(clk) * 1000000000ULL / tps);
-    }
+    // With REAL_TIME_CLOCK_ENABLE the device clock already counts nanoseconds, so
+    // an uncalibrated tps (no RX-timestamp path active) means clk is ns as-is.
+    if (tps == 0 || tps == 1000000000ULL) { return clk; }
+    return static_cast<uint64_t>(static_cast<unsigned __int128>(clk) * 1000000000ULL / tps);
   }
-  // Fallback: on mlx5 rte_eth_read_clock is unsupported, but the NIC real-time
-  // clock tracks UTC nanoseconds, which CLOCK_REALTIME also tracks. A constant
-  // host/NIC offset only shifts the schedule, not the inter-burst spacing, so
-  // the paced rate stays accurate.
+  // Fallback: rte_eth_read_clock unsupported. The NIC PTP clock free-runs from ~0
+  // at driver load (unless a PTP daemon disciplines it), tracking CLOCK_MONOTONIC,
+  // NOT CLOCK_REALTIME (UTC). A small constant host/NIC offset only shifts the
+  // schedule, not the inter-burst spacing, so CLOCK_MONOTONIC keeps it closest.
   struct timespec ts {};
-  clock_gettime(CLOCK_REALTIME, &ts);
+  clock_gettime(CLOCK_MONOTONIC, &ts);
   return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + static_cast<uint64_t>(ts.tv_nsec);
 }
 
@@ -2463,10 +2471,9 @@ void DpdkEngine::initialize() {
     }
     if (loopback_ != LoopbackType::LOOPBACK_TYPE_SW &&
         (tx.accurate_send_ || tx_pacing_requested)) {
-      if (ret != 0) {
-        DAQIRI_LOG_CRITICAL("Failed to get device info for port {}", intf.port_id_);
-        return;
-      }
+      // dev_info was already fetched and validated at the top of this loop
+      // iteration (the non-SW-loopback branch returns on failure), so it is
+      // safe to inspect tx_offload_capa here directly.
       if ((dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP) == 0) {
         // accurate_send is a hard requirement; pacing degrades to line rate.
         if (tx.accurate_send_) {
@@ -4345,9 +4352,14 @@ int DpdkEngine::tx_core_worker(void* arg) {
       *RTE_MBUF_DYNFIELD(m0, tparams->tx_ts_dynfield_offset, uint64_t*) = tparams->pace_next_ns;
       // ns = bytes * 8 bits / (Mbps * 1e6 bits/s) * 1e9 ns/s = 8000 * bytes / Mbps.
       // Carry the division remainder so the long-run average is exactly pacing_mbps.
-      uint64_t bytes = 0;
-      for (size_t p = 0; p < msg->hdr.hdr.num_pkts; p++) {
-        bytes += reinterpret_cast<struct rte_mbuf*>(msg->pkts[0][p])->pkt_len;
+      // The set_*_packet_lengths helpers maintain hdr.nbytes as the burst's L2 byte
+      // total; use it directly to avoid walking the burst. Fall back to a walk for
+      // bursts populated without those helpers (nbytes left at 0).
+      uint64_t bytes = msg->hdr.hdr.nbytes;
+      if (bytes == 0) {
+        for (size_t p = 0; p < msg->hdr.hdr.num_pkts; p++) {
+          bytes += reinterpret_cast<struct rte_mbuf*>(msg->pkts[0][p])->pkt_len;
+        }
       }
       const uint64_t numer = 8000ULL * bytes + tparams->pace_rem;
       tparams->pace_next_ns += numer / tparams->pacing_mbps;
@@ -4652,6 +4664,8 @@ Status DpdkEngine::set_packet_lengths(BurstParams* burst, int idx,
   }
 
   reinterpret_cast<rte_mbuf**>(burst->pkts[0])[idx]->pkt_len = ttl_len;
+  // Accumulate the burst's L2 byte total so TX pacing need not walk the burst.
+  burst->hdr.hdr.nbytes += ttl_len;
 
   return Status::SUCCESS;
 }
@@ -4675,6 +4689,8 @@ Status DpdkEngine::set_all_packet_lengths(BurstParams* burst,
 
   auto** first_seg = reinterpret_cast<rte_mbuf**>(burst->pkts[0]);
   for (int idx = 0; idx < num_pkts; ++idx) { first_seg[idx]->pkt_len = ttl_len; }
+  // Record the burst's L2 byte total so TX pacing need not walk the burst.
+  burst->hdr.hdr.nbytes = ttl_len * static_cast<uint32_t>(num_pkts);
 
   return Status::SUCCESS;
 }
