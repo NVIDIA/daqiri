@@ -37,8 +37,8 @@
 #include "src/engine.h"
 #include <daqiri/daqiri.h>
 
-struct rte_ring;
-struct rte_mempool;
+#include "src/daqiri_ring.h"
+#include "src/daqiri_pool.h"
 
 namespace daqiri {
 
@@ -207,7 +207,7 @@ struct IbvRxQueue {
   std::atomic<uint64_t> reposts{0};  // diagnostic: WQE reposts
 
   // App-facing burst ring (worker enqueues, get_rx_burst dequeues).
-  struct rte_ring* ring = nullptr;
+  daqiri::Ring* ring = nullptr;
 
   // Optional GPU reordering state for this queue.
   std::unique_ptr<IbvReorderState> reorder;
@@ -297,7 +297,7 @@ struct IbvTxQueue {
   // Ethernet source so the application doesn't have to supply it.
   bool insert_eth_src = false;
   uint8_t eth_src[6] = {0};
-  struct rte_ring* send_ring = nullptr;  // bursts handed off for posting
+  daqiri::Ring* send_ring = nullptr;  // bursts handed off for posting
   std::thread compl_worker;
   std::atomic<bool> running{false};
 };
@@ -379,7 +379,6 @@ class IbverbsEngine : public Engine {
 
  private:
   // ---- bring-up ----
-  bool init_eal();  // EAL for rte_ring/mempool only
   struct ibv_context* open_device_for_interface(const InterfaceConfig& intf);
   Status setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf, const RxQueueConfig& qcfg);
   Status register_rx_mr(IbvRxQueue& q);      // ibv_reg_mr (CPU); dmabuf later
@@ -462,8 +461,6 @@ class IbverbsEngine : public Engine {
   void ensure_port_mtus();
 
   // ---- state ----
-  bool eal_initialized_ = false;
-  std::string eal_file_prefix_;
   std::atomic<bool> force_quit_{false};
 
   // One ibv_context + PD per opened device, keyed by device name.
@@ -522,8 +519,8 @@ class IbverbsEngine : public Engine {
 
   // Burst metadata pools. Each element is a BurstParams + inline pointer/length
   // /stride arrays; see the .cpp for the layout.
-  struct rte_mempool* rx_meta_pool_ = nullptr;
-  struct rte_mempool* tx_meta_pool_ = nullptr;
+  daqiri::ObjectPool* rx_meta_pool_ = nullptr;
+  daqiri::ObjectPool* tx_meta_pool_ = nullptr;
   size_t rx_meta_pool_size_ = 0;
   uint32_t max_batch_ = 0;  // largest batch_size across RX+TX queues
 

@@ -145,6 +145,8 @@ class DpdkEngine : public Engine {
   void shutdown() override;
   void print_stats() override;
   void adjust_memory_regions() override;
+  // kind: HUGE regions come from EAL hugepages (IOVA-contiguous for the NIC).
+  void* alloc_huge(size_t bytes, int numa) override;
   uint64_t get_burst_tot_byte(BurstParams* burst) override;
   BurstParams* create_tx_burst_params() override;
   bool validate_config() const override;

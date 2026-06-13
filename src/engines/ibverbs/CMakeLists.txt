@@ -53,18 +53,9 @@ if(NOT MLX5_LIBRARIES)
     message(FATAL_ERROR "ibverbs engine requires libmlx5 (mlx5dv.h) for striding RQ / DevX")
 endif()
 
-# DPDK is needed for rings (only used in .cpp, not exposed in public headers),
-# mirroring the rdma engine. The common library already links DPDK.
-pkg_check_modules(DPDK QUIET libdpdk)
-if(NOT DPDK_FOUND)
-  message(STATUS "Looking for DPDK in alternative directories")
-  set(ENV{PKG_CONFIG_PATH} /opt/mellanox/dpdk/lib/x86_64-linux-gnu/pkgconfig/)
-  pkg_check_modules(DPDK REQUIRED libdpdk)
-endif()
-
-target_link_directories(${ENGINE_TARGET} PRIVATE ${DPDK_LIBRARY_DIRS})
-target_include_directories(${ENGINE_TARGET} PRIVATE ${DPDK_INCLUDE_DIRS})
-target_compile_options(${ENGINE_TARGET} PRIVATE ${DPDK_CFLAGS_OTHER})
+# The ibverbs engine no longer depends on DPDK: its rings/pools are the
+# libdpdk-free daqiri::Ring / daqiri::ObjectPool, and it drives the NIC through
+# libibverbs/mlx5dv directly.
 
 # verbs/mlx5dv: PUBLIC (daqiri_ibverbs_engine.h includes <infiniband/verbs.h> and <infiniband/mlx5dv.h>)
 target_include_directories(${ENGINE_TARGET} PUBLIC ${IBVERBS_INCLUDE_DIRS} ${MLX5_INCLUDE_DIRS})
@@ -76,6 +67,4 @@ target_link_libraries(${ENGINE_TARGET}
         ${MLX5_LIBRARIES}
     PRIVATE
         CUDA::cuda_driver
-        ${DPDK_LDFLAGS_OTHER}
-        ${DPDK_LIBRARIES}
 )
