@@ -1505,16 +1505,6 @@ void IbverbsEngine::initialize() {
       // i.e. an 8-second cyclic window ((MLX5_TS_MASK_SECS=8 << 32) - 1). A full
       // mask makes the seconds field compare wrong (the wait never satisfies).
       q->rt_timemask = (8ULL << 32) - 1ULL;
-      if (q->pacing_mbps > 0) {
-        if (q->send_scheduling) {
-          DAQIRI_LOG_INFO("TX queue {} packet pacing enabled: {} Mbps", q->queue_id,
-                          q->pacing_mbps);
-        } else {
-          DAQIRI_LOG_WARN(
-              "TX queue {} pacing_mbps={} ignored: device lacks wait-on-time / real-time clock",
-              q->queue_id, q->pacing_mbps);
-        }
-      }
     }
   }
 
@@ -2373,18 +2363,6 @@ uint64_t IbverbsEngine::ts_to_ns(struct ibv_context* ctx, uint64_t raw_ts) {
   return c.valid ? mlx5dv_ts_to_ns(&c.info, raw_ts) : 0;
 }
 
-// Read the current NIC real-time clock and return it in nanoseconds (same
-// linear-ns domain as ts_to_ns / get_packet_rx_timestamp). mlx5 packs the full
-// free-running HCA counter into raw_clock.tv_nsec; ts_to_ns converts it.
-uint64_t IbverbsEngine::now_nic_ns(struct ibv_context* ctx) {
-  struct ibv_values_ex val {};
-  val.comp_mask = IBV_VALUES_MASK_RAW_CLOCK;
-  if (ibv_query_rt_values_ex(ctx, &val) != 0) {
-    return 0;
-  }
-  return ts_to_ns(ctx, static_cast<uint64_t>(val.raw_clock.tv_nsec));
-}
-
 Status IbverbsEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) {
   if (burst == nullptr || timestamp_ns == nullptr) {
     return Status::NULL_PTR;
@@ -2794,7 +2772,18 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
       q.insert_eth_src = true;
     }
   }
-  q.pacing_mbps = qcfg.pacing_mbps_;
+  // Packet pacing (pacing_mbps) is not supported on the ibverbs engine: the
+  // wait-on-time WQE it would use is not honored without the mlx5 send-scheduling
+  // clock/rearm-queue infrastructure that this engine does not set up, so a paced
+  // queue would not meter and would eventually stall. Reject it up front rather
+  // than silently running at line rate. Use the DPDK raw engine for pacing.
+  if (qcfg.pacing_mbps_ > 0) {
+    DAQIRI_LOG_CRITICAL(
+        "TX queue {}: pacing_mbps is not supported by the ibverbs engine; use the default "
+        "DPDK raw engine (remove engine: \"ibverbs\") for packet pacing",
+        q.queue_id);
+    return Status::INVALID_PARAMETER;
+  }
   if (qcfg.common_.mrs_.empty()) {
     DAQIRI_LOG_CRITICAL("TX queue {} has no memory region", q.queue_id);
     return Status::INVALID_PARAMETER;
@@ -3111,31 +3100,12 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
   // Per-packet send times (ns); 0 = send immediately. Reuses the burst's
   // timestamp array (a burst is either RX or TX, never both).
   const uint64_t* txtime = burst_ts_arr(burst);
-  // Packet pacing owns scheduling for the whole queue when configured (and the
-  // device supports wait-on-time): a single WAIT-on-time WQE at the head of the
-  // burst meters it out, and per-packet set_packet_tx_time is ignored. Counting
-  // the burst's L2 frame bytes keeps the average rate at/under pacing_mbps.
-  const bool pacing = q.send_scheduling && q.pacing_mbps > 0;
   void* last_ctrl = nullptr;
-  uint64_t batch_bytes = 0;
-
-  if (pacing) {
-    const uint64_t now = now_nic_ns(q.ctx);
-    // Seed on the first burst, and never let an idle gap accrue send credit: if
-    // the virtual clock has fallen behind real time, restart it at now so a
-    // backlog cannot burst above the configured rate.
-    if (q.pace_next_ns == 0 || q.pace_next_ns < now) {
-      q.pace_next_ns = now;
-      q.pace_rem = 0;
-    }
-    last_ctrl = emit_wait_wqe(q, q.pace_next_ns);
-  }
 
   for (int i = 0; i < n; i++) {
     // Accurate send scheduling (per-packet): emit a WAIT-on-time WQE so the NIC
     // holds the following send until its real-time clock reaches txtime[i].
-    // Skipped while pacing is active -- the queue rate config does the gating.
-    if (!pacing && q.send_scheduling && txtime[i] != 0) {
+    if (q.send_scheduling && txtime[i] != 0) {
       last_ctrl = emit_wait_wqe(q, txtime[i]);
     }
 
@@ -3163,22 +3133,11 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
       dseg[s].byte_count = htobe32(burst->pkt_lens[s][i]);
       dseg[s].lkey = htobe32(q.regions[s].lkey);
       dseg[s].addr = htobe64(reinterpret_cast<uint64_t>(burst->pkts[s][i]));
-      batch_bytes += burst->pkt_lens[s][i];
     }
     q.slots_posted++;  // this packet consumes one slot
     q.wqe_slot_cum[idx] = q.slots_posted;
     last_ctrl = ctrl;
     q.sq_pi++;
-  }
-
-  if (pacing) {
-    // Advance the virtual clock by the time this burst's bytes take at the
-    // configured rate: ns = bytes * 8 bits / (Mbps * 1e6 bits/s) * 1e9 ns/s
-    //                     = 8000 * bytes / Mbps. Carry the division remainder so
-    // the long-run average rate is exactly pacing_mbps (no rounding drift).
-    const uint64_t numer = 8000ULL * batch_bytes + q.pace_rem;
-    q.pace_next_ns += numer / q.pacing_mbps;
-    q.pace_rem = numer % q.pacing_mbps;
   }
 
   // Ring the SQ doorbell once for the whole burst: publish the WQEs, bump the

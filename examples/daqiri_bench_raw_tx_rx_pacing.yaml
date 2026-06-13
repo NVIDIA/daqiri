@@ -6,8 +6,9 @@
 # the TX queue (no "engine" key, so it uses the default raw engine, DPDK). The
 # NIC meters the queue out so its average TX rate stays at or below the
 # configured value; the limit is enforced on an average basis and idle gaps do
-# not accumulate burst credit. Pacing is also supported on the ibverbs engine
-# (add engine: "ibverbs").
+# not accumulate burst credit. Pacing is supported only on the default DPDK raw
+# engine; the ibverbs engine does not support pacing_mbps (daqiri_init fails if
+# it is set on an ibverbs queue).
 #
 # Requirements: a Mellanox/mlx5 NIC with hardware send scheduling (ConnectX-7 or
 # later). On devices without it, pacing_mbps is ignored with a warning at init

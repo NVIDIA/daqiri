@@ -353,9 +353,10 @@ daqiri::set_reorder_cuda_stream("rx_port", "rx_reorder_0", stream);
   bytes (the data the application transmits, excluding preamble/IFG/FCS). The NIC meters the queue
   out so its long-run average TX rate stays at or below this value; the limit is enforced on an
   average basis and idle gaps do not accumulate burst credit. `0` (the default) disables pacing
-  and sends at line rate. Supported by both raw-Ethernet engines (`dpdk` and `ibverbs`) on a NIC
-  with hardware send scheduling (ConnectX-7 or later); on devices without it, `pacing_mbps` is
-  ignored with a warning and TX runs at line rate.
+  and sends at line rate. Supported only by the default `dpdk` raw engine on a NIC with hardware
+  send scheduling (ConnectX-7 or later); on devices without it, `pacing_mbps` is ignored with a
+  warning and TX runs at line rate. The `ibverbs` raw engine does **not** support `pacing_mbps`
+  and `daqiri_init()` fails if it is set on an `ibverbs` queue.
   - type: `integer`
   - default: `0`
 
