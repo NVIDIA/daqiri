@@ -45,6 +45,10 @@
 
 #include <daqiri/logging.hpp>
 
+#if DAQIRI_HAVE_NUMA
+#include <numa.h>
+#endif
+
 namespace daqiri {
 
 // Initialize static members
@@ -222,7 +226,26 @@ static inline size_t align_ceil(size_t value, size_t align) {
   return (value + (align - 1)) & ~(align - 1);
 }
 
-void* Engine::alloc_huge(size_t bytes, int /*numa*/) {
+// Bind [p, p+bytes) to NUMA node `numa` (>=0) when libnuma is available, so a
+// kind: HUGE region lands on the same node DPDK's rte_malloc_socket(mr.affinity_)
+// used. Policy-only (no forced touch): a HUGE region may be large, so let it
+// fault on `numa` as it is used. No-op without libnuma or for numa < 0.
+static void bind_region_numa(void* p, size_t bytes, int numa) {
+#if DAQIRI_HAVE_NUMA
+  // Single-node systems: pinning is a no-op (skip to avoid mbind noise). The
+  // region here is mmap/posix_memalign(GPU_PAGE_SIZE)-backed, so it is already
+  // page-aligned as mbind requires.
+  if (p != nullptr && numa >= 0 && numa_available() != -1 && numa_max_node() > 0) {
+    numa_tonode_memory(p, bytes, numa);
+    return;
+  }
+#endif
+  (void)p;
+  (void)bytes;
+  (void)numa;
+}
+
+void* Engine::alloc_huge(size_t bytes, int numa) {
   // Base (non-DPDK) implementation: try a real hugepage-backed mapping, falling
   // back to ordinary page-aligned host memory if MAP_HUGETLB is unavailable.
   // The DPDK engine overrides this to use rte_malloc_socket (EAL hugepages,
@@ -231,6 +254,7 @@ void* Engine::alloc_huge(size_t bytes, int /*numa*/) {
   void* p = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB,
                  -1, 0);
   if (p != MAP_FAILED) {
+    bind_region_numa(p, bytes, numa);
     return p;
   }
   DAQIRI_LOG_WARN(
@@ -242,6 +266,7 @@ void* Engine::alloc_huge(size_t bytes, int /*numa*/) {
   if (posix_memalign(&ptr, GPU_PAGE_SIZE, bytes) != 0) {
     return nullptr;
   }
+  bind_region_numa(ptr, bytes, numa);
   return ptr;
 }
 

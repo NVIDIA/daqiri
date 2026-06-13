@@ -37,13 +37,62 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <new>
+
+#if DAQIRI_HAVE_NUMA
+#include <numa.h>
+#include <unistd.h>
+#endif
 
 namespace daqiri {
 
 enum class RingMode { MPMC, SPSC };
 
 namespace detail {
+
+// Bind [p, p+bytes) to NUMA node `node` and fault the pages in there now, so the
+// allocation lands on the same node DPDK's socket-aware allocators (rte_ring /
+// rte_mempool with rte_socket_id()) used. No-op when libnuma was not compiled in
+// (DAQIRI_HAVE_NUMA=0) or `node` < 0 -- the pages then follow the kernel's
+// default first-touch policy, which may place them off-node and cost bandwidth
+// on multi-socket / GPU-host-NUMA systems.
+inline void numa_bind(void* p, size_t bytes, int node) {
+#if DAQIRI_HAVE_NUMA
+  // numa_max_node() == 0 means a single NUMA node, where pinning is a no-op and
+  // mbind only adds noise; skip it. mbind() requires a page-aligned address, but
+  // the allocation is only cache-line aligned, so bind the page-aligned superset
+  // range (the leading/trailing slack is unused heap).
+  if (node >= 0 && numa_available() != -1 && numa_max_node() > 0) {
+    const auto pg = static_cast<uintptr_t>(sysconf(_SC_PAGESIZE));
+    const uintptr_t addr = reinterpret_cast<uintptr_t>(p);
+    const uintptr_t start = addr & ~(pg - 1);
+    const size_t len = ((addr + bytes - start) + (pg - 1)) & ~(pg - 1);
+    numa_tonode_memory(reinterpret_cast<void*>(start), len, node);
+    std::memset(p, 0, bytes);  // first-touch now, on `node`
+    return;
+  }
+#endif
+  (void)p;
+  (void)bytes;
+  (void)node;
+}
+
+// Resolve the NUMA node a CPU core belongs to, or -1 if unknown / libnuma absent.
+// Used to mirror DPDK's rte_socket_id() (the master lcore's node) for the pools
+// and rings.
+inline int numa_node_for_cpu(int cpu) {
+#if DAQIRI_HAVE_NUMA
+  if (cpu >= 0 && numa_available() != -1) {
+    const int node = numa_node_of_cpu(cpu);
+    if (node >= 0) {
+      return node;
+    }
+  }
+#endif
+  (void)cpu;
+  return -1;
+}
 
 // Spin-wait hint while another producer/consumer finishes publishing its
 // reserved slots. Matches rte_pause().
@@ -76,14 +125,17 @@ inline uint32_t round_up_pow2(uint32_t v) {
 class Ring {
  public:
   // count is rounded up to a power of two; usable capacity is (rounded-1).
-  // mode selects MPMC vs SPSC. Returns nullptr on allocation failure.
-  static Ring* create(const char* /*name*/, unsigned count, RingMode mode) {
+  // mode selects MPMC vs SPSC. numa_node (>=0) pins the backing memory to that
+  // NUMA node when libnuma is available; -1 leaves placement to first-touch.
+  // Returns nullptr on allocation failure.
+  static Ring* create(const char* /*name*/, unsigned count, RingMode mode, int numa_node = -1) {
     const uint32_t size = detail::round_up_pow2(static_cast<uint32_t>(count));
     void* mem = nullptr;
     const size_t bytes = sizeof(Ring) + static_cast<size_t>(size) * sizeof(void*);
     if (posix_memalign(&mem, kCacheline, bytes) != 0) {
       return nullptr;
     }
+    detail::numa_bind(mem, bytes, numa_node);
     Ring* r = new (mem) Ring();
     r->size_ = size;
     r->mask_ = size - 1;

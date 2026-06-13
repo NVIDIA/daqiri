@@ -280,7 +280,8 @@ int RdmaEngine::rdma_register_cfg_mrs() {
     // Allocate 1 more than the user specifies because the ring usable capacity is size - 1.
     // Multi-producer/consumer: app threads and the RDMA worker both touch this buffer pool.
     auto ring = daqiri::Ring::create(mr.second.name_.c_str(), mr.second.num_bufs_ + 1,
-                                     daqiri::RingMode::MPMC);
+                                     daqiri::RingMode::MPMC,
+                                     daqiri::detail::numa_node_for_cpu(cfg_.common_.master_core_));
 
     if (ring == nullptr) {
       DAQIRI_LOG_CRITICAL("Failed to create ring for MR {}", mr.second.name_);
@@ -1499,6 +1500,10 @@ int RdmaEngine::setup_pools_and_rings() {
   // RX rings
   DAQIRI_LOG_INFO("Setting up TX/RX per-queue rings");
 
+  // Pin the rings/pools to the master core's NUMA node, mirroring DPDK's use of
+  // rte_socket_id() for these allocations. -1 (libnuma absent) -> first-touch.
+  const int numa_node = daqiri::detail::numa_node_for_cpu(cfg_.common_.master_core_);
+
   // Each connection ring is single-producer/single-consumer by design: one
   // rdma_thread owns the engine side and one application thread owns the API
   // side for a given conn_id. If multi-threaded app access per conn_id is ever
@@ -1506,7 +1511,8 @@ int RdmaEngine::setup_pools_and_rings() {
   for (int i = 0; i < MAX_RDMA_CONNECTIONS; i++) {
     std::string ring_name = "RX_RING_" + std::to_string(i);
     DAQIRI_LOG_DEBUG("Setting up RX ring {}", ring_name);
-    daqiri::Ring* ring = daqiri::Ring::create(ring_name.c_str(), 2048, daqiri::RingMode::SPSC);
+    daqiri::Ring* ring =
+        daqiri::Ring::create(ring_name.c_str(), 2048, daqiri::RingMode::SPSC, numa_node);
     if (ring == nullptr) {
       DAQIRI_LOG_CRITICAL("Failed to allocate RX ring {}!", ring_name);
       return -1;
@@ -1515,7 +1521,7 @@ int RdmaEngine::setup_pools_and_rings() {
 
     ring_name = "TX_RING_" + std::to_string(i);
     DAQIRI_LOG_DEBUG("Setting up TX ring {}", ring_name);
-    ring = daqiri::Ring::create(ring_name.c_str(), 2048, daqiri::RingMode::SPSC);
+    ring = daqiri::Ring::create(ring_name.c_str(), 2048, daqiri::RingMode::SPSC, numa_node);
     if (ring == nullptr) {
       DAQIRI_LOG_CRITICAL("Failed to allocate TX ring {}!", ring_name);
       return -1;
@@ -1526,28 +1532,30 @@ int RdmaEngine::setup_pools_and_rings() {
   // Packet length buffers
   DAQIRI_LOG_DEBUG("Setting up RX meta pool");
   pkt_len_pool_ = daqiri::ObjectPool::create("PKT_LEN_POOL", (1U << 11) - 1U,
-                                             sizeof(uint32_t) * MAX_RDMA_BATCH);
+                                             sizeof(uint32_t) * MAX_RDMA_BATCH, numa_node);
   if (pkt_len_pool_ == nullptr) {
     DAQIRI_LOG_CRITICAL("Failed to allocate packet length pool!");
     return -1;
   }
 
   DAQIRI_LOG_DEBUG("Setting up RX meta pool");
-  rx_meta = daqiri::ObjectPool::create("RX_META_POOL", (1U << 11) - 1U, sizeof(BurstParams));
+  rx_meta =
+      daqiri::ObjectPool::create("RX_META_POOL", (1U << 11) - 1U, sizeof(BurstParams), numa_node);
   if (rx_meta == nullptr) {
     DAQIRI_LOG_CRITICAL("Failed to allocate RX meta pool!");
     return -1;
   }
 
   DAQIRI_LOG_DEBUG("Setting up TX meta pool");
-  tx_meta = daqiri::ObjectPool::create("TX_META_POOL", (1U << 11) - 1U, sizeof(BurstParams));
+  tx_meta =
+      daqiri::ObjectPool::create("TX_META_POOL", (1U << 11) - 1U, sizeof(BurstParams), numa_node);
   if (tx_meta == nullptr) {
     DAQIRI_LOG_CRITICAL("Failed to allocate TX meta pool!");
     return -1;
   }
 
-  tx_burst_pool_ =
-      daqiri::ObjectPool::create("TX_BURST_POOL", (1U << 11) - 1U, sizeof(void*) * MAX_RDMA_BATCH);
+  tx_burst_pool_ = daqiri::ObjectPool::create("TX_BURST_POOL", (1U << 11) - 1U,
+                                              sizeof(void*) * MAX_RDMA_BATCH, numa_node);
   if (tx_burst_pool_ == nullptr) {
     DAQIRI_LOG_CRITICAL("Failed to allocate TX burst pool!");
     return -1;

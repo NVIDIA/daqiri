@@ -36,9 +36,11 @@ class ObjectPool {
  public:
   // Allocates n elements of at least elt_size bytes each (stride rounded up to
   // a cache line to avoid false sharing between neighbouring elements) and
-  // pre-populates the free-list. socket is accepted for call-site parity with
-  // rte_mempool_create and currently ignored. Returns nullptr on failure.
-  static ObjectPool* create(const char* /*name*/, unsigned n, size_t elt_size, int /*socket*/ = 0) {
+  // pre-populates the free-list. numa_node (>=0) pins both the slab and the
+  // free-list ring to that NUMA node when libnuma is available (mirroring
+  // rte_mempool_create's socket argument); -1 leaves placement to first-touch.
+  // Returns nullptr on failure.
+  static ObjectPool* create(const char* /*name*/, unsigned n, size_t elt_size, int numa_node = -1) {
     auto* p = new (std::nothrow) ObjectPool();
     if (p == nullptr) {
       return nullptr;
@@ -49,8 +51,9 @@ class ObjectPool {
       delete p;
       return nullptr;
     }
+    detail::numa_bind(p->base_, static_cast<size_t>(n) * stride, numa_node);
     // Free-list capacity must hold all n elements; round_up_pow2(n+1)-1 >= n.
-    p->free_ = Ring::create("objpool", n + 1, RingMode::MPMC);
+    p->free_ = Ring::create("objpool", n + 1, RingMode::MPMC, numa_node);
     if (p->free_ == nullptr) {
       std::free(p->base_);
       delete p;

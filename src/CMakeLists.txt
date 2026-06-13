@@ -103,6 +103,28 @@ if(DAQIRI_BUILD_DPDK)
   endif()
 endif()
 
+# libnuma is an OPTIONAL dependency. When present, daqiri::Ring / daqiri::ObjectPool
+# and the kind:HUGE allocator pin their memory to the NUMA node DPDK's socket-aware
+# allocators used (rte_socket_id() / rte_malloc_socket). When absent, those pages
+# follow the kernel's first-touch policy, which can land off-node and cost memory
+# bandwidth on multi-socket / GPU-host-NUMA systems -- run scripts ... tune_system.py
+# --check numa for the warning. The define is set at directory scope so every target
+# in src/ (daqiri_common and each engine) agrees on it; the headers are included by
+# all of them.
+find_library(DAQIRI_NUMA_LIBRARY numa)
+find_path(DAQIRI_NUMA_INCLUDE_DIR numa.h)
+if(DAQIRI_NUMA_LIBRARY AND DAQIRI_NUMA_INCLUDE_DIR)
+  set(DAQIRI_HAVE_NUMA ON)
+  add_compile_definitions(DAQIRI_HAVE_NUMA=1)
+  message(STATUS "libnuma found (${DAQIRI_NUMA_LIBRARY}): NUMA-aware pool/ring allocation enabled")
+else()
+  set(DAQIRI_HAVE_NUMA OFF)
+  add_compile_definitions(DAQIRI_HAVE_NUMA=0)
+  message(STATUS
+    "libnuma NOT found: pools/rings use first-touch placement (install libnuma-dev "
+    "for NUMA pinning that matches DPDK). This may cost memory bandwidth on multi-socket systems.")
+endif()
+
 # Common library. dpdk_log.cpp and engine_dpdk.cpp hold the only rte_* code left
 # in daqiri_common and are added below only when the dpdk engine is built.
 add_library(daqiri_common
@@ -145,6 +167,10 @@ if(DAQIRI_BUILD_DPDK)
   target_include_directories(daqiri_common PRIVATE ${DPDK_INCLUDE_DIRS})
   target_link_directories(daqiri_common PUBLIC ${DPDK_LIBRARY_DIRS})
   target_link_libraries(daqiri_common PUBLIC ${DPDK_LDFLAGS_OTHER} ${DPDK_LIBRARIES})
+endif()
+if(DAQIRI_HAVE_NUMA)
+  target_include_directories(daqiri_common PRIVATE ${DAQIRI_NUMA_INCLUDE_DIR})
+  target_link_libraries(daqiri_common PUBLIC ${DAQIRI_NUMA_LIBRARY})
 endif()
 if(DAQIRI_ENABLE_OTEL_METRICS)
   target_link_libraries(daqiri_common PRIVATE opentelemetry-cpp::api)
@@ -287,6 +313,12 @@ foreach(ENGINE IN LISTS DAQIRI_ENGINE_INTERNAL_LIST)
           ${DAQIRI_SPDLOG_INCLUDE_DIR}
     )
     target_link_libraries(${ENGINE_TARGET} PRIVATE CUDA::cudart ${DAQIRI_YAML_TARGET})
+    # Engines that build the daqiri::Ring / daqiri::ObjectPool inline NUMA path
+    # reference libnuma symbols; link it when available.
+    if(DAQIRI_HAVE_NUMA)
+      target_include_directories(${ENGINE_TARGET} PRIVATE ${DAQIRI_NUMA_INCLUDE_DIR})
+      target_link_libraries(${ENGINE_TARGET} PRIVATE ${DAQIRI_NUMA_LIBRARY})
+    endif()
     set_target_properties(${ENGINE_TARGET} PROPERTIES
         OUTPUT_NAME "daqiri_${ENGINE_LOWER}"
         EXPORT_NAME "${ENGINE_LOWER}"

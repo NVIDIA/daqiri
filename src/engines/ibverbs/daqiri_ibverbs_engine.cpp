@@ -1368,7 +1368,8 @@ Status IbverbsEngine::setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf,
   // App-facing burst ring.
   const std::string ring_name =
       "ibv_rx_" + std::to_string(q.port_id) + "_" + std::to_string(q.queue_id);
-  q.ring = daqiri::Ring::create(ring_name.c_str(), 2048, daqiri::RingMode::MPMC);
+  q.ring = daqiri::Ring::create(ring_name.c_str(), 2048, daqiri::RingMode::MPMC,
+                                daqiri::detail::numa_node_for_cpu(cfg_.common_.master_core_));
   if (q.ring == nullptr) {
     DAQIRI_LOG_CRITICAL("Failed to create RX ring {}", ring_name);
     return Status::GENERIC_FAILURE;
@@ -1415,13 +1416,16 @@ void IbverbsEngine::initialize() {
   }
   g_layout = compute_layout(max_batch_);
   rx_meta_pool_size_ = cfg_.rx_meta_buffers_ ? cfg_.rx_meta_buffers_ : 4096;
-  rx_meta_pool_ = daqiri::ObjectPool::create("IBV_RX_META", rx_meta_pool_size_ - 1, g_layout.total);
+  const int pool_numa = daqiri::detail::numa_node_for_cpu(cfg_.common_.master_core_);
+  rx_meta_pool_ =
+      daqiri::ObjectPool::create("IBV_RX_META", rx_meta_pool_size_ - 1, g_layout.total, pool_numa);
   if (rx_meta_pool_ == nullptr) {
     DAQIRI_LOG_CRITICAL("Failed to create RX metadata pool");
     return;
   }
   const size_t tx_meta_n = cfg_.tx_meta_buffers_ ? cfg_.tx_meta_buffers_ : 4096;
-  tx_meta_pool_ = daqiri::ObjectPool::create("IBV_TX_META", tx_meta_n - 1, g_layout.total);
+  tx_meta_pool_ =
+      daqiri::ObjectPool::create("IBV_TX_META", tx_meta_n - 1, g_layout.total, pool_numa);
   if (tx_meta_pool_ == nullptr) {
     DAQIRI_LOG_CRITICAL("Failed to create TX metadata pool");
     return;
@@ -2777,7 +2781,8 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
   // worker dequeues and does the WQE build + doorbell + completion reclaim.
   const std::string send_name =
       "ibv_txsend_" + std::to_string(q.port_id) + "_" + std::to_string(q.queue_id);
-  q.send_ring = daqiri::Ring::create(send_name.c_str(), 4096, daqiri::RingMode::SPSC);
+  q.send_ring = daqiri::Ring::create(send_name.c_str(), 4096, daqiri::RingMode::SPSC,
+                                     daqiri::detail::numa_node_for_cpu(cfg_.common_.master_core_));
   if (q.send_ring == nullptr) {
     DAQIRI_LOG_CRITICAL("Failed to create TX send ring {}", send_name);
     return Status::GENERIC_FAILURE;
