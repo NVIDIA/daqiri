@@ -115,7 +115,7 @@ struct BurstHeaderParams {
   uint16_t port_id;
   uint16_t q_id;
   int num_segs;
-  uint32_t nbytes;
+  uint64_t nbytes;
   uintptr_t first_pkt_addr;
   uint32_t max_pkt;
   uint32_t max_pkt_size;

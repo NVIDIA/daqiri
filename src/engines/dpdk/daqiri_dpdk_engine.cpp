@@ -4690,7 +4690,7 @@ Status DpdkEngine::set_all_packet_lengths(BurstParams* burst,
   auto** first_seg = reinterpret_cast<rte_mbuf**>(burst->pkts[0]);
   for (int idx = 0; idx < num_pkts; ++idx) { first_seg[idx]->pkt_len = ttl_len; }
   // Record the burst's L2 byte total so TX pacing need not walk the burst.
-  burst->hdr.hdr.nbytes = ttl_len * static_cast<uint32_t>(num_pkts);
+  burst->hdr.hdr.nbytes = static_cast<uint64_t>(ttl_len) * static_cast<uint64_t>(num_pkts);
 
   return Status::SUCCESS;
 }
@@ -4822,6 +4822,8 @@ Status DpdkEngine::get_tx_metadata_buffer(BurstParams** burst) {
       "latency)", cfg_.tx_meta_buffers_, (*burst)->hdr.hdr.port_id, (*burst)->hdr.hdr.q_id);
     return Status::NO_FREE_BURST_BUFFERS;
   }
+  // Clear the recycled running L2 byte total (see create_tx_burst_params).
+  (*burst)->hdr.hdr.nbytes = 0;
 
   return Status::SUCCESS;
 }
@@ -4916,6 +4918,12 @@ BurstParams* DpdkEngine::create_tx_burst_params() {
     DAQIRI_LOG_CRITICAL("Failed to get TX meta descriptor");
     return nullptr;
   }
+  // TX metadata buffers are recycled from a mempool, so clear the running L2
+  // byte total here (the start of a burst's lifecycle). set_header also resets
+  // it, but doing it on acquire keeps the pacing path's "nbytes == 0 means not
+  // yet accumulated" sentinel correct even if a caller fills lengths without
+  // calling set_header first.
+  burst->hdr.hdr.nbytes = 0;
   return burst;
 }
 };  // namespace daqiri

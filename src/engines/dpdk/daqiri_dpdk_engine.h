@@ -164,8 +164,8 @@ class DpdkEngine : public Engine {
   bool calibrate_rx_timestamp_clock(uint16_t port_id);
   // Current NIC clock for `port` in nanoseconds, for packet-pacing scheduling.
   // Uses rte_eth_read_clock + the calibrated ticks/sec where supported; falls
-  // back to CLOCK_REALTIME (e.g. mlx5, whose real-time clock tracks UTC and
-  // where rte_eth_read_clock is unsupported).
+  // back to CLOCK_MONOTONIC (the NIC PTP clock free-runs from driver load unless
+  // a PTP daemon disciplines it, so it tracks CLOCK_MONOTONIC, not CLOCK_REALTIME).
   uint64_t now_tx_ns(uint16_t port);
   int setup_pools_and_rings(int max_rx_batch, int max_tx_batch);
   struct rte_flow* add_flow(int port, const FlowConfig& cfg);
