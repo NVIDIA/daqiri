@@ -49,7 +49,7 @@ stream to use the MPRQ engine instead. Build it by including `ibverbs` in `DAQIR
 ### Limitations
 
 - TX header-fill helpers currently support UDP only.
-- Raw Ethernet configs must reference valid RX queue IDs in `rx.flows` `action.id`; init fails if flow rules cannot be installed on the NIC.
+- Raw Ethernet configs must reference valid RX queue IDs in `rx.flows` `action.id` and valid flex-item IDs on the same interface; init fails if flow rules cannot be installed on the NIC.
 - The `ibverbs` raw (MPRQ) engine requires a Mellanox/mlx5 NIC (ConnectX-6 Dx or
   later, BlueField); it is DevX-based and not portable to other vendors.
 

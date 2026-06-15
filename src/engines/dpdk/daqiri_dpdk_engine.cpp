@@ -68,6 +68,22 @@ static inline uint32_t generate_queue_key(int port_id, int queue_id) {
     return (static_cast<uint32_t>(port_id) << 16) | static_cast<uint32_t>(queue_id);
 }
 
+static inline uint32_t flex_item_handle_key(uint16_t port, uint16_t flex_item_id) {
+  return (static_cast<uint32_t>(port) << 16) | static_cast<uint32_t>(flex_item_id);
+}
+
+static const FlexItemConfig* find_flex_item_config(const NetworkConfig& cfg, int port,
+                                                   uint16_t flex_item_id) {
+  for (const auto& intf : cfg.ifs_) {
+    if (intf.port_id_ != port) { continue; }
+    for (const auto& item : intf.rx_.flex_items_) {
+      if (item.id_ == flex_item_id) { return &item; }
+    }
+    return nullptr;
+  }
+  return nullptr;
+}
+
 /**
  * @brief Extracts the port ID from a 32-bit queue key.
  */
@@ -2033,7 +2049,7 @@ void DpdkEngine::initialize() {
     DpdkEngine* engine;
     ~EalCleanupGuard() {
       if (!engine->initialized_) {
-        engine->destroy_eth_jump_rules();
+        engine->destroy_all_flow_rules();
         engine->cleanup_eal();
       }
     }
@@ -2677,7 +2693,6 @@ void DpdkEngine::initialize() {
 
   // Initialize all drop_all_traffic_flow pointers to nullptr
   for (auto& config : drop_all_traffic_flow) {
-    config.jump = nullptr;
     config.drop = nullptr;
   }
 
@@ -2863,6 +2878,61 @@ bool DpdkEngine::ensure_eth_jump_rule(int port, uint32_t group) {
   return true;
 }
 
+void DpdkEngine::track_flow(uint16_t port, struct rte_flow* flow) {
+  if (flow != nullptr) {
+    programmed_flows_.push_back({port, flow});
+  }
+}
+
+void DpdkEngine::destroy_programmed_flows() {
+  for (const auto& [port, flow] : programmed_flows_) {
+    if (flow == nullptr) { continue; }
+    struct rte_flow_error error;
+    const int ret = rte_flow_destroy(port, flow, &error);
+    if (ret != 0) {
+      DAQIRI_LOG_ERROR("Failed to destroy flow on port {}: {}",
+                       port,
+                       error.message ? error.message : "unknown error");
+    }
+  }
+  programmed_flows_.clear();
+
+  for (uint16_t port = 0; port < drop_all_traffic_flow.size(); ++port) {
+    struct rte_flow* drop_flow = drop_all_traffic_flow[port].drop;
+    if (drop_flow == nullptr) { continue; }
+    struct rte_flow_error error;
+    const int ret = rte_flow_destroy(port, drop_flow, &error);
+    if (ret != 0) {
+      DAQIRI_LOG_ERROR("Failed to destroy drop-all-traffic rule on port {}: {}",
+                       port,
+                       error.message ? error.message : "unknown error");
+    }
+    drop_all_traffic_flow[port].drop = nullptr;
+  }
+}
+
+void DpdkEngine::destroy_flex_item_handles() {
+  for (const auto& [flex_item_id, flex_handle] : flex_item_handles_) {
+    if (flex_handle.handle == nullptr) { continue; }
+    struct rte_flow_error error;
+    const int ret =
+        rte_flow_flex_item_release(flex_handle.port, flex_handle.handle, &error);
+    if (ret != 0) {
+      DAQIRI_LOG_ERROR("Failed to destroy flex item {} on port {}: {}",
+                       flex_item_id,
+                       flex_handle.port,
+                       error.message ? error.message : "unknown error");
+    }
+  }
+  flex_item_handles_.clear();
+}
+
+void DpdkEngine::destroy_all_flow_rules() {
+  destroy_programmed_flows();
+  destroy_flex_item_handles();
+  destroy_eth_jump_rules();
+}
+
 void DpdkEngine::destroy_eth_jump_rules() {
   for (const auto& [key, flow] : eth_jump_flows_) {
     if (flow == nullptr) { continue; }
@@ -2879,56 +2949,6 @@ void DpdkEngine::destroy_eth_jump_rules() {
   eth_jump_installed_.clear();
 }
 
-struct rte_flow_item_flex_handle *DpdkEngine::create_flex_flow_rule(
-    int port, int offset, struct rte_flow_item *udp_item, struct rte_flow_item *end_pattern) {
-  static struct rte_flow_item_flex_handle *item_handle = NULL;
-  struct rte_flow_error error;
-
-  if (item_handle != NULL) {
-    return item_handle;
-  }
-
-  if (!ensure_eth_jump_rule(port, 1)) { return NULL; }
-
-  struct rte_flow_item_flex_conf flex_conf;
-  flex_conf.tunnel = FLEX_TUNNEL_MODE_SINGLE;
-  memset(&flex_conf.next_header, 0, sizeof(flex_conf.next_header));
-  flex_conf.next_header.field_mode = FIELD_MODE_FIXED;
-  flex_conf.next_header.field_base = 32 * 8;  // Always sample 8 32-bit words for now
-
-  memset(&flex_conf.next_protocol, 0, sizeof(flex_conf.next_protocol));
-
-  struct rte_flow_item_flex_field sample_data[1];
-  memset(&sample_data[0], 0, sizeof(sample_data));
-  sample_data[0].field_mode = FIELD_MODE_FIXED;
-  sample_data[0].field_size = 32;
-  sample_data[0].field_base = offset * 8;  // Offset is in bytes while DPDK wants bits
-  flex_conf.sample_data = &sample_data[0];
-  flex_conf.nb_samples = 1;
-
-  struct rte_flow_item_flex_link input_link;
-  memset(&input_link, 0, sizeof(input_link));
-  input_link.item = *udp_item;
-  flex_conf.input_link = &input_link;
-  flex_conf.nb_inputs = 1;
-
-  struct rte_flow_item_flex_link output_link;
-  memset(&output_link, 0, sizeof(output_link));
-  output_link.item = *end_pattern;
-  flex_conf.output_link = &output_link;
-  flex_conf.nb_outputs = 0;
-
-  item_handle = rte_flow_flex_item_create(port, &flex_conf, &error);
-  if (item_handle == NULL) {
-    DAQIRI_LOG_CRITICAL("Failed to create flex item on port {}: {}",
-                        port,
-                        error.message ? error.message : "unknown error");
-    return NULL;
-  }
-
-  return item_handle;
-}
-
 struct rte_flow* DpdkEngine::add_flex_item_flow(
     int port, const FlexItemMatch& match_info, uint16_t queue_id) {
   /* Declaring structs being used. 8< */
@@ -2943,7 +2963,13 @@ struct rte_flow* DpdkEngine::add_flex_item_flow(
   struct rte_flow_item_ipv4  ip_spec;
   struct rte_flow_item_ipv4  ip_mask;
   int res;
-  const auto& flex_item_config = cfg_.ifs_[port].rx_.flex_items_[match_info.flex_item_id_];
+  const FlexItemConfig* flex_item_config =
+      find_flex_item_config(cfg_, port, match_info.flex_item_id_);
+  if (flex_item_config == nullptr) {
+    DAQIRI_LOG_CRITICAL("Flow references unknown flex item id {} on port {}", match_info.flex_item_id_,
+                        port);
+    return nullptr;
+  }
 
   memset(pattern, 0, sizeof(pattern));
   memset(action, 0, sizeof(action));
@@ -2970,7 +2996,7 @@ struct rte_flow* DpdkEngine::add_flex_item_flow(
 
   struct rte_flow_item udp_item;
   udp_spec.hdr.src_port = 0;
-  udp_spec.hdr.dst_port = htons(flex_item_config.udp_dst_port_);
+  udp_spec.hdr.dst_port = htons(flex_item_config->udp_dst_port_);
   udp_spec.hdr.dgram_len = 0;
   udp_spec.hdr.dgram_cksum = 0;
 
@@ -2986,18 +3012,57 @@ struct rte_flow* DpdkEngine::add_flex_item_flow(
 
   pattern[2] = udp_item;
 
-  if (flex_item_handles_.find(match_info.flex_item_id_) == flex_item_handles_.end()) {
+  const uint32_t handle_key =
+      flex_item_handle_key(static_cast<uint16_t>(port), match_info.flex_item_id_);
+  auto handle_it = flex_item_handles_.find(handle_key);
+  if (handle_it == flex_item_handles_.end()) {
+    if (!ensure_eth_jump_rule(port, 1)) { return nullptr; }
+
+    struct rte_flow_item_flex_conf flex_conf;
+    flex_conf.tunnel = FLEX_TUNNEL_MODE_SINGLE;
+    memset(&flex_conf.next_header, 0, sizeof(flex_conf.next_header));
+    flex_conf.next_header.field_mode = FIELD_MODE_FIXED;
+    flex_conf.next_header.field_base = 32 * 8;
+
+    memset(&flex_conf.next_protocol, 0, sizeof(flex_conf.next_protocol));
+
+    struct rte_flow_item_flex_field sample_data[1];
+    memset(&sample_data[0], 0, sizeof(sample_data));
+    sample_data[0].field_mode = FIELD_MODE_FIXED;
+    sample_data[0].field_size = 32;
+    sample_data[0].field_base = flex_item_config->offset_ * 8;
+    flex_conf.sample_data = &sample_data[0];
+    flex_conf.nb_samples = 1;
+
+    struct rte_flow_item_flex_link input_link;
+    memset(&input_link, 0, sizeof(input_link));
+    input_link.item = udp_item;
+    flex_conf.input_link = &input_link;
+    flex_conf.nb_inputs = 1;
+
+    struct rte_flow_item_flex_link output_link;
+    memset(&output_link, 0, sizeof(output_link));
+    output_link.item = pattern[4];
+    flex_conf.output_link = &output_link;
+    flex_conf.nb_outputs = 0;
+
     struct rte_flow_item_flex_handle* item_handle =
-        create_flex_flow_rule(port, flex_item_config.offset_, &udp_item, &pattern[4]);
-    if (item_handle != nullptr) {
-      flex_item_handles_[match_info.flex_item_id_] = item_handle;
+        rte_flow_flex_item_create(port, &flex_conf, &error);
+    if (item_handle == nullptr) {
+      DAQIRI_LOG_CRITICAL("Failed to create flex item on port {}: {}",
+                          port,
+                          error.message ? error.message : "unknown error");
+      return nullptr;
     }
+    flex_item_handles_[handle_key] = {static_cast<uint16_t>(port), item_handle};
+    handle_it = flex_item_handles_.find(handle_key);
   }
 
-  const auto handle_it = flex_item_handles_.find(match_info.flex_item_id_);
-  if (handle_it == flex_item_handles_.end() || handle_it->second == nullptr) { return nullptr; }
+  if (handle_it == flex_item_handles_.end() || handle_it->second.handle == nullptr) {
+    return nullptr;
+  }
 
-  struct rte_flow_item_flex_handle* item_handle = handle_it->second;
+  struct rte_flow_item_flex_handle* item_handle = handle_it->second.handle;
 
   /* Define the new protocol header structure */
   struct rte_udp_flex_hdr {
@@ -3052,6 +3117,8 @@ struct rte_flow* DpdkEngine::add_flex_item_flow(
                         match_info.val_,
                         error.message ? error.message : "unknown error",
                         rte_strerror(rte_errno));
+  } else {
+    track_flow(static_cast<uint16_t>(port), flow);
   }
 
   return flow;
@@ -3176,6 +3243,8 @@ struct rte_flow* DpdkEngine::add_flow(int port, const FlowConfig& cfg) {
                         port,
                         error.message ? error.message : "unknown error",
                         rte_strerror(rte_errno));
+  } else {
+    track_flow(static_cast<uint16_t>(port), flow);
   }
   return flow;
 }
@@ -3223,6 +3292,7 @@ bool DpdkEngine::add_send_to_kernel_fallback(int port, uint32_t group) {
     return false;
   }
 
+  track_flow(static_cast<uint16_t>(port), flow);
   return true;
 }
 
@@ -3234,7 +3304,6 @@ Status DpdkEngine::drop_all_traffic(int port) {
   struct rte_flow* flow = NULL;
   struct rte_flow_error error;
   DropTrafficConfig config{};
-  config.jump = nullptr;
 
   // Jump to group 3 is shared with init-time RX flows; only the drop rule is owned here.
   if (!ensure_eth_jump_rule(port, 3)) {
@@ -3312,7 +3381,6 @@ Status DpdkEngine::allow_all_traffic(int port) {
   }
 
   drop_all_traffic_flow[port].drop = nullptr;
-  drop_all_traffic_flow[port].jump = nullptr;
 
   DAQIRI_LOG_INFO(
     "Successfully removed drop all traffic rule on port {}, traffic is now allowed", port);
@@ -3402,6 +3470,8 @@ struct rte_flow* DpdkEngine::add_modify_flow_set(int port, int queue, const char
                         queue,
                         error.message ? error.message : "unknown error",
                         rte_strerror(rte_errno));
+  } else {
+    track_flow(static_cast<uint16_t>(port), flow);
   }
   return flow;
 }
@@ -3504,7 +3574,7 @@ DpdkEngine::~DpdkEngine() {
     rx_rings.clear();
     tx_rings.clear();
 
-    destroy_eth_jump_rules();
+    destroy_all_flow_rules();
 
     // Final safety net: if shutdown() was never called (e.g. process exiting
     // via std::exit after a partial init), still release EAL and unlink any
@@ -3518,6 +3588,14 @@ bool DpdkEngine::validate_config() const {
   for (const auto& intf : cfg_.ifs_) {
     std::unordered_set<uint16_t> rx_queue_ids;
     for (const auto& q : intf.rx_.queues_) { rx_queue_ids.insert(q.common_.id_); }
+
+    std::unordered_set<uint16_t> flex_ids;
+    for (const auto& item : intf.rx_.flex_items_) {
+      if (!flex_ids.insert(item.id_).second) {
+        DAQIRI_LOG_ERROR("Duplicate flex item id {} on interface '{}'", item.id_, intf.name_);
+        return false;
+      }
+    }
 
     std::unordered_map<uint16_t, uint16_t> flow_to_queue;
     bool has_standard_flows = false;
@@ -3537,6 +3615,20 @@ bool DpdkEngine::validate_config() const {
       flow_to_queue.emplace(flow.id_, flow.action_.id_);
       if (flow.match_.type_ == FlowMatchType::FLEX_ITEM) {
         has_flex_item_flows = true;
+        const uint16_t flex_item_id = flow.match_.flex_item_match_.flex_item_id_;
+        const auto flex_item_it =
+            std::find_if(intf.rx_.flex_items_.begin(),
+                         intf.rx_.flex_items_.end(),
+                         [flex_item_id](const FlexItemConfig& item) {
+                           return item.id_ == flex_item_id;
+                         });
+        if (flex_item_it == intf.rx_.flex_items_.end()) {
+          DAQIRI_LOG_ERROR("Flow '{}' references unknown flex item id {} on interface '{}'",
+                           flow.name_,
+                           flex_item_id,
+                           intf.name_);
+          return false;
+        }
       } else {
         has_standard_flows = true;
       }
@@ -4882,7 +4974,7 @@ void DpdkEngine::shutdown() {
     }
     tx_rings.clear();
 
-    destroy_eth_jump_rules();
+    destroy_all_flow_rules();
     cleanup_eal();
     initialized_ = false;
   }

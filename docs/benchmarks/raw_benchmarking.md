@@ -224,6 +224,19 @@ After having modified the configuration file, ensure you have connected an SFP c
 
 By default the application runs for 10 seconds and then exits. You can change the duration by passing `--seconds <N>` after the YAML path, or stop it gracefully at any time with `Ctrl-C`.
 
+## Flow programming smoke test
+
+Raw Ethernet flow rules are programmed into the NIC during `daqiri_init()`. Software loopback
+(`loopback: "sw"`) skips NIC init entirely, so it is a build/runtime smoke test only — not a
+flow programming test.
+
+| Step | Command / action | Expected |
+|------|------------------|----------|
+| Build smoke | `daqiri_bench_raw_sw_loopback.yaml --seconds 5` | Init succeeds; no NIC flows created |
+| Good NIC config | `daqiri_bench_raw_tx_rx.yaml` (filled placeholders, cabled NIC) | Init succeeds; RX and `tx_eth_src` flows programmed |
+| Bad queue ID | Copy `daqiri_bench_raw_tx_rx.yaml`, set `flows[0].action.id: 99` | Fails in `validate_config()` before EAL/NIC init with `references unknown RX queue` |
+| Mixed flows (optional) | On one interface, add both a standard UDP/IP flow and a flex-item flow (see `rx.flex_items` in the [configuration reference](../api-reference/configuration.md)) | Fails in `validate_config()` with `mixes standard (UDP/IP) and flex-item` |
+
 ## Cap the transmit rate with packet pacing
 
 To meter the transmit side at a fixed rate in hardware, set a per-queue `pacing_mbps` cap
