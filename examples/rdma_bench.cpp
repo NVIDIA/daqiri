@@ -93,6 +93,7 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
   uintptr_t conn_id = 0;
   std::string send_mr = cfg.server ? "DATA_TX_GPU_SERVER" : "DATA_TX_GPU_CLIENT";
   std::string recv_mr = cfg.server ? "DATA_RX_GPU_SERVER" : "DATA_RX_GPU_CLIENT";
+  bool recv_primed = !cfg.receive;
 
   while (!stop.load()) {
     if (conn_id == 0) {
@@ -107,6 +108,7 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
         continue;
       }
+      recv_primed = !cfg.receive;
     }
 
     auto post_req = [&](int& outstanding, int depth, uint64_t& wr_id, daqiri::RDMAOpCode op,
@@ -155,6 +157,16 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
       }
       return posted;
     };
+
+    if (!recv_primed) {
+      while (!stop.load() && outstanding_recv < cfg.rx_depth) {
+        if (!refill_receives()) {
+          std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+      }
+      recv_primed = outstanding_recv >= cfg.rx_depth;
+      if (stop.load()) { return; }
+    }
 
     bool posted_work = refill_receives();
     bool got_completion = false;

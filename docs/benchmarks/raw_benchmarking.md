@@ -63,6 +63,20 @@ docker run --rm -it --privileged \
 
 If you have two DGX Sparks cross-cabled p0↔p0 instead of a chassis QSFP loop on one machine, use the `_xhost` configs. Each host runs only its own role, so the YAML on each side configures one port instead of two. Both hosts must already be set up per the [DGX Spark profile](../tutorials/system_configuration.md#dgx-spark-profile), with one adjustment: the `daqiri-tx` (`1.1.1.1/24`) and `daqiri-rx` (`2.2.2.2/24`) nmcli profiles are *split across* the two hosts — bring up `daqiri-tx` on the TX host's p0 and `daqiri-rx` on the RX host's p0, instead of both on one box.
 
+**Network prerequisite (required for RDMA; recommended for raw).** Assigning `/24` addresses on each host is not enough for the kernel to reach the peer over a direct cable. RDMA-CM uses the kernel stack, so you need a host route and a static neighbor on the cabled port before ping or RoCE will work. Run [`scripts/setup_spark_xhost_net.sh`](https://github.com/nvidia/daqiri/blob/main/scripts/setup_spark_xhost_net.sh) on **both** hosts after bringing up the nmcli profile — see the [cross-host variant](../tutorials/system_configuration.md#cross-host-variant-two-sparks) in System Configuration for the full steps.
+
+```bash
+# TX host (peer MAC from RX: cat /sys/class/net/enp1s0f0np0/address)
+sudo scripts/setup_spark_xhost_net.sh --role tx --peer-mac <RX_P0_MAC>
+
+# RX host (peer MAC from TX)
+sudo scripts/setup_spark_xhost_net.sh --role rx --peer-mac <TX_P0_MAC>
+
+# Verify on each host before starting benches
+ping -c 3 <peer-ip>    # 2.2.2.2 on TX, 1.1.1.1 on RX
+ip route get <peer-ip> # must name enp1s0f0np0, not lo
+```
+
 **Raw GPUDirect.** Start the RX side first so the flow rule is installed before any traffic arrives:
 
 ```bash
@@ -85,7 +99,7 @@ sudo ./daqiri_bench_rdma daqiri_bench_rdma_tx_rx_spark_xhost.yaml --mode server 
 sudo ./daqiri_bench_rdma daqiri_bench_rdma_tx_rx_spark_xhost.yaml --mode client --seconds 30
 ```
 
-Verify both sides report non-zero send/receive completions. The server-side `Couldn't find server params for address …` log line that may appear once between the listener-create log and the "RDMA server successfully started" log is a benign startup race (the application thread polls for the listener before the CM thread finishes inserting it); subsequent lookups succeed.
+Verify both sides report non-zero send/receive completions and no `CQ error` / `RETRY_EXC_ERR` lines in the client log.
 
 The benchmark executables and example YAML configurations are located at:
 

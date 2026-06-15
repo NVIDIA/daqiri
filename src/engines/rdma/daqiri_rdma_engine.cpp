@@ -210,6 +210,18 @@ inline bool RdmaEngine::ack_event(rdma_cm_event* cm_event) {
   return true;
 }
 
+void RdmaEngine::launch_server_worker(rdma_thread_params* params) {
+  if (params == nullptr || params->client_id == nullptr) { return; }
+
+  std::lock_guard<std::mutex> lock(threads_mutex_);
+  if (worker_threads_.find(params->client_id) != worker_threads_.end()) { return; }
+
+  params->worker_started.store(false);
+  worker_threads_[params->client_id] =
+      std::thread(&RdmaEngine::rdma_thread, this, true, params);
+  DAQIRI_LOG_INFO("Launched server worker for client ID {}", (void*)params->client_id);
+}
+
 int RdmaEngine::mr_access_to_ibv(uint32_t access) {
   int ibv_access = 0;
 
@@ -495,6 +507,7 @@ void RdmaEngine::rdma_thread(bool is_server, rdma_thread_params* tparams) {
     DAQIRI_LOG_CRITICAL("Failed to set RDMA core affinity");
     return;
   }
+  tparams->worker_started.store(true);
 
   DAQIRI_LOG_INFO("Affined {} RDMA thread to core {}", is_server ? "Server" : "Client", cpu_core);
 
@@ -881,43 +894,49 @@ Status RdmaEngine::rdma_get_server_conn_id(const std::string& server_addr, uint1
                                         uintptr_t* conn_id) {
   const auto iter = server_str_to_id_.find(server_addr + ":" + std::to_string(server_port));
   if (iter == server_str_to_id_.end()) {
-    DAQIRI_LOG_CRITICAL("Couldn't find server params for address {}", server_addr);
-    return Status::INVALID_PARAMETER;
+    return Status::NOT_READY;
   }
 
-  // Now that we have the server's listening ID, we need to find the next queue ID that's not
-  // already in use
   const auto server_id = iter->second;
   const auto server_params = server_q_params_.find(server_id);
   if (server_params == server_q_params_.end()) {
-    DAQIRI_LOG_CRITICAL("Couldn't find server params for address {}", server_addr);
-    return Status::INVALID_PARAMETER;
+    return Status::NOT_READY;
   }
 
-  // Find the next queue ID that's not already in use
+  bool waiting_for_client = true;
   for (size_t i = 0; i < server_params->second.size(); i++) {
-    if (server_params->second[i].client_id != nullptr && !server_params->second[i].active) {
-      auto* client_id = server_params->second[i].client_id;
-      std::lock_guard<std::mutex> lock(threads_mutex_);
-      if (worker_threads_.find(client_id) == worker_threads_.end() ||
-          tx_rings_map_.find(client_id) == tx_rings_map_.end() ||
-          rx_rings_map_.find(client_id) == rx_rings_map_.end()) {
-        continue;
-      }
+    if (server_params->second[i].client_id == nullptr) { continue; }
+    waiting_for_client = false;
 
-      *conn_id = reinterpret_cast<uintptr_t>(client_id);
-      server_params->second[i].active = true;
-      DAQIRI_LOG_INFO("Found available queue ID for server {}:{} with cm_id {}",
-                        server_addr,
-                        server_port,
-                        (void*)client_id);
-      return Status::SUCCESS;
+    if (server_params->second[i].active) { continue; }
+
+    auto* client_id = server_params->second[i].client_id;
+    if (!server_params->second[i].worker_started.load()) { continue; }
+
+    std::lock_guard<std::mutex> lock(threads_mutex_);
+    if (worker_threads_.find(client_id) == worker_threads_.end() ||
+        tx_rings_map_.find(client_id) == tx_rings_map_.end() ||
+        rx_rings_map_.find(client_id) == rx_rings_map_.end()) {
+      continue;
     }
+
+    *conn_id = reinterpret_cast<uintptr_t>(client_id);
+    server_params->second[i].active = true;
+    DAQIRI_LOG_INFO("Found available queue ID for server {}:{} with cm_id {}",
+                      server_addr,
+                      server_port,
+                      (void*)client_id);
+    return Status::SUCCESS;
   }
 
-  DAQIRI_LOG_CRITICAL(
-    "Couldn't find an available queue ID for server {}:{}. "
-    "Maybe no clients have tried to connect yet?", server_addr, server_port);
+  if (waiting_for_client) {
+    DAQIRI_LOG_DEBUG("No client connected yet for server {}:{}", server_addr, server_port);
+    return Status::NOT_READY;
+  }
+
+  DAQIRI_LOG_WARN(
+    "No free queue slots for server {}:{}. Close at least one connection first.",
+    server_addr, server_port);
   return Status::NO_SPACE_AVAILABLE;
 }
 
@@ -1254,6 +1273,8 @@ void RdmaEngine::run() {
     // instantiates the move-if-noexcept path even when starting from empty.
     server_q_params_.try_emplace(s_id, intf.rx_.queues_.size());
 
+    server_str_to_id_[intf.address_ + ":" + std::to_string(intf.rdma_.port_)] = s_id;
+
     DAQIRI_LOG_INFO("Created RDMA server on {}:{} successfully with listener_id {}",
                       intf.address_,
                       intf.rdma_.port_,
@@ -1270,8 +1291,6 @@ void RdmaEngine::run() {
       DAQIRI_LOG_CRITICAL("Failed to listen for RDMA server: {}", strerror(errno));
       return;
     }
-
-    server_str_to_id_[intf.address_ + ":" + std::to_string(intf.rdma_.port_)] = s_id;
 
     DAQIRI_LOG_INFO("RDMA server successfully started on {} queues", intf.rx_.queues_.size());
   }
@@ -1353,7 +1372,8 @@ void RdmaEngine::run() {
 
           auto& params = server_iter->second[queue_idx];
           params.active = false;
-          params.ready_to_exit.store(false);  // Reset in case this slot was used by a previous client.
+          params.ready_to_exit.store(false);
+          params.worker_started.store(false);
           params.client_id = cm_event->id;
           params.pd = pd_map_[cm_event->id->verbs];
           // Use the listener's cfg-interface index, not cm_event->id->port_num
@@ -1362,8 +1382,7 @@ void RdmaEngine::run() {
           params.queue_idx = queue_idx;
 
           setup_thread_params(&params, true);
-          DAQIRI_LOG_INFO("Configured queues for client {}. Launching thread",
-                            (void*)cm_event->id);
+          DAQIRI_LOG_INFO("Configured queues for client {}", (void*)cm_event->id);
 
           ack_event(cm_event);
 
@@ -1376,10 +1395,11 @@ void RdmaEngine::run() {
             DAQIRI_LOG_CRITICAL("Failed to accept connection: {}", strerror(errno));
             rdma_reject(params.client_id, nullptr, 0);
             continue;
-          } else {
-            DAQIRI_LOG_INFO("Server accepted connection for client ID {}",
-                              (void*)params.client_id);
           }
+
+          DAQIRI_LOG_INFO("Server accepted connection for client ID {}",
+                            (void*)params.client_id);
+          launch_server_worker(&params);
         }
 
         break;
@@ -1388,25 +1408,17 @@ void RdmaEngine::run() {
         bool found = false;
         DAQIRI_LOG_INFO("Received established event for client ID {}", (void*)cm_event->id);
 
-        // Find which server the client is on
         for (auto& sp : server_q_params_) {
           for (auto& thread_params : sp.second) {
             if (thread_params.client_id == cm_event->id) {
               DAQIRI_LOG_INFO(
                   "Client ID {} is on server ID {}", (void*)cm_event->id, (void*)sp.first);
               found = true;
-
-              DAQIRI_LOG_INFO("Connection established. Launching server thread for client {}",
-                                (void*)cm_event->id);
-
-              threads_mutex_.lock();
-              worker_threads_[cm_event->id] =
-                  std::thread(&RdmaEngine::rdma_thread, this, true, &thread_params);
-              threads_mutex_.unlock();
-              found = true;
+              launch_server_worker(&thread_params);
               break;
             }
           }
+          if (found) { break; }
         }
 
         if (!found) {
@@ -1468,6 +1480,7 @@ void RdmaEngine::run() {
           }
           tparams_to_clear->client_id = nullptr;
           tparams_to_clear->active = false;
+          tparams_to_clear->worker_started.store(false);
           DAQIRI_LOG_INFO("Joined and removed client thread for ID {}", (void*)cm_event->id);
         } else {
           DAQIRI_LOG_CRITICAL("Received disconnected event for unknown client ID {}",

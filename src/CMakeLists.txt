@@ -17,7 +17,30 @@ project(daqiri_core)
 
 find_package(PkgConfig QUIET)
 find_package(CUDAToolkit REQUIRED)
-find_package(yaml-cpp QUIET)
+
+option(DAQIRI_PREFER_SYSTEM_YAML_CPP "Prefer system yaml-cpp over third_party/yaml-cpp" OFF)
+set(DAQIRI_USING_VENDORED_YAML_CPP OFF)
+set(_DAQIRI_VENDORED_YAML_CPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/yaml-cpp")
+
+if(NOT DAQIRI_PREFER_SYSTEM_YAML_CPP AND
+   EXISTS "${_DAQIRI_VENDORED_YAML_CPP_DIR}/CMakeLists.txt")
+  message(STATUS "Using vendored yaml-cpp from third_party/yaml-cpp")
+  set(DAQIRI_USING_VENDORED_YAML_CPP ON)
+  add_subdirectory(${_DAQIRI_VENDORED_YAML_CPP_DIR}
+                   ${CMAKE_CURRENT_BINARY_DIR}/third_party/yaml-cpp)
+else()
+  find_package(yaml-cpp QUIET)
+  if(NOT TARGET yaml-cpp AND NOT TARGET yaml-cpp::yaml-cpp)
+    if(EXISTS "${_DAQIRI_VENDORED_YAML_CPP_DIR}/CMakeLists.txt")
+      message(STATUS "Using vendored yaml-cpp from third_party/yaml-cpp")
+      set(DAQIRI_USING_VENDORED_YAML_CPP ON)
+      add_subdirectory(${_DAQIRI_VENDORED_YAML_CPP_DIR}
+                       ${CMAKE_CURRENT_BINARY_DIR}/third_party/yaml-cpp)
+    else()
+      message(FATAL_ERROR "yaml-cpp not found and third_party/yaml-cpp is missing")
+    endif()
+  endif()
+endif()
 
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
   set(CMAKE_CUDA_ARCHITECTURES 80 90)
@@ -48,18 +71,6 @@ if(DAQIRI_ENABLE_OTEL_METRICS)
   find_package(opentelemetry-cpp CONFIG REQUIRED COMPONENTS api)
 else()
   add_compile_definitions(DAQIRI_ENABLE_OTEL_METRICS=0)
-endif()
-
-set(DAQIRI_USING_VENDORED_YAML_CPP OFF)
-if(NOT TARGET yaml-cpp AND NOT TARGET yaml-cpp::yaml-cpp)
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/yaml-cpp/CMakeLists.txt")
-    message(STATUS "Using vendored yaml-cpp from third_party/yaml-cpp")
-    set(DAQIRI_USING_VENDORED_YAML_CPP ON)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../third_party/yaml-cpp
-                     ${CMAKE_CURRENT_BINARY_DIR}/third_party/yaml-cpp)
-  else()
-    message(FATAL_ERROR "yaml-cpp not found and third_party/yaml-cpp is missing")
-  endif()
 endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/spdlog/include/spdlog/spdlog.h")
@@ -115,6 +126,8 @@ if(TARGET yaml-cpp::yaml-cpp)
 else()
   set(DAQIRI_YAML_TARGET yaml-cpp)
 endif()
+set(DAQIRI_YAML_TARGET ${DAQIRI_YAML_TARGET} PARENT_SCOPE)
+set(DAQIRI_USING_VENDORED_YAML_CPP ${DAQIRI_USING_VENDORED_YAML_CPP} PARENT_SCOPE)
 target_link_libraries(daqiri_common
     PUBLIC
         CUDA::cudart

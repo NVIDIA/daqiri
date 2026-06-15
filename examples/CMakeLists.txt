@@ -16,10 +16,9 @@ endif()
 
 set(DAQIRI_EXAMPLES_CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
 
-if(TARGET yaml-cpp::yaml-cpp)
-  set(DAQIRI_EXAMPLE_YAML_TARGET yaml-cpp::yaml-cpp)
-else()
-  set(DAQIRI_EXAMPLE_YAML_TARGET yaml-cpp)
+if(NOT DAQIRI_YAML_TARGET)
+  message(FATAL_ERROR
+    "DAQIRI_YAML_TARGET is not set; initialize git submodules (third_party/yaml-cpp)")
 endif()
 
 set(DAQIRI_BENCH_CONFIGS
@@ -61,10 +60,10 @@ function(link_daqiri_bench target)
       "-Wl,--start-group"
       ${DAQIRI_EXAMPLE_STATIC_LIBS}
       "-Wl,--end-group"
-      ${DAQIRI_EXAMPLE_YAML_TARGET}
+      ${DAQIRI_YAML_TARGET}
     )
   else()
-    target_link_libraries(${target} PRIVATE daqiri::daqiri ${DAQIRI_EXAMPLE_YAML_TARGET})
+    target_link_libraries(${target} PRIVATE daqiri::daqiri ${DAQIRI_YAML_TARGET})
   endif()
 endfunction()
 
