@@ -1755,6 +1755,11 @@ Status DpdkEngine::get_mac_addr(int port, char* mac) {
   return Status::SUCCESS;
 }
 
+void* DpdkEngine::alloc_huge(size_t bytes, int numa) {
+  // EAL hugepage allocation: IOVA-contiguous and registrable with the NIC.
+  return rte_malloc_socket(nullptr, bytes, 0, numa);
+}
+
 void DpdkEngine::adjust_memory_regions() {
   // num_bufs smaller than ~1.5x the NIC descriptor ring deadlock the worker once the ring
   // fills (the ring holds every buffer in the pool with no replacement available, so the

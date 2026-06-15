@@ -126,6 +126,7 @@ def parse_args():
             "mrrs",
             "mps",
             "hugepages",
+            "numa",
             "gpu-clocks",
             "bar1-size",
             "topo",
@@ -142,6 +143,7 @@ def parse_args():
             "  mrrs       - Check if the Maximum Read Request Size (MRRS) of NVIDIA NICs is set to 4096.\n"
             "  mps        - Check if the Maximum Payload Size is set to the NIC's hardware maximum.\n"
             "  hugepages  - Check if hugepages are enabled\n"
+            "  numa       - Check for libnuma (optional; enables NUMA-aware pool/ring placement).\n"
             "  gpu-clocks - Check GPU clocks\n"
             "  bar1-size  - Check the BAR1 size of the GPU\n"
             "  topo       - Check the GPU and NIC topology\n"
@@ -562,6 +564,54 @@ def check_hugepages():
     except Exception as e:
         logging.error(f"An error occurred while checking hugepages: {e}")
         return False
+
+
+def check_numa():
+    """
+    Checks for libnuma, which DAQIRI uses (optionally) to pin its lock-free
+    rings and object pools -- and kind: HUGE memory regions -- to a specific
+    NUMA node, matching the placement DPDK gets from rte_socket_id() /
+    rte_malloc_socket(). libnuma is an optional build/runtime dependency: when it
+    is missing, DAQIRI still works but those allocations follow the kernel's
+    first-touch policy and may land off-node, costing memory bandwidth in some
+    situations (most noticeably on multi-socket hosts and when the NIC/GPU and
+    the polling cores sit on different NUMA nodes).
+    """
+    from ctypes.util import find_library
+
+    # Count NUMA nodes; on a single-node system placement is moot.
+    num_nodes = 0
+    try:
+        num_nodes = len(
+            [n for n in os.listdir("/sys/devices/system/node") if re.fullmatch(r"node\d+", n)]
+        )
+    except FileNotFoundError:
+        pass
+
+    lib = find_library("numa")
+    if lib:
+        logging.info(
+            f"libnuma available ({lib}); {num_nodes} NUMA node(s) detected. DAQIRI can pin "
+            "its rings/pools and HUGE memory regions to the correct node."
+        )
+        return True
+
+    if num_nodes <= 1:
+        logging.info(
+            "libnuma not found, but this host has a single NUMA node, so pool/ring "
+            "placement is not a concern here."
+        )
+        return False
+
+    logging.warning(
+        f"libnuma not found and this host has {num_nodes} NUMA nodes. DAQIRI's rings, object "
+        "pools, and kind: HUGE memory regions will use the kernel's first-touch placement "
+        "instead of being pinned to a chosen node. This can cost memory bandwidth in some "
+        "situations -- especially when the NIC/GPU and the polling cores are on different NUMA "
+        "nodes. Install libnuma (e.g. 'apt-get install libnuma-dev') and rebuild to enable "
+        "NUMA-aware allocation that matches DPDK."
+    )
+    return False
 
 
 def check_nvidia_gpu_clocks():
@@ -2153,6 +2203,8 @@ def main():
             check_max_payload_size()
         if args.check == "all" or args.check == "hugepages":
             check_hugepages()
+        if args.check == "all" or args.check == "numa":
+            check_numa()
         if args.check == "all" or args.check == "gpu-clocks":
             check_nvidia_gpu_clocks()
         if args.check == "all" or args.check == "bar1-size":

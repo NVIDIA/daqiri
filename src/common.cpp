@@ -21,6 +21,7 @@
 #include <arpa/inet.h>
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cctype>
 #include <filesystem>
 #include <limits>
