@@ -574,15 +574,15 @@ void RdmaEngine::rdma_thread(bool is_server, rdma_thread_params* tparams) {
                          cpu_core,
                          (int64_t)wc.wr_id);
       if (wc.status != IBV_WC_SUCCESS) {
-        // WR_FLUSH_ERR is the expected status for in-flight WRs when the QP
-        // moves to ERR state (peer disconnect, local shutdown). Demote to
-        // DEBUG so a clean teardown doesn't produce log spam. RETRY_EXC during
-        // shutdown is the same story: the peer's QP went away before our last
-        // outstanding WR could be acked.
+        // WR_FLUSH_ERR / RETRY_EXC_ERR are the expected statuses for in-flight
+        // WRs when the QP moves to ERR state during teardown (peer disconnect or
+        // local shutdown). Demote to DEBUG only while shutting down, so a clean
+        // teardown doesn't spam while an unexpected mid-run flush (e.g. abrupt
+        // peer disconnect before CM teardown is observed) still surfaces.
         const bool shutting_down = rdma_force_quit.load() || tparams->ready_to_exit.load();
         const bool benign_teardown =
-            wc.status == IBV_WC_WR_FLUSH_ERR ||
-            (shutting_down && wc.status == IBV_WC_RETRY_EXC_ERR);
+            shutting_down &&
+            (wc.status == IBV_WC_WR_FLUSH_ERR || wc.status == IBV_WC_RETRY_EXC_ERR);
         if (benign_teardown) {
           DAQIRI_LOG_DEBUG("RX CQ teardown status {} ({}) for WRID {} opcode {}",
                              ibv_wc_status_str(wc.status), (int)wc.status,
@@ -698,8 +698,8 @@ void RdmaEngine::rdma_thread(bool is_server, rdma_thread_params* tparams) {
       if (wc.status != IBV_WC_SUCCESS) {
         const bool shutting_down = rdma_force_quit.load() || tparams->ready_to_exit.load();
         const bool benign_teardown =
-            wc.status == IBV_WC_WR_FLUSH_ERR ||
-            (shutting_down && wc.status == IBV_WC_RETRY_EXC_ERR);
+            shutting_down &&
+            (wc.status == IBV_WC_WR_FLUSH_ERR || wc.status == IBV_WC_RETRY_EXC_ERR);
         if (benign_teardown) {
           DAQIRI_LOG_DEBUG(
             "TX CQ teardown status on {}: {} ({}) for WRID {} opcode {}",
@@ -1373,17 +1373,23 @@ void RdmaEngine::run() {
             break;
           }
 
-          // Find first inactive queue
-          int queue_idx = -1;
-          for (int i = 0; i < server_iter->second.size(); i++) {
-            if (!server_iter->second[i].active) { queue_idx = i; }
-
-            // Also check if the client ID already exists
-            if (cm_event->id == server_iter->second[i].client_id) {
+          bool duplicate_client = false;
+          for (const auto& slot : server_iter->second) {
+            if (cm_event->id == slot.client_id) {
               DAQIRI_LOG_CRITICAL("Client ID {} already exists in server ID {}",
                                     (void*)cm_event->id,
                                     (void*)listen_iter->second.server_id);
               rdma_reject(cm_event->id, nullptr, 0);
+              duplicate_client = true;
+              break;
+            }
+          }
+          if (duplicate_client) { break; }
+
+          int queue_idx = -1;
+          for (int i = 0; i < server_iter->second.size(); i++) {
+            if (!server_iter->second[i].active) {
+              queue_idx = i;
               break;
             }
           }
