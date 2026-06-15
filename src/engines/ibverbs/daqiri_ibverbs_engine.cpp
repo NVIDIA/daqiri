@@ -2772,6 +2772,18 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
       q.insert_eth_src = true;
     }
   }
+  // Packet pacing (pacing_mbps) is not supported on the ibverbs engine: the
+  // wait-on-time WQE it would use is not honored without the mlx5 send-scheduling
+  // clock/rearm-queue infrastructure that this engine does not set up, so a paced
+  // queue would not meter and would eventually stall. Reject it up front rather
+  // than silently running at line rate. Use the DPDK raw engine for pacing.
+  if (qcfg.pacing_mbps_ > 0) {
+    DAQIRI_LOG_CRITICAL(
+        "TX queue {}: pacing_mbps is not supported by the ibverbs engine; use the default "
+        "DPDK raw engine (remove engine: \"ibverbs\") for packet pacing",
+        q.queue_id);
+    return Status::INVALID_PARAMETER;
+  }
   if (qcfg.common_.mrs_.empty()) {
     DAQIRI_LOG_CRITICAL("TX queue {} has no memory region", q.queue_id);
     return Status::INVALID_PARAMETER;
@@ -3033,6 +3045,40 @@ Status IbverbsEngine::set_packet_tx_time(BurstParams* burst, int idx, uint64_t t
   return Status::SUCCESS;
 }
 
+// Build a WAIT-on-time WQE (ctrl + wseg = 48 B = 1 WQEBB) at q.sq_pi that holds
+// the following send(s) until the NIC real-time clock reaches when_ns. The WAIT
+// WQE consumes no slot; wqe_slot_cum records the cumulative slot count per WQEBB
+// so completion can map a CQE's wqe_counter back to slots. Advances sq_pi and
+// returns the ctrl segment (the caller writes the burst's last ctrl to BlueFlame).
+void* IbverbsEngine::emit_wait_wqe(IbvTxQueue& q, uint64_t when_ns) {
+  uint8_t* const sq_buf = static_cast<uint8_t*>(q.dv_qp.sq.buf);
+  const uint32_t wqe_cnt = q.dv_qp.sq.wqe_cnt;
+  const uint32_t stride = q.dv_qp.sq.stride;
+  const uint32_t widx = q.sq_pi % wqe_cnt;
+  uint8_t* wbase = sq_buf + static_cast<size_t>(widx) * stride;
+  auto* wctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(wbase);
+  wctrl->opmod_idx_opcode = htobe32((static_cast<uint32_t>(MLX5_OPC_MOD_WAIT_TIME) << 24) |
+                                    ((q.sq_pi & 0xffff) << 8) | MLX5_OPCODE_WAIT);
+  wctrl->qpn_ds = htobe32((q.sqn << 8) | 3u);  // ctrl(1) + wseg(2) = 3 DS
+  wctrl->signature = 0;
+  wctrl->dci_stream_channel_id = 0;
+  wctrl->fm_ce_se = 0;  // unsignaled
+  wctrl->imm = 0;
+  auto* ws = reinterpret_cast<struct mlx5_wqe_wseg*>(wbase + 16);
+  ws->operation = htobe32(MLX5_WAIT_COND_CYCLIC_SMALLER);
+  ws->lkey = 0;
+  ws->va_high = 0;
+  ws->va_low = 0;
+  // The HW real-time clock compares in UTC format (seconds<<32 | ns), so the
+  // linear nanoseconds (same domain as get_packet_rx_timestamp) are split here.
+  const uint64_t v = (when_ns % 1000000000ULL) | ((when_ns / 1000000000ULL) << 32);
+  ws->value = htobe64(v);
+  ws->mask = htobe64(q.rt_timemask);
+  q.wqe_slot_cum[widx] = q.slots_posted;
+  q.sq_pi++;
+  return wctrl;
+}
+
 // Runs on the pinned TX worker thread: builds the burst's send WQEs directly
 // into the SQ ring and rings the BlueFlame doorbell once for the whole burst,
 // bypassing ibv_post_send. Each WQE is ctrl(16) + minimal eth(16) + data
@@ -3057,35 +3103,10 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
   void* last_ctrl = nullptr;
 
   for (int i = 0; i < n; i++) {
-    // Accurate send scheduling: emit a WAIT-on-time WQE so the NIC holds the
-    // following send until its real-time clock reaches txtime[i]. The WAIT WQE
-    // (ctrl + wseg = 48 B = 1 WQEBB) consumes no slot; wqe_slot_cum records the
-    // cumulative slot count per WQEBB so completion can map back to slots.
+    // Accurate send scheduling (per-packet): emit a WAIT-on-time WQE so the NIC
+    // holds the following send until its real-time clock reaches txtime[i].
     if (q.send_scheduling && txtime[i] != 0) {
-      const uint32_t widx = q.sq_pi % wqe_cnt;
-      uint8_t* wbase = sq_buf + static_cast<size_t>(widx) * stride;
-      auto* wctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(wbase);
-      wctrl->opmod_idx_opcode = htobe32((static_cast<uint32_t>(MLX5_OPC_MOD_WAIT_TIME) << 24) |
-                                        ((q.sq_pi & 0xffff) << 8) | MLX5_OPCODE_WAIT);
-      wctrl->qpn_ds = htobe32((q.sqn << 8) | 3u);  // ctrl(1) + wseg(2) = 3 DS
-      wctrl->signature = 0;
-      wctrl->dci_stream_channel_id = 0;
-      wctrl->fm_ce_se = 0;  // unsignaled
-      wctrl->imm = 0;
-      auto* ws = reinterpret_cast<struct mlx5_wqe_wseg*>(wbase + 16);
-      ws->operation = htobe32(MLX5_WAIT_COND_CYCLIC_SMALLER);
-      ws->lkey = 0;
-      ws->va_high = 0;
-      ws->va_low = 0;
-      // The HW real-time clock compares in UTC format (seconds<<32 | ns), so the
-      // caller's linear nanoseconds (same domain as get_packet_rx_timestamp) are
-      // split here.
-      const uint64_t v = (txtime[i] % 1000000000ULL) | ((txtime[i] / 1000000000ULL) << 32);
-      ws->value = htobe64(v);
-      ws->mask = htobe64(q.rt_timemask);
-      q.wqe_slot_cum[widx] = q.slots_posted;
-      last_ctrl = wctrl;
-      q.sq_pi++;
+      last_ctrl = emit_wait_wqe(q, txtime[i]);
     }
 
     const uint32_t idx = q.sq_pi % wqe_cnt;

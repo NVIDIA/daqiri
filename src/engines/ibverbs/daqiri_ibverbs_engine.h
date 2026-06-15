@@ -441,7 +441,11 @@ class IbverbsEngine : public Engine {
   Status setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf, const TxQueueConfig& qcfg);
   Status create_tx_raw_qp(IbvTxQueue& q);                 // IBV_QPT_RAW_PACKET, RESET->RTS
   void post_tx_burst(IbvTxQueue& q, BurstParams* burst);  // build send WQEs + ring doorbell
-  void poll_tx_completions(IbvTxQueue& q);                // drain TX CQ, reclaim slot-runs
+  // Build a WAIT-on-time WQE (ctrl + wseg = 1 WQEBB, no slot) at q.sq_pi that
+  // holds the following send(s) until the NIC real-time clock reaches when_ns,
+  // advance sq_pi, and return its ctrl segment (for the BlueFlame doorbell).
+  void* emit_wait_wqe(IbvTxQueue& q, uint64_t when_ns);
+  void poll_tx_completions(IbvTxQueue& q);  // drain TX CQ, reclaim slot-runs
   // One worker services a group of TX queues sharing a cpu_core, round-robin:
   // drains each send_ring (post) + reclaims completions.
   void tx_worker(std::vector<IbvTxQueue*> group);

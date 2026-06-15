@@ -25,6 +25,7 @@ endif()
 set(DAQIRI_BENCH_CONFIGS
   daqiri_bench_raw_tx_rx.yaml
   daqiri_bench_raw_tx_rx_4q.yaml
+  daqiri_bench_raw_tx_rx_pacing.yaml
   daqiri_bench_raw_tx_rx_hds.yaml
   daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml
   daqiri_bench_raw_tx_rx_reorder_seq_1024_cpu.yaml
