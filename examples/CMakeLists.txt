@@ -49,6 +49,7 @@ set(DAQIRI_BENCH_CONFIGS
   daqiri_bench_raw_rx_reorder_seq_batch.yaml
   daqiri_bench_raw_rx_multi_q.yaml
   daqiri_bench_raw_sw_loopback.yaml
+  daqiri_example_dynamic_rx_flow.yaml
   daqiri_example_gds_write_sw_loopback.yaml
   daqiri_example_gds_write_tx_rx.yaml
   daqiri_example_pcap_writer_sw_loopback.yaml
@@ -110,6 +111,7 @@ if(DAQIRI_ENABLE_OTEL_METRICS)
 endif()
 add_daqiri_raw_bench(daqiri_bench_raw_reorder_seq raw_reorder_seq_bench.cpp)
 add_daqiri_raw_bench(daqiri_bench_raw_reorder_quantize raw_reorder_quantize_bench.cpp)
+add_daqiri_raw_bench(daqiri_example_dynamic_rx_flow dynamic_rx_flow_example.cpp)
 add_daqiri_raw_bench(daqiri_example_gds_write gds_write_example.cpp)
 add_daqiri_raw_bench(daqiri_example_pcap_writer pcap_writer_example.cpp)
 
@@ -163,6 +165,7 @@ install(TARGETS
         daqiri_bench_raw_gpudirect
         daqiri_bench_raw_reorder_seq
         daqiri_bench_raw_reorder_quantize
+        daqiri_example_dynamic_rx_flow
         daqiri_example_gds_write
         daqiri_example_pcap_writer
         daqiri_bench_rdma

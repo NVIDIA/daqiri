@@ -7,6 +7,9 @@ Standalone benchmark applications for testing performance of DAQIRI with various
 - `daqiri_bench_raw_reorder_seq`: raw RX sequence-number reorder benchmark
 - `daqiri_bench_raw_reorder_quantize`: raw RX sequence reorder with payload conversion
 - `daqiri_example_pcap_writer`: RX pcap writer with optional GPUDirect demo TX traffic
+- `daqiri_example_dynamic_rx_flow`: raw TX/RX example that starts with RX flow
+  isolation and no configured flows, then dynamically steers one UDP flow to
+  queues 0 and 1 in sequence
 - `daqiri_bench_rdma`: RDMA benchmark logic (former `rdma_bench.h`)
 - `daqiri_bench_socket`: TCP/UDP socket benchmark logic
 - `daqiri_example_gds_write`: one-shot capture that demonstrates synchronous and
@@ -57,6 +60,7 @@ Run:
 ./build/examples/daqiri_bench_raw_reorder_seq ./build/examples/daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml --seconds 10
 ./build/examples/daqiri_bench_raw_reorder_quantize ./build/examples/daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml --seconds 10
 ./build/examples/daqiri_example_pcap_writer ./build/examples/daqiri_example_pcap_writer_sw_loopback.yaml /tmp/daqiri-capture.pcap --tx
+./build/examples/daqiri_example_dynamic_rx_flow ./build/examples/daqiri_example_dynamic_rx_flow.yaml --target-gbps 10
 ./build/examples/daqiri_bench_rdma ./build/examples/daqiri_bench_rdma_tx_rx.yaml --seconds 10 --mode both
 ./build/examples/daqiri_bench_socket ./build/examples/daqiri_bench_socket_udp_tx_rx.yaml --seconds 10 --mode both
 ./build/examples/daqiri_bench_socket ./build/examples/daqiri_bench_socket_tcp_tx_rx.yaml --seconds 10 --mode both
@@ -84,6 +88,7 @@ Included configs:
 | `daqiri_bench_raw_tx_rx.yaml` | `daqiri_bench_raw_gpudirect` |
 | `daqiri_bench_raw_tx_rx_4q.yaml` | `daqiri_bench_raw_gpudirect` |
 | `daqiri_bench_raw_sw_loopback.yaml` | `daqiri_bench_raw_gpudirect` |
+| `daqiri_example_dynamic_rx_flow.yaml` | `daqiri_example_dynamic_rx_flow` |
 | `daqiri_example_gds_write_sw_loopback.yaml` | `daqiri_example_gds_write` |
 | `daqiri_example_gds_write_tx_rx.yaml` | `daqiri_example_gds_write` |
 | `daqiri_bench_raw_rx_multi_q.yaml` | `daqiri_bench_raw_gpudirect` |

@@ -77,7 +77,7 @@ For a single-segment configuration (CPU-only or batched GPU):
 for (int i = 0; i < daqiri::get_num_packets(burst); i++) {
     void *pkt = daqiri::get_packet_ptr(burst, i);
     uint32_t len = daqiri::get_packet_length(burst, i);
-    uint16_t flow = daqiri::get_packet_flow_id(burst, i);
+    daqiri::FlowId flow = daqiri::get_packet_flow_id(burst, i);
     uint64_t rx_ts_ns = 0;
     if (daqiri::get_packet_rx_timestamp(burst, i, &rx_ts_ns) == daqiri::Status::SUCCESS) {
         // rx_ts_ns is in the NIC timestamp clock domain.
@@ -129,6 +129,97 @@ daqiri::free_packet_segment(burst, seg, idx);
 daqiri::free_all_segment_packets(burst, seg);
 daqiri::free_rx_burst(burst);
 ```
+
+## Dynamic RX Flows
+
+Raw Ethernet RX flows can be added and deleted after `daqiri_init()` on the
+`dpdk` and raw `ibverbs` engines. This supports queues-only startup configs,
+including `rx.flow_isolation: true` with no initial `rx.flows`. Static YAML
+flows still use explicit configured IDs and are not deletable through this API.
+
+```cpp
+daqiri::FlowRuleConfig flow;
+flow.name_ = "udp_5000";
+flow.action_.type_ = daqiri::FlowType::QUEUE;
+flow.action_.id_ = 0;
+flow.match_.type_ = daqiri::FlowMatchType::IPV4_UDP;
+flow.match_.udp_dst_ = 5000;
+
+daqiri::FlowOpId add_op = 0;
+auto st = daqiri::add_rx_flow_async(0, flow, &add_op);
+if (st != daqiri::Status::SUCCESS) {
+    // invalid port/queue/match, unsupported backend, or no flow IDs available
+}
+
+daqiri::FlowId flow_id = 0;
+daqiri::FlowOpResult result;
+while (flow_id == 0) {
+    st = daqiri::poll_flow_op(&result);
+    if (st == daqiri::Status::NOT_READY) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        continue;
+    }
+    if (st != daqiri::Status::SUCCESS) {
+        // handle poll error
+        break;
+    }
+    if (result.op_id_ == add_op) {
+        if (result.status_ != daqiri::Status::SUCCESS) {
+            // handle flow create failure
+            break;
+        }
+        flow_id = result.flow_id_;
+    }
+}
+```
+
+Packets matching a dynamic rule are marked with the same `FlowId` returned by
+the add completion, so `get_packet_flow_id()` gives the handle to pass to
+`delete_flow_async()`. `poll_flow_op()` returns `Status::NOT_READY` when no flow
+operation has completed yet. A dynamic flow is deletable only after its add
+completion has been polled successfully; deleting a flow that is still pending returns
+`Status::INVALID_PARAMETER`.
+
+Multiple RX flows can be added as one operation. On DPDK this maps to a single
+template queue push when the IPv4/UDP template path is available. The raw
+`ibverbs` engine installs the batch synchronously and reports one software
+completion. In both cases, `poll_flow_op()` returns one batch completion when all
+creates in the batch have resolved.
+
+```cpp
+std::vector<daqiri::FlowRuleConfig> flows;
+flows.push_back(flow);
+flows.push_back(flow);
+flows.back().name_ = "udp_5001";
+flows.back().match_.udp_dst_ = 5001;
+
+daqiri::FlowOpId batch_op = 0;
+st = daqiri::add_rx_flows_async(0, flows, &batch_op);
+
+std::vector<daqiri::FlowId> flow_ids;
+while (flow_ids.empty()) {
+    st = daqiri::poll_flow_op(&result);
+    if (st == daqiri::Status::NOT_READY) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        continue;
+    }
+    if (st == daqiri::Status::SUCCESS && result.op_id_ == batch_op) {
+        flow_ids = result.flow_ids_;
+    }
+}
+```
+
+For batch completions, `flow_ids_` is in the same order as the input rules. If
+the completion status is not `SUCCESS`, nonzero entries were installed and zero
+entries were not installed.
+
+```cpp
+daqiri::FlowOpId delete_op = 0;
+auto delete_status = daqiri::delete_flow_async(flow_id, &delete_op);
+```
+
+Dynamic flow support is RX-only in v1. Socket, RDMA/RoCE, and software loopback
+engines return `NOT_SUPPORTED`.
 
 ## Reordered RX Bursts
 
@@ -493,8 +584,17 @@ workflow sections above show the common call order and ownership rules.
 | `get_segment_packet_ptr(burst, seg, idx)` | Return a packet pointer for a specific segment. |
 | `get_packet_length(burst, idx)` | Return the logical packet length. |
 | `get_segment_packet_length(burst, seg, idx)` | Return the length of one packet segment. |
-| `get_packet_flow_id(burst, idx)` | Return the matched flow ID, or `0` when no flow matched. |
+| `get_packet_flow_id(burst, idx)` | Return the matched `FlowId`, or `0` when no flow matched. |
 | `get_packet_rx_timestamp(burst, idx, &timestamp_ns)` | Return the hardware RX timestamp when enabled and available. |
+
+### Dynamic RX Flow Lifecycle
+
+| Function | Purpose |
+| --- | --- |
+| `add_rx_flow_async(port, flow, &op_id)` | Enqueue a dynamic RX flow create. The add completion returns the allocated `FlowId`. |
+| `add_rx_flows_async(port, flows, &op_id)` | Enqueue a dynamic RX flow batch create. One completion returns allocated `FlowId`s in input order. |
+| `delete_flow_async(flow_id, &op_id)` | Enqueue deletion of an active dynamic flow. Static YAML flows and unknown IDs return `INVALID_PARAMETER`. |
+| `poll_flow_op(&result)` | Return one completed flow operation, or `NOT_READY` when none are ready. |
 
 ### RX and Reorder
 

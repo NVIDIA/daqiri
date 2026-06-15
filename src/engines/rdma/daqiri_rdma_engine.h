@@ -114,7 +114,7 @@ class RdmaEngine : public Engine {
 
   void* get_packet_ptr(BurstParams* burst, int idx) override;
   uint32_t get_packet_length(BurstParams* burst, int idx) override;
-  uint16_t get_packet_flow_id(BurstParams* burst, int idx) override { return 0; }
+  FlowId get_packet_flow_id(BurstParams* burst, int idx) override { return 0; }
   Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) override {
     (void)burst;
     (void)idx;

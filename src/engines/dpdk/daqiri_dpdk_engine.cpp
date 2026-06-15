@@ -497,7 +497,7 @@ bool DpdkEngine::init_reorder_queue_state(const InterfaceConfig& intf, const RxQ
   const auto key = generate_queue_key(intf.port_id_, qcfg.common_.id_);
   ReorderQueueState qstate;
 
-  std::unordered_map<uint16_t, uint16_t> flow_id_to_queue;
+  std::unordered_map<FlowId, uint16_t> flow_id_to_queue;
   for (const auto& flow : intf.rx_.flows_) {
     if (flow_id_to_queue.find(flow.id_) != flow_id_to_queue.end()) {
       DAQIRI_LOG_ERROR("Duplicate flow ID {} in interface '{}'", flow.id_, intf.name_);
@@ -509,7 +509,7 @@ bool DpdkEngine::init_reorder_queue_state(const InterfaceConfig& intf, const RxQ
   for (const auto& reorder_cfg : intf.rx_.reorder_configs_) {
     const bool use_gpu_backend = reorder_cfg.reorder_type_ == "gpu";
     int flow_queue_id = -1;
-    std::vector<uint16_t> queue_flow_ids;
+    std::vector<FlowId> queue_flow_ids;
     queue_flow_ids.reserve(reorder_cfg.flow_ids_.size());
 
     for (const auto flow_id : reorder_cfg.flow_ids_) {
@@ -1492,7 +1492,7 @@ Status DpdkEngine::process_burst_for_reorder(uint32_t key, ReorderQueueState& qs
   qstate.unmatched_count = 0;
 
   for (int i = 0; i < num_pkts; ++i) {
-    const uint16_t flow_id = get_packet_flow_id(burst, i);
+    const FlowId flow_id = get_packet_flow_id(burst, i);
     const auto flow_it = qstate.flow_id_to_plan.find(flow_id);
     if (flow_it == qstate.flow_id_to_plan.end()) {
       if (qstate.unmatched_count >= unmatched_indices.size()) {
@@ -1725,6 +1725,10 @@ bool DpdkEngine::set_config_and_initialize(const NetworkConfig& cfg) {
 
     if (!validate_config()) {
       DAQIRI_LOG_CRITICAL("Config validation failed");
+      return false;
+    }
+    if (!reserve_static_flow_ids()) {
+      DAQIRI_LOG_CRITICAL("Static flow ID reservation failed");
       return false;
     }
 
@@ -2049,6 +2053,7 @@ void DpdkEngine::initialize() {
     DpdkEngine* engine;
     ~EalCleanupGuard() {
       if (!engine->initialized_) {
+        engine->cleanup_dynamic_flows();
         engine->destroy_all_flow_rules();
         engine->cleanup_eal();
       }
@@ -2573,6 +2578,10 @@ void DpdkEngine::initialize() {
 
       rte_eth_macaddr_get(intf.port_id_, &conf_ports_eth_addr[intf.port_id_]);
 
+      if (rx.dynamic_flow_capacity_ > 0) {
+        configure_flow_api_for_port(intf.port_id_, rx.dynamic_flow_capacity_);
+      }
+
       for (const auto& q : rx.queues_) {
         // Assume one core for now
         auto socketid = rte_lcore_to_socket_id(strtol(q.common_.cpu_core_.c_str(), nullptr, 10));
@@ -2665,7 +2674,7 @@ void DpdkEngine::initialize() {
         struct rte_flow* created = nullptr;
         if (flow.match_.type_ == FlowMatchType::FLEX_ITEM) {
           created = add_flex_item_flow(
-              intf.port_id_, flow.match_.flex_item_match_, flow.action_.id_);
+              intf.port_id_, flow.match_.flex_item_match_, flow.action_.id_, flow.id_);
           if (created != nullptr) { has_flex_item_flows = true; }
         } else {
           created = add_flow(intf.port_id_, flow);
@@ -2832,6 +2841,1209 @@ int DpdkEngine::setup_pools_and_rings(int max_rx_batch, int max_tx_batch) {
 #define MAX_PATTERN_NUM 5
 #define MAX_ACTION_NUM 4
 
+struct FlowTemplateCreateStorage {
+  struct rte_flow_item pattern[MAX_PATTERN_NUM];
+  struct rte_flow_action action[MAX_ACTION_NUM];
+  struct rte_flow_item_ipv4 ip_spec;
+  struct rte_flow_item_udp udp_spec;
+  struct rte_flow_action_mark mark;
+  struct rte_flow_action_queue queue;
+};
+
+static constexpr uint32_t kDynamicFlowQueueId = 0;
+static constexpr FlowId kMaxDynamicFlowMarkId = 0x00ffffffU;
+static constexpr uint32_t kRxFlowGroup = 3;
+static constexpr uint32_t kRxFlowPriority = 1;
+static constexpr size_t kMaxIpv4UdpFlowTemplateFieldsForSingleTable = 7;
+
+enum class Ipv4UdpFlowTemplateField {
+  IPV4_LEN,
+  IPV4_SRC,
+  IPV4_DST,
+  UDP_SRC,
+  UDP_DST,
+};
+
+struct Ipv4UdpFlowTemplateKey {
+  std::vector<Ipv4UdpFlowTemplateField> fields;
+};
+
+static bool operator==(const Ipv4UdpFlowTemplateKey& lhs,
+                       const Ipv4UdpFlowTemplateKey& rhs) {
+  return lhs.fields == rhs.fields;
+}
+
+static const std::vector<Ipv4UdpFlowTemplateField>& ipv4_udp_flow_template_fields() {
+  static const std::vector<Ipv4UdpFlowTemplateField> fields = {
+      Ipv4UdpFlowTemplateField::IPV4_LEN,
+      Ipv4UdpFlowTemplateField::IPV4_SRC,
+      Ipv4UdpFlowTemplateField::IPV4_DST,
+      Ipv4UdpFlowTemplateField::UDP_SRC,
+      Ipv4UdpFlowTemplateField::UDP_DST,
+  };
+  return fields;
+}
+
+static void append_ipv4_udp_flow_template_keys(size_t field_idx,
+                                                std::vector<Ipv4UdpFlowTemplateField>& selected,
+                                                std::vector<Ipv4UdpFlowTemplateKey>& keys) {
+  const auto& fields = ipv4_udp_flow_template_fields();
+  if (field_idx == fields.size()) {
+    keys.push_back({selected});
+    return;
+  }
+
+  append_ipv4_udp_flow_template_keys(field_idx + 1, selected, keys);
+  selected.push_back(fields[field_idx]);
+  append_ipv4_udp_flow_template_keys(field_idx + 1, selected, keys);
+  selected.pop_back();
+}
+
+static const std::vector<Ipv4UdpFlowTemplateKey>& ipv4_udp_flow_template_keys() {
+  static const std::vector<Ipv4UdpFlowTemplateKey> keys = [] {
+    std::vector<Ipv4UdpFlowTemplateKey> generated_keys;
+    if (ipv4_udp_flow_template_fields().size() >
+        kMaxIpv4UdpFlowTemplateFieldsForSingleTable) {
+      return generated_keys;
+    }
+
+    std::vector<Ipv4UdpFlowTemplateField> selected;
+    append_ipv4_udp_flow_template_keys(0, selected, generated_keys);
+    return generated_keys;
+  }();
+  return keys;
+}
+
+static Ipv4UdpFlowTemplateKey ipv4_udp_flow_template_key(const FlowMatch& match) {
+  Ipv4UdpFlowTemplateKey key;
+  if (match.ipv4_len_ > 0) {
+    key.fields.push_back(Ipv4UdpFlowTemplateField::IPV4_LEN);
+  }
+  if (match.ipv4_src_ != INADDR_ANY) {
+    key.fields.push_back(Ipv4UdpFlowTemplateField::IPV4_SRC);
+  }
+  if (match.ipv4_dst_ != INADDR_ANY) {
+    key.fields.push_back(Ipv4UdpFlowTemplateField::IPV4_DST);
+  }
+  if (match.udp_src_ > 0) {
+    key.fields.push_back(Ipv4UdpFlowTemplateField::UDP_SRC);
+  }
+  if (match.udp_dst_ > 0) {
+    key.fields.push_back(Ipv4UdpFlowTemplateField::UDP_DST);
+  }
+  return key;
+}
+
+static bool ipv4_udp_flow_template_key_has_field(const Ipv4UdpFlowTemplateKey& key,
+                                                  Ipv4UdpFlowTemplateField field) {
+  return std::find(key.fields.begin(), key.fields.end(), field) != key.fields.end();
+}
+
+static void build_ipv4_udp_template_pattern(const Ipv4UdpFlowTemplateKey& key,
+                                             struct rte_flow_item pattern[MAX_PATTERN_NUM],
+                                             struct rte_flow_item_ipv4* ip_mask,
+                                             struct rte_flow_item_udp* udp_mask) {
+  memset(pattern, 0, sizeof(struct rte_flow_item) * MAX_PATTERN_NUM);
+  memset(ip_mask, 0, sizeof(*ip_mask));
+  memset(udp_mask, 0, sizeof(*udp_mask));
+
+  pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
+  pattern[1].type = RTE_FLOW_ITEM_TYPE_IPV4;
+  pattern[2].type = RTE_FLOW_ITEM_TYPE_UDP;
+  pattern[3].type = RTE_FLOW_ITEM_TYPE_END;
+
+  if (ipv4_udp_flow_template_key_has_field(key, Ipv4UdpFlowTemplateField::IPV4_LEN)) {
+    ip_mask->hdr.total_length = 0xffff;
+  }
+  if (ipv4_udp_flow_template_key_has_field(key, Ipv4UdpFlowTemplateField::IPV4_SRC)) {
+    ip_mask->hdr.src_addr = 0xffffffff;
+  }
+  if (ipv4_udp_flow_template_key_has_field(key, Ipv4UdpFlowTemplateField::IPV4_DST)) {
+    ip_mask->hdr.dst_addr = 0xffffffff;
+  }
+  if (ipv4_udp_flow_template_key_has_field(key, Ipv4UdpFlowTemplateField::IPV4_LEN) ||
+      ipv4_udp_flow_template_key_has_field(key, Ipv4UdpFlowTemplateField::IPV4_SRC) ||
+      ipv4_udp_flow_template_key_has_field(key, Ipv4UdpFlowTemplateField::IPV4_DST)) {
+    pattern[1].mask = ip_mask;
+  }
+
+  if (ipv4_udp_flow_template_key_has_field(key, Ipv4UdpFlowTemplateField::UDP_SRC)) {
+    udp_mask->hdr.src_port = 0xffff;
+  }
+  if (ipv4_udp_flow_template_key_has_field(key, Ipv4UdpFlowTemplateField::UDP_DST)) {
+    udp_mask->hdr.dst_port = 0xffff;
+  }
+  if (ipv4_udp_flow_template_key_has_field(key, Ipv4UdpFlowTemplateField::UDP_SRC) ||
+      ipv4_udp_flow_template_key_has_field(key, Ipv4UdpFlowTemplateField::UDP_DST)) {
+    pattern[2].mask = udp_mask;
+  }
+}
+
+void* DpdkEngine::flow_op_user_data(FlowOpId op_id) {
+  return reinterpret_cast<void*>(static_cast<uintptr_t>(op_id));
+}
+
+FlowOpId DpdkEngine::flow_op_id_from_user_data(void* user_data) {
+  return static_cast<FlowOpId>(reinterpret_cast<uintptr_t>(user_data));
+}
+
+FlowOpId DpdkEngine::allocate_flow_op_id() {
+  if (next_flow_op_id_ == 0) { next_flow_op_id_ = 1; }
+  return next_flow_op_id_++;
+}
+
+FlowId DpdkEngine::allocate_dynamic_flow_id() {
+  while (!free_dynamic_flow_ids_.empty()) {
+    const FlowId candidate = free_dynamic_flow_ids_.front();
+    free_dynamic_flow_ids_.pop();
+    if (candidate == 0 || candidate > kMaxDynamicFlowMarkId) { continue; }
+    if (static_flow_ids_.find(candidate) != static_flow_ids_.end()) { continue; }
+    if (dynamic_flows_.find(candidate) != dynamic_flows_.end()) { continue; }
+    return candidate;
+  }
+
+  while (next_dynamic_flow_id_ != 0 &&
+         next_dynamic_flow_id_ <= kMaxDynamicFlowMarkId) {
+    const FlowId candidate = next_dynamic_flow_id_++;
+    if (candidate == 0) { continue; }
+    if (static_flow_ids_.find(candidate) != static_flow_ids_.end()) { continue; }
+    if (dynamic_flows_.find(candidate) != dynamic_flows_.end()) { continue; }
+    return candidate;
+  }
+  return 0;
+}
+
+void DpdkEngine::release_dynamic_flow_id(FlowId flow_id) {
+  if (flow_id == 0 || flow_id > kMaxDynamicFlowMarkId) { return; }
+  if (static_flow_ids_.find(flow_id) != static_flow_ids_.end()) { return; }
+  if (dynamic_flows_.find(flow_id) != dynamic_flows_.end()) { return; }
+  free_dynamic_flow_ids_.push(flow_id);
+}
+
+bool DpdkEngine::reserve_static_flow_ids() {
+  static_flow_ids_.clear();
+  while (!free_dynamic_flow_ids_.empty()) { free_dynamic_flow_ids_.pop(); }
+  for (const auto& intf : cfg_.ifs_) {
+    for (const auto& flow : intf.rx_.flows_) {
+      if (flow.id_ == 0) { continue; }
+      if (!static_flow_ids_.insert(flow.id_).second) {
+        DAQIRI_LOG_ERROR("Duplicate static flow ID {}", flow.id_);
+        return false;
+      }
+    }
+  }
+  next_dynamic_flow_id_ = 1;
+  return true;
+}
+
+bool DpdkEngine::is_valid_rx_queue(int port, uint16_t queue_id) const {
+  if (port < 0 || port >= static_cast<int>(cfg_.ifs_.size())) { return false; }
+  const auto& queues = cfg_.ifs_[port].rx_.queues_;
+  return std::any_of(queues.begin(), queues.end(), [queue_id](const RxQueueConfig& q) {
+    return q.common_.id_ == queue_id;
+  });
+}
+
+bool DpdkEngine::ipv4_udp_flow_template_index(const FlowMatch& match,
+                                              uint8_t* template_index) const {
+  if (template_index == nullptr) { return false; }
+  *template_index = 0;
+
+  const auto key = ipv4_udp_flow_template_key(match);
+  if (key.fields.empty()) { return false; }
+
+  const auto& keys = ipv4_udp_flow_template_keys();
+  const auto key_it = std::find(keys.begin(), keys.end(), key);
+  if (key_it == keys.end()) { return false; }
+
+  const auto distance = std::distance(keys.begin(), key_it);
+  if (distance < 0 || distance > std::numeric_limits<uint8_t>::max()) {
+    return false;
+  }
+  *template_index = static_cast<uint8_t>(distance);
+  return true;
+}
+
+bool DpdkEngine::is_ipv4_udp_flow_match(const FlowMatch& match) const {
+  return match.type_ == FlowMatchType::IPV4_UDP &&
+         !ipv4_udp_flow_template_key(match).fields.empty();
+}
+
+bool DpdkEngine::validate_dynamic_rx_flow(int port, const FlowRuleConfig& flow) const {
+  if (!initialized_) {
+    DAQIRI_LOG_ERROR("Cannot add dynamic RX flow before DAQIRI initialization");
+    return false;
+  }
+  if (loopback_ == LoopbackType::LOOPBACK_TYPE_SW) {
+    DAQIRI_LOG_ERROR("Dynamic RX flows are not supported in software loopback mode");
+    return false;
+  }
+  if (port < 0 || port >= static_cast<int>(cfg_.ifs_.size())) {
+    DAQIRI_LOG_ERROR("Invalid dynamic RX flow port {}", port);
+    return false;
+  }
+  if (flow.action_.type_ != FlowType::QUEUE) {
+    DAQIRI_LOG_ERROR("Dynamic RX flow action type is not supported");
+    return false;
+  }
+  if (!is_valid_rx_queue(port, flow.action_.id_)) {
+    DAQIRI_LOG_ERROR("Dynamic RX flow targets invalid port/queue {}/{}", port, flow.action_.id_);
+    return false;
+  }
+  if (is_ipv4_udp_flow_match(flow.match_)) { return true; }
+  if (flow.match_.type_ == FlowMatchType::FLEX_ITEM) {
+    if (find_flex_item_config(cfg_, port, flow.match_.flex_item_match_.flex_item_id_) == nullptr) {
+      DAQIRI_LOG_ERROR("Dynamic RX flow references invalid flex item ID {}",
+                       flow.match_.flex_item_match_.flex_item_id_);
+      return false;
+    }
+    return true;
+  }
+
+  DAQIRI_LOG_ERROR("Dynamic RX flow must define an IPv4/UDP or flex-item match");
+  return false;
+}
+
+void DpdkEngine::build_ipv4_udp_flow_pattern(const FlowMatch& match,
+                                             struct rte_flow_item pattern[MAX_PATTERN_NUM],
+                                             struct rte_flow_item_ipv4* ip_spec,
+                                             struct rte_flow_item_udp* udp_spec) const {
+  if (ip_spec == nullptr || udp_spec == nullptr) { return; }
+
+  memset(pattern, 0, sizeof(struct rte_flow_item) * MAX_PATTERN_NUM);
+  memset(ip_spec, 0, sizeof(*ip_spec));
+  memset(udp_spec, 0, sizeof(*udp_spec));
+
+  pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
+  pattern[1].type = RTE_FLOW_ITEM_TYPE_IPV4;
+  pattern[2].type = RTE_FLOW_ITEM_TYPE_UDP;
+  pattern[3].type = RTE_FLOW_ITEM_TYPE_END;
+
+  bool has_ip_match = false;
+  if (match.ipv4_len_ > 0) {
+    ip_spec->hdr.total_length = htons(match.ipv4_len_);
+    has_ip_match = true;
+  }
+  if (match.ipv4_src_ != INADDR_ANY) {
+    ip_spec->hdr.src_addr = match.ipv4_src_;
+    has_ip_match = true;
+  }
+  if (match.ipv4_dst_ != INADDR_ANY) {
+    ip_spec->hdr.dst_addr = match.ipv4_dst_;
+    has_ip_match = true;
+  }
+  if (has_ip_match) { pattern[1].spec = ip_spec; }
+
+  bool has_udp_match = false;
+  if (match.udp_src_ > 0) {
+    udp_spec->hdr.src_port = htons(match.udp_src_);
+    has_udp_match = true;
+  }
+  if (match.udp_dst_ > 0) {
+    udp_spec->hdr.dst_port = htons(match.udp_dst_);
+    has_udp_match = true;
+  }
+  if (has_udp_match) { pattern[2].spec = udp_spec; }
+}
+
+void DpdkEngine::build_mark_queue_actions(FlowId flow_id,
+                                          uint16_t queue_id,
+                                          struct rte_flow_action action[MAX_ACTION_NUM],
+                                          struct rte_flow_action_mark* mark,
+                                          struct rte_flow_action_queue* queue) const {
+  if (mark == nullptr || queue == nullptr) { return; }
+
+  memset(action, 0, sizeof(struct rte_flow_action) * MAX_ACTION_NUM);
+  memset(mark, 0, sizeof(*mark));
+  memset(queue, 0, sizeof(*queue));
+
+  mark->id = flow_id;
+  queue->index = queue_id;
+  action[0].type = RTE_FLOW_ACTION_TYPE_MARK;
+  action[0].conf = mark;
+  action[1].type = RTE_FLOW_ACTION_TYPE_QUEUE;
+  action[1].conf = queue;
+  action[2].type = RTE_FLOW_ACTION_TYPE_END;
+}
+
+Status DpdkEngine::enqueue_software_flow_completion(const FlowOpResult& result) {
+  ready_flow_ops_.push(result);
+  return Status::SUCCESS;
+}
+
+bool DpdkEngine::configure_flow_api_for_port(uint16_t port, uint32_t capacity) {
+  if (port >= flow_template_states_.size()) { return false; }
+  if (capacity == 0) { return false; }
+  auto& state = flow_template_states_[port];
+  if (state.configured) { return true; }
+
+  struct rte_flow_error error;
+  struct rte_flow_port_info port_info;
+  struct rte_flow_queue_info queue_info;
+  memset(&error, 0, sizeof(error));
+  memset(&port_info, 0, sizeof(port_info));
+  memset(&queue_info, 0, sizeof(queue_info));
+
+  int ret = rte_flow_info_get(port, &port_info, &queue_info, &error);
+  if (ret < 0 || port_info.max_nb_queues == 0) {
+    DAQIRI_LOG_WARN("DPDK async flow API is not available on port {}: {}",
+                    port,
+                    error.message ? error.message : rte_strerror(rte_errno));
+    return false;
+  }
+
+  state.capacity = capacity;
+  struct rte_flow_port_attr port_attr;
+  struct rte_flow_queue_attr queue_attr;
+  memset(&port_attr, 0, sizeof(port_attr));
+  memset(&queue_attr, 0, sizeof(queue_attr));
+
+  if ((port_info.supported_flags & RTE_FLOW_PORT_FLAG_STRICT_QUEUE) != 0) {
+    port_attr.flags |= RTE_FLOW_PORT_FLAG_STRICT_QUEUE;
+  }
+  queue_attr.size = std::max<uint32_t>(64, state.capacity * 2);
+  if (queue_info.max_size > 0) { queue_attr.size = std::min(queue_attr.size, queue_info.max_size); }
+  const struct rte_flow_queue_attr* queue_attrs[] = {&queue_attr};
+
+  ret = rte_flow_configure(port, &port_attr, 1, queue_attrs, &error);
+  if (ret < 0) {
+    DAQIRI_LOG_WARN("Failed to configure DPDK async flow API on port {}: {}",
+                    port,
+                    error.message ? error.message : rte_strerror(rte_errno));
+    return false;
+  }
+
+  state.configured = true;
+  state.flow_queue_id = kDynamicFlowQueueId;
+  DAQIRI_LOG_INFO("Configured DPDK async flow API on port {} with queue size {}",
+                  port,
+                  queue_attr.size);
+  return true;
+}
+
+bool DpdkEngine::ensure_ipv4_udp_flow_template_table(uint16_t port) {
+  if (port >= flow_template_states_.size()) { return false; }
+  auto& state = flow_template_states_[port];
+  if (state.templates_ready) { return true; }
+  if (!state.configured) { return false; }
+
+  struct rte_flow_error error;
+  memset(&error, 0, sizeof(error));
+
+  const auto& template_keys = ipv4_udp_flow_template_keys();
+  if (template_keys.empty()) {
+    DAQIRI_LOG_WARN("IPv4/UDP RX flow template field count {} cannot fit in one DPDK "
+                    "template table; falling back to legacy flow create",
+                    ipv4_udp_flow_template_fields().size());
+    return false;
+  }
+  if (template_keys.size() > std::numeric_limits<uint8_t>::max()) {
+    DAQIRI_LOG_WARN("DPDK supports at most {} pattern templates per table; {} IPv4/UDP RX "
+                    "flow templates requested",
+                    static_cast<unsigned int>(std::numeric_limits<uint8_t>::max()),
+                    template_keys.size());
+    return false;
+  }
+
+  state.ipv4_udp_pattern_templates.assign(template_keys.size(), nullptr);
+  for (size_t pattern_idx = 0; pattern_idx < template_keys.size(); ++pattern_idx) {
+    struct rte_flow_pattern_template_attr pattern_attr;
+    struct rte_flow_item pattern[MAX_PATTERN_NUM];
+    struct rte_flow_item_ipv4 ip_mask;
+    struct rte_flow_item_udp udp_mask;
+    memset(&pattern_attr, 0, sizeof(pattern_attr));
+    pattern_attr.ingress = 1;
+    pattern_attr.relaxed_matching = 1;
+    build_ipv4_udp_template_pattern(template_keys[pattern_idx], pattern, &ip_mask, &udp_mask);
+
+    state.ipv4_udp_pattern_templates[pattern_idx] =
+        rte_flow_pattern_template_create(port, &pattern_attr, pattern, &error);
+    if (state.ipv4_udp_pattern_templates[pattern_idx] == nullptr) {
+      DAQIRI_LOG_WARN("Failed to create RX flow pattern template {} on port {}: {}",
+                      pattern_idx,
+                      port,
+                      error.message ? error.message : rte_strerror(rte_errno));
+      for (auto* tmpl : state.ipv4_udp_pattern_templates) {
+        if (tmpl != nullptr) { rte_flow_pattern_template_destroy(port, tmpl, &error); }
+      }
+      state.ipv4_udp_pattern_templates.clear();
+      return false;
+    }
+  }
+
+  struct rte_flow_actions_template_attr actions_attr;
+  struct rte_flow_action actions[MAX_ACTION_NUM];
+  struct rte_flow_action masks[MAX_ACTION_NUM];
+  struct rte_flow_action_mark mark;
+  struct rte_flow_action_queue queue;
+  struct rte_flow_action_mark mark_mask;
+  struct rte_flow_action_queue queue_mask;
+  memset(&actions_attr, 0, sizeof(actions_attr));
+  memset(actions, 0, sizeof(actions));
+  memset(masks, 0, sizeof(masks));
+  memset(&mark, 0, sizeof(mark));
+  memset(&queue, 0, sizeof(queue));
+  memset(&mark_mask, 0, sizeof(mark_mask));
+  memset(&queue_mask, 0, sizeof(queue_mask));
+  actions_attr.ingress = 1;
+  actions[0].type = RTE_FLOW_ACTION_TYPE_MARK;
+  actions[0].conf = &mark;
+  actions[1].type = RTE_FLOW_ACTION_TYPE_QUEUE;
+  actions[1].conf = &queue;
+  actions[2].type = RTE_FLOW_ACTION_TYPE_END;
+  masks[0].type = RTE_FLOW_ACTION_TYPE_MARK;
+  masks[0].conf = &mark_mask;
+  masks[1].type = RTE_FLOW_ACTION_TYPE_QUEUE;
+  masks[1].conf = &queue_mask;
+  masks[2].type = RTE_FLOW_ACTION_TYPE_END;
+
+  state.mark_queue_actions_template =
+      rte_flow_actions_template_create(port, &actions_attr, actions, masks, &error);
+  if (state.mark_queue_actions_template == nullptr) {
+    DAQIRI_LOG_WARN("Failed to create RX flow actions template on port {}: {}",
+                    port,
+                    error.message ? error.message : rte_strerror(rte_errno));
+    for (auto* tmpl : state.ipv4_udp_pattern_templates) {
+      if (tmpl != nullptr) { rte_flow_pattern_template_destroy(port, tmpl, &error); }
+    }
+    state.ipv4_udp_pattern_templates.clear();
+    return false;
+  }
+
+  struct rte_flow_template_table_attr table_attr;
+  memset(&table_attr, 0, sizeof(table_attr));
+  table_attr.flow_attr.ingress = 1;
+  table_attr.flow_attr.group = kRxFlowGroup;
+  table_attr.flow_attr.priority = kRxFlowPriority;
+  table_attr.nb_flows = state.capacity;
+  table_attr.insertion_type = RTE_FLOW_TABLE_INSERTION_TYPE_PATTERN;
+  table_attr.hash_func = RTE_FLOW_TABLE_HASH_FUNC_DEFAULT;
+
+  std::vector<struct rte_flow_actions_template*> action_templates = {
+      state.mark_queue_actions_template};
+  state.ipv4_udp_table =
+      rte_flow_template_table_create(port,
+                                     &table_attr,
+                                     state.ipv4_udp_pattern_templates.data(),
+                                     static_cast<uint8_t>(state.ipv4_udp_pattern_templates.size()),
+                                     action_templates.data(),
+                                     static_cast<uint8_t>(action_templates.size()),
+                                     &error);
+  if (state.ipv4_udp_table == nullptr) {
+    DAQIRI_LOG_WARN("Failed to create RX flow template table on port {}: {}",
+                    port,
+                    error.message ? error.message : rte_strerror(rte_errno));
+    rte_flow_actions_template_destroy(port, state.mark_queue_actions_template, &error);
+    state.mark_queue_actions_template = nullptr;
+    for (auto* tmpl : state.ipv4_udp_pattern_templates) {
+      if (tmpl != nullptr) { rte_flow_pattern_template_destroy(port, tmpl, &error); }
+    }
+    state.ipv4_udp_pattern_templates.clear();
+    return false;
+  }
+
+  state.templates_ready = true;
+  DAQIRI_LOG_INFO("Created RX flow template table on port {} with capacity {}",
+                  port,
+                  state.capacity);
+  return true;
+}
+
+Status DpdkEngine::create_dynamic_flow_legacy_locked(int port,
+                                                     const FlowRuleConfig& flow,
+                                                     FlowId flow_id) {
+  FlowConfig cfg;
+  cfg.name_ = flow.name_;
+  cfg.id_ = flow_id;
+  cfg.action_ = flow.action_;
+  cfg.match_ = flow.match_;
+  cfg.backend_config_ = flow.backend_config_;
+
+  struct rte_flow* rte_flow = nullptr;
+  if (cfg.match_.type_ == FlowMatchType::FLEX_ITEM) {
+    rte_flow = add_flex_item_flow(
+        port, cfg.match_.flex_item_match_, cfg.action_.id_, cfg.id_, false);
+  } else {
+    rte_flow = add_flow(port, cfg, false);
+  }
+
+  if (rte_flow == nullptr) {
+    return Status::INTERNAL_ERROR;
+  }
+
+  DynamicFlowEntry entry;
+  entry.flow_id = flow_id;
+  entry.port = static_cast<uint16_t>(port);
+  entry.queue = flow.action_.id_;
+  entry.flow = rte_flow;
+  entry.backend = DynamicFlowBackend::LEGACY;
+  entry.state = DynamicFlowState::ACTIVE;
+  dynamic_flows_[flow_id] = entry;
+  return Status::SUCCESS;
+}
+
+Status DpdkEngine::add_rx_flow_legacy_locked(int port,
+                                             const FlowRuleConfig& flow,
+                                             FlowId flow_id,
+                                             FlowOpId op_id) {
+  FlowOpResult result;
+  result.op_id_ = op_id;
+  result.type_ = FlowOpType::ADD_RX;
+  result.flow_id_ = flow_id;
+  result.flow_ids_ = {flow_id};
+  result.status_ = create_dynamic_flow_legacy_locked(port, flow, flow_id);
+  if (result.status_ != Status::SUCCESS) {
+    result.flow_id_ = 0;
+    result.flow_ids_[0] = 0;
+    release_dynamic_flow_id(flow_id);
+  }
+
+  enqueue_software_flow_completion(result);
+  return Status::SUCCESS;
+}
+
+Status DpdkEngine::add_rx_flows_legacy_locked(int port,
+                                              const std::vector<FlowRuleConfig>& flows,
+                                              const std::vector<FlowId>& flow_ids,
+                                              FlowOpId op_id) {
+  FlowOpResult result;
+  result.op_id_ = op_id;
+  result.type_ = FlowOpType::ADD_RX_BATCH;
+  result.status_ = Status::SUCCESS;
+  result.flow_ids_ = flow_ids;
+
+  for (size_t i = 0; i < flows.size(); ++i) {
+    const Status status = create_dynamic_flow_legacy_locked(port, flows[i], flow_ids[i]);
+    if (status != Status::SUCCESS) {
+      result.status_ = status;
+      result.flow_ids_[i] = 0;
+      release_dynamic_flow_id(flow_ids[i]);
+    }
+  }
+
+  enqueue_software_flow_completion(result);
+  return Status::SUCCESS;
+}
+
+Status DpdkEngine::enqueue_rx_flow_template_create_locked(int port,
+                                                          const FlowRuleConfig& flow,
+                                                          FlowId flow_id,
+                                                          FlowOpId completion_id) {
+  auto& state = flow_template_states_[port];
+  struct rte_flow_op_attr op_attr;
+  struct rte_flow_error error;
+  memset(&op_attr, 0, sizeof(op_attr));
+  memset(&error, 0, sizeof(error));
+
+  auto storage = std::make_shared<FlowTemplateCreateStorage>();
+  build_ipv4_udp_flow_pattern(flow.match_, storage->pattern, &storage->ip_spec, &storage->udp_spec);
+  build_mark_queue_actions(flow_id,
+                           flow.action_.id_,
+                           storage->action,
+                           &storage->mark,
+                           &storage->queue);
+
+  uint8_t template_index = 0;
+  if (!ipv4_udp_flow_template_index(flow.match_, &template_index)) {
+    return Status::INTERNAL_ERROR;
+  }
+  struct rte_flow* rte_flow =
+      rte_flow_async_create(static_cast<uint16_t>(port),
+                            state.flow_queue_id,
+                            &op_attr,
+                            state.ipv4_udp_table,
+                            storage->pattern,
+                            template_index,
+                            storage->action,
+                            0,
+                            flow_op_user_data(completion_id),
+                            &error);
+  if (rte_flow == nullptr) {
+    DAQIRI_LOG_WARN("Failed to enqueue async RX flow create on port {}: {}",
+                    port,
+                    error.message ? error.message : rte_strerror(rte_errno));
+    return Status::INTERNAL_ERROR;
+  }
+
+  DynamicFlowEntry entry;
+  entry.flow_id = flow_id;
+  entry.port = static_cast<uint16_t>(port);
+  entry.queue = flow.action_.id_;
+  entry.flow = rte_flow;
+  entry.backend = DynamicFlowBackend::TEMPLATE;
+  entry.state = DynamicFlowState::ADDING;
+  entry.flow_queue_id = state.flow_queue_id;
+  entry.backend_storage = storage;
+  dynamic_flows_[flow_id] = entry;
+  return Status::SUCCESS;
+}
+
+void DpdkEngine::discard_unpushed_template_creates_locked(const std::vector<FlowId>& flow_ids) {
+  struct rte_flow_error error;
+  struct rte_flow_op_attr op_attr;
+  std::array<uint32_t, RTE_MAX_ETHPORTS> pending_destroys{};
+
+  for (const FlowId flow_id : flow_ids) {
+    auto flow_it = dynamic_flows_.find(flow_id);
+    if (flow_it != dynamic_flows_.end() &&
+        flow_it->second.backend == DynamicFlowBackend::TEMPLATE &&
+        flow_it->second.state == DynamicFlowState::ADDING) {
+      DynamicFlowEntry& entry = flow_it->second;
+      if (entry.flow != nullptr && entry.port < flow_template_states_.size() &&
+          flow_template_states_[entry.port].configured) {
+        memset(&error, 0, sizeof(error));
+        memset(&op_attr, 0, sizeof(op_attr));
+        if (rte_flow_async_destroy(entry.port,
+                                   entry.flow_queue_id,
+                                   &op_attr,
+                                   entry.flow,
+                                   nullptr,
+                                   &error) < 0) {
+          DAQIRI_LOG_WARN("Failed to enqueue cleanup destroy for unpushed dynamic RX flow {} "
+                          "on port {}: {}",
+                          flow_id,
+                          entry.port,
+                          error.message ? error.message : rte_strerror(rte_errno));
+        } else {
+          ++pending_destroys[entry.port];
+        }
+      }
+      dynamic_flows_.erase(flow_it);
+    }
+    release_dynamic_flow_id(flow_id);
+  }
+
+  for (uint16_t port = 0; port < pending_destroys.size(); ++port) {
+    if (pending_destroys[port] == 0) { continue; }
+    auto& state = flow_template_states_[port];
+    memset(&error, 0, sizeof(error));
+    if (rte_flow_push(port, state.flow_queue_id, &error) < 0) {
+      DAQIRI_LOG_WARN("Failed to push cleanup destroys for unpushed dynamic RX flows "
+                      "on port {}: {}",
+                      port,
+                      error.message ? error.message : rte_strerror(rte_errno));
+      continue;
+    }
+
+    uint32_t remaining = pending_destroys[port];
+    unsigned idle_polls = 0;
+    struct rte_flow_op_result results[16];
+    while (remaining > 0 && idle_polls < 100) {
+      memset(&error, 0, sizeof(error));
+      memset(results, 0, sizeof(results));
+      const int ret = rte_flow_pull(port, state.flow_queue_id, results, 16, &error);
+      if (ret < 0) {
+        DAQIRI_LOG_WARN("Failed to pull cleanup destroy completions on port {}: {}",
+                        port,
+                        error.message ? error.message : rte_strerror(rte_errno));
+        break;
+      }
+      if (ret == 0) {
+        ++idle_polls;
+        rte_delay_us_sleep(1000);
+        continue;
+      }
+
+      idle_polls = 0;
+      for (int i = 0; i < ret && remaining > 0; ++i) {
+        if (results[i].user_data != nullptr) { continue; }
+        if (results[i].status != RTE_FLOW_OP_SUCCESS) {
+          DAQIRI_LOG_WARN("Cleanup destroy failed on port {}", port);
+        }
+        --remaining;
+      }
+    }
+
+    if (remaining > 0) {
+      DAQIRI_LOG_WARN("{} cleanup destroy completions were not received on port {}",
+                      remaining,
+                      port);
+    }
+  }
+}
+
+Status DpdkEngine::add_rx_flow_template_locked(int port,
+                                               const FlowRuleConfig& flow,
+                                               FlowId flow_id,
+                                               FlowOpId op_id) {
+  if (!ensure_eth_jump_rule(port, kRxFlowGroup) ||
+      !ensure_ipv4_udp_flow_template_table(static_cast<uint16_t>(port))) {
+    return add_rx_flow_legacy_locked(port, flow, flow_id, op_id);
+  }
+
+  PendingFlowBatch pending;
+  pending.result.op_id_ = op_id;
+  pending.result.type_ = FlowOpType::ADD_RX;
+  pending.result.status_ = Status::NOT_READY;
+  pending.result.flow_id_ = flow_id;
+  pending.result.flow_ids_ = {flow_id};
+  pending.remaining = 1;
+
+  if (enqueue_rx_flow_template_create_locked(port, flow, flow_id, op_id) != Status::SUCCESS) {
+    return add_rx_flow_legacy_locked(port, flow, flow_id, op_id);
+  }
+
+  auto& state = flow_template_states_[port];
+  struct rte_flow_error error;
+  memset(&error, 0, sizeof(error));
+  pending_flow_batches_[op_id] = pending;
+  pending_flow_completions_[op_id] = {op_id, flow_id, 0};
+
+  if (rte_flow_push(static_cast<uint16_t>(port), state.flow_queue_id, &error) < 0) {
+    DAQIRI_LOG_WARN("Failed to push async RX flow create on port {}: {}",
+                    port,
+                    error.message ? error.message : rte_strerror(rte_errno));
+
+    pending_flow_completions_.erase(op_id);
+    pending_flow_batches_.erase(op_id);
+    discard_unpushed_template_creates_locked({flow_id});
+    FlowOpResult result;
+    result.op_id_ = op_id;
+    result.type_ = FlowOpType::ADD_RX;
+    result.status_ = Status::INTERNAL_ERROR;
+    result.flow_id_ = 0;
+    result.flow_ids_ = {0};
+    enqueue_software_flow_completion(result);
+    return Status::SUCCESS;
+  }
+
+  return Status::SUCCESS;
+}
+
+Status DpdkEngine::add_rx_flows_template_locked(int port,
+                                                const std::vector<FlowRuleConfig>& flows,
+                                                const std::vector<FlowId>& flow_ids,
+                                                FlowOpId op_id) {
+  if (!ensure_eth_jump_rule(port, kRxFlowGroup) ||
+      !ensure_ipv4_udp_flow_template_table(static_cast<uint16_t>(port))) {
+    return add_rx_flows_legacy_locked(port, flows, flow_ids, op_id);
+  }
+
+  for (const auto& flow : flows) {
+    uint8_t template_index = 0;
+    if (!ipv4_udp_flow_template_index(flow.match_, &template_index)) {
+      return add_rx_flows_legacy_locked(port, flows, flow_ids, op_id);
+    }
+  }
+
+  PendingFlowBatch pending;
+  pending.result.op_id_ = op_id;
+  pending.result.type_ = FlowOpType::ADD_RX_BATCH;
+  pending.result.status_ = Status::NOT_READY;
+  pending.result.flow_ids_ = flow_ids;
+
+  size_t enqueued = 0;
+  std::vector<FlowId> enqueued_flow_ids;
+  enqueued_flow_ids.reserve(flows.size());
+  for (size_t i = 0; i < flows.size(); ++i) {
+    const FlowOpId completion_id = allocate_flow_op_id();
+    const Status status =
+        enqueue_rx_flow_template_create_locked(port, flows[i], flow_ids[i], completion_id);
+    if (status != Status::SUCCESS) {
+      pending.result.status_ = status;
+      pending.result.flow_ids_[i] = 0;
+      release_dynamic_flow_id(flow_ids[i]);
+      for (size_t j = i + 1; j < pending.result.flow_ids_.size(); ++j) {
+        pending.result.flow_ids_[j] = 0;
+        release_dynamic_flow_id(flow_ids[j]);
+      }
+      break;
+    }
+
+    pending_flow_completions_[completion_id] = {op_id, flow_ids[i], i};
+    enqueued_flow_ids.push_back(flow_ids[i]);
+    ++enqueued;
+  }
+
+  if (enqueued == 0) {
+    if (pending.result.status_ == Status::NOT_READY) {
+      pending.result.status_ = Status::INTERNAL_ERROR;
+      std::fill(pending.result.flow_ids_.begin(), pending.result.flow_ids_.end(), 0);
+      for (const FlowId flow_id : flow_ids) {
+        release_dynamic_flow_id(flow_id);
+      }
+    }
+    enqueue_software_flow_completion(pending.result);
+    return Status::SUCCESS;
+  }
+
+  pending.remaining = enqueued;
+  pending_flow_batches_[op_id] = pending;
+
+  auto& state = flow_template_states_[port];
+  struct rte_flow_error error;
+  memset(&error, 0, sizeof(error));
+  if (rte_flow_push(static_cast<uint16_t>(port), state.flow_queue_id, &error) < 0) {
+    DAQIRI_LOG_WARN("Failed to push async RX flow batch create on port {}: {}",
+                    port,
+                    error.message ? error.message : rte_strerror(rte_errno));
+
+    for (auto completion_it = pending_flow_completions_.begin();
+         completion_it != pending_flow_completions_.end();) {
+      if (completion_it->second.op_id == op_id) {
+        completion_it = pending_flow_completions_.erase(completion_it);
+      } else {
+        ++completion_it;
+      }
+    }
+    pending_flow_batches_.erase(op_id);
+    discard_unpushed_template_creates_locked(enqueued_flow_ids);
+
+    pending.result.status_ = Status::INTERNAL_ERROR;
+    std::fill(pending.result.flow_ids_.begin(), pending.result.flow_ids_.end(), 0);
+    enqueue_software_flow_completion(pending.result);
+  }
+
+  return Status::SUCCESS;
+}
+
+Status DpdkEngine::delete_flow_legacy_locked(DynamicFlowEntry& entry, FlowOpId op_id) {
+  struct rte_flow_error error;
+  memset(&error, 0, sizeof(error));
+
+  FlowOpResult result;
+  result.op_id_ = op_id;
+  result.type_ = FlowOpType::DELETE;
+  result.flow_id_ = entry.flow_id;
+  result.status_ = Status::SUCCESS;
+
+  const FlowId flow_id = entry.flow_id;
+  if (rte_flow_destroy(entry.port, entry.flow, &error) != 0) {
+    DAQIRI_LOG_ERROR("Failed to destroy dynamic RX flow {} on port {}: {}",
+                     entry.flow_id,
+                     entry.port,
+                     error.message ? error.message : rte_strerror(rte_errno));
+    result.status_ = Status::INTERNAL_ERROR;
+  } else {
+    dynamic_flows_.erase(flow_id);
+    release_dynamic_flow_id(flow_id);
+  }
+
+  enqueue_software_flow_completion(result);
+  return Status::SUCCESS;
+}
+
+Status DpdkEngine::delete_flow_template_locked(DynamicFlowEntry& entry, FlowOpId op_id) {
+  struct rte_flow_op_attr op_attr;
+  struct rte_flow_error error;
+  memset(&op_attr, 0, sizeof(op_attr));
+  memset(&error, 0, sizeof(error));
+
+  if (rte_flow_async_destroy(entry.port,
+                             entry.flow_queue_id,
+                             &op_attr,
+                             entry.flow,
+                             flow_op_user_data(op_id),
+                             &error) < 0) {
+    DAQIRI_LOG_ERROR("Failed to enqueue async RX flow destroy for {} on port {}: {}",
+                     entry.flow_id,
+                     entry.port,
+                     error.message ? error.message : rte_strerror(rte_errno));
+    return Status::INTERNAL_ERROR;
+  }
+  if (rte_flow_push(entry.port, entry.flow_queue_id, &error) < 0) {
+    DAQIRI_LOG_ERROR("Failed to push async RX flow destroy for {} on port {}: {}",
+                     entry.flow_id,
+                     entry.port,
+                     error.message ? error.message : rte_strerror(rte_errno));
+    return Status::INTERNAL_ERROR;
+  }
+
+  entry.state = DynamicFlowState::DELETING;
+  PendingFlowBatch pending;
+  pending.result.op_id_ = op_id;
+  pending.result.type_ = FlowOpType::DELETE;
+  pending.result.status_ = Status::NOT_READY;
+  pending.result.flow_id_ = entry.flow_id;
+  pending.remaining = 1;
+  pending_flow_batches_[op_id] = pending;
+  pending_flow_completions_[op_id] = {op_id, entry.flow_id, 0};
+  return Status::SUCCESS;
+}
+
+void DpdkEngine::poll_dpdk_flow_completions_locked() {
+  struct rte_flow_error error;
+  struct rte_flow_op_result results[16];
+
+  for (uint16_t port = 0; port < flow_template_states_.size(); ++port) {
+    auto& state = flow_template_states_[port];
+    if (!state.configured) { continue; }
+
+    while (true) {
+      memset(&error, 0, sizeof(error));
+      memset(results, 0, sizeof(results));
+      const int ret = rte_flow_pull(port, state.flow_queue_id, results, 16, &error);
+      if (ret <= 0) { break; }
+
+      for (int i = 0; i < ret; ++i) {
+        const FlowOpId completion_id = flow_op_id_from_user_data(results[i].user_data);
+        const auto completion_it = pending_flow_completions_.find(completion_id);
+        if (completion_it == pending_flow_completions_.end()) { continue; }
+
+        const PendingFlowCompletion completion = completion_it->second;
+        pending_flow_completions_.erase(completion_it);
+
+        const auto batch_it = pending_flow_batches_.find(completion.op_id);
+        if (batch_it == pending_flow_batches_.end()) { continue; }
+        PendingFlowBatch& batch = batch_it->second;
+        const Status completion_status = results[i].status == RTE_FLOW_OP_SUCCESS
+                                             ? Status::SUCCESS
+                                             : Status::INTERNAL_ERROR;
+        const bool is_add_op = batch.result.type_ == FlowOpType::ADD_RX ||
+                               batch.result.type_ == FlowOpType::ADD_RX_BATCH;
+        if (completion_status != Status::SUCCESS) {
+          batch.result.status_ = completion_status;
+          if (is_add_op && completion.flow_index < batch.result.flow_ids_.size()) {
+            batch.result.flow_ids_[completion.flow_index] = 0;
+          }
+          if (is_add_op && batch.result.flow_id_ == completion.flow_id) {
+            batch.result.flow_id_ = 0;
+          }
+        }
+
+        const auto flow_it = dynamic_flows_.find(completion.flow_id);
+        if (flow_it != dynamic_flows_.end()) {
+          if (is_add_op) {
+            if (completion_status == Status::SUCCESS) {
+              flow_it->second.state = DynamicFlowState::ACTIVE;
+              flow_it->second.backend_storage.reset();
+            } else {
+              const FlowId failed_flow_id = flow_it->first;
+              dynamic_flows_.erase(flow_it);
+              release_dynamic_flow_id(failed_flow_id);
+            }
+          } else {
+            if (completion_status == Status::SUCCESS) {
+              const FlowId deleted_flow_id = flow_it->first;
+              dynamic_flows_.erase(flow_it);
+              release_dynamic_flow_id(deleted_flow_id);
+            } else {
+              flow_it->second.state = DynamicFlowState::ACTIVE;
+            }
+          }
+        }
+
+        if (batch.remaining > 0) { --batch.remaining; }
+        if (batch.remaining == 0) {
+          if (batch.result.status_ == Status::NOT_READY) {
+            batch.result.status_ = Status::SUCCESS;
+          }
+          ready_flow_ops_.push(batch.result);
+          pending_flow_batches_.erase(batch_it);
+        }
+      }
+    }
+  }
+}
+
+void DpdkEngine::cleanup_template_dynamic_flows_locked() {
+  struct rte_flow_error error;
+  struct rte_flow_op_attr op_attr;
+  std::array<uint32_t, RTE_MAX_ETHPORTS> pending_destroys{};
+
+  for (auto& [flow_id, entry] : dynamic_flows_) {
+    if (entry.backend != DynamicFlowBackend::TEMPLATE || entry.flow == nullptr) {
+      continue;
+    }
+    if (entry.port >= flow_template_states_.size() ||
+        !flow_template_states_[entry.port].configured) {
+      DAQIRI_LOG_WARN("Skipping async destroy for dynamic RX flow {} on unconfigured port {}",
+                      flow_id,
+                      entry.port);
+      continue;
+    }
+
+    memset(&error, 0, sizeof(error));
+    memset(&op_attr, 0, sizeof(op_attr));
+    if (rte_flow_async_destroy(entry.port,
+                               entry.flow_queue_id,
+                               &op_attr,
+                               entry.flow,
+                               nullptr,
+                               &error) < 0) {
+      DAQIRI_LOG_WARN("Failed to enqueue shutdown async destroy for dynamic RX flow {} "
+                      "on port {}: {}",
+                      flow_id,
+                      entry.port,
+                      error.message ? error.message : rte_strerror(rte_errno));
+      continue;
+    }
+    ++pending_destroys[entry.port];
+  }
+
+  for (uint16_t port = 0; port < pending_destroys.size(); ++port) {
+    if (pending_destroys[port] == 0) { continue; }
+    auto& state = flow_template_states_[port];
+    memset(&error, 0, sizeof(error));
+    if (rte_flow_push(port, state.flow_queue_id, &error) < 0) {
+      DAQIRI_LOG_WARN("Failed to push shutdown async destroys on port {}: {}",
+                      port,
+                      error.message ? error.message : rte_strerror(rte_errno));
+      continue;
+    }
+
+    uint32_t remaining = pending_destroys[port];
+    unsigned idle_polls = 0;
+    struct rte_flow_op_result results[16];
+    while (remaining > 0 && idle_polls < 1000) {
+      memset(&error, 0, sizeof(error));
+      memset(results, 0, sizeof(results));
+      const int ret = rte_flow_pull(port, state.flow_queue_id, results, 16, &error);
+      if (ret < 0) {
+        DAQIRI_LOG_WARN("Failed to pull shutdown async destroy completions on port {}: {}",
+                        port,
+                        error.message ? error.message : rte_strerror(rte_errno));
+        break;
+      }
+      if (ret == 0) {
+        ++idle_polls;
+        rte_delay_us_sleep(1000);
+        continue;
+      }
+
+      idle_polls = 0;
+      for (int i = 0; i < ret && remaining > 0; ++i) {
+        if (results[i].user_data != nullptr) { continue; }
+        if (results[i].status != RTE_FLOW_OP_SUCCESS) {
+          DAQIRI_LOG_WARN("Shutdown async destroy failed on port {}", port);
+        }
+        --remaining;
+      }
+    }
+
+    if (remaining > 0) {
+      DAQIRI_LOG_WARN("{} shutdown async dynamic RX flow destroys did not complete on port {}",
+                      remaining,
+                      port);
+    }
+  }
+}
+
+void DpdkEngine::cleanup_dynamic_flows() {
+  std::lock_guard<std::mutex> guard(flow_lock_);
+  struct rte_flow_error error;
+  memset(&error, 0, sizeof(error));
+
+  poll_dpdk_flow_completions_locked();
+  pending_flow_batches_.clear();
+  pending_flow_completions_.clear();
+  while (!ready_flow_ops_.empty()) { ready_flow_ops_.pop(); }
+
+  cleanup_template_dynamic_flows_locked();
+
+  for (auto& [flow_id, entry] : dynamic_flows_) {
+    if (entry.backend == DynamicFlowBackend::LEGACY && entry.flow != nullptr) {
+      rte_flow_destroy(entry.port, entry.flow, &error);
+    }
+  }
+  dynamic_flows_.clear();
+
+  for (uint16_t port = 0; port < flow_template_states_.size(); ++port) {
+    auto& state = flow_template_states_[port];
+    if (state.ipv4_udp_table != nullptr) {
+      rte_flow_template_table_destroy(port, state.ipv4_udp_table, &error);
+      state.ipv4_udp_table = nullptr;
+    }
+    if (state.mark_queue_actions_template != nullptr) {
+      rte_flow_actions_template_destroy(port, state.mark_queue_actions_template, &error);
+      state.mark_queue_actions_template = nullptr;
+    }
+    for (auto* tmpl : state.ipv4_udp_pattern_templates) {
+      if (tmpl != nullptr) { rte_flow_pattern_template_destroy(port, tmpl, &error); }
+    }
+    state.ipv4_udp_pattern_templates.clear();
+    state.templates_ready = false;
+    state.configured = false;
+  }
+}
+
+Status DpdkEngine::add_rx_flow_async(int port, const FlowRuleConfig& flow, FlowOpId* op_id) {
+  if (op_id == nullptr) { return Status::NULL_PTR; }
+  *op_id = 0;
+  std::lock_guard<std::mutex> guard(flow_lock_);
+  if (!validate_dynamic_rx_flow(port, flow)) { return Status::INVALID_PARAMETER; }
+
+  const FlowId flow_id = allocate_dynamic_flow_id();
+  if (flow_id == 0) { return Status::NO_SPACE_AVAILABLE; }
+  const FlowOpId new_op_id = allocate_flow_op_id();
+  *op_id = new_op_id;
+
+  if (is_ipv4_udp_flow_match(flow.match_)) {
+    return add_rx_flow_template_locked(port, flow, flow_id, new_op_id);
+  }
+  return add_rx_flow_legacy_locked(port, flow, flow_id, new_op_id);
+}
+
+Status DpdkEngine::add_rx_flows_async(int port,
+                                      const std::vector<FlowRuleConfig>& flows,
+                                      FlowOpId* op_id) {
+  if (op_id == nullptr) { return Status::NULL_PTR; }
+  *op_id = 0;
+  if (flows.empty()) { return Status::INVALID_PARAMETER; }
+
+  std::lock_guard<std::mutex> guard(flow_lock_);
+  for (const auto& flow : flows) {
+    if (!validate_dynamic_rx_flow(port, flow)) { return Status::INVALID_PARAMETER; }
+  }
+
+  std::vector<FlowId> flow_ids;
+  flow_ids.reserve(flows.size());
+  for (size_t i = 0; i < flows.size(); ++i) {
+    const FlowId flow_id = allocate_dynamic_flow_id();
+    if (flow_id == 0) {
+      for (const FlowId allocated_flow_id : flow_ids) {
+        release_dynamic_flow_id(allocated_flow_id);
+      }
+      return Status::NO_SPACE_AVAILABLE;
+    }
+    flow_ids.push_back(flow_id);
+  }
+
+  const FlowOpId new_op_id = allocate_flow_op_id();
+  *op_id = new_op_id;
+
+  const bool all_ipv4_udp =
+      std::all_of(flows.begin(), flows.end(), [this](const FlowRuleConfig& flow) {
+        return is_ipv4_udp_flow_match(flow.match_);
+      });
+  if (all_ipv4_udp) {
+    return add_rx_flows_template_locked(port, flows, flow_ids, new_op_id);
+  }
+  return add_rx_flows_legacy_locked(port, flows, flow_ids, new_op_id);
+}
+
+Status DpdkEngine::delete_flow_async(FlowId flow_id, FlowOpId* op_id) {
+  if (op_id == nullptr) { return Status::NULL_PTR; }
+  *op_id = 0;
+  std::lock_guard<std::mutex> guard(flow_lock_);
+  if (!initialized_) { return Status::NOT_READY; }
+  if (static_flow_ids_.find(flow_id) != static_flow_ids_.end()) { return Status::INVALID_PARAMETER; }
+  const auto flow_it = dynamic_flows_.find(flow_id);
+  if (flow_it == dynamic_flows_.end() || flow_it->second.state != DynamicFlowState::ACTIVE) {
+    return Status::INVALID_PARAMETER;
+  }
+
+  const FlowOpId new_op_id = allocate_flow_op_id();
+  if (flow_it->second.backend == DynamicFlowBackend::TEMPLATE) {
+    const Status status = delete_flow_template_locked(flow_it->second, new_op_id);
+    if (status == Status::SUCCESS) { *op_id = new_op_id; }
+    return status;
+  }
+  const Status status = delete_flow_legacy_locked(flow_it->second, new_op_id);
+  if (status == Status::SUCCESS) { *op_id = new_op_id; }
+  return status;
+}
+
+Status DpdkEngine::poll_flow_op(FlowOpResult* result) {
+  if (result == nullptr) { return Status::NULL_PTR; }
+  std::lock_guard<std::mutex> guard(flow_lock_);
+  poll_dpdk_flow_completions_locked();
+  if (ready_flow_ops_.empty()) { return Status::NOT_READY; }
+  *result = ready_flow_ops_.front();
+  ready_flow_ops_.pop();
+  return Status::SUCCESS;
+}
+
 static uint64_t eth_jump_key(int port, uint32_t group) {
   return (static_cast<uint64_t>(static_cast<uint16_t>(port)) << 32) | group;
 }
@@ -2950,13 +4162,18 @@ void DpdkEngine::destroy_eth_jump_rules() {
 }
 
 struct rte_flow* DpdkEngine::add_flex_item_flow(
-    int port, const FlexItemMatch& match_info, uint16_t queue_id) {
+    int port,
+    const FlexItemMatch& match_info,
+    uint16_t queue_id,
+    FlowId mark_id,
+    bool track) {
   /* Declaring structs being used. 8< */
   struct rte_flow_attr attr;
   struct rte_flow_item pattern[MAX_PATTERN_NUM];
   struct rte_flow_action action[MAX_ACTION_NUM];
   struct rte_flow* flow = NULL;
   struct rte_flow_action_queue queue = {.index = queue_id};
+  struct rte_flow_action_mark mark = {.id = mark_id};
   struct rte_flow_error error;
   struct rte_flow_item_udp udp_spec;
   struct rte_flow_item_udp udp_mask;
@@ -2979,15 +4196,17 @@ struct rte_flow* DpdkEngine::add_flex_item_flow(
   memset(&udp_spec, 0, sizeof(struct rte_flow_item_udp));
   memset(&udp_mask, 0, sizeof(struct rte_flow_item_udp));
 
-  // struct rte_flow_action_mark mark;
-  // mark.id = 0x40 + queue_id;
-
-  action[0].type = RTE_FLOW_ACTION_TYPE_QUEUE;
-  action[0].conf = &queue;
-  action[1].type = RTE_FLOW_ACTION_TYPE_END;
-  //  action[1].type = RTE_FLOW_ACTION_TYPE_MARK;
-  //  action[1].conf = &mark;
-  //  action[2].type = RTE_FLOW_ACTION_TYPE_END;
+  if (mark_id != 0) {
+    action[0].type = RTE_FLOW_ACTION_TYPE_MARK;
+    action[0].conf = &mark;
+    action[1].type = RTE_FLOW_ACTION_TYPE_QUEUE;
+    action[1].conf = &queue;
+    action[2].type = RTE_FLOW_ACTION_TYPE_END;
+  } else {
+    action[0].type = RTE_FLOW_ACTION_TYPE_QUEUE;
+    action[0].conf = &queue;
+    action[1].type = RTE_FLOW_ACTION_TYPE_END;
+  }
 
   pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
   pattern[1].type = RTE_FLOW_ITEM_TYPE_IPV4;
@@ -3117,7 +4336,7 @@ struct rte_flow* DpdkEngine::add_flex_item_flow(
                         match_info.val_,
                         error.message ? error.message : "unknown error",
                         rte_strerror(rte_errno));
-  } else {
+  } else if (track) {
     track_flow(static_cast<uint16_t>(port), flow);
   }
 
@@ -3126,7 +4345,7 @@ struct rte_flow* DpdkEngine::add_flex_item_flow(
 
 
 // Taken from flow_block.c DPDK example */
-struct rte_flow* DpdkEngine::add_flow(int port, const FlowConfig& cfg) {
+struct rte_flow* DpdkEngine::add_flow(int port, const FlowConfig& cfg, bool track) {
   /* Declaring structs being used. 8< */
   struct rte_flow_attr attr;
   struct rte_flow_item pattern[MAX_PATTERN_NUM];
@@ -3243,7 +4462,7 @@ struct rte_flow* DpdkEngine::add_flow(int port, const FlowConfig& cfg) {
                         port,
                         error.message ? error.message : "unknown error",
                         rte_strerror(rte_errno));
-  } else {
+  } else if (track) {
     track_flow(static_cast<uint16_t>(port), flow);
   }
   return flow;
@@ -3574,6 +4793,7 @@ DpdkEngine::~DpdkEngine() {
     rx_rings.clear();
     tx_rings.clear();
 
+    cleanup_dynamic_flows();
     destroy_all_flow_rules();
 
     // Final safety net: if shutdown() was never called (e.g. process exiting
@@ -3597,7 +4817,7 @@ bool DpdkEngine::validate_config() const {
       }
     }
 
-    std::unordered_map<uint16_t, uint16_t> flow_to_queue;
+    std::unordered_map<FlowId, uint16_t> flow_to_queue;
     bool has_standard_flows = false;
     bool has_flex_item_flows = false;
     for (const auto& flow : intf.rx_.flows_) {
@@ -3641,7 +4861,7 @@ bool DpdkEngine::validate_config() const {
       }
     }
 
-    std::unordered_set<uint16_t> reorder_flow_ids;
+    std::unordered_set<FlowId> reorder_flow_ids;
     for (const auto& reorder_cfg : intf.rx_.reorder_configs_) {
       const bool use_gpu_backend = reorder_cfg.reorder_type_ == "gpu";
       const bool use_cpu_backend = reorder_cfg.reorder_type_ == "cpu";
@@ -4586,7 +5806,7 @@ uint32_t DpdkEngine::get_packet_length(BurstParams* burst, int idx) {
   return reinterpret_cast<rte_mbuf*>(burst->pkts[0][idx])->pkt_len;
 }
 
-uint16_t DpdkEngine::get_packet_flow_id(BurstParams* burst, int idx) {
+FlowId DpdkEngine::get_packet_flow_id(BurstParams* burst, int idx) {
   if (burst == nullptr || idx < 0) { return 0; }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) { return 0; }
   if (idx >= static_cast<int>(burst->hdr.hdr.num_pkts) || burst->pkts[0] == nullptr) {
@@ -4974,6 +6194,7 @@ void DpdkEngine::shutdown() {
     }
     tx_rings.clear();
 
+    cleanup_dynamic_flows();
     destroy_all_flow_rules();
     cleanup_eal();
     initialized_ = false;
