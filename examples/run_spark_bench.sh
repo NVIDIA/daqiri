@@ -52,6 +52,10 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="${DAQIRI_BUILD_DIR:-$SCRIPT_DIR/../build}"
+# Load the platform profile (BENCH_PLATFORM=spark|igx; default spark). Defines the
+# CORE_*/DPDK_*_PCI/BENCH_MEM_KIND/... values and bench_fill_placeholders().
+# shellcheck source=bench_platform.sh
+source "$SCRIPT_DIR/bench_platform.sh"
 # Splits a combined both-role netns base into a single-role config (rdma + socket).
 NETNS_GEN="$SCRIPT_DIR/../scripts/gen_spark_netns_config.py"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -87,15 +91,14 @@ case "$BACKEND" in
     PAIRS_HEADLINE=(1)
     BASE_YAML="$SCRIPT_DIR/daqiri_bench_raw_tx_rx_spark.yaml"
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_raw_gpudirect"
-    CPU_MASTER=8; CPU_TX=17; CPU_RX=18
+    CPU_MASTER=$CORE_MASTER; CPU_TX=$CORE_DPDK_TXQ; CPU_RX=$CORE_DPDK_RXQ
     : "${ETH_DST_ADDR:?ETH_DST_ADDR must be set for dpdk backend (cat /sys/class/net/<rx-iface>/address)}"
     # Resolve the tx_port (p0) / rx_port (p1) netdevs so each cell can assert wire
     # transit via their *_phy SerDes counters -- the MLX5 bifurcated driver keeps
     # these live even while the DPDK PMD owns the port, so a non-advancing
     # rx_packets_phy flags the on-chip eswitch short-cut instead of a true cable
     # loopback. Override DPDK_{TX,RX}_PCI / DPDK_{TX,RX}_NETDEV if auto-detect fails.
-    DPDK_TX_PCI="${DPDK_TX_PCI:-0000:01:00.0}"
-    DPDK_RX_PCI="${DPDK_RX_PCI:-0002:01:00.1}"
+    # DPDK_{TX,RX}_PCI come from the platform profile.
     DPDK_TX_NETDEV="${DPDK_TX_NETDEV:-$(ls "/sys/bus/pci/devices/$DPDK_TX_PCI/net" 2>/dev/null | head -n1 || true)}"
     DPDK_RX_NETDEV="${DPDK_RX_NETDEV:-$(ls "/sys/bus/pci/devices/$DPDK_RX_PCI/net" 2>/dev/null | head -n1 || true)}"
     ;;
@@ -112,7 +115,7 @@ case "$BACKEND" in
     # the kernel's local routing table.
     BASE_YAML="$SCRIPT_DIR/daqiri_bench_rdma_tx_rx_spark_netns.yaml"
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_rdma"
-    CPU_MASTER=8; CPU_TX=17; CPU_RX=18
+    CPU_MASTER=$CORE_MASTER; CPU_TX=$CORE_ROCE_CLI_TXQ; CPU_RX=$CORE_ROCE_SRV_W
     ;;
     # Single-frame UDP sizes (<= the ~8972 B MTU payload, so no IP fragmentation).
     # 65507 is intentionally excluded: it fragments into ~8 packets and, under
@@ -137,7 +140,7 @@ case "$BACKEND" in
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_socket"
     # Pair 0 pins to core 16 (see pair_core); report that core's busy% as the per-pair
     # bottleneck. cpu_tx_pct and cpu_rx_pct therefore both refer to the pair-0 core.
-    CPU_MASTER=8; CPU_TX=16; CPU_RX=16
+    CPU_MASTER=$CORE_MASTER; CPU_TX=${SOCKET_PAIR_CORES[0]}; CPU_RX=${SOCKET_PAIR_CORES[0]}
     ;;
   socket-tcp)
     # 1 MiB / 8000 / 1000 to mirror the published TCP matrix. The bench memsets a full
@@ -156,10 +159,17 @@ case "$BACKEND" in
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_socket"
     # Pair 0 pins to core 16 (see pair_core); report that core's busy% as the per-pair
     # bottleneck. cpu_tx_pct and cpu_rx_pct therefore both refer to the pair-0 core.
-    CPU_MASTER=8; CPU_TX=16; CPU_RX=16
+    CPU_MASTER=$CORE_MASTER; CPU_TX=${SOCKET_PAIR_CORES[0]}; CPU_RX=${SOCKET_PAIR_CORES[0]}
     ;;
   *) echo "Unknown backend: $BACKEND" >&2; exit 1 ;;
 esac
+
+# Fill the platform @VAR@ placeholders (cores, mem kind, PCI, num_bufs) into a
+# concrete base once; every generator (dpdk sed, gen_spark_netns_config split,
+# socket sed) then operates on real values. yaml-cpp/PyYAML never see a token.
+FILLED_BASE="$OUT_DIR/base.$BACKEND.filled.yaml"
+bench_fill_placeholders "$BASE_YAML" > "$FILLED_BASE"
+BASE_YAML="$FILLED_BASE"
 
 DROP_CURVE_TARGETS=(1 5 10 25 50 75 100 0)  # 0 means unpaced (line rate)
 
@@ -271,8 +281,12 @@ generate_yaml() {
       # bite), large messages stay memory-bounded (where window depth is irrelevant).
       local budget=1073741824   # 1 GiB pinned per memory region
       local cap=$(( budget / payload )); (( cap < 1 )) && cap=1
-      local rx_nb=512; (( rx_nb > cap )) && rx_nb=$cap
-      local tx_nb=128; (( tx_nb > cap )) && tx_nb=$cap
+      # Flow-control window, capped per platform (RDMA_{RX,TX}_DEPTH_CAP): Spark's
+      # CX-7 firmware takes the deep rx_depth=512, but the IGX CX-7 throws CQ errors
+      # on <=1MB cells with 512, so its profile caps at 128. Also bounded by the
+      # per-region memory budget (cap) so large messages stay memory-bounded.
+      local rx_nb=$RDMA_RX_DEPTH_CAP; (( rx_nb > cap )) && rx_nb=$cap
+      local tx_nb=$RDMA_TX_DEPTH_CAP; (( tx_nb > cap )) && tx_nb=$cap
       # Split the combined base per role, then apply the per-message-size window
       # rewrite to each. Server -> $out, client -> ${out%.yaml}_client.yaml.
       local role dst
@@ -306,7 +320,9 @@ generate_yaml() {
 # the send rate to the receive rate (the sender cannot outrun the receiver it time-slices
 # with), so each pair sits near the per-core ceiling and N pairs scale to ~N x that. This
 # matches the reference four-pair methodology and keeps App TX ~= App RX with low loss.
-pair_core() { echo $(( 16 + ($1 % 4) )); }
+# One core per socket pair, from the platform profile's SOCKET_PAIR_CORES
+# (Spark 16-19; IGX 9/10/11/0). Wraps if more pairs than listed cores.
+pair_core() { echo "${SOCKET_PAIR_CORES[$(( $1 % ${#SOCKET_PAIR_CORES[@]} ))]}"; }
 
 # Write the server/client YAML pair for socket pair `idx`: split the combined base
 # per role, then substitute message_size, unique ports (SRV/CLI_PORT_BASE + idx),
@@ -316,18 +332,23 @@ generate_socket_yaml() {
   local srv_port=$(( SRV_PORT_BASE + idx ))
   local cli_port=$(( CLI_PORT_BASE + idx ))
   local core; core="$(pair_core "$idx")"
+  # NOTE: the address-port patterns make the surrounding quote optional (\"?).
+  # gen_spark_netns_config.py round-trips through PyYAML, which emits the
+  # local_addr/remote_addr scheme strings UNQUOTED (udp://10.250.0.2:5001), so a
+  # quote-required pattern silently fails to substitute and every pair collides
+  # on the base port (TCP "address already in use", UDP all on one port).
   python3 "$NETNS_GEN" "$BASE_YAML" --role server | \
   sed -E \
     -e "s|^( *message_size: ).*|\1$payload|g" \
-    -e "s|^( *local_addr: \"[a-z]+://[0-9.]+:)[0-9]+(\")|\1$srv_port\2|" \
+    -e "s|^( *local_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$srv_port\2|" \
     -e "s|^( *server_port: ).*|\1$srv_port|" \
     -e "s|^( *cpu_core: ).*|\1$core|" \
     > "$server_out"
   python3 "$NETNS_GEN" "$BASE_YAML" --role client | \
   sed -E \
     -e "s|^( *message_size: ).*|\1$payload|g" \
-    -e "s|^( *local_addr: \"[a-z]+://[0-9.]+:)[0-9]+(\")|\1$cli_port\2|" \
-    -e "s|^( *remote_addr: \"[a-z]+://[0-9.]+:)[0-9]+(\")|\1$srv_port\2|" \
+    -e "s|^( *local_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$cli_port\2|" \
+    -e "s|^( *remote_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$srv_port\2|" \
     -e "s|^( *server_port: ).*|\1$srv_port|" \
     -e "s|^( *cpu_core: ).*|\1$core|" \
     > "$client_out"

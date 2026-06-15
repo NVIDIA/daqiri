@@ -1,26 +1,25 @@
-# DGX Spark (GB10) ready-to-run config for daqiri_bench_raw_gpudirect.
-# Templated version (with <angle-bracket> placeholders) is in
-# daqiri_bench_raw_tx_rx.yaml.
+# Over-the-wire loopback config template for daqiri_bench_raw_gpudirect, driven by
+# run_spark_bench.sh. The @TOKEN@ fields are filled per platform from
+# examples/bench_platform_<P>.env (BENCH_PLATFORM=spark|igx); see "Platform
+# profiles" in AGENTS.md. The fully-placeholdered base is daqiri_bench_raw_tx_rx.yaml.
 #
-# Spark substitutions baked in here:
-#   - PCIe addresses: this file is configured for an over-the-wire loopback --
-#     tx_port (0000:01:00.0) and rx_port (0002:01:00.1) are different physical
-#     ports (p0 / p1) cross-cabled by the chassis QSFP loop, so traffic crosses
-#     the cable. To verify the port topology or set up a different loopback
-#     (e.g. on-chip), see the "Port topology" section of the "DGX Spark" tab in
+# What the profile fills, and how the two reference platforms differ:
+#   - @MEM_KIND@: host_pinned on DGX Spark (GB10 unified memory; nvidia_peermem
+#     does not load, so host_pinned is the working GPUDirect path) vs device on
+#     IGX Orin (discrete RTX 6000 Ada with real GPUDirect via dmabuf -- NIC DMAs
+#     straight to VRAM, ~96 Gb/s vs ~74 with host_pinned).
+#   - @DPDK_TX_PCI@ / @DPDK_RX_PCI@: the two cross-cabled physical ports (p0->p1
+#     QSFP loop) so traffic crosses the wire. Spark 0000:01:00.0 / 0002:01:00.1;
+#     IGX 0005:03:00.0 / 0005:03:00.1. See the "Port topology" section of
 #     docs/tutorials/system_configuration.md.
-#   - kind: host_pinned, NOT device. GB10 has unified memory; nvidia_peermem
-#     does not load and CUDA reports DMA_BUF_SUPPORTED=0. PR #41 made
-#     host_pinned the working GPUDirect path on Spark (~94 Gbps unicast).
-#   - cpu_core: DAQIRI queue threads use 17 (TX) / 18 (RX); the benchmark app
-#     workers use the remaining big cores 16 (TX) / 19 (RX) so the app and
-#     DAQIRI poll threads never share a core. All four are big-cluster X925
-#     cores 16-19 isolated by the daqiri-tuning grub drop-in.
-#   - master_core: 8 (a non-isolated big core; any 0-15 works).
-#   - bench_tx ip_src/ip_dst: match the daqiri-tx / daqiri-rx nmcli profiles
-#     (1.1.1.1/24 and 2.2.2.2/24, MTU 9000).
-#   - eth_dst_addr: your rx_port's own MAC; fill per-system, e.g.:
-#       cat /sys/class/net/enP2p1s0f1np1/address
+#   - cpu_core / master_core: per-platform isolated-core map (Spark 16-19/master 8;
+#     IGX 9-11/master 8). DAQIRI queue pollers and the bench app workers never
+#     share a core.
+#   - @NUM_BUFS_TX@ / @NUM_BUFS_RX@: buffer-pool depths (device memory on IGX lifts
+#     the RX pool well above the host hugepage budget).
+#   - bench_tx ip_src/ip_dst: 1.1.1.1/24 -> 2.2.2.2/24, MTU 9000.
+#   - eth_dst_addr: rx_port's own MAC, filled by run_spark_bench.sh from
+#     $ETH_DST_ADDR (cat /sys/class/net/<rx-iface>/address).
 #
 %YAML 1.2
 ---
@@ -28,32 +27,36 @@ daqiri:
   cfg:
     version: 1
     stream_type: "raw"
-    master_core: 8
+    master_core: @CORE_MASTER@
     debug: false
     log_level: "info"
     loopback: ""
 
+    # Per-platform placeholder tokens are filled by examples/bench_platform.sh from
+    # the selected bench_platform_<P>.env (run via run_spark_bench.sh). kind is device
+    # on IGX (discrete GPU, GPUDirect to VRAM) and host_pinned on Spark (GB10
+    # unified memory); cores/PCI also differ per platform.
     memory_regions:
     - name: "Data_TX_GPU"
-      kind: "host_pinned"
+      kind: "@MEM_KIND@"
       affinity: 0
-      num_bufs: 51200
+      num_bufs: @NUM_BUFS_TX@
       buf_size: 8064
     - name: "Data_RX_GPU"
-      kind: "host_pinned"
+      kind: "@MEM_KIND@"
       affinity: 0
-      num_bufs: 51200
+      num_bufs: @NUM_BUFS_RX@
       buf_size: 8064
 
     interfaces:
     - name: "tx_port"
-      address: 0000:01:00.0
+      address: @DPDK_TX_PCI@
       tx:
         queues:
         - name: "tx_q_0"
           id: 0
           batch_size: 10240
-          cpu_core: 17
+          cpu_core: @CORE_DPDK_TXQ@
           memory_regions:
             - "Data_TX_GPU"
           offloads:
@@ -62,13 +65,13 @@ daqiri:
       # p1 -- a DIFFERENT physical port than tx_port (p0), cross-cabled to it, so
       # traffic crosses the wire. The same physical port (e.g. 0002:01:00.0, also
       # p0) would loop on-chip instead. Verify your p0/p1 mapping (see header).
-      address: 0002:01:00.1
+      address: @DPDK_RX_PCI@
       rx:
         flow_isolation: true
         queues:
         - name: "rq_q_0"
           id: 0
-          cpu_core: 18
+          cpu_core: @CORE_DPDK_RXQ@
           batch_size: 10240
           memory_regions:
             - "Data_RX_GPU"
@@ -84,11 +87,11 @@ daqiri:
 
 bench_rx:
   interface_name: "rx_port"
-  cpu_core: 19
+  cpu_core: @CORE_DPDK_RXW@
 
 bench_tx:
   interface_name: "tx_port"
-  cpu_core: 16
+  cpu_core: @CORE_DPDK_TXW@
   batch_size: 10240
   payload_size: 8000
   header_size: 64

@@ -1,4 +1,8 @@
-# DGX Spark (GB10) multi-queue core-scaling base -- the (TX=2, RX=2) superset.
+# Multi-queue core-scaling base -- the (TX=2, RX=2) superset. PLATFORM TEMPLATE:
+# the @TOKEN@ fields (kind, cores, PCI, num_bufs) are filled by run_spark_mq_bench.sh
+# from examples/bench_platform_<P>.env (BENCH_PLATFORM=spark|igx). The detailed
+# core-cluster notes below describe the SPARK profile; IGX uses isolcpus 9-11 with
+# kind: device (discrete GPU GPUDirect). See "Platform profiles" in AGENTS.md.
 #
 # This is the single checked-in config for the multi-queue scaling sweep. The
 # matrix cells (TX,RX) = (1,1),(1,2),(2,1),(2,2) are derived from this file at
@@ -49,42 +53,45 @@ daqiri:
   cfg:
     version: 1
     stream_type: "raw"
-    master_core: 8
+    master_core: @CORE_MASTER@
     debug: false
     log_level: "info"
     loopback: ""
 
     memory_regions:
+    # IGX discrete RTX 6000 Ada -> real GPUDirect: kind device for both TX and RX
+    # (NIC DMAs straight to VRAM). VRAM is 49 GB, so large pools are fine; RX gets
+    # the deep pool the ANO gpu-only config uses to sustain line rate drop-free.
     - name: "Data_TX_GPU_0"
-      kind: "host_pinned"
+      kind: "@MEM_KIND@"
       affinity: 0
-      num_bufs: 51200
+      num_bufs: @NUM_BUFS_TX@
       buf_size: 8064
     - name: "Data_TX_GPU_1"
-      kind: "host_pinned"
+      kind: "@MEM_KIND@"
       affinity: 0
-      num_bufs: 51200
+      num_bufs: @NUM_BUFS_TX@
       buf_size: 8064
     - name: "Data_RX_GPU_0"
-      kind: "host_pinned"
+      kind: "@MEM_KIND@"
       affinity: 0
-      num_bufs: 51200
+      num_bufs: @NUM_BUFS_RX@
       buf_size: 8064
     - name: "Data_RX_GPU_1"
-      kind: "host_pinned"
+      kind: "@MEM_KIND@"
       affinity: 0
-      num_bufs: 51200
+      num_bufs: @NUM_BUFS_RX@
       buf_size: 8064
 
     interfaces:
     - name: "tx_port"
-      address: "0000:01:00.0"   # quoted: PyYAML (gen_spark_mq_config.py) else reads the BDF as base-60
+      address: "@DPDK_TX_PCI@"   # quoted: PyYAML (gen_spark_mq_config.py) else reads the BDF as base-60
       tx:
         queues:
         - name: "tx_q_0"
           id: 0
           batch_size: 10240
-          cpu_core: 16
+          cpu_core: @CORE_MQ_TXQ0@
           memory_regions:
             - "Data_TX_GPU_0"
           offloads:
@@ -92,25 +99,25 @@ daqiri:
         - name: "tx_q_1"
           id: 1
           batch_size: 10240
-          cpu_core: 19
+          cpu_core: @CORE_MQ_TXQ1@
           memory_regions:
             - "Data_TX_GPU_1"
           offloads:
             - "tx_eth_src"
     - name: "rx_port"
-      address: "0002:01:00.1"   # quoted: PyYAML (gen_spark_mq_config.py) else reads the BDF as base-60
+      address: "@DPDK_RX_PCI@"   # quoted: PyYAML (gen_spark_mq_config.py) else reads the BDF as base-60
       rx:
         flow_isolation: true
         queues:
         - name: "rx_q_0"
           id: 0
-          cpu_core: 18
+          cpu_core: @CORE_MQ_RXQ0@
           batch_size: 10240
           memory_regions:
             - "Data_RX_GPU_0"
         - name: "rx_q_1"
           id: 1
-          cpu_core: 9
+          cpu_core: @CORE_MQ_RXQ1@
           batch_size: 10240
           memory_regions:
             - "Data_RX_GPU_1"
@@ -135,15 +142,15 @@ daqiri:
 bench_rx:
 - interface_name: "rx_port"
   queue_id: 0
-  cpu_core: 17              # RX q0 worker (cluster A); its queue poller is on 18
+  cpu_core: @CORE_MQ_RXW0@         # RX q0 worker
 - interface_name: "rx_port"
   queue_id: 1
-  cpu_core: 7               # RX q1 worker (cluster B); its queue poller is on 9
+  cpu_core: @CORE_MQ_RXW1@         # RX q1 worker
 
 bench_tx:
 - interface_name: "tx_port"
   queue_id: 0
-  cpu_core: 15              # TX q0 worker (cluster A); its queue poller is on 16
+  cpu_core: @CORE_MQ_TXW0@         # TX q0 worker
   batch_size: 10240
   payload_size: 8000
   header_size: 64
@@ -154,7 +161,7 @@ bench_tx:
   udp_dst_port: 4096
 - interface_name: "tx_port"
   queue_id: 1
-  cpu_core: 6               # TX q1 worker (cluster 5-9); its poller is on 19 (cross-cluster)
+  cpu_core: @CORE_MQ_TXW1@         # TX q1 worker
   batch_size: 10240
   payload_size: 8000
   header_size: 64

@@ -52,6 +52,17 @@ Configs named `raw_rx_*` are RX-only — they initialize the RX path and wait fo
 
 When determining throughput for a benchmark use the `mlnx_perf` utility in the background to view transmit and receive rates. Using application run time with packet counts is usually not accurate enough due to startup inconsistencies.
 
+### Platform profiles (Spark / IGX)
+
+The `*_spark*` sweep configs and the `run_spark_*` / `setup_spark_wire_loopback_netns.sh` scripts are **platform-parameterized**, selected by `BENCH_PLATFORM` (default `spark`):
+
+```bash
+BENCH_PLATFORM=igx ./examples/run_spark_bench.sh dpdk sweep   # IGX Orin devkit
+./examples/run_spark_bench.sh dpdk sweep                       # DGX Spark (default)
+```
+
+`examples/bench_platform.sh` sources `examples/bench_platform_<P>.env` (one profile per platform) and fills `@VAR@` placeholders in the sweep config templates. A profile carries the per-platform values that differ between a GB10 Spark (unified memory → `kind: host_pinned`, isolcpus 16-19) and an IGX Orin devkit (discrete RTX 6000 Ada → `kind: device` for real GPUDirect, isolcpus 9-11, PCIe `0005:03:00.x`): memory kind, `num_bufs`, core map, DPDK port BDFs, wire-loopback netdevs/RDMA devices, and the RoCE flow-control depth cap. Add a platform by dropping in a new `bench_platform_<name>.env`. The `daqiri_bench_socket_*_netns` configs are not templated (kernel sockets: `kind: host`, master 8, fixed netns IPs); only their per-pair cores differ, applied by the run script. Set `REPEATS=3` for publication-quality error bars.
+
 ## Formatting
 
 `clang-format` is required for contributions (CONTRIBUTING.md):
