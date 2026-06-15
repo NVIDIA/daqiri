@@ -29,9 +29,11 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "src/engine.h"
@@ -367,6 +369,10 @@ class IbverbsEngine : public Engine {
   Status get_mac_addr(int port, char* mac) override;
   Status drop_all_traffic(int port) override;
   Status allow_all_traffic(int port) override;
+  Status add_rx_flow_async(int port, const FlowRuleConfig& flow, FlowOpId* op_id) override;
+  Status add_rx_flows_async(int port, const std::vector<FlowRuleConfig>& flows, FlowOpId* op_id) override;
+  Status delete_flow_async(FlowId flow_id, FlowOpId* op_id) override;
+  Status poll_flow_op(FlowOpResult* result) override;
   uint16_t get_num_rx_queues(int port_id) const override;
   bool validate_config() const override;
   void shutdown() override;
@@ -464,6 +470,27 @@ class IbverbsEngine : public Engine {
   // port MTU, so jumbo frames are silently dropped on RX if the MTU is too low.
   void ensure_port_mtus();
 
+  // ---- dynamic RX flow lifecycle ----
+  enum class DynamicFlowState { ACTIVE, DELETING };
+  struct DynamicFlowEntry {
+    FlowId flow_id = 0;
+    int port = 0;
+    uint16_t queue = 0;
+    struct mlx5dv_dr_matcher* matcher = nullptr;
+    struct mlx5dv_dr_rule* rule = nullptr;
+    struct mlx5dv_dr_action* tag_action = nullptr;
+    DynamicFlowState state = DynamicFlowState::ACTIVE;
+  };
+  const InterfaceConfig* find_interface_config(int port) const;
+  bool reserve_static_flow_ids();
+  FlowOpId allocate_flow_op_id_locked();
+  FlowId allocate_dynamic_flow_id_locked();
+  bool validate_dynamic_rx_flow_locked(int port, const FlowRuleConfig& flow) const;
+  Status create_dynamic_flow_locked(int port, const FlowRuleConfig& flow, FlowId flow_id);
+  void destroy_dynamic_flow_entry_locked(DynamicFlowEntry& entry);
+  void cleanup_dynamic_flows_locked();
+  void enqueue_flow_completion_locked(const FlowOpResult& result);
+
   // ---- state ----
   std::atomic<bool> force_quit_{false};
 
@@ -518,8 +545,34 @@ class IbverbsEngine : public Engine {
     // IPv4 ethertype). Torn down with the flex_nodes after rules.
     FlexNode ipv4_len_node;
     bool dropped = false;
+    int next_dynamic_priority = 1000;
   };
   std::map<int, PortSteering> port_steering_;  // port_id -> steering
+
+  bool create_dr_rule_locked(int port,
+                             PortSteering& st,
+                             uint16_t criteria,
+                             struct mlx5dv_flow_match_parameters* mask,
+                             struct mlx5dv_flow_match_parameters* value,
+                             IbvRxQueue* dest,
+                             int priority,
+                             FlowId flow_id,
+                             const char* desc,
+                             DynamicFlowEntry* dynamic_entry);
+  Status install_flow_rule_locked(int port,
+                                  PortSteering& st,
+                                  const InterfaceConfig& intf,
+                                  const FlowRuleConfig& flow,
+                                  FlowId flow_id,
+                                  int priority,
+                                  DynamicFlowEntry* dynamic_entry);
+
+  std::mutex flow_lock_;
+  FlowId next_dynamic_flow_id_ = 1;
+  FlowOpId next_flow_op_id_ = 1;
+  std::unordered_set<FlowId> static_flow_ids_;
+  std::unordered_map<FlowId, DynamicFlowEntry> dynamic_flows_;
+  std::queue<FlowOpResult> ready_flow_ops_;
 
   // Burst metadata pools. Each element is a BurstParams + inline pointer/length
   // /stride arrays; see the .cpp for the layout.

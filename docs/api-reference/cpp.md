@@ -132,10 +132,10 @@ daqiri::free_rx_burst(burst);
 
 ## Dynamic RX Flows
 
-DPDK RX flows can be added and deleted after `daqiri_init()`. This supports
-queues-only startup configs, including `rx.flow_isolation: true` with no
-initial `rx.flows`. Static YAML flows still use explicit configured IDs and are
-not deletable through this API.
+Raw Ethernet RX flows can be added and deleted after `daqiri_init()` on the
+`dpdk` and raw `ibverbs` engines. This supports queues-only startup configs,
+including `rx.flow_isolation: true` with no initial `rx.flows`. Static YAML
+flows still use explicit configured IDs and are not deletable through this API.
 
 ```cpp
 daqiri::FlowRuleConfig flow;
@@ -180,10 +180,11 @@ operation has completed yet. A dynamic flow is deletable only after its add
 completion has been polled successfully; deleting a flow that is still pending returns
 `Status::INVALID_PARAMETER`.
 
-Multiple RX flows can be added as one operation. This maps to a single DPDK
-template queue push when the IPv4/UDP template path is available, and
-`poll_flow_op()` returns one batch completion when all creates in the batch have
-resolved.
+Multiple RX flows can be added as one operation. On DPDK this maps to a single
+template queue push when the IPv4/UDP template path is available. The raw
+`ibverbs` engine installs the batch synchronously and reports one software
+completion. In both cases, `poll_flow_op()` returns one batch completion when all
+creates in the batch have resolved.
 
 ```cpp
 std::vector<daqiri::FlowRuleConfig> flows;
@@ -217,8 +218,8 @@ daqiri::FlowOpId delete_op = 0;
 auto delete_status = daqiri::delete_flow_async(flow_id, &delete_op);
 ```
 
-Dynamic flow support is RX-only in v1. Socket, RDMA, and software loopback
-managers return `NOT_SUPPORTED`.
+Dynamic flow support is RX-only in v1. Socket, RDMA/RoCE, and software loopback
+engines return `NOT_SUPPORTED`.
 
 ## Reordered RX Bursts
 
