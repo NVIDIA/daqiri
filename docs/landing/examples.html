@@ -1,146 +1,132 @@
 <!-- EXAMPLES -->
+  <style>
+    .examples-table-wrap { overflow-x: auto; }
+    .examples-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+      line-height: 1.5;
+    }
+    .examples-table thead tr {
+      border-bottom: 2px solid var(--border, rgba(255,255,255,0.12));
+    }
+    .examples-table th {
+      padding: 0.6rem 1rem;
+      text-align: left;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-mut);
+      white-space: nowrap;
+    }
+    .examples-table td {
+      padding: 0.75rem 1rem;
+      vertical-align: top;
+      border-bottom: 1px solid var(--border, rgba(255,255,255,0.07));
+    }
+    .examples-table tbody tr:last-child td { border-bottom: none; }
+    .examples-table tbody tr:hover td {
+      background: rgba(255,255,255,0.03);
+    }
+    .ex-name {
+      font-weight: 600;
+      color: var(--text-pri);
+      white-space: nowrap;
+    }
+    .ex-badge {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 0.15em 0.5em;
+      border-radius: 4px;
+      letter-spacing: 0.04em;
+    }
+    .ex-badge-cpp  { background: rgba(100,160,255,0.15); color: #7eb8f7; }
+    .ex-badge-cuda { background: rgba(118,185,0,0.15);   color: #89c400; }
+    .ex-badge-yaml { background: rgba(255,180,50,0.15);  color: #f5b84b; }
+    .examples-table .ex-desc-cell { color: var(--text-pri); }
+    .ex-code-link {
+      white-space: nowrap;
+      font-size: 0.82rem;
+      color: var(--accent, #76b900);
+      text-decoration: none;
+      border-bottom: 1px solid transparent;
+      transition: border-color 0.15s;
+    }
+    .ex-code-link:hover { border-color: currentColor; }
+  </style>
   <section id="examples">
     <div class="container">
       <div class="section-header">
         <div>
           <div class="section-label">Code Samples</div>
           <h2 class="section-title">Examples</h2>
-          <p class="section-desc">Benchmark executables and YAML configs included in the <code>examples/</code> directory.</p>
+          <p class="section-desc">Get started with DAQIRI by exploring commonly used features when building real time sensor processing applications.</p>
         </div>
         <a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="btn btn-outline" target="_blank">Browse examples/ →</a>
       </div>
-      <div class="examples-grid">
-
-        <div class="example-card">
-          <div class="ex-hdr"><span class="ex-dot dot-cpp"></span><span class="ex-title">Transmit a Packet Burst</span><span class="ex-lang">C++</span></div>
-          <div class="ex-body"><pre><span class="kw">auto</span> burst =
-  daqiri::<span class="fn">create_tx_burst_params</span>();
-daqiri::<span class="fn">set_header</span>(burst, port_id,
-    queue_id, batch_size, num_segs);
-daqiri::<span class="fn">get_tx_packet_burst</span>(burst);
-
-<span class="kw">for</span> (<span class="kw">int</span> i = <span class="nm">0</span>; i &lt; batch_size; i++) {
-  daqiri::<span class="fn">set_eth_header</span>(burst,i,dst_mac);
-  daqiri::<span class="fn">set_ipv4_header</span>(burst,i,
-      ip_len,IPPROTO_UDP,src_ip,dst_ip);
-  daqiri::<span class="fn">set_udp_header</span>(burst,i,
-      udp_len,src_port,dst_port);
-  daqiri::<span class="fn">set_udp_payload</span>(burst,i,
-      payload_ptr,payload_size);
-}
-daqiri::<span class="fn">send_tx_burst</span>(burst);</pre></div>
-          <div class="ex-footer"><span class="ex-desc">Build and send a UDP burst over Raw Ethernet</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
-        </div>
-
-        <div class="example-card">
-          <div class="ex-hdr"><span class="ex-dot dot-cpp"></span><span class="ex-title">GPU Packet Processing</span><span class="ex-lang">C++/CUDA</span></div>
-          <div class="ex-body"><pre><span class="cm">// Batched GPU: packets arrive in
-// CUDA-addressable buffers. Reordering
-// is configured with rx.reorder_configs.</span>
-<span class="kw">__global__</span> <span class="kw">void</span> noop_packet_kernel(<span class="kw">void</span>* pkt) {
-  (<span class="kw">void</span>)pkt;
-}
-
-<span class="kw">if</span> (daqiri::<span class="fn">get_num_packets</span>(burst) &gt; <span class="nm">0</span>) {
-  <span class="kw">void</span>* pkt =
-    daqiri::<span class="fn">get_packet_ptr</span>(burst, <span class="nm">0</span>);
-  noop_packet_kernel&lt;&lt;&lt;<span class="nm">1</span>, <span class="nm">1</span>, <span class="nm">0</span>, stream&gt;&gt;&gt;(pkt);
-}
-
-daqiri::<span class="fn">free_all_packets_and_burst_rx</span>(
-  burst);</pre></div>
-          <div class="ex-footer"><span class="ex-desc">Launch custom GPU work on packet buffers</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
-        </div>
-
-        <div class="example-card">
-          <div class="ex-hdr"><span class="ex-dot dot-yaml"></span><span class="ex-title">Header-Data Split Config</span><span class="ex-lang">YAML</span></div>
-          <div class="ex-body"><pre>daqiri:
-  cfg:
-    version: <span class="nm">1</span>
-    stream_type: <span class="str">"raw"</span>
-    master_core: <span class="nm">3</span>
-    memory_regions:
-    - name: <span class="str">"RX_CPU"</span>
-      kind: <span class="str">"huge"</span>
-      affinity: <span class="nm">0</span>
-      num_bufs: <span class="nm">51200</span>
-      buf_size: <span class="nm">64</span>    <span class="cm"># headers (~42 B)</span>
-    - name: <span class="str">"RX_GPU"</span>
-      kind: <span class="str">"device"</span>
-      affinity: <span class="nm">0</span>
-      num_bufs: <span class="nm">51200</span>
-      buf_size: <span class="nm">1000</span>  <span class="cm"># payload</span></pre></div>
-          <div class="ex-footer"><span class="ex-desc">Two-region HDS: CPU headers + GPU payload</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
-        </div>
-
-        <div class="example-card">
-          <div class="ex-hdr"><span class="ex-dot dot-yaml"></span><span class="ex-title">Hardware Flow Steering</span><span class="ex-lang">YAML</span></div>
-          <div class="ex-body"><pre>rx:
-  flow_isolation: <span class="kw">true</span>
-  queues:
-  - name: <span class="str">"rx_q_0"</span>
-    id: <span class="nm">0</span>
-    cpu_core: <span class="nm">9</span>
-    batch_size: <span class="nm">10240</span>
-    memory_regions:
-      - <span class="str">"Data_RX_GPU"</span>
-  - name: <span class="str">"rx_q_1"</span>
-    id: <span class="nm">1</span>
-    cpu_core: <span class="nm">10</span>
-    batch_size: <span class="nm">10240</span>
-    memory_regions:
-      - <span class="str">"Data_RX_GPU_2"</span>
-  flows:
-  - name: <span class="str">"udp_4096"</span>
-    id: <span class="nm">0</span>
-    action: {type: queue, id: <span class="nm">0</span>}
-    match: {udp_dst: <span class="nm">4096</span>}
-  - name: <span class="str">"udp_4097"</span>
-    id: <span class="nm">1</span>
-    action: {type: queue, id: <span class="nm">1</span>}
-    match: {udp_dst: <span class="nm">4097</span>}</pre></div>
-          <div class="ex-footer"><span class="ex-desc">Steer UDP 4096 → GPU 0, UDP 4097 → GPU 1 in hardware</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
-        </div>
-
-        <div class="example-card">
-          <div class="ex-hdr"><span class="ex-dot dot-bash"></span><span class="ex-title">Raw Ethernet Benchmarks</span><span class="ex-lang">bash</span></div>
-          <div class="ex-body"><pre><span class="cm"># Build with examples</span>
-cmake -S . -B build \
-  -DDAQIRI_BUILD_EXAMPLES=ON \
-  -DDAQIRI_ENGINE=<span class="str">"dpdk ibverbs"</span>
-cmake --build build -j
-
-<span class="cm"># TX/RX throughput (10 s)</span>
-./build/examples/daqiri_bench_raw_gpudirect \
-  examples/daqiri_bench_raw_tx_rx.yaml \
-  --seconds <span class="nm">10</span>
-
-<span class="cm"># Header-data split / GPUDirect</span>
-./build/examples/daqiri_bench_raw_hds \
-  examples/daqiri_bench_raw_tx_rx_hds.yaml \
-  --seconds <span class="nm">10</span></pre></div>
-          <div class="ex-footer"><span class="ex-desc">Run Raw Ethernet TX/RX and HDS benchmarks</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
-        </div>
-
-        <div class="example-card">
-          <div class="ex-hdr"><span class="ex-dot dot-bash"></span><span class="ex-title">RDMA &amp; Multi-Queue Benchmarks</span><span class="ex-lang">bash</span></div>
-          <div class="ex-body"><pre><span class="cm"># RDMA client/server (10 s)</span>
-./build/examples/daqiri_bench_rdma \
-  examples/daqiri_bench_rdma_tx_rx.yaml \
-  --seconds <span class="nm">10</span> --mode both
-
-<span class="cm"># Software loopback (no physical link)</span>
-./build/examples/daqiri_bench_raw_gpudirect \
-  examples/daqiri_bench_raw_sw_loopback.yaml \
-  --seconds <span class="nm">10</span>
-
-<span class="cm"># Multi-queue RX</span>
-./build/examples/daqiri_bench_raw_gpudirect \
-  examples/daqiri_bench_raw_rx_multi_q.yaml \
-  --seconds <span class="nm">10</span></pre></div>
-          <div class="ex-footer"><span class="ex-desc">RDMA, loopback, and multi-queue benchmarks</span><a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="ex-link" target="_blank">Open ↗</a></div>
-        </div>
-
+      <div class="examples-table-wrap">
+        <table class="examples-table">
+          <thead>
+            <tr>
+              <th>Example</th>
+              <th>Type</th>
+              <th>Description</th>
+              <th>Source</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="ex-name">Raw TX/RX GPUDirect</td>
+              <td><span class="ex-badge ex-badge-cpp">C++</span></td>
+              <td class="ex-desc-cell">The recommended starting point. Sends and receives packets with payloads landing directly in GPU memory, with no CPU in the data path. Use this to validate your hardware setup and measure baseline throughput.</td>
+              <td><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/raw_gpudirect_bench.cpp" target="_blank">raw_gpudirect_bench.cpp ↗</a></td>
+            </tr>
+            <tr>
+              <td class="ex-name">Header-Data Split TX/RX</td>
+              <td><span class="ex-badge ex-badge-cpp">C++</span></td>
+              <td class="ex-desc-cell">Splits each incoming packet into two segments: headers land in CPU memory for inspection, while the payload goes directly to the GPU. Useful when your application needs to read per-packet metadata without touching the payload on the CPU.</td>
+              <td><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/raw_hds_bench.cpp" target="_blank">raw_hds_bench.cpp ↗</a></td>
+            </tr>
+            <tr>
+              <td class="ex-name">Sequence Reorder</td>
+              <td><span class="ex-badge ex-badge-cuda">C++/CUDA</span></td>
+              <td class="ex-desc-cell">Reassembles out-of-order UDP packets into a correctly ordered GPU buffer. A CUDA kernel reads the sequence number embedded in each packet header and places the packet at the right position, so downstream compute always sees a clean, ordered stream.</td>
+              <td><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/raw_reorder_seq_bench.cpp" target="_blank">raw_reorder_seq_bench.cpp ↗</a></td>
+            </tr>
+            <tr>
+              <td class="ex-name">Sequence Reorder + Quantize</td>
+              <td><span class="ex-badge ex-badge-cuda">C++/CUDA</span></td>
+              <td class="ex-desc-cell">Extends sequence reorder with an in-kernel type conversion step (e.g., int4 → fp32), so the GPU buffer is both reordered and in the format your compute pipeline expects — all before your application code runs.</td>
+              <td><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/raw_reorder_quantize_bench.cpp" target="_blank">raw_reorder_quantize_bench.cpp ↗</a></td>
+            </tr>
+            <tr>
+              <td class="ex-name">PCAP Writer</td>
+              <td><span class="ex-badge ex-badge-cpp">C++</span></td>
+              <td class="ex-desc-cell">Captures live network traffic to a standard <code>.pcap</code> file you can open in Wireshark or tcpdump. Packets are received via GPUDirect and staged through pinned host memory to disk; capture continues until you press Ctrl+C.</td>
+              <td><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/pcap_writer_example.cpp" target="_blank">pcap_writer_example.cpp ↗</a></td>
+            </tr>
+            <tr>
+              <td class="ex-name">RDMA Benchmark</td>
+              <td><span class="ex-badge ex-badge-cpp">C++</span></td>
+              <td class="ex-desc-cell">Measures RoCE/RDMA throughput in client/server mode. Useful for comparing DAQIRI against standard tools like <code>ib_send_bw</code>, or when one endpoint is a third-party RDMA device such as an FPGA or instrument.</td>
+              <td><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/rdma_bench.cpp" target="_blank">rdma_bench.cpp ↗</a></td>
+            </tr>
+            <tr>
+              <td class="ex-name">Socket Benchmark</td>
+              <td><span class="ex-badge ex-badge-cpp">C++</span></td>
+              <td class="ex-desc-cell">Measures TCP and UDP throughput over standard Linux sockets — no ConnectX NIC or special privileges required. A good comparison baseline before moving to kernel-bypass, or for connecting to a peer that only speaks standard sockets.</td>
+              <td><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/socket_bench.cpp" target="_blank">socket_bench.cpp ↗</a></td>
+            </tr>
+            <tr>
+              <td class="ex-name">GPUDirect Storage Write</td>
+              <td><span class="ex-badge ex-badge-cuda">C++/CUDA</span></td>
+              <td class="ex-desc-cell">Captures a burst of packets and writes them from GPU memory directly to NVMe storage via cuFile, in either raw binary or PCAP format. Supports both synchronous and asynchronous writes, demonstrating the full GPU-to-storage path without any CPU copy.</td>
+              <td><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/gds_write_example.cpp" target="_blank">gds_write_example.cpp ↗</a></td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </div>
   </section>
