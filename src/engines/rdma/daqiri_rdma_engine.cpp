@@ -574,10 +574,24 @@ void RdmaEngine::rdma_thread(bool is_server, rdma_thread_params* tparams) {
                          cpu_core,
                          (int64_t)wc.wr_id);
       if (wc.status != IBV_WC_SUCCESS) {
-        DAQIRI_LOG_ERROR("CQ error {} for WRID {} and opcode {}",
-                           (int)wc.status,
-                           (int64_t)wc.wr_id,
-                           (int)wc.opcode);
+        // WR_FLUSH_ERR is the expected status for in-flight WRs when the QP
+        // moves to ERR state (peer disconnect, local shutdown). Demote to
+        // DEBUG so a clean teardown doesn't produce log spam. RETRY_EXC during
+        // shutdown is the same story: the peer's QP went away before our last
+        // outstanding WR could be acked.
+        const bool shutting_down = rdma_force_quit.load() || tparams->ready_to_exit.load();
+        const bool benign_teardown =
+            wc.status == IBV_WC_WR_FLUSH_ERR ||
+            (shutting_down && wc.status == IBV_WC_RETRY_EXC_ERR);
+        if (benign_teardown) {
+          DAQIRI_LOG_DEBUG("RX CQ teardown status {} ({}) for WRID {} opcode {}",
+                             ibv_wc_status_str(wc.status), (int)wc.status,
+                             (int64_t)wc.wr_id, (int)wc.opcode);
+        } else {
+          DAQIRI_LOG_ERROR("CQ error {} ({}) for WRID {} and opcode {}",
+                             ibv_wc_status_str(wc.status), (int)wc.status,
+                             (int64_t)wc.wr_id, (int)wc.opcode);
+        }
         metrics::add_dropped(counters, "rx_completion_error", 1);
         continue;
       }
@@ -682,12 +696,24 @@ void RdmaEngine::rdma_thread(bool is_server, rdma_thread_params* tparams) {
                          cpu_core,
                          (int64_t)wc.wr_id);
       if (wc.status != IBV_WC_SUCCESS) {
-        DAQIRI_LOG_ERROR("CQ error on {}: {} ({}) for WRID {} and opcode {}",
-                           is_server ? "server" : "client",
-                           ibv_wc_status_str(wc.status),
-                           (int)wc.status,
-                           (int64_t)wc.wr_id,
-                           (int)wc.opcode);
+        const bool shutting_down = rdma_force_quit.load() || tparams->ready_to_exit.load();
+        const bool benign_teardown =
+            wc.status == IBV_WC_WR_FLUSH_ERR ||
+            (shutting_down && wc.status == IBV_WC_RETRY_EXC_ERR);
+        if (benign_teardown) {
+          DAQIRI_LOG_DEBUG(
+            "TX CQ teardown status on {}: {} ({}) for WRID {} opcode {}",
+            is_server ? "server" : "client",
+            ibv_wc_status_str(wc.status), (int)wc.status,
+            (int64_t)wc.wr_id, (int)wc.opcode);
+        } else {
+          DAQIRI_LOG_ERROR("CQ error on {}: {} ({}) for WRID {} and opcode {}",
+                             is_server ? "server" : "client",
+                             ibv_wc_status_str(wc.status),
+                             (int)wc.status,
+                             (int64_t)wc.wr_id,
+                             (int)wc.opcode);
+        }
         metrics::add_dropped(counters, "tx_completion_error", 1);
         if (wc.opcode == IBV_WC_SEND &&
             !complete_send_wrs(wc.wr_id, Status::GENERIC_FAILURE)) {
