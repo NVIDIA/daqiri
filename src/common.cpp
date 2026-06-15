@@ -317,6 +317,9 @@ void set_header(BurstParams* burst, uint16_t port, uint16_t q, int64_t num, int 
   burst->hdr.hdr.port_id = port;
   burst->hdr.hdr.q_id = q;
   burst->hdr.hdr.num_segs = segs;
+  // Reset the running L2 byte total; the set_*_packet_lengths helpers accumulate
+  // into it so the TX pacing path can read it without walking the burst.
+  burst->hdr.hdr.nbytes = 0;
 }
 
 void free_tx_burst(BurstParams* burst) {
@@ -1441,6 +1444,10 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_tx_queue_common_config(
       for (const auto& off : offload) {
         q.common_.offloads_.push_back(off.as<std::string>());
       }
+    }
+    // Optional per-queue packet-pacing rate in Mbps (0/absent = pacing off).
+    if (q_item["pacing_mbps"].IsDefined()) {
+      q.pacing_mbps_ = q_item["pacing_mbps"].as<uint64_t>();
     }
   } catch (const std::exception& e) {
     DAQIRI_LOG_ERROR("Error parsing TxQueueConfig: {}", e.what());

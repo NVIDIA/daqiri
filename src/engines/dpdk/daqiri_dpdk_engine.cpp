@@ -393,6 +393,18 @@ struct TxWorkerParams {
   struct rte_mempool* meta_pool;
   struct rte_mempool* burst_pool;
   struct rte_ether_addr mac_addr;
+  // Packet pacing (per-queue): when pacing_mbps > 0 and the SEND_ON_TIMESTAMP
+  // offload is active (tx_ts_dynfield_offset >= 0), the worker tags the first
+  // mbuf of each burst with a scheduled TX time so the NIC meters the queue at
+  // (at most) the configured average rate. pace_next_ns is the NIC-clock time
+  // the next burst may start; pace_rem carries the sub-ns division remainder so
+  // the long-run average is exact. engine is needed to read the NIC clock.
+  uint64_t pacing_mbps = 0;
+  int tx_ts_dynfield_offset = -1;
+  uint64_t tx_ts_dynflag_mask = 0;
+  DpdkEngine* engine = nullptr;
+  uint64_t pace_next_ns = 0;
+  uint64_t pace_rem = 0;
 };
 
 struct RxWorkerParams {
@@ -1914,6 +1926,33 @@ bool DpdkEngine::setup_tx_timestamp_dynfield() {
   return true;
 }
 
+uint64_t DpdkEngine::now_tx_ns(uint16_t port) {
+  // The mlx5 send scheduler (tx_pp / SEND_ON_TIMESTAMP) releases packets when its
+  // own PTP hardware clock reaches the per-packet timestamp. To pace accurately we
+  // MUST seed pace_next_ns from that same clock: any offset between the seed clock
+  // and the NIC clock becomes a fixed per-burst scheduling latency (e.g. seeding
+  // from a host clock that runs ~0.2 s ahead parks every burst ~0.2 s in the NIC's
+  // future, which caps throughput). rte_eth_read_clock() returns exactly that
+  // clock, so prefer it.
+  uint64_t clk = 0;
+  if (rte_eth_read_clock(port, &clk) == 0) {
+    const uint64_t tps =
+        (port < rx_timestamp_conversions_.size() && rx_timestamp_conversions_[port].valid)
+            ? rx_timestamp_conversions_[port].ticks_per_second
+            : 0;
+    // With REAL_TIME_CLOCK_ENABLE the device clock already counts nanoseconds, so
+    // an uncalibrated tps (no RX-timestamp path active) means clk is ns as-is.
+    if (tps == 0 || tps == 1000000000ULL) { return clk; }
+    return static_cast<uint64_t>(static_cast<unsigned __int128>(clk) * 1000000000ULL / tps);
+  }
+  // Fallback: rte_eth_read_clock unsupported. The NIC PTP clock free-runs from ~0
+  // at driver load (unless a PTP daemon disciplines it), tracking CLOCK_MONOTONIC,
+  // NOT CLOCK_REALTIME (UTC). A small constant host/NIC offset only shifts the
+  // schedule, not the inter-burst spacing, so CLOCK_MONOTONIC keeps it closest.
+  struct timespec ts {};
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + static_cast<uint64_t>(ts.tv_nsec);
+}
 
 // HWS doesn't allow zero queues on an interface, so we make some dummy interfaces here for
 // users that are only doing TX
@@ -2115,12 +2154,35 @@ void DpdkEngine::initialize() {
     strncpy(_argv[arg++], "--iova-mode=va", max_arg_size - 1);
   }
 
+  // Accurate send scheduling (accurate_send) and packet pacing (pacing_mbps)
+  // ride the mlx5 send-on-timestamp scheduler, which only runs when the tx_pp
+  // devarg (pacing granularity in ns) is set. Add it once when any TX path needs
+  // scheduling so the offload enabled later actually engages.
+  bool needs_send_sched = false;
+  for (const auto& intf : cfg_.ifs_) {
+    if (intf.tx_.accurate_send_) {
+      needs_send_sched = true;
+      break;
+    }
+    for (const auto& q : intf.tx_.queues_) {
+      if (q.pacing_mbps_ > 0) {
+        needs_send_sched = true;
+        break;
+      }
+    }
+    if (needs_send_sched) {
+      break;
+    }
+  }
+
   if (loopback_ != LoopbackType::LOOPBACK_TYPE_SW) {
     for (const auto& name : ifs) {
       strncpy(_argv[arg++], "-a", max_arg_size - 1);
-      strncpy(_argv[arg++],
-              (name + std::string(",txq_inline_max=0,dv_flow_en=2")).c_str(),
-              max_arg_size - 1);
+      std::string devargs = name + std::string(",txq_inline_max=0,dv_flow_en=2");
+      if (needs_send_sched) {
+        devargs += ",tx_pp=500";  // 500 ns scheduling granularity
+      }
+      strncpy(_argv[arg++], devargs.c_str(), max_arg_size - 1);
     }
   }
 
@@ -2402,20 +2464,35 @@ void DpdkEngine::initialize() {
       }
     }
 
-    if (loopback_ != LoopbackType::LOOPBACK_TYPE_SW && tx.accurate_send_) {
-      if (!setup_tx_timestamp_dynfield()) { return; }
-
-      if (ret != 0) {
-        DAQIRI_LOG_CRITICAL("Failed to get device info for port {}", intf.port_id_);
-        return;
-      } else {
-        if ((dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP) == 0) {
+    // The SEND_ON_TIMESTAMP offload backs both accurate_send (per-packet
+    // set_packet_tx_time) and per-queue packet pacing (pacing_mbps), so enable
+    // it when either is requested.
+    bool tx_pacing_requested = false;
+    for (const auto& pq : tx.queues_) {
+      if (pq.pacing_mbps_ > 0) {
+        tx_pacing_requested = true;
+        break;
+      }
+    }
+    if (loopback_ != LoopbackType::LOOPBACK_TYPE_SW &&
+        (tx.accurate_send_ || tx_pacing_requested)) {
+      // dev_info was already fetched and validated at the top of this loop
+      // iteration (the non-SW-loopback branch returns on failure), so it is
+      // safe to inspect tx_offload_capa here directly.
+      if ((dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP) == 0) {
+        // accurate_send is a hard requirement; pacing degrades to line rate.
+        if (tx.accurate_send_) {
           DAQIRI_LOG_CRITICAL(
               "Accurate send scheduling enabled in config, but not supported by NIC!");
           return;
-        } else {
-          local_port_conf[intf.port_id_].txmode.offloads |= RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP;
         }
+        DAQIRI_LOG_WARN(
+            "TX packet pacing requested on port {} but NIC lacks SEND_ON_TIMESTAMP offload; "
+            "pacing disabled (line rate)",
+            intf.port_id_);
+      } else {
+        if (!setup_tx_timestamp_dynfield()) { return; }
+        local_port_conf[intf.port_id_].txmode.offloads |= RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP;
       }
     }
 
@@ -3755,6 +3832,23 @@ void DpdkEngine::run() {
         params->meta_pool = tx_metadata;
         params->batch_size = q.common_.batch_size_;
         rte_eth_macaddr_get(intf.port_id_, &params->mac_addr);
+        // Packet pacing: active only when the SEND_ON_TIMESTAMP offload was
+        // enabled above (timestamp_dynfield_offset_ >= 0). A zero offset/-1 makes
+        // the worker skip pacing and send at line rate.
+        params->engine = this;
+        params->pacing_mbps = q.pacing_mbps_;
+        params->tx_ts_dynfield_offset = timestamp_dynfield_offset_;
+        params->tx_ts_dynflag_mask = tx_timestamp_dynflag_mask_;
+        if (q.pacing_mbps_ > 0) {
+          if (timestamp_dynfield_offset_ >= 0) {
+            DAQIRI_LOG_INFO("TX port {} queue {} packet pacing enabled: {} Mbps", intf.port_id_,
+                            q.common_.id_, q.pacing_mbps_);
+          } else {
+            DAQIRI_LOG_WARN(
+                "TX port {} queue {} pacing_mbps={} ignored: SEND_ON_TIMESTAMP offload not active",
+                intf.port_id_, q.common_.id_, q.pacing_mbps_);
+          }
+        }
         rte_eal_remote_launch(
             tx_worker, (void*)params, strtol(q.common_.cpu_core_.c_str(), NULL, 10));
       }
@@ -4242,6 +4336,41 @@ int DpdkEngine::tx_core_worker(void* arg) {
       }
     }
 
+    // Packet pacing: meter this queue at (at most) pacing_mbps on average by
+    // gating each burst behind the NIC SEND_ON_TIMESTAMP scheduler. Tag only the
+    // first packet of the burst with a scheduled release time -- the NIC holds it
+    // (one WAIT) until pace_next_ns and sends the rest of the burst right after,
+    // so no per-packet schedule is needed. pace_next_ns then advances by the time
+    // the burst's L2 frame bytes take at the configured rate.
+    if (tparams->pacing_mbps > 0 && tparams->tx_ts_dynfield_offset >= 0 &&
+        msg->hdr.hdr.num_pkts > 0) {
+      const uint64_t now = tparams->engine->now_tx_ns(static_cast<uint16_t>(tparams->port));
+      // Seed on the first burst, and never let an idle gap accrue send credit: if
+      // the virtual clock has fallen behind real time, restart it at now so a
+      // backlog cannot burst above the configured rate.
+      if (tparams->pace_next_ns == 0 || tparams->pace_next_ns < now) {
+        tparams->pace_next_ns = now;
+        tparams->pace_rem = 0;
+      }
+      auto* m0 = reinterpret_cast<struct rte_mbuf*>(msg->pkts[0][0]);
+      m0->ol_flags |= tparams->tx_ts_dynflag_mask;
+      *RTE_MBUF_DYNFIELD(m0, tparams->tx_ts_dynfield_offset, uint64_t*) = tparams->pace_next_ns;
+      // ns = bytes * 8 bits / (Mbps * 1e6 bits/s) * 1e9 ns/s = 8000 * bytes / Mbps.
+      // Carry the division remainder so the long-run average is exactly pacing_mbps.
+      // The set_*_packet_lengths helpers maintain hdr.nbytes as the burst's L2 byte
+      // total; use it directly to avoid walking the burst. Fall back to a walk for
+      // bursts populated without those helpers (nbytes left at 0).
+      uint64_t bytes = msg->hdr.hdr.nbytes;
+      if (bytes == 0) {
+        for (size_t p = 0; p < msg->hdr.hdr.num_pkts; p++) {
+          bytes += reinterpret_cast<struct rte_mbuf*>(msg->pkts[0][p])->pkt_len;
+        }
+      }
+      const uint64_t numer = 8000ULL * bytes + tparams->pace_rem;
+      tparams->pace_next_ns += numer / tparams->pacing_mbps;
+      tparams->pace_rem = numer % tparams->pacing_mbps;
+    }
+
     auto pkts_to_transmit = static_cast<int64_t>(msg->hdr.hdr.num_pkts);
 
     size_t pkts_tx = 0;
@@ -4540,6 +4669,8 @@ Status DpdkEngine::set_packet_lengths(BurstParams* burst, int idx,
   }
 
   reinterpret_cast<rte_mbuf**>(burst->pkts[0])[idx]->pkt_len = ttl_len;
+  // Accumulate the burst's L2 byte total so TX pacing need not walk the burst.
+  burst->hdr.hdr.nbytes += ttl_len;
 
   return Status::SUCCESS;
 }
@@ -4563,6 +4694,8 @@ Status DpdkEngine::set_all_packet_lengths(BurstParams* burst,
 
   auto** first_seg = reinterpret_cast<rte_mbuf**>(burst->pkts[0]);
   for (int idx = 0; idx < num_pkts; ++idx) { first_seg[idx]->pkt_len = ttl_len; }
+  // Record the burst's L2 byte total so TX pacing need not walk the burst.
+  burst->hdr.hdr.nbytes = static_cast<uint64_t>(ttl_len) * static_cast<uint64_t>(num_pkts);
 
   return Status::SUCCESS;
 }
@@ -4694,6 +4827,8 @@ Status DpdkEngine::get_tx_metadata_buffer(BurstParams** burst) {
       "latency)", cfg_.tx_meta_buffers_, (*burst)->hdr.hdr.port_id, (*burst)->hdr.hdr.q_id);
     return Status::NO_FREE_BURST_BUFFERS;
   }
+  // Clear the recycled running L2 byte total (see create_tx_burst_params).
+  (*burst)->hdr.hdr.nbytes = 0;
 
   return Status::SUCCESS;
 }
@@ -4788,6 +4923,12 @@ BurstParams* DpdkEngine::create_tx_burst_params() {
     DAQIRI_LOG_CRITICAL("Failed to get TX meta descriptor");
     return nullptr;
   }
+  // TX metadata buffers are recycled from a mempool, so clear the running L2
+  // byte total here (the start of a burst's lifecycle). set_header also resets
+  // it, but doing it on acquire keeps the pacing path's "nbytes == 0 means not
+  // yet accumulated" sentinel correct even if a caller fills lengths without
+  // calling set_header first.
+  burst->hdr.hdr.nbytes = 0;
   return burst;
 }
 };  // namespace daqiri

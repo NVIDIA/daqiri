@@ -115,7 +115,7 @@ struct BurstHeaderParams {
   uint16_t port_id;
   uint16_t q_id;
   int num_segs;
-  uint32_t nbytes;
+  uint64_t nbytes;
   uintptr_t first_pkt_addr;
   uint32_t max_pkt;
   uint32_t max_pkt_size;
@@ -625,6 +625,10 @@ struct RxQueueConfig {
 
 struct TxQueueConfig {
   CommonQueueConfig common_;
+  // Packet pacing: average TX rate cap in megabits/sec (L2 frame bytes). 0
+  // disables pacing (line-rate). Honored only by engines/devices with accurate
+  // send scheduling (wait-on-time + real-time clock).
+  uint64_t pacing_mbps_ = 0;
 };
 
 // struct FlowConfig {
