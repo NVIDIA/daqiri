@@ -236,6 +236,8 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg,
       packets += static_cast<uint64_t>(num_pkts);
       ++bursts;
       pacer.wait_for_bytes(static_cast<size_t>(num_pkts) * packet_size, stop);
+    } else {
+      daqiri::free_all_packets_and_burst_tx(msg);
     }
   }
 

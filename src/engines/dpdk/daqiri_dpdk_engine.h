@@ -281,6 +281,7 @@ class DpdkEngine : public Engine {
                                                 const FlowRuleConfig& flow,
                                                 FlowId flow_id,
                                                 FlowOpId completion_id);
+  void discard_unpushed_template_creates_locked(const std::vector<FlowId>& flow_ids);
   Status add_rx_flow_template_locked(int port,
                                      const FlowRuleConfig& flow,
                                      FlowId flow_id,

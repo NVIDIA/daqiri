@@ -3478,6 +3478,18 @@ Status DpdkEngine::enqueue_rx_flow_template_create_locked(int port,
   return Status::SUCCESS;
 }
 
+void DpdkEngine::discard_unpushed_template_creates_locked(const std::vector<FlowId>& flow_ids) {
+  for (const FlowId flow_id : flow_ids) {
+    auto flow_it = dynamic_flows_.find(flow_id);
+    if (flow_it != dynamic_flows_.end() &&
+        flow_it->second.backend == DynamicFlowBackend::TEMPLATE &&
+        flow_it->second.state == DynamicFlowState::ADDING) {
+      dynamic_flows_.erase(flow_it);
+    }
+    release_dynamic_flow_id(flow_id);
+  }
+}
+
 Status DpdkEngine::add_rx_flow_template_locked(int port,
                                                const FlowRuleConfig& flow,
                                                FlowId flow_id,
@@ -3512,6 +3524,7 @@ Status DpdkEngine::add_rx_flow_template_locked(int port,
 
     pending_flow_completions_.erase(op_id);
     pending_flow_batches_.erase(op_id);
+    discard_unpushed_template_creates_locked({flow_id});
     FlowOpResult result;
     result.op_id_ = op_id;
     result.type_ = FlowOpType::ADD_RX;
@@ -3548,6 +3561,8 @@ Status DpdkEngine::add_rx_flows_template_locked(int port,
   pending.result.flow_ids_ = flow_ids;
 
   size_t enqueued = 0;
+  std::vector<FlowId> enqueued_flow_ids;
+  enqueued_flow_ids.reserve(flows.size());
   for (size_t i = 0; i < flows.size(); ++i) {
     const FlowOpId completion_id = allocate_flow_op_id();
     const Status status =
@@ -3564,6 +3579,7 @@ Status DpdkEngine::add_rx_flows_template_locked(int port,
     }
 
     pending_flow_completions_[completion_id] = {op_id, flow_ids[i], i};
+    enqueued_flow_ids.push_back(flow_ids[i]);
     ++enqueued;
   }
 
@@ -3599,6 +3615,7 @@ Status DpdkEngine::add_rx_flows_template_locked(int port,
       }
     }
     pending_flow_batches_.erase(op_id);
+    discard_unpushed_template_creates_locked(enqueued_flow_ids);
 
     pending.result.status_ = Status::INTERNAL_ERROR;
     std::fill(pending.result.flow_ids_.begin(), pending.result.flow_ids_.end(), 0);
