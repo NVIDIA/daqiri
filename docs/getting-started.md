@@ -207,8 +207,8 @@ rules into the NIC. Initialization fails if any RX flow rule, send-to-kernel fal
 `flow_isolation: true`), or `tx_eth_src` offload rule cannot be installed.
 `rx.flows` may also be omitted for queues-only startup; applications can then add and delete
 RX flow rules at runtime with `add_rx_flow_async()` / `delete_flow_async()`. The DPDK
-template fast path is sized by `rx.dynamic_flow_capacity` (default `1024`, set `0` to
-disable templates and use the legacy fallback path).
+template fast path is enabled and sized by `rx.dynamic_flow_capacity` (default `0`, set a
+positive value such as `1024` to create template tables).
 
 CUDA architectures default to `80;90` (A100, H100), with `121` (GB10) added
 when configuring with CUDA Toolkit 13.0 or newer. Override
