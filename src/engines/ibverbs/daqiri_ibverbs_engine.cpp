@@ -838,6 +838,18 @@ FlowOpId IbverbsEngine::allocate_flow_op_id_locked() {
   return next_flow_op_id_++;
 }
 
+bool IbverbsEngine::has_dynamic_flow_id_capacity_locked(size_t count) const {
+  FlowId candidate = next_dynamic_flow_id_;
+  while (count > 0 && candidate != 0 && candidate <= kMaxIbverbsFlowTag) {
+    const FlowId flow_id = candidate++;
+    if (flow_id == 0) { continue; }
+    if (static_flow_ids_.find(flow_id) != static_flow_ids_.end()) { continue; }
+    if (dynamic_flows_.find(flow_id) != dynamic_flows_.end()) { continue; }
+    --count;
+  }
+  return count == 0;
+}
+
 FlowId IbverbsEngine::allocate_dynamic_flow_id_locked() {
   while (next_dynamic_flow_id_ != 0 && next_dynamic_flow_id_ <= kMaxIbverbsFlowTag) {
     const FlowId candidate = next_dynamic_flow_id_++;
@@ -2910,6 +2922,7 @@ Status IbverbsEngine::add_rx_flows_async(int port,
   for (const auto& flow : flows) {
     if (!validate_dynamic_rx_flow_locked(port, flow)) { return Status::INVALID_PARAMETER; }
   }
+  if (!has_dynamic_flow_id_capacity_locked(flows.size())) { return Status::NO_SPACE_AVAILABLE; }
 
   std::vector<FlowId> flow_ids;
   flow_ids.reserve(flows.size());

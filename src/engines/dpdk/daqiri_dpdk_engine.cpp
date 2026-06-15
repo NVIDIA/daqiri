@@ -3479,14 +3479,86 @@ Status DpdkEngine::enqueue_rx_flow_template_create_locked(int port,
 }
 
 void DpdkEngine::discard_unpushed_template_creates_locked(const std::vector<FlowId>& flow_ids) {
+  struct rte_flow_error error;
+  struct rte_flow_op_attr op_attr;
+  std::array<uint32_t, RTE_MAX_ETHPORTS> pending_destroys{};
+
   for (const FlowId flow_id : flow_ids) {
     auto flow_it = dynamic_flows_.find(flow_id);
     if (flow_it != dynamic_flows_.end() &&
         flow_it->second.backend == DynamicFlowBackend::TEMPLATE &&
         flow_it->second.state == DynamicFlowState::ADDING) {
+      DynamicFlowEntry& entry = flow_it->second;
+      if (entry.flow != nullptr && entry.port < flow_template_states_.size() &&
+          flow_template_states_[entry.port].configured) {
+        memset(&error, 0, sizeof(error));
+        memset(&op_attr, 0, sizeof(op_attr));
+        if (rte_flow_async_destroy(entry.port,
+                                   entry.flow_queue_id,
+                                   &op_attr,
+                                   entry.flow,
+                                   nullptr,
+                                   &error) < 0) {
+          DAQIRI_LOG_WARN("Failed to enqueue cleanup destroy for unpushed dynamic RX flow {} "
+                          "on port {}: {}",
+                          flow_id,
+                          entry.port,
+                          error.message ? error.message : rte_strerror(rte_errno));
+        } else {
+          ++pending_destroys[entry.port];
+        }
+      }
       dynamic_flows_.erase(flow_it);
     }
     release_dynamic_flow_id(flow_id);
+  }
+
+  for (uint16_t port = 0; port < pending_destroys.size(); ++port) {
+    if (pending_destroys[port] == 0) { continue; }
+    auto& state = flow_template_states_[port];
+    memset(&error, 0, sizeof(error));
+    if (rte_flow_push(port, state.flow_queue_id, &error) < 0) {
+      DAQIRI_LOG_WARN("Failed to push cleanup destroys for unpushed dynamic RX flows "
+                      "on port {}: {}",
+                      port,
+                      error.message ? error.message : rte_strerror(rte_errno));
+      continue;
+    }
+
+    uint32_t remaining = pending_destroys[port];
+    unsigned idle_polls = 0;
+    struct rte_flow_op_result results[16];
+    while (remaining > 0 && idle_polls < 100) {
+      memset(&error, 0, sizeof(error));
+      memset(results, 0, sizeof(results));
+      const int ret = rte_flow_pull(port, state.flow_queue_id, results, 16, &error);
+      if (ret < 0) {
+        DAQIRI_LOG_WARN("Failed to pull cleanup destroy completions on port {}: {}",
+                        port,
+                        error.message ? error.message : rte_strerror(rte_errno));
+        break;
+      }
+      if (ret == 0) {
+        ++idle_polls;
+        rte_delay_us_sleep(1000);
+        continue;
+      }
+
+      idle_polls = 0;
+      for (int i = 0; i < ret && remaining > 0; ++i) {
+        if (results[i].user_data != nullptr) { continue; }
+        if (results[i].status != RTE_FLOW_OP_SUCCESS) {
+          DAQIRI_LOG_WARN("Cleanup destroy failed on port {}", port);
+        }
+        --remaining;
+      }
+    }
+
+    if (remaining > 0) {
+      DAQIRI_LOG_WARN("{} cleanup destroy completions were not received on port {}",
+                      remaining,
+                      port);
+    }
   }
 }
 

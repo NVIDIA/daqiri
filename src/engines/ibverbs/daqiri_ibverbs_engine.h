@@ -484,6 +484,7 @@ class IbverbsEngine : public Engine {
   const InterfaceConfig* find_interface_config(int port) const;
   bool reserve_static_flow_ids();
   FlowOpId allocate_flow_op_id_locked();
+  bool has_dynamic_flow_id_capacity_locked(size_t count) const;
   FlowId allocate_dynamic_flow_id_locked();
   bool validate_dynamic_rx_flow_locked(int port, const FlowRuleConfig& flow) const;
   Status create_dynamic_flow_locked(int port, const FlowRuleConfig& flow, FlowId flow_id);
