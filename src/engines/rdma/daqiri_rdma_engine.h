@@ -45,8 +45,13 @@ struct rdma_qp_params {
 };
 
 struct rdma_thread_params {
+  // active == app-visible: true once rdma_get_server_conn_id() hands the
+  // conn_id to the caller. A slot is "occupied" (not reusable) as soon as
+  // client_id is set at CONNECT_REQUEST, which is earlier than active; slot
+  // selection must key off client_id, not active, or an accepted-but-not-yet-
+  // claimed connection can be overwritten by a later CONNECT_REQUEST.
   bool active = false;
-  struct rdma_cm_id* client_id;
+  struct rdma_cm_id* client_id = nullptr;
   struct ibv_pd* pd;
   rdma_qp_params qp_params;
   int if_idx;

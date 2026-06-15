@@ -1386,9 +1386,13 @@ void RdmaEngine::run() {
           }
           if (duplicate_client) { break; }
 
+          // A slot is free only when no client occupies it. Testing !active
+          // would reuse a slot that was already accepted but not yet claimed by
+          // the app (client_id set, active still false), clobbering the first
+          // connection's params/rings while its worker is still running.
           int queue_idx = -1;
           for (int i = 0; i < server_iter->second.size(); i++) {
-            if (!server_iter->second[i].active) {
+            if (server_iter->second[i].client_id == nullptr) {
               queue_idx = i;
               break;
             }
