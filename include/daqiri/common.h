@@ -1425,6 +1425,15 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
               tx_cfg.queues_.emplace_back(std::move(q));
             }
 
+            for (const auto &flow_item : tx["flows"]) {
+              daqiri::FlowConfig flow;
+              if (!parse_flow_config(flow_item, flow)) {
+                DAQIRI_LOG_ERROR("Failed to parse TX FlowConfig");
+                return false;
+              }
+              tx_cfg.flows_.emplace_back(std::move(flow));
+            }
+
             ifcfg.tx_ = tx_cfg;
           } catch (const std::exception &e) {
           } // No TX queues defined for this interface.

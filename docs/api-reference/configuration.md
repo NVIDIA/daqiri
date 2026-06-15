@@ -194,19 +194,28 @@ engine.
 
 `rx.flows:` — Static startup flow rules that steer packets to specific queues based on
 match criteria. This sequence may be omitted; a queues-only RX config can add DPDK RX
-flows later with the dynamic flow API.
+flows later with the dynamic flow API. For Raw Ethernet on the DPDK and ibverbs engines,
+RX flows can also perform hardware VLAN pop or tunnel decapsulation before queue delivery.
 
 - **`name`**: Flow name.
   - type: `string`
 - **`id`**: Flow ID. Retrievable at runtime via `get_packet_flow_id()`.
   - type: `integer`
-- **`action`**: What to do with matched packets.
-  - **`type`**: Action type. Only `queue` is currently supported.
-    - type: `string`
-  - **`id`**: Queue ID to steer matched packets to. Must match the `id` of an entry under
-    `rx.queues` on the same interface. `daqiri_init()` rejects unknown queue IDs during
-    config validation.
-    - type: `integer`
+- **`action`**: Legacy single action map. Existing configs may keep using
+  `action: {type: queue, id: ...}`.
+- **`actions`**: Ordered action list. Use this for tunnel/VLAN transforms.
+  RX transform flows must end with `type: queue`.
+  - **`type: queue`**: Steer matched packets to an RX queue.
+    - **`id`**: Queue ID under `rx.queues` on the same interface.
+  - **`type: vlan_pop`**: Pop one VLAN tag in hardware.
+  - **`type: tunnel_decap`**: Decapsulate a hardware tunnel before queue delivery.
+    - **`tunnel.type`**: `vxlan`, `gre`, or `nvgre`.
+    - **`outer_eth_src` / `outer_eth_dst`**: Outer Ethernet addresses.
+    - **`outer_ipv4_src` / `outer_ipv4_dst`**: Outer IPv4 addresses. IPv6 outer
+      headers are not supported in v1.
+    - **VXLAN fields**: `vni`, optional `outer_udp_src`, `outer_udp_dst` default `4789`.
+    - **GRE fields**: optional `gre_protocol` default `0x0800`.
+    - **NVGRE fields**: `tni`, optional `flow_id`.
 - **`match`**: Criteria for matching packets.
   - **`udp_src`**: UDP source port or port range (e.g., `1000-1010`).
     - type: `integer` or `string`
@@ -230,6 +239,7 @@ created when `flow_isolation: true`, initialization fails with a critical log an
 A single RX interface must use either standard UDP/IP flows or flex-item flows, not both.
 Both classes install conflicting DPDK group-0 jump rules, so only one is reachable when mixed.
 `daqiri_init` rejects such configs with a clear error.
+Flex-item flows cannot be combined with VLAN/tunnel transform actions in v1.
 
 ### Flow Isolation
 
@@ -374,6 +384,34 @@ daqiri::set_reorder_cuda_stream("rx_port", "rx_reorder_0", stream);
   and `daqiri_init()` fails if it is set on an `ibverbs` queue.
   - type: `integer`
   - default: `0`
+
+### Transmit Flows
+
+`tx.flows:` — Raw Ethernet hardware transform rules for outgoing packets. Supported on
+the DPDK and ibverbs raw engines only. TX flows match the packet as supplied by the
+application, then push or encapsulate headers in hardware; the application buffer remains
+the pre-encap packet.
+
+- **`name`** / **`id`**: Flow label and ID.
+- **`actions`**: Ordered transform action list. TX flows cannot contain `queue`.
+  - **`type: vlan_push`**: Push one VLAN tag.
+    - **`vlan_id`**: VLAN ID, `0..4095`.
+    - **`pcp`**: Priority, `0..7`, default `0`.
+    - **`dei`**: Drop eligible indicator, `0..1`, default `0`.
+    - **`ethertype`**: VLAN TPID, default `0x8100`.
+  - **`type: tunnel_encap`**: Encapsulate in `vxlan`, `gre`, or `nvgre`.
+    - **`tunnel.type`**: `vxlan`, `gre`, or `nvgre`.
+    - **`outer_eth_src` / `outer_eth_dst`** and **`outer_ipv4_src` /
+      `outer_ipv4_dst`** are required.
+    - **VXLAN fields**: `vni`, optional `outer_udp_src`, `outer_udp_dst` default `4789`.
+    - **GRE fields**: optional `gre_protocol` default `0x0800`.
+    - **NVGRE fields**: `tni`, optional `flow_id`.
+- **`match`**: Same standard UDP/IP match keys as RX flows. Omit `match` for a
+  catch-all TX transform.
+
+DAQIRI validates tunnel overhead against the configured packet buffer size and
+the supported jumbo-frame bound. For RX decap/pop, MTU sizing accounts for the
+outer wire frame while packet buffers contain the post-decap frame.
 
 ### Accurate Send
 

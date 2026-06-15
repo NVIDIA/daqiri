@@ -33,8 +33,8 @@ There is no unit test suite. Verification is done via the benchmark executables 
 
 | Executable | Source | Typical config |
 |---|---|---|
-| `daqiri_bench_raw_gpudirect` | `raw_gpudirect_bench.cpp` | `daqiri_bench_raw_tx_rx.yaml`, `daqiri_bench_raw_tx_rx_4q.yaml`, `daqiri_bench_raw_tx_rx_spark.yaml`, `daqiri_bench_raw_{tx,rx}_spark_xhost.yaml`, `daqiri_bench_raw_sw_loopback.yaml`, `daqiri_bench_raw_rx_multi_q.yaml`, `daqiri_bench_raw_tx_rx_spark_mq.yaml` (mq base; `run_spark_mq_bench.sh` derives the 4 cells via `scripts/gen_spark_mq_config.py`), `daqiri_bench_raw_tx_rx_pacing.yaml` (per-queue `pacing_mbps`; DPDK engine only) |
-| `daqiri_example_dynamic_rx_flow` | `dynamic_rx_flow_example.cpp` | `daqiri_example_dynamic_rx_flow.yaml` — queues-only `flow_isolation: true` startup followed by runtime RX flow add/delete |
+| `daqiri_bench_raw_gpudirect` | `raw_gpudirect_bench.cpp` | `daqiri_bench_raw_tx_rx.yaml`, `daqiri_bench_raw_tx_rx_4q.yaml`, `daqiri_bench_raw_tx_rx_spark.yaml`, `daqiri_bench_raw_{tx,rx}_spark_xhost.yaml`, `daqiri_bench_raw_sw_loopback.yaml`, `daqiri_bench_raw_rx_multi_q.yaml`, `daqiri_bench_raw_tx_rx_vxlan.yaml`, `daqiri_bench_raw_tx_rx_vlan.yaml`, `daqiri_bench_raw_tx_rx_gre.yaml`, `daqiri_bench_raw_tx_rx_nvgre.yaml`, `daqiri_bench_raw_tx_rx_spark_mq.yaml` (mq base; `run_spark_mq_bench.sh` derives the 4 cells via `scripts/gen_spark_mq_config.py`), `daqiri_bench_raw_tx_rx_pacing.yaml` (per-queue `pacing_mbps`; DPDK engine only) |
+| `daqiri_example_dynamic_rx_flow` | `dynamic_rx_flow_example.cpp` | `daqiri_example_dynamic_rx_flow.yaml` — `flow_isolation: true` startup followed by runtime RX queue-steering and raw-engine decap/pop flow add/delete |
 | `daqiri_bench_raw_hds` | `raw_hds_bench.cpp` | `daqiri_bench_raw_tx_rx_hds.yaml` |
 | `daqiri_bench_raw_reorder_seq` | `raw_reorder_seq_bench.cpp` | `daqiri_bench_raw_tx_rx_reorder_seq_1024*.yaml`, `daqiri_bench_raw_rx_reorder_seq_*.yaml` |
 | `daqiri_bench_raw_reorder_quantize` | `raw_reorder_quantize_bench.cpp` | `daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml` |
@@ -94,9 +94,10 @@ Vendored under `third_party/` as submodules (`.gitmodules`): `yaml-cpp` (config 
 
 ### Current limitations
 - TX header fill currently supports UDP only (see README).
-- Raw Ethernet RX flow `action.id` must match an `rx.queues` ID and flex-item flows must reference a valid `flex_item_id` on the same interface; `daqiri_init()` aborts if RX flow rules, send-to-kernel fallbacks (`flow_isolation: true`), or `tx_eth_src` offload rules cannot be programmed on the NIC.
+- Raw Ethernet RX flow legacy `action.id` or final `actions:` queue action must match an `rx.queues` ID, and flex-item flows must reference a valid `flex_item_id` on the same interface; `daqiri_init()` aborts if RX flow rules, send-to-kernel fallbacks (`flow_isolation: true`), transform flow actions, or `tx_eth_src` offload rules cannot be programmed on the NIC.
+- Raw Ethernet tunnel/VLAN transform flows are hardware-only on the DPDK and ibverbs raw engines. TX flows may contain only push/encap transform actions and RX transform flows must use pop/decap actions ending in a queue; socket/RDMA engines reject these actions instead of adding a software fallback.
 - Raw Ethernet RX flow steering: a single interface cannot mix standard (UDP/IP) and
-  flex-item flows; `DpdkEngine::validate_config()` rejects mixed configs at init.
+  flex-item flows, and flex-item flows cannot combine with tunnel/VLAN transform actions; `DpdkEngine::validate_config()` rejects mixed configs at init.
 - No CI yet — contributors and reviewers verify manually (CONTRIBUTING.md).
 
 ## Documentation

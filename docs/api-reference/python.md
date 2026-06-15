@@ -591,6 +591,11 @@ The workflow sections above show the common call order and ownership rules.
 | `rdma_get_port_queue(conn_id)` | Return `(Status, port, queue)`. |
 | `rdma_get_server_conn_id(server_addr, server_port)` | Return `(Status, conn_id)`. |
 
+Dynamic RX flows are RX-only in v1. The `action` attribute remains the single queue-action
+shorthand; use ordered `actions` when a raw DPDK or raw ibverbs dynamic rule needs hardware
+VLAN pop or VXLAN/GRE/NVGRE decapsulation before the final queue action. Static TX
+encapsulation/push rules are configured in YAML under `tx.flows`.
+
 ## Constants
 
 | Name | Description |
@@ -622,7 +627,8 @@ The workflow sections above show the common call order and ownership rules.
 | `RDMAMode` | `CLIENT`, `SERVER`, `INVALID` |
 | `RDMATransportMode` | `RC`, `UC`, `UD`, `INVALID` |
 | `SocketMode` | `CLIENT`, `SERVER`, `INVALID` |
-| `FlowType` | `QUEUE` |
+| `FlowType` | `QUEUE`, `VLAN_PUSH`, `VLAN_POP`, `TUNNEL_ENCAP`, `TUNNEL_DECAP` |
+| `TunnelType` | `NONE`, `VXLAN`, `GRE`, `NVGRE` |
 | `FlowMatchType` | `IPV4_UDP`, `FLEX_ITEM` |
 | `FlowOpType` | `ADD_RX`, `ADD_RX_BATCH`, `DELETE` |
 | `ReorderMethod` | `INVALID`, `SEQ_BATCH_NUMBER`, `SEQ_PACKETS_PER_BATCH` |
@@ -654,10 +660,12 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `RxQueueConfig` | RX queue wrapper with common queue fields and timeout. |
 | `TxQueueConfig` | TX queue wrapper with common queue fields. |
 | `MemoryRegionConfig` | Memory region kind, affinity, access flags, sizes, counts, and ownership. |
-| `FlowAction` | Flow action type and target ID. |
+| `VlanActionConfig` | VLAN push parameters: VLAN ID, priority, DEI, and ethertype. |
+| `TunnelConfig` | VXLAN, GRE, or NVGRE tunnel template fields for hardware encap/decap actions. |
+| `FlowAction` | Flow action type, queue target ID, optional VLAN config, and optional tunnel config. |
 | `FlowMatch` | Flow match fields for UDP, IPv4, and flex item matching. |
-| `FlowConfig` | Named flow rule combining action and match. |
-| `FlowRuleConfig` | Dynamic flow rule match and action. |
+| `FlowConfig` | Static named flow rule combining legacy `action`, ordered `actions`, and match fields. |
+| `FlowRuleConfig` | Dynamic RX flow rule combining legacy `action`, ordered `actions`, and match fields. |
 | `FlowOpResult` | Dynamic flow operation completion. Batch adds return `flow_ids` in input order. |
 | `FlexItemConfig` | Flexible parser item configuration. |
 | `FlexItemMatch` | Flexible parser match value and mask. |

@@ -28,7 +28,9 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 - **Flow Steering** — Configure the NIC's hardware flow engine to route packets by UDP
   source/destination port or flex-item payload fields. Raw RX flows can be configured
   statically in YAML or added/deleted dynamically after `daqiri_init()`. Per RX
-  interface, use standard UDP/IP flows or flex-item flows, not both.
+  interface, use standard UDP/IP flows or flex-item flows, not both. Raw DPDK and
+  raw ibverbs flows can also use hardware-only VLAN push/pop and VXLAN, GRE, or
+  NVGRE encap/decap actions; socket/RDMA streams reject those tunnel actions.
 - **RDMA** — RDMA verbs (READ, WRITE, SEND) over RoCE on Ethernet NICs or InfiniBand.
 - **Optional OpenTelemetry metrics** — Expose per-interface or per-queue packet,
   byte, and drop counters when built with `DAQIRI_ENABLE_OTEL_METRICS=ON`.
@@ -50,7 +52,7 @@ stream to use the MPRQ engine instead. Build it by including `ibverbs` in `DAQIR
 ### Limitations
 
 - TX header-fill helpers currently support UDP only.
-- Raw Ethernet configs must reference valid RX queue IDs in `rx.flows` `action.id` and valid flex-item IDs on the same interface; init fails if flow rules cannot be installed on the NIC.
+- Raw Ethernet configs must reference valid RX queue IDs in `rx.flows` `action.id` or final `actions[].id` queue actions, and valid flex-item IDs on the same interface; init fails if flow rules, TX transform flows, or dynamic RX transform flows cannot be installed on the NIC.
 - The `ibverbs` raw (MPRQ) engine requires a Mellanox/mlx5 NIC (ConnectX-6 Dx or
   later, BlueField); it is DevX-based and not portable to other vendors.
 

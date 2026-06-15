@@ -242,18 +242,17 @@ buffers (CPU hugepages, GPU device memory, or pinned host memory).
 
 ### Flow
 
-A **flow** is a match pattern paired with an action. The common action
-is to steer matching packets into a specific queue. For example, all
-UDP-destination-port-4096 packets can be routed into a queue backed by
-GPU memory. Matching and the resulting action both run entirely in NIC
-hardware.
+A **flow** is a match pattern paired with one or more actions. The
+common RX action is to steer matching packets into a specific queue. For
+example, all UDP-destination-port-4096 packets can be routed into a
+queue backed by GPU memory. Matching and the resulting actions both run
+entirely in NIC hardware.
 
 Flow rules are only available in Raw Ethernet (`stream_type: "raw"`).
 
 A flow's match can combine fields such as `udp_src`, `udp_dst`, and
 `ipv4_len`; multiple flows can target the same queue, and the matching
-flow's ID is available at runtime so the application can distinguish
-them.
+flow's ID is available at runtime so the application can distinguish them.
 
 Flows can be static or dynamic. Static flows are configured under
 `rx.flows` in the YAML and keep their configured IDs for the process lifetime.
@@ -264,6 +263,13 @@ returned in the add completion, and used as the packet marks returned by
 flow IDs are in input order. Only dynamic flows can be deleted dynamically. TX
 dynamic flows are not part of v1.
 
+Raw DPDK and raw ibverbs flows can also use ordered `actions:` for hardware VLAN
+pop/push and VXLAN, GRE, or NVGRE decap/encap. RX decap/pop actions deliver
+post-decap packets to application buffers; TX encap/push actions leave
+application buffers as pre-encap packets and change only the wire frame.
+Dynamic RX flows use the same ordered action model for runtime decap/pop rules,
+while TX transform flows remain static startup configuration.
+
 ### Flow Steering
 
 **Flow steering** is the NIC-level mechanism that classifies an
@@ -271,9 +277,10 @@ incoming packet against the configured flows and writes it into the
 matching queue's buffer, entirely in hardware. Multi-queue RX works by
 routing each flow to a separate queue for parallel processing.
 
-For Raw Ethernet, flow steering is implemented on top of RTE Flow. Flow
-rules are programmed during `daqiri_init()`; initialization fails if the
-NIC rejects a rule. The YAML options are documented in
+For Raw Ethernet, flow steering is implemented on top of RTE Flow in the
+DPDK engine and mlx5 Direct Rules in the ibverbs engine. Flow rules are
+programmed during `daqiri_init()`; initialization fails if the NIC
+rejects a rule. The YAML options are documented in
 [Configuration YAML Reference → Flows](api-reference/configuration.md#flows).
 
 ## Memory Regions

@@ -202,13 +202,19 @@ Both methods use the same public C++ include:
 | `BUILD_SHARED_LIBS` | — | Build as shared library. |
 
 For Raw Ethernet (`stream_type: "raw"`), `daqiri_init()` validates that each `rx.flows`
-entry's `action.id` matches an `rx.queues` ID on the same interface, then programs flow
-rules into the NIC. Initialization fails if any RX flow rule, send-to-kernel fallback (when
-`flow_isolation: true`), or `tx_eth_src` offload rule cannot be installed.
+entry's legacy `action.id` or final ordered `actions:` queue action matches an
+`rx.queues` ID on the same interface, then programs flow rules into the NIC.
+Initialization fails if any RX flow rule, TX transform flow, send-to-kernel fallback
+(when `flow_isolation: true`), or `tx_eth_src` offload rule cannot be installed.
+Raw DPDK and raw ibverbs can offload VLAN push/pop and VXLAN, GRE, or NVGRE
+encap/decap through flow actions; socket/RDMA streams reject those actions.
 `rx.flows` may also be omitted for queues-only startup; applications can then add and delete
-RX flow rules at runtime with `add_rx_flow_async()` / `delete_flow_async()`. The DPDK
-template fast path is enabled and sized by `rx.dynamic_flow_capacity` (default `0`, set a
-positive value such as `1024` to create template tables).
+RX flow rules at runtime with `add_rx_flow_async()` / `delete_flow_async()`. Dynamic
+RX flows can use the same decap/pop action ordering as static RX flows. The DPDK template
+fast path is enabled and sized by `rx.dynamic_flow_capacity` (default `0`, set a positive
+value such as `1024` to create template tables); dynamic transform rules fall back to
+regular hardware flow creation because packet reformat actions are not part of that
+template fast path.
 
 CUDA architectures default to `80;90` (A100, H100), with `121` (GB10) added
 when configuring with CUDA Toolkit 13.0 or newer. Override

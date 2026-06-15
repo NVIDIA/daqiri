@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <array>
 #include <vector>
 #include <string>
 #include <tuple>
@@ -38,9 +39,13 @@
 #include <rte_debug.h>
 #include <rte_ether.h>
 #include <rte_ethdev.h>
+#include <rte_gre.h>
+#include <rte_ip.h>
 #include <rte_mempool.h>
 #include <rte_mbuf.h>
 #include <rte_metrics.h>
+#include <rte_udp.h>
+#include <rte_vxlan.h>
 #include <rte_bitrate.h>
 #include <rte_latencystats.h>
 #include <rte_flow.h>
@@ -50,6 +55,7 @@
 #include <deque>
 #include <queue>
 #include <mutex>
+#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include "src/engine.h"
@@ -89,6 +95,8 @@ struct RxTimestampConversion {
 
 class DpdkEngine : public Engine {
  public:
+  struct DpdkFlowResource;
+
   static_assert(MAX_INTERFACES <= RTE_MAX_ETHPORTS, "Too many interfaces configured");
 
   DpdkEngine() = default;
@@ -186,13 +194,18 @@ class DpdkEngine : public Engine {
   // a PTP daemon disciplines it, so it tracks CLOCK_MONOTONIC, not CLOCK_REALTIME).
   uint64_t now_tx_ns(uint16_t port);
   int setup_pools_and_rings(int max_rx_batch, int max_tx_batch);
-  struct rte_flow* add_flow(int port, const FlowConfig& cfg, bool track = true);
+  struct rte_flow* add_flow(int port,
+                            const FlowConfig& cfg,
+                            bool track = true,
+                            std::shared_ptr<DpdkFlowResource>* resource_out = nullptr);
+  struct rte_flow* add_tx_flow(int port, const FlowConfig& cfg);
   bool ensure_eth_jump_rule(int port, uint32_t group);
   void track_flow(uint16_t port, struct rte_flow* flow);
   void destroy_programmed_flows();
   void destroy_flex_item_handles();
   void destroy_eth_jump_rules();
   void destroy_all_flow_rules();
+  void destroy_owned_flows();
   bool add_send_to_kernel_fallback(int port, uint32_t group);
   void create_dummy_rx_q();
   void create_dummy_tx_q();
@@ -301,6 +314,39 @@ class DpdkEngine : public Engine {
   static FlowOpId flow_op_id_from_user_data(void* user_data);
 
   bool apply_tx_offloads(int port);
+
+ public:
+  struct DpdkFlowResource {
+    struct ActionStorage {
+      std::vector<uint8_t> raw_data;
+      struct rte_flow_action_raw_encap raw_encap {};
+      struct rte_flow_action_raw_decap raw_decap {};
+      struct rte_flow_action_vxlan_encap vxlan_encap {};
+      struct rte_flow_action_nvgre_encap nvgre_encap {};
+      std::array<struct rte_flow_item, 6> definition {};
+      struct rte_flow_item_eth eth_spec {};
+      struct rte_flow_item_eth eth_mask {};
+      struct rte_flow_item_ipv4 ipv4_spec {};
+      struct rte_flow_item_ipv4 ipv4_mask {};
+      struct rte_flow_item_udp udp_spec {};
+      struct rte_flow_item_udp udp_mask {};
+      struct rte_flow_item_vxlan vxlan_spec {};
+      struct rte_flow_item_vxlan vxlan_mask {};
+      struct rte_flow_item_gre gre_spec {};
+      struct rte_flow_item_gre gre_mask {};
+      struct rte_flow_item_nvgre nvgre_spec {};
+      struct rte_flow_item_nvgre nvgre_mask {};
+      struct rte_flow_action_of_push_vlan push_vlan {};
+      struct rte_flow_action_of_set_vlan_vid set_vlan_vid {};
+      struct rte_flow_action_of_set_vlan_pcp set_vlan_pcp {};
+    };
+    int port = -1;
+    struct rte_flow* flow = nullptr;
+    std::vector<ActionStorage> action_storage;
+  };
+
+ private:
+  std::vector<std::shared_ptr<DpdkFlowResource>> owned_flows_;
 
   struct ReorderBatchState {
     uint64_t first_packet_cycles = 0;
