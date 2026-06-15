@@ -194,6 +194,13 @@ class Engine {
     size_t dummy_queue_count = 0;
   };
 
+  // The hugepage/EAL preflight helpers below (estimate_required_hugepages,
+  // available_hugepage_bytes, check_hugepage_availability, cleanup_eal) are,
+  // like the mbuf/pool helpers above, defined only in engine_dpdk.cpp and so
+  // compiled into daqiri_common only in DPDK builds. They are called solely
+  // from DpdkEngine; in non-DPDK builds they are declared-but-undefined and
+  // never referenced, so the library still links.
+
   // Estimate hugepage bytes required by the current cfg_. Heuristic;
   // intentionally errs on the high side.
   HugepageEstimate estimate_required_hugepages() const;

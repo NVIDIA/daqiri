@@ -47,6 +47,12 @@
 #include <rte_eal.h>
 #include <rte_ring.h>
 #include <rte_mempool.h>
+#else
+// Fallbacks so the RingCase initializers (which carry rte_flags for the DPDK
+// comparison arm) still compile when DPDK is absent. The values are unused in
+// this build -- the rte_ring comparison is compiled out under BENCH_HAVE_DPDK.
+#define RING_F_SP_ENQ 0
+#define RING_F_SC_DEQ 0
 #endif
 
 namespace {

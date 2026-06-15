@@ -197,7 +197,6 @@ class RdmaEngine : public Engine {
   daqiri::ObjectPool* rx_meta;
   daqiri::ObjectPool* tx_meta;
   daqiri::ObjectPool* pkt_len_pool_;
-  std::unordered_map<std::string, daqiri::ObjectPool*> mr_pools_;
   std::queue<daqiri::Ring*> tx_rings_;
   std::queue<daqiri::Ring*> rx_rings_;
   std::unordered_map<struct rdma_cm_id*, daqiri::Ring*> tx_rings_map_;

@@ -24,6 +24,7 @@
 // (the metadata / burst-descriptor pools), which never relied on rte_mbuf
 // semantics -- they only needed get()/put()/avail/in-use on fixed-size slabs.
 
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -87,7 +88,14 @@ class ObjectPool {
     return free_->dequeue(obj);
   }
   void put(void* obj) {
-    free_->enqueue(obj);
+    // In correct usage the free-list always has room (it is sized to hold all
+    // n elements), so enqueue cannot fail. A false return means the caller put
+    // an object that did not come from this pool, or put the same object twice
+    // -- silently dropped in release like the rte_mempool_put it replaces, but
+    // assert in debug to catch the misuse early.
+    bool ok = free_->enqueue(obj);
+    (void)ok;
+    assert(ok && "ObjectPool::put on full free-list (foreign or double-freed object)");
   }
 
   unsigned avail_count() const {
