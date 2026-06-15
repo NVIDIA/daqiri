@@ -545,7 +545,9 @@ class IbverbsEngine : public Engine {
     // IPv4 ethertype). Torn down with the flex_nodes after rules.
     FlexNode ipv4_len_node;
     bool dropped = false;
-    int next_dynamic_priority = 1000;
+    // Continue directly after static rules; sparse high priorities can fail on
+    // some mlx5 DR stacks even when the same matcher/action works at init.
+    int next_dynamic_priority = 0;
   };
   std::map<int, PortSteering> port_steering_;  // port_id -> steering
 

@@ -1464,7 +1464,7 @@ Status IbverbsEngine::install_port_flows() {
       }
       DAQIRI_LOG_INFO("DevX catch-all flow -> queue {} (port {})", dest->queue_id, port);
     }
-    st.next_dynamic_priority = std::max(st.next_dynamic_priority, prio + 1);
+    st.next_dynamic_priority = std::max(st.next_dynamic_priority, prio);
   }
   return Status::SUCCESS;
 }
