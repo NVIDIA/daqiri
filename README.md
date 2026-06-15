@@ -26,8 +26,9 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 - **S3 raw object writes** — Optionally upload raw burst packets to Amazon S3 or an
   S3-compatible object store through the AWS SDK for C++.
 - **Flow Steering** — Configure the NIC's hardware flow engine to route packets by UDP
-  source/destination port or flex-item payload fields. Per RX interface, use standard
-  UDP/IP flows or flex-item flows, not both.
+  source/destination port or flex-item payload fields. Raw RX flows can be configured
+  statically in YAML or added/deleted dynamically after `daqiri_init()`. Per RX
+  interface, use standard UDP/IP flows or flex-item flows, not both.
 - **RDMA** — RDMA verbs (READ, WRITE, SEND) over RoCE on Ethernet NICs or InfiniBand.
 - **Optional OpenTelemetry metrics** — Expose per-interface or per-queue packet,
   byte, and drop counters when built with `DAQIRI_ENABLE_OTEL_METRICS=ON`.
@@ -148,6 +149,7 @@ Step-by-step walkthroughs to get hands-on:
 - [Benchmarking Overview](https://nvidia.github.io/daqiri/benchmarks/benchmarks/) — choose between Linux sockets, RoCE/RDMA, and raw Ethernet benchmarks
 - [Socket and RDMA Benchmarking](https://nvidia.github.io/daqiri/benchmarks/socket_benchmarking/) — run TCP/UDP sockets and RoCE/RDMA with matching namespace isolation
 - [Raw Ethernet Benchmarking](https://nvidia.github.io/daqiri/benchmarks/raw_benchmarking/) — run `daqiri_bench_raw_gpudirect` with a physical loopback test
+- [Dynamic RX Flow Example](https://nvidia.github.io/daqiri/tutorials/configuration-walkthrough/#choosing-an-example-config) — start with RX queues only, then add and delete flow-steering rules at runtime
 - [Understanding the Configuration File](https://nvidia.github.io/daqiri/tutorials/configuration-walkthrough/) — annotated YAML walkthrough
 - [DAQIRI + Holoscan Integration](https://nvidia.github.io/daqiri/tutorials/daqiri-holoscan-integration/) — use DAQIRI RX bursts from a Holoscan source operator
 

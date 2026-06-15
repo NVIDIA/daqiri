@@ -820,6 +820,7 @@ const InterfaceConfig* IbverbsEngine::find_interface_config(int port) const {
 
 bool IbverbsEngine::reserve_static_flow_ids() {
   static_flow_ids_.clear();
+  while (!free_dynamic_flow_ids_.empty()) { free_dynamic_flow_ids_.pop(); }
   for (const auto& intf : cfg_.ifs_) {
     for (const auto& flow : intf.rx_.flows_) {
       if (flow.id_ == 0) { continue; }
@@ -839,6 +840,9 @@ FlowOpId IbverbsEngine::allocate_flow_op_id_locked() {
 }
 
 bool IbverbsEngine::has_dynamic_flow_id_capacity_locked(size_t count) const {
+  if (free_dynamic_flow_ids_.size() >= count) { return true; }
+  count -= free_dynamic_flow_ids_.size();
+
   FlowId candidate = next_dynamic_flow_id_;
   while (count > 0 && candidate != 0 && candidate <= kMaxIbverbsFlowTag) {
     const FlowId flow_id = candidate++;
@@ -851,6 +855,15 @@ bool IbverbsEngine::has_dynamic_flow_id_capacity_locked(size_t count) const {
 }
 
 FlowId IbverbsEngine::allocate_dynamic_flow_id_locked() {
+  while (!free_dynamic_flow_ids_.empty()) {
+    const FlowId candidate = free_dynamic_flow_ids_.front();
+    free_dynamic_flow_ids_.pop();
+    if (candidate == 0 || candidate > kMaxIbverbsFlowTag) { continue; }
+    if (static_flow_ids_.find(candidate) != static_flow_ids_.end()) { continue; }
+    if (dynamic_flows_.find(candidate) != dynamic_flows_.end()) { continue; }
+    return candidate;
+  }
+
   while (next_dynamic_flow_id_ != 0 && next_dynamic_flow_id_ <= kMaxIbverbsFlowTag) {
     const FlowId candidate = next_dynamic_flow_id_++;
     if (candidate == 0) { continue; }
@@ -859,6 +872,13 @@ FlowId IbverbsEngine::allocate_dynamic_flow_id_locked() {
     return candidate;
   }
   return 0;
+}
+
+void IbverbsEngine::release_dynamic_flow_id_locked(FlowId flow_id) {
+  if (flow_id == 0 || flow_id > kMaxIbverbsFlowTag) { return; }
+  if (static_flow_ids_.find(flow_id) != static_flow_ids_.end()) { return; }
+  if (dynamic_flows_.find(flow_id) != dynamic_flows_.end()) { return; }
+  free_dynamic_flow_ids_.push(flow_id);
 }
 
 bool IbverbsEngine::validate_dynamic_rx_flow_locked(int port, const FlowRuleConfig& flow) const {
@@ -2906,6 +2926,7 @@ Status IbverbsEngine::add_rx_flow_async(int port, const FlowRuleConfig& flow, Fl
   if (result.status_ != Status::SUCCESS) {
     result.flow_id_ = 0;
     result.flow_ids_[0] = 0;
+    release_dynamic_flow_id_locked(flow_id);
   }
   enqueue_flow_completion_locked(result);
   return Status::SUCCESS;
@@ -2928,7 +2949,12 @@ Status IbverbsEngine::add_rx_flows_async(int port,
   flow_ids.reserve(flows.size());
   for (size_t i = 0; i < flows.size(); ++i) {
     const FlowId flow_id = allocate_dynamic_flow_id_locked();
-    if (flow_id == 0) { return Status::NO_SPACE_AVAILABLE; }
+    if (flow_id == 0) {
+      for (const FlowId allocated_flow_id : flow_ids) {
+        release_dynamic_flow_id_locked(allocated_flow_id);
+      }
+      return Status::NO_SPACE_AVAILABLE;
+    }
     flow_ids.push_back(flow_id);
   }
 
@@ -2946,6 +2972,7 @@ Status IbverbsEngine::add_rx_flows_async(int port,
     if (status != Status::SUCCESS) {
       result.status_ = status;
       result.flow_ids_[i] = 0;
+      release_dynamic_flow_id_locked(flow_ids[i]);
     }
   }
 
@@ -2973,6 +3000,7 @@ Status IbverbsEngine::delete_flow_async(FlowId flow_id, FlowOpId* op_id) {
   flow_it->second.state = DynamicFlowState::DELETING;
   destroy_dynamic_flow_entry_locked(flow_it->second);
   dynamic_flows_.erase(flow_it);
+  release_dynamic_flow_id_locked(flow_id);
 
   FlowOpResult result;
   result.op_id_ = new_op_id;

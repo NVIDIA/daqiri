@@ -34,6 +34,7 @@ There is no unit test suite. Verification is done via the benchmark executables 
 | Executable | Source | Typical config |
 |---|---|---|
 | `daqiri_bench_raw_gpudirect` | `raw_gpudirect_bench.cpp` | `daqiri_bench_raw_tx_rx.yaml`, `daqiri_bench_raw_tx_rx_4q.yaml`, `daqiri_bench_raw_tx_rx_spark.yaml`, `daqiri_bench_raw_{tx,rx}_spark_xhost.yaml`, `daqiri_bench_raw_sw_loopback.yaml`, `daqiri_bench_raw_rx_multi_q.yaml`, `daqiri_bench_raw_tx_rx_spark_mq.yaml` (mq base; `run_spark_mq_bench.sh` derives the 4 cells via `scripts/gen_spark_mq_config.py`), `daqiri_bench_raw_tx_rx_pacing.yaml` (per-queue `pacing_mbps`; DPDK engine only) |
+| `daqiri_example_dynamic_rx_flow` | `dynamic_rx_flow_example.cpp` | `daqiri_example_dynamic_rx_flow.yaml` — queues-only `flow_isolation: true` startup followed by runtime RX flow add/delete |
 | `daqiri_bench_raw_hds` | `raw_hds_bench.cpp` | `daqiri_bench_raw_tx_rx_hds.yaml` |
 | `daqiri_bench_raw_reorder_seq` | `raw_reorder_seq_bench.cpp` | `daqiri_bench_raw_tx_rx_reorder_seq_1024*.yaml`, `daqiri_bench_raw_rx_reorder_seq_*.yaml` |
 | `daqiri_bench_raw_reorder_quantize` | `raw_reorder_quantize_bench.cpp` | `daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml` |
@@ -50,7 +51,7 @@ The four `raw_*` benches share `raw_bench_common.{cpp,h}` and accept `--seconds 
 
 YAML files contain `<angle-bracket>` placeholders (PCIe addresses, CPU cores, MACs, IPs) that **must** be replaced for your system. `daqiri_bench_raw_sw_loopback.yaml` requires no physical link and is the fastest way to smoke-test a build.
 
-Configs named `raw_rx_*` are RX-only — they initialize the RX path and wait for external traffic, so a standalone run can exit cleanly with `0` packets. Use the `tx_rx` configs for closed-loop smoke tests. NIC flow programming (RX flows, `tx_eth_src`) requires a hardware loopback or cross-host wire test — see `docs/benchmarks/raw_benchmarking.md` (Flow programming smoke test); `daqiri_bench_raw_sw_loopback.yaml` only smoke-tests the build/runtime path.
+Configs named `raw_rx_*` are RX-only — they initialize the RX path and wait for external traffic, so a standalone run can exit cleanly with `0` packets. Use the `tx_rx` configs for closed-loop smoke tests. NIC flow programming (RX flows, dynamic RX flows, `tx_eth_src`) requires a hardware loopback or cross-host wire test — see `docs/benchmarks/raw_benchmarking.md` (Flow programming smoke test); `daqiri_bench_raw_sw_loopback.yaml` only smoke-tests the build/runtime path.
 
 When determining throughput for a benchmark use the `mlnx_perf` utility in the background to view transmit and receive rates. Using application run time with packet counts is usually not accurate enough due to startup inconsistencies.
 

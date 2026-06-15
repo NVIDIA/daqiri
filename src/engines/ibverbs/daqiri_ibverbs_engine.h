@@ -486,6 +486,7 @@ class IbverbsEngine : public Engine {
   FlowOpId allocate_flow_op_id_locked();
   bool has_dynamic_flow_id_capacity_locked(size_t count) const;
   FlowId allocate_dynamic_flow_id_locked();
+  void release_dynamic_flow_id_locked(FlowId flow_id);
   bool validate_dynamic_rx_flow_locked(int port, const FlowRuleConfig& flow) const;
   Status create_dynamic_flow_locked(int port, const FlowRuleConfig& flow, FlowId flow_id);
   void destroy_dynamic_flow_entry_locked(DynamicFlowEntry& entry);
@@ -574,6 +575,7 @@ class IbverbsEngine : public Engine {
   FlowId next_dynamic_flow_id_ = 1;
   FlowOpId next_flow_op_id_ = 1;
   std::unordered_set<FlowId> static_flow_ids_;
+  std::queue<FlowId> free_dynamic_flow_ids_;
   std::unordered_map<FlowId, DynamicFlowEntry> dynamic_flows_;
   std::queue<FlowOpResult> ready_flow_ops_;
 
