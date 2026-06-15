@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Render the DGX Spark DPDK multi-queue payload sweep as a line plot.
+"""Render a DPDK multi-queue payload sweep as a line plot.
 
 Reads a runs.csv produced by examples/run_spark_mq_bench.sh (columns:
 cell,tx_cores,rx_cores,payload,gbps,pps,drops,cpu8,cpu16,cpu17,cpu18,cpu19)
 and plots achieved Gb/s vs payload size, one line per (TX,RX) core cell.
 
 Usage:
-    scripts/plot_mq_payload_sweep.py <runs.csv> [output.svg]
+    scripts/plot_mq_payload_sweep.py <runs.csv> [output.svg] [chart title]
 
 Default output: docs/images/spark-mq-payload-sweep.svg (relative to repo root).
-Requires matplotlib (not a runtime dependency of DAQIRI; install in a venv to
-regenerate, e.g. `python3 -m venv .venv && .venv/bin/pip install matplotlib`).
+The chart title defaults to the DGX Spark wording; pass a third argument to
+override it for another platform (e.g. "IGX Orin — DPDK multi-queue throughput
+vs payload"). Requires matplotlib (not a runtime dependency of DAQIRI; install
+in a venv to regenerate, e.g. `python3 -m venv .venv && .venv/bin/pip install
+matplotlib`).
 """
 
 import csv
@@ -58,6 +61,8 @@ def main(argv):
     else:
         repo_root = Path(__file__).resolve().parent.parent
         out_path = repo_root / "docs" / "images" / "spark-mq-payload-sweep.svg"
+    title = argv[3] if len(argv) >= 4 else \
+        "DGX Spark — DPDK multi-queue throughput vs payload"
 
     series = load(csv_path)
 
@@ -76,7 +81,7 @@ def main(argv):
     ax.set_xscale("log", base=2)
     ax.set_xlabel("UDP payload size (bytes)")
     ax.set_ylabel("Achieved throughput (Gb/s)")
-    ax.set_title("DGX Spark — DPDK multi-queue throughput vs payload")
+    ax.set_title(title)
     ax.set_ylim(bottom=0)
     if payload_ticks:
         ticks = sorted(payload_ticks)

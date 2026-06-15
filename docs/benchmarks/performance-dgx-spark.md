@@ -307,4 +307,4 @@ Each run writes `bench-results/<timestamp>-<backend>-<mode>/runs.csv`. See
 per-transport details.
 
 ---
-**Previous:** [Raw Ethernet Benchmarking](raw_benchmarking.md)
+**Previous:** [Raw Ethernet Benchmarking](raw_benchmarking.md) &nbsp;|&nbsp; **Next:** [Performance: IGX Orin](performance-igx-orin.md)
