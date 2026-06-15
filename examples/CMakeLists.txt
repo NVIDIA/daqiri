@@ -16,10 +16,24 @@ endif()
 
 set(DAQIRI_EXAMPLES_CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
 
-if(TARGET yaml-cpp::yaml-cpp)
-  set(DAQIRI_EXAMPLE_YAML_TARGET yaml-cpp::yaml-cpp)
-else()
-  set(DAQIRI_EXAMPLE_YAML_TARGET yaml-cpp)
+if(NOT DAQIRI_YAML_TARGET)
+  # Standalone build (not added by the top-level CMakeLists): mirror the
+  # src/CMakeLists.txt resolution so a system yaml-cpp or the vendored
+  # submodule both work.
+  find_package(yaml-cpp QUIET)
+  if(TARGET yaml-cpp::yaml-cpp)
+    set(DAQIRI_YAML_TARGET yaml-cpp::yaml-cpp)
+  elseif(TARGET yaml-cpp)
+    set(DAQIRI_YAML_TARGET yaml-cpp)
+  elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/yaml-cpp/CMakeLists.txt")
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../third_party/yaml-cpp
+                     ${CMAKE_CURRENT_BINARY_DIR}/third_party/yaml-cpp)
+    set(DAQIRI_YAML_TARGET yaml-cpp)
+  else()
+    message(FATAL_ERROR
+      "yaml-cpp not found; install yaml-cpp-dev or run "
+      "`git submodule update --init third_party/yaml-cpp`")
+  endif()
 endif()
 
 set(DAQIRI_BENCH_CONFIGS
@@ -62,10 +76,10 @@ function(link_daqiri_bench target)
       "-Wl,--start-group"
       ${DAQIRI_EXAMPLE_STATIC_LIBS}
       "-Wl,--end-group"
-      ${DAQIRI_EXAMPLE_YAML_TARGET}
+      ${DAQIRI_YAML_TARGET}
     )
   else()
-    target_link_libraries(${target} PRIVATE daqiri::daqiri ${DAQIRI_EXAMPLE_YAML_TARGET})
+    target_link_libraries(${target} PRIVATE daqiri::daqiri ${DAQIRI_YAML_TARGET})
   endif()
 endfunction()
 

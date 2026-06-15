@@ -93,8 +93,24 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
   uintptr_t conn_id = 0;
   std::string send_mr = cfg.server ? "DATA_TX_GPU_SERVER" : "DATA_TX_GPU_CLIENT";
   std::string recv_mr = cfg.server ? "DATA_RX_GPU_SERVER" : "DATA_RX_GPU_CLIENT";
+  bool recv_primed = !cfg.receive;
 
-  while (!stop.load()) {
+  // After `stop` is signalled, drain in-flight completions for a short window so
+  // pending SENDs land cleanly instead of getting WR_FLUSH_ERR on disconnect.
+  auto drain_deadline = std::chrono::steady_clock::time_point::max();
+  const auto drain_window = std::chrono::milliseconds(500);
+
+  while (true) {
+    const bool stopped = stop.load();
+    if (stopped && drain_deadline == std::chrono::steady_clock::time_point::max()) {
+      drain_deadline = std::chrono::steady_clock::now() + drain_window;
+    }
+    if (stopped) {
+      if (outstanding_send == 0 && outstanding_recv == 0) { break; }
+      if (std::chrono::steady_clock::now() >= drain_deadline) { break; }
+    }
+
+    if (conn_id == 0 && stopped) { break; }
     if (conn_id == 0) {
       daqiri::Status s = daqiri::Status::GENERIC_FAILURE;
       if (cfg.server) {
@@ -107,6 +123,7 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
         continue;
       }
+      recv_primed = !cfg.receive;
     }
 
     auto post_req = [&](int& outstanding, int depth, uint64_t& wr_id, daqiri::RDMAOpCode op,
@@ -156,7 +173,20 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
       return posted;
     };
 
-    bool posted_work = refill_receives();
+    if (!recv_primed && !stopped) {
+      int idle_spins = 0;
+      while (!stop.load() && outstanding_recv < cfg.rx_depth) {
+        if (refill_receives()) {
+          idle_spins = 0;
+        } else {
+          if (++idle_spins > 100) { break; }
+          std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+      }
+      recv_primed = !cfg.receive || outstanding_recv > 0;
+    }
+
+    bool posted_work = stopped ? false : refill_receives();
     bool got_completion = false;
     while (true) {
       daqiri::BurstParams* completion = nullptr;
@@ -177,9 +207,9 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
       daqiri::free_tx_burst(completion);
     }
 
-    posted_work = refill_receives() || posted_work;
+    if (!stopped) { posted_work = refill_receives() || posted_work; }
     const bool local_receive_window_ready = !cfg.receive || outstanding_recv > 0;
-    if (cfg.send && local_receive_window_ready) {
+    if (!stopped && cfg.send && local_receive_window_ready) {
       while (outstanding_send < cfg.tx_depth &&
              post_req(outstanding_send, cfg.tx_depth, send_wr_id, daqiri::RDMAOpCode::SEND,
                       send_mr)) {

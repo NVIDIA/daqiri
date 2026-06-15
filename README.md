@@ -96,6 +96,10 @@ for CMake builds or `DAQIRI_ENABLE_OTEL_METRICS=ON` for container builds. DAQIRI
 registers the instruments, while applications configure the OpenTelemetry SDK and
 exporters.
 
+The build uses the vendored `third_party/yaml-cpp` submodule by default so a
+conda/miniforge env on `PATH` doesn't break example linking. Set
+`-DDAQIRI_PREFER_SYSTEM_YAML_CPP=ON` to opt in to a system `yaml-cpp` instead.
+
 See [Getting Started](https://nvidia.github.io/daqiri/getting-started/) for requirements, CMake options, and
 running the benchmarks.
 

@@ -46,8 +46,13 @@ struct rdma_qp_params {
 };
 
 struct rdma_thread_params {
+  // active == app-visible: true once rdma_get_server_conn_id() hands the
+  // conn_id to the caller. A slot is "occupied" (not reusable) as soon as
+  // client_id is set at CONNECT_REQUEST, which is earlier than active; slot
+  // selection must key off client_id, not active, or an accepted-but-not-yet-
+  // claimed connection can be overwritten by a later CONNECT_REQUEST.
   bool active = false;
-  struct rdma_cm_id* client_id;
+  struct rdma_cm_id* client_id = nullptr;
   struct ibv_pd* pd;
   rdma_qp_params qp_params;
   int if_idx;
@@ -61,6 +66,7 @@ struct rdma_thread_params {
   // holding it (server_q_params_ vectors and client_q_params_) construct
   // elements in place via resize() / try_emplace(), so this is fine.
   std::atomic<bool> ready_to_exit{false};
+  std::atomic<bool> worker_started{false};
 };
 
 // Used to spawn a new server thread for a particular client
@@ -216,6 +222,7 @@ class RdmaEngine : public Engine {
   void server_tx(int if_idx, int q);
   void server_rx(int if_idx, int q);
   bool ack_event(rdma_cm_event* cm_event);
+  void launch_server_worker(rdma_thread_params* params);
   int mr_access_to_ibv(uint32_t access);
   bool get_ip_from_interface(const std::string_view& if_name, sockaddr_in& addr);
   int setup_thread_params(rdma_thread_params* params, bool is_server);

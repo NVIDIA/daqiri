@@ -207,9 +207,11 @@ cmake -S . -B build \
     -DDAQIRI_BUILD_PYTHON=OFF
 ```
 
-!!! warning "Deactivate conda before configuring"
+!!! warning "Deactivate conda before configuring DPDK"
 
-    If a conda environment (including `(base)`) is active, `find_package(yaml-cpp)` may silently pick up conda's vendored yaml-cpp 0.8 at configure time and then fail at link time with `cannot find -lyaml-cpp`. Run `conda deactivate` (or invoke CMake under `env -i PATH=/usr/bin:/bin /usr/bin/cmake ...`) before the configure step. The same `(base)` contamination also breaks `meson setup` for DPDK in [Step 3.3](#33-configure-build-and-install).
+    An active conda environment (including `(base)`) can break `meson setup` for DPDK in [Step 3.3](#33-configure-build-and-install). Run `conda deactivate` before building DPDK from source.
+
+    DAQIRI itself prefers the vendored `third_party/yaml-cpp` submodule by default, so example benchmarks link correctly even when conda is active. Initialize submodules before configuring: `git submodule update --init third_party/yaml-cpp`. Set `-DDAQIRI_PREFER_SYSTEM_YAML_CPP=ON` only if you intentionally want the system package.
 
 The sections below explain each option you can flip from the default, with explicit "when to use" guidance. The full reference is the [CMake Options table](../getting-started.md#cmake-options).
 
