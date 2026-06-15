@@ -25,6 +25,7 @@ endif()
 set(DAQIRI_BENCH_CONFIGS
   daqiri_bench_raw_tx_rx.yaml
   daqiri_bench_raw_tx_rx_4q.yaml
+  daqiri_bench_raw_tx_rx_pacing.yaml
   daqiri_bench_raw_tx_rx_hds.yaml
   daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml
   daqiri_bench_raw_tx_rx_reorder_seq_1024_cpu.yaml
@@ -112,6 +113,29 @@ set_target_properties(daqiri_bench_socket PROPERTIES
   BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
 )
 
+# Microbenchmark for the daqiri::Ring / daqiri::ObjectPool primitives. Always
+# built (the primitives are header-only); when the dpdk engine is present it also
+# compiles the rte_ring / rte_mempool comparison arm.
+add_executable(daqiri_pool_ring_bench pool_ring_bench.cpp)
+target_compile_features(daqiri_pool_ring_bench PRIVATE cxx_std_17)
+target_include_directories(daqiri_pool_ring_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+find_package(Threads REQUIRED)
+target_link_libraries(daqiri_pool_ring_bench PRIVATE Threads::Threads)
+if(TARGET daqiri_dpdk)
+  find_package(PkgConfig)
+  pkg_check_modules(BENCH_DPDK QUIET libdpdk)
+  if(NOT BENCH_DPDK_FOUND)
+    list(APPEND CMAKE_PREFIX_PATH "/opt/mellanox/dpdk/lib/${CMAKE_HOST_SYSTEM_PROCESSOR}-linux-gnu/")
+    pkg_check_modules(BENCH_DPDK QUIET libdpdk)
+  endif()
+  if(BENCH_DPDK_FOUND)
+    target_compile_definitions(daqiri_pool_ring_bench PRIVATE BENCH_HAVE_DPDK=1)
+    target_include_directories(daqiri_pool_ring_bench PRIVATE ${BENCH_DPDK_INCLUDE_DIRS})
+    target_link_directories(daqiri_pool_ring_bench PRIVATE ${BENCH_DPDK_LIBRARY_DIRS})
+    target_link_libraries(daqiri_pool_ring_bench PRIVATE ${BENCH_DPDK_LDFLAGS_OTHER} ${BENCH_DPDK_LIBRARIES})
+  endif()
+endif()
+
 foreach(cfg IN LISTS DAQIRI_BENCH_CONFIGS)
   configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${cfg} ${CMAKE_CURRENT_BINARY_DIR}/${cfg} COPYONLY)
 endforeach()
@@ -129,6 +153,7 @@ install(TARGETS
         daqiri_example_pcap_writer
         daqiri_bench_rdma
         daqiri_bench_socket
+        daqiri_pool_ring_bench
         RUNTIME DESTINATION bin)
 install(FILES ${DAQIRI_BENCH_CONFIGS}
         DESTINATION bin)

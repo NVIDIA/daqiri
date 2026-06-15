@@ -21,22 +21,8 @@ target_include_directories(${ENGINE_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_sources(${ENGINE_TARGET} PRIVATE daqiri_socket_engine.cpp)
 
-# engine.h includes DPDK ring/mbuf headers.
-pkg_check_modules(DPDK QUIET libdpdk)
-if(NOT DPDK_FOUND)
-  list(APPEND CMAKE_PREFIX_PATH "/opt/mellanox/dpdk/lib/${CMAKE_HOST_SYSTEM_PROCESSOR}-linux-gnu/")
-  pkg_check_modules(DPDK REQUIRED libdpdk)
-endif()
-
-target_link_directories(${ENGINE_TARGET} PRIVATE ${DPDK_LIBRARY_DIRS})
-target_include_directories(${ENGINE_TARGET} PRIVATE ${DPDK_INCLUDE_DIRS})
-target_compile_options(${ENGINE_TARGET} PRIVATE ${DPDK_CFLAGS_OTHER})
-
-target_link_libraries(${ENGINE_TARGET}
-  PRIVATE
-    ${DPDK_LDFLAGS_OTHER}
-    ${DPDK_LIBRARIES}
-)
+# The socket engine no longer depends on DPDK: engine.h is libdpdk-free and the
+# engine only uses Linux sockets (plus the rdma engine for its RoCE path).
 
 # RoCE-under-socket delegates to the ibverbs/rdma engine when it is built
 # (DAQIRI_ENGINE includes "ibverbs"). Without it, the socket engine still

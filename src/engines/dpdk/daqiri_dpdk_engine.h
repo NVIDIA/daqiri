@@ -154,6 +154,8 @@ class DpdkEngine : public Engine {
   void shutdown() override;
   void print_stats() override;
   void adjust_memory_regions() override;
+  // kind: HUGE regions come from EAL hugepages (IOVA-contiguous for the NIC).
+  void* alloc_huge(size_t bytes, int numa) override;
   uint64_t get_burst_tot_byte(BurstParams* burst) override;
   BurstParams* create_tx_burst_params() override;
   bool validate_config() const override;
@@ -171,6 +173,11 @@ class DpdkEngine : public Engine {
   bool setup_rx_timestamp_dynfield();
   bool setup_tx_timestamp_dynfield();
   bool calibrate_rx_timestamp_clock(uint16_t port_id);
+  // Current NIC clock for `port` in nanoseconds, for packet-pacing scheduling.
+  // Uses rte_eth_read_clock + the calibrated ticks/sec where supported; falls
+  // back to CLOCK_MONOTONIC (the NIC PTP clock free-runs from driver load unless
+  // a PTP daemon disciplines it, so it tracks CLOCK_MONOTONIC, not CLOCK_REALTIME).
+  uint64_t now_tx_ns(uint16_t port);
   int setup_pools_and_rings(int max_rx_batch, int max_tx_batch);
   struct rte_flow* add_flow(int port, const FlowConfig& cfg);
   bool ensure_eth_jump_rule(int port, uint32_t group);

@@ -17,10 +17,18 @@
 
 #pragma once
 
-#include <rte_ring.h>
-#include <rte_mbuf.h>
+#include "src/daqiri_ring.h"
 #include <daqiri/types.h>
 #include <optional>
+
+// Forward declarations of the DPDK types used only by the DPDK engine. Keeping
+// them as forward declarations (the members are a pointer-returning helper and a
+// shared_ptr to an incomplete type) means engine.h pulls in no libdpdk headers,
+// so daqiri_common and the rdma/ibverbs/socket engines build without DPDK. The
+// definitions of the methods that use them live in engine_dpdk.cpp, compiled
+// into daqiri_common only when the dpdk engine is selected.
+struct rte_mempool;
+struct rte_pktmbuf_extmem;
 
 namespace daqiri {
 
@@ -114,6 +122,10 @@ class Engine {
                                  const std::string& local_mr_name);
   virtual RDMAOpCode rdma_get_opcode(BurstParams* burst);
   int numa_from_mem(const MemoryRegionConfig& mr) const;
+  // mbuf/extmem-based helpers used only by the DPDK engine. Their definitions
+  // live in engine_dpdk.cpp, compiled into daqiri_common only when the dpdk
+  // engine is selected; in non-DPDK builds they are declared-but-undefined and
+  // never referenced (they are only called from DpdkEngine), so they link fine.
   Status register_memory_regions();
   Status map_memory_regions();
   struct rte_mempool* create_pktmbuf_pool(const std::string& name, const MemoryRegionConfig& mr);
@@ -129,24 +141,23 @@ class Engine {
   static constexpr uint32_t JUMBO_FRAME_MAX_SIZE = 0x2600;
   static constexpr uint32_t NON_JUMBO_FRAME_MAX_SIZE = 1518;
 
-  // Per-pool DPDK overhead carried in hugepages even when buffer data is in
-  // extmem (rte_mbuf headers, mempool ring, per-lcore caches, descriptor).
-  // Calibrated against 51200-mbuf extbuf pools at 8 KiB element size.
+  // DPDK hugepage-accounting constants used only by the DPDK engine's preflight
+  // (engine_dpdk.cpp). Harmless to keep in the shared base; they pull in no
+  // libdpdk types.
   static constexpr size_t DPDK_PER_POOL_HUGEPAGE_OVERHEAD = 32UL * 1024 * 1024;
-  // Fixed DPDK/EAL overhead (services, memzones, ethdev tables, etc.) carried
-  // by every initialized process regardless of pool count.
   static constexpr size_t DPDK_EAL_FIXED_OVERHEAD = 64UL * 1024 * 1024;
 
   bool initialized_ = false;
   NetworkConfig cfg_;
   std::unordered_map<std::string, AllocRegion> ar_;
+  // shared_ptr to an incomplete type -- only populated by the DPDK engine
+  // (engine_dpdk.cpp). Layout is identical in every build.
   std::unordered_map<std::string, std::shared_ptr<struct rte_pktmbuf_extmem>> ext_pktmbufs_;
   std::unordered_map<uint32_t, std::vector<std::pair<uint16_t, uint16_t>>> rx_core_q_map;
 
-  // Tracks whether rte_eal_init() has succeeded so shutdown/error paths know
-  // to call rte_eal_cleanup() and unlink leftover hugepage files. Mirrors the
-  // --file-prefix= value passed to EAL so cleanup can target only the files
-  // this process owns.
+  // EAL lifecycle state, used only by the DPDK engine. Mirrors the
+  // --file-prefix= value passed to EAL so cleanup targets only this process's
+  // hugepage files.
   bool eal_initialized_ = false;
   std::string eal_file_prefix_;
 
@@ -156,11 +167,19 @@ class Engine {
 
   virtual Status allocate_memory_regions();
   virtual void adjust_memory_regions() {}
+  // Allocate hugepage-backed memory for a kind: HUGE region. The base provides
+  // a libdpdk-free implementation (MAP_HUGETLB with a regular-page fallback);
+  // DpdkEngine overrides it with rte_malloc_socket so HUGE regions come from EAL
+  // hugepages that are IOVA-contiguous for the NIC.
+  virtual void* alloc_huge(size_t bytes, int numa);
   void init_rx_core_q_map();
   static std::string generate_random_string(int len);
   size_t get_alignment(MemoryKind kind);
-  Status populate_pool(struct rte_ring* ring, const std::string& mr_name);
+  Status populate_pool(daqiri::Ring* ring, const std::string& mr_name);
 
+  // The hugepage-preflight and EAL-cleanup helpers below are defined only in
+  // engine_dpdk.cpp (DPDK builds). They are declared unconditionally but, like
+  // the pool helpers above, are only referenced from the DPDK engine.
   // Breakdown of the hugepage estimate (all values in bytes). Used by both
   // the preflight log line and the failure diagnostic so users can see
   // exactly which knob drives the number they're seeing.
@@ -174,6 +193,13 @@ class Engine {
     size_t extbuf_pool_count = 0;
     size_t dummy_queue_count = 0;
   };
+
+  // The hugepage/EAL preflight helpers below (estimate_required_hugepages,
+  // available_hugepage_bytes, check_hugepage_availability, cleanup_eal) are,
+  // like the mbuf/pool helpers above, defined only in engine_dpdk.cpp and so
+  // compiled into daqiri_common only in DPDK builds. They are called solely
+  // from DpdkEngine; in non-DPDK builds they are declared-but-undefined and
+  // never referenced, so the library still links.
 
   // Estimate hugepage bytes required by the current cfg_. Heuristic;
   // intentionally errs on the high side.

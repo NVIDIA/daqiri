@@ -223,6 +223,28 @@ flow programming test.
 | Bad queue ID | Copy `daqiri_bench_raw_tx_rx.yaml`, set `flows[0].action.id: 99` | Fails in `validate_config()` before EAL/NIC init with `references unknown RX queue` |
 | Mixed flows (optional) | On one interface, add both a standard UDP/IP flow and a flex-item flow (see `rx.flex_items` in the [configuration reference](../api-reference/configuration.md)) | Fails in `validate_config()` with `mixes standard (UDP/IP) and flex-item` |
 
+## Cap the transmit rate with packet pacing
+
+To meter the transmit side at a fixed rate in hardware, set a per-queue `pacing_mbps` cap
+on the TX queue. [`daqiri_bench_raw_tx_rx_pacing.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_pacing.yaml)
+is the loopback config above with `pacing_mbps: 10000` (10 Gbps) on the TX queue. Pacing is
+supported only on the default DPDK engine; the `ibverbs` engine does not support `pacing_mbps`
+(init fails if it is set on an `ibverbs` queue). The NIC meters the queue out so its average
+TX rate stays at or below the configured value; the limit is enforced on an average basis and
+idle gaps do not accumulate burst credit.
+
+```bash
+/opt/daqiri/bin/daqiri_bench_raw_gpudirect /opt/daqiri/bin/daqiri_bench_raw_tx_rx_pacing.yaml --seconds 10
+```
+
+Validate the cap from the `RX complete:` line: `Gbps = bytes * 8 / seconds / 1e9`. With
+`pacing_mbps: 10000` the achieved rate should sit at or just below 10 Gbps regardless of
+link speed. Change `pacing_mbps` (or set it to `0` to disable pacing and send at line rate)
+and re-run to see the cap move.
+
+Pacing requires a Mellanox/mlx5 NIC with hardware send scheduling (ConnectX-7 or later). On
+devices without it, `pacing_mbps` is ignored with a warning at init and TX runs at line rate.
+
 ## Tune RDMA SEND completion signaling
 
 The RDMA engine signals every SEND work request by default. For `daqiri_bench_rdma`

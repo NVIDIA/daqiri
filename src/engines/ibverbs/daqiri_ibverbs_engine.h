@@ -37,8 +37,8 @@
 #include "src/engine.h"
 #include <daqiri/daqiri.h>
 
-struct rte_ring;
-struct rte_mempool;
+#include "src/daqiri_ring.h"
+#include "src/daqiri_pool.h"
 
 namespace daqiri {
 
@@ -207,7 +207,7 @@ struct IbvRxQueue {
   std::atomic<uint64_t> reposts{0};  // diagnostic: WQE reposts
 
   // App-facing burst ring (worker enqueues, get_rx_burst dequeues).
-  struct rte_ring* ring = nullptr;
+  daqiri::Ring* ring = nullptr;
 
   // Optional GPU reordering state for this queue.
   std::unique_ptr<IbvReorderState> reorder;
@@ -297,7 +297,7 @@ struct IbvTxQueue {
   // Ethernet source so the application doesn't have to supply it.
   bool insert_eth_src = false;
   uint8_t eth_src[6] = {0};
-  struct rte_ring* send_ring = nullptr;  // bursts handed off for posting
+  daqiri::Ring* send_ring = nullptr;  // bursts handed off for posting
   std::thread compl_worker;
   std::atomic<bool> running{false};
 };
@@ -379,7 +379,6 @@ class IbverbsEngine : public Engine {
 
  private:
   // ---- bring-up ----
-  bool init_eal();  // EAL for rte_ring/mempool only
   struct ibv_context* open_device_for_interface(const InterfaceConfig& intf);
   Status setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf, const RxQueueConfig& qcfg);
   Status register_rx_mr(IbvRxQueue& q);      // ibv_reg_mr (CPU); dmabuf later
@@ -441,7 +440,11 @@ class IbverbsEngine : public Engine {
   Status setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf, const TxQueueConfig& qcfg);
   Status create_tx_raw_qp(IbvTxQueue& q);                 // IBV_QPT_RAW_PACKET, RESET->RTS
   void post_tx_burst(IbvTxQueue& q, BurstParams* burst);  // build send WQEs + ring doorbell
-  void poll_tx_completions(IbvTxQueue& q);                // drain TX CQ, reclaim slot-runs
+  // Build a WAIT-on-time WQE (ctrl + wseg = 1 WQEBB, no slot) at q.sq_pi that
+  // holds the following send(s) until the NIC real-time clock reaches when_ns,
+  // advance sq_pi, and return its ctrl segment (for the BlueFlame doorbell).
+  void* emit_wait_wqe(IbvTxQueue& q, uint64_t when_ns);
+  void poll_tx_completions(IbvTxQueue& q);  // drain TX CQ, reclaim slot-runs
   // One worker services a group of TX queues sharing a cpu_core, round-robin:
   // drains each send_ring (post) + reclaims completions.
   void tx_worker(std::vector<IbvTxQueue*> group);
@@ -462,8 +465,6 @@ class IbverbsEngine : public Engine {
   void ensure_port_mtus();
 
   // ---- state ----
-  bool eal_initialized_ = false;
-  std::string eal_file_prefix_;
   std::atomic<bool> force_quit_{false};
 
   // One ibv_context + PD per opened device, keyed by device name.
@@ -522,8 +523,8 @@ class IbverbsEngine : public Engine {
 
   // Burst metadata pools. Each element is a BurstParams + inline pointer/length
   // /stride arrays; see the .cpp for the layout.
-  struct rte_mempool* rx_meta_pool_ = nullptr;
-  struct rte_mempool* tx_meta_pool_ = nullptr;
+  daqiri::ObjectPool* rx_meta_pool_ = nullptr;
+  daqiri::ObjectPool* tx_meta_pool_ = nullptr;
   size_t rx_meta_pool_size_ = 0;
   uint32_t max_batch_ = 0;  // largest batch_size across RX+TX queues
 
