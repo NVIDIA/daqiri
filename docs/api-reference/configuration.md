@@ -181,7 +181,8 @@ engine.
 
 - **`name`**: Name of the flex item.
   - type: `string`
-- **`id`**: ID of the flex item.
+- **`id`**: ID of the flex item. Scoped per interface; the same numeric ID on two
+  interfaces may refer to different parser settings.
   - type: `integer`
 - **`offset`**: Byte offset after the UDP header where matching begins. Must be a multiple
   of 4 and less than 28.
@@ -211,8 +212,8 @@ engine.
     - type: `integer` or `string`
   - **`ipv4_len`**: IPv4 payload length.
     - type: `integer`
-  - **`flex_item_id`**: Flex item ID (from `rx.flex_items`). Cannot be combined with UDP/IP
-    matching.
+  - **`flex_item_id`**: Flex item ID (the `id` field from an entry under `rx.flex_items` on
+    the same interface). Cannot be combined with UDP/IP matching.
     - type: `integer`
   - **`val`**: 32-bit value to match (with flex items).
     - type: `integer`

@@ -68,8 +68,17 @@ struct DPDKQueueConfig {
 };
 
 struct DropTrafficConfig {
-  struct rte_flow* jump;  // unused; port jump is owned by ensure_eth_jump_rule()
   struct rte_flow* drop;
+};
+
+struct PortFlow {
+  uint16_t port;
+  struct rte_flow* flow;
+};
+
+struct FlexItemHandle {
+  uint16_t port;
+  struct rte_flow_item_flex_handle* handle;
 };
 
 struct RxTimestampConversion {
@@ -165,15 +174,17 @@ class DpdkEngine : public Engine {
   int setup_pools_and_rings(int max_rx_batch, int max_tx_batch);
   struct rte_flow* add_flow(int port, const FlowConfig& cfg);
   bool ensure_eth_jump_rule(int port, uint32_t group);
+  void track_flow(uint16_t port, struct rte_flow* flow);
+  void destroy_programmed_flows();
+  void destroy_flex_item_handles();
   void destroy_eth_jump_rules();
+  void destroy_all_flow_rules();
   bool add_send_to_kernel_fallback(int port, uint32_t group);
   void create_dummy_rx_q();
   void create_dummy_tx_q();
   struct rte_flow* add_modify_flow_set(int port, int queue, const char* buf, int len,
                                        Direction direction);
 
-  struct rte_flow_item_flex_handle *create_flex_flow_rule(
-    int port, int offset, struct rte_flow_item *udp_item, struct rte_flow_item *end_pattern);
   struct rte_flow* add_flex_item_flow(int port, const FlexItemMatch& match, uint16_t queue_id);
 
   bool apply_tx_offloads(int port);
@@ -321,7 +332,8 @@ class DpdkEngine : public Engine {
   std::array<struct rte_ether_addr, MAX_IFS> mac_addrs;
   std::unordered_map<uint32_t, struct rte_ring*> rx_rings;
   struct rte_ether_addr conf_ports_eth_addr[RTE_MAX_ETHPORTS];
-  std::unordered_map<uint16_t, struct rte_flow_item_flex_handle*> flex_item_handles_;
+  std::unordered_map<uint32_t, FlexItemHandle> flex_item_handles_;
+  std::vector<PortFlow> programmed_flows_;
   std::unordered_set<uint64_t> eth_jump_installed_;
   std::unordered_map<uint64_t, struct rte_flow*> eth_jump_flows_;
   std::unordered_map<uint32_t, struct rte_ring*> tx_rings;
