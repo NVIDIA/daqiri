@@ -24,7 +24,7 @@ large RoCE messages) hit the same ~96–98 Gb/s NIC/PCIe ceiling as Spark — th
 does that work, not the CPU — while the CPU-bound paths (kernel sockets,
 small-operation RoCE, small-packet DPDK) top out well below Spark in proportion
 to the per-core gap. A clean check: single-pair 1 MiB TCP runs 31.6 Gb/s on Spark
-versus 17.8 Gb/s here — a 1.78× ratio that tracks the 3.9/1.97 GHz clock ratio
+versus 17.2 Gb/s here — a ~1.8× ratio that tracks the 3.9/1.97 GHz clock ratio
 almost exactly.
 
 For the loopback setup these numbers depend on and the per-transport
@@ -51,7 +51,7 @@ loopback). The exact commands are collected under [Reproduce](#reproduce) below.
 | NIC | ConnectX-7, ports `eth0` ↔ `eth1` (`0005:03:00.0`/`.1`) cross-cabled (single-host loopback), MTU 9000 |
 | Build | Release (`-DCMAKE_BUILD_TYPE=Release`), `DAQIRI_ENGINE="dpdk ibverbs"` |
 | Loopback | Raw/DPDK uses the two physical ports directly; socket/RoCE use the `dq_wire_*` network-namespace wire loopback |
-| Core pinning | Each direction has a busy-spin queue poller and an app worker on separate cores. DPDK single-queue: pollers 9/10, workers 0/1, master 8. Multi-queue: TX pollers 9/7, RX pollers 10/11 — with only three isolated cores, the fourth poller borrows non-isolated core 7. |
+| Core pinning | DPDK/RoCE (poll-mode) use the isolated cores: DPDK single-queue pollers 9/10, workers 0/1, master 8; multi-queue TX pollers 9/7, RX pollers 10/11 (the fourth poller borrows non-isolated core 7, since only three are isolated). Kernel sockets instead pin to **non-isolated** cores 1–4 (in the `irqaffinity=0-8` pool, normal tick/RCU, and off core 0 — the single NIC RX-softirq sink); isolated cores hurt syscall-heavy kernel networking. |
 | PCIe | Switch Max Payload Size capped at 128 B (devkit limitation), bounding bulk throughput near ~96–98 Gb/s |
 
 ## Results Summary — native-shape peak (C++ loopback)
@@ -64,8 +64,8 @@ four-pair aggregate is shown.
 | ----------------- | --------- | ---------: | ----- | ----- |
 | Raw Ethernet / GPUDirect | 4 KB packet | **97.0 Gb/s** | 0 | 96.4 Gb/s at the 8 KB native shape; flat across batch size |
 | Socket / RoCE (SEND) | 8 MB message | **97.7 Gb/s** | 0 | Single QP, batch 1; collapses below 64 KB (see below) |
-| Socket / TCP | 8 KB × 4 pairs | **15.7 Gb/s** | ~0 | Does not scale past ~17 Gb/s; kernel-TCP CPU-bound |
-| Socket / UDP | 8 KB × 4 pairs | **9.3 Gb/s** | ~1% loss | Receiver goodput; unpaced sender |
+| Socket / TCP | 8 KB × 4 pairs | **15.3 Gb/s** | ~0 | Large-message scaling capped by single-core RX softirq; kernel-TCP CPU-bound |
+| Socket / UDP | 8 KB × 4 pairs | **10.5 Gb/s** | ~0% loss | Receiver goodput; unpaced sender |
 
 Each transport is best read at its own native operation size (see the per-transport
 tables below). The headline story is the split between the two NIC-saturating
@@ -200,9 +200,9 @@ into VRAM, while the GPU SM stays idle — the `kind: device` GPUDirect signatur
 ## Socket / TCP
 
 Four one-way TCP client/server pairs over the netns wire loopback, each pair
-pinned to one core. TCP self-paces via flow control, so App TX equals App RX with
-effectively no app-level loss. `message_size` is the per-send byte count of a
-stream (no datagram boundary, no fragmentation).
+pinned to one non-isolated core (1–4). TCP self-paces via flow control, so App TX
+equals App RX with effectively no app-level loss. `message_size` is the per-send
+byte count of a stream (no datagram boundary, no fragmentation).
 
 Throughput in Gb/s (App TX = App RX), mean of 3 reps (spread ≤0.3 Gb/s):
 
@@ -217,24 +217,40 @@ Throughput in Gb/s (App TX = App RX), mean of 3 reps (spread ≤0.3 Gb/s):
     </tr>
   </thead>
   <tbody>
-    <tr><th>1000 B</th><td>3.6</td><td>7.1</td><td>12.1</td></tr>
-    <tr><th>8000 B</th><td>14.7</td><td>16.6</td><td>15.7</td></tr>
-    <tr><th>1 MiB</th><td>17.8</td><td>16.4</td><td>15.4</td></tr>
+    <tr><th>1000 B</th><td>4.2</td><td>8.5</td><td>16.7</td></tr>
+    <tr><th>8000 B</th><td>15.9</td><td>16.8</td><td>15.3</td></tr>
+    <tr><th>1 MiB</th><td>17.2</td><td>15.6</td><td>14.6</td></tr>
   </tbody>
 </table>
 
-Kernel TCP on the IGX Orin tops out near **~17 Gb/s**, far below Spark's ~97 Gb/s
-four-pair aggregate. Small (1000 B) messages are per-operation-bound and scale
-with pair count (more cores doing syscalls), but at 8 KB and 1 MiB a single pair
-already reaches the ~17 Gb/s ceiling and adding pairs causes contention rather
-than scaling — 1 MiB even regresses from 17.8 (1 pair) to 15.4 (4 pairs). The
-limit is host-side kernel-TCP CPU cost: a single 1 MiB pair runs 17.8 Gb/s here
-versus 31.6 Gb/s on Spark, a 1.78× gap that matches the 1.97-vs-3.9 GHz per-core
-clock ratio almost exactly — the wire is identical, the cores are not.
+A single TCP stream tops out near **~17 Gb/s** — the per-core ceiling, far below
+Spark's ~97 Gb/s four-pair aggregate. That is host-side kernel-TCP CPU cost: a
+single 1 MiB pair runs 17.2 Gb/s here versus 31.6 Gb/s on Spark, a ~1.8× gap that
+matches the 1.97-vs-3.9 GHz per-core clock ratio almost exactly. The wire is
+identical; the cores are not.
+
+Two different scaling regimes appear as you add pairs:
+
+- **Small (1000 B) messages scale well** — 4.2 → 8.5 → 16.7 Gb/s over 1/2/4 pairs
+  (~linear). These are operation-rate-bound, so spreading them across more cores
+  helps. Pinning matters here: kernel sockets run on non-isolated cores 1–4 — the
+  isolated `nohz_full`/`rcu_nocbs` cores 9–11 used for DPDK/RoCE *halve* this
+  small-message scaling, because deferred timers/RCU starve the syscall path.
+- **Large (8 KB, 1 MiB) messages do not scale** — a single pair already nears the
+  ~17 Gb/s per-core ceiling, and adding pairs does not raise the aggregate (1 MiB
+  even drifts to 14.6 at 4 pairs). The cause is **receive-side, not the app
+  cores**: all NIC RX softirq processing serializes on a single core — measured,
+  every `NET_RX` softirq lands on cpu0, which runs ~70% in softirq while every
+  other core sees none. RSS/RPS is not spreading receive work, so the four flows'
+  copy-heavy receive paths share one softirq core. Lifting this would need
+  RX-softirq spreading (RPS / multi-queue RSS steered to distinct cores), not more
+  app cores — which is why moving the app threads around leaves the large-message
+  numbers essentially unchanged.
 
 ## Socket / UDP
 
-Four one-way UDP client/server pairs, same one-core-per-pair pinning. UDP has no
+Four one-way UDP client/server pairs, same one-core-per-pair pinning on the
+non-isolated cores 1–4. UDP has no
 flow control, so each sender runs flat-out and the receiver drops whatever it
 cannot drain — the loss column is an inherent property of unpaced UDP, not a
 fault. App RX is the delivered goodput; App-level loss is `(App TX − App RX) /
@@ -254,16 +270,16 @@ beneath it (mean of 3 reps):
     </tr>
   </thead>
   <tbody>
-    <tr><th>1000 B</th><td>1.3<small>1% loss</small></td><td>0.00<small>~100% loss</small></td><td>0.00<small>~100% loss</small></td></tr>
-    <tr><th>8000 B</th><td>5.4<small>27% loss</small></td><td>8.0<small>21% loss</small></td><td>9.3<small>1% loss</small></td></tr>
+    <tr><th>1000 B</th><td>1.6<small>1% loss</small></td><td>0.00<small>~100% loss</small></td><td>0.00<small>~100% loss</small></td></tr>
+    <tr><th>8000 B</th><td>5.8<small>31% loss</small></td><td>8.9<small>20% loss</small></td><td>10.5<small>~0% loss</small></td></tr>
   </tbody>
 </table>
 
 The sweep stops at 8000 B (single Ethernet frame). At 1000 B the multi-pair
 receiver collapses to near-total loss — the small-datagram receive rate on the
 IGX Orin's cores cannot keep up with multiple unpaced senders, so almost nothing
-is delivered. At 8000 B delivered goodput climbs with pair count to ~9.3 Gb/s
-(loss falling to ~1% at 4 pairs as the per-pair send rate drops below what the
+is delivered. At 8000 B delivered goodput climbs with pair count to ~10.5 Gb/s
+(loss falling to ~0% at 4 pairs as the per-pair send rate drops below what the
 receiver drains). As on Spark, the wire itself is loss-free; the loss is
 host-side socket-buffer and receive-rate pressure, sharper here on the smaller
 cores.
