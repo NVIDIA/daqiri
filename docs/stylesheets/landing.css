@@ -848,27 +848,28 @@ body.graphic-overlay-open {
   min-width: 0;
 }
 
-/* details element resets so it looks identical to a div on desktop */
+/* details element resets */
 .daqiri-landing .gs-code-details {
   list-style: none;
 }
 .daqiri-landing .gs-code-details summary {
-  cursor: default;
+  cursor: pointer;
   list-style: none;
 }
 .daqiri-landing .gs-code-details summary::-webkit-details-marker {
   display: none;
 }
 
-/* Force both panels always open and non-interactive on desktop.
-   Overrides browser UA display:none on closed <details> children. */
-@media (min-width: 481px) {
-  .daqiri-landing .gs-code-details > *:not(summary) {
-    display: block;
-  }
-  .daqiri-landing .gs-code-details summary {
-    pointer-events: none;
-  }
+/* Expand/collapse chevron on all screen sizes */
+.daqiri-landing .gs-code-details .gs-code-hdr::after {
+  content: "▲";
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  margin-left: 0.5rem;
+  flex-shrink: 0;
+}
+.daqiri-landing .gs-code-details:not([open]) .gs-code-hdr::after {
+  content: "▼";
 }
 
 .daqiri-landing .gs-code-hdr {
@@ -1650,14 +1651,7 @@ body.graphic-overlay-open {
     grid-column: 1 / -1;
     grid-row: 2;
     padding: 0.7rem 1rem;
-    border-bottom: 1px solid var(--border);
     font-size: 0.8rem;
-  }
-  /* Card footer: source link */
-  .examples-table td:nth-child(4) {
-    grid-column: 1 / -1;
-    grid-row: 3;
-    padding: 0.6rem 1rem;
   }
   .ex-name {
     white-space: normal;
@@ -1717,21 +1711,7 @@ body.graphic-overlay-open {
     padding: 1.1rem 0;
   }
 
-  /* Option B: make details/summary interactive on mobile */
-  .daqiri-landing .gs-code-details summary {
-    cursor: pointer;
-  }
-  .daqiri-landing .gs-code-details .gs-code-hdr::after {
-    content: "▲";
-    font-size: 0.65rem;
-    color: var(--text-dim);
-    margin-left: 0.5rem;
-    flex-shrink: 0;
-    transition: transform 0.2s ease;
-  }
-  .daqiri-landing .gs-code-details:not([open]) .gs-code-hdr::after {
-    content: "▼";
-  }
+  /* Quick-start steps: tighten */
 
   /* Option A: smaller font + tighter padding on all pre blocks */
   .daqiri-landing pre,
