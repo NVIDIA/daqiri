@@ -7,13 +7,13 @@
 
 DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux kernel network stack to achieve the highest possible throughput and lowest latency for Ethernet frame transmission and reception. It targets NVIDIA ConnectX-6 Dx and later NICs and supports GPU direct memory access (GPUDirect) for zero-copy data paths between the NIC and GPU.
 
-| &nbsp; | &nbsp; |
-|:---:|:---|
-| 📖 | **Docs & Website:** [nvidia.github.io/daqiri](https://nvidia.github.io/daqiri/) |
-| ⚡ | **Peak performance** requires an NVIDIA SmartNIC (ConnectX-6 Dx or later) and a GPUDirect-capable NVIDIA GPU |
-| 🖥️ | **Supported hardware:** NVIDIA DGX Spark, NVIDIA IGX, and NVIDIA RTX Pro Servers |
-| 🔌 | **Works with any NIC and NVIDIA GPU** via DAQIRI's built-in Linux Sockets engine |
-| 🚀 | **Getting Started:** [nvidia.github.io/daqiri/getting-started](https://nvidia.github.io/daqiri/getting-started/) |
+<table>
+<tr><td align="center">📖</td><td><strong>Docs &amp; Website:</strong> <a href="https://nvidia.github.io/daqiri/">nvidia.github.io/daqiri</a></td></tr>
+<tr><td align="center">⚡</td><td><strong>Peak performance</strong> requires an NVIDIA SmartNIC (ConnectX-6 Dx or later) and a GPUDirect-capable NVIDIA GPU</td></tr>
+<tr><td align="center">🖥️</td><td><strong>Supported hardware:</strong> NVIDIA DGX Spark, NVIDIA IGX, and NVIDIA RTX Pro Servers</td></tr>
+<tr><td align="center">🔌</td><td><strong>Works with any NIC and NVIDIA GPU</strong> via DAQIRI's built-in Linux Sockets engine</td></tr>
+<tr><td align="center">🚀</td><td><strong>Getting Started:</strong> <a href="https://nvidia.github.io/daqiri/getting-started/">nvidia.github.io/daqiri/getting-started</a></td></tr>
+</table>
 
 ## Table of Contents
 
