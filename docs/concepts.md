@@ -194,6 +194,15 @@ Use HDS when the application needs to inspect headers (UDP
 source/destination ports, application-layer sequence numbers, etc.) but
 the bulk of the data is meant for the GPU.
 
+<figure class="packet-diagram">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="images/packet_diagrams/hds/header-data-split-light.webp" type="image/webp">
+    <source srcset="images/packet_diagrams/hds/header-data-split.webp" type="image/webp">
+    <img src="images/packet_diagrams/hds/header-data-split-poster.png" alt="Header-data split writes small CPU header segments and large GPUDirect GPU payload segments." loading="lazy" decoding="async">
+  </picture>
+  <figcaption>HDS splits each packet into a CPU header segment and a GPUDirect GPU payload segment.</figcaption>
+</figure>
+
 ## Flows and Queues
 
 These two terms describe how packets are routed from the wire into the
@@ -234,6 +243,15 @@ routing each flow to a separate queue for parallel processing.
 For Raw Ethernet, flow steering is implemented on top of RTE Flow. The
 YAML options are documented in
 [Configuration YAML Reference → Flows](api-reference/configuration.md#flows).
+
+<figure class="packet-diagram">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="images/packet_diagrams/flow_steering/flow-steering-light.webp" type="image/webp">
+    <source srcset="images/packet_diagrams/flow_steering/flow-steering.webp" type="image/webp">
+    <img src="images/packet_diagrams/flow_steering/flow-steering-poster.png" alt="Flow steering maps matching UDP ports to separate RX queues and sends non-matching packets to the kernel fallback path." loading="lazy" decoding="async">
+  </picture>
+  <figcaption>Flow rules classify packets in NIC hardware and steer each matching flow to its configured RX queue.</figcaption>
+</figure>
 
 ## Memory Regions
 
@@ -293,6 +311,24 @@ on RX through `rx.reorder_configs`:
 This is the path to use when packets arrive out of order (e.g. across
 multiple NIC queues) and need to be reassembled into a single, contiguous
 GPU buffer before downstream processing.
+
+<figure class="packet-diagram">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="images/packet_diagrams/reorder/packet-reorder-light.webp" type="image/webp">
+    <source srcset="images/packet_diagrams/reorder/packet-reorder.webp" type="image/webp">
+    <img src="images/packet_diagrams/reorder/packet-reorder-poster.png" alt="GPU reorder stages packet pointers and writes payloads into fixed sequence slots." loading="lazy" decoding="async">
+  </picture>
+  <figcaption>GPU reorder stages packet pointers, then writes payloads into fixed slots derived from the sequence number.</figcaption>
+</figure>
+
+<figure class="packet-diagram">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="images/packet_diagrams/reorder_quantize/packet-reorder-quantize-light.webp" type="image/webp">
+    <source srcset="images/packet_diagrams/reorder_quantize/packet-reorder-quantize.webp" type="image/webp">
+    <img src="images/packet_diagrams/reorder_quantize/packet-reorder-quantize-poster.png" alt="GPU reorder plus conversion stages int4 packet pointers and writes fp32 output slots." loading="lazy" decoding="async">
+  </picture>
+  <figcaption>The fused reorder-and-convert path writes reordered output while converting payload data, for example from int4 to fp32.</figcaption>
+</figure>
 
 Each reorder config currently operates on a single memory domain, either
 GPU-only or CPU-only. Reordering packets whose segments span two memory

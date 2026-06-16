@@ -636,3 +636,24 @@ body[data-active-tab="igx-orin"] .md-nav--secondary li:has(> a[data-tab="dgx-spa
 body[data-active-tab="dgx-spark"] .md-nav--secondary li:has(> a[data-tab="igx-orin"]) {
   display: none;
 }
+
+/* Packet path animations embedded in concept pages. */
+.md-typeset figure.packet-diagram {
+  margin: 1.2rem 0 1.6rem;
+}
+
+.md-typeset figure.packet-diagram img {
+  display: block;
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.md-typeset figure.packet-diagram figcaption {
+  max-width: 760px;
+  margin: 0.45rem auto 0;
+  color: var(--md-default-fg-color--light);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  text-align: center;
+}
