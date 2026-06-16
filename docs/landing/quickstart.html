@@ -64,8 +64,8 @@ cmake --install build --prefix /opt/daqiri</pre>
         </div>
 
         <div class="gs-code-panel">
-          <div class="gs-code-block">
-            <div class="gs-code-hdr"><span class="gs-code-title">Initialize &amp; Receive Packets</span><span class="gs-code-lang">C++</span></div>
+          <details class="gs-code-block gs-code-details" open>
+            <summary class="gs-code-hdr"><span class="gs-code-title">Initialize &amp; Receive Packets</span><span class="gs-code-lang">C++</span></summary>
             <pre><span class="kw">#include</span> <span class="str">&lt;daqiri/daqiri.h&gt;</span>
 
 <span class="cm">// Init from YAML config</span>
@@ -86,9 +86,9 @@ daqiri::<span class="fn">BurstParams</span> *burst;
   daqiri::<span class="fn">free_all_packets_and_burst_rx</span>(
       burst);
 }</pre>
-          </div>
-          <div class="gs-code-block">
-            <div class="gs-code-hdr"><span class="gs-code-title">Header-Data Split (GPU payload)</span><span class="gs-code-lang">C++</span></div>
+          </details>
+          <details class="gs-code-block gs-code-details" open>
+            <summary class="gs-code-hdr"><span class="gs-code-title">Header-Data Split (GPU payload)</span><span class="gs-code-lang">C++</span></summary>
             <pre><span class="cm">// Seg 0 = headers (CPU)
 // Seg 1 = payload (GPU)</span>
 <span class="kw">for</span> (<span class="kw">int</span> i = <span class="nm">0</span>; i &lt; n; i++) {
@@ -106,7 +106,7 @@ daqiri::<span class="fn">BurstParams</span> *burst;
         burst, <span class="nm">1</span>, i);
   <span class="cm">// pay is already on GPU — no copy</span>
 }</pre>
-          </div>
+          </details>
         </div>
       </div>
     </div>

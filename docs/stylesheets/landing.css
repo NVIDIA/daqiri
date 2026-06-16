@@ -848,6 +848,30 @@ body.graphic-overlay-open {
   min-width: 0;
 }
 
+/* details element resets */
+.daqiri-landing .gs-code-details {
+  list-style: none;
+}
+.daqiri-landing .gs-code-details summary {
+  cursor: pointer;
+  list-style: none;
+}
+.daqiri-landing .gs-code-details summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Expand/collapse chevron on all screen sizes */
+.daqiri-landing .gs-code-details .gs-code-hdr::after {
+  content: "▲";
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  margin-left: 0.5rem;
+  flex-shrink: 0;
+}
+.daqiri-landing .gs-code-details:not([open]) .gs-code-hdr::after {
+  content: "▼";
+}
+
 .daqiri-landing .gs-code-hdr {
   padding: 0.7rem 1.25rem;
   background: var(--gs-code-hdr-bg);
@@ -1518,5 +1542,218 @@ body.graphic-overlay-open {
 
   .daqiri-landing .graphic-overlay-img {
     max-height: calc(100vh - var(--md-header-height, 3rem) - var(--md-tabs-height, 2.4rem) - 5rem);
+  }
+
+  /* Stack section-header title + action button vertically */
+  .daqiri-landing .section-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  /* Prevent inline code strings from overflowing paragraph text */
+  .daqiri-landing p code,
+  .daqiri-landing .section-desc code,
+  .daqiri-landing .tut-desc code,
+  .daqiri-landing .gs-step-body p code,
+  .daqiri-landing .pub-authors code {
+    word-break: break-all;
+  }
+
+  /* Allow long text containers to wrap at any point */
+  .daqiri-landing p,
+  .daqiri-landing .section-desc,
+  .daqiri-landing .hero-desc,
+  .daqiri-landing .tut-desc,
+  .daqiri-landing .tut-title,
+  .daqiri-landing .gs-step-body p {
+    overflow-wrap: break-word;
+  }
+
+  /* Hero eyebrow: allow wrapping on narrow screens */
+  .daqiri-landing .hero-eyebrow {
+    white-space: normal;
+    flex-wrap: wrap;
+  }
+
+  /* Ensure all pre blocks are capped to their container width */
+  .daqiri-landing pre,
+  .daqiri-landing .cta-pre {
+    max-width: 100%;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  /* Fix pub-grid: 360px min overflows on narrow phones */
+  .daqiri-landing .pub-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Feature cards: reduce padding on mobile */
+  .daqiri-landing .feature-card {
+    padding: 1.25rem;
+  }
+
+  /* features-intro: reduce large top/bottom gaps */
+  .daqiri-landing .features-intro {
+    margin-bottom: 2rem;
+  }
+  .daqiri-landing .features-grid {
+    margin-top: 2rem;
+  }
+
+  /* Tutorial items: tighten gap and number prefix */
+  .daqiri-landing .tut-item {
+    gap: 0.75rem;
+    padding: 0.9rem 1rem;
+  }
+
+  /* Convert examples table to a card list */
+  .examples-table-wrap {
+    overflow-x: visible;
+  }
+  .examples-table thead {
+    display: none;
+  }
+  .examples-table tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  .examples-table tr {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  /* Card header: name (left) + type badge (right) */
+  .examples-table td:nth-child(1) {
+    grid-column: 1;
+    grid-row: 1;
+    padding: 0.7rem 0.5rem 0.7rem 1rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    border-right: none;
+  }
+  .examples-table td:nth-child(2) {
+    grid-column: 2;
+    grid-row: 1;
+    padding: 0.7rem 1rem 0.7rem 0.5rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+  }
+  /* Card body: description */
+  .examples-table td:nth-child(3) {
+    display: block;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    padding: 0.7rem 1rem;
+    font-size: 0.8rem;
+  }
+  .ex-name {
+    white-space: normal;
+    font-size: 0.875rem;
+  }
+
+  /* CTA: stack action buttons full-width */
+  .daqiri-landing .cta-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .daqiri-landing .cta-actions .btn {
+    justify-content: center;
+  }
+
+  /* Footer bottom: stack copyright + links */
+  .daqiri-landing .footer-bottom {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+}
+
+/* Very narrow phones: tighten container padding and hero */
+@media (max-width: 480px) {
+  .daqiri-landing .container,
+  .daqiri-landing #hero .container {
+    padding: 0 1rem;
+  }
+
+  /* Hero actions: full-width stack */
+  .daqiri-landing .hero-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .daqiri-landing .hero-actions .btn {
+    flex: none;
+    justify-content: center;
+    width: 100%;
+  }
+
+  /* Hero stats: compact 2-column grid */
+  .daqiri-landing .hero-stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+  }
+
+  /* Reduce section spacing further */
+  .daqiri-landing section:not(#hero) {
+    padding: 1.75rem 0;
+  }
+
+  /* Quick-start steps: tighten */
+  .daqiri-landing .gs-step {
+    gap: 0.75rem;
+    padding: 1.1rem 0;
+  }
+
+  /* Quick-start steps: tighten */
+
+  /* Option A: smaller font + tighter padding on all pre blocks */
+  .daqiri-landing pre,
+  .daqiri-landing .gs-step-body pre,
+  .daqiri-landing .gs-code-block pre,
+  [data-md-color-scheme="slate"] .md-typeset .daqiri-landing .gs-code-block pre,
+  [data-md-color-scheme="default"] .md-typeset .daqiri-landing .gs-code-block pre {
+    font-size: 0.72rem;
+    padding: 0.75rem;
+    line-height: 1.55;
+  }
+
+  /* Option C: right-edge fade on step pre blocks to signal horizontal scroll */
+  .daqiri-landing .gs-step-body {
+    position: relative;
+  }
+  .daqiri-landing .gs-step-body::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 2.5rem;
+    /* height matches the pre block — sits over it only */
+    height: 2.75rem;
+    background: linear-gradient(to right, transparent, var(--code-block-bg));
+    pointer-events: none;
+    border-radius: 0 var(--radius) var(--radius) 0;
+  }
+  /* Remove fade when there's no pre in the step */
+  .daqiri-landing .gs-step-body:not(:has(pre))::after {
+    display: none;
+  }
+
+  /* Overlay: inset flush on tiny screens */
+  .daqiri-landing .graphic-overlay {
+    inset: calc(var(--md-header-height, 3rem) + var(--md-tabs-height, 2.4rem)) 0 0;
+  }
+  .daqiri-landing .graphic-overlay-backdrop {
+    border-radius: 0;
+  }
+  .daqiri-landing .graphic-overlay-panel {
+    border-radius: 0;
+    width: 100%;
   }
 }

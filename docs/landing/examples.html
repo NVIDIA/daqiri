@@ -11,7 +11,7 @@
       border-bottom: 2px solid var(--border, rgba(255,255,255,0.12));
     }
     .examples-table th {
-      padding: 0.6rem 1rem;
+      padding: 0.4rem 0.85rem;
       text-align: left;
       font-size: 0.75rem;
       font-weight: 600;
@@ -21,7 +21,7 @@
       white-space: nowrap;
     }
     .examples-table td {
-      padding: 0.75rem 1rem;
+      padding: 0.45rem 0.85rem;
       vertical-align: top;
       border-bottom: 1px solid var(--border, rgba(255,255,255,0.07));
     }
@@ -73,57 +73,48 @@
               <th>Example</th>
               <th>Type</th>
               <th>Description</th>
-              <th>Source</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td class="ex-name">Raw TX/RX GPUDirect</td>
+              <td class="ex-name"><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/raw_gpudirect_bench.cpp" target="_blank">Raw TX/RX GPUDirect ↗</a></td>
               <td><span class="ex-badge ex-badge-cpp">C++</span></td>
               <td class="ex-desc-cell">The recommended starting point. Sends and receives packets with payloads landing directly in GPU memory, with no CPU in the data path. Use this to validate your hardware setup and measure baseline throughput.</td>
-              <td><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/raw_gpudirect_bench.cpp" target="_blank">raw_gpudirect_bench.cpp ↗</a></td>
             </tr>
             <tr>
-              <td class="ex-name">Header-Data Split TX/RX</td>
+              <td class="ex-name"><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/raw_hds_bench.cpp" target="_blank">Header-Data Split TX/RX ↗</a></td>
               <td><span class="ex-badge ex-badge-cpp">C++</span></td>
               <td class="ex-desc-cell">Splits each incoming packet into two segments: headers land in CPU memory for inspection, while the payload goes directly to the GPU. Useful when your application needs to read per-packet metadata without touching the payload on the CPU.</td>
-              <td><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/raw_hds_bench.cpp" target="_blank">raw_hds_bench.cpp ↗</a></td>
             </tr>
             <tr>
-              <td class="ex-name">Sequence Reorder</td>
+              <td class="ex-name"><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/raw_reorder_seq_bench.cpp" target="_blank">Sequence Reorder ↗</a></td>
               <td><span class="ex-badge ex-badge-cuda">C++/CUDA</span></td>
               <td class="ex-desc-cell">Reassembles out-of-order UDP packets into a correctly ordered GPU buffer. A CUDA kernel reads the sequence number embedded in each packet header and places the packet at the right position, so downstream compute always sees a clean, ordered stream.</td>
-              <td><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/raw_reorder_seq_bench.cpp" target="_blank">raw_reorder_seq_bench.cpp ↗</a></td>
             </tr>
             <tr>
-              <td class="ex-name">Sequence Reorder + Quantize</td>
+              <td class="ex-name"><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/raw_reorder_quantize_bench.cpp" target="_blank">Sequence Reorder + Quantize ↗</a></td>
               <td><span class="ex-badge ex-badge-cuda">C++/CUDA</span></td>
               <td class="ex-desc-cell">Extends sequence reorder with an in-kernel type conversion step (e.g., int4 → fp32), so the GPU buffer is both reordered and in the format your compute pipeline expects — all before your application code runs.</td>
-              <td><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/raw_reorder_quantize_bench.cpp" target="_blank">raw_reorder_quantize_bench.cpp ↗</a></td>
             </tr>
             <tr>
-              <td class="ex-name">PCAP Writer</td>
+              <td class="ex-name"><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/pcap_writer_example.cpp" target="_blank">PCAP Writer ↗</a></td>
               <td><span class="ex-badge ex-badge-cpp">C++</span></td>
               <td class="ex-desc-cell">Captures live network traffic to a standard <code>.pcap</code> file you can open in Wireshark or tcpdump. Packets are received via GPUDirect and staged through pinned host memory to disk; capture continues until you press Ctrl+C.</td>
-              <td><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/pcap_writer_example.cpp" target="_blank">pcap_writer_example.cpp ↗</a></td>
             </tr>
             <tr>
-              <td class="ex-name">RDMA Benchmark</td>
+              <td class="ex-name"><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/rdma_bench.cpp" target="_blank">RDMA Benchmark ↗</a></td>
               <td><span class="ex-badge ex-badge-cpp">C++</span></td>
               <td class="ex-desc-cell">Measures RoCE/RDMA throughput in client/server mode. Useful for comparing DAQIRI against standard tools like <code>ib_send_bw</code>, or when one endpoint is a third-party RDMA device such as an FPGA or instrument.</td>
-              <td><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/rdma_bench.cpp" target="_blank">rdma_bench.cpp ↗</a></td>
             </tr>
             <tr>
-              <td class="ex-name">Socket Benchmark</td>
+              <td class="ex-name"><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/socket_bench.cpp" target="_blank">Socket Benchmark ↗</a></td>
               <td><span class="ex-badge ex-badge-cpp">C++</span></td>
               <td class="ex-desc-cell">Measures TCP and UDP throughput over standard Linux sockets — no ConnectX NIC or special privileges required. A good comparison baseline before moving to kernel-bypass, or for connecting to a peer that only speaks standard sockets.</td>
-              <td><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/socket_bench.cpp" target="_blank">socket_bench.cpp ↗</a></td>
             </tr>
             <tr>
-              <td class="ex-name">GPUDirect Storage Write</td>
+              <td class="ex-name"><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/gds_write_example.cpp" target="_blank">GPUDirect Storage Write ↗</a></td>
               <td><span class="ex-badge ex-badge-cuda">C++/CUDA</span></td>
               <td class="ex-desc-cell">Captures a burst of packets and writes them from GPU memory directly to NVMe storage via cuFile, in either raw binary or PCAP format. Supports both synchronous and asynchronous writes, demonstrating the full GPU-to-storage path without any CPU copy.</td>
-              <td><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/gds_write_example.cpp" target="_blank">gds_write_example.cpp ↗</a></td>
             </tr>
           </tbody>
         </table>
