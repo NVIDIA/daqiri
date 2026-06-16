@@ -4,15 +4,24 @@
 
 **Send and receive Ethernet packets into CPU and GPU memory at hundreds of Gbps with a simple API.** DAQIRI (Data Acquisition for Integrated Real-time Instruments) connects data acquisition systems to NVIDIA GPUs for real-time processing and AI, paving the way for autonomy of the next generation of scientific and industrial instruments.
 
-> [!WARNING]
-> The library is undergoing large improvements as we aim to better support it as an NVIDIA product.
-> API breakages might be more frequent until we reach version 1.0.
 
 DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux kernel network stack to achieve the highest possible throughput and lowest latency for Ethernet frame transmission and reception. It targets NVIDIA ConnectX-6 Dx and later NICs and supports GPU direct memory access (GPUDirect) for zero-copy data paths between the NIC and GPU.
 
-📖 **Live documentation: [nvidia.github.io/daqiri](https://nvidia.github.io/daqiri/)**
+| | |
+|:---:|---|
+| 📖 | **Docs & Website:** [nvidia.github.io/daqiri](https://nvidia.github.io/daqiri/) |
+| ⚡ | **Peak performance** requires an NVIDIA SmartNIC (ConnectX-6 Dx or later) and a GPUDirect-capable NVIDIA GPU |
+| 🖥️ | **Supported hardware:** NVIDIA DGX Spark, NVIDIA IGX, and NVIDIA RTX Pro Servers |
+| 🔌 | **Works with any NIC and NVIDIA GPU** via DAQIRI's built-in Linux Sockets engine |
+| 🚀 | **Getting Started:** [nvidia.github.io/daqiri/getting-started](https://nvidia.github.io/daqiri/getting-started/) |
 
-**Requires** an NVIDIA SmartNIC (ConnectX-6 Dx or later) and a GPUDirect-capable NVIDIA GPU. Tested on the NVIDIA DGX Spark, NVIDIA IGX platform, and an x86_64 RTX Pro server. See [Getting Started](https://nvidia.github.io/daqiri/getting-started/) for the full requirements list.
+## Table of Contents
+
+- [Features](#features)
+- [Benchmarking](#benchmarking)
+- [Documentation](#documentation)
+- [Tutorials](#tutorials)
+- [License](#license)
 
 ## Features
 
@@ -33,100 +42,22 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 - **Optional OpenTelemetry metrics** — Expose per-interface or per-queue packet,
   byte, and drop counters when built with `DAQIRI_ENABLE_OTEL_METRICS=ON`.
 
-### Engines
-
-An *engine* is the library that implements a [stream type](docs/concepts.md#stream-types). You configure the stream type and endpoint URIs; the engine is chosen for you by default. `DAQIRI_ENGINE` selects which **optional** engines are compiled in — Linux sockets are always available and need no engine value.
-
-| `DAQIRI_ENGINE` value | Implements | Description |
-|---------|-------------|-------------|
-| `dpdk` | `stream_type: "raw"` (default) | Userspace kernel-bypass packet processing with DPDK mbufs and rings. Init aborts if RX flow rules or TX offload rules cannot be programmed on the NIC. |
-| `ibverbs` | `stream_type: "raw"` with `engine: "ibverbs"`, and `stream_type: "socket"` with `roce://` endpoints | Two libibverbs-based engines built from one value: a pure-DevX Mellanox/mlx5 Multi-Packet (striding) Receive Queue (MPRQ) engine for raw Ethernet (opt in per stream with `engine: "ibverbs"`), and RDMA verbs over RoCE/InfiniBand for socket `roce://` endpoints (also backs the socket engine's RoCE path). The MPRQ engine eliminates DPDK's per-packet mbuf alloc/free; packets DMA strided into one pre-posted buffer (host or GPU via GPUDirect). |
-| *(built in)* | `stream_type: "socket"` with `tcp://`/`udp://` endpoints | Linux kernel UDP/TCP sockets — always available, no build flag required. |
-
-For `stream_type: "raw"` the engine defaults to `dpdk`; set `engine: "ibverbs"` on the
-stream to use the MPRQ engine instead. Build it by including `ibverbs` in `DAQIRI_ENGINE`
-(the default `"dpdk ibverbs"` already does).
-
-### Limitations
-
-- TX header-fill helpers currently support UDP only.
-- Raw Ethernet configs must reference valid RX queue IDs in `rx.flows` `action.id` and valid flex-item IDs on the same interface; init fails if flow rules cannot be installed on the NIC.
-- The `ibverbs` raw (MPRQ) engine requires a Mellanox/mlx5 NIC (ConnectX-6 Dx or
-  later, BlueField); it is DevX-based and not portable to other vendors.
-
-## Quick Start
-
-Pick **one** of the two build paths below.
-
-**Container build (recommended)** — bundles all user-space dependencies, including a patched DPDK with dmabuf support, so no host-side dependency setup is required:
-
-```bash
-BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
-```
-
-Set `BASE_IMAGE=torch` to build on top of NGC PyTorch instead of the default CUDA base — useful for Torch / TensorRT inference workflows that ingest packets directly into GPU memory.
-
-**Bare-metal CMake build** — use if you have all dependencies installed on the host (see the [Dockerfile](Dockerfile) for the full list):
-
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_ENGINE="dpdk ibverbs"
-cmake --build build -j
-cmake --install build --prefix /opt/daqiri
-```
-
-Host-memory burst file writes do not require GPUDirect Storage. Enable cuFile support for
-CUDA device-memory file writes with `-DDAQIRI_ENABLE_GDS=ON`; this requires `cufile.h`
-and `libcufile` in the build environment. At runtime, regular GDS writes through
-NVIDIA's `nvidia-fs` path require the `nvidia-fs` kernel module to be loaded and the
-target storage stack to be reported as supported by `gdscheck.py -p`.
-
-Enable raw packet uploads to S3 with `-DDAQIRI_ENABLE_S3=ON`. The recommended
-container build installs AWS SDK for C++ with S3 support; bare-metal builds need
-`aws-cpp-sdk-core` and `aws-cpp-sdk-s3` discoverable by CMake. S3 credentials are
-resolved through the AWS SDK provider chain.
-
-Container build:
-
-```bash
-BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
-DAQIRI_ENABLE_S3=ON DAQIRI_BUILD_PYTHON=ON BASE_TARGET=dpdk scripts/build-container.sh
-```
-
-OpenTelemetry metrics are opt-in. Build with `-DDAQIRI_ENABLE_OTEL_METRICS=ON`
-for CMake builds or `DAQIRI_ENABLE_OTEL_METRICS=ON` for container builds. DAQIRI
-registers the instruments, while applications configure the OpenTelemetry SDK and
-exporters.
-
-The build uses the vendored `third_party/yaml-cpp` submodule by default so a
-conda/miniforge env on `PATH` doesn't break example linking. Set
-`-DDAQIRI_PREFER_SYSTEM_YAML_CPP=ON` to opt in to a system `yaml-cpp` instead.
-
-See [Getting Started](https://nvidia.github.io/daqiri/getting-started/) for requirements, CMake options, and
-running the benchmarks.
-
 ## Benchmarking
 
-Start with the [Benchmarking overview](https://nvidia.github.io/daqiri/benchmarks/benchmarks/) to choose between Linux sockets, RoCE/RDMA, and raw Ethernet.
+Consult the [Benchmarking overview](https://nvidia.github.io/daqiri/benchmarks/benchmarks/) to learn more about generating and optimizing benchmarking on the NVIDIA platform, including:
+- [Socket and RDMA Benchmarking](https://nvidia.github.io/daqiri/benchmarks/socket_benchmarking/) for the full namespace setup and YAML templates
+- [Raw Ethernet Benchmarking](https://nvidia.github.io/daqiri/benchmarks/raw_benchmarking/) for DPDK/raw Ethernet loopback tests
 
-For Spark-style on-wire tests, use the same client/server namespace shape for Linux sockets and RDMA/RoCE: put the client-facing NIC in one namespace, the server-facing NIC in another, pin routes and neighbors to those interfaces, then verify `tx_packets_phy` on the client and `rx_packets_phy` on the server before trusting bandwidth numbers.
+### DGX Spark Result Summary
 
-```bash
-# Linux TCP/UDP sockets, split by namespace
-ip netns exec dq_wire_server ./build/examples/daqiri_bench_socket \
-  /tmp/socket-server.yaml --seconds 10 --mode server &
-ip netns exec dq_wire_client ./build/examples/daqiri_bench_socket \
-  /tmp/socket-client.yaml --seconds 10 --mode client
-wait
+| Stream / Protocol        | Best case      | Throughput        | Drops     | Notes                                           |
+|:-------------------------|:---------------|:------------------|:----------|:------------------------------------------------|
+| Raw Ethernet / GPUDirect | 4 KB packet    | **105.5 ±0.9 Gb/s** | 0      | 98.5 Gb/s single-queue at the 8 KB native shape |
+| Socket / RoCE (SEND)     | 8 MB message   | **102.2 ±0.3 Gb/s** | 0      | Single QP, batch 1                              |
+| Socket / TCP             | 8 KB × 4 pairs | **97.2 ±2.8 Gb/s**  | ~0     | Flow-controlled (App TX = App RX)               |
+| Socket / UDP             | 8 KB × 4 pairs | **29.8 ±0.2 Gb/s**  | ~51% loss | Receiver goodput; unpaced sender             |
 
-# RoCE/RDMA, using the same namespace pair
-ip netns exec dq_wire_server ./build/examples/daqiri_bench_rdma \
-  /tmp/rdma-server.yaml --seconds 10 --mode server &
-ip netns exec dq_wire_client ./build/examples/daqiri_bench_rdma \
-  /tmp/rdma-client.yaml --seconds 10 --mode client
-wait
-```
-
-See [Socket and RDMA Benchmarking](https://nvidia.github.io/daqiri/benchmarks/socket_benchmarking/) for the full namespace setup and YAML templates. See [Raw Ethernet Benchmarking](https://nvidia.github.io/daqiri/benchmarks/raw_benchmarking/) for DPDK/raw Ethernet loopback tests.
+Each transport at its best-case operation size on a single DGX Spark (GB10), driven over a physical cabled loopback on one ConnectX-7. Full methodology and per-transport breakdowns at [Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/).
 
 ## Documentation
 
