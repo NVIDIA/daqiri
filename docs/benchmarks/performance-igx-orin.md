@@ -8,7 +8,7 @@ hide:
 Measured C++-loopback throughput for each stream/protocol on a single IGX Orin
 devkit (discrete RTX 6000 Ada GPU), driven over a physical cabled loopback on one
 ConnectX-7. Numbers are from a Release build via `BENCH_PLATFORM=igx
-examples/run_spark_bench.sh` (30 s per cell).
+examples/run_spark_bench.sh`, 30 s per cell, mean of 3 reps.
 
 This page is the IGX-Orin counterpart to [Performance: DGX Spark](performance-dgx-spark.md);
 the two run the *same* sweep scripts, selected by `BENCH_PLATFORM`. The
@@ -33,12 +33,13 @@ benchmarking procedure, see [Socket and RDMA Benchmarking](socket_benchmarking.m
 [Raw Ethernet Benchmarking](raw_benchmarking.md) (the two-physical-port DPDK
 loopback). The exact commands are collected under [Reproduce](#reproduce) below.
 
-!!! note "Single-rep figures"
-    Unlike the DGX Spark page (mean ± std over 3 reps), the tables below are from
-    a single 30 s rep per cell (`REPEATS=1`), so no error bars are shown. Re-run
-    with `REPEATS=3` for publication-quality spread; every cell here was
-    drop-free and run-to-run variation on this platform has been within a couple
-    percent in earlier sweeps.
+!!! note "Methodology"
+    Each cell is the mean of 3 independent 30 s reps (`REPEATS=3`). Run-to-run
+    spread is tiny on this platform — ≤0.4 Gb/s on the DPDK and RoCE sweeps,
+    ≤0.3 Gb/s on the sockets — so the tables show means without per-cell error
+    bars and call out the spread in prose instead. Every DPDK and RoCE cell was
+    drop-free; the per-core CPU-utilization figures are approximate (see the note
+    under the DPDK table).
 
 ## System under test
 
@@ -63,7 +64,7 @@ four-pair aggregate is shown.
 | ----------------- | --------- | ---------: | ----- | ----- |
 | Raw Ethernet / GPUDirect | 4 KB packet | **97.0 Gb/s** | 0 | 96.4 Gb/s at the 8 KB native shape; flat across batch size |
 | Socket / RoCE (SEND) | 8 MB message | **97.7 Gb/s** | 0 | Single QP, batch 1; collapses below 64 KB (see below) |
-| Socket / TCP | 8 KB × 4 pairs | **15.8 Gb/s** | ~0 | Does not scale past ~17 Gb/s; kernel-TCP CPU-bound |
+| Socket / TCP | 8 KB × 4 pairs | **15.7 Gb/s** | ~0 | Does not scale past ~17 Gb/s; kernel-TCP CPU-bound |
 | Socket / UDP | 8 KB × 4 pairs | **9.3 Gb/s** | ~1% loss | Receiver goodput; unpaced sender |
 
 Each transport is best read at its own native operation size (see the per-transport
@@ -81,7 +82,7 @@ the throughput peak is **97.0 Gb/s** at a 4 KB payload. Packet handling is
 CPU-bound on the poller cores. Throughput is flat across batch size.
 
 Achieved Gb/s measured at App RX (equal to App TX, since every cell is
-drop-free), unpaced, single rep:
+drop-free), unpaced, mean of 3 reps (run-to-run spread ≤0.4 Gb/s):
 
 <table class="perf-matrix" markdown="0">
   <thead>
@@ -94,11 +95,11 @@ drop-free), unpaced, single rep:
     </tr>
   </thead>
   <tbody>
-    <tr><th>8000 B</th><td>96.5</td><td>96.4</td><td>96.4</td><td>96.4</td></tr>
-    <tr><th>4096 B</th><td>96.7</td><td>97.0</td><td>96.9</td><td>96.6</td></tr>
-    <tr><th>1024 B</th><td>95.3</td><td>95.9</td><td>95.7</td><td>95.3</td></tr>
-    <tr><th>256 B</th><td>36.7</td><td>37.5</td><td>37.0</td><td>37.8</td></tr>
-    <tr><th>64 B</th><td>14.2</td><td>14.2</td><td>14.4</td><td>14.6</td></tr>
+    <tr><th>8000 B</th><td>96.5</td><td>96.5</td><td>96.5</td><td>96.4</td></tr>
+    <tr><th>4096 B</th><td>96.7</td><td>97.0</td><td>97.0</td><td>96.6</td></tr>
+    <tr><th>1024 B</th><td>95.4</td><td>95.9</td><td>95.7</td><td>95.3</td></tr>
+    <tr><th>256 B</th><td>36.9</td><td>37.2</td><td>37.6</td><td>38.2</td></tr>
+    <tr><th>64 B</th><td>14.1</td><td>14.1</td><td>14.3</td><td>14.5</td></tr>
   </tbody>
 </table>
 
@@ -114,18 +115,15 @@ caps lower on both axes — the 128 B PCIe MPS limit holds the byte rate near
 ~96–97 Gb/s, and the smaller cores hold the single-queue packet rate near
 ~15 M pps.
 
-**CPU utilization** (headline cell, 8000 B / batch 10240, single-queue, unpaced;
-from the equivalent `(1,1)` multi-queue cell):
-
-| Core                    | Busy% | Note                                  |
-| ----------------------- | ----: | ------------------------------------- |
-| Master (CPU 8)          |  ~28% | Orchestration only                    |
-| TX queue poller (CPU 9) |  ~70% | Poll-mode spin; rate-independent      |
-| RX queue poller (CPU 10)|  ~70% | Poll-mode spin; rate-independent      |
-
-The app workers run on their own cores (TX 0, RX 1) alongside these pollers. The
-GPU stays compute-idle (SM ~0%) — it is a DMA target for the payload, not a
-compute engine — though its memory controller shows light activity as the NIC
+**CPU utilization.** Per-core busy% is unreliable to report on this platform: the
+poller cores (9–11) run with `nohz_full`/`rcu_nocbs`, whose tickless accounting
+under-counts busy time in `/proc/stat`, and the figure shifts run-to-run even at
+identical throughput. So we don't publish a precise per-core table here — the real
+evidence that the path is CPU-bound is the throughput itself: it stays flat across
+batch size (the poll-mode driver spins regardless of offered load) and the
+small-payload packet rate caps below Spark in proportion to the per-core clock
+gap. The GPU stays compute-idle (SM ~0%) — it is a DMA target for the payload, not
+a compute engine — while its memory controller shows light activity as the NIC
 writes into VRAM.
 
 ### Multi-queue core scaling
@@ -138,10 +136,10 @@ adding RX cores either. The matrix sweeps (TX cores, RX cores) over `(1,1)`,
 
 | Cell | TX pollers | RX pollers | Achieved <span style="text-transform: none">Gb/s</span> (8 KB) |
 | ---- | ---------- | ---------- | ------------: |
-| (1,1) | 9    | 10    | 96.5 |
+| (1,1) | 9    | 10    | 96.4 |
 | (1,2) | 9    | 10,11 | 96.4 |
 | (2,1) | 9,7  | 10    | 95.4 |
-| (2,2) | 9,7  | 10,11 | 95.5 |
+| (2,2) | 9,7  | 10,11 | 95.4 |
 
 The slight regression in the two-TX cells is the isolated-core budget: the IGX
 Orin has only three isolated cores (`isolcpus=9-11`), so the second TX poller
@@ -166,37 +164,38 @@ drops. Large messages saturate the wire; small messages are bound by
 per-operation software overhead — and the IGX Orin's shallower flow-control
 window makes that overhead bite much earlier than on Spark.
 
-**Message-size sweep (single QP, batch 1, 0 drops), single rep:**
+**Message-size sweep (single QP, batch 1, 0 drops), mean of 3 reps (spread ≤0.1 Gb/s):**
 
 | Message size | <span style="text-transform: none">Gb/s</span> |
 | ------------ | ---: |
 | 8 MB  | **97.7** |
 | 1 MB  | 97.6 |
 | 64 KB | 95.6 |
-| 8 KB  | 12.8 |
-| 4 KB  | 5.5  |
+| 8 KB  | 12.6 |
+| 4 KB  | 5.4  |
 
 Messages ≥64 KB hold ~96–98 Gb/s at the wire ceiling — matching Spark. Below
 that the path is operation-rate-bound (per-operation software overhead, not a
 stall). Here the IGX Orin diverges sharply from Spark: at 8 KB it reaches only
-12.8 Gb/s (Spark: 60.7) and at 4 KB only 5.5 Gb/s (Spark: 38.0). Two platform
+12.6 Gb/s (Spark: 60.7) and at 4 KB only 5.4 Gb/s (Spark: 38.0). Two platform
 factors compound — the RoCE flow-control window is capped shallower on this HCA
 (`RDMA_RX_DEPTH_CAP=128` vs Spark's 512, so fewer operations stay in flight to
 amortize the per-op cost), and the smaller cores post/poll operations more
 slowly. The window is still drop-free; it is simply op-rate-bound far below the
 wire at small messages.
 
-**CPU utilization** (headline cell, 8 MB message, batch 1, unpaced, single rep):
+**CPU utilization** (headline cell, 8 MB message, batch 1, unpaced, mean of 3 reps):
 
 | Core               | Busy% | Note                                          |
 | ------------------ | ----: | --------------------------------------------- |
 | Master (CPU 8)     |  ~2%  | Orchestration only                            |
-| Client TX (CPU 10) | ~77%  | Post-and-poll spin; rate-independent          |
-| Server-side core   | ~76%  | Worker core; busy-polls the receive CQ        |
+| Client TX (CPU 10) | ~76%  | Post-and-poll spin; rate-independent          |
+| Server RX (CPU 0)  |  ~4%  | HCA writes straight to memory; CPU uninvolved |
 
-The GPU memory controller shows light activity (~6%) as the HCA DMAs message
-payloads into VRAM, while the GPU SM stays idle — the `kind: device` GPUDirect
-signature.
+The idle RX core is the expected RoCE RC signature — the HCA places incoming data
+directly into registered memory with no CPU involvement, exactly as on Spark. The
+GPU memory controller shows light activity (~6%) as the HCA DMAs message payloads
+into VRAM, while the GPU SM stays idle — the `kind: device` GPUDirect signature.
 
 ## Socket / TCP
 
@@ -205,7 +204,7 @@ pinned to one core. TCP self-paces via flow control, so App TX equals App RX wit
 effectively no app-level loss. `message_size` is the per-send byte count of a
 stream (no datagram boundary, no fragmentation).
 
-Throughput in Gb/s (App TX = App RX), single rep:
+Throughput in Gb/s (App TX = App RX), mean of 3 reps (spread ≤0.3 Gb/s):
 
 <table class="perf-matrix" markdown="0">
   <thead>
@@ -218,9 +217,9 @@ Throughput in Gb/s (App TX = App RX), single rep:
     </tr>
   </thead>
   <tbody>
-    <tr><th>1000 B</th><td>3.6</td><td>7.1</td><td>12.4</td></tr>
-    <tr><th>8000 B</th><td>14.4</td><td>16.9</td><td>15.8</td></tr>
-    <tr><th>1 MiB</th><td>17.8</td><td>17.2</td><td>15.6</td></tr>
+    <tr><th>1000 B</th><td>3.6</td><td>7.1</td><td>12.1</td></tr>
+    <tr><th>8000 B</th><td>14.7</td><td>16.6</td><td>15.7</td></tr>
+    <tr><th>1 MiB</th><td>17.8</td><td>16.4</td><td>15.4</td></tr>
   </tbody>
 </table>
 
@@ -228,7 +227,7 @@ Kernel TCP on the IGX Orin tops out near **~17 Gb/s**, far below Spark's ~97 Gb/
 four-pair aggregate. Small (1000 B) messages are per-operation-bound and scale
 with pair count (more cores doing syscalls), but at 8 KB and 1 MiB a single pair
 already reaches the ~17 Gb/s ceiling and adding pairs causes contention rather
-than scaling — 1 MiB even regresses from 17.8 (1 pair) to 15.6 (4 pairs). The
+than scaling — 1 MiB even regresses from 17.8 (1 pair) to 15.4 (4 pairs). The
 limit is host-side kernel-TCP CPU cost: a single 1 MiB pair runs 17.8 Gb/s here
 versus 31.6 Gb/s on Spark, a 1.78× gap that matches the 1.97-vs-3.9 GHz per-core
 clock ratio almost exactly — the wire is identical, the cores are not.
@@ -242,7 +241,7 @@ fault. App RX is the delivered goodput; App-level loss is `(App TX − App RX) /
 App TX`.
 
 Each cell shows **receiver goodput in Gb/s** with the **app-level loss %** dimmed
-beneath it (single rep):
+beneath it (mean of 3 reps):
 
 <table class="perf-matrix" markdown="0">
   <thead>
@@ -255,8 +254,8 @@ beneath it (single rep):
     </tr>
   </thead>
   <tbody>
-    <tr><th>1000 B</th><td>1.3<small>2% loss</small></td><td>0.01<small>~100% loss</small></td><td>0.01<small>~100% loss</small></td></tr>
-    <tr><th>8000 B</th><td>5.4<small>28% loss</small></td><td>8.1<small>21% loss</small></td><td>9.3<small>1% loss</small></td></tr>
+    <tr><th>1000 B</th><td>1.3<small>1% loss</small></td><td>0.00<small>~100% loss</small></td><td>0.00<small>~100% loss</small></td></tr>
+    <tr><th>8000 B</th><td>5.4<small>27% loss</small></td><td>8.0<small>21% loss</small></td><td>9.3<small>1% loss</small></td></tr>
   </tbody>
 </table>
 
@@ -281,6 +280,7 @@ map, the `0005:03:00.x` PCIe addresses, and the shallower RoCE depth cap. See th
 
 ```bash
 export BENCH_PLATFORM=igx
+export REPEATS=3                                    # mean of 3 reps, as published here
 export DAQIRI_BUILD_DIR=./build
 export LD_LIBRARY_PATH=/opt/daqiri/lib:${LD_LIBRARY_PATH:-}
 ```
