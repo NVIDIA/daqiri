@@ -481,6 +481,17 @@ enum {
   MLX5_WAIT_COND_CYCLIC_SMALLER = 5,
 };
 
+// ---- enhanced multi-packet send (eMPW) ----
+// One control + one ethernet segment shared by many single-segment packets,
+// each described by a single 16-byte data (pointer) segment packed back to
+// back. Amortizes the per-packet ctrl+eth overhead and cuts the WQEBB volume
+// DMA'd over PCIe. The max WQE is 60 16-byte segments (MLX5_WQE_SIZE_MAX), so a
+// single eMPW WQE carries up to 60 - 2 = 58 data (packet) segments.
+enum {
+  MLX5_OPCODE_ENHANCED_MPSW = 0x29,
+  MLX5_EMPW_MAX_DSEG = 58,  // 60 segs/WQE - ctrl - eth
+};
+
 // Wait segment (16 bytes of control + an 8-byte value + 8-byte mask = 32 B,
 // i.e. 2 DS). All fields big-endian on the wire.
 struct mlx5_wqe_wseg {

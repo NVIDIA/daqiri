@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <set>
@@ -3254,6 +3255,19 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
       q.insert_eth_src = true;
     }
   }
+  // Enhanced multi-packet send (eMPW) is the default TX fast path. The hidden
+  // DAQIRI_IBV_EMPW=0 escape hatch reverts to one SEND WQE per packet (used for
+  // A/B benchmarking and as a fallback if a device ever mis-handles eMPW).
+  // DAQIRI_IBV_EMPW_MAX caps packets per eMPW WQE (clamped to 1..58).
+  if (const char* s = getenv("DAQIRI_IBV_EMPW")) {
+    q.empw_enabled = (s[0] != '0');
+  }
+  if (const char* s = getenv("DAQIRI_IBV_EMPW_MAX")) {
+    const int v = std::atoi(s);
+    if (v >= 1) {
+      q.empw_max_pkts = static_cast<uint32_t>(std::min(v, static_cast<int>(MLX5_EMPW_MAX_DSEG)));
+    }
+  }
   // Packet pacing (pacing_mbps) is not supported on the ibverbs engine: the
   // wait-on-time WQE it would use is not honored without the mlx5 send-scheduling
   // clock/rearm-queue infrastructure that this engine does not set up, so a paced
@@ -3561,6 +3575,90 @@ void* IbverbsEngine::emit_wait_wqe(IbvTxQueue& q, uint64_t when_ns) {
   return wctrl;
 }
 
+// Enhanced multi-packet WQE (eMPW) TX fast path. Instead of one ctrl(16) +
+// eth(16) + data(16) WQE per packet (a 64 B WQEBB each), a single eMPW WQE
+// shares ONE ctrl + eth segment across up to q.empw_max_pkts packets, each
+// described by a single 16 B data (pointer) segment packed back to back. For a
+// burst of N packets this collapses N WQEBBs of build/DMA work into
+// ceil((2 + part)/4) WQEBBs per WQE -- a large reduction in per-packet WQE
+// volume that the engine's hundreds-to-thousands-per-burst sizing exploits.
+//
+// WQE geometry (per chunk of `part` packets):
+//   [ctrl 16][eth 16][dseg 16]...[dseg 16]   total ds = 2 + part 16B segments
+// occupying ceil((2 + part)/4) WQEBBs. Data segments wrap at the SQ buffer end
+// (mlx5 SQ is a cyclic WQEBB ring), exactly like DPDK's mlx5 eMPW path. Only
+// reached for single-segment, unscheduled bursts (see post_tx_burst).
+void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst) {
+  const int n = static_cast<int>(burst->hdr.hdr.num_pkts);
+  // Cap packets per WQE by the configured limit and the 58-dseg hardware max.
+  const uint32_t max_pkts =
+      std::min<uint32_t>(q.empw_max_pkts, static_cast<uint32_t>(MLX5_EMPW_MAX_DSEG));
+  // Signal roughly every SIGNAL_EVERY_WQE eMPW WQEs (and the final WQE) so the
+  // TX worker reclaims slots periodically without a CQE per WQE.
+  static constexpr int SIGNAL_EVERY_WQE = 16;
+  uint8_t* const sq_buf = static_cast<uint8_t*>(q.dv_qp.sq.buf);
+  const uint32_t wqe_cnt = q.dv_qp.sq.wqe_cnt;
+  const uint32_t stride = q.dv_qp.sq.stride;  // 64 B (one WQEBB)
+  uint8_t* const sq_end = sq_buf + static_cast<size_t>(wqe_cnt) * stride;
+  const uint32_t lkey = q.regions[0].lkey;
+  void* last_ctrl = nullptr;
+  int wqe_idx = 0;  // eMPW WQE index within this burst (for signaling)
+
+  int i = 0;
+  while (i < n) {
+    const uint32_t part = std::min<uint32_t>(max_pkts, static_cast<uint32_t>(n - i));
+    const uint32_t widx = q.sq_pi % wqe_cnt;
+    uint8_t* const title = sq_buf + static_cast<size_t>(widx) * stride;
+    const uint32_t nwqebb = (2u + part + 3u) / 4u;  // ctrl+eth + part dsegs -> WQEBBs
+    const uint8_t ds = static_cast<uint8_t>(2u + part);
+
+    // Control segment: eMPW opcode, ds = 2 (ctrl+eth) + part data segments.
+    const bool last_wqe = (i + static_cast<int>(part)) >= n;
+    const bool signaled = ((wqe_idx % SIGNAL_EVERY_WQE) == (SIGNAL_EVERY_WQE - 1)) || last_wqe;
+    auto* ctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(title);
+    ctrl->opmod_idx_opcode = htobe32(((q.sq_pi & 0xffff) << 8) | MLX5_OPCODE_ENHANCED_MPSW);
+    ctrl->qpn_ds = htobe32((q.sqn << 8) | ds);
+    ctrl->signature = 0;
+    ctrl->dci_stream_channel_id = 0;
+    ctrl->fm_ce_se = signaled ? MLX5_WQE_CTRL_CQ_UPDATE : 0;
+    ctrl->imm = 0;
+    // Shared Ethernet segment (no inline): request IPv4 + L4 checksum offload,
+    // matching the per-packet path. All packets in the WQE share these flags.
+    memset(title + 16, 0, 16);
+    reinterpret_cast<struct mlx5_wqe_eth_seg*>(title + 16)->cs_flags =
+        MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
+
+    // Pack one data (pointer) segment per packet, wrapping at the SQ ring end.
+    uint8_t* dptr = title + 32;
+    for (uint32_t j = 0; j < part; j++) {
+      if (dptr >= sq_end) {
+        dptr = sq_buf;
+      }
+      auto* dseg = reinterpret_cast<struct mlx5_wqe_data_seg*>(dptr);
+      dseg->byte_count = htobe32(burst->pkt_lens[0][i + j]);
+      dseg->lkey = htobe32(lkey);
+      dseg->addr = htobe64(reinterpret_cast<uint64_t>(burst->pkts[0][i + j]));
+      dptr += 16;
+    }
+
+    q.slots_posted += part;
+    q.wqe_slot_cum[widx] = q.slots_posted;  // CQE wqe_counter -> cumulative slots
+    last_ctrl = ctrl;
+    q.sq_pi += nwqebb;
+    i += static_cast<int>(part);
+    wqe_idx++;
+  }
+
+  // Ring the SQ doorbell once for the whole burst (same as the per-packet path).
+  doorbell_store_barrier();
+  q.dv_qp.dbrec[MLX5_SND_DBR] = htobe32(q.sq_pi & 0xffff);
+  doorbell_store_barrier();
+  *reinterpret_cast<volatile uint64_t*>(static_cast<uint8_t*>(q.dv_qp.bf.reg) + q.bf_offset) =
+      *reinterpret_cast<uint64_t*>(last_ctrl);
+  doorbell_store_barrier();
+  q.bf_offset ^= q.dv_qp.bf.size;
+}
+
 // Runs on the pinned TX worker thread: builds the burst's send WQEs directly
 // into the SQ ring and rings the BlueFlame doorbell once for the whole burst,
 // bypassing ibv_post_send. Each WQE is ctrl(16) + minimal eth(16) + data
@@ -3572,6 +3670,14 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
   const int n = static_cast<int>(burst->hdr.hdr.num_pkts);
   const int segs = burst->hdr.hdr.num_segs;
   if (n <= 0) {
+    return;
+  }
+  // Fast path: enhanced multi-packet WQE. Restricted to single-segment,
+  // unscheduled bursts -- HDS (segs>1) needs one WQE per packet (each packet
+  // scatters across two MRs), and wait-on-time scheduling needs a per-packet
+  // WAIT WQE. Both fall through to the per-packet SEND path below.
+  if (q.empw_enabled && segs == 1 && !q.send_scheduling) {
+    post_tx_burst_empw(q, burst);
     return;
   }
   static constexpr int SIGNAL_EVERY = 32;

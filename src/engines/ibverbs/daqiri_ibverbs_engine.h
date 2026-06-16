@@ -291,6 +291,13 @@ struct IbvTxQueue {
   uint64_t slots_posted = 0;
   bool send_scheduling = false;  // HCA wait_on_time present + real-time clock
   uint64_t rt_timemask = 0;      // wait segment comparison mask
+  // Enhanced multi-packet send (eMPW): pack many single-segment packets into one
+  // WQE (shared ctrl+eth, one data seg per packet). On by default; the
+  // DAQIRI_IBV_EMPW=0 escape hatch falls back to one SEND WQE per packet. Only
+  // used for single-segment, unscheduled bursts (HDS / wait-on-time fall back to
+  // the per-packet path automatically). empw_max_pkts caps packets per WQE.
+  bool empw_enabled = true;
+  uint32_t empw_max_pkts = 32;
   // Hand-off-ring-full drops: send_tx_burst couldn't enqueue (TX worker behind),
   // so the burst was dropped and its slots rolled back. App-thread-written.
   uint64_t handoff_drop_bursts = 0;
@@ -446,6 +453,10 @@ class IbverbsEngine : public Engine {
   Status setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf, const TxQueueConfig& qcfg);
   Status create_tx_raw_qp(IbvTxQueue& q);                 // IBV_QPT_RAW_PACKET, RESET->RTS
   void post_tx_burst(IbvTxQueue& q, BurstParams* burst);  // build send WQEs + ring doorbell
+  // Enhanced multi-packet WQE (eMPW) fast path for single-segment, unscheduled
+  // bursts: one ctrl+eth title shared by up to q.empw_max_pkts packed data
+  // segments. Falls back to post_tx_burst's per-packet SEND for HDS/scheduled.
+  void post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst);
   // Build a WAIT-on-time WQE (ctrl + wseg = 1 WQEBB, no slot) at q.sq_pi that
   // holds the following send(s) until the NIC real-time clock reaches when_ns,
   // advance sq_pi, and return its ctrl segment (for the BlueFlame doorbell).
