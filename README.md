@@ -57,7 +57,7 @@ Consult the [Benchmarking overview](https://nvidia.github.io/daqiri/benchmarks/b
 | Socket / TCP             | 8 KB × 4 pairs | **97.2 ±2.8 Gb/s**  | ~0     | Flow-controlled (App TX = App RX)               |
 | Socket / UDP             | 8 KB × 4 pairs | **29.8 ±0.2 Gb/s**  | ~51% loss | Receiver goodput; unpaced sender             |
 
-Each transport at its best-case operation size on a single DGX Spark (GB10), driven over a physical cabled loopback on one ConnectX-7. Full methodology and per-transport breakdowns at [Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/).
+Each transport at its best-case operation size on a single DGX Spark (GB10), driven over a physical cabled loopback on one ConnectX-7. Full methodology and per-transport breakdowns at [Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/). These tests were run using a 200G cable, which allowed transfers to reach PCIe limitations slightly over 100Gbps.
 
 ## Documentation
 
