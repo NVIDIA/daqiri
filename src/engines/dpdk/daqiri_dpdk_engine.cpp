@@ -3189,6 +3189,22 @@ bool DpdkEngine::validate_dynamic_rx_flow(int port, const FlowRuleConfig& flow) 
       DAQIRI_LOG_ERROR("Dynamic eCPRI RX flow matches pc_id/rtc_id but no msg_type");
       return false;
     }
+    // The eCPRI flow item is honored only under firmware steering (dv_flow_en=1).
+    // initialize() switches a port to firmware steering only when it has at least
+    // one static eCPRI flow; otherwise the port stays on HW steering (dv_flow_en=2)
+    // where add_ecpri_flow() returns success but the rule silently never matches.
+    // A static eCPRI flow on the interface is the only signal that the switch
+    // happened, so require one before accepting a dynamic eCPRI flow.
+    const auto& intf_flows = cfg_.ifs_[port].rx_.flows_;
+    if (std::none_of(intf_flows.begin(), intf_flows.end(),
+                     [](const FlowConfig& f) { return f.match_.type_ == FlowMatchType::ECPRI; })) {
+      DAQIRI_LOG_ERROR(
+          "Dynamic eCPRI RX flow on port {} requires at least one static eCPRI flow in the "
+          "initial config; without it the port keeps HW steering (dv_flow_en=2) and the eCPRI "
+          "flow item silently never matches.",
+          port);
+      return false;
+    }
     return true;
   }
 
