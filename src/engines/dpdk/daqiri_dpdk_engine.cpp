@@ -2196,10 +2196,37 @@ void DpdkEngine::initialize() {
     }
   }
 
+  // The mlx5 native eCPRI flow item (RTE_FLOW_ITEM_TYPE_ECPRI) is honored only
+  // under software/firmware steering (dv_flow_en=1); HW steering (dv_flow_en=2)
+  // silently fails to match it on ConnectX-class NICs. Switch any interface with
+  // eCPRI RX flows to firmware steering. Trade-off: the async/template
+  // dynamic-RX-flow path requires HW steering, so it is unavailable on that port.
+  auto interface_has_ecpri = [&](const std::string& dev_addr) -> bool {
+    for (const auto& intf : cfg_.ifs_) {
+      if (intf.address_ != dev_addr) {
+        continue;
+      }
+      for (const auto& fl : intf.rx_.flows_) {
+        if (fl.match_.type_ == FlowMatchType::ECPRI) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
   if (loopback_ != LoopbackType::LOOPBACK_TYPE_SW) {
     for (const auto& name : ifs) {
       strncpy(_argv[arg++], "-a", max_arg_size - 1);
-      std::string devargs = name + std::string(",txq_inline_max=0,dv_flow_en=2");
+      const int dv_flow_en = interface_has_ecpri(name) ? 1 : 2;
+      if (dv_flow_en == 1) {
+        DAQIRI_LOG_WARN(
+            "Interface '{}' has eCPRI RX flows: switching mlx5 to firmware steering "
+            "(dv_flow_en=1). HW steering (dv_flow_en=2) does not honor the eCPRI flow item on "
+            "this NIC; async/template dynamic RX flows are unavailable on this port.",
+            name);
+      }
+      std::string devargs = name + ",txq_inline_max=0,dv_flow_en=" + std::to_string(dv_flow_en);
       if (needs_send_sched) {
         devargs += ",tx_pp=500";  // 500 ns scheduling granularity
       }

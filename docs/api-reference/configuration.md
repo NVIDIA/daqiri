@@ -247,7 +247,10 @@ For Raw Ethernet (`stream_type: "raw"`), each flow rule is programmed into the N
 created when `flow_isolation: true`, initialization fails with a critical log and
 `daqiri_init()` returns an error status. eCPRI matching is supported by both the `dpdk`
 (via the mlx5 eCPRI flow item) and `ibverbs` (via an mlx5 flex-parser node anchored on the
-eCPRI EtherType) engines.
+eCPRI EtherType) engines. On the `dpdk` engine the mlx5 eCPRI flow item is only honored under
+firmware steering, so any interface with eCPRI flows is automatically switched to
+`dv_flow_en=1` (logged as a warning); a side effect is that the async/template dynamic-RX-flow
+API is unavailable on that interface. The `ibverbs` engine has no such restriction.
 
 A single RX interface must use exactly one flow class — standard UDP/IP, flex-item, or eCPRI.
 Each class installs its own DPDK group-0 jump rule, and these conflict when mixed, so only one
