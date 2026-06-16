@@ -31,6 +31,7 @@
 #endif
 
 #include <chrono>
+#include <arpa/inet.h>
 #include <cstdlib>
 #include <cuda.h>
 #include <dirent.h>
@@ -59,6 +60,20 @@ extern void initialize_engine(Engine* _engine);
 
 namespace {
 
+constexpr size_t kTunnelMaxFrameSize = 9100;
+constexpr size_t kMaxFlowActions = 7;
+
+bool is_mac_address(const std::string& address) {
+  static const std::regex mac_regex(
+      "^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$", std::regex::ECMAScript);
+  return std::regex_match(address, mac_regex);
+}
+
+bool is_ipv4_address(const std::string& address) {
+  struct in_addr addr {};
+  return !address.empty() && inet_pton(AF_INET, address.c_str(), &addr) == 1;
+}
+
 SocketProtocol protocol_from_endpoint_addr(const std::string& addr) {
   const auto scheme_end = addr.find("://");
   if (scheme_end == std::string::npos) { return SocketProtocol::INVALID; }
@@ -69,6 +84,75 @@ SocketProtocol protocol_from_endpoint_addr(const std::string& addr) {
     return SocketProtocol::ROCE;
   }
   return SocketProtocol::INVALID;
+}
+
+bool validate_tunnel_action_config(const FlowAction& action, const std::string& flow_name) {
+  if (action.type_ != FlowType::TUNNEL_ENCAP && action.type_ != FlowType::TUNNEL_DECAP) {
+    return true;
+  }
+  const auto& tunnel = action.tunnel_;
+  if (tunnel.type_ == TunnelType::NONE) {
+    DAQIRI_LOG_ERROR("Flow '{}' tunnel action is missing tunnel type", flow_name);
+    return false;
+  }
+  if (!is_mac_address(tunnel.outer_eth_src_) || !is_mac_address(tunnel.outer_eth_dst_)) {
+    DAQIRI_LOG_ERROR("Flow '{}' tunnel action requires valid outer_eth_src/outer_eth_dst",
+                     flow_name);
+    return false;
+  }
+  if (!is_ipv4_address(tunnel.outer_ipv4_src_) || !is_ipv4_address(tunnel.outer_ipv4_dst_)) {
+    DAQIRI_LOG_ERROR("Flow '{}' tunnel action requires valid IPv4 outer addresses", flow_name);
+    return false;
+  }
+  switch (tunnel.type_) {
+    case TunnelType::VXLAN:
+      if (tunnel.vni_ > 0x00ffffffu) {
+        DAQIRI_LOG_ERROR("Flow '{}' VXLAN vni {} is outside [0, 0xffffff]", flow_name,
+                         tunnel.vni_);
+        return false;
+      }
+      if (tunnel.outer_udp_dst_ == 0) {
+        DAQIRI_LOG_ERROR("Flow '{}' VXLAN outer_udp_dst must be non-zero", flow_name);
+        return false;
+      }
+      break;
+    case TunnelType::GRE:
+      if (tunnel.gre_protocol_ == 0) {
+        DAQIRI_LOG_ERROR("Flow '{}' GRE gre_protocol must be non-zero", flow_name);
+        return false;
+      }
+      break;
+    case TunnelType::NVGRE:
+      if (tunnel.tni_ > 0x00ffffffu) {
+        DAQIRI_LOG_ERROR("Flow '{}' NVGRE tni {} is outside [0, 0xffffff]", flow_name,
+                         tunnel.tni_);
+        return false;
+      }
+      break;
+    case TunnelType::NONE:
+      break;
+  }
+  return true;
+}
+
+bool validate_flow_action_config(const FlowAction& action, const std::string& flow_name) {
+  if (action.type_ == FlowType::VLAN_PUSH) {
+    if (action.vlan_.vlan_id_ > 4095) {
+      DAQIRI_LOG_ERROR("Flow '{}' vlan_id {} is outside [0, 4095]", flow_name,
+                       action.vlan_.vlan_id_);
+      return false;
+    }
+    if (action.vlan_.pcp_ > 7 || action.vlan_.dei_ > 1) {
+      DAQIRI_LOG_ERROR("Flow '{}' VLAN pcp/dei values must be in ranges [0, 7]/[0, 1]",
+                       flow_name);
+      return false;
+    }
+    if (action.vlan_.ethertype_ == 0) {
+      DAQIRI_LOG_ERROR("Flow '{}' VLAN ethertype must be non-zero", flow_name);
+      return false;
+    }
+  }
+  return validate_tunnel_action_config(action, flow_name);
 }
 
 }  // namespace
@@ -384,16 +468,133 @@ bool Engine::validate_config() const {
   bool pass = true;
   std::set<std::string> mr_names;
   std::set<std::string> q_mr_names;
+  const bool tunnel_supported_engine =
+      cfg_.common_.engine_type == EngineType::DPDK || cfg_.common_.engine_type == EngineType::IBVERBS;
 
   // Verify all memory regions are used in queues and all queue MRs are listed in the MR section
   for (const auto& mr : cfg_.mrs_) { mr_names.emplace(mr.second.name_); }
 
   for (const auto& intf : cfg_.ifs_) {
+    size_t max_rx_payload_frame = 0;
+    size_t max_tx_payload_frame = 0;
+    auto queue_frame_size = [&](const CommonQueueConfig& queue) {
+      size_t total = 0;
+      for (const auto& mr_name : queue.mrs_) {
+        auto it = cfg_.mrs_.find(mr_name);
+        if (it != cfg_.mrs_.end()) {
+          total += it->second.buf_size_;
+        }
+      }
+      return total;
+    };
     for (const auto& rxq : intf.rx_.queues_) {
       for (const auto& mr : rxq.common_.mrs_) { q_mr_names.emplace(mr); }
+      max_rx_payload_frame = std::max(max_rx_payload_frame, queue_frame_size(rxq.common_));
     }
     for (const auto& txq : intf.tx_.queues_) {
       for (const auto& mr : txq.common_.mrs_) { q_mr_names.emplace(mr); }
+      max_tx_payload_frame = std::max(max_tx_payload_frame, queue_frame_size(txq.common_));
+    }
+
+    for (const auto& flow : intf.rx_.flows_) {
+      if (flow.actions_.empty()) {
+        DAQIRI_LOG_ERROR("RX flow '{}' on interface '{}' has no actions", flow.name_, intf.name_);
+        pass = false;
+        continue;
+      }
+      if (flow.actions_.size() > kMaxFlowActions) {
+        DAQIRI_LOG_ERROR("RX flow '{}' on interface '{}' has {} actions; maximum supported is {}",
+                         flow.name_, intf.name_, flow.actions_.size(), kMaxFlowActions);
+        pass = false;
+      }
+      if (flow.actions_.back().type_ != FlowType::QUEUE) {
+        DAQIRI_LOG_ERROR("RX flow '{}' on interface '{}' must end with a queue action",
+                         flow.name_, intf.name_);
+        pass = false;
+      }
+      const bool has_transform = flow_has_transform_actions(flow);
+      if (has_transform && flow.match_.type_ == FlowMatchType::FLEX_ITEM) {
+        DAQIRI_LOG_ERROR("RX flow '{}' on interface '{}' combines flex-item matching with tunnel "
+                         "or VLAN actions; this is not supported",
+                         flow.name_, intf.name_);
+        pass = false;
+      }
+      if (has_transform && (cfg_.common_.stream_type != StreamType::RAW || !tunnel_supported_engine)) {
+        DAQIRI_LOG_ERROR("RX flow '{}' uses tunnel/VLAN actions, which are supported only for raw "
+                         "DPDK or raw ibverbs engines",
+                         flow.name_);
+        pass = false;
+      }
+      size_t rx_overhead = 0;
+      for (const auto& action : flow.actions_) {
+        if (action.type_ == FlowType::VLAN_PUSH || action.type_ == FlowType::TUNNEL_ENCAP) {
+          DAQIRI_LOG_ERROR("RX flow '{}' on interface '{}' can only use decap/pop transform "
+                           "actions before queue",
+                           flow.name_, intf.name_);
+          pass = false;
+        }
+        if (!validate_flow_action_config(action, flow.name_)) { pass = false; }
+        rx_overhead += flow_decap_wire_overhead(action);
+      }
+      if (max_rx_payload_frame + rx_overhead > kTunnelMaxFrameSize) {
+        DAQIRI_LOG_ERROR("RX flow '{}' requires wire frame size {} bytes, exceeding {} bytes",
+                         flow.name_, max_rx_payload_frame + rx_overhead, kTunnelMaxFrameSize);
+        pass = false;
+      }
+    }
+
+    for (const auto& flow : intf.tx_.flows_) {
+      if (flow.actions_.empty()) {
+        DAQIRI_LOG_ERROR("TX flow '{}' on interface '{}' has no actions", flow.name_, intf.name_);
+        pass = false;
+        continue;
+      }
+      if (flow.actions_.size() > kMaxFlowActions) {
+        DAQIRI_LOG_ERROR("TX flow '{}' on interface '{}' has {} actions; maximum supported is {}",
+                         flow.name_, intf.name_, flow.actions_.size(), kMaxFlowActions);
+        pass = false;
+      }
+      if (flow.match_.type_ == FlowMatchType::FLEX_ITEM) {
+        DAQIRI_LOG_ERROR("TX flow '{}' on interface '{}' uses flex-item matching; this is not "
+                         "supported for TX tunnel/VLAN actions",
+                         flow.name_, intf.name_);
+        pass = false;
+      }
+      bool has_transform = false;
+      size_t tx_overhead = 0;
+      for (const auto& action : flow.actions_) {
+        if (action.type_ == FlowType::QUEUE) {
+          DAQIRI_LOG_ERROR("TX flow '{}' on interface '{}' cannot contain a queue action",
+                           flow.name_, intf.name_);
+          pass = false;
+        }
+        if (action.type_ == FlowType::VLAN_POP || action.type_ == FlowType::TUNNEL_DECAP) {
+          DAQIRI_LOG_ERROR("TX flow '{}' on interface '{}' can only use encap/push transform "
+                           "actions",
+                           flow.name_, intf.name_);
+          pass = false;
+        }
+        if (flow_action_is_transform(action)) { has_transform = true; }
+        if (!validate_flow_action_config(action, flow.name_)) { pass = false; }
+        tx_overhead += flow_action_wire_overhead(action);
+      }
+      if (!has_transform) {
+        DAQIRI_LOG_ERROR("TX flow '{}' on interface '{}' must contain a tunnel or VLAN action",
+                         flow.name_, intf.name_);
+        pass = false;
+      }
+      if (has_transform &&
+          (cfg_.common_.stream_type != StreamType::RAW || !tunnel_supported_engine)) {
+        DAQIRI_LOG_ERROR("TX flow '{}' uses tunnel/VLAN actions, which are supported only for raw "
+                         "DPDK or raw ibverbs engines",
+                         flow.name_);
+        pass = false;
+      }
+      if (max_tx_payload_frame + tx_overhead > kTunnelMaxFrameSize) {
+        DAQIRI_LOG_ERROR("TX flow '{}' requires wire frame size {} bytes, exceeding {} bytes",
+                         flow.name_, max_tx_payload_frame + tx_overhead, kTunnelMaxFrameSize);
+        pass = false;
+      }
     }
   }
 

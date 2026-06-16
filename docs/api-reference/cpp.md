@@ -136,6 +136,11 @@ Raw Ethernet RX flows can be added and deleted after `daqiri_init()` on the
 `dpdk` and raw `ibverbs` engines. This supports queues-only startup configs,
 including `rx.flow_isolation: true` with no initial `rx.flows`. Static YAML
 flows still use explicit configured IDs and are not deletable through this API.
+The legacy `FlowRuleConfig::action_` field remains the shorthand for a single
+queue action; `FlowRuleConfig::actions_` is the ordered form used when a dynamic
+RX rule needs hardware VLAN pop or tunnel decapsulation before queue delivery.
+Dynamic TX transform flows are not part of v1; configure TX encapsulation/push
+rules statically under `tx.flows`.
 
 ```cpp
 daqiri::FlowRuleConfig flow;
@@ -171,6 +176,33 @@ while (flow_id == 0) {
         flow_id = result.flow_id_;
     }
 }
+```
+
+For a dynamic VXLAN decap rule, use ordered actions and make the final action
+the target queue:
+
+```cpp
+daqiri::FlowRuleConfig decap;
+decap.name_ = "vxlan_decap_5000";
+
+daqiri::FlowAction tunnel;
+tunnel.type_ = daqiri::FlowType::TUNNEL_DECAP;
+tunnel.tunnel_.type_ = daqiri::TunnelType::VXLAN;
+tunnel.tunnel_.outer_eth_src_ = "02:00:00:00:00:01";
+tunnel.tunnel_.outer_eth_dst_ = "02:00:00:00:00:02";
+tunnel.tunnel_.outer_ipv4_src_ = "192.0.2.1";
+tunnel.tunnel_.outer_ipv4_dst_ = "192.0.2.2";
+tunnel.tunnel_.outer_udp_dst_ = 4789;
+tunnel.tunnel_.vni_ = 100;
+decap.actions_.push_back(tunnel);
+
+daqiri::FlowAction queue;
+queue.type_ = daqiri::FlowType::QUEUE;
+queue.id_ = 0;
+decap.actions_.push_back(queue);
+
+decap.match_.type_ = daqiri::FlowMatchType::IPV4_UDP;
+decap.match_.udp_dst_ = 5000;
 ```
 
 Packets matching a dynamic rule are marked with the same `FlowId` returned by
@@ -219,7 +251,8 @@ auto delete_status = daqiri::delete_flow_async(flow_id, &delete_op);
 ```
 
 Dynamic flow support is RX-only in v1. Socket, RDMA/RoCE, and software loopback
-engines return `NOT_SUPPORTED`.
+engines return `NOT_SUPPORTED`; tunnel/VLAN transform actions are accepted only
+by raw DPDK and raw ibverbs.
 
 ## Reordered RX Bursts
 

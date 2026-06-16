@@ -110,6 +110,20 @@ The benchmark executables and example YAML configurations are located at:
 
 The fields in the YAML configs will be explained in more detail in [Understanding the Configuration File](../tutorials/configuration-walkthrough.md). For now, we'll stick to modifying the strict minimum required fields to run the application as-is on your system.
 
+### Hardware tunnel transform examples
+
+Raw DPDK and raw ibverbs builds can program hardware flow actions that push or
+encapsulate on TX and pop or decapsulate on RX. The application packet buffers
+remain pre-encap on TX and post-decap on RX; DAQIRI accounts for outer-header
+overhead when sizing MTU/wire frames.
+
+| Transform | YAML config | Binary |
+|---|---|---|
+| VXLAN encap + decap | [`daqiri_bench_raw_tx_rx_vxlan.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_vxlan.yaml) | `daqiri_bench_raw_gpudirect` |
+| VLAN push + pop | [`daqiri_bench_raw_tx_rx_vlan.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_vlan.yaml) | `daqiri_bench_raw_gpudirect` |
+| GRE encap + decap | [`daqiri_bench_raw_tx_rx_gre.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_gre.yaml) | `daqiri_bench_raw_gpudirect` |
+| NVGRE encap + decap | [`daqiri_bench_raw_tx_rx_nvgre.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_nvgre.yaml) | `daqiri_bench_raw_gpudirect` |
+
 ##### Identify your NIC's PCIe addresses
 
 Retrieve the PCIe addresses of both ports of your NIC. We'll arbitrarily use the first for Tx and the second for Rx here:

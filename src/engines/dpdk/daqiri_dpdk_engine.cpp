@@ -2445,6 +2445,13 @@ void DpdkEngine::initialize() {
       tx_dpdk_q_map_[key] = q_backend;
     }
 
+    const size_t rx_tunnel_overhead = flow_max_decap_wire_overhead(rx.flows_);
+    if (rx_tunnel_overhead > 0) {
+      DAQIRI_LOG_INFO("Adding {} bytes of RX tunnel overhead for MTU sizing", rx_tunnel_overhead);
+      max_rx_pkt_size += rx_tunnel_overhead;
+      max_pkt_size = std::max(max_pkt_size, max_rx_pkt_size);
+    }
+
     DAQIRI_LOG_INFO("Max packet size needed with TX: {}", max_pkt_size);
     DAQIRI_LOG_INFO("Max packet size needed with RX only: {}", max_rx_pkt_size);
 
@@ -2688,6 +2695,11 @@ void DpdkEngine::initialize() {
         if (has_flex_item_flows && !add_send_to_kernel_fallback(intf.port_id_, 1)) { return; }
       }
 
+      for (const auto& flow : tx.flows_) {
+        DAQIRI_LOG_INFO("Adding TX flow {}", flow.name_);
+        if (add_tx_flow(intf.port_id_, flow) == nullptr) { return; }
+      }
+
       if (!apply_tx_offloads(intf.port_id_)) { return; }
     } else {
       DAQIRI_LOG_INFO("Software loopback mode configured");
@@ -2838,8 +2850,8 @@ int DpdkEngine::setup_pools_and_rings(int max_rx_batch, int max_tx_batch) {
   return 0;
 }
 
-#define MAX_PATTERN_NUM 5
-#define MAX_ACTION_NUM 4
+#define MAX_PATTERN_NUM 16
+#define MAX_ACTION_NUM 12
 
 struct FlowTemplateCreateStorage {
   struct rte_flow_item pattern[MAX_PATTERN_NUM];
@@ -3082,12 +3094,32 @@ bool DpdkEngine::validate_dynamic_rx_flow(int port, const FlowRuleConfig& flow) 
     DAQIRI_LOG_ERROR("Invalid dynamic RX flow port {}", port);
     return false;
   }
-  if (flow.action_.type_ != FlowType::QUEUE) {
-    DAQIRI_LOG_ERROR("Dynamic RX flow action type is not supported");
+  const auto actions = flow_rule_actions(flow);
+  if (actions.empty() || actions.back().type_ != FlowType::QUEUE) {
+    DAQIRI_LOG_ERROR("Dynamic RX flow must end with a queue action");
     return false;
   }
-  if (!is_valid_rx_queue(port, flow.action_.id_)) {
-    DAQIRI_LOG_ERROR("Dynamic RX flow targets invalid port/queue {}/{}", port, flow.action_.id_);
+  if (actions.size() > 7) {
+    DAQIRI_LOG_ERROR("Dynamic RX flow '{}' has too many actions", flow.name_);
+    return false;
+  }
+  const FlowAction queue_action = flow_queue_action(actions);
+  if (!is_valid_rx_queue(port, queue_action.id_)) {
+    DAQIRI_LOG_ERROR("Dynamic RX flow targets invalid port/queue {}/{}", port, queue_action.id_);
+    return false;
+  }
+  const bool has_transform = flow_actions_have_transform(actions);
+  for (const auto& action : actions) {
+    if (action.type_ == FlowType::VLAN_PUSH || action.type_ == FlowType::TUNNEL_ENCAP) {
+      DAQIRI_LOG_ERROR("Dynamic RX flow '{}' can only use decap/pop transform actions",
+                       flow.name_);
+      return false;
+    }
+  }
+  if (has_transform && flow.match_.type_ == FlowMatchType::FLEX_ITEM) {
+    DAQIRI_LOG_ERROR("Dynamic RX flow '{}' cannot combine flex-item matching with tunnel/VLAN "
+                     "actions",
+                     flow.name_);
     return false;
   }
   if (is_ipv4_udp_flow_match(flow.match_)) { return true; }
@@ -3355,16 +3387,18 @@ Status DpdkEngine::create_dynamic_flow_legacy_locked(int port,
   FlowConfig cfg;
   cfg.name_ = flow.name_;
   cfg.id_ = flow_id;
-  cfg.action_ = flow.action_;
+  cfg.actions_ = flow_rule_actions(flow);
+  cfg.action_ = flow_queue_action(cfg.actions_);
   cfg.match_ = flow.match_;
   cfg.backend_config_ = flow.backend_config_;
 
   struct rte_flow* rte_flow = nullptr;
+  std::shared_ptr<DpdkFlowResource> resource;
   if (cfg.match_.type_ == FlowMatchType::FLEX_ITEM) {
     rte_flow = add_flex_item_flow(
         port, cfg.match_.flex_item_match_, cfg.action_.id_, cfg.id_, false);
   } else {
-    rte_flow = add_flow(port, cfg, false);
+    rte_flow = add_flow(port, cfg, false, &resource);
   }
 
   if (rte_flow == nullptr) {
@@ -3378,6 +3412,7 @@ Status DpdkEngine::create_dynamic_flow_legacy_locked(int port,
   entry.flow = rte_flow;
   entry.backend = DynamicFlowBackend::LEGACY;
   entry.state = DynamicFlowState::ACTIVE;
+  entry.backend_storage = resource;
   dynamic_flows_[flow_id] = entry;
   return Status::SUCCESS;
 }
@@ -3968,7 +4003,7 @@ Status DpdkEngine::add_rx_flow_async(int port, const FlowRuleConfig& flow, FlowO
   const FlowOpId new_op_id = allocate_flow_op_id();
   *op_id = new_op_id;
 
-  if (is_ipv4_udp_flow_match(flow.match_)) {
+  if (is_ipv4_udp_flow_match(flow.match_) && !flow_rule_has_transform_actions(flow)) {
     return add_rx_flow_template_locked(port, flow, flow_id, new_op_id);
   }
   return add_rx_flow_legacy_locked(port, flow, flow_id, new_op_id);
@@ -4004,7 +4039,7 @@ Status DpdkEngine::add_rx_flows_async(int port,
 
   const bool all_ipv4_udp =
       std::all_of(flows.begin(), flows.end(), [this](const FlowRuleConfig& flow) {
-        return is_ipv4_udp_flow_match(flow.match_);
+        return is_ipv4_udp_flow_match(flow.match_) && !flow_rule_has_transform_actions(flow);
       });
   if (all_ipv4_udp) {
     return add_rx_flows_template_locked(port, flows, flow_ids, new_op_id);
@@ -4140,6 +4175,7 @@ void DpdkEngine::destroy_flex_item_handles() {
 }
 
 void DpdkEngine::destroy_all_flow_rules() {
+  destroy_owned_flows();
   destroy_programmed_flows();
   destroy_flex_item_handles();
   destroy_eth_jump_rules();
@@ -4159,6 +4195,21 @@ void DpdkEngine::destroy_eth_jump_rules() {
   }
   eth_jump_flows_.clear();
   eth_jump_installed_.clear();
+}
+
+void DpdkEngine::destroy_owned_flows() {
+  for (auto& resource : owned_flows_) {
+    if (resource == nullptr || resource->flow == nullptr || resource->port < 0) { continue; }
+    struct rte_flow_error error;
+    const int ret = rte_flow_destroy(resource->port, resource->flow, &error);
+    if (ret != 0) {
+      DAQIRI_LOG_ERROR("Failed to destroy DPDK flow on port {}: {}",
+                       resource->port,
+                       error.message ? error.message : "unknown error");
+    }
+    resource->flow = nullptr;
+  }
+  owned_flows_.clear();
 }
 
 struct rte_flow* DpdkEngine::add_flex_item_flow(
@@ -4343,109 +4394,412 @@ struct rte_flow* DpdkEngine::add_flex_item_flow(
   return flow;
 }
 
+namespace {
+
+bool parse_ipv4_be(const std::string& text, rte_be32_t* out) {
+  struct in_addr addr {};
+  if (out == nullptr || inet_pton(AF_INET, text.c_str(), &addr) != 1) { return false; }
+  *out = addr.s_addr;
+  return true;
+}
+
+bool parse_mac_addr(const std::string& text, struct rte_ether_addr* out) {
+  return out != nullptr && rte_ether_unformat_addr(text.c_str(), out) == 0;
+}
+
+void set_u24_be(uint8_t out[3], uint32_t value) {
+  out[0] = static_cast<uint8_t>((value >> 16) & 0xff);
+  out[1] = static_cast<uint8_t>((value >> 8) & 0xff);
+  out[2] = static_cast<uint8_t>(value & 0xff);
+}
+
+void append_bytes(std::vector<uint8_t>& dst, const void* src, size_t len) {
+  const auto* bytes = static_cast<const uint8_t*>(src);
+  dst.insert(dst.end(), bytes, bytes + len);
+}
+
+bool fill_outer_eth_ip(DpdkEngine::DpdkFlowResource::ActionStorage& storage,
+                       const TunnelConfig& tunnel, uint8_t proto) {
+  rte_be32_t src_addr = 0;
+  rte_be32_t dst_addr = 0;
+  if (!parse_mac_addr(tunnel.outer_eth_dst_, &storage.eth_spec.hdr.dst_addr) ||
+      !parse_mac_addr(tunnel.outer_eth_src_, &storage.eth_spec.hdr.src_addr) ||
+      !parse_ipv4_be(tunnel.outer_ipv4_src_, &src_addr) ||
+      !parse_ipv4_be(tunnel.outer_ipv4_dst_, &dst_addr)) {
+    return false;
+  }
+
+  memset(&storage.eth_mask, 0, sizeof(storage.eth_mask));
+  memset(&storage.ipv4_mask, 0, sizeof(storage.ipv4_mask));
+  storage.eth_spec.hdr.ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4);
+  memset(&storage.eth_mask.hdr.dst_addr, 0xff, sizeof(storage.eth_mask.hdr.dst_addr));
+  memset(&storage.eth_mask.hdr.src_addr, 0xff, sizeof(storage.eth_mask.hdr.src_addr));
+  storage.eth_mask.hdr.ether_type = 0xffff;
+
+  storage.ipv4_spec.hdr.version_ihl = RTE_IPV4_VHL_DEF;
+  storage.ipv4_spec.hdr.type_of_service = tunnel.outer_ipv4_tos_;
+  storage.ipv4_spec.hdr.time_to_live = tunnel.outer_ipv4_ttl_;
+  storage.ipv4_spec.hdr.next_proto_id = proto;
+  storage.ipv4_spec.hdr.src_addr = src_addr;
+  storage.ipv4_spec.hdr.dst_addr = dst_addr;
+  storage.ipv4_mask.hdr.src_addr = 0xffffffffu;
+  storage.ipv4_mask.hdr.dst_addr = 0xffffffffu;
+  storage.ipv4_mask.hdr.next_proto_id = 0xff;
+  return true;
+}
+
+bool fill_vxlan_storage(DpdkEngine::DpdkFlowResource::ActionStorage& storage,
+                        const TunnelConfig& tunnel) {
+  if (!fill_outer_eth_ip(storage, tunnel, IPPROTO_UDP)) { return false; }
+  storage.udp_spec.hdr.src_port = rte_cpu_to_be_16(tunnel.outer_udp_src_);
+  storage.udp_spec.hdr.dst_port = rte_cpu_to_be_16(tunnel.outer_udp_dst_);
+  storage.udp_mask.hdr.src_port = tunnel.outer_udp_src_ == 0 ? 0 : 0xffff;
+  storage.udp_mask.hdr.dst_port = 0xffff;
+  storage.vxlan_spec.hdr.vx_flags = rte_cpu_to_be_32(0x08000000u);
+  storage.vxlan_spec.hdr.vx_vni = rte_cpu_to_be_32(tunnel.vni_ << 8);
+  storage.vxlan_mask.hdr.vx_flags = rte_cpu_to_be_32(0xff000000u);
+  storage.vxlan_mask.hdr.vx_vni = rte_cpu_to_be_32(0xffffff00u);
+
+  storage.definition[0] = {.type = RTE_FLOW_ITEM_TYPE_ETH,
+                           .spec = &storage.eth_spec,
+                           .last = nullptr,
+                           .mask = &storage.eth_mask};
+  storage.definition[1] = {.type = RTE_FLOW_ITEM_TYPE_IPV4,
+                           .spec = &storage.ipv4_spec,
+                           .last = nullptr,
+                           .mask = &storage.ipv4_mask};
+  storage.definition[2] = {.type = RTE_FLOW_ITEM_TYPE_UDP,
+                           .spec = &storage.udp_spec,
+                           .last = nullptr,
+                           .mask = &storage.udp_mask};
+  storage.definition[3] = {.type = RTE_FLOW_ITEM_TYPE_VXLAN,
+                           .spec = &storage.vxlan_spec,
+                           .last = nullptr,
+                           .mask = &storage.vxlan_mask};
+  storage.definition[4] = {.type = RTE_FLOW_ITEM_TYPE_END};
+  storage.vxlan_encap.definition = storage.definition.data();
+  return true;
+}
+
+bool fill_nvgre_storage(DpdkEngine::DpdkFlowResource::ActionStorage& storage,
+                        const TunnelConfig& tunnel) {
+  if (!fill_outer_eth_ip(storage, tunnel, IPPROTO_GRE)) { return false; }
+  storage.nvgre_spec.c_k_s_rsvd0_ver = rte_cpu_to_be_16(0x2000);
+  storage.nvgre_spec.protocol = rte_cpu_to_be_16(RTE_ETHER_TYPE_TEB);
+  set_u24_be(storage.nvgre_spec.tni, tunnel.tni_);
+  storage.nvgre_spec.flow_id = tunnel.flow_id_;
+  storage.nvgre_mask.c_k_s_rsvd0_ver = 0xffff;
+  storage.nvgre_mask.protocol = 0xffff;
+  storage.nvgre_mask.tni[0] = 0xff;
+  storage.nvgre_mask.tni[1] = 0xff;
+  storage.nvgre_mask.tni[2] = 0xff;
+  storage.nvgre_mask.flow_id = 0xff;
+
+  storage.definition[0] = {.type = RTE_FLOW_ITEM_TYPE_ETH,
+                           .spec = &storage.eth_spec,
+                           .last = nullptr,
+                           .mask = &storage.eth_mask};
+  storage.definition[1] = {.type = RTE_FLOW_ITEM_TYPE_IPV4,
+                           .spec = &storage.ipv4_spec,
+                           .last = nullptr,
+                           .mask = &storage.ipv4_mask};
+  storage.definition[2] = {.type = RTE_FLOW_ITEM_TYPE_NVGRE,
+                           .spec = &storage.nvgre_spec,
+                           .last = nullptr,
+                           .mask = &storage.nvgre_mask};
+  storage.definition[3] = {.type = RTE_FLOW_ITEM_TYPE_END};
+  storage.nvgre_encap.definition = storage.definition.data();
+  return true;
+}
+
+bool fill_gre_raw_storage(DpdkEngine::DpdkFlowResource::ActionStorage& storage,
+                          const TunnelConfig& tunnel) {
+  if (!fill_outer_eth_ip(storage, tunnel, IPPROTO_GRE)) { return false; }
+  struct rte_gre_hdr gre {};
+  gre.proto = rte_cpu_to_be_16(tunnel.gre_protocol_);
+  storage.gre_spec.protocol = rte_cpu_to_be_16(tunnel.gre_protocol_);
+  storage.gre_mask.protocol = 0xffff;
+  append_bytes(storage.raw_data, &storage.eth_spec.hdr, sizeof(storage.eth_spec.hdr));
+  append_bytes(storage.raw_data, &storage.ipv4_spec.hdr, sizeof(storage.ipv4_spec.hdr));
+  append_bytes(storage.raw_data, &gre, sizeof(gre));
+  storage.raw_encap.data = storage.raw_data.data();
+  storage.raw_encap.preserve = nullptr;
+  storage.raw_encap.size = storage.raw_data.size();
+  storage.raw_decap.data = storage.raw_data.data();
+  storage.raw_decap.size = storage.raw_data.size();
+  return true;
+}
+
+void append_normal_match(struct rte_flow_item* pattern, int* idx, const FlowMatch& match,
+                         struct rte_flow_item_ipv4* ip_spec,
+                         struct rte_flow_item_ipv4* ip_mask,
+                         struct rte_flow_item_udp* udp_spec,
+                         struct rte_flow_item_udp* udp_mask) {
+  bool has_ip_match = false;
+  bool has_udp_match = false;
+  if (match.ipv4_len_ > 0) {
+    ip_spec->hdr.total_length = htons(match.ipv4_len_);
+    ip_mask->hdr.total_length = 0xffff;
+    has_ip_match = true;
+  }
+  if (match.ipv4_src_ != INADDR_ANY) {
+    ip_spec->hdr.src_addr = match.ipv4_src_;
+    ip_mask->hdr.src_addr = 0xffffffff;
+    has_ip_match = true;
+  }
+  if (match.ipv4_dst_ != INADDR_ANY) {
+    ip_spec->hdr.dst_addr = match.ipv4_dst_;
+    ip_mask->hdr.dst_addr = 0xffffffff;
+    has_ip_match = true;
+  }
+  if (match.udp_src_ > 0) {
+    udp_spec->hdr.src_port = htons(match.udp_src_);
+    udp_mask->hdr.src_port = 0xffff;
+    has_udp_match = true;
+  }
+  if (match.udp_dst_ > 0) {
+    udp_spec->hdr.dst_port = htons(match.udp_dst_);
+    udp_mask->hdr.dst_port = 0xffff;
+    has_udp_match = true;
+  }
+  if (has_udp_match) { has_ip_match = true; }
+  if (has_ip_match) {
+    pattern[(*idx)++] = {.type = RTE_FLOW_ITEM_TYPE_IPV4,
+                         .spec = ip_spec,
+                         .last = nullptr,
+                         .mask = ip_mask};
+  }
+  if (has_udp_match) {
+    pattern[(*idx)++] = {.type = RTE_FLOW_ITEM_TYPE_UDP,
+                         .spec = udp_spec,
+                         .last = nullptr,
+                         .mask = udp_mask};
+  }
+}
+
+int normal_match_pattern_item_count(const FlowMatch& match) {
+  const bool has_udp_match = match.udp_src_ > 0 || match.udp_dst_ > 0;
+  const bool has_ip_match = has_udp_match || match.ipv4_len_ > 0 ||
+                            match.ipv4_src_ != INADDR_ANY ||
+                            match.ipv4_dst_ != INADDR_ANY;
+  return (has_ip_match ? 1 : 0) + (has_udp_match ? 1 : 0);
+}
+
+int transform_pattern_item_count(const FlowAction& flow_action) {
+  if (flow_action.type_ == FlowType::VLAN_POP) { return 2; }
+  if (flow_action.type_ != FlowType::TUNNEL_DECAP) { return 0; }
+
+  switch (flow_action.tunnel_.type_) {
+    case TunnelType::VXLAN:
+      return 4;
+    case TunnelType::GRE:
+    case TunnelType::NVGRE:
+      return 3;
+    case TunnelType::NONE:
+      return 0;
+  }
+  return 0;
+}
+
+int transform_action_item_count(const FlowAction& flow_action) {
+  switch (flow_action.type_) {
+    case FlowType::VLAN_PUSH:
+      return 3;
+    case FlowType::VLAN_POP:
+    case FlowType::TUNNEL_ENCAP:
+    case FlowType::TUNNEL_DECAP:
+      return 1;
+    case FlowType::QUEUE:
+      return 0;
+  }
+  return 0;
+}
+
+bool append_tunnel_pattern(struct rte_flow_item* pattern, int* idx,
+                           DpdkEngine::DpdkFlowResource& resource,
+                           const TunnelConfig& tunnel) {
+  resource.action_storage.emplace_back();
+  auto& storage = resource.action_storage.back();
+  switch (tunnel.type_) {
+    case TunnelType::VXLAN:
+      if (!fill_vxlan_storage(storage, tunnel)) { return false; }
+      pattern[(*idx)++] = storage.definition[0];
+      pattern[(*idx)++] = storage.definition[1];
+      pattern[(*idx)++] = storage.definition[2];
+      pattern[(*idx)++] = storage.definition[3];
+      return true;
+    case TunnelType::GRE:
+      if (!fill_gre_raw_storage(storage, tunnel)) { return false; }
+      pattern[(*idx)++] = {.type = RTE_FLOW_ITEM_TYPE_ETH,
+                           .spec = &storage.eth_spec,
+                           .last = nullptr,
+                           .mask = &storage.eth_mask};
+      pattern[(*idx)++] = {.type = RTE_FLOW_ITEM_TYPE_IPV4,
+                           .spec = &storage.ipv4_spec,
+                           .last = nullptr,
+                           .mask = &storage.ipv4_mask};
+      pattern[(*idx)++] = {.type = RTE_FLOW_ITEM_TYPE_GRE,
+                           .spec = &storage.gre_spec,
+                           .last = nullptr,
+                           .mask = &storage.gre_mask};
+      return true;
+    case TunnelType::NVGRE:
+      if (!fill_nvgre_storage(storage, tunnel)) { return false; }
+      pattern[(*idx)++] = storage.definition[0];
+      pattern[(*idx)++] = storage.definition[1];
+      pattern[(*idx)++] = storage.definition[2];
+      return true;
+    case TunnelType::NONE:
+      return false;
+  }
+  return false;
+}
+
+bool append_transform_action(struct rte_flow_action* actions, int* idx,
+                             DpdkEngine::DpdkFlowResource& resource,
+                             const FlowAction& flow_action) {
+  resource.action_storage.emplace_back();
+  auto& storage = resource.action_storage.back();
+  switch (flow_action.type_) {
+    case FlowType::VLAN_PUSH:
+      storage.push_vlan.ethertype = rte_cpu_to_be_16(flow_action.vlan_.ethertype_);
+      storage.set_vlan_vid.vlan_vid = rte_cpu_to_be_16(
+          static_cast<uint16_t>((flow_action.vlan_.dei_ ? 0x1000 : 0) |
+                                (flow_action.vlan_.vlan_id_ & 0x0fff)));
+      storage.set_vlan_pcp.vlan_pcp = flow_action.vlan_.pcp_;
+      actions[(*idx)++] = {.type = RTE_FLOW_ACTION_TYPE_OF_PUSH_VLAN,
+                           .conf = &storage.push_vlan};
+      actions[(*idx)++] = {.type = RTE_FLOW_ACTION_TYPE_OF_SET_VLAN_VID,
+                           .conf = &storage.set_vlan_vid};
+      actions[(*idx)++] = {.type = RTE_FLOW_ACTION_TYPE_OF_SET_VLAN_PCP,
+                           .conf = &storage.set_vlan_pcp};
+      return true;
+    case FlowType::VLAN_POP:
+      actions[(*idx)++] = {.type = RTE_FLOW_ACTION_TYPE_OF_POP_VLAN, .conf = nullptr};
+      return true;
+    case FlowType::TUNNEL_ENCAP:
+      switch (flow_action.tunnel_.type_) {
+        case TunnelType::VXLAN:
+          if (!fill_vxlan_storage(storage, flow_action.tunnel_)) { return false; }
+          actions[(*idx)++] = {.type = RTE_FLOW_ACTION_TYPE_VXLAN_ENCAP,
+                               .conf = &storage.vxlan_encap};
+          return true;
+        case TunnelType::GRE:
+          if (!fill_gre_raw_storage(storage, flow_action.tunnel_)) { return false; }
+          actions[(*idx)++] = {.type = RTE_FLOW_ACTION_TYPE_RAW_ENCAP,
+                               .conf = &storage.raw_encap};
+          return true;
+        case TunnelType::NVGRE:
+          if (!fill_nvgre_storage(storage, flow_action.tunnel_)) { return false; }
+          actions[(*idx)++] = {.type = RTE_FLOW_ACTION_TYPE_NVGRE_ENCAP,
+                               .conf = &storage.nvgre_encap};
+          return true;
+        case TunnelType::NONE:
+          return false;
+      }
+      break;
+    case FlowType::TUNNEL_DECAP:
+      switch (flow_action.tunnel_.type_) {
+        case TunnelType::VXLAN:
+          actions[(*idx)++] = {.type = RTE_FLOW_ACTION_TYPE_VXLAN_DECAP, .conf = nullptr};
+          return true;
+        case TunnelType::GRE:
+          if (!fill_gre_raw_storage(storage, flow_action.tunnel_)) { return false; }
+          actions[(*idx)++] = {.type = RTE_FLOW_ACTION_TYPE_RAW_DECAP,
+                               .conf = &storage.raw_decap};
+          return true;
+        case TunnelType::NVGRE:
+          actions[(*idx)++] = {.type = RTE_FLOW_ACTION_TYPE_NVGRE_DECAP, .conf = nullptr};
+          return true;
+        case TunnelType::NONE:
+          return false;
+      }
+      break;
+    case FlowType::QUEUE:
+      return false;
+  }
+  return false;
+}
+
+}  // namespace
+
 
 // Taken from flow_block.c DPDK example */
-struct rte_flow* DpdkEngine::add_flow(int port, const FlowConfig& cfg, bool track) {
-  /* Declaring structs being used. 8< */
-  struct rte_flow_attr attr;
-  struct rte_flow_item pattern[MAX_PATTERN_NUM];
-  struct rte_flow_action action[MAX_ACTION_NUM];
-  struct rte_flow* flow = NULL;
+struct rte_flow* DpdkEngine::add_flow(int port,
+                                      const FlowConfig& cfg,
+                                      bool track,
+                                      std::shared_ptr<DpdkFlowResource>* resource_out) {
+  struct rte_flow_attr attr {};
+  struct rte_flow_item pattern[MAX_PATTERN_NUM] {};
+  struct rte_flow_action action[MAX_ACTION_NUM] {};
   struct rte_flow_action_queue queue = {.index = cfg.action_.id_};
   struct rte_flow_action_mark  mark = {.id = cfg.id_};
-  struct rte_flow_error error;
-  struct rte_flow_item_udp udp_spec;
-  struct rte_flow_item_udp udp_mask;
-  struct rte_flow_item_ipv4  ip_spec;
-  struct rte_flow_item_ipv4  ip_mask;
-  int res;
+  struct rte_flow_error error {};
+  struct rte_flow_item_udp udp_spec {};
+  struct rte_flow_item_udp udp_mask {};
+  struct rte_flow_item_ipv4 ip_spec {};
+  struct rte_flow_item_ipv4 ip_mask {};
 
   if (!ensure_eth_jump_rule(port, 3)) { return nullptr; }
 
-  memset(pattern, 0, sizeof(pattern));
-  memset(action, 0, sizeof(action));
-  memset(&attr, 0, sizeof(struct rte_flow_attr));
-  memset(&ip_spec, 0, sizeof(struct rte_flow_item_ipv4));
-  memset(&ip_mask, 0, sizeof(struct rte_flow_item_ipv4));
-  memset(&udp_spec, 0, sizeof(struct rte_flow_item_udp));
-  memset(&udp_mask, 0, sizeof(struct rte_flow_item_udp));
+  auto resource = std::make_shared<DpdkFlowResource>();
+  resource->port = port;
+  resource->action_storage.reserve(cfg.actions_.size() * 2 + 2);
 
-  action[0].type = RTE_FLOW_ACTION_TYPE_MARK;
-  action[0].conf = &mark;
-  action[1].type = RTE_FLOW_ACTION_TYPE_QUEUE;
-  action[1].conf = &queue;
-  action[2].type = RTE_FLOW_ACTION_TYPE_END;
-
-  pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
-  pattern[1].type = RTE_FLOW_ITEM_TYPE_IPV4;
-  pattern[2].type = RTE_FLOW_ITEM_TYPE_UDP;
-
-  bool has_ip_match = false;
-
-  if (cfg.match_.ipv4_len_ > 0) {
-    ip_spec.hdr.total_length = htons(cfg.match_.ipv4_len_);
-    ip_mask.hdr.total_length = 0xffff;
-    has_ip_match = true;
-    DAQIRI_LOG_INFO("Adding IPv4 length match for {}", cfg.match_.ipv4_len_);
+  int required_pattern_items = 1 + normal_match_pattern_item_count(cfg.match_) + 1;
+  int required_action_items = 2 + 1;
+  for (const auto& flow_action : cfg.actions_) {
+    required_pattern_items += transform_pattern_item_count(flow_action);
+    required_action_items += transform_action_item_count(flow_action);
+  }
+  if (required_pattern_items > MAX_PATTERN_NUM) {
+    DAQIRI_LOG_CRITICAL("RX flow '{}' requires {} DPDK pattern entries, maximum is {}",
+                        cfg.name_, required_pattern_items, MAX_PATTERN_NUM);
+    return nullptr;
+  }
+  if (required_action_items > MAX_ACTION_NUM) {
+    DAQIRI_LOG_CRITICAL("RX flow '{}' requires {} DPDK action entries, maximum is {}",
+                        cfg.name_, required_action_items, MAX_ACTION_NUM);
+    return nullptr;
   }
 
-  if (cfg.match_.ipv4_src_ != INADDR_ANY) {
-    char str_ip[INET_ADDRSTRLEN];
-    ip_spec.hdr.src_addr = cfg.match_.ipv4_src_;
-    ip_mask.hdr.src_addr = 0xffffffff;
-    has_ip_match = true;
-    inet_ntop(AF_INET, &ip_spec.hdr.src_addr, str_ip, INET_ADDRSTRLEN);
-    DAQIRI_LOG_INFO("Adding IPv4 source IP match for {}", str_ip);
+  int pi = 0;
+  bool has_outer_transform = false;
+  for (const auto& flow_action : cfg.actions_) {
+    if (flow_action.type_ == FlowType::TUNNEL_DECAP) {
+      if (!append_tunnel_pattern(pattern, &pi, *resource, flow_action.tunnel_)) {
+        DAQIRI_LOG_CRITICAL("Failed to build tunnel pattern for RX flow '{}'", cfg.name_);
+        return nullptr;
+      }
+      has_outer_transform = true;
+    } else if (flow_action.type_ == FlowType::VLAN_POP) {
+      pattern[pi++].type = RTE_FLOW_ITEM_TYPE_ETH;
+      pattern[pi++].type = RTE_FLOW_ITEM_TYPE_VLAN;
+      has_outer_transform = true;
+    }
   }
+  pattern[pi++].type = RTE_FLOW_ITEM_TYPE_ETH;
+  append_normal_match(pattern, &pi, cfg.match_, &ip_spec, &ip_mask, &udp_spec, &udp_mask);
+  pattern[pi].type = RTE_FLOW_ITEM_TYPE_END;
 
-  if (cfg.match_.ipv4_dst_ != INADDR_ANY) {
-    char str_ip[INET_ADDRSTRLEN];
-    ip_spec.hdr.dst_addr = cfg.match_.ipv4_dst_;
-    ip_mask.hdr.dst_addr = 0xffffffff;
-    has_ip_match = true;
-    inet_ntop(AF_INET, &ip_spec.hdr.dst_addr, str_ip, INET_ADDRSTRLEN);
-    DAQIRI_LOG_INFO("Adding IPv4 destination IP match for {}", str_ip);
+  int ai = 0;
+  for (const auto& flow_action : cfg.actions_) {
+    if (flow_action.type_ == FlowType::QUEUE) { continue; }
+    if (!append_transform_action(action, &ai, *resource, flow_action)) {
+      DAQIRI_LOG_CRITICAL("Failed to build RX action '{}' for flow '{}'",
+                          flow_type_to_string(flow_action.type_), cfg.name_);
+      return nullptr;
+    }
   }
-
-  if (has_ip_match == true) {
-    pattern[1].spec = &ip_spec;
-    pattern[1].mask = &ip_mask;
-  }
-
-  bool has_udp_match = false;
-
-  if (cfg.match_.udp_src_ > 0) {
-    udp_spec.hdr.src_port = htons(cfg.match_.udp_src_);
-    udp_mask.hdr.src_port = 0xffff;
-    has_udp_match = true;
-    DAQIRI_LOG_INFO("Adding UDP port match for src {}", cfg.match_.udp_src_);
-  }
-
-  if (cfg.match_.udp_dst_ > 0) {
-    udp_spec.hdr.dst_port = htons(cfg.match_.udp_dst_);
-    udp_mask.hdr.dst_port = 0xffff;
-    has_udp_match = true;
-    DAQIRI_LOG_INFO("Adding UDP port match for dst {}", cfg.match_.udp_dst_);
-  }
-
-  if (has_udp_match == true) {
-    udp_spec.hdr.dgram_len = 0;
-    udp_spec.hdr.dgram_cksum = 0;
-    udp_mask.hdr.dgram_len = 0;
-    udp_mask.hdr.dgram_cksum = 0;
-
-    pattern[2].spec = &udp_spec;
-    pattern[2].mask = &udp_mask;
-  }
-
+  action[ai++] = {.type = RTE_FLOW_ACTION_TYPE_MARK, .conf = &mark};
+  action[ai++] = {.type = RTE_FLOW_ACTION_TYPE_QUEUE, .conf = &queue};
+  action[ai].type = RTE_FLOW_ACTION_TYPE_END;
 
   attr.ingress = 1;
-  attr.priority = 1;  // Lower priority to allow drop_traffic (priority 0) to take precedence
+  attr.priority = has_outer_transform ? 0 : 1;
   attr.group = 3;
 
-  pattern[3].type = RTE_FLOW_ITEM_TYPE_END;
-
-  res = rte_flow_validate(port, &attr, pattern, action, &error);
+  int res = rte_flow_validate(port, &attr, pattern, action, &error);
   if (res != 0) {
     DAQIRI_LOG_CRITICAL("Failed to validate RX flow '{}' on port {}: {} ({})",
                         cfg.name_,
@@ -4455,16 +4809,90 @@ struct rte_flow* DpdkEngine::add_flow(int port, const FlowConfig& cfg, bool trac
     return nullptr;
   }
 
-  flow = rte_flow_create(port, &attr, pattern, action, &error);
+  struct rte_flow* flow = rte_flow_create(port, &attr, pattern, action, &error);
   if (flow == nullptr) {
     DAQIRI_LOG_CRITICAL("Failed to create RX flow '{}' on port {}: {} ({})",
                         cfg.name_,
                         port,
                         error.message ? error.message : "unknown error",
                         rte_strerror(rte_errno));
-  } else if (track) {
-    track_flow(static_cast<uint16_t>(port), flow);
+    return nullptr;
   }
+  resource->flow = flow;
+  if (resource_out != nullptr) { *resource_out = resource; }
+  if (track) { owned_flows_.push_back(resource); }
+  return flow;
+}
+
+struct rte_flow* DpdkEngine::add_tx_flow(int port, const FlowConfig& cfg) {
+  struct rte_flow_attr attr {};
+  struct rte_flow_item pattern[MAX_PATTERN_NUM] {};
+  struct rte_flow_action action[MAX_ACTION_NUM] {};
+  struct rte_flow_error error {};
+  struct rte_flow_item_udp udp_spec {};
+  struct rte_flow_item_udp udp_mask {};
+  struct rte_flow_item_ipv4 ip_spec {};
+  struct rte_flow_item_ipv4 ip_mask {};
+
+  auto resource = std::make_shared<DpdkFlowResource>();
+  resource->port = port;
+  resource->action_storage.reserve(cfg.actions_.size() * 2 + 1);
+
+  const int required_pattern_items = 1 + normal_match_pattern_item_count(cfg.match_) + 1;
+  int required_action_items = 1;
+  for (const auto& flow_action : cfg.actions_) {
+    required_action_items += transform_action_item_count(flow_action);
+  }
+  if (required_pattern_items > MAX_PATTERN_NUM) {
+    DAQIRI_LOG_CRITICAL("TX flow '{}' requires {} DPDK pattern entries, maximum is {}",
+                        cfg.name_, required_pattern_items, MAX_PATTERN_NUM);
+    return nullptr;
+  }
+  if (required_action_items > MAX_ACTION_NUM) {
+    DAQIRI_LOG_CRITICAL("TX flow '{}' requires {} DPDK action entries, maximum is {}",
+                        cfg.name_, required_action_items, MAX_ACTION_NUM);
+    return nullptr;
+  }
+
+  int pi = 0;
+  pattern[pi++].type = RTE_FLOW_ITEM_TYPE_ETH;
+  append_normal_match(pattern, &pi, cfg.match_, &ip_spec, &ip_mask, &udp_spec, &udp_mask);
+  pattern[pi].type = RTE_FLOW_ITEM_TYPE_END;
+
+  int ai = 0;
+  for (const auto& flow_action : cfg.actions_) {
+    if (!append_transform_action(action, &ai, *resource, flow_action)) {
+      DAQIRI_LOG_CRITICAL("Failed to build TX action '{}' for flow '{}'",
+                          flow_type_to_string(flow_action.type_), cfg.name_);
+      return nullptr;
+    }
+  }
+  action[ai].type = RTE_FLOW_ACTION_TYPE_END;
+
+  attr.egress = 1;
+  attr.priority = 1;
+
+  int res = rte_flow_validate(port, &attr, pattern, action, &error);
+  if (res != 0) {
+    DAQIRI_LOG_CRITICAL("Failed to validate TX flow '{}' on port {}: {} ({})",
+                        cfg.name_,
+                        port,
+                        error.message ? error.message : "unknown error",
+                        rte_strerror(rte_errno));
+    return nullptr;
+  }
+
+  struct rte_flow* flow = rte_flow_create(port, &attr, pattern, action, &error);
+  if (flow == nullptr) {
+    DAQIRI_LOG_CRITICAL("Failed to create TX flow '{}' on port {}: {} ({})",
+                        cfg.name_,
+                        port,
+                        error.message ? error.message : "unknown error",
+                        rte_strerror(rte_errno));
+    return nullptr;
+  }
+  resource->flow = flow;
+  owned_flows_.push_back(resource);
   return flow;
 }
 

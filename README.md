@@ -39,7 +39,9 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 - **Flow Steering** — Configure the NIC's hardware flow engine to route packets by UDP
   source/destination port or flex-item payload fields. Raw RX flows can be configured
   statically in YAML or added/deleted dynamically after `daqiri_init()`. Per RX
-  interface, use standard UDP/IP flows or flex-item flows, not both.
+  interface, use standard UDP/IP flows or flex-item flows, not both. Raw DPDK and
+  raw ibverbs flows can also use hardware-only VLAN push/pop and VXLAN, GRE, or
+  NVGRE encap/decap actions; socket/RDMA streams reject those tunnel actions.
 - **RDMA** — RDMA verbs (READ, WRITE, SEND) over RoCE on Ethernet NICs or InfiniBand.
 - **Optional OpenTelemetry metrics** — Expose per-interface or per-queue packet,
   byte, and drop counters when built with `DAQIRI_ENABLE_OTEL_METRICS=ON`.

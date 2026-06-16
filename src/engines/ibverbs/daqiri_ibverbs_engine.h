@@ -403,6 +403,7 @@ class IbverbsEngine : public Engine {
   // single catch-all rule -> the only queue when no flows are configured).
   // Installed once, after all RX queues on every port are set up.
   Status install_port_flows();
+  Status install_tx_flows();
   // Probe HCA caps for accurate-send-scheduling (wait-on-time) support. Logs
   // wait_on_time + device_frequency_khz and returns true when the WAIT-WQE TX
   // scheduling path is usable (wait_on_time + real-time clock).
@@ -479,6 +480,8 @@ class IbverbsEngine : public Engine {
     struct mlx5dv_dr_matcher* matcher = nullptr;
     struct mlx5dv_dr_rule* rule = nullptr;
     struct mlx5dv_dr_action* tag_action = nullptr;
+    std::vector<struct mlx5dv_dr_action*> reformat_actions;
+    std::vector<std::vector<uint8_t>> reformat_buffers;
     DynamicFlowState state = DynamicFlowState::ACTIVE;
   };
   const InterfaceConfig* find_interface_config(int port) const;
@@ -525,11 +528,14 @@ class IbverbsEngine : public Engine {
     std::vector<struct mlx5dv_dr_matcher*> matchers;
     std::vector<struct mlx5dv_dr_rule*> rules;
     std::vector<struct mlx5dv_dr_action*> tag_actions;  // per-flow MARK tag actions
+    std::vector<struct mlx5dv_dr_action*> reformat_actions;
+    std::vector<std::vector<uint8_t>> reformat_buffers;
     // Enough to recreate each rule for allow_all_traffic after a drop_all.
     struct RuleSpec {
       struct mlx5dv_dr_matcher* matcher;
       struct mlx5dv_dr_action* action;         // dest-TIR
       struct mlx5dv_dr_action* tag = nullptr;  // optional MARK tag action
+      std::vector<struct mlx5dv_dr_action*> reformats;
       size_t value_sz = 0;                     // bytes of `value` in use
       uint64_t value[64];                      // up to full fte_match_param (512 B)
     };
@@ -562,7 +568,9 @@ class IbverbsEngine : public Engine {
                              int priority,
                              FlowId flow_id,
                              const char* desc,
-                             DynamicFlowEntry* dynamic_entry);
+                             DynamicFlowEntry* dynamic_entry,
+                             const std::vector<struct mlx5dv_dr_action*>& reformats =
+                                 std::vector<struct mlx5dv_dr_action*>{});
   Status install_flow_rule_locked(int port,
                                   PortSteering& st,
                                   const InterfaceConfig& intf,
@@ -578,6 +586,16 @@ class IbverbsEngine : public Engine {
   std::queue<FlowId> free_dynamic_flow_ids_;
   std::unordered_map<FlowId, DynamicFlowEntry> dynamic_flows_;
   std::queue<FlowOpResult> ready_flow_ops_;
+
+  struct TxPortSteering {
+    struct mlx5dv_dr_domain* domain = nullptr;
+    struct mlx5dv_dr_table* table = nullptr;
+    std::vector<struct mlx5dv_dr_matcher*> matchers;
+    std::vector<struct mlx5dv_dr_rule*> rules;
+    std::vector<struct mlx5dv_dr_action*> reformat_actions;
+    std::vector<std::vector<uint8_t>> reformat_buffers;
+  };
+  std::map<int, TxPortSteering> tx_port_steering_;
 
   // Burst metadata pools. Each element is a BurstParams + inline pointer/length
   // /stride arrays; see the .cpp for the layout.
