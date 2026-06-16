@@ -230,28 +230,42 @@ RX flows can also perform hardware VLAN pop or tunnel decapsulation before queue
     - type: `integer`
   - **`mask`**: 32-bit mask applied before matching (with flex items).
     - type: `integer`
+  - **`ecpri`**: eCPRI-over-Ethernet match (EtherType `0xAEFE`). Presence of this map selects
+    the eCPRI flow class; the EtherType is matched implicitly. Cannot be combined with UDP/IP
+    or flex-item matching. A flow with an empty `ecpri: {}` map matches all eCPRI frames.
+    - **`msg_type`**: eCPRI common-header message type (e.g. `0` = IQ data, `2` = real-time
+      control). Optional.
+      - type: `integer`
+    - **`pc_id`** / **`rtc_id`**: eCPRI message identifier (the 16-bit physical-channel ID for
+      message types 0/1, or real-time-control ID for type 2). `pc_id` and `rtc_id` are aliases
+      for the same field. Optional, but matching it requires a `msg_type` (the NIC needs a known
+      message type to locate the identifier in the eCPRI header).
+      - type: `integer`
 
 For Raw Ethernet (`stream_type: "raw"`), each flow rule is programmed into the NIC during
 `daqiri_init()`. If any rule cannot be installed, or the send-to-kernel fallback cannot be
 created when `flow_isolation: true`, initialization fails with a critical log and
-`daqiri_init()` returns an error status.
+`daqiri_init()` returns an error status. eCPRI matching is supported by both the `dpdk`
+(via the mlx5 eCPRI flow item) and `ibverbs` (via an mlx5 flex-parser node anchored on the
+eCPRI EtherType) engines.
 
-A single RX interface must use either standard UDP/IP flows or flex-item flows, not both.
-Both classes install conflicting DPDK group-0 jump rules, so only one is reachable when mixed.
-`daqiri_init` rejects such configs with a clear error.
+A single RX interface must use exactly one flow class — standard UDP/IP, flex-item, or eCPRI.
+Each class installs its own DPDK group-0 jump rule, and these conflict when mixed, so only one
+class is reachable per interface. `daqiri_init` rejects mixed configs with a clear error.
 Flex-item flows cannot be combined with VLAN/tunnel transform actions in v1.
 
 ### Flow Isolation
 
 `rx.flow_isolation:` — When `true`, only packets matching an explicit flow rule are delivered
 to the application. Static startup flows install send-to-kernel fallback rules per flow class
-(standard or flex-item), so unmatched traffic in those classes is steered back to the Linux
+(standard, flex-item, or eCPRI), so unmatched traffic in those classes is steered back to the Linux
 kernel. Queues-only configs can set `flow_isolation: true` and then install dynamic RX flows
 after `daqiri_init()`; the first dynamic RX flow installs the send-to-kernel fallback for that
 flow class (so unmatched control traffic such as ARP keeps reaching the kernel), and until a
 dynamic rule is added, application traffic is not delivered to DAQIRI RX queues. When `false`,
-unmatched packets go to a default queue. Mixing standard and flex-item flow classes on one
-interface is not supported, including across dynamic flow additions or within one dynamic batch.
+unmatched packets go to a default queue. Mixing standard, flex-item, and eCPRI flow classes on
+one interface is not supported, including across dynamic flow additions or within one dynamic
+batch.
 
 - type: `boolean`
 - default: `false`

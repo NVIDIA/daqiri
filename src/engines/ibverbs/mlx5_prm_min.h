@@ -439,6 +439,7 @@ enum {
   MLX5_DR_MATCH_CRITERIA_OUTER = 1 << 0,  // match_criteria_enable: outer_headers
   MLX5_DR_MATCH_CRITERIA_MISC4 = 1 << 5,  // match_criteria_enable: misc_parameters_4
   MLX5_ETHERTYPE_IPV4 = 0x0800,
+  MLX5_ETHERTYPE_ECPRI = 0xAEFE,  // eCPRI over Ethernet
   MLX5_IP_PROTOCOL_UDP = 0x11,
 };
 

@@ -1046,13 +1046,21 @@ bool IbverbsEngine::validate_dynamic_rx_flow_locked(int port, const FlowRuleConf
     return true;
   }
 
+  if (match.type_ == FlowMatchType::ECPRI) {
+    if (match.ecpri_match_.match_id_ && !match.ecpri_match_.match_msg_type_) {
+      DAQIRI_LOG_ERROR("Dynamic eCPRI RX flow matches pc_id/rtc_id but no msg_type");
+      return false;
+    }
+    return true;
+  }
+
   if (match.type_ == FlowMatchType::IPV4_UDP &&
       (match.udp_src_ > 0 || match.udp_dst_ > 0 || match.ipv4_src_ != INADDR_ANY ||
        match.ipv4_dst_ != INADDR_ANY || match.ipv4_len_ > 0)) {
     return true;
   }
 
-  DAQIRI_LOG_ERROR("Dynamic RX flow must define an IPv4/UDP or flex-item match");
+  DAQIRI_LOG_ERROR("Dynamic RX flow must define an IPv4/UDP, flex-item or eCPRI match");
   return false;
 }
 
@@ -1240,6 +1248,24 @@ Status IbverbsEngine::install_flow_rule_locked(int port,
     return ok ? Status::SUCCESS : Status::GENERIC_FAILURE;
   }
 
+  if (mt.type_ == FlowMatchType::ECPRI) {
+    DrMatchParam mask{}, value{};
+    mask.match_sz = sizeof(mask.buf);
+    value.match_sz = sizeof(value.buf);
+    uint16_t criteria = 0;
+    if (build_ecpri_match_locked(
+            dest->ctx, st, mt.ecpri_match_, reinterpret_cast<uint8_t*>(mask.buf),
+            reinterpret_cast<uint8_t*>(value.buf), &criteria) != Status::SUCCESS) {
+      return Status::GENERIC_FAILURE;
+    }
+    return create_dr_rule_locked(port, st, criteria,
+                                 reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&mask),
+                                 reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&value),
+                                 dest, priority, flow_id, flow.name_.c_str(), dynamic_entry)
+               ? Status::SUCCESS
+               : Status::GENERIC_FAILURE;
+  }
+
   DrMatchParam mask{}, value{};
   mask.match_sz = sizeof(mask.buf);
   value.match_sz = sizeof(value.buf);
@@ -1418,6 +1444,135 @@ struct mlx5dv_devx_obj* IbverbsEngine::create_flex_parser_node(struct ibv_contex
       "Flex parser node created: id {} arc {} compare {} offset {} -> sample_field_id {}", node_id,
       arc_node, compare_value, offset, *out_sample_id);
   return obj;
+}
+
+struct mlx5dv_devx_obj* IbverbsEngine::create_ecpri_parser_node(struct ibv_context* ctx,
+                                                                uint32_t* out_type_sample_id,
+                                                                uint32_t* out_id_sample_id) {
+  uint32_t in[DEVX_ST_SZ_DW(create_flex_parser_in)] = {0};
+  uint32_t out[DEVX_ST_SZ_DW(create_flex_parser_out)] = {0};
+  void* hdr = DEVX_ADDR_OF(create_flex_parser_in, in, hdr);
+  void* flex = DEVX_ADDR_OF(create_flex_parser_in, in, flex);
+  DEVX_SET(general_obj_in_cmd_hdr, hdr, opcode, MLX5_CMD_OP_CREATE_GENERAL_OBJECT);
+  DEVX_SET(general_obj_in_cmd_hdr, hdr, obj_type, MLX5_GENERAL_OBJ_TYPE_FLEX_PARSE_GRAPH);
+
+  // Fixed-length custom header covering both 4-byte samples (offsets 0 and 4).
+  DEVX_SET(parse_graph_flex, flex, header_length_mode, MLX5_GRAPH_NODE_LEN_FIXED);
+  DEVX_SET(parse_graph_flex, flex, header_length_base_value, 8u);
+
+  // Sample 0: eCPRI common header (message type lives in the second byte), at
+  // offset 0. Sample 1: eCPRI message body (pc_id/rtc_id), at offset 4.
+  void* s0 = DEVX_ADDR_OF(parse_graph_flex, flex, sample_table[0]);
+  DEVX_SET(parse_graph_flow_match_sample, s0, flow_match_sample_en, 1);
+  DEVX_SET(parse_graph_flow_match_sample, s0, flow_match_sample_offset_mode,
+           MLX5_GRAPH_SAMPLE_OFFSET_FIXED);
+  DEVX_SET(parse_graph_flow_match_sample, s0, flow_match_sample_field_base_offset, 0);
+  void* s1 = DEVX_ADDR_OF(parse_graph_flex, flex, sample_table[1]);
+  DEVX_SET(parse_graph_flow_match_sample, s1, flow_match_sample_en, 1);
+  DEVX_SET(parse_graph_flow_match_sample, s1, flow_match_sample_offset_mode,
+           MLX5_GRAPH_SAMPLE_OFFSET_FIXED);
+  DEVX_SET(parse_graph_flow_match_sample, s1, flow_match_sample_field_base_offset, 4);
+
+  // Anchor the node at L2, entered on the eCPRI EtherType.
+  void* in_arc = DEVX_ADDR_OF(parse_graph_flex, flex, input_arc);
+  DEVX_SET(parse_graph_arc, in_arc, arc_parse_graph_node, MLX5_GRAPH_ARC_NODE_MAC);
+  DEVX_SET(parse_graph_arc, in_arc, compare_condition_value, MLX5_ETHERTYPE_ECPRI);
+
+  struct mlx5dv_devx_obj* obj = mlx5dv_devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
+  if (obj == nullptr) {
+    DAQIRI_LOG_CRITICAL(
+        "CREATE_GENERAL_OBJECT(FLEX_PARSE_GRAPH/eCPRI) failed: {} (syndrome 0x{:x})",
+        strerror(errno), DEVX_GET(general_obj_out_cmd_hdr, out, syndrome));
+    return nullptr;
+  }
+  const uint32_t node_id = DEVX_GET(general_obj_out_cmd_hdr, out, obj_id);
+
+  // Query the device-assigned sample field ids back (not reliably echoed by CREATE).
+  uint32_t qin[DEVX_ST_SZ_DW(general_obj_in_cmd_hdr)] = {0};
+  uint32_t qout[DEVX_ST_SZ_DW(create_flex_parser_out)] = {0};
+  DEVX_SET(general_obj_in_cmd_hdr, qin, opcode, MLX5_CMD_OP_QUERY_GENERAL_OBJECT);
+  DEVX_SET(general_obj_in_cmd_hdr, qin, obj_type, MLX5_GENERAL_OBJ_TYPE_FLEX_PARSE_GRAPH);
+  DEVX_SET(general_obj_in_cmd_hdr, qin, obj_id, node_id);
+  if (mlx5dv_devx_obj_query(obj, qin, sizeof(qin), qout, sizeof(qout)) != 0) {
+    DAQIRI_LOG_CRITICAL("QUERY_GENERAL_OBJECT(FLEX_PARSE_GRAPH/eCPRI) failed: {} (syndrome 0x{:x})",
+                        strerror(errno), DEVX_GET(general_obj_out_cmd_hdr, qout, syndrome));
+    mlx5dv_devx_obj_destroy(obj);
+    return nullptr;
+  }
+  void* q_flex = DEVX_ADDR_OF(create_flex_parser_out, qout, flex);
+  void* q_s0 = DEVX_ADDR_OF(parse_graph_flex, q_flex, sample_table[0]);
+  void* q_s1 = DEVX_ADDR_OF(parse_graph_flex, q_flex, sample_table[1]);
+  *out_type_sample_id = DEVX_GET(parse_graph_flow_match_sample, q_s0, flow_match_sample_field_id);
+  *out_id_sample_id = DEVX_GET(parse_graph_flow_match_sample, q_s1, flow_match_sample_field_id);
+  DAQIRI_LOG_INFO("eCPRI flex parser node created: id {} -> type_sample_id {} id_sample_id {}",
+                  node_id, *out_type_sample_id, *out_id_sample_id);
+  return obj;
+}
+
+Status IbverbsEngine::build_ecpri_match_locked(struct ibv_context* ctx, PortSteering& st,
+                                               const EcpriMatch& em, uint8_t* mask_buf,
+                                               uint8_t* value_buf, uint16_t* criteria) {
+  // Always pin the eCPRI EtherType so the rule only matches eCPRI-over-Ethernet
+  // frames (the parse-graph sample register is meaningful only for them).
+  DEVX_SET(fte_match_set_lyr_2_4, mask_buf, ethertype, 0xffff);
+  DEVX_SET(fte_match_set_lyr_2_4, value_buf, ethertype, MLX5_ETHERTYPE_ECPRI);
+  *criteria |= MLX5_DR_MATCH_CRITERIA_OUTER;
+
+  if (!em.match_msg_type_ && !em.match_id_) {
+    return Status::SUCCESS;  // EtherType-only match -- no flex sampling needed.
+  }
+
+  if (st.ecpri_node.obj == nullptr) {
+    uint32_t type_sid = 0;
+    uint32_t id_sid = 0;
+    struct mlx5dv_devx_obj* node = create_ecpri_parser_node(ctx, &type_sid, &id_sid);
+    if (node == nullptr) {
+      DAQIRI_LOG_CRITICAL("eCPRI: parse-graph node creation failed");
+      return Status::GENERIC_FAILURE;
+    }
+    st.ecpri_node = PortSteering::EcpriNode{node, type_sid, id_sid};
+  }
+
+  void* m4_mask = DEVX_ADDR_OF(fte_match_param, mask_buf, misc_parameters_4);
+  void* m4_value = DEVX_ADDR_OF(fte_match_param, value_buf, misc_parameters_4);
+  // prog_sample_field_id_N selects which parse-graph sample register; set
+  // identically in mask and value (a selector, not a matched field). The sample
+  // register holds the 4 sampled bytes in big-endian wire order, so DEVX_SET's
+  // host->BE conversion of the (value, mask) pair lines up with it -- the same
+  // arithmetic the ipv4_len path relies on.
+  int slot = 0;
+  auto set_sample = [&](uint32_t sid, uint32_t v, uint32_t msk) {
+    switch (slot) {
+      case 0:
+        DEVX_SET(fte_match_set_misc4, m4_mask, prog_sample_field_id_0, sid);
+        DEVX_SET(fte_match_set_misc4, m4_value, prog_sample_field_id_0, sid);
+        DEVX_SET(fte_match_set_misc4, m4_mask, prog_sample_field_value_0, msk);
+        DEVX_SET(fte_match_set_misc4, m4_value, prog_sample_field_value_0, v & msk);
+        break;
+      case 1:
+        DEVX_SET(fte_match_set_misc4, m4_mask, prog_sample_field_id_1, sid);
+        DEVX_SET(fte_match_set_misc4, m4_value, prog_sample_field_id_1, sid);
+        DEVX_SET(fte_match_set_misc4, m4_mask, prog_sample_field_value_1, msk);
+        DEVX_SET(fte_match_set_misc4, m4_value, prog_sample_field_value_1, v & msk);
+        break;
+      default:
+        break;
+    }
+    slot++;
+  };
+
+  // Message type: second byte of the common-header dword (sample at offset 0) ->
+  // big-endian register bits [23:16], mask 0x00ff0000.
+  if (em.match_msg_type_) {
+    set_sample(st.ecpri_node.type_sample_id, static_cast<uint32_t>(em.msg_type_) << 16,
+               0x00ff0000u);
+  }
+  // Identifier: top 16 bits of the message-body dword (sample at offset 4).
+  if (em.match_id_) {
+    set_sample(st.ecpri_node.id_sample_id, static_cast<uint32_t>(em.id_) << 16, 0xffff0000u);
+  }
+  *criteria |= MLX5_DR_MATCH_CRITERIA_MISC4;
+  return Status::SUCCESS;
 }
 
 Status IbverbsEngine::install_port_flows() {
@@ -1601,6 +1756,32 @@ Status IbverbsEngine::install_port_flows() {
             "Flow '{}' (flex item {}) -> queue {} (port {}): udp_dst={} sample==0x{:x}/0x{:x}",
             fl.name_, fid, fl.action_.id_, port, fcfg->udp_dst_port_, mt.flex_item_match_.val_,
             mt.flex_item_match_.mask_);
+        installed++;
+        continue;
+      }
+
+      // eCPRI-over-Ethernet match: pin the eCPRI EtherType (outer) and, when a
+      // message type / identifier is requested, the parse-graph sample registers
+      // (misc_parameters_4). One shared eCPRI node per port, created lazily.
+      if (mt.type_ == FlowMatchType::ECPRI) {
+        DrMatchParam emask{}, eval{};
+        emask.match_sz = sizeof(emask.buf);
+        eval.match_sz = sizeof(eval.buf);
+        uint16_t ecrit = 0;
+        if (build_ecpri_match_locked(
+                ctx, st, mt.ecpri_match_, reinterpret_cast<uint8_t*>(emask.buf),
+                reinterpret_cast<uint8_t*>(eval.buf), &ecrit) != Status::SUCCESS) {
+          return Status::GENERIC_FAILURE;
+        }
+        if (!add_rule(ecrit, reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&emask),
+                      reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&eval), it->second,
+                      prio++, fl.id_, fl.name_.c_str())) {
+          return Status::GENERIC_FAILURE;
+        }
+        DAQIRI_LOG_INFO(
+            "Flow '{}' (eCPRI) -> queue {} (port {}): msg_type={}(matched={}) id={}(matched={})",
+            fl.name_, fl.action_.id_, port, mt.ecpri_match_.msg_type_,
+            mt.ecpri_match_.match_msg_type_, mt.ecpri_match_.id_, mt.ecpri_match_.match_id_);
         installed++;
         continue;
       }
@@ -3453,6 +3634,9 @@ void IbverbsEngine::shutdown() {
     }
     if (st.ipv4_len_node.obj) {
       mlx5dv_devx_obj_destroy(st.ipv4_len_node.obj);
+    }
+    if (st.ecpri_node.obj) {
+      mlx5dv_devx_obj_destroy(st.ecpri_node.obj);
     }
   }
   port_steering_.clear();

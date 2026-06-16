@@ -417,6 +417,13 @@ class IbverbsEngine : public Engine {
   struct mlx5dv_devx_obj* create_flex_parser_node(struct ibv_context* ctx, uint8_t arc_node,
                                                   uint16_t compare_value, uint16_t offset,
                                                   uint32_t* out_sample_id);
+  // Create the per-port eCPRI parse-graph node: anchored at MAC on the eCPRI
+  // EtherType (0xAEFE) with two 4-byte samples -- offset 0 (common header, the
+  // message type) and offset 4 (message body, the pc_id/rtc_id). Returns the
+  // DevX object and the two device-assigned sample field ids.
+  struct mlx5dv_devx_obj* create_ecpri_parser_node(struct ibv_context* ctx,
+                                                   uint32_t* out_type_sample_id,
+                                                   uint32_t* out_id_sample_id);
   void devx_build_wqe(IbvRxQueue& q, uint32_t wqe_idx);  // write one RQ WQE
   void devx_ring_rq_doorbell(IbvRxQueue& q);
   void devx_advance_producer(IbvRxQueue& q);  // worker-only: refill freed regions
@@ -552,6 +559,17 @@ class IbverbsEngine : public Engine {
     // lazily when the first ipv4_len flow is installed (anchored at L2 on the
     // IPv4 ethertype). Torn down with the flex_nodes after rules.
     FlexNode ipv4_len_node;
+    // Shared parse-graph node for eCPRI-over-Ethernet matching (anchored at L2
+    // on the eCPRI EtherType), created lazily when the first eCPRI flow that
+    // matches a message type or identifier is installed. Carries two sample
+    // registers: type_sample_id (common header, offset 0) and id_sample_id
+    // (message body, offset 4). Torn down with the flex_nodes after rules.
+    struct EcpriNode {
+      struct mlx5dv_devx_obj* obj = nullptr;
+      uint32_t type_sample_id = 0;
+      uint32_t id_sample_id = 0;
+    };
+    EcpriNode ecpri_node;
     bool dropped = false;
     // Continue directly after static rules; sparse high priorities can fail on
     // some mlx5 DR stacks even when the same matcher/action works at init.
@@ -578,6 +596,13 @@ class IbverbsEngine : public Engine {
                                   FlowId flow_id,
                                   int priority,
                                   DynamicFlowEntry* dynamic_entry);
+  // Fill an eCPRI flow's match mask/value (always pinning the eCPRI EtherType in
+  // outer_headers, and the message type / identifier in misc_parameters_4 when
+  // requested), lazily creating the port's shared eCPRI parse-graph node.
+  // Accumulates the match criteria bits. Shared by the static and dynamic flow
+  // installers.
+  Status build_ecpri_match_locked(struct ibv_context* ctx, PortSteering& st, const EcpriMatch& em,
+                                  uint8_t* mask_buf, uint8_t* value_buf, uint16_t* criteria);
 
   std::mutex flow_lock_;
   FlowId next_dynamic_flow_id_ = 1;
