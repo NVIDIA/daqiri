@@ -21,6 +21,8 @@
 
 #include "daqiri_socket_engine.h"
 
+#include "src/burst_validation.h"
+
 #include <arpa/inet.h>
 #include <cerrno>
 #include <chrono>
@@ -34,6 +36,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -48,6 +51,14 @@ namespace daqiri {
 namespace {
 
 constexpr size_t kMaxUdpPayloadBytes = 65507;
+
+burst_validation::BurstLimits cleanup_header_limits(const BurstParams* burst) {
+  if (burst == nullptr) { return {}; }
+  return {
+      burst->hdr.hdr.num_pkts,
+      std::clamp(burst->hdr.hdr.num_segs, 0, MAX_NUM_SEGS),
+  };
+}
 
 bool parse_ipv4_addr(const std::string& ip, uint16_t port, sockaddr_in* addr) {
   if (addr == nullptr) { return false; }
@@ -200,16 +211,28 @@ uint32_t SocketEngine::get_packet_length(BurstParams* burst, int idx) {
 }
 
 void* SocketEngine::get_segment_packet_ptr(BurstParams* burst, int seg, int idx) {
-  if (burst == nullptr || seg < 0 || seg >= MAX_NUM_SEGS || burst->pkts[seg] == nullptr || idx < 0 ||
-      idx >= static_cast<int>(burst->hdr.hdr.num_pkts)) {
+  if (burst_validation::validate_segment_packet_storage(
+          burst,
+          burst_validation::header_limits(burst),
+          seg,
+          idx,
+          true,
+          false,
+          "SocketEngine::get_segment_packet_ptr") != Status::SUCCESS) {
     return nullptr;
   }
   return burst->pkts[seg][idx];
 }
 
 uint32_t SocketEngine::get_segment_packet_length(BurstParams* burst, int seg, int idx) {
-  if (burst == nullptr || seg < 0 || seg >= MAX_NUM_SEGS || burst->pkt_lens[seg] == nullptr || idx < 0 ||
-      idx >= static_cast<int>(burst->hdr.hdr.num_pkts)) {
+  if (burst_validation::validate_segment_packet_storage(
+          burst,
+          burst_validation::header_limits(burst),
+          seg,
+          idx,
+          false,
+          true,
+          "SocketEngine::get_segment_packet_length") != Status::SUCCESS) {
     return 0;
   }
   return burst->pkt_lens[seg][idx];
@@ -239,14 +262,14 @@ Status SocketEngine::get_tx_packet_burst(BurstParams* burst) {
 #endif
   }
 
-  if (burst == nullptr) { return Status::INVALID_PARAMETER; }
+  if (burst == nullptr) { return Status::NULL_PTR; }
 
   const auto* ep = endpoint_for_port(burst->hdr.hdr.port_id);
   const auto num_pkts = burst->hdr.hdr.num_pkts > 0 ? burst->hdr.hdr.num_pkts : (ep ? ep->tx_batch_size : 1);
   const auto pkt_size = ep ? ep->max_packet_size : static_cast<size_t>(65536);
 
-  if (num_pkts == 0) {
-    DAQIRI_LOG_ERROR("TX burst requested with zero packets");
+  if (num_pkts == 0 || num_pkts > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    DAQIRI_LOG_ERROR("TX burst requested with invalid packet count {}", num_pkts);
     return Status::INVALID_PARAMETER;
   }
 
@@ -318,12 +341,18 @@ Status SocketEngine::set_udp_header(BurstParams* burst, int idx, int udp_len, ui
 }
 
 Status SocketEngine::set_udp_payload(BurstParams* burst, int idx, void* data, int len) {
-  if (burst == nullptr || burst->pkts[0] == nullptr || idx < 0 ||
-      idx >= static_cast<int>(burst->hdr.hdr.num_pkts) || data == nullptr || len < 0) {
-    return Status::INVALID_PARAMETER;
-  }
+  const Status status = burst_validation::validate_payload_write(
+      burst,
+      burst_validation::header_limits(burst),
+      idx,
+      data,
+      len,
+      burst_validation::strict_enabled() ? packet_capacity(burst)
+                                         : burst_validation::kUnknownCapacity,
+      "SocketEngine::set_udp_payload");
+  if (status != Status::SUCCESS) { return status; }
 
-  std::memcpy(burst->pkts[0][idx], data, static_cast<size_t>(len));
+  if (len > 0) { std::memcpy(burst->pkts[0][idx], data, static_cast<size_t>(len)); }
   return Status::SUCCESS;
 }
 
@@ -350,17 +379,39 @@ Status SocketEngine::set_packet_lengths(BurstParams* burst, int idx,
 #endif
   }
 
-  if (burst == nullptr || burst->pkt_lens[0] == nullptr || idx < 0 ||
-      idx >= static_cast<int>(burst->hdr.hdr.num_pkts) || lens.size() == 0) {
-    return Status::INVALID_PARAMETER;
-  }
+  std::array<size_t, MAX_NUM_SEGS> capacities = burst_validation::unknown_capacities();
+  if (burst_validation::strict_enabled()) { capacities[0] = packet_capacity(burst); }
+  const Status status = burst_validation::validate_packet_lengths(
+      burst,
+      burst_validation::header_limits(burst),
+      idx,
+      lens,
+      capacities,
+      true,
+      true,
+      std::numeric_limits<uint32_t>::max(),
+      "SocketEngine::set_packet_lengths",
+      nullptr);
+  if (status != Status::SUCCESS) { return status; }
 
   burst->pkt_lens[0][idx] = static_cast<uint32_t>(*(lens.begin()));
   return Status::SUCCESS;
 }
 
 void SocketEngine::free_all_segment_packets(BurstParams* burst, int seg) {
-  if (burst == nullptr || seg < 0 || seg >= MAX_NUM_SEGS || burst->pkts[seg] == nullptr) { return; }
+  if (burst_validation::validate_segment_index(
+          burst,
+          cleanup_header_limits(burst),
+          seg,
+          "SocketEngine::free_all_segment_packets") != Status::SUCCESS ||
+      burst_validation::validate_packet_count(
+          burst,
+          burst_validation::header_limits(burst),
+          static_cast<size_t>(std::numeric_limits<int>::max()),
+          "SocketEngine::free_all_segment_packets") != Status::SUCCESS ||
+      burst->pkts[seg] == nullptr) {
+    return;
+  }
   for (size_t i = 0; i < burst->hdr.hdr.num_pkts; ++i) {
     auto* pkt = reinterpret_cast<uint8_t*>(burst->pkts[seg][i]);
     delete[] pkt;
@@ -369,16 +420,26 @@ void SocketEngine::free_all_segment_packets(BurstParams* burst, int seg) {
 }
 
 void SocketEngine::free_all_packets(BurstParams* burst) {
-  if (burst == nullptr) { return; }
-  const int num_segs = std::clamp(burst->hdr.hdr.num_segs, 0, MAX_NUM_SEGS);
-  for (int seg = 0; seg < num_segs; ++seg) {
+  if (burst_validation::validate_segment_count(
+          burst,
+          cleanup_header_limits(burst),
+          "SocketEngine::free_all_packets") != Status::SUCCESS) {
+    return;
+  }
+  for (int seg = 0; seg < cleanup_header_limits(burst).num_segs; ++seg) {
     free_all_segment_packets(burst, seg);
   }
 }
 
 void SocketEngine::free_packet_segment(BurstParams* burst, int seg, int pkt) {
-  if (burst == nullptr || seg < 0 || seg >= MAX_NUM_SEGS || burst->pkts[seg] == nullptr || pkt < 0 ||
-      pkt >= static_cast<int>(burst->hdr.hdr.num_pkts)) {
+  if (burst_validation::validate_segment_packet_storage(
+          burst,
+          cleanup_header_limits(burst),
+          seg,
+          pkt,
+          true,
+          false,
+          "SocketEngine::free_packet_segment") != Status::SUCCESS) {
     return;
   }
   auto* data = reinterpret_cast<uint8_t*>(burst->pkts[seg][pkt]);
@@ -547,7 +608,14 @@ void SocketEngine::print_stats() {
 }
 
 uint64_t SocketEngine::get_burst_tot_byte(BurstParams* burst) {
-  if (burst == nullptr || burst->pkt_lens[0] == nullptr) { return 0; }
+  if (burst == nullptr || burst->pkt_lens[0] == nullptr ||
+      burst_validation::validate_packet_count(
+          burst,
+          burst_validation::header_limits(burst),
+          static_cast<size_t>(std::numeric_limits<int>::max()),
+          "SocketEngine::get_burst_tot_byte") != Status::SUCCESS) {
+    return 0;
+  }
   uint64_t total = 0;
   for (size_t i = 0; i < burst->hdr.hdr.num_pkts; ++i) {
     total += burst->pkt_lens[0][i];
@@ -837,7 +905,19 @@ Status SocketEngine::send_tx_burst(BurstParams* burst) {
 #endif
   }
 
-  if (burst == nullptr || burst->pkts[0] == nullptr || burst->pkt_lens[0] == nullptr) {
+  if (burst == nullptr) { return Status::NULL_PTR; }
+  const auto limits = burst_validation::header_limits(burst);
+  Status status = burst_validation::validate_segment_count(
+      burst, limits, "SocketEngine::send_tx_burst");
+  if (status != Status::SUCCESS) { return status; }
+  status = burst_validation::validate_packet_count(
+      burst,
+      limits,
+      static_cast<size_t>(std::numeric_limits<int>::max()),
+      "SocketEngine::send_tx_burst");
+  if (status != Status::SUCCESS) { return status; }
+
+  if (burst->pkts[0] == nullptr || burst->pkt_lens[0] == nullptr) {
     return Status::INVALID_PARAMETER;
   }
 
@@ -868,7 +948,7 @@ Status SocketEngine::send_tx_burst(BurstParams* burst) {
     }
   }
 
-  Status status = Status::SUCCESS;
+  status = Status::SUCCESS;
   size_t sent_pkts = 0;
   uint64_t sent_bytes = 0;
   const auto requested_pkts = static_cast<uint64_t>(burst->hdr.hdr.num_pkts);
@@ -985,6 +1065,12 @@ uint16_t SocketEngine::select_queue_id(const std::vector<TxQueueConfig>& queues)
 uint32_t SocketEngine::select_batch_size(const std::vector<TxQueueConfig>& queues) const {
   if (queues.empty()) { return 1; }
   return static_cast<uint32_t>(std::max(1, queues.front().common_.batch_size_));
+}
+
+size_t SocketEngine::packet_capacity(const BurstParams* burst) const {
+  if (burst == nullptr) { return 0; }
+  const auto* ep = endpoint_for_port(burst->hdr.hdr.port_id);
+  return ep != nullptr ? ep->max_packet_size : static_cast<size_t>(65536);
 }
 
 std::shared_ptr<SocketEngine::ConnectionState> SocketEngine::register_connection(

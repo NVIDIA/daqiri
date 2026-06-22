@@ -39,6 +39,7 @@
 #include <rte_mbuf_dyn.h>
 
 #include "src/dpdk_log.h"
+#include "src/burst_validation.h"
 #include "daqiri_dpdk_engine.h"
 #include "src/kernels.h"
 #include <daqiri/logging.hpp>
@@ -467,6 +468,79 @@ struct UDPPkt {
   struct rte_udp_hdr udp;
   uint8_t payload[];
 } __attribute__((packed));
+
+static size_t mbuf_data_capacity(const rte_mbuf* mbuf) {
+  if (mbuf == nullptr || mbuf->buf_len < mbuf->data_off) { return 0; }
+  return static_cast<size_t>(mbuf->buf_len - mbuf->data_off);
+}
+
+static Status validate_dpdk_first_segment_write(BurstParams* burst,
+                                                int idx,
+                                                size_t bytes_required,
+                                                const char* op_name) {
+  const auto limits = burst_validation::header_limits(burst);
+  Status status = burst_validation::validate_segment_packet_storage(
+      burst, limits, 0, idx, true, false, op_name);
+  if (status != Status::SUCCESS) { return status; }
+  if (!burst_validation::strict_enabled()) { return Status::SUCCESS; }
+
+  const auto* mbuf = reinterpret_cast<const rte_mbuf*>(burst->pkts[0][idx]);
+  const size_t capacity = mbuf_data_capacity(mbuf);
+  if (bytes_required > capacity) {
+    DAQIRI_LOG_ERROR("{}: write size {} exceeds first-segment backing capacity {}",
+                     op_name,
+                     bytes_required,
+                     capacity);
+    return Status::INVALID_PARAMETER;
+  }
+  return Status::SUCCESS;
+}
+
+static Status dpdk_packet_length_capacities(BurstParams* burst,
+                                            int idx,
+                                            std::array<size_t, MAX_NUM_SEGS>* capacities,
+                                            const char* op_name) {
+  if (capacities == nullptr) { return Status::NULL_PTR; }
+  *capacities = burst_validation::unknown_capacities();
+  if (!burst_validation::strict_enabled()) { return Status::SUCCESS; }
+
+  const auto limits = burst_validation::header_limits(burst);
+  Status status = burst_validation::validate_packet_index(burst, limits, idx, op_name);
+  if (status != Status::SUCCESS) { return status; }
+  status = burst_validation::validate_segment_count(burst, limits, op_name);
+  if (status != Status::SUCCESS) { return status; }
+
+  for (int seg = 0; seg < limits.num_segs; ++seg) {
+    status = burst_validation::validate_segment_packet_storage(
+        burst, limits, seg, idx, true, false, op_name);
+    if (status != Status::SUCCESS) { return status; }
+    (*capacities)[static_cast<size_t>(seg)] =
+        mbuf_data_capacity(reinterpret_cast<const rte_mbuf*>(burst->pkts[seg][idx]));
+  }
+  return Status::SUCCESS;
+}
+
+static Status validate_dpdk_packet_lengths(BurstParams* burst,
+                                           int idx,
+                                           const std::initializer_list<int>& lens,
+                                           uint32_t* total_len,
+                                           const char* op_name) {
+  std::array<size_t, MAX_NUM_SEGS> capacities{};
+  Status status = dpdk_packet_length_capacities(burst, idx, &capacities, op_name);
+  if (status != Status::SUCCESS) { return status; }
+
+  return burst_validation::validate_packet_lengths(
+      burst,
+      burst_validation::header_limits(burst),
+      idx,
+      lens,
+      capacities,
+      true,
+      false,
+      std::numeric_limits<uint16_t>::max(),
+      op_name,
+      total_len);
+}
 
 static inline uint64_t convert_rx_timestamp_ticks_to_ns(uint64_t timestamp,
                                                         const RxTimestampConversion& conversion) {
@@ -6199,45 +6273,74 @@ int DpdkEngine::tx_lb_worker(void* arg) {
 
 /* daqiri interface implementations */
 void* DpdkEngine::get_segment_packet_ptr(BurstParams* burst, int seg, int idx) {
-  if (burst == nullptr || idx < 0 || seg < 0 || seg >= MAX_NUM_SEGS) { return nullptr; }
+  const auto limits = burst_validation::header_limits(burst);
+  if ((burst == nullptr) ||
+      burst_validation::validate_segment_packet_storage(
+          burst, limits, seg, idx, true, false, "DpdkEngine::get_segment_packet_ptr")
+          != Status::SUCCESS) {
+    return nullptr;
+  }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
-    if (seg != 0 || burst->pkts[0] == nullptr) { return nullptr; }
+    if (seg != 0) { return nullptr; }
     return burst->pkts[0][idx];
   }
   return rte_pktmbuf_mtod(reinterpret_cast<rte_mbuf*>(burst->pkts[seg][idx]), void*);
 }
 
 void* DpdkEngine::get_packet_ptr(BurstParams* burst, int idx) {
-  if (burst == nullptr || idx < 0) { return nullptr; }
-  if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
-    if (burst->pkts[0] == nullptr) { return nullptr; }
-    return burst->pkts[0][idx];
-  }
-  return rte_pktmbuf_mtod(reinterpret_cast<rte_mbuf*>(burst->pkts[0][idx]), void*);
+  return get_segment_packet_ptr(burst, 0, idx);
 }
 
 uint32_t DpdkEngine::get_segment_packet_length(BurstParams* burst, int seg, int idx) {
-  if (burst == nullptr || idx < 0 || seg < 0 || seg >= MAX_NUM_SEGS) { return 0; }
+  if (burst == nullptr) { return 0; }
+  const auto limits = burst_validation::header_limits(burst);
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
-    if (seg != 0 || burst->pkt_lens[0] == nullptr) { return 0; }
+    if (seg != 0 ||
+        burst_validation::validate_segment_packet_storage(
+            burst, limits, seg, idx, false, true, "DpdkEngine::get_segment_packet_length")
+            != Status::SUCCESS) {
+      return 0;
+    }
     return burst->pkt_lens[0][idx];
+  }
+  if (burst_validation::validate_segment_packet_storage(
+          burst, limits, seg, idx, true, false, "DpdkEngine::get_segment_packet_length")
+      != Status::SUCCESS) {
+    return 0;
   }
   return reinterpret_cast<rte_mbuf*>(burst->pkts[seg][idx])->data_len;
 }
 
 uint32_t DpdkEngine::get_packet_length(BurstParams* burst, int idx) {
-  if (burst == nullptr || idx < 0) { return 0; }
+  if (burst == nullptr) { return 0; }
+  const auto limits = burst_validation::header_limits(burst);
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
-    if (burst->pkt_lens[0] == nullptr) { return 0; }
+    if (burst_validation::validate_segment_packet_storage(
+            burst, limits, 0, idx, false, true, "DpdkEngine::get_packet_length")
+        != Status::SUCCESS) {
+      return 0;
+    }
     return burst->pkt_lens[0][idx];
+  }
+  if (burst_validation::validate_segment_packet_storage(
+          burst, limits, 0, idx, true, false, "DpdkEngine::get_packet_length")
+      != Status::SUCCESS) {
+    return 0;
   }
   return reinterpret_cast<rte_mbuf*>(burst->pkts[0][idx])->pkt_len;
 }
 
 FlowId DpdkEngine::get_packet_flow_id(BurstParams* burst, int idx) {
-  if (burst == nullptr || idx < 0) { return 0; }
+  if (burst == nullptr) { return 0; }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) { return 0; }
-  if (idx >= static_cast<int>(burst->hdr.hdr.num_pkts) || burst->pkts[0] == nullptr) {
+  if (burst_validation::validate_segment_packet_storage(
+          burst,
+          burst_validation::header_limits(burst),
+          0,
+          idx,
+          true,
+          false,
+          "DpdkEngine::get_packet_flow_id") != Status::SUCCESS) {
     return 0;
   }
   const auto* mbuf = reinterpret_cast<const rte_mbuf*>(burst->pkts[0][idx]);
@@ -6248,11 +6351,11 @@ FlowId DpdkEngine::get_packet_flow_id(BurstParams* burst, int idx) {
 Status DpdkEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) {
   if (burst == nullptr || timestamp_ns == nullptr) { return Status::NULL_PTR; }
   *timestamp_ns = 0;
-  if (idx < 0 || idx >= static_cast<int>(burst->hdr.hdr.num_pkts)) {
-    return Status::INVALID_PARAMETER;
-  }
 
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
+    Status status = burst_validation::validate_packet_index(
+        burst, burst_validation::header_limits(burst), idx, "DpdkEngine::get_packet_rx_timestamp");
+    if (status != Status::SUCCESS) { return status; }
     if (idx != 0 || burst->custom_pkt_data == nullptr) { return Status::INVALID_PARAMETER; }
     auto ctx = std::static_pointer_cast<ReorderBurstContext>(burst->custom_pkt_data);
     if (!ctx || !ctx->rx_timestamp_ns_valid) { return Status::NOT_SUPPORTED; }
@@ -6260,7 +6363,15 @@ Status DpdkEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t
     return Status::SUCCESS;
   }
 
-  if (burst->pkts[0] == nullptr) { return Status::INVALID_PARAMETER; }
+  Status status = burst_validation::validate_segment_packet_storage(
+      burst,
+      burst_validation::header_limits(burst),
+      0,
+      idx,
+      true,
+      false,
+      "DpdkEngine::get_packet_rx_timestamp");
+  if (status != Status::SUCCESS) { return status; }
   auto* mbuf = reinterpret_cast<rte_mbuf*>(burst->pkts[0][idx]);
   if (mbuf == nullptr || burst->hdr.hdr.port_id >= rx_timestamp_conversions_.size()) {
     return Status::INVALID_PARAMETER;
@@ -6278,9 +6389,15 @@ Status DpdkEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t
 
 Status DpdkEngine::set_packet_tx_time(BurstParams* burst, int idx, uint64_t timestamp) {
   if (burst == nullptr) { return Status::NULL_PTR; }
-  if (idx < 0 || idx >= static_cast<int>(burst->hdr.hdr.num_pkts)) {
-    return Status::INVALID_PARAMETER;
-  }
+  Status status = burst_validation::validate_segment_packet_storage(
+      burst,
+      burst_validation::header_limits(burst),
+      0,
+      idx,
+      true,
+      false,
+      "DpdkEngine::set_packet_tx_time");
+  if (status != Status::SUCCESS) { return status; }
   if (timestamp_dynfield_offset_ < 0 || tx_timestamp_dynflag_mask_ == 0) {
     return Status::NOT_SUPPORTED;
   }
@@ -6306,6 +6423,18 @@ void* DpdkEngine::get_packet_extra_info(BurstParams* burst, int idx) {
 }
 
 Status DpdkEngine::get_tx_packet_burst(BurstParams* burst) {
+  if (burst == nullptr) { return Status::NULL_PTR; }
+  const auto limits = burst_validation::header_limits(burst);
+  Status status = burst_validation::validate_segment_count(
+      burst, limits, "DpdkEngine::get_tx_packet_burst");
+  if (status != Status::SUCCESS) { return status; }
+  status = burst_validation::validate_packet_count(
+      burst,
+      limits,
+      static_cast<size_t>(std::numeric_limits<int>::max()),
+      "DpdkEngine::get_tx_packet_burst");
+  if (status != Status::SUCCESS) { return status; }
+
   const uint32_t key = generate_queue_key(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
   const auto q_it = tx_dpdk_q_map_.find(key);
   if (q_it == tx_dpdk_q_map_.end() || q_it->second == nullptr) {
@@ -6316,6 +6445,12 @@ Status DpdkEngine::get_tx_packet_burst(BurstParams* burst) {
     return Status::INVALID_PARAMETER;
   }
   const auto& q = q_it->second;
+  if (q->pools.size() < static_cast<size_t>(limits.num_segs)) {
+    DAQIRI_LOG_ERROR("TX queue has {} pool(s), burst requires {} segment(s)",
+                     q->pools.size(),
+                     limits.num_segs);
+    return Status::INVALID_PARAMETER;
+  }
 
   const auto burst_pool = tx_burst_buffers.find(key);
   if (burst_pool == tx_burst_buffers.end()) {
@@ -6342,6 +6477,11 @@ Status DpdkEngine::get_tx_packet_burst(BurstParams* burst) {
 }
 
 Status DpdkEngine::set_eth_header(BurstParams* burst, int idx, char* dst_addr) {
+  if (dst_addr == nullptr) { return Status::NULL_PTR; }
+  Status status = validate_dpdk_first_segment_write(
+      burst, idx, sizeof(UDPPkt), "DpdkEngine::set_eth_header");
+  if (status != Status::SUCCESS) { return status; }
+
   auto mbuf = reinterpret_cast<rte_mbuf*>(burst->pkts[0][idx]);
   auto mbuf_data = rte_pktmbuf_mtod(mbuf, UDPPkt*);
   memcpy(reinterpret_cast<void*>(&mbuf_data->eth.dst_addr),
@@ -6354,6 +6494,15 @@ Status DpdkEngine::set_eth_header(BurstParams* burst, int idx, char* dst_addr) {
 
 Status DpdkEngine::set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint8_t proto,
                                    unsigned int src_host, unsigned int dst_host) {
+  if (ip_len < 0 ||
+      static_cast<size_t>(ip_len) >
+          std::numeric_limits<uint16_t>::max() - sizeof(rte_ipv4_hdr)) {
+    return Status::INVALID_PARAMETER;
+  }
+  Status status = validate_dpdk_first_segment_write(
+      burst, idx, sizeof(UDPPkt), "DpdkEngine::set_ipv4_header");
+  if (status != Status::SUCCESS) { return status; }
+
   auto mbuf = reinterpret_cast<rte_mbuf*>(burst->pkts[0][idx]);
   auto mbuf_data = rte_pktmbuf_mtod(mbuf, UDPPkt*);
   mbuf_data->ip.next_proto_id = proto;
@@ -6367,6 +6516,15 @@ Status DpdkEngine::set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint
 
 Status DpdkEngine::set_udp_header(BurstParams* burst, int idx, int udp_len, uint16_t src_port,
                                   uint16_t dst_port) {
+  if (udp_len < 0 ||
+      static_cast<size_t>(udp_len) >
+          std::numeric_limits<uint16_t>::max() - sizeof(rte_udp_hdr)) {
+    return Status::INVALID_PARAMETER;
+  }
+  Status status = validate_dpdk_first_segment_write(
+      burst, idx, sizeof(UDPPkt), "DpdkEngine::set_udp_header");
+  if (status != Status::SUCCESS) { return status; }
+
   auto mbuf = reinterpret_cast<rte_mbuf*>(burst->pkts[0][idx]);
   auto mbuf_data = rte_pktmbuf_mtod(mbuf, UDPPkt*);
 
@@ -6378,17 +6536,59 @@ Status DpdkEngine::set_udp_header(BurstParams* burst, int idx, int udp_len, uint
 }
 
 Status DpdkEngine::set_udp_payload(BurstParams* burst, int idx, void* data, int len) {
+  size_t payload_capacity = burst_validation::kUnknownCapacity;
+  bool header_fits = true;
+  if (burst_validation::strict_enabled() && burst != nullptr &&
+      burst_validation::validate_segment_packet_storage(
+          burst,
+          burst_validation::header_limits(burst),
+          0,
+          idx,
+          true,
+          false,
+          "DpdkEngine::set_udp_payload")
+          == Status::SUCCESS) {
+    const auto* mbuf = reinterpret_cast<const rte_mbuf*>(burst->pkts[0][idx]);
+    const size_t capacity = mbuf_data_capacity(mbuf);
+    header_fits = capacity >= sizeof(UDPPkt);
+    payload_capacity = capacity >= sizeof(UDPPkt) ? capacity - sizeof(UDPPkt) : 0;
+  }
+  Status status = burst_validation::validate_payload_write(
+      burst,
+      burst_validation::header_limits(burst),
+      idx,
+      data,
+      len,
+      payload_capacity,
+      "DpdkEngine::set_udp_payload");
+  if (status != Status::SUCCESS) { return status; }
+  if (!header_fits) { return Status::INVALID_PARAMETER; }
+
   auto mbuf = reinterpret_cast<rte_mbuf*>(burst->pkts[0][idx]);
   auto mbuf_data = rte_pktmbuf_mtod(mbuf, UDPPkt*);
 
-  rte_memcpy(mbuf_data->payload, data, len);
+  if (len > 0) { rte_memcpy(mbuf_data->payload, data, len); }
   return Status::SUCCESS;
 }
 
 bool DpdkEngine::is_tx_burst_available(BurstParams* burst) {
+  if (burst == nullptr) { return false; }
+  const auto limits = burst_validation::header_limits(burst);
+  if (burst_validation::validate_segment_count(
+          burst, limits, "DpdkEngine::is_tx_burst_available") != Status::SUCCESS) {
+    return false;
+  }
+  if (burst_validation::validate_packet_count(
+          burst,
+          limits,
+          static_cast<size_t>(std::numeric_limits<int>::max()),
+          "DpdkEngine::is_tx_burst_available") != Status::SUCCESS) {
+    return false;
+  }
   const uint32_t key = generate_queue_key(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
   const auto item = tx_dpdk_q_map_.find(key);
-  if (item == tx_dpdk_q_map_.end()) {
+  if (item == tx_dpdk_q_map_.end() ||
+      item->second->pools.size() < static_cast<size_t>(limits.num_segs)) {
     return false;
   }
 
@@ -6403,9 +6603,14 @@ bool DpdkEngine::is_tx_burst_available(BurstParams* burst) {
 Status DpdkEngine::set_packet_lengths(BurstParams* burst, int idx,
                                    const std::initializer_list<int>& lens) {
   uint32_t ttl_len = 0;
+  Status status = validate_dpdk_packet_lengths(
+      burst, idx, lens, &ttl_len, "DpdkEngine::set_packet_lengths");
+  if (status != Status::SUCCESS) { return status; }
+
+  int seg_idx = 0;
   for (int seg = 0; seg < burst->hdr.hdr.num_segs; seg++) {
-    reinterpret_cast<rte_mbuf**>(burst->pkts[seg])[idx]->data_len = *(lens.begin() + seg);
-    ttl_len += *(lens.begin() + seg);
+    reinterpret_cast<rte_mbuf**>(burst->pkts[seg])[idx]->data_len = *(lens.begin() + seg_idx);
+    ++seg_idx;
   }
 
   reinterpret_cast<rte_mbuf**>(burst->pkts[0])[idx]->pkt_len = ttl_len;
@@ -6418,15 +6623,34 @@ Status DpdkEngine::set_packet_lengths(BurstParams* burst, int idx,
 Status DpdkEngine::set_all_packet_lengths(BurstParams* burst,
                                        const std::initializer_list<int>& lens) {
   if (burst == nullptr) { return Status::NULL_PTR; }
+  if (burst_validation::validate_segment_count(
+          burst,
+          burst_validation::header_limits(burst),
+          "DpdkEngine::set_all_packet_lengths") != Status::SUCCESS) {
+    return Status::INVALID_PARAMETER;
+  }
+  if (burst->hdr.hdr.num_pkts == 0 ||
+      burst->hdr.hdr.num_pkts > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    return Status::INVALID_PARAMETER;
+  }
 
   std::array<uint32_t, MAX_NUM_SEGS> seg_lens{};
   uint32_t ttl_len = 0;
-  for (int seg = 0; seg < burst->hdr.hdr.num_segs; ++seg) {
-    seg_lens[seg] = static_cast<uint32_t>(*(lens.begin() + seg));
-    ttl_len += seg_lens[seg];
+  const auto num_pkts = static_cast<int>(burst->hdr.hdr.num_pkts);
+  for (int idx = 0; idx < num_pkts; ++idx) {
+    uint32_t packet_len = 0;
+    Status status = validate_dpdk_packet_lengths(
+        burst, idx, lens, &packet_len, "DpdkEngine::set_all_packet_lengths");
+    if (status != Status::SUCCESS) { return status; }
+    ttl_len = packet_len;
   }
 
-  const auto num_pkts = static_cast<int>(burst->hdr.hdr.num_pkts);
+  int lens_idx = 0;
+  for (int seg = 0; seg < burst->hdr.hdr.num_segs; ++seg) {
+    seg_lens[seg] = static_cast<uint32_t>(*(lens.begin() + lens_idx));
+    ++lens_idx;
+  }
+
   for (int seg = 0; seg < burst->hdr.hdr.num_segs; ++seg) {
     auto** mbufs = reinterpret_cast<rte_mbuf**>(burst->pkts[seg]);
     for (int idx = 0; idx < num_pkts; ++idx) { mbufs[idx]->data_len = seg_lens[seg]; }
@@ -6444,10 +6668,24 @@ void DpdkEngine::free_packet_segment(BurstParams* burst, int seg, int pkt) {
   if (burst == nullptr) { return; }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
     release_reorder_output_context(burst);
-    if (seg == 0 && burst->pkt_lens[0] != nullptr && pkt >= 0
-        && pkt < static_cast<int>(burst->hdr.hdr.num_pkts)) {
+    if (seg == 0 && burst->pkt_lens[0] != nullptr &&
+        burst_validation::validate_packet_index(
+            burst,
+            burst_validation::header_limits(burst),
+            pkt,
+            "DpdkEngine::free_packet_segment") == Status::SUCCESS) {
       burst->pkt_lens[0][pkt] = 0;
     }
+    return;
+  }
+  if (burst_validation::validate_segment_packet_storage(
+          burst,
+          burst_validation::header_limits(burst),
+          seg,
+          pkt,
+          true,
+          false,
+          "DpdkEngine::free_packet_segment") != Status::SUCCESS) {
     return;
   }
   rte_pktmbuf_free_seg(reinterpret_cast<rte_mbuf**>(burst->pkts[seg])[pkt]);
@@ -6455,14 +6693,32 @@ void DpdkEngine::free_packet_segment(BurstParams* burst, int seg, int pkt) {
 
 void DpdkEngine::free_all_segment_packets(BurstParams* burst, int seg) {
   if (burst == nullptr) { return; }
+  const auto limits = burst_validation::header_limits(burst);
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
     release_reorder_output_context(burst);
-    if (seg == 0 && burst->pkt_lens[0] != nullptr) {
-      for (int p = 0; p < burst->hdr.hdr.num_pkts; p++) { burst->pkt_lens[0][p] = 0; }
+    if (seg == 0 && burst->pkt_lens[0] != nullptr &&
+        burst_validation::validate_packet_count(
+            burst,
+            limits,
+            static_cast<size_t>(std::numeric_limits<int>::max()),
+            "DpdkEngine::free_all_segment_packets") == Status::SUCCESS) {
+      for (int p = 0; p < static_cast<int>(burst->hdr.hdr.num_pkts); p++) {
+        burst->pkt_lens[0][p] = 0;
+      }
     }
     return;
   }
-  for (int p = 0; p < burst->hdr.hdr.num_pkts; p++) {
+  if (burst_validation::validate_segment_index(
+          burst, limits, seg, "DpdkEngine::free_all_segment_packets") != Status::SUCCESS ||
+      burst_validation::validate_packet_count(
+          burst,
+          limits,
+          static_cast<size_t>(std::numeric_limits<int>::max()),
+          "DpdkEngine::free_all_segment_packets") != Status::SUCCESS ||
+      burst->pkts[seg] == nullptr) {
+    return;
+  }
+  for (int p = 0; p < static_cast<int>(burst->hdr.hdr.num_pkts); p++) {
     rte_pktmbuf_free_seg(reinterpret_cast<rte_mbuf**>(burst->pkts[seg])[p]);
   }
 }
@@ -6471,9 +6727,22 @@ void DpdkEngine::free_packet(BurstParams* burst, int pkt) {
   if (burst == nullptr) { return; }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
     release_reorder_output_context(burst);
-    if (burst->pkt_lens[0] != nullptr && pkt >= 0 && pkt < static_cast<int>(burst->hdr.hdr.num_pkts)) {
+    if (burst->pkt_lens[0] != nullptr &&
+        burst_validation::validate_packet_index(
+            burst, burst_validation::header_limits(burst), pkt, "DpdkEngine::free_packet") ==
+            Status::SUCCESS) {
       burst->pkt_lens[0][pkt] = 0;
     }
+    return;
+  }
+  if (burst_validation::validate_segment_packet_storage(
+          burst,
+          burst_validation::header_limits(burst),
+          0,
+          pkt,
+          true,
+          false,
+          "DpdkEngine::free_packet") != Status::SUCCESS) {
     return;
   }
   rte_pktmbuf_free(reinterpret_cast<rte_mbuf**>(burst->pkts[0])[pkt]);
@@ -6481,14 +6750,30 @@ void DpdkEngine::free_packet(BurstParams* burst, int pkt) {
 
 void DpdkEngine::free_all_packets(BurstParams* burst) {
   if (burst == nullptr) { return; }
+  const auto limits = burst_validation::header_limits(burst);
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
     release_reorder_output_context(burst);
-    if (burst->pkt_lens[0] != nullptr) {
-      for (int p = 0; p < burst->hdr.hdr.num_pkts; p++) { burst->pkt_lens[0][p] = 0; }
+    if (burst->pkt_lens[0] != nullptr &&
+        burst_validation::validate_packet_count(
+            burst,
+            limits,
+            static_cast<size_t>(std::numeric_limits<int>::max()),
+            "DpdkEngine::free_all_packets") == Status::SUCCESS) {
+      for (int p = 0; p < static_cast<int>(burst->hdr.hdr.num_pkts); p++) {
+        burst->pkt_lens[0][p] = 0;
+      }
     }
     return;
   }
-  for (int p = 0; p < burst->hdr.hdr.num_pkts; p++) {
+  if (burst_validation::validate_packet_count(
+          burst,
+          limits,
+          static_cast<size_t>(std::numeric_limits<int>::max()),
+          "DpdkEngine::free_all_packets") != Status::SUCCESS ||
+      burst->pkts[0] == nullptr) {
+    return;
+  }
+  for (int p = 0; p < static_cast<int>(burst->hdr.hdr.num_pkts); p++) {
     rte_pktmbuf_free(reinterpret_cast<rte_mbuf**>(burst->pkts[0])[p]);
   }
 }
@@ -6507,8 +6792,14 @@ void DpdkEngine::free_rx_burst(BurstParams* burst) {
     return;
   }
 
-  for (int seg = 0; seg < burst->hdr.hdr.num_segs; seg++) {
-    rte_mempool_put(rx_burst_buffer, (void*)burst->pkts[seg]);
+  const auto limits = burst_validation::header_limits(burst);
+  if (burst_validation::validate_segment_count(
+          burst, limits, "DpdkEngine::free_rx_burst") == Status::SUCCESS) {
+    for (int seg = 0; seg < burst->hdr.hdr.num_segs; seg++) {
+      if (burst->pkts[seg] != nullptr) {
+        rte_mempool_put(rx_burst_buffer, (void*)burst->pkts[seg]);
+      }
+    }
   }
 
   burst->hdr.hdr.num_pkts = 0;
@@ -6517,11 +6808,19 @@ void DpdkEngine::free_rx_burst(BurstParams* burst) {
 }
 
 void DpdkEngine::free_tx_burst(BurstParams* burst) {
+  if (burst == nullptr) { return; }
   const uint32_t key = generate_queue_key(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
   const auto burst_pool = tx_burst_buffers.find(key);
 
-  for (int seg = 0; seg < burst->hdr.hdr.num_segs; seg++) {
-    rte_mempool_put(burst_pool->second, (void*)burst->pkts[seg]);
+  const auto limits = burst_validation::header_limits(burst);
+  if (burst_pool != tx_burst_buffers.end() &&
+      burst_validation::validate_segment_count(
+          burst, limits, "DpdkEngine::free_tx_burst") == Status::SUCCESS) {
+    for (int seg = 0; seg < burst->hdr.hdr.num_segs; seg++) {
+      if (burst->pkts[seg] != nullptr) {
+        rte_mempool_put(burst_pool->second, (void*)burst->pkts[seg]);
+      }
+    }
   }
 
   burst->hdr.hdr.num_pkts = 0;
@@ -6574,6 +6873,18 @@ Status DpdkEngine::get_tx_metadata_buffer(BurstParams** burst) {
 }
 
 Status DpdkEngine::send_tx_burst(BurstParams* burst) {
+  if (burst == nullptr) { return Status::NULL_PTR; }
+  const auto limits = burst_validation::header_limits(burst);
+  Status status = burst_validation::validate_segment_count(
+      burst, limits, "DpdkEngine::send_tx_burst");
+  if (status != Status::SUCCESS) { return status; }
+  status = burst_validation::validate_packet_count(
+      burst,
+      limits,
+      static_cast<size_t>(std::numeric_limits<int>::max()),
+      "DpdkEngine::send_tx_burst");
+  if (status != Status::SUCCESS) { return status; }
+
   uint32_t key = generate_queue_key(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
   const auto ring = tx_rings.find(key);
 
@@ -6642,6 +6953,14 @@ void DpdkEngine::print_stats() {
 
 uint64_t DpdkEngine::get_burst_tot_byte(BurstParams* burst) {
   if (burst == nullptr) { return 0; }
+  const auto limits = burst_validation::header_limits(burst);
+  if (burst_validation::validate_packet_count(
+          burst,
+          limits,
+          static_cast<size_t>(std::numeric_limits<int>::max()),
+          "DpdkEngine::get_burst_tot_byte") != Status::SUCCESS) {
+    return 0;
+  }
   uint64_t total = 0;
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
     if (burst->pkt_lens[0] != nullptr) {

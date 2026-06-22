@@ -278,6 +278,7 @@ The override is honored because `src/CMakeLists.txt` only sets `CMAKE_CUDA_ARCHI
 
 - `-DBUILD_SHARED_LIBS=ON`: produces `libdaqiri.so` (recommended). With `OFF`, you get a static library.
 - `-DDAQIRI_BUILD_EXAMPLES=ON`: builds the `daqiri_bench_*` executables under `build/examples/`. Required for the smoke test in [Step 5.3](#53-smoke-test). On by default.
+- `-DDAQIRI_ENABLE_BURST_VALIDATION=ON`: enables defensive burst bounds and backing-capacity validation in packet accessors and setters. On by default; turn off only for trusted-input performance testing after benchmarking.
 - `-DDAQIRI_REORDER_GPU_PROFILE=ON`: instruments the CUDA reorder kernels with CUDA event timing. Off by default; turn on only when profiling.
 
 ## Step 5: Build, install, and verify

@@ -24,6 +24,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <map>
@@ -456,6 +457,9 @@ class IbverbsEngine : public Engine {
   // drains each send_ring (post) + reclaims completions.
   void tx_worker(std::vector<IbvTxQueue*> group);
   IbvTxQueue* find_tx_queue(int port, int q);
+  size_t tx_segment_capacity(const BurstParams* burst, int seg);
+  size_t tx_payload_capacity(const BurstParams* burst);
+  std::array<size_t, MAX_NUM_SEGS> tx_segment_capacities(const BurstParams* burst);
 
   // ---- helpers ----
   static int mr_access_to_ibv(uint32_t access);

@@ -17,6 +17,7 @@
 
 #include "src/engines/ibverbs/daqiri_ibverbs_engine.h"
 #include "src/engines/ibverbs/mlx5_prm_min.h"
+#include "src/burst_validation.h"
 #include "src/kernels.h"
 
 #include <cuda.h>
@@ -32,6 +33,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <set>
 #include <string>
@@ -2904,6 +2906,16 @@ void IbverbsEngine::free_packet(BurstParams* burst, int pkt) {
   if (burst == nullptr) {
     return;
   }
+  if (burst->hdr.hdr.burst_flags & DAQIRI_BURST_FLAG_REORDERED) {
+    return;
+  }
+  if (burst_validation::validate_packet_index(
+          burst,
+          burst_validation::header_limits(burst),
+          pkt,
+          "IbverbsEngine::free_packet") != Status::SUCCESS) {
+    return;
+  }
   IbvRxQueue* q = find_rx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
   if (q == nullptr) {
     return;
@@ -2921,6 +2933,13 @@ void IbverbsEngine::free_all_packets(BurstParams* burst) {
     return;
   }
   if (burst->hdr.hdr.burst_flags & IBV_TX_BURST_FLAG) {
+    if (burst_validation::validate_packet_count(
+            burst,
+            burst_validation::header_limits(burst),
+            std::numeric_limits<unsigned>::max(),
+            "IbverbsEngine::free_all_packets") != Status::SUCCESS) {
+      return;
+    }
     // TX burst the app allocated but never sent (a local fill failure): roll
     // back the allocation. The bench only does this for the just-allocated
     // burst, so these are the most-recent (unposted) cyclic slots.
@@ -2933,6 +2952,13 @@ void IbverbsEngine::free_all_packets(BurstParams* burst) {
   }
   IbvRxQueue* q = find_rx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
   if (q == nullptr) {
+    return;
+  }
+  if (burst_validation::validate_packet_count(
+          burst,
+          burst_validation::header_limits(burst),
+          std::numeric_limits<int>::max(),
+          "IbverbsEngine::free_all_packets") != Status::SUCCESS) {
     return;
   }
   uint16_t* wqe_arr = burst_wqe_arr(burst);
@@ -2983,22 +3009,74 @@ void IbverbsEngine::free_rx_metadata(BurstParams* burst) {
 // Accessors
 // ---------------------------------------------------------------------------
 void* IbverbsEngine::get_packet_ptr(BurstParams* burst, int idx) {
-  return burst->pkts[0][idx];
+  return get_segment_packet_ptr(burst, 0, idx);
 }
 
 uint32_t IbverbsEngine::get_packet_length(BurstParams* burst, int idx) {
-  return burst->pkt_lens[0][idx];
+  uint64_t total = 0;
+  const auto limits = burst_validation::header_limits(burst);
+  if (burst_validation::validate_packet_index(
+          burst, limits, idx, "IbverbsEngine::get_packet_length") != Status::SUCCESS ||
+      burst_validation::validate_segment_count(
+          burst, limits, "IbverbsEngine::get_packet_length") != Status::SUCCESS) {
+    return 0;
+  }
+  for (int seg = 0; seg < limits.num_segs; ++seg) {
+    if (burst_validation::validate_segment_packet_storage(
+            burst,
+            limits,
+            seg,
+            idx,
+            false,
+            true,
+            "IbverbsEngine::get_packet_length") != Status::SUCCESS) {
+      return 0;
+    }
+    total += burst->pkt_lens[seg][idx];
+    if (total > std::numeric_limits<uint32_t>::max()) { return 0; }
+  }
+  return static_cast<uint32_t>(total);
 }
 
 void* IbverbsEngine::get_segment_packet_ptr(BurstParams* burst, int seg, int idx) {
+  if (burst_validation::validate_segment_packet_storage(
+          burst,
+          burst_validation::header_limits(burst),
+          seg,
+          idx,
+          true,
+          false,
+          "IbverbsEngine::get_segment_packet_ptr") != Status::SUCCESS) {
+    return nullptr;
+  }
   return burst->pkts[seg][idx];
 }
 
 uint32_t IbverbsEngine::get_segment_packet_length(BurstParams* burst, int seg, int idx) {
+  if (burst_validation::validate_segment_packet_storage(
+          burst,
+          burst_validation::header_limits(burst),
+          seg,
+          idx,
+          false,
+          true,
+          "IbverbsEngine::get_segment_packet_length") != Status::SUCCESS) {
+    return 0;
+  }
   return burst->pkt_lens[seg][idx];
 }
 
 FlowId IbverbsEngine::get_packet_flow_id(BurstParams* burst, int idx) {
+  if (burst == nullptr || (burst->hdr.hdr.burst_flags & DAQIRI_BURST_FLAG_REORDERED) != 0U) {
+    return 0;
+  }
+  if (burst_validation::validate_packet_index(
+          burst,
+          burst_validation::header_limits(burst),
+          idx,
+          "IbverbsEngine::get_packet_flow_id") != Status::SUCCESS) {
+    return 0;
+  }
   // Per-packet MARK tag captured from the CQE (set by the flow's tag action).
   // Distinguishes flows that share a queue. Falls back to the per-queue flow_id
   // for untagged packets (tag 0), e.g. catch-all traffic or single-flow configs.
@@ -3032,9 +3110,12 @@ Status IbverbsEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint6
     return Status::NULL_PTR;
   }
   *timestamp_ns = 0;
-  if (idx < 0 || idx >= static_cast<int>(burst->hdr.hdr.num_pkts)) {
-    return Status::INVALID_PARAMETER;
-  }
+  Status status = burst_validation::validate_packet_index(
+      burst,
+      burst_validation::header_limits(burst),
+      idx,
+      "IbverbsEngine::get_packet_rx_timestamp");
+  if (status != Status::SUCCESS) { return status; }
   // Reordered output bursts are GPU result buffers, not raw packets -- no
   // per-packet HW timestamp is carried.
   if (burst->hdr.hdr.burst_flags & DAQIRI_BURST_FLAG_REORDERED) {
@@ -3055,9 +3136,17 @@ void* IbverbsEngine::get_packet_extra_info(BurstParams* burst, int idx) {
 }
 
 uint64_t IbverbsEngine::get_burst_tot_byte(BurstParams* burst) {
+  if (burst == nullptr ||
+      burst_validation::validate_packet_count(
+          burst,
+          burst_validation::header_limits(burst),
+          std::numeric_limits<int>::max(),
+          "IbverbsEngine::get_burst_tot_byte") != Status::SUCCESS) {
+    return 0;
+  }
   uint64_t tot = 0;
   for (size_t i = 0; i < burst->hdr.hdr.num_pkts; i++) {
-    tot += burst->pkt_lens[0][i];
+    tot += get_packet_length(burst, static_cast<int>(i));
   }
   return tot;
 }
@@ -3548,6 +3637,31 @@ IbvTxQueue* IbverbsEngine::find_tx_queue(int port, int q) {
   return nullptr;
 }
 
+size_t IbverbsEngine::tx_segment_capacity(const BurstParams* burst, int seg) {
+  if (burst == nullptr || seg < 0) { return 0; }
+  auto* q = find_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
+  if (q == nullptr || seg >= static_cast<int>(q->regions.size())) { return 0; }
+  return q->regions[seg].slot_size;
+}
+
+size_t IbverbsEngine::tx_payload_capacity(const BurstParams* burst) {
+  const size_t capacity = tx_segment_capacity(burst, 0);
+  return capacity >= sizeof(UDPIPV4Pkt) ? capacity - sizeof(UDPIPV4Pkt) : 0;
+}
+
+std::array<size_t, MAX_NUM_SEGS> IbverbsEngine::tx_segment_capacities(const BurstParams* burst) {
+  std::array<size_t, MAX_NUM_SEGS> capacities = burst_validation::unknown_capacities();
+  if (!burst_validation::strict_enabled()) { return capacities; }
+  if (burst == nullptr) { return capacities; }
+  auto* q = find_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
+  if (q == nullptr) { return capacities; }
+  const int num_segs = std::min<int>(static_cast<int>(q->regions.size()), MAX_NUM_SEGS);
+  for (int seg = 0; seg < num_segs; ++seg) {
+    capacities[seg] = q->regions[seg].slot_size;
+  }
+  return capacities;
+}
+
 Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
   q.cq = ibv_create_cq(q.ctx, static_cast<int>(q.num_slots) + 1, nullptr, nullptr, 0);
   if (q.cq == nullptr) {
@@ -3795,8 +3909,17 @@ Status IbverbsEngine::get_tx_metadata_buffer(BurstParams** burst) {
 }
 
 bool IbverbsEngine::is_tx_burst_available(BurstParams* burst) {
+  if (burst == nullptr) { return false; }
   IbvTxQueue* q = find_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
   if (q == nullptr) {
+    return false;
+  }
+  const auto limits = burst_validation::header_limits(burst);
+  if (burst_validation::validate_packet_count(
+          burst,
+          limits,
+          std::numeric_limits<unsigned>::max(),
+          "IbverbsEngine::is_tx_burst_available") != Status::SUCCESS) {
     return false;
   }
   const uint64_t in_flight = q->alloc_head - q->completed_tail.load(std::memory_order_acquire);
@@ -3804,8 +3927,20 @@ bool IbverbsEngine::is_tx_burst_available(BurstParams* burst) {
 }
 
 Status IbverbsEngine::get_tx_packet_burst(BurstParams* burst) {
+  if (burst == nullptr) { return Status::NULL_PTR; }
   IbvTxQueue* q = find_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
   if (q == nullptr) {
+    return Status::INVALID_PARAMETER;
+  }
+  const auto limits = burst_validation::header_limits(burst);
+  Status status = burst_validation::validate_packet_count(
+      burst,
+      limits,
+      std::numeric_limits<unsigned>::max(),
+      "IbverbsEngine::get_tx_packet_burst");
+  if (status != Status::SUCCESS) { return status; }
+  if (q->num_segs <= 0 || q->num_segs > MAX_NUM_SEGS ||
+      q->regions.size() < static_cast<size_t>(q->num_segs)) {
     return Status::INVALID_PARAMETER;
   }
   const unsigned n = static_cast<unsigned>(burst->hdr.hdr.num_pkts);
@@ -3836,11 +3971,21 @@ Status IbverbsEngine::get_tx_packet_burst(BurstParams* burst) {
 
 Status IbverbsEngine::set_packet_lengths(BurstParams* burst, int idx,
                                          const std::initializer_list<int>& lens) {
+  const Status status = burst_validation::validate_packet_lengths(
+      burst,
+      burst_validation::header_limits(burst),
+      idx,
+      lens,
+      tx_segment_capacities(burst),
+      true,
+      true,
+      std::numeric_limits<uint32_t>::max(),
+      "IbverbsEngine::set_packet_lengths",
+      nullptr);
+  if (status != Status::SUCCESS) { return status; }
+
   int seg = 0;
   for (int v : lens) {
-    if (seg >= MAX_NUM_SEGS) {
-      break;
-    }
     burst->pkt_lens[seg][idx] = static_cast<uint32_t>(v);
     ++seg;
   }
@@ -3848,6 +3993,21 @@ Status IbverbsEngine::set_packet_lengths(BurstParams* burst, int idx,
 }
 
 Status IbverbsEngine::set_eth_header(BurstParams* burst, int idx, char* dst_addr) {
+  if (dst_addr == nullptr) { return Status::NULL_PTR; }
+  Status status = burst_validation::validate_segment_packet_storage(
+      burst,
+      burst_validation::header_limits(burst),
+      0,
+      idx,
+      true,
+      false,
+      "IbverbsEngine::set_eth_header");
+  if (status != Status::SUCCESS) { return status; }
+  if (burst_validation::strict_enabled() &&
+      sizeof(UDPIPV4Pkt) > tx_segment_capacity(burst, 0)) {
+    return Status::INVALID_PARAMETER;
+  }
+
   auto* pkt = static_cast<UDPIPV4Pkt*>(burst->pkts[0][idx]);
   memcpy(pkt->eth.h_dest, dst_addr, 6);
   pkt->eth.h_proto = htons(0x0800);  // IPv4
@@ -3861,6 +4021,23 @@ Status IbverbsEngine::set_eth_header(BurstParams* burst, int idx, char* dst_addr
 
 Status IbverbsEngine::set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint8_t proto,
                                       unsigned int src_host, unsigned int dst_host) {
+  if (ip_len < 0 || static_cast<size_t>(ip_len) > std::numeric_limits<uint16_t>::max()) {
+    return Status::INVALID_PARAMETER;
+  }
+  Status status = burst_validation::validate_segment_packet_storage(
+      burst,
+      burst_validation::header_limits(burst),
+      0,
+      idx,
+      true,
+      false,
+      "IbverbsEngine::set_ipv4_header");
+  if (status != Status::SUCCESS) { return status; }
+  if (burst_validation::strict_enabled() &&
+      sizeof(UDPIPV4Pkt) > tx_segment_capacity(burst, 0)) {
+    return Status::INVALID_PARAMETER;
+  }
+
   auto* pkt = static_cast<UDPIPV4Pkt*>(burst->pkts[0][idx]);
   pkt->ip.version = 4;
   pkt->ip.ihl = 5;
@@ -3874,6 +4051,23 @@ Status IbverbsEngine::set_ipv4_header(BurstParams* burst, int idx, int ip_len, u
 
 Status IbverbsEngine::set_udp_header(BurstParams* burst, int idx, int udp_len, uint16_t src_port,
                                      uint16_t dst_port) {
+  if (udp_len < 0 || static_cast<size_t>(udp_len) > std::numeric_limits<uint16_t>::max()) {
+    return Status::INVALID_PARAMETER;
+  }
+  Status status = burst_validation::validate_segment_packet_storage(
+      burst,
+      burst_validation::header_limits(burst),
+      0,
+      idx,
+      true,
+      false,
+      "IbverbsEngine::set_udp_header");
+  if (status != Status::SUCCESS) { return status; }
+  if (burst_validation::strict_enabled() &&
+      sizeof(UDPIPV4Pkt) > tx_segment_capacity(burst, 0)) {
+    return Status::INVALID_PARAMETER;
+  }
+
   auto* pkt = static_cast<UDPIPV4Pkt*>(burst->pkts[0][idx]);
   pkt->udp.source = htons(src_port);
   pkt->udp.dest = htons(dst_port);
@@ -3883,8 +4077,24 @@ Status IbverbsEngine::set_udp_header(BurstParams* burst, int idx, int udp_len, u
 }
 
 Status IbverbsEngine::set_udp_payload(BurstParams* burst, int idx, void* data, int len) {
+  if (burst == nullptr) { return Status::NULL_PTR; }
+  if (burst_validation::strict_enabled() &&
+      tx_segment_capacity(burst, 0) < sizeof(UDPIPV4Pkt)) {
+    return Status::INVALID_PARAMETER;
+  }
+  const Status status = burst_validation::validate_payload_write(
+      burst,
+      burst_validation::header_limits(burst),
+      idx,
+      data,
+      len,
+      burst_validation::strict_enabled() ? tx_payload_capacity(burst)
+                                         : burst_validation::kUnknownCapacity,
+      "IbverbsEngine::set_udp_payload");
+  if (status != Status::SUCCESS) { return status; }
+
   auto* p = static_cast<uint8_t*>(burst->pkts[0][idx]) + sizeof(UDPIPV4Pkt);
-  memcpy(p, data, static_cast<size_t>(len));
+  if (len > 0) { memcpy(p, data, static_cast<size_t>(len)); }
   return Status::SUCCESS;
 }
 
@@ -3896,6 +4106,16 @@ Status IbverbsEngine::set_udp_payload(BurstParams* burst, int idx, void* data, i
 // far in the past wraps). Returns NOT_SUPPORTED when the device lacks wait-on-time
 // or a real-time clock.
 Status IbverbsEngine::set_packet_tx_time(BurstParams* burst, int idx, uint64_t time) {
+  Status status = burst_validation::validate_segment_packet_storage(
+      burst,
+      burst_validation::header_limits(burst),
+      0,
+      idx,
+      true,
+      false,
+      "IbverbsEngine::set_packet_tx_time");
+  if (status != Status::SUCCESS) { return status; }
+
   IbvTxQueue* q = find_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
   if (q == nullptr) {
     return Status::INVALID_PARAMETER;
@@ -4020,6 +4240,18 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
 // overlaps the next fill batch with the post of the previous one and beat the
 // single-thread inline model in measurement.
 Status IbverbsEngine::send_tx_burst(BurstParams* burst) {
+  if (burst == nullptr) { return Status::NULL_PTR; }
+  const auto limits = burst_validation::header_limits(burst);
+  Status status = burst_validation::validate_segment_count(
+      burst, limits, "IbverbsEngine::send_tx_burst");
+  if (status != Status::SUCCESS) { return status; }
+  status = burst_validation::validate_packet_count(
+      burst,
+      limits,
+      std::numeric_limits<unsigned>::max(),
+      "IbverbsEngine::send_tx_burst");
+  if (status != Status::SUCCESS) { return status; }
+
   IbvTxQueue* q = find_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
   if (q == nullptr) {
     return Status::INVALID_PARAMETER;
