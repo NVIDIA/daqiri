@@ -23,6 +23,9 @@
 #   ETH_DST_ADDR     — required for dpdk backend (the RX iface MAC).
 #   REPEATS          — repeats per cell for error bars (default 1; use 3 for the
 #                      published re-run). Each rep is an independent run + CSV row.
+#   WORKLOAD         — representative GPU workload in the receive path:
+#                      none (default) | fft | gemm. Honoured by dpdk + rdma only;
+#                      recorded in the CSV post_process column (issue #15).
 #
 # Optional (dpdk only): DPDK_{TX,RX}_PCI / DPDK_{TX,RX}_NETDEV override the p0/p1
 # ports used for the per-cell *_phy wire-transit check (defaults p0 0000:01:00.0 /
@@ -72,6 +75,14 @@ RUN_SECONDS=30
 # capture dir (<cell>-r<rep>) and CSV row; the perf-doc tables report mean +/- std
 # across reps. Default 1; set REPEATS=3 for the published re-run.
 REPEATS="${REPEATS:-1}"
+# Representative GPU workload run in the receive path (issue #15): none | fft |
+# gemm. Recorded in the CSV post_process column. Only the dpdk (raw/HDS) and rdma
+# backends honour it; socket ignores --workload. Default none = bare loopback.
+WORKLOAD="${WORKLOAD:-none}"
+case "$WORKLOAD" in
+  none|fft|gemm) ;;
+  *) echo "Invalid WORKLOAD '$WORKLOAD' (expected none|fft|gemm)" >&2; exit 1 ;;
+esac
 DRIVER_LOG="$OUT_DIR/last_run.stderr"
 FAILURES=0
 
@@ -365,6 +376,10 @@ run_cell() {
 
   local bench_extra=()
   [[ "$target_gbps" != "0" ]] && bench_extra+=(--target-gbps "$target_gbps")
+  # Only the raw (dpdk) and rdma benches accept --workload; socket ignores it.
+  if [[ "$WORKLOAD" != "none" && ( "$BACKEND" == "dpdk" || "$BACKEND" == "rdma" ) ]]; then
+    bench_extra+=(--workload "$WORKLOAD")
+  fi
   # Shutdown ordering: the server must keep receiving until the client has fully
   # stopped sending, otherwise the client's last in-flight messages have no peer
   # to land on -- for RDMA that flushes the QP (status 5, "Work Request Flushed
@@ -536,7 +551,7 @@ run_cell() {
   gpu_mem="$(awk '/^ *[0-9]/ { count++; sum += $6 } END { if (count) printf "%.1f", sum/count; else print 0 }' \
                 "$cell_dir/nvidia_smi_dmon.txt" 2>/dev/null || echo 0)"
 
-  echo "$lang,$BACKEND,none,$payload,$batch,$pairs,$target_gbps,$rep,$secs,$pkts,$bytes,$pps,$gbps,$rx_gbps,$drops,$drops_kind,$cpu_master_pct,$cpu_tx_pct,$cpu_rx_pct,$gpu_sm,$gpu_mem" \
+  echo "$lang,$BACKEND,$WORKLOAD,$payload,$batch,$pairs,$target_gbps,$rep,$secs,$pkts,$bytes,$pps,$gbps,$rx_gbps,$drops,$drops_kind,$cpu_master_pct,$cpu_tx_pct,$cpu_rx_pct,$gpu_sm,$gpu_mem" \
     | tee -a "$CSV"
 }
 

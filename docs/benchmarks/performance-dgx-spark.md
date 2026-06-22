@@ -235,6 +235,53 @@ shared per-namespace pool, so under multi-pair unpaced load delivery collapses
 (≈100% loss at 65507 B / 4 pairs). The wire itself is loss-free here; the loss
 is host-side socket-buffer and reassembly pressure.
 
+## GPU workload (FFT / GEMM in the receive path)
+
+Issue #15 asks for each backend at bare loopback, loopback **+ FFT**, and
+loopback **+ GEMM**. The benchmarks accept `--workload none|fft|gemm`, and
+`run_spark_bench.sh` exposes it as the `WORKLOAD` env var (recorded in the CSV
+`post_process` column). FFT is a batched 1D cuFFT C2C transform; GEMM is a square
+cuBLAS SGEMM. Both are sized to the per-burst/per-message working set and run
+once per received burst on a dedicated CUDA stream, synchronised every 16 runs to
+bound outstanding GPU work.
+
+!!! note "Representative compute, not a data transform"
+    The workload is a **reusable, engine-agnostic component** (`examples/bench_workload.{h,cu}`)
+    that runs on its own GPU scratch buffers, **not** on the received packet
+    bytes. This keeps it a true drop-in across every stream_type / engine (raw,
+    HDS, RoCE) — RoCE in particular exposes no public payload device pointer.
+    These numbers therefore measure the **GPU-load headroom of the receive path**
+    (does sustained GPU compute on the receiver steal enough SM/PCIe/host cycles
+    to dent line rate?), not the cost of transforming the actual data.
+
+Each per-burst workload is sized to the **whole burst's data volume**
+(`batch × payload`) — i.e. it processes every byte the burst delivered — so the
+GPU load scales with the receive data rate. At the Raw 8 KB native shape (batch
+10240) that is a ~82 MB working set per burst: a 10000×1024-point batched cuFFT,
+or a 4520×4520 cuBLAS SGEMM. Up to two kernels are kept in flight (sync depth 2).
+GPU SM% is from `nvidia-smi dmon` across the run. Single 30 s run per cell.
+
+Raw / GPUDirect, 8 KB native shape (batch 10240), GPU-resident payloads:
+
+| Workload | Throughput | Drops | GPU SM% | Notes |
+| -------- | ---------: | ----- | ------: | ----- |
+| none (baseline) | 98.5 Gb/s | 0 | ~0 | Bare loopback |
+| FFT | 94.2 Gb/s | 0 | 8.9% | Light compute; line rate essentially held (−4%) |
+| GEMM | 62.3 Gb/s | 0 | 82.4% | GPU-bound; throughput backpressures, still **drop-free** |
+
+The headline is the **drops column**: even when the per-burst SGEMM saturates the
+GB10 to ~82% SM and pulls effective throughput down to 62 Gb/s, the receive path
+paces against the GPU and **drops zero packets** — backpressure, not loss. A
+lighter workload (FFT, ~9% SM) holds line rate within 4%. Because the workload
+scales with `batch × payload`, a smaller batch or payload moves the operating
+point back toward line rate; this cell deliberately picks a heavy per-burst GEMM
+to show the GPU-bound end of the curve.
+
+<!-- TODO(#15): RoCE rows pending a WORKLOAD={fft,gemm} rdma sweep (netns up).
+     Baseline is the 8 MB RoCE cell (102.2 Gb/s) from the summary above. -->
+
+Socket / RoCE (8 MB message): _pending rdma workload sweep._
+
 ## Reproduce
 
 Run inside the project container (privileged, GPUs passed through, hugepages
@@ -293,6 +340,23 @@ before running; tear it down when finished:
 ./examples/run_spark_bench.sh socket-udp sweep
 ./scripts/setup_spark_wire_loopback_netns.sh down        # tear down when done
 ```
+
+**GPU workload (FFT / GEMM)** re-runs a backend with a representative GPU
+workload in the receive path by exporting `WORKLOAD`. It composes with the same
+modes and netns setup as above (dpdk in the default namespace, rdma in the
+`dq_wire_*` namespaces):
+
+```bash
+# Raw / GPUDirect (netns down, ETH_DST_ADDR exported as above)
+WORKLOAD=fft  ./examples/run_spark_bench.sh dpdk smoke
+WORKLOAD=gemm ./examples/run_spark_bench.sh dpdk smoke
+# Socket / RoCE (netns up)
+WORKLOAD=fft  ./examples/run_spark_bench.sh rdma smoke
+WORKLOAD=gemm ./examples/run_spark_bench.sh rdma smoke
+```
+
+The chosen workload lands in the CSV `post_process` column; compare `gbps` /
+`gpu_sm_pct` against the matching `WORKLOAD=none` baseline.
 
 Each run writes `bench-results/<timestamp>-<backend>-<mode>/runs.csv`. See
 [Socket and RDMA Benchmarking](socket_benchmarking.md) and

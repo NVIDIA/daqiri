@@ -153,7 +153,8 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
 int main(int argc, char **argv) {
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0]
-              << " <config.yaml> [--seconds N] [--target-gbps G]\n";
+              << " <config.yaml> [--seconds N] [--target-gbps G] "
+                 "[--workload none|fft|gemm]\n";
     return 1;
   }
 
@@ -161,6 +162,7 @@ int main(int argc, char **argv) {
       daqiri::bench::grafana::init_prometheus_metrics_from_env();
   const int run_seconds = daqiri::bench::parse_run_seconds(argc, argv);
   const double target_gbps = daqiri::bench::parse_target_gbps(argc, argv);
+  const auto workload = daqiri::bench::parse_workload(argc, argv);
   const auto root = YAML::LoadFile(argv[1]);
 
   std::vector<daqiri::bench::RawBenchRxConfig> rx_configs;
@@ -188,10 +190,18 @@ int main(int argc, char **argv) {
   std::vector<std::thread> rx_threads;
   daqiri::bench::TokenBucketPacer tx_pacer(target_gbps);
 
+  // Size the per-burst GPU workload to the whole burst's data volume
+  // (batch x payload), i.e. "process every byte received in the burst", so the
+  // GPU load scales with the receive data rate and is actually visible.
+  const size_t workload_bytes =
+      tx_configs.empty()
+          ? 0
+          : static_cast<size_t>(tx_configs.front().payload_size) *
+                tx_configs.front().batch_size;
   rx_threads.reserve(rx_configs.size());
   for (const auto &cfg : rx_configs) {
     rx_threads.emplace_back(daqiri::bench::rx_count_worker, cfg,
-                            std::ref(stop));
+                            std::ref(stop), workload, workload_bytes);
   }
   tx_threads.reserve(tx_configs.size());
   for (const auto &cfg : tx_configs) {

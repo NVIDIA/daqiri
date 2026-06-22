@@ -20,6 +20,8 @@
 #include <cuda_runtime.h>
 #include <yaml-cpp/yaml.h>
 
+#include "bench_workload.h"
+
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -137,6 +139,12 @@ void wait_for_stop(int run_seconds, std::atomic<bool> &stop);
 void print_queue_stats(const char *direction, const std::string &interface_name,
                        int queue_id, const RawBenchQueueStats &stats,
                        double seconds);
-void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop);
+// When `workload != None`, each RX thread builds its own GpuWorkload (cuFFT/
+// cuBLAS handles are not thread-safe to share) sized to `workload_bytes`
+// (0 => internal default) and runs one representative compute per received
+// burst. The default leaves the bare-loopback path untouched.
+void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop,
+                     BenchWorkload workload = BenchWorkload::None,
+                     size_t workload_bytes = 0);
 
 } // namespace daqiri::bench

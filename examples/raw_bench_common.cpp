@@ -548,10 +548,19 @@ void print_queue_stats(const char *direction, const std::string &interface_name,
             << std::endl;
 }
 
-void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
+void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop,
+                     BenchWorkload workload, size_t workload_bytes) {
   if (!set_current_thread_affinity(cfg.cpu_core, "bench_rx")) {
     stop.store(true);
     return;
+  }
+
+  // Per-thread representative GPU workload (no-op unless --workload set). If
+  // init fails we warn and keep counting so the run still produces throughput.
+  GpuWorkload gpu_workload;
+  if (!gpu_workload.init(workload, workload_bytes) &&
+      workload != BenchWorkload::None) {
+    std::cerr << "RX workload init failed; continuing without GPU workload\n";
   }
 
   const int port_id = daqiri::get_port_id(cfg.interface_name);
@@ -595,11 +604,13 @@ void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
       stats.bytes += daqiri::get_burst_tot_byte(burst);
       ++stats.bursts;
       daqiri::free_all_packets_and_burst_rx(burst);
+      gpu_workload.run();
     }
     if (!got_any) {
       std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
   }
+  gpu_workload.sync();
   const double secs =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
           .count();

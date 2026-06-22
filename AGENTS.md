@@ -42,7 +42,7 @@ There is no unit test suite. Verification is done via the benchmark executables 
 | `daqiri_bench_socket` | `socket_bench.cpp` | `daqiri_bench_socket_{udp,tcp}_tx_rx.yaml`, `daqiri_bench_socket_{udp,tcp}_tx_rx_spark_netns.yaml` (combined-role netns bases) |
 | `daqiri_pool_ring_bench` | `pool_ring_bench.cpp` | none — microbenchmark comparing `daqiri::Ring`/`daqiri::ObjectPool` vs DPDK `rte_ring`/`rte_mempool` (SPSC/MPMC, single/bulk, thread sweep). The `rte_*` comparison arm compiles only in a DPDK-enabled build; takes no YAML/CLI args |
 
-The four `raw_*` benches share `raw_bench_common.{cpp,h}` and accept `--seconds N`. `daqiri_bench_rdma` and `daqiri_bench_socket` also take `--mode {tx,rx,both}`.
+The four `raw_*` benches share `raw_bench_common.{cpp,h}` and accept `--seconds N`. `daqiri_bench_rdma` and `daqiri_bench_socket` also take `--mode {tx,rx,both}`. `daqiri_bench_raw_gpudirect`, `daqiri_bench_raw_hds`, and `daqiri_bench_rdma` additionally accept `--workload none|fft|gemm` — a reusable representative GPU workload (`examples/bench_workload.{h,cu}`, cuFFT/cuBLAS) run once per received burst on GPU scratch buffers (not the payload), used by `run_spark_bench.sh`'s `WORKLOAD` env to fill the CSV `post_process` column (issue #15).
 
 ```bash
 ./build/examples/daqiri_bench_raw_gpudirect ./build/examples/daqiri_bench_raw_tx_rx.yaml --seconds 10

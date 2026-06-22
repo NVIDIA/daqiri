@@ -238,6 +238,8 @@ After having modified the configuration file, ensure you have connected an SFP c
 
 By default the application runs for 10 seconds and then exits. You can change the duration by passing `--seconds <N>` after the YAML path, or stop it gracefully at any time with `Ctrl-C`.
 
+`daqiri_bench_raw_gpudirect` and `daqiri_bench_raw_hds` also accept `--workload none|fft|gemm`, which runs a representative GPU workload (cuFFT C2C transform or cuBLAS SGEMM) once per received burst. The compute runs on dedicated GPU scratch buffers — not the received packet bytes — so it models downstream GPU load on the receive path without depending on a payload pointer, and the same component drops into the RoCE bench (`daqiri_bench_rdma`) unchanged. See the [DGX Spark GPU-workload results](performance-dgx-spark.md#gpu-workload-fft-gemm-in-the-receive-path).
+
 ## Flow programming smoke test
 
 Raw Ethernet flow rules are programmed into the NIC during `daqiri_init()`. Software loopback

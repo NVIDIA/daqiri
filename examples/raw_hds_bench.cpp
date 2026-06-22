@@ -138,11 +138,13 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
 
 int main(int argc, char **argv) {
   if (argc < 2) {
-    std::cerr << "Usage: " << argv[0] << " <config.yaml> [--seconds N]\n";
+    std::cerr << "Usage: " << argv[0]
+              << " <config.yaml> [--seconds N] [--workload none|fft|gemm]\n";
     return 1;
   }
 
   const int run_seconds = daqiri::bench::parse_run_seconds(argc, argv);
+  const auto workload = daqiri::bench::parse_workload(argc, argv);
   const auto root = YAML::LoadFile(argv[1]);
   if (daqiri::daqiri_init(argv[1]) != daqiri::Status::SUCCESS) {
     std::cerr << "daqiri_init failed\n";
@@ -162,8 +164,16 @@ int main(int argc, char **argv) {
   std::thread rx_thread;
 
   if (has_rx) {
+    // Size the per-burst GPU workload to the whole burst's data volume
+    // (batch x payload) so the GPU load scales with the receive data rate.
+    size_t workload_bytes = 0;
+    if (has_tx) {
+      const auto tx = daqiri::bench::parse_tx(root);
+      workload_bytes = static_cast<size_t>(tx.payload_size) * tx.batch_size;
+    }
     rx_thread = std::thread(daqiri::bench::rx_count_worker,
-                            daqiri::bench::parse_rx(root), std::ref(stop));
+                            daqiri::bench::parse_rx(root), std::ref(stop),
+                            workload, workload_bytes);
   }
   if (has_tx) {
     tx_thread =

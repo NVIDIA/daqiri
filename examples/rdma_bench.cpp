@@ -78,12 +78,24 @@ RdmaBenchConfig parse_rdma_cfg(const YAML::Node& node) {
 }
 
 void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pacer,
-                 std::atomic<bool>& stop, RdmaWorkerStats& stats) {
+                 std::atomic<bool>& stop, RdmaWorkerStats& stats,
+                 daqiri::bench::BenchWorkload workload) {
   const char *thread_name =
       cfg.server ? "rdma_bench_server" : "rdma_bench_client";
   if (!daqiri::bench::set_current_thread_affinity(cfg.cpu_core, thread_name)) {
     stop.store(true);
     return;
+  }
+
+  // Representative GPU workload run per received message (no-op unless
+  // --workload set). RoCE exposes no payload device pointer, so this runs on
+  // its own scratch buffers sized to the message — exactly the drop-in the
+  // reusable component is designed for.
+  daqiri::bench::GpuWorkload gpu_workload;
+  if (!gpu_workload.init(workload,
+                         static_cast<size_t>(cfg.message_size)) &&
+      workload != daqiri::bench::BenchWorkload::None) {
+    std::cerr << "RDMA workload init failed; continuing without GPU workload\n";
   }
 
   int outstanding_send = 0;
@@ -203,6 +215,7 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
         outstanding_recv--;
         stats.recv_completions++;
         stats.recv_bytes += static_cast<uint64_t>(cfg.message_size);
+        gpu_workload.run();
       }
       daqiri::free_tx_burst(completion);
     }
@@ -221,6 +234,7 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
       std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
   }
+  gpu_workload.sync();
 }
 
 }  // namespace
@@ -228,7 +242,8 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
 int main(int argc, char** argv) {
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0]
-              << " <config.yaml> [--seconds N] [--mode server|client|both] [--target-gbps G]\n";
+              << " <config.yaml> [--seconds N] [--mode server|client|both] "
+                 "[--target-gbps G] [--workload none|fft|gemm]\n";
     return 1;
   }
 
@@ -244,6 +259,7 @@ int main(int argc, char** argv) {
       target_gbps = std::stod(argv[i + 1]);
     }
   }
+  const auto workload = daqiri::bench::parse_workload(argc, argv);
 
   const auto root = YAML::LoadFile(argv[1]);
   if (daqiri::daqiri_init(argv[1]) != daqiri::Status::SUCCESS) {
@@ -280,11 +296,11 @@ int main(int argc, char** argv) {
 
   if (run_server) {
     server_thread = std::thread(rdma_worker, server_cfg, std::ref(server_pacer),
-                                std::ref(stop), std::ref(server_stats));
+                                std::ref(stop), std::ref(server_stats), workload);
   }
   if (run_client) {
     client_thread = std::thread(rdma_worker, client_cfg, std::ref(client_pacer),
-                                std::ref(stop), std::ref(client_stats));
+                                std::ref(stop), std::ref(client_stats), workload);
   }
 
   if (!server_thread.joinable() && !client_thread.joinable()) {

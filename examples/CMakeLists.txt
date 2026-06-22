@@ -85,9 +85,10 @@ function(link_daqiri_bench target)
 endfunction()
 
 function(add_daqiri_raw_bench target source)
-  add_executable(${target} ${source} raw_bench_common.cpp raw_bench_common_cuda.cu)
+  add_executable(${target} ${source} raw_bench_common.cpp raw_bench_common_cuda.cu
+                 bench_workload.cu)
   link_daqiri_bench(${target})
-  target_link_libraries(${target} PRIVATE CUDA::cudart)
+  target_link_libraries(${target} PRIVATE CUDA::cudart CUDA::cufft CUDA::cublas)
   set_target_properties(${target} PROPERTIES
     CUDA_ARCHITECTURES "${DAQIRI_EXAMPLES_CUDA_ARCHITECTURES}"
     BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
@@ -115,17 +116,23 @@ add_daqiri_raw_bench(daqiri_example_dynamic_rx_flow dynamic_rx_flow_example.cpp)
 add_daqiri_raw_bench(daqiri_example_gds_write gds_write_example.cpp)
 add_daqiri_raw_bench(daqiri_example_pcap_writer pcap_writer_example.cpp)
 
-add_executable(daqiri_bench_rdma rdma_bench.cpp raw_bench_common.cpp)
+add_executable(daqiri_bench_rdma rdma_bench.cpp raw_bench_common.cpp
+               bench_workload.cu)
 link_daqiri_bench(daqiri_bench_rdma)
-target_link_libraries(daqiri_bench_rdma PRIVATE CUDA::cudart)
+target_link_libraries(daqiri_bench_rdma PRIVATE CUDA::cudart CUDA::cufft CUDA::cublas)
 set_target_properties(daqiri_bench_rdma PROPERTIES
+  CUDA_ARCHITECTURES "${DAQIRI_EXAMPLES_CUDA_ARCHITECTURES}"
   BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
 )
 
-add_executable(daqiri_bench_socket socket_bench.cpp raw_bench_common.cpp)
+# raw_bench_common.cpp's rx_count_worker references GpuWorkload, so the socket
+# bench must also compile/link bench_workload.cu (and the math libs).
+add_executable(daqiri_bench_socket socket_bench.cpp raw_bench_common.cpp
+               bench_workload.cu)
 link_daqiri_bench(daqiri_bench_socket)
-target_link_libraries(daqiri_bench_socket PRIVATE CUDA::cudart)
+target_link_libraries(daqiri_bench_socket PRIVATE CUDA::cudart CUDA::cufft CUDA::cublas)
 set_target_properties(daqiri_bench_socket PROPERTIES
+  CUDA_ARCHITECTURES "${DAQIRI_EXAMPLES_CUDA_ARCHITECTURES}"
   BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
 )
 
