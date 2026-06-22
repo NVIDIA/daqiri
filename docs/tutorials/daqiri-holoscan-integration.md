@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # DAQIRI + Holoscan Integration
 
 This tutorial demonstrates how the DAQIRI library can be integrated into an NVIDIA
