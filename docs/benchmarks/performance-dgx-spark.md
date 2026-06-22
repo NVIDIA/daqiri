@@ -238,28 +238,43 @@ is host-side socket-buffer and reassembly pressure.
 ## GPU workload (FFT / GEMM in the receive path)
 
 Issue #15 asks for each backend at bare loopback, loopback **+ FFT**, and
-loopback **+ GEMM**. The benchmarks accept `--workload none|fft|gemm`, and
+loopback **+ GEMM** — i.e. how much line rate the receiver holds while a GPU also
+crunches the incoming data. The benchmarks accept `--workload none|fft|gemm`, and
 `run_spark_bench.sh` exposes it as the `WORKLOAD` env var (recorded in the CSV
-`post_process` column). FFT is a batched 1D cuFFT C2C transform; GEMM is a square
-cuBLAS SGEMM. Both are sized to the per-burst/per-message working set and run
-once per received burst on a dedicated CUDA stream, synchronised every 16 runs to
-bound outstanding GPU work.
+`post_process` column).
+
+**What the two workloads compute** (the reusable component
+`examples/bench_workload.{h,cu}`):
+
+- **FFT** — a batched 1-D **complex-to-complex forward FFT** via cuFFT
+  (`cufftExecC2C`). The burst's bytes are treated as an array of single-precision
+  complex samples and transformed as many independent length-1024 FFTs, batched so
+  the transforms cover the whole burst (e.g. ~10000 × 1024-point FFTs for an 82 MB
+  burst). This models a streaming signal-processing receiver — channelization or
+  spectral analysis that FFTs every frame as it arrives.
+- **GEMM** — a single-precision dense **matrix multiply** `C = A·B` via cuBLAS
+  (`cublasSgemm`) on square *n×n* matrices, with *n* chosen so the three matrices
+  together match the burst's data volume (e.g. 4520×4520 for an 82 MB burst). This
+  models a receiver that feeds incoming data into a dense linear-algebra stage —
+  beamforming, correlation, or a neural-network layer.
+
+Each is run **once per received burst** on a dedicated CUDA stream, with up to two
+kernels kept in flight (sync depth 2) to overlap GPU work with ingest while
+bounding the queue so it cannot run unboundedly ahead. The problem is sized to the
+**whole burst's data volume** (`batch × payload`) so the GPU load scales with the
+receive data rate; a smaller batch or payload moves the operating point back toward
+line rate. GPU SM% is from `nvidia-smi dmon` across the run. Single 30 s run per
+cell.
 
 !!! note "Representative compute, not a data transform"
-    The workload is a **reusable, engine-agnostic component** (`examples/bench_workload.{h,cu}`)
-    that runs on its own GPU scratch buffers, **not** on the received packet
-    bytes. This keeps it a true drop-in across every stream_type / engine (raw,
-    HDS, RoCE) — RoCE in particular exposes no public payload device pointer.
-    These numbers therefore measure the **GPU-load headroom of the receive path**
-    (does sustained GPU compute on the receiver steal enough SM/PCIe/host cycles
-    to dent line rate?), not the cost of transforming the actual data.
-
-Each per-burst workload is sized to the **whole burst's data volume**
-(`batch × payload`) — i.e. it processes every byte the burst delivered — so the
-GPU load scales with the receive data rate. At the Raw 8 KB native shape (batch
-10240) that is a ~82 MB working set per burst: a 10000×1024-point batched cuFFT,
-or a 4520×4520 cuBLAS SGEMM. Up to two kernels are kept in flight (sync depth 2).
-GPU SM% is from `nvidia-smi dmon` across the run. Single 30 s run per cell.
+    The workload runs on its own GPU scratch buffers, **not** on the received
+    packet bytes. This keeps it a true drop-in across every stream_type / engine
+    (raw, HDS, RoCE) — RoCE in particular exposes no public payload device
+    pointer — and means it measures the **GPU-load headroom of the receive path**
+    (does sustained GPU compute on the receiver steal enough SM / PCIe / host
+    cycles to dent line rate?), not the cost of transforming the actual data. The
+    FLOP profile and memory footprint match a real per-burst transform; only the
+    input bytes differ.
 
 Raw / GPUDirect, 8 KB native shape (batch 10240), GPU-resident payloads:
 
@@ -277,10 +292,18 @@ scales with `batch × payload`, a smaller batch or payload moves the operating
 point back toward line rate; this cell deliberately picks a heavy per-burst GEMM
 to show the GPU-bound end of the curve.
 
-<!-- TODO(#15): RoCE rows pending a WORKLOAD={fft,gemm} rdma sweep (netns up).
-     Baseline is the 8 MB RoCE cell (102.2 Gb/s) from the summary above. -->
+Socket / RoCE, 8 MB native message (single QP, batch 1), GPU-resident payloads:
 
-Socket / RoCE (8 MB message): _pending rdma workload sweep._
+| Workload | Throughput | Drops | GPU SM% | Notes |
+| -------- | ---------: | ----- | ------: | ----- |
+| none (baseline) | 101.4 Gb/s | 0 | ~0 | Bare loopback |
+| FFT | 98.7 Gb/s | 0 | 26.9% | Line rate held within ~3% |
+| GEMM | 79.3 Gb/s | 0 | 76.6% | GPU-bound; throughput backpressures, still **drop-free** |
+
+The 8 MB message gives a larger per-burst working set than the Raw 8 KB shape, so
+both workloads register more GPU utilization here, but the shape is identical:
+light compute (FFT) holds line rate, a heavy per-message SGEMM drives the GB10 to
+~77% SM and pulls throughput to 79 Gb/s with zero CQ errors / drops.
 
 ## Reproduce
 
