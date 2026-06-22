@@ -47,6 +47,7 @@ When the user is committing, pushing, or otherwise wrapping up a change that tou
 ### Landing page and navigation (low frequency, high visibility)
 - `mkdocs.yml` — nav entries should match actual files in `docs/` (the CI gate enforces this; the rule is here for awareness).
 - `docs/index.md` — landing page orchestrator; includes section bodies from `docs/landing/*.html`. If any doc file is renamed or moved, update landing fragment links in `docs/landing/`.
+- **Page frontmatter consistency** — pages within a section should share the same Material `hide:` frontmatter so the LHS navigation behaves uniformly across the section. The tutorial pages (`docs/tutorials/*.md`) all use `hide: [navigation]`; when adding a new tutorial page, copy that frontmatter so it doesn't render a stray LHS menu. Not enforced by CI — check by hand.
 
 ### Top-level README (low frequency, high visibility)
 
@@ -83,4 +84,5 @@ When the user is committing, pushing, or otherwise wrapping up a change that tou
 | `examples/*.yaml` | `docs/benchmarks/raw_benchmarking.md`, `docs/tutorials/configuration-walkthrough.md`, `AGENTS.md` |
 | `examples/*.py` | `docs/api-reference/python.md`, `AGENTS.md` |
 | `mkdocs.yml` | `docs/index.md`, `docs/landing/` (nav links) |
+| New `docs/tutorials/*.md` page | match sibling pages' `hide: [navigation]` frontmatter |
 | Any `docs/*` rename/move | `README.md` (Documentation table), `AGENTS.md` (Documentation section), `mkdocs.yml`, `docs/index.md`, `docs/landing/` |
