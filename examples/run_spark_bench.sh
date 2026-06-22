@@ -24,8 +24,9 @@
 #   REPEATS          — repeats per cell for error bars (default 1; use 3 for the
 #                      published re-run). Each rep is an independent run + CSV row.
 #   WORKLOAD         — representative GPU workload in the receive path:
-#                      none (default) | fft | gemm. Honoured by dpdk + rdma only;
-#                      recorded in the CSV post_process column (issue #15).
+#                      none (default) | fft | gemm (FP32) | gemm_fp16 (FP16
+#                      tensor-core matmul). Honoured by dpdk + rdma only; recorded
+#                      in the CSV post_process column.
 #
 # Optional (dpdk only): DPDK_{TX,RX}_PCI / DPDK_{TX,RX}_NETDEV override the p0/p1
 # ports used for the per-cell *_phy wire-transit check (defaults p0 0000:01:00.0 /
@@ -75,13 +76,14 @@ RUN_SECONDS=30
 # capture dir (<cell>-r<rep>) and CSV row; the perf-doc tables report mean +/- std
 # across reps. Default 1; set REPEATS=3 for the published re-run.
 REPEATS="${REPEATS:-1}"
-# Representative GPU workload run in the receive path (issue #15): none | fft |
-# gemm. Recorded in the CSV post_process column. Only the dpdk (raw/HDS) and rdma
+# Representative GPU workload run in the receive path: none | fft | gemm (FP32
+# SGEMM) | gemm_fp16 (mixed-precision FP16/tensor-core matmul, the inference-style
+# GEMM). Recorded in the CSV post_process column. Only the dpdk (raw/HDS) and rdma
 # backends honour it; socket ignores --workload. Default none = bare loopback.
 WORKLOAD="${WORKLOAD:-none}"
 case "$WORKLOAD" in
-  none|fft|gemm) ;;
-  *) echo "Invalid WORKLOAD '$WORKLOAD' (expected none|fft|gemm)" >&2; exit 1 ;;
+  none|fft|gemm|gemm_fp16) ;;
+  *) echo "Invalid WORKLOAD '$WORKLOAD' (expected none|fft|gemm|gemm_fp16)" >&2; exit 1 ;;
 esac
 DRIVER_LOG="$OUT_DIR/last_run.stderr"
 FAILURES=0

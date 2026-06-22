@@ -139,7 +139,8 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
 int main(int argc, char **argv) {
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0]
-              << " <config.yaml> [--seconds N] [--workload none|fft|gemm]\n";
+              << " <config.yaml> [--seconds N] "
+                 "[--workload none|fft|gemm|gemm_fp16]\n";
     return 1;
   }
 

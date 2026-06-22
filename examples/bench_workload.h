@@ -22,12 +22,14 @@
 namespace daqiri::bench {
 
 // Representative GPU workloads that can be dropped into any benchmark's receive
-// path to model downstream GPU compute. The issue-#15 sweep reports throughput
-// for bare loopback (None) vs loopback + FFT vs loopback + GEMM.
-enum class BenchWorkload { None, Fft, Gemm };
+// path to model downstream GPU compute. Bare loopback (None) vs loopback + FFT
+// vs loopback + GEMM. GemmFp16 is the same square matmul as Gemm but in
+// mixed-precision (FP16 inputs, FP32 accumulate) on the tensor cores — the core
+// op of GPU inference, and far faster than the FP32 path on tensor-core GPUs.
+enum class BenchWorkload { None, Fft, Gemm, GemmFp16 };
 
-// Parse "--workload none|fft|gemm" from argv (default None). Mirrors the
-// flag/value stride used by parse_run_seconds / parse_target_gbps.
+// Parse "--workload none|fft|gemm|gemm_fp16" from argv (default None). Mirrors
+// the flag/value stride used by parse_run_seconds / parse_target_gbps.
 BenchWorkload parse_workload(int argc, char **argv);
 
 // Lower-case name ("none"/"fft"/"gemm"); used for the run_spark_bench.sh
@@ -75,6 +77,9 @@ public:
 
 private:
   void destroy();
+  // Enqueue one op on the stream; returns false if the cuFFT/cuBLAS call reports
+  // an error at enqueue. Shared by run() (hot path) and init() (warmup/validate).
+  bool issue_op();
 
   BenchWorkload kind_ = BenchWorkload::None;
   bool ok_ = false;
@@ -89,7 +94,7 @@ private:
 
   // Device scratch.
   void *fft_buf_ = nullptr;  // cufftComplex[fft_total_]
-  void *gemm_a_ = nullptr;   // float[n*n]
+  void *gemm_a_ = nullptr;   // float[n*n]   (Gemm) or __half[n*n] (GemmFp16)
   void *gemm_b_ = nullptr;
   void *gemm_c_ = nullptr;
   int gemm_n_ = 0;
