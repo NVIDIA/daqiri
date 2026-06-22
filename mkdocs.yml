@@ -61,6 +61,7 @@ nav:
     - Socket and RDMA Benchmarking: benchmarks/socket_benchmarking.md
     - Raw Ethernet Benchmarking: benchmarks/raw_benchmarking.md
     - "Performance: DGX Spark": benchmarks/performance-dgx-spark.md
+    - "Performance: IGX Orin": benchmarks/performance-igx-orin.md
   - API Reference:
     - API Guide: api-reference/index.md
     - Configuration YAML Reference: api-reference/configuration.md

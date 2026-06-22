@@ -55,6 +55,17 @@ Configs named `raw_rx_*` are RX-only — they initialize the RX path and wait fo
 
 When determining throughput for a benchmark use the `mlnx_perf` utility in the background to view transmit and receive rates. Using application run time with packet counts is usually not accurate enough due to startup inconsistencies.
 
+### Platform profiles (Spark / IGX)
+
+The `*_spark*` sweep configs and the `run_spark_*` / `setup_spark_wire_loopback_netns.sh` scripts are **platform-parameterized**, selected by `BENCH_PLATFORM` (default `spark`):
+
+```bash
+BENCH_PLATFORM=igx ./examples/run_spark_bench.sh dpdk sweep   # IGX Orin devkit
+./examples/run_spark_bench.sh dpdk sweep                       # DGX Spark (default)
+```
+
+`examples/bench_platform.sh` sources `examples/bench_platform_<P>.env` (one profile per platform) and fills `@VAR@` placeholders in the sweep config templates. A profile carries the per-platform values that differ between a GB10 Spark (unified memory → `kind: host_pinned`, isolcpus 16-19) and an IGX Orin devkit (discrete RTX 6000 Ada → `kind: device` for real GPUDirect, isolcpus 9-11, PCIe `0005:03:00.x`): memory kind, `num_bufs`, core map, DPDK port BDFs, wire-loopback netdevs/RDMA devices, and the RoCE flow-control depth cap. Add a platform by dropping in a new `bench_platform_<name>.env`. The `daqiri_bench_socket_*_netns` configs are not templated (kernel sockets: `kind: host`, master 8, fixed netns IPs); only their per-pair cores differ, applied by the run script. Set `REPEATS=3` for publication-quality error bars.
+
 ## Formatting
 
 `clang-format` is required for contributions (CONTRIBUTING.md):
@@ -118,6 +129,7 @@ The web docs live in `docs/` and are built with [MkDocs Material](https://squidf
   - `docs/benchmarks/socket_benchmarking.md` — "Socket and RDMA Benchmarking" (TCP/UDP and RoCE/RDMA)
   - `docs/benchmarks/raw_benchmarking.md` — "Raw Ethernet Benchmarking" (DPDK `raw_*` benches)
   - `docs/benchmarks/performance-dgx-spark.md` — per-platform performance report for DGX Spark stream/protocol combinations (the long internal report lives outside the repo in `projects/daqiri-notes/`)
+  - `docs/benchmarks/performance-igx-orin.md` — the IGX Orin devkit counterpart (discrete RTX 6000 Ada, `kind: device` GPUDirect), produced by the same sweep scripts with `BENCH_PLATFORM=igx`
 - `docs/stylesheets/extra.css` — custom theme overrides
 
 **User-facing vocabulary:** the YAML schema uses `stream_type` (`raw`, `socket`, future `pcie`); for socket streams the transport is encoded in the endpoint URI scheme (`udp://`, `tcp://`, `roce://`) in `socket_config.local_addr`/`remote_addr`, **not** a separate `protocol` field. (`SocketProtocol` still exists internally, derived from the scheme.) **"Engine"** is the standard term for the specific library backing an implementation; it replaced the former "manager" and "backend" terms and is now used consistently across code (`src/engines/<name>/`, the `Engine` ABC, CMake `DAQIRI_ENGINE`), the API reference, tutorials, the landing page, and concept pages. The mapping: `stream_type: "raw"` is implemented by the `dpdk` engine; `stream_type: "socket"` with `udp://`/`tcp://` endpoints by the always-built `socket` engine; `stream_type: "socket"` with `roce://` endpoints by the `ibverbs` engine.

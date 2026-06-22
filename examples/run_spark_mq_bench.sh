@@ -71,6 +71,9 @@ set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="${DAQIRI_BUILD_DIR:-$SCRIPT_DIR/../build}"
+# Load the platform profile (BENCH_PLATFORM=spark|igx; default spark).
+# shellcheck source=bench_platform.sh
+source "$SCRIPT_DIR/bench_platform.sh"
 BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_raw_gpudirect"
 RUN_SECONDS="${RUN_SECONDS:-30}"
 PAYLOADS="${PAYLOADS:-64 256 1024 4096 8000}"
@@ -92,7 +95,9 @@ OUT_DIR="$SCRIPT_DIR/../bench-results/$TS-dpdk-mq"
 mkdir -p "$OUT_DIR"
 
 CSV="$OUT_DIR/runs.csv"
-echo "cell,tx_cores,rx_cores,payload,rep,gbps,pps,drops,cpu8,cpu16,cpu15,cpu19,cpu6,cpu18,cpu17,cpu9,cpu7" > "$CSV"
+# Per-core busy% columns are named from the platform's MQ_CPU_SAMPLE order.
+CPU_HDR="$(printf 'cpu%s,' "${MQ_CPU_SAMPLE[@]}" | sed 's/,$//')"
+echo "cell,tx_cores,rx_cores,payload,rep,gbps,pps,drops,$CPU_HDR" > "$CSV"
 
 # Capture slow-moving environment state once per result set (mirrors
 # run_spark_bench.sh). Best-effort -- skip if the helper is unavailable.
@@ -112,10 +117,16 @@ if [[ ! -f "$MQ_BASE" || ! -f "$MQ_GEN" ]]; then
   exit 1
 fi
 
+# Fill platform @VAR@ placeholders into a concrete base before gen_spark_mq_config
+# (PyYAML) ever parses it -- otherwise cores/kind/num_bufs tokens reach yaml-cpp.
+FILLED_MQ_BASE="$OUT_DIR/base.mq.filled.yaml"
+bench_fill_placeholders "$MQ_BASE" > "$FILLED_MQ_BASE"
+MQ_BASE="$FILLED_MQ_BASE"
+
 # RX netdev whose *_phy counters prove traffic crossed the cable. rx_port is the
 # PCIe address 0002:01:00.1; resolve its netdev name for ethtool -S. Override
 # with RX_NETDEV if auto-detection fails.
-RX_PCI="0002:01:00.1"
+RX_PCI="$DPDK_RX_PCI"   # from the platform profile
 RX_NETDEV="${RX_NETDEV:-}"
 if [[ -z "$RX_NETDEV" ]]; then
   RX_NETDEV="$(ls "/sys/bus/pci/devices/$RX_PCI/net" 2>/dev/null | head -n1 || true)"
@@ -132,10 +143,9 @@ CELLS=(
   "2t2r 2 2"
 )
 
-# Cores to sample busy% for, in CSV column order: master, then each queue's
-# poller+worker pair (TX q0 16/15, TX q1 19/6, RX q0 18/17, RX q1 9/7).
-# Order must match the CSV header above.
-CPU_CORES=(8 16 15 19 6 18 17 9 7)
+# Cores to sample busy% for, in CSV column order (master, then each queue's
+# poller+worker pair). From the platform profile; must match the CSV header above.
+CPU_CORES=("${MQ_CPU_SAMPLE[@]}")
 
 FAILURES=0
 
@@ -216,8 +226,8 @@ run_cell() {
   # CSV display columns show the queue-poller cores: TX -> 16[,19], RX -> 18[,9]
   # per queue count. '|' keeps multi-core lists in a single CSV field.
   local tx_cores rx_cores
-  [[ "$tx_count" == 2 ]] && tx_cores="16|19" || tx_cores="16"
-  [[ "$rx_count" == 2 ]] && rx_cores="18|9" || rx_cores="18"
+  [[ "$tx_count" == 2 ]] && tx_cores="$CORE_MQ_TXQ0|$CORE_MQ_TXQ1" || tx_cores="$CORE_MQ_TXQ0"
+  [[ "$rx_count" == 2 ]] && rx_cores="$CORE_MQ_RXQ0|$CORE_MQ_RXQ1" || rx_cores="$CORE_MQ_RXQ0"
   local run_dir="$OUT_DIR/$cell/p$payload/r$rep"
   mkdir -p "$run_dir"
 

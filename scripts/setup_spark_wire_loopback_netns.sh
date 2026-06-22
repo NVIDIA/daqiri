@@ -55,23 +55,28 @@
 CLIENT_NS=dq_wire_client
 SERVER_NS=dq_wire_server
 
-CLIENT_IF=enp1s0f0np0          # p0 via PCI segment 0000:01:00.0 (carrier up)
-SERVER_IF=enP2p1s0f1np1        # p1 via PCI segment 0002:01:00.1 (carrier up) -- the
-                               # cabled peer of CLIENT_IF (p0<->p1 QSFP loopback). NOT
-                               # enP2p1s0f0np0, which is p0 again (same physical port).
+# Interfaces / RDMA devices / IPs / MTU come from the platform profile
+# (examples/bench_platform_<P>.env, BENCH_PLATFORM=spark|igx). Spark cables
+# enp1s0f0np0<->enP2p1s0f1np1 (rocep1s0f0/roceP2p1s0f1); IGX cables eth0<->eth1
+# (mlx5_0/mlx5_1). Override any of these by exporting them before running.
+_setup_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../examples/bench_platform.sh
+source "$_setup_dir/../examples/bench_platform.sh"
 
-CLIENT_RDMA=rocep1s0f0         # rdma dev for enp1s0f0np0
-SERVER_RDMA=roceP2p1s0f1       # rdma dev for enP2p1s0f1np1
+CLIENT_IF="${CLIENT_IF:-$WIRE_CLIENT_IF}"
+SERVER_IF="${SERVER_IF:-$WIRE_SERVER_IF}"
+CLIENT_RDMA="${CLIENT_RDMA:-$WIRE_CLIENT_RDMA}"
+SERVER_RDMA="${SERVER_RDMA:-$WIRE_SERVER_RDMA}"
 
 # Leave these blank to auto-detect from the interfaces (recommended). Only set
 # them if you need to override the peer MAC for some reason.
 CLIENT_MAC=""
 SERVER_MAC=""
 
-CLIENT_IP=10.250.0.1
-SERVER_IP=10.250.0.2
+CLIENT_IP="${WIRE_CLIENT_IP}"
+SERVER_IP="${WIRE_SERVER_IP}"
 
-MTU=9000                       # colleague used 9082; 9000 matches the data-plane ports
+MTU="${WIRE_MTU}"
 # =====================================================================
 
 set -euo pipefail

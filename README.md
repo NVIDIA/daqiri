@@ -74,6 +74,7 @@ Reference material for the DAQIRI codebase:
 - [C++ API Usage](https://nvidia.github.io/daqiri/api-reference/cpp/) — C++ RX/TX workflows, buffer lifecycle, file writing, utilities, and status codes
 - [Python API Usage](https://nvidia.github.io/daqiri/api-reference/python/) — Python bindings, workflow examples, enums, config classes, and helper functions
 - [Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/) — Per-platform throughput, drop, and utilization numbers for stream/protocol combinations on DGX Spark
+- [Performance: IGX Orin](https://nvidia.github.io/daqiri/benchmarks/performance-igx-orin/) — The same sweep on an IGX Orin devkit (discrete RTX 6000 Ada, `kind: device` GPUDirect)
 - [Contributing](CONTRIBUTING.md) — Contribution guidelines, coding standards, DCO sign-off
 
 ## Tutorials

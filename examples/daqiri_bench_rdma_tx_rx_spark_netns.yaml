@@ -1,4 +1,10 @@
-# DGX Spark (GB10) RDMA bench — combined base for the netns wire loopback.
+# RDMA/RoCE bench — combined base for the netns wire loopback. PLATFORM TEMPLATE:
+# the @TOKEN@ fields (kind, cores) are filled by run_spark_bench.sh from
+# examples/bench_platform_<P>.env (BENCH_PLATFORM=spark|igx). On IGX use
+# kind: device (discrete GPU GPUDirect RDMA) -- NIC reads VRAM over the GPU<->NIC
+# PXB path and hits ~96 Gb/s on large messages vs ~38 with host_pinned (NIC reads
+# CPU DDR over PCIe, capped by MPS=128). Spark uses host_pinned (unified memory).
+# See "Platform profiles" in AGENTS.md.
 #
 # This is the single checked-in config for the RoCE wire-loopback sweep. It
 # carries BOTH roles (the my_server / my_client interfaces, their memory regions,
@@ -30,28 +36,28 @@ daqiri:
   cfg:
     version: 1
     stream_type: "socket"
-    master_core: 8
+    master_core: @CORE_MASTER@
     debug: false
     log_level: "info"
 
     memory_regions:
     - name: "DATA_RX_GPU_SERVER"
-      kind: "host_pinned"
+      kind: "@MEM_KIND@"
       affinity: 0
       num_bufs: 128
       buf_size: 10000000
     - name: "DATA_TX_GPU_SERVER"
-      kind: "host_pinned"
+      kind: "@MEM_KIND@"
       affinity: 0
       num_bufs: 128
       buf_size: 10000000
     - name: "DATA_TX_GPU_CLIENT"
-      kind: "host_pinned"
+      kind: "@MEM_KIND@"
       affinity: 0
       num_bufs: 128
       buf_size: 10000000
     - name: "DATA_RX_GPU_CLIENT"
-      kind: "host_pinned"
+      kind: "@MEM_KIND@"
       affinity: 0
       num_bufs: 128
       buf_size: 10000000
@@ -68,32 +74,35 @@ daqiri:
         queues:
         - name: "Server_RX_Queue"
           id: 0
-          cpu_core: 19
+          cpu_core: @CORE_ROCE_SRV_RXQ@
           batch_size: 1
       tx:
         queues:
         - name: "Server_TX_Queue"
           id: 0
-          cpu_core: 16
+          cpu_core: @CORE_ROCE_SRV_TXQ@
           batch_size: 1
     - name: my_client
       address: 10.250.0.1
       socket_config:
         mode: client
-        remote_addr: "roce://10.250.0.2:4096"
+        # Current schema: a RoCE client gives only its own local_addr here; the
+        # peer endpoint lives in rdma_bench_client.server_address/server_port
+        # below. (The old remote_addr-in-socket_config form is now rejected.)
+        local_addr: "roce://10.250.0.1"
       roce_config:
         transport_mode: RC
       tx:
         queues:
         - name: "Client_TX_Queue"
           id: 0
-          cpu_core: 17
+          cpu_core: @CORE_ROCE_CLI_TXQ@
           batch_size: 1
       rx:
         queues:
         - name: "Client_RX_Queue"
           id: 0
-          cpu_core: 18
+          cpu_core: @CORE_ROCE_CLI_RXQ@
           batch_size: 1
 
 rdma_bench_server:
@@ -102,7 +111,7 @@ rdma_bench_server:
   # hands off through a ring, so co-locating the worker there livelocks at small
   # message sizes (same failure mode as DPDK small-batch). Put the worker on the
   # server's other isolated core (the RX queue core, 19).
-  cpu_core: 19
+  cpu_core: @CORE_ROCE_SRV_W@
   server_address: 10.250.0.2
   server_port: 4096
   message_size: 8000000
@@ -118,7 +127,7 @@ rdma_bench_server:
 rdma_bench_client:
   # Bench worker on a separate core from the mgr thread (Client_TX_Queue = 17);
   # worker on the client's RX queue core (18). See the server note above.
-  cpu_core: 18
+  cpu_core: @CORE_ROCE_CLI_W@
   message_size: 8000000
   # Flow-control windows (PR #144). Pre-post rx_depth receives before sending and
   # bound the transmit side by tx_depth so small-message SENDs don't outrun the

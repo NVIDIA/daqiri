@@ -246,6 +246,13 @@ export DAQIRI_BUILD_DIR=./build
 export LD_LIBRARY_PATH=/opt/daqiri/lib:${LD_LIBRARY_PATH:-}
 ```
 
+The sweep scripts are platform-parameterized via `BENCH_PLATFORM` (default
+`spark`); these Spark numbers use the default. The same scripts run on an IGX
+Orin devkit with `BENCH_PLATFORM=igx`, which selects that platform's profile
+(`examples/bench_platform_igx.env`): a discrete GPU uses `kind: device` for real
+GPUDirect (vs Spark's `kind: host_pinned` over unified memory), with its own core
+map and PCIe addresses. See the "Platform profiles" note in `AGENTS.md`.
+
 The base container does not ship the network tools the setup scripts and RoCE
 baseline depend on; install them first, or
 `scripts/setup_spark_wire_loopback_netns.sh` fails with `ip: command not found`:
@@ -300,4 +307,4 @@ Each run writes `bench-results/<timestamp>-<backend>-<mode>/runs.csv`. See
 per-transport details.
 
 ---
-**Previous:** [Raw Ethernet Benchmarking](raw_benchmarking.md)
+**Previous:** [Raw Ethernet Benchmarking](raw_benchmarking.md) &nbsp;|&nbsp; **Next:** [Performance: IGX Orin](performance-igx-orin.md)
