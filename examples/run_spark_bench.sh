@@ -25,8 +25,9 @@
 #                      published re-run). Each rep is an independent run + CSV row.
 #   WORKLOAD         — representative GPU workload in the receive path:
 #                      none (default) | fft | gemm (FP32) | gemm_fp16 (FP16
-#                      tensor-core matmul). Honoured by dpdk + rdma only; recorded
-#                      in the CSV post_process column.
+#                      tensor-core matmul). Honoured by dpdk + rdma only; the CSV
+#                      post_process column records the workload actually applied
+#                      (socket backends always record none).
 #
 # Optional (dpdk only): DPDK_{TX,RX}_PCI / DPDK_{TX,RX}_NETDEV override the p0/p1
 # ports used for the per-cell *_phy wire-transit check (defaults p0 0000:01:00.0 /
@@ -173,6 +174,16 @@ case "$BACKEND" in
     ;;
   *) echo "Unknown backend: $BACKEND" >&2; exit 1 ;;
 esac
+
+# Only the raw (dpdk) and rdma benches accept --workload; socket ignores it. The
+# CSV post_process column must report what actually ran, so reduce WORKLOAD to
+# `none` on backends that don't honour it -- otherwise a socket run with
+# WORKLOAD=fft would record a GPU workload that was never applied.
+if [[ "$BACKEND" == "dpdk" || "$BACKEND" == "rdma" ]]; then
+  WORKLOAD_EFF="$WORKLOAD"
+else
+  WORKLOAD_EFF="none"
+fi
 
 DROP_CURVE_TARGETS=(1 5 10 25 50 75 100 0)  # 0 means unpaced (line rate)
 
@@ -378,9 +389,9 @@ run_cell() {
 
   local bench_extra=()
   [[ "$target_gbps" != "0" ]] && bench_extra+=(--target-gbps "$target_gbps")
-  # Only the raw (dpdk) and rdma benches accept --workload; socket ignores it.
-  if [[ "$WORKLOAD" != "none" && ( "$BACKEND" == "dpdk" || "$BACKEND" == "rdma" ) ]]; then
-    bench_extra+=(--workload "$WORKLOAD")
+  # WORKLOAD_EFF is already reduced to `none` on backends that ignore --workload.
+  if [[ "$WORKLOAD_EFF" != "none" ]]; then
+    bench_extra+=(--workload "$WORKLOAD_EFF")
   fi
   # Shutdown ordering: the server must keep receiving until the client has fully
   # stopped sending, otherwise the client's last in-flight messages have no peer
@@ -553,7 +564,7 @@ run_cell() {
   gpu_mem="$(awk '/^ *[0-9]/ { count++; sum += $6 } END { if (count) printf "%.1f", sum/count; else print 0 }' \
                 "$cell_dir/nvidia_smi_dmon.txt" 2>/dev/null || echo 0)"
 
-  echo "$lang,$BACKEND,$WORKLOAD,$payload,$batch,$pairs,$target_gbps,$rep,$secs,$pkts,$bytes,$pps,$gbps,$rx_gbps,$drops,$drops_kind,$cpu_master_pct,$cpu_tx_pct,$cpu_rx_pct,$gpu_sm,$gpu_mem" \
+  echo "$lang,$BACKEND,$WORKLOAD_EFF,$payload,$batch,$pairs,$target_gbps,$rep,$secs,$pkts,$bytes,$pps,$gbps,$rx_gbps,$drops,$drops_kind,$cpu_master_pct,$cpu_tx_pct,$cpu_rx_pct,$gpu_sm,$gpu_mem" \
     | tee -a "$CSV"
 }
 
