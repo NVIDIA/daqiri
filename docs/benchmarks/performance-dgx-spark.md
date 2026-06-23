@@ -271,14 +271,17 @@ line rate. GPU SM% is from `nvidia-smi dmon` across the run. Throughput is mean 
 std over 3 reps, 30 s each.
 
 !!! note "Representative compute, not a data transform"
-    The workload runs on its own GPU scratch buffers, **not** on the received
-    packet bytes. This keeps it a true drop-in across every stream_type / engine
-    (raw, HDS, RoCE) — RoCE in particular exposes no public payload device
-    pointer — and means it measures the **GPU-load headroom of the receive path**
-    (does sustained GPU compute on the receiver steal enough SM / PCIe / host
-    cycles to dent line rate?), not the cost of transforming the actual data. The
-    FLOP profile and memory footprint match a real per-burst transform; only the
-    input bytes differ.
+    The workload runs on its own GPU scratch buffers rather than on the received
+    packet bytes. We do this so the same workload drops cleanly into every
+    stream_type / engine (raw, HDS, RoCE) without modification — RoCE, for one,
+    exposes no public device pointer to the payload, so anything that operated on
+    the real bytes couldn't run there at all. As a result, what these numbers
+    capture is the **GPU-load headroom of the receive path**: when the receiver is
+    also busy with sustained GPU compute, does the contention for SM, PCIe, and
+    host cycles steal enough to dent line rate? They are not a measurement of the
+    cost of transforming the actual data. That said, the workload is sized to a
+    real per-burst transform — its FLOP profile and memory footprint match one;
+    only the input bytes differ.
 
 Raw / GPUDirect, 8 KB native shape (batch 10240), GPU-resident payloads:
 
@@ -289,7 +292,7 @@ Raw / GPUDirect, 8 KB native shape (batch 10240), GPU-resident payloads:
 | GEMM (FP32) | 61.5 ±0.3 Gb/s | 0 | 82.3% | FP32 cores GPU-bound; throughput backpressures, still **drop-free** |
 | GEMM (FP16 tensor) | 98.5 ±0.3 Gb/s | 0 | 28.7% | Same matrix, tensor cores; line rate held |
 
-Two headlines. First, the **drops column**: even when the per-burst FP32 SGEMM
+Two points to highlight. First, the **drops column**: even when the per-burst FP32 SGEMM
 saturates the GB10 to ~82% SM and pulls effective throughput down to ~62 Gb/s, the
 receive path paces against the GPU and **drops zero packets** — backpressure, not
 loss. A lighter workload (FFT, ~9% SM) holds line rate within ~3%.
