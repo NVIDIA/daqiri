@@ -54,7 +54,11 @@ BenchWorkload parse_workload(int argc, char **argv) {
         workload = BenchWorkload::Gemm;
       } else if (val == "gemm_fp16" || val == "gemm-fp16") {
         workload = BenchWorkload::GemmFp16;
+      } else if (val == "none") {
+        workload = BenchWorkload::None;
       } else {
+        std::cerr << "Unknown --workload value '" << val
+                  << "' (expected none|fft|gemm|gemm_fp16); using none\n";
         workload = BenchWorkload::None;
       }
     }
