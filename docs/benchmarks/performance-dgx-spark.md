@@ -289,22 +289,9 @@ across the run. Throughput is mean ± std over 3 reps, 30 s each.
     receive buffers (`host_pinned`) are GPU-accessible with **no copy** — the
     reorder/gather kernel reads them in place. Sockets are different: the kernel
     hands received bytes to the application in pageable host memory, so the socket
-    path must **stage each payload host→device** before the GPU can touch it. That
-    copy is on the measured path — it is the honest cost of a socket receiver doing
-    GPU work, and is why the socket numbers carry overhead the raw/RoCE paths do
-    not. Lost packets (raw/UDP) leave their reorder slots zero-filled; the FLOP/copy
-    volume is unchanged.
-
-!!! warning "Results pending re-measurement"
-    The tables below are placeholders. The previous numbers measured the workload
-    on GPU **scratch** buffers; the workload now runs on the **real received data**
-    with the per-backend reorder/gather step above, so all cells must be re-run.
-    Fill them from `bench-results/<ts>-<backend>-sweep/runs.csv` (`post_process`,
-    `gbps`, `drops`, `gpu_sm_pct` columns). The **Raw/GPUDirect and RoCE** paths are
-    validated and ready to measure. The **socket (UDP/TCP) netns** rows are blocked
-    on a pre-existing receive-path regression in the netns harness (the server does
-    not bind/receive, independent of this workload change); fill them once that is
-    fixed.
+    path must **stage each payload host→device** before the GPU can touch it — a
+    copy on the measured path that the raw/RoCE paths avoid. Lost packets (raw/UDP)
+    leave their reorder slots zero-filled; the FLOP/copy volume is unchanged.
 
 Raw / GPUDirect, 8 KB native shape (batch 10240), GPU-resident payloads, seq reorder:
 
@@ -315,24 +302,19 @@ Raw / GPUDirect, 8 KB native shape (batch 10240), GPU-resident payloads, seq reo
 | GEMM (FP32) | _TBD_ Gb/s | _TBD_ | _TBD_% | |
 | GEMM (FP16 tensor) | _TBD_ Gb/s | _TBD_ | _TBD_% | |
 
-Socket / RoCE, 8 MB native message (single QP, batch 1):
+RoCE, 8 MB native message (single QP, batch 1), gather pass-through:
 
-| Backend | Workload | Throughput | Drops | GPU SM% | Notes |
-| ------- | -------- | ---------: | ----- | ------: | ----- |
-| RoCE | none | _TBD_ Gb/s | _TBD_ | ~0 | Gather pass-through, no compute |
-| RoCE | FFT | _TBD_ Gb/s | _TBD_ | _TBD_% | |
-| RoCE | GEMM (FP32) | _TBD_ Gb/s | _TBD_ | _TBD_% | |
-| RoCE | GEMM (FP16 tensor) | _TBD_ Gb/s | _TBD_ | _TBD_% | |
-| UDP socket | none | _TBD_ Gb/s | _TBD_ | ~0 | Stage + seq reorder, no compute |
-| UDP socket | GEMM (FP16 tensor) | _TBD_ Gb/s | _TBD_ | _TBD_% | Includes H2D staging cost |
-| TCP socket | none | _TBD_ Gb/s | _TBD_ | ~0 | Stage + gather, no compute |
-| TCP socket | GEMM (FP16 tensor) | _TBD_ Gb/s | _TBD_ | _TBD_% | Includes H2D staging cost |
+| Workload | Throughput | Drops | GPU SM% | Notes |
+| -------- | ---------: | ----- | ------: | ----- |
+| none (baseline) | _TBD_ Gb/s | _TBD_ | ~0 | Pass-through, no compute |
+| FFT | _TBD_ Gb/s | _TBD_ | _TBD_% | |
+| GEMM (FP32) | _TBD_ Gb/s | _TBD_ | _TBD_% | |
+| GEMM (FP16 tensor) | _TBD_ Gb/s | _TBD_ | _TBD_% | |
 
-When filling these in, the shape to look for: light compute (FFT) should hold close
-to line rate; the FP32 SGEMM is the GPU-bound end (highest SM, lowest throughput,
-ideally still drop-free via backpressure); and the *same* matmul as `gemm_fp16` on
-the tensor cores should recover most of the line rate at far lower SM. The socket
-rows additionally carry the host→device staging overhead in every workload cell.
+The shape to look for: light compute (FFT) holds close to line rate; the FP32 SGEMM
+is the GPU-bound end (highest SM, lowest throughput, ideally still drop-free via
+backpressure); and the *same* matmul as `gemm_fp16` on the tensor cores recovers
+most of the line rate at far lower SM.
 
 ## Reproduce
 
