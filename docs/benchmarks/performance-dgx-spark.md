@@ -297,24 +297,33 @@ Raw / GPUDirect, 8 KB native shape (batch 10240), GPU-resident payloads, seq reo
 
 | Workload | Throughput | Drops | GPU SM% | Notes |
 | -------- | ---------: | ----- | ------: | ----- |
-| none (baseline) | _TBD_ Gb/s | _TBD_ | ~0 | Bare loopback (no GPU compute) |
-| FFT | _TBD_ Gb/s | _TBD_ | _TBD_% | |
-| GEMM (FP32) | _TBD_ Gb/s | _TBD_ | _TBD_% | |
-| GEMM (FP16 tensor) | _TBD_ Gb/s | _TBD_ | _TBD_% | |
+| none (baseline) | 98.4 ±0.2 Gb/s | 0 | ~0 | Bare loopback (no GPU compute) |
+| FFT | 95.5 ±1.7 Gb/s | 0 | 16.4% | Light compute; line rate held within ~3% |
+| GEMM (FP32) | 94.9 ±0.0 Gb/s | 0 | 55.9% | FP32 cores; GPU-bound end, still **drop-free** |
+| GEMM (FP16 tensor) | 97.7 ±0.2 Gb/s | 0 | 16.8% | Same matrix, tensor cores; near line rate at a third of the SM |
 
 RoCE, 8 MB native message (single QP, batch 1), gather pass-through:
 
 | Workload | Throughput | Drops | GPU SM% | Notes |
 | -------- | ---------: | ----- | ------: | ----- |
-| none (baseline) | _TBD_ Gb/s | _TBD_ | ~0 | Pass-through, no compute |
-| FFT | _TBD_ Gb/s | _TBD_ | _TBD_% | |
-| GEMM (FP32) | _TBD_ Gb/s | _TBD_ | _TBD_% | |
-| GEMM (FP16 tensor) | _TBD_ Gb/s | _TBD_ | _TBD_% | |
+| none (baseline) | 102.2 ±0.4 Gb/s | 0 | ~0 | Pass-through, no compute |
+| FFT | 93.0 ±0.2 Gb/s | 0 | 36.5% | Light compute; ~9% off line rate |
+| GEMM (FP32) | 32.6 ±0.1 Gb/s | 0 | 77.8% | FP32 GPU-bound and serialized (see below), still **drop-free** |
+| GEMM (FP16 tensor) | 85.3 ±0.3 Gb/s | 0 | 53.8% | Same matrix, tensor cores; ~2.6× the FP32 throughput |
 
-The shape to look for: light compute (FFT) holds close to line rate; the FP32 SGEMM
-is the GPU-bound end (highest SM, lowest throughput, ideally still drop-free via
-backpressure); and the *same* matmul as `gemm_fp16` on the tensor cores recovers
-most of the line rate at far lower SM.
+The pattern holds on both paths and **every cell is drop-free**: light compute (FFT)
+stays within a few percent of line rate, the FP32 SGEMM is the GPU-bound end (highest
+SM, lowest throughput), and the *same* matmul in FP16 on the tensor cores recovers
+most of the throughput at lower SM. The receiver backpressures against GPU load rather
+than dropping.
+
+The FP32 cell is far heavier on RoCE (32.6 Gb/s vs 94.9 on raw) because of how each
+path drives the GPU, not a transport difference: the raw path pipelines ~10 reorder
+windows per received burst before draining the stream, overlapping compute with
+ingest, whereas the RoCE path processes one 8 MB message at a time and drains the
+stream per message (the gather pass-through must finish before the recv buffer is
+recycled), so the GPU work fully serializes against receive. Overlapping the RoCE path
+(deeper sync depth across messages) is a possible future improvement.
 
 ## Reproduce
 
