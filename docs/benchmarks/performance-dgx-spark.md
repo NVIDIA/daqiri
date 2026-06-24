@@ -239,22 +239,27 @@ is host-side socket-buffer and reassembly pressure.
 
 A common question for a GPU-attached receiver is how much line rate it holds while
 the GPU also crunches the incoming data. The benchmarks accept
-`--workload none|fft|gemm`, exposed by `run_spark_bench.sh` as the `WORKLOAD` env
-var (recorded in the CSV `post_process` column); more workload kinds can be added
-to the same reusable component over time.
+`--workload none|fft|gemm|gemm_fp16`, exposed by `run_spark_bench.sh` as the
+`WORKLOAD` env var (recorded in the CSV `post_process` column); more workload kinds
+can be added to the same reusable component over time. The workload runs on the
+**actual received packet data** — every backend first assembles the burst's
+payloads into one contiguous GPU buffer (a sequence-number **reorder** on the
+out-of-order transports, an arrival-order **gather** on the in-order ones) and the
+compute consumes that buffer. So these numbers measure the genuine end-to-end
+"receive the data, then process it" cost, not just GPU-load headroom.
 
 **What the two workloads compute** (the reusable component
 `examples/bench_workload.{h,cu}`):
 
 - **FFT** — a batched 1-D **complex-to-complex forward FFT** via cuFFT
-  (`cufftExecC2C`). The burst's bytes are treated as an array of single-precision
+  (`cufftExecC2C`). The reordered buffer is treated as an array of single-precision
   complex samples and transformed as many independent length-1024 FFTs, batched so
-  the transforms cover the whole burst (e.g. ~10000 × 1024-point FFTs for an 82 MB
-  burst). This models a streaming signal-processing receiver — channelization or
-  spectral analysis that FFTs every frame as it arrives.
+  the transforms cover the whole reorder window. This models a streaming
+  signal-processing receiver — channelization or spectral analysis that FFTs every
+  frame as it arrives.
 - **GEMM** — a dense **matrix multiply** `C = A·B` via cuBLAS on square *n×n*
-  matrices, with *n* chosen so the matrices match the burst's data volume (e.g.
-  4520×4520 for an 82 MB burst). Two precisions: **`gemm`** is FP32
+  matrices, with the reordered buffer supplying the *A* operand and *n* chosen so
+  the matrices match the working-set size. Two precisions: **`gemm`** is FP32
   (`cublasSgemm`); **`gemm_fp16`** is the *same-size* mixed-precision matmul (FP16
   inputs, FP32 accumulate) on the **tensor cores** (`cublasGemmEx`,
   `CUBLAS_GEMM_DEFAULT_TENSOR_OP`) — the core op of GPU inference. Running both at
@@ -262,63 +267,72 @@ to the same reusable component over time.
   receiver feeding incoming data into a dense linear-algebra or neural-network
   stage (beamforming, correlation, an inference layer).
 
-Each is run **once per received burst** on a dedicated CUDA stream, with up to two
-kernels kept in flight (sync depth 2) to overlap GPU work with ingest while
-bounding the queue so it cannot run unboundedly ahead. The problem is sized to the
-**whole burst's data volume** (`batch × payload`) so the GPU load scales with the
-receive data rate; a smaller batch or payload moves the operating point back toward
-line rate. GPU SM% is from `nvidia-smi dmon` across the run. Throughput is mean ±
-std over 3 reps, 30 s each.
+**The reorder/gather step is per-backend** (`examples/bench_pipeline.{h,cu}`),
+chosen to be representative for each transport:
 
-!!! note "Representative compute, not a data transform"
-    The workload runs on its own GPU scratch buffers rather than on the received
-    packet bytes. We do this so the same workload drops cleanly into every
-    stream_type / engine (raw, HDS, RoCE) without modification — RoCE, for one,
-    exposes no public device pointer to the payload, so anything that operated on
-    the real bytes couldn't run there at all. As a result, what these numbers
-    capture is the **GPU-load headroom of the receive path**: when the receiver is
-    also busy with sustained GPU compute, does the contention for SM, PCIe, and
-    host cycles steal enough to dent line rate? They are not a measurement of the
-    cost of transforming the actual data. That said, the workload is sized to a
-    real per-burst transform — its FLOP profile and memory footprint match one;
-    only the input bytes differ.
+| Backend | Payload source | Pre-workload step |
+| ------- | -------------- | ----------------- |
+| Raw / GPUDirect (DPDK) | GPU-accessible RX buffers | **seq reorder** kernel → contiguous device buffer (out-of-order capable) |
+| RoCE (RC) | GPU-accessible recv MR | **gather** (in-order); one large message is a zero-copy pass-through |
+| UDP sockets | host RX buffers | **host→device stage**, then **seq reorder** |
+| TCP sockets | host RX buffers | **host→device stage**, then **gather** (in-order stream) |
 
-Raw / GPUDirect, 8 KB native shape (batch 10240), GPU-resident payloads:
+Each compute runs **once per reorder window** on a dedicated CUDA stream (shared
+with the reorder/gather kernel so the two serialize without an extra sync), with up
+to two kernels in flight (sync depth 2) to overlap GPU work with ingest. The
+reorder window is sized so the contiguous buffer is ~8 MB on every backend, giving
+a comparable GPU working set across transports. GPU SM% is from `nvidia-smi dmon`
+across the run. Throughput is mean ± std over 3 reps, 30 s each.
 
-| Workload | Throughput | Drops | GPU SM% | Notes |
-| -------- | ---------: | ----- | ------: | ----- |
-| none (baseline) | 98.5 ±0.0 Gb/s | 0 | ~0 | Bare loopback |
-| FFT | 95.1 ±0.3 Gb/s | 0 | 9.3% | Light compute; line rate essentially held (−3%) |
-| GEMM (FP32) | 61.5 ±0.3 Gb/s | 0 | 82.3% | FP32 cores GPU-bound; throughput backpressures, still **drop-free** |
-| GEMM (FP16 tensor) | 98.5 ±0.3 Gb/s | 0 | 28.7% | Same matrix, tensor cores; line rate held |
+!!! note "Where the data lives, per backend"
+    On the integrated GB10 the GPU shares memory with the CPU, so the raw and RoCE
+    receive buffers (`host_pinned`) are GPU-accessible with **no copy** — the
+    reorder/gather kernel reads them in place. Sockets are different: the kernel
+    hands received bytes to the application in pageable host memory, so the socket
+    path must **stage each payload host→device** before the GPU can touch it. That
+    copy is on the measured path — it is the honest cost of a socket receiver doing
+    GPU work, and is why the socket numbers carry overhead the raw/RoCE paths do
+    not. Lost packets (raw/UDP) leave their reorder slots zero-filled; the FLOP/copy
+    volume is unchanged.
 
-Two points to highlight. First, the **drops column**: even when the per-burst FP32 SGEMM
-saturates the GB10 to ~82% SM and pulls effective throughput down to ~62 Gb/s, the
-receive path paces against the GPU and **drops zero packets** — backpressure, not
-loss. A lighter workload (FFT, ~9% SM) holds line rate within ~3%.
+!!! warning "Results pending re-measurement"
+    The tables below are placeholders. The previous numbers measured the workload
+    on GPU **scratch** buffers; the workload now runs on the **real received data**
+    with the per-backend reorder/gather step above, so all cells must be re-run.
+    Fill them from `bench-results/<ts>-<backend>-sweep/runs.csv` (`post_process`,
+    `gbps`, `drops`, `gpu_sm_pct` columns). The **Raw/GPUDirect and RoCE** paths are
+    validated and ready to measure. The **socket (UDP/TCP) netns** rows are blocked
+    on a pre-existing receive-path regression in the netns harness (the server does
+    not bind/receive, independent of this workload change); fill them once that is
+    fixed.
 
-Second, **precision**: `gemm_fp16` runs the *exact same* 4520×4520 matmul as the
-FP32 cell, but in mixed precision on the tensor cores — and it holds full line rate
-(98.5 Gb/s) at only ~29% SM, versus 62 Gb/s at 82% SM for FP32. The matmul that was
-GPU-bound in FP32 is effectively free at inference precision. (Because the workload
-scales with `batch × payload`, a smaller batch or payload also moves the FP32 point
-back toward line rate; this cell picks a heavy matmul to expose the GPU-bound end.)
-
-Socket / RoCE, 8 MB native message (single QP, batch 1), GPU-resident payloads:
+Raw / GPUDirect, 8 KB native shape (batch 10240), GPU-resident payloads, seq reorder:
 
 | Workload | Throughput | Drops | GPU SM% | Notes |
 | -------- | ---------: | ----- | ------: | ----- |
-| none (baseline) | 101.4 ±0.3 Gb/s | 0 | ~0 | Bare loopback |
-| FFT | 99.4 ±0.3 Gb/s | 0 | 27.1% | Line rate held within ~2% |
-| GEMM (FP32) | 77.8 ±0.5 Gb/s | 0 | 76.7% | FP32 cores GPU-bound; still **drop-free** |
-| GEMM (FP16 tensor) | 100.1 ±0.1 Gb/s | 0 | 35.3% | Same matrix, tensor cores; line rate held |
+| none (baseline) | _TBD_ Gb/s | _TBD_ | ~0 | Bare loopback (no GPU compute) |
+| FFT | _TBD_ Gb/s | _TBD_ | _TBD_% | |
+| GEMM (FP32) | _TBD_ Gb/s | _TBD_ | _TBD_% | |
+| GEMM (FP16 tensor) | _TBD_ Gb/s | _TBD_ | _TBD_% | |
 
-The 8 MB message gives a larger per-burst working set than the Raw 8 KB shape, so
-both workloads register more GPU utilization here, but the shape is identical to the
-Raw path: light compute (FFT) holds line rate; the FP32 SGEMM drives the GB10 to
-~77% SM and pulls throughput to ~78 Gb/s; and the *same* matmul in FP16 on the
-tensor cores (`gemm_fp16`) returns to full line rate (100.1 Gb/s) at ~35% SM — all
-with zero CQ errors / drops. Same 3-rep methodology as the Raw table above.
+Socket / RoCE, 8 MB native message (single QP, batch 1):
+
+| Backend | Workload | Throughput | Drops | GPU SM% | Notes |
+| ------- | -------- | ---------: | ----- | ------: | ----- |
+| RoCE | none | _TBD_ Gb/s | _TBD_ | ~0 | Gather pass-through, no compute |
+| RoCE | FFT | _TBD_ Gb/s | _TBD_ | _TBD_% | |
+| RoCE | GEMM (FP32) | _TBD_ Gb/s | _TBD_ | _TBD_% | |
+| RoCE | GEMM (FP16 tensor) | _TBD_ Gb/s | _TBD_ | _TBD_% | |
+| UDP socket | none | _TBD_ Gb/s | _TBD_ | ~0 | Stage + seq reorder, no compute |
+| UDP socket | GEMM (FP16 tensor) | _TBD_ Gb/s | _TBD_ | _TBD_% | Includes H2D staging cost |
+| TCP socket | none | _TBD_ Gb/s | _TBD_ | ~0 | Stage + gather, no compute |
+| TCP socket | GEMM (FP16 tensor) | _TBD_ Gb/s | _TBD_ | _TBD_% | Includes H2D staging cost |
+
+When filling these in, the shape to look for: light compute (FFT) should hold close
+to line rate; the FP32 SGEMM is the GPU-bound end (highest SM, lowest throughput,
+ideally still drop-free via backpressure); and the *same* matmul as `gemm_fp16` on
+the tensor cores should recover most of the line rate at far lower SM. The socket
+rows additionally carry the host→device staging overhead in every workload cell.
 
 ## Reproduce
 
