@@ -17,6 +17,7 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -25,6 +26,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "raw_bench_common.h"
 #include <daqiri/daqiri.h>
@@ -114,6 +116,23 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
     }
   }
   const bool run_workload = gpu_workload.enabled() && pipeline.enabled();
+
+  // To overlap receive with compute (apples-to-apples with the raw path, which
+  // holds a whole burst and drains the GPU once per burst), hold a small batch of
+  // RECEIVE completions instead of draining + freeing after each one. Holding a
+  // completion keeps its recv buffer alive, so the pass-through compute can read it
+  // while later messages keep arriving into other pool buffers; we drain the stream
+  // once per batch, then free them all. Bounded well under rx_depth so receives are
+  // not starved.
+  std::vector<daqiri::BurstParams*> held_recv;
+  const size_t recv_hold_batch =
+      run_workload ? std::max<size_t>(1, std::min<size_t>(cfg.rx_depth / 2, 8)) : 0;
+  auto flush_held_recv = [&]() {
+    if (held_recv.empty()) { return; }
+    gpu_workload.sync();
+    for (auto* held : held_recv) { daqiri::free_tx_burst(held); }
+    held_recv.clear();
+  };
 
   int outstanding_send = 0;
   int outstanding_recv = 0;
@@ -237,13 +256,16 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
           pipeline.add_device_packet(daqiri::get_segment_packet_ptr(completion, 0, 0));
           const auto* base = static_cast<const uint8_t*>(pipeline.finish_batch());
           // One compute per chunk-sized slice of the message (num_chunks == 1 when
-          // the batch is the whole message).
+          // the batch is the whole message). Enqueue only; the GPU work overlaps
+          // with subsequent receives and is drained per batch (below).
           for (uint32_t k = 0; k < num_chunks; ++k) {
             gpu_workload.run(base + static_cast<size_t>(k) * chunk);
           }
-          // Drain before freeing: the compute reads the recv buffer directly
-          // (pass-through), so it must finish before the buffer is recycled.
-          gpu_workload.sync();
+          // Hold the completion (and thus its recv buffer) until the batch drains,
+          // so the pass-through compute reads valid data without a per-message sync.
+          held_recv.push_back(completion);
+          if (held_recv.size() >= recv_hold_batch) { flush_held_recv(); }
+          continue;  // do not free yet; freed by flush_held_recv()
         }
       }
       daqiri::free_tx_burst(completion);
@@ -260,9 +282,13 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
     }
 
     if (!got_completion && !posted_work) {
+      // Idle: return any held recv buffers so they are not pinned while traffic
+      // pauses, then back off.
+      flush_held_recv();
       std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
   }
+  flush_held_recv();
   gpu_workload.sync();
 }
 

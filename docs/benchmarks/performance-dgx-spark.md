@@ -306,24 +306,20 @@ RoCE, 8 MB native message (single QP, batch 1), gather pass-through:
 
 | Workload | Throughput | Drops | GPU SM% | Notes |
 | -------- | ---------: | ----- | ------: | ----- |
-| none (baseline) | 102.2 ±0.4 Gb/s | 0 | ~0 | Pass-through, no compute |
-| FFT | 93.0 ±0.2 Gb/s | 0 | 36.5% | Light compute; ~9% off line rate |
-| GEMM (FP32) | 32.6 ±0.1 Gb/s | 0 | 77.8% | FP32 GPU-bound and serialized (see below), still **drop-free** |
-| GEMM (FP16 tensor) | 85.3 ±0.3 Gb/s | 0 | 53.8% | Same matrix, tensor cores; ~2.6× the FP32 throughput |
+| none (baseline) | _TBD_ Gb/s | _TBD_ | ~0 | Pass-through, no compute |
+| FFT | _TBD_ Gb/s | _TBD_ | _TBD_% | |
+| GEMM (FP32) | _TBD_ Gb/s | _TBD_ | _TBD_% | |
+| GEMM (FP16 tensor) | _TBD_ Gb/s | _TBD_ | _TBD_% | |
 
-The pattern holds on both paths and **every cell is drop-free**: light compute (FFT)
-stays within a few percent of line rate, the FP32 SGEMM is the GPU-bound end (highest
-SM, lowest throughput), and the *same* matmul in FP16 on the tensor cores recovers
-most of the throughput at lower SM. The receiver backpressures against GPU load rather
-than dropping.
-
-The FP32 cell is far heavier on RoCE (32.6 Gb/s vs 94.9 on raw) because of how each
-path drives the GPU, not a transport difference: the raw path pipelines ~10 reorder
-windows per received burst before draining the stream, overlapping compute with
-ingest, whereas the RoCE path processes one 8 MB message at a time and drains the
-stream per message (the gather pass-through must finish before the recv buffer is
-recycled), so the GPU work fully serializes against receive. Overlapping the RoCE path
-(deeper sync depth across messages) is a possible future improvement.
+Both paths drive the GPU the same way, so the comparison is apples-to-apples: each
+holds a batch of received data and drains the GPU stream **once per batch** rather than
+per compute — the raw path holds a burst (~10 reorder windows), the RoCE path holds a
+small batch of messages (their recv buffers stay live during the pass-through compute,
+while later messages keep arriving into other pool buffers). Compute overlaps with
+receive on both. The expected shape: light compute (FFT) within a few percent of line
+rate, the FP32 SGEMM the GPU-bound end (highest SM, lowest throughput), and the *same*
+matmul in FP16 on the tensor cores recovering most of the throughput at lower SM — all
+drop-free, the receiver backpressuring against GPU load rather than dropping.
 
 ### Workload batch-size sweep
 
