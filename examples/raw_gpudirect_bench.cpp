@@ -119,8 +119,7 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
         // fixed index within the batch.
         if (cfg.payload_size >= sizeof(uint32_t)) {
           const uint32_t seq = htonl(static_cast<uint32_t>(i));
-          std::memcpy(packet_template.data() + cfg.header_size, &seq,
-                      sizeof(seq));
+          std::memcpy(packet_template.data() + cfg.header_size, &seq, sizeof(seq));
         }
         daqiri::bench::finalize_udp_ipv4_checksums(packet_template.data());
         if (cudaMemcpy(gpu_pkt, packet_template.data(), packet_template.size(),
@@ -164,7 +163,7 @@ int main(int argc, char **argv) {
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0]
               << " <config.yaml> [--seconds N] [--target-gbps G] "
-                 "[--workload none|fft|gemm|gemm_fp16]\n";
+                 "[--workload none|fft|gemm|gemm_fp16] [--workload-batch-bytes N]\n";
     return 1;
   }
 
@@ -173,6 +172,8 @@ int main(int argc, char **argv) {
   const int run_seconds = daqiri::bench::parse_run_seconds(argc, argv);
   const double target_gbps = daqiri::bench::parse_target_gbps(argc, argv);
   const auto workload = daqiri::bench::parse_workload(argc, argv);
+  const size_t workload_batch_bytes =
+      daqiri::bench::parse_workload_batch_bytes(argc, argv);
   const auto root = YAML::LoadFile(argv[1]);
 
   std::vector<daqiri::bench::RawBenchRxConfig> rx_configs;
@@ -206,18 +207,25 @@ int main(int argc, char **argv) {
   // RoCE 8 MB working set) that the compute then consumes.
   daqiri::bench::ReorderGeometry geom;
   if (!tx_configs.empty()) {
-    const auto &tx = tx_configs.front();
+    const auto& tx = tx_configs.front();
     geom.payload_segment = 0;
     geom.payload_byte_offset = tx.header_size;
     geom.seq_bit_offset = static_cast<uint16_t>(tx.header_size * 8);
     geom.seq_bit_width = 32;
     geom.out_payload_len = tx.payload_size;
-    geom.packets_per_batch = std::min<uint32_t>(1024, tx.batch_size);
+    // Reorder window = the workload batch. --workload-batch-bytes sets it
+    // (rounded to whole packets); default ~8 MB (1024 packets at the native
+    // shape). Capped to one burst's packet count.
+    const uint32_t ppb =
+        workload_batch_bytes > 0
+            ? std::max<uint32_t>(1, static_cast<uint32_t>(
+                                        workload_batch_bytes / tx.payload_size))
+            : 1024;
+    geom.packets_per_batch = std::min<uint32_t>(ppb, tx.batch_size);
   }
   rx_threads.reserve(rx_configs.size());
   for (const auto &cfg : rx_configs) {
-    rx_threads.emplace_back(daqiri::bench::rx_count_worker, cfg,
-                            std::ref(stop), workload, geom);
+    rx_threads.emplace_back(daqiri::bench::rx_count_worker, cfg, std::ref(stop), workload, geom);
   }
   tx_threads.reserve(tx_configs.size());
   for (const auto &cfg : tx_configs) {

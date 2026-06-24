@@ -68,7 +68,9 @@ CSV="$OUT_DIR/runs.csv"
 # `pairs` = number of concurrent client/server process pairs (socket backends sweep
 # this; dpdk/rdma are always 1). `gbps` is aggregate App TX, `rx_gbps` aggregate App RX
 # (summed across pairs); App-level loss is (gbps - rx_gbps) / gbps.
-echo "lang,backend,post_process,payload,batch,pairs,target_gbps,rep,seconds,packets,bytes,pps,gbps,rx_gbps,drops,drops_kind,cpu_master_pct,cpu_tx_pct,cpu_rx_pct,gpu_sm_pct,gpu_mem_pct" > "$CSV"
+# post_process_batch (last column) = WORKLOAD_BATCH bytes, or "default" when unset.
+# Appended at the end so existing column positions are unchanged.
+echo "lang,backend,post_process,payload,batch,pairs,target_gbps,rep,seconds,packets,bytes,pps,gbps,rx_gbps,drops,drops_kind,cpu_master_pct,cpu_tx_pct,cpu_rx_pct,gpu_sm_pct,gpu_mem_pct,post_process_batch" > "$CSV"
 
 # Capture slow-moving environment state once per result set.
 "$SCRIPT_DIR/bench_capture_environment.sh" "$OUT_DIR"
@@ -88,6 +90,14 @@ case "$WORKLOAD" in
   none|fft|gemm|gemm_fp16) ;;
   *) echo "Invalid WORKLOAD '$WORKLOAD' (expected none|fft|gemm|gemm_fp16)" >&2; exit 1 ;;
 esac
+# WORKLOAD_BATCH (bytes): the GPU compute working set per call, decoupled from the
+# I/O unit (RoCE sub-chunks each message; raw sets the reorder window). Empty =
+# backend default. Sweep it (e.g. 262144 524288 1048576 2097152 4194304 8388608)
+# to trace the compute-intensity vs throughput curve. Recorded in post_process_batch.
+WORKLOAD_BATCH="${WORKLOAD_BATCH:-}"
+if [[ -n "$WORKLOAD_BATCH" && ! "$WORKLOAD_BATCH" =~ ^[0-9]+$ ]]; then
+  echo "Invalid WORKLOAD_BATCH '$WORKLOAD_BATCH' (expected a positive byte count)" >&2; exit 1
+fi
 DRIVER_LOG="$OUT_DIR/last_run.stderr"
 FAILURES=0
 
@@ -389,6 +399,7 @@ run_cell() {
   # Every backend honours --workload (runs it on real received data); none = skip.
   if [[ "$WORKLOAD_EFF" != "none" ]]; then
     bench_extra+=(--workload "$WORKLOAD_EFF")
+    [[ -n "$WORKLOAD_BATCH" ]] && bench_extra+=(--workload-batch-bytes "$WORKLOAD_BATCH")
   fi
   # Shutdown ordering: the server must keep receiving until the client has fully
   # stopped sending, otherwise the client's last in-flight messages have no peer
@@ -561,7 +572,9 @@ run_cell() {
   gpu_mem="$(awk '/^ *[0-9]/ { count++; sum += $6 } END { if (count) printf "%.1f", sum/count; else print 0 }' \
                 "$cell_dir/nvidia_smi_dmon.txt" 2>/dev/null || echo 0)"
 
-  echo "$lang,$BACKEND,$WORKLOAD_EFF,$payload,$batch,$pairs,$target_gbps,$rep,$secs,$pkts,$bytes,$pps,$gbps,$rx_gbps,$drops,$drops_kind,$cpu_master_pct,$cpu_tx_pct,$cpu_rx_pct,$gpu_sm,$gpu_mem" \
+  local pp_batch="${WORKLOAD_BATCH:-default}"
+  [[ -z "$pp_batch" ]] && pp_batch="default"
+  echo "$lang,$BACKEND,$WORKLOAD_EFF,$payload,$batch,$pairs,$target_gbps,$rep,$secs,$pkts,$bytes,$pps,$gbps,$rx_gbps,$drops,$drops_kind,$cpu_master_pct,$cpu_tx_pct,$cpu_rx_pct,$gpu_sm,$gpu_mem,$pp_batch" \
     | tee -a "$CSV"
 }
 

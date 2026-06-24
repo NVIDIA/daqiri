@@ -325,6 +325,29 @@ stream per message (the gather pass-through must finish before the recv buffer i
 recycled), so the GPU work fully serializes against receive. Overlapping the RoCE path
 (deeper sync depth across messages) is a possible future improvement.
 
+### Workload batch-size sweep
+
+The workload's compute working set is **decoupled from the I/O unit** via
+`--workload-batch-bytes` (env `WORKLOAD_BATCH` in `run_spark_bench.sh`): it sets the
+bytes fed to one compute call — the GEMM dimension is `n = √(batch/4)` — independent of
+the 8 MB RoCE message or 8 KB raw frame. RoCE sub-divides each message into batch-sized
+slices (one compute per slice); raw sizes its reorder window to the batch. Sweeping the
+batch traces the compute-intensity curve: small batches are near line rate, large
+batches reach the GPU-bound knee. Sweep run on `gemm_fp16` (cuBLAS takes the dimension
+per call); the tables above are the fixed-batch operating points.
+
+| Batch | RoCE Gb/s | RoCE GPU SM% | Raw Gb/s | Raw GPU SM% |
+| ----: | --------: | -----------: | -------: | ----------: |
+| 256 KB | _TBD_ | _TBD_% | _TBD_ | _TBD_% |
+| 512 KB | _TBD_ | _TBD_% | _TBD_ | _TBD_% |
+| 1 MB | _TBD_ | _TBD_% | _TBD_ | _TBD_% |
+| 2 MB | _TBD_ | _TBD_% | _TBD_ | _TBD_% |
+| 4 MB | _TBD_ | _TBD_% | _TBD_ | _TBD_% |
+| 8 MB | _TBD_ | _TBD_% | _TBD_ | _TBD_% |
+
+(Raw cells use the nearest whole-packet window to the batch size; RoCE caps the batch at
+the 8 MB message.)
+
 ## Reproduce
 
 Run inside the project container (privileged, GPUs passed through, hugepages
@@ -400,6 +423,17 @@ WORKLOAD=gemm ./examples/run_spark_bench.sh rdma smoke
 
 The chosen workload lands in the CSV `post_process` column; compare `gbps` /
 `gpu_sm_pct` against the matching `WORKLOAD=none` baseline.
+
+**Workload batch-size sweep** decouples the compute working set from the I/O unit
+by also exporting `WORKLOAD_BATCH` (bytes); it lands in the CSV `post_process_batch`
+column:
+
+```bash
+for B in 262144 524288 1048576 2097152 4194304 8388608; do
+  WORKLOAD=gemm_fp16 WORKLOAD_BATCH=$B ./examples/run_spark_bench.sh rdma smoke   # netns up
+done
+# raw: netns down, ETH_DST_ADDR exported; same loop with `dpdk`
+```
 
 Each run writes `bench-results/<timestamp>-<backend>-<mode>/runs.csv`. See
 [Socket and RDMA Benchmarking](socket_benchmarking.md) and

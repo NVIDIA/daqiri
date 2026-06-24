@@ -30,11 +30,17 @@ enum class BenchWorkload { None, Fft, Gemm, GemmFp16 };
 
 // Parse "--workload none|fft|gemm|gemm_fp16" from argv (default None). Mirrors
 // the flag/value stride used by parse_run_seconds / parse_target_gbps.
-BenchWorkload parse_workload(int argc, char **argv);
+BenchWorkload parse_workload(int argc, char** argv);
+
+// Parse "--workload-batch-bytes N" from argv: the working-set size (bytes) fed to
+// one compute call, decoupled from the I/O unit (RoCE message / raw frame). The
+// GEMM matrix dimension and FFT batch scale from it. Returns 0 if unset (the bench
+// then falls back to its backend-default batch). Mirrors parse_workload's stride.
+size_t parse_workload_batch_bytes(int argc, char** argv);
 
 // Lower-case name ("none"/"fft"/"gemm"); used for the run_spark_bench.sh
 // post_process CSV column and log lines.
-const char *workload_name(BenchWorkload workload);
+const char* workload_name(BenchWorkload workload);
 
 // Engine-agnostic representative GPU compute, run once per received burst on the
 // ACTUAL received packet data.
@@ -53,11 +59,11 @@ const char *workload_name(BenchWorkload workload);
 // The stream is shared with the ReorderPipeline so the reorder/gather kernel and
 // the workload are serialized on the same stream without an explicit sync.
 class GpuWorkload {
-public:
+ public:
   GpuWorkload() = default;
   ~GpuWorkload();
-  GpuWorkload(const GpuWorkload &) = delete;
-  GpuWorkload &operator=(const GpuWorkload &) = delete;
+  GpuWorkload(const GpuWorkload&) = delete;
+  GpuWorkload& operator=(const GpuWorkload&) = delete;
 
   // Build the plan/handle and size the problem to the contiguous input buffer of
   // batch_bytes the caller will pass to run() (0 => an internal default). The op
@@ -69,7 +75,7 @@ public:
 
   // Enqueue one representative FFT/SGEMM on the internal stream, reading `input`
   // (a device pointer to >= batch_bytes valid bytes). No-op unless enabled().
-  void run(const void *input);
+  void run(const void* input);
 
   // Every sync_interval runs, block until the stream drains so the GPU stays on
   // the critical path without unbounded queueing.
@@ -78,20 +84,26 @@ public:
   // Drain any remaining queued work (call once on shutdown).
   void sync();
 
-  bool enabled() const { return kind_ != BenchWorkload::None && ok_; }
-  BenchWorkload kind() const { return kind_; }
+  bool enabled() const {
+    return kind_ != BenchWorkload::None && ok_;
+  }
+  BenchWorkload kind() const {
+    return kind_;
+  }
 
   // CUDA stream (cudaStream_t) this workload runs on; share it with the
   // ReorderPipeline so the reorder/gather kernel orders before run(). null when
   // the workload is disabled.
-  void *stream() const { return stream_; }
+  void* stream() const {
+    return stream_;
+  }
 
-private:
+ private:
   void destroy();
   // Enqueue one op on the stream reading `input`; returns false if the
   // cuFFT/cuBLAS call reports an error at enqueue. Shared by run() (hot path)
   // and init() (warmup/validate, against an internal zeroed buffer).
-  bool issue_op(const void *input);
+  bool issue_op(const void* input);
 
   BenchWorkload kind_ = BenchWorkload::None;
   bool ok_ = false;
@@ -100,15 +112,15 @@ private:
 
   // Opaque handles, cast in the .cu so this header stays free of CUDA library
   // includes (it is included from plain .cpp bench mains).
-  void *stream_ = nullptr;   // cudaStream_t
-  void *cublas_ = nullptr;   // cublasHandle_t
-  int fft_plan_ = -1;        // cufftHandle (-1 == unset)
+  void* stream_ = nullptr;  // cudaStream_t
+  void* cublas_ = nullptr;  // cublasHandle_t
+  int fft_plan_ = -1;       // cufftHandle (-1 == unset)
 
   // Device scratch (operands NOT sourced from received data).
-  void *fft_out_ = nullptr;  // cufftComplex[fft_total_] (FFT output)
-  void *gemm_b_ = nullptr;   // B operand
-  void *gemm_c_ = nullptr;   // C output
+  void* fft_out_ = nullptr;  // cufftComplex[fft_total_] (FFT output)
+  void* gemm_b_ = nullptr;   // B operand
+  void* gemm_c_ = nullptr;   // C output
   int gemm_n_ = 0;
 };
 
-} // namespace daqiri::bench
+}  // namespace daqiri::bench
