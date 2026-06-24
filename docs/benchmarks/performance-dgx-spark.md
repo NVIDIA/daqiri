@@ -306,20 +306,21 @@ RoCE, 8 MB native message (single QP, batch 1), gather pass-through:
 
 | Workload | Throughput | Drops | GPU SM% | Notes |
 | -------- | ---------: | ----- | ------: | ----- |
-| none (baseline) | _TBD_ Gb/s | _TBD_ | ~0 | Pass-through, no compute |
-| FFT | _TBD_ Gb/s | _TBD_ | _TBD_% | |
-| GEMM (FP32) | _TBD_ Gb/s | _TBD_ | _TBD_% | |
-| GEMM (FP16 tensor) | _TBD_ Gb/s | _TBD_ | _TBD_% | |
+| none (baseline) | 101.7 ±0.2 Gb/s | 0 | ~0 | Pass-through, no compute |
+| FFT | 93.6 ±1.6 Gb/s | 0 | 36.0% | Light compute; ~8% off line rate |
+| GEMM (FP32) | 35.0 ±0.3 Gb/s | 0 | 79.0% | GPU-bound at this batch (one GEMM/message); see sweep |
+| GEMM (FP16 tensor) | 85.8 ±0.2 Gb/s | 0 | 53.6% | Same matrix, tensor cores |
 
-Both paths drive the GPU the same way, so the comparison is apples-to-apples: each
-holds a batch of received data and drains the GPU stream **once per batch** rather than
-per compute — the raw path holds a burst (~10 reorder windows), the RoCE path holds a
-small batch of messages (their recv buffers stay live during the pass-through compute,
-while later messages keep arriving into other pool buffers). Compute overlaps with
-receive on both. The expected shape: light compute (FFT) within a few percent of line
-rate, the FP32 SGEMM the GPU-bound end (highest SM, lowest throughput), and the *same*
-matmul in FP16 on the tensor cores recovering most of the throughput at lower SM — all
-drop-free, the receiver backpressuring against GPU load rather than dropping.
+Both paths drive the GPU the same way (each holds a batch of received data and drains
+the GPU stream **once per batch** — the raw path a burst of ~10 reorder windows, the
+RoCE path a small batch of messages whose recv buffers stay live during the pass-through
+compute), so compute overlaps with receive on both and every cell is drop-free.
+
+The remaining RoCE-vs-raw gap on the heavy GEMM is **pipelining depth, not transport**:
+at the default batch, one 8 MB RoCE message is a single GEMM with no neighbor to overlap,
+while a raw burst packs ~10 GEMMs back-to-back. The batch-size sweep below confirms this —
+tuning the RoCE batch to 2–4 MB packs several GEMMs per message and recovers ~92 Gb/s,
+matching the raw path. (The fixed-batch rows here are the 8 MB operating point.)
 
 ### Workload batch-size sweep
 
@@ -327,22 +328,25 @@ The workload's compute working set is **decoupled from the I/O unit** via
 `--workload-batch-bytes` (env `WORKLOAD_BATCH` in `run_spark_bench.sh`): it sets the
 bytes fed to one compute call — the GEMM dimension is `n = √(batch/4)` — independent of
 the 8 MB RoCE message or 8 KB raw frame. RoCE sub-divides each message into batch-sized
-slices (one compute per slice); raw sizes its reorder window to the batch. Sweeping the
-batch traces the compute-intensity curve: small batches are near line rate, large
-batches reach the GPU-bound knee. Sweep run on `gemm_fp16` (cuBLAS takes the dimension
-per call); the tables above are the fixed-batch operating points.
+slices (one compute per slice); raw sizes its reorder window to the batch. Sweep run on
+`gemm_fp16` (cuBLAS takes the dimension per call); the tables above are the fixed-batch
+(8 MB) operating points.
+
+The RoCE curve is **non-monotonic with a sweet spot at 2–4 MB**: tiny batches collapse on
+per-call launch/sync overhead (16 small GEMMs per message), the 8 MB default underpipelines
+(one GEMM, nothing to overlap), and the 2–4 MB middle balances pipelining against overhead —
+recovering ~92 Gb/s, on par with the raw path. (Single rep per point; RoCE only so far.)
 
 | Batch | RoCE Gb/s | RoCE GPU SM% | Raw Gb/s | Raw GPU SM% |
 | ----: | --------: | -----------: | -------: | ----------: |
-| 256 KB | _TBD_ | _TBD_% | _TBD_ | _TBD_% |
-| 512 KB | _TBD_ | _TBD_% | _TBD_ | _TBD_% |
-| 1 MB | _TBD_ | _TBD_% | _TBD_ | _TBD_% |
-| 2 MB | _TBD_ | _TBD_% | _TBD_ | _TBD_% |
-| 4 MB | _TBD_ | _TBD_% | _TBD_ | _TBD_% |
-| 8 MB | _TBD_ | _TBD_% | _TBD_ | _TBD_% |
+| 512 KB | 37.0 | 76.9% | _TBD_ | _TBD_% |
+| 1 MB | 76.9 | 75.9% | _TBD_ | _TBD_% |
+| 2 MB | 90.8 | 54.0% | _TBD_ | _TBD_% |
+| 4 MB | 92.5 | 40.4% | _TBD_ | _TBD_% |
+| 8 MB | 85.3 | 52.2% | _TBD_ | _TBD_% |
 
 (Raw cells use the nearest whole-packet window to the batch size; RoCE caps the batch at
-the 8 MB message.)
+the 8 MB message. Raw column + a repeat-averaged RoCE pass still to collect.)
 
 ## Reproduce
 
