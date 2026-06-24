@@ -20,6 +20,7 @@
 #include <cuda_runtime.h>
 #include <yaml-cpp/yaml.h>
 
+#include "bench_pipeline.h"
 #include "bench_workload.h"
 
 #include <atomic>
@@ -139,12 +140,27 @@ void wait_for_stop(int run_seconds, std::atomic<bool> &stop);
 void print_queue_stats(const char *direction, const std::string &interface_name,
                        int queue_id, const RawBenchQueueStats &stats,
                        double seconds);
+// Describes how received packets are reordered/gathered into the contiguous
+// device buffer the GpuWorkload consumes. Defaults match the raw native shape;
+// the bench main fills it from the TX config.
+struct ReorderGeometry {
+  uint32_t packets_per_batch = 1024;  // slots in the ordered buffer
+  uint32_t out_payload_len = 0;       // bytes/slot (0 => use payload_size)
+  uint32_t payload_byte_offset = 0;   // offset of payload within the packet
+  uint16_t seq_bit_offset = 0;        // bit offset of the seq number
+  uint8_t seq_bit_width = 32;         // seq number width (bits)
+  int payload_segment = 0;            // packet segment carrying payload (1 = HDS)
+};
+
 // When `workload != None`, each RX thread builds its own GpuWorkload (cuFFT/
-// cuBLAS handles are not thread-safe to share) sized to `workload_bytes`
-// (0 => internal default) and runs one representative compute per received
-// burst. The default leaves the bare-loopback path untouched.
+// cuBLAS handles are not thread-safe to share) and its own ReorderPipeline, then
+// for each received burst reorders the real packet payloads into a contiguous
+// device buffer (geom) and runs one representative compute on THAT buffer. The
+// stream is shared so the reorder kernel orders before the workload; the burst
+// is freed only after the stream drains (so the reorder has read the buffers).
+// workload == None leaves the bare-loopback count-only path untouched.
 void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop,
                      BenchWorkload workload = BenchWorkload::None,
-                     size_t workload_bytes = 0);
+                     const ReorderGeometry &geom = {});
 
 } // namespace daqiri::bench

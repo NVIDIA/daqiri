@@ -23,11 +23,12 @@
 #   ETH_DST_ADDR     — required for dpdk backend (the RX iface MAC).
 #   REPEATS          — repeats per cell for error bars (default 1; use 3 for the
 #                      published re-run). Each rep is an independent run + CSV row.
-#   WORKLOAD         — representative GPU workload in the receive path:
+#   WORKLOAD         — representative GPU workload run on the REAL received data
+#                      in the receive path (preceded by a reorder/gather step):
 #                      none (default) | fft | gemm (FP32) | gemm_fp16 (FP16
-#                      tensor-core matmul). Honoured by dpdk + rdma only; the CSV
-#                      post_process column records the workload actually applied
-#                      (socket backends always record none).
+#                      tensor-core matmul). Honoured by all backends (dpdk, rdma,
+#                      socket-udp, socket-tcp); recorded in the CSV post_process
+#                      column.
 #
 # Optional (dpdk only): DPDK_{TX,RX}_PCI / DPDK_{TX,RX}_NETDEV override the p0/p1
 # ports used for the per-cell *_phy wire-transit check (defaults p0 0000:01:00.0 /
@@ -77,10 +78,11 @@ RUN_SECONDS=30
 # capture dir (<cell>-r<rep>) and CSV row; the perf-doc tables report mean +/- std
 # across reps. Default 1; set REPEATS=3 for the published re-run.
 REPEATS="${REPEATS:-1}"
-# Representative GPU workload run in the receive path: none | fft | gemm (FP32
-# SGEMM) | gemm_fp16 (mixed-precision FP16/tensor-core matmul, the inference-style
-# GEMM). Recorded in the CSV post_process column. Only the dpdk (raw/HDS) and rdma
-# backends honour it; socket ignores --workload. Default none = bare loopback.
+# Representative GPU workload run on the REAL received data (after a reorder/
+# gather step) in the receive path: none | fft | gemm (FP32 SGEMM) | gemm_fp16
+# (mixed-precision FP16/tensor-core matmul, the inference-style GEMM). Recorded in
+# the CSV post_process column. Honoured by ALL backends (dpdk, rdma, socket-udp,
+# socket-tcp). Default none = bare loopback (no GPU compute).
 WORKLOAD="${WORKLOAD:-none}"
 case "$WORKLOAD" in
   none|fft|gemm|gemm_fp16) ;;
@@ -175,15 +177,10 @@ case "$BACKEND" in
   *) echo "Unknown backend: $BACKEND" >&2; exit 1 ;;
 esac
 
-# Only the raw (dpdk) and rdma benches accept --workload; socket ignores it. The
-# CSV post_process column must report what actually ran, so reduce WORKLOAD to
-# `none` on backends that don't honour it -- otherwise a socket run with
-# WORKLOAD=fft would record a GPU workload that was never applied.
-if [[ "$BACKEND" == "dpdk" || "$BACKEND" == "rdma" ]]; then
-  WORKLOAD_EFF="$WORKLOAD"
-else
-  WORKLOAD_EFF="none"
-fi
+# All backends (dpdk, rdma, socket-udp, socket-tcp) now run the workload on real
+# received data, so the CSV post_process column records the requested workload
+# for every backend.
+WORKLOAD_EFF="$WORKLOAD"
 
 DROP_CURVE_TARGETS=(1 5 10 25 50 75 100 0)  # 0 means unpaced (line rate)
 
@@ -389,7 +386,7 @@ run_cell() {
 
   local bench_extra=()
   [[ "$target_gbps" != "0" ]] && bench_extra+=(--target-gbps "$target_gbps")
-  # WORKLOAD_EFF is already reduced to `none` on backends that ignore --workload.
+  # Every backend honours --workload (runs it on real received data); none = skip.
   if [[ "$WORKLOAD_EFF" != "none" ]]; then
     bench_extra+=(--workload "$WORKLOAD_EFF")
   fi

@@ -87,16 +87,25 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
     return;
   }
 
-  // Representative GPU workload run per received message (no-op unless
-  // --workload set). RoCE exposes no payload device pointer, so this runs on
-  // its own scratch buffers sized to the message — exactly the drop-in the
-  // reusable component is designed for.
+  // Representative GPU workload run on each received message's REAL data (no-op
+  // unless --workload set). RoCE/RC delivers one large in-order message, so the
+  // recv buffer is already contiguous and (host_pinned on the integrated GB10)
+  // GPU-accessible: the gather-only pipeline is a zero-copy pass-through that
+  // hands the recv pointer straight to the compute.
   daqiri::bench::GpuWorkload gpu_workload;
-  if (!gpu_workload.init(workload,
-                         static_cast<size_t>(cfg.message_size)) &&
-      workload != daqiri::bench::BenchWorkload::None) {
-    std::cerr << "RDMA workload init failed; continuing without GPU workload\n";
+  daqiri::bench::ReorderPipeline pipeline;
+  if (workload != daqiri::bench::BenchWorkload::None) {
+    if (!gpu_workload.init(workload, static_cast<size_t>(cfg.message_size)) ||
+        !pipeline.init(daqiri::bench::ReorderMode::GatherOnly,
+                       /*packets_per_batch=*/1,
+                       static_cast<uint32_t>(cfg.message_size),
+                       /*payload_byte_offset=*/0, /*seq_bit_offset=*/0,
+                       /*seq_bit_width=*/0, /*staging_needed=*/false,
+                       gpu_workload.stream())) {
+      std::cerr << "RDMA workload init failed; continuing without GPU workload\n";
+    }
   }
+  const bool run_workload = gpu_workload.enabled() && pipeline.enabled();
 
   int outstanding_send = 0;
   int outstanding_recv = 0;
@@ -215,7 +224,15 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
         outstanding_recv--;
         stats.recv_completions++;
         stats.recv_bytes += static_cast<uint64_t>(cfg.message_size);
-        gpu_workload.run();
+        if (run_workload) {
+          pipeline.reset_batch();
+          pipeline.add_device_packet(
+              daqiri::get_segment_packet_ptr(completion, 0, 0));
+          gpu_workload.run(pipeline.finish_batch());
+          // Drain before freeing: the compute reads the recv buffer directly
+          // (pass-through), so it must finish before the buffer is recycled.
+          gpu_workload.sync();
+        }
       }
       daqiri::free_tx_burst(completion);
     }

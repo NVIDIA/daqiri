@@ -43,6 +43,18 @@ __attribute__((__visibility__("default"))) void packet_reorder_copy_payload_by_s
     uint8_t input_endianness,
     uint64_t* batch_id_out,
     cudaStream_t stream);
+
+// Gather-only companion to packet_reorder_copy_payload_by_sequence: places each
+// input packet's payload into the output buffer at its ARRIVAL index (slot =
+// packet index), with no sequence-number read and no reshuffle. Used for the
+// in-order transports (RoCE/TCP) where the seq-based reorder is meaningless.
+__attribute__((__visibility__("default"))) void packet_gather_copy_payload(
+    void* out,
+    const void* const* const in,
+    uint32_t payload_len,
+    uint32_t payload_byte_offset,
+    uint32_t num_pkts,
+    cudaStream_t stream);
 #if __cplusplus
 }
 #endif

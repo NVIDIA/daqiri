@@ -91,13 +91,9 @@ void GpuWorkload::destroy() {
     cublasDestroy(as_cublas(cublas_));
     cublas_ = nullptr;
   }
-  if (fft_buf_ != nullptr) {
-    cudaFree(fft_buf_);
-    fft_buf_ = nullptr;
-  }
-  if (gemm_a_ != nullptr) {
-    cudaFree(gemm_a_);
-    gemm_a_ = nullptr;
+  if (fft_out_ != nullptr) {
+    cudaFree(fft_out_);
+    fft_out_ = nullptr;
   }
   if (gemm_b_ != nullptr) {
     cudaFree(gemm_b_);
@@ -114,7 +110,7 @@ void GpuWorkload::destroy() {
   ok_ = false;
 }
 
-bool GpuWorkload::init(BenchWorkload kind, size_t bytes_per_burst,
+bool GpuWorkload::init(BenchWorkload kind, size_t batch_bytes,
                        int sync_interval) {
   kind_ = kind;
   sync_interval_ = sync_interval > 0 ? sync_interval : 1;
@@ -124,7 +120,7 @@ bool GpuWorkload::init(BenchWorkload kind, size_t bytes_per_burst,
     return true; // inert no-op object; not an error
   }
 
-  const size_t bytes = bytes_per_burst > 0 ? bytes_per_burst : kDefaultBytes;
+  const size_t bytes = batch_bytes > 0 ? batch_bytes : kDefaultBytes;
 
   cudaStream_t stream = nullptr;
   if (cudaStreamCreate(&stream) != cudaSuccess) {
@@ -135,15 +131,17 @@ bool GpuWorkload::init(BenchWorkload kind, size_t bytes_per_burst,
   stream_ = stream;
 
   if (kind_ == BenchWorkload::Fft) {
-    // Fan the working set out across batched length-kFftLen C2C transforms.
+    // Fan the working set out across batched length-kFftLen C2C transforms. The
+    // transform reads the caller's input buffer and writes the owned fft_out_;
+    // total*sizeof(cufftComplex) <= bytes so the input always holds enough data.
     const size_t n_complex =
         std::max<size_t>(kFftLen, bytes / sizeof(cufftComplex));
     const int batch =
         std::max<int>(1, static_cast<int>(n_complex / kFftLen));
     const size_t total = static_cast<size_t>(kFftLen) * batch;
 
-    if (cudaMalloc(&fft_buf_, total * sizeof(cufftComplex)) != cudaSuccess ||
-        cudaMemset(fft_buf_, 0, total * sizeof(cufftComplex)) != cudaSuccess) {
+    if (cudaMalloc(&fft_out_, total * sizeof(cufftComplex)) != cudaSuccess ||
+        cudaMemset(fft_out_, 0, total * sizeof(cufftComplex)) != cudaSuccess) {
       std::cerr << "GpuWorkload: FFT buffer alloc failed\n";
       destroy();
       return false;
@@ -163,7 +161,8 @@ bool GpuWorkload::init(BenchWorkload kind, size_t bytes_per_burst,
   } else { // Gemm or GemmFp16
     // Square matmul whose matrices match the working set. Size n from FP32 in
     // both cases so gemm and gemm_fp16 use the SAME dimension -> identical FLOP
-    // count, isolating the precision / tensor-core effect.
+    // count, isolating the precision / tensor-core effect. The A operand is the
+    // caller's input buffer (n*n*elem_size <= bytes); B and C are owned scratch.
     int n = static_cast<int>(std::sqrt(static_cast<double>(bytes) /
                                         sizeof(float)));
     n = std::max(64, (n / 8) * 8); // multiple of 8, sane floor
@@ -171,10 +170,8 @@ bool GpuWorkload::init(BenchWorkload kind, size_t bytes_per_burst,
     const size_t elems = static_cast<size_t>(n) * n;
     const size_t elem_size =
         kind_ == BenchWorkload::GemmFp16 ? sizeof(__half) : sizeof(float);
-    if (cudaMalloc(&gemm_a_, elems * elem_size) != cudaSuccess ||
-        cudaMalloc(&gemm_b_, elems * elem_size) != cudaSuccess ||
+    if (cudaMalloc(&gemm_b_, elems * elem_size) != cudaSuccess ||
         cudaMalloc(&gemm_c_, elems * elem_size) != cudaSuccess ||
-        cudaMemset(gemm_a_, 0, elems * elem_size) != cudaSuccess ||
         cudaMemset(gemm_b_, 0, elems * elem_size) != cudaSuccess) {
       std::cerr << "GpuWorkload: GEMM buffer alloc failed\n";
       destroy();
@@ -194,11 +191,20 @@ bool GpuWorkload::init(BenchWorkload kind, size_t bytes_per_burst,
     }
   }
 
-  // Warm up and validate the chosen op once: this surfaces a misconfigured
-  // cuFFT/cuBLAS call (which would otherwise no-op silently on the hot path and
-  // look like a free workload) and excludes one-time library setup from the
-  // measured run.
-  if (!issue_op() || cudaStreamSynchronize(stream) != cudaSuccess) {
+  // Warm up and validate the chosen op once against a transient zeroed input
+  // buffer: this surfaces a misconfigured cuFFT/cuBLAS call (which would
+  // otherwise no-op silently on the hot path and look like a free workload) and
+  // excludes one-time library setup from the measured run. The warmup buffer is
+  // freed immediately; the measured runs read the caller's received-data buffer.
+  void *warmup_in = nullptr;
+  const bool warmup_ok =
+      cudaMalloc(&warmup_in, bytes) == cudaSuccess &&
+      cudaMemset(warmup_in, 0, bytes) == cudaSuccess && issue_op(warmup_in) &&
+      cudaStreamSynchronize(stream) == cudaSuccess;
+  if (warmup_in != nullptr) {
+    cudaFree(warmup_in);
+  }
+  if (!warmup_ok) {
     std::cerr << "GpuWorkload: warmup of '" << workload_name(kind_)
               << "' failed (cuda="
               << cudaGetErrorString(cudaGetLastError()) << ")\n";
@@ -210,36 +216,37 @@ bool GpuWorkload::init(BenchWorkload kind, size_t bytes_per_burst,
   return true;
 }
 
-bool GpuWorkload::issue_op() {
+bool GpuWorkload::issue_op(const void *input) {
   if (kind_ == BenchWorkload::Fft) {
-    return cufftExecC2C(as_fft_plan(fft_plan_),
-                        static_cast<cufftComplex *>(fft_buf_),
-                        static_cast<cufftComplex *>(fft_buf_),
-                        CUFFT_FORWARD) == CUFFT_SUCCESS;
+    return cufftExecC2C(
+               as_fft_plan(fft_plan_),
+               const_cast<cufftComplex *>(static_cast<const cufftComplex *>(input)),
+               static_cast<cufftComplex *>(fft_out_),
+               CUFFT_FORWARD) == CUFFT_SUCCESS;
   }
   const float alpha = 1.0f;
   const float beta = 0.0f;
   if (kind_ == BenchWorkload::Gemm) {
     return cublasSgemm(as_cublas(cublas_), CUBLAS_OP_N, CUBLAS_OP_N, gemm_n_,
                        gemm_n_, gemm_n_, &alpha,
-                       static_cast<const float *>(gemm_a_), gemm_n_,
+                       static_cast<const float *>(input), gemm_n_,
                        static_cast<const float *>(gemm_b_), gemm_n_, &beta,
                        static_cast<float *>(gemm_c_), gemm_n_) ==
            CUBLAS_STATUS_SUCCESS;
   }
   // GemmFp16: FP16 inputs, FP32 accumulate, on the tensor cores.
   return cublasGemmEx(as_cublas(cublas_), CUBLAS_OP_N, CUBLAS_OP_N, gemm_n_,
-                      gemm_n_, gemm_n_, &alpha, gemm_a_, CUDA_R_16F, gemm_n_,
+                      gemm_n_, gemm_n_, &alpha, input, CUDA_R_16F, gemm_n_,
                       gemm_b_, CUDA_R_16F, gemm_n_, &beta, gemm_c_, CUDA_R_16F,
                       gemm_n_, CUBLAS_COMPUTE_32F,
                       CUBLAS_GEMM_DEFAULT_TENSOR_OP) == CUBLAS_STATUS_SUCCESS;
 }
 
-void GpuWorkload::run() {
-  if (!enabled()) {
+void GpuWorkload::run(const void *input) {
+  if (!enabled() || input == nullptr) {
     return;
   }
-  issue_op();
+  issue_op(input);
   ++run_count_;
   maybe_sync();
 }

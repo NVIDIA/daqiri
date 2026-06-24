@@ -19,6 +19,7 @@
 #include <cuda_runtime.h>
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -112,6 +113,15 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
             eth_dst, ip_src, ip_dst, src_port, dst_port);
         std::memcpy(packet_template.data() + cfg.header_size,
                     payload_template.data(), cfg.payload_size);
+        // Inject a per-packet sequence number (network byte order) at the start
+        // of the payload so the RX-side reorder workload has a real seq to sort
+        // by. The buffer is initialized once and reused, so seq == the packet's
+        // fixed index within the batch.
+        if (cfg.payload_size >= sizeof(uint32_t)) {
+          const uint32_t seq = htonl(static_cast<uint32_t>(i));
+          std::memcpy(packet_template.data() + cfg.header_size, &seq,
+                      sizeof(seq));
+        }
         daqiri::bench::finalize_udp_ipv4_checksums(packet_template.data());
         if (cudaMemcpy(gpu_pkt, packet_template.data(), packet_template.size(),
                        cudaMemcpyHostToDevice) != cudaSuccess) {
@@ -190,18 +200,24 @@ int main(int argc, char **argv) {
   std::vector<std::thread> rx_threads;
   daqiri::bench::TokenBucketPacer tx_pacer(target_gbps);
 
-  // Size the per-burst GPU workload to the whole burst's data volume
-  // (batch x payload), i.e. "process every byte received in the burst", so the
-  // GPU load scales with the receive data rate and is actually visible.
-  const size_t workload_bytes =
-      tx_configs.empty()
-          ? 0
-          : static_cast<size_t>(tx_configs.front().payload_size) *
-                tx_configs.front().batch_size;
+  // Reorder geometry for the real-data workload: the seq number sits at the
+  // payload start (just after the UDP/IP header), and a window of up to 1024
+  // packets is reordered into a contiguous ~8 MB device buffer (matching the
+  // RoCE 8 MB working set) that the compute then consumes.
+  daqiri::bench::ReorderGeometry geom;
+  if (!tx_configs.empty()) {
+    const auto &tx = tx_configs.front();
+    geom.payload_segment = 0;
+    geom.payload_byte_offset = tx.header_size;
+    geom.seq_bit_offset = static_cast<uint16_t>(tx.header_size * 8);
+    geom.seq_bit_width = 32;
+    geom.out_payload_len = tx.payload_size;
+    geom.packets_per_batch = std::min<uint32_t>(1024, tx.batch_size);
+  }
   rx_threads.reserve(rx_configs.size());
   for (const auto &cfg : rx_configs) {
     rx_threads.emplace_back(daqiri::bench::rx_count_worker, cfg,
-                            std::ref(stop), workload, workload_bytes);
+                            std::ref(stop), workload, geom);
   }
   tx_threads.reserve(tx_configs.size());
   for (const auto &cfg : tx_configs) {

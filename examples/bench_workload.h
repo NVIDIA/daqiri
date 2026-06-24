@@ -36,17 +36,22 @@ BenchWorkload parse_workload(int argc, char **argv);
 // post_process CSV column and log lines.
 const char *workload_name(BenchWorkload workload);
 
-// Engine-agnostic representative GPU compute, run once per received burst.
+// Engine-agnostic representative GPU compute, run once per received burst on the
+// ACTUAL received packet data.
 //
-// The component deliberately operates on its OWN device scratch buffers, not
-// the received packet bytes: this keeps it a true drop-in across every
-// stream_type / engine (raw, HDS, RoCE, socket) without needing a payload
-// device pointer (RoCE exposes none). It therefore measures the GPU-load
-// headroom of the receive path, not a data transform.
+// The caller hands run() a contiguous device buffer holding the reordered /
+// gathered payload of one burst (see ReorderPipeline in bench_pipeline.h). The
+// op reads that buffer as its input operand: FFT transforms it in place of the
+// scratch input; GEMM uses it as the A matrix. The bytes are arbitrary packet
+// data, which is fine for a throughput benchmark — the FLOP profile and memory
+// footprint are unchanged; only the input source differs. This makes the
+// measurement an honest end-to-end "receive then process the data" cost.
 //
 // Owns its own CUDA stream, cuFFT plan, and cuBLAS handle. cuFFT plans and
 // cuBLAS handles are not safe to share across threads, so construct one
 // GpuWorkload per RX worker thread (each multi-queue RX thread gets its own).
+// The stream is shared with the ReorderPipeline so the reorder/gather kernel and
+// the workload are serialized on the same stream without an explicit sync.
 class GpuWorkload {
 public:
   GpuWorkload() = default;
@@ -54,16 +59,17 @@ public:
   GpuWorkload(const GpuWorkload &) = delete;
   GpuWorkload &operator=(const GpuWorkload &) = delete;
 
-  // Build the plan/handle and size the problem to ~bytes_per_burst of working
-  // set (0 => an internal default). kind == None leaves the object an inert
-  // no-op. sync_interval bounds outstanding GPU work (sync every N runs).
-  // Returns false on CUDA / library error; the caller may warn and continue
-  // with the workload disabled (enabled() will report false).
-  bool init(BenchWorkload kind, size_t bytes_per_burst, int sync_interval = 2);
+  // Build the plan/handle and size the problem to the contiguous input buffer of
+  // batch_bytes the caller will pass to run() (0 => an internal default). The op
+  // reads at most batch_bytes from that buffer. kind == None leaves the object an
+  // inert no-op. sync_interval bounds outstanding GPU work (sync every N runs).
+  // Returns false on CUDA / library error; the caller may warn and continue with
+  // the workload disabled (enabled() will report false).
+  bool init(BenchWorkload kind, size_t batch_bytes, int sync_interval = 2);
 
-  // Enqueue one representative FFT/SGEMM on the internal stream. No-op unless
-  // enabled().
-  void run();
+  // Enqueue one representative FFT/SGEMM on the internal stream, reading `input`
+  // (a device pointer to >= batch_bytes valid bytes). No-op unless enabled().
+  void run(const void *input);
 
   // Every sync_interval runs, block until the stream drains so the GPU stays on
   // the critical path without unbounded queueing.
@@ -75,11 +81,17 @@ public:
   bool enabled() const { return kind_ != BenchWorkload::None && ok_; }
   BenchWorkload kind() const { return kind_; }
 
+  // CUDA stream (cudaStream_t) this workload runs on; share it with the
+  // ReorderPipeline so the reorder/gather kernel orders before run(). null when
+  // the workload is disabled.
+  void *stream() const { return stream_; }
+
 private:
   void destroy();
-  // Enqueue one op on the stream; returns false if the cuFFT/cuBLAS call reports
-  // an error at enqueue. Shared by run() (hot path) and init() (warmup/validate).
-  bool issue_op();
+  // Enqueue one op on the stream reading `input`; returns false if the
+  // cuFFT/cuBLAS call reports an error at enqueue. Shared by run() (hot path)
+  // and init() (warmup/validate, against an internal zeroed buffer).
+  bool issue_op(const void *input);
 
   BenchWorkload kind_ = BenchWorkload::None;
   bool ok_ = false;
@@ -92,11 +104,10 @@ private:
   void *cublas_ = nullptr;   // cublasHandle_t
   int fft_plan_ = -1;        // cufftHandle (-1 == unset)
 
-  // Device scratch.
-  void *fft_buf_ = nullptr;  // cufftComplex[fft_total_]
-  void *gemm_a_ = nullptr;   // float[n*n]   (Gemm) or __half[n*n] (GemmFp16)
-  void *gemm_b_ = nullptr;
-  void *gemm_c_ = nullptr;
+  // Device scratch (operands NOT sourced from received data).
+  void *fft_out_ = nullptr;  // cufftComplex[fft_total_] (FFT output)
+  void *gemm_b_ = nullptr;   // B operand
+  void *gemm_c_ = nullptr;   // C output
   int gemm_n_ = 0;
 };
 

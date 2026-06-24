@@ -21,6 +21,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -165,16 +166,24 @@ int main(int argc, char **argv) {
   std::thread rx_thread;
 
   if (has_rx) {
-    // Size the per-burst GPU workload to the whole burst's data volume
-    // (batch x payload) so the GPU load scales with the receive data rate.
-    size_t workload_bytes = 0;
+    // HDS reorder geometry: the payload lives in segment 1 (GPU memory), so the
+    // reorder reads it from offset 0 of that segment. The HDS TX does not inject
+    // a per-packet sequence number, so the seq-based reorder still exercises the
+    // kernel but mostly collides on slot 0 — fine for a throughput benchmark
+    // (the FLOP/copy volume is unchanged).
+    daqiri::bench::ReorderGeometry geom;
     if (has_tx) {
       const auto tx = daqiri::bench::parse_tx(root);
-      workload_bytes = static_cast<size_t>(tx.payload_size) * tx.batch_size;
+      geom.payload_segment = 1;
+      geom.payload_byte_offset = 0;
+      geom.seq_bit_offset = 0;
+      geom.seq_bit_width = 32;
+      geom.out_payload_len = tx.payload_size;
+      geom.packets_per_batch = std::min<uint32_t>(1024, tx.batch_size);
     }
     rx_thread = std::thread(daqiri::bench::rx_count_worker,
                             daqiri::bench::parse_rx(root), std::ref(stop),
-                            workload, workload_bytes);
+                            workload, geom);
   }
   if (has_tx) {
     tx_thread =
