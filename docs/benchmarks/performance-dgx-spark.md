@@ -314,13 +314,22 @@ RoCE, 8 MB native message (single QP, batch 1), gather pass-through:
 Both paths drive the GPU the same way (each holds a batch of received data and drains
 the GPU stream **once per batch** — the raw path a burst of ~10 reorder windows, the
 RoCE path a small batch of messages whose recv buffers stay live during the pass-through
-compute), so compute overlaps with receive on both and every cell is drop-free.
+compute), so compute overlaps with receive on both and every cell is drop-free. The
+fixed-batch rows above are the 8 MB native operating point, batch-matched to the raw
+path's ~8.19 MB reorder window (1024 packets × 8000 B).
 
 The remaining RoCE-vs-raw gap on the heavy GEMM is **pipelining depth, not transport**:
-at the default batch, one 8 MB RoCE message is a single GEMM with no neighbor to overlap,
-while a raw burst packs ~10 GEMMs back-to-back. The batch-size sweep below confirms this —
-tuning the RoCE batch to 2–4 MB packs several GEMMs per message and recovers ~92 Gb/s,
-matching the raw path. (The fixed-batch rows here are the 8 MB operating point.)
+at the 8 MB default, one RoCE message is a single GEMM with no neighbor to overlap, while
+a raw burst packs ~10 GEMMs back-to-back. Sub-dividing the message into a smaller compute
+batch packs several GEMMs per message and recovers most of the throughput — at a **4 MB
+batch (2 GEMMs/message), 3-rep**:
+
+| Workload | Throughput | Drops | GPU SM% | vs 8 MB default |
+| -------- | ---------: | ----- | ------: | --------------- |
+| GEMM (FP32) | 76.3 ±0.2 Gb/s | 0 | 77.7% | 2.2× (was 35.0) |
+| GEMM (FP16 tensor) | 92.3 ±2.0 Gb/s | 0 | 38.7% | within ~5% of raw (was 85.8) |
+
+The full curve is in the [batch-size sweep](#workload-batch-size-sweep) below.
 
 ### Workload batch-size sweep
 
