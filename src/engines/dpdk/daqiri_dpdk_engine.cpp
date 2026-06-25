@@ -3136,6 +3136,13 @@ bool DpdkEngine::validate_dynamic_rx_flow(int port, const FlowRuleConfig& flow) 
   return false;
 }
 
+bool DpdkEngine::ensure_dynamic_flow_isolation_fallback_locked(int port) {
+  if (port < 0 || port >= static_cast<int>(cfg_.ifs_.size())) { return false; }
+  if (!cfg_.ifs_[port].rx_.flow_isolation_) { return true; }
+  if (!ensure_eth_jump_rule(port, kRxFlowGroup)) { return false; }
+  return add_send_to_kernel_fallback(port, kRxFlowGroup);
+}
+
 void DpdkEngine::build_ipv4_udp_flow_pattern(const FlowMatch& match,
                                              struct rte_flow_item pattern[MAX_PATTERN_NUM],
                                              struct rte_flow_item_ipv4* ip_spec,
@@ -3997,6 +4004,9 @@ Status DpdkEngine::add_rx_flow_async(int port, const FlowRuleConfig& flow, FlowO
   *op_id = 0;
   std::lock_guard<std::mutex> guard(flow_lock_);
   if (!validate_dynamic_rx_flow(port, flow)) { return Status::INVALID_PARAMETER; }
+  if (!ensure_dynamic_flow_isolation_fallback_locked(port)) {
+    return Status::INTERNAL_ERROR;
+  }
 
   const FlowId flow_id = allocate_dynamic_flow_id();
   if (flow_id == 0) { return Status::NO_SPACE_AVAILABLE; }
@@ -4019,6 +4029,9 @@ Status DpdkEngine::add_rx_flows_async(int port,
   std::lock_guard<std::mutex> guard(flow_lock_);
   for (const auto& flow : flows) {
     if (!validate_dynamic_rx_flow(port, flow)) { return Status::INVALID_PARAMETER; }
+  }
+  if (!ensure_dynamic_flow_isolation_fallback_locked(port)) {
+    return Status::INTERNAL_ERROR;
   }
 
   std::vector<FlowId> flow_ids;
@@ -4143,6 +4156,7 @@ void DpdkEngine::destroy_programmed_flows() {
     }
   }
   programmed_flows_.clear();
+  send_to_kernel_fallback_installed_.clear();
 
   for (uint16_t port = 0; port < drop_all_traffic_flow.size(); ++port) {
     struct rte_flow* drop_flow = drop_all_traffic_flow[port].drop;
@@ -4897,6 +4911,9 @@ struct rte_flow* DpdkEngine::add_tx_flow(int port, const FlowConfig& cfg) {
 }
 
 bool DpdkEngine::add_send_to_kernel_fallback(int port, uint32_t group) {
+  const uint64_t key = eth_jump_key(port, group);
+  if (send_to_kernel_fallback_installed_.count(key) != 0) { return true; }
+
   struct rte_flow_attr attr;
   struct rte_flow_item pattern[MAX_PATTERN_NUM];
   struct rte_flow_action action[MAX_ACTION_NUM];
@@ -4940,6 +4957,7 @@ bool DpdkEngine::add_send_to_kernel_fallback(int port, uint32_t group) {
   }
 
   track_flow(static_cast<uint16_t>(port), flow);
+  send_to_kernel_fallback_installed_.insert(key);
   return true;
 }
 

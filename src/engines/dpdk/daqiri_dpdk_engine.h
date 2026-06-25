@@ -266,6 +266,7 @@ class DpdkEngine : public Engine {
   void release_dynamic_flow_id(FlowId flow_id);
   bool reserve_static_flow_ids();
   bool validate_dynamic_rx_flow(int port, const FlowRuleConfig& flow) const;
+  bool ensure_dynamic_flow_isolation_fallback_locked(int port);
   bool is_valid_rx_queue(int port, uint16_t queue_id) const;
   bool is_ipv4_udp_flow_match(const FlowMatch& match) const;
   bool ipv4_udp_flow_template_index(const FlowMatch& match, uint8_t* template_index) const;
@@ -495,6 +496,7 @@ class DpdkEngine : public Engine {
   std::array<PortFlowTemplateState, RTE_MAX_ETHPORTS> flow_template_states_{};
   std::vector<PortFlow> programmed_flows_;
   std::unordered_set<uint64_t> eth_jump_installed_;
+  std::unordered_set<uint64_t> send_to_kernel_fallback_installed_;
   std::unordered_map<uint64_t, struct rte_flow*> eth_jump_flows_;
   std::unordered_map<uint32_t, struct rte_ring*> tx_rings;
   std::unordered_map<uint32_t, struct rte_mempool*> tx_burst_buffers;

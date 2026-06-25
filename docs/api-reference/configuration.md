@@ -247,9 +247,11 @@ Flex-item flows cannot be combined with VLAN/tunnel transform actions in v1.
 to the application. Static startup flows install send-to-kernel fallback rules per flow class
 (standard or flex-item), so unmatched traffic in those classes is steered back to the Linux
 kernel. Queues-only configs can set `flow_isolation: true` and then install dynamic RX flows
-after `daqiri_init()`; until a dynamic rule is added, application traffic is not delivered to
-DAQIRI RX queues. When `false`, unmatched packets go to a default queue. Mixing standard and
-flex-item flow classes on one interface is not supported.
+after `daqiri_init()`; the first dynamic RX flow installs the same send-to-kernel fallback (so
+unmatched control traffic such as ARP keeps reaching the kernel), and until a dynamic rule is
+added, application traffic is not delivered to DAQIRI RX queues. When `false`, unmatched packets
+go to a default queue. Mixing standard and flex-item flow classes on one interface is not
+supported.
 
 - type: `boolean`
 - default: `false`
