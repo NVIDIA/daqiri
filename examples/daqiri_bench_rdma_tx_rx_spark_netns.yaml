@@ -80,7 +80,10 @@ daqiri:
       address: 10.250.0.1
       socket_config:
         mode: client
-        remote_addr: "roce://10.250.0.2:4096"
+        # Client binds its own RoCE address here; the server peer endpoint lives
+        # in the rdma_bench_client app config (server_address/server_port). Since
+        # #156 a RoCE client's socket_config.remote_addr is rejected by daqiri_init.
+        local_addr: "roce://10.250.0.1"
       roce_config:
         transport_mode: RC
       tx:

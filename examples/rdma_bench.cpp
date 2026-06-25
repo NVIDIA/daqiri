@@ -17,6 +17,7 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -25,6 +26,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "raw_bench_common.h"
 #include <daqiri/daqiri.h>
@@ -78,13 +80,63 @@ RdmaBenchConfig parse_rdma_cfg(const YAML::Node& node) {
 }
 
 void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pacer,
-                 std::atomic<bool>& stop, RdmaWorkerStats& stats) {
+                 std::atomic<bool>& stop, RdmaWorkerStats& stats,
+                 daqiri::bench::BenchWorkload workload, size_t workload_batch_bytes) {
   const char *thread_name =
       cfg.server ? "rdma_bench_server" : "rdma_bench_client";
   if (!daqiri::bench::set_current_thread_affinity(cfg.cpu_core, thread_name)) {
     stop.store(true);
     return;
   }
+
+  // Representative GPU workload run on each received message's REAL data (no-op
+  // unless --workload set). RoCE/RC delivers one large in-order message, so the
+  // recv buffer is already contiguous and (host_pinned on the integrated GB10)
+  // GPU-accessible: the gather-only pipeline is a zero-copy pass-through that
+  // hands the recv pointer straight to the compute.
+  //
+  // The compute working set is decoupled from the 8 MB message: --workload-batch-
+  // bytes sub-divides each message into chunk-sized slices, one compute per slice
+  // (the per-message sync then amortizes over num_chunks computes). 0 or >= the
+  // message size means one compute per message.
+  const uint32_t msg = static_cast<uint32_t>(cfg.message_size);
+  const uint32_t chunk = (workload_batch_bytes > 0 && workload_batch_bytes < msg)
+                             ? static_cast<uint32_t>(workload_batch_bytes)
+                             : msg;
+  const uint32_t num_chunks = chunk > 0 ? msg / chunk : 1;
+  daqiri::bench::GpuWorkload gpu_workload;
+  daqiri::bench::ReorderPipeline pipeline;
+  if (workload != daqiri::bench::BenchWorkload::None) {
+    if (!gpu_workload.init(workload, chunk) ||
+        !pipeline.init(daqiri::bench::ReorderMode::GatherOnly,
+                       /*packets_per_batch=*/1, msg,
+                       /*payload_byte_offset=*/0, /*seq_bit_offset=*/0,
+                       /*seq_bit_width=*/0, /*staging_needed=*/false, gpu_workload.stream())) {
+      std::cerr << "RDMA workload init failed; continuing without GPU workload\n";
+    }
+  }
+  const bool run_workload = gpu_workload.enabled() && pipeline.enabled();
+
+  // To overlap receive with compute (apples-to-apples with the raw path, which
+  // holds a whole burst and drains the GPU once per burst), hold a small batch of
+  // RECEIVE completions instead of draining + freeing after each one. Holding a
+  // completion keeps its recv buffer alive, so the pass-through compute can read it
+  // while later messages keep arriving into other pool buffers; we drain the stream
+  // once per batch, then free them all. Bounded well under rx_depth so receives are
+  // not starved.
+  std::vector<daqiri::BurstParams*> held_recv;
+  const size_t recv_hold_batch =
+      run_workload ? std::max<size_t>(1, std::min<size_t>(cfg.rx_depth / 2, 8)) : 0;
+  auto flush_held_recv = [&]() {
+    if (held_recv.empty()) {
+      return;
+    }
+    gpu_workload.sync();
+    for (auto* held : held_recv) {
+      daqiri::free_tx_burst(held);
+    }
+    held_recv.clear();
+  };
 
   int outstanding_send = 0;
   int outstanding_recv = 0;
@@ -203,6 +255,24 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
         outstanding_recv--;
         stats.recv_completions++;
         stats.recv_bytes += static_cast<uint64_t>(cfg.message_size);
+        if (run_workload) {
+          pipeline.reset_batch();
+          pipeline.add_device_packet(daqiri::get_segment_packet_ptr(completion, 0, 0));
+          const auto* base = static_cast<const uint8_t*>(pipeline.finish_batch());
+          // One compute per chunk-sized slice of the message (num_chunks == 1 when
+          // the batch is the whole message). Enqueue only; the GPU work overlaps
+          // with subsequent receives and is drained per batch (below).
+          for (uint32_t k = 0; k < num_chunks; ++k) {
+            gpu_workload.run(base + static_cast<size_t>(k) * chunk);
+          }
+          // Hold the completion (and thus its recv buffer) until the batch drains,
+          // so the pass-through compute reads valid data without a per-message sync.
+          held_recv.push_back(completion);
+          if (held_recv.size() >= recv_hold_batch) {
+            flush_held_recv();
+          }
+          continue;  // do not free yet; freed by flush_held_recv()
+        }
       }
       daqiri::free_tx_burst(completion);
     }
@@ -218,9 +288,14 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
     }
 
     if (!got_completion && !posted_work) {
+      // Idle: return any held recv buffers so they are not pinned while traffic
+      // pauses, then back off.
+      flush_held_recv();
       std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
   }
+  flush_held_recv();
+  gpu_workload.sync();
 }
 
 }  // namespace
@@ -228,7 +303,9 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
 int main(int argc, char** argv) {
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0]
-              << " <config.yaml> [--seconds N] [--mode server|client|both] [--target-gbps G]\n";
+              << " <config.yaml> [--seconds N] [--mode server|client|both] "
+                 "[--target-gbps G] [--workload none|fft|gemm|gemm_fp16] "
+                 "[--workload-batch-bytes N]\n";
     return 1;
   }
 
@@ -244,6 +321,8 @@ int main(int argc, char** argv) {
       target_gbps = std::stod(argv[i + 1]);
     }
   }
+  const auto workload = daqiri::bench::parse_workload(argc, argv);
+  const size_t workload_batch_bytes = daqiri::bench::parse_workload_batch_bytes(argc, argv);
 
   const auto root = YAML::LoadFile(argv[1]);
   if (daqiri::daqiri_init(argv[1]) != daqiri::Status::SUCCESS) {
@@ -279,12 +358,12 @@ int main(int argc, char** argv) {
   }
 
   if (run_server) {
-    server_thread = std::thread(rdma_worker, server_cfg, std::ref(server_pacer),
-                                std::ref(stop), std::ref(server_stats));
+    server_thread = std::thread(rdma_worker, server_cfg, std::ref(server_pacer), std::ref(stop),
+                                std::ref(server_stats), workload, workload_batch_bytes);
   }
   if (run_client) {
-    client_thread = std::thread(rdma_worker, client_cfg, std::ref(client_pacer),
-                                std::ref(stop), std::ref(client_stats));
+    client_thread = std::thread(rdma_worker, client_cfg, std::ref(client_pacer), std::ref(stop),
+                                std::ref(client_stats), workload, workload_batch_bytes);
   }
 
   if (!server_thread.joinable() && !client_thread.joinable()) {

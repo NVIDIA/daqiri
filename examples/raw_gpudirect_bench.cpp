@@ -19,6 +19,7 @@
 #include <cuda_runtime.h>
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -112,6 +113,14 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
             eth_dst, ip_src, ip_dst, src_port, dst_port);
         std::memcpy(packet_template.data() + cfg.header_size,
                     payload_template.data(), cfg.payload_size);
+        // Inject a per-packet sequence number (network byte order) at the start
+        // of the payload so the RX-side reorder workload has a real seq to sort
+        // by. The buffer is initialized once and reused, so seq == the packet's
+        // fixed index within the batch.
+        if (cfg.payload_size >= sizeof(uint32_t)) {
+          const uint32_t seq = htonl(static_cast<uint32_t>(i));
+          std::memcpy(packet_template.data() + cfg.header_size, &seq, sizeof(seq));
+        }
         daqiri::bench::finalize_udp_ipv4_checksums(packet_template.data());
         if (cudaMemcpy(gpu_pkt, packet_template.data(), packet_template.size(),
                        cudaMemcpyHostToDevice) != cudaSuccess) {
@@ -153,7 +162,8 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
 int main(int argc, char **argv) {
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0]
-              << " <config.yaml> [--seconds N] [--target-gbps G]\n";
+              << " <config.yaml> [--seconds N] [--target-gbps G] "
+                 "[--workload none|fft|gemm|gemm_fp16] [--workload-batch-bytes N]\n";
     return 1;
   }
 
@@ -161,6 +171,8 @@ int main(int argc, char **argv) {
       daqiri::bench::grafana::init_prometheus_metrics_from_env();
   const int run_seconds = daqiri::bench::parse_run_seconds(argc, argv);
   const double target_gbps = daqiri::bench::parse_target_gbps(argc, argv);
+  const auto workload = daqiri::bench::parse_workload(argc, argv);
+  const size_t workload_batch_bytes = daqiri::bench::parse_workload_batch_bytes(argc, argv);
   const auto root = YAML::LoadFile(argv[1]);
 
   std::vector<daqiri::bench::RawBenchRxConfig> rx_configs;
@@ -188,10 +200,30 @@ int main(int argc, char **argv) {
   std::vector<std::thread> rx_threads;
   daqiri::bench::TokenBucketPacer tx_pacer(target_gbps);
 
+  // Reorder geometry for the real-data workload: the seq number sits at the
+  // payload start (just after the UDP/IP header), and a window of up to 1024
+  // packets is reordered into a contiguous ~8 MB device buffer (matching the
+  // RoCE 8 MB working set) that the compute then consumes.
+  daqiri::bench::ReorderGeometry geom;
+  if (!tx_configs.empty()) {
+    const auto& tx = tx_configs.front();
+    geom.payload_segment = 0;
+    geom.payload_byte_offset = tx.header_size;
+    geom.seq_bit_offset = static_cast<uint16_t>(tx.header_size * 8);
+    geom.seq_bit_width = 32;
+    geom.out_payload_len = tx.payload_size;
+    // Reorder window = the workload batch. --workload-batch-bytes sets it
+    // (rounded to whole packets); default ~8 MB (1024 packets at the native
+    // shape). Capped to one burst's packet count.
+    const uint32_t ppb =
+        workload_batch_bytes > 0
+            ? std::max<uint32_t>(1, static_cast<uint32_t>(workload_batch_bytes / tx.payload_size))
+            : 1024;
+    geom.packets_per_batch = std::min<uint32_t>(ppb, tx.batch_size);
+  }
   rx_threads.reserve(rx_configs.size());
   for (const auto &cfg : rx_configs) {
-    rx_threads.emplace_back(daqiri::bench::rx_count_worker, cfg,
-                            std::ref(stop));
+    rx_threads.emplace_back(daqiri::bench::rx_count_worker, cfg, std::ref(stop), workload, geom);
   }
   tx_threads.reserve(tx_configs.size());
   for (const auto &cfg : tx_configs) {
