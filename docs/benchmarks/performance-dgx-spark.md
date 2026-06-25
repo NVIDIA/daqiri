@@ -332,21 +332,26 @@ slices (one compute per slice); raw sizes its reorder window to the batch. Sweep
 `gemm_fp16` (cuBLAS takes the dimension per call); the tables above are the fixed-batch
 (8 MB) operating points.
 
-The RoCE curve is **non-monotonic with a sweet spot at 2–4 MB**: tiny batches collapse on
-per-call launch/sync overhead (16 small GEMMs per message), the 8 MB default underpipelines
-(one GEMM, nothing to overlap), and the 2–4 MB middle balances pipelining against overhead —
-recovering ~92 Gb/s, on par with the raw path. (Single rep per point; RoCE only so far.)
+The two paths respond very differently, which is the whole point. **Raw is flat at line
+rate (~98 Gb/s) across every batch** — a raw burst always packs ~10 reorder windows, so
+the GPU stays fed regardless of the per-window size; the workload is never the bottleneck.
+**RoCE is strongly batch-sensitive** and **non-monotonic with a sweet spot at 2–4 MB**:
+one 8 MB message yields a single GEMM with nothing to overlap (underpipelined, 85 Gb/s),
+sub-dividing it to 2–4 MB packs 2–4 GEMMs per message and recovers **~92 Gb/s — on par
+with raw**, and tiny 512 KB slices collapse to 37 Gb/s on per-call launch/sync overhead
+(16 GEMMs/message). So the RoCE↔raw gap at the default batch is purely pipelining depth:
+give RoCE a batch that packs a few GEMMs per message and the two paths converge.
 
 | Batch | RoCE Gb/s | RoCE GPU SM% | Raw Gb/s | Raw GPU SM% |
 | ----: | --------: | -----------: | -------: | ----------: |
-| 512 KB | 37.0 | 76.9% | _TBD_ | _TBD_% |
-| 1 MB | 76.9 | 75.9% | _TBD_ | _TBD_% |
-| 2 MB | 90.8 | 54.0% | _TBD_ | _TBD_% |
-| 4 MB | 92.5 | 40.4% | _TBD_ | _TBD_% |
-| 8 MB | 85.3 | 52.2% | _TBD_ | _TBD_% |
+| 512 KB | 37.0 | 76.9% | 98.0 | 24.8% |
+| 1 MB | 76.9 | 75.9% | 98.3 | 16.8% |
+| 2 MB | 90.8 | 54.0% | 98.2 | 13.6% |
+| 4 MB | 92.5 | 40.4% | 97.8 | 15.1% |
+| 8 MB | 85.3 | 52.2% | 96.7 | 16.0% |
 
-(Raw cells use the nearest whole-packet window to the batch size; RoCE caps the batch at
-the 8 MB message. Raw column + a repeat-averaged RoCE pass still to collect.)
+(`gemm_fp16`, single rep per point. Raw cells use the nearest whole-packet window to the
+batch size; RoCE caps the batch at the 8 MB message.)
 
 ## Reproduce
 
