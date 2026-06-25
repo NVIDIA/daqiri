@@ -266,7 +266,7 @@ class DpdkEngine : public Engine {
   void release_dynamic_flow_id(FlowId flow_id);
   bool reserve_static_flow_ids();
   bool validate_dynamic_rx_flow(int port, const FlowRuleConfig& flow) const;
-  bool ensure_dynamic_flow_isolation_fallback_locked(int port);
+  Status ensure_dynamic_flow_isolation_fallback_locked(int port, uint32_t group);
   bool is_valid_rx_queue(int port, uint16_t queue_id) const;
   bool is_ipv4_udp_flow_match(const FlowMatch& match) const;
   bool ipv4_udp_flow_template_index(const FlowMatch& match, uint8_t* template_index) const;
