@@ -245,8 +245,7 @@ can be added to the same reusable component over time. The workload runs on the
 **actual received packet data** — every backend first assembles the burst's
 payloads into one contiguous GPU buffer (a sequence-number **reorder** on the
 out-of-order transports, an arrival-order **gather** on the in-order ones) and the
-compute consumes that buffer. So these numbers measure the genuine end-to-end
-"receive the data, then process it" cost, not just GPU-load headroom.
+compute consumes that buffer.
 
 **What the two workloads compute** (the reusable component
 `examples/bench_workload.{h,cu}`):
