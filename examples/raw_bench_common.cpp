@@ -548,8 +548,8 @@ void print_queue_stats(const char *direction, const std::string &interface_name,
             << std::endl;
 }
 
-void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop,
-                     BenchWorkload workload, const ReorderGeometry &geom) {
+void rx_count_worker(const RawBenchRxConfig& cfg, std::atomic<bool>& stop, BenchWorkload workload,
+                     const ReorderGeometry& geom) {
   if (!set_current_thread_affinity(cfg.cpu_core, "bench_rx")) {
     stop.store(true);
     return;
@@ -559,17 +559,14 @@ void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop,
   // --workload is set). If init fails we warn and keep counting so the run still
   // produces throughput. The pipeline shares the workload's CUDA stream so the
   // reorder kernel orders before the compute with no extra sync.
-  const uint32_t out_payload_len =
-      geom.out_payload_len > 0 ? geom.out_payload_len : 1;
-  const size_t batch_bytes =
-      static_cast<size_t>(geom.packets_per_batch) * out_payload_len;
+  const uint32_t out_payload_len = geom.out_payload_len > 0 ? geom.out_payload_len : 1;
+  const size_t batch_bytes = static_cast<size_t>(geom.packets_per_batch) * out_payload_len;
   GpuWorkload gpu_workload;
   ReorderPipeline pipeline;
   if (workload != BenchWorkload::None) {
     if (!gpu_workload.init(workload, batch_bytes) ||
-        !pipeline.init(ReorderMode::SeqReorder, geom.packets_per_batch,
-                       out_payload_len, geom.payload_byte_offset,
-                       geom.seq_bit_offset, geom.seq_bit_width,
+        !pipeline.init(ReorderMode::SeqReorder, geom.packets_per_batch, out_payload_len,
+                       geom.payload_byte_offset, geom.seq_bit_offset, geom.seq_bit_width,
                        /*staging_needed=*/false, gpu_workload.stream())) {
       std::cerr << "RX workload init failed; continuing without GPU workload\n";
     }

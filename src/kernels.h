@@ -49,12 +49,8 @@ __attribute__((__visibility__("default"))) void packet_reorder_copy_payload_by_s
 // packet index), with no sequence-number read and no reshuffle. Used for the
 // in-order transports (RoCE/TCP) where the seq-based reorder is meaningless.
 __attribute__((__visibility__("default"))) void packet_gather_copy_payload(
-    void* out,
-    const void* const* const in,
-    uint32_t payload_len,
-    uint32_t payload_byte_offset,
-    uint32_t num_pkts,
-    cudaStream_t stream);
+    void* out, const void* const* const in, uint32_t payload_len, uint32_t payload_byte_offset,
+    uint32_t num_pkts, cudaStream_t stream);
 #if __cplusplus
 }
 #endif

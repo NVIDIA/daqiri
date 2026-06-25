@@ -85,13 +85,19 @@ bool socket_transport_is_tcp(const YAML::Node& root) {
   if (ifaces && ifaces.IsSequence()) {
     for (const auto& iface : ifaces) {
       const auto sc = iface["socket_config"];
-      if (!sc) { continue; }
+      if (!sc) {
+        continue;
+      }
       const auto addr = sc["local_addr"].as<std::string>("");
-      if (addr.rfind("tcp://", 0) == 0) { return true; }
-      if (addr.rfind("udp://", 0) == 0) { return false; }
+      if (addr.rfind("tcp://", 0) == 0) {
+        return true;
+      }
+      if (addr.rfind("udp://", 0) == 0) {
+        return false;
+      }
     }
   }
-  return false; // default to UDP semantics
+  return false;  // default to UDP semantics
 }
 
 void socket_worker(const SocketBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pacer,
@@ -117,8 +123,7 @@ void socket_worker(const SocketBenchConfig& cfg, daqiri::bench::TokenBucketPacer
   daqiri::bench::GpuWorkload gpu_workload;
   daqiri::bench::ReorderPipeline pipeline;
   if (workload != daqiri::bench::BenchWorkload::None) {
-    if (!gpu_workload.init(workload,
-                           static_cast<size_t>(packets_per_batch) * msg) ||
+    if (!gpu_workload.init(workload, static_cast<size_t>(packets_per_batch) * msg) ||
         !pipeline.init(is_tcp ? daqiri::bench::ReorderMode::GatherOnly
                               : daqiri::bench::ReorderMode::SeqReorder,
                        packets_per_batch, msg, /*payload_byte_offset=*/0,
@@ -285,12 +290,12 @@ int main(int argc, char** argv) {
   }
 
   if (run_server) {
-    server_thread = std::thread(socket_worker, server_cfg, std::ref(server_pacer),
-                                std::ref(stop), std::ref(server_stats), workload, is_tcp);
+    server_thread = std::thread(socket_worker, server_cfg, std::ref(server_pacer), std::ref(stop),
+                                std::ref(server_stats), workload, is_tcp);
   }
   if (run_client) {
-    client_thread = std::thread(socket_worker, client_cfg, std::ref(client_pacer),
-                                std::ref(stop), std::ref(client_stats), workload, is_tcp);
+    client_thread = std::thread(socket_worker, client_cfg, std::ref(client_pacer), std::ref(stop),
+                                std::ref(client_stats), workload, is_tcp);
   }
 
   if (!server_thread.joinable() && !client_thread.joinable()) {

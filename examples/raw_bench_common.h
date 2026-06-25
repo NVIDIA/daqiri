@@ -159,8 +159,8 @@ struct ReorderGeometry {
 // stream is shared so the reorder kernel orders before the workload; the burst
 // is freed only after the stream drains (so the reorder has read the buffers).
 // workload == None leaves the bare-loopback count-only path untouched.
-void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop,
+void rx_count_worker(const RawBenchRxConfig& cfg, std::atomic<bool>& stop,
                      BenchWorkload workload = BenchWorkload::None,
-                     const ReorderGeometry &geom = {});
+                     const ReorderGeometry& geom = {});
 
 } // namespace daqiri::bench

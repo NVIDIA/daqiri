@@ -128,9 +128,13 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
   const size_t recv_hold_batch =
       run_workload ? std::max<size_t>(1, std::min<size_t>(cfg.rx_depth / 2, 8)) : 0;
   auto flush_held_recv = [&]() {
-    if (held_recv.empty()) { return; }
+    if (held_recv.empty()) {
+      return;
+    }
     gpu_workload.sync();
-    for (auto* held : held_recv) { daqiri::free_tx_burst(held); }
+    for (auto* held : held_recv) {
+      daqiri::free_tx_burst(held);
+    }
     held_recv.clear();
   };
 
@@ -264,7 +268,9 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
           // Hold the completion (and thus its recv buffer) until the batch drains,
           // so the pass-through compute reads valid data without a per-message sync.
           held_recv.push_back(completion);
-          if (held_recv.size() >= recv_hold_batch) { flush_held_recv(); }
+          if (held_recv.size() >= recv_hold_batch) {
+            flush_held_recv();
+          }
           continue;  // do not free yet; freed by flush_held_recv()
         }
       }

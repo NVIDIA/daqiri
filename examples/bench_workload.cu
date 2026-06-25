@@ -77,7 +77,9 @@ size_t parse_workload_batch_bytes(int argc, char** argv) {
   for (int i = 2; i + 1 < argc; i += 2) {
     if (std::string(argv[i]) == "--workload-batch-bytes") {
       const long long v = std::atoll(argv[i + 1]);
-      if (v > 0) { return static_cast<size_t>(v); }
+      if (v > 0) {
+        return static_cast<size_t>(v);
+      }
     }
   }
   return 0;

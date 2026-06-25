@@ -147,8 +147,7 @@ int main(int argc, char **argv) {
 
   const int run_seconds = daqiri::bench::parse_run_seconds(argc, argv);
   const auto workload = daqiri::bench::parse_workload(argc, argv);
-  const size_t workload_batch_bytes =
-      daqiri::bench::parse_workload_batch_bytes(argc, argv);
+  const size_t workload_batch_bytes = daqiri::bench::parse_workload_batch_bytes(argc, argv);
   const auto root = YAML::LoadFile(argv[1]);
   if (daqiri::daqiri_init(argv[1]) != daqiri::Status::SUCCESS) {
     std::cerr << "daqiri_init failed\n";
@@ -183,8 +182,7 @@ int main(int argc, char **argv) {
       geom.out_payload_len = tx.payload_size;
       const uint32_t ppb =
           workload_batch_bytes > 0
-              ? std::max<uint32_t>(1, static_cast<uint32_t>(
-                                          workload_batch_bytes / tx.payload_size))
+              ? std::max<uint32_t>(1, static_cast<uint32_t>(workload_batch_bytes / tx.payload_size))
               : 1024;
       geom.packets_per_batch = std::min<uint32_t>(ppb, tx.batch_size);
     }

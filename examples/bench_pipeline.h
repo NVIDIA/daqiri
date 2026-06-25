@@ -51,11 +51,11 @@ enum class ReorderMode {
 //   const void* ordered = pipe.finish_batch();          // launches kernel
 //   workload.run(ordered);
 class ReorderPipeline {
-public:
+ public:
   ReorderPipeline() = default;
   ~ReorderPipeline();
-  ReorderPipeline(const ReorderPipeline &) = delete;
-  ReorderPipeline &operator=(const ReorderPipeline &) = delete;
+  ReorderPipeline(const ReorderPipeline&) = delete;
+  ReorderPipeline& operator=(const ReorderPipeline&) = delete;
 
   // packets_per_batch slots of out_payload_len bytes form the contiguous output
   // buffer. payload_byte_offset / seq_bit_offset / seq_bit_width describe the
@@ -64,33 +64,39 @@ public:
   // GpuWorkload's cudaStream_t (share it); pass nullptr to disable the pipeline.
   // Returns false on CUDA error (caller may warn and continue disabled).
   bool init(ReorderMode mode, uint32_t packets_per_batch, uint32_t out_payload_len,
-            uint32_t payload_byte_offset, uint16_t seq_bit_offset,
-            uint8_t seq_bit_width, bool staging_needed, void *stream);
+            uint32_t payload_byte_offset, uint16_t seq_bit_offset, uint8_t seq_bit_width,
+            bool staging_needed, void* stream);
 
   // Begin accumulating a new batch.
   void reset_batch();
 
   // Record one GPU-accessible source pointer (packet base, before
   // payload_byte_offset). Ignored once packets_per_batch is reached.
-  void add_device_packet(const void *dptr);
+  void add_device_packet(const void* dptr);
 
   // Copy `len` host bytes into the device staging buffer and return the device
   // pointer to feed add_device_packet(). Returns nullptr if disabled/full.
-  void *stage_host_packet(const void *hptr, uint32_t len);
+  void* stage_host_packet(const void* hptr, uint32_t len);
 
-  uint32_t collected() const { return collected_; }
+  uint32_t collected() const {
+    return collected_;
+  }
 
   // Launch the reorder/gather kernel for the collected packets and return the
   // contiguous ordered device buffer (packets_per_batch * out_payload_len) to
   // hand to GpuWorkload::run(). For the single-packet GatherOnly pass-through it
   // returns the source pointer directly (no kernel, no copy). Returns nullptr if
   // disabled or nothing was collected.
-  const void *finish_batch();
+  const void* finish_batch();
 
-  size_t batch_bytes() const { return batch_bytes_; }
-  bool enabled() const { return ok_; }
+  size_t batch_bytes() const {
+    return batch_bytes_;
+  }
+  bool enabled() const {
+    return ok_;
+  }
 
-private:
+ private:
   void destroy();
 
   ReorderMode mode_ = ReorderMode::GatherOnly;
@@ -107,11 +113,11 @@ private:
   uint32_t collected_ = 0;
   uint32_t staged_ = 0;
 
-  void *stream_ = nullptr;     // cudaStream_t (shared, not owned)
-  void *ordered_ = nullptr;    // device output buffer (owned)
-  void *staging_ = nullptr;    // device staging buffer (owned, sockets only)
-  void *dev_ptrs_ = nullptr;   // device void*[packets_per_batch] (owned)
-  void *host_ptrs_ = nullptr;  // host const void*[packets_per_batch] (owned)
+  void* stream_ = nullptr;     // cudaStream_t (shared, not owned)
+  void* ordered_ = nullptr;    // device output buffer (owned)
+  void* staging_ = nullptr;    // device staging buffer (owned, sockets only)
+  void* dev_ptrs_ = nullptr;   // device void*[packets_per_batch] (owned)
+  void* host_ptrs_ = nullptr;  // host const void*[packets_per_batch] (owned)
 };
 
-} // namespace daqiri::bench
+}  // namespace daqiri::bench
