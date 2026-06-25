@@ -2864,9 +2864,15 @@ struct FlowTemplateCreateStorage {
 
 static constexpr uint32_t kDynamicFlowQueueId = 0;
 static constexpr FlowId kMaxDynamicFlowMarkId = 0x00ffffffU;
-static constexpr uint32_t kRxFlowGroup = 3;
+static constexpr uint32_t kFlexItemRxFlowGroup = 1;
+static constexpr uint32_t kStandardRxFlowGroup = 3;
 static constexpr uint32_t kRxFlowPriority = 1;
 static constexpr size_t kMaxIpv4UdpFlowTemplateFieldsForSingleTable = 7;
+
+static uint32_t dynamic_rx_flow_group(const FlowRuleConfig& flow) {
+  return flow.match_.type_ == FlowMatchType::FLEX_ITEM ? kFlexItemRxFlowGroup
+                                                       : kStandardRxFlowGroup;
+}
 
 enum class Ipv4UdpFlowTemplateField {
   IPV4_LEN,
@@ -3136,6 +3142,30 @@ bool DpdkEngine::validate_dynamic_rx_flow(int port, const FlowRuleConfig& flow) 
   return false;
 }
 
+Status DpdkEngine::ensure_dynamic_flow_isolation_fallback_locked(int port, uint32_t group) {
+  if (port < 0 || port >= static_cast<int>(cfg_.ifs_.size())) { return Status::INVALID_PARAMETER; }
+
+  for (const auto key : eth_jump_installed_) {
+    const int installed_port = static_cast<int>(key >> 32);
+    const uint32_t installed_group = static_cast<uint32_t>(key & 0xffffffffU);
+    if (installed_port != port || installed_group == group) { continue; }
+
+    DAQIRI_LOG_ERROR(
+        "Dynamic RX flow on port {} requires DPDK flow group {}, but group {} already owns "
+        "the group-0 ETH jump; standard IPv4/UDP and flex-item flows cannot mix on one "
+        "interface",
+        port,
+        group,
+        installed_group);
+    return Status::INVALID_PARAMETER;
+  }
+
+  if (!cfg_.ifs_[port].rx_.flow_isolation_) { return Status::SUCCESS; }
+  if (!add_send_to_kernel_fallback(port, group)) { return Status::INTERNAL_ERROR; }
+  if (!ensure_eth_jump_rule(port, group)) { return Status::INTERNAL_ERROR; }
+  return Status::SUCCESS;
+}
+
 void DpdkEngine::build_ipv4_udp_flow_pattern(const FlowMatch& match,
                                              struct rte_flow_item pattern[MAX_PATTERN_NUM],
                                              struct rte_flow_item_ipv4* ip_spec,
@@ -3345,7 +3375,7 @@ bool DpdkEngine::ensure_ipv4_udp_flow_template_table(uint16_t port) {
   struct rte_flow_template_table_attr table_attr;
   memset(&table_attr, 0, sizeof(table_attr));
   table_attr.flow_attr.ingress = 1;
-  table_attr.flow_attr.group = kRxFlowGroup;
+  table_attr.flow_attr.group = kStandardRxFlowGroup;
   table_attr.flow_attr.priority = kRxFlowPriority;
   table_attr.nb_flows = state.capacity;
   table_attr.insertion_type = RTE_FLOW_TABLE_INSERTION_TYPE_PATTERN;
@@ -3601,7 +3631,7 @@ Status DpdkEngine::add_rx_flow_template_locked(int port,
                                                const FlowRuleConfig& flow,
                                                FlowId flow_id,
                                                FlowOpId op_id) {
-  if (!ensure_eth_jump_rule(port, kRxFlowGroup) ||
+  if (!ensure_eth_jump_rule(port, kStandardRxFlowGroup) ||
       !ensure_ipv4_udp_flow_template_table(static_cast<uint16_t>(port))) {
     return add_rx_flow_legacy_locked(port, flow, flow_id, op_id);
   }
@@ -3649,7 +3679,7 @@ Status DpdkEngine::add_rx_flows_template_locked(int port,
                                                 const std::vector<FlowRuleConfig>& flows,
                                                 const std::vector<FlowId>& flow_ids,
                                                 FlowOpId op_id) {
-  if (!ensure_eth_jump_rule(port, kRxFlowGroup) ||
+  if (!ensure_eth_jump_rule(port, kStandardRxFlowGroup) ||
       !ensure_ipv4_udp_flow_template_table(static_cast<uint16_t>(port))) {
     return add_rx_flows_legacy_locked(port, flows, flow_ids, op_id);
   }
@@ -3997,6 +4027,9 @@ Status DpdkEngine::add_rx_flow_async(int port, const FlowRuleConfig& flow, FlowO
   *op_id = 0;
   std::lock_guard<std::mutex> guard(flow_lock_);
   if (!validate_dynamic_rx_flow(port, flow)) { return Status::INVALID_PARAMETER; }
+  const uint32_t flow_group = dynamic_rx_flow_group(flow);
+  const Status fallback_status = ensure_dynamic_flow_isolation_fallback_locked(port, flow_group);
+  if (fallback_status != Status::SUCCESS) { return fallback_status; }
 
   const FlowId flow_id = allocate_dynamic_flow_id();
   if (flow_id == 0) { return Status::NO_SPACE_AVAILABLE; }
@@ -4020,6 +4053,18 @@ Status DpdkEngine::add_rx_flows_async(int port,
   for (const auto& flow : flows) {
     if (!validate_dynamic_rx_flow(port, flow)) { return Status::INVALID_PARAMETER; }
   }
+  const uint32_t flow_group = dynamic_rx_flow_group(flows.front());
+  for (const auto& flow : flows) {
+    const uint32_t current_group = dynamic_rx_flow_group(flow);
+    if (current_group == flow_group) { continue; }
+    DAQIRI_LOG_ERROR(
+        "Dynamic RX flow batch on port {} mixes standard IPv4/UDP and flex-item flows, "
+        "which cannot share one DPDK group-0 ETH jump",
+        port);
+    return Status::INVALID_PARAMETER;
+  }
+  const Status fallback_status = ensure_dynamic_flow_isolation_fallback_locked(port, flow_group);
+  if (fallback_status != Status::SUCCESS) { return fallback_status; }
 
   std::vector<FlowId> flow_ids;
   flow_ids.reserve(flows.size());
@@ -4143,6 +4188,7 @@ void DpdkEngine::destroy_programmed_flows() {
     }
   }
   programmed_flows_.clear();
+  send_to_kernel_fallback_installed_.clear();
 
   for (uint16_t port = 0; port < drop_all_traffic_flow.size(); ++port) {
     struct rte_flow* drop_flow = drop_all_traffic_flow[port].drop;
@@ -4286,7 +4332,7 @@ struct rte_flow* DpdkEngine::add_flex_item_flow(
       flex_item_handle_key(static_cast<uint16_t>(port), match_info.flex_item_id_);
   auto handle_it = flex_item_handles_.find(handle_key);
   if (handle_it == flex_item_handles_.end()) {
-    if (!ensure_eth_jump_rule(port, 1)) { return nullptr; }
+    if (!ensure_eth_jump_rule(port, kFlexItemRxFlowGroup)) { return nullptr; }
 
     struct rte_flow_item_flex_conf flex_conf;
     flex_conf.tunnel = FLEX_TUNNEL_MODE_SINGLE;
@@ -4368,7 +4414,7 @@ struct rte_flow* DpdkEngine::add_flex_item_flow(
 
   attr.ingress = 1;
   attr.priority = 0;
-  attr.group = 1;
+  attr.group = kFlexItemRxFlowGroup;
 
   res = rte_flow_validate(port, &attr, pattern, action, &error);
   if (res != 0) {
@@ -4740,7 +4786,7 @@ struct rte_flow* DpdkEngine::add_flow(int port,
   struct rte_flow_item_ipv4 ip_spec {};
   struct rte_flow_item_ipv4 ip_mask {};
 
-  if (!ensure_eth_jump_rule(port, 3)) { return nullptr; }
+  if (!ensure_eth_jump_rule(port, kStandardRxFlowGroup)) { return nullptr; }
 
   auto resource = std::make_shared<DpdkFlowResource>();
   resource->port = port;
@@ -4797,7 +4843,7 @@ struct rte_flow* DpdkEngine::add_flow(int port,
 
   attr.ingress = 1;
   attr.priority = has_outer_transform ? 0 : 1;
-  attr.group = 3;
+  attr.group = kStandardRxFlowGroup;
 
   int res = rte_flow_validate(port, &attr, pattern, action, &error);
   if (res != 0) {
@@ -4897,6 +4943,9 @@ struct rte_flow* DpdkEngine::add_tx_flow(int port, const FlowConfig& cfg) {
 }
 
 bool DpdkEngine::add_send_to_kernel_fallback(int port, uint32_t group) {
+  const uint64_t key = eth_jump_key(port, group);
+  if (send_to_kernel_fallback_installed_.count(key) != 0) { return true; }
+
   struct rte_flow_attr attr;
   struct rte_flow_item pattern[MAX_PATTERN_NUM];
   struct rte_flow_action action[MAX_ACTION_NUM];
@@ -4940,6 +4989,7 @@ bool DpdkEngine::add_send_to_kernel_fallback(int port, uint32_t group) {
   }
 
   track_flow(static_cast<uint16_t>(port), flow);
+  send_to_kernel_fallback_installed_.insert(key);
   return true;
 }
 
