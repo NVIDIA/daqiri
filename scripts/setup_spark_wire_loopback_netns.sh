@@ -55,13 +55,22 @@
 CLIENT_NS=dq_wire_client
 SERVER_NS=dq_wire_server
 
-CLIENT_IF=enp1s0f0np0          # p0 via PCI segment 0000:01:00.0 (carrier up)
-SERVER_IF=enP2p1s0f1np1        # p1 via PCI segment 0002:01:00.1 (carrier up) -- the
-                               # cabled peer of CLIENT_IF (p0<->p1 QSFP loopback). NOT
-                               # enP2p1s0f0np0, which is p0 again (same physical port).
+# Leave CLIENT_IF / SERVER_IF blank to AUTO-DETECT the cabled data-plane ports
+# (recommended): the two RoCE-backed netdevs that report carrier up -- exactly
+# the pair the QSFP loopback lights. PCIe enumeration / interface names drift
+# across reboots and kernel upgrades on this box, so hardcoding them is fragile
+# (a stale name aborts setup, the netns never gets created, and the netns-based
+# benches silently have nowhere to run). Override from the environment only if
+# auto-detect picks the wrong pair, e.g.:
+#   CLIENT_IF=enp1s0f1np1 SERVER_IF=enP2p1s0f0np0 sudo -E ./setup_spark_wire_loopback_netns.sh up
+CLIENT_IF="${CLIENT_IF:-}"
+SERVER_IF="${SERVER_IF:-}"
 
-CLIENT_RDMA=rocep1s0f0         # rdma dev for enp1s0f0np0
-SERVER_RDMA=roceP2p1s0f1       # rdma dev for enP2p1s0f1np1
+# RDMA devices backing the netdevs above. Blank = derive from the netdev via
+# sysfs (/sys/class/net/<if>/device/infiniband). Only needed for RDMA exclusive
+# netns mode; the socket/UDP/TCP benches do not use these.
+CLIENT_RDMA="${CLIENT_RDMA:-}"
+SERVER_RDMA="${SERVER_RDMA:-}"
 
 # Leave these blank to auto-detect from the interfaces (recommended). Only set
 # them if you need to override the peer MAC for some reason.
@@ -80,6 +89,56 @@ require_root() {
   if [[ "$(id -u)" -ne 0 ]]; then
     echo "ERROR: run as root (sudo)." >&2
     exit 1
+  fi
+}
+
+rdma_for_netdev() {  # netdev -> backing RDMA device name (sysfs); empty if none
+  local ifc="$1" d
+  for d in /sys/class/net/"$ifc"/device/infiniband/*; do
+    [[ -e "$d" ]] || continue
+    basename "$d"
+    return 0
+  done
+  return 1
+}
+
+autodetect_ports() {
+  # Pick the cabled data-plane ports automatically when not overridden: the
+  # RoCE-backed netdevs in init_net that report carrier up -- exactly the pair
+  # the QSFP loopback lights. Ports must be in init_net here (up() calls down()
+  # first, returning any moved netdevs), same precondition as detect_macs.
+  if [[ -z "$CLIENT_IF" || -z "$SERVER_IF" ]]; then
+    local found=() ifc
+    for ifc in $(ls /sys/class/net 2>/dev/null | sort); do
+      [[ "$ifc" == lo ]] && continue
+      rdma_for_netdev "$ifc" >/dev/null 2>&1 || continue
+      [[ "$(cat "/sys/class/net/$ifc/carrier" 2>/dev/null || echo 0)" == 1 ]] || continue
+      found+=("$ifc")
+    done
+    if [[ "${#found[@]}" -ne 2 ]]; then
+      echo "ERROR: auto-detect expected exactly 2 carrier-up RoCE ports, found ${#found[@]}: ${found[*]:-none}." >&2
+      echo "       Cable the loopback, or set CLIENT_IF / SERVER_IF explicitly, e.g.:" >&2
+      echo "         CLIENT_IF=enp1s0f1np1 SERVER_IF=enP2p1s0f0np0 sudo -E $0 up" >&2
+      echo "       List candidates with: ip -br link show | grep -E 'enp|enP'" >&2
+      exit 1
+    fi
+    [[ -z "$CLIENT_IF" ]] && CLIENT_IF="${found[0]}"
+    [[ -z "$SERVER_IF" ]] && SERVER_IF="${found[1]}"
+  fi
+  [[ -z "$CLIENT_RDMA" ]] && CLIENT_RDMA="$(rdma_for_netdev "$CLIENT_IF" || true)"
+  [[ -z "$SERVER_RDMA" ]] && SERVER_RDMA="$(rdma_for_netdev "$SERVER_IF" || true)"
+  echo "Using ports: CLIENT_IF=$CLIENT_IF (rdma=${CLIENT_RDMA:-none})  SERVER_IF=$SERVER_IF (rdma=${SERVER_RDMA:-none})"
+}
+
+resolve_ports() {
+  # For verify()/monitor(), which run AFTER up() with the ports already moved
+  # into the namespaces: read each ns's non-lo netdev name. If the namespaces
+  # are absent, fall back to init_net auto-detect. Honours explicit overrides.
+  if ip netns list 2>/dev/null | grep -qw "$CLIENT_NS"; then
+    [[ -z "$CLIENT_IF" ]] && CLIENT_IF="$(ip netns exec "$CLIENT_NS" ls /sys/class/net 2>/dev/null | grep -vx lo | head -1)"
+    [[ -z "$SERVER_IF" ]] && SERVER_IF="$(ip netns exec "$SERVER_NS" ls /sys/class/net 2>/dev/null | grep -vx lo | head -1)"
+  else
+    autodetect_ports
   fi
 }
 
@@ -108,8 +167,10 @@ down() {
       while read -r dev _; do
         [[ -n "$dev" ]] && ip netns exec "$NS" rdma dev set "$dev" netns 1 2>/dev/null || true
       done < <(ip netns exec "$NS" rdma dev show 2>/dev/null | awk -F': ' '/link/ {print $2}' | awk '{print $1}')
-      # Move netdevs back to init_net.
-      for IF in "$CLIENT_IF" "$SERVER_IF"; do
+      # Move every (non-lo) netdev back to init_net. Name-independent so
+      # teardown can't break on a stale/auto-detected interface name.
+      for IF in $(ip netns exec "$NS" ls /sys/class/net 2>/dev/null); do
+        [[ "$IF" == lo ]] && continue
         ip netns exec "$NS" ip link set "$IF" netns 1 2>/dev/null || true
       done
       ip netns delete "$NS" 2>/dev/null || true
@@ -123,6 +184,7 @@ up() {
   echo "== Tearing down any previous state =="
   down
 
+  autodetect_ports
   detect_macs
 
   echo "== Clearing shared-namespace IPs on the cabled ports =="
@@ -184,6 +246,7 @@ up() {
 }
 
 verify() {
+  resolve_ports
   echo "== RDMA device per namespace (each should show exactly its own dev) =="
   echo "-- $CLIENT_NS --"; ip netns exec "$CLIENT_NS" rdma dev show || true
   echo "-- $SERVER_NS --"; ip netns exec "$SERVER_NS" rdma dev show || true
@@ -230,6 +293,7 @@ monitor() {
   # enP2p1s0f0np0), not the rdma device (rocep1s0f0).
   # Auto-detects whether the ports live in the netns (this script's setup) or
   # the default namespace (the policy-routed setup_spark_rdma_loopback.sh setup).
+  resolve_ports
   local cns sns
   if ip netns list 2>/dev/null | grep -qw "$CLIENT_NS"; then
     cns="$CLIENT_NS"; sns="$SERVER_NS"
