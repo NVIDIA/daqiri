@@ -1,0 +1,119 @@
+%YAML 1.2
+---
+# DAQIRI -> TensorRT ResNet inference (example mode), DGX Spark physical p0->p1
+# cabled loopback. Replace every <angle-bracket> placeholder for your system and
+# export ETH_DST_ADDR=$(cat /sys/class/net/<rx-iface>/address) so the replayed
+# frames carry the RX port (p1) MAC. The dq_wire_* netns must be DOWN (it
+# captures the ports and hides them from DPDK). See the README / the
+# "Performance: DGX Spark" report for the full loopback setup.
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    master_core: 3
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    # kind: host_pinned, NOT device. GB10 (DGX Spark) has unified memory; the
+    # device dma-buf / nvidia-peermem DMA-map path is unsupported and fails with
+    # "Could not DMA map EXT memory". Host-pinned buffers are GPU-coherent on
+    # GB10, so the reorder kernel still reads them directly with zero copy.
+    memory_regions:
+    - name: "Data_TX_GPU"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+    - name: "Data_RX_GPU"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+
+    interfaces:
+    - name: "tx_port"           # physical port p0
+      address: <tx-pcie-addr>
+      tx:
+        queues:
+        - name: "tx_q_0"
+          id: 0
+          batch_size: 10240
+          cpu_core: 11
+          memory_regions:
+            - "Data_TX_GPU"
+          offloads:
+            - "tx_eth_src"
+    - name: "rx_port"           # physical port p1 (the loopback sink)
+      address: <rx-pcie-addr>
+      rx:
+        flow_isolation: true
+        queues:
+        - name: "rq_q_0"
+          id: 0
+          cpu_core: 9
+          batch_size: 10240
+          # Flush a partial (< batch_size) burst to the app after this many us of
+          # no new packets. Without it the RX poller only releases a burst once it
+          # fills to batch_size, so the final sub-batch_size remainder of a
+          # finite dataset (here the last ~1024 packets / 13 images) is never
+          # delivered -- example mode would stop short of the full dataset.
+          timeout_us: 2000
+          memory_regions:
+            - "Data_RX_GPU"
+        flows:
+        - name: "flow_0"
+          id: 0
+          action:
+            type: queue
+            id: 0
+          match:
+            udp_src: 4096
+            udp_dst: 4096
+
+bench_rx:
+- interface_name: "rx_port"
+  cpu_core: 8
+
+bench_tx:
+- interface_name: "tx_port"
+  cpu_core: 10
+  batch_size: 10240
+  payload_size: 7172          # 4-byte seq prefix + 7168-byte image chunk
+  header_size: 64
+  eth_dst_addr: <rx-port-mac> # overridden by ETH_DST_ADDR at run time
+  ip_src_addr: <1.2.3.4>
+  ip_dst_addr: <5.6.7.8>
+  udp_src_port: 4096
+  udp_dst_port: 4096
+
+# Image reassembly geometry. 84 packets x 7168 pixel-bytes = 602112 bytes =
+# 3 x 224 x 224 x 4 (FP32 NCHW), so images reassemble with no padding.
+reorder:
+  out_payload_len: 7168
+  images_per_batch: 32
+
+# TensorRT engine. Run tools/export_resnet_onnx.py first; the engine is built
+# and cached on the first launch, then loaded from cache afterwards.
+inference:
+  onnx_path: "models/resnet50_features.onnx"
+  engine_path: "models/resnet50_features.fp16.engine"
+  enable_fp16: true
+  channels: 3
+  height: 224
+  width: 224
+  feature_dim: 2048
+  opt_min: 1
+  opt_avg: 32
+  opt_max: 256
+  input_name: "input"
+  output_name: "features"
+
+# Real CIFAR-10 images for the example. Produced by tools/prepare_cifar10_pcap.py,
+# which also writes "<pcap_path>.labels".
+dataset:
+  pcap_path: "data/cifar10_resnet.pcap"
+
+stats:
+  enabled: true
+  top_k: 8
