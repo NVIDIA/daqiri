@@ -2409,6 +2409,10 @@ void DpdkEngine::initialize() {
     // For now make a single queue. Support more sophisticated TX on next release
     const auto& tx = intf.tx_;
 
+    const auto is_dummy_tx_queue = [](const CommonQueueConfig& queue) {
+      return queue.name_.find("UNUSED_TX_P") == 0;
+    };
+
     for (auto& q : tx.queues_) {
       DAQIRI_LOG_INFO("Configuring TX queue: {} ({}) on port {}",
                         q.common_.name_,
@@ -2440,7 +2444,12 @@ void DpdkEngine::initialize() {
         q_packet_size += mr.buf_size_;
       }
 
-      max_pkt_size = std::max(max_pkt_size, q_packet_size);
+      // Exclude generated dummy TX queues so RX-only ports are not inflated to the
+      // dummy jumbo frame size when MTU sizing uses the combined RX/TX maximum.
+      // Generated dummy RX queues are left unchanged to preserve TX-only behavior.
+      if (!is_dummy_tx_queue(q.common_)) {
+        max_pkt_size = std::max(max_pkt_size, q_packet_size);
+      }
       uint32_t key = generate_queue_key(intf.port_id_, q.common_.id_);
       tx_dpdk_q_map_[key] = q_backend;
     }
@@ -2457,10 +2466,12 @@ void DpdkEngine::initialize() {
 
     local_port_conf[intf.port_id_].txmode.offloads = 0;
 
-    // Compute MTU conservatively. Clamp to jumbo frame bounds and enforce a valid minimum MTU.
-    max_rx_pkt_size = std::max(max_rx_pkt_size, 64UL);
+    // Compute MTU from the largest RX/TX queue buffer frame needed on this port
+    // (max_pkt_size already folds in the existing RX tunnel decap overhead).
+    // Clamp to jumbo bounds and enforce a valid minimum MTU.
+    max_pkt_size = std::max(max_pkt_size, 64UL);
     const size_t requested_frame_size =
-        std::min(max_rx_pkt_size, static_cast<size_t>(JUMBOFRAME_SIZE));
+        std::min(max_pkt_size, static_cast<size_t>(JUMBOFRAME_SIZE));
     const size_t crc_and_hdr = RTE_ETHER_CRC_LEN + RTE_ETHER_HDR_LEN;
     const size_t requested_mtu =
         (requested_frame_size > crc_and_hdr) ? (requested_frame_size - crc_and_hdr) : 0;
