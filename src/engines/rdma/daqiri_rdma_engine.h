@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <vector>
 #include <string>
 #include <tuple>
@@ -228,6 +229,7 @@ class RdmaEngine : public Engine {
   int setup_thread_params(rdma_thread_params* params, bool is_server);
   int destroy_thread_params(rdma_thread_params* params);
   RDMAOpCode ibv_opcode_to_daqiri_opcode(ibv_wc_opcode opcode);
+  size_t local_mr_capacity(const BurstParams* burst) const;
 };
 
 };  // namespace daqiri

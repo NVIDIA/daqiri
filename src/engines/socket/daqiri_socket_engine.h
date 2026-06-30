@@ -18,6 +18,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -181,6 +182,7 @@ class SocketEngine : public Engine {
   uint16_t select_queue_id(const std::vector<RxQueueConfig>& queues) const;
   uint16_t select_queue_id(const std::vector<TxQueueConfig>& queues) const;
   uint32_t select_batch_size(const std::vector<TxQueueConfig>& queues) const;
+  size_t packet_capacity(const BurstParams* burst) const;
 
   Status pop_rx_burst(const std::shared_ptr<RxQueueState>& qstate, BurstParams** burst);
   void push_rx_burst(const std::shared_ptr<RxQueueState>& qstate, BurstParams* burst);

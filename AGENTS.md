@@ -19,6 +19,7 @@ CMake options (full table in `docs/getting-started.md`):
 - `DAQIRI_BUILD_PYTHON` — builds `pybind11` bindings from `python/`.
 - `DAQIRI_BUILD_EXAMPLES` — builds the benchmark executables (default `ON`).
 - `DAQIRI_ENABLE_OTEL_METRICS` — enables OpenTelemetry metrics instrumentation (default `OFF`).
+- `DAQIRI_ENABLE_BURST_VALIDATION` — enables defensive burst bounds and backing-capacity validation in public packet accessors and setters (default `ON`; disable only for trusted-input performance testing).
 - `DAQIRI_REORDER_GPU_PROFILE` — enable CUDA event timing in the DPDK reorder kernels (off by default).
 - `DAQIRI_ENABLE_S3` — enable AWS SDK-backed asynchronous raw packet writes to S3 (off by default).
 - `DAQIRI_PREFER_SYSTEM_YAML_CPP` — prefer system `yaml-cpp` over the vendored `third_party/yaml-cpp` submodule (off by default; keep off when a conda/miniforge env is on `PATH`).
@@ -124,7 +125,7 @@ The web docs live in `docs/` and are built with [MkDocs Material](https://squidf
 
 **Keeping docs in sync with code:** before committing changes, scan for the recurring drift hotspots:
 - **Stream-type list** (`src/engines/*/`) — README Engines table, `docs/getting-started.md`, `docs/concepts.md` (Stream Types section + Support and testing admonition), `docs/api-reference/configuration.md`
-- **CMake options / `DAQIRI_ENGINE` default** (`src/CMakeLists.txt:137`) — README Quick Start, `docs/getting-started.md`, this file's Build & run section
+- **CMake options / `DAQIRI_ENGINE` default** (`src/CMakeLists.txt`) — README Quick Start, `docs/getting-started.md`, this file's Build & run section
 - **Benchmark binary or YAML names** (`examples/`) — the benchmark table above, `docs/benchmarks/raw_benchmarking.md`, the "Choosing an example config" decision tree in `docs/tutorials/configuration-walkthrough.md` (every YAML must have a leaf; CI's `scripts/check_doc_refs.py` enforces coverage), and per-platform performance docs (`docs/benchmarks/performance-*.md`)
 - **Public API include** (`#include <daqiri/daqiri.h>`; source files under `include/daqiri/`) — `docs/api-reference/index.md`, `docs/api-reference/cpp.md`, `docs/api-reference/python.md`; if the change adds or renames a user-facing concept, also `docs/concepts.md`
 - **Python bindings** (`python/daqiri_common_pybind.cpp`) — `docs/api-reference/python.md` (function reference tables, enums/classes tables, GIL Behavior section)

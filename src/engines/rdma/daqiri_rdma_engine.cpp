@@ -21,12 +21,13 @@
 #include <unistd.h>
 #include <mqueue.h>
 #include <algorithm>
-#include <cassert>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <map>
 #include "src/daqiri_ring.h"
 #include "src/daqiri_pool.h"
+#include "src/burst_validation.h"
 #include "src/metrics.h"
 #include "daqiri_rdma_engine.h"
 
@@ -98,28 +99,68 @@ bool RdmaEngine::set_config_and_initialize(const NetworkConfig& cfg) {
   return initialized_;
 }
 
+size_t RdmaEngine::local_mr_capacity(const BurstParams* burst) const {
+  if (burst == nullptr) { return 0; }
+  const auto mr_it = mrs_.find(std::string(burst->transport_hdr.local_mr_name));
+  if (mr_it == mrs_.end()) { return 0; }
+  return mr_it->second.params_.adj_size_;
+}
+
 // Common DAQIRI functions
 Status RdmaEngine::set_packet_lengths(BurstParams* burst, int idx,
                                    const std::initializer_list<int>& lens) {
-  assert(lens.size() == 1);  // Split not supported yet
+  std::array<size_t, MAX_NUM_SEGS> capacities = burst_validation::unknown_capacities();
+  if (burst_validation::strict_enabled()) { capacities[0] = local_mr_capacity(burst); }
+  const Status status = burst_validation::validate_packet_lengths(
+      burst,
+      burst_validation::transport_limits(burst),
+      idx,
+      lens,
+      capacities,
+      true,
+      true,
+      std::numeric_limits<uint32_t>::max(),
+      "RdmaEngine::set_packet_lengths",
+      nullptr);
+  if (status != Status::SUCCESS) { return status; }
   burst->pkt_lens[0][idx] = lens.begin()[0];
   return Status::SUCCESS;
 }
 
 void* RdmaEngine::get_segment_packet_ptr(BurstParams* burst, int seg, int idx) {
+  if (burst_validation::validate_segment_packet_storage(
+          burst,
+          burst_validation::transport_limits(burst),
+          seg,
+          idx,
+          true,
+          false,
+          "RdmaEngine::get_segment_packet_ptr") != Status::SUCCESS) {
+    return nullptr;
+  }
   return burst->pkts[seg][idx];
 }
 
 void* RdmaEngine::get_packet_ptr(BurstParams* burst, int idx) {
-  return burst->pkts[0][idx];
+  return get_segment_packet_ptr(burst, 0, idx);
 }
 
 uint32_t RdmaEngine::get_segment_packet_length(BurstParams* burst, int seg, int idx) {
+  if (burst_validation::validate_segment_packet_storage(
+          burst,
+          burst_validation::transport_limits(burst),
+          seg,
+          idx,
+          false,
+          true,
+          "RdmaEngine::get_segment_packet_length") != Status::SUCCESS) {
+    return 0;
+  }
   return burst->pkt_lens[seg][idx];
 }
 
 uint32_t RdmaEngine::get_packet_length(BurstParams* burst, int idx) {
-  return burst->pkt_lens[0][idx];
+  return get_segment_packet_length(burst, 0, idx);
 }
 
 Status RdmaEngine::set_eth_header(BurstParams* burst, int idx, char* dst_addr) {
@@ -140,7 +181,17 @@ Status RdmaEngine::set_udp_header(BurstParams* burst, int idx, int udp_len, uint
 }
 
 Status RdmaEngine::set_udp_payload(BurstParams* burst, int idx, void* data, int len) {
-  memcpy(burst->pkts[0][idx], data, len);
+  const Status status = burst_validation::validate_payload_write(
+      burst,
+      burst_validation::transport_limits(burst),
+      idx,
+      data,
+      len,
+      burst_validation::strict_enabled() ? local_mr_capacity(burst)
+                                         : burst_validation::kUnknownCapacity,
+      "RdmaEngine::set_udp_payload");
+  if (status != Status::SUCCESS) { return status; }
+  if (len > 0) { memcpy(burst->pkts[0][idx], data, static_cast<size_t>(len)); }
   return Status::SUCCESS;
 }
 
@@ -431,7 +482,17 @@ inline int RdmaEngine::set_affinity(int cpu_core) {
 }
 
 Status RdmaEngine::send_tx_burst(BurstParams* burst) {
-  if (burst == nullptr) { return Status::INVALID_PARAMETER; }
+  if (burst == nullptr) { return Status::NULL_PTR; }
+  const auto limits = burst_validation::transport_limits(burst);
+  Status status = burst_validation::validate_segment_count(
+      burst, limits, "RdmaEngine::send_tx_burst");
+  if (status != Status::SUCCESS) { return status; }
+  status = burst_validation::validate_packet_count(
+      burst,
+      limits,
+      MAX_RDMA_BATCH,
+      "RdmaEngine::send_tx_burst");
+  if (status != Status::SUCCESS) { return status; }
 
   daqiri::Ring* ring;
 
@@ -906,6 +967,8 @@ RDMAOpCode RdmaEngine::rdma_get_opcode(BurstParams* burst) {
 Status RdmaEngine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id,
                                 bool is_server, int num_pkts, uint64_t wr_id,
                                 const std::string& local_mr_name) {
+  if (burst == nullptr) { return Status::NULL_PTR; }
+  if (num_pkts <= 0 || num_pkts > MAX_RDMA_BATCH) { return Status::INVALID_PARAMETER; }
   burst->transport_hdr.opcode = op_code;
   set_connection_id(burst, conn_id);
   burst->transport_hdr.server = is_server;
@@ -1195,8 +1258,16 @@ Status RdmaEngine::get_tx_packet_burst(BurstParams* burst) {
   if (burst == nullptr) { return Status::INVALID_PARAMETER; }
 
   // RDMA isn't allowing split segments yet
-  assert(burst->transport_hdr.num_segs == 1);
-  assert(burst->transport_hdr.num_pkts <= MAX_RDMA_BATCH);
+  const auto limits = burst_validation::transport_limits(burst);
+  Status status = burst_validation::validate_segment_count(
+      burst, limits, "RdmaEngine::get_tx_packet_burst");
+  if (status != Status::SUCCESS) { return status; }
+  if (limits.num_segs != 1 || limits.num_pkts == 0 || limits.num_pkts > MAX_RDMA_BATCH) {
+    DAQIRI_LOG_ERROR("Invalid RDMA TX burst shape: num_pkts={} num_segs={}",
+                     limits.num_pkts,
+                     limits.num_segs);
+    return Status::INVALID_PARAMETER;
+  }
   auto burst_pool = mem_pools_.find(burst->transport_hdr.local_mr_name);
   if (burst_pool == mem_pools_.end()) {
     DAQIRI_LOG_ERROR("Failed to look up burst pool name for MR {}",
@@ -1232,6 +1303,13 @@ Status RdmaEngine::get_tx_packet_burst(BurstParams* burst) {
 }
 
 bool RdmaEngine::is_tx_burst_available(BurstParams* burst) {
+  if (burst == nullptr) { return false; }
+  const auto limits = burst_validation::transport_limits(burst);
+  if (burst_validation::validate_segment_count(
+          burst, limits, "RdmaEngine::is_tx_burst_available") != Status::SUCCESS ||
+      limits.num_segs != 1 || limits.num_pkts == 0 || limits.num_pkts > MAX_RDMA_BATCH) {
+    return false;
+  }
   auto burst_pool = mem_pools_.find(burst->transport_hdr.local_mr_name);
   if (burst_pool == mem_pools_.end()) {
     DAQIRI_LOG_ERROR("Failed to look up burst pool name for MR {}",
@@ -1624,10 +1702,18 @@ void RdmaEngine::free_tx_burst(BurstParams* burst) {
   if (burst == nullptr) { return; }
 
   auto burst_pool = mem_pools_.find(burst->transport_hdr.local_mr_name);
-  if (burst->transport_hdr.num_pkts > 0 && burst->pkts[0] != nullptr &&
+  const auto limits = burst_validation::transport_limits(burst);
+  const bool valid_packet_count =
+      burst_validation::validate_packet_count(
+          burst,
+          limits,
+          MAX_RDMA_BATCH,
+          "RdmaEngine::free_tx_burst") == Status::SUCCESS;
+  if (valid_packet_count && burst->pkts[0] != nullptr &&
       burst_pool != mem_pools_.end()) {
+    const auto num_pkts = static_cast<unsigned>(burst->transport_hdr.num_pkts);
     unsigned ret = burst_pool->second->enqueue_bulk(reinterpret_cast<void**>(burst->pkts[0]),
-                                                    burst->transport_hdr.num_pkts);
+                                                    num_pkts);
     if (ret != burst->transport_hdr.num_pkts) {
       DAQIRI_LOG_CRITICAL(
           "Asked to free {} packets, only enqueued {}", burst->transport_hdr.num_pkts, ret);

@@ -33,6 +33,8 @@ endif()
 option(DAQIRI_BUILD_PYTHON "Build Python bindings" OFF)
 option(DAQIRI_BUILD_EXAMPLES "Build standalone examples" ON)
 option(DAQIRI_ENABLE_OTEL_METRICS "Enable OpenTelemetry metrics instrumentation" OFF)
+option(DAQIRI_ENABLE_BURST_VALIDATION
+       "Enable defensive burst bounds and backing capacity validation" ON)
 set(DAQIRI_ENGINE "dpdk ibverbs" CACHE STRING "Optional engine implementations to build: dpdk, ibverbs (Linux sockets are always built in)")
 
 add_subdirectory(src)
