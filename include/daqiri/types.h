@@ -739,9 +739,23 @@ struct FlexItemMatch {
   uint32_t mask_ = 0;
 };
 
+// eCPRI-over-Ethernet (EtherType 0xAEFE) RX flow match. The eCPRI EtherType is
+// matched implicitly; the common-header message type and the message-body
+// identifier (pc_id for message types 0/1, rtc_id for type 2) are matched only
+// when their match_*_ flag is set. Matching the identifier requires a message
+// type (the hardware needs a known message type to locate the body field), so
+// match_id_ implies match_msg_type_.
+struct EcpriMatch {
+  bool match_msg_type_ = false;
+  uint8_t msg_type_ = 0;  // eCPRI common-header message type (RTE_ECPRI_MSG_TYPE_*)
+  bool match_id_ = false;
+  uint16_t id_ = 0;  // pc_id (msg type 0/1) or rtc_id (msg type 2), at eCPRI offset 4
+};
+
 enum class FlowMatchType {
   IPV4_UDP,
   FLEX_ITEM,
+  ECPRI,
 };
 
 struct FlowMatch {
@@ -752,6 +766,7 @@ struct FlowMatch {
   in_addr_t ipv4_src_ = INADDR_ANY;
   in_addr_t ipv4_dst_ = INADDR_ANY;
   FlexItemMatch flex_item_match_;
+  EcpriMatch ecpri_match_;
 };
 struct FlowConfig {
   std::string name_;

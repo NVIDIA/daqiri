@@ -2196,10 +2196,37 @@ void DpdkEngine::initialize() {
     }
   }
 
+  // The mlx5 native eCPRI flow item (RTE_FLOW_ITEM_TYPE_ECPRI) is honored only
+  // under software/firmware steering (dv_flow_en=1); HW steering (dv_flow_en=2)
+  // silently fails to match it on ConnectX-class NICs. Switch any interface with
+  // eCPRI RX flows to firmware steering. Trade-off: the async/template
+  // dynamic-RX-flow path requires HW steering, so it is unavailable on that port.
+  auto interface_has_ecpri = [&](const std::string& dev_addr) -> bool {
+    for (const auto& intf : cfg_.ifs_) {
+      if (intf.address_ != dev_addr) {
+        continue;
+      }
+      for (const auto& fl : intf.rx_.flows_) {
+        if (fl.match_.type_ == FlowMatchType::ECPRI) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
   if (loopback_ != LoopbackType::LOOPBACK_TYPE_SW) {
     for (const auto& name : ifs) {
       strncpy(_argv[arg++], "-a", max_arg_size - 1);
-      std::string devargs = name + std::string(",txq_inline_max=0,dv_flow_en=2");
+      const int dv_flow_en = interface_has_ecpri(name) ? 1 : 2;
+      if (dv_flow_en == 1) {
+        DAQIRI_LOG_WARN(
+            "Interface '{}' has eCPRI RX flows: switching mlx5 to firmware steering "
+            "(dv_flow_en=1). HW steering (dv_flow_en=2) does not honor the eCPRI flow item on "
+            "this NIC; async/template dynamic RX flows are unavailable on this port.",
+            name);
+      }
+      std::string devargs = name + ",txq_inline_max=0,dv_flow_en=" + std::to_string(dv_flow_en);
       if (needs_send_sched) {
         devargs += ",tx_pp=500";  // 500 ns scheduling granularity
       }
@@ -2682,11 +2709,12 @@ void DpdkEngine::initialize() {
 
       if (rx.hardware_timestamps_ && !calibrate_rx_timestamp_clock(intf.port_id_)) { return; }
 
-      // Standard (group 3) and flex-item (group 1) flows use separate DPDK flow
-      // groups with conflicting group-0 jump rules; validate_config() rejects mixed
-      // configs per interface.
+      // Standard (group 3), flex-item (group 1) and eCPRI (group 2) flows use
+      // separate DPDK flow groups with conflicting group-0 jump rules;
+      // validate_config() rejects mixing these classes per interface.
       bool has_standard_flows = false;
       bool has_flex_item_flows = false;
+      bool has_ecpri_flows = false;
       for (const auto& flow : rx.flows_) {
         DAQIRI_LOG_INFO("Adding RX flow {}", flow.name_);
         struct rte_flow* created = nullptr;
@@ -2694,6 +2722,11 @@ void DpdkEngine::initialize() {
           created = add_flex_item_flow(
               intf.port_id_, flow.match_.flex_item_match_, flow.action_.id_, flow.id_);
           if (created != nullptr) { has_flex_item_flows = true; }
+        } else if (flow.match_.type_ == FlowMatchType::ECPRI) {
+          created = add_ecpri_flow(intf.port_id_, flow);
+          if (created != nullptr) {
+            has_ecpri_flows = true;
+          }
         } else {
           created = add_flow(intf.port_id_, flow);
           if (created != nullptr) { has_standard_flows = true; }
@@ -2704,6 +2737,9 @@ void DpdkEngine::initialize() {
       if (intf.rx_.flow_isolation_) {
         if (has_standard_flows && !add_send_to_kernel_fallback(intf.port_id_, 3)) { return; }
         if (has_flex_item_flows && !add_send_to_kernel_fallback(intf.port_id_, 1)) { return; }
+        if (has_ecpri_flows && !add_send_to_kernel_fallback(intf.port_id_, 2)) {
+          return;
+        }
       }
 
       for (const auto& flow : tx.flows_) {
@@ -3148,8 +3184,31 @@ bool DpdkEngine::validate_dynamic_rx_flow(int port, const FlowRuleConfig& flow) 
     }
     return true;
   }
+  if (flow.match_.type_ == FlowMatchType::ECPRI) {
+    if (flow.match_.ecpri_match_.match_id_ && !flow.match_.ecpri_match_.match_msg_type_) {
+      DAQIRI_LOG_ERROR("Dynamic eCPRI RX flow matches pc_id/rtc_id but no msg_type");
+      return false;
+    }
+    // The eCPRI flow item is honored only under firmware steering (dv_flow_en=1).
+    // initialize() switches a port to firmware steering only when it has at least
+    // one static eCPRI flow; otherwise the port stays on HW steering (dv_flow_en=2)
+    // where add_ecpri_flow() returns success but the rule silently never matches.
+    // A static eCPRI flow on the interface is the only signal that the switch
+    // happened, so require one before accepting a dynamic eCPRI flow.
+    const auto& intf_flows = cfg_.ifs_[port].rx_.flows_;
+    if (std::none_of(intf_flows.begin(), intf_flows.end(),
+                     [](const FlowConfig& f) { return f.match_.type_ == FlowMatchType::ECPRI; })) {
+      DAQIRI_LOG_ERROR(
+          "Dynamic eCPRI RX flow on port {} requires at least one static eCPRI flow in the "
+          "initial config; without it the port keeps HW steering (dv_flow_en=2) and the eCPRI "
+          "flow item silently never matches.",
+          port);
+      return false;
+    }
+    return true;
+  }
 
-  DAQIRI_LOG_ERROR("Dynamic RX flow must define an IPv4/UDP or flex-item match");
+  DAQIRI_LOG_ERROR("Dynamic RX flow must define an IPv4/UDP, flex-item or eCPRI match");
   return false;
 }
 
@@ -3438,6 +3497,8 @@ Status DpdkEngine::create_dynamic_flow_legacy_locked(int port,
   if (cfg.match_.type_ == FlowMatchType::FLEX_ITEM) {
     rte_flow = add_flex_item_flow(
         port, cfg.match_.flex_item_match_, cfg.action_.id_, cfg.id_, false);
+  } else if (cfg.match_.type_ == FlowMatchType::ECPRI) {
+    rte_flow = add_ecpri_flow(port, cfg, false);
   } else {
     rte_flow = add_flow(port, cfg, false, &resource);
   }
@@ -4953,6 +5014,92 @@ struct rte_flow* DpdkEngine::add_tx_flow(int port, const FlowConfig& cfg) {
   return flow;
 }
 
+struct rte_flow* DpdkEngine::add_ecpri_flow(int port, const FlowConfig& cfg, bool track) {
+  struct rte_flow_attr attr;
+  struct rte_flow_item pattern[MAX_PATTERN_NUM];
+  struct rte_flow_action action[MAX_ACTION_NUM];
+  struct rte_flow* flow = NULL;
+  struct rte_flow_action_queue queue = {.index = cfg.action_.id_};
+  struct rte_flow_action_mark mark = {.id = cfg.id_};
+  struct rte_flow_error error;
+  struct rte_flow_item_eth eth_spec;
+  struct rte_flow_item_eth eth_mask;
+  struct rte_flow_item_ecpri ecpri_spec;
+  struct rte_flow_item_ecpri ecpri_mask;
+  int res;
+
+  if (!ensure_eth_jump_rule(port, 2)) {
+    return nullptr;
+  }
+
+  memset(pattern, 0, sizeof(pattern));
+  memset(action, 0, sizeof(action));
+  memset(&attr, 0, sizeof(struct rte_flow_attr));
+  memset(&eth_spec, 0, sizeof(struct rte_flow_item_eth));
+  memset(&eth_mask, 0, sizeof(struct rte_flow_item_eth));
+  memset(&ecpri_spec, 0, sizeof(struct rte_flow_item_ecpri));
+  memset(&ecpri_mask, 0, sizeof(struct rte_flow_item_ecpri));
+
+  action[0].type = RTE_FLOW_ACTION_TYPE_MARK;
+  action[0].conf = &mark;
+  action[1].type = RTE_FLOW_ACTION_TYPE_QUEUE;
+  action[1].conf = &queue;
+  action[2].type = RTE_FLOW_ACTION_TYPE_END;
+
+  // Pin the eCPRI EtherType so the rule only fires on eCPRI-over-Ethernet frames.
+  eth_spec.hdr.ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_ECPRI);
+  eth_mask.hdr.ether_type = 0xffff;
+  pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
+  pattern[0].spec = &eth_spec;
+  pattern[0].mask = &eth_mask;
+
+  // The mlx5 eCPRI parser matches the common-header dword (message type at the
+  // second byte, network-order mask 0x00ff0000) and the message-body dword
+  // (hdr.dummy[0], shared by type0.pc_id / type2.rtc_id; the identifier is the
+  // top 16 bits, mask 0xffff0000). Both are filled in network byte order. The
+  // PMD only matches the body when the common-header mask is non-zero, so
+  // pc_id/rtc_id matching requires a msg_type (enforced at config parse).
+  const EcpriMatch& em = cfg.match_.ecpri_match_;
+  if (em.match_msg_type_) {
+    ecpri_spec.hdr.common.u32 = rte_cpu_to_be_32(static_cast<uint32_t>(em.msg_type_) << 16);
+    ecpri_mask.hdr.common.u32 = rte_cpu_to_be_32(0x00ff0000u);
+  }
+  if (em.match_id_) {
+    ecpri_spec.hdr.type0.pc_id = rte_cpu_to_be_16(em.id_);
+    ecpri_mask.hdr.type0.pc_id = rte_cpu_to_be_16(0xffff);
+  }
+
+  uint8_t npat = 1;
+  if (em.match_msg_type_ || em.match_id_) {
+    pattern[npat].type = RTE_FLOW_ITEM_TYPE_ECPRI;
+    pattern[npat].spec = &ecpri_spec;
+    pattern[npat].mask = &ecpri_mask;
+    npat++;
+  }
+  pattern[npat].type = RTE_FLOW_ITEM_TYPE_END;
+
+  attr.ingress = 1;
+  attr.priority = 1;  // below the drop-all rule (priority 0)
+  attr.group = 2;
+
+  res = rte_flow_validate(port, &attr, pattern, action, &error);
+  if (res != 0) {
+    DAQIRI_LOG_CRITICAL("Failed to validate eCPRI RX flow '{}' on port {}: {} ({})", cfg.name_,
+                        port, error.message ? error.message : "unknown error",
+                        rte_strerror(rte_errno));
+    return nullptr;
+  }
+
+  flow = rte_flow_create(port, &attr, pattern, action, &error);
+  if (flow == nullptr) {
+    DAQIRI_LOG_CRITICAL("Failed to create eCPRI RX flow '{}' on port {}: {} ({})", cfg.name_, port,
+                        error.message ? error.message : "unknown error", rte_strerror(rte_errno));
+  } else if (track) {
+    track_flow(static_cast<uint16_t>(port), flow);
+  }
+  return flow;
+}
+
 bool DpdkEngine::add_send_to_kernel_fallback(int port, uint32_t group) {
   const uint64_t key = eth_jump_key(port, group);
   if (send_to_kernel_fallback_installed_.count(key) != 0) { return true; }
@@ -5309,6 +5456,7 @@ bool DpdkEngine::validate_config() const {
     std::unordered_map<FlowId, uint16_t> flow_to_queue;
     bool has_standard_flows = false;
     bool has_flex_item_flows = false;
+    bool has_ecpri_flows = false;
     for (const auto& flow : intf.rx_.flows_) {
       if (flow_to_queue.find(flow.id_) != flow_to_queue.end()) {
         DAQIRI_LOG_ERROR("Duplicate flow ID {} on interface '{}'", flow.id_, intf.name_);
@@ -5338,12 +5486,24 @@ bool DpdkEngine::validate_config() const {
                            intf.name_);
           return false;
         }
+      } else if (flow.match_.type_ == FlowMatchType::ECPRI) {
+        has_ecpri_flows = true;
+        if (flow.match_.ecpri_match_.match_id_ && !flow.match_.ecpri_match_.match_msg_type_) {
+          DAQIRI_LOG_ERROR("eCPRI flow '{}' matches pc_id/rtc_id but no msg_type on interface '{}'",
+                           flow.name_, intf.name_);
+          return false;
+        }
       } else {
         has_standard_flows = true;
       }
-      if (has_standard_flows && has_flex_item_flows) {
+      // Standard (group 3), flex-item (group 1) and eCPRI (group 2) flows install
+      // conflicting group-0 ETH jump rules, so only one class is allowed per
+      // interface.
+      if (static_cast<int>(has_standard_flows) + static_cast<int>(has_flex_item_flows) +
+              static_cast<int>(has_ecpri_flows) >
+          1) {
         DAQIRI_LOG_ERROR(
-            "Interface '{}' mixes standard (UDP/IP) and flex-item RX flows, which is not "
+            "Interface '{}' mixes standard (UDP/IP), flex-item and/or eCPRI RX flows, which is not "
             "supported. Use only one flow class per interface.",
             intf.name_);
         return false;

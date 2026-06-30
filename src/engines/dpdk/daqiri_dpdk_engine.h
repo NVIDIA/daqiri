@@ -218,6 +218,11 @@ class DpdkEngine : public Engine {
                                       FlowId mark_id = 0,
                                       bool track = true);
 
+  // eCPRI-over-Ethernet RX flow (EtherType 0xAEFE) via RTE_FLOW_ITEM_TYPE_ECPRI.
+  // Programmed in a dedicated flow group (2), like the standard (3) and
+  // flex-item (1) classes, with its own group-0 ETH jump rule.
+  struct rte_flow* add_ecpri_flow(int port, const FlowConfig& cfg, bool track = true);
+
   enum class DynamicFlowBackend {
     LEGACY,
     TEMPLATE,
