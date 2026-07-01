@@ -17,6 +17,8 @@
 
 #include "metrics.h"
 
+#include <daqiri/version.h>
+
 #include <array>
 #include <atomic>
 #include <mutex>
@@ -190,7 +192,7 @@ class Registry {
     if (initialized_) { return; }
 
     auto provider = otel::metrics::Provider::GetMeterProvider();
-    auto meter = provider->GetMeter("daqiri", "0.1.0");
+    auto meter = provider->GetMeter("daqiri", version_string());
     rx_packets_ = meter->CreateInt64ObservableCounter(
         "daqiri.rx.packets", "Packets received by DAQIRI", "{packet}");
     tx_packets_ = meter->CreateInt64ObservableCounter(

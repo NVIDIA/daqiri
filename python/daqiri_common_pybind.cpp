@@ -946,6 +946,15 @@ PYBIND11_MODULE(_daqiri, m) {
   m.attr("DAQIRI_BURST_FLAG_REORDERED") = DAQIRI_BURST_FLAG_REORDERED;
   m.attr("DAQIRI_BURST_FLAG_REORDER_TIMEOUT") =
       DAQIRI_BURST_FLAG_REORDER_TIMEOUT;
+  m.attr("__version__") = version_string();
+  m.attr("__version_info__") =
+      py::make_tuple(version_year(), version_month(), version_patch());
+  m.attr("__abi_version__") = abi_version();
+  m.attr("DAQIRI_VERSION") = DAQIRI_VERSION;
+  m.attr("DAQIRI_VERSION_YEAR") = DAQIRI_VERSION_YEAR;
+  m.attr("DAQIRI_VERSION_MONTH") = DAQIRI_VERSION_MONTH;
+  m.attr("DAQIRI_VERSION_PATCH") = DAQIRI_VERSION_PATCH;
+  m.attr("DAQIRI_ABI_VERSION") = DAQIRI_ABI_VERSION;
   m.attr("MEM_ACCESS_LOCAL") =
       py::int_(static_cast<uint32_t>(MEM_ACCESS_LOCAL));
   m.attr("MEM_ACCESS_RDMA_WRITE") =
@@ -993,6 +1002,11 @@ PYBIND11_MODULE(_daqiri, m) {
 
   m.def("get_engine_type", static_cast<EngineType (*)()>(&get_engine_type),
         "Get the current engine type");
+  m.def("version_string", &version_string, "Get the DAQIRI package version");
+  m.def("version_year", &version_year, "Get the DAQIRI CalVer year");
+  m.def("version_month", &version_month, "Get the DAQIRI CalVer month");
+  m.def("version_patch", &version_patch, "Get the DAQIRI CalVer patch number");
+  m.def("abi_version", &abi_version, "Get the DAQIRI shared library ABI version");
   m.def("engine_type_from_string", &engine_type_from_string, "str"_a,
         "Convert a string to an engine type");
   m.def("engine_type_to_string", &engine_type_to_string, "type"_a,

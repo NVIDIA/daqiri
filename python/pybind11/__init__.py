@@ -13,4 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from . import _daqiri as _daqiri_module
 from ._daqiri import *  # noqa: F401,F403
+
+__version__ = _daqiri_module.__version__
+__version_info__ = _daqiri_module.__version_info__
+__abi_version__ = _daqiri_module.__abi_version__
