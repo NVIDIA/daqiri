@@ -18,6 +18,7 @@ CMake options (full table in `docs/getting-started.md`):
 - `DAQIRI_ENGINE` — space-separated list of optional engines to compile. Valid values: `dpdk` (raw Ethernet) and `ibverbs` (RDMA/RoCE). Linux sockets (UDP/TCP) are always built in, so there is no `socket` value. Default is `"dpdk ibverbs"`.
 - `DAQIRI_BUILD_PYTHON` — builds `pybind11` bindings from `python/`.
 - `DAQIRI_BUILD_EXAMPLES` — builds the benchmark executables (default `ON`).
+- `DAQIRI_BUILD_APPLICATIONS` — builds the end-to-end example applications under `applications/` (default `OFF`; requires TensorRT, e.g. the `BASE_IMAGE=torch` container). Currently builds `applications/resnet50_inference/` (DAQIRI → TensorRT ResNet inference).
 - `DAQIRI_ENABLE_OTEL_METRICS` — enables OpenTelemetry metrics instrumentation (default `OFF`).
 - `DAQIRI_REORDER_GPU_PROFILE` — enable CUDA event timing in the DPDK reorder kernels (off by default).
 - `DAQIRI_ENABLE_S3` — enable AWS SDK-backed asynchronous raw packet writes to S3 (off by default).
@@ -56,6 +57,14 @@ YAML files contain `<angle-bracket>` placeholders (PCIe addresses, CPU cores, MA
 Configs named `raw_rx_*` are RX-only — they initialize the RX path and wait for external traffic, so a standalone run can exit cleanly with `0` packets. Use the `tx_rx` configs for closed-loop smoke tests. NIC flow programming (RX flows, dynamic RX flows, `tx_eth_src`) requires a hardware loopback or cross-host wire test — see `docs/benchmarks/raw_benchmarking.md` (Flow programming smoke test); `daqiri_bench_raw_sw_loopback.yaml` only smoke-tests the build/runtime path.
 
 When determining throughput for a benchmark use the `mlnx_perf` utility in the background to view transmit and receive rates. Using application run time with packet counts is usually not accurate enough due to startup inconsistencies.
+
+### Example applications (`applications/`, opt-in)
+
+Beyond the benchmarks, end-to-end **example applications** live under `applications/` and build only with `-DDAQIRI_BUILD_APPLICATIONS=ON` (off by default; they pull in heavier optional dependencies). They are downstream `daqiri::daqiri` consumers — they reuse the bench scaffolding (`examples/raw_bench_common.*`, `bench_pipeline.cu`) but are not part of the benchmark table above.
+
+| Executable | Source | Typical config |
+|---|---|---|
+| `daqiri_resnet50_inference` | `applications/resnet50_inference/` | `configs/resnet50_wire_loopback.yaml` (example: real CIFAR-10 images → per-class feature stats), `configs/resnet50_bench_spark.yaml` (synthetic throughput sweep). DAQIRI raw/GPUDirect RX → GPU sequence-number reorder → ResNet feature extraction via **TensorRT** (FP16) → per-class mean-feature stats. Requires TensorRT (build the container with `BASE_IMAGE=torch`). Accepts `--seconds N --dataset <pcap> --images-per-batch N --model resnet18|34|50|101|152`. Data prep + sweep tools in `applications/resnet50_inference/tools/`. See `docs/tutorials/daqiri-resnet-inference.md`. |
 
 ## Formatting
 
@@ -118,7 +127,7 @@ The web docs live in `docs/` and are built with [MkDocs Material](https://squidf
 - `docs/concepts.md` — terminology glossary (stream types and endpoint URI schemes, GPUDirect, packet/burst/segment, flow/queue, memory region, zero-copy ownership, RX reorder). Meant to be opened in parallel with the rest of the docs.
 - `docs/api-reference/index.md` — API guide (6-step application lifecycle, configuration-first model)
 - `docs/api-reference/configuration.md`, `docs/api-reference/cpp.md`, `docs/api-reference/python.md` — YAML schema, C++ API, and Python bindings docs
-- `docs/tutorials/` — tutorial walkthroughs (system config, config-file walkthrough, Holoscan integration)
+- `docs/tutorials/` — tutorial walkthroughs (system config, config-file walkthrough, Holoscan integration, ResNet inference)
 - `docs/benchmarks/` — benchmark guide pages, surfaced as a top-level "Benchmarking" nav section in `mkdocs.yml` and the landing page (`docs/index.md`):
   - `docs/benchmarks/benchmarks.md` — overview and engine-selection decision tree
   - `docs/benchmarks/socket_benchmarking.md` — "Socket and RDMA Benchmarking" (TCP/UDP and RoCE/RDMA)

@@ -2,6 +2,11 @@ build*/
 site/
 bench-results/
 
+# ResNet inference example: locally generated dataset + model artifacts
+# (built offline by applications/resnet50_inference/tools/, see the tutorial)
+/data/
+/models/
+
 # tune_system.py default output
 pcie_schematic.png
 

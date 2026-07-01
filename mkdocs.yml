@@ -71,6 +71,7 @@ nav:
     - Bare-Metal CMake Build: tutorials/bare-metal-cmake-build.md
     - Configuration YAML Walkthrough: tutorials/configuration-walkthrough.md
     - DAQIRI + Holoscan Integration: tutorials/daqiri-holoscan-integration.md
+    - DAQIRI + TensorRT Inference: tutorials/daqiri-resnet-inference.md
 
 markdown_extensions:
   - admonition
@@ -82,7 +83,11 @@ markdown_extensions:
   - toc:
       permalink: true
   - pymdownx.details
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.highlight:

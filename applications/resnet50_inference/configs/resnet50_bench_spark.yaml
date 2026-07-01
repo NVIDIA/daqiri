@@ -1,0 +1,103 @@
+%YAML 1.2
+---
+# DAQIRI -> TensorRT ResNet inference (benchmark mode), DGX Spark physical
+# p0->p1 cabled loopback. No dataset: the TX synthesizes frames so this measures
+# the full reorder + inference receive-path throughput. Swept across model sizes
+# by tools/run_resnet_bench.sh (which sets --model and --images-per-batch).
+# Replace <angle-bracket> placeholders and export ETH_DST_ADDR as in the example
+# config; the dq_wire_* netns must be DOWN.
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    master_core: 3
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    memory_regions:
+    - name: "Data_TX_GPU"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+    - name: "Data_RX_GPU"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+
+    interfaces:
+    - name: "tx_port"
+      address: <tx-pcie-addr>
+      tx:
+        queues:
+        - name: "tx_q_0"
+          id: 0
+          batch_size: 10240
+          cpu_core: 11
+          memory_regions:
+            - "Data_TX_GPU"
+          offloads:
+            - "tx_eth_src"
+    - name: "rx_port"
+      address: <rx-pcie-addr>
+      rx:
+        flow_isolation: true
+        queues:
+        - name: "rq_q_0"
+          id: 0
+          cpu_core: 9
+          batch_size: 10240
+          # Flush a partial (< batch_size) burst after this idle gap so a finite
+          # run's tail is delivered (the poller otherwise waits to fill batch_size).
+          timeout_us: 2000
+          memory_regions:
+            - "Data_RX_GPU"
+        flows:
+        - name: "flow_0"
+          id: 0
+          action:
+            type: queue
+            id: 0
+          match:
+            udp_src: 4096
+            udp_dst: 4096
+
+bench_rx:
+- interface_name: "rx_port"
+  cpu_core: 8
+
+bench_tx:
+- interface_name: "tx_port"
+  cpu_core: 10
+  batch_size: 10240
+  payload_size: 7172
+  header_size: 64
+  eth_dst_addr: <rx-port-mac>
+  ip_src_addr: <1.2.3.4>
+  ip_dst_addr: <5.6.7.8>
+  udp_src_port: 4096
+  udp_dst_port: 4096
+
+reorder:
+  out_payload_len: 7168
+  images_per_batch: 32
+
+inference:
+  onnx_path: "models/resnet50_features.onnx"
+  engine_path: "models/resnet50_features.fp16.engine"
+  enable_fp16: true
+  channels: 3
+  height: 224
+  width: 224
+  feature_dim: 2048
+  opt_min: 1
+  opt_avg: 32
+  opt_max: 256
+  input_name: "input"
+  output_name: "features"
+
+# No dataset block => synthetic benchmark mode.
+stats:
+  enabled: false
