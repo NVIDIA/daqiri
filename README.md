@@ -43,6 +43,9 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
   raw ibverbs flows can also use hardware-only VLAN push/pop and VXLAN, GRE, or
   NVGRE encap/decap actions; socket/RDMA streams reject those tunnel actions.
 - **RDMA** — RDMA verbs (READ, WRITE, SEND) over RoCE on Ethernet NICs or InfiniBand.
+- **Linux socket control** — TCP/UDP socket streams expose connection IDs and
+  `socket_setsockopt()` for native Linux `setsockopt` tuning without YAML option
+  name mappings.
 - **Optional OpenTelemetry metrics** — Expose per-interface or per-queue packet,
   byte, and drop counters when built with `DAQIRI_ENABLE_OTEL_METRICS=ON`.
 

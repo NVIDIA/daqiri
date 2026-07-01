@@ -382,9 +382,14 @@ Socket helpers return connection IDs and queue routing information. The
 returned port and queue can then be used with the normal burst APIs:
 
 ```python
+import socket
+
 status, conn_id = daqiri.socket_connect_to_server("192.0.2.10", 5000)
 if status == daqiri.Status.SUCCESS:
     status, port, queue = daqiri.socket_get_port_queue(conn_id)
+
+    # Socket options use OS constants directly; DAQIRI does not map option names.
+    daqiri.socket_setsockopt(conn_id, socket.SOL_SOCKET, socket.SO_RCVBUF, 8 * 1024 * 1024)
 
     status, rx_burst = daqiri.get_rx_burst(port, queue)
     if status == daqiri.Status.SUCCESS and rx_burst is not None:
@@ -405,6 +410,11 @@ if status == daqiri.Status.SUCCESS:
     else:
         daqiri.free_tx_metadata(tx_burst)
 ```
+
+`socket_setsockopt(conn_id, level, optname, value)` applies Linux `setsockopt`
+to an existing TCP/UDP socket connection. `value` may be `bool`, `int`, `str`,
+`bytes`, `bytearray`, or another bytes-like buffer. For structured options such
+as timeouts, pack the native struct yourself and pass it as bytes.
 
 RDMA follows the same tuple-returning style:
 
@@ -587,6 +597,7 @@ The workflow sections above show the common call order and ownership rules.
 | `socket_connect_to_server(server_addr, server_port[, src_addr])` | Return `(Status, conn_id)`. |
 | `socket_get_port_queue(conn_id)` | Return `(Status, port, queue)`. |
 | `socket_get_server_conn_id(server_addr, server_port)` | Return `(Status, conn_id)`. |
+| `socket_setsockopt(conn_id, level, optname, value)` | Apply a Linux socket option to an existing TCP/UDP socket connection. |
 | `rdma_connect_to_server(server_addr, server_port[, src_addr])` | Return `(Status, conn_id)`. |
 | `rdma_get_port_queue(conn_id)` | Return `(Status, port, queue)`. |
 | `rdma_get_server_conn_id(server_addr, server_port)` | Return `(Status, conn_id)`. |

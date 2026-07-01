@@ -789,6 +789,12 @@ Status socket_get_server_conn_id(const std::string& server_addr, uint16_t server
   return g_daqiri_engine->socket_get_server_conn_id(server_addr, server_port, conn_id);
 }
 
+Status socket_setsockopt(uintptr_t conn_id, int level, int optname, const void* optval,
+                         size_t optlen) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->socket_setsockopt(conn_id, level, optname, optval, optlen);
+}
+
 // RDMA Functions
 Status rdma_connect_to_server(const std::string& server_addr, uint16_t server_port,
                               uintptr_t* conn_id) {

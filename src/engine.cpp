@@ -757,6 +757,12 @@ Status Engine::socket_get_server_conn_id(const std::string& server_addr, uint16_
   return Status::NOT_SUPPORTED;
 }
 
+Status Engine::socket_setsockopt(uintptr_t conn_id, int level, int optname, const void* optval,
+                                  size_t optlen) {
+  DAQIRI_LOG_CRITICAL("Socket setsockopt not implemented");
+  return Status::NOT_SUPPORTED;
+}
+
 Status Engine::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
                                        uintptr_t* conn_id) {
   DAQIRI_LOG_CRITICAL("RDMA connect to server not implemented");

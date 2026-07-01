@@ -705,6 +705,7 @@ workflow sections above show the common call order and ownership rules.
 | `socket_connect_to_server(server_addr, server_port, src_addr, &conn_id)` | Connect a socket client using an explicit source address. |
 | `socket_get_port_queue(conn_id, &port, &queue)` | Resolve a socket connection to port/queue routing. |
 | `socket_get_server_conn_id(server_addr, server_port, &conn_id)` | Look up a server-side socket connection ID. |
+| `socket_setsockopt(conn_id, level, optname, optval, optlen)` | Apply a Linux `setsockopt` option to an existing TCP/UDP socket connection. |
 | `rdma_connect_to_server(server_addr, server_port, &conn_id)` | Connect an RDMA client to a server. |
 | `rdma_connect_to_server(server_addr, server_port, src_addr, &conn_id)` | Connect an RDMA client using an explicit source address. |
 | `rdma_get_port_queue(conn_id, &port, &queue)` | Resolve an RDMA connection to port/queue routing. |

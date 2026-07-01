@@ -18,6 +18,7 @@
 #pragma once
 #include <daqiri/logging.hpp>
 #include <daqiri/types.h>
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <stdint.h>
@@ -902,6 +903,8 @@ Status socket_get_port_queue(uintptr_t conn_id, uint16_t *port,
                              uint16_t *queue);
 Status socket_get_server_conn_id(const std::string &server_addr,
                                  uint16_t server_port, uintptr_t *conn_id);
+Status socket_setsockopt(uintptr_t conn_id, int level, int optname,
+                         const void *optval, size_t optlen);
 
 // RDMA functions
 Status rdma_connect_to_server(const std::string &server_addr,

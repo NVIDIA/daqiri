@@ -201,6 +201,11 @@ Both methods use the same public C++ include:
 | `DAQIRI_PREFER_SYSTEM_YAML_CPP` | `OFF` | Prefer a system-installed `yaml-cpp` over the vendored `third_party/yaml-cpp` submodule. Keep `OFF` if a conda/miniforge env is on `PATH`. |
 | `BUILD_SHARED_LIBS` | — | Build as shared library. |
 
+Linux UDP/TCP sockets are always available. Applications that need kernel socket
+tuning can call `socket_setsockopt()` after resolving a TCP/UDP connection ID,
+passing the numeric `level` and option constants from system headers; DAQIRI does
+not maintain symbolic socket-option mappings in YAML.
+
 For Raw Ethernet (`stream_type: "raw"`), `daqiri_init()` validates that each `rx.flows`
 entry's legacy `action.id` or final ordered `actions:` queue action matches an
 `rx.queues` ID on the same interface, then programs flow rules into the NIC.
