@@ -51,7 +51,7 @@ fi
 declare -A FEATURE_DIM=( [resnet18]=512 [resnet34]=512 [resnet50]=2048 \
                          [resnet101]=2048 [resnet152]=2048 )
 
-echo "model,feature_dim,images_per_batch,seconds,rep,img_s,inference_batches" > "${OUT}"
+echo "model,feature_dim,images_per_batch,seconds,rep,img_s,inference_batches,lat_p50_ms,lat_p99_ms,rx_drops" > "${OUT}"
 
 for model in ${MODELS}; do
   onnx="${MODEL_DIR}/${model}_features.onnx"
@@ -65,9 +65,16 @@ for model in ${MODELS}; do
     # First rep builds + caches the engine; later reps load from cache.
     "${BIN}" "${CONFIG}" --model "${model}" --images-per-batch "${IMAGES_PER_BATCH}" \
       --seconds "${SECONDS_PER}" 2>&1 | tee "${log}" || true
-    img_s=$(grep -oE '=> [0-9.]+ img/s' "${log}" | grep -oE '[0-9.]+' | head -1)
-    batches=$(grep -oE '[0-9]+ inference batches' "${log}" | grep -oE '[0-9]+' | head -1)
-    echo "${model},${FEATURE_DIM[$model]:-2048},${IMAGES_PER_BATCH},${SECONDS_PER},${rep},${img_s:-NA},${batches:-NA}" >> "${OUT}"
+    # `|| true` on each: grep exits non-zero when a field is absent (e.g. a
+    # drop-free run has no "total:" line), which under `set -euo pipefail` would
+    # otherwise abort the whole sweep at the assignment.
+    img_s=$(grep -oE '=> [0-9.]+ img/s' "${log}" | grep -oE '[0-9.]+' | head -1 || true)
+    batches=$(grep -oE '[0-9]+ inference batches' "${log}" | grep -oE '[0-9]+' | head -1 || true)
+    lat_p50=$(grep -oE 'p50=[0-9.]+' "${log}" | head -1 | cut -d= -f2 || true)
+    lat_p99=$(grep -oE 'p99=[0-9.]+' "${log}" | head -1 | cut -d= -f2 || true)
+    # Cumulative RX drop total from the periodic drop logger; absent => 0.
+    drops=$(grep -oE 'total: [0-9]+' "${log}" | grep -oE '[0-9]+' | tail -1 || true)
+    echo "${model},${FEATURE_DIM[$model]:-2048},${IMAGES_PER_BATCH},${SECONDS_PER},${rep},${img_s:-NA},${batches:-NA},${lat_p50:-NA},${lat_p99:-NA},${drops:-0}" >> "${OUT}"
     rm -f "${log}"
   done
 done

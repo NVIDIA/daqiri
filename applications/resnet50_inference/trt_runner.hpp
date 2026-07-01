@@ -33,6 +33,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include <cuda_runtime.h>
 
@@ -96,6 +97,12 @@ class TrtRunner {
     return total_batches_inferred_;
   }
 
+  // Per-batch inference latency in milliseconds (batch-ready -> features on
+  // host), one entry per completed batch. Measured with CUDA timing events.
+  const std::vector<float>& batch_latencies_ms() const {
+    return batch_latency_ms_;
+  }
+
  private:
   TrtRunnerConfig cfg_;
   cudaStream_t inf_stream_;
@@ -109,11 +116,15 @@ class TrtRunner {
   float* trt_out_dev_[kBuffers] = {nullptr, nullptr};
   float* host_buf_[kBuffers] = {nullptr, nullptr};
   cudaEvent_t d2h_event_[kBuffers] = {nullptr, nullptr};
+  // Timing-enabled start marker per buffer: recorded when the batch begins on
+  // the inference stream; elapsed-to-d2h_event gives the batch latency.
+  cudaEvent_t start_evt_[kBuffers] = {nullptr, nullptr};
   bool has_pending_[kBuffers] = {false, false};
   uint32_t pending_n_[kBuffers] = {0, 0};
   int parity_ = 0;
 
   uint64_t total_batches_inferred_ = 0;
+  std::vector<float> batch_latency_ms_;
 
   void build_or_load_engine_();
   void allocate_buffers_();

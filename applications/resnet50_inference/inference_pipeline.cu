@@ -19,9 +19,12 @@
 
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <chrono>
 #include <iostream>
+#include <numeric>
 #include <thread>
+#include <vector>
 
 #include "bench_pipeline.h"
 #include "raw_bench_common.h"
@@ -188,6 +191,23 @@ void inference_rx_worker(const AppConfig& cfg, FeatureSink& sink, uint64_t expec
   const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
   std::cerr << "inference_rx_worker: " << trt.total_batches_inferred() << " inference batches in "
             << secs << " s\n";
+
+  // Per-batch inference latency (batch-ready -> features on host). Report
+  // mean/p50/p99 over all batches in a greppable line for the bench sweep.
+  std::vector<float> lat = trt.batch_latencies_ms();
+  if (!lat.empty()) {
+    std::sort(lat.begin(), lat.end());
+    const double mean =
+        std::accumulate(lat.begin(), lat.end(), 0.0) / static_cast<double>(lat.size());
+    const auto pct = [&lat](double p) {
+      const size_t idx =
+          std::min(lat.size() - 1, static_cast<size_t>(p * (static_cast<double>(lat.size()) - 1)));
+      return lat[idx];
+    };
+    std::cerr << "inference latency (ms): mean=" << mean << " p50=" << pct(0.50)
+              << " p99=" << pct(0.99) << " (per batch of " << batch << " images, n=" << lat.size()
+              << ")\n";
+  }
 
   cudaFree(d_nchw_batch);
   cudaEventDestroy(input_ready);

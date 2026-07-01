@@ -15,10 +15,6 @@ daqiri:
     log_level: "info"
     loopback: ""
 
-    # kind: host_pinned, NOT device. GB10 (DGX Spark) has unified memory; the
-    # device dma-buf / nvidia-peermem DMA-map path is unsupported and fails with
-    # "Could not DMA map EXT memory". Host-pinned buffers are GPU-coherent on
-    # GB10, so the reorder kernel still reads them directly with zero copy.
     memory_regions:
     - name: "Data_TX_GPU"
       kind: "host_pinned"
@@ -53,8 +49,8 @@ daqiri:
           id: 0
           cpu_core: 9
           batch_size: 10240
-          # Flush partial (< batch_size) bursts after this many us so a finite
-          # run's tail is delivered (see resnet50_wire_loopback.yaml).
+          # Flush a partial (< batch_size) burst after this idle gap so a finite
+          # run's tail is delivered (the poller otherwise waits to fill batch_size).
           timeout_us: 2000
           memory_regions:
             - "Data_RX_GPU"

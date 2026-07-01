@@ -81,6 +81,7 @@ TrtRunner::~TrtRunner() {
     if (host_buf_[i]) cudaFreeHost(host_buf_[i]);
     if (trt_out_dev_[i]) cudaFree(trt_out_dev_[i]);
     if (d2h_event_[i]) cudaEventDestroy(d2h_event_[i]);
+    if (start_evt_[i]) cudaEventDestroy(start_evt_[i]);
   }
   delete context_;
   delete engine_;
@@ -217,7 +218,10 @@ void TrtRunner::allocate_buffers_() {
   for (int i = 0; i < kBuffers; ++i) {
     cudaMalloc(&trt_out_dev_[i], max_out_bytes);
     cudaMallocHost(&host_buf_[i], max_out_bytes);
-    cudaEventCreateWithFlags(&d2h_event_[i], cudaEventDisableTiming);
+    // Timing-enabled (default flags) so cudaEventElapsedTime(start_evt, d2h)
+    // yields the per-batch latency; both events in a pair must be timing-enabled.
+    cudaEventCreate(&d2h_event_[i]);
+    cudaEventCreate(&start_evt_[i]);
   }
   std::cerr << "TrtRunner buffers: 2x" << max_out_bytes << " bytes pinned host + GPU output\n";
 }
@@ -242,6 +246,10 @@ void TrtRunner::infer(float* dev_input, uint32_t batch, cudaEvent_t input_ready,
 
   // Gate this inference on the upstream reorder/copy completion.
   cudaStreamWaitEvent(inf_stream_, input_ready, 0);
+
+  // Latency clock starts once the batch is ready on the stream (post-wait),
+  // ending at this batch's d2h_event; read one batch late (see below).
+  cudaEventRecord(start_evt_[parity_], inf_stream_);
 
   const nvinfer1::Dims4 dims{static_cast<int>(batch), cfg_.channels, cfg_.height, cfg_.width};
   if (!context_->setInputShape(cfg_.input_name.c_str(), dims)) {
@@ -268,6 +276,10 @@ void TrtRunner::infer(float* dev_input, uint32_t batch, cudaEvent_t input_ready,
   const int prev = 1 - parity_;
   if (has_pending_[prev]) {
     cudaEventSynchronize(d2h_event_[prev]);
+    float ms = 0.0f;
+    if (cudaEventElapsedTime(&ms, start_evt_[prev], d2h_event_[prev]) == cudaSuccess) {
+      batch_latency_ms_.push_back(ms);
+    }
     host_out_prev = host_buf_[prev];
     host_out_prev_n = pending_n_[prev];
     has_pending_[prev] = false;
@@ -286,6 +298,10 @@ void TrtRunner::drain_final(float*& host_out, uint32_t& host_out_n) {
   for (int i = 0; i < kBuffers; ++i) {
     if (has_pending_[i]) {
       cudaEventSynchronize(d2h_event_[i]);
+      float ms = 0.0f;
+      if (cudaEventElapsedTime(&ms, start_evt_[i], d2h_event_[i]) == cudaSuccess) {
+        batch_latency_ms_.push_back(ms);
+      }
       host_out = host_buf_[i];
       host_out_n = pending_n_[i];
       has_pending_[i] = false;

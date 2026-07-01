@@ -67,6 +67,25 @@ The receive path is one loop on a single CUDA stream. The walkthrough below foll
 that loop in order (`applications/resnet50_inference/inference_pipeline.cu`,
 `trt_runner.cu`).
 
+Under the hood the app is multi-threaded: a DAQIRI RX poller thread pulls packets off
+the NIC into the burst ring, and a separate **RX worker thread** dequeues those bursts
+and runs the reorder kernel *and* TensorRT inference — both on the one CUDA stream.
+A TX worker feeds the loopback. The cores are set in the config (values below are the
+DGX Spark example):
+
+| Thread | Core | Role |
+| ------ | ---: | ---- |
+| DPDK EAL master + stats | 3 | `cfg.master_core` |
+| DPDK RX queue poller | 9 | `rx.queues[].cpu_core` — NIC → burst ring |
+| App RX worker | 8 | `bench_rx.cpu_core` — `get_rx_burst` → reorder → inference |
+| DPDK TX queue poller | 11 | `tx.queues[].cpu_core` — ring → NIC |
+| App TX worker | 10 | `bench_tx.cpu_core` — replay/synthesize frames → enqueue |
+
+The key point the "single stream" framing hides: reorder and inference share **one
+thread and one stream** (the RX worker), while a *different* core (the DPDK poller)
+fills the burst ring — a producer/consumer split. If the receive path can't keep up,
+this core map is what you tune.
+
 ### 1 — One stream, three events
 
 Everything runs on one non-blocking CUDA stream, so the GPU stages stay ordered
@@ -118,6 +137,24 @@ still reassembles correctly. The per-image sequence number occupies the first 4
 payload bytes; the reorder kernel copies pixels starting *after* it, so the sequence
 number never overwrites image data.
 
+This is DAQIRI's own sequence-number GPU reorder kernel
+(`packet_reorder_copy_payload_by_sequence`, `src/kernels.cu`) — the same primitive the
+`raw_reorder_*` benchmarks use — reused here through `ReorderPipeline`. It is
+**application-driven**: DAQIRI does not reorder inside `get_rx_burst()`; the pipeline
+invokes the kernel per burst. The config
+([`resnet50_wire_loopback.yaml`](https://github.com/NVIDIA/daqiri/blob/main/applications/resnet50_inference/configs/resnet50_wire_loopback.yaml))
+supplies only the packet geometry — `packets_per_image` is *derived* as
+`image_bytes / out_payload_len`:
+
+```yaml
+reorder:
+  out_payload_len: 7168   # pixel-bytes per packet, after the 4-byte sequence prefix
+  images_per_batch: 32    # images assembled per inference batch
+```
+
+84 packets × 7168 B = 602,112 B = 3 × 224 × 224 × 4 (FP32 NCHW), so images reassemble
+with no padding.
+
 When an image completes, it is copied into its slot in the contiguous NCHW batch
 buffer; once `images_per_batch` images are ready, one inference fires:
 
@@ -142,12 +179,24 @@ for (int i = 0; i < num_pkts; ++i) {
     }
   }
 }
+
+// End of burst: flush the CURRENT image's this-burst packets into the persistent
+// reorder buffer before the burst is freed — its device pointers die at free.
+pipe.finish_batch();
+pipe.reset_batch();
 ```
+
+This trailing `finish_batch()` runs on **every** burst, not just when an image
+completes. `add_device_packet()` only records each packet's GPU pointer; the reorder
+kernel that copies pixels out of those buffers runs at `finish_batch()`. So when an
+image straddles a burst boundary, its partial set of packets must be scattered into
+the persistent buffer *before* the burst is freed and those pointers go dead — which
+is exactly what lets a split image reassemble across bursts.
 
 ### 4 — Hand off to TensorRT
 
 The runner gates inference on `input_ready`, binds the NCHW batch and output buffers,
-enqueues on its own stream, then records `d2h_event` (output copied to host) and
+enqueues on the same stream, then records `d2h_event` (output copied to host) and
 `release_evt` (input buffer reusable):
 
 ```cpp
@@ -189,6 +238,22 @@ daqiri::free_all_packets_and_burst_rx(burst);   // return buffers to the pool
 Missing the free drains the RX buffer pool, producing `NO_FREE_BURST_BUFFERS` /
 `NO_FREE_PACKET_BUFFERS` errors and NIC-level drops. Free every burst, even on error
 paths.
+
+### 6 — Drain the last batch at shutdown
+
+Because features are delivered **one batch late** (§1), the most recent batch is still
+in flight when the loop exits. At shutdown the pipeline first flushes any trailing
+partial batch (the dataset size need not be a multiple of `images_per_batch`), then
+calls `trt.drain_final()` to synchronize and recover the final batch's features. Skip
+this and the last batch is silently lost:
+
+```cpp
+cudaStreamSynchronize(stream);
+float* host_final = nullptr;
+uint32_t n_final = 0;
+trt.drain_final(host_final, n_final);        // recover the one-batch-late tail
+if (host_final != nullptr) sink.consume(host_final, n_final);
+```
 
 ## Build & run
 
@@ -280,21 +345,24 @@ Measured on a DGX Spark over the ConnectX-7 p0→p1 cable, FP16 engine, batch 32
 1000-way ImageNet FC head is stripped). Payload rate is the application data rate
 (`img/s × 3×224×224×4 B × 8`); the wire rate is a few percent higher (headers).
 
-| Model | Params (M) | Feature dim | Throughput (img/s) | Payload rate (Gb/s) | Latency | RX drops |
-| --------- | ---------: | ----------: | -----------------: | ------------------: | :-----: | :------: |
-| ResNet-18 | 11.2 | 512 | 2052 | 9.9 | TBD | TBD |
-| ResNet-34 | 21.3 | 512 | 1946 | 9.4 | TBD | TBD |
-| ResNet-50 | 23.5 | 2048 | 1764 | 8.5 | TBD | TBD |
-| ResNet-101 | 42.5 | 2048 | 1400 | 6.7 | TBD | TBD |
-| ResNet-152 | 58.1 | 2048 | 1130 | 5.4 | TBD | TBD |
+Latency is per **inference batch** (32 images), measured batch-ready → features on
+the host with CUDA events.
 
-Throughput falls monotonically with model depth (2052 → 1130 img/s, ~1.8× from
-ResNet-18 to ResNet-152). Even ResNet-18's payload rate (~9.9 Gb/s) is well under
+| Model | Params (M) | Feature dim | Throughput (img/s) | Payload rate (Gb/s) | Latency p50 / p99 (ms) | RX drops |
+| --------- | ---------: | ----------: | -----------------: | ------------------: | :--------------------: | :------: |
+| ResNet-18 | 11.2 | 512 | 2109 | 10.2 | 3.0 / 5.1 | 0 |
+| ResNet-34 | 21.3 | 512 | 1944 | 9.4 | 5.3 / 7.8 | 0 |
+| ResNet-50 | 23.5 | 2048 | 1692 | 8.1 | 8.9 / 11.6 | 0 |
+| ResNet-101 | 42.5 | 2048 | 1390 | 6.7 | 15.1 / 19.9 | 0 |
+| ResNet-152 | 58.1 | 2048 | 1143 | 5.5 | 21.8 / 26.9 | ~19% |
+
+Throughput falls monotonically with model depth (2109 → 1143 img/s, ~1.85× from
+ResNet-18 to ResNet-152) and per-batch latency rises in step (p50 3.0 → 21.8 ms) —
+both tracking model FLOPs. The **RX-drop column marks the receive-bound →
+compute-bound transition**: everything up through ResNet-101 keeps up **drop-free**
+(the receive path sustains ~1390 img/s), and only ResNet-152's inference is slow
+enough to back-pressure the RX ring — it drops ~19% of arriving packets
+(~698 K of ~3.6 M). Even the top payload rate (~10 Gb/s at ResNet-18) is well under
 the ~95 Gb/s this link sustains on the raw DPDK bench, so the pipeline is
-**GPU-compute bound, not receive bound**, across every model — the single-stream
-reorder + FP16 inference on the integrated GB10 is the limiter, and the RX drops
-under load are simply frames the GPU couldn't consume in time (heaviest on
-ResNet-152). Per-model latency and drop counts are TBD (pending instrumentation).
-
-Published numbers for the DGX Spark are also collected in
-[Performance: DGX Spark](../benchmarks/performance-dgx-spark.md).
+**GPU-compute bound**, not wire-bound: the single-stream reorder + FP16 inference on
+the integrated GB10 is the limiter throughout.
