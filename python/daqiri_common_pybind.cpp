@@ -462,7 +462,7 @@ Status socket_setsockopt_from_python(uintptr_t conn_id,
     const std::string opt_value = value.cast<std::string>();
     py::gil_scoped_release release;
     return socket_setsockopt(
-        conn_id, level, optname, opt_value.c_str(), opt_value.size() + 1);
+        conn_id, level, optname, opt_value.data(), opt_value.size());
   }
 
   if (py::isinstance<py::bytes>(value)) {

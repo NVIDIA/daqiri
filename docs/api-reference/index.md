@@ -33,7 +33,9 @@ configuration is the source of truth for queue IDs, memory placement,
 stream-type / engine / endpoint selection, flow routing, and static TX
 tunnel/VLAN transforms. Dynamic RX flow APIs can add and delete runtime
 queue-steering rules and, on raw DPDK or raw ibverbs, runtime RX decap/pop
-rules using the same ordered action model.
+rules using the same ordered action model. TCP/UDP socket options are also
+runtime state: after resolving a connection ID, applications can call
+`socket_setsockopt()` with native Linux `level` and option constants.
 
 The configuration schema lives in the
 [Configuration YAML Reference](configuration.md). For an annotated

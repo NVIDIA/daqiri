@@ -140,6 +140,11 @@ Endpoint addresses are URI strings. Supported schemes are `tcp://`, `udp://`, an
   fields accepted for older configs when a top-level engine override provides the
   transport.
 
+Linux TCP/UDP socket options are intentionally not configured in YAML. Apply them
+after connection setup with `socket_setsockopt(conn_id, level, optname, optval,
+optlen)`, using the numeric constants from the target system headers. The API is
+not supported for `roce://` endpoints.
+
 When using RoCE, set `stream_type: "socket"` and use `roce://` endpoint addresses
 plus a `roce_config` block for transport settings. A RoCE URI may include
 `?engine=ibverbs`; when omitted, `ibverbs` is the default and only supported RoCE
