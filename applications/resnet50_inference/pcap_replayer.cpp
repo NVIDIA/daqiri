@@ -213,6 +213,11 @@ void pcap_tx_worker(const AppConfig& cfg, const std::vector<PcapFrame>& frames,
     }
     if (daqiri::send_tx_burst(msg) == daqiri::Status::SUCCESS) {
       total_sent += static_cast<uint64_t>(num_pkts);
+    } else {
+      // Caller owns the burst after get_tx_packet_burst; free it on a failed send
+      // so a persistent error doesn't drain the TX mempool one slot at a time.
+      daqiri::free_all_packets_and_burst_tx(msg);
+      continue;
     }
     // --replay-once: the whole dataset has now been sent exactly once (the burst
     // above was sized to the remainder), so stop.

@@ -342,14 +342,15 @@ BUILD_DIR=./build ./applications/resnet50_inference/tools/run_resnet_bench.sh
 
 Measured on a DGX Spark over the ConnectX-7 p0→p1 cable, FP16 engine, batch 32,
 30 s × 3 reps (median reported). Params are the feature-extractor counts (the
-1000-way ImageNet FC head is stripped). Payload rate is the application data rate
-(`img/s × 3×224×224×4 B × 8`); the wire rate is a few percent higher (headers).
+1000-way ImageNet FC head is stripped). Throughput is reported both as images/s and
+as the application data rate in Gb/s (`img/s × 3×224×224×4 B × 8`); the wire rate is
+a few percent higher (headers).
 
 Latency is per **inference batch** (32 images), measured batch-ready → features on
 the host with CUDA events.
 
-| Model | Params (M) | Feature dim | Throughput (img/s) | Payload rate (Gb/s) | Latency p50 / p99 (ms) | RX drops |
-| --------- | ---------: | ----------: | -----------------: | ------------------: | :--------------------: | :------: |
+| Model | Params (M) | Feature dim | Throughput (<span style="text-transform: none">img/s</span>) | Throughput (<span style="text-transform: none">Gb/s</span>) | Latency p50 / p99 (<span style="text-transform: none">ms</span>) | RX drops |
+| --------- | ---------: | ----------: | -----------------: | ----------------: | :--------------------: | :------: |
 | ResNet-18 | 11.2 | 512 | 2109 | 10.2 | 3.0 / 5.1 | 0 |
 | ResNet-34 | 21.3 | 512 | 1944 | 9.4 | 5.3 / 7.8 | 0 |
 | ResNet-50 | 23.5 | 2048 | 1692 | 8.1 | 8.9 / 11.6 | 0 |
@@ -362,7 +363,7 @@ both tracking model FLOPs. The **RX-drop column marks the receive-bound →
 compute-bound transition**: everything up through ResNet-101 keeps up **drop-free**
 (the receive path sustains ~1390 img/s), and only ResNet-152's inference is slow
 enough to back-pressure the RX ring — it drops ~19% of arriving packets
-(~698 K of ~3.6 M). Even the top payload rate (~10 Gb/s at ResNet-18) is well under
+(~698 K of ~3.6 M). Even the top throughput (~10 Gb/s at ResNet-18) is well under
 the ~95 Gb/s this link sustains on the raw DPDK bench, so the pipeline is
 **GPU-compute bound**, not wire-bound: the single-stream reorder + FP16 inference on
 the integrated GB10 is the limiter throughout.

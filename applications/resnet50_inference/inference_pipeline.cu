@@ -82,7 +82,12 @@ void inference_rx_worker(const AppConfig& cfg, FeatureSink& sink, uint64_t expec
   const int port_id = daqiri::get_port_id(cfg.rx.interface_name);
   if (port_id < 0) {
     std::cerr << "inference_rx_worker: invalid RX interface " << cfg.rx.interface_name << "\n";
+    cudaFree(d_nchw_batch);
+    cudaEventDestroy(input_ready);
+    cudaEventDestroy(release_evt);
+    cudaStreamDestroy(stream);
     stop.store(true);
+    return;
   }
   const int queue_id = cfg.rx.queue_id >= 0 ? cfg.rx.queue_id : 0;
 
