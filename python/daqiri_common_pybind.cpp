@@ -442,6 +442,47 @@ struct PyS3Writer {
   }
 };
 
+Status socket_setsockopt_from_python(uintptr_t conn_id,
+                                     int level,
+                                     int optname,
+                                     py::object value) {
+  if (PyBool_Check(value.ptr())) {
+    const int opt_value = value.cast<bool>() ? 1 : 0;
+    py::gil_scoped_release release;
+    return socket_setsockopt(conn_id, level, optname, &opt_value, sizeof(opt_value));
+  }
+
+  if (py::isinstance<py::int_>(value)) {
+    const int opt_value = value.cast<int>();
+    py::gil_scoped_release release;
+    return socket_setsockopt(conn_id, level, optname, &opt_value, sizeof(opt_value));
+  }
+
+  if (py::isinstance<py::str>(value)) {
+    const std::string opt_value = value.cast<std::string>();
+    py::gil_scoped_release release;
+    return socket_setsockopt(
+        conn_id, level, optname, opt_value.c_str(), opt_value.size() + 1);
+  }
+
+  if (py::isinstance<py::bytes>(value)) {
+    const std::string opt_value = value.cast<std::string>();
+    py::gil_scoped_release release;
+    return socket_setsockopt(
+        conn_id, level, optname, opt_value.data(), opt_value.size());
+  }
+
+  if (PyObject_CheckBuffer(value.ptr())) {
+    py::buffer buffer = value.cast<py::buffer>();
+    py::buffer_info info = buffer.request();
+    const size_t nbytes = buffer_nbytes(info);
+    py::gil_scoped_release release;
+    return socket_setsockopt(conn_id, level, optname, info.ptr, nbytes);
+  }
+
+  throw py::type_error("setsockopt value must be bool, int, str, bytes, or a buffer");
+}
+
 void bind_enums(py::module_ &m) {
   py::enum_<Status>(m, "Status")
       .value("SUCCESS", Status::SUCCESS)
@@ -1287,6 +1328,8 @@ PYBIND11_MODULE(_daqiri, m) {
         return py::make_tuple(status, conn_id);
       },
       "server_addr"_a, "server_port"_a);
+  m.def("socket_setsockopt", &socket_setsockopt_from_python, "conn_id"_a,
+        "level"_a, "optname"_a, "value"_a);
 
   m.def(
       "rdma_connect_to_server",

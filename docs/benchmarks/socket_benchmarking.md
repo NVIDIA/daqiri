@@ -158,6 +158,11 @@ The shipped configs run both endpoints on `127.0.0.1` and are useful for a smoke
 
 For an on-wire namespace test, use separate server and client YAML files. The important fields are the endpoint URI scheme, namespace IPs, server port, `max_payload_size`, memory-region `buf_size`, and benchmark `message_size`.
 
+Applications can tune the underlying TCP/UDP socket after resolving a connection ID
+with `socket_connect_to_server()` or `socket_get_server_conn_id()`. Use
+`socket_setsockopt(conn_id, level, optname, optval, optlen)` with the integer
+constants from your system headers.
+
 Server-side UDP template:
 
 ```yaml

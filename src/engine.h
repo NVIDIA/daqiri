@@ -115,6 +115,8 @@ class Engine {
   virtual Status socket_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue);
   virtual Status socket_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
                                            uintptr_t* conn_id);
+  virtual Status socket_setsockopt(uintptr_t conn_id, int level, int optname, const void* optval,
+                                   size_t optlen);
 
   virtual Status rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
                                         uintptr_t* conn_id);
