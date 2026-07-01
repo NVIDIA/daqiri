@@ -357,7 +357,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     !!! warning "Advanced"
 
-        The section below is for advanced users looking to extract more performance out of their system. You can choose to skip this section and return to it later if performance if your application is not satisfactory.
+        The section below is for advanced users looking to extract more performance out of their system. You can choose to skip this section and return to it later if performance of your application is not satisfactory.
 
     While the configurations above are the minimum requirements to get a NIC and a NVIDIA GPU to communicate while bypassing the OS kernel stack, performance can be further improved in most scenarios by tuning the system as described below.
 
@@ -527,7 +527,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
         ??? abstract "See an example output"
 
-            The PCIe configuration on the IGX Orin developer kit is not able to leverage the max payload size of the NIC:
+            The PCIe configuration on the IGX Orin developer kit is not able to use the max payload size of the NIC:
 
             ```log
             2025-03-10 16:15:54 - WARNING - cx7_0/0005:03:00.0: PCIe Max Payload Size is not set to 256 bytes. Found: 128 bytes.
@@ -560,7 +560,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
         ??? abstract "See an example output"
 
-            The PCIe configuration on the IGX Orin developer kit is not able to leverage the max payload size of the NIC:
+            The PCIe configuration on the IGX Orin developer kit is not able to use the max payload size of the NIC:
 
             ```log
             Max MaxPayload 512
@@ -1297,9 +1297,6 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
         maxmtu 9978
         ```
 
-    ---
-    **Next:** [Benchmarking](../benchmarks/benchmarks.md) — choose and run your first DAQIRI benchmark
-
 === "DGX Spark"
 
     ## DGX Spark profile
@@ -1500,7 +1497,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     ### Step 3: Maximize the NIC's MRRS via a systemd unit
 
-    `tune_system.py --set mrrs` writes `0x68.w`. On Spark, write to `CAP_EXP+8.w` (capability-relative) so the change is robust to capability-layout differences and easy to do in a unit file. **Secure Boot must be disabled** for `setpci` writes to succeed (otherwise the kernel's lockdown policy returns EPERM).
+    `tune_system.py --set mrrs` writes `0x68.w`. On Spark, write to `CAP_EXP+8.w` (capability-relative) so the change tolerates capability-layout differences and is easy to do in a unit file. **Secure Boot must be disabled** for `setpci` writes to succeed (otherwise the kernel's lockdown policy returns EPERM).
 
     ```bash
     cat << 'EOF' | sudo tee /etc/systemd/system/nic-mrrs.service
@@ -1609,8 +1606,5 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     ip link show enp1s0f0np0   | grep -oE "mtu [0-9]+"
     ip link show enP2p1s0f1np1 | grep -oE "mtu [0-9]+"
     ```
-
-    ---
-    **Next:** [Benchmarking](../benchmarks/benchmarks.md) — choose and run your first DAQIRI benchmark
 
 </div>

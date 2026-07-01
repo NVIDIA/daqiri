@@ -12,6 +12,14 @@ want to interoperate with existing configuration code.
 
 See `examples/daqiri_bench_*.yaml` for complete working examples.
 
+!!! tip "Where to start"
+    This is a long reference. If you are new, start from a working `examples/daqiri_bench_*.yaml` and the [Configuration YAML Walkthrough](../tutorials/configuration-walkthrough.md), then use the sections below to look up individual fields:
+
+    - **Common Configuration** — `version`, `master_core`, `stream_type`, `engine`, `log_level` (apply to every config).
+    - **Memory regions** — host, hugepage, and GPU buffer pools.
+    - **RX / TX queues and flows** — queue setup, flow steering, and per-transport options.
+    - **Socket / RoCE** — `socket_config` endpoints (`udp://`, `tcp://`, `roce://`).
+
 OpenTelemetry metrics do not add YAML fields. Metrics-enabled builds use the
 same interface, queue, and flow names from the active configuration as metric
 labels, and applications are still responsible for configuring the OpenTelemetry

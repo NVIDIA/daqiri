@@ -86,6 +86,37 @@
 .md-header__title .md-header__topic {
   font-weight: 700;
 }
+/* Material only grows the header title (pushing palette/search/repo to the   */
+/* right edge) at its wider breakpoints. On the compact header the controls   */
+/* drifted toward the middle, especially next to the short "DAQIRI" title.    */
+/* Grow the title at all widths so the control cluster stays right-aligned.   */
+.md-header__title {
+  flex-grow: 1;
+}
+/* Below Material's desktop (tabs) breakpoint the full site_name             */
+/* ("DAQIRI — Data Acquisition for Integrated Real-time Instruments")         */
+/* truncates with an ellipsis in the compact header. Show just "DAQIRI"       */
+/* visually while leaving the full name in the DOM for assistive tech         */
+/* (font-size:0 collapses the glyphs but keeps the text node readable).       */
+/* Scoped to the site-name topic (first child) so the page-title topic, which */
+/* Material swaps in on scroll, is untouched. At >= 76.25em the full title     */
+/* fits, so it stays.                                                          */
+@media screen and (max-width: 76.1875em) {
+  .md-header__title
+    .md-header__ellipsis
+    .md-header__topic:first-child
+    .md-ellipsis {
+    font-size: 0;
+  }
+  .md-header__title
+    .md-header__ellipsis
+    .md-header__topic:first-child
+    .md-ellipsis::after {
+    content: "DAQIRI";
+    font-size: 0.9rem;
+    font-weight: 700;
+  }
+}
 [data-md-color-scheme="slate"] .md-tabs {
   background: #1a1a1a;
 }
@@ -667,6 +698,23 @@
 body[data-active-tab="igx-orin"] .md-nav--secondary li:has(> a[data-tab="dgx-spark"]),
 body[data-active-tab="dgx-spark"] .md-nav--secondary li:has(> a[data-tab="igx-orin"]) {
   display: none;
+}
+
+/* ── Keyboard focus visibility ───────────────────────────────────────── */
+/* Material renders icon-only header controls (palette toggle, search, menu) */
+/* and code copy buttons with accessible names but no strong focus ring.     */
+/* Add a visible focus-visible outline so keyboard users can see where focus  */
+/* is. Universal across both color schemes; uses the NVIDIA accent.          */
+.md-header__button:focus-visible,
+.md-search__input:focus-visible,
+.md-typeset .md-clipboard:focus-visible,
+.md-content__button:focus-visible,
+.md-footer__link:focus-visible,
+.md-nav__link:focus-visible,
+.md-tabs__link:focus-visible {
+  outline: 2px solid var(--nv-green);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 /* ── Performance-report heatmap cells ───────────────────────────────── */

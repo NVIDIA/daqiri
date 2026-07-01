@@ -52,7 +52,3 @@ DAQIRI ships with several stream types to handle different types of incoming and
 - [Socket and RDMA Benchmarking](socket_benchmarking.md) covers Linux TCP/UDP and RoCE/RDMA runs with matching client/server namespace setup.
 - [Raw Ethernet Benchmarking](raw_benchmarking.md) covers the DPDK/raw Ethernet examples, hugepage sizing, physical loopback configuration, and raw benchmark troubleshooting.
 - [Understanding the Configuration File](../tutorials/configuration-walkthrough.md) explains the YAML fields once you have selected the stream type and example config.
-
----
-**Previous:** [System Configuration](../tutorials/system_configuration.md)<br>
-**Next:** [Socket and RDMA Benchmarking](socket_benchmarking.md)

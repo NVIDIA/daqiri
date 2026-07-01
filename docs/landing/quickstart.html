@@ -4,7 +4,7 @@
       <div class="section-header">
         <div>
           <div class="section-label">Quick Start</div>
-          <h2 class="section-title">Build &amp; Run in Minutes</h2>
+          <h2 class="section-title">Build and Run DAQIRI</h2>
           <p class="section-desc">Runs on Linux (kernel 5.4+) with the CUDA Toolkit 12.2+. The kernel-bypass and GPUDirect paths additionally require an NVIDIA ConnectX-6 Dx (or newer) NIC.</p>
         </div>
         <a href="getting-started/" class="btn btn-outline">Full Guide →</a>
@@ -37,7 +37,7 @@ cmake --install build --prefix /opt/daqiri</pre>
             <div class="gs-step-num">3</div>
             <div class="gs-step-body">
               <h4>Or Build the Container</h4>
-              <p>The Dockerfile builds DPDK from source with dmabuf patches — no peermem needed inside the container. Set <code>BASE_IMAGE=torch</code> to build on top of NGC PyTorch for Torch / TensorRT inference workflows.</p>
+              <p>The Dockerfile builds DPDK from source with dmabuf patches, so no peermem is needed inside the container. Set <code>BASE_IMAGE=torch</code> to build on top of NGC PyTorch for Torch / TensorRT inference workflows.</p>
               <pre>BASE_TARGET=dpdk \
   DAQIRI_ENGINE=<span class="str">"dpdk ibverbs"</span> \
   scripts/build-container.sh</pre>
@@ -104,9 +104,10 @@ daqiri::<span class="fn">BurstParams</span> *burst;
   uint32_t plen =
     daqiri::<span class="fn">get_segment_packet_length</span>(
         burst, <span class="nm">1</span>, i);
-  <span class="cm">// pay is already on GPU — no copy</span>
+  <span class="cm">// pay is already on GPU, no copy</span>
 }</pre>
           </details>
+          <p class="gs-code-note">Minimal excerpt. See the full lifecycle (init, RX/TX, access, free, <code>shutdown()</code>) in the <a href="api-reference/">API Guide</a> and the complete <a href="https://github.com/NVIDIA/daqiri/blob/main/examples/raw_gpudirect_bench.cpp" target="_blank">raw_gpudirect_bench.cpp</a> example.</p>
         </div>
       </div>
     </div>

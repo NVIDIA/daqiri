@@ -120,6 +120,25 @@ body:has(.daqiri-landing) .md-header__title {
   font-size: 0.9rem;
 }
 
+/* Landing header: keep the site name static. Material swaps the header title  */
+/* (site name -> page heading) with a slide/fade once you scroll past the      */
+/* hero <h1>, which reads as a jarring animation in the first centimeters of   */
+/* scroll on the home page. Pin the site-name topic and hide the page-title    */
+/* topic here only; doc pages keep Material's default behavior.                */
+body:has(.daqiri-landing) .md-header__title .md-header__topic {
+  transition: none;
+}
+body:has(.daqiri-landing) .md-header__title .md-header__topic:first-child,
+body:has(.daqiri-landing) .md-header__title--active .md-header__topic:first-child {
+  transform: none;
+  opacity: 1;
+  z-index: 1;
+  pointer-events: auto;
+}
+body:has(.daqiri-landing) .md-header__title [data-md-component="header-topic"] {
+  display: none;
+}
+
 .daqiri-landing .md-typeset :is(h1, h2, h3, h4, p, pre, ul, ol, dl) {
   margin-top: 0;
   margin-bottom: 0;
@@ -832,11 +851,10 @@ body.graphic-overlay-open {
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  max-height: calc(100vh - var(--md-header-height, 3rem) - var(--md-tabs-height, 2.4rem) - 2rem);
-  overflow-y: auto;
-  overflow-x: hidden;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
+  /* The panel no longer scrolls/clips itself; each code block scrolls   */
+  /* internally (see .gs-code-block pre) so no content is cut off and the */
+  /* scrollbar lands on the block the reader is looking at.              */
+  overflow: visible;
   z-index: 1;
 }
 
@@ -887,6 +905,13 @@ body.graphic-overlay-open {
   color: var(--text-mut);
 }
 
+.daqiri-landing .gs-code-note {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  line-height: 1.5;
+  margin: 0;
+}
+
 .daqiri-landing .gs-code-lang {
   font-size: 0.7rem;
   font-family: var(--font-mono);
@@ -903,10 +928,10 @@ body.graphic-overlay-open {
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  overflow-x: auto;
-  overflow-y: hidden;
+  max-height: min(60vh, 24rem);
+  overflow: auto;
   scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
+  scrollbar-color: var(--text-dim) transparent;
   white-space: pre;
   box-sizing: border-box;
   font-family: var(--font-mono);
@@ -915,6 +940,35 @@ body.graphic-overlay-open {
   padding: 1.4rem 1.5rem;
   background: var(--ex-pre-bg);
   color: var(--code-fg);
+}
+
+/* Always-visible scrollbars on landing code blocks (Chromium/WebKit, which  */
+/* includes the in-app preview). Firefox uses scrollbar-width/color above.   */
+.daqiri-landing .gs-code-block pre::-webkit-scrollbar,
+.daqiri-landing .gs-step-body pre::-webkit-scrollbar,
+.daqiri-landing .ex-body pre::-webkit-scrollbar,
+.daqiri-landing pre.cta-pre::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.daqiri-landing .gs-code-block pre::-webkit-scrollbar-thumb,
+.daqiri-landing .gs-step-body pre::-webkit-scrollbar-thumb,
+.daqiri-landing .ex-body pre::-webkit-scrollbar-thumb,
+.daqiri-landing pre.cta-pre::-webkit-scrollbar-thumb {
+  background: var(--text-dim);
+  border-radius: 8px;
+}
+.daqiri-landing .gs-code-block pre::-webkit-scrollbar-thumb:hover,
+.daqiri-landing .gs-step-body pre::-webkit-scrollbar-thumb:hover,
+.daqiri-landing .ex-body pre::-webkit-scrollbar-thumb:hover,
+.daqiri-landing pre.cta-pre::-webkit-scrollbar-thumb:hover {
+  background: var(--text-mut);
+}
+.daqiri-landing .gs-code-block pre::-webkit-scrollbar-track,
+.daqiri-landing .gs-step-body pre::-webkit-scrollbar-track,
+.daqiri-landing .ex-body pre::-webkit-scrollbar-track,
+.daqiri-landing pre.cta-pre::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .daqiri-landing .gs-code-block pre > code,

@@ -2,9 +2,9 @@
   <section id="features">
     <div class="container">
       <div class="section-label">Why DAQIRI</div>
-      <h2 class="section-title">Closing the Gap Between Sensor and GPU</h2>
+      <h2 class="section-title">Move Sensor Data Directly Into GPU Memory</h2>
       <div class="features-intro">
-        <p class="section-desc">Scientific and industrial instruments generate data that is richest at the source — before it is filtered, decimated, or summarized. DAQIRI places NVIDIA GPU hardware directly in that data path, forging a tight bond between upstream sensors, their data converters, and the NVIDIA compute ecosystem. The result is a new foundation for developers: the ability to work with instrument data in its rawest form, at wire speed, and to build a new class of autonomous experiments where AI can observe phenomena directly at the source, augment human analysis, and steer experiments in real time. <span class="features-highlight">Stream data into and out of GPUs efficiently while leveraging common tensor-compute libraries.</span></p>
+        <p class="section-desc">Scientific and industrial instruments produce their most detailed data at the source, before it is filtered, decimated, or summarized. DAQIRI puts NVIDIA GPUs directly in that data path, so applications can read raw instrument data as it arrives and feed it straight into GPU compute. <span class="features-highlight">Stream data into and out of GPUs efficiently using common tensor-compute libraries.</span></p>
 
         <!-- AI Native DAQ Architecture SVG -->
         <button class="hero-visual-link" type="button" data-arch-open aria-controls="architecture-graphic-overlay" aria-label="Open the AI Native DAQ Architecture graphic overlay" style="width:min(100%,calc(400px + 0.9rem));margin:0 auto;">
@@ -20,27 +20,27 @@
         <div class="feature-card">
           <div class="feature-icon">🚀</div>
           <h3>GPUDirect Zero-Copy</h3>
-          <p>Two GPU receive modes: <strong>Header-data split</strong> (headers to CPU, payload to GPU — recommended) and <strong>Batched GPU</strong> (entire packets to GPU for maximum bandwidth).</p>
+          <p>Two GPU receive modes: <strong>Header-data split</strong> (headers to CPU, payload to GPU, recommended) and <strong>Batched GPU</strong> (entire packets to GPU for maximum bandwidth).</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">🔀</div>
           <h3>Hardware Flow Steering</h3>
-          <p>Route packets based on header matching to steer different streams to different GPUs or CPUs — entirely in NIC silicon, before any software runs.</p>
+          <p>Route packets based on header matching to steer different streams to different GPUs or CPUs, entirely in NIC silicon, before any software runs.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">🔗</div>
           <h3>RDMA over Converged Ethernet</h3>
-          <p>Run RDMA READ, WRITE, and SEND over standard Ethernet via <strong>RoCE</strong> — no specialized InfiniBand fabric required. The same libibverbs API also supports InfiniBand for environments where it is available.</p>
+          <p>Run RDMA READ, WRITE, and SEND over standard Ethernet via <strong>RoCE</strong>: no specialized InfiniBand fabric required. The same libibverbs API also supports InfiniBand for environments where it is available.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">📄</div>
           <h3>YAML-Driven Configuration</h3>
-          <p>Define memory regions, NIC interfaces, TX/RX queues, and flow rules in a single YAML file — or build the same config in C++ code. Switch stream types, memory kinds, and buffer sizes without recompiling.</p>
+          <p>Define memory regions, NIC interfaces, TX/RX queues, and flow rules in a single YAML file, or build the same config in C++ code. Switch stream types, memory kinds, and buffer sizes without recompiling.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">📦</div>
           <h3>Containerized Deployment</h3>
-          <p>A ready-to-run container bundles all userspace dependencies including a dmabuf-patched DPDK — no host-side dependency setup, no peermem kernel module. From <code>docker pull</code> to running benchmarks in minutes.</p>
+          <p>The container bundles all userspace dependencies including a dmabuf-patched DPDK, so no peermem kernel module is required. Build it locally with <code>scripts/build-container.sh</code>, then run the benchmarks inside it.</p>
         </div>
       </div>
     </div>

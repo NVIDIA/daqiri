@@ -184,7 +184,7 @@ interfaces:
 
 ##### Configure the application
 
-To run the benchmarking application to run a loopback on your system, you'll need to modify the `bench_tx` section which configures the application itself, to create the packet headers, pin the application TX worker, and direct the packets to the NIC. Make sure to remove the template brackets `< >`.
+To run a loopback benchmark on your system, modify the `bench_tx` section, which configures the application itself: it creates the packet headers, pins the application TX worker, and directs packets to the NIC. Make sure to remove the template brackets `< >`.
 
 - `eth_dst_addr` with the MAC address (and not the PCIe address) of the NIC interface you want to use for Rx. You can get the MAC address of your `if_name` interface with `#!bash cat /sys/class/net/$if_name/address`:
 - `cpu_core` with the CPU core for the benchmark application's TX thread. This is separate from the DAQIRI TX queue `cpu_core`; use a different isolated core when you have one, or deliberately share when the machine has a tight core budget.
@@ -253,6 +253,8 @@ flow programming test.
 | Mixed flows (optional) | On one interface, add both a standard UDP/IP flow and a flex-item flow (see `rx.flex_items` in the [configuration reference](../api-reference/configuration.md)) | Fails in `validate_config()` with `mixes standard (UDP/IP) and flex-item` |
 
 ## Cap the transmit rate with packet pacing
+
+Packet pacing requires a Mellanox/mlx5 NIC with hardware send scheduling (ConnectX-7 or later) and the default DPDK engine. On devices without it the cap is ignored (warning at init, TX runs at line rate), and the `ibverbs` engine rejects `pacing_mbps` outright.
 
 To meter the transmit side at a fixed rate in hardware, set a per-queue `pacing_mbps` cap
 on the TX queue. [`daqiri_bench_raw_tx_rx_pacing.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_pacing.yaml)
@@ -576,7 +578,3 @@ The `*_packets_phy` and `*_bytes_phy` counters are physical-link counters. They 
         ```
 
         You might need to kill some of the listed processes to free up GPU VRAM.
-
----
-**Previous:** [Benchmarking](benchmarks.md)<br>
-**Next:** [Understanding the Configuration File](../tutorials/configuration-walkthrough.md) — deep dive into the YAML parameters

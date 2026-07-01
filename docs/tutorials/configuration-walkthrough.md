@@ -439,6 +439,3 @@ The reorder bench runs on `daqiri_bench_raw_reorder_seq`:
 ```
 
 Other reorder variants are listed under [question 2 of the decision tree above](#choosing-an-example-config): the CPU-kernel variant, the RX-only variants, and the `seq_batch_number` algorithm with in-kernel int4 → fp32 type conversion (runs on `daqiri_bench_raw_reorder_quantize`).
-
----
-**Previous:** [Raw Ethernet Benchmarking](../benchmarks/raw_benchmarking.md)

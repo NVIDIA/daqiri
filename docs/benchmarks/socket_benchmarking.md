@@ -378,7 +378,3 @@ mlxconfig -d <device> set FORCE_LOOPBACK_DISABLE=1
 ```
 
 Treat firmware settings as maintenance-window changes: query first, set only with the proper Mellanox tooling available, then reset or reboot as required and rerun the same `rx_packets_phy` proof.
-
----
-**Previous:** [Benchmarking](benchmarks.md)<br>
-**Next:** [Raw Ethernet Benchmarking](raw_benchmarking.md)

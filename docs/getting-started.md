@@ -88,7 +88,7 @@ Then build the DAQIRI library:
 
 === "Container build (recommended)"
 
-    The container bundles all user-space libraries for each stream type, avoiding dependency issues on the host:
+    The container bundles all user-space *libraries* for each stream type, avoiding host dependency issues. It does **not** replace host setup: for Raw Ethernet, GPUDirect, and RoCE you still need the NIC driver, hugepages, GPU driver, and kernel/firmware configuration on the host (see [System Configuration](tutorials/system_configuration.md)). Build the image with:
 
     ```bash
     git clone git@github.com:NVIDIA/daqiri.git
@@ -199,7 +199,7 @@ Both methods use the same public C++ include:
 | `DAQIRI_ENABLE_OTEL_METRICS` | `OFF` | Enable OpenTelemetry C++ metrics instrumentation. When enabled, OpenTelemetry C++ API package metadata must be available to CMake. |
 | `DAQIRI_ENABLE_S3` | `OFF` | Enable AWS SDK-backed asynchronous raw packet writes to S3. |
 | `DAQIRI_PREFER_SYSTEM_YAML_CPP` | `OFF` | Prefer a system-installed `yaml-cpp` over the vendored `third_party/yaml-cpp` submodule. Keep `OFF` if a conda/miniforge env is on `PATH`. |
-| `BUILD_SHARED_LIBS` | — | Build as shared library. |
+| `BUILD_SHARED_LIBS` | `OFF` | Standard CMake option. Build `libdaqiri` as a shared library; DAQIRI's own build commands pass `ON`. |
 
 For Raw Ethernet (`stream_type: "raw"`), `daqiri_init()` validates that each `rx.flows`
 entry's legacy `action.id` or final ordered `actions:` queue action matches an

@@ -9,6 +9,9 @@ Measured C++-loopback throughput for each stream/protocol on a single DGX Spark
 (GB10), driven over a physical cabled loopback on one ConnectX-7. Numbers are
 from a Release build via `examples/run_spark_bench.sh` (30 s per cell).
 
+!!! note "Scope of these numbers"
+    These are single-system, single-NIC cabled-loopback measurements on one DGX Spark, not universal product guarantees. Results on other hardware vary with NIC, platform, tuning, and workload. The GPU here is a DMA target, not a compute benchmark.
+
 For the loopback setup these numbers depend on and the per-transport
 benchmarking procedure, see [Socket and RDMA Benchmarking](socket_benchmarking.md)
 (the `dq_wire_*` network-namespace wire loopback used by RoCE and sockets) and
@@ -298,6 +301,3 @@ Each run writes `bench-results/<timestamp>-<backend>-<mode>/runs.csv`. See
 [Socket and RDMA Benchmarking](socket_benchmarking.md) and
 [Raw Ethernet Benchmarking](raw_benchmarking.md) for the namespace setup and
 per-transport details.
-
----
-**Previous:** [Raw Ethernet Benchmarking](raw_benchmarking.md)
