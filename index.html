@@ -1,0 +1,1524 @@
+
+
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://nvidia.github.io/daqiri/">
+      
+      
+      
+        <link rel="next" href="getting-started/">
+      
+      
+        
+      
+      
+      <link rel="icon" type="image/png" sizes="32x32" href="images/favicon-32.png">
+      <link rel="icon" href="images/favicon.svg" sizes="any" type="image/svg+xml">
+      <link rel="apple-touch-icon" href="images/apple-touch-icon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>DAQIRI — Data Acquisition for Integrated Real-time Instruments - DAQIRI — Data Acquisition for Integrated Real-time Instruments</title>
+      
+    
+    
+  
+      <link rel="stylesheet" href="assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+  <link rel="stylesheet" href="stylesheets/landing.css">
+
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="stylesheets/extra.css">
+    
+    <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  <script>window.NV_NAV = {"Benchmarking": [{"label": "Overview", "url": "benchmarks/benchmarks/"}, {"label": "Socket and RDMA Benchmarking", "url": "benchmarks/socket_benchmarking/"}, {"label": "Raw Ethernet Benchmarking", "url": "benchmarks/raw_benchmarking/"}, {"label": "Performance: DGX Spark", "url": "benchmarks/performance-dgx-spark/"}], "API Reference": [{"label": "API Guide", "url": "api-reference/"}, {"label": "Configuration YAML Reference", "url": "api-reference/configuration/"}, {"label": "C++ API Usage", "url": "api-reference/cpp/"}, {"label": "Python API Usage", "url": "api-reference/python/"}], "Tutorials": [{"label": "System Configuration", "url": "tutorials/system_configuration/"}, {"label": "Bare-Metal CMake Build", "url": "tutorials/bare-metal-cmake-build/"}, {"label": "Configuration YAML Walkthrough", "url": "tutorials/configuration-walkthrough/"}, {"label": "DAQIRI + Holoscan Integration", "url": "tutorials/daqiri-holoscan-integration/"}]};</script></head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="light-green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="." title="DAQIRI — Data Acquisition for Integrated Real-time Instruments" class="md-header__button md-logo" aria-label="DAQIRI — Data Acquisition for Integrated Real-time Instruments" data-md-component="logo">
+      
+  <img src="images/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            DAQIRI — Data Acquisition for Integrated Real-time Instruments
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              DAQIRI — Data Acquisition for Integrated Real-time Instruments
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="light-green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="light-green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/nvidia/daqiri" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    nvidia/daqiri
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    
+  
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="getting-started/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Getting Started
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="concepts/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Concepts
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="benchmarks/benchmarks/" class="md-tabs__link">
+          
+  
+  
+  Benchmarking
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="api-reference/" class="md-tabs__link">
+          
+  
+  
+  API Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="tutorials/system_configuration/" class="md-tabs__link">
+          
+  
+  
+  Tutorials
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+                
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" hidden>
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="." title="DAQIRI — Data Acquisition for Integrated Real-time Instruments" class="md-nav__button md-logo" aria-label="DAQIRI — Data Acquisition for Integrated Real-time Instruments" data-md-component="logo">
+      
+  <img src="images/logo.svg" alt="logo">
+
+    </a>
+    DAQIRI — Data Acquisition for Integrated Real-time Instruments
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/nvidia/daqiri" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    nvidia/daqiri
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+      
+      <a href="." class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="concepts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Benchmarking
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Benchmarking
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="benchmarks/benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="benchmarks/socket_benchmarking/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Socket and RDMA Benchmarking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="benchmarks/raw_benchmarking/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Raw Ethernet Benchmarking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="benchmarks/performance-dgx-spark/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance: DGX Spark
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api-reference/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration YAML Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api-reference/cpp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    C++ API Usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api-reference/python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API Usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorials
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tutorials
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="tutorials/system_configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="tutorials/bare-metal-cmake-build/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bare-Metal CMake Build
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="tutorials/configuration-walkthrough/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration YAML Walkthrough
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="tutorials/daqiri-holoscan-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DAQIRI + Holoscan Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+                
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" hidden>
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+  <div class="daqiri-landing">
+    <!-- HERO -->
+<section id="hero">
+    <div class="hero-grid"></div>
+    <div class="hero-glow"></div>
+    <div class="container">
+      <div class="hero-inner">
+        <div class="hero-eyebrow">
+          <span class="hero-eyebrow-part">NVIDIA Open Source</span>
+          <span class="hero-eyebrow-sep" aria-hidden="true">·</span>
+          <span class="hero-eyebrow-part">Data Acquisition</span>
+        </div>
+        <div class="hero-content">
+          <h1 class="hero-title">DAQIRI Connects Sensor Data to the <span class="hi">NVIDIA Compute Ecosystem</span></h1>
+          <p class="hero-desc">
+            DAQIRI (Data Acquisition for Integrated Real-time Instruments) moves high-bandwidth data between external
+            sensors and GPU, CPU, or storage devices. Streams can arrive from PCIe devices such as FPGAs or from network-capable sensors
+            over Raw Ethernet (UDP/TCP) or RoCE/RDMA, giving applications one zero-copy path for ingest and egress.
+            DAQIRI not only accelerates data movement and storage at the instrument but can also be used to connect sensor data to HPC and Cloud systems.
+          </p>
+        </div>
+        <div class="hero-visual">
+          <button class="hero-visual-link" type="button" data-graphic-open aria-controls="daqiri-graphic-overlay" aria-label="Open the DAQIRI sensor data path graphic overlay">
+            <img src="images/daqiri-landing-graphic.svg" alt="DAQIRI moves PCIe FPGA and network sensor data into or out of NVIDIA GPU or CPU memory, then writes GPU data to storage through GPUDirect Storage" />
+          </button>
+        </div>
+        <div class="hero-actions">
+          <a href="#getting-started" class="btn btn-primary">Quick Start →</a>
+          <a href="#examples" class="btn btn-outline">Examples</a>
+          <a href="#tutorials" class="btn btn-outline">Tutorials</a>
+        </div>
+        <div class="hero-stats">
+          <div><div class="stat-value">PCIe + Ethernet</div><div class="stat-label">Sensor Paths</div></div>
+          <div><div class="stat-value">Ingest + Egress</div><div class="stat-label">Data Direction</div></div>
+          <div><div class="stat-value">Zero-Copy</div><div class="stat-label">CPU/GPU Memory</div></div>
+          <div><div class="stat-value">Raw Ethernet, RoCE</div><div class="stat-label">Protocols</div></div>
+          <div><div class="stat-value">C++ / Python</div><div class="stat-label">Application API</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+<!-- FEATURES -->
+<section id="features">
+    <div class="container">
+      <div class="section-label">Why DAQIRI</div>
+      <h2 class="section-title">Closing the Gap Between Sensor and GPU</h2>
+      <div class="features-intro">
+        <p class="section-desc">Scientific and industrial instruments generate data that is richest at the source — before it is filtered, decimated, or summarized. DAQIRI places NVIDIA GPU hardware directly in that data path, forging a tight bond between upstream sensors, their data converters, and the NVIDIA compute ecosystem. The result is a new foundation for developers: the ability to work with instrument data in its rawest form, at wire speed, and to build a new class of autonomous experiments where AI can observe phenomena directly at the source, augment human analysis, and steer experiments in real time. <span class="features-highlight">Stream data into and out of GPUs efficiently while leveraging common tensor-compute libraries.</span></p>
+
+        <!-- AI Native DAQ Architecture SVG -->
+        <button class="hero-visual-link" type="button" data-arch-open aria-controls="architecture-graphic-overlay" aria-label="Open the AI Native DAQ Architecture graphic overlay" style="width:min(100%,calc(400px + 0.9rem));margin:0 auto;">
+          <img src="images/architecture.svg" alt="AI Native DAQ Architecture" />
+        </button>
+      </div>
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">⚡</div>
+          <h3>Scalable, High Throughput</h3>
+          <p>Hundreds of gigabits per second with proper hardware and CPU/NUMA tuning. Direct access to NIC ring buffers keeps latency at PCIe transit time only.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🚀</div>
+          <h3>GPUDirect Zero-Copy</h3>
+          <p>Two GPU receive modes: <strong>Header-data split</strong> (headers to CPU, payload to GPU — recommended) and <strong>Batched GPU</strong> (entire packets to GPU for maximum bandwidth).</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🔀</div>
+          <h3>Hardware Flow Steering</h3>
+          <p>Route packets based on header matching to steer different streams to different GPUs or CPUs — entirely in NIC silicon, before any software runs.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🔗</div>
+          <h3>RDMA over Converged Ethernet</h3>
+          <p>Run RDMA READ, WRITE, and SEND over standard Ethernet via <strong>RoCE</strong> — no specialized InfiniBand fabric required. The same libibverbs API also supports InfiniBand for environments where it is available.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📄</div>
+          <h3>YAML-Driven Configuration</h3>
+          <p>Define memory regions, NIC interfaces, TX/RX queues, and flow rules in a single YAML file — or build the same config in C++ code. Switch stream types, memory kinds, and buffer sizes without recompiling.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📦</div>
+          <h3>Containerized Deployment</h3>
+          <p>A ready-to-run container bundles all userspace dependencies including a dmabuf-patched DPDK — no host-side dependency setup, no peermem kernel module. From <code>docker pull</code> to running benchmarks in minutes.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+<!-- QUICK START -->
+<section id="getting-started">
+    <div class="container">
+      <div class="section-header">
+        <div>
+          <div class="section-label">Quick Start</div>
+          <h2 class="section-title">Build &amp; Run in Minutes</h2>
+          <p class="section-desc">Runs on Linux (kernel 5.4+) with the CUDA Toolkit 12.2+. The kernel-bypass and GPUDirect paths additionally require an NVIDIA ConnectX-6 Dx (or newer) NIC.</p>
+        </div>
+        <a href="getting-started/" class="btn btn-outline">Full Guide →</a>
+      </div>
+      <div class="gs-layout">
+        <div class="gs-steps">
+          <div class="gs-step">
+            <div class="gs-step-num">1</div>
+            <div class="gs-step-body">
+              <h4>Install Prerequisites</h4>
+              <p>Install the CUDA Toolkit (12.2 or newer).</p>
+              <p>For the Raw Ethernet / GPUDirect / RoCE path, you also need an NVIDIA ConnectX-6 Dx (or newer) NIC. The default Ubuntu kernel drivers are sufficient; we recommend additionally installing <code>doca-ofed</code> for the diagnostic utilities (<code>ibstat</code>, <code>ibv_devinfo</code>, <code>mlxconfig</code>, <code>mlnx_perf</code>, …).</p>
+            </div>
+          </div>
+          <div class="gs-step">
+            <div class="gs-step-num">2</div>
+            <div class="gs-step-body">
+              <h4>Build from Source</h4>
+              <p>Select optional engines with <code>DAQIRI_ENGINE</code>. Valid values: <code>dpdk</code>, <code>ibverbs</code>. Linux sockets are always built in.</p>
+              <pre><span class="cm"># Configure, build, install</span>
+cmake -S . -B build \
+  -DBUILD_SHARED_LIBS=ON \
+  -DDAQIRI_BUILD_PYTHON=OFF \
+  -DDAQIRI_ENGINE=<span class="str">"dpdk ibverbs"</span>
+cmake --build build -j
+cmake --install build --prefix /opt/daqiri</pre>
+            </div>
+          </div>
+          <div class="gs-step">
+            <div class="gs-step-num">3</div>
+            <div class="gs-step-body">
+              <h4>Or Build the Container</h4>
+              <p>The Dockerfile builds DPDK from source with dmabuf patches — no peermem needed inside the container. Set <code>BASE_IMAGE=torch</code> to build on top of NGC PyTorch for Torch / TensorRT inference workflows.</p>
+              <pre>BASE_TARGET=dpdk \
+  DAQIRI_ENGINE=<span class="str">"dpdk ibverbs"</span> \
+  scripts/build-container.sh</pre>
+            </div>
+          </div>
+          <div class="gs-step">
+            <div class="gs-step-num">4</div>
+            <div class="gs-step-body">
+              <h4>Tune the System</h4>
+              <p>Run the diagnostic script to surface common networking bottlenecks (CPU governor, hugepages, MRRS, NUMA, GPU clocks, MTU, BAR1, PCIe topology):</p>
+              <pre>sudo python3 python/tune_system.py --check all</pre>
+            </div>
+          </div>
+          <div class="gs-step">
+            <div class="gs-step-num">5</div>
+            <div class="gs-step-body">
+              <h4>Run a Benchmark</h4>
+              <p>Edit the YAML to match your hardware (PCIe BDF, CPU cores, IPs), then:</p>
+              <pre>./build/examples/daqiri_bench_raw_gpudirect \
+  examples/daqiri_bench_raw_tx_rx.yaml \
+  --seconds 10</pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="gs-code-panel">
+          <details class="gs-code-block gs-code-details" open>
+            <summary class="gs-code-hdr"><span class="gs-code-title">Initialize &amp; Receive Packets</span><span class="gs-code-lang">C++</span></summary>
+            <pre><span class="kw">#include</span> <span class="str">&lt;daqiri/daqiri.h&gt;</span>
+
+<span class="cm">// Init from YAML config</span>
+daqiri::<span class="fn">daqiri_init</span>(<span class="str">"config.yaml"</span>);
+
+<span class="cm">// Non-blocking burst receive</span>
+daqiri::<span class="fn">BurstParams</span> *burst;
+<span class="kw">auto</span> s = daqiri::<span class="fn">get_rx_burst</span>(
+    &amp;burst, port_id, queue_id);
+
+<span class="kw">if</span> (s == daqiri::<span class="fn">Status</span>::<span class="nm">SUCCESS</span>) {
+  <span class="kw">int</span> n = daqiri::<span class="fn">get_num_packets</span>(burst);
+  <span class="kw">for</span> (<span class="kw">int</span> i = <span class="nm">0</span>; i &lt; n; i++) {
+    <span class="kw">void</span>* p = daqiri::<span class="fn">get_packet_ptr</span>(
+        burst, i);
+    <span class="cm">// process p ...</span>
+  }
+  daqiri::<span class="fn">free_all_packets_and_burst_rx</span>(
+      burst);
+}</pre>
+          </details>
+          <details class="gs-code-block gs-code-details" open>
+            <summary class="gs-code-hdr"><span class="gs-code-title">Header-Data Split (GPU payload)</span><span class="gs-code-lang">C++</span></summary>
+            <pre><span class="cm">// Seg 0 = headers (CPU)
+// Seg 1 = payload (GPU)</span>
+<span class="kw">for</span> (<span class="kw">int</span> i = <span class="nm">0</span>; i &lt; n; i++) {
+  <span class="kw">void</span>* hdr =
+    daqiri::<span class="fn">get_segment_packet_ptr</span>(
+        burst, <span class="nm">0</span>, i);
+  <span class="kw">void</span>* pay =
+    daqiri::<span class="fn">get_segment_packet_ptr</span>(
+        burst, <span class="nm">1</span>, i); <span class="cm">// GPU ptr</span>
+  uint32_t hlen =
+    daqiri::<span class="fn">get_segment_packet_length</span>(
+        burst, <span class="nm">0</span>, i);
+  uint32_t plen =
+    daqiri::<span class="fn">get_segment_packet_length</span>(
+        burst, <span class="nm">1</span>, i);
+  <span class="cm">// pay is already on GPU — no copy</span>
+}</pre>
+          </details>
+        </div>
+      </div>
+    </div>
+  </section>
+
+<!-- EXAMPLES -->
+<style>
+    .examples-table-wrap { overflow-x: auto; }
+    .examples-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+      line-height: 1.5;
+    }
+    .examples-table thead tr {
+      border-bottom: 2px solid var(--border, rgba(255,255,255,0.12));
+    }
+    .examples-table th {
+      padding: 0.4rem 0.85rem;
+      text-align: left;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-mut);
+      white-space: nowrap;
+    }
+    .examples-table td {
+      padding: 0.45rem 0.85rem;
+      vertical-align: top;
+      border-bottom: 1px solid var(--border, rgba(255,255,255,0.07));
+    }
+    .examples-table tbody tr:last-child td { border-bottom: none; }
+    .examples-table tbody tr:hover td {
+      background: rgba(255,255,255,0.03);
+    }
+    .ex-name {
+      font-weight: 600;
+      color: var(--text-pri);
+      white-space: nowrap;
+    }
+    .ex-badge {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 0.15em 0.5em;
+      border-radius: 4px;
+      letter-spacing: 0.04em;
+    }
+    .ex-badge-cpp  { background: rgba(100,160,255,0.15); color: #7eb8f7; }
+    .ex-badge-cuda { background: rgba(118,185,0,0.15);   color: #89c400; }
+    .ex-badge-yaml { background: rgba(255,180,50,0.15);  color: #f5b84b; }
+    .examples-table .ex-desc-cell { color: var(--text-pri); }
+    .ex-code-link {
+      white-space: nowrap;
+      font-size: 0.82rem;
+      color: var(--accent, #76b900);
+      text-decoration: none;
+      border-bottom: 1px solid transparent;
+      transition: border-color 0.15s;
+    }
+    .ex-code-link:hover { border-color: currentColor; }
+  </style>
+<section id="examples">
+    <div class="container">
+      <div class="section-header">
+        <div>
+          <div class="section-label">Code Samples</div>
+          <h2 class="section-title">Examples</h2>
+          <p class="section-desc">Get started with DAQIRI by exploring commonly used features when building real time sensor processing applications.</p>
+        </div>
+        <a href="https://github.com/NVIDIA/daqiri/tree/main/examples" class="btn btn-outline" target="_blank">Browse examples/ →</a>
+      </div>
+      <div class="examples-table-wrap">
+        <table class="examples-table">
+          <thead>
+            <tr>
+              <th>Example</th>
+              <th>Type</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="ex-name"><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/raw_gpudirect_bench.cpp" target="_blank">Raw TX/RX GPUDirect ↗</a></td>
+              <td><span class="ex-badge ex-badge-cpp">C++</span></td>
+              <td class="ex-desc-cell">The recommended starting point. Sends and receives packets with payloads landing directly in GPU memory, with no CPU in the data path. Use this to validate your hardware setup and measure baseline throughput.</td>
+            </tr>
+            <tr>
+              <td class="ex-name"><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/raw_hds_bench.cpp" target="_blank">Header-Data Split TX/RX ↗</a></td>
+              <td><span class="ex-badge ex-badge-cpp">C++</span></td>
+              <td class="ex-desc-cell">Splits each incoming packet into two segments: headers land in CPU memory for inspection, while the payload goes directly to the GPU. Useful when your application needs to read per-packet metadata without touching the payload on the CPU.</td>
+            </tr>
+            <tr>
+              <td class="ex-name"><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/raw_reorder_seq_bench.cpp" target="_blank">Sequence Reorder ↗</a></td>
+              <td><span class="ex-badge ex-badge-cuda">C++/CUDA</span></td>
+              <td class="ex-desc-cell">Reassembles out-of-order UDP packets into a correctly ordered GPU buffer. A CUDA kernel reads the sequence number embedded in each packet header and places the packet at the right position, so downstream compute always sees a clean, ordered stream.</td>
+            </tr>
+            <tr>
+              <td class="ex-name"><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/raw_reorder_quantize_bench.cpp" target="_blank">Sequence Reorder + Quantize ↗</a></td>
+              <td><span class="ex-badge ex-badge-cuda">C++/CUDA</span></td>
+              <td class="ex-desc-cell">Extends sequence reorder with an in-kernel type conversion step (e.g., int4 → fp32), so the GPU buffer is both reordered and in the format your compute pipeline expects — all before your application code runs.</td>
+            </tr>
+            <tr>
+              <td class="ex-name"><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/pcap_writer_example.cpp" target="_blank">PCAP Writer ↗</a></td>
+              <td><span class="ex-badge ex-badge-cpp">C++</span></td>
+              <td class="ex-desc-cell">Captures live network traffic to a standard <code>.pcap</code> file you can open in Wireshark or tcpdump. Packets are received via GPUDirect and staged through pinned host memory to disk; capture continues until you press Ctrl+C.</td>
+            </tr>
+            <tr>
+              <td class="ex-name"><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/rdma_bench.cpp" target="_blank">RDMA Benchmark ↗</a></td>
+              <td><span class="ex-badge ex-badge-cpp">C++</span></td>
+              <td class="ex-desc-cell">Measures RoCE/RDMA throughput in client/server mode. Useful for comparing DAQIRI against standard tools like <code>ib_send_bw</code>, or when one endpoint is a third-party RDMA device such as an FPGA or instrument.</td>
+            </tr>
+            <tr>
+              <td class="ex-name"><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/socket_bench.cpp" target="_blank">Socket Benchmark ↗</a></td>
+              <td><span class="ex-badge ex-badge-cpp">C++</span></td>
+              <td class="ex-desc-cell">Measures TCP and UDP throughput over standard Linux sockets — no ConnectX NIC or special privileges required. A good comparison baseline before moving to kernel-bypass, or for connecting to a peer that only speaks standard sockets.</td>
+            </tr>
+            <tr>
+              <td class="ex-name"><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/gds_write_example.cpp" target="_blank">GPUDirect Storage Write ↗</a></td>
+              <td><span class="ex-badge ex-badge-cuda">C++/CUDA</span></td>
+              <td class="ex-desc-cell">Captures a burst of packets and writes them from GPU memory directly to NVMe storage via cuFile, in either raw binary or PCAP format. Supports both synchronous and asynchronous writes, demonstrating the full GPU-to-storage path without any CPU copy.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+<!-- TUTORIALS -->
+<section id="tutorials">
+    <div class="container">
+      <div class="section-header">
+        <div>
+          <div class="section-label">Learning Resources</div>
+          <h2 class="section-title">Tutorials</h2>
+          <p class="section-desc">Step-by-step guides from first build to production-grade deployment.</p>
+        </div>
+        <a href="getting-started/" class="btn btn-outline">Getting Started →</a>
+      </div>
+      <div class="tutorials-list">
+        <a href="getting-started/" class="tut-item"><span class="tut-num">01</span><div class="tut-info"><div class="tut-title">Requirements &amp; Installation</div><div class="tut-desc">Hardware (NVIDIA ConnectX-6 Dx or newer for kernel-bypass and GPUDirect), default Ubuntu kernel drivers plus optional <code>doca-ofed</code> for diagnostics, and CUDA Toolkit 12.2+ on Linux 5.4+.</div></div><div class="tut-meta"><span class="tag tag-beg">Beginner</span><span class="tut-time">~15 min</span></div><span class="tut-arrow">→</span></a>
+        <a href="tutorials/bare-metal-cmake-build/" class="tut-item"><span class="tut-num">02</span><div class="tut-info"><div class="tut-title">Bare-Metal CMake Build</div><div class="tut-desc">End-to-end bare-metal build: verify prerequisites, install RDMA libraries, build patched DPDK 25.11 from source, configure <code>DAQIRI_ENGINE</code> / <code>DAQIRI_BUILD_PYTHON</code> / <code>CMAKE_CUDA_ARCHITECTURES</code>, install, smoke-test, troubleshoot.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~45 min</span></div><span class="tut-arrow">→</span></a>
+        <a href="getting-started/#container-build" class="tut-item"><span class="tut-num">03</span><div class="tut-info"><div class="tut-title">Container Build with Patched DPDK</div><div class="tut-desc">Build the Docker image with <code>build-container.sh</code>. The container ships a dmabuf-patched DPDK, so peermem is not required.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~20 min</span></div><span class="tut-arrow">→</span></a>
+        <a href="tutorials/system_configuration/" class="tut-item"><span class="tut-num">04</span><div class="tut-info"><div class="tut-title">System Tuning for High-Performance Networking</div><div class="tut-desc">Isolate CPU cores, configure hugepages, set NUMA affinity, and run <code>python/tune_system.py</code> to diagnose common configuration issues.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~30 min</span></div><span class="tut-arrow">→</span></a>
+        <a href="benchmarks/socket_benchmarking/" class="tut-item"><span class="tut-num">05</span><div class="tut-info"><div class="tut-title">Socket and RDMA Benchmarking</div><div class="tut-desc">Run TCP/UDP sockets and RoCE/RDMA with matching namespace isolation and PHY-counter checks.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~30 min</span></div><span class="tut-arrow">→</span></a>
+        <a href="benchmarks/raw_benchmarking/" class="tut-item"><span class="tut-num">06</span><div class="tut-info"><div class="tut-title">Raw Ethernet Benchmarking</div><div class="tut-desc">Run a DPDK raw Ethernet TX/RX loopback test and interpret NIC throughput counters.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~20 min</span></div><span class="tut-arrow">→</span></a>
+        <a href="tutorials/configuration-walkthrough/" class="tut-item"><span class="tut-num">07</span><div class="tut-info"><div class="tut-title">YAML Configuration Deep Dive</div><div class="tut-desc">Memory regions (<code>huge</code>, <code>device</code>, <code>host_pinned</code>), RX/TX queue setup, flow steering rules, flex items, and RDMA client/server config schemas.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~40 min</span></div><span class="tut-arrow">→</span></a>
+        <a href="tutorials/daqiri-holoscan-integration/" class="tut-item"><span class="tut-num">08</span><div class="tut-info"><div class="tut-title">DAQIRI + Holoscan Integration</div><div class="tut-desc">Use a shared YAML file to initialize DAQIRI and configure Holoscan operators, following the landed Holohub raw Ethernet benchmark.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~25 min</span></div><span class="tut-arrow">→</span></a>
+        <a href="tutorials/configuration-walkthrough/#header-data-split-hds" class="tut-item"><span class="tut-num">09</span><div class="tut-info"><div class="tut-title">GPUDirect: Header-Data Split Pipeline</div><div class="tut-desc">Configure a two-region memory layout, access CPU headers and GPU payloads per-packet with <code>get_segment_packet_ptr()</code>, and reorder scattered GPU buffers with the built-in CUDA kernel.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~25 min</span></div><span class="tut-arrow">→</span></a>
+        <a href="api-reference/configuration/#accurate-send" class="tut-item"><span class="tut-num">10</span><div class="tut-info"><div class="tut-title">Timed TX with ConnectX-7</div><div class="tut-desc">Enable <code>accurate_send</code> in the TX config and use <code>set_packet_tx_time()</code> for PTP-synchronized, hardware-scheduled packet transmission on ConnectX-7+.</div></div><div class="tut-meta"><span class="tag tag-int">Intermediate</span><span class="tut-time">~15 min</span></div><span class="tut-arrow">→</span></a>
+      </div>
+    </div>
+  </section>
+
+<!-- CTA -->
+<section id="cta">
+    <div class="container">
+      <div class="section-label">Get Started</div>
+      <h2>Connect Your Sensors to the NVIDIA Ecosystem</h2>
+      <p>Clone the repo, build with CMake, and start streaming sensor data directly into your GPU-accelerated pipeline today.</p>
+      <pre class="cta-pre"><span class="cm"># Clone and build</span>
+git clone https://github.com/NVIDIA/daqiri
+cmake -S daqiri -B build \
+  -DBUILD_SHARED_LIBS=ON \
+  -DDAQIRI_ENGINE=<span class="str">"dpdk ibverbs"</span>
+cmake --build build -j</pre>
+      <div class="cta-actions">
+        <a href="getting-started/" class="btn btn-primary">Getting Started Guide →</a>
+        <a href="api-reference/" class="btn btn-outline">API Reference →</a>
+        <a href="https://github.com/NVIDIA/daqiri" class="btn btn-outline" target="_blank">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          View on GitHub
+        </a>
+      </div>
+    </div>
+  </section>
+
+<!-- FOOTER -->
+<footer class="landing-footer">
+    <div class="container">
+      <div class="footer-inner">
+        <div class="footer-brand">
+          <div class="footer-brand-logo">
+            <img src="images/logo.svg" alt="DAQIRI" />
+            <span class="footer-logo-text">DAQIRI</span>
+            <span class="footer-logo-badge">NVIDIA</span>
+          </div>
+          <p>Data Acquisition for Integrated Real-time Instruments — high-bandwidth Ethernet I/O for GPU-accelerated science and industry.</p>
+        </div>
+        <div>
+          <div class="footer-col-title">Docs</div>
+          <ul class="footer-links">
+            <li><a href="api-reference/">API Guide</a></li>
+            <li><a href="api-reference/configuration/">Configuration</a></li>
+            <li><a href="api-reference/cpp/">C++ API Usage</a></li>
+            <li><a href="api-reference/python/">Python API Usage</a></li>
+            <li><a href="getting-started/">Getting Started</a></li>
+            <li><a href="benchmarks/benchmarks/">Benchmarking</a></li>
+          </ul>
+        </div>
+        <div>
+          <div class="footer-col-title">Project</div>
+          <ul class="footer-links">
+            <li><a href="https://github.com/NVIDIA/daqiri" target="_blank">GitHub</a></li>
+            <li><a href="https://github.com/NVIDIA/daqiri/issues" target="_blank">Issues</a></li>
+            <li><a href="https://github.com/NVIDIA/daqiri/blob/main/CONTRIBUTING.md" target="_blank">Contributing</a></li>
+            <li><a href="https://github.com/NVIDIA/daqiri/blob/main/SECURITY.md" target="_blank">Security</a></li>
+          </ul>
+        </div>
+        <div>
+          <div class="footer-col-title">NVIDIA</div>
+          <ul class="footer-links">
+            <li><a href="https://developer.nvidia.com" target="_blank">Developer</a></li>
+            <li><a href="https://developer.nvidia.com/networking" target="_blank">Networking</a></li>
+            <li><a href="https://developer.nvidia.com/gpudirect" target="_blank">GPUDirect</a></li>
+            <li><a href="https://developer.nvidia.com/doca-archive" target="_blank">DOCA</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <div class="footer-bottom-l">© 2026 NVIDIA Corporation. Licensed under Apache 2.0.</div>
+        <div class="footer-bottom-r">
+          <a href="https://github.com/NVIDIA/daqiri/blob/main/LICENSE" target="_blank">License</a>
+          <a href="https://github.com/NVIDIA/daqiri/blob/main/SECURITY.md" target="_blank">Security</a>
+          <a href="https://github.com/NVIDIA/daqiri" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+<div class="graphic-overlay" id="architecture-graphic-overlay" aria-hidden="true">
+    <div class="graphic-overlay-backdrop" data-arch-close></div>
+    <div class="graphic-overlay-panel" role="dialog" aria-modal="true" aria-labelledby="architecture-graphic-title">
+      <div class="graphic-overlay-bar">
+        <h2 class="graphic-overlay-title" id="architecture-graphic-title">AI Native Data Acquisition and Control</h2>
+        <button class="graphic-overlay-close" type="button" data-arch-close aria-label="Close graphic overlay">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+      <img class="graphic-overlay-img" src="images/architecture.svg" alt="AI Native DAQ Architecture" />
+    </div>
+  </div>
+
+<div class="graphic-overlay" id="daqiri-graphic-overlay" aria-hidden="true">
+    <div class="graphic-overlay-backdrop" data-graphic-close></div>
+    <div class="graphic-overlay-panel" role="dialog" aria-modal="true" aria-labelledby="daqiri-graphic-title">
+      <div class="graphic-overlay-bar">
+        <h2 class="graphic-overlay-title" id="daqiri-graphic-title">DAQIRI Sensor Data and Storage Paths</h2>
+        <button class="graphic-overlay-close" type="button" data-graphic-close aria-label="Close graphic overlay">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+      <img class="graphic-overlay-img" src="images/daqiri-landing-graphic.svg" alt="DAQIRI moves PCIe FPGA and network sensor data into or out of NVIDIA GPU or CPU memory, then writes GPU data to storage through GPUDirect Storage" />
+    </div>
+  </div>
+  </div>
+
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+  
+
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["content.code.annotate", "content.code.copy", "content.tabs.link", "navigation.tabs", "navigation.sections", "navigation.top", "navigation.footer", "search.highlight", "search.suggest", "toc.follow"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+  
+      <script src="assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="javascripts/platform-tab-toc.js"></script>
+      
+        <script src="javascripts/tab-dropdowns.js"></script>
+      
+        <script src="javascripts/image-overlay.js"></script>
+      
+    
+  <script src="javascripts/landing.js"></script>
+
+  </body>
+</html>

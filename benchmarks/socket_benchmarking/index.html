@@ -1,0 +1,1796 @@
+
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://nvidia.github.io/daqiri/benchmarks/socket_benchmarking/">
+      
+      
+        <link rel="prev" href="../benchmarks/">
+      
+      
+        <link rel="next" href="../raw_benchmarking/">
+      
+      
+        
+      
+      
+      <link rel="icon" type="image/png" sizes="32x32" href="../../images/favicon-32.png">
+      <link rel="icon" href="../../images/favicon.svg" sizes="any" type="image/svg+xml">
+      <link rel="apple-touch-icon" href="../../images/apple-touch-icon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Socket and RDMA Benchmarking - DAQIRI — Data Acquisition for Integrated Real-time Instruments</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  <script>window.NV_NAV = {"Benchmarking": [{"label": "Overview", "url": "benchmarks/benchmarks/"}, {"label": "Socket and RDMA Benchmarking", "url": "benchmarks/socket_benchmarking/"}, {"label": "Raw Ethernet Benchmarking", "url": "benchmarks/raw_benchmarking/"}, {"label": "Performance: DGX Spark", "url": "benchmarks/performance-dgx-spark/"}], "API Reference": [{"label": "API Guide", "url": "api-reference/"}, {"label": "Configuration YAML Reference", "url": "api-reference/configuration/"}, {"label": "C++ API Usage", "url": "api-reference/cpp/"}, {"label": "Python API Usage", "url": "api-reference/python/"}], "Tutorials": [{"label": "System Configuration", "url": "tutorials/system_configuration/"}, {"label": "Bare-Metal CMake Build", "url": "tutorials/bare-metal-cmake-build/"}, {"label": "Configuration YAML Walkthrough", "url": "tutorials/configuration-walkthrough/"}, {"label": "DAQIRI + Holoscan Integration", "url": "tutorials/daqiri-holoscan-integration/"}]};</script></head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="light-green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#socket-and-rdma-benchmarking" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="DAQIRI — Data Acquisition for Integrated Real-time Instruments" class="md-header__button md-logo" aria-label="DAQIRI — Data Acquisition for Integrated Real-time Instruments" data-md-component="logo">
+      
+  <img src="../../images/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            DAQIRI — Data Acquisition for Integrated Real-time Instruments
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Socket and RDMA Benchmarking
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="light-green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="light-green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/nvidia/daqiri" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    nvidia/daqiri
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../getting-started/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Getting Started
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../concepts/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Concepts
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../benchmarks/" class="md-tabs__link">
+          
+  
+  
+  Benchmarking
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../api-reference/" class="md-tabs__link">
+          
+  
+  
+  API Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../tutorials/system_configuration/" class="md-tabs__link">
+          
+  
+  
+  Tutorials
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+                
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" hidden>
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="DAQIRI — Data Acquisition for Integrated Real-time Instruments" class="md-nav__button md-logo" aria-label="DAQIRI — Data Acquisition for Integrated Real-time Instruments" data-md-component="logo">
+      
+  <img src="../../images/logo.svg" alt="logo">
+
+    </a>
+    DAQIRI — Data Acquisition for Integrated Real-time Instruments
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/nvidia/daqiri" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    nvidia/daqiri
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Benchmarking
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Benchmarking
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Socket and RDMA Benchmarking
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Socket and RDMA Benchmarking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#protocol-choices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Protocol choices
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#build-and-launch-a-test-shell" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Build and launch a test shell
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#create-isolated-namespaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Create isolated namespaces
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prove-the-pair-hits-the-wire" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prove the pair hits the wire
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#run-the-linux-socket-benchmark" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run the Linux socket benchmark
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#run-the-rdma-roce-benchmark" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run the RDMA RoCE benchmark
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-spark-socket-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example Spark socket results
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#restore-host-networking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Restore host networking
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#loopback-disable-knobs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Loopback disable knobs
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../raw_benchmarking/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Raw Ethernet Benchmarking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../performance-dgx-spark/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance: DGX Spark
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration YAML Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/cpp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    C++ API Usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API Usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorials
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tutorials
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/system_configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/bare-metal-cmake-build/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bare-Metal CMake Build
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/configuration-walkthrough/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration YAML Walkthrough
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/daqiri-holoscan-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DAQIRI + Holoscan Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+                
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#protocol-choices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Protocol choices
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#build-and-launch-a-test-shell" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Build and launch a test shell
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#create-isolated-namespaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Create isolated namespaces
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prove-the-pair-hits-the-wire" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prove the pair hits the wire
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#run-the-linux-socket-benchmark" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run the Linux socket benchmark
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#run-the-rdma-roce-benchmark" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run the RDMA RoCE benchmark
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-spark-socket-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example Spark socket results
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#restore-host-networking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Restore host networking
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#loopback-disable-knobs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Loopback disable knobs
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+  
+
+
+
+  
+  
+
+
+<h1 id="socket-and-rdma-benchmarking">Socket and RDMA Benchmarking<a class="headerlink" href="#socket-and-rdma-benchmarking" title="Permanent link">&para;</a></h1>
+<p>Use this page when the peer transport is TCP, UDP, or RoCE/RDMA. These benchmarks use the Linux networking stack for TCP/UDP and RDMA verbs for RoCE, so the same client/server namespace shape is useful for proving that traffic leaves the host through the expected NIC path.</p>
+<p>For <strong>two-host Spark cross-cable</strong> tests (not netns), RoCE/RDMA still needs kernel reachability to the peer — apply the host route and static neighbor steps in <a href="../../tutorials/system_configuration/#cross-host-variant-two-sparks">System Configuration → Cross-host variant</a> before running <code>daqiri_bench_rdma</code> with the <code>_xhost</code> configs.</p>
+<p>Make sure to <a href="../../getting-started/#build-the-daqiri-library">build DAQIRI</a> with the <code>ibverbs</code> engine first (for the RoCE/RDMA benchmark); Linux UDP/TCP sockets are always available.</p>
+<h2 id="protocol-choices">Protocol choices<a class="headerlink" href="#protocol-choices" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Transport</th>
+<th>YAML selector</th>
+<th>Benchmark executable</th>
+<th>Typical reason to use it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TCP</td>
+<td><code>stream_type: "socket"</code> with <code>tcp://</code> endpoint URIs</td>
+<td><code>daqiri_bench_socket</code></td>
+<td>Baseline against normal Linux streams or test a TCP-speaking peer.</td>
+</tr>
+<tr>
+<td>UDP</td>
+<td><code>stream_type: "socket"</code> with <code>udp://</code> endpoint URIs</td>
+<td><code>daqiri_bench_socket</code></td>
+<td>Datagram baseline against Linux networking. UDP payloads must be at most <code>65507</code> bytes.</td>
+</tr>
+<tr>
+<td>RoCE/RDMA</td>
+<td><code>stream_type: "socket"</code> and <code>roce://</code> endpoint URIs</td>
+<td><code>daqiri_bench_rdma</code></td>
+<td>Compare DAQIRI RDMA verbs against tools such as <code>ib_send_bw</code> or <code>ib_write_bw</code>.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="build-and-launch-a-test-shell">Build and launch a test shell<a class="headerlink" href="#build-and-launch-a-test-shell" title="Permanent link">&para;</a></h2>
+<p>Build the socket and RDMA benchmarks inside the DAQIRI container:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>--privileged<span class="w"> </span>--network<span class="o">=</span>host<span class="w"> </span>--gpus<span class="w"> </span>all<span class="w"> </span>--ipc<span class="o">=</span>host<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--user<span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>id<span class="w"> </span>-u<span class="k">)</span><span class="s2">:</span><span class="k">$(</span>id<span class="w"> </span>-g<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>-v<span class="w"> </span>/dev/hugepages:/dev/hugepages<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>-v<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$PWD</span><span class="s2">:/work&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span>-w<span class="w"> </span>/work<span class="w"> </span>daqiri:local<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span>bash<span class="w"> </span>-lc<span class="w"> </span><span class="s1">&#39;cmake -S . -B build-socket-rdma \</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="s1">    -DBUILD_SHARED_LIBS=ON \</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="s1">    -DDAQIRI_BUILD_PYTHON=OFF \</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="s1">    -DDAQIRI_ENGINE=&quot;dpdk ibverbs&quot; &amp;&amp;</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="s1">    cmake --build build-socket-rdma \</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="s1">      --target daqiri_bench_socket daqiri_bench_rdma -j&quot;$(nproc)&quot;&#39;</span>
+</code></pre></div>
+<p>Run the benchmark setup commands as root. The easiest path is a privileged, host-networked DAQIRI container:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-it<span class="w"> </span>--privileged<span class="w"> </span>--network<span class="o">=</span>host<span class="w"> </span>--pid<span class="o">=</span>host<span class="w"> </span>--ipc<span class="o">=</span>host<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--gpus<span class="w"> </span>all<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>-v<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$PWD</span><span class="s2">:/work&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>-v<span class="w"> </span>/tmp:/tmp<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span>-w<span class="w"> </span>/work<span class="w"> </span>daqiri:local<span class="w"> </span>bash
+</code></pre></div>
+<p>Install network tools inside the container if needed:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>apt-get<span class="w"> </span>update
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>apt-get<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>iproute2<span class="w"> </span>iputils-ping<span class="w"> </span>ethtool<span class="w"> </span>iperf3<span class="w"> </span>rdma-core<span class="w"> </span>ibverbs-utils
+</code></pre></div>
+<h2 id="create-isolated-namespaces">Create isolated namespaces<a class="headerlink" href="#create-isolated-namespaces" title="Permanent link">&para;</a></h2>
+<p>Choose one transmit-facing interface and one receive-facing interface. The example below uses the Spark pair that was verified to increment physical counters on the tested system; adjust names, IPs, and MAC addresses on other machines.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nv">CLIENT_NS</span><span class="o">=</span>dq_wire_client
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nv">SERVER_NS</span><span class="o">=</span>dq_wire_server
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="nv">CLIENT_IF</span><span class="o">=</span>enp1s0f0np0
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="nv">SERVER_IF</span><span class="o">=</span>enp1s0f1np1
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="nv">CLIENT_IP</span><span class="o">=</span><span class="m">10</span>.250.0.1
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="nv">SERVER_IP</span><span class="o">=</span><span class="m">10</span>.250.0.2
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="nv">CLIENT_MAC</span><span class="o">=</span>4c:bb:47:2a:ea:ed
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="nv">SERVER_MAC</span><span class="o">=</span>4c:bb:47:2a:ea:ee
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="nv">MTU</span><span class="o">=</span><span class="m">9082</span>
+</code></pre></div>
+<p>Create namespaces and pin routes to the physical interfaces:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>ip<span class="w"> </span>netns<span class="w"> </span>delete<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_NS</span><span class="s2">&quot;</span><span class="w"> </span>&gt;/dev/null<span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>ip<span class="w"> </span>netns<span class="w"> </span>delete<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_NS</span><span class="s2">&quot;</span><span class="w"> </span>&gt;/dev/null<span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>ip<span class="w"> </span>addr<span class="w"> </span>flush<span class="w"> </span>dev<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_IF</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>ip<span class="w"> </span>addr<span class="w"> </span>flush<span class="w"> </span>dev<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_IF</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>ip<span class="w"> </span>netns<span class="w"> </span>add<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_NS</span><span class="s2">&quot;</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>ip<span class="w"> </span>netns<span class="w"> </span>add<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_NS</span><span class="s2">&quot;</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>ip<span class="w"> </span>link<span class="w"> </span><span class="nb">set</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_IF</span><span class="s2">&quot;</span><span class="w"> </span>netns<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_NS</span><span class="s2">&quot;</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>ip<span class="w"> </span>link<span class="w"> </span><span class="nb">set</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_IF</span><span class="s2">&quot;</span><span class="w"> </span>netns<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_NS</span><span class="s2">&quot;</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>ip<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_NS</span><span class="s2">&quot;</span><span class="w"> </span>addr<span class="w"> </span>add<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_IP</span><span class="s2">/24&quot;</span><span class="w"> </span>dev<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_IF</span><span class="s2">&quot;</span>
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>ip<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_NS</span><span class="s2">&quot;</span><span class="w"> </span>addr<span class="w"> </span>add<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_IP</span><span class="s2">/24&quot;</span><span class="w"> </span>dev<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_IF</span><span class="s2">&quot;</span>
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>
+<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a>ip<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_NS</span><span class="s2">&quot;</span><span class="w"> </span>link<span class="w"> </span><span class="nb">set</span><span class="w"> </span>lo<span class="w"> </span>up
+<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a>ip<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_NS</span><span class="s2">&quot;</span><span class="w"> </span>link<span class="w"> </span><span class="nb">set</span><span class="w"> </span>lo<span class="w"> </span>up
+<a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a>ip<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_NS</span><span class="s2">&quot;</span><span class="w"> </span>link<span class="w"> </span><span class="nb">set</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_IF</span><span class="s2">&quot;</span><span class="w"> </span>mtu<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$MTU</span><span class="s2">&quot;</span><span class="w"> </span>up
+<a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a>ip<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_NS</span><span class="s2">&quot;</span><span class="w"> </span>link<span class="w"> </span><span class="nb">set</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_IF</span><span class="s2">&quot;</span><span class="w"> </span>mtu<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$MTU</span><span class="s2">&quot;</span><span class="w"> </span>up
+<a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a>
+<a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a>ip<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_NS</span><span class="s2">&quot;</span><span class="w"> </span>route<span class="w"> </span>add<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_IP</span><span class="s2">/32&quot;</span><span class="w"> </span>dev<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_IF</span><span class="s2">&quot;</span>
+<a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a>ip<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_NS</span><span class="s2">&quot;</span><span class="w"> </span>route<span class="w"> </span>add<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_IP</span><span class="s2">/32&quot;</span><span class="w"> </span>dev<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_IF</span><span class="s2">&quot;</span>
+<a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a>
+<a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a>ip<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_NS</span><span class="s2">&quot;</span><span class="w"> </span>neigh<span class="w"> </span>replace<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_IP</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-25" name="__codelineno-4-25" href="#__codelineno-4-25"></a><span class="w">  </span>lladdr<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_MAC</span><span class="s2">&quot;</span><span class="w"> </span>dev<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_IF</span><span class="s2">&quot;</span><span class="w"> </span>nud<span class="w"> </span>permanent
+<a id="__codelineno-4-26" name="__codelineno-4-26" href="#__codelineno-4-26"></a>ip<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_NS</span><span class="s2">&quot;</span><span class="w"> </span>neigh<span class="w"> </span>replace<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_IP</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-27" name="__codelineno-4-27" href="#__codelineno-4-27"></a><span class="w">  </span>lladdr<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_MAC</span><span class="s2">&quot;</span><span class="w"> </span>dev<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_IF</span><span class="s2">&quot;</span><span class="w"> </span>nud<span class="w"> </span>permanent
+</code></pre></div>
+<p>Verify the route and a short control packet:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>ip<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_NS</span><span class="s2">&quot;</span><span class="w"> </span>route<span class="w"> </span>get<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_IP</span><span class="s2">&quot;</span><span class="w"> </span>from<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_IP</span><span class="s2">&quot;</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>ip<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_NS</span><span class="s2">&quot;</span><span class="w"> </span>route<span class="w"> </span>get<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_IP</span><span class="s2">&quot;</span><span class="w"> </span>from<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_IP</span><span class="s2">&quot;</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>ip<span class="w"> </span>netns<span class="w"> </span><span class="nb">exec</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_NS</span><span class="s2">&quot;</span><span class="w"> </span>ping<span class="w"> </span>-c<span class="w"> </span><span class="m">1</span><span class="w"> </span>-W<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_IP</span><span class="s2">&quot;</span>
+</code></pre></div>
+<p>The route output should name the namespace interface, not <code>lo</code>.</p>
+<div class="admonition note">
+<p class="admonition-title">RDMA device visibility</p>
+<p>On most RoCE setups, the RDMA device follows the netdev/GID association used by the namespace. If <code>ibv_devinfo</code> or <code>rdma link show</code> inside a namespace cannot see the expected device, move the matching RDMA device into the namespace with <code>rdma dev set &lt;rdma_device&gt; netns &lt;namespace&gt;</code>, or run the RDMA benchmark in the host namespace and still verify the same physical counters.</p>
+</div>
+<h2 id="prove-the-pair-hits-the-wire">Prove the pair hits the wire<a class="headerlink" href="#prove-the-pair-hits-the-wire" title="Permanent link">&para;</a></h2>
+<p>Capture directional PHY counters before and after a short transfer. For one-way client-to-server traffic:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>ip<span class="w"> </span>netns<span class="w"> </span><span class="nb">exec</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_NS</span><span class="s2">&quot;</span><span class="w"> </span>ethtool<span class="w"> </span>-S<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_IF</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s1">&#39;tx_packets_phy|tx_bytes_phy|tx_vport_unicast&#39;</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>ip<span class="w"> </span>netns<span class="w"> </span><span class="nb">exec</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_NS</span><span class="s2">&quot;</span><span class="w"> </span>ethtool<span class="w"> </span>-S<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_IF</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s1">&#39;rx_packets_phy|rx_bytes_phy|rx_vport_unicast&#39;</span>
+</code></pre></div>
+<p>Use <code>iperf3</code> as a quick proof before running DAQIRI:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>ip<span class="w"> </span>netns<span class="w"> </span><span class="nb">exec</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_NS</span><span class="s2">&quot;</span><span class="w"> </span>iperf3<span class="w"> </span>-s<span class="w"> </span>-B<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_IP</span><span class="s2">&quot;</span><span class="w"> </span>-1<span class="w"> </span><span class="p">&amp;</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>sleep<span class="w"> </span><span class="m">1</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>ip<span class="w"> </span>netns<span class="w"> </span><span class="nb">exec</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_NS</span><span class="s2">&quot;</span><span class="w"> </span>iperf3<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_IP</span><span class="s2">&quot;</span><span class="w"> </span>-B<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_IP</span><span class="s2">&quot;</span><span class="w"> </span>-t<span class="w"> </span><span class="m">2</span><span class="w"> </span>-P<span class="w"> </span><span class="m">1</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="nb">wait</span>
+</code></pre></div>
+<p>Then check the counters again. Treat the result as on-wire only when the client <code>tx_packets_phy</code> and server <code>rx_packets_phy</code> counters increase by matching packet counts. If only vport counters move, pick a different port pair.</p>
+<h2 id="run-the-linux-socket-benchmark">Run the Linux socket benchmark<a class="headerlink" href="#run-the-linux-socket-benchmark" title="Permanent link">&para;</a></h2>
+<p>The shipped configs run both endpoints on <code>127.0.0.1</code> and are useful for a smoke test:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>./build-socket-rdma/examples/daqiri_bench_socket<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span>examples/daqiri_bench_socket_udp_tx_rx.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span>--seconds<span class="w"> </span><span class="m">10</span><span class="w"> </span>--mode<span class="w"> </span>both
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>./build-socket-rdma/examples/daqiri_bench_socket<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">  </span>examples/daqiri_bench_socket_tcp_tx_rx.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">  </span>--seconds<span class="w"> </span><span class="m">10</span><span class="w"> </span>--mode<span class="w"> </span>both
+</code></pre></div>
+<p>For an on-wire namespace test, use separate server and client YAML files. The important fields are the endpoint URI scheme, namespace IPs, server port, <code>max_payload_size</code>, memory-region <code>buf_size</code>, and benchmark <code>message_size</code>.</p>
+<p>Applications can tune the underlying TCP/UDP socket after resolving a connection ID
+with <code>socket_connect_to_server()</code> or <code>socket_get_server_conn_id()</code>. Use
+<code>socket_setsockopt(conn_id, level, optname, optval, optlen)</code> with the integer
+constants from your system headers.</p>
+<p>Server-side UDP template:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nt">%YAML</span><span class="w"> </span><span class="m">1.2</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="nn">---</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="nt">daqiri</span><span class="p">:</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span><span class="nt">cfg</span><span class="p">:</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">    </span><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">    </span><span class="nt">stream_type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;socket&quot;</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">    </span><span class="nt">master_core</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">    </span><span class="nt">debug</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">    </span><span class="nt">log_level</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;info&quot;</span>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="w">    </span><span class="nt">memory_regions</span><span class="p">:</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;DATA_SOCKET_SERVER&quot;</span>
+<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="w">      </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;host&quot;</span>
+<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="w">      </span><span class="nt">affinity</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span>
+<a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a><span class="w">      </span><span class="nt">num_bufs</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1024</span>
+<a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a><span class="w">      </span><span class="nt">buf_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">65507</span>
+<a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a><span class="w">    </span><span class="nt">interfaces</span><span class="p">:</span>
+<a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">udp_server</span>
+<a id="__codelineno-9-18" name="__codelineno-9-18" href="#__codelineno-9-18"></a><span class="w">      </span><span class="nt">address</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10.250.0.2</span>
+<a id="__codelineno-9-19" name="__codelineno-9-19" href="#__codelineno-9-19"></a><span class="w">      </span><span class="nt">socket_config</span><span class="p">:</span>
+<a id="__codelineno-9-20" name="__codelineno-9-20" href="#__codelineno-9-20"></a><span class="w">        </span><span class="nt">mode</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">server</span>
+<a id="__codelineno-9-21" name="__codelineno-9-21" href="#__codelineno-9-21"></a><span class="w">        </span><span class="nt">local_addr</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;udp://10.250.0.2:5021&quot;</span>
+<a id="__codelineno-9-22" name="__codelineno-9-22" href="#__codelineno-9-22"></a><span class="w">        </span><span class="nt">max_payload_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">65535</span>
+<a id="__codelineno-9-23" name="__codelineno-9-23" href="#__codelineno-9-23"></a><span class="w">      </span><span class="nt">rx</span><span class="p">:</span>
+<a id="__codelineno-9-24" name="__codelineno-9-24" href="#__codelineno-9-24"></a><span class="w">        </span><span class="nt">queues</span><span class="p">:</span>
+<a id="__codelineno-9-25" name="__codelineno-9-25" href="#__codelineno-9-25"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;RX_Queue&quot;</span>
+<a id="__codelineno-9-26" name="__codelineno-9-26" href="#__codelineno-9-26"></a><span class="w">          </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span>
+<a id="__codelineno-9-27" name="__codelineno-9-27" href="#__codelineno-9-27"></a><span class="w">          </span><span class="nt">cpu_core</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+<a id="__codelineno-9-28" name="__codelineno-9-28" href="#__codelineno-9-28"></a><span class="w">          </span><span class="nt">batch_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<a id="__codelineno-9-29" name="__codelineno-9-29" href="#__codelineno-9-29"></a><span class="w">          </span><span class="nt">memory_regions</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;DATA_SOCKET_SERVER&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-9-30" name="__codelineno-9-30" href="#__codelineno-9-30"></a><span class="w">      </span><span class="nt">tx</span><span class="p">:</span>
+<a id="__codelineno-9-31" name="__codelineno-9-31" href="#__codelineno-9-31"></a><span class="w">        </span><span class="nt">queues</span><span class="p">:</span>
+<a id="__codelineno-9-32" name="__codelineno-9-32" href="#__codelineno-9-32"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;TX_Queue&quot;</span>
+<a id="__codelineno-9-33" name="__codelineno-9-33" href="#__codelineno-9-33"></a><span class="w">          </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span>
+<a id="__codelineno-9-34" name="__codelineno-9-34" href="#__codelineno-9-34"></a><span class="w">          </span><span class="nt">cpu_core</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">7</span>
+<a id="__codelineno-9-35" name="__codelineno-9-35" href="#__codelineno-9-35"></a><span class="w">          </span><span class="nt">batch_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<a id="__codelineno-9-36" name="__codelineno-9-36" href="#__codelineno-9-36"></a><span class="w">          </span><span class="nt">memory_regions</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;DATA_SOCKET_SERVER&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-9-37" name="__codelineno-9-37" href="#__codelineno-9-37"></a>
+<a id="__codelineno-9-38" name="__codelineno-9-38" href="#__codelineno-9-38"></a><span class="nt">socket_bench_server</span><span class="p">:</span>
+<a id="__codelineno-9-39" name="__codelineno-9-39" href="#__codelineno-9-39"></a><span class="w">  </span><span class="nt">server</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-9-40" name="__codelineno-9-40" href="#__codelineno-9-40"></a><span class="w">  </span><span class="nt">send</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<a id="__codelineno-9-41" name="__codelineno-9-41" href="#__codelineno-9-41"></a><span class="w">  </span><span class="nt">receive</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-9-42" name="__codelineno-9-42" href="#__codelineno-9-42"></a><span class="w">  </span><span class="nt">cpu_core</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">9</span>
+<a id="__codelineno-9-43" name="__codelineno-9-43" href="#__codelineno-9-43"></a><span class="w">  </span><span class="nt">iterations</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1000000000</span>
+<a id="__codelineno-9-44" name="__codelineno-9-44" href="#__codelineno-9-44"></a><span class="w">  </span><span class="nt">message_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">65507</span>
+<a id="__codelineno-9-45" name="__codelineno-9-45" href="#__codelineno-9-45"></a><span class="w">  </span><span class="nt">server_address</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10.250.0.2</span>
+<a id="__codelineno-9-46" name="__codelineno-9-46" href="#__codelineno-9-46"></a><span class="w">  </span><span class="nt">client_address</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10.250.0.1</span>
+<a id="__codelineno-9-47" name="__codelineno-9-47" href="#__codelineno-9-47"></a><span class="w">  </span><span class="nt">server_port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5021</span>
+</code></pre></div>
+<p>Client-side UDP template:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nt">%YAML</span><span class="w"> </span><span class="m">1.2</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="nn">---</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="nt">daqiri</span><span class="p">:</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span><span class="nt">cfg</span><span class="p">:</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">    </span><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">    </span><span class="nt">stream_type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;socket&quot;</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">    </span><span class="nt">master_core</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">    </span><span class="nt">debug</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">    </span><span class="nt">log_level</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;info&quot;</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">    </span><span class="nt">memory_regions</span><span class="p">:</span>
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;DATA_SOCKET_CLIENT&quot;</span>
+<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="w">      </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;host&quot;</span>
+<a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="w">      </span><span class="nt">affinity</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span>
+<a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a><span class="w">      </span><span class="nt">num_bufs</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1024</span>
+<a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a><span class="w">      </span><span class="nt">buf_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">65507</span>
+<a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a><span class="w">    </span><span class="nt">interfaces</span><span class="p">:</span>
+<a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">udp_client</span>
+<a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a><span class="w">      </span><span class="nt">address</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10.250.0.1</span>
+<a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a><span class="w">      </span><span class="nt">socket_config</span><span class="p">:</span>
+<a id="__codelineno-10-20" name="__codelineno-10-20" href="#__codelineno-10-20"></a><span class="w">        </span><span class="nt">mode</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">client</span>
+<a id="__codelineno-10-21" name="__codelineno-10-21" href="#__codelineno-10-21"></a><span class="w">        </span><span class="nt">local_addr</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;udp://10.250.0.1:5121&quot;</span>
+<a id="__codelineno-10-22" name="__codelineno-10-22" href="#__codelineno-10-22"></a><span class="w">        </span><span class="nt">remote_addr</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;udp://10.250.0.2:5021&quot;</span>
+<a id="__codelineno-10-23" name="__codelineno-10-23" href="#__codelineno-10-23"></a><span class="w">        </span><span class="nt">max_payload_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">65535</span>
+<a id="__codelineno-10-24" name="__codelineno-10-24" href="#__codelineno-10-24"></a><span class="w">      </span><span class="nt">rx</span><span class="p">:</span>
+<a id="__codelineno-10-25" name="__codelineno-10-25" href="#__codelineno-10-25"></a><span class="w">        </span><span class="nt">queues</span><span class="p">:</span>
+<a id="__codelineno-10-26" name="__codelineno-10-26" href="#__codelineno-10-26"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;RX_Queue&quot;</span>
+<a id="__codelineno-10-27" name="__codelineno-10-27" href="#__codelineno-10-27"></a><span class="w">          </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span>
+<a id="__codelineno-10-28" name="__codelineno-10-28" href="#__codelineno-10-28"></a><span class="w">          </span><span class="nt">cpu_core</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+<a id="__codelineno-10-29" name="__codelineno-10-29" href="#__codelineno-10-29"></a><span class="w">          </span><span class="nt">batch_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<a id="__codelineno-10-30" name="__codelineno-10-30" href="#__codelineno-10-30"></a><span class="w">          </span><span class="nt">memory_regions</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;DATA_SOCKET_CLIENT&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-10-31" name="__codelineno-10-31" href="#__codelineno-10-31"></a><span class="w">      </span><span class="nt">tx</span><span class="p">:</span>
+<a id="__codelineno-10-32" name="__codelineno-10-32" href="#__codelineno-10-32"></a><span class="w">        </span><span class="nt">queues</span><span class="p">:</span>
+<a id="__codelineno-10-33" name="__codelineno-10-33" href="#__codelineno-10-33"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;TX_Queue&quot;</span>
+<a id="__codelineno-10-34" name="__codelineno-10-34" href="#__codelineno-10-34"></a><span class="w">          </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span>
+<a id="__codelineno-10-35" name="__codelineno-10-35" href="#__codelineno-10-35"></a><span class="w">          </span><span class="nt">cpu_core</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">7</span>
+<a id="__codelineno-10-36" name="__codelineno-10-36" href="#__codelineno-10-36"></a><span class="w">          </span><span class="nt">batch_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<a id="__codelineno-10-37" name="__codelineno-10-37" href="#__codelineno-10-37"></a><span class="w">          </span><span class="nt">memory_regions</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;DATA_SOCKET_CLIENT&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-10-38" name="__codelineno-10-38" href="#__codelineno-10-38"></a>
+<a id="__codelineno-10-39" name="__codelineno-10-39" href="#__codelineno-10-39"></a><span class="nt">socket_bench_client</span><span class="p">:</span>
+<a id="__codelineno-10-40" name="__codelineno-10-40" href="#__codelineno-10-40"></a><span class="w">  </span><span class="nt">server</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<a id="__codelineno-10-41" name="__codelineno-10-41" href="#__codelineno-10-41"></a><span class="w">  </span><span class="nt">send</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-10-42" name="__codelineno-10-42" href="#__codelineno-10-42"></a><span class="w">  </span><span class="nt">receive</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<a id="__codelineno-10-43" name="__codelineno-10-43" href="#__codelineno-10-43"></a><span class="w">  </span><span class="nt">cpu_core</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">9</span>
+<a id="__codelineno-10-44" name="__codelineno-10-44" href="#__codelineno-10-44"></a><span class="w">  </span><span class="nt">iterations</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1000000000</span>
+<a id="__codelineno-10-45" name="__codelineno-10-45" href="#__codelineno-10-45"></a><span class="w">  </span><span class="nt">message_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">65507</span>
+<a id="__codelineno-10-46" name="__codelineno-10-46" href="#__codelineno-10-46"></a><span class="w">  </span><span class="nt">server_address</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10.250.0.2</span>
+<a id="__codelineno-10-47" name="__codelineno-10-47" href="#__codelineno-10-47"></a><span class="w">  </span><span class="nt">client_address</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10.250.0.1</span>
+<a id="__codelineno-10-48" name="__codelineno-10-48" href="#__codelineno-10-48"></a><span class="w">  </span><span class="nt">server_port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5021</span>
+</code></pre></div>
+<p>For TCP, change each endpoint URI scheme from <code>udp://</code> to <code>tcp://</code> in both files. For UDP, keep <code>message_size</code> at or below <code>65507</code>.</p>
+<p>Run the server and client in their namespaces:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">LD_LIBRARY_PATH</span><span class="o">=</span>/work/build-socket-rdma/src:<span class="si">${</span><span class="nv">LD_LIBRARY_PATH</span><span class="k">:-</span><span class="si">}</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="nv">BIN</span><span class="o">=</span>/work/build-socket-rdma/examples/daqiri_bench_socket
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>ip<span class="w"> </span>netns<span class="w"> </span><span class="nb">exec</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_NS</span><span class="s2">&quot;</span><span class="w"> </span>env<span class="w"> </span><span class="nv">LD_LIBRARY_PATH</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$LD_LIBRARY_PATH</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">  </span><span class="s2">&quot;</span><span class="nv">$BIN</span><span class="s2">&quot;</span><span class="w"> </span>/tmp/socket-server.yaml<span class="w"> </span>--seconds<span class="w"> </span><span class="m">11</span><span class="w"> </span>--mode<span class="w"> </span>server<span class="w"> </span><span class="p">&amp;</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>sleep<span class="w"> </span><span class="m">1</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>ip<span class="w"> </span>netns<span class="w"> </span><span class="nb">exec</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_NS</span><span class="s2">&quot;</span><span class="w"> </span>env<span class="w"> </span><span class="nv">LD_LIBRARY_PATH</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$LD_LIBRARY_PATH</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="w">  </span><span class="s2">&quot;</span><span class="nv">$BIN</span><span class="s2">&quot;</span><span class="w"> </span>/tmp/socket-client.yaml<span class="w"> </span>--seconds<span class="w"> </span><span class="m">10</span><span class="w"> </span>--mode<span class="w"> </span>client
+<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a>
+<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a><span class="nb">wait</span>
+</code></pre></div>
+<p>For a four-process run, create four server/client YAML pairs with unique server ports such as <code>5021</code>, <code>5022</code>, <code>5023</code>, and <code>5024</code>, and unique client local ports such as <code>5121</code>, <code>5122</code>, <code>5123</code>, and <code>5124</code>.</p>
+<h2 id="run-the-rdma-roce-benchmark">Run the RDMA RoCE benchmark<a class="headerlink" href="#run-the-rdma-roce-benchmark" title="Permanent link">&para;</a></h2>
+<p>Start from <code>examples/daqiri_bench_rdma_tx_rx.yaml</code> or <code>examples/daqiri_bench_rdma_tx_rx_spark.yaml</code>. The full config can run both endpoints in one process:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>./build-socket-rdma/examples/daqiri_bench_rdma<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span>examples/daqiri_bench_rdma_tx_rx_spark.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span>--seconds<span class="w"> </span><span class="m">10</span><span class="w"> </span>--mode<span class="w"> </span>both
+</code></pre></div>
+<p><code>rdma_bench_server</code> and <code>rdma_bench_client</code> accept <code>cpu_core</code> plus optional
+<code>tx_depth</code> and <code>rx_depth</code> fields. <code>cpu_core</code> pins the benchmark application's
+server/client role thread, separately from the DAQIRI queue worker cores. The
+depth defaults follow the <code>ib_send_bw</code> shape:
+<code>tx_depth: 128</code>, <code>rx_depth: 512</code>. The benchmark preposts receive work before
+sending, refills receive work after completions, and keeps the transmit side
+bounded by <code>tx_depth</code>. For 4 KiB SEND-style stress tests, set the RX/TX
+memory-region <code>num_bufs</code> high enough for the chosen windows, for example at
+least <code>rx_depth</code> receive buffers and <code>tx_depth</code> transmit buffers per side.</p>
+<p>For namespace testing, split the file by role just as in the Linux socket test:</p>
+<ul>
+<li>The server YAML keeps the server memory regions, the server interface with <code>socket_config.mode: server</code>, and <code>rdma_bench_server</code>.</li>
+<li>The client YAML keeps the client memory regions, the client interface with <code>socket_config.mode: client</code>, and <code>rdma_bench_client</code>.</li>
+<li>Both files use <code>stream_type: "socket"</code> and <code>roce://</code> endpoint URIs.</li>
+<li>The client DAQIRI interface uses its local <code>roce://</code> endpoint; <code>rdma_bench_client.server_address</code> and <code>server_port</code> choose the peer at the app layer.</li>
+<li><code>rdma_bench_client.client_address</code> should be the client namespace IP.</li>
+</ul>
+<p>Run the split RDMA test with the same namespace pair:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">LD_LIBRARY_PATH</span><span class="o">=</span>/work/build-socket-rdma/src:<span class="si">${</span><span class="nv">LD_LIBRARY_PATH</span><span class="k">:-</span><span class="si">}</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="nv">BIN</span><span class="o">=</span>/work/build-socket-rdma/examples/daqiri_bench_rdma
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>ip<span class="w"> </span>netns<span class="w"> </span><span class="nb">exec</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_NS</span><span class="s2">&quot;</span><span class="w"> </span>env<span class="w"> </span><span class="nv">LD_LIBRARY_PATH</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$LD_LIBRARY_PATH</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">  </span><span class="s2">&quot;</span><span class="nv">$BIN</span><span class="s2">&quot;</span><span class="w"> </span>/tmp/rdma-server.yaml<span class="w"> </span>--seconds<span class="w"> </span><span class="m">11</span><span class="w"> </span>--mode<span class="w"> </span>server<span class="w"> </span><span class="p">&amp;</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>sleep<span class="w"> </span><span class="m">1</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>
+<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a>ip<span class="w"> </span>netns<span class="w"> </span><span class="nb">exec</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_NS</span><span class="s2">&quot;</span><span class="w"> </span>env<span class="w"> </span><span class="nv">LD_LIBRARY_PATH</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$LD_LIBRARY_PATH</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a><span class="w">  </span><span class="s2">&quot;</span><span class="nv">$BIN</span><span class="s2">&quot;</span><span class="w"> </span>/tmp/rdma-client.yaml<span class="w"> </span>--seconds<span class="w"> </span><span class="m">10</span><span class="w"> </span>--mode<span class="w"> </span>client
+<a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a>
+<a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a><span class="nb">wait</span>
+</code></pre></div>
+<p>Use <code>ib_send_bw</code> or <code>ib_write_bw</code> in the same namespaces as a comparison baseline, and monitor <code>mlnx_perf</code> or <code>ethtool -S</code> on the same directional interfaces.</p>
+<h2 id="example-spark-socket-results">Example Spark socket results<a class="headerlink" href="#example-spark-socket-results" title="Permanent link">&para;</a></h2>
+<p>The following DAQIRI socket matrix was run on the verified physical path <code>enp1s0f0np0 -&gt; enp1s0f1np1</code> with four client/server process pairs:</p>
+<table>
+<thead>
+<tr>
+<th>Protocol</th>
+<th style="text-align: right;">Message size</th>
+<th style="text-align: right;">App TX</th>
+<th style="text-align: right;">App RX</th>
+<th style="text-align: right;">Loss</th>
+<th style="text-align: right;">Client <code>tx_packets_phy</code></th>
+<th style="text-align: right;">Server <code>rx_packets_phy</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TCP</td>
+<td style="text-align: right;">1000</td>
+<td style="text-align: right;">10.93 Gb/s</td>
+<td style="text-align: right;">10.93 Gb/s</td>
+<td style="text-align: right;">0.00%</td>
+<td style="text-align: right;">1,513,047</td>
+<td style="text-align: right;">1,513,047</td>
+</tr>
+<tr>
+<td>TCP</td>
+<td style="text-align: right;">8000</td>
+<td style="text-align: right;">11.20 Gb/s</td>
+<td style="text-align: right;">11.20 Gb/s</td>
+<td style="text-align: right;">0.00%</td>
+<td style="text-align: right;">1,550,052</td>
+<td style="text-align: right;">1,550,052</td>
+</tr>
+<tr>
+<td>TCP</td>
+<td style="text-align: right;">1 MiB</td>
+<td style="text-align: right;">11.67 Gb/s</td>
+<td style="text-align: right;">11.67 Gb/s</td>
+<td style="text-align: right;">0.00%</td>
+<td style="text-align: right;">1,615,399</td>
+<td style="text-align: right;">1,615,399</td>
+</tr>
+<tr>
+<td>UDP</td>
+<td style="text-align: right;">1000</td>
+<td style="text-align: right;">12.28 Gb/s</td>
+<td style="text-align: right;">11.68 Gb/s</td>
+<td style="text-align: right;">4.88%</td>
+<td style="text-align: right;">15,350,463</td>
+<td style="text-align: right;">15,350,463</td>
+</tr>
+<tr>
+<td>UDP</td>
+<td style="text-align: right;">8000</td>
+<td style="text-align: right;">12.93 Gb/s</td>
+<td style="text-align: right;">10.10 Gb/s</td>
+<td style="text-align: right;">21.91%</td>
+<td style="text-align: right;">2,020,461</td>
+<td style="text-align: right;">2,020,461</td>
+</tr>
+<tr>
+<td>UDP</td>
+<td style="text-align: right;">65507</td>
+<td style="text-align: right;">12.84 Gb/s</td>
+<td style="text-align: right;">12.41 Gb/s</td>
+<td style="text-align: right;">3.34%</td>
+<td style="text-align: right;">1,960,392</td>
+<td style="text-align: right;">1,960,392</td>
+</tr>
+</tbody>
+</table>
+<p>UDP 1 MiB is intentionally skipped because Linux UDP payloads above <code>65507</code> bytes require fragmentation or segmentation behavior outside the benchmark's supported payload model.</p>
+<h2 id="restore-host-networking">Restore host networking<a class="headerlink" href="#restore-host-networking" title="Permanent link">&para;</a></h2>
+<p>After tests, move interfaces back to the host and restore the usual IPs. Adjust names and addresses for the target machine:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="k">for</span><span class="w"> </span>ns<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_NS</span><span class="s2">&quot;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_NS</span><span class="s2">&quot;</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span>ip<span class="w"> </span>netns<span class="w"> </span><span class="nb">exec</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$ns</span><span class="s2">&quot;</span><span class="w"> </span>ip<span class="w"> </span>link<span class="w"> </span><span class="nb">set</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_IF</span><span class="s2">&quot;</span><span class="w"> </span>netns<span class="w"> </span><span class="m">1</span><span class="w"> </span>&gt;/dev/null<span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span>ip<span class="w"> </span>netns<span class="w"> </span><span class="nb">exec</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$ns</span><span class="s2">&quot;</span><span class="w"> </span>ip<span class="w"> </span>link<span class="w"> </span><span class="nb">set</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_IF</span><span class="s2">&quot;</span><span class="w"> </span>netns<span class="w"> </span><span class="m">1</span><span class="w"> </span>&gt;/dev/null<span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="k">done</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>ip<span class="w"> </span>netns<span class="w"> </span>delete<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_NS</span><span class="s2">&quot;</span><span class="w"> </span>&gt;/dev/null<span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>ip<span class="w"> </span>netns<span class="w"> </span>delete<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_NS</span><span class="s2">&quot;</span><span class="w"> </span>&gt;/dev/null<span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>
+<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="k">for</span><span class="w"> </span>ifc<span class="w"> </span><span class="k">in</span><span class="w"> </span>enp1s0f0np0<span class="w"> </span>enp1s0f1np1<span class="w"> </span>enP2p1s0f0np0<span class="w"> </span>enP2p1s0f1np1<span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a><span class="w">  </span>ip<span class="w"> </span>addr<span class="w"> </span>flush<span class="w"> </span>dev<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$ifc</span><span class="s2">&quot;</span><span class="w"> </span>&gt;/dev/null<span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a><span class="w">  </span>ip<span class="w"> </span>link<span class="w"> </span><span class="nb">set</span><span class="w"> </span>dev<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$ifc</span><span class="s2">&quot;</span><span class="w"> </span>mtu<span class="w"> </span><span class="m">9082</span><span class="w"> </span>up<span class="w"> </span>&gt;/dev/null<span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a><span class="k">done</span>
+</code></pre></div>
+<h2 id="loopback-disable-knobs">Loopback disable knobs<a class="headerlink" href="#loopback-disable-knobs" title="Permanent link">&para;</a></h2>
+<p>If namespace isolation still increments only vport counters, check whether the platform exposes loopback control:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>ethtool<span class="w"> </span>--show-priv-flags<span class="w"> </span>&lt;interface&gt;
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>ethtool<span class="w"> </span>--set-priv-flags<span class="w"> </span>&lt;interface&gt;<span class="w"> </span>local_lb<span class="w"> </span>off
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>mlxconfig<span class="w"> </span>-d<span class="w"> </span>&lt;device&gt;<span class="w"> </span>q<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>FORCE_LOOPBACK_DISABLE
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>mlxconfig<span class="w"> </span>-d<span class="w"> </span>&lt;device&gt;<span class="w"> </span><span class="nb">set</span><span class="w"> </span><span class="nv">FORCE_LOOPBACK_DISABLE</span><span class="o">=</span><span class="m">1</span>
+</code></pre></div>
+<p>Treat firmware settings as maintenance-window changes: query first, set only with the proper Mellanox tooling available, then reset or reboot as required and rerun the same <code>rx_packets_phy</code> proof.</p>
+<hr />
+<p><strong>Previous:</strong> <a href="../benchmarks/">Benchmarking</a><br>
+<strong>Next:</strong> <a href="../raw_benchmarking/">Raw Ethernet Benchmarking</a></p>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+  
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+        
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../benchmarks/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Overview">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Overview
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../raw_benchmarking/" class="md-footer__link md-footer__link--next" aria-label="Next: Raw Ethernet Benchmarking">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Raw Ethernet Benchmarking
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["content.code.annotate", "content.code.copy", "content.tabs.link", "navigation.tabs", "navigation.sections", "navigation.top", "navigation.footer", "search.highlight", "search.suggest", "toc.follow"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../javascripts/platform-tab-toc.js"></script>
+      
+        <script src="../../javascripts/tab-dropdowns.js"></script>
+      
+        <script src="../../javascripts/image-overlay.js"></script>
+      
+    
+  </body>
+</html>
