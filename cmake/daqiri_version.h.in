@@ -17,5 +17,18 @@
 
 #pragma once
 
-#include <daqiri/common.h>
-#include <daqiri/version.h>
+#define DAQIRI_VERSION "@PROJECT_VERSION@"
+#define DAQIRI_VERSION_YEAR @PROJECT_VERSION_MAJOR@
+#define DAQIRI_VERSION_MONTH @PROJECT_VERSION_MINOR@
+#define DAQIRI_VERSION_PATCH @PROJECT_VERSION_PATCH@
+#define DAQIRI_ABI_VERSION @DAQIRI_ABI_VERSION@
+
+namespace daqiri {
+
+inline constexpr const char* version_string() noexcept { return DAQIRI_VERSION; }
+inline constexpr int version_year() noexcept { return DAQIRI_VERSION_YEAR; }
+inline constexpr int version_month() noexcept { return DAQIRI_VERSION_MONTH; }
+inline constexpr int version_patch() noexcept { return DAQIRI_VERSION_PATCH; }
+inline constexpr int abi_version() noexcept { return DAQIRI_ABI_VERSION; }
+
+}  // namespace daqiri

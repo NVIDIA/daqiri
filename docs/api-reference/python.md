@@ -57,6 +57,19 @@ import daqiri
 The `daqiri` package re-exports the compiled `_daqiri` pybind11 module, so
 application code uses one import.
 
+DAQIRI package versions use CalVer in `YYYY.MM.PATCH` form. The Python package
+exposes `daqiri.__version__`, `daqiri.__version_info__`, and
+`daqiri.__abi_version__`; the ABI version is intentionally separate from the
+CalVer package version. The YAML `common.version` field remains the
+configuration schema version.
+
+```python
+import daqiri
+
+print(daqiri.__version__)
+print(daqiri.version_string(), daqiri.abi_version())
+```
+
 PyYAML is required at runtime when calling `daqiri_init()` with a Python `dict`
 or a config-like object that provides `as_dict()`.
 
@@ -492,6 +505,9 @@ The workflow sections above show the common call order and ownership rules.
 
 | Function | Purpose |
 | --- | --- |
+| `version_string()` | Return the DAQIRI package version as `YYYY.MM.PATCH`. |
+| `version_year()` / `version_month()` / `version_patch()` | Return the CalVer components. |
+| `abi_version()` | Return the DAQIRI shared-library ABI version. |
 | `engine_type_from_string(str)` / `engine_type_to_string(type)` | Convert engine types. |
 | `stream_type_from_string(str)` / `stream_type_to_string(type)` | Convert stream types. |
 | `reorder_data_type_from_string(str)` / `reorder_data_type_to_string(type)` | Convert reorder data types. |
@@ -605,6 +621,9 @@ encapsulation/push rules are configured in YAML under `tx.flows`.
 | `MAX_NUM_TX_QUEUES` | Maximum configured TX queues. |
 | `MAX_INTERFACES` | Maximum configured interfaces. |
 | `MAX_NUM_SEGS` | Maximum packet segments per burst. |
+| `DAQIRI_VERSION` | DAQIRI package version as `YYYY.MM.PATCH`. |
+| `DAQIRI_VERSION_YEAR` / `DAQIRI_VERSION_MONTH` / `DAQIRI_VERSION_PATCH` | CalVer components. |
+| `DAQIRI_ABI_VERSION` | DAQIRI shared-library ABI version. |
 | `DAQIRI_BURST_FLAG_REORDERED` | Burst flag indicating a reordered aggregate. |
 | `DAQIRI_BURST_FLAG_REORDER_TIMEOUT` | Burst flag indicating a reorder timeout aggregate. |
 | `MEM_ACCESS_LOCAL` | Local memory access flag. |

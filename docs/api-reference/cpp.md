@@ -16,6 +16,24 @@ For the terminology used here (*burst*, *segment*, *flow*, *queue*, *memory
 region*, *zero-copy ownership*, *RX reorder*), keep the
 [Concepts](../concepts.md) page open in a second tab.
 
+## Version Metadata
+
+DAQIRI package versions use CalVer in `YYYY.MM.PATCH` form. The public
+`daqiri/daqiri.h` header includes `daqiri/version.h`, which exposes compile-time
+macros and inline C++ helpers:
+
+```cpp
+#include <daqiri/daqiri.h>
+
+static_assert(DAQIRI_VERSION_YEAR >= 2026);
+const char *package_version = daqiri::version_string();
+int abi = daqiri::abi_version();
+```
+
+`DAQIRI_ABI_VERSION` / `daqiri::abi_version()` is the shared-library ABI version
+and is intentionally separate from the CalVer package version. The YAML
+`common.version` field remains the configuration schema version.
+
 ## Initialization
 
 ```cpp
@@ -588,6 +606,9 @@ workflow sections above show the common call order and ownership rules.
 
 | Function | Purpose |
 | --- | --- |
+| `version_string()` | Return the DAQIRI package version as `YYYY.MM.PATCH`. |
+| `version_year()` / `version_month()` / `version_patch()` | Return the CalVer components. |
+| `abi_version()` | Return the DAQIRI shared-library ABI version. |
 | `daqiri_init(NetworkConfig &config)` | Initialize DAQIRI from an already-populated config object. |
 | `daqiri_init(const std::string &yaml_string_or_path)` | Initialize from a YAML string or YAML file path. |
 | `daqiri_init_from_yaml_string(const std::string &yaml_string)` | Initialize from YAML content. |

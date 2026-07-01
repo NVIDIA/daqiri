@@ -176,10 +176,18 @@ find_package(daqiri REQUIRED)
 target_link_libraries(my_app PRIVATE daqiri::daqiri)
 ```
 
+DAQIRI uses CalVer package versions in `YYYY.MM.PATCH` form. Consumers that need
+a minimum DAQIRI release can request it from CMake:
+
+```cmake
+find_package(daqiri 2026.7.0 REQUIRED)
+```
+
 Pkg-config consumers can use the installed `daqiri.pc` file:
 
 ```bash
 c++ my_app.cpp -o my_app $(pkg-config --cflags --libs daqiri)
+pkg-config --modversion daqiri
 ```
 
 Both methods use the same public C++ include:
@@ -187,6 +195,11 @@ Both methods use the same public C++ include:
 ```cpp
 #include <daqiri/daqiri.h>
 ```
+
+`daqiri/version.h` is included by `daqiri/daqiri.h` and provides
+`DAQIRI_VERSION`, `daqiri::version_string()`, and related CalVer helpers.
+DAQIRI's shared-library ABI version is tracked separately through
+`DAQIRI_ABI_VERSION` / `daqiri::abi_version()`.
 
 ### CMake Options
 
