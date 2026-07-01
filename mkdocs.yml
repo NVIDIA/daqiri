@@ -71,7 +71,7 @@ nav:
     - Bare-Metal CMake Build: tutorials/bare-metal-cmake-build.md
     - Configuration YAML Walkthrough: tutorials/configuration-walkthrough.md
     - DAQIRI + Holoscan Integration: tutorials/daqiri-holoscan-integration.md
-    - DAQIRI + ResNet Inference: tutorials/daqiri-resnet-inference.md
+    - DAQIRI + TensorRT Inference: tutorials/daqiri-resnet-inference.md
 
 markdown_extensions:
   - admonition
