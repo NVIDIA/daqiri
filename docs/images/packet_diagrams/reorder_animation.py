@@ -4,34 +4,38 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
-from incoming_wire import center_wire_y, draw_rx_wire, draw_rx_wire_label, path_point_and_tangent, wire_t_end
+from anim_common import font_scheme, save_webp_animation
+from incoming_wire import draw_rx_wire, draw_rx_wire_label
 
 
 ROOT = Path(__file__).resolve().parent
-OUTPUT_DIR = ROOT / "reorder"
 
 WIDTH = 1180
 HEIGHT = 660
 SCALE = 2
-DURATION_MS = 55
+DURATION_MS = 40
 
 PACKET_COUNT = 5
-ARRIVAL_ORDER = (3, 1, 5, 2, 4)
-WIRE_FRAMES = 32
-KERNEL_TRAVEL = 24
-SHUFFLE_FRAMES = 18
-PACKET_GAP = 5
+ARRIVAL_ORDER = (2, 0, 4, 1, 3)
+WIRE_FRAMES = 34
+STAGE_TRAVEL_FRAMES = 20
+ARRIVAL_GAP = 16
+KERNEL_DELAY = 22
+WRITE_FRAMES = 42
+WRITE_STAGGER = 2
 
 NIC_RECT = (300, 250, 500, 410)
-REORDER_RECT = (640, 168, 860, 528)
-QUEUE_COL = (668, 248, 832, 512)
+REORDER_RECT = (610, 150, 940, 546)
+REORDER_STAGING_COL = (635, 260, 755, 512)
+REORDER_QUEUE_COL = (790, 260, 910, 512)
+CONVERT_STAGING_COL = (635, 260, 720, 512)
+CONVERT_QUEUE_COL = (755, 260, 915, 512)
 
 WIRE_Y = 330
 
 TRANSPARENT = (0, 0, 0, 0)
-GIF_TRANSPARENCY_INDEX = 255
 
 PACKET_GRAD_START = "#59d4ff"
 PACKET_GRAD_END = "#9b8cff"
@@ -82,17 +86,60 @@ COLORS = THEMES["default"]
 
 
 @dataclass(frozen=True)
+class VisualConfig:
+    output_dir: Path
+    base_name: str
+    title: str
+    subtitle: str
+    output_heading: str
+    nic_idle: str
+    nic_tracking_prefix: str
+    staging_col: tuple[float, float, float, float]
+    queue_col: tuple[float, float, float, float]
+    convert_payload: bool = False
+
+
+VISUALIZATIONS = (
+    VisualConfig(
+        output_dir=ROOT / "reorder",
+        base_name="packet-reorder",
+        title="GPU reorder",
+        subtitle="batch staging -> fixed slots",
+        output_heading="slot = seq % N",
+        nic_idle="staging",
+        nic_tracking_prefix="stage seq",
+        staging_col=REORDER_STAGING_COL,
+        queue_col=REORDER_QUEUE_COL,
+    ),
+    VisualConfig(
+        output_dir=ROOT / "reorder_quantize",
+        base_name="packet-reorder-quantize",
+        title="GPU reorder + convert",
+        subtitle="batch staging -> fixed slots\nint4 -> fp32 conversion",
+        output_heading="fp32 slots",
+        nic_idle="int4 staging",
+        nic_tracking_prefix="stage int4 seq",
+        staging_col=CONVERT_STAGING_COL,
+        queue_col=CONVERT_QUEUE_COL,
+        convert_payload=True,
+    ),
+)
+
+CURRENT_VISUAL = VISUALIZATIONS[0]
+
+
+@dataclass(frozen=True)
 class PacketSpec:
     num: int
     start: int
-    decide: int
-    kernel_end: int
-    shuffle_end: int
+    nic_arrive: int
+    stage_end: int
+    write_start: int
+    write_end: int
 
 
 NIC = NIC_RECT
 REORDER = REORDER_RECT
-QUEUE_COL_R = QUEUE_COL
 NIC_CX = (NIC[0] + NIC[2]) / 2
 NIC_CY = (NIC[1] + NIC[3]) / 2
 REORDER_CY = (REORDER[1] + REORDER[3]) / 2
@@ -135,32 +182,7 @@ def progress_linear(frame: int, start: int, end: int) -> float:
     return clamp((frame - start) / max(1, end - start))
 
 
-def font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont:
-    if bold:
-        candidates = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        ]
-    else:
-        candidates = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        ]
-    for path in candidates:
-        if Path(path).exists():
-            return ImageFont.truetype(path, size * SCALE)
-    return ImageFont.load_default()
-
-
-FONTS = {
-    "label": font(18, bold=True),
-    "small": font(14),
-    "tiny": font(12),
-    "chip": font(21, bold=True),
-    "badge": font(15, bold=True),
-    "queue": font(18, bold=True),
-    "packet": font(12),
-}
+FONTS = font_scheme(SCALE)
 
 
 def s(value: float) -> int:
@@ -195,6 +217,25 @@ def centered_text(
 ) -> None:
     x1, y1, x2, y2 = rect
     draw.text((s((x1 + x2) / 2), s((y1 + y2) / 2)), text, font=face, fill=fill, anchor="mm")
+
+
+def centered_multiline_text(
+    draw: ImageDraw.ImageDraw,
+    rect: tuple[float, float, float, float],
+    text: str,
+    face: ImageFont.FreeTypeFont,
+    fill: str | tuple[int, int, int, int] = COLORS["text"],
+) -> None:
+    x1, y1, x2, y2 = rect
+    draw.multiline_text(
+        (s((x1 + x2) / 2), s((y1 + y2) / 2)),
+        text,
+        font=face,
+        fill=fill,
+        anchor="mm",
+        align="center",
+        spacing=s(4),
+    )
 
 
 def rectangular_path(waypoints: tuple[tuple[float, float], ...], steps: int = 28) -> list[tuple[float, float]]:
@@ -323,8 +364,8 @@ def draw_glow_arrows(
     base.alpha_composite(layer)
 
 
-def queue_row_layout() -> list[tuple[float, float, float, float]]:
-    x1, y1, x2, y2 = QUEUE_COL_R
+def column_row_layout(rect: tuple[float, float, float, float]) -> list[tuple[float, float, float, float]]:
+    x1, y1, x2, y2 = rect
     cx = (x1 + x2) / 2
     pad_y = 6
     gap = 6
@@ -339,69 +380,75 @@ def queue_row_layout() -> list[tuple[float, float, float, float]]:
     return rows
 
 
-QUEUE_ROWS = queue_row_layout()
+def staging_col_rect() -> tuple[float, float, float, float]:
+    return CURRENT_VISUAL.staging_col
+
+
+def queue_col_rect() -> tuple[float, float, float, float]:
+    return CURRENT_VISUAL.queue_col
+
+
+def staging_row_pos(row: int) -> tuple[float, float, float, float]:
+    return column_row_layout(staging_col_rect())[row]
 
 
 def queue_row_pos(row: int) -> tuple[float, float, float, float]:
-    return QUEUE_ROWS[row]
+    return column_row_layout(queue_col_rect())[row]
+
+
+def slot_index(num: int) -> int:
+    return num % PACKET_COUNT
+
+
+def packet_order_index(pkt: PacketSpec) -> int:
+    return PACKETS.index(pkt)
 
 
 def completed_nums(frame: int) -> list[int]:
-    return sorted(p.num for p in PACKETS if frame >= p.shuffle_end)
+    return [p.num for p in PACKETS if frame >= p.write_end]
 
 
-def shuffling_packet(frame: int) -> PacketSpec | None:
+def staged_packets(frame: int) -> list[PacketSpec]:
+    return [p for p in PACKETS if p.stage_end <= frame < p.write_start]
+
+
+def writing_packet(frame: int) -> PacketSpec | None:
     for pkt in PACKETS:
-        if pkt.kernel_end <= frame < pkt.shuffle_end:
+        if pkt.write_start <= frame < pkt.write_end:
             return pkt
     return None
 
 
 def queue_display(frame: int) -> list[int | None]:
-    nums = completed_nums(frame)
     row: list[int | None] = [None] * PACKET_COUNT
-    for i, num in enumerate(nums[:PACKET_COUNT]):
-        row[i] = num
+    for num in completed_nums(frame):
+        row[slot_index(num)] = num
     return row
 
 
-def packet_label(num: int) -> str:
-    return f"packet {num}"
+def packet_label(num: int, *, output: bool = False) -> str:
+    if CURRENT_VISUAL.convert_payload:
+        return f"fp32 s{num}" if output else f"int4 s{num}"
+    return f"seq {num}"
 
 
 def before_placement(pkt: PacketSpec) -> list[int]:
-    return sorted(p.num for p in PACKETS if p.shuffle_end <= pkt.kernel_end)
+    return [p.num for p in PACKETS if p.write_end <= pkt.write_start]
 
 
 def after_placement(pkt: PacketSpec) -> list[int]:
-    return sorted(before_placement(pkt) + [pkt.num])
+    return before_placement(pkt) + [pkt.num]
 
 
 def placed_packet_position(frame: int, num: int) -> tuple[float, float, float, float] | None:
-    inflight = shuffling_packet(frame)
-    if inflight is None:
-        nums = completed_nums(frame)
-        if num not in nums:
-            return None
-        return queue_row_pos(nums.index(num))
-
-    before = before_placement(inflight)
-    if num not in before:
+    if num not in completed_nums(frame):
         return None
-
-    after = after_placement(inflight)
-    t = progress_linear(frame, inflight.kernel_end, inflight.shuffle_end)
-    old_row = before.index(num)
-    new_row = after.index(num)
-    cx, cy_old, chip_w, chip_h = queue_row_pos(old_row)
-    _, cy_new, _, _ = queue_row_pos(new_row)
-    cy = lerp(cy_old, cy_new, t)
-    return cx, cy, chip_w, chip_h
+    return queue_row_pos(slot_index(num))
 
 
 def shuffle_entry_for_row(row: int) -> tuple[float, float]:
-    _, cy, _, _ = queue_row_pos(row)
-    return REORDER[0] + 12, cy
+    _, cy, _, _ = staging_row_pos(row)
+    return staging_col_rect()[0] + 12, cy
 
 
 def build_paths() -> dict[str, list[tuple[float, float]]]:
@@ -426,39 +473,47 @@ PATHS = build_paths()
 
 
 def make_packets() -> tuple[PacketSpec, ...]:
-    packets: list[PacketSpec] = []
+    staged: list[tuple[int, int, int, int]] = []
     cursor = 8
     for num in ARRIVAL_ORDER:
-        decide = cursor + WIRE_FRAMES
-        kernel_end = decide + KERNEL_TRAVEL
-        shuffle_end = kernel_end + SHUFFLE_FRAMES
-        packets.append(PacketSpec(num, cursor, decide, kernel_end, shuffle_end))
-        cursor = shuffle_end + PACKET_GAP
+        nic_arrive = cursor + WIRE_FRAMES
+        stage_end = nic_arrive + STAGE_TRAVEL_FRAMES
+        staged.append((num, cursor, nic_arrive, stage_end))
+        cursor += ARRIVAL_GAP
+
+    kernel_start = max(stage_end for _, _, _, stage_end in staged) + KERNEL_DELAY
+    packets: list[PacketSpec] = []
+    for idx, (num, start, nic_arrive, stage_end) in enumerate(staged):
+        write_start = kernel_start + idx * WRITE_STAGGER
+        write_end = write_start + WRITE_FRAMES
+        packets.append(PacketSpec(num, start, nic_arrive, stage_end, write_start, write_end))
     return tuple(packets)
 
 
 PACKETS = make_packets()
-FRAMES = max(360, PACKETS[-1].shuffle_end + 40)
+KERNEL_START = min(p.write_start for p in PACKETS)
+KERNEL_END = max(p.write_end for p in PACKETS)
+FRAMES = KERNEL_END + 40
 
 
 def active_packet(frame: int) -> PacketSpec | None:
     for pkt in PACKETS:
-        if pkt.start <= frame < pkt.shuffle_end:
+        if pkt.nic_arrive <= frame < pkt.stage_end:
             return pkt
     return None
 
 
 def nic_pulse(frame: int, pkt: PacketSpec) -> float:
     return max(
-        progress_linear(frame, pkt.decide, pkt.decide + 6),
-        1.0 - progress_linear(frame, pkt.decide + 8, pkt.decide + 14),
+        progress_linear(frame, pkt.nic_arrive, pkt.nic_arrive + 6),
+        1.0 - progress_linear(frame, pkt.nic_arrive + 8, pkt.nic_arrive + 14),
     )
 
 
 def packet_base_color(num: int) -> str:
     if PACKET_COUNT <= 1:
         return PACKET_GRAD_START
-    t = (num - 1) / (PACKET_COUNT - 1)
+    t = clamp(num / (PACKET_COUNT - 1))
     return lerp_hex(PACKET_GRAD_START, PACKET_GRAD_END, t)
 
 
@@ -485,27 +540,60 @@ def point_on_path(points: list[tuple[float, float]], t: float) -> tuple[float, f
     return points[-1]
 
 
+def stage_path(pkt: PacketSpec) -> list[tuple[float, float]]:
+    _, sy, _, _ = staging_row_pos(packet_order_index(pkt))
+    staging_col = staging_col_rect()
+    return rectangular_path(
+        (
+            (NIC[2], NIC_CY),
+            (REORDER[0], NIC_CY),
+            (staging_col[0] + 10, sy),
+            ((staging_col[0] + staging_col[2]) / 2, sy),
+        ),
+        steps=16,
+    )
+
+
+def packet_stage_path(pkt: PacketSpec) -> list[tuple[float, float]]:
+    _, sy, _, _ = staging_row_pos(packet_order_index(pkt))
+    staging_col = staging_col_rect()
+    return rectangular_path(
+        (
+            (48, WIRE_Y),
+            (NIC[0], WIRE_Y),
+            (NIC[2], NIC_CY),
+            (REORDER[0], NIC_CY),
+            (staging_col[0] + 10, sy),
+            ((staging_col[0] + staging_col[2]) / 2, sy),
+        ),
+        steps=16,
+    )
+
+
+def write_path(pkt: PacketSpec) -> list[tuple[float, float]]:
+    sx, sy, _, _ = staging_row_pos(packet_order_index(pkt))
+    tx, ty, _, _ = queue_row_pos(slot_index(pkt.num))
+    return rectangular_path(((sx, sy), (tx, ty)), steps=18)
+
+
 def packet_screen_pos(frame: int, pkt: PacketSpec) -> tuple[float, float, float] | None:
-    if frame < pkt.start or frame >= pkt.shuffle_end:
+    if frame < pkt.start or frame >= pkt.write_end:
         return None
-    width = 72.0
-    if frame < pkt.decide:
-        t = progress_linear(frame, pkt.start, pkt.decide)
-        cx, cy = point_on_path(PATHS["to_reorder"], t * 0.55)
+    width = 92.0
+    if frame < pkt.stage_end:
+        t = progress_linear(frame, pkt.start, pkt.stage_end)
+        cx, cy = point_on_path(packet_stage_path(pkt), t)
         return cx, cy, width
-    if frame < pkt.kernel_end:
-        t = progress_linear(frame, pkt.decide, pkt.kernel_end)
-        cx, cy = point_on_path(PATHS["to_reorder"], lerp(0.55, 1.0, t))
-        return cx, cy, width
-    t = progress_linear(frame, pkt.kernel_end, pkt.shuffle_end)
-    row = after_placement(pkt).index(pkt.num)
-    sx, sy = shuffle_entry_for_row(row)
-    tx, ty, tw, _ = queue_row_pos(row)
-    return lerp(sx, tx, t), ty, lerp(72.0, tw, t)
+    if frame < pkt.write_start:
+        return None
+    t = progress_linear(frame, pkt.write_start, pkt.write_end)
+    sx, sy, sw, _ = staging_row_pos(packet_order_index(pkt))
+    tx, ty, tw, _ = queue_row_pos(slot_index(pkt.num))
+    return lerp(sx, tx, t), lerp(sy, ty, t), lerp(sw - 6, tw - 6, t)
 
 
 def received_count(frame: int) -> int:
-    return sum(1 for p in PACKETS if frame >= p.decide)
+    return sum(1 for p in PACKETS if frame >= p.stage_end)
 
 
 def draw_gradient_packet(
@@ -551,14 +639,10 @@ def draw_gradient_packet(
         width=s(2),
     )
     if label:
-        if label.startswith("packet "):
-            face = FONTS["packet"]
-        elif len(label) > 8:
+        if len(label) > 10:
             face = FONTS["tiny"]
-        elif height > 30:
-            face = FONTS["queue"]
         else:
-            face = FONTS["tiny"]
+            face = FONTS["packet"]
         centered_text(draw, (x1, y1, x2, y2), label, face, fill=rgba(COLORS["ink"], alpha))
 
 
@@ -572,48 +656,111 @@ def draw_static_route(draw: ImageDraw.ImageDraw) -> None:
 
 
 def draw_sequence_queue(base: Image.Image, draw: ImageDraw.ImageDraw, frame: int) -> None:
-    inflight = shuffling_packet(frame)
-
-    if inflight is None:
-        row = queue_display(frame)
-        for idx, value in enumerate(row):
-            cx, cy, chip_w, chip_h = queue_row_pos(idx)
-            if value is None:
-                centered_text(draw, (cx - chip_w / 2, cy - chip_h / 2, cx + chip_w / 2, cy + chip_h / 2), "_", FONTS["queue"], fill=COLORS["slot_empty"])
-                continue
-            draw_gradient_packet(base, draw, cx, cy, chip_w, value, label=packet_label(value), height=chip_h)
-        return
-
-    after = after_placement(inflight)
-    before = before_placement(inflight)
-
-    for num in before:
-        pos = placed_packet_position(frame, num)
-        if pos is None:
-            continue
-        cx, cy, chip_w, chip_h = pos
-        draw_gradient_packet(base, draw, cx, cy, chip_w, num, label=packet_label(num), height=chip_h)
-
-    for idx in range(len(after), PACKET_COUNT):
+    row = queue_display(frame)
+    for idx, value in enumerate(row):
         cx, cy, chip_w, chip_h = queue_row_pos(idx)
-        centered_text(draw, (cx - chip_w / 2, cy - chip_h / 2, cx + chip_w / 2, cy + chip_h / 2), "_", FONTS["queue"], fill=COLORS["slot_empty"])
+        slot_box = (cx - chip_w / 2, cy - chip_h / 2, cx + chip_w / 2, cy + chip_h / 2)
+        draw.rounded_rectangle(
+            box(slot_box),
+            radius=s(7),
+            fill=COLORS["row_bg"],
+            outline=rgba(COLORS["line"], 210),
+            width=s(1),
+        )
+        if value is None:
+            centered_text(draw, slot_box, f"slot {idx}", FONTS["slot"], fill=COLORS["slot_empty"])
+            continue
+        draw_gradient_packet(
+            base,
+            draw,
+            cx,
+            cy,
+            chip_w - 6,
+            value,
+            label=packet_label(value, output=True),
+            height=chip_h - 6,
+        )
+
+
+def draw_staging_list(base: Image.Image, draw: ImageDraw.ImageDraw, frame: int) -> None:
+    staged_by_row = {packet_order_index(pkt): pkt for pkt in staged_packets(frame)}
+    for idx in range(PACKET_COUNT):
+        cx, cy, chip_w, chip_h = staging_row_pos(idx)
+        row_box = (cx - chip_w / 2, cy - chip_h / 2, cx + chip_w / 2, cy + chip_h / 2)
+        draw.rounded_rectangle(
+            box(row_box),
+            radius=s(7),
+            fill=COLORS["row_bg"],
+            outline=rgba(COLORS["line"], 190),
+            width=s(1),
+        )
+        pkt = staged_by_row.get(idx)
+        if pkt is None:
+            centered_text(draw, row_box, "ptr", FONTS["tiny"], fill=COLORS["slot_empty"])
+            continue
+        draw_gradient_packet(base, draw, cx, cy, chip_w - 6, pkt.num, label=packet_label(pkt.num), height=chip_h - 6)
 
 
 def draw_reorder_panel(base: Image.Image, draw: ImageDraw.ImageDraw, frame: int) -> None:
     x1, y1, _, _ = REORDER
-    shuffling = any(pkt.kernel_end <= frame < pkt.shuffle_end for pkt in PACKETS)
-    pulse = 0.55 if shuffling else 0.0
+    staging_col = staging_col_rect()
+    queue_col = queue_col_rect()
+    kernel_active = KERNEL_START <= frame < KERNEL_END
+    pulse = 0.55 if kernel_active else 0.0
     glow = int(40 + 55 * pulse)
     draw.rounded_rectangle(box(REORDER), radius=s(18), fill=COLORS["panel_2"], outline=rgba(COLORS["reorder"], 170 + glow), width=s(3))
-    draw_text(draw, (x1 + 14, y1 + 16), "GPU reorder", FONTS["label"], fill=COLORS["text"], anchor="lt")
-    draw_text(draw, (x1 + 14, y1 + 40), "reorder kernel", FONTS["small"], fill=COLORS["muted"], anchor="lt")
+    draw_text(draw, (x1 + 14, y1 + 16), CURRENT_VISUAL.title, FONTS["label"], fill=COLORS["text"], anchor="lt")
+    for idx, subtitle in enumerate(CURRENT_VISUAL.subtitle.splitlines()):
+        draw_text(draw, (x1 + 14, y1 + 40 + idx * 17), subtitle, FONTS["small"], fill=COLORS["muted"], anchor="lt")
+    draw_text(draw, (staging_col[0], staging_col[1] - 20), "staged ptrs", FONTS["tiny"], fill=COLORS["muted"], anchor="lt")
+    draw_text(draw, (queue_col[0], queue_col[1] - 20), CURRENT_VISUAL.output_heading, FONTS["tiny"], fill=COLORS["muted"], anchor="lt")
+    if CURRENT_VISUAL.convert_payload and kernel_active:
+        draw_text(
+            draw,
+            ((staging_col[2] + queue_col[0]) / 2, staging_col[1] - 20),
+            "convert",
+            FONTS["tiny"],
+            fill=COLORS["reorder"],
+            anchor="mm",
+        )
+    draw_staging_list(base, draw, frame)
     draw_sequence_queue(base, draw, frame)
 
 
-def draw_nic_chip(draw: ImageDraw.ImageDraw, frame: int) -> None:
+def nic_status(frame: int) -> tuple[str, str, str, float]:
+    pkt = active_packet(frame)
+    tracking = pkt is not None
+    pulse = nic_pulse(frame, pkt) if tracking and pkt else 0.0
+    if tracking and pkt:
+        if CURRENT_VISUAL.convert_payload:
+            return f"stage int4\nseq {pkt.num}", packet_base_color(pkt.num), "#ffffff", pulse
+        return f"stage seq\n{pkt.num}", packet_base_color(pkt.num), "#ffffff", pulse
+
+    count = received_count(frame)
+    if count:
+        return f"staged\n{count}/{PACKET_COUNT}", COLORS["nvidia"], COLORS["ink"], pulse
+    idle = "int4\nstaging" if CURRENT_VISUAL.convert_payload else CURRENT_VISUAL.nic_idle
+    return idle, COLORS["nvidia"], COLORS["ink"], pulse
+
+
+def draw_nic_status_pill(draw: ImageDraw.ImageDraw, frame: int) -> None:
+    x1, y1, x2, _ = NIC
+    pill_text, pill_accent, pill_ink, pulse = nic_status(frame)
+    pill = (x1 + 12, y1 + 38, x2 - 12, y1 + 122)
+    draw.rounded_rectangle(
+        box(pill),
+        radius=s(8),
+        fill=rgba(pill_accent, 245),
+        outline=rgba(pill_accent, 220),
+        width=s(2),
+    )
+    centered_multiline_text(draw, pill, pill_text, FONTS["nic_center"], fill=pill_ink)
+
+
+def draw_nic_chip_base(draw: ImageDraw.ImageDraw, frame: int) -> None:
     x1, y1, x2, y2 = NIC
     pkt = active_packet(frame)
-    tracking = pkt is not None and pkt.decide <= frame < pkt.kernel_end
+    tracking = pkt is not None
     pulse = nic_pulse(frame, pkt) if tracking and pkt else 0.0
     accent = COLORS["nvidia"]
 
@@ -628,69 +775,56 @@ def draw_nic_chip(draw: ImageDraw.ImageDraw, frame: int) -> None:
         x = lerp(x1 + 25, x2 - 25, i / 4)
         draw.line((s(x), s(y1 - 12), s(x), s(y1)), fill=rgba(COLORS["line"], 220), width=s(3))
         draw.line((s(x), s(y2), s(x), s(y2 + 12)), fill=rgba(COLORS["line"], 220), width=s(3))
-    centered_text(draw, (x1 + 18, y1 + 38, x2 - 18, y1 + 75), "NVIDIA NIC", FONTS["chip"], fill=COLORS["text"])
-
-    pill = (x1 + 18, y1 + 82, x2 - 18, y1 + 110)
-    if tracking and pkt:
-        pill_text = f"sequence {pkt.num}"
-        pill_accent = packet_base_color(pkt.num)
-        pill_ink = "#ffffff"
-    else:
-        count = received_count(frame)
-        pill_text = f"received: {count}" if count else "sequence —"
-        pill_accent = COLORS["nvidia"]
-        pill_ink = COLORS["ink"]
-    draw.rounded_rectangle(box(pill), radius=s(8), fill=rgba(pill_accent, 180 + int(60 * pulse)), outline=rgba(pill_accent, 220), width=s(2))
-    centered_text(draw, pill, pill_text, FONTS["badge"], fill=pill_ink)
-
-
-def incoming_path_t(frame: int, pkt: PacketSpec) -> float:
-    if frame < pkt.decide:
-        return progress_linear(frame, pkt.start, pkt.decide) * 0.55
-    return lerp(0.55, 1.0, progress_linear(frame, pkt.decide, pkt.kernel_end))
+    centered_text(draw, (x1 + 18, y1 + 4, x2 - 18, y1 + 38), "NVIDIA NIC", FONTS["chip"], fill=COLORS["text"])
 
 
 def draw_flowing_packets(base: Image.Image, draw: ImageDraw.ImageDraw, frame: int) -> None:
     for pkt in PACKETS:
-        if frame < pkt.start or frame >= pkt.shuffle_end:
-            continue
-        if frame < pkt.kernel_end:
-            t = incoming_path_t(frame, pkt)
-            on_wire = t <= wire_t_end(PATHS["wire"], PATHS["to_reorder"])
-            cx, cy, _ = path_point_and_tangent(PATHS["to_reorder"], t)
-            if on_wire:
-                cy = center_wire_y(cx, 48, WIRE_Y, frame)
-            draw_gradient_packet(base, draw, cx, cy, 92, pkt.num, label=packet_label(pkt.num), height=32)
+        if frame < pkt.start or frame >= pkt.write_end:
             continue
         pos = packet_screen_pos(frame, pkt)
         if pos is None:
             continue
         cx, cy, w = pos
-        _, _, _, chip_h = queue_row_pos(after_placement(pkt).index(pkt.num))
-        draw_gradient_packet(base, draw, cx, cy, w, pkt.num, label=packet_label(pkt.num), height=chip_h)
+        if frame < pkt.stage_end:
+            chip_h = 32
+            label = None if NIC[0] <= cx <= NIC[2] and NIC[1] <= cy <= NIC[3] else packet_label(pkt.num)
+        else:
+            _, _, _, chip_h = queue_row_pos(slot_index(pkt.num))
+            chip_h -= 6
+            label = packet_label(pkt.num, output=frame >= pkt.write_end - 4)
+        draw_gradient_packet(
+            base,
+            draw,
+            cx,
+            cy,
+            w,
+            pkt.num,
+            label=label,
+            height=chip_h,
+        )
 
 
 def draw_route_glow(base: Image.Image, frame: int) -> None:
-    pkt = active_packet(frame)
-    if pkt and pkt.decide <= frame < pkt.kernel_end:
-        glow = progress_linear(frame, pkt.decide, pkt.kernel_end)
-        draw_glow_line(base, PATHS["nic_route"], COLORS["reorder"], int(50 + 40 * glow), 7)
-    elif pkt and pkt.kernel_end <= frame < pkt.shuffle_end:
-        glow = progress_linear(frame, pkt.kernel_end, pkt.shuffle_end)
-        row = after_placement(pkt).index(pkt.num)
-        sx, sy = shuffle_entry_for_row(row)
-        tx, ty, _, _ = queue_row_pos(row)
-        draw_glow_line(base, [(sx, sy), (tx, ty)], COLORS["reorder"], int(50 + 40 * glow), 5)
-
-
-def rgba_frame_to_palette(frame: Image.Image) -> Image.Image:
-    rgba_img = frame.convert("RGBA")
-    alpha = rgba_img.getchannel("A")
-    rgb_img = Image.new("RGB", rgba_img.size, (0, 0, 0))
-    rgb_img.paste(rgba_img, mask=alpha)
-    palette = rgb_img.quantize(colors=254, method=Image.Quantize.MEDIANCUT)
-    palette.paste(GIF_TRANSPARENCY_INDEX, mask=alpha.point(lambda a: 255 if a < 128 else 0))
-    return palette
+    for pkt in PACKETS:
+        if pkt.nic_arrive <= frame < pkt.stage_end:
+            glow = progress_linear(frame, pkt.nic_arrive, pkt.stage_end)
+            draw_glow_line(base, stage_path(pkt), COLORS["reorder"], int(45 + 45 * glow), 6)
+        elif pkt.write_start <= frame < pkt.write_end:
+            glow = progress_linear(frame, pkt.write_start, pkt.write_end)
+            draw_glow_line(base, write_path(pkt), COLORS["reorder"], int(45 + 45 * glow), 5)
+            if CURRENT_VISUAL.convert_payload:
+                sx, sy, _, _ = staging_row_pos(packet_order_index(pkt))
+                tx, ty, _, _ = queue_row_pos(slot_index(pkt.num))
+                draw = ImageDraw.Draw(base)
+                draw_text(
+                    draw,
+                    (lerp(sx, tx, glow), lerp(sy, ty, glow) - 24),
+                    "int4 -> fp32",
+                    FONTS["tiny"],
+                    fill=COLORS["reorder"],
+                    anchor="mm",
+                )
 
 
 def render_frame(frame: int) -> Image.Image:
@@ -700,41 +834,34 @@ def render_frame(frame: int) -> Image.Image:
     draw_wires(draw, frame)
     draw_static_route(draw)
     draw_reorder_panel(img, draw, frame)
-    draw_nic_chip(draw, frame)
+    draw_nic_chip_base(draw, frame)
     draw_route_glow(img, frame)
     draw_flowing_packets(img, draw, frame)
+    draw_nic_status_pill(draw, frame)
     return img.resize((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
 
 
-def render_theme(theme: str) -> None:
-    global COLORS
+def render_theme(theme: str, visual: VisualConfig) -> None:
+    global COLORS, CURRENT_VISUAL
     COLORS = THEMES[theme]
+    CURRENT_VISUAL = visual
     suffix = THEME_OUTPUT_SUFFIX[theme]
-    gif_path = OUTPUT_DIR / f"packet-reorder{suffix}.gif"
-    poster_path = OUTPUT_DIR / f"packet-reorder{suffix}-poster.png"
+    animation_path = visual.output_dir / f"{visual.base_name}{suffix}.webp"
+    poster_path = visual.output_dir / f"{visual.base_name}{suffix}-poster.png"
 
+    visual.output_dir.mkdir(parents=True, exist_ok=True)
     frames = [render_frame(i) for i in range(FRAMES)]
-    gif_frames = [rgba_frame_to_palette(f) for f in frames]
-    gif_frames[0].save(
-        gif_path,
-        save_all=True,
-        append_images=gif_frames[1:],
-        optimize=True,
-        duration=DURATION_MS,
-        loop=0,
-        disposal=2,
-        transparency=GIF_TRANSPARENCY_INDEX,
-    )
-    poster_frame = min(FRAMES - 1, PACKETS[-1].shuffle_end + 12)
+    save_webp_animation(frames, animation_path, DURATION_MS)
+    poster_frame = min(FRAMES - 1, KERNEL_END + 12)
     render_frame(poster_frame).save(poster_path, optimize=True)
-    print(f"Wrote {gif_path}")
+    print(f"Wrote {animation_path}")
     print(f"Wrote {poster_path}")
 
 
 def main() -> None:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    for theme in THEMES:
-        render_theme(theme)
+    for visual in VISUALIZATIONS:
+        for theme in THEMES:
+            render_theme(theme, visual)
 
 
 if __name__ == "__main__":

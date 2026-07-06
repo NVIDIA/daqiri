@@ -51,6 +51,7 @@ extra_javascript:
 site_dir: site
 exclude_docs: |
   landing/
+  images/packet_diagrams/README.md
 
 nav:
   - Home: index.md

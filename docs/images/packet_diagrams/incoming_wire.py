@@ -14,7 +14,9 @@ RgbaFn = Callable[[str, int], tuple[int, int, int, int]]
 BoxFn = Callable[[tuple[float, float, float, float]], tuple[int, int, int, int]]
 
 
-def center_wire_y(x: float, x0: float, y_center: float, frame: int) -> float:
+def center_wire_y(x: float, x0: float, y_center: float, frame: int, *, wave: bool = False) -> float:
+    if not wave:
+        return y_center
     i = (x - x0) / 3.55
     return y_center + math.sin((i + frame * 0.95) / 5.4) * 2.4
 
@@ -43,6 +45,8 @@ def draw_rx_wire(
     box: BoxFn,
     *,
     ambient_markers: bool = True,
+    animate_markers: bool = False,
+    wave: bool = False,
 ) -> None:
     span = max(x1 - x0, 1.0)
     count = max(20, int(span / 3.55) + 1)
@@ -50,16 +54,17 @@ def draw_rx_wire(
         pts: list[tuple[float, float]] = []
         for i in range(count):
             x = x0 + i * (span / max(1, count - 1))
-            wave = math.sin((i + frame * 0.95) / 5.4) * 2.4
-            pts.append((x, y_center + offset + wave))
+            wave_offset = math.sin((i + frame * 0.95) / 5.4) * 2.4 if wave else 0.0
+            pts.append((x, y_center + offset + wave_offset))
         draw.line([pt(p) for p in pts], fill=wire_color, width=s(2))
 
     if not ambient_markers:
         return
     loop = max(44.0, span - 44.0)
+    marker_frame = frame if animate_markers else 0
     for i in range(5):
-        x = x0 + 22 + ((frame * 7 + i * 68) % loop)
-        cy = center_wire_y(x, x0, y_center, frame)
+        x = x0 + 22 + ((marker_frame * 7 + i * 68) % loop)
+        cy = center_wire_y(x, x0, y_center, frame, wave=wave)
         alpha = 160 - i * 16
         draw.ellipse(box((x - 4, cy - 4, x + 4, cy + 4)), fill=rgba(marker_color, alpha))
 
@@ -78,8 +83,9 @@ def draw_rx_packet_marker(
     alpha: int = 255,
     snap_to_wire: bool = True,
     cy: float | None = None,
+    wave: bool = False,
 ) -> None:
-    marker_y = center_wire_y(cx, wire_x0, wire_y, frame) if snap_to_wire else (cy if cy is not None else wire_y)
+    marker_y = center_wire_y(cx, wire_x0, wire_y, frame, wave=wave) if snap_to_wire else (cy if cy is not None else wire_y)
     draw.ellipse(
         box((cx - radius, marker_y - radius, cx + radius, marker_y + radius)),
         fill=rgba(color, alpha),
