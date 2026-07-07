@@ -32,6 +32,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <set>
 #include <string>
@@ -55,6 +56,20 @@ inline uint64_t ibv_now_ns() {
   return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                    std::chrono::steady_clock::now().time_since_epoch())
                                    .count());
+}
+
+size_t next_power_of_two(size_t value) {
+  if (value == 0) {
+    return 0;
+  }
+  size_t rounded = 1;
+  while (rounded < value) {
+    if (rounded > (std::numeric_limits<size_t>::max() >> 1)) {
+      return value;
+    }
+    rounded <<= 1;
+  }
+  return rounded;
 }
 }  // namespace
 
@@ -2260,8 +2275,9 @@ void IbverbsEngine::initialize() {
     intf.port_id_ = if_num++;
   }
   for (auto& mr : cfg_.mrs_) {
-    const size_t align = std::max<size_t>(get_alignment(mr.second.kind_), GPU_PAGE_SIZE);
-    mr.second.adj_size_ = (mr.second.buf_size_ + align - 1) & ~(align - 1);
+    // MR registrations need a page-rounded allocation span, but individual packet
+    // slots do not. Keep slot spacing close to the configured packet/segment size.
+    mr.second.adj_size_ = next_power_of_two(mr.second.buf_size_);
   }
 
   if (allocate_memory_regions() != Status::SUCCESS) {
