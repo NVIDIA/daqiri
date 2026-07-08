@@ -166,6 +166,14 @@ void Engine::free_memory_regions() noexcept {
   // allocations. EAL-backed HUGE allocations themselves are released by
   // rte_eal_cleanup(), which runs in DpdkEngine before this base destructor.
   ext_pktmbufs_.clear();
+  // Safety net for partial teardown. Normal DPDK shutdown closes these after
+  // rte_eal_cleanup(), then clears the vector before reaching this destructor.
+  for (const int fd : ext_dmabuf_fds_) {
+    if (fd >= 0) {
+      close(fd);
+    }
+  }
+  ext_dmabuf_fds_.clear();
 
   for (auto& [name, region] : ar_) {
     (void)name;

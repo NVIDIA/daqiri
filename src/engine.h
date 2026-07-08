@@ -171,6 +171,9 @@ class Engine {
   // shared_ptr to an incomplete type -- only populated by the DPDK engine
   // (engine_dpdk.cpp). Layout is identical in every build.
   std::unordered_map<std::string, std::shared_ptr<struct rte_pktmbuf_extmem>> ext_pktmbufs_;
+  // rte_extmem_register_dmabuf() retains the caller's numeric fd for deferred
+  // driver mapping. Keep successful exports open until EAL teardown completes.
+  std::vector<int> ext_dmabuf_fds_;
   std::unordered_map<uint32_t, std::vector<std::pair<uint16_t, uint16_t>>> rx_core_q_map;
 
   // EAL lifecycle state, used only by the DPDK engine. Mirrors the

@@ -194,6 +194,16 @@ void Engine::cleanup_eal() {
   // behind, so we also do a best-effort unlink targeted at our --file-prefix.
   rte_eal_cleanup();
 
+  // The patched rte_extmem_register_dmabuf() stores caller-provided fd values
+  // for deferred driver DMA mapping; it does not duplicate them. They must
+  // remain valid through EAL teardown and can be closed only afterward.
+  for (const int fd : ext_dmabuf_fds_) {
+    if (fd >= 0) {
+      close(fd);
+    }
+  }
+  ext_dmabuf_fds_.clear();
+
   if (!eal_file_prefix_.empty()) {
     static const char* kHugepageMounts[] = {"/dev/hugepages", "/mnt/huge"};
     for (const char* mount : kHugepageMounts) {
@@ -317,7 +327,11 @@ Status Engine::register_memory_regions() {
 #if RTE_VERSION >= RTE_VERSION_NUM(24, 11, 0, 0)
           ret = rte_extmem_register_dmabuf(ext_mem->buf_ptr, ext_mem->buf_len, dmabuf_fd, offset,
                                            NULL, 0, GPU_PAGE_SIZE);
-          close(dmabuf_fd);
+          if (ret == 0) {
+            ext_dmabuf_fds_.push_back(dmabuf_fd);
+          } else {
+            close(dmabuf_fd);
+          }
 #else
           DAQIRI_LOG_WARN(
               "rte_extmem_register_dmabuf unavailable in DPDK {}; falling back to peermem "
