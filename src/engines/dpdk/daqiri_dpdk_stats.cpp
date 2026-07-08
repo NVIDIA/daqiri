@@ -23,6 +23,7 @@
 namespace daqiri {
 
 void DpdkStats::Init(const NetworkConfig &cfg) {
+  force_quit_.store(false, std::memory_order_relaxed);
   cfg_ = cfg;
   init_ = true;
   port_metrics_.clear();

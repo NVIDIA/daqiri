@@ -33,6 +33,11 @@ auto status = daqiri::daqiri_init(config);
 After `daqiri_init()` returns `Status::SUCCESS`, all memory regions are allocated, NIC
 queues are configured, and worker threads are running.
 
+Only one engine may be active in a process. Calling `daqiri_init()` again before
+`shutdown()` returns `Status::INTERNAL_ERROR` and leaves the running engine unchanged.
+After `shutdown()` completes, a later `daqiri_init()` creates a fresh engine instance and
+allocates/registers its resources again.
+
 If GPU RX `reorder_configs` are configured for Raw Ethernet (`stream_type: "raw"`), set
 one CUDA stream per GPU reorder plan before pulling reordered bursts. CPU reorder configs do not use a
 CUDA stream. See the [Configuration YAML Reference](configuration.md#rx-reorder-configs)

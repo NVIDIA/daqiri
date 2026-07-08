@@ -509,6 +509,9 @@ class IbverbsEngine : public Engine {
   // One ibv_context + PD per opened device, keyed by device name.
   std::unordered_map<std::string, struct ibv_context*> ctx_map_;
   std::unordered_map<struct ibv_context*, struct ibv_pd*> pd_map_;
+  // Registrations may be shared by queue setup only through their backing
+  // allocation, so retain every verbs object and deregister it before its PD.
+  std::vector<struct ibv_mr*> registered_mrs_;
 
   // Cached mlx5 clock-info per device for converting the CQE's free-running HW
   // timestamp to nanoseconds (mlx5dv_ts_to_ns). Refreshed lazily (the HW clock

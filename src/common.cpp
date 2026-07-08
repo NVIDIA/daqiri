@@ -47,6 +47,15 @@ static Engine* g_daqiri_engine = nullptr;
 
 namespace {
 
+void reset_active_engine() {
+  Engine* engine = g_daqiri_engine;
+  g_daqiri_engine = nullptr;
+  if (engine != nullptr) {
+    engine->shutdown();
+  }
+  EngineFactory::reset();
+}
+
 constexpr size_t kEthAddrLength = 6;
 constexpr size_t kEthAddrOctetLength = 2;
 
@@ -523,7 +532,7 @@ void* get_packet_ptr(BurstParams* burst, int idx) {
 
 void shutdown() {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
-  g_daqiri_engine->shutdown();
+  reset_active_engine();
   metrics::shutdown();
 }
 
@@ -580,6 +589,11 @@ void print_stats() {
 }
 
 Status daqiri_init(NetworkConfig& config) {
+  if (g_daqiri_engine != nullptr) {
+    DAQIRI_LOG_ERROR("DAQIRI is already initialized; call shutdown() before daqiri_init()");
+    return Status::INTERNAL_ERROR;
+  }
+
   if (config.common_.engine_type == EngineType::UNKNOWN) {
     if (is_explicit_engine_type(config.common_.engine)) {
       config.common_.engine_type = config.common_.engine;
@@ -653,13 +667,19 @@ Status daqiri_init(NetworkConfig& config) {
 
   auto engine = &(EngineFactory::get_active_engine());
 
-  if (!engine->set_config_and_initialize(config)) { return Status::INTERNAL_ERROR; }
+  if (!engine->set_config_and_initialize(config)) {
+    reset_active_engine();
+    metrics::shutdown();
+    return Status::INTERNAL_ERROR;
+  }
 
   for (const auto& intf : config.ifs_) {
     const auto& rx = intf.rx_;
     auto port = engine->get_port_id(intf.address_);
     if (port < 0) {
       DAQIRI_LOG_ERROR("Failed to get port from name {}", intf.address_);
+      reset_active_engine();
+      metrics::shutdown();
       return Status::INVALID_PARAMETER;
     }
   }

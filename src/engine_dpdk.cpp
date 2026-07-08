@@ -317,6 +317,7 @@ Status Engine::register_memory_regions() {
 #if RTE_VERSION >= RTE_VERSION_NUM(24, 11, 0, 0)
           ret = rte_extmem_register_dmabuf(ext_mem->buf_ptr, ext_mem->buf_len, dmabuf_fd, offset,
                                            NULL, 0, GPU_PAGE_SIZE);
+          close(dmabuf_fd);
 #else
           DAQIRI_LOG_WARN(
               "rte_extmem_register_dmabuf unavailable in DPDK {}; falling back to peermem "
