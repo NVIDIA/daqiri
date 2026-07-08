@@ -38,6 +38,20 @@ BenchWorkload parse_workload(int argc, char** argv);
 // then falls back to its backend-default batch). Mirrors parse_workload's stride.
 size_t parse_workload_batch_bytes(int argc, char** argv);
 
+// Parse "--workload-gemm-n N" from argv: pin the square GEMM dimension directly,
+// independent of the compute batch bytes, so the FLOP count per call is FIXED as
+// the I/O unit (message / burst window) is swept. Isolates pipelining depth from
+// problem size in the RoCE-vs-raw comparison. Returns 0 if unset (the GEMM
+// dimension then derives from the working-set size). Mirrors parse_workload's stride.
+int parse_workload_gemm_n(int argc, char** argv);
+
+// Parse "--workload-sync-interval N" from argv: drain the GPU stream every N compute
+// calls (bounds outstanding GPU work). Larger N = deeper async queue, fewer CPU
+// stalls waiting on the GPU; N=1 is fully synchronous. Used to characterize how much
+// the single-threaded receive+compute loop is limited by sync stalls. Returns 2 (the
+// default) if unset. Mirrors parse_workload's stride.
+int parse_workload_sync_interval(int argc, char** argv);
+
 // Lower-case name ("none"/"fft"/"gemm"); used for the run_spark_bench.sh
 // post_process CSV column and log lines.
 const char* workload_name(BenchWorkload workload);
@@ -69,9 +83,13 @@ class GpuWorkload {
   // batch_bytes the caller will pass to run() (0 => an internal default). The op
   // reads at most batch_bytes from that buffer. kind == None leaves the object an
   // inert no-op. sync_interval bounds outstanding GPU work (sync every N runs).
+  // gemm_n_override (>0) pins the square GEMM dimension directly, holding the FLOP
+  // count per call fixed regardless of batch_bytes (0 => derive n from batch_bytes).
+  // Logs the chosen problem shape (GEMM n / FFT length+batch) and FLOP count so
+  // every published benchmark number carries its explicit compute size.
   // Returns false on CUDA / library error; the caller may warn and continue with
   // the workload disabled (enabled() will report false).
-  bool init(BenchWorkload kind, size_t batch_bytes, int sync_interval = 2);
+  bool init(BenchWorkload kind, size_t batch_bytes, int sync_interval = 2, int gemm_n_override = 0);
 
   // Enqueue one representative FFT/SGEMM on the internal stream, reading `input`
   // (a device pointer to >= batch_bytes valid bytes). No-op unless enabled().

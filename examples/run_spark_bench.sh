@@ -29,6 +29,18 @@
 #                      tensor-core matmul). Honoured by all backends (dpdk, rdma,
 #                      socket-udp, socket-tcp); recorded in the CSV post_process
 #                      column.
+#   WORKLOAD_BATCH   — GPU compute working-set bytes per call, decoupled from the
+#                      I/O unit (empty = backend default). Recorded in
+#                      post_process_batch.
+#   GEMM_N           — pin the square GEMM dimension n directly (--workload-gemm-n),
+#                      holding FLOPs/call fixed (2·n³) while the I/O unit is swept
+#                      via PAYLOADS_OVERRIDE. The fixed-n message-size sweep that
+#                      isolates pipelining depth from problem size. Recorded in
+#                      post_process_gemm_n.
+#   SYNC_INTERVAL    — drain the GPU stream every N compute calls
+#                      (--workload-sync-interval; default 2). Sweep it (1 2 4 8 16 32)
+#                      to see how much of the receive+compute ceiling is single-thread
+#                      GPU sync-stall. Recorded in post_process_sync.
 #
 # Optional (dpdk only): DPDK_{TX,RX}_PCI / DPDK_{TX,RX}_NETDEV override the p0/p1
 # ports used for the per-cell *_phy wire-transit check (defaults p0 0000:01:00.0 /
@@ -68,9 +80,11 @@ CSV="$OUT_DIR/runs.csv"
 # `pairs` = number of concurrent client/server process pairs (socket backends sweep
 # this; dpdk/rdma are always 1). `gbps` is aggregate App TX, `rx_gbps` aggregate App RX
 # (summed across pairs); App-level loss is (gbps - rx_gbps) / gbps.
-# post_process_batch (last column) = WORKLOAD_BATCH bytes, or "default" when unset.
+# post_process_batch = WORKLOAD_BATCH bytes, or "default" when unset.
+# post_process_gemm_n = GEMM_N pinned dimension, or "derived" when unset.
+# post_process_sync (last column) = SYNC_INTERVAL, or "default" (2) when unset.
 # Appended at the end so existing column positions are unchanged.
-echo "lang,backend,post_process,payload,batch,pairs,target_gbps,rep,seconds,packets,bytes,pps,gbps,rx_gbps,drops,drops_kind,cpu_master_pct,cpu_tx_pct,cpu_rx_pct,gpu_sm_pct,gpu_mem_pct,post_process_batch" > "$CSV"
+echo "lang,backend,post_process,payload,batch,pairs,target_gbps,rep,seconds,packets,bytes,pps,gbps,rx_gbps,drops,drops_kind,cpu_master_pct,cpu_tx_pct,cpu_rx_pct,gpu_sm_pct,gpu_mem_pct,post_process_batch,post_process_gemm_n,post_process_sync" > "$CSV"
 
 # Capture slow-moving environment state once per result set.
 "$SCRIPT_DIR/bench_capture_environment.sh" "$OUT_DIR"
@@ -97,6 +111,25 @@ esac
 WORKLOAD_BATCH="${WORKLOAD_BATCH:-}"
 if [[ -n "$WORKLOAD_BATCH" && ! "$WORKLOAD_BATCH" =~ ^[0-9]+$ ]]; then
   echo "Invalid WORKLOAD_BATCH '$WORKLOAD_BATCH' (expected a positive byte count)" >&2; exit 1
+fi
+# GEMM_N: pin the square GEMM dimension n directly (--workload-gemm-n), holding the
+# FLOP count per call FIXED (2·n³) while the I/O unit (RoCE message via
+# PAYLOADS_OVERRIDE, raw reorder window) is swept. This isolates pipelining depth
+# from problem size -- the fixed-n message-size sweep that proves the RoCE↔raw gap
+# is pipelining, not transport. Empty = derive n from the working set. Recorded in
+# the CSV post_process_gemm_n column.
+GEMM_N="${GEMM_N:-}"
+if [[ -n "$GEMM_N" && ! "$GEMM_N" =~ ^[0-9]+$ ]]; then
+  echo "Invalid GEMM_N '$GEMM_N' (expected a positive integer)" >&2; exit 1
+fi
+# SYNC_INTERVAL: drain the GPU stream every N compute calls (--workload-sync-interval).
+# Larger N lets more GEMMs queue asynchronously before the single receive+compute
+# thread blocks on the GPU, so sweeping it (e.g. 1 2 4 8 16 32) shows how much of the
+# ceiling is CPU sync-stall vs the receive path. Empty = default (2). Recorded in the
+# CSV post_process_sync column.
+SYNC_INTERVAL="${SYNC_INTERVAL:-}"
+if [[ -n "$SYNC_INTERVAL" && ! "$SYNC_INTERVAL" =~ ^[0-9]+$ ]]; then
+  echo "Invalid SYNC_INTERVAL '$SYNC_INTERVAL' (expected a positive integer)" >&2; exit 1
 fi
 DRIVER_LOG="$OUT_DIR/last_run.stderr"
 FAILURES=0
@@ -186,6 +219,20 @@ case "$BACKEND" in
     ;;
   *) echo "Unknown backend: $BACKEND" >&2; exit 1 ;;
 esac
+
+# Optional space-separated overrides for the sweep ladders, so a one-off experiment
+# can re-target the payload/batch matrix without editing the per-backend defaults
+# above. Used by the fixed-n workload sweep: pin the GEMM dimension with GEMM_N
+# (constant 2·n³ FLOPs/call) and sweep PAYLOADS_OVERRIDE = the RoCE message size, so
+# num_chunks = message/batch varies pipelining depth at a FIXED matrix size. This is
+# the "send an 80 MB message, launch N same-size GEMMs" experiment that isolates
+# pipelining depth from problem size -- proving the RoCE↔raw gap is pipelining, not
+# transport. Hold WORKLOAD_BATCH at the per-chunk size (= the GEMM working set).
+# e.g. WORKLOAD=gemm_fp16 GEMM_N=1024 WORKLOAD_BATCH=4194304 \
+#      PAYLOADS_OVERRIDE="4194304 8388608 16777216 33554432 83886080" \
+#      ./run_spark_bench.sh rdma sweep
+[[ -n "${PAYLOADS_OVERRIDE:-}" ]] && read -r -a PAYLOADS_SWEEP <<< "$PAYLOADS_OVERRIDE"
+[[ -n "${BATCHES_OVERRIDE:-}"  ]] && read -r -a BATCHES_SWEEP  <<< "$BATCHES_OVERRIDE"
 
 # All backends (dpdk, rdma, socket-udp, socket-tcp) now run the workload on real
 # received data, so the CSV post_process column records the requested workload
@@ -400,6 +447,8 @@ run_cell() {
   if [[ "$WORKLOAD_EFF" != "none" ]]; then
     bench_extra+=(--workload "$WORKLOAD_EFF")
     [[ -n "$WORKLOAD_BATCH" ]] && bench_extra+=(--workload-batch-bytes "$WORKLOAD_BATCH")
+    [[ -n "$GEMM_N" ]] && bench_extra+=(--workload-gemm-n "$GEMM_N")
+    [[ -n "$SYNC_INTERVAL" ]] && bench_extra+=(--workload-sync-interval "$SYNC_INTERVAL")
   fi
   # Shutdown ordering: the server must keep receiving until the client has fully
   # stopped sending, otherwise the client's last in-flight messages have no peer
@@ -574,7 +623,11 @@ run_cell() {
 
   local pp_batch="${WORKLOAD_BATCH:-default}"
   [[ -z "$pp_batch" ]] && pp_batch="default"
-  echo "$lang,$BACKEND,$WORKLOAD_EFF,$payload,$batch,$pairs,$target_gbps,$rep,$secs,$pkts,$bytes,$pps,$gbps,$rx_gbps,$drops,$drops_kind,$cpu_master_pct,$cpu_tx_pct,$cpu_rx_pct,$gpu_sm,$gpu_mem,$pp_batch" \
+  local pp_gemm_n="${GEMM_N:-derived}"
+  [[ -z "$pp_gemm_n" ]] && pp_gemm_n="derived"
+  local pp_sync="${SYNC_INTERVAL:-default}"
+  [[ -z "$pp_sync" ]] && pp_sync="default"
+  echo "$lang,$BACKEND,$WORKLOAD_EFF,$payload,$batch,$pairs,$target_gbps,$rep,$secs,$pkts,$bytes,$pps,$gbps,$rx_gbps,$drops,$drops_kind,$cpu_master_pct,$cpu_tx_pct,$cpu_rx_pct,$gpu_sm,$gpu_mem,$pp_batch,$pp_gemm_n,$pp_sync" \
     | tee -a "$CSV"
 }
 

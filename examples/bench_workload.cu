@@ -85,6 +85,30 @@ size_t parse_workload_batch_bytes(int argc, char** argv) {
   return 0;
 }
 
+int parse_workload_gemm_n(int argc, char** argv) {
+  for (int i = 2; i + 1 < argc; i += 2) {
+    if (std::string(argv[i]) == "--workload-gemm-n") {
+      const long long v = std::atoll(argv[i + 1]);
+      if (v > 0) {
+        return static_cast<int>(v);
+      }
+    }
+  }
+  return 0;
+}
+
+int parse_workload_sync_interval(int argc, char** argv) {
+  for (int i = 2; i + 1 < argc; i += 2) {
+    if (std::string(argv[i]) == "--workload-sync-interval") {
+      const long long v = std::atoll(argv[i + 1]);
+      if (v > 0) {
+        return static_cast<int>(v);
+      }
+    }
+  }
+  return 2;  // default sync depth
+}
+
 const char* workload_name(BenchWorkload workload) {
   switch (workload) {
     case BenchWorkload::Fft:
@@ -131,7 +155,8 @@ void GpuWorkload::destroy() {
   ok_ = false;
 }
 
-bool GpuWorkload::init(BenchWorkload kind, size_t batch_bytes, int sync_interval) {
+bool GpuWorkload::init(BenchWorkload kind, size_t batch_bytes, int sync_interval,
+                       int gemm_n_override) {
   kind_ = kind;
   sync_interval_ = sync_interval > 0 ? sync_interval : 1;
   run_count_ = 0;
@@ -176,16 +201,36 @@ bool GpuWorkload::init(BenchWorkload kind, size_t batch_bytes, int sync_interval
       destroy();
       return false;
     }
+    // Explicit shape so every published FFT number carries its compute size.
+    // ~5·N·log2(N) flops per length-N C2C transform, times `batch` transforms.
+    const double flops = 5.0 * kFftLen * std::log2(static_cast<double>(kFftLen)) * batch;
+    std::cerr << "GpuWorkload: fft shape = " << batch << " x C2C length-" << kFftLen
+              << " (working set " << (bytes >> 10) << " KiB, " << (flops / 1e6) << " MFLOP/call)\n";
   } else {  // Gemm or GemmFp16
-    // Square matmul whose matrices match the working set. Size n from FP32 in
-    // both cases so gemm and gemm_fp16 use the SAME dimension -> identical FLOP
-    // count, isolating the precision / tensor-core effect. The A operand is the
-    // caller's input buffer (n*n*elem_size <= bytes); B and C are owned scratch.
-    int n = static_cast<int>(std::sqrt(static_cast<double>(bytes) / sizeof(float)));
+    // Square matmul. By default size n from the working set (FP32 in both cases so
+    // gemm and gemm_fp16 use the SAME dimension -> identical FLOP count, isolating
+    // the precision / tensor-core effect). A caller-supplied gemm_n_override pins n
+    // directly so the FLOP count per call stays FIXED while the I/O unit is swept --
+    // this isolates pipelining depth from problem size in the RoCE-vs-raw study.
+    // The A operand is the caller's input buffer (n*n*elem_size must be <= bytes,
+    // enforced below); B and C are owned scratch.
+    int n = gemm_n_override > 0
+                ? gemm_n_override
+                : static_cast<int>(std::sqrt(static_cast<double>(bytes) / sizeof(float)));
     n = std::max(64, (n / 8) * 8);  // multiple of 8, sane floor
     gemm_n_ = n;
     const size_t elems = static_cast<size_t>(n) * n;
     const size_t elem_size = kind_ == BenchWorkload::GemmFp16 ? sizeof(__half) : sizeof(float);
+    // The A operand is read from the caller's received-data buffer, which holds
+    // `bytes`. A pinned n must fit -- otherwise cuBLAS reads past the buffer. Reject
+    // rather than silently OOB-read; the caller should raise --workload-batch-bytes.
+    if (elems * elem_size > bytes) {
+      std::cerr << "GpuWorkload: pinned gemm n=" << n << " needs " << (elems * elem_size >> 10)
+                << " KiB for the A operand but the working set is only " << (bytes >> 10)
+                << " KiB; raise --workload-batch-bytes to >= n*n*elem_size\n";
+      destroy();
+      return false;
+    }
     if (cudaMalloc(&gemm_b_, elems * elem_size) != cudaSuccess ||
         cudaMalloc(&gemm_c_, elems * elem_size) != cudaSuccess ||
         cudaMemset(gemm_b_, 0, elems * elem_size) != cudaSuccess) {
@@ -205,6 +250,13 @@ bool GpuWorkload::init(BenchWorkload kind, size_t batch_bytes, int sync_interval
       destroy();
       return false;
     }
+    // Explicit shape so every published GEMM number carries its compute size. A
+    // square n×n×n matmul is 2·n³ flops; note whether n was pinned or derived.
+    const double flops = 2.0 * static_cast<double>(n) * n * n;
+    std::cerr << "GpuWorkload: " << workload_name(kind_) << " shape = " << n << "x" << n << "x" << n
+              << (gemm_n_override > 0 ? " (pinned)" : " (derived)") << ", "
+              << (elem_size == sizeof(__half) ? "fp16" : "fp32") << " A/B, " << (flops / 1e9)
+              << " GFLOP/call, matrix " << (elems * elem_size >> 10) << " KiB\n";
   }
 
   // Warm up and validate the chosen op once against a transient zeroed input

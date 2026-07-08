@@ -102,8 +102,8 @@ bool socket_transport_is_tcp(const YAML::Node& root) {
 
 void socket_worker(const SocketBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pacer,
                    std::atomic<bool>& stop, SocketWorkerStats& stats,
-                   daqiri::bench::BenchWorkload workload, bool is_tcp,
-                   size_t workload_batch_bytes) {
+                   daqiri::bench::BenchWorkload workload, bool is_tcp, size_t workload_batch_bytes,
+                   int workload_gemm_n, int workload_sync_interval) {
   const char *thread_name =
       cfg.server ? "socket_bench_server" : "socket_bench_client";
   if (!daqiri::bench::set_current_thread_affinity(cfg.cpu_core, thread_name)) {
@@ -126,7 +126,8 @@ void socket_worker(const SocketBenchConfig& cfg, daqiri::bench::TokenBucketPacer
   daqiri::bench::GpuWorkload gpu_workload;
   daqiri::bench::ReorderPipeline pipeline;
   if (workload != daqiri::bench::BenchWorkload::None) {
-    if (!gpu_workload.init(workload, static_cast<size_t>(packets_per_batch) * msg) ||
+    if (!gpu_workload.init(workload, static_cast<size_t>(packets_per_batch) * msg,
+                           workload_sync_interval, workload_gemm_n) ||
         !pipeline.init(is_tcp ? daqiri::bench::ReorderMode::GatherOnly
                               : daqiri::bench::ReorderMode::SeqReorder,
                        packets_per_batch, msg, /*payload_byte_offset=*/0,
@@ -259,6 +260,8 @@ int main(int argc, char** argv) {
   }
   const auto workload = daqiri::bench::parse_workload(argc, argv);
   const size_t workload_batch_bytes = daqiri::bench::parse_workload_batch_bytes(argc, argv);
+  const int workload_gemm_n = daqiri::bench::parse_workload_gemm_n(argc, argv);
+  const int workload_sync_interval = daqiri::bench::parse_workload_sync_interval(argc, argv);
 
   const auto root = YAML::LoadFile(argv[1]);
   const bool is_tcp = socket_transport_is_tcp(root);
@@ -296,11 +299,13 @@ int main(int argc, char** argv) {
 
   if (run_server) {
     server_thread = std::thread(socket_worker, server_cfg, std::ref(server_pacer), std::ref(stop),
-                                std::ref(server_stats), workload, is_tcp, workload_batch_bytes);
+                                std::ref(server_stats), workload, is_tcp, workload_batch_bytes,
+                                workload_gemm_n, workload_sync_interval);
   }
   if (run_client) {
     client_thread = std::thread(socket_worker, client_cfg, std::ref(client_pacer), std::ref(stop),
-                                std::ref(client_stats), workload, is_tcp, workload_batch_bytes);
+                                std::ref(client_stats), workload, is_tcp, workload_batch_bytes,
+                                workload_gemm_n, workload_sync_interval);
   }
 
   if (!server_thread.joinable() && !client_thread.joinable()) {
