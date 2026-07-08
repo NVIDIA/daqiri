@@ -98,6 +98,10 @@ finally:
     daqiri.shutdown()
 ```
 
+Only one engine may be active at a time. A second `daqiri_init()` before `shutdown()`
+returns `Status.INTERNAL_ERROR` without changing the live engine. After `shutdown()`, a
+later initialization starts with a fresh engine instance and fresh resources.
+
 Initialize from a Python dictionary:
 
 ```python

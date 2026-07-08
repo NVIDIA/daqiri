@@ -157,6 +157,58 @@ bool validate_flow_action_config(const FlowAction& action, const std::string& fl
 
 }  // namespace
 
+Engine::~Engine() {
+  free_memory_regions();
+}
+
+void Engine::free_memory_regions() noexcept {
+  // DPDK's external-memory descriptors must be released before their backing
+  // allocations. EAL-backed HUGE allocations themselves are released by
+  // rte_eal_cleanup(), which runs in DpdkEngine before this base destructor.
+  ext_pktmbufs_.clear();
+  // Safety net for partial teardown. Normal DPDK shutdown closes these after
+  // rte_eal_cleanup(), then clears the vector before reaching this destructor.
+  for (const int fd : ext_dmabuf_fds_) {
+    if (fd >= 0) {
+      close(fd);
+    }
+  }
+  ext_dmabuf_fds_.clear();
+
+  for (auto& [name, region] : ar_) {
+    (void)name;
+    if (region.ptr_ == nullptr) {
+      continue;
+    }
+
+    switch (region.deallocator_) {
+      case AllocRegion::Deallocator::FREE:
+        std::free(region.ptr_);
+        break;
+      case AllocRegion::Deallocator::CUDA_HOST:
+        if (region.affinity_ >= 0) {
+          cudaSetDevice(region.affinity_);
+        }
+        cudaFreeHost(region.ptr_);
+        break;
+      case AllocRegion::Deallocator::CUDA_DEVICE:
+        if (region.affinity_ >= 0) {
+          cudaSetDevice(region.affinity_);
+        }
+        cuMemFree(reinterpret_cast<CUdeviceptr>(region.ptr_));
+        break;
+      case AllocRegion::Deallocator::MUNMAP:
+        munmap(region.ptr_, region.size_);
+        break;
+      case AllocRegion::Deallocator::EAL:
+      case AllocRegion::Deallocator::NONE:
+        break;
+    }
+    region.ptr_ = nullptr;
+  }
+  ar_.clear();
+}
+
 std::string Engine::generate_random_string(int len) {
   constexpr char tokens[] = "abcdefghijklmnopqrstuvwxyz";
   if (len <= 0) { return {}; }
@@ -329,16 +381,20 @@ static void bind_region_numa(void* p, size_t bytes, int numa) {
   (void)numa;
 }
 
-void* Engine::alloc_huge(size_t bytes, int numa) {
+void* Engine::alloc_huge(size_t bytes, int numa, AllocRegion::Deallocator* deallocator) {
   // Base (non-DPDK) implementation: try a real hugepage-backed mapping, falling
   // back to ordinary page-aligned host memory if MAP_HUGETLB is unavailable.
   // The DPDK engine overrides this to use rte_malloc_socket (EAL hugepages,
   // IOVA-contiguous for the NIC) -- see DpdkEngine::alloc_huge.
+  if (deallocator == nullptr) {
+    return nullptr;
+  }
 #if defined(MAP_HUGETLB)
   void* p = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB,
                  -1, 0);
   if (p != MAP_FAILED) {
     bind_region_numa(p, bytes, numa);
+    *deallocator = AllocRegion::Deallocator::MUNMAP;
     return p;
   }
   DAQIRI_LOG_WARN(
@@ -351,6 +407,7 @@ void* Engine::alloc_huge(size_t bytes, int numa) {
     return nullptr;
   }
   bind_region_numa(ptr, bytes, numa);
+  *deallocator = AllocRegion::Deallocator::FREE;
   return ptr;
 }
 
@@ -359,7 +416,10 @@ Status Engine::allocate_memory_regions() {
   for (auto& mr : cfg_.mrs_) {
     void* ptr = nullptr;
     AllocRegion ar;
+    ar.mr_name_ = mr.second.name_;
+    ar.affinity_ = mr.second.affinity_;
     mr.second.ttl_size_ = align_ceil(mr.second.adj_size_ * mr.second.num_bufs_, GPU_PAGE_SIZE);
+    ar.size_ = mr.second.ttl_size_;
 
     if (mr.second.owned_) {
       switch (mr.second.kind_) {
@@ -368,6 +428,7 @@ Status Engine::allocate_memory_regions() {
             DAQIRI_LOG_CRITICAL("Failed to allocate aligned host memory!");
             return Status::NULL_PTR;
           }
+          ar.deallocator_ = AllocRegion::Deallocator::FREE;
           break;
         case MemoryKind::HOST_PINNED:
           cudaSetDevice(mr.second.affinity_);
@@ -375,9 +436,10 @@ Status Engine::allocate_memory_regions() {
             DAQIRI_LOG_CRITICAL("Failed to allocate CUDA pinned host memory!");
             return Status::NULL_PTR;
           }
+          ar.deallocator_ = AllocRegion::Deallocator::CUDA_HOST;
           break;
         case MemoryKind::HUGE:
-          ptr = alloc_huge(mr.second.ttl_size_, mr.second.affinity_);
+          ptr = alloc_huge(mr.second.ttl_size_, mr.second.affinity_, &ar.deallocator_);
           break;
         case MemoryKind::DEVICE: {
           unsigned int flag = 1;
@@ -402,8 +464,10 @@ Status Engine::allocate_memory_regions() {
               cuPointerSetAttribute(&flag, CU_POINTER_ATTRIBUTE_SYNC_MEMOPS, cuptr);
           if (attr_res != CUDA_SUCCESS) {
             DAQIRI_LOG_CRITICAL("Could not set pointer attributes");
+            cuMemFree(cuptr);
             return Status::NULL_PTR;
           }
+          ar.deallocator_ = AllocRegion::Deallocator::CUDA_DEVICE;
           break;
         }
         default:
@@ -419,6 +483,8 @@ Status Engine::allocate_memory_regions() {
       }
     }
 
+    ar.ptr_ = ptr;
+
     DAQIRI_LOG_INFO(
         "Successfully allocated memory region {} at {} type {} with {} bytes "
         "({} elements @ {} bytes total {})",
@@ -429,7 +495,7 @@ Status Engine::allocate_memory_regions() {
         mr.second.num_bufs_,
         mr.second.adj_size_,
         mr.second.ttl_size_);
-    ar_[mr.second.name_] = {mr.second.name_, ptr};
+    ar_[mr.second.name_] = ar;
   }
   DAQIRI_LOG_INFO("Finished allocating memory regions");
   return Status::SUCCESS;

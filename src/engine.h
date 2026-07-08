@@ -33,8 +33,20 @@ struct rte_pktmbuf_extmem;
 namespace daqiri {
 
 struct AllocRegion {
+  enum class Deallocator {
+    NONE,
+    FREE,
+    CUDA_HOST,
+    CUDA_DEVICE,
+    MUNMAP,
+    EAL,
+  };
+
   std::string mr_name_;
-  void* ptr_;
+  void* ptr_ = nullptr;
+  size_t size_ = 0;
+  int affinity_ = -1;
+  Deallocator deallocator_ = Deallocator::NONE;
 };
 
 /**
@@ -139,7 +151,7 @@ class Engine {
   struct rte_mempool* create_pktmbuf_pool(const std::string& name, const MemoryRegionConfig& mr);
   struct rte_mempool* create_generic_pool(const std::string& name, const MemoryRegionConfig& mr);
 
-  virtual ~Engine() = default;
+  virtual ~Engine();
 
  protected:
   static constexpr int MAX_IFS = 4;
@@ -161,6 +173,9 @@ class Engine {
   // shared_ptr to an incomplete type -- only populated by the DPDK engine
   // (engine_dpdk.cpp). Layout is identical in every build.
   std::unordered_map<std::string, std::shared_ptr<struct rte_pktmbuf_extmem>> ext_pktmbufs_;
+  // rte_extmem_register_dmabuf() retains the caller's numeric fd for deferred
+  // driver mapping. Keep successful exports open until EAL teardown completes.
+  std::vector<int> ext_dmabuf_fds_;
   std::unordered_map<uint32_t, std::vector<std::pair<uint16_t, uint16_t>>> rx_core_q_map;
 
   // EAL lifecycle state, used only by the DPDK engine. Mirrors the
@@ -179,7 +194,8 @@ class Engine {
   // a libdpdk-free implementation (MAP_HUGETLB with a regular-page fallback);
   // DpdkEngine overrides it with rte_malloc_socket so HUGE regions come from EAL
   // hugepages that are IOVA-contiguous for the NIC.
-  virtual void* alloc_huge(size_t bytes, int numa);
+  virtual void* alloc_huge(size_t bytes, int numa, AllocRegion::Deallocator* deallocator);
+  void free_memory_regions() noexcept;
   void init_rx_core_q_map();
   static std::string generate_random_string(int len);
   size_t get_alignment(MemoryKind kind);
@@ -256,6 +272,11 @@ class EngineFactory {
     if (EngineType_ == EngineType::UNKNOWN) { throw std::logic_error("EngineType not set"); }
     if (!EngineInstance_) { EngineInstance_ = create_instance(EngineType_); }
     return *EngineInstance_;
+  }
+
+  static void reset() {
+    EngineInstance_.reset();
+    EngineType_ = EngineType::UNKNOWN;
   }
 
  private:

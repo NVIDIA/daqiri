@@ -345,6 +345,13 @@ IbverbsEngine::~IbverbsEngine() {
 // Bring-up
 // ---------------------------------------------------------------------------
 bool IbverbsEngine::set_config_and_initialize(const NetworkConfig& cfg) {
+  if (initialized_) {
+    DAQIRI_LOG_ERROR("ibverbs engine is already initialized; call shutdown() first");
+    return false;
+  }
+
+  force_quit_.store(false, std::memory_order_relaxed);
+  max_batch_ = 0;
   cfg_ = cfg;
   if (!reserve_static_flow_ids()) { return false; }
   initialize();
@@ -493,12 +500,14 @@ Status IbverbsEngine::register_mr(struct ibv_pd* pd, const std::string& mr_name,
       return Status::GENERIC_FAILURE;
     }
     struct ibv_mr* gmr = ibv_reg_dmabuf_mr(pd, offset, mr.ttl_size_, va, dmabuf_fd, access);
+    const int reg_errno = errno;
+    close(dmabuf_fd);
     if (gmr == nullptr) {
       DAQIRI_LOG_CRITICAL("ibv_reg_dmabuf_mr failed for MR {} ({} bytes): {}", mr_name,
-                          mr.ttl_size_, strerror(errno));
-      close(dmabuf_fd);
+                          mr.ttl_size_, strerror(reg_errno));
       return Status::NULL_PTR;
     }
+    registered_mrs_.push_back(gmr);
     *out_base = static_cast<uint8_t*>(base);
     *out_lkey = gmr->lkey;
     DAQIRI_LOG_INFO("Registered GPU MR {} (dmabuf) base {} size {} lkey {}", mr_name, base,
@@ -511,6 +520,7 @@ Status IbverbsEngine::register_mr(struct ibv_pd* pd, const std::string& mr_name,
     DAQIRI_LOG_CRITICAL("ibv_reg_mr failed for {} ({} bytes)", mr_name, mr.ttl_size_);
     return Status::NULL_PTR;
   }
+  registered_mrs_.push_back(ib_mr);
   *out_base = static_cast<uint8_t*>(base);
   *out_lkey = ib_mr->lkey;
   DAQIRI_LOG_INFO("Registered MR {} base {} size {} lkey {}", mr_name, base, mr.ttl_size_,
@@ -3596,7 +3606,7 @@ void IbverbsEngine::print_stats() {
 }
 
 void IbverbsEngine::shutdown() {
-  force_quit_ = true;
+  force_quit_.store(true, std::memory_order_relaxed);
   for (auto& q : rx_queues_) {
     q->running = false;
     if (q->worker.joinable()) {
@@ -3714,15 +3724,24 @@ void IbverbsEngine::shutdown() {
     }
   }
   tx_queues_.clear();
+
+  for (auto it = registered_mrs_.rbegin(); it != registered_mrs_.rend(); ++it) {
+    if (*it != nullptr && ibv_dereg_mr(*it) != 0) {
+      DAQIRI_LOG_ERROR("ibv_dereg_mr failed during ibverbs shutdown: {}", strerror(errno));
+    }
+  }
+  registered_mrs_.clear();
+
   for (auto& pd : pd_map_) {
-    if (pd.second) {
-      ibv_dealloc_pd(pd.second);
+    if (pd.second && ibv_dealloc_pd(pd.second) != 0) {
+      DAQIRI_LOG_ERROR("ibv_dealloc_pd failed during ibverbs shutdown: {}", strerror(errno));
     }
   }
   pd_map_.clear();
+  clock_cache_.clear();
   for (auto& c : ctx_map_) {
-    if (c.second) {
-      ibv_close_device(c.second);
+    if (c.second && ibv_close_device(c.second) != 0) {
+      DAQIRI_LOG_ERROR("ibv_close_device failed during ibverbs shutdown: {}", strerror(errno));
     }
   }
   ctx_map_.clear();
@@ -3734,6 +3753,10 @@ void IbverbsEngine::shutdown() {
     daqiri::ObjectPool::free(tx_meta_pool_);
     tx_meta_pool_ = nullptr;
   }
+  initialized_ = false;
+  force_quit_.store(false, std::memory_order_relaxed);
+  max_batch_ = 0;
+  rx_meta_pool_size_ = 0;
 }
 
 // ---------------------------------------------------------------------------

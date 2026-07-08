@@ -91,7 +91,13 @@ std::shared_ptr<metrics::CounterSet> get_rdma_metrics_for_connection(
 }  // namespace
 
 bool RdmaEngine::set_config_and_initialize(const NetworkConfig& cfg) {
+  if (initialized_) {
+    DAQIRI_LOG_ERROR("RDMA engine is already initialized; call shutdown() first");
+    return false;
+  }
+
   DAQIRI_LOG_INFO("Setting up RDMA engine");
+  rdma_force_quit.store(false, std::memory_order_relaxed);
   cfg_ = cfg;
   initialize();
 
@@ -260,6 +266,12 @@ int RdmaEngine::rdma_register_mr(const MemoryRegionConfig& mr, void* ptr) {
 #endif
       if (params.ctx_mr_map_[pd.second] == nullptr) {
         DAQIRI_LOG_CRITICAL("Failed to register MR {} on PD {}", mr.name_, (void*)pd.second);
+        for (auto& [registered_pd, registered_mr] : params.ctx_mr_map_) {
+          (void)registered_pd;
+          if (registered_mr != nullptr) {
+            ibv_dereg_mr(registered_mr);
+          }
+        }
         return -1;
       } else {
         DAQIRI_LOG_INFO(
@@ -1921,6 +1933,20 @@ RdmaEngine::~RdmaEngine() {
     rdma_destroy_event_channel(cm_event_channel_);
     cm_event_channel_ = nullptr;
   }
+
+  // Registrations hold references to their PDs and backing allocations. Drop
+  // them before deallocating PDs; Engine's base destructor frees the buffers.
+  for (auto& [name, params] : mrs_) {
+    (void)name;
+    for (auto& [pd, mr] : params.ctx_mr_map_) {
+      (void)pd;
+      if (mr != nullptr) {
+        ibv_dereg_mr(mr);
+      }
+    }
+    params.ctx_mr_map_.clear();
+  }
+  mrs_.clear();
 
   // Deallocate PDs
   for (auto& entry : pd_map_) {

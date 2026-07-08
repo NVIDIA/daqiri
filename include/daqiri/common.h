@@ -859,8 +859,8 @@ void set_header(BurstParams *burst, uint16_t port, uint16_t q, int64_t num,
 void format_eth_addr(char *dst, std::string addr);
 
 /**
- * @brief Shut down the daqiri and do any cleanup necessary. Freeing memory is
- * done in the engine's destructor.
+ * @brief Shut down DAQIRI and release the active engine and its resources.
+ * A subsequent daqiri_init() creates a fresh engine instance.
  *
  */
 void shutdown();
