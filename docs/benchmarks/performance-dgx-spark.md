@@ -358,9 +358,15 @@ The bottleneck is the **single-threaded RoCE receive+compute loop**: one thread 
 that thread — so while the GPU drains, no receives are posted and the message rate falls.
 The heavier the GEMM, the longer each stall, which is why FP32 (48 Gb/s) suffers more than
 FP16 (88 Gb/s) while raw stays wire-limited for both. Raw proves one thread *can* feed the
-GPU at ~3100 GEMM/s, so the remedy is to decouple receive from compute (a dedicated
-GPU-worker thread) or thin the stalls (`--workload-sync-interval`); a sync-interval sweep
-quantifying the latter is in progress.
+GPU at ~3100 GEMM/s, so the ceiling is the RoCE receive path, not the GPU.
+
+Tuning the sync cadence does **not** recover it: sweeping `--workload-sync-interval` from 2
+to 32 leaves throughput flat (FP32 ~48 Gb/s / ~1450 GEMMs/s, FP16 ~88 Gb/s / ~2650 GEMMs/s),
+and fully-synchronous (interval 1) matches deep-async — the path already drains the stream
+once per held-receive batch, which masks the knob, and the real limit is the single-threaded
+single-QP receive itself. The remedy is therefore **structural**: decouple receive from
+compute onto a dedicated GPU-worker thread (and/or fan out across multiple QPs/threads),
+not sync tuning.
 
 ### Workload batch-size sweep
 
