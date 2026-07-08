@@ -37,6 +37,9 @@ namespace {
 constexpr int kFftLen = 1024;
 // Default working-set size when the caller passes bytes_per_burst == 0.
 constexpr size_t kDefaultBytes = 1u << 16;  // 64 KiB
+// Fixed CUDA-event pool for record_event(); comfortably above the RoCE recv-path
+// in-flight cap (min(rx_depth/2, 8)). Created lazily on first record_event().
+constexpr int kEventPoolSize = 32;
 
 cufftHandle as_fft_plan(int p) {
   return static_cast<cufftHandle>(p);
@@ -46,6 +49,9 @@ cudaStream_t as_stream(void* s) {
 }
 cublasHandle_t as_cublas(void* h) {
   return static_cast<cublasHandle_t>(h);
+}
+cudaEvent_t as_event(void* e) {
+  return static_cast<cudaEvent_t>(e);
 }
 
 }  // namespace
@@ -136,6 +142,11 @@ void GpuWorkload::destroy() {
     cudaFree(gemm_c_);
     gemm_c_ = nullptr;
   }
+  for (void* ev : event_pool_) {
+    cudaEventDestroy(as_event(ev));
+  }
+  event_pool_.clear();
+  free_events_.clear();
   if (stream_ != nullptr) {
     cudaStreamDestroy(as_stream(stream_));
     stream_ = nullptr;
@@ -296,6 +307,64 @@ void GpuWorkload::run(const void* input) {
   issue_op(input);
   ++run_count_;
   maybe_sync();
+}
+
+void GpuWorkload::run_async(const void* input) {
+  if (!enabled() || input == nullptr) {
+    return;
+  }
+  issue_op(input);
+  ++run_count_;
+  // No maybe_sync: the caller bounds outstanding work with events.
+}
+
+void* GpuWorkload::record_event() {
+  if (!enabled()) {
+    return nullptr;
+  }
+  // Lazily create the pool on first use so the run()+sync() callers (DPDK/socket)
+  // that never record events pay nothing.
+  if (event_pool_.empty()) {
+    event_pool_.reserve(kEventPoolSize);
+    free_events_.reserve(kEventPoolSize);
+    for (int i = 0; i < kEventPoolSize; ++i) {
+      cudaEvent_t ev = nullptr;
+      if (cudaEventCreateWithFlags(&ev, cudaEventDisableTiming) != cudaSuccess) {
+        break;  // partial pool is fine; record_event just returns null when empty
+      }
+      event_pool_.push_back(ev);
+      free_events_.push_back(ev);
+    }
+  }
+  if (free_events_.empty()) {
+    return nullptr;  // caller must drain (event_done / wait_event) and retry
+  }
+  void* ev = free_events_.back();
+  free_events_.pop_back();
+  if (cudaEventRecord(as_event(ev), as_stream(stream_)) != cudaSuccess) {
+    free_events_.push_back(ev);
+    return nullptr;
+  }
+  return ev;
+}
+
+bool GpuWorkload::event_done(void* ev) const {
+  if (ev == nullptr) {
+    return true;
+  }
+  return cudaEventQuery(as_event(ev)) == cudaSuccess;
+}
+
+void GpuWorkload::wait_event(void* ev) {
+  if (ev != nullptr) {
+    cudaEventSynchronize(as_event(ev));
+  }
+}
+
+void GpuWorkload::release_event(void* ev) {
+  if (ev != nullptr) {
+    free_events_.push_back(ev);
+  }
 }
 
 void GpuWorkload::maybe_sync() {

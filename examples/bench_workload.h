@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cstddef>
+#include <vector>
 
 namespace daqiri::bench {
 
@@ -93,12 +94,33 @@ class GpuWorkload {
   // enabled().
   void run(const void* input);
 
+  // Like run(), but enqueue only -- never blocks (no maybe_sync). For callers that
+  // bound outstanding GPU work with events (record_event) instead of the periodic
+  // maybe_sync drain, so the receive thread is never parked on the GPU.
+  void run_async(const void* input);
+
   // Every sync_interval runs, block until the stream drains so the GPU stays on
   // the critical path without unbounded queueing.
   void maybe_sync();
 
   // Drain any remaining queued work (call once on shutdown).
   void sync();
+
+  // Event-based buffer recycling for callers that read a still-owned input buffer
+  // zero-copy (the RoCE recv path): record an event on the stream after the ops
+  // for one input have been enqueued; the event completes only once those ops
+  // (and thus the reads of that input) finish. Poll it non-blocking with
+  // event_done() to free/repost the input, or block on it (wait_event) for
+  // backpressure / shutdown. Handles come from a fixed internal pool; release_event
+  // returns one for reuse. All are no-ops / return true / null when disabled.
+  //
+  // Enabled callers must keep at most pool-capacity events outstanding (wait+
+  // release the oldest before exceeding it); record_event returns null if the pool
+  // is momentarily exhausted so the caller can drain and retry.
+  void* record_event();
+  bool event_done(void* ev) const;
+  void wait_event(void* ev);
+  void release_event(void* ev);
 
   bool enabled() const {
     return kind_ != BenchWorkload::None && ok_;
@@ -137,6 +159,12 @@ class GpuWorkload {
   void* gemm_b_ = nullptr;   // B operand
   void* gemm_c_ = nullptr;   // C output
   int gemm_n_ = 0;
+
+  // Fixed pool of CUDA events (cudaEvent_t, cast in the .cu) for record_event().
+  // Created lazily on first use; freed in destroy(). free_events_ holds the
+  // currently-available handles.
+  std::vector<void*> event_pool_;   // all owned events (for teardown)
+  std::vector<void*> free_events_;  // subset available to hand out
 };
 
 }  // namespace daqiri::bench

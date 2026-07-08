@@ -622,6 +622,11 @@ void rx_count_worker(const RawBenchRxConfig& cfg, std::atomic<bool>& stop, Bench
         // is freed, so process complete batches within this burst (the remainder
         // < packets_per_batch is dropped), then drain the stream so the reorder
         // kernel has finished reading the buffers before they are recycled.
+        // Unlike the RoCE path (which reads the recv buffer zero-copy and recycles
+        // it with CUDA events), the reorder here copies into the pipeline's single
+        // shared output buffer, so overlapping GEMMs across bursts would need that
+        // buffer double/ring-buffered first -- hence the per-burst blocking drain.
+        // The raw path already sustains line rate, so events are not wired in here.
         pipeline.reset_batch();
         for (int i = 0; i < num_pkts; ++i) {
           pipeline.add_device_packet(
