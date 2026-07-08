@@ -881,6 +881,18 @@ inline size_t flow_max_decap_wire_overhead(const std::vector<FlowConfig>& flows)
   return overhead;
 }
 
+inline size_t flow_max_encap_wire_overhead(const std::vector<FlowConfig>& flows) {
+  size_t overhead = 0;
+  for (const auto& flow : flows) {
+    size_t per_flow = 0;
+    for (const auto& action : flow.actions_) {
+      per_flow += flow_action_wire_overhead(action);
+    }
+    overhead = std::max(overhead, per_flow);
+  }
+  return overhead;
+}
+
 struct CommonConfig {
   int version;
   int master_core_;

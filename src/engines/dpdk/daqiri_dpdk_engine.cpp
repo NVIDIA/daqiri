@@ -2319,12 +2319,21 @@ void DpdkEngine::initialize() {
                       intf.rx_.queues_.size() > 0 ? "ENABLED" : "DISABLED",
                       intf.tx_.queues_.size() > 0 ? "ENABLED" : "DISABLED");
 
-    // Queue setup
-    size_t max_pkt_size = 0;
+    // Queue setup. MTU sizing is direction-aware: RX and TX frames are
+    // accumulated separately so each direction folds in only its own transform
+    // (decap/pop for RX, encap/push for TX) wire overhead.
     size_t max_rx_pkt_size = 0;
+    size_t max_tx_pkt_size = 0;
     bool single_seg_rx_needs_scatter = false;
     size_t min_single_seg_rx_buf_size = std::numeric_limits<size_t>::max();
     const auto& rx = intf.rx_;
+
+    // Generated dummy RX queues (name prefix "UNUSED_P") are setup-only and
+    // must not drive MTU sizing. Prefix match mirrors is_dummy_tx_queue; the
+    // 8th char differs from "UNUSED_TX_P" so this excludes only dummy RX.
+    const auto is_dummy_rx_queue = [](const CommonQueueConfig& queue) {
+      return queue.name_.find("UNUSED_P") == 0;
+    };
 
     for (auto& q : rx.queues_) {
       DAQIRI_LOG_INFO("Configuring RX queue: {} ({}) on port {}",
@@ -2365,9 +2374,10 @@ void DpdkEngine::initialize() {
         }
       }
 
-      max_pkt_size = std::max(max_pkt_size, q_packet_size);
-      max_rx_pkt_size = std::max(max_rx_pkt_size, q_packet_size);
-      DAQIRI_LOG_INFO("Max packet size needed for RX: {}", max_pkt_size);
+      if (!is_dummy_rx_queue(q.common_)) {
+        max_rx_pkt_size = std::max(max_rx_pkt_size, q_packet_size);
+        DAQIRI_LOG_INFO("Max packet size needed for RX: {}", max_rx_pkt_size);
+      }
 
       // Keep scatter available for single-segment RX so queue setup is not tied to MTU sizing.
       if (q.common_.mrs_.size() == 1 && q_packet_size > 0) {
@@ -2471,37 +2481,42 @@ void DpdkEngine::initialize() {
         q_packet_size += mr.buf_size_;
       }
 
-      // Exclude generated dummy TX queues so RX-only ports are not inflated to the
-      // dummy jumbo frame size when MTU sizing uses the combined RX/TX maximum.
-      // Generated dummy RX queues are left unchanged to preserve TX-only behavior.
+      // Generated dummy RX and TX queues are setup-only and are excluded from
+      // direction-aware MTU sizing, so they never inflate a port to the dummy
+      // jumbo frame size.
       if (!is_dummy_tx_queue(q.common_)) {
-        max_pkt_size = std::max(max_pkt_size, q_packet_size);
+        max_tx_pkt_size = std::max(max_tx_pkt_size, q_packet_size);
       }
       uint32_t key = generate_queue_key(intf.port_id_, q.common_.id_);
       tx_dpdk_q_map_[key] = q_backend;
     }
 
-    const size_t rx_tunnel_overhead = flow_max_decap_wire_overhead(rx.flows_);
-    if (rx_tunnel_overhead > 0) {
-      DAQIRI_LOG_INFO("Adding {} bytes of RX tunnel overhead for MTU sizing", rx_tunnel_overhead);
-      max_rx_pkt_size += rx_tunnel_overhead;
-      max_pkt_size = std::max(max_pkt_size, max_rx_pkt_size);
+    const size_t rx_transform_overhead = flow_max_decap_wire_overhead(rx.flows_);
+    if (rx_transform_overhead > 0) {
+      DAQIRI_LOG_INFO("Adding {} bytes of RX transform overhead for MTU sizing",
+                      rx_transform_overhead);
     }
-
-    DAQIRI_LOG_INFO("Max packet size needed with TX: {}", max_pkt_size);
-    DAQIRI_LOG_INFO("Max packet size needed with RX only: {}", max_rx_pkt_size);
+    const size_t tx_transform_overhead = flow_max_encap_wire_overhead(tx.flows_);
+    if (tx_transform_overhead > 0) {
+      DAQIRI_LOG_INFO("Adding {} bytes of TX transform overhead for MTU sizing",
+                      tx_transform_overhead);
+    }
+    const size_t rx_required = max_rx_pkt_size + rx_transform_overhead;
+    const size_t tx_required = max_tx_pkt_size + tx_transform_overhead;
+    DAQIRI_LOG_INFO("Max frame needed - RX: {} TX: {}", rx_required, tx_required);
 
     local_port_conf[intf.port_id_].txmode.offloads = 0;
 
-    // Compute MTU from the largest RX/TX queue buffer frame needed on this port
-    // (max_pkt_size already folds in the existing RX tunnel decap overhead).
-    // Clamp to jumbo bounds and enforce a valid minimum MTU.
-    max_pkt_size = std::max(max_pkt_size, 64UL);
-    const size_t requested_frame_size =
-        std::min(max_pkt_size, static_cast<size_t>(JUMBOFRAME_SIZE));
+    // Compute MTU from the largest frame needed on this port in either
+    // direction: each direction's queue buffer frame plus its own transform
+    // (RX decap/pop, TX encap/push) wire overhead. Clamp to jumbo bounds and
+    // enforce a valid minimum MTU.
+    const size_t required_frame = std::max({rx_required, tx_required, 64UL});
+    const size_t clamped_frame_size =
+        std::min(required_frame, static_cast<size_t>(JUMBOFRAME_SIZE));
     const size_t crc_and_hdr = RTE_ETHER_CRC_LEN + RTE_ETHER_HDR_LEN;
     const size_t requested_mtu =
-        (requested_frame_size > crc_and_hdr) ? (requested_frame_size - crc_and_hdr) : 0;
+        (clamped_frame_size > crc_and_hdr) ? (clamped_frame_size - crc_and_hdr) : 0;
     local_port_conf[intf.port_id_].rxmode.mtu =
         std::max(requested_mtu, static_cast<size_t>(RTE_ETHER_MIN_MTU));
     local_port_conf[intf.port_id_].rxmode.max_lro_pkt_size =

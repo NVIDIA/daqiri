@@ -475,7 +475,8 @@ class IbverbsEngine : public Engine {
   std::string port_netdev(int port) const;
   // Raise each port's netdev MTU to cover the largest configured frame. Unlike
   // DPDK, the ibverbs path uses the kernel netdev directly and does not own the
-  // port MTU, so jumbo frames are silently dropped on RX if the MTU is too low.
+  // port MTU, so jumbo frames are silently dropped on RX and TX egress
+  // (post-encap) if the MTU is too low.
   void ensure_port_mtus();
 
   // ---- dynamic RX flow lifecycle ----
