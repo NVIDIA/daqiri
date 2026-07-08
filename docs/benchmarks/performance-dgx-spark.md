@@ -317,20 +317,59 @@ compute), so compute overlaps with receive on both and every cell is drop-free. 
 fixed-batch rows above are the 8 MB native operating point, batch-matched to the raw
 path's ~8.19 MB reorder window (1024 packets × 8000 B).
 
-The remaining RoCE-vs-raw gap on the heavy GEMM is **pipelining depth, not transport**:
-at the 8 MB default, one RoCE message is a single GEMM with no neighbor to overlap, while
-a raw burst packs ~10 GEMMs back-to-back. Sub-dividing the message into a smaller compute
-batch packs several GEMMs per message and recovers most of the throughput — at a **4 MB
-batch (2 GEMMs/message), 3-rep**:
+### Fixed-size GEMM comparison
 
-| Workload | Throughput | Drops | GPU SM% | vs 8 MB default |
-| -------- | ---------: | ----- | ------: | --------------- |
-| GEMM (FP32) | 76.3 ±0.2 Gb/s | 0 | 77.7% | 2.2× (was 35.0) |
-| GEMM (FP16 tensor) | 92.3 ±2.0 Gb/s | 0 | 38.7% | within ~5% of raw (was 85.8) |
+The tables above size the GEMM from the working set, so sweeping the batch also changes
+the matrix dimension (FLOPs ∝ n³) and conflates problem size with transport. To compare
+transports cleanly we **pin the GEMM dimension** with `--workload-gemm-n 1024`
+(env `GEMM_N` in `run_spark_bench.sh`): every call is an identical **1024×1024×1024
+matmul = 2.15 GFLOP**, and both transports consume **exactly 4 MB per GEMM** (one GEMM
+per 4 MB window), so throughput *and* GEMMs/s are directly comparable. Fixed n=1024,
+3 reps, 30 s each; RoCE at its 8 MB message (2 GEMMs/message), raw at a 4 MB reorder
+window (4096 B × 1024 packets).
 
-The full curve is in the [batch-size sweep](#workload-batch-size-sweep) below.
+| Transport | Workload | Throughput | GEMMs/s | GPU SM% |
+| --------- | -------- | ---------: | ------: | ------: |
+| RoCE (RC)  | GEMM FP32          | 48.1 Gb/s  | 1434 | 78% |
+| Raw (DPDK) | GEMM FP32          | 103.8 Gb/s | 3095 | 40% |
+| RoCE (RC)  | GEMM FP16 (tensor) | 88.3 Gb/s  | 2631 | 56% |
+| Raw (DPDK) | GEMM FP16 (tensor) | 105.6 Gb/s | 3148 | 15% |
+
+Three things fall out, and they revise the "pipelining depth" reading of the earlier
+batch sweep:
+
+- **The RoCE↔raw gap is real, and it is not the GPU.** At the *identical* fixed workload
+  raw sustains **2.2× the GEMM rate at FP32** (and ~1.2× at FP16) while using *less* than
+  half the SM. Raw has GPU headroom (15–40% SM) and is wire-limited (~104–106 Gb/s for
+  both precisions); RoCE is the side leaving the GPU idle-but-stalled.
+- **GEMMs/s is the transport-fair metric, not Gb/s** — because an engine that consumes more
+  bytes per GEMM carries more throughput at the same compute rate. (Matching the window to
+  4 MB on both sides is what makes the two columns comparable.) Achieved rates are
+  ~3.1 TFLOP/s (FP32) / ~5.7 TFLOP/s (FP16), only ~10% of peak, so the small matrix is
+  **launch/sync-latency-bound**, not FLOP-bound.
+- **GPU SM% is a duty-cycle metric, anti-correlated with throughput here.** RoCE is
+  "stall-busy" (78% SM at 48 Gb/s); raw is efficient (40% SM at 104 Gb/s). High SM% means
+  the GPU work is *stretched thin* against a slower receive path, not that more useful work
+  is done — so SM% should not be read as compute efficiency.
+
+The bottleneck is the **single-threaded RoCE receive+compute loop**: one thread runs
+`poll completion → gather → issue GEMM → stream-sync → free → repeat`, and the periodic
+`cudaStreamSynchronize` (required before a received buffer can be safely reused) blocks
+that thread — so while the GPU drains, no receives are posted and the message rate falls.
+The heavier the GEMM, the longer each stall, which is why FP32 (48 Gb/s) suffers more than
+FP16 (88 Gb/s) while raw stays wire-limited for both. Raw proves one thread *can* feed the
+GPU at ~3100 GEMM/s, so the remedy is to decouple receive from compute (a dedicated
+GPU-worker thread) or thin the stalls (`--workload-sync-interval`); a sync-interval sweep
+quantifying the latter is in progress.
 
 ### Workload batch-size sweep
+
+!!! warning "Superseded — conflates problem size with pipelining"
+    This sweep varies `--workload-batch-bytes`, which also sets the GEMM dimension
+    (`n = √(batch/4)`), so each column changes the FLOP count *and* the pipelining depth
+    at once. The [fixed-size GEMM comparison](#fixed-size-gemm-comparison) above pins n and
+    shows the RoCE↔raw gap is a receive-path / threading effect, not pipelining depth. The
+    curve is kept here for transparency.
 
 The workload's compute working set is **decoupled from the I/O unit** via
 `--workload-batch-bytes` (env `WORKLOAD_BATCH` in `run_spark_bench.sh`): it sets the
@@ -347,8 +386,10 @@ the GPU stays fed regardless of the per-window size; the workload is never the b
 one 8 MB message yields a single GEMM with nothing to overlap (underpipelined, 85 Gb/s),
 sub-dividing it to 2–4 MB packs 2–4 GEMMs per message and recovers **~92 Gb/s — on par
 with raw**, and tiny 512 KB slices collapse to 37 Gb/s on per-call launch/sync overhead
-(16 GEMMs/message). So the RoCE↔raw gap at the default batch is purely pipelining depth:
-give RoCE a batch that packs a few GEMMs per message and the two paths converge.
+(16 GEMMs/message). The apparent RoCE recovery here is partly an artifact of the growing
+matrix (bigger batch → bigger n → a more efficient, more GPU-bound GEMM on both paths); the
+[fixed-size GEMM comparison](#fixed-size-gemm-comparison) above pins n to separate that from
+the transport effect and shows the gap is the RoCE receive path, not pipelining depth.
 
 | Batch | RoCE Gb/s | RoCE GPU SM% | Raw Gb/s | Raw GPU SM% |
 | ----: | --------: | -----------: | -------: | ----------: |
@@ -446,6 +487,23 @@ for B in 262144 524288 1048576 2097152 4194304 8388608; do
   WORKLOAD=gemm_fp16 WORKLOAD_BATCH=$B ./examples/run_spark_bench.sh rdma smoke   # netns up
 done
 # raw: netns down, ETH_DST_ADDR exported; same loop with `dpdk`
+```
+
+**Fixed-size GEMM comparison** pins the matrix dimension with `GEMM_N`
+(`--workload-gemm-n`) so the FLOP count is constant across transports; both sides run one
+GEMM per 4 MB window. Lands in the CSV `post_process_gemm_n` column:
+
+```bash
+# RoCE (netns up): 8 MB message, 4 MB chunk -> 2 fixed 1024^3 GEMMs/message
+for WL in gemm gemm_fp16; do
+  WORKLOAD=$WL GEMM_N=1024 WORKLOAD_BATCH=4194304 REPEATS=3 \
+    PAYLOADS_OVERRIDE="8388608" ./examples/run_spark_bench.sh rdma sweep
+done
+# Raw (netns down, ETH_DST_ADDR exported): 4096 B x 1024 packets = 4 MB reorder window
+for WL in gemm gemm_fp16; do
+  WORKLOAD=$WL GEMM_N=1024 WORKLOAD_BATCH=4194304 REPEATS=3 \
+    PAYLOADS_OVERRIDE="4096" BATCHES_OVERRIDE="1024" ./examples/run_spark_bench.sh dpdk sweep
+done
 ```
 
 Each run writes `bench-results/<timestamp>-<backend>-<mode>/runs.csv`. See
