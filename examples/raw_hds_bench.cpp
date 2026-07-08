@@ -141,14 +141,13 @@ int main(int argc, char **argv) {
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0]
               << " <config.yaml> [--seconds N] "
-                 "[--workload none|fft|gemm|gemm_fp16] [--workload-batch-bytes N]\n";
+                 "[--workload none|fft|gemm|gemm_fp16] [--workload-gemm-dim N]\n";
     return 1;
   }
 
   const int run_seconds = daqiri::bench::parse_run_seconds(argc, argv);
   const auto workload = daqiri::bench::parse_workload(argc, argv);
-  const size_t workload_batch_bytes = daqiri::bench::parse_workload_batch_bytes(argc, argv);
-  const int workload_gemm_n = daqiri::bench::parse_workload_gemm_n(argc, argv);
+  const int workload_gemm_dim = daqiri::bench::parse_workload_gemm_dim(argc, argv);
   const int workload_sync_interval = daqiri::bench::parse_workload_sync_interval(argc, argv);
   const auto root = YAML::LoadFile(argv[1]);
   if (daqiri::daqiri_init(argv[1]) != daqiri::Status::SUCCESS) {
@@ -182,15 +181,14 @@ int main(int argc, char **argv) {
       geom.seq_bit_offset = 0;
       geom.seq_bit_width = 32;
       geom.out_payload_len = tx.payload_size;
-      const uint32_t ppb =
-          workload_batch_bytes > 0
-              ? std::max<uint32_t>(1, static_cast<uint32_t>(workload_batch_bytes / tx.payload_size))
-              : 1024;
-      geom.packets_per_batch = std::min<uint32_t>(ppb, tx.batch_size);
+      // Reorder window: ~8 MB (1024 packets at the native shape), capped to one
+      // burst. The compute reads the first n*n*elem_size bytes (GEMM dimension
+      // pinned via --workload-gemm-dim).
+      geom.packets_per_batch = std::min<uint32_t>(1024, tx.batch_size);
     }
     rx_thread =
         std::thread(daqiri::bench::rx_count_worker, daqiri::bench::parse_rx(root), std::ref(stop),
-                    workload, geom, workload_gemm_n, workload_sync_interval);
+                    workload, geom, workload_gemm_dim, workload_sync_interval);
   }
   if (has_tx) {
     tx_thread =

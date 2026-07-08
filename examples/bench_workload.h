@@ -32,18 +32,13 @@ enum class BenchWorkload { None, Fft, Gemm, GemmFp16 };
 // the flag/value stride used by parse_run_seconds / parse_target_gbps.
 BenchWorkload parse_workload(int argc, char** argv);
 
-// Parse "--workload-batch-bytes N" from argv: the working-set size (bytes) fed to
-// one compute call, decoupled from the I/O unit (RoCE message / raw frame). The
-// GEMM matrix dimension and FFT batch scale from it. Returns 0 if unset (the bench
-// then falls back to its backend-default batch). Mirrors parse_workload's stride.
-size_t parse_workload_batch_bytes(int argc, char** argv);
-
-// Parse "--workload-gemm-n N" from argv: pin the square GEMM dimension directly,
-// independent of the compute batch bytes, so the FLOP count per call is FIXED as
-// the I/O unit (message / burst window) is swept. Isolates pipelining depth from
-// problem size in the RoCE-vs-raw comparison. Returns 0 if unset (the GEMM
-// dimension then derives from the working-set size). Mirrors parse_workload's stride.
-int parse_workload_gemm_n(int argc, char** argv);
+// Parse "--workload-gemm-dim N" from argv: the square GEMM side length n, held
+// FIXED so the FLOP count per call (2*n^3) is constant as the I/O unit (message /
+// burst window) is swept -- this isolates pipelining depth from problem size in
+// the RoCE-vs-raw comparison. The compute working set is n*n*elem_size, derived
+// entirely from n; the assembled input buffer must be at least that large.
+// Returns 1024 (the default) if unset. Mirrors parse_workload's stride.
+int parse_workload_gemm_dim(int argc, char** argv);
 
 // Parse "--workload-sync-interval N" from argv: drain the GPU stream every N compute
 // calls (bounds outstanding GPU work). Larger N = deeper async queue, fewer CPU
@@ -79,20 +74,23 @@ class GpuWorkload {
   GpuWorkload(const GpuWorkload&) = delete;
   GpuWorkload& operator=(const GpuWorkload&) = delete;
 
-  // Build the plan/handle and size the problem to the contiguous input buffer of
-  // batch_bytes the caller will pass to run() (0 => an internal default). The op
-  // reads at most batch_bytes from that buffer. kind == None leaves the object an
-  // inert no-op. sync_interval bounds outstanding GPU work (sync every N runs).
-  // gemm_n_override (>0) pins the square GEMM dimension directly, holding the FLOP
-  // count per call fixed regardless of batch_bytes (0 => derive n from batch_bytes).
-  // Logs the chosen problem shape (GEMM n / FFT length+batch) and FLOP count so
-  // every published benchmark number carries its explicit compute size.
-  // Returns false on CUDA / library error; the caller may warn and continue with
-  // the workload disabled (enabled() will report false).
-  bool init(BenchWorkload kind, size_t batch_bytes, int sync_interval = 2, int gemm_n_override = 0);
+  // Build the plan/handle for `kind`. `input_bytes` is the size of the contiguous
+  // buffer the caller will pass to run() (its reorder window / message size, 0 =>
+  // an internal default); it bounds the op's read and is validated against the
+  // pinned GEMM working set. `gemm_dim` is the square GEMM side length n, held
+  // fixed so 2*n^3 FLOPs/call stays constant across the I/O sweep (>0 required for
+  // GEMM; <=0 falls back to the 1024 default). kind == None leaves the object an
+  // inert no-op. sync_interval bounds outstanding GPU work (sync every N runs) for
+  // the run()+sync() callers (DPDK/socket); the RoCE path bounds work with events
+  // instead and ignores it. Logs the chosen problem shape (GEMM n / FFT
+  // length+batch) and FLOP count so every published benchmark number carries its
+  // explicit compute size. Returns false on CUDA / library error; the caller may
+  // warn and continue with the workload disabled (enabled() will report false).
+  bool init(BenchWorkload kind, size_t input_bytes, int sync_interval = 2, int gemm_dim = 1024);
 
   // Enqueue one representative FFT/SGEMM on the internal stream, reading `input`
-  // (a device pointer to >= batch_bytes valid bytes). No-op unless enabled().
+  // (a device pointer to >= the GEMM working set of valid bytes). No-op unless
+  // enabled().
   void run(const void* input);
 
   // Every sync_interval runs, block until the stream drains so the GPU stays on

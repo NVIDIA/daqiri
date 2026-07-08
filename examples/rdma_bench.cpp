@@ -81,8 +81,8 @@ RdmaBenchConfig parse_rdma_cfg(const YAML::Node& node) {
 
 void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pacer,
                  std::atomic<bool>& stop, RdmaWorkerStats& stats,
-                 daqiri::bench::BenchWorkload workload, size_t workload_batch_bytes,
-                 int workload_gemm_n, int workload_sync_interval) {
+                 daqiri::bench::BenchWorkload workload, int workload_gemm_dim,
+                 int workload_sync_interval) {
   const char *thread_name =
       cfg.server ? "rdma_bench_server" : "rdma_bench_client";
   if (!daqiri::bench::set_current_thread_affinity(cfg.cpu_core, thread_name)) {
@@ -96,19 +96,14 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
   // GPU-accessible: the gather-only pipeline is a zero-copy pass-through that
   // hands the recv pointer straight to the compute.
   //
-  // The compute working set is decoupled from the 8 MB message: --workload-batch-
-  // bytes sub-divides each message into chunk-sized slices, one compute per slice
-  // (the per-message sync then amortizes over num_chunks computes). 0 or >= the
-  // message size means one compute per message.
+  // One fixed-dimension compute per received message, reading the first
+  // n*n*elem_size bytes of the message (GpuWorkload::init rejects a message too
+  // small to hold the pinned GEMM operand).
   const uint32_t msg = static_cast<uint32_t>(cfg.message_size);
-  const uint32_t chunk = (workload_batch_bytes > 0 && workload_batch_bytes < msg)
-                             ? static_cast<uint32_t>(workload_batch_bytes)
-                             : msg;
-  const uint32_t num_chunks = chunk > 0 ? msg / chunk : 1;
   daqiri::bench::GpuWorkload gpu_workload;
   daqiri::bench::ReorderPipeline pipeline;
   if (workload != daqiri::bench::BenchWorkload::None) {
-    if (!gpu_workload.init(workload, chunk, workload_sync_interval, workload_gemm_n) ||
+    if (!gpu_workload.init(workload, msg, workload_sync_interval, workload_gemm_dim) ||
         !pipeline.init(daqiri::bench::ReorderMode::GatherOnly,
                        /*packets_per_batch=*/1, msg,
                        /*payload_byte_offset=*/0, /*seq_bit_offset=*/0,
@@ -259,13 +254,10 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
         if (run_workload) {
           pipeline.reset_batch();
           pipeline.add_device_packet(daqiri::get_segment_packet_ptr(completion, 0, 0));
-          const auto* base = static_cast<const uint8_t*>(pipeline.finish_batch());
-          // One compute per chunk-sized slice of the message (num_chunks == 1 when
-          // the batch is the whole message). Enqueue only; the GPU work overlaps
-          // with subsequent receives and is drained per batch (below).
-          for (uint32_t k = 0; k < num_chunks; ++k) {
-            gpu_workload.run(base + static_cast<size_t>(k) * chunk);
-          }
+          // One fixed-dimension compute per message on its real (zero-copy) data.
+          // Enqueue only; the GPU work overlaps with subsequent receives and is
+          // drained per batch (below).
+          gpu_workload.run(pipeline.finish_batch());
           // Hold the completion (and thus its recv buffer) until the batch drains,
           // so the pass-through compute reads valid data without a per-message sync.
           held_recv.push_back(completion);
@@ -306,7 +298,7 @@ int main(int argc, char** argv) {
     std::cerr << "Usage: " << argv[0]
               << " <config.yaml> [--seconds N] [--mode server|client|both] "
                  "[--target-gbps G] [--workload none|fft|gemm|gemm_fp16] "
-                 "[--workload-batch-bytes N]\n";
+                 "[--workload-gemm-dim N]\n";
     return 1;
   }
 
@@ -323,8 +315,7 @@ int main(int argc, char** argv) {
     }
   }
   const auto workload = daqiri::bench::parse_workload(argc, argv);
-  const size_t workload_batch_bytes = daqiri::bench::parse_workload_batch_bytes(argc, argv);
-  const int workload_gemm_n = daqiri::bench::parse_workload_gemm_n(argc, argv);
+  const int workload_gemm_dim = daqiri::bench::parse_workload_gemm_dim(argc, argv);
   const int workload_sync_interval = daqiri::bench::parse_workload_sync_interval(argc, argv);
 
   const auto root = YAML::LoadFile(argv[1]);
@@ -362,13 +353,13 @@ int main(int argc, char** argv) {
 
   if (run_server) {
     server_thread = std::thread(rdma_worker, server_cfg, std::ref(server_pacer), std::ref(stop),
-                                std::ref(server_stats), workload, workload_batch_bytes,
-                                workload_gemm_n, workload_sync_interval);
+                                std::ref(server_stats), workload, workload_gemm_dim,
+                                workload_sync_interval);
   }
   if (run_client) {
     client_thread = std::thread(rdma_worker, client_cfg, std::ref(client_pacer), std::ref(stop),
-                                std::ref(client_stats), workload, workload_batch_bytes,
-                                workload_gemm_n, workload_sync_interval);
+                                std::ref(client_stats), workload, workload_gemm_dim,
+                                workload_sync_interval);
   }
 
   if (!server_thread.joinable() && !client_thread.joinable()) {

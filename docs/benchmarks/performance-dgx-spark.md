@@ -319,14 +319,18 @@ path's ~8.19 MB reorder window (1024 packets × 8000 B).
 
 ### Fixed-size GEMM comparison
 
-The tables above size the GEMM from the working set, so sweeping the batch also changes
-the matrix dimension (FLOPs ∝ n³) and conflates problem size with transport. To compare
-transports cleanly we **pin the GEMM dimension** with `--workload-gemm-n 1024`
-(env `GEMM_N` in `run_spark_bench.sh`): every call is an identical **1024×1024×1024
-matmul = 2.15 GFLOP**, and both transports consume **exactly 4 MB per GEMM** (one GEMM
-per 4 MB window), so throughput *and* GEMMs/s are directly comparable. Fixed n=1024,
-3 reps, 30 s each; RoCE at its 8 MB message (2 GEMMs/message), raw at a 4 MB reorder
-window (4096 B × 1024 packets).
+To compare transports cleanly we **pin the GEMM dimension** with `--workload-gemm-dim 1024`
+(env `GEMM_DIM` in `run_spark_bench.sh`): every call is an identical **1024×1024×1024
+matmul = 2.15 GFLOP** reading the first **4 MB** (n²·4 B, FP32) of each received I/O unit,
+so throughput *and* GEMMs/s are directly comparable across transports. One fixed-n GEMM
+per received unit — RoCE per 8 MB message, raw per reorder window. Fixed n=1024, 3 reps,
+30 s each.
+
+!!! note "Numbers pending refresh"
+    The table below was measured under the earlier per-message chunking (2 GEMMs per 8 MB
+    message) and the blocking per-batch `cudaStreamSynchronize`. The receive path now runs
+    **one GEMM per message** and recycles recv buffers with non-blocking CUDA events; these
+    cells will be re-measured under that model.
 
 | Transport | Workload | Throughput | GEMMs/s | GPU SM% |
 | --------- | -------- | ---------: | ------: | ------: |
@@ -367,46 +371,6 @@ once per held-receive batch, which masks the knob, and the real limit is the sin
 single-QP receive itself. The remedy is therefore **structural**: decouple receive from
 compute onto a dedicated GPU-worker thread (and/or fan out across multiple QPs/threads),
 not sync tuning.
-
-### Workload batch-size sweep
-
-!!! warning "Superseded — conflates problem size with pipelining"
-    This sweep varies `--workload-batch-bytes`, which also sets the GEMM dimension
-    (`n = √(batch/4)`), so each column changes the FLOP count *and* the pipelining depth
-    at once. The [fixed-size GEMM comparison](#fixed-size-gemm-comparison) above pins n and
-    shows the RoCE↔raw gap is a receive-path / threading effect, not pipelining depth. The
-    curve is kept here for transparency.
-
-The workload's compute working set is **decoupled from the I/O unit** via
-`--workload-batch-bytes` (env `WORKLOAD_BATCH` in `run_spark_bench.sh`): it sets the
-bytes fed to one compute call — the GEMM dimension is `n = √(batch/4)` — independent of
-the 8 MB RoCE message or 8 KB raw frame. RoCE sub-divides each message into batch-sized
-slices (one compute per slice); raw sizes its reorder window to the batch. Sweep run on
-`gemm_fp16` (cuBLAS takes the dimension per call); the tables above are the fixed-batch
-(8 MB) operating points.
-
-The two paths respond very differently, which is the whole point. **Raw is flat at line
-rate (~98 Gb/s) across every batch** — a raw burst always packs ~10 reorder windows, so
-the GPU stays fed regardless of the per-window size; the workload is never the bottleneck.
-**RoCE is strongly batch-sensitive** and **non-monotonic with a sweet spot at 2–4 MB**:
-one 8 MB message yields a single GEMM with nothing to overlap (underpipelined, 85 Gb/s),
-sub-dividing it to 2–4 MB packs 2–4 GEMMs per message and recovers **~92 Gb/s — on par
-with raw**, and tiny 512 KB slices collapse to 37 Gb/s on per-call launch/sync overhead
-(16 GEMMs/message). The apparent RoCE recovery here is partly an artifact of the growing
-matrix (bigger batch → bigger n → a more efficient, more GPU-bound GEMM on both paths); the
-[fixed-size GEMM comparison](#fixed-size-gemm-comparison) above pins n to separate that from
-the transport effect and shows the gap is the RoCE receive path, not pipelining depth.
-
-| Batch | RoCE Gb/s | RoCE GPU SM% | Raw Gb/s | Raw GPU SM% |
-| ----: | --------: | -----------: | -------: | ----------: |
-| 512 KB | 37.0 | 76.9% | 98.0 | 24.8% |
-| 1 MB | 76.9 | 75.9% | 98.3 | 16.8% |
-| 2 MB | 90.8 | 54.0% | 98.2 | 13.6% |
-| 4 MB | 92.5 | 40.4% | 97.8 | 15.1% |
-| 8 MB | 85.3 | 52.2% | 96.7 | 16.0% |
-
-(`gemm_fp16`, single rep per point. Raw cells use the nearest whole-packet window to the
-batch size; RoCE caps the batch at the 8 MB message.)
 
 ## Reproduce
 
@@ -484,31 +448,20 @@ WORKLOAD=gemm ./examples/run_spark_bench.sh rdma smoke
 The chosen workload lands in the CSV `post_process` column; compare `gbps` /
 `gpu_sm_pct` against the matching `WORKLOAD=none` baseline.
 
-**Workload batch-size sweep** decouples the compute working set from the I/O unit
-by also exporting `WORKLOAD_BATCH` (bytes); it lands in the CSV `post_process_batch`
-column:
+**Fixed-size GEMM comparison** pins the matrix dimension with `GEMM_DIM`
+(`--workload-gemm-dim`, default 1024) so the FLOP count is constant across transports;
+each side runs one fixed 1024³ GEMM per received I/O unit, reading its first 4 MB. Lands
+in the CSV `post_process_gemm_dim` column (the sweep is restricted to the headline
+message size automatically when a workload is active):
 
 ```bash
-for B in 262144 524288 1048576 2097152 4194304 8388608; do
-  WORKLOAD=gemm_fp16 WORKLOAD_BATCH=$B ./examples/run_spark_bench.sh rdma smoke   # netns up
-done
-# raw: netns down, ETH_DST_ADDR exported; same loop with `dpdk`
-```
-
-**Fixed-size GEMM comparison** pins the matrix dimension with `GEMM_N`
-(`--workload-gemm-n`) so the FLOP count is constant across transports; both sides run one
-GEMM per 4 MB window. Lands in the CSV `post_process_gemm_n` column:
-
-```bash
-# RoCE (netns up): 8 MB message, 4 MB chunk -> 2 fixed 1024^3 GEMMs/message
+# RoCE (netns up)
 for WL in gemm gemm_fp16; do
-  WORKLOAD=$WL GEMM_N=1024 WORKLOAD_BATCH=4194304 REPEATS=3 \
-    PAYLOADS_OVERRIDE="8388608" ./examples/run_spark_bench.sh rdma sweep
+  WORKLOAD=$WL GEMM_DIM=1024 REPEATS=3 ./examples/run_spark_bench.sh rdma sweep
 done
-# Raw (netns down, ETH_DST_ADDR exported): 4096 B x 1024 packets = 4 MB reorder window
+# Raw (netns down, ETH_DST_ADDR exported)
 for WL in gemm gemm_fp16; do
-  WORKLOAD=$WL GEMM_N=1024 WORKLOAD_BATCH=4194304 REPEATS=3 \
-    PAYLOADS_OVERRIDE="4096" BATCHES_OVERRIDE="1024" ./examples/run_spark_bench.sh dpdk sweep
+  WORKLOAD=$WL GEMM_DIM=1024 REPEATS=3 ./examples/run_spark_bench.sh dpdk sweep
 done
 ```
 
