@@ -113,6 +113,8 @@ For a shorter selection guide, start with the [Benchmarking overview](../benchma
 
     *Requires: Raw Ethernet build (`DAQIRI_ENGINE` includes `dpdk`) + NVIDIA ConnectX-class NIC. The RX-only config also requires a separate TX traffic source.*
 
+    A [diff-style walkthrough](#flow-steering) of multi-queue RX routing appears below.
+
 ??? question "5. I need to record packet data to disk"
     Sub-question: **which output format?**
 
@@ -139,7 +141,7 @@ For a shorter selection guide, start with the [Benchmarking overview](../benchma
 
 ## Annotated walkthrough
 
-This section walks through three YAML configurations: the base TX+RX template, followed by diff-style snippets for header-data split (HDS) and GPU packet reordering. Click on the :material-plus-circle: icons to expand explanations for each annotated line.
+This section walks through four YAML topics: the base TX+RX template, flow steering, header-data split (HDS), and GPU packet reordering. Click on the :material-plus-circle: icons to expand explanations for each annotated line.
 
 Annotations are prefixed with a category icon when applicable:
 
@@ -251,9 +253,25 @@ bench_tx: # (25)!
 24. The `bench_rx` section is specific to the benchmark application. It is a list of application worker configs; list entries map to DAQIRI RX queues on the named interface, either by explicit `queue_id` or by queue-list order when `queue_id` is omitted. `cpu_core` pins the benchmark application's RX worker thread; it is separate from the DAQIRI queue `cpu_core` above, and can use the same core only when you intentionally want to share. In this base config there is one RX queue, so there is one entry. Other DAQIRI binaries (e.g. the reorder-quantize bench) may add fields here; see those configs for details.
 25. :material-package-variant: The `bench_tx` section configures the TX side of the benchmark: the benchmark application's TX worker core, packet sizes, and the Ethernet/IP/UDP header fields embedded in outgoing packets. It is a list for the same reason as `bench_rx`: each entry maps to a DAQIRI TX queue on the named interface, either by explicit `queue_id` or by queue-list order when `queue_id` is omitted. The `cpu_core` field pins the application TX thread. The `eth_dst_addr` is required when `flow_isolation` is enabled on the RX interface. The `ip_src_addr` / `ip_dst_addr` are only needed when traffic is routed across subnets — for a direct cable loopback, any value works. The `payload_size`, `header_size`, and UDP ports should match your application's packet format. Hardware TX VLAN push or tunnel encapsulation is configured under `daqiri.cfg.interfaces[].tx.flows`, not in `bench_tx`; application buffers remain the pre-encap packet.
 
+### Flow steering
+
+Raw Ethernet RX can steer packets into GPU queues, a flow-matched host queue, or a kernel fallback path for traffic that matches no rule. The animation below is a conceptual superset of the paths DAQIRI supports; the four-queue YAML example maps one UDP flow per GPU RX queue.
+
+<div class="packet-diagram" markdown="1">
+![Flow steering](../images/packet_diagrams/flow_steering/flow-steering.webp)
+</div>
+
+Matched packets land in **queue 1** (host memory), **queues 2–4** (GPU memory), or the unnamed top host row when no rule matches (grey packets through the Linux kernel).
+
+The four-queue example [`daqiri_bench_raw_tx_rx_4q.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_4q.yaml) maps one UDP flow per GPU RX queue via `rx.flows` and matching `bench_tx` UDP ports.
+
 ### Header-data split (HDS)
 
 For applications that parse small per-packet fields on the CPU while keeping the payload on the GPU, DAQIRI supports **header-data split (HDS)**: the NIC writes the header bytes to a CPU buffer (segment 0) and the payload to a GPU buffer (segment 1) using GPUDirect zero-copy. The packet is split at a fixed byte boundary defined by the `buf_size` of the first region in the queue's `memory_regions:` list.
+
+<div class="packet-diagram" markdown="1">
+![Header-data split](../images/packet_diagrams/hds/header-data-split.webp)
+</div>
 
 The canonical HDS config is [`daqiri_bench_raw_tx_rx_hds.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_hds.yaml). It builds on the base TX+RX config above; only the deltas are shown here.
 
@@ -333,6 +351,10 @@ The HDS bench runs on `daqiri_bench_raw_hds`:
 ### Packet reordering on the GPU
 
 For UDP workloads where packets arrive out-of-order and need to be placed at their correct offset in a GPU buffer before the application sees them, DAQIRI provides a **GPU reorder kernel**: the kernel reads a sequence number from each packet and writes the packet into a dedicated landing region at the correct slot. The downstream consumer reads a fully ordered batch with no CPU touch.
+
+<div class="packet-diagram" markdown="1">
+![GPU packet reorder](../images/packet_diagrams/reorder/packet-reorder.webp)
+</div>
 
 The canonical reorder config is [`daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml) (`seq_packets_per_batch` algorithm, GPU kernel, closed-loop TX+RX). It builds on the base TX+RX config above; only the deltas are shown here.
 
@@ -437,6 +459,12 @@ The reorder bench runs on `daqiri_bench_raw_reorder_seq`:
 ```bash
 ./build/examples/daqiri_bench_raw_reorder_seq ./build/examples/daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml --seconds 10
 ```
+
+When the wire format and compute format differ, the quantize variant adds an in-kernel int4 → fp32 conversion step:
+
+<div class="packet-diagram" markdown="1">
+![GPU reorder and convert](../images/packet_diagrams/reorder_quantize/packet-reorder-quantize.webp)
+</div>
 
 Other reorder variants are listed under [question 2 of the decision tree above](#choosing-an-example-config): the CPU-kernel variant, the RX-only variants, and the `seq_batch_number` algorithm with in-kernel int4 → fp32 type conversion (runs on `daqiri_bench_raw_reorder_quantize`).
 

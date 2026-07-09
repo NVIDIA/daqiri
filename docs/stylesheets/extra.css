@@ -650,6 +650,14 @@
   border-radius: 16px;
 }
 
+/* ── Packet diagram animations ─────────────────────────────────────── */
+/* Self-contained transparent canvas; readable on white slides and docs.  */
+.packet-diagram img {
+  width: 100%;
+  display: block;
+  border-radius: 12px;
+}
+
 /* ── Platform tabs (IGX Orin / DGX Spark) — enlarged labels ─────────── */
 /* Scoped to the .platform-tabs wrapper in system_configuration.md and  */
 /* limited to the wrapper's direct tabbed-set so nested sub-tabs        */

@@ -6,17 +6,37 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from anim_common import font_scheme, save_webp_animation
-from incoming_wire import draw_rx_wire, draw_rx_wire_label
+from anim_common import (
+    CANVAS_FILL,
+    CANVAS_HEIGHT,
+    CANVAS_SCALE,
+    CANVAS_WIDTH,
+    FRAME_DURATION_MS,
+    KERNEL_CORNER_RADIUS,
+    NIC_CORNER_RADIUS,
+    PANEL_CORNER_RADIUS,
+    PANEL_OUTLINE_WIDTH,
+    PANEL_TITLE_X,
+    PANEL_TITLE_Y,
+    ROUTE_ARROW_SIZE,
+    ROUTE_LINE_WIDTH,
+    WIRE_DOT_COLOR,
+    diagram_colors,
+    font_scheme,
+    output_paths,
+    save_gif_animation,
+    save_webp_animation,
+)
+from incoming_wire import draw_incoming_wire
 
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = ROOT / "hds"
 
-WIDTH = 1180
-HEIGHT = 660
-SCALE = 2
-DURATION_MS = 40
+WIDTH = CANVAS_WIDTH
+HEIGHT = CANVAS_HEIGHT
+SCALE = CANVAS_SCALE
+DURATION_MS = FRAME_DURATION_MS
 
 TOTAL_BYTES = 1064
 HEADER_BYTES = 64
@@ -58,62 +78,11 @@ KERNEL_BOX = shift_rect((KERNEL_CX - KERNEL_WIDTH / 2, 22, KERNEL_CX + KERNEL_WI
 TRANSPARENT = (0, 0, 0, 0)
 
 ACCENTS = {
-    "nvidia": "#76b900",
     "header": "#ffcf5a",
     "payload": "#78e08f",
-    "host": "#9b8cff",
-    "gpu": "#76b900",
-    "kernel": "#64748b",
-    "ink": "#07111f",
 }
 
-THEMES: dict[str, dict[str, str | None]] = {
-    "default": {
-        **ACCENTS,
-        "bg": None,
-        "panel": "#0d1b2e",
-        "panel_2": "#101f34",
-        "line": "#35516f",
-        "line_soft": "#20384f",
-        "text": "#f6fbff",
-        "muted": "#afc0cf",
-        "wire": "#6d7e92",
-        "white": "#ffffff",
-        "shadow": "#03101d",
-        "row_bg": "#061220",
-        "kernel_fill": "#0f2744",
-        "arrow": "#ffffff",
-        "stroke": "#ffffff",
-        "bar_glow": "#ffffff",
-        "bypass": "#afc0cf",
-    },
-    "light": {
-        **ACCENTS,
-        "bg": "#ffffff",
-        "panel": "#f5f5f5",
-        "panel_2": "#eeeeee",
-        "line": "#1a1a1a",
-        "line_soft": "#cccccc",
-        "text": "#1a1a1a",
-        "muted": "#404040",
-        "wire": "#404040",
-        "white": "#ffffff",
-        "shadow": "#bdbdbd",
-        "row_bg": "#e8e8e8",
-        "kernel_fill": "#f0f4ff",
-        "arrow": "#1a1a1a",
-        "stroke": "#1a1a1a",
-        "bar_glow": "#cccccc",
-        "bypass": "#404040",
-    },
-}
-
-THEME_OUTPUT_SUFFIX = {
-    "default": "",
-    "light": "-light",
-}
-
-COLORS = THEMES["default"]
+COLORS = diagram_colors(**ACCENTS)
 
 
 @dataclass(frozen=True)
@@ -443,7 +412,7 @@ def draw_packet_bar(
     if label:
         centered_text(draw, payload_rect, "Payload", FONTS["tiny"], fill=rgba(COLORS["ink"], alpha))
     if packet_num is not None:
-        draw_text(draw, (x + w / 2, y - 5), f"P{packet_num}", FONTS["tiny"], fill=COLORS["text"], anchor="mb")
+        draw_text(draw, (x + w / 2, y - 5), f"P{packet_num}", FONTS["tiny"], fill=COLORS["canvas_text"], anchor="mb")
 
 
 def segment_slot_rect(
@@ -502,7 +471,7 @@ def draw_segment_slots(
         draw.rounded_rectangle(
             box(slot),
             radius=s(7),
-            fill=rgba(COLORS["panel"], 180),
+            fill=COLORS["panel_slot"],
             outline=rgba(COLORS["line"], 170),
             width=s(1),
         )
@@ -539,7 +508,7 @@ def draw_path_tag(
     x1 = tx - tw / (2 * SCALE) - pad_x if anchor == "mm" else tx
     y1 = ty - th / (2 * SCALE) - pad_y if anchor == "mm" else ty
     tag = (x1, y1, x1 + tw / SCALE + pad_x * 2, y1 + th / SCALE + pad_y * 2)
-    draw.rounded_rectangle(box(tag), radius=s(6), fill=rgba(COLORS["panel"], 235), outline=rgba(color, 180), width=s(1))
+    draw.rounded_rectangle(box(tag), radius=s(6), fill=rgba(COLORS["tag_fill"], 245), outline=rgba(color, 210), width=s(2))
     centered_text(draw, tag, text, FONTS["tiny"], fill=COLORS["text"])
 
 
@@ -552,16 +521,16 @@ def draw_nic_chip_base(
     x1, y1, x2, y2 = rect
     glow_alpha = int(55 + 95 * pulse)
     draw.rounded_rectangle(box((x1 - 10, y1 - 10, x2 + 10, y2 + 10)), radius=s(24), fill=rgba(accent, 16 + glow_alpha // 4))
-    draw.rounded_rectangle(box(rect), radius=s(18), fill=COLORS["panel"], outline=rgba(accent, 190), width=s(3))
+    draw.rounded_rectangle(box(rect), radius=s(NIC_CORNER_RADIUS), fill=COLORS["nic_panel"], outline=rgba(accent, 190), width=s(3))
     for i in range(7):
         y = lerp(y1 + 18, y2 - 18, i / 6)
-        draw.line((s(x1 - 14), s(y), s(x1), s(y)), fill=rgba(COLORS["line"], 220), width=s(3))
-        draw.line((s(x2), s(y), s(x2 + 14), s(y)), fill=rgba(COLORS["line"], 220), width=s(3))
+        draw.line((s(x1 - 14), s(y), s(x1), s(y)), fill=rgba(COLORS["nic_line"], 220), width=s(3))
+        draw.line((s(x2), s(y), s(x2 + 14), s(y)), fill=rgba(COLORS["nic_line"], 220), width=s(3))
     for i in range(5):
         x = lerp(x1 + 25, x2 - 25, i / 4)
-        draw.line((s(x), s(y1 - 12), s(x), s(y1)), fill=rgba(COLORS["line"], 220), width=s(3))
-        draw.line((s(x), s(y2), s(x), s(y2 + 12)), fill=rgba(COLORS["line"], 220), width=s(3))
-    centered_text(draw, (x1 + 18, y1 + 4, x2 - 18, y1 + 38), "NVIDIA NIC", FONTS["chip"], fill=COLORS["text"])
+        draw.line((s(x), s(y1 - 12), s(x), s(y1)), fill=rgba(COLORS["nic_line"], 220), width=s(3))
+        draw.line((s(x), s(y2), s(x), s(y2 + 12)), fill=rgba(COLORS["nic_line"], 220), width=s(3))
+    centered_text(draw, (x1 + 18, y1 + 4, x2 - 18, y1 + 38), "NVIDIA NIC", FONTS["chip"], fill=COLORS["nic_text"])
 
 
 def draw_nic_engine_box(draw: ImageDraw.ImageDraw) -> None:
@@ -573,8 +542,20 @@ def draw_nic_engine_box(draw: ImageDraw.ImageDraw) -> None:
 
 def draw_wire(draw: ImageDraw.ImageDraw, frame: int) -> None:
     y = dy(WIRE_Y)
-    draw_rx_wire_label(lambda xy, text: draw_text(draw, xy, text, FONTS["label"], fill=COLORS["text"]), y)
-    draw_rx_wire(draw, frame, 48, NIC_RECT[0], y, COLORS["wire"], COLORS["header"], pt, s, rgba, box)
+    draw_incoming_wire(
+        draw,
+        frame,
+        y,
+        NIC_RECT[0],
+        COLORS["wire"],
+        WIRE_DOT_COLOR,
+        COLORS["canvas_text"],
+        FONTS["label"],
+        pt,
+        s,
+        rgba,
+        box,
+    )
 
 
 def draw_device_memory(draw: ImageDraw.ImageDraw, frame: int) -> None:
@@ -584,8 +565,8 @@ def draw_device_memory(draw: ImageDraw.ImageDraw, frame: int) -> None:
     )
     for rect, title, accent in panels:
         x1, y1, x2, y2 = rect
-        draw.rounded_rectangle(box(rect), radius=s(18), fill=COLORS["panel_2"], outline=rgba(accent, 170), width=s(3))
-        draw_text(draw, (x1 + 22, y1 + 24), title, FONTS["label"], fill=COLORS["text"], anchor="lt")
+        draw.rounded_rectangle(box(rect), radius=s(PANEL_CORNER_RADIUS), fill=COLORS["panel_2"], outline=rgba(accent, 170), width=s(PANEL_OUTLINE_WIDTH))
+        draw_text(draw, (x1 + PANEL_TITLE_X, y1 + PANEL_TITLE_Y), title, FONTS["label"], fill=COLORS["text"], anchor="lt")
 
     header_slots = {pkt.num for pkt in PACKETS if frame >= pkt.header_end}
     payload_slots = {pkt.num for pkt in PACKETS if frame >= pkt.payload_end}
@@ -599,9 +580,15 @@ def draw_static_background(draw: ImageDraw.ImageDraw) -> None:
 
 def draw_kernel_bypass(draw: ImageDraw.ImageDraw) -> None:
     x1, y1, x2, y2 = KERNEL_BOX
-    draw.rounded_rectangle(box(KERNEL_BOX), radius=s(12), fill=rgba(COLORS["kernel_fill"], 150), outline=rgba(COLORS["kernel"], 120), width=s(2))
-    draw_text(draw, ((x1 + x2) / 2, y1 + 23), "Linux kernel", FONTS["small"], fill=COLORS["muted"], anchor="mm")
-    draw_text(draw, ((x1 + x2) / 2, y1 + 47), "bypassed", FONTS["small"], fill=COLORS["muted"], anchor="mm")
+    draw.rounded_rectangle(
+        box(KERNEL_BOX),
+        radius=s(KERNEL_CORNER_RADIUS),
+        fill=rgba(COLORS["kernel_fill"], 245),
+        outline=rgba(COLORS["kernel"], 210),
+        width=s(2),
+    )
+    centered_text(draw, (x1, y1 + 8, x2, y2 - 18), "Linux kernel", FONTS["label"], fill=COLORS["text"])
+    centered_text(draw, (x1, y1 + 34, x2, y2 - 4), "bypassed", FONTS["small"], fill=COLORS["muted"])
 
 
 def split_origin() -> tuple[float, float]:
@@ -740,8 +727,9 @@ def segment_position(kind: str, pkt: PacketSpec, frame: int) -> tuple[float, flo
 def draw_dma_paths(base: Image.Image, draw: ImageDraw.ImageDraw, frame: int) -> None:
     header_path = segment_trunk_path("header")
     payload_path = segment_trunk_path("payload")
-    draw_arrow(draw, header_path, rgba(str(COLORS["arrow"]), 130), 3, 12)
-    draw_arrow(draw, payload_path, rgba(str(COLORS["arrow"]), 130), 3, 12)
+    route = rgba(COLORS["route"], 255)
+    draw_arrow(draw, header_path, route, ROUTE_LINE_WIDTH, ROUTE_ARROW_SIZE)
+    draw_arrow(draw, payload_path, route, ROUTE_LINE_WIDTH, ROUTE_ARROW_SIZE)
     bend_x = NIC_RECT[2] + 88
     draw_path_tag(draw, (bend_x + 14, (HEADER_SLOT_AREA[1] + HEADER_SLOT_AREA[3]) / 2 - 30), "header DMA", COLORS["header"])
     draw_path_tag(draw, (bend_x + 14, (PAYLOAD_SLOT_AREA[1] + PAYLOAD_SLOT_AREA[3]) / 2 + 32), "GPUDirect payload DMA", COLORS["payload"])
@@ -779,8 +767,7 @@ FRAMES = max(190, max(pkt.payload_end for pkt in PACKETS) + 36)
 
 
 def render_frame(frame: int) -> Image.Image:
-    bg = COLORS.get("bg")
-    img = Image.new("RGBA", (WIDTH * SCALE, HEIGHT * SCALE), rgba(str(bg), 255) if bg else TRANSPARENT)
+    img = Image.new("RGBA", (WIDTH * SCALE, HEIGHT * SCALE), CANVAS_FILL)
     draw = ImageDraw.Draw(img)
     draw_static_background(draw)
     draw_wire(draw, frame)
@@ -791,27 +778,24 @@ def render_frame(frame: int) -> Image.Image:
     draw_nic_chip_base(draw, NIC_RECT, COLORS["nvidia"], pulse=0.8 if nic_active else 0.0)
     draw_flowing_segments(img, draw, frame)
     draw_nic_engine_box(draw)
-    return img.resize((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
+    return img
 
 
-def render_theme(theme: str) -> None:
-    global COLORS
-    COLORS = THEMES[theme]
-    suffix = THEME_OUTPUT_SUFFIX[theme]
-    animation_path = OUTPUT_DIR / f"header-data-split{suffix}.webp"
-    poster_path = OUTPUT_DIR / f"header-data-split{suffix}-poster.png"
+def render() -> None:
+    animation_path, gif_path, poster_path = output_paths(OUTPUT_DIR, "header-data-split")
 
     frames = [render_frame(i) for i in range(FRAMES)]
     save_webp_animation(frames, animation_path, DURATION_MS)
+    save_gif_animation(frames, gif_path, DURATION_MS)
     render_frame(min(FRAMES - 1, max(pkt.payload_end for pkt in PACKETS) + 10)).save(poster_path, optimize=True)
     print(f"Wrote {animation_path}")
+    print(f"Wrote {gif_path}")
     print(f"Wrote {poster_path}")
 
 
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    for theme in THEMES:
-        render_theme(theme)
+    render()
 
 
 if __name__ == "__main__":

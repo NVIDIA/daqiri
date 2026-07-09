@@ -13,4 +13,14 @@ __pycache__/
 # macOS
 .DS_Store
 
+# Generated packet diagram animations (posters are committed; run make -C docs/images/packet_diagrams)
+docs/images/packet_diagrams/hds/*.webp
+docs/images/packet_diagrams/hds/*.gif
+docs/images/packet_diagrams/flow_steering/*.webp
+docs/images/packet_diagrams/flow_steering/*.gif
+docs/images/packet_diagrams/reorder/*.webp
+docs/images/packet_diagrams/reorder/*.gif
+docs/images/packet_diagrams/reorder_quantize/*.webp
+docs/images/packet_diagrams/reorder_quantize/*.gif
+
 __pycache__/

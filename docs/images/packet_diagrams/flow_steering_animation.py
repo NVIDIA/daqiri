@@ -6,17 +6,37 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from anim_common import font_scheme, save_webp_animation
-from incoming_wire import center_wire_y, draw_rx_wire, draw_rx_wire_label, path_point_and_tangent, wire_t_end
+from anim_common import (
+    CANVAS_FILL,
+    CANVAS_HEIGHT,
+    CANVAS_SCALE,
+    CANVAS_WIDTH,
+    FRAME_DURATION_MS,
+    KERNEL_CORNER_RADIUS,
+    NIC_CORNER_RADIUS,
+    PANEL_CORNER_RADIUS,
+    PANEL_OUTLINE_WIDTH,
+    PANEL_TITLE_X,
+    PANEL_TITLE_Y,
+    ROUTE_ARROW_SIZE,
+    ROUTE_LINE_WIDTH,
+    WIRE_DOT_COLOR,
+    diagram_colors,
+    font_scheme,
+    output_paths,
+    save_gif_animation,
+    save_webp_animation,
+)
+from incoming_wire import center_wire_y, draw_incoming_wire, path_point_and_tangent, wire_t_end
 
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = ROOT / "flow_steering"
 
-WIDTH = 1180
-HEIGHT = 660
-SCALE = 2
-DURATION_MS = 40
+WIDTH = CANVAS_WIDTH
+HEIGHT = CANVAS_HEIGHT
+SCALE = CANVAS_SCALE
+DURATION_MS = FRAME_DURATION_MS
 
 QUEUE_TRAVEL_FRAMES = 76
 ARRIVAL_GAP = 14
@@ -26,13 +46,15 @@ LAYOUT_SHIFT_Y = 0
 NIC_RECT = (300, 250, 500, 410)
 HOST_RECT = (750, 86, 1120, 282)
 GPU_RECT = (750, 360, 1120, 620)
-HOST_ROW = (774, 170, 1096, 238)
+HOST_FALLBACK_ROW = (774, 142, 1096, 194)
+HOST_QUEUE4_ROW = (774, 202, 1096, 254)
 GPU_QUEUE_AREA = (774, 430, 1096, 596)
 
 WIRE_Y = 330
 KERNEL_WIDTH = 130
 HOST_SLOT_COUNT = 3
-QUEUE_COUNT = 3
+GPU_QUEUE_COUNT = 3
+HOST_QUEUE_ID = 3
 QUEUE_SLOT_COUNT = 2
 WIRE_PACKET_WIDTH = 86
 WIRE_PACKET_HEIGHT = 38
@@ -42,70 +64,23 @@ FLOW_RULES = {
     4096: 0,
     4097: 1,
     4098: 2,
+    5003: HOST_QUEUE_ID,
 }
 
 TRANSPARENT = (0, 0, 0, 0)
 
 ACCENTS = {
-    "nvidia": "#76b900",
-    "host": "#9b8cff",
-    "gpu": "#59d4ff",
-    "kernel": "#3b82f6",
     "host_pkt": "#9b8cff",
     "gpu_pkt": "#59d4ff",
     "queue_0": "#59d4ff",
     "queue_1": "#78e08f",
     "queue_2": "#ffcf5a",
-    "ink": "#07111f",
+    "queue_3": "#9b8cff",
+    "match_ok": "#76b900",
+    "match_no": "#ef4444",
 }
 
-THEMES: dict[str, dict[str, str | None]] = {
-    "default": {
-        **ACCENTS,
-        "bg": None,
-        "panel": "#0d1b2e",
-        "panel_2": "#101f34",
-        "line": "#35516f",
-        "text": "#f6fbff",
-        "muted": "#afc0cf",
-        "wire": "#6d7e92",
-        "shadow": "#03101d",
-        "row_bg": "#061220",
-        "arrow": "#ffffff",
-        "stroke": "#ffffff",
-        "bar_glow": "#ffffff",
-        "kernel_fill": "#0f2744",
-        "bypass": "#64748b",
-        "match_ok": "#76b900",
-        "match_no": "#ef4444",
-    },
-    "light": {
-        **ACCENTS,
-        "bg": "#ffffff",
-        "panel": "#f5f5f5",
-        "panel_2": "#eeeeee",
-        "line": "#1a1a1a",
-        "text": "#1a1a1a",
-        "muted": "#404040",
-        "wire": "#404040",
-        "shadow": "#bdbdbd",
-        "row_bg": "#e8e8e8",
-        "arrow": "#1a1a1a",
-        "stroke": "#1a1a1a",
-        "bar_glow": "#cccccc",
-        "kernel_fill": "#f0f4ff",
-        "bypass": "#64748b",
-        "match_ok": "#15803d",
-        "match_no": "#dc2626",
-    },
-}
-
-THEME_OUTPUT_SUFFIX = {
-    "default": "",
-    "light": "-light",
-}
-
-COLORS = THEMES["default"]
+COLORS = diagram_colors(**ACCENTS)
 
 
 @dataclass(frozen=True)
@@ -134,7 +109,8 @@ def shift_rect(rect: tuple[float, float, float, float]) -> tuple[float, float, f
 NIC = shift_rect(NIC_RECT)
 HOST = shift_rect(HOST_RECT)
 GPU = shift_rect(GPU_RECT)
-HOST_ROW_R = shift_rect(HOST_ROW)
+HOST_FALLBACK_ROW_R = shift_rect(HOST_FALLBACK_ROW)
+HOST_QUEUE4_ROW_R = shift_rect(HOST_QUEUE4_ROW)
 GPU_QUEUE_AREA_R = shift_rect(GPU_QUEUE_AREA)
 WIRE = shift_y(WIRE_Y)
 KERNEL_CX = NIC_RECT[2] + 102
@@ -335,7 +311,7 @@ def draw_path_tag(
         tx + tw / (2 * SCALE) + pad_x,
         ty + th / (2 * SCALE) + pad_y,
     )
-    draw.rounded_rectangle(box(tag), radius=s(6), fill=rgba(COLORS["panel"], 235), outline=rgba(color, 180), width=s(1))
+    draw.rounded_rectangle(box(tag), radius=s(6), fill=rgba(COLORS["tag_fill"], 245), outline=rgba(color, 210), width=s(2))
     centered_text(draw, tag, text, FONTS["tiny"], fill=COLORS["text"])
 
 
@@ -352,10 +328,10 @@ def panel_top_center(rect: tuple[float, float, float, float]) -> tuple[float, fl
 def flow_queue_rows() -> list[tuple[float, float, float, float]]:
     x1, y1, x2, y2 = GPU_QUEUE_AREA_R
     gap = 8
-    row_h = (y2 - y1 - gap * (QUEUE_COUNT - 1)) / QUEUE_COUNT
+    row_h = (y2 - y1 - gap * (GPU_QUEUE_COUNT - 1)) / GPU_QUEUE_COUNT
     rows: list[tuple[float, float, float, float]] = []
     y = y1
-    for _ in range(QUEUE_COUNT):
+    for _ in range(GPU_QUEUE_COUNT):
         rows.append((x1, y, x2, y + row_h))
         y += row_h + gap
     return rows
@@ -371,7 +347,7 @@ def queue_center_y(queue_id: int) -> float:
 
 def queue_route_path(queue_id: int) -> list[tuple[float, float]]:
     qy = queue_center_y(queue_id)
-    tap_x = NIC[2] + 54 + (QUEUE_COUNT - 1 - queue_id) * 44
+    tap_x = NIC[2] + 54 + (GPU_QUEUE_COUNT - 1 - queue_id) * 44
     return rectangular_path(
         (
             (NIC[2], WIRE),
@@ -382,8 +358,21 @@ def queue_route_path(queue_id: int) -> list[tuple[float, float]]:
     )
 
 
+def host_queue4_route_path() -> list[tuple[float, float]]:
+    qy = (HOST_QUEUE4_ROW_R[1] + HOST_QUEUE4_ROW_R[3]) / 2
+    tap_x = NIC[2] + 54 + GPU_QUEUE_COUNT * 44
+    return rectangular_path(
+        (
+            (NIC[2], WIRE),
+            (tap_x, WIRE),
+            (tap_x, qy),
+            (HOST_QUEUE4_ROW_R[0], qy),
+        )
+    )
+
+
 def build_paths() -> dict[str, list[tuple[float, float]]]:
-    host_y = (HOST_ROW_R[1] + HOST_ROW_R[3]) / 2
+    host_y = (HOST_FALLBACK_ROW_R[1] + HOST_FALLBACK_ROW_R[3]) / 2
     bus_y = (KERNEL[1] + KERNEL[3]) / 2
     kernel_in = (KERNEL[0], bus_y)
     kernel_out = (KERNEL[2], bus_y)
@@ -405,17 +394,20 @@ def build_paths() -> dict[str, list[tuple[float, float]]]:
             (host_entry[0], bus_y),
             host_entry,
             (host_entry[0], host_y),
-            (HOST_ROW_R[0], host_y),
+            (HOST_FALLBACK_ROW_R[0], host_y),
         )
     )
+    host_q4_route = host_queue4_route_path()
     paths = {
         "wire": wire,
         "host": wire + host_tail[1:],
         "host_nic_to_kernel": host_nic_to_kernel,
         "host_kernel_to_queue": host_kernel_to_queue,
         "host_direct": host_direct,
+        "host_queue4_route": host_q4_route,
+        "host_queue4": wire + host_q4_route[1:],
     }
-    for queue_id in range(QUEUE_COUNT):
+    for queue_id in range(GPU_QUEUE_COUNT):
         route = queue_route_path(queue_id)
         paths[f"queue{queue_id}_route"] = route
         paths[f"queue{queue_id}"] = wire + route[1:]
@@ -435,14 +427,21 @@ def path_total(points: list[tuple[float, float]]) -> float:
 
 
 def make_packets() -> tuple[PacketSpec, ...]:
-    queue_len = max(path_total(PATHS[f"queue{queue_id}"]) for queue_id in range(QUEUE_COUNT))
+    matched_paths = [path_total(PATHS[f"queue{queue_id}"]) for queue_id in range(GPU_QUEUE_COUNT)]
+    matched_paths.append(path_total(PATHS["host_queue4"]))
+    queue_len = max(matched_paths)
     host_len = path_total(PATHS["host"])
     wire_len = path_total(PATHS["wire"])
     px_per_frame = queue_len / QUEUE_TRAVEL_FRAMES
     wire_frames = max(1, int(math.ceil(wire_len / px_per_frame)))
 
     def travel_frames(queue_id: int | None) -> int:
-        length = host_len if queue_id is None else path_total(PATHS[f"queue{queue_id}"])
+        if queue_id is None:
+            length = host_len
+        elif queue_id == HOST_QUEUE_ID:
+            length = path_total(PATHS["host_queue4"])
+        else:
+            length = path_total(PATHS[f"queue{queue_id}"])
         return max(1, int(math.ceil(length / px_per_frame)))
 
     routing = (
@@ -452,9 +451,11 @@ def make_packets() -> tuple[PacketSpec, ...]:
         (4, 4098),
         (5, 4096),
         (6, 4097),
-        (7, 5001),
+        (7, 5003),
         (8, 4098),
-        (9, 5002),
+        (9, 5001),
+        (10, 5003),
+        (11, 5002),
     )
     packets: list[PacketSpec] = []
     cursor = 8
@@ -481,16 +482,19 @@ def decision_pulse(frame: int, pkt: PacketSpec) -> float:
     return max(progress_linear(frame, pkt.decide, pkt.decide + 8), 1.0 - progress_linear(frame, pkt.decide + 10, pkt.decide + 18))
 
 
-def queued_packets(frame: int) -> tuple[list[int], list[list[int]]]:
-    host_nums: list[int] = []
-    queue_nums: list[list[int]] = [[] for _ in range(QUEUE_COUNT)]
+def queued_packets(frame: int) -> tuple[list[int], list[int], list[list[int]]]:
+    fallback_nums: list[int] = []
+    host_q4_nums: list[int] = []
+    gpu_nums: list[list[int]] = [[] for _ in range(GPU_QUEUE_COUNT)]
     for pkt in PACKETS:
         if frame >= pkt.end:
             if pkt.queue_id is None:
-                host_nums.append(pkt.num)
+                fallback_nums.append(pkt.num)
+            elif pkt.queue_id == HOST_QUEUE_ID:
+                host_q4_nums.append(pkt.num)
             else:
-                queue_nums[pkt.queue_id].append(pkt.num)
-    return host_nums, queue_nums
+                gpu_nums[pkt.queue_id].append(pkt.num)
+    return fallback_nums, host_q4_nums, gpu_nums
 
 
 def draw_whole_packet(
@@ -522,6 +526,11 @@ def queue_color(queue_id: int) -> str:
     return str(COLORS[f"queue_{queue_id}"])
 
 
+def queue_label(queue_id: int) -> str:
+    display_num = {HOST_QUEUE_ID: 1, 0: 2, 1: 3, 2: 4}[queue_id]
+    return f"queue {display_num}"
+
+
 def packet_by_num(num: int) -> PacketSpec | None:
     for pkt in PACKETS:
         if pkt.num == num:
@@ -531,8 +540,20 @@ def packet_by_num(num: int) -> PacketSpec | None:
 
 def packet_color(num: int) -> str:
     pkt = packet_by_num(num)
-    if pkt is None or pkt.queue_id is None:
+    if pkt is None:
         return str(COLORS["host_pkt"])
+    if pkt.queue_id is None:
+        return str(COLORS["bypass"])
+    return queue_color(pkt.queue_id)
+
+
+def flowing_packet_color(pkt: PacketSpec, cx: float, cy: float) -> str:
+    inside_nic = NIC[0] <= cx <= NIC[2] and NIC[1] <= cy <= NIC[3]
+    before_nic = cx < NIC[0]
+    if pkt.queue_id is None:
+        if before_nic or inside_nic:
+            return str(COLORS["host_pkt"])
+        return str(COLORS["bypass"])
     return queue_color(pkt.queue_id)
 
 
@@ -567,11 +588,22 @@ def queue_slot_index(pkt: PacketSpec) -> int:
     return sum(1 for other in PACKETS if other.queue_id == pkt.queue_id and other.end <= pkt.end) - 1
 
 
+def host_q4_slot_index(pkt: PacketSpec) -> int:
+    return sum(1 for other in PACKETS if other.queue_id == HOST_QUEUE_ID and other.end <= pkt.end) - 1
+
+
 def host_slot_target(pkt: PacketSpec) -> tuple[float, float, float, float]:
-    slots = queue_chip_layout(HOST_ROW_R, HOST_SLOT_COUNT)
+    slots = queue_chip_layout(HOST_FALLBACK_ROW_R, HOST_SLOT_COUNT)
     idx = max(0, min(HOST_SLOT_COUNT - 1, host_slot_index(pkt)))
     cx, cy, chip_w = slots[idx]
     return cx, cy, chip_w - 4, HOST_PACKET_HEIGHT
+
+
+def host_q4_slot_target(pkt: PacketSpec) -> tuple[float, float, float, float]:
+    slots = queue_chip_layout(flow_queue_slots_rect(HOST_QUEUE4_ROW_R), QUEUE_SLOT_COUNT)
+    idx = max(0, min(QUEUE_SLOT_COUNT - 1, host_q4_slot_index(pkt)))
+    cx, cy, chip_w = slots[idx]
+    return cx, cy, chip_w - 4, QUEUE_PACKET_HEIGHT
 
 
 def flow_queue_slots_rect(row: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
@@ -580,7 +612,7 @@ def flow_queue_slots_rect(row: tuple[float, float, float, float]) -> tuple[float
 
 
 def queue_slot_target(pkt: PacketSpec) -> tuple[float, float, float, float]:
-    queue_id = 0 if pkt.queue_id is None else pkt.queue_id
+    queue_id = pkt.queue_id if pkt.queue_id is not None else 0
     slots = queue_chip_layout(flow_queue_slots_rect(QUEUE_ROWS[queue_id]), QUEUE_SLOT_COUNT)
     idx = max(0, min(QUEUE_SLOT_COUNT - 1, queue_slot_index(pkt)))
     cx, cy, chip_w = slots[idx]
@@ -588,23 +620,31 @@ def queue_slot_target(pkt: PacketSpec) -> tuple[float, float, float, float]:
 
 
 def packet_target(pkt: PacketSpec) -> tuple[float, float, float, float]:
-    return host_slot_target(pkt) if pkt.queue_id is None else queue_slot_target(pkt)
+    if pkt.queue_id is None:
+        return host_slot_target(pkt)
+    if pkt.queue_id == HOST_QUEUE_ID:
+        return host_q4_slot_target(pkt)
+    return queue_slot_target(pkt)
 
 
 def packet_memory_entry(pkt: PacketSpec) -> tuple[float, float]:
     if pkt.queue_id is None:
         return panel_top_center(HOST)
+    if pkt.queue_id == HOST_QUEUE_ID:
+        return PATHS["host_queue4_route"][-1]
     return PATHS[f"queue{pkt.queue_id}_route"][-1]
+
+
+def packet_in_memory_panel(pkt: PacketSpec, cx: float, cy: float) -> bool:
+    if pkt.queue_id is None or pkt.queue_id == HOST_QUEUE_ID:
+        return HOST[0] <= cx <= HOST[2] and HOST[1] <= cy <= HOST[3]
+    return GPU[0] <= cx <= GPU[2] and GPU[1] <= cy <= GPU[3]
 
 
 def packet_draw_dimensions(pkt: PacketSpec, cx: float, cy: float) -> tuple[float, float]:
     target_x, target_y, target_w, target_h = packet_target(pkt)
     entry_x, entry_y = packet_memory_entry(pkt)
-    if pkt.queue_id is None:
-        in_memory = HOST[0] <= cx <= HOST[2] and HOST[1] <= cy <= HOST[3]
-    else:
-        in_memory = GPU[0] <= cx <= GPU[2] and GPU[1] <= cy <= GPU[3]
-    if not in_memory:
+    if not packet_in_memory_panel(pkt, cx, cy):
         return WIRE_PACKET_WIDTH, WIRE_PACKET_HEIGHT
 
     total = math.hypot(target_x - entry_x, target_y - entry_y)
@@ -634,7 +674,10 @@ def packet_path(pkt: PacketSpec) -> list[tuple[float, float]]:
         )
         return wire + tail[1:]
 
-    queue_path = PATHS[f"queue{pkt.queue_id}"]
+    if pkt.queue_id == HOST_QUEUE_ID:
+        queue_path = PATHS["host_queue4"]
+    else:
+        queue_path = PATHS[f"queue{pkt.queue_id}"]
     branch = rectangular_path((queue_path[-1], (target_x, target_y)))
     return queue_path + branch[1:]
 
@@ -654,7 +697,7 @@ def draw_queue_row(
         draw.rounded_rectangle(
             box(slot_rect),
             radius=s(7),
-            fill=rgba(COLORS["panel"], 165),
+            fill=COLORS["panel_slot"],
             outline=rgba(accent, 135),
             width=s(1),
         )
@@ -675,7 +718,7 @@ def draw_flow_queue_row(
     accent = queue_color(queue_id)
     draw.rounded_rectangle(box(rect), radius=s(8), fill=rgba(COLORS["row_bg"], 235), outline=rgba(accent, 145), width=s(2))
     label_rect = (x1 + 8, y1 + 3, x1 + 104, y2 - 3)
-    centered_text(draw, label_rect, f"queue {queue_id + 1}", FONTS["slot"], fill=COLORS["muted"])
+    centered_text(draw, label_rect, queue_label(queue_id), FONTS["slot"], fill=COLORS["muted"])
     slots_rect = flow_queue_slots_rect(rect)
     slots = queue_chip_layout(slots_rect, QUEUE_SLOT_COUNT)
     for idx, (cx, cy, chip_w) in enumerate(slots):
@@ -683,7 +726,7 @@ def draw_flow_queue_row(
         draw.rounded_rectangle(
             box(slot_rect),
             radius=s(6),
-            fill=rgba(COLORS["panel"], 165),
+            fill=COLORS["panel_slot"],
             outline=rgba(accent, 135),
             width=s(1),
         )
@@ -694,21 +737,29 @@ def draw_flow_queue_row(
 
 
 def draw_host_route(draw: ImageDraw.ImageDraw) -> None:
-    color = rgba(COLORS["host_pkt"], 255)
-    draw_arrow(draw, PATHS["host_nic_to_kernel"], color, 3, 12)
-    draw_arrow(draw, PATHS["host_kernel_to_queue"], color, 3, 12)
+    color = rgba(COLORS["bypass"], 255)
+    draw_arrow(draw, PATHS["host_nic_to_kernel"], color, ROUTE_LINE_WIDTH, ROUTE_ARROW_SIZE)
+    draw_arrow(draw, PATHS["host_kernel_to_queue"], color, ROUTE_LINE_WIDTH, ROUTE_ARROW_SIZE)
 
 
 def draw_kernel_bypass(draw: ImageDraw.ImageDraw) -> None:
     x1, y1, x2, y2 = KERNEL
-    draw.rounded_rectangle(box(KERNEL), radius=s(12), fill=rgba(COLORS["kernel_fill"], 245), outline=rgba(COLORS["kernel"], 210), width=s(2))
+    draw.rounded_rectangle(
+        box(KERNEL),
+        radius=s(KERNEL_CORNER_RADIUS),
+        fill=rgba(COLORS["kernel_fill"], 245),
+        outline=rgba(COLORS["kernel"], 210),
+        width=s(2),
+    )
     centered_text(draw, (x1, y1 + 8, x2, y2 - 8), "Linux kernel", FONTS["label"], fill=COLORS["text"])
 
 
 def draw_matched_routes(draw: ImageDraw.ImageDraw) -> None:
-    for queue_id in range(QUEUE_COUNT):
-        draw_arrow(draw, PATHS[f"queue{queue_id}_route"], rgba(str(COLORS["arrow"]), 130), 3, 12)
-    draw_path_tag(draw, (600, 416), "flow match -> queue", COLORS["gpu"])
+    route = rgba(COLORS["route"], 255)
+    for queue_id in range(GPU_QUEUE_COUNT):
+        draw_arrow(draw, PATHS[f"queue{queue_id}_route"], route, ROUTE_LINE_WIDTH, ROUTE_ARROW_SIZE)
+    draw_arrow(draw, PATHS["host_queue4_route"], route, ROUTE_LINE_WIDTH, ROUTE_ARROW_SIZE)
+    draw_path_tag(draw, (600, 318), "flow match -> queue", COLORS["route"])
 
 
 def nic_status(frame: int) -> tuple[str, str, str, float]:
@@ -717,8 +768,8 @@ def nic_status(frame: int) -> tuple[str, str, str, float]:
     pulse = decision_pulse(frame, pkt) if deciding and pkt else 0.0
     if deciding and pkt:
         if pkt.queue_id is not None:
-            return f"{packet_label(pkt.num)}\nqueue {pkt.queue_id + 1}", queue_color(pkt.queue_id), "#ffffff", pulse
-        return f"{packet_label(pkt.num)}\nto kernel", COLORS["host_pkt"], "#ffffff", pulse
+            return f"{packet_label(pkt.num)}\n{queue_label(pkt.queue_id)}", queue_color(pkt.queue_id), "#ffffff", pulse
+        return f"{packet_label(pkt.num)}\nto kernel", COLORS["bypass"], "#ffffff", pulse
     return "flow\nsteering", COLORS["nvidia"], COLORS["ink"], pulse
 
 
@@ -745,37 +796,49 @@ def draw_nic_chip_base(draw: ImageDraw.ImageDraw, frame: int) -> None:
 
     glow_alpha = int(55 + 120 * pulse) if deciding else 55
     draw.rounded_rectangle(box((x1 - 10, y1 - 10, x2 + 10, y2 + 10)), radius=s(24), fill=rgba(accent, 16 + glow_alpha // 3))
-    draw.rounded_rectangle(box(NIC), radius=s(18), fill=COLORS["panel"], outline=rgba(accent, 190 + int(65 * pulse)), width=s(3 + int(2 * pulse)))
+    draw.rounded_rectangle(box(NIC), radius=s(NIC_CORNER_RADIUS), fill=COLORS["nic_panel"], outline=rgba(accent, 190 + int(65 * pulse)), width=s(3 + int(2 * pulse)))
     for i in range(7):
         y = lerp(y1 + 18, y2 - 18, i / 6)
-        draw.line((s(x1 - 14), s(y), s(x1), s(y)), fill=rgba(COLORS["line"], 220), width=s(3))
-        draw.line((s(x2), s(y), s(x2 + 14), s(y)), fill=rgba(COLORS["line"], 220), width=s(3))
+        draw.line((s(x1 - 14), s(y), s(x1), s(y)), fill=rgba(COLORS["nic_line"], 220), width=s(3))
+        draw.line((s(x2), s(y), s(x2 + 14), s(y)), fill=rgba(COLORS["nic_line"], 220), width=s(3))
     for i in range(5):
         x = lerp(x1 + 25, x2 - 25, i / 4)
-        draw.line((s(x), s(y1 - 12), s(x), s(y1)), fill=rgba(COLORS["line"], 220), width=s(3))
-        draw.line((s(x), s(y2), s(x), s(y2 + 12)), fill=rgba(COLORS["line"], 220), width=s(3))
-    centered_text(draw, (x1 + 18, y1 + 4, x2 - 18, y1 + 38), "NVIDIA NIC", FONTS["chip"], fill=COLORS["text"])
+        draw.line((s(x), s(y1 - 12), s(x), s(y1)), fill=rgba(COLORS["nic_line"], 220), width=s(3))
+        draw.line((s(x), s(y2), s(x), s(y2 + 12)), fill=rgba(COLORS["nic_line"], 220), width=s(3))
+    centered_text(draw, (x1 + 18, y1 + 4, x2 - 18, y1 + 38), "NVIDIA NIC", FONTS["chip"], fill=COLORS["nic_text"])
 
 
 def draw_device_memory(draw: ImageDraw.ImageDraw, frame: int) -> None:
-    host_nums, queue_nums = queued_packets(frame)
-    panels = (
-        (HOST, "Host memory", "kernel fallback packets", COLORS["host"]),
-        (GPU, "GPU memory", "RX queues selected by flow rules", COLORS["gpu"]),
-    )
-    for panel_rect, title, subtitle, accent in panels:
+    fallback_nums, host_q4_nums, gpu_nums = queued_packets(frame)
+    host_panel = (HOST, "Host memory", None, COLORS["host"])
+    gpu_panel = (GPU, "GPU memory", "RX queues selected by flow rules", COLORS["gpu"])
+    for panel_rect, title, subtitle, accent in (host_panel, gpu_panel):
         x1, y1, _, _ = panel_rect
-        draw.rounded_rectangle(box(panel_rect), radius=s(18), fill=COLORS["panel_2"], outline=rgba(accent, 170), width=s(3))
-        draw_text(draw, (x1 + 22, y1 + 22), title, FONTS["label"], fill=COLORS["text"], anchor="lt")
-        draw_text(draw, (x1 + 22, y1 + 46), subtitle, FONTS["small"], fill=COLORS["muted"], anchor="lt")
-    draw_queue_row(draw, HOST_ROW_R, host_nums, COLORS["host_pkt"], HOST_SLOT_COUNT)
+        draw.rounded_rectangle(box(panel_rect), radius=s(PANEL_CORNER_RADIUS), fill=COLORS["panel_2"], outline=rgba(accent, 170), width=s(PANEL_OUTLINE_WIDTH))
+        draw_text(draw, (x1 + PANEL_TITLE_X, y1 + PANEL_TITLE_Y), title, FONTS["label"], fill=COLORS["text"], anchor="lt")
+        if subtitle:
+            draw_text(draw, (x1 + 22, y1 + 46), subtitle, FONTS["small"], fill=COLORS["muted"], anchor="lt")
+    draw_queue_row(draw, HOST_FALLBACK_ROW_R, fallback_nums, COLORS["bypass"], HOST_SLOT_COUNT)
+    draw_flow_queue_row(draw, HOST_QUEUE4_ROW_R, HOST_QUEUE_ID, host_q4_nums)
     for queue_id, row in enumerate(QUEUE_ROWS):
-        draw_flow_queue_row(draw, row, queue_id, queue_nums[queue_id])
+        draw_flow_queue_row(draw, row, queue_id, gpu_nums[queue_id])
 
 
 def draw_wires(draw: ImageDraw.ImageDraw, frame: int) -> None:
-    draw_rx_wire_label(lambda xy, text: draw_text(draw, xy, text, FONTS["label"], fill=COLORS["text"]), WIRE)
-    draw_rx_wire(draw, frame, 48, NIC[0], WIRE, str(COLORS["wire"]), "#ffcf5a", pt, s, rgba, box)
+    draw_incoming_wire(
+        draw,
+        frame,
+        WIRE,
+        NIC[0],
+        str(COLORS["wire"]),
+        WIRE_DOT_COLOR,
+        COLORS["canvas_text"],
+        FONTS["label"],
+        pt,
+        s,
+        rgba,
+        box,
+    )
 
 
 def draw_route_glow(base: Image.Image, frame: int) -> None:
@@ -787,7 +850,6 @@ def draw_flowing_packets(draw: ImageDraw.ImageDraw, frame: int) -> None:
         if not (pkt.start <= frame < pkt.end):
             continue
         path = packet_path(pkt)
-        color = packet_color(pkt.num)
         t = progress_linear(frame, pkt.start, pkt.end)
         if 0 <= t < 1:
             on_wire = t <= wire_t_end(PATHS["wire"], path)
@@ -797,6 +859,7 @@ def draw_flowing_packets(draw: ImageDraw.ImageDraw, frame: int) -> None:
             inside_nic = NIC[0] <= cx <= NIC[2] and NIC[1] <= cy <= NIC[3]
             label = None if inside_nic else packet_label(pkt.num)
             packet_w, packet_h = packet_draw_dimensions(pkt, cx, cy)
+            color = flowing_packet_color(pkt, cx, cy)
             draw_whole_packet(draw, cx, cy, packet_w, color, label=label, height=packet_h)
 
 
@@ -828,8 +891,7 @@ def point_on_path(points: list[tuple[float, float]], t: float) -> tuple[float, f
 
 
 def render_frame(frame: int) -> Image.Image:
-    bg = COLORS.get("bg")
-    img = Image.new("RGBA", (WIDTH * SCALE, HEIGHT * SCALE), rgba(str(bg), 255) if bg else TRANSPARENT)
+    img = Image.new("RGBA", (WIDTH * SCALE, HEIGHT * SCALE), CANVAS_FILL)
     draw = ImageDraw.Draw(img)
     draw_wires(draw, frame)
     draw_device_memory(draw, frame)
@@ -840,27 +902,24 @@ def render_frame(frame: int) -> Image.Image:
     draw_route_glow(img, frame)
     draw_flowing_packets(draw, frame)
     draw_nic_status_pill(draw, frame)
-    return img.resize((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
+    return img
 
 
-def render_theme(theme: str) -> None:
-    global COLORS
-    COLORS = THEMES[theme]
-    suffix = THEME_OUTPUT_SUFFIX[theme]
-    animation_path = OUTPUT_DIR / f"flow-steering{suffix}.webp"
-    poster_path = OUTPUT_DIR / f"flow-steering{suffix}-poster.png"
+def render() -> None:
+    animation_path, gif_path, poster_path = output_paths(OUTPUT_DIR, "flow-steering")
 
     frames = [render_frame(i) for i in range(FRAMES)]
     save_webp_animation(frames, animation_path, DURATION_MS)
+    save_gif_animation(frames, gif_path, DURATION_MS)
     render_frame(min(FRAMES - 1, PACKETS[-1].end + 10)).save(poster_path, optimize=True)
     print(f"Wrote {animation_path}")
+    print(f"Wrote {gif_path}")
     print(f"Wrote {poster_path}")
 
 
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    for theme in THEMES:
-        render_theme(theme)
+    render()
 
 
 if __name__ == "__main__":
