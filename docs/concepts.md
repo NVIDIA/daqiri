@@ -225,6 +225,10 @@ Use HDS when the application needs to inspect headers (UDP
 source/destination ports, application-layer sequence numbers, etc.) but
 the bulk of the data is meant for the GPU.
 
+<div class="packet-diagram" markdown="1">
+![Header-data split](images/packet_diagrams/hds/header-data-split.webp)
+</div>
+
 ## Flows and Queues
 
 These two terms describe how packets are routed from the wire into the
@@ -282,6 +286,10 @@ DPDK engine and mlx5 Direct Rules in the ibverbs engine. Flow rules are
 programmed during `daqiri_init()`; initialization fails if the NIC
 rejects a rule. The YAML options are documented in
 [Configuration YAML Reference → Flows](api-reference/configuration.md#flows).
+
+<div class="packet-diagram" markdown="1">
+![Flow steering](images/packet_diagrams/flow_steering/flow-steering.webp)
+</div>
 
 ## Memory Regions
 
@@ -341,6 +349,10 @@ on RX through `rx.reorder_configs`:
 This is the path to use when packets arrive out of order (e.g. across
 multiple NIC queues) and need to be reassembled into a single, contiguous
 GPU buffer before downstream processing.
+
+<div class="packet-diagram" markdown="1">
+![GPU packet reorder](images/packet_diagrams/reorder/packet-reorder.webp)
+</div>
 
 Each reorder config currently operates on a single memory domain, either
 GPU-only or CPU-only. Reordering packets whose segments span two memory

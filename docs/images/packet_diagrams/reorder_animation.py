@@ -6,16 +6,35 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from anim_common import font_scheme, save_webp_animation
-from incoming_wire import draw_rx_wire, draw_rx_wire_label
+from anim_common import (
+    CANVAS_FILL,
+    CANVAS_HEIGHT,
+    CANVAS_SCALE,
+    CANVAS_WIDTH,
+    FRAME_DURATION_MS,
+    NIC_CORNER_RADIUS,
+    PANEL_CORNER_RADIUS,
+    PANEL_OUTLINE_WIDTH,
+    PANEL_TITLE_X,
+    PANEL_TITLE_Y,
+    ROUTE_ARROW_SIZE,
+    ROUTE_LINE_WIDTH,
+    WIRE_DOT_COLOR,
+    diagram_colors,
+    font_scheme,
+    output_paths,
+    save_gif_animation,
+    save_webp_animation,
+)
+from incoming_wire import draw_incoming_wire
 
 
 ROOT = Path(__file__).resolve().parent
 
-WIDTH = 1180
-HEIGHT = 660
-SCALE = 2
-DURATION_MS = 40
+WIDTH = CANVAS_WIDTH
+HEIGHT = CANVAS_HEIGHT
+SCALE = CANVAS_SCALE
+DURATION_MS = FRAME_DURATION_MS
 
 PACKET_COUNT = 5
 ARRIVAL_ORDER = (2, 0, 4, 1, 3)
@@ -30,8 +49,8 @@ NIC_RECT = (300, 250, 500, 410)
 REORDER_RECT = (610, 150, 940, 546)
 REORDER_STAGING_COL = (635, 260, 755, 512)
 REORDER_QUEUE_COL = (790, 260, 910, 512)
-CONVERT_STAGING_COL = (635, 260, 720, 512)
-CONVERT_QUEUE_COL = (755, 260, 915, 512)
+CONVERT_STAGING_COL = REORDER_STAGING_COL
+CONVERT_QUEUE_COL = REORDER_QUEUE_COL
 
 WIRE_Y = 330
 
@@ -40,49 +59,7 @@ TRANSPARENT = (0, 0, 0, 0)
 PACKET_GRAD_START = "#59d4ff"
 PACKET_GRAD_END = "#9b8cff"
 
-ACCENTS = {
-    "nvidia": "#76b900",
-    "reorder": "#76b900",
-    "ink": "#07111f",
-}
-
-THEMES: dict[str, dict[str, str | None]] = {
-    "default": {
-        **ACCENTS,
-        "bg": None,
-        "panel": "#0d1b2e",
-        "panel_2": "#101f34",
-        "line": "#35516f",
-        "text": "#f6fbff",
-        "muted": "#afc0cf",
-        "wire": "#6d7e92",
-        "row_bg": "#061220",
-        "stroke": "#ffffff",
-        "slot_empty": "#64748b",
-        "arrow": "#ffffff",
-    },
-    "light": {
-        **ACCENTS,
-        "bg": "#ffffff",
-        "panel": "#f5f5f5",
-        "panel_2": "#eeeeee",
-        "line": "#1a1a1a",
-        "text": "#1a1a1a",
-        "muted": "#404040",
-        "wire": "#404040",
-        "row_bg": "#e8e8e8",
-        "stroke": "#1a1a1a",
-        "slot_empty": "#9ca3af",
-        "arrow": "#1a1a1a",
-    },
-}
-
-THEME_OUTPUT_SUFFIX = {
-    "default": "",
-    "light": "-light",
-}
-
-COLORS = THEMES["default"]
+COLORS = diagram_colors(reorder="#76b900")
 
 
 @dataclass(frozen=True)
@@ -647,12 +624,24 @@ def draw_gradient_packet(
 
 
 def draw_wires(draw: ImageDraw.ImageDraw, frame: int) -> None:
-    draw_rx_wire_label(lambda xy, text: draw_text(draw, xy, text, FONTS["label"], fill=COLORS["text"]), WIRE_Y)
-    draw_rx_wire(draw, frame, 48, NIC[0], WIRE_Y, str(COLORS["wire"]), PACKET_GRAD_START, pt, s, rgba, box)
+    draw_incoming_wire(
+        draw,
+        frame,
+        WIRE_Y,
+        NIC[0],
+        str(COLORS["wire"]),
+        WIRE_DOT_COLOR,
+        COLORS["canvas_text"],
+        FONTS["label"],
+        pt,
+        s,
+        rgba,
+        box,
+    )
 
 
 def draw_static_route(draw: ImageDraw.ImageDraw) -> None:
-    draw_arrow(draw, PATHS["nic_route"], rgba(COLORS["reorder"], 255), 3, 12)
+    draw_arrow(draw, PATHS["nic_route"], rgba(COLORS["route"], 255), ROUTE_LINE_WIDTH, ROUTE_ARROW_SIZE)
 
 
 def draw_sequence_queue(base: Image.Image, draw: ImageDraw.ImageDraw, frame: int) -> None:
@@ -708,21 +697,12 @@ def draw_reorder_panel(base: Image.Image, draw: ImageDraw.ImageDraw, frame: int)
     kernel_active = KERNEL_START <= frame < KERNEL_END
     pulse = 0.55 if kernel_active else 0.0
     glow = int(40 + 55 * pulse)
-    draw.rounded_rectangle(box(REORDER), radius=s(18), fill=COLORS["panel_2"], outline=rgba(COLORS["reorder"], 170 + glow), width=s(3))
-    draw_text(draw, (x1 + 14, y1 + 16), CURRENT_VISUAL.title, FONTS["label"], fill=COLORS["text"], anchor="lt")
+    draw.rounded_rectangle(box(REORDER), radius=s(PANEL_CORNER_RADIUS), fill=COLORS["panel_2"], outline=rgba(COLORS["reorder"], 170 + glow), width=s(PANEL_OUTLINE_WIDTH))
+    draw_text(draw, (x1 + PANEL_TITLE_X, y1 + PANEL_TITLE_Y), CURRENT_VISUAL.title, FONTS["label"], fill=COLORS["text"], anchor="lt")
     for idx, subtitle in enumerate(CURRENT_VISUAL.subtitle.splitlines()):
-        draw_text(draw, (x1 + 14, y1 + 40 + idx * 17), subtitle, FONTS["small"], fill=COLORS["muted"], anchor="lt")
+        draw_text(draw, (x1 + PANEL_TITLE_X, y1 + PANEL_TITLE_Y + 24 + idx * 17), subtitle, FONTS["small"], fill=COLORS["muted"], anchor="lt")
     draw_text(draw, (staging_col[0], staging_col[1] - 20), "staged ptrs", FONTS["tiny"], fill=COLORS["muted"], anchor="lt")
     draw_text(draw, (queue_col[0], queue_col[1] - 20), CURRENT_VISUAL.output_heading, FONTS["tiny"], fill=COLORS["muted"], anchor="lt")
-    if CURRENT_VISUAL.convert_payload and kernel_active:
-        draw_text(
-            draw,
-            ((staging_col[2] + queue_col[0]) / 2, staging_col[1] - 20),
-            "convert",
-            FONTS["tiny"],
-            fill=COLORS["reorder"],
-            anchor="mm",
-        )
     draw_staging_list(base, draw, frame)
     draw_sequence_queue(base, draw, frame)
 
@@ -766,16 +746,16 @@ def draw_nic_chip_base(draw: ImageDraw.ImageDraw, frame: int) -> None:
 
     glow_alpha = int(55 + 120 * pulse) if tracking else 55
     draw.rounded_rectangle(box((x1 - 10, y1 - 10, x2 + 10, y2 + 10)), radius=s(24), fill=rgba(accent, 16 + glow_alpha // 3))
-    draw.rounded_rectangle(box(NIC), radius=s(18), fill=COLORS["panel"], outline=rgba(accent, 190 + int(65 * pulse)), width=s(3 + int(2 * pulse)))
+    draw.rounded_rectangle(box(NIC), radius=s(NIC_CORNER_RADIUS), fill=COLORS["nic_panel"], outline=rgba(accent, 190 + int(65 * pulse)), width=s(3 + int(2 * pulse)))
     for i in range(7):
         y = lerp(y1 + 18, y2 - 18, i / 6)
-        draw.line((s(x1 - 14), s(y), s(x1), s(y)), fill=rgba(COLORS["line"], 220), width=s(3))
-        draw.line((s(x2), s(y), s(x2 + 14), s(y)), fill=rgba(COLORS["line"], 220), width=s(3))
+        draw.line((s(x1 - 14), s(y), s(x1), s(y)), fill=rgba(COLORS["nic_line"], 220), width=s(3))
+        draw.line((s(x2), s(y), s(x2 + 14), s(y)), fill=rgba(COLORS["nic_line"], 220), width=s(3))
     for i in range(5):
         x = lerp(x1 + 25, x2 - 25, i / 4)
-        draw.line((s(x), s(y1 - 12), s(x), s(y1)), fill=rgba(COLORS["line"], 220), width=s(3))
-        draw.line((s(x), s(y2), s(x), s(y2 + 12)), fill=rgba(COLORS["line"], 220), width=s(3))
-    centered_text(draw, (x1 + 18, y1 + 4, x2 - 18, y1 + 38), "NVIDIA NIC", FONTS["chip"], fill=COLORS["text"])
+        draw.line((s(x), s(y1 - 12), s(x), s(y1)), fill=rgba(COLORS["nic_line"], 220), width=s(3))
+        draw.line((s(x), s(y2), s(x), s(y2 + 12)), fill=rgba(COLORS["nic_line"], 220), width=s(3))
+    centered_text(draw, (x1 + 18, y1 + 4, x2 - 18, y1 + 38), "NVIDIA NIC", FONTS["chip"], fill=COLORS["nic_text"])
 
 
 def draw_flowing_packets(base: Image.Image, draw: ImageDraw.ImageDraw, frame: int) -> None:
@@ -828,8 +808,7 @@ def draw_route_glow(base: Image.Image, frame: int) -> None:
 
 
 def render_frame(frame: int) -> Image.Image:
-    bg = COLORS.get("bg")
-    img = Image.new("RGBA", (WIDTH * SCALE, HEIGHT * SCALE), rgba(str(bg), 255) if bg else TRANSPARENT)
+    img = Image.new("RGBA", (WIDTH * SCALE, HEIGHT * SCALE), CANVAS_FILL)
     draw = ImageDraw.Draw(img)
     draw_wires(draw, frame)
     draw_static_route(draw)
@@ -838,30 +817,28 @@ def render_frame(frame: int) -> Image.Image:
     draw_route_glow(img, frame)
     draw_flowing_packets(img, draw, frame)
     draw_nic_status_pill(draw, frame)
-    return img.resize((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
+    return img
 
 
-def render_theme(theme: str, visual: VisualConfig) -> None:
-    global COLORS, CURRENT_VISUAL
-    COLORS = THEMES[theme]
+def render(visual: VisualConfig) -> None:
+    global CURRENT_VISUAL
     CURRENT_VISUAL = visual
-    suffix = THEME_OUTPUT_SUFFIX[theme]
-    animation_path = visual.output_dir / f"{visual.base_name}{suffix}.webp"
-    poster_path = visual.output_dir / f"{visual.base_name}{suffix}-poster.png"
+    animation_path, gif_path, poster_path = output_paths(visual.output_dir, visual.base_name)
 
     visual.output_dir.mkdir(parents=True, exist_ok=True)
     frames = [render_frame(i) for i in range(FRAMES)]
     save_webp_animation(frames, animation_path, DURATION_MS)
+    save_gif_animation(frames, gif_path, DURATION_MS)
     poster_frame = min(FRAMES - 1, KERNEL_END + 12)
     render_frame(poster_frame).save(poster_path, optimize=True)
     print(f"Wrote {animation_path}")
+    print(f"Wrote {gif_path}")
     print(f"Wrote {poster_path}")
 
 
 def main() -> None:
     for visual in VISUALIZATIONS:
-        for theme in THEMES:
-            render_theme(theme, visual)
+        render(visual)
 
 
 if __name__ == "__main__":

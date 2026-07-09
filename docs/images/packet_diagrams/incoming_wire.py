@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Callable
 
-from PIL import ImageDraw
+from PIL import ImageDraw, ImageFont
 
 RX_WIRE_LABEL = "RX Packets over Wire"
 WIRE_LABEL_OFFSET = 95.0
@@ -22,13 +22,22 @@ def center_wire_y(x: float, x0: float, y_center: float, frame: int, *, wave: boo
 
 
 def draw_rx_wire_label(
-    draw_text: Callable[..., None],
+    draw: ImageDraw.ImageDraw,
     wire_y: float,
+    font: ImageFont.FreeTypeFont,
+    fill: str,
+    pt: PtFn,
     *,
     x: float = 48.0,
     text: str = RX_WIRE_LABEL,
 ) -> None:
-    draw_text((x, wire_y - WIRE_LABEL_OFFSET), text)
+    draw.text(
+        pt((x, wire_y - WIRE_LABEL_OFFSET)),
+        text,
+        font=font,
+        fill=fill,
+        anchor="la",
+    )
 
 
 def draw_rx_wire(
@@ -45,28 +54,52 @@ def draw_rx_wire(
     box: BoxFn,
     *,
     ambient_markers: bool = True,
-    animate_markers: bool = False,
+    animate_markers: bool = True,
     wave: bool = False,
 ) -> None:
     span = max(x1 - x0, 1.0)
     count = max(20, int(span / 3.55) + 1)
+    line_width = s(3)
     for offset in (-13, 0, 13):
         pts: list[tuple[float, float]] = []
         for i in range(count):
             x = x0 + i * (span / max(1, count - 1))
             wave_offset = math.sin((i + frame * 0.95) / 5.4) * 2.4 if wave else 0.0
             pts.append((x, y_center + offset + wave_offset))
-        draw.line([pt(p) for p in pts], fill=wire_color, width=s(2))
+        draw.line([pt(p) for p in pts], fill=wire_color, width=line_width)
 
     if not ambient_markers:
         return
     loop = max(44.0, span - 44.0)
     marker_frame = frame if animate_markers else 0
+    marker_radius = 5.0
     for i in range(5):
         x = x0 + 22 + ((marker_frame * 7 + i * 68) % loop)
         cy = center_wire_y(x, x0, y_center, frame, wave=wave)
-        alpha = 160 - i * 16
-        draw.ellipse(box((x - 4, cy - 4, x + 4, cy + 4)), fill=rgba(marker_color, alpha))
+        draw.ellipse(
+            box((x - marker_radius, cy - marker_radius, x + marker_radius, cy + marker_radius)),
+            fill=rgba(marker_color, 255),
+        )
+
+
+def draw_incoming_wire(
+    draw: ImageDraw.ImageDraw,
+    frame: int,
+    wire_y: float,
+    nic_x: float,
+    wire_color: str,
+    marker_color: str,
+    label_fill: str,
+    font: ImageFont.FreeTypeFont,
+    pt: PtFn,
+    s: ScaleFn,
+    rgba: RgbaFn,
+    box: BoxFn,
+    *,
+    x0: float = 48.0,
+) -> None:
+    draw_rx_wire_label(draw, wire_y, font, label_fill, pt, x=x0)
+    draw_rx_wire(draw, frame, x0, nic_x, wire_y, wire_color, marker_color, pt, s, rgba, box)
 
 
 def draw_rx_packet_marker(

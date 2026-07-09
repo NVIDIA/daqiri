@@ -4,8 +4,9 @@ These scripts generate the animated packet-path diagrams used by the DAQIRI docs
 
 ## Requirements
 
-- Python 3
-- Pillow 11.1.x with animated WebP support
+- Python 3 with Pillow **built with WebP support** (`features.check("webp")`).
+  The Makefile auto-selects `python3.12` or the first `python3` on `PATH`
+  that passes that check.
 - DejaVu Sans or Liberation Sans fonts installed in a standard system font path
 
 Check the encoder support with:
@@ -15,7 +16,6 @@ python3 - <<'PY'
 from PIL import Image, features
 print("Pillow", Image.__version__)
 print("webp", features.check("webp"))
-print("webp_anim", features.check("webp_anim"))
 PY
 ```
 
@@ -33,8 +33,9 @@ Before committing, run:
 make -C docs/images/packet_diagrams check
 ```
 
-The check regenerates the assets and fails if any generated output directory
-has uncommitted changes afterward.
+The check regenerates all assets, verifies WebP/GIF files exist locally, and fails if
+any committed poster PNG is stale. WebP and GIF outputs are gitignored; only
+`-poster.png` files are checked into the repo.
 
 Or run one generator directly:
 
@@ -44,7 +45,18 @@ python3 docs/images/packet_diagrams/flow_steering_animation.py
 python3 docs/images/packet_diagrams/reorder_animation.py
 ```
 
-Each generator writes animated WebP files and PNG posters into its adjacent output directory. The reorder generator emits both the reorder-only and reorder-plus-convert variants.
+Each generator writes assets into its adjacent output directory:
+
+- `<name>.webp` / `<name>.gif` — generated locally (gitignored)
+- `<name>-poster.png` — committed still frame for slides and docs fallback
+
+Embed in docs with the `.packet-diagram` wrapper (see `docs/stylesheets/extra.css`):
+
+```markdown
+<div class="packet-diagram" markdown="1">
+![Header-data split](../images/packet_diagrams/hds/header-data-split.webp)
+</div>
+```
 
 Animated WebP encoders may coalesce identical consecutive frames, so a decoded
 WebP frame count can be lower than the script's logical frame count. Use
