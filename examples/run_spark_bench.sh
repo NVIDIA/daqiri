@@ -83,7 +83,10 @@ echo "lang,backend,post_process,payload,batch,pairs,target_gbps,rep,seconds,pack
 # Capture slow-moving environment state once per result set.
 "$SCRIPT_DIR/bench_capture_environment.sh" "$OUT_DIR"
 
-RUN_SECONDS=30
+RUN_SECONDS="${RUN_SECONDS:-30}"
+if [[ ! "$RUN_SECONDS" =~ ^[0-9]+$ || "$RUN_SECONDS" -lt 1 ]]; then
+  echo "Invalid RUN_SECONDS '$RUN_SECONDS' (expected a positive integer)" >&2; exit 1
+fi
 # Repeats per cell for error bars. Each rep is a full independent run with its own
 # capture dir (<cell>-r<rep>) and CSV row; the perf-doc tables report mean +/- std
 # across reps. Default 1; set REPEATS=3 for the published re-run.
@@ -115,6 +118,39 @@ fi
 SYNC_INTERVAL="${SYNC_INTERVAL:-}"
 if [[ -n "$SYNC_INTERVAL" && ! "$SYNC_INTERVAL" =~ ^[0-9]+$ ]]; then
   echo "Invalid SYNC_INTERVAL '$SYNC_INTERVAL' (expected a positive integer)" >&2; exit 1
+fi
+# MAX_INFLIGHT: for the RoCE event-recycling recv path, the max recv buffers with
+# in-flight GPU work before the receive thread blocks on the oldest event
+# (--workload-max-inflight). Larger absorbs more jitter before stalling reposts;
+# clamped in the bench to the event pool (63) and rx_depth. Empty = bench default
+# (min(rx_depth/2, 32)). Ignored by the run()+sync() DPDK/socket path.
+MAX_INFLIGHT="${MAX_INFLIGHT:-}"
+if [[ -n "$MAX_INFLIGHT" && ! "$MAX_INFLIGHT" =~ ^[0-9]+$ ]]; then
+  echo "Invalid MAX_INFLIGHT '$MAX_INFLIGHT' (expected a positive integer)" >&2; exit 1
+fi
+# NSYS: when set (NSYS=1), wrap the RoCE *server* (the receive + GPU-workload
+# process) in `nsys profile` to capture the CUDA/GPU timeline and thread states,
+# so we can see whether the GPU stream idles between GEMMs (receive-thread cadence
+# gaps) or the SM is genuinely busy. Only the server is traced -- the client is a
+# pure traffic generator. Per-cell report lands as <cell_dir>/roce_server.nsys-rep.
+# Use `rdma smoke` + a short RUN_SECONDS so the report stays small.
+NSYS="${NSYS:-}"
+NSYS_BIN="${NSYS_BIN:-}"
+if [[ -n "$NSYS" ]]; then
+  if [[ -z "$NSYS_BIN" ]]; then
+    # Resolve nsys: PATH first, then the usual CUDA toolkit location.
+    if command -v nsys >/dev/null 2>&1; then
+      NSYS_BIN="$(command -v nsys)"
+    elif [[ -x /usr/local/cuda/bin/nsys ]]; then
+      NSYS_BIN="/usr/local/cuda/bin/nsys"
+    fi
+  fi
+  if [[ -z "$NSYS_BIN" || ! -x "$NSYS_BIN" ]]; then
+    echo "NSYS set but no nsys binary found (looked on PATH and /usr/local/cuda/bin)." >&2
+    echo "Set NSYS_BIN=/path/to/nsys explicitly." >&2
+    exit 1
+  fi
+  echo "nsys profiling enabled: $NSYS_BIN" >&2
 fi
 DRIVER_LOG="$OUT_DIR/last_run.stderr"
 FAILURES=0
@@ -330,10 +366,14 @@ generate_yaml() {
       # (rx 512 / tx 128) but are capped so num_bufs * buf_size stays within a memory
       # budget per region -- small messages get the full deep window (where RNR NACKs
       # bite), large messages stay memory-bounded (where window depth is irrelevant).
-      local budget=1073741824   # 1 GiB pinned per memory region
+      # Overridable for the buffer-depth experiment: RDMA_BUDGET_GIB raises the
+      # per-region pinned-memory cap, RDMA_RX_NB / RDMA_TX_NB raise the window
+      # ceilings (num_bufs + {rx,tx}_depth). Defaults reproduce the shipped sizing
+      # (1 GiB, rx 512 / tx 128).
+      local budget=$(( ${RDMA_BUDGET_GIB:-1} * 1073741824 ))   # pinned per memory region
       local cap=$(( budget / payload )); (( cap < 1 )) && cap=1
-      local rx_nb=512; (( rx_nb > cap )) && rx_nb=$cap
-      local tx_nb=128; (( tx_nb > cap )) && tx_nb=$cap
+      local rx_nb=${RDMA_RX_NB:-512}; (( rx_nb > cap )) && rx_nb=$cap
+      local tx_nb=${RDMA_TX_NB:-128}; (( tx_nb > cap )) && tx_nb=$cap
       # Split the combined base per role, then apply the per-message-size window
       # rewrite to each. Server -> $out, client -> ${out%.yaml}_client.yaml.
       local role dst
@@ -342,8 +382,13 @@ generate_yaml() {
         # name-anchored num_bufs rewrite: RX regions -> rx_nb, TX regions -> tx_nb.
         # Depths are clamped to their region's num_bufs so the window never exceeds
         # the buffers backing it.
+        # UNIDIR=1 makes the flow one-way to match the DPDK bench (which only
+        # receives+computes on the RX port): server receive-only (runs the GEMM),
+        # client send-only (no GEMM). Removes the reverse-direction DMA and the
+        # second GEMM, so RoCE and raw do the same GPU + memory work.
         python3 "$NETNS_GEN" "$BASE_YAML" --role "$role" | \
-        awk -v p="$payload" -v bs="$payload" -v rxnb="$rx_nb" -v txnb="$tx_nb" '
+        awk -v p="$payload" -v bs="$payload" -v rxnb="$rx_nb" -v txnb="$tx_nb" \
+            -v uni="${UNIDIR:-}" -v role="$role" '
           /^[[:space:]]*- name:/ { region = $0 }
           /^[[:space:]]*num_bufs:/ {
             if (region ~ /RX/)      { sub(/num_bufs:.*/, "num_bufs: " rxnb) }
@@ -354,6 +399,8 @@ generate_yaml() {
           /^[[:space:]]*message_size:/  { sub(/message_size:.*/,  "message_size: " p); print; next }
           /^[[:space:]]*rx_depth:/      { sub(/rx_depth:.*/,      "rx_depth: " rxnb); print; next }
           /^[[:space:]]*tx_depth:/      { sub(/tx_depth:.*/,      "tx_depth: " txnb); print; next }
+          /^[[:space:]]*send:/    { if (uni != "" && role == "server") { sub(/send:.*/,    "send: false") }    print; next }
+          /^[[:space:]]*receive:/ { if (uni != "" && role == "client") { sub(/receive:.*/, "receive: false") } print; next }
           { print }
         ' > "$dst"
       done
@@ -431,6 +478,7 @@ run_cell() {
     bench_extra+=(--workload "$WORKLOAD_EFF")
     bench_extra+=(--workload-gemm-dim "$GEMM_DIM")
     [[ -n "$SYNC_INTERVAL" ]] && bench_extra+=(--workload-sync-interval "$SYNC_INTERVAL")
+    [[ -n "$MAX_INFLIGHT" ]] && bench_extra+=(--workload-max-inflight "$MAX_INFLIGHT")
   fi
   # Shutdown ordering: the server must keep receiving until the client has fully
   # stopped sending, otherwise the client's last in-flight messages have no peer
@@ -487,7 +535,14 @@ run_cell() {
     # addresses over the wire rather than short-cutting the kernel's local table.
     local yaml="$cell_dir/config.yaml"
     generate_yaml "$yaml" "$payload" "$batch"
-    ip netns exec dq_wire_server "$BENCH_BIN" "$yaml" \
+    # Optionally wrap the server (receive + GPU-workload) in nsys. Placed AFTER the
+    # netns exec so nsys traces the bench, not `ip netns exec`.
+    local -a nsys_pre=()
+    if [[ -n "$NSYS" ]]; then
+      nsys_pre=("$NSYS_BIN" profile --trace=cuda,osrt --sample=cpu --cpuctxsw=process-tree
+                --force-overwrite=true --output "$cell_dir/roce_server")
+    fi
+    ip netns exec dq_wire_server "${nsys_pre[@]}" "$BENCH_BIN" "$yaml" \
         --seconds "$server_seconds" "${bench_extra[@]}" --mode server \
         > "$cell_dir/server_stdout.txt" 2> "$cell_dir/server_stderr.txt" &
     local server_pid=$!
@@ -498,6 +553,15 @@ run_cell() {
     wait "$server_pid" 2>/dev/null || true
     cat "$cell_dir/server_stdout.txt" >> "$stdout"
     cat "$cell_dir/server_stderr.txt" >> "$stderr"
+    if [[ -n "$NSYS" && -f "$cell_dir/roce_server.nsys-rep" ]]; then
+      echo "=== nsys GPU kernel summary ($cell) ===" >&2
+      "$NSYS_BIN" stats --report cuda_gpu_kern_sum --format table \
+          "$cell_dir/roce_server.nsys-rep" >&2 || true
+      echo "=== nsys CUDA API summary ($cell) ===" >&2
+      "$NSYS_BIN" stats --report cuda_api_sum --format table \
+          "$cell_dir/roce_server.nsys-rep" >&2 || true
+      echo "nsys report: $cell_dir/roce_server.nsys-rep" >&2
+    fi
     # RDMA prints "Client complete: ... send_completions=N send_bytes=N seconds=S".
     pkts="$(extract_field 'Client complete' send_completions "$stdout")"
     bytes="$(extract_field 'Client complete' send_bytes "$stdout")"

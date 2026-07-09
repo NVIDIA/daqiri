@@ -48,6 +48,21 @@ int parse_workload_gemm_dim(int argc, char** argv);
 // default) if unset. Mirrors parse_workload's stride.
 int parse_workload_sync_interval(int argc, char** argv);
 
+// Upper bound for the RoCE recv-path in-flight cap (--workload-max-inflight,
+// below). Kept one below the internal CUDA-event pool (kEventPoolSize in
+// bench_workload.cu) so record_event() never starves exactly at the cap and
+// falls back to a per-message sync.
+constexpr int kMaxWorkloadInflight = 63;
+
+// Parse "--workload-max-inflight N" from argv: for the event-recycling RoCE recv
+// path, the max number of recv buffers that may have in-flight GPU work before
+// the receive thread blocks on the oldest event (backpressure). Larger N absorbs
+// more receive/compute jitter before stalling reposts, bounded by the event pool
+// (kMaxWorkloadInflight) and the posted-receive window (rx_depth). Returns 0 when
+// unset, so the caller applies its computed default (min(rx_depth/2, 32)). Mirrors
+// parse_workload's stride. Ignored by the run()+sync() DPDK/socket path.
+int parse_workload_max_inflight(int argc, char** argv);
+
 // Lower-case name ("none"/"fft"/"gemm"); used for the run_spark_bench.sh
 // post_process CSV column and log lines.
 const char* workload_name(BenchWorkload workload);

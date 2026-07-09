@@ -38,8 +38,12 @@ constexpr int kFftLen = 1024;
 // Default working-set size when the caller passes bytes_per_burst == 0.
 constexpr size_t kDefaultBytes = 1u << 16;  // 64 KiB
 // Fixed CUDA-event pool for record_event(); comfortably above the RoCE recv-path
-// in-flight cap (min(rx_depth/2, 8)). Created lazily on first record_event().
-constexpr int kEventPoolSize = 32;
+// in-flight cap (default min(rx_depth/2, 32), overridable up to kMaxWorkloadInflight
+// via --workload-max-inflight). Created lazily on first record_event().
+constexpr int kEventPoolSize = 64;
+static_assert(kEventPoolSize > daqiri::bench::kMaxWorkloadInflight,
+              "event pool must stay above the max in-flight cap so record_event() "
+              "never starves exactly at the cap");
 
 cufftHandle as_fft_plan(int p) {
   return static_cast<cufftHandle>(p);
@@ -101,6 +105,18 @@ int parse_workload_sync_interval(int argc, char** argv) {
     }
   }
   return 2;  // default sync depth
+}
+
+int parse_workload_max_inflight(int argc, char** argv) {
+  for (int i = 2; i + 1 < argc; i += 2) {
+    if (std::string(argv[i]) == "--workload-max-inflight") {
+      const long long v = std::atoll(argv[i + 1]);
+      if (v > 0) {
+        return static_cast<int>(v);
+      }
+    }
+  }
+  return 0;  // unset -> caller applies its computed default
 }
 
 const char* workload_name(BenchWorkload workload) {
