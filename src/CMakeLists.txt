@@ -64,7 +64,14 @@ endif()
 option(DAQIRI_ENABLE_GDS "Enable cuFile-backed burst file writes from CUDA device memory" OFF)
 option(DAQIRI_ENABLE_OTEL_METRICS "Enable OpenTelemetry metrics instrumentation" OFF)
 option(DAQIRI_ENABLE_S3 "Enable AWS SDK-backed raw packet writes to S3" OFF)
+option(DAQIRI_ENABLE_PCIE "Enable the PCIe GPUDirect stream implementation" OFF)
 set(DOCA_PATH /opt/mellanox/doca)
+
+if(DAQIRI_ENABLE_PCIE AND CUDAToolkit_VERSION VERSION_LESS 12.8)
+  message(FATAL_ERROR
+    "DAQIRI_ENABLE_PCIE=ON requires CUDA Toolkit 12.8 or newer for "
+    "CU_MEM_RANGE_FLAG_DMA_BUF_MAPPING_TYPE_PCIE")
+endif()
 
 if(DAQIRI_ENABLE_OTEL_METRICS)
   add_compile_definitions(DAQIRI_ENABLE_OTEL_METRICS=1)
@@ -135,6 +142,10 @@ else()
     "libnuma NOT found: pools/rings use first-touch placement (install libnuma-dev "
     "for NUMA pinning that matches DPDK). This may cost memory bandwidth on multi-socket systems.")
 endif()
+# The top-level package metadata is generated after this subdirectory returns.
+# Propagate the optional dependency result so static pkg-config consumers get
+# the same libnuma link requirement as the compiled targets.
+set(DAQIRI_HAVE_NUMA ${DAQIRI_HAVE_NUMA} PARENT_SCOPE)
 
 # Common library. dpdk_log.cpp and engine_dpdk.cpp hold the only rte_* code left
 # in daqiri_common and are added below only when the dpdk engine is built.
@@ -351,3 +362,41 @@ foreach(ENGINE IN LISTS DAQIRI_ENGINE_INTERNAL_LIST)
     target_compile_definitions(daqiri_common PUBLIC "DAQIRI_ENGINE_${ENGINE_UPPER}=1")
     target_link_libraries(daqiri_common PRIVATE ${ENGINE_TARGET})
 endforeach()
+
+# PCIe is selected by stream_type rather than DAQIRI_ENGINE. Keep it outside
+# the public NIC-engine list and expose only the feature compile definition.
+if(DAQIRI_ENABLE_PCIE)
+  message(STATUS "Adding PCIe stream implementation to the configuration")
+  set(ENGINE_TARGET daqiri_pcie)
+  add_library(${ENGINE_TARGET})
+  add_subdirectory(engines/pcie)
+  target_compile_definitions(${ENGINE_TARGET} PUBLIC DAQIRI_ENABLE_PCIE=1)
+  target_include_directories(${ENGINE_TARGET}
+      PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../include
+        ${DAQIRI_GENERATED_INCLUDE_DIR}
+        ${DAQIRI_SPDLOG_INCLUDE_DIR}
+  )
+  target_link_libraries(${ENGINE_TARGET}
+      PRIVATE CUDA::cudart CUDA::cuda_driver ${DAQIRI_YAML_TARGET})
+  if(DAQIRI_HAVE_NUMA)
+    target_include_directories(${ENGINE_TARGET} PRIVATE ${DAQIRI_NUMA_INCLUDE_DIR})
+    target_link_libraries(${ENGINE_TARGET} PRIVATE ${DAQIRI_NUMA_LIBRARY})
+  endif()
+  set_target_properties(${ENGINE_TARGET} PROPERTIES
+      OUTPUT_NAME "daqiri_pcie"
+      EXPORT_NAME "pcie"
+      VERSION "${CMAKE_PROJECT_VERSION}"
+      SOVERSION "${DAQIRI_ABI_VERSION}"
+      INSTALL_RPATH "$ORIGIN"
+  )
+  install(TARGETS ${ENGINE_TARGET}
+      EXPORT daqiriTargets
+      COMPONENT daqiri-cpp
+  )
+  target_compile_definitions(daqiri_common PUBLIC DAQIRI_ENABLE_PCIE=1)
+  target_link_libraries(daqiri_common PRIVATE ${ENGINE_TARGET})
+else()
+  target_compile_definitions(daqiri_common PUBLIC DAQIRI_ENABLE_PCIE=0)
+endif()

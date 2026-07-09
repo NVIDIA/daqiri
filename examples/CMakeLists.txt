@@ -57,6 +57,7 @@ set(DAQIRI_BENCH_CONFIGS
   daqiri_bench_rdma_tx_rx.yaml
   daqiri_bench_socket_udp_tx_rx.yaml
   daqiri_bench_socket_tcp_tx_rx.yaml
+  daqiri_bench_pcie_sw_loopback.yaml
 )
 
 set(DAQIRI_PYTHON_EXAMPLES
@@ -67,7 +68,7 @@ function(link_daqiri_bench target)
   target_compile_features(${target} PRIVATE cxx_std_17)
   if(NOT BUILD_SHARED_LIBS AND UNIX AND NOT APPLE)
     set(DAQIRI_EXAMPLE_STATIC_LIBS daqiri::daqiri)
-    foreach(engine IN ITEMS dpdk socket rdma)
+    foreach(engine IN ITEMS dpdk socket rdma pcie)
       if(TARGET daqiri_${engine})
         list(APPEND DAQIRI_EXAMPLE_STATIC_LIBS daqiri_${engine})
       endif()
@@ -137,6 +138,15 @@ set_target_properties(daqiri_bench_socket PROPERTIES
   BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
 )
 
+if(DAQIRI_ENABLE_PCIE)
+  add_executable(daqiri_bench_pcie pcie_bench.cpp)
+  link_daqiri_bench(daqiri_bench_pcie)
+  target_link_libraries(daqiri_bench_pcie PRIVATE CUDA::cudart)
+  set_target_properties(daqiri_bench_pcie PROPERTIES
+    BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
+  )
+endif()
+
 # Microbenchmark for the daqiri::Ring / daqiri::ObjectPool primitives. Always
 # built (the primitives are header-only); when the dpdk engine is present it also
 # compiles the rte_ring / rte_mempool comparison arm.
@@ -180,6 +190,9 @@ install(TARGETS
         daqiri_bench_socket
         daqiri_pool_ring_bench
         RUNTIME DESTINATION bin)
+if(DAQIRI_ENABLE_PCIE)
+  install(TARGETS daqiri_bench_pcie RUNTIME DESTINATION bin)
+endif()
 install(FILES ${DAQIRI_BENCH_CONFIGS}
         DESTINATION bin)
 install(FILES ${DAQIRI_PYTHON_EXAMPLES}

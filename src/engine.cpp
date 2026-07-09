@@ -29,6 +29,9 @@
 #if DAQIRI_ENGINE_IBVERBS
 #include "src/engines/ibverbs/daqiri_ibverbs_engine.h"
 #endif
+#if DAQIRI_ENABLE_PCIE
+#include "src/engines/pcie/daqiri_pcie_engine.h"
+#endif
 
 #include <chrono>
 #include <arpa/inet.h>
@@ -55,6 +58,7 @@ namespace daqiri {
 // Initialize static members
 std::unique_ptr<Engine> EngineFactory::EngineInstance_ = nullptr;  // Initialize static members
 EngineType EngineFactory::EngineType_ = EngineType::UNKNOWN;
+StreamType EngineFactory::StreamType_ = StreamType::INVALID;
 
 extern void initialize_engine(Engine* _engine);
 
@@ -282,6 +286,25 @@ std::unique_ptr<Engine> EngineFactory::create_instance(EngineType type) {
   return _engine;
 }
 
+std::unique_ptr<Engine> EngineFactory::create_instance(StreamType type) {
+  std::unique_ptr<Engine> engine;
+  if (type == StreamType::PCIE) {
+#if DAQIRI_ENABLE_PCIE
+    engine = std::make_unique<PcieEngine>();
+#else
+    throw std::invalid_argument(
+        "stream_type 'pcie' is not available in this build; rebuild with "
+        "-DDAQIRI_ENABLE_PCIE=ON");
+#endif
+  } else {
+    throw std::invalid_argument("Stream type '" + stream_type_to_string(type) +
+                                "' does not directly select an internal engine");
+  }
+
+  initialize_engine(engine.get());
+  return engine;
+}
+
 template <typename Config>
 EngineType EngineFactory::get_engine_type(const Config& config) {
   // Ensure that Config has a method yaml_nodes() that returns a collection
@@ -297,6 +320,10 @@ EngineType EngineFactory::get_engine_type(const Config& config) {
       const std::string stream_type_str = node["stream_type"].template as<std::string>("");
       const auto stream_type = stream_type_from_string(stream_type_str);
       if (stream_type == StreamType::INVALID) { continue; }
+
+      if (stream_type == StreamType::PCIE) {
+        return EngineType::DEFAULT;
+      }
 
       const std::string engine_str = node["engine"].template as<std::string>("");
       if (!engine_str.empty() && engine_str != DAQIRI_ENGINE_STR__DEFAULT) {

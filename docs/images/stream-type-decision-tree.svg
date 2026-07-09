@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1200" role="img" aria-labelledby="title desc">
   <title id="title">DAQIRI stream type decision tree</title>
-  <desc id="desc">Choose the planned PCIe path for programmable PCIe sensors, socket TCP or UDP endpoint URIs for non-NVIDIA NICs, RoCE endpoint URIs for NVIDIA NICs talking to an RDMA endpoint, or raw Ethernet for NVIDIA NICs without an existing RoCE endpoint.</desc>
+  <desc id="desc">Choose PCIe for programmable PCIe sensors, socket TCP or UDP endpoint URIs for non-NVIDIA NICs, RoCE endpoint URIs for NVIDIA NICs talking to an RDMA endpoint, or raw Ethernet for NVIDIA NICs without an existing RoCE endpoint.</desc>
   <defs>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
       <feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="#1f2937" flood-opacity="0.16"/>
@@ -14,7 +14,7 @@
   <rect width="1600" height="138" fill="#0b1017"/>
   <rect y="132" width="1600" height="7" fill="#76b900"/>
   <rect x="64" y="42" width="82" height="48" rx="6" fill="#76b900"/>
-  <text x="164" y="69" fill="#ffffff" font-family="Inter, Arial, sans-serif" font-size="42" font-weight="800">DAQIRI Networking Engine Decision Tree</text>
+  <text x="164" y="69" fill="#ffffff" font-family="Inter, Arial, sans-serif" font-size="42" font-weight="800">DAQIRI Stream Type Decision Tree</text>
   <text x="164" y="102" fill="#c7d0dd" font-family="Inter, Arial, sans-serif" font-size="21">Choose the stream type and endpoint scheme that match the sensor, NIC, and peer.</text>
 
   <!-- Connectors -->
@@ -58,7 +58,7 @@
   <g filter="url(#shadow)">
     <rect x="1250" y="220" width="310" height="110" rx="14" fill="#e6f7ff" stroke="#0b6f8f" stroke-width="3"/>
     <text x="1405" y="278" text-anchor="middle" fill="#121827" font-family="Inter, Arial, sans-serif" font-size="25" font-weight="800">stream_type = pcie</text>
-    <text x="1405" y="307" text-anchor="middle" fill="#0b6f8f" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="800">under development</text>
+    <text x="1405" y="307" text-anchor="middle" fill="#0b6f8f" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="800">DMA-BUF GPUDirect</text>
   </g>
 
   <g filter="url(#shadow)">
