@@ -51,6 +51,18 @@ auto status = daqiri::daqiri_init(config);
 After `daqiri_init()` returns `Status::SUCCESS`, all memory regions are allocated, NIC
 queues are configured, and worker threads are running.
 
+Use the stream query when behavior depends on the configured transport:
+
+```cpp
+if (daqiri::get_stream_type() == daqiri::StreamType::PCIE) {
+    // One queue per direction; no network flow or header operations.
+}
+```
+
+For PCIe, `get_engine_type()` returns `EngineType::DEFAULT`: PCIe has no
+user-selectable engine. DMA-BUF is an internal registration mechanism and is not
+represented by `EngineType`.
+
 Only one engine may be active in a process. Calling `daqiri_init()` again before
 `shutdown()` returns `Status::INTERNAL_ERROR` and leaves the running engine unchanged.
 After `shutdown()` completes, a later `daqiri_init()` creates a fresh engine instance and
@@ -395,6 +407,40 @@ cases the application must **not** free or otherwise access the burst afterwards
 `NO_SPACE_AVAILABLE` is the only failure a correctly-configured sender encounters
 at runtime.
 
+### PCIe GPU-buffer ordering
+
+The RX and TX calls are unchanged for `stream_type: "pcie"`, but a free or send
+call crosses the ownership boundary with the FPGA:
+
+```cpp
+// RX: complete all GPU reads before returning the FPGA's slot.
+cudaMemcpy(host_copy, daqiri::get_packet_ptr(rx_burst, 0), bytes,
+           cudaMemcpyDeviceToHost);  // synchronous example
+daqiri::free_all_packets_and_burst_rx(rx_burst);
+
+// TX: complete all GPU writes before allowing the FPGA to read the slot.
+cudaMemcpy(daqiri::get_packet_ptr(tx_burst, 0), host_data, bytes,
+           cudaMemcpyHostToDevice);  // synchronous example
+daqiri::send_tx_burst(tx_burst);
+```
+
+With asynchronous CUDA work, synchronize the producing TX stream before
+`send_tx_burst()` and the consuming RX stream before the packet/burst free call.
+Do not keep a persistent kernel touching slots after ownership transfers. DAQIRI
+does the required GPUDirect RX visibility operation before returning a completed
+burst, but it cannot infer when application CUDA work is done.
+
+An RX slot is credited back to the FPGA only when its packet is freed. A TX slot
+is reclaimed only after the FPGA reports that every PCIe read has completed.
+Holding RX bursts or a slow FPGA therefore creates normal backpressure rather
+than permitting slot overwrite.
+
+PCIe has no flow IDs or network headers: `get_packet_flow_id()` returns `0`, and
+flow, MAC/header, scheduled-send, timestamp, and socket/RDMA helpers return
+`Status::NOT_SUPPORTED`. See
+[PCIe / GPUDirect Benchmarking](../benchmarks/pcie_benchmarking.md) for the full
+driver/FPGA ordering contract.
+
 ### Timed Transmission
 
 For precise packet scheduling (requires ConnectX-7+):
@@ -619,6 +665,7 @@ workflow sections above show the common call order and ownership rules.
 | `daqiri_init_from_yaml_string(const std::string &yaml_string)` | Initialize from YAML content. |
 | `daqiri_init_from_yaml_file(const std::string &yaml_path)` | Initialize from a YAML file path. |
 | `parse_network_config(...)` | Parse YAML into `NetworkConfig` without starting the engine. |
+| `get_stream_type()` | Return the active stream type after initialization. |
 | `get_engine_type()` | Return the active engine type after initialization. |
 | `get_engine_type(config)` | Return the engine type selected by a config object. |
 | `shutdown()` | Stop DAQIRI and release engine-owned resources. |

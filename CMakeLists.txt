@@ -51,7 +51,15 @@ endif()
 option(DAQIRI_BUILD_PYTHON "Build Python bindings" OFF)
 option(DAQIRI_BUILD_EXAMPLES "Build standalone examples" ON)
 option(DAQIRI_ENABLE_OTEL_METRICS "Enable OpenTelemetry metrics instrumentation" OFF)
+option(DAQIRI_ENABLE_PCIE "Enable the PCIe GPUDirect stream implementation" OFF)
 set(DAQIRI_ENGINE "dpdk ibverbs" CACHE STRING "Optional engine implementations to build: dpdk, ibverbs (Linux sockets are always built in)")
+
+# A pybind11 extension is always a shared module. When DAQIRI itself is built
+# static, every archive linked into that module (including vendored yaml-cpp)
+# must still contain position-independent objects.
+if(DAQIRI_BUILD_PYTHON AND NOT BUILD_SHARED_LIBS)
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
 
 add_subdirectory(src)
 
@@ -111,7 +119,7 @@ else()
 endif()
 
 set(DAQIRI_PC_REQUIRES "")
-set(DAQIRI_PC_REQUIRES_PRIVATE "libdpdk")
+set(DAQIRI_PC_REQUIRES_PRIVATE_LIST "")
 set(DAQIRI_PC_LIBS "-lyaml-cpp")
 if(DAQIRI_ENABLE_OTEL_METRICS)
   string(APPEND DAQIRI_PC_LIBS " -lopentelemetry_api")
@@ -119,9 +127,34 @@ endif()
 # The ibverbs engine (and the socket RoCE path it backs) needs libibverbs /
 # librdmacm. Plain Linux UDP/TCP sockets need nothing extra.
 separate_arguments(DAQIRI_PC_ENGINE_LIST UNIX_COMMAND "${DAQIRI_ENGINE}")
+list(FIND DAQIRI_PC_ENGINE_LIST "dpdk" DAQIRI_PC_HAS_DPDK_IDX)
 list(FIND DAQIRI_PC_ENGINE_LIST "ibverbs" DAQIRI_PC_HAS_IBVERBS_IDX)
+if(NOT DAQIRI_PC_HAS_DPDK_IDX EQUAL -1)
+  list(APPEND DAQIRI_PC_REQUIRES_PRIVATE_LIST "libdpdk")
+endif()
 if(NOT DAQIRI_PC_HAS_IBVERBS_IDX EQUAL -1)
-  string(APPEND DAQIRI_PC_REQUIRES_PRIVATE " libibverbs librdmacm")
+  list(APPEND DAQIRI_PC_REQUIRES_PRIVATE_LIST "libibverbs" "librdmacm" "libmlx5")
+endif()
+string(JOIN " " DAQIRI_PC_REQUIRES_PRIVATE ${DAQIRI_PC_REQUIRES_PRIVATE_LIST})
+
+# A static DAQIRI build consists of mutually-referencing common and engine
+# archives. Keep them in one linker group, mirroring the in-tree examples, and
+# include only the engines that were actually built.
+set(DAQIRI_PC_MAIN_LIBS "-ldaqiri")
+if(NOT BUILD_SHARED_LIBS)
+  set(DAQIRI_PC_STATIC_ARCHIVES "-ldaqiri" "-ldaqiri_socket")
+  if(NOT DAQIRI_PC_HAS_DPDK_IDX EQUAL -1)
+    list(APPEND DAQIRI_PC_STATIC_ARCHIVES "-ldaqiri_dpdk")
+  endif()
+  if(NOT DAQIRI_PC_HAS_IBVERBS_IDX EQUAL -1)
+    list(APPEND DAQIRI_PC_STATIC_ARCHIVES "-ldaqiri_rdma" "-ldaqiri_ibverbs")
+  endif()
+  if(DAQIRI_ENABLE_PCIE)
+    list(APPEND DAQIRI_PC_STATIC_ARCHIVES "-ldaqiri_pcie")
+  endif()
+  string(JOIN " " DAQIRI_PC_STATIC_ARCHIVES_STR ${DAQIRI_PC_STATIC_ARCHIVES})
+  set(DAQIRI_PC_MAIN_LIBS
+      "-Wl,--start-group ${DAQIRI_PC_STATIC_ARCHIVES_STR} -Wl,--end-group")
 endif()
 
 set(DAQIRI_PC_REQUIRES_LINE "")
@@ -147,6 +180,9 @@ if(CUDAToolkit_LIBRARY_DIR)
 endif()
 if(DAQIRI_ENABLE_S3)
   string(APPEND DAQIRI_PC_LIBS_PRIVATE " -laws-cpp-sdk-s3 -laws-cpp-sdk-core")
+endif()
+if(DAQIRI_HAVE_NUMA)
+  string(APPEND DAQIRI_PC_LIBS_PRIVATE " -lnuma")
 endif()
 
 configure_file(

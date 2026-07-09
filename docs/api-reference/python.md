@@ -70,6 +70,10 @@ print(daqiri.__version__)
 print(daqiri.version_string(), daqiri.abi_version())
 ```
 
+After initialization, `daqiri.get_stream_type()` is the authoritative transport
+query. For `StreamType.PCIE`, `get_engine_type()` returns
+`EngineType.DEFAULT`; DMA-BUF is internal and is not an engine enum value.
+
 PyYAML is required at runtime when calling `daqiri_init()` with a Python `dict`
 or a config-like object that provides `as_dict()`.
 
@@ -363,6 +367,27 @@ both cases the application must **not** free or otherwise access the burst
 afterwards. `NO_SPACE_AVAILABLE` is the only failure a correctly-configured
 sender encounters at runtime.
 
+### PCIe GPU-buffer ordering
+
+PCIe uses the same Python burst calls, with one additional ownership rule:
+finish every GPU write to a TX packet before `send_tx_burst()`, and finish every
+GPU read from an RX packet before calling a packet/burst free helper. The free
+call credits an RX slot back to the FPGA, and a successful send lets the FPGA
+read the TX slot. DAQIRI cannot synchronize application-owned CUDA streams for
+you.
+
+Use the synchronization primitive of the CUDA Python library that owns the work
+(for example, a CuPy stream synchronization) at those boundaries. Do not keep a
+persistent kernel touching FPGA-owned slots. DAQIRI publishes an RX burst only
+after applying the platform's required GPUDirect visibility operation; it
+reclaims TX storage only after the FPGA reports that all reads completed.
+
+PCIe supports no flows or network headers. Flow, MAC/header, scheduled-send,
+timestamp, and socket/RDMA helpers return `Status.NOT_SUPPORTED`, while
+`get_packet_flow_id()` returns `0`. See
+[PCIe / GPUDirect Benchmarking](../benchmarks/pcie_benchmarking.md) for the
+driver/FPGA protocol.
+
 ### Timed Transmission
 
 For precise packet scheduling (requires ConnectX-7+):
@@ -511,6 +536,7 @@ The workflow sections above show the common call order and ownership rules.
 | `parse_network_config(yaml_string_or_path)` | `(Status, NetworkConfig)` |
 | `parse_network_config_from_yaml_string(yaml_string)` | `(Status, NetworkConfig)` |
 | `parse_network_config_from_yaml_file(yaml_path)` | `(Status, NetworkConfig)` |
+| `get_stream_type()` | `StreamType` |
 | `get_engine_type()` | `EngineType` |
 | `shutdown()` | `None` |
 | `print_stats()` | `None` |
@@ -656,7 +682,7 @@ encapsulation/push rules are configured in YAML under `tx.flows`.
 | `Direction` | `RX`, `TX`, `TX_RX` |
 | `BufferLocation` | `CPU`, `GPU`, `CPU_GPU_SPLIT` |
 | `MemoryKind` | `HOST`, `HOST_PINNED`, `HUGE`, `DEVICE`, `INVALID` |
-| `StreamType` | `RAW`, `SOCKET`, `INVALID` |
+| `StreamType` | `RAW`, `SOCKET`, `INVALID`, `PCIE` |
 | `LoopbackType` | `DISABLED`, `LOOPBACK_TYPE_SW` |
 | `RDMAMode` | `CLIENT`, `SERVER`, `INVALID` |
 | `RDMATransportMode` | `RC`, `UC`, `UD`, `INVALID` |
@@ -686,7 +712,7 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `BurstHeaderParams` | Burst metadata: packet count, port, queue, segment count, byte totals, and reorder flags. |
 | `ReorderBurstInfo` | Metadata for reordered aggregate bursts. |
 | `NetworkConfig` | Top-level parsed DAQIRI configuration. |
-| `CommonConfig` | Global stream type, engine selection, direction, loopback, and core settings. (Transport protocol is derived from the endpoint URI scheme.) |
+| `CommonConfig` | Global stream type, optional network-engine selection, direction, loopback, and core settings. PCIe rejects an explicit engine; socket transport protocol is derived from the endpoint URI scheme. |
 | `InterfaceConfig` | Per-interface address, socket/RoCE/RDMA, RX, and TX configuration. |
 | `RxConfig` | RX flow isolation, timestamps, queues, flows, flex items, and reorder configs. |
 | `TxConfig` | TX accurate-send flag, queues, and flows. |

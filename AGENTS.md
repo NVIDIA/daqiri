@@ -12,10 +12,14 @@ cmake --install build --prefix /opt/daqiri
 
 # Container build (compiles patched DPDK from source)
 BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
+
+# PCIe-only container (no DPDK or ibverbs engine)
+BASE_TARGET=base-deps DAQIRI_ENABLE_PCIE=ON DAQIRI_ENGINE="" scripts/build-container.sh
 ```
 
 CMake options (full table in `docs/getting-started.md`):
 - `DAQIRI_ENGINE` — space-separated list of optional engines to compile. Valid values: `dpdk` (raw Ethernet) and `ibverbs` (RDMA/RoCE). Linux sockets (UDP/TCP) are always built in, so there is no `socket` value. Default is `"dpdk ibverbs"`.
+- `DAQIRI_ENABLE_PCIE` — builds the `stream_type: "pcie"` implementation and benchmark independently of `DAQIRI_ENGINE` (default `OFF`; requires CUDA Toolkit 12.8+).
 - `DAQIRI_BUILD_PYTHON` — builds `pybind11` bindings from `python/`.
 - `DAQIRI_BUILD_EXAMPLES` — builds the benchmark executables (default `ON`).
 - `DAQIRI_ENABLE_OTEL_METRICS` — enables OpenTelemetry metrics instrumentation (default `OFF`).
@@ -42,6 +46,7 @@ There is no unit test suite. Verification is done via the benchmark executables 
 | `daqiri_bench_raw_reorder_quantize` | `raw_reorder_quantize_bench.cpp` | `daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml` |
 | `daqiri_bench_rdma` | `rdma_bench.cpp` | `daqiri_bench_rdma_tx_rx.yaml`, `daqiri_bench_rdma_tx_rx_spark.yaml`, `daqiri_bench_rdma_tx_rx_spark_xhost.yaml`, `daqiri_bench_rdma_tx_rx_spark_netns.yaml` (combined-role netns base; `run_spark_bench.sh` splits per role via `scripts/gen_spark_netns_config.py`) |
 | `daqiri_bench_socket` | `socket_bench.cpp` | `daqiri_bench_socket_{udp,tcp}_tx_rx.yaml`, `daqiri_bench_socket_{udp,tcp}_tx_rx_spark_netns.yaml` (combined-role netns bases) |
+| `daqiri_bench_pcie` | `pcie_bench.cpp` | `daqiri_bench_pcie_sw_loopback.yaml` — deterministic GPU-buffer validation through the PCIe software provider; built with `DAQIRI_ENABLE_PCIE=ON` |
 | `daqiri_pool_ring_bench` | `pool_ring_bench.cpp` | none — microbenchmark comparing `daqiri::Ring`/`daqiri::ObjectPool` vs DPDK `rte_ring`/`rte_mempool` (SPSC/MPMC, single/bulk, thread sweep). The `rte_*` comparison arm compiles only in a DPDK-enabled build; takes no YAML/CLI args |
 
 The four `raw_*` benches share `raw_bench_common.{cpp,h}` and accept `--seconds N`. `daqiri_bench_rdma` and `daqiri_bench_socket` also take `--mode {tx,rx,both}`. `daqiri_bench_raw_gpudirect`, `daqiri_bench_raw_hds`, `daqiri_bench_rdma`, and `daqiri_bench_socket` additionally accept `--workload none|fft|gemm|gemm_fp16` — a reusable representative GPU workload (`examples/bench_workload.{h,cu}`, cuFFT/cuBLAS) run once per received reorder window on the **actual received payload**. Each backend first assembles the burst's payloads into one contiguous GPU buffer via `examples/bench_pipeline.{h,cu}` (`ReorderPipeline`): a sequence-number reorder kernel for the out-of-order transports (DPDK raw, UDP) and an arrival-order gather for the in-order ones (RoCE RC, TCP); sockets stage host→device first since their payloads land in pageable host memory. The reorder/gather kernels (`packet_reorder_copy_payload_by_sequence`, `packet_gather_copy_payload`) live in `src/kernels.cu`. `gemm` is FP32 `cublasSgemm`; `gemm_fp16` is the same-size mixed-precision FP16/tensor-core `cublasGemmEx` (inference-style); the contiguous buffer supplies the FFT input / GEMM A operand. `--workload-batch-bytes N` decouples the compute working set from the I/O unit (RoCE sub-chunks each message; raw sizes its reorder window), enabling a batch-size sweep. Used by `run_spark_bench.sh`'s `WORKLOAD` / `WORKLOAD_BATCH` env (all backends) to fill the CSV `post_process` / `post_process_batch` columns (issue #15).
@@ -49,9 +54,10 @@ The four `raw_*` benches share `raw_bench_common.{cpp,h}` and accept `--seconds 
 ```bash
 ./build/examples/daqiri_bench_raw_gpudirect ./build/examples/daqiri_bench_raw_tx_rx.yaml --seconds 10
 ./build/examples/daqiri_bench_socket        ./build/examples/daqiri_bench_socket_udp_tx_rx.yaml --seconds 10 --mode both
+./build/examples/daqiri_bench_pcie          ./build/examples/daqiri_bench_pcie_sw_loopback.yaml --seconds 10 --mode both
 ```
 
-YAML files contain `<angle-bracket>` placeholders (PCIe addresses, CPU cores, MACs, IPs) that **must** be replaced for your system. `daqiri_bench_raw_sw_loopback.yaml` requires no physical link and is the fastest way to smoke-test a build.
+YAML files contain `<angle-bracket>` placeholders (PCIe addresses, CPU cores, MACs, IPs) that **must** be replaced for your system. `daqiri_bench_raw_sw_loopback.yaml` requires no physical link; `daqiri_bench_pcie_sw_loopback.yaml` requires no FPGA or board driver.
 
 Configs named `raw_rx_*` are RX-only — they initialize the RX path and wait for external traffic, so a standalone run can exit cleanly with `0` packets. Use the `tx_rx` configs for closed-loop smoke tests. NIC flow programming (RX flows, dynamic RX flows, `tx_eth_src`) requires a hardware loopback or cross-host wire test — see `docs/benchmarks/raw_benchmarking.md` (Flow programming smoke test); `daqiri_bench_raw_sw_loopback.yaml` only smoke-tests the build/runtime path.
 
@@ -76,6 +82,8 @@ clang-format -style=file -i -fallback-style=none <files>
 `src/engine.h` defines `daqiri::Engine` — an (almost) ABC with ~50 virtual methods covering init, RX/TX burst dequeue/enqueue, header-fill helpers, buffer free, socket connection helpers, runtime TCP/UDP `setsockopt` passthrough, and RDMA connection setup. Engines live in `src/engines/<name>/` (`dpdk/`, `rdma/`, `socket/`, `ibverbs/`). `DAQIRI_ENGINE` selects the optional `dpdk` and `ibverbs` engines at CMake configure time; the `socket` engine is always built. The user-facing value `ibverbs` builds **two** internal engines that both use libibverbs: `rdma` (`src/engines/rdma/`, `DAQIRI_ENGINE_RDMA`, RoCE/InfiniBand for socket `roce://`) and `ibverbs` (`src/engines/ibverbs/`, `DAQIRI_ENGINE_IBVERBS`, the pure-DevX MPRQ raw-Ethernet engine). Each engine produces its own static library (`daqiri_dpdk`, `daqiri_rdma`, `daqiri_socket`, `daqiri_ibverbs`) linked into `daqiri_common`, and each adds a `DAQIRI_ENGINE_<NAME>=1` compile definition.
 
 `EngineType` (`include/daqiri/types.h`) is resolved from `(stream_type, engine)`: `raw` defaults to `EngineType::DPDK`; `raw` + `engine: "ibverbs"` selects `EngineType::IBVERBS` (the MPRQ engine); `socket` + a `roce://` endpoint (or `engine: "ibverbs"`) selects `EngineType::RDMA`. The stream-aware `config_engine_from_string(str, stream_type)` overload encodes the `ibverbs`→`{IBVERBS for raw, RDMA for socket}` split. `EngineFactory` (in `engine.h`) is a singleton that instantiates the active engine. `daqiri_init(...)` resolves which engine to use from the `NetworkConfig` and then delegates everything through the `Engine` vtable. There is only ever **one** active `Engine` per process.
+
+PCIe is the exception to public engine selection: `stream_type: "pcie"` directly constructs the internal `PcieEngine`, rejects any YAML `engine:` key, and reports `EngineType::DEFAULT`. It is enabled by `DAQIRI_ENABLE_PCIE`, not `DAQIRI_ENGINE`. DMA-BUF is its v1 GPU-registration mechanism, not an engine; `nvidia-peermem` is not used for custom FPGA registration. The stable C driver/RTL ABI is `include/daqiri/pcie_abi.h`; hardware operation needs a board-specific driver and FPGA implementation, while `loopback: "sw"` selects the included software provider. PCIe permits one RX and one TX queue per interface (ID 0), dedicated `MemoryKind::DEVICE` regions, and no flows, HDS, reorder, timestamps, offloads, or scheduled send.
 
 The always-built socket engine implements Linux UDP/TCP streams directly. Applications that need kernel socket tuning call `socket_setsockopt(conn_id, level, optname, optval, optlen)` after resolving a TCP/UDP connection ID; DAQIRI passes the numeric Linux constants through without maintaining a symbolic option map. `socket_setsockopt` is not supported for `roce://` connections, which delegate to the RDMA/ibverbs path.
 
@@ -123,10 +131,11 @@ The web docs live in `docs/` and are built with [MkDocs Material](https://squidf
   - `docs/benchmarks/benchmarks.md` — overview and engine-selection decision tree
   - `docs/benchmarks/socket_benchmarking.md` — "Socket and RDMA Benchmarking" (TCP/UDP and RoCE/RDMA)
   - `docs/benchmarks/raw_benchmarking.md` — "Raw Ethernet Benchmarking" (DPDK `raw_*` benches)
+  - `docs/benchmarks/pcie_benchmarking.md` — PCIe software loopback plus driver/FPGA ABI and ownership contract
   - `docs/benchmarks/performance-dgx-spark.md` — per-platform performance report for DGX Spark stream/protocol combinations (the long internal report lives outside the repo in `projects/daqiri-notes/`)
 - `docs/stylesheets/extra.css` — custom theme overrides
 
-**User-facing vocabulary:** the YAML schema uses `stream_type` (`raw`, `socket`, future `pcie`); for socket streams the transport is encoded in the endpoint URI scheme (`udp://`, `tcp://`, `roce://`) in `socket_config.local_addr`/`remote_addr`, **not** a separate `protocol` field. (`SocketProtocol` still exists internally, derived from the scheme.) **"Engine"** is the standard term for the specific library backing an implementation; it replaced the former "manager" and "backend" terms and is now used consistently across code (`src/engines/<name>/`, the `Engine` ABC, CMake `DAQIRI_ENGINE`), the API reference, tutorials, the landing page, and concept pages. The mapping: `stream_type: "raw"` is implemented by the `dpdk` engine; `stream_type: "socket"` with `udp://`/`tcp://` endpoints by the always-built `socket` engine; `stream_type: "socket"` with `roce://` endpoints by the `ibverbs` engine.
+**User-facing vocabulary:** the YAML schema uses `stream_type` (`raw`, `socket`, `pcie`); for socket streams the transport is encoded in the endpoint URI scheme (`udp://`, `tcp://`, `roce://`) in `socket_config.local_addr`/`remote_addr`, **not** a separate `protocol` field. (`SocketProtocol` still exists internally, derived from the scheme.) **"Engine"** is the standard term for the specific library backing a network implementation. The mapping: `stream_type: "raw"` is implemented by the `dpdk` engine; `stream_type: "socket"` with `udp://`/`tcp://` endpoints by the always-built `socket` engine; `stream_type: "socket"` with `roce://` endpoints by the `ibverbs` engine. `stream_type: "pcie"` has no user-selectable engine and rejects `engine:`.
 
 **Keeping docs in sync with code:** before committing changes, scan for the recurring drift hotspots:
 - **Stream-type list** (`src/engines/*/`) — README Engines table, `docs/getting-started.md`, `docs/concepts.md` (Stream Types section + Support and testing admonition), `docs/api-reference/configuration.md`

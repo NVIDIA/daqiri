@@ -539,6 +539,7 @@ void bind_enums(py::module_ &m) {
   py::enum_<StreamType>(m, "StreamType")
       .value("RAW", StreamType::RAW)
       .value("SOCKET", StreamType::SOCKET)
+      .value("PCIE", StreamType::PCIE)
       .value("INVALID", StreamType::INVALID);
 
   py::enum_<SocketProtocol>(m, "SocketProtocol")
@@ -1002,6 +1003,7 @@ PYBIND11_MODULE(_daqiri, m) {
 
   m.def("get_engine_type", static_cast<EngineType (*)()>(&get_engine_type),
         "Get the current engine type");
+  m.def("get_stream_type", &get_stream_type, "Get the current stream type");
   m.def("version_string", &version_string, "Get the DAQIRI package version");
   m.def("version_year", &version_year, "Get the DAQIRI CalVer year");
   m.def("version_month", &version_month, "Get the DAQIRI CalVer month");

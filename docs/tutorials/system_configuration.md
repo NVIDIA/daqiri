@@ -5,10 +5,59 @@ hide:
 
 # System Configuration
 
-DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking/ethernet-adapters/) (ConnectX-6 Dx or later) and a CUDA-capable GPU. Two reference platforms are documented in this tutorial — pick the one closest to yours below:
+DAQIRI's network streams require a suitable NIC, while its PCIe stream connects a
+programmable device directly to a CUDA-capable GPU. Two Ethernet reference
+platforms are documented in the tabs below; PCIe FPGA-specific checks precede
+them.
 
 - **IGX Orin** with a discrete GPU (e.g. [RTX 6000 Ada](https://www.nvidia.com/en-us/design-visualization/rtx-6000/)): peermem-based GPUDirect, a separate GPU BAR1, and a discrete-PCIe path between GPU and NIC. The originally-supported reference platform.
 - **DGX Spark** (Grace Blackwell **GB10** superchip): unified CPU/GPU memory via NVLink-C2C, integrated **ConnectX-7**, no peermem, and GPUDirect via `kind: host_pinned` data buffers.
+
+## PCIe FPGA Streams
+
+`stream_type: "pcie"` uses CUDA's PCIe BAR1 DMA-BUF export path. It does not use
+`nvidia-peermem`, and DMA-BUF is not an engine setting. CUDA Toolkit 12.8 or newer
+is required to request a PCIe mapping explicitly.
+
+The software provider (`loopback: "sw"`) needs only a discrete CUDA-capable GPU.
+For hardware operation, the system also needs a peer-capable FPGA endpoint, a
+trusted bitstream, and a board-specific character driver implementing DAQIRI's
+UAPI. DAQIRI ships the userspace provider and ABI, but not a board driver or FPGA
+RTL.
+
+Before trying a hardware configuration:
+
+1. Identify the GPU and FPGA BDFs with `nvidia-smi --query-gpu=pci.bus_id` and
+   `lspci -D`. Put the FPGA BDF in `interfaces[].address`.
+2. Inspect `lspci -tv` and keep the GPU and FPGA below the same PCIe root complex
+   where possible. Cross-root peer traffic is platform-dependent and often
+   blocked or routed through the host bridge.
+3. Confirm the GPU has enough BAR1 capacity for every dedicated RX and TX memory
+   region plus allocation alignment overhead:
+
+    ```bash
+    nvidia-smi -q | grep -A 3 "BAR1 Memory Usage"
+    ```
+
+4. Configure the IOMMU for an identity/pass-through peer mapping supported by
+   the board driver, or disable translation for the peer path. A translated
+   mapping that the FPGA driver cannot import is not usable.
+5. Confirm the board driver bound to the FPGA exposes an exclusive character
+   device and negotiates ABI magic `DQPC`, version `1.0`, with both the
+   `DMABUF_PCIE` and `DMA_FENCE` capabilities. DAQIRI will fail initialization
+   rather than fall back to an ambiguous mapping. The exact BDF-to-device-node
+   discovery convention is published in
+   [PCIe / GPUDirect Benchmarking](../benchmarks/pcie_benchmarking.md#character-device-discovery-and-exclusivity).
+
+The driver must retain and map every entry in the imported DMA-BUF scatter/gather
+list; a CUDA virtual address is not an FPGA bus address. The FPGA must fence
+payload writes before publishing RX completions and wait for every read response
+before publishing TX completions. PCIe Relaxed Ordering must not allow completion
+traffic to pass payload DMA. See
+[PCIe / GPUDirect Benchmarking](../benchmarks/pcie_benchmarking.md) for the ring,
+ownership, shutdown, and error contracts, and the
+[NVIDIA GPUDirect RDMA guide](https://docs.nvidia.com/cuda/gpudirect-rdma/) for
+platform background.
 
 <div class="platform-tabs" markdown="1">
 

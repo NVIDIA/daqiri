@@ -292,10 +292,186 @@ EngineType get_engine_type() {
   return EngineFactory::get_engine_type();
 }
 
+StreamType get_stream_type() {
+  return EngineFactory::get_stream_type();
+}
+
 template <typename Config>
 EngineType get_engine_type(const Config& config) {
   return EngineFactory::get_engine_type(config);
 }
+
+namespace detail {
+
+bool validate_pcie_config(const NetworkConfig& config) {
+  if (config.common_.stream_type != StreamType::PCIE) {
+    return true;
+  }
+
+  bool valid = true;
+  if (config.common_.engine != EngineType::DEFAULT ||
+      (config.common_.engine_type != EngineType::UNKNOWN &&
+       config.common_.engine_type != EngineType::DEFAULT)) {
+    DAQIRI_LOG_ERROR("stream_type 'pcie' does not accept an engine selection");
+    valid = false;
+  }
+  if (config.common_.protocol != SocketProtocol::INVALID) {
+    DAQIRI_LOG_ERROR("stream_type 'pcie' does not accept a socket protocol");
+    valid = false;
+  }
+  if (config.common_.loopback_ != LoopbackType::DISABLED &&
+      config.common_.loopback_ != LoopbackType::LOOPBACK_TYPE_SW) {
+    DAQIRI_LOG_ERROR("stream_type 'pcie' has an invalid loopback selection");
+    valid = false;
+  }
+
+  if (config.ifs_.empty() || config.ifs_.size() > MAX_INTERFACES) {
+    DAQIRI_LOG_ERROR("stream_type 'pcie' requires between one and {} interfaces", MAX_INTERFACES);
+    valid = false;
+  }
+
+  std::unordered_map<std::string, std::string> mr_owners;
+  auto validate_queue = [&](const CommonQueueConfig& queue, const std::string& owner,
+                            uint64_t pacing_mbps) {
+    if (queue.id_ != 0) {
+      DAQIRI_LOG_ERROR("PCIe queue '{}' must use id 0", queue.name_);
+      valid = false;
+    }
+    if (queue.mrs_.size() != 1) {
+      DAQIRI_LOG_ERROR("PCIe queue '{}' must reference exactly one memory region", queue.name_);
+      valid = false;
+      return;
+    }
+    if (!queue.offloads_.empty()) {
+      DAQIRI_LOG_ERROR("PCIe queue '{}' does not support offloads", queue.name_);
+      valid = false;
+    }
+    if (queue.split_boundary_ != 0 || queue.extra_queue_config_ != nullptr) {
+      DAQIRI_LOG_ERROR("PCIe queue '{}' does not support HDS or engine-specific queue data",
+                       queue.name_);
+      valid = false;
+    }
+    if (pacing_mbps != 0) {
+      DAQIRI_LOG_ERROR("PCIe queue '{}' does not support pacing_mbps", queue.name_);
+      valid = false;
+    }
+
+    const auto& mr_name = queue.mrs_.front();
+    const auto mr_it = config.mrs_.find(mr_name);
+    if (mr_it == config.mrs_.end()) {
+      DAQIRI_LOG_ERROR("PCIe queue '{}' references unknown memory region '{}'", queue.name_,
+                       mr_name);
+      valid = false;
+      return;
+    }
+
+    const auto& mr = mr_it->second;
+    if (mr.kind_ != MemoryKind::DEVICE) {
+      DAQIRI_LOG_ERROR(
+          "PCIe queue '{}' requires a kind: device memory region; '{}' is not "
+          "device memory",
+          queue.name_, mr_name);
+      valid = false;
+    }
+    if (!mr.owned_) {
+      DAQIRI_LOG_ERROR(
+          "PCIe queue '{}' requires a DAQIRI-owned memory region; '{}' has "
+          "owned: false",
+          queue.name_, mr_name);
+      valid = false;
+    }
+    constexpr size_t pcie_slot_alignment = 256;
+    const bool slot_size_overflows =
+        mr.buf_size_ > static_cast<size_t>(UINT32_MAX) - (pcie_slot_alignment - 1);
+    const size_t slot_stride =
+        slot_size_overflows ? 0
+                            : (mr.buf_size_ + pcie_slot_alignment - 1) & ~(pcie_slot_alignment - 1);
+    constexpr size_t gpu_allocation_alignment = 1U << 16;
+    const bool region_size_overflows =
+        slot_stride != 0 && (mr.num_bufs_ > std::numeric_limits<size_t>::max() / slot_stride ||
+                             slot_stride * mr.num_bufs_ > std::numeric_limits<size_t>::max() -
+                                                              (gpu_allocation_alignment - 1));
+    if (mr.buf_size_ == 0 || mr.num_bufs_ == 0 || slot_size_overflows ||
+        mr.num_bufs_ > UINT32_MAX || region_size_overflows) {
+      DAQIRI_LOG_ERROR(
+          "PCIe memory region '{}' must have non-zero, 32-bit-addressable fixed slots and a "
+          "representable total size",
+          mr_name);
+      valid = false;
+    }
+    if (queue.batch_size_ <= 0 || static_cast<size_t>(queue.batch_size_) > mr.num_bufs_) {
+      DAQIRI_LOG_ERROR("PCIe queue '{}' batch_size must be in the range [1, {}]", queue.name_,
+                       mr.num_bufs_);
+      valid = false;
+    }
+
+    const auto [owner_it, inserted] = mr_owners.emplace(mr_name, owner);
+    if (!inserted) {
+      DAQIRI_LOG_ERROR(
+          "PCIe memory region '{}' is shared by '{}' and '{}'; each direction "
+          "and interface requires a distinct memory region",
+          mr_name, owner_it->second, owner);
+      valid = false;
+    }
+  };
+
+  for (const auto& intf : config.ifs_) {
+    const auto& socket = intf.socket_;
+    const bool has_socket_config =
+        socket.mode_ != SocketMode::INVALID || !socket.local_addr_.empty() ||
+        !socket.remote_addr_.empty() || !socket.local_ip_.empty() || !socket.remote_ip_.empty() ||
+        socket.local_port_ != 0 || socket.remote_port_ != 0 || socket.max_payload_size_ != 0 ||
+        socket.max_burst_interval_ms_ != 0 || socket.min_ipg_ns_ != 0 ||
+        socket.retry_connect_s_ != 1;
+    const bool has_roce_config = intf.roce_.transport_mode_ != RDMATransportMode::INVALID;
+    const bool has_rdma_config = intf.rdma_.mode_ != RDMAMode::INVALID ||
+                                 intf.rdma_.xmode_ != RDMATransportMode::INVALID ||
+                                 intf.rdma_.port_ != 0;
+    if (has_socket_config || has_roce_config || has_rdma_config) {
+      DAQIRI_LOG_ERROR(
+          "PCIe interface '{}' does not support socket, RoCE, or RDMA "
+          "configuration",
+          intf.name_);
+      valid = false;
+    }
+
+    if (intf.rx_.queues_.size() > 1 || intf.tx_.queues_.size() > 1) {
+      DAQIRI_LOG_ERROR("PCIe interface '{}' supports at most one RX queue and one TX queue",
+                       intf.name_);
+      valid = false;
+    }
+    if (intf.rx_.queues_.empty() && intf.tx_.queues_.empty()) {
+      DAQIRI_LOG_ERROR("PCIe interface '{}' requires an RX or TX queue", intf.name_);
+      valid = false;
+    }
+    if (intf.rx_.flow_isolation_ || intf.rx_.hardware_timestamps_ ||
+        intf.rx_.dynamic_flow_capacity_ != 0 || !intf.rx_.flows_.empty() ||
+        !intf.rx_.flex_items_.empty() || !intf.rx_.reorder_configs_.empty()) {
+      DAQIRI_LOG_ERROR(
+          "PCIe interface '{}' does not support RX flows, flow isolation, "
+          "dynamic flows, flex items, reorder, or hardware timestamps",
+          intf.name_);
+      valid = false;
+    }
+    if (intf.tx_.accurate_send_ || !intf.tx_.flows_.empty()) {
+      DAQIRI_LOG_ERROR("PCIe interface '{}' does not support TX flows or accurate_send",
+                       intf.name_);
+      valid = false;
+    }
+
+    if (!intf.rx_.queues_.empty()) {
+      validate_queue(intf.rx_.queues_.front().common_, intf.name_ + "/rx", 0);
+    }
+    if (!intf.tx_.queues_.empty()) {
+      const auto& txq = intf.tx_.queues_.front();
+      validate_queue(txq.common_, intf.name_ + "/tx", txq.pacing_mbps_);
+    }
+  }
+
+  return valid;
+}
+
+}  // namespace detail
 
 void free_packet(BurstParams* burst, int pkt) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
@@ -594,6 +770,19 @@ Status daqiri_init(NetworkConfig& config) {
     return Status::INTERNAL_ERROR;
   }
 
+  if (!detail::validate_pcie_config(config)) {
+    return Status::INVALID_PARAMETER;
+  }
+
+#if !DAQIRI_ENABLE_PCIE
+  if (config.common_.stream_type == StreamType::PCIE) {
+    DAQIRI_LOG_ERROR(
+        "stream_type 'pcie' is not available in this build; rebuild with "
+        "-DDAQIRI_ENABLE_PCIE=ON");
+    return Status::NOT_SUPPORTED;
+  }
+#endif
+
   if (config.common_.engine_type == EngineType::UNKNOWN) {
     if (is_explicit_engine_type(config.common_.engine)) {
       config.common_.engine_type = config.common_.engine;
@@ -663,6 +852,7 @@ Status daqiri_init(NetworkConfig& config) {
     }
   }
 
+  EngineFactory::set_stream_type(config.common_.stream_type);
   EngineFactory::set_engine_type(config.common_.engine_type);
 
   auto engine = &(EngineFactory::get_active_engine());

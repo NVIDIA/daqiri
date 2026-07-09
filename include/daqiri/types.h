@@ -173,17 +173,22 @@ enum MemoryAccess {
 };
 
 enum class StreamType {
-  RAW,
-  SOCKET,
-  INVALID,
+  RAW = 0,
+  SOCKET = 1,
+  INVALID = 2,
+  PCIE = 3,
 };
 
 static constexpr const char* DAQIRI_STREAM_TYPE_STR__RAW = "raw";
 static constexpr const char* DAQIRI_STREAM_TYPE_STR__SOCKET = "socket";
+static constexpr const char* DAQIRI_STREAM_TYPE_STR__PCIE = "pcie";
 
 inline StreamType stream_type_from_string(const std::string& str) {
   if (str == DAQIRI_STREAM_TYPE_STR__RAW) { return StreamType::RAW; }
   if (str == DAQIRI_STREAM_TYPE_STR__SOCKET) { return StreamType::SOCKET; }
+  if (str == DAQIRI_STREAM_TYPE_STR__PCIE) {
+    return StreamType::PCIE;
+  }
   return StreamType::INVALID;
 }
 
@@ -193,6 +198,8 @@ inline std::string stream_type_to_string(StreamType type) {
       return DAQIRI_STREAM_TYPE_STR__RAW;
     case StreamType::SOCKET:
       return DAQIRI_STREAM_TYPE_STR__SOCKET;
+    case StreamType::PCIE:
+      return DAQIRI_STREAM_TYPE_STR__PCIE;
     default:
       return "invalid";
   }
@@ -494,6 +501,10 @@ inline EngineType engine_type_from_stream_type(StreamType stream_type,
     case StreamType::SOCKET:
       if (protocol == SocketProtocol::ROCE) { return EngineType::RDMA; }
       return EngineType::SOCKET;
+    case StreamType::PCIE:
+      // PCIe is a stream type with an internal implementation, not a
+      // user-selectable public engine.
+      return EngineType::DEFAULT;
     default:
       return EngineType::UNKNOWN;
   }
@@ -509,6 +520,8 @@ inline bool engine_type_supports_stream_type(EngineType type, StreamType stream_
       return type == EngineType::DPDK || type == EngineType::IBVERBS;
     case StreamType::SOCKET:
       return type == EngineType::SOCKET || type == EngineType::RDMA;
+    case StreamType::PCIE:
+      return type == EngineType::DEFAULT;
     default:
       return false;
   }
@@ -602,13 +615,13 @@ class EngineExtraQueueConfig {
 
 struct CommonQueueConfig {
   std::string name_;
-  int id_;
-  int batch_size_;
-  int split_boundary_;
+  int id_ = 0;
+  int batch_size_ = 0;
+  int split_boundary_ = 0;
   std::string cpu_core_;
   std::vector<std::string> mrs_;
   std::vector<std::string> offloads_;
-  EngineExtraQueueConfig* extra_queue_config_;
+  EngineExtraQueueConfig* extra_queue_config_ = nullptr;
 };
 
 struct MemoryRegionConfig {
@@ -625,7 +638,7 @@ struct MemoryRegionConfig {
 
 struct RxQueueConfig {
   CommonQueueConfig common_;
-  uint64_t timeout_us_;
+  uint64_t timeout_us_ = 0;
 };
 
 struct TxQueueConfig {
@@ -889,7 +902,7 @@ struct CommonConfig {
   SocketProtocol protocol = SocketProtocol::INVALID;
   EngineType engine = EngineType::DEFAULT;        // optional `engine:` override
   EngineType engine_type = EngineType::UNKNOWN;   // resolved active engine
-  LoopbackType loopback_;
+  LoopbackType loopback_ = LoopbackType::DISABLED;
 };
 
 enum class SocketMode {

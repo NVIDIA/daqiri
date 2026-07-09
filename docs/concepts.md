@@ -23,7 +23,7 @@ choice is configured per-application in YAML with:
   `socket_config.local_addr` and `socket_config.remote_addr`.
 
 The shipped Ethernet stream types use NICs as their hardware endpoint.
-The planned PCIe programmable-sensor path uses the same DAQIRI model for
+The PCIe programmable-sensor path uses the same DAQIRI model for
 devices that sit directly on the PCIe bus, such as FPGAs, frame grabbers,
 or custom acquisition cards.
 
@@ -42,6 +42,7 @@ the `stream_type` and the endpoint URI scheme:
 | `stream_type: "raw"` with `engine: "ibverbs"` | **`ibverbs`** (opt-in) | MPRQ raw Ethernet via libibverbs/DevX (Mellanox/mlx5) |
 | `stream_type: "socket"` with `udp://`/`tcp://` endpoints | **built-in Linux sockets** | always available, nothing to build |
 | `stream_type: "socket"` with `roce://` endpoints | **`ibverbs`** | RDMA/RoCE via libibverbs |
+| `stream_type: "pcie"` | **internal PCIe implementation** | selected directly by stream type; no `engine:` value |
 
 The engine concept exists so the implementation can be swapped without
 changing the stream type. For example, raw Ethernet is served by the
@@ -52,7 +53,9 @@ and a future release could add a DOCA RDMA engine as an alternative for the
 same `roce://` stream.
 
 At build time, `DAQIRI_ENGINE` selects which optional engines are
-compiled in (`dpdk`, `ibverbs`); Linux sockets are always available. See
+compiled in (`dpdk`, `ibverbs`); Linux sockets are always available. PCIe is
+enabled separately with `DAQIRI_ENABLE_PCIE`; DMA-BUF is an internal memory
+registration mechanism, not an engine. See
 [Getting Started](getting-started.md) for the build options.
 
 ### Raw Ethernet
@@ -89,15 +92,22 @@ URI schemes:
   speaks RoCE. When both peers run DAQIRI, prefer an upper-layer
   library such as MPI, NCCL, or UCX rather than wiring RoCE directly.
 
-### PCIe (future)
+### PCIe
 
 *YAML:* `stream_type: "pcie"`.
 
-Planned path for sensors that appear directly on the PCIe bus, such
-as FPGAs, frame grabbers, or custom acquisition cards. The goal is to
-move data into or out of CPU or NVIDIA GPU memory through the same
-DAQIRI C++/Python API while avoiding unnecessary copies. This stream
-type does not currently ship with a runnable benchmark or example YAML.
+Path for sensors that appear directly on the PCIe bus, such as FPGAs, frame
+grabbers, or custom acquisition cards. PCIe uses the normal DAQIRI burst API to
+move data to or from DAQIRI-owned NVIDIA GPU `device` memory. Each interface has
+at most one RX and one TX queue, both with ID `0`; flow steering and multi-queue
+operation do not apply.
+
+DAQIRI exports the GPU allocation as a PCIe BAR1 DMA-BUF and passes it to the
+board driver. Applications do not select DMA-BUF or `nvidia-peermem`, and an
+`engine:` field is invalid for this stream type. The software-loopback provider
+is included. A board-specific character driver and FPGA implementation of the
+completion protocol are required for hardware use and are outside the
+repository. See [PCIe / GPUDirect Benchmarking](benchmarks/pcie_benchmarking.md).
 
 ### Choosing a stream type
 
@@ -126,7 +136,8 @@ in the configuration walkthrough.
     - **Socket — RoCE** (`stream_type: "socket"` and
       `roce://` endpoints) is supported and distributed; integration
       testing is under development.
-    - The **PCIe programmable-sensor** path is under development.
+    - **PCIe** (`stream_type: "pcie"`) includes a software-loopback provider.
+      Hardware qualification awaits a conforming board driver and FPGA bitstream.
 
 ## GPUDirect
 
@@ -307,6 +318,10 @@ segment before the remainder spills into the next region in the
 queue's list. Region buffers can be much larger than a single Ethernet
 frame for fragmented transports (for example, `roce://`).
 
+PCIe v1 is intentionally narrower: each direction uses exactly one dedicated
+`device` memory region, and the region cannot be shared with another direction
+or interface. Header-data split and host-backed PCIe payloads are not supported.
+
 Combining memory regions on a single queue is how *header-data split*
 is expressed in the YAML: queue 0's first memory region is a `huge` CPU
 pool (for headers, segment 0); its second region is a `device` GPU pool
@@ -323,6 +338,12 @@ Applications must free RX bursts after processing and free or send TX
 bursts after allocation. Holding bursts indefinitely drains DAQIRI's
 buffer pools and can lead to `NO_FREE_BURST_BUFFERS`,
 `NO_FREE_PACKET_BUFFERS`, queue drops, or stalled TX.
+
+For PCIe RX, freeing a packet is also the credit that permits the FPGA to
+overwrite its slot again; finish all CUDA reads first. For PCIe TX,
+`send_tx_burst()` permits the FPGA to read the slot; finish all CUDA writes
+first. The slot is not reusable until the FPGA posts a read completion. See the
+[PCIe ownership contract](benchmarks/pcie_benchmarking.md#buffer-ownership-and-cuda-ordering).
 
 When to call each `free_*` function is documented in the
 [C++ API Usage page](api-reference/cpp.md#rx-step-3-free-buffers).

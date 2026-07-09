@@ -126,12 +126,31 @@ Status parse_network_config_from_yaml_file(const std::string &yaml_path,
 EngineType get_engine_type();
 
 /**
+ * @brief Returns the active stream type.
+ *
+ * PCIe is selected as a stream type rather than a public engine type. Use this
+ * function when code needs to distinguish PCIe from raw or socket streams.
+ *
+ * @return Active stream type, or StreamType::INVALID when DAQIRI is not
+ * initialized.
+ */
+StreamType get_stream_type();
+
+/**
  * @brief Returns an engine type
  *
  * @param config YML Configuration structure (e.g. NetworkConfig)
  * @return Engine type
  */
 template <typename Config> EngineType get_engine_type(const Config &config);
+
+namespace detail {
+
+// Shared by YAML decoding and daqiri_init(NetworkConfig&) so PCIe constraints
+// are identical for parsed and programmatically constructed configurations.
+bool validate_pcie_config(const NetworkConfig& config);
+
+}  // namespace detail
 
 /**
  * @brief Returns a raw packet pointer from a pointer in BurstParams
@@ -1090,21 +1109,29 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
 
       if (!node["stream_type"].IsDefined()) {
         DAQIRI_LOG_ERROR(
-            "Missing required field 'stream_type' (valid: 'raw' or 'socket')");
+            "Missing required field 'stream_type' (valid: 'raw', 'socket', or "
+            "'pcie')");
         return false;
       }
 
       input_spec.common_.stream_type = daqiri::stream_type_from_string(
           node["stream_type"].as<std::string>());
       if (input_spec.common_.stream_type == daqiri::StreamType::INVALID) {
-        DAQIRI_LOG_ERROR("Invalid stream_type '{}'. Valid values: raw, socket",
+        DAQIRI_LOG_ERROR("Invalid stream_type '{}'. Valid values: raw, socket, pcie",
                          node["stream_type"].as<std::string>());
         return false;
       }
 
       const bool socket_used =
           input_spec.common_.stream_type == daqiri::StreamType::SOCKET;
+      const bool pcie_used = input_spec.common_.stream_type == daqiri::StreamType::PCIE;
       if (node["engine"].IsDefined()) {
+        if (pcie_used) {
+          DAQIRI_LOG_ERROR(
+              "'engine' is not valid for stream_type 'pcie'; PCIe selects its "
+              "implementation directly");
+          return false;
+        }
         input_spec.common_.engine = daqiri::config_engine_from_string(
             node["engine"].as<std::string>(), input_spec.common_.stream_type);
         if (input_spec.common_.engine != daqiri::EngineType::DEFAULT &&
@@ -1332,6 +1359,12 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
             } catch (const std::exception& e) { rx_cfg.flow_isolation_ = false; }
 
             try {
+              rx_cfg.hardware_timestamps_ = rx["hardware_timestamps"].as<bool>();
+            } catch (const std::exception& e) {
+              rx_cfg.hardware_timestamps_ = false;
+            }
+
+            try {
               rx_cfg.dynamic_flow_capacity_ =
                   rx["dynamic_flow_capacity"].as<uint32_t>();
             } catch (const std::exception& e) {
@@ -1496,6 +1529,10 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
               joined);
           return false;
         }
+      }
+
+      if (pcie_used && !daqiri::detail::validate_pcie_config(input_spec)) {
+        return false;
       }
 
       DAQIRI_LOG_INFO("Finished reading DAQIRI configuration");

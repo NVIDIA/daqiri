@@ -1,0 +1,55 @@
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "pcie"
+    master_core: 0
+    debug: false
+    log_level: "info"
+    loopback: "sw"
+
+    memory_regions:
+    - name: "PCIE_TX_GPU"
+      kind: "device"
+      affinity: 0
+      num_bufs: 256
+      buf_size: 4096
+    - name: "PCIE_RX_GPU"
+      kind: "device"
+      affinity: 0
+      num_bufs: 256
+      buf_size: 4096
+
+    interfaces:
+    - name: "fpga0"
+      address: "loopback"
+      tx:
+        queues:
+        - name: "tx0"
+          id: 0
+          cpu_core: 2
+          batch_size: 32
+          memory_regions:
+            - "PCIE_TX_GPU"
+      rx:
+        queues:
+        - name: "rx0"
+          id: 0
+          cpu_core: 1
+          timeout_us: 100
+          batch_size: 32
+          memory_regions:
+            - "PCIE_RX_GPU"
+
+pcie_bench:
+  interface_name: "fpga0"
+  tx_cpu_core: -1
+  rx_cpu_core: -1
+  # Deliberately differs from the RX queue's batch size. Together with its
+  # timeout, this exercises partial RX burst publication as well as full ones.
+  batch_size: 17
+  payload_size: 4096
+  hold_rx_bursts: 4
+  verify: true
+  mixed_packet_frees: true

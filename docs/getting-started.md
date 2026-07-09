@@ -7,16 +7,17 @@ hide:
 
 ## System Requirements
 
-DAQIRI's baseline requirements depend on which [stream type](concepts.md#stream-types) you plan to use. The Linux Sockets path (`stream_type: "socket"` with `udp://` or `tcp://` endpoints) runs on any modern Linux box. The Raw Ethernet kernel-bypass path and GPUDirect impose additional hardware requirements, listed below.
+DAQIRI's baseline requirements depend on which [stream type](concepts.md#stream-types) you plan to use. The Linux Sockets path (`stream_type: "socket"` with `udp://` or `tcp://` endpoints) runs on any modern Linux box. Raw Ethernet, RoCE, and PCIe GPUDirect impose additional hardware requirements, listed below.
 
 | Component | Requirement |
 |-----------|-------------|
 | **OS** | Linux (kernel 5.4+), Ubuntu 22.04 recommended |
-| **CUDA** | CUDA Toolkit 12.2+ (the container ships CUDA 13.1) |
+| **CUDA** | CUDA Toolkit 12.2+ generally (the container ships CUDA 13.1); PCIe support requires CUDA Toolkit 12.8+ for the explicit PCIe DMA-BUF mapping flag. |
 | **NIC** *(Raw Ethernet / GPUDirect / RoCE only)* | NVIDIA ConnectX-6 Dx or later. Default Ubuntu kernel drivers (inbox) are sufficient; we recommend also installing `doca-ofed` for the diagnostic utilities (`ibstat`, `ibv_devinfo`, `ibdev2netdev`, `mlnx_perf`, `mlxconfig`, …). |
 | **GPU** *(GPUDirect only)* | RTX or Data Center GPU. GeForce is not supported. |
 | **DPDK** | Included in the DAQIRI container (patched for dma-buf, so `nvidia-peermem` is **not required** inside the container); see [bare-metal dependencies](#bare-metal-dependencies) below for the host build. |
 | **RoCE** | `libibverbs` and `librdmacm` (for `stream_type: "socket"` and `roce://` endpoints). |
+| **PCIe FPGA** | A discrete GPUDirect-capable GPU and peer-capable PCIe topology. Software loopback needs no FPGA; hardware operation additionally needs a board-specific DAQIRI character driver and FPGA implementation of the completion ABI. |
 | **GDS** | Optional `cufile.h` and `libcufile` for file writes from CUDA device memory. Runtime device-memory writes require a working cuFile installation; for regular `nvidia-fs` mode, the `nvidia-fs` kernel module must be loaded and the destination storage stack must be supported. |
 | **S3** | Optional AWS SDK for C++ with the `s3` component for raw packet uploads to Amazon S3 or S3-compatible object stores. The DAQIRI container builds this SDK from source. |
 
@@ -94,6 +95,13 @@ Then build the DAQIRI library:
     git clone git@github.com:NVIDIA/daqiri.git
     cd daqiri
     BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
+    ```
+
+    For a PCIe-only image with no optional Ethernet engines:
+
+    ```bash
+    BASE_TARGET=base-deps DAQIRI_ENABLE_PCIE=ON DAQIRI_ENGINE="" \
+      scripts/build-container.sh
     ```
 
     Set `BASE_IMAGE=torch` to build on top of NGC PyTorch instead of the default CUDA base — useful for Torch / TensorRT inference workflows that ingest packets directly into GPU memory:
@@ -206,6 +214,7 @@ DAQIRI's shared-library ABI version is tracked separately through
 | Option | Default | Description |
 |--------|---------|-------------|
 | `DAQIRI_ENGINE` | `"dpdk ibverbs"` | Space-separated list of optional engine implementations to compile in. Valid values: `dpdk` (Raw Ethernet) and `ibverbs`. `ibverbs` builds two libibverbs-based engines: RDMA/RoCE (for `stream_type: "socket"` with `roce://` endpoints) and a Mellanox/mlx5 Multi-Packet (striding) Receive Queue engine for `stream_type: "raw"` (opt in per stream with `engine: "ibverbs"`). Linux UDP/TCP sockets are always built in, so there is no `socket` value. |
+| `DAQIRI_ENABLE_PCIE` | `OFF` | Build `stream_type: "pcie"`, its DMA-BUF provider, and `daqiri_bench_pcie`. This is independent of `DAQIRI_ENGINE` and requires CUDA Toolkit 12.8+. |
 | `DAQIRI_BUILD_PYTHON` | `OFF` | Build pybind11 Python bindings. |
 | `DAQIRI_BUILD_EXAMPLES` | `ON` | Build benchmark executables. |
 | `DAQIRI_ENABLE_GDS` | `OFF` | Enable cuFile-backed burst file writes from CUDA device memory. Host-memory writes use POSIX APIs without GDS. |
@@ -218,6 +227,21 @@ Linux UDP/TCP sockets are always available. Applications that need kernel socket
 tuning can call `socket_setsockopt()` after resolving a TCP/UDP connection ID,
 passing the numeric `level` and option constants from system headers; DAQIRI does
 not maintain symbolic socket-option mappings in YAML.
+
+A minimal PCIe-only build uses no optional Ethernet engines:
+
+```bash
+cmake -S . -B build \
+  -DDAQIRI_ENABLE_PCIE=ON \
+  -DDAQIRI_ENGINE="" \
+  -DDAQIRI_BUILD_PYTHON=ON
+cmake --build build -j
+```
+
+Run its self-contained protocol smoke test with
+`daqiri_bench_pcie daqiri_bench_pcie_sw_loopback.yaml --seconds 10 --mode both`.
+DMA-BUF is selected internally; do not add it to `DAQIRI_ENGINE` or an
+`engine:` configuration field.
 
 For Raw Ethernet (`stream_type: "raw"`), `daqiri_init()` validates that each `rx.flows`
 entry's legacy `action.id` or final ordered `actions:` queue action matches an
@@ -278,5 +302,5 @@ Once DAQIRI is built, follow the tutorials to configure your system and run your
 1. [**Concepts**](concepts.md) — terminology (stream types, engines, endpoint URI schemes, packet, burst, segment, flow, queue, memory region), GPUDirect, and zero-copy ownership. Keep this open in a second tab.
 2. [**API Guide**](api-reference/index.md) — the six-step DAQIRI application lifecycle and configuration-first model
 3. [**System Configuration**](tutorials/system_configuration.md) — NIC drivers, link layers, GPUDirect, hugepages, CPU isolation, GPU clocks, and more
-4. [**Benchmarking**](benchmarks/benchmarks.md) — choose an engine, then run socket/RDMA or raw Ethernet benchmarks
+4. [**Benchmarking**](benchmarks/benchmarks.md) — choose a stream type, then run its PCIe, socket/RDMA, or raw Ethernet benchmark
 5. [**Understanding the Configuration File**](tutorials/configuration-walkthrough.md) — annotated YAML walkthrough

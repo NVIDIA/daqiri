@@ -17,15 +17,16 @@ DAQIRI ships with several stream types to handle different types of incoming and
 
 | Use case | DAQIRI config | Benchmark | Start here |
 |---|---|---|---|
-| Ingest from or egress to a programmable PCIe sensor, such as an FPGA on the PCIe bus. | `stream_type: "pcie"` | — | Under development (see note below). |
+| Ingest from or egress to a programmable PCIe sensor, such as an FPGA on the PCIe bus. | `stream_type: "pcie"` | `daqiri_bench_pcie` | [PCIe / GPUDirect Benchmarking](pcie_benchmarking.md) |
 | Compare against normal Linux networking, run on a non-NVIDIA NIC, or test a peer that speaks TCP/UDP sockets. | `stream_type: "socket"` with `tcp://` or `udp://` endpoints | `daqiri_bench_socket` | [Socket and RDMA Benchmarking](socket_benchmarking.md) |
 | Test a peer that already implements RDMA verbs over RoCE. | `stream_type: "socket"` and `roce://` endpoints | `daqiri_bench_rdma` | [Socket and RDMA Benchmarking](socket_benchmarking.md#run-the-rdma-roce-benchmark) |
 | Drive raw Ethernet packets directly from an NVIDIA NIC under DAQIRI control. | `stream_type: "raw"` | `daqiri_bench_raw_gpudirect` and the other `raw_*` benches | [Raw Ethernet Benchmarking](raw_benchmarking.md) |
 
-!!! note "PCIe stream type status"
+!!! note "PCIe hardware status"
 
-    The PCIe programmable-sensor path is under development. Once completed it will allow 3rd party PCIe devices
-    to read from and write to the GPU's BAR1 memory.
+    The PCIe software-loopback provider is runnable today. Hardware use requires a
+    board-specific kernel driver and FPGA implementation of DAQIRI's completion
+    protocol; those hardware components are not distributed in this repository.
 
 !!! note "Why RDMA is listed under socket"
 
@@ -33,10 +34,13 @@ DAQIRI ships with several stream types to handle different types of incoming and
 
 ## Common benchmark workflow
 
-1. Build the examples with the engines you plan to test. The default container build enables every stream type:
+1. Build the examples with the features you plan to test. The default container
+   build enables the Ethernet engines. For PCIe, use the CMake command in
+   [PCIe / GPUDirect Benchmarking](pcie_benchmarking.md#build):
 
     ```bash
-    BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
+    BASE_TARGET=base-deps DAQIRI_ENABLE_PCIE=ON DAQIRI_ENGINE="" \
+      scripts/build-container.sh
     ```
 
 2. Pick the physical pair or host pair that should carry the traffic. For same-host Spark wire tests, prefer a client namespace and a server namespace so the route cannot silently fall back to loopback.
@@ -51,8 +55,9 @@ DAQIRI ships with several stream types to handle different types of incoming and
 
 - [Socket and RDMA Benchmarking](socket_benchmarking.md) covers Linux TCP/UDP and RoCE/RDMA runs with matching client/server namespace setup.
 - [Raw Ethernet Benchmarking](raw_benchmarking.md) covers the DPDK/raw Ethernet examples, hugepage sizing, physical loopback configuration, and raw benchmark troubleshooting.
+- [PCIe / GPUDirect Benchmarking](pcie_benchmarking.md) covers the FPGA completion protocol, GPU-buffer ownership, and the software-loopback smoke test.
 - [Understanding the Configuration File](../tutorials/configuration-walkthrough.md) explains the YAML fields once you have selected the stream type and example config.
 
 ---
 **Previous:** [System Configuration](../tutorials/system_configuration.md)<br>
-**Next:** [Socket and RDMA Benchmarking](socket_benchmarking.md)
+**Next:** [PCIe / GPUDirect Benchmarking](pcie_benchmarking.md)

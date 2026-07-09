@@ -14,10 +14,18 @@ DAQIRI exposes a single API on top of multiple packet I/O stacks, selected at ru
 - **Raw Ethernet** — `stream_type: "raw"`. Kernel-bypass with GPUDirect zero-copy. Highest performance. Requires an [NVIDIA ConnectX-class NIC](https://www.nvidia.com/en-us/networking/ethernet-adapters/); `tx_port` and `rx_port` can share one physical NIC for a single-host closed-loop bench, or be split across two hosts.
 - **Socket — UDP / TCP** — `stream_type: "socket"` with `udp://` or `tcp://` endpoints. Plain Linux kernel sockets. No NIC, no privileges, no special CMake flags. Useful as a comparison baseline and as a path to first results on a system without an NVIDIA NIC. Socket options are runtime API calls: resolve a connection ID, then pass native Linux constants to `socket_setsockopt()` rather than adding option names to YAML.
 - **Socket — RoCE (RDMA)** — `stream_type: "socket"` and `roce://` endpoints. RDMA verbs over Ethernet, with a server/client connection model and a NIC-level reliable transport. Primarily intended for setups where **one** endpoint is a third-party RoCE implementation (FPGA, instrument, customer black box). When both peers run DAQIRI, prefer an upper-layer library such as MPI / NCCL / UCX instead.
+- **PCIe FPGA** — `stream_type: "pcie"`. One RX and one TX queue per
+  interface, with DAQIRI-owned GPU memory exported internally through DMA-BUF.
+  No `engine:` field is used. The included software provider needs no FPGA;
+  production needs a conforming board driver and FPGA completion protocol.
 
 If you don't have any NIC at all, the `*_sw_loopback*` variants of the Raw Ethernet configs need no hardware — useful for first-time build verification.
 
-(`DAQIRI_ENGINE` at the CMake layer selects which optional engine implementations to compile in — `dpdk` enables `stream_type: "raw"`, and `ibverbs` enables `roce://` endpoints. Linux UDP/TCP sockets are always built in. The default build is `dpdk ibverbs`.)
+(`DAQIRI_ENGINE` at the CMake layer selects which optional Ethernet engine
+implementations to compile in — `dpdk` enables `stream_type: "raw"`, and
+`ibverbs` enables `roce://` endpoints. Linux UDP/TCP sockets are always built
+in. PCIe is enabled separately with `DAQIRI_ENABLE_PCIE=ON`; it is not a
+`DAQIRI_ENGINE` value. The default Ethernet build is `dpdk ibverbs`.)
 
 For a shorter selection guide, start with the [Benchmarking overview](../benchmarks/benchmarks.md). With a stream type in mind, read down the questions below and stop at the first one that matches what you're trying to do. Each section names the YAML, the binary that consumes it, and any platform-specific notes.
 
@@ -57,6 +65,15 @@ For a shorter selection guide, start with the [Benchmarking overview](../benchma
     - **UDP — DGX Spark netns wire loopback** (combined base) — [`daqiri_bench_socket_udp_tx_rx_spark_netns.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_socket_udp_tx_rx_spark_netns.yaml). Carries both roles; `examples/run_spark_bench.sh` (via `scripts/gen_spark_netns_config.py`) splits it per role and runs each in its own network namespace (`--mode server` / `--mode client`) so same-host IPs cross the wire instead of looping through `lo`; see [Socket and RDMA Benchmarking](../benchmarks/socket_benchmarking.md#run-the-linux-socket-benchmark).
     - **TCP** — [`daqiri_bench_socket_tcp_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_socket_tcp_tx_rx.yaml).
     - **TCP — DGX Spark netns wire loopback** (combined base) — [`daqiri_bench_socket_tcp_tx_rx_spark_netns.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_socket_tcp_tx_rx_spark_netns.yaml). Carries both roles; `examples/run_spark_bench.sh` (via `scripts/gen_spark_netns_config.py`) splits it per role and runs each in its own network namespace (`--mode server` / `--mode client`); see [Socket and RDMA Benchmarking](../benchmarks/socket_benchmarking.md#run-the-linux-socket-benchmark).
+
+    **PCIe FPGA** (`stream_type: "pcie"`) — runs on `daqiri_bench_pcie`
+    (use `--mode {tx,rx,both}`).
+
+    - **No FPGA or board driver available** —
+      [`daqiri_bench_pcie_sw_loopback.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_pcie_sw_loopback.yaml).
+      Validates deterministic GPU payloads through the software provider. See
+      [PCIe / GPUDirect Benchmarking](../benchmarks/pcie_benchmarking.md) before
+      adapting it to a hardware BDF.
 
 ??? question "2. I have out-of-order UDP packets that need to be reordered on the GPU"
     DAQIRI's flagship pipeline: a CUDA kernel reads a sequence number from each packet's header and places packets at the correct offset in a GPU buffer, so a downstream consumer sees a fully ordered stream without a CPU touch. Configs run on `daqiri_bench_raw_reorder_seq` unless 2.4 applies. Sub-questions:
@@ -226,7 +243,7 @@ bench_tx: # (25)!
 ```
 
 1. The `daqiri` section configures the DAQIRI library, which is responsible for setting up the NIC. It is passed to `daqiri_init(...)` during application startup. Within this section, `name:` fields on interfaces, queues, flows, and memory regions are used only for logging — pick any descriptive string.
-2. **`stream_type`** · `string` · *required* — High-level transport family selected for this config. **Supported:** `"raw"` (Raw Ethernet via kernel bypass, used here), `"socket"` (kernel sockets and RDMA). Use endpoint URI schemes such as `tcp://`, `udp://`, and `roce://` for socket-style transports.
+2. **`stream_type`** · `string` · *required* — High-level transport family selected for this config. **Supported:** `"raw"` (Raw Ethernet via kernel bypass, used here), `"socket"` (kernel sockets and RDMA), and `"pcie"` (single-queue programmable PCIe devices). Use endpoint URI schemes such as `tcp://`, `udp://`, and `roce://` for socket-style transports; PCIe has no endpoint URI or user-selectable engine.
 3. :material-wrench: **`master_core`** · `integer (CPU core ID)` · *required* — Core used for DAQIRI setup. Does not need to be isolated; recommended to differ from the `cpu_core` fields below that poll the NIC.
 4. **`loopback`** · `string` · *default: `""`* — Loopback mode. **Supported:** `""` (no loopback; use the physical NIC), `"sw"` (software loopback — no NIC required, used by the `*_sw_loopback*` configs for first-time build verification).
 5. The `memory_regions` section lists where the NIC will write/read data from/to when bypassing the OS kernel. Tip: when using GPU buffer regions, keeping the sum of their buffer sizes below 80% of your BAR1 size is generally a good rule of thumb.

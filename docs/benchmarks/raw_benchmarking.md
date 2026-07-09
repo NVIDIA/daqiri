@@ -581,5 +581,5 @@ The `*_packets_phy` and `*_bytes_phy` counters are physical-link counters. They 
         You might need to kill some of the listed processes to free up GPU VRAM.
 
 ---
-**Previous:** [Benchmarking](benchmarks.md)<br>
-**Next:** [Understanding the Configuration File](../tutorials/configuration-walkthrough.md) — deep dive into the YAML parameters
+**Previous:** [Socket and RDMA Benchmarking](socket_benchmarking.md)<br>
+**Next:** [Performance: DGX Spark](performance-dgx-spark.md)

@@ -59,6 +59,7 @@ nav:
   - Concepts: concepts.md
   - Benchmarking:
     - Overview: benchmarks/benchmarks.md
+    - PCIe / GPUDirect Benchmarking: benchmarks/pcie_benchmarking.md
     - Socket and RDMA Benchmarking: benchmarks/socket_benchmarking.md
     - Raw Ethernet Benchmarking: benchmarks/raw_benchmarking.md
     - "Performance: DGX Spark": benchmarks/performance-dgx-spark.md

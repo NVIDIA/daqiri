@@ -6,7 +6,7 @@ hide:
 # Configuration YAML Reference
 
 DAQIRI is configured through a YAML file or a `NetworkConfig` struct built in code.
-Either form defines memory regions, NIC interfaces, TX/RX queues, and flow rules, and
+Either form defines memory regions, I/O interfaces, TX/RX queues, and optional flow rules, and
 is passed to `daqiri_init()` at startup. The struct form is useful for customers who
 want to interoperate with existing configuration code.
 
@@ -29,7 +29,7 @@ These settings apply globally to both TX and RX:
   - type: `integer`
 - **`stream_type`**: Packet I/O stream class.
   - type: `string`
-  - values: `raw`, `socket`
+  - values: `raw`, `socket`, `pcie`
 - **`engine`**: Optional implementation engine for the selected stream type. Omit this
   unless you need a specific implementation override. For `stream_type: "raw"` the
   default is `dpdk`; set `engine: "ibverbs"` to use the Multi-Packet (striding) Receive
@@ -37,6 +37,8 @@ These settings apply globally to both TX and RX:
   `roce://` endpoint URIs by default.
   - type: `string`
   - values: `dpdk`, `socket`, `ibverbs`
+  - PCIe: omit this key. Any `engine:` key is rejected when
+    `stream_type: "pcie"`; DMA-BUF is not an engine value.
 - **`log_level`**: Engine log level.
   - type: `string`
   - values: `trace`, `debug`, `info`, `warn` (default), `error`, `critical`, `off`
@@ -63,7 +65,9 @@ and their `kind` determines the receive mode (CPU-only, header-data split, or ba
   - type: `string`
   - values:
     - `huge` — CPU hugepages (recommended for CPU buffers)
-    - `device` — GPU VRAM (discrete GPUs only; requires GPUDirect via peermem or DMA-BUF)
+    - `device` — GPU VRAM (discrete GPUs only; requires GPUDirect via peermem or DMA-BUF).
+      This is the only payload kind accepted by PCIe v1; PCIe always uses its
+      internal PCIe BAR1 DMA-BUF registration path.
     - `host_pinned` — Pinned CPU pages allocated via `cudaHostAlloc`. **Recommended on
       integrated GPUs (e.g. NVIDIA GB10 / DGX Spark)**, where the NIC cannot peer-DMA
       into device memory and CUDA reports DMA-BUF unsupported. On discrete-GPU systems,
@@ -109,13 +113,13 @@ memory_regions:
 
 ## Interfaces
 
-`interfaces:` — List of NIC interfaces to configure.
+`interfaces:` — List of NIC, socket endpoint, or PCIe device interfaces to configure.
 
 - **`name`**: Interface name. Used to look up port IDs at runtime via `get_port_id()`.
   - type: `string`
 - **`address`**: PCIe BDF address (from `lspci`) or Linux interface name for Raw Ethernet
-  (`stream_type: "raw"`), or IP address for RoCE (`stream_type: "socket"` with a
-  `roce://` endpoint).
+  (`stream_type: "raw"`), IP address for RoCE (`stream_type: "socket"` with a
+  `roce://` endpoint), or the FPGA PCIe BDF for `stream_type: "pcie"`.
   - type: `string`
 
 ### Socket and RDMA Endpoint Configuration
@@ -154,6 +158,70 @@ engine.
   - type: `string`
   - values: `RC` (Reliable Connected), `UC` (Unreliable Connected)
 
+### PCIe Interface Configuration
+
+PCIe interfaces use the normal `interfaces`, `rx.queues`, and `tx.queues`
+structure. They do not use `socket_config`, `roce_config`, or an `engine` field.
+The production provider resolves the interface's PCI BDF to a compatible DAQIRI
+character device. Use `loopback: "sw"` with `address: "loopback"` to select the
+software provider instead. The accepted direct `/dev/...` form and the stable
+BDF-to-device-node convention are specified under
+[Character-device discovery and exclusivity](../benchmarks/pcie_benchmarking.md#character-device-discovery-and-exclusivity).
+
+PCIe configuration is validated identically whether it came from YAML or a
+programmatically populated `NetworkConfig`:
+
+- each interface has at most one RX queue and one TX queue, and its queue ID is `0`;
+- every enabled direction references exactly one DAQIRI-owned `device` memory
+  region and therefore has exactly one segment;
+- RX and TX regions are distinct, and no PCIe region is shared between interfaces;
+- `batch_size` is positive and no larger than the region's `num_bufs`; and
+- flows/flex items, flow isolation/capacity, HDS, host payloads, reorder,
+  timestamps, offloads, pacing, accurate send, socket, and RoCE settings are rejected.
+
+The slot stride is `buf_size` rounded up to 256 bytes. `timeout_us` on the RX
+queue publishes a partial burst after the first completion has waited that long;
+zero waits for a full `batch_size` burst.
+
+```yaml
+stream_type: "pcie"
+loopback: "sw"
+
+memory_regions:
+- name: "PCIE_RX_GPU"
+  kind: "device"
+  affinity: 0
+  num_bufs: 256
+  buf_size: 4096
+- name: "PCIE_TX_GPU"
+  kind: "device"
+  affinity: 0
+  num_bufs: 256
+  buf_size: 4096
+
+interfaces:
+- name: "fpga0"
+  address: "loopback"
+  rx:
+    queues:
+    - name: "rx0"
+      id: 0
+      cpu_core: 8
+      batch_size: 32
+      timeout_us: 100
+      memory_regions: ["PCIE_RX_GPU"]
+  tx:
+    queues:
+    - name: "tx0"
+      id: 0
+      cpu_core: 9
+      batch_size: 32
+      memory_regions: ["PCIE_TX_GPU"]
+```
+
+The complete runnable file is
+[`examples/daqiri_bench_pcie_sw_loopback.yaml`](https://github.com/NVIDIA/daqiri/blob/main/examples/daqiri_bench_pcie_sw_loopback.yaml).
+
 ## Receive Configuration (rx)
 
 ### Queues
@@ -164,6 +232,7 @@ engine.
   - type: `string`
 - **`id`**: Integer ID used for flow steering and burst retrieval.
   - type: `integer`
+  - PCIe: must be `0`; only one RX queue is permitted per interface.
 - **`cpu_core`**: CPU core ID for the RX worker thread. Should be an isolated core for best
   performance.
   - type: `string`
@@ -386,6 +455,7 @@ daqiri::set_reorder_cuda_stream("rx_port", "rx_reorder_0", stream);
   - type: `string`
 - **`id`**: Integer ID used for burst submission.
   - type: `integer`
+  - PCIe: must be `0`; only one TX queue is permitted per interface.
 - **`cpu_core`**: CPU core ID for the TX worker thread. Should be an isolated core for best
   performance.
   - type: `string`

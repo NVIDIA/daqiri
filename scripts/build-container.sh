@@ -4,9 +4,12 @@ set -euo pipefail
 IMAGE_TAG="${IMAGE_TAG:-daqiri:local}"
 BASE_TARGET="${BASE_TARGET:-dpdk}"
 BASE_IMAGE="${BASE_IMAGE:-cuda}"
-DAQIRI_ENGINE="${DAQIRI_ENGINE:-dpdk ibverbs}"
+# Default only when unset; an explicitly empty string is the supported
+# PCIe/socket-only build with no optional Ethernet engines.
+DAQIRI_ENGINE="${DAQIRI_ENGINE-dpdk ibverbs}"
 DAQIRI_BUILD_PYTHON="${DAQIRI_BUILD_PYTHON:-OFF}"
 DAQIRI_ENABLE_S3="${DAQIRI_ENABLE_S3:-OFF}"
+DAQIRI_ENABLE_PCIE="${DAQIRI_ENABLE_PCIE:-OFF}"
 BUILD_SHARED_LIBS="${BUILD_SHARED_LIBS:-ON}"
 DAQIRI_ENABLE_OTEL_METRICS="${DAQIRI_ENABLE_OTEL_METRICS:-OFF}"
 AWS_SDK_CPP_VERSION="${AWS_SDK_CPP_VERSION:-1.11.822}"
@@ -31,6 +34,7 @@ docker build \
   --build-arg DAQIRI_ENGINE="${DAQIRI_ENGINE}" \
   --build-arg DAQIRI_BUILD_PYTHON="${DAQIRI_BUILD_PYTHON}" \
   --build-arg DAQIRI_ENABLE_S3="${DAQIRI_ENABLE_S3}" \
+  --build-arg DAQIRI_ENABLE_PCIE="${DAQIRI_ENABLE_PCIE}" \
   --build-arg BUILD_SHARED_LIBS="${BUILD_SHARED_LIBS}" \
   --build-arg DAQIRI_ENABLE_OTEL_METRICS="${DAQIRI_ENABLE_OTEL_METRICS}" \
   --build-arg AWS_SDK_CPP_VERSION="${AWS_SDK_CPP_VERSION}" \

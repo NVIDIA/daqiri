@@ -250,9 +250,23 @@ class Engine {
 
 class EngineFactory {
  public:
+  static void set_stream_type(StreamType type) {
+    if (StreamType_ != StreamType::INVALID && StreamType_ != type) {
+      throw std::logic_error("Stream type is already set with another stream type.");
+    }
+    StreamType_ = type;
+  }
+
   static void set_engine_type(EngineType type) {
     if (EngineType_ != EngineType::UNKNOWN && EngineType_ != type) {
       throw std::logic_error("Engine type is already set with another engine type.");
+    }
+    if (StreamType_ == StreamType::PCIE) {
+      if (type != EngineType::DEFAULT && type != EngineType::UNKNOWN) {
+        throw std::logic_error("PCIe streams do not accept an engine type.");
+      }
+      EngineType_ = EngineType::DEFAULT;
+      return;
     }
     if (type == EngineType::DEFAULT) {
       EngineType_ = get_default_engine_type();
@@ -262,6 +276,9 @@ class EngineFactory {
   }
 
   static EngineType get_engine_type() { return EngineType_; }
+  static StreamType get_stream_type() {
+    return StreamType_;
+  }
 
   template <typename Config>
   static EngineType get_engine_type(const Config& config);
@@ -269,6 +286,12 @@ class EngineFactory {
   static EngineType get_default_engine_type();
 
   static Engine& get_active_engine() {
+    if (StreamType_ == StreamType::PCIE) {
+      if (!EngineInstance_) {
+        EngineInstance_ = create_instance(StreamType_);
+      }
+      return *EngineInstance_;
+    }
     if (EngineType_ == EngineType::UNKNOWN) { throw std::logic_error("EngineType not set"); }
     if (!EngineInstance_) { EngineInstance_ = create_instance(EngineType_); }
     return *EngineInstance_;
@@ -277,6 +300,7 @@ class EngineFactory {
   static void reset() {
     EngineInstance_.reset();
     EngineType_ = EngineType::UNKNOWN;
+    StreamType_ = StreamType::INVALID;
   }
 
  private:
@@ -287,8 +311,10 @@ class EngineFactory {
 
   static std::unique_ptr<Engine> EngineInstance_;
   static EngineType EngineType_;
+  static StreamType StreamType_;
 
   static std::unique_ptr<Engine> create_instance(EngineType type);
+  static std::unique_ptr<Engine> create_instance(StreamType type);
 };
 
 };  // namespace daqiri
