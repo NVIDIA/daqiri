@@ -480,6 +480,8 @@ enum {
   MLX5_OPCODE_WAIT = 0x0f,
   MLX5_OPC_MOD_WAIT_TIME = 2,
   MLX5_WAIT_COND_CYCLIC_SMALLER = 5,
+  MLX5_OPCODE_ENHANCED_MPSW = 0x29,
+  MLX5_EMPW_MAX_DSEG = 58,
 };
 
 // Wait segment (16 bytes of control + an 8-byte value + 8-byte mask = 32 B,
