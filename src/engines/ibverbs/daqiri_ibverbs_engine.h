@@ -272,7 +272,9 @@ struct IbvTxQueue {
   struct mlx5dv_qp dv_qp {};
   struct mlx5dv_cq dv_txcq {};
   uint32_t sqn = 0;
-  uint32_t sq_pi = 0;      // SQ producer (WQEBB units)
+  uint64_t sq_pi = 0;  // monotonic SQ producer (WQEBB units)
+  uint64_t sq_completed = 0;
+  uint32_t sq_capacity_wqebbs = 0;
   uint32_t bf_offset = 0;  // toggles between 0 and bf.size each doorbell
   uint32_t tx_cq_ci = 0;   // TX CQ consumer index
   // Slots are handed out cyclically and posted/completed in order, so the whole
@@ -284,13 +286,14 @@ struct IbvTxQueue {
   std::atomic<uint64_t> completed_tail{0};
   // Accurate send scheduling (wait-on-time): a scheduled packet emits a WAIT
   // WQE before its send WQE, so a WQEBB index no longer maps 1:1 to a slot.
-  // wqe_slot_cum[wqebb_index] records the cumulative slots posted through that
-  // WQEBB, so completion does completed_tail = wqe_slot_cum[cqe.wqe_counter].
-  // slots_posted is the running slot/packet total (worker-owned).
+  // A WQE may span multiple WQEBBs, so packet-slot and SQ-credit completion
+  // progress are tracked independently at each WQE's first WQEBB.
   std::vector<uint64_t> wqe_slot_cum;
+  std::vector<uint64_t> wqe_wqebb_cum;
   uint64_t slots_posted = 0;
   bool send_scheduling = false;  // HCA wait_on_time present + real-time clock
   uint64_t rt_timemask = 0;      // wait segment comparison mask
+  bool empw_enabled = false;
   // Hand-off-ring-full drops: send_tx_burst couldn't enqueue (TX worker behind),
   // so the burst was dropped and its slots rolled back. App-thread-written.
   uint64_t handoff_drop_bursts = 0;
@@ -454,10 +457,13 @@ class IbverbsEngine : public Engine {
   Status setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf, const TxQueueConfig& qcfg);
   Status create_tx_raw_qp(IbvTxQueue& q);                 // IBV_QPT_RAW_PACKET, RESET->RTS
   void post_tx_burst(IbvTxQueue& q, BurstParams* burst);  // build send WQEs + ring doorbell
+  void post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst);
   // Build a WAIT-on-time WQE (ctrl + wseg = 1 WQEBB, no slot) at q.sq_pi that
   // holds the following send(s) until the NIC real-time clock reaches when_ns,
   // advance sq_pi, and return its ctrl segment (for the BlueFlame doorbell).
   void* emit_wait_wqe(IbvTxQueue& q, uint64_t when_ns);
+  uint64_t tx_burst_wqebbs(const IbvTxQueue& q, const BurstParams* burst) const;
+  bool tx_sq_has_space(IbvTxQueue& q, uint64_t needed_wqebbs);
   void poll_tx_completions(IbvTxQueue& q);  // drain TX CQ, reclaim slot-runs
   // One worker services a group of TX queues sharing a cpu_core, round-robin:
   // drains each send_ring (post) + reclaims completions.

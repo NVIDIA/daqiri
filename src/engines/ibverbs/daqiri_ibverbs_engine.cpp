@@ -87,6 +87,30 @@ static constexpr uint32_t MPRQ_LEN_MASK = 0x0000ffffu;
 // Marks a burst's metadata block as TX-owned so the shared free family routes
 // it to the TX slot ring rather than the RX stride-release path.
 static constexpr uint32_t IBV_TX_BURST_FLAG = 1u << 27;
+static constexpr uint32_t IBV_TX_SCHEDULED_FLAG = 1u << 26;
+
+static constexpr uint32_t EMPW_MAX_PACKETS = 32;
+static_assert(EMPW_MAX_PACKETS <= MLX5_EMPW_MAX_DSEG);
+static_assert(sizeof(struct mlx5_wqe_ctrl_seg) == 16);
+static_assert(sizeof(struct mlx5_wqe_data_seg) == 16);
+
+constexpr uint32_t empw_wqebbs(uint32_t packets) {
+  return (2u + packets + 3u) / 4u;
+}
+
+constexpr uint64_t empw_burst_wqebbs(uint64_t packets) {
+  uint64_t total = 0;
+  while (packets != 0) {
+    const uint32_t part =
+        packets < EMPW_MAX_PACKETS ? static_cast<uint32_t>(packets) : EMPW_MAX_PACKETS;
+    total += empw_wqebbs(part);
+    packets -= part;
+  }
+  return total;
+}
+static_assert(empw_wqebbs(1) == 1);
+static_assert(empw_wqebbs(32) == 9);
+static_assert(empw_burst_wqebbs(33) == 10);
 
 // Defaults for the striding-RQ geometry; clamped to device caps at setup.
 static constexpr uint32_t DEFAULT_STRIDE_LOG = 11;          // 2048 B per stride
@@ -331,6 +355,9 @@ inline uint16_t* burst_strd_arr(BurstParams* b) {
 }
 inline uint64_t* burst_ts_arr(BurstParams* b) {
   return reinterpret_cast<uint64_t*>(reinterpret_cast<uint8_t*>(b) + g_layout.off_ts);
+}
+inline const uint64_t* burst_ts_arr(const BurstParams* b) {
+  return reinterpret_cast<const uint64_t*>(reinterpret_cast<const uint8_t*>(b) + g_layout.off_ts);
 }
 inline uint32_t* burst_flowtag_arr(BurstParams* b) {
   return reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(b) + g_layout.off_flowtag);
@@ -3594,11 +3621,8 @@ void IbverbsEngine::print_stats() {
         q->ring_full_bursts, q->ring_full_pkts);
   }
   for (auto& q : tx_queues_) {
-    // completed_tail is the authoritative uint64 transmitted+completed count;
-    // sq_pi is the 32-bit producer, so in-flight is a modular-32 subtraction
-    // (in flight is bounded by num_slots, so this is exact).
     const uint64_t completed = q->completed_tail.load(std::memory_order_relaxed);
-    const uint32_t inflight = q->sq_pi - static_cast<uint32_t>(completed);
+    const uint64_t inflight = q->slots_posted - completed;
     DAQIRI_LOG_INFO(
         "ibverbs TX port {} q{}: transmitted={} inflight={} handoff_full_drops={} bursts ({} pkts)",
         q->port_id, q->queue_id, completed, inflight, q->handoff_drop_bursts, q->handoff_drop_pkts);
@@ -3834,12 +3858,15 @@ Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
   // -- the latter is only populated for DevX-created SQs and reads back 0 here.
   q.sqn = q.qp->qp_num;
   q.sq_pi = 0;
+  q.sq_completed = 0;
+  q.sq_capacity_wqebbs = q.dv_qp.sq.wqe_cnt;
   q.bf_offset = 0;
   q.tx_cq_ci = 0;
   q.alloc_head = 0;
   q.completed_tail.store(0, std::memory_order_relaxed);
   q.slots_posted = 0;
   q.wqe_slot_cum.assign(q.dv_qp.sq.wqe_cnt, 0);
+  q.wqe_wqebb_cum.assign(q.dv_qp.sq.wqe_cnt, 0);
   DAQIRI_LOG_INFO("TX SQ mapped q{}: sqn {}, wqe_cnt {}, stride {}, bf.size {}, cqe_cnt {}",
                   q.queue_id, q.sqn, q.dv_qp.sq.wqe_cnt, q.dv_qp.sq.stride, q.dv_qp.bf.size,
                   q.dv_txcq.cqe_cnt);
@@ -3877,6 +3904,11 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
   }
   q.mr_names = qcfg.common_.mrs_;
   q.mr_name = qcfg.common_.mrs_[0];
+  if (q.mr_names.size() > 2) {
+    DAQIRI_LOG_CRITICAL("TX queue {} configures {} memory regions; at most two are supported",
+                        q.queue_id, q.mr_names.size());
+    return Status::INVALID_PARAMETER;
+  }
   // >1 region = header-data split TX: each packet segment comes from its own MR
   // (region 0 = CPU header, region 1 = GPU payload), each with its own lkey.
   q.num_segs = std::min<int>(static_cast<int>(qcfg.common_.mrs_.size()), MAX_NUM_SEGS);
@@ -3886,6 +3918,11 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
     return Status::GENERIC_FAILURE;
   }
   q.pd = pd_map_[q.ctx];
+
+  struct mlx5dv_context dv_ctx {};
+  const uint64_t empw_flags = MLX5DV_CONTEXT_FLAGS_MPW_ALLOWED | MLX5DV_CONTEXT_FLAGS_ENHANCED_MPW;
+  q.empw_enabled =
+      mlx5dv_query_device(q.ctx, &dv_ctx) == 0 && (dv_ctx.flags & empw_flags) == empw_flags;
 
   // Register every MR as a TX scatter region; num_slots is the smallest region's
   // buffer count (a packet consumes slot i from every region).
@@ -3923,17 +3960,14 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
   return Status::SUCCESS;
 }
 
-// Drain the TX CQ and reclaim completed slot-runs back to the free ring. Runs
-// inline on the application's TX thread (the DPDK model: the sender reclaims
-// its own completions), so the whole TX slot lifecycle stays single-threaded
-// and contention-free. Each signaled CQE's wqe_counter is the SQ WQE index (one
-// WQEBB / packet) of the signaled WQE; everything up to and including it is done.
+// Drain the TX CQ and reclaim packet slots and SQ WQEBBs independently.
 void IbverbsEngine::poll_tx_completions(IbvTxQueue& q) {
   uint8_t* const cq_buf = static_cast<uint8_t*>(q.dv_txcq.buf);
   const uint32_t cqe_cnt = q.dv_txcq.cqe_cnt;
   const uint32_t cqe_size = q.dv_txcq.cqe_size;
   const uint32_t wqe_cnt = q.dv_qp.sq.wqe_cnt;
   uint64_t tail = q.completed_tail.load(std::memory_order_relaxed);
+  uint64_t sq_tail = q.sq_completed;
   bool any = false;
   for (;;) {
     uint8_t* cqe = cq_buf + (q.tx_cq_ci & (cqe_cnt - 1)) * cqe_size;
@@ -3949,21 +3983,56 @@ void IbverbsEngine::poll_tx_completions(IbvTxQueue& q) {
     cqe_read_barrier();
     if (opcode == MLX5_CQE_REQ_ERR || opcode == MLX5_CQE_RESP_ERR) {
       DAQIRI_LOG_ERROR("TX CQE error q{} opcode {}", q.queue_id, opcode);
+      force_quit_.store(true, std::memory_order_relaxed);
     }
-    // wqe_counter is the signaled send WQE's WQEBB index; wqe_slot_cum maps it
-    // to the cumulative slot count posted through it (accounting for interleaved
-    // WAIT WQEs, which consume a WQEBB but no slot). Advancing completed_tail to
-    // that count frees the run of cyclic slots in one step -- no ring ops.
     const uint16_t wc_idx = be16toh(cqe64->wqe_counter);
-    tail = q.wqe_slot_cum[wc_idx & (wqe_cnt - 1)];
+    const uint32_t map_idx = wc_idx & (wqe_cnt - 1);
+    tail = q.wqe_slot_cum[map_idx];
+    sq_tail = q.wqe_wqebb_cum[map_idx];
     q.tx_cq_ci++;
     any = true;
   }
   if (any) {
     q.completed_tail.store(tail, std::memory_order_release);
+    q.sq_completed = sq_tail;
     doorbell_store_barrier();
     *q.dv_txcq.dbrec = htobe32(q.tx_cq_ci & 0xffffff);
   }
+}
+
+uint64_t IbverbsEngine::tx_burst_wqebbs(const IbvTxQueue& q, const BurstParams* burst) const {
+  const uint64_t packets = burst->hdr.hdr.num_pkts;
+  const bool scheduled = (burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) != 0;
+  if (q.empw_enabled && burst->hdr.hdr.num_segs == 1 && !scheduled) {
+    return empw_burst_wqebbs(packets);
+  }
+  uint64_t wqebbs = packets;
+  if (scheduled) {
+    const uint64_t* txtime = burst_ts_arr(burst);
+    for (uint64_t i = 0; i < packets; ++i) {
+      if (txtime[i] != 0) {
+        ++wqebbs;
+      }
+    }
+  }
+  return wqebbs;
+}
+
+bool IbverbsEngine::tx_sq_has_space(IbvTxQueue& q, uint64_t needed_wqebbs) {
+  if (needed_wqebbs > q.sq_capacity_wqebbs) {
+    DAQIRI_LOG_ERROR("TX q{} burst needs {} WQEBBs, exceeding SQ capacity {}", q.queue_id,
+                     needed_wqebbs, q.sq_capacity_wqebbs);
+    force_quit_.store(true, std::memory_order_relaxed);
+    return false;
+  }
+  const uint64_t used = q.sq_pi - q.sq_completed;
+  if (used > q.sq_capacity_wqebbs) {
+    DAQIRI_LOG_ERROR("TX q{} SQ accounting exceeded capacity: used {}, capacity {}", q.queue_id,
+                     used, q.sq_capacity_wqebbs);
+    force_quit_.store(true, std::memory_order_relaxed);
+    return false;
+  }
+  return needed_wqebbs <= q.sq_capacity_wqebbs - used;
 }
 
 // Pinned TX worker: drains the hand-off ring (the cheap DevX WQE build + doorbell
@@ -3981,16 +4050,39 @@ void IbverbsEngine::tx_worker(std::vector<IbvTxQueue*> group) {
     CPU_SET(leader->cpu_core, &set);
     pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
   }
+  struct PendingBurst {
+    BurstParams* burst = nullptr;
+    uint64_t needed_wqebbs = 0;
+  };
+  std::vector<PendingBurst> pending(group.size());
   while (leader->running.load(std::memory_order_relaxed) &&
          !force_quit_.load(std::memory_order_relaxed)) {
-    for (auto* q : group) {
-      void* b = nullptr;
-      while (q->send_ring->dequeue(&b)) {
-        auto* burst = static_cast<BurstParams*>(b);
-        post_tx_burst(*q, burst);
-        tx_meta_pool_->put(burst);
-      }
+    for (size_t i = 0; i < group.size(); ++i) {
+      IbvTxQueue* q = group[i];
       poll_tx_completions(*q);
+      for (;;) {
+        PendingBurst& item = pending[i];
+        if (item.burst == nullptr) {
+          void* dequeued = nullptr;
+          if (!q->send_ring->dequeue(&dequeued)) {
+            break;
+          }
+          item.burst = static_cast<BurstParams*>(dequeued);
+          item.needed_wqebbs = tx_burst_wqebbs(*q, item.burst);
+        }
+        if (!tx_sq_has_space(*q, item.needed_wqebbs)) {
+          break;
+        }
+        post_tx_burst(*q, item.burst);
+        tx_meta_pool_->put(item.burst);
+        item = {};
+        poll_tx_completions(*q);
+      }
+    }
+  }
+  for (PendingBurst& item : pending) {
+    if (item.burst != nullptr) {
+      tx_meta_pool_->put(item.burst);
     }
   }
 }
@@ -4050,10 +4142,6 @@ Status IbverbsEngine::get_tx_packet_burst(BurstParams* burst) {
     }
   }
   q->alloc_head += n;
-  // Clear per-packet send times; set_packet_tx_time fills the scheduled ones.
-  if (q->send_scheduling) {
-    memset(burst_ts_arr(burst), 0, n * sizeof(uint64_t));
-  }
   return Status::SUCCESS;
 }
 
@@ -4126,6 +4214,10 @@ Status IbverbsEngine::set_packet_tx_time(BurstParams* burst, int idx, uint64_t t
   if (!q->send_scheduling) {
     return Status::NOT_SUPPORTED;
   }
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) == 0) {
+    memset(burst_ts_arr(burst), 0, static_cast<size_t>(burst->hdr.hdr.num_pkts) * sizeof(uint64_t));
+    burst->hdr.hdr.burst_flags |= IBV_TX_SCHEDULED_FLAG;
+  }
   // Stored in the burst's per-packet timestamp array; post_tx_burst emits a
   // WAIT-on-time WQE for any packet whose time is non-zero.
   burst_ts_arr(burst)[idx] = time;
@@ -4163,7 +4255,72 @@ void* IbverbsEngine::emit_wait_wqe(IbvTxQueue& q, uint64_t when_ns) {
   ws->mask = htobe64(q.rt_timemask);
   q.wqe_slot_cum[widx] = q.slots_posted;
   q.sq_pi++;
+  q.wqe_wqebb_cum[widx] = q.sq_pi;
   return wctrl;
+}
+
+// Pack multiple single-segment packets into each enhanced multi-packet WQE.
+void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst) {
+  const int n = static_cast<int>(burst->hdr.hdr.num_pkts);
+  static constexpr int SIGNAL_EVERY_WQE = 16;
+  uint8_t* const sq_buf = static_cast<uint8_t*>(q.dv_qp.sq.buf);
+  const uint32_t wqe_cnt = q.dv_qp.sq.wqe_cnt;
+  const uint32_t stride = q.dv_qp.sq.stride;
+  uint8_t* const sq_end = sq_buf + static_cast<size_t>(wqe_cnt) * stride;
+  const uint32_t lkey = q.regions[0].lkey;
+  void* last_ctrl = nullptr;
+  int packet = 0;
+  int burst_wqe = 0;
+
+  while (packet < n) {
+    const uint32_t part = std::min<uint32_t>(EMPW_MAX_PACKETS, static_cast<uint32_t>(n - packet));
+    const uint32_t widx = static_cast<uint32_t>(q.sq_pi % wqe_cnt);
+    uint8_t* const title = sq_buf + static_cast<size_t>(widx) * stride;
+    const uint32_t wqebbs = empw_wqebbs(part);
+    const uint8_t ds = static_cast<uint8_t>(2u + part);
+    const bool last_wqe = packet + static_cast<int>(part) == n;
+    const bool signaled = burst_wqe % SIGNAL_EVERY_WQE == SIGNAL_EVERY_WQE - 1 || last_wqe;
+
+    auto* ctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(title);
+    ctrl->opmod_idx_opcode =
+        htobe32(((static_cast<uint32_t>(q.sq_pi) & 0xffff) << 8) | MLX5_OPCODE_ENHANCED_MPSW);
+    ctrl->qpn_ds = htobe32((q.sqn << 8) | ds);
+    ctrl->signature = 0;
+    ctrl->dci_stream_channel_id = 0;
+    ctrl->fm_ce_se = signaled ? MLX5_WQE_CTRL_CQ_UPDATE : 0;
+    ctrl->imm = 0;
+    memset(title + 16, 0, 16);
+    reinterpret_cast<struct mlx5_wqe_eth_seg*>(title + 16)->cs_flags =
+        MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
+
+    uint8_t* dptr = title + 32;
+    for (uint32_t i = 0; i < part; ++i) {
+      if (dptr == sq_end) {
+        dptr = sq_buf;
+      }
+      auto* dseg = reinterpret_cast<struct mlx5_wqe_data_seg*>(dptr);
+      dseg->byte_count = htobe32(burst->pkt_lens[0][packet + i]);
+      dseg->lkey = htobe32(lkey);
+      dseg->addr = htobe64(reinterpret_cast<uint64_t>(burst->pkts[0][packet + i]));
+      dptr += sizeof(*dseg);
+    }
+
+    q.slots_posted += part;
+    q.wqe_slot_cum[widx] = q.slots_posted;
+    q.sq_pi += wqebbs;
+    q.wqe_wqebb_cum[widx] = q.sq_pi;
+    last_ctrl = ctrl;
+    packet += static_cast<int>(part);
+    ++burst_wqe;
+  }
+
+  doorbell_store_barrier();
+  q.dv_qp.dbrec[MLX5_SND_DBR] = htobe32(static_cast<uint32_t>(q.sq_pi) & 0xffff);
+  doorbell_store_barrier();
+  *reinterpret_cast<volatile uint64_t*>(static_cast<uint8_t*>(q.dv_qp.bf.reg) + q.bf_offset) =
+      *reinterpret_cast<uint64_t*>(last_ctrl);
+  doorbell_store_barrier();
+  q.bf_offset ^= q.dv_qp.bf.size;
 }
 
 // Runs on the pinned TX worker thread: builds the burst's send WQEs directly
@@ -4179,20 +4336,23 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
   if (n <= 0) {
     return;
   }
+  const bool scheduled = (burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) != 0;
+  if (q.empw_enabled && segs == 1 && !scheduled) {
+    post_tx_burst_empw(q, burst);
+    return;
+  }
   static constexpr int SIGNAL_EVERY = 32;
   uint8_t* const sq_buf = static_cast<uint8_t*>(q.dv_qp.sq.buf);
   const uint32_t wqe_cnt = q.dv_qp.sq.wqe_cnt;
   const uint32_t stride = q.dv_qp.sq.stride;          // 64 B (one WQEBB)
   const uint8_t ds = static_cast<uint8_t>(2 + segs);  // ctrl + eth + segs data
-  // Per-packet send times (ns); 0 = send immediately. Reuses the burst's
-  // timestamp array (a burst is either RX or TX, never both).
-  const uint64_t* txtime = burst_ts_arr(burst);
+  const uint64_t* txtime = scheduled ? burst_ts_arr(burst) : nullptr;
   void* last_ctrl = nullptr;
 
   for (int i = 0; i < n; i++) {
     // Accurate send scheduling (per-packet): emit a WAIT-on-time WQE so the NIC
     // holds the following send until its real-time clock reaches txtime[i].
-    if (q.send_scheduling && txtime[i] != 0) {
+    if (scheduled && txtime[i] != 0) {
       last_ctrl = emit_wait_wqe(q, txtime[i]);
     }
 
@@ -4225,12 +4385,13 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
     q.wqe_slot_cum[idx] = q.slots_posted;
     last_ctrl = ctrl;
     q.sq_pi++;
+    q.wqe_wqebb_cum[idx] = q.sq_pi;
   }
 
   // Ring the SQ doorbell once for the whole burst: publish the WQEs, bump the
   // doorbell record, then write the last ctrl segment to the BlueFlame register.
   doorbell_store_barrier();  // WQEs visible before the doorbell record
-  q.dv_qp.dbrec[MLX5_SND_DBR] = htobe32(q.sq_pi & 0xffff);
+  q.dv_qp.dbrec[MLX5_SND_DBR] = htobe32(static_cast<uint32_t>(q.sq_pi) & 0xffff);
   doorbell_store_barrier();  // doorbell record visible before the BF write
   *reinterpret_cast<volatile uint64_t*>(static_cast<uint8_t*>(q.dv_qp.bf.reg) + q.bf_offset) =
       *reinterpret_cast<uint64_t*>(last_ctrl);
