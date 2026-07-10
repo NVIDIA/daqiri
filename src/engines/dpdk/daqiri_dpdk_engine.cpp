@@ -68,6 +68,22 @@ static inline uint32_t generate_queue_key(int port_id, int queue_id) {
     return (static_cast<uint32_t>(port_id) << 16) | static_cast<uint32_t>(queue_id);
 }
 
+static inline uint32_t flex_item_handle_key(uint16_t port, uint16_t flex_item_id) {
+  return (static_cast<uint32_t>(port) << 16) | static_cast<uint32_t>(flex_item_id);
+}
+
+static const FlexItemConfig* find_flex_item_config(const NetworkConfig& cfg, int port,
+                                                   uint16_t flex_item_id) {
+  for (const auto& intf : cfg.ifs_) {
+    if (intf.port_id_ != port) { continue; }
+    for (const auto& item : intf.rx_.flex_items_) {
+      if (item.id_ == flex_item_id) { return &item; }
+    }
+    return nullptr;
+  }
+  return nullptr;
+}
+
 /**
  * @brief Extracts the port ID from a 32-bit queue key.
  */
@@ -393,6 +409,18 @@ struct TxWorkerParams {
   struct rte_mempool* meta_pool;
   struct rte_mempool* burst_pool;
   struct rte_ether_addr mac_addr;
+  // Packet pacing (per-queue): when pacing_mbps > 0 and the SEND_ON_TIMESTAMP
+  // offload is active (tx_ts_dynfield_offset >= 0), the worker tags the first
+  // mbuf of each burst with a scheduled TX time so the NIC meters the queue at
+  // (at most) the configured average rate. pace_next_ns is the NIC-clock time
+  // the next burst may start; pace_rem carries the sub-ns division remainder so
+  // the long-run average is exact. engine is needed to read the NIC clock.
+  uint64_t pacing_mbps = 0;
+  int tx_ts_dynfield_offset = -1;
+  uint64_t tx_ts_dynflag_mask = 0;
+  DpdkEngine* engine = nullptr;
+  uint64_t pace_next_ns = 0;
+  uint64_t pace_rem = 0;
 };
 
 struct RxWorkerParams {
@@ -469,7 +497,7 @@ bool DpdkEngine::init_reorder_queue_state(const InterfaceConfig& intf, const RxQ
   const auto key = generate_queue_key(intf.port_id_, qcfg.common_.id_);
   ReorderQueueState qstate;
 
-  std::unordered_map<uint16_t, uint16_t> flow_id_to_queue;
+  std::unordered_map<FlowId, uint16_t> flow_id_to_queue;
   for (const auto& flow : intf.rx_.flows_) {
     if (flow_id_to_queue.find(flow.id_) != flow_id_to_queue.end()) {
       DAQIRI_LOG_ERROR("Duplicate flow ID {} in interface '{}'", flow.id_, intf.name_);
@@ -481,7 +509,7 @@ bool DpdkEngine::init_reorder_queue_state(const InterfaceConfig& intf, const RxQ
   for (const auto& reorder_cfg : intf.rx_.reorder_configs_) {
     const bool use_gpu_backend = reorder_cfg.reorder_type_ == "gpu";
     int flow_queue_id = -1;
-    std::vector<uint16_t> queue_flow_ids;
+    std::vector<FlowId> queue_flow_ids;
     queue_flow_ids.reserve(reorder_cfg.flow_ids_.size());
 
     for (const auto flow_id : reorder_cfg.flow_ids_) {
@@ -1464,7 +1492,7 @@ Status DpdkEngine::process_burst_for_reorder(uint32_t key, ReorderQueueState& qs
   qstate.unmatched_count = 0;
 
   for (int i = 0; i < num_pkts; ++i) {
-    const uint16_t flow_id = get_packet_flow_id(burst, i);
+    const FlowId flow_id = get_packet_flow_id(burst, i);
     const auto flow_it = qstate.flow_id_to_plan.find(flow_id);
     if (flow_it == qstate.flow_id_to_plan.end()) {
       if (qstate.unmatched_count >= unmatched_indices.size()) {
@@ -1692,10 +1720,21 @@ Status DpdkEngine::set_reorder_cuda_stream(const std::string& interface_name,
 ///
 ////////////////////////////////////////////////////////////////////////////////
 bool DpdkEngine::set_config_and_initialize(const NetworkConfig& cfg) {
-  num_init++;
-
   if (!this->initialized_) {
+    force_quit.store(false, std::memory_order_relaxed);
     cfg_ = cfg;
+
+    if (!validate_config()) {
+      DAQIRI_LOG_CRITICAL("Config validation failed");
+      return false;
+    }
+    if (!reserve_static_flow_ids()) {
+      DAQIRI_LOG_CRITICAL("Static flow ID reservation failed");
+      return false;
+    }
+
+    num_init++;
+
     cpu_set_t mask;
     long nproc, i;
 
@@ -1706,6 +1745,7 @@ bool DpdkEngine::set_config_and_initialize(const NetworkConfig& cfg) {
 
     // Our thread should have set the flag if it succeeded
     if (!this->initialized_) {
+      num_init--;
       DAQIRI_LOG_CRITICAL("Failed to initialize DPDK");
       return false;
     }
@@ -1713,17 +1753,14 @@ bool DpdkEngine::set_config_and_initialize(const NetworkConfig& cfg) {
     stats_.Init(cfg_);
     stats_thread_ = std::thread(&DpdkStats::Run, &stats_);
 
-    if (!validate_config()) {
-      DAQIRI_LOG_CRITICAL("Config validation failed");
-      return false;
-    }
-
     if (!init_reorder_state()) {
       DAQIRI_LOG_CRITICAL("Failed to initialize reorder state");
       return false;
     }
 
     run();
+  } else {
+    num_init++;
   }
 
   return true;
@@ -1737,6 +1774,15 @@ Status DpdkEngine::get_mac_addr(int port, char* mac) {
 
   memcpy(mac, reinterpret_cast<char*>(&mac_addrs[port]), sizeof(mac_addrs[port]));
   return Status::SUCCESS;
+}
+
+void* DpdkEngine::alloc_huge(size_t bytes, int numa, AllocRegion::Deallocator* deallocator) {
+  // EAL hugepage allocation: IOVA-contiguous and registrable with the NIC.
+  if (deallocator == nullptr) {
+    return nullptr;
+  }
+  *deallocator = AllocRegion::Deallocator::EAL;
+  return rte_malloc_socket(nullptr, bytes, 0, numa);
 }
 
 void DpdkEngine::adjust_memory_regions() {
@@ -1905,6 +1951,33 @@ bool DpdkEngine::setup_tx_timestamp_dynfield() {
   return true;
 }
 
+uint64_t DpdkEngine::now_tx_ns(uint16_t port) {
+  // The mlx5 send scheduler (tx_pp / SEND_ON_TIMESTAMP) releases packets when its
+  // own PTP hardware clock reaches the per-packet timestamp. To pace accurately we
+  // MUST seed pace_next_ns from that same clock: any offset between the seed clock
+  // and the NIC clock becomes a fixed per-burst scheduling latency (e.g. seeding
+  // from a host clock that runs ~0.2 s ahead parks every burst ~0.2 s in the NIC's
+  // future, which caps throughput). rte_eth_read_clock() returns exactly that
+  // clock, so prefer it.
+  uint64_t clk = 0;
+  if (rte_eth_read_clock(port, &clk) == 0) {
+    const uint64_t tps =
+        (port < rx_timestamp_conversions_.size() && rx_timestamp_conversions_[port].valid)
+            ? rx_timestamp_conversions_[port].ticks_per_second
+            : 0;
+    // With REAL_TIME_CLOCK_ENABLE the device clock already counts nanoseconds, so
+    // an uncalibrated tps (no RX-timestamp path active) means clk is ns as-is.
+    if (tps == 0 || tps == 1000000000ULL) { return clk; }
+    return static_cast<uint64_t>(static_cast<unsigned __int128>(clk) * 1000000000ULL / tps);
+  }
+  // Fallback: rte_eth_read_clock unsupported. The NIC PTP clock free-runs from ~0
+  // at driver load (unless a PTP daemon disciplines it), tracking CLOCK_MONOTONIC,
+  // NOT CLOCK_REALTIME (UTC). A small constant host/NIC offset only shifts the
+  // schedule, not the inter-burst spacing, so CLOCK_MONOTONIC keeps it closest.
+  struct timespec ts {};
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + static_cast<uint64_t>(ts.tv_nsec);
+}
 
 // HWS doesn't allow zero queues on an interface, so we make some dummy interfaces here for
 // users that are only doing TX
@@ -1984,7 +2057,11 @@ void DpdkEngine::initialize() {
   struct EalCleanupGuard {
     DpdkEngine* engine;
     ~EalCleanupGuard() {
-      if (!engine->initialized_) { engine->cleanup_eal(); }
+      if (!engine->initialized_) {
+        engine->cleanup_dynamic_flows();
+        engine->destroy_all_flow_rules();
+        engine->cleanup_eal();
+      }
     }
   } cleanup_guard{this};
 
@@ -2103,12 +2180,62 @@ void DpdkEngine::initialize() {
     strncpy(_argv[arg++], "--iova-mode=va", max_arg_size - 1);
   }
 
+  // Accurate send scheduling (accurate_send) and packet pacing (pacing_mbps)
+  // ride the mlx5 send-on-timestamp scheduler, which only runs when the tx_pp
+  // devarg (pacing granularity in ns) is set. Add it once when any TX path needs
+  // scheduling so the offload enabled later actually engages.
+  bool needs_send_sched = false;
+  for (const auto& intf : cfg_.ifs_) {
+    if (intf.tx_.accurate_send_) {
+      needs_send_sched = true;
+      break;
+    }
+    for (const auto& q : intf.tx_.queues_) {
+      if (q.pacing_mbps_ > 0) {
+        needs_send_sched = true;
+        break;
+      }
+    }
+    if (needs_send_sched) {
+      break;
+    }
+  }
+
+  // The mlx5 native eCPRI flow item (RTE_FLOW_ITEM_TYPE_ECPRI) is honored only
+  // under software/firmware steering (dv_flow_en=1); HW steering (dv_flow_en=2)
+  // silently fails to match it on ConnectX-class NICs. Switch any interface with
+  // eCPRI RX flows to firmware steering. Trade-off: the async/template
+  // dynamic-RX-flow path requires HW steering, so it is unavailable on that port.
+  auto interface_has_ecpri = [&](const std::string& dev_addr) -> bool {
+    for (const auto& intf : cfg_.ifs_) {
+      if (intf.address_ != dev_addr) {
+        continue;
+      }
+      for (const auto& fl : intf.rx_.flows_) {
+        if (fl.match_.type_ == FlowMatchType::ECPRI) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
   if (loopback_ != LoopbackType::LOOPBACK_TYPE_SW) {
     for (const auto& name : ifs) {
       strncpy(_argv[arg++], "-a", max_arg_size - 1);
-      strncpy(_argv[arg++],
-              (name + std::string(",txq_inline_max=0,dv_flow_en=2")).c_str(),
-              max_arg_size - 1);
+      const int dv_flow_en = interface_has_ecpri(name) ? 1 : 2;
+      if (dv_flow_en == 1) {
+        DAQIRI_LOG_WARN(
+            "Interface '{}' has eCPRI RX flows: switching mlx5 to firmware steering "
+            "(dv_flow_en=1). HW steering (dv_flow_en=2) does not honor the eCPRI flow item on "
+            "this NIC; async/template dynamic RX flows are unavailable on this port.",
+            name);
+      }
+      std::string devargs = name + ",txq_inline_max=0,dv_flow_en=" + std::to_string(dv_flow_en);
+      if (needs_send_sched) {
+        devargs += ",tx_pp=500";  // 500 ns scheduling granularity
+      }
+      strncpy(_argv[arg++], devargs.c_str(), max_arg_size - 1);
     }
   }
 
@@ -2314,6 +2441,10 @@ void DpdkEngine::initialize() {
     // For now make a single queue. Support more sophisticated TX on next release
     const auto& tx = intf.tx_;
 
+    const auto is_dummy_tx_queue = [](const CommonQueueConfig& queue) {
+      return queue.name_.find("UNUSED_TX_P") == 0;
+    };
+
     for (auto& q : tx.queues_) {
       DAQIRI_LOG_INFO("Configuring TX queue: {} ({}) on port {}",
                         q.common_.name_,
@@ -2345,9 +2476,21 @@ void DpdkEngine::initialize() {
         q_packet_size += mr.buf_size_;
       }
 
-      max_pkt_size = std::max(max_pkt_size, q_packet_size);
+      // Exclude generated dummy TX queues so RX-only ports are not inflated to the
+      // dummy jumbo frame size when MTU sizing uses the combined RX/TX maximum.
+      // Generated dummy RX queues are left unchanged to preserve TX-only behavior.
+      if (!is_dummy_tx_queue(q.common_)) {
+        max_pkt_size = std::max(max_pkt_size, q_packet_size);
+      }
       uint32_t key = generate_queue_key(intf.port_id_, q.common_.id_);
       tx_dpdk_q_map_[key] = q_backend;
+    }
+
+    const size_t rx_tunnel_overhead = flow_max_decap_wire_overhead(rx.flows_);
+    if (rx_tunnel_overhead > 0) {
+      DAQIRI_LOG_INFO("Adding {} bytes of RX tunnel overhead for MTU sizing", rx_tunnel_overhead);
+      max_rx_pkt_size += rx_tunnel_overhead;
+      max_pkt_size = std::max(max_pkt_size, max_rx_pkt_size);
     }
 
     DAQIRI_LOG_INFO("Max packet size needed with TX: {}", max_pkt_size);
@@ -2355,10 +2498,12 @@ void DpdkEngine::initialize() {
 
     local_port_conf[intf.port_id_].txmode.offloads = 0;
 
-    // Compute MTU conservatively. Clamp to jumbo frame bounds and enforce a valid minimum MTU.
-    max_rx_pkt_size = std::max(max_rx_pkt_size, 64UL);
+    // Compute MTU from the largest RX/TX queue buffer frame needed on this port
+    // (max_pkt_size already folds in the existing RX tunnel decap overhead).
+    // Clamp to jumbo bounds and enforce a valid minimum MTU.
+    max_pkt_size = std::max(max_pkt_size, 64UL);
     const size_t requested_frame_size =
-        std::min(max_rx_pkt_size, static_cast<size_t>(JUMBOFRAME_SIZE));
+        std::min(max_pkt_size, static_cast<size_t>(JUMBOFRAME_SIZE));
     const size_t crc_and_hdr = RTE_ETHER_CRC_LEN + RTE_ETHER_HDR_LEN;
     const size_t requested_mtu =
         (requested_frame_size > crc_and_hdr) ? (requested_frame_size - crc_and_hdr) : 0;
@@ -2390,20 +2535,35 @@ void DpdkEngine::initialize() {
       }
     }
 
-    if (loopback_ != LoopbackType::LOOPBACK_TYPE_SW && tx.accurate_send_) {
-      if (!setup_tx_timestamp_dynfield()) { return; }
-
-      if (ret != 0) {
-        DAQIRI_LOG_CRITICAL("Failed to get device info for port {}", intf.port_id_);
-        return;
-      } else {
-        if ((dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP) == 0) {
+    // The SEND_ON_TIMESTAMP offload backs both accurate_send (per-packet
+    // set_packet_tx_time) and per-queue packet pacing (pacing_mbps), so enable
+    // it when either is requested.
+    bool tx_pacing_requested = false;
+    for (const auto& pq : tx.queues_) {
+      if (pq.pacing_mbps_ > 0) {
+        tx_pacing_requested = true;
+        break;
+      }
+    }
+    if (loopback_ != LoopbackType::LOOPBACK_TYPE_SW &&
+        (tx.accurate_send_ || tx_pacing_requested)) {
+      // dev_info was already fetched and validated at the top of this loop
+      // iteration (the non-SW-loopback branch returns on failure), so it is
+      // safe to inspect tx_offload_capa here directly.
+      if ((dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP) == 0) {
+        // accurate_send is a hard requirement; pacing degrades to line rate.
+        if (tx.accurate_send_) {
           DAQIRI_LOG_CRITICAL(
               "Accurate send scheduling enabled in config, but not supported by NIC!");
           return;
-        } else {
-          local_port_conf[intf.port_id_].txmode.offloads |= RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP;
         }
+        DAQIRI_LOG_WARN(
+            "TX packet pacing requested on port {} but NIC lacks SEND_ON_TIMESTAMP offload; "
+            "pacing disabled (line rate)",
+            intf.port_id_);
+      } else {
+        if (!setup_tx_timestamp_dynfield()) { return; }
+        local_port_conf[intf.port_id_].txmode.offloads |= RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP;
       }
     }
 
@@ -2467,6 +2627,10 @@ void DpdkEngine::initialize() {
       }
 
       rte_eth_macaddr_get(intf.port_id_, &conf_ports_eth_addr[intf.port_id_]);
+
+      if (rx.dynamic_flow_capacity_ > 0) {
+        configure_flow_api_for_port(intf.port_id_, rx.dynamic_flow_capacity_);
+      }
 
       for (const auto& q : rx.queues_) {
         // Assume one core for now
@@ -2550,26 +2714,45 @@ void DpdkEngine::initialize() {
 
       if (rx.hardware_timestamps_ && !calibrate_rx_timestamp_clock(intf.port_id_)) { return; }
 
-      // Start flows
+      // Standard (group 3), flex-item (group 1) and eCPRI (group 2) flows use
+      // separate DPDK flow groups with conflicting group-0 jump rules;
+      // validate_config() rejects mixing these classes per interface.
       bool has_standard_flows = false;
       bool has_flex_item_flows = false;
+      bool has_ecpri_flows = false;
       for (const auto& flow : rx.flows_) {
         DAQIRI_LOG_INFO("Adding RX flow {}", flow.name_);
+        struct rte_flow* created = nullptr;
         if (flow.match_.type_ == FlowMatchType::FLEX_ITEM) {
-          add_flex_item_flow(intf.port_id_, flow.match_.flex_item_match_, flow.action_.id_);
-          has_flex_item_flows = true;
+          created = add_flex_item_flow(
+              intf.port_id_, flow.match_.flex_item_match_, flow.action_.id_, flow.id_);
+          if (created != nullptr) { has_flex_item_flows = true; }
+        } else if (flow.match_.type_ == FlowMatchType::ECPRI) {
+          created = add_ecpri_flow(intf.port_id_, flow);
+          if (created != nullptr) {
+            has_ecpri_flows = true;
+          }
         } else {
-          add_flow(intf.port_id_, flow);
-          has_standard_flows = true;
+          created = add_flow(intf.port_id_, flow);
+          if (created != nullptr) { has_standard_flows = true; }
         }
+        if (created == nullptr) { return; }
       }
 
       if (intf.rx_.flow_isolation_) {
         if (has_standard_flows && !add_send_to_kernel_fallback(intf.port_id_, 3)) { return; }
         if (has_flex_item_flows && !add_send_to_kernel_fallback(intf.port_id_, 1)) { return; }
+        if (has_ecpri_flows && !add_send_to_kernel_fallback(intf.port_id_, 2)) {
+          return;
+        }
       }
 
-      apply_tx_offloads(intf.port_id_);
+      for (const auto& flow : tx.flows_) {
+        DAQIRI_LOG_INFO("Adding TX flow {}", flow.name_);
+        if (add_tx_flow(intf.port_id_, flow) == nullptr) { return; }
+      }
+
+      if (!apply_tx_offloads(intf.port_id_)) { return; }
     } else {
       DAQIRI_LOG_INFO("Software loopback mode configured");
     }
@@ -2583,7 +2766,6 @@ void DpdkEngine::initialize() {
 
   // Initialize all drop_all_traffic_flow pointers to nullptr
   for (auto& config : drop_all_traffic_flow) {
-    config.jump = nullptr;
     config.drop = nullptr;
   }
 
@@ -2720,100 +2902,1465 @@ int DpdkEngine::setup_pools_and_rings(int max_rx_batch, int max_tx_batch) {
   return 0;
 }
 
-#define MAX_PATTERN_NUM 5
-#define MAX_ACTION_NUM 4
+#define MAX_PATTERN_NUM 16
+#define MAX_ACTION_NUM 12
 
-struct rte_flow_item_flex_handle *DpdkEngine::create_flex_flow_rule(
-    int port, int offset, struct rte_flow_item *udp_item, struct rte_flow_item *end_pattern) {
-  static struct rte_flow_item_flex_handle *item_handle = NULL;
-  struct rte_flow_error error;
+struct FlowTemplateCreateStorage {
+  struct rte_flow_item pattern[MAX_PATTERN_NUM];
+  struct rte_flow_action action[MAX_ACTION_NUM];
+  struct rte_flow_item_ipv4 ip_spec;
+  struct rte_flow_item_udp udp_spec;
+  struct rte_flow_action_mark mark;
+  struct rte_flow_action_queue queue;
+};
 
-  if (item_handle != NULL) {
-    return item_handle;
+static constexpr uint32_t kDynamicFlowQueueId = 0;
+static constexpr FlowId kMaxDynamicFlowMarkId = 0x00ffffffU;
+static constexpr uint32_t kFlexItemRxFlowGroup = 1;
+static constexpr uint32_t kStandardRxFlowGroup = 3;
+static constexpr uint32_t kRxFlowPriority = 1;
+static constexpr size_t kMaxIpv4UdpFlowTemplateFieldsForSingleTable = 7;
+
+static uint32_t dynamic_rx_flow_group(const FlowRuleConfig& flow) {
+  return flow.match_.type_ == FlowMatchType::FLEX_ITEM ? kFlexItemRxFlowGroup
+                                                       : kStandardRxFlowGroup;
+}
+
+enum class Ipv4UdpFlowTemplateField {
+  IPV4_LEN,
+  IPV4_SRC,
+  IPV4_DST,
+  UDP_SRC,
+  UDP_DST,
+};
+
+struct Ipv4UdpFlowTemplateKey {
+  std::vector<Ipv4UdpFlowTemplateField> fields;
+};
+
+static bool operator==(const Ipv4UdpFlowTemplateKey& lhs,
+                       const Ipv4UdpFlowTemplateKey& rhs) {
+  return lhs.fields == rhs.fields;
+}
+
+static const std::vector<Ipv4UdpFlowTemplateField>& ipv4_udp_flow_template_fields() {
+  static const std::vector<Ipv4UdpFlowTemplateField> fields = {
+      Ipv4UdpFlowTemplateField::IPV4_LEN,
+      Ipv4UdpFlowTemplateField::IPV4_SRC,
+      Ipv4UdpFlowTemplateField::IPV4_DST,
+      Ipv4UdpFlowTemplateField::UDP_SRC,
+      Ipv4UdpFlowTemplateField::UDP_DST,
+  };
+  return fields;
+}
+
+static void append_ipv4_udp_flow_template_keys(size_t field_idx,
+                                                std::vector<Ipv4UdpFlowTemplateField>& selected,
+                                                std::vector<Ipv4UdpFlowTemplateKey>& keys) {
+  const auto& fields = ipv4_udp_flow_template_fields();
+  if (field_idx == fields.size()) {
+    keys.push_back({selected});
+    return;
   }
 
-  {
-    struct rte_flow_error jump_error;
-    struct rte_flow_attr jump_attr;
-    jump_attr.group = 0;
-    jump_attr.ingress = 1;
-    struct rte_flow_action_jump jump_v;
-    jump_v.group = 1;
-    struct rte_flow_action jump_actions[2];
-    jump_actions[0].type = RTE_FLOW_ACTION_TYPE_JUMP;
-    jump_actions[0].conf = &jump_v;
-    jump_actions[1].type = RTE_FLOW_ACTION_TYPE_END;
+  append_ipv4_udp_flow_template_keys(field_idx + 1, selected, keys);
+  selected.push_back(fields[field_idx]);
+  append_ipv4_udp_flow_template_keys(field_idx + 1, selected, keys);
+  selected.pop_back();
+}
 
-    struct rte_flow_item jump_pattern[2];
-    jump_pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
-    jump_pattern[0].spec = 0;
-    jump_pattern[0].mask = 0;
-    jump_pattern[1].type = RTE_FLOW_ITEM_TYPE_END;
+static const std::vector<Ipv4UdpFlowTemplateKey>& ipv4_udp_flow_template_keys() {
+  static const std::vector<Ipv4UdpFlowTemplateKey> keys = [] {
+    std::vector<Ipv4UdpFlowTemplateKey> generated_keys;
+    if (ipv4_udp_flow_template_fields().size() >
+        kMaxIpv4UdpFlowTemplateFieldsForSingleTable) {
+      return generated_keys;
+    }
 
-    int res = rte_flow_validate(port, &jump_attr, jump_pattern, jump_actions, &jump_error);
-    if (!res) {
-      struct rte_flow* flow = rte_flow_create(
-          port, &jump_attr, jump_pattern, jump_actions, &jump_error);
-      if (flow == NULL) {
-        printf("rte_flow_create failed");
+    std::vector<Ipv4UdpFlowTemplateField> selected;
+    append_ipv4_udp_flow_template_keys(0, selected, generated_keys);
+    return generated_keys;
+  }();
+  return keys;
+}
+
+static Ipv4UdpFlowTemplateKey ipv4_udp_flow_template_key(const FlowMatch& match) {
+  Ipv4UdpFlowTemplateKey key;
+  if (match.ipv4_len_ > 0) {
+    key.fields.push_back(Ipv4UdpFlowTemplateField::IPV4_LEN);
+  }
+  if (match.ipv4_src_ != INADDR_ANY) {
+    key.fields.push_back(Ipv4UdpFlowTemplateField::IPV4_SRC);
+  }
+  if (match.ipv4_dst_ != INADDR_ANY) {
+    key.fields.push_back(Ipv4UdpFlowTemplateField::IPV4_DST);
+  }
+  if (match.udp_src_ > 0) {
+    key.fields.push_back(Ipv4UdpFlowTemplateField::UDP_SRC);
+  }
+  if (match.udp_dst_ > 0) {
+    key.fields.push_back(Ipv4UdpFlowTemplateField::UDP_DST);
+  }
+  return key;
+}
+
+static bool ipv4_udp_flow_template_key_has_field(const Ipv4UdpFlowTemplateKey& key,
+                                                  Ipv4UdpFlowTemplateField field) {
+  return std::find(key.fields.begin(), key.fields.end(), field) != key.fields.end();
+}
+
+static void build_ipv4_udp_template_pattern(const Ipv4UdpFlowTemplateKey& key,
+                                             struct rte_flow_item pattern[MAX_PATTERN_NUM],
+                                             struct rte_flow_item_ipv4* ip_mask,
+                                             struct rte_flow_item_udp* udp_mask) {
+  memset(pattern, 0, sizeof(struct rte_flow_item) * MAX_PATTERN_NUM);
+  memset(ip_mask, 0, sizeof(*ip_mask));
+  memset(udp_mask, 0, sizeof(*udp_mask));
+
+  pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
+  pattern[1].type = RTE_FLOW_ITEM_TYPE_IPV4;
+  pattern[2].type = RTE_FLOW_ITEM_TYPE_UDP;
+  pattern[3].type = RTE_FLOW_ITEM_TYPE_END;
+
+  if (ipv4_udp_flow_template_key_has_field(key, Ipv4UdpFlowTemplateField::IPV4_LEN)) {
+    ip_mask->hdr.total_length = 0xffff;
+  }
+  if (ipv4_udp_flow_template_key_has_field(key, Ipv4UdpFlowTemplateField::IPV4_SRC)) {
+    ip_mask->hdr.src_addr = 0xffffffff;
+  }
+  if (ipv4_udp_flow_template_key_has_field(key, Ipv4UdpFlowTemplateField::IPV4_DST)) {
+    ip_mask->hdr.dst_addr = 0xffffffff;
+  }
+  if (ipv4_udp_flow_template_key_has_field(key, Ipv4UdpFlowTemplateField::IPV4_LEN) ||
+      ipv4_udp_flow_template_key_has_field(key, Ipv4UdpFlowTemplateField::IPV4_SRC) ||
+      ipv4_udp_flow_template_key_has_field(key, Ipv4UdpFlowTemplateField::IPV4_DST)) {
+    pattern[1].mask = ip_mask;
+  }
+
+  if (ipv4_udp_flow_template_key_has_field(key, Ipv4UdpFlowTemplateField::UDP_SRC)) {
+    udp_mask->hdr.src_port = 0xffff;
+  }
+  if (ipv4_udp_flow_template_key_has_field(key, Ipv4UdpFlowTemplateField::UDP_DST)) {
+    udp_mask->hdr.dst_port = 0xffff;
+  }
+  if (ipv4_udp_flow_template_key_has_field(key, Ipv4UdpFlowTemplateField::UDP_SRC) ||
+      ipv4_udp_flow_template_key_has_field(key, Ipv4UdpFlowTemplateField::UDP_DST)) {
+    pattern[2].mask = udp_mask;
+  }
+}
+
+void* DpdkEngine::flow_op_user_data(FlowOpId op_id) {
+  return reinterpret_cast<void*>(static_cast<uintptr_t>(op_id));
+}
+
+FlowOpId DpdkEngine::flow_op_id_from_user_data(void* user_data) {
+  return static_cast<FlowOpId>(reinterpret_cast<uintptr_t>(user_data));
+}
+
+FlowOpId DpdkEngine::allocate_flow_op_id() {
+  if (next_flow_op_id_ == 0) { next_flow_op_id_ = 1; }
+  return next_flow_op_id_++;
+}
+
+FlowId DpdkEngine::allocate_dynamic_flow_id() {
+  while (!free_dynamic_flow_ids_.empty()) {
+    const FlowId candidate = free_dynamic_flow_ids_.front();
+    free_dynamic_flow_ids_.pop();
+    if (candidate == 0 || candidate > kMaxDynamicFlowMarkId) { continue; }
+    if (static_flow_ids_.find(candidate) != static_flow_ids_.end()) { continue; }
+    if (dynamic_flows_.find(candidate) != dynamic_flows_.end()) { continue; }
+    return candidate;
+  }
+
+  while (next_dynamic_flow_id_ != 0 &&
+         next_dynamic_flow_id_ <= kMaxDynamicFlowMarkId) {
+    const FlowId candidate = next_dynamic_flow_id_++;
+    if (candidate == 0) { continue; }
+    if (static_flow_ids_.find(candidate) != static_flow_ids_.end()) { continue; }
+    if (dynamic_flows_.find(candidate) != dynamic_flows_.end()) { continue; }
+    return candidate;
+  }
+  return 0;
+}
+
+void DpdkEngine::release_dynamic_flow_id(FlowId flow_id) {
+  if (flow_id == 0 || flow_id > kMaxDynamicFlowMarkId) { return; }
+  if (static_flow_ids_.find(flow_id) != static_flow_ids_.end()) { return; }
+  if (dynamic_flows_.find(flow_id) != dynamic_flows_.end()) { return; }
+  free_dynamic_flow_ids_.push(flow_id);
+}
+
+bool DpdkEngine::reserve_static_flow_ids() {
+  static_flow_ids_.clear();
+  while (!free_dynamic_flow_ids_.empty()) { free_dynamic_flow_ids_.pop(); }
+  for (const auto& intf : cfg_.ifs_) {
+    for (const auto& flow : intf.rx_.flows_) {
+      if (flow.id_ == 0) { continue; }
+      if (!static_flow_ids_.insert(flow.id_).second) {
+        DAQIRI_LOG_ERROR("Duplicate static flow ID {}", flow.id_);
+        return false;
       }
-    } else {
-      printf("Failed flow validation: %d\n", res);
+    }
+  }
+  next_dynamic_flow_id_ = 1;
+  return true;
+}
+
+bool DpdkEngine::is_valid_rx_queue(int port, uint16_t queue_id) const {
+  if (port < 0 || port >= static_cast<int>(cfg_.ifs_.size())) { return false; }
+  const auto& queues = cfg_.ifs_[port].rx_.queues_;
+  return std::any_of(queues.begin(), queues.end(), [queue_id](const RxQueueConfig& q) {
+    return q.common_.id_ == queue_id;
+  });
+}
+
+bool DpdkEngine::ipv4_udp_flow_template_index(const FlowMatch& match,
+                                              uint8_t* template_index) const {
+  if (template_index == nullptr) { return false; }
+  *template_index = 0;
+
+  const auto key = ipv4_udp_flow_template_key(match);
+  if (key.fields.empty()) { return false; }
+
+  const auto& keys = ipv4_udp_flow_template_keys();
+  const auto key_it = std::find(keys.begin(), keys.end(), key);
+  if (key_it == keys.end()) { return false; }
+
+  const auto distance = std::distance(keys.begin(), key_it);
+  if (distance < 0 || distance > std::numeric_limits<uint8_t>::max()) {
+    return false;
+  }
+  *template_index = static_cast<uint8_t>(distance);
+  return true;
+}
+
+bool DpdkEngine::is_ipv4_udp_flow_match(const FlowMatch& match) const {
+  return match.type_ == FlowMatchType::IPV4_UDP &&
+         !ipv4_udp_flow_template_key(match).fields.empty();
+}
+
+bool DpdkEngine::validate_dynamic_rx_flow(int port, const FlowRuleConfig& flow) const {
+  if (!initialized_) {
+    DAQIRI_LOG_ERROR("Cannot add dynamic RX flow before DAQIRI initialization");
+    return false;
+  }
+  if (loopback_ == LoopbackType::LOOPBACK_TYPE_SW) {
+    DAQIRI_LOG_ERROR("Dynamic RX flows are not supported in software loopback mode");
+    return false;
+  }
+  if (port < 0 || port >= static_cast<int>(cfg_.ifs_.size())) {
+    DAQIRI_LOG_ERROR("Invalid dynamic RX flow port {}", port);
+    return false;
+  }
+  const auto actions = flow_rule_actions(flow);
+  if (actions.empty() || actions.back().type_ != FlowType::QUEUE) {
+    DAQIRI_LOG_ERROR("Dynamic RX flow must end with a queue action");
+    return false;
+  }
+  if (actions.size() > 7) {
+    DAQIRI_LOG_ERROR("Dynamic RX flow '{}' has too many actions", flow.name_);
+    return false;
+  }
+  const FlowAction queue_action = flow_queue_action(actions);
+  if (!is_valid_rx_queue(port, queue_action.id_)) {
+    DAQIRI_LOG_ERROR("Dynamic RX flow targets invalid port/queue {}/{}", port, queue_action.id_);
+    return false;
+  }
+  const bool has_transform = flow_actions_have_transform(actions);
+  for (const auto& action : actions) {
+    if (action.type_ == FlowType::VLAN_PUSH || action.type_ == FlowType::TUNNEL_ENCAP) {
+      DAQIRI_LOG_ERROR("Dynamic RX flow '{}' can only use decap/pop transform actions",
+                       flow.name_);
+      return false;
+    }
+  }
+  if (has_transform && flow.match_.type_ == FlowMatchType::FLEX_ITEM) {
+    DAQIRI_LOG_ERROR("Dynamic RX flow '{}' cannot combine flex-item matching with tunnel/VLAN "
+                     "actions",
+                     flow.name_);
+    return false;
+  }
+  if (is_ipv4_udp_flow_match(flow.match_)) { return true; }
+  if (flow.match_.type_ == FlowMatchType::FLEX_ITEM) {
+    if (find_flex_item_config(cfg_, port, flow.match_.flex_item_match_.flex_item_id_) == nullptr) {
+      DAQIRI_LOG_ERROR("Dynamic RX flow references invalid flex item ID {}",
+                       flow.match_.flex_item_match_.flex_item_id_);
+      return false;
+    }
+    return true;
+  }
+  if (flow.match_.type_ == FlowMatchType::ECPRI) {
+    if (flow.match_.ecpri_match_.match_id_ && !flow.match_.ecpri_match_.match_msg_type_) {
+      DAQIRI_LOG_ERROR("Dynamic eCPRI RX flow matches pc_id/rtc_id but no msg_type");
+      return false;
+    }
+    // The eCPRI flow item is honored only under firmware steering (dv_flow_en=1).
+    // initialize() switches a port to firmware steering only when it has at least
+    // one static eCPRI flow; otherwise the port stays on HW steering (dv_flow_en=2)
+    // where add_ecpri_flow() returns success but the rule silently never matches.
+    // A static eCPRI flow on the interface is the only signal that the switch
+    // happened, so require one before accepting a dynamic eCPRI flow.
+    const auto& intf_flows = cfg_.ifs_[port].rx_.flows_;
+    if (std::none_of(intf_flows.begin(), intf_flows.end(),
+                     [](const FlowConfig& f) { return f.match_.type_ == FlowMatchType::ECPRI; })) {
+      DAQIRI_LOG_ERROR(
+          "Dynamic eCPRI RX flow on port {} requires at least one static eCPRI flow in the "
+          "initial config; without it the port keeps HW steering (dv_flow_en=2) and the eCPRI "
+          "flow item silently never matches.",
+          port);
+      return false;
+    }
+    return true;
+  }
+
+  DAQIRI_LOG_ERROR("Dynamic RX flow must define an IPv4/UDP, flex-item or eCPRI match");
+  return false;
+}
+
+Status DpdkEngine::ensure_dynamic_flow_isolation_fallback_locked(int port, uint32_t group) {
+  if (port < 0 || port >= static_cast<int>(cfg_.ifs_.size())) { return Status::INVALID_PARAMETER; }
+
+  for (const auto key : eth_jump_installed_) {
+    const int installed_port = static_cast<int>(key >> 32);
+    const uint32_t installed_group = static_cast<uint32_t>(key & 0xffffffffU);
+    if (installed_port != port || installed_group == group) { continue; }
+
+    DAQIRI_LOG_ERROR(
+        "Dynamic RX flow on port {} requires DPDK flow group {}, but group {} already owns "
+        "the group-0 ETH jump; standard IPv4/UDP and flex-item flows cannot mix on one "
+        "interface",
+        port,
+        group,
+        installed_group);
+    return Status::INVALID_PARAMETER;
+  }
+
+  if (!cfg_.ifs_[port].rx_.flow_isolation_) { return Status::SUCCESS; }
+  if (!add_send_to_kernel_fallback(port, group)) { return Status::INTERNAL_ERROR; }
+  if (!ensure_eth_jump_rule(port, group)) { return Status::INTERNAL_ERROR; }
+  return Status::SUCCESS;
+}
+
+void DpdkEngine::build_ipv4_udp_flow_pattern(const FlowMatch& match,
+                                             struct rte_flow_item pattern[MAX_PATTERN_NUM],
+                                             struct rte_flow_item_ipv4* ip_spec,
+                                             struct rte_flow_item_udp* udp_spec) const {
+  if (ip_spec == nullptr || udp_spec == nullptr) { return; }
+
+  memset(pattern, 0, sizeof(struct rte_flow_item) * MAX_PATTERN_NUM);
+  memset(ip_spec, 0, sizeof(*ip_spec));
+  memset(udp_spec, 0, sizeof(*udp_spec));
+
+  pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
+  pattern[1].type = RTE_FLOW_ITEM_TYPE_IPV4;
+  pattern[2].type = RTE_FLOW_ITEM_TYPE_UDP;
+  pattern[3].type = RTE_FLOW_ITEM_TYPE_END;
+
+  bool has_ip_match = false;
+  if (match.ipv4_len_ > 0) {
+    ip_spec->hdr.total_length = htons(match.ipv4_len_);
+    has_ip_match = true;
+  }
+  if (match.ipv4_src_ != INADDR_ANY) {
+    ip_spec->hdr.src_addr = match.ipv4_src_;
+    has_ip_match = true;
+  }
+  if (match.ipv4_dst_ != INADDR_ANY) {
+    ip_spec->hdr.dst_addr = match.ipv4_dst_;
+    has_ip_match = true;
+  }
+  if (has_ip_match) { pattern[1].spec = ip_spec; }
+
+  bool has_udp_match = false;
+  if (match.udp_src_ > 0) {
+    udp_spec->hdr.src_port = htons(match.udp_src_);
+    has_udp_match = true;
+  }
+  if (match.udp_dst_ > 0) {
+    udp_spec->hdr.dst_port = htons(match.udp_dst_);
+    has_udp_match = true;
+  }
+  if (has_udp_match) { pattern[2].spec = udp_spec; }
+}
+
+void DpdkEngine::build_mark_queue_actions(FlowId flow_id,
+                                          uint16_t queue_id,
+                                          struct rte_flow_action action[MAX_ACTION_NUM],
+                                          struct rte_flow_action_mark* mark,
+                                          struct rte_flow_action_queue* queue) const {
+  if (mark == nullptr || queue == nullptr) { return; }
+
+  memset(action, 0, sizeof(struct rte_flow_action) * MAX_ACTION_NUM);
+  memset(mark, 0, sizeof(*mark));
+  memset(queue, 0, sizeof(*queue));
+
+  mark->id = flow_id;
+  queue->index = queue_id;
+  action[0].type = RTE_FLOW_ACTION_TYPE_MARK;
+  action[0].conf = mark;
+  action[1].type = RTE_FLOW_ACTION_TYPE_QUEUE;
+  action[1].conf = queue;
+  action[2].type = RTE_FLOW_ACTION_TYPE_END;
+}
+
+Status DpdkEngine::enqueue_software_flow_completion(const FlowOpResult& result) {
+  ready_flow_ops_.push(result);
+  return Status::SUCCESS;
+}
+
+bool DpdkEngine::configure_flow_api_for_port(uint16_t port, uint32_t capacity) {
+  if (port >= flow_template_states_.size()) { return false; }
+  if (capacity == 0) { return false; }
+  auto& state = flow_template_states_[port];
+  if (state.configured) { return true; }
+
+  struct rte_flow_error error;
+  struct rte_flow_port_info port_info;
+  struct rte_flow_queue_info queue_info;
+  memset(&error, 0, sizeof(error));
+  memset(&port_info, 0, sizeof(port_info));
+  memset(&queue_info, 0, sizeof(queue_info));
+
+  int ret = rte_flow_info_get(port, &port_info, &queue_info, &error);
+  if (ret < 0 || port_info.max_nb_queues == 0) {
+    DAQIRI_LOG_WARN("DPDK async flow API is not available on port {}: {}",
+                    port,
+                    error.message ? error.message : rte_strerror(rte_errno));
+    return false;
+  }
+
+  state.capacity = capacity;
+  struct rte_flow_port_attr port_attr;
+  struct rte_flow_queue_attr queue_attr;
+  memset(&port_attr, 0, sizeof(port_attr));
+  memset(&queue_attr, 0, sizeof(queue_attr));
+
+  if ((port_info.supported_flags & RTE_FLOW_PORT_FLAG_STRICT_QUEUE) != 0) {
+    port_attr.flags |= RTE_FLOW_PORT_FLAG_STRICT_QUEUE;
+  }
+  queue_attr.size = std::max<uint32_t>(64, state.capacity * 2);
+  if (queue_info.max_size > 0) { queue_attr.size = std::min(queue_attr.size, queue_info.max_size); }
+  const struct rte_flow_queue_attr* queue_attrs[] = {&queue_attr};
+
+  ret = rte_flow_configure(port, &port_attr, 1, queue_attrs, &error);
+  if (ret < 0) {
+    DAQIRI_LOG_WARN("Failed to configure DPDK async flow API on port {}: {}",
+                    port,
+                    error.message ? error.message : rte_strerror(rte_errno));
+    return false;
+  }
+
+  state.configured = true;
+  state.flow_queue_id = kDynamicFlowQueueId;
+  DAQIRI_LOG_INFO("Configured DPDK async flow API on port {} with queue size {}",
+                  port,
+                  queue_attr.size);
+  return true;
+}
+
+bool DpdkEngine::ensure_ipv4_udp_flow_template_table(uint16_t port) {
+  if (port >= flow_template_states_.size()) { return false; }
+  auto& state = flow_template_states_[port];
+  if (state.templates_ready) { return true; }
+  if (!state.configured) { return false; }
+
+  struct rte_flow_error error;
+  memset(&error, 0, sizeof(error));
+
+  const auto& template_keys = ipv4_udp_flow_template_keys();
+  if (template_keys.empty()) {
+    DAQIRI_LOG_WARN("IPv4/UDP RX flow template field count {} cannot fit in one DPDK "
+                    "template table; falling back to legacy flow create",
+                    ipv4_udp_flow_template_fields().size());
+    return false;
+  }
+  if (template_keys.size() > std::numeric_limits<uint8_t>::max()) {
+    DAQIRI_LOG_WARN("DPDK supports at most {} pattern templates per table; {} IPv4/UDP RX "
+                    "flow templates requested",
+                    static_cast<unsigned int>(std::numeric_limits<uint8_t>::max()),
+                    template_keys.size());
+    return false;
+  }
+
+  state.ipv4_udp_pattern_templates.assign(template_keys.size(), nullptr);
+  for (size_t pattern_idx = 0; pattern_idx < template_keys.size(); ++pattern_idx) {
+    struct rte_flow_pattern_template_attr pattern_attr;
+    struct rte_flow_item pattern[MAX_PATTERN_NUM];
+    struct rte_flow_item_ipv4 ip_mask;
+    struct rte_flow_item_udp udp_mask;
+    memset(&pattern_attr, 0, sizeof(pattern_attr));
+    pattern_attr.ingress = 1;
+    pattern_attr.relaxed_matching = 1;
+    build_ipv4_udp_template_pattern(template_keys[pattern_idx], pattern, &ip_mask, &udp_mask);
+
+    state.ipv4_udp_pattern_templates[pattern_idx] =
+        rte_flow_pattern_template_create(port, &pattern_attr, pattern, &error);
+    if (state.ipv4_udp_pattern_templates[pattern_idx] == nullptr) {
+      DAQIRI_LOG_WARN("Failed to create RX flow pattern template {} on port {}: {}",
+                      pattern_idx,
+                      port,
+                      error.message ? error.message : rte_strerror(rte_errno));
+      for (auto* tmpl : state.ipv4_udp_pattern_templates) {
+        if (tmpl != nullptr) { rte_flow_pattern_template_destroy(port, tmpl, &error); }
+      }
+      state.ipv4_udp_pattern_templates.clear();
+      return false;
     }
   }
 
-  struct rte_flow_item_flex_conf flex_conf;
-  flex_conf.tunnel = FLEX_TUNNEL_MODE_SINGLE;
-  memset(&flex_conf.next_header, 0, sizeof(flex_conf.next_header));
-  flex_conf.next_header.field_mode = FIELD_MODE_FIXED;
-  flex_conf.next_header.field_base = 32 * 8;  // Always sample 8 32-bit words for now
+  struct rte_flow_actions_template_attr actions_attr;
+  struct rte_flow_action actions[MAX_ACTION_NUM];
+  struct rte_flow_action masks[MAX_ACTION_NUM];
+  struct rte_flow_action_mark mark;
+  struct rte_flow_action_queue queue;
+  struct rte_flow_action_mark mark_mask;
+  struct rte_flow_action_queue queue_mask;
+  memset(&actions_attr, 0, sizeof(actions_attr));
+  memset(actions, 0, sizeof(actions));
+  memset(masks, 0, sizeof(masks));
+  memset(&mark, 0, sizeof(mark));
+  memset(&queue, 0, sizeof(queue));
+  memset(&mark_mask, 0, sizeof(mark_mask));
+  memset(&queue_mask, 0, sizeof(queue_mask));
+  actions_attr.ingress = 1;
+  actions[0].type = RTE_FLOW_ACTION_TYPE_MARK;
+  actions[0].conf = &mark;
+  actions[1].type = RTE_FLOW_ACTION_TYPE_QUEUE;
+  actions[1].conf = &queue;
+  actions[2].type = RTE_FLOW_ACTION_TYPE_END;
+  masks[0].type = RTE_FLOW_ACTION_TYPE_MARK;
+  masks[0].conf = &mark_mask;
+  masks[1].type = RTE_FLOW_ACTION_TYPE_QUEUE;
+  masks[1].conf = &queue_mask;
+  masks[2].type = RTE_FLOW_ACTION_TYPE_END;
 
-  memset(&flex_conf.next_protocol, 0, sizeof(flex_conf.next_protocol));
-
-  struct rte_flow_item_flex_field sample_data[1];
-  memset(&sample_data[0], 0, sizeof(sample_data));
-  sample_data[0].field_mode = FIELD_MODE_FIXED;
-  sample_data[0].field_size = 32;
-  sample_data[0].field_base = offset * 8;  // Offset is in bytes while DPDK wants bits
-  flex_conf.sample_data = &sample_data[0];
-  flex_conf.nb_samples = 1;
-
-  struct rte_flow_item_flex_link input_link;
-  memset(&input_link, 0, sizeof(input_link));
-  input_link.item = *udp_item;
-  flex_conf.input_link = &input_link;
-  flex_conf.nb_inputs = 1;
-
-  struct rte_flow_item_flex_link output_link;
-  memset(&output_link, 0, sizeof(output_link));
-  output_link.item = *end_pattern;
-  flex_conf.output_link = &output_link;
-  flex_conf.nb_outputs = 0;
-
-  item_handle = rte_flow_flex_item_create(port, &flex_conf, &error);
-  if (item_handle == NULL) {
-    printf("Failed to create flex item: %s\n", error.message);
-    return NULL;
+  state.mark_queue_actions_template =
+      rte_flow_actions_template_create(port, &actions_attr, actions, masks, &error);
+  if (state.mark_queue_actions_template == nullptr) {
+    DAQIRI_LOG_WARN("Failed to create RX flow actions template on port {}: {}",
+                    port,
+                    error.message ? error.message : rte_strerror(rte_errno));
+    for (auto* tmpl : state.ipv4_udp_pattern_templates) {
+      if (tmpl != nullptr) { rte_flow_pattern_template_destroy(port, tmpl, &error); }
+    }
+    state.ipv4_udp_pattern_templates.clear();
+    return false;
   }
 
-  return item_handle;
+  struct rte_flow_template_table_attr table_attr;
+  memset(&table_attr, 0, sizeof(table_attr));
+  table_attr.flow_attr.ingress = 1;
+  table_attr.flow_attr.group = kStandardRxFlowGroup;
+  table_attr.flow_attr.priority = kRxFlowPriority;
+  table_attr.nb_flows = state.capacity;
+  table_attr.insertion_type = RTE_FLOW_TABLE_INSERTION_TYPE_PATTERN;
+  table_attr.hash_func = RTE_FLOW_TABLE_HASH_FUNC_DEFAULT;
+
+  std::vector<struct rte_flow_actions_template*> action_templates = {
+      state.mark_queue_actions_template};
+  state.ipv4_udp_table =
+      rte_flow_template_table_create(port,
+                                     &table_attr,
+                                     state.ipv4_udp_pattern_templates.data(),
+                                     static_cast<uint8_t>(state.ipv4_udp_pattern_templates.size()),
+                                     action_templates.data(),
+                                     static_cast<uint8_t>(action_templates.size()),
+                                     &error);
+  if (state.ipv4_udp_table == nullptr) {
+    DAQIRI_LOG_WARN("Failed to create RX flow template table on port {}: {}",
+                    port,
+                    error.message ? error.message : rte_strerror(rte_errno));
+    rte_flow_actions_template_destroy(port, state.mark_queue_actions_template, &error);
+    state.mark_queue_actions_template = nullptr;
+    for (auto* tmpl : state.ipv4_udp_pattern_templates) {
+      if (tmpl != nullptr) { rte_flow_pattern_template_destroy(port, tmpl, &error); }
+    }
+    state.ipv4_udp_pattern_templates.clear();
+    return false;
+  }
+
+  state.templates_ready = true;
+  DAQIRI_LOG_INFO("Created RX flow template table on port {} with capacity {}",
+                  port,
+                  state.capacity);
+  return true;
+}
+
+Status DpdkEngine::create_dynamic_flow_legacy_locked(int port,
+                                                     const FlowRuleConfig& flow,
+                                                     FlowId flow_id) {
+  FlowConfig cfg;
+  cfg.name_ = flow.name_;
+  cfg.id_ = flow_id;
+  cfg.actions_ = flow_rule_actions(flow);
+  cfg.action_ = flow_queue_action(cfg.actions_);
+  cfg.match_ = flow.match_;
+  cfg.backend_config_ = flow.backend_config_;
+
+  struct rte_flow* rte_flow = nullptr;
+  std::shared_ptr<DpdkFlowResource> resource;
+  if (cfg.match_.type_ == FlowMatchType::FLEX_ITEM) {
+    rte_flow = add_flex_item_flow(
+        port, cfg.match_.flex_item_match_, cfg.action_.id_, cfg.id_, false);
+  } else if (cfg.match_.type_ == FlowMatchType::ECPRI) {
+    rte_flow = add_ecpri_flow(port, cfg, false);
+  } else {
+    rte_flow = add_flow(port, cfg, false, &resource);
+  }
+
+  if (rte_flow == nullptr) {
+    return Status::INTERNAL_ERROR;
+  }
+
+  DynamicFlowEntry entry;
+  entry.flow_id = flow_id;
+  entry.port = static_cast<uint16_t>(port);
+  entry.queue = flow.action_.id_;
+  entry.flow = rte_flow;
+  entry.backend = DynamicFlowBackend::LEGACY;
+  entry.state = DynamicFlowState::ACTIVE;
+  entry.backend_storage = resource;
+  dynamic_flows_[flow_id] = entry;
+  return Status::SUCCESS;
+}
+
+Status DpdkEngine::add_rx_flow_legacy_locked(int port,
+                                             const FlowRuleConfig& flow,
+                                             FlowId flow_id,
+                                             FlowOpId op_id) {
+  FlowOpResult result;
+  result.op_id_ = op_id;
+  result.type_ = FlowOpType::ADD_RX;
+  result.flow_id_ = flow_id;
+  result.flow_ids_ = {flow_id};
+  result.status_ = create_dynamic_flow_legacy_locked(port, flow, flow_id);
+  if (result.status_ != Status::SUCCESS) {
+    result.flow_id_ = 0;
+    result.flow_ids_[0] = 0;
+    release_dynamic_flow_id(flow_id);
+  }
+
+  enqueue_software_flow_completion(result);
+  return Status::SUCCESS;
+}
+
+Status DpdkEngine::add_rx_flows_legacy_locked(int port,
+                                              const std::vector<FlowRuleConfig>& flows,
+                                              const std::vector<FlowId>& flow_ids,
+                                              FlowOpId op_id) {
+  FlowOpResult result;
+  result.op_id_ = op_id;
+  result.type_ = FlowOpType::ADD_RX_BATCH;
+  result.status_ = Status::SUCCESS;
+  result.flow_ids_ = flow_ids;
+
+  for (size_t i = 0; i < flows.size(); ++i) {
+    const Status status = create_dynamic_flow_legacy_locked(port, flows[i], flow_ids[i]);
+    if (status != Status::SUCCESS) {
+      result.status_ = status;
+      result.flow_ids_[i] = 0;
+      release_dynamic_flow_id(flow_ids[i]);
+    }
+  }
+
+  enqueue_software_flow_completion(result);
+  return Status::SUCCESS;
+}
+
+Status DpdkEngine::enqueue_rx_flow_template_create_locked(int port,
+                                                          const FlowRuleConfig& flow,
+                                                          FlowId flow_id,
+                                                          FlowOpId completion_id) {
+  auto& state = flow_template_states_[port];
+  struct rte_flow_op_attr op_attr;
+  struct rte_flow_error error;
+  memset(&op_attr, 0, sizeof(op_attr));
+  memset(&error, 0, sizeof(error));
+
+  auto storage = std::make_shared<FlowTemplateCreateStorage>();
+  build_ipv4_udp_flow_pattern(flow.match_, storage->pattern, &storage->ip_spec, &storage->udp_spec);
+  build_mark_queue_actions(flow_id,
+                           flow.action_.id_,
+                           storage->action,
+                           &storage->mark,
+                           &storage->queue);
+
+  uint8_t template_index = 0;
+  if (!ipv4_udp_flow_template_index(flow.match_, &template_index)) {
+    return Status::INTERNAL_ERROR;
+  }
+  struct rte_flow* rte_flow =
+      rte_flow_async_create(static_cast<uint16_t>(port),
+                            state.flow_queue_id,
+                            &op_attr,
+                            state.ipv4_udp_table,
+                            storage->pattern,
+                            template_index,
+                            storage->action,
+                            0,
+                            flow_op_user_data(completion_id),
+                            &error);
+  if (rte_flow == nullptr) {
+    DAQIRI_LOG_WARN("Failed to enqueue async RX flow create on port {}: {}",
+                    port,
+                    error.message ? error.message : rte_strerror(rte_errno));
+    return Status::INTERNAL_ERROR;
+  }
+
+  DynamicFlowEntry entry;
+  entry.flow_id = flow_id;
+  entry.port = static_cast<uint16_t>(port);
+  entry.queue = flow.action_.id_;
+  entry.flow = rte_flow;
+  entry.backend = DynamicFlowBackend::TEMPLATE;
+  entry.state = DynamicFlowState::ADDING;
+  entry.flow_queue_id = state.flow_queue_id;
+  entry.backend_storage = storage;
+  dynamic_flows_[flow_id] = entry;
+  return Status::SUCCESS;
+}
+
+void DpdkEngine::discard_unpushed_template_creates_locked(const std::vector<FlowId>& flow_ids) {
+  struct rte_flow_error error;
+  struct rte_flow_op_attr op_attr;
+  std::array<uint32_t, RTE_MAX_ETHPORTS> pending_destroys{};
+
+  for (const FlowId flow_id : flow_ids) {
+    auto flow_it = dynamic_flows_.find(flow_id);
+    if (flow_it != dynamic_flows_.end() &&
+        flow_it->second.backend == DynamicFlowBackend::TEMPLATE &&
+        flow_it->second.state == DynamicFlowState::ADDING) {
+      DynamicFlowEntry& entry = flow_it->second;
+      if (entry.flow != nullptr && entry.port < flow_template_states_.size() &&
+          flow_template_states_[entry.port].configured) {
+        memset(&error, 0, sizeof(error));
+        memset(&op_attr, 0, sizeof(op_attr));
+        if (rte_flow_async_destroy(entry.port,
+                                   entry.flow_queue_id,
+                                   &op_attr,
+                                   entry.flow,
+                                   nullptr,
+                                   &error) < 0) {
+          DAQIRI_LOG_WARN("Failed to enqueue cleanup destroy for unpushed dynamic RX flow {} "
+                          "on port {}: {}",
+                          flow_id,
+                          entry.port,
+                          error.message ? error.message : rte_strerror(rte_errno));
+        } else {
+          ++pending_destroys[entry.port];
+        }
+      }
+      dynamic_flows_.erase(flow_it);
+    }
+    release_dynamic_flow_id(flow_id);
+  }
+
+  for (uint16_t port = 0; port < pending_destroys.size(); ++port) {
+    if (pending_destroys[port] == 0) { continue; }
+    auto& state = flow_template_states_[port];
+    memset(&error, 0, sizeof(error));
+    if (rte_flow_push(port, state.flow_queue_id, &error) < 0) {
+      DAQIRI_LOG_WARN("Failed to push cleanup destroys for unpushed dynamic RX flows "
+                      "on port {}: {}",
+                      port,
+                      error.message ? error.message : rte_strerror(rte_errno));
+      continue;
+    }
+
+    uint32_t remaining = pending_destroys[port];
+    unsigned idle_polls = 0;
+    struct rte_flow_op_result results[16];
+    while (remaining > 0 && idle_polls < 100) {
+      memset(&error, 0, sizeof(error));
+      memset(results, 0, sizeof(results));
+      const int ret = rte_flow_pull(port, state.flow_queue_id, results, 16, &error);
+      if (ret < 0) {
+        DAQIRI_LOG_WARN("Failed to pull cleanup destroy completions on port {}: {}",
+                        port,
+                        error.message ? error.message : rte_strerror(rte_errno));
+        break;
+      }
+      if (ret == 0) {
+        ++idle_polls;
+        rte_delay_us_sleep(1000);
+        continue;
+      }
+
+      idle_polls = 0;
+      for (int i = 0; i < ret && remaining > 0; ++i) {
+        if (results[i].user_data != nullptr) { continue; }
+        if (results[i].status != RTE_FLOW_OP_SUCCESS) {
+          DAQIRI_LOG_WARN("Cleanup destroy failed on port {}", port);
+        }
+        --remaining;
+      }
+    }
+
+    if (remaining > 0) {
+      DAQIRI_LOG_WARN("{} cleanup destroy completions were not received on port {}",
+                      remaining,
+                      port);
+    }
+  }
+}
+
+Status DpdkEngine::add_rx_flow_template_locked(int port,
+                                               const FlowRuleConfig& flow,
+                                               FlowId flow_id,
+                                               FlowOpId op_id) {
+  if (!ensure_eth_jump_rule(port, kStandardRxFlowGroup) ||
+      !ensure_ipv4_udp_flow_template_table(static_cast<uint16_t>(port))) {
+    return add_rx_flow_legacy_locked(port, flow, flow_id, op_id);
+  }
+
+  PendingFlowBatch pending;
+  pending.result.op_id_ = op_id;
+  pending.result.type_ = FlowOpType::ADD_RX;
+  pending.result.status_ = Status::NOT_READY;
+  pending.result.flow_id_ = flow_id;
+  pending.result.flow_ids_ = {flow_id};
+  pending.remaining = 1;
+
+  if (enqueue_rx_flow_template_create_locked(port, flow, flow_id, op_id) != Status::SUCCESS) {
+    return add_rx_flow_legacy_locked(port, flow, flow_id, op_id);
+  }
+
+  auto& state = flow_template_states_[port];
+  struct rte_flow_error error;
+  memset(&error, 0, sizeof(error));
+  pending_flow_batches_[op_id] = pending;
+  pending_flow_completions_[op_id] = {op_id, flow_id, 0};
+
+  if (rte_flow_push(static_cast<uint16_t>(port), state.flow_queue_id, &error) < 0) {
+    DAQIRI_LOG_WARN("Failed to push async RX flow create on port {}: {}",
+                    port,
+                    error.message ? error.message : rte_strerror(rte_errno));
+
+    pending_flow_completions_.erase(op_id);
+    pending_flow_batches_.erase(op_id);
+    discard_unpushed_template_creates_locked({flow_id});
+    FlowOpResult result;
+    result.op_id_ = op_id;
+    result.type_ = FlowOpType::ADD_RX;
+    result.status_ = Status::INTERNAL_ERROR;
+    result.flow_id_ = 0;
+    result.flow_ids_ = {0};
+    enqueue_software_flow_completion(result);
+    return Status::SUCCESS;
+  }
+
+  return Status::SUCCESS;
+}
+
+Status DpdkEngine::add_rx_flows_template_locked(int port,
+                                                const std::vector<FlowRuleConfig>& flows,
+                                                const std::vector<FlowId>& flow_ids,
+                                                FlowOpId op_id) {
+  if (!ensure_eth_jump_rule(port, kStandardRxFlowGroup) ||
+      !ensure_ipv4_udp_flow_template_table(static_cast<uint16_t>(port))) {
+    return add_rx_flows_legacy_locked(port, flows, flow_ids, op_id);
+  }
+
+  for (const auto& flow : flows) {
+    uint8_t template_index = 0;
+    if (!ipv4_udp_flow_template_index(flow.match_, &template_index)) {
+      return add_rx_flows_legacy_locked(port, flows, flow_ids, op_id);
+    }
+  }
+
+  PendingFlowBatch pending;
+  pending.result.op_id_ = op_id;
+  pending.result.type_ = FlowOpType::ADD_RX_BATCH;
+  pending.result.status_ = Status::NOT_READY;
+  pending.result.flow_ids_ = flow_ids;
+
+  size_t enqueued = 0;
+  std::vector<FlowId> enqueued_flow_ids;
+  enqueued_flow_ids.reserve(flows.size());
+  for (size_t i = 0; i < flows.size(); ++i) {
+    const FlowOpId completion_id = allocate_flow_op_id();
+    const Status status =
+        enqueue_rx_flow_template_create_locked(port, flows[i], flow_ids[i], completion_id);
+    if (status != Status::SUCCESS) {
+      pending.result.status_ = status;
+      pending.result.flow_ids_[i] = 0;
+      release_dynamic_flow_id(flow_ids[i]);
+      for (size_t j = i + 1; j < pending.result.flow_ids_.size(); ++j) {
+        pending.result.flow_ids_[j] = 0;
+        release_dynamic_flow_id(flow_ids[j]);
+      }
+      break;
+    }
+
+    pending_flow_completions_[completion_id] = {op_id, flow_ids[i], i};
+    enqueued_flow_ids.push_back(flow_ids[i]);
+    ++enqueued;
+  }
+
+  if (enqueued == 0) {
+    if (pending.result.status_ == Status::NOT_READY) {
+      pending.result.status_ = Status::INTERNAL_ERROR;
+      std::fill(pending.result.flow_ids_.begin(), pending.result.flow_ids_.end(), 0);
+      for (const FlowId flow_id : flow_ids) {
+        release_dynamic_flow_id(flow_id);
+      }
+    }
+    enqueue_software_flow_completion(pending.result);
+    return Status::SUCCESS;
+  }
+
+  pending.remaining = enqueued;
+  pending_flow_batches_[op_id] = pending;
+
+  auto& state = flow_template_states_[port];
+  struct rte_flow_error error;
+  memset(&error, 0, sizeof(error));
+  if (rte_flow_push(static_cast<uint16_t>(port), state.flow_queue_id, &error) < 0) {
+    DAQIRI_LOG_WARN("Failed to push async RX flow batch create on port {}: {}",
+                    port,
+                    error.message ? error.message : rte_strerror(rte_errno));
+
+    for (auto completion_it = pending_flow_completions_.begin();
+         completion_it != pending_flow_completions_.end();) {
+      if (completion_it->second.op_id == op_id) {
+        completion_it = pending_flow_completions_.erase(completion_it);
+      } else {
+        ++completion_it;
+      }
+    }
+    pending_flow_batches_.erase(op_id);
+    discard_unpushed_template_creates_locked(enqueued_flow_ids);
+
+    pending.result.status_ = Status::INTERNAL_ERROR;
+    std::fill(pending.result.flow_ids_.begin(), pending.result.flow_ids_.end(), 0);
+    enqueue_software_flow_completion(pending.result);
+  }
+
+  return Status::SUCCESS;
+}
+
+Status DpdkEngine::delete_flow_legacy_locked(DynamicFlowEntry& entry, FlowOpId op_id) {
+  struct rte_flow_error error;
+  memset(&error, 0, sizeof(error));
+
+  FlowOpResult result;
+  result.op_id_ = op_id;
+  result.type_ = FlowOpType::DELETE;
+  result.flow_id_ = entry.flow_id;
+  result.status_ = Status::SUCCESS;
+
+  const FlowId flow_id = entry.flow_id;
+  if (rte_flow_destroy(entry.port, entry.flow, &error) != 0) {
+    DAQIRI_LOG_ERROR("Failed to destroy dynamic RX flow {} on port {}: {}",
+                     entry.flow_id,
+                     entry.port,
+                     error.message ? error.message : rte_strerror(rte_errno));
+    result.status_ = Status::INTERNAL_ERROR;
+  } else {
+    dynamic_flows_.erase(flow_id);
+    release_dynamic_flow_id(flow_id);
+  }
+
+  enqueue_software_flow_completion(result);
+  return Status::SUCCESS;
+}
+
+Status DpdkEngine::delete_flow_template_locked(DynamicFlowEntry& entry, FlowOpId op_id) {
+  struct rte_flow_op_attr op_attr;
+  struct rte_flow_error error;
+  memset(&op_attr, 0, sizeof(op_attr));
+  memset(&error, 0, sizeof(error));
+
+  if (rte_flow_async_destroy(entry.port,
+                             entry.flow_queue_id,
+                             &op_attr,
+                             entry.flow,
+                             flow_op_user_data(op_id),
+                             &error) < 0) {
+    DAQIRI_LOG_ERROR("Failed to enqueue async RX flow destroy for {} on port {}: {}",
+                     entry.flow_id,
+                     entry.port,
+                     error.message ? error.message : rte_strerror(rte_errno));
+    return Status::INTERNAL_ERROR;
+  }
+  if (rte_flow_push(entry.port, entry.flow_queue_id, &error) < 0) {
+    DAQIRI_LOG_ERROR("Failed to push async RX flow destroy for {} on port {}: {}",
+                     entry.flow_id,
+                     entry.port,
+                     error.message ? error.message : rte_strerror(rte_errno));
+    return Status::INTERNAL_ERROR;
+  }
+
+  entry.state = DynamicFlowState::DELETING;
+  PendingFlowBatch pending;
+  pending.result.op_id_ = op_id;
+  pending.result.type_ = FlowOpType::DELETE;
+  pending.result.status_ = Status::NOT_READY;
+  pending.result.flow_id_ = entry.flow_id;
+  pending.remaining = 1;
+  pending_flow_batches_[op_id] = pending;
+  pending_flow_completions_[op_id] = {op_id, entry.flow_id, 0};
+  return Status::SUCCESS;
+}
+
+void DpdkEngine::poll_dpdk_flow_completions_locked() {
+  struct rte_flow_error error;
+  struct rte_flow_op_result results[16];
+
+  for (uint16_t port = 0; port < flow_template_states_.size(); ++port) {
+    auto& state = flow_template_states_[port];
+    if (!state.configured) { continue; }
+
+    while (true) {
+      memset(&error, 0, sizeof(error));
+      memset(results, 0, sizeof(results));
+      const int ret = rte_flow_pull(port, state.flow_queue_id, results, 16, &error);
+      if (ret <= 0) { break; }
+
+      for (int i = 0; i < ret; ++i) {
+        const FlowOpId completion_id = flow_op_id_from_user_data(results[i].user_data);
+        const auto completion_it = pending_flow_completions_.find(completion_id);
+        if (completion_it == pending_flow_completions_.end()) { continue; }
+
+        const PendingFlowCompletion completion = completion_it->second;
+        pending_flow_completions_.erase(completion_it);
+
+        const auto batch_it = pending_flow_batches_.find(completion.op_id);
+        if (batch_it == pending_flow_batches_.end()) { continue; }
+        PendingFlowBatch& batch = batch_it->second;
+        const Status completion_status = results[i].status == RTE_FLOW_OP_SUCCESS
+                                             ? Status::SUCCESS
+                                             : Status::INTERNAL_ERROR;
+        const bool is_add_op = batch.result.type_ == FlowOpType::ADD_RX ||
+                               batch.result.type_ == FlowOpType::ADD_RX_BATCH;
+        if (completion_status != Status::SUCCESS) {
+          batch.result.status_ = completion_status;
+          if (is_add_op && completion.flow_index < batch.result.flow_ids_.size()) {
+            batch.result.flow_ids_[completion.flow_index] = 0;
+          }
+          if (is_add_op && batch.result.flow_id_ == completion.flow_id) {
+            batch.result.flow_id_ = 0;
+          }
+        }
+
+        const auto flow_it = dynamic_flows_.find(completion.flow_id);
+        if (flow_it != dynamic_flows_.end()) {
+          if (is_add_op) {
+            if (completion_status == Status::SUCCESS) {
+              flow_it->second.state = DynamicFlowState::ACTIVE;
+              flow_it->second.backend_storage.reset();
+            } else {
+              const FlowId failed_flow_id = flow_it->first;
+              dynamic_flows_.erase(flow_it);
+              release_dynamic_flow_id(failed_flow_id);
+            }
+          } else {
+            if (completion_status == Status::SUCCESS) {
+              const FlowId deleted_flow_id = flow_it->first;
+              dynamic_flows_.erase(flow_it);
+              release_dynamic_flow_id(deleted_flow_id);
+            } else {
+              flow_it->second.state = DynamicFlowState::ACTIVE;
+            }
+          }
+        }
+
+        if (batch.remaining > 0) { --batch.remaining; }
+        if (batch.remaining == 0) {
+          if (batch.result.status_ == Status::NOT_READY) {
+            batch.result.status_ = Status::SUCCESS;
+          }
+          ready_flow_ops_.push(batch.result);
+          pending_flow_batches_.erase(batch_it);
+        }
+      }
+    }
+  }
+}
+
+void DpdkEngine::cleanup_template_dynamic_flows_locked() {
+  struct rte_flow_error error;
+  struct rte_flow_op_attr op_attr;
+  std::array<uint32_t, RTE_MAX_ETHPORTS> pending_destroys{};
+
+  for (auto& [flow_id, entry] : dynamic_flows_) {
+    if (entry.backend != DynamicFlowBackend::TEMPLATE || entry.flow == nullptr) {
+      continue;
+    }
+    if (entry.port >= flow_template_states_.size() ||
+        !flow_template_states_[entry.port].configured) {
+      DAQIRI_LOG_WARN("Skipping async destroy for dynamic RX flow {} on unconfigured port {}",
+                      flow_id,
+                      entry.port);
+      continue;
+    }
+
+    memset(&error, 0, sizeof(error));
+    memset(&op_attr, 0, sizeof(op_attr));
+    if (rte_flow_async_destroy(entry.port,
+                               entry.flow_queue_id,
+                               &op_attr,
+                               entry.flow,
+                               nullptr,
+                               &error) < 0) {
+      DAQIRI_LOG_WARN("Failed to enqueue shutdown async destroy for dynamic RX flow {} "
+                      "on port {}: {}",
+                      flow_id,
+                      entry.port,
+                      error.message ? error.message : rte_strerror(rte_errno));
+      continue;
+    }
+    ++pending_destroys[entry.port];
+  }
+
+  for (uint16_t port = 0; port < pending_destroys.size(); ++port) {
+    if (pending_destroys[port] == 0) { continue; }
+    auto& state = flow_template_states_[port];
+    memset(&error, 0, sizeof(error));
+    if (rte_flow_push(port, state.flow_queue_id, &error) < 0) {
+      DAQIRI_LOG_WARN("Failed to push shutdown async destroys on port {}: {}",
+                      port,
+                      error.message ? error.message : rte_strerror(rte_errno));
+      continue;
+    }
+
+    uint32_t remaining = pending_destroys[port];
+    unsigned idle_polls = 0;
+    struct rte_flow_op_result results[16];
+    while (remaining > 0 && idle_polls < 1000) {
+      memset(&error, 0, sizeof(error));
+      memset(results, 0, sizeof(results));
+      const int ret = rte_flow_pull(port, state.flow_queue_id, results, 16, &error);
+      if (ret < 0) {
+        DAQIRI_LOG_WARN("Failed to pull shutdown async destroy completions on port {}: {}",
+                        port,
+                        error.message ? error.message : rte_strerror(rte_errno));
+        break;
+      }
+      if (ret == 0) {
+        ++idle_polls;
+        rte_delay_us_sleep(1000);
+        continue;
+      }
+
+      idle_polls = 0;
+      for (int i = 0; i < ret && remaining > 0; ++i) {
+        if (results[i].user_data != nullptr) { continue; }
+        if (results[i].status != RTE_FLOW_OP_SUCCESS) {
+          DAQIRI_LOG_WARN("Shutdown async destroy failed on port {}", port);
+        }
+        --remaining;
+      }
+    }
+
+    if (remaining > 0) {
+      DAQIRI_LOG_WARN("{} shutdown async dynamic RX flow destroys did not complete on port {}",
+                      remaining,
+                      port);
+    }
+  }
+}
+
+void DpdkEngine::cleanup_dynamic_flows() {
+  std::lock_guard<std::mutex> guard(flow_lock_);
+  struct rte_flow_error error;
+  memset(&error, 0, sizeof(error));
+
+  poll_dpdk_flow_completions_locked();
+  pending_flow_batches_.clear();
+  pending_flow_completions_.clear();
+  while (!ready_flow_ops_.empty()) { ready_flow_ops_.pop(); }
+
+  cleanup_template_dynamic_flows_locked();
+
+  for (auto& [flow_id, entry] : dynamic_flows_) {
+    if (entry.backend == DynamicFlowBackend::LEGACY && entry.flow != nullptr) {
+      rte_flow_destroy(entry.port, entry.flow, &error);
+    }
+  }
+  dynamic_flows_.clear();
+
+  for (uint16_t port = 0; port < flow_template_states_.size(); ++port) {
+    auto& state = flow_template_states_[port];
+    if (state.ipv4_udp_table != nullptr) {
+      rte_flow_template_table_destroy(port, state.ipv4_udp_table, &error);
+      state.ipv4_udp_table = nullptr;
+    }
+    if (state.mark_queue_actions_template != nullptr) {
+      rte_flow_actions_template_destroy(port, state.mark_queue_actions_template, &error);
+      state.mark_queue_actions_template = nullptr;
+    }
+    for (auto* tmpl : state.ipv4_udp_pattern_templates) {
+      if (tmpl != nullptr) { rte_flow_pattern_template_destroy(port, tmpl, &error); }
+    }
+    state.ipv4_udp_pattern_templates.clear();
+    state.templates_ready = false;
+    state.configured = false;
+  }
+}
+
+Status DpdkEngine::add_rx_flow_async(int port, const FlowRuleConfig& flow, FlowOpId* op_id) {
+  if (op_id == nullptr) { return Status::NULL_PTR; }
+  *op_id = 0;
+  std::lock_guard<std::mutex> guard(flow_lock_);
+  if (!validate_dynamic_rx_flow(port, flow)) { return Status::INVALID_PARAMETER; }
+  const uint32_t flow_group = dynamic_rx_flow_group(flow);
+  const Status fallback_status = ensure_dynamic_flow_isolation_fallback_locked(port, flow_group);
+  if (fallback_status != Status::SUCCESS) { return fallback_status; }
+
+  const FlowId flow_id = allocate_dynamic_flow_id();
+  if (flow_id == 0) { return Status::NO_SPACE_AVAILABLE; }
+  const FlowOpId new_op_id = allocate_flow_op_id();
+  *op_id = new_op_id;
+
+  if (is_ipv4_udp_flow_match(flow.match_) && !flow_rule_has_transform_actions(flow)) {
+    return add_rx_flow_template_locked(port, flow, flow_id, new_op_id);
+  }
+  return add_rx_flow_legacy_locked(port, flow, flow_id, new_op_id);
+}
+
+Status DpdkEngine::add_rx_flows_async(int port,
+                                      const std::vector<FlowRuleConfig>& flows,
+                                      FlowOpId* op_id) {
+  if (op_id == nullptr) { return Status::NULL_PTR; }
+  *op_id = 0;
+  if (flows.empty()) { return Status::INVALID_PARAMETER; }
+
+  std::lock_guard<std::mutex> guard(flow_lock_);
+  for (const auto& flow : flows) {
+    if (!validate_dynamic_rx_flow(port, flow)) { return Status::INVALID_PARAMETER; }
+  }
+  const uint32_t flow_group = dynamic_rx_flow_group(flows.front());
+  for (const auto& flow : flows) {
+    const uint32_t current_group = dynamic_rx_flow_group(flow);
+    if (current_group == flow_group) { continue; }
+    DAQIRI_LOG_ERROR(
+        "Dynamic RX flow batch on port {} mixes standard IPv4/UDP and flex-item flows, "
+        "which cannot share one DPDK group-0 ETH jump",
+        port);
+    return Status::INVALID_PARAMETER;
+  }
+  const Status fallback_status = ensure_dynamic_flow_isolation_fallback_locked(port, flow_group);
+  if (fallback_status != Status::SUCCESS) { return fallback_status; }
+
+  std::vector<FlowId> flow_ids;
+  flow_ids.reserve(flows.size());
+  for (size_t i = 0; i < flows.size(); ++i) {
+    const FlowId flow_id = allocate_dynamic_flow_id();
+    if (flow_id == 0) {
+      for (const FlowId allocated_flow_id : flow_ids) {
+        release_dynamic_flow_id(allocated_flow_id);
+      }
+      return Status::NO_SPACE_AVAILABLE;
+    }
+    flow_ids.push_back(flow_id);
+  }
+
+  const FlowOpId new_op_id = allocate_flow_op_id();
+  *op_id = new_op_id;
+
+  const bool all_ipv4_udp =
+      std::all_of(flows.begin(), flows.end(), [this](const FlowRuleConfig& flow) {
+        return is_ipv4_udp_flow_match(flow.match_) && !flow_rule_has_transform_actions(flow);
+      });
+  if (all_ipv4_udp) {
+    return add_rx_flows_template_locked(port, flows, flow_ids, new_op_id);
+  }
+  return add_rx_flows_legacy_locked(port, flows, flow_ids, new_op_id);
+}
+
+Status DpdkEngine::delete_flow_async(FlowId flow_id, FlowOpId* op_id) {
+  if (op_id == nullptr) { return Status::NULL_PTR; }
+  *op_id = 0;
+  std::lock_guard<std::mutex> guard(flow_lock_);
+  if (!initialized_) { return Status::NOT_READY; }
+  if (static_flow_ids_.find(flow_id) != static_flow_ids_.end()) { return Status::INVALID_PARAMETER; }
+  const auto flow_it = dynamic_flows_.find(flow_id);
+  if (flow_it == dynamic_flows_.end() || flow_it->second.state != DynamicFlowState::ACTIVE) {
+    return Status::INVALID_PARAMETER;
+  }
+
+  const FlowOpId new_op_id = allocate_flow_op_id();
+  if (flow_it->second.backend == DynamicFlowBackend::TEMPLATE) {
+    const Status status = delete_flow_template_locked(flow_it->second, new_op_id);
+    if (status == Status::SUCCESS) { *op_id = new_op_id; }
+    return status;
+  }
+  const Status status = delete_flow_legacy_locked(flow_it->second, new_op_id);
+  if (status == Status::SUCCESS) { *op_id = new_op_id; }
+  return status;
+}
+
+Status DpdkEngine::poll_flow_op(FlowOpResult* result) {
+  if (result == nullptr) { return Status::NULL_PTR; }
+  std::lock_guard<std::mutex> guard(flow_lock_);
+  poll_dpdk_flow_completions_locked();
+  if (ready_flow_ops_.empty()) { return Status::NOT_READY; }
+  *result = ready_flow_ops_.front();
+  ready_flow_ops_.pop();
+  return Status::SUCCESS;
+}
+
+static uint64_t eth_jump_key(int port, uint32_t group) {
+  return (static_cast<uint64_t>(static_cast<uint16_t>(port)) << 32) | group;
+}
+
+bool DpdkEngine::ensure_eth_jump_rule(int port, uint32_t group) {
+  const uint64_t key = eth_jump_key(port, group);
+  if (eth_jump_installed_.count(key) != 0) { return true; }
+
+  struct rte_flow_error jump_error;
+  struct rte_flow_attr jump_attr{.group = 0, .ingress = 1};
+  struct rte_flow_action_jump jump_v = {.group = group};
+  struct rte_flow_action jump_actions[] = {
+      {.type = RTE_FLOW_ACTION_TYPE_JUMP, .conf = &jump_v},
+      {.type = RTE_FLOW_ACTION_TYPE_END},
+  };
+  struct rte_flow_item jump_pattern[] = {
+      {.type = RTE_FLOW_ITEM_TYPE_ETH, .spec = 0, .mask = 0},
+      {.type = RTE_FLOW_ITEM_TYPE_END},
+  };
+
+  int res = rte_flow_validate(port, &jump_attr, jump_pattern, jump_actions, &jump_error);
+  if (res != 0) {
+    DAQIRI_LOG_CRITICAL("Failed to validate ETH jump rule on port {} to group {}: {} ({})",
+                        port,
+                        group,
+                        jump_error.message ? jump_error.message : "unknown error",
+                        rte_strerror(rte_errno));
+    return false;
+  }
+
+  struct rte_flow* jump_flow =
+      rte_flow_create(port, &jump_attr, jump_pattern, jump_actions, &jump_error);
+  if (jump_flow == nullptr) {
+    DAQIRI_LOG_CRITICAL("Failed to create ETH jump rule on port {} to group {}: {} ({})",
+                        port,
+                        group,
+                        jump_error.message ? jump_error.message : "unknown error",
+                        rte_strerror(rte_errno));
+    return false;
+  }
+
+  eth_jump_installed_.insert(key);
+  eth_jump_flows_[key] = jump_flow;
+  return true;
+}
+
+void DpdkEngine::track_flow(uint16_t port, struct rte_flow* flow) {
+  if (flow != nullptr) {
+    programmed_flows_.push_back({port, flow});
+  }
+}
+
+void DpdkEngine::destroy_programmed_flows() {
+  for (const auto& [port, flow] : programmed_flows_) {
+    if (flow == nullptr) { continue; }
+    struct rte_flow_error error;
+    const int ret = rte_flow_destroy(port, flow, &error);
+    if (ret != 0) {
+      DAQIRI_LOG_ERROR("Failed to destroy flow on port {}: {}",
+                       port,
+                       error.message ? error.message : "unknown error");
+    }
+  }
+  programmed_flows_.clear();
+  send_to_kernel_fallback_installed_.clear();
+
+  for (uint16_t port = 0; port < drop_all_traffic_flow.size(); ++port) {
+    struct rte_flow* drop_flow = drop_all_traffic_flow[port].drop;
+    if (drop_flow == nullptr) { continue; }
+    struct rte_flow_error error;
+    const int ret = rte_flow_destroy(port, drop_flow, &error);
+    if (ret != 0) {
+      DAQIRI_LOG_ERROR("Failed to destroy drop-all-traffic rule on port {}: {}",
+                       port,
+                       error.message ? error.message : "unknown error");
+    }
+    drop_all_traffic_flow[port].drop = nullptr;
+  }
+}
+
+void DpdkEngine::destroy_flex_item_handles() {
+  for (const auto& [flex_item_id, flex_handle] : flex_item_handles_) {
+    if (flex_handle.handle == nullptr) { continue; }
+    struct rte_flow_error error;
+    const int ret =
+        rte_flow_flex_item_release(flex_handle.port, flex_handle.handle, &error);
+    if (ret != 0) {
+      DAQIRI_LOG_ERROR("Failed to destroy flex item {} on port {}: {}",
+                       flex_item_id,
+                       flex_handle.port,
+                       error.message ? error.message : "unknown error");
+    }
+  }
+  flex_item_handles_.clear();
+}
+
+void DpdkEngine::destroy_all_flow_rules() {
+  destroy_owned_flows();
+  destroy_programmed_flows();
+  destroy_flex_item_handles();
+  destroy_eth_jump_rules();
+}
+
+void DpdkEngine::destroy_eth_jump_rules() {
+  for (const auto& [key, flow] : eth_jump_flows_) {
+    if (flow == nullptr) { continue; }
+    const int port = static_cast<int>(key >> 32);
+    struct rte_flow_error error;
+    const int ret = rte_flow_destroy(port, flow, &error);
+    if (ret != 0) {
+      DAQIRI_LOG_ERROR("Failed to destroy ETH jump rule on port {}: {}",
+                       port,
+                       error.message ? error.message : "unknown error");
+    }
+  }
+  eth_jump_flows_.clear();
+  eth_jump_installed_.clear();
+}
+
+void DpdkEngine::destroy_owned_flows() {
+  for (auto& resource : owned_flows_) {
+    if (resource == nullptr || resource->flow == nullptr || resource->port < 0) { continue; }
+    struct rte_flow_error error;
+    const int ret = rte_flow_destroy(resource->port, resource->flow, &error);
+    if (ret != 0) {
+      DAQIRI_LOG_ERROR("Failed to destroy DPDK flow on port {}: {}",
+                       resource->port,
+                       error.message ? error.message : "unknown error");
+    }
+    resource->flow = nullptr;
+  }
+  owned_flows_.clear();
 }
 
 struct rte_flow* DpdkEngine::add_flex_item_flow(
-    int port, const FlexItemMatch& match_info, uint16_t queue_id) {
+    int port,
+    const FlexItemMatch& match_info,
+    uint16_t queue_id,
+    FlowId mark_id,
+    bool track) {
   /* Declaring structs being used. 8< */
   struct rte_flow_attr attr;
   struct rte_flow_item pattern[MAX_PATTERN_NUM];
   struct rte_flow_action action[MAX_ACTION_NUM];
   struct rte_flow* flow = NULL;
   struct rte_flow_action_queue queue = {.index = queue_id};
+  struct rte_flow_action_mark mark = {.id = mark_id};
   struct rte_flow_error error;
   struct rte_flow_item_udp udp_spec;
   struct rte_flow_item_udp udp_mask;
   struct rte_flow_item_ipv4  ip_spec;
   struct rte_flow_item_ipv4  ip_mask;
   int res;
-  const auto& flex_item_config = cfg_.ifs_[port].rx_.flex_items_[match_info.flex_item_id_];
+  const FlexItemConfig* flex_item_config =
+      find_flex_item_config(cfg_, port, match_info.flex_item_id_);
+  if (flex_item_config == nullptr) {
+    DAQIRI_LOG_CRITICAL("Flow references unknown flex item id {} on port {}", match_info.flex_item_id_,
+                        port);
+    return nullptr;
+  }
 
   memset(pattern, 0, sizeof(pattern));
   memset(action, 0, sizeof(action));
@@ -2823,15 +4370,17 @@ struct rte_flow* DpdkEngine::add_flex_item_flow(
   memset(&udp_spec, 0, sizeof(struct rte_flow_item_udp));
   memset(&udp_mask, 0, sizeof(struct rte_flow_item_udp));
 
-  // struct rte_flow_action_mark mark;
-  // mark.id = 0x40 + queue_id;
-
-  action[0].type = RTE_FLOW_ACTION_TYPE_QUEUE;
-  action[0].conf = &queue;
-  action[1].type = RTE_FLOW_ACTION_TYPE_END;
-  //  action[1].type = RTE_FLOW_ACTION_TYPE_MARK;
-  //  action[1].conf = &mark;
-  //  action[2].type = RTE_FLOW_ACTION_TYPE_END;
+  if (mark_id != 0) {
+    action[0].type = RTE_FLOW_ACTION_TYPE_MARK;
+    action[0].conf = &mark;
+    action[1].type = RTE_FLOW_ACTION_TYPE_QUEUE;
+    action[1].conf = &queue;
+    action[2].type = RTE_FLOW_ACTION_TYPE_END;
+  } else {
+    action[0].type = RTE_FLOW_ACTION_TYPE_QUEUE;
+    action[0].conf = &queue;
+    action[1].type = RTE_FLOW_ACTION_TYPE_END;
+  }
 
   pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
   pattern[1].type = RTE_FLOW_ITEM_TYPE_IPV4;
@@ -2840,7 +4389,7 @@ struct rte_flow* DpdkEngine::add_flex_item_flow(
 
   struct rte_flow_item udp_item;
   udp_spec.hdr.src_port = 0;
-  udp_spec.hdr.dst_port = htons(flex_item_config.udp_dst_port_);
+  udp_spec.hdr.dst_port = htons(flex_item_config->udp_dst_port_);
   udp_spec.hdr.dgram_len = 0;
   udp_spec.hdr.dgram_cksum = 0;
 
@@ -2856,13 +4405,57 @@ struct rte_flow* DpdkEngine::add_flex_item_flow(
 
   pattern[2] = udp_item;
 
-  if (flex_item_handles_.find(match_info.flex_item_id_) == flex_item_handles_.end()) {
-    struct rte_flow_item_flex_handle *item_handle =
-      create_flex_flow_rule(port, flex_item_config.offset_, &udp_item, &pattern[4]);
-    flex_item_handles_[match_info.flex_item_id_] = item_handle;
+  const uint32_t handle_key =
+      flex_item_handle_key(static_cast<uint16_t>(port), match_info.flex_item_id_);
+  auto handle_it = flex_item_handles_.find(handle_key);
+  if (handle_it == flex_item_handles_.end()) {
+    if (!ensure_eth_jump_rule(port, kFlexItemRxFlowGroup)) { return nullptr; }
+
+    struct rte_flow_item_flex_conf flex_conf;
+    flex_conf.tunnel = FLEX_TUNNEL_MODE_SINGLE;
+    memset(&flex_conf.next_header, 0, sizeof(flex_conf.next_header));
+    flex_conf.next_header.field_mode = FIELD_MODE_FIXED;
+    flex_conf.next_header.field_base = 32 * 8;
+
+    memset(&flex_conf.next_protocol, 0, sizeof(flex_conf.next_protocol));
+
+    struct rte_flow_item_flex_field sample_data[1];
+    memset(&sample_data[0], 0, sizeof(sample_data));
+    sample_data[0].field_mode = FIELD_MODE_FIXED;
+    sample_data[0].field_size = 32;
+    sample_data[0].field_base = flex_item_config->offset_ * 8;
+    flex_conf.sample_data = &sample_data[0];
+    flex_conf.nb_samples = 1;
+
+    struct rte_flow_item_flex_link input_link;
+    memset(&input_link, 0, sizeof(input_link));
+    input_link.item = udp_item;
+    flex_conf.input_link = &input_link;
+    flex_conf.nb_inputs = 1;
+
+    struct rte_flow_item_flex_link output_link;
+    memset(&output_link, 0, sizeof(output_link));
+    output_link.item = pattern[4];
+    flex_conf.output_link = &output_link;
+    flex_conf.nb_outputs = 0;
+
+    struct rte_flow_item_flex_handle* item_handle =
+        rte_flow_flex_item_create(port, &flex_conf, &error);
+    if (item_handle == nullptr) {
+      DAQIRI_LOG_CRITICAL("Failed to create flex item on port {}: {}",
+                          port,
+                          error.message ? error.message : "unknown error");
+      return nullptr;
+    }
+    flex_item_handles_[handle_key] = {static_cast<uint16_t>(port), item_handle};
+    handle_it = flex_item_handles_.find(handle_key);
   }
 
-  struct rte_flow_item_flex_handle *item_handle = flex_item_handles_[match_info.flex_item_id_];
+  if (handle_it == flex_item_handles_.end() || handle_it->second.handle == nullptr) {
+    return nullptr;
+  }
+
+  struct rte_flow_item_flex_handle* item_handle = handle_it->second.handle;
 
   /* Define the new protocol header structure */
   struct rte_udp_flex_hdr {
@@ -2898,79 +4491,559 @@ struct rte_flow* DpdkEngine::add_flex_item_flow(
 
   attr.ingress = 1;
   attr.priority = 0;
-  attr.group = 1;
+  attr.group = kFlexItemRxFlowGroup;
 
-    /* Validate the rule and create it */
-     res = rte_flow_validate(port, &attr, pattern, action, &error);
-    if (!res) {
-        flow = rte_flow_create(port, &attr, pattern, action, &error);
-        if (!flow) {
-            printf("Flow creation failed for match %08x: %s\n",
-                   match_info.val_, error.message);
-        } else {
-            printf("Created flow rule: match %08x -> Queue %u\n",
-                   match_info.val_, queue_id);
-        }
-    } else {
-        printf("Flow validation failed for match %08x: %s\n",
-               match_info.val_, error.message);
-    }
+  res = rte_flow_validate(port, &attr, pattern, action, &error);
+  if (res != 0) {
+    DAQIRI_LOG_CRITICAL("Failed to validate flex-item RX flow on port {} (match {:08x}): {} ({})",
+                        port,
+                        match_info.val_,
+                        error.message ? error.message : "unknown error",
+                        rte_strerror(rte_errno));
+    return nullptr;
+  }
 
-    return flow;
+  flow = rte_flow_create(port, &attr, pattern, action, &error);
+  if (flow == nullptr) {
+    DAQIRI_LOG_CRITICAL("Failed to create flex-item RX flow on port {} (match {:08x}): {} ({})",
+                        port,
+                        match_info.val_,
+                        error.message ? error.message : "unknown error",
+                        rte_strerror(rte_errno));
+  } else if (track) {
+    track_flow(static_cast<uint16_t>(port), flow);
+  }
+
+  return flow;
 }
+
+namespace {
+
+bool parse_ipv4_be(const std::string& text, rte_be32_t* out) {
+  struct in_addr addr {};
+  if (out == nullptr || inet_pton(AF_INET, text.c_str(), &addr) != 1) { return false; }
+  *out = addr.s_addr;
+  return true;
+}
+
+bool parse_mac_addr(const std::string& text, struct rte_ether_addr* out) {
+  return out != nullptr && rte_ether_unformat_addr(text.c_str(), out) == 0;
+}
+
+void set_u24_be(uint8_t out[3], uint32_t value) {
+  out[0] = static_cast<uint8_t>((value >> 16) & 0xff);
+  out[1] = static_cast<uint8_t>((value >> 8) & 0xff);
+  out[2] = static_cast<uint8_t>(value & 0xff);
+}
+
+void append_bytes(std::vector<uint8_t>& dst, const void* src, size_t len) {
+  const auto* bytes = static_cast<const uint8_t*>(src);
+  dst.insert(dst.end(), bytes, bytes + len);
+}
+
+bool fill_outer_eth_ip(DpdkEngine::DpdkFlowResource::ActionStorage& storage,
+                       const TunnelConfig& tunnel, uint8_t proto) {
+  rte_be32_t src_addr = 0;
+  rte_be32_t dst_addr = 0;
+  if (!parse_mac_addr(tunnel.outer_eth_dst_, &storage.eth_spec.hdr.dst_addr) ||
+      !parse_mac_addr(tunnel.outer_eth_src_, &storage.eth_spec.hdr.src_addr) ||
+      !parse_ipv4_be(tunnel.outer_ipv4_src_, &src_addr) ||
+      !parse_ipv4_be(tunnel.outer_ipv4_dst_, &dst_addr)) {
+    return false;
+  }
+
+  memset(&storage.eth_mask, 0, sizeof(storage.eth_mask));
+  memset(&storage.ipv4_mask, 0, sizeof(storage.ipv4_mask));
+  storage.eth_spec.hdr.ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4);
+  memset(&storage.eth_mask.hdr.dst_addr, 0xff, sizeof(storage.eth_mask.hdr.dst_addr));
+  memset(&storage.eth_mask.hdr.src_addr, 0xff, sizeof(storage.eth_mask.hdr.src_addr));
+  storage.eth_mask.hdr.ether_type = 0xffff;
+
+  storage.ipv4_spec.hdr.version_ihl = RTE_IPV4_VHL_DEF;
+  storage.ipv4_spec.hdr.type_of_service = tunnel.outer_ipv4_tos_;
+  storage.ipv4_spec.hdr.time_to_live = tunnel.outer_ipv4_ttl_;
+  storage.ipv4_spec.hdr.next_proto_id = proto;
+  storage.ipv4_spec.hdr.src_addr = src_addr;
+  storage.ipv4_spec.hdr.dst_addr = dst_addr;
+  storage.ipv4_mask.hdr.src_addr = 0xffffffffu;
+  storage.ipv4_mask.hdr.dst_addr = 0xffffffffu;
+  storage.ipv4_mask.hdr.next_proto_id = 0xff;
+  return true;
+}
+
+bool fill_vxlan_storage(DpdkEngine::DpdkFlowResource::ActionStorage& storage,
+                        const TunnelConfig& tunnel) {
+  if (!fill_outer_eth_ip(storage, tunnel, IPPROTO_UDP)) { return false; }
+  storage.udp_spec.hdr.src_port = rte_cpu_to_be_16(tunnel.outer_udp_src_);
+  storage.udp_spec.hdr.dst_port = rte_cpu_to_be_16(tunnel.outer_udp_dst_);
+  storage.udp_mask.hdr.src_port = tunnel.outer_udp_src_ == 0 ? 0 : 0xffff;
+  storage.udp_mask.hdr.dst_port = 0xffff;
+  storage.vxlan_spec.hdr.vx_flags = rte_cpu_to_be_32(0x08000000u);
+  storage.vxlan_spec.hdr.vx_vni = rte_cpu_to_be_32(tunnel.vni_ << 8);
+  storage.vxlan_mask.hdr.vx_flags = rte_cpu_to_be_32(0xff000000u);
+  storage.vxlan_mask.hdr.vx_vni = rte_cpu_to_be_32(0xffffff00u);
+
+  storage.definition[0] = {.type = RTE_FLOW_ITEM_TYPE_ETH,
+                           .spec = &storage.eth_spec,
+                           .last = nullptr,
+                           .mask = &storage.eth_mask};
+  storage.definition[1] = {.type = RTE_FLOW_ITEM_TYPE_IPV4,
+                           .spec = &storage.ipv4_spec,
+                           .last = nullptr,
+                           .mask = &storage.ipv4_mask};
+  storage.definition[2] = {.type = RTE_FLOW_ITEM_TYPE_UDP,
+                           .spec = &storage.udp_spec,
+                           .last = nullptr,
+                           .mask = &storage.udp_mask};
+  storage.definition[3] = {.type = RTE_FLOW_ITEM_TYPE_VXLAN,
+                           .spec = &storage.vxlan_spec,
+                           .last = nullptr,
+                           .mask = &storage.vxlan_mask};
+  storage.definition[4] = {.type = RTE_FLOW_ITEM_TYPE_END};
+  storage.vxlan_encap.definition = storage.definition.data();
+  return true;
+}
+
+bool fill_nvgre_storage(DpdkEngine::DpdkFlowResource::ActionStorage& storage,
+                        const TunnelConfig& tunnel) {
+  if (!fill_outer_eth_ip(storage, tunnel, IPPROTO_GRE)) { return false; }
+  storage.nvgre_spec.c_k_s_rsvd0_ver = rte_cpu_to_be_16(0x2000);
+  storage.nvgre_spec.protocol = rte_cpu_to_be_16(RTE_ETHER_TYPE_TEB);
+  set_u24_be(storage.nvgre_spec.tni, tunnel.tni_);
+  storage.nvgre_spec.flow_id = tunnel.flow_id_;
+  storage.nvgre_mask.c_k_s_rsvd0_ver = 0xffff;
+  storage.nvgre_mask.protocol = 0xffff;
+  storage.nvgre_mask.tni[0] = 0xff;
+  storage.nvgre_mask.tni[1] = 0xff;
+  storage.nvgre_mask.tni[2] = 0xff;
+  storage.nvgre_mask.flow_id = 0xff;
+
+  storage.definition[0] = {.type = RTE_FLOW_ITEM_TYPE_ETH,
+                           .spec = &storage.eth_spec,
+                           .last = nullptr,
+                           .mask = &storage.eth_mask};
+  storage.definition[1] = {.type = RTE_FLOW_ITEM_TYPE_IPV4,
+                           .spec = &storage.ipv4_spec,
+                           .last = nullptr,
+                           .mask = &storage.ipv4_mask};
+  storage.definition[2] = {.type = RTE_FLOW_ITEM_TYPE_NVGRE,
+                           .spec = &storage.nvgre_spec,
+                           .last = nullptr,
+                           .mask = &storage.nvgre_mask};
+  storage.definition[3] = {.type = RTE_FLOW_ITEM_TYPE_END};
+  storage.nvgre_encap.definition = storage.definition.data();
+  return true;
+}
+
+bool fill_gre_raw_storage(DpdkEngine::DpdkFlowResource::ActionStorage& storage,
+                          const TunnelConfig& tunnel) {
+  if (!fill_outer_eth_ip(storage, tunnel, IPPROTO_GRE)) { return false; }
+  struct rte_gre_hdr gre {};
+  gre.proto = rte_cpu_to_be_16(tunnel.gre_protocol_);
+  storage.gre_spec.protocol = rte_cpu_to_be_16(tunnel.gre_protocol_);
+  storage.gre_mask.protocol = 0xffff;
+  append_bytes(storage.raw_data, &storage.eth_spec.hdr, sizeof(storage.eth_spec.hdr));
+  append_bytes(storage.raw_data, &storage.ipv4_spec.hdr, sizeof(storage.ipv4_spec.hdr));
+  append_bytes(storage.raw_data, &gre, sizeof(gre));
+  storage.raw_encap.data = storage.raw_data.data();
+  storage.raw_encap.preserve = nullptr;
+  storage.raw_encap.size = storage.raw_data.size();
+  storage.raw_decap.data = storage.raw_data.data();
+  storage.raw_decap.size = storage.raw_data.size();
+  return true;
+}
+
+void append_normal_match(struct rte_flow_item* pattern, int* idx, const FlowMatch& match,
+                         struct rte_flow_item_ipv4* ip_spec,
+                         struct rte_flow_item_ipv4* ip_mask,
+                         struct rte_flow_item_udp* udp_spec,
+                         struct rte_flow_item_udp* udp_mask) {
+  bool has_ip_match = false;
+  bool has_udp_match = false;
+  if (match.ipv4_len_ > 0) {
+    ip_spec->hdr.total_length = htons(match.ipv4_len_);
+    ip_mask->hdr.total_length = 0xffff;
+    has_ip_match = true;
+  }
+  if (match.ipv4_src_ != INADDR_ANY) {
+    ip_spec->hdr.src_addr = match.ipv4_src_;
+    ip_mask->hdr.src_addr = 0xffffffff;
+    has_ip_match = true;
+  }
+  if (match.ipv4_dst_ != INADDR_ANY) {
+    ip_spec->hdr.dst_addr = match.ipv4_dst_;
+    ip_mask->hdr.dst_addr = 0xffffffff;
+    has_ip_match = true;
+  }
+  if (match.udp_src_ > 0) {
+    udp_spec->hdr.src_port = htons(match.udp_src_);
+    udp_mask->hdr.src_port = 0xffff;
+    has_udp_match = true;
+  }
+  if (match.udp_dst_ > 0) {
+    udp_spec->hdr.dst_port = htons(match.udp_dst_);
+    udp_mask->hdr.dst_port = 0xffff;
+    has_udp_match = true;
+  }
+  if (has_udp_match) { has_ip_match = true; }
+  if (has_ip_match) {
+    pattern[(*idx)++] = {.type = RTE_FLOW_ITEM_TYPE_IPV4,
+                         .spec = ip_spec,
+                         .last = nullptr,
+                         .mask = ip_mask};
+  }
+  if (has_udp_match) {
+    pattern[(*idx)++] = {.type = RTE_FLOW_ITEM_TYPE_UDP,
+                         .spec = udp_spec,
+                         .last = nullptr,
+                         .mask = udp_mask};
+  }
+}
+
+int normal_match_pattern_item_count(const FlowMatch& match) {
+  const bool has_udp_match = match.udp_src_ > 0 || match.udp_dst_ > 0;
+  const bool has_ip_match = has_udp_match || match.ipv4_len_ > 0 ||
+                            match.ipv4_src_ != INADDR_ANY ||
+                            match.ipv4_dst_ != INADDR_ANY;
+  return (has_ip_match ? 1 : 0) + (has_udp_match ? 1 : 0);
+}
+
+int transform_pattern_item_count(const FlowAction& flow_action) {
+  if (flow_action.type_ == FlowType::VLAN_POP) { return 2; }
+  if (flow_action.type_ != FlowType::TUNNEL_DECAP) { return 0; }
+
+  switch (flow_action.tunnel_.type_) {
+    case TunnelType::VXLAN:
+      return 4;
+    case TunnelType::GRE:
+    case TunnelType::NVGRE:
+      return 3;
+    case TunnelType::NONE:
+      return 0;
+  }
+  return 0;
+}
+
+int transform_action_item_count(const FlowAction& flow_action) {
+  switch (flow_action.type_) {
+    case FlowType::VLAN_PUSH:
+      return 3;
+    case FlowType::VLAN_POP:
+    case FlowType::TUNNEL_ENCAP:
+    case FlowType::TUNNEL_DECAP:
+      return 1;
+    case FlowType::QUEUE:
+      return 0;
+  }
+  return 0;
+}
+
+bool append_tunnel_pattern(struct rte_flow_item* pattern, int* idx,
+                           DpdkEngine::DpdkFlowResource& resource,
+                           const TunnelConfig& tunnel) {
+  resource.action_storage.emplace_back();
+  auto& storage = resource.action_storage.back();
+  switch (tunnel.type_) {
+    case TunnelType::VXLAN:
+      if (!fill_vxlan_storage(storage, tunnel)) { return false; }
+      pattern[(*idx)++] = storage.definition[0];
+      pattern[(*idx)++] = storage.definition[1];
+      pattern[(*idx)++] = storage.definition[2];
+      pattern[(*idx)++] = storage.definition[3];
+      return true;
+    case TunnelType::GRE:
+      if (!fill_gre_raw_storage(storage, tunnel)) { return false; }
+      pattern[(*idx)++] = {.type = RTE_FLOW_ITEM_TYPE_ETH,
+                           .spec = &storage.eth_spec,
+                           .last = nullptr,
+                           .mask = &storage.eth_mask};
+      pattern[(*idx)++] = {.type = RTE_FLOW_ITEM_TYPE_IPV4,
+                           .spec = &storage.ipv4_spec,
+                           .last = nullptr,
+                           .mask = &storage.ipv4_mask};
+      pattern[(*idx)++] = {.type = RTE_FLOW_ITEM_TYPE_GRE,
+                           .spec = &storage.gre_spec,
+                           .last = nullptr,
+                           .mask = &storage.gre_mask};
+      return true;
+    case TunnelType::NVGRE:
+      if (!fill_nvgre_storage(storage, tunnel)) { return false; }
+      pattern[(*idx)++] = storage.definition[0];
+      pattern[(*idx)++] = storage.definition[1];
+      pattern[(*idx)++] = storage.definition[2];
+      return true;
+    case TunnelType::NONE:
+      return false;
+  }
+  return false;
+}
+
+bool append_transform_action(struct rte_flow_action* actions, int* idx,
+                             DpdkEngine::DpdkFlowResource& resource,
+                             const FlowAction& flow_action) {
+  resource.action_storage.emplace_back();
+  auto& storage = resource.action_storage.back();
+  switch (flow_action.type_) {
+    case FlowType::VLAN_PUSH:
+      storage.push_vlan.ethertype = rte_cpu_to_be_16(flow_action.vlan_.ethertype_);
+      storage.set_vlan_vid.vlan_vid = rte_cpu_to_be_16(
+          static_cast<uint16_t>((flow_action.vlan_.dei_ ? 0x1000 : 0) |
+                                (flow_action.vlan_.vlan_id_ & 0x0fff)));
+      storage.set_vlan_pcp.vlan_pcp = flow_action.vlan_.pcp_;
+      actions[(*idx)++] = {.type = RTE_FLOW_ACTION_TYPE_OF_PUSH_VLAN,
+                           .conf = &storage.push_vlan};
+      actions[(*idx)++] = {.type = RTE_FLOW_ACTION_TYPE_OF_SET_VLAN_VID,
+                           .conf = &storage.set_vlan_vid};
+      actions[(*idx)++] = {.type = RTE_FLOW_ACTION_TYPE_OF_SET_VLAN_PCP,
+                           .conf = &storage.set_vlan_pcp};
+      return true;
+    case FlowType::VLAN_POP:
+      actions[(*idx)++] = {.type = RTE_FLOW_ACTION_TYPE_OF_POP_VLAN, .conf = nullptr};
+      return true;
+    case FlowType::TUNNEL_ENCAP:
+      switch (flow_action.tunnel_.type_) {
+        case TunnelType::VXLAN:
+          if (!fill_vxlan_storage(storage, flow_action.tunnel_)) { return false; }
+          actions[(*idx)++] = {.type = RTE_FLOW_ACTION_TYPE_VXLAN_ENCAP,
+                               .conf = &storage.vxlan_encap};
+          return true;
+        case TunnelType::GRE:
+          if (!fill_gre_raw_storage(storage, flow_action.tunnel_)) { return false; }
+          actions[(*idx)++] = {.type = RTE_FLOW_ACTION_TYPE_RAW_ENCAP,
+                               .conf = &storage.raw_encap};
+          return true;
+        case TunnelType::NVGRE:
+          if (!fill_nvgre_storage(storage, flow_action.tunnel_)) { return false; }
+          actions[(*idx)++] = {.type = RTE_FLOW_ACTION_TYPE_NVGRE_ENCAP,
+                               .conf = &storage.nvgre_encap};
+          return true;
+        case TunnelType::NONE:
+          return false;
+      }
+      break;
+    case FlowType::TUNNEL_DECAP:
+      switch (flow_action.tunnel_.type_) {
+        case TunnelType::VXLAN:
+          actions[(*idx)++] = {.type = RTE_FLOW_ACTION_TYPE_VXLAN_DECAP, .conf = nullptr};
+          return true;
+        case TunnelType::GRE:
+          if (!fill_gre_raw_storage(storage, flow_action.tunnel_)) { return false; }
+          actions[(*idx)++] = {.type = RTE_FLOW_ACTION_TYPE_RAW_DECAP,
+                               .conf = &storage.raw_decap};
+          return true;
+        case TunnelType::NVGRE:
+          actions[(*idx)++] = {.type = RTE_FLOW_ACTION_TYPE_NVGRE_DECAP, .conf = nullptr};
+          return true;
+        case TunnelType::NONE:
+          return false;
+      }
+      break;
+    case FlowType::QUEUE:
+      return false;
+  }
+  return false;
+}
+
+}  // namespace
 
 
 // Taken from flow_block.c DPDK example */
-struct rte_flow* DpdkEngine::add_flow(int port, const FlowConfig& cfg) {
-  /* Declaring structs being used. 8< */
+struct rte_flow* DpdkEngine::add_flow(int port,
+                                      const FlowConfig& cfg,
+                                      bool track,
+                                      std::shared_ptr<DpdkFlowResource>* resource_out) {
+  struct rte_flow_attr attr {};
+  struct rte_flow_item pattern[MAX_PATTERN_NUM] {};
+  struct rte_flow_action action[MAX_ACTION_NUM] {};
+  struct rte_flow_action_queue queue = {.index = cfg.action_.id_};
+  struct rte_flow_action_mark  mark = {.id = cfg.id_};
+  struct rte_flow_error error {};
+  struct rte_flow_item_udp udp_spec {};
+  struct rte_flow_item_udp udp_mask {};
+  struct rte_flow_item_ipv4 ip_spec {};
+  struct rte_flow_item_ipv4 ip_mask {};
+
+  if (!ensure_eth_jump_rule(port, kStandardRxFlowGroup)) { return nullptr; }
+
+  auto resource = std::make_shared<DpdkFlowResource>();
+  resource->port = port;
+  resource->action_storage.reserve(cfg.actions_.size() * 2 + 2);
+
+  int required_pattern_items = 1 + normal_match_pattern_item_count(cfg.match_) + 1;
+  int required_action_items = 2 + 1;
+  for (const auto& flow_action : cfg.actions_) {
+    required_pattern_items += transform_pattern_item_count(flow_action);
+    required_action_items += transform_action_item_count(flow_action);
+  }
+  if (required_pattern_items > MAX_PATTERN_NUM) {
+    DAQIRI_LOG_CRITICAL("RX flow '{}' requires {} DPDK pattern entries, maximum is {}",
+                        cfg.name_, required_pattern_items, MAX_PATTERN_NUM);
+    return nullptr;
+  }
+  if (required_action_items > MAX_ACTION_NUM) {
+    DAQIRI_LOG_CRITICAL("RX flow '{}' requires {} DPDK action entries, maximum is {}",
+                        cfg.name_, required_action_items, MAX_ACTION_NUM);
+    return nullptr;
+  }
+
+  int pi = 0;
+  bool has_outer_transform = false;
+  for (const auto& flow_action : cfg.actions_) {
+    if (flow_action.type_ == FlowType::TUNNEL_DECAP) {
+      if (!append_tunnel_pattern(pattern, &pi, *resource, flow_action.tunnel_)) {
+        DAQIRI_LOG_CRITICAL("Failed to build tunnel pattern for RX flow '{}'", cfg.name_);
+        return nullptr;
+      }
+      has_outer_transform = true;
+    } else if (flow_action.type_ == FlowType::VLAN_POP) {
+      pattern[pi++].type = RTE_FLOW_ITEM_TYPE_ETH;
+      pattern[pi++].type = RTE_FLOW_ITEM_TYPE_VLAN;
+      has_outer_transform = true;
+    }
+  }
+  pattern[pi++].type = RTE_FLOW_ITEM_TYPE_ETH;
+  append_normal_match(pattern, &pi, cfg.match_, &ip_spec, &ip_mask, &udp_spec, &udp_mask);
+  pattern[pi].type = RTE_FLOW_ITEM_TYPE_END;
+
+  int ai = 0;
+  for (const auto& flow_action : cfg.actions_) {
+    if (flow_action.type_ == FlowType::QUEUE) { continue; }
+    if (!append_transform_action(action, &ai, *resource, flow_action)) {
+      DAQIRI_LOG_CRITICAL("Failed to build RX action '{}' for flow '{}'",
+                          flow_type_to_string(flow_action.type_), cfg.name_);
+      return nullptr;
+    }
+  }
+  action[ai++] = {.type = RTE_FLOW_ACTION_TYPE_MARK, .conf = &mark};
+  action[ai++] = {.type = RTE_FLOW_ACTION_TYPE_QUEUE, .conf = &queue};
+  action[ai].type = RTE_FLOW_ACTION_TYPE_END;
+
+  attr.ingress = 1;
+  attr.priority = has_outer_transform ? 0 : 1;
+  attr.group = kStandardRxFlowGroup;
+
+  int res = rte_flow_validate(port, &attr, pattern, action, &error);
+  if (res != 0) {
+    DAQIRI_LOG_CRITICAL("Failed to validate RX flow '{}' on port {}: {} ({})",
+                        cfg.name_,
+                        port,
+                        error.message ? error.message : "unknown error",
+                        rte_strerror(rte_errno));
+    return nullptr;
+  }
+
+  struct rte_flow* flow = rte_flow_create(port, &attr, pattern, action, &error);
+  if (flow == nullptr) {
+    DAQIRI_LOG_CRITICAL("Failed to create RX flow '{}' on port {}: {} ({})",
+                        cfg.name_,
+                        port,
+                        error.message ? error.message : "unknown error",
+                        rte_strerror(rte_errno));
+    return nullptr;
+  }
+  resource->flow = flow;
+  if (resource_out != nullptr) { *resource_out = resource; }
+  if (track) { owned_flows_.push_back(resource); }
+  return flow;
+}
+
+struct rte_flow* DpdkEngine::add_tx_flow(int port, const FlowConfig& cfg) {
+  struct rte_flow_attr attr {};
+  struct rte_flow_item pattern[MAX_PATTERN_NUM] {};
+  struct rte_flow_action action[MAX_ACTION_NUM] {};
+  struct rte_flow_error error {};
+  struct rte_flow_item_udp udp_spec {};
+  struct rte_flow_item_udp udp_mask {};
+  struct rte_flow_item_ipv4 ip_spec {};
+  struct rte_flow_item_ipv4 ip_mask {};
+
+  auto resource = std::make_shared<DpdkFlowResource>();
+  resource->port = port;
+  resource->action_storage.reserve(cfg.actions_.size() * 2 + 1);
+
+  const int required_pattern_items = 1 + normal_match_pattern_item_count(cfg.match_) + 1;
+  int required_action_items = 1;
+  for (const auto& flow_action : cfg.actions_) {
+    required_action_items += transform_action_item_count(flow_action);
+  }
+  if (required_pattern_items > MAX_PATTERN_NUM) {
+    DAQIRI_LOG_CRITICAL("TX flow '{}' requires {} DPDK pattern entries, maximum is {}",
+                        cfg.name_, required_pattern_items, MAX_PATTERN_NUM);
+    return nullptr;
+  }
+  if (required_action_items > MAX_ACTION_NUM) {
+    DAQIRI_LOG_CRITICAL("TX flow '{}' requires {} DPDK action entries, maximum is {}",
+                        cfg.name_, required_action_items, MAX_ACTION_NUM);
+    return nullptr;
+  }
+
+  int pi = 0;
+  pattern[pi++].type = RTE_FLOW_ITEM_TYPE_ETH;
+  append_normal_match(pattern, &pi, cfg.match_, &ip_spec, &ip_mask, &udp_spec, &udp_mask);
+  pattern[pi].type = RTE_FLOW_ITEM_TYPE_END;
+
+  int ai = 0;
+  for (const auto& flow_action : cfg.actions_) {
+    if (!append_transform_action(action, &ai, *resource, flow_action)) {
+      DAQIRI_LOG_CRITICAL("Failed to build TX action '{}' for flow '{}'",
+                          flow_type_to_string(flow_action.type_), cfg.name_);
+      return nullptr;
+    }
+  }
+  action[ai].type = RTE_FLOW_ACTION_TYPE_END;
+
+  attr.egress = 1;
+  attr.priority = 1;
+
+  int res = rte_flow_validate(port, &attr, pattern, action, &error);
+  if (res != 0) {
+    DAQIRI_LOG_CRITICAL("Failed to validate TX flow '{}' on port {}: {} ({})",
+                        cfg.name_,
+                        port,
+                        error.message ? error.message : "unknown error",
+                        rte_strerror(rte_errno));
+    return nullptr;
+  }
+
+  struct rte_flow* flow = rte_flow_create(port, &attr, pattern, action, &error);
+  if (flow == nullptr) {
+    DAQIRI_LOG_CRITICAL("Failed to create TX flow '{}' on port {}: {} ({})",
+                        cfg.name_,
+                        port,
+                        error.message ? error.message : "unknown error",
+                        rte_strerror(rte_errno));
+    return nullptr;
+  }
+  resource->flow = flow;
+  owned_flows_.push_back(resource);
+  return flow;
+}
+
+struct rte_flow* DpdkEngine::add_ecpri_flow(int port, const FlowConfig& cfg, bool track) {
   struct rte_flow_attr attr;
   struct rte_flow_item pattern[MAX_PATTERN_NUM];
   struct rte_flow_action action[MAX_ACTION_NUM];
   struct rte_flow* flow = NULL;
   struct rte_flow_action_queue queue = {.index = cfg.action_.id_};
-  struct rte_flow_action_mark  mark = {.id = cfg.id_};
+  struct rte_flow_action_mark mark = {.id = cfg.id_};
   struct rte_flow_error error;
-  struct rte_flow_item_udp udp_spec;
-  struct rte_flow_item_udp udp_mask;
-  struct rte_flow_item_ipv4  ip_spec;
-  struct rte_flow_item_ipv4  ip_mask;
+  struct rte_flow_item_eth eth_spec;
+  struct rte_flow_item_eth eth_mask;
+  struct rte_flow_item_ecpri ecpri_spec;
+  struct rte_flow_item_ecpri ecpri_mask;
   int res;
 
-  // HWS requires using a non-zero group, so we make a jump event to group 3 for all ethernet
-  // packets
-  {
-    struct rte_flow_error jump_error;
-    struct rte_flow_attr jump_attr{.group = 0, .ingress = 1};
-    struct rte_flow_action_jump jump_v = {.group = 3};
-    struct rte_flow_action jump_actions[] = {
-      { .type = RTE_FLOW_ACTION_TYPE_JUMP, .conf = &jump_v},
-      { .type = RTE_FLOW_ACTION_TYPE_END}
-    };
-
-    struct rte_flow_item jump_pattern[] = {
-      { .type = RTE_FLOW_ITEM_TYPE_ETH, .spec = 0, .mask = 0},
-      { .type = RTE_FLOW_ITEM_TYPE_END},
-    };
-
-    auto res = rte_flow_validate(port, &jump_attr, jump_pattern, jump_actions, &jump_error);
-    if (!res) {
-      struct rte_flow* flow = rte_flow_create(
-          port, &jump_attr, jump_pattern, jump_actions, &jump_error);
-      if (flow == nullptr) {
-        DAQIRI_LOG_ERROR("rte_flow_create failed");
-      }
-    } else {
-      DAQIRI_LOG_ERROR("Failed flow validation: {}", res);
-    }
+  if (!ensure_eth_jump_rule(port, 2)) {
+    return nullptr;
   }
 
   memset(pattern, 0, sizeof(pattern));
   memset(action, 0, sizeof(action));
   memset(&attr, 0, sizeof(struct rte_flow_attr));
-  memset(&ip_spec, 0, sizeof(struct rte_flow_item_ipv4));
-  memset(&ip_mask, 0, sizeof(struct rte_flow_item_ipv4));
-  memset(&udp_spec, 0, sizeof(struct rte_flow_item_udp));
-  memset(&udp_mask, 0, sizeof(struct rte_flow_item_udp));
+  memset(&eth_spec, 0, sizeof(struct rte_flow_item_eth));
+  memset(&eth_mask, 0, sizeof(struct rte_flow_item_eth));
+  memset(&ecpri_spec, 0, sizeof(struct rte_flow_item_ecpri));
+  memset(&ecpri_mask, 0, sizeof(struct rte_flow_item_ecpri));
 
   action[0].type = RTE_FLOW_ACTION_TYPE_MARK;
   action[0].conf = &mark;
@@ -2978,80 +5051,64 @@ struct rte_flow* DpdkEngine::add_flow(int port, const FlowConfig& cfg) {
   action[1].conf = &queue;
   action[2].type = RTE_FLOW_ACTION_TYPE_END;
 
+  // Pin the eCPRI EtherType so the rule only fires on eCPRI-over-Ethernet frames.
+  eth_spec.hdr.ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_ECPRI);
+  eth_mask.hdr.ether_type = 0xffff;
   pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
-  pattern[1].type = RTE_FLOW_ITEM_TYPE_IPV4;
-  pattern[2].type = RTE_FLOW_ITEM_TYPE_UDP;
+  pattern[0].spec = &eth_spec;
+  pattern[0].mask = &eth_mask;
 
-  bool has_ip_match = false;
-
-  if (cfg.match_.ipv4_len_ > 0) {
-    ip_spec.hdr.total_length = htons(cfg.match_.ipv4_len_);
-    ip_mask.hdr.total_length = 0xffff;
-    has_ip_match = true;
-    DAQIRI_LOG_INFO("Adding IPv4 length match for {}", cfg.match_.ipv4_len_);
+  // The mlx5 eCPRI parser matches the common-header dword (message type at the
+  // second byte, network-order mask 0x00ff0000) and the message-body dword
+  // (hdr.dummy[0], shared by type0.pc_id / type2.rtc_id; the identifier is the
+  // top 16 bits, mask 0xffff0000). Both are filled in network byte order. The
+  // PMD only matches the body when the common-header mask is non-zero, so
+  // pc_id/rtc_id matching requires a msg_type (enforced at config parse).
+  const EcpriMatch& em = cfg.match_.ecpri_match_;
+  if (em.match_msg_type_) {
+    ecpri_spec.hdr.common.u32 = rte_cpu_to_be_32(static_cast<uint32_t>(em.msg_type_) << 16);
+    ecpri_mask.hdr.common.u32 = rte_cpu_to_be_32(0x00ff0000u);
+  }
+  if (em.match_id_) {
+    ecpri_spec.hdr.type0.pc_id = rte_cpu_to_be_16(em.id_);
+    ecpri_mask.hdr.type0.pc_id = rte_cpu_to_be_16(0xffff);
   }
 
-  if (cfg.match_.ipv4_src_ != INADDR_ANY) {
-    char str_ip[INET_ADDRSTRLEN];
-    ip_spec.hdr.src_addr = cfg.match_.ipv4_src_;
-    ip_mask.hdr.src_addr = 0xffffffff;
-    has_ip_match = true;
-    inet_ntop(AF_INET, &ip_spec.hdr.src_addr, str_ip, INET_ADDRSTRLEN);
-    DAQIRI_LOG_INFO("Adding IPv4 source IP match for {}", str_ip);
+  uint8_t npat = 1;
+  if (em.match_msg_type_ || em.match_id_) {
+    pattern[npat].type = RTE_FLOW_ITEM_TYPE_ECPRI;
+    pattern[npat].spec = &ecpri_spec;
+    pattern[npat].mask = &ecpri_mask;
+    npat++;
   }
-
-  if (cfg.match_.ipv4_dst_ != INADDR_ANY) {
-    char str_ip[INET_ADDRSTRLEN];
-    ip_spec.hdr.dst_addr = cfg.match_.ipv4_dst_;
-    ip_mask.hdr.dst_addr = 0xffffffff;
-    has_ip_match = true;
-    inet_ntop(AF_INET, &ip_spec.hdr.dst_addr, str_ip, INET_ADDRSTRLEN);
-    DAQIRI_LOG_INFO("Adding IPv4 destination IP match for {}", str_ip);
-  }
-
-  if (has_ip_match == true) {
-    pattern[1].spec = &ip_spec;
-    pattern[1].mask = &ip_mask;
-  }
-
-  bool has_udp_match = false;
-
-  if (cfg.match_.udp_src_ > 0) {
-    udp_spec.hdr.src_port = htons(cfg.match_.udp_src_);
-    udp_mask.hdr.src_port = 0xffff;
-    has_udp_match = true;
-    DAQIRI_LOG_INFO("Adding UDP port match for src {}", cfg.match_.udp_src_);
-  }
-
-  if (cfg.match_.udp_dst_ > 0) {
-    udp_spec.hdr.dst_port = htons(cfg.match_.udp_dst_);
-    udp_mask.hdr.dst_port = 0xffff;
-    has_udp_match = true;
-    DAQIRI_LOG_INFO("Adding UDP port match for dst {}", cfg.match_.udp_dst_);
-  }
-
-  if (has_udp_match == true) {
-    udp_spec.hdr.dgram_len = 0;
-    udp_spec.hdr.dgram_cksum = 0;
-    udp_mask.hdr.dgram_len = 0;
-    udp_mask.hdr.dgram_cksum = 0;
-
-    pattern[2].spec = &udp_spec;
-    pattern[2].mask = &udp_mask;
-  }
-
+  pattern[npat].type = RTE_FLOW_ITEM_TYPE_END;
 
   attr.ingress = 1;
-  attr.priority = 1;  // Lower priority to allow drop_traffic (priority 0) to take precedence
-  attr.group = 3;
+  attr.priority = 1;  // below the drop-all rule (priority 0)
+  attr.group = 2;
 
-  pattern[3].type = RTE_FLOW_ITEM_TYPE_END;
+  res = rte_flow_validate(port, &attr, pattern, action, &error);
+  if (res != 0) {
+    DAQIRI_LOG_CRITICAL("Failed to validate eCPRI RX flow '{}' on port {}: {} ({})", cfg.name_,
+                        port, error.message ? error.message : "unknown error",
+                        rte_strerror(rte_errno));
+    return nullptr;
+  }
 
   flow = rte_flow_create(port, &attr, pattern, action, &error);
+  if (flow == nullptr) {
+    DAQIRI_LOG_CRITICAL("Failed to create eCPRI RX flow '{}' on port {}: {} ({})", cfg.name_, port,
+                        error.message ? error.message : "unknown error", rte_strerror(rte_errno));
+  } else if (track) {
+    track_flow(static_cast<uint16_t>(port), flow);
+  }
   return flow;
 }
 
 bool DpdkEngine::add_send_to_kernel_fallback(int port, uint32_t group) {
+  const uint64_t key = eth_jump_key(port, group);
+  if (send_to_kernel_fallback_installed_.count(key) != 0) { return true; }
+
   struct rte_flow_attr attr;
   struct rte_flow_item pattern[MAX_PATTERN_NUM];
   struct rte_flow_action action[MAX_ACTION_NUM];
@@ -3094,6 +5151,8 @@ bool DpdkEngine::add_send_to_kernel_fallback(int port, uint32_t group) {
     return false;
   }
 
+  track_flow(static_cast<uint16_t>(port), flow);
+  send_to_kernel_fallback_installed_.insert(key);
   return true;
 }
 
@@ -3104,33 +5163,13 @@ Status DpdkEngine::drop_all_traffic(int port) {
   struct rte_flow_action action[MAX_ACTION_NUM];
   struct rte_flow* flow = NULL;
   struct rte_flow_error error;
-  DropTrafficConfig config;
+  DropTrafficConfig config{};
 
-  // Initialize the jump rule to group 3 (required by HWS)
-  {
-    struct rte_flow_error jump_error;
-    struct rte_flow_attr jump_attr{.group = 0, .ingress = 1};
-    struct rte_flow_action_jump jump_v = {.group = 3};
-    struct rte_flow_action jump_actions[] = {
-      { .type = RTE_FLOW_ACTION_TYPE_JUMP, .conf = &jump_v},
-      { .type = RTE_FLOW_ACTION_TYPE_END}
-    };
-
-    struct rte_flow_item jump_pattern[] = {
-      { .type = RTE_FLOW_ITEM_TYPE_ETH, .spec = 0, .mask = 0},
-      { .type = RTE_FLOW_ITEM_TYPE_END},
-    };
-
-    auto res = rte_flow_validate(port, &jump_attr, jump_pattern, jump_actions, &jump_error);
-    if (!res) {
-      config.jump = rte_flow_create(
-          port, &jump_attr, jump_pattern, jump_actions, &jump_error);
-      if (config.jump == nullptr) {
-        DAQIRI_LOG_ERROR("rte_flow_create failed for jump rule in drop_all_traffic");
-      }
-    } else {
-      DAQIRI_LOG_ERROR("Failed flow validation for jump rule in drop_all_traffic: {}", res);
-    }
+  // Jump to group 3 is shared with init-time RX flows; only the drop rule is owned here.
+  if (!ensure_eth_jump_rule(port, 3)) {
+    DAQIRI_LOG_CRITICAL("Cannot drop all traffic on port {}: ETH jump to group 3 unavailable",
+                        port);
+    return Status::INTERNAL_ERROR;
   }
 
   // Clear all structures
@@ -3152,15 +5191,24 @@ Status DpdkEngine::drop_all_traffic(int port) {
   attr.group = 3;
 
   DAQIRI_LOG_INFO("Creating drop all traffic rule on port {} with priority {}",
-    port, attr.priority);
+                  port,
+                  attr.priority);
 
-  // Create the flow rule
+  int ret = rte_flow_validate(port, &attr, pattern, action, &error);
+  if (ret != 0) {
+    DAQIRI_LOG_CRITICAL("Failed to validate drop-all-traffic rule on port {}: {} ({})",
+                        port,
+                        error.message ? error.message : "unknown error",
+                        rte_strerror(rte_errno));
+    return Status::INTERNAL_ERROR;
+  }
+
   config.drop = rte_flow_create(port, &attr, pattern, action, &error);
 
   if (config.drop == nullptr) {
-    DAQIRI_LOG_ERROR("Failed to create drop all traffic flow rule on port {}: {}",
-                       port, error.message ? error.message : "unknown error");
-    rte_flow_destroy(port, config.jump, &error);
+    DAQIRI_LOG_CRITICAL("Failed to create drop all traffic flow rule on port {}: {}",
+                        port,
+                        error.message ? error.message : "unknown error");
     return Status::INTERNAL_ERROR;
   } else {
     DAQIRI_LOG_INFO("Successfully created drop all traffic rule on port {}", port);
@@ -3181,27 +5229,18 @@ Status DpdkEngine::allow_all_traffic(int port) {
   // Tell the RX threads they can keep processing packets
   flush_rx_queues.store(false);
 
-  struct rte_flow_error jump_error;
+  // ETH jump to group 3 is shared with init-time RX flows and is not destroyed here.
   struct rte_flow_error drop_error;
   int drop_ret = rte_flow_destroy(port, drop_all_traffic_flow[port].drop, &drop_error);
-  int jump_ret = rte_flow_destroy(port, drop_all_traffic_flow[port].jump, &jump_error);
 
   if (drop_ret != 0) {
     DAQIRI_LOG_ERROR("Failed to destroy drop all traffic flow rule on port {}: {}",
-                       port, drop_error.message ? drop_error.message : "unknown error");
-  }
-
-  if (jump_ret != 0) {
-    DAQIRI_LOG_ERROR("Failed to destroy jump all traffic flow rule on port {}: {}",
-                       port, jump_error.message ? jump_error.message : "unknown error");
-  }
-
-  if (drop_ret != 0 || jump_ret != 0) {
+                     port,
+                     drop_error.message ? drop_error.message : "unknown error");
     return Status::INTERNAL_ERROR;
   }
 
   drop_all_traffic_flow[port].drop = nullptr;
-  drop_all_traffic_flow[port].jump = nullptr;
 
   DAQIRI_LOG_INFO(
     "Successfully removed drop all traffic rule on port {}, traffic is now allowed", port);
@@ -3275,28 +5314,49 @@ struct rte_flow* DpdkEngine::add_modify_flow_set(int port, int queue, const char
   pattern[1].type = RTE_FLOW_ITEM_TYPE_END;
 
   res = rte_flow_validate(port, &attr, pattern, action, &error);
-  if (!res) {
-    flow = rte_flow_create(port, &attr, pattern, action, &error);
-    return flow;
+  if (res != 0) {
+    DAQIRI_LOG_CRITICAL("Failed to validate TX modify flow on port {} queue {}: {} ({})",
+                        port,
+                        queue,
+                        error.message ? error.message : "unknown error",
+                        rte_strerror(rte_errno));
+    return nullptr;
   }
 
-  return nullptr;
+  flow = rte_flow_create(port, &attr, pattern, action, &error);
+  if (flow == nullptr) {
+    DAQIRI_LOG_CRITICAL("Failed to create TX modify flow on port {} queue {}: {} ({})",
+                        port,
+                        queue,
+                        error.message ? error.message : "unknown error",
+                        rte_strerror(rte_errno));
+  } else {
+    track_flow(static_cast<uint16_t>(port), flow);
+  }
+  return flow;
 }
 
-void DpdkEngine::apply_tx_offloads(int port) {
+bool DpdkEngine::apply_tx_offloads(int port) {
   for (const auto& q : cfg_.ifs_[port].tx_.queues_) {
     for (const auto& off : q.common_.offloads_) {
       if (off == "tx_eth_src") {  // Offload Ethernet source copy
         DAQIRI_LOG_INFO("Applying {} offload for port {}", off, port);
         const auto mac_bytes = mac_addrs[port];
-        add_modify_flow_set(port,
-                            q.common_.id_,
-                            reinterpret_cast<const char*>(&mac_bytes),
-                            sizeof(mac_bytes) * 8,
-                            Direction::TX);
+        if (add_modify_flow_set(port,
+                                q.common_.id_,
+                                reinterpret_cast<const char*>(&mac_bytes),
+                                sizeof(mac_bytes) * 8,
+                                Direction::TX) == nullptr) {
+          DAQIRI_LOG_CRITICAL("Failed to apply {} offload for port {} queue {}",
+                              off,
+                              port,
+                              q.common_.id_);
+          return false;
+        }
       }
     }
   }
+  return true;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -3374,6 +5434,9 @@ DpdkEngine::~DpdkEngine() {
     rx_rings.clear();
     tx_rings.clear();
 
+    cleanup_dynamic_flows();
+    destroy_all_flow_rules();
+
     // Final safety net: if shutdown() was never called (e.g. process exiting
     // via std::exit after a partial init), still release EAL and unlink any
     // leftover hugepage files we own.
@@ -3384,16 +5447,75 @@ bool DpdkEngine::validate_config() const {
   if (!Engine::validate_config()) { return false; }
 
   for (const auto& intf : cfg_.ifs_) {
-    std::unordered_map<uint16_t, uint16_t> flow_to_queue;
+    std::unordered_set<uint16_t> rx_queue_ids;
+    for (const auto& q : intf.rx_.queues_) { rx_queue_ids.insert(q.common_.id_); }
+
+    std::unordered_set<uint16_t> flex_ids;
+    for (const auto& item : intf.rx_.flex_items_) {
+      if (!flex_ids.insert(item.id_).second) {
+        DAQIRI_LOG_ERROR("Duplicate flex item id {} on interface '{}'", item.id_, intf.name_);
+        return false;
+      }
+    }
+
+    std::unordered_map<FlowId, uint16_t> flow_to_queue;
+    bool has_standard_flows = false;
+    bool has_flex_item_flows = false;
+    bool has_ecpri_flows = false;
     for (const auto& flow : intf.rx_.flows_) {
       if (flow_to_queue.find(flow.id_) != flow_to_queue.end()) {
         DAQIRI_LOG_ERROR("Duplicate flow ID {} on interface '{}'", flow.id_, intf.name_);
         return false;
       }
+      if (rx_queue_ids.find(flow.action_.id_) == rx_queue_ids.end()) {
+        DAQIRI_LOG_ERROR("Flow '{}' references unknown RX queue {} on interface '{}'",
+                         flow.name_,
+                         flow.action_.id_,
+                         intf.name_);
+        return false;
+      }
       flow_to_queue.emplace(flow.id_, flow.action_.id_);
+      if (flow.match_.type_ == FlowMatchType::FLEX_ITEM) {
+        has_flex_item_flows = true;
+        const uint16_t flex_item_id = flow.match_.flex_item_match_.flex_item_id_;
+        const auto flex_item_it =
+            std::find_if(intf.rx_.flex_items_.begin(),
+                         intf.rx_.flex_items_.end(),
+                         [flex_item_id](const FlexItemConfig& item) {
+                           return item.id_ == flex_item_id;
+                         });
+        if (flex_item_it == intf.rx_.flex_items_.end()) {
+          DAQIRI_LOG_ERROR("Flow '{}' references unknown flex item id {} on interface '{}'",
+                           flow.name_,
+                           flex_item_id,
+                           intf.name_);
+          return false;
+        }
+      } else if (flow.match_.type_ == FlowMatchType::ECPRI) {
+        has_ecpri_flows = true;
+        if (flow.match_.ecpri_match_.match_id_ && !flow.match_.ecpri_match_.match_msg_type_) {
+          DAQIRI_LOG_ERROR("eCPRI flow '{}' matches pc_id/rtc_id but no msg_type on interface '{}'",
+                           flow.name_, intf.name_);
+          return false;
+        }
+      } else {
+        has_standard_flows = true;
+      }
+      // Standard (group 3), flex-item (group 1) and eCPRI (group 2) flows install
+      // conflicting group-0 ETH jump rules, so only one class is allowed per
+      // interface.
+      if (static_cast<int>(has_standard_flows) + static_cast<int>(has_flex_item_flows) +
+              static_cast<int>(has_ecpri_flows) >
+          1) {
+        DAQIRI_LOG_ERROR(
+            "Interface '{}' mixes standard (UDP/IP), flex-item and/or eCPRI RX flows, which is not "
+            "supported. Use only one flow class per interface.",
+            intf.name_);
+        return false;
+      }
     }
 
-    std::unordered_set<uint16_t> reorder_flow_ids;
+    std::unordered_set<FlowId> reorder_flow_ids;
     for (const auto& reorder_cfg : intf.rx_.reorder_configs_) {
       const bool use_gpu_backend = reorder_cfg.reorder_type_ == "gpu";
       const bool use_cpu_backend = reorder_cfg.reorder_type_ == "cpu";
@@ -3676,6 +5798,23 @@ void DpdkEngine::run() {
         params->meta_pool = tx_metadata;
         params->batch_size = q.common_.batch_size_;
         rte_eth_macaddr_get(intf.port_id_, &params->mac_addr);
+        // Packet pacing: active only when the SEND_ON_TIMESTAMP offload was
+        // enabled above (timestamp_dynfield_offset_ >= 0). A zero offset/-1 makes
+        // the worker skip pacing and send at line rate.
+        params->engine = this;
+        params->pacing_mbps = q.pacing_mbps_;
+        params->tx_ts_dynfield_offset = timestamp_dynfield_offset_;
+        params->tx_ts_dynflag_mask = tx_timestamp_dynflag_mask_;
+        if (q.pacing_mbps_ > 0) {
+          if (timestamp_dynfield_offset_ >= 0) {
+            DAQIRI_LOG_INFO("TX port {} queue {} packet pacing enabled: {} Mbps", intf.port_id_,
+                            q.common_.id_, q.pacing_mbps_);
+          } else {
+            DAQIRI_LOG_WARN(
+                "TX port {} queue {} pacing_mbps={} ignored: SEND_ON_TIMESTAMP offload not active",
+                intf.port_id_, q.common_.id_, q.pacing_mbps_);
+          }
+        }
         rte_eal_remote_launch(
             tx_worker, (void*)params, strtol(q.common_.cpu_core_.c_str(), NULL, 10));
       }
@@ -4163,6 +6302,41 @@ int DpdkEngine::tx_core_worker(void* arg) {
       }
     }
 
+    // Packet pacing: meter this queue at (at most) pacing_mbps on average by
+    // gating each burst behind the NIC SEND_ON_TIMESTAMP scheduler. Tag only the
+    // first packet of the burst with a scheduled release time -- the NIC holds it
+    // (one WAIT) until pace_next_ns and sends the rest of the burst right after,
+    // so no per-packet schedule is needed. pace_next_ns then advances by the time
+    // the burst's L2 frame bytes take at the configured rate.
+    if (tparams->pacing_mbps > 0 && tparams->tx_ts_dynfield_offset >= 0 &&
+        msg->hdr.hdr.num_pkts > 0) {
+      const uint64_t now = tparams->engine->now_tx_ns(static_cast<uint16_t>(tparams->port));
+      // Seed on the first burst, and never let an idle gap accrue send credit: if
+      // the virtual clock has fallen behind real time, restart it at now so a
+      // backlog cannot burst above the configured rate.
+      if (tparams->pace_next_ns == 0 || tparams->pace_next_ns < now) {
+        tparams->pace_next_ns = now;
+        tparams->pace_rem = 0;
+      }
+      auto* m0 = reinterpret_cast<struct rte_mbuf*>(msg->pkts[0][0]);
+      m0->ol_flags |= tparams->tx_ts_dynflag_mask;
+      *RTE_MBUF_DYNFIELD(m0, tparams->tx_ts_dynfield_offset, uint64_t*) = tparams->pace_next_ns;
+      // ns = bytes * 8 bits / (Mbps * 1e6 bits/s) * 1e9 ns/s = 8000 * bytes / Mbps.
+      // Carry the division remainder so the long-run average is exactly pacing_mbps.
+      // The set_*_packet_lengths helpers maintain hdr.nbytes as the burst's L2 byte
+      // total; use it directly to avoid walking the burst. Fall back to a walk for
+      // bursts populated without those helpers (nbytes left at 0).
+      uint64_t bytes = msg->hdr.hdr.nbytes;
+      if (bytes == 0) {
+        for (size_t p = 0; p < msg->hdr.hdr.num_pkts; p++) {
+          bytes += reinterpret_cast<struct rte_mbuf*>(msg->pkts[0][p])->pkt_len;
+        }
+      }
+      const uint64_t numer = 8000ULL * bytes + tparams->pace_rem;
+      tparams->pace_next_ns += numer / tparams->pacing_mbps;
+      tparams->pace_rem = numer % tparams->pacing_mbps;
+    }
+
     auto pkts_to_transmit = static_cast<int64_t>(msg->hdr.hdr.num_pkts);
 
     size_t pkts_tx = 0;
@@ -4286,7 +6460,7 @@ uint32_t DpdkEngine::get_packet_length(BurstParams* burst, int idx) {
   return reinterpret_cast<rte_mbuf*>(burst->pkts[0][idx])->pkt_len;
 }
 
-uint16_t DpdkEngine::get_packet_flow_id(BurstParams* burst, int idx) {
+FlowId DpdkEngine::get_packet_flow_id(BurstParams* burst, int idx) {
   if (burst == nullptr || idx < 0) { return 0; }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) { return 0; }
   if (idx >= static_cast<int>(burst->hdr.hdr.num_pkts) || burst->pkts[0] == nullptr) {
@@ -4461,6 +6635,8 @@ Status DpdkEngine::set_packet_lengths(BurstParams* burst, int idx,
   }
 
   reinterpret_cast<rte_mbuf**>(burst->pkts[0])[idx]->pkt_len = ttl_len;
+  // Accumulate the burst's L2 byte total so TX pacing need not walk the burst.
+  burst->hdr.hdr.nbytes += ttl_len;
 
   return Status::SUCCESS;
 }
@@ -4484,6 +6660,8 @@ Status DpdkEngine::set_all_packet_lengths(BurstParams* burst,
 
   auto** first_seg = reinterpret_cast<rte_mbuf**>(burst->pkts[0]);
   for (int idx = 0; idx < num_pkts; ++idx) { first_seg[idx]->pkt_len = ttl_len; }
+  // Record the burst's L2 byte total so TX pacing need not walk the burst.
+  burst->hdr.hdr.nbytes = static_cast<uint64_t>(ttl_len) * static_cast<uint64_t>(num_pkts);
 
   return Status::SUCCESS;
 }
@@ -4615,6 +6793,8 @@ Status DpdkEngine::get_tx_metadata_buffer(BurstParams** burst) {
       "latency)", cfg_.tx_meta_buffers_, (*burst)->hdr.hdr.port_id, (*burst)->hdr.hdr.q_id);
     return Status::NO_FREE_BURST_BUFFERS;
   }
+  // Clear the recycled running L2 byte total (see create_tx_burst_params).
+  (*burst)->hdr.hdr.nbytes = 0;
 
   return Status::SUCCESS;
 }
@@ -4668,6 +6848,8 @@ void DpdkEngine::shutdown() {
     }
     tx_rings.clear();
 
+    cleanup_dynamic_flows();
+    destroy_all_flow_rules();
     cleanup_eal();
     initialized_ = false;
   }
@@ -4708,6 +6890,12 @@ BurstParams* DpdkEngine::create_tx_burst_params() {
     DAQIRI_LOG_CRITICAL("Failed to get TX meta descriptor");
     return nullptr;
   }
+  // TX metadata buffers are recycled from a mempool, so clear the running L2
+  // byte total here (the start of a burst's lifecycle). set_header also resets
+  // it, but doing it on acquire keeps the pacing path's "nbytes == 0 means not
+  // yet accumulated" sentinel correct even if a caller fills lengths without
+  // calling set_header first.
+  burst->hdr.hdr.nbytes = 0;
   return burst;
 }
 };  // namespace daqiri

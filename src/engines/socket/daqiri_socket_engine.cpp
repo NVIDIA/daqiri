@@ -89,6 +89,30 @@ Status SocketEngine::roce_not_initialized(const char* op_name) const {
   return Status::NOT_SUPPORTED;
 }
 
+bool SocketEngine::apply_socket_int_option(int fd,
+                                           int level,
+                                           int name,
+                                           int value,
+                                           const char* context,
+                                           bool required) const {
+  if (::setsockopt(fd, level, name, &value, sizeof(value)) == 0) { return true; }
+
+  if (required) {
+    DAQIRI_LOG_ERROR("{} setsockopt(level={}, name={}) failed: {}",
+                     context,
+                     level,
+                     name,
+                     strerror(errno));
+  } else {
+    DAQIRI_LOG_WARN("{} default setsockopt(level={}, name={}) failed: {}",
+                    context,
+                    level,
+                    name,
+                    strerror(errno));
+  }
+  return !required;
+}
+
 bool SocketEngine::set_config_and_initialize(const NetworkConfig& cfg) {
   cfg_ = cfg;
 
@@ -215,7 +239,7 @@ uint32_t SocketEngine::get_segment_packet_length(BurstParams* burst, int seg, in
   return burst->pkt_lens[seg][idx];
 }
 
-uint16_t SocketEngine::get_packet_flow_id(BurstParams* burst, int idx) {
+FlowId SocketEngine::get_packet_flow_id(BurstParams* burst, int idx) {
   return 0;
 }
 
@@ -1043,9 +1067,8 @@ std::shared_ptr<SocketEngine::ConnectionState> SocketEngine::create_tcp_client_c
     return nullptr;
   }
 
-  int yes = 1;
-  ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-  ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
+  apply_socket_int_option(fd, SOL_SOCKET, SO_REUSEADDR, 1, "TCP client socket", false);
+  apply_socket_int_option(fd, IPPROTO_TCP, TCP_NODELAY, 1, "TCP client socket", false);
 
   if (!src_addr.empty() || src_port != 0) {
     const std::string bind_ip = src_addr.empty() ? std::string("0.0.0.0") : src_addr;
@@ -1115,8 +1138,7 @@ void SocketEngine::setup_tcp_endpoint(EndpointState& ep) {
     throw std::runtime_error("failed to create TCP listen socket");
   }
 
-  int yes = 1;
-  ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+  apply_socket_int_option(fd, SOL_SOCKET, SO_REUSEADDR, 1, "TCP listen socket", false);
 
   sockaddr_in bind_addr{};
   if (!parse_ipv4_addr(ep.socket_cfg.local_ip_, ep.socket_cfg.local_port_, &bind_addr)) {
@@ -1150,8 +1172,7 @@ void SocketEngine::setup_udp_endpoint(EndpointState& ep) {
   int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
   if (fd < 0) { throw std::runtime_error("failed to create UDP socket"); }
 
-  int yes = 1;
-  ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+  apply_socket_int_option(fd, SOL_SOCKET, SO_REUSEADDR, 1, "UDP socket", false);
 
   if (ep.socket_cfg.mode_ == SocketMode::SERVER) {
     sockaddr_in bind_addr{};
@@ -1237,8 +1258,7 @@ void SocketEngine::tcp_accept_loop(int if_index) {
       continue;
     }
 
-    int yes = 1;
-    ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
+    apply_socket_int_option(fd, IPPROTO_TCP, TCP_NODELAY, 1, "accepted TCP socket", false);
 
     auto conn = register_connection(
         fd, ep->port, ep->rx_queue, ep->if_index, true, false, ep->rx_queue_state, true);
@@ -1460,6 +1480,48 @@ Status SocketEngine::socket_get_server_conn_id(const std::string& server_addr, u
   }
 
   return Status::NULL_PTR;
+}
+
+Status SocketEngine::socket_setsockopt(uintptr_t conn_id,
+                                       int level,
+                                       int optname,
+                                       const void* optval,
+                                       size_t optlen) {
+  if (is_roce_protocol()) {
+    DAQIRI_LOG_ERROR("socket_setsockopt is not supported for protocol=roce");
+    return Status::NOT_SUPPORTED;
+  }
+  if (optval == nullptr && optlen != 0) { return Status::INVALID_PARAMETER; }
+
+  std::shared_ptr<ConnectionState> conn;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    auto it = connections_.find(conn_id);
+    if (it == connections_.end() || it->second == nullptr) {
+      return Status::INVALID_PARAMETER;
+    }
+    conn = it->second;
+  }
+
+  if (conn->fd < 0) {
+    DAQIRI_LOG_ERROR("socket_setsockopt called for closed conn_id={}", conn_id);
+    return Status::CONNECT_FAILURE;
+  }
+
+  if (::setsockopt(conn->fd,
+                   level,
+                   optname,
+                   optval,
+                   static_cast<socklen_t>(optlen)) != 0) {
+    DAQIRI_LOG_ERROR("setsockopt(conn_id={}, level={}, optname={}) failed: {}",
+                     conn_id,
+                     level,
+                     optname,
+                     strerror(errno));
+    return Status::GENERIC_FAILURE;
+  }
+
+  return Status::SUCCESS;
 }
 
 Status SocketEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,

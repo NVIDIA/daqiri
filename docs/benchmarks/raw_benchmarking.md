@@ -83,6 +83,20 @@ docker run --rm -it --privileged \
 
 If you have two DGX Sparks cross-cabled p0↔p0 instead of a chassis QSFP loop on one machine, use the `_xhost` configs. Each host runs only its own role, so the YAML on each side configures one port instead of two. Both hosts must already be set up per the [DGX Spark profile](../tutorials/system_configuration.md#dgx-spark-profile), with one adjustment: the `daqiri-tx` (`1.1.1.1/24`) and `daqiri-rx` (`2.2.2.2/24`) nmcli profiles are *split across* the two hosts — bring up `daqiri-tx` on the TX host's p0 and `daqiri-rx` on the RX host's p0, instead of both on one box.
 
+**Network prerequisite (required for RDMA; recommended for raw).** Assigning `/24` addresses on each host is not enough for the kernel to reach the peer over a direct cable. RDMA-CM uses the kernel stack, so you need a host route and a static neighbor on the cabled port before ping or RoCE will work. Run [`scripts/setup_spark_xhost_net.sh`](https://github.com/nvidia/daqiri/blob/main/scripts/setup_spark_xhost_net.sh) on **both** hosts after bringing up the nmcli profile — see the [cross-host variant](../tutorials/system_configuration.md#cross-host-variant-two-sparks) in System Configuration for the full steps.
+
+```bash
+# TX host (peer MAC from RX: cat /sys/class/net/enp1s0f0np0/address)
+sudo scripts/setup_spark_xhost_net.sh --role tx --peer-mac <RX_P0_MAC>
+
+# RX host (peer MAC from TX)
+sudo scripts/setup_spark_xhost_net.sh --role rx --peer-mac <TX_P0_MAC>
+
+# Verify on each host before starting benches
+ping -c 3 <peer-ip>    # 2.2.2.2 on TX, 1.1.1.1 on RX
+ip route get <peer-ip> # must name enp1s0f0np0, not lo
+```
+
 **Raw GPUDirect.** Start the RX side first so the flow rule is installed before any traffic arrives:
 
 ```bash
@@ -105,7 +119,7 @@ sudo ./daqiri_bench_rdma daqiri_bench_rdma_tx_rx_spark_xhost.yaml --mode server 
 sudo ./daqiri_bench_rdma daqiri_bench_rdma_tx_rx_spark_xhost.yaml --mode client --seconds 30
 ```
 
-Verify both sides report non-zero send/receive completions. The server-side `Couldn't find server params for address …` log line that may appear once between the listener-create log and the "RDMA server successfully started" log is a benign startup race (the application thread polls for the listener before the CM thread finishes inserting it); subsequent lookups succeed.
+Verify both sides report non-zero send/receive completions and no `CQ error` / `RETRY_EXC_ERR` lines in the client log.
 
 The benchmark executables and example YAML configurations are located at:
 
@@ -115,6 +129,20 @@ The benchmark executables and example YAML configurations are located at:
 | **From source** | `./build/examples/` | `./examples/` |
 
 The fields in the YAML configs will be explained in more detail in [Understanding the Configuration File](../tutorials/configuration-walkthrough.md). For now, we'll stick to modifying the strict minimum required fields to run the application as-is on your system.
+
+### Hardware tunnel transform examples
+
+Raw DPDK and raw ibverbs builds can program hardware flow actions that push or
+encapsulate on TX and pop or decapsulate on RX. The application packet buffers
+remain pre-encap on TX and post-decap on RX; DAQIRI accounts for outer-header
+overhead when sizing MTU/wire frames.
+
+| Transform | YAML config | Binary |
+|---|---|---|
+| VXLAN encap + decap | [`daqiri_bench_raw_tx_rx_vxlan.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_vxlan.yaml) | `daqiri_bench_raw_gpudirect` |
+| VLAN push + pop | [`daqiri_bench_raw_tx_rx_vlan.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_vlan.yaml) | `daqiri_bench_raw_gpudirect` |
+| GRE encap + decap | [`daqiri_bench_raw_tx_rx_gre.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_gre.yaml) | `daqiri_bench_raw_gpudirect` |
+| NVGRE encap + decap | [`daqiri_bench_raw_tx_rx_nvgre.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_nvgre.yaml) | `daqiri_bench_raw_gpudirect` |
 
 ##### Identify your NIC's PCIe addresses
 
@@ -229,6 +257,45 @@ After having modified the configuration file, ensure you have connected an SFP c
     ```
 
 By default the application runs for 10 seconds and then exits. You can change the duration by passing `--seconds <N>` after the YAML path, or stop it gracefully at any time with `Ctrl-C`.
+
+`daqiri_bench_raw_gpudirect` and `daqiri_bench_raw_hds` also accept `--workload none|fft|gemm|gemm_fp16`, which runs a representative GPU workload once per received reorder window on the **actual received packet data**: `fft` (batched cuFFT C2C transform), `gemm` (FP32 `cublasSgemm`), or `gemm_fp16` (the same-size mixed-precision FP16/tensor-core matmul that models inference). Each received burst's payloads are first reordered by sequence number into a contiguous GPU buffer (`examples/bench_pipeline.{h,cu}`) that the compute then consumes. The same `--workload` flag is honoured by the RoCE bench (`daqiri_bench_rdma`, in-order gather) and the socket bench (`daqiri_bench_socket`, host→device stage then UDP reorder / TCP gather). See the [DGX Spark GPU-workload results](performance-dgx-spark.md#gpu-workloads-in-the-receive-path).
+
+## Flow programming smoke test
+
+Raw Ethernet flow rules are programmed into the NIC during `daqiri_init()`. Software loopback
+(`loopback: "sw"`) skips NIC init entirely, so it is a build/runtime smoke test only — not a
+flow programming test.
+
+| Step | Command / action | Expected |
+|------|------------------|----------|
+| Build smoke | `daqiri_bench_raw_sw_loopback.yaml --seconds 5` | Init succeeds; no NIC flows created |
+| Good NIC config | `daqiri_bench_raw_tx_rx.yaml` (filled placeholders, cabled NIC) | Init succeeds; RX and `tx_eth_src` flows programmed |
+| Dynamic RX flow config | `daqiri_example_dynamic_rx_flow.yaml` with `daqiri_example_dynamic_rx_flow` | Starts with `flow_isolation: true` and no `rx.flows`, drops unmatched traffic, then adds/deletes runtime UDP steering rules |
+| Bad queue ID | Copy `daqiri_bench_raw_tx_rx.yaml`, set `flows[0].action.id: 99` | Fails in `validate_config()` before EAL/NIC init with `references unknown RX queue` |
+| Mixed flows (optional) | On one interface, add two of the three flow classes — standard UDP/IP, flex-item (see `rx.flex_items`), or eCPRI (`match.ecpri`) — in the [configuration reference](../api-reference/configuration.md) | Fails in `validate_config()` with `mixes standard (UDP/IP), flex-item and/or eCPRI` |
+| eCPRI flow (optional) | On a cabled NIC, add a flow with `match: { ecpri: { msg_type: 0, pc_id: 1 } }` (see the [configuration reference](../api-reference/configuration.md)) | Init succeeds; eCPRI-over-Ethernet (EtherType 0xAEFE) frames matching the message type and pc_id steer to the flow's queue |
+
+## Cap the transmit rate with packet pacing
+
+To meter the transmit side at a fixed rate in hardware, set a per-queue `pacing_mbps` cap
+on the TX queue. [`daqiri_bench_raw_tx_rx_pacing.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_pacing.yaml)
+is the loopback config above with `pacing_mbps: 10000` (10 Gbps) on the TX queue. Pacing is
+supported only on the default DPDK engine; the `ibverbs` engine does not support `pacing_mbps`
+(init fails if it is set on an `ibverbs` queue). The NIC meters the queue out so its average
+TX rate stays at or below the configured value; the limit is enforced on an average basis and
+idle gaps do not accumulate burst credit.
+
+```bash
+/opt/daqiri/bin/daqiri_bench_raw_gpudirect /opt/daqiri/bin/daqiri_bench_raw_tx_rx_pacing.yaml --seconds 10
+```
+
+Validate the cap from the `RX complete:` line: `Gbps = bytes * 8 / seconds / 1e9`. With
+`pacing_mbps: 10000` the achieved rate should sit at or just below 10 Gbps regardless of
+link speed. Change `pacing_mbps` (or set it to `0` to disable pacing and send at line rate)
+and re-run to see the cap move.
+
+Pacing requires a Mellanox/mlx5 NIC with hardware send scheduling (ConnectX-7 or later). On
+devices without it, `pacing_mbps` is ignored with a warning at init and TX runs at line rate.
 
 ## Tune RDMA SEND completion signaling
 

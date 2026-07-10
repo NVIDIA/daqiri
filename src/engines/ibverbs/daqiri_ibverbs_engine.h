@@ -29,16 +29,18 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "src/engine.h"
 #include <daqiri/daqiri.h>
 
-struct rte_ring;
-struct rte_mempool;
+#include "src/daqiri_ring.h"
+#include "src/daqiri_pool.h"
 
 namespace daqiri {
 
@@ -85,7 +87,7 @@ struct IbvReorderState {
   bool enabled = false;
   bool single_plan = false;
   std::vector<IbvReorderPlan> plans;
-  std::unordered_map<uint16_t, size_t> flow_to_plan;
+  std::unordered_map<FlowId, size_t> flow_to_plan;
   std::deque<BurstParams*> ready;
   std::mutex lock;
 };
@@ -126,7 +128,7 @@ struct IbvRxQueue {
   // Flow id reported for packets on this queue. When a single configured flow
   // steers to this queue, get_packet_flow_id returns its id (per-queue fallback
   // for the flow_tag/MARK the DPDK backend used).
-  uint16_t flow_id = 0;
+  FlowId flow_id = 0;
 
   // When false, a DevX *regular* (cyclic) RQ is used instead of MPRQ: one WQE
   // per packet, each WQE a multi-segment scatter list. Selected for physical HDS
@@ -207,7 +209,7 @@ struct IbvRxQueue {
   std::atomic<uint64_t> reposts{0};  // diagnostic: WQE reposts
 
   // App-facing burst ring (worker enqueues, get_rx_burst dequeues).
-  struct rte_ring* ring = nullptr;
+  daqiri::Ring* ring = nullptr;
 
   // Optional GPU reordering state for this queue.
   std::unique_ptr<IbvReorderState> reorder;
@@ -270,7 +272,9 @@ struct IbvTxQueue {
   struct mlx5dv_qp dv_qp {};
   struct mlx5dv_cq dv_txcq {};
   uint32_t sqn = 0;
-  uint32_t sq_pi = 0;      // SQ producer (WQEBB units)
+  uint64_t sq_pi = 0;  // monotonic SQ producer (WQEBB units)
+  uint64_t sq_completed = 0;
+  uint32_t sq_capacity_wqebbs = 0;
   uint32_t bf_offset = 0;  // toggles between 0 and bf.size each doorbell
   uint32_t tx_cq_ci = 0;   // TX CQ consumer index
   // Slots are handed out cyclically and posted/completed in order, so the whole
@@ -282,13 +286,14 @@ struct IbvTxQueue {
   std::atomic<uint64_t> completed_tail{0};
   // Accurate send scheduling (wait-on-time): a scheduled packet emits a WAIT
   // WQE before its send WQE, so a WQEBB index no longer maps 1:1 to a slot.
-  // wqe_slot_cum[wqebb_index] records the cumulative slots posted through that
-  // WQEBB, so completion does completed_tail = wqe_slot_cum[cqe.wqe_counter].
-  // slots_posted is the running slot/packet total (worker-owned).
+  // A WQE may span multiple WQEBBs, so packet-slot and SQ-credit completion
+  // progress are tracked independently at each WQE's first WQEBB.
   std::vector<uint64_t> wqe_slot_cum;
+  std::vector<uint64_t> wqe_wqebb_cum;
   uint64_t slots_posted = 0;
   bool send_scheduling = false;  // HCA wait_on_time present + real-time clock
   uint64_t rt_timemask = 0;      // wait segment comparison mask
+  bool empw_enabled = false;
   // Hand-off-ring-full drops: send_tx_burst couldn't enqueue (TX worker behind),
   // so the burst was dropped and its slots rolled back. App-thread-written.
   uint64_t handoff_drop_bursts = 0;
@@ -297,7 +302,7 @@ struct IbvTxQueue {
   // Ethernet source so the application doesn't have to supply it.
   bool insert_eth_src = false;
   uint8_t eth_src[6] = {0};
-  struct rte_ring* send_ring = nullptr;  // bursts handed off for posting
+  daqiri::Ring* send_ring = nullptr;  // bursts handed off for posting
   std::thread compl_worker;
   std::atomic<bool> running{false};
 };
@@ -329,7 +334,7 @@ class IbverbsEngine : public Engine {
   uint32_t get_packet_length(BurstParams* burst, int idx) override;
   void* get_segment_packet_ptr(BurstParams* burst, int seg, int idx) override;
   uint32_t get_segment_packet_length(BurstParams* burst, int seg, int idx) override;
-  uint16_t get_packet_flow_id(BurstParams* burst, int idx) override;
+  FlowId get_packet_flow_id(BurstParams* burst, int idx) override;
   Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) override;
   void* get_packet_extra_info(BurstParams* burst, int idx) override;
 
@@ -367,6 +372,10 @@ class IbverbsEngine : public Engine {
   Status get_mac_addr(int port, char* mac) override;
   Status drop_all_traffic(int port) override;
   Status allow_all_traffic(int port) override;
+  Status add_rx_flow_async(int port, const FlowRuleConfig& flow, FlowOpId* op_id) override;
+  Status add_rx_flows_async(int port, const std::vector<FlowRuleConfig>& flows, FlowOpId* op_id) override;
+  Status delete_flow_async(FlowId flow_id, FlowOpId* op_id) override;
+  Status poll_flow_op(FlowOpResult* result) override;
   uint16_t get_num_rx_queues(int port_id) const override;
   bool validate_config() const override;
   void shutdown() override;
@@ -379,7 +388,6 @@ class IbverbsEngine : public Engine {
 
  private:
   // ---- bring-up ----
-  bool init_eal();  // EAL for rte_ring/mempool only
   struct ibv_context* open_device_for_interface(const InterfaceConfig& intf);
   Status setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf, const RxQueueConfig& qcfg);
   Status register_rx_mr(IbvRxQueue& q);      // ibv_reg_mr (CPU); dmabuf later
@@ -398,6 +406,7 @@ class IbverbsEngine : public Engine {
   // single catch-all rule -> the only queue when no flows are configured).
   // Installed once, after all RX queues on every port are set up.
   Status install_port_flows();
+  Status install_tx_flows();
   // Probe HCA caps for accurate-send-scheduling (wait-on-time) support. Logs
   // wait_on_time + device_frequency_khz and returns true when the WAIT-WQE TX
   // scheduling path is usable (wait_on_time + real-time clock).
@@ -411,6 +420,13 @@ class IbverbsEngine : public Engine {
   struct mlx5dv_devx_obj* create_flex_parser_node(struct ibv_context* ctx, uint8_t arc_node,
                                                   uint16_t compare_value, uint16_t offset,
                                                   uint32_t* out_sample_id);
+  // Create the per-port eCPRI parse-graph node: anchored at MAC on the eCPRI
+  // EtherType (0xAEFE) with two 4-byte samples -- offset 0 (common header, the
+  // message type) and offset 4 (message body, the pc_id/rtc_id). Returns the
+  // DevX object and the two device-assigned sample field ids.
+  struct mlx5dv_devx_obj* create_ecpri_parser_node(struct ibv_context* ctx,
+                                                   uint32_t* out_type_sample_id,
+                                                   uint32_t* out_id_sample_id);
   void devx_build_wqe(IbvRxQueue& q, uint32_t wqe_idx);  // write one RQ WQE
   void devx_ring_rq_doorbell(IbvRxQueue& q);
   void devx_advance_producer(IbvRxQueue& q);  // worker-only: refill freed regions
@@ -441,7 +457,14 @@ class IbverbsEngine : public Engine {
   Status setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf, const TxQueueConfig& qcfg);
   Status create_tx_raw_qp(IbvTxQueue& q);                 // IBV_QPT_RAW_PACKET, RESET->RTS
   void post_tx_burst(IbvTxQueue& q, BurstParams* burst);  // build send WQEs + ring doorbell
-  void poll_tx_completions(IbvTxQueue& q);                // drain TX CQ, reclaim slot-runs
+  void post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst);
+  // Build a WAIT-on-time WQE (ctrl + wseg = 1 WQEBB, no slot) at q.sq_pi that
+  // holds the following send(s) until the NIC real-time clock reaches when_ns,
+  // advance sq_pi, and return its ctrl segment (for the BlueFlame doorbell).
+  void* emit_wait_wqe(IbvTxQueue& q, uint64_t when_ns);
+  uint64_t tx_burst_wqebbs(const IbvTxQueue& q, const BurstParams* burst) const;
+  bool tx_sq_has_space(IbvTxQueue& q, uint64_t needed_wqebbs);
+  void poll_tx_completions(IbvTxQueue& q);  // drain TX CQ, reclaim slot-runs
   // One worker services a group of TX queues sharing a cpu_core, round-robin:
   // drains each send_ring (post) + reclaims completions.
   void tx_worker(std::vector<IbvTxQueue*> group);
@@ -461,14 +484,40 @@ class IbverbsEngine : public Engine {
   // port MTU, so jumbo frames are silently dropped on RX if the MTU is too low.
   void ensure_port_mtus();
 
+  // ---- dynamic RX flow lifecycle ----
+  enum class DynamicFlowState { ACTIVE, DELETING };
+  struct DynamicFlowEntry {
+    FlowId flow_id = 0;
+    int port = 0;
+    uint16_t queue = 0;
+    struct mlx5dv_dr_matcher* matcher = nullptr;
+    struct mlx5dv_dr_rule* rule = nullptr;
+    struct mlx5dv_dr_action* tag_action = nullptr;
+    std::vector<struct mlx5dv_dr_action*> reformat_actions;
+    std::vector<std::vector<uint8_t>> reformat_buffers;
+    DynamicFlowState state = DynamicFlowState::ACTIVE;
+  };
+  const InterfaceConfig* find_interface_config(int port) const;
+  bool reserve_static_flow_ids();
+  FlowOpId allocate_flow_op_id_locked();
+  bool has_dynamic_flow_id_capacity_locked(size_t count) const;
+  FlowId allocate_dynamic_flow_id_locked();
+  void release_dynamic_flow_id_locked(FlowId flow_id);
+  bool validate_dynamic_rx_flow_locked(int port, const FlowRuleConfig& flow) const;
+  Status create_dynamic_flow_locked(int port, const FlowRuleConfig& flow, FlowId flow_id);
+  void destroy_dynamic_flow_entry_locked(DynamicFlowEntry& entry);
+  void cleanup_dynamic_flows_locked();
+  void enqueue_flow_completion_locked(const FlowOpResult& result);
+
   // ---- state ----
-  bool eal_initialized_ = false;
-  std::string eal_file_prefix_;
   std::atomic<bool> force_quit_{false};
 
   // One ibv_context + PD per opened device, keyed by device name.
   std::unordered_map<std::string, struct ibv_context*> ctx_map_;
   std::unordered_map<struct ibv_context*, struct ibv_pd*> pd_map_;
+  // Registrations may be shared by queue setup only through their backing
+  // allocation, so retain every verbs object and deregister it before its PD.
+  std::vector<struct ibv_mr*> registered_mrs_;
 
   // Cached mlx5 clock-info per device for converting the CQE's free-running HW
   // timestamp to nanoseconds (mlx5dv_ts_to_ns). Refreshed lazily (the HW clock
@@ -495,11 +544,14 @@ class IbverbsEngine : public Engine {
     std::vector<struct mlx5dv_dr_matcher*> matchers;
     std::vector<struct mlx5dv_dr_rule*> rules;
     std::vector<struct mlx5dv_dr_action*> tag_actions;  // per-flow MARK tag actions
+    std::vector<struct mlx5dv_dr_action*> reformat_actions;
+    std::vector<std::vector<uint8_t>> reformat_buffers;
     // Enough to recreate each rule for allow_all_traffic after a drop_all.
     struct RuleSpec {
       struct mlx5dv_dr_matcher* matcher;
       struct mlx5dv_dr_action* action;         // dest-TIR
       struct mlx5dv_dr_action* tag = nullptr;  // optional MARK tag action
+      std::vector<struct mlx5dv_dr_action*> reformats;
       size_t value_sz = 0;                     // bytes of `value` in use
       uint64_t value[64];                      // up to full fte_match_param (512 B)
     };
@@ -516,14 +568,73 @@ class IbverbsEngine : public Engine {
     // lazily when the first ipv4_len flow is installed (anchored at L2 on the
     // IPv4 ethertype). Torn down with the flex_nodes after rules.
     FlexNode ipv4_len_node;
+    // Shared parse-graph node for eCPRI-over-Ethernet matching (anchored at L2
+    // on the eCPRI EtherType), created lazily when the first eCPRI flow that
+    // matches a message type or identifier is installed. Carries two sample
+    // registers: type_sample_id (common header, offset 0) and id_sample_id
+    // (message body, offset 4). Torn down with the flex_nodes after rules.
+    struct EcpriNode {
+      struct mlx5dv_devx_obj* obj = nullptr;
+      uint32_t type_sample_id = 0;
+      uint32_t id_sample_id = 0;
+    };
+    EcpriNode ecpri_node;
     bool dropped = false;
+    // Continue directly after static rules; sparse high priorities can fail on
+    // some mlx5 DR stacks even when the same matcher/action works at init.
+    int next_dynamic_priority = 0;
   };
   std::map<int, PortSteering> port_steering_;  // port_id -> steering
 
+  bool create_dr_rule_locked(int port,
+                             PortSteering& st,
+                             uint16_t criteria,
+                             struct mlx5dv_flow_match_parameters* mask,
+                             struct mlx5dv_flow_match_parameters* value,
+                             IbvRxQueue* dest,
+                             int priority,
+                             FlowId flow_id,
+                             const char* desc,
+                             DynamicFlowEntry* dynamic_entry,
+                             const std::vector<struct mlx5dv_dr_action*>& reformats =
+                                 std::vector<struct mlx5dv_dr_action*>{});
+  Status install_flow_rule_locked(int port,
+                                  PortSteering& st,
+                                  const InterfaceConfig& intf,
+                                  const FlowRuleConfig& flow,
+                                  FlowId flow_id,
+                                  int priority,
+                                  DynamicFlowEntry* dynamic_entry);
+  // Fill an eCPRI flow's match mask/value (always pinning the eCPRI EtherType in
+  // outer_headers, and the message type / identifier in misc_parameters_4 when
+  // requested), lazily creating the port's shared eCPRI parse-graph node.
+  // Accumulates the match criteria bits. Shared by the static and dynamic flow
+  // installers.
+  Status build_ecpri_match_locked(struct ibv_context* ctx, PortSteering& st, const EcpriMatch& em,
+                                  uint8_t* mask_buf, uint8_t* value_buf, uint16_t* criteria);
+
+  std::mutex flow_lock_;
+  FlowId next_dynamic_flow_id_ = 1;
+  FlowOpId next_flow_op_id_ = 1;
+  std::unordered_set<FlowId> static_flow_ids_;
+  std::queue<FlowId> free_dynamic_flow_ids_;
+  std::unordered_map<FlowId, DynamicFlowEntry> dynamic_flows_;
+  std::queue<FlowOpResult> ready_flow_ops_;
+
+  struct TxPortSteering {
+    struct mlx5dv_dr_domain* domain = nullptr;
+    struct mlx5dv_dr_table* table = nullptr;
+    std::vector<struct mlx5dv_dr_matcher*> matchers;
+    std::vector<struct mlx5dv_dr_rule*> rules;
+    std::vector<struct mlx5dv_dr_action*> reformat_actions;
+    std::vector<std::vector<uint8_t>> reformat_buffers;
+  };
+  std::map<int, TxPortSteering> tx_port_steering_;
+
   // Burst metadata pools. Each element is a BurstParams + inline pointer/length
   // /stride arrays; see the .cpp for the layout.
-  struct rte_mempool* rx_meta_pool_ = nullptr;
-  struct rte_mempool* tx_meta_pool_ = nullptr;
+  daqiri::ObjectPool* rx_meta_pool_ = nullptr;
+  daqiri::ObjectPool* tx_meta_pool_ = nullptr;
   size_t rx_meta_pool_size_ = 0;
   uint32_t max_batch_ = 0;  // largest batch_size across RX+TX queues
 

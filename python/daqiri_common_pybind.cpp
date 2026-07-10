@@ -442,6 +442,47 @@ struct PyS3Writer {
   }
 };
 
+Status socket_setsockopt_from_python(uintptr_t conn_id,
+                                     int level,
+                                     int optname,
+                                     py::object value) {
+  if (PyBool_Check(value.ptr())) {
+    const int opt_value = value.cast<bool>() ? 1 : 0;
+    py::gil_scoped_release release;
+    return socket_setsockopt(conn_id, level, optname, &opt_value, sizeof(opt_value));
+  }
+
+  if (py::isinstance<py::int_>(value)) {
+    const int opt_value = value.cast<int>();
+    py::gil_scoped_release release;
+    return socket_setsockopt(conn_id, level, optname, &opt_value, sizeof(opt_value));
+  }
+
+  if (py::isinstance<py::str>(value)) {
+    const std::string opt_value = value.cast<std::string>();
+    py::gil_scoped_release release;
+    return socket_setsockopt(
+        conn_id, level, optname, opt_value.data(), opt_value.size());
+  }
+
+  if (py::isinstance<py::bytes>(value)) {
+    const std::string opt_value = value.cast<std::string>();
+    py::gil_scoped_release release;
+    return socket_setsockopt(
+        conn_id, level, optname, opt_value.data(), opt_value.size());
+  }
+
+  if (PyObject_CheckBuffer(value.ptr())) {
+    py::buffer buffer = value.cast<py::buffer>();
+    py::buffer_info info = buffer.request();
+    const size_t nbytes = buffer_nbytes(info);
+    py::gil_scoped_release release;
+    return socket_setsockopt(conn_id, level, optname, info.ptr, nbytes);
+  }
+
+  throw py::type_error("setsockopt value must be bool, int, str, bytes, or a buffer");
+}
+
 void bind_enums(py::module_ &m) {
   py::enum_<Status>(m, "Status")
       .value("SUCCESS", Status::SUCCESS)
@@ -526,11 +567,27 @@ void bind_enums(py::module_ &m) {
       .value("SERVER", SocketMode::SERVER)
       .value("INVALID", SocketMode::INVALID);
 
-  py::enum_<FlowType>(m, "FlowType").value("QUEUE", FlowType::QUEUE);
+  py::enum_<FlowType>(m, "FlowType")
+      .value("QUEUE", FlowType::QUEUE)
+      .value("VLAN_PUSH", FlowType::VLAN_PUSH)
+      .value("VLAN_POP", FlowType::VLAN_POP)
+      .value("TUNNEL_ENCAP", FlowType::TUNNEL_ENCAP)
+      .value("TUNNEL_DECAP", FlowType::TUNNEL_DECAP);
+
+  py::enum_<TunnelType>(m, "TunnelType")
+      .value("NONE", TunnelType::NONE)
+      .value("VXLAN", TunnelType::VXLAN)
+      .value("GRE", TunnelType::GRE)
+      .value("NVGRE", TunnelType::NVGRE);
 
   py::enum_<FlowMatchType>(m, "FlowMatchType")
-      .value("NORMAL", FlowMatchType::NORMAL)
+      .value("IPV4_UDP", FlowMatchType::IPV4_UDP)
       .value("FLEX_ITEM", FlowMatchType::FLEX_ITEM);
+
+  py::enum_<FlowOpType>(m, "FlowOpType")
+      .value("ADD_RX", FlowOpType::ADD_RX)
+      .value("ADD_RX_BATCH", FlowOpType::ADD_RX_BATCH)
+      .value("DELETE", FlowOpType::DELETE);
 
   py::enum_<ReorderMethod>(m, "ReorderMethod")
       .value("INVALID", ReorderMethod::INVALID)
@@ -687,10 +744,35 @@ void bind_config_types(py::module_ &m) {
       .def(py::init<>())
       .def_readwrite("common", &TxQueueConfig::common_);
 
+  py::class_<VlanActionConfig>(m, "VlanActionConfig")
+      .def(py::init<>())
+      .def_readwrite("vlan_id", &VlanActionConfig::vlan_id_)
+      .def_readwrite("pcp", &VlanActionConfig::pcp_)
+      .def_readwrite("dei", &VlanActionConfig::dei_)
+      .def_readwrite("ethertype", &VlanActionConfig::ethertype_);
+
+  py::class_<TunnelConfig>(m, "TunnelConfig")
+      .def(py::init<>())
+      .def_readwrite("type", &TunnelConfig::type_)
+      .def_readwrite("outer_eth_src", &TunnelConfig::outer_eth_src_)
+      .def_readwrite("outer_eth_dst", &TunnelConfig::outer_eth_dst_)
+      .def_readwrite("outer_ipv4_src", &TunnelConfig::outer_ipv4_src_)
+      .def_readwrite("outer_ipv4_dst", &TunnelConfig::outer_ipv4_dst_)
+      .def_readwrite("outer_ipv4_ttl", &TunnelConfig::outer_ipv4_ttl_)
+      .def_readwrite("outer_ipv4_tos", &TunnelConfig::outer_ipv4_tos_)
+      .def_readwrite("outer_udp_src", &TunnelConfig::outer_udp_src_)
+      .def_readwrite("outer_udp_dst", &TunnelConfig::outer_udp_dst_)
+      .def_readwrite("vni", &TunnelConfig::vni_)
+      .def_readwrite("gre_protocol", &TunnelConfig::gre_protocol_)
+      .def_readwrite("tni", &TunnelConfig::tni_)
+      .def_readwrite("flow_id", &TunnelConfig::flow_id_);
+
   py::class_<FlowAction>(m, "FlowAction")
       .def(py::init<>())
       .def_readwrite("type", &FlowAction::type_)
-      .def_readwrite("id", &FlowAction::id_);
+      .def_readwrite("id", &FlowAction::id_)
+      .def_readwrite("vlan", &FlowAction::vlan_)
+      .def_readwrite("tunnel", &FlowAction::tunnel_);
 
   py::class_<FlexItemMatch>(m, "FlexItemMatch")
       .def(py::init<>())
@@ -713,7 +795,23 @@ void bind_config_types(py::module_ &m) {
       .def_readwrite("name", &FlowConfig::name_)
       .def_readwrite("id", &FlowConfig::id_)
       .def_readwrite("action", &FlowConfig::action_)
+      .def_readwrite("actions", &FlowConfig::actions_)
       .def_readwrite("match", &FlowConfig::match_);
+
+  py::class_<FlowRuleConfig>(m, "FlowRuleConfig")
+      .def(py::init<>())
+      .def_readwrite("name", &FlowRuleConfig::name_)
+      .def_readwrite("action", &FlowRuleConfig::action_)
+      .def_readwrite("actions", &FlowRuleConfig::actions_)
+      .def_readwrite("match", &FlowRuleConfig::match_);
+
+  py::class_<FlowOpResult>(m, "FlowOpResult")
+      .def(py::init<>())
+      .def_readwrite("op_id", &FlowOpResult::op_id_)
+      .def_readwrite("type", &FlowOpResult::type_)
+      .def_readwrite("status", &FlowOpResult::status_)
+      .def_readwrite("flow_id", &FlowOpResult::flow_id_)
+      .def_readwrite("flow_ids", &FlowOpResult::flow_ids_);
 
   py::class_<CommonConfig>(m, "CommonConfig")
       .def(py::init<>())
@@ -800,6 +898,8 @@ void bind_config_types(py::module_ &m) {
       .def(py::init<>())
       .def_readwrite("flow_isolation", &RxConfig::flow_isolation_)
       .def_readwrite("hardware_timestamps", &RxConfig::hardware_timestamps_)
+      .def_readwrite("dynamic_flow_capacity",
+                     &RxConfig::dynamic_flow_capacity_)
       .def_readwrite("queues", &RxConfig::queues_)
       .def_readwrite("flows", &RxConfig::flows_)
       .def_readwrite("flex_items", &RxConfig::flex_items_)
@@ -846,6 +946,15 @@ PYBIND11_MODULE(_daqiri, m) {
   m.attr("DAQIRI_BURST_FLAG_REORDERED") = DAQIRI_BURST_FLAG_REORDERED;
   m.attr("DAQIRI_BURST_FLAG_REORDER_TIMEOUT") =
       DAQIRI_BURST_FLAG_REORDER_TIMEOUT;
+  m.attr("__version__") = version_string();
+  m.attr("__version_info__") =
+      py::make_tuple(version_year(), version_month(), version_patch());
+  m.attr("__abi_version__") = abi_version();
+  m.attr("DAQIRI_VERSION") = DAQIRI_VERSION;
+  m.attr("DAQIRI_VERSION_YEAR") = DAQIRI_VERSION_YEAR;
+  m.attr("DAQIRI_VERSION_MONTH") = DAQIRI_VERSION_MONTH;
+  m.attr("DAQIRI_VERSION_PATCH") = DAQIRI_VERSION_PATCH;
+  m.attr("DAQIRI_ABI_VERSION") = DAQIRI_ABI_VERSION;
   m.attr("MEM_ACCESS_LOCAL") =
       py::int_(static_cast<uint32_t>(MEM_ACCESS_LOCAL));
   m.attr("MEM_ACCESS_RDMA_WRITE") =
@@ -893,6 +1002,11 @@ PYBIND11_MODULE(_daqiri, m) {
 
   m.def("get_engine_type", static_cast<EngineType (*)()>(&get_engine_type),
         "Get the current engine type");
+  m.def("version_string", &version_string, "Get the DAQIRI package version");
+  m.def("version_year", &version_year, "Get the DAQIRI CalVer year");
+  m.def("version_month", &version_month, "Get the DAQIRI CalVer month");
+  m.def("version_patch", &version_patch, "Get the DAQIRI CalVer patch number");
+  m.def("abi_version", &abi_version, "Get the DAQIRI shared library ABI version");
   m.def("engine_type_from_string", &engine_type_from_string, "str"_a,
         "Convert a string to an engine type");
   m.def("engine_type_to_string", &engine_type_to_string, "type"_a,
@@ -1122,6 +1236,37 @@ PYBIND11_MODULE(_daqiri, m) {
   m.def("get_port_id", &get_port_id, "key"_a);
   m.def("drop_all_traffic", &drop_all_traffic, "port"_a);
   m.def("allow_all_traffic", &allow_all_traffic, "port"_a);
+  m.def(
+      "add_rx_flow_async",
+      [](int port, const FlowRuleConfig &flow) {
+        FlowOpId op_id = 0;
+        const Status status = add_rx_flow_async(port, flow, &op_id);
+        return py::make_tuple(status, op_id);
+      },
+      "port"_a, "flow"_a);
+  m.def(
+      "add_rx_flows_async",
+      [](int port, const std::vector<FlowRuleConfig> &flows) {
+        FlowOpId op_id = 0;
+        const Status status = add_rx_flows_async(port, flows, &op_id);
+        return py::make_tuple(status, op_id);
+      },
+      "port"_a, "flows"_a);
+  m.def(
+      "delete_flow_async",
+      [](FlowId flow_id) {
+        FlowOpId op_id = 0;
+        const Status status = delete_flow_async(flow_id, &op_id);
+        return py::make_tuple(status, op_id);
+      },
+      "flow_id"_a);
+  m.def(
+      "poll_flow_op",
+      []() {
+        FlowOpResult result;
+        const Status status = poll_flow_op(&result);
+        return py::make_tuple(status, result);
+      });
   m.def("get_num_rx_queues", &get_num_rx_queues, "port_id"_a);
   m.def("flush_port_queue", &flush_port_queue, "port"_a, "queue"_a);
 
@@ -1197,6 +1342,8 @@ PYBIND11_MODULE(_daqiri, m) {
         return py::make_tuple(status, conn_id);
       },
       "server_addr"_a, "server_port"_a);
+  m.def("socket_setsockopt", &socket_setsockopt_from_python, "conn_id"_a,
+        "level"_a, "optname"_a, "value"_a);
 
   m.def(
       "rdma_connect_to_server",

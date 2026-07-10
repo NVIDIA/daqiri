@@ -7,6 +7,8 @@ hide:
 
 Use this page when the peer transport is TCP, UDP, or RoCE/RDMA. These benchmarks use the Linux networking stack for TCP/UDP and RDMA verbs for RoCE, so the same client/server namespace shape is useful for proving that traffic leaves the host through the expected NIC path.
 
+For **two-host Spark cross-cable** tests (not netns), RoCE/RDMA still needs kernel reachability to the peer — apply the host route and static neighbor steps in [System Configuration → Cross-host variant](../tutorials/system_configuration.md#cross-host-variant-two-sparks) before running `daqiri_bench_rdma` with the `_xhost` configs.
+
 Make sure to [build DAQIRI](../getting-started.md#build-the-daqiri-library) with the `ibverbs` engine first (for the RoCE/RDMA benchmark); Linux UDP/TCP sockets are always available.
 
 ## Protocol choices
@@ -155,6 +157,11 @@ The shipped configs run both endpoints on `127.0.0.1` and are useful for a smoke
 ```
 
 For an on-wire namespace test, use separate server and client YAML files. The important fields are the endpoint URI scheme, namespace IPs, server port, `max_payload_size`, memory-region `buf_size`, and benchmark `message_size`.
+
+Applications can tune the underlying TCP/UDP socket after resolving a connection ID
+with `socket_connect_to_server()` or `socket_get_server_conn_id()`. Use
+`socket_setsockopt(conn_id, level, optname, optval, optlen)` with the integer
+constants from your system headers.
 
 Server-side UDP template:
 

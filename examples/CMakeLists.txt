@@ -16,15 +16,30 @@ endif()
 
 set(DAQIRI_EXAMPLES_CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
 
-if(TARGET yaml-cpp::yaml-cpp)
-  set(DAQIRI_EXAMPLE_YAML_TARGET yaml-cpp::yaml-cpp)
-else()
-  set(DAQIRI_EXAMPLE_YAML_TARGET yaml-cpp)
+if(NOT DAQIRI_YAML_TARGET)
+  # Standalone build (not added by the top-level CMakeLists): mirror the
+  # src/CMakeLists.txt resolution so a system yaml-cpp or the vendored
+  # submodule both work.
+  find_package(yaml-cpp QUIET)
+  if(TARGET yaml-cpp::yaml-cpp)
+    set(DAQIRI_YAML_TARGET yaml-cpp::yaml-cpp)
+  elseif(TARGET yaml-cpp)
+    set(DAQIRI_YAML_TARGET yaml-cpp)
+  elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/yaml-cpp/CMakeLists.txt")
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../third_party/yaml-cpp
+                     ${CMAKE_CURRENT_BINARY_DIR}/third_party/yaml-cpp)
+    set(DAQIRI_YAML_TARGET yaml-cpp)
+  else()
+    message(FATAL_ERROR
+      "yaml-cpp not found; install yaml-cpp-dev or run "
+      "`git submodule update --init third_party/yaml-cpp`")
+  endif()
 endif()
 
 set(DAQIRI_BENCH_CONFIGS
   daqiri_bench_raw_tx_rx.yaml
   daqiri_bench_raw_tx_rx_4q.yaml
+  daqiri_bench_raw_tx_rx_pacing.yaml
   daqiri_bench_raw_tx_rx_hds.yaml
   daqiri_bench_raw_tx_rx_hds_rtx_pro_6000.yaml
   daqiri_bench_raw_rx_ibverbs_rtx_pro_6000.yaml
@@ -41,6 +56,7 @@ set(DAQIRI_BENCH_CONFIGS
   daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml
   daqiri_bench_raw_tx_rx_rtx_pro_6000_nic_same_port.yaml
   daqiri_bench_raw_tx_only_rtx_pro_6000_nic.yaml
+  daqiri_example_dynamic_rx_flow.yaml
   daqiri_example_gds_write_sw_loopback.yaml
   daqiri_example_gds_write_tx_rx.yaml
   daqiri_example_pcap_writer_sw_loopback.yaml
@@ -69,10 +85,10 @@ function(link_daqiri_bench target)
       "-Wl,--start-group"
       ${DAQIRI_EXAMPLE_STATIC_LIBS}
       "-Wl,--end-group"
-      ${DAQIRI_EXAMPLE_YAML_TARGET}
+      ${DAQIRI_YAML_TARGET}
     )
   else()
-    target_link_libraries(${target} PRIVATE daqiri::daqiri ${DAQIRI_EXAMPLE_YAML_TARGET})
+    target_link_libraries(${target} PRIVATE daqiri::daqiri ${DAQIRI_YAML_TARGET})
   endif()
 endfunction()
 
@@ -104,6 +120,7 @@ if(DAQIRI_ENABLE_OTEL_METRICS)
 endif()
 add_daqiri_raw_bench(daqiri_bench_raw_reorder_seq raw_reorder_seq_bench.cpp)
 add_daqiri_raw_bench(daqiri_bench_raw_reorder_quantize raw_reorder_quantize_bench.cpp)
+add_daqiri_raw_bench(daqiri_example_dynamic_rx_flow dynamic_rx_flow_example.cpp)
 add_daqiri_raw_bench(daqiri_example_gds_write gds_write_example.cpp)
 add_daqiri_raw_bench(daqiri_example_pcap_writer pcap_writer_example.cpp)
 
@@ -116,6 +133,9 @@ set_target_properties(daqiri_bench_rdma PROPERTIES
   BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
 )
 
+# raw_bench_common.cpp's rx_count_worker references GpuWorkload + ReorderPipeline,
+# so the socket bench must also compile/link bench_workload.cu + bench_pipeline.cu
+# (and the math libs).
 add_executable(daqiri_bench_socket socket_bench.cpp raw_bench_common.cpp
                bench_workload.cu bench_pipeline.cu)
 link_daqiri_bench(daqiri_bench_socket)
@@ -124,6 +144,29 @@ set_target_properties(daqiri_bench_socket PROPERTIES
   CUDA_ARCHITECTURES "${DAQIRI_EXAMPLES_CUDA_ARCHITECTURES}"
   BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
 )
+
+# Microbenchmark for the daqiri::Ring / daqiri::ObjectPool primitives. Always
+# built (the primitives are header-only); when the dpdk engine is present it also
+# compiles the rte_ring / rte_mempool comparison arm.
+add_executable(daqiri_pool_ring_bench pool_ring_bench.cpp)
+target_compile_features(daqiri_pool_ring_bench PRIVATE cxx_std_17)
+target_include_directories(daqiri_pool_ring_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+find_package(Threads REQUIRED)
+target_link_libraries(daqiri_pool_ring_bench PRIVATE Threads::Threads)
+if(TARGET daqiri_dpdk)
+  find_package(PkgConfig)
+  pkg_check_modules(BENCH_DPDK QUIET libdpdk)
+  if(NOT BENCH_DPDK_FOUND)
+    list(APPEND CMAKE_PREFIX_PATH "/opt/mellanox/dpdk/lib/${CMAKE_HOST_SYSTEM_PROCESSOR}-linux-gnu/")
+    pkg_check_modules(BENCH_DPDK QUIET libdpdk)
+  endif()
+  if(BENCH_DPDK_FOUND)
+    target_compile_definitions(daqiri_pool_ring_bench PRIVATE BENCH_HAVE_DPDK=1)
+    target_include_directories(daqiri_pool_ring_bench PRIVATE ${BENCH_DPDK_INCLUDE_DIRS})
+    target_link_directories(daqiri_pool_ring_bench PRIVATE ${BENCH_DPDK_LIBRARY_DIRS})
+    target_link_libraries(daqiri_pool_ring_bench PRIVATE ${BENCH_DPDK_LDFLAGS_OTHER} ${BENCH_DPDK_LIBRARIES})
+  endif()
+endif()
 
 foreach(cfg IN LISTS DAQIRI_BENCH_CONFIGS)
   configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${cfg} ${CMAKE_CURRENT_BINARY_DIR}/${cfg} COPYONLY)
@@ -138,10 +181,12 @@ install(TARGETS
         daqiri_bench_raw_gpudirect
         daqiri_bench_raw_reorder_seq
         daqiri_bench_raw_reorder_quantize
+        daqiri_example_dynamic_rx_flow
         daqiri_example_gds_write
         daqiri_example_pcap_writer
         daqiri_bench_rdma
         daqiri_bench_socket
+        daqiri_pool_ring_bench
         RUNTIME DESTINATION bin)
 install(FILES ${DAQIRI_BENCH_CONFIGS}
         DESTINATION bin)

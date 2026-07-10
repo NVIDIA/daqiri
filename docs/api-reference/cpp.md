@@ -16,6 +16,24 @@ For the terminology used here (*burst*, *segment*, *flow*, *queue*, *memory
 region*, *zero-copy ownership*, *RX reorder*), keep the
 [Concepts](../concepts.md) page open in a second tab.
 
+## Version Metadata
+
+DAQIRI package versions use CalVer in `YYYY.MM.PATCH` form. The public
+`daqiri/daqiri.h` header includes `daqiri/version.h`, which exposes compile-time
+macros and inline C++ helpers:
+
+```cpp
+#include <daqiri/daqiri.h>
+
+static_assert(DAQIRI_VERSION_YEAR >= 2026);
+const char *package_version = daqiri::version_string();
+int abi = daqiri::abi_version();
+```
+
+`DAQIRI_ABI_VERSION` / `daqiri::abi_version()` is the shared-library ABI version
+and is intentionally separate from the CalVer package version. The YAML
+`common.version` field remains the configuration schema version.
+
 ## Initialization
 
 ```cpp
@@ -32,6 +50,11 @@ auto status = daqiri::daqiri_init(config);
 
 After `daqiri_init()` returns `Status::SUCCESS`, all memory regions are allocated, NIC
 queues are configured, and worker threads are running.
+
+Only one engine may be active in a process. Calling `daqiri_init()` again before
+`shutdown()` returns `Status::INTERNAL_ERROR` and leaves the running engine unchanged.
+After `shutdown()` completes, a later `daqiri_init()` creates a fresh engine instance and
+allocates/registers its resources again.
 
 If GPU RX `reorder_configs` are configured for Raw Ethernet (`stream_type: "raw"`), set
 one CUDA stream per GPU reorder plan before pulling reordered bursts. CPU reorder configs do not use a
@@ -77,7 +100,7 @@ For a single-segment configuration (CPU-only or batched GPU):
 for (int i = 0; i < daqiri::get_num_packets(burst); i++) {
     void *pkt = daqiri::get_packet_ptr(burst, i);
     uint32_t len = daqiri::get_packet_length(burst, i);
-    uint16_t flow = daqiri::get_packet_flow_id(burst, i);
+    daqiri::FlowId flow = daqiri::get_packet_flow_id(burst, i);
     uint64_t rx_ts_ns = 0;
     if (daqiri::get_packet_rx_timestamp(burst, i, &rx_ts_ns) == daqiri::Status::SUCCESS) {
         // rx_ts_ns is in the NIC timestamp clock domain.
@@ -129,6 +152,130 @@ daqiri::free_packet_segment(burst, seg, idx);
 daqiri::free_all_segment_packets(burst, seg);
 daqiri::free_rx_burst(burst);
 ```
+
+## Dynamic RX Flows
+
+Raw Ethernet RX flows can be added and deleted after `daqiri_init()` on the
+`dpdk` and raw `ibverbs` engines. This supports queues-only startup configs,
+including `rx.flow_isolation: true` with no initial `rx.flows`. Static YAML
+flows still use explicit configured IDs and are not deletable through this API.
+The legacy `FlowRuleConfig::action_` field remains the shorthand for a single
+queue action; `FlowRuleConfig::actions_` is the ordered form used when a dynamic
+RX rule needs hardware VLAN pop or tunnel decapsulation before queue delivery.
+Dynamic TX transform flows are not part of v1; configure TX encapsulation/push
+rules statically under `tx.flows`.
+
+```cpp
+daqiri::FlowRuleConfig flow;
+flow.name_ = "udp_5000";
+flow.action_.type_ = daqiri::FlowType::QUEUE;
+flow.action_.id_ = 0;
+flow.match_.type_ = daqiri::FlowMatchType::IPV4_UDP;
+flow.match_.udp_dst_ = 5000;
+
+daqiri::FlowOpId add_op = 0;
+auto st = daqiri::add_rx_flow_async(0, flow, &add_op);
+if (st != daqiri::Status::SUCCESS) {
+    // invalid port/queue/match, unsupported backend, or no flow IDs available
+}
+
+daqiri::FlowId flow_id = 0;
+daqiri::FlowOpResult result;
+while (flow_id == 0) {
+    st = daqiri::poll_flow_op(&result);
+    if (st == daqiri::Status::NOT_READY) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        continue;
+    }
+    if (st != daqiri::Status::SUCCESS) {
+        // handle poll error
+        break;
+    }
+    if (result.op_id_ == add_op) {
+        if (result.status_ != daqiri::Status::SUCCESS) {
+            // handle flow create failure
+            break;
+        }
+        flow_id = result.flow_id_;
+    }
+}
+```
+
+For a dynamic VXLAN decap rule, use ordered actions and make the final action
+the target queue:
+
+```cpp
+daqiri::FlowRuleConfig decap;
+decap.name_ = "vxlan_decap_5000";
+
+daqiri::FlowAction tunnel;
+tunnel.type_ = daqiri::FlowType::TUNNEL_DECAP;
+tunnel.tunnel_.type_ = daqiri::TunnelType::VXLAN;
+tunnel.tunnel_.outer_eth_src_ = "02:00:00:00:00:01";
+tunnel.tunnel_.outer_eth_dst_ = "02:00:00:00:00:02";
+tunnel.tunnel_.outer_ipv4_src_ = "192.0.2.1";
+tunnel.tunnel_.outer_ipv4_dst_ = "192.0.2.2";
+tunnel.tunnel_.outer_udp_dst_ = 4789;
+tunnel.tunnel_.vni_ = 100;
+decap.actions_.push_back(tunnel);
+
+daqiri::FlowAction queue;
+queue.type_ = daqiri::FlowType::QUEUE;
+queue.id_ = 0;
+decap.actions_.push_back(queue);
+
+decap.match_.type_ = daqiri::FlowMatchType::IPV4_UDP;
+decap.match_.udp_dst_ = 5000;
+```
+
+Packets matching a dynamic rule are marked with the same `FlowId` returned by
+the add completion, so `get_packet_flow_id()` gives the handle to pass to
+`delete_flow_async()`. `poll_flow_op()` returns `Status::NOT_READY` when no flow
+operation has completed yet. A dynamic flow is deletable only after its add
+completion has been polled successfully; deleting a flow that is still pending returns
+`Status::INVALID_PARAMETER`.
+
+Multiple RX flows can be added as one operation. On DPDK this maps to a single
+template queue push when the IPv4/UDP template path is available. The raw
+`ibverbs` engine installs the batch synchronously and reports one software
+completion. In both cases, `poll_flow_op()` returns one batch completion when all
+creates in the batch have resolved.
+
+```cpp
+std::vector<daqiri::FlowRuleConfig> flows;
+flows.push_back(flow);
+flows.push_back(flow);
+flows.back().name_ = "udp_5001";
+flows.back().match_.udp_dst_ = 5001;
+
+daqiri::FlowOpId batch_op = 0;
+st = daqiri::add_rx_flows_async(0, flows, &batch_op);
+
+std::vector<daqiri::FlowId> flow_ids;
+while (flow_ids.empty()) {
+    st = daqiri::poll_flow_op(&result);
+    if (st == daqiri::Status::NOT_READY) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        continue;
+    }
+    if (st == daqiri::Status::SUCCESS && result.op_id_ == batch_op) {
+        flow_ids = result.flow_ids_;
+    }
+}
+```
+
+For batch completions, `flow_ids_` is in the same order as the input rules. If
+the completion status is not `SUCCESS`, nonzero entries were installed and zero
+entries were not installed.
+
+```cpp
+daqiri::FlowOpId delete_op = 0;
+auto delete_status = daqiri::delete_flow_async(flow_id, &delete_op);
+```
+
+Dynamic flow support is RX-only in v1. Socket, RDMA/RoCE, and software loopback
+engines return `NOT_SUPPORTED`; tunnel/VLAN transform actions are accepted only
+by raw DPDK and raw ibverbs.
 
 ## Reordered RX Bursts
 
@@ -464,6 +611,9 @@ workflow sections above show the common call order and ownership rules.
 
 | Function | Purpose |
 | --- | --- |
+| `version_string()` | Return the DAQIRI package version as `YYYY.MM.PATCH`. |
+| `version_year()` / `version_month()` / `version_patch()` | Return the CalVer components. |
+| `abi_version()` | Return the DAQIRI shared-library ABI version. |
 | `daqiri_init(NetworkConfig &config)` | Initialize DAQIRI from an already-populated config object. |
 | `daqiri_init(const std::string &yaml_string_or_path)` | Initialize from a YAML string or YAML file path. |
 | `daqiri_init_from_yaml_string(const std::string &yaml_string)` | Initialize from YAML content. |
@@ -493,8 +643,17 @@ workflow sections above show the common call order and ownership rules.
 | `get_segment_packet_ptr(burst, seg, idx)` | Return a packet pointer for a specific segment. |
 | `get_packet_length(burst, idx)` | Return the logical packet length. |
 | `get_segment_packet_length(burst, seg, idx)` | Return the length of one packet segment. |
-| `get_packet_flow_id(burst, idx)` | Return the matched flow ID, or `0` when no flow matched. |
+| `get_packet_flow_id(burst, idx)` | Return the matched `FlowId`, or `0` when no flow matched. |
 | `get_packet_rx_timestamp(burst, idx, &timestamp_ns)` | Return the hardware RX timestamp when enabled and available. |
+
+### Dynamic RX Flow Lifecycle
+
+| Function | Purpose |
+| --- | --- |
+| `add_rx_flow_async(port, flow, &op_id)` | Enqueue a dynamic RX flow create. The add completion returns the allocated `FlowId`. |
+| `add_rx_flows_async(port, flows, &op_id)` | Enqueue a dynamic RX flow batch create. One completion returns allocated `FlowId`s in input order. |
+| `delete_flow_async(flow_id, &op_id)` | Enqueue deletion of an active dynamic flow. Static YAML flows and unknown IDs return `INVALID_PARAMETER`. |
+| `poll_flow_op(&result)` | Return one completed flow operation, or `NOT_READY` when none are ready. |
 
 ### RX and Reorder
 
@@ -572,6 +731,7 @@ workflow sections above show the common call order and ownership rules.
 | `socket_connect_to_server(server_addr, server_port, src_addr, &conn_id)` | Connect a socket client using an explicit source address. |
 | `socket_get_port_queue(conn_id, &port, &queue)` | Resolve a socket connection to port/queue routing. |
 | `socket_get_server_conn_id(server_addr, server_port, &conn_id)` | Look up a server-side socket connection ID. |
+| `socket_setsockopt(conn_id, level, optname, optval, optlen)` | Apply a Linux `setsockopt` option to an existing TCP/UDP socket connection. |
 | `rdma_connect_to_server(server_addr, server_port, &conn_id)` | Connect an RDMA client to a server. |
 | `rdma_connect_to_server(server_addr, server_port, src_addr, &conn_id)` | Connect an RDMA client using an explicit source address. |
 | `rdma_get_port_queue(conn_id, &port, &queue)` | Resolve an RDMA connection to port/queue routing. |

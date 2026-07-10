@@ -176,10 +176,18 @@ find_package(daqiri REQUIRED)
 target_link_libraries(my_app PRIVATE daqiri::daqiri)
 ```
 
+DAQIRI uses CalVer package versions in `YYYY.MM.PATCH` form. Consumers that need
+a minimum DAQIRI release can request it from CMake:
+
+```cmake
+find_package(daqiri 2026.7.0 REQUIRED)
+```
+
 Pkg-config consumers can use the installed `daqiri.pc` file:
 
 ```bash
 c++ my_app.cpp -o my_app $(pkg-config --cflags --libs daqiri)
+pkg-config --modversion daqiri
 ```
 
 Both methods use the same public C++ include:
@@ -187,6 +195,11 @@ Both methods use the same public C++ include:
 ```cpp
 #include <daqiri/daqiri.h>
 ```
+
+`daqiri/version.h` is included by `daqiri/daqiri.h` and provides
+`DAQIRI_VERSION`, `daqiri::version_string()`, and related CalVer helpers.
+DAQIRI's shared-library ABI version is tracked separately through
+`DAQIRI_ABI_VERSION` / `daqiri::abi_version()`.
 
 ### CMake Options
 
@@ -198,7 +211,28 @@ Both methods use the same public C++ include:
 | `DAQIRI_ENABLE_GDS` | `OFF` | Enable cuFile-backed burst file writes from CUDA device memory. Host-memory writes use POSIX APIs without GDS. |
 | `DAQIRI_ENABLE_OTEL_METRICS` | `OFF` | Enable OpenTelemetry C++ metrics instrumentation. When enabled, OpenTelemetry C++ API package metadata must be available to CMake. |
 | `DAQIRI_ENABLE_S3` | `OFF` | Enable AWS SDK-backed asynchronous raw packet writes to S3. |
+| `DAQIRI_PREFER_SYSTEM_YAML_CPP` | `OFF` | Prefer a system-installed `yaml-cpp` over the vendored `third_party/yaml-cpp` submodule. Keep `OFF` if a conda/miniforge env is on `PATH`. |
 | `BUILD_SHARED_LIBS` | — | Build as shared library. |
+
+Linux UDP/TCP sockets are always available. Applications that need kernel socket
+tuning can call `socket_setsockopt()` after resolving a TCP/UDP connection ID,
+passing the numeric `level` and option constants from system headers; DAQIRI does
+not maintain symbolic socket-option mappings in YAML.
+
+For Raw Ethernet (`stream_type: "raw"`), `daqiri_init()` validates that each `rx.flows`
+entry's legacy `action.id` or final ordered `actions:` queue action matches an
+`rx.queues` ID on the same interface, then programs flow rules into the NIC.
+Initialization fails if any RX flow rule, TX transform flow, send-to-kernel fallback
+(when `flow_isolation: true`), or `tx_eth_src` offload rule cannot be installed.
+Raw DPDK and raw ibverbs can offload VLAN push/pop and VXLAN, GRE, or NVGRE
+encap/decap through flow actions; socket/RDMA streams reject those actions.
+`rx.flows` may also be omitted for queues-only startup; applications can then add and delete
+RX flow rules at runtime with `add_rx_flow_async()` / `delete_flow_async()`. Dynamic
+RX flows can use the same decap/pop action ordering as static RX flows. The DPDK template
+fast path is enabled and sized by `rx.dynamic_flow_capacity` (default `0`, set a positive
+value such as `1024` to create template tables); dynamic transform rules fall back to
+regular hardware flow creation because packet reformat actions are not part of that
+template fast path.
 
 CUDA architectures default to `80;90` (A100, H100), with `121` (GB10) added
 when configuring with CUDA Toolkit 13.0 or newer. Override
@@ -230,6 +264,12 @@ Configure credentials through the AWS SDK provider chain, such as environment
 variables, a shared AWS profile, container credentials, or an EC2 instance role.
 DAQIRI writes one object per packet with a single `PutObject`; multipart uploads
 and PCAP output are not part of the S3 path.
+
+### Raw Ethernet RX flows
+
+On a single RX interface, use either standard UDP/IP flow rules or flex-item flow
+rules, not both. Mixed configs are rejected at `daqiri_init`. See
+[Configuration reference](api-reference/configuration.md#flows).
 
 ## Next Steps
 

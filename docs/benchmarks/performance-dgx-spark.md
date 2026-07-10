@@ -25,11 +25,11 @@ loopback). The exact commands are collected under [Reproduce](#reproduce) below.
 | Loopback | Raw/DPDK uses the two physical ports directly; socket/RoCE use the `dq_wire_*` network-namespace wire loopback |
 | Core pinning | Each direction has a busy-spin queue poller and an app worker on separate isolated X925 cores (PR #149). Single-queue: DPDK pollers 17/18, workers 16/19. Multi-queue: TX pollers 16/19, RX pollers 18/9, each with its own worker core, master 8 (with `isolcpus=5-9,15-19`). |
 
-## Results Summary — native-shape peak (C++ loopback)
+## Results Summary (C++ loopback)
 
-Each transport at its best-case operation size. Raw/RoCE are single-stream;
-socket TCP/UDP scale with the number of client/server pairs, so the four-pair
-aggregate is shown.
+Each transport at its best-case **native operation size**. Raw/RoCE are
+single-stream; socket TCP/UDP scale with the number of client/server pairs, so the
+four-pair aggregate is shown.
 
 | Stream / Protocol | Best case | Throughput | Drops | Notes |
 | ----------------- | --------- | ---------: | ----- | ----- |
@@ -235,6 +235,132 @@ shared per-namespace pool, so under multi-pair unpaced load delivery collapses
 (≈100% loss at 65507 B / 4 pairs). The wire itself is loss-free here; the loss
 is host-side socket-buffer and reassembly pressure.
 
+## GPU workloads in the receive path
+
+A common question for a GPU-attached receiver is how much line rate it holds while
+the GPU also crunches the incoming data. The benchmarks accept
+`--workload none|fft|gemm|gemm_fp16`, exposed by `run_spark_bench.sh` as the
+`WORKLOAD` env var (recorded in the CSV `post_process` column); more workload kinds
+can be added to the same reusable component over time. The workload runs on the
+**actual received packet data** — every backend first assembles the burst's
+payloads into one contiguous GPU buffer (a sequence-number **reorder** on the
+out-of-order transports, an arrival-order **gather** on the in-order ones) and the
+compute consumes that buffer.
+
+**What the two workloads compute** (the reusable component
+`examples/bench_workload.{h,cu}`):
+
+- **FFT** — a batched 1-D **complex-to-complex forward FFT** via cuFFT
+  (`cufftExecC2C`). The reordered buffer is treated as an array of single-precision
+  complex samples and transformed as many independent length-1024 FFTs, batched so
+  the transforms cover the whole reorder window. This models a streaming
+  signal-processing receiver — channelization or spectral analysis that FFTs every
+  frame as it arrives.
+- **GEMM** — a dense **matrix multiply** `C = A·B` via cuBLAS on square *n×n*
+  matrices, with the reordered buffer supplying the *A* operand and *n* chosen so
+  the matrices match the working-set size. Two precisions: **`gemm`** is FP32
+  (`cublasSgemm`); **`gemm_fp16`** is the *same-size* mixed-precision matmul (FP16
+  inputs, FP32 accumulate) on the **tensor cores** (`cublasGemmEx`,
+  `CUBLAS_GEMM_DEFAULT_TENSOR_OP`) — the core op of GPU inference. Running both at
+  one matrix size isolates the precision / tensor-core effect. This models a
+  receiver feeding incoming data into a dense linear-algebra or neural-network
+  stage (beamforming, correlation, an inference layer).
+
+**The reorder/gather step is per-backend** (`examples/bench_pipeline.{h,cu}`),
+chosen to be representative for each transport:
+
+| Backend | Payload source | Pre-workload step |
+| ------- | -------------- | ----------------- |
+| Raw / GPUDirect (DPDK) | GPU-accessible RX buffers | **seq reorder** kernel → contiguous device buffer (out-of-order capable) |
+| RoCE (RC) | GPU-accessible recv MR | **gather** (in-order); one large message is a zero-copy pass-through |
+| UDP sockets | host RX buffers | **host→device stage**, then **seq reorder** |
+| TCP sockets | host RX buffers | **host→device stage**, then **gather** (in-order stream) |
+
+Each compute runs **once per reorder window** on a dedicated CUDA stream (shared
+with the reorder/gather kernel so the two serialize without an extra sync), with up
+to two kernels in flight (sync depth 2) to overlap GPU work with ingest. The
+reorder window is sized so the contiguous buffer is ~8 MB on every backend, giving
+a comparable GPU working set across transports. GPU SM% is from `nvidia-smi dmon`
+across the run. Throughput is mean ± std over 3 reps, 30 s each.
+
+!!! note "Where the data lives, per backend"
+    On the integrated GB10 the GPU shares memory with the CPU, so the raw and RoCE
+    receive buffers (`host_pinned`) are GPU-accessible with **no copy** — the
+    reorder/gather kernel reads them in place. Sockets are different: the kernel
+    hands received bytes to the application in pageable host memory, so the socket
+    path must **stage each payload host→device** before the GPU can touch it — a
+    copy on the measured path that the raw/RoCE paths avoid. Lost packets (raw/UDP)
+    leave their reorder slots zero-filled; the FLOP/copy volume is unchanged.
+
+Raw / GPUDirect, 8 KB native shape (batch 10240), GPU-resident payloads, seq reorder:
+
+| Workload | Throughput | Drops | GPU SM% | Notes |
+| -------- | ---------: | ----- | ------: | ----- |
+| none (baseline) | 98.4 ±0.2 Gb/s | 0 | ~0 | Bare loopback (no GPU compute) |
+| FFT | 95.5 ±1.7 Gb/s | 0 | 16.4% | Light compute; line rate held within ~3% |
+| GEMM (FP32) | 94.9 ±0.0 Gb/s | 0 | 55.9% | FP32 cores; GPU-bound end, still **drop-free** |
+| GEMM (FP16 tensor) | 97.7 ±0.2 Gb/s | 0 | 16.8% | Same matrix, tensor cores; near line rate at a third of the SM |
+
+RoCE, 8 MB native message (single QP, batch 1), gather pass-through:
+
+| Workload | Throughput | Drops | GPU SM% | Notes |
+| -------- | ---------: | ----- | ------: | ----- |
+| none (baseline) | 101.7 ±0.2 Gb/s | 0 | ~0 | Pass-through, no compute |
+| FFT | 93.6 ±1.6 Gb/s | 0 | 36.0% | Light compute; ~8% off line rate |
+| GEMM (FP32) | 35.0 ±0.3 Gb/s | 0 | 79.0% | GPU-bound at this batch (one GEMM/message); see sweep |
+| GEMM (FP16 tensor) | 85.8 ±0.2 Gb/s | 0 | 53.6% | Same matrix, tensor cores |
+
+Both paths drive the GPU the same way (each holds a batch of received data and drains
+the GPU stream **once per batch** — the raw path a burst of ~10 reorder windows, the
+RoCE path a small batch of messages whose recv buffers stay live during the pass-through
+compute), so compute overlaps with receive on both and every cell is drop-free. The
+fixed-batch rows above are the 8 MB native operating point, batch-matched to the raw
+path's ~8.19 MB reorder window (1024 packets × 8000 B).
+
+The remaining RoCE-vs-raw gap on the heavy GEMM is **pipelining depth, not transport**:
+at the 8 MB default, one RoCE message is a single GEMM with no neighbor to overlap, while
+a raw burst packs ~10 GEMMs back-to-back. Sub-dividing the message into a smaller compute
+batch packs several GEMMs per message and recovers most of the throughput — at a **4 MB
+batch (2 GEMMs/message), 3-rep**:
+
+| Workload | Throughput | Drops | GPU SM% | vs 8 MB default |
+| -------- | ---------: | ----- | ------: | --------------- |
+| GEMM (FP32) | 76.3 ±0.2 Gb/s | 0 | 77.7% | 2.2× (was 35.0) |
+| GEMM (FP16 tensor) | 92.3 ±2.0 Gb/s | 0 | 38.7% | within ~5% of raw (was 85.8) |
+
+The full curve is in the [batch-size sweep](#workload-batch-size-sweep) below.
+
+### Workload batch-size sweep
+
+The workload's compute working set is **decoupled from the I/O unit** via
+`--workload-batch-bytes` (env `WORKLOAD_BATCH` in `run_spark_bench.sh`): it sets the
+bytes fed to one compute call — the GEMM dimension is `n = √(batch/4)` — independent of
+the 8 MB RoCE message or 8 KB raw frame. RoCE sub-divides each message into batch-sized
+slices (one compute per slice); raw sizes its reorder window to the batch. Sweep run on
+`gemm_fp16` (cuBLAS takes the dimension per call); the tables above are the fixed-batch
+(8 MB) operating points.
+
+The two paths respond very differently, which is the whole point. **Raw is flat at line
+rate (~98 Gb/s) across every batch** — a raw burst always packs ~10 reorder windows, so
+the GPU stays fed regardless of the per-window size; the workload is never the bottleneck.
+**RoCE is strongly batch-sensitive** and **non-monotonic with a sweet spot at 2–4 MB**:
+one 8 MB message yields a single GEMM with nothing to overlap (underpipelined, 85 Gb/s),
+sub-dividing it to 2–4 MB packs 2–4 GEMMs per message and recovers **~92 Gb/s — on par
+with raw**, and tiny 512 KB slices collapse to 37 Gb/s on per-call launch/sync overhead
+(16 GEMMs/message). So the RoCE↔raw gap at the default batch is purely pipelining depth:
+give RoCE a batch that packs a few GEMMs per message and the two paths converge.
+
+| Batch | RoCE Gb/s | RoCE GPU SM% | Raw Gb/s | Raw GPU SM% |
+| ----: | --------: | -----------: | -------: | ----------: |
+| 512 KB | 37.0 | 76.9% | 98.0 | 24.8% |
+| 1 MB | 76.9 | 75.9% | 98.3 | 16.8% |
+| 2 MB | 90.8 | 54.0% | 98.2 | 13.6% |
+| 4 MB | 92.5 | 40.4% | 97.8 | 15.1% |
+| 8 MB | 85.3 | 52.2% | 96.7 | 16.0% |
+
+(`gemm_fp16`, single rep per point. Raw cells use the nearest whole-packet window to the
+batch size; RoCE caps the batch at the 8 MB message.)
+
 ## Reproduce
 
 Run inside the project container (privileged, GPUs passed through, hugepages
@@ -292,6 +418,34 @@ before running; tear it down when finished:
 ./examples/run_spark_bench.sh socket-tcp sweep
 ./examples/run_spark_bench.sh socket-udp sweep
 ./scripts/setup_spark_wire_loopback_netns.sh down        # tear down when done
+```
+
+**GPU workload (FFT / GEMM)** re-runs a backend with a representative GPU
+workload in the receive path by exporting `WORKLOAD`. It composes with the same
+modes and netns setup as above (dpdk in the default namespace, rdma in the
+`dq_wire_*` namespaces):
+
+```bash
+# Raw / GPUDirect (netns down, ETH_DST_ADDR exported as above)
+WORKLOAD=fft  ./examples/run_spark_bench.sh dpdk smoke
+WORKLOAD=gemm ./examples/run_spark_bench.sh dpdk smoke
+# Socket / RoCE (netns up)
+WORKLOAD=fft  ./examples/run_spark_bench.sh rdma smoke
+WORKLOAD=gemm ./examples/run_spark_bench.sh rdma smoke
+```
+
+The chosen workload lands in the CSV `post_process` column; compare `gbps` /
+`gpu_sm_pct` against the matching `WORKLOAD=none` baseline.
+
+**Workload batch-size sweep** decouples the compute working set from the I/O unit
+by also exporting `WORKLOAD_BATCH` (bytes); it lands in the CSV `post_process_batch`
+column:
+
+```bash
+for B in 262144 524288 1048576 2097152 4194304 8388608; do
+  WORKLOAD=gemm_fp16 WORKLOAD_BATCH=$B ./examples/run_spark_bench.sh rdma smoke   # netns up
+done
+# raw: netns down, ETH_DST_ADDR exported; same loop with `dpdk`
 ```
 
 Each run writes `bench-results/<timestamp>-<backend>-<mode>/runs.csv`. See

@@ -29,6 +29,7 @@
 #include <infiniband/verbs.h>
 #include <rdma/rdma_cma.h>
 #include "src/engine.h"
+#include "src/daqiri_pool.h"
 #include <daqiri/daqiri.h>
 #include <mutex>
 
@@ -37,16 +38,21 @@ namespace daqiri {
 struct rdma_qp_params {
   struct ibv_cq* rx_cq;
   struct ibv_cq* tx_cq;
-  struct rte_ring* rx_ring;
-  struct rte_ring* tx_ring;
+  daqiri::Ring* rx_ring;
+  daqiri::Ring* tx_ring;
   // mqd_t rx_mq;
   // mqd_t tx_mq;
   struct ibv_qp_init_attr qp_attr;
 };
 
 struct rdma_thread_params {
+  // active == app-visible: true once rdma_get_server_conn_id() hands the
+  // conn_id to the caller. A slot is "occupied" (not reusable) as soon as
+  // client_id is set at CONNECT_REQUEST, which is earlier than active; slot
+  // selection must key off client_id, not active, or an accepted-but-not-yet-
+  // claimed connection can be overwritten by a later CONNECT_REQUEST.
   bool active = false;
-  struct rdma_cm_id* client_id;
+  struct rdma_cm_id* client_id = nullptr;
   struct ibv_pd* pd;
   rdma_qp_params qp_params;
   int if_idx;
@@ -60,6 +66,7 @@ struct rdma_thread_params {
   // holding it (server_q_params_ vectors and client_q_params_) construct
   // elements in place via resize() / try_emplace(), so this is fine.
   std::atomic<bool> ready_to_exit{false};
+  std::atomic<bool> worker_started{false};
 };
 
 // Used to spawn a new server thread for a particular client
@@ -107,7 +114,7 @@ class RdmaEngine : public Engine {
 
   void* get_packet_ptr(BurstParams* burst, int idx) override;
   uint32_t get_packet_length(BurstParams* burst, int idx) override;
-  uint16_t get_packet_flow_id(BurstParams* burst, int idx) override { return 0; }
+  FlowId get_packet_flow_id(BurstParams* burst, int idx) override { return 0; }
   Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) override {
     (void)burst;
     (void)idx;
@@ -193,16 +200,15 @@ class RdmaEngine : public Engine {
   std::queue<struct ibv_sge*> sge_bufs_;
   std::array<rdma_work_req, MAX_OUSTANDING_WR> out_wr_;
   uint64_t cur_wc_id_ = 0;
-  struct rte_mempool* rx_meta;
-  struct rte_mempool* tx_meta;
-  struct rte_mempool* pkt_len_pool_;
-  std::unordered_map<std::string, struct rte_mempool*> mr_pools_;
-  std::queue<struct rte_ring*> tx_rings_;
-  std::queue<struct rte_ring*> rx_rings_;
-  std::unordered_map<struct rdma_cm_id*, struct rte_ring*> tx_rings_map_;
-  std::unordered_map<struct rdma_cm_id*, struct rte_ring*> rx_rings_map_;
-  std::unordered_map<std::string, struct rte_ring*> mem_pools_;
-  struct rte_mempool* tx_burst_pool_;
+  daqiri::ObjectPool* rx_meta;
+  daqiri::ObjectPool* tx_meta;
+  daqiri::ObjectPool* pkt_len_pool_;
+  std::queue<daqiri::Ring*> tx_rings_;
+  std::queue<daqiri::Ring*> rx_rings_;
+  std::unordered_map<struct rdma_cm_id*, daqiri::Ring*> tx_rings_map_;
+  std::unordered_map<struct rdma_cm_id*, daqiri::Ring*> rx_rings_map_;
+  std::unordered_map<std::string, daqiri::Ring*> mem_pools_;
+  daqiri::ObjectPool* tx_burst_pool_;
   rdma_event_channel* cm_event_channel_;
   std::mutex threads_mutex_;
   std::mutex client_params_mutex_;
@@ -216,6 +222,7 @@ class RdmaEngine : public Engine {
   void server_tx(int if_idx, int q);
   void server_rx(int if_idx, int q);
   bool ack_event(rdma_cm_event* cm_event);
+  void launch_server_worker(rdma_thread_params* params);
   int mr_access_to_ibv(uint32_t access);
   bool get_ip_from_interface(const std::string_view& if_name, sockaddr_in& addr);
   int setup_thread_params(rdma_thread_params* params, bool is_server);

@@ -57,6 +57,19 @@ import daqiri
 The `daqiri` package re-exports the compiled `_daqiri` pybind11 module, so
 application code uses one import.
 
+DAQIRI package versions use CalVer in `YYYY.MM.PATCH` form. The Python package
+exposes `daqiri.__version__`, `daqiri.__version_info__`, and
+`daqiri.__abi_version__`; the ABI version is intentionally separate from the
+CalVer package version. The YAML `common.version` field remains the
+configuration schema version.
+
+```python
+import daqiri
+
+print(daqiri.__version__)
+print(daqiri.version_string(), daqiri.abi_version())
+```
+
 PyYAML is required at runtime when calling `daqiri_init()` with a Python `dict`
 or a config-like object that provides `as_dict()`.
 
@@ -84,6 +97,10 @@ finally:
     daqiri.print_stats()
     daqiri.shutdown()
 ```
+
+Only one engine may be active at a time. A second `daqiri_init()` before `shutdown()`
+returns `Status.INTERNAL_ERROR` without changing the live engine. After `shutdown()`, a
+later initialization starts with a fresh engine instance and fresh resources.
 
 Initialize from a Python dictionary:
 
@@ -382,9 +399,14 @@ Socket helpers return connection IDs and queue routing information. The
 returned port and queue can then be used with the normal burst APIs:
 
 ```python
+import socket
+
 status, conn_id = daqiri.socket_connect_to_server("192.0.2.10", 5000)
 if status == daqiri.Status.SUCCESS:
     status, port, queue = daqiri.socket_get_port_queue(conn_id)
+
+    # Socket options use OS constants directly; DAQIRI does not map option names.
+    daqiri.socket_setsockopt(conn_id, socket.SOL_SOCKET, socket.SO_RCVBUF, 8 * 1024 * 1024)
 
     status, rx_burst = daqiri.get_rx_burst(port, queue)
     if status == daqiri.Status.SUCCESS and rx_burst is not None:
@@ -405,6 +427,11 @@ if status == daqiri.Status.SUCCESS:
     else:
         daqiri.free_tx_metadata(tx_burst)
 ```
+
+`socket_setsockopt(conn_id, level, optname, value)` applies Linux `setsockopt`
+to an existing TCP/UDP socket connection. `value` may be `bool`, `int`, `str`,
+`bytes`, `bytearray`, or another bytes-like buffer. For structured options such
+as timeouts, pack the native struct yourself and pass it as bytes.
 
 RDMA follows the same tuple-returning style:
 
@@ -492,6 +519,9 @@ The workflow sections above show the common call order and ownership rules.
 
 | Function | Purpose |
 | --- | --- |
+| `version_string()` | Return the DAQIRI package version as `YYYY.MM.PATCH`. |
+| `version_year()` / `version_month()` / `version_patch()` | Return the CalVer components. |
+| `abi_version()` | Return the DAQIRI shared-library ABI version. |
 | `engine_type_from_string(str)` / `engine_type_to_string(type)` | Convert engine types. |
 | `stream_type_from_string(str)` / `stream_type_to_string(type)` | Convert stream types. |
 | `reorder_data_type_from_string(str)` / `reorder_data_type_to_string(type)` | Convert reorder data types. |
@@ -580,12 +610,22 @@ The workflow sections above show the common call order and ownership rules.
 | `drop_all_traffic(port)` | Install a high-priority drop rule on a port. |
 | `allow_all_traffic(port)` | Remove a drop rule installed by `drop_all_traffic`. |
 | `flush_port_queue(port, queue)` | Drain stale packets from a port queue. |
+| `add_rx_flow_async(port, flow)` | Return `(Status, op_id)` after enqueueing one dynamic RX flow create. |
+| `add_rx_flows_async(port, flows)` | Return `(Status, op_id)` after enqueueing a dynamic RX flow batch create. One completion returns `flow_ids` in input order. |
+| `delete_flow_async(flow_id)` | Return `(Status, op_id)` after enqueueing deletion of one dynamic flow. |
+| `poll_flow_op()` | Return `(Status, FlowOpResult)`, or `NOT_READY` when no dynamic flow operation has completed. |
 | `socket_connect_to_server(server_addr, server_port[, src_addr])` | Return `(Status, conn_id)`. |
 | `socket_get_port_queue(conn_id)` | Return `(Status, port, queue)`. |
 | `socket_get_server_conn_id(server_addr, server_port)` | Return `(Status, conn_id)`. |
+| `socket_setsockopt(conn_id, level, optname, value)` | Apply a Linux socket option to an existing TCP/UDP socket connection. |
 | `rdma_connect_to_server(server_addr, server_port[, src_addr])` | Return `(Status, conn_id)`. |
 | `rdma_get_port_queue(conn_id)` | Return `(Status, port, queue)`. |
 | `rdma_get_server_conn_id(server_addr, server_port)` | Return `(Status, conn_id)`. |
+
+Dynamic RX flows are RX-only in v1. The `action` attribute remains the single queue-action
+shorthand; use ordered `actions` when a raw DPDK or raw ibverbs dynamic rule needs hardware
+VLAN pop or VXLAN/GRE/NVGRE decapsulation before the final queue action. Static TX
+encapsulation/push rules are configured in YAML under `tx.flows`.
 
 ## Constants
 
@@ -596,6 +636,9 @@ The workflow sections above show the common call order and ownership rules.
 | `MAX_NUM_TX_QUEUES` | Maximum configured TX queues. |
 | `MAX_INTERFACES` | Maximum configured interfaces. |
 | `MAX_NUM_SEGS` | Maximum packet segments per burst. |
+| `DAQIRI_VERSION` | DAQIRI package version as `YYYY.MM.PATCH`. |
+| `DAQIRI_VERSION_YEAR` / `DAQIRI_VERSION_MONTH` / `DAQIRI_VERSION_PATCH` | CalVer components. |
+| `DAQIRI_ABI_VERSION` | DAQIRI shared-library ABI version. |
 | `DAQIRI_BURST_FLAG_REORDERED` | Burst flag indicating a reordered aggregate. |
 | `DAQIRI_BURST_FLAG_REORDER_TIMEOUT` | Burst flag indicating a reorder timeout aggregate. |
 | `MEM_ACCESS_LOCAL` | Local memory access flag. |
@@ -618,8 +661,10 @@ The workflow sections above show the common call order and ownership rules.
 | `RDMAMode` | `CLIENT`, `SERVER`, `INVALID` |
 | `RDMATransportMode` | `RC`, `UC`, `UD`, `INVALID` |
 | `SocketMode` | `CLIENT`, `SERVER`, `INVALID` |
-| `FlowType` | `QUEUE` |
-| `FlowMatchType` | `NORMAL`, `FLEX_ITEM` |
+| `FlowType` | `QUEUE`, `VLAN_PUSH`, `VLAN_POP`, `TUNNEL_ENCAP`, `TUNNEL_DECAP` |
+| `TunnelType` | `NONE`, `VXLAN`, `GRE`, `NVGRE` |
+| `FlowMatchType` | `IPV4_UDP`, `FLEX_ITEM` |
+| `FlowOpType` | `ADD_RX`, `ADD_RX_BATCH`, `DELETE` |
 | `ReorderMethod` | `INVALID`, `SEQ_BATCH_NUMBER`, `SEQ_PACKETS_PER_BATCH` |
 | `ReorderDataType` | `SAME`, `INT4`, `INT8`, `INT16`, `INT32`, `FP16`, `BF16`, `FP32`, `FP64`, `INVALID` |
 | `ReorderEndianness` | `HOST`, `NETWORK`, `INVALID` |
@@ -649,9 +694,13 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `RxQueueConfig` | RX queue wrapper with common queue fields and timeout. |
 | `TxQueueConfig` | TX queue wrapper with common queue fields. |
 | `MemoryRegionConfig` | Memory region kind, affinity, access flags, sizes, counts, and ownership. |
-| `FlowAction` | Flow action type and target ID. |
+| `VlanActionConfig` | VLAN push parameters: VLAN ID, priority, DEI, and ethertype. |
+| `TunnelConfig` | VXLAN, GRE, or NVGRE tunnel template fields for hardware encap/decap actions. |
+| `FlowAction` | Flow action type, queue target ID, optional VLAN config, and optional tunnel config. |
 | `FlowMatch` | Flow match fields for UDP, IPv4, and flex item matching. |
-| `FlowConfig` | Named flow rule combining action and match. |
+| `FlowConfig` | Static named flow rule combining legacy `action`, ordered `actions`, and match fields. |
+| `FlowRuleConfig` | Dynamic RX flow rule combining legacy `action`, ordered `actions`, and match fields. |
+| `FlowOpResult` | Dynamic flow operation completion. Batch adds return `flow_ids` in input order. |
 | `FlexItemConfig` | Flexible parser item configuration. |
 | `FlexItemMatch` | Flexible parser match value and mask. |
 | `SocketConfig` | Socket client/server endpoint URI, legacy IP/port, and timing settings. |

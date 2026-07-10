@@ -6,14 +6,16 @@
 # split across hosts: put 1.1.1.1/24 on the client host's p0 and 2.2.2.2/24
 # on the server host's p0 (instead of both addresses on one machine).
 #
+# Before running, apply cross-host L3 on both boxes:
+#   sudo scripts/setup_spark_xhost_net.sh --role tx --peer-mac <RX_P0_MAC>   # TX host
+#   sudo scripts/setup_spark_xhost_net.sh --role rx --peer-mac <TX_P0_MAC>   # RX host
+# See docs/tutorials/system_configuration.md#cross-host-variant-two-sparks.
+#
 # Run with --mode client on the TX host and --mode server on the RX host:
 #   server (RX): sudo ./daqiri_bench_rdma <this.yaml> --mode server --seconds 30
 #   client (TX): sudo ./daqiri_bench_rdma <this.yaml> --mode client --seconds 30
 #
-# This config is the regression test for the RDMA cross-host receive-
-# provisioning bug fixed in issue #113. Before the fix, the server-side
-# worker thread crashed on launch and no receives were ever posted.
-#
+# Regression test for cross-host RDMA receive readiness (#113, #174).
 # Spark substitutions baked in here:
 #   - IPs: 1.1.1.1 (client/TX p0) and 2.2.2.2 (server/RX p0)
 #   - cpu_core values for DAQIRI queues and benchmark app role threads from

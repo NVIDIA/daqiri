@@ -28,43 +28,13 @@
 namespace daqiri::bench {
 
 namespace {
-// kReorderDataTypeSame / kReorderEndiannessNetwork from src/kernels.cu -- a pure
+// kReorderDataTypeSame / kReorderEndiannessNetwork from src/kernels.cu — a pure
 // vectorized copy (no quantization), reading the seq number network-byte-order.
 constexpr uint8_t kDataTypeSame = 0;
 constexpr uint8_t kEndianNetwork = 1;
 
 cudaStream_t as_stream(void* s) {
   return static_cast<cudaStream_t>(s);
-}
-
-__global__ void packet_gather_copy_payload_kernel(void* out, const void* const* in,
-                                                  uint32_t payload_len,
-                                                  uint32_t payload_byte_offset,
-                                                  uint32_t num_pkts) {
-  const uint32_t pkt_idx = blockIdx.x;
-  if (pkt_idx >= num_pkts) {
-    return;
-  }
-
-  const auto* src_pkt = static_cast<const uint8_t*>(in[pkt_idx]);
-  if (src_pkt == nullptr) {
-    return;
-  }
-  const auto* src = src_pkt + payload_byte_offset;
-  auto* dst = static_cast<uint8_t*>(out) + (static_cast<size_t>(pkt_idx) * payload_len);
-  for (uint32_t offset = threadIdx.x; offset < payload_len; offset += blockDim.x) {
-    dst[offset] = src[offset];
-  }
-}
-
-void packet_gather_copy_payload(void* out, const void* const* in, uint32_t payload_len,
-                                uint32_t payload_byte_offset, uint32_t num_pkts,
-                                cudaStream_t stream) {
-  if (out == nullptr || in == nullptr || payload_len == 0 || num_pkts == 0) {
-    return;
-  }
-  packet_gather_copy_payload_kernel<<<num_pkts, 128, 0, stream>>>(
-      out, in, payload_len, payload_byte_offset, num_pkts);
 }
 }  // namespace
 

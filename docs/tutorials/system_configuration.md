@@ -1414,6 +1414,32 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     ip link show enP2p1s0f1np1 | grep -oE "mtu [0-9]+"
     ```
 
+    ### Cross-host variant (two Sparks)
+
+    For a **two-host** p0↔p0 cable (instead of the single-host p0↔p1 loop above), split the nmcli profiles across the boxes:
+
+    - TX host: `sudo nmcli connection up daqiri-tx` only (`1.1.1.1/24` on `enp1s0f0np0`)
+    - RX host: `sudo nmcli connection up daqiri-rx` only (`2.2.2.2/24` on `enp1s0f0np0`)
+
+    The `/24` assignment alone does not give the kernel a route to the peer. On **each** host, add a host route and static neighbor for the peer on the cabled port (read the peer's MAC on the other box with `cat /sys/class/net/enp1s0f0np0/address`):
+
+    ```bash
+    # TX host
+    sudo scripts/setup_spark_xhost_net.sh --role tx --peer-mac <RX_P0_MAC>
+
+    # RX host
+    sudo scripts/setup_spark_xhost_net.sh --role rx --peer-mac <TX_P0_MAC>
+    ```
+
+    Verify before running `_xhost` benchmarks (raw or RDMA):
+
+    ```bash
+    ping -c 3 <peer-ip>     # 2.2.2.2 on TX, 1.1.1.1 on RX
+    ip route get <peer-ip>  # must name enp1s0f0np0
+    ```
+
+    Bench run details: [Cross-host two-DGX-Spark loopback](../benchmarks/raw_benchmarking.md#cross-host-two-dgx-spark-loopback).
+
     ### Enable GPUDirect
 
     **No GPUDirect kernel-module setup is required on GB10.** Set `kind: "host_pinned"` in the YAML and you're done — there is no system-side step to perform. Buffers are allocated by DAQIRI via `cudaHostAlloc` (so they are CUDA-addressable) and registered with DPDK via `rte_extmem_register`. End-to-end TX↔RX over the QSFP loop with `kind: "host_pinned"`, `num_bufs: 51200`, `batch_size: 10240` reaches **~94 Gbps** unicast (verified against `main` 9ebd729, which contains [PR #41](https://github.com/nvidia/daqiri/pull/41)).

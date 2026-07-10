@@ -1,0 +1,34 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+ * All rights reserved. SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#define DAQIRI_VERSION "@PROJECT_VERSION@"
+#define DAQIRI_VERSION_YEAR @PROJECT_VERSION_MAJOR@
+#define DAQIRI_VERSION_MONTH @PROJECT_VERSION_MINOR@
+#define DAQIRI_VERSION_PATCH @PROJECT_VERSION_PATCH@
+#define DAQIRI_ABI_VERSION @DAQIRI_ABI_VERSION@
+
+namespace daqiri {
+
+inline constexpr const char* version_string() noexcept { return DAQIRI_VERSION; }
+inline constexpr int version_year() noexcept { return DAQIRI_VERSION_YEAR; }
+inline constexpr int version_month() noexcept { return DAQIRI_VERSION_MONTH; }
+inline constexpr int version_patch() noexcept { return DAQIRI_VERSION_PATCH; }
+inline constexpr int abi_version() noexcept { return DAQIRI_ABI_VERSION; }
+
+}  // namespace daqiri

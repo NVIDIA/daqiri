@@ -439,6 +439,7 @@ enum {
   MLX5_DR_MATCH_CRITERIA_OUTER = 1 << 0,  // match_criteria_enable: outer_headers
   MLX5_DR_MATCH_CRITERIA_MISC4 = 1 << 5,  // match_criteria_enable: misc_parameters_4
   MLX5_ETHERTYPE_IPV4 = 0x0800,
+  MLX5_ETHERTYPE_ECPRI = 0xAEFE,  // eCPRI over Ethernet
   MLX5_IP_PROTOCOL_UDP = 0x11,
 };
 
@@ -479,6 +480,8 @@ enum {
   MLX5_OPCODE_WAIT = 0x0f,
   MLX5_OPC_MOD_WAIT_TIME = 2,
   MLX5_WAIT_COND_CYCLIC_SMALLER = 5,
+  MLX5_OPCODE_ENHANCED_MPSW = 0x29,
+  MLX5_EMPW_MAX_DSEG = 58,
 };
 
 // Wait segment (16 bytes of control + an 8-byte value + 8-byte mask = 32 B,

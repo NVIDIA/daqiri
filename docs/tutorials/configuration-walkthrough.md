@@ -12,7 +12,7 @@ hide:
 DAQIRI exposes a single API on top of multiple packet I/O stacks, selected at runtime with `stream_type` and endpoint URI schemes such as `udp://`, `tcp://`, and `roce://`. Pick the row that matches your hardware and the role of the other endpoint:
 
 - **Raw Ethernet** — `stream_type: "raw"`. Kernel-bypass with GPUDirect zero-copy. Highest performance. Requires an [NVIDIA ConnectX-class NIC](https://www.nvidia.com/en-us/networking/ethernet-adapters/); `tx_port` and `rx_port` can share one physical NIC for a single-host closed-loop bench, or be split across two hosts.
-- **Socket — UDP / TCP** — `stream_type: "socket"` with `udp://` or `tcp://` endpoints. Plain Linux kernel sockets. No NIC, no privileges, no special CMake flags. Useful as a comparison baseline and as a path to first results on a system without an NVIDIA NIC.
+- **Socket — UDP / TCP** — `stream_type: "socket"` with `udp://` or `tcp://` endpoints. Plain Linux kernel sockets. No NIC, no privileges, no special CMake flags. Useful as a comparison baseline and as a path to first results on a system without an NVIDIA NIC. Socket options are runtime API calls: resolve a connection ID, then pass native Linux constants to `socket_setsockopt()` rather than adding option names to YAML.
 - **Socket — RoCE (RDMA)** — `stream_type: "socket"` and `roce://` endpoints. RDMA verbs over Ethernet, with a server/client connection model and a NIC-level reliable transport. Primarily intended for setups where **one** endpoint is a third-party RoCE implementation (FPGA, instrument, customer black box). When both peers run DAQIRI, prefer an upper-layer library such as MPI / NCCL / UCX instead.
 
 If you don't have any NIC at all, the `*_sw_loopback*` variants of the Raw Ethernet configs need no hardware — useful for first-time build verification.
@@ -30,12 +30,19 @@ For a shorter selection guide, start with the [Benchmarking overview](../benchma
     - **Four queue closed-loop TX+RX** (template — replace `<placeholders>`) — [`daqiri_bench_raw_tx_rx_4q.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_4q.yaml). Uses one application worker per TX/RX queue, with each `bench_tx` entry sending a different UDP flow.
     - **DGX Spark / GB10** (prefilled) — [`daqiri_bench_raw_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark.yaml). `kind: host_pinned` for the integrated GPU; cores, PCIe addresses, and IPs are prefilled. See the [Spark profile callout](../benchmarks/raw_benchmarking.md#update-the-loopback-configuration) for run details.
     - **DGX Spark multi-queue core-scaling matrix** (prefilled) — one base config [`daqiri_bench_raw_tx_rx_spark_mq.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark_mq.yaml) (the balanced TX=2/RX=2 superset; cores TX → 16,17, RX → 18,19) from which `examples/run_spark_mq_bench.sh` (via `scripts/gen_spark_mq_config.py`) derives the four `(TX, RX)` cells — (1,1), (1,2) (RX scaling), (2,1) (TX scaling), (2,2) (balanced) — by pruning queues/flows. All run on `daqiri_bench_raw_gpudirect` at the native 8 KB shape.
-    - **DGX Spark cross-host** (prefilled, runs on two Sparks) — [`daqiri_bench_raw_tx_spark_xhost.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_spark_xhost.yaml) on the TX host and [`daqiri_bench_raw_rx_spark_xhost.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_rx_spark_xhost.yaml) on the RX host. Each host runs `daqiri_bench_raw_gpudirect` against its own half; cables connect p0↔p0 between the two boxes. See the [Cross-host two-DGX-Spark loopback](../benchmarks/raw_benchmarking.md#cross-host-two-dgx-spark-loopback) section for run details.
+    - **DGX Spark cross-host** (prefilled, runs on two Sparks) — [`daqiri_bench_raw_tx_spark_xhost.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_spark_xhost.yaml) on the TX host and [`daqiri_bench_raw_rx_spark_xhost.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_rx_spark_xhost.yaml) on the RX host. Each host runs `daqiri_bench_raw_gpudirect` against its own half; cables connect p0↔p0 between the two boxes. Apply the [cross-host network setup](../tutorials/system_configuration.md#cross-host-variant-two-sparks) before running. See the [Cross-host two-DGX-Spark loopback](../benchmarks/raw_benchmarking.md#cross-host-two-dgx-spark-loopback) section for run details.
     - **No physical NIC available** — [`daqiri_bench_raw_sw_loopback.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_sw_loopback.yaml). `loopback: "sw"`, no NIC required. Useful for first-time build verification, not representative of production performance.
     - **RTX PRO 6000 Blackwell — no cable** — [`daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml). `kind: device`, `affinity: 0`; build with [`CMAKE_CUDA_ARCHITECTURES=120`](../tutorials/bare-metal-cmake-build.md). SW loopback smoke test only.
     - **RTX PRO 6000 Blackwell — real NIC, dual-port on one card** (prefilled dev box) — [`daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml). `61:00.0` p0 → `61:00.1` p1, GPU 0 TX / GPU 1 RX; needs L2 link between ports (not SW loopback). See [`rtx_pro_6000_baseline.md`](https://github.com/nvidia/daqiri/blob/main/examples/rtx_pro_6000_baseline.md) for hardware limits and measured baseline.
     - **RTX PRO 6000 — same-PF NIC attempt** (experimental) — [`daqiri_bench_raw_tx_rx_rtx_pro_6000_nic_same_port.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_rtx_pro_6000_nic_same_port.yaml). Single port `61:00.0` TX+RX; failed `daqiri_init` on reference box — kept for follow-up.
     - **RTX PRO 6000 Blackwell — dual-NIC loopback** (generic template) — [`daqiri_bench_raw_tx_rx_rtx_pro_6000.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_rtx_pro_6000.yaml). Placeholders for Cliff's 800 Gbps cross-card target; fill PCIe BDFs and MACs.
+
+    **Raw Ethernet hardware tunnel transforms** — run on `daqiri_bench_raw_gpudirect`; replace placeholders and use a raw DPDK or raw ibverbs build.
+
+    - **VXLAN encap + decap** — [`daqiri_bench_raw_tx_rx_vxlan.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_vxlan.yaml).
+    - **VLAN push + pop** — [`daqiri_bench_raw_tx_rx_vlan.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_vlan.yaml).
+    - **GRE encap + decap** — [`daqiri_bench_raw_tx_rx_gre.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_gre.yaml).
+    - **NVGRE encap + decap** — [`daqiri_bench_raw_tx_rx_nvgre.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_nvgre.yaml).
 
     To watch the same raw loopback benchmark with live Prometheus and Grafana
     counters, use the Grafana compose stack described in
@@ -46,7 +53,7 @@ For a shorter selection guide, start with the [Benchmarking overview](../benchma
     - **Generic** (template — replace IPs) — [`daqiri_bench_rdma_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx.yaml).
     - **DGX Spark** (prefilled) — [`daqiri_bench_rdma_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx_spark.yaml). See [Socket and RDMA Benchmarking](../benchmarks/socket_benchmarking.md#run-the-rdma-roce-benchmark) for namespace and wire-counter run details.
     - **DGX Spark netns wire loopback** (prefilled, combined base) — [`daqiri_bench_rdma_tx_rx_spark_netns.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx_spark_netns.yaml). Carries both roles; `examples/run_spark_bench.sh` (via `scripts/gen_spark_netns_config.py`) splits it per role and runs each in its own network namespace (`--mode server` / `--mode client`) so RDMA-CM resolves over the wire; see [Socket and RDMA Benchmarking](../benchmarks/socket_benchmarking.md#run-the-rdma-roce-benchmark).
-    - **DGX Spark cross-host** (prefilled, runs on two Sparks) — [`daqiri_bench_rdma_tx_rx_spark_xhost.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx_spark_xhost.yaml). Run with `--mode server` on the RX host and `--mode client` on the TX host. See the [Cross-host two-DGX-Spark loopback](../benchmarks/raw_benchmarking.md#cross-host-two-dgx-spark-loopback) section for run details.
+    - **DGX Spark cross-host** (prefilled, runs on two Sparks) — [`daqiri_bench_rdma_tx_rx_spark_xhost.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx_spark_xhost.yaml). Run with `--mode server` on the RX host and `--mode client` on the TX host. Apply the [cross-host network setup](../tutorials/system_configuration.md#cross-host-variant-two-sparks) before running. See the [Cross-host two-DGX-Spark loopback](../benchmarks/raw_benchmarking.md#cross-host-two-dgx-spark-loopback) section for run details.
 
     **Socket — UDP / TCP** (`stream_type: "socket"` with `udp://` or `tcp://` endpoints) — runs on `daqiri_bench_socket`. The shipped smoke-test configs bind to `127.0.0.1`; see [Socket and RDMA Benchmarking](../benchmarks/socket_benchmarking.md) for namespace-based wire tests.
 
@@ -104,10 +111,13 @@ For a shorter selection guide, start with the [Benchmarking overview](../benchma
 ??? question "4. I need flow-based load balancing across multiple RX queues"
     - **Closed-loop TX+RX with four queues** — [`daqiri_bench_raw_tx_rx_4q.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_4q.yaml) (runs on `daqiri_bench_raw_gpudirect`).
     - [`daqiri_bench_raw_rx_multi_q.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_rx_multi_q.yaml) (runs on `daqiri_bench_raw_gpudirect`).
+    - **Dynamic RX flow lifecycle** — [`daqiri_example_dynamic_rx_flow.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_example_dynamic_rx_flow.yaml) (runs on `daqiri_example_dynamic_rx_flow`). Starts with `flow_isolation: true` and no configured flows, then dynamically routes one UDP flow to RX queue 0 and queue 1 in sequence.
 
-    The four-queue TX+RX config is self-contained and maps each `bench_tx`/`bench_rx` list entry to the matching DAQIRI queue. The RX-only config is for an external traffic source. Both demonstrate flow-rule-based routing across multiple RX queues, with explicit CPU cores for both DAQIRI queue workers and benchmark application workers.
+    The four-queue TX+RX config is self-contained and maps each `bench_tx`/`bench_rx` list entry to the matching DAQIRI queue. The RX-only config is for an external traffic source. The dynamic-flow example demonstrates queues-only startup and runtime flow insertion/deletion. All three demonstrate flow-rule-based routing across multiple RX queues, with explicit CPU cores for both DAQIRI queue workers and benchmark application workers.
 
     *Requires: Raw Ethernet build (`DAQIRI_ENGINE` includes `dpdk`) + NVIDIA ConnectX-class NIC. The RX-only config also requires a separate TX traffic source.*
+
+    A [diff-style walkthrough](#flow-steering) of multi-queue RX routing appears below.
 
 ??? question "5. I need to record packet data to disk"
     Sub-question: **which output format?**
@@ -126,9 +136,16 @@ For a shorter selection guide, start with the [Benchmarking overview](../benchma
 
     *Requires: built with `-DDAQIRI_ENABLE_GDS=ON`, NVMe-backed storage, working cuFile / `nvidia_fs` stack, `gdscheck.py -p` reports `NVMe : Supported`.*
 
+??? question "6. I need to cap (pace) the transmit rate in hardware"
+    - [`daqiri_bench_raw_tx_rx_pacing.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_pacing.yaml) (runs on `daqiri_bench_raw_gpudirect`).
+
+    This is the base TX+RX template with a per-queue `pacing_mbps` cap added to the TX queue (it uses the default DPDK engine; pacing is supported only on the DPDK engine — the `ibverbs` engine does not support `pacing_mbps` and `daqiri_init()` fails if it is set on an `ibverbs` queue). The NIC meters the queue out so its average TX rate stays at or below the configured Mbps; the limit is enforced on an average basis and idle gaps do not accumulate burst credit. Set `pacing_mbps: 0` (or remove it) to send at line rate. Validate by computing the achieved rate from the benchmark's RX line (`Gbps = bytes * 8 / seconds / 1e9`) and confirming it tracks the configured cap. See the `pacing_mbps` key in the [TX queue configuration](../api-reference/configuration.md#transmit-configuration-tx).
+
+    *Requires: a Mellanox/mlx5 NIC with hardware send scheduling (ConnectX-7 or later). On devices without it, `pacing_mbps` is ignored with a warning and TX runs at line rate.*
+
 ## Annotated walkthrough
 
-This section walks through three YAML configurations: the base TX+RX template, followed by diff-style snippets for header-data split (HDS) and GPU packet reordering. Click on the :material-plus-circle: icons to expand explanations for each annotated line.
+This section walks through four YAML topics: the base TX+RX template, flow steering, header-data split (HDS), and GPU packet reordering. Click on the :material-plus-circle: icons to expand explanations for each annotated line.
 
 Annotations are prefixed with a category icon when applicable:
 
@@ -230,19 +247,35 @@ bench_tx: # (25)!
 14. :material-package-variant: **`batch_size`** · `integer (packets)` · *required* — Packets per burst. The RX path delivers packets to the application in batches of this size; the TX path should not send more packets than this per call.
 15. :material-wrench: **`cpu_core`** · `integer (CPU core ID)` · *required* — Core that this queue uses to poll the NIC. Ideally one [isolated core](system_configuration.md#step-5-isolate-cpu-cores) per queue. **Must match your system's available cores.**
 16. The list of memory regions where this queue will write/read packets. **Order matters:** the first region is used until one buffer fills (`buf_size`), then the next region is used, and so on until the packet is fully written/read. The [HDS walkthrough](#header-data-split-hds) below shows a chained example.
-17. **`offloads`** · `list of string` · *TX queues only* — Optional tasks offloaded to the NIC. **Supported:** `tx_eth_src` (the NIC inserts the Ethernet source MAC into outgoing headers). Note: IP, UDP, and Ethernet checksums/CRC are always done by the NIC and are not optional.
+17. **`offloads`** · `list of string` · *TX queues only* — Optional tasks offloaded to the NIC. **Supported:** `tx_eth_src` (the NIC inserts the Ethernet source MAC into outgoing headers). `daqiri_init()` fails if the NIC cannot install the offload flow rule. Note: IP, UDP, and Ethernet checksums/CRC are always done by the NIC and are not optional.
 18. :material-wrench: **`address`** · `string (PCIe BDF)` · *required* — PCIe bus address of the RX interface. May share the BDF with `tx_port` for single-port closed-loop benches, or be a different NIC for two-port setups. **Must be changed for your system.**
-19. **`flow_isolation`** · `boolean` · *default: `false`* — When `true`, packets that don't match this interface's MAC or any rule under `flows` are delegated back to the Linux kernel (no kernel bypass). Useful for letting the interface still handle ARP, ICMP, etc. while DAQIRI takes the application packets. When `false`, every packet hitting the interface must be processed (or dropped) by your application.
-20. The list of flows. Flows route packets to a queue based on packet fields. If `flows` is missing, all packets are routed to the first queue.
+19. **`flow_isolation`** · `boolean` · *default: `false`* — When `true`, static startup flows send unmatched traffic in their flow class back to the Linux kernel via fallback rules, while queues-only dynamic configs deliver no traffic to DAQIRI queues until dynamic rules are installed. Useful for letting the interface still handle ARP, ICMP, etc. while DAQIRI takes the application packets. When `false`, every packet hitting the interface must be processed (or dropped) by your application.
+20. The list of static startup flows. Flows route packets to a queue based on packet fields; queues-only configs may omit this list and add dynamic RX flows after initialization. For Raw Ethernet, each configured rule is programmed into the NIC during `daqiri_init()`; initialization fails if any rule or the send-to-kernel fallback (when `flow_isolation: true`) cannot be installed. Per interface, use only standard UDP/IP flows or only flex-item flows — not both.
 21. **`id`** · `integer` · *required* — Tag attached to packets that match this flow. Useful when multiple flows route to a single queue and the application needs to distinguish which rule matched.
-22. What to do with packets that match this flow. The only currently supported action is `type: queue` (send the packet to the queue with the given `id`).
+22. What to do with packets that match this flow. Existing configs can use the legacy single `action:` map with `type: queue` to send packets to the queue with the given `id`. New hardware transform flows use ordered `actions:`; RX transform flows can `vlan_pop` or `tunnel_decap` and must end with `type: queue`. That queue `id` must match an `rx.queues` entry on this interface; `daqiri_init()` rejects unknown queue IDs during config validation.
 23. :material-package-variant: List of rules to match packets against. **All** rules must hold for a packet to match the flow. Currently supported keys: `udp_src` / `udp_dst` (UDP source/destination port numbers, integer), `ipv4_len` (full IPv4 packet length in bytes, integer). **Adjust to match your incoming traffic.**
 24. The `bench_rx` section is specific to the benchmark application. It is a list of application worker configs; list entries map to DAQIRI RX queues on the named interface, either by explicit `queue_id` or by queue-list order when `queue_id` is omitted. `cpu_core` pins the benchmark application's RX worker thread; it is separate from the DAQIRI queue `cpu_core` above, and can use the same core only when you intentionally want to share. In this base config there is one RX queue, so there is one entry. Other DAQIRI binaries (e.g. the reorder-quantize bench) may add fields here; see those configs for details.
-25. :material-package-variant: The `bench_tx` section configures the TX side of the benchmark: the benchmark application's TX worker core, packet sizes, and the Ethernet/IP/UDP header fields embedded in outgoing packets. It is a list for the same reason as `bench_rx`: each entry maps to a DAQIRI TX queue on the named interface, either by explicit `queue_id` or by queue-list order when `queue_id` is omitted. The `cpu_core` field pins the application TX thread. The `eth_dst_addr` is required when `flow_isolation` is enabled on the RX interface. The `ip_src_addr` / `ip_dst_addr` are only needed when traffic is routed across subnets — for a direct cable loopback, any value works. The `payload_size`, `header_size`, and UDP ports should match your application's packet format.
+25. :material-package-variant: The `bench_tx` section configures the TX side of the benchmark: the benchmark application's TX worker core, packet sizes, and the Ethernet/IP/UDP header fields embedded in outgoing packets. It is a list for the same reason as `bench_rx`: each entry maps to a DAQIRI TX queue on the named interface, either by explicit `queue_id` or by queue-list order when `queue_id` is omitted. The `cpu_core` field pins the application TX thread. The `eth_dst_addr` is required when `flow_isolation` is enabled on the RX interface. The `ip_src_addr` / `ip_dst_addr` are only needed when traffic is routed across subnets — for a direct cable loopback, any value works. The `payload_size`, `header_size`, and UDP ports should match your application's packet format. Hardware TX VLAN push or tunnel encapsulation is configured under `daqiri.cfg.interfaces[].tx.flows`, not in `bench_tx`; application buffers remain the pre-encap packet.
+
+### Flow steering
+
+Raw Ethernet RX can steer packets into GPU queues, a flow-matched host queue, or a kernel fallback path for traffic that matches no rule. The animation below is a conceptual superset of the paths DAQIRI supports; the four-queue YAML example maps one UDP flow per GPU RX queue.
+
+<div class="packet-diagram" markdown="1">
+![Flow steering](../images/packet_diagrams/flow_steering/flow-steering.webp)
+</div>
+
+Matched packets land in **queue 1** (host memory), **queues 2–4** (GPU memory), or the unnamed top host row when no rule matches (grey packets through the Linux kernel).
+
+The four-queue example [`daqiri_bench_raw_tx_rx_4q.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_4q.yaml) maps one UDP flow per GPU RX queue via `rx.flows` and matching `bench_tx` UDP ports.
 
 ### Header-data split (HDS)
 
 For applications that parse small per-packet fields on the CPU while keeping the payload on the GPU, DAQIRI supports **header-data split (HDS)**: the NIC writes the header bytes to a CPU buffer (segment 0) and the payload to a GPU buffer (segment 1) using GPUDirect zero-copy. The packet is split at a fixed byte boundary defined by the `buf_size` of the first region in the queue's `memory_regions:` list.
+
+<div class="packet-diagram" markdown="1">
+![Header-data split](../images/packet_diagrams/hds/header-data-split.webp)
+</div>
 
 The canonical HDS config is [`daqiri_bench_raw_tx_rx_hds.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_hds.yaml). It builds on the base TX+RX config above; only the deltas are shown here.
 
@@ -322,6 +355,10 @@ The HDS bench runs on `daqiri_bench_raw_hds`:
 ### Packet reordering on the GPU
 
 For UDP workloads where packets arrive out-of-order and need to be placed at their correct offset in a GPU buffer before the application sees them, DAQIRI provides a **GPU reorder kernel**: the kernel reads a sequence number from each packet and writes the packet into a dedicated landing region at the correct slot. The downstream consumer reads a fully ordered batch with no CPU touch.
+
+<div class="packet-diagram" markdown="1">
+![GPU packet reorder](../images/packet_diagrams/reorder/packet-reorder.webp)
+</div>
 
 The canonical reorder config is [`daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml) (`seq_packets_per_batch` algorithm, GPU kernel, closed-loop TX+RX). It builds on the base TX+RX config above; only the deltas are shown here.
 
@@ -426,6 +463,12 @@ The reorder bench runs on `daqiri_bench_raw_reorder_seq`:
 ```bash
 ./build/examples/daqiri_bench_raw_reorder_seq ./build/examples/daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml --seconds 10
 ```
+
+When the wire format and compute format differ, the quantize variant adds an in-kernel int4 → fp32 conversion step:
+
+<div class="packet-diagram" markdown="1">
+![GPU reorder and convert](../images/packet_diagrams/reorder_quantize/packet-reorder-quantize.webp)
+</div>
 
 Other reorder variants are listed under [question 2 of the decision tree above](#choosing-an-example-config): the CPU-kernel variant, the RX-only variants, and the `seq_batch_number` algorithm with in-kernel int4 → fp32 type conversion (runs on `daqiri_bench_raw_reorder_quantize`).
 

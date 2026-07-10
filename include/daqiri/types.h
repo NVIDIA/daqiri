@@ -29,6 +29,7 @@
 #include <linux/if_ether.h>
 #include <netinet/ip.h>
 #include <linux/udp.h>
+#include <netinet/in.h>
 #include <cuda_runtime.h>
 
 namespace daqiri {
@@ -44,6 +45,10 @@ static inline constexpr uint32_t MAX_INTERFACES = 4;
 static inline constexpr int MAX_NUM_SEGS = 4;
 static inline constexpr uint32_t DAQIRI_BURST_FLAG_REORDERED = (1U << 28);
 static inline constexpr uint32_t DAQIRI_BURST_FLAG_REORDER_TIMEOUT = (1U << 29);
+static inline constexpr uint32_t DEFAULT_DYNAMIC_FLOW_CAPACITY = 0;
+
+using FlowId = uint32_t;
+using FlowOpId = uint64_t;
 
 struct ReorderBurstInfo {
   uint64_t batch_id;
@@ -115,7 +120,7 @@ struct BurstHeaderParams {
   uint16_t port_id;
   uint16_t q_id;
   int num_segs;
-  uint32_t nbytes;
+  uint64_t nbytes;
   uintptr_t first_pkt_addr;
   uint32_t max_pkt;
   uint32_t max_pkt_size;
@@ -625,6 +630,10 @@ struct RxQueueConfig {
 
 struct TxQueueConfig {
   CommonQueueConfig common_;
+  // Packet pacing: average TX rate cap in megabits/sec (L2 frame bytes). 0
+  // disables pacing (line-rate). Honored only by engines/devices with accurate
+  // send scheduling (wait-on-time + real-time clock).
+  uint64_t pacing_mbps_ = 0;
 };
 
 // struct FlowConfig {
@@ -633,40 +642,244 @@ struct TxQueueConfig {
 //   std::string pattern_;
 // };
 
-enum class FlowType { QUEUE };
+enum class FlowType {
+  QUEUE,
+  VLAN_PUSH,
+  VLAN_POP,
+  TUNNEL_ENCAP,
+  TUNNEL_DECAP,
+};
+
+inline FlowType flow_type_from_string(const std::string& str) {
+  if (str == "queue") { return FlowType::QUEUE; }
+  if (str == "vlan_push") { return FlowType::VLAN_PUSH; }
+  if (str == "vlan_pop") { return FlowType::VLAN_POP; }
+  if (str == "tunnel_encap") { return FlowType::TUNNEL_ENCAP; }
+  if (str == "tunnel_decap") { return FlowType::TUNNEL_DECAP; }
+  throw std::invalid_argument("Unknown flow action type '" + str + "'");
+}
+
+inline std::string flow_type_to_string(FlowType type) {
+  switch (type) {
+    case FlowType::QUEUE:
+      return "queue";
+    case FlowType::VLAN_PUSH:
+      return "vlan_push";
+    case FlowType::VLAN_POP:
+      return "vlan_pop";
+    case FlowType::TUNNEL_ENCAP:
+      return "tunnel_encap";
+    case FlowType::TUNNEL_DECAP:
+      return "tunnel_decap";
+  }
+  return "unknown";
+}
+
+enum class TunnelType {
+  NONE,
+  VXLAN,
+  GRE,
+  NVGRE,
+};
+
+inline TunnelType tunnel_type_from_string(const std::string& str) {
+  if (str == "vxlan") { return TunnelType::VXLAN; }
+  if (str == "gre") { return TunnelType::GRE; }
+  if (str == "nvgre") { return TunnelType::NVGRE; }
+  throw std::invalid_argument("Unknown tunnel type '" + str + "'");
+}
+
+inline std::string tunnel_type_to_string(TunnelType type) {
+  switch (type) {
+    case TunnelType::VXLAN:
+      return "vxlan";
+    case TunnelType::GRE:
+      return "gre";
+    case TunnelType::NVGRE:
+      return "nvgre";
+    case TunnelType::NONE:
+      return "none";
+  }
+  return "unknown";
+}
+
+struct VlanActionConfig {
+  uint16_t vlan_id_ = 0;
+  uint8_t pcp_ = 0;
+  uint8_t dei_ = 0;
+  uint16_t ethertype_ = 0x8100;
+};
+
+struct TunnelConfig {
+  TunnelType type_ = TunnelType::NONE;
+  std::string outer_eth_src_;
+  std::string outer_eth_dst_;
+  std::string outer_ipv4_src_;
+  std::string outer_ipv4_dst_;
+  uint8_t outer_ipv4_ttl_ = 64;
+  uint8_t outer_ipv4_tos_ = 0;
+  uint16_t outer_udp_src_ = 0;
+  uint16_t outer_udp_dst_ = 4789;
+  uint32_t vni_ = 0;
+  uint16_t gre_protocol_ = 0x0800;
+  uint32_t tni_ = 0;
+  uint8_t flow_id_ = 0;
+};
 
 struct FlowAction {
-  FlowType type_;
-  uint16_t id_;
+  FlowType type_ = FlowType::QUEUE;
+  uint16_t id_ = 0;
+  VlanActionConfig vlan_;
+  TunnelConfig tunnel_;
 };
 
 struct FlexItemMatch {
-  uint16_t flex_item_id_;
-  uint32_t val_;
-  uint32_t mask_;
+  uint16_t flex_item_id_ = 0;
+  uint32_t val_ = 0;
+  uint32_t mask_ = 0;
+};
+
+// eCPRI-over-Ethernet (EtherType 0xAEFE) RX flow match. The eCPRI EtherType is
+// matched implicitly; the common-header message type and the message-body
+// identifier (pc_id for message types 0/1, rtc_id for type 2) are matched only
+// when their match_*_ flag is set. Matching the identifier requires a message
+// type (the hardware needs a known message type to locate the body field), so
+// match_id_ implies match_msg_type_.
+struct EcpriMatch {
+  bool match_msg_type_ = false;
+  uint8_t msg_type_ = 0;  // eCPRI common-header message type (RTE_ECPRI_MSG_TYPE_*)
+  bool match_id_ = false;
+  uint16_t id_ = 0;  // pc_id (msg type 0/1) or rtc_id (msg type 2), at eCPRI offset 4
 };
 
 enum class FlowMatchType {
-  NORMAL,
+  IPV4_UDP,
   FLEX_ITEM,
+  ECPRI,
 };
 
 struct FlowMatch {
-  FlowMatchType type_;
-  uint16_t udp_src_;
-  uint16_t udp_dst_;
-  uint16_t ipv4_len_;
-  in_addr_t ipv4_src_;
-  in_addr_t ipv4_dst_;
+  FlowMatchType type_ = FlowMatchType::IPV4_UDP;
+  uint16_t udp_src_ = 0;
+  uint16_t udp_dst_ = 0;
+  uint16_t ipv4_len_ = 0;
+  in_addr_t ipv4_src_ = INADDR_ANY;
+  in_addr_t ipv4_dst_ = INADDR_ANY;
   FlexItemMatch flex_item_match_;
+  EcpriMatch ecpri_match_;
 };
 struct FlowConfig {
   std::string name_;
-  uint16_t id_;
+  FlowId id_ = 0;
   FlowAction action_;
+  std::vector<FlowAction> actions_;
   FlowMatch match_;
-  void* backend_config_;  // Filled in by operator
+  void* backend_config_ = nullptr;  // Filled in by operator
 };
+
+struct FlowRuleConfig {
+  std::string name_;
+  FlowAction action_;
+  std::vector<FlowAction> actions_;
+  FlowMatch match_;
+  void* backend_config_ = nullptr;  // Filled in by operator
+};
+
+enum class FlowOpType {
+  ADD_RX,
+  ADD_RX_BATCH,
+  DELETE,
+};
+
+struct FlowOpResult {
+  FlowOpId op_id_ = 0;
+  FlowOpType type_ = FlowOpType::ADD_RX;
+  Status status_ = Status::NOT_READY;
+  FlowId flow_id_ = 0;
+  std::vector<FlowId> flow_ids_;
+};
+
+inline bool flow_action_is_transform(const FlowAction& action) {
+  return action.type_ == FlowType::VLAN_PUSH || action.type_ == FlowType::VLAN_POP ||
+         action.type_ == FlowType::TUNNEL_ENCAP || action.type_ == FlowType::TUNNEL_DECAP;
+}
+
+inline std::vector<FlowAction> flow_rule_actions(const FlowRuleConfig& flow) {
+  if (!flow.actions_.empty()) { return flow.actions_; }
+  return {flow.action_};
+}
+
+inline FlowAction flow_queue_action(const std::vector<FlowAction>& actions) {
+  auto it = std::find_if(actions.begin(), actions.end(), [](const FlowAction& action) {
+    return action.type_ == FlowType::QUEUE;
+  });
+  return it == actions.end() ? FlowAction{} : *it;
+}
+
+inline bool flow_actions_have_transform(const std::vector<FlowAction>& actions) {
+  return std::any_of(actions.begin(), actions.end(), flow_action_is_transform);
+}
+
+inline bool flow_has_transform_actions(const FlowConfig& flow) {
+  return flow_actions_have_transform(flow.actions_);
+}
+
+inline bool flow_rule_has_transform_actions(const FlowRuleConfig& flow) {
+  return flow_actions_have_transform(flow_rule_actions(flow));
+}
+
+inline size_t flow_action_wire_overhead(const FlowAction& action) {
+  switch (action.type_) {
+    case FlowType::VLAN_PUSH:
+      return 4;
+    case FlowType::VLAN_POP:
+      return 0;
+    case FlowType::TUNNEL_ENCAP:
+      switch (action.tunnel_.type_) {
+        case TunnelType::VXLAN:
+          return sizeof(ethhdr) + sizeof(iphdr) + sizeof(udphdr) + 8;
+        case TunnelType::GRE:
+          return sizeof(ethhdr) + sizeof(iphdr) + 4;
+        case TunnelType::NVGRE:
+          return sizeof(ethhdr) + sizeof(iphdr) + 8;
+        case TunnelType::NONE:
+          return 0;
+      }
+      break;
+    case FlowType::TUNNEL_DECAP:
+    case FlowType::QUEUE:
+      return 0;
+  }
+  return 0;
+}
+
+inline size_t flow_decap_wire_overhead(const FlowAction& action) {
+  if (action.type_ == FlowType::VLAN_POP) { return 4; }
+  if (action.type_ != FlowType::TUNNEL_DECAP) { return 0; }
+  switch (action.tunnel_.type_) {
+    case TunnelType::VXLAN:
+      return sizeof(ethhdr) + sizeof(iphdr) + sizeof(udphdr) + 8;
+    case TunnelType::GRE:
+      return sizeof(ethhdr) + sizeof(iphdr) + 4;
+    case TunnelType::NVGRE:
+      return sizeof(ethhdr) + sizeof(iphdr) + 8;
+    case TunnelType::NONE:
+      return 0;
+  }
+  return 0;
+}
+
+inline size_t flow_max_decap_wire_overhead(const std::vector<FlowConfig>& flows) {
+  size_t overhead = 0;
+  for (const auto& flow : flows) {
+    size_t per_flow = 0;
+    for (const auto& action : flow.actions_) {
+      per_flow += flow_decap_wire_overhead(action);
+    }
+    overhead = std::max(overhead, per_flow);
+  }
+  return overhead;
+}
 
 struct CommonConfig {
   int version;
@@ -854,7 +1067,7 @@ struct ReorderConfig {
   std::string reorder_type_;
   std::string memory_region_;
   uint32_t payload_byte_offset_ = 0;
-  std::vector<uint16_t> flow_ids_;
+  std::vector<FlowId> flow_ids_;
   ReorderMethod method_ = ReorderMethod::INVALID;
   ReorderSeqBatchNumberConfig seq_batch_number_;
   ReorderSeqPacketsPerBatchConfig seq_packets_per_batch_;
@@ -864,6 +1077,7 @@ struct ReorderConfig {
 struct RxConfig {
   bool flow_isolation_ = false;
   bool hardware_timestamps_ = false;
+  uint32_t dynamic_flow_capacity_ = DEFAULT_DYNAMIC_FLOW_CAPACITY;
   std::vector<RxQueueConfig> queues_;
   std::vector<FlowConfig> flows_;
   std::vector<FlexItemConfig> flex_items_;

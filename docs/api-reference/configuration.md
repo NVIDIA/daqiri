@@ -140,6 +140,11 @@ Endpoint addresses are URI strings. Supported schemes are `tcp://`, `udp://`, an
   fields accepted for older configs when a top-level engine override provides the
   transport.
 
+Linux TCP/UDP socket options are intentionally not configured in YAML. Apply them
+after connection setup with `socket_setsockopt(conn_id, level, optname, optval,
+optlen)`, using the numeric constants from the target system headers. The API is
+not supported for `roce://` endpoints.
+
 When using RoCE, set `stream_type: "socket"` and use `roce://` endpoint addresses
 plus a `roce_config` block for transport settings. A RoCE URI may include
 `?engine=ibverbs`; when omitted, `ibverbs` is the default and only supported RoCE
@@ -181,7 +186,8 @@ engine.
 
 - **`name`**: Name of the flex item.
   - type: `string`
-- **`id`**: ID of the flex item.
+- **`id`**: ID of the flex item. Scoped per interface; the same numeric ID on two
+  interfaces may refer to different parser settings.
   - type: `integer`
 - **`offset`**: Byte offset after the UDP header where matching begins. Must be a multiple
   of 4 and less than 28.
@@ -191,17 +197,30 @@ engine.
 
 ### Flows
 
-`rx.flows:` — Flow rules that steer packets to specific queues based on match criteria.
+`rx.flows:` — Static startup flow rules that steer packets to specific queues based on
+match criteria. This sequence may be omitted; a queues-only RX config can add DPDK RX
+flows later with the dynamic flow API. For Raw Ethernet on the DPDK and ibverbs engines,
+RX flows can also perform hardware VLAN pop or tunnel decapsulation before queue delivery.
 
 - **`name`**: Flow name.
   - type: `string`
 - **`id`**: Flow ID. Retrievable at runtime via `get_packet_flow_id()`.
   - type: `integer`
-- **`action`**: What to do with matched packets.
-  - **`type`**: Action type. Only `queue` is currently supported.
-    - type: `string`
-  - **`id`**: Queue ID to steer matched packets to.
-    - type: `integer`
+- **`action`**: Legacy single action map. Existing configs may keep using
+  `action: {type: queue, id: ...}`.
+- **`actions`**: Ordered action list. Use this for tunnel/VLAN transforms.
+  RX transform flows must end with `type: queue`.
+  - **`type: queue`**: Steer matched packets to an RX queue.
+    - **`id`**: Queue ID under `rx.queues` on the same interface.
+  - **`type: vlan_pop`**: Pop one VLAN tag in hardware.
+  - **`type: tunnel_decap`**: Decapsulate a hardware tunnel before queue delivery.
+    - **`tunnel.type`**: `vxlan`, `gre`, or `nvgre`.
+    - **`outer_eth_src` / `outer_eth_dst`**: Outer Ethernet addresses.
+    - **`outer_ipv4_src` / `outer_ipv4_dst`**: Outer IPv4 addresses. IPv6 outer
+      headers are not supported in v1.
+    - **VXLAN fields**: `vni`, optional `outer_udp_src`, `outer_udp_dst` default `4789`.
+    - **GRE fields**: optional `gre_protocol` default `0x0800`.
+    - **NVGRE fields**: `tni`, optional `flow_id`.
 - **`match`**: Criteria for matching packets.
   - **`udp_src`**: UDP source port or port range (e.g., `1000-1010`).
     - type: `integer` or `string`
@@ -209,21 +228,65 @@ engine.
     - type: `integer` or `string`
   - **`ipv4_len`**: IPv4 payload length.
     - type: `integer`
-  - **`flex_item_id`**: Flex item ID (from `rx.flex_items`). Cannot be combined with UDP/IP
-    matching.
+  - **`flex_item_id`**: Flex item ID (the `id` field from an entry under `rx.flex_items` on
+    the same interface). Cannot be combined with UDP/IP matching.
     - type: `integer`
   - **`val`**: 32-bit value to match (with flex items).
     - type: `integer`
   - **`mask`**: 32-bit mask applied before matching (with flex items).
     - type: `integer`
+  - **`ecpri`**: eCPRI-over-Ethernet match (EtherType `0xAEFE`). Presence of this map selects
+    the eCPRI flow class; the EtherType is matched implicitly. Cannot be combined with UDP/IP
+    or flex-item matching. A flow with an empty `ecpri: {}` map matches all eCPRI frames.
+    - **`msg_type`**: eCPRI common-header message type (e.g. `0` = IQ data, `2` = real-time
+      control). Optional.
+      - type: `integer`
+    - **`pc_id`** / **`rtc_id`**: eCPRI message identifier (the 16-bit physical-channel ID for
+      message types 0/1, or real-time-control ID for type 2). `pc_id` and `rtc_id` are aliases
+      for the same field. Optional, but matching it requires a `msg_type` (the NIC needs a known
+      message type to locate the identifier in the eCPRI header).
+      - type: `integer`
+
+For Raw Ethernet (`stream_type: "raw"`), each flow rule is programmed into the NIC during
+`daqiri_init()`. If any rule cannot be installed, or the send-to-kernel fallback cannot be
+created when `flow_isolation: true`, initialization fails with a critical log and
+`daqiri_init()` returns an error status. eCPRI matching is supported by both the `dpdk`
+(via the mlx5 eCPRI flow item) and `ibverbs` (via an mlx5 flex-parser node anchored on the
+eCPRI EtherType) engines. On the `dpdk` engine the mlx5 eCPRI flow item is only honored under
+firmware steering, so any interface with eCPRI flows is automatically switched to
+`dv_flow_en=1` (logged as a warning); a side effect is that the async/template dynamic-RX-flow
+API is unavailable on that interface. The `ibverbs` engine has no such restriction.
+
+A single RX interface must use exactly one flow class — standard UDP/IP, flex-item, or eCPRI.
+Each class installs its own DPDK group-0 jump rule, and these conflict when mixed, so only one
+class is reachable per interface. `daqiri_init` rejects mixed configs with a clear error.
+Flex-item flows cannot be combined with VLAN/tunnel transform actions in v1.
 
 ### Flow Isolation
 
-`rx.flow_isolation:` — When `true`, only packets matching an explicit flow rule are delivered.
-Unmatched packets are dropped. When `false`, unmatched packets go to a default queue.
+`rx.flow_isolation:` — When `true`, only packets matching an explicit flow rule are delivered
+to the application. Static startup flows install send-to-kernel fallback rules per flow class
+(standard, flex-item, or eCPRI), so unmatched traffic in those classes is steered back to the Linux
+kernel. Queues-only configs can set `flow_isolation: true` and then install dynamic RX flows
+after `daqiri_init()`; the first dynamic RX flow installs the send-to-kernel fallback for that
+flow class (so unmatched control traffic such as ARP keeps reaching the kernel), and until a
+dynamic rule is added, application traffic is not delivered to DAQIRI RX queues. When `false`,
+unmatched packets go to a default queue. Mixing standard, flex-item, and eCPRI flow classes on
+one interface is not supported, including across dynamic flow additions or within one dynamic
+batch.
 
 - type: `boolean`
 - default: `false`
+
+### Dynamic Flow Capacity
+
+`rx.dynamic_flow_capacity:` — DPDK template-table capacity reserved for dynamic RX flow
+rules on this interface. `0` disables DPDK template/async setup on startup. Set a positive
+value to opt in to the template fast path when it is available; legacy fallback paths still
+accept dynamic RX flow operations but do not use a template table.
+
+- type: `integer`
+- default: `0`
 
 ### Hardware Timestamps
 
@@ -331,9 +394,48 @@ daqiri::set_reorder_cuda_stream("rx_port", "rx_reorder_0", stream);
   - type: `integer`
 - **`memory_regions`**: List of memory region names. Same segment mapping rules as RX.
   - type: `list`
-- **`offloads`**: List of hardware offloads to enable.
+- **`offloads`**: List of hardware offloads to enable. Each offload installs an RTE Flow rule
+  during `daqiri_init()`; initialization fails if the NIC cannot program the rule.
   - type: `list`
   - values: `tx_eth_src` (auto-fill source MAC address)
+- **`pacing_mbps`**: Packet-pacing rate cap for this queue, in megabits per second of L2 frame
+  bytes (the data the application transmits, excluding preamble/IFG/FCS). The NIC meters the queue
+  out so its long-run average TX rate stays at or below this value; the limit is enforced on an
+  average basis and idle gaps do not accumulate burst credit. `0` (the default) disables pacing
+  and sends at line rate. Supported only by the default `dpdk` raw engine on a NIC with hardware
+  send scheduling (ConnectX-7 or later); on devices without it, `pacing_mbps` is ignored with a
+  warning and TX runs at line rate. The `ibverbs` raw engine does **not** support `pacing_mbps`
+  and `daqiri_init()` fails if it is set on an `ibverbs` queue.
+  - type: `integer`
+  - default: `0`
+
+### Transmit Flows
+
+`tx.flows:` — Raw Ethernet hardware transform rules for outgoing packets. Supported on
+the DPDK and ibverbs raw engines only. TX flows match the packet as supplied by the
+application, then push or encapsulate headers in hardware; the application buffer remains
+the pre-encap packet.
+
+- **`name`** / **`id`**: Flow label and ID.
+- **`actions`**: Ordered transform action list. TX flows cannot contain `queue`.
+  - **`type: vlan_push`**: Push one VLAN tag.
+    - **`vlan_id`**: VLAN ID, `0..4095`.
+    - **`pcp`**: Priority, `0..7`, default `0`.
+    - **`dei`**: Drop eligible indicator, `0..1`, default `0`.
+    - **`ethertype`**: VLAN TPID, default `0x8100`.
+  - **`type: tunnel_encap`**: Encapsulate in `vxlan`, `gre`, or `nvgre`.
+    - **`tunnel.type`**: `vxlan`, `gre`, or `nvgre`.
+    - **`outer_eth_src` / `outer_eth_dst`** and **`outer_ipv4_src` /
+      `outer_ipv4_dst`** are required.
+    - **VXLAN fields**: `vni`, optional `outer_udp_src`, `outer_udp_dst` default `4789`.
+    - **GRE fields**: optional `gre_protocol` default `0x0800`.
+    - **NVGRE fields**: `tni`, optional `flow_id`.
+- **`match`**: Same standard UDP/IP match keys as RX flows. Omit `match` for a
+  catch-all TX transform.
+
+DAQIRI validates tunnel overhead against the configured packet buffer size and
+the supported jumbo-frame bound. For RX decap/pop, MTU sizing accounts for the
+outer wire frame while packet buffers contain the post-decap frame.
 
 ### Accurate Send
 

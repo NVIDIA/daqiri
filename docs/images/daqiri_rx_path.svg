@@ -1,0 +1,351 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 1820" font-family="Inter, Helvetica, Arial, sans-serif">
+  <defs>
+    <!-- arrow markers, one per flow type so the legend stays honest -->
+    <marker id="arrData" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1f2937"/>
+    </marker>
+    <marker id="arrDesc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1d4ed8"/>
+    </marker>
+    <marker id="arrFree" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#b91c1c"/>
+    </marker>
+    <marker id="arrSetup" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6b7280"/>
+    </marker>
+  </defs>
+
+  <!-- backdrop -->
+  <rect x="0" y="0" width="1400" height="1820" fill="#fafbfc"/>
+
+  <!-- ============================================================ -->
+  <!-- TITLE                                                         -->
+  <!-- ============================================================ -->
+  <text x="700" y="38" text-anchor="middle" font-size="22" font-weight="800" fill="#111827">
+    DAQIRI RX Path — Pointer Lifecycle &amp; Multiple Receive Modes
+  </text>
+  <text x="700" y="62" text-anchor="middle" font-size="13" fill="#4b5563">
+    DPDK backend · ConnectX-6/7 · GPUDirect via peermem or DMA-BUF (or host_pinned on integrated GPUs)
+  </text>
+
+  <!-- ============================================================ -->
+  <!-- LEGEND                                                        -->
+  <!-- ============================================================ -->
+  <g transform="translate(40,84)">
+    <rect x="0" y="0" width="1320" height="48" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+    <text x="20" y="29" font-size="12" font-weight="700" fill="#374151">Legend</text>
+
+    <line x1="90" y1="24" x2="150" y2="24" stroke="#1f2937" stroke-width="2.2" marker-end="url(#arrData)"/>
+    <text x="158" y="29" font-size="12" fill="#1f2937">packet data (DMA, zero-copy)</text>
+
+    <line x1="380" y1="24" x2="440" y2="24" stroke="#1d4ed8" stroke-width="2.2" stroke-dasharray="6 3" marker-end="url(#arrDesc)"/>
+    <text x="448" y="29" font-size="12" fill="#1d4ed8">descriptor / handle exchange (rte_mbuf*, BurstParams*)</text>
+
+    <line x1="830" y1="24" x2="890" y2="24" stroke="#b91c1c" stroke-width="2.2" stroke-dasharray="4 4" marker-end="url(#arrFree)"/>
+    <text x="898" y="29" font-size="12" fill="#b91c1c">free-return path (caller must close)</text>
+
+    <line x1="1150" y1="24" x2="1210" y2="24" stroke="#6b7280" stroke-width="1.6" stroke-dasharray="2 4" marker-end="url(#arrSetup)"/>
+    <text x="1218" y="29" font-size="12" fill="#6b7280">setup-time wiring</text>
+  </g>
+
+  <!-- ============================================================ -->
+  <!-- WIRE → NIC                                                    -->
+  <!-- ============================================================ -->
+  <text x="120" y="166" font-size="13" font-weight="700" fill="#374151">Wire — mixed UDP flows</text>
+  <rect x="100" y="178" width="1200" height="36" rx="4" fill="#eef2ff" stroke="#a5b4fc"/>
+  <g font-size="11" fill="#1e1b4b">
+    <text x="160" y="201">udp_dst=4000</text>
+    <text x="320" y="201">udp_dst=4001</text>
+    <text x="480" y="201">udp_dst=4002</text>
+    <text x="640" y="201">flex_item match</text>
+    <text x="820" y="201">udp_dst=5000 (batched)</text>
+    <text x="1040" y="201">udp_dst=5001 (batched)</text>
+  </g>
+
+  <line x1="700" y1="214" x2="700" y2="248" stroke="#1f2937" stroke-width="2.2" marker-end="url(#arrData)"/>
+
+  <!-- ConnectX NIC + flow-steering engine -->
+  <g transform="translate(150,248)">
+    <rect x="0" y="0" width="1100" height="100" rx="8" fill="#f3f4f6" stroke="#9ca3af" stroke-width="1.5"/>
+    <text x="20" y="22" font-size="11" font-weight="700" fill="#4b5563" letter-spacing="1">CONNECTX-6 / -7 NIC</text>
+    <text x="20" y="42" font-size="14" font-weight="700" fill="#111827">Flow steering engine (rte_flow)</text>
+    <text x="20" y="60" font-size="11" fill="#4b5563">Matches on UDP src/dst, IPv4 length, or flex-item bytes after UDP header. Action = queue.id.</text>
+
+    <!-- Two outbound branches -->
+    <rect x="220" y="68" width="260" height="22" rx="3" fill="#fde68a" stroke="#b45309"/>
+    <text x="350" y="83" text-anchor="middle" font-size="11" font-weight="700" fill="#7c2d12">rule → queue 0 (HDS, 2 segments)</text>
+
+    <rect x="620" y="68" width="260" height="22" rx="3" fill="#bbf7d0" stroke="#15803d"/>
+    <text x="750" y="83" text-anchor="middle" font-size="11" font-weight="700" fill="#14532d">rule → queue 1 (GPU-only, batched)</text>
+  </g>
+
+  <!-- arrows NIC → each queue header -->
+  <line x1="500" y1="348" x2="500" y2="400" stroke="#1f2937" stroke-width="2.2" marker-end="url(#arrData)"/>
+  <line x1="900" y1="348" x2="900" y2="400" stroke="#1f2937" stroke-width="2.2" marker-end="url(#arrData)"/>
+
+  <!-- ============================================================ -->
+  <!-- QUEUE 0 — HDS                                                  -->
+  <!-- ============================================================ -->
+  <g transform="translate(150,400)">
+    <rect x="0" y="0" width="600" height="540" rx="10" fill="#fffbeb" stroke="#b45309" stroke-width="1.5"/>
+    <text x="20" y="24" font-size="13" font-weight="800" fill="#7c2d12">Queue 0 — Header-Data Split</text>
+    <text x="20" y="42" font-size="11" fill="#7c2d12">2 memory_regions → segment 0 (CPU hdr) + segment 1 (GPU payload)</text>
+
+    <!-- mempool: CPU header -->
+    <g transform="translate(20,60)">
+      <rect x="0" y="0" width="270" height="120" rx="6" fill="#dbeafe" stroke="#1d4ed8"/>
+      <text x="10" y="18" font-size="10" font-weight="700" fill="#1e3a8a" letter-spacing="1">SEGMENT 0 — CPU MEMPOOL</text>
+      <text x="10" y="38" font-size="12" font-weight="700" fill="#1e3a8a">kind: huge (hugepages)</text>
+      <text x="10" y="56" font-size="11" fill="#1e3a8a">buf_size ≈ 64 B  (Eth+IPv4+UDP)</text>
+      <text x="10" y="72" font-size="11" fill="#1e3a8a">num_bufs ≥ 3× batch_size</text>
+      <text x="10" y="88" font-size="11" fill="#1e3a8a">Pre-allocated. NIC DMAs into</text>
+      <text x="10" y="103" font-size="11" fill="#1e3a8a">these slots — never copied.</text>
+    </g>
+
+    <!-- mempool: GPU payload -->
+    <g transform="translate(310,60)">
+      <rect x="0" y="0" width="270" height="120" rx="6" fill="#dcfce7" stroke="#15803d"/>
+      <text x="10" y="18" font-size="10" font-weight="700" fill="#14532d" letter-spacing="1">SEGMENT 1 — GPU MEMPOOL</text>
+      <text x="10" y="38" font-size="12" font-weight="700" fill="#14532d">kind: device (GPU VRAM)</text>
+      <text x="10" y="56" font-size="11" fill="#14532d">DMA-mapped via peermem/DMA-BUF</text>
+      <text x="10" y="72" font-size="11" fill="#14532d">buf_size = MTU − header</text>
+      <text x="10" y="88" font-size="11" fill="#14532d">GPUDirect: NIC → GPU VRAM,</text>
+      <text x="10" y="103" font-size="11" fill="#14532d">no CPU bounce.</text>
+    </g>
+
+    <!-- descriptor ring -->
+    <g transform="translate(20,200)">
+      <rect x="0" y="0" width="560" height="60" rx="6" fill="#e0e7ff" stroke="#3730a3"/>
+      <text x="10" y="18" font-size="10" font-weight="700" fill="#312e81" letter-spacing="1">NIC DESCRIPTOR RING (per-queue, SPSC)</text>
+      <text x="10" y="38" font-size="11" fill="#312e81">rte_mbuf * — one descriptor pair per packet (seg-0 + seg-1 mbuf chain)</text>
+      <text x="10" y="52" font-size="11" fill="#312e81">Filled by NIC DMA · drained by rte_eth_rx_burst() in worker</text>
+    </g>
+
+    <!-- RX worker -->
+    <g transform="translate(160,280)">
+      <rect x="0" y="0" width="280" height="56" rx="6" fill="#ffffff" stroke="#4b5563"/>
+      <text x="140" y="22" text-anchor="middle" font-size="12" font-weight="700" fill="#111827">RX worker thread</text>
+      <text x="140" y="42" text-anchor="middle" font-size="11" fill="#4b5563">pinned to rx.queue.cpu_core (e.g. 5)</text>
+    </g>
+
+    <!-- per-queue host ring of BurstParams* -->
+    <g transform="translate(20,356)">
+      <rect x="0" y="0" width="560" height="58" rx="6" fill="#fef3c7" stroke="#a16207"/>
+      <text x="10" y="18" font-size="10" font-weight="700" fill="#713f12" letter-spacing="1">HOST RX RING (lock-free SPSC)</text>
+      <text x="10" y="38" font-size="11" fill="#713f12">BurstParams * handles (allocated from rx_meta_buffers pool)</text>
+      <text x="10" y="52" font-size="11" fill="#713f12">Worker enqueues · user dequeues via get_rx_burst()</text>
+    </g>
+
+    <!-- API call list -->
+    <g transform="translate(20,432)">
+      <rect x="0" y="0" width="560" height="96" rx="6" fill="#ffffff" stroke="#9ca3af"/>
+      <text x="10" y="18" font-size="10" font-weight="700" fill="#374151" letter-spacing="1">USER READS (HDS)</text>
+      <text x="10" y="38" font-size="11" font-family="JetBrains Mono, ui-monospace, monospace" fill="#111827">get_rx_burst(&amp;burst, port, /*q=*/0)</text>
+      <text x="10" y="54" font-size="11" font-family="JetBrains Mono, ui-monospace, monospace" fill="#111827">N = get_num_packets(burst)</text>
+      <text x="10" y="70" font-size="11" font-family="JetBrains Mono, ui-monospace, monospace" fill="#111827">hdr_ptr = get_segment_packet_ptr(burst, /*seg=*/0, i)</text>
+      <text x="10" y="86" font-size="11" font-family="JetBrains Mono, ui-monospace, monospace" fill="#111827">pay_ptr = get_segment_packet_ptr(burst, /*seg=*/1, i)</text>
+    </g>
+  </g>
+
+  <!-- ============================================================ -->
+  <!-- QUEUE 1 — Batched GPU-only                                     -->
+  <!-- ============================================================ -->
+  <g transform="translate(770,400)">
+    <rect x="0" y="0" width="480" height="540" rx="10" fill="#f0fdf4" stroke="#15803d" stroke-width="1.5"/>
+    <text x="20" y="24" font-size="13" font-weight="800" fill="#14532d">Queue 1 — Batched GPU-only</text>
+    <text x="20" y="42" font-size="11" fill="#14532d">1 memory_region → segment 0 (full packet in GPU VRAM)</text>
+
+    <!-- single mempool -->
+    <g transform="translate(20,60)">
+      <rect x="0" y="0" width="440" height="120" rx="6" fill="#dcfce7" stroke="#15803d"/>
+      <text x="10" y="18" font-size="10" font-weight="700" fill="#14532d" letter-spacing="1">SEGMENT 0 — GPU MEMPOOL</text>
+      <text x="10" y="38" font-size="12" font-weight="700" fill="#14532d">kind: device (GPU VRAM)</text>
+      <text x="10" y="56" font-size="11" fill="#14532d">buf_size = MTU (full packet, headers + payload)</text>
+      <text x="10" y="72" font-size="11" fill="#14532d">num_bufs ≥ 3× batch_size (auto-bumped if &lt;1.5× ring)</text>
+      <text x="10" y="88" font-size="11" fill="#14532d">DMA-mapped via peermem/DMA-BUF; full packet lands</text>
+      <text x="10" y="103" font-size="11" fill="#14532d">in VRAM in one shot — no segmentation.</text>
+    </g>
+
+    <!-- descriptor ring -->
+    <g transform="translate(20,200)">
+      <rect x="0" y="0" width="440" height="60" rx="6" fill="#e0e7ff" stroke="#3730a3"/>
+      <text x="10" y="18" font-size="10" font-weight="700" fill="#312e81" letter-spacing="1">NIC DESCRIPTOR RING (per-queue, SPSC)</text>
+      <text x="10" y="38" font-size="11" fill="#312e81">rte_mbuf * — one descriptor per packet (single segment)</text>
+      <text x="10" y="52" font-size="11" fill="#312e81">Filled by NIC DMA · drained by rte_eth_rx_burst()</text>
+    </g>
+
+    <!-- worker -->
+    <g transform="translate(100,280)">
+      <rect x="0" y="0" width="280" height="56" rx="6" fill="#ffffff" stroke="#4b5563"/>
+      <text x="140" y="22" text-anchor="middle" font-size="12" font-weight="700" fill="#111827">RX worker thread</text>
+      <text x="140" y="42" text-anchor="middle" font-size="11" fill="#4b5563">pinned to rx.queue.cpu_core (e.g. 6)</text>
+    </g>
+
+    <!-- host ring -->
+    <g transform="translate(20,356)">
+      <rect x="0" y="0" width="440" height="58" rx="6" fill="#fef3c7" stroke="#a16207"/>
+      <text x="10" y="18" font-size="10" font-weight="700" fill="#713f12" letter-spacing="1">HOST RX RING (lock-free SPSC)</text>
+      <text x="10" y="38" font-size="11" fill="#713f12">BurstParams * handles (from rx_meta_buffers pool)</text>
+      <text x="10" y="52" font-size="11" fill="#713f12">Worker enqueues · user dequeues via get_rx_burst()</text>
+    </g>
+
+    <!-- API call list -->
+    <g transform="translate(20,432)">
+      <rect x="0" y="0" width="440" height="96" rx="6" fill="#ffffff" stroke="#9ca3af"/>
+      <text x="10" y="18" font-size="10" font-weight="700" fill="#374151" letter-spacing="1">USER READS (BATCHED)</text>
+      <text x="10" y="38" font-size="11" font-family="JetBrains Mono, ui-monospace, monospace" fill="#111827">get_rx_burst(&amp;burst, port, /*q=*/1)</text>
+      <text x="10" y="54" font-size="11" font-family="JetBrains Mono, ui-monospace, monospace" fill="#111827">N = get_num_packets(burst)</text>
+      <text x="10" y="70" font-size="11" font-family="JetBrains Mono, ui-monospace, monospace" fill="#111827">ptr = get_packet_ptr(burst, i)  // single segment</text>
+      <text x="10" y="86" font-size="11" font-family="JetBrains Mono, ui-monospace, monospace" fill="#111827">len = get_packet_length(burst, i)</text>
+    </g>
+  </g>
+
+  <!-- ============================================================ -->
+  <!-- Vertical data arrows inside each queue column                  -->
+  <!-- ============================================================ -->
+  <!-- Q0: mempool → desc ring  -->
+  <line x1="285" y1="580" x2="285" y2="600" stroke="#1f2937" stroke-width="2" marker-end="url(#arrData)"/>
+  <line x1="615" y1="580" x2="615" y2="600" stroke="#1f2937" stroke-width="2" marker-end="url(#arrData)"/>
+  <!-- Q0: desc ring → worker  -->
+  <line x1="450" y1="660" x2="450" y2="680" stroke="#1d4ed8" stroke-width="2" stroke-dasharray="6 3" marker-end="url(#arrDesc)"/>
+  <!-- Q0: worker → host ring  -->
+  <line x1="450" y1="736" x2="450" y2="756" stroke="#1d4ed8" stroke-width="2" stroke-dasharray="6 3" marker-end="url(#arrDesc)"/>
+  <!-- Q0: host ring → API box (visual continuity) -->
+  <line x1="450" y1="814" x2="450" y2="832" stroke="#1d4ed8" stroke-width="2" stroke-dasharray="6 3" marker-end="url(#arrDesc)"/>
+
+  <!-- Q1: mempool → desc ring -->
+  <line x1="1010" y1="580" x2="1010" y2="600" stroke="#1f2937" stroke-width="2" marker-end="url(#arrData)"/>
+  <!-- Q1: desc ring → worker -->
+  <line x1="1010" y1="660" x2="1010" y2="680" stroke="#1d4ed8" stroke-width="2" stroke-dasharray="6 3" marker-end="url(#arrDesc)"/>
+  <!-- Q1: worker → host ring -->
+  <line x1="1010" y1="736" x2="1010" y2="756" stroke="#1d4ed8" stroke-width="2" stroke-dasharray="6 3" marker-end="url(#arrDesc)"/>
+  <!-- Q1: host ring → API box  -->
+  <line x1="1010" y1="814" x2="1010" y2="832" stroke="#1d4ed8" stroke-width="2" stroke-dasharray="6 3" marker-end="url(#arrDesc)"/>
+
+  <!-- ============================================================ -->
+  <!-- USER APPLICATION (consolidator)                                -->
+  <!-- ============================================================ -->
+  <g transform="translate(150,960)">
+    <rect x="0" y="0" width="1100" height="120" rx="10" fill="#fffbe8" stroke="#92400e" stroke-width="1.5"/>
+    <text x="20" y="26" font-size="14" font-weight="800" fill="#7c2d12">User Application</text>
+    <text x="20" y="46" font-size="11" fill="#7c2d12">Owns the BurstParams* between get_rx_burst() and the matching free. Reads from packet buffers in place — zero-copy.</text>
+
+    <g transform="translate(20,60)">
+      <rect x="0" y="0" width="525" height="46" rx="4" fill="#ffffff" stroke="#d1d5db"/>
+      <text x="10" y="18" font-size="10" font-weight="700" fill="#374151" letter-spacing="1">HDS PATH (queue 0)</text>
+      <text x="10" y="36" font-size="11" font-family="JetBrains Mono, ui-monospace, monospace" fill="#111827">hdr = get_segment_packet_ptr(burst, 0, i);  pay = get_segment_packet_ptr(burst, 1, i);</text>
+    </g>
+
+    <g transform="translate(555,60)">
+      <rect x="0" y="0" width="525" height="46" rx="4" fill="#ffffff" stroke="#d1d5db"/>
+      <text x="10" y="18" font-size="10" font-weight="700" fill="#374151" letter-spacing="1">BATCHED PATH (queue 1)</text>
+      <text x="10" y="36" font-size="11" font-family="JetBrains Mono, ui-monospace, monospace" fill="#111827">ptr = get_packet_ptr(burst, i);  flow_id = get_packet_flow_id(burst, i);</text>
+    </g>
+  </g>
+
+  <!-- ============================================================ -->
+  <!-- BUFFER RETURN PATH — the corrected one                         -->
+  <!-- ============================================================ -->
+  <g transform="translate(150,1110)">
+    <rect x="0" y="0" width="1100" height="380" rx="10" fill="#fef2f2" stroke="#b91c1c" stroke-width="1.8"/>
+    <text x="20" y="26" font-size="14" font-weight="800" fill="#7f1d1d">Buffer return path — packets first, then burst (MUST NOT LEAK)</text>
+    <text x="20" y="46" font-size="11" fill="#7f1d1d">
+      free_rx_burst() releases only the BurstParams handle. It does NOT free packet buffers — those must be returned to the mempool first.
+    </text>
+    <text x="20" y="62" font-size="11" fill="#7f1d1d">
+      Skipping the per-packet step drains the packet mempool → NO_FREE_PACKET_BUFFERS → NIC drops new traffic.
+    </text>
+
+    <!-- option A: one-shot -->
+    <g transform="translate(20,82)">
+      <rect x="0" y="0" width="345" height="120" rx="6" fill="#ffffff" stroke="#15803d" stroke-width="1.5"/>
+      <text x="14" y="20" font-size="11" font-weight="700" fill="#14532d" letter-spacing="1">A · ONE-SHOT (RECOMMENDED)</text>
+      <text x="14" y="40" font-size="11" fill="#14532d">Frees every packet (all segments) + the burst</text>
+      <text x="14" y="55" font-size="11" fill="#14532d">handle in a single call.</text>
+      <rect x="14" y="68" width="317" height="40" rx="3" fill="#f0fdf4" stroke="#86efac"/>
+      <text x="22" y="84" font-size="11" font-family="JetBrains Mono, ui-monospace, monospace" fill="#14532d">free_all_packets_and_burst_rx(burst);</text>
+      <text x="22" y="100" font-size="10" fill="#15803d">// works for HDS &amp; batched, any segment count</text>
+    </g>
+
+    <!-- option B: per-segment (HDS) -->
+    <g transform="translate(377,82)">
+      <rect x="0" y="0" width="345" height="120" rx="6" fill="#ffffff" stroke="#a16207" stroke-width="1.5"/>
+      <text x="14" y="20" font-size="11" font-weight="700" fill="#713f12" letter-spacing="1">B · PER-SEGMENT (HDS, FINE-GRAIN)</text>
+      <text x="14" y="40" font-size="11" fill="#713f12">Free each segment's packet pool, then release</text>
+      <text x="14" y="55" font-size="11" fill="#713f12">the burst handle.</text>
+      <rect x="14" y="68" width="317" height="40" rx="3" fill="#fffbeb" stroke="#fcd34d"/>
+      <text x="22" y="84" font-size="11" font-family="JetBrains Mono, ui-monospace, monospace" fill="#713f12">free_all_segment_packets(burst, 0);</text>
+      <text x="22" y="100" font-size="11" font-family="JetBrains Mono, ui-monospace, monospace" fill="#713f12">free_all_segment_packets(burst, 1); free_rx_burst(burst);</text>
+    </g>
+
+    <!-- option C: per-packet -->
+    <g transform="translate(735,82)">
+      <rect x="0" y="0" width="345" height="120" rx="6" fill="#ffffff" stroke="#4b5563" stroke-width="1.5"/>
+      <text x="14" y="20" font-size="11" font-weight="700" fill="#111827" letter-spacing="1">C · PER-PACKET (SELECTIVE)</text>
+      <text x="14" y="40" font-size="11" fill="#1f2937">Use when only some packets are kept (e.g. forwarded</text>
+      <text x="14" y="55" font-size="11" fill="#1f2937">to another stage). Then close the burst.</text>
+      <rect x="14" y="68" width="317" height="40" rx="3" fill="#f9fafb" stroke="#d1d5db"/>
+      <text x="22" y="84" font-size="11" font-family="JetBrains Mono, ui-monospace, monospace" fill="#111827">for (i …) free_packet(burst, i);</text>
+      <text x="22" y="100" font-size="11" font-family="JetBrains Mono, ui-monospace, monospace" fill="#111827">free_rx_burst(burst);</text>
+    </g>
+
+    <!-- where each pool the buffers go back to -->
+    <g transform="translate(20,220)">
+      <text x="0" y="0" font-size="12" font-weight="800" fill="#7f1d1d">Where buffers actually go back:</text>
+      <text x="0" y="22" font-size="11" fill="#7f1d1d">
+        • <tspan font-family="JetBrains Mono, ui-monospace, monospace">free_packet*</tspan> / <tspan font-family="JetBrains Mono, ui-monospace, monospace">free_all_segment_packets</tspan> → returns rte_mbuf to the segment's packet mempool (CPU hugepage / GPU device).
+      </text>
+      <text x="0" y="40" font-size="11" fill="#7f1d1d">
+        • <tspan font-family="JetBrains Mono, ui-monospace, monospace">free_rx_burst</tspan> → returns the BurstParams handle to the <tspan font-family="JetBrains Mono, ui-monospace, monospace">rx_meta_buffers</tspan> pool (separate from the packet pool).
+      </text>
+      <text x="0" y="58" font-size="11" fill="#7f1d1d">
+        • <tspan font-family="JetBrains Mono, ui-monospace, monospace">free_all_packets_and_burst_rx</tspan> = both of the above, in order.
+      </text>
+    </g>
+
+    <!-- Sizing reminder -->
+    <g transform="translate(20,300)">
+      <rect x="0" y="0" width="1060" height="62" rx="6" fill="#ffffff" stroke="#f59e0b"/>
+      <text x="14" y="20" font-size="11" font-weight="700" fill="#92400e" letter-spacing="1">SIZING / FAILURE NOTES</text>
+      <text x="14" y="38" font-size="11" fill="#92400e">
+        Rule of thumb: <tspan font-family="JetBrains Mono, ui-monospace, monospace">num_bufs ≥ 3× batch_size</tspan>; DPDK auto-bumps to 3× ring (default 8192 → 24576) and logs WARN if too small (deadlock guard).
+      </text>
+      <text x="14" y="54" font-size="11" fill="#92400e">
+        Symptoms of a missed free: <tspan font-family="JetBrains Mono, ui-monospace, monospace">NO_FREE_PACKET_BUFFERS</tspan> / <tspan font-family="JetBrains Mono, ui-monospace, monospace">NO_FREE_BURST_BUFFERS</tspan>, then NIC-level RX drops in <tspan font-family="JetBrains Mono, ui-monospace, monospace">imissed</tspan>.
+      </text>
+    </g>
+  </g>
+
+  <!-- arrows from user app into return-path box -->
+  <line x1="450" y1="1080" x2="450" y2="1108" stroke="#b91c1c" stroke-width="2" stroke-dasharray="4 4" marker-end="url(#arrFree)"/>
+  <line x1="1010" y1="1080" x2="1010" y2="1108" stroke="#b91c1c" stroke-width="2" stroke-dasharray="4 4" marker-end="url(#arrFree)"/>
+
+  <!-- arrows from return-path back up to the two GPU/CPU mempools (return-to-pool) -->
+  <!-- left side: long red curved-ish arrow up to Q0 mempools -->
+  <path d="M 80 1300 L 80 540 L 170 540" fill="none" stroke="#b91c1c" stroke-width="1.8" stroke-dasharray="4 4" marker-end="url(#arrFree)"/>
+  <text x="32" y="900" font-size="10" fill="#b91c1c" transform="rotate(-90 32 900)">packets back to mempool (seg 0/1)</text>
+
+  <!-- right side: return path for Q1 -->
+  <path d="M 1320 1300 L 1320 540 L 1230 540" fill="none" stroke="#b91c1c" stroke-width="1.8" stroke-dasharray="4 4" marker-end="url(#arrFree)"/>
+  <text x="1352" y="900" font-size="10" fill="#b91c1c" transform="rotate(90 1352 900)">packets back to mempool</text>
+
+  <!-- ============================================================ -->
+  <!-- FOOTER                                                        -->
+  <!-- ============================================================ -->
+  <g transform="translate(40,1520)">
+    <text x="0" y="0" font-size="11" font-weight="700" fill="#374151">Notes</text>
+    <text x="0" y="18" font-size="11" fill="#4b5563">
+      ① Number of memory_regions per queue picks the receive mode (1 = batched / CPU-only, 2 = header-data split). See docs/configuration.md §Memory Regions.
+    </text>
+    <text x="0" y="34" font-size="11" fill="#4b5563">
+      ② Same flow rule schema serves both columns: <tspan font-family="JetBrains Mono, ui-monospace, monospace">rx.flows[*].action.id</tspan> chooses the queue; mode is determined by that queue's memory_regions list.
+    </text>
+    <text x="0" y="50" font-size="11" fill="#4b5563">
+      ③ On integrated GPUs (e.g. NVIDIA GB10 / DGX Spark) substitute <tspan font-family="JetBrains Mono, ui-monospace, monospace">kind: host_pinned</tspan> for <tspan font-family="JetBrains Mono, ui-monospace, monospace">device</tspan> — the NIC can't peer-DMA into iGPU VRAM.
+    </text>
+    <text x="0" y="66" font-size="11" fill="#4b5563">
+      ④ Sources: <tspan font-family="JetBrains Mono, ui-monospace, monospace">include/daqiri/common.h</tspan> (API), <tspan font-family="JetBrains Mono, ui-monospace, monospace">include/daqiri/types.h</tspan> (MemoryKind), <tspan font-family="JetBrains Mono, ui-monospace, monospace">src/managers/dpdk/daqiri_dpdk_mgr.cpp</tspan> (rte_flow), <tspan font-family="JetBrains Mono, ui-monospace, monospace">docs/configuration.md</tspan>.
+    </text>
+  </g>
+</svg>

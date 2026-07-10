@@ -18,3 +18,4 @@
 #pragma once
 
 #include <daqiri/common.h>
+#include <daqiri/version.h>

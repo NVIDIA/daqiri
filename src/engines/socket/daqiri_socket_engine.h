@@ -48,7 +48,7 @@ class SocketEngine : public Engine {
   uint32_t get_packet_length(BurstParams* burst, int idx) override;
   void* get_segment_packet_ptr(BurstParams* burst, int seg, int idx) override;
   uint32_t get_segment_packet_length(BurstParams* burst, int seg, int idx) override;
-  uint16_t get_packet_flow_id(BurstParams* burst, int idx) override;
+  FlowId get_packet_flow_id(BurstParams* burst, int idx) override;
   Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) override;
   void* get_packet_extra_info(BurstParams* burst, int idx) override;
 
@@ -95,6 +95,8 @@ class SocketEngine : public Engine {
   Status socket_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) override;
   Status socket_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
                                    uintptr_t* conn_id) override;
+  Status socket_setsockopt(uintptr_t conn_id, int level, int optname, const void* optval,
+                           size_t optlen) override;
 
   // RoCE-only wrappers.
   Status rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,
@@ -155,6 +157,12 @@ class SocketEngine : public Engine {
 
   bool is_roce_protocol() const;
   Status roce_not_initialized(const char* op_name) const;
+  bool apply_socket_int_option(int fd,
+                               int level,
+                               int name,
+                               int value,
+                               const char* context,
+                               bool required) const;
 
   void setup_tcp_endpoint(EndpointState& ep);
   void setup_udp_endpoint(EndpointState& ep);

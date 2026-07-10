@@ -19,11 +19,29 @@ if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
   set(DAQIRI_USING_DEFAULT_CUDA_ARCHITECTURES ON)
 endif()
 
-project(daqiri VERSION 0.1.0 LANGUAGES C CXX CUDA)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" DAQIRI_PROJECT_VERSION)
+string(STRIP "${DAQIRI_PROJECT_VERSION}" DAQIRI_PROJECT_VERSION)
+if(NOT DAQIRI_PROJECT_VERSION MATCHES "^([0-9][0-9][0-9][0-9])\\.([1-9]|1[0-2])\\.(0|[1-9][0-9]*)$")
+  message(FATAL_ERROR "VERSION must use CalVer format YYYY.MM.PATCH, for example 2026.7.0")
+endif()
+
+project(daqiri VERSION ${DAQIRI_PROJECT_VERSION} LANGUAGES C CXX CUDA)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 find_package(CUDAToolkit REQUIRED)
+
+set(DAQIRI_ABI_VERSION "0" CACHE STRING "DAQIRI shared library ABI version")
+if(NOT DAQIRI_ABI_VERSION MATCHES "^(0|[1-9][0-9]*)$")
+  message(FATAL_ERROR "DAQIRI_ABI_VERSION must be a non-negative integer")
+endif()
+
+set(DAQIRI_GENERATED_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/cmake/daqiri_version.h.in
+  ${DAQIRI_GENERATED_INCLUDE_DIR}/daqiri/version.h
+  @ONLY
+)
 
 if(DAQIRI_USING_DEFAULT_CUDA_ARCHITECTURES AND
    CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 13.0)
@@ -68,7 +86,7 @@ configure_package_config_file(
 write_basic_package_version_file(
   ${CMAKE_CURRENT_BINARY_DIR}/daqiriConfigVersion.cmake
   VERSION ${PROJECT_VERSION}
-  COMPATIBILITY SameMajorVersion
+  COMPATIBILITY AnyNewerVersion
 )
 
 if(IS_ABSOLUTE "${CMAKE_INSTALL_LIBDIR}")
@@ -148,5 +166,11 @@ install(
   FILES
     ${CMAKE_CURRENT_BINARY_DIR}/daqiri.pc
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig
+  COMPONENT daqiri-cpp
+)
+
+install(
+  FILES ${DAQIRI_GENERATED_INCLUDE_DIR}/daqiri/version.h
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/daqiri
   COMPONENT daqiri-cpp
 )
