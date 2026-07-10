@@ -59,22 +59,26 @@ docker run --rm -it --privileged \
 
 !!! tip "RTX PRO 6000 Blackwell (x86_64 workstation / server)"
 
-    For discrete Blackwell RTX PRO 6000 systems, build with [`CMAKE_CUDA_ARCHITECTURES=120`](../tutorials/bare-metal-cmake-build.md) and use these configs:
+    Discrete Blackwell RTX PRO 6000: build with [`CMAKE_CUDA_ARCHITECTURES=120`](../tutorials/bare-metal-cmake-build.md), `kind: device` memory regions.
 
-    - [`daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml) — software loopback, no NIC required. Validates the GPUDirect build path; throughput is not wire-rate. See measured numbers in [`examples/rtx_pro_6000_baseline.md`](https://github.com/nvidia/daqiri/blob/main/examples/rtx_pro_6000_baseline.md).
-    - [`daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml) — prefilled dual-port NIC run (dev-box PCIe BDFs and MACs, same style as the Spark prefilled YAML). Port 0 TX on GPU CUDA 0, port 1 RX on GPU CUDA 1. Requires an L2 link between the two ports (QSFP cable, passive loopback optic, or switch). `carrier=1` on both ports does not guarantee they are looped to each other.
-    - [`daqiri_bench_raw_tx_rx_rtx_pro_6000.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_rtx_pro_6000.yaml) — generic `<placeholder>` template for cross-card or custom topology (800 Gbps target once cabled).
-    - [`daqiri_bench_raw_tx_rx_rtx_pro_6000_nic_same_port.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_rtx_pro_6000_nic_same_port.yaml) — experimental same-port TX+RX; failed `daqiri_init` on the reference box.
+    **Wire closed-loop (primary)** — TX on one port, RX on another over an L2 link (cable, optic, or switch). Same benchmark class as Spark's dual-port wire loopback, but discrete servers typically need a real link (one PF per port, no on-chip eswitch). Confirm wire traffic with `tx_phy_packets` / `rx_phy_packets`.
 
-    Unlike DGX Spark, typical RTX Pro servers expose one PF per physical port — there is no on-chip eswitch shortcut between two PFs on the same port without a link. After a NIC run, confirm whether traffic crossed the wire using `tx_phy_packets` / `rx_phy_packets` in the DPDK extended stats (near zero = on-chip or no wire loop; rising with vport counts = over-the-wire). Full constraints and baseline results: [`rtx_pro_6000_baseline.md`](https://github.com/nvidia/daqiri/blob/main/examples/rtx_pro_6000_baseline.md).
+    - [`daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml) — prefilled dual-port example (override BDFs/MAC per host)
+    - [`daqiri_bench_raw_tx_rx_rtx_pro_6000.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_rtx_pro_6000.yaml) — generic placeholders
+    - [`daqiri_bench_raw_tx_rx_hds_rtx_pro_6000.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_hds_rtx_pro_6000.yaml) — HDS wire + `--workload fft|gemm`
+    - [`daqiri_bench_rdma_tx_rx_rtx_pro_6000.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx_rtx_pro_6000.yaml) — RoCE wire
+    - [`daqiri_bench_raw_rx_ibverbs_rtx_pro_6000.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_rx_ibverbs_rtx_pro_6000.yaml) — ibverbs RX + DPDK TX sender
+
+    **SW loopback (optional)** — [`daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml): build sanity only, no NIC, non-wire.
+
+    Discovery / overrides: `scripts/discover_rtx_pro_topology.sh` or `run_rtx_pro_bench.sh --tx-bdf --rx-bdf --rx-mac`. Baseline: [`rtx_pro_6000_baseline.md`](https://github.com/nvidia/daqiri/blob/main/examples/rtx_pro_6000_baseline.md).
 
     ```bash
-    sudo ./daqiri_bench_raw_gpudirect \
-      ./examples/daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml --seconds 30
-
-    # Once p0 and p1 are cabled:
-    sudo ./daqiri_bench_raw_gpudirect \
-      ./examples/daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml --seconds 30
+    source ./scripts/discover_rtx_pro_topology.sh
+    sudo ./examples/run_rtx_pro_bench.sh dpdk nic-smoke --seconds 30
+    sudo ./examples/run_rtx_pro_bench.sh dpdk issue17 --seconds 30
+    sudo ./examples/run_rtx_pro_bench.sh dpdk-hds issue17 --seconds 30
+    python3 scripts/plot_rtx_pro_bench.py --csv bench-results/<run>/runs.csv --x payload --y gbps --series batch
     ```
 
 #### Cross-host two-DGX-Spark loopback
@@ -227,6 +231,17 @@ After having modified the configuration file, ensure you have connected an SFP c
     ```
 
 By default the application runs for 10 seconds and then exits. You can change the duration by passing `--seconds <N>` after the YAML path, or stop it gracefully at any time with `Ctrl-C`.
+
+## GPU workloads in the receive path (issue #17)
+
+`daqiri_bench_raw_gpudirect`, `daqiri_bench_raw_hds`, `daqiri_bench_rdma`, and `daqiri_bench_socket` accept `--workload none|fft|gemm|gemm_fp16`. Each received burst is reordered/gathered into a contiguous GPU buffer (`examples/bench_pipeline.{h,cu}`), then a representative cuFFT or cuBLAS operation runs on that buffer (`examples/bench_workload.{h,cu}`).
+
+On RTX PRO 6000, use `examples/run_rtx_pro_bench.sh` with `WORKLOAD=fft|gemm` or the `issue17` mode to emit both `runs.csv` and `summary.csv` (total data rate, packets sent/received, drops). Backends: `dpdk-hds` (DPDK + HDS), `rdma`/`roce` (RoCE), and `ibverbs` (raw `engine: ibverbs`, host-staged RX paired with DPDK TX).
+
+```bash
+sudo WORKLOAD=fft  ./examples/run_rtx_pro_bench.sh dpdk-hds issue17 --seconds 30
+sudo WORKLOAD=gemm ./examples/run_rtx_pro_bench.sh rdma issue17 --seconds 30
+```
 
 ## Tune RDMA SEND completion signaling
 

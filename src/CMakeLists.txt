@@ -209,7 +209,7 @@ if(NOT DEFINED DAQIRI_MGR)
     # Default: raw + socket backends
     set(DAQIRI_MGR "dpdk socket" CACHE STRING "Manager type(s) list")
 endif()
-set_property(CACHE DAQIRI_MGR PROPERTY STRINGS "dpdk" "socket" "rdma")
+set_property(CACHE DAQIRI_MGR PROPERTY STRINGS "dpdk" "socket" "rdma" "ibverbs")
 separate_arguments(DAQIRI_MGR_LIST UNIX_COMMAND ${DAQIRI_MGR})
 
 # Socket backend reuses RoCE transport from the RDMA implementation.

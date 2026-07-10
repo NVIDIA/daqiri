@@ -1,0 +1,46 @@
+%YAML 1.2
+---
+# RX-only smoke test for the pure-ibverbs MPRQ raw backend (Milestone 2).
+#
+# Selected via `engine: "ibverbs"` under `stream_type: "raw"`. This config uses
+# HOST memory because GPUDirect (device memory) registration is added in the
+# next milestone. It initializes the striding receive queue and waits for
+# external traffic, so run a separate sender (e.g. the DPDK TX bench on another
+# host/port, or pktgen) at the matching 5-tuple.
+#
+# Replace the <angle-bracket> placeholders for your system:
+#   - address: PCIe BDF of the mlx5 NIC (e.g. 0000:08:00.0) OR an IB device
+#     name (e.g. mlx5_0). The backend also accepts a netdev name in `name`.
+#   - cpu_core / master_core: isolated cores on the NIC's NUMA node.
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    engine: "ibverbs"
+    master_core: 3
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    memory_regions:
+      - name: "Data_RX_HOST"
+        kind: "huge"
+        affinity: 0
+        num_bufs: 16384
+        buf_size: 2048
+
+    interfaces:
+      - name: "rx_port"
+        address: <0000:00:00.0>
+        rx:
+          queues:
+            - name: "rx_q_0"
+              id: 0
+              cpu_core: 9
+              batch_size: 1024
+              timeout_us: 2000
+              memory_regions:
+                - "Data_RX_HOST"
+
+bench_rx:
+  interface_name: "rx_port"

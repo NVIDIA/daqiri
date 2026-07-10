@@ -1,19 +1,10 @@
-# RTX PRO 6000 Blackwell (discrete dGPU) software-loopback smoke test.
-# No NIC or cable required — validates build + GPUDirect on one GPU.
-# Not representative of wire-speed performance; use the hardware template
-# (daqiri_bench_raw_tx_rx_rtx_pro_6000.yaml) once a QSFP loopback cable is installed.
-#
-# Build (native sm_120):
-#   cmake -S . -B build -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF \
-#     -DDAQIRI_MGR="dpdk socket rdma" -DCMAKE_CUDA_ARCHITECTURES=120
-#   cmake --build build -j
+# RTX PRO 6000 — software loopback (build sanity only, no NIC).
+# Does not cross SerDes; throughput is not wire-rate. For real network traffic
+# use a dual-port wire closed-loop config, e.g.:
+#   daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml  (run_rtx_pro_bench.sh dpdk nic-smoke)
 #
 # Run:
-#   ./build/examples/daqiri_bench_raw_gpudirect \
-#     ./build/examples/daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml --seconds 30
-#
-# memory_regions[].affinity is the CUDA device index (not nvidia-smi GPU id).
-# Change affinity to target a different GPU, e.g. affinity: 1 for CUDA device 1.
+#   ./build/examples/daqiri_bench_raw_gpudirect <this.yaml> --seconds 10
 #
 %YAML 1.2
 ---
@@ -64,9 +55,11 @@ daqiri:
 
 bench_rx:
   interface_name: "loopback_ports"
+  cpu_core: 8
 
 bench_tx:
   interface_name: "loopback_ports"
+  cpu_core: 10
   batch_size: 10240
   payload_size: 8000
   header_size: 64

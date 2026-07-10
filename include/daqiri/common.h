@@ -1067,6 +1067,28 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
       input_spec.common_.manager_type =
           daqiri::manager_type_from_stream_type(input_spec.common_.stream_type);
 
+      // Optional 'engine' selector chooses the backend that implements a raw
+      // stream. Defaults to 'dpdk'; 'ibverbs' selects the pure-ibverbs MPRQ path.
+      if (node["engine"].IsDefined()) {
+        if (input_spec.common_.stream_type != daqiri::StreamType::RAW) {
+          DAQIRI_LOG_ERROR(
+              "Field 'engine' is only valid when stream_type is 'raw'");
+          return false;
+        }
+        const auto engine_str = node["engine"].as<std::string>();
+        if (engine_str == daqiri::DAQIRI_MGR_STR__DPDK) {
+          input_spec.common_.manager_type = daqiri::ManagerType::DPDK;
+        } else if (engine_str == daqiri::DAQIRI_MGR_STR__IBVERBS) {
+          input_spec.common_.manager_type = daqiri::ManagerType::IBVERBS;
+        } else {
+          DAQIRI_LOG_ERROR(
+              "Invalid engine '{}' for stream_type 'raw'. Valid values: "
+              "dpdk, ibverbs",
+              engine_str);
+          return false;
+        }
+      }
+
       input_spec.common_.loopback_ = daqiri::LoopbackType::DISABLED;
       try {
         const auto lbstr = node["loopback"].as<std::string>();

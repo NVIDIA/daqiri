@@ -548,11 +548,30 @@ void print_queue_stats(const char *direction, const std::string &interface_name,
             << std::endl;
 }
 
-void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
+void rx_count_worker(const RawBenchRxConfig& cfg, std::atomic<bool>& stop, BenchWorkload workload,
+                     const ReorderGeometry& geom, int workload_gemm_n, int workload_sync_interval) {
   if (!set_current_thread_affinity(cfg.cpu_core, "bench_rx")) {
     stop.store(true);
     return;
   }
+
+  // Per-thread representative GPU workload + reorder pipeline (both inert unless
+  // --workload is set). If init fails we warn and keep counting so the run still
+  // produces throughput. The pipeline shares the workload's CUDA stream so the
+  // reorder kernel orders before the compute with no extra sync.
+  const uint32_t out_payload_len = geom.out_payload_len > 0 ? geom.out_payload_len : 1;
+  const size_t batch_bytes = static_cast<size_t>(geom.packets_per_batch) * out_payload_len;
+  GpuWorkload gpu_workload;
+  ReorderPipeline pipeline;
+  if (workload != BenchWorkload::None) {
+    if (!gpu_workload.init(workload, batch_bytes, workload_sync_interval, workload_gemm_n) ||
+        !pipeline.init(ReorderMode::SeqReorder, geom.packets_per_batch, out_payload_len,
+                       geom.payload_byte_offset, geom.seq_bit_offset, geom.seq_bit_width,
+                       /*staging_needed=*/false, gpu_workload.stream())) {
+      std::cerr << "RX workload init failed; continuing without GPU workload\n";
+    }
+  }
+  const bool run_workload = gpu_workload.enabled() && pipeline.enabled();
 
   const int port_id = daqiri::get_port_id(cfg.interface_name);
   if (port_id < 0) {
@@ -591,15 +610,34 @@ void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
       }
       got_any = true;
       auto &stats = queue_stats[static_cast<size_t>(q)];
-      stats.packets += static_cast<uint64_t>(daqiri::get_num_packets(burst));
+      const int num_pkts = static_cast<int>(daqiri::get_num_packets(burst));
+      stats.packets += static_cast<uint64_t>(num_pkts);
       stats.bytes += daqiri::get_burst_tot_byte(burst);
       ++stats.bursts;
+
+      if (run_workload) {
+        // Reorder the real received payloads into a contiguous device buffer and
+        // run the compute on it. Packet pointers are only valid until the burst
+        // is freed, so process complete batches within this burst (the remainder
+        // < packets_per_batch is dropped), then drain the stream so the reorder
+        // kernel has finished reading the buffers before they are recycled.
+        pipeline.reset_batch();
+        for (int i = 0; i < num_pkts; ++i) {
+          pipeline.add_device_packet(
+              daqiri::get_segment_packet_ptr(burst, geom.payload_segment, i));
+          if (pipeline.collected() == geom.packets_per_batch) {
+            gpu_workload.run(pipeline.finish_batch());
+            pipeline.reset_batch();
+          }
+        }
+      }
       daqiri::free_all_packets_and_burst_rx(burst);
     }
     if (!got_any) {
       std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
   }
+  gpu_workload.sync();
   const double secs =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
           .count();

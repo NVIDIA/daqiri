@@ -1,0 +1,96 @@
+---
+description: Generic always-apply rules for communication, git, and safety
+alwaysApply: true
+---
+
+# Generic Rules
+
+## Communication
+- Keep responses brief and action-focused. No preamble, filler, or sycophancy.
+- Plain, direct language. Avoid buzzwords like "leverage", "robust", "seamless", "comprehensive".
+- No emojis unless explicitly requested.
+- After substantive edits, end with a short bullet summary of what changed.
+- Cite exact file paths (and line numbers when relevant) when discussing code.
+
+## Git / source control
+- NEVER run `git add`, `git commit`, or `git push`. Instead, print the exact commands for the user to run. Use git add {file/path}, not "." or "-A"
+- Keep commit messages short and concrete. No verbose AI prose, no marketing language.
+- These git operations are allowed, but ASK BEFORE running:
+  - merge conflict resolution
+  - branch creation / `git checkout` / switching branches
+  - `git rebase`
+- Never bypass hooks (`--no-verify`) or force push without explicit user instruction.
+- when you make a branch, prefix it with ccrozier-{whatever}
+
+### Commit message style
+
+```
+GOOD: fix null check in auth middleware
+
+BAD: This commit comprehensively addresses a critical issue by introducing
+     a robust null-safety enhancement to seamlessly improve the
+     authentication middleware's resilience.
+```
+
+## Safety and process
+- Ask before any destructive shell command (`rm -rf`, `DROP TABLE`, force push, mass file deletion, etc.).
+- Don't fabricate APIs, functions, packages, or versions. Verify by reading code or docs first.
+- Read a file before editing it. Don't guess at contents.
+- Don't make unrelated changes or expand scope beyond what was requested.
+- Ask before large refactors or multi-file restructures.
+
+## Code style
+- No obvious or narrating comments (e.g. `// increment counter`, `// import module`).
+- Prefer editing existing files over creating new ones.
+
+## Bugs found while working on a task
+When you discover a bug unrelated to the requested change:
+
+1. Decide if the bug BLOCKS the requested task.
+   - Blocking = the requested feature/fix cannot work correctly without addressing it.
+2. If BLOCKING: document the bug (what, where, why it blocks), fix it in the current PR, and call it out in the PR description under a "Drive-by fixes" or "Also fixed" section.
+3. If NOT BLOCKING: do NOT fix it. Document it for the user with:
+   - file path + line(s)
+   - short description of the bug
+   - suggested fix (1-2 lines)
+   - a note that it is unresolved and recommend a follow-up issue.
+4. Never silently fix unrelated bugs.
+
+## PRs and issues (give text, not commands)
+- Do NOT run `gh pr create`, `gh issue create`, or any git/gh command that opens or pushes PRs/issues.
+- Instead, output the text the user will paste into the GitHub/GitLab UI (markdown format)
+- Always provide a title AND a body, clearly labeled.
+- Word limits (hard caps):
+  - PR body: under 100 words
+  - Issue body: under 50 words
+  - Title: under 12 words, imperative mood, no trailing period
+- No marketing language, no emojis, no "This PR comprehensively..." style intros.
+- Body structure:
+  - PR: 1-2 line summary, then short bullets for what changed and how to test.
+  - Issue: 1-line problem, 1-line expected behavior, 1-line repro (if relevant).
+
+### Example PR output
+
+```
+TITLE: fix null check in auth middleware
+
+BODY:
+Auth middleware crashed when `req.user` was undefined on public routes.
+
+Changes:
+- Add null guard in `authMiddleware` before role lookup
+- Add unit test for unauthenticated request
+
+Test: `npm test -- auth.middleware`
+```
+
+### Example issue output
+
+```
+TITLE: auth middleware crashes on public routes
+
+BODY:
+`authMiddleware` throws when `req.user` is undefined.
+Expected: skip role check and call `next()`.
+Repro: GET /health while logged out.
+```

@@ -1,17 +1,10 @@
-# RTX PRO 6000 — dual-port wire closed-loop (DPDK GPUDirect).
-# One process: TX on port A, RX on port B over an L2 link (cable, optic, or switch).
-# Example BDFs/MACs below are from one dev box — override per host:
-#   source ./scripts/discover_rtx_pro_topology.sh
-#   run_rtx_pro_bench.sh ... --tx-bdf ... --rx-bdf ... --rx-mac ...
+# RTX PRO 6000 — Header-Data Split wire closed-loop (dual-port L2 loop).
+# TX port + RX port must have L2 connectivity. Override BDFs/MAC via discovery
+# or run_rtx_pro_bench.sh --tx-bdf / --rx-bdf / --rx-mac.
 #
-# Unlike DGX Spark on-chip eswitch paths, discrete servers usually have one PF
-# per port; wire tests need real L2 connectivity. Confirm with tx_phy_packets /
-# rx_phy_packets after a run.
-#
-# Build: cmake ... -DCMAKE_CUDA_ARCHITECTURES=120
 # Run:
-#   sudo ./build/examples/daqiri_bench_raw_gpudirect <this.yaml> --seconds 30
-#   sudo ./examples/run_rtx_pro_bench.sh dpdk nic-smoke --seconds 30
+#   sudo ./build/examples/daqiri_bench_raw_hds <this.yaml> --seconds 30 --workload fft
+#   sudo ./examples/run_rtx_pro_bench.sh dpdk-hds issue17 --seconds 30
 #
 %YAML 1.2
 ---
@@ -25,16 +18,26 @@ daqiri:
     loopback: ""
 
     memory_regions:
+    - name: "Data_TX_CPU"
+      kind: "huge"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 64
     - name: "Data_TX_GPU"
       kind: "device"
       affinity: 0
       num_bufs: 51200
-      buf_size: 8064
+      buf_size: 1064
+    - name: "Data_RX_CPU"
+      kind: "huge"
+      affinity: 1
+      num_bufs: 51200
+      buf_size: 64
     - name: "Data_RX_GPU"
       kind: "device"
       affinity: 1
       num_bufs: 51200
-      buf_size: 8064
+      buf_size: 1000
 
     interfaces:
     - name: "tx_port"
@@ -46,6 +49,7 @@ daqiri:
           batch_size: 10240
           cpu_core: 11
           memory_regions:
+            - "Data_TX_CPU"
             - "Data_TX_GPU"
           offloads:
             - "tx_eth_src"
@@ -59,6 +63,7 @@ daqiri:
           cpu_core: 9
           batch_size: 10240
           memory_regions:
+            - "Data_RX_CPU"
             - "Data_RX_GPU"
         flows:
         - name: "flow_0"
@@ -69,6 +74,7 @@ daqiri:
           match:
             udp_src: 4096
             udp_dst: 4096
+            ipv4_len: 1050
 
 bench_rx:
   interface_name: "rx_port"
@@ -78,9 +84,8 @@ bench_tx:
   interface_name: "tx_port"
   cpu_core: 10
   batch_size: 10240
-  payload_size: 8000
+  payload_size: 1000
   header_size: 64
-  # RX port MAC; fill per host: cat /sys/class/net/<rx-iface>/address
   eth_dst_addr: <00:00:00:00:00:00>
   ip_src_addr: 1.2.3.4
   ip_dst_addr: 5.6.7.8

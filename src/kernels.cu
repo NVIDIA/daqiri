@@ -580,3 +580,33 @@ extern "C" void packet_reorder_copy_payload_by_sequence(void* out,
       input_endianness,
       batch_id_out);
 }
+
+__global__ void packet_gather_copy_payload_kernel(void* __restrict__ out,
+                                                  const void* const* const __restrict__ in,
+                                                  uint32_t payload_len,
+                                                  uint32_t payload_byte_offset, uint32_t num_pkts) {
+  const uint32_t pkt_idx = static_cast<uint32_t>(blockIdx.x);
+  if (pkt_idx >= num_pkts) {
+    return;
+  }
+
+  const auto* src_pkt = static_cast<const uint8_t*>(in[pkt_idx]);
+  if (src_pkt == nullptr) {
+    return;
+  }
+
+  const auto* src = src_pkt + payload_byte_offset;
+  auto* dst = static_cast<uint8_t*>(out) + (static_cast<size_t>(pkt_idx) * payload_len);
+  copy_payload_vectorized(dst, src, payload_len);
+}
+
+extern "C" void packet_gather_copy_payload(void* out, const void* const* const in,
+                                           uint32_t payload_len, uint32_t payload_byte_offset,
+                                           uint32_t num_pkts, cudaStream_t stream) {
+  if (out == nullptr || in == nullptr || payload_len == 0 || num_pkts == 0) {
+    return;
+  }
+
+  packet_gather_copy_payload_kernel<<<num_pkts, 128, 0, stream>>>(out, in, payload_len,
+                                                                  payload_byte_offset, num_pkts);
+}

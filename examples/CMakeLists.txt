@@ -26,6 +26,9 @@ set(DAQIRI_BENCH_CONFIGS
   daqiri_bench_raw_tx_rx.yaml
   daqiri_bench_raw_tx_rx_4q.yaml
   daqiri_bench_raw_tx_rx_hds.yaml
+  daqiri_bench_raw_tx_rx_hds_rtx_pro_6000.yaml
+  daqiri_bench_raw_rx_ibverbs.yaml
+  daqiri_bench_raw_rx_ibverbs_rtx_pro_6000.yaml
   daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml
   daqiri_bench_raw_tx_rx_reorder_seq_1024_cpu.yaml
   daqiri_bench_raw_sw_loopback_reorder_seq_1024.yaml
@@ -43,6 +46,7 @@ set(DAQIRI_BENCH_CONFIGS
   daqiri_example_pcap_writer_sw_loopback.yaml
   daqiri_example_pcap_writer_tx_rx.yaml
   daqiri_bench_rdma_tx_rx.yaml
+  daqiri_bench_rdma_tx_rx_rtx_pro_6000.yaml
   daqiri_bench_socket_udp_tx_rx.yaml
   daqiri_bench_socket_tcp_tx_rx.yaml
 )
@@ -55,7 +59,7 @@ function(link_daqiri_bench target)
   target_compile_features(${target} PRIVATE cxx_std_17)
   if(NOT BUILD_SHARED_LIBS AND UNIX AND NOT APPLE)
     set(DAQIRI_EXAMPLE_STATIC_LIBS daqiri::daqiri)
-    foreach(mgr IN ITEMS dpdk socket rdma)
+    foreach(mgr IN ITEMS dpdk socket rdma ibverbs)
       if(TARGET daqiri_${mgr})
         list(APPEND DAQIRI_EXAMPLE_STATIC_LIBS daqiri_${mgr})
       endif()
@@ -73,9 +77,10 @@ function(link_daqiri_bench target)
 endfunction()
 
 function(add_daqiri_raw_bench target source)
-  add_executable(${target} ${source} raw_bench_common.cpp raw_bench_common_cuda.cu)
+  add_executable(${target} ${source} raw_bench_common.cpp raw_bench_common_cuda.cu
+                 bench_workload.cu bench_pipeline.cu)
   link_daqiri_bench(${target})
-  target_link_libraries(${target} PRIVATE CUDA::cudart)
+  target_link_libraries(${target} PRIVATE CUDA::cudart CUDA::cufft CUDA::cublas)
   set_target_properties(${target} PROPERTIES
     CUDA_ARCHITECTURES "${DAQIRI_EXAMPLES_CUDA_ARCHITECTURES}"
     BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
@@ -102,16 +107,19 @@ add_daqiri_raw_bench(daqiri_bench_raw_reorder_quantize raw_reorder_quantize_benc
 add_daqiri_raw_bench(daqiri_example_gds_write gds_write_example.cpp)
 add_daqiri_raw_bench(daqiri_example_pcap_writer pcap_writer_example.cpp)
 
-add_executable(daqiri_bench_rdma rdma_bench.cpp raw_bench_common.cpp)
+add_executable(daqiri_bench_rdma rdma_bench.cpp raw_bench_common.cpp
+               bench_workload.cu bench_pipeline.cu)
 link_daqiri_bench(daqiri_bench_rdma)
-target_link_libraries(daqiri_bench_rdma PRIVATE CUDA::cudart)
+target_link_libraries(daqiri_bench_rdma PRIVATE CUDA::cudart CUDA::cufft CUDA::cublas)
 set_target_properties(daqiri_bench_rdma PROPERTIES
+  CUDA_ARCHITECTURES "${DAQIRI_EXAMPLES_CUDA_ARCHITECTURES}"
   BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
 )
 
-add_executable(daqiri_bench_socket socket_bench.cpp raw_bench_common.cpp)
+add_executable(daqiri_bench_socket socket_bench.cpp raw_bench_common.cpp
+               bench_workload.cu bench_pipeline.cu)
 link_daqiri_bench(daqiri_bench_socket)
-target_link_libraries(daqiri_bench_socket PRIVATE CUDA::cudart)
+target_link_libraries(daqiri_bench_socket PRIVATE CUDA::cudart CUDA::cufft CUDA::cublas)
 set_target_properties(daqiri_bench_socket PROPERTIES
   BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
 )

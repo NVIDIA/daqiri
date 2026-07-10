@@ -1,0 +1,537 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3140" height="3200" viewBox="0 0 3140 3200">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="40" y="45" font-family="DejaVu Sans, Arial, sans-serif" font-size="22" font-weight="700" fill="#1f2937">PCIe Topology Schematic</text>
+<text x="40" y="68" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#4b5563">Root complexes show PCIe enumeration; highlighted switch boxes show PIX/PXB peer fabrics.</text>
+<polyline points="300,1195.0 440.0,1195.0 440.0,425.0 580,425.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="312" y="413.0" width="156" height="24" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="390.0" y="429.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">root complex</text>
+<polyline points="850,425.0 985.0,425.0 985.0,425.0 1120,425.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="862" y="406.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="940.0" y="422.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="940.0" y="436.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="1460,425.0 1560.0,425.0 1560.0,425.0 1660,425.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="1472" y="406.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="1550.0" y="422.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="1550.0" y="436.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="2000,425.0 2100.0,425.0 2100.0,136.0 2200,136.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2012" y="117.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2090.0" y="133.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="2090.0" y="147.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="2540,136.0 2640.0,136.0 2640.0,136.0 2740,136.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2552" y="117.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2630.0" y="133.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="2630.0" y="147.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="2000,425.0 2100.0,425.0 2100.0,276.0 2200,276.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2012" y="257.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2090.0" y="273.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="2090.0" y="287.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="2540,276.0 2640.0,276.0 2640.0,276.0 2740,276.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2552" y="257.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2630.0" y="273.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="2630.0" y="287.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="2000,425.0 2100.0,425.0 2100.0,434.0 2200,434.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2012" y="415.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2090.0" y="431.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="2090.0" y="445.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="2540,434.0 2640.0,434.0 2640.0,434.0 2740,434.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2552" y="415.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2630.0" y="431.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="2630.0" y="445.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="2000,425.0 2100.0,425.0 2100.0,574.0 2200,574.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2012" y="555.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2090.0" y="571.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x4</text>
+<text text-anchor="middle" x="2090.0" y="585.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">15.8 GB/s</text>
+<polyline points="2540,574.0 2640.0,574.0 2640.0,574.0 2740,574.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2552" y="555.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2630.0" y="571.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x4</text>
+<text text-anchor="middle" x="2630.0" y="585.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">15.8 GB/s</text>
+<polyline points="2000,425.0 2100.0,425.0 2100.0,714.0 2200,714.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2012" y="695.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2090.0" y="711.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x4</text>
+<text text-anchor="middle" x="2090.0" y="725.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">15.8 GB/s</text>
+<polyline points="2540,714.0 2640.0,714.0 2640.0,714.0 2740,714.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2552" y="695.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2630.0" y="711.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x4</text>
+<text text-anchor="middle" x="2630.0" y="725.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">15.8 GB/s</text>
+<polyline points="300,1195.0 440.0,1195.0 440.0,1055.0 580,1055.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="312" y="1043.0" width="156" height="24" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="390.0" y="1059.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">root complex</text>
+<polyline points="850,1055.0 985.0,1055.0 985.0,1055.0 1120,1055.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="862" y="1029.0" width="156" height="52" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="940.0" y="1045.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen4 x16</text>
+<text text-anchor="middle" x="940.0" y="1059.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">31.5 GB/s</text>
+<text text-anchor="middle" x="940.0" y="1073.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">current Gen2 x4</text>
+<polyline points="1460,1055.0 1560.0,1055.0 1560.0,845.0 1660,845.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="1472" y="826.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="1550.0" y="842.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen2 x4</text>
+<text text-anchor="middle" x="1550.0" y="856.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">2.0 GB/s</text>
+<polyline points="1460,1055.0 1560.0,1055.0 1560.0,985.0 1660,985.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="1472" y="966.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="1550.0" y="982.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen2 x4</text>
+<text text-anchor="middle" x="1550.0" y="996.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">2.0 GB/s</text>
+<polyline points="1460,1055.0 1560.0,1055.0 1560.0,1125.0 1660,1125.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="1472" y="1106.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="1550.0" y="1122.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen2 x4</text>
+<text text-anchor="middle" x="1550.0" y="1136.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">2.0 GB/s</text>
+<polyline points="1460,1055.0 1560.0,1055.0 1560.0,1265.0 1660,1265.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="1472" y="1246.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="1550.0" y="1262.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen2 x4</text>
+<text text-anchor="middle" x="1550.0" y="1276.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">2.0 GB/s</text>
+<polyline points="300,1195.0 440.0,1195.0 440.0,1414.0 580,1414.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="312" y="1402.0" width="156" height="24" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="390.0" y="1418.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">root complex</text>
+<polyline points="850,1414.0 985.0,1414.0 985.0,1414.0 1120,1414.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="862" y="1395.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="940.0" y="1411.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen3 x2</text>
+<text text-anchor="middle" x="940.0" y="1425.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">2.0 GB/s</text>
+<polyline points="1460,1414.0 1560.0,1414.0 1560.0,1414.0 1660,1414.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="1472" y="1388.0" width="156" height="52" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="1550.0" y="1404.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen3 x8</text>
+<text text-anchor="middle" x="1550.0" y="1418.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">7.9 GB/s</text>
+<text text-anchor="middle" x="1550.0" y="1432.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">current Gen3 x2</text>
+<polyline points="300,1195.0 440.0,1195.0 440.0,1624.0 580,1624.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="312" y="1612.0" width="156" height="24" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="390.0" y="1628.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">root complex</text>
+<polyline points="850,1624.0 985.0,1624.0 985.0,1624.0 1120,1624.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="862" y="1605.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="940.0" y="1621.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="940.0" y="1635.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="1460,1624.0 1560.0,1624.0 1560.0,1554.0 1660,1554.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="1472" y="1535.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="1550.0" y="1551.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="1550.0" y="1565.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="1460,1624.0 1560.0,1624.0 1560.0,1694.0 1660,1694.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="1472" y="1675.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="1550.0" y="1691.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="1550.0" y="1705.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="300,1195.0 440.0,1195.0 440.0,1965.0 580,1965.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="312" y="1953.0" width="156" height="24" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="390.0" y="1969.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">root complex</text>
+<polyline points="850,1965.0 985.0,1965.0 985.0,1965.0 1120,1965.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="862" y="1946.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="940.0" y="1962.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="940.0" y="1976.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="1460,1965.0 1560.0,1965.0 1560.0,1965.0 1660,1965.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="1472" y="1946.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="1550.0" y="1962.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="1550.0" y="1976.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="2000,1965.0 2100.0,1965.0 2100.0,1816.0 2200,1816.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2012" y="1790.0" width="156" height="52" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2090.0" y="1806.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="2090.0" y="1820.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<text text-anchor="middle" x="2090.0" y="1834.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">current Gen1 x16</text>
+<polyline points="2540,1816.0 2640.0,1816.0 2640.0,1816.0 2740,1816.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2552" y="1790.0" width="156" height="52" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2630.0" y="1806.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="2630.0" y="1820.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<text text-anchor="middle" x="2630.0" y="1834.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">current Gen1 x16</text>
+<polyline points="2000,1965.0 2100.0,1965.0 2100.0,1956.0 2200,1956.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2012" y="1930.0" width="156" height="52" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2090.0" y="1946.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="2090.0" y="1960.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<text text-anchor="middle" x="2090.0" y="1974.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">current Gen1 x16</text>
+<polyline points="2540,1956.0 2640.0,1956.0 2640.0,1956.0 2740,1956.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2552" y="1930.0" width="156" height="52" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2630.0" y="1946.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="2630.0" y="1960.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<text text-anchor="middle" x="2630.0" y="1974.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">current Gen1 x16</text>
+<polyline points="2000,1965.0 2100.0,1965.0 2100.0,2114.0 2200,2114.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2012" y="2095.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2090.0" y="2111.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="2090.0" y="2125.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="2540,2114.0 2640.0,2114.0 2640.0,2114.0 2740,2114.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2552" y="2095.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2630.0" y="2111.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="2630.0" y="2125.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="300,2770.0 440.0,2770.0 440.0,2525.0 580,2525.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="312" y="2513.0" width="156" height="24" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="390.0" y="2529.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">root complex</text>
+<polyline points="850,2525.0 985.0,2525.0 985.0,2525.0 1120,2525.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="862" y="2506.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="940.0" y="2522.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="940.0" y="2536.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="1460,2525.0 1560.0,2525.0 1560.0,2525.0 1660,2525.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="1472" y="2506.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="1550.0" y="2522.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="1550.0" y="2536.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="2000,2525.0 2100.0,2525.0 2100.0,2236.0 2200,2236.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2012" y="2210.0" width="156" height="52" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2090.0" y="2226.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="2090.0" y="2240.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<text text-anchor="middle" x="2090.0" y="2254.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">current Gen1 x0</text>
+<polyline points="2540,2236.0 2640.0,2236.0 2640.0,2236.0 2740,2236.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2552" y="2224.0" width="156" height="24" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2630.0" y="2240.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">link unknown</text>
+<polyline points="2000,2525.0 2100.0,2525.0 2100.0,2376.0 2200,2376.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2012" y="2357.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2090.0" y="2373.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="2090.0" y="2387.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="2540,2376.0 2640.0,2376.0 2640.0,2376.0 2740,2376.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2552" y="2357.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2630.0" y="2373.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="2630.0" y="2387.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="2000,2525.0 2100.0,2525.0 2100.0,2534.0 2200,2534.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2012" y="2515.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2090.0" y="2531.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="2090.0" y="2545.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="2540,2534.0 2640.0,2534.0 2640.0,2534.0 2740,2534.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2552" y="2515.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2630.0" y="2531.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="2630.0" y="2545.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="2000,2525.0 2100.0,2525.0 2100.0,2674.0 2200,2674.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2012" y="2655.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2090.0" y="2671.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x4</text>
+<text text-anchor="middle" x="2090.0" y="2685.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">15.8 GB/s</text>
+<polyline points="2540,2674.0 2640.0,2674.0 2640.0,2674.0 2740,2674.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2552" y="2655.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2630.0" y="2671.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x4</text>
+<text text-anchor="middle" x="2630.0" y="2685.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">15.8 GB/s</text>
+<polyline points="2000,2525.0 2100.0,2525.0 2100.0,2814.0 2200,2814.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2012" y="2795.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2090.0" y="2811.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x4</text>
+<text text-anchor="middle" x="2090.0" y="2825.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">15.8 GB/s</text>
+<polyline points="2540,2814.0 2640.0,2814.0 2640.0,2814.0 2740,2814.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2552" y="2795.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2630.0" y="2811.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x4</text>
+<text text-anchor="middle" x="2630.0" y="2825.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">15.8 GB/s</text>
+<polyline points="300,2770.0 440.0,2770.0 440.0,3015.0 580,3015.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="312" y="3003.0" width="156" height="24" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="390.0" y="3019.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">root complex</text>
+<polyline points="850,3015.0 985.0,3015.0 985.0,3015.0 1120,3015.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="862" y="2996.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="940.0" y="3012.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="940.0" y="3026.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="1460,3015.0 1560.0,3015.0 1560.0,3015.0 1660,3015.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="1472" y="2996.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="1550.0" y="3012.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="1550.0" y="3026.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="2000,3015.0 2100.0,3015.0 2100.0,2936.0 2200,2936.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2012" y="2910.0" width="156" height="52" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2090.0" y="2926.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="2090.0" y="2940.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<text text-anchor="middle" x="2090.0" y="2954.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">current Gen1 x16</text>
+<polyline points="2540,2936.0 2640.0,2936.0 2640.0,2936.0 2740,2936.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2552" y="2910.0" width="156" height="52" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2630.0" y="2926.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="2630.0" y="2940.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<text text-anchor="middle" x="2630.0" y="2954.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">current Gen1 x16</text>
+<polyline points="2000,3015.0 2100.0,3015.0 2100.0,3094.0 2200,3094.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2012" y="3075.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2090.0" y="3091.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="2090.0" y="3105.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<polyline points="2540,3094.0 2640.0,3094.0 2640.0,3094.0 2740,3094.0" fill="none" stroke="#6b7280" stroke-width="2"/>
+<rect x="2552" y="3075.0" width="156" height="38" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+<text text-anchor="middle" x="2630.0" y="3091.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">Gen5 x16</text>
+<text text-anchor="middle" x="2630.0" y="3105.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="400" fill="#374151">63.0 GB/s</text>
+<rect x="40" y="1163" width="260" height="64" rx="8" fill="#dcecff" stroke="#5c7fa6" stroke-width="2"/>
+<text x="54" y="1188" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">CPU/SoC NODE0</text>
+<text x="54" y="1207" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">CPUs 0-63,128-191</text>
+<rect x="580" y="393" width="270" height="64" rx="8" fill="#eceff4" stroke="#8a95a5" stroke-width="2"/>
+<text x="594" y="418" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">Host Bridge</text>
+<text x="594" y="437" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">pci0000:00</text>
+<rect x="1120" y="368" width="340" height="114" rx="8" fill="#f4f0e6" stroke="#b88a35" stroke-width="2"/>
+<text x="1134" y="393" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Bridge / Root Port</text>
+<text x="1134" y="412" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:00:01.1</text>
+<text x="1134" y="429" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Advanced Micro Devices, Inc. [AMD] Device</text>
+<text x="1134" y="446" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">153e</text>
+<text x="1134" y="463" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="1660" y="341" width="340" height="168" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+<text x="1674" y="366" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Switch</text>
+<text x="1674" y="385" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:01:00.0</text>
+<text x="1674" y="402" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Broadcom / LSI PEX890xx PCIe Gen 5 Switch</text>
+<text x="1674" y="419" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">PXB peer fabric: GPU0 &lt;-&gt;</text>
+<text x="1674" y="436" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NVME0,NVME1,ens15f0np0</text>
+<text x="1674" y="453" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">PXB peer fabric: GPU1 &lt;-&gt;</text>
+<text x="1674" y="470" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NVME0,NVME1,ens15f0np0</text>
+<text x="1674" y="487" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="2200" y="88" width="340" height="96" rx="8" fill="#f4f0e6" stroke="#b88a35" stroke-width="2"/>
+<text x="2214" y="113" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Switch</text>
+<text x="2214" y="132" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:02:00.0</text>
+<text x="2214" y="149" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Broadcom / LSI PEX890xx PCIe Gen 5 Switch</text>
+<text x="2214" y="166" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="2740" y="88" width="360" height="96" rx="8" fill="#e5f6de" stroke="#5f9d3b" stroke-width="2"/>
+<text x="2754" y="113" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">GPU0 GPU</text>
+<text x="2754" y="132" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:03:00.0</text>
+<text x="2754" y="149" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NVIDIA Corporation Device 2bb5</text>
+<text x="2754" y="166" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="2200" y="228" width="340" height="96" rx="8" fill="#f4f0e6" stroke="#b88a35" stroke-width="2"/>
+<text x="2214" y="253" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Switch</text>
+<text x="2214" y="272" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:02:01.0</text>
+<text x="2214" y="289" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Broadcom / LSI PEX890xx PCIe Gen 5 Switch</text>
+<text x="2214" y="306" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="2740" y="228" width="360" height="96" rx="8" fill="#e5f6de" stroke="#5f9d3b" stroke-width="2"/>
+<text x="2754" y="253" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">GPU1 GPU</text>
+<text x="2754" y="272" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:04:00.0</text>
+<text x="2754" y="289" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NVIDIA RTX PRO 6000 Blackwell Server Edition</text>
+<text x="2754" y="306" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="2200" y="386" width="340" height="96" rx="8" fill="#f4f0e6" stroke="#b88a35" stroke-width="2"/>
+<text x="2214" y="411" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Switch</text>
+<text x="2214" y="430" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:02:02.0</text>
+<text x="2214" y="447" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Broadcom / LSI PEX890xx PCIe Gen 5 Switch</text>
+<text x="2214" y="464" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="2740" y="368" width="360" height="132" rx="8" fill="#e2f4f7" stroke="#3b91a3" stroke-width="2"/>
+<text x="2754" y="393" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">ens15f0np0 NIC</text>
+<text x="2754" y="412" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:05:00.0</text>
+<text x="2754" y="429" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Mellanox Technologies MT43244 BlueField-3</text>
+<text x="2754" y="446" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">integrated ConnectX-7 network controller</text>
+<text x="2754" y="463" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">rdma mlx5_1</text>
+<text x="2754" y="480" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="2200" y="526" width="340" height="96" rx="8" fill="#f4f0e6" stroke="#b88a35" stroke-width="2"/>
+<text x="2214" y="551" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Switch</text>
+<text x="2214" y="570" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:02:03.0</text>
+<text x="2214" y="587" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Broadcom / LSI PEX890xx PCIe Gen 5 Switch</text>
+<text x="2214" y="604" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="2740" y="508" width="360" height="132" rx="8" fill="#efe7fb" stroke="#8b65b7" stroke-width="2"/>
+<text x="2754" y="533" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">NVME0 NVMe</text>
+<text x="2754" y="552" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:06:00.0</text>
+<text x="2754" y="569" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Samsung Electronics Co Ltd NVMe SSD</text>
+<text x="2754" y="586" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Controller PM174X</text>
+<text x="2754" y="603" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">block nvme3c3n1</text>
+<text x="2754" y="620" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="2200" y="666" width="340" height="96" rx="8" fill="#f4f0e6" stroke="#b88a35" stroke-width="2"/>
+<text x="2214" y="691" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Switch</text>
+<text x="2214" y="710" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:02:04.0</text>
+<text x="2214" y="727" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Broadcom / LSI PEX890xx PCIe Gen 5 Switch</text>
+<text x="2214" y="744" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="2740" y="648" width="360" height="132" rx="8" fill="#efe7fb" stroke="#8b65b7" stroke-width="2"/>
+<text x="2754" y="673" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">NVME1 NVMe</text>
+<text x="2754" y="692" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:07:00.0</text>
+<text x="2754" y="709" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Samsung Electronics Co Ltd NVMe SSD</text>
+<text x="2754" y="726" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Controller PM174X</text>
+<text x="2754" y="743" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">block nvme4c4n1</text>
+<text x="2754" y="760" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="580" y="1023" width="270" height="64" rx="8" fill="#eceff4" stroke="#8a95a5" stroke-width="2"/>
+<text x="594" y="1048" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">Host Bridge</text>
+<text x="594" y="1067" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">pci0000:10</text>
+<rect x="1120" y="998" width="340" height="114" rx="8" fill="#f4f0e6" stroke="#b88a35" stroke-width="2"/>
+<text x="1134" y="1023" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Bridge / Root Port</text>
+<text x="1134" y="1042" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:10:01.1</text>
+<text x="1134" y="1059" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Advanced Micro Devices, Inc. [AMD] Device</text>
+<text x="1134" y="1076" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">153e</text>
+<text x="1134" y="1093" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="1660" y="788" width="360" height="114" rx="8" fill="#e2f4f7" stroke="#3b91a3" stroke-width="2"/>
+<text x="1674" y="813" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">ens27f0 NIC</text>
+<text x="1674" y="832" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:11:00.0</text>
+<text x="1674" y="849" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Intel Corporation I350 Gigabit Network</text>
+<text x="1674" y="866" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Connection</text>
+<text x="1674" y="883" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="1660" y="928" width="360" height="114" rx="8" fill="#e2f4f7" stroke="#3b91a3" stroke-width="2"/>
+<text x="1674" y="953" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">ens27f1 NIC</text>
+<text x="1674" y="972" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:11:00.1</text>
+<text x="1674" y="989" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Intel Corporation I350 Gigabit Network</text>
+<text x="1674" y="1006" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Connection</text>
+<text x="1674" y="1023" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="1660" y="1068" width="360" height="114" rx="8" fill="#e2f4f7" stroke="#3b91a3" stroke-width="2"/>
+<text x="1674" y="1093" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">ens27f2 NIC</text>
+<text x="1674" y="1112" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:11:00.2</text>
+<text x="1674" y="1129" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Intel Corporation I350 Gigabit Network</text>
+<text x="1674" y="1146" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Connection</text>
+<text x="1674" y="1163" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="1660" y="1208" width="360" height="114" rx="8" fill="#e2f4f7" stroke="#3b91a3" stroke-width="2"/>
+<text x="1674" y="1233" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">ens27f3 NIC</text>
+<text x="1674" y="1252" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:11:00.3</text>
+<text x="1674" y="1269" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Intel Corporation I350 Gigabit Network</text>
+<text x="1674" y="1286" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Connection</text>
+<text x="1674" y="1303" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="580" y="1382" width="270" height="64" rx="8" fill="#eceff4" stroke="#8a95a5" stroke-width="2"/>
+<text x="594" y="1407" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">Host Bridge</text>
+<text x="594" y="1426" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">pci0000:50</text>
+<rect x="1120" y="1357" width="340" height="114" rx="8" fill="#f4f0e6" stroke="#b88a35" stroke-width="2"/>
+<text x="1134" y="1382" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Bridge / Root Port</text>
+<text x="1134" y="1401" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:50:03.2</text>
+<text x="1134" y="1418" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Advanced Micro Devices, Inc. [AMD] Device</text>
+<text x="1134" y="1435" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">1554</text>
+<text x="1134" y="1452" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="1660" y="1348" width="360" height="132" rx="8" fill="#efe7fb" stroke="#8b65b7" stroke-width="2"/>
+<text x="1674" y="1373" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">NVME2 NVMe</text>
+<text x="1674" y="1392" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:51:00.0</text>
+<text x="1674" y="1409" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Marvell Technology Group Ltd. 88NR2241 Non-</text>
+<text x="1674" y="1426" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Volatile memory controller</text>
+<text x="1674" y="1443" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">block nvme2c2n1</text>
+<text x="1674" y="1460" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="580" y="1592" width="270" height="64" rx="8" fill="#eceff4" stroke="#8a95a5" stroke-width="2"/>
+<text x="594" y="1617" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">Host Bridge</text>
+<text x="594" y="1636" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">pci0000:60</text>
+<rect x="1120" y="1567" width="340" height="114" rx="8" fill="#f4f0e6" stroke="#b88a35" stroke-width="2"/>
+<text x="1134" y="1592" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Bridge / Root Port</text>
+<text x="1134" y="1611" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:60:01.1</text>
+<text x="1134" y="1628" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Advanced Micro Devices, Inc. [AMD] Device</text>
+<text x="1134" y="1645" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">153e</text>
+<text x="1134" y="1662" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="1660" y="1488" width="360" height="132" rx="8" fill="#e2f4f7" stroke="#3b91a3" stroke-width="2"/>
+<text x="1674" y="1513" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">ens1f0np0 NIC</text>
+<text x="1674" y="1532" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:61:00.0</text>
+<text x="1674" y="1549" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Mellanox Technologies MT43244 BlueField-3</text>
+<text x="1674" y="1566" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">integrated ConnectX-7 network controller</text>
+<text x="1674" y="1583" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">rdma mlx5_2</text>
+<text x="1674" y="1600" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="1660" y="1628" width="360" height="132" rx="8" fill="#e2f4f7" stroke="#3b91a3" stroke-width="2"/>
+<text x="1674" y="1653" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">ens1f1np1 NIC</text>
+<text x="1674" y="1672" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:61:00.1</text>
+<text x="1674" y="1689" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Mellanox Technologies MT43244 BlueField-3</text>
+<text x="1674" y="1706" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">integrated ConnectX-7 network controller</text>
+<text x="1674" y="1723" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">rdma mlx5_3</text>
+<text x="1674" y="1740" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="580" y="1933" width="270" height="64" rx="8" fill="#eceff4" stroke="#8a95a5" stroke-width="2"/>
+<text x="594" y="1958" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">Host Bridge</text>
+<text x="594" y="1977" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">pci0000:70</text>
+<rect x="1120" y="1908" width="340" height="114" rx="8" fill="#f4f0e6" stroke="#b88a35" stroke-width="2"/>
+<text x="1134" y="1933" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Bridge / Root Port</text>
+<text x="1134" y="1952" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:70:01.1</text>
+<text x="1134" y="1969" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Advanced Micro Devices, Inc. [AMD] Device</text>
+<text x="1134" y="1986" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">153e</text>
+<text x="1134" y="2003" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="1660" y="1899" width="340" height="132" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+<text x="1674" y="1924" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Switch</text>
+<text x="1674" y="1943" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:71:00.0</text>
+<text x="1674" y="1960" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Broadcom / LSI PEX890xx PCIe Gen 5 Switch</text>
+<text x="1674" y="1977" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">PXB peer fabric: GPU2 &lt;-&gt; ens16f0np0</text>
+<text x="1674" y="1994" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">PXB peer fabric: GPU3 &lt;-&gt; ens16f0np0</text>
+<text x="1674" y="2011" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="2200" y="1768" width="340" height="96" rx="8" fill="#f4f0e6" stroke="#b88a35" stroke-width="2"/>
+<text x="2214" y="1793" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Switch</text>
+<text x="2214" y="1812" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:72:00.0</text>
+<text x="2214" y="1829" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Broadcom / LSI PEX890xx PCIe Gen 5 Switch</text>
+<text x="2214" y="1846" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="2740" y="1768" width="360" height="96" rx="8" fill="#e5f6de" stroke="#5f9d3b" stroke-width="2"/>
+<text x="2754" y="1793" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">GPU2 GPU</text>
+<text x="2754" y="1812" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:73:00.0</text>
+<text x="2754" y="1829" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NVIDIA RTX PRO 6000 Blackwell Server Edition</text>
+<text x="2754" y="1846" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="2200" y="1908" width="340" height="96" rx="8" fill="#f4f0e6" stroke="#b88a35" stroke-width="2"/>
+<text x="2214" y="1933" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Switch</text>
+<text x="2214" y="1952" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:72:01.0</text>
+<text x="2214" y="1969" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Broadcom / LSI PEX890xx PCIe Gen 5 Switch</text>
+<text x="2214" y="1986" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="2740" y="1908" width="360" height="96" rx="8" fill="#e5f6de" stroke="#5f9d3b" stroke-width="2"/>
+<text x="2754" y="1933" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">GPU3 GPU</text>
+<text x="2754" y="1952" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:74:00.0</text>
+<text x="2754" y="1969" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NVIDIA RTX PRO 6000 Blackwell Server Edition</text>
+<text x="2754" y="1986" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="2200" y="2066" width="340" height="96" rx="8" fill="#f4f0e6" stroke="#b88a35" stroke-width="2"/>
+<text x="2214" y="2091" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Switch</text>
+<text x="2214" y="2110" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:72:02.0</text>
+<text x="2214" y="2127" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Broadcom / LSI PEX890xx PCIe Gen 5 Switch</text>
+<text x="2214" y="2144" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="2740" y="2048" width="360" height="132" rx="8" fill="#e2f4f7" stroke="#3b91a3" stroke-width="2"/>
+<text x="2754" y="2073" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">ens16f0np0 NIC</text>
+<text x="2754" y="2092" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:75:00.0</text>
+<text x="2754" y="2109" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Mellanox Technologies MT43244 BlueField-3</text>
+<text x="2754" y="2126" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">integrated ConnectX-7 network controller</text>
+<text x="2754" y="2143" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">rdma mlx5_0</text>
+<text x="2754" y="2160" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 0</text>
+<rect x="40" y="2738" width="260" height="64" rx="8" fill="#dcecff" stroke="#5c7fa6" stroke-width="2"/>
+<text x="54" y="2763" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">CPU/SoC NODE1</text>
+<text x="54" y="2782" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">CPUs 64-127,192-255</text>
+<rect x="580" y="2493" width="270" height="64" rx="8" fill="#eceff4" stroke="#8a95a5" stroke-width="2"/>
+<text x="594" y="2518" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">Host Bridge</text>
+<text x="594" y="2537" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">pci0000:80</text>
+<rect x="1120" y="2468" width="340" height="114" rx="8" fill="#f4f0e6" stroke="#b88a35" stroke-width="2"/>
+<text x="1134" y="2493" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Bridge / Root Port</text>
+<text x="1134" y="2512" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:80:01.1</text>
+<text x="1134" y="2529" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Advanced Micro Devices, Inc. [AMD] Device</text>
+<text x="1134" y="2546" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">153e</text>
+<text x="1134" y="2563" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 1</text>
+<rect x="1660" y="2441" width="340" height="168" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+<text x="1674" y="2466" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Switch</text>
+<text x="1674" y="2485" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:81:00.0</text>
+<text x="1674" y="2502" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Broadcom / LSI PEX890xx PCIe Gen 5 Switch</text>
+<text x="1674" y="2519" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">PXB peer fabric: GPU4 &lt;-&gt;</text>
+<text x="1674" y="2536" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NVME3,NVME4,ens20f0np0</text>
+<text x="1674" y="2553" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">PXB peer fabric: GPU5 &lt;-&gt;</text>
+<text x="1674" y="2570" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NVME3,NVME4,ens20f0np0</text>
+<text x="1674" y="2587" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 1</text>
+<rect x="2200" y="2188" width="340" height="96" rx="8" fill="#f4f0e6" stroke="#b88a35" stroke-width="2"/>
+<text x="2214" y="2213" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Switch</text>
+<text x="2214" y="2232" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:82:00.0</text>
+<text x="2214" y="2249" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Broadcom / LSI PEX890xx PCIe Gen 5 Switch</text>
+<text x="2214" y="2266" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 1</text>
+<rect x="2740" y="2188" width="360" height="96" rx="8" fill="#e5f6de" stroke="#5f9d3b" stroke-width="2"/>
+<text x="2754" y="2213" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">GPU4 GPU</text>
+<text x="2754" y="2232" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:83:00.0</text>
+<text x="2754" y="2249" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NVIDIA Corporation Device 2bb5</text>
+<text x="2754" y="2266" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 1</text>
+<rect x="2200" y="2328" width="340" height="96" rx="8" fill="#f4f0e6" stroke="#b88a35" stroke-width="2"/>
+<text x="2214" y="2353" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Switch</text>
+<text x="2214" y="2372" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:82:01.0</text>
+<text x="2214" y="2389" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Broadcom / LSI PEX890xx PCIe Gen 5 Switch</text>
+<text x="2214" y="2406" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 1</text>
+<rect x="2740" y="2328" width="360" height="96" rx="8" fill="#e5f6de" stroke="#5f9d3b" stroke-width="2"/>
+<text x="2754" y="2353" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">GPU5 GPU</text>
+<text x="2754" y="2372" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:84:00.0</text>
+<text x="2754" y="2389" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NVIDIA Corporation Device 2bb5</text>
+<text x="2754" y="2406" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 1</text>
+<rect x="2200" y="2486" width="340" height="96" rx="8" fill="#f4f0e6" stroke="#b88a35" stroke-width="2"/>
+<text x="2214" y="2511" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Switch</text>
+<text x="2214" y="2530" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:82:02.0</text>
+<text x="2214" y="2547" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Broadcom / LSI PEX890xx PCIe Gen 5 Switch</text>
+<text x="2214" y="2564" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 1</text>
+<rect x="2740" y="2468" width="360" height="132" rx="8" fill="#e2f4f7" stroke="#3b91a3" stroke-width="2"/>
+<text x="2754" y="2493" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">ens20f0np0 NIC</text>
+<text x="2754" y="2512" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:85:00.0</text>
+<text x="2754" y="2529" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Mellanox Technologies MT43244 BlueField-3</text>
+<text x="2754" y="2546" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">integrated ConnectX-7 network controller</text>
+<text x="2754" y="2563" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">rdma mlx5_5</text>
+<text x="2754" y="2580" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 1</text>
+<rect x="2200" y="2626" width="340" height="96" rx="8" fill="#f4f0e6" stroke="#b88a35" stroke-width="2"/>
+<text x="2214" y="2651" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Switch</text>
+<text x="2214" y="2670" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:82:03.0</text>
+<text x="2214" y="2687" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Broadcom / LSI PEX890xx PCIe Gen 5 Switch</text>
+<text x="2214" y="2704" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 1</text>
+<rect x="2740" y="2608" width="360" height="132" rx="8" fill="#efe7fb" stroke="#8b65b7" stroke-width="2"/>
+<text x="2754" y="2633" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">NVME3 NVMe</text>
+<text x="2754" y="2652" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:86:00.0</text>
+<text x="2754" y="2669" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Samsung Electronics Co Ltd NVMe SSD</text>
+<text x="2754" y="2686" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Controller PM174X</text>
+<text x="2754" y="2703" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">block nvme0c0n1</text>
+<text x="2754" y="2720" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 1</text>
+<rect x="2200" y="2766" width="340" height="96" rx="8" fill="#f4f0e6" stroke="#b88a35" stroke-width="2"/>
+<text x="2214" y="2791" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Switch</text>
+<text x="2214" y="2810" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:82:04.0</text>
+<text x="2214" y="2827" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Broadcom / LSI PEX890xx PCIe Gen 5 Switch</text>
+<text x="2214" y="2844" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 1</text>
+<rect x="2740" y="2748" width="360" height="132" rx="8" fill="#efe7fb" stroke="#8b65b7" stroke-width="2"/>
+<text x="2754" y="2773" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">NVME4 NVMe</text>
+<text x="2754" y="2792" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:87:00.0</text>
+<text x="2754" y="2809" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Samsung Electronics Co Ltd NVMe SSD</text>
+<text x="2754" y="2826" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Controller PM174X</text>
+<text x="2754" y="2843" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">block nvme1c1n1</text>
+<text x="2754" y="2860" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 1</text>
+<rect x="580" y="2983" width="270" height="64" rx="8" fill="#eceff4" stroke="#8a95a5" stroke-width="2"/>
+<text x="594" y="3008" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">Host Bridge</text>
+<text x="594" y="3027" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">pci0000:f0</text>
+<rect x="1120" y="2958" width="340" height="114" rx="8" fill="#f4f0e6" stroke="#b88a35" stroke-width="2"/>
+<text x="1134" y="2983" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Bridge / Root Port</text>
+<text x="1134" y="3002" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:f0:01.1</text>
+<text x="1134" y="3019" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Advanced Micro Devices, Inc. [AMD] Device</text>
+<text x="1134" y="3036" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">153e</text>
+<text x="1134" y="3053" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 1</text>
+<rect x="1660" y="2958" width="340" height="114" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+<text x="1674" y="2983" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Switch</text>
+<text x="1674" y="3002" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:f1:00.0</text>
+<text x="1674" y="3019" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Broadcom / LSI PEX890xx PCIe Gen 5 Switch</text>
+<text x="1674" y="3036" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">PXB peer fabric: GPU6 &lt;-&gt; ens21f0np0</text>
+<text x="1674" y="3053" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 1</text>
+<rect x="2200" y="2888" width="340" height="96" rx="8" fill="#f4f0e6" stroke="#b88a35" stroke-width="2"/>
+<text x="2214" y="2913" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Switch</text>
+<text x="2214" y="2932" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:f2:00.0</text>
+<text x="2214" y="2949" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Broadcom / LSI PEX890xx PCIe Gen 5 Switch</text>
+<text x="2214" y="2966" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 1</text>
+<rect x="2740" y="2888" width="360" height="96" rx="8" fill="#e5f6de" stroke="#5f9d3b" stroke-width="2"/>
+<text x="2754" y="2913" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">GPU6 GPU</text>
+<text x="2754" y="2932" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:f3:00.0</text>
+<text x="2754" y="2949" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NVIDIA RTX PRO 6000 Blackwell Server Edition</text>
+<text x="2754" y="2966" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 1</text>
+<rect x="2200" y="3046" width="340" height="96" rx="8" fill="#f4f0e6" stroke="#b88a35" stroke-width="2"/>
+<text x="2214" y="3071" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">PCIe Switch</text>
+<text x="2214" y="3090" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:f2:02.0</text>
+<text x="2214" y="3107" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Broadcom / LSI PEX890xx PCIe Gen 5 Switch</text>
+<text x="2214" y="3124" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 1</text>
+<rect x="2740" y="3028" width="360" height="132" rx="8" fill="#e2f4f7" stroke="#3b91a3" stroke-width="2"/>
+<text x="2754" y="3053" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700" fill="#111827">ens21f0np0 NIC</text>
+<text x="2754" y="3072" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">0000:f5:00.0</text>
+<text x="2754" y="3089" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">Mellanox Technologies MT43244 BlueField-3</text>
+<text x="2754" y="3106" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">integrated ConnectX-7 network controller</text>
+<text x="2754" y="3123" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">rdma mlx5_4</text>
+<text x="2754" y="3140" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="400" fill="#111827">NUMA node 1</text>
+</svg>

@@ -1,60 +1,111 @@
 # RTX PRO 6000 benchmark baseline
 
-Host: x86_64 EPYC · GPU: NVIDIA RTX PRO 6000 Blackwell Server Edition · `CMAKE_CUDA_ARCHITECTURES=120` · branch `ccrozier-rtx-pro-6000-bench` · 2026-06-12
+Reference measurements and commands for **discrete Blackwell dGPU** hosts (`CMAKE_CUDA_ARCHITECTURES=120`, `kind: device` buffers). The benchmark *patterns* below apply to any host with a suitable NIC topology; prefilled YAML values are examples — override BDFs, MACs, and GPUs via discovery or runner flags.
 
-## Hardware limitations (read first)
+## Two benchmark classes
 
-| What | Limit |
+| Class | Config pattern | Uses NIC / SerDes | Meaningful for line rate |
+|---|---|---|---|
+| **Wire closed-loop** | `daqiri_bench_raw_tx_rx*_nic.yaml`, HDS/RoCE/ibverbs wire YAMLs | Yes | **Yes** — primary path |
+| **SW loopback** | `daqiri_bench_raw_sw_loopback*.yaml`, `loopback: sw` | No | No — build sanity only |
+
+Wire closed-loop needs **L2 connectivity** between the TX port and RX port: QSFP/DAC between two ports on one card, a loopback optic, or a switch. One process sends on port A and receives on port B; `tx_phy_packets` / `rx_phy_packets` confirm packets crossed the link. This is the same *class* of test as Spark's p0→p1 wire loopback, but on discrete-GPU servers there is typically **one PF per port** (no on-chip eswitch shortcut).
+
+SW loopback (`loopback: sw`) stays in the tree for compile/GPUDirect sanity when no link is available. Throughput is not comparable to wire Gbps.
+
+## Topology (fill per host)
+
+| Field | How to set |
 |---|---|
-| **Cliff 800 Gbps target** | Two ~400G ports with an **active L2 link** (QSFP cable, loopback optic, or switch). Not achievable without that link. |
-| **This server vs DGX Spark** | One PF per physical port. **No** Spark-style on-chip eswitch loopback (two PFs on the same port). |
-| **`loopback: "sw"`** | Does **not** use the NIC. Measures in-process DPDK path only; can exceed line rate (not comparable to Gbps on the wire). |
-| **`carrier=1`** | Link up on a port ≠ p0 and p1 are cabled **to each other**. Our dual-port run proved this: TX on p0, RX 0 on p1. |
-| **Starting point** | SW smoke test validates GPUDirect build. Real NIC numbers need a completed L2 loop; use `tx_phy_packets` / `rx_phy_packets` to confirm wire vs internal. |
+| TX BDF / RX BDF | `scripts/discover_rtx_pro_topology.sh`, or `--tx-bdf` / `--rx-bdf` |
+| `eth_dst_addr` | RX port MAC (`ETH_DST_ADDR` from discovery) |
+| GPU affinity | `--tx-gpu` / `--rx-gpu`, or edit YAML `memory_regions[].affinity` |
+| CPU cores | YAML `cpu_core` / queue cores — tune from `nvidia-smi topo -m` |
 
-## Results (this dev box)
+Example values from one reference box (replace on other hosts):
 
-| Config | GPU (CUDA) | Mode | Duration | TX Gbps | RX Gbps | Notes |
-|---|---|---|---|---|---|---|
-| `daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml` | 0 | `loopback: sw` | 30s | 1579.5 | 1579.5 | No NIC; GPUDirect smoke baseline |
-| `daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml` | 0 TX / 1 RX | real NIC `61:00.0`→`61:00.1` | 30s | 381.5 | 0 | NIC TX path works; **no RX** — p0/p1 not looped (phy_pkts ≪ vport) |
-| `daqiri_bench_raw_tx_rx_rtx_pro_6000_nic_same_port.yaml` | 0 | same PF `61:00.0` | — | — | — | `daqiri_init` failed (extmem pool on single port); not a baseline |
-| `daqiri_bench_raw_sw_loopback_reorder_seq_1024.yaml` | CPU huge | `loopback: sw` + reorder | 30s | — | 160.2 | GPU reorder kernel path; CPU buffers not GPUDirect |
-| `daqiri_bench_socket_udp_tx_rx.yaml` (`iterations: 0`) | host | kernel UDP `127.0.0.1` | 15s | 4.7 | 4.7 | Kernel socket baseline; stock YAML uses `iterations: 1000` (not a perf test) |
+| Role | PCIe BDF | Iface (example) | CUDA GPU |
+|------|----------|-----------------|----------|
+| TX | `0000:61:00.0` | `ens1f0np0` | 0 |
+| RX | `0000:61:00.1` | `ens1f1np1` | 1 |
 
-### NIC dual-port run detail
+Fully generic template (angle-bracket placeholders): `daqiri_bench_raw_tx_rx_rtx_pro_6000.yaml`. Prefilled dual-port example: `daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml`.
 
-- Card: `0000:61:00.0` (ens1f0np0, p0) TX → `0000:61:00.1` (ens1f1np1, p1) RX
-- `eth_dst_addr`: `c4:70:bd:c2:8a:93` (p1 MAC)
-- DPDK `tx_phy_packets` / `rx_phy_packets` on port 0: **2** / **76** vs **177M** TX vport packets → traffic did not cross SerDes between ports
+## Benchmark ladder
+
+```
+build-only
+optional: dpdk sw-smoke              # no NIC; non-wire
+
+wire (primary — any host with L2 loop):
+  ├── dpdk nic-smoke                 # GPUDirect closed-loop
+  ├── dpdk issue17                   # none / fft / gemm
+  ├── dpdk-hds issue17               # HDS + workloads
+  ├── rdma issue17                   # RoCE + workloads
+  ├── ibverbs issue17                # ibverbs RX + DPDK TX
+  └── dpdk sweep / drop-curve        # after nic-smoke passes
+```
 
 ## Commands
 
 ```bash
-# SW smoke (no NIC)
-sudo ./build/examples/daqiri_bench_raw_gpudirect \
-  ./build/examples/daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml --seconds 30
+# Build
+./examples/run_rtx_pro_bench.sh dpdk build-only \
+  --build-targets raw_gpudirect,raw_hds,rdma,socket
 
-# Real NIC dual-port (needs p0↔p1 L2 loop)
-sudo ./build/examples/daqiri_bench_raw_gpudirect \
-  ./build/examples/daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml --seconds 30
+# Discover (host-side, before DPDK bind) — or set ETH_DST_ADDR / BDFs manually
+source ./scripts/discover_rtx_pro_topology.sh
+
+# Optional build sanity (no link required)
+sudo ./examples/run_rtx_pro_bench.sh dpdk sw-smoke --seconds 10
+
+# Wire ladder (run as root)
+sudo ./examples/run_rtx_pro_bench.sh dpdk nic-smoke --seconds 30
+sudo ./examples/run_rtx_pro_bench.sh dpdk issue17 --seconds 30
+sudo ./examples/run_rtx_pro_bench.sh dpdk-hds issue17 --seconds 30
+sudo ./examples/run_rtx_pro_bench.sh rdma issue17 --seconds 30
+sudo ./examples/run_rtx_pro_bench.sh ibverbs issue17 --seconds 30
+
+# Override topology without editing tracked YAML:
+sudo ./examples/run_rtx_pro_bench.sh dpdk nic-smoke \
+  --tx-bdf 0000:61:00.0 --rx-bdf 0000:61:00.1 --rx-mac aa:bb:cc:dd:ee:ff
 ```
 
-## What we can still run now (#17, partial)
+## Issue #17 matrix (wire)
 
-| Test | Status | Notes |
+| Backend | Config | Workloads | Binary |
+|---|---|---|---|
+| DPDK GPUDirect | `daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml` | `none`, `fft`, `gemm` | `daqiri_bench_raw_gpudirect` |
+| DPDK HDS | `daqiri_bench_raw_tx_rx_hds_rtx_pro_6000.yaml` | `none`, `fft`, `gemm` | `daqiri_bench_raw_hds` |
+| RoCE | `daqiri_bench_rdma_tx_rx_rtx_pro_6000.yaml` | `none`, `fft`, `gemm` | `daqiri_bench_rdma` |
+| ibverbs | `daqiri_bench_raw_rx_ibverbs_rtx_pro_6000.yaml` | `none`, `fft`, `gemm` | `daqiri_bench_raw_gpudirect` + DPDK TX |
+
+Runner writes `runs.csv` and `summary.csv` (total data rate, sent, received, dropped).
+
+### Pass / fail (wire)
+
+- RX packets and RX Gbps > 0
+- `tx_phy_packets` / `rx_phy_packets` rise with traffic
+- No `NO_FREE_BURST_BUFFERS` / `NO_FREE_PACKET_BUFFERS`
+- DPDK drops not exploding
+
+## RTX vs Spark (do not copy Spark settings)
+
+| | Spark (GB10) | RTX PRO 6000 class |
 |---|---|---|
-| Raw SW loopback GPUDirect | Done | Best no-cable perf number |
-| Raw NIC TX (one port) | Done | Proves mlx5 + GPUDirect TX |
-| Reorder SW loopback | Done | ~160 Gbps RX, CPU-side buffers |
-| Socket UDP (`iterations: 0`) | Done | ~5 Gbps kernel baseline |
-| Socket TCP (`iterations: 0`) | Easy | Same yaml tweak |
-| HDS / RoCE / NIC closed-loop | Blocked | Need filled YAML + L2 loop |
-| FFT / GEMM workloads | Not in repo | #17 asks for these |
+| CUDA arch | `121` | **`120`** |
+| Buffer kind | `host_pinned` | **`device`** |
+| Wire loopback | on-chip eswitch possible | **dual-port L2 loop** (cable/optic/switch) |
+| SW loopback | ~94 Gbps, wire-ish | ~1580 Gbps, **not wire** |
 
-## Follow-ups
+## Reference box measurements
 
-- Install QSFP cable (or passive loopback) between p0 and p1 on `61:00.x`, re-run `_nic.yaml`
-- Scale to cross-card 800 Gbps using `daqiri_bench_raw_tx_rx_rtx_pro_6000.yaml` template + second card
-- Tune CPU cores from `nvidia-smi topo -m` once RX path is up
-- Add RTX socket YAML with `iterations: 0` for repeatable kernel baseline
+Host: x86_64 EPYC · RTX PRO 6000 Blackwell · branch `ccrozier-rtx-pro-6000-bench` · 2026-07-10
+
+| Config | Mode | TX Gbps | RX Gbps | Notes |
+|---|---|---|---|---|
+| `daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml` | SW loopback | 1579.5 | 1579.5 | Non-wire; build sanity |
+| `daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml` | Wire | 381.5 | 0 | Pre-link-fix run; flat `rx_phy_packets` |
+| HDS / RoCE wire | — | — | — | Record after wire path passes |
+
+Re-run wire configs after discovery on any host and append rows here.

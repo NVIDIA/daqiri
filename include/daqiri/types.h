@@ -295,11 +295,13 @@ enum class ManagerType {
   DPDK,
   SOCKET,
   RDMA,
+  IBVERBS,
 };
 
 static constexpr const char* DAQIRI_MGR_STR__DPDK = "dpdk";
 static constexpr const char* DAQIRI_MGR_STR__SOCKET = "socket";
 static constexpr const char* DAQIRI_MGR_STR__RDMA = "rdma";
+static constexpr const char* DAQIRI_MGR_STR__IBVERBS = "ibverbs";
 static constexpr const char* DAQIRI_MGR_STR__DEFAULT = "default";
 /**
  * @brief Convert string to manager type
@@ -333,6 +335,13 @@ inline ManagerType manager_type_from_string(const std::string& str) {
   available_managers += std::string(DAQIRI_MGR_STR__RDMA) + " ";
 #else
   if (str == DAQIRI_MGR_STR__RDMA) is_known_but_unavailable = true;
+#endif
+
+#if DAQIRI_MGR_IBVERBS
+  if (str == DAQIRI_MGR_STR__IBVERBS) return ManagerType::IBVERBS;
+  available_managers += std::string(DAQIRI_MGR_STR__IBVERBS) + " ";
+#else
+  if (str == DAQIRI_MGR_STR__IBVERBS) is_known_but_unavailable = true;
 #endif
 
   if (!available_managers.empty()) {
@@ -407,6 +416,8 @@ inline std::string manager_type_to_string(ManagerType type) {
       return DAQIRI_MGR_STR__SOCKET;
     case ManagerType::RDMA:
       return DAQIRI_MGR_STR__RDMA;
+    case ManagerType::IBVERBS:
+      return DAQIRI_MGR_STR__IBVERBS;
     case ManagerType::DEFAULT:
       return DAQIRI_MGR_STR__DEFAULT;
   }

@@ -26,8 +26,11 @@
 #if DAQIRI_MGR_RDMA
 #include "src/managers/rdma/daqiri_rdma_mgr.h"
 #endif
+#if DAQIRI_MGR_IBVERBS
+#include "src/managers/ibverbs/daqiri_ibverbs_mgr.h"
+#endif
 
-#if DAQIRI_MGR_DPDK || DAQIRI_MGR_SOCKET || DAQIRI_MGR_RDMA
+#if DAQIRI_MGR_DPDK || DAQIRI_MGR_SOCKET || DAQIRI_MGR_RDMA || DAQIRI_MGR_IBVERBS
 #include <rte_common.h>
 #include <rte_malloc.h>
 #include <rte_memory.h>
@@ -114,6 +117,11 @@ std::unique_ptr<Manager> ManagerFactory::create_instance(ManagerType type) {
       _manager = std::make_unique<RdmaMgr>();
       break;
 #endif
+#if DAQIRI_MGR_IBVERBS
+    case ManagerType::IBVERBS:
+      _manager = std::make_unique<IbverbsMgr>();
+      break;
+#endif
     case ManagerType::DEFAULT:
       _manager = create_instance(get_default_manager_type());
       return _manager;
@@ -143,6 +151,12 @@ ManagerType ManagerFactory::get_manager_type(const Config& config) {
       const std::string stream_type_str = node["stream_type"].template as<std::string>("");
       const auto stream_type = stream_type_from_string(stream_type_str);
       if (stream_type == StreamType::INVALID) { continue; }
+      // Honor the optional 'engine' selector for raw streams.
+      if (stream_type == StreamType::RAW) {
+        const std::string engine_str = node["engine"].template as<std::string>("");
+        if (engine_str == DAQIRI_MGR_STR__IBVERBS) { return ManagerType::IBVERBS; }
+        if (engine_str == DAQIRI_MGR_STR__DPDK) { return ManagerType::DPDK; }
+      }
       return manager_type_from_stream_type(stream_type);
     } catch (const std::exception& e) {
       return get_default_manager_type();
