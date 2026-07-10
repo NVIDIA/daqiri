@@ -201,7 +201,12 @@ case "$BACKEND" in
     # the kernel's local routing table.
     BASE_YAML="$SCRIPT_DIR/daqiri_bench_rdma_tx_rx_spark_netns.yaml"
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_rdma"
-    CPU_MASTER=8; CPU_TX=17; CPU_RX=18
+    # One-way roles: the client (send-only) drives the TX-queue core 17; the server
+    # (receive-only) runs its RX-queue poller AND bench worker on core 19. Measure
+    # the sender core as cpu_tx and the SERVER RECEIVE core (19, not the idle
+    # client-RX core 18) as cpu_rx, so cpu_rx_pct reflects the true RoCE RC
+    # receiver cost.
+    CPU_MASTER=8; CPU_TX=17; CPU_RX=19
     ;;
     # Single-frame UDP sizes (<= the ~8972 B MTU payload, so no IP fragmentation).
     # 65507 is intentionally excluded: it fragments into ~8 packets and, under

@@ -38,7 +38,7 @@ four-pair aggregate is shown.
 | Stream / Protocol | Best case | Throughput | Drops | Notes |
 | ----------------- | --------- | ---------: | ----- | ----- |
 | Raw Ethernet / GPUDirect | 4 KB packet | **105.5 ±0.9 Gb/s** | 0 | 98.5 Gb/s single-queue at 8 KB |
-| Socket / RoCE (SEND) | 8 MB message | **102.2 ±0.3 Gb/s** | 0 | Single QP, batch 1 |
+| Socket / RoCE (SEND) | 64 KB message | **106.0 ±0.1 Gb/s** | 0 | Single QP, batch 1 |
 | Socket / TCP | 8 KB × 4 pairs | **97.2 ±2.8 Gb/s** | ~0 | Flow-controlled (App TX = App RX) |
 | Socket / UDP | 8 KB × 4 pairs | **29.8 ±0.2 Gb/s** | ~51% loss | Receiver goodput; unpaced sender |
 
@@ -85,7 +85,7 @@ pps ≈ Gb/s ÷ ((payload + 64) × 8). These small-payload cells are flat across
 size and stable run-to-run. Because every cell is drop-free, the achieved rate is
 also the no-drop rate: pacing the sender below it hits the target with zero drops.
 
-**CPU utilization** (headline cell, 8000 B / batch 10240, unpaced):
+**CPU utilization** (summary-table cell, 8000 B / batch 10240, unpaced):
 
 | Core                     | Busy% | Note                                  |
 | ------------------------ | ----: | ------------------------------------- |
@@ -147,36 +147,37 @@ saturate the wire; the smallest messages are bound by per-operation software
 overhead.
 
 **Message-size sweep (single QP, batch 1, 0 drops).** Mean of 3 reps; run-to-run
-spread ≤0.8 Gb/s (<2%) in every cell.
+spread ≤0.7 Gb/s (<1%) in every cell.
 
 | Message size | <span style="text-transform: none">Gb/s</span> |
 | ------------ | ---: |
-| 8 MB  | **102.2** |
-| 1 MB  | 101.3 |
-| 64 KB | 101.6 |
-| 8 KB  | 60.7 |
-| 4 KB  | 38.0 |
+| 8 MB  | 105.0 |
+| 1 MB  | 105.1 |
+| 64 KB | **106.0** |
+| 8 KB  | 51.5 |
+| 4 KB  | 28.6 |
 
-Messages ≥64 KB hold ~101–102 Gb/s at the wire ceiling. Below that the path is
+Messages ≥64 KB hold ~105–106 Gb/s at the wire ceiling. Below that the path is
 operation-rate-bound (per-operation software overhead, not a stall) rather than
-wire-bound, and every cell is drop-free. At 8 KB (60.7 Gb/s) and 4 KB (38.0 Gb/s)
+wire-bound, and every cell is drop-free. At 8 KB (51.5 Gb/s) and 4 KB (28.6 Gb/s)
 a dedicated bench-worker core, separate from the RoCE engine thread, sustains the
 operation rate, as it does for small DPDK packets. A per-message flow-control
 window keeps enough operations in flight to amortize that overhead: it pre-posts
 `rx_depth` receives before sending and caps the transmit side at `tx_depth`, each
 sized to the message so the in-flight window stays full.
 
-**CPU utilization** (headline cell, 8 MB message, batch 1, unpaced):
+**CPU utilization** (summary-table cell, 8 MB message, batch 1, unpaced):
 
-| Core                | Busy% | Note                                            |
-| ------------------- | ----: | ----------------------------------------------- |
-| Master (CPU 8)      |  5.9% | Orchestration only                              |
-| Client TX (CPU 17)  | 74.9% | Post-and-poll spin; rate-independent            |
-| Server RX (CPU 18)  |  0.0% | HCA writes straight to memory; CPU uninvolved   |
+| Core                 | Busy% | Note                                            |
+| -------------------- | ----: | ----------------------------------------------- |
+| Master (CPU 8)       |  0.7% | Orchestration only                              |
+| Client TX (CPU 17)   | 74.8% | Post-and-poll spin; rate-independent            |
+| Server RX (CPU 19)   |  1.1% | HCA DMAs straight to memory; worker only reaps completions |
 
-The idle RX core is the expected RoCE RC signature — the HCA places incoming
-data directly into registered memory with no CPU involvement. The GPU stays
-idle here too (SM and memory-controller ~0%; DMA target, not a compute engine).
+The near-idle RX core is the expected RoCE RC signature — the HCA places incoming
+data directly into registered memory, so the receive worker only reaps
+completions and reposts (~1% at this message rate). The GPU stays idle here too
+(SM and memory-controller ~0%; DMA target, not a compute engine).
 
 ## Socket / TCP
 
@@ -334,6 +335,12 @@ apt-get install -y iproute2 iputils-ping ethtool iperf3 rdma-core ibverbs-utils 
 
 These provide `ip`/`nstat` (`iproute2`), `ethtool`, and `ib_send_bw` (`perftest`).
 
+Each `run_spark_bench.sh <backend> <mode>` invocation takes a **mode** that sets
+which cells run: `sweep` runs the full payload × batch × pairs matrix (the
+per-transport message-size tables above), while `smoke` runs just the single
+summary-table cell — one payload/batch/pairs operating point. `REPEATS=N` repeats
+every cell N times for error bars.
+
 **Raw Ethernet / GPUDirect (DPDK)** drives the two physical ports directly, so
 the `dq_wire_*` namespaces must **not** be up — they capture the ports and
 hide them from DPDK. Tear them down first (no-op if they were never created).
@@ -371,39 +378,29 @@ before running; tear it down when finished:
 ./scripts/setup_spark_wire_loopback_netns.sh down        # tear down when done
 ```
 
-**GPU workload (FFT / GEMM)** re-runs a backend with a representative GPU
-workload in the receive path by exporting `WORKLOAD`. It composes with the same
-modes and netns setup as above (dpdk in the default namespace, rdma in the
-`dq_wire_*` namespaces):
+**GPU workload (FFT / GEMM)** re-runs a backend with a representative GPU workload
+in the receive path by exporting `WORKLOAD` (`none` | `fft` | `gemm` |
+`gemm_fp16`), run once per received I/O unit on the real payload. Each call is a
+fixed **1024³ GEMM** (override with `GEMM_DIM` / `--workload-gemm-dim`) or a batched
+**length-1024 FFT** (override with `FFT_LEN` / `--workload-fft-len`) — both compute
+sizes are held constant while the message size varies, so the FLOP count per call
+is fixed. It composes with the same netns setup as above (dpdk in the default
+namespace, rdma in the `dq_wire_*` namespaces). Use `smoke` — the single
+summary-table cell that the fixed-n table reports — and run all three workloads
+with error bars:
 
 ```bash
-# Raw / GPUDirect (netns down, ETH_DST_ADDR exported as above)
-WORKLOAD=fft  ./examples/run_spark_bench.sh dpdk smoke
-WORKLOAD=gemm ./examples/run_spark_bench.sh dpdk smoke
-# Socket / RoCE (netns up)
-WORKLOAD=fft  ./examples/run_spark_bench.sh rdma smoke
-WORKLOAD=gemm ./examples/run_spark_bench.sh rdma smoke
-```
-
-The chosen workload lands in the CSV `post_process` column; compare `gbps` /
-`gpu_sm_pct` against the matching `WORKLOAD=none` baseline.
-
-**Fixed-size GEMM comparison** pins the matrix dimension with `GEMM_DIM`
-(`--workload-gemm-dim`, default 1024) so the FLOP count is constant across transports;
-each side runs one fixed 1024³ GEMM per received I/O unit, reading its first 4 MB. Lands
-in the CSV `post_process_gemm_dim` column (the sweep is restricted to the headline
-message size automatically when a workload is active):
-
-```bash
-# RoCE (netns up)
+# RoCE (netns up); Raw is identical with `dpdk`, netns down, ETH_DST_ADDR exported.
 for WL in none fft gemm; do
-  WORKLOAD=$WL GEMM_DIM=1024 REPEATS=3 ./examples/run_spark_bench.sh rdma sweep
-done
-# Raw (netns down, ETH_DST_ADDR exported)
-for WL in none fft gemm; do
-  WORKLOAD=$WL GEMM_DIM=1024 REPEATS=3 ./examples/run_spark_bench.sh dpdk sweep
+  WORKLOAD=$WL REPEATS=3 ./examples/run_spark_bench.sh rdma smoke
 done
 ```
+
+In the workload case the payload size is fixed per backend (8 KB for DPDK, 8 MB
+message for RoCE), so a `sweep` only steps through batch size (DPDK) or
+client/server pairs (sockets). The workload lands in the CSV `post_process` column
+(with the GEMM dimension in `post_process_gemm_dim`); compare each `gbps` /
+`gpu_sm_pct` against the `WORKLOAD=none` baseline from the same loop.
 
 Each run writes `bench-results/<timestamp>-<backend>-<mode>/runs.csv`. See
 [Socket and RDMA Benchmarking](socket_benchmarking.md) and
