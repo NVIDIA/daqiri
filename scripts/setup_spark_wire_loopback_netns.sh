@@ -41,10 +41,11 @@
 #   ibdev2netdev                              # (mlnx) same mapping, friendlier
 #   ethtool <IF> | grep -i 'link detected'    # the two CABLED ports show "yes"
 #
-# CLIENT_IF / SERVER_IF must be the TWO PORTS YOUR QSFP CABLE PHYSICALLY
-# CONNECTS. Your colleague's box cabled f0np0<->f1np1; the repo YAMLs assume the
-# two f0np0 ports across PCI segments. Confirm with `ethtool ... link detected`
-# -- exactly the two cabled ports report carrier up.
+# CLIENT_IF / SERVER_IF must be on the TWO DIFFERENT PHYSICAL PORTS (p0, p1) of
+# the CX-7 -- the on-chip loopback the QSFP cable closes. Confirm each netdev's
+# physical port with `cat /sys/class/net/<IF>/phys_port_name` (p0 / p1); a cabled
+# loopback lights carrier on all four PFs, so carrier alone does not distinguish
+# them. See docs/tutorials/system_configuration.md "Port topology: 4 PFs, 2 ports".
 #
 # CLIENT_RDMA / SERVER_RDMA are the RDMA devices bound to those netdevs
 # (from `rdma link show` / `ibdev2netdev`).
@@ -56,13 +57,14 @@ CLIENT_NS=dq_wire_client
 SERVER_NS=dq_wire_server
 
 # Leave CLIENT_IF / SERVER_IF blank to AUTO-DETECT the cabled data-plane ports
-# (recommended): the two RoCE-backed netdevs that report carrier up -- exactly
-# the pair the QSFP loopback lights. PCIe enumeration / interface names drift
+# (recommended): autodetect_ports() collects the carrier-up RoCE netdevs, groups
+# them by phys_port_name, and keeps one per physical port -- so the pair always
+# straddles both ports (over-the-wire). PCIe enumeration / interface names drift
 # across reboots and kernel upgrades on this box, so hardcoding them is fragile
 # (a stale name aborts setup, the netns never gets created, and the netns-based
-# benches silently have nowhere to run). Override from the environment only if
-# auto-detect picks the wrong pair, e.g.:
-#   CLIENT_IF=enp1s0f1np1 SERVER_IF=enP2p1s0f0np0 sudo -E ./setup_spark_wire_loopback_netns.sh up
+# benches silently have nowhere to run); phys_port_name does not drift. Override
+# from the environment only if auto-detect picks the wrong pair, e.g.:
+#   CLIENT_IF=enp1s0f1np1 SERVER_IF=enp1s0f0np0 sudo -E ./setup_spark_wire_loopback_netns.sh up
 CLIENT_IF="${CLIENT_IF:-}"
 SERVER_IF="${SERVER_IF:-}"
 
@@ -103,27 +105,50 @@ rdma_for_netdev() {  # netdev -> backing RDMA device name (sysfs); empty if none
 }
 
 autodetect_ports() {
-  # Pick the cabled data-plane ports automatically when not overridden: the
-  # RoCE-backed netdevs in init_net that report carrier up -- exactly the pair
-  # the QSFP loopback lights. Ports must be in init_net here (up() calls down()
-  # first, returning any moved netdevs), same precondition as detect_macs.
+  # Pick the cabled data-plane ports automatically when not overridden. Spark's
+  # single ConnectX-7 exposes each of its TWO physical ports (p0, p1) over BOTH
+  # PCIe segments (socket-direct), so it presents up to 4 PFs and a cabled
+  # loopback lights carrier on ALL of them at once -- not just two. Counting
+  # carrier-up netdevs therefore over-counts the physical ports. Instead group by
+  # phys_port_name (the hardware port label, stable across PCIe re-enumeration and
+  # interface renames) and keep ONE netdev per physical port, so CLIENT_IF and
+  # SERVER_IF always land on DIFFERENT physical ports (over-the-wire, never the
+  # on-chip same-port eswitch shortcut). See docs/tutorials/system_configuration.md
+  # "Port topology: 4 PFs, 2 ports". Ports must be in init_net here (up() calls
+  # down() first, returning any moved netdevs), same precondition as detect_macs.
   if [[ -z "$CLIENT_IF" || -z "$SERVER_IF" ]]; then
-    local found=() ifc
+    local ifc port pci
+    declare -A rep_for_port=() pci_for_port=()
     for ifc in $(ls /sys/class/net 2>/dev/null | sort); do
       [[ "$ifc" == lo ]] && continue
       rdma_for_netdev "$ifc" >/dev/null 2>&1 || continue
       [[ "$(cat "/sys/class/net/$ifc/carrier" 2>/dev/null || echo 0)" == 1 ]] || continue
-      found+=("$ifc")
+      port="$(cat "/sys/class/net/$ifc/phys_port_name" 2>/dev/null || true)"
+      # Without phys_port_name we cannot fold the two PCIe reps of a port
+      # together; fall back to the netdev name as its own group so the 2-port
+      # check below still guards (it just won't dedupe).
+      [[ -z "$port" ]] && port="$ifc"
+      pci="$(basename "$(readlink -f "/sys/class/net/$ifc/device" 2>/dev/null || echo "$ifc")")"
+      # Prefer the lowest-BDF rep per port (the 0000: segment, matching the doc's
+      # canonical enp1s0f{0,1}np{0,1} names) for a stable, least-surprise pick.
+      if [[ -z "${rep_for_port[$port]:-}" || "$pci" < "${pci_for_port[$port]}" ]]; then
+        rep_for_port["$port"]="$ifc"
+        pci_for_port["$port"]="$pci"
+      fi
     done
-    if [[ "${#found[@]}" -ne 2 ]]; then
-      echo "ERROR: auto-detect expected exactly 2 carrier-up RoCE ports, found ${#found[@]}: ${found[*]:-none}." >&2
+    local ports
+    mapfile -t ports < <(printf '%s\n' "${!rep_for_port[@]}" | LC_ALL=C sort)
+    if [[ "${#ports[@]}" -ne 2 ]]; then
+      echo "ERROR: auto-detect expected exactly 2 carrier-up physical ports, found ${#ports[@]}: ${ports[*]:-none}." >&2
+      echo "       (netdevs are grouped by phys_port_name; Spark exposes each port over 2 PCIe segments.)" >&2
       echo "       Cable the loopback, or set CLIENT_IF / SERVER_IF explicitly, e.g.:" >&2
-      echo "         CLIENT_IF=enp1s0f1np1 SERVER_IF=enP2p1s0f0np0 sudo -E $0 up" >&2
-      echo "       List candidates with: ip -br link show | grep -E 'enp|enP'" >&2
+      echo "         CLIENT_IF=enp1s0f1np1 SERVER_IF=enp1s0f0np0 sudo -E $0 up" >&2
+      echo "       List candidates and their ports with:" >&2
+      echo "         for d in /sys/class/net/*/device; do n=\${d%/device}; n=\${n##*/}; printf '%s port=%s\\n' \"\$n\" \"\$(cat /sys/class/net/\$n/phys_port_name 2>/dev/null)\"; done" >&2
       exit 1
     fi
-    [[ -z "$CLIENT_IF" ]] && CLIENT_IF="${found[0]}"
-    [[ -z "$SERVER_IF" ]] && SERVER_IF="${found[1]}"
+    [[ -z "$CLIENT_IF" ]] && CLIENT_IF="${rep_for_port[${ports[0]}]}"
+    [[ -z "$SERVER_IF" ]] && SERVER_IF="${rep_for_port[${ports[1]}]}"
   fi
   [[ -z "$CLIENT_RDMA" ]] && CLIENT_RDMA="$(rdma_for_netdev "$CLIENT_IF" || true)"
   [[ -z "$SERVER_RDMA" ]] && SERVER_RDMA="$(rdma_for_netdev "$SERVER_IF" || true)"
