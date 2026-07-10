@@ -83,7 +83,7 @@ RdmaBenchConfig parse_rdma_cfg(const YAML::Node& node) {
 void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pacer,
                  std::atomic<bool>& stop, RdmaWorkerStats& stats,
                  daqiri::bench::BenchWorkload workload, int workload_gemm_dim,
-                 int workload_sync_interval, int workload_max_inflight) {
+                 int workload_sync_interval, int workload_max_inflight, int workload_fft_len) {
   const char *thread_name =
       cfg.server ? "rdma_bench_server" : "rdma_bench_client";
   if (!daqiri::bench::set_current_thread_affinity(cfg.cpu_core, thread_name)) {
@@ -104,7 +104,8 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
   daqiri::bench::GpuWorkload gpu_workload;
   daqiri::bench::ReorderPipeline pipeline;
   if (workload != daqiri::bench::BenchWorkload::None) {
-    if (!gpu_workload.init(workload, msg, workload_sync_interval, workload_gemm_dim) ||
+    if (!gpu_workload.init(workload, msg, workload_sync_interval, workload_gemm_dim,
+                           workload_fft_len) ||
         !pipeline.init(daqiri::bench::ReorderMode::GatherOnly,
                        /*packets_per_batch=*/1, msg,
                        /*payload_byte_offset=*/0, /*seq_bit_offset=*/0,
@@ -370,6 +371,7 @@ int main(int argc, char** argv) {
   }
   const auto workload = daqiri::bench::parse_workload(argc, argv);
   const int workload_gemm_dim = daqiri::bench::parse_workload_gemm_dim(argc, argv);
+  const int workload_fft_len = daqiri::bench::parse_workload_fft_len(argc, argv);
   const int workload_sync_interval = daqiri::bench::parse_workload_sync_interval(argc, argv);
   const int workload_max_inflight = daqiri::bench::parse_workload_max_inflight(argc, argv);
 
@@ -409,12 +411,12 @@ int main(int argc, char** argv) {
   if (run_server) {
     server_thread = std::thread(rdma_worker, server_cfg, std::ref(server_pacer), std::ref(stop),
                                 std::ref(server_stats), workload, workload_gemm_dim,
-                                workload_sync_interval, workload_max_inflight);
+                                workload_sync_interval, workload_max_inflight, workload_fft_len);
   }
   if (run_client) {
     client_thread = std::thread(rdma_worker, client_cfg, std::ref(client_pacer), std::ref(stop),
                                 std::ref(client_stats), workload, workload_gemm_dim,
-                                workload_sync_interval, workload_max_inflight);
+                                workload_sync_interval, workload_max_inflight, workload_fft_len);
   }
 
   if (!server_thread.joinable() && !client_thread.joinable()) {

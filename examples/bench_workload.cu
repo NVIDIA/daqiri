@@ -95,6 +95,18 @@ int parse_workload_gemm_dim(int argc, char** argv) {
   return 1024;  // default square GEMM side length
 }
 
+int parse_workload_fft_len(int argc, char** argv) {
+  for (int i = 2; i + 1 < argc; i += 2) {
+    if (std::string(argv[i]) == "--workload-fft-len") {
+      const long long v = std::atoll(argv[i + 1]);
+      if (v > 0) {
+        return static_cast<int>(v);
+      }
+    }
+  }
+  return kFftLen;  // default 1-D C2C transform length
+}
+
 int parse_workload_sync_interval(int argc, char** argv) {
   for (int i = 2; i + 1 < argc; i += 2) {
     if (std::string(argv[i]) == "--workload-sync-interval") {
@@ -171,7 +183,7 @@ void GpuWorkload::destroy() {
 }
 
 bool GpuWorkload::init(BenchWorkload kind, size_t input_bytes, int sync_interval,
-                       int gemm_dim) {
+                       int gemm_dim, int fft_len) {
   kind_ = kind;
   sync_interval_ = sync_interval > 0 ? sync_interval : 1;
   run_count_ = 0;
@@ -191,12 +203,15 @@ bool GpuWorkload::init(BenchWorkload kind, size_t input_bytes, int sync_interval
   stream_ = stream;
 
   if (kind_ == BenchWorkload::Fft) {
-    // Fan the working set out across batched length-kFftLen C2C transforms. The
+    // 1-D C2C transform length, pinned via --workload-fft-len (default kFftLen);
+    // held fixed while the I/O unit is swept, like the GEMM side length.
+    fft_len_ = std::max(2, fft_len > 0 ? fft_len : kFftLen);
+    // Fan the working set out across batched length-fft_len_ C2C transforms. The
     // transform reads the caller's input buffer and writes the owned fft_out_;
     // total*sizeof(cufftComplex) <= bytes so the input always holds enough data.
-    const size_t n_complex = std::max<size_t>(kFftLen, bytes / sizeof(cufftComplex));
-    const int batch = std::max<int>(1, static_cast<int>(n_complex / kFftLen));
-    const size_t total = static_cast<size_t>(kFftLen) * batch;
+    const size_t n_complex = std::max<size_t>(fft_len_, bytes / sizeof(cufftComplex));
+    const int batch = std::max<int>(1, static_cast<int>(n_complex / fft_len_));
+    const size_t total = static_cast<size_t>(fft_len_) * batch;
 
     if (cudaMalloc(&fft_out_, total * sizeof(cufftComplex)) != cudaSuccess ||
         cudaMemset(fft_out_, 0, total * sizeof(cufftComplex)) != cudaSuccess) {
@@ -205,7 +220,7 @@ bool GpuWorkload::init(BenchWorkload kind, size_t input_bytes, int sync_interval
       return false;
     }
     cufftHandle plan = 0;
-    if (cufftPlan1d(&plan, kFftLen, CUFFT_C2C, batch) != CUFFT_SUCCESS) {
+    if (cufftPlan1d(&plan, fft_len_, CUFFT_C2C, batch) != CUFFT_SUCCESS) {
       std::cerr << "GpuWorkload: cufftPlan1d failed\n";
       destroy();
       return false;
@@ -218,8 +233,8 @@ bool GpuWorkload::init(BenchWorkload kind, size_t input_bytes, int sync_interval
     }
     // Explicit shape so every published FFT number carries its compute size.
     // ~5·N·log2(N) flops per length-N C2C transform, times `batch` transforms.
-    const double flops = 5.0 * kFftLen * std::log2(static_cast<double>(kFftLen)) * batch;
-    std::cerr << "GpuWorkload: fft shape = " << batch << " x C2C length-" << kFftLen
+    const double flops = 5.0 * fft_len_ * std::log2(static_cast<double>(fft_len_)) * batch;
+    std::cerr << "GpuWorkload: fft shape = " << batch << " x C2C length-" << fft_len_
               << " (working set " << (bytes >> 10) << " KiB, " << (flops / 1e6) << " MFLOP/call)\n";
   } else {  // Gemm or GemmFp16
     // Square matmul with the side length n pinned directly (FP32 and FP16 use the

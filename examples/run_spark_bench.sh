@@ -33,6 +33,9 @@
 #                      1024), held fixed so FLOPs/call (2·n³) is constant. The
 #                      compute working set is n·n·elem_size, read from the front of
 #                      each received I/O unit. Recorded in post_process_gemm_dim.
+#   FFT_LEN          — the 1-D C2C transform length (--workload-fft-len; default
+#                      1024) for WORKLOAD=fft, held fixed while the I/O unit is
+#                      swept. Independent of GEMM_DIM.
 #   SYNC_INTERVAL    — drain the GPU stream every N compute calls
 #                      (--workload-sync-interval; default 2). Sweep it (1 2 4 8 16 32)
 #                      to see how much of the receive+compute ceiling is single-thread
@@ -109,6 +112,12 @@ esac
 GEMM_DIM="${GEMM_DIM:-1024}"
 if [[ ! "$GEMM_DIM" =~ ^[0-9]+$ ]]; then
   echo "Invalid GEMM_DIM '$GEMM_DIM' (expected a positive integer)" >&2; exit 1
+fi
+# FFT_LEN: the 1-D C2C transform length (--workload-fft-len) for WORKLOAD=fft, held
+# FIXED while the I/O unit is swept. Independent of GEMM_DIM. Default 1024.
+FFT_LEN="${FFT_LEN:-1024}"
+if [[ ! "$FFT_LEN" =~ ^[0-9]+$ ]]; then
+  echo "Invalid FFT_LEN '$FFT_LEN' (expected a positive integer)" >&2; exit 1
 fi
 # SYNC_INTERVAL: drain the GPU stream every N compute calls (--workload-sync-interval).
 # Larger N lets more GEMMs queue asynchronously before the single receive+compute
@@ -472,6 +481,7 @@ run_cell() {
   if [[ "$WORKLOAD_EFF" != "none" ]]; then
     bench_extra+=(--workload "$WORKLOAD_EFF")
     bench_extra+=(--workload-gemm-dim "$GEMM_DIM")
+    bench_extra+=(--workload-fft-len "$FFT_LEN")
     [[ -n "$SYNC_INTERVAL" ]] && bench_extra+=(--workload-sync-interval "$SYNC_INTERVAL")
     [[ -n "$MAX_INFLIGHT" ]] && bench_extra+=(--workload-max-inflight "$MAX_INFLIGHT")
   fi

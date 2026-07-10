@@ -41,6 +41,13 @@ BenchWorkload parse_workload(int argc, char** argv);
 // Returns 1024 (the default) if unset. Mirrors parse_workload's stride.
 int parse_workload_gemm_dim(int argc, char** argv);
 
+// Parse "--workload-fft-len N" from argv: the 1-D C2C transform length. The burst
+// working set is fanned out across as many batched length-N transforms as fit, so
+// N sets the per-transform cost (~5*N*log2(N) flops) while the batch count tracks
+// the I/O unit. Independent of --workload-gemm-dim. Returns 1024 (the default) if
+// unset. Mirrors parse_workload's stride.
+int parse_workload_fft_len(int argc, char** argv);
+
 // Parse "--workload-sync-interval N" from argv: drain the GPU stream every N compute
 // calls (bounds outstanding GPU work). Larger N = deeper async queue, fewer CPU
 // stalls waiting on the GPU; N=1 is fully synchronous. Used to characterize how much
@@ -98,11 +105,14 @@ class GpuWorkload {
   // GEMM; <=0 falls back to the 1024 default). kind == None leaves the object an
   // inert no-op. sync_interval bounds outstanding GPU work (sync every N runs) for
   // the run()+sync() callers (DPDK/socket); the RoCE path bounds work with events
-  // instead and ignores it. Logs the chosen problem shape (GEMM n / FFT
-  // length+batch) and FLOP count so every published benchmark number carries its
-  // explicit compute size. Returns false on CUDA / library error; the caller may
-  // warn and continue with the workload disabled (enabled() will report false).
-  bool init(BenchWorkload kind, size_t input_bytes, int sync_interval = 2, int gemm_dim = 1024);
+  // instead and ignores it. `fft_len` is the 1-D FFT transform length for the FFT
+  // kind (>0; <=0 falls back to the 1024 default), ignored by the GEMM kinds.
+  // Logs the chosen problem shape (GEMM n / FFT length+batch) and FLOP count so
+  // every published benchmark number carries its explicit compute size. Returns
+  // false on CUDA / library error; the caller may warn and continue with the
+  // workload disabled (enabled() will report false).
+  bool init(BenchWorkload kind, size_t input_bytes, int sync_interval = 2, int gemm_dim = 1024,
+            int fft_len = 1024);
 
   // Enqueue one representative FFT/SGEMM on the internal stream, reading `input`
   // (a device pointer to >= the GEMM working set of valid bytes). No-op unless
@@ -168,6 +178,8 @@ class GpuWorkload {
   void* stream_ = nullptr;  // cudaStream_t
   void* cublas_ = nullptr;  // cublasHandle_t
   int fft_plan_ = -1;       // cufftHandle (-1 == unset)
+
+  int fft_len_ = 0;          // 1-D C2C transform length (set in init)
 
   // Device scratch (operands NOT sourced from received data).
   void* fft_out_ = nullptr;  // cufftComplex[fft_total_] (FFT output)

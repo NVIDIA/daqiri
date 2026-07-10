@@ -173,6 +173,7 @@ int main(int argc, char **argv) {
   const double target_gbps = daqiri::bench::parse_target_gbps(argc, argv);
   const auto workload = daqiri::bench::parse_workload(argc, argv);
   const int workload_gemm_dim = daqiri::bench::parse_workload_gemm_dim(argc, argv);
+  const int workload_fft_len = daqiri::bench::parse_workload_fft_len(argc, argv);
   const int workload_sync_interval = daqiri::bench::parse_workload_sync_interval(argc, argv);
   const auto root = YAML::LoadFile(argv[1]);
 
@@ -222,7 +223,7 @@ int main(int argc, char **argv) {
   rx_threads.reserve(rx_configs.size());
   for (const auto &cfg : rx_configs) {
     rx_threads.emplace_back(daqiri::bench::rx_count_worker, cfg, std::ref(stop), workload, geom,
-                            workload_gemm_dim, workload_sync_interval);
+                            workload_gemm_dim, workload_sync_interval, workload_fft_len);
   }
   tx_threads.reserve(tx_configs.size());
   for (const auto &cfg : tx_configs) {
