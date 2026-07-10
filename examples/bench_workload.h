@@ -43,8 +43,8 @@ int parse_workload_gemm_dim(int argc, char** argv);
 
 // Parse "--workload-fft-len N" from argv: the 1-D C2C transform length. The burst
 // working set is fanned out across as many batched length-N transforms as fit, so
-// N sets the per-transform cost (~5*N*log2(N) flops) while the batch count tracks
-// the I/O unit. Independent of --workload-gemm-dim. Returns 1024 (the default) if
+// N sets the per-transform cost while the batch count tracks the I/O unit.
+// Independent of --workload-gemm-dim. Returns 1024 (the default) if
 // unset. Mirrors parse_workload's stride.
 int parse_workload_fft_len(int argc, char** argv);
 

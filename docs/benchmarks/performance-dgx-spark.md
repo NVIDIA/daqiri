@@ -90,8 +90,8 @@ also the no-drop rate: pacing the sender below it hits the target with zero drop
 | Core                     | Busy% | Note                                  |
 | ------------------------ | ----: | ------------------------------------- |
 | Master (CPU 8)           |  3.7% | Orchestration only; mostly idle       |
-| TX queue poller (CPU 17) |  ~92% | Poll-mode spin; rate-independent      |
-| RX queue poller (CPU 18) |  ~92% | Poll-mode spin; rate-independent      |
+| TX queue poller (CPU 17) |  ~92% | Poll-mode busy-spin; ~constant vs load |
+| RX queue poller (CPU 18) |  ~92% | Poll-mode busy-spin; ~constant vs load |
 
 The benchmark app workers run on their own cores (TX 16, RX 19) alongside these
 pollers; this run sampled only the poller cores.
@@ -171,13 +171,16 @@ sized to the message so the in-flight window stays full.
 | Core                 | Busy% | Note                                            |
 | -------------------- | ----: | ----------------------------------------------- |
 | Master (CPU 8)       |  0.7% | Orchestration only                              |
-| Client TX (CPU 17)   | 74.8% | Post-and-poll spin; rate-independent            |
+| Client TX (CPU 17)   | 74.8% | Busy-spins posting sends and polling completions |
 | Server RX (CPU 19)   |  1.1% | HCA DMAs straight to memory; worker only reaps completions |
 
-The near-idle RX core is the expected RoCE RC signature — the HCA places incoming
-data directly into registered memory, so the receive worker only reaps
-completions and reposts (~1% at this message rate). The GPU stays idle here too
-(SM and memory-controller ~0%; DMA target, not a compute engine).
+The TX core busy-spins in a post-and-poll loop, so its ~75% busy time is set by
+that spin, not by the throughput: it stays near this level whether the link runs
+at 10 or 100 Gb/s (the same reason the DPDK pollers sit near 92% regardless of
+offered load). The near-idle RX core is the expected RoCE RC signature — the HCA
+places incoming data directly into registered memory, so the receive worker only
+reaps completions and reposts (~1% at this message rate). The GPU stays idle here
+too (SM and memory-controller ~0%; DMA target, not a compute engine).
 
 ## Socket / TCP
 
