@@ -207,6 +207,17 @@ case "$BACKEND" in
     # client-RX core 18) as cpu_rx, so cpu_rx_pct reflects the true RoCE RC
     # receiver cost.
     CPU_MASTER=8; CPU_TX=17; CPU_RX=19
+    # Resolve the server (RX) / client (TX) netdevs inside the wire-loopback
+    # namespaces so each cell can assert wire transit via *_phy SerDes counters,
+    # exactly like the dpdk path. RoCE loops over the SAME cable, so a non-advancing
+    # server rx_packets_phy flags the on-chip eswitch short-cut instead of a true
+    # over-the-cable loopback -- the tell for a RoCE number above the ~99 Gb/s
+    # 100GbE line-rate ceiling. Empty if the netns is not up yet (the per-cell check
+    # then just skips with a WARN). Override RDMA_{SERVER,CLIENT}_NETDEV if needed.
+    RDMA_SERVER_NS="${RDMA_SERVER_NS:-dq_wire_server}"
+    RDMA_CLIENT_NS="${RDMA_CLIENT_NS:-dq_wire_client}"
+    RDMA_SERVER_NETDEV="${RDMA_SERVER_NETDEV:-$(ip netns exec "$RDMA_SERVER_NS" ls /sys/class/net 2>/dev/null | grep -vx lo | head -n1 || true)}"
+    RDMA_CLIENT_NETDEV="${RDMA_CLIENT_NETDEV:-$(ip netns exec "$RDMA_CLIENT_NS" ls /sys/class/net 2>/dev/null | grep -vx lo | head -n1 || true)}"
     ;;
     # Single-frame UDP sizes (<= the ~8972 B MTU payload, so no IP fragmentation).
     # 65507 is intentionally excluded: it fragments into ~8 packets and, under
@@ -355,10 +366,13 @@ cpu_busy_pct() {
 
 # Sum a NIC *_phy SerDes counter (proves traffic crossed the cable, not an on-chip
 # eswitch short-cut). Empty netdev -> 0. Mirrors run_spark_mq_bench.sh's phy check.
+# Optional third arg is a network namespace (the RoCE/socket wire loopback moves the
+# cabled netdevs into dq_wire_{server,client}); empty reads the current namespace.
 phy_counter() {
-  local netdev="$1" key="$2"
+  local netdev="$1" key="$2" ns="${3:-}"
   [[ -z "$netdev" ]] && { echo 0; return; }
-  ethtool -S "$netdev" 2>/dev/null \
+  { if [[ -n "$ns" ]]; then ip netns exec "$ns" ethtool -S "$netdev" 2>/dev/null
+    else ethtool -S "$netdev" 2>/dev/null; fi; } \
     | awk -F'[: ]+' -v k="$key" '$2 == k { s += $3 } END { printf "%d", s+0 }'
 }
 
@@ -552,6 +566,12 @@ run_cell() {
       nsys_pre=("$NSYS_BIN" profile --trace=cuda,osrt --sample=cpu --cpuctxsw=process-tree
                 --force-overwrite=true --output "$cell_dir/roce_server")
     fi
+    # Snapshot the netns *_phy counters around the run to assert the RoCE traffic
+    # actually crossed the cable (client tx -> server rx over the wire), not the
+    # on-chip eswitch short-cut that lets a loopback exceed the 100GbE line rate.
+    local phy_tx_before phy_rx_before
+    phy_tx_before="$(phy_counter "$RDMA_CLIENT_NETDEV" tx_packets_phy "$RDMA_CLIENT_NS")"
+    phy_rx_before="$(phy_counter "$RDMA_SERVER_NETDEV" rx_packets_phy "$RDMA_SERVER_NS")"
     ip netns exec dq_wire_server "${nsys_pre[@]}" "$BENCH_BIN" "$yaml" \
         --seconds "$server_seconds" "${bench_extra[@]}" --mode server \
         > "$cell_dir/server_stdout.txt" 2> "$cell_dir/server_stderr.txt" &
@@ -572,11 +592,30 @@ run_cell() {
           "$cell_dir/roce_server.nsys-rep" >&2 || true
       echo "nsys report: $cell_dir/roce_server.nsys-rep" >&2
     fi
+    local phy_tx_delta phy_rx_delta
+    phy_tx_delta=$(( $(phy_counter "$RDMA_CLIENT_NETDEV" tx_packets_phy "$RDMA_CLIENT_NS") - phy_tx_before ))
+    phy_rx_delta=$(( $(phy_counter "$RDMA_SERVER_NETDEV" rx_packets_phy "$RDMA_SERVER_NS") - phy_rx_before ))
     # RDMA prints "Client complete: ... send_completions=N send_bytes=N seconds=S".
     pkts="$(extract_field 'Client complete' send_completions "$stdout")"
     bytes="$(extract_field 'Client complete' send_bytes "$stdout")"
     secs="$(extract_field 'Client complete' seconds "$stdout")"
     rx_bytes="$bytes"
+    # Wire-transit check. On the cable the server's rx_*_phy advances by at least one
+    # SerDes packet per RDMA message -- many more once a message exceeds the MTU and
+    # segments -- so a genuine over-the-wire run shows phy_rx_delta >= the message
+    # count. An on-chip eswitch short-cut leaves rx_*_phy essentially FLAT (only a
+    # handful of stray background/control packets), so a bare ">0" is not enough: a
+    # +22 on a 23M-message run passed the old check while never touching the cable.
+    # Require the delta to reach half the message count (generous margin for counter
+    # slack) before certifying wire transit.
+    local phy_min=$(( ${pkts:-0} / 2 ))
+    if [[ -z "$RDMA_SERVER_NETDEV" ]]; then
+      echo "WARN: $cell could not resolve server netdev in $RDMA_SERVER_NS (netns up?); skipped wire (*_phy) check" >&2
+    elif [[ "$phy_rx_delta" -lt "$phy_min" || "$phy_rx_delta" -le 0 ]]; then
+      echo "WARN: $cell rx_packets_phy advanced only +$phy_rx_delta on $RDMA_SERVER_NETDEV (expected >= ~$phy_min, one per message) -- traffic likely did NOT cross the wire (on-chip eswitch short-cut?)" >&2
+    else
+      echo "INFO: $cell wire OK -- client tx_packets_phy +$phy_tx_delta, server rx_packets_phy +$phy_rx_delta (>= $phy_min msgs)" >&2
+    fi
   else
     local yaml="$cell_dir/config.yaml"
     generate_yaml "$yaml" "$payload" "$batch"
@@ -590,13 +629,6 @@ run_cell() {
     local phy_tx_delta phy_rx_delta
     phy_tx_delta=$(( $(phy_counter "$DPDK_TX_NETDEV" tx_packets_phy) - phy_tx_before ))
     phy_rx_delta=$(( $(phy_counter "$DPDK_RX_NETDEV" rx_packets_phy) - phy_rx_before ))
-    if [[ -z "$DPDK_RX_NETDEV" ]]; then
-      echo "WARN: $cell could not resolve rx_port netdev ($DPDK_RX_PCI); skipped wire (*_phy) check" >&2
-    elif [[ "$phy_rx_delta" -le 0 ]]; then
-      echo "WARN: $cell rx_packets_phy did not advance ($phy_rx_delta) on $DPDK_RX_NETDEV -- traffic may NOT have crossed the wire (on-chip eswitch short-cut?)" >&2
-    else
-      echo "INFO: $cell wire OK -- p0 tx_packets_phy +$phy_tx_delta, p1 rx_packets_phy +$phy_rx_delta" >&2
-    fi
     # For RX-bearing benches "RX complete" is authoritative; fall back to "TX complete".
     pkts="$(extract_field 'RX complete' packets "$stdout")"
     bytes="$(extract_field 'RX complete' bytes   "$stdout")"
@@ -607,6 +639,19 @@ run_cell() {
       secs="$(extract_field 'TX complete' seconds  "$stdout")"
     fi
     rx_bytes="$bytes"
+    # Wire-transit check. Raw Ethernet is one SerDes packet per app packet, so a
+    # genuine over-the-wire run advances rx_*_phy by ~the received packet count; an
+    # on-chip eswitch short-cut leaves it near-flat. Require the delta to reach half
+    # the packet count -- a bare ">0" would let a stray background packet false-pass
+    # (the same hole the RoCE check had).
+    local phy_min=$(( ${pkts:-0} / 2 ))
+    if [[ -z "$DPDK_RX_NETDEV" ]]; then
+      echo "WARN: $cell could not resolve rx_port netdev ($DPDK_RX_PCI); skipped wire (*_phy) check" >&2
+    elif [[ "$phy_rx_delta" -lt "$phy_min" || "$phy_rx_delta" -le 0 ]]; then
+      echo "WARN: $cell rx_packets_phy advanced only +$phy_rx_delta on $DPDK_RX_NETDEV (expected >= ~$phy_min) -- traffic likely did NOT cross the wire (on-chip eswitch short-cut?)" >&2
+    else
+      echo "INFO: $cell wire OK -- p0 tx_packets_phy +$phy_tx_delta, p1 rx_packets_phy +$phy_rx_delta (>= $phy_min)" >&2
+    fi
   fi
   cp "$stderr" "$DRIVER_LOG"
 

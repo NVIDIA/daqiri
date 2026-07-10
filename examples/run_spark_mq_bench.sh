@@ -265,14 +265,18 @@ run_cell() {
 
   local drops; drops="$(parse_dpdk_drops "$stderr")"
 
-  # Wire-traffic confirmation: rx_packets_phy must advance over the run.
+  # Wire-traffic confirmation: rx_packets_phy must advance by ~the received packet
+  # count (raw Ethernet is one SerDes packet per app packet). A bare ">0" would let a
+  # stray background packet false-pass an on-chip eswitch short-cut, so require the
+  # delta to reach half the packet count.
   local phy_delta=$(( phy_after - phy_before ))
+  local phy_min=$(( ${pkts:-0} / 2 ))
   if [[ -z "$RX_NETDEV" ]]; then
     echo "WARN: $cell p$payload could not resolve RX netdev for $RX_PCI; skipped wire (*_phy) check" >&2
-  elif [[ "$phy_delta" -le 0 ]]; then
-    echo "WARN: $cell p$payload rx_packets_phy did not advance ($phy_delta) -- traffic may not have crossed the wire" >&2
+  elif [[ "$phy_delta" -lt "$phy_min" || "$phy_delta" -le 0 ]]; then
+    echo "WARN: $cell p$payload rx_packets_phy advanced only +$phy_delta (expected >= ~$phy_min) -- traffic likely did NOT cross the wire (on-chip eswitch short-cut?)" >&2
   else
-    echo "INFO: $cell p$payload wire OK -- rx_packets_phy +$phy_delta" >&2
+    echo "INFO: $cell p$payload wire OK -- rx_packets_phy +$phy_delta (>= $phy_min)" >&2
   fi
 
   # Per-core busy% over the bench window, in CSV column order (see CPU_CORES).
