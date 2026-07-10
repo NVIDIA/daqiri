@@ -17,6 +17,9 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <arpa/inet.h>
+
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -74,14 +77,67 @@ SocketBenchConfig parse_socket_cfg(const YAML::Node& node) {
   return cfg;
 }
 
+// Detect the socket transport from the YAML: TCP is an in-order byte stream
+// (gather-only), UDP datagrams can reorder (seq-based reorder). Scans the
+// interfaces' socket_config.local_addr scheme.
+bool socket_transport_is_tcp(const YAML::Node& root) {
+  const auto cfg = root["daqiri"] && root["daqiri"]["cfg"] ? root["daqiri"]["cfg"] : root;
+  const auto ifaces = cfg["interfaces"];
+  if (ifaces && ifaces.IsSequence()) {
+    for (const auto& iface : ifaces) {
+      const auto sc = iface["socket_config"];
+      if (!sc) {
+        continue;
+      }
+      const auto addr = sc["local_addr"].as<std::string>("");
+      if (addr.rfind("tcp://", 0) == 0) {
+        return true;
+      }
+      if (addr.rfind("udp://", 0) == 0) {
+        return false;
+      }
+    }
+  }
+  return false;  // default to UDP semantics
+}
+
 void socket_worker(const SocketBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pacer,
-                   std::atomic<bool>& stop, SocketWorkerStats& stats) {
+                   std::atomic<bool>& stop, SocketWorkerStats& stats,
+                   daqiri::bench::BenchWorkload workload, bool is_tcp, size_t workload_batch_bytes,
+                   int workload_gemm_n, int workload_sync_interval) {
   const char *thread_name =
       cfg.server ? "socket_bench_server" : "socket_bench_client";
   if (!daqiri::bench::set_current_thread_affinity(cfg.cpu_core, thread_name)) {
     stop.store(true);
     return;
   }
+
+  // Representative GPU workload on the REAL received data. Socket data lands in
+  // pageable host memory, so the pipeline stages it to the GPU (a host->device
+  // copy on the workload stream -- the honest cost of the socket path). UDP can
+  // reorder by sequence number; TCP is in-order, so it gathers per chunk.
+  const uint32_t msg = static_cast<uint32_t>(cfg.message_size);
+  // --workload-batch-bytes sets the UDP ordered-buffer / working-set size
+  // (default ~8 MB, matching the RoCE working set); the UDP reorder window is that
+  // many datagrams. TCP gathers one chunk at a time (one compute per recv).
+  const uint32_t target_bytes =
+      workload_batch_bytes > 0 ? static_cast<uint32_t>(workload_batch_bytes) : 8u * 1024u * 1024u;
+  const uint32_t packets_per_batch =
+      is_tcp ? 1u : std::max(1u, std::min(8192u, target_bytes / std::max(1u, msg)));
+  daqiri::bench::GpuWorkload gpu_workload;
+  daqiri::bench::ReorderPipeline pipeline;
+  if (workload != daqiri::bench::BenchWorkload::None) {
+    if (!gpu_workload.init(workload, static_cast<size_t>(packets_per_batch) * msg,
+                           workload_sync_interval, workload_gemm_n) ||
+        !pipeline.init(is_tcp ? daqiri::bench::ReorderMode::GatherOnly
+                              : daqiri::bench::ReorderMode::SeqReorder,
+                       packets_per_batch, msg, /*payload_byte_offset=*/0,
+                       /*seq_bit_offset=*/0, /*seq_bit_width=*/is_tcp ? 0 : 32,
+                       /*staging_needed=*/true, gpu_workload.stream())) {
+      std::cerr << "Socket workload init failed; continuing without GPU workload\n";
+    }
+  }
+  const bool run_workload = gpu_workload.enabled() && pipeline.enabled();
 
   uintptr_t conn_id = 0;
   uint16_t port = 0;
@@ -124,9 +180,20 @@ void socket_worker(const SocketBenchConfig& cfg, daqiri::bench::TokenBucketPacer
       daqiri::set_header(msg, port, queue, 1, 1);
 
       if (daqiri::get_tx_packet_burst(msg) == daqiri::Status::SUCCESS) {
+        if (daqiri::set_packet_lengths(msg, 0, {cfg.message_size}) != daqiri::Status::SUCCESS) {
+          std::cerr << "socket_bench message_size exceeds configured socket buffer size\n";
+          daqiri::free_all_packets_and_burst_tx(msg);
+          stop.store(true);
+          continue;
+        }
         auto* payload = reinterpret_cast<uint8_t*>(daqiri::get_packet_ptr(msg, 0));
         std::memset(payload, static_cast<int>(stats.sent_packets & 0xff), cfg.message_size);
-        daqiri::set_packet_lengths(msg, 0, {cfg.message_size});
+        // Inject a sequence number (network byte order) at the payload start so
+        // the UDP RX-side reorder has a real seq to sort by. Harmless for TCP.
+        if (cfg.message_size >= static_cast<int>(sizeof(uint32_t))) {
+          const uint32_t seq = htonl(static_cast<uint32_t>(stats.sent_packets));
+          std::memcpy(payload, &seq, sizeof(seq));
+        }
 
         daqiri::set_connection_id(msg, conn_id);
 
@@ -144,9 +211,28 @@ void socket_worker(const SocketBenchConfig& cfg, daqiri::bench::TokenBucketPacer
       daqiri::BurstParams* burst = nullptr;
       if (daqiri::get_rx_burst(&burst, conn_id, cfg.server) == daqiri::Status::SUCCESS &&
           burst != nullptr) {
-        const uint64_t rx_pkts = static_cast<uint64_t>(daqiri::get_num_packets(burst));
-        stats.received_packets += rx_pkts;
+        const int num_pkts = static_cast<int>(daqiri::get_num_packets(burst));
+        stats.received_packets += static_cast<uint64_t>(num_pkts);
         stats.received_bytes += daqiri::get_burst_tot_byte(burst);
+
+        if (run_workload) {
+          // Stage each received (host) payload to the GPU; the copy persists in
+          // the pipeline's device buffer, so a batch can accumulate across bursts
+          // (UDP bursts are one datagram). When a batch fills, reorder/gather it
+          // and run the compute. TCP (packets_per_batch == 1) flushes per chunk.
+          for (int i = 0; i < num_pkts; ++i) {
+            const auto len = daqiri::get_packet_length(burst, i);
+            void* d = pipeline.stage_host_packet(daqiri::get_packet_ptr(burst, i), len);
+            pipeline.add_device_packet(d);
+            if (pipeline.collected() == packets_per_batch) {
+              gpu_workload.run(pipeline.finish_batch());
+              pipeline.reset_batch();
+            }
+          }
+          // Drain so the host->device staging copies (which read this burst's
+          // memory) complete before the burst is freed/recycled.
+          gpu_workload.sync();
+        }
         daqiri::free_all_packets_and_burst_rx(burst);
       } else {
         std::this_thread::sleep_for(std::chrono::microseconds(100));
@@ -160,7 +246,9 @@ void socket_worker(const SocketBenchConfig& cfg, daqiri::bench::TokenBucketPacer
 int main(int argc, char** argv) {
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0]
-              << " <config.yaml> [--seconds N] [--mode server|client|both] [--target-gbps G]\n";
+              << " <config.yaml> [--seconds N] [--mode server|client|both] "
+                 "[--target-gbps G] [--workload none|fft|gemm|gemm_fp16] "
+                 "[--workload-batch-bytes N]\n";
     return 1;
   }
 
@@ -176,8 +264,13 @@ int main(int argc, char** argv) {
       target_gbps = std::stod(argv[i + 1]);
     }
   }
+  const auto workload = daqiri::bench::parse_workload(argc, argv);
+  const size_t workload_batch_bytes = daqiri::bench::parse_workload_batch_bytes(argc, argv);
+  const int workload_gemm_n = daqiri::bench::parse_workload_gemm_n(argc, argv);
+  const int workload_sync_interval = daqiri::bench::parse_workload_sync_interval(argc, argv);
 
   const auto root = YAML::LoadFile(argv[1]);
+  const bool is_tcp = socket_transport_is_tcp(root);
   if (daqiri::daqiri_init(argv[1]) != daqiri::Status::SUCCESS) {
     std::cerr << "daqiri_init failed\n";
     return 1;
@@ -211,12 +304,14 @@ int main(int argc, char** argv) {
   }
 
   if (run_server) {
-    server_thread = std::thread(socket_worker, server_cfg, std::ref(server_pacer),
-                                std::ref(stop), std::ref(server_stats));
+    server_thread = std::thread(socket_worker, server_cfg, std::ref(server_pacer), std::ref(stop),
+                                std::ref(server_stats), workload, is_tcp, workload_batch_bytes,
+                                workload_gemm_n, workload_sync_interval);
   }
   if (run_client) {
-    client_thread = std::thread(socket_worker, client_cfg, std::ref(client_pacer),
-                                std::ref(stop), std::ref(client_stats));
+    client_thread = std::thread(socket_worker, client_cfg, std::ref(client_pacer), std::ref(stop),
+                                std::ref(client_stats), workload, is_tcp, workload_batch_bytes,
+                                workload_gemm_n, workload_sync_interval);
   }
 
   if (!server_thread.joinable() && !client_thread.joinable()) {

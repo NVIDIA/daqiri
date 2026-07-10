@@ -22,6 +22,7 @@
 #include <sched.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <csignal>
 #include <cstring>
@@ -548,11 +549,69 @@ void print_queue_stats(const char *direction, const std::string &interface_name,
             << std::endl;
 }
 
-void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
+void rx_count_worker(const RawBenchRxConfig& cfg, std::atomic<bool>& stop, BenchWorkload workload,
+                     const ReorderGeometry& geom, int workload_gemm_n, int workload_sync_interval) {
   if (!set_current_thread_affinity(cfg.cpu_core, "bench_rx")) {
     stop.store(true);
     return;
   }
+
+  // Per-thread representative GPU workload + double-buffered reorder slots
+  // (both inert unless --workload is set). Each slot owns its ordered output
+  // buffer and holds the source DAQIRI burst until the slot's stream work is
+  // complete, so RX can enqueue GPU work without a per-burst synchronization.
+  constexpr size_t kWorkloadSlots = 2;
+  const uint32_t out_payload_len = geom.out_payload_len > 0 ? geom.out_payload_len : 1;
+  const size_t batch_bytes = static_cast<size_t>(geom.packets_per_batch) * out_payload_len;
+  GpuWorkload gpu_workload;
+  struct WorkloadSlot {
+    ReorderPipeline pipeline;
+    cudaEvent_t done = nullptr;
+    daqiri::BurstParams *burst = nullptr;
+    bool busy = false;
+  };
+  std::array<WorkloadSlot, kWorkloadSlots> workload_slots;
+  bool run_workload = false;
+  if (workload != BenchWorkload::None) {
+    bool ok = gpu_workload.init(workload, batch_bytes, workload_sync_interval, workload_gemm_n);
+    for (auto &slot : workload_slots) {
+      ok = ok && slot.pipeline.init(ReorderMode::SeqReorder, geom.packets_per_batch,
+                                    out_payload_len, geom.payload_byte_offset,
+                                    geom.seq_bit_offset, geom.seq_bit_width,
+                                    /*staging_needed=*/false, gpu_workload.stream()) &&
+           cudaEventCreateWithFlags(&slot.done, cudaEventDisableTiming) == cudaSuccess;
+    }
+    if (!ok) {
+      std::cerr << "RX workload init failed; continuing without GPU workload\n";
+      for (auto &slot : workload_slots) {
+        if (slot.done != nullptr) {
+          cudaEventDestroy(slot.done);
+          slot.done = nullptr;
+        }
+      }
+      gpu_workload.sync();
+    } else {
+      run_workload = true;
+    }
+  }
+
+  auto release_slot = [](WorkloadSlot &slot, bool wait) {
+    if (!slot.busy) {
+      return false;
+    }
+    const cudaError_t status = wait ? cudaEventSynchronize(slot.done) : cudaEventQuery(slot.done);
+    if (status == cudaSuccess) {
+      daqiri::free_all_packets_and_burst_rx(slot.burst);
+      slot.burst = nullptr;
+      slot.busy = false;
+      return true;
+    }
+    if (status != cudaErrorNotReady) {
+      std::cerr << "RX workload CUDA event error: " << cudaGetErrorString(status) << "\n";
+    }
+    return false;
+  };
+  size_t next_slot = 0;
 
   const int port_id = daqiri::get_port_id(cfg.interface_name);
   if (port_id < 0) {
@@ -591,13 +650,53 @@ void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
       }
       got_any = true;
       auto &stats = queue_stats[static_cast<size_t>(q)];
-      stats.packets += static_cast<uint64_t>(daqiri::get_num_packets(burst));
+      const int num_pkts = static_cast<int>(daqiri::get_num_packets(burst));
+      stats.packets += static_cast<uint64_t>(num_pkts);
       stats.bytes += daqiri::get_burst_tot_byte(burst);
       ++stats.bursts;
-      daqiri::free_all_packets_and_burst_rx(burst);
+
+      if (run_workload) {
+        for (auto &slot : workload_slots) {
+          release_slot(slot, false);
+        }
+
+        auto &slot = workload_slots[next_slot];
+        release_slot(slot, true);
+        next_slot = (next_slot + 1) % workload_slots.size();
+
+        slot.pipeline.reset_batch();
+        bool enqueued_work = false;
+        for (int i = 0; i < num_pkts; ++i) {
+          slot.pipeline.add_device_packet(
+              daqiri::get_segment_packet_ptr(burst, geom.payload_segment, i));
+          if (slot.pipeline.collected() == geom.packets_per_batch) {
+            gpu_workload.run(slot.pipeline.finish_batch());
+            slot.pipeline.reset_batch();
+            enqueued_work = true;
+          }
+        }
+
+        if (enqueued_work) {
+          cudaEventRecord(slot.done, static_cast<cudaStream_t>(gpu_workload.stream()));
+          slot.burst = burst;
+          slot.busy = true;
+        } else {
+          daqiri::free_all_packets_and_burst_rx(burst);
+        }
+      } else {
+        daqiri::free_all_packets_and_burst_rx(burst);
+      }
     }
     if (!got_any) {
       std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+  }
+  gpu_workload.sync();
+  for (auto &slot : workload_slots) {
+    release_slot(slot, true);
+    if (slot.done != nullptr) {
+      cudaEventDestroy(slot.done);
+      slot.done = nullptr;
     }
   }
   const double secs =

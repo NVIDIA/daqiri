@@ -5,7 +5,7 @@
 #
 # Build (native sm_120):
 #   cmake -S . -B build -DBUILD_SHARED_LIBS=ON -DDAQIRI_BUILD_PYTHON=OFF \
-#     -DDAQIRI_MGR="dpdk socket rdma" -DCMAKE_CUDA_ARCHITECTURES=120
+#     -DDAQIRI_ENGINE="dpdk ibverbs" -DCMAKE_CUDA_ARCHITECTURES=120
 #   cmake --build build -j
 #
 # Run:

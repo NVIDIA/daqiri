@@ -1,0 +1,93 @@
+# RTX PRO 6000 -- Header-Data Split wire closed-loop (dual-port L2 loop).
+# TX port + RX port must have L2 connectivity. Override BDFs/MAC via discovery
+# or run_rtx_pro_bench.sh --tx-bdf / --rx-bdf / --rx-mac.
+#
+# Run:
+#   sudo ./build/examples/daqiri_bench_raw_hds <this.yaml> --seconds 30 --workload fft
+#   sudo ./examples/run_rtx_pro_bench.sh dpdk-hds issue17 --seconds 30
+#
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    master_core: 3
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    memory_regions:
+    - name: "Data_TX_CPU"
+      kind: "huge"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 64
+    - name: "Data_TX_GPU"
+      kind: "device"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+    - name: "Data_RX_CPU"
+      kind: "huge"
+      affinity: 1
+      num_bufs: 51200
+      buf_size: 64
+    - name: "Data_RX_GPU"
+      kind: "device"
+      affinity: 1
+      num_bufs: 51200
+      buf_size: 8000
+
+    interfaces:
+    - name: "tx_port"
+      address: 0000:61:00.0
+      tx:
+        queues:
+        - name: "tx_q_0"
+          id: 0
+          batch_size: 4096
+          cpu_core: 11
+          memory_regions:
+            - "Data_TX_CPU"
+            - "Data_TX_GPU"
+          offloads:
+            - "tx_eth_src"
+    - name: "rx_port"
+      address: 0000:61:00.1
+      rx:
+        flow_isolation: true
+        queues:
+        - name: "rq_q_0"
+          id: 0
+          cpu_core: 9
+          batch_size: 4096
+          memory_regions:
+            - "Data_RX_CPU"
+            - "Data_RX_GPU"
+        flows:
+        - name: "flow_0"
+          id: 0
+          action:
+            type: queue
+            id: 0
+          match:
+            udp_src: 4096
+            udp_dst: 4096
+            ipv4_len: 8050
+
+bench_rx:
+  interface_name: "rx_port"
+  cpu_core: 8
+
+bench_tx:
+  interface_name: "tx_port"
+  cpu_core: 10
+  batch_size: 4096
+  payload_size: 8000
+  header_size: 64
+  eth_dst_addr: <00:00:00:00:00:00>
+  ip_src_addr: 1.2.3.4
+  ip_dst_addr: 5.6.7.8
+  udp_src_port: 4096
+  udp_dst_port: 4096

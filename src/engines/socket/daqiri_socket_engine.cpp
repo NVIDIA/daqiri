@@ -355,7 +355,20 @@ Status SocketEngine::set_packet_lengths(BurstParams* burst, int idx,
     return Status::INVALID_PARAMETER;
   }
 
-  burst->pkt_lens[0][idx] = static_cast<uint32_t>(*(lens.begin()));
+  const int len = *(lens.begin());
+  if (len < 0) {
+    return Status::INVALID_PARAMETER;
+  }
+  const auto* ep = endpoint_for_port(burst->hdr.hdr.port_id);
+  if (ep != nullptr && static_cast<size_t>(len) > ep->max_packet_size) {
+    DAQIRI_LOG_ERROR("Socket packet length {} exceeds configured max_payload_size/buf_size {} on port {}",
+                     len,
+                     ep->max_packet_size,
+                     burst->hdr.hdr.port_id);
+    return Status::NO_SPACE_AVAILABLE;
+  }
+
+  burst->pkt_lens[0][idx] = static_cast<uint32_t>(len);
   return Status::SUCCESS;
 }
 
