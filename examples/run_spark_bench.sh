@@ -110,13 +110,13 @@ esac
 # so that unit must be at least that large. Default 1024. Recorded in the CSV
 # post_process_gemm_dim column.
 GEMM_DIM="${GEMM_DIM:-1024}"
-if [[ ! "$GEMM_DIM" =~ ^[0-9]+$ ]]; then
+if [[ ! "$GEMM_DIM" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid GEMM_DIM '$GEMM_DIM' (expected a positive integer)" >&2; exit 1
 fi
 # FFT_LEN: the 1-D C2C transform length (--workload-fft-len) for WORKLOAD=fft, held
 # FIXED while the I/O unit is swept. Independent of GEMM_DIM. Default 1024.
 FFT_LEN="${FFT_LEN:-1024}"
-if [[ ! "$FFT_LEN" =~ ^[0-9]+$ ]]; then
+if [[ ! "$FFT_LEN" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid FFT_LEN '$FFT_LEN' (expected a positive integer)" >&2; exit 1
 fi
 # SYNC_INTERVAL: drain the GPU stream every N compute calls (--workload-sync-interval).

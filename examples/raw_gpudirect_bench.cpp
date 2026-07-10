@@ -163,7 +163,8 @@ int main(int argc, char **argv) {
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0]
               << " <config.yaml> [--seconds N] [--target-gbps G] "
-                 "[--workload none|fft|gemm|gemm_fp16] [--workload-gemm-dim N]\n";
+                 "[--workload none|fft|gemm|gemm_fp16] [--workload-gemm-dim N] "
+                 "[--workload-fft-len N] [--workload-sync-interval N]\n";
     return 1;
   }
 
