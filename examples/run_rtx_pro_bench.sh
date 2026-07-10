@@ -210,6 +210,54 @@ wire_preflight() {
 wire_preflight
 
 # --------------------------------------------------------------------------
+# RoCE (rdma) single-host wire loop: the client and server IPs must sit on ONE
+# connected subnet across the two cabled RoCE ports so rdma_cm can resolve the
+# peer over the cable. Assign them to the discovered TX/RX interfaces (and relax
+# rp_filter / enable accept_local for same-host cross-NIC delivery), then remove
+# the addresses we added on exit so we don't disturb the host's base config.
+# --------------------------------------------------------------------------
+RDMA_IP_CLIENT="10.100.0.1"
+RDMA_IP_SERVER="10.100.0.2"
+RDMA_NET_CIDR="24"
+RDMA_ADDED_CLIENT_IF=""
+RDMA_ADDED_SERVER_IF=""
+
+rdma_net_teardown() {
+  [[ -n "$RDMA_ADDED_CLIENT_IF" ]] && \
+    ip addr del "${RDMA_IP_CLIENT}/${RDMA_NET_CIDR}" dev "$RDMA_ADDED_CLIENT_IF" 2>/dev/null || true
+  [[ -n "$RDMA_ADDED_SERVER_IF" ]] && \
+    ip addr del "${RDMA_IP_SERVER}/${RDMA_NET_CIDR}" dev "$RDMA_ADDED_SERVER_IF" 2>/dev/null || true
+}
+
+rdma_net_setup() {
+  [[ "$BACKEND" == "rdma" && "$IS_SW" != "1" ]] || return 0
+  local tx_if="${RTX_TX_IFACE:-}" rx_if="${RTX_RX_IFACE:-}"
+  [[ -z "$tx_if" ]] && tx_if="$(resolve_iface_for_bdf "$TX_BDF" 2>/dev/null || true)"
+  [[ -z "$rx_if" ]] && rx_if="$(resolve_iface_for_bdf "$RX_BDF" 2>/dev/null || true)"
+  if [[ -z "$tx_if" || -z "$rx_if" ]]; then
+    echo "WARNING: could not resolve RoCE interfaces for auto IP setup; assign ${RDMA_IP_CLIENT}/${RDMA_IP_SERVER} manually" >&2
+    return 0
+  fi
+  if ! ip -br addr show "$tx_if" 2>/dev/null | grep -q "$RDMA_IP_CLIENT"; then
+    ip addr add "${RDMA_IP_CLIENT}/${RDMA_NET_CIDR}" dev "$tx_if" 2>/dev/null && RDMA_ADDED_CLIENT_IF="$tx_if"
+  fi
+  if ! ip -br addr show "$rx_if" 2>/dev/null | grep -q "$RDMA_IP_SERVER"; then
+    ip addr add "${RDMA_IP_SERVER}/${RDMA_NET_CIDR}" dev "$rx_if" 2>/dev/null && RDMA_ADDED_SERVER_IF="$rx_if"
+  fi
+  sysctl -q -w net.ipv4.conf.all.accept_local=1 2>/dev/null || true
+  sysctl -q -w net.ipv4.conf.all.rp_filter=0 2>/dev/null || true
+  for i in "$tx_if" "$rx_if"; do
+    sysctl -q -w "net.ipv4.conf.${i}.rp_filter=0" 2>/dev/null || true
+    sysctl -q -w "net.ipv4.conf.${i}.arp_ignore=1" 2>/dev/null || true
+    sysctl -q -w "net.ipv4.conf.${i}.arp_announce=2" 2>/dev/null || true
+  done
+  trap rdma_net_teardown EXIT
+  echo "RoCE net: ${RDMA_IP_CLIENT} on ${tx_if}, ${RDMA_IP_SERVER} on ${rx_if}" >&2
+}
+
+rdma_net_setup
+
+# --------------------------------------------------------------------------
 # Backend configuration
 # --------------------------------------------------------------------------
 TX_SENDER_BIN="$BUILD_DIR/examples/daqiri_bench_raw_gpudirect"
@@ -339,7 +387,11 @@ parse_dpdk_drops() {
 
 parse_rdma_drops() {
   local log="$1"
-  grep -c 'CQ error' "$log" 2>/dev/null || echo 0
+  local n
+  # grep -c prints "0" AND exits 1 on no match; capture the count and ignore
+  # the exit status so we return a single clean integer.
+  n="$(grep -c 'CQ error' "$log" 2>/dev/null)" || true
+  echo "${n:-0}"
 }
 
 snapshot_proc_net_udp() {
@@ -610,9 +662,20 @@ run_cell() {
     fi
   fi
 
-  if [[ "$workload" != "none" && "$IS_SW" != "1" && "${rx_pkts:-0}" -lt 1000000 ]]; then
-    echo "ERROR: $cell workload=$workload RX too low ($rx_pkts pkts) -- GPU post-process path likely stalled" >&2
-    return 1
+  # Stalled-GPU guard for the raw small-packet backends only. rdma/socket move
+  # large messages (e.g. 8 MB RDMA writes), so a handful of thousand "packets"
+  # is a full line rate there and a compute-heavy GEMM legitimately lowers the
+  # message count -- a fixed 1M-packet floor would false-positive on those.
+  if [[ "$workload" != "none" && "$IS_SW" != "1" ]]; then
+    local min_workload_rx=0
+    case "$BACKEND" in
+      dpdk|dpdk-hds|ibverbs) min_workload_rx=1000000 ;;
+      *)                     min_workload_rx=1 ;;
+    esac
+    if [[ "${rx_pkts:-0}" -lt "$min_workload_rx" ]]; then
+      echo "ERROR: $cell workload=$workload RX too low ($rx_pkts pkts, need >=$min_workload_rx) -- GPU post-process path likely stalled" >&2
+      return 1
+    fi
   fi
 
   tx_pkts="${tx_pkts:-0}"

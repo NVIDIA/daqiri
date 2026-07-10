@@ -572,7 +572,25 @@ void rx_count_worker(const RawBenchRxConfig& cfg, std::atomic<bool>& stop, Bench
   };
   std::array<WorkloadSlot, kWorkloadSlots> workload_slots;
   bool run_workload = false;
-  if (workload != BenchWorkload::None) {
+  bool workload_init_done = (workload == BenchWorkload::None);
+
+  // The GPU workload is initialized lazily on the first received burst so the
+  // cuFFT/cuBLAS handles, reorder buffers, and CUDA stream are created on the
+  // SAME device that holds the RX packet buffers. The RX memory region may live
+  // on a non-default GPU (e.g. affinity: 1 on the dual-port wire path); binding
+  // the workload to the default device would make every reorder/compute kernel
+  // dereference foreign device pointers and fault with an illegal access.
+  auto init_workload = [&](daqiri::BurstParams *burst) {
+    workload_init_done = true;
+    const void *sample =
+        daqiri::get_segment_packet_ptr(burst, geom.payload_segment, 0);
+    cudaPointerAttributes attrs{};
+    if (sample != nullptr &&
+        cudaPointerGetAttributes(&attrs, sample) == cudaSuccess &&
+        attrs.type == cudaMemoryTypeDevice) {
+      cudaSetDevice(attrs.device);
+    }
+    cudaGetLastError();  // clear any benign query error before real work
     bool ok = gpu_workload.init(workload, batch_bytes, workload_sync_interval, workload_gemm_n);
     for (auto &slot : workload_slots) {
       ok = ok && slot.pipeline.init(ReorderMode::SeqReorder, geom.packets_per_batch,
@@ -593,7 +611,7 @@ void rx_count_worker(const RawBenchRxConfig& cfg, std::atomic<bool>& stop, Bench
     } else {
       run_workload = true;
     }
-  }
+  };
 
   auto release_slot = [](WorkloadSlot &slot, bool wait) {
     if (!slot.busy) {
@@ -654,6 +672,10 @@ void rx_count_worker(const RawBenchRxConfig& cfg, std::atomic<bool>& stop, Bench
       stats.packets += static_cast<uint64_t>(num_pkts);
       stats.bytes += daqiri::get_burst_tot_byte(burst);
       ++stats.bursts;
+
+      if (!workload_init_done) {
+        init_workload(burst);
+      }
 
       if (run_workload) {
         for (auto &slot : workload_slots) {
