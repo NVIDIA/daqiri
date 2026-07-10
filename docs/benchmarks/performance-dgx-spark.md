@@ -9,6 +9,10 @@ Measured C++-loopback throughput for each stream/protocol on a single DGX Spark
 (GB10), driven over a physical cabled loopback on one ConnectX-7. Numbers are
 from a Release build via `examples/run_spark_bench.sh` (30 s per cell).
 
+All backends are measured **one-way** (unidirectional) by default: one side sends,
+the other receives and computes. For a bidirectional test, set `send: true` on the
+receiving role (and `receive: true` on the sending role) in the bench config.
+
 For the loopback setup these numbers depend on and the per-transport
 benchmarking procedure, see [Socket and RDMA Benchmarking](socket_benchmarking.md)
 (the `dq_wire_*` network-namespace wire loopback used by RoCE and sockets) and
@@ -291,10 +295,8 @@ compute overlaps ingest. The reorder window is sized so the contiguous buffer is
 
 Fixed **n=1024**, one GEMM (or a length-1024 batched FFT) per received unit. DPDK runs
 at an **8 KB payload** (~8 MB reorder window, 1024 packets × 8000 B), matched to RoCE's
-**8 MB message** so the GPU working set and per-unit compute are the same on both. RoCE
-runs **unidirectional** (`UNIDIR=1`) — the server receives and computes, the client only
-sends — matching DPDK's one-way TX→RX flow. 3 reps, 30 s each, GPU SM% from
-`nvidia-smi dmon`; 0 drops on every cell.
+**8 MB message** so the GPU working set and per-unit compute are the same on both.
+3 reps, 30 s each, GPU SM% from `nvidia-smi dmon`; 0 drops on every cell.
 
 | Workload | DPDK (Raw / GPUDirect) | RoCE (RC) |
 | -------- | ---------------------: | --------: |
@@ -378,9 +380,9 @@ modes and netns setup as above (dpdk in the default namespace, rdma in the
 # Raw / GPUDirect (netns down, ETH_DST_ADDR exported as above)
 WORKLOAD=fft  ./examples/run_spark_bench.sh dpdk smoke
 WORKLOAD=gemm ./examples/run_spark_bench.sh dpdk smoke
-# Socket / RoCE (netns up; UNIDIR=1 for the one-way, apples-to-apples comparison)
-UNIDIR=1 WORKLOAD=fft  ./examples/run_spark_bench.sh rdma smoke
-UNIDIR=1 WORKLOAD=gemm ./examples/run_spark_bench.sh rdma smoke
+# Socket / RoCE (netns up)
+WORKLOAD=fft  ./examples/run_spark_bench.sh rdma smoke
+WORKLOAD=gemm ./examples/run_spark_bench.sh rdma smoke
 ```
 
 The chosen workload lands in the CSV `post_process` column; compare `gbps` /
@@ -393,9 +395,9 @@ in the CSV `post_process_gemm_dim` column (the sweep is restricted to the headli
 message size automatically when a workload is active):
 
 ```bash
-# RoCE (netns up; UNIDIR=1 for the one-way comparison)
+# RoCE (netns up)
 for WL in none fft gemm; do
-  UNIDIR=1 WORKLOAD=$WL GEMM_DIM=1024 REPEATS=3 ./examples/run_spark_bench.sh rdma sweep
+  WORKLOAD=$WL GEMM_DIM=1024 REPEATS=3 ./examples/run_spark_bench.sh rdma sweep
 done
 # Raw (netns down, ETH_DST_ADDR exported)
 for WL in none fft gemm; do

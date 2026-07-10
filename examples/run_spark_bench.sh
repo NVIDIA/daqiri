@@ -381,14 +381,11 @@ generate_yaml() {
         if [[ "$role" == server ]]; then dst="$out"; else dst="${out%.yaml}_client.yaml"; fi
         # name-anchored num_bufs rewrite: RX regions -> rx_nb, TX regions -> tx_nb.
         # Depths are clamped to their region's num_bufs so the window never exceeds
-        # the buffers backing it.
-        # UNIDIR=1 makes the flow one-way to match the DPDK bench (which only
-        # receives+computes on the RX port): server receive-only (runs the GEMM),
-        # client send-only (no GEMM). Removes the reverse-direction DMA and the
-        # second GEMM, so RoCE and raw do the same GPU + memory work.
+        # the buffers backing it. One-way (server receive-only + GEMM, client
+        # send-only) is baked into the base config, matching the DPDK and socket
+        # benches -- see the send:/receive: notes in the base YAML.
         python3 "$NETNS_GEN" "$BASE_YAML" --role "$role" | \
-        awk -v p="$payload" -v bs="$payload" -v rxnb="$rx_nb" -v txnb="$tx_nb" \
-            -v uni="${UNIDIR:-}" -v role="$role" '
+        awk -v p="$payload" -v bs="$payload" -v rxnb="$rx_nb" -v txnb="$tx_nb" '
           /^[[:space:]]*- name:/ { region = $0 }
           /^[[:space:]]*num_bufs:/ {
             if (region ~ /RX/)      { sub(/num_bufs:.*/, "num_bufs: " rxnb) }
@@ -399,8 +396,6 @@ generate_yaml() {
           /^[[:space:]]*message_size:/  { sub(/message_size:.*/,  "message_size: " p); print; next }
           /^[[:space:]]*rx_depth:/      { sub(/rx_depth:.*/,      "rx_depth: " rxnb); print; next }
           /^[[:space:]]*tx_depth:/      { sub(/tx_depth:.*/,      "tx_depth: " txnb); print; next }
-          /^[[:space:]]*send:/    { if (uni != "" && role == "server") { sub(/send:.*/,    "send: false") }    print; next }
-          /^[[:space:]]*receive:/ { if (uni != "" && role == "client") { sub(/receive:.*/, "receive: false") } print; next }
           { print }
         ' > "$dst"
       done
