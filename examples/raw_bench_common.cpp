@@ -549,7 +549,8 @@ void print_queue_stats(const char *direction, const std::string &interface_name,
 }
 
 void rx_count_worker(const RawBenchRxConfig& cfg, std::atomic<bool>& stop, BenchWorkload workload,
-                     const ReorderGeometry& geom) {
+                     const ReorderGeometry& geom, int workload_gemm_dim,
+                     int workload_sync_interval, int workload_fft_len) {
   if (!set_current_thread_affinity(cfg.cpu_core, "bench_rx")) {
     stop.store(true);
     return;
@@ -564,7 +565,8 @@ void rx_count_worker(const RawBenchRxConfig& cfg, std::atomic<bool>& stop, Bench
   GpuWorkload gpu_workload;
   ReorderPipeline pipeline;
   if (workload != BenchWorkload::None) {
-    if (!gpu_workload.init(workload, batch_bytes) ||
+    if (!gpu_workload.init(workload, batch_bytes, workload_sync_interval, workload_gemm_dim,
+                           workload_fft_len) ||
         !pipeline.init(ReorderMode::SeqReorder, geom.packets_per_batch, out_payload_len,
                        geom.payload_byte_offset, geom.seq_bit_offset, geom.seq_bit_width,
                        /*staging_needed=*/false, gpu_workload.stream())) {
@@ -621,6 +623,11 @@ void rx_count_worker(const RawBenchRxConfig& cfg, std::atomic<bool>& stop, Bench
         // is freed, so process complete batches within this burst (the remainder
         // < packets_per_batch is dropped), then drain the stream so the reorder
         // kernel has finished reading the buffers before they are recycled.
+        // Unlike the RoCE path (which reads the recv buffer zero-copy and recycles
+        // it with CUDA events), the reorder here copies into the pipeline's single
+        // shared output buffer, so overlapping GEMMs across bursts would need that
+        // buffer double/ring-buffered first -- hence the per-burst blocking drain.
+        // The raw path already sustains line rate, so events are not wired in here.
         pipeline.reset_batch();
         for (int i = 0; i < num_pkts; ++i) {
           pipeline.add_device_packet(

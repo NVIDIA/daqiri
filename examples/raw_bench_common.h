@@ -160,7 +160,8 @@ struct ReorderGeometry {
 // is freed only after the stream drains (so the reorder has read the buffers).
 // workload == None leaves the bare-loopback count-only path untouched.
 void rx_count_worker(const RawBenchRxConfig& cfg, std::atomic<bool>& stop,
-                     BenchWorkload workload = BenchWorkload::None,
-                     const ReorderGeometry& geom = {});
+                     BenchWorkload workload = BenchWorkload::None, const ReorderGeometry& geom = {},
+                     int workload_gemm_dim = 1024, int workload_sync_interval = 2,
+                     int workload_fft_len = 1024);
 
 } // namespace daqiri::bench

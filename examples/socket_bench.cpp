@@ -102,8 +102,8 @@ bool socket_transport_is_tcp(const YAML::Node& root) {
 
 void socket_worker(const SocketBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pacer,
                    std::atomic<bool>& stop, SocketWorkerStats& stats,
-                   daqiri::bench::BenchWorkload workload, bool is_tcp,
-                   size_t workload_batch_bytes) {
+                   daqiri::bench::BenchWorkload workload, bool is_tcp, int workload_gemm_dim,
+                   int workload_sync_interval, int workload_fft_len) {
   const char *thread_name =
       cfg.server ? "socket_bench_server" : "socket_bench_client";
   if (!daqiri::bench::set_current_thread_affinity(cfg.cpu_core, thread_name)) {
@@ -116,17 +116,17 @@ void socket_worker(const SocketBenchConfig& cfg, daqiri::bench::TokenBucketPacer
   // copy on the workload stream -- the honest cost of the socket path). UDP can
   // reorder by sequence number; TCP is in-order, so it gathers per chunk.
   const uint32_t msg = static_cast<uint32_t>(cfg.message_size);
-  // --workload-batch-bytes sets the UDP ordered-buffer / working-set size
-  // (default ~8 MB, matching the RoCE working set); the UDP reorder window is that
-  // many datagrams. TCP gathers one chunk at a time (one compute per recv).
-  const uint32_t target_bytes =
-      workload_batch_bytes > 0 ? static_cast<uint32_t>(workload_batch_bytes) : 8u * 1024u * 1024u;
+  // The UDP reorder window is a fixed ~8 MB of datagrams (matching the RoCE
+  // working set); TCP gathers one chunk at a time (one compute per recv). The GEMM
+  // reads the first n*n*elem_size bytes of that window (dimension pinned below).
+  const uint32_t target_bytes = 8u * 1024u * 1024u;
   const uint32_t packets_per_batch =
       is_tcp ? 1u : std::max(1u, std::min(8192u, target_bytes / std::max(1u, msg)));
   daqiri::bench::GpuWorkload gpu_workload;
   daqiri::bench::ReorderPipeline pipeline;
   if (workload != daqiri::bench::BenchWorkload::None) {
-    if (!gpu_workload.init(workload, static_cast<size_t>(packets_per_batch) * msg) ||
+    if (!gpu_workload.init(workload, static_cast<size_t>(packets_per_batch) * msg,
+                           workload_sync_interval, workload_gemm_dim, workload_fft_len) ||
         !pipeline.init(is_tcp ? daqiri::bench::ReorderMode::GatherOnly
                               : daqiri::bench::ReorderMode::SeqReorder,
                        packets_per_batch, msg, /*payload_byte_offset=*/0,
@@ -241,7 +241,8 @@ int main(int argc, char** argv) {
     std::cerr << "Usage: " << argv[0]
               << " <config.yaml> [--seconds N] [--mode server|client|both] "
                  "[--target-gbps G] [--workload none|fft|gemm|gemm_fp16] "
-                 "[--workload-batch-bytes N]\n";
+                 "[--workload-gemm-dim N] [--workload-fft-len N] "
+                 "[--workload-sync-interval N]\n";
     return 1;
   }
 
@@ -258,7 +259,9 @@ int main(int argc, char** argv) {
     }
   }
   const auto workload = daqiri::bench::parse_workload(argc, argv);
-  const size_t workload_batch_bytes = daqiri::bench::parse_workload_batch_bytes(argc, argv);
+  const int workload_gemm_dim = daqiri::bench::parse_workload_gemm_dim(argc, argv);
+  const int workload_fft_len = daqiri::bench::parse_workload_fft_len(argc, argv);
+  const int workload_sync_interval = daqiri::bench::parse_workload_sync_interval(argc, argv);
 
   const auto root = YAML::LoadFile(argv[1]);
   const bool is_tcp = socket_transport_is_tcp(root);
@@ -296,11 +299,13 @@ int main(int argc, char** argv) {
 
   if (run_server) {
     server_thread = std::thread(socket_worker, server_cfg, std::ref(server_pacer), std::ref(stop),
-                                std::ref(server_stats), workload, is_tcp, workload_batch_bytes);
+                                std::ref(server_stats), workload, is_tcp, workload_gemm_dim,
+                                workload_sync_interval, workload_fft_len);
   }
   if (run_client) {
     client_thread = std::thread(socket_worker, client_cfg, std::ref(client_pacer), std::ref(stop),
-                                std::ref(client_stats), workload, is_tcp, workload_batch_bytes);
+                                std::ref(client_stats), workload, is_tcp, workload_gemm_dim,
+                                workload_sync_interval, workload_fft_len);
   }
 
   if (!server_thread.joinable() && !client_thread.joinable()) {
