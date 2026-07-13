@@ -83,9 +83,11 @@ REPEATS="${REPEATS:-1}"
 MQ_BASE="$SCRIPT_DIR/daqiri_bench_raw_tx_rx_spark_mq.yaml"
 MQ_GEN="$SCRIPT_DIR/../scripts/gen_spark_mq_config.py"
 
-# Match run_spark_bench.sh: prefer the installed shared libs, falling back to
-# the build tree. Keep both so a fresh build dir still resolves.
-export LD_LIBRARY_PATH="/opt/daqiri/lib:$BUILD_DIR:${LD_LIBRARY_PATH:-}"
+# Resolve the DAQIRI shared libs from the build tree first. The per-engine
+# sub-libraries (libdaqiri_dpdk.so.0 etc.) live in $BUILD_DIR/src, not $BUILD_DIR,
+# so that directory must be on the path or the bench fails to load them; keep
+# $BUILD_DIR and the installed /opt/daqiri/lib as fallbacks.
+export LD_LIBRARY_PATH="$BUILD_DIR/src:$BUILD_DIR:/opt/daqiri/lib:${LD_LIBRARY_PATH:-}"
 
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT_DIR="$SCRIPT_DIR/../bench-results/$TS-dpdk-mq"

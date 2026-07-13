@@ -450,15 +450,15 @@ generate_socket_yaml() {
   python3 "$NETNS_GEN" "$BASE_YAML" --role server | \
   sed -E \
     -e "s|^( *message_size: ).*|\1$payload|g" \
-    -e "s|^( *local_addr: \"[a-z]+://[0-9.]+:)[0-9]+(\")|\1$srv_port\2|" \
+    -e "s|^( *local_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$srv_port\2|" \
     -e "s|^( *server_port: ).*|\1$srv_port|" \
     -e "s|^( *cpu_core: ).*|\1$core|" \
     > "$server_out"
   python3 "$NETNS_GEN" "$BASE_YAML" --role client | \
   sed -E \
     -e "s|^( *message_size: ).*|\1$payload|g" \
-    -e "s|^( *local_addr: \"[a-z]+://[0-9.]+:)[0-9]+(\")|\1$cli_port\2|" \
-    -e "s|^( *remote_addr: \"[a-z]+://[0-9.]+:)[0-9]+(\")|\1$srv_port\2|" \
+    -e "s|^( *local_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$cli_port\2|" \
+    -e "s|^( *remote_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$srv_port\2|" \
     -e "s|^( *server_port: ).*|\1$srv_port|" \
     -e "s|^( *cpu_core: ).*|\1$core|" \
     > "$client_out"
