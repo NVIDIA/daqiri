@@ -27,7 +27,7 @@ loopback). The exact commands are collected under [Reproduce](#reproduce) below.
 | NIC | ConnectX-7, ports p0 ↔ p1 cross-cabled with a **100 GbE QSFP28** loopback cable (single-host loopback), MTU 9000 |
 | Build | Release (`-DCMAKE_BUILD_TYPE=Release`), `DAQIRI_ENGINE="dpdk ibverbs"` |
 | Loopback | Raw/DPDK uses the two physical ports directly; socket/RoCE use the `dq_wire_*` network-namespace wire loopback |
-| Core pinning | Each direction has a busy-spin queue poller and an app worker on separate isolated X925 cores (PR #149). Single-queue: DPDK pollers 17/18, workers 16/19. Multi-queue: TX pollers 16/19, RX pollers 18/9, each with its own worker core, master 8 (with `isolcpus=5-9,15-19`). |
+| Core pinning | Each direction has a busy-spin queue poller and an app worker on separate isolated X925 cores (PR #149). Single-queue: DPDK pollers 17/18, workers 16/19. Multi-queue: TX pollers 16/19, RX pollers 18/9, each with its own worker core, master 8. Sockets pin each pair's send and receive to separate cores in the same CPU cluster (all with `isolcpus=5-9,15-19`). |
 
 ## Results Summary (C++ loopback)
 
@@ -44,8 +44,8 @@ just under that ceiling.
 | ----------------- | --------- | ---------: | ----- | ----- |
 | Raw Ethernet / GPUDirect | 8 KB packet | **98.8 ±0.1 Gb/s** | 0 | Flat ~98.7 across 4–8 KB, all batch sizes |
 | Socket / RoCE (SEND) | 64 KB message | **97.6 ±0.1 Gb/s** | 0 | Single QP, batch 1 |
-| Socket / TCP | 1 MiB × 4 pairs | **90.6 ±1.5 Gb/s** | ~0 | Flow-controlled (App TX = App RX) |
-| Socket / UDP | 8 KB × 4 pairs | **28.5 ±0.6 Gb/s** | ~54% loss | Receiver goodput; unpaced sender |
+| Socket / TCP | 8 KB × 4 pairs | **87.3 ±2.2 Gb/s** | ~0 | Flow-controlled (App TX = App RX) |
+| Socket / UDP | 8 KB × 4 pairs | **34.5 ±0.6 Gb/s** | ~48% loss | Receiver goodput; unpaced sender |
 
 Each transport is best read at its own best-case operation size (see the per-transport
 tables below); a single cross-transport unit of work isn't meaningful here, since
@@ -192,10 +192,14 @@ too (SM and memory-controller ~0%; DMA target, not a compute engine).
 
 ## Socket / TCP
 
-Four one-way TCP client/server pairs over the netns wire loopback, each pair
-pinned to one isolated core (16–19). TCP self-paces via flow control, so App TX
-equals App RX with effectively no app-level loss. `message_size` is the per-send
-byte count of a stream (no datagram boundary, no fragmentation).
+Four one-way TCP client/server pairs over the netns wire loopback. Each pair's
+send (client) and receive (server) sides pin to **separate** isolated cores in one
+CPU cluster (pairs 1–2 in 15–19, pairs 3–4 in 5–9). A shared send/receive core
+ping-pongs a single stream and can wedge it at half rate for a whole run, so
+splitting the two sides keeps single-stream throughput stable. TCP self-paces via
+flow control, so App TX equals App RX with effectively no app-level loss.
+`message_size` is the per-send byte count of a stream (no datagram boundary, no
+fragmentation).
 
 Throughput in Gb/s (App TX = App RX), mean ± std over 3 reps:
 
@@ -210,21 +214,23 @@ Throughput in Gb/s (App TX = App RX), mean ± std over 3 reps:
     </tr>
   </thead>
   <tbody>
-    <tr><th>1000 B</th><td>13.7<small>±0.4</small></td><td>27.2<small>±0.1</small></td><td>55.0<small>±0.4</small></td></tr>
-    <tr><th>8000 B</th><td>25.3<small>±8.6</small></td><td>46.4<small>±4.2</small></td><td>87.2<small>±1.6</small></td></tr>
-    <tr><th>1 MiB</th><td>31.5<small>±1.3</small></td><td>51.9<small>±2.2</small></td><td>90.6<small>±1.5</small></td></tr>
+    <tr><th>1000 B</th><td>14.2<small>±0.4</small></td><td>27.6<small>±0.4</small></td><td>45.2<small>±0.1</small></td></tr>
+    <tr><th>8000 B</th><td>28.9<small>±2.9</small></td><td>42.4<small>±2.7</small></td><td>87.3<small>±2.2</small></td></tr>
+    <tr><th>1 MiB</th><td>32.1<small>±2.2</small></td><td>51.5<small>±2.4</small></td><td>83.7<small>±0.4</small></td></tr>
   </tbody>
 </table>
 
 Throughput scales with the pair count; retransmits stay negligible over the run.
+At four pairs the eight cores span both clusters, and the pairs in 5–9 sit farther
+from the NIC, so the 4-pair cells scale slightly sub-linearly.
 
 ## Socket / UDP
 
-Four one-way UDP client/server pairs, same one-core-per-pair pinning. UDP has no
-flow control, so each sender runs flat-out and the receiver drops whatever it
-cannot drain — the loss column is an inherent property of unpaced UDP, not a
-fault. App RX is the delivered goodput; App-level loss is `(App TX − App RX) /
-App TX`.
+Four one-way UDP client/server pairs, same per-side pinning (send and receive on
+separate cores). UDP has no flow control, so each sender runs flat-out and the
+receiver drops whatever it cannot drain — the loss column is an inherent property
+of unpaced UDP. App RX is the delivered goodput; App-level loss is
+`(App TX − App RX) / App TX`.
 
 Each cell shows **receiver goodput in Gb/s** (mean ± std over 3 reps) with the
 **app-level loss %** dimmed beneath it:
@@ -240,8 +246,8 @@ Each cell shows **receiver goodput in Gb/s** (mean ± std over 3 reps) with the
     </tr>
   </thead>
   <tbody>
-    <tr><th>1000 B</th><td>4.5 ±0.2<small>15% loss</small></td><td>8.2 ±0.1<small>14% loss</small></td><td>14.1 ±0.3<small>15% loss</small></td></tr>
-    <tr><th>8000 B</th><td>9.8 ±1.7<small>64% loss</small></td><td>18.9 ±0.4<small>64% loss</small></td><td>28.5 ±0.6<small>54% loss</small></td></tr>
+    <tr><th>1000 B</th><td>4.0 ±0.1<small>44% loss</small></td><td>6.8 ±0.8<small>52% loss</small></td><td>15.2 ±0.3<small>40% loss</small></td></tr>
+    <tr><th>8000 B</th><td>12.2 ±1.2<small>69% loss</small></td><td>18.9 ±0.2<small>59% loss</small></td><td>34.5 ±0.6<small>48% loss</small></td></tr>
   </tbody>
 </table>
 

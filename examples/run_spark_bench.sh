@@ -431,28 +431,50 @@ generate_yaml() {
   esac
 }
 
-# One isolated core per socket pair: 16 + (idx % 4) -> cores 16-19 for pairs 0-3 (Spark
-# isolcpus), wrapping (oversubscribing) beyond four. Both the server and the client of a
-# pair pin to this same core. Sharing one CPU across the send and receive sides couples
-# the send rate to the receive rate (the sender cannot outrun the receiver it time-slices
-# with), so each pair sits near the per-core ceiling and N pairs scale to ~N x that. This
-# matches the reference four-pair methodology and keeps App TX ~= App RX with low loss.
-pair_core() { echo $(( 16 + ($1 % 4) )); }
+# Separate isolated cores for the send (client) and receive (server) sides of each
+# socket pair, so a pair's two processes never time-slice one CPU. Co-locating them
+# (the old "one core per pair" setup) forces a send/recv ping-pong on a single core
+# that, at mid-size messages (e.g. 8000 B), makes a single TCP stream metastable --
+# it locks into an efficient (~30 Gb/s) or a serialized (~15 Gb/s) mode for a whole
+# run, producing bimodal, high-variance results.
+#
+# CRITICAL: keep each pair's two cores in the SAME CPU cluster. GB10's ten big X925
+# cores are two clusters of five (5-9 and 15-19); straddling a pair across clusters
+# makes every payload pay cross-cluster cache-coherence latency and *regresses* large
+# messages (1 MiB 4-pair dropped ~90 -> ~77 Gb/s in testing). So pairs 0-1 sit in the
+# 15-19 cluster and pairs 2-3 in the 5-9 cluster, each send/recv intra-cluster
+# (master 8, spare 15). NOTE: separating send/recv also lets the UDP sender outrun the
+# receiver (no shared-core self-pacing), so UDP loss rises vs the co-pinned setup --
+# the more representative behaviour for an unpaced sender.
+SRV_PIN_CORES=(16 18 5 7)
+CLI_PIN_CORES=(17 19 6 9)
+pair_server_core() { echo "${SRV_PIN_CORES[$(( $1 % 4 ))]}"; }
+pair_client_core() { echo "${CLI_PIN_CORES[$(( $1 % 4 ))]}"; }
 
 # Write the server/client YAML pair for socket pair `idx`: split the combined base
 # per role, then substitute message_size, unique ports (SRV/CLI_PORT_BASE + idx),
-# and pin every queue to the pair's core.
+# and pin the server (receive) side and client (send) side to DIFFERENT isolated
+# cores so the pair does not time-slice one CPU (see pair_server_core comment).
 generate_socket_yaml() {
   local idx="$1" payload="$2" server_out="$3" client_out="$4"
   local srv_port=$(( SRV_PORT_BASE + idx ))
   local cli_port=$(( CLI_PORT_BASE + idx ))
-  local core; core="$(pair_core "$idx")"
+  # SOCKET_NOPIN=1 runs the bench workers unpinned (cpu_core -1 -> no affinity, the
+  # scheduler places them). For gathering the pinned-vs-non-pinned comparison only;
+  # the published report stays pinned like the other backends.
+  local server_core client_core
+  if [[ -n "${SOCKET_NOPIN:-}" ]]; then
+    server_core=-1; client_core=-1
+  else
+    server_core="$(pair_server_core "$idx")"
+    client_core="$(pair_client_core "$idx")"
+  fi
   python3 "$NETNS_GEN" "$BASE_YAML" --role server | \
   sed -E \
     -e "s|^( *message_size: ).*|\1$payload|g" \
     -e "s|^( *local_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$srv_port\2|" \
     -e "s|^( *server_port: ).*|\1$srv_port|" \
-    -e "s|^( *cpu_core: ).*|\1$core|" \
+    -e "s|^( *cpu_core: ).*|\1$server_core|" \
     > "$server_out"
   python3 "$NETNS_GEN" "$BASE_YAML" --role client | \
   sed -E \
@@ -460,7 +482,7 @@ generate_socket_yaml() {
     -e "s|^( *local_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$cli_port\2|" \
     -e "s|^( *remote_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$srv_port\2|" \
     -e "s|^( *server_port: ).*|\1$srv_port|" \
-    -e "s|^( *cpu_core: ).*|\1$core|" \
+    -e "s|^( *cpu_core: ).*|\1$client_core|" \
     > "$client_out"
 }
 
