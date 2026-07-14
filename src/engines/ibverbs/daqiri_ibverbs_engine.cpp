@@ -3796,6 +3796,26 @@ IbvTxQueue* IbverbsEngine::find_tx_queue(int port, int q) {
 }
 
 Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
+  // A scheduled packet may consume a WAIT WQE followed by its send WQE, so
+  // provision up to two outstanding WRs per packet slot. Check the generic
+  // device limit here to turn an otherwise opaque ibv_create_qp EINVAL into an
+  // actionable configuration warning.
+  const uint64_t requested_send_wr = static_cast<uint64_t>(q.num_slots) * 2;
+  if (requested_send_wr > std::numeric_limits<uint32_t>::max()) {
+    DAQIRI_LOG_CRITICAL("TX queue {} has too many buffers: {} slots require {} send WRs",
+                        q.queue_id, q.num_slots, requested_send_wr);
+    return Status::INVALID_PARAMETER;
+  }
+  struct ibv_device_attr device_attr {};
+  const bool have_device_attr = ibv_query_device(q.ctx, &device_attr) == 0;
+  if (have_device_attr && requested_send_wr > device_attr.max_qp_wr) {
+    DAQIRI_LOG_WARN(
+        "TX queue {} has {} buffers and requests {} send WRs, exceeding the device max_qp_wr "
+        "of {}; QP creation may fail (reduce the TX memory region num_bufs to {} or less)",
+        q.queue_id, q.num_slots, requested_send_wr, device_attr.max_qp_wr,
+        device_attr.max_qp_wr / 2);
+  }
+
   q.cq = ibv_create_cq(q.ctx, static_cast<int>(q.num_slots) + 1, nullptr, nullptr, 0);
   if (q.cq == nullptr) {
     DAQIRI_LOG_CRITICAL("TX ibv_create_cq failed: {}", strerror(errno));
@@ -3807,13 +3827,25 @@ Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
   attr.recv_cq = q.cq;
   // Room for 2 WQEBBs per slot: a scheduled packet emits a WAIT WQE before its
   // send WQE, so the SQ must hold up to 2x num_slots WQEs in flight.
-  attr.cap.max_send_wr = q.num_slots * 2;
-  attr.cap.max_send_sge = MAX_NUM_SEGS;
+  attr.cap.max_send_wr = static_cast<uint32_t>(requested_send_wr);
+  // Size the QP for the segments this queue actually uses. Requesting the
+  // library-wide maximum makes mlx5 reserve larger WQEs even for a normal
+  // single-region queue and can needlessly exceed the device's SQ limit.
+  attr.cap.max_send_sge = static_cast<uint32_t>(q.num_segs);
   attr.cap.max_recv_wr = 1;
   attr.cap.max_recv_sge = 1;
   q.qp = ibv_create_qp(q.pd, &attr);
   if (q.qp == nullptr) {
-    DAQIRI_LOG_CRITICAL("TX ibv_create_qp (RAW_PACKET) failed: {}", strerror(errno));
+    if (have_device_attr) {
+      DAQIRI_LOG_CRITICAL(
+          "TX ibv_create_qp (RAW_PACKET) failed: {} ({} slots, {} send WRs, {} send SGEs; "
+          "device max_qp_wr {})",
+          strerror(errno), q.num_slots, requested_send_wr, q.num_segs, device_attr.max_qp_wr);
+    } else {
+      DAQIRI_LOG_CRITICAL(
+          "TX ibv_create_qp (RAW_PACKET) failed: {} ({} slots, {} send WRs, {} send SGEs)",
+          strerror(errno), q.num_slots, requested_send_wr, q.num_segs);
+    }
     return Status::GENERIC_FAILURE;
   }
   // RESET -> INIT -> RTR -> RTS.
