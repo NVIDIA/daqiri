@@ -1,0 +1,86 @@
+%YAML 1.2
+---
+# IGX Thor raw-Ethernet bench config (derived from daqiri_bench_raw_tx_rx.yaml).
+# - discrete RTX PRO 6000 (sm_120). The Tegra CUDA runtime only enumerates one GPU
+#   class at a time, so the container is pinned to the discrete GPU alone
+#   (`docker --gpus '"device=1"'`); it is then the ONLY CUDA device = ordinal 0.
+#   Hence affinity: 0 (NOT 1). Requires the CUDA-13.0 image (host driver = 13.0).
+# - num_bufs capped at 12288 (~99 MiB/region, ~198 MiB total) to fit the discrete
+#   GPU's 256 MiB BAR1 for GPUDirect dma-buf mapping.
+# - batch_size 4096 (NOT 10240): DpdkEngine::is_tx_burst_available requires
+#   avail mbufs >= 2 * batch_size, so num_bufs must be >= 2*batch_size. With
+#   num_bufs 12288 (BAR1-capped), batch must be <= ~6000; 4096 leaves margin for
+#   the mempool per-core cache. batch 10240 needs 20480 bufs -> 320 MiB, over BAR1.
+# - single-queue payload sweep; the sweep runner toggles `engine: "ibverbs"` and
+#   payload_size in a temp copy of this file (default here = DPDK engine).
+# - CX7 loopback: tx_port 0004:03:00.0 -> rx_port 0004:03:00.1 (200 G negotiated).
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    master_core: 3
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    memory_regions:
+    - name: "Data_TX_GPU"
+      kind: "device"
+      affinity: 0
+      num_bufs: 12288
+      buf_size: 8064
+    - name: "Data_RX_GPU"
+      kind: "device"
+      affinity: 0
+      num_bufs: 12288
+      buf_size: 8064
+
+    interfaces:
+    - name: "tx_port"
+      address: 0004:03:00.0
+      tx:
+        queues:
+        - name: "tx_q_0"
+          id: 0
+          batch_size: 4096
+          cpu_core: 11
+          memory_regions:
+            - "Data_TX_GPU"
+          offloads:
+            - "tx_eth_src"
+    - name: "rx_port"
+      address: 0004:03:00.1
+      rx:
+        flow_isolation: true
+        queues:
+        - name: "rq_q_0"
+          id: 0
+          cpu_core: 9
+          batch_size: 4096
+          memory_regions:
+            - "Data_RX_GPU"
+        flows:
+        - name: "flow_0"
+          id: 0
+          action:
+            type: queue
+            id: 0
+          match:
+            udp_src: 4096
+            udp_dst: 4096
+
+bench_rx:
+- interface_name: "rx_port"
+  cpu_core: 8
+
+bench_tx:
+- interface_name: "tx_port"
+  cpu_core: 10
+  batch_size: 4096
+  payload_size: 8000
+  header_size: 64
+  eth_dst_addr: ac:3a:e2:86:7a:0f
+  ip_src_addr: 1.2.3.4
+  ip_dst_addr: 5.6.7.8
+  udp_src_port: 4096
+  udp_dst_port: 4096

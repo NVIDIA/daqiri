@@ -20,6 +20,7 @@
 #include <atomic>
 #include <cmath>
 #include <complex>
+#include <cstdlib>
 #include <chrono>
 #include <iostream>
 #include <cstdio>
@@ -2049,6 +2050,26 @@ void DpdkEngine::create_dummy_tx_q() {
 
 void DpdkEngine::initialize() {
   int ret;
+
+  // Optional override of the NIC descriptor-ring depth via environment. The
+  // default (8192) implies num_bufs >= ~3x = 24576 per queue-backed MR to avoid
+  // RX starvation (see adjust_memory_regions). On GPUs with a small BAR1 (e.g. a
+  // 256 MiB discrete card) two 8 KB-buffer GPUDirect regions cannot reach that,
+  // so allow shrinking the ring to fit the buffer budget. Runs before
+  // adjust_memory_regions() so the deadlock threshold uses the override.
+  for (const auto& [env, field] :
+       {std::pair<const char*, uint16_t*>{"DAQIRI_NUM_RX_DESC", &default_num_rx_desc},
+        std::pair<const char*, uint16_t*>{"DAQIRI_NUM_TX_DESC", &default_num_tx_desc}}) {
+    if (const char* v = std::getenv(env); v != nullptr && *v != '\0') {
+      const long n = std::strtol(v, nullptr, 10);
+      if (n > 0 && n <= 65535) {
+        *field = static_cast<uint16_t>(n);
+        DAQIRI_LOG_INFO("{} override: NIC descriptor ring set to {}", env, *field);
+      } else {
+        DAQIRI_LOG_WARN("{} value '{}' out of range (1..65535); keeping default {}", env, v, *field);
+      }
+    }
+  }
 
   // Cleanup-on-failure guard: if initialize() returns without setting
   // initialized_ = true, this will call rte_eal_cleanup() and best-effort
