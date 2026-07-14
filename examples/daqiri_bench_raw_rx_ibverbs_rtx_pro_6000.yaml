@@ -27,10 +27,12 @@ daqiri:
     log_level: "info"
     loopback: ""
 
+    # affinity is the NUMA node for the huge-page RX region. Keep it on the RX
+    # port's node (discover with: cat /sys/class/net/<rx-iface>/device/numa_node).
     memory_regions:
       - name: "Data_RX_HOST"
         kind: "huge"
-        affinity: 1
+        affinity: 0
         num_bufs: 4096
         buf_size: 8064
 

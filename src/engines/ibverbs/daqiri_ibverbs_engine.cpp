@@ -51,7 +51,13 @@ namespace {
 // libdpdk: "cycles" are nanoseconds, so the timer frequency is 1e9.
 constexpr uint64_t ibv_timer_hz = 1'000'000'000ULL;
 constexpr FlowId kMaxIbverbsFlowTag = 0x00ffffffU;
-constexpr int kIbverbsCatchAllPriority = 1'000'000;
+// mlx5dv_dr_matcher_create() takes the priority as a uint16_t. A value that
+// does not fit silently truncates, and on ConnectX-class NICs software steering
+// then rejects the rule (mlx5dv_dr_rule_create fails with ENOMEM). The catch-all
+// is only installed when it is the sole rule on a port (static flows and
+// flow_isolation take other branches), so precedence is irrelevant and it uses
+// priority 0.
+constexpr int kIbverbsCatchAllPriority = 0;
 inline uint64_t ibv_now_ns() {
   return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                    std::chrono::steady_clock::now().time_since_epoch())
@@ -952,15 +958,10 @@ Status IbverbsEngine::devx_create_tir(IbvRxQueue& q) {
   return Status::SUCCESS;
 }
 
-// mlx5dv_dr match buffer: 64 bytes interpreted as fte_match_set_lyr_2_4 when
-// criteria_enable selects outer_headers.
-namespace {
-struct DrMatchBuf {
-  size_t match_sz;
-  uint64_t buf[8];  // == sizeof(fte_match_set_lyr_2_4)
-};
 // Full match parameter (512 B) for matches that reach misc_parameters_4 (the
-// flex-parser sample registers), which sits past the first 64-byte section.
+// flex-parser sample registers). The first 64 bytes alias fte_match_set_lyr_2_4
+// (outer_headers), so this buffer also serves L2/L3/L4 and catch-all rules.
+namespace {
 struct DrMatchParam {
   size_t match_sz;
   uint64_t buf[64];  // == sizeof(fte_match_param)
@@ -1930,8 +1931,12 @@ Status IbverbsEngine::install_port_flows() {
                       "after initialization",
                       port);
     } else if (installed == 0) {
-      // No per-flow rules: catch-all (criteria_enable = 0) -> first queue.
-      DrMatchBuf mask{}, val{};
+      // No per-flow rules: wildcard catch-all -> first queue. This rule is only
+      // installed when it is the sole rule on the port (static flows take the
+      // branch above; flow_isolation takes the branch below), so it sits at
+      // priority 0 with an empty match (match_criteria_enable = 0) and matches
+      // every packet.
+      DrMatchParam mask{}, val{};
       mask.match_sz = sizeof(mask.buf);
       val.match_sz = sizeof(val.buf);
       IbvRxQueue* dest = by_id.begin()->second;
