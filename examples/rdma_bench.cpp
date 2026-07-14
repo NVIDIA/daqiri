@@ -22,6 +22,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstdint>
+#include <deque>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -81,8 +82,8 @@ RdmaBenchConfig parse_rdma_cfg(const YAML::Node& node) {
 
 void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pacer,
                  std::atomic<bool>& stop, RdmaWorkerStats& stats,
-                 daqiri::bench::BenchWorkload workload, size_t workload_batch_bytes,
-                 int workload_gemm_n, int workload_sync_interval) {
+                 daqiri::bench::BenchWorkload workload, int workload_gemm_dim,
+                 int workload_sync_interval, int workload_max_inflight, int workload_fft_len) {
   const char *thread_name =
       cfg.server ? "rdma_bench_server" : "rdma_bench_client";
   if (!daqiri::bench::set_current_thread_affinity(cfg.cpu_core, thread_name)) {
@@ -96,19 +97,15 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
   // GPU-accessible: the gather-only pipeline is a zero-copy pass-through that
   // hands the recv pointer straight to the compute.
   //
-  // The compute working set is decoupled from the 8 MB message: --workload-batch-
-  // bytes sub-divides each message into chunk-sized slices, one compute per slice
-  // (the per-message sync then amortizes over num_chunks computes). 0 or >= the
-  // message size means one compute per message.
+  // One fixed-dimension compute per received message, reading the first
+  // n*n*elem_size bytes of the message (GpuWorkload::init rejects a message too
+  // small to hold the pinned GEMM operand).
   const uint32_t msg = static_cast<uint32_t>(cfg.message_size);
-  const uint32_t chunk = (workload_batch_bytes > 0 && workload_batch_bytes < msg)
-                             ? static_cast<uint32_t>(workload_batch_bytes)
-                             : msg;
-  const uint32_t num_chunks = chunk > 0 ? msg / chunk : 1;
   daqiri::bench::GpuWorkload gpu_workload;
   daqiri::bench::ReorderPipeline pipeline;
   if (workload != daqiri::bench::BenchWorkload::None) {
-    if (!gpu_workload.init(workload, chunk, workload_sync_interval, workload_gemm_n) ||
+    if (!gpu_workload.init(workload, msg, workload_sync_interval, workload_gemm_dim,
+                           workload_fft_len) ||
         !pipeline.init(daqiri::bench::ReorderMode::GatherOnly,
                        /*packets_per_batch=*/1, msg,
                        /*payload_byte_offset=*/0, /*seq_bit_offset=*/0,
@@ -118,23 +115,49 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
   }
   const bool run_workload = gpu_workload.enabled() && pipeline.enabled();
 
-  // To overlap receive with compute (apples-to-apples with the raw path, which
-  // holds a whole burst and drains the GPU once per burst), hold a small batch of
-  // RECEIVE completions instead of draining + freeing after each one. Holding a
-  // completion keeps its recv buffer alive, so the pass-through compute can read it
-  // while later messages keep arriving into other pool buffers; we drain the stream
-  // once per batch, then free them all. Bounded well under rx_depth so receives are
-  // not starved.
-  std::vector<daqiri::BurstParams*> held_recv;
-  const size_t recv_hold_batch =
-      run_workload ? std::max<size_t>(1, std::min<size_t>(cfg.rx_depth / 2, 8)) : 0;
-  auto flush_held_recv = [&]() {
-    if (held_recv.empty()) {
-      return;
+  // To overlap receive with compute (apples-to-apples with the raw path), hold each
+  // RECEIVE completion until the GPU has finished reading its recv buffer, then
+  // free/repost it -- WITHOUT blocking the single receive thread. The compute reads
+  // the recv buffer zero-copy, so the buffer must stay alive until its GEMM
+  // completes. We stamp a CUDA event on the stream after each message's GEMM and
+  // free the buffer only once event_done() reports the read is finished, so the
+  // thread keeps reaping completions and reposting meanwhile. Outstanding GPU work
+  // is bounded by max_inflight (backpressure, not a periodic hard drain), which is
+  // what keeps the throughput measurement honest. Bounded well under rx_depth (and
+  // the event pool) so receives are not starved.
+  struct HeldRecv {
+    daqiri::BurstParams* buf;
+    void* event;
+  };
+  std::deque<HeldRecv> held_recv;
+  // Default cap min(rx_depth/2, 32); --workload-max-inflight overrides it. Clamp to
+  // the event pool (kMaxWorkloadInflight -- else record_event() starves at the cap
+  // and falls back to a per-message sync) and to rx_depth (else we would block
+  // reposting more receives than are posted).
+  size_t inflight_cap = workload_max_inflight > 0
+                            ? static_cast<size_t>(workload_max_inflight)
+                            : std::min<size_t>(cfg.rx_depth / 2, 32);
+  inflight_cap =
+      std::min<size_t>(inflight_cap, static_cast<size_t>(daqiri::bench::kMaxWorkloadInflight));
+  inflight_cap = std::min<size_t>(inflight_cap, static_cast<size_t>(cfg.rx_depth));
+  const size_t max_inflight = run_workload ? std::max<size_t>(1, inflight_cap) : 0;
+  // Free every held buffer whose GEMM has completed (non-blocking); keeps the recv
+  // pool drained without parking the thread on the GPU.
+  auto reclaim_completed = [&]() {
+    while (!held_recv.empty() && gpu_workload.event_done(held_recv.front().event)) {
+      daqiri::free_tx_burst(held_recv.front().buf);
+      gpu_workload.release_event(held_recv.front().event);
+      held_recv.pop_front();
     }
-    gpu_workload.sync();
-    for (auto* held : held_recv) {
-      daqiri::free_tx_burst(held);
+  };
+  // Block until every held buffer's GEMM is done, then free them all (shutdown /
+  // connection loss). Events complete in stream order, so waiting front-to-back
+  // drains the whole queue.
+  auto drain_held_recv = [&]() {
+    for (auto& held : held_recv) {
+      gpu_workload.wait_event(held.event);
+      daqiri::free_tx_burst(held.buf);
+      gpu_workload.release_event(held.event);
     }
     held_recv.clear();
   };
@@ -259,20 +282,38 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
         if (run_workload) {
           pipeline.reset_batch();
           pipeline.add_device_packet(daqiri::get_segment_packet_ptr(completion, 0, 0));
-          const auto* base = static_cast<const uint8_t*>(pipeline.finish_batch());
-          // One compute per chunk-sized slice of the message (num_chunks == 1 when
-          // the batch is the whole message). Enqueue only; the GPU work overlaps
-          // with subsequent receives and is drained per batch (below).
-          for (uint32_t k = 0; k < num_chunks; ++k) {
-            gpu_workload.run(base + static_cast<size_t>(k) * chunk);
+          // One fixed-dimension compute per message on its real (zero-copy) data.
+          // Enqueue only (never blocks); the GPU work overlaps with subsequent
+          // receives and is reclaimed once its event completes.
+          gpu_workload.run_async(pipeline.finish_batch());
+          void* ev = gpu_workload.record_event();
+          if (ev == nullptr) {
+            // Event pool momentarily exhausted (defensive: max_inflight is clamped
+            // below the pool, so steady state never starves). Drain and free now so
+            // we never read/repost a buffer the GPU is still using.
+            gpu_workload.sync();
+            daqiri::free_tx_burst(completion);
+          } else {
+            // Hold the completion (its recv buffer) until the event says the GEMM
+            // has finished reading it.
+            held_recv.push_back({completion, ev});
           }
-          // Hold the completion (and thus its recv buffer) until the batch drains,
-          // so the pass-through compute reads valid data without a per-message sync.
-          held_recv.push_back(completion);
-          if (held_recv.size() >= recv_hold_batch) {
-            flush_held_recv();
+          // Reclaim completed GEMMs FIRST (non-blocking) so finished work frees its
+          // held slot before we ever consider blocking. In steady state the GPU keeps
+          // up (GEMM ~337us << message interval), so this drops held below the cap
+          // every iteration and the block below never fires -- the thread keeps
+          // launching GEMMs and reposting receives, so the GPU stays fed and the wire
+          // stays full. (Parking here instead is what starved the GPU and throttled
+          // the sender: it stalled launches/reposts every message.)
+          reclaim_completed();
+          // Last-resort backpressure: only park if, even after reclaiming, held is
+          // still at the cap -- i.e. the GPU is genuinely behind (rare; bounds CPU
+          // run-ahead for measurement honesty), not the per-message stall it was.
+          if (held_recv.size() >= max_inflight) {
+            gpu_workload.wait_event(held_recv.front().event);
+            reclaim_completed();  // free the one we just drained
           }
-          continue;  // do not free yet; freed by flush_held_recv()
+          continue;  // do not free yet; freed by reclaim_completed()/drain_held_recv()
         }
       }
       daqiri::free_tx_burst(completion);
@@ -289,13 +330,19 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
     }
 
     if (!got_completion && !posted_work) {
-      // Idle: return any held recv buffers so they are not pinned while traffic
-      // pauses, then back off.
-      flush_held_recv();
-      std::this_thread::sleep_for(std::chrono::microseconds(100));
+      // Out of completions for the moment. Do NOT touch the GPU here: neither block
+      // (drain_held_recv parks the thread on each in-flight GEMM) NOR hot-spin
+      // reclaim_completed() -- polling cudaEventQuery millions of times stole ~40% of
+      // the thread from wire servicing, throttling the sender just as badly. The main
+      // receive path already reclaims finished GEMMs on every message, so here we just
+      // keep polling get_rx_burst (cheap, no CUDA) for the next completion, and back
+      // off only when there is genuinely nothing in flight.
+      if (held_recv.empty()) {
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+      }
     }
   }
-  flush_held_recv();
+  drain_held_recv();
   gpu_workload.sync();
 }
 
@@ -306,7 +353,8 @@ int main(int argc, char** argv) {
     std::cerr << "Usage: " << argv[0]
               << " <config.yaml> [--seconds N] [--mode server|client|both] "
                  "[--target-gbps G] [--workload none|fft|gemm|gemm_fp16] "
-                 "[--workload-batch-bytes N]\n";
+                 "[--workload-gemm-dim N] [--workload-fft-len N] "
+                 "[--workload-sync-interval N] [--workload-max-inflight N]\n";
     return 1;
   }
 
@@ -323,9 +371,10 @@ int main(int argc, char** argv) {
     }
   }
   const auto workload = daqiri::bench::parse_workload(argc, argv);
-  const size_t workload_batch_bytes = daqiri::bench::parse_workload_batch_bytes(argc, argv);
-  const int workload_gemm_n = daqiri::bench::parse_workload_gemm_n(argc, argv);
+  const int workload_gemm_dim = daqiri::bench::parse_workload_gemm_dim(argc, argv);
+  const int workload_fft_len = daqiri::bench::parse_workload_fft_len(argc, argv);
   const int workload_sync_interval = daqiri::bench::parse_workload_sync_interval(argc, argv);
+  const int workload_max_inflight = daqiri::bench::parse_workload_max_inflight(argc, argv);
 
   const auto root = YAML::LoadFile(argv[1]);
   if (daqiri::daqiri_init(argv[1]) != daqiri::Status::SUCCESS) {
@@ -362,13 +411,13 @@ int main(int argc, char** argv) {
 
   if (run_server) {
     server_thread = std::thread(rdma_worker, server_cfg, std::ref(server_pacer), std::ref(stop),
-                                std::ref(server_stats), workload, workload_batch_bytes,
-                                workload_gemm_n, workload_sync_interval);
+                                std::ref(server_stats), workload, workload_gemm_dim,
+                                workload_sync_interval, workload_max_inflight, workload_fft_len);
   }
   if (run_client) {
     client_thread = std::thread(rdma_worker, client_cfg, std::ref(client_pacer), std::ref(stop),
-                                std::ref(client_stats), workload, workload_batch_bytes,
-                                workload_gemm_n, workload_sync_interval);
+                                std::ref(client_stats), workload, workload_gemm_dim,
+                                workload_sync_interval, workload_max_inflight, workload_fft_len);
   }
 
   if (!server_thread.joinable() && !client_thread.joinable()) {

@@ -4,8 +4,9 @@
 """Render the DGX Spark DPDK multi-queue payload sweep as a line plot.
 
 Reads a runs.csv produced by examples/run_spark_mq_bench.sh (columns:
-cell,tx_cores,rx_cores,payload,gbps,pps,drops,cpu8,cpu16,cpu17,cpu18,cpu19)
-and plots achieved Gb/s vs payload size, one line per (TX,RX) core cell.
+cell,tx_cores,rx_cores,payload,rep,gbps,pps,drops,cpu...) and plots achieved
+Gb/s vs payload size, one line per (TX,RX) core cell. Multiple reps per
+(cell, payload) are averaged.
 
 Usage:
     scripts/plot_mq_payload_sweep.py <runs.csv> [output.svg]
@@ -36,16 +37,21 @@ CELL_LABEL = {
 
 
 def load(csv_path):
-    """cell -> list of (payload_bytes, gbps), sorted by payload."""
-    series = OrderedDict((c, []) for c in CELL_ORDER)
+    """cell -> list of (payload_bytes, mean gbps over reps), sorted by payload."""
+    from collections import defaultdict
+
+    acc = OrderedDict((c, defaultdict(list)) for c in CELL_ORDER)
     with open(csv_path, newline="") as fh:
         for row in csv.DictReader(fh):
             cell = row["cell"].strip()
-            if cell not in series:
-                series[cell] = []  # tolerate unexpected cells
-            series[cell].append((int(row["payload"]), float(row["gbps"])))
-    for cell in series:
-        series[cell].sort(key=lambda pt: pt[0])
+            if cell not in acc:
+                acc[cell] = defaultdict(list)  # tolerate unexpected cells
+            acc[cell][int(row["payload"])].append(float(row["gbps"]))
+    series = OrderedDict()
+    for cell, by_payload in acc.items():
+        series[cell] = sorted(
+            (payload, sum(vals) / len(vals)) for payload, vals in by_payload.items()
+        )
     return series
 
 
