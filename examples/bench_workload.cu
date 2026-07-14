@@ -37,6 +37,13 @@ namespace {
 constexpr int kFftLen = 1024;
 // Default working-set size when the caller passes bytes_per_burst == 0.
 constexpr size_t kDefaultBytes = 1u << 16;  // 64 KiB
+// Fixed CUDA-event pool for record_event(); comfortably above the RoCE recv-path
+// in-flight cap (default min(rx_depth/2, 32), overridable up to kMaxWorkloadInflight
+// via --workload-max-inflight). Created lazily on first record_event().
+constexpr int kEventPoolSize = 64;
+static_assert(kEventPoolSize > daqiri::bench::kMaxWorkloadInflight,
+              "event pool must stay above the max in-flight cap so record_event() "
+              "never starves exactly at the cap");
 
 cufftHandle as_fft_plan(int p) {
   return static_cast<cufftHandle>(p);
@@ -46,6 +53,9 @@ cudaStream_t as_stream(void* s) {
 }
 cublasHandle_t as_cublas(void* h) {
   return static_cast<cublasHandle_t>(h);
+}
+cudaEvent_t as_event(void* e) {
+  return static_cast<cudaEvent_t>(e);
 }
 
 }  // namespace
@@ -73,28 +83,28 @@ BenchWorkload parse_workload(int argc, char** argv) {
   return workload;
 }
 
-size_t parse_workload_batch_bytes(int argc, char** argv) {
+int parse_workload_gemm_dim(int argc, char** argv) {
   for (int i = 2; i + 1 < argc; i += 2) {
-    if (std::string(argv[i]) == "--workload-batch-bytes") {
-      const long long v = std::atoll(argv[i + 1]);
-      if (v > 0) {
-        return static_cast<size_t>(v);
-      }
-    }
-  }
-  return 0;
-}
-
-int parse_workload_gemm_n(int argc, char** argv) {
-  for (int i = 2; i + 1 < argc; i += 2) {
-    if (std::string(argv[i]) == "--workload-gemm-n") {
+    if (std::string(argv[i]) == "--workload-gemm-dim") {
       const long long v = std::atoll(argv[i + 1]);
       if (v > 0) {
         return static_cast<int>(v);
       }
     }
   }
-  return 0;
+  return 1024;  // default square GEMM side length
+}
+
+int parse_workload_fft_len(int argc, char** argv) {
+  for (int i = 2; i + 1 < argc; i += 2) {
+    if (std::string(argv[i]) == "--workload-fft-len") {
+      const long long v = std::atoll(argv[i + 1]);
+      if (v > 0) {
+        return static_cast<int>(v);
+      }
+    }
+  }
+  return kFftLen;  // default 1-D C2C transform length
 }
 
 int parse_workload_sync_interval(int argc, char** argv) {
@@ -107,6 +117,18 @@ int parse_workload_sync_interval(int argc, char** argv) {
     }
   }
   return 2;  // default sync depth
+}
+
+int parse_workload_max_inflight(int argc, char** argv) {
+  for (int i = 2; i + 1 < argc; i += 2) {
+    if (std::string(argv[i]) == "--workload-max-inflight") {
+      const long long v = std::atoll(argv[i + 1]);
+      if (v > 0) {
+        return static_cast<int>(v);
+      }
+    }
+  }
+  return 0;  // unset -> caller applies its computed default
 }
 
 const char* workload_name(BenchWorkload workload) {
@@ -148,6 +170,11 @@ void GpuWorkload::destroy() {
     cudaFree(gemm_c_);
     gemm_c_ = nullptr;
   }
+  for (void* ev : event_pool_) {
+    cudaEventDestroy(as_event(ev));
+  }
+  event_pool_.clear();
+  free_events_.clear();
   if (stream_ != nullptr) {
     cudaStreamDestroy(as_stream(stream_));
     stream_ = nullptr;
@@ -155,8 +182,8 @@ void GpuWorkload::destroy() {
   ok_ = false;
 }
 
-bool GpuWorkload::init(BenchWorkload kind, size_t batch_bytes, int sync_interval,
-                       int gemm_n_override) {
+bool GpuWorkload::init(BenchWorkload kind, size_t input_bytes, int sync_interval,
+                       int gemm_dim, int fft_len) {
   kind_ = kind;
   sync_interval_ = sync_interval > 0 ? sync_interval : 1;
   run_count_ = 0;
@@ -165,7 +192,7 @@ bool GpuWorkload::init(BenchWorkload kind, size_t batch_bytes, int sync_interval
     return true;  // inert no-op object; not an error
   }
 
-  const size_t bytes = batch_bytes > 0 ? batch_bytes : kDefaultBytes;
+  const size_t bytes = input_bytes > 0 ? input_bytes : kDefaultBytes;
 
   cudaStream_t stream = nullptr;
   if (cudaStreamCreate(&stream) != cudaSuccess) {
@@ -176,12 +203,15 @@ bool GpuWorkload::init(BenchWorkload kind, size_t batch_bytes, int sync_interval
   stream_ = stream;
 
   if (kind_ == BenchWorkload::Fft) {
-    // Fan the working set out across batched length-kFftLen C2C transforms. The
+    // 1-D C2C transform length, pinned via --workload-fft-len (default kFftLen);
+    // held fixed while the I/O unit is swept, like the GEMM side length.
+    fft_len_ = std::max(2, fft_len > 0 ? fft_len : kFftLen);
+    // Fan the working set out across batched length-fft_len_ C2C transforms. The
     // transform reads the caller's input buffer and writes the owned fft_out_;
     // total*sizeof(cufftComplex) <= bytes so the input always holds enough data.
-    const size_t n_complex = std::max<size_t>(kFftLen, bytes / sizeof(cufftComplex));
-    const int batch = std::max<int>(1, static_cast<int>(n_complex / kFftLen));
-    const size_t total = static_cast<size_t>(kFftLen) * batch;
+    const size_t n_complex = std::max<size_t>(fft_len_, bytes / sizeof(cufftComplex));
+    const int batch = std::max<int>(1, static_cast<int>(n_complex / fft_len_));
+    const size_t total = static_cast<size_t>(fft_len_) * batch;
 
     if (cudaMalloc(&fft_out_, total * sizeof(cufftComplex)) != cudaSuccess ||
         cudaMemset(fft_out_, 0, total * sizeof(cufftComplex)) != cudaSuccess) {
@@ -190,7 +220,7 @@ bool GpuWorkload::init(BenchWorkload kind, size_t batch_bytes, int sync_interval
       return false;
     }
     cufftHandle plan = 0;
-    if (cufftPlan1d(&plan, kFftLen, CUFFT_C2C, batch) != CUFFT_SUCCESS) {
+    if (cufftPlan1d(&plan, fft_len_, CUFFT_C2C, batch) != CUFFT_SUCCESS) {
       std::cerr << "GpuWorkload: cufftPlan1d failed\n";
       destroy();
       return false;
@@ -202,32 +232,31 @@ bool GpuWorkload::init(BenchWorkload kind, size_t batch_bytes, int sync_interval
       return false;
     }
     // Explicit shape so every published FFT number carries its compute size.
-    // ~5*N*log2(N) flops per length-N C2C transform, times `batch` transforms.
-    const double flops = 5.0 * kFftLen * std::log2(static_cast<double>(kFftLen)) * batch;
-    std::cerr << "GpuWorkload: fft shape = " << batch << " x C2C length-" << kFftLen
+    // ~5·N·log2(N) flops per length-N C2C transform, times `batch` transforms.
+    const double flops = 5.0 * fft_len_ * std::log2(static_cast<double>(fft_len_)) * batch;
+    std::cerr << "GpuWorkload: fft shape = " << batch << " x C2C length-" << fft_len_
               << " (working set " << (bytes >> 10) << " KiB, " << (flops / 1e6) << " MFLOP/call)\n";
   } else {  // Gemm or GemmFp16
-    // Square matmul. By default size n from the working set (FP32 in both cases so
-    // gemm and gemm_fp16 use the SAME dimension -> identical FLOP count, isolating
-    // the precision / tensor-core effect). A caller-supplied gemm_n_override pins n
-    // directly so the FLOP count per call stays FIXED while the I/O unit is swept --
-    // this isolates pipelining depth from problem size in the RoCE-vs-raw study.
-    // The A operand is the caller's input buffer (n*n*elem_size must be <= bytes,
-    // enforced below); B and C are owned scratch.
-    int n = gemm_n_override > 0
-                ? gemm_n_override
-                : static_cast<int>(std::sqrt(static_cast<double>(bytes) / sizeof(float)));
+    // Square matmul with the side length n pinned directly (FP32 and FP16 use the
+    // SAME dimension -> identical FLOP count, isolating the precision / tensor-core
+    // effect). n is held FIXED while the I/O unit is swept, so 2*n^3 FLOPs/call
+    // stays constant -- this isolates pipelining depth from problem size in the
+    // RoCE-vs-raw study. The A operand is the caller's input buffer (n*n*elem_size
+    // must be <= input_bytes, enforced below); B and C are owned scratch.
+    int n = gemm_dim > 0 ? gemm_dim : 1024;
     n = std::max(64, (n / 8) * 8);  // multiple of 8, sane floor
     gemm_n_ = n;
     const size_t elems = static_cast<size_t>(n) * n;
     const size_t elem_size = kind_ == BenchWorkload::GemmFp16 ? sizeof(__half) : sizeof(float);
     // The A operand is read from the caller's received-data buffer, which holds
-    // `bytes`. A pinned n must fit -- otherwise cuBLAS reads past the buffer. Reject
-    // rather than silently OOB-read; the caller should raise --workload-batch-bytes.
+    // `bytes`. The pinned n must fit -- otherwise cuBLAS reads past the buffer.
+    // Reject rather than silently OOB-read; the caller should use a larger I/O unit
+    // (message / reorder window) for this GEMM dimension.
     if (elems * elem_size > bytes) {
-      std::cerr << "GpuWorkload: pinned gemm n=" << n << " needs " << (elems * elem_size >> 10)
-                << " KiB for the A operand but the working set is only " << (bytes >> 10)
-                << " KiB; raise --workload-batch-bytes to >= n*n*elem_size\n";
+      std::cerr << "GpuWorkload: gemm n=" << n << " needs " << (elems * elem_size >> 10)
+                << " KiB for the A operand but the input buffer is only " << (bytes >> 10)
+                << " KiB; use a larger I/O unit (>= n*n*elem_size) or a smaller "
+                   "--workload-gemm-dim\n";
       destroy();
       return false;
     }
@@ -251,12 +280,11 @@ bool GpuWorkload::init(BenchWorkload kind, size_t batch_bytes, int sync_interval
       return false;
     }
     // Explicit shape so every published GEMM number carries its compute size. A
-    // square nxnxn matmul is 2*n^3 flops; note whether n was pinned or derived.
+    // square n×n×n matmul is 2·n³ flops; n is pinned via --workload-gemm-dim.
     const double flops = 2.0 * static_cast<double>(n) * n * n;
     std::cerr << "GpuWorkload: " << workload_name(kind_) << " shape = " << n << "x" << n << "x" << n
-              << (gemm_n_override > 0 ? " (pinned)" : " (derived)") << ", "
-              << (elem_size == sizeof(__half) ? "fp16" : "fp32") << " A/B, " << (flops / 1e9)
-              << " GFLOP/call, matrix " << (elems * elem_size >> 10) << " KiB\n";
+              << " (pinned), " << (elem_size == sizeof(__half) ? "fp16" : "fp32") << " A/B, "
+              << (flops / 1e9) << " GFLOP/call, matrix " << (elems * elem_size >> 10) << " KiB\n";
   }
 
   // Warm up and validate the chosen op once against a transient zeroed input
@@ -310,6 +338,64 @@ void GpuWorkload::run(const void* input) {
   issue_op(input);
   ++run_count_;
   maybe_sync();
+}
+
+void GpuWorkload::run_async(const void* input) {
+  if (!enabled() || input == nullptr) {
+    return;
+  }
+  issue_op(input);
+  ++run_count_;
+  // No maybe_sync: the caller bounds outstanding work with events.
+}
+
+void* GpuWorkload::record_event() {
+  if (!enabled()) {
+    return nullptr;
+  }
+  // Lazily create the pool on first use so the run()+sync() callers (DPDK/socket)
+  // that never record events pay nothing.
+  if (event_pool_.empty()) {
+    event_pool_.reserve(kEventPoolSize);
+    free_events_.reserve(kEventPoolSize);
+    for (int i = 0; i < kEventPoolSize; ++i) {
+      cudaEvent_t ev = nullptr;
+      if (cudaEventCreateWithFlags(&ev, cudaEventDisableTiming) != cudaSuccess) {
+        break;  // partial pool is fine; record_event just returns null when empty
+      }
+      event_pool_.push_back(ev);
+      free_events_.push_back(ev);
+    }
+  }
+  if (free_events_.empty()) {
+    return nullptr;  // caller must drain (event_done / wait_event) and retry
+  }
+  void* ev = free_events_.back();
+  free_events_.pop_back();
+  if (cudaEventRecord(as_event(ev), as_stream(stream_)) != cudaSuccess) {
+    free_events_.push_back(ev);
+    return nullptr;
+  }
+  return ev;
+}
+
+bool GpuWorkload::event_done(void* ev) const {
+  if (ev == nullptr) {
+    return true;
+  }
+  return cudaEventQuery(as_event(ev)) == cudaSuccess;
+}
+
+void GpuWorkload::wait_event(void* ev) {
+  if (ev != nullptr) {
+    cudaEventSynchronize(as_event(ev));
+  }
+}
+
+void GpuWorkload::release_event(void* ev) {
+  if (ev != nullptr) {
+    free_events_.push_back(ev);
+  }
 }
 
 void GpuWorkload::maybe_sync() {

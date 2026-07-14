@@ -433,9 +433,10 @@ the pre-encap packet.
 - **`match`**: Same standard UDP/IP match keys as RX flows. Omit `match` for a
   catch-all TX transform.
 
-DAQIRI validates tunnel overhead against the configured packet buffer size and
-the supported jumbo-frame bound. For RX decap/pop, MTU sizing accounts for the
-outer wire frame while packet buffers contain the post-decap frame.
+DAQIRI validates transform overhead against the configured packet buffer size and
+the supported jumbo-frame bound. For RX decap/pop and TX encap/push, MTU sizing
+accounts for the outer wire frame; packet buffers hold the post-decap (RX) /
+pre-encap (TX) frame.
 
 ### Accurate Send
 

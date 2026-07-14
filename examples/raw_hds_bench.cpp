@@ -70,8 +70,6 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
   }
 
   std::unordered_set<void *> initialized_payload_buffers;
-  daqiri::bench::RawBenchQueueStats stats;
-  const auto t0 = std::chrono::steady_clock::now();
 
   while (!stop.load()) {
     auto *msg = daqiri::create_tx_burst_params();
@@ -133,19 +131,8 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
       daqiri::free_all_packets_and_burst_tx(msg);
       continue;
     }
-    if (daqiri::send_tx_burst(msg) == daqiri::Status::SUCCESS) {
-      stats.packets += static_cast<uint64_t>(num_pkts);
-      stats.bytes += static_cast<uint64_t>(num_pkts) *
-                    static_cast<uint64_t>(cfg.header_size + cfg.payload_size);
-      ++stats.bursts;
-    }
+    daqiri::send_tx_burst(msg);
   }
-
-  const double secs =
-      std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
-          .count();
-  daqiri::bench::print_queue_stats("TX", cfg.interface_name, cfg.queue_id, stats,
-                                   secs);
 }
 
 } // namespace
@@ -154,14 +141,15 @@ int main(int argc, char **argv) {
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0]
               << " <config.yaml> [--seconds N] "
-                 "[--workload none|fft|gemm|gemm_fp16] [--workload-batch-bytes N]\n";
+                 "[--workload none|fft|gemm|gemm_fp16] [--workload-gemm-dim N] "
+                 "[--workload-fft-len N] [--workload-sync-interval N]\n";
     return 1;
   }
 
   const int run_seconds = daqiri::bench::parse_run_seconds(argc, argv);
   const auto workload = daqiri::bench::parse_workload(argc, argv);
-  const size_t workload_batch_bytes = daqiri::bench::parse_workload_batch_bytes(argc, argv);
-  const int workload_gemm_n = daqiri::bench::parse_workload_gemm_n(argc, argv);
+  const int workload_gemm_dim = daqiri::bench::parse_workload_gemm_dim(argc, argv);
+  const int workload_fft_len = daqiri::bench::parse_workload_fft_len(argc, argv);
   const int workload_sync_interval = daqiri::bench::parse_workload_sync_interval(argc, argv);
   const auto root = YAML::LoadFile(argv[1]);
   if (daqiri::daqiri_init(argv[1]) != daqiri::Status::SUCCESS) {
@@ -185,7 +173,7 @@ int main(int argc, char **argv) {
     // HDS reorder geometry: the payload lives in segment 1 (GPU memory), so the
     // reorder reads it from offset 0 of that segment. The HDS TX does not inject
     // a per-packet sequence number, so the seq-based reorder still exercises the
-    // kernel but mostly collides on slot 0 -- fine for a throughput benchmark
+    // kernel but mostly collides on slot 0 — fine for a throughput benchmark
     // (the FLOP/copy volume is unchanged).
     daqiri::bench::ReorderGeometry geom;
     if (has_tx) {
@@ -195,15 +183,14 @@ int main(int argc, char **argv) {
       geom.seq_bit_offset = 0;
       geom.seq_bit_width = 32;
       geom.out_payload_len = tx.payload_size;
-      const uint32_t ppb =
-          workload_batch_bytes > 0
-              ? std::max<uint32_t>(1, static_cast<uint32_t>(workload_batch_bytes / tx.payload_size))
-              : 1024;
-      geom.packets_per_batch = std::min<uint32_t>(ppb, tx.batch_size);
+      // Reorder window: ~8 MB (1024 packets at the native shape), capped to one
+      // burst. The compute reads the first n*n*elem_size bytes (GEMM dimension
+      // pinned via --workload-gemm-dim).
+      geom.packets_per_batch = std::min<uint32_t>(1024, tx.batch_size);
     }
     rx_thread =
         std::thread(daqiri::bench::rx_count_worker, daqiri::bench::parse_rx(root), std::ref(stop),
-                    workload, geom, workload_gemm_n, workload_sync_interval);
+                    workload, geom, workload_gemm_dim, workload_sync_interval, workload_fft_len);
   }
   if (has_tx) {
     tx_thread =

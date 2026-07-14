@@ -9,6 +9,10 @@ Measured C++-loopback throughput for each stream/protocol on a single DGX Spark
 (GB10), driven over a physical cabled loopback on one ConnectX-7. Numbers are
 from a Release build via `examples/run_spark_bench.sh` (30 s per cell).
 
+All backends are measured **one-way** (unidirectional) by default: one side sends,
+the other receives and computes. For a bidirectional test, set `send: true` on the
+receiving role (and `receive: true` on the sending role) in the bench config.
+
 For the loopback setup these numbers depend on and the per-transport
 benchmarking procedure, see [Socket and RDMA Benchmarking](socket_benchmarking.md)
 (the `dq_wire_*` network-namespace wire loopback used by RoCE and sockets) and
@@ -20,39 +24,44 @@ loopback). The exact commands are collected under [Reproduce](#reproduce) below.
 | Component | Detail |
 | --------- | ------ |
 | Platform | DGX Spark (GB10), 20 cores, isolcpus `16-19` (the multi-queue sweep expands this; see [Multi-queue core scaling](#multi-queue-core-scaling)) |
-| NIC | ConnectX-7, ports p0 ↔ p1 cross-cabled (single-host loopback), MTU 9000 |
+| NIC | ConnectX-7, ports p0 ↔ p1 cross-cabled with a **100 GbE QSFP28** loopback cable (single-host loopback), MTU 9000 |
 | Build | Release (`-DCMAKE_BUILD_TYPE=Release`), `DAQIRI_ENGINE="dpdk ibverbs"` |
 | Loopback | Raw/DPDK uses the two physical ports directly; socket/RoCE use the `dq_wire_*` network-namespace wire loopback |
-| Core pinning | Each direction has a busy-spin queue poller and an app worker on separate isolated X925 cores (PR #149). Single-queue: DPDK pollers 17/18, workers 16/19. Multi-queue: TX pollers 16/19, RX pollers 18/9, each with its own worker core, master 8 (with `isolcpus=5-9,15-19`). |
+| Core pinning | Each direction has a busy-spin queue poller and an app worker on separate isolated X925 cores (PR #149). Single-queue: DPDK pollers 17/18, workers 16/19. Multi-queue: TX pollers 16/19, RX pollers 18/9, each with its own worker core, master 8. Sockets pin each pair's send and receive to separate cores in the same CPU cluster (all with `isolcpus=5-9,15-19`). |
 
 ## Results Summary (C++ loopback)
 
-Each transport at its best-case **native operation size**. Raw/RoCE are
+Each transport at its best-case **operation size**. Raw/RoCE are
 single-stream; socket TCP/UDP scale with the number of client/server pairs, so the
 four-pair aggregate is shown.
 
+The **100 GbE QSFP28 loopback cable sets the maximum data rate** here — not the
+ConnectX-7 (which is rated for higher line rates) or the software path. A 100 GbE
+link tops out near ~99.6 Gb/s of payload, so every large-transfer result saturates
+just under that ceiling.
+
 | Stream / Protocol | Best case | Throughput | Drops | Notes |
 | ----------------- | --------- | ---------: | ----- | ----- |
-| Raw Ethernet / GPUDirect | 4 KB packet | **105.5 ±0.9 Gb/s** | 0 | 98.5 Gb/s single-queue at the 8 KB native shape |
-| Socket / RoCE (SEND) | 8 MB message | **102.2 ±0.3 Gb/s** | 0 | Single QP, batch 1 |
-| Socket / TCP | 8 KB × 4 pairs | **97.2 ±2.8 Gb/s** | ~0 | Flow-controlled (App TX = App RX) |
-| Socket / UDP | 8 KB × 4 pairs | **29.8 ±0.2 Gb/s** | ~51% loss | Receiver goodput; unpaced sender |
+| Raw Ethernet / GPUDirect | 8 KB packet | **98.8 ±0.1 Gb/s** | 0 | Flat ~98.7 across 4–8 KB, all batch sizes |
+| Socket / RoCE (SEND) | 64 KB message | **97.6 ±0.1 Gb/s** | 0 | Single QP, batch 1 |
+| Socket / TCP | 8 KB × 4 pairs | **87.3 ±2.2 Gb/s** | ~0 | Flow-controlled (App TX = App RX) |
+| Socket / UDP | 8 KB × 4 pairs | **34.5 ±0.6 Gb/s** | ~48% loss | Receiver goodput; unpaced sender |
 
-Each transport is best read at its own native operation size (see the per-transport
+Each transport is best read at its own best-case operation size (see the per-transport
 tables below); a single cross-transport unit of work isn't meaningful here, since
 RoCE at 8 KB is op-rate-bound well below its large-message peak and TCP has no
 operation boundary.
 
 ## Raw Ethernet / GPUDirect (DPDK)
 
-Physical port-to-port loopback, GPU-resident payloads. Native 8 KB packets run
-at **98.5 Gb/s** drop-free across all batch sizes; the throughput peak is
-**105.5 Gb/s** at a 4 KB payload. Packet handling is CPU-bound (see the CPU
-utilization table below). Throughput is flat across batch size and stable
-run-to-run (3 reps per cell, ≤1% spread).
+Physical port-to-port loopback, GPU-resident payloads. Throughput saturates the
+100 GbE line at **~98.8 Gb/s** for 4–8 KB payloads, drop-free across all batch
+sizes. Packet handling is CPU-bound (see the CPU utilization table below).
+Throughput is flat across batch size and stable run-to-run (3 reps per cell,
+≤1% spread).
 
 Achieved Gb/s measured at App RX (equal to App TX, since every cell is
-drop-free), unpaced, mean of 3 reps; run-to-run spread ≤0.9 Gb/s (<1%):
+drop-free), unpaced, mean of 3 reps; run-to-run spread ≤0.5 Gb/s (<1%):
 
 <table class="perf-matrix" markdown="0">
   <thead>
@@ -65,29 +74,29 @@ drop-free), unpaced, mean of 3 reps; run-to-run spread ≤0.9 Gb/s (<1%):
     </tr>
   </thead>
   <tbody>
-    <tr><th>8000 B</th><td>98.5</td><td>98.0</td><td>98.0</td><td>98.5</td></tr>
-    <tr><th>4096 B</th><td>105.2</td><td>105.3</td><td>105.5</td><td>105.1</td></tr>
-    <tr><th>1024 B</th><td>92.1</td><td>91.8</td><td>91.7</td><td>91.7</td></tr>
-    <tr><th>256 B</th><td>50.0</td><td>49.8</td><td>49.8</td><td>49.8</td></tr>
-    <tr><th>64 B</th><td>20.4</td><td>20.5</td><td>20.5</td><td>20.4</td></tr>
+    <tr><th>8000 B</th><td>98.8</td><td>98.8</td><td>98.8</td><td>98.7</td></tr>
+    <tr><th>4096 B</th><td>98.6</td><td>98.8</td><td>98.7</td><td>98.6</td></tr>
+    <tr><th>1024 B</th><td>97.1</td><td>97.2</td><td>97.2</td><td>97.1</td></tr>
+    <tr><th>256 B</th><td>49.7</td><td>49.6</td><td>49.6</td><td>49.5</td></tr>
+    <tr><th>64 B</th><td>20.2</td><td>20.2</td><td>20.4</td><td>20.2</td></tr>
   </tbody>
 </table>
 
-At ≥4 KB the link saturates (~98–105 Gb/s) regardless of batch. Below that the
-path is packet-rate-bound: 1 KB ~92 Gb/s (10.5 M pps), 256 B ~50 Gb/s (19.5 M pps),
-64 B ~20 Gb/s (20 M pps) — a ~20 M pps single-queue ceiling (the multi-queue
+At ≥1 KB the link saturates near line rate (~97–99 Gb/s) regardless of batch.
+Below that the path is packet-rate-bound: 256 B ~50 Gb/s (19.5 M pps), 64 B
+~20 Gb/s (20 M pps) — a ~20 M pps single-queue ceiling (the multi-queue
 section lifts it). Gb/s here is the L2 frame rate including the 64 B header, so
 pps ≈ Gb/s ÷ ((payload + 64) × 8). These small-payload cells are flat across batch
 size and stable run-to-run. Because every cell is drop-free, the achieved rate is
 also the no-drop rate: pacing the sender below it hits the target with zero drops.
 
-**CPU utilization** (headline cell, 8000 B / batch 10240, unpaced):
+**CPU utilization** (summary-table cell, 8000 B / batch 10240, unpaced):
 
 | Core                     | Busy% | Note                                  |
 | ------------------------ | ----: | ------------------------------------- |
 | Master (CPU 8)           |  3.7% | Orchestration only; mostly idle       |
-| TX queue poller (CPU 17) |  ~92% | Poll-mode spin; rate-independent      |
-| RX queue poller (CPU 18) |  ~92% | Poll-mode spin; rate-independent      |
+| TX queue poller (CPU 17) |  ~92% | Poll-mode busy-spin |
+| RX queue poller (CPU 18) |  ~92% | Poll-mode busy-spin |
 
 The benchmark app workers run on their own cores (TX 16, RX 19) alongside these
 pollers; this run sampled only the poller cores.
@@ -98,10 +107,10 @@ not a compute engine.
 
 ### Multi-queue core scaling
 
-Each packet-handling core spins in poll-mode. At the native 8 KB shape a single
-TX core caps throughput near ~98 Gb/s while a single RX core already drains the
-line, so the second TX core is the lever: it scales `(1,1)` to `(2,1)` from
-97.5 to 108.8 Gb/s, while a second RX core adds little. The matrix sweeps
+Each packet-handling core spins in poll-mode. At large payloads (≥1 KB) a single
+queue already saturates the 100 GbE line (~97–99 Gb/s), so extra cores add
+nothing there — the multi-queue win is confined to the small,
+packet-rate-bound payloads, where **RX cores** are the lever. The matrix sweeps
 (TX cores, RX cores) over `(1,1)`, `(1,2)`, `(2,1)`, `(2,2)`.
 
 Each queue is served by a poll-mode driver core plus a separate bench-worker
@@ -113,26 +122,29 @@ base `daqiri_bench_raw_tx_rx_spark_mq.yaml` (the balanced 2,2 superset) by
 `scripts/gen_spark_mq_config.py`; generated by `examples/run_spark_mq_bench.sh`,
 30 s per cell, 0 drops.
 
+Achieved Gb/s at a **256 B payload** (the packet-rate-bound regime where core
+count matters); at ≥1 KB every cell converges at the wire ceiling regardless:
+
 | Cell | TX pollers | RX pollers | Achieved <span style="text-transform: none">Gb/s</span> |
 | ---- | ---------- | ---------- | ------------: |
-| (1,1) | 16    | 18   | 97.5  |
-| (1,2) | 16    | 18,9 | 99.0  |
-| (2,1) | 16,19 | 18   | **108.8** |
-| (2,2) | 16,19 | 18,9 | **108.8** |
+| (1,1) | 16    | 18   | 50.0  |
+| (1,2) | 16    | 18,9 | **66.4** |
+| (2,1) | 16,19 | 18   | 49.0  |
+| (2,2) | 16,19 | 18,9 | 64.7  |
 
-Which core is the bottleneck flips with payload size. Sweeping each cell from
-64 B to 8 KB:
+A second **RX** core lifts 256 B from 50.0 to 66.4 Gb/s; a second **TX** core does
+nothing (49.0 ≈ 50.0). The full payload sweep shows why — the bottleneck depends
+on payload size:
 
 ![DPDK multi-queue throughput vs UDP payload size on DGX Spark, one line per (TX,RX) core count](../images/spark-mq-payload-sweep.svg)
 
 At small payloads the path is packet-rate-bound, so **RX cores** are the lever:
-at 64 B a second RX core lifts throughput from 20.3 to 26.8 Gb/s (~20 M → ~26 M
-pps) while a second TX core does nothing. At large payloads it inverts to the
-byte/line-rate-bound regime where **TX cores** are the lever: at 8 KB the second
-TX core takes 97.5 to 108.8 Gb/s (the native-shape result above) while a second
-RX core adds nothing. The curves cross around 1–4 KB, where the link saturates
-and all four cells converge near ~104–109 Gb/s. Every cell is drop-free.
-Generated by `examples/run_spark_mq_bench.sh` (30 s per point) and
+a second RX core lifts 64 B from 20.3 to 26.9 Gb/s (~20 M → ~27 M pps) and 256 B
+from 50.0 to 66.4 Gb/s, while a second TX core does nothing. At large payloads a
+single queue already saturates the wire, so all four cells converge near
+~97–99 Gb/s at ≥1 KB and neither extra core helps. Every cell is drop-free.
+Generated by
+`examples/run_spark_mq_bench.sh` (30 s per point) and
 `scripts/plot_mq_payload_sweep.py`.
 
 ## Socket / RoCE
@@ -142,44 +154,52 @@ is App RX goodput, equal to App TX with 0 drops. Large messages up to 64 KB
 saturate the wire; the smallest messages are bound by per-operation software
 overhead.
 
-**Message-size sweep (single QP, batch 1, 0 drops).** Mean of 3 reps; run-to-run
-spread ≤0.8 Gb/s (<2%) in every cell.
+**Message-size sweep (single QP, batch 1, 0 drops).** Mean ± sample std over 3
+reps; run-to-run spread <1% in every cell.
 
 | Message size | <span style="text-transform: none">Gb/s</span> |
 | ------------ | ---: |
-| 8 MB  | **102.2** |
-| 1 MB  | 101.3 |
-| 64 KB | 101.6 |
-| 8 KB  | 60.7 |
-| 4 KB  | 38.0 |
+| 8 MB  | 96.8 ±0.3 |
+| 1 MB  | 96.9 ±0.2 |
+| 64 KB | **97.6 ±0.1** |
+| 8 KB  | 51.8 ±0.2 |
+| 4 KB  | 28.5 ±0.0 |
 
-Messages ≥64 KB hold ~101–102 Gb/s at the wire ceiling. Below that the path is
-operation-rate-bound (per-operation software overhead, not a stall) rather than
-wire-bound, and every cell is drop-free. At 8 KB (60.7 Gb/s) and 4 KB (38.0 Gb/s)
+Messages ≥64 KB hold ~97 Gb/s at the 100 GbE wire ceiling (line rate). Below that
+the path is operation-rate-bound (per-operation software overhead, not a stall)
+rather than wire-bound, and every cell is drop-free. At 8 KB (51.8 Gb/s) and 4 KB (28.5 Gb/s)
 a dedicated bench-worker core, separate from the RoCE engine thread, sustains the
 operation rate, as it does for small DPDK packets. A per-message flow-control
 window keeps enough operations in flight to amortize that overhead: it pre-posts
 `rx_depth` receives before sending and caps the transmit side at `tx_depth`, each
 sized to the message so the in-flight window stays full.
 
-**CPU utilization** (headline cell, 8 MB message, batch 1, unpaced):
+**CPU utilization** (summary-table cell, 8 MB message, batch 1, unpaced):
 
-| Core                | Busy% | Note                                            |
-| ------------------- | ----: | ----------------------------------------------- |
-| Master (CPU 8)      |  5.9% | Orchestration only                              |
-| Client TX (CPU 17)  | 74.9% | Post-and-poll spin; rate-independent            |
-| Server RX (CPU 18)  |  0.0% | HCA writes straight to memory; CPU uninvolved   |
+| Core                 | Busy% | Note                                            |
+| -------------------- | ----: | ----------------------------------------------- |
+| Master (CPU 8)       |  0.7% | Orchestration only                              |
+| Client TX (CPU 17)   | 74.8% | Busy-spins posting sends and polling completions |
+| Server RX (CPU 19)   |  1.1% | HCA DMAs straight to memory; worker only reaps completions |
 
-The idle RX core is the expected RoCE RC signature — the HCA places incoming
-data directly into registered memory with no CPU involvement. The GPU stays
-idle here too (SM and memory-controller ~0%; DMA target, not a compute engine).
+The TX core busy-spins in a post-and-poll loop, so its ~75% busy time is set by
+that spin, not by the throughput: it stays near this level whether the link runs
+at 10 or 100 Gb/s (the same reason the DPDK pollers sit near 92% regardless of
+offered load). The near-idle RX core is the expected RoCE RC signature — the HCA
+places incoming data directly into registered memory, so the receive worker only
+reaps completions and reposts (~1% at this message rate). The GPU stays idle here
+too (SM and memory-controller ~0%; DMA target, not a compute engine).
 
 ## Socket / TCP
 
-Four one-way TCP client/server pairs over the netns wire loopback, each pair
-pinned to one isolated core (16–19). TCP self-paces via flow control, so App TX
-equals App RX with effectively no app-level loss. `message_size` is the per-send
-byte count of a stream (no datagram boundary, no fragmentation).
+Four one-way TCP client/server pairs over the netns wire loopback. Each pair's
+send (client) and receive (server) sides pin to **separate** isolated cores in one
+CPU cluster (pairs 1–2 in 15–19, pairs 3–4 in 5–9). A shared send/receive core
+ping-pongs a single stream and can wedge it at half rate for a whole run, so
+splitting the two sides keeps single-stream throughput stable. TCP self-paces via
+flow control, so App TX equals App RX with effectively no app-level loss.
+`message_size` is the per-send byte count of a stream (no datagram boundary, no
+fragmentation).
 
 Throughput in Gb/s (App TX = App RX), mean ± std over 3 reps:
 
@@ -194,21 +214,23 @@ Throughput in Gb/s (App TX = App RX), mean ± std over 3 reps:
     </tr>
   </thead>
   <tbody>
-    <tr><th>1000 B</th><td>13.5<small>±0.2</small></td><td>27.3<small>±0.2</small></td><td>54.8<small>±0.2</small></td></tr>
-    <tr><th>8000 B</th><td>30.8<small>±5.8</small></td><td>68.0<small>±9.7</small></td><td>97.2<small>±2.8</small></td></tr>
-    <tr><th>1 MiB</th><td>31.6<small>±0.1</small></td><td>58.7<small>±0.3</small></td><td>93.7<small>±1.3</small></td></tr>
+    <tr><th>1000 B</th><td>14.2<small>±0.4</small></td><td>27.6<small>±0.4</small></td><td>45.2<small>±0.1</small></td></tr>
+    <tr><th>8000 B</th><td>28.9<small>±2.9</small></td><td>42.4<small>±2.7</small></td><td>87.3<small>±2.2</small></td></tr>
+    <tr><th>1 MiB</th><td>32.1<small>±2.2</small></td><td>51.5<small>±2.4</small></td><td>83.7<small>±0.4</small></td></tr>
   </tbody>
 </table>
 
 Throughput scales with the pair count; retransmits stay negligible over the run.
+At four pairs the eight cores span both clusters, and the pairs in 5–9 sit farther
+from the NIC, so the 4-pair cells scale slightly sub-linearly.
 
 ## Socket / UDP
 
-Four one-way UDP client/server pairs, same one-core-per-pair pinning. UDP has no
-flow control, so each sender runs flat-out and the receiver drops whatever it
-cannot drain — the loss column is an inherent property of unpaced UDP, not a
-fault. App RX is the delivered goodput; App-level loss is `(App TX − App RX) /
-App TX`.
+Four one-way UDP client/server pairs, same per-side pinning (send and receive on
+separate cores). UDP has no flow control, so each sender runs flat-out and the
+receiver drops whatever it cannot drain — the loss column is an inherent property
+of unpaced UDP. App RX is the delivered goodput; App-level loss is
+`(App TX − App RX) / App TX`.
 
 Each cell shows **receiver goodput in Gb/s** (mean ± std over 3 reps) with the
 **app-level loss %** dimmed beneath it:
@@ -224,8 +246,8 @@ Each cell shows **receiver goodput in Gb/s** (mean ± std over 3 reps) with the
     </tr>
   </thead>
   <tbody>
-    <tr><th>1000 B</th><td>3.6 ±0.0<small>11% loss</small></td><td>7.7 ±0.0<small>16% loss</small></td><td>13.5 ±0.1<small>6% loss</small></td></tr>
-    <tr><th>8000 B</th><td>9.6 ±0.5<small>56% loss</small></td><td>20.9 ±1.3<small>57% loss</small></td><td>29.8 ±0.2<small>51% loss</small></td></tr>
+    <tr><th>1000 B</th><td>4.0 ±0.1<small>44% loss</small></td><td>6.8 ±0.8<small>52% loss</small></td><td>15.2 ±0.3<small>40% loss</small></td></tr>
+    <tr><th>8000 B</th><td>12.2 ±1.2<small>69% loss</small></td><td>18.9 ±0.2<small>59% loss</small></td><td>34.5 ±0.6<small>48% loss</small></td></tr>
   </tbody>
 </table>
 
@@ -242,13 +264,13 @@ the GPU also crunches the incoming data. The benchmarks accept
 `--workload none|fft|gemm|gemm_fp16`, exposed by `run_spark_bench.sh` as the
 `WORKLOAD` env var (recorded in the CSV `post_process` column); more workload kinds
 can be added to the same reusable component over time. The workload runs on the
-**actual received packet data** — every backend first assembles the burst's
+received packet data — every backend first assembles the burst's
 payloads into one contiguous GPU buffer (a sequence-number **reorder** on the
 out-of-order transports, an arrival-order **gather** on the in-order ones) and the
 compute consumes that buffer.
 
-**What the two workloads compute** (the reusable component
-`examples/bench_workload.{h,cu}`):
+**What the two workloads compute** — both in **FP32** (single precision) — from the
+reusable component `examples/bench_workload.{h,cu}`:
 
 - **FFT** — a batched 1-D **complex-to-complex forward FFT** via cuFFT
   (`cufftExecC2C`). The reordered buffer is treated as an array of single-precision
@@ -257,12 +279,11 @@ compute consumes that buffer.
   signal-processing receiver — channelization or spectral analysis that FFTs every
   frame as it arrives.
 - **GEMM** — a dense **matrix multiply** `C = A·B` via cuBLAS on square *n×n*
-  matrices, with the reordered buffer supplying the *A* operand and *n* chosen so
-  the matrices match the working-set size. Two precisions: **`gemm`** is FP32
-  (`cublasSgemm`); **`gemm_fp16`** is the *same-size* mixed-precision matmul (FP16
-  inputs, FP32 accumulate) on the **tensor cores** (`cublasGemmEx`,
-  `CUBLAS_GEMM_DEFAULT_TENSOR_OP`) — the core op of GPU inference. Running both at
-  one matrix size isolates the precision / tensor-core effect. This models a
+  matrices, with the reordered buffer supplying the *A* operand. The side length is
+  **pinned at n=1024** (`--workload-gemm-dim`, env `GEMM_DIM`), so every call is an
+  identical **2.15 GFLOP** matmul reading the first **4 MB** (n²·4 B, FP32) of each
+  received unit — the compute is fixed regardless of message size, which is what
+  makes it comparable across transports. The matmul is FP32 (`cublasSgemm`). This models a
   receiver feeding incoming data into a dense linear-algebra or neural-network
   stage (beamforming, correlation, an inference layer).
 
@@ -276,12 +297,10 @@ chosen to be representative for each transport:
 | UDP sockets | host RX buffers | **host→device stage**, then **seq reorder** |
 | TCP sockets | host RX buffers | **host→device stage**, then **gather** (in-order stream) |
 
-Each compute runs **once per reorder window** on a dedicated CUDA stream (shared
-with the reorder/gather kernel so the two serialize without an extra sync), with up
-to two kernels in flight (sync depth 2) to overlap GPU work with ingest. The
-reorder window is sized so the contiguous buffer is ~8 MB on every backend, giving
-a comparable GPU working set across transports. GPU SM% is from `nvidia-smi dmon`
-across the run. Throughput is mean ± std over 3 reps, 30 s each.
+Each compute runs **once per reorder window** on a dedicated CUDA stream, shared
+with the reorder/gather kernel so the two serialize without an extra sync and
+compute overlaps ingest. The reorder window is sized so the contiguous buffer is
+~8 MB on every backend, giving a comparable GPU working set across transports.
 
 !!! note "Where the data lives, per backend"
     On the integrated GB10 the GPU shares memory with the CPU, so the raw and RoCE
@@ -292,74 +311,24 @@ across the run. Throughput is mean ± std over 3 reps, 30 s each.
     copy on the measured path that the raw/RoCE paths avoid. Lost packets (raw/UDP)
     leave their reorder slots zero-filled; the FLOP/copy volume is unchanged.
 
-Raw / GPUDirect, 8 KB native shape (batch 10240), GPU-resident payloads, seq reorder:
+Fixed **n=1024**, one GEMM (or a length-1024 batched FFT) per received unit. DPDK runs
+at an **8 KB payload** (~8 MB reorder window, 1024 packets × 8000 B), matched to RoCE's
+**8 MB message** so the GPU working set and per-unit compute are the same on both.
+3 reps, 30 s each, GPU SM% from `nvidia-smi dmon`; 0 drops on every cell.
 
-| Workload | Throughput | Drops | GPU SM% | Notes |
-| -------- | ---------: | ----- | ------: | ----- |
-| none (baseline) | 98.4 ±0.2 Gb/s | 0 | ~0 | Bare loopback (no GPU compute) |
-| FFT | 95.5 ±1.7 Gb/s | 0 | 16.4% | Light compute; line rate held within ~3% |
-| GEMM (FP32) | 94.9 ±0.0 Gb/s | 0 | 55.9% | FP32 cores; GPU-bound end, still **drop-free** |
-| GEMM (FP16 tensor) | 97.7 ±0.2 Gb/s | 0 | 16.8% | Same matrix, tensor cores; near line rate at a third of the SM |
+| Workload | DPDK (Raw / GPUDirect) | RoCE (RC) |
+| -------- | ---------------------: | --------: |
+| none (baseline) | 98.7 ±0.0  | 96.6 ±0.3 |
+| FFT             | 95.7 ±0.8  | 95.6 ±0.1 |
+| GEMM (FP32)     | 96.6 ±0.2  | 90.2 ±1.1 |
 
-RoCE, 8 MB native message (single QP, batch 1), gather pass-through:
+Throughput in Gb/s. Both `none` baselines sit at the ~97–99 Gb/s wire ceiling
+(DPDK 98.7, RoCE 96.6), as expected for two line-rate transports.
 
-| Workload | Throughput | Drops | GPU SM% | Notes |
-| -------- | ---------: | ----- | ------: | ----- |
-| none (baseline) | 101.7 ±0.2 Gb/s | 0 | ~0 | Pass-through, no compute |
-| FFT | 93.6 ±1.6 Gb/s | 0 | 36.0% | Light compute; ~8% off line rate |
-| GEMM (FP32) | 35.0 ±0.3 Gb/s | 0 | 79.0% | GPU-bound at this batch (one GEMM/message); see sweep |
-| GEMM (FP16 tensor) | 85.8 ±0.2 Gb/s | 0 | 53.6% | Same matrix, tensor cores |
-
-Both paths drive the GPU the same way (each holds a batch of received data and drains
-the GPU stream **once per batch** — the raw path a burst of ~10 reorder windows, the
-RoCE path a small batch of messages whose recv buffers stay live during the pass-through
-compute), so compute overlaps with receive on both and every cell is drop-free. The
-fixed-batch rows above are the 8 MB native operating point, batch-matched to the raw
-path's ~8.19 MB reorder window (1024 packets × 8000 B).
-
-The remaining RoCE-vs-raw gap on the heavy GEMM is **pipelining depth, not transport**:
-at the 8 MB default, one RoCE message is a single GEMM with no neighbor to overlap, while
-a raw burst packs ~10 GEMMs back-to-back. Sub-dividing the message into a smaller compute
-batch packs several GEMMs per message and recovers most of the throughput — at a **4 MB
-batch (2 GEMMs/message), 3-rep**:
-
-| Workload | Throughput | Drops | GPU SM% | vs 8 MB default |
-| -------- | ---------: | ----- | ------: | --------------- |
-| GEMM (FP32) | 76.3 ±0.2 Gb/s | 0 | 77.7% | 2.2× (was 35.0) |
-| GEMM (FP16 tensor) | 92.3 ±2.0 Gb/s | 0 | 38.7% | within ~5% of raw (was 85.8) |
-
-The full curve is in the [batch-size sweep](#workload-batch-size-sweep) below.
-
-### Workload batch-size sweep
-
-The workload's compute working set is **decoupled from the I/O unit** via
-`--workload-batch-bytes` (env `WORKLOAD_BATCH` in `run_spark_bench.sh`): it sets the
-bytes fed to one compute call — the GEMM dimension is `n = √(batch/4)` — independent of
-the 8 MB RoCE message or 8 KB raw frame. RoCE sub-divides each message into batch-sized
-slices (one compute per slice); raw sizes its reorder window to the batch. Sweep run on
-`gemm_fp16` (cuBLAS takes the dimension per call); the tables above are the fixed-batch
-(8 MB) operating points.
-
-The two paths respond very differently, which is the whole point. **Raw is flat at line
-rate (~98 Gb/s) across every batch** — a raw burst always packs ~10 reorder windows, so
-the GPU stays fed regardless of the per-window size; the workload is never the bottleneck.
-**RoCE is strongly batch-sensitive** and **non-monotonic with a sweet spot at 2–4 MB**:
-one 8 MB message yields a single GEMM with nothing to overlap (underpipelined, 85 Gb/s),
-sub-dividing it to 2–4 MB packs 2–4 GEMMs per message and recovers **~92 Gb/s — on par
-with raw**, and tiny 512 KB slices collapse to 37 Gb/s on per-call launch/sync overhead
-(16 GEMMs/message). So the RoCE↔raw gap at the default batch is purely pipelining depth:
-give RoCE a batch that packs a few GEMMs per message and the two paths converge.
-
-| Batch | RoCE Gb/s | RoCE GPU SM% | Raw Gb/s | Raw GPU SM% |
-| ----: | --------: | -----------: | -------: | ----------: |
-| 512 KB | 37.0 | 76.9% | 98.0 | 24.8% |
-| 1 MB | 76.9 | 75.9% | 98.3 | 16.8% |
-| 2 MB | 90.8 | 54.0% | 98.2 | 13.6% |
-| 4 MB | 92.5 | 40.4% | 97.8 | 15.1% |
-| 8 MB | 85.3 | 52.2% | 96.7 | 16.0% |
-
-(`gemm_fp16`, single rep per point. Raw cells use the nearest whole-packet window to the
-batch size; RoCE caps the batch at the 8 MB message.)
+**GPU compute dents line rate only modestly, and stays wire-limited, not
+compute-limited** (SM well under 100% throughout). FFT is nearly free on both
+(SM ~6–17%, ≤1 Gb/s off baseline). The reorder/gather step assembles
+each unit's payload into one contiguous GPU buffer.
 
 ## Reproduce
 
@@ -382,6 +351,12 @@ apt-get install -y iproute2 iputils-ping ethtool iperf3 rdma-core ibverbs-utils 
 ```
 
 These provide `ip`/`nstat` (`iproute2`), `ethtool`, and `ib_send_bw` (`perftest`).
+
+Each `run_spark_bench.sh <backend> <mode>` invocation takes a **mode** that sets
+which cells run: `sweep` runs the full payload × batch × pairs matrix (the
+per-transport message-size tables above), while `smoke` runs just the single
+summary-table cell — one payload/batch/pairs operating point. `REPEATS=N` repeats
+every cell N times for error bars.
 
 **Raw Ethernet / GPUDirect (DPDK)** drives the two physical ports directly, so
 the `dq_wire_*` namespaces must **not** be up — they capture the ports and
@@ -420,33 +395,29 @@ before running; tear it down when finished:
 ./scripts/setup_spark_wire_loopback_netns.sh down        # tear down when done
 ```
 
-**GPU workload (FFT / GEMM)** re-runs a backend with a representative GPU
-workload in the receive path by exporting `WORKLOAD`. It composes with the same
-modes and netns setup as above (dpdk in the default namespace, rdma in the
-`dq_wire_*` namespaces):
+**GPU workload (FFT / GEMM)** re-runs a backend with a representative GPU workload
+in the receive path by exporting `WORKLOAD` (`none` | `fft` | `gemm` |
+`gemm_fp16`), run once per received I/O unit on the real payload. Each call is a
+fixed **1024³ GEMM** (override with `GEMM_DIM` / `--workload-gemm-dim`) or a batched
+**length-1024 FFT** (override with `FFT_LEN` / `--workload-fft-len`) — both compute
+sizes are held constant while the message size varies, so the FLOP count per call
+is fixed. It composes with the same netns setup as above (dpdk in the default
+namespace, rdma in the `dq_wire_*` namespaces). Use `smoke` — the single
+summary-table cell that the fixed-n table reports — and run all three workloads
+with error bars:
 
 ```bash
-# Raw / GPUDirect (netns down, ETH_DST_ADDR exported as above)
-WORKLOAD=fft  ./examples/run_spark_bench.sh dpdk smoke
-WORKLOAD=gemm ./examples/run_spark_bench.sh dpdk smoke
-# Socket / RoCE (netns up)
-WORKLOAD=fft  ./examples/run_spark_bench.sh rdma smoke
-WORKLOAD=gemm ./examples/run_spark_bench.sh rdma smoke
-```
-
-The chosen workload lands in the CSV `post_process` column; compare `gbps` /
-`gpu_sm_pct` against the matching `WORKLOAD=none` baseline.
-
-**Workload batch-size sweep** decouples the compute working set from the I/O unit
-by also exporting `WORKLOAD_BATCH` (bytes); it lands in the CSV `post_process_batch`
-column:
-
-```bash
-for B in 262144 524288 1048576 2097152 4194304 8388608; do
-  WORKLOAD=gemm_fp16 WORKLOAD_BATCH=$B ./examples/run_spark_bench.sh rdma smoke   # netns up
+# RoCE (netns up); Raw is identical with `dpdk`, netns down, ETH_DST_ADDR exported.
+for WL in none fft gemm; do
+  WORKLOAD=$WL REPEATS=3 ./examples/run_spark_bench.sh rdma smoke
 done
-# raw: netns down, ETH_DST_ADDR exported; same loop with `dpdk`
 ```
+
+In the workload case the payload size is fixed per backend (8 KB for DPDK, 8 MB
+message for RoCE), so a `sweep` only steps through batch size (DPDK) or
+client/server pairs (sockets). The workload lands in the CSV `post_process` column
+(with the GEMM dimension in `post_process_gemm_dim`); compare each `gbps` /
+`gpu_sm_pct` against the `WORKLOAD=none` baseline from the same loop.
 
 Each run writes `bench-results/<timestamp>-<backend>-<mode>/runs.csv`. See
 [Socket and RDMA Benchmarking](socket_benchmarking.md) and

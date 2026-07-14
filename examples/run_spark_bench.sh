@@ -29,6 +29,17 @@
 #                      tensor-core matmul). Honoured by all backends (dpdk, rdma,
 #                      socket-udp, socket-tcp); recorded in the CSV post_process
 #                      column.
+#   GEMM_DIM         — the square GEMM side length n (--workload-gemm-dim; default
+#                      1024), held fixed so FLOPs/call (2·n³) is constant. The
+#                      compute working set is n·n·elem_size, read from the front of
+#                      each received I/O unit. Recorded in post_process_gemm_dim.
+#   FFT_LEN          — the 1-D C2C transform length (--workload-fft-len; default
+#                      1024) for WORKLOAD=fft, held fixed while the I/O unit is
+#                      swept. Independent of GEMM_DIM.
+#   SYNC_INTERVAL    — drain the GPU stream every N compute calls
+#                      (--workload-sync-interval; default 2). Sweep it (1 2 4 8 16 32)
+#                      to see how much of the receive+compute ceiling is single-thread
+#                      GPU sync-stall. Recorded in post_process_sync.
 #
 # Optional (dpdk only): DPDK_{TX,RX}_PCI / DPDK_{TX,RX}_NETDEV override the p0/p1
 # ports used for the per-cell *_phy wire-transit check (defaults p0 0000:01:00.0 /
@@ -68,14 +79,17 @@ CSV="$OUT_DIR/runs.csv"
 # `pairs` = number of concurrent client/server process pairs (socket backends sweep
 # this; dpdk/rdma are always 1). `gbps` is aggregate App TX, `rx_gbps` aggregate App RX
 # (summed across pairs); App-level loss is (gbps - rx_gbps) / gbps.
-# post_process_batch (last column) = WORKLOAD_BATCH bytes, or "default" when unset.
-# Appended at the end so existing column positions are unchanged.
-echo "lang,backend,post_process,payload,batch,pairs,target_gbps,rep,seconds,packets,bytes,pps,gbps,rx_gbps,drops,drops_kind,cpu_master_pct,cpu_tx_pct,cpu_rx_pct,gpu_sm_pct,gpu_mem_pct,post_process_batch" > "$CSV"
+# post_process_gemm_dim = GEMM_DIM pinned dimension (default 1024).
+# post_process_sync (last column) = SYNC_INTERVAL, or "default" (2) when unset.
+echo "lang,backend,post_process,payload,batch,pairs,target_gbps,rep,seconds,packets,bytes,pps,gbps,rx_gbps,drops,drops_kind,cpu_master_pct,cpu_tx_pct,cpu_rx_pct,gpu_sm_pct,gpu_mem_pct,post_process_gemm_dim,post_process_sync" > "$CSV"
 
 # Capture slow-moving environment state once per result set.
 "$SCRIPT_DIR/bench_capture_environment.sh" "$OUT_DIR"
 
-RUN_SECONDS=30
+RUN_SECONDS="${RUN_SECONDS:-30}"
+if [[ ! "$RUN_SECONDS" =~ ^[0-9]+$ || "$RUN_SECONDS" -lt 1 ]]; then
+  echo "Invalid RUN_SECONDS '$RUN_SECONDS' (expected a positive integer)" >&2; exit 1
+fi
 # Repeats per cell for error bars. Each rep is a full independent run with its own
 # capture dir (<cell>-r<rep>) and CSV row; the perf-doc tables report mean +/- std
 # across reps. Default 1; set REPEATS=3 for the published re-run.
@@ -90,13 +104,62 @@ case "$WORKLOAD" in
   none|fft|gemm|gemm_fp16) ;;
   *) echo "Invalid WORKLOAD '$WORKLOAD' (expected none|fft|gemm|gemm_fp16)" >&2; exit 1 ;;
 esac
-# WORKLOAD_BATCH (bytes): the GPU compute working set per call, decoupled from the
-# I/O unit (RoCE sub-chunks each message; raw sets the reorder window). Empty =
-# backend default. Sweep it (e.g. 262144 524288 1048576 2097152 4194304 8388608)
-# to trace the compute-intensity vs throughput curve. Recorded in post_process_batch.
-WORKLOAD_BATCH="${WORKLOAD_BATCH:-}"
-if [[ -n "$WORKLOAD_BATCH" && ! "$WORKLOAD_BATCH" =~ ^[0-9]+$ ]]; then
-  echo "Invalid WORKLOAD_BATCH '$WORKLOAD_BATCH' (expected a positive byte count)" >&2; exit 1
+# GEMM_DIM: the square GEMM side length n (--workload-gemm-dim), held FIXED so the
+# FLOP count per call (2·n³) is constant. The compute working set is n·n·elem_size,
+# read from the front of each received I/O unit (RoCE message / raw reorder window),
+# so that unit must be at least that large. Default 1024. Recorded in the CSV
+# post_process_gemm_dim column.
+GEMM_DIM="${GEMM_DIM:-1024}"
+if [[ ! "$GEMM_DIM" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid GEMM_DIM '$GEMM_DIM' (expected a positive integer)" >&2; exit 1
+fi
+# FFT_LEN: the 1-D C2C transform length (--workload-fft-len) for WORKLOAD=fft, held
+# FIXED while the I/O unit is swept. Independent of GEMM_DIM. Default 1024.
+FFT_LEN="${FFT_LEN:-1024}"
+if [[ ! "$FFT_LEN" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid FFT_LEN '$FFT_LEN' (expected a positive integer)" >&2; exit 1
+fi
+# SYNC_INTERVAL: drain the GPU stream every N compute calls (--workload-sync-interval).
+# Larger N lets more GEMMs queue asynchronously before the single receive+compute
+# thread blocks on the GPU, so sweeping it (e.g. 1 2 4 8 16 32) shows how much of the
+# ceiling is CPU sync-stall vs the receive path. Empty = default (2). Recorded in the
+# CSV post_process_sync column.
+SYNC_INTERVAL="${SYNC_INTERVAL:-}"
+if [[ -n "$SYNC_INTERVAL" && ! "$SYNC_INTERVAL" =~ ^[0-9]+$ ]]; then
+  echo "Invalid SYNC_INTERVAL '$SYNC_INTERVAL' (expected a positive integer)" >&2; exit 1
+fi
+# MAX_INFLIGHT: for the RoCE event-recycling recv path, the max recv buffers with
+# in-flight GPU work before the receive thread blocks on the oldest event
+# (--workload-max-inflight). Larger absorbs more jitter before stalling reposts;
+# clamped in the bench to the event pool (63) and rx_depth. Empty = bench default
+# (min(rx_depth/2, 32)). Ignored by the run()+sync() DPDK/socket path.
+MAX_INFLIGHT="${MAX_INFLIGHT:-}"
+if [[ -n "$MAX_INFLIGHT" && ! "$MAX_INFLIGHT" =~ ^[0-9]+$ ]]; then
+  echo "Invalid MAX_INFLIGHT '$MAX_INFLIGHT' (expected a positive integer)" >&2; exit 1
+fi
+# NSYS: when set (NSYS=1), wrap the RoCE *server* (the receive + GPU-workload
+# process) in `nsys profile` to capture the CUDA/GPU timeline and thread states,
+# so we can see whether the GPU stream idles between GEMMs (receive-thread cadence
+# gaps) or the SM is genuinely busy. Only the server is traced -- the client is a
+# pure traffic generator. Per-cell report lands as <cell_dir>/roce_server.nsys-rep.
+# Use `rdma smoke` + a short RUN_SECONDS so the report stays small.
+NSYS="${NSYS:-}"
+NSYS_BIN="${NSYS_BIN:-}"
+if [[ -n "$NSYS" ]]; then
+  if [[ -z "$NSYS_BIN" ]]; then
+    # Resolve nsys: PATH first, then the usual CUDA toolkit location.
+    if command -v nsys >/dev/null 2>&1; then
+      NSYS_BIN="$(command -v nsys)"
+    elif [[ -x /usr/local/cuda/bin/nsys ]]; then
+      NSYS_BIN="/usr/local/cuda/bin/nsys"
+    fi
+  fi
+  if [[ -z "$NSYS_BIN" || ! -x "$NSYS_BIN" ]]; then
+    echo "NSYS set but no nsys binary found (looked on PATH and /usr/local/cuda/bin)." >&2
+    echo "Set NSYS_BIN=/path/to/nsys explicitly." >&2
+    exit 1
+  fi
+  echo "nsys profiling enabled: $NSYS_BIN" >&2
 fi
 DRIVER_LOG="$OUT_DIR/last_run.stderr"
 FAILURES=0
@@ -138,7 +201,23 @@ case "$BACKEND" in
     # the kernel's local routing table.
     BASE_YAML="$SCRIPT_DIR/daqiri_bench_rdma_tx_rx_spark_netns.yaml"
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_rdma"
-    CPU_MASTER=8; CPU_TX=17; CPU_RX=18
+    # One-way roles: the client (send-only) drives the TX-queue core 17; the server
+    # (receive-only) runs its RX-queue poller AND bench worker on core 19. Measure
+    # the sender core as cpu_tx and the SERVER RECEIVE core (19, not the idle
+    # client-RX core 18) as cpu_rx, so cpu_rx_pct reflects the true RoCE RC
+    # receiver cost.
+    CPU_MASTER=8; CPU_TX=17; CPU_RX=19
+    # Resolve the server (RX) / client (TX) netdevs inside the wire-loopback
+    # namespaces so each cell can assert wire transit via *_phy SerDes counters,
+    # exactly like the dpdk path. RoCE loops over the SAME cable, so a non-advancing
+    # server rx_packets_phy flags the on-chip eswitch short-cut instead of a true
+    # over-the-cable loopback -- the tell for a RoCE number above the ~99 Gb/s
+    # 100GbE line-rate ceiling. Empty if the netns is not up yet (the per-cell check
+    # then just skips with a WARN). Override RDMA_{SERVER,CLIENT}_NETDEV if needed.
+    RDMA_SERVER_NS="${RDMA_SERVER_NS:-dq_wire_server}"
+    RDMA_CLIENT_NS="${RDMA_CLIENT_NS:-dq_wire_client}"
+    RDMA_SERVER_NETDEV="${RDMA_SERVER_NETDEV:-$(ip netns exec "$RDMA_SERVER_NS" ls /sys/class/net 2>/dev/null | grep -vx lo | head -n1 || true)}"
+    RDMA_CLIENT_NETDEV="${RDMA_CLIENT_NETDEV:-$(ip netns exec "$RDMA_CLIENT_NS" ls /sys/class/net 2>/dev/null | grep -vx lo | head -n1 || true)}"
     ;;
     # Single-frame UDP sizes (<= the ~8972 B MTU payload, so no IP fragmentation).
     # 65507 is intentionally excluded: it fragments into ~8 packets and, under
@@ -186,6 +265,18 @@ case "$BACKEND" in
     ;;
   *) echo "Unknown backend: $BACKEND" >&2; exit 1 ;;
 esac
+
+# When a GPU workload is active, its pinned GEMM operand (n·n·elem_size, from
+# GEMM_DIM) must fit inside each received I/O unit -- the small entries in the
+# default payload sweep can't hold it. Restrict the sweep to the headline
+# (native-shape) size so the fixed-n comparison is a single clean point per
+# backend instead of silently disabling the workload on the small cells.
+# e.g. WORKLOAD=gemm_fp16 GEMM_DIM=1024 REPEATS=3 ./run_spark_bench.sh rdma sweep
+if [[ "$WORKLOAD" != "none" ]]; then
+  PAYLOADS_SWEEP=("${PAYLOADS_HEADLINE[@]}")
+fi
+# Optional space-separated override for the batch ladder (one-off experiments).
+[[ -n "${BATCHES_OVERRIDE:-}"  ]] && read -r -a BATCHES_SWEEP  <<< "$BATCHES_OVERRIDE"
 
 # All backends (dpdk, rdma, socket-udp, socket-tcp) now run the workload on real
 # received data, so the CSV post_process column records the requested workload
@@ -275,10 +366,13 @@ cpu_busy_pct() {
 
 # Sum a NIC *_phy SerDes counter (proves traffic crossed the cable, not an on-chip
 # eswitch short-cut). Empty netdev -> 0. Mirrors run_spark_mq_bench.sh's phy check.
+# Optional third arg is a network namespace (the RoCE/socket wire loopback moves the
+# cabled netdevs into dq_wire_{server,client}); empty reads the current namespace.
 phy_counter() {
-  local netdev="$1" key="$2"
+  local netdev="$1" key="$2" ns="${3:-}"
   [[ -z "$netdev" ]] && { echo 0; return; }
-  ethtool -S "$netdev" 2>/dev/null \
+  { if [[ -n "$ns" ]]; then ip netns exec "$ns" ethtool -S "$netdev" 2>/dev/null
+    else ethtool -S "$netdev" 2>/dev/null; fi; } \
     | awk -F'[: ]+' -v k="$key" '$2 == k { s += $3 } END { printf "%d", s+0 }'
 }
 
@@ -300,10 +394,14 @@ generate_yaml() {
       # (rx 512 / tx 128) but are capped so num_bufs * buf_size stays within a memory
       # budget per region -- small messages get the full deep window (where RNR NACKs
       # bite), large messages stay memory-bounded (where window depth is irrelevant).
-      local budget=1073741824   # 1 GiB pinned per memory region
+      # Overridable for the buffer-depth experiment: RDMA_BUDGET_GIB raises the
+      # per-region pinned-memory cap, RDMA_RX_NB / RDMA_TX_NB raise the window
+      # ceilings (num_bufs + {rx,tx}_depth). Defaults reproduce the shipped sizing
+      # (1 GiB, rx 512 / tx 128).
+      local budget=$(( ${RDMA_BUDGET_GIB:-1} * 1073741824 ))   # pinned per memory region
       local cap=$(( budget / payload )); (( cap < 1 )) && cap=1
-      local rx_nb=512; (( rx_nb > cap )) && rx_nb=$cap
-      local tx_nb=128; (( tx_nb > cap )) && tx_nb=$cap
+      local rx_nb=${RDMA_RX_NB:-512}; (( rx_nb > cap )) && rx_nb=$cap
+      local tx_nb=${RDMA_TX_NB:-128}; (( tx_nb > cap )) && tx_nb=$cap
       # Split the combined base per role, then apply the per-message-size window
       # rewrite to each. Server -> $out, client -> ${out%.yaml}_client.yaml.
       local role dst
@@ -311,7 +409,9 @@ generate_yaml() {
         if [[ "$role" == server ]]; then dst="$out"; else dst="${out%.yaml}_client.yaml"; fi
         # name-anchored num_bufs rewrite: RX regions -> rx_nb, TX regions -> tx_nb.
         # Depths are clamped to their region's num_bufs so the window never exceeds
-        # the buffers backing it.
+        # the buffers backing it. One-way (server receive-only + GEMM, client
+        # send-only) is baked into the base config, matching the DPDK and socket
+        # benches -- see the send:/receive: notes in the base YAML.
         python3 "$NETNS_GEN" "$BASE_YAML" --role "$role" | \
         awk -v p="$payload" -v bs="$payload" -v rxnb="$rx_nb" -v txnb="$tx_nb" '
           /^[[:space:]]*- name:/ { region = $0 }
@@ -331,36 +431,58 @@ generate_yaml() {
   esac
 }
 
-# One isolated core per socket pair: 16 + (idx % 4) -> cores 16-19 for pairs 0-3 (Spark
-# isolcpus), wrapping (oversubscribing) beyond four. Both the server and the client of a
-# pair pin to this same core. Sharing one CPU across the send and receive sides couples
-# the send rate to the receive rate (the sender cannot outrun the receiver it time-slices
-# with), so each pair sits near the per-core ceiling and N pairs scale to ~N x that. This
-# matches the reference four-pair methodology and keeps App TX ~= App RX with low loss.
-pair_core() { echo $(( 16 + ($1 % 4) )); }
+# Separate isolated cores for the send (client) and receive (server) sides of each
+# socket pair, so a pair's two processes never time-slice one CPU. Co-locating them
+# (the old "one core per pair" setup) forces a send/recv ping-pong on a single core
+# that, at mid-size messages (e.g. 8000 B), makes a single TCP stream metastable --
+# it locks into an efficient (~30 Gb/s) or a serialized (~15 Gb/s) mode for a whole
+# run, producing bimodal, high-variance results.
+#
+# CRITICAL: keep each pair's two cores in the SAME CPU cluster. GB10's ten big X925
+# cores are two clusters of five (5-9 and 15-19); straddling a pair across clusters
+# makes every payload pay cross-cluster cache-coherence latency and *regresses* large
+# messages (1 MiB 4-pair dropped ~90 -> ~77 Gb/s in testing). So pairs 0-1 sit in the
+# 15-19 cluster and pairs 2-3 in the 5-9 cluster, each send/recv intra-cluster
+# (master 8, spare 15). NOTE: separating send/recv also lets the UDP sender outrun the
+# receiver (no shared-core self-pacing), so UDP loss rises vs the co-pinned setup --
+# the more representative behaviour for an unpaced sender.
+SRV_PIN_CORES=(16 18 5 7)
+CLI_PIN_CORES=(17 19 6 9)
+pair_server_core() { echo "${SRV_PIN_CORES[$(( $1 % 4 ))]}"; }
+pair_client_core() { echo "${CLI_PIN_CORES[$(( $1 % 4 ))]}"; }
 
 # Write the server/client YAML pair for socket pair `idx`: split the combined base
 # per role, then substitute message_size, unique ports (SRV/CLI_PORT_BASE + idx),
-# and pin every queue to the pair's core.
+# and pin the server (receive) side and client (send) side to DIFFERENT isolated
+# cores so the pair does not time-slice one CPU (see pair_server_core comment).
 generate_socket_yaml() {
   local idx="$1" payload="$2" server_out="$3" client_out="$4"
   local srv_port=$(( SRV_PORT_BASE + idx ))
   local cli_port=$(( CLI_PORT_BASE + idx ))
-  local core; core="$(pair_core "$idx")"
+  # SOCKET_NOPIN=1 runs the bench workers unpinned (cpu_core -1 -> no affinity, the
+  # scheduler places them). For gathering the pinned-vs-non-pinned comparison only;
+  # the published report stays pinned like the other backends.
+  local server_core client_core
+  if [[ -n "${SOCKET_NOPIN:-}" ]]; then
+    server_core=-1; client_core=-1
+  else
+    server_core="$(pair_server_core "$idx")"
+    client_core="$(pair_client_core "$idx")"
+  fi
   python3 "$NETNS_GEN" "$BASE_YAML" --role server | \
   sed -E \
     -e "s|^( *message_size: ).*|\1$payload|g" \
-    -e "s|^( *local_addr: \"[a-z]+://[0-9.]+:)[0-9]+(\")|\1$srv_port\2|" \
+    -e "s|^( *local_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$srv_port\2|" \
     -e "s|^( *server_port: ).*|\1$srv_port|" \
-    -e "s|^( *cpu_core: ).*|\1$core|" \
+    -e "s|^( *cpu_core: ).*|\1$server_core|" \
     > "$server_out"
   python3 "$NETNS_GEN" "$BASE_YAML" --role client | \
   sed -E \
     -e "s|^( *message_size: ).*|\1$payload|g" \
-    -e "s|^( *local_addr: \"[a-z]+://[0-9.]+:)[0-9]+(\")|\1$cli_port\2|" \
-    -e "s|^( *remote_addr: \"[a-z]+://[0-9.]+:)[0-9]+(\")|\1$srv_port\2|" \
+    -e "s|^( *local_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$cli_port\2|" \
+    -e "s|^( *remote_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$srv_port\2|" \
     -e "s|^( *server_port: ).*|\1$srv_port|" \
-    -e "s|^( *cpu_core: ).*|\1$core|" \
+    -e "s|^( *cpu_core: ).*|\1$client_core|" \
     > "$client_out"
 }
 
@@ -399,7 +521,10 @@ run_cell() {
   # Every backend honours --workload (runs it on real received data); none = skip.
   if [[ "$WORKLOAD_EFF" != "none" ]]; then
     bench_extra+=(--workload "$WORKLOAD_EFF")
-    [[ -n "$WORKLOAD_BATCH" ]] && bench_extra+=(--workload-batch-bytes "$WORKLOAD_BATCH")
+    bench_extra+=(--workload-gemm-dim "$GEMM_DIM")
+    bench_extra+=(--workload-fft-len "$FFT_LEN")
+    [[ -n "$SYNC_INTERVAL" ]] && bench_extra+=(--workload-sync-interval "$SYNC_INTERVAL")
+    [[ -n "$MAX_INFLIGHT" ]] && bench_extra+=(--workload-max-inflight "$MAX_INFLIGHT")
   fi
   # Shutdown ordering: the server must keep receiving until the client has fully
   # stopped sending, otherwise the client's last in-flight messages have no peer
@@ -456,7 +581,20 @@ run_cell() {
     # addresses over the wire rather than short-cutting the kernel's local table.
     local yaml="$cell_dir/config.yaml"
     generate_yaml "$yaml" "$payload" "$batch"
-    ip netns exec dq_wire_server "$BENCH_BIN" "$yaml" \
+    # Optionally wrap the server (receive + GPU-workload) in nsys. Placed AFTER the
+    # netns exec so nsys traces the bench, not `ip netns exec`.
+    local -a nsys_pre=()
+    if [[ -n "$NSYS" ]]; then
+      nsys_pre=("$NSYS_BIN" profile --trace=cuda,osrt --sample=cpu --cpuctxsw=process-tree
+                --force-overwrite=true --output "$cell_dir/roce_server")
+    fi
+    # Snapshot the netns *_phy counters around the run to assert the RoCE traffic
+    # actually crossed the cable (client tx -> server rx over the wire), not the
+    # on-chip eswitch short-cut that lets a loopback exceed the 100GbE line rate.
+    local phy_tx_before phy_rx_before
+    phy_tx_before="$(phy_counter "$RDMA_CLIENT_NETDEV" tx_packets_phy "$RDMA_CLIENT_NS")"
+    phy_rx_before="$(phy_counter "$RDMA_SERVER_NETDEV" rx_packets_phy "$RDMA_SERVER_NS")"
+    ip netns exec dq_wire_server "${nsys_pre[@]}" "$BENCH_BIN" "$yaml" \
         --seconds "$server_seconds" "${bench_extra[@]}" --mode server \
         > "$cell_dir/server_stdout.txt" 2> "$cell_dir/server_stderr.txt" &
     local server_pid=$!
@@ -467,11 +605,39 @@ run_cell() {
     wait "$server_pid" 2>/dev/null || true
     cat "$cell_dir/server_stdout.txt" >> "$stdout"
     cat "$cell_dir/server_stderr.txt" >> "$stderr"
+    if [[ -n "$NSYS" && -f "$cell_dir/roce_server.nsys-rep" ]]; then
+      echo "=== nsys GPU kernel summary ($cell) ===" >&2
+      "$NSYS_BIN" stats --report cuda_gpu_kern_sum --format table \
+          "$cell_dir/roce_server.nsys-rep" >&2 || true
+      echo "=== nsys CUDA API summary ($cell) ===" >&2
+      "$NSYS_BIN" stats --report cuda_api_sum --format table \
+          "$cell_dir/roce_server.nsys-rep" >&2 || true
+      echo "nsys report: $cell_dir/roce_server.nsys-rep" >&2
+    fi
+    local phy_tx_delta phy_rx_delta
+    phy_tx_delta=$(( $(phy_counter "$RDMA_CLIENT_NETDEV" tx_packets_phy "$RDMA_CLIENT_NS") - phy_tx_before ))
+    phy_rx_delta=$(( $(phy_counter "$RDMA_SERVER_NETDEV" rx_packets_phy "$RDMA_SERVER_NS") - phy_rx_before ))
     # RDMA prints "Client complete: ... send_completions=N send_bytes=N seconds=S".
     pkts="$(extract_field 'Client complete' send_completions "$stdout")"
     bytes="$(extract_field 'Client complete' send_bytes "$stdout")"
     secs="$(extract_field 'Client complete' seconds "$stdout")"
     rx_bytes="$bytes"
+    # Wire-transit check. On the cable the server's rx_*_phy advances by at least one
+    # SerDes packet per RDMA message -- many more once a message exceeds the MTU and
+    # segments -- so a genuine over-the-wire run shows phy_rx_delta >= the message
+    # count. An on-chip eswitch short-cut leaves rx_*_phy essentially FLAT (only a
+    # handful of stray background/control packets), so a bare ">0" is not enough: a
+    # +22 on a 23M-message run passed the old check while never touching the cable.
+    # Require the delta to reach half the message count (generous margin for counter
+    # slack) before certifying wire transit.
+    local phy_min=$(( ${pkts:-0} / 2 ))
+    if [[ -z "$RDMA_SERVER_NETDEV" ]]; then
+      echo "WARN: $cell could not resolve server netdev in $RDMA_SERVER_NS (netns up?); skipped wire (*_phy) check" >&2
+    elif [[ "$phy_rx_delta" -lt "$phy_min" || "$phy_rx_delta" -le 0 ]]; then
+      echo "WARN: $cell rx_packets_phy advanced only +$phy_rx_delta on $RDMA_SERVER_NETDEV (expected >= ~$phy_min, one per message) -- traffic likely did NOT cross the wire (on-chip eswitch short-cut?)" >&2
+    else
+      echo "INFO: $cell wire OK -- client tx_packets_phy +$phy_tx_delta, server rx_packets_phy +$phy_rx_delta (>= $phy_min msgs)" >&2
+    fi
   else
     local yaml="$cell_dir/config.yaml"
     generate_yaml "$yaml" "$payload" "$batch"
@@ -485,13 +651,6 @@ run_cell() {
     local phy_tx_delta phy_rx_delta
     phy_tx_delta=$(( $(phy_counter "$DPDK_TX_NETDEV" tx_packets_phy) - phy_tx_before ))
     phy_rx_delta=$(( $(phy_counter "$DPDK_RX_NETDEV" rx_packets_phy) - phy_rx_before ))
-    if [[ -z "$DPDK_RX_NETDEV" ]]; then
-      echo "WARN: $cell could not resolve rx_port netdev ($DPDK_RX_PCI); skipped wire (*_phy) check" >&2
-    elif [[ "$phy_rx_delta" -le 0 ]]; then
-      echo "WARN: $cell rx_packets_phy did not advance ($phy_rx_delta) on $DPDK_RX_NETDEV -- traffic may NOT have crossed the wire (on-chip eswitch short-cut?)" >&2
-    else
-      echo "INFO: $cell wire OK -- p0 tx_packets_phy +$phy_tx_delta, p1 rx_packets_phy +$phy_rx_delta" >&2
-    fi
     # For RX-bearing benches "RX complete" is authoritative; fall back to "TX complete".
     pkts="$(extract_field 'RX complete' packets "$stdout")"
     bytes="$(extract_field 'RX complete' bytes   "$stdout")"
@@ -502,6 +661,19 @@ run_cell() {
       secs="$(extract_field 'TX complete' seconds  "$stdout")"
     fi
     rx_bytes="$bytes"
+    # Wire-transit check. Raw Ethernet is one SerDes packet per app packet, so a
+    # genuine over-the-wire run advances rx_*_phy by ~the received packet count; an
+    # on-chip eswitch short-cut leaves it near-flat. Require the delta to reach half
+    # the packet count -- a bare ">0" would let a stray background packet false-pass
+    # (the same hole the RoCE check had).
+    local phy_min=$(( ${pkts:-0} / 2 ))
+    if [[ -z "$DPDK_RX_NETDEV" ]]; then
+      echo "WARN: $cell could not resolve rx_port netdev ($DPDK_RX_PCI); skipped wire (*_phy) check" >&2
+    elif [[ "$phy_rx_delta" -lt "$phy_min" || "$phy_rx_delta" -le 0 ]]; then
+      echo "WARN: $cell rx_packets_phy advanced only +$phy_rx_delta on $DPDK_RX_NETDEV (expected >= ~$phy_min) -- traffic likely did NOT cross the wire (on-chip eswitch short-cut?)" >&2
+    else
+      echo "INFO: $cell wire OK -- p0 tx_packets_phy +$phy_tx_delta, p1 rx_packets_phy +$phy_rx_delta (>= $phy_min)" >&2
+    fi
   fi
   cp "$stderr" "$DRIVER_LOG"
 
@@ -572,9 +744,10 @@ run_cell() {
   gpu_mem="$(awk '/^ *[0-9]/ { count++; sum += $6 } END { if (count) printf "%.1f", sum/count; else print 0 }' \
                 "$cell_dir/nvidia_smi_dmon.txt" 2>/dev/null || echo 0)"
 
-  local pp_batch="${WORKLOAD_BATCH:-default}"
-  [[ -z "$pp_batch" ]] && pp_batch="default"
-  echo "$lang,$BACKEND,$WORKLOAD_EFF,$payload,$batch,$pairs,$target_gbps,$rep,$secs,$pkts,$bytes,$pps,$gbps,$rx_gbps,$drops,$drops_kind,$cpu_master_pct,$cpu_tx_pct,$cpu_rx_pct,$gpu_sm,$gpu_mem,$pp_batch" \
+  local pp_gemm_dim="$GEMM_DIM"
+  local pp_sync="${SYNC_INTERVAL:-default}"
+  [[ -z "$pp_sync" ]] && pp_sync="default"
+  echo "$lang,$BACKEND,$WORKLOAD_EFF,$payload,$batch,$pairs,$target_gbps,$rep,$secs,$pkts,$bytes,$pps,$gbps,$rx_gbps,$drops,$drops_kind,$cpu_master_pct,$cpu_tx_pct,$cpu_rx_pct,$gpu_sm,$gpu_mem,$pp_gemm_dim,$pp_sync" \
     | tee -a "$CSV"
 }
 

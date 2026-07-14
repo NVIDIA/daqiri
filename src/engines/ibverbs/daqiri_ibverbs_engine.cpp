@@ -2375,7 +2375,7 @@ void IbverbsEngine::initialize() {
   }
 
   // Raise each port's netdev MTU to cover the configured frame size before any
-  // traffic flows (the kernel netdev MTU gates jumbo RX on this path).
+  // traffic flows (the kernel netdev MTU gates jumbo RX and TX egress on this path).
   ensure_port_mtus();
 
   // All RX queues (and their TIRs) now exist -- install per-port flow steering.
@@ -3346,10 +3346,12 @@ void IbverbsEngine::ensure_port_mtus() {
   constexpr unsigned kEthHdr = 14;    // L2 header bytes excluded from the MTU
   constexpr unsigned kStdMtu = 1500;  // never lower below the standard MTU
   for (const auto& intf : cfg_.ifs_) {
-    // Largest L2 frame the NIC may deliver = max over queues of the sum of the
-    // queue's memory-region buffer sizes (HDS spreads one frame across regions).
-    size_t max_frame = 0;
-    auto accumulate = [&](const CommonQueueConfig& c) {
+    // Largest L2 frame the NIC may handle in each direction = max over that
+    // direction's queues of the sum of the queue's memory-region buffer sizes
+    // (HDS spreads one frame across regions). MTU sizing is direction-aware:
+    // RX folds in decap/pop overhead, TX egress folds in encap/push overhead.
+    size_t rx_frame = 0, tx_frame = 0;
+    auto queue_frame = [&](const CommonQueueConfig& c) {
       size_t sum = 0;
       for (const auto& name : c.mrs_) {
         auto it = cfg_.mrs_.find(name);
@@ -3357,24 +3359,34 @@ void IbverbsEngine::ensure_port_mtus() {
           sum += it->second.buf_size_;
         }
       }
-      max_frame = std::max(max_frame, sum);
+      return sum;
     };
     for (const auto& q : intf.rx_.queues_) {
-      accumulate(q.common_);
+      rx_frame = std::max(rx_frame, queue_frame(q.common_));
     }
     for (const auto& q : intf.tx_.queues_) {
-      accumulate(q.common_);
+      tx_frame = std::max(tx_frame, queue_frame(q.common_));
     }
-    max_frame += flow_max_decap_wire_overhead(intf.rx_.flows_);
-    if (max_frame <= kStdMtu + kEthHdr) {
+    const size_t rx_required = rx_frame + flow_max_decap_wire_overhead(intf.rx_.flows_);
+    const size_t tx_required = tx_frame + flow_max_encap_wire_overhead(intf.tx_.flows_);
+    const size_t required_frame = std::max(rx_required, tx_required);
+    if (required_frame <= kStdMtu + kEthHdr) {
       continue;
     }  // standard MTU already fits
 
-    const unsigned need = static_cast<unsigned>(max_frame) - kEthHdr;
+    const unsigned need =
+        static_cast<unsigned>(required_frame > kEthHdr ? required_frame - kEthHdr : 0);
+    // Computed-target log: unconditional w.r.t. the current netdev MTU, so the
+    // target is observable even when cur >= need and the raise is skipped
+    // (parity with DPDK's always-on MTU log). Placed after the standard-MTU
+    // skip so no-op ports don't log a 0 target.
+    DAQIRI_LOG_INFO("MTU: port {} requires frame {} B (target netdev MTU {})", intf.port_id_,
+                    required_frame, need);
     const std::string netdev = port_netdev(intf.port_id_);
     if (netdev.empty()) {
-      DAQIRI_LOG_WARN("MTU: no netdev for port {}; cannot raise MTU (need {}) -- jumbo RX may drop",
-                      intf.port_id_, need);
+      DAQIRI_LOG_WARN(
+          "MTU: no netdev for port {}; cannot raise MTU (need {}) -- jumbo frames may drop",
+          intf.port_id_, need);
       continue;
     }
     // Read the current MTU; only raise it (never shrink, to avoid disturbing
@@ -3402,12 +3414,12 @@ void IbverbsEngine::ensure_port_mtus() {
     ifr.ifr_mtu = static_cast<int>(need);
     if (ioctl(fd, SIOCSIFMTU, &ifr) != 0) {
       DAQIRI_LOG_WARN(
-          "MTU: could not raise {} MTU {}->{} ({}); jumbo RX may silently drop. Set it manually "
-          "(ip link set {} mtu {}) or run with privileges.",
+          "MTU: could not raise {} MTU {}->{} ({}); jumbo frames may silently drop. Set it "
+          "manually (ip link set {} mtu {}) or run with privileges.",
           netdev, cur, need, strerror(errno), netdev, need);
     } else {
       DAQIRI_LOG_INFO("MTU: raised {} (port {}) from {} to {} for max frame {} B", netdev,
-                      intf.port_id_, cur, need, max_frame);
+                      intf.port_id_, cur, need, required_frame);
     }
     close(fd);
   }

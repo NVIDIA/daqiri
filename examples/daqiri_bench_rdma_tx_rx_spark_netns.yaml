@@ -114,7 +114,10 @@ rdma_bench_server:
   # peer's posted receives and trigger RNR NACKs. Keep <= the MR num_bufs above.
   rx_depth: 128
   tx_depth: 128
-  send: true
+  # One-way (unidirectional) by default, matching the DPDK and socket benches:
+  # the server only receives, the client only sends. Set send: true here (and
+  # receive: true on the client) for a bidirectional test.
+  send: false
   receive: true
   server: true
 
@@ -131,6 +134,8 @@ rdma_bench_client:
   client_address: 10.250.0.1
   server_address: 10.250.0.2
   server_port: 4096
-  receive: true
+  # One-way (see server note above): the client only sends. Set receive: true for
+  # a bidirectional test.
+  receive: false
   send: true
   server: false

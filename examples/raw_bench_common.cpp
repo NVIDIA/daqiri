@@ -22,7 +22,6 @@
 #include <sched.h>
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <csignal>
 #include <cstring>
@@ -550,86 +549,31 @@ void print_queue_stats(const char *direction, const std::string &interface_name,
 }
 
 void rx_count_worker(const RawBenchRxConfig& cfg, std::atomic<bool>& stop, BenchWorkload workload,
-                     const ReorderGeometry& geom, int workload_gemm_n, int workload_sync_interval) {
+                     const ReorderGeometry& geom, int workload_gemm_dim,
+                     int workload_sync_interval, int workload_fft_len) {
   if (!set_current_thread_affinity(cfg.cpu_core, "bench_rx")) {
     stop.store(true);
     return;
   }
 
-  // Per-thread representative GPU workload + double-buffered reorder slots
-  // (both inert unless --workload is set). Each slot owns its ordered output
-  // buffer and holds the source DAQIRI burst until the slot's stream work is
-  // complete, so RX can enqueue GPU work without a per-burst synchronization.
-  constexpr size_t kWorkloadSlots = 2;
+  // Per-thread representative GPU workload + reorder pipeline (both inert unless
+  // --workload is set). If init fails we warn and keep counting so the run still
+  // produces throughput. The pipeline shares the workload's CUDA stream so the
+  // reorder kernel orders before the compute with no extra sync.
   const uint32_t out_payload_len = geom.out_payload_len > 0 ? geom.out_payload_len : 1;
   const size_t batch_bytes = static_cast<size_t>(geom.packets_per_batch) * out_payload_len;
   GpuWorkload gpu_workload;
-  struct WorkloadSlot {
-    ReorderPipeline pipeline;
-    cudaEvent_t done = nullptr;
-    daqiri::BurstParams *burst = nullptr;
-    bool busy = false;
-  };
-  std::array<WorkloadSlot, kWorkloadSlots> workload_slots;
-  bool run_workload = false;
-  bool workload_init_done = (workload == BenchWorkload::None);
-
-  // The GPU workload is initialized lazily on the first received burst so the
-  // cuFFT/cuBLAS handles, reorder buffers, and CUDA stream are created on the
-  // SAME device that holds the RX packet buffers. The RX memory region may live
-  // on a non-default GPU (e.g. affinity: 1 on the dual-port wire path); binding
-  // the workload to the default device would make every reorder/compute kernel
-  // dereference foreign device pointers and fault with an illegal access.
-  auto init_workload = [&](daqiri::BurstParams *burst) {
-    workload_init_done = true;
-    const void *sample =
-        daqiri::get_segment_packet_ptr(burst, geom.payload_segment, 0);
-    cudaPointerAttributes attrs{};
-    if (sample != nullptr &&
-        cudaPointerGetAttributes(&attrs, sample) == cudaSuccess &&
-        attrs.type == cudaMemoryTypeDevice) {
-      cudaSetDevice(attrs.device);
-    }
-    cudaGetLastError();  // clear any benign query error before real work
-    bool ok = gpu_workload.init(workload, batch_bytes, workload_sync_interval, workload_gemm_n);
-    for (auto &slot : workload_slots) {
-      ok = ok && slot.pipeline.init(ReorderMode::SeqReorder, geom.packets_per_batch,
-                                    out_payload_len, geom.payload_byte_offset,
-                                    geom.seq_bit_offset, geom.seq_bit_width,
-                                    /*staging_needed=*/false, gpu_workload.stream()) &&
-           cudaEventCreateWithFlags(&slot.done, cudaEventDisableTiming) == cudaSuccess;
-    }
-    if (!ok) {
+  ReorderPipeline pipeline;
+  if (workload != BenchWorkload::None) {
+    if (!gpu_workload.init(workload, batch_bytes, workload_sync_interval, workload_gemm_dim,
+                           workload_fft_len) ||
+        !pipeline.init(ReorderMode::SeqReorder, geom.packets_per_batch, out_payload_len,
+                       geom.payload_byte_offset, geom.seq_bit_offset, geom.seq_bit_width,
+                       /*staging_needed=*/false, gpu_workload.stream())) {
       std::cerr << "RX workload init failed; continuing without GPU workload\n";
-      for (auto &slot : workload_slots) {
-        if (slot.done != nullptr) {
-          cudaEventDestroy(slot.done);
-          slot.done = nullptr;
-        }
-      }
-      gpu_workload.sync();
-    } else {
-      run_workload = true;
     }
-  };
-
-  auto release_slot = [](WorkloadSlot &slot, bool wait) {
-    if (!slot.busy) {
-      return false;
-    }
-    const cudaError_t status = wait ? cudaEventSynchronize(slot.done) : cudaEventQuery(slot.done);
-    if (status == cudaSuccess) {
-      daqiri::free_all_packets_and_burst_rx(slot.burst);
-      slot.burst = nullptr;
-      slot.busy = false;
-      return true;
-    }
-    if (status != cudaErrorNotReady) {
-      std::cerr << "RX workload CUDA event error: " << cudaGetErrorString(status) << "\n";
-    }
-    return false;
-  };
-  size_t next_slot = 0;
+  }
+  const bool run_workload = gpu_workload.enabled() && pipeline.enabled();
 
   const int port_id = daqiri::get_port_id(cfg.interface_name);
   if (port_id < 0) {
@@ -673,54 +617,35 @@ void rx_count_worker(const RawBenchRxConfig& cfg, std::atomic<bool>& stop, Bench
       stats.bytes += daqiri::get_burst_tot_byte(burst);
       ++stats.bursts;
 
-      if (!workload_init_done) {
-        init_workload(burst);
-      }
-
       if (run_workload) {
-        for (auto &slot : workload_slots) {
-          release_slot(slot, false);
-        }
-
-        auto &slot = workload_slots[next_slot];
-        release_slot(slot, true);
-        next_slot = (next_slot + 1) % workload_slots.size();
-
-        slot.pipeline.reset_batch();
-        bool enqueued_work = false;
+        // Reorder the real received payloads into a contiguous device buffer and
+        // run the compute on it. Packet pointers are only valid until the burst
+        // is freed, so process complete batches within this burst (the remainder
+        // < packets_per_batch is dropped), then drain the stream so the reorder
+        // kernel has finished reading the buffers before they are recycled.
+        // Unlike the RoCE path (which reads the recv buffer zero-copy and recycles
+        // it with CUDA events), the reorder here copies into the pipeline's single
+        // shared output buffer, so overlapping GEMMs across bursts would need that
+        // buffer double/ring-buffered first -- hence the per-burst blocking drain.
+        // The raw path already sustains line rate, so events are not wired in here.
+        pipeline.reset_batch();
         for (int i = 0; i < num_pkts; ++i) {
-          slot.pipeline.add_device_packet(
+          pipeline.add_device_packet(
               daqiri::get_segment_packet_ptr(burst, geom.payload_segment, i));
-          if (slot.pipeline.collected() == geom.packets_per_batch) {
-            gpu_workload.run(slot.pipeline.finish_batch());
-            slot.pipeline.reset_batch();
-            enqueued_work = true;
+          if (pipeline.collected() == geom.packets_per_batch) {
+            gpu_workload.run(pipeline.finish_batch());
+            pipeline.reset_batch();
           }
         }
-
-        if (enqueued_work) {
-          cudaEventRecord(slot.done, static_cast<cudaStream_t>(gpu_workload.stream()));
-          slot.burst = burst;
-          slot.busy = true;
-        } else {
-          daqiri::free_all_packets_and_burst_rx(burst);
-        }
-      } else {
-        daqiri::free_all_packets_and_burst_rx(burst);
+        gpu_workload.sync();
       }
+      daqiri::free_all_packets_and_burst_rx(burst);
     }
     if (!got_any) {
       std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
   }
   gpu_workload.sync();
-  for (auto &slot : workload_slots) {
-    release_slot(slot, true);
-    if (slot.done != nullptr) {
-      cudaEventDestroy(slot.done);
-      slot.done = nullptr;
-    }
-  }
   const double secs =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
           .count();

@@ -258,7 +258,7 @@ After having modified the configuration file, ensure you have connected an SFP c
 
 By default the application runs for 10 seconds and then exits. You can change the duration by passing `--seconds <N>` after the YAML path, or stop it gracefully at any time with `Ctrl-C`.
 
-`daqiri_bench_raw_gpudirect` and `daqiri_bench_raw_hds` also accept `--workload none|fft|gemm|gemm_fp16`, which runs a representative GPU workload once per received reorder window on the **actual received packet data**: `fft` (batched cuFFT C2C transform), `gemm` (FP32 `cublasSgemm`), or `gemm_fp16` (the same-size mixed-precision FP16/tensor-core matmul that models inference). Each received burst's payloads are first reordered by sequence number into a contiguous GPU buffer (`examples/bench_pipeline.{h,cu}`) that the compute then consumes. The same `--workload` flag is honoured by the RoCE bench (`daqiri_bench_rdma`, in-order gather) and the socket bench (`daqiri_bench_socket`, host→device stage then UDP reorder / TCP gather). See the [DGX Spark GPU-workload results](performance-dgx-spark.md#gpu-workloads-in-the-receive-path).
+`daqiri_bench_raw_gpudirect` and `daqiri_bench_raw_hds` also accept `--workload none|fft|gemm|gemm_fp16`, which runs a representative GPU workload once per received reorder window on the **actual received packet data**: `fft` (batched cuFFT C2C transform), `gemm` (FP32 `cublasSgemm`), or `gemm_fp16` (the same-size mixed-precision FP16/tensor-core matmul that models inference). Each received burst's payloads are first reordered by sequence number into a contiguous GPU buffer (`examples/bench_pipeline.{h,cu}`) that the compute then consumes. `--workload-gemm-dim N` (default 1024) pins the square GEMM side length and `--workload-fft-len N` (default 1024) the 1-D FFT transform length, so the FLOP count per call stays constant as the I/O unit is swept. The same flags are honoured by the RoCE bench (`daqiri_bench_rdma`, in-order gather) and the socket bench (`daqiri_bench_socket`, host→device stage then UDP reorder / TCP gather). See the [DGX Spark GPU-workload results](performance-dgx-spark.md#gpu-workloads-in-the-receive-path).
 
 ## Flow programming smoke test
 
@@ -343,6 +343,8 @@ interface and queue.
 
 ??? abstract "See an example output"
 
+    This is an illustrative excerpt; source line numbers and pointer values vary by build.
+
     ```log
     [INFO] /workspace/daqiri/src/../include/daqiri/common.h:1045: Finished reading DAQIRI configuration
     [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1732: Attempting to use 2 ports for high-speed network
@@ -376,12 +378,10 @@ interface and queue.
     [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1850: DPDK init (0005:03:00.0) -- RX: ENABLED TX: ENABLED
     [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1863: Configuring RX queue: UNUSED_P0_Q0 (0) on port 0
     [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1896: Created mempool RXP_P0_Q0_MR0 : mbufs=32768 elsize=9228 ptr=0x17fca4380
-    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1908: Max packet size needed for RX: 9100
     [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1955: Configuring TX queue: tx_q_0 (0) on port 0
     [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1981: Created mempool TXP_P0_Q0_MR0 : mbufs=32768 elsize=8064 ptr=0x148cdc980
-    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1995: Max packet size needed with TX: 9100
-    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1996: Max packet size needed with RX only: 9100
-    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2012: Setting port config for port 0 mtu:9082
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1995: Max frame needed - RX: 0 TX: 8064
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2012: Setting port config for port 0 mtu:8046
     [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2026: Enabling RX scatter offload for single-segment RX queues (min buffer size: 9100)
     [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2062: Initializing port 0 with 1 RX queues and 1 TX queues...
     [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2079: Successfully configured ethdev
@@ -400,8 +400,7 @@ interface and queue.
     [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1908: Max packet size needed for RX: 8064
     [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1955: Configuring TX queue: UNUSED_TX_P1_Q0 (0) on port 1
     [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1981: Created mempool TXP_P1_Q0_MR0 : mbufs=32768 elsize=9100 ptr=0x1470e9e00
-    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1995: Max packet size needed with TX: 9100
-    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1996: Max packet size needed with RX only: 8064
+    [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1995: Max frame needed - RX: 8064 TX: 0
     [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2012: Setting port config for port 1 mtu:8046
     [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2026: Enabling RX scatter offload for single-segment RX queues (min buffer size: 8064)
     [INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2062: Initializing port 1 with 1 RX queues and 1 TX queues...
