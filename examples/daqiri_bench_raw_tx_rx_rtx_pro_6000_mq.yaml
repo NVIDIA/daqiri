@@ -8,12 +8,14 @@
 # eth_dst_addr from discovery (ETH_DST_ADDR) or:
 #   cat /sys/class/net/<rx-iface>/address
 #
-# Core map (pollers are DPDK EAL lcores; workers are bench pthreads):
-#   master_core 3
-#   TX q0: poller 11 / worker 10
-#   TX q1: poller 12 / worker 13
-#   RX q0: poller  9 / worker  8
-#   RX q1: poller 14 / worker 15
+# Core map (pollers are DPDK EAL lcores; workers are bench pthreads).
+# Defaults below are placeholders; run_rtx_pro_mq_bench.sh replaces them via
+# scripts/rtx_pro_discover.py (isolcpus on the NIC NUMA node + PIX GPU ordinals).
+#   master_core, TX q0 poll/work, TX q1 poll/work, RX q0 poll/work, RX q1 poll/work
+#
+# GPU affinity is the CUDA ordinal under CUDA_DEVICE_ORDER=PCI_BUS_ID. Discovery
+# picks PIX-linked GPUs per NIC and spreads TX queue 1 onto a second PIX GPU when
+# available. Override with RTX_TX_GPU / RTX_RX_GPU / RTX_TX_GPU2 / RTX_RX_GPU2.
 #
 %YAML 1.2
 ---
@@ -34,7 +36,7 @@ daqiri:
       buf_size: 8064
     - name: "Data_TX_GPU_1"
       kind: "device"
-      affinity: 0
+      affinity: 1
       num_bufs: 51200
       buf_size: 8064
     - name: "Data_RX_GPU_0"
@@ -50,7 +52,7 @@ daqiri:
 
     interfaces:
     - name: "tx_port"
-      address: "0000:75:00.0"
+      address: <0000:00:00.0>
       tx:
         queues:
         - name: "tx_q_0"
@@ -70,7 +72,7 @@ daqiri:
           offloads:
             - "tx_eth_src"
     - name: "rx_port"
-      address: "0000:05:00.0"
+      address: <0000:00:00.1>
       rx:
         flow_isolation: true
         queues:
