@@ -15,6 +15,8 @@
 
 set -u
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 read_mac() {
   local iface="$1"
   local path="/sys/class/net/${iface}/address"
@@ -146,4 +148,21 @@ fi
 
 if [[ -z "${TX_BDF:-}" || -z "${RX_BDF:-}" ]]; then
   echo "WARNING: could not resolve PCIe BDFs; pass --tx-bdf/--rx-bdf to run_rtx_pro_bench.sh" >&2
+fi
+
+# GPU ordinals (PIX to each NIC) and poll-core layout for bench YAML generation.
+# Requires CUDA (libcuda) and nvidia-smi; override with TX_GPU/RX_GPU/RTX_CPU_CORES.
+export CUDA_DEVICE_ORDER="${CUDA_DEVICE_ORDER:-PCI_BUS_ID}"
+DISCOVER_PY="$REPO_ROOT/scripts/rtx_pro_discover.py"
+if [[ -f "$DISCOVER_PY" && -n "${TX_BDF:-}" && -n "${RX_BDF:-}" ]]; then
+  # shellcheck disable=SC1090
+  eval "$(RTX_TX_BDF="$TX_BDF" RTX_RX_BDF="$RX_BDF" python3 "$DISCOVER_PY" 2>/dev/null)" || true
+fi
+
+if [[ -n "${RTX_TX_GPU:-}" ]]; then
+  echo "  TX GPU:    ordinal ${RTX_TX_GPU} (+ queue2 ${RTX_TX_GPU2:-$RTX_TX_GPU})"
+  echo "  RX GPU:    ordinal ${RTX_RX_GPU} (+ queue2 ${RTX_RX_GPU2:-$RTX_RX_GPU})"
+fi
+if [[ -n "${RTX_CPU_CORES:-}" ]]; then
+  echo "  poll cores: ${RTX_CPU_CORES}"
 fi

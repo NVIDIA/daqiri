@@ -104,6 +104,7 @@ esac
 WORKLOAD_BATCH="${WORKLOAD_BATCH:-}"
 GEMM_N="${GEMM_N:-}"
 SYNC_INTERVAL="${SYNC_INTERVAL:-}"
+MAX_INFLIGHT="${MAX_INFLIGHT:-16}"
 
 # --------------------------------------------------------------------------
 # build-only
@@ -145,9 +146,12 @@ if [[ "$MODE" == "build-only" ]]; then
   exit $?
 fi
 
+export LD_LIBRARY_PATH="/opt/daqiri/lib:$BUILD_DIR:${LD_LIBRARY_PATH:-}" 2>/dev/null || true
+
 # --------------------------------------------------------------------------
 # Discovery + wire preflight
 # --------------------------------------------------------------------------
+export CUDA_DEVICE_ORDER="${CUDA_DEVICE_ORDER:-PCI_BUS_ID}"
 if [[ -x "$DISCOVER" ]]; then
   # shellcheck disable=SC1090
   source "$DISCOVER"
@@ -181,8 +185,11 @@ FAILURES=0
 
 TX_BDF="${RTX_TX_BDF:-0000:61:00.0}"
 RX_BDF="${RTX_RX_BDF:-0000:61:00.1}"
-TX_GPU="${TX_GPU:-0}"
-RX_GPU="${RX_GPU:-1}"
+TX_GPU="${TX_GPU:-${RTX_TX_GPU:-0}}"
+RX_GPU="${RX_GPU:-${RTX_RX_GPU:-1}}"
+CPU_MASTER="${RTX_MASTER_CORE:-3}"
+CPU_TX="${RTX_TX_Q0_POLL:-11}"
+CPU_RX="${RTX_RX_Q0_POLL:-9}"
 
 wire_preflight() {
   if [[ "$IS_SW" == "1" ]]; then
@@ -346,6 +353,11 @@ case "$BACKEND" in
     ;;
 esac
 
+# Discovery overrides backend defaults when sourced from discover_rtx_pro_topology.sh.
+CPU_MASTER="${RTX_MASTER_CORE:-$CPU_MASTER}"
+CPU_TX="${RTX_TX_Q0_POLL:-$CPU_TX}"
+CPU_RX="${RTX_RX_Q0_POLL:-$CPU_RX}"
+
 DROP_CURVE_TARGETS=(1 5 10 25 50 75 100 0)
 
 # SW loopback rides the single-segment GPUDirect ring in the dpdk engine. HDS
@@ -489,6 +501,11 @@ generate_yaml() {
         in_rx && /^      affinity:/ { sub(/[0-9]+$/, rxg); in_rx=0 }
         { print }
       ' "$out" > "${out}.tmp" && mv "${out}.tmp" "$out"
+      sed -E \
+        -e "s|^(    master_core:)[[:space:]]*[0-9]+|\1 $CPU_MASTER|" \
+        -e "/- name: \"tx_port\"/,/- name: \"rx_port\"/ s|^(          cpu_core:)[[:space:]]*[0-9]+|\1 $CPU_TX|" \
+        -e "/- name: \"rx_port\"/,/^bench_/ s|^(          cpu_core:)[[:space:]]*[0-9]+|\1 $CPU_RX|" \
+        "$out" > "${out}.tmp" && mv "${out}.tmp" "$out"
       ;;
     dpdk-hds)
       local ipv4_len=$((payload + 50))
@@ -569,6 +586,7 @@ run_cell() {
     [[ -n "$WORKLOAD_BATCH" ]] && args+=(--workload-batch-bytes "$WORKLOAD_BATCH")
     [[ -n "$GEMM_N" ]] && args+=(--workload-gemm-n "$GEMM_N")
     [[ -n "$SYNC_INTERVAL" ]] && args+=(--workload-sync-interval "$SYNC_INTERVAL")
+    [[ -n "$MAX_INFLIGHT" && "$BACKEND" == "rdma" ]] && args+=(--workload-max-inflight "$MAX_INFLIGHT")
   fi
 
   local tx_pid=""

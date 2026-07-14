@@ -10,10 +10,10 @@
 # size. Cells:
 #
 #   cell  TX pollers  RX pollers
-#   1t1r  11          9
-#   1t2r  11          9,14
-#   2t1r  11,12       9
-#   2t2r  11,12       9,14
+#   1t1r  1           1
+#   1t2r  1           2
+#   2t1r  2           1
+#   2t2r  2           2
 #
 # Usage (as root, privileged container):
 #   source scripts/discover_rtx_pro_topology.sh
@@ -24,6 +24,7 @@
 #   PAYLOADS      space-separated payload bytes (default "64 256 1024 4096 8000")
 #   REPEATS       repeats per (cell, payload) (default 1)
 #   RTX_TX_BDF, RTX_RX_BDF, RTX_RX_IFACE, ETH_DST_ADDR from discovery
+#   RTX_TX_GPU, RTX_RX_GPU, RTX_TX_GPU2, RTX_RX_GPU2, RTX_CPU_CORES (discovery)
 #
 # Plot afterwards:
 #   scripts/plot_rtx_pro_bench.py bench-results/<ts>-rtx-pro-mq/runs.csv
@@ -45,17 +46,26 @@ MQ_GEN="$REPO_ROOT/scripts/gen_rtx_pro_mq_config.py"
 PLOT_SCRIPT="$REPO_ROOT/scripts/plot_rtx_pro_bench.py"
 
 export LD_LIBRARY_PATH="/opt/daqiri/lib:$BUILD_DIR:${LD_LIBRARY_PATH:-}"
+export CUDA_DEVICE_ORDER="${CUDA_DEVICE_ORDER:-PCI_BUS_ID}"
 
 if [[ -x "$DISCOVER" ]]; then
   # shellcheck disable=SC1090
   source "$DISCOVER"
 fi
 
-TX_BDF="${RTX_TX_BDF:-0000:75:00.0}"
-RX_BDF="${RTX_RX_BDF:-0000:05:00.0}"
-TX_GPU="${TX_GPU:-0}"
-RX_GPU="${RX_GPU:-1}"
-RX_NETDEV="${RTX_RX_IFACE:-}"
+TX_BDF="${RTX_TX_BDF:-}"
+RX_BDF="${RTX_RX_BDF:-}"
+TX_GPU="${TX_GPU:-${RTX_TX_GPU:-0}}"
+RX_GPU="${RX_GPU:-${RTX_RX_GPU:-1}}"
+TX_GPU2="${TX_GPU2:-${RTX_TX_GPU2:-$TX_GPU}}"
+RX_GPU2="${RX_GPU2:-${RTX_RX_GPU2:-$RX_GPU}}"
+
+# master, TX q0 poll/work, TX q1 poll/work, RX q0 poll/work, RX q1 poll/work
+if [[ -n "${RTX_CPU_CORES:-}" ]]; then
+  read -r -a CPU_CORES <<< "$RTX_CPU_CORES"
+else
+  CPU_CORES=(3 11 10 12 13 9 8 14 15)
+fi
 
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT_DIR="${DAQIRI_BENCH_RESULTS_DIR:-$REPO_ROOT/bench-results}/$TS-rtx-pro-mq"
@@ -80,6 +90,12 @@ if [[ -z "${ETH_DST_ADDR:-}" ]]; then
   echo "ERROR: ETH_DST_ADDR must be set (source scripts/discover_rtx_pro_topology.sh)" >&2
   exit 1
 fi
+if [[ -z "$TX_BDF" || -z "$RX_BDF" ]]; then
+  echo "ERROR: RTX_TX_BDF and RTX_RX_BDF must be set (discovery or env)" >&2
+  exit 1
+fi
+
+CPU_CORES_CSV="$(IFS=,; echo "${CPU_CORES[*]}")"
 
 CELLS=(
   "1t1r 1 1"
@@ -87,9 +103,6 @@ CELLS=(
   "2t1r 2 1"
   "2t2r 2 2"
 )
-
-# master, TX q0 poll/work, TX q1 poll/work, RX q0 poll/work, RX q1 poll/work
-CPU_CORES=(3 11 10 12 13 9 8 14 15)
 
 FAILURES=0
 
@@ -154,7 +167,7 @@ cpu_busy_pct() {
 gpu_sample() {
   local out="$1"
   nvidia-smi --query-gpu=utilization.gpu,utilization.memory \
-    --format=csv,noheader,nounits -i "$TX_GPU,$RX_GPU" 2>/dev/null \
+    --format=csv,noheader,nounits -i "$TX_GPU,$TX_GPU2,$RX_GPU,$RX_GPU2" 2>/dev/null \
     | awk -F', ' '{
         sm += $1; mem += $2; n++
       } END {
@@ -166,8 +179,8 @@ gpu_sample() {
 run_cell() {
   local cell="$1" tx_count="$2" rx_count="$3" payload="$4" rep="${5:-1}"
   local tx_cores rx_cores
-  [[ "$tx_count" == 2 ]] && tx_cores="11|12" || tx_cores="11"
-  [[ "$rx_count" == 2 ]] && rx_cores="9|14" || rx_cores="9"
+  [[ "$tx_count" == 2 ]] && tx_cores="${CPU_CORES[1]}|${CPU_CORES[3]}" || tx_cores="${CPU_CORES[1]}"
+  [[ "$rx_count" == 2 ]] && rx_cores="${CPU_CORES[5]}|${CPU_CORES[7]}" || rx_cores="${CPU_CORES[5]}"
   local run_dir="$OUT_DIR/$cell/p$payload/r$rep"
   mkdir -p "$run_dir"
 
@@ -176,6 +189,8 @@ run_cell() {
         --payload "$payload" --eth-dst "$ETH_DST_ADDR" \
         --tx-bdf "$TX_BDF" --rx-bdf "$RX_BDF" \
         --tx-gpu "$TX_GPU" --rx-gpu "$RX_GPU" \
+        --tx-gpu2 "$TX_GPU2" --rx-gpu2 "$RX_GPU2" \
+        --cpu-cores "$CPU_CORES_CSV" \
         > "$tmp_cfg" 2> "$run_dir/gen.err"; then
     echo "ERROR: $cell p$payload config generation failed" >&2
     cat "$run_dir/gen.err" >&2
@@ -236,6 +251,7 @@ run_cell() {
 
 echo "RTX PRO 6000 multi-queue sweep -- ${RUN_SECONDS}s per (cell, payload)"
 echo "TX BDF=$TX_BDF RX BDF=$RX_BDF ETH_DST=$ETH_DST_ADDR"
+echo "TX GPU=$TX_GPU,$TX_GPU2  RX GPU=$RX_GPU,$RX_GPU2  cores=${CPU_CORES[*]}"
 echo "Payloads: $PAYLOADS"
 echo "Output:   $OUT_DIR"
 echo
