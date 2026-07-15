@@ -19,7 +19,7 @@ If you don't have any NIC at all, the `*_sw_loopback*` variants of the Raw Ether
 
 (`DAQIRI_ENGINE` at the CMake layer selects which optional engine implementations to compile in — `dpdk` enables `stream_type: "raw"`, and `ibverbs` enables `roce://` endpoints. Linux UDP/TCP sockets are always built in. The default build is `dpdk ibverbs`.)
 
-For a shorter selection guide, start with the [Benchmarking overview](../benchmarks/benchmarks.md). With a stream type in mind, read down the questions below and stop at the first one that matches what you're trying to do. Each section names the YAML, the binary that consumes it, and any platform-specific notes.
+For a shorter selection guide, start with the [Benchmarking overview](../benchmarks/index.md). With a stream type in mind, read down the questions below and stop at the first one that matches what you're trying to do. Each section names the YAML, the binary that consumes it, and any platform-specific notes.
 
 ??? question "1. I want to measure baseline throughput"
     Pick the stream type that matches your stack (see the [overview](#choosing-the-appropriate-daqiri-stream-type-for-your-setup) above), then the hardware or transport variant.

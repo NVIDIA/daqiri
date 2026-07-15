@@ -278,5 +278,5 @@ Once DAQIRI is built, follow the tutorials to configure your system and run your
 1. [**Concepts**](concepts.md) — terminology (stream types, engines, endpoint URI schemes, packet, burst, segment, flow, queue, memory region), GPUDirect, and zero-copy ownership. Keep this open in a second tab.
 2. [**API Guide**](api-reference/index.md) — the six-step DAQIRI application lifecycle and configuration-first model
 3. [**System Configuration**](tutorials/system_configuration.md) — NIC drivers, link layers, GPUDirect, hugepages, CPU isolation, GPU clocks, and more
-4. [**Benchmarking**](benchmarks/benchmarks.md) — choose an engine, then run socket/RDMA or raw Ethernet benchmarks
+4. [**Benchmarking**](benchmarks/index.md) — choose an engine, then run socket/RDMA or raw Ethernet benchmarks
 5. [**Understanding the Configuration File**](tutorials/configuration-walkthrough.md) — annotated YAML walkthrough
