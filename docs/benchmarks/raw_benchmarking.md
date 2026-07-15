@@ -9,7 +9,7 @@ DAQIRI provides raw Ethernet benchmark applications that use DPDK to drive an NV
 
 Make sure to [build the DAQIRI library](../getting-started.md#build-the-daqiri-library) beforehand.
 
-**Not sure which stream type to benchmark?** Start with the [Benchmarking overview](benchmarks.md). Use this page after you have chosen the raw Ethernet stream type. Use [Socket and RDMA Benchmarking](socket_benchmarking.md) for TCP, UDP, and RoCE/RDMA runs.
+**Not sure which stream type to benchmark?** Start with the [Benchmarking overview](index.md). Use this page after you have chosen the raw Ethernet stream type. Use [Socket and RDMA Benchmarking](socket_benchmarking.md) for TCP, UDP, and RoCE/RDMA runs.
 
 !!! note "Prerequisites"
 
@@ -580,5 +580,5 @@ The `*_packets_phy` and `*_bytes_phy` counters are physical-link counters. They 
         You might need to kill some of the listed processes to free up GPU VRAM.
 
 ---
-**Previous:** [Benchmarking](benchmarks.md)<br>
+**Previous:** [Benchmarking](index.md)<br>
 **Next:** [Understanding the Configuration File](../tutorials/configuration-walkthrough.md) — deep dive into the YAML parameters

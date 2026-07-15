@@ -120,7 +120,7 @@ The web docs live in `docs/` and are built with [MkDocs Material](https://squidf
 - `docs/api-reference/configuration.md`, `docs/api-reference/cpp.md`, `docs/api-reference/python.md` — YAML schema, C++ API, and Python bindings docs
 - `docs/tutorials/` — tutorial walkthroughs (system config, config-file walkthrough, Holoscan integration)
 - `docs/benchmarks/` — benchmark guide pages, surfaced as a top-level "Benchmarking" nav section in `mkdocs.yml` and the landing page (`docs/index.md`):
-  - `docs/benchmarks/benchmarks.md` — overview and engine-selection decision tree
+  - `docs/benchmarks/index.md` — overview and engine-selection decision tree
   - `docs/benchmarks/socket_benchmarking.md` — "Socket and RDMA Benchmarking" (TCP/UDP and RoCE/RDMA)
   - `docs/benchmarks/raw_benchmarking.md` — "Raw Ethernet Benchmarking" (DPDK `raw_*` benches)
   - `docs/benchmarks/performance-dgx-spark.md` — per-platform performance report for DGX Spark stream/protocol combinations (the long internal report lives outside the repo in `projects/daqiri-notes/`)
