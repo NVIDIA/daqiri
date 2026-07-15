@@ -13,11 +13,11 @@ DAQIRI's baseline requirements depend on which [stream type](concepts.md#stream-
 |-----------|-------------|
 | **OS** | Linux (kernel 5.4+), Ubuntu 22.04 recommended |
 | **CUDA** | CUDA Toolkit 12.2+ (the container ships CUDA 13.1) |
-| **NIC** *(Raw Ethernet / GPUDirect / RoCE only)* | NVIDIA ConnectX-6 Dx or later. Default Ubuntu kernel drivers (inbox) are sufficient; we recommend also installing `doca-ofed` for the diagnostic utilities (`ibstat`, `ibv_devinfo`, `ibdev2netdev`, `mlnx_perf`, `mlxconfig`, …). |
+| **NIC** *(Raw Ethernet / GPUDirect / RoCE only)* | NVIDIA ConnectX-6 Dx or later. Default Ubuntu kernel drivers (inbox) are sufficient. We recommend also installing `doca-ofed` for the diagnostic utilities (`ibstat`, `ibv_devinfo`, `ibdev2netdev`, `mlnx_perf`, `mlxconfig`, and so on). |
 | **GPU** *(GPUDirect only)* | RTX or Data Center GPU. GeForce is not supported. |
 | **DPDK** | Included in the DAQIRI container (patched for dma-buf, so `nvidia-peermem` is **not required** inside the container); see [bare-metal dependencies](#bare-metal-dependencies) below for the host build. |
 | **RoCE** | `libibverbs` and `librdmacm` (for `stream_type: "socket"` and `roce://` endpoints). |
-| **GDS** | Optional `cufile.h` and `libcufile` for file writes from CUDA device memory. Runtime device-memory writes require a working cuFile installation; for regular `nvidia-fs` mode, the `nvidia-fs` kernel module must be loaded and the destination storage stack must be supported. |
+| **GDS** | Optional `cufile.h` and `libcufile` for file writes from CUDA device memory. Runtime device-memory writes require a working cuFile installation. For regular `nvidia-fs` mode, the `nvidia-fs` kernel module must be loaded and the destination storage stack must be supported. |
 | **S3** | Optional AWS SDK for C++ with the `s3` component for raw packet uploads to Amazon S3 or S3-compatible object stores. The DAQIRI container builds this SDK from source. |
 
 Supported platforms include [NVIDIA Data Center](https://www.nvidia.com/en-us/data-center/) systems, edge systems like [NVIDIA IGX](https://www.nvidia.com/en-us/edge-computing/products/igx/) and [NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/workstations/dgx-spark/), and `x86_64` systems with the above components.
@@ -96,7 +96,7 @@ Then build the DAQIRI library:
     BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
     ```
 
-    Set `BASE_IMAGE=torch` to build on top of NGC PyTorch instead of the default CUDA base — useful for Torch / TensorRT inference workflows that ingest packets directly into GPU memory:
+    Set `BASE_IMAGE=torch` to build on top of NGC PyTorch instead of the default CUDA base. This is useful for Torch / TensorRT inference workflows that ingest packets directly into GPU memory:
 
     ```bash
     BASE_IMAGE=torch BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
@@ -212,11 +212,11 @@ DAQIRI's shared-library ABI version is tracked separately through
 | `DAQIRI_ENABLE_OTEL_METRICS` | `OFF` | Enable OpenTelemetry C++ metrics instrumentation. When enabled, OpenTelemetry C++ API package metadata must be available to CMake. |
 | `DAQIRI_ENABLE_S3` | `OFF` | Enable AWS SDK-backed asynchronous raw packet writes to S3. |
 | `DAQIRI_PREFER_SYSTEM_YAML_CPP` | `OFF` | Prefer a system-installed `yaml-cpp` over the vendored `third_party/yaml-cpp` submodule. Keep `OFF` if a conda/miniforge env is on `PATH`. |
-| `BUILD_SHARED_LIBS` | — | Build as shared library. |
+| `BUILD_SHARED_LIBS` | n/a | Build as shared library. |
 
 Linux UDP/TCP sockets are always available. Applications that need kernel socket
 tuning can call `socket_setsockopt()` after resolving a TCP/UDP connection ID,
-passing the numeric `level` and option constants from system headers; DAQIRI does
+passing the numeric `level` and option constants from system headers. DAQIRI does
 not maintain symbolic socket-option mappings in YAML.
 
 For Raw Ethernet (`stream_type: "raw"`), `daqiri_init()` validates that each `rx.flows`
@@ -225,8 +225,8 @@ entry's legacy `action.id` or final ordered `actions:` queue action matches an
 Initialization fails if any RX flow rule, TX transform flow, send-to-kernel fallback
 (when `flow_isolation: true`), or `tx_eth_src` offload rule cannot be installed.
 Raw DPDK and raw ibverbs can offload VLAN push/pop and VXLAN, GRE, or NVGRE
-encap/decap through flow actions; socket/RDMA streams reject those actions.
-`rx.flows` may also be omitted for queues-only startup; applications can then add and delete
+encap/decap through flow actions. Socket/RDMA streams reject those actions.
+`rx.flows` may also be omitted for queues-only startup, and applications can then add and delete
 RX flow rules at runtime with `add_rx_flow_async()` / `delete_flow_async()`. Dynamic
 RX flows can use the same decap/pop action ordering as static RX flows. The DPDK template
 fast path is enabled and sized by `rx.dynamic_flow_capacity` (default `0`, set a positive
@@ -254,7 +254,7 @@ writes. Host-backed burst writes continue to use POSIX APIs and do not require G
 
 OpenTelemetry metrics builds register observable counters for received packets,
 transmitted packets, received bytes, transmitted bytes, and dropped packets. DAQIRI
-does not configure an SDK reader or exporter; applications that want exported data
+does not configure an SDK reader or exporter. Applications that want exported data
 must configure the OpenTelemetry C++ SDK before or during DAQIRI initialization.
 
 When using `DAQIRI_ENABLE_S3=ON`, the container build installs AWS SDK for C++
@@ -275,8 +275,8 @@ rules, not both. Mixed configs are rejected at `daqiri_init`. See
 
 Once DAQIRI is built, follow the tutorials to configure your system and run your first benchmark:
 
-1. [**Concepts**](concepts.md) — terminology (stream types, engines, endpoint URI schemes, packet, burst, segment, flow, queue, memory region), GPUDirect, and zero-copy ownership. Keep this open in a second tab.
-2. [**API Guide**](api-reference/index.md) — the six-step DAQIRI application lifecycle and configuration-first model
-3. [**System Configuration**](tutorials/system_configuration.md) — NIC drivers, link layers, GPUDirect, hugepages, CPU isolation, GPU clocks, and more
-4. [**Benchmarking**](benchmarks/index.md) — choose an engine, then run socket/RDMA or raw Ethernet benchmarks
-5. [**Understanding the Configuration File**](tutorials/configuration-walkthrough.md) — annotated YAML walkthrough
+1. [**Concepts**](concepts.md): terminology (stream types, engines, endpoint URI schemes, packet, burst, segment, flow, queue, memory region), GPUDirect, and zero-copy ownership. Keep this open in a second tab.
+2. [**API Guide**](api-reference/index.md): the six-step DAQIRI application lifecycle and configuration-first model
+3. [**System Configuration**](tutorials/system_configuration.md): NIC drivers, link layers, GPUDirect, hugepages, CPU isolation, GPU clocks, and more
+4. [**Benchmarking**](benchmarks/index.md): choose an engine, then run socket/RDMA or raw Ethernet benchmarks
+5. [**Understanding the Configuration File**](tutorials/configuration-walkthrough.md): annotated YAML walkthrough

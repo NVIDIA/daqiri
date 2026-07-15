@@ -7,7 +7,7 @@ hide:
 
 Use this page when the peer transport is TCP, UDP, or RoCE/RDMA. These benchmarks use the Linux networking stack for TCP/UDP and RDMA verbs for RoCE, so the same client/server namespace shape is useful for proving that traffic leaves the host through the expected NIC path.
 
-For **two-host Spark cross-cable** tests (not netns), RoCE/RDMA still needs kernel reachability to the peer — apply the host route and static neighbor steps in [System Configuration → Cross-host variant](../tutorials/system_configuration.md#cross-host-variant-two-sparks) before running `daqiri_bench_rdma` with the `_xhost` configs.
+For **two-host Spark cross-cable** tests (not netns), RoCE/RDMA still needs kernel reachability to the peer, so apply the host route and static neighbor steps in [System Configuration → Cross-host variant](../tutorials/system_configuration.md#cross-host-variant-two-sparks) before running `daqiri_bench_rdma` with the `_xhost` configs.
 
 Make sure to [build DAQIRI](../getting-started.md#build-the-daqiri-library) with the `ibverbs` engine first (for the RoCE/RDMA benchmark); Linux UDP/TCP sockets are always available.
 
@@ -56,7 +56,7 @@ apt-get install -y iproute2 iputils-ping ethtool iperf3 rdma-core ibverbs-utils
 
 ## Create isolated namespaces
 
-Choose one transmit-facing interface and one receive-facing interface. The example below uses the Spark pair that was verified to increment physical counters on the tested system; adjust names, IPs, and MAC addresses on other machines.
+Choose one transmit-facing interface and one receive-facing interface. The example below uses the Spark pair that was verified to increment physical counters on the tested system. Adjust names, IPs, and MAC addresses on other machines.
 
 ```bash
 CLIENT_NS=dq_wire_client
@@ -383,7 +383,3 @@ mlxconfig -d <device> set FORCE_LOOPBACK_DISABLE=1
 ```
 
 Treat firmware settings as maintenance-window changes: query first, set only with the proper Mellanox tooling available, then reset or reboot as required and rerun the same `rx_packets_phy` proof.
-
----
-**Previous:** [Benchmarking](index.md)<br>
-**Next:** [Raw Ethernet Benchmarking](raw_benchmarking.md)

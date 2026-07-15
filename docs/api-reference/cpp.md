@@ -71,7 +71,7 @@ if (st != daqiri::Status::SUCCESS) {
 
 ## Receiving Packets
 
-### RX Step 1 — Get a burst
+### RX Step 1: Get a burst
 
 ```cpp
 daqiri::BurstParams *burst;
@@ -92,7 +92,7 @@ daqiri::get_rx_burst(&burst, 0);
 daqiri::get_rx_burst(&burst);
 ```
 
-### RX Step 2 — Access packet data
+### RX Step 2: Access packet data
 
 For a single-segment configuration (CPU-only or batched GPU):
 
@@ -129,7 +129,7 @@ for (int i = 0; i < daqiri::get_num_packets(burst); i++) {
 }
 ```
 
-### RX Step 3 — Free buffers
+### RX Step 3: Free buffers
 
 When you are done processing, free the burst to return buffers to the pool:
 
@@ -232,7 +232,7 @@ Packets matching a dynamic rule are marked with the same `FlowId` returned by
 the add completion, so `get_packet_flow_id()` gives the handle to pass to
 `delete_flow_async()`. `poll_flow_op()` returns `Status::NOT_READY` when no flow
 operation has completed yet. A dynamic flow is deletable only after its add
-completion has been polled successfully; deleting a flow that is still pending returns
+completion has been polled successfully. Deleting a flow that is still pending returns
 `Status::INVALID_PARAMETER`.
 
 Multiple RX flows can be added as one operation. On DPDK this maps to a single
@@ -312,7 +312,7 @@ if ((burst->hdr.hdr.burst_flags & daqiri::DAQIRI_BURST_FLAG_REORDERED) != 0U) {
 
 ### GPU packet processing on reordered bursts
 
-When using batched GPU mode, packets arrive in CUDA-addressable buffers — each at an
+When using batched GPU mode, packets arrive in CUDA-addressable buffers, each at an
 arbitrary GPU address. Launch your own CUDA work directly on the packet pointers. Packet
 reordering and aggregation should be configured through `rx.reorder_configs`; see
 `raw_reorder_seq_bench.cpp` and `raw_reorder_quantize_bench.cpp` for complete examples
@@ -334,7 +334,7 @@ daqiri::free_all_packets_and_burst_rx(burst);
 
 ## Transmitting Packets
 
-### TX Step 1 — Allocate a burst
+### TX Step 1: Allocate a burst
 
 ```cpp
 auto burst = daqiri::create_tx_burst_params();
@@ -342,7 +342,7 @@ daqiri::set_header(burst, port_id, queue_id, batch_size, num_segments);
 
 auto status = daqiri::get_tx_packet_burst(burst);
 if (status != daqiri::Status::SUCCESS) {
-    // No buffers available — retry later
+    // No buffers available, retry later
 }
 ```
 
@@ -363,7 +363,7 @@ daqiri::set_connection_id(burst, conn_id);
 auto rx_conn_id = daqiri::get_connection_id(rx_burst);
 ```
 
-### TX Step 2 — Fill packets
+### TX Step 2: Fill packets
 
 Use the header helper functions for standard UDP packets:
 
@@ -380,7 +380,7 @@ for (int i = 0; i < daqiri::get_num_packets(burst); i++) {
 Or construct raw packets by writing directly into the packet buffer returned by
 `get_packet_ptr()`.
 
-### TX Step 3 — Send
+### TX Step 3: Send
 
 ```cpp
 daqiri::send_tx_burst(burst);
@@ -535,7 +535,7 @@ copies each packet's post-offset logical bytes into owned host staging memory
 before submission, so the burst may be released after
 `daqiri_write_raw_to_s3_objects_async()` succeeds. Header-data split and other
 multi-segment packets are concatenated into one object. The first S3 version
-uses one single-part `PutObject` per packet; objects larger than 5 GiB return
+uses one single-part `PutObject` per packet. Objects larger than 5 GiB return
 `NOT_SUPPORTED`, and multipart/burst aggregation is future work.
 
 The Python bindings expose the same C++ writer when both
@@ -721,7 +721,7 @@ workflow sections above show the common call order and ownership rules.
 | Function | Purpose |
 | --- | --- |
 | `get_mac_addr(port, mac)` | Copy a port MAC address into a six-byte buffer. |
-| `format_eth_addr(dst, addr)` | Convert a `xx:xx:xx:xx:xx:xx` MAC string into a six-byte buffer; invalid input zeroes the buffer. |
+| `format_eth_addr(dst, addr)` | Convert a `xx:xx:xx:xx:xx:xx` MAC string into a six-byte buffer. Invalid input zeroes the buffer. |
 | `get_port_id(key)` | Resolve an interface name or PCIe address to a port ID. |
 | `get_num_rx_queues(port_id)` | Return the configured or engine-reported RX queue count. |
 | `drop_all_traffic(port)` | Install a high-priority drop rule on a port. |

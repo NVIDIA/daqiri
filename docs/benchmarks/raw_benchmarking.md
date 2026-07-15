@@ -52,18 +52,18 @@ docker run --rm -it --privileged \
 
     For systems configured per the [DGX Spark profile](../tutorials/system_configuration.md#dgx-spark-profile), use these configs to skip the PCIe/IP/CPU-core edits below:
 
-    - [`daqiri_bench_raw_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark.yaml) for `daqiri_bench_raw_gpudirect` — still set `eth_dst_addr` to the RX MAC. The rx_port is `0002:01:00.1` (physical port p1), so read its MAC: `cat /sys/class/net/enP2p1s0f1np1/address`. This p0-to-p1 pairing is intentional for an over-the-wire single-machine loopback; using two PFs that map to the same physical port exercises the on-chip eswitch path instead.
-    - [`daqiri_bench_rdma_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx_spark.yaml) for `daqiri_bench_rdma` — no further edits needed.
+    - [`daqiri_bench_raw_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark.yaml) for `daqiri_bench_raw_gpudirect`. Still set `eth_dst_addr` to the RX MAC. The rx_port is `0002:01:00.1` (physical port p1), so read its MAC: `cat /sys/class/net/enP2p1s0f1np1/address`. This p0-to-p1 pairing is intentional for an over-the-wire single-machine loopback. Using two PFs that map to the same physical port exercises the on-chip eswitch path instead.
+    - [`daqiri_bench_rdma_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx_spark.yaml) for `daqiri_bench_rdma`. No further edits needed.
 
-    For the multi-queue core-scaling matrix, use the single base config [`daqiri_bench_raw_tx_rx_spark_mq.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark_mq.yaml) (the balanced TX=2/RX=2 superset) with `daqiri_bench_raw_gpudirect`, driven by [`run_spark_mq_bench.sh`](https://github.com/nvidia/daqiri/blob/main/examples/run_spark_mq_bench.sh) — it derives the four `(TX, RX)` cells from the base (via `scripts/gen_spark_mq_config.py`) and sweeps the payload.
+    For the multi-queue core-scaling matrix, use the single base config [`daqiri_bench_raw_tx_rx_spark_mq.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark_mq.yaml) (the balanced TX=2/RX=2 superset) with `daqiri_bench_raw_gpudirect`, driven by [`run_spark_mq_bench.sh`](https://github.com/nvidia/daqiri/blob/main/examples/run_spark_mq_bench.sh). It derives the four `(TX, RX)` cells from the base (via `scripts/gen_spark_mq_config.py`) and sweeps the payload.
 
     The Spark configs also pin the benchmark application's `bench_tx.cpu_core` / `bench_rx.cpu_core` fields to the high-frequency Cortex-X925 cores. Keep both the DAQIRI queue cores and the application worker cores on cores 16-19 unless you intentionally want a lower-power core in the measurement.
 
 #### Cross-host two-DGX-Spark loopback
 
-If you have two DGX Sparks cross-cabled p0↔p0 instead of a chassis QSFP loop on one machine, use the `_xhost` configs. Each host runs only its own role, so the YAML on each side configures one port instead of two. Both hosts must already be set up per the [DGX Spark profile](../tutorials/system_configuration.md#dgx-spark-profile), with one adjustment: the `daqiri-tx` (`1.1.1.1/24`) and `daqiri-rx` (`2.2.2.2/24`) nmcli profiles are *split across* the two hosts — bring up `daqiri-tx` on the TX host's p0 and `daqiri-rx` on the RX host's p0, instead of both on one box.
+If you have two DGX Sparks cross-cabled p0↔p0 instead of a chassis QSFP loop on one machine, use the `_xhost` configs. Each host runs only its own role, so the YAML on each side configures one port instead of two. Both hosts must already be set up per the [DGX Spark profile](../tutorials/system_configuration.md#dgx-spark-profile), with one adjustment: the `daqiri-tx` (`1.1.1.1/24`) and `daqiri-rx` (`2.2.2.2/24`) nmcli profiles are *split across* the two hosts. Bring up `daqiri-tx` on the TX host's p0 and `daqiri-rx` on the RX host's p0, instead of both on one box.
 
-**Network prerequisite (required for RDMA; recommended for raw).** Assigning `/24` addresses on each host is not enough for the kernel to reach the peer over a direct cable. RDMA-CM uses the kernel stack, so you need a host route and a static neighbor on the cabled port before ping or RoCE will work. Run [`scripts/setup_spark_xhost_net.sh`](https://github.com/nvidia/daqiri/blob/main/scripts/setup_spark_xhost_net.sh) on **both** hosts after bringing up the nmcli profile — see the [cross-host variant](../tutorials/system_configuration.md#cross-host-variant-two-sparks) in System Configuration for the full steps.
+**Network prerequisite (required for RDMA, recommended for raw).** Assigning `/24` addresses on each host is not enough for the kernel to reach the peer over a direct cable. RDMA-CM uses the kernel stack, so you need a host route and a static neighbor on the cabled port before ping or RoCE will work. Run [`scripts/setup_spark_xhost_net.sh`](https://github.com/nvidia/daqiri/blob/main/scripts/setup_spark_xhost_net.sh) on **both** hosts after bringing up the nmcli profile. See the [cross-host variant](../tutorials/system_configuration.md#cross-host-variant-two-sparks) in System Configuration for the full steps.
 
 ```bash
 # TX host (peer MAC from RX: cat /sys/class/net/enp1s0f0np0/address)
@@ -212,7 +212,7 @@ bench_tx:
 ??? info "Show explanation"
 
     - `eth_dst_addr` - the destination ethernet MAC address - will be embedded in the packet headers by the application. This is required here because the Rx interface above has `flow_isolation: true` (explained in more details below). In that configuration, only the packets listing the adequate destination MAC address will be accepted by the Rx interface.
-    - `cpu_core` - the benchmark application's own TX worker thread affinity. Set the matching `bench_rx.cpu_core` for RX workers too; these app-thread fields are distinct from the DAQIRI queue `cpu_core` values that poll the NIC.
+    - `cpu_core` - the benchmark application's own TX worker thread affinity. Set the matching `bench_rx.cpu_core` for RX workers too. These app-thread fields are distinct from the DAQIRI queue `cpu_core` values that poll the NIC.
     - We ignore the IP fields (`ip_src_addr`, `ip_dst_addr`) for now, as we are testing on a layer 2 network by just connecting a cable between the two interfaces on our system, therefore having mock values has no impact.
     - You might have noted the lack of a `eth_src_addr` field in this `bench_tx` section. This is because the source Ethernet MAC address can be inferred automatically by the DAQIRI library from the PCIe address of the Tx interface referenced above.
 
@@ -243,26 +243,26 @@ By default the application runs for 10 seconds and then exits. You can change th
 ## Flow programming smoke test
 
 Raw Ethernet flow rules are programmed into the NIC during `daqiri_init()`. Software loopback
-(`loopback: "sw"`) skips NIC init entirely, so it is a build/runtime smoke test only — not a
+(`loopback: "sw"`) skips NIC init entirely, so it is a build/runtime smoke test only, not a
 flow programming test.
 
 | Step | Command / action | Expected |
 |------|------------------|----------|
-| Build smoke | `daqiri_bench_raw_sw_loopback.yaml --seconds 5` | Init succeeds; no NIC flows created |
+| Build smoke | `daqiri_bench_raw_sw_loopback.yaml --seconds 5` | Init succeeds, no NIC flows created |
 | Good NIC config | `daqiri_bench_raw_tx_rx.yaml` (filled placeholders, cabled NIC) | Init succeeds; RX and `tx_eth_src` flows programmed |
 | Dynamic RX flow config | `daqiri_example_dynamic_rx_flow.yaml` with `daqiri_example_dynamic_rx_flow` | Starts with `flow_isolation: true` and no `rx.flows`, drops unmatched traffic, then adds/deletes runtime UDP steering rules |
 | Bad queue ID | Copy `daqiri_bench_raw_tx_rx.yaml`, set `flows[0].action.id: 99` | Fails in `validate_config()` before EAL/NIC init with `references unknown RX queue` |
-| Mixed flows (optional) | On one interface, add two of the three flow classes — standard UDP/IP, flex-item (see `rx.flex_items`), or eCPRI (`match.ecpri`) — in the [configuration reference](../api-reference/configuration.md) | Fails in `validate_config()` with `mixes standard (UDP/IP), flex-item and/or eCPRI` |
-| eCPRI flow (optional) | On a cabled NIC, add a flow with `match: { ecpri: { msg_type: 0, pc_id: 1 } }` (see the [configuration reference](../api-reference/configuration.md)) | Init succeeds; eCPRI-over-Ethernet (EtherType 0xAEFE) frames matching the message type and pc_id steer to the flow's queue |
+| Mixed flows (optional) | On one interface, add two of the three flow classes (standard UDP/IP, flex-item (see `rx.flex_items`), or eCPRI (`match.ecpri`)) in the [configuration reference](../api-reference/configuration.md) | Fails in `validate_config()` with `mixes standard (UDP/IP), flex-item and/or eCPRI` |
+| eCPRI flow (optional) | On a cabled NIC, add a flow with `match: { ecpri: { msg_type: 0, pc_id: 1 } }` (see the [configuration reference](../api-reference/configuration.md)) | Init succeeds. eCPRI-over-Ethernet (EtherType 0xAEFE) frames matching the message type and pc_id steer to the flow's queue |
 
 ## Cap the transmit rate with packet pacing
 
 To meter the transmit side at a fixed rate in hardware, set a per-queue `pacing_mbps` cap
 on the TX queue. [`daqiri_bench_raw_tx_rx_pacing.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_pacing.yaml)
 is the loopback config above with `pacing_mbps: 10000` (10 Gbps) on the TX queue. Pacing is
-supported only on the default DPDK engine; the `ibverbs` engine does not support `pacing_mbps`
+supported only on the default DPDK engine. The `ibverbs` engine does not support `pacing_mbps`
 (init fails if it is set on an `ibverbs` queue). The NIC meters the queue out so its average
-TX rate stays at or below the configured value; the limit is enforced on an average basis and
+TX rate stays at or below the configured value. The limit is enforced on an average basis and
 idle gaps do not accumulate burst credit.
 
 ```bash
@@ -323,7 +323,7 @@ interface and queue.
 
 ??? abstract "See an example output"
 
-    This is an illustrative excerpt; source line numbers and pointer values vary by build.
+    This is an illustrative excerpt. Source line numbers and pointer values vary by build.
 
     ```log
     [INFO] /workspace/daqiri/src/../include/daqiri/common.h:1045: Finished reading DAQIRI configuration
@@ -578,7 +578,3 @@ The `*_packets_phy` and `*_bytes_phy` counters are physical-link counters. They 
         ```
 
         You might need to kill some of the listed processes to free up GPU VRAM.
-
----
-**Previous:** [Benchmarking](index.md)<br>
-**Next:** [Understanding the Configuration File](../tutorials/configuration-walkthrough.md) — deep dive into the YAML parameters

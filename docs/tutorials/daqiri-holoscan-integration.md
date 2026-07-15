@@ -27,16 +27,16 @@ Holoscan.
 
 ## Application Lifecycle
 
-A Holoscan application is a directed acyclic graph of operators — the fundamental
-units of work — connected by data flows and run by a scheduler. DAQIRI owns NIC
-setup, packet memory, and RX burst lifetimes; the operators in the graph pull
+A Holoscan application is a directed acyclic graph of operators (the fundamental
+units of work) connected by data flows and run by a scheduler. DAQIRI owns NIC
+setup, packet memory, and RX burst lifetimes. The operators in the graph pull
 received data from DAQIRI and pass it downstream as tensors.
 
 The recommended Holoscan pattern is to pass one YAML file into the application
 with `app->config(...)`, read Holoscan operator parameters with `from_config(...)`,
 and initialize DAQIRI from the same YAML during graph composition before any
 DAQIRI-backed operators run. DAQIRI handles any configured GPU reorder/quantize
-plan internally; the Holoscan source operator is just the adapter that polls DAQIRI
+plan internally. The Holoscan source operator is just the adapter that polls DAQIRI
 and emits completed batches to downstream operators.
 
 ```cpp
@@ -209,7 +209,7 @@ NIC while other workers run downstream operators. With `stop_on_deadlock: true` 
 scheduler returns from `app->run()` once no operator can make progress for
 `stop_on_deadlock_timeout` ms (e.g. the stream ends); `SIGINT` (Ctrl-C) also stops
 it. Either way control returns to `main()` and the teardown prints stats and shuts
-DAQIRI down. To bound a run explicitly — for a smoke test — attach a stop condition
+DAQIRI down. To bound a run explicitly, for a smoke test, attach a stop condition
 such as `make_condition<holoscan::CountCondition>(num_batches)` to the operator in
 `compose()`.
 
@@ -307,7 +307,7 @@ class DaqiriRxOp : public holoscan::Operator {
       return;
     }
 
-    // The reorder/quantize kernel filled the batch asynchronously on our stream; the
+    // The reorder/quantize kernel filled the batch asynchronously on our stream, and the
     // burst carries the completion event. Fence on it before reading the data.
     if (burst->event != nullptr) {
       cudaEventSynchronize(burst->event);
@@ -326,7 +326,7 @@ class DaqiriRxOp : public holoscan::Operator {
 
     // Wrap that device buffer as a tensor and emit it zero-copy. The tensor takes
     // ownership of the burst and frees it via the DLPack deleter once downstream is
-    // done — so we do NOT free the burst here.
+    // done, so we do NOT free the burst here.
     auto tensor = wrap_reorder_output_as_tensor(burst_guard.get(), batch, info);
     burst_guard.release();  // Tensor's DLPack deleter now owns the burst.
 
@@ -355,11 +355,11 @@ Because the DAQIRI reorder plan reorders and quantizes the payloads on the GPU, 
 operator never touches individual packets: it dequeues a burst, checks the
 `DAQIRI_BURST_FLAG_REORDERED` flag, waits on the burst's CUDA event, and reads one
 contiguous output buffer. `daqiri::get_reorder_burst_info(...)` returns the batch
-layout — `packets_per_batch` sequence slots, `payload_len` output bytes per slot,
-`aggregate_len` total — so the operator can shape the tensor correctly.
+layout: `packets_per_batch` sequence slots, `payload_len` output bytes per slot, and
+`aggregate_len` total, so the operator can shape the tensor correctly.
 
-To process the stream differently — a different reorder layout, a custom
-quantization, or any other per-batch GPU transform — you can add your own CUDA kernel
+To process the stream differently (a different reorder layout, a custom
+quantization, or any other per-batch GPU transform), you can add your own CUDA kernel
 instead of (or after) the built-in plan: run it on the operator's stream over the raw
 RX payloads and emit its output buffer the same way. DAQIRI's reorder kernels live in
 `src/kernels.cu` (build with `-DDAQIRI_REORDER_GPU_PROFILE=ON` for CUDA event timing)
@@ -417,7 +417,7 @@ std::shared_ptr<holoscan::Tensor> DaqiriRxOp::wrap_reorder_output_as_tensor(
   };
 
   auto tensor = std::make_shared<holoscan::Tensor>(dl.get());
-  // Tensor construction succeeded; its DLPack deleter now owns dl and shape.
+  // Tensor construction succeeded. Its DLPack deleter now owns dl and shape.
   shape.release();
   dl.release();
   return tensor;
@@ -426,7 +426,7 @@ std::shared_ptr<holoscan::Tensor> DaqiriRxOp::wrap_reorder_output_as_tensor(
 
 Downstream operators receive an fp32 `[packets_per_batch, elements_per_packet]` tensor
 on the GPU, ready for inference or further processing with no host copy. The exact
-DLPack and tensor-construction details track the Holoscan SDK version; a complete,
+DLPack and tensor-construction details track the Holoscan SDK version. A complete,
 build-tested implementation lives in the Holohub example (see [References](#references)).
 
 ## Sink Operator Skeleton
@@ -477,7 +477,7 @@ class TensorSinkOp : public holoscan::Operator {
 - The standalone `daqiri_bench_raw_reorder_quantize` benchmark
   (`examples/raw_reorder_quantize_bench.cpp`, config
   `daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml`) exercises the same
-  reorder/quantize path outside Holoscan — a good way to validate the DAQIRI config
+  reorder/quantize path outside Holoscan, a good way to validate the DAQIRI config
   first. See [Raw Ethernet Benchmarking](../benchmarks/raw_benchmarking.md).
 - The landed Holohub reference app is
   [`applications/daqiri_raw_ethernet_bench`](https://github.com/nvidia-holoscan/holohub/tree/main/applications/daqiri_raw_ethernet_bench).

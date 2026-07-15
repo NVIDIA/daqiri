@@ -54,7 +54,7 @@ These settings apply globally to both TX and RX:
 
 ## Memory Regions
 
-`memory_regions:` — List of regions where packet buffers are stored. The number of regions
+`memory_regions:` List of regions where packet buffers are stored. The number of regions
 and their `kind` determines the receive mode (CPU-only, header-data split, or batched GPU).
 
 - **`name`**: Memory region name. Referenced by queue configurations.
@@ -62,13 +62,13 @@ and their `kind` determines the receive mode (CPU-only, header-data split, or ba
 - **`kind`**: Memory type.
   - type: `string`
   - values:
-    - `huge` — CPU hugepages (recommended for CPU buffers)
-    - `device` — GPU VRAM (discrete GPUs only; requires GPUDirect via peermem or DMA-BUF)
-    - `host_pinned` — Pinned CPU pages allocated via `cudaHostAlloc`. **Recommended on
+    - `huge`: CPU hugepages (recommended for CPU buffers)
+    - `device`: GPU VRAM (discrete GPUs only, requires GPUDirect via peermem or DMA-BUF)
+    - `host_pinned`: Pinned CPU pages allocated via `cudaHostAlloc`. **Recommended on
       integrated GPUs (e.g. NVIDIA GB10 / DGX Spark)**, where the NIC cannot peer-DMA
       into device memory and CUDA reports DMA-BUF unsupported. On discrete-GPU systems,
       prefer `device` for high-throughput RX/TX paths.
-    - `host` — Regular CPU memory (not recommended)
+    - `host`: Regular CPU memory (not recommended)
 - **`affinity`**: GPU ID for `device` memory, or NUMA node ID for CPU memory.
   - type: `integer`
 - **`access`**: Memory access permissions.
@@ -87,7 +87,7 @@ and their `kind` determines the receive mode (CPU-only, header-data split, or ba
 
 ### Example: Header-Data Split
 
-Two regions — a small CPU region for headers and a GPU region for payload:
+Two regions, a small CPU region for headers and a GPU region for payload:
 
 ```yaml
 memory_regions:
@@ -109,7 +109,7 @@ memory_regions:
 
 ## Interfaces
 
-`interfaces:` — List of NIC interfaces to configure.
+`interfaces:` List of NIC interfaces to configure.
 
 - **`name`**: Interface name. Used to look up port IDs at runtime via `get_port_id()`.
   - type: `string`
@@ -158,7 +158,7 @@ engine.
 
 ### Queues
 
-`rx.queues:` — List of receive queues on the interface.
+`rx.queues:` List of receive queues on the interface.
 
 - **`name`**: Queue name.
   - type: `string`
@@ -168,11 +168,11 @@ engine.
   performance.
   - type: `string`
 - **`batch_size`**: Number of packets per batch passed from the NIC to the application. Larger
-  values increase throughput; smaller values reduce latency.
+  values increase throughput, and smaller values reduce latency.
   - type: `integer`
 - **`memory_regions`**: List of memory region names (defined in [Memory Regions](#memory-regions)).
   The order determines segment mapping: first region = segment 0, second = segment 1, etc.
-  A single region means all packet data lands in one place; two regions enables header-data
+  A single region means all packet data lands in one place, while two regions enables header-data
   split.
   - type: `list`
 - **`timeout_us`**: Timeout in microseconds. A partial batch is delivered if this time elapses
@@ -182,11 +182,11 @@ engine.
 
 ### Flex Items
 
-`rx.flex_items:` — Flexible parser items for custom flow matching beyond standard UDP fields.
+`rx.flex_items:` Flexible parser items for custom flow matching beyond standard UDP fields.
 
 - **`name`**: Name of the flex item.
   - type: `string`
-- **`id`**: ID of the flex item. Scoped per interface; the same numeric ID on two
+- **`id`**: ID of the flex item. Scoped per interface. The same numeric ID on two
   interfaces may refer to different parser settings.
   - type: `integer`
 - **`offset`**: Byte offset after the UDP header where matching begins. Must be a multiple
@@ -197,8 +197,8 @@ engine.
 
 ### Flows
 
-`rx.flows:` — Static startup flow rules that steer packets to specific queues based on
-match criteria. This sequence may be omitted; a queues-only RX config can add DPDK RX
+`rx.flows:` Static startup flow rules that steer packets to specific queues based on
+match criteria. This sequence may be omitted, and a queues-only RX config can add DPDK RX
 flows later with the dynamic flow API. For Raw Ethernet on the DPDK and ibverbs engines,
 RX flows can also perform hardware VLAN pop or tunnel decapsulation before queue delivery.
 
@@ -236,7 +236,7 @@ RX flows can also perform hardware VLAN pop or tunnel decapsulation before queue
   - **`mask`**: 32-bit mask applied before matching (with flex items).
     - type: `integer`
   - **`ecpri`**: eCPRI-over-Ethernet match (EtherType `0xAEFE`). Presence of this map selects
-    the eCPRI flow class; the EtherType is matched implicitly. Cannot be combined with UDP/IP
+    the eCPRI flow class. The EtherType is matched implicitly. Cannot be combined with UDP/IP
     or flex-item matching. A flow with an empty `ecpri: {}` map matches all eCPRI frames.
     - **`msg_type`**: eCPRI common-header message type (e.g. `0` = IQ data, `2` = real-time
       control). Optional.
@@ -257,14 +257,14 @@ firmware steering, so any interface with eCPRI flows is automatically switched t
 `dv_flow_en=1` (logged as a warning); a side effect is that the async/template dynamic-RX-flow
 API is unavailable on that interface. The `ibverbs` engine has no such restriction.
 
-A single RX interface must use exactly one flow class — standard UDP/IP, flex-item, or eCPRI.
+A single RX interface must use exactly one flow class: standard UDP/IP, flex-item, or eCPRI.
 Each class installs its own DPDK group-0 jump rule, and these conflict when mixed, so only one
 class is reachable per interface. `daqiri_init` rejects mixed configs with a clear error.
 Flex-item flows cannot be combined with VLAN/tunnel transform actions in v1.
 
 ### Flow Isolation
 
-`rx.flow_isolation:` — When `true`, only packets matching an explicit flow rule are delivered
+`rx.flow_isolation:` When `true`, only packets matching an explicit flow rule are delivered
 to the application. Static startup flows install send-to-kernel fallback rules per flow class
 (standard, flex-item, or eCPRI), so unmatched traffic in those classes is steered back to the Linux
 kernel. Queues-only configs can set `flow_isolation: true` and then install dynamic RX flows
@@ -280,9 +280,9 @@ batch.
 
 ### Dynamic Flow Capacity
 
-`rx.dynamic_flow_capacity:` — DPDK template-table capacity reserved for dynamic RX flow
+`rx.dynamic_flow_capacity:` DPDK template-table capacity reserved for dynamic RX flow
 rules on this interface. `0` disables DPDK template/async setup on startup. Set a positive
-value to opt in to the template fast path when it is available; legacy fallback paths still
+value to opt in to the template fast path when it is available. Legacy fallback paths still
 accept dynamic RX flow operations but do not use a template table.
 
 - type: `integer`
@@ -290,7 +290,7 @@ accept dynamic RX flow operations but do not use a template table.
 
 ### Hardware Timestamps
 
-`rx.hardware_timestamps:` — Enable per-packet hardware RX timestamps for Raw Ethernet
+`rx.hardware_timestamps:` Enable per-packet hardware RX timestamps for Raw Ethernet
 (`stream_type: "raw"`).
 When enabled, DAQIRI requires `RTE_ETH_RX_OFFLOAD_TIMESTAMP` support from the NIC/PMD and
 initialization fails if DAQIRI cannot provide nanosecond timestamps for the selected PMD.
@@ -302,7 +302,7 @@ clock domain, not wall-clock time.
 
 ### RX Reorder Configs
 
-`rx.reorder_configs:` — Optional automatic packet reordering/aggregation plans. Implemented
+`rx.reorder_configs:` Optional automatic packet reordering/aggregation plans. Implemented
 for Raw Ethernet (`stream_type: "raw"`) only in v1. GPU reorder requires CUDA-addressable
 packet buffers (`device` or `host_pinned` memory regions). CPU reorder requires CPU-addressable
 packet buffers (`host`, `host_pinned`, or `huge` memory regions).
@@ -330,7 +330,7 @@ v1 batch-size requirement:
   - values: `gpu`, `cpu`
 - **`memory_region`**: Output memory region where reordered payload is written.
   - type: `string`
-  - requirements: for `gpu`, must reference a `device` or `host_pinned` memory region; for
+  - requirements: for `gpu`, must reference a `device` or `host_pinned` memory region. For
     `cpu`, must reference a `host`, `host_pinned`, or `huge` memory region
 - **`payload_byte_offset`**: Byte offset in each packet where copied payload starts. Bytes before
   this offset are skipped.
@@ -380,7 +380,7 @@ daqiri::set_reorder_cuda_stream("rx_port", "rx_reorder_0", stream);
 
 ### Queues
 
-`tx.queues:` — List of transmit queues on the interface.
+`tx.queues:` List of transmit queues on the interface.
 
 - **`name`**: Queue name.
   - type: `string`
@@ -390,7 +390,7 @@ daqiri::set_reorder_cuda_stream("rx_port", "rx_reorder_0", stream);
   performance.
   - type: `string`
 - **`batch_size`**: Number of packets per batch sent to the NIC. Larger values increase
-  throughput; smaller values reduce latency.
+  throughput, and smaller values reduce latency.
   - type: `integer`
 - **`memory_regions`**: List of memory region names. Same segment mapping rules as RX.
   - type: `list`
@@ -400,7 +400,7 @@ daqiri::set_reorder_cuda_stream("rx_port", "rx_reorder_0", stream);
   - values: `tx_eth_src` (auto-fill source MAC address)
 - **`pacing_mbps`**: Packet-pacing rate cap for this queue, in megabits per second of L2 frame
   bytes (the data the application transmits, excluding preamble/IFG/FCS). The NIC meters the queue
-  out so its long-run average TX rate stays at or below this value; the limit is enforced on an
+  out so its long-run average TX rate stays at or below this value. The limit is enforced on an
   average basis and idle gaps do not accumulate burst credit. `0` (the default) disables pacing
   and sends at line rate. Supported only by the default `dpdk` raw engine on a NIC with hardware
   send scheduling (ConnectX-7 or later); on devices without it, `pacing_mbps` is ignored with a
@@ -411,9 +411,9 @@ daqiri::set_reorder_cuda_stream("rx_port", "rx_reorder_0", stream);
 
 ### Transmit Flows
 
-`tx.flows:` — Raw Ethernet hardware transform rules for outgoing packets. Supported on
+`tx.flows:` Raw Ethernet hardware transform rules for outgoing packets. Supported on
 the DPDK and ibverbs raw engines only. TX flows match the packet as supplied by the
-application, then push or encapsulate headers in hardware; the application buffer remains
+application, then push or encapsulate headers in hardware. The application buffer remains
 the pre-encap packet.
 
 - **`name`** / **`id`**: Flow label and ID.
@@ -435,12 +435,12 @@ the pre-encap packet.
 
 DAQIRI validates transform overhead against the configured packet buffer size and
 the supported jumbo-frame bound. For RX decap/pop and TX encap/push, MTU sizing
-accounts for the outer wire frame; packet buffers hold the post-decap (RX) /
+accounts for the outer wire frame. Packet buffers hold the post-decap (RX) /
 pre-encap (TX) frame.
 
 ### Accurate Send
 
-`tx.accurate_send:` — Enable hardware-timed packet transmission using PTP timestamps. When
+`tx.accurate_send:` Enable hardware-timed packet transmission using PTP timestamps. When
 enabled, use `set_packet_tx_time()` to schedule packets. Requires ConnectX-7 or later.
 
 - type: `boolean`
