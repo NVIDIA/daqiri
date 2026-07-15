@@ -6729,9 +6729,10 @@ void DpdkEngine::free_all_packets(BurstParams* burst) {
     }
     return;
   }
-  for (int p = 0; p < burst->hdr.hdr.num_pkts; p++) {
-    rte_pktmbuf_free(reinterpret_cast<rte_mbuf**>(burst->pkts[0])[p]);
+  if (burst->hdr.hdr.num_pkts == 0 || burst->pkts[0] == nullptr) {
+    return;
   }
+  rte_pktmbuf_free_bulk(reinterpret_cast<rte_mbuf**>(burst->pkts[0]), burst->hdr.hdr.num_pkts);
 }
 
 void DpdkEngine::free_rx_burst(BurstParams* burst) {
