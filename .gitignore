@@ -2,6 +2,14 @@ build*/
 site/
 bench-results/
 
+# Benchmark plot generation (scripts/plot_rtx_pro_bench.py, plot_mq_payload_sweep.py)
+bench-results/**/plots/
+bench-results/**/*.svg
+bench-results/**/*.png
+bench-results/*.log
+docs/images/rtx-pro-*.svg
+docs/images/rtx-pro-*.png
+
 # tune_system.py default output
 pcie_schematic.png
 

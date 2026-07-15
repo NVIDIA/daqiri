@@ -1,0 +1,54 @@
+# RTX PRO 6000 Blackwell -- ibverbs MPRQ RX-only (host-staged).
+#
+# Selected via `engine: "ibverbs"` under `stream_type: "raw"`. Uses HOST hugepage
+# memory (GPUDirect device registration is not yet available on this backend).
+# FFT/GEMM workloads therefore include host->device staging cost -- label results
+# as `host-staged` when comparing against DPDK HDS.
+#
+# RX-only: pair with a DPDK TX sender (run_rtx_pro_bench.sh ibverbs mode starts
+# daqiri_bench_raw_gpudirect on tx_port in the background).
+#
+# Run (manual):
+#   sudo ./build/examples/daqiri_bench_raw_gpudirect \
+#     ./build/examples/daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml --seconds 30 &
+#   sudo ./build/examples/daqiri_bench_raw_gpudirect \
+#     ./build/examples/daqiri_bench_raw_rx_ibverbs_rtx_pro_6000.yaml \
+#     --seconds 30 --workload fft
+#
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    engine: "ibverbs"
+    master_core: 3
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    # affinity is the NUMA node for the huge-page RX region. Keep it on the RX
+    # port's node (discover with: cat /sys/class/net/<rx-iface>/device/numa_node).
+    memory_regions:
+      - name: "Data_RX_HOST"
+        kind: "huge"
+        affinity: 0
+        num_bufs: 4096
+        buf_size: 8064
+
+    interfaces:
+      - name: "rx_port"
+        address: 0000:61:00.1
+        rx:
+          queues:
+            - name: "rx_q_0"
+              id: 0
+              cpu_core: 9
+              batch_size: 1024
+              timeout_us: 2000
+              memory_regions:
+                - "Data_RX_HOST"
+
+bench_rx:
+  interface_name: "rx_port"
+  cpu_core: 8

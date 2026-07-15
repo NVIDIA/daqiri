@@ -41,6 +41,8 @@ set(DAQIRI_BENCH_CONFIGS
   daqiri_bench_raw_tx_rx_4q.yaml
   daqiri_bench_raw_tx_rx_pacing.yaml
   daqiri_bench_raw_tx_rx_hds.yaml
+  daqiri_bench_raw_tx_rx_hds_rtx_pro_6000.yaml
+  daqiri_bench_raw_rx_ibverbs_rtx_pro_6000.yaml
   daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml
   daqiri_bench_raw_tx_rx_reorder_seq_1024_cpu.yaml
   daqiri_bench_raw_sw_loopback_reorder_seq_1024.yaml
@@ -49,12 +51,18 @@ set(DAQIRI_BENCH_CONFIGS
   daqiri_bench_raw_rx_reorder_seq_batch.yaml
   daqiri_bench_raw_rx_multi_q.yaml
   daqiri_bench_raw_sw_loopback.yaml
+  daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml
+  daqiri_bench_raw_tx_rx_rtx_pro_6000.yaml
+  daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml
+  daqiri_bench_raw_tx_rx_rtx_pro_6000_nic_same_port.yaml
+  daqiri_bench_raw_tx_only_rtx_pro_6000_nic.yaml
   daqiri_example_dynamic_rx_flow.yaml
   daqiri_example_gds_write_sw_loopback.yaml
   daqiri_example_gds_write_tx_rx.yaml
   daqiri_example_pcap_writer_sw_loopback.yaml
   daqiri_example_pcap_writer_tx_rx.yaml
   daqiri_bench_rdma_tx_rx.yaml
+  daqiri_bench_rdma_tx_rx_rtx_pro_6000.yaml
   daqiri_bench_socket_udp_tx_rx.yaml
   daqiri_bench_socket_tcp_tx_rx.yaml
 )
@@ -67,7 +75,7 @@ function(link_daqiri_bench target)
   target_compile_features(${target} PRIVATE cxx_std_17)
   if(NOT BUILD_SHARED_LIBS AND UNIX AND NOT APPLE)
     set(DAQIRI_EXAMPLE_STATIC_LIBS daqiri::daqiri)
-    foreach(engine IN ITEMS dpdk socket rdma)
+    foreach(engine IN ITEMS dpdk socket rdma ibverbs)
       if(TARGET daqiri_${engine})
         list(APPEND DAQIRI_EXAMPLE_STATIC_LIBS daqiri_${engine})
       endif()

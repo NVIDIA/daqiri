@@ -1,0 +1,106 @@
+# RTX PRO 6000 Blackwell -- RoCE closed-loop (client + server in one process).
+# Uses host_pinned memory by default. Device memory RoCE requires a working GPUDirect RDMA MR path (nvidia-peermem or dma-buf support); use host_pinned as the portable fallback.
+#
+# The client (10.100.0.1) and server (10.100.0.2) live on ONE connected subnet
+# so a single-host dual-port loop resolves the peer over the cable. Assign the
+# two addresses to the two RoCE-capable cabled ports before running, e.g.:
+#   sudo ip addr add 10.100.0.1/24 dev <tx-iface>
+#   sudo ip addr add 10.100.0.2/24 dev <rx-iface>
+#   sudo sysctl -w net.ipv4.conf.all.accept_local=1 net.ipv4.conf.all.rp_filter=0
+# (run_rtx_pro_bench.sh rdma does this automatically from discovered topology).
+#
+# Run:
+#   sudo ./build/examples/daqiri_bench_rdma \
+#     ./build/examples/daqiri_bench_rdma_tx_rx_rtx_pro_6000.yaml \
+#     --seconds 30 --mode both --workload gemm
+#
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "socket"
+    master_core: 3
+    debug: false
+    log_level: "info"
+
+    memory_regions:
+    - name: "DATA_RX_GPU_SERVER"
+      kind: "host_pinned"
+      affinity: 1
+      num_bufs: 20
+      buf_size: 9000000
+    - name: "DATA_TX_GPU_SERVER"
+      kind: "host_pinned"
+      affinity: 1
+      num_bufs: 20
+      buf_size: 9000000
+    - name: "DATA_TX_GPU_CLIENT"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 20
+      buf_size: 9000000
+    - name: "DATA_RX_GPU_CLIENT"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 20
+      buf_size: 9000000
+
+    interfaces:
+    - name: my_client
+      address: 10.100.0.1
+      socket_config:
+        mode: client
+        local_addr: "roce://10.100.0.1"
+      roce_config:
+        transport_mode: RC
+      tx:
+        queues:
+        - name: "Client_TX_Queue"
+          id: 0
+          batch_size: 1
+          cpu_core: 7
+      rx:
+        queues:
+        - name: "Client_RX_Queue"
+          id: 0
+          cpu_core: 7
+          batch_size: 1
+    - name: my_server
+      address: 10.100.0.2
+      socket_config:
+        mode: server
+        local_addr: "roce://10.100.0.2:4096"
+      roce_config:
+        transport_mode: RC
+      rx:
+        queues:
+        - name: "Server_RX_Queue"
+          id: 0
+          cpu_core: 8
+          batch_size: 1
+      tx:
+        queues:
+        - name: "Server_TX_Queue"
+          id: 0
+          cpu_core: 8
+          batch_size: 1
+
+rdma_bench_server:
+  server_address: 10.100.0.2
+  server_port: 4096
+  message_size: 8000000
+  send: true
+  receive: true
+  cpu_core: 9
+  server: true
+
+rdma_bench_client:
+  message_size: 8000000
+  client_address: 10.100.0.1
+  server_address: 10.100.0.2
+  server_port: 4096
+  receive: true
+  send: true
+  cpu_core: 10
+  server: false

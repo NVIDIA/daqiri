@@ -1,0 +1,139 @@
+# RTX PRO 6000 — multi-queue core-scaling base (TX=2, RX=2 superset).
+#
+# Matrix cells (TX,RX) = (1,1),(1,2),(2,1),(2,2) are derived at sweep time by
+# scripts/gen_rtx_pro_mq_config.py (invoked by run_rtx_pro_mq_bench.sh), which
+# prunes queues/flows/memory-regions/bench entries down to each cell.
+#
+# Wire closed-loop: tx_port -> rx_port over L2 (cable/optic/switch). Fill
+# eth_dst_addr from discovery (ETH_DST_ADDR) or:
+#   cat /sys/class/net/<rx-iface>/address
+#
+# Core map (pollers are DPDK EAL lcores; workers are bench pthreads).
+# Defaults below are placeholders; run_rtx_pro_mq_bench.sh replaces them via
+# scripts/rtx_pro_discover.py (isolcpus on the NIC NUMA node + PIX GPU ordinals).
+#   master_core, TX q0 poll/work, TX q1 poll/work, RX q0 poll/work, RX q1 poll/work
+#
+# GPU affinity is the CUDA ordinal under CUDA_DEVICE_ORDER=PCI_BUS_ID. Discovery
+# picks PIX-linked GPUs per NIC and spreads TX queue 1 onto a second PIX GPU when
+# available. Override with RTX_TX_GPU / RTX_RX_GPU / RTX_TX_GPU2 / RTX_RX_GPU2.
+#
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    master_core: 3
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    memory_regions:
+    - name: "Data_TX_GPU_0"
+      kind: "device"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8064
+    - name: "Data_TX_GPU_1"
+      kind: "device"
+      affinity: 1
+      num_bufs: 51200
+      buf_size: 8064
+    - name: "Data_RX_GPU_0"
+      kind: "device"
+      affinity: 1
+      num_bufs: 51200
+      buf_size: 8064
+    - name: "Data_RX_GPU_1"
+      kind: "device"
+      affinity: 1
+      num_bufs: 51200
+      buf_size: 8064
+
+    interfaces:
+    - name: "tx_port"
+      address: <0000:00:00.0>
+      tx:
+        queues:
+        - name: "tx_q_0"
+          id: 0
+          batch_size: 10240
+          cpu_core: 11
+          memory_regions:
+            - "Data_TX_GPU_0"
+          offloads:
+            - "tx_eth_src"
+        - name: "tx_q_1"
+          id: 1
+          batch_size: 10240
+          cpu_core: 12
+          memory_regions:
+            - "Data_TX_GPU_1"
+          offloads:
+            - "tx_eth_src"
+    - name: "rx_port"
+      address: <0000:00:00.1>
+      rx:
+        flow_isolation: true
+        queues:
+        - name: "rx_q_0"
+          id: 0
+          cpu_core: 9
+          batch_size: 10240
+          memory_regions:
+            - "Data_RX_GPU_0"
+        - name: "rx_q_1"
+          id: 1
+          cpu_core: 14
+          batch_size: 10240
+          memory_regions:
+            - "Data_RX_GPU_1"
+        flows:
+        - name: "flow_0"
+          id: 0
+          action:
+            type: queue
+            id: 0
+          match:
+            udp_src: 4096
+            udp_dst: 4096
+        - name: "flow_1"
+          id: 1
+          action:
+            type: queue
+            id: 1
+          match:
+            udp_src: 4097
+            udp_dst: 4097
+
+bench_rx:
+- interface_name: "rx_port"
+  queue_id: 0
+  cpu_core: 8
+- interface_name: "rx_port"
+  queue_id: 1
+  cpu_core: 15
+
+bench_tx:
+- interface_name: "tx_port"
+  queue_id: 0
+  cpu_core: 10
+  batch_size: 10240
+  payload_size: 8000
+  header_size: 64
+  eth_dst_addr: <00:00:00:00:00:00>
+  ip_src_addr: 1.2.3.4
+  ip_dst_addr: 5.6.7.8
+  udp_src_port: 4096
+  udp_dst_port: 4096
+- interface_name: "tx_port"
+  queue_id: 1
+  cpu_core: 13
+  batch_size: 10240
+  payload_size: 8000
+  header_size: 64
+  eth_dst_addr: <00:00:00:00:00:00>
+  ip_src_addr: 1.2.3.4
+  ip_dst_addr: 5.6.7.8
+  udp_src_port: 4097
+  udp_dst_port: 4097
