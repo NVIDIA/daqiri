@@ -120,6 +120,24 @@ body:has(.daqiri-landing) .md-header__title {
   font-size: 0.9rem;
 }
 
+/* On the landing page the site title and the page title are identical, so
+   Material's scroll swap just slides the same text sideways when you scroll
+   from the very top. Keep a single, static title instead of animating it.
+   Material toggles .md-header__title--active after scrolling past the H1,
+   which would otherwise hide the first topic (opacity/transform) and set it
+   to pointer-events: none / z-index: -1; reset all four so the title stays
+   fully visible and interactive in both states. */
+body:has(.daqiri-landing) .md-header__title .md-header__topic + .md-header__topic {
+  display: none;
+}
+body:has(.daqiri-landing) .md-header__title .md-header__topic:first-child {
+  opacity: 1;
+  transform: none;
+  transition: none;
+  pointer-events: auto;
+  z-index: auto;
+}
+
 .daqiri-landing .md-typeset :is(h1, h2, h3, h4, p, pre, ul, ol, dl) {
   margin-top: 0;
   margin-bottom: 0;

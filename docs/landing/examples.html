@@ -94,12 +94,12 @@
             <tr>
               <td class="ex-name"><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/raw_reorder_quantize_bench.cpp" target="_blank">Sequence Reorder + Quantize ↗</a></td>
               <td><span class="ex-badge ex-badge-cuda">C++/CUDA</span></td>
-              <td class="ex-desc-cell">Extends sequence reorder with an in-kernel type conversion step (e.g., int4 → fp32), so the GPU buffer is both reordered and in the format your compute pipeline expects — all before your application code runs.</td>
+              <td class="ex-desc-cell">Extends sequence reorder with an in-kernel type conversion step (e.g., int4 → fp32), so the GPU buffer is both reordered and in the format your compute pipeline expects, all before your application code runs.</td>
             </tr>
             <tr>
               <td class="ex-name"><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/pcap_writer_example.cpp" target="_blank">PCAP Writer ↗</a></td>
               <td><span class="ex-badge ex-badge-cpp">C++</span></td>
-              <td class="ex-desc-cell">Captures live network traffic to a standard <code>.pcap</code> file you can open in Wireshark or tcpdump. Packets are received via GPUDirect and staged through pinned host memory to disk; capture continues until you press Ctrl+C.</td>
+              <td class="ex-desc-cell">Captures live network traffic to a standard <code>.pcap</code> file you can open in Wireshark or tcpdump. Packets are received via GPUDirect and staged through pinned host memory to disk. Capture continues until you press Ctrl+C.</td>
             </tr>
             <tr>
               <td class="ex-name"><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/rdma_bench.cpp" target="_blank">RDMA Benchmark ↗</a></td>
@@ -109,7 +109,7 @@
             <tr>
               <td class="ex-name"><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/socket_bench.cpp" target="_blank">Socket Benchmark ↗</a></td>
               <td><span class="ex-badge ex-badge-cpp">C++</span></td>
-              <td class="ex-desc-cell">Measures TCP and UDP throughput over standard Linux sockets — no ConnectX NIC or special privileges required. A good comparison baseline before moving to kernel-bypass, or for connecting to a peer that only speaks standard sockets.</td>
+              <td class="ex-desc-cell">Measures TCP and UDP throughput over standard Linux sockets, with no ConnectX NIC or special privileges required. A good comparison baseline before moving to kernel-bypass, or for connecting to a peer that only speaks standard sockets.</td>
             </tr>
             <tr>
               <td class="ex-name"><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/gds_write_example.cpp" target="_blank">GPUDirect Storage Write ↗</a></td>

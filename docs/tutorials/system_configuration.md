@@ -5,7 +5,7 @@ hide:
 
 # System Configuration
 
-DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking/ethernet-adapters/) (ConnectX-6 Dx or later) and a CUDA-capable GPU. Two reference platforms are documented in this tutorial — pick the one closest to yours below:
+DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking/ethernet-adapters/) (ConnectX-6 Dx or later) and a CUDA-capable GPU. Two reference platforms are documented in this tutorial. Pick the one closest to yours below:
 
 - **IGX Orin** with a discrete GPU (e.g. [RTX 6000 Ada](https://www.nvidia.com/en-us/design-visualization/rtx-6000/)): peermem-based GPUDirect, a separate GPU BAR1, and a discrete-PCIe path between GPU and NIC. The originally-supported reference platform.
 - **DGX Spark** (Grace Blackwell **GB10** superchip): unified CPU/GPU memory via NVLink-C2C, integrated **ConnectX-7**, no peermem, and GPUDirect via `kind: host_pinned` data buffers.
@@ -141,7 +141,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     **For DAQIRI, we want the NIC to use the ETH link layer.** To switch the link layer mode, there are two possible options:
 
     1. On IGX Orin developer kits, you can switch that setting through the BIOS: [see IGX Orin documentation](https://docs.nvidia.com/igx-orin/user-guide/latest/switch-network-link.html).
-    2. On any system with a NVIDIA NIC (including the IGX Orin developer kits), you can run the commands below from a terminal:
+    2. On any system with an NVIDIA NIC (including the IGX Orin developer kits), you can run the commands below from a terminal:
 
         1. Identify the PCI address of your NVIDIA NIC
 
@@ -359,7 +359,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
         The section below is for advanced users looking to extract more performance out of their system. You can choose to skip this section and return to it later if performance if your application is not satisfactory.
 
-    While the configurations above are the minimum requirements to get a NIC and a NVIDIA GPU to communicate while bypassing the OS kernel stack, performance can be further improved in most scenarios by tuning the system as described below.
+    While the configurations above are the minimum requirements to get a NIC and an NVIDIA GPU to communicate while bypassing the OS kernel stack, performance can be further improved in most scenarios by tuning the system as described below.
 
     The table below summarizes all optimization steps covered in this section, along with the corresponding `tune_system.py` flags and whether each setting can be made persistent across reboots. Use it as a checklist to track your progress.
 
@@ -367,19 +367,19 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     |------|-------------|--------------------|-------------|
     | 1 | [PCIe topology](#step-1-ensure-ideal-pcie-topology) | `--check topo` | N/A (hardware) |
     | 2 | [PCIe config (MPS/Speed)](#step-2-check-the-nics-pcie-configuration) | `--check mps` | N/A (hardware) |
-    | 3 | [NIC MRRS](#step-3-maximize-the-nics-max-read-request-size-mrrs) | `--check mrrs` / `--set mrrs` | No — use a startup script |
-    | 4 | [Hugepages](#step-4-enable-huge-pages) | `--check hugepages` | Yes — kernel bootline or `/etc/fstab` |
-    | 5 | [CPU isolation](#step-5-isolate-cpu-cores) | `--check cmdline` | Yes — kernel bootline |
-    | 6 | [CPU governor](#step-6-prevent-cpu-cores-from-going-idle) | `--check cpu-freq` | Yes — see persistent option in section |
-    | 7 | [GPU clocks](#step-7-prevent-the-gpu-from-going-idle) | `--check gpu-clock` | Partial — `nvidia-smi -pm 1` persists driver; clock locks need a startup script |
-    | 8 | [GPU BAR1 size](#step-8-maximize-gpu-bar1-size) | `--check bar1-size` | Yes — firmware flash |
-    | 9 | [Jumbo frames (MTU)](#step-9-enable-jumbo-frames) | `--check mtu` | Yes — see persistent option in section |
+    | 3 | [NIC MRRS](#step-3-maximize-the-nics-max-read-request-size-mrrs) | `--check mrrs` / `--set mrrs` | No, use a startup script |
+    | 4 | [Hugepages](#step-4-enable-huge-pages) | `--check hugepages` | Yes, kernel bootline or `/etc/fstab` |
+    | 5 | [CPU isolation](#step-5-isolate-cpu-cores) | `--check cmdline` | Yes, kernel bootline |
+    | 6 | [CPU governor](#step-6-prevent-cpu-cores-from-going-idle) | `--check cpu-freq` | Yes, see persistent option in section |
+    | 7 | [GPU clocks](#step-7-prevent-the-gpu-from-going-idle) | `--check gpu-clock` | Partial. `nvidia-smi -pm 1` persists driver, clock locks need a startup script |
+    | 8 | [GPU BAR1 size](#step-8-maximize-gpu-bar1-size) | `--check bar1-size` | Yes, firmware flash |
+    | 9 | [Jumbo frames (MTU)](#step-9-enable-jumbo-frames) | `--check mtu` | Yes, see persistent option in section |
 
     !!! tip "Plan your reboots"
 
-        Several steps below require adding flags to the kernel bootline in `/etc/default/grub` (hugepages in [Enable Huge pages](#step-4-enable-huge-pages), CPU isolation in [Isolate CPU cores](#step-5-isolate-cpu-cores)). We recommend reading through both sections first and adding all the flags at once to avoid multiple reboots. Other items like MRRS, GPU clocks, and MTU can be applied at runtime but reset on reboot — consider scripting them or using a systemd service for persistence.
+        Several steps below require adding flags to the kernel bootline in `/etc/default/grub` (hugepages in [Enable Huge pages](#step-4-enable-huge-pages), CPU isolation in [Isolate CPU cores](#step-5-isolate-cpu-cores)). We recommend reading through both sections first and adding all the flags at once to avoid multiple reboots. Other items like MRRS, GPU clocks, and MTU can be applied at runtime but reset on reboot, so consider scripting them or using a systemd service for persistence.
 
-    Before diving in each of the setups below, we provide a utility script as part of the DAQIRI library which provides an overview of the configurations that potentially need to be tuned on your system. The script (`python/tune_system.py`) is run on the host from a clone of the DAQIRI repo — it touches host PCIe/sysfs and is not intended to run inside the build container.
+    Before diving in each of the setups below, we provide a utility script as part of the DAQIRI library which provides an overview of the configurations that potentially need to be tuned on your system. The script (`python/tune_system.py`) is run on the host from a clone of the DAQIRI repo. It touches host PCIe/sysfs and is not intended to run inside the build container.
 
     ??? example "Work In Progress"
 
@@ -835,7 +835,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
         cat /proc/cmdline | grep -e isolcpus -e irqaffinity -e nohz_full -e rcu_nocbs -e rcu_nocb_poll
         ```
 
-    Decide which cores to isolate based on your configuration. We recommend one core per DAQIRI queue, plus one core per benchmark application worker thread (the `bench_tx` / `bench_rx` `cpu_core` fields), as a rule of thumb — these are separate busy-poll threads and should not share a core. First, identify your core IDs:
+    Decide which cores to isolate based on your configuration. We recommend one core per DAQIRI queue, plus one core per benchmark application worker thread (the `bench_tx` / `bench_rx` `cpu_core` fields), as a rule of thumb. These are separate busy-poll threads and should not share a core. First, identify your core IDs:
 
     ```bash
     cat /proc/cpuinfo | grep processor
@@ -1151,7 +1151,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     1. Press `Join Now`.
     2. Once approved, download the `Display Mode Selector` archive.
     3. Unzip the archive.
-    4. Access your system without an X-server running. SSH into the machine, or switch to a Virtual Console (`Alt+F1`). You do not need to physically disconnect the monitor — the requirement is that no display server (X11/Wayland) is holding a lock on the NVIDIA driver.
+    4. Access your system without an X-server running. SSH into the machine, or switch to a Virtual Console (`Alt+F1`). You do not need to physically disconnect the monitor. The requirement is that no display server (X11/Wayland) is holding a lock on the NVIDIA driver.
     5. Go down the right OS and architecture folder for your system (`linux/aarch64` or `linux/x64`).
     6. Run the `displaymodeselector` command like so:
 
@@ -1297,8 +1297,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
         maxmtu 9978
         ```
 
-    ---
-    **Next:** [Benchmarking](../benchmarks/index.md) — choose and run your first DAQIRI benchmark
+    With the system tuned, continue to [Benchmarking](../benchmarks/index.md) to choose and run your first DAQIRI benchmark.
 
 === "DGX Spark"
 
@@ -1314,7 +1313,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
         **Plug a cable into the chassis QSFP socket before debugging firmware, drivers, or BIOS.** The hotplug service brings the device back when a cable is detected.
 
-    The hotplug behavior is implemented as a power/thermal management policy and coordinates with `nvidia-spark-mlnx-firmware-manager.service`. If you need the NIC alive without a cable for software-only testing, the override point is the scripts under `/opt/nvidia/dgx-spark-mlnx-hotplug` — read them before disabling.
+    The hotplug behavior is implemented as a power/thermal management policy and coordinates with `nvidia-spark-mlnx-firmware-manager.service`. If you need the NIC alive without a cable for software-only testing, the override point is the scripts under `/opt/nvidia/dgx-spark-mlnx-hotplug`. Read them before disabling.
 
     ### Port topology: 4 PFs, 2 ports, tied chassis sockets
 
@@ -1335,9 +1334,9 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     done
     ```
 
-    !!! important "Single-machine loopback: same physical port = on-chip test; different ports = over-the-wire test"
+    !!! important "Single-machine loopback: same physical port = on-chip test, different ports = over-the-wire test"
 
-        This distinction matters when you run a loopback benchmark within one DGX Spark, where TX and RX are two PFs on the same integrated CX-7. For two-device tests, pick ports according to the external cabling and the peer system's topology; the on-chip shortcut described here is specific to same-machine loopback.
+        This distinction matters when you run a loopback benchmark within one DGX Spark, where TX and RX are two PFs on the same integrated CX-7. For two-device tests, pick ports according to the external cabling and the peer system's topology. The on-chip shortcut described here is specific to same-machine loopback.
 
         Which PF pair you choose decides **what you are actually measuring**. Because each physical port is exposed over both PCIe segments, two of the four BDFs map to the *same* physical port. Identify them on your own system with `phys_port_name`:
 
@@ -1359,18 +1358,18 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
         Here two BDFs share each physical port (`mlx5_0` and `mlx5_2` are both **p0**). The two pairings measure different things:
 
-        - **Same physical port** (e.g. `mlx5_0` ↔ `mlx5_2`, both p0) → TX/RX loop **on-chip** through the eswitch; traffic never reaches the cable. Physical-link packet counters stay flat while the vport counters (`tx_good_packets` / `rx_good_packets`) run at line rate. This is a software-path test.
+        - **Same physical port** (e.g. `mlx5_0` ↔ `mlx5_2`, both p0) → TX/RX loop **on-chip** through the eswitch. Traffic never reaches the cable. Physical-link packet counters stay flat while the vport counters (`tx_good_packets` / `rx_good_packets`) run at line rate. This is a software-path test.
         - **Different physical ports** (e.g. `mlx5_0` p0 ↔ `mlx5_3` p1 `0002:01:00.1`, or `mlx5_0` ↔ `mlx5_1`) → TX/RX loop **over the wire**; physical-link packet counters rise to match the TX/RX counts. This is an over-the-wire test.
 
         Confirm which case you got from the physical-link packet counters: near zero for on-chip, matching the TX/RX packet counts for over-the-wire. These counters count packets that reached the SerDes/QSFP side of the NIC rather than packets switched internally by the eswitch. The [daqiri bench](../benchmarks/raw_benchmarking.md)'s DPDK "Extended Stats" output reports them as `tx_phy_packets` / `rx_phy_packets`; `ethtool -S` and `mlnx_perf` report the same wire counters as `tx_packets_phy` / `rx_packets_phy`.
 
-    `ethtool -m` reports identical `Connector: 0x23 No separable connector` on all 4 PFs and is **not** useful for distinguishing them; use `phys_port_name` above (the cable-yank carrier test confirms a cable is present but does **not** distinguish ports).
+    `ethtool -m` reports identical `Connector: 0x23 No separable connector` on all 4 PFs and is **not** useful for distinguishing them. Use `phys_port_name` above (the cable-yank carrier test confirms a cable is present but does **not** distinguish ports).
 
     ## System Setup for DAQIRI
 
     ### Check your NIC drivers
 
-    Same as IGX — verify `ib_core` is loaded:
+    Same as IGX. Verify `ib_core` is loaded:
 
     ```bash
     lsmod | grep ib_core
@@ -1392,7 +1391,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     ### Configure the IP addresses of the NIC ports
 
-    Spark uses NetworkManager. Create persistent `daqiri-tx` / `daqiri-rx` profiles that pin both the IP and the MTU (so [Step 9: Jumbo frames](#step-9-enable-jumbo-frames-already-covered) is folded in here). `daqiri-tx` is p0 (`enp1s0f0np0`) and `daqiri-rx` is p1 (`enP2p1s0f1np1`) — different physical ports, matching the over-the-wire benchmark example:
+    Spark uses NetworkManager. Create persistent `daqiri-tx` / `daqiri-rx` profiles that pin both the IP and the MTU (so [Step 9: Jumbo frames](#step-9-enable-jumbo-frames-already-covered) is folded in here). `daqiri-tx` is p0 (`enp1s0f0np0`) and `daqiri-rx` is p1 (`enP2p1s0f1np1`), different physical ports, matching the over-the-wire benchmark example:
 
     ```bash
     sudo nmcli connection add type ethernet ifname enp1s0f0np0   con-name daqiri-tx \
@@ -1442,7 +1441,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     ### Enable GPUDirect
 
-    **No GPUDirect kernel-module setup is required on GB10.** Set `kind: "host_pinned"` in the YAML and you're done — there is no system-side step to perform. Buffers are allocated by DAQIRI via `cudaHostAlloc` (so they are CUDA-addressable) and registered with DPDK via `rte_extmem_register`. End-to-end TX↔RX over the QSFP loop with `kind: "host_pinned"`, `num_bufs: 51200`, `batch_size: 10240` reaches **~94 Gbps** unicast (verified against `main` 9ebd729, which contains [PR #41](https://github.com/nvidia/daqiri/pull/41)).
+    **No GPUDirect kernel-module setup is required on GB10.** Set `kind: "host_pinned"` in the YAML and you're done. There is no system-side step to perform. Buffers are allocated by DAQIRI via `cudaHostAlloc` (so they are CUDA-addressable) and registered with DPDK via `rte_extmem_register`. End-to-end TX↔RX over the QSFP loop with `kind: "host_pinned"`, `num_bufs: 51200`, `batch_size: 10240` reaches **~94 Gbps** unicast (verified against `main` 9ebd729, which contains [PR #41](https://github.com/nvidia/daqiri/pull/41)).
 
     `kind: "huge"` works as a fallback at the same rate. `kind: "device"` does **not** work on GB10.
 
@@ -1470,25 +1469,25 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     | Step | Spark status | Notes |
     |------|--------------|-------|
-    | 1. PCIe topology | **N/A** | Single-SoC integrated GPU; no separable PCIe path GPU↔NIC |
+    | 1. PCIe topology | **N/A** | Single-SoC integrated GPU, no separable PCIe path GPU↔NIC |
     | 2. PCIe MPS / Speed | unchanged | Same diagnostic commands; PCIe Gen5 native |
     | 3. NIC MRRS | reshape | Use systemd unit + `setpci CAP_EXP+8.w` (capability-relative); **disable Secure Boot** |
     | 4. Hugepages | reshape | Use a grub **drop-in** under `/etc/default/grub.d/`, not `/etc/default/grub` |
     | 5. CPU isolation | reshape | Pin to big cores 16-19 (X925 cluster 1); folds into the same grub drop-in as Step 4 |
     | 6. CPU governor | already set | Spark default is `performance` on all 20 cores |
     | 7. GPU clocks | unchanged | Same systemd-unit recipe; GB10 max SM clock is 3003 MHz |
-    | 8. GPU BAR1 size | **N/A** | Unified memory; no resizable BAR1 |
+    | 8. GPU BAR1 size | **N/A** | Unified memory, no resizable BAR1 |
     | 9. Jumbo frames | folded into setup | MTU=9000 was set in the `daqiri-tx`/`daqiri-rx` nmcli profiles above |
 
-    `tune_system.py --check all` on Spark suppresses the WARNs that are false positives on integrated GPUs (peermem, gpudirect, topology, BAR1) — see the source comments in [`python/tune_system.py`](https://github.com/nvidia/daqiri/blob/main/python/tune_system.py).
+    `tune_system.py --check all` on Spark suppresses the WARNs that are false positives on integrated GPUs (peermem, gpudirect, topology, BAR1). See the source comments in [`python/tune_system.py`](https://github.com/nvidia/daqiri/blob/main/python/tune_system.py).
 
-    ### Step 1: PCIe topology — N/A on Spark
+    ### Step 1: PCIe topology (N/A on Spark)
 
     `nvidia-smi topo -m` reports the integrated GPU as `SYS`-connected to the NIC PFs. This is structural, not tunable: there is no separable PCIe path GPU↔NIC on a single-SoC integrated GPU. `tune_system.py --check topo` recognizes integrated GPUs and reports INFO instead of WARNING for this case.
 
     ### Step 2: Check the NIC's PCIe configuration
 
-    Same diagnostic commands as IGX — for each PF, query `MaxPayload` (DevCap vs DevCtl) and PCIe `Speed` (LnkCap vs LnkSta). Spark's CX-7 PFs negotiate PCIe Gen5 at the chip's native MPS; nothing to set.
+    Same diagnostic commands as IGX. For each PF, query `MaxPayload` (DevCap vs DevCtl) and PCIe `Speed` (LnkCap vs LnkSta). Spark's CX-7 PFs negotiate PCIe Gen5 at the chip's native MPS. Nothing to set.
 
     ```bash
     for d in 0000:01:00.0 0000:01:00.1 0002:01:00.0 0002:01:00.1; do
@@ -1529,7 +1528,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     # Each line should print 5xxx (high nibble 5 = 4096-byte MRRS).
     ```
 
-    ### Step 4: Enable Huge pages — grub drop-in pattern
+    ### Step 4: Enable Huge pages (grub drop-in pattern)
 
     Spark composes its `GRUB_CMDLINE_LINUX` from drop-ins under `/etc/default/grub.d/`. Edit a new file rather than `/etc/default/grub` directly so Spark platform updates don't fight your changes. The shipped `daqiri_bench_raw_tx_rx_spark.yaml` needs ~4 GiB of hugepages (kind: HUGE dummy queues + DPDK per-pool overhead); 4 × 1 GiB pages is enough:
 
@@ -1547,7 +1546,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     sudo mkdir -p /mnt/huge
     ```
 
-    Reboot once — Steps 4 and 5 land together.
+    Reboot once. Steps 4 and 5 land together.
 
     ```bash
     sudo reboot
@@ -1576,7 +1575,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     cat /proc/cmdline | grep -oE "isolcpus=[^ ]+|nohz_full=[^ ]+|rcu_nocbs=[^ ]+|irqaffinity=[^ ]+"
     ```
 
-    ### Step 6: CPU governor — already `performance` on Spark
+    ### Step 6: CPU governor (already `performance` on Spark)
 
     Spark ships with `performance` on all 20 cores. Verify:
 
@@ -1595,13 +1594,13 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     sudo nvidia-smi -lgc=$(nvidia-smi --query-gpu=clocks.max.sm --format=csv,noheader,nounits)
     ```
 
-    On a production GB10 the locked SM clock is 3003 MHz. If `nvidia-smi -pm 1` reports persistence mode is unsupported on this platform, the lock-clocks call still takes effect for the current driver session — fold it into a unit (omitting the `--lock-memory-clocks` line from the IGX recipe) and start it after reboot.
+    On a production GB10 the locked SM clock is 3003 MHz. If `nvidia-smi -pm 1` reports persistence mode is unsupported on this platform, the lock-clocks call still takes effect for the current driver session. Fold it into a unit (omitting the `--lock-memory-clocks` line from the IGX recipe) and start it after reboot.
 
-    ### Step 8: GPU BAR1 size — N/A on Spark
+    ### Step 8: GPU BAR1 size (N/A on Spark)
 
-    GB10 has unified CPU/GPU memory (NVLink-C2C coherent) — there is no resizable BAR1 to enlarge, so the entire IGX displaymodeselector / firmware-flash flow does not apply. `nvidia-smi -q | grep -A 3 BAR1` may print numbers but they are not actionable. `tune_system.py --check bar1-size` reports INFO instead of WARNING when an integrated GPU is detected.
+    GB10 has unified CPU/GPU memory (NVLink-C2C coherent). There is no resizable BAR1 to enlarge, so the entire IGX displaymodeselector / firmware-flash flow does not apply. `nvidia-smi -q | grep -A 3 BAR1` may print numbers but they are not actionable. `tune_system.py --check bar1-size` reports INFO instead of WARNING when an integrated GPU is detected.
 
-    ### Step 9: Enable Jumbo frames — already covered
+    ### Step 9: Enable Jumbo frames (already covered)
 
     The `daqiri-tx` / `daqiri-rx` nmcli profiles created in [Configure the IP addresses](#configure-the-ip-addresses-of-the-nic-ports_1) already pin `ethernet.mtu 9000`, so this step is a no-op on Spark. Verify:
 
@@ -1610,7 +1609,6 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     ip link show enP2p1s0f1np1 | grep -oE "mtu [0-9]+"
     ```
 
-    ---
-    **Next:** [Benchmarking](../benchmarks/index.md) — choose and run your first DAQIRI benchmark
+    With the system tuned, continue to [Benchmarking](../benchmarks/index.md) to choose and run your first DAQIRI benchmark.
 
 </div>

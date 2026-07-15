@@ -18,8 +18,8 @@ endpoint URI schemes**, **GPUDirect**, **packet / burst / segment**,
 DAQIRI exposes a single C++ API on top of several packet-I/O stacks. The
 choice is configured per-application in YAML with:
 
-- `stream_type` — the I/O stack family.
-- endpoint URI schemes — `tcp://`, `udp://`, or `roce://` in
+- `stream_type`: the I/O stack family.
+- endpoint URI schemes: `tcp://`, `udp://`, or `roce://` in
   `socket_config.local_addr` and `socket_config.remote_addr`.
 
 The shipped Ethernet stream types use NICs as their hardware endpoint.
@@ -33,7 +33,7 @@ An **engine** is the library that *implements* a stream type. It is a
 separate concept from `stream_type`: the stream type says *what* kind of
 stream you want, the engine is the *implementation* behind it.
 
-You normally never set an engine — DAQIRI picks a sensible default from
+You normally never set an engine, since DAQIRI picks a sensible default from
 the `stream_type` and the endpoint URI scheme:
 
 | Stream | Default engine | Notes |
@@ -47,7 +47,7 @@ The engine concept exists so the implementation can be swapped without
 changing the stream type. For example, raw Ethernet is served by the
 `dpdk` engine by default but can instead use the `ibverbs` engine (a
 Multi-Packet/striding Receive Queue implementation) by setting
-`engine: "ibverbs"` on the stream; RoCE is served by the `ibverbs` engine,
+`engine: "ibverbs"` on the stream. RoCE is served by the `ibverbs` engine,
 and a future release could add a DOCA RDMA engine as an alternative for the
 same `roce://` stream.
 
@@ -63,7 +63,7 @@ Kernel-bypass raw Ethernet. The application talks directly to NIC ring
 buffers in user space, skipping the Linux network stack entirely. This
 is the highest-performance path and the only one with hardware flow
 steering (see [Flows](#flow) below). Implemented on top of
-[DPDK](https://www.dpdk.org/) by default; the DPDK dependency is an
+[DPDK](https://www.dpdk.org/) by default. The DPDK dependency is an
 implementation detail, not a user-facing concept. Setting `engine: "ibverbs"`
 on the stream instead uses a pure-libibverbs/DevX Multi-Packet (striding)
 Receive Queue engine on Mellanox/mlx5 NICs, which packs many packets into one
@@ -76,11 +76,11 @@ Requires an NVIDIA SmartNIC (ConnectX-6 Dx or later).
 *YAML:* `stream_type: "socket"`. The specific transport is chosen by endpoint
 URI schemes:
 
-- **`udp://`** / **`tcp://`** — Linux kernel UDP and TCP sockets. No NIC
+- **`udp://`** / **`tcp://`**: Linux kernel UDP and TCP sockets. No NIC
   privileges required, no special hardware. Useful
   as a comparison baseline against the kernel-bypass paths and as a way
   to get first results on a system without an NVIDIA NIC.
-- **`roce://` endpoints** — RDMA over Converged Ethernet, using the
+- **`roce://` endpoints**: RDMA over Converged Ethernet, using the
   open-source [`rdma-core`](https://github.com/linux-rdma/rdma-core)
   library. A server/client connection model, NIC-level reliable
   transport (RC), and in-order delivery. Primarily intended for
@@ -120,11 +120,11 @@ in the configuration walkthrough.
     - **Raw Ethernet** (`stream_type: "raw"`) is supported, distributed
       with the DAQIRI library, and is the only stream type actively
       tested at this time.
-    - **Socket — UDP / TCP** (`stream_type: "socket"` with `udp://` /
-      `tcp://` endpoints) is supported and distributed; integration testing is
+    - **Socket: UDP / TCP** (`stream_type: "socket"` with `udp://` /
+      `tcp://` endpoints) is supported and distributed. Integration testing is
       under development.
-    - **Socket — RoCE** (`stream_type: "socket"` and
-      `roce://` endpoints) is supported and distributed; integration
+    - **Socket: RoCE** (`stream_type: "socket"` and
+      `roce://` endpoints) is supported and distributed. Integration
       testing is under development.
     - The **PCIe programmable-sensor** path is under development.
 
@@ -182,7 +182,7 @@ For step-by-step system setup, see the
 
 DAQIRI is a batch processing library. Packets are received from DAQIRI
 and sent to DAQIRI in batches called **bursts**. Larger bursts can
-increase throughput at the expense of latency; smaller bursts decrease
+increase throughput at the expense of latency, while smaller bursts decrease
 latency but cap total throughput because of the per-burst processing
 overhead. The terms below appear throughout the API, configuration, and
 code paths.
@@ -199,7 +199,7 @@ reassembles them on the wire transparently.
 
 A **burst** is the metadata container DAQIRI uses to describe a batch
 of packets being transmitted or received. The C++ type for a burst is
-`BurstParams`. It is intentionally opaque — applications use helper
+`BurstParams`. It is intentionally opaque, so applications use helper
 functions (`get_packet_ptr`, `get_packet_length`, `get_num_packets`,
 ...) to inspect or modify it rather than touching its fields directly.
 
@@ -269,7 +269,7 @@ dynamic flows are not part of v1.
 
 Raw DPDK and raw ibverbs flows can also use ordered `actions:` for hardware VLAN
 pop/push and VXLAN, GRE, or NVGRE decap/encap. RX decap/pop actions deliver
-post-decap packets to application buffers; TX encap/push actions leave
+post-decap packets to application buffers, while TX encap/push actions leave
 application buffers as pre-encap packets and change only the wire frame.
 Dynamic RX flows use the same ordered action model for runtime decap/pop rules,
 while TX transform flows remain static startup configuration.
@@ -301,7 +301,7 @@ The kind of a memory region determines whether packet data ends up on
 the CPU or the GPU:
 
 - `huge`: CPU hugepages (recommended for CPU buffers).
-- `device`: GPU VRAM (discrete GPUs; requires GPUDirect via peermem or
+- `device`: GPU VRAM (discrete GPUs, requires GPUDirect via peermem or
   DMA-BUF).
 - `host_pinned`: pinned CPU pages allocated via `cudaHostAlloc`.
   Recommended on integrated GPUs (NVIDIA GB10 / DGX Spark), where the
@@ -324,7 +324,7 @@ pool (for headers, segment 0); its second region is a `device` GPU pool
 
 DAQIRI is designed around zero-copy packet delivery. When a receive API
 returns packet data, the application is reading the buffers the NIC
-DMA'd into; the API passes pointers and metadata, not copies.
+DMA'd into. The API passes pointers and metadata, not copies.
 
 That zero-copy model makes **buffer release part of the API contract**.
 Applications must free RX bursts after processing and free or send TX

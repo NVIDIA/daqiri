@@ -1,4 +1,4 @@
-site_name: DAQIRI — Data Acquisition for Integrated Real-time Instruments
+site_name: "DAQIRI: Data Acquisition for Integrated Real-time Instruments"
 site_url: https://nvidia.github.io/daqiri/
 repo_url: https://github.com/nvidia/daqiri
 repo_name: nvidia/daqiri
@@ -9,20 +9,18 @@ theme:
   logo: images/logo.svg
   favicon: images/favicon-32.png
   palette:
-    - media: "(prefers-color-scheme: light)"
-      scheme: default
-      primary: black
-      accent: light green
-      toggle:
-        icon: material/brightness-7
-        name: Switch to dark mode
-    - media: "(prefers-color-scheme: dark)"
-      scheme: slate
+    - scheme: slate
       primary: black
       accent: light green
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
+    - scheme: default
+      primary: black
+      accent: light green
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
   font:
     text: Inter
     code: JetBrains Mono

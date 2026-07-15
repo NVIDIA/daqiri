@@ -19,7 +19,7 @@ region*, *zero-copy ownership*, *RX reorder*), keep the
 Functions that can fail return a `daqiri.Status` value, or a tuple whose first
 element is a `Status` and whose remaining elements are output values. Packet
 storage is owned by DAQIRI, so received and transmitted bursts must be explicitly
-freed — see
+freed. See
 [Concepts → Zero-Copy Ownership](../concepts.md#zero-copy-ownership) for why a
 missed free causes RX drops.
 
@@ -28,9 +28,9 @@ For a complete executable Python benchmark, see
 
 ## Building and Importing
 
-Follow the build flow in [Getting Started](../getting-started.md) — container
-or bare-metal — and add `-DDAQIRI_BUILD_PYTHON=ON` to the CMake configure step
-(the default is `OFF`). The container path is recommended; it already provides
+Follow the build flow in [Getting Started](../getting-started.md), container
+or bare-metal, and add `-DDAQIRI_BUILD_PYTHON=ON` to the CMake configure step
+(the default is `OFF`). The container path is recommended, and it already provides
 `pybind11` and the rest of the build dependencies. For example, inside the
 container:
 
@@ -154,7 +154,7 @@ if status == daqiri.Status.SUCCESS:
 
 If GPU RX `reorder_configs` are configured for the DPDK engine, set one CUDA
 stream per GPU reorder plan before pulling reordered bursts. Pass the CUDA
-stream as an integer address; pass `0` to use the default stream. See the
+stream as an integer address. Pass `0` to use the default stream. See the
 [Configuration YAML Reference](configuration.md#rx-reorder-configs)
 for reorder configuration constraints.
 
@@ -166,10 +166,10 @@ if status != daqiri.Status.SUCCESS:
 
 ## Receiving Packets
 
-### RX Step 1 — Get a burst
+### RX Step 1: Get a burst
 
 `get_rx_burst()` is non-blocking. It returns `(Status, BurstParams | None)`.
-`Status.SUCCESS` means a burst is ready; other statuses (including `NULL_PTR`)
+`Status.SUCCESS` means a burst is ready. Other statuses (including `NULL_PTR`)
 mean no burst is ready yet or an error occurred.
 
 ```python
@@ -186,7 +186,7 @@ status, burst = daqiri.get_rx_burst()                    # any queue on any port
 status, burst = daqiri.get_rx_burst_for_connection(conn_id, server=True)
 ```
 
-### RX Step 2 — Access packet data
+### RX Step 2: Access packet data
 
 For a single-segment burst (CPU-only or batched GPU), copy data out with
 `get_packet_bytes`:
@@ -219,9 +219,9 @@ RX hardware timestamps are available only when the DPDK engine is configured
 with `rx.hardware_timestamps: true` and the NIC supports
 `RTE_ETH_RX_OFFLOAD_TIMESTAMP`. See
 [C++ API Usage → Receiving Packets](cpp.md#receiving-packets) for the clock
-semantics; the Python wrapper exposes the same timestamps in nanoseconds.
+semantics. The Python wrapper exposes the same timestamps in nanoseconds.
 
-### RX Step 3 — Free buffers
+### RX Step 3: Free buffers
 
 When you are done with a burst, free it:
 
@@ -246,7 +246,7 @@ transfer ownership to Python.
 
 Prefer the copy helpers unless the application deliberately needs raw addresses
 for CUDA or foreign-function interop. The copy helpers handle both CPU pointers
-and CUDA device pointers; device copies use `cudaMemcpy` internally.
+and CUDA device pointers. Device copies use `cudaMemcpy` internally.
 
 ```python
 status = daqiri.copy_buffer_to_segment_packet(
@@ -276,8 +276,8 @@ This section covers how to consume reordered bursts from Python.
 
 Reordered RX bursts are identified by flags on `burst.hdr.hdr.burst_flags`:
 
-- `DAQIRI_BURST_FLAG_REORDERED` — burst contains one aggregated reorder buffer.
-- `DAQIRI_BURST_FLAG_REORDER_TIMEOUT` — the aggregate was emitted by the
+- `DAQIRI_BURST_FLAG_REORDERED`: burst contains one aggregated reorder buffer.
+- `DAQIRI_BURST_FLAG_REORDER_TIMEOUT`: the aggregate was emitted by the
   timeout path rather than by filling the configured `packets_per_batch`.
 
 For reordered bursts, `burst.hdr.hdr.max_pkt` is the logical number of source
@@ -302,7 +302,7 @@ any.
 
 ## Transmitting Packets
 
-### TX Step 1 — Allocate a burst
+### TX Step 1: Allocate a burst
 
 ```python
 port_id = daqiri.get_port_id("tx_port")
@@ -321,11 +321,11 @@ else:
         # retry later
 ```
 
-### TX Step 2 — Fill packets
+### TX Step 2: Fill packets
 
 Header helpers are available when DAQIRI is responsible for filling packet
 headers. `set_ipv4_header()` takes the source and destination hosts as
-**integers**, not dotted-quad strings — convert with `ipaddress.IPv4Address` (or
+**integers**, not dotted-quad strings. Convert with `ipaddress.IPv4Address` (or
 your own packer) before calling:
 
 ```python
@@ -349,11 +349,11 @@ for idx in range(daqiri.get_num_packets(burst)):
     status = daqiri.set_packet_lengths(burst, idx, [len(packet)])
 ```
 
-### TX Step 3 — Send
+### TX Step 3: Send
 
 ```python
 status = daqiri.send_tx_burst(burst)
-# Do not free `burst` after a SUCCESS or NO_SPACE_AVAILABLE return — see the ownership note below.
+# Do not free `burst` after a SUCCESS or NO_SPACE_AVAILABLE return. See the ownership note below.
 ```
 
 `send_tx_burst()` takes ownership of the burst on success and on a full-ring
@@ -390,7 +390,7 @@ status = daqiri.daqiri_write_pcap_to_file(
 CUDA device-backed packet segments require `DAQIRI_ENABLE_GDS=ON` and working
 NVIDIA cuFile support. See
 [C++ API Usage → Writing Bursts to Storage](cpp.md#writing-bursts-to-storage)
-for the full GDS constraints; the asynchronous file-write API is C++-only at
+for the full GDS constraints. The asynchronous file-write API is C++-only at
 this time.
 
 ## Socket and RDMA
@@ -479,16 +479,16 @@ The bindings release the Python GIL around blocking or long-running DAQIRI
 calls where the pybind11 wrapper declares `py::gil_scoped_release`. This
 currently includes:
 
-- `daqiri_init` — all input forms (YAML path/string, dict, `NetworkConfig`,
+- `daqiri_init`: all input forms (YAML path/string, dict, `NetworkConfig`,
   `value`/`as_dict` config-like objects). The GIL is released around the
-  underlying DAQIRI call; any Python-side conversion (PyYAML `dump`, `as_dict()`
+  underlying DAQIRI call. Any Python-side conversion (PyYAML `dump`, `as_dict()`
   invocation) still runs with the GIL held.
 - `daqiri_init_from_yaml_string` and `daqiri_init_from_yaml_file`
 - `get_rx_burst` (all overloads) and `get_rx_burst_for_connection`
 - `is_tx_burst_available`, `get_tx_packet_burst`, `send_tx_burst`
-- `copy_buffer_to_packet`, `copy_buffer_to_segment_packet` — released around
+- `copy_buffer_to_packet`, `copy_buffer_to_segment_packet`: released around
   the underlying memory copy (host or `cudaMemcpy`).
-- `get_packet_bytes`, `get_segment_packet_bytes` — released around the copy
+- `get_packet_bytes`, `get_segment_packet_bytes`: released around the copy
   out of the DAQIRI buffer.
 - `daqiri_write_raw_to_file`, `daqiri_write_pcap_to_file`
 - `synchronize_burst_event`
@@ -604,7 +604,7 @@ The workflow sections above show the common call order and ownership rules.
 | Function | Purpose |
 | --- | --- |
 | `get_mac_addr(port)` | Return `(Status, "aa:bb:cc:dd:ee:ff")`. |
-| `format_eth_addr(addr)` | Return six MAC-address bytes from a `xx:xx:xx:xx:xx:xx` MAC string; invalid input returns zero bytes. |
+| `format_eth_addr(addr)` | Return six MAC-address bytes from a `xx:xx:xx:xx:xx:xx` MAC string. Invalid input returns zero bytes. |
 | `get_port_id(key)` | Resolve an interface name or PCIe address to a port ID. |
 | `get_num_rx_queues(port_id)` | Return configured RX queue count for a port. |
 | `drop_all_traffic(port)` | Install a high-priority drop rule on a port. |
@@ -623,7 +623,7 @@ The workflow sections above show the common call order and ownership rules.
 | `rdma_get_server_conn_id(server_addr, server_port)` | Return `(Status, conn_id)`. |
 
 Dynamic RX flows are RX-only in v1. The `action` attribute remains the single queue-action
-shorthand; use ordered `actions` when a raw DPDK or raw ibverbs dynamic rule needs hardware
+shorthand. Use ordered `actions` when a raw DPDK or raw ibverbs dynamic rule needs hardware
 VLAN pop or VXLAN/GRE/NVGRE decapsulation before the final queue action. Static TX
 encapsulation/push rules are configured in YAML under `tx.flows`.
 
@@ -676,7 +676,7 @@ encapsulation/push rules are configured in YAML under `tx.flows`.
 All exposed classes have a default constructor and read/write attributes.
 Config classes mirror the C++ configuration structs, with Python attribute
 names that mostly omit the trailing underscore from the C++ member name (e.g.
-`name_` → `name`). A few fields are renamed for clarity — for example `mrs_`
+`name_` → `name`). A few fields are renamed for clarity, for example `mrs_`
 → `memory_regions` and `ifs_` → `interfaces`.
 
 | Class | Purpose |
