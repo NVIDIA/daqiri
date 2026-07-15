@@ -161,12 +161,37 @@ parse_drops() {
   echo "$sum"
 }
 
-# Read the app-reported RX (fallback TX) packet count from the bench stdout.
+# The throughput metric is APP-LEVEL: the bench's own reported bytes/packets over
+# its own traffic timer ("RX complete ... bytes=B ... seconds=S"), matching
+# run_spark_bench.sh. This avoids two biases of a phy-delta-over-wall-clock measure:
+# (1) the wall/docker window includes container start + CUDA/dma-buf init where no
+# traffic flows (~10% deflation at 30 s), and (2) a concurrent stray sender would
+# inflate the RX *_phy counters but not the app's own byte count. The rx_*_phy delta
+# is kept only as a "did traffic cross the cable" sanity check.
+
+# Sum app-reported RX (fallback TX) packets across queues from the bench stdout.
 app_packets() {
   local out="$1" p
-  p="$(grep -E '^RX complete' "$out" | tail -n1 | grep -oE ' packets=[0-9]+' | sed -E 's/.*=//')"
-  [[ -z "$p" ]] && p="$(grep -E '^TX complete' "$out" | tail -n1 | grep -oE ' packets=[0-9]+' | sed -E 's/.*=//')"
+  p="$(grep -E '^RX complete' "$out" | grep -oE 'packets=[0-9]+' | sed -E 's/.*=//' | awk '{s+=$1} END{printf "%d", s+0}')"
+  [[ "${p:-0}" -eq 0 ]] && p="$(grep -E '^TX complete' "$out" | grep -oE 'packets=[0-9]+' | sed -E 's/.*=//' | awk '{s+=$1} END{printf "%d", s+0}')"
   echo "${p:-0}"
+}
+
+# Sum app-reported RX (fallback TX) bytes across queues (delivered goodput).
+app_bytes() {
+  local out="$1" b
+  b="$(grep -E '^RX complete' "$out" | grep -oE 'bytes=[0-9]+' | sed -E 's/.*=//' | awk '{s+=$1} END{printf "%d", s+0}')"
+  [[ "${b:-0}" -eq 0 ]] && b="$(grep -E '^TX complete' "$out" | grep -oE 'bytes=[0-9]+' | sed -E 's/.*=//' | awk '{s+=$1} END{printf "%d", s+0}')"
+  echo "${b:-0}"
+}
+
+# Max bench-reported traffic duration (seconds) across RX (fallback TX) complete
+# lines -- the true send/receive window, excluding container + init startup.
+bench_seconds() {
+  local out="$1" s
+  s="$(grep -E '^RX complete' "$out" | grep -oE 'seconds=[0-9.]+' | sed -E 's/.*=//' | sort -rn | head -1)"
+  [[ -z "$s" ]] && s="$(grep -E '^TX complete' "$out" | grep -oE 'seconds=[0-9.]+' | sed -E 's/.*=//' | sort -rn | head -1)"
+  echo "${s:-0}"
 }
 
 # Build the per-cell config: substitute payload_size + eth_dst_addr, and for the
@@ -243,23 +268,30 @@ run_cell() {
     FAILURES=$((FAILURES + 1)); return 1
   fi
 
-  local d_bytes d_pkts elapsed gbps pps pct
-  d_bytes=$((b_after - b_before))
+  local d_bytes d_pkts bench_secs a_bytes a_pkts gbps pps pct
+  d_bytes=$((b_after - b_before))    # rx_*_phy delta over the wall window = wire sanity only
   d_pkts=$((p_after - p_before))
-  elapsed="$(awk -v a="$t_before" -v b="$t_after" 'BEGIN{printf "%.3f", b-a}')"
-  gbps="$(awk -v b="$d_bytes" -v s="$elapsed" 'BEGIN{ if(s>0) printf "%.3f", (b*8.0)/s/1e9; else print 0 }')"
-  pps="$(awk  -v p="$d_pkts"  -v s="$elapsed" 'BEGIN{ if(s>0) printf "%.0f", p/s; else print 0 }')"
+  bench_secs="$(bench_seconds "$stdout")"   # true traffic duration (bench's own timer)
+  a_bytes="$(app_bytes "$stdout")"          # delivered goodput
+  a_pkts="$(app_packets "$stdout")"
+  gbps="$(awk -v b="$a_bytes" -v s="$bench_secs" 'BEGIN{ if(s>0) printf "%.3f", (b*8.0)/s/1e9; else print 0 }')"
+  pps="$(awk  -v p="$a_pkts"  -v s="$bench_secs" 'BEGIN{ if(s>0) printf "%.0f", p/s; else print 0 }')"
   pct="$(awk  -v g="$gbps" -v l="$LINE_RATE_GBPS" 'BEGIN{ if(l>0) printf "%.1f", 100.0*g/l; else print 0 }')"
 
   if [[ "$d_pkts" -le 0 ]]; then
     echo "WARN: $cell rx_packets_phy did not advance -- traffic may not have crossed the wire" >&2
   fi
+  # Contamination guard: the wire (phy) should not carry materially MORE than the app
+  # sent/received; a large excess means a concurrent stray sender polluted the counters.
+  awk -v ph="$d_bytes" -v ap="$a_bytes" -v c="$cell" \
+    'BEGIN{ if(ap>0 && ph > ap*1.10) printf "WARN: %s rx_bytes_phy (%d) >> app bytes (%d): possible concurrent traffic\n", c, ph, ap > "/dev/stderr" }'
 
-  local drops apkts
+  local drops
   drops="$(parse_drops "$stderr")"
-  apkts="$(app_packets "$stdout")"
 
-  echo "$PHASE,$engine,$payload,$rep,$elapsed,$d_bytes,$d_pkts,$gbps,$pps,$pct,$drops,$apkts" | tee -a "$CSV"
+  # CSV cols: seconds=bench traffic time; rx_bytes/packets_phy=wire-sanity delta;
+  # gbps/pps/pct=app-level over the traffic window (see helper notes above).
+  echo "$PHASE,$engine,$payload,$rep,$bench_secs,$d_bytes,$d_pkts,$gbps,$pps,$pct,$drops,$a_pkts" | tee -a "$CSV"
 }
 
 echo "phase=$PHASE  engines=[${ENGINES[*]}]  payloads=[${PAYLOADS[*]}]  ${RUN_SECONDS}s x ${REPEATS} rep(s)  docker=$RUN_IN_DOCKER"
