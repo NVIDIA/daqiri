@@ -631,8 +631,8 @@ struct RxQueueConfig {
 struct TxQueueConfig {
   CommonQueueConfig common_;
   // Packet pacing: average TX rate cap in megabits/sec (L2 frame bytes). 0
-  // disables pacing (line-rate). Honored only by engines/devices with accurate
-  // send scheduling (wait-on-time + real-time clock).
+  // disables pacing (line-rate). Honored only by engines/devices with hardware
+  // packet-pacing support.
   uint64_t pacing_mbps_ = 0;
 };
 
