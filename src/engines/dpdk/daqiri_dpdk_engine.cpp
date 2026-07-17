@@ -6301,7 +6301,15 @@ int DpdkEngine::tx_core_worker(void* arg) {
                     (void*)tparams->ring);
 
   while (!force_quit.load()) {
-    if (rte_ring_dequeue(tparams->ring, reinterpret_cast<void**>(&msg)) != 0) { continue; }
+    if (rte_ring_dequeue(tparams->ring, reinterpret_cast<void**>(&msg)) != 0) {
+      // Poll TX completions while idle so the PMD reclaims mbufs back to the
+      // mempool.  Without this, is_tx_burst_available() can permanently gate
+      // new submissions once the pool drops below the 2×batch threshold,
+      // because rte_eth_tx_burst() — the only other reclaim path — is never
+      // called when the ring is empty.
+      (void)rte_eth_tx_done_cleanup(tparams->port, tparams->queue, 0);
+      continue;
+    }
 
     // Scatter mode needs to chain all the buffers
     if (msg->hdr.hdr.num_segs > 1) {

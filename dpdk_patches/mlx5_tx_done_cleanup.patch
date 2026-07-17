@@ -1,0 +1,59 @@
+diff --git a/drivers/net/mlx5/mlx5_tx.h b/drivers/net/mlx5/mlx5_tx.h
+--- a/drivers/net/mlx5/mlx5_tx.h
++++ b/drivers/net/mlx5/mlx5_tx.h
+@@ -237,6 +237,7 @@
+ void mlx5_tx_handle_completion(struct mlx5_txq_data *__rte_restrict txq,
+ 			       unsigned int olx __rte_unused);
+ int mlx5_tx_descriptor_status(void *tx_queue, uint16_t offset);
++int mlx5_tx_done_cleanup(void *tx_queue, uint32_t free_cnt);
+ void mlx5_txq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
+ 		       struct rte_eth_txq_info *qinfo);
+ int mlx5_tx_burst_mode_get(struct rte_eth_dev *dev, uint16_t tx_queue_id,
+diff --git a/drivers/net/mlx5/mlx5_tx.c b/drivers/net/mlx5/mlx5_tx.c
+--- a/drivers/net/mlx5/mlx5_tx.c
++++ b/drivers/net/mlx5/mlx5_tx.c
+@@ -288,5 +288,27 @@ mlx5_tx_descriptor_status(void *tx_queue, uint16_t offset)
+ }
+ 
++/**
++ * DPDK callback to free consumed TX mbufs.
++ *
++ * @param tx_queue
++ *   The TX queue.
++ * @param[in] free_cnt
++ *   Maximum number of packets to free. Use 0 to indicate all possible packets
++ *   should be freed. Note that a packet may be using multiple mbufs.
++ *
++ * @return
++ *   Number of packets freed, or negative errno on error.
++ */
++int
++mlx5_tx_done_cleanup(void *tx_queue, uint32_t free_cnt __rte_unused)
++{
++	struct mlx5_txq_data *__rte_restrict txq = tx_queue;
++	uint16_t tail_before = txq->elts_tail;
++
++	mlx5_tx_handle_completion(txq, 0);
++	return (uint16_t)(txq->elts_tail - tail_before);
++}
++
+ /*
+  * Array of declared and compiled Tx burst function and corresponding
+  * supported offloads set. The array is used to select the Tx burst
+diff --git a/drivers/net/mlx5/mlx5.c b/drivers/net/mlx5/mlx5.c
+--- a/drivers/net/mlx5/mlx5.c
++++ b/drivers/net/mlx5/mlx5.c
+@@ -2585,5 +2585,6 @@ const struct eth_dev_ops mlx5_dev_ops = {
+ 	.rxq_info_get = mlx5_rxq_info_get,
+ 	.txq_info_get = mlx5_txq_info_get,
++	.tx_done_cleanup = mlx5_tx_done_cleanup,
+ 	.rx_burst_mode_get = mlx5_rx_burst_mode_get,
+ 	.tx_burst_mode_get = mlx5_tx_burst_mode_get,
+ 	.rx_queue_intr_enable = mlx5_rx_intr_enable,
+@@ -2680,5 +2681,6 @@ const struct eth_dev_ops mlx5_dev_ops_isolate = {
+ 	.rxq_info_get = mlx5_rxq_info_get,
+ 	.txq_info_get = mlx5_txq_info_get,
++	.tx_done_cleanup = mlx5_tx_done_cleanup,
+ 	.rx_burst_mode_get = mlx5_rx_burst_mode_get,
+ 	.tx_burst_mode_get = mlx5_tx_burst_mode_get,
+ 	.rx_queue_intr_enable = mlx5_rx_intr_enable,
