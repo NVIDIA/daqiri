@@ -276,9 +276,10 @@ link speed. Change `pacing_mbps` (or set it to `0` to disable pacing and send at
 and re-run to see the cap move.
 
 The DPDK path requires hardware send scheduling; if unavailable, it logs a warning and runs at
-line rate. The ibverbs path requires packet-pacing support for RAW_PACKET QPs and a requested rate
-within the range reported by the device; otherwise initialization fails instead of silently
-ignoring the cap.
+line rate. The ibverbs path requires packet-pacing support for RAW_PACKET QPs and, when the driver
+reports a supported range, a rate within that range. Older drivers that omit the range defer the
+check to the provider when applying the rate; unsupported requests still fail initialization
+instead of silently ignoring the cap.
 
 ## Tune RDMA SEND completion signaling
 

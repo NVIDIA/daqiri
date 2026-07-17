@@ -11,7 +11,8 @@
 #
 # Requirements: the DPDK path needs its hardware send-scheduling offload and
 # warns/runs at line rate without it. The ibverbs path requires RAW_PACKET packet
-# pacing and a rate within the device's advertised range; otherwise init fails.
+# pacing and an accepted rate; older drivers that omit their supported range
+# defer validation to the provider when the rate is applied.
 #
 # Validate: run daqiri_bench_raw_gpudirect with this config and compute the
 # achieved rate from the RX line's bytes/seconds (Gbps = bytes * 8 / seconds /

@@ -405,7 +405,8 @@ daqiri::set_reorder_cuda_stream("rx_port", "rx_reorder_0", stream);
   requirements: `dpdk` uses hardware send scheduling and falls back to line rate with a warning
   when that offload is unavailable; `ibverbs` assigns the QP to an mlx5 hardware packet-pacing
   rate-table entry and fails initialization if RAW_PACKET pacing is unavailable or the requested
-  rate is outside the device's advertised range. The ibverbs engine leaves the optional burst
+  rate is outside a range advertised by the device. Older drivers that omit the range defer bounds
+  checking to the provider when the rate is applied. The ibverbs engine leaves the optional burst
   bound and typical-packet-size fields at their device defaults.
   - type: `integer`
   - default: `0`

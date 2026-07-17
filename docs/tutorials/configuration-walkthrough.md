@@ -137,7 +137,7 @@ For a shorter selection guide, start with the [Benchmarking overview](../benchma
 
     This is the base TX+RX template with a per-queue `pacing_mbps` cap added to the TX queue. It uses the default DPDK engine; add `engine: "ibverbs"` beside `stream_type: "raw"` to use the mlx5 QP packet-pacing rate table instead. The NIC meters the queue out so its average TX rate stays at or below the configured Mbps. Set `pacing_mbps: 0` (or remove it) to send at line rate. Validate by computing the achieved rate from the benchmark's RX line (`Gbps = bytes * 8 / seconds / 1e9`) and confirming it tracks the configured cap. See the `pacing_mbps` key in the [TX queue configuration](../api-reference/configuration.md#transmit-configuration-tx).
 
-    *Requires the engine's pacing capability: DPDK warns and runs at line rate without its send-scheduling offload; ibverbs fails initialization unless the device advertises RAW_PACKET packet pacing and the rate is in range.*
+    *Requires the engine's pacing capability: DPDK warns and runs at line rate without its send-scheduling offload; ibverbs fails initialization unless the device advertises RAW_PACKET packet pacing and accepts the requested rate. If an older driver omits its supported range, the provider validates the rate when it is applied.*
 
 ## Annotated walkthrough
 

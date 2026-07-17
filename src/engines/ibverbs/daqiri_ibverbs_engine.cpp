@@ -3837,7 +3837,11 @@ Status IbverbsEngine::configure_tx_pacing(IbvTxQueue& q, uint64_t pacing_mbps) {
         q.queue_id, pacing_mbps);
     return Status::INVALID_PARAMETER;
   }
-  if (rate_kbps < caps.qp_rate_limit_min || rate_kbps > caps.qp_rate_limit_max) {
+  // Some older MLNX_OFED/rdma-core combinations advertise RAW_PACKET pacing
+  // but leave both range fields at zero. In that case the capability is still
+  // usable; defer bounds enforcement to ibv_modify_qp_rate_limit().
+  if (caps.qp_rate_limit_max != 0 &&
+      (rate_kbps < caps.qp_rate_limit_min || rate_kbps > caps.qp_rate_limit_max)) {
     DAQIRI_LOG_CRITICAL(
         "TX queue {}: pacing_mbps={} ({} kbps) is outside the ibverbs device range "
         "[{}, {}] kbps",
