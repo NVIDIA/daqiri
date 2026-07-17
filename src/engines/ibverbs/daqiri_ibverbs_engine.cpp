@@ -3807,6 +3807,60 @@ IbvTxQueue* IbverbsEngine::find_tx_queue(int port, int q) {
   return nullptr;
 }
 
+Status IbverbsEngine::configure_tx_pacing(IbvTxQueue& q, uint64_t pacing_mbps) {
+  if (pacing_mbps == 0) {
+    return Status::SUCCESS;
+  }
+
+  constexpr uint64_t KBPS_PER_MBPS = 1000;
+  if (pacing_mbps > std::numeric_limits<uint32_t>::max() / KBPS_PER_MBPS) {
+    DAQIRI_LOG_CRITICAL(
+        "TX queue {}: pacing_mbps={} exceeds the ibverbs rate-limit maximum of {} Mbps", q.queue_id,
+        pacing_mbps, std::numeric_limits<uint32_t>::max() / KBPS_PER_MBPS);
+    return Status::INVALID_PARAMETER;
+  }
+  const uint32_t rate_kbps = static_cast<uint32_t>(pacing_mbps * KBPS_PER_MBPS);
+
+  struct ibv_device_attr_ex device_attr {};
+  const int query_rc = ibv_query_device_ex(q.ctx, nullptr, &device_attr);
+  if (query_rc != 0) {
+    const int err = query_rc > 0 ? query_rc : errno;
+    DAQIRI_LOG_CRITICAL("TX queue {}: failed to query packet-pacing capabilities: {}", q.queue_id,
+                        strerror(err));
+    return Status::GENERIC_FAILURE;
+  }
+  const auto& caps = device_attr.packet_pacing_caps;
+  if ((caps.supported_qpts & (1U << IBV_QPT_RAW_PACKET)) == 0) {
+    DAQIRI_LOG_CRITICAL(
+        "TX queue {}: pacing_mbps={} requested, but the ibverbs device does not support "
+        "hardware packet pacing for RAW_PACKET QPs",
+        q.queue_id, pacing_mbps);
+    return Status::INVALID_PARAMETER;
+  }
+  if (rate_kbps < caps.qp_rate_limit_min || rate_kbps > caps.qp_rate_limit_max) {
+    DAQIRI_LOG_CRITICAL(
+        "TX queue {}: pacing_mbps={} ({} kbps) is outside the ibverbs device range "
+        "[{}, {}] kbps",
+        q.queue_id, pacing_mbps, rate_kbps, caps.qp_rate_limit_min, caps.qp_rate_limit_max);
+    return Status::INVALID_PARAMETER;
+  }
+
+  struct ibv_qp_rate_limit_attr rate_attr {};
+  rate_attr.rate_limit = rate_kbps;
+  // Leave max_burst_sz and typical_pkt_sz at zero so the device uses its
+  // defaults. Some devices do not support programming those optional fields.
+  const int modify_rc = ibv_modify_qp_rate_limit(q.qp, &rate_attr);
+  if (modify_rc != 0) {
+    const int err = modify_rc > 0 ? modify_rc : errno;
+    DAQIRI_LOG_CRITICAL("TX queue {}: failed to apply hardware packet-pacing rate {} Mbps: {}",
+                        q.queue_id, pacing_mbps, strerror(err));
+    return Status::GENERIC_FAILURE;
+  }
+
+  DAQIRI_LOG_INFO("TX queue {} hardware packet pacing enabled: {} Mbps", q.queue_id, pacing_mbps);
+  return Status::SUCCESS;
+}
+
 Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
   // A scheduled packet may consume a WAIT WQE followed by its send WQE, so
   // provision up to two outstanding WRs per packet slot. Check the generic
@@ -3930,18 +3984,6 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
       q.insert_eth_src = true;
     }
   }
-  // Packet pacing (pacing_mbps) is not supported on the ibverbs engine: the
-  // wait-on-time WQE it would use is not honored without the mlx5 send-scheduling
-  // clock/rearm-queue infrastructure that this engine does not set up, so a paced
-  // queue would not meter and would eventually stall. Reject it up front rather
-  // than silently running at line rate. Use the DPDK raw engine for pacing.
-  if (qcfg.pacing_mbps_ > 0) {
-    DAQIRI_LOG_CRITICAL(
-        "TX queue {}: pacing_mbps is not supported by the ibverbs engine; use the default "
-        "DPDK raw engine (remove engine: \"ibverbs\") for packet pacing",
-        q.queue_id);
-    return Status::INVALID_PARAMETER;
-  }
   if (qcfg.common_.mrs_.empty()) {
     DAQIRI_LOG_CRITICAL("TX queue {} has no memory region", q.queue_id);
     return Status::INVALID_PARAMETER;
@@ -3986,6 +4028,15 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
   q.lkey = q.regions[0].lkey;
   q.slot_size = q.regions[0].slot_size;
   if (Status s = create_tx_raw_qp(q); s != Status::SUCCESS) {
+    return s;
+  }
+  // Packet pacing is an SQ/QP rate-table setting, independent of the WAIT WQEs
+  // used by set_packet_tx_time for absolute per-packet scheduling.
+  if (Status s = configure_tx_pacing(q, qcfg.pacing_mbps_); s != Status::SUCCESS) {
+    ibv_destroy_qp(q.qp);
+    q.qp = nullptr;
+    ibv_destroy_cq(q.cq);
+    q.cq = nullptr;
     return s;
   }
 
