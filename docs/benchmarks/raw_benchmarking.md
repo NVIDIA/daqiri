@@ -261,10 +261,11 @@ flow programming test.
 To meter the transmit side at a fixed rate in hardware, set a per-queue `pacing_mbps` cap
 on the TX queue. [`daqiri_bench_raw_tx_rx_pacing.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_pacing.yaml)
 is the loopback config above with `pacing_mbps: 10000` (10 Gbps) on the TX queue. Pacing is
-supported only on the default DPDK engine. The `ibverbs` engine does not support `pacing_mbps`
-(init fails if it is set on an `ibverbs` queue). The NIC meters the queue out so its average
-TX rate stays at or below the configured value. The limit is enforced on an average basis and
-idle gaps do not accumulate burst credit.
+supported by both raw engines. The example uses the default DPDK engine; add
+`engine: "ibverbs"` beside `stream_type: "raw"` to exercise the ibverbs path. The NIC meters the
+queue out so its average TX rate stays at or below the configured value. The ibverbs path uses
+the mlx5 packet-pacing rate table rather than per-packet WAIT WQEs; firmware defaults determine
+the allowed burst size unless configured outside DAQIRI.
 
 ```bash
 /opt/daqiri/bin/daqiri_bench_raw_gpudirect /opt/daqiri/bin/daqiri_bench_raw_tx_rx_pacing.yaml --seconds 10
@@ -275,8 +276,11 @@ Validate the cap from the `RX complete:` line: `Gbps = bytes * 8 / seconds / 1e9
 link speed. Change `pacing_mbps` (or set it to `0` to disable pacing and send at line rate)
 and re-run to see the cap move.
 
-Pacing requires a Mellanox/mlx5 NIC with hardware send scheduling (ConnectX-7 or later). On
-devices without it, `pacing_mbps` is ignored with a warning at init and TX runs at line rate.
+The DPDK path requires hardware send scheduling; if unavailable, it logs a warning and runs at
+line rate. The ibverbs path requires packet-pacing support for RAW_PACKET QPs and, when the driver
+reports a supported range, a rate within that range. Older drivers that omit the range defer the
+check to the provider when applying the rate; unsupported requests still fail initialization
+instead of silently ignoring the cap.
 
 ## Tune RDMA SEND completion signaling
 

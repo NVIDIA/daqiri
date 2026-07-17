@@ -422,12 +422,14 @@ daqiri::set_reorder_cuda_stream("rx_port", "rx_reorder_0", stream);
   - values: `tx_eth_src` (auto-fill source MAC address)
 - **`pacing_mbps`**: Packet-pacing rate cap for this queue, in megabits per second of L2 frame
   bytes (the data the application transmits, excluding preamble/IFG/FCS). The NIC meters the queue
-  out so its long-run average TX rate stays at or below this value. The limit is enforced on an
-  average basis and idle gaps do not accumulate burst credit. `0` (the default) disables pacing
-  and sends at line rate. Supported only by the default `dpdk` raw engine on a NIC with hardware
-  send scheduling (ConnectX-7 or later); on devices without it, `pacing_mbps` is ignored with a
-  warning and TX runs at line rate. The `ibverbs` raw engine does **not** support `pacing_mbps`
-  and `daqiri_init()` fails if it is set on an `ibverbs` queue.
+  out so its long-run average TX rate stays at or below this value. `0` (the default) disables
+  pacing and sends at line rate. Both raw engines support this setting, with different capability
+  requirements: `dpdk` uses hardware send scheduling and falls back to line rate with a warning
+  when that offload is unavailable; `ibverbs` assigns the QP to an mlx5 hardware packet-pacing
+  rate-table entry and fails initialization if RAW_PACKET pacing is unavailable or the requested
+  rate is outside a range advertised by the device. Older drivers that omit the range defer bounds
+  checking to the provider when the rate is applied. The ibverbs engine leaves the optional burst
+  bound and typical-packet-size fields at their device defaults.
   - type: `integer`
   - default: `0`
 

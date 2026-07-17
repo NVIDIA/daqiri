@@ -5,14 +5,14 @@
 # This is daqiri_bench_raw_tx_rx.yaml with a per-queue pacing_mbps cap added to
 # the TX queue (no "engine" key, so it uses the default raw engine, DPDK). The
 # NIC meters the queue out so its average TX rate stays at or below the
-# configured value; the limit is enforced on an average basis and idle gaps do
-# not accumulate burst credit. Pacing is supported only on the default DPDK raw
-# engine; the ibverbs engine does not support pacing_mbps (daqiri_init fails if
-# it is set on an ibverbs queue).
+# configured value. To exercise the ibverbs path, add `engine: "ibverbs"` beside
+# `stream_type: "raw"`; it programs the mlx5 hardware packet-pacing rate table
+# for the TX QP and uses the device defaults for burst sizing.
 #
-# Requirements: a Mellanox/mlx5 NIC with hardware send scheduling (ConnectX-7 or
-# later). On devices without it, pacing_mbps is ignored with a warning at init
-# and TX runs at line rate.
+# Requirements: the DPDK path needs its hardware send-scheduling offload and
+# warns/runs at line rate without it. The ibverbs path requires RAW_PACKET packet
+# pacing and an accepted rate; older drivers that omit their supported range
+# defer validation to the provider when the rate is applied.
 #
 # Validate: run daqiri_bench_raw_gpudirect with this config and compute the
 # achieved rate from the RX line's bytes/seconds (Gbps = bytes * 8 / seconds /
