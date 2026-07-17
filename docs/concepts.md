@@ -247,7 +247,8 @@ buffers (CPU hugepages, GPU device memory, or pinned host memory).
 ### Flow
 
 A **flow** is a match pattern paired with one or more actions. The
-common RX action is to steer matching packets into a specific queue. For
+common RX action is to steer matching packets into one queue or a list of
+queues. For
 example, all UDP-destination-port-4096 packets can be routed into a
 queue backed by GPU memory. Matching and the resulting actions both run
 entirely in NIC hardware.
@@ -274,12 +275,21 @@ application buffers as pre-encap packets and change only the wire frame.
 Dynamic RX flows use the same ordered action model for runtime decap/pop rules,
 while TX transform flows remain static startup configuration.
 
+A queue action with two or more queue IDs enables **receive-side scaling
+(RSS)**. The NIC computes a Toeplitz hash from the IPv4/UDP five tuple and uses
+it to select one requested queue. This is flow-affine: every packet in an
+unchanged flow stays on one queue, preserving per-flow ordering. RSS is not
+packet striping, so roughly even queue packet counts require enough distinct
+tuples with reasonably balanced traffic. Tunnel-decap rules hash the inner
+tuple; flex-item rules still hash the IPv4/UDP tuple rather than the flex value.
+eCPRI flows do not support multi-queue RSS.
+
 ### Flow Steering
 
 **Flow steering** is the NIC-level mechanism that classifies an
-incoming packet against the configured flows and writes it into the
-matching queue's buffer, entirely in hardware. Multi-queue RX works by
-routing each flow to a separate queue for parallel processing.
+incoming packet against the configured flows and writes it into a selected
+queue's buffer, entirely in hardware. Multi-queue RX can use separate scalar
+rules or one RSS rule for parallel processing.
 
 For Raw Ethernet, flow steering is implemented on top of RTE Flow in the
 DPDK engine and mlx5 Direct Rules in the ibverbs engine. Flow rules are

@@ -485,6 +485,15 @@ class IbverbsEngine : public Engine {
   // (post-encap) if the MTU is too low.
   void ensure_port_mtus();
 
+  struct RssDestination {
+    std::vector<uint16_t> queue_ids;
+    bool inner = false;
+    struct mlx5dv_devx_obj* rqt_obj = nullptr;
+    struct mlx5dv_devx_obj* tir_obj = nullptr;
+    struct mlx5dv_dr_action* action = nullptr;
+  };
+  using RssDestinationPtr = std::shared_ptr<RssDestination>;
+
   // ---- dynamic RX flow lifecycle ----
   enum class DynamicFlowState { ACTIVE, DELETING };
   struct DynamicFlowEntry {
@@ -494,6 +503,7 @@ class IbverbsEngine : public Engine {
     struct mlx5dv_dr_matcher* matcher = nullptr;
     struct mlx5dv_dr_rule* rule = nullptr;
     struct mlx5dv_dr_action* tag_action = nullptr;
+    RssDestinationPtr rss_destination;
     std::vector<struct mlx5dv_dr_action*> reformat_actions;
     std::vector<std::vector<uint8_t>> reformat_buffers;
     DynamicFlowState state = DynamicFlowState::ACTIVE;
@@ -553,10 +563,12 @@ class IbverbsEngine : public Engine {
       struct mlx5dv_dr_action* action;         // dest-TIR
       struct mlx5dv_dr_action* tag = nullptr;  // optional MARK tag action
       std::vector<struct mlx5dv_dr_action*> reformats;
+      RssDestinationPtr rss_destination;
       size_t value_sz = 0;                     // bytes of `value` in use
       uint64_t value[64];                      // up to full fte_match_param (512 B)
     };
     std::vector<RuleSpec> rule_specs;
+    std::unordered_map<std::string, std::weak_ptr<RssDestination>> rss_destinations;
     // Flex-parser (parse-graph) nodes for arbitrary-offset / ipv4_len matching,
     // keyed by the config flex-item id. The DevX object must outlive any matcher
     // that references its sample_field_id, so these are torn down after rules.
@@ -587,18 +599,17 @@ class IbverbsEngine : public Engine {
   };
   std::map<int, PortSteering> port_steering_;  // port_id -> steering
 
-  bool create_dr_rule_locked(int port,
-                             PortSteering& st,
-                             uint16_t criteria,
+  bool create_dr_rule_locked(int port, PortSteering& st, uint16_t criteria,
                              struct mlx5dv_flow_match_parameters* mask,
                              struct mlx5dv_flow_match_parameters* value,
-                             IbvRxQueue* dest,
-                             int priority,
-                             FlowId flow_id,
-                             const char* desc,
-                             DynamicFlowEntry* dynamic_entry,
+                             struct mlx5dv_dr_action* destination_action, uint16_t primary_queue,
+                             const RssDestinationPtr& rss_destination, int priority, FlowId flow_id,
+                             const char* desc, DynamicFlowEntry* dynamic_entry,
                              const std::vector<struct mlx5dv_dr_action*>& reformats =
                                  std::vector<struct mlx5dv_dr_action*>{});
+  Status resolve_rx_destination(int port, PortSteering& st, const FlowAction& queue_action,
+                                bool inner, struct mlx5dv_dr_action** action,
+                                uint16_t* primary_queue, RssDestinationPtr* rss_destination);
   Status install_flow_rule_locked(int port,
                                   PortSteering& st,
                                   const InterfaceConfig& intf,

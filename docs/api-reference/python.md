@@ -622,8 +622,15 @@ The workflow sections above show the common call order and ownership rules.
 | `rdma_get_port_queue(conn_id)` | Return `(Status, port, queue)`. |
 | `rdma_get_server_conn_id(server_addr, server_port)` | Return `(Status, conn_id)`. |
 
-Dynamic RX flows are RX-only in v1. The `action` attribute remains the single queue-action
-shorthand. Use ordered `actions` when a raw DPDK or raw ibverbs dynamic rule needs hardware
+Dynamic RX flows are RX-only in v1. The `action` attribute remains the queue-action
+shorthand. Set `flow.action.id = 0` for direct steering, or set
+`flow.action.ids = [0, 1]` to enable automatic flow-affine IPv4/UDP five-tuple
+RSS. A one-entry `ids` list is direct steering. Lists must be non-empty,
+duplicate-free, and contain configured RX queue IDs. An unchanged five tuple
+stays on one queue; balanced packet totals require enough distinct, reasonably
+balanced tuples. Multi-queue RSS is unsupported for eCPRI and reorder-owned
+flows, and hardware creation errors are returned rather than falling back to a
+single queue. Use ordered `actions` when a raw DPDK or raw ibverbs dynamic rule needs hardware
 VLAN pop or VXLAN/GRE/NVGRE decapsulation before the final queue action. Static TX
 encapsulation/push rules are configured in YAML under `tx.flows`.
 
@@ -696,7 +703,7 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `MemoryRegionConfig` | Memory region kind, affinity, access flags, sizes, counts, and ownership. |
 | `VlanActionConfig` | VLAN push parameters: VLAN ID, priority, DEI, and ethertype. |
 | `TunnelConfig` | VXLAN, GRE, or NVGRE tunnel template fields for hardware encap/decap actions. |
-| `FlowAction` | Flow action type, queue target ID, optional VLAN config, and optional tunnel config. |
+| `FlowAction` | Flow action type, scalar queue target `id`, queue-list target `ids`, optional VLAN config, and optional tunnel config. |
 | `FlowMatch` | Flow match fields for UDP, IPv4, and flex item matching. |
 | `FlowConfig` | Static named flow rule combining legacy `action`, ordered `actions`, and match fields. |
 | `FlowRuleConfig` | Dynamic RX flow rule combining legacy `action`, ordered `actions`, and match fields. |

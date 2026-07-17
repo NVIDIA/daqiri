@@ -771,6 +771,7 @@ void bind_config_types(py::module_ &m) {
       .def(py::init<>())
       .def_readwrite("type", &FlowAction::type_)
       .def_readwrite("id", &FlowAction::id_)
+      .def_readwrite("ids", &FlowAction::ids_)
       .def_readwrite("vlan", &FlowAction::vlan_)
       .def_readwrite("tunnel", &FlowAction::tunnel_);
 

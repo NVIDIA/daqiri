@@ -159,8 +159,11 @@ Raw Ethernet RX flows can be added and deleted after `daqiri_init()` on the
 `dpdk` and raw `ibverbs` engines. This supports queues-only startup configs,
 including `rx.flow_isolation: true` with no initial `rx.flows`. Static YAML
 flows still use explicit configured IDs and are not deletable through this API.
-The legacy `FlowRuleConfig::action_` field remains the shorthand for a single
-queue action; `FlowRuleConfig::actions_` is the ordered form used when a dynamic
+The legacy `FlowRuleConfig::action_` field remains the shorthand for a queue
+action; set `FlowAction::id_` for direct steering or `FlowAction::ids_` for a
+queue list. A list with one entry is direct steering, while two or more entries
+automatically enable flow-affine IPv4/UDP five-tuple RSS. `FlowRuleConfig::actions_`
+is the ordered form used when a dynamic
 RX rule needs hardware VLAN pop or tunnel decapsulation before queue delivery.
 Dynamic TX transform flows are not part of v1; configure TX encapsulation/push
 rules statically under `tx.flows`.
@@ -200,6 +203,21 @@ while (flow_id == 0) {
     }
 }
 ```
+
+To distribute distinct IPv4/UDP flows across two queues, replace the scalar
+target with a queue list:
+
+```cpp
+flow.action_.ids_ = {0, 1};
+```
+
+The queue list must be non-empty, duplicate-free, and contain only configured RX
+queue IDs. Each unchanged five tuple remains on one queue; approximately even
+packet totals require many distinct tuples with reasonably balanced traffic.
+Tunnel decapsulation hashes the inner tuple. Multi-queue RSS is not available for
+eCPRI flows or flows referenced by an RX reorder configuration. Hardware creation
+failure is reported by the static initialization or dynamic operation completion;
+DAQIRI does not silently select one queue.
 
 For a dynamic VXLAN decap rule, use ordered actions and make the final action
 the target queue:

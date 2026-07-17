@@ -541,6 +541,11 @@ bool Engine::validate_config() const {
   for (const auto& mr : cfg_.mrs_) { mr_names.emplace(mr.second.name_); }
 
   for (const auto& intf : cfg_.ifs_) {
+    std::set<uint16_t> rx_queue_ids;
+    for (const auto& rxq : intf.rx_.queues_) {
+      rx_queue_ids.insert(rxq.common_.id_);
+    }
+    std::set<FlowId> rss_flow_ids;
     size_t max_rx_payload_frame = 0;
     size_t max_tx_payload_frame = 0;
     auto queue_frame_size = [&](const CommonQueueConfig& queue) {
@@ -563,20 +568,40 @@ bool Engine::validate_config() const {
     }
 
     for (const auto& flow : intf.rx_.flows_) {
-      if (flow.actions_.empty()) {
-        DAQIRI_LOG_ERROR("RX flow '{}' on interface '{}' has no actions", flow.name_, intf.name_);
-        pass = false;
-        continue;
-      }
-      if (flow.actions_.size() > kMaxFlowActions) {
+      const auto actions = flow_config_actions(flow);
+      if (actions.size() > kMaxFlowActions) {
         DAQIRI_LOG_ERROR("RX flow '{}' on interface '{}' has {} actions; maximum supported is {}",
-                         flow.name_, intf.name_, flow.actions_.size(), kMaxFlowActions);
+                         flow.name_, intf.name_, actions.size(), kMaxFlowActions);
         pass = false;
       }
-      if (flow.actions_.back().type_ != FlowType::QUEUE) {
+      if (actions.back().type_ != FlowType::QUEUE) {
         DAQIRI_LOG_ERROR("RX flow '{}' on interface '{}' must end with a queue action",
                          flow.name_, intf.name_);
         pass = false;
+      } else {
+        const FlowAction& queue_action = actions.back();
+        const auto queue_ids = flow_queue_ids(queue_action);
+        std::set<uint16_t> unique_ids;
+        for (const uint16_t queue_id : queue_ids) {
+          if (!unique_ids.insert(queue_id).second) {
+            DAQIRI_LOG_ERROR("RX flow '{}' on interface '{}' repeats queue id {}", flow.name_,
+                             intf.name_, queue_id);
+            pass = false;
+          }
+          if (rx_queue_ids.find(queue_id) == rx_queue_ids.end()) {
+            DAQIRI_LOG_ERROR("RX flow '{}' references unknown RX queue {} on interface '{}'",
+                             flow.name_, queue_id, intf.name_);
+            pass = false;
+          }
+        }
+        if (queue_ids.size() > 1) {
+          rss_flow_ids.insert(flow.id_);
+          if (flow.match_.type_ == FlowMatchType::ECPRI) {
+            DAQIRI_LOG_ERROR("RX flow '{}' on interface '{}' cannot use RSS with eCPRI matching",
+                             flow.name_, intf.name_);
+            pass = false;
+          }
+        }
       }
       const bool has_transform = flow_has_transform_actions(flow);
       if (has_transform && flow.match_.type_ == FlowMatchType::FLEX_ITEM) {
@@ -592,7 +617,7 @@ bool Engine::validate_config() const {
         pass = false;
       }
       size_t rx_overhead = 0;
-      for (const auto& action : flow.actions_) {
+      for (const auto& action : actions) {
         if (action.type_ == FlowType::VLAN_PUSH || action.type_ == FlowType::TUNNEL_ENCAP) {
           DAQIRI_LOG_ERROR("RX flow '{}' on interface '{}' can only use decap/pop transform "
                            "actions before queue",
@@ -609,15 +634,23 @@ bool Engine::validate_config() const {
       }
     }
 
-    for (const auto& flow : intf.tx_.flows_) {
-      if (flow.actions_.empty()) {
-        DAQIRI_LOG_ERROR("TX flow '{}' on interface '{}' has no actions", flow.name_, intf.name_);
-        pass = false;
-        continue;
+    for (const auto& reorder : intf.rx_.reorder_configs_) {
+      for (const FlowId flow_id : reorder.flow_ids_) {
+        if (rss_flow_ids.find(flow_id) != rss_flow_ids.end()) {
+          DAQIRI_LOG_ERROR(
+              "Reorder config '{}' on interface '{}' references RSS flow ID {}; reorder flows "
+              "must target exactly one RX queue",
+              reorder.name_, intf.name_, flow_id);
+          pass = false;
+        }
       }
-      if (flow.actions_.size() > kMaxFlowActions) {
+    }
+
+    for (const auto& flow : intf.tx_.flows_) {
+      const auto actions = flow_config_actions(flow);
+      if (actions.size() > kMaxFlowActions) {
         DAQIRI_LOG_ERROR("TX flow '{}' on interface '{}' has {} actions; maximum supported is {}",
-                         flow.name_, intf.name_, flow.actions_.size(), kMaxFlowActions);
+                         flow.name_, intf.name_, actions.size(), kMaxFlowActions);
         pass = false;
       }
       if (flow.match_.type_ == FlowMatchType::FLEX_ITEM) {
@@ -628,7 +661,7 @@ bool Engine::validate_config() const {
       }
       bool has_transform = false;
       size_t tx_overhead = 0;
-      for (const auto& action : flow.actions_) {
+      for (const auto& action : actions) {
         if (action.type_ == FlowType::QUEUE) {
           DAQIRI_LOG_ERROR("TX flow '{}' on interface '{}' cannot contain a queue action",
                            flow.name_, intf.name_);

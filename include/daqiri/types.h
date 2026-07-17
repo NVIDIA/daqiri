@@ -731,6 +731,10 @@ struct FlowAction {
   uint16_t id_ = 0;
   VlanActionConfig vlan_;
   TunnelConfig tunnel_;
+  // Kept after the legacy fields so positional scalar aggregate initializers
+  // remain source-compatible. A non-empty list replaces id_ as the queue
+  // destination; two or more entries request flow-affine RSS.
+  std::vector<uint16_t> ids_;
 };
 
 struct FlexItemMatch {
@@ -809,6 +813,13 @@ inline std::vector<FlowAction> flow_rule_actions(const FlowRuleConfig& flow) {
   return {flow.action_};
 }
 
+inline std::vector<FlowAction> flow_config_actions(const FlowConfig& flow) {
+  if (!flow.actions_.empty()) {
+    return flow.actions_;
+  }
+  return {flow.action_};
+}
+
 inline FlowAction flow_queue_action(const std::vector<FlowAction>& actions) {
   auto it = std::find_if(actions.begin(), actions.end(), [](const FlowAction& action) {
     return action.type_ == FlowType::QUEUE;
@@ -816,12 +827,23 @@ inline FlowAction flow_queue_action(const std::vector<FlowAction>& actions) {
   return it == actions.end() ? FlowAction{} : *it;
 }
 
+inline std::vector<uint16_t> flow_queue_ids(const FlowAction& action) {
+  if (!action.ids_.empty()) {
+    return action.ids_;
+  }
+  return {action.id_};
+}
+
+inline bool flow_queue_action_uses_rss(const FlowAction& action) {
+  return action.type_ == FlowType::QUEUE && action.ids_.size() > 1;
+}
+
 inline bool flow_actions_have_transform(const std::vector<FlowAction>& actions) {
   return std::any_of(actions.begin(), actions.end(), flow_action_is_transform);
 }
 
 inline bool flow_has_transform_actions(const FlowConfig& flow) {
-  return flow_actions_have_transform(flow.actions_);
+  return flow_actions_have_transform(flow_config_actions(flow));
 }
 
 inline bool flow_rule_has_transform_actions(const FlowRuleConfig& flow) {
@@ -873,7 +895,7 @@ inline size_t flow_max_decap_wire_overhead(const std::vector<FlowConfig>& flows)
   size_t overhead = 0;
   for (const auto& flow : flows) {
     size_t per_flow = 0;
-    for (const auto& action : flow.actions_) {
+    for (const auto& action : flow_config_actions(flow)) {
       per_flow += flow_decap_wire_overhead(action);
     }
     overhead = std::max(overhead, per_flow);
@@ -885,7 +907,7 @@ inline size_t flow_max_encap_wire_overhead(const std::vector<FlowConfig>& flows)
   size_t overhead = 0;
   for (const auto& flow : flows) {
     size_t per_flow = 0;
-    for (const auto& action : flow.actions_) {
+    for (const auto& action : flow_config_actions(flow)) {
       per_flow += flow_action_wire_overhead(action);
     }
     overhead = std::max(overhead, per_flow);

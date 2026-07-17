@@ -41,11 +41,42 @@
 #include "src/dpdk_log.h"
 #include "daqiri_dpdk_engine.h"
 #include "src/kernels.h"
+#include "src/rss.h"
 #include <daqiri/logging.hpp>
 
 using namespace std::chrono;
 
 namespace daqiri {
+
+namespace {
+
+struct DpdkRxDestination {
+  explicit DpdkRxDestination(const FlowAction& action, uint32_t rss_level = 0)
+      : queue_ids(flow_queue_ids(action)) {
+    queue.index = queue_ids.front();
+    rss.func = RTE_ETH_HASH_FUNCTION_TOEPLITZ;
+    rss.level = rss_level;
+    rss.types = RTE_ETH_RSS_NONFRAG_IPV4_UDP;
+    rss.key_len = static_cast<uint32_t>(kToeplitzRssKey.size());
+    rss.queue_num = static_cast<uint32_t>(queue_ids.size());
+    rss.key = kToeplitzRssKey.data();
+    rss.queue = queue_ids.data();
+  }
+
+  void append(struct rte_flow_action actions[], int* index) {
+    if (queue_ids.size() > 1) {
+      actions[(*index)++] = {.type = RTE_FLOW_ACTION_TYPE_RSS, .conf = &rss};
+    } else {
+      actions[(*index)++] = {.type = RTE_FLOW_ACTION_TYPE_QUEUE, .conf = &queue};
+    }
+  }
+
+  std::vector<uint16_t> queue_ids;
+  struct rte_flow_action_queue queue {};
+  struct rte_flow_action_rss rss {};
+};
+
+}  // namespace
 
 static bool looks_like_mac_address(const std::string& address) {
   static const std::regex mac_regex(
@@ -503,7 +534,8 @@ bool DpdkEngine::init_reorder_queue_state(const InterfaceConfig& intf, const RxQ
       DAQIRI_LOG_ERROR("Duplicate flow ID {} in interface '{}'", flow.id_, intf.name_);
       return false;
     }
-    flow_id_to_queue[flow.id_] = flow.action_.id_;
+    flow_id_to_queue[flow.id_] =
+        flow_queue_ids(flow_queue_action(flow_config_actions(flow))).front();
   }
 
   for (const auto& reorder_cfg : intf.rx_.reorder_configs_) {
@@ -2738,10 +2770,13 @@ void DpdkEngine::initialize() {
       for (const auto& flow : rx.flows_) {
         DAQIRI_LOG_INFO("Adding RX flow {}", flow.name_);
         struct rte_flow* created = nullptr;
+        const FlowAction queue_action = flow_queue_action(flow_config_actions(flow));
         if (flow.match_.type_ == FlowMatchType::FLEX_ITEM) {
-          created = add_flex_item_flow(
-              intf.port_id_, flow.match_.flex_item_match_, flow.action_.id_, flow.id_);
-          if (created != nullptr) { has_flex_item_flows = true; }
+          created = add_flex_item_flow(intf.port_id_, flow.match_.flex_item_match_, queue_action,
+                                       flow.id_);
+          if (created != nullptr) {
+            has_flex_item_flows = true;
+          }
         } else if (flow.match_.type_ == FlowMatchType::ECPRI) {
           created = add_ecpri_flow(intf.port_id_, flow);
           if (created != nullptr) {
@@ -3177,8 +3212,20 @@ bool DpdkEngine::validate_dynamic_rx_flow(int port, const FlowRuleConfig& flow) 
     return false;
   }
   const FlowAction queue_action = flow_queue_action(actions);
-  if (!is_valid_rx_queue(port, queue_action.id_)) {
-    DAQIRI_LOG_ERROR("Dynamic RX flow targets invalid port/queue {}/{}", port, queue_action.id_);
+  const auto queue_ids = flow_queue_ids(queue_action);
+  std::unordered_set<uint16_t> unique_queue_ids;
+  for (const uint16_t queue_id : queue_ids) {
+    if (!unique_queue_ids.insert(queue_id).second) {
+      DAQIRI_LOG_ERROR("Dynamic RX flow '{}' repeats queue id {}", flow.name_, queue_id);
+      return false;
+    }
+    if (!is_valid_rx_queue(port, queue_id)) {
+      DAQIRI_LOG_ERROR("Dynamic RX flow targets invalid port/queue {}/{}", port, queue_id);
+      return false;
+    }
+  }
+  if (queue_ids.size() > 1 && flow.match_.type_ == FlowMatchType::ECPRI) {
+    DAQIRI_LOG_ERROR("Dynamic RX flow '{}' cannot use RSS with eCPRI matching", flow.name_);
     return false;
   }
   const bool has_transform = flow_actions_have_transform(actions);
@@ -3515,8 +3562,7 @@ Status DpdkEngine::create_dynamic_flow_legacy_locked(int port,
   struct rte_flow* rte_flow = nullptr;
   std::shared_ptr<DpdkFlowResource> resource;
   if (cfg.match_.type_ == FlowMatchType::FLEX_ITEM) {
-    rte_flow = add_flex_item_flow(
-        port, cfg.match_.flex_item_match_, cfg.action_.id_, cfg.id_, false);
+    rte_flow = add_flex_item_flow(port, cfg.match_.flex_item_match_, cfg.action_, cfg.id_, false);
   } else if (cfg.match_.type_ == FlowMatchType::ECPRI) {
     rte_flow = add_ecpri_flow(port, cfg, false);
   } else {
@@ -3530,7 +3576,7 @@ Status DpdkEngine::create_dynamic_flow_legacy_locked(int port,
   DynamicFlowEntry entry;
   entry.flow_id = flow_id;
   entry.port = static_cast<uint16_t>(port);
-  entry.queue = flow.action_.id_;
+  entry.queue = flow_queue_ids(cfg.action_).front();
   entry.flow = rte_flow;
   entry.backend = DynamicFlowBackend::LEGACY;
   entry.state = DynamicFlowState::ACTIVE;
@@ -3594,11 +3640,9 @@ Status DpdkEngine::enqueue_rx_flow_template_create_locked(int port,
 
   auto storage = std::make_shared<FlowTemplateCreateStorage>();
   build_ipv4_udp_flow_pattern(flow.match_, storage->pattern, &storage->ip_spec, &storage->udp_spec);
-  build_mark_queue_actions(flow_id,
-                           flow.action_.id_,
-                           storage->action,
-                           &storage->mark,
-                           &storage->queue);
+  const FlowAction queue_action = flow_queue_action(flow_rule_actions(flow));
+  const uint16_t queue_id = flow_queue_ids(queue_action).front();
+  build_mark_queue_actions(flow_id, queue_id, storage->action, &storage->mark, &storage->queue);
 
   uint8_t template_index = 0;
   if (!ipv4_udp_flow_template_index(flow.match_, &template_index)) {
@@ -3625,7 +3669,7 @@ Status DpdkEngine::enqueue_rx_flow_template_create_locked(int port,
   DynamicFlowEntry entry;
   entry.flow_id = flow_id;
   entry.port = static_cast<uint16_t>(port);
-  entry.queue = flow.action_.id_;
+  entry.queue = queue_id;
   entry.flow = rte_flow;
   entry.backend = DynamicFlowBackend::TEMPLATE;
   entry.state = DynamicFlowState::ADDING;
@@ -4128,7 +4172,9 @@ Status DpdkEngine::add_rx_flow_async(int port, const FlowRuleConfig& flow, FlowO
   const FlowOpId new_op_id = allocate_flow_op_id();
   *op_id = new_op_id;
 
-  if (is_ipv4_udp_flow_match(flow.match_) && !flow_rule_has_transform_actions(flow)) {
+  const FlowAction queue_action = flow_queue_action(flow_rule_actions(flow));
+  if (is_ipv4_udp_flow_match(flow.match_) && !flow_rule_has_transform_actions(flow) &&
+      !flow_queue_action_uses_rss(queue_action)) {
     return add_rx_flow_template_locked(port, flow, flow_id, new_op_id);
   }
   return add_rx_flow_legacy_locked(port, flow, flow_id, new_op_id);
@@ -4176,7 +4222,9 @@ Status DpdkEngine::add_rx_flows_async(int port,
 
   const bool all_ipv4_udp =
       std::all_of(flows.begin(), flows.end(), [this](const FlowRuleConfig& flow) {
-        return is_ipv4_udp_flow_match(flow.match_) && !flow_rule_has_transform_actions(flow);
+        const FlowAction queue_action = flow_queue_action(flow_rule_actions(flow));
+        return is_ipv4_udp_flow_match(flow.match_) && !flow_rule_has_transform_actions(flow) &&
+               !flow_queue_action_uses_rss(queue_action);
       });
   if (all_ipv4_udp) {
     return add_rx_flows_template_locked(port, flows, flow_ids, new_op_id);
@@ -4350,18 +4398,15 @@ void DpdkEngine::destroy_owned_flows() {
   owned_flows_.clear();
 }
 
-struct rte_flow* DpdkEngine::add_flex_item_flow(
-    int port,
-    const FlexItemMatch& match_info,
-    uint16_t queue_id,
-    FlowId mark_id,
-    bool track) {
+struct rte_flow* DpdkEngine::add_flex_item_flow(int port, const FlexItemMatch& match_info,
+                                                const FlowAction& queue_action, FlowId mark_id,
+                                                bool track) {
   /* Declaring structs being used. 8< */
   struct rte_flow_attr attr;
   struct rte_flow_item pattern[MAX_PATTERN_NUM];
   struct rte_flow_action action[MAX_ACTION_NUM];
   struct rte_flow* flow = NULL;
-  struct rte_flow_action_queue queue = {.index = queue_id};
+  DpdkRxDestination destination(queue_action);
   struct rte_flow_action_mark mark = {.id = mark_id};
   struct rte_flow_error error;
   struct rte_flow_item_udp udp_spec;
@@ -4385,17 +4430,13 @@ struct rte_flow* DpdkEngine::add_flex_item_flow(
   memset(&udp_spec, 0, sizeof(struct rte_flow_item_udp));
   memset(&udp_mask, 0, sizeof(struct rte_flow_item_udp));
 
+  int action_index = 0;
   if (mark_id != 0) {
-    action[0].type = RTE_FLOW_ACTION_TYPE_MARK;
-    action[0].conf = &mark;
-    action[1].type = RTE_FLOW_ACTION_TYPE_QUEUE;
-    action[1].conf = &queue;
-    action[2].type = RTE_FLOW_ACTION_TYPE_END;
-  } else {
-    action[0].type = RTE_FLOW_ACTION_TYPE_QUEUE;
-    action[0].conf = &queue;
-    action[1].type = RTE_FLOW_ACTION_TYPE_END;
+    action[action_index].type = RTE_FLOW_ACTION_TYPE_MARK;
+    action[action_index++].conf = &mark;
   }
+  destination.append(action, &action_index);
+  action[action_index].type = RTE_FLOW_ACTION_TYPE_END;
 
   pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
   pattern[1].type = RTE_FLOW_ITEM_TYPE_IPV4;
@@ -4669,10 +4710,9 @@ bool fill_gre_raw_storage(DpdkEngine::DpdkFlowResource::ActionStorage& storage,
 }
 
 void append_normal_match(struct rte_flow_item* pattern, int* idx, const FlowMatch& match,
-                         struct rte_flow_item_ipv4* ip_spec,
-                         struct rte_flow_item_ipv4* ip_mask,
-                         struct rte_flow_item_udp* udp_spec,
-                         struct rte_flow_item_udp* udp_mask) {
+                         struct rte_flow_item_ipv4* ip_spec, struct rte_flow_item_ipv4* ip_mask,
+                         struct rte_flow_item_udp* udp_spec, struct rte_flow_item_udp* udp_mask,
+                         bool force_ipv4_udp = false) {
   bool has_ip_match = false;
   bool has_udp_match = false;
   if (match.ipv4_len_ > 0) {
@@ -4700,7 +4740,10 @@ void append_normal_match(struct rte_flow_item* pattern, int* idx, const FlowMatc
     udp_mask->hdr.dst_port = 0xffff;
     has_udp_match = true;
   }
-  if (has_udp_match) { has_ip_match = true; }
+  if (has_udp_match || force_ipv4_udp) {
+    has_udp_match = true;
+    has_ip_match = true;
+  }
   if (has_ip_match) {
     pattern[(*idx)++] = {.type = RTE_FLOW_ITEM_TYPE_IPV4,
                          .spec = ip_spec,
@@ -4715,8 +4758,8 @@ void append_normal_match(struct rte_flow_item* pattern, int* idx, const FlowMatc
   }
 }
 
-int normal_match_pattern_item_count(const FlowMatch& match) {
-  const bool has_udp_match = match.udp_src_ > 0 || match.udp_dst_ > 0;
+int normal_match_pattern_item_count(const FlowMatch& match, bool force_ipv4_udp = false) {
+  const bool has_udp_match = force_ipv4_udp || match.udp_src_ > 0 || match.udp_dst_ > 0;
   const bool has_ip_match = has_udp_match || match.ipv4_len_ > 0 ||
                             match.ipv4_src_ != INADDR_ANY ||
                             match.ipv4_dst_ != INADDR_ANY;
@@ -4861,7 +4904,6 @@ bool append_transform_action(struct rte_flow_action* actions, int* idx,
 
 }  // namespace
 
-
 // Taken from flow_block.c DPDK example */
 struct rte_flow* DpdkEngine::add_flow(int port,
                                       const FlowConfig& cfg,
@@ -4870,7 +4912,11 @@ struct rte_flow* DpdkEngine::add_flow(int port,
   struct rte_flow_attr attr {};
   struct rte_flow_item pattern[MAX_PATTERN_NUM] {};
   struct rte_flow_action action[MAX_ACTION_NUM] {};
-  struct rte_flow_action_queue queue = {.index = cfg.action_.id_};
+  const auto flow_actions = flow_config_actions(cfg);
+  const bool hash_inner = std::any_of(
+      flow_actions.begin(), flow_actions.end(),
+      [](const FlowAction& flow_action) { return flow_action.type_ == FlowType::TUNNEL_DECAP; });
+  DpdkRxDestination destination(flow_queue_action(flow_actions), hash_inner ? 2 : 0);
   struct rte_flow_action_mark  mark = {.id = cfg.id_};
   struct rte_flow_error error {};
   struct rte_flow_item_udp udp_spec {};
@@ -4882,11 +4928,12 @@ struct rte_flow* DpdkEngine::add_flow(int port,
 
   auto resource = std::make_shared<DpdkFlowResource>();
   resource->port = port;
-  resource->action_storage.reserve(cfg.actions_.size() * 2 + 2);
+  resource->action_storage.reserve(flow_actions.size() * 2 + 2);
 
-  int required_pattern_items = 1 + normal_match_pattern_item_count(cfg.match_) + 1;
+  const bool use_rss = destination.queue_ids.size() > 1;
+  int required_pattern_items = 1 + normal_match_pattern_item_count(cfg.match_, use_rss) + 1;
   int required_action_items = 2 + 1;
-  for (const auto& flow_action : cfg.actions_) {
+  for (const auto& flow_action : flow_actions) {
     required_pattern_items += transform_pattern_item_count(flow_action);
     required_action_items += transform_action_item_count(flow_action);
   }
@@ -4903,7 +4950,7 @@ struct rte_flow* DpdkEngine::add_flow(int port,
 
   int pi = 0;
   bool has_outer_transform = false;
-  for (const auto& flow_action : cfg.actions_) {
+  for (const auto& flow_action : flow_actions) {
     if (flow_action.type_ == FlowType::TUNNEL_DECAP) {
       if (!append_tunnel_pattern(pattern, &pi, *resource, flow_action.tunnel_)) {
         DAQIRI_LOG_CRITICAL("Failed to build tunnel pattern for RX flow '{}'", cfg.name_);
@@ -4917,11 +4964,11 @@ struct rte_flow* DpdkEngine::add_flow(int port,
     }
   }
   pattern[pi++].type = RTE_FLOW_ITEM_TYPE_ETH;
-  append_normal_match(pattern, &pi, cfg.match_, &ip_spec, &ip_mask, &udp_spec, &udp_mask);
+  append_normal_match(pattern, &pi, cfg.match_, &ip_spec, &ip_mask, &udp_spec, &udp_mask, use_rss);
   pattern[pi].type = RTE_FLOW_ITEM_TYPE_END;
 
   int ai = 0;
-  for (const auto& flow_action : cfg.actions_) {
+  for (const auto& flow_action : flow_actions) {
     if (flow_action.type_ == FlowType::QUEUE) { continue; }
     if (!append_transform_action(action, &ai, *resource, flow_action)) {
       DAQIRI_LOG_CRITICAL("Failed to build RX action '{}' for flow '{}'",
@@ -4930,7 +4977,7 @@ struct rte_flow* DpdkEngine::add_flow(int port,
     }
   }
   action[ai++] = {.type = RTE_FLOW_ACTION_TYPE_MARK, .conf = &mark};
-  action[ai++] = {.type = RTE_FLOW_ACTION_TYPE_QUEUE, .conf = &queue};
+  destination.append(action, &ai);
   action[ai].type = RTE_FLOW_ACTION_TYPE_END;
 
   attr.ingress = 1;
@@ -4971,14 +5018,15 @@ struct rte_flow* DpdkEngine::add_tx_flow(int port, const FlowConfig& cfg) {
   struct rte_flow_item_udp udp_mask {};
   struct rte_flow_item_ipv4 ip_spec {};
   struct rte_flow_item_ipv4 ip_mask {};
+  const auto flow_actions = flow_config_actions(cfg);
 
   auto resource = std::make_shared<DpdkFlowResource>();
   resource->port = port;
-  resource->action_storage.reserve(cfg.actions_.size() * 2 + 1);
+  resource->action_storage.reserve(flow_actions.size() * 2 + 1);
 
   const int required_pattern_items = 1 + normal_match_pattern_item_count(cfg.match_) + 1;
   int required_action_items = 1;
-  for (const auto& flow_action : cfg.actions_) {
+  for (const auto& flow_action : flow_actions) {
     required_action_items += transform_action_item_count(flow_action);
   }
   if (required_pattern_items > MAX_PATTERN_NUM) {
@@ -4998,7 +5046,7 @@ struct rte_flow* DpdkEngine::add_tx_flow(int port, const FlowConfig& cfg) {
   pattern[pi].type = RTE_FLOW_ITEM_TYPE_END;
 
   int ai = 0;
-  for (const auto& flow_action : cfg.actions_) {
+  for (const auto& flow_action : flow_actions) {
     if (!append_transform_action(action, &ai, *resource, flow_action)) {
       DAQIRI_LOG_CRITICAL("Failed to build TX action '{}' for flow '{}'",
                           flow_type_to_string(flow_action.type_), cfg.name_);
@@ -5039,7 +5087,7 @@ struct rte_flow* DpdkEngine::add_ecpri_flow(int port, const FlowConfig& cfg, boo
   struct rte_flow_item pattern[MAX_PATTERN_NUM];
   struct rte_flow_action action[MAX_ACTION_NUM];
   struct rte_flow* flow = NULL;
-  struct rte_flow_action_queue queue = {.index = cfg.action_.id_};
+  DpdkRxDestination destination(flow_queue_action(flow_config_actions(cfg)));
   struct rte_flow_action_mark mark = {.id = cfg.id_};
   struct rte_flow_error error;
   struct rte_flow_item_eth eth_spec;
@@ -5062,9 +5110,9 @@ struct rte_flow* DpdkEngine::add_ecpri_flow(int port, const FlowConfig& cfg, boo
 
   action[0].type = RTE_FLOW_ACTION_TYPE_MARK;
   action[0].conf = &mark;
-  action[1].type = RTE_FLOW_ACTION_TYPE_QUEUE;
-  action[1].conf = &queue;
-  action[2].type = RTE_FLOW_ACTION_TYPE_END;
+  int action_index = 1;
+  destination.append(action, &action_index);
+  action[action_index].type = RTE_FLOW_ACTION_TYPE_END;
 
   // Pin the eCPRI EtherType so the rule only fires on eCPRI-over-Ethernet frames.
   eth_spec.hdr.ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_ECPRI);
@@ -5482,14 +5530,15 @@ bool DpdkEngine::validate_config() const {
         DAQIRI_LOG_ERROR("Duplicate flow ID {} on interface '{}'", flow.id_, intf.name_);
         return false;
       }
-      if (rx_queue_ids.find(flow.action_.id_) == rx_queue_ids.end()) {
-        DAQIRI_LOG_ERROR("Flow '{}' references unknown RX queue {} on interface '{}'",
-                         flow.name_,
-                         flow.action_.id_,
-                         intf.name_);
-        return false;
+      const auto destination_ids = flow_queue_ids(flow_queue_action(flow_config_actions(flow)));
+      for (const uint16_t destination_id : destination_ids) {
+        if (rx_queue_ids.find(destination_id) == rx_queue_ids.end()) {
+          DAQIRI_LOG_ERROR("Flow '{}' references unknown RX queue {} on interface '{}'", flow.name_,
+                           destination_id, intf.name_);
+          return false;
+        }
       }
-      flow_to_queue.emplace(flow.id_, flow.action_.id_);
+      flow_to_queue.emplace(flow.id_, destination_ids.front());
       if (flow.match_.type_ == FlowMatchType::FLEX_ITEM) {
         has_flex_item_flows = true;
         const uint16_t flex_item_id = flow.match_.flex_item_match_.flex_item_id_;
@@ -5868,7 +5917,7 @@ int DpdkEngine::rx_core_multi_q_worker(void* arg) {
   uint16_t num_queues = tparams->q_params.size();
 
   std::string pq_str = "";
-  for (const auto &pq : tparams->q_params) {
+  for (const auto& pq : tparams->q_params) {
     pq_str += std::to_string(pq.port) + "/" + std::to_string(pq.queue) + " ";
   }
 
@@ -6301,7 +6350,9 @@ int DpdkEngine::tx_core_worker(void* arg) {
                     (void*)tparams->ring);
 
   while (!force_quit.load()) {
-    if (rte_ring_dequeue(tparams->ring, reinterpret_cast<void**>(&msg)) != 0) { continue; }
+    if (rte_ring_dequeue(tparams->ring, reinterpret_cast<void**>(&msg)) != 0) {
+      continue;
+    }
 
     // Scatter mode needs to chain all the buffers
     if (msg->hdr.hdr.num_segs > 1) {

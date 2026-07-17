@@ -8,8 +8,8 @@ Standalone benchmark applications for testing performance of DAQIRI with various
 - `daqiri_bench_raw_reorder_quantize`: raw RX sequence reorder with payload conversion
 - `daqiri_example_pcap_writer`: RX pcap writer with optional GPUDirect demo TX traffic
 - `daqiri_example_dynamic_rx_flow`: raw TX/RX example that starts with RX flow
-  isolation and no configured flows, then dynamically steers one UDP flow to
-  queues 0 and 1 in sequence
+  isolation and no configured flows, dynamically steers UDP traffic to queues 0
+  and 1 in sequence, then verifies five-tuple RSS across both queues and flow IDs
 - `daqiri_bench_rdma`: RDMA benchmark logic (former `rdma_bench.h`)
 - `daqiri_bench_socket`: TCP/UDP socket benchmark logic
 - `daqiri_example_gds_write`: one-shot capture that demonstrates synchronous and

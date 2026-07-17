@@ -250,8 +250,9 @@ flow programming test.
 |------|------------------|----------|
 | Build smoke | `daqiri_bench_raw_sw_loopback.yaml --seconds 5` | Init succeeds, no NIC flows created |
 | Good NIC config | `daqiri_bench_raw_tx_rx.yaml` (filled placeholders, cabled NIC) | Init succeeds; RX and `tx_eth_src` flows programmed |
-| Dynamic RX flow config | `daqiri_example_dynamic_rx_flow.yaml` with `daqiri_example_dynamic_rx_flow` | Starts with `flow_isolation: true` and no `rx.flows`, drops unmatched traffic, then adds/deletes runtime UDP steering rules |
-| Bad queue ID | Copy `daqiri_bench_raw_tx_rx.yaml`, set `flows[0].action.id: 99` | Fails in `validate_config()` before EAL/NIC init with `references unknown RX queue` |
+| Dynamic RX flow config | `daqiri_example_dynamic_rx_flow.yaml` with `daqiri_example_dynamic_rx_flow` | Starts with `flow_isolation: true` and no `rx.flows`, drops unmatched traffic, tests scalar queue rules, then varies UDP source ports and verifies one `[0, 1]` RSS rule reaches both queues with the expected flow ID and tolerance |
+| Bad queue target | Copy `daqiri_bench_raw_tx_rx.yaml`; try `flows[0].action.id: 99`, `ids: []`, duplicate/unknown IDs, or both `id` and `ids` | Fails validation before NIC initialization |
+| Static RSS flow | Change a standard IPv4/UDP flow action to `{type: queue, ids: [0, 1]}` and generate many distinct five tuples | Both queues receive packets; an unchanged tuple remains on one queue. Validate per-queue rates with `mlnx_perf` |
 | Mixed flows (optional) | On one interface, add two of the three flow classes (standard UDP/IP, flex-item (see `rx.flex_items`), or eCPRI (`match.ecpri`)) in the [configuration reference](../api-reference/configuration.md) | Fails in `validate_config()` with `mixes standard (UDP/IP), flex-item and/or eCPRI` |
 | eCPRI flow (optional) | On a cabled NIC, add a flow with `match: { ecpri: { msg_type: 0, pc_id: 1 } }` (see the [configuration reference](../api-reference/configuration.md)) | Init succeeds. eCPRI-over-Ethernet (EtherType 0xAEFE) frames matching the message type and pc_id steer to the flow's queue |
 

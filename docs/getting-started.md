@@ -220,8 +220,10 @@ passing the numeric `level` and option constants from system headers. DAQIRI doe
 not maintain symbolic socket-option mappings in YAML.
 
 For Raw Ethernet (`stream_type: "raw"`), `daqiri_init()` validates that each `rx.flows`
-entry's legacy `action.id` or final ordered `actions:` queue action matches an
-`rx.queues` ID on the same interface, then programs flow rules into the NIC.
+entry's legacy scalar `action.id` or queue-list `action.ids` (including the final
+queue action in ordered `actions:`) references configured `rx.queues` IDs on the
+same interface, then programs flow rules into the NIC. Two or more queue IDs
+automatically enable flow-affine IPv4/UDP five-tuple RSS.
 Initialization fails if any RX flow rule, TX transform flow, send-to-kernel fallback
 (when `flow_isolation: true`), or `tx_eth_src` offload rule cannot be installed.
 Raw DPDK and raw ibverbs can offload VLAN push/pop and VXLAN, GRE, or NVGRE

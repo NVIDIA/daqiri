@@ -207,11 +207,16 @@ RX flows can also perform hardware VLAN pop or tunnel decapsulation before queue
 - **`id`**: Flow ID. Retrievable at runtime via `get_packet_flow_id()`.
   - type: `integer`
 - **`action`**: Legacy single action map. Existing configs may keep using
-  `action: {type: queue, id: ...}`.
+  `action: {type: queue, id: ...}`. A multi-queue destination uses
+  `action: {type: queue, ids: [0, 1]}`.
 - **`actions`**: Ordered action list. Use this for tunnel/VLAN transforms.
   RX transform flows must end with `type: queue`.
   - **`type: queue`**: Steer matched packets to an RX queue.
     - **`id`**: Queue ID under `rx.queues` on the same interface.
+    - **`ids`**: Non-empty list of unique queue IDs under `rx.queues` on the same
+      interface. One entry is direct steering. Two or more entries automatically
+      enable flow-affine Toeplitz RSS over source/destination IPv4 address and
+      source/destination UDP port. `id` and `ids` are mutually exclusive.
   - **`type: vlan_pop`**: Pop one VLAN tag in hardware.
   - **`type: tunnel_decap`**: Decapsulate a hardware tunnel before queue delivery.
     - **`tunnel.type`**: `vxlan`, `gre`, or `nvgre`.
@@ -261,6 +266,22 @@ A single RX interface must use exactly one flow class: standard UDP/IP, flex-ite
 Each class installs its own DPDK group-0 jump rule, and these conflict when mixed, so only one
 class is reachable per interface. `daqiri_init` rejects mixed configs with a clear error.
 Flex-item flows cannot be combined with VLAN/tunnel transform actions in v1.
+
+Multi-queue RSS is supported for standard IPv4/UDP and flex-item flows. A flex
+item selects the rule, but its sampled value is not an RSS input; distribution
+still uses the packet's IPv4/UDP tuple. VLAN-pop rules hash the IPv4/UDP packet
+after the VLAN header, and tunnel-decap rules hash the inner IPv4/UDP tuple.
+eCPRI flows cannot use multi-queue RSS because they have no applicable UDP/IP
+five tuple. Queue-list order affects hash-to-queue mapping, but does not express
+weights.
+
+RSS is flow-affine: every packet with an unchanged five tuple stays on one
+queue. Roughly even packet counts require enough distinct tuples with reasonably
+balanced traffic; this is not packet striping or exact round-robin delivery.
+There is no queue-action mode field in schema v1; a future stripe mode can be
+added without changing the multi-ID RSS default. If
+the NIC rejects an RSS action, static initialization or the dynamic flow
+completion fails rather than falling back to one queue.
 
 ### Flow Isolation
 
@@ -346,7 +367,8 @@ v1 batch-size requirement:
     nibble first; `network` endianness swaps byte-multiple input types wider than 8 bits
 - **`flow_ids`**: List of RX flow IDs this reorder config applies to.
   - type: `list[integer]`
-  - notes: flow IDs cannot overlap across reorder configs on the same interface
+  - notes: flow IDs cannot overlap across reorder configs on the same interface;
+    a referenced flow must use direct steering to one queue, not multi-queue RSS
 - **`method`**: Exactly one method must be configured:
   - **`seq_batch_number`**
     - `sequence_number.bit_offset`
