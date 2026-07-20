@@ -173,7 +173,9 @@ engine.
 - **`memory_regions`**: List of memory region names (defined in [Memory Regions](#memory-regions)).
   The order determines segment mapping: first region = segment 0, second = segment 1, etc.
   A single region means all packet data lands in one place, while two regions enables header-data
-  split.
+  split. On a raw `ibverbs` stream, a two-region queue automatically uses mlx5 SHAMPO
+  `HEADER_SPLIT_DATA_MERGE` when the NIC advertises it; otherwise it falls back to the regular
+  multi-SGE HDS receive queue. `DAQIRI_IBV_SHAMPO=0` disables SHAMPO for baseline comparisons.
   - type: `list`
 - **`timeout_us`**: Timeout in microseconds. A partial batch is delivered if this time elapses
   before `batch_size` packets are collected. Set to `0` to disable (wait for full batch only).

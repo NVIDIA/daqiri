@@ -63,6 +63,7 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
   const auto dst_ports = daqiri::bench::parse_udp_ports(cfg.udp_dst_port);
   size_t src_idx = 0;
   size_t dst_idx = 0;
+  uint16_t ipv4_id = 0;
 
   std::vector<uint8_t> payload_template(cfg.payload_size, 0);
   for (size_t i = 0; i < payload_template.size(); ++i) {
@@ -108,6 +109,15 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
         failed = true;
         break;
       }
+
+      // SHAMPO's EXTENDED merge criteria require consecutive IPv4 IDs. The
+      // generic header helper intentionally leaves the ID application-owned,
+      // so make this in-order HDS benchmark stream explicit. Ethernet is 14 B
+      // and the IPv4 identification field is at byte 4 of the IPv4 header.
+      auto *cpu_header = static_cast<uint8_t *>(
+          daqiri::get_segment_packet_ptr(msg, 0, i));
+      const uint16_t ipv4_id_be = htons(ipv4_id++);
+      std::memcpy(cpu_header + 14 + 4, &ipv4_id_be, sizeof(ipv4_id_be));
 
       auto *gpu_payload = daqiri::get_segment_packet_ptr(msg, 1, i);
       if (initialized_payload_buffers.insert(gpu_payload).second) {

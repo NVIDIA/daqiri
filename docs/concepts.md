@@ -225,6 +225,14 @@ Use HDS when the application needs to inspect headers (UDP
 source/destination ports, application-layer sequence numbers, etc.) but
 the bulk of the data is meant for the GPU.
 
+For raw streams using the `ibverbs` engine, DAQIRI probes the mlx5 SHAMPO
+capabilities when an RX queue names two memory regions. If the device supports
+`HEADER_SPLIT_DATA_MERGE`, the NIC writes headers into a cyclic CPU buffer and
+merges each in-order flow's payloads into MPRQ data reservations. Devices that
+do not advertise both the general SHAMPO capability and this mode use the
+regular multi-SGE HDS receive queue instead. Set `DAQIRI_IBV_SHAMPO=0` to force
+that fallback when comparing the two paths.
+
 <div class="packet-diagram" markdown="1">
 ![Header-data split](images/packet_diagrams/hds/header-data-split.webp)
 </div>

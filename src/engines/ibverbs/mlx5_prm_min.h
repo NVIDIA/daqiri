@@ -54,6 +54,7 @@ enum {
 // QUERY_HCA_CAP op_mod: general device caps, current values.
 enum {
   MLX5_HCA_CAP_OPMOD_GENERAL_CUR = (0x0 << 1) | 0x1,
+  MLX5_HCA_CAP_OPMOD_SHAMPO_CUR = (0x1d << 1) | 0x1,
 };
 
 // ---- HCA capability probe (wait_on_time for accurate TX send scheduling) ----
@@ -70,7 +71,9 @@ struct mlx5_ifc_query_hca_cap_in_bits {
 // prefixes (DEVX_GET uses offsetof, so the intervening fields need not be named
 // -- only the cumulative offset must match DPDK's mlx5_ifc_cmd_hca_cap_bits).
 struct mlx5_ifc_cmd_hca_cap_min_bits {
-  uint8_t reserved_at_0[0x420];
+  uint8_t reserved_at_0[0xba];
+  uint8_t shampo[0x1];  // general-cap bit advertising the SHAMPO cap block
+  uint8_t reserved_at_bb[0x365];
   uint8_t general_obj_types[0x40];  // at bit 0x420; bit 0x22 = FLEX_PARSE_GRAPH
   uint8_t reserved_at_460[0x80];
   uint8_t device_frequency_khz[0x20];  // at bit 0x4e0
@@ -88,6 +91,29 @@ struct mlx5_ifc_query_hca_cap_out_bits {
   uint8_t syndrome[0x20];
   uint8_t reserved_at_40[0x40];
   struct mlx5_ifc_cmd_hca_cap_min_bits capability;
+};
+
+// SHAMPO is a separate QUERY_HCA_CAP capability block (cap type 0x1d). Only
+// the fields required for HEADER_SPLIT_DATA_MERGE are named here.
+struct mlx5_ifc_shampo_cap_min_bits {
+  uint8_t reserved_at_0[0x3];
+  uint8_t shampo_log_max_reservation_size[0x5];
+  uint8_t reserved_at_8[0x3];
+  uint8_t shampo_log_min_reservation_size[0x5];
+  uint8_t shampo_min_mss_size[0x10];
+  uint8_t shampo_header_split[0x1];
+  uint8_t shampo_header_split_data_merge[0x1];
+  uint8_t reserved_at_22[0x1];
+  uint8_t shampo_log_max_headers_entry_size[0x5];
+  uint8_t reserved_at_28[0x7fd8];
+};
+
+struct mlx5_ifc_query_shampo_cap_out_bits {
+  uint8_t status[0x8];
+  uint8_t reserved_at_8[0x18];
+  uint8_t syndrome[0x20];
+  uint8_t reserved_at_40[0x40];
+  struct mlx5_ifc_shampo_cap_min_bits capability;
 };
 enum {
   MLX5_CQE_SIZE_64B = 0x0,
@@ -160,7 +186,19 @@ struct mlx5_ifc_wq_bits {
   uint8_t dbr_umem_id[0x20];
   uint8_t wq_umem_id[0x20];
   uint8_t wq_umem_offset[0x40];
-  uint8_t reserved_at_1c0[0x440];
+  uint8_t headers_mkey[0x20];
+  uint8_t shampo_enable[0x1];
+  uint8_t reserved_at_1e1[0x1];
+  uint8_t shampo_mode[0x2];
+  uint8_t reserved_at_1e4[0x1];
+  uint8_t log_reservation_size[0x3];
+  uint8_t reserved_at_1e8[0x5];
+  uint8_t log_max_num_of_packets_per_reservation[0x3];
+  uint8_t reserved_at_1f0[0x6];
+  uint8_t log_headers_entry_size[0x2];
+  uint8_t reserved_at_1f8[0x4];
+  uint8_t log_headers_buffer_entry_num[0x4];
+  uint8_t reserved_at_200[0x400];
 };
 
 struct mlx5_ifc_rqc_bits {
@@ -190,7 +228,12 @@ struct mlx5_ifc_rqc_bits {
   uint8_t hairpin_peer_sq[0x18];
   uint8_t reserved_at_c0[0x10];
   uint8_t hairpin_peer_vhca[0x10];
-  uint8_t reserved_at_e0[0xa0];
+  uint8_t reserved_at_e0[0x46];
+  uint8_t shampo_no_match_alignment_granularity[0x2];
+  uint8_t reserved_at_128[0x6];
+  uint8_t shampo_match_criteria_type[0x2];
+  uint8_t reservation_timeout[0x10];
+  uint8_t reserved_at_140[0x40];
   struct mlx5_ifc_wq_bits wq;
 };
 

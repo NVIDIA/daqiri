@@ -135,6 +135,9 @@ struct IbvRxQueue {
   // (header -> CPU MR, payload -> GPU MR) or multi-region queues, which MPRQ's
   // single-stride scatter can't express. Slower than MPRQ (1 WQE+CQE/packet).
   bool striding = true;
+  // SHAMPO HEADER_SPLIT_DATA_MERGE keeps CPU headers in a separate cyclic mkey
+  // while merging in-order payloads into reservations in the striding RQ.
+  bool shampo = false;
 
   // Striding-RQ geometry.
   uint32_t stride_size = 0;      // bytes per stride
@@ -163,6 +166,11 @@ struct IbvRxQueue {
   std::string mr_name;
   uint8_t* mr_base = nullptr;  // base VA of the stride pool (striding path)
   uint32_t lkey = 0;
+  uint8_t* shampo_header_base = nullptr;
+  uint32_t shampo_header_lkey = 0;
+  uint32_t shampo_header_entry_size = 0;
+  uint32_t shampo_header_entries = 0;
+  uint32_t shampo_packets_per_reservation = 0;
 
   // ibverbs/mlx5dv objects.
   struct ibv_context* ctx = nullptr;
@@ -398,6 +406,8 @@ class IbverbsEngine : public Engine {
   // DevX striding-RQ (real MPRQ) path.
   Status create_striding_rq_devx(IbvRxQueue& q);
   Status create_regular_rq(IbvRxQueue& q);  // non-striding DevX RQ (multi-SGE / HDS)
+  bool probe_shampo(struct ibv_context* ctx);
+  Status register_shampo_header_mr(IbvRxQueue& q);
   Status devx_create_cq(IbvRxQueue& q);
   Status devx_create_rq(IbvRxQueue& q, uint32_t stride_log, uint32_t strides_log);
   Status devx_create_tir(IbvRxQueue& q);  // also creates q.dr_action (dest TIR)

@@ -117,6 +117,18 @@ static constexpr uint32_t DEFAULT_STRIDE_LOG = 11;          // 2048 B per stride
 static constexpr uint32_t DEFAULT_STRIDES_PER_WQE_LOG = 9;  // 512 strides / WQE
 static constexpr uint32_t MIN_NUM_WQE = 4;                  // outstanding regions
 
+// SHAMPO HEADER_SPLIT_DATA_MERGE geometry. The PRM encodes reservation size
+// relative to 4 KiB and header-entry size relative to 64 B. A 256 B entry is
+// the mlx5 driver's established size and leaves room for supported L2-L4
+// headers while the configured HDS split remains (for example) 64 B.
+static constexpr uint32_t SHAMPO_RESERVATION_SIZE = 64u * 1024u;
+static constexpr uint32_t SHAMPO_HEADER_ENTRY_SIZE = 256u;
+static constexpr uint32_t SHAMPO_MAX_HEADER_ENTRIES = 1u << 15;
+static constexpr uint32_t SHAMPO_MODE_HEADER_SPLIT_DATA_MERGE = 0;
+static constexpr uint32_t SHAMPO_MATCH_CRITERIA_EXTENDED = 1;
+static constexpr uint32_t SHAMPO_NO_MATCH_ALIGN_STRIDE = 1;
+static constexpr uint32_t SHAMPO_RESERVATION_TIMEOUT = 1024;
+
 // Read barrier between observing a CQE owner flip and reading its payload.
 // On weakly-ordered ARM this must be a real device barrier.
 static inline void cqe_read_barrier() {
@@ -576,8 +588,74 @@ Status IbverbsEngine::register_rx_mr(IbvRxQueue& q) {
   if (q.num_segs == 2 && q.split_boundary > 0 && q.regions.size() >= 2) {
     q.regions[0].seg_len = static_cast<uint32_t>(q.split_boundary);
   }
-  q.mr_base = q.regions[0].base;
-  q.lkey = q.regions[0].lkey;
+  // A SHAMPO HDS queue uses region 0 for the cyclic CPU header buffer and the
+  // last region as the MPRQ data buffer. The regular scatter path starts from
+  // region 0 as before.
+  const size_t data_region = q.shampo ? q.regions.size() - 1 : 0;
+  q.mr_base = q.regions[data_region].base;
+  q.lkey = q.regions[data_region].lkey;
+  return Status::SUCCESS;
+}
+
+bool IbverbsEngine::probe_shampo(struct ibv_context* ctx) {
+  uint32_t gin[DEVX_ST_SZ_DW(query_hca_cap_in)] = {0};
+  std::vector<uint32_t> gout(DEVX_ST_SZ_DW(query_hca_cap_out), 0);
+  DEVX_SET(query_hca_cap_in, gin, opcode, MLX5_CMD_OP_QUERY_HCA_CAP);
+  DEVX_SET(query_hca_cap_in, gin, op_mod, MLX5_HCA_CAP_OPMOD_GENERAL_CUR);
+  if (mlx5dv_devx_general_cmd(ctx, gin, sizeof(gin), gout.data(), gout.size() * sizeof(uint32_t)) !=
+      0) {
+    DAQIRI_LOG_WARN("QUERY_HCA_CAP general failed while probing SHAMPO: {}", strerror(errno));
+    return false;
+  }
+  void* gcap = DEVX_ADDR_OF(query_hca_cap_out, gout.data(), capability);
+  const bool general_shampo = DEVX_GET(cmd_hca_cap_min, gcap, shampo) != 0;
+
+  uint32_t sin[DEVX_ST_SZ_DW(query_hca_cap_in)] = {0};
+  std::vector<uint32_t> sout(DEVX_ST_SZ_DW(query_shampo_cap_out), 0);
+  DEVX_SET(query_hca_cap_in, sin, opcode, MLX5_CMD_OP_QUERY_HCA_CAP);
+  DEVX_SET(query_hca_cap_in, sin, op_mod, MLX5_HCA_CAP_OPMOD_SHAMPO_CUR);
+  if (mlx5dv_devx_general_cmd(ctx, sin, sizeof(sin), sout.data(), sout.size() * sizeof(uint32_t)) !=
+      0) {
+    DAQIRI_LOG_WARN("QUERY_HCA_CAP SHAMPO failed: {}", strerror(errno));
+    return false;
+  }
+  void* scap = DEVX_ADDR_OF(query_shampo_cap_out, sout.data(), capability);
+  const bool merge = DEVX_GET(shampo_cap_min, scap, shampo_header_split_data_merge) != 0;
+  const uint32_t min_res = DEVX_GET(shampo_cap_min, scap, shampo_log_min_reservation_size);
+  const uint32_t max_res = DEVX_GET(shampo_cap_min, scap, shampo_log_max_reservation_size);
+  const uint32_t max_header = DEVX_GET(shampo_cap_min, scap, shampo_log_max_headers_entry_size);
+  DAQIRI_LOG_INFO(
+      "HCA {} SHAMPO caps: general={} HEADER_SPLIT_DATA_MERGE={} reservation_log=[{},{}] "
+      "max_header_entry_log={}",
+      ibv_get_device_name(ctx->device), general_shampo ? "yes" : "no", merge ? "yes" : "no",
+      min_res, max_res, max_header);
+  return general_shampo && merge;
+}
+
+Status IbverbsEngine::register_shampo_header_mr(IbvRxQueue& q) {
+  if (!q.shampo || q.regions.empty()) {
+    return Status::SUCCESS;
+  }
+  const auto& header_cfg = cfg_.mrs_[q.mr_names.front()];
+  const size_t bytes = static_cast<size_t>(q.shampo_header_entries) * q.shampo_header_entry_size;
+  if (header_cfg.ttl_size_ < bytes) {
+    DAQIRI_LOG_CRITICAL("SHAMPO header MR {} too small: {} bytes available, {} required",
+                        q.mr_names.front(), header_cfg.ttl_size_, bytes);
+    return Status::INVALID_PARAMETER;
+  }
+  const int access = mr_access_to_ibv(header_cfg.access_) | IBV_ACCESS_ZERO_BASED;
+  struct ibv_mr* mr = ibv_reg_mr_iova2(q.pd, q.regions[0].base, bytes, 0, access);
+  if (mr == nullptr) {
+    DAQIRI_LOG_CRITICAL("ibv_reg_mr_iova2 failed for SHAMPO header MR {}: {}", q.mr_names.front(),
+                        strerror(errno));
+    return Status::NULL_PTR;
+  }
+  registered_mrs_.push_back(mr);
+  q.shampo_header_base = q.regions[0].base;
+  q.shampo_header_lkey = mr->lkey;
+  DAQIRI_LOG_INFO("SHAMPO header MR {}: base {} entries={} entry={}B bytes={} zero-based lkey={}",
+                  q.mr_names.front(), static_cast<void*>(q.shampo_header_base),
+                  q.shampo_header_entries, q.shampo_header_entry_size, bytes, q.shampo_header_lkey);
   return Status::SUCCESS;
 }
 
@@ -637,6 +715,31 @@ Status IbverbsEngine::create_striding_rq(IbvRxQueue& q) {
     fit = 4096;
   }
   q.num_wqe = fit ? (1u << log2_floor(fit)) : 0;
+  if (q.shampo) {
+    // Reserve enough cyclic header entries for the worst-case number of
+    // packets every outstanding data WQE can hold. Reducing the data RQ depth
+    // when necessary keeps header and data lifetime coupled through reposts.
+    const auto& payload_mr = cfg_.mrs_[q.mr_name];
+    const uint32_t max_packet =
+        std::max<uint32_t>(1, static_cast<uint32_t>(q.split_boundary) + payload_mr.buf_size_);
+    q.shampo_packets_per_reservation = static_cast<uint32_t>(
+        next_power_of_two((SHAMPO_RESERVATION_SIZE + max_packet - 1) / max_packet));
+    q.shampo_packets_per_reservation =
+        std::min<uint32_t>(q.shampo_packets_per_reservation, 1u << 7);
+    const uint32_t reservations_per_wqe =
+        std::max<uint32_t>(1, q.region_size / SHAMPO_RESERVATION_SIZE);
+    const uint32_t headers_per_wqe = reservations_per_wqe * q.shampo_packets_per_reservation;
+    const uint32_t available_headers =
+        static_cast<uint32_t>(cfg_.mrs_[q.mr_names.front()].ttl_size_ / SHAMPO_HEADER_ENTRY_SIZE);
+    while (q.num_wqe >= MIN_NUM_WQE &&
+           (static_cast<uint64_t>(headers_per_wqe) * q.num_wqe > SHAMPO_MAX_HEADER_ENTRIES ||
+            static_cast<uint64_t>(headers_per_wqe) * q.num_wqe > available_headers)) {
+      q.num_wqe >>= 1;
+    }
+    const uint32_t needed_headers = headers_per_wqe * q.num_wqe;
+    q.shampo_header_entry_size = SHAMPO_HEADER_ENTRY_SIZE;
+    q.shampo_header_entries = static_cast<uint32_t>(next_power_of_two(needed_headers));
+  }
   if (q.num_wqe < MIN_NUM_WQE) {
     DAQIRI_LOG_CRITICAL(
         "MR {} too small for striding RQ: {} bytes / region {} = {} WQEs (need >= {}). Increase "
@@ -667,9 +770,31 @@ Status IbverbsEngine::create_striding_rq(IbvRxQueue& q) {
   q.wqe_stride = 32;
   q.wqe_dseg_off = 16;
 
+  if (q.shampo) {
+    if (Status s = register_shampo_header_mr(q); s != Status::SUCCESS) {
+      return s;
+    }
+    DAQIRI_LOG_INFO(
+        "SHAMPO HEADER_SPLIT_DATA_MERGE q{}: split={}B reservation={}B packets/reservation={} "
+        "header_entries={}",
+        q.queue_id, q.split_boundary, SHAMPO_RESERVATION_SIZE, q.shampo_packets_per_reservation,
+        q.shampo_header_entries);
+  }
+
   // Real MPRQ uses a DevX-built CQ + striding RQ + TIR + mlx5dv_dr steering. The
   // DevX RQ can only reference a DevX-created CQ (a verbs CQ is rejected).
   if (Status s = create_striding_rq_devx(q); s != Status::SUCCESS) {
+    if (q.shampo) {
+      DAQIRI_LOG_WARN("SHAMPO RQ creation failed for q{}; cleaning up and using the regular HDS RQ",
+                      q.queue_id);
+      devx_destroy(q);
+      q.shampo = false;
+      q.striding = false;
+      q.mr_name = q.mr_names.front();
+      q.mr_base = q.regions.front().base;
+      q.lkey = q.regions.front().lkey;
+      return create_regular_rq(q);
+    }
     return s;
   }
   DAQIRI_LOG_INFO("DevX striding RQ ready: rqn {} (q{})", q.rqn, q.queue_id);
@@ -864,6 +989,11 @@ Status IbverbsEngine::devx_create_rq(IbvRxQueue& q, uint32_t stride_log, uint32_
   DEVX_SET(rqc, rqc, cqn, q.dv_cq.cqn);
   DEVX_SET(rqc, rqc, flush_in_error_en, 1);
   DEVX_SET(rqc, rqc, vsd, 1);  // do not strip VLAN
+  if (q.shampo) {
+    DEVX_SET(rqc, rqc, reservation_timeout, SHAMPO_RESERVATION_TIMEOUT);
+    DEVX_SET(rqc, rqc, shampo_match_criteria_type, SHAMPO_MATCH_CRITERIA_EXTENDED);
+    DEVX_SET(rqc, rqc, shampo_no_match_alignment_granularity, SHAMPO_NO_MATCH_ALIGN_STRIDE);
+  }
 
   DEVX_SET(wq, wq, wq_type, q.striding ? MLX5_WQ_TYPE_CYCLIC_STRIDING_RQ : MLX5_WQ_TYPE_CYCLIC);
   DEVX_SET(wq, wq, log_wq_stride, log2_floor(q.wqe_stride));
@@ -884,6 +1014,16 @@ Status IbverbsEngine::devx_create_rq(IbvRxQueue& q, uint32_t stride_log, uint32_
     DEVX_SET(wq, wq, two_byte_shift_en, q.two_byte_shift);
     DEVX_SET(wq, wq, single_stride_log_num_of_bytes,
              stride_log - MLX5_MIN_SINGLE_STRIDE_LOG_NUM_BYTES);
+    if (q.shampo) {
+      DEVX_SET(wq, wq, headers_mkey, q.shampo_header_lkey);
+      DEVX_SET(wq, wq, shampo_enable, 1);
+      DEVX_SET(wq, wq, shampo_mode, SHAMPO_MODE_HEADER_SPLIT_DATA_MERGE);
+      DEVX_SET(wq, wq, log_reservation_size, log2_floor(SHAMPO_RESERVATION_SIZE) - 12u);
+      DEVX_SET(wq, wq, log_max_num_of_packets_per_reservation,
+               log2_floor(q.shampo_packets_per_reservation));
+      DEVX_SET(wq, wq, log_headers_entry_size, log2_floor(q.shampo_header_entry_size) - 6u);
+      DEVX_SET(wq, wq, log_headers_buffer_entry_num, log2_floor(q.shampo_header_entries));
+    }
   }
 
   q.rq_obj = mlx5dv_devx_obj_create(q.ctx, in, sizeof(in), out, sizeof(out));
@@ -2249,9 +2389,9 @@ Status IbverbsEngine::setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf,
   q.mr_names = qcfg.common_.mrs_;
   q.mr_name = qcfg.common_.mrs_[0];
   // A queue with >1 memory region is header-data split: region 0 (CPU) holds the
-  // header, region 1 (GPU) the payload, split at region 0's buf_size. Physical
-  // HDS needs per-packet multi-segment scatter, which MPRQ can't express -- those
-  // queues use the (slower) regular RQ. MPRQ stays the default everywhere else.
+  // header and the final region holds payload data. On SHAMPO-capable devices,
+  // HEADER_SPLIT_DATA_MERGE performs the split on MPRQ; otherwise the existing
+  // regular multi-SGE RQ remains the fallback.
   if (qcfg.common_.mrs_.size() > 1) {
     q.num_segs = std::min<int>(static_cast<int>(qcfg.common_.mrs_.size()), MAX_NUM_SEGS);
     q.split_boundary = static_cast<int>(cfg_.mrs_[q.mr_name].buf_size_);
@@ -2260,8 +2400,10 @@ Status IbverbsEngine::setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf,
     q.num_segs = 1;
     q.split_boundary = 0;
   }
-  if (const char* s = getenv("DAQIRI_IBV_STRIDING")) {
-    q.striding = (s[0] != '0');
+  if (q.num_segs == 1) {
+    if (const char* s = getenv("DAQIRI_IBV_STRIDING")) {
+      q.striding = (s[0] != '0');
+    }
   }
 
   // Per-queue flow id: if a configured flow steers to this queue, report its id
@@ -2278,6 +2420,21 @@ Status IbverbsEngine::setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf,
     return Status::GENERIC_FAILURE;
   }
   q.pd = pd_map_[q.ctx];
+
+  if (q.num_segs > 1) {
+    const char* shampo_env = getenv("DAQIRI_IBV_SHAMPO");
+    bool shampo_enabled = shampo_env == nullptr || shampo_env[0] != '0';
+    if (const char* striding_env = getenv("DAQIRI_IBV_STRIDING")) {
+      shampo_enabled = shampo_enabled && striding_env[0] != '0';
+    }
+    q.shampo = shampo_enabled && probe_shampo(q.ctx);
+    if (q.shampo) {
+      q.striding = true;
+      q.mr_name = q.mr_names.back();
+    } else {
+      DAQIRI_LOG_INFO("SHAMPO unavailable/disabled for q{}; using regular HDS RQ", q.queue_id);
+    }
+  }
 
   if (Status s = register_rx_mr(q); s != Status::SUCCESS) {
     return s;
@@ -2316,7 +2473,6 @@ void IbverbsEngine::initialize() {
     // slots do not. Keep slot spacing close to the configured packet/segment size.
     mr.second.adj_size_ = next_power_of_two(mr.second.buf_size_);
   }
-
   if (allocate_memory_regions() != Status::SUCCESS) {
     DAQIRI_LOG_CRITICAL("Failed to allocate memory regions");
     return;
@@ -2590,6 +2746,19 @@ void IbverbsEngine::rx_poll_queue(IbvRxQueue* q) {
         q->striding ? ((byte_cnt & MPRQ_STRIDE_NUM_MASK) >> MPRQ_STRIDE_NUM_SHIFT) : 1u;
     const uint32_t len = q->striding ? (byte_cnt & MPRQ_LEN_MASK) : (byte_cnt & 0x00ffffffu);
 
+    // SHAMPO overlays CQE bytes 4..11 with match/flush, header size,
+    // header-entry index, and the payload offset in the MPWQE data buffer.
+    // mlx5dv's public CQE type leaves that area reserved, so decode it by its
+    // PRM byte layout rather than relying on a non-public bitfield struct.
+    const uint8_t* cqe_raw = reinterpret_cast<const uint8_t*>(cqe64);
+    uint16_t shampo_header_index_be = 0;
+    uint32_t shampo_data_offset_be = 0;
+    memcpy(&shampo_header_index_be, cqe_raw + 6, sizeof(shampo_header_index_be));
+    memcpy(&shampo_data_offset_be, cqe_raw + 8, sizeof(shampo_data_offset_be));
+    const uint32_t shampo_header_size = q->shampo ? cqe_raw[5] : 0;
+    const uint32_t shampo_header_index = be16toh(shampo_header_index_be);
+    const uint32_t shampo_data_offset = be32toh(shampo_data_offset_be);
+
     // Region (WQE) + intra-WQE stride offset. For a striding RQ the CQE's
     // wqe_counter is the STRIDE index within the WQE, not the WQE index, so the
     // region is tracked in software by accumulating stride counts and advancing
@@ -2597,7 +2766,13 @@ void IbverbsEngine::rx_poll_queue(IbvRxQueue* q) {
     // wqe_counter is the WQE index and each WQE holds one packet.)
     uint32_t region;
     uint32_t strd_off;
-    if (q->striding) {
+    if (q->shampo) {
+      // Unlike ordinary MPRQ, SHAMPO reports both the MPWQE id and the exact
+      // merged-data offset. This removes any dependency on packet arrival
+      // arithmetic and is the key to exposing each in-order packet zero-copy.
+      region = be16toh(cqe64->wqe_id) & wqe_mask;
+      strd_off = shampo_data_offset;
+    } else if (q->striding) {
       region = q->cur_wqe;
       strd_off = q->cur_consumed;
       q->cur_consumed += strd;
@@ -2619,9 +2794,9 @@ void IbverbsEngine::rx_poll_queue(IbvRxQueue* q) {
     q->dbg_data++;
 
     const int n = q->cur_n;
-    const uint32_t hdr = (static_cast<uint32_t>(q->split_boundary) < len)
-                             ? static_cast<uint32_t>(q->split_boundary)
-                             : len;
+    const uint32_t hdr = q->shampo
+                             ? std::min<uint32_t>(shampo_header_size, len)
+                             : std::min<uint32_t>(static_cast<uint32_t>(q->split_boundary), len);
     if (!q->striding) {
       // Regular RQ: each segment is in its own region (physical split). Slot
       // `region` indexes the per-packet buffer within each region.
@@ -2636,6 +2811,15 @@ void IbverbsEngine::rx_poll_queue(IbvRxQueue* q) {
         q->cur_burst->pkts[0][n] = hbuf;
         q->cur_burst->pkt_lens[0][n] = len;
       }
+    } else if (q->shampo) {
+      const uint32_t header_slot = shampo_header_index & (q->shampo_header_entries - 1);
+      uint8_t* hbuf =
+          q->shampo_header_base + static_cast<size_t>(header_slot) * q->shampo_header_entry_size;
+      uint8_t* pbuf = q->mr_base + static_cast<size_t>(region) * q->region_size + strd_off;
+      q->cur_burst->pkts[0][n] = hbuf;
+      q->cur_burst->pkt_lens[0][n] = hdr;
+      q->cur_burst->pkts[1][n] = pbuf;
+      q->cur_burst->pkt_lens[1][n] = len - hdr;
     } else {
       uint8_t* pkt = q->mr_base + static_cast<size_t>(region) * q->region_size +
                      static_cast<size_t>(strd_off) * q->stride_size + q->two_byte_shift * 2;
@@ -4275,10 +4459,10 @@ Status IbverbsEngine::set_ipv4_header(BurstParams* burst, int idx, int ip_len, u
   pkt->ip.version = 4;
   pkt->ip.ihl = 5;
   pkt->ip.tos = 0;
-  pkt->ip.tot_len = htons(static_cast<uint16_t>(ip_len));
+  pkt->ip.tot_len = htons(static_cast<uint16_t>(sizeof(pkt->ip) + ip_len));
   pkt->ip.protocol = proto;
-  pkt->ip.saddr = src_host;
-  pkt->ip.daddr = dst_host;
+  pkt->ip.saddr = htonl(src_host);
+  pkt->ip.daddr = htonl(dst_host);
   return Status::SUCCESS;
 }
 
@@ -4287,7 +4471,7 @@ Status IbverbsEngine::set_udp_header(BurstParams* burst, int idx, int udp_len, u
   auto* pkt = static_cast<UDPIPV4Pkt*>(burst->pkts[0][idx]);
   pkt->udp.source = htons(src_port);
   pkt->udp.dest = htons(dst_port);
-  pkt->udp.len = htons(static_cast<uint16_t>(udp_len));
+  pkt->udp.len = htons(static_cast<uint16_t>(sizeof(pkt->udp) + udp_len));
   pkt->udp.check = 0;
   return Status::SUCCESS;
 }
