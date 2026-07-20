@@ -43,7 +43,7 @@ daqiri:
       address: <0000:00:00.0>
       rx:
         flow_isolation: true
-        dynamic_flow_capacity: 1024
+        dynamic_flow_capacity: 0
         queues:
         - name: "rx_q_0"
           id: 0

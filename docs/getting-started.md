@@ -232,9 +232,11 @@ encap/decap through flow actions. Socket/RDMA streams reject those actions.
 RX flow rules at runtime with `add_rx_flow_async()` / `delete_flow_async()`. Dynamic
 RX flows can use the same decap/pop action ordering as static RX flows. The DPDK template
 fast path is enabled and sized by `rx.dynamic_flow_capacity` (default `0`, set a positive
-value such as `1024` to create template tables); dynamic transform rules fall back to
-regular hardware flow creation because packet reformat actions are not part of that
-template fast path.
+value such as `1024` to create template tables on NICs that support the async flow API);
+dynamic transform rules fall back to regular hardware flow creation because packet reformat
+actions are not part of that template fast path. The dynamic RX-flow example leaves this
+setting at `0` so it runs on devices whose mlx5 async flow setup is unavailable or resource
+limited.
 
 CUDA architectures default to `80;90` (A100, H100), with `121` (GB10) added
 when configuring with CUDA Toolkit 13.0 or newer. Override

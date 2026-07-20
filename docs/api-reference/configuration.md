@@ -303,8 +303,9 @@ batch.
 
 `rx.dynamic_flow_capacity:` DPDK template-table capacity reserved for dynamic RX flow
 rules on this interface. `0` disables DPDK template/async setup on startup. Set a positive
-value to opt in to the template fast path when it is available. Legacy fallback paths still
-accept dynamic RX flow operations but do not use a template table.
+value to opt in to the template fast path when it is available and the NIC has enough async
+flow resources. Legacy fallback paths still accept dynamic RX flow operations but do not use
+a template table.
 
 - type: `integer`
 - default: `0`
