@@ -212,10 +212,8 @@ class DpdkEngine : public Engine {
   struct rte_flow* add_modify_flow_set(int port, int queue, const char* buf, int len,
                                        Direction direction);
 
-  struct rte_flow* add_flex_item_flow(int port,
-                                      const FlexItemMatch& match,
-                                      uint16_t queue_id,
-                                      FlowId mark_id = 0,
+  struct rte_flow* add_flex_item_flow(int port, const FlexItemMatch& match,
+                                      const FlowAction& queue_action, FlowId mark_id = 0,
                                       bool track = true);
 
   // eCPRI-over-Ethernet RX flow (EtherType 0xAEFE) via RTE_FLOW_ITEM_TYPE_ECPRI.

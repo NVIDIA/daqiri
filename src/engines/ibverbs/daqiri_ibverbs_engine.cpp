@@ -18,6 +18,7 @@
 #include "src/engines/ibverbs/daqiri_ibverbs_engine.h"
 #include "src/engines/ibverbs/mlx5_prm_min.h"
 #include "src/kernels.h"
+#include "src/rss.h"
 
 #include <cuda.h>
 #include <arpa/inet.h>
@@ -1059,14 +1060,23 @@ bool IbverbsEngine::validate_dynamic_rx_flow_locked(int port, const FlowRuleConf
     return false;
   }
   const FlowAction queue_action = flow_queue_action(actions);
-
-  const auto queue_it = std::find_if(intf->rx_.queues_.begin(), intf->rx_.queues_.end(),
-                                     [&](const RxQueueConfig& q) {
-                                       return q.common_.id_ == queue_action.id_;
-                                     });
-  if (queue_it == intf->rx_.queues_.end()) {
-    DAQIRI_LOG_ERROR("Dynamic RX flow targets invalid port/queue {}/{}", port,
-                     queue_action.id_);
+  const auto queue_ids = flow_queue_ids(queue_action);
+  std::set<uint16_t> unique_queue_ids;
+  for (const uint16_t queue_id : queue_ids) {
+    if (!unique_queue_ids.insert(queue_id).second) {
+      DAQIRI_LOG_ERROR("Dynamic RX flow '{}' repeats queue id {}", flow.name_, queue_id);
+      return false;
+    }
+    const auto queue_it =
+        std::find_if(intf->rx_.queues_.begin(), intf->rx_.queues_.end(),
+                     [&](const RxQueueConfig& q) { return q.common_.id_ == queue_id; });
+    if (queue_it == intf->rx_.queues_.end()) {
+      DAQIRI_LOG_ERROR("Dynamic RX flow targets invalid port/queue {}/{}", port, queue_id);
+      return false;
+    }
+  }
+  if (queue_ids.size() > 1 && flow.match_.type_ == FlowMatchType::ECPRI) {
+    DAQIRI_LOG_ERROR("Dynamic RX flow '{}' cannot use RSS with eCPRI matching", flow.name_);
     return false;
   }
   const bool has_transform = flow_actions_have_transform(actions);
@@ -1116,17 +1126,131 @@ bool IbverbsEngine::validate_dynamic_rx_flow_locked(int port, const FlowRuleConf
   return false;
 }
 
-bool IbverbsEngine::create_dr_rule_locked(int port,
-                                          PortSteering& st,
-                                          uint16_t criteria,
-                                          struct mlx5dv_flow_match_parameters* mask,
-                                          struct mlx5dv_flow_match_parameters* value,
-                                          IbvRxQueue* dest,
-                                          int priority,
-                                          FlowId flow_id,
-                                          const char* desc,
-                                          DynamicFlowEntry* dynamic_entry,
-                                          const std::vector<struct mlx5dv_dr_action*>& reformats) {
+Status IbverbsEngine::resolve_rx_destination(int port, PortSteering& st,
+                                             const FlowAction& queue_action, bool inner,
+                                             struct mlx5dv_dr_action** action,
+                                             uint16_t* primary_queue,
+                                             RssDestinationPtr* rss_destination) {
+  if (action == nullptr || primary_queue == nullptr || rss_destination == nullptr) {
+    return Status::NULL_PTR;
+  }
+  *action = nullptr;
+  *primary_queue = 0;
+  rss_destination->reset();
+
+  const auto queue_ids = flow_queue_ids(queue_action);
+  std::vector<IbvRxQueue*> queues;
+  queues.reserve(queue_ids.size());
+  for (const uint16_t queue_id : queue_ids) {
+    IbvRxQueue* queue = find_rx_queue(port, queue_id);
+    if (queue == nullptr || queue->dr_action == nullptr) {
+      DAQIRI_LOG_ERROR("Flow targets unknown queue id {} on port {}", queue_id, port);
+      return Status::INVALID_PARAMETER;
+    }
+    queues.push_back(queue);
+  }
+  *primary_queue = queue_ids.front();
+  if (queues.size() == 1) {
+    *action = queues.front()->dr_action;
+    return Status::SUCCESS;
+  }
+
+  std::string cache_key = inner ? "inner:" : "outer:";
+  for (const uint16_t queue_id : queue_ids) {
+    cache_key += std::to_string(queue_id) + ",";
+  }
+  auto cached = st.rss_destinations.find(cache_key);
+  if (cached != st.rss_destinations.end()) {
+    if (auto destination = cached->second.lock()) {
+      *action = destination->action;
+      *rss_destination = std::move(destination);
+      return Status::SUCCESS;
+    }
+  }
+
+  const size_t table_size = rss_table_size(queues.size());
+  const size_t rqt_bytes = DEVX_ST_SZ_BYTES(create_rqt_in) + (table_size - 1) * sizeof(uint32_t);
+  std::vector<uint32_t> rqt_in((rqt_bytes + sizeof(uint32_t) - 1) / sizeof(uint32_t), 0);
+  uint32_t rqt_out[DEVX_ST_SZ_DW(create_rqt_out)] = {0};
+  void* rqtc = DEVX_ADDR_OF(create_rqt_in, rqt_in.data(), rqt_context);
+  DEVX_SET(create_rqt_in, rqt_in.data(), opcode, MLX5_CMD_OP_CREATE_RQT);
+  DEVX_SET(rqtc, rqtc, rqt_max_size, table_size);
+  DEVX_SET(rqtc, rqtc, rqt_actual_size, table_size);
+  auto* rqt_entries = reinterpret_cast<uint32_t*>(DEVX_ADDR_OF(rqtc, rqtc, rq_num));
+  for (size_t i = 0; i < table_size; ++i) {
+    rqt_entries[i] = htobe32(queues[i % queues.size()]->rqn & 0x00ffffffu);
+  }
+
+  auto destination = RssDestinationPtr(new RssDestination, [](RssDestination* value) {
+    if (value->action != nullptr) {
+      mlx5dv_dr_action_destroy(value->action);
+    }
+    if (value->tir_obj != nullptr) {
+      mlx5dv_devx_obj_destroy(value->tir_obj);
+    }
+    if (value->rqt_obj != nullptr) {
+      mlx5dv_devx_obj_destroy(value->rqt_obj);
+    }
+    delete value;
+  });
+  destination->queue_ids = queue_ids;
+  destination->inner = inner;
+  destination->rqt_obj = mlx5dv_devx_obj_create(queues.front()->ctx, rqt_in.data(), rqt_bytes,
+                                                rqt_out, sizeof(rqt_out));
+  if (destination->rqt_obj == nullptr) {
+    DAQIRI_LOG_ERROR("CREATE_RQT failed for RSS flow on port {}: {} (syndrome 0x{:x})", port,
+                     strerror(errno), DEVX_GET(create_rqt_out, rqt_out, syndrome));
+    return Status::GENERIC_FAILURE;
+  }
+  const uint32_t rqtn = DEVX_GET(create_rqt_out, rqt_out, rqtn);
+
+  uint32_t tir_in[DEVX_ST_SZ_DW(create_tir_in)] = {0};
+  uint32_t tir_out[DEVX_ST_SZ_DW(create_tir_out)] = {0};
+  void* tirc = DEVX_ADDR_OF(create_tir_in, tir_in, ctx);
+  DEVX_SET(create_tir_in, tir_in, opcode, MLX5_CMD_OP_CREATE_TIR);
+  DEVX_SET(tirc, tirc, disp_type, MLX5_TIRC_DISP_TYPE_INDIRECT);
+  DEVX_SET(tirc, tirc, indirect_table, rqtn);
+  DEVX_SET(tirc, tirc, rx_hash_fn, MLX5_RX_HASH_FN_TOEPLITZ);
+  DEVX_SET(tirc, tirc, transport_domain, queues.front()->td_num);
+  if (inner) {
+    DEVX_SET(tirc, tirc, tunneled_offload_en, 1);
+  }
+  void* selector = inner ? DEVX_ADDR_OF(tirc, tirc, rx_hash_field_selector_inner)
+                         : DEVX_ADDR_OF(tirc, tirc, rx_hash_field_selector_outer);
+  DEVX_SET(rx_hash_field_select, selector, l3_prot_type, MLX5_L3_PROT_TYPE_IPV4);
+  DEVX_SET(rx_hash_field_select, selector, l4_prot_type, MLX5_L4_PROT_TYPE_UDP);
+  DEVX_SET(rx_hash_field_select, selector, selected_fields,
+           MLX5_HASH_FIELD_SEL_SRC_IP | MLX5_HASH_FIELD_SEL_DST_IP | MLX5_HASH_FIELD_SEL_L4_SPORT |
+               MLX5_HASH_FIELD_SEL_L4_DPORT);
+  void* key = DEVX_ADDR_OF(tirc, tirc, rx_hash_toeplitz_key);
+  memcpy(key, kToeplitzRssKey.data(), kToeplitzRssKey.size());
+
+  destination->tir_obj =
+      mlx5dv_devx_obj_create(queues.front()->ctx, tir_in, sizeof(tir_in), tir_out, sizeof(tir_out));
+  if (destination->tir_obj == nullptr) {
+    DAQIRI_LOG_ERROR("CREATE_TIR failed for RSS flow on port {}: {} (syndrome 0x{:x})", port,
+                     strerror(errno), DEVX_GET(create_tir_out, tir_out, syndrome));
+    return Status::GENERIC_FAILURE;
+  }
+  destination->action = mlx5dv_dr_action_create_dest_devx_tir(destination->tir_obj);
+  if (destination->action == nullptr) {
+    DAQIRI_LOG_ERROR("Failed to create RSS destination action on port {}: {}", port,
+                     strerror(errno));
+    return Status::GENERIC_FAILURE;
+  }
+
+  st.rss_destinations[cache_key] = destination;
+  *action = destination->action;
+  *rss_destination = destination;
+  return Status::SUCCESS;
+}
+
+bool IbverbsEngine::create_dr_rule_locked(
+    int port, PortSteering& st, uint16_t criteria, struct mlx5dv_flow_match_parameters* mask,
+    struct mlx5dv_flow_match_parameters* value, struct mlx5dv_dr_action* destination_action,
+    uint16_t primary_queue, const RssDestinationPtr& rss_destination, int priority, FlowId flow_id,
+    const char* desc, DynamicFlowEntry* dynamic_entry,
+    const std::vector<struct mlx5dv_dr_action*>& reformats) {
   struct mlx5dv_dr_matcher* matcher = mlx5dv_dr_matcher_create(st.table, priority, criteria, mask);
   if (matcher == nullptr) {
     DAQIRI_LOG_CRITICAL("dr_matcher_create failed (port {} {}): {}", port, desc, strerror(errno));
@@ -1155,7 +1279,7 @@ bool IbverbsEngine::create_dr_rule_locked(int port,
     }
     actions[num_actions++] = reformat;
   }
-  actions[num_actions++] = dest->dr_action;
+  actions[num_actions++] = destination_action;
 
   struct mlx5dv_dr_rule* rule = mlx5dv_dr_rule_create(matcher, value, num_actions, actions);
   if (rule == nullptr) {
@@ -1167,10 +1291,11 @@ bool IbverbsEngine::create_dr_rule_locked(int port,
 
   if (dynamic_entry != nullptr) {
     dynamic_entry->port = port;
-    dynamic_entry->queue = static_cast<uint16_t>(dest->queue_id);
+    dynamic_entry->queue = primary_queue;
     dynamic_entry->matcher = matcher;
     dynamic_entry->rule = rule;
     dynamic_entry->tag_action = tag_action;
+    dynamic_entry->rss_destination = rss_destination;
     dynamic_entry->state = DynamicFlowState::ACTIVE;
     return true;
   }
@@ -1179,7 +1304,8 @@ bool IbverbsEngine::create_dr_rule_locked(int port,
   st.rules.push_back(rule);
   if (tag_action != nullptr) { st.tag_actions.push_back(tag_action); }
 
-  PortSteering::RuleSpec spec{matcher, dest->dr_action, tag_action, reformats, 0, {}};
+  PortSteering::RuleSpec spec{
+      matcher, destination_action, tag_action, reformats, rss_destination, 0, {}};
   spec.value_sz = std::min(value->match_sz, sizeof(spec.value));
   memcpy(spec.value, value->match_buf, spec.value_sz);
   st.rule_specs.push_back(spec);
@@ -1201,10 +1327,19 @@ Status IbverbsEngine::install_flow_rule_locked(int port,
 
   const auto actions = flow_rule_actions(flow);
   const FlowAction queue_action = flow_queue_action(actions);
-  IbvRxQueue* dest = find_rx_queue(port, queue_action.id_);
-  if (dest == nullptr || dest->dr_action == nullptr) {
-    DAQIRI_LOG_ERROR("Flow '{}' targets unknown queue id {} on port {}", flow.name_, queue_action.id_,
-                     port);
+  const bool inner = std::any_of(actions.begin(), actions.end(), [](const FlowAction& action) {
+    return action.type_ == FlowType::TUNNEL_DECAP;
+  });
+  struct mlx5dv_dr_action* destination_action = nullptr;
+  uint16_t primary_queue = 0;
+  RssDestinationPtr rss_destination;
+  const Status destination_status = resolve_rx_destination(
+      port, st, queue_action, inner, &destination_action, &primary_queue, &rss_destination);
+  if (destination_status != Status::SUCCESS) {
+    return destination_status;
+  }
+  IbvRxQueue* primary = find_rx_queue(port, primary_queue);
+  if (primary == nullptr) {
     return Status::INVALID_PARAMETER;
   }
 
@@ -1285,18 +1420,14 @@ Status IbverbsEngine::install_flow_rule_locked(int port,
              mt.flex_item_match_.val_ & mt.flex_item_match_.mask_);
 
     const bool ok =
-        create_dr_rule_locked(port,
-                              st,
-                              MLX5_DR_MATCH_CRITERIA_OUTER | MLX5_DR_MATCH_CRITERIA_MISC4,
+        create_dr_rule_locked(port, st, MLX5_DR_MATCH_CRITERIA_OUTER | MLX5_DR_MATCH_CRITERIA_MISC4,
                               reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&mask),
                               reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&value),
-                              dest,
-                              priority,
-                              flow_id,
-                              flow.name_.c_str(),
-                              dynamic_entry,
-                              flow_reformats);
-    if (!ok) { cleanup_dynamic_reformats(); }
+                              destination_action, primary_queue, rss_destination, priority, flow_id,
+                              flow.name_.c_str(), dynamic_entry, flow_reformats);
+    if (!ok) {
+      cleanup_dynamic_reformats();
+    }
     return ok ? Status::SUCCESS : Status::GENERIC_FAILURE;
   }
 
@@ -1306,14 +1437,14 @@ Status IbverbsEngine::install_flow_rule_locked(int port,
     value.match_sz = sizeof(value.buf);
     uint16_t criteria = 0;
     if (build_ecpri_match_locked(
-            dest->ctx, st, mt.ecpri_match_, reinterpret_cast<uint8_t*>(mask.buf),
+            primary->ctx, st, mt.ecpri_match_, reinterpret_cast<uint8_t*>(mask.buf),
             reinterpret_cast<uint8_t*>(value.buf), &criteria) != Status::SUCCESS) {
       return Status::GENERIC_FAILURE;
     }
-    return create_dr_rule_locked(port, st, criteria,
-                                 reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&mask),
-                                 reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&value),
-                                 dest, priority, flow_id, flow.name_.c_str(), dynamic_entry)
+    return create_dr_rule_locked(
+               port, st, criteria, reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&mask),
+               reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&value), destination_action,
+               primary_queue, rss_destination, priority, flow_id, flow.name_.c_str(), dynamic_entry)
                ? Status::SUCCESS
                : Status::GENERIC_FAILURE;
   }
@@ -1336,6 +1467,10 @@ Status IbverbsEngine::install_flow_rule_locked(int port,
     DEVX_SET(fte_match_set_lyr_2_4, mask_buf, ip_protocol, 0xff);
     DEVX_SET(fte_match_set_lyr_2_4, value_buf, ip_protocol, MLX5_IP_PROTOCOL_UDP);
   };
+
+  if (rss_destination != nullptr) {
+    pin_ipv4_udp();
+  }
 
   if (mt.udp_src_ > 0) {
     pin_ipv4_udp();
@@ -1366,9 +1501,8 @@ Status IbverbsEngine::install_flow_rule_locked(int port,
   if (mt.ipv4_len_ > 0) {
     if (st.ipv4_len_node.obj == nullptr) {
       uint32_t sample_id = 0;
-      struct mlx5dv_devx_obj* node =
-          create_flex_parser_node(dest->ctx, MLX5_GRAPH_ARC_NODE_MAC, MLX5_ETHERTYPE_IPV4, 0,
-                                  &sample_id);
+      struct mlx5dv_devx_obj* node = create_flex_parser_node(primary->ctx, MLX5_GRAPH_ARC_NODE_MAC,
+                                                             MLX5_ETHERTYPE_IPV4, 0, &sample_id);
       if (node == nullptr) {
         DAQIRI_LOG_CRITICAL("ipv4_len: parse-graph node creation failed on port {}", port);
         return Status::GENERIC_FAILURE;
@@ -1394,19 +1528,14 @@ Status IbverbsEngine::install_flow_rule_locked(int port,
     return Status::INVALID_PARAMETER;
   }
 
-  const bool ok =
-      create_dr_rule_locked(port,
-                            st,
-                            criteria,
-                            reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&mask),
-                            reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&value),
-                            dest,
-                            priority,
-                            flow_id,
-                            flow.name_.c_str(),
-                            dynamic_entry,
-                            flow_reformats);
-  if (!ok) { cleanup_dynamic_reformats(); }
+  const bool ok = create_dr_rule_locked(
+      port, st, criteria, reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&mask),
+      reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&value), destination_action,
+      primary_queue, rss_destination, priority, flow_id, flow.name_.c_str(), dynamic_entry,
+      flow_reformats);
+  if (!ok) {
+    cleanup_dynamic_reformats();
+  }
   return ok ? Status::SUCCESS : Status::GENERIC_FAILURE;
 }
 
@@ -1681,11 +1810,12 @@ Status IbverbsEngine::install_port_flows() {
     // Build the per-flow rules. Each flow with a queue action steers its matched
     // 5-tuple to that queue's TIR. A flow that matches no supported field, and
     // the no-flows case, fall through to a catch-all -> the first queue.
-    auto add_rule = [&](uint16_t crit, struct mlx5dv_flow_match_parameters* mask,
-                        struct mlx5dv_flow_match_parameters* val, IbvRxQueue* dest, int prio,
-                        uint32_t tag, const char* desc,
-                        const std::vector<struct mlx5dv_dr_action*>& reformats =
-                            std::vector<struct mlx5dv_dr_action*>{}) -> bool {
+    auto add_rule =
+        [&](uint16_t crit, struct mlx5dv_flow_match_parameters* mask,
+            struct mlx5dv_flow_match_parameters* val, struct mlx5dv_dr_action* destination_action,
+            const RssDestinationPtr& rss_destination, int prio, uint32_t tag, const char* desc,
+            const std::vector<struct mlx5dv_dr_action*>& reformats =
+                std::vector<struct mlx5dv_dr_action*>{}) -> bool {
       struct mlx5dv_dr_matcher* m = mlx5dv_dr_matcher_create(st.table, prio, crit, mask);
       if (m == nullptr) {
         DAQIRI_LOG_CRITICAL("dr_matcher_create failed (port {} {}): {}", port, desc,
@@ -1716,14 +1846,15 @@ Status IbverbsEngine::install_port_flows() {
         }
         actions[na++] = reformat;
       }
-      actions[na++] = dest->dr_action;
+      actions[na++] = destination_action;
       struct mlx5dv_dr_rule* r = mlx5dv_dr_rule_create(m, val, na, actions);
       if (r == nullptr) {
         DAQIRI_LOG_CRITICAL("dr_rule_create failed (port {} {}): {}", port, desc, strerror(errno));
         return false;
       }
       st.rules.push_back(r);
-      PortSteering::RuleSpec spec{m, dest->dr_action, tag_act, reformats, 0, {}};
+      PortSteering::RuleSpec spec{m, destination_action, tag_act, reformats, rss_destination, 0,
+                                  {}};
       spec.value_sz = std::min(val->match_sz, sizeof(spec.value));
       memcpy(spec.value, val->match_buf, spec.value_sz);
       st.rule_specs.push_back(spec);
@@ -1733,18 +1864,24 @@ Status IbverbsEngine::install_port_flows() {
     int installed = 0;
     int prio = 0;
     for (const auto& fl : intf.rx_.flows_) {
-      if (fl.action_.type_ != FlowType::QUEUE) {
+      const auto actions = flow_config_actions(fl);
+      const FlowAction queue_action = flow_queue_action(actions);
+      if (queue_action.type_ != FlowType::QUEUE) {
         continue;
       }
-      auto it = by_id.find(fl.action_.id_);
-      if (it == by_id.end()) {
-        DAQIRI_LOG_ERROR("Flow '{}' targets unknown queue id {} on port {}", fl.name_,
-                         fl.action_.id_, port);
-        continue;
+      const bool inner = std::any_of(actions.begin(), actions.end(), [](const FlowAction& action) {
+        return action.type_ == FlowType::TUNNEL_DECAP;
+      });
+      struct mlx5dv_dr_action* destination_action = nullptr;
+      uint16_t primary_queue = 0;
+      RssDestinationPtr rss_destination;
+      if (resolve_rx_destination(port, st, queue_action, inner, &destination_action, &primary_queue,
+                                 &rss_destination) != Status::SUCCESS) {
+        return Status::GENERIC_FAILURE;
       }
       const FlowMatch& mt = fl.match_;
       std::vector<struct mlx5dv_dr_action*> flow_reformats;
-      for (const auto& action : fl.actions_) {
+      for (const auto& action : actions) {
         if (!flow_action_is_transform(action)) { continue; }
         st.reformat_buffers.emplace_back();
         auto& buffer = st.reformat_buffers.back();
@@ -1800,13 +1937,14 @@ Status IbverbsEngine::install_port_flows() {
                  mt.flex_item_match_.val_ & mt.flex_item_match_.mask_);
         if (!add_rule(MLX5_DR_MATCH_CRITERIA_OUTER | MLX5_DR_MATCH_CRITERIA_MISC4,
                       reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&fmask),
-                      reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&fval), it->second,
-                      prio++, fl.id_, fl.name_.c_str(), flow_reformats)) {
+                      reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&fval),
+                      destination_action, rss_destination, prio++, fl.id_, fl.name_.c_str(),
+                      flow_reformats)) {
           return Status::GENERIC_FAILURE;
         }
         DAQIRI_LOG_INFO(
             "Flow '{}' (flex item {}) -> queue {} (port {}): udp_dst={} sample==0x{:x}/0x{:x}",
-            fl.name_, fid, fl.action_.id_, port, fcfg->udp_dst_port_, mt.flex_item_match_.val_,
+            fl.name_, fid, primary_queue, port, fcfg->udp_dst_port_, mt.flex_item_match_.val_,
             mt.flex_item_match_.mask_);
         installed++;
         continue;
@@ -1826,13 +1964,13 @@ Status IbverbsEngine::install_port_flows() {
           return Status::GENERIC_FAILURE;
         }
         if (!add_rule(ecrit, reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&emask),
-                      reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&eval), it->second,
-                      prio++, fl.id_, fl.name_.c_str())) {
+                      reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&eval),
+                      destination_action, rss_destination, prio++, fl.id_, fl.name_.c_str())) {
           return Status::GENERIC_FAILURE;
         }
         DAQIRI_LOG_INFO(
             "Flow '{}' (eCPRI) -> queue {} (port {}): msg_type={}(matched={}) id={}(matched={})",
-            fl.name_, fl.action_.id_, port, mt.ecpri_match_.msg_type_,
+            fl.name_, primary_queue, port, mt.ecpri_match_.msg_type_,
             mt.ecpri_match_.match_msg_type_, mt.ecpri_match_.id_, mt.ecpri_match_.match_id_);
         installed++;
         continue;
@@ -1858,6 +1996,9 @@ Status IbverbsEngine::install_port_flows() {
         DEVX_SET(fte_match_set_lyr_2_4, mk, ip_protocol, 0xff);
         DEVX_SET(fte_match_set_lyr_2_4, vl, ip_protocol, MLX5_IP_PROTOCOL_UDP);
       };
+      if (rss_destination != nullptr) {
+        pin_ipv4_udp();
+      }
       if (mt.udp_src_ > 0) {
         pin_ipv4_udp();
         DEVX_SET(fte_match_set_lyr_2_4, mk, udp_sport, 0xffff);
@@ -1916,12 +2057,13 @@ Status IbverbsEngine::install_port_flows() {
         continue;
       }
       if (!add_rule(crit, reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&mask),
-                    reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&val), it->second,
-                    prio++, fl.id_, fl.name_.c_str(), flow_reformats)) {
+                    reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&val),
+                    destination_action, rss_destination, prio++, fl.id_, fl.name_.c_str(),
+                    flow_reformats)) {
         return Status::GENERIC_FAILURE;
       }
       DAQIRI_LOG_INFO("Flow '{}' -> queue {} (port {}): udp_src={} udp_dst={} ipv4_len={}",
-                      fl.name_, fl.action_.id_, port, mt.udp_src_, mt.udp_dst_, mt.ipv4_len_);
+                      fl.name_, primary_queue, port, mt.udp_src_, mt.udp_dst_, mt.ipv4_len_);
       installed++;
     }
 
@@ -1936,8 +2078,8 @@ Status IbverbsEngine::install_port_flows() {
       val.match_sz = sizeof(val.buf);
       IbvRxQueue* dest = by_id.begin()->second;
       if (!add_rule(0, reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&mask),
-                    reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&val), dest,
-                    kIbverbsCatchAllPriority, 0, "catch-all")) {
+                    reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&val), dest->dr_action,
+                    nullptr, kIbverbsCatchAllPriority, 0, "catch-all")) {
         return Status::GENERIC_FAILURE;
       }
       DAQIRI_LOG_INFO("DevX catch-all flow -> queue {} (port {})", dest->queue_id, port);
@@ -2043,7 +2185,7 @@ Status IbverbsEngine::install_tx_flows() {
 
       struct mlx5dv_dr_action* actions[8];
       int na = 0;
-      for (const auto& action : fl.actions_) {
+      for (const auto& action : flow_config_actions(fl)) {
         st.reformat_buffers.emplace_back();
         auto& buffer = st.reformat_buffers.back();
         enum mlx5dv_flow_action_packet_reformat_type reformat_type {};
@@ -2267,7 +2409,10 @@ Status IbverbsEngine::setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf,
   // Per-queue flow id: if a configured flow steers to this queue, report its id
   // for packets received here (see get_packet_flow_id).
   for (const auto& fl : intf.rx_.flows_) {
-    if (fl.action_.type_ == FlowType::QUEUE && fl.action_.id_ == q.queue_id) {
+    const FlowAction queue_action = flow_queue_action(flow_config_actions(fl));
+    const auto queue_ids = flow_queue_ids(queue_action);
+    if (queue_action.type_ == FlowType::QUEUE &&
+        std::find(queue_ids.begin(), queue_ids.end(), q.queue_id) != queue_ids.end()) {
       q.flow_id = fl.id_;
       break;
     }
@@ -2760,7 +2905,7 @@ Status IbverbsEngine::init_reorder(IbvRxQueue& q, const InterfaceConfig& intf,
   // flow id -> queue, to find which reorder configs belong to this queue.
   std::unordered_map<FlowId, uint16_t> flow_to_queue;
   for (const auto& fl : intf.rx_.flows_) {
-    flow_to_queue[fl.id_] = fl.action_.id_;
+    flow_to_queue[fl.id_] = flow_queue_ids(flow_queue_action(flow_config_actions(fl))).front();
   }
 
   auto st = std::make_unique<IbvReorderState>();
@@ -3667,6 +3812,11 @@ void IbverbsEngine::shutdown() {
         mlx5dv_dr_rule_destroy(r);
       }
     }
+    st.rules.clear();
+    // Rules no longer reference their destination actions, so release shared
+    // RSS TIR/RQT resources before the queues and their direct TIRs disappear.
+    st.rule_specs.clear();
+    st.rss_destinations.clear();
     for (auto* a : st.tag_actions) {
       if (a) {
         mlx5dv_dr_action_destroy(a);

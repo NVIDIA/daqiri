@@ -38,10 +38,14 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
   S3-compatible object store through the AWS SDK for C++.
 - **Flow Steering** — Configure the NIC's hardware flow engine to route packets by UDP
   source/destination port or flex-item payload fields. Raw RX flows can be configured
-  statically in YAML or added/deleted dynamically after `daqiri_init()`. Per RX
-  interface, use standard UDP/IP flows or flex-item flows, not both. Raw DPDK and
-  raw ibverbs flows can also use hardware-only VLAN push/pop and VXLAN, GRE, or
-  NVGRE encap/decap actions; socket/RDMA streams reject those tunnel actions.
+  statically in YAML or added/deleted dynamically after `daqiri_init()`. A scalar
+  queue target steers directly to one queue; `ids: [0, 1, ...]` automatically enables
+  flow-affine IPv4/UDP Toeplitz RSS across the listed queues on the raw DPDK and
+  ibverbs engines. One unchanged five-tuple remains on one queue, so balanced packet
+  counts require varied tuples. Per RX interface, use standard UDP/IP flows or
+  flex-item flows, not both. Raw DPDK and raw ibverbs flows can also use hardware-only
+  VLAN push/pop and VXLAN, GRE, or NVGRE encap/decap actions; socket/RDMA streams reject
+  those tunnel actions.
 - **RDMA** — RDMA verbs (READ, WRITE, SEND) over RoCE on Ethernet NICs or InfiniBand.
 - **Linux socket control** — TCP/UDP socket streams expose connection IDs and
   `socket_setsockopt()` for native Linux `setsockopt` tuning without YAML option

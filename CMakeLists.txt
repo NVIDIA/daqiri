@@ -31,7 +31,7 @@ include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 find_package(CUDAToolkit REQUIRED)
 
-set(DAQIRI_ABI_VERSION "0" CACHE STRING "DAQIRI shared library ABI version")
+set(DAQIRI_ABI_VERSION "1" CACHE STRING "DAQIRI shared library ABI version")
 if(NOT DAQIRI_ABI_VERSION MATCHES "^(0|[1-9][0-9]*)$")
   message(FATAL_ERROR "DAQIRI_ABI_VERSION must be a non-negative integer")
 endif()

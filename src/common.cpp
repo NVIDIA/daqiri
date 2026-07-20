@@ -164,8 +164,28 @@ bool parse_flow_action_config(const YAML::Node& action_node, FlowAction& action)
   }
 
   if (action.type_ == FlowType::QUEUE) {
-    if (!parse_u16_field(action_node, "id", &action.id_)) {
-      DAQIRI_LOG_ERROR("Queue flow action requires integer 'id'");
+    if (action_node["id"] && action_node["ids"]) {
+      DAQIRI_LOG_ERROR("Queue flow action must use either 'id' or 'ids', not both");
+      return false;
+    }
+    action.ids_.clear();
+    if (action_node["ids"]) {
+      const YAML::Node ids = action_node["ids"];
+      if (!ids.IsSequence() || ids.size() == 0) {
+        DAQIRI_LOG_ERROR("Queue flow action 'ids' must be a non-empty sequence");
+        return false;
+      }
+      action.ids_.reserve(ids.size());
+      for (const auto& id_node : ids) {
+        uint64_t parsed = 0;
+        if (!parse_u64_scalar(id_node, &parsed) || parsed > std::numeric_limits<uint16_t>::max()) {
+          DAQIRI_LOG_ERROR("Queue flow action 'ids' entries must be 16-bit integers");
+          return false;
+        }
+        action.ids_.push_back(static_cast<uint16_t>(parsed));
+      }
+    } else if (!parse_u16_field(action_node, "id", &action.id_)) {
+      DAQIRI_LOG_ERROR("Queue flow action requires integer 'id' or non-empty 'ids'");
       return false;
     }
     return true;

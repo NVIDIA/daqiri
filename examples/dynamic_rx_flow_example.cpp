@@ -30,6 +30,7 @@
 #include <string>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "raw_bench_common.h"
@@ -52,6 +53,7 @@ struct RxCounter {
   std::atomic<uint64_t> packets{0};
   std::atomic<uint64_t> bytes{0};
   std::atomic<uint64_t> bursts{0};
+  std::atomic<uint64_t> unexpected_flow_ids{0};
 };
 
 Args parse_args(int argc, char** argv) {
@@ -109,9 +111,8 @@ uint16_t single_udp_port(const std::string& spec, const char* field) {
   return ports.front();
 }
 
-void rx_worker(const daqiri::bench::RawBenchRxConfig& cfg,
-               RxCounter& counter,
-               std::atomic<bool>& stop) {
+void rx_worker(const daqiri::bench::RawBenchRxConfig& cfg, RxCounter& counter,
+               const std::atomic<daqiri::FlowId>& expected_flow_id, std::atomic<bool>& stop) {
   const int port_id = daqiri::get_port_id(cfg.interface_name);
   if (port_id < 0) {
     std::cerr << "Invalid RX interface_name: " << cfg.interface_name << "\n";
@@ -127,8 +128,16 @@ void rx_worker(const daqiri::bench::RawBenchRxConfig& cfg,
       continue;
     }
 
-    counter.packets.fetch_add(static_cast<uint64_t>(daqiri::get_num_packets(burst)),
-                              std::memory_order_relaxed);
+    const int num_packets = daqiri::get_num_packets(burst);
+    const daqiri::FlowId expected = expected_flow_id.load(std::memory_order_relaxed);
+    if (expected != 0) {
+      for (int i = 0; i < num_packets; ++i) {
+        if (daqiri::get_packet_flow_id(burst, i) != expected) {
+          counter.unexpected_flow_ids.fetch_add(1, std::memory_order_relaxed);
+        }
+      }
+    }
+    counter.packets.fetch_add(static_cast<uint64_t>(num_packets), std::memory_order_relaxed);
     counter.bytes.fetch_add(daqiri::get_burst_tot_byte(burst), std::memory_order_relaxed);
     counter.bursts.fetch_add(1, std::memory_order_relaxed);
     daqiri::free_all_packets_and_burst_rx(burst);
@@ -207,11 +216,19 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg,
     for (int i = 0; i < num_pkts; ++i) {
       void* pkt = daqiri::get_segment_packet_ptr(msg, 0, i);
       if (initialized_tx_buffers.insert(pkt).second) {
-        if (cudaMemcpyAsync(pkt,
-                            packet_template.data(),
-                            packet_template.size(),
-                            cudaMemcpyHostToDevice,
-                            nullptr) != cudaSuccess ||
+        constexpr uint32_t kFirstDynamicPort = 1024;
+        constexpr uint32_t kDynamicPortCount = 65536 - kFirstDynamicPort;
+        const uint32_t base_port = udp_src >= kFirstDynamicPort ? udp_src - kFirstDynamicPort : 0;
+        const auto source_port = static_cast<uint16_t>(
+            kFirstDynamicPort +
+            ((base_port + initialized_tx_buffers.size() - 1) % kDynamicPortCount));
+        std::vector<uint8_t> packet = packet_template;
+        daqiri::bench::populate_udp_ipv4_headers(packet.data(), cfg.header_size, cfg.payload_size,
+                                                 eth_src, eth_dst, ip_src, ip_dst, source_port,
+                                                 udp_dst);
+        daqiri::bench::finalize_udp_ipv4_checksums(packet.data());
+        if (cudaMemcpyAsync(pkt, packet.data(), packet.size(), cudaMemcpyHostToDevice, nullptr) !=
+                cudaSuccess ||
             cudaEventRecord(copy_done, nullptr) != cudaSuccess ||
             cudaEventSynchronize(copy_done) != cudaSuccess) {
           initialized_tx_buffers.erase(pkt);
@@ -280,22 +297,35 @@ daqiri::FlowId wait_for_flow_op(daqiri::FlowOpId op_id,
   throw std::runtime_error("timed out waiting for dynamic flow operation");
 }
 
-daqiri::FlowId add_dynamic_udp_flow(int port_id,
-                                    uint16_t queue_id,
-                                    uint16_t udp_src,
-                                    uint16_t udp_dst) {
+daqiri::FlowId add_dynamic_udp_flow(int port_id, uint16_t queue_id, uint16_t udp_dst) {
   daqiri::FlowRuleConfig flow;
   flow.name_ = "dynamic_udp_" + std::to_string(udp_dst) + "_q" + std::to_string(queue_id);
   flow.action_.type_ = daqiri::FlowType::QUEUE;
   flow.action_.id_ = queue_id;
   flow.match_.type_ = daqiri::FlowMatchType::IPV4_UDP;
-  flow.match_.udp_src_ = udp_src;
   flow.match_.udp_dst_ = udp_dst;
 
   daqiri::FlowOpId op_id = 0;
   const auto status = daqiri::add_rx_flow_async(port_id, flow, &op_id);
   if (status != daqiri::Status::SUCCESS) {
     throw std::runtime_error("add_rx_flow_async was not accepted");
+  }
+  return wait_for_flow_op(op_id, daqiri::FlowOpType::ADD_RX, std::chrono::seconds(5));
+}
+
+daqiri::FlowId add_dynamic_udp_rss_flow(int port_id, std::vector<uint16_t> queue_ids,
+                                        uint16_t udp_dst) {
+  daqiri::FlowRuleConfig flow;
+  flow.name_ = "dynamic_udp_" + std::to_string(udp_dst) + "_rss";
+  flow.action_.type_ = daqiri::FlowType::QUEUE;
+  flow.action_.ids_ = std::move(queue_ids);
+  flow.match_.type_ = daqiri::FlowMatchType::IPV4_UDP;
+  flow.match_.udp_dst_ = udp_dst;
+
+  daqiri::FlowOpId op_id = 0;
+  const auto status = daqiri::add_rx_flow_async(port_id, flow, &op_id);
+  if (status != daqiri::Status::SUCCESS) {
+    throw std::runtime_error("add_rx_flow_async RSS rule was not accepted");
   }
   return wait_for_flow_op(op_id, daqiri::FlowOpType::ADD_RX, std::chrono::seconds(5));
 }
@@ -315,12 +345,12 @@ uint64_t packets(const RxCounter& counter) {
 
 void print_rx_counter(const daqiri::bench::RawBenchRxConfig& cfg,
                       const RxCounter& counter) {
-  std::cout << "RX complete: interface=" << cfg.interface_name
-            << " queue=" << cfg.queue_id
+  std::cout << "RX complete: interface=" << cfg.interface_name << " queue=" << cfg.queue_id
             << " packets=" << counter.packets.load(std::memory_order_relaxed)
             << " bytes=" << counter.bytes.load(std::memory_order_relaxed)
             << " bursts=" << counter.bursts.load(std::memory_order_relaxed)
-            << "\n";
+            << " unexpected_flow_ids="
+            << counter.unexpected_flow_ids.load(std::memory_order_relaxed) << "\n";
 }
 
 }  // namespace
@@ -328,6 +358,7 @@ void print_rx_counter(const daqiri::bench::RawBenchRxConfig& cfg,
 int main(int argc, char** argv) {
   bool daqiri_initialized = false;
   std::atomic<bool> stop{false};
+  std::atomic<daqiri::FlowId> expected_flow_id{0};
   std::thread tx_thread;
   std::vector<std::thread> rx_threads;
 
@@ -359,14 +390,16 @@ int main(int argc, char** argv) {
     std::vector<RxCounter> counters(2);
     rx_threads.reserve(rx_configs.size());
     for (size_t i = 0; i < rx_configs.size(); ++i) {
-      rx_threads.emplace_back(rx_worker, std::cref(rx_configs[i]), std::ref(counters[i]), std::ref(stop));
+      rx_threads.emplace_back(rx_worker, std::cref(rx_configs[i]), std::ref(counters[i]),
+                              std::cref(expected_flow_id), std::ref(stop));
     }
 
     daqiri::bench::TokenBucketPacer pacer(args.target_gbps);
     tx_thread = std::thread(tx_worker, std::cref(tx_configs[0]), std::ref(pacer), std::ref(stop));
 
-    std::cout << "Initial drop window: UDP " << udp_src << " -> " << udp_dst
-              << " has no configured flow for " << args.drop_ms << " ms\n";
+    std::cout << "Initial drop window: varied UDP source ports (base " << udp_src
+              << ") -> destination " << udp_dst << " have no configured flow for " << args.drop_ms
+              << " ms\n";
     std::this_thread::sleep_for(std::chrono::milliseconds(args.drop_ms));
     const uint64_t dropped_window_packets = packets(counters[0]) + packets(counters[1]);
     if (dropped_window_packets != 0) {
@@ -374,18 +407,35 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "Adding dynamic UDP flow to RX queue 0 for " << args.active_ms << " ms\n";
-    const daqiri::FlowId q0_flow = add_dynamic_udp_flow(rx_port_id, 0, udp_src, udp_dst);
+    const daqiri::FlowId q0_flow = add_dynamic_udp_flow(rx_port_id, 0, udp_dst);
+    expected_flow_id.store(q0_flow, std::memory_order_relaxed);
     std::this_thread::sleep_for(std::chrono::milliseconds(args.active_ms));
     delete_dynamic_flow(q0_flow);
+    expected_flow_id.store(0, std::memory_order_relaxed);
     std::this_thread::sleep_for(std::chrono::milliseconds(args.drain_ms));
     const uint64_t q0_after = packets(counters[0]);
     const uint64_t q1_after_q0 = packets(counters[1]);
 
     std::cout << "Adding dynamic UDP flow to RX queue 1 for " << args.active_ms << " ms\n";
-    const daqiri::FlowId q1_flow = add_dynamic_udp_flow(rx_port_id, 1, udp_src, udp_dst);
+    const daqiri::FlowId q1_flow = add_dynamic_udp_flow(rx_port_id, 1, udp_dst);
+    expected_flow_id.store(q1_flow, std::memory_order_relaxed);
     std::this_thread::sleep_for(std::chrono::milliseconds(args.active_ms));
     delete_dynamic_flow(q1_flow);
+    expected_flow_id.store(0, std::memory_order_relaxed);
     std::this_thread::sleep_for(std::chrono::milliseconds(args.drain_ms));
+    const uint64_t q0_before_rss = packets(counters[0]);
+    const uint64_t q1_before_rss = packets(counters[1]);
+
+    std::cout << "Adding dynamic UDP RSS flow to RX queues [0, 1] for " << args.active_ms
+              << " ms\n";
+    const daqiri::FlowId rss_flow = add_dynamic_udp_rss_flow(rx_port_id, {0, 1}, udp_dst);
+    expected_flow_id.store(rss_flow, std::memory_order_relaxed);
+    std::this_thread::sleep_for(std::chrono::milliseconds(args.active_ms));
+    delete_dynamic_flow(rss_flow);
+    expected_flow_id.store(0, std::memory_order_relaxed);
+    std::this_thread::sleep_for(std::chrono::milliseconds(args.drain_ms));
+    const uint64_t q0_rss_packets = packets(counters[0]) - q0_before_rss;
+    const uint64_t q1_rss_packets = packets(counters[1]) - q1_before_rss;
 
     stop.store(true);
     if (tx_thread.joinable()) {
@@ -400,25 +450,30 @@ int main(int argc, char** argv) {
     print_rx_counter(rx_configs[0], counters[0]);
     print_rx_counter(rx_configs[1], counters[1]);
 
-    const uint64_t q0_packets = packets(counters[0]);
-    const uint64_t q1_packets = packets(counters[1]);
-    if (q0_packets == 0 || q1_packets == 0) {
-      throw std::runtime_error("Expected nonzero packet counts on both RX queues");
+    if (q0_rss_packets == 0 || q1_rss_packets == 0) {
+      throw std::runtime_error("Expected the RSS phase to deliver packets to both RX queues");
     }
     if (q1_after_q0 != 0) {
       throw std::runtime_error("Queue 1 received packets while only the queue 0 flow was active");
     }
-    if (q0_packets < q0_after) {
-      throw std::runtime_error("Queue 0 packet counter regressed");
+    if (q0_after == 0 || q1_before_rss == q1_after_q0) {
+      throw std::runtime_error("Expected both scalar queue phases to receive packets");
+    }
+    if (q0_before_rss != q0_after) {
+      throw std::runtime_error("Queue 0 received packets while only the queue 1 flow was active");
+    }
+    if (counters[0].unexpected_flow_ids.load(std::memory_order_relaxed) != 0 ||
+        counters[1].unexpected_flow_ids.load(std::memory_order_relaxed) != 0) {
+      throw std::runtime_error("Received packets with an unexpected dynamic flow ID");
     }
 
-    const auto min_packets = static_cast<double>(std::min(q0_packets, q1_packets));
-    const auto max_packets = static_cast<double>(std::max(q0_packets, q1_packets));
+    const auto min_packets = static_cast<double>(std::min(q0_rss_packets, q1_rss_packets));
+    const auto max_packets = static_cast<double>(std::max(q0_rss_packets, q1_rss_packets));
     const double relative_delta = (max_packets - min_packets) / max_packets;
-    std::cout << "Queue packet relative delta=" << relative_delta
-              << " tolerance=" << args.tolerance << "\n";
+    std::cout << "RSS queue packets: q0=" << q0_rss_packets << " q1=" << q1_rss_packets
+              << " relative_delta=" << relative_delta << " tolerance=" << args.tolerance << "\n";
     if (relative_delta > args.tolerance) {
-      throw std::runtime_error("RX queue packet counts are not similar");
+      throw std::runtime_error("RSS queue packet counts are not similar");
     }
 
     daqiri::print_stats();
