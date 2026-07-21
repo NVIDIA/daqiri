@@ -541,6 +541,11 @@ void bind_enums(py::module_ &m) {
       .value("SOCKET", StreamType::SOCKET)
       .value("INVALID", StreamType::INVALID);
 
+  py::enum_<QueuePollMode>(m, "QueuePollMode")
+      .value("INDIRECT", QueuePollMode::INDIRECT)
+      .value("DIRECT", QueuePollMode::DIRECT)
+      .value("INVALID", QueuePollMode::INVALID);
+
   py::enum_<SocketProtocol>(m, "SocketProtocol")
       .value("TCP", SocketProtocol::TCP)
       .value("UDP", SocketProtocol::UDP)
@@ -738,11 +743,13 @@ void bind_config_types(py::module_ &m) {
   py::class_<RxQueueConfig>(m, "RxQueueConfig")
       .def(py::init<>())
       .def_readwrite("common", &RxQueueConfig::common_)
-      .def_readwrite("timeout_us", &RxQueueConfig::timeout_us_);
+      .def_readwrite("timeout_us", &RxQueueConfig::timeout_us_)
+      .def_readwrite("poll_mode", &RxQueueConfig::poll_mode_);
 
   py::class_<TxQueueConfig>(m, "TxQueueConfig")
       .def(py::init<>())
-      .def_readwrite("common", &TxQueueConfig::common_);
+      .def_readwrite("common", &TxQueueConfig::common_)
+      .def_readwrite("poll_mode", &TxQueueConfig::poll_mode_);
 
   py::class_<VlanActionConfig>(m, "VlanActionConfig")
       .def(py::init<>())

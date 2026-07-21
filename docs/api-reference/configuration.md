@@ -164,11 +164,19 @@ engine.
   - type: `string`
 - **`id`**: Integer ID used for flow steering and burst retrieval.
   - type: `integer`
-- **`cpu_core`**: CPU core ID for the RX worker thread. Should be an isolated core for best
-  performance.
+- **`poll_mode`**: `indirect` uses the current DAQIRI RX worker and application handoff ring.
+  `direct` makes the thread calling `get_rx_burst()` poll the NIC synchronously and is supported
+  only by the raw ibverbs engine.
+  - type: `string`
+  - values: `indirect`, `direct`
+  - default: `indirect`
+- **`cpu_core`**: CPU core ID for the RX worker thread. Required in indirect mode and forbidden
+  in direct mode. Should be an isolated core for best performance.
   - type: `string`
 - **`batch_size`**: Number of packets per batch passed from the NIC to the application. Larger
-  values increase throughput, and smaller values reduce latency.
+  values increase throughput, and smaller values reduce latency. Required in indirect mode and
+  forbidden in direct mode. A direct poll returns the packets currently ready, up to 256,
+  without waiting.
   - type: `integer`
 - **`memory_regions`**: List of memory region names (defined in [Memory Regions](#memory-regions)).
   The order determines segment mapping: first region = segment 0, second = segment 1, etc.
@@ -177,8 +185,14 @@ engine.
   - type: `list`
 - **`timeout_us`**: Timeout in microseconds. A partial batch is delivered if this time elapses
   before `batch_size` packets are collected. Set to `0` to disable (wait for full batch only).
+  Forbidden in direct mode.
   - type: `integer`
   - default: `0`
+
+Direct queues must be polled by exactly one user thread per queue. They do not create an RX
+worker or handoff ring, so an application stall also stops CQ draining and WQE reposting. A
+direct queue cannot be targeted by an RX reorder configuration. Unsupported engines, reorder,
+or forbidden worker fields produce a warning followed by configuration failure.
 
 ### Flex Items
 
@@ -409,11 +423,18 @@ daqiri::set_reorder_cuda_stream("rx_port", "rx_reorder_0", stream);
   - type: `string`
 - **`id`**: Integer ID used for burst submission.
   - type: `integer`
-- **`cpu_core`**: CPU core ID for the TX worker thread. Should be an isolated core for best
-  performance.
+- **`poll_mode`**: `indirect` hands bursts to a DAQIRI TX worker. `direct` makes the calling
+  thread synchronously poll completions, build one packet's WQE, and ring the NIC doorbell;
+  it is supported only by the raw ibverbs engine.
+  - type: `string`
+  - values: `indirect`, `direct`
+  - default: `indirect`
+- **`cpu_core`**: CPU core ID for the TX worker thread. Required in indirect mode and forbidden
+  in direct mode. Should be an isolated core for best performance.
   - type: `string`
 - **`batch_size`**: Number of packets per batch sent to the NIC. Larger values increase
-  throughput, and smaller values reduce latency.
+  throughput, and smaller values reduce latency. Required in indirect mode and forbidden in
+  direct mode; direct TX requires exactly one packet per API submission.
   - type: `integer`
 - **`memory_regions`**: List of memory region names. Same segment mapping rules as RX.
   - type: `list`
@@ -433,6 +454,13 @@ daqiri::set_reorder_cuda_stream("rx_port", "rx_reorder_0", stream);
   bound and typical-packet-size fields at their device defaults.
   - type: `integer`
   - default: `0`
+
+A direct TX queue creates no handoff ring or worker. One application thread owns the queue and
+may have only one acquired-but-unsubmitted packet at a time. `BurstParams` remains the ownership
+handle, but neither it nor the packet data crosses another CPU core: the caller writes directly
+to registered memory and `send_tx_burst()` posts directly to the mlx5 SQ. Completion reclamation
+occurs on later availability, allocation, or send calls. Unsupported engines and forbidden
+worker fields produce a warning followed by configuration failure.
 
 ### Transmit Flows
 

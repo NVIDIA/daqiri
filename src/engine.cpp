@@ -542,10 +542,67 @@ bool Engine::validate_config() const {
 
   for (const auto& intf : cfg_.ifs_) {
     std::set<uint16_t> rx_queue_ids;
+    std::set<uint16_t> direct_rx_queue_ids;
     for (const auto& rxq : intf.rx_.queues_) {
       rx_queue_ids.insert(rxq.common_.id_);
+      if (rxq.poll_mode_ == QueuePollMode::DIRECT) {
+        direct_rx_queue_ids.insert(rxq.common_.id_);
+        if (cfg_.common_.stream_type != StreamType::RAW ||
+            cfg_.common_.engine_type != EngineType::IBVERBS) {
+          DAQIRI_LOG_WARN(
+              "RX queue '{}' requests direct polling, which is supported only by the raw "
+              "ibverbs engine",
+              rxq.common_.name_);
+          pass = false;
+        }
+        if (!rxq.common_.cpu_core_.empty() || rxq.common_.batch_size_ != 0 ||
+            rxq.timeout_us_ != 0) {
+          DAQIRI_LOG_WARN(
+              "RX queue '{}' must omit cpu_core, batch_size, and timeout_us in direct mode",
+              rxq.common_.name_);
+          pass = false;
+        }
+      } else if (rxq.poll_mode_ == QueuePollMode::INDIRECT) {
+        if (rxq.common_.cpu_core_.empty() || rxq.common_.batch_size_ <= 0) {
+          DAQIRI_LOG_ERROR(
+              "RX queue '{}' requires cpu_core and a positive batch_size in indirect mode",
+              rxq.common_.name_);
+          pass = false;
+        }
+      } else {
+        DAQIRI_LOG_ERROR("RX queue '{}' has an invalid poll mode", rxq.common_.name_);
+        pass = false;
+      }
+    }
+    for (const auto& txq : intf.tx_.queues_) {
+      if (txq.poll_mode_ == QueuePollMode::DIRECT) {
+        if (cfg_.common_.stream_type != StreamType::RAW ||
+            cfg_.common_.engine_type != EngineType::IBVERBS) {
+          DAQIRI_LOG_WARN(
+              "TX queue '{}' requests direct polling, which is supported only by the raw "
+              "ibverbs engine",
+              txq.common_.name_);
+          pass = false;
+        }
+        if (!txq.common_.cpu_core_.empty() || txq.common_.batch_size_ != 0) {
+          DAQIRI_LOG_WARN("TX queue '{}' must omit cpu_core and batch_size in direct mode",
+                          txq.common_.name_);
+          pass = false;
+        }
+      } else if (txq.poll_mode_ == QueuePollMode::INDIRECT) {
+        if (txq.common_.cpu_core_.empty() || txq.common_.batch_size_ <= 0) {
+          DAQIRI_LOG_ERROR(
+              "TX queue '{}' requires cpu_core and a positive batch_size in indirect mode",
+              txq.common_.name_);
+          pass = false;
+        }
+      } else {
+        DAQIRI_LOG_ERROR("TX queue '{}' has an invalid poll mode", txq.common_.name_);
+        pass = false;
+      }
     }
     std::set<FlowId> rss_flow_ids;
+    std::unordered_map<FlowId, std::vector<uint16_t>> flow_rx_queue_ids;
     size_t max_rx_payload_frame = 0;
     size_t max_tx_payload_frame = 0;
     auto queue_frame_size = [&](const CommonQueueConfig& queue) {
@@ -581,6 +638,7 @@ bool Engine::validate_config() const {
       } else {
         const FlowAction& queue_action = actions.back();
         const auto queue_ids = flow_queue_ids(queue_action);
+        flow_rx_queue_ids[flow.id_] = queue_ids;
         std::set<uint16_t> unique_ids;
         for (const uint16_t queue_id : queue_ids) {
           if (!unique_ids.insert(queue_id).second) {
@@ -642,6 +700,18 @@ bool Engine::validate_config() const {
               "must target exactly one RX queue",
               reorder.name_, intf.name_, flow_id);
           pass = false;
+        }
+        const auto queues_it = flow_rx_queue_ids.find(flow_id);
+        if (queues_it != flow_rx_queue_ids.end()) {
+          for (const uint16_t queue_id : queues_it->second) {
+            if (direct_rx_queue_ids.find(queue_id) != direct_rx_queue_ids.end()) {
+              DAQIRI_LOG_WARN(
+                  "Reorder config '{}' targets direct RX queue {} on interface '{}'; direct "
+                  "polling does not support reorder",
+                  reorder.name_, queue_id, intf.name_);
+              pass = false;
+            }
+          }
         }
       }
     }
@@ -780,6 +850,13 @@ Status Engine::poll_flow_op(FlowOpResult* result) {
   return Status::NOT_SUPPORTED;
 }
 
+Status Engine::get_tx_packet_burst_checked(BurstParams* burst) {
+  if (!is_tx_burst_available(burst)) {
+    return Status::NO_FREE_BURST_BUFFERS;
+  }
+  return get_tx_packet_burst(burst);
+}
+
 Status Engine::get_rx_burst(BurstParams** burst, int port_id) {
   // Check if the port_id is valid
   if (port_id < 0 || port_id >= static_cast<int>(cfg_.ifs_.size())) {
@@ -792,20 +869,22 @@ Status Engine::get_rx_burst(BurstParams** burst, int port_id) {
   size_t& next_queue_index = next_queue_index_map_[port_id];
 
   // Check all queues once, starting from the next index
+  bool saw_not_ready = false;
   for (size_t i = 0; i < num_queues; ++i) {
     size_t check_index = (next_queue_index + i) % num_queues;
     int queue_id = queues[check_index].common_.id_;
 
     Status ret = get_rx_burst(burst, port_id, queue_id);
-    if (ret != Status::NULL_PTR) {
+    if (ret != Status::NULL_PTR && ret != Status::NOT_READY) {
       // Got something, update index for next time and return status
       next_queue_index = (check_index + 1) % num_queues;
       return ret;
     }
+    saw_not_ready = saw_not_ready || ret == Status::NOT_READY;
   }
 
   // If we checked all queues and none had data
-  return Status::NULL_PTR;
+  return saw_not_ready ? Status::NOT_READY : Status::NULL_PTR;
 }
 
 Status Engine::get_rx_burst(BurstParams** burst) {
@@ -817,20 +896,22 @@ Status Engine::get_rx_burst(BurstParams** burst) {
   size_t num_interfaces = cfg_.ifs_.size();
 
   // Check all queues once, starting from the next index
+  bool saw_not_ready = false;
   for (size_t i = 0; i < num_interfaces; ++i) {
     size_t check_index = (next_port_index_ + i) % num_interfaces;
     int port_id = cfg_.ifs_[check_index].port_id_;
 
     Status ret = get_rx_burst(burst, port_id);
-    if (ret != Status::NULL_PTR) {
+    if (ret != Status::NULL_PTR && ret != Status::NOT_READY) {
       // Got something, update index for next time and return status
       next_port_index_ = (check_index + 1) % num_interfaces;
       return ret;
     }
+    saw_not_ready = saw_not_ready || ret == Status::NOT_READY;
   }
 
   // If we checked all interfaces and none yielded a burst
-  return Status::NULL_PTR;
+  return saw_not_ready ? Status::NOT_READY : Status::NULL_PTR;
 }
 
 Status Engine::socket_connect_to_server(const std::string& dst_addr, uint16_t dst_port,

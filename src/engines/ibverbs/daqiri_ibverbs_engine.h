@@ -123,6 +123,7 @@ struct IbvRxQueue {
   int cpu_core = -1;
   int batch_size = 1;
   uint64_t timeout_us = 0;
+  QueuePollMode poll_mode = QueuePollMode::INDIRECT;
   int num_segs = 1;
   int split_boundary = 0;
   // Flow id reported for packets on this queue. When a single configured flow
@@ -202,14 +203,20 @@ struct IbvRxQueue {
   std::vector<uint32_t> consumed_strides;  // strides handed to the app (verbs path)
   std::vector<uint32_t> released_strides;  // strides freed by the app (verbs path)
   // DevX path: strides freed per region, fetch_add'd by both the app (data
-  // frees) and the worker (filler frees); drained only by the worker thread.
+  // frees) and the poller (filler frees); drained by the queue's active poller.
   std::unique_ptr<std::atomic<uint32_t>[]> freed_strides;
   uint32_t cur_wqe = 0;              // region currently being filled
   uint32_t cur_consumed = 0;         // strides consumed in cur_wqe
   std::atomic<uint64_t> reposts{0};  // diagnostic: WQE reposts
 
-  // App-facing burst ring (worker enqueues, get_rx_burst dequeues).
+  // Indirect-mode app-facing burst ring (worker enqueues, get_rx_burst dequeues).
   daqiri::Ring* ring = nullptr;
+
+  // Direct polling transfers CQ ownership to the get_rx_burst caller. Only one
+  // caller may poll a queue at a time; frees remain safe from other threads via
+  // freed_strides' atomic counters.
+  std::mutex direct_poll_mutex;
+  std::atomic<uint64_t> direct_poll_conflicts{0};
 
   // Optional GPU reordering state for this queue.
   std::unique_ptr<IbvReorderState> reorder;
@@ -236,14 +243,15 @@ struct IbvRxQueue {
 /**
  * @brief Per-queue raw-packet TX context.
  *
- * The TX memory region is carved into fixed-size slots held in a free ring; a
- * burst pulls slots, the app fills them, and send_tx_burst posts one WR per
- * packet (wr_id = slot pointer). A completion worker returns slots to the ring.
- * No per-packet allocation.
+ * The TX memory region is carved into fixed-size cyclic slots. The application
+ * fills allocated slots and send_tx_burst posts their WQEs. Indirect queues use
+ * a completion worker; single-packet direct queues do posting and completion
+ * reclaim on their owner thread. No per-packet memory allocation.
  */
 struct IbvTxQueue {
   int port_id = 0;
   int queue_id = 0;
+  QueuePollMode poll_mode = QueuePollMode::INDIRECT;
   int cpu_core = -1;
   int batch_size = 1;
   int num_segs = 1;
@@ -280,7 +288,7 @@ struct IbvTxQueue {
   // Slots are handed out cyclically and posted/completed in order, so the whole
   // free/in-flight lifecycle is two counters instead of rings (slot k lives at
   // mr_base + (k % num_slots) * slot_size). alloc_head is owned by the app fill
-  // thread; completed_tail is advanced by the TX worker. In flight =
+  // thread; completed_tail is advanced by the TX worker or direct caller. In flight =
   // alloc_head - completed_tail, which must stay <= num_slots.
   uint64_t alloc_head = 0;
   std::atomic<uint64_t> completed_tail{0};
@@ -298,6 +306,14 @@ struct IbvTxQueue {
   // so the burst was dropped and its slots rolled back. App-thread-written.
   uint64_t handoff_drop_bursts = 0;
   uint64_t handoff_drop_pkts = 0;
+  // Direct mode has no handoff worker. One caller thread owns the queue and may
+  // have exactly one allocated-but-unposted packet at a time.
+  std::mutex direct_mutex;
+  std::thread::id direct_owner;
+  bool direct_owner_set = false;
+  BurstParams* direct_pending = nullptr;
+  std::atomic<uint64_t> direct_conflicts{0};
+  uint64_t direct_no_space = 0;
   // tx_eth_src offload: when set, set_eth_header stamps the port's MAC as the
   // Ethernet source so the application doesn't have to supply it.
   bool insert_eth_src = false;
@@ -340,6 +356,7 @@ class IbverbsEngine : public Engine {
 
   // TX construction / header fill (implemented in the TX milestone)
   Status get_tx_packet_burst(BurstParams* burst) override;
+  Status get_tx_packet_burst_checked(BurstParams* burst) override;
   Status set_eth_header(BurstParams* burst, int idx, char* dst_addr) override;
   Status set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint8_t proto,
                          unsigned int src_host, unsigned int dst_host) override;
@@ -373,7 +390,8 @@ class IbverbsEngine : public Engine {
   Status drop_all_traffic(int port) override;
   Status allow_all_traffic(int port) override;
   Status add_rx_flow_async(int port, const FlowRuleConfig& flow, FlowOpId* op_id) override;
-  Status add_rx_flows_async(int port, const std::vector<FlowRuleConfig>& flows, FlowOpId* op_id) override;
+  Status add_rx_flows_async(int port, const std::vector<FlowRuleConfig>& flows,
+                            FlowOpId* op_id) override;
   Status delete_flow_async(FlowId flow_id, FlowOpId* op_id) override;
   Status poll_flow_op(FlowOpResult* result) override;
   uint16_t get_num_rx_queues(int port_id) const override;
@@ -429,7 +447,7 @@ class IbverbsEngine : public Engine {
                                                    uint32_t* out_id_sample_id);
   void devx_build_wqe(IbvRxQueue& q, uint32_t wqe_idx);  // write one RQ WQE
   void devx_ring_rq_doorbell(IbvRxQueue& q);
-  void devx_advance_producer(IbvRxQueue& q);  // worker-only: refill freed regions
+  void devx_advance_producer(IbvRxQueue& q);  // poller-owned: refill freed regions
   void devx_destroy(IbvRxQueue& q);
 
   // ---- GPU reorder ----
@@ -446,7 +464,7 @@ class IbverbsEngine : public Engine {
   // One poller thread services a group of RX queues that share a cpu_core,
   // round-robin. rx_poll_queue does one bounded pass over a single queue's CQ.
   void rx_worker(std::vector<IbvRxQueue*> group);
-  void rx_poll_queue(IbvRxQueue* q);
+  Status rx_poll_queue(IbvRxQueue* q, BurstParams** direct_burst = nullptr);
   bool rx_alloc_burst(IbvRxQueue* q);  // grab a metadata burst into q->cur_burst
   void rx_flush_burst(IbvRxQueue* q);  // enqueue q->cur_burst to the app ring
   // Release `strd` strides belonging to `wqe_idx`; repost the region if fully
@@ -455,7 +473,7 @@ class IbverbsEngine : public Engine {
 
   // ---- TX path ----
   Status setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf, const TxQueueConfig& qcfg);
-  Status create_tx_raw_qp(IbvTxQueue& q);                 // IBV_QPT_RAW_PACKET, RESET->RTS
+  Status create_tx_raw_qp(IbvTxQueue& q);  // IBV_QPT_RAW_PACKET, RESET->RTS
   Status configure_tx_pacing(IbvTxQueue& q, uint64_t pacing_mbps);
   void post_tx_burst(IbvTxQueue& q, BurstParams* burst);  // build send WQEs + ring doorbell
   void post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst);
@@ -466,6 +484,7 @@ class IbverbsEngine : public Engine {
   uint64_t tx_burst_wqebbs(const IbvTxQueue& q, const BurstParams* burst) const;
   bool tx_sq_has_space(IbvTxQueue& q, uint64_t needed_wqebbs);
   void poll_tx_completions(IbvTxQueue& q);  // drain TX CQ, reclaim slot-runs
+  bool lock_direct_tx_queue(IbvTxQueue& q, std::unique_lock<std::mutex>& guard);
   // One worker services a group of TX queues sharing a cpu_core, round-robin:
   // drains each send_ring (post) + reclaims completions.
   void tx_worker(std::vector<IbvTxQueue*> group);
@@ -650,6 +669,7 @@ class IbverbsEngine : public Engine {
   daqiri::ObjectPool* tx_meta_pool_ = nullptr;
   size_t rx_meta_pool_size_ = 0;
   uint32_t max_batch_ = 0;  // largest batch_size across RX+TX queues
+  static constexpr uint32_t kDirectPollMaxBatch = 256;
 
   // Tag every burst metadata block so free paths can find the owning queue.
   // Stored in the burst's BurstHeader.

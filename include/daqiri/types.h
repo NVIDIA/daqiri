@@ -602,13 +602,13 @@ class EngineExtraQueueConfig {
 
 struct CommonQueueConfig {
   std::string name_;
-  int id_;
-  int batch_size_;
-  int split_boundary_;
+  int id_ = 0;
+  int batch_size_ = 0;
+  int split_boundary_ = 0;
   std::string cpu_core_;
   std::vector<std::string> mrs_;
   std::vector<std::string> offloads_;
-  EngineExtraQueueConfig* extra_queue_config_;
+  EngineExtraQueueConfig* extra_queue_config_ = nullptr;
 };
 
 struct MemoryRegionConfig {
@@ -623,13 +623,38 @@ struct MemoryRegionConfig {
   bool owned_;
 };
 
+enum class QueuePollMode { INDIRECT, DIRECT, INVALID };
+
+inline QueuePollMode queue_poll_mode_from_string(const std::string& str) {
+  if (str == "indirect") {
+    return QueuePollMode::INDIRECT;
+  }
+  if (str == "direct") {
+    return QueuePollMode::DIRECT;
+  }
+  return QueuePollMode::INVALID;
+}
+
+inline std::string queue_poll_mode_to_string(QueuePollMode mode) {
+  switch (mode) {
+    case QueuePollMode::INDIRECT:
+      return "indirect";
+    case QueuePollMode::DIRECT:
+      return "direct";
+    default:
+      return "invalid";
+  }
+}
+
 struct RxQueueConfig {
   CommonQueueConfig common_;
-  uint64_t timeout_us_;
+  uint64_t timeout_us_ = 0;
+  QueuePollMode poll_mode_ = QueuePollMode::INDIRECT;
 };
 
 struct TxQueueConfig {
   CommonQueueConfig common_;
+  QueuePollMode poll_mode_ = QueuePollMode::INDIRECT;
   // Packet pacing: average TX rate cap in megabits/sec (L2 frame bytes). 0
   // disables pacing (line-rate). Honored only by engines/devices with hardware
   // packet-pacing support.
