@@ -223,7 +223,7 @@ semantics. The Python wrapper exposes the same timestamps in nanoseconds.
 
 `RxQueueConfig.poll_mode` accepts `QueuePollMode.INDIRECT` (the default) or
 `QueuePollMode.DIRECT`. Direct mode is available only on raw ibverbs RX queues and makes the
-Python thread calling `get_rx_burst()` perform the bounded CQ poll while the GIL is released.
+Python thread calling `get_rx_burst()` check for ready packets while the GIL is released.
 
 ### RX Step 3: Free buffers
 
@@ -360,12 +360,12 @@ status = daqiri.send_tx_burst(burst)
 # Do not free `burst` after a SUCCESS or NO_SPACE_AVAILABLE return. See the ownership note below.
 ```
 
-`send_tx_burst()` takes ownership of the burst on success and on a full-ring
-or full-SQ failure. `TxQueueConfig.poll_mode = QueuePollMode.DIRECT` selects single-packet raw
-ibverbs direct TX. The Python thread polls completions, builds the WQE, and rings the NIC
-doorbell; no worker or handoff ring touches the packet. Direct TX requires exactly one packet,
-one pending handle, and one thread per queue. On `NO_SPACE_AVAILABLE` DAQIRI has already freed
-the packet reservation and burst internally. In
+`send_tx_burst()` takes ownership of the burst on success and when transmit capacity is
+temporarily exhausted. `TxQueueConfig.poll_mode = QueuePollMode.DIRECT` selects single-packet raw
+ibverbs direct TX. The Python thread submits the packet and manages transmit progress; no worker
+or handoff ring touches the packet. Direct TX requires exactly one packet, one pending handle,
+and one thread per queue. On `NO_SPACE_AVAILABLE` DAQIRI has already freed the packet reservation
+and burst internally. In
 both cases the application must **not** free or otherwise access the burst
 afterwards. `NO_SPACE_AVAILABLE` is the only failure a correctly-configured
 sender encounters at runtime.

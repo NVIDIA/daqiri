@@ -93,11 +93,11 @@ daqiri::get_rx_burst(&burst);
 ```
 
 For an ibverbs RX queue configured with `poll_mode: direct`, the calling thread performs one
-bounded NIC CQ poll inside `get_rx_burst()`. A successful call returns the packets currently
-ready, up to 256, without a DAQIRI RX worker or handoff ring. Exactly one thread may poll each
-direct queue. Continue using the normal burst-free APIs; released receive WQEs are reposted by
-a subsequent direct poll. An empty direct poll returns `Status::NOT_READY`. Indirect mode remains
-the default.
+bounded check for ready packets inside `get_rx_burst()`. A successful call returns the packets
+currently ready, up to 256, without a DAQIRI RX worker or handoff ring. Exactly one thread may
+poll each direct queue. Continue using the normal burst-free APIs; released packet buffers are
+recycled by a subsequent direct poll. An empty direct poll returns `Status::NOT_READY`. Indirect
+mode remains the default.
 
 ### RX Step 2: Access packet data
 
@@ -413,13 +413,13 @@ daqiri::send_tx_burst(burst);
 
 In the default indirect mode, the burst is enqueued to the TX worker thread, which sends it to
 the NIC via DMA. A raw ibverbs queue configured with `poll_mode: direct` requires `batch_size`
-to be omitted and `num_pkts == 1`. The calling thread polls completions, builds the WQE, and
-rings the NIC doorbell synchronously. `BurstParams` is only an ownership handle; neither the
-metadata nor packet data is handed to another core.
+to be omitted and `num_pkts == 1`. The calling thread submits the packet synchronously and
+manages transmit progress. `BurstParams` is only an ownership handle; neither the metadata nor
+packet data is handed to another core.
 
-`send_tx_burst()` takes ownership of the burst on success and on a full-ring
-or full-SQ failure. In direct mode, `SUCCESS` means the WQE has been posted and the doorbell
-rung, while completion is reclaimed by a later caller-driven operation. On
+`send_tx_burst()` takes ownership of the burst on success and when transmit capacity is
+temporarily exhausted. In direct mode, `SUCCESS` means the packet has been submitted to the NIC;
+the packet buffer is reclaimed by a later caller-driven operation. On
 `NO_SPACE_AVAILABLE` it has already freed the packet reservation and metadata. In both
 cases the application must **not** free or otherwise access the burst afterwards.
 `NO_SPACE_AVAILABLE` is the only failure a correctly-configured sender encounters

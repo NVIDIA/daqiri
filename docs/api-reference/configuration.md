@@ -190,8 +190,8 @@ engine.
   - default: `0`
 
 Direct queues must be polled by exactly one user thread per queue. They do not create an RX
-worker or handoff ring, so an application stall also stops CQ draining and WQE reposting. A
-direct queue cannot be targeted by an RX reorder configuration. Unsupported engines, reorder,
+worker or handoff ring, so an application stall also stops packet reception and buffer recycling.
+A direct queue cannot be targeted by an RX reorder configuration. Unsupported engines, reorder,
 or forbidden worker fields produce a warning followed by configuration failure.
 
 ### Flex Items
@@ -424,8 +424,8 @@ daqiri::set_reorder_cuda_stream("rx_port", "rx_reorder_0", stream);
 - **`id`**: Integer ID used for burst submission.
   - type: `integer`
 - **`poll_mode`**: `indirect` hands bursts to a DAQIRI TX worker. `direct` makes the calling
-  thread synchronously poll completions, build one packet's WQE, and ring the NIC doorbell;
-  it is supported only by the raw ibverbs engine.
+  thread submit one packet immediately and manage transmit progress; it is supported only by
+  the raw ibverbs engine.
   - type: `string`
   - values: `indirect`, `direct`
   - default: `indirect`
@@ -458,8 +458,8 @@ daqiri::set_reorder_cuda_stream("rx_port", "rx_reorder_0", stream);
 A direct TX queue creates no handoff ring or worker. One application thread owns the queue and
 may have only one acquired-but-unsubmitted packet at a time. `BurstParams` remains the ownership
 handle, but neither it nor the packet data crosses another CPU core: the caller writes directly
-to registered memory and `send_tx_burst()` posts directly to the mlx5 SQ. Completion reclamation
-occurs on later availability, allocation, or send calls. Unsupported engines and forbidden
+to the packet buffer and `send_tx_burst()` submits it directly. Completed packet buffers are
+reclaimed on later availability, allocation, or send calls. Unsupported engines and forbidden
 worker fields produce a warning followed by configuration failure.
 
 ### Transmit Flows

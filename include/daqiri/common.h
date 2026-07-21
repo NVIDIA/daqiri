@@ -271,7 +271,7 @@ Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_
  *    SUCCESS: Packets allocated
  *    NULL_PTR: Burst or packet pools uninitialized
  *    NO_FREE_BURST_BUFFERS: No burst buffers to allocate
- *    NO_FREE_PACKET_BUFFERS: Not enough packet buffers or SQ credits available
+ *    NO_FREE_PACKET_BUFFERS: Not enough packet buffers or transmit capacity available
  *    NOT_READY: A direct queue already has a pending packet or rejected the caller
  *    INVALID_PARAMETER: Invalid queue or non-single-packet direct request
  */
@@ -758,7 +758,7 @@ void set_num_packets(BurstParams *burst, int64_t num);
  *
  * Takes ownership of @p burst on SUCCESS and on NO_SPACE_AVAILABLE. Indirect
  * mode hands a successful burst to the TX worker; raw ibverbs direct mode has
- * already posted its single-packet WQE before returning SUCCESS. On
+ * already submitted its single packet before returning SUCCESS. On
  * NO_SPACE_AVAILABLE it has already freed the packets and burst internally.
  * In all ownership-consuming cases the caller must
  * NOT free or otherwise access @p burst afterwards. NO_SPACE_AVAILABLE is the
@@ -767,7 +767,7 @@ void set_num_packets(BurstParams *burst, int64_t num);
  * @param burst Burst structure
  * @return Status indicating result. Valid values are:
  *    SUCCESS: burst enqueued or directly posted (ownership transferred)
- *    NO_SPACE_AVAILABLE: TX ring/SQ full; burst already freed (ownership consumed)
+ *    NO_SPACE_AVAILABLE: No transmit capacity; burst already freed (ownership consumed)
  *    INVALID_PARAMETER: bad port/queue; burst NOT consumed (see issue #164)
  *    NOT_READY: direct queue called concurrently or from a non-owner thread; burst not consumed
  */
