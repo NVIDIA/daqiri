@@ -81,8 +81,9 @@ auto status = daqiri::get_rx_burst(&burst, port_id, queue_id);
 ```
 
 `get_rx_burst()` is non-blocking. It returns `Status::SUCCESS` when a complete batch is
-available, or `Status::NULL_PTR` when no indirect burst is ready yet. There are also overloads
-that dequeue from any queue on a port, or from any queue on any port:
+available. When no burst is ready, engines return `Status::NULL_PTR` or `Status::NOT_READY`;
+applications should handle both as an empty poll. There are also overloads that dequeue from
+any queue on a port, or from any queue on any port:
 
 ```cpp
 // From any queue on port 0
@@ -778,7 +779,7 @@ All functions that can fail return `daqiri::Status`:
 | `NULL_PTR` | Burst or internal pointer not initialized / no data ready |
 | `NO_FREE_BURST_BUFFERS` | Metadata buffer pool exhausted (increase `tx/rx_meta_buffers`) |
 | `NO_FREE_PACKET_BUFFERS` | Packet buffer pool exhausted (free buffers faster or increase `num_bufs`) |
-| `NOT_READY` | System not yet initialized |
+| `NOT_READY` | Operation cannot proceed yet / no data ready |
 | `INVALID_PARAMETER` | Invalid argument passed |
 | `NO_SPACE_AVAILABLE` | Ring or queue is full |
 | `NOT_SUPPORTED` | Operation not supported by the current engine or build options |

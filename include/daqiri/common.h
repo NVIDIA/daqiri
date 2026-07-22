@@ -781,7 +781,7 @@ Status send_tx_burst(BurstParams *burst);
  * @param q Queue ID of interface
  * @return Status indicating status. Valid values are:
  *    SUCCESS: Burst received successfully
- *    NULL_PTR: No bursts ready to receive
+ *    NULL_PTR or NOT_READY: No bursts ready to receive
  */
 Status get_rx_burst(BurstParams **burst, int port, int q);
 
@@ -792,7 +792,7 @@ Status get_rx_burst(BurstParams **burst, int port, int q);
  * @param port Port ID of interface
  * @return Status indicating status. Valid values are:
  *    SUCCESS: Burst received successfully
- *    NULL_PTR: No bursts ready to receive on any queue for this port
+ *    NULL_PTR or NOT_READY: No bursts ready to receive on any queue for this port
  */
 Status get_rx_burst(BurstParams **burst, int port);
 
@@ -802,7 +802,7 @@ Status get_rx_burst(BurstParams **burst, int port);
  * @param burst Burst structure
  * @return Status indicating status. Valid values are:
  *    SUCCESS: Burst received successfully
- *    NULL_PTR: No bursts ready to receive on any queue on any port
+ *    NULL_PTR or NOT_READY: No bursts ready to receive on any queue on any port
  */
 Status get_rx_burst(BurstParams **burst);
 

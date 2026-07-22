@@ -169,8 +169,8 @@ if status != daqiri.Status.SUCCESS:
 ### RX Step 1: Get a burst
 
 `get_rx_burst()` is non-blocking. It returns `(Status, BurstParams | None)`.
-`Status.SUCCESS` means a burst is ready. Other statuses (including `NULL_PTR`)
-mean no burst is ready yet or an error occurred.
+`Status.SUCCESS` means a burst is ready. `Status.NULL_PTR` and
+`Status.NOT_READY` both mean no burst is ready; other statuses report errors.
 
 ```python
 port_id = daqiri.get_port_id("rx_port")

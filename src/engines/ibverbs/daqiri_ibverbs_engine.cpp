@@ -3389,7 +3389,7 @@ Status IbverbsEngine::get_rx_burst(BurstParams** burst, int port, int q) {
   }
   void* b = nullptr;
   if (!rq->ring->dequeue(&b)) {
-    return Status::NULL_PTR;
+    return Status::NOT_READY;
   }
   *burst = static_cast<BurstParams*>(b);
   return Status::SUCCESS;
