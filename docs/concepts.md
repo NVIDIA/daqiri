@@ -246,18 +246,24 @@ buffers (CPU hugepages, GPU device memory, or pinned host memory).
 
 ### Queue Polling Modes (`poll_mode`)
 
-The per-queue `poll_mode` setting controls which thread moves packets between
-the application and the network. It applies independently to RX and TX queues
-and defaults to `indirect` when omitted.
+With packet processing there is an inverse relationship with bandwidth and latency. This is mainly for two reasons:
+
+1) Batching packets allows more optimizations, but takes longer to wait
+2) Larger packet sizes are more efficient for higher bandwidth, but take longer to transmit and receive
+
+DAQIRI allows users to select whether to prefer higher bandwidth or lower latency on a per-queue basis. A typical 
+use case for this would be high bandwidth for data plane, and low latency for control plane. Note that these are extreme definitions of high bandwidth and low latency. DAQIRI already provides extremely low latency and high bandwidth by bypassing the Linux kernel, regardless of the setting. Choosing low latency may save low single digit microseconds per packet.
+
+The `poll_mode` setting is used by choosing either indirect for high bandwidth, or direct for low latency by choosing which thread polls the NIC. `indirect` mode is chosen by default to favor high bandwidth and batching.
 
 | Mode | Who services the queue? | Best suited for |
 |---|---|---|
-| `indirect` | A DAQIRI worker running on the queue's configured `cpu_core` | General use, batching, and applications that should not have to poll continuously |
+| `indirect` | A DAQIRI worker running on the queue's configured `cpu_core` | General use, batching, highest bandwidth |
 | `direct` | The application thread calling the RX or TX API | The lowest single-packet latency when the application can dedicate one thread to each queue |
 
 In **indirect mode**, the application and DAQIRI worker exchange bursts. The
 queue requires `cpu_core` and `batch_size`; RX queues may also use `timeout_us`
-to return a partial batch. This is the existing behavior and is supported by
+to return a partial batch. `indirect` mode also allows more processing jitter in the application threads by using a zero-copy ring in between DAQIRI and the user. This is the existing behavior and is supported by
 all applicable engines.
 
 In **direct mode**, there is no worker between the application and the queue.
