@@ -246,7 +246,7 @@ buffers (CPU hugepages, GPU device memory, or pinned host memory).
 
 ### Queue Polling Modes (`poll_mode`)
 
-With packet processing there is an inverse relationship with bandwidth and latency. This is mainly for two reasons:
+With packet processing there is an inverse relationship between bandwidth and latency. This is mainly for two reasons:
 
 1) Batching packets allows more optimizations, but takes longer to wait
 2) Larger packet sizes are more efficient for higher bandwidth, but take longer to transmit and receive
