@@ -523,8 +523,11 @@ Status IbverbsEngine::register_mr(struct ibv_pd* pd, const std::string& mr_name,
     if (cres != CUDA_SUCCESS) {
       const char* es = nullptr;
       cuGetErrorString(cres, &es);
-      DAQIRI_LOG_CRITICAL("cuMemGetHandleForAddressRange failed for MR {}: {}", mr_name,
-                          es ? es : "?");
+      DAQIRI_LOG_CRITICAL(
+          "cuMemGetHandleForAddressRange failed for MR {}: {}. CUDA DMA-BUF export requires "
+          "Linux kernel 5.12 or newer and the NVIDIA open kernel driver",
+          mr_name,
+          es ? es : "?");
       return Status::GENERIC_FAILURE;
     }
     struct ibv_mr* gmr = ibv_reg_dmabuf_mr(pd, offset, mr.ttl_size_, va, dmabuf_fd, access);
