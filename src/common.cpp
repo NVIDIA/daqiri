@@ -444,8 +444,7 @@ int get_port_id(const std::string& key) {
 
 Status get_tx_packet_burst(BurstParams* burst) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
-  if (!g_daqiri_engine->is_tx_burst_available(burst)) return Status::NO_FREE_BURST_BUFFERS;
-  return g_daqiri_engine->get_tx_packet_burst(burst);
+  return g_daqiri_engine->get_tx_packet_burst_checked(burst);
 }
 
 Status set_eth_header(BurstParams* burst, int idx, char* dst_addr) {
@@ -1639,14 +1638,23 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_roce_config(
  * @param parse_memory_regions True if memory regions should be parsed, false otherwise.
  * @return true if parsing was successful, false otherwise.
  */
-bool parse_common_queue_config(const YAML::Node& q_item,
-                               daqiri::CommonQueueConfig& common,
-                               bool parse_memory_regions) {
+bool parse_common_queue_config(const YAML::Node& q_item, daqiri::CommonQueueConfig& common,
+                               bool parse_memory_regions, bool require_worker_fields = true) {
   try {
     common.name_ = q_item["name"].as<std::string>();
     common.id_ = q_item["id"].as<int>();
-    common.cpu_core_ = q_item["cpu_core"].as<std::string>();
-    common.batch_size_ = q_item["batch_size"].as<int>();
+    if (require_worker_fields) {
+      if (!q_item["cpu_core"].IsDefined() || !q_item["batch_size"].IsDefined()) {
+        DAQIRI_LOG_ERROR("Queue '{}' requires cpu_core and batch_size in indirect mode",
+                         common.name_);
+        return false;
+      }
+      common.cpu_core_ = q_item["cpu_core"].as<std::string>();
+      common.batch_size_ = q_item["batch_size"].as<int>();
+    } else {
+      common.cpu_core_.clear();
+      common.batch_size_ = 0;
+    }
     common.extra_queue_config_ = nullptr;
     if (q_item["memory_regions"].IsDefined()) {
       if (!parse_memory_regions) {
@@ -1698,11 +1706,43 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_rx_queue_config(
     daqiri::RxQueueConfig& q, bool parse_memory_regions) {
   try {
     daqiri::EngineType _engine_type = engine_type;
-
-    if (!parse_rx_queue_common_config(q_item, q, parse_memory_regions)) { return false; }
-
     if (engine_type == daqiri::EngineType::DEFAULT) {
       _engine_type = daqiri::EngineFactory::get_default_engine_type();
+    }
+
+    if (q_item["poll_mode"].IsDefined()) {
+      q.poll_mode_ = daqiri::queue_poll_mode_from_string(q_item["poll_mode"].as<std::string>());
+      if (q.poll_mode_ == daqiri::QueuePollMode::INVALID) {
+        DAQIRI_LOG_ERROR("Invalid RX poll_mode '{}'; valid values are indirect and direct",
+                         q_item["poll_mode"].as<std::string>());
+        return false;
+      }
+    }
+
+    if (q.poll_mode_ == daqiri::QueuePollMode::DIRECT) {
+      if (_engine_type != daqiri::EngineType::IBVERBS) {
+        DAQIRI_LOG_WARN(
+            "RX poll_mode direct is supported only by the raw ibverbs engine; "
+            "configured engine is {}",
+            daqiri::engine_type_to_string(_engine_type));
+        return false;
+      }
+      bool forbidden_field = false;
+      for (const char* field : {"cpu_core", "batch_size", "timeout_us"}) {
+        if (q_item[field].IsDefined()) {
+          DAQIRI_LOG_WARN("RX queue '{}' must omit {} when poll_mode is direct",
+                          q_item["name"].as<std::string>(), field);
+          forbidden_field = true;
+        }
+      }
+      if (forbidden_field) {
+        return false;
+      }
+    }
+
+    if (!parse_common_queue_config(q_item, q.common_, parse_memory_regions,
+                                   q.poll_mode_ == daqiri::QueuePollMode::INDIRECT)) {
+      return false;
     }
   } catch (const std::exception& e) {
     DAQIRI_LOG_ERROR("Error parsing RxQueueConfig: {}", e.what());
@@ -1719,9 +1759,11 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_rx_queue_config(
  * @return true if parsing was successful, false otherwise.
  */
 bool YAML::convert<daqiri::NetworkConfig>::parse_tx_queue_common_config(
-    const YAML::Node& q_item, daqiri::TxQueueConfig& q,
-    bool parse_memory_regions) {
-  if (!parse_common_queue_config(q_item, q.common_, parse_memory_regions)) { return false; }
+    const YAML::Node& q_item, daqiri::TxQueueConfig& q, bool parse_memory_regions,
+    bool require_worker_fields) {
+  if (!parse_common_queue_config(q_item, q.common_, parse_memory_regions, require_worker_fields)) {
+    return false;
+  }
   try {
     if (q_item["offloads"].IsDefined()) {
       const auto& offload = q_item["offloads"];
@@ -1759,7 +1801,40 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_tx_queue_config(
       _engine_type = daqiri::EngineFactory::get_default_engine_type();
     }
 
-    if (!parse_tx_queue_common_config(q_item, q, parse_memory_regions)) { return false; }
+    if (q_item["poll_mode"].IsDefined()) {
+      q.poll_mode_ = daqiri::queue_poll_mode_from_string(q_item["poll_mode"].as<std::string>());
+      if (q.poll_mode_ == daqiri::QueuePollMode::INVALID) {
+        DAQIRI_LOG_ERROR("Invalid TX poll_mode '{}'; valid values are indirect and direct",
+                         q_item["poll_mode"].as<std::string>());
+        return false;
+      }
+    }
+
+    if (q.poll_mode_ == daqiri::QueuePollMode::DIRECT) {
+      if (_engine_type != daqiri::EngineType::IBVERBS) {
+        DAQIRI_LOG_WARN(
+            "TX poll_mode direct is supported only by the raw ibverbs engine; "
+            "configured engine is {}",
+            daqiri::engine_type_to_string(_engine_type));
+        return false;
+      }
+      bool forbidden_field = false;
+      for (const char* field : {"cpu_core", "batch_size"}) {
+        if (q_item[field].IsDefined()) {
+          DAQIRI_LOG_WARN("TX queue '{}' must omit {} when poll_mode is direct",
+                          q_item["name"].as<std::string>(), field);
+          forbidden_field = true;
+        }
+      }
+      if (forbidden_field) {
+        return false;
+      }
+    }
+
+    if (!parse_tx_queue_common_config(q_item, q, parse_memory_regions,
+                                      q.poll_mode_ == daqiri::QueuePollMode::INDIRECT)) {
+      return false;
+    }
 
   } catch (const std::exception& e) {
     DAQIRI_LOG_ERROR("Error parsing TxQueueConfig: {}", e.what());

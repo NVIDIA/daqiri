@@ -81,8 +81,9 @@ auto status = daqiri::get_rx_burst(&burst, port_id, queue_id);
 ```
 
 `get_rx_burst()` is non-blocking. It returns `Status::SUCCESS` when a complete batch is
-available, or `Status::NULL_PTR` when no burst is ready yet. There are also overloads
-that dequeue from any queue on a port, or from any queue on any port:
+available. When no burst is ready, engines return `Status::NULL_PTR` or `Status::NOT_READY`;
+applications should handle both as an empty poll. There are also overloads that dequeue from
+any queue on a port, or from any queue on any port:
 
 ```cpp
 // From any queue on port 0
@@ -91,6 +92,13 @@ daqiri::get_rx_burst(&burst, 0);
 // From any queue on any port (round-robin)
 daqiri::get_rx_burst(&burst);
 ```
+
+For an ibverbs RX queue configured with `poll_mode: direct`, the calling thread performs one
+bounded check for ready packets inside `get_rx_burst()`. A successful call returns the packets
+currently ready, up to 256, without a DAQIRI RX worker or handoff ring. Exactly one thread may
+poll each direct queue. Continue using the normal burst-free APIs; released packet buffers are
+recycled by a subsequent direct poll. An empty direct poll returns `Status::NOT_READY`. Indirect
+mode remains the default.
 
 ### RX Step 2: Access packet data
 
@@ -404,14 +412,20 @@ Or construct raw packets by writing directly into the packet buffer returned by
 daqiri::send_tx_burst(burst);
 ```
 
-The burst is enqueued to the TX worker thread, which sends it to the NIC via DMA.
+In the default indirect mode, the burst is enqueued to the TX worker thread, which sends it to
+the NIC via DMA. A raw ibverbs queue configured with `poll_mode: direct` requires `batch_size`
+to be omitted and `num_pkts == 1`. The calling thread submits the packet synchronously and
+manages transmit progress. `BurstParams` is only an ownership handle; neither the metadata nor
+packet data is handed to another core.
 
-`send_tx_burst()` takes ownership of the burst on success and on a full-ring
-failure: on `SUCCESS` the TX worker owns it, and on `NO_SPACE_AVAILABLE` (the TX
-ring is full) it has already freed the packets and the burst internally. In both
+`send_tx_burst()` takes ownership of the burst on success and when transmit capacity is
+temporarily exhausted. In direct mode, `SUCCESS` means the packet has been submitted to the NIC;
+the packet buffer is reclaimed by a later caller-driven operation. On
+`NO_SPACE_AVAILABLE` it has already freed the packet reservation and metadata. In both
 cases the application must **not** free or otherwise access the burst afterwards.
 `NO_SPACE_AVAILABLE` is the only failure a correctly-configured sender encounters
-at runtime.
+at submission time. A second direct acquisition before the pending packet is sent or freed
+returns `NOT_READY`; zero- or multi-packet direct requests return `INVALID_PARAMETER`.
 
 ### Timed Transmission
 
@@ -765,7 +779,7 @@ All functions that can fail return `daqiri::Status`:
 | `NULL_PTR` | Burst or internal pointer not initialized / no data ready |
 | `NO_FREE_BURST_BUFFERS` | Metadata buffer pool exhausted (increase `tx/rx_meta_buffers`) |
 | `NO_FREE_PACKET_BUFFERS` | Packet buffer pool exhausted (free buffers faster or increase `num_bufs`) |
-| `NOT_READY` | System not yet initialized |
+| `NOT_READY` | Operation cannot proceed yet / no data ready |
 | `INVALID_PARAMETER` | Invalid argument passed |
 | `NO_SPACE_AVAILABLE` | Ring or queue is full |
 | `NOT_SUPPORTED` | Operation not supported by the current engine or build options |

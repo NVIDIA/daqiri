@@ -169,8 +169,8 @@ if status != daqiri.Status.SUCCESS:
 ### RX Step 1: Get a burst
 
 `get_rx_burst()` is non-blocking. It returns `(Status, BurstParams | None)`.
-`Status.SUCCESS` means a burst is ready. Other statuses (including `NULL_PTR`)
-mean no burst is ready yet or an error occurred.
+`Status.SUCCESS` means a burst is ready. `Status.NULL_PTR` and
+`Status.NOT_READY` both mean no burst is ready; other statuses report errors.
 
 ```python
 port_id = daqiri.get_port_id("rx_port")
@@ -220,6 +220,10 @@ with `rx.hardware_timestamps: true` and the NIC supports
 `RTE_ETH_RX_OFFLOAD_TIMESTAMP`. See
 [C++ API Usage → Receiving Packets](cpp.md#receiving-packets) for the clock
 semantics. The Python wrapper exposes the same timestamps in nanoseconds.
+
+`RxQueueConfig.poll_mode` accepts `QueuePollMode.INDIRECT` (the default) or
+`QueuePollMode.DIRECT`. Direct mode is available only on raw ibverbs RX queues and makes the
+Python thread calling `get_rx_burst()` check for ready packets while the GIL is released.
 
 ### RX Step 3: Free buffers
 
@@ -356,9 +360,12 @@ status = daqiri.send_tx_burst(burst)
 # Do not free `burst` after a SUCCESS or NO_SPACE_AVAILABLE return. See the ownership note below.
 ```
 
-`send_tx_burst()` takes ownership of the burst on success and on a full-ring
-failure: on `SUCCESS` the worker thread owns it, and on `NO_SPACE_AVAILABLE` (the
-TX ring is full) it has already freed the packets and the burst internally. In
+`send_tx_burst()` takes ownership of the burst on success and when transmit capacity is
+temporarily exhausted. `TxQueueConfig.poll_mode = QueuePollMode.DIRECT` selects single-packet raw
+ibverbs direct TX. The Python thread submits the packet and manages transmit progress; no worker
+or handoff ring touches the packet. Direct TX requires exactly one packet, one pending handle,
+and one thread per queue. On `NO_SPACE_AVAILABLE` DAQIRI has already freed the packet reservation
+and burst internally. In
 both cases the application must **not** free or otherwise access the burst
 afterwards. `NO_SPACE_AVAILABLE` is the only failure a correctly-configured
 sender encounters at runtime.
@@ -664,6 +671,7 @@ encapsulation/push rules are configured in YAML under `tx.flows`.
 | `BufferLocation` | `CPU`, `GPU`, `CPU_GPU_SPLIT` |
 | `MemoryKind` | `HOST`, `HOST_PINNED`, `HUGE`, `DEVICE`, `INVALID` |
 | `StreamType` | `RAW`, `SOCKET`, `INVALID` |
+| `QueuePollMode` | `INDIRECT`, `DIRECT`, `INVALID` |
 | `LoopbackType` | `DISABLED`, `LOOPBACK_TYPE_SW` |
 | `RDMAMode` | `CLIENT`, `SERVER`, `INVALID` |
 | `RDMATransportMode` | `RC`, `UC`, `UD`, `INVALID` |
@@ -698,8 +706,8 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `RxConfig` | RX flow isolation, timestamps, queues, flows, flex items, and reorder configs. |
 | `TxConfig` | TX accurate-send flag, queues, and flows. |
 | `CommonQueueConfig` | Shared queue fields: name, ID, batch size, split boundary, CPU core, memory regions, and offloads. |
-| `RxQueueConfig` | RX queue wrapper with common queue fields and timeout. |
-| `TxQueueConfig` | TX queue wrapper with common queue fields. |
+| `RxQueueConfig` | RX queue wrapper with common queue fields, timeout, and `QueuePollMode`. |
+| `TxQueueConfig` | TX queue wrapper with common queue fields and `QueuePollMode`. |
 | `MemoryRegionConfig` | Memory region kind, affinity, access flags, sizes, counts, and ownership. |
 | `VlanActionConfig` | VLAN push parameters: VLAN ID, priority, DEI, and ethertype. |
 | `TunnelConfig` | VXLAN, GRE, or NVGRE tunnel template fields for hardware encap/decap actions. |

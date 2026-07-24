@@ -178,11 +178,13 @@ static bool fill_tunnel_l2_l3(std::vector<uint8_t>& data, const TunnelConfig& tu
 static bool build_reformat_buffer(const FlowAction& action, std::vector<uint8_t>& data,
                                   enum mlx5dv_flow_action_packet_reformat_type* type) {
   data.clear();
-  if (type == nullptr) { return false; }
+  if (type == nullptr) {
+    return false;
+  }
   if (action.type_ == FlowType::VLAN_PUSH || action.type_ == FlowType::VLAN_POP) {
-    const uint16_t tci = static_cast<uint16_t>(((action.vlan_.pcp_ & 0x7) << 13) |
-                                              ((action.vlan_.dei_ & 0x1) << 12) |
-                                              (action.vlan_.vlan_id_ & 0x0fff));
+    const uint16_t tci =
+        static_cast<uint16_t>(((action.vlan_.pcp_ & 0x7) << 13) |
+                              ((action.vlan_.dei_ & 0x1) << 12) | (action.vlan_.vlan_id_ & 0x0fff));
     const uint16_t tpid = htobe16(action.vlan_.ethertype_);
     const uint16_t be_tci = htobe16(tci);
     append_bytes(data, &tpid, sizeof(tpid));
@@ -200,35 +202,41 @@ static bool build_reformat_buffer(const FlowAction& action, std::vector<uint8_t>
   const TunnelConfig& tunnel = action.tunnel_;
   switch (tunnel.type_) {
     case TunnelType::VXLAN: {
-      if (!fill_tunnel_l2_l3(data, tunnel, IPPROTO_UDP)) { return false; }
+      if (!fill_tunnel_l2_l3(data, tunnel, IPPROTO_UDP)) {
+        return false;
+      }
       struct udphdr udp {};
       udp.source = htobe16(tunnel.outer_udp_src_);
       udp.dest = htobe16(tunnel.outer_udp_dst_);
       struct {
         uint32_t flags;
         uint32_t vni;
-      } __attribute__((packed)) vxlan {htobe32(0x08000000u), htobe32(tunnel.vni_ << 8)};
+      } __attribute__((packed)) vxlan{htobe32(0x08000000u), htobe32(tunnel.vni_ << 8)};
       append_bytes(data, &udp, sizeof(udp));
       append_bytes(data, &vxlan, sizeof(vxlan));
       break;
     }
     case TunnelType::GRE: {
-      if (!fill_tunnel_l2_l3(data, tunnel, IPPROTO_GRE)) { return false; }
+      if (!fill_tunnel_l2_l3(data, tunnel, IPPROTO_GRE)) {
+        return false;
+      }
       struct {
         uint16_t flags;
         uint16_t proto;
-      } __attribute__((packed)) gre {0, htobe16(tunnel.gre_protocol_)};
+      } __attribute__((packed)) gre{0, htobe16(tunnel.gre_protocol_)};
       append_bytes(data, &gre, sizeof(gre));
       break;
     }
     case TunnelType::NVGRE: {
-      if (!fill_tunnel_l2_l3(data, tunnel, IPPROTO_GRE)) { return false; }
+      if (!fill_tunnel_l2_l3(data, tunnel, IPPROTO_GRE)) {
+        return false;
+      }
       struct {
         uint16_t flags;
         uint16_t proto;
         uint8_t tni[3];
         uint8_t flow_id;
-      } __attribute__((packed)) nvgre {};
+      } __attribute__((packed)) nvgre{};
       nvgre.flags = htobe16(0x2000);
       nvgre.proto = htobe16(ETH_P_TEB);
       set_u24_be(nvgre.tni, tunnel.tni_);
@@ -381,7 +389,12 @@ bool IbverbsEngine::set_config_and_initialize(const NetworkConfig& cfg) {
   force_quit_.store(false, std::memory_order_relaxed);
   max_batch_ = 0;
   cfg_ = cfg;
-  if (!reserve_static_flow_ids()) { return false; }
+  if (!validate_config()) {
+    return false;
+  }
+  if (!reserve_static_flow_ids()) {
+    return false;
+  }
   initialize();
   return initialized_;
 }
@@ -973,17 +986,23 @@ struct DrMatchParam {
 
 const InterfaceConfig* IbverbsEngine::find_interface_config(int port) const {
   for (const auto& intf : cfg_.ifs_) {
-    if (intf.port_id_ == port) { return &intf; }
+    if (intf.port_id_ == port) {
+      return &intf;
+    }
   }
   return nullptr;
 }
 
 bool IbverbsEngine::reserve_static_flow_ids() {
   static_flow_ids_.clear();
-  while (!free_dynamic_flow_ids_.empty()) { free_dynamic_flow_ids_.pop(); }
+  while (!free_dynamic_flow_ids_.empty()) {
+    free_dynamic_flow_ids_.pop();
+  }
   for (const auto& intf : cfg_.ifs_) {
     for (const auto& flow : intf.rx_.flows_) {
-      if (flow.id_ == 0) { continue; }
+      if (flow.id_ == 0) {
+        continue;
+      }
       if (!static_flow_ids_.insert(flow.id_).second) {
         DAQIRI_LOG_ERROR("Duplicate static flow ID {}", flow.id_);
         return false;
@@ -995,20 +1014,30 @@ bool IbverbsEngine::reserve_static_flow_ids() {
 }
 
 FlowOpId IbverbsEngine::allocate_flow_op_id_locked() {
-  if (next_flow_op_id_ == 0) { next_flow_op_id_ = 1; }
+  if (next_flow_op_id_ == 0) {
+    next_flow_op_id_ = 1;
+  }
   return next_flow_op_id_++;
 }
 
 bool IbverbsEngine::has_dynamic_flow_id_capacity_locked(size_t count) const {
-  if (free_dynamic_flow_ids_.size() >= count) { return true; }
+  if (free_dynamic_flow_ids_.size() >= count) {
+    return true;
+  }
   count -= free_dynamic_flow_ids_.size();
 
   FlowId candidate = next_dynamic_flow_id_;
   while (count > 0 && candidate != 0 && candidate <= kMaxIbverbsFlowTag) {
     const FlowId flow_id = candidate++;
-    if (flow_id == 0) { continue; }
-    if (static_flow_ids_.find(flow_id) != static_flow_ids_.end()) { continue; }
-    if (dynamic_flows_.find(flow_id) != dynamic_flows_.end()) { continue; }
+    if (flow_id == 0) {
+      continue;
+    }
+    if (static_flow_ids_.find(flow_id) != static_flow_ids_.end()) {
+      continue;
+    }
+    if (dynamic_flows_.find(flow_id) != dynamic_flows_.end()) {
+      continue;
+    }
     --count;
   }
   return count == 0;
@@ -1018,26 +1047,44 @@ FlowId IbverbsEngine::allocate_dynamic_flow_id_locked() {
   while (!free_dynamic_flow_ids_.empty()) {
     const FlowId candidate = free_dynamic_flow_ids_.front();
     free_dynamic_flow_ids_.pop();
-    if (candidate == 0 || candidate > kMaxIbverbsFlowTag) { continue; }
-    if (static_flow_ids_.find(candidate) != static_flow_ids_.end()) { continue; }
-    if (dynamic_flows_.find(candidate) != dynamic_flows_.end()) { continue; }
+    if (candidate == 0 || candidate > kMaxIbverbsFlowTag) {
+      continue;
+    }
+    if (static_flow_ids_.find(candidate) != static_flow_ids_.end()) {
+      continue;
+    }
+    if (dynamic_flows_.find(candidate) != dynamic_flows_.end()) {
+      continue;
+    }
     return candidate;
   }
 
   while (next_dynamic_flow_id_ != 0 && next_dynamic_flow_id_ <= kMaxIbverbsFlowTag) {
     const FlowId candidate = next_dynamic_flow_id_++;
-    if (candidate == 0) { continue; }
-    if (static_flow_ids_.find(candidate) != static_flow_ids_.end()) { continue; }
-    if (dynamic_flows_.find(candidate) != dynamic_flows_.end()) { continue; }
+    if (candidate == 0) {
+      continue;
+    }
+    if (static_flow_ids_.find(candidate) != static_flow_ids_.end()) {
+      continue;
+    }
+    if (dynamic_flows_.find(candidate) != dynamic_flows_.end()) {
+      continue;
+    }
     return candidate;
   }
   return 0;
 }
 
 void IbverbsEngine::release_dynamic_flow_id_locked(FlowId flow_id) {
-  if (flow_id == 0 || flow_id > kMaxIbverbsFlowTag) { return; }
-  if (static_flow_ids_.find(flow_id) != static_flow_ids_.end()) { return; }
-  if (dynamic_flows_.find(flow_id) != dynamic_flows_.end()) { return; }
+  if (flow_id == 0 || flow_id > kMaxIbverbsFlowTag) {
+    return;
+  }
+  if (static_flow_ids_.find(flow_id) != static_flow_ids_.end()) {
+    return;
+  }
+  if (dynamic_flows_.find(flow_id) != dynamic_flows_.end()) {
+    return;
+  }
   free_dynamic_flow_ids_.push(flow_id);
 }
 
@@ -1085,8 +1132,7 @@ bool IbverbsEngine::validate_dynamic_rx_flow_locked(int port, const FlowRuleConf
   const bool has_transform = flow_actions_have_transform(actions);
   for (const auto& action : actions) {
     if (action.type_ == FlowType::VLAN_PUSH || action.type_ == FlowType::TUNNEL_ENCAP) {
-      DAQIRI_LOG_ERROR("Dynamic RX flow '{}' can only use decap/pop transform actions",
-                       flow.name_);
+      DAQIRI_LOG_ERROR("Dynamic RX flow '{}' can only use decap/pop transform actions", flow.name_);
       return false;
     }
   }
@@ -1094,16 +1140,16 @@ bool IbverbsEngine::validate_dynamic_rx_flow_locked(int port, const FlowRuleConf
   const FlowMatch& match = flow.match_;
   if (match.type_ == FlowMatchType::FLEX_ITEM) {
     if (has_transform) {
-      DAQIRI_LOG_ERROR("Dynamic RX flow '{}' cannot combine flex-item matching with tunnel/VLAN "
-                       "actions",
-                       flow.name_);
+      DAQIRI_LOG_ERROR(
+          "Dynamic RX flow '{}' cannot combine flex-item matching with tunnel/VLAN "
+          "actions",
+          flow.name_);
       return false;
     }
     const uint16_t flex_item_id = match.flex_item_match_.flex_item_id_;
-    const auto flex_it = std::find_if(intf->rx_.flex_items_.begin(), intf->rx_.flex_items_.end(),
-                                      [&](const FlexItemConfig& c) {
-                                        return c.id_ == flex_item_id;
-                                      });
+    const auto flex_it =
+        std::find_if(intf->rx_.flex_items_.begin(), intf->rx_.flex_items_.end(),
+                     [&](const FlexItemConfig& c) { return c.id_ == flex_item_id; });
     if (flex_it == intf->rx_.flex_items_.end()) {
       DAQIRI_LOG_ERROR("Dynamic RX flow references invalid flex item ID {}", flex_item_id);
       return false;
@@ -1276,7 +1322,9 @@ bool IbverbsEngine::create_dr_rule_locked(
   for (auto* reformat : reformats) {
     if (num_actions >= static_cast<int>(sizeof(actions) / sizeof(actions[0])) - 1) {
       DAQIRI_LOG_CRITICAL("Too many reformat actions for flow '{}' on port {}", desc, port);
-      if (tag_action != nullptr) { mlx5dv_dr_action_destroy(tag_action); }
+      if (tag_action != nullptr) {
+        mlx5dv_dr_action_destroy(tag_action);
+      }
       mlx5dv_dr_matcher_destroy(matcher);
       return false;
     }
@@ -1287,7 +1335,9 @@ bool IbverbsEngine::create_dr_rule_locked(
   struct mlx5dv_dr_rule* rule = mlx5dv_dr_rule_create(matcher, value, num_actions, actions);
   if (rule == nullptr) {
     DAQIRI_LOG_CRITICAL("dr_rule_create failed (port {} {}): {}", port, desc, strerror(errno));
-    if (tag_action != nullptr) { mlx5dv_dr_action_destroy(tag_action); }
+    if (tag_action != nullptr) {
+      mlx5dv_dr_action_destroy(tag_action);
+    }
     mlx5dv_dr_matcher_destroy(matcher);
     return false;
   }
@@ -1305,7 +1355,9 @@ bool IbverbsEngine::create_dr_rule_locked(
 
   st.matchers.push_back(matcher);
   st.rules.push_back(rule);
-  if (tag_action != nullptr) { st.tag_actions.push_back(tag_action); }
+  if (tag_action != nullptr) {
+    st.tag_actions.push_back(tag_action);
+  }
 
   PortSteering::RuleSpec spec{
       matcher, destination_action, tag_action, reformats, rss_destination, 0, {}};
@@ -1315,18 +1367,17 @@ bool IbverbsEngine::create_dr_rule_locked(
   return true;
 }
 
-Status IbverbsEngine::install_flow_rule_locked(int port,
-                                               PortSteering& st,
+Status IbverbsEngine::install_flow_rule_locked(int port, PortSteering& st,
                                                const InterfaceConfig& intf,
-                                               const FlowRuleConfig& flow,
-                                               FlowId flow_id,
-                                               int priority,
-                                               DynamicFlowEntry* dynamic_entry) {
+                                               const FlowRuleConfig& flow, FlowId flow_id,
+                                               int priority, DynamicFlowEntry* dynamic_entry) {
   if (st.dropped) {
     DAQIRI_LOG_ERROR("Cannot modify dynamic RX flows while port {} is dropped", port);
     return Status::INVALID_PARAMETER;
   }
-  if (st.table == nullptr) { return Status::NOT_READY; }
+  if (st.table == nullptr) {
+    return Status::NOT_READY;
+  }
 
   const auto actions = flow_rule_actions(flow);
   const FlowAction queue_action = flow_queue_action(actions);
@@ -1348,15 +1399,21 @@ Status IbverbsEngine::install_flow_rule_locked(int port,
 
   std::vector<struct mlx5dv_dr_action*> flow_reformats;
   auto cleanup_dynamic_reformats = [&]() {
-    if (dynamic_entry == nullptr) { return; }
+    if (dynamic_entry == nullptr) {
+      return;
+    }
     for (auto* reformat : dynamic_entry->reformat_actions) {
-      if (reformat != nullptr) { mlx5dv_dr_action_destroy(reformat); }
+      if (reformat != nullptr) {
+        mlx5dv_dr_action_destroy(reformat);
+      }
     }
     dynamic_entry->reformat_actions.clear();
     dynamic_entry->reformat_buffers.clear();
   };
   for (const auto& action : actions) {
-    if (!flow_action_is_transform(action)) { continue; }
+    if (!flow_action_is_transform(action)) {
+      continue;
+    }
     std::vector<uint8_t>* buffer = nullptr;
     if (dynamic_entry != nullptr) {
       dynamic_entry->reformat_buffers.emplace_back();
@@ -1413,12 +1470,10 @@ Status IbverbsEngine::install_flow_rule_locked(int port,
 
     void* m4_mask = DEVX_ADDR_OF(fte_match_param, mask_buf, misc_parameters_4);
     void* m4_value = DEVX_ADDR_OF(fte_match_param, value_buf, misc_parameters_4);
-    DEVX_SET(fte_match_set_misc4, m4_mask, prog_sample_field_id_0,
-             node_it->second.sample_field_id);
+    DEVX_SET(fte_match_set_misc4, m4_mask, prog_sample_field_id_0, node_it->second.sample_field_id);
     DEVX_SET(fte_match_set_misc4, m4_value, prog_sample_field_id_0,
              node_it->second.sample_field_id);
-    DEVX_SET(fte_match_set_misc4, m4_mask, prog_sample_field_value_0,
-             mt.flex_item_match_.mask_);
+    DEVX_SET(fte_match_set_misc4, m4_mask, prog_sample_field_value_0, mt.flex_item_match_.mask_);
     DEVX_SET(fte_match_set_misc4, m4_value, prog_sample_field_value_0,
              mt.flex_item_match_.val_ & mt.flex_item_match_.mask_);
 
@@ -2071,9 +2126,10 @@ Status IbverbsEngine::install_port_flows() {
     }
 
     if (installed == 0 && intf.rx_.flow_isolation_) {
-      DAQIRI_LOG_INFO("No static RX flows on isolated ibverbs port {}; dynamic flows may be added "
-                      "after initialization",
-                      port);
+      DAQIRI_LOG_INFO(
+          "No static RX flows on isolated ibverbs port {}; dynamic flows may be added "
+          "after initialization",
+          port);
     } else if (installed == 0) {
       // No per-flow rules: catch-all (criteria_enable = 0) -> first queue.
       DrMatchBuf mask{}, val{};
@@ -2113,14 +2169,12 @@ Status IbverbsEngine::install_tx_flows() {
     TxPortSteering& st = tx_port_steering_[port];
     st.domain = mlx5dv_dr_domain_create(ctx, MLX5DV_DR_DOMAIN_TYPE_NIC_TX);
     if (st.domain == nullptr) {
-      DAQIRI_LOG_CRITICAL("TX mlx5dv_dr_domain_create failed (port {}): {}", port,
-                          strerror(errno));
+      DAQIRI_LOG_CRITICAL("TX mlx5dv_dr_domain_create failed (port {}): {}", port, strerror(errno));
       return Status::GENERIC_FAILURE;
     }
     st.table = mlx5dv_dr_table_create(st.domain, 0);
     if (st.table == nullptr) {
-      DAQIRI_LOG_CRITICAL("TX mlx5dv_dr_table_create failed (port {}): {}", port,
-                          strerror(errno));
+      DAQIRI_LOG_CRITICAL("TX mlx5dv_dr_table_create failed (port {}): {}", port, strerror(errno));
       return Status::GENERIC_FAILURE;
     }
 
@@ -2170,18 +2224,19 @@ Status IbverbsEngine::install_tx_flows() {
         any = true;
       }
       if (fl.match_.ipv4_len_ > 0) {
-        DAQIRI_LOG_ERROR("TX flow '{}' uses ipv4_len, which is not supported by ibverbs TX "
-                         "steering",
-                         fl.name_);
+        DAQIRI_LOG_ERROR(
+            "TX flow '{}' uses ipv4_len, which is not supported by ibverbs TX "
+            "steering",
+            fl.name_);
         return Status::GENERIC_FAILURE;
       }
 
-      struct mlx5dv_dr_matcher* matcher = mlx5dv_dr_matcher_create(
-          st.table, prio++, any ? crit : 0,
-          reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&mask));
+      struct mlx5dv_dr_matcher* matcher =
+          mlx5dv_dr_matcher_create(st.table, prio++, any ? crit : 0,
+                                   reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&mask));
       if (matcher == nullptr) {
-        DAQIRI_LOG_CRITICAL("TX dr_matcher_create failed (port {} flow '{}'): {}", port,
-                            fl.name_, strerror(errno));
+        DAQIRI_LOG_CRITICAL("TX dr_matcher_create failed (port {} flow '{}'): {}", port, fl.name_,
+                            strerror(errno));
         return Status::GENERIC_FAILURE;
       }
       st.matchers.push_back(matcher);
@@ -2382,7 +2437,9 @@ Status IbverbsEngine::setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf,
                                      const RxQueueConfig& qcfg) {
   q.port_id = intf.port_id_;
   q.queue_id = qcfg.common_.id_;
-  q.batch_size = std::max(1, qcfg.common_.batch_size_);
+  q.poll_mode = qcfg.poll_mode_;
+  q.batch_size = q.poll_mode == QueuePollMode::DIRECT ? static_cast<int>(kDirectPollMaxBatch)
+                                                      : std::max(1, qcfg.common_.batch_size_);
   q.timeout_us = qcfg.timeout_us_;
   if (!qcfg.common_.cpu_core_.empty()) {
     q.cpu_core = std::stoi(qcfg.common_.cpu_core_);
@@ -2434,14 +2491,17 @@ Status IbverbsEngine::setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf,
     return s;
   }
 
-  // App-facing burst ring.
-  const std::string ring_name =
-      "ibv_rx_" + std::to_string(q.port_id) + "_" + std::to_string(q.queue_id);
-  q.ring = daqiri::Ring::create(ring_name.c_str(), 2048, daqiri::RingMode::MPMC,
-                                daqiri::detail::numa_node_for_cpu(cfg_.common_.master_core_));
-  if (q.ring == nullptr) {
-    DAQIRI_LOG_CRITICAL("Failed to create RX ring {}", ring_name);
-    return Status::GENERIC_FAILURE;
+  if (q.poll_mode == QueuePollMode::INDIRECT) {
+    // App-facing burst ring for the background worker handoff. Direct queues
+    // return the completed metadata block from get_rx_burst without a ring.
+    const std::string ring_name =
+        "ibv_rx_" + std::to_string(q.port_id) + "_" + std::to_string(q.queue_id);
+    q.ring = daqiri::Ring::create(ring_name.c_str(), 2048, daqiri::RingMode::MPMC,
+                                  daqiri::detail::numa_node_for_cpu(cfg_.common_.master_core_));
+    if (q.ring == nullptr) {
+      DAQIRI_LOG_CRITICAL("Failed to create RX ring {}", ring_name);
+      return Status::GENERIC_FAILURE;
+    }
   }
 
   if (Status s = init_reorder(q, intf, qcfg); s != Status::SUCCESS) {
@@ -2473,7 +2533,10 @@ void IbverbsEngine::initialize() {
   // Determine the largest batch (RX + TX) and build the burst metadata pools.
   for (const auto& intf : cfg_.ifs_) {
     for (const auto& q : intf.rx_.queues_) {
-      max_batch_ = std::max<uint32_t>(max_batch_, std::max(1, q.common_.batch_size_));
+      const uint32_t batch = q.poll_mode_ == QueuePollMode::DIRECT
+                                 ? kDirectPollMaxBatch
+                                 : static_cast<uint32_t>(std::max(1, q.common_.batch_size_));
+      max_batch_ = std::max(max_batch_, batch);
     }
     for (const auto& q : intf.tx_.queues_) {
       max_batch_ = std::max<uint32_t>(max_batch_, std::max(1, q.common_.batch_size_));
@@ -2592,6 +2655,11 @@ void IbverbsEngine::run() {
   std::map<int, std::vector<IbvRxQueue*>> rx_groups;
   std::vector<std::vector<IbvRxQueue*>> rx_threads;
   for (auto& q : rx_queues_) {
+    if (q->poll_mode == QueuePollMode::DIRECT) {
+      DAQIRI_LOG_INFO("RX queue port {} q{} uses caller-driven direct polling", q->port_id,
+                      q->queue_id);
+      continue;
+    }
     q->running = true;
     if (q->cpu_core >= 0) {
       rx_groups[q->cpu_core].push_back(q.get());
@@ -2610,6 +2678,11 @@ void IbverbsEngine::run() {
   std::map<int, std::vector<IbvTxQueue*>> tx_groups;
   std::vector<std::vector<IbvTxQueue*>> tx_threads;
   for (auto& q : tx_queues_) {
+    if (q->poll_mode == QueuePollMode::DIRECT) {
+      DAQIRI_LOG_INFO("TX queue port {} q{} uses caller-driven direct posting", q->port_id,
+                      q->queue_id);
+      continue;
+    }
     q->running = true;
     if (q->cpu_core >= 0) {
       tx_groups[q->cpu_core].push_back(q.get());
@@ -2639,6 +2712,7 @@ bool IbverbsEngine::rx_alloc_burst(IbvRxQueue* q) {
   b->hdr.hdr.q_id = q->queue_id;
   b->hdr.hdr.num_pkts = 0;
   b->hdr.hdr.num_segs = q->num_segs;
+  b->hdr.hdr.burst_flags = 0;
   b->pkts[0] = reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(b) + g_layout.off_pkts0);
   b->pkt_lens[0] = reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(b) + g_layout.off_lens0);
   b->pkts[1] = reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(b) + g_layout.off_pkts1);
@@ -2671,7 +2745,14 @@ void IbverbsEngine::rx_flush_burst(IbvRxQueue* q) {
 // the queue's in-progress burst, then yields so a shared poller can round-robin
 // the next queue. All cursors/accumulators live in the queue, so the partial
 // burst persists across passes.
-void IbverbsEngine::rx_poll_queue(IbvRxQueue* q) {
+Status IbverbsEngine::rx_poll_queue(IbvRxQueue* q, BurstParams** direct_burst) {
+  const bool direct = direct_burst != nullptr;
+  if (direct) {
+    *direct_burst = nullptr;
+    // Application frees only record released strides. With no background
+    // worker, the next caller-driven poll is responsible for reposting them.
+    devx_advance_producer(*q);
+  }
   const uint32_t cqe_cnt = q->dv_cq.cqe_cnt;
   const uint32_t cqe_size = q->dv_cq.cqe_size;
   uint8_t* cq_buf = static_cast<uint8_t*>(q->dv_cq.buf);
@@ -2679,17 +2760,29 @@ void IbverbsEngine::rx_poll_queue(IbvRxQueue* q) {
   const uint64_t timeout_cycles = q->timeout_us ? (ibv_timer_hz * q->timeout_us) / 1'000'000ULL : 0;
 
   if (q->cur_burst == nullptr && !rx_alloc_burst(q)) {
-    DAQIRI_LOG_ERROR("RX worker q{}: metadata pool exhausted (increase rx_meta_buffers)",
+    DAQIRI_LOG_ERROR("RX poller q{}: metadata pool exhausted (increase rx_meta_buffers)",
                      q->queue_id);
-    return;
+    return Status::NO_FREE_BURST_BUFFERS;
   }
+  auto finish_direct_burst = [&]() {
+    if (!direct || q->cur_burst == nullptr || q->cur_n == 0) {
+      return;
+    }
+    q->cur_burst->hdr.hdr.num_pkts = q->cur_n;
+    *direct_burst = q->cur_burst;
+    q->cur_burst = nullptr;
+    q->cur_n = 0;
+  };
   uint16_t* wqe_arr = burst_wqe_arr(q->cur_burst);
   uint16_t* strd_arr = burst_strd_arr(q->cur_burst);
 
-  const int budget = q->batch_size > 0 ? q->batch_size : 256;
+  const int packet_budget = q->batch_size > 0 ? q->batch_size : 256;
+  // Direct mode promises a packet limit, so filler and error CQEs must not
+  // consume that limit. Still bound one call to at most one complete CQ scan.
+  const uint32_t cqe_budget = direct ? cqe_cnt : static_cast<uint32_t>(packet_budget);
   const uint32_t start_ci = q->cq_ci;
-  int processed = 0;
-  while (processed < budget) {
+  uint32_t processed = 0;
+  while (processed < cqe_budget && (!direct || q->cur_n < packet_budget)) {
     uint8_t* cqe = cq_buf + (q->cq_ci & (cqe_cnt - 1)) * cqe_size;
     // For 128B CQEs the 64B CQE is in the second half.
     struct mlx5_cqe64* cqe64 =
@@ -2705,10 +2798,11 @@ void IbverbsEngine::rx_poll_queue(IbvRxQueue* q) {
       // CQ drained. Reclaim freed regions and maybe flush a partial burst on
       // timeout, then yield to the next queue.
       devx_advance_producer(*q);
-      if (timeout_cycles && q->cur_n > 0 && (ibv_now_ns() - q->last_flush_tsc) > timeout_cycles) {
+      if (!direct && timeout_cycles && q->cur_n > 0 &&
+          (ibv_now_ns() - q->last_flush_tsc) > timeout_cycles) {
         rx_flush_burst(q);
         if (!rx_alloc_burst(q)) {
-          return;
+          return Status::NO_FREE_BURST_BUFFERS;
         }
         wqe_arr = burst_wqe_arr(q->cur_burst);
         strd_arr = burst_strd_arr(q->cur_burst);
@@ -2809,19 +2903,24 @@ void IbverbsEngine::rx_poll_queue(IbvRxQueue* q) {
     // delivers it in sop_drop_qpn (24-bit). 0 = untagged.
     burst_flowtag_arr(q->cur_burst)[n] = be32toh(cqe64->sop_drop_qpn) & 0x00ffffffu;
     q->cur_n++;
-    if (q->cur_n == 1) {
+    if (!direct && q->cur_n == 1) {
       q->last_flush_tsc = ibv_now_ns();
     }
 
     if (q->cur_n >= q->batch_size) {
-      rx_flush_burst(q);
-      if (!rx_alloc_burst(q)) {
-        DAQIRI_LOG_ERROR("RX worker q{}: metadata pool exhausted (increase rx_meta_buffers)",
-                         q->queue_id);
-        return;
+      if (direct) {
+        finish_direct_burst();
+        break;
+      } else {
+        rx_flush_burst(q);
+        if (!rx_alloc_burst(q)) {
+          DAQIRI_LOG_ERROR("RX poller q{}: metadata pool exhausted (increase rx_meta_buffers)",
+                           q->queue_id);
+          return Status::NO_FREE_BURST_BUFFERS;
+        }
+        wqe_arr = burst_wqe_arr(q->cur_burst);
+        strd_arr = burst_strd_arr(q->cur_burst);
       }
-      wqe_arr = burst_wqe_arr(q->cur_burst);
-      strd_arr = burst_strd_arr(q->cur_burst);
     }
 
     // Periodically advance the CQ doorbell so the HW can recycle CQEs, and
@@ -2836,6 +2935,11 @@ void IbverbsEngine::rx_poll_queue(IbvRxQueue* q) {
   if (q->cq_ci != start_ci) {
     *q->dv_cq.dbrec = htobe32(q->cq_ci & 0xffffff);
   }
+  if (direct && *direct_burst == nullptr) {
+    finish_direct_burst();
+  }
+  return direct ? (*direct_burst != nullptr ? Status::SUCCESS : Status::NOT_READY)
+                : Status::SUCCESS;
 }
 
 void IbverbsEngine::rx_worker(std::vector<IbvRxQueue*> group) {
@@ -2857,7 +2961,7 @@ void IbverbsEngine::rx_worker(std::vector<IbvRxQueue*> group) {
   while (leader->running.load(std::memory_order_relaxed) &&
          !force_quit_.load(std::memory_order_relaxed)) {
     for (auto* q : group) {
-      rx_poll_queue(q);
+      (void)rx_poll_queue(q);
     }
   }
 
@@ -2877,8 +2981,8 @@ void IbverbsEngine::rx_worker(std::vector<IbvRxQueue*> group) {
 
 void IbverbsEngine::release_strides(IbvRxQueue& q, uint32_t wqe_idx, uint32_t strd) {
   // Both the striding and the regular RQ are DevX: record the freed strides
-  // (regular RQ = 1 per packet); the worker thread drains and reposts WQEs in
-  // cyclic order (devx_advance_producer). Safe from the app and worker threads.
+  // (regular RQ = 1 per packet); the queue's poller drains and reposts WQEs in
+  // cyclic order (devx_advance_producer). Safe from the app and poller threads.
   q.freed_strides[wqe_idx].fetch_add(strd, std::memory_order_release);
 }
 
@@ -3261,9 +3365,27 @@ Status IbverbsEngine::get_reorder_burst_info(BurstParams* burst, ReorderBurstInf
 }
 
 Status IbverbsEngine::get_rx_burst(BurstParams** burst, int port, int q) {
+  if (burst == nullptr) {
+    return Status::NULL_PTR;
+  }
+  *burst = nullptr;
   IbvRxQueue* rq = find_rx_queue(port, q);
   if (rq == nullptr) {
     return Status::INVALID_PARAMETER;
+  }
+  if (rq->poll_mode == QueuePollMode::DIRECT) {
+    std::unique_lock<std::mutex> guard(rq->direct_poll_mutex, std::try_to_lock);
+    if (!guard.owns_lock()) {
+      const uint64_t conflicts = rq->direct_poll_conflicts.fetch_add(1) + 1;
+      if ((conflicts & (conflicts - 1)) == 0) {
+        DAQIRI_LOG_WARN(
+            "Concurrent direct RX poll on port {} queue {} rejected ({} conflict(s)); use one "
+            "polling thread per direct queue",
+            port, q, conflicts);
+      }
+      return Status::NOT_READY;
+    }
+    return rx_poll_queue(rq, burst);
   }
   if (rq->reorder && rq->reorder->enabled) {
     return reorder_get_rx(*rq, burst);
@@ -3308,6 +3430,18 @@ void IbverbsEngine::free_all_packets(BurstParams* burst) {
     // burst, so these are the most-recent (unposted) cyclic slots.
     IbvTxQueue* tq = find_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
     if (tq == nullptr) {
+      return;
+    }
+    if (tq->poll_mode == QueuePollMode::DIRECT) {
+      std::lock_guard<std::mutex> guard(tq->direct_mutex);
+      if (tq->direct_pending == burst) {
+        tq->alloc_head--;
+        tq->direct_pending = nullptr;
+      } else {
+        DAQIRI_LOG_WARN(
+            "Ignoring cancellation of a non-pending direct TX burst on port {} queue {}",
+            tq->port_id, tq->queue_id);
+      }
       return;
     }
     tq->alloc_head -= static_cast<uint64_t>(burst->hdr.hdr.num_pkts);
@@ -3599,14 +3733,17 @@ Status IbverbsEngine::get_mac_addr(int port, char* mac) {
   return Status::SUCCESS;
 }
 
-Status IbverbsEngine::create_dynamic_flow_locked(int port,
-                                                 const FlowRuleConfig& flow,
+Status IbverbsEngine::create_dynamic_flow_locked(int port, const FlowRuleConfig& flow,
                                                  FlowId flow_id) {
   const InterfaceConfig* intf = find_interface_config(port);
-  if (intf == nullptr) { return Status::INVALID_PARAMETER; }
+  if (intf == nullptr) {
+    return Status::INVALID_PARAMETER;
+  }
 
   auto steering_it = port_steering_.find(port);
-  if (steering_it == port_steering_.end()) { return Status::NOT_READY; }
+  if (steering_it == port_steering_.end()) {
+    return Status::NOT_READY;
+  }
 
   PortSteering& steering = steering_it->second;
   DynamicFlowEntry entry;
@@ -3614,7 +3751,9 @@ Status IbverbsEngine::create_dynamic_flow_locked(int port,
   const int priority = steering.next_dynamic_priority++;
   const Status status =
       install_flow_rule_locked(port, steering, *intf, flow, flow_id, priority, &entry);
-  if (status != Status::SUCCESS) { return status; }
+  if (status != Status::SUCCESS) {
+    return status;
+  }
 
   dynamic_flows_[flow_id] = entry;
   return Status::SUCCESS;
@@ -3630,7 +3769,9 @@ void IbverbsEngine::destroy_dynamic_flow_entry_locked(DynamicFlowEntry& entry) {
     entry.tag_action = nullptr;
   }
   for (auto* reformat : entry.reformat_actions) {
-    if (reformat != nullptr) { mlx5dv_dr_action_destroy(reformat); }
+    if (reformat != nullptr) {
+      mlx5dv_dr_action_destroy(reformat);
+    }
   }
   entry.reformat_actions.clear();
   entry.reformat_buffers.clear();
@@ -3641,9 +3782,13 @@ void IbverbsEngine::destroy_dynamic_flow_entry_locked(DynamicFlowEntry& entry) {
 }
 
 void IbverbsEngine::cleanup_dynamic_flows_locked() {
-  for (auto& [flow_id, entry] : dynamic_flows_) { destroy_dynamic_flow_entry_locked(entry); }
+  for (auto& [flow_id, entry] : dynamic_flows_) {
+    destroy_dynamic_flow_entry_locked(entry);
+  }
   dynamic_flows_.clear();
-  while (!ready_flow_ops_.empty()) { ready_flow_ops_.pop(); }
+  while (!ready_flow_ops_.empty()) {
+    ready_flow_ops_.pop();
+  }
 }
 
 void IbverbsEngine::enqueue_flow_completion_locked(const FlowOpResult& result) {
@@ -3651,14 +3796,20 @@ void IbverbsEngine::enqueue_flow_completion_locked(const FlowOpResult& result) {
 }
 
 Status IbverbsEngine::add_rx_flow_async(int port, const FlowRuleConfig& flow, FlowOpId* op_id) {
-  if (op_id == nullptr) { return Status::NULL_PTR; }
+  if (op_id == nullptr) {
+    return Status::NULL_PTR;
+  }
   *op_id = 0;
 
   std::lock_guard<std::mutex> guard(flow_lock_);
-  if (!validate_dynamic_rx_flow_locked(port, flow)) { return Status::INVALID_PARAMETER; }
+  if (!validate_dynamic_rx_flow_locked(port, flow)) {
+    return Status::INVALID_PARAMETER;
+  }
 
   const FlowId flow_id = allocate_dynamic_flow_id_locked();
-  if (flow_id == 0) { return Status::NO_SPACE_AVAILABLE; }
+  if (flow_id == 0) {
+    return Status::NO_SPACE_AVAILABLE;
+  }
 
   const FlowOpId new_op_id = allocate_flow_op_id_locked();
   *op_id = new_op_id;
@@ -3678,18 +3829,25 @@ Status IbverbsEngine::add_rx_flow_async(int port, const FlowRuleConfig& flow, Fl
   return Status::SUCCESS;
 }
 
-Status IbverbsEngine::add_rx_flows_async(int port,
-                                         const std::vector<FlowRuleConfig>& flows,
+Status IbverbsEngine::add_rx_flows_async(int port, const std::vector<FlowRuleConfig>& flows,
                                          FlowOpId* op_id) {
-  if (op_id == nullptr) { return Status::NULL_PTR; }
+  if (op_id == nullptr) {
+    return Status::NULL_PTR;
+  }
   *op_id = 0;
-  if (flows.empty()) { return Status::INVALID_PARAMETER; }
+  if (flows.empty()) {
+    return Status::INVALID_PARAMETER;
+  }
 
   std::lock_guard<std::mutex> guard(flow_lock_);
   for (const auto& flow : flows) {
-    if (!validate_dynamic_rx_flow_locked(port, flow)) { return Status::INVALID_PARAMETER; }
+    if (!validate_dynamic_rx_flow_locked(port, flow)) {
+      return Status::INVALID_PARAMETER;
+    }
   }
-  if (!has_dynamic_flow_id_capacity_locked(flows.size())) { return Status::NO_SPACE_AVAILABLE; }
+  if (!has_dynamic_flow_id_capacity_locked(flows.size())) {
+    return Status::NO_SPACE_AVAILABLE;
+  }
 
   std::vector<FlowId> flow_ids;
   flow_ids.reserve(flows.size());
@@ -3727,11 +3885,15 @@ Status IbverbsEngine::add_rx_flows_async(int port,
 }
 
 Status IbverbsEngine::delete_flow_async(FlowId flow_id, FlowOpId* op_id) {
-  if (op_id == nullptr) { return Status::NULL_PTR; }
+  if (op_id == nullptr) {
+    return Status::NULL_PTR;
+  }
   *op_id = 0;
 
   std::lock_guard<std::mutex> guard(flow_lock_);
-  if (!initialized_) { return Status::NOT_READY; }
+  if (!initialized_) {
+    return Status::NOT_READY;
+  }
   if (flow_id == 0 || static_flow_ids_.find(flow_id) != static_flow_ids_.end()) {
     return Status::INVALID_PARAMETER;
   }
@@ -3759,10 +3921,14 @@ Status IbverbsEngine::delete_flow_async(FlowId flow_id, FlowOpId* op_id) {
 }
 
 Status IbverbsEngine::poll_flow_op(FlowOpResult* result) {
-  if (result == nullptr) { return Status::NULL_PTR; }
+  if (result == nullptr) {
+    return Status::NULL_PTR;
+  }
 
   std::lock_guard<std::mutex> guard(flow_lock_);
-  if (ready_flow_ops_.empty()) { return Status::NOT_READY; }
+  if (ready_flow_ops_.empty()) {
+    return Status::NOT_READY;
+  }
   *result = ready_flow_ops_.front();
   ready_flow_ops_.pop();
   return Status::SUCCESS;
@@ -3775,17 +3941,21 @@ bool IbverbsEngine::validate_config() const {
 void IbverbsEngine::print_stats() {
   for (auto& q : rx_queues_) {
     DAQIRI_LOG_INFO(
-        "ibverbs RX port {} q{}: packets={} fillers={} cqe_errors={} reposts={} "
-        "app_ring_full_drops={} bursts ({} pkts)",
-        q->port_id, q->queue_id, q->dbg_data, q->dbg_filler, q->dbg_err, q->reposts.load(),
-        q->ring_full_bursts, q->ring_full_pkts);
+        "ibverbs RX port {} q{} ({}): packets={} fillers={} cqe_errors={} reposts={} "
+        "app_ring_full_drops={} bursts ({} pkts) direct_poll_conflicts={}",
+        q->port_id, q->queue_id, queue_poll_mode_to_string(q->poll_mode), q->dbg_data,
+        q->dbg_filler, q->dbg_err, q->reposts.load(), q->ring_full_bursts, q->ring_full_pkts,
+        q->direct_poll_conflicts.load());
   }
   for (auto& q : tx_queues_) {
     const uint64_t completed = q->completed_tail.load(std::memory_order_relaxed);
     const uint64_t inflight = q->slots_posted - completed;
     DAQIRI_LOG_INFO(
-        "ibverbs TX port {} q{}: transmitted={} inflight={} handoff_full_drops={} bursts ({} pkts)",
-        q->port_id, q->queue_id, completed, inflight, q->handoff_drop_bursts, q->handoff_drop_pkts);
+        "ibverbs TX port {} q{} ({}): posted={} completed={} inflight={} "
+        "handoff_full_drops={} bursts ({} pkts) direct_no_space={} direct_conflicts={}",
+        q->port_id, q->queue_id, queue_poll_mode_to_string(q->poll_mode), q->slots_posted,
+        completed, inflight, q->handoff_drop_bursts, q->handoff_drop_pkts, q->direct_no_space,
+        q->direct_conflicts.load());
   }
 }
 
@@ -3882,6 +4052,16 @@ void IbverbsEngine::shutdown() {
   tx_port_steering_.clear();
 
   for (auto& q : rx_queues_) {
+    if (q->poll_mode == QueuePollMode::DIRECT && q->cur_burst != nullptr) {
+      uint16_t* wqe_arr = burst_wqe_arr(q->cur_burst);
+      uint16_t* strd_arr = burst_strd_arr(q->cur_burst);
+      for (int i = 0; i < q->cur_n; ++i) {
+        release_strides(*q, wqe_arr[i], strd_arr[i]);
+      }
+      rx_meta_pool_->put(q->cur_burst);
+      q->cur_burst = nullptr;
+      q->cur_n = 0;
+    }
     reorder_cleanup(*q);
     devx_destroy(*q);
     if (q->qp) {
@@ -3902,6 +4082,14 @@ void IbverbsEngine::shutdown() {
   }
   rx_queues_.clear();
   for (auto& q : tx_queues_) {
+    if (q->poll_mode == QueuePollMode::DIRECT && q->direct_pending != nullptr) {
+      DAQIRI_LOG_WARN(
+          "Direct TX port {} queue {} shut down with one unsubmitted packet; reclaiming it",
+          q->port_id, q->queue_id);
+      q->alloc_head--;
+      tx_meta_pool_->put(q->direct_pending);
+      q->direct_pending = nullptr;
+    }
     if (q->qp) {
       ibv_destroy_qp(q->qp);
     }
@@ -4132,7 +4320,8 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
                                      const TxQueueConfig& qcfg) {
   q.port_id = intf.port_id_;
   q.queue_id = qcfg.common_.id_;
-  q.batch_size = std::max(1, qcfg.common_.batch_size_);
+  q.poll_mode = qcfg.poll_mode_;
+  q.batch_size = q.poll_mode == QueuePollMode::DIRECT ? 1 : std::max(1, qcfg.common_.batch_size_);
   if (!qcfg.common_.cpu_core_.empty()) {
     q.cpu_core = std::stoi(qcfg.common_.cpu_core_);
   }
@@ -4164,8 +4353,9 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
 
   struct mlx5dv_context dv_ctx {};
   const uint64_t empw_flags = MLX5DV_CONTEXT_FLAGS_MPW_ALLOWED | MLX5DV_CONTEXT_FLAGS_ENHANCED_MPW;
-  q.empw_enabled =
-      mlx5dv_query_device(q.ctx, &dv_ctx) == 0 && (dv_ctx.flags & empw_flags) == empw_flags;
+  q.empw_enabled = q.poll_mode == QueuePollMode::INDIRECT &&
+                   mlx5dv_query_device(q.ctx, &dv_ctx) == 0 &&
+                   (dv_ctx.flags & empw_flags) == empw_flags;
 
   // Register every MR as a TX scatter region; num_slots is the smallest region's
   // buffer count (a packet consumes slot i from every region).
@@ -4197,18 +4387,22 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
     return s;
   }
 
-  // Hand-off ring: the app fill thread enqueues filled bursts; the pinned TX
-  // worker dequeues and does the WQE build + doorbell + completion reclaim.
-  const std::string send_name =
-      "ibv_txsend_" + std::to_string(q.port_id) + "_" + std::to_string(q.queue_id);
-  q.send_ring = daqiri::Ring::create(send_name.c_str(), 4096, daqiri::RingMode::SPSC,
-                                     daqiri::detail::numa_node_for_cpu(cfg_.common_.master_core_));
-  if (q.send_ring == nullptr) {
-    DAQIRI_LOG_CRITICAL("Failed to create TX send ring {}", send_name);
-    return Status::GENERIC_FAILURE;
+  if (q.poll_mode == QueuePollMode::INDIRECT) {
+    // Hand-off ring: the app fill thread enqueues filled bursts; the pinned TX
+    // worker dequeues and does the WQE build + doorbell + completion reclaim.
+    const std::string send_name =
+        "ibv_txsend_" + std::to_string(q.port_id) + "_" + std::to_string(q.queue_id);
+    q.send_ring =
+        daqiri::Ring::create(send_name.c_str(), 4096, daqiri::RingMode::SPSC,
+                             daqiri::detail::numa_node_for_cpu(cfg_.common_.master_core_));
+    if (q.send_ring == nullptr) {
+      DAQIRI_LOG_CRITICAL("Failed to create TX send ring {}", send_name);
+      return Status::GENERIC_FAILURE;
+    }
   }
-  DAQIRI_LOG_INFO("TX queue {} ready: {} slots of {}B, qp {} (mr {})", q.queue_id, q.num_slots,
-                  q.slot_size, (void*)q.qp, q.mr_name);
+  DAQIRI_LOG_INFO("TX queue {} ready in {} mode: {} slots of {}B, qp {} (mr {})", q.queue_id,
+                  queue_poll_mode_to_string(q.poll_mode), q.num_slots, q.slot_size, (void*)q.qp,
+                  q.mr_name);
   return Status::SUCCESS;
 }
 
@@ -4250,6 +4444,37 @@ void IbverbsEngine::poll_tx_completions(IbvTxQueue& q) {
     doorbell_store_barrier();
     *q.dv_txcq.dbrec = htobe32(q.tx_cq_ci & 0xffffff);
   }
+}
+
+bool IbverbsEngine::lock_direct_tx_queue(IbvTxQueue& q, std::unique_lock<std::mutex>& guard) {
+  if (!guard.try_lock()) {
+    const uint64_t conflicts = q.direct_conflicts.fetch_add(1) + 1;
+    if ((conflicts & (conflicts - 1)) == 0) {
+      DAQIRI_LOG_WARN(
+          "Concurrent direct TX access on port {} queue {} rejected ({} conflict(s)); use one "
+          "thread per direct queue",
+          q.port_id, q.queue_id, conflicts);
+    }
+    return false;
+  }
+
+  const std::thread::id caller = std::this_thread::get_id();
+  if (!q.direct_owner_set) {
+    q.direct_owner = caller;
+    q.direct_owner_set = true;
+    return true;
+  }
+  if (q.direct_owner != caller) {
+    const uint64_t conflicts = q.direct_conflicts.fetch_add(1) + 1;
+    if ((conflicts & (conflicts - 1)) == 0) {
+      DAQIRI_LOG_WARN(
+          "Direct TX port {} queue {} called from a non-owner thread ({} conflict(s)); the first "
+          "caller owns this queue",
+          q.port_id, q.queue_id, conflicts);
+    }
+    return false;
+  }
+  return true;
 }
 
 uint64_t IbverbsEngine::tx_burst_wqebbs(const IbvTxQueue& q, const BurstParams* burst) const {
@@ -4362,24 +4587,63 @@ Status IbverbsEngine::get_tx_metadata_buffer(BurstParams** burst) {
 }
 
 bool IbverbsEngine::is_tx_burst_available(BurstParams* burst) {
+  if (burst == nullptr) {
+    return false;
+  }
   IbvTxQueue* q = find_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
   if (q == nullptr) {
     return false;
+  }
+  if (q->poll_mode == QueuePollMode::DIRECT) {
+    if (burst->hdr.hdr.num_pkts != 1) {
+      return false;
+    }
+    std::unique_lock<std::mutex> guard(q->direct_mutex, std::defer_lock);
+    if (!lock_direct_tx_queue(*q, guard) || q->direct_pending != nullptr) {
+      return false;
+    }
+    poll_tx_completions(*q);
+    const uint64_t in_flight = q->alloc_head - q->completed_tail.load(std::memory_order_acquire);
+    return in_flight < q->num_slots && tx_sq_has_space(*q, 2);
   }
   const uint64_t in_flight = q->alloc_head - q->completed_tail.load(std::memory_order_acquire);
   return (q->num_slots - in_flight) >= static_cast<uint64_t>(burst->hdr.hdr.num_pkts);
 }
 
 Status IbverbsEngine::get_tx_packet_burst(BurstParams* burst) {
+  if (burst == nullptr) {
+    return Status::NULL_PTR;
+  }
   IbvTxQueue* q = find_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
   if (q == nullptr) {
     return Status::INVALID_PARAMETER;
   }
   const unsigned n = static_cast<unsigned>(burst->hdr.hdr.num_pkts);
+  std::unique_lock<std::mutex> direct_guard;
+  if (q->poll_mode == QueuePollMode::DIRECT) {
+    if (n != 1) {
+      DAQIRI_LOG_WARN("Direct TX port {} queue {} requires exactly one packet; requested {}",
+                      q->port_id, q->queue_id, n);
+      return Status::INVALID_PARAMETER;
+    }
+    direct_guard = std::unique_lock<std::mutex>(q->direct_mutex, std::defer_lock);
+    if (!lock_direct_tx_queue(*q, direct_guard)) {
+      return Status::NOT_READY;
+    }
+    if (q->direct_pending != nullptr) {
+      return Status::NOT_READY;
+    }
+    poll_tx_completions(*q);
+    const uint64_t in_flight = q->alloc_head - q->completed_tail.load(std::memory_order_acquire);
+    if (in_flight >= q->num_slots || !tx_sq_has_space(*q, 2)) {
+      return Status::NO_FREE_PACKET_BUFFERS;
+    }
+  }
   burst->hdr.hdr.num_segs = q->num_segs;
   // Hand out the next n cyclic slots if they fit under num_slots in flight. No
   // ring ops: each slot pointer is computed from the monotonic alloc_head, and
-  // the TX worker frees them by advancing completed_tail as completions arrive.
+  // the TX worker or direct caller frees it by advancing completed_tail as
+  // completions arrive.
   const uint64_t in_flight = q->alloc_head - q->completed_tail.load(std::memory_order_acquire);
   if (q->num_slots - in_flight < n) {
     return Status::NO_FREE_PACKET_BUFFERS;
@@ -4394,7 +4658,20 @@ Status IbverbsEngine::get_tx_packet_burst(BurstParams* burst) {
     }
   }
   q->alloc_head += n;
+  if (q->poll_mode == QueuePollMode::DIRECT) {
+    q->direct_pending = burst;
+  }
   return Status::SUCCESS;
+}
+
+Status IbverbsEngine::get_tx_packet_burst_checked(BurstParams* burst) {
+  if (burst != nullptr) {
+    IbvTxQueue* q = find_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
+    if (q != nullptr && q->poll_mode == QueuePollMode::DIRECT) {
+      return get_tx_packet_burst(burst);
+    }
+  }
+  return Engine::get_tx_packet_burst_checked(burst);
 }
 
 Status IbverbsEngine::set_packet_lengths(BurstParams* burst, int idx,
@@ -4575,13 +4852,15 @@ void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst) {
   q.bf_offset ^= q.dv_qp.bf.size;
 }
 
-// Runs on the pinned TX worker thread: builds the burst's send WQEs directly
-// into the SQ ring and rings the BlueFlame doorbell once for the whole burst,
+// Builds the burst's send WQEs directly into the SQ ring and rings the BlueFlame
+// doorbell once for the whole burst. This runs on the pinned worker for indirect
+// queues and synchronously on the application thread for direct queues,
 // bypassing ibv_post_send. Each WQE is ctrl(16) + minimal eth(16) + data
 // segs(16 each); with <=2 segments it is exactly one 64B WQEBB, so the SQ
 // producer (and the CQE wqe_counter) advances by one per packet. Signals every
 // SIGNAL_EVERY-th WQE (and the last) for completion-driven slot reclaim.
-// Does NOT free the metadata block (the caller in tx_worker does).
+// Does NOT free the metadata block; the worker or direct caller does that after
+// this function returns.
 void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
   const int n = static_cast<int>(burst->hdr.hdr.num_pkts);
   const int segs = burst->hdr.hdr.num_segs;
@@ -4651,14 +4930,40 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
   q.bf_offset ^= q.dv_qp.bf.size;
 }
 
-// App fill thread: hand the filled burst to the pinned TX worker, which does
-// the DevX WQE build + doorbell + completion reclaim on its own core. This
-// overlaps the next fill batch with the post of the previous one and beat the
-// single-thread inline model in measurement.
+// Submit a filled TX burst. Indirect queues hand it to the pinned worker so WQE
+// posting overlaps application fill; direct queues post one packet inline on
+// the owner thread and return only after ringing the doorbell.
 Status IbverbsEngine::send_tx_burst(BurstParams* burst) {
+  if (burst == nullptr) {
+    return Status::NULL_PTR;
+  }
   IbvTxQueue* q = find_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
   if (q == nullptr) {
     return Status::INVALID_PARAMETER;
+  }
+  if (q->poll_mode == QueuePollMode::DIRECT) {
+    std::unique_lock<std::mutex> guard(q->direct_mutex, std::defer_lock);
+    if (!lock_direct_tx_queue(*q, guard)) {
+      return Status::NOT_READY;
+    }
+    if (burst->hdr.hdr.num_pkts != 1 || q->direct_pending != burst) {
+      DAQIRI_LOG_WARN("Direct TX port {} queue {} requires its one pending single-packet burst",
+                      q->port_id, q->queue_id);
+      return Status::INVALID_PARAMETER;
+    }
+    poll_tx_completions(*q);
+    const uint64_t needed_wqebbs = tx_burst_wqebbs(*q, burst);
+    if (!tx_sq_has_space(*q, needed_wqebbs)) {
+      q->alloc_head--;
+      q->direct_pending = nullptr;
+      q->direct_no_space++;
+      tx_meta_pool_->put(burst);
+      return Status::NO_SPACE_AVAILABLE;
+    }
+    post_tx_burst(*q, burst);
+    q->direct_pending = nullptr;
+    tx_meta_pool_->put(burst);
+    return Status::SUCCESS;
   }
   if (!q->send_ring->enqueue(burst)) {
     // Worker is behind: roll back this (most-recent, unposted) allocation and
@@ -4695,12 +5000,13 @@ Status IbverbsEngine::drop_all_traffic(int port) {
   // The matchers/specs persist so allow_all_traffic can recreate the rules.
   {
     std::lock_guard<std::mutex> guard(flow_lock_);
-    const auto has_dynamic_flow_on_port = std::any_of(
-        dynamic_flows_.begin(), dynamic_flows_.end(), [&](const auto& item) {
+    const auto has_dynamic_flow_on_port =
+        std::any_of(dynamic_flows_.begin(), dynamic_flows_.end(), [&](const auto& item) {
           return item.second.port == port && item.second.state == DynamicFlowState::ACTIVE;
         });
     if (has_dynamic_flow_on_port) {
-      DAQIRI_LOG_ERROR("drop_all_traffic is not supported while port {} has dynamic RX flows", port);
+      DAQIRI_LOG_ERROR("drop_all_traffic is not supported while port {} has dynamic RX flows",
+                       port);
       return Status::NOT_SUPPORTED;
     }
   }

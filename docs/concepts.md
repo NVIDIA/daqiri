@@ -10,8 +10,8 @@ This page is the DAQIRI glossary. It defines the terms used across the
 [Configuration Reference](api-reference/configuration.md), and
 [tutorials](tutorials/system_configuration.md): **stream types and
 endpoint URI schemes**, **GPUDirect**, **packet / burst / segment**,
-**flow / queue**, **memory region**, **zero-copy ownership**, and
-**RX reorder**.
+**flow / queue**, **memory region**, **zero-copy ownership**,
+**queue polling modes**, and **RX reorder**.
 
 ## Stream Types
 
@@ -237,12 +237,60 @@ right application buffer.
 ### Queue
 
 A **queue** is a NIC-side buffer that an application reads from (RX) or
-writes to (TX). Each queue is assigned a CPU core in the YAML to poll
-it, but queues and cores are not strictly one-to-one: one core can poll
-multiple queues, and a TX queue can be fed from multiple cores.
+writes to (TX). By default, each queue is assigned a CPU core in the YAML
+for DAQIRI to service. Queues and cores are not strictly one-to-one: one
+core can service multiple queues.
 
 A queue points at one or more *memory regions*, which hold its packet
 buffers (CPU hugepages, GPU device memory, or pinned host memory).
+
+### Queue Polling Modes (`poll_mode`)
+
+With packet processing there is an inverse relationship between bandwidth and latency. This is mainly for two reasons:
+
+1) Batching packets allows more optimizations, but takes longer to wait
+2) Larger packet sizes are more efficient for higher bandwidth, but take longer to transmit and receive
+
+DAQIRI allows users to select whether to prefer higher bandwidth or lower latency on a per-queue basis. A typical 
+use case for this would be high bandwidth for data plane, and low latency for control plane. Note that these are extreme definitions of high bandwidth and low latency. DAQIRI already provides extremely low latency and high bandwidth by bypassing the Linux kernel, regardless of the setting. Choosing low latency may save low single digit microseconds per packet.
+
+The `poll_mode` setting is used by choosing either indirect for high bandwidth, or direct for low latency by choosing which thread polls the NIC. `indirect` mode is chosen by default to favor high bandwidth and batching.
+
+| Mode | Who services the queue? | Best suited for |
+|---|---|---|
+| `indirect` | A DAQIRI worker running on the queue's configured `cpu_core` | General use, batching, highest bandwidth |
+| `direct` | The application thread calling the RX or TX API | The lowest single-packet latency when the application can dedicate one thread to each queue |
+
+In **indirect mode**, the application and DAQIRI worker exchange bursts. The
+queue requires `cpu_core` and `batch_size`; RX queues may also use `timeout_us`
+to return a partial batch. `indirect` mode also allows more processing jitter in the application threads by using a zero-copy ring in between DAQIRI and the user. This is the existing behavior and is supported by
+all applicable engines.
+
+In **direct mode**, there is no worker between the application and the queue.
+The application thread performs the queue work as part of its normal API calls:
+
+- Direct RX returns all packets currently ready, up to 256, without waiting.
+  An empty poll returns `Status::NOT_READY`.
+- Direct TX accepts exactly one packet per `BurstParams`. A successful
+  `send_tx_burst()` means the packet was submitted; the application must not
+  access that burst afterward.
+- Exactly one application thread must own each direct queue. A direct TX queue
+  may have only one acquired-but-unsubmitted packet at a time.
+
+Direct mode is available only for the raw `ibverbs` engine. A direct queue must
+omit `cpu_core`, `batch_size`, and, for RX, `timeout_us`. Direct RX does not
+support reorder configurations. Direct and indirect queues may be mixed on the
+same interface.
+
+Direct mode removes the cross-thread handoff that can add latency, but it also
+makes application scheduling part of packet I/O. If the application thread is
+descheduled, blocked, or busy doing other work, packet processing for that queue
+stops until it calls DAQIRI again. Use indirect mode when steady progress or
+batch throughput matters more than minimum latency.
+
+See the [RX queue](api-reference/configuration.md#queues) and
+[TX queue](api-reference/configuration.md#queues_1) configuration references
+for the complete field rules.
 
 ### Flow
 
