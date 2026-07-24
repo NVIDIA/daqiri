@@ -1,0 +1,2092 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+  
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://nvidia.github.io/daqiri/benchmarks/raw_benchmarking/">
+      
+      
+        <link rel="prev" href="../socket_benchmarking/">
+      
+      
+        <link rel="next" href="../performance-dgx-spark/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../images/favicon-32.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+  <link rel="icon" href="../../images/favicon.svg" sizes="any" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="../../images/apple-touch-icon.png">
+
+    
+      
+        <title>Raw Ethernet Benchmarking - DAQIRI: Data Acquisition for Integrated Real-time Instruments</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  <script>window.NV_NAV = {"Benchmarking": [{"label": "Overview", "url": "benchmarks/"}, {"label": "Socket and RDMA Benchmarking", "url": "benchmarks/socket_benchmarking/"}, {"label": "Raw Ethernet Benchmarking", "url": "benchmarks/raw_benchmarking/"}, {"label": "Performance: DGX Spark", "url": "benchmarks/performance-dgx-spark/"}], "API Reference": [{"label": "API Guide", "url": "api-reference/"}, {"label": "Configuration YAML Reference", "url": "api-reference/configuration/"}, {"label": "C++ API Usage", "url": "api-reference/cpp/"}, {"label": "Python API Usage", "url": "api-reference/python/"}], "Tutorials": [{"label": "System Configuration", "url": "tutorials/system_configuration/"}, {"label": "Bare-Metal CMake Build", "url": "tutorials/bare-metal-cmake-build/"}, {"label": "Configuration YAML Walkthrough", "url": "tutorials/configuration-walkthrough/"}, {"label": "DAQIRI + Holoscan Integration", "url": "tutorials/daqiri-holoscan-integration/"}]};</script></head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="light-green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#raw-ethernet-benchmarking" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="DAQIRI: Data Acquisition for Integrated Real-time Instruments" class="md-header__button md-logo" aria-label="DAQIRI: Data Acquisition for Integrated Real-time Instruments" data-md-component="logo">
+      
+  <img src="../../images/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            DAQIRI: Data Acquisition for Integrated Real-time Instruments
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Raw Ethernet Benchmarking
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="light-green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="light-green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/nvidia/daqiri" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    nvidia/daqiri
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../getting-started/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Getting Started
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../concepts/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Concepts
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  Benchmarking
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../api-reference/" class="md-tabs__link">
+          
+  
+  
+  API Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../tutorials/system_configuration/" class="md-tabs__link">
+          
+  
+  
+  Tutorials
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+                
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" hidden>
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="DAQIRI: Data Acquisition for Integrated Real-time Instruments" class="md-nav__button md-logo" aria-label="DAQIRI: Data Acquisition for Integrated Real-time Instruments" data-md-component="logo">
+      
+  <img src="../../images/logo.svg" alt="logo">
+
+    </a>
+    DAQIRI: Data Acquisition for Integrated Real-time Instruments
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/nvidia/daqiri" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    nvidia/daqiri
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Benchmarking
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Benchmarking
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../socket_benchmarking/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Socket and RDMA Benchmarking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Raw Ethernet Benchmarking
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Raw Ethernet Benchmarking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#configure-hugepages-first" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configure hugepages first
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-the-daqiri-container" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running the DAQIRI container
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#update-the-loopback-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Update the loopback configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Update the loopback configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cross-host-two-dgx-spark-loopback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-host two-DGX-Spark loopback
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hardware-tunnel-transform-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hardware tunnel transform examples
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Hardware tunnel transform examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#identify-your-nics-pcie-addresses" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Identify your NIC's PCIe addresses
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#configure-the-nic-for-tx-and-rx" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configure the NIC for Tx and Rx
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#configure-the-application" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configure the application
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#run-the-loopback-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run the loopback test
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#flow-programming-smoke-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flow programming smoke test
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cap-the-transmit-rate-with-packet-pacing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cap the transmit rate with packet pacing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tune-rdma-send-completion-signaling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tune RDMA SEND completion signaling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#watch-live-opentelemetry-metrics-in-grafana" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Watch live OpenTelemetry metrics in Grafana
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../performance-dgx-spark/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance: DGX Spark
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration YAML Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/cpp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    C++ API Usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API Usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorials
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tutorials
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/system_configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/bare-metal-cmake-build/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bare-Metal CMake Build
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/configuration-walkthrough/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration YAML Walkthrough
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/daqiri-holoscan-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DAQIRI + Holoscan Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+                
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#configure-hugepages-first" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configure hugepages first
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-the-daqiri-container" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running the DAQIRI container
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#update-the-loopback-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Update the loopback configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Update the loopback configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cross-host-two-dgx-spark-loopback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-host two-DGX-Spark loopback
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hardware-tunnel-transform-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hardware tunnel transform examples
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Hardware tunnel transform examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#identify-your-nics-pcie-addresses" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Identify your NIC's PCIe addresses
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#configure-the-nic-for-tx-and-rx" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configure the NIC for Tx and Rx
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#configure-the-application" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configure the application
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#run-the-loopback-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run the loopback test
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#flow-programming-smoke-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flow programming smoke test
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cap-the-transmit-rate-with-packet-pacing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cap the transmit rate with packet pacing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tune-rdma-send-completion-signaling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tune RDMA SEND completion signaling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#watch-live-opentelemetry-metrics-in-grafana" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Watch live OpenTelemetry metrics in Grafana
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+  
+
+
+
+  
+  
+
+
+<h1 id="raw-ethernet-benchmarking">Raw Ethernet Benchmarking<a class="headerlink" href="#raw-ethernet-benchmarking" title="Permanent link">&para;</a></h1>
+<p>DAQIRI provides raw Ethernet benchmark applications that use DPDK to drive an NVIDIA NIC directly. This page walks through <code>daqiri_bench_raw_gpudirect</code>, the TX/RX loopback config, and the raw Ethernet checks needed before interpreting throughput results.</p>
+<p>Make sure to <a href="../../getting-started/#build-the-daqiri-library">build the DAQIRI library</a> beforehand.</p>
+<p><strong>Not sure which stream type to benchmark?</strong> Start with the <a href="../">Benchmarking overview</a>. Use this page after you have chosen the raw Ethernet stream type. Use <a href="../socket_benchmarking/">Socket and RDMA Benchmarking</a> for TCP, UDP, and RoCE/RDMA runs.</p>
+<div class="admonition note">
+<p class="admonition-title">Prerequisites</p>
+<p>Before running the benchmarking application, ensure your system has been fully configured per the <a href="../../tutorials/system_configuration/">System Configuration</a> page.</p>
+</div>
+<h2 id="configure-hugepages-first">Configure hugepages first<a class="headerlink" href="#configure-hugepages-first" title="Permanent link">&para;</a></h2>
+<p>Size the hugepage pool to your YAML's <code>memory_regions</code> plus DPDK overhead before running. DAQIRI's preflight aborts with an actionable error (and the exact <code>echo N | sudo tee …</code> to fix it) if the pool is too small, so the simplest workflow is: run once, copy-paste the recommendation. To check current state:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>grep<span class="w"> </span>Huge<span class="w"> </span>/proc/meminfo
+</code></pre></div>
+<p>For a persistent allocation across reboots, use the grub recipe in <a href="../../tutorials/system_configuration/#step-4-enable-huge-pages">Step 4 of System Configuration</a>.</p>
+<h2 id="running-the-daqiri-container">Running the DAQIRI container<a class="headerlink" href="#running-the-daqiri-container" title="Permanent link">&para;</a></h2>
+<p>If you built DAQIRI using the container approach, use the following command to launch the container with Raw Ethernet (DPDK) and GPU support. The host system must be fully configured (see <a href="../../tutorials/system_configuration/">System Configuration</a>) before the container can access the NIC and GPU hardware.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-it<span class="w"> </span>--privileged<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--runtime<span class="o">=</span>nvidia<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>--network<span class="o">=</span>host<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>-v<span class="w"> </span>/dev/hugepages:/dev/hugepages<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span>daqiri:local<span class="w"> </span>bash
+</code></pre></div>
+<details class="info">
+<summary>Explanation of container flags</summary>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--privileged</code></td>
+<td>DPDK requires raw access to NIC hardware, PCI devices, and hugepage files.</td>
+</tr>
+<tr>
+<td><code>--runtime=nvidia</code></td>
+<td>Makes the host GPU visible inside the container via the NVIDIA Container Toolkit</td>
+</tr>
+<tr>
+<td><code>--network=host</code></td>
+<td>Shares the host network namespace so DPDK can discover the physical NIC interfaces and their PCIe topology</td>
+</tr>
+<tr>
+<td><code>-v /dev/hugepages:/dev/hugepages</code></td>
+<td>Mounts the hugepage filesystem for DPDK memory allocation (<code>--privileged</code> alone does not cover mounted filesystems)</td>
+</tr>
+</tbody>
+</table>
+</details>
+<h2 id="update-the-loopback-configuration">Update the loopback configuration<a class="headerlink" href="#update-the-loopback-configuration" title="Permanent link">&para;</a></h2>
+<div class="admonition tip">
+<p class="admonition-title">DGX Spark</p>
+<p>For systems configured per the <a href="../../tutorials/system_configuration/#dgx-spark-profile">DGX Spark profile</a>, use these configs to skip the PCIe/IP/CPU-core edits below:</p>
+<ul>
+<li><a href="https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark.yaml"><code>daqiri_bench_raw_tx_rx_spark.yaml</code></a> for <code>daqiri_bench_raw_gpudirect</code>. Still set <code>eth_dst_addr</code> to the RX MAC. The rx_port is <code>0002:01:00.1</code> (physical port p1), so read its MAC: <code>cat /sys/class/net/enP2p1s0f1np1/address</code>. This p0-to-p1 pairing is intentional for an over-the-wire single-machine loopback. Using two PFs that map to the same physical port exercises the on-chip eswitch path instead.</li>
+<li><a href="https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx_spark.yaml"><code>daqiri_bench_rdma_tx_rx_spark.yaml</code></a> for <code>daqiri_bench_rdma</code>. No further edits needed.</li>
+</ul>
+<p>For the multi-queue core-scaling matrix, use the single base config <a href="https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark_mq.yaml"><code>daqiri_bench_raw_tx_rx_spark_mq.yaml</code></a> (the balanced TX=2/RX=2 superset) with <code>daqiri_bench_raw_gpudirect</code>, driven by <a href="https://github.com/nvidia/daqiri/blob/main/examples/run_spark_mq_bench.sh"><code>run_spark_mq_bench.sh</code></a>. It derives the four <code>(TX, RX)</code> cells from the base (via <code>scripts/gen_spark_mq_config.py</code>) and sweeps the payload.</p>
+<p>The Spark configs also pin the benchmark application's <code>bench_tx.cpu_core</code> / <code>bench_rx.cpu_core</code> fields to the high-frequency Cortex-X925 cores. Keep both the DAQIRI queue cores and the application worker cores on cores 16-19 unless you intentionally want a lower-power core in the measurement.</p>
+</div>
+<h4 id="cross-host-two-dgx-spark-loopback">Cross-host two-DGX-Spark loopback<a class="headerlink" href="#cross-host-two-dgx-spark-loopback" title="Permanent link">&para;</a></h4>
+<p>If you have two DGX Sparks cross-cabled p0↔p0 instead of a chassis QSFP loop on one machine, use the <code>_xhost</code> configs. Each host runs only its own role, so the YAML on each side configures one port instead of two. Both hosts must already be set up per the <a href="../../tutorials/system_configuration/#dgx-spark-profile">DGX Spark profile</a>, with one adjustment: the <code>daqiri-tx</code> (<code>1.1.1.1/24</code>) and <code>daqiri-rx</code> (<code>2.2.2.2/24</code>) nmcli profiles are <em>split across</em> the two hosts. Bring up <code>daqiri-tx</code> on the TX host's p0 and <code>daqiri-rx</code> on the RX host's p0, instead of both on one box.</p>
+<p><strong>Network prerequisite (required for RDMA, recommended for raw).</strong> Assigning <code>/24</code> addresses on each host is not enough for the kernel to reach the peer over a direct cable. RDMA-CM uses the kernel stack, so you need a host route and a static neighbor on the cabled port before ping or RoCE will work. Run <a href="https://github.com/nvidia/daqiri/blob/main/scripts/setup_spark_xhost_net.sh"><code>scripts/setup_spark_xhost_net.sh</code></a> on <strong>both</strong> hosts after bringing up the nmcli profile. See the <a href="../../tutorials/system_configuration/#cross-host-variant-two-sparks">cross-host variant</a> in System Configuration for the full steps.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># TX host (peer MAC from RX: cat /sys/class/net/enp1s0f0np0/address)</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>sudo<span class="w"> </span>scripts/setup_spark_xhost_net.sh<span class="w"> </span>--role<span class="w"> </span>tx<span class="w"> </span>--peer-mac<span class="w"> </span>&lt;RX_P0_MAC&gt;
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># RX host (peer MAC from TX)</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>sudo<span class="w"> </span>scripts/setup_spark_xhost_net.sh<span class="w"> </span>--role<span class="w"> </span>rx<span class="w"> </span>--peer-mac<span class="w"> </span>&lt;TX_P0_MAC&gt;
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="c1"># Verify on each host before starting benches</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>ping<span class="w"> </span>-c<span class="w"> </span><span class="m">3</span><span class="w"> </span>&lt;peer-ip&gt;<span class="w">    </span><span class="c1"># 2.2.2.2 on TX, 1.1.1.1 on RX</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>ip<span class="w"> </span>route<span class="w"> </span>get<span class="w"> </span>&lt;peer-ip&gt;<span class="w"> </span><span class="c1"># must name enp1s0f0np0, not lo</span>
+</code></pre></div>
+<p><strong>Raw GPUDirect.</strong> Start the RX side first so the flow rule is installed before any traffic arrives:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># RX host</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>sudo<span class="w"> </span>./daqiri_bench_raw_gpudirect<span class="w"> </span>daqiri_bench_raw_rx_spark_xhost.yaml<span class="w"> </span>--seconds<span class="w"> </span><span class="m">30</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># TX host (set eth_dst_addr to the RX host p0&#39;s MAC first: cat /sys/class/net/enp1s0f0np0/address on the RX host)</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>sudo<span class="w"> </span>./daqiri_bench_raw_gpudirect<span class="w"> </span>daqiri_bench_raw_tx_spark_xhost.yaml<span class="w"> </span>--seconds<span class="w"> </span><span class="m">30</span>
+</code></pre></div>
+<p>Verify both sides report non-zero packet counts and no <code>NO_FREE_BURST_BUFFERS</code> / <code>NO_FREE_PACKET_BUFFERS</code> errors.</p>
+<p><strong>RDMA.</strong> Start the server side first:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># RX (server) host</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>sudo<span class="w"> </span>./daqiri_bench_rdma<span class="w"> </span>daqiri_bench_rdma_tx_rx_spark_xhost.yaml<span class="w"> </span>--mode<span class="w"> </span>server<span class="w"> </span>--seconds<span class="w"> </span><span class="m">30</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># TX (client) host</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>sudo<span class="w"> </span>./daqiri_bench_rdma<span class="w"> </span>daqiri_bench_rdma_tx_rx_spark_xhost.yaml<span class="w"> </span>--mode<span class="w"> </span>client<span class="w"> </span>--seconds<span class="w"> </span><span class="m">30</span>
+</code></pre></div>
+<p>Verify both sides report non-zero send/receive completions and no <code>CQ error</code> / <code>RETRY_EXC_ERR</code> lines in the client log.</p>
+<p>The benchmark executables and example YAML configurations are located at:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Binaries</th>
+<th>YAML configs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Container</strong></td>
+<td><code>/opt/daqiri/bin/</code></td>
+<td><code>/opt/daqiri/bin/</code></td>
+</tr>
+<tr>
+<td><strong>From source</strong></td>
+<td><code>./build/examples/</code></td>
+<td><code>./examples/</code></td>
+</tr>
+</tbody>
+</table>
+<p>The fields in the YAML configs will be explained in more detail in <a href="../../tutorials/configuration-walkthrough/">Understanding the Configuration File</a>. For now, we'll stick to modifying the strict minimum required fields to run the application as-is on your system.</p>
+<h3 id="hardware-tunnel-transform-examples">Hardware tunnel transform examples<a class="headerlink" href="#hardware-tunnel-transform-examples" title="Permanent link">&para;</a></h3>
+<p>Raw DPDK and raw ibverbs builds can program hardware flow actions that push or
+encapsulate on TX and pop or decapsulate on RX. The application packet buffers
+remain pre-encap on TX and post-decap on RX; DAQIRI accounts for outer-header
+overhead when sizing MTU/wire frames.</p>
+<table>
+<thead>
+<tr>
+<th>Transform</th>
+<th>YAML config</th>
+<th>Binary</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>VXLAN encap + decap</td>
+<td><a href="https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_vxlan.yaml"><code>daqiri_bench_raw_tx_rx_vxlan.yaml</code></a></td>
+<td><code>daqiri_bench_raw_gpudirect</code></td>
+</tr>
+<tr>
+<td>VLAN push + pop</td>
+<td><a href="https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_vlan.yaml"><code>daqiri_bench_raw_tx_rx_vlan.yaml</code></a></td>
+<td><code>daqiri_bench_raw_gpudirect</code></td>
+</tr>
+<tr>
+<td>GRE encap + decap</td>
+<td><a href="https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_gre.yaml"><code>daqiri_bench_raw_tx_rx_gre.yaml</code></a></td>
+<td><code>daqiri_bench_raw_gpudirect</code></td>
+</tr>
+<tr>
+<td>NVGRE encap + decap</td>
+<td><a href="https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_nvgre.yaml"><code>daqiri_bench_raw_tx_rx_nvgre.yaml</code></a></td>
+<td><code>daqiri_bench_raw_gpudirect</code></td>
+</tr>
+</tbody>
+</table>
+<h5 id="identify-your-nics-pcie-addresses">Identify your NIC's PCIe addresses<a class="headerlink" href="#identify-your-nics-pcie-addresses" title="Permanent link">&para;</a></h5>
+<p>Retrieve the PCIe addresses of both ports of your NIC. We'll arbitrarily use the first for Tx and the second for Rx here:</p>
+<div class="tabbed-set tabbed-alternate" data-tabs="1:2"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">ibdev2netdev</label><label for="__tabbed_1_2">lspci</label></div>
+<div class="tabbed-content">
+<div class="tabbed-block">
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>sudo<span class="w"> </span>ibdev2netdev<span class="w"> </span>-v<span class="w"> </span><span class="p">|</span><span class="w"> </span>awk<span class="w"> </span><span class="s1">&#39;{print $1}&#39;</span>
+</code></pre></div>
+</div>
+<div class="tabbed-block">
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># `0200` is the PCI-SIG class code for NICs</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="c1"># `15b3` is the Vendor ID for Mellanox</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>lspci<span class="w"> </span>-n<span class="w"> </span><span class="p">|</span><span class="w"> </span>awk<span class="w"> </span><span class="s1">&#39;$2 == &quot;0200:&quot; &amp;&amp; $3 ~ /^15b3:/ {print $1}&#39;</span>
+</code></pre></div>
+</div>
+</div>
+</div>
+<details class="abstract">
+<summary>See an example output</summary>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>0005:03:00.0
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>0005:03:00.1
+</code></pre></div>
+</details>
+<h5 id="configure-the-nic-for-tx-and-rx">Configure the NIC for Tx and Rx<a class="headerlink" href="#configure-the-nic-for-tx-and-rx" title="Permanent link">&para;</a></h5>
+<p>Set the NIC addresses in the <code>interfaces</code> section of the <code>daqiri</code> configuration, making sure to remove the template brackets <code>&lt; &gt;</code>. This configures your NIC independently of your application:</p>
+<ul>
+<li>Set the <code>address</code> field of the <code>tx_port</code> interface to one of these addresses. That interface will be able to transmit ethernet packets.</li>
+<li>Set the <code>address</code> field of the <code>rx_port</code> interface to the other address. This interface will be able to receive ethernet packets.</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nt">interfaces</span><span class="p">:</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;tx_port&quot;</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="hll"><span class="w">    </span><span class="nt">address</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;0000:00:00.0&gt;</span><span class="w">       </span><span class="c1"># The BUS address of the interface doing Tx</span>
+</span><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">    </span><span class="nt">tx</span><span class="p">:</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">        </span><span class="l l-Scalar l-Scalar-Plain">...</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;rx_port&quot;</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="hll"><span class="w">    </span><span class="nt">address</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;0000:00:00.0&gt;</span><span class="w">       </span><span class="c1"># The BUS address of the interface doing Rx</span>
+</span><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">    </span><span class="nt">rx</span><span class="p">:</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">        </span><span class="l l-Scalar l-Scalar-Plain">...</span>
+</code></pre></div>
+<details class="abstract" open="open">
+<summary>See an example yaml</summary>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nt">interfaces</span><span class="p">:</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;tx_port&quot;</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="hll"><span class="w">    </span><span class="nt">address</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0005:03:00.0</span><span class="w">       </span><span class="c1"># The BUS address of the interface doing Tx</span>
+</span><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">    </span><span class="nt">tx</span><span class="p">:</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">        </span><span class="l l-Scalar l-Scalar-Plain">...</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;rx_port&quot;</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="hll"><span class="w">    </span><span class="nt">address</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0005:03:00.1</span><span class="w">       </span><span class="c1"># The BUS address of the interface doing Rx</span>
+</span><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">    </span><span class="nt">rx</span><span class="p">:</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">        </span><span class="l l-Scalar l-Scalar-Plain">...</span>
+</code></pre></div>
+</details>
+<h5 id="configure-the-application">Configure the application<a class="headerlink" href="#configure-the-application" title="Permanent link">&para;</a></h5>
+<p>To run the benchmarking application to run a loopback on your system, you'll need to modify the <code>bench_tx</code> section which configures the application itself, to create the packet headers, pin the application TX worker, and direct the packets to the NIC. Make sure to remove the template brackets <code>&lt; &gt;</code>.</p>
+<ul>
+<li><code>eth_dst_addr</code> with the MAC address (and not the PCIe address) of the NIC interface you want to use for Rx. You can get the MAC address of your <code>if_name</code> interface with <code class="highlight">cat<span class="w"> </span>/sys/class/net/<span class="nv">$if_name</span>/address</code>:</li>
+<li><code>cpu_core</code> with the CPU core for the benchmark application's TX thread. This is separate from the DAQIRI TX queue <code>cpu_core</code>; use a different isolated core when you have one, or deliberately share when the machine has a tight core budget.</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nt">bench_tx</span><span class="p">:</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">interface_name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;tx_port&quot;</span><span class="w"> </span><span class="c1"># Name of the TX port from the daqiri config</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="hll"><span class="w">  </span><span class="nt">cpu_core</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span><span class="w">              </span><span class="c1"># Benchmark application TX thread affinity</span>
+</span><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span><span class="l l-Scalar l-Scalar-Plain">...</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="hll"><span class="w">  </span><span class="nt">eth_dst_addr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;00:00:00:00:00:00&gt;</span><span class="w"> </span><span class="c1"># Destination MAC address - required when Rx flow_isolation=true</span>
+</span><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">  </span><span class="l l-Scalar l-Scalar-Plain">...</span>
+</code></pre></div>
+<details class="abstract" open="open">
+<summary>See an example yaml</summary>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nt">bench_tx</span><span class="p">:</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">interface_name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;tx_port&quot;</span><span class="w"> </span><span class="c1"># Name of the TX port from the daqiri config</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="hll"><span class="w">  </span><span class="nt">cpu_core</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span><span class="w">              </span><span class="c1"># Benchmark application TX thread affinity</span>
+</span><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span><span class="l l-Scalar l-Scalar-Plain">...</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="hll"><span class="w">  </span><span class="nt">eth_dst_addr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">48:b0:2d:ee:83:ad</span><span class="w"> </span><span class="c1"># Destination MAC address - required when Rx flow_isolation=true</span>
+</span><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">  </span><span class="l l-Scalar l-Scalar-Plain">...</span>
+</code></pre></div>
+</details>
+<details class="info">
+<summary>Show explanation</summary>
+<ul>
+<li><code>eth_dst_addr</code> - the destination ethernet MAC address - will be embedded in the packet headers by the application. This is required here because the Rx interface above has <code>flow_isolation: true</code> (explained in more details below). In that configuration, only the packets listing the adequate destination MAC address will be accepted by the Rx interface.</li>
+<li><code>cpu_core</code> - the benchmark application's own TX worker thread affinity. Set the matching <code>bench_rx.cpu_core</code> for RX workers too. These app-thread fields are distinct from the DAQIRI queue <code>cpu_core</code> values that poll the NIC.</li>
+<li>We ignore the IP fields (<code>ip_src_addr</code>, <code>ip_dst_addr</code>) for now, as we are testing on a layer 2 network by just connecting a cable between the two interfaces on our system, therefore having mock values has no impact.</li>
+<li>You might have noted the lack of a <code>eth_src_addr</code> field in this <code>bench_tx</code> section. This is because the source Ethernet MAC address can be inferred automatically by the DAQIRI library from the PCIe address of the Tx interface referenced above.</li>
+</ul>
+</details>
+<h2 id="run-the-loopback-test">Run the loopback test<a class="headerlink" href="#run-the-loopback-test" title="Permanent link">&para;</a></h2>
+<p>After having modified the configuration file, ensure you have connected an SFP cable between the two interfaces of your NIC, then run the application with the command below:</p>
+<div class="tabbed-set tabbed-alternate" data-tabs="2:2"><input checked="checked" id="__tabbed_2_1" name="__tabbed_2" type="radio" /><input id="__tabbed_2_2" name="__tabbed_2" type="radio" /><div class="tabbed-labels"><label for="__tabbed_2_1">Containerized</label><label for="__tabbed_2_2">From source</label></div>
+<div class="tabbed-content">
+<div class="tabbed-block">
+<p><a href="#running-the-daqiri-container">Launch the DAQIRI container</a>, then inside:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>/opt/daqiri/bin/daqiri_bench_raw_gpudirect<span class="w"> </span>/opt/daqiri/bin/daqiri_bench_raw_tx_rx.yaml
+</code></pre></div>
+</div>
+<div class="tabbed-block">
+<p>This assumes you have built DAQIRI and its dependencies locally on your system.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>sudo<span class="w"> </span>./build/examples/daqiri_bench_raw_gpudirect<span class="w"> </span>examples/daqiri_bench_raw_tx_rx.yaml
+</code></pre></div>
+</div>
+</div>
+</div>
+<p>By default the application runs for 10 seconds and then exits. You can change the duration by passing <code>--seconds &lt;N&gt;</code> after the YAML path, or stop it gracefully at any time with <code>Ctrl-C</code>.</p>
+<p><code>daqiri_bench_raw_gpudirect</code> and <code>daqiri_bench_raw_hds</code> also accept <code>--workload none|fft|gemm|gemm_fp16</code>, which runs a representative GPU workload once per received reorder window on the <strong>actual received packet data</strong>: <code>fft</code> (batched cuFFT C2C transform), <code>gemm</code> (FP32 <code>cublasSgemm</code>), or <code>gemm_fp16</code> (the same-size mixed-precision FP16/tensor-core matmul that models inference). Each received burst's payloads are first reordered by sequence number into a contiguous GPU buffer (<code>examples/bench_pipeline.{h,cu}</code>) that the compute then consumes. <code>--workload-gemm-dim N</code> (default 1024) pins the square GEMM side length and <code>--workload-fft-len N</code> (default 1024) the 1-D FFT transform length, so the FLOP count per call stays constant as the I/O unit is swept. The same flags are honoured by the RoCE bench (<code>daqiri_bench_rdma</code>, in-order gather) and the socket bench (<code>daqiri_bench_socket</code>, host→device stage then UDP reorder / TCP gather). See the <a href="../performance-dgx-spark/#gpu-workloads-in-the-receive-path">DGX Spark GPU-workload results</a>.</p>
+<h2 id="flow-programming-smoke-test">Flow programming smoke test<a class="headerlink" href="#flow-programming-smoke-test" title="Permanent link">&para;</a></h2>
+<p>Raw Ethernet flow rules are programmed into the NIC during <code>daqiri_init()</code>. Software loopback
+(<code>loopback: "sw"</code>) skips NIC init entirely, so it is a build/runtime smoke test only, not a
+flow programming test.</p>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Command / action</th>
+<th>Expected</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Build smoke</td>
+<td><code>daqiri_bench_raw_sw_loopback.yaml --seconds 5</code></td>
+<td>Init succeeds, no NIC flows created</td>
+</tr>
+<tr>
+<td>Good NIC config</td>
+<td><code>daqiri_bench_raw_tx_rx.yaml</code> (filled placeholders, cabled NIC)</td>
+<td>Init succeeds; RX and <code>tx_eth_src</code> flows programmed</td>
+</tr>
+<tr>
+<td>Dynamic RX flow config</td>
+<td><code>daqiri_example_dynamic_rx_flow.yaml</code> with <code>daqiri_example_dynamic_rx_flow</code></td>
+<td>Starts with <code>flow_isolation: true</code> and no <code>rx.flows</code>, drops unmatched traffic, tests scalar queue rules, then varies UDP source ports and verifies one <code>[0, 1]</code> RSS rule reaches both queues with the expected flow ID and tolerance</td>
+</tr>
+<tr>
+<td>Bad queue target</td>
+<td>Copy <code>daqiri_bench_raw_tx_rx.yaml</code>; try <code>flows[0].action.id: 99</code>, <code>ids: []</code>, duplicate/unknown IDs, or both <code>id</code> and <code>ids</code></td>
+<td>Fails validation before NIC initialization</td>
+</tr>
+<tr>
+<td>Static RSS flow</td>
+<td>Change a standard IPv4/UDP flow action to <code>{type: queue, ids: [0, 1]}</code> and generate many distinct five tuples</td>
+<td>Both queues receive packets; an unchanged tuple remains on one queue. Validate per-queue rates with <code>mlnx_perf</code></td>
+</tr>
+<tr>
+<td>Mixed flows (optional)</td>
+<td>On one interface, add two of the three flow classes (standard UDP/IP, flex-item (see <code>rx.flex_items</code>), or eCPRI (<code>match.ecpri</code>)) in the <a href="../../api-reference/configuration/">configuration reference</a></td>
+<td>Fails in <code>validate_config()</code> with <code>mixes standard (UDP/IP), flex-item and/or eCPRI</code></td>
+</tr>
+<tr>
+<td>eCPRI flow (optional)</td>
+<td>On a cabled NIC, add a flow with <code>match: { ecpri: { msg_type: 0, pc_id: 1 } }</code> (see the <a href="../../api-reference/configuration/">configuration reference</a>)</td>
+<td>Init succeeds. eCPRI-over-Ethernet (EtherType 0xAEFE) frames matching the message type and pc_id steer to the flow's queue</td>
+</tr>
+</tbody>
+</table>
+<h2 id="cap-the-transmit-rate-with-packet-pacing">Cap the transmit rate with packet pacing<a class="headerlink" href="#cap-the-transmit-rate-with-packet-pacing" title="Permanent link">&para;</a></h2>
+<p>To meter the transmit side at a fixed rate in hardware, set a per-queue <code>pacing_mbps</code> cap
+on the TX queue. <a href="https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_pacing.yaml"><code>daqiri_bench_raw_tx_rx_pacing.yaml</code></a>
+is the loopback config above with <code>pacing_mbps: 10000</code> (10 Gbps) on the TX queue. Pacing is
+supported by both raw engines. The example uses the default DPDK engine; add
+<code>engine: "ibverbs"</code> beside <code>stream_type: "raw"</code> to exercise the ibverbs path. The NIC meters the
+queue out so its average TX rate stays at or below the configured value. The ibverbs path uses
+the mlx5 packet-pacing rate table rather than per-packet WAIT WQEs; firmware defaults determine
+the allowed burst size unless configured outside DAQIRI.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>/opt/daqiri/bin/daqiri_bench_raw_gpudirect<span class="w"> </span>/opt/daqiri/bin/daqiri_bench_raw_tx_rx_pacing.yaml<span class="w"> </span>--seconds<span class="w"> </span><span class="m">10</span>
+</code></pre></div>
+<p>Validate the cap from the <code>RX complete:</code> line: <code>Gbps = bytes * 8 / seconds / 1e9</code>. With
+<code>pacing_mbps: 10000</code> the achieved rate should sit at or just below 10 Gbps regardless of
+link speed. Change <code>pacing_mbps</code> (or set it to <code>0</code> to disable pacing and send at line rate)
+and re-run to see the cap move.</p>
+<p>The DPDK path requires hardware send scheduling; if unavailable, it logs a warning and runs at
+line rate. The ibverbs path requires packet-pacing support for RAW_PACKET QPs and, when the driver
+reports a supported range, a rate within that range. Older drivers that omit the range defer the
+check to the provider when applying the rate; unsupported requests still fail initialization
+instead of silently ignoring the cap.</p>
+<h2 id="tune-rdma-send-completion-signaling">Tune RDMA SEND completion signaling<a class="headerlink" href="#tune-rdma-send-completion-signaling" title="Permanent link">&para;</a></h2>
+<p>The RDMA engine signals every SEND work request by default. For <code>daqiri_bench_rdma</code>
+runs where CQ polling overhead is part of the bottleneck investigation, set
+<code>DAQIRI_RDMA_SEND_SIGNAL_EVERY=N</code> to request one signaled SEND every <code>N</code> posts:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="nv">DAQIRI_RDMA_SEND_SIGNAL_EVERY</span><span class="o">=</span><span class="m">16</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="w">  </span>/opt/daqiri/bin/daqiri_bench_rdma<span class="w"> </span>/opt/daqiri/bin/daqiri_bench_rdma_tx_rx.yaml
+</code></pre></div>
+<p>Larger values reduce SEND completion traffic, but completions also drive
+application credits and buffer recycling in the benchmark. Keep the variable
+unset, or set it to <code>1</code>, for baseline measurements.</p>
+<h2 id="watch-live-opentelemetry-metrics-in-grafana">Watch live OpenTelemetry metrics in Grafana<a class="headerlink" href="#watch-live-opentelemetry-metrics-in-grafana" title="Permanent link">&para;</a></h2>
+<p>DAQIRI can expose the raw benchmark counters through OpenTelemetry when metrics
+support is enabled at build time. The Grafana example uses the same benchmark
+binary and YAML files as the loopback test above, then starts Prometheus and
+Grafana beside the benchmark process.</p>
+<p>Build the container with metrics enabled:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="nv">DAQIRI_ENABLE_OTEL_METRICS</span><span class="o">=</span>ON<span class="w"> </span><span class="nv">DAQIRI_ENGINE</span><span class="o">=</span><span class="s2">&quot;dpdk ibverbs&quot;</span><span class="w"> </span>scripts/build-container.sh
+</code></pre></div>
+<p>Before starting the stack, fill in the required <code>&lt;placeholders&gt;</code> in the benchmark
+YAML you plan to run. You can also pass a machine-local copy through
+<code>DAQIRI_CONFIG</code> so the tracked example YAML keeps its placeholder syntax.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="nb">cd</span><span class="w"> </span>examples/grafana
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="nv">DAQIRI_CONFIG</span><span class="o">=</span>/workspace/daqiri/examples/daqiri_bench_raw_tx_rx.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="nv">DAQIRI_SECONDS</span><span class="o">=</span><span class="m">60</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>docker<span class="w"> </span>compose<span class="w"> </span>up
+</code></pre></div>
+<p>Prometheus scrapes <code>http://localhost:9464/metrics</code>, and Grafana serves the
+<code>DAQIRI OpenTelemetry Metrics</code> dashboard at <code>http://localhost:3000</code>. The
+throughput panel reports payload counter rates in <code>Gb/s</code> for each active
+interface and queue.</p>
+<details class="abstract">
+<summary>See an example output</summary>
+<p>This is an illustrative excerpt. Source line numbers and pointer values vary by build.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>[INFO] /workspace/daqiri/src/../include/daqiri/common.h:1045: Finished reading DAQIRI configuration
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1732: Attempting to use 2 ports for high-speed network
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1741: Setting DPDK log level to: Info
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1775: DPDK EAL arguments: operator --file-prefix=vwcrlqhfkb -l 3,11,9 --log-level=error --log-level=pmd.net.mlx5:info --iova-mode=va -a 0005:03:00.0,txq_inline_max=0,dv_flow_en=2 -a 0005:03:00.1,txq_inline_max=0,dv_flow_en=2 
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1799: tx_port (0005:03:00.0): identified as port 0
+<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1799: rx_port (0005:03:00.1): identified as port 1
+<a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1809: Creating dummy RX and TX queues
+<a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1591: Port 0 has no RX queues. Creating dummy queue.
+<a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1624: Port 1 has no TX queues. Creating dummy queue.
+<a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1542: Adjusting buffer size to 9228 for headroom
+<a id="__codelineno-18-11" name="__codelineno-18-11" href="#__codelineno-18-11"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1542: Adjusting buffer size to 9228 for headroom
+<a id="__codelineno-18-12" name="__codelineno-18-12" href="#__codelineno-18-12"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1542: Adjusting buffer size to 8192 for headroom
+<a id="__codelineno-18-13" name="__codelineno-18-13" href="#__codelineno-18-13"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1542: Adjusting buffer size to 8192 for headroom
+<a id="__codelineno-18-14" name="__codelineno-18-14" href="#__codelineno-18-14"></a>[INFO] /workspace/daqiri/src/engine.cpp:175: Registering memory regions
+<a id="__codelineno-18-15" name="__codelineno-18-15" href="#__codelineno-18-15"></a>[INFO] /workspace/daqiri/src/engine.cpp:236: Successfully allocated memory region MR_Unused_TX_P1 at 0x16d9bf580 type 2 with 9100 bytes (32768 elements @ 9228 bytes total 302383104)
+<a id="__codelineno-18-16" name="__codelineno-18-16" href="#__codelineno-18-16"></a>[INFO] /workspace/daqiri/src/engine.cpp:236: Successfully allocated memory region MR_Unused_P0 at 0x15b95f500 type 2 with 9100 bytes (32768 elements @ 9228 bytes total 302383104)
+<a id="__codelineno-18-17" name="__codelineno-18-17" href="#__codelineno-18-17"></a>[INFO] /workspace/daqiri/src/engine.cpp:236: Successfully allocated memory region Data_RX_GPU at 0xffff34000000 type 3 with 8064 bytes (32768 elements @ 8192 bytes total 268435456)
+<a id="__codelineno-18-18" name="__codelineno-18-18" href="#__codelineno-18-18"></a>[INFO] /workspace/daqiri/src/engine.cpp:236: Successfully allocated memory region Data_TX_GPU at 0xffff24000000 type 3 with 8064 bytes (32768 elements @ 8192 bytes total 268435456)
+<a id="__codelineno-18-19" name="__codelineno-18-19" href="#__codelineno-18-19"></a>[INFO] /workspace/daqiri/src/engine.cpp:249: Finished allocating memory regions
+<a id="__codelineno-18-20" name="__codelineno-18-20" href="#__codelineno-18-20"></a>[INFO] /workspace/daqiri/src/engine.cpp:314: dma-buf supported for device 0
+<a id="__codelineno-18-21" name="__codelineno-18-21" href="#__codelineno-18-21"></a>[INFO] /workspace/daqiri/src/engine.cpp:324: dma-buf GPU buffer address at 0xffff24000000 aligned at 0xffff24000000 with aligned size 268435456
+<a id="__codelineno-18-22" name="__codelineno-18-22" href="#__codelineno-18-22"></a>[INFO] /workspace/daqiri/src/engine.cpp:364: Successfully registered external memory for Data_TX_GPU
+<a id="__codelineno-18-23" name="__codelineno-18-23" href="#__codelineno-18-23"></a>[INFO] /workspace/daqiri/src/engine.cpp:314: dma-buf supported for device 0
+<a id="__codelineno-18-24" name="__codelineno-18-24" href="#__codelineno-18-24"></a>[INFO] /workspace/daqiri/src/engine.cpp:324: dma-buf GPU buffer address at 0xffff34000000 aligned at 0xffff34000000 with aligned size 268435456
+<a id="__codelineno-18-25" name="__codelineno-18-25" href="#__codelineno-18-25"></a>[INFO] /workspace/daqiri/src/engine.cpp:364: Successfully registered external memory for Data_RX_GPU
+<a id="__codelineno-18-26" name="__codelineno-18-26" href="#__codelineno-18-26"></a>[INFO] /workspace/daqiri/src/engine.cpp:277: Mapped external memory descriptor for 0xffff34000000 to device 0
+<a id="__codelineno-18-27" name="__codelineno-18-27" href="#__codelineno-18-27"></a>[INFO] /workspace/daqiri/src/engine.cpp:277: Mapped external memory descriptor for 0xffff24000000 to device 0
+<a id="__codelineno-18-28" name="__codelineno-18-28" href="#__codelineno-18-28"></a>[INFO] /workspace/daqiri/src/engine.cpp:277: Mapped external memory descriptor for 0xffff34000000 to device 1
+<a id="__codelineno-18-29" name="__codelineno-18-29" href="#__codelineno-18-29"></a>[INFO] /workspace/daqiri/src/engine.cpp:277: Mapped external memory descriptor for 0xffff24000000 to device 1
+<a id="__codelineno-18-30" name="__codelineno-18-30" href="#__codelineno-18-30"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1850: DPDK init (0005:03:00.0) -- RX: ENABLED TX: ENABLED
+<a id="__codelineno-18-31" name="__codelineno-18-31" href="#__codelineno-18-31"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1863: Configuring RX queue: UNUSED_P0_Q0 (0) on port 0
+<a id="__codelineno-18-32" name="__codelineno-18-32" href="#__codelineno-18-32"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1896: Created mempool RXP_P0_Q0_MR0 : mbufs=32768 elsize=9228 ptr=0x17fca4380
+<a id="__codelineno-18-33" name="__codelineno-18-33" href="#__codelineno-18-33"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1955: Configuring TX queue: tx_q_0 (0) on port 0
+<a id="__codelineno-18-34" name="__codelineno-18-34" href="#__codelineno-18-34"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1981: Created mempool TXP_P0_Q0_MR0 : mbufs=32768 elsize=8064 ptr=0x148cdc980
+<a id="__codelineno-18-35" name="__codelineno-18-35" href="#__codelineno-18-35"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1995: Max frame needed - RX: 0 TX: 8064
+<a id="__codelineno-18-36" name="__codelineno-18-36" href="#__codelineno-18-36"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2012: Setting port config for port 0 mtu:8046
+<a id="__codelineno-18-37" name="__codelineno-18-37" href="#__codelineno-18-37"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2026: Enabling RX scatter offload for single-segment RX queues (min buffer size: 9100)
+<a id="__codelineno-18-38" name="__codelineno-18-38" href="#__codelineno-18-38"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2062: Initializing port 0 with 1 RX queues and 1 TX queues...
+<a id="__codelineno-18-39" name="__codelineno-18-39" href="#__codelineno-18-39"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2079: Successfully configured ethdev
+<a id="__codelineno-18-40" name="__codelineno-18-40" href="#__codelineno-18-40"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2091: Successfully set descriptors to 8192/8192
+<a id="__codelineno-18-41" name="__codelineno-18-41" href="#__codelineno-18-41"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2106: Port 0 not in isolation mode
+<a id="__codelineno-18-42" name="__codelineno-18-42" href="#__codelineno-18-42"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2115: Setting up port:0, queue:0, Num scatter:1 pool:0x17fca4380
+<a id="__codelineno-18-43" name="__codelineno-18-43" href="#__codelineno-18-43"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2136: Successfully setup RX port 0 queue 0
+<a id="__codelineno-18-44" name="__codelineno-18-44" href="#__codelineno-18-44"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2158: Successfully set up TX queue 0/0
+<a id="__codelineno-18-45" name="__codelineno-18-45" href="#__codelineno-18-45"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2163: Enabling promiscuous mode for port 0
+<a id="__codelineno-18-46" name="__codelineno-18-46" href="#__codelineno-18-46"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2177: Successfully started port 0
+<a id="__codelineno-18-47" name="__codelineno-18-47" href="#__codelineno-18-47"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2180: Port 0, MAC address: 48:B0:2D:F4:04:23
+<a id="__codelineno-18-48" name="__codelineno-18-48" href="#__codelineno-18-48"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2891: Applying tx_eth_src offload for port 0
+<a id="__codelineno-18-49" name="__codelineno-18-49" href="#__codelineno-18-49"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1850: DPDK init (0005:03:00.1) -- RX: ENABLED TX: ENABLED
+<a id="__codelineno-18-50" name="__codelineno-18-50" href="#__codelineno-18-50"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1863: Configuring RX queue: rq_q_0 (0) on port 1
+<a id="__codelineno-18-51" name="__codelineno-18-51" href="#__codelineno-18-51"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1896: Created mempool RXP_P1_Q0_MR0 : mbufs=32768 elsize=8192 ptr=0x147d6a980
+<a id="__codelineno-18-52" name="__codelineno-18-52" href="#__codelineno-18-52"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1908: Max packet size needed for RX: 8064
+<a id="__codelineno-18-53" name="__codelineno-18-53" href="#__codelineno-18-53"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1955: Configuring TX queue: UNUSED_TX_P1_Q0 (0) on port 1
+<a id="__codelineno-18-54" name="__codelineno-18-54" href="#__codelineno-18-54"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1981: Created mempool TXP_P1_Q0_MR0 : mbufs=32768 elsize=9100 ptr=0x1470e9e00
+<a id="__codelineno-18-55" name="__codelineno-18-55" href="#__codelineno-18-55"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:1995: Max frame needed - RX: 8064 TX: 0
+<a id="__codelineno-18-56" name="__codelineno-18-56" href="#__codelineno-18-56"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2012: Setting port config for port 1 mtu:8046
+<a id="__codelineno-18-57" name="__codelineno-18-57" href="#__codelineno-18-57"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2026: Enabling RX scatter offload for single-segment RX queues (min buffer size: 8064)
+<a id="__codelineno-18-58" name="__codelineno-18-58" href="#__codelineno-18-58"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2062: Initializing port 1 with 1 RX queues and 1 TX queues...
+<a id="__codelineno-18-59" name="__codelineno-18-59" href="#__codelineno-18-59"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2079: Successfully configured ethdev
+<a id="__codelineno-18-60" name="__codelineno-18-60" href="#__codelineno-18-60"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2091: Successfully set descriptors to 8192/8192
+<a id="__codelineno-18-61" name="__codelineno-18-61" href="#__codelineno-18-61"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2103: Port 1 in isolation mode
+<a id="__codelineno-18-62" name="__codelineno-18-62" href="#__codelineno-18-62"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2115: Setting up port:1, queue:0, Num scatter:1 pool:0x147d6a980
+<a id="__codelineno-18-63" name="__codelineno-18-63" href="#__codelineno-18-63"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2136: Successfully setup RX port 1 queue 0
+<a id="__codelineno-18-64" name="__codelineno-18-64" href="#__codelineno-18-64"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2158: Successfully set up TX queue 1/0
+<a id="__codelineno-18-65" name="__codelineno-18-65" href="#__codelineno-18-65"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2166: Not enabling promiscuous mode on port 1 since flow isolation is enabled
+<a id="__codelineno-18-66" name="__codelineno-18-66" href="#__codelineno-18-66"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2177: Successfully started port 1
+<a id="__codelineno-18-67" name="__codelineno-18-67" href="#__codelineno-18-67"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2180: Port 1, MAC address: 48:B0:2D:F4:04:24
+<a id="__codelineno-18-68" name="__codelineno-18-68" href="#__codelineno-18-68"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2192: Adding RX flow flow_0
+<a id="__codelineno-18-69" name="__codelineno-18-69" href="#__codelineno-18-69"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2670: Adding UDP port match for src 4096
+<a id="__codelineno-18-70" name="__codelineno-18-70" href="#__codelineno-18-70"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2677: Adding UDP port match for dst 4096
+<a id="__codelineno-18-71" name="__codelineno-18-71" href="#__codelineno-18-71"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2246: Setting up RX burst pool with 8191 batches of size 81920
+<a id="__codelineno-18-72" name="__codelineno-18-72" href="#__codelineno-18-72"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2265: Setting up RX burst pool with 8191 batches of size 20480
+<a id="__codelineno-18-73" name="__codelineno-18-73" href="#__codelineno-18-73"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2284: Setting up RX meta pool with 256 buffers
+<a id="__codelineno-18-74" name="__codelineno-18-74" href="#__codelineno-18-74"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2307: Setting up TX ring TX_RING_P0_Q0
+<a id="__codelineno-18-75" name="__codelineno-18-75" href="#__codelineno-18-75"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2333: Setting up TX burst pool TX_BURST_POOL_P0_Q0 with 10240 pointers at 0x14703e380
+<a id="__codelineno-18-76" name="__codelineno-18-76" href="#__codelineno-18-76"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2307: Setting up TX ring TX_RING_P1_Q0
+<a id="__codelineno-18-77" name="__codelineno-18-77" href="#__codelineno-18-77"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2333: Setting up TX burst pool TX_BURST_POOL_P1_Q0 with 10240 pointers at 0x1848bf700
+<a id="__codelineno-18-78" name="__codelineno-18-78" href="#__codelineno-18-78"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2340: Setting up TX meta pool with 256 buffers
+<a id="__codelineno-18-79" name="__codelineno-18-79" href="#__codelineno-18-79"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:34: Initializing DPDK stats
+<a id="__codelineno-18-80" name="__codelineno-18-80" href="#__codelineno-18-80"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:55: Port 0, Queue 0: Memory regions: MR_Unused_P0
+<a id="__codelineno-18-81" name="__codelineno-18-81" href="#__codelineno-18-81"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:55: Port 1, Queue 0: Memory regions: Data_RX_GPU
+<a id="__codelineno-18-82" name="__codelineno-18-82" href="#__codelineno-18-82"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:130: Found rx_q0_errors counter at index 10
+<a id="__codelineno-18-83" name="__codelineno-18-83" href="#__codelineno-18-83"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:152: Initialized DPDK xstats for port 0, found 70 stats
+<a id="__codelineno-18-84" name="__codelineno-18-84" href="#__codelineno-18-84"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:154: Found rx_missed counter at index 4
+<a id="__codelineno-18-85" name="__codelineno-18-85" href="#__codelineno-18-85"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:160: Found mbuf allocation counter at index 7
+<a id="__codelineno-18-86" name="__codelineno-18-86" href="#__codelineno-18-86"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:130: Found rx_q0_errors counter at index 10
+<a id="__codelineno-18-87" name="__codelineno-18-87" href="#__codelineno-18-87"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:152: Initialized DPDK xstats for port 1, found 70 stats
+<a id="__codelineno-18-88" name="__codelineno-18-88" href="#__codelineno-18-88"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:154: Found rx_missed counter at index 4
+<a id="__codelineno-18-89" name="__codelineno-18-89" href="#__codelineno-18-89"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:160: Found mbuf allocation counter at index 7
+<a id="__codelineno-18-90" name="__codelineno-18-90" href="#__codelineno-18-90"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:169: Initialized DPDK stats
+<a id="__codelineno-18-91" name="__codelineno-18-91" href="#__codelineno-18-91"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:3169: Config validated successfully
+<a id="__codelineno-18-92" name="__codelineno-18-92" href="#__codelineno-18-92"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:3182: Starting DAQIRI workers
+<a id="__codelineno-18-93" name="__codelineno-18-93" href="#__codelineno-18-93"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_stats.cpp:201: Starting stats thread on core 3
+<a id="__codelineno-18-94" name="__codelineno-18-94" href="#__codelineno-18-94"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:3287: Flushing packet on port 1
+<a id="__codelineno-18-95" name="__codelineno-18-95" href="#__codelineno-18-95"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:3525: Starting RX Core 9, port 1, queue 0, socket 0
+<a id="__codelineno-18-96" name="__codelineno-18-96" href="#__codelineno-18-96"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:3762: Starting TX Core 11, port 0, queue 0 socket 0 using burst pool 0x14703e380 ring 0x1852c8700
+<a id="__codelineno-18-97" name="__codelineno-18-97" href="#__codelineno-18-97"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:3277: Done starting workers
+<a id="__codelineno-18-98" name="__codelineno-18-98" href="#__codelineno-18-98"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:4239: daqiri DPDK engine stats
+<a id="__codelineno-18-99" name="__codelineno-18-99" href="#__codelineno-18-99"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2913: Port 0:
+<a id="__codelineno-18-100" name="__codelineno-18-100" href="#__codelineno-18-100"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2915:  - Received packets:    0
+<a id="__codelineno-18-101" name="__codelineno-18-101" href="#__codelineno-18-101"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2916:  - Transmit packets:    45722624
+<a id="__codelineno-18-102" name="__codelineno-18-102" href="#__codelineno-18-102"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2917:  - Received bytes:      0
+<a id="__codelineno-18-103" name="__codelineno-18-103" href="#__codelineno-18-103"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2918:  - Transmit bytes:      368707239936
+<a id="__codelineno-18-104" name="__codelineno-18-104" href="#__codelineno-18-104"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2919:  - Missed packets:      0
+<a id="__codelineno-18-105" name="__codelineno-18-105" href="#__codelineno-18-105"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2920:  - Errored packets:     0
+<a id="__codelineno-18-106" name="__codelineno-18-106" href="#__codelineno-18-106"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2921:  - RX out of buffers:   0
+<a id="__codelineno-18-107" name="__codelineno-18-107" href="#__codelineno-18-107"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2923:    ** Extended Stats **
+<a id="__codelineno-18-108" name="__codelineno-18-108" href="#__codelineno-18-108"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       tx_good_packets:       45728768
+<a id="__codelineno-18-109" name="__codelineno-18-109" href="#__codelineno-18-109"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       tx_good_bytes:     368756785152
+<a id="__codelineno-18-110" name="__codelineno-18-110" href="#__codelineno-18-110"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       tx_q0_packets:     45728768
+<a id="__codelineno-18-111" name="__codelineno-18-111" href="#__codelineno-18-111"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       tx_q0_bytes:       368756785152
+<a id="__codelineno-18-112" name="__codelineno-18-112" href="#__codelineno-18-112"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       tx_unicast_bytes:      368681991552
+<a id="__codelineno-18-113" name="__codelineno-18-113" href="#__codelineno-18-113"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       tx_unicast_packets:        45719493
+<a id="__codelineno-18-114" name="__codelineno-18-114" href="#__codelineno-18-114"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       tx_phy_packets:        45719292
+<a id="__codelineno-18-115" name="__codelineno-18-115" href="#__codelineno-18-115"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       tx_phy_bytes:      368863334632
+<a id="__codelineno-18-116" name="__codelineno-18-116" href="#__codelineno-18-116"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2913: Port 1:
+<a id="__codelineno-18-117" name="__codelineno-18-117" href="#__codelineno-18-117"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2915:  - Received packets:    45720948
+<a id="__codelineno-18-118" name="__codelineno-18-118" href="#__codelineno-18-118"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2916:  - Transmit packets:    0
+<a id="__codelineno-18-119" name="__codelineno-18-119" href="#__codelineno-18-119"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2917:  - Received bytes:      368693724672
+<a id="__codelineno-18-120" name="__codelineno-18-120" href="#__codelineno-18-120"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2918:  - Transmit bytes:      0
+<a id="__codelineno-18-121" name="__codelineno-18-121" href="#__codelineno-18-121"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2919:  - Missed packets:      0
+<a id="__codelineno-18-122" name="__codelineno-18-122" href="#__codelineno-18-122"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2920:  - Errored packets:     0
+<a id="__codelineno-18-123" name="__codelineno-18-123" href="#__codelineno-18-123"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2921:  - RX out of buffers:   0
+<a id="__codelineno-18-124" name="__codelineno-18-124" href="#__codelineno-18-124"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2923:    ** Extended Stats **
+<a id="__codelineno-18-125" name="__codelineno-18-125" href="#__codelineno-18-125"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       rx_good_packets:       45726554
+<a id="__codelineno-18-126" name="__codelineno-18-126" href="#__codelineno-18-126"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       rx_good_bytes:     368738931456
+<a id="__codelineno-18-127" name="__codelineno-18-127" href="#__codelineno-18-127"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       rx_q0_packets:     45726554
+<a id="__codelineno-18-128" name="__codelineno-18-128" href="#__codelineno-18-128"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       rx_q0_bytes:       368738931456
+<a id="__codelineno-18-129" name="__codelineno-18-129" href="#__codelineno-18-129"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       rx_unicast_bytes:      368729399808
+<a id="__codelineno-18-130" name="__codelineno-18-130" href="#__codelineno-18-130"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       rx_unicast_packets:        45725372
+<a id="__codelineno-18-131" name="__codelineno-18-131" href="#__codelineno-18-131"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       rx_phy_packets:        45725224
+<a id="__codelineno-18-132" name="__codelineno-18-132" href="#__codelineno-18-132"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:2953:       rx_phy_bytes:      368911131436
+<a id="__codelineno-18-133" name="__codelineno-18-133" href="#__codelineno-18-133"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:4226: daqiri DPDK engine shutdown called 1
+<a id="__codelineno-18-134" name="__codelineno-18-134" href="#__codelineno-18-134"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:4229: daqiri DPDK engine shutting down
+<a id="__codelineno-18-135" name="__codelineno-18-135" href="#__codelineno-18-135"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:3676: Total packets received by application (port/queue 1/0): 45726776
+<a id="__codelineno-18-136" name="__codelineno-18-136" href="#__codelineno-18-136"></a>[INFO] /workspace/daqiri/src/engines/dpdk/daqiri_dpdk_engine.cpp:3814: Total packets transmitted by application (port/queue 0/0): 45731840
+<a id="__codelineno-18-137" name="__codelineno-18-137" href="#__codelineno-18-137"></a>RX complete: packets=45711360 bytes=368616407040 bursts=4464
+</code></pre></div>
+</details>
+<p>To inspect the speed the data is moving through the NIC, run <code>mlnx_perf</code> on one of the interfaces in a separate terminal, concurrently with the application running:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>sudo<span class="w"> </span>mlnx_perf<span class="w"> </span>-i<span class="w"> </span><span class="nv">$if_name</span>
+</code></pre></div>
+<p>The <code>*_packets_phy</code> and <code>*_bytes_phy</code> counters are physical-link counters. They increase when packets cross the wire through the QSFP/SerDes side of the NIC. If a DGX Spark same-machine loopback uses two PFs that map to the same physical port, traffic can be switched on-chip and the vport counters may rise while the physical counters stay flat.</p>
+<details class="abstract">
+<summary>See an example output</summary>
+<p>On IGX with RTX 6000 Ada Generation, we saturate the 100 Gbps linerate with this configuration:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>      rx_vport_unicast_packets: 1,562,203
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>        rx_vport_unicast_bytes: 12,597,604,992 Bps   = 100,780.83 Mbps
+<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a>                rx_packets_phy: 1,562,198
+<a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a>                  rx_bytes_phy: 12,603,813,464 Bps   = 100,830.50 Mbps
+<a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a>     rx_4096_to_8191_bytes_phy: 1,562,186
+<a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a>                rx_prio0_bytes: 12,603,256,772 Bps   = 100,826.5 Mbps
+<a id="__codelineno-20-7" name="__codelineno-20-7" href="#__codelineno-20-7"></a>              rx_prio0_packets: 1,562,128
+</code></pre></div></p>
+</details>
+<details class="tip">
+<summary>Troubleshooting</summary>
+<details class="failure">
+<summary>Cannot create HWS action since HWS is not supported</summary>
+<p>Example error:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>mlx5_net: [mlx5dr_action_create_generic_bulk]: Cannot create HWS action since HWS is not supported
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>mlx5_net: Failed to start port 0 0005:03:00.0: fail to configure port
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>[CRITICAL] Cannot start device err=-95, port=0
+</code></pre></div>
+<p>Raw Ethernet (DPDK-backed) uses Hardware Steering (HWS) via the <code>dv_flow_en=2</code> mlx5 device argument. HWS requires compatible versions of both the NIC firmware and the host's MLNX_OFED kernel modules. Per the <a href="https://doc.dpdk.org/guides/nics/mlx5.html">DPDK mlx5 documentation</a>, the minimum requirements are ConnectX-6 Dx or later with firmware <code>xx.35.1012</code>+, but the host's OFED/kernel driver must also support the HWS features expected by the DPDK version in use.</p>
+<p>Check your OFED and firmware versions:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>cat<span class="w"> </span>/sys/module/mlx5_core/version<span class="w">   </span><span class="c1"># Host OFED kernel module version</span>
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>ethtool<span class="w"> </span>-i<span class="w"> </span>&lt;interface_name&gt;<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>firmware<span class="w">  </span><span class="c1"># NIC firmware version</span>
+</code></pre></div>
+<p>To resolve, update your NIC firmware and OFED drivers, or contact the DAQIRI team for guidance on compatible version combinations.</p>
+</details>
+<details class="failure">
+<summary>EAL: failed to parse device</summary>
+<p>Make sure to set valid PCIe addresses in the <code>address</code> fields in <code>interfaces</code>, per <a href="#configure-the-nic-for-tx-and-rx">instructions above</a>.</p>
+</details>
+<details class="failure">
+<summary>Invalid MAC address format</summary>
+<p>Make sure to set a valid MAC address in the <code>eth_dst_addr</code> field in <code>bench_tx</code>, per <a href="#configure-the-application">instructions above</a>.</p>
+</details>
+<details class="failure">
+<summary>mlx5_common: Fail to create MR for address [...] Could not DMA map EXT memory</summary>
+<p>Example error:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>mlx5_common: Fail to create MR for address (0xffff2fc00000)
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>mlx5_common: Device 0005:03:00.0 unable to DMA map
+<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>[critical] [adv_network_dpdk_mgr.cpp:188] Could not DMA map EXT memory: -1 err=Invalid argument
+<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a>[critical] [adv_network_dpdk_mgr.cpp:430] Failed to map MRs
+</code></pre></div>
+<p>Check the <a href="../../tutorials/system_configuration/#enable-gpudirect">GPUDirect setup</a> for your
+deployment. Some host builds use <code>nvidia-peermem</code>; the container path uses
+dma-buf support from the patched DPDK build.</p>
+</details>
+<details class="failure">
+<summary>EAL: Couldn't get fd on hugepage file [..] error allocating rte services array</summary>
+<p>Example error:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>EAL: get_seg_fd(): open &#39;/mnt/huge/nwlrbbmqbhmap_0&#39; failed: Permission denied
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>EAL: Couldn&#39;t get fd on hugepage file
+<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a>EAL: error allocating rte services array
+<a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a>EAL: FATAL: rte_service_init() failed
+<a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a>EAL: rte_service_init() failed
+</code></pre></div>
+<p>Ensure you run as root, using <code>sudo</code>.</p>
+</details>
+<details class="failure">
+<summary>EAL: Cannot get hugepage information.</summary>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>EAL: x hugepages of size x reserved, no mounted hugetlbfs found for that size
+</code></pre></div>
+<p>Ensure your <a href="../../tutorials/system_configuration/#step-4-enable-huge-pages">hugepages are mounted</a>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>EAL: No free x kB hugepages reported on node 0
+</code></pre></div>
+<p>Reachable only when the in-process preflight is bypassed (e.g. running an older binary against a host with hugepages reserved but not mounted). Mount per <a href="../../tutorials/system_configuration/#step-4-enable-huge-pages">System Configuration: Step 4</a> and re-run.</p>
+</details>
+<details class="failure">
+<summary>Stale <code>&lt;file-prefix&gt;map_*</code> files in /dev/hugepages after a SIGKILL</summary>
+<p>Init- and shutdown-path cleanup is automatic. Files only leak if the process is <code>SIGKILL</code>ed (OOM, container hard-stop). Symptom: <code>HugePages_Free: 0</code> with no bench running.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>pgrep<span class="w"> </span>-af<span class="w"> </span>daqiri_bench<span class="w">   </span><span class="c1"># confirm nothing is running</span>
+<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>sudo<span class="w"> </span>rm<span class="w"> </span>-f<span class="w"> </span>/dev/hugepages/*map_*<span class="w"> </span>/mnt/huge/*map_*
+</code></pre></div>
+</details>
+<details class="failure">
+<summary>Could not allocate x MB of GPU memory [...] Failed to allocate GPU memory</summary>
+<p>Check your GPU utilization:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>nvidia-smi<span class="w"> </span>pmon<span class="w"> </span>-c<span class="w"> </span><span class="m">1</span>
+</code></pre></div>
+<p>You might need to kill some of the listed processes to free up GPU VRAM.</p>
+</details>
+</details>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+  
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+        
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../socket_benchmarking/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Socket and RDMA Benchmarking">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Socket and RDMA Benchmarking
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../performance-dgx-spark/" class="md-footer__link md-footer__link--next" aria-label="Next: Performance: DGX Spark">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Performance: DGX Spark
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["content.code.annotate", "content.code.copy", "content.tabs.link", "navigation.tabs", "navigation.sections", "navigation.top", "navigation.footer", "search.highlight", "search.suggest", "toc.follow"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+        <script src="../../javascripts/platform-tab-toc.js"></script>
+      
+        <script src="../../javascripts/tab-dropdowns.js"></script>
+      
+        <script src="../../javascripts/image-overlay.js"></script>
+      
+    
+  </body>
+</html>

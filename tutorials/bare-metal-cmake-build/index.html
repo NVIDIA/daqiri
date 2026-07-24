@@ -1,0 +1,2178 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+  
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://nvidia.github.io/daqiri/tutorials/bare-metal-cmake-build/">
+      
+      
+        <link rel="prev" href="../system_configuration/">
+      
+      
+        <link rel="next" href="../configuration-walkthrough/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../images/favicon-32.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+  <link rel="icon" href="../../images/favicon.svg" sizes="any" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="../../images/apple-touch-icon.png">
+
+    
+      
+        <title>Bare-Metal CMake Build - DAQIRI: Data Acquisition for Integrated Real-time Instruments</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  <script>window.NV_NAV = {"Benchmarking": [{"label": "Overview", "url": "benchmarks/"}, {"label": "Socket and RDMA Benchmarking", "url": "benchmarks/socket_benchmarking/"}, {"label": "Raw Ethernet Benchmarking", "url": "benchmarks/raw_benchmarking/"}, {"label": "Performance: DGX Spark", "url": "benchmarks/performance-dgx-spark/"}], "API Reference": [{"label": "API Guide", "url": "api-reference/"}, {"label": "Configuration YAML Reference", "url": "api-reference/configuration/"}, {"label": "C++ API Usage", "url": "api-reference/cpp/"}, {"label": "Python API Usage", "url": "api-reference/python/"}], "Tutorials": [{"label": "System Configuration", "url": "tutorials/system_configuration/"}, {"label": "Bare-Metal CMake Build", "url": "tutorials/bare-metal-cmake-build/"}, {"label": "Configuration YAML Walkthrough", "url": "tutorials/configuration-walkthrough/"}, {"label": "DAQIRI + Holoscan Integration", "url": "tutorials/daqiri-holoscan-integration/"}]};</script></head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="light-green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#bare-metal-cmake-build" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="DAQIRI: Data Acquisition for Integrated Real-time Instruments" class="md-header__button md-logo" aria-label="DAQIRI: Data Acquisition for Integrated Real-time Instruments" data-md-component="logo">
+      
+  <img src="../../images/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            DAQIRI: Data Acquisition for Integrated Real-time Instruments
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Bare-Metal CMake Build
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="light-green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="light-green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/nvidia/daqiri" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    nvidia/daqiri
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../getting-started/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Getting Started
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../concepts/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Concepts
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../benchmarks/" class="md-tabs__link">
+          
+  
+  
+  Benchmarking
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../api-reference/" class="md-tabs__link">
+          
+  
+  
+  API Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../system_configuration/" class="md-tabs__link">
+          
+  
+  
+  Tutorials
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+                
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" hidden>
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="DAQIRI: Data Acquisition for Integrated Real-time Instruments" class="md-nav__button md-logo" aria-label="DAQIRI: Data Acquisition for Integrated Real-time Instruments" data-md-component="logo">
+      
+  <img src="../../images/logo.svg" alt="logo">
+
+    </a>
+    DAQIRI: Data Acquisition for Integrated Real-time Instruments
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/nvidia/daqiri" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    nvidia/daqiri
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Benchmarking
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Benchmarking
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/socket_benchmarking/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Socket and RDMA Benchmarking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/raw_benchmarking/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Raw Ethernet Benchmarking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/performance-dgx-spark/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance: DGX Spark
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration YAML Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/cpp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    C++ API Usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API Usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorials
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tutorials
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../system_configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bare-Metal CMake Build
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bare-Metal CMake Build
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#prerequisite-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisite verification
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-1-configure-the-doca-apt-repository" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1: Configure the DOCA APT repository
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-2-install-build-tooling-and-rdma-libraries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2: Install build tooling and RDMA libraries
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-3-build-dpdk-with-daqiri-patches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 3: Build DPDK with DAQIRI patches
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 3: Build DPDK with DAQIRI patches">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-clone-daqiri" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 Clone DAQIRI
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-download-and-patch-dpdk-2511" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2 Download and patch DPDK 25.11
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-configure-build-and-install" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3 Configure, build, and install
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-verify" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.4 Verify
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-4-configure-daqiri-with-cmake" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 4: Configure DAQIRI with CMake
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 4: Configure DAQIRI with CMake">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#daqiri_engine-engine-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DAQIRI_ENGINE: engine selection
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#daqiri_build_python-pybind11-bindings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DAQIRI_BUILD_PYTHON: pybind11 bindings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#daqiri_enable_gds-cufile-burst-writes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DAQIRI_ENABLE_GDS: cuFile burst writes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cmake_cuda_architectures-gpu-compute-capability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CMAKE_CUDA_ARCHITECTURES: GPU compute capability
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#other-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Other flags
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-5-build-install-and-verify" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 5: Build, install, and verify
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 5: Build, install, and verify">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-build" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.1 Build
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52-install" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.2 Install
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53-smoke-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.3 Smoke test
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-6-troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 6: Troubleshooting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#platform-specific-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Platform-specific notes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#next-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Next steps
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cleanup
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration-walkthrough/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration YAML Walkthrough
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../daqiri-holoscan-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DAQIRI + Holoscan Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+                
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#prerequisite-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisite verification
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-1-configure-the-doca-apt-repository" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1: Configure the DOCA APT repository
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-2-install-build-tooling-and-rdma-libraries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2: Install build tooling and RDMA libraries
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-3-build-dpdk-with-daqiri-patches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 3: Build DPDK with DAQIRI patches
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 3: Build DPDK with DAQIRI patches">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-clone-daqiri" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 Clone DAQIRI
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-download-and-patch-dpdk-2511" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2 Download and patch DPDK 25.11
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-configure-build-and-install" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3 Configure, build, and install
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-verify" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.4 Verify
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-4-configure-daqiri-with-cmake" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 4: Configure DAQIRI with CMake
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 4: Configure DAQIRI with CMake">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#daqiri_engine-engine-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DAQIRI_ENGINE: engine selection
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#daqiri_build_python-pybind11-bindings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DAQIRI_BUILD_PYTHON: pybind11 bindings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#daqiri_enable_gds-cufile-burst-writes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DAQIRI_ENABLE_GDS: cuFile burst writes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cmake_cuda_architectures-gpu-compute-capability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CMAKE_CUDA_ARCHITECTURES: GPU compute capability
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#other-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Other flags
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-5-build-install-and-verify" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 5: Build, install, and verify
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 5: Build, install, and verify">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-build" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.1 Build
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52-install" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.2 Install
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53-smoke-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.3 Smoke test
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-6-troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 6: Troubleshooting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#platform-specific-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Platform-specific notes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#next-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Next steps
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cleanup
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+  
+
+
+
+  
+  
+
+
+<h1 id="bare-metal-cmake-build">Bare-Metal CMake Build<a class="headerlink" href="#bare-metal-cmake-build" title="Permanent link">&para;</a></h1>
+<p>This tutorial walks you through a complete bare-metal DAQIRI build on a Linux host, from verifying the kernel, driver, NIC, and CUDA prerequisites, through building a patched DPDK from source, configuring DAQIRI with CMake, installing the library, and recovering from the most common failure modes.</p>
+<p>It is the long-form companion to the five-line <code>cmake</code> snippet in <a href="../../getting-started/#build-the-daqiri-library">Getting Started</a>.</p>
+<div class="admonition tip">
+<p class="admonition-title">Prefer the container build</p>
+<p>The <a href="../../getting-started/#build-the-daqiri-library">container build</a> ships a dmabuf-patched DPDK and all user-space dependencies pre-installed. It is the recommended path for most users. Use this bare-metal tutorial when:</p>
+<ul>
+<li>your host distribution or CUDA stack is fixed and you cannot run a container;</li>
+<li>you are packaging DAQIRI into another product that already provides a runtime image;</li>
+<li>you are debugging a build problem inside the container's <code>daqiri-build</code> stage and need to reproduce it on the host.</li>
+</ul>
+<p>If none of those apply, follow <a href="../system_configuration/">System Configuration</a> and then <a href="../../benchmarks/raw_benchmarking/">Raw Ethernet Benchmarking</a> instead.</p>
+</div>
+<h2 id="prerequisite-verification">Prerequisite verification<a class="headerlink" href="#prerequisite-verification" title="Permanent link">&para;</a></h2>
+<p>Before installing anything, run the checks below and resolve any failures. They all run as a regular user.</p>
+<table>
+<thead>
+<tr>
+<th>Check</th>
+<th>Command</th>
+<th>Expected</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NVIDIA driver + GPU</td>
+<td><code>nvidia-smi</code></td>
+<td>Driver version printed, one or more GPUs listed</td>
+</tr>
+<tr>
+<td>CUDA Toolkit (11.7+)</td>
+<td><code>nvcc --version</code></td>
+<td><code>Cuda compilation tools, release 11.7</code> or later</td>
+</tr>
+<tr>
+<td>NIC kernel drivers</td>
+<td><code>lsmod \| grep ib_core</code></td>
+<td><code>ib_core</code> listed</td>
+</tr>
+<tr>
+<td>NIC user-space tools</td>
+<td><code>ibv_devinfo</code></td>
+<td>At least one <code>mlx5_*</code> HCA in <code>PORT_ACTIVE</code> state</td>
+</tr>
+<tr>
+<td>ConnectX device on PCIe</td>
+<td><code>lspci -d 15b3:</code></td>
+<td>One or more Mellanox/NVIDIA networking entries</td>
+</tr>
+<tr>
+<td>Kernel dma-buf support</td>
+<td><code>zgrep CONFIG_DMA_SHARED_BUFFER /proc/config.gz</code></td>
+<td><code>=y</code> (built-in)</td>
+</tr>
+</tbody>
+</table>
+<details class="failure">
+<summary><code>nvidia-smi: command not found</code></summary>
+<p>Install the NVIDIA driver. On Ubuntu the simplest path is <code>sudo ubuntu-drivers install</code>. The driver must be a recent branch with GPUDirect support. See the <a href="../../getting-started/#system-requirements">system requirements table</a>.</p>
+</details>
+<details class="failure">
+<summary><code>nvcc: command not found</code> (but <code>nvidia-smi</code> works)</summary>
+<p>The runtime driver is installed but the CUDA Toolkit is not. Add the CUDA APT repository for your distribution from <a href="https://developer.nvidia.com/cuda-downloads?target_os=Linux">NVIDIA's CUDA downloads page</a> and <code>sudo apt install cuda-toolkit</code>. Then put <code>nvcc</code> on <code>PATH</code> (typically <code>/usr/local/cuda/bin</code>).</p>
+</details>
+<details class="failure">
+<summary><code>lsmod | grep ib_core</code> is empty</summary>
+<p>The NIC kernel drivers are not loaded. Follow <a href="../system_configuration/#check-your-nic-drivers">Check your NIC drivers</a> in System Configuration to install <code>doca-ofed</code> (or the inbox <code>rdma-core</code> stack) and reboot.</p>
+</details>
+<details class="failure">
+<summary><code>ibv_devinfo</code> prints <code>libvmw_pvrdma-rdmav34.so</code> warning</summary>
+<p><code>couldn't load driver 'libvmw_pvrdma-rdmav34.so'</code> is harmless. It refers to a VMware paravirtual RDMA userspace provider that is not relevant on bare-metal systems. As long as <code>ibv_devinfo</code> still lists your <code>mlx5_*</code> HCAs after the warning, you can ignore it. See <a href="../system_configuration/#check-your-nic-drivers">System Configuration → Warning about <code>libvmw_pvrdma-rdmav34.so</code></a> for more context.</p>
+</details>
+<details class="failure">
+<summary><code>/proc/config.gz</code> does not exist</summary>
+<p>Some kernels don't expose <code>/proc/config.gz</code> (notably the IGX/Tegra kernel). Try <code>grep CONFIG_DMA_SHARED_BUFFER /boot/config-$(uname -r)</code> instead. The expected value is <code>=y</code>. Without dma-buf support the patched DPDK built in <a href="#step-3-build-dpdk-with-daqiri-patches">Step 3</a> cannot register GPU memory regions and DAQIRI will fall back to the legacy peermem path.</p>
+</details>
+<h2 id="step-1-configure-the-doca-apt-repository">Step 1: Configure the DOCA APT repository<a class="headerlink" href="#step-1-configure-the-doca-apt-repository" title="Permanent link">&para;</a></h2>
+<p>DAQIRI's RDMA/ibverbs dependencies (<code>libibverbs-dev</code>, <code>librdmacm-dev</code>, <code>libmlx5-1</code>, <code>mlnx-ofed-kernel-utils</code>, <code>mft</code>) come from the DOCA repository. The exact apt setup commands for IGX OS 1.1, SBSA Ubuntu 22.04, and x86_64 Ubuntu 22.04 are in <a href="../../getting-started/#build-the-daqiri-library">Getting Started → Build the DAQIRI library</a>. Run the tab that matches your platform, then return here.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The container build uses DOCA <code>3.2.1</code> (see <code>DOCA_VERSION</code> in the <a href="https://github.com/NVIDIA/daqiri/blob/main/Dockerfile">Dockerfile</a>). Earlier DOCA releases also work. The version pinning is for build reproducibility, not a strict requirement.</p>
+</div>
+<h2 id="step-2-install-build-tooling-and-rdma-libraries">Step 2: Install build tooling and RDMA libraries<a class="headerlink" href="#step-2-install-build-tooling-and-rdma-libraries" title="Permanent link">&para;</a></h2>
+<p>The package list below mirrors the <code>base</code>, <code>base-deps</code>, and <code>dpdk</code> stages of the <a href="https://github.com/NVIDIA/daqiri/blob/main/Dockerfile">Dockerfile</a> and is the minimum needed for the recipe that follows.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>sudo<span class="w"> </span>apt<span class="w"> </span>update
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>--no-install-recommends<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span>build-essential<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span>git<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span>curl<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span>ca-certificates<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span>gnupg<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span>pkg-config<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span>ninja-build<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span>meson<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span>python3-pyelftools<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">    </span>libnuma-dev<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span>libibverbs-dev<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">    </span>librdmacm-dev<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">    </span>libmlx5-1<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">    </span>ibverbs-utils<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">    </span>mlnx-ofed-kernel-utils<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">    </span>mft
+</code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">apt may select <code>ibverbs-providers</code> instead of <code>libmlx5-1</code></p>
+<p>On many host configurations (always on Ubuntu 24.04 with DOCA 3.2.1, where <code>libmlx5-1</code> has no DOCA candidate) apt resolves <code>libmlx5-1</code> to the <code>ibverbs-providers</code> virtual package (the inbox bundle of mlx5/mlx4 user-space providers). This is fine: <code>libmlx5.so.1</code> ends up installed either way and DAQIRI links against it through <code>libibverbs</code>. If you want the DOCA-provided build specifically, install <code>libmlx5-1</code> and <code>libmlx5-dev</code> after the DOCA repo from <a href="#step-1-configure-the-doca-apt-repository">Step 1</a> is configured.</p>
+</div>
+<p>DAQIRI's top-level CMake requires version 3.20 or newer (see <a href="https://github.com/NVIDIA/daqiri/blob/main/CMakeLists.txt">CMakeLists.txt</a>). On Ubuntu 22.04 the distribution package is too old. Install a current build from the Kitware APT repository:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nv">OS_CODENAME</span><span class="o">=</span><span class="k">$(</span>.<span class="w"> </span>/etc/os-release<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$VERSION_CODENAME</span><span class="s2">&quot;</span><span class="k">)</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nv">KITWARE_LINE</span><span class="o">=</span><span class="s2">&quot;deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ </span><span class="si">${</span><span class="nv">OS_CODENAME</span><span class="si">}</span><span class="s2"> main&quot;</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>curl<span class="w"> </span>-fsSL<span class="w"> </span>https://apt.kitware.com/keys/kitware-archive-latest.asc<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span><span class="p">|</span><span class="w"> </span>sudo<span class="w"> </span>gpg<span class="w"> </span>--dearmor<span class="w"> </span>-o<span class="w"> </span>/usr/share/keyrings/kitware-archive-keyring.gpg
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">KITWARE_LINE</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>sudo<span class="w"> </span>tee<span class="w"> </span>/etc/apt/sources.list.d/kitware.list
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>sudo<span class="w"> </span>apt<span class="w"> </span>update
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>--no-install-recommends<span class="w"> </span>kitware-archive-keyring<span class="w"> </span>cmake<span class="w"> </span>cmake-data
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>cmake<span class="w"> </span>--version<span class="w">   </span><span class="c1"># expect &gt;= 3.20</span>
+</code></pre></div>
+<div class="admonition tip">
+<p class="admonition-title">Copy/paste safety</p>
+<p>The <code>KITWARE_LINE</code> shell variable above (and the <code>DISABLE_DRIVERS</code> variable in <a href="#33-configure-build-and-install">Step 3.3</a>) keep long single-line strings off the terminal so a copy/paste that wraps a line break into the middle of the string does not silently truncate the argument. If you paste the literal <code>echo ...</code> or <code>meson setup ...</code> commands instead, verify the resulting file/command actually contains what you intended before continuing.</p>
+</div>
+<details class="note">
+<summary>Optional: Python bindings</summary>
+<p>Skip this if you do not need <code>import daqiri</code> from Python. To build the pybind11 bindings later with <code>-DDAQIRI_BUILD_PYTHON=ON</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>--no-install-recommends<span class="w"> </span>python3-dev<span class="w"> </span>pybind11-dev
+</code></pre></div>
+</details>
+<details class="note">
+<summary>Optional: GDS (cuFile) for device-memory file writes</summary>
+<p>Skip this unless you plan to enable <code>-DDAQIRI_ENABLE_GDS=ON</code>. The cuFile headers and <code>libcufile</code> are installed as part of the CUDA Toolkit (<code>cuda-toolkit-*</code> metapackage) and need no separate apt step. The runtime requirements (<code>nvidia-fs</code> kernel module, supported destination filesystem) are documented in <a href="../../getting-started/#cmake-options">Getting Started</a>.</p>
+</details>
+<h2 id="step-3-build-dpdk-with-daqiri-patches">Step 3: Build DPDK with DAQIRI patches<a class="headerlink" href="#step-3-build-dpdk-with-daqiri-patches" title="Permanent link">&para;</a></h2>
+<p>DAQIRI requires DPDK with the two patches in <a href="https://github.com/NVIDIA/daqiri/blob/main/dpdk_patches"><code>dpdk_patches/</code></a>: <code>dmabuf.patch</code> enables GPUDirect through the kernel dma-buf interface (so <code>nvidia-peermem</code> is <strong>not</strong> required), and <code>dpdk.nvidia.patch</code> adds the NVIDIA-specific changes consumed by the DPDK engine. The recipe below is the literal sequence run by the <code>dpdk</code> stage of the <a href="https://github.com/NVIDIA/daqiri/blob/main/Dockerfile">Dockerfile</a>.</p>
+<h3 id="31-clone-daqiri">3.1 Clone DAQIRI<a class="headerlink" href="#31-clone-daqiri" title="Permanent link">&para;</a></h3>
+<p>You need the repository for <code>dpdk_patches/</code> regardless of whether you also build DAQIRI from this clone in <a href="#step-4-configure-daqiri-with-cmake">Step 4</a>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/NVIDIA/daqiri.git
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nb">cd</span><span class="w"> </span>daqiri
+</code></pre></div>
+<h3 id="32-download-and-patch-dpdk-2511">3.2 Download and patch DPDK 25.11<a class="headerlink" href="#32-download-and-patch-dpdk-2511" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nv">DPDK_VERSION</span><span class="o">=</span><span class="m">25</span>.11
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nv">DAQIRI_REPO_DIR</span><span class="o">=</span><span class="nv">$PWD</span><span class="w">   </span><span class="c1"># remember the daqiri clone path before we cd away</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>curl<span class="w"> </span>-fsSL<span class="w"> </span>https://fast.dpdk.org/rel/dpdk-<span class="si">${</span><span class="nv">DPDK_VERSION</span><span class="si">}</span>.tar.xz<span class="w"> </span>-o<span class="w"> </span>/tmp/dpdk-<span class="si">${</span><span class="nv">DPDK_VERSION</span><span class="si">}</span>.tar.xz
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>tar<span class="w"> </span>xf<span class="w"> </span>/tmp/dpdk-<span class="si">${</span><span class="nv">DPDK_VERSION</span><span class="si">}</span>.tar.xz<span class="w"> </span>-C<span class="w"> </span>/tmp
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="nb">cd</span><span class="w"> </span>/tmp/dpdk-<span class="si">${</span><span class="nv">DPDK_VERSION</span><span class="si">}</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="c1"># `git apply` is used instead of `patch -p1` because:</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="c1">#   1. `dmabuf.patch` carries `.mailmap` and release-notes hunks that conflict on</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="c1">#      a stock tarball, and they must be excluded. GNU `patch` 2.7.x does not</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="c1">#      accept `--exclude=`; only `git apply` does.</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="c1">#   2. `git apply` does not actually require the working directory to be a git</span>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="c1">#      repo, so it works on an extracted tarball as-is.</span>
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>git<span class="w"> </span>apply<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="w">    </span>--exclude<span class="o">=</span>.mailmap<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="w">    </span>--exclude<span class="o">=</span><span class="s1">&#39;doc/guides/rel_notes/release_26_03.rst&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="w">    </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">DAQIRI_REPO_DIR</span><span class="si">}</span><span class="s2">/dpdk_patches/dmabuf.patch&quot;</span>
+<a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a>git<span class="w"> </span>apply<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">DAQIRI_REPO_DIR</span><span class="si">}</span><span class="s2">/dpdk_patches/dpdk.nvidia.patch&quot;</span>
+</code></pre></div>
+<h3 id="33-configure-build-and-install">3.3 Configure, build, and install<a class="headerlink" href="#33-configure-build-and-install" title="Permanent link">&para;</a></h3>
+<p>The <code>meson setup</code> flags below match the container build. The <code>disable_drivers</code> list trims drivers DAQIRI never uses, cutting build time and the installed footprint. It is kept in a shell variable so the long comma-separated string is not at risk of being truncated by terminal copy/paste line-wrapping.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nv">DPDK_BUILD_DIR</span><span class="o">=</span>/tmp/dpdk-build
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nv">DPDK_INSTALL_PREFIX</span><span class="o">=</span>/usr/local
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="nv">DISABLE_DRIVERS</span><span class="o">=</span><span class="s1">&#39;baseband/*,bus/ifpga/*,common/cpt,common/dpaax,common/iavf,common/octeontx,common/octeontx2,crypto/nitrox,net/ark,net/atlantic,net/avp,net/axgbe,net/bnx2x,net/bnxt,net/cxgbe,net/e1000,net/ena,net/enic,net/fm10k,net/hinic,net/hns3,net/i40e,net/ixgbe,vdpa/ifc,net/igc,net/liquidio,net/mana,net/netvsc,net/nfp,net/qede,net/sfc,net/thunderx,net/vdev_netvsc,net/vmxnet3,regex/octeontx2&#39;</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>meson<span class="w"> </span>setup<span class="w"> </span><span class="si">${</span><span class="nv">DPDK_BUILD_DIR</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">    </span>--prefix<span class="o">=</span><span class="si">${</span><span class="nv">DPDK_INSTALL_PREFIX</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">    </span>-Dtests<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">    </span>-Dplatform<span class="o">=</span>generic<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">    </span>-Denable_docs<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">    </span>-Ddisable_drivers<span class="o">=</span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">DISABLE_DRIVERS</span><span class="si">}</span><span class="s2">&quot;</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="nb">cd</span><span class="w"> </span><span class="si">${</span><span class="nv">DPDK_BUILD_DIR</span><span class="si">}</span>
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>ninja
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>sudo<span class="w"> </span>meson<span class="w"> </span>install
+<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>sudo<span class="w"> </span>ldconfig
+</code></pre></div>
+<h3 id="34-verify">3.4 Verify<a class="headerlink" href="#34-verify" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>pkg-config<span class="w"> </span>--modversion<span class="w"> </span>libdpdk<span class="w">   </span><span class="c1"># expect 25.11.x</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>pkg-config<span class="w"> </span>--libs<span class="w"> </span>libdpdk<span class="w">         </span><span class="c1"># should print -lrte_eal -lrte_mbuf ... etc.</span>
+</code></pre></div>
+<p>If <code>pkg-config</code> cannot find <code>libdpdk</code>, add the install location to its search path:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PKG_CONFIG_PATH</span><span class="o">=</span>/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:<span class="si">${</span><span class="nv">PKG_CONFIG_PATH</span><span class="k">:-</span><span class="si">}</span>
+</code></pre></div>
+<p>(Replace <code>x86_64-linux-gnu</code> with <code>aarch64-linux-gnu</code> on ARM hosts.)</p>
+<h2 id="step-4-configure-daqiri-with-cmake">Step 4: Configure DAQIRI with CMake<a class="headerlink" href="#step-4-configure-daqiri-with-cmake" title="Permanent link">&para;</a></h2>
+<p>From the <code>daqiri</code> repository root (the clone you made in <a href="#31-clone-daqiri">Step 3.1</a>):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>cmake<span class="w"> </span>-S<span class="w"> </span>.<span class="w"> </span>-B<span class="w"> </span>build<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">    </span>-DCMAKE_BUILD_TYPE<span class="o">=</span>Release<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">    </span>-DBUILD_SHARED_LIBS<span class="o">=</span>ON<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">    </span>-DDAQIRI_ENGINE<span class="o">=</span><span class="s2">&quot;dpdk ibverbs&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">    </span>-DDAQIRI_BUILD_EXAMPLES<span class="o">=</span>ON<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">    </span>-DDAQIRI_BUILD_PYTHON<span class="o">=</span>OFF
+</code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title">Deactivate conda before configuring DPDK</p>
+<p>An active conda environment (including <code>(base)</code>) can break <code>meson setup</code> for DPDK in <a href="#33-configure-build-and-install">Step 3.3</a>. Run <code>conda deactivate</code> before building DPDK from source.</p>
+<p>DAQIRI itself prefers the vendored <code>third_party/yaml-cpp</code> submodule by default, so example benchmarks link correctly even when conda is active. Initialize submodules before configuring: <code>git submodule update --init third_party/yaml-cpp</code>. Set <code>-DDAQIRI_PREFER_SYSTEM_YAML_CPP=ON</code> only if you intentionally want the system package.</p>
+</div>
+<p>The sections below explain each option you can flip from the default, with explicit "when to use" guidance. The full reference is the <a href="../../getting-started/#cmake-options">CMake Options table</a>.</p>
+<h3 id="daqiri_engine-engine-selection"><code>DAQIRI_ENGINE</code>: engine selection<a class="headerlink" href="#daqiri_engine-engine-selection" title="Permanent link">&para;</a></h3>
+<p><code>DAQIRI_ENGINE</code> is a space-separated list controlling which <strong>optional</strong> engines are compiled into <code>libdaqiri.so</code>. Linux UDP/TCP sockets are always built in, so the only values are <code>dpdk</code> and <code>ibverbs</code>. Three recipes cover most use cases:</p>
+<table>
+<thead>
+<tr>
+<th>Recipe</th>
+<th>What you get</th>
+<th>When to use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-DDAQIRI_ENGINE="dpdk"</code></td>
+<td>Raw Ethernet (DPDK) + built-in UDP/TCP sockets</td>
+<td>No RoCE/RDMA, smallest NIC build</td>
+</tr>
+<tr>
+<td><code>-DDAQIRI_ENGINE="ibverbs"</code></td>
+<td>RDMA/RoCE (ibverbs) + built-in UDP/TCP sockets</td>
+<td>RDMA-only, no raw Ethernet</td>
+</tr>
+<tr>
+<td><code>-DDAQIRI_ENGINE="dpdk ibverbs"</code></td>
+<td>Raw Ethernet + RDMA/RoCE + built-in UDP/TCP sockets</td>
+<td>Recommended default, matches the container</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">Sockets are always available; <code>ibverbs</code> backs RoCE</p>
+<p>The socket engine (Linux UDP/TCP) is always built, so it never appears in <code>DAQIRI_ENGINE</code>. Its RoCE path delegates to the <code>ibverbs</code> engine, so <code>roce://</code> endpoints work only when <code>ibverbs</code> is in the list. Internally the ibverbs engine lives under <a href="https://github.com/NVIDIA/daqiri/blob/main/src/engines/rdma"><code>src/engines/rdma</code></a> (target <code>daqiri_rdma</code>); <code>ibverbs</code> is just the user-facing name, chosen so an alternative RDMA engine (such as DOCA) could be added later.</p>
+</div>
+<h3 id="daqiri_build_python-pybind11-bindings"><code>DAQIRI_BUILD_PYTHON</code>: pybind11 bindings<a class="headerlink" href="#daqiri_build_python-pybind11-bindings" title="Permanent link">&para;</a></h3>
+<p><code>-DDAQIRI_BUILD_PYTHON=ON</code> builds the <code>daqiri</code> Python module from <code>python/</code>. It requires the <code>python3-dev</code> and <code>pybind11-dev</code> packages from the optional step in <a href="#step-2-install-build-tooling-and-rdma-libraries">Step 2</a>. Leave it <code>OFF</code> (the default) if you only consume DAQIRI from C++.</p>
+<h3 id="daqiri_enable_gds-cufile-burst-writes"><code>DAQIRI_ENABLE_GDS</code>: cuFile burst writes<a class="headerlink" href="#daqiri_enable_gds-cufile-burst-writes" title="Permanent link">&para;</a></h3>
+<p><code>-DDAQIRI_ENABLE_GDS=ON</code> enables the <code>cuFile</code>-backed file-write path for bursts whose payload lives in CUDA device memory. The build requires <code>cufile.h</code> and <code>libcufile</code> (both shipped with the CUDA Toolkit). At runtime you also need the <code>nvidia-fs</code> kernel module loaded and a GDS-supported destination filesystem. Verify with the snippet in <a href="../../getting-started/#cmake-options">Getting Started</a>. Without this flag, device-memory burst writes return <code>NOT_SUPPORTED</code>, and host-memory writes are unaffected.</p>
+<h3 id="cmake_cuda_architectures-gpu-compute-capability"><code>CMAKE_CUDA_ARCHITECTURES</code>: GPU compute capability<a class="headerlink" href="#cmake_cuda_architectures-gpu-compute-capability" title="Permanent link">&para;</a></h3>
+<p>The default CUDA architectures DAQIRI compiles for are <code>80;90</code> (A100, H100), with <code>121</code> (GB10) appended automatically when the configuring CUDA compiler is 13.0 or newer. The logic lives in <a href="https://github.com/NVIDIA/daqiri/blob/main/src/CMakeLists.txt"><code>src/CMakeLists.txt</code></a> (search for <code>CMAKE_CUDA_ARCHITECTURES</code>).</p>
+<p>If your GPU is a different generation, override it on the CMake command line:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Example: Ada only (sm_89, e.g. RTX 6000 Ada)</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>cmake<span class="w"> </span>-S<span class="w"> </span>.<span class="w"> </span>-B<span class="w"> </span>build<span class="w"> </span>...<span class="w"> </span>-DCMAKE_CUDA_ARCHITECTURES<span class="o">=</span><span class="m">89</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="c1"># Example: A100 + Ada + Hopper, skip GB10</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>cmake<span class="w"> </span>-S<span class="w"> </span>.<span class="w"> </span>-B<span class="w"> </span>build<span class="w"> </span>...<span class="w"> </span>-DCMAKE_CUDA_ARCHITECTURES<span class="o">=</span><span class="s2">&quot;80;89;90&quot;</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="c1"># Example: RTX PRO 6000 Blackwell Server/Workstation Edition only (sm_120)</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>cmake<span class="w"> </span>-S<span class="w"> </span>.<span class="w"> </span>-B<span class="w"> </span>build<span class="w"> </span>...<span class="w"> </span>-DCMAKE_CUDA_ARCHITECTURES<span class="o">=</span><span class="m">120</span>
+</code></pre></div>
+<p>The override is honored because <code>src/CMakeLists.txt</code> only sets <code>CMAKE_CUDA_ARCHITECTURES</code> when it is not already defined, so a user-supplied <code>-D</code> value takes precedence. Common values:</p>
+<table>
+<thead>
+<tr>
+<th>GPU family</th>
+<th>Architecture</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A100</td>
+<td><code>80</code></td>
+</tr>
+<tr>
+<td>RTX 30xx, A40</td>
+<td><code>86</code></td>
+</tr>
+<tr>
+<td>RTX 40xx, RTX 6000 Ada, L40</td>
+<td><code>89</code></td>
+</tr>
+<tr>
+<td>H100, H200</td>
+<td><code>90</code></td>
+</tr>
+<tr>
+<td>Blackwell datacenter (B100, B200, GB100, GB200)</td>
+<td><code>100</code></td>
+</tr>
+<tr>
+<td>Blackwell consumer / workstation (RTX PRO 6000 Blackwell, RTX 5090)</td>
+<td><code>120</code></td>
+</tr>
+<tr>
+<td>GB10 (DGX Spark)</td>
+<td><code>121</code></td>
+</tr>
+</tbody>
+</table>
+<div class="admonition warning">
+<p class="admonition-title">Default list omits sm_86, sm_89, sm_100, and sm_120</p>
+<p>If your GPU is Ampere (RTX 30xx, A40), Ada (RTX 40xx, RTX 6000 Ada), datacenter Blackwell (B100, B200, GB100, GB200), or workstation Blackwell (RTX PRO 6000 Blackwell, RTX 5090), the default build will not contain native code for your card. The binary may still load via PTX JIT for some architectures, but for production use pass the matching <code>sm_*</code> value via <code>-DCMAKE_CUDA_ARCHITECTURES=...</code>.</p>
+</div>
+<div class="admonition warning">
+<p class="admonition-title"><code>sm_121</code> requires a recent CUDA Toolkit</p>
+<p><code>sm_121</code> (GB10 / DGX Spark) is only known to CUDA Toolkit 13.0 and newer. On CUDA 12.x the automatic append is suppressed, but if you explicitly pass <code>-DCMAKE_CUDA_ARCHITECTURES="...;121"</code> on an older toolkit you will get <code>nvcc fatal: Unsupported gpu architecture 'compute_121'</code>. Drop the <code>121</code> entry or upgrade the toolkit.</p>
+</div>
+<h3 id="other-flags">Other flags<a class="headerlink" href="#other-flags" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>-DBUILD_SHARED_LIBS=ON</code>: produces <code>libdaqiri.so</code> (recommended). With <code>OFF</code>, you get a static library.</li>
+<li><code>-DDAQIRI_BUILD_EXAMPLES=ON</code>: builds the <code>daqiri_bench_*</code> executables under <code>build/examples/</code>. Required for the smoke test in <a href="#53-smoke-test">Step 5.3</a>. On by default.</li>
+<li><code>-DDAQIRI_REORDER_GPU_PROFILE=ON</code>: instruments the CUDA reorder kernels with CUDA event timing. Off by default. Turn on only when profiling.</li>
+</ul>
+<h2 id="step-5-build-install-and-verify">Step 5: Build, install, and verify<a class="headerlink" href="#step-5-build-install-and-verify" title="Permanent link">&para;</a></h2>
+<h3 id="51-build">5.1 Build<a class="headerlink" href="#51-build" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>cmake<span class="w"> </span>--build<span class="w"> </span>build<span class="w"> </span>-j<span class="s2">&quot;</span><span class="k">$(</span>nproc<span class="k">)</span><span class="s2">&quot;</span>
+</code></pre></div>
+<p>A clean build on a modern workstation takes a few minutes. The slowest single translation unit is <code>src/kernels.cu</code>.</p>
+<h3 id="52-install">5.2 Install<a class="headerlink" href="#52-install" title="Permanent link">&para;</a></h3>
+<p>Install to a prefix of your choice. <code>/opt/daqiri</code> matches both the container and the <a href="../../getting-started/">Getting Started</a> recipe:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>sudo<span class="w"> </span>cmake<span class="w"> </span>--install<span class="w"> </span>build<span class="w"> </span>--prefix<span class="w"> </span>/opt/daqiri
+</code></pre></div>
+<p>Confirm the expected artifacts are in place:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>ls<span class="w"> </span>/opt/daqiri/include/daqiri/daqiri.h
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>ls<span class="w"> </span>/opt/daqiri/lib/libdaqiri.so
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>ls<span class="w"> </span>/opt/daqiri/lib/cmake/daqiri/
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>ls<span class="w"> </span>/opt/daqiri/lib/pkgconfig/daqiri.pc
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>ldd<span class="w"> </span>/opt/daqiri/lib/libdaqiri.so<span class="w"> </span><span class="p">|</span><span class="w"> </span>head
+</code></pre></div>
+<p><code>ldd</code> should show <code>librte_*</code> (DPDK), <code>libibverbs.so</code>, <code>librdmacm.so</code>, <code>libcudart.so</code>, and <code>libyaml-cpp.so</code> resolving. Unresolved entries usually mean either DPDK was installed to a prefix not on the dynamic loader path (add it to <code>/etc/ld.so.conf.d/</code> and re-run <code>sudo ldconfig</code>), or the RDMA libraries from <a href="#step-2-install-build-tooling-and-rdma-libraries">Step 2</a> were not actually installed.</p>
+<h3 id="53-smoke-test">5.3 Smoke test<a class="headerlink" href="#53-smoke-test" title="Permanent link">&para;</a></h3>
+<p>Verify the build with the standard two-port TX/RX loopback. This requires a NIC with two ports connected to each other by a physical SFP cable, and that you replace the <code>&lt;angle-bracket&gt;</code> placeholders in the YAML (PCIe BDFs, CPU cores, destination MAC) for your system. The walkthrough for those edits lives in <a href="../../benchmarks/raw_benchmarking/#update-the-loopback-configuration">Raw Ethernet Benchmarking → Update the loopback configuration</a>; do that first, then run:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>sudo<span class="w"> </span>./build/examples/daqiri_bench_raw_gpudirect<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">    </span>./build/examples/daqiri_bench_raw_tx_rx.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">    </span>--seconds<span class="w"> </span><span class="m">5</span>
+</code></pre></div>
+<p>A successful run prints a stream of <code>[INFO]</code> lines followed by an RX/TX rate summary with non-zero packet counts on both sides. If the program aborts immediately with <code>EAL: No free hugepages reported</code>, see <a href="#step-6-troubleshooting">Step 6: Troubleshooting</a> below.</p>
+<div class="admonition tip">
+<p class="admonition-title">DGX Spark</p>
+<p>On DGX Spark, use the prefilled <code>daqiri_bench_raw_tx_rx_spark.yaml</code> instead. Only <code>eth_dst_addr</code> needs an edit. See the <a href="../../benchmarks/raw_benchmarking/#update-the-loopback-configuration">DGX Spark profile callout</a> for the exact MAC-lookup command.</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">No NIC available?</p>
+<p>If you don't have a NIC at all and just want to verify the binary starts cleanly, you can substitute <a href="https://github.com/NVIDIA/daqiri/blob/main/examples/daqiri_bench_raw_sw_loopback.yaml"><code>daqiri_bench_raw_sw_loopback.yaml</code></a>. It runs an in-process TX/RX through DPDK's software loopback with no hardware required. It is <strong>not</strong> representative of production performance and should not replace the real loopback above for build acceptance.</p>
+</div>
+<h2 id="step-6-troubleshooting">Step 6: Troubleshooting<a class="headerlink" href="#step-6-troubleshooting" title="Permanent link">&para;</a></h2>
+<details class="failure">
+<summary>CMake: <code>Could not find a package configuration file provided by ... libdpdk</code></summary>
+<p><code>pkg-config</code> cannot locate the DPDK installation. Either point it at the prefix you used in <a href="#33-configure-build-and-install">Step 3.3</a>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PKG_CONFIG_PATH</span><span class="o">=</span>/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig
+</code></pre></div>
+<p>or, if you installed DPDK from MLNX_OFED to <code>/opt/mellanox/dpdk</code>, rely on the fallback in <a href="https://github.com/NVIDIA/daqiri/blob/main/src/CMakeLists.txt"><code>src/CMakeLists.txt</code></a> (search for <code>mellanox</code>); no extra environment variable is needed, but the path must exist.</p>
+</details>
+<details class="failure">
+<summary>CMake: <code>Could not find libibverbs</code> / <code>librdmacm</code></summary>
+<p>The RDMA development headers are missing. Re-run the apt install from <a href="#step-2-install-build-tooling-and-rdma-libraries">Step 2</a>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>libibverbs-dev<span class="w"> </span>librdmacm-dev<span class="w"> </span>libmlx5-1
+</code></pre></div>
+<p>If apt reports the packages are "installed" but the <code>-dev</code> symlinks are missing on disk (this happens on some base images such as <code>nvcr.io/nvidia/pytorch</code>), force a reinstall from the DOCA repository configured in <a href="#step-1-configure-the-doca-apt-repository">Step 1</a>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>--reinstall<span class="w"> </span>libibverbs-dev<span class="w"> </span>librdmacm-dev<span class="w"> </span>libmlx5-1
+</code></pre></div>
+</details>
+<details class="failure">
+<summary><code>nvcc fatal: Unsupported gpu architecture 'compute_121'</code></summary>
+<p>Your CUDA Toolkit predates GB10 / Blackwell support but <code>sm_121</code> ended up in the architecture list. Either omit <code>121</code> from <code>CMAKE_CUDA_ARCHITECTURES</code> or pin an explicit list that matches your GPU:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>cmake<span class="w"> </span>-S<span class="w"> </span>.<span class="w"> </span>-B<span class="w"> </span>build<span class="w"> </span>...<span class="w"> </span>-DCMAKE_CUDA_ARCHITECTURES<span class="o">=</span><span class="s2">&quot;80;90&quot;</span>
+</code></pre></div>
+<p>The default in <code>src/CMakeLists.txt</code> already suppresses the <code>121</code> auto-append on CUDA &lt; 13.0, so this error generally only appears when the override was provided explicitly. See the <a href="#cmake_cuda_architectures-gpu-compute-capability">GPU compute capability table</a> for valid values.</p>
+</details>
+<details class="failure">
+<summary>Runtime: <code>EAL: Cannot get hugepage information</code> or <code>EAL: No free hugepages reported</code></summary>
+<p>DPDK could not allocate hugepages because none are reserved (<code>Cannot get hugepage information</code> when <code>nr_hugepages</code> is zero, or <code>No free hugepages reported</code> when the reserved pool is exhausted). Hugepage configuration is part of system setup, not the build. Follow <a href="../system_configuration/#step-4-enable-huge-pages">System Configuration → Step 4: Enable Huge pages</a> to add a persistent reservation, or reserve some temporarily with:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="nb">echo</span><span class="w"> </span><span class="m">1024</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>sudo<span class="w"> </span>tee<span class="w"> </span>/sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
+</code></pre></div>
+</details>
+<details class="failure">
+<summary>Runtime: <code>nvidia-fs not loaded</code> (with <code>DAQIRI_ENABLE_GDS=ON</code>)</summary>
+<p>The cuFile path needs the <code>nvidia-fs</code> kernel module loaded and a GDS-supported destination filesystem. Verify with:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>lsmod<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>nvidia_fs
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>/usr/local/cuda/gds/tools/gdscheck.py<span class="w"> </span>-p
+</code></pre></div>
+<p>Full setup notes are in <a href="../../getting-started/#cmake-options">Getting Started → CMake Options</a>. If <code>nvidia-fs</code> cannot be loaded on this host, drop <code>-DDAQIRI_ENABLE_GDS=ON</code> from the CMake configure step. Host-memory burst writes do not require it.</p>
+</details>
+<details class="failure">
+<summary><code>pkg-config: command not found</code></summary>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>pkgconf
+</code></pre></div>
+</details>
+<details class="failure">
+<summary>DPDK <code>meson setup</code>: <code>ERROR: Dependency \"libnuma\" not found</code></summary>
+<p>The Dockerfile installs <code>libnuma-dev</code> in the same apt batch as the DPDK build tooling. If you skipped it:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>libnuma-dev
+</code></pre></div>
+</details>
+<details class="failure">
+<summary>Build succeeds but <code>ibv_devinfo</code> reports <code>0 HCAs found</code></summary>
+<p>The user-space libraries are installed but the kernel drivers are not; <code>lsmod | grep mlx5</code> will be empty. Follow <a href="../system_configuration/#check-your-nic-drivers">Check your NIC drivers</a> to install <code>doca-ofed</code> and reboot.</p>
+</details>
+<h2 id="platform-specific-notes">Platform-specific notes<a class="headerlink" href="#platform-specific-notes" title="Permanent link">&para;</a></h2>
+<p>The build recipe above is the same on every supported host. The notes below cover the few places where defaults or expectations diverge. Open the tab that matches your hardware.</p>
+<div class="tabbed-set tabbed-alternate" data-tabs="1:3"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><input id="__tabbed_1_3" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">DGX Spark (GB10)</label><label for="__tabbed_1_2">IGX Orin + dGPU</label><label for="__tabbed_1_3">x86_64 RTX Pro Server</label></div>
+<div class="tabbed-content">
+<div class="tabbed-block">
+<ul>
+<li>The integrated <strong>ConnectX-7</strong> appears in <code>ibv_devinfo</code> as one or two <code>mlx5_*</code> HCAs depending on link configuration. No separate driver install beyond the <a href="#step-1-configure-the-doca-apt-repository">DOCA repository setup</a> is needed.</li>
+<li>GB10 is <strong>compute capability 12.1</strong> (<code>sm_121</code>). DAQIRI's default arch list adds <code>121</code> automatically when configuring with <strong>CUDA Toolkit 13.0 or newer</strong>; on those toolkits no override is needed. On older toolkits, GB10 is not supported.</li>
+<li>DGX Spark uses <strong>NVLink-C2C unified memory</strong> and has no separate GPU BAR1, so data buffers in YAML configs use <code>kind: host_pinned</code> rather than <code>kind: device</code>. The DGX-Spark-prefilled YAMLs in <code>examples/*_spark.yaml</code> already encode this.</li>
+<li><code>nvidia-peermem</code> is not used; GPUDirect goes through the dma-buf path enabled by the DPDK patches in <a href="#step-3-build-dpdk-with-daqiri-patches">Step 3</a>.</li>
+<li>For a runnable end-to-end test after the build completes, follow the <a href="../../benchmarks/raw_benchmarking/#update-the-loopback-configuration">DGX Spark profile callout</a> in Raw Ethernet Benchmarking: the prefilled <code>daqiri_bench_raw_tx_rx_spark.yaml</code> and <code>daqiri_bench_rdma_tx_rx_spark.yaml</code> need only an <code>eth_dst_addr</code> edit.</li>
+</ul>
+</div>
+<div class="tabbed-block">
+<ul>
+<li>
+<p>The reference dGPU is the <strong>RTX 6000 Ada</strong> (compute capability <strong>8.9</strong>), which is not in the default arch list. Pass <code>-DCMAKE_CUDA_ARCHITECTURES=89</code> on the CMake configure step:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>cmake<span class="w"> </span>-S<span class="w"> </span>.<span class="w"> </span>-B<span class="w"> </span>build<span class="w"> </span>...<span class="w"> </span>-DCMAKE_CUDA_ARCHITECTURES<span class="o">=</span><span class="m">89</span>
+</code></pre></div>
+<p>Use a different value (or extra entries) if you have a different dGPU installed.</p>
+</li>
+<li>
+<p>On IGX Orin, several system settings (BAR1 size, MRRS, NIC link layer) need to be applied <strong>before</strong> DAQIRI will run end-to-end. Follow the <a href="../system_configuration/">IGX Orin tab in System Configuration</a> for the full sequence. The build itself does not require those changes.</p>
+</li>
+<li>GPUDirect can use either the patched DPDK's dma-buf path (recommended) or the legacy <code>nvidia-peermem</code> module. The patched DPDK built in <a href="#step-3-build-dpdk-with-daqiri-patches">Step 3</a> removes the peermem dependency.</li>
+<li>
+<p>For ARM64 (<code>aarch64</code>) hosts, set <code>PKG_CONFIG_PATH</code> to the aarch64 directory:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PKG_CONFIG_PATH</span><span class="o">=</span>/usr/local/lib/aarch64-linux-gnu/pkgconfig:<span class="si">${</span><span class="nv">PKG_CONFIG_PATH</span><span class="k">:-</span><span class="si">}</span>
+</code></pre></div>
+</li>
+<li>
+<p>The IGX/Tegra kernel does not expose <code>/proc/config.gz</code>; use the <code>/boot/config-$(uname -r)</code> fallback shown in <a href="#prerequisite-verification">Prerequisite verification</a> to confirm <code>CONFIG_DMA_SHARED_BUFFER=y</code>.</p>
+</li>
+</ul>
+</div>
+<div class="tabbed-block">
+<ul>
+<li>"RTX Pro Server" covers any <code>x86_64</code> workstation or server with a ConnectX-6 Dx (or later) NIC and an RTX Pro / Workstation GPU. Confirm <code>nvidia-smi</code> reports a GPUDirect-capable GPU (any RTX Pro / Quadro / Data Center class card, <strong>not</strong> GeForce, and see the warning in <a href="../../concepts/#gpudirect">Concepts → GPUDirect</a>).</li>
+<li>
+<p>Set <code>-DCMAKE_CUDA_ARCHITECTURES</code> to match the installed card. RTX PRO 6000 Blackwell Server/Workstation Edition is <code>120</code> (workstation Blackwell, <code>sm_120</code>); RTX 6000 Ada is <code>89</code>; RTX A6000 is <code>86</code>. Confirm with <code>nvidia-smi --query-gpu=compute_cap --format=csv,noheader</code> (e.g. <code>12.0</code> → <code>120</code>):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>cmake<span class="w"> </span>-S<span class="w"> </span>.<span class="w"> </span>-B<span class="w"> </span>build<span class="w"> </span>...<span class="w"> </span>-DCMAKE_CUDA_ARCHITECTURES<span class="o">=</span><span class="m">120</span>
+</code></pre></div>
+</li>
+<li>
+<p>x86_64 hosts use <code>/usr/local/lib/x86_64-linux-gnu/pkgconfig</code> for the DPDK <code>.pc</code> file. That's the default <code>PKG_CONFIG_PATH</code> entry shown in <a href="#34-verify">Step 3.4</a>.</p>
+</li>
+<li>All other steps are identical to the generic recipe above.</li>
+</ul>
+</div>
+</div>
+</div>
+<h2 id="next-steps">Next steps<a class="headerlink" href="#next-steps" title="Permanent link">&para;</a></h2>
+<p>Once <code>libdaqiri.so</code> is installed and the <a href="#53-smoke-test">smoke test</a> passes:</p>
+<ol>
+<li><a href="../system_configuration/"><strong>System Configuration</strong></a>: tune the host (hugepages, NIC link layer, GPU BAR1, CPU isolation) for production performance.</li>
+<li><a href="../../benchmarks/raw_benchmarking/"><strong>Raw Ethernet Benchmarking</strong></a>: run <code>daqiri_bench_raw_gpudirect</code> over a physical loopback.</li>
+<li><a href="../configuration-walkthrough/"><strong>Understanding the Configuration File</strong></a>: pick the right starter YAML for your use case from the decision tree.</li>
+</ol>
+<hr />
+<h2 id="cleanup">Cleanup<a class="headerlink" href="#cleanup" title="Permanent link">&para;</a></h2>
+<p>To remove the CMake install while keeping every prerequisite (DPDK, DOCA libraries, CUDA, hugepages, NIC drivers) in place, run <a href="https://github.com/NVIDIA/daqiri/blob/main/scripts/cleanup.sh"><code>scripts/cleanup.sh</code></a> with the <code>cmake</code> target:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>scripts/cleanup.sh<span class="w"> </span>cmake<span class="w">             </span><span class="c1"># interactive, with manifest preview</span>
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>scripts/cleanup.sh<span class="w"> </span>cmake<span class="w"> </span>--dry-run<span class="w">   </span><span class="c1"># show what would be removed</span>
+<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>scripts/cleanup.sh<span class="w"> </span>cmake<span class="w"> </span>--yes<span class="w">       </span><span class="c1"># non-interactive</span>
+</code></pre></div>
+<p>The script reads <code>build/install_manifest.txt</code> (written by <a href="#52-install">Step 5.2</a>) for the canonical list of installed paths, then refuses to remove anything unless every manifest entry is under <code>DAQIRI_PREFIX</code>. Manifest entries that are already absent are reported and skipped so cleanup can be rerun after a partial removal. Verification still runs and decides the final exit status. Override the install prefix with <code>DAQIRI_PREFIX=...</code> if you installed somewhere other than <code>/opt/daqiri</code>, or <code>BUILD_DIR=...</code> if your build tree is named something other than <code>build</code>. When the manifest is missing, the script falls back to a name-scoped scan that auto-removes only DAQIRI-owned artifacts and flags vendored <code>spdlog/</code>, <code>yaml-cpp/</code>, and <code>libyaml-cpp.so*</code> for manual review. The final step runs verification (<code>ls /opt/daqiri</code>, <code>pkg-config --modversion daqiri</code>, <code>ldconfig -p | grep daqiri</code>) and exits non-zero if any DAQIRI artifact is still present.</p>
+<p>Pass <code>all</code> instead of <code>cmake</code> to also remove the container image (<code>docker image rm "$IMAGE_TAG"</code>) in the same run.</p>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+  
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+        
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../system_configuration/" class="md-footer__link md-footer__link--prev" aria-label="Previous: System Configuration">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                System Configuration
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../configuration-walkthrough/" class="md-footer__link md-footer__link--next" aria-label="Next: Configuration YAML Walkthrough">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Configuration YAML Walkthrough
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["content.code.annotate", "content.code.copy", "content.tabs.link", "navigation.tabs", "navigation.sections", "navigation.top", "navigation.footer", "search.highlight", "search.suggest", "toc.follow"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+        <script src="../../javascripts/platform-tab-toc.js"></script>
+      
+        <script src="../../javascripts/tab-dropdowns.js"></script>
+      
+        <script src="../../javascripts/image-overlay.js"></script>
+      
+    
+  </body>
+</html>

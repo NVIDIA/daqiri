@@ -1,0 +1,1960 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+  
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/">
+      
+      
+        <link rel="prev" href="../raw_benchmarking/">
+      
+      
+        <link rel="next" href="../../api-reference/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../images/favicon-32.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+  <link rel="icon" href="../../images/favicon.svg" sizes="any" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="../../images/apple-touch-icon.png">
+
+    
+      
+        <title>Performance: DGX Spark - DAQIRI: Data Acquisition for Integrated Real-time Instruments</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  <script>window.NV_NAV = {"Benchmarking": [{"label": "Overview", "url": "benchmarks/"}, {"label": "Socket and RDMA Benchmarking", "url": "benchmarks/socket_benchmarking/"}, {"label": "Raw Ethernet Benchmarking", "url": "benchmarks/raw_benchmarking/"}, {"label": "Performance: DGX Spark", "url": "benchmarks/performance-dgx-spark/"}], "API Reference": [{"label": "API Guide", "url": "api-reference/"}, {"label": "Configuration YAML Reference", "url": "api-reference/configuration/"}, {"label": "C++ API Usage", "url": "api-reference/cpp/"}, {"label": "Python API Usage", "url": "api-reference/python/"}], "Tutorials": [{"label": "System Configuration", "url": "tutorials/system_configuration/"}, {"label": "Bare-Metal CMake Build", "url": "tutorials/bare-metal-cmake-build/"}, {"label": "Configuration YAML Walkthrough", "url": "tutorials/configuration-walkthrough/"}, {"label": "DAQIRI + Holoscan Integration", "url": "tutorials/daqiri-holoscan-integration/"}]};</script></head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="light-green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#performance-dgx-spark" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="DAQIRI: Data Acquisition for Integrated Real-time Instruments" class="md-header__button md-logo" aria-label="DAQIRI: Data Acquisition for Integrated Real-time Instruments" data-md-component="logo">
+      
+  <img src="../../images/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            DAQIRI: Data Acquisition for Integrated Real-time Instruments
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Performance: DGX Spark
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="light-green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="light-green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/nvidia/daqiri" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    nvidia/daqiri
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../getting-started/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Getting Started
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../concepts/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Concepts
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  Benchmarking
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../api-reference/" class="md-tabs__link">
+          
+  
+  
+  API Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../tutorials/system_configuration/" class="md-tabs__link">
+          
+  
+  
+  Tutorials
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+                
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" hidden>
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="DAQIRI: Data Acquisition for Integrated Real-time Instruments" class="md-nav__button md-logo" aria-label="DAQIRI: Data Acquisition for Integrated Real-time Instruments" data-md-component="logo">
+      
+  <img src="../../images/logo.svg" alt="logo">
+
+    </a>
+    DAQIRI: Data Acquisition for Integrated Real-time Instruments
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/nvidia/daqiri" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    nvidia/daqiri
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Benchmarking
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Benchmarking
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../socket_benchmarking/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Socket and RDMA Benchmarking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../raw_benchmarking/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Raw Ethernet Benchmarking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance: DGX Spark
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance: DGX Spark
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#system-under-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        System under test
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#results-summary-c-loopback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Results Summary (C++ loopback)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#raw-ethernet-gpudirect-dpdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Raw Ethernet / GPUDirect (DPDK)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Raw Ethernet / GPUDirect (DPDK)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#multi-queue-core-scaling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-queue core scaling
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#socket-roce" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Socket / RoCE
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#socket-tcp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Socket / TCP
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#socket-udp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Socket / UDP
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gpu-workloads-in-the-receive-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GPU workloads in the receive path
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reproduce" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reproduce
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration YAML Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/cpp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    C++ API Usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API Usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorials
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tutorials
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/system_configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/bare-metal-cmake-build/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bare-Metal CMake Build
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/configuration-walkthrough/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration YAML Walkthrough
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/daqiri-holoscan-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DAQIRI + Holoscan Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+                
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#system-under-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        System under test
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#results-summary-c-loopback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Results Summary (C++ loopback)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#raw-ethernet-gpudirect-dpdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Raw Ethernet / GPUDirect (DPDK)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Raw Ethernet / GPUDirect (DPDK)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#multi-queue-core-scaling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-queue core scaling
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#socket-roce" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Socket / RoCE
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#socket-tcp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Socket / TCP
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#socket-udp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Socket / UDP
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gpu-workloads-in-the-receive-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GPU workloads in the receive path
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reproduce" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reproduce
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+  
+
+
+
+  
+  
+
+
+<h1 id="performance-dgx-spark">Performance: DGX Spark<a class="headerlink" href="#performance-dgx-spark" title="Permanent link">&para;</a></h1>
+<p>Measured C++-loopback throughput for each stream/protocol on a single DGX Spark
+(GB10), driven over a physical cabled loopback on one ConnectX-7. Numbers are
+from a Release build via <code>examples/run_spark_bench.sh</code> (30 s per cell).</p>
+<p>All backends are measured <strong>one-way</strong> (unidirectional) by default: one side sends,
+the other receives and computes. For a bidirectional test, set <code>send: true</code> on the
+receiving role (and <code>receive: true</code> on the sending role) in the bench config.</p>
+<p>For the loopback setup these numbers depend on and the per-transport
+benchmarking procedure, see <a href="../socket_benchmarking/">Socket and RDMA Benchmarking</a>
+(the <code>dq_wire_*</code> network-namespace wire loopback used by RoCE and sockets) and
+<a href="../raw_benchmarking/">Raw Ethernet Benchmarking</a> (the two-physical-port DPDK
+loopback). The exact commands are collected under <a href="#reproduce">Reproduce</a> below.</p>
+<h2 id="system-under-test">System under test<a class="headerlink" href="#system-under-test" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Platform</td>
+<td>DGX Spark (GB10), 20 cores, isolcpus <code>16-19</code> (the multi-queue sweep expands this, see <a href="#multi-queue-core-scaling">Multi-queue core scaling</a>)</td>
+</tr>
+<tr>
+<td>NIC</td>
+<td>ConnectX-7, ports p0 ↔ p1 cross-cabled with a <strong>100 GbE QSFP28</strong> loopback cable (single-host loopback), MTU 9000</td>
+</tr>
+<tr>
+<td>Build</td>
+<td>Release (<code>-DCMAKE_BUILD_TYPE=Release</code>), <code>DAQIRI_ENGINE="dpdk ibverbs"</code></td>
+</tr>
+<tr>
+<td>Loopback</td>
+<td>Raw/DPDK uses the two physical ports directly, while socket/RoCE use the <code>dq_wire_*</code> network-namespace wire loopback</td>
+</tr>
+<tr>
+<td>Core pinning</td>
+<td>Each direction has a busy-spin queue poller and an app worker on separate isolated X925 cores (PR #149). Single-queue: DPDK pollers 17/18, workers 16/19. Multi-queue: TX pollers 16/19, RX pollers 18/9, each with its own worker core, master 8. Sockets pin each pair's send and receive to separate cores in the same CPU cluster (all with <code>isolcpus=5-9,15-19</code>).</td>
+</tr>
+</tbody>
+</table>
+<h2 id="results-summary-c-loopback">Results Summary (C++ loopback)<a class="headerlink" href="#results-summary-c-loopback" title="Permanent link">&para;</a></h2>
+<p>Each transport at its best-case <strong>operation size</strong>. Raw/RoCE are
+single-stream. Socket TCP/UDP scale with the number of client/server pairs, so the
+four-pair aggregate is shown.</p>
+<p>The <strong>100 GbE QSFP28 loopback cable sets the maximum data rate</strong> here, not the
+ConnectX-7 (which is rated for higher line rates) or the software path. A 100 GbE
+link tops out near ~99.6 Gb/s of payload, so every large-transfer result saturates
+just under that ceiling.</p>
+<table>
+<thead>
+<tr>
+<th>Stream / Protocol</th>
+<th>Best case</th>
+<th style="text-align: right;">Throughput</th>
+<th>Drops</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Raw Ethernet / GPUDirect</td>
+<td>8 KB packet</td>
+<td style="text-align: right;"><strong>98.8 ±0.1 Gb/s</strong></td>
+<td>0</td>
+<td>Flat ~98.7 across 4–8 KB, all batch sizes</td>
+</tr>
+<tr>
+<td>Socket / RoCE (SEND)</td>
+<td>64 KB message</td>
+<td style="text-align: right;"><strong>97.6 ±0.1 Gb/s</strong></td>
+<td>0</td>
+<td>Single QP, batch 1</td>
+</tr>
+<tr>
+<td>Socket / TCP</td>
+<td>8 KB × 4 pairs</td>
+<td style="text-align: right;"><strong>87.3 ±2.2 Gb/s</strong></td>
+<td>~0</td>
+<td>Flow-controlled (App TX = App RX)</td>
+</tr>
+<tr>
+<td>Socket / UDP</td>
+<td>8 KB × 4 pairs</td>
+<td style="text-align: right;"><strong>34.5 ±0.6 Gb/s</strong></td>
+<td>~48% loss</td>
+<td>Receiver goodput, unpaced sender</td>
+</tr>
+</tbody>
+</table>
+<p>Each transport is best read at its own best-case operation size (see the per-transport
+tables below); a single cross-transport unit of work isn't meaningful here, since
+RoCE at 8 KB is op-rate-bound well below its large-message peak and TCP has no
+operation boundary.</p>
+<h2 id="raw-ethernet-gpudirect-dpdk">Raw Ethernet / GPUDirect (DPDK)<a class="headerlink" href="#raw-ethernet-gpudirect-dpdk" title="Permanent link">&para;</a></h2>
+<p>Physical port-to-port loopback, GPU-resident payloads. Throughput saturates the
+100 GbE line at <strong>~98.8 Gb/s</strong> for 4–8 KB payloads, drop-free across all batch
+sizes. Packet handling is CPU-bound (see the CPU utilization table below).
+Throughput is flat across batch size and stable run-to-run (3 reps per cell,
+≤1% spread).</p>
+<p>Achieved Gb/s measured at App RX (equal to App TX, since every cell is
+drop-free), unpaced, mean of 3 reps. Run-to-run spread ≤0.5 Gb/s (&lt;1%):</p>
+<table class="perf-matrix" markdown="0">
+  <thead>
+    <tr>
+      <th rowspan="2">Payload</th>
+      <th colspan="4">Batch size (packets per burst)</th>
+    </tr>
+    <tr>
+      <th>256</th><th>1024</th><th>4096</th><th>10240</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><th>8000 B</th><td>98.8</td><td>98.8</td><td>98.8</td><td>98.7</td></tr>
+    <tr><th>4096 B</th><td>98.6</td><td>98.8</td><td>98.7</td><td>98.6</td></tr>
+    <tr><th>1024 B</th><td>97.1</td><td>97.2</td><td>97.2</td><td>97.1</td></tr>
+    <tr><th>256 B</th><td>49.7</td><td>49.6</td><td>49.6</td><td>49.5</td></tr>
+    <tr><th>64 B</th><td>20.2</td><td>20.2</td><td>20.4</td><td>20.2</td></tr>
+  </tbody>
+</table>
+
+<p>At ≥1 KB the link saturates near line rate (~97–99 Gb/s) regardless of batch.
+Below that the path is packet-rate-bound: 256 B ~50 Gb/s (19.5 M pps), 64 B
+~20 Gb/s (20 M pps), a ~20 M pps single-queue ceiling (the multi-queue
+section lifts it). Gb/s here is the L2 frame rate including the 64 B header, so
+pps ≈ Gb/s ÷ ((payload + 64) × 8). These small-payload cells are flat across batch
+size and stable run-to-run. Because every cell is drop-free, the achieved rate is
+also the no-drop rate: pacing the sender below it hits the target with zero drops.</p>
+<p><strong>CPU utilization</strong> (summary-table cell, 8000 B / batch 10240, unpaced):</p>
+<table>
+<thead>
+<tr>
+<th>Core</th>
+<th style="text-align: right;">Busy%</th>
+<th>Note</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Master (CPU 8)</td>
+<td style="text-align: right;">3.7%</td>
+<td>Orchestration only, mostly idle</td>
+</tr>
+<tr>
+<td>TX queue poller (CPU 17)</td>
+<td style="text-align: right;">~92%</td>
+<td>Poll-mode busy-spin</td>
+</tr>
+<tr>
+<td>RX queue poller (CPU 18)</td>
+<td style="text-align: right;">~92%</td>
+<td>Poll-mode busy-spin</td>
+</tr>
+</tbody>
+</table>
+<p>The benchmark app workers run on their own cores (TX 16, RX 19) alongside these
+pollers. This run sampled only the poller cores.
+The pollers stay near 92% across every drop-curve step from 1 Gb/s to line rate,
+because DPDK's poll-mode driver spins regardless of offered load. The GPU stays idle (SM
+and memory-controller utilization both ~0%): it is a DMA target for the payload,
+not a compute engine.</p>
+<h3 id="multi-queue-core-scaling">Multi-queue core scaling<a class="headerlink" href="#multi-queue-core-scaling" title="Permanent link">&para;</a></h3>
+<p>Each packet-handling core spins in poll-mode. At large payloads (≥1 KB) a single
+queue already saturates the 100 GbE line (~97–99 Gb/s), so extra cores add
+nothing there. The multi-queue win is confined to the small,
+packet-rate-bound payloads, where <strong>RX cores</strong> are the lever. The matrix sweeps
+(TX cores, RX cores) over <code>(1,1)</code>, <code>(1,2)</code>, <code>(2,1)</code>, <code>(2,2)</code>.</p>
+<p>Each queue is served by a poll-mode driver core plus a separate bench-worker
+core, paired within one CPU cluster where possible so the poller→worker handoff
+stays local. The four-queue matrix uses the expanded isolated-core budget
+(<code>isolcpus=5-9,15-19</code>): TX pollers on 16/19, RX pollers on 18/9, each with its
+own worker core, and the master on core 8. Configs are derived from the single
+base <code>daqiri_bench_raw_tx_rx_spark_mq.yaml</code> (the balanced 2,2 superset) by
+<code>scripts/gen_spark_mq_config.py</code>; generated by <code>examples/run_spark_mq_bench.sh</code>,
+30 s per cell, 0 drops.</p>
+<p>Achieved Gb/s at a <strong>256 B payload</strong> (the packet-rate-bound regime where core
+count matters); at ≥1 KB every cell converges at the wire ceiling regardless:</p>
+<table>
+<thead>
+<tr>
+<th>Cell</th>
+<th>TX pollers</th>
+<th>RX pollers</th>
+<th style="text-align: right;">Achieved <span style="text-transform: none">Gb/s</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>(1,1)</td>
+<td>16</td>
+<td>18</td>
+<td style="text-align: right;">50.0</td>
+</tr>
+<tr>
+<td>(1,2)</td>
+<td>16</td>
+<td>18,9</td>
+<td style="text-align: right;"><strong>66.4</strong></td>
+</tr>
+<tr>
+<td>(2,1)</td>
+<td>16,19</td>
+<td>18</td>
+<td style="text-align: right;">49.0</td>
+</tr>
+<tr>
+<td>(2,2)</td>
+<td>16,19</td>
+<td>18,9</td>
+<td style="text-align: right;">64.7</td>
+</tr>
+</tbody>
+</table>
+<p>A second <strong>RX</strong> core lifts 256 B from 50.0 to 66.4 Gb/s, while a second <strong>TX</strong> core does
+nothing (49.0 ≈ 50.0). The full payload sweep shows why, since the bottleneck depends
+on payload size:</p>
+<p><img alt="DPDK multi-queue throughput vs UDP payload size on DGX Spark, one line per (TX,RX) core count" src="../../images/spark-mq-payload-sweep.svg" /></p>
+<p>At small payloads the path is packet-rate-bound, so <strong>RX cores</strong> are the lever:
+a second RX core lifts 64 B from 20.3 to 26.9 Gb/s (~20 M → ~27 M pps) and 256 B
+from 50.0 to 66.4 Gb/s, while a second TX core does nothing. At large payloads a
+single queue already saturates the wire, so all four cells converge near
+~97–99 Gb/s at ≥1 KB and neither extra core helps. Every cell is drop-free.
+Generated by
+<code>examples/run_spark_mq_bench.sh</code> (30 s per point) and
+<code>scripts/plot_mq_payload_sweep.py</code>.</p>
+<h2 id="socket-roce">Socket / RoCE<a class="headerlink" href="#socket-roce" title="Permanent link">&para;</a></h2>
+<p>RoCE SEND over the netns wire loopback, single queue-pair, batch 1. Throughput
+is App RX goodput, equal to App TX with 0 drops. Large messages up to 64 KB
+saturate the wire, while the smallest messages are bound by per-operation software
+overhead.</p>
+<p><strong>Message-size sweep (single QP, batch 1, 0 drops).</strong> Mean ± sample std over 3
+reps. Run-to-run spread &lt;1% in every cell.</p>
+<table>
+<thead>
+<tr>
+<th>Message size</th>
+<th style="text-align: right;"><span style="text-transform: none">Gb/s</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>8 MB</td>
+<td style="text-align: right;">96.8 ±0.3</td>
+</tr>
+<tr>
+<td>1 MB</td>
+<td style="text-align: right;">96.9 ±0.2</td>
+</tr>
+<tr>
+<td>64 KB</td>
+<td style="text-align: right;"><strong>97.6 ±0.1</strong></td>
+</tr>
+<tr>
+<td>8 KB</td>
+<td style="text-align: right;">51.8 ±0.2</td>
+</tr>
+<tr>
+<td>4 KB</td>
+<td style="text-align: right;">28.5 ±0.0</td>
+</tr>
+</tbody>
+</table>
+<p>Messages ≥64 KB hold ~97 Gb/s at the 100 GbE wire ceiling (line rate). Below that
+the path is operation-rate-bound (per-operation software overhead, not a stall)
+rather than wire-bound, and every cell is drop-free. At 8 KB (51.8 Gb/s) and 4 KB (28.5 Gb/s)
+a dedicated bench-worker core, separate from the RoCE engine thread, sustains the
+operation rate, as it does for small DPDK packets. A per-message flow-control
+window keeps enough operations in flight to amortize that overhead: it pre-posts
+<code>rx_depth</code> receives before sending and caps the transmit side at <code>tx_depth</code>, each
+sized to the message so the in-flight window stays full.</p>
+<p><strong>CPU utilization</strong> (summary-table cell, 8 MB message, batch 1, unpaced):</p>
+<table>
+<thead>
+<tr>
+<th>Core</th>
+<th style="text-align: right;">Busy%</th>
+<th>Note</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Master (CPU 8)</td>
+<td style="text-align: right;">0.7%</td>
+<td>Orchestration only</td>
+</tr>
+<tr>
+<td>Client TX (CPU 17)</td>
+<td style="text-align: right;">74.8%</td>
+<td>Busy-spins posting sends and polling completions</td>
+</tr>
+<tr>
+<td>Server RX (CPU 19)</td>
+<td style="text-align: right;">1.1%</td>
+<td>HCA DMAs straight to memory, worker only reaps completions</td>
+</tr>
+</tbody>
+</table>
+<p>The TX core busy-spins in a post-and-poll loop, so its ~75% busy time is set by
+that spin, not by the throughput: it stays near this level whether the link runs
+at 10 or 100 Gb/s (the same reason the DPDK pollers sit near 92% regardless of
+offered load). The near-idle RX core is the expected RoCE RC signature. The HCA
+places incoming data directly into registered memory, so the receive worker only
+reaps completions and reposts (~1% at this message rate). The GPU stays idle here
+too (SM and memory-controller ~0%; DMA target, not a compute engine).</p>
+<h2 id="socket-tcp">Socket / TCP<a class="headerlink" href="#socket-tcp" title="Permanent link">&para;</a></h2>
+<p>Four one-way TCP client/server pairs over the netns wire loopback. Each pair's
+send (client) and receive (server) sides pin to <strong>separate</strong> isolated cores in one
+CPU cluster (pairs 1–2 in 15–19, pairs 3–4 in 5–9). A shared send/receive core
+ping-pongs a single stream and can wedge it at half rate for a whole run, so
+splitting the two sides keeps single-stream throughput stable. TCP self-paces via
+flow control, so App TX equals App RX with effectively no app-level loss.
+<code>message_size</code> is the per-send byte count of a stream (no datagram boundary, no
+fragmentation).</p>
+<p>Throughput in Gb/s (App TX = App RX), mean ± std over 3 reps:</p>
+<table class="perf-matrix" markdown="0">
+  <thead>
+    <tr>
+      <th rowspan="2">Message size</th>
+      <th colspan="3">Number of client/server pairs</th>
+    </tr>
+    <tr>
+      <th>1</th><th>2</th><th>4</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><th>1000 B</th><td>14.2<small>±0.4</small></td><td>27.6<small>±0.4</small></td><td>45.2<small>±0.1</small></td></tr>
+    <tr><th>8000 B</th><td>28.9<small>±2.9</small></td><td>42.4<small>±2.7</small></td><td>87.3<small>±2.2</small></td></tr>
+    <tr><th>1 MiB</th><td>32.1<small>±2.2</small></td><td>51.5<small>±2.4</small></td><td>83.7<small>±0.4</small></td></tr>
+  </tbody>
+</table>
+
+<p>Throughput scales with the pair count, and retransmits stay negligible over the run.
+At four pairs the eight cores span both clusters, and the pairs in 5–9 sit farther
+from the NIC, so the 4-pair cells scale slightly sub-linearly.</p>
+<h2 id="socket-udp">Socket / UDP<a class="headerlink" href="#socket-udp" title="Permanent link">&para;</a></h2>
+<p>Four one-way UDP client/server pairs, same per-side pinning (send and receive on
+separate cores). UDP has no flow control, so each sender runs flat-out and the
+receiver drops whatever it cannot drain, and the loss column is an inherent property
+of unpaced UDP. App RX is the delivered goodput; App-level loss is
+<code>(App TX − App RX) / App TX</code>.</p>
+<p>Each cell shows <strong>receiver goodput in Gb/s</strong> (mean ± std over 3 reps) with the
+<strong>app-level loss %</strong> dimmed beneath it:</p>
+<table class="perf-matrix" markdown="0">
+  <thead>
+    <tr>
+      <th rowspan="2">Message size</th>
+      <th colspan="3">Number of client/server pairs</th>
+    </tr>
+    <tr>
+      <th>1</th><th>2</th><th>4</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><th>1000 B</th><td>4.0 ±0.1<small>44% loss</small></td><td>6.8 ±0.8<small>52% loss</small></td><td>15.2 ±0.3<small>40% loss</small></td></tr>
+    <tr><th>8000 B</th><td>12.2 ±1.2<small>69% loss</small></td><td>18.9 ±0.2<small>59% loss</small></td><td>34.5 ±0.6<small>48% loss</small></td></tr>
+  </tbody>
+</table>
+
+<p>The sweep stops at 8000 B (single Ethernet frame). Larger UDP datagrams
+fragment above the ~8972 B MTU payload. Reassembly is all-or-nothing out of a
+shared per-namespace pool, so under multi-pair unpaced load delivery collapses
+(≈100% loss at 65507 B / 4 pairs). The wire itself is loss-free here. The loss
+is host-side socket-buffer and reassembly pressure.</p>
+<h2 id="gpu-workloads-in-the-receive-path">GPU workloads in the receive path<a class="headerlink" href="#gpu-workloads-in-the-receive-path" title="Permanent link">&para;</a></h2>
+<p>A common question for a GPU-attached receiver is how much line rate it holds while
+the GPU also crunches the incoming data. The benchmarks accept
+<code>--workload none|fft|gemm|gemm_fp16</code>, exposed by <code>run_spark_bench.sh</code> as the
+<code>WORKLOAD</code> env var (recorded in the CSV <code>post_process</code> column); more workload kinds
+can be added to the same reusable component over time. The workload runs on the
+received packet data. Every backend first assembles the burst's
+payloads into one contiguous GPU buffer (a sequence-number <strong>reorder</strong> on the
+out-of-order transports, an arrival-order <strong>gather</strong> on the in-order ones) and the
+compute consumes that buffer.</p>
+<p><strong>What the two workloads compute</strong>, both in <strong>FP32</strong> (single precision), from the
+reusable component <code>examples/bench_workload.{h,cu}</code>:</p>
+<ul>
+<li><strong>FFT</strong>: a batched 1-D <strong>complex-to-complex forward FFT</strong> via cuFFT
+  (<code>cufftExecC2C</code>). The reordered buffer is treated as an array of single-precision
+  complex samples and transformed as many independent length-1024 FFTs, batched so
+  the transforms cover the whole reorder window. This models a streaming
+  signal-processing receiver, such as channelization or spectral analysis that FFTs every
+  frame as it arrives.</li>
+<li><strong>GEMM</strong>: a dense <strong>matrix multiply</strong> <code>C = A·B</code> via cuBLAS on square <em>n×n</em>
+  matrices, with the reordered buffer supplying the <em>A</em> operand. The side length is
+  <strong>pinned at n=1024</strong> (<code>--workload-gemm-dim</code>, env <code>GEMM_DIM</code>), so every call is an
+  identical <strong>2.15 GFLOP</strong> matmul reading the first <strong>4 MB</strong> (n²·4 B, FP32) of each
+  received unit. The compute is fixed regardless of message size, which is what
+  makes it comparable across transports. The matmul is FP32 (<code>cublasSgemm</code>). This models a
+  receiver feeding incoming data into a dense linear-algebra or neural-network
+  stage (beamforming, correlation, an inference layer).</li>
+</ul>
+<p><strong>The reorder/gather step is per-backend</strong> (<code>examples/bench_pipeline.{h,cu}</code>),
+chosen to be representative for each transport:</p>
+<table>
+<thead>
+<tr>
+<th>Backend</th>
+<th>Payload source</th>
+<th>Pre-workload step</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Raw / GPUDirect (DPDK)</td>
+<td>GPU-accessible RX buffers</td>
+<td><strong>seq reorder</strong> kernel → contiguous device buffer (out-of-order capable)</td>
+</tr>
+<tr>
+<td>RoCE (RC)</td>
+<td>GPU-accessible recv MR</td>
+<td><strong>gather</strong> (in-order); one large message is a zero-copy pass-through</td>
+</tr>
+<tr>
+<td>UDP sockets</td>
+<td>host RX buffers</td>
+<td><strong>host→device stage</strong>, then <strong>seq reorder</strong></td>
+</tr>
+<tr>
+<td>TCP sockets</td>
+<td>host RX buffers</td>
+<td><strong>host→device stage</strong>, then <strong>gather</strong> (in-order stream)</td>
+</tr>
+</tbody>
+</table>
+<p>Each compute runs <strong>once per reorder window</strong> on a dedicated CUDA stream, shared
+with the reorder/gather kernel so the two serialize without an extra sync and
+compute overlaps ingest. The reorder window is sized so the contiguous buffer is
+~8 MB on every backend, giving a comparable GPU working set across transports.</p>
+<div class="admonition note">
+<p class="admonition-title">Where the data lives, per backend</p>
+<p>On the integrated GB10 the GPU shares memory with the CPU, so the raw and RoCE
+receive buffers (<code>host_pinned</code>) are GPU-accessible with <strong>no copy</strong>, and the
+reorder/gather kernel reads them in place. Sockets are different: the kernel
+hands received bytes to the application in pageable host memory, so the socket
+path must <strong>stage each payload host→device</strong> before the GPU can touch it, a
+copy on the measured path that the raw/RoCE paths avoid. Lost packets (raw/UDP)
+leave their reorder slots zero-filled, and the FLOP/copy volume is unchanged.</p>
+</div>
+<p>Fixed <strong>n=1024</strong>, one GEMM (or a length-1024 batched FFT) per received unit. DPDK runs
+at an <strong>8 KB payload</strong> (~8 MB reorder window, 1024 packets × 8000 B), matched to RoCE's
+<strong>8 MB message</strong> so the GPU working set and per-unit compute are the same on both.
+3 reps, 30 s each, GPU SM% from <code>nvidia-smi dmon</code>; 0 drops on every cell.</p>
+<table>
+<thead>
+<tr>
+<th>Workload</th>
+<th style="text-align: right;">DPDK (Raw / GPUDirect)</th>
+<th style="text-align: right;">RoCE (RC)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>none (baseline)</td>
+<td style="text-align: right;">98.7 ±0.0</td>
+<td style="text-align: right;">96.6 ±0.3</td>
+</tr>
+<tr>
+<td>FFT</td>
+<td style="text-align: right;">95.7 ±0.8</td>
+<td style="text-align: right;">95.6 ±0.1</td>
+</tr>
+<tr>
+<td>GEMM (FP32)</td>
+<td style="text-align: right;">96.6 ±0.2</td>
+<td style="text-align: right;">90.2 ±1.1</td>
+</tr>
+</tbody>
+</table>
+<p>Throughput in Gb/s. Both <code>none</code> baselines sit at the ~97–99 Gb/s wire ceiling
+(DPDK 98.7, RoCE 96.6), as expected for two line-rate transports.</p>
+<p><strong>GPU compute dents line rate only modestly, and stays wire-limited, not
+compute-limited</strong> (SM well under 100% throughout). FFT is nearly free on both
+(SM ~6–17%, ≤1 Gb/s off baseline). The reorder/gather step assembles
+each unit's payload into one contiguous GPU buffer.</p>
+<h2 id="reproduce">Reproduce<a class="headerlink" href="#reproduce" title="Permanent link">&para;</a></h2>
+<p>Run inside the project container (privileged, GPUs passed through, hugepages
+mounted), as root. Build with <code>-DCMAKE_BUILD_TYPE=Release</code> and
+<code>cmake --install build</code> so the bench loads the current <code>libdaqiri.so</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">DAQIRI_BUILD_DIR</span><span class="o">=</span>./build
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">LD_LIBRARY_PATH</span><span class="o">=</span>/opt/daqiri/lib:<span class="si">${</span><span class="nv">LD_LIBRARY_PATH</span><span class="k">:-</span><span class="si">}</span>
+</code></pre></div>
+<p>The base container does not ship the network tools the setup scripts and RoCE
+baseline depend on. Install them first, or
+<code>scripts/setup_spark_wire_loopback_netns.sh</code> fails with <code>ip: command not found</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>apt-get<span class="w"> </span>update
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>apt-get<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>iproute2<span class="w"> </span>iputils-ping<span class="w"> </span>ethtool<span class="w"> </span>iperf3<span class="w"> </span>rdma-core<span class="w"> </span>ibverbs-utils<span class="w"> </span>perftest
+</code></pre></div>
+<p>These provide <code>ip</code>/<code>nstat</code> (<code>iproute2</code>), <code>ethtool</code>, and <code>ib_send_bw</code> (<code>perftest</code>).</p>
+<p>Each <code>run_spark_bench.sh &lt;backend&gt; &lt;mode&gt;</code> invocation takes a <strong>mode</strong> that sets
+which cells run: <code>sweep</code> runs the full payload × batch × pairs matrix (the
+per-transport message-size tables above), while <code>smoke</code> runs just the single
+summary-table cell, one payload/batch/pairs operating point. <code>REPEATS=N</code> repeats
+every cell N times for error bars.</p>
+<p><strong>Raw Ethernet / GPUDirect (DPDK)</strong> drives the two physical ports directly, so
+the <code>dq_wire_*</code> namespaces must <strong>not</strong> be up, since they capture the ports and
+hide them from DPDK. Tear them down first (no-op if they were never created).
+<code>&lt;rx-iface&gt;</code> below is the RX physical port (p1 in the p0→p1 loopback):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>./scripts/setup_spark_wire_loopback_netns.sh<span class="w"> </span>down<span class="w">       </span><span class="c1"># ensure netns is torn down</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">ETH_DST_ADDR</span><span class="o">=</span><span class="k">$(</span>cat<span class="w"> </span>/sys/class/net/&lt;rx-iface&gt;/address<span class="k">)</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>./examples/run_spark_bench.sh<span class="w"> </span>dpdk<span class="w"> </span>sweep
+</code></pre></div>
+<p>The <strong>multi-queue core-scaling matrix and payload sweep</strong> run on the same
+physical loopback (netns down). The four cells are generated from
+<code>examples/daqiri_bench_raw_tx_rx_spark_mq.yaml</code> at run time, so just export the
+rx-iface MAC as <code>ETH_DST_ADDR</code> (the script fills it into each generated config),
+then run the sweep and render the plot:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">ETH_DST_ADDR</span><span class="o">=</span><span class="k">$(</span>cat<span class="w"> </span>/sys/class/net/&lt;rx-iface&gt;/address<span class="k">)</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>./examples/run_spark_mq_bench.sh<span class="w">                       </span><span class="c1"># 4 cells x payload sweep, 30 s each</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="c1"># render the line plot (needs matplotlib in a venv -- not a runtime dependency):</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>./scripts/plot_mq_payload_sweep.py<span class="w"> </span>bench-results/&lt;timestamp&gt;-dpdk-mq/runs.csv
+</code></pre></div>
+<p><strong>Socket / RoCE and sockets</strong> cross the cable through the <code>dq_wire_client</code> →
+<code>dq_wire_server</code> namespaces. Bring the loopback up and confirm PHY counters move
+before running, and tear it down when finished:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>./scripts/setup_spark_wire_loopback_netns.sh<span class="w"> </span>up<span class="w">         </span><span class="c1"># create the namespaces</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>./scripts/setup_spark_wire_loopback_netns.sh<span class="w"> </span>verify<span class="w">      </span><span class="c1"># confirm wire traffic</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>./examples/run_spark_bench.sh<span class="w"> </span>rdma<span class="w"> </span>sweep
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>./examples/run_spark_bench.sh<span class="w"> </span>socket-tcp<span class="w"> </span>sweep
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>./examples/run_spark_bench.sh<span class="w"> </span>socket-udp<span class="w"> </span>sweep
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>./scripts/setup_spark_wire_loopback_netns.sh<span class="w"> </span>down<span class="w">        </span><span class="c1"># tear down when done</span>
+</code></pre></div>
+<p><strong>GPU workload (FFT / GEMM)</strong> re-runs a backend with a representative GPU workload
+in the receive path by exporting <code>WORKLOAD</code> (<code>none</code> | <code>fft</code> | <code>gemm</code> |
+<code>gemm_fp16</code>), run once per received I/O unit on the real payload. Each call is a
+fixed <strong>1024³ GEMM</strong> (override with <code>GEMM_DIM</code> / <code>--workload-gemm-dim</code>) or a batched
+<strong>length-1024 FFT</strong> (override with <code>FFT_LEN</code> / <code>--workload-fft-len</code>). Both compute
+sizes are held constant while the message size varies, so the FLOP count per call
+is fixed. It composes with the same netns setup as above (dpdk in the default
+namespace, rdma in the <code>dq_wire_*</code> namespaces). Use <code>smoke</code>, the single
+summary-table cell that the fixed-n table reports, and run all three workloads
+with error bars:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># RoCE (netns up); Raw is identical with `dpdk`, netns down, ETH_DST_ADDR exported.</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="k">for</span><span class="w"> </span>WL<span class="w"> </span><span class="k">in</span><span class="w"> </span>none<span class="w"> </span>fft<span class="w"> </span>gemm<span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nv">WORKLOAD</span><span class="o">=</span><span class="nv">$WL</span><span class="w"> </span><span class="nv">REPEATS</span><span class="o">=</span><span class="m">3</span><span class="w"> </span>./examples/run_spark_bench.sh<span class="w"> </span>rdma<span class="w"> </span>smoke
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="k">done</span>
+</code></pre></div>
+<p>In the workload case the payload size is fixed per backend (8 KB for DPDK, 8 MB
+message for RoCE), so a <code>sweep</code> only steps through batch size (DPDK) or
+client/server pairs (sockets). The workload lands in the CSV <code>post_process</code> column
+(with the GEMM dimension in <code>post_process_gemm_dim</code>); compare each <code>gbps</code> /
+<code>gpu_sm_pct</code> against the <code>WORKLOAD=none</code> baseline from the same loop.</p>
+<p>Each run writes <code>bench-results/&lt;timestamp&gt;-&lt;backend&gt;-&lt;mode&gt;/runs.csv</code>. See
+<a href="../socket_benchmarking/">Socket and RDMA Benchmarking</a> and
+<a href="../raw_benchmarking/">Raw Ethernet Benchmarking</a> for the namespace setup and
+per-transport details.</p>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+  
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+        
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../raw_benchmarking/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Raw Ethernet Benchmarking">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Raw Ethernet Benchmarking
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../../api-reference/" class="md-footer__link md-footer__link--next" aria-label="Next: API Guide">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                API Guide
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["content.code.annotate", "content.code.copy", "content.tabs.link", "navigation.tabs", "navigation.sections", "navigation.top", "navigation.footer", "search.highlight", "search.suggest", "toc.follow"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+        <script src="../../javascripts/platform-tab-toc.js"></script>
+      
+        <script src="../../javascripts/tab-dropdowns.js"></script>
+      
+        <script src="../../javascripts/image-overlay.js"></script>
+      
+    
+  </body>
+</html>

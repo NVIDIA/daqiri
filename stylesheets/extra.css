@@ -1,0 +1,738 @@
+/* ── NVIDIA theme — Material override sheet ─────────────────────────── */
+/* Mirrors the palette and typography of docs/index.md (landing page)   */
+/* so Material-rendered pages share the landing page's visual style.    */
+
+:root {
+  --nv-green:   #76b900;
+  --nv-green-d: #5a8f00;
+  --nv-green-l: #a0d000;
+  --nv-radius:  8px;
+}
+
+/* Dark tokens (slate) */
+[data-md-color-scheme="slate"] {
+  --nv-bg-page:   #0a0a0a;
+  --nv-bg-card:   #111111;
+  --nv-bg-card2:  #161616;
+  --nv-border:    #222222;
+  --nv-text-pri:  #f0f0f0;
+  --nv-text-mut:  #888888;
+  --nv-text-dim:  #555555;
+  --nv-code-bg:   #0d0d0d;
+  --nv-code-inline-bg: #1a1a1a;
+  --nv-code-fg:   #cccccc;
+  --nv-link:      var(--nv-green);
+  --nv-link-hover: var(--nv-green-l);
+  --nv-table-row-border: #181818;
+}
+
+/* Light tokens (default) */
+[data-md-color-scheme="default"] {
+  --nv-bg-page:   #ffffff;
+  --nv-bg-card:   #f5f5f5;
+  --nv-bg-card2:  #eeeeee;
+  --nv-border:    #e0e0e0;
+  --nv-text-pri:  #1a1a1a;
+  --nv-text-mut:  #5c5c5c;
+  --nv-text-dim:  #757575;
+  --nv-code-bg:   #f8f8f8;
+  --nv-code-inline-bg: #f0f0f0;
+  --nv-code-fg:   #1a1a1a;
+  --nv-link:      var(--nv-green-d);
+  --nv-link-hover: var(--nv-green);
+  --nv-table-row-border: #e8e8e8;
+}
+
+/* ── Map design tokens onto Material's documented variables ──────────── */
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color:           var(--nv-bg-page);
+  --md-default-fg-color:           var(--nv-text-pri);
+  --md-default-fg-color--light:    var(--nv-text-mut);
+  --md-default-fg-color--lighter:  var(--nv-text-dim);
+  --md-code-bg-color:              var(--nv-code-bg);
+  --md-code-fg-color:              var(--nv-code-fg);
+  --md-primary-fg-color:           #000000;
+  --md-primary-bg-color:           #ffffff;
+  --md-primary-bg-color--light:    rgba(255, 255, 255, 0.7);
+  --md-accent-fg-color:            var(--nv-green);
+  --md-typeset-a-color:            var(--nv-link);
+}
+
+[data-md-color-scheme="default"] {
+  --md-default-bg-color:           var(--nv-bg-page);
+  --md-default-fg-color:           var(--nv-text-pri);
+  --md-default-fg-color--light:    var(--nv-text-mut);
+  --md-default-fg-color--lighter:  var(--nv-text-dim);
+  --md-code-bg-color:              var(--nv-code-bg);
+  --md-code-fg-color:              var(--nv-code-fg);
+  --md-primary-fg-color:           var(--nv-bg-page);
+  --md-primary-bg-color:           var(--nv-text-pri);
+  --md-primary-bg-color--light:    var(--nv-text-mut);
+  --md-accent-fg-color:            var(--nv-green);
+  --md-typeset-a-color:            var(--nv-link);
+}
+
+/* ── Header / Tabs / Footer ──────────────────────────────────────────── */
+[data-md-color-scheme="slate"] .md-header {
+  background: #000;
+}
+/* Render the DAQIRI logo (docs/images/logo.svg) at the same 36px height  */
+/* the custom HTML pages use, rather than Material's smaller default.     */
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg {
+  height: 36px;
+  width: auto;
+}
+.md-header__title .md-header__topic {
+  font-weight: 700;
+}
+[data-md-color-scheme="slate"] .md-tabs {
+  background: #1a1a1a;
+}
+[data-md-color-scheme="slate"] .md-tabs__link {
+  color: var(--nv-text-mut);
+  opacity: 1;
+}
+[data-md-color-scheme="slate"] .md-tabs__link:hover,
+[data-md-color-scheme="slate"] .md-tabs__link--active {
+  color: var(--nv-text-pri);
+}
+[data-md-color-scheme="slate"] .md-footer {
+  background: var(--nv-bg-card);
+  border-top: 1px solid var(--nv-border);
+}
+
+[data-md-color-scheme="default"] .md-header {
+  background: var(--nv-bg-page);
+  border-bottom: 1px solid var(--nv-border);
+  box-shadow: none;
+  color: var(--nv-text-pri);
+}
+[data-md-color-scheme="default"] .md-header__button,
+[data-md-color-scheme="default"] .md-header__title {
+  color: var(--nv-text-pri);
+}
+[data-md-color-scheme="default"] .md-search__form {
+  background-color: var(--nv-code-inline-bg);
+  color: var(--nv-text-pri);
+}
+[data-md-color-scheme="default"] .md-search__form:hover {
+  background-color: var(--nv-bg-card2);
+}
+[data-md-color-scheme="default"] .md-tabs {
+  background: var(--nv-bg-card2);
+}
+[data-md-color-scheme="default"] .md-tabs__link {
+  color: var(--nv-text-mut);
+  opacity: 1;
+}
+[data-md-color-scheme="default"] .md-tabs__link:hover,
+[data-md-color-scheme="default"] .md-tabs__link--active {
+  color: var(--nv-text-pri);
+}
+[data-md-color-scheme="default"] .md-footer {
+  background: var(--nv-bg-card);
+  border-top: 1px solid var(--nv-border);
+}
+
+/* ── Typography ──────────────────────────────────────────────────────── */
+/* Shrink the typeset baseline (Material's default is 0.8em). Headings    */
+/* are sized in rem (absolute) so they reduce independently below.        */
+[data-md-color-scheme="slate"] .md-typeset {
+  font-size: 0.72rem;
+}
+[data-md-color-scheme="slate"] .md-typeset h1 {
+  font-size: clamp(1.26rem, 2.8vw, 2.1rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--nv-text-pri);
+}
+[data-md-color-scheme="slate"] .md-typeset h2 {
+  font-size: clamp(0.91rem, 1.75vw, 1.33rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+[data-md-color-scheme="slate"] .md-typeset h3 {
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+[data-md-color-scheme="slate"] .md-typeset h4 {
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+[data-md-color-scheme="default"] .md-typeset {
+  font-size: 0.72rem;
+}
+[data-md-color-scheme="default"] .md-typeset h1 {
+  font-size: clamp(1.26rem, 2.8vw, 2.1rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--nv-text-pri);
+}
+[data-md-color-scheme="default"] .md-typeset h2 {
+  font-size: clamp(0.91rem, 1.75vw, 1.33rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+[data-md-color-scheme="default"] .md-typeset h3 {
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+[data-md-color-scheme="default"] .md-typeset h4 {
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+/* ── Links ───────────────────────────────────────────────────────────── */
+[data-md-color-scheme="slate"] .md-typeset a {
+  color: var(--nv-link);
+}
+[data-md-color-scheme="slate"] .md-typeset a:hover {
+  color: var(--nv-link-hover);
+}
+
+[data-md-color-scheme="default"] .md-typeset a {
+  color: var(--nv-link);
+}
+[data-md-color-scheme="default"] .md-typeset a:hover {
+  color: var(--nv-link-hover);
+}
+
+/* ── Code (inline only — don't double-decorate code inside <pre>) ────── */
+[data-md-color-scheme="slate"] .md-typeset :not(pre) > code {
+  background: var(--nv-code-inline-bg);
+  border: 1px solid var(--nv-border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  color: var(--nv-green-l);
+  font-size: 0.85em;
+}
+
+[data-md-color-scheme="default"] .md-typeset :not(pre) > code {
+  background: var(--nv-code-inline-bg);
+  border: 1px solid var(--nv-border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  color: var(--nv-green-d);
+  font-size: 0.85em;
+}
+
+/* ── Code blocks ─────────────────────────────────────────────────────── */
+[data-md-color-scheme="slate"] .md-typeset pre > code {
+  background: var(--nv-code-bg);
+  border: 1px solid var(--nv-border);
+  border-radius: var(--nv-radius);
+  color: var(--nv-code-fg);
+  font-size: 0.72rem;
+  line-height: 1.65;
+}
+[data-md-color-scheme="slate"] .md-typeset .highlight > pre,
+[data-md-color-scheme="slate"] .md-typeset .highlighttable .linenodiv pre {
+  background: var(--nv-code-bg);
+}
+
+[data-md-color-scheme="default"] .md-typeset pre > code {
+  background: var(--nv-code-bg);
+  border: 1px solid var(--nv-border);
+  border-radius: var(--nv-radius);
+  color: var(--nv-code-fg);
+  font-size: 0.72rem;
+  line-height: 1.65;
+}
+[data-md-color-scheme="default"] .md-typeset .highlight > pre,
+[data-md-color-scheme="default"] .md-typeset .highlighttable .linenodiv pre {
+  background: var(--nv-code-bg);
+}
+
+/* Light-mode Pygments syntax colors */
+[data-md-color-scheme="default"] .highlight .c,
+[data-md-color-scheme="default"] .highlight .cm,
+[data-md-color-scheme="default"] .highlight .cp {
+  color: #757575;
+  font-style: italic;
+}
+[data-md-color-scheme="default"] .highlight .k,
+[data-md-color-scheme="default"] .highlight .kd,
+[data-md-color-scheme="default"] .highlight .kn,
+[data-md-color-scheme="default"] .highlight .kr {
+  color: #7b1fa2;
+}
+[data-md-color-scheme="default"] .highlight .s,
+[data-md-color-scheme="default"] .highlight .s1,
+[data-md-color-scheme="default"] .highlight .s2,
+[data-md-color-scheme="default"] .highlight .sb {
+  color: #2e7d32;
+}
+[data-md-color-scheme="default"] .highlight .nf,
+[data-md-color-scheme="default"] .highlight .nc,
+[data-md-color-scheme="default"] .highlight .nn {
+  color: #1565c0;
+}
+[data-md-color-scheme="default"] .highlight .m,
+[data-md-color-scheme="default"] .highlight .mi,
+[data-md-color-scheme="default"] .highlight .mf {
+  color: #5a8f00;
+}
+
+/* ── Content width ───────────────────────────────────────────────────── */
+/* Material defaults to ~61rem of content width; combined with the smaller   */
+/* 0.72rem typeset baseline above, tables with monospace cells (CMake-options*/
+/* table in getting-started.md) wrap mid-token. Widen the grid to give wide  */
+/* tables room. Universal — applies to both color schemes.                   */
+.md-grid {
+  max-width: 76rem;
+}
+
+/* ── Tables ──────────────────────────────────────────────────────────── */
+/* Structural rules (wrapping, monospace nowrap) are universal so the table */
+/* layout looks the same in light and dark. Color rules below are slate-     */
+/* only since they reference dark-mode tokens.                               */
+.md-typeset table:not([class]) td {
+  /* Prefer word-boundary wrapping over mid-word breaks, which were */
+  /* producing single-character orphans in narrow columns.          */
+  word-break: normal;
+  overflow-wrap: anywhere;
+  hyphens: none;
+}
+/* Keep monospace tokens (CMake options, YAML keys) together. */
+.md-typeset table:not([class]) td > code,
+.md-typeset table:not([class]) th > code {
+  white-space: nowrap;
+}
+/* Slate-only color overrides for tables. */
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) {
+  border: 1px solid var(--nv-border);
+  background: var(--nv-bg-card);
+}
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) th {
+  background: var(--nv-bg-card2);
+  color: var(--nv-text-dim);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border-bottom: 1px solid var(--nv-border);
+}
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) td {
+  border-bottom: 1px solid var(--nv-table-row-border);
+  color: var(--nv-text-mut);
+}
+
+[data-md-color-scheme="default"] .md-typeset table:not([class]) {
+  border: 1px solid var(--nv-border);
+  background: var(--nv-bg-card);
+}
+[data-md-color-scheme="default"] .md-typeset table:not([class]) th {
+  background: var(--nv-bg-card2);
+  color: var(--nv-text-dim);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border-bottom: 1px solid var(--nv-border);
+}
+[data-md-color-scheme="default"] .md-typeset table:not([class]) td {
+  border-bottom: 1px solid var(--nv-table-row-border);
+  color: var(--nv-text-mut);
+}
+
+/* ── Sidebar / Navigation ────────────────────────────────────────────── */
+[data-md-color-scheme="slate"] .md-nav__link {
+  color: var(--nv-text-mut);
+  border-left: 2px solid transparent;
+  transition: color 0.2s ease, background 0.2s ease;
+}
+[data-md-color-scheme="slate"] .md-nav__link:hover {
+  color: var(--nv-text-pri);
+  background: rgba(255, 255, 255, 0.03);
+}
+[data-md-color-scheme="slate"] .md-nav__link--active {
+  color: var(--nv-green) !important;
+  border-left: 2px solid var(--nv-green);
+  background: rgba(118, 185, 0, 0.06);
+}
+
+[data-md-color-scheme="default"] .md-nav__link {
+  color: var(--nv-text-mut);
+  border-left: 2px solid transparent;
+  transition: color 0.2s ease, background 0.2s ease;
+}
+[data-md-color-scheme="default"] .md-nav__link:hover {
+  color: var(--nv-text-pri);
+  background: rgba(0, 0, 0, 0.04);
+}
+[data-md-color-scheme="default"] .md-nav__link--active {
+  color: var(--nv-green-d) !important;
+  border-left: 2px solid var(--nv-green);
+  background: rgba(118, 185, 0, 0.08);
+}
+
+/* ── Top-tab dropdowns (added by tab-dropdowns.js) ──────────────────── */
+/* JS injects <ul class="nv-tab-dropdown"> into tab <li> for sections    */
+/* with multiple sub-pages. CSS turns it into a hover/focus popover so    */
+/* you can hop sub-page to sub-page without bouncing through the section  */
+/* index. Sub-page list is hard-coded in tab-dropdowns.js (kept in sync   */
+/* with mkdocs.yml nav).                                                  */
+
+/* Material defaults `.md-tabs` and `.md-tabs__list` to `overflow: auto`  */
+/* (for horizontal scroll on narrow viewports) and `contain: content` on  */
+/* the list (paint clipping). Both clip our absolutely-positioned         */
+/* dropdown. Override here. With 5 tabs the strip fits comfortably on    */
+/* desktop; on narrow viewports the tabs already collapse (handled by    */
+/* Material's responsive nav).                                            */
+.md-tabs,
+.md-tabs__list {
+  overflow: visible !important;
+}
+.md-tabs__list {
+  contain: none !important;
+}
+.md-tabs__item.nv-has-dropdown {
+  position: relative;
+}
+/* Chevron indicator on tabs that have a dropdown. */
+.md-tabs__item.nv-has-dropdown > .md-tabs__link::after {
+  content: " ▾";
+  margin-left: 0.25rem;
+  font-size: 0.7em;
+  opacity: 0.55;
+}
+.nv-tab-dropdown {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin: 0;
+  padding: 0.4rem 0;
+  list-style: none;
+  min-width: 16rem;
+  /* Use Material's color tokens so this picks up the right surface in    */
+  /* both light and dark schemes (in slate these resolve to dark cards;   */
+  /* in default they resolve to white cards with a subtle border).        */
+  background: var(--md-default-bg-color);
+  border: 1px solid var(--md-default-fg-color--lightest, rgba(0, 0, 0, 0.12));
+  border-radius: var(--nv-radius);
+  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.25);
+  z-index: 100;
+}
+/* Slightly stronger shadow in slate to read against the dark surface. */
+[data-md-color-scheme="slate"] .nv-tab-dropdown {
+  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.55);
+}
+[data-md-color-scheme="default"] .nv-tab-dropdown {
+  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.12);
+}
+/* Invisible bridge so the cursor can cross from tab to dropdown without
+   the gap (top: 100% leaves no room for the cursor to slip through).    */
+.nv-tab-dropdown::before {
+  content: "";
+  position: absolute;
+  top: -0.5rem;
+  left: 0;
+  right: 0;
+  height: 0.5rem;
+}
+.md-tabs__item.nv-has-dropdown:hover .nv-tab-dropdown,
+.md-tabs__item.nv-has-dropdown:focus-within .nv-tab-dropdown {
+  display: block;
+}
+.nv-tab-dropdown li {
+  margin: 0;
+}
+.nv-tab-dropdown a {
+  display: block;
+  padding: 0.45rem 1rem;
+  color: var(--md-default-fg-color--light);
+  text-decoration: none;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.nv-tab-dropdown a:hover,
+.nv-tab-dropdown a:focus {
+  color: var(--md-default-fg-color);
+  background: rgba(118, 185, 0, 0.1);
+  outline: none;
+}
+
+/* ── Right-hand TOC: a touch of breathing room between items ─────────── */
+/* Material's default item spacing crowds the entries; add explicit         */
+/* margin-bottom (single side, so adjacent margins don't silently collapse */
+/* and halve the gap). Scoped to .md-nav--secondary so the left sidebar    */
+/* (already tuned) is unaffected. Universal so light and dark schemes      */
+/* share the same TOC density.                                              */
+.md-nav--secondary .md-nav__item {
+  margin-bottom: 0.35rem;
+}
+.md-nav--secondary .md-nav__item:last-child {
+  margin-bottom: 0;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────── */
+[data-md-color-scheme="slate"] .md-typeset .md-button {
+  background: transparent;
+  color: var(--nv-text-pri);
+  border: 1.5px solid var(--nv-border);
+  border-radius: var(--nv-radius);
+  padding: 0.5rem 1.25rem;
+  transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+[data-md-color-scheme="slate"] .md-typeset .md-button:hover {
+  border-color: #444;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--nv-text-pri);
+}
+[data-md-color-scheme="slate"] .md-typeset .md-button--primary {
+  background: var(--nv-green);
+  color: #000;
+  border-color: var(--nv-green);
+}
+[data-md-color-scheme="slate"] .md-typeset .md-button--primary:hover {
+  background: var(--nv-green-l);
+  border-color: var(--nv-green-l);
+  color: #000;
+}
+
+[data-md-color-scheme="default"] .md-typeset .md-button {
+  background: transparent;
+  color: var(--nv-text-pri);
+  border: 1.5px solid var(--nv-border);
+  border-radius: var(--nv-radius);
+  padding: 0.5rem 1.25rem;
+  transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+[data-md-color-scheme="default"] .md-typeset .md-button:hover {
+  border-color: #bdbdbd;
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--nv-text-pri);
+}
+[data-md-color-scheme="default"] .md-typeset .md-button--primary {
+  background: var(--nv-green);
+  color: #000;
+  border-color: var(--nv-green);
+}
+[data-md-color-scheme="default"] .md-typeset .md-button--primary:hover {
+  background: var(--nv-green-l);
+  border-color: var(--nv-green-l);
+  color: #000;
+}
+
+/* ── Admonitions ─────────────────────────────────────────────────────── */
+/* note (existing, kept) */
+[data-md-color-scheme="slate"] .md-typeset .admonition.note,
+[data-md-color-scheme="slate"] .md-typeset details.note {
+  border-color: var(--nv-green);
+}
+[data-md-color-scheme="slate"] .md-typeset .note > .admonition-title,
+[data-md-color-scheme="slate"] .md-typeset .note > summary {
+  background-color: rgba(118, 185, 0, 0.1);
+}
+[data-md-color-scheme="slate"] .md-typeset .note > .admonition-title::before,
+[data-md-color-scheme="slate"] .md-typeset .note > summary::before {
+  color: var(--nv-green);
+}
+
+/* warning — amber */
+[data-md-color-scheme="slate"] .md-typeset .admonition.warning,
+[data-md-color-scheme="slate"] .md-typeset details.warning {
+  border-color: rgba(255, 193, 7, 0.4);
+}
+[data-md-color-scheme="slate"] .md-typeset .warning > .admonition-title,
+[data-md-color-scheme="slate"] .md-typeset .warning > summary {
+  background-color: rgba(255, 193, 7, 0.07);
+}
+[data-md-color-scheme="slate"] .md-typeset .warning > .admonition-title::before,
+[data-md-color-scheme="slate"] .md-typeset .warning > summary::before {
+  color: #ffcb6b;
+}
+
+/* info / tip — soft blue */
+[data-md-color-scheme="slate"] .md-typeset .admonition.info,
+[data-md-color-scheme="slate"] .md-typeset details.info,
+[data-md-color-scheme="slate"] .md-typeset .admonition.tip,
+[data-md-color-scheme="slate"] .md-typeset details.tip {
+  border-color: rgba(130, 170, 255, 0.4);
+}
+[data-md-color-scheme="slate"] .md-typeset .info > .admonition-title,
+[data-md-color-scheme="slate"] .md-typeset .info > summary,
+[data-md-color-scheme="slate"] .md-typeset .tip > .admonition-title,
+[data-md-color-scheme="slate"] .md-typeset .tip > summary {
+  background-color: rgba(130, 170, 255, 0.07);
+}
+[data-md-color-scheme="slate"] .md-typeset .info > .admonition-title::before,
+[data-md-color-scheme="slate"] .md-typeset .info > summary::before,
+[data-md-color-scheme="slate"] .md-typeset .tip > .admonition-title::before,
+[data-md-color-scheme="slate"] .md-typeset .tip > summary::before {
+  color: #aac4ff;
+}
+
+[data-md-color-scheme="default"] .md-typeset .admonition.note,
+[data-md-color-scheme="default"] .md-typeset details.note {
+  border-color: var(--nv-green);
+}
+[data-md-color-scheme="default"] .md-typeset .note > .admonition-title,
+[data-md-color-scheme="default"] .md-typeset .note > summary {
+  background-color: rgba(118, 185, 0, 0.12);
+}
+[data-md-color-scheme="default"] .md-typeset .note > .admonition-title::before,
+[data-md-color-scheme="default"] .md-typeset .note > summary::before {
+  color: var(--nv-green-d);
+}
+
+[data-md-color-scheme="default"] .md-typeset .admonition.warning,
+[data-md-color-scheme="default"] .md-typeset details.warning {
+  border-color: rgba(230, 162, 0, 0.5);
+}
+[data-md-color-scheme="default"] .md-typeset .warning > .admonition-title,
+[data-md-color-scheme="default"] .md-typeset .warning > summary {
+  background-color: rgba(255, 193, 7, 0.12);
+}
+[data-md-color-scheme="default"] .md-typeset .warning > .admonition-title::before,
+[data-md-color-scheme="default"] .md-typeset .warning > summary::before {
+  color: #c77c00;
+}
+
+[data-md-color-scheme="default"] .md-typeset .admonition.info,
+[data-md-color-scheme="default"] .md-typeset details.info,
+[data-md-color-scheme="default"] .md-typeset .admonition.tip,
+[data-md-color-scheme="default"] .md-typeset details.tip {
+  border-color: rgba(21, 101, 192, 0.35);
+}
+[data-md-color-scheme="default"] .md-typeset .info > .admonition-title,
+[data-md-color-scheme="default"] .md-typeset .info > summary,
+[data-md-color-scheme="default"] .md-typeset .tip > .admonition-title,
+[data-md-color-scheme="default"] .md-typeset .tip > summary {
+  background-color: rgba(21, 101, 192, 0.08);
+}
+[data-md-color-scheme="default"] .md-typeset .info > .admonition-title::before,
+[data-md-color-scheme="default"] .md-typeset .info > summary::before,
+[data-md-color-scheme="default"] .md-typeset .tip > .admonition-title::before,
+[data-md-color-scheme="default"] .md-typeset .tip > summary::before {
+  color: #1565c0;
+}
+
+/* ── Reusable image frame — matches landing page hero-visual-link ────── */
+.img-visual-frame {
+  display: block;
+  max-width: 740px;
+  margin: 1.5rem 0;
+  padding: 0.45rem;
+  border-radius: 20px;
+  background: linear-gradient(135deg, rgba(118, 185, 0, 0.34), rgba(93, 216, 242, 0.18));
+  border: 1px solid rgba(160, 208, 0, 0.38);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.58), 0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  cursor: zoom-in;
+}
+
+.img-visual-frame:hover {
+  transform: translateY(-2px);
+  border-color: rgba(160, 208, 0, 0.68);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.65), 0 0 34px rgba(118, 185, 0, 0.16);
+}
+
+/* Zero out the <p> margin Python-Markdown adds around the image */
+.img-visual-frame p {
+  margin: 0;
+  line-height: 0;
+}
+
+.img-visual-frame img {
+  width: 100%;
+  display: block;
+  border-radius: 16px;
+}
+
+/* ── Packet diagram animations ─────────────────────────────────────── */
+/* Self-contained transparent canvas; readable on white slides and docs.  */
+.packet-diagram img {
+  width: 100%;
+  display: block;
+  border-radius: 12px;
+}
+
+/* ── Platform tabs (IGX Orin / DGX Spark) — enlarged labels ─────────── */
+/* Scoped to the .platform-tabs wrapper in system_configuration.md and  */
+/* limited to the wrapper's direct tabbed-set so nested sub-tabs        */
+/* (tune_system.py / manual, One-time / Persistent, …) are unaffected.  */
+.md-typeset .platform-tabs > .tabbed-set > .tabbed-labels > label {
+  font-size: 1rem;
+  font-weight: 700;
+  padding: 0.6em 1.2em;
+}
+
+/* ── Right-hand TOC: hide entries that belong to the inactive platform tab. */
+/* JS (platform-tab-toc.js) tags each [data-tab] link and mirrors the active */
+/* tab onto <body data-active-tab="...">. We hide the link's containing <li> */
+/* (via :has()) so the surrounding indentation collapses too.                */
+body[data-active-tab="igx-orin"] .md-nav--secondary li:has(> a[data-tab="dgx-spark"]),
+body[data-active-tab="dgx-spark"] .md-nav--secondary li:has(> a[data-tab="igx-orin"]) {
+  display: none;
+}
+
+/* ── Performance-report heatmap cells ───────────────────────────────── */
+/* Used by the payload×batch and payload×target_gbps matrices in
+   docs/performance-*.md. Threshold logic (vs. matrix-global max):
+     green  = no drops AND Gbps ≥ 90% of max
+     yellow = no drops AND Gbps ≥ 70% of max
+     red    = any drops OR Gbps < 70% of max                            */
+.md-typeset table.perf-matrix {
+  width: 100%;
+  table-layout: auto;
+  border-collapse: collapse;
+  font-size: 0.64rem;
+}
+.md-typeset table.perf-matrix th,
+.md-typeset table.perf-matrix td {
+  text-align: center;
+  vertical-align: middle;
+  font-variant-numeric: tabular-nums;
+  padding: 0.55em 0.6em;
+  border: 1px solid var(--md-default-fg-color--light);
+  white-space: nowrap;
+}
+.md-typeset table.perf-matrix td small {
+  display: block;
+  opacity: 0.75;
+  font-size: 0.85em;
+  margin-top: 0.25em;
+}
+.md-typeset table.perf-matrix td.cell-green {
+  background-color: rgba(118, 185, 0, 0.28);
+  color: inherit;
+}
+.md-typeset table.perf-matrix td.cell-yellow {
+  background-color: rgba(255, 196, 0, 0.32);
+  color: inherit;
+}
+.md-typeset table.perf-matrix td.cell-red {
+  background-color: rgba(220, 60, 60, 0.32);
+  color: inherit;
+}
+.md-typeset table.perf-matrix th {
+  background-color: rgba(255, 255, 255, 0.05);
+  font-weight: 600;
+}
+/* Compact legend chips that pair with the matrix. */
+.md-typeset .perf-legend {
+  display: flex;
+  gap: 0.75em;
+  margin: 0.5em 0 1em 0;
+  font-size: 0.85em;
+  flex-wrap: wrap;
+}
+.md-typeset .perf-legend span {
+  padding: 0.1em 0.55em;
+  border-radius: 0.25em;
+  white-space: nowrap;
+}
+.md-typeset .perf-legend .cell-green  { background-color: rgba(118, 185, 0, 0.28); }
+.md-typeset .perf-legend .cell-yellow { background-color: rgba(255, 196, 0, 0.32); }
+.md-typeset .perf-legend .cell-red    { background-color: rgba(220, 60, 60, 0.32); }
