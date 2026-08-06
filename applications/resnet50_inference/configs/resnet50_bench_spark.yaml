@@ -1,0 +1,134 @@
+%YAML 1.2
+---
+# Single-host Spark bench (synthetic TX+RX). Prefer xhost configs for dual-Spark.
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    master_core: 3
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    memory_regions:
+    - name: "Data_TX_GPU"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 2048
+    # buf_size MUST be payload_byte_offset + out_payload_len (64 + 1176): the
+    # reorder slot stride is (source buf_size - payload_byte_offset).
+    - name: "Data_RX_GPU"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 1240
+    - name: "Reorder_RX_GPU"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 16
+      buf_size: 9633792
+
+    interfaces:
+    - name: "tx_port"
+      address: <tx-pcie-addr>
+      tx:
+        queues:
+        - name: "tx_q_0"
+          id: 0
+          # Aligned to the RX reorder packets_per_batch (4096) so a gap between TX
+          # bursts lands on a batch boundary instead of splitting a batch.
+          batch_size: 4096
+          cpu_core: 11
+          memory_regions:
+            - "Data_TX_GPU"
+          offloads:
+            - "tx_eth_src"
+    - name: "rx_port"
+      address: <rx-pcie-addr>
+      rx:
+        flow_isolation: true
+        queues:
+        - name: "rq_q_0"
+          id: 0
+          cpu_core: 9
+          # Multiple of packets_per_batch (4096) so a batch never straddles an RX
+          # burst boundary. timeout_us 0 disables partial flushes, which would
+          # otherwise truncate a batch to whole images and drop the straddler.
+          batch_size: 8192
+          timeout_us: 0
+          memory_regions:
+            - "Data_RX_GPU"
+        flows:
+        - name: "flow_resnet"
+          id: 201
+          action:
+            type: queue
+            id: 0
+          match:
+            udp_src: 4096
+            udp_dst: 4096
+        reorder_configs:
+        - name: "rx_reorder_resnet_int8_fp16"
+          reorder_type: "gpu"
+          memory_region: "Reorder_RX_GPU"
+          payload_byte_offset: 64
+          flow_ids: [201]
+          data_types:
+            input_type: "int8"
+            output_type: "fp16"
+            endianness: "host"
+          method:
+            seq_packets_per_batch:
+              sequence_number:
+                bit_offset: 128
+                bit_width: 12
+              packets_per_batch: 4096
+
+bench_rx:
+- interface_name: "rx_port"
+  cpu_core: 8
+
+bench_tx:
+- interface_name: "tx_port"
+  cpu_core: 10
+  batch_size: 4096
+  payload_size: 1176
+  header_size: 64
+  eth_dst_addr: <rx-port-mac>
+  ip_src_addr: 1.1.1.1
+  ip_dst_addr: 2.2.2.2
+  udp_src_port: 4096
+  udp_dst_port: 4096
+
+reorder:
+  reorder_name: "rx_reorder_resnet_int8_fp16"
+  out_payload_len: 1176
+  output_slot_stride: 2352
+  packets_per_image: 128
+  packets_per_batch: 4096
+  payload_byte_offset: 64
+  seq_bit_offset: 128
+  seq_bit_width: 12
+  images_per_batch: 32
+  image_out_bytes: 301056
+
+inference:
+  onnx_path: "models/resnet50_features.onnx"
+  engine_path: "models/resnet50_features.fp16in.engine"
+  enable_fp16: true
+  channels: 3
+  height: 224
+  width: 224
+  feature_dim: 2048
+  opt_min: 1
+  opt_avg: 32
+  opt_max: 256
+  cpu_core: 7
+  input_name: "input"
+  output_name: "features"
+  pca_every_n_batches: 0
+
+stats:
+  enabled: false
+  top_k: 8

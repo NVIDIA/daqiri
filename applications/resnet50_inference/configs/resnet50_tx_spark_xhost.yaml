@@ -1,0 +1,82 @@
+%YAML 1.2
+---
+# DGX Spark cross-host TX: spark-stacked-01 (ncg-spark-0177) sends CIFAR int8
+# frames to spark-stacked-02. Companion: resnet50_rx_spark_xhost.yaml.
+# p0 BDF 0000:01:00.0; set eth_dst_addr / ETH_DST_ADDR to the peer RX p0 MAC.
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    master_core: 8
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    memory_regions:
+    - name: "Data_TX_GPU"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 2048
+
+    interfaces:
+    - name: "tx_port"
+      address: 0000:01:00.0
+      tx:
+        queues:
+        - name: "tx_q_0"
+          id: 0
+          # Aligned to the RX reorder packets_per_batch (4096) so any gap between
+          # TX bursts lands on a batch boundary instead of splitting a batch.
+          batch_size: 4096
+          cpu_core: 17
+          memory_regions:
+            - "Data_TX_GPU"
+          offloads:
+            - "tx_eth_src"
+
+bench_tx:
+- interface_name: "tx_port"
+  cpu_core: 16
+  batch_size: 4096
+  payload_size: 1176
+  header_size: 64
+  eth_dst_addr: <00:00:00:00:00:00>
+  ip_src_addr: 1.1.1.1
+  ip_dst_addr: 2.2.2.2
+  udp_src_port: 4096
+  udp_dst_port: 4096
+
+# App geometry (must match RX reorder_configs).
+reorder:
+  reorder_name: "rx_reorder_resnet_int8_fp16"
+  out_payload_len: 1176
+  output_slot_stride: 2352
+  packets_per_image: 128
+  packets_per_batch: 4096
+  payload_byte_offset: 64
+  seq_bit_offset: 128
+  seq_bit_width: 12
+  images_per_batch: 32
+  image_out_bytes: 301056
+
+inference:
+  onnx_path: "models/resnet50_features.onnx"
+  engine_path: "models/resnet50_features.fp16in.engine"
+  enable_fp16: true
+  channels: 3
+  height: 224
+  width: 224
+  feature_dim: 2048
+  opt_min: 1
+  opt_avg: 32
+  opt_max: 256
+  input_name: "input"
+  output_name: "features"
+
+dataset:
+  pcap_path: "data/cifar10_resnet.pcap"
+
+stats:
+  enabled: false
+  top_k: 8

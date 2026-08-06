@@ -1151,6 +1151,12 @@ body.graphic-overlay-open {
   border: 1px solid rgba(255, 193, 7, 0.2);
 }
 
+.daqiri-landing .tag-adv {
+  background: rgba(255, 112, 67, 0.1);
+  color: #ff7043;
+  border: 1px solid rgba(255, 112, 67, 0.2);
+}
+
 .daqiri-landing .tut-time {
   font-size: 0.8rem;
   color: var(--text-dim);

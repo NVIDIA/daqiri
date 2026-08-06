@@ -34,6 +34,10 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
   - *Batched GPU*: Entire packets to GPU memory (maximum bandwidth, GPU-side parsing required).
 - **Burst file writes** — Write received bursts as raw packet files or appendable PCAP
   captures. Host-backed buffers use POSIX writes; CUDA device-backed buffers can use cuFile/GDS.
+- **AI/ML integration** — Optional `daqiri_resnet50_inference` application
+  (`-DDAQIRI_BUILD_APPLICATIONS=ON`, TensorRT): GPUDirect RX → reorder → ResNet-50
+  feature extraction with headless PC1/PC2 output. See
+  [DAQIRI + TensorRT Inference](https://nvidia.github.io/daqiri/tutorials/daqiri-resnet-inference/).
 - **S3 raw object writes** — Optionally upload raw burst packets to Amazon S3 or an
   S3-compatible object store through the AWS SDK for C++.
 - **Flow Steering** — Configure the NIC's hardware flow engine to route packets by UDP
@@ -94,6 +98,7 @@ Step-by-step walkthroughs to get hands-on:
 - [Dynamic RX Flow Example](https://nvidia.github.io/daqiri/tutorials/configuration-walkthrough/#choosing-an-example-config) — start with RX queues only, then add and delete flow-steering rules at runtime
 - [Understanding the Configuration File](https://nvidia.github.io/daqiri/tutorials/configuration-walkthrough/) — annotated YAML walkthrough
 - [DAQIRI + Holoscan Integration](https://nvidia.github.io/daqiri/tutorials/daqiri-holoscan-integration/) — use DAQIRI RX bursts from a Holoscan source operator
+- [DAQIRI + TensorRT Inference](https://nvidia.github.io/daqiri/tutorials/daqiri-resnet-inference/) — packet ingest → ResNet-50 feature extraction with TensorRT
 
 ## License
 

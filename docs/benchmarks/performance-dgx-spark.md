@@ -19,6 +19,12 @@ benchmarking procedure, see [Socket and RDMA Benchmarking](socket_benchmarking.m
 [Raw Ethernet Benchmarking](raw_benchmarking.md) (the two-physical-port DPDK
 loopback). The exact commands are collected under [Reproduce](#reproduce) below.
 
+One section is measured differently and says so: the
+[end-to-end inference pipeline](#end-to-end-inference-pipeline-resnet-50-cross-host)
+runs **cross-host** on a stacked Spark pair over a faster cable, so it is not
+comparable to the single-host tables. It also measures a whole application rather
+than a transport, so the figure of merit is images per second, not Gb/s.
+
 ## System under test
 
 | Component | Detail |
@@ -230,7 +236,7 @@ Four one-way UDP client/server pairs, same per-side pinning (send and receive on
 separate cores). UDP has no flow control, so each sender runs flat-out and the
 receiver drops whatever it cannot drain, and the loss column is an inherent property
 of unpaced UDP. App RX is the delivered goodput; App-level loss is
-`(App TX − App RX) / App TX`.
+`(App TX - App RX) / App TX`.
 
 Each cell shows **receiver goodput in Gb/s** (mean ± std over 3 reps) with the
 **app-level loss %** dimmed beneath it:
@@ -330,6 +336,60 @@ compute-limited** (SM well under 100% throughout). FFT is nearly free on both
 (SM ~6–17%, ≤1 Gb/s off baseline). The reorder/gather step assembles
 each unit's payload into one contiguous GPU buffer.
 
+Sockets are absent from that table because they cannot reach a comparable rate.
+
+## End-to-end inference pipeline (ResNet-50, cross-host)
+
+Everything above measures transports in isolation. This section measures a
+complete application built on them: the
+[ResNet-50 pipeline](../tutorials/daqiri-resnet-inference.md), which takes
+CIFAR-10 images off the wire and runs TensorRT inference on them without the
+payload ever being touched by the CPU.
+
+It runs **cross-host** on a stacked Spark pair (`spark-stacked-01` TX →
+`spark-stacked-02` RX) over one direct `det1` cable, not the 100 GbE chassis
+loopback used above, so these numbers are not directly comparable to the
+single-host tables.
+
+```mermaid
+flowchart LR
+  TX["stacked-01<br/>CIFAR-10 int8 frames"] -->|"det1 cable"| N["stacked-02 NIC DMA"]
+  N --> R["RX buffers (host_pinned,<br/>GPU-accessible)"]
+  R --> K["DAQIRI reorder kernel:<br/>reassemble + int8 to fp16"]
+  K -->|"REORDERED burst + CUDA event"| Q["SPSC ring"]
+  Q --> T["TensorRT FP16<br/>ResNet-50"]
+  T --> F["feature vectors"]
+```
+
+Each image is 224×224×3 **signed int8** on the wire, 150,528 B, split across 128
+frames of 1240 B (64 B header + 1176 B payload). The reorder kernel reassembles
+the frames and converts to fp16 in the same pass, so fp16 exists only in GPU
+memory and the network carries one byte per pixel. TensorRT reads the reorder
+output directly; there is no staging copy.
+
+Batch of 32 images. Payload Gb/s counts CIFAR-10's native uint8 image bytes on
+the wire (`3×224×224` bytes/image). The fp16 TensorRT input exists only after GPU
+reorder.
+
+| Result | img/s | Payload Gb/s | latency_ms | Note |
+| --- | ---: | ---: | ---: | --- |
+| **ResNet-50 FP16 baseline** | **3431** | **4.13** | **8.66** | int8 wire, GPU int8 to fp16 reorder, FP16 TensorRT |
+| ResNet-18 FP16 comparison | 4626 | 5.57 | 2.59 | +34.8% versus ResNet-50 baseline |
+
+Clock locking and INT8 TensorRT did not improve the ResNet-50 result in this
+setup: locked FP16 was 3411 img/s (-0.6%), and locked INT8 was 3390 img/s
+(-1.2%).
+
+**Bottleneck:** ResNet-50 uses 4.13 Gb/s of image payload, about 4.36 Gb/s on the
+wire with headers. That is far below the roughly 100 Gb/s ingest-only result for
+the same Spark pair. The smaller ResNet-18 model raises throughput, so the limit
+for this PR's ResNet example is TensorRT model execution, not RX polling, GPU
+reorder, or link bandwidth.
+
+Benchmarking gap: future runs should keep offered TX frames, reordered batches
+delivered, and TensorRT batches consumed as separate counters. That keeps SPSC
+backpressure drops in benchmark mode separate from NIC drops.
+
 ## Reproduce
 
 Run inside the project container (privileged, GPUs passed through, hugepages
@@ -423,3 +483,24 @@ Each run writes `bench-results/<timestamp>-<backend>-<mode>/runs.csv`. See
 [Socket and RDMA Benchmarking](socket_benchmarking.md) and
 [Raw Ethernet Benchmarking](raw_benchmarking.md) for the namespace setup and
 per-transport details.
+
+**The ResNet-50 pipeline** needs `-DDAQIRI_BUILD_APPLICATIONS=ON`, TensorRT (the
+`BASE_IMAGE=torch` container), and the exported model plus packetized dataset.
+The [tutorial](../tutorials/daqiri-resnet-inference.md) covers both. Given
+passwordless `ssh` between the two hosts and a shared checkout,
+`run_resnet_xhost.sh` starts the RX side, waits for TensorRT to report ready,
+then launches TX:
+
+```bash
+# sustained cell: the table above
+applications/resnet50_inference/tools/run_resnet_xhost.sh --seconds 30
+```
+
+For the batch-size sweep, point the RX host at a config with a different
+`images_per_batch` (and `packets_per_batch` scaled with it, 128 packets per
+image) and re-run. Throughput comes from the RX process's own image counter;
+wire rates come from `mlnx_perf` on both ports, since application run time over
+packet counts is not accurate enough at these rates.
+
+Rates are normalized on the TX window, because the RX process deliberately
+outlives it by 15 s and counts that idle tail in its own `seconds=` field.
