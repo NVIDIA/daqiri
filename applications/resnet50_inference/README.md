@@ -21,7 +21,7 @@ New here? Run [software loopback smoke](#software-loopback-smoke-no-nic) first
 
 ```
 TX host:  pcap / synthetic → pcap_tx_worker → wire (int8 samples + header seq)
-RX host:  DPDK RX + reorder_configs (int8→fp16, packets_per_batch=4096)
+RX host:  DPDK RX + GPU reorder (int8→fp16, packets_per_batch=4096)
        → rx_producer_worker → InferenceQueue (SPSC)
        → inference_consumer_worker → TrtRunner (fp16 in) → FeatureSink
 ```
@@ -96,15 +96,27 @@ Uses `loopback: "sw"` / `address: "loopback"` (same pattern as
 
 ## Config keys (app `reorder:`)
 
+The app `reorder:` block is the **single source of truth** for reorder geometry.
+Do **not** hand-write `daqiri.cfg…rx.reorder_configs`; the app synthesizes it
+from `reorder:` at startup (and errors if the YAML defines it directly).
+
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `reorder_name` | — | Must match `rx.reorder_configs[].name` |
+| `reorder_name` | — | Name given to the synthesized reorder config |
+| `output_type` | fp16 | `fp16` (int8→fp16 convert) or `int8` (passthrough) |
+| `reorder_type` | gpu | Reorder engine type |
+| `memory_region` | Reorder_RX_GPU | Output MR (must exist in `daqiri.cfg.memory_regions`) |
+| `flow_ids` | RX flows | Flow IDs to reorder (defaults to all RX flow IDs) |
 | `out_payload_len` | 1176 | Wire int8 bytes/packet |
-| `output_slot_stride` | 2352 | fp16 bytes/slot |
+| `output_slot_stride` | 2352 | fp16 bytes/slot (1176 for int8) |
 | `packets_per_image` | 128 | Power of two |
-| `packets_per_batch` | 4096 | = images_per_batch × packets_per_image |
-| `images_per_batch` | 32 | Power-of-two divisor |
+| `images_per_batch` | 32 | Inference batch size (power of two) |
+| `payload_byte_offset` | 64 | Header size before payload |
 | `seq_bit_offset` / `seq_bit_width` | 128 / 12 | Header seq field |
+
+`packets_per_batch` is derived as `packets_per_image × images_per_batch` and
+written into the synthesized `reorder_configs`. `--images-per-batch` may shrink
+the TRT batch afterward without changing the engine reorder window.
 
 ## Queue sizing vs. reorder batches
 

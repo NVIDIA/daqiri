@@ -21,6 +21,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "raw_bench_common.h"
 #include "trt_runner.hpp"
@@ -29,10 +30,12 @@ namespace daqiri::apps::resnet {
 
 enum class AppRole { Both, Tx, Rx };
 
-// Resolved configuration for the ResNet inference application. Geometry is
-// taken from the app-level `reorder:` block (must match the RX
-// `reorder_configs` plan): int8 wire → fp16 or int8 GPU, one reordered burst =
-// one inference batch.
+// Resolved configuration for the ResNet inference application.
+//
+// App-level `reorder:` is the single source of truth for reorder geometry.
+// Before daqiri_init, call materialize_daqiri_reorder() to synthesize
+// daqiri.cfg…rx.reorder_configs from that block (do not author reorder_configs
+// in the YAML). packets_per_batch = packets_per_image * images_per_batch.
 struct AppConfig {
   AppRole role = AppRole::Both;
   bool has_rx = false;
@@ -42,13 +45,19 @@ struct AppConfig {
   daqiri::bench::RawBenchTxConfig tx;
   TrtRunnerConfig trt;
 
-  // Config-based reorder geometry (authoritative; matches YAML reorder_configs).
   std::string reorder_name;
   // "fp16" (int8→fp16 convert) or "int8" (passthrough into INT8 TRT).
   std::string reorder_output_type = "fp16";
-  uint32_t out_payload_len = 1176;       // wire int8 bytes per packet
-  uint32_t output_slot_stride = 2352;    // bytes per packet slot (2352 fp16 / 1176 int8)
+  std::string reorder_type = "gpu";
+  std::string reorder_memory_region = "Reorder_RX_GPU";
+  // Empty => all flow IDs on the RX interface (must be non-empty after resolve).
+  std::vector<uint32_t> reorder_flow_ids;
+
+  uint32_t out_payload_len = 1176;     // wire int8 bytes per packet
+  uint32_t output_slot_stride = 2352;  // bytes per packet slot (2352 fp16 / 1176 int8)
   uint32_t packets_per_image = 128;
+  // Derived at YAML parse. --images-per-batch may shrink images_per_batch
+  // afterward without changing this (engine window stays fixed).
   uint32_t packets_per_batch = 4096;
   uint32_t payload_byte_offset = 64;
   uint16_t seq_bit_offset = 128;
@@ -56,7 +65,6 @@ struct AppConfig {
   uint32_t images_per_batch = 32;
   uint32_t image_out_bytes = 0;  // packets_per_image * output_slot_stride
 
-  // Optional affinity for the inference consumer thread (RX role).
   int inference_cpu_core = -1;
 
   std::string dataset_pcap;
@@ -64,19 +72,21 @@ struct AppConfig {
 
   bool stats_enabled = true;
   int stats_top_k = 8;
-  // Headless 2-component PCA on a ring of recent features; print pc1/pc2 every N
-  // batches (0 disables). Default matches issue #73 acceptance criteria.
   int pca_every_n_batches = 8;
 
-  // Wire frame: header + int8 payload (no 4-byte seq prefix).
   uint32_t frame_bytes() const { return tx.header_size + out_payload_len; }
 
   bool example_mode() const { return !dataset_pcap.empty(); }
 
   static AppConfig from_yaml(const YAML::Node& root);
 
-  // Clamp --images-per-batch to a power-of-two divisor of packets_per_batch /
-  // packets_per_image. Returns false if invalid.
+  // Inject daqiri.cfg…rx.reorder_configs from this app config. Errors if the
+  // YAML already defines reorder_configs (remove them; use app reorder: only).
+  // No-op when has_rx is false.
+  void materialize_daqiri_reorder(YAML::Node& root) const;
+
+  // Clamp --images-per-batch to a power-of-two divisor of
+  // (packets_per_batch / packets_per_image). Does not change packets_per_batch.
   bool apply_images_per_batch_override(uint32_t n);
 };
 

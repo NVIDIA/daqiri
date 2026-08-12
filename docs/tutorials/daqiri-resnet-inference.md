@@ -61,7 +61,7 @@ itself is indifferent to the dtype.
 | packets_per_image | 128 |
 | wire payload | 1176 B int8 |
 | output_slot_stride | 2352 B fp16 |
-| packets_per_batch | 4096 (= 128×32) |
+| packets_per_batch | 4096 (= 128×32; derived from app `reorder:`, injected into synthesized `reorder_configs`) |
 | seq | header bit_offset 128, width 12 |
 | aggregate output | 9,633,792 B = `[32,3,224,224]` fp16 |
 
@@ -580,10 +580,12 @@ reorder, or link bandwidth.
 
 ### Batch size
 
-`images_per_batch` sets both the reorder window and the TensorRT batch. Keep it a
-power-of-two divisor of `packets_per_batch / packets_per_image`. Treat batch size
-as a latency and queueing setting until the next one-cable, uint8-accounted sweep
-is complete.
+`images_per_batch` is the app inference batch. At YAML parse the app derives
+`packets_per_batch = packets_per_image × images_per_batch` and checks it against
+`daqiri…reorder_configs…packets_per_batch`. `--images-per-batch` may shrink the
+TRT batch to a power-of-two divisor of that window without reprogramming the
+engine. Treat batch size as a latency and queueing setting until the next
+one-cable, uint8-accounted sweep is complete.
 
 For this pipeline in the context of the platform's other transport numbers, see
 [DGX Spark performance](../benchmarks/performance-dgx-spark.md#end-to-end-inference-pipeline-resnet-50-cross-host).

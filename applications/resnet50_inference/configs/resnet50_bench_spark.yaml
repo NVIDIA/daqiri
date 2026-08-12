@@ -68,22 +68,6 @@ daqiri:
           match:
             udp_src: 4096
             udp_dst: 4096
-        reorder_configs:
-        - name: "rx_reorder_resnet_int8_fp16"
-          reorder_type: "gpu"
-          memory_region: "Reorder_RX_GPU"
-          payload_byte_offset: 64
-          flow_ids: [201]
-          data_types:
-            input_type: "int8"
-            output_type: "fp16"
-            endianness: "host"
-          method:
-            seq_packets_per_batch:
-              sequence_number:
-                bit_offset: 128
-                bit_width: 12
-              packets_per_batch: 4096
 
 bench_rx:
 - interface_name: "rx_port"
@@ -106,7 +90,6 @@ reorder:
   out_payload_len: 1176
   output_slot_stride: 2352
   packets_per_image: 128
-  packets_per_batch: 4096
   payload_byte_offset: 64
   seq_bit_offset: 128
   seq_bit_width: 12

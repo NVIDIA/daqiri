@@ -82,9 +82,11 @@ int main(int argc, char** argv) {
   const int run_seconds = daqiri::bench::parse_run_seconds(argc, argv);
 
   app::AppConfig cfg;
+  YAML::Node root;
   try {
-    const auto root = YAML::LoadFile(argv[1]);
+    root = YAML::LoadFile(argv[1]);
     cfg = app::AppConfig::from_yaml(root);
+    cfg.materialize_daqiri_reorder(root);
   } catch (const std::exception& e) {
     std::cerr << "Invalid config: " << e.what() << "\n";
     return 1;
@@ -183,7 +185,9 @@ int main(int argc, char** argv) {
     }
   }
 
-  if (daqiri::daqiri_init(argv[1]) != daqiri::Status::SUCCESS) {
+  // App reorder: is authoritative; materialize_daqiri_reorder() already injected
+  // daqiri…rx.reorder_configs into `root` for RX roles.
+  if (daqiri::daqiri_init_from_yaml_string(YAML::Dump(root)) != daqiri::Status::SUCCESS) {
     std::cerr << "daqiri_init failed\n";
     return 1;
   }
