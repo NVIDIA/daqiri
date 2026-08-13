@@ -1,0 +1,131 @@
+%YAML 1.2
+---
+# Thor IGX cross-host RX+inference. Companion: resnet50_tx_spark_xhost_f2d7.yaml
+# on the DGX Spark (spark-f2d7), 200 GbE point-to-point.
+#
+# Derived from resnet50_rx_spark_xhost.yaml. Differences from the Spark RX host:
+#   - 8 CPU cores (0-7), so every core assignment is remapped.
+#   - ConnectX port 0004:03:00.1 (netdev enP4p3s0f1np1, MAC ac:3a:e2:86:7a:0f).
+#     Port f0 (0004:03:00.0) is the other half of the same dual-port card and is
+#     unused here.
+#   - Discrete RTX PRO 6000 rather than an integrated GB10. Launch the container
+#     in CDI mode (--device nvidia.com/gpu=1, NOT --privileged/--runtime=nvidia)
+#     so CUDA enumerates the dGPU as ordinal 0; affinity below assumes that.
+#
+# Config-based GPU reorder: int8 wire -> fp16 NCHW batch (4096 pkts = 32 images).
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    # Thor has cores 0-7 only. Data path is 2 (RX poll), 3 (bench RX), 4
+    # (inference consumer); the RX poller and the consumer must not share a core
+    # or the SPSC decoupling buys nothing. 5-7 are left clear of the data path.
+    master_core: 0
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    memory_regions:
+    # buf_size MUST be payload_byte_offset + out_payload_len (64 + 1176). The
+    # reorder slot stride is derived from (source buf_size - payload_byte_offset),
+    # so any slack here would pad the fp16 NCHW batch and break the tensor layout.
+    #
+    # device, not host_pinned. This GPU is discrete, so host_pinned would leave
+    # the NIC landing buffer and (worse) the TensorRT input tensor in host
+    # memory, read across PCIe on every inference. Measured cost of getting this
+    # wrong: p50 batch latency stayed ~3 ms but the mean hit 1837 ms and p99
+    # 3.4 s, collapsing throughput to 12.6 img/s.
+    #
+    # The two regions total 207.5 MiB against 8189 MiB of free BAR1 on this
+    # card, so there is ample headroom (an earlier note claiming 256 MiB of BAR1
+    # was wrong -- verify with `nvidia-smi -q -i <n> | grep -A3 BAR1`).
+    - name: "Data_RX_GPU"
+      kind: "device"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 1240
+    # packets_per_batch (4096) * output_slot_stride (2352) = 9,633,792
+    - name: "Reorder_RX_GPU"
+      kind: "device"
+      affinity: 0
+      num_bufs: 16
+      buf_size: 9633792
+
+    interfaces:
+    - name: "rx_port"
+      address: "0004:03:00.1"   # quoted: PyYAML else reads the BDF as base-60
+      rx:
+        flow_isolation: true
+        queues:
+        - name: "rq_q_0"
+          id: 0
+          cpu_core: 2
+          # Multiple of packets_per_batch (4096) so a reorder batch never straddles
+          # an RX burst boundary and flushes partially.
+          batch_size: 8192
+          # Flush a partial (< packets_per_batch) reorder batch after this idle gap.
+          # Keep finite. It is now a safety net rather than the only defence: with
+          # seq_bit_width 16 (see reorder: below) batch ids cycle 0..15, so the
+          # accumulator can tell adjacent batches apart and a lost packet no longer
+          # lets the next batch silently complete the previous one. The timeout
+          # still bounds how long a batch left short by a drop occupies the
+          # accumulator, and delivers the tail of a finite run.
+          timeout_us: 2000
+          memory_regions:
+            - "Data_RX_GPU"
+        flows:
+        - name: "flow_resnet"
+          id: 201
+          action:
+            type: queue
+            id: 0
+          match:
+            udp_src: 4096
+            udp_dst: 4096
+
+bench_rx:
+- interface_name: "rx_port"
+  cpu_core: 3
+
+reorder:
+  reorder_name: "rx_reorder_resnet_int8_fp16"
+  out_payload_len: 1176
+  output_slot_stride: 2352
+  packets_per_image: 128
+  payload_byte_offset: 64
+  seq_bit_offset: 128
+  # 16, not 12: DAQIRI derives the reorder batch id as seq / packets_per_batch,
+  # so a 12-bit sequence over packets_per_batch 4096 makes every batch id 0 and
+  # batches have no identity -- a lost packet then lets the next batch complete
+  # the previous one and shifts every batch after it. 16 bits cycles the id 0..15.
+  # Must match --seq-bit-width used to generate the pcap.
+  seq_bit_width: 16
+  images_per_batch: 32
+  image_out_bytes: 301056
+
+inference:
+  onnx_path: "models/resnet50_features.onnx"
+  engine_path: "models/resnet50_features.fp16in.engine"
+  enable_fp16: true
+  channels: 3
+  height: 224
+  width: 224
+  feature_dim: 2048
+  opt_min: 1
+  opt_avg: 32
+  opt_max: 256
+  cpu_core: 4
+  input_name: "input"
+  output_name: "features"
+
+# No `dataset:` block on purpose. dataset.pcap_path is what selects example mode
+# (AppConfig::example_mode() is just "is dataset_pcap non-empty"), and the RX
+# side never reads the pcap -- only TX replays it. In example mode the producer
+# backpressures on a full inference queue instead of dropping, and quiesces once
+# an expected image count is reached, neither of which is wanted while
+# measuring. Leaving it set was a carry-over from the single-host Spark config.
+# Pass --dataset explicitly if you do want the example behaviour.
+
+stats:
+  enabled: true
+  top_k: 8

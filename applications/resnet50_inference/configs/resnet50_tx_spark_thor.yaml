@@ -1,0 +1,103 @@
+%YAML 1.2
+---
+# DGX Spark (spark-f2d7) cross-host TX to the Thor IGX RX host over a direct
+# 200 GbE cable. Companion: resnet50_rx_thor_xhost.yaml.
+#
+# Verified topology (link-state plus a ping over temporary 10.99.99.0/24 IPs):
+#   spark-f2d7 enP2p1s0f1np1  0002:01:00.1  4c:bb:47:7c:f2:dd
+#     |
+#     +-- direct cable, no switch, 200000 Mb/s
+#     |
+#   thor       enP4p3s0f1np1  0004:03:00.1  ac:3a:e2:86:7a:0f   <- eth_dst_addr
+#
+# Note spark-f2d7 has a second 200 G port up (enp1s0f1np1, 0000:01:00.1) that is
+# NOT the Thor cable -- taking it down leaves the Thor link carrier untouched.
+#
+# Derived from resnet50_tx_spark_xhost.yaml. Differences:
+#   - 10 CPU cores (0-9), so master/TX/bench cores are remapped from 8/17/16.
+#   - Port 0002:01:00.1 rather than 0000:01:00.0.
+#   - eth_dst_addr defaulted to the Thor RX MAC. run_resnet_xhost.sh overrides
+#     this via ETH_DST_ADDR, which it resolves from the RX host at run time.
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    master_core: 0
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    memory_regions:
+    - name: "Data_TX_GPU"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 2048
+
+    interfaces:
+    - name: "tx_port"
+      address: "0002:01:00.1"   # quoted: PyYAML else reads the BDF as base-60
+      tx:
+        queues:
+        - name: "tx_q_0"
+          id: 0
+          # Aligned to the RX reorder packets_per_batch (4096) so any gap between
+          # TX bursts lands on a batch boundary instead of splitting a batch.
+          batch_size: 4096
+          cpu_core: 4
+          memory_regions:
+            - "Data_TX_GPU"
+          offloads:
+            - "tx_eth_src"
+
+bench_tx:
+- interface_name: "tx_port"
+  cpu_core: 3
+  batch_size: 4096
+  payload_size: 1176
+  header_size: 64
+  # Thor enP4p3s0f1np1. run_resnet_xhost.sh passes ETH_DST_ADDR, which wins.
+  eth_dst_addr: ac:3a:e2:86:7a:0f
+  ip_src_addr: 1.1.1.1
+  ip_dst_addr: 2.2.2.2
+  udp_src_port: 4096
+  udp_dst_port: 4096
+
+# App reorder geometry (single source of truth; RX synthesizes
+# daqiri.cfg…rx.reorder_configs from this at startup).
+reorder:
+  reorder_name: "rx_reorder_resnet_int8_fp16"
+  out_payload_len: 1176
+  output_slot_stride: 2352
+  packets_per_image: 128
+  payload_byte_offset: 64
+  seq_bit_offset: 128
+  # 16, not 12: DAQIRI derives the reorder batch id as seq / packets_per_batch,
+  # so a 12-bit sequence over packets_per_batch 4096 makes every batch id 0 and
+  # batches have no identity -- a lost packet then lets the next batch complete
+  # the previous one and shifts every batch after it. 16 bits cycles the id 0..15.
+  # Must match --seq-bit-width used to generate the pcap.
+  seq_bit_width: 16
+  images_per_batch: 32
+  image_out_bytes: 301056
+
+inference:
+  onnx_path: "models/resnet50_features.onnx"
+  engine_path: "models/resnet50_features.fp16in.engine"
+  enable_fp16: true
+  channels: 3
+  height: 224
+  width: 224
+  feature_dim: 2048
+  opt_min: 1
+  opt_avg: 32
+  opt_max: 256
+  input_name: "input"
+  output_name: "features"
+
+dataset:
+  pcap_path: "data/cifar10_resnet.pcap"
+
+stats:
+  enabled: false
+  top_k: 8

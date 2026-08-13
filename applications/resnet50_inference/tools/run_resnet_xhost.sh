@@ -2,16 +2,46 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Spark-to-Spark ResNet xhost runner.
-#   TX: spark-stacked-01 (ncg-spark-0177)
-#   RX: spark-stacked-02 (ncg-spark-7013)
+# Cross-host ResNet runner: one host transmits a CIFAR pcap, the other receives,
+# reorders on the GPU and runs TensorRT inference.
 #
-# Assumes passwordless SSH and a shared NFS checkout. Start from either host.
+# Defaults describe the Spark-to-Spark pair (TX spark-stacked-01, RX
+# spark-stacked-02) with a shared NFS checkout. Every host-specific value is
+# overridable, so an asymmetric pair -- different repo paths, different configs,
+# one side in a container -- needs no edits to this script. See
+# tools/env/ for ready-made environment files.
 #
 # Usage:
 #   ./tools/run_resnet_xhost.sh [--replay-once|--seconds N] [--dataset PATH]
+#   RX_ENV=tools/env/thor-rx.env ./tools/run_resnet_xhost.sh --seconds 30
+#
+# Per-side overrides (TX_* / RX_*):
+#   {TX,RX}_HOST      ssh destination
+#   {TX,RX}_REPO      repo root ON THAT HOST (they need not match)
+#   {TX,RX}_BUILD     build dir on that host
+#   {TX,RX}_BIN       binary path as the launcher sees it
+#   {TX,RX}_CFG       config path as the launcher sees it
+#   {TX,RX}_LAUNCHER  command prefix before the binary. Default "sudo".
+#                     Set to a full `docker run ... <image>` to run in a
+#                     container; then _BIN/_CFG are container-side paths.
+#   RX_IFACE          netdev whose MAC becomes the TX destination
 #
 set -euo pipefail
+
+# Optional env files, sourced before defaults so they can set any of the above.
+[[ -n "${TX_ENV:-}" ]] && source "${TX_ENV}"
+[[ -n "${RX_ENV:-}" ]] && source "${RX_ENV}"
+
+# Run a command on a host, or locally when that host IS this machine. Without
+# this, a single-host or same-host-as-runner setup would need loopback ssh
+# (key plus known_hosts) purely to talk to itself.
+on_host() {
+  local host="$1"; shift
+  case "${host}" in
+    localhost|127.0.0.1|"") bash -c "$*" ;;
+    *)                      ssh "${host}" "$*" ;;
+  esac
+}
 
 TX_HOST="${TX_HOST:-spark-stacked-01}"
 RX_HOST="${RX_HOST:-spark-stacked-02}"
@@ -20,10 +50,27 @@ RX_IFACE="${RX_IFACE:-det1}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${APP_DIR}/../.." && pwd)"
-BUILD_DIR="${BUILD_DIR:-${REPO_ROOT}/build-resnet}"
-BIN="${BUILD_DIR}/applications/resnet50_inference/daqiri_resnet50_inference"
-TX_CFG="${BUILD_DIR}/applications/resnet50_inference/configs/resnet50_tx_spark_xhost.yaml"
-RX_CFG="${BUILD_DIR}/applications/resnet50_inference/configs/resnet50_rx_spark_xhost.yaml"
+
+# Per-side paths default to this checkout's layout, which is correct when the
+# hosts share a mount. Asymmetric pairs override the ones that differ.
+TX_REPO="${TX_REPO:-${REPO_ROOT}}"
+RX_REPO="${RX_REPO:-${REPO_ROOT}}"
+BUILD_DIR="${BUILD_DIR:-build-resnet}"
+TX_BUILD="${TX_BUILD:-${TX_REPO}/${BUILD_DIR#/}}"
+RX_BUILD="${RX_BUILD:-${RX_REPO}/${BUILD_DIR#/}}"
+
+APP_SUBDIR="applications/resnet50_inference"
+TX_BIN="${TX_BIN:-${TX_BUILD}/${APP_SUBDIR}/daqiri_resnet50_inference}"
+RX_BIN="${RX_BIN:-${RX_BUILD}/${APP_SUBDIR}/daqiri_resnet50_inference}"
+TX_CFG="${TX_CFG:-${TX_BUILD}/${APP_SUBDIR}/configs/resnet50_tx_spark_xhost.yaml}"
+RX_CFG="${RX_CFG:-${RX_BUILD}/${APP_SUBDIR}/configs/resnet50_rx_spark_xhost.yaml}"
+
+# Prefix before the binary. "sudo" for bare metal; a full `docker run` for a
+# containerized side (GPU/NIC device flags belong here, not in this script).
+# TX must forward ETH_DST_ADDR from the environment: `sudo -E` bare metal, or
+# `-e ETH_DST_ADDR` in a docker launcher.
+TX_LAUNCHER="${TX_LAUNCHER:-sudo -E}"
+RX_LAUNCHER="${RX_LAUNCHER:-sudo}"
 
 RESULTS_DIR="${RESULTS_DIR:-${REPO_ROOT}/resnet-results}"
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
@@ -41,36 +88,48 @@ while [[ $# -gt 0 ]]; do
     --results-dir) RESULTS_DIR="$2"; shift 2 ;;
     --run-id) RUN_ID="$2"; shift 2 ;;
     --dataset) DATASET_ARGS=(--dataset "$2"); shift 2 ;;
-    --build-dir) BUILD_DIR="$2"; BIN="${BUILD_DIR}/applications/resnet50_inference/daqiri_resnet50_inference"
-                 TX_CFG="${BUILD_DIR}/applications/resnet50_inference/configs/resnet50_tx_spark_xhost.yaml"
-                 RX_CFG="${BUILD_DIR}/applications/resnet50_inference/configs/resnet50_rx_spark_xhost.yaml"
+    # Rewrites both sides. Use TX_BUILD/RX_BUILD directly for an asymmetric pair.
+    --build-dir) TX_BUILD="${TX_REPO}/${2#/}"; RX_BUILD="${RX_REPO}/${2#/}"
+                 TX_BIN="${TX_BUILD}/${APP_SUBDIR}/daqiri_resnet50_inference"
+                 RX_BIN="${RX_BUILD}/${APP_SUBDIR}/daqiri_resnet50_inference"
+                 TX_CFG="${TX_BUILD}/${APP_SUBDIR}/configs/resnet50_tx_spark_xhost.yaml"
+                 RX_CFG="${RX_BUILD}/${APP_SUBDIR}/configs/resnet50_rx_spark_xhost.yaml"
                  shift 2 ;;
+    --tx-cfg) TX_CFG="$2"; shift 2 ;;
+    --rx-cfg) RX_CFG="$2"; shift 2 ;;
     *) echo "Unknown arg: $1" >&2; exit 1 ;;
   esac
 done
 
-if [[ ! -x "${BIN}" ]]; then
-  echo "Binary not found: ${BIN}" >&2
-  echo "Build with -DDAQIRI_BUILD_APPLICATIONS=ON first." >&2
-  exit 1
-fi
+# Check on the host that will run it, not locally: the paths may be
+# container-side, and with an asymmetric pair they do not exist here at all.
+for side in TX RX; do
+  eval "host=\${${side}_HOST} bin=\${${side}_BIN} launcher=\${${side}_LAUNCHER}"
+  # A containerized launcher resolves its own paths; only check bare-metal ones.
+  if [[ "${launcher}" == sudo* ]] && ! on_host "${host}" "test -x '${bin}'"; then
+    echo "${side} binary not found or not executable on ${host}: ${bin}" >&2
+    echo "Build with -DDAQIRI_BUILD_APPLICATIONS=ON first." >&2
+    exit 1
+  fi
+done
 
 echo "Resolving RX MAC on ${RX_HOST} (${RX_IFACE})..."
-RX_MAC="$(ssh "${RX_HOST}" "cat /sys/class/net/${RX_IFACE}/address")"
+RX_MAC="$(on_host "${RX_HOST}" "cat /sys/class/net/${RX_IFACE}/address")"
 echo "RX MAC=${RX_MAC}"
-echo "Reminder: run scripts/setup_spark_xhost_net.sh on both hosts if not already done."
+echo "TX ${TX_HOST}: ${TX_LAUNCHER} ${TX_BIN} ${TX_CFG}"
+echo "RX ${RX_HOST}: ${RX_LAUNCHER} ${RX_BIN} ${RX_CFG}"
 
 RX_LOG="$(mktemp /tmp/resnet-rx.XXXXXX.log)"
 TX_LOG="$(mktemp /tmp/resnet-tx.XXXXXX.log)"
 cleanup() {
-  ssh "${RX_HOST}" "pkill -f daqiri_resnet50_inference || true" 2>/dev/null || true
-  ssh "${TX_HOST}" "pkill -f daqiri_resnet50_inference || true" 2>/dev/null || true
+  on_host "${RX_HOST}" "pkill -f daqiri_resnet50_inference || true" 2>/dev/null || true
+  on_host "${TX_HOST}" "pkill -f daqiri_resnet50_inference || true" 2>/dev/null || true
 }
 trap cleanup EXIT
 
 echo "Starting RX on ${RX_HOST}..."
 # shellcheck disable=SC2029
-ssh "${RX_HOST}" "cd '${REPO_ROOT}' && sudo '${BIN}' '${RX_CFG}' --mode rx ${DATASET_ARGS[*]} ${SECONDS_ARGS[*]} ${MODE_ARGS[*]}" \
+on_host "${RX_HOST}" "cd '${RX_REPO}' && ${RX_LAUNCHER} '${RX_BIN}' '${RX_CFG}' --mode rx ${DATASET_ARGS[*]} ${SECONDS_ARGS[*]} ${MODE_ARGS[*]}" \
   >"${RX_LOG}" 2>&1 &
 RX_SSH_PID=$!
 
@@ -100,7 +159,7 @@ echo "Starting TX on ${TX_HOST}..."
 # script before the log dump below, which is exactly when the logs are needed.
 TX_RC=0
 # shellcheck disable=SC2029
-ssh "${TX_HOST}" "cd '${REPO_ROOT}' && export ETH_DST_ADDR='${RX_MAC}' && sudo -E '${BIN}' '${TX_CFG}' --mode tx ${DATASET_ARGS[*]} ${SECONDS_ARGS[*]} ${MODE_ARGS[*]}" \
+on_host "${TX_HOST}" "cd '${TX_REPO}' && export ETH_DST_ADDR='${RX_MAC}' && ${TX_LAUNCHER} '${TX_BIN}' '${TX_CFG}' --mode tx ${DATASET_ARGS[*]} ${SECONDS_ARGS[*]} ${MODE_ARGS[*]}" \
   >"${TX_LOG}" 2>&1 || TX_RC=$?
 
 echo "Waiting for RX to finish..."
