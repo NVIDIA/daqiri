@@ -113,7 +113,6 @@ inference:
   cpu_core: 7
   input_name: "input"
   output_name: "features"
-  pca_every_n_batches: 0
 
 stats:
   enabled: false

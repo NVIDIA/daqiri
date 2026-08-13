@@ -212,8 +212,7 @@ int main(int argc, char** argv) {
 
   const bool example_stats =
       cfg.role != app::AppRole::Tx && cfg.example_mode() && !labels.empty() && cfg.stats_enabled;
-  app::FeatureSink sink(example_stats, cfg.trt.feature_dim, cfg.stats_top_k, labels,
-                        cfg.role == app::AppRole::Tx ? 0 : cfg.pca_every_n_batches);
+  app::FeatureSink sink(example_stats, cfg.trt.feature_dim, cfg.stats_top_k, labels);
 
   std::atomic<bool> stop{false};
   std::atomic<bool> rx_ready{false};

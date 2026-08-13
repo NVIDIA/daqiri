@@ -114,7 +114,6 @@ inference:
   cpu_core: 7
   input_name: "input"
   output_name: "features"
-  pca_every_n_batches: 8
 
 dataset:
   pcap_path: "data/cifar10_resnet.pcap"

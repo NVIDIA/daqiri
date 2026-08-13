@@ -216,9 +216,6 @@ AppConfig AppConfig::from_yaml(const YAML::Node& root) {
   if (root["inference"] && root["inference"]["cpu_core"]) {
     cfg.inference_cpu_core = root["inference"]["cpu_core"].as<int>();
   }
-  if (root["inference"] && root["inference"]["pca_every_n_batches"]) {
-    cfg.pca_every_n_batches = root["inference"]["pca_every_n_batches"].as<int>();
-  }
 
   if (cfg.has_rx && cfg.reorder_name.empty()) {
     throw std::runtime_error("RX role requires reorder.reorder_name");

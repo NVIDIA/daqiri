@@ -34,57 +34,6 @@ constexpr const char* kCifar10Names[] = {
     "dog",      "frog",       "horse", "ship", "truck",
 };
 
-double dot(const std::vector<double>& a, const std::vector<double>& b) {
-  double s = 0.0;
-  for (size_t i = 0; i < a.size(); ++i) s += a[i] * b[i];
-  return s;
-}
-
-void normalize(std::vector<double>& v) {
-  const double n = std::sqrt(dot(v, v));
-  if (n <= 0.0) return;
-  for (double& x : v) x /= n;
-}
-
-// Cov matvec without forming the d×d matrix: (X^T X) v / (n-1) on mean-centered rows.
-void cov_matvec(const std::vector<double>& centered, size_t n, int dim,
-                const std::vector<double>& v, std::vector<double>& out) {
-  out.assign(static_cast<size_t>(dim), 0.0);
-  if (n < 2) return;
-  std::vector<double> xv(n, 0.0);
-  for (size_t i = 0; i < n; ++i) {
-    const double* row = centered.data() + i * static_cast<size_t>(dim);
-    double s = 0.0;
-    for (int d = 0; d < dim; ++d) s += row[d] * v[static_cast<size_t>(d)];
-    xv[i] = s;
-  }
-  const double scale = 1.0 / static_cast<double>(n - 1);
-  for (size_t i = 0; i < n; ++i) {
-    const double* row = centered.data() + i * static_cast<size_t>(dim);
-    const double c = xv[i] * scale;
-    for (int d = 0; d < dim; ++d) out[static_cast<size_t>(d)] += row[d] * c;
-  }
-}
-
-void power_iteration(const std::vector<double>& centered, size_t n, int dim,
-                     const std::vector<double>* deflate, std::vector<double>& out_pc,
-                     int iters = 32) {
-  out_pc.assign(static_cast<size_t>(dim), 0.0);
-  if (n < 2 || dim <= 0) return;
-  // Deterministic start vector.
-  for (int d = 0; d < dim; ++d) out_pc[static_cast<size_t>(d)] = 1.0 / std::sqrt(static_cast<double>(dim));
-  std::vector<double> tmp(static_cast<size_t>(dim));
-  for (int it = 0; it < iters; ++it) {
-    cov_matvec(centered, n, dim, out_pc, tmp);
-    if (deflate != nullptr) {
-      const double proj = dot(tmp, *deflate);
-      for (int d = 0; d < dim; ++d) tmp[static_cast<size_t>(d)] -= proj * (*deflate)[static_cast<size_t>(d)];
-    }
-    normalize(tmp);
-    out_pc.swap(tmp);
-  }
-}
-
 }  // namespace
 
 const char* cifar10_class_name(int class_id) {
@@ -105,72 +54,16 @@ std::vector<int> load_labels(const std::string& path) {
   return labels;
 }
 
-FeatureSink::FeatureSink(bool example_mode, int feature_dim, int top_k, std::vector<int> labels,
-                         int pca_every_n_batches)
+FeatureSink::FeatureSink(bool example_mode, int feature_dim, int top_k, std::vector<int> labels)
     : example_mode_(example_mode),
       feature_dim_(feature_dim),
       top_k_(std::min(top_k, feature_dim)),
-      pca_every_n_batches_(pca_every_n_batches),
       labels_(std::move(labels)) {
   if (example_mode_ && !labels_.empty()) {
     num_classes_ = *std::max_element(labels_.begin(), labels_.end()) + 1;
     class_sum_.assign(static_cast<size_t>(num_classes_) * feature_dim_, 0.0);
     class_count_.assign(num_classes_, 0);
   }
-  if (pca_every_n_batches_ > 0 && feature_dim_ > 0) {
-    pca_ring_.assign(kPcaRingCap * static_cast<size_t>(feature_dim_), 0.0f);
-  }
-}
-
-void FeatureSink::push_pca_sample(const float* row) {
-  if (pca_every_n_batches_ <= 0 || feature_dim_ <= 0) return;
-  float* dest = pca_ring_.data() + pca_ring_next_ * static_cast<size_t>(feature_dim_);
-  std::copy(row, row + feature_dim_, dest);
-  pca_ring_next_ = (pca_ring_next_ + 1) % kPcaRingCap;
-  if (pca_ring_count_ < kPcaRingCap) ++pca_ring_count_;
-}
-
-void FeatureSink::run_pca_and_print() {
-  const size_t n = pca_ring_count_;
-  if (n < 2 || feature_dim_ <= 0) return;
-
-  std::vector<double> mean(static_cast<size_t>(feature_dim_), 0.0);
-  // Oldest→newest order for stable indexing in print.
-  const size_t start =
-      (pca_ring_count_ < kPcaRingCap) ? 0 : pca_ring_next_;
-  for (size_t i = 0; i < n; ++i) {
-    const size_t idx = (start + i) % kPcaRingCap;
-    const float* row = pca_ring_.data() + idx * static_cast<size_t>(feature_dim_);
-    for (int d = 0; d < feature_dim_; ++d) mean[static_cast<size_t>(d)] += row[d];
-  }
-  for (double& m : mean) m /= static_cast<double>(n);
-
-  std::vector<double> centered(n * static_cast<size_t>(feature_dim_));
-  for (size_t i = 0; i < n; ++i) {
-    const size_t idx = (start + i) % kPcaRingCap;
-    const float* row = pca_ring_.data() + idx * static_cast<size_t>(feature_dim_);
-    double* dest = centered.data() + i * static_cast<size_t>(feature_dim_);
-    for (int d = 0; d < feature_dim_; ++d) {
-      dest[d] = static_cast<double>(row[d]) - mean[static_cast<size_t>(d)];
-    }
-  }
-
-  std::vector<double> pc1, pc2;
-  power_iteration(centered, n, feature_dim_, nullptr, pc1);
-  power_iteration(centered, n, feature_dim_, &pc1, pc2);
-
-  std::cout << std::fixed << std::setprecision(6);
-  for (size_t i = 0; i < n; ++i) {
-    const double* row = centered.data() + i * static_cast<size_t>(feature_dim_);
-    double p1 = 0.0, p2 = 0.0;
-    for (int d = 0; d < feature_dim_; ++d) {
-      p1 += row[d] * pc1[static_cast<size_t>(d)];
-      p2 += row[d] * pc2[static_cast<size_t>(d)];
-    }
-    std::cout << "pc1=" << p1 << " pc2=" << p2 << "\n";
-  }
-  std::cout.flush();
-  last_pca_batch_ = batches_;
 }
 
 void FeatureSink::consume(const float* host_features, uint32_t n) {
@@ -178,7 +71,6 @@ void FeatureSink::consume(const float* host_features, uint32_t n) {
 
   for (uint32_t i = 0; i < n; ++i) {
     const float* row = host_features + static_cast<size_t>(i) * feature_dim_;
-    push_pca_sample(row);
 
     if (example_mode_ && !labels_.empty()) {
       const int label = labels_[static_cast<size_t>(images_ % labels_.size())];
@@ -202,19 +94,9 @@ void FeatureSink::consume(const float* host_features, uint32_t n) {
     }
     ++images_;
   }
-
-  if (pca_every_n_batches_ > 0 &&
-      (batches_ % static_cast<uint64_t>(pca_every_n_batches_) == 0)) {
-    run_pca_and_print();
-  }
 }
 
 void FeatureSink::log_final_summary(double seconds) {
-  // Flush a final PCA pass if we buffered samples since the last print.
-  if (pca_every_n_batches_ > 0 && batches_ > last_pca_batch_ && pca_ring_count_ >= 2) {
-    run_pca_and_print();
-  }
-
   const double imgs_per_s = seconds > 0 ? static_cast<double>(images_) / seconds : 0.0;
   std::cerr << "\n=== ResNet inference summary ===\n";
   std::cerr << "images=" << images_ << " batches=" << batches_ << " seconds=" << std::fixed

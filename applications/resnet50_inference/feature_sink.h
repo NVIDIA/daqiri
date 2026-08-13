@@ -31,13 +31,14 @@ std::vector<int> load_labels(const std::string& path);
 
 // Consumes host-resident ResNet feature vectors. Example mode accumulates a
 // per-class mean feature vector (label from the sidecar) and prints class names.
-// When pca_every_n_batches > 0, keeps a ring of recent vectors and prints
-// headless PC1/PC2 projections to stdout every N batches.
+// PCA is intentionally not implemented; per-class mean-feature stats are the
+// cheap, dependency-free readout that shows the latent space separating by
+// class. A projection would have to run off the inference consumer thread to
+// avoid stalling it.
 // Predicted-class / softmax head is intentionally deferred.
 class FeatureSink {
  public:
-  FeatureSink(bool example_mode, int feature_dim, int top_k, std::vector<int> labels,
-              int pca_every_n_batches = 8);
+  FeatureSink(bool example_mode, int feature_dim, int top_k, std::vector<int> labels);
 
   void consume(const float* host_features, uint32_t n);
 
@@ -46,29 +47,18 @@ class FeatureSink {
   uint64_t images() const { return images_; }
 
  private:
-  void push_pca_sample(const float* row);
-  void run_pca_and_print();
-
   bool example_mode_;
   int feature_dim_;
   int top_k_;
-  int pca_every_n_batches_;
   int num_classes_ = 0;
   std::vector<int> labels_;
 
   uint64_t images_ = 0;
   uint64_t batches_ = 0;
   uint64_t samples_printed_ = 0;
-  uint64_t last_pca_batch_ = 0;
 
   std::vector<double> class_sum_;
   std::vector<uint64_t> class_count_;
-
-  // Ring of recent feature vectors for incremental 2-component PCA (capacity 256).
-  static constexpr size_t kPcaRingCap = 256;
-  std::vector<float> pca_ring_;  // row-major [cap * feature_dim]
-  size_t pca_ring_count_ = 0;
-  size_t pca_ring_next_ = 0;
 };
 
 }  // namespace daqiri::apps::resnet

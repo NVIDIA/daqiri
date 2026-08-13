@@ -72,7 +72,6 @@ struct AppConfig {
 
   bool stats_enabled = true;
   int stats_top_k = 8;
-  int pca_every_n_batches = 8;
 
   uint32_t frame_bytes() const { return tx.header_size + out_payload_len; }
 

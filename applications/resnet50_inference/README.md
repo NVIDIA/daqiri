@@ -79,8 +79,7 @@ sudo -E ./build/applications/resnet50_inference/daqiri_resnet50_inference \
   --mode tx --replay-once --dataset data/cifar10_resnet.pcap
 ```
 
-Expect: `kHALF` input binding, `set_reorder_cuda_stream OK`, `pc1=`/`pc2=` lines on
-stdout every `inference.pca_every_n_batches` batches (default 8), per-class mean
+Expect: `kHALF` input binding, `set_reorder_cuda_stream OK`, per-class mean
 features with CIFAR-10 class names, clean shutdown.
 
 ## Software loopback smoke (no NIC)
