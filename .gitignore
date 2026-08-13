@@ -29,3 +29,6 @@ docs/images/packet_diagrams/reorder_quantize/*.webp
 docs/images/packet_diagrams/reorder_quantize/*.gif
 
 __pycache__/
+
+# ResNet xhost benchmark run artifacts (run_resnet_xhost.sh --results-dir)
+resnet-results/

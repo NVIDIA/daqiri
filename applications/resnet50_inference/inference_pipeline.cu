@@ -21,8 +21,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <iomanip>
 #include <iostream>
 #include <numeric>
+#include <sstream>
 #include <thread>
 #include <vector>
 
@@ -56,9 +58,28 @@ void rx_producer_worker(const AppConfig& cfg, InferenceQueue<kInferenceQueueCap>
   uint64_t bursts_not_reordered = 0;
   uint64_t packets_not_reordered = 0;
   uint64_t bursts_partial = 0;
-  uint64_t bursts_dropped = 0;
   uint64_t partial_packets = 0;
   uint64_t info_failures = 0;
+  // Drop reasons are counted separately: a burst lost to a full SPSC queue means
+  // inference could not keep up, while the others mean the RX side produced
+  // something unusable. Folding them into one counter makes backpressure
+  // indistinguishable from NIC/reorder loss.
+  uint64_t dropped_queue_full = 0;
+  uint64_t dropped_short_batch = 0;
+  uint64_t dropped_info_failure = 0;
+  uint64_t dropped_null_input = 0;
+  // How far short of packets_per_batch the timeout-flushed batches closed.
+  //
+  // This is NOT a loss count. A batch closes early either because packets were
+  // lost or because the source simply paused mid-batch, and ReorderBurstInfo
+  // reports only a count -- not which sequence slots are covered -- so the two
+  // are indistinguishable here. Reported descriptively; see the remainder
+  // counter below for the part that is unambiguous.
+  uint64_t early_flush_shortfall = 0;
+  // Packets discarded because they did not complete an image: a flush that lands
+  // mid-image leaves source_packet_count % packets_per_image stragglers, which
+  // integer division drops. Unambiguous, and directly attributable.
+  uint64_t remainder_packets_dropped = 0;
   // ~100us per empty poll. Post-traffic quiescence is short (a stalled tail);
   // the pre-traffic window is long so a slow peer TX start is not mistaken for
   // "no traffic ever" (RX-only runs are started before the TX host).
@@ -107,7 +128,7 @@ void rx_producer_worker(const AppConfig& cfg, InferenceQueue<kInferenceQueueCap>
         std::this_thread::sleep_for(std::chrono::microseconds(50));
       }
       if (info_status != daqiri::Status::SUCCESS || cfg.packets_per_image == 0) {
-        ++bursts_dropped;
+        ++dropped_info_failure;
         ++info_failures;
         std::cerr << "rx_producer_worker: get_reorder_burst_info failed (status "
                   << static_cast<int>(info_status) << "), dropping partial batch\n";
@@ -115,11 +136,16 @@ void rx_producer_worker(const AppConfig& cfg, InferenceQueue<kInferenceQueueCap>
         continue;
       }
       partial_packets += info.source_packet_count;
+      if (cfg.packets_per_batch > info.source_packet_count) {
+        early_flush_shortfall += cfg.packets_per_batch - info.source_packet_count;
+      }
+      remainder_packets_dropped += info.source_packet_count % cfg.packets_per_image;
       std::cerr << "rx_producer_worker: partial burst #" << bursts_reordered
-                << " batch_id=" << info.batch_id << " packets=" << info.source_packet_count << "\n";
+                << " batch_id=" << info.batch_id << " packets=" << info.source_packet_count
+                << " (expected " << cfg.packets_per_batch << ")\n";
       n_img = info.source_packet_count / cfg.packets_per_image;
       if (n_img == 0) {
-        ++bursts_dropped;
+        ++dropped_short_batch;
         std::cerr << "rx_producer_worker: partial reorder burst with " << info.source_packet_count
                   << " packets (< packets_per_image " << cfg.packets_per_image << "), dropped\n";
         daqiri::free_all_packets_and_burst_rx(burst);
@@ -129,7 +155,7 @@ void rx_producer_worker(const AppConfig& cfg, InferenceQueue<kInferenceQueueCap>
 
     void* dev_input = daqiri::get_packet_ptr(burst, 0);
     if (dev_input == nullptr) {
-      ++bursts_dropped;
+      ++dropped_null_input;
       daqiri::free_all_packets_and_burst_rx(burst);
       continue;
     }
@@ -144,7 +170,7 @@ void rx_producer_worker(const AppConfig& cfg, InferenceQueue<kInferenceQueueCap>
       pushed = queue.try_push(job);
     }
     if (!pushed) {
-      ++bursts_dropped;
+      ++dropped_queue_full;
       daqiri::free_all_packets_and_burst_rx(burst);
       if (backpressure) break;
       continue;
@@ -155,12 +181,49 @@ void rx_producer_worker(const AppConfig& cfg, InferenceQueue<kInferenceQueueCap>
   }
 
   producer_done.store(true);
-  std::cerr << "rx_producer_worker: pushed " << images_pushed
-            << " images (reordered_bursts=" << bursts_reordered << " partial=" << bursts_partial
-            << " dropped=" << bursts_dropped << " partial_packets=" << partial_packets
-            << " info_failures=" << info_failures
-            << " non_reordered_bursts=" << bursts_not_reordered
-            << " non_reordered_packets=" << packets_not_reordered << ")\n";
+  const uint64_t dropped_total =
+      dropped_queue_full + dropped_short_batch + dropped_info_failure + dropped_null_input;
+  // Built as one string and written once: the consumer thread is still logging
+  // concurrently, and chained operator<< on std::cerr is not atomic, so a split
+  // write interleaves mid-line. The runner greps these lines with ^-anchored
+  // patterns, so an interleaved prefix silently loses the counters.
+  //
+  // Reported as a chain so each stage's loss is attributable: the engine
+  // delivers reordered bursts, the producer pushes a subset to the queue, and
+  // the consumer (see inference_consumer_worker) infers a subset of those.
+  std::ostringstream os;
+  os << "rx_producer_worker: delivered_bursts=" << bursts_reordered
+     << " pushed_images=" << images_pushed << " dropped_bursts=" << dropped_total
+     << " [queue_full=" << dropped_queue_full << " short_batch=" << dropped_short_batch
+     << " info_failure=" << dropped_info_failure << " null_input=" << dropped_null_input << "]\n";
+  os << "rx_producer_worker: partial_bursts=" << bursts_partial
+     << " partial_packets=" << partial_packets
+     << " early_flush_shortfall=" << early_flush_shortfall
+     << " remainder_dropped=" << remainder_packets_dropped
+     << " info_failures=" << info_failures << " non_reordered_bursts=" << bursts_not_reordered
+     << " non_reordered_packets=" << packets_not_reordered << "\n";
+  if (dropped_queue_full > 0) {
+    os << "rx_producer_worker: WARNING " << dropped_queue_full
+       << " bursts dropped on a full inference queue -- throughput is consumer-bound "
+          "and these are NOT link losses\n";
+  }
+  if (remainder_packets_dropped > 0) {
+    os << "rx_producer_worker: WARNING " << remainder_packets_dropped
+       << " packets discarded as incomplete-image remainders after a mid-image flush\n";
+  }
+  // A source that cannot sustain packets_per_batch between idle gaps closes
+  // nearly every batch on the timeout. That is a TX-rate symptom, not loss --
+  // call it out so the shortfall above is not misread as packets dropped.
+  if (bursts_reordered > 0 && bursts_partial * 2 > bursts_reordered) {
+    os << "rx_producer_worker: NOTE " << bursts_partial << "/" << bursts_reordered
+       << " batches closed on the idle timeout rather than filling "
+       << cfg.packets_per_batch
+       << " packets. The source is not sustaining a full batch between gaps; this is a "
+          "TX-rate symptom. Whether any packets were also LOST cannot be determined here -- "
+          "ReorderBurstInfo reports a count, not which sequence slots are covered. Compare "
+          "offered TX frames against partial_packets to tell the two apart.\n";
+  }
+  std::cerr << os.str();
 }
 
 void inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
@@ -193,6 +256,12 @@ void inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
 
   daqiri::BurstParams* prev_burst = nullptr;
   const auto t0 = std::chrono::steady_clock::now();
+  // Per-interval throughput. A terminal aggregate cannot distinguish a run that
+  // held its rate from one that started high and decayed, so the warmup knee is
+  // invisible without this.
+  constexpr double kReportIntervalSec = 1.0;
+  auto interval_t0 = t0;
+  uint64_t interval_images = 0;
 
   while (true) {
     InferenceJob job{};
@@ -216,6 +285,20 @@ void inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
     } else {
       daqiri::free_all_packets_and_burst_rx(job.burst);
     }
+
+    interval_images += job.batch_size;
+    const auto now = std::chrono::steady_clock::now();
+    const double interval_s = std::chrono::duration<double>(now - interval_t0).count();
+    if (interval_s >= kReportIntervalSec) {
+      const double elapsed_s = std::chrono::duration<double>(now - t0).count();
+      std::cerr << "inference_consumer_worker: t=" << std::fixed << std::setprecision(1)
+                << elapsed_s << "s " << std::setprecision(0)
+                << (static_cast<double>(interval_images) / interval_s) << " img/s"
+                << " (queue_depth=" << queue.depth() << ")\n"
+                << std::defaultfloat;
+      interval_t0 = now;
+      interval_images = 0;
+    }
   }
 
   float* host_final = nullptr;
@@ -227,8 +310,11 @@ void inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
   }
 
   const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-  std::cerr << "inference_consumer_worker: " << trt.total_batches_inferred()
-            << " inference batches in " << secs << " s\n";
+  // One write, for the same reason as the producer summary above: the producer
+  // may still be logging, and the runner greps these lines ^-anchored.
+  std::ostringstream os;
+  os << "inference_consumer_worker: " << trt.total_batches_inferred() << " inference batches in "
+     << secs << " s\n";
 
   std::vector<float> lat = trt.batch_latencies_ms();
   if (!lat.empty()) {
@@ -240,10 +326,10 @@ void inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
           std::min(lat.size() - 1, static_cast<size_t>(p * (static_cast<double>(lat.size()) - 1)));
       return lat[idx];
     };
-    std::cerr << "inference latency (ms): mean=" << mean << " p50=" << pct(0.50)
-              << " p99=" << pct(0.99) << " (per batch of " << cfg.images_per_batch
-              << " images, n=" << lat.size() << ")\n";
+    os << "inference latency (ms): mean=" << mean << " p50=" << pct(0.50) << " p99=" << pct(0.99)
+       << " (per batch of " << cfg.images_per_batch << " images, n=" << lat.size() << ")\n";
   }
+  std::cerr << os.str();
 
   cudaEventDestroy(release_evt);
   cudaStreamDestroy(inf_stream);
