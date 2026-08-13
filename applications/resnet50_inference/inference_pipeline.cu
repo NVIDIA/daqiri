@@ -262,6 +262,9 @@ void inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
   constexpr double kReportIntervalSec = 1.0;
   auto interval_t0 = t0;
   uint64_t interval_images = 0;
+  // Start of the active window: when the first job actually arrives.
+  std::chrono::steady_clock::time_point t_first_job{};
+  bool first_job_seen = false;
 
   while (true) {
     InferenceJob job{};
@@ -270,6 +273,11 @@ void inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
       if (stop.load() && queue.empty()) break;
       std::this_thread::sleep_for(std::chrono::microseconds(50));
       continue;
+    }
+
+    if (!first_job_seen) {
+      first_job_seen = true;
+      t_first_job = std::chrono::steady_clock::now();
     }
 
     float* host_prev = nullptr;
@@ -309,12 +317,19 @@ void inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
     daqiri::free_all_packets_and_burst_rx(prev_burst);
   }
 
-  const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+  const auto t_end = std::chrono::steady_clock::now();
+  const double secs = std::chrono::duration<double>(t_end - t0).count();
+  // t0 is thread start, so secs includes the wait for the peer to start
+  // transmitting. Report the active window separately -- it is the one that
+  // describes the receiver rather than the harness's startup skew.
+  const double active_secs =
+      first_job_seen ? std::chrono::duration<double>(t_end - t_first_job).count() : 0.0;
   // One write, for the same reason as the producer summary above: the producer
   // may still be logging, and the runner greps these lines ^-anchored.
   std::ostringstream os;
   os << "inference_consumer_worker: " << trt.total_batches_inferred() << " inference batches in "
-     << secs << " s\n";
+     << secs << " s (active " << active_secs << " s, idle-before-traffic "
+     << (secs - active_secs) << " s)\n";
 
   std::vector<float> lat = trt.batch_latencies_ms();
   if (!lat.empty()) {

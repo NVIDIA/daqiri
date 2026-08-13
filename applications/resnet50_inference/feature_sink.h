@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -56,6 +57,13 @@ class FeatureSink {
   uint64_t images_ = 0;
   uint64_t batches_ = 0;
   uint64_t samples_printed_ = 0;
+
+  // Active window: first to last batch actually consumed. The caller's wall
+  // clock starts at process start, so it also counts the seconds spent waiting
+  // for the peer to begin transmitting -- on a cross-host run that is the TX
+  // host's whole startup, and it silently deflates the reported rate.
+  std::chrono::steady_clock::time_point first_consume_{};
+  std::chrono::steady_clock::time_point last_consume_{};
 
   std::vector<double> class_sum_;
   std::vector<uint64_t> class_count_;

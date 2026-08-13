@@ -67,6 +67,9 @@ FeatureSink::FeatureSink(bool example_mode, int feature_dim, int top_k, std::vec
 }
 
 void FeatureSink::consume(const float* host_features, uint32_t n) {
+  const auto now = std::chrono::steady_clock::now();
+  if (batches_ == 0) first_consume_ = now;
+  last_consume_ = now;
   ++batches_;
 
   for (uint32_t i = 0; i < n; ++i) {
@@ -100,7 +103,27 @@ void FeatureSink::log_final_summary(double seconds) {
   const double imgs_per_s = seconds > 0 ? static_cast<double>(images_) / seconds : 0.0;
   std::cerr << "\n=== ResNet inference summary ===\n";
   std::cerr << "images=" << images_ << " batches=" << batches_ << " seconds=" << std::fixed
-            << std::setprecision(2) << seconds << " => " << imgs_per_s << " img/s\n";
+            << std::setprecision(2) << seconds << " => " << imgs_per_s << " img/s (wall)\n";
+
+  // Active window excludes the pre-traffic wait. Quote this rate, not the wall
+  // one: on a cross-host run the wall clock starts when this process does, but
+  // packets only arrive once the peer has finished its own startup. Measured on
+  // a 20 s Thor run, that gap was 7.3 s -- the wall rate read 2527 img/s while
+  // the receiver was actually sustaining ~3990.
+  //
+  // batches_ - 1 intervals span first->last, so the rate uses the images
+  // delivered after the first batch; with a single batch there is no interval
+  // and only the wall figure is meaningful.
+  if (batches_ > 1) {
+    const double active =
+        std::chrono::duration<double>(last_consume_ - first_consume_).count();
+    if (active > 0.0) {
+      const double per_batch = static_cast<double>(images_) / static_cast<double>(batches_);
+      const double active_imgs = static_cast<double>(images_) - per_batch;
+      std::cerr << "active_seconds=" << active << " => " << (active_imgs / active)
+                << " img/s (excludes " << (seconds - active) << " s before first batch)\n";
+    }
+  }
 
   if (!example_mode_ || labels_.empty() || num_classes_ == 0) return;
 
