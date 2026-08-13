@@ -140,6 +140,15 @@ void* out_dev_ptr(bool out_is_half, void* raw, float* fp32) {
   return out_is_half ? raw : static_cast<void*>(fp32);
 }
 
+// Setup-time CUDA failures are fatal. Left unchecked, a failed allocation surfaces much
+// later as a null dereference in the D2H copy or in FeatureSink, far from the real cause.
+void cuda_check(cudaError_t err, const char* what) {
+  if (err != cudaSuccess) {
+    std::cerr << "TrtRunner: " << what << " failed: " << cudaGetErrorString(err) << "\n";
+    std::exit(1);
+  }
+}
+
 }  // namespace
 
 TrtRunnerConfig TrtRunnerConfig::from_yaml(const YAML::Node& root) {
@@ -417,15 +426,15 @@ void TrtRunner::allocate_buffers_() {
   const size_t max_out_raw_bytes = out_elems * out_elem_bytes_;
   for (int i = 0; i < kBuffers; ++i) {
     // Always keep a float device buffer (sink conversion / FP32 engines).
-    cudaMalloc(&trt_out_dev_[i], max_out_float_bytes);
-    cudaMallocHost(&host_buf_[i], max_out_float_bytes);
+    cuda_check(cudaMalloc(&trt_out_dev_[i], max_out_float_bytes), "cudaMalloc trt_out_dev_");
+    cuda_check(cudaMallocHost(&host_buf_[i], max_out_float_bytes), "cudaMallocHost host_buf_");
     if (out_is_half_) {
-      cudaMalloc(&trt_out_raw_[i], max_out_raw_bytes);
+      cuda_check(cudaMalloc(&trt_out_raw_[i], max_out_raw_bytes), "cudaMalloc trt_out_raw_");
     } else {
       trt_out_raw_[i] = nullptr;
     }
-    cudaEventCreate(&d2h_event_[i]);
-    cudaEventCreate(&start_evt_[i]);
+    cuda_check(cudaEventCreate(&d2h_event_[i]), "cudaEventCreate d2h_event_");
+    cuda_check(cudaEventCreate(&start_evt_[i]), "cudaEventCreate start_evt_");
   }
   std::cerr << "TrtRunner buffers: 2x" << max_out_float_bytes
             << " bytes pinned host + GPU float output"

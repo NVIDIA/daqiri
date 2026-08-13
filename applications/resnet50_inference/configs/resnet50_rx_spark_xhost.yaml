@@ -40,12 +40,15 @@ daqiri:
           # Multiple of packets_per_batch (4096) so a reorder batch never straddles
           # an RX burst boundary and flushes partially.
           batch_size: 8192
-          # 0 disables partial flushes: a reorder batch is delivered only when all
-          # packets_per_batch packets have arrived. The dataset is padded to whole
-          # batches, so a partial flush can only truncate to whole images and drop
-          # the image straddling the boundary. Any finite timeout loses that race
-          # whenever the RX poller stalls behind inference backpressure mid-batch.
-          timeout_us: 0
+          # Flush a partial (< packets_per_batch) reorder batch after this idle gap.
+          # This must stay finite on a lossy link: the accumulator fills by arrival
+          # order (packet_idx = batch.packet_count), and with seq_bit_width 12 over
+          # packets_per_batch 4096 every batch derives the same batch id, so a batch
+          # closes only on count. Without a timeout, one lost packet lets the next
+          # batch's first packet complete this one, shifting every subsequent batch
+          # by one packet for the rest of the run and misaligning image boundaries
+          # and labels. A finite timeout resyncs at the batch boundary instead.
+          timeout_us: 2000
           memory_regions:
             - "Data_RX_GPU"
         flows:

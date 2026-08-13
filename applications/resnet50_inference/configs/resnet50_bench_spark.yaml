@@ -53,10 +53,13 @@ daqiri:
           id: 0
           cpu_core: 9
           # Multiple of packets_per_batch (4096) so a batch never straddles an RX
-          # burst boundary. timeout_us 0 disables partial flushes, which would
-          # otherwise truncate a batch to whole images and drop the straddler.
+          # burst boundary.
           batch_size: 8192
-          timeout_us: 0
+          # Flush a partial reorder batch after this idle gap. Keep finite: the
+          # accumulator closes a batch on arrival count alone, so without a timeout
+          # a single lost packet shifts every subsequent batch by one for the rest
+          # of the run. A finite timeout resyncs at the batch boundary.
+          timeout_us: 2000
           memory_regions:
             - "Data_RX_GPU"
         flows:
