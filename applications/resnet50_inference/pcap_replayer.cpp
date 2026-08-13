@@ -132,6 +132,66 @@ void set_bits_be(uint8_t* data, uint32_t bit_offset, uint8_t bit_width, uint32_t
   }
 }
 
+// Inverse of set_bits_be; mirrors extract_bits_be_host in the DPDK engine.
+uint32_t get_bits_be(const uint8_t* data, uint32_t bit_offset, uint8_t bit_width) {
+  uint32_t value = 0;
+  for (uint8_t i = 0; i < bit_width; ++i) {
+    const uint32_t bit_idx = bit_offset + i;
+    const uint8_t bit = static_cast<uint8_t>((data[bit_idx / 8U] >> (7U - (bit_idx % 8U))) & 0x1U);
+    value = (value << 1) | bit;
+  }
+  return value;
+}
+
+// Confirm the capture's sequence field matches the configured geometry.
+//
+// A pcap built with a different seq_bit_width still has the right frame size, so
+// the per-frame length check cannot catch the mismatch -- and the failure is
+// silent: reading a 12-bit field as 16 bits yields the written value shifted
+// left by 4 (the extra low bits are header filler), so every payload lands at
+// (seq*16) % packets_per_batch. Slots collide, most stay empty, and the images
+// handed to TensorRT are garbage while throughput looks entirely normal.
+//
+// Consecutive frames in a well-formed capture carry consecutive sequence
+// numbers, so a width mismatch shows up immediately as a stride of 16 instead
+// of 1. Returns false and explains on mismatch.
+bool validate_sequence_geometry(const std::vector<PcapFrame>& frames, const AppConfig& cfg) {
+  if (cfg.seq_bit_width == 0 || frames.size() < 2) return true;
+
+  const uint32_t seq_mod =
+      (cfg.seq_bit_width >= 32) ? 0U : (1U << cfg.seq_bit_width);  // 0 == no wrap
+  const size_t min_bytes = (cfg.seq_bit_offset + cfg.seq_bit_width + 7U) / 8U;
+  const size_t probe = std::min<size_t>(frames.size(), 64);
+
+  uint32_t prev = 0;
+  bool have_prev = false;
+  for (size_t i = 0; i < probe; ++i) {
+    if (frames[i].size() < min_bytes) return true;  // length check reports this
+    const uint32_t seq = get_bits_be(frames[i].data(), cfg.seq_bit_offset, cfg.seq_bit_width);
+    if (have_prev) {
+      const uint32_t expected = seq_mod ? ((prev + 1U) % seq_mod) : (prev + 1U);
+      if (seq != expected) {
+        std::cerr << "pcap_tx_worker: PCAP sequence geometry does not match the config. "
+                  << "Frame " << i << " has seq=" << seq << ", expected " << expected
+                  << " (frame " << (i - 1) << " had " << prev << ").\n"
+                  << "  Config declares seq_bit_offset=" << cfg.seq_bit_offset
+                  << " seq_bit_width=" << static_cast<unsigned>(cfg.seq_bit_width) << ".\n";
+        if (prev != 0 && seq == prev * 2U) {
+          std::cerr << "  A stride that doubles means the capture was written with a "
+                       "narrower field.\n";
+        }
+        std::cerr << "  Regenerate the capture with matching geometry, e.g.\n"
+                  << "    prepare_cifar10_pcap.py --num-images 512 --seq-bit-width "
+                  << static_cast<unsigned>(cfg.seq_bit_width) << "\n";
+        return false;
+      }
+    }
+    prev = seq;
+    have_prev = true;
+  }
+  return true;
+}
+
 }  // namespace
 
 std::vector<PcapFrame> build_synthetic_frames(const AppConfig& cfg) {
@@ -205,6 +265,13 @@ void pcap_tx_worker(const AppConfig& cfg, const std::vector<PcapFrame>& frames,
   char dst_mac[6] = {0};
   daqiri::format_eth_addr(dst_mac, eth_dst_addr);
   const size_t expected_frame_bytes = static_cast<size_t>(cfg.frame_bytes());
+
+  // Checked once, before any traffic: a geometry mismatch here corrupts every
+  // image silently, so failing to start is strictly better than transmitting.
+  if (!validate_sequence_geometry(frames, cfg)) {
+    stop.store(true);
+    return;
+  }
 
   std::vector<uint8_t> scratch;
   size_t cursor = 0;

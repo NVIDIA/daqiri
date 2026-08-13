@@ -17,8 +17,8 @@
 
 Each image is resized to 224x224 RGB uint8, quantized to signed int8 as
 (pixel - INT8_OFFSET) — lossless for 0..255 — and split into out_payload_len
-byte packets (default 1176). Sequence numbers span a full inference batch
-(img_in_batch * packets_per_image + pkt) and are written as big-endian bits
+byte packets (default 1176). Sequence numbers are GLOBAL (mod 2^seq_bit_width)
+rather than per-batch, so DAQIRI can derive distinct reorder batch ids; written big-endian
 into the header at seq_bit_offset (no 4-byte payload prefix). Normalization
 is NOT applied here; the ONNX front-end folds offset + ImageNet norm.
 
@@ -101,7 +101,9 @@ def main() -> None:
     ap.add_argument("--header-size", type=int, default=64)
     ap.add_argument("--payload-byte-offset", type=int, default=64)
     ap.add_argument("--seq-bit-offset", type=int, default=128)
-    ap.add_argument("--seq-bit-width", type=int, default=12)
+    ap.add_argument("--seq-bit-width", type=int, default=16,
+                    help="Global sequence field width. 2^width must be a multiple of "
+                         "packets_per_batch AND span >1 batch, else batch ids collide.")
     ap.add_argument("--packets-per-image", type=int, default=128)
     ap.add_argument("--udp-port", type=int, default=4096)
     ap.add_argument("--eth-src", default="02:00:00:00:00:01")
@@ -156,6 +158,31 @@ def main() -> None:
 
     packets_per_batch = packets_per_image * ipb
 
+    # The sequence number is GLOBAL (mod 2^seq_bit_width), not per-batch. DAQIRI
+    # derives a reorder batch id as seq / packets_per_batch and the slot within
+    # the batch as seq % packets_per_batch, so a sequence that restarts at 0
+    # every batch makes every batch id 0 -- batches then have no identity and the
+    # accumulator can only close them on arrival count. A lost packet lets the
+    # next batch's first packet complete the previous one, shifting every
+    # subsequent batch for the rest of the run.
+    #
+    # 2^seq_bit_width must therefore span several batches: with seq_bit_width 16
+    # and packets_per_batch 4096 the batch id cycles 0..15 before wrapping, which
+    # is ample to distinguish adjacent batches. The engine also requires
+    # 2^seq_bit_width % packets_per_batch == 0 so batches stay slot-aligned
+    # across the wrap.
+    seq_mod = 1 << args.seq_bit_width
+    if seq_mod % packets_per_batch != 0:
+        raise SystemExit(
+            f"2^seq_bit_width ({seq_mod}) must be divisible by packets_per_batch "
+            f"({packets_per_batch}); widen --seq-bit-width")
+    if seq_mod // packets_per_batch < 2:
+        raise SystemExit(
+            f"seq_bit_width {args.seq_bit_width} spans only one batch of "
+            f"{packets_per_batch} packets, so every reorder batch id would be 0 "
+            f"and batches would be indistinguishable; widen --seq-bit-width")
+    global_seq = 0
+
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     labels = []
     frames_written = 0
@@ -169,11 +196,10 @@ def main() -> None:
             data = i8.tobytes()  # 150528 bytes, NCHW channel order R,G,B
             assert len(data) == elems_per_image
             labels.append(int(label) if idx < n_write else int(label))
-            img_in_batch = idx % ipb
             for pkt in range(packets_per_image):
                 chunk = data[pkt * args.out_payload_len:(pkt + 1) * args.out_payload_len]
-                seq = img_in_batch * packets_per_image + pkt
-                assert 0 <= seq < packets_per_batch
+                seq = global_seq % seq_mod
+                global_seq += 1
                 frame = build_frame(chunk, seq, args.header_size, args.payload_byte_offset,
                                     args.seq_bit_offset, args.seq_bit_width,
                                     eth_src, eth_dst, ip_src, ip_dst,

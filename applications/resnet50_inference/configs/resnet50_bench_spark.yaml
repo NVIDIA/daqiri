@@ -95,7 +95,12 @@ reorder:
   packets_per_image: 128
   payload_byte_offset: 64
   seq_bit_offset: 128
-  seq_bit_width: 12
+  # 16, not 12: DAQIRI derives the reorder batch id as seq / packets_per_batch,
+  # so a 12-bit sequence over packets_per_batch 4096 makes every batch id 0 and
+  # batches have no identity -- a lost packet then lets the next batch complete
+  # the previous one and shifts every batch after it. 16 bits cycles the id 0..15.
+  # Must match --seq-bit-width used to regenerate the pcap.
+  seq_bit_width: 16
   images_per_batch: 32
   image_out_bytes: 301056
 
