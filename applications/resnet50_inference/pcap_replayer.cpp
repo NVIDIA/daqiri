@@ -42,7 +42,7 @@ constexpr int kLinkTypeEthernet = 1;
 constexpr uint32_t kMaxPcapFrameBytes = 65535U;
 // Cumulative bounds so a large CLI-selected pcap cannot exhaust host memory.
 // CIFAR smoke (~256 images × 128 pkts) is ~32k frames / ~40 MiB.
-constexpr size_t kMaxPcapFrames = 1u << 20;             // 1M frames
+constexpr size_t kMaxPcapFrames = 1u << 20;            // 1M frames
 constexpr uint64_t kMaxPcapTotalBytes = 512ull << 20;  // 512 MiB of frame bodies
 
 }  // namespace
@@ -172,8 +172,8 @@ bool validate_sequence_geometry(const std::vector<PcapFrame>& frames, const AppC
       const uint32_t expected = seq_mod ? ((prev + 1U) % seq_mod) : (prev + 1U);
       if (seq != expected) {
         std::cerr << "pcap_tx_worker: PCAP sequence geometry does not match the config. "
-                  << "Frame " << i << " has seq=" << seq << ", expected " << expected
-                  << " (frame " << (i - 1) << " had " << prev << ").\n"
+                  << "Frame " << i << " has seq=" << seq << ", expected " << expected << " (frame "
+                  << (i - 1) << " had " << prev << ").\n"
                   << "  Config declares seq_bit_offset=" << cfg.seq_bit_offset
                   << " seq_bit_width=" << static_cast<unsigned>(cfg.seq_bit_width) << ".\n";
         if (prev != 0 && seq == prev * 2U) {
@@ -190,6 +190,23 @@ bool validate_sequence_geometry(const std::vector<PcapFrame>& frames, const AppC
     have_prev = true;
   }
   return true;
+}
+
+// Whether the TX packet buffers can be written with a plain memcpy.
+//
+// Every shipped config declares the TX region as kind: "host_pinned", so the
+// destination is host memory and the per-packet cudaMemcpy is CUDA API overhead
+// around a host-to-host copy: ~1000 ns/packet versus ~22 ns for memcpy, which
+// capped pcap TX at ~660 kpps (~6.7 Gbps) regardless of link speed. Only a
+// device-backed region actually needs the CUDA copy.
+bool tx_dst_is_host_accessible(const void* ptr) {
+  cudaPointerAttributes attr{};
+  if (cudaPointerGetAttributes(&attr, ptr) != cudaSuccess) {
+    cudaGetLastError();  // clear so the next real CUDA error is not misattributed
+    return false;        // unknown provenance: keep the safe path
+  }
+  return attr.type == cudaMemoryTypeHost || attr.type == cudaMemoryTypeUnregistered ||
+         attr.type == cudaMemoryTypeManaged;
 }
 
 }  // namespace
@@ -273,7 +290,9 @@ void pcap_tx_worker(const AppConfig& cfg, const std::vector<PcapFrame>& frames,
     return;
   }
 
-  std::vector<uint8_t> scratch;
+  std::vector<uint8_t> scratch;  // staging for a device-backed TX region only
+  bool fill_probed = false;
+  bool dst_is_host = false;
   size_t cursor = 0;
   uint64_t total_sent = 0;
   uint64_t send_failures = 0;
@@ -351,14 +370,6 @@ void pcap_tx_worker(const AppConfig& cfg, const std::vector<PcapFrame>& frames,
         break;
       }
 
-      scratch.assign(frame.begin(), frame.end());
-      if (scratch.size() >= 6) {
-        std::memcpy(scratch.data(), dst_mac, 6);  // patch dst MAC
-      }
-
-      // cudaMemcpyDefault (not HostToDevice): the TX memory region may be
-      // host_pinned (GB10 / DGX Spark) rather than device memory, and an
-      // explicit HostToDevice with a host destination fails.
       auto* pkt_dst = daqiri::get_segment_packet_ptr(msg, 0, i);
       if (pkt_dst == nullptr) {
         if (fill_failures == 0) {
@@ -367,16 +378,42 @@ void pcap_tx_worker(const AppConfig& cfg, const std::vector<PcapFrame>& frames,
         failed = true;
         break;
       }
-      const cudaError_t cerr =
-          cudaMemcpy(pkt_dst, scratch.data(), scratch.size(), cudaMemcpyDefault);
-      if (cerr != cudaSuccess) {
-        if (fill_failures == 0) {
-          std::cerr << "pcap_tx_worker: packet copy failed: " << cudaGetErrorString(cerr) << "\n";
-        }
-        failed = true;
-        break;
+
+      if (!fill_probed) {
+        fill_probed = true;
+        dst_is_host = tx_dst_is_host_accessible(pkt_dst);
+        std::cerr << "pcap_tx_worker: filling packets with "
+                  << (dst_is_host ? "memcpy (host-accessible TX region)"
+                                  : "cudaMemcpy (device TX region)")
+                  << "\n";
       }
-      if (daqiri::set_packet_lengths(msg, i, {static_cast<int>(scratch.size())}) !=
+
+      if (dst_is_host) {
+        // Copy straight into the packet buffer, then stamp the destination MAC
+        // over the first 6 bytes: no staging copy, no CUDA call per packet.
+        std::memcpy(pkt_dst, frame.data(), frame.size());
+        if (frame.size() >= 6) {
+          std::memcpy(pkt_dst, dst_mac, 6);
+        }
+      } else {
+        scratch.assign(frame.begin(), frame.end());
+        if (scratch.size() >= 6) {
+          std::memcpy(scratch.data(), dst_mac, 6);  // patch dst MAC
+        }
+        // cudaMemcpyDefault (not HostToDevice): the TX memory region may be
+        // host_pinned (GB10 / DGX Spark) rather than device memory, and an
+        // explicit HostToDevice with a host destination fails.
+        const cudaError_t cerr =
+            cudaMemcpy(pkt_dst, scratch.data(), scratch.size(), cudaMemcpyDefault);
+        if (cerr != cudaSuccess) {
+          if (fill_failures == 0) {
+            std::cerr << "pcap_tx_worker: packet copy failed: " << cudaGetErrorString(cerr) << "\n";
+          }
+          failed = true;
+          break;
+        }
+      }
+      if (daqiri::set_packet_lengths(msg, i, {static_cast<int>(frame.size())}) !=
           daqiri::Status::SUCCESS) {
         failed = true;
         break;
