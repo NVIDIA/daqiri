@@ -1173,7 +1173,7 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_reorder_config(
     }
     if (!daqiri::is_reorder_output_data_type(reorder_config.data_types_.output_type_)) {
       DAQIRI_LOG_ERROR(
-          "Invalid reorder output_type '{}' in config '{}'. Valid values: fp16, bf16, fp32, fp64, int32",
+          "Invalid reorder output_type '{}' in config '{}'. Valid values: fp16, bf16, fp32, fp64, int32, int8",
           daqiri::reorder_data_type_to_string(reorder_config.data_types_.output_type_),
           reorder_config.name_);
       return false;

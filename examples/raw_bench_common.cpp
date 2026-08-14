@@ -249,9 +249,12 @@ const uint8_t *PinnedHostBuffer::data() const {
 
 size_t PinnedHostBuffer::capacity() const { return capacity_; }
 
+// Every index is scanned rather than every other one: benches also accept lone
+// flags (--loop, --replay-once), and stepping by two would shift the parity so
+// that a following "--flag value" pair is never seen and silently defaults.
 int parse_run_seconds(int argc, char **argv) {
   int run_seconds = 10;
-  for (int i = 2; i + 1 < argc; i += 2) {
+  for (int i = 2; i + 1 < argc; ++i) {
     if (std::string(argv[i]) == "--seconds") {
       run_seconds = std::stoi(argv[i + 1]);
     }
@@ -261,7 +264,7 @@ int parse_run_seconds(int argc, char **argv) {
 
 double parse_target_gbps(int argc, char **argv) {
   double target_gbps = 0.0;
-  for (int i = 2; i + 1 < argc; i += 2) {
+  for (int i = 2; i + 1 < argc; ++i) {
     if (std::string(argv[i]) == "--target-gbps") {
       target_gbps = std::stod(argv[i + 1]);
     }

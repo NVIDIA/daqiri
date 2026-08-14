@@ -1073,9 +1073,11 @@ inline bool is_reorder_input_data_type(ReorderDataType type) {
 }
 
 inline bool is_reorder_output_data_type(ReorderDataType type) {
+  // INT8 is allowed so int8→int8 reorder can passthrough (no convert) into an
+  // INT8 TensorRT binding; same-width as wire keeps slot stride = payload len.
   return type == ReorderDataType::FP16 || type == ReorderDataType::BF16
          || type == ReorderDataType::FP32 || type == ReorderDataType::FP64
-         || type == ReorderDataType::INT32;
+         || type == ReorderDataType::INT32 || type == ReorderDataType::INT8;
 }
 
 inline uint32_t reorder_data_type_bit_width(ReorderDataType type) {

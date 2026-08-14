@@ -1,0 +1,104 @@
+%YAML 1.2
+---
+# DGX Spark cross-host RX+inference: spark-stacked-02 (ncg-spark-7013).
+# Companion: resnet50_tx_spark_xhost.yaml on spark-stacked-01.
+# Config-based GPU reorder: int8 wire → fp16 NCHW batch (4096 pkts = 32 images).
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    master_core: 8
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    memory_regions:
+    # buf_size MUST be payload_byte_offset + out_payload_len (64 + 1176). The
+    # reorder slot stride is derived from (source buf_size - payload_byte_offset),
+    # so any slack here would pad the fp16 NCHW batch and break the tensor layout.
+    - name: "Data_RX_GPU"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 1240
+    # packets_per_batch (4096) * output_slot_stride (2352) = 9,633,792
+    - name: "Reorder_RX_GPU"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 16
+      buf_size: 9633792
+
+    interfaces:
+    - name: "rx_port"
+      address: 0000:01:00.0
+      rx:
+        flow_isolation: true
+        queues:
+        - name: "rq_q_0"
+          id: 0
+          cpu_core: 18
+          # Multiple of packets_per_batch (4096) so a reorder batch never straddles
+          # an RX burst boundary and flushes partially.
+          batch_size: 8192
+          # Flush a partial (< packets_per_batch) reorder batch after this idle gap.
+          # This must stay finite on a lossy link: the accumulator fills by arrival
+          # order (packet_idx = batch.packet_count), and with seq_bit_width 12 over
+          # packets_per_batch 4096 every batch derives the same batch id, so a batch
+          # closes only on count. Without a timeout, one lost packet lets the next
+          # batch's first packet complete this one, shifting every subsequent batch
+          # by one packet for the rest of the run and misaligning image boundaries
+          # and labels. A finite timeout resyncs at the batch boundary instead.
+          timeout_us: 2000
+          memory_regions:
+            - "Data_RX_GPU"
+        flows:
+        - name: "flow_resnet"
+          id: 201
+          action:
+            type: queue
+            id: 0
+          match:
+            udp_src: 4096
+            udp_dst: 4096
+
+bench_rx:
+- interface_name: "rx_port"
+  cpu_core: 19
+
+reorder:
+  reorder_name: "rx_reorder_resnet_int8_fp16"
+  out_payload_len: 1176
+  output_slot_stride: 2352
+  packets_per_image: 128
+  payload_byte_offset: 64
+  seq_bit_offset: 128
+  # 16, not 12: DAQIRI derives the reorder batch id as seq / packets_per_batch,
+  # so a 12-bit sequence over packets_per_batch 4096 makes every batch id 0 and
+  # batches have no identity -- a lost packet then lets the next batch complete
+  # the previous one and shifts every batch after it. 16 bits cycles the id 0..15.
+  # Must match --seq-bit-width used to regenerate the pcap.
+  seq_bit_width: 16
+  images_per_batch: 32
+  image_out_bytes: 301056
+
+inference:
+  onnx_path: "models/resnet50_features.onnx"
+  engine_path: "models/resnet50_features.fp16in.engine"
+  enable_fp16: true
+  channels: 3
+  height: 224
+  width: 224
+  feature_dim: 2048
+  opt_min: 1
+  opt_avg: 32
+  opt_max: 256
+  cpu_core: 15
+  input_name: "input"
+  output_name: "features"
+
+dataset:
+  pcap_path: "data/cifar10_resnet.pcap"
+
+stats:
+  enabled: true
+  top_k: 8

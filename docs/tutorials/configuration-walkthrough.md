@@ -139,6 +139,14 @@ For a shorter selection guide, start with the [Benchmarking overview](../benchma
 
     *Requires the engine's pacing capability: DPDK warns and runs at line rate without its send-scheduling offload; ibverbs fails initialization unless the device advertises RAW_PACKET packet pacing and accepts the requested rate. If an older driver omits its supported range, the provider validates the rate when it is applied.*
 
+??? question "7. I want packet ingest into a TensorRT inference pipeline"
+    - **No physical NIC available (start here)**: [`resnet50_sw_loopback.yaml`](https://github.com/nvidia/daqiri/blob/main/applications/resnet50_inference/configs/resnet50_sw_loopback.yaml). `loopback: "sw"`, no NIC required. First-time build + TensorRT smoke.
+    - **DGX Spark cross-host (reported numbers)**: [`resnet50_tx_spark_xhost.yaml`](https://github.com/nvidia/daqiri/blob/main/applications/resnet50_inference/configs/resnet50_tx_spark_xhost.yaml) on the TX host and [`resnet50_rx_spark_xhost.yaml`](https://github.com/nvidia/daqiri/blob/main/applications/resnet50_inference/configs/resnet50_rx_spark_xhost.yaml) on the RX host — **one cable** p0↔p0 (runs on `daqiri_resnet50_inference`).
+
+    Config-based GPU reorder (int8→fp16) reassembles packets into an NCHW batch, an SPSC ring decouples RX from TensorRT, and FeatureSink prints headless PC1/PC2 plus per-class mean-feature stats. Build with `-DDAQIRI_BUILD_APPLICATIONS=ON` inside the `BASE_IMAGE=torch` container.
+
+    See the [DAQIRI → TensorRT ResNet Inference](daqiri-resnet-inference.md) tutorial.
+
 ## Annotated walkthrough
 
 This section walks through four YAML topics: the base TX+RX template, flow steering, header-data split (HDS), and GPU packet reordering. Click on the :material-plus-circle: icons to expand explanations for each annotated line.
