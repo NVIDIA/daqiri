@@ -559,24 +559,13 @@ Bench: `--seconds 20` for sustained throughput (drops OK; stats off).
 
 ## Performance
 
-Measured on the xhost pair (stacked-01 TX to stacked-02 RX), batch of 32 images.
-Payload Gb/s counts CIFAR-10's native uint8 image bytes on the wire. The fp16
-TensorRT input exists only after GPU reorder.
+Sustained img/s is not published here. Earlier draft tables used a different
+binary and counted the pre-traffic wait in the wall clock. Re-measure on the
+current tree; use `--seconds 30` and the RX `active_seconds` line.
 
-| Result | img/s | Payload Gb/s | latency_ms | Note |
-|---|---:|---:|---:|---|
-| **ResNet-50 FP16 baseline** | **3431** | **4.13** | **8.66** | int8 wire, GPU int8 to fp16 reorder, FP16 TensorRT |
-| ResNet-18 FP16 comparison | 4626 | 5.57 | 2.59 | +34.8% versus ResNet-50 baseline |
-
-Clock locking and INT8 TensorRT did not improve the ResNet-50 result in this
-setup: locked FP16 was 3411 img/s (-0.6%), and locked INT8 was 3390 img/s
-(-1.2%).
-
-**Bottleneck:** ResNet-50 uses 4.13 Gb/s of image payload, about 4.36 Gb/s on the
-wire with headers. That is far below the roughly 100 Gb/s ingest-only result for
-the same Spark pair. The smaller ResNet-18 model raises throughput, so the limit
-for this PR's ResNet example is TensorRT model execution, not RX polling, GPU
-reorder, or link bandwidth.
+The ingest-only raw bench on the same Spark pair is ~100 Gb/s. This pipeline
+carries a few Gb/s of image payload at ResNet-50, so a published number should
+separate DAQIRI RX+reorder from TensorRT.
 
 ### Batch size
 
@@ -618,8 +607,8 @@ Per-class mean-feature stats (first 8 dims + L2 norm of the mean vector):
 Distinct per-class mean vectors, and their differing L2 norms, are a cheap
 dependency-free readout: a quick post-run check that the latent space separates
 by class without pulling in a clustering or plotting dependency. Note that the
-`img/s` in that summary covers the whole process lifetime including startup — it
-is not the throughput figure reported under [Performance](#performance).
+`img/s` in that summary covers the whole process lifetime including startup.
+Prefer the `active_seconds` line from a `--seconds` run for throughput.
 
 ## See also
 

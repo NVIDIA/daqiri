@@ -367,28 +367,17 @@ the frames and converts to fp16 in the same pass, so fp16 exists only in GPU
 memory and the network carries one byte per pixel. TensorRT reads the reorder
 output directly; there is no staging copy.
 
-Batch of 32 images. Payload Gb/s counts CIFAR-10's native uint8 image bytes on
-the wire (`3×224×224` bytes/image). The fp16 TensorRT input exists only after GPU
-reorder.
+Batch of 32 images. Payload Gb/s, when published, should count CIFAR-10's native
+uint8 image bytes on the wire (`3×224×224` bytes/image). The fp16 TensorRT input
+exists only after GPU reorder.
 
-| Result | img/s | Payload Gb/s | latency_ms | Note |
-| --- | ---: | ---: | ---: | --- |
-| **ResNet-50 FP16 baseline** | **3431** | **4.13** | **8.66** | int8 wire, GPU int8 to fp16 reorder, FP16 TensorRT |
-| ResNet-18 FP16 comparison | 4626 | 5.57 | 2.59 | +34.8% versus ResNet-50 baseline |
+Sustained img/s for this application is **not published here**. An earlier draft
+table was measured on a different binary and counted the pre-traffic wait in the
+wall clock. Leave the cells empty until a dedicated pass on the current tree
+(separate DAQIRI RX+reorder from TensorRT, report `active_seconds`).
 
-Clock locking and INT8 TensorRT did not improve the ResNet-50 result in this
-setup: locked FP16 was 3411 img/s (-0.6%), and locked INT8 was 3390 img/s
-(-1.2%).
-
-**Bottleneck:** ResNet-50 uses 4.13 Gb/s of image payload, about 4.36 Gb/s on the
-wire with headers. That is far below the roughly 100 Gb/s ingest-only result for
-the same Spark pair. The smaller ResNet-18 model raises throughput, so the limit
-for this PR's ResNet example is TensorRT model execution, not RX polling, GPU
-reorder, or link bandwidth.
-
-Benchmarking gap: future runs should keep offered TX frames, reordered batches
-delivered, and TensorRT batches consumed as separate counters. That keeps SPSC
-backpressure drops in benchmark mode separate from NIC drops.
+The ingest-only raw bench on the same pair is ~100 Gb/s, so the interesting
+question is how much of that the model consumes, not a single combined img/s.
 
 ## Reproduce
 
@@ -492,7 +481,7 @@ passwordless `ssh` between the two hosts and a shared checkout,
 then launches TX:
 
 ```bash
-# sustained cell: the table above
+# sustained cell (do not treat wall-clock img/s as the published rate)
 applications/resnet50_inference/tools/run_resnet_xhost.sh --seconds 30
 ```
 
