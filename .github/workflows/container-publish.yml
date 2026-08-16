@@ -39,7 +39,10 @@ jobs:
             arch: arm64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      # Pinned by commit rather than by tag, unlike the other workflows: these
+      # jobs hold the NGC push credential, so a retagged action must not be
+      # able to reach it.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # The runtime image is ~8.5 GB and the build compiles DPDK and the AWS
       # SDK from source. Hosted runners start with roughly 25 GB free, which
@@ -124,7 +127,7 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || inputs.push
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Resolve version
         id: version
