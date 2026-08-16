@@ -1,0 +1,132 @@
+name: Publish container
+
+on:
+  workflow_dispatch:
+    inputs:
+      push:
+        description: 'Push to NGC staging (clear to build only)'
+        type: boolean
+        default: true
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: nvcr.io/nvstaging/holoscan/daqiri
+  # scripts/build-container.sh calls plain `docker build`, but pin this so a
+  # runner defaulting to a buildx container driver still emits a plain
+  # manifest rather than an OCI index with a provenance attestation --
+  # `imagetools create` in the merge job needs per-arch manifests.
+  BUILDX_NO_DEFAULT_ATTESTATIONS: 1
+
+jobs:
+  build:
+    name: build ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The runtime image is ~8.5 GB and the build compiles DPDK and the AWS
+      # SDK from source. Hosted runners start with roughly 25 GB free, which
+      # does not survive the intermediate layers, so drop preinstalled
+      # toolchains this build never touches.
+      - name: Reclaim disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "${AGENT_TOOLSDIRECTORY}"
+          df -h /
+
+      - name: Resolve version
+        id: version
+        run: |
+          version="$(cat VERSION)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+          # Release tags are zero-padded (v2026.07.00) while VERSION is not
+          # (2026.7.0), so compare numerically. Catches a tag pushed without
+          # the matching VERSION bump, which would publish a stale image tag.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag_version="$(echo "${GITHUB_REF_NAME#v}" \
+              | awk -F. '{printf "%d.%d.%d", $1, $2, $3}')"
+            file_version="$(echo "${version}" \
+              | awk -F. '{printf "%d.%d.%d", $1, $2, $3}')"
+            if [ "${tag_version}" != "${file_version}" ]; then
+              echo "::error::tag ${GITHUB_REF_NAME} does not match VERSION ${version}"
+              exit 1
+            fi
+          fi
+
+      - name: Log in to nvcr.io
+        env:
+          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+        run: |
+          if [ -z "${NGC_API_KEY}" ]; then
+            echo "::error::NGC_API_KEY secret is not set on this repository"
+            exit 1
+          fi
+          printf '%s' "${NGC_API_KEY}" \
+            | docker login nvcr.io -u '$oauthtoken' --password-stdin
+
+      # Reuse the same script developers run by hand so CI and local builds
+      # cannot drift apart on build args.
+      - name: Build
+        env:
+          IMAGE_TAG: ${{ env.IMAGE }}:${{ steps.version.outputs.version }}-${{ matrix.arch }}
+        run: scripts/build-container.sh
+
+      - name: Push
+        if: github.event_name != 'workflow_dispatch' || inputs.push
+        env:
+          IMAGE_TAG: ${{ env.IMAGE }}:${{ steps.version.outputs.version }}-${{ matrix.arch }}
+        run: |
+          docker push "${IMAGE_TAG}"
+          echo "Pushed ${IMAGE_TAG}" >> "$GITHUB_STEP_SUMMARY"
+
+  merge:
+    name: multi-arch manifest
+    needs: build
+    if: github.event_name != 'workflow_dispatch' || inputs.push
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to nvcr.io
+        env:
+          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+        run: |
+          printf '%s' "${NGC_API_KEY}" \
+            | docker login nvcr.io -u '$oauthtoken' --password-stdin
+
+      - name: Join per-arch tags into one manifest list
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          docker buildx imagetools create -t "${IMAGE}:${VERSION}" \
+            "${IMAGE}:${VERSION}-amd64" \
+            "${IMAGE}:${VERSION}-arm64"
+
+      - name: Verify
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          docker buildx imagetools inspect "${IMAGE}:${VERSION}" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
