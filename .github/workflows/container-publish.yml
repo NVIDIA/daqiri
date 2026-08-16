@@ -71,7 +71,10 @@ jobs:
             fi
           fi
 
+      # Only needed to push. The CUDA base image pulls anonymously, so a
+      # build-only run works on a repository with no NGC secret configured.
       - name: Log in to nvcr.io
+        if: github.event_name != 'workflow_dispatch' || inputs.push
         env:
           NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
         run: |
