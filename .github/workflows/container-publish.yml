@@ -55,12 +55,30 @@ jobs:
         id: version
         run: |
           version="$(cat VERSION)"
+
+          # VERSION becomes the published image tag verbatim, so reject
+          # anything that is not a bare CalVer triple.
+          if ! printf '%s' "${version}" \
+            | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::VERSION '${version}' is not YYYY.MM.PATCH"
+            exit 1
+          fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
-          # Release tags are zero-padded (v2026.07.00) while VERSION is not
-          # (2026.7.0), so compare numerically. Catches a tag pushed without
-          # the matching VERSION bump, which would publish a stale image tag.
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            # The trigger glob is 'v*', so require the full release format
+            # before comparing. The numeric compare below reads only a leading
+            # integer per field, which would otherwise let a prerelease tag
+            # such as v2026.07.00-rc1 publish over the stable 2026.7.0 image.
+            if ! printf '%s' "${GITHUB_REF_NAME}" \
+              | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "::error::tag ${GITHUB_REF_NAME} is not a vYYYY.MM.PATCH release tag"
+              exit 1
+            fi
+
+            # Release tags are zero-padded (v2026.07.00) while VERSION is not
+            # (2026.7.0), so compare numerically. Catches a tag pushed without
+            # the matching VERSION bump, which would publish a stale image tag.
             tag_version="$(echo "${GITHUB_REF_NAME#v}" \
               | awk -F. '{printf "%d.%d.%d", $1, $2, $3}')"
             file_version="$(echo "${version}" \
