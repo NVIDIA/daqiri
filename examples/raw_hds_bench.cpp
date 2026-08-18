@@ -71,44 +71,42 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
   std::unordered_set<void *> initialized_payload_buffers;
 
   while (!stop.load()) {
-    auto *msg = daqiri::create_tx_burst_params();
-    daqiri::set_header(msg, static_cast<uint16_t>(port_id),
+    daqiri::TxBurst msg;
+    if (daqiri::create_tx_burst(&msg) != daqiri::Status::SUCCESS) {
+      continue;
+    }
+    daqiri::set_header(msg.get(), static_cast<uint16_t>(port_id),
                        static_cast<uint16_t>(cfg.queue_id), cfg.batch_size, 2);
 
-    if (!daqiri::is_tx_burst_available(msg)) {
-      daqiri::free_tx_metadata(msg);
+    if (!daqiri::is_tx_burst_available(msg.get())) {
       std::this_thread::sleep_for(std::chrono::microseconds(100));
       continue;
     }
 
-    if (daqiri::get_tx_packet_burst(msg) != daqiri::Status::SUCCESS) {
-      daqiri::free_tx_metadata(msg);
+    if (daqiri::get_tx_packet_burst(&msg) != daqiri::Status::SUCCESS) {
       continue;
     }
 
     bool failed = false;
-    const auto num_pkts = static_cast<int>(daqiri::get_num_packets(msg));
+    const auto num_pkts = static_cast<int>(daqiri::get_num_packets(msg.get()));
     for (int i = 0; i < num_pkts; ++i) {
       const uint16_t src_port = src_ports[src_idx];
       const uint16_t dst_port = dst_ports[dst_idx];
       src_idx = (src_idx + 1) % src_ports.size();
       dst_idx = (dst_idx + 1) % dst_ports.size();
 
-      if (daqiri::set_eth_header(msg, i, eth_dst) != daqiri::Status::SUCCESS ||
-          daqiri::set_ipv4_header(
-              msg, i,
-              static_cast<int>(cfg.payload_size + cfg.header_size - (14 + 20)),
-              17, ip_src, ip_dst) != daqiri::Status::SUCCESS ||
+      if (daqiri::set_eth_header(msg.get(), i, eth_dst) != daqiri::Status::SUCCESS ||
+          daqiri::set_ipv4_header(msg.get(), i,
+                                  static_cast<int>(cfg.payload_size + cfg.header_size - (14 + 20)),
+                                  17, ip_src, ip_dst) != daqiri::Status::SUCCESS ||
           daqiri::set_udp_header(
-              msg, i,
-              static_cast<int>(cfg.payload_size + cfg.header_size -
-                               (14 + 20 + 8)),
+              msg.get(), i, static_cast<int>(cfg.payload_size + cfg.header_size - (14 + 20 + 8)),
               src_port, dst_port) != daqiri::Status::SUCCESS) {
         failed = true;
         break;
       }
 
-      auto *gpu_payload = daqiri::get_segment_packet_ptr(msg, 1, i);
+      auto* gpu_payload = daqiri::get_segment_packet_ptr(msg.get(), 1, i);
       if (initialized_payload_buffers.insert(gpu_payload).second) {
         if (cudaMemcpy(gpu_payload, payload_template.data(), cfg.payload_size,
                        cudaMemcpyHostToDevice) != cudaSuccess) {
@@ -117,9 +115,9 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
         }
       }
 
-      if (daqiri::set_packet_lengths(msg, i,
-                                     {static_cast<int>(cfg.header_size),
-                                      static_cast<int>(cfg.payload_size)}) !=
+      if (daqiri::set_packet_lengths(
+              msg.get(), i,
+              {static_cast<int>(cfg.header_size), static_cast<int>(cfg.payload_size)}) !=
           daqiri::Status::SUCCESS) {
         failed = true;
         break;
@@ -127,10 +125,9 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
     }
 
     if (failed) {
-      daqiri::free_all_packets_and_burst_tx(msg);
       continue;
     }
-    daqiri::send_tx_burst(msg);
+    msg.send();
   }
 }
 

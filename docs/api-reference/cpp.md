@@ -51,10 +51,11 @@ if (st != daqiri::Status::SUCCESS) {
 ### RX Step 1 — Get a burst
 
 ```cpp
-daqiri::BurstParams *burst;
+daqiri::RxBurst owner;
 int port_id = 0;
 int queue_id = 0;
-auto status = daqiri::get_rx_burst(&burst, port_id, queue_id);
+auto status = daqiri::get_rx_burst(&owner, port_id, queue_id);
+daqiri::BurstParams *burst = owner.get();
 ```
 
 `get_rx_burst()` is non-blocking. It returns `Status::SUCCESS` when a complete batch is
@@ -63,10 +64,10 @@ that dequeue from any queue on a port, or from any queue on any port:
 
 ```cpp
 // From any queue on port 0
-daqiri::get_rx_burst(&burst, 0);
+daqiri::get_rx_burst(&owner, 0);
 
 // From any queue on any port (round-robin)
-daqiri::get_rx_burst(&burst);
+daqiri::get_rx_burst(&owner);
 ```
 
 ### RX Step 2 — Access packet data
@@ -106,7 +107,7 @@ for (int i = 0; i < daqiri::get_num_packets(burst); i++) {
 }
 ```
 
-### RX Step 3 — Free buffers
+### RX Step 3 — Release buffers
 
 The recommended C++ path is the move-only `RxBurst` owner. Its destructor
 returns all packets and metadata through the correct engine-specific free path:
@@ -138,34 +139,25 @@ if (daqiri::get_rx_burst(&owner, port_id, queue_id) ==
 }
 ```
 
-`reset()` releases immediately, while `release()` detaches and returns the raw
-pointer to code that will use the manual free API. Destroy all application-held
-owners before calling `daqiri::shutdown()`; shutdown drains releases already
-deferred to CUDA streams and reports owners still held by the application.
-
-The original manual API remains available:
-
-When you are done processing, free the burst to return buffers to the pool:
+Usually the destructor is the right release point. If processing continues in
+the same scope but no longer needs the packet memory, call `reset()` to return
+the buffers immediately:
 
 ```cpp
-// Free all packets and the burst metadata
-daqiri::free_all_packets_and_burst_rx(burst);
+daqiri::RxBurst owner;
+if (daqiri::get_rx_burst(&owner, port_id, queue_id) ==
+    daqiri::Status::SUCCESS) {
+    consume(owner.get());
+    owner.reset(); // release now; owner remains in scope but is empty
+    do_more_work_without_holding_rx_buffers();
+}
 ```
 
-You can also free individual packets or segments if your pipeline releases buffers
-incrementally:
-
-```cpp
-// Free a single packet (all segments)
-daqiri::free_packet(burst, idx);
-
-// Free one segment of a packet
-daqiri::free_packet_segment(burst, seg, idx);
-
-// Free all packets for one segment, then the burst
-daqiri::free_all_segment_packets(burst, seg);
-daqiri::free_rx_burst(burst);
-```
+`release()` is the lower-level escape hatch: it detaches and returns the raw
+pointer when ownership must transfer to code that uses the manual API. Destroy
+all application-held owners before calling `daqiri::shutdown()`; shutdown
+drains releases already deferred to CUDA streams and reports owners still held
+by the application.
 
 ## Dynamic RX Flows
 
@@ -304,14 +296,12 @@ __global__ void noop_packet_kernel(void *packet) {
     (void)packet;
 }
 
-if (daqiri::get_num_packets(burst) > 0) {
-    void *packet = daqiri::get_packet_ptr(burst, 0);
-noop_packet_kernel<<<1, 1, 0, stream>>>(packet);
+if (daqiri::get_num_packets(owner.get()) > 0) {
+    void *packet = daqiri::get_packet_ptr(owner.get(), 0);
+    noop_packet_kernel<<<1, 1, 0, stream>>>(packet);
 }
 
-// The manual API requires the application to prove GPU completion first.
-cudaStreamSynchronize(stream);
-daqiri::free_all_packets_and_burst_rx(burst);
+owner.release_on_stream(stream);
 ```
 
 ## Transmitting Packets
@@ -334,23 +324,11 @@ acquired so far. Use the `TxBurst` overload of `get_tx_packet_burst()` rather
 than passing `owner.get()` to the legacy overload, so the owner can record that
 packet buffers were acquired.
 
-The original manual allocation path is:
-
-```cpp
-auto burst = daqiri::create_tx_burst_params();
-daqiri::set_header(burst, port_id, queue_id, batch_size, num_segments);
-
-auto status = daqiri::get_tx_packet_burst(burst);
-if (status != daqiri::Status::SUCCESS) {
-    // No buffers available — retry later
-}
-```
-
 You can check availability before allocating:
 
 ```cpp
-if (daqiri::is_tx_burst_available(burst)) {
-    daqiri::get_tx_packet_burst(burst);
+if (daqiri::is_tx_burst_available(owner.get())) {
+    daqiri::get_tx_packet_burst(&owner);
 }
 ```
 
@@ -359,7 +337,7 @@ sending when you need to target a specific peer. RX bursts from those transports
 inspected with the matching getter:
 
 ```cpp
-daqiri::set_connection_id(burst, conn_id);
+daqiri::set_connection_id(owner.get(), conn_id);
 auto rx_conn_id = daqiri::get_connection_id(rx_burst);
 ```
 
@@ -368,12 +346,12 @@ auto rx_conn_id = daqiri::get_connection_id(rx_burst);
 Use the header helper functions for standard UDP packets:
 
 ```cpp
-for (int i = 0; i < daqiri::get_num_packets(burst); i++) {
-    daqiri::set_eth_header(burst, i, dst_mac);
-    daqiri::set_ipv4_header(burst, i, ip_payload_len, IPPROTO_UDP, src_ip, dst_ip);
-    daqiri::set_udp_header(burst, i, udp_payload_len, src_port, dst_port);
-    daqiri::set_udp_payload(burst, i, payload_ptr, payload_size);
-    daqiri::set_packet_lengths(burst, i, {total_pkt_len});
+for (int i = 0; i < daqiri::get_num_packets(owner.get()); i++) {
+    daqiri::set_eth_header(owner.get(), i, dst_mac);
+    daqiri::set_ipv4_header(owner.get(), i, ip_payload_len, IPPROTO_UDP, src_ip, dst_ip);
+    daqiri::set_udp_header(owner.get(), i, udp_payload_len, src_port, dst_port);
+    daqiri::set_udp_payload(owner.get(), i, payload_ptr, payload_size);
+    daqiri::set_packet_lengths(owner.get(), i, {total_pkt_len});
 }
 ```
 
@@ -392,20 +370,11 @@ The owner becomes empty when the selected engine consumed the burst, including
 engine-specific failure paths. If the engine retained ownership after a
 validation error, the owner remains non-empty and releases it on destruction.
 
-The equivalent manual call is:
-
-```cpp
-daqiri::send_tx_burst(burst);
-```
-
 The burst is enqueued to the TX worker thread, which sends it to the NIC via DMA.
 
-`send_tx_burst()` takes ownership of the burst on success and on a full-ring
-failure: on `SUCCESS` the TX worker owns it, and on `NO_SPACE_AVAILABLE` (the TX
-ring is full) it has already freed the packets and the burst internally. In both
-cases the application must **not** free or otherwise access the burst afterwards.
-`NO_SPACE_AVAILABLE` is the only failure a correctly-configured sender encounters
-at runtime.
+On `SUCCESS` the TX worker owns the burst. On `NO_SPACE_AVAILABLE`, the engine
+has already released it. `TxBurst::send()` handles both cases and empties the
+owner so the application cannot release the burst twice.
 
 ### Timed Transmission
 
@@ -519,13 +488,12 @@ daqiri::S3WriteHandle *handle = nullptr;
 if (st == daqiri::Status::SUCCESS) {
     st = daqiri::daqiri_write_raw_to_s3_objects_async(
         writer,
-        burst,
+        owner.get(),
         "runs/run42/packet",
         60,
         &handle);
     if (st == daqiri::Status::SUCCESS) {
-        daqiri::free_all_packets_and_burst_rx(burst);
-        burst = nullptr;
+        owner.reset(); // copied into writer-owned staging memory
     }
 }
 
@@ -533,9 +501,6 @@ daqiri::S3WriteStatus s3_status{};
 if (st == daqiri::Status::SUCCESS) {
     st = daqiri::daqiri_s3_write_wait(handle, &s3_status);
     daqiri::daqiri_s3_write_destroy(handle);
-}
-if (burst != nullptr) {
-    daqiri::free_all_packets_and_burst_rx(burst);
 }
 if (writer != nullptr) {
     daqiri::daqiri_s3_writer_destroy(writer);
@@ -561,12 +526,12 @@ cfg.region = "us-west-2"
 writer = daqiri.S3Writer(cfg)
 try:
     status = writer.write_raw_objects(
-        burst,
+        owner.burst,
         "runs/run42/packet",
         packet_data_offset=60,
     )
 finally:
-    daqiri.free_all_packets_and_burst_rx(burst)
+    owner.close()
     writer.destroy()
 ```
 

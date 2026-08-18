@@ -119,19 +119,20 @@ void rx_worker(const daqiri::bench::RawBenchRxConfig& cfg,
     return;
   }
 
+  daqiri::RxBurst burst;
   while (!stop.load()) {
-    daqiri::BurstParams* burst = nullptr;
-    if (daqiri::get_rx_burst(&burst, port_id, cfg.queue_id) != daqiri::Status::SUCCESS ||
-        burst == nullptr) {
+    if (daqiri::get_rx_burst(&burst, port_id, cfg.queue_id) != daqiri::Status::SUCCESS) {
       std::this_thread::sleep_for(std::chrono::microseconds(100));
       continue;
     }
 
-    counter.packets.fetch_add(static_cast<uint64_t>(daqiri::get_num_packets(burst)),
+    counter.packets.fetch_add(static_cast<uint64_t>(daqiri::get_num_packets(burst.get())),
                               std::memory_order_relaxed);
-    counter.bytes.fetch_add(daqiri::get_burst_tot_byte(burst), std::memory_order_relaxed);
+    counter.bytes.fetch_add(daqiri::get_burst_tot_byte(burst.get()), std::memory_order_relaxed);
     counter.bursts.fetch_add(1, std::memory_order_relaxed);
-    daqiri::free_all_packets_and_burst_rx(burst);
+    // The owner stays in scope across iterations, so release explicitly before
+    // trying to acquire the next burst.
+    burst.reset();
   }
 }
 
@@ -184,28 +185,26 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg,
   const auto t0 = Clock::now();
 
   while (!stop.load()) {
-    auto* msg = daqiri::create_tx_burst_params();
-    daqiri::set_header(msg,
-                       static_cast<uint16_t>(port_id),
-                       static_cast<uint16_t>(cfg.queue_id),
-                       cfg.batch_size,
-                       1);
+    daqiri::TxBurst msg;
+    if (daqiri::create_tx_burst(&msg) != daqiri::Status::SUCCESS) {
+      continue;
+    }
+    daqiri::set_header(msg.get(), static_cast<uint16_t>(port_id),
+                       static_cast<uint16_t>(cfg.queue_id), cfg.batch_size, 1);
 
-    if (!daqiri::is_tx_burst_available(msg)) {
-      daqiri::free_tx_metadata(msg);
+    if (!daqiri::is_tx_burst_available(msg.get())) {
       std::this_thread::sleep_for(std::chrono::microseconds(100));
       continue;
     }
 
-    if (daqiri::get_tx_packet_burst(msg) != daqiri::Status::SUCCESS) {
-      daqiri::free_tx_metadata(msg);
+    if (daqiri::get_tx_packet_burst(&msg) != daqiri::Status::SUCCESS) {
       continue;
     }
 
     bool failed = false;
-    const int num_pkts = static_cast<int>(daqiri::get_num_packets(msg));
+    const int num_pkts = static_cast<int>(daqiri::get_num_packets(msg.get()));
     for (int i = 0; i < num_pkts; ++i) {
-      void* pkt = daqiri::get_segment_packet_ptr(msg, 0, i);
+      void* pkt = daqiri::get_segment_packet_ptr(msg.get(), 0, i);
       if (initialized_tx_buffers.insert(pkt).second) {
         if (cudaMemcpyAsync(pkt,
                             packet_template.data(),
@@ -220,7 +219,7 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg,
         }
       }
 
-      if (daqiri::set_packet_lengths(msg, i, {static_cast<int>(packet_size)}) !=
+      if (daqiri::set_packet_lengths(msg.get(), i, {static_cast<int>(packet_size)}) !=
           daqiri::Status::SUCCESS) {
         failed = true;
         break;
@@ -228,16 +227,13 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg,
     }
 
     if (failed) {
-      daqiri::free_all_packets_and_burst_tx(msg);
       continue;
     }
 
-    if (daqiri::send_tx_burst(msg) == daqiri::Status::SUCCESS) {
+    if (msg.send() == daqiri::Status::SUCCESS) {
       packets += static_cast<uint64_t>(num_pkts);
       ++bursts;
       pacer.wait_for_bytes(static_cast<size_t>(num_pkts) * packet_size, stop);
-    } else {
-      daqiri::free_all_packets_and_burst_tx(msg);
     }
   }
 

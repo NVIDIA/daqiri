@@ -684,22 +684,23 @@ void tx_worker(const BenchConfig &cfg, const ReorderPlanConfig &plan,
   batch_copy_sizes.reserve(cfg.batch_size);
 
   while (!stop.load()) {
-    auto *msg = daqiri::create_tx_burst_params();
-    daqiri::set_header(msg, static_cast<uint16_t>(port_id),
+    daqiri::TxBurst msg;
+    if (daqiri::create_tx_burst(&msg) != daqiri::Status::SUCCESS) {
+      continue;
+    }
+    daqiri::set_header(msg.get(), static_cast<uint16_t>(port_id),
                        static_cast<uint16_t>(cfg.queue_id), cfg.batch_size, 1);
 
-    if (!daqiri::is_tx_burst_available(msg)) {
-      daqiri::free_tx_metadata(msg);
+    if (!daqiri::is_tx_burst_available(msg.get())) {
       std::this_thread::sleep_for(std::chrono::microseconds(100));
       continue;
     }
-    if (daqiri::get_tx_packet_burst(msg) != daqiri::Status::SUCCESS) {
-      daqiri::free_tx_metadata(msg);
+    if (daqiri::get_tx_packet_burst(&msg) != daqiri::Status::SUCCESS) {
       continue;
     }
 
     bool failed = false;
-    const auto num_pkts = static_cast<int>(daqiri::get_num_packets(msg));
+    const auto num_pkts = static_cast<int>(daqiri::get_num_packets(msg.get()));
     if (num_pkts > static_cast<int>(cfg.batch_size)) {
       std::cerr << "TX burst packet count exceeds configured batch_size\n";
       failed = true;
@@ -714,8 +715,7 @@ void tx_worker(const BenchConfig &cfg, const ReorderPlanConfig &plan,
       }
       const uint32_t batch_id = current_batch_id & batch_mask;
 
-      auto *gpu_pkt =
-          static_cast<uint8_t *>(daqiri::get_segment_packet_ptr(msg, 0, i));
+      auto* gpu_pkt = static_cast<uint8_t*>(daqiri::get_segment_packet_ptr(msg.get(), 0, i));
       if (gpu_pkt == nullptr) {
         failed = true;
         break;
@@ -777,19 +777,17 @@ void tx_worker(const BenchConfig &cfg, const ReorderPlanConfig &plan,
       }
     }
 
-    if (!failed &&
-        daqiri::set_all_packet_lengths(msg, {static_cast<int>(packet_size)}) !=
-            daqiri::Status::SUCCESS) {
+    if (!failed && daqiri::set_all_packet_lengths(msg.get(), {static_cast<int>(packet_size)}) !=
+                       daqiri::Status::SUCCESS) {
       failed = true;
     }
 
     if (failed) {
       stats.failures.fetch_add(1);
-      daqiri::free_all_packets_and_burst_tx(msg);
       stop.store(true);
       continue;
     }
-    daqiri::send_tx_burst(msg);
+    msg.send();
   }
   if (tx_copy_stream != nullptr) {
     cudaStreamDestroy(tx_copy_stream);
@@ -815,22 +813,20 @@ void rx_worker(const BenchConfig &cfg, const ReorderPlanConfig &plan,
 
   daqiri::bench::PinnedHostBuffer output;
   while (!stop.load()) {
-    daqiri::BurstParams *burst = nullptr;
-    if (daqiri::get_rx_burst(&burst, port_id, 0) != daqiri::Status::SUCCESS ||
-        burst == nullptr) {
+    daqiri::RxBurst owner;
+    if (daqiri::get_rx_burst(&owner, port_id, 0) != daqiri::Status::SUCCESS) {
       std::this_thread::sleep_for(std::chrono::microseconds(100));
       continue;
     }
+    auto* burst = owner.get();
 
     const bool reordered = (burst->hdr.hdr.burst_flags &
                             daqiri::DAQIRI_BURST_FLAG_REORDERED) != 0U;
     if (!reordered) {
-      daqiri::free_all_packets_and_burst_rx(burst);
       continue;
     }
 
     if (cfg.verify_batches == 0) {
-      daqiri::free_all_packets_and_burst_rx(burst);
       continue;
     }
 
@@ -843,7 +839,6 @@ void rx_worker(const BenchConfig &cfg, const ReorderPlanConfig &plan,
       std::cerr << "get_reorder_burst_info failed with status "
                 << static_cast<int>(info_status) << "\n";
       stats.failures.fetch_add(1);
-      daqiri::free_all_packets_and_burst_rx(burst);
       stop.store(true);
       return;
     }
@@ -852,7 +847,6 @@ void rx_worker(const BenchConfig &cfg, const ReorderPlanConfig &plan,
     if (!output.resize(aggregate_len)) {
       std::cerr << "Failed to allocate pinned verification output buffer\n";
       stats.failures.fetch_add(1);
-      daqiri::free_all_packets_and_burst_rx(burst);
       stop.store(true);
       return;
     }
@@ -860,13 +854,11 @@ void rx_worker(const BenchConfig &cfg, const ReorderPlanConfig &plan,
                    aggregate_len, cudaMemcpyDeviceToHost) != cudaSuccess) {
       std::cerr << "Failed to copy reordered output to host\n";
       stats.failures.fetch_add(1);
-      daqiri::free_all_packets_and_burst_rx(burst);
       stop.store(true);
       return;
     }
 
     const bool ok = verify_reorder_output(output.data(), info, cfg);
-    daqiri::free_all_packets_and_burst_rx(burst);
     if (!ok) {
       stats.failures.fetch_add(1);
       stop.store(true);

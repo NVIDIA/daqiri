@@ -138,47 +138,44 @@ void tx_worker(const SequenceTxConfig &cfg, std::atomic<bool> &stop) {
   uint32_t next_sequence = cfg.sequence_number_start;
 
   while (!stop.load()) {
-    auto *msg = daqiri::create_tx_burst_params();
-    daqiri::set_header(msg, static_cast<uint16_t>(port_id),
-                       static_cast<uint16_t>(cfg.packet.queue_id),
-                       cfg.packet.batch_size, 1);
+    daqiri::TxBurst msg;
+    if (daqiri::create_tx_burst(&msg) != daqiri::Status::SUCCESS) {
+      continue;
+    }
+    daqiri::set_header(msg.get(), static_cast<uint16_t>(port_id),
+                       static_cast<uint16_t>(cfg.packet.queue_id), cfg.packet.batch_size, 1);
 
-    if (!daqiri::is_tx_burst_available(msg)) {
-      daqiri::free_tx_metadata(msg);
+    if (!daqiri::is_tx_burst_available(msg.get())) {
       std::this_thread::sleep_for(std::chrono::microseconds(100));
       continue;
     }
 
-    if (daqiri::get_tx_packet_burst(msg) != daqiri::Status::SUCCESS) {
-      daqiri::free_tx_metadata(msg);
+    if (daqiri::get_tx_packet_burst(&msg) != daqiri::Status::SUCCESS) {
       continue;
     }
 
     bool failed = false;
-    const auto num_pkts = static_cast<int>(daqiri::get_num_packets(msg));
+    const auto num_pkts = static_cast<int>(daqiri::get_num_packets(msg.get()));
     for (int i = 0; i < num_pkts; ++i) {
       const uint16_t src_port = src_ports[src_idx];
       const uint16_t dst_port = dst_ports[dst_idx];
       src_idx = (src_idx + 1) % src_ports.size();
       dst_idx = (dst_idx + 1) % dst_ports.size();
 
-      if (daqiri::set_eth_header(msg, i, eth_dst) != daqiri::Status::SUCCESS ||
+      if (daqiri::set_eth_header(msg.get(), i, eth_dst) != daqiri::Status::SUCCESS ||
           daqiri::set_ipv4_header(
-              msg, i,
-              static_cast<int>(cfg.packet.payload_size +
-                               cfg.packet.header_size - (14 + 20)),
-              17, ip_src, ip_dst) != daqiri::Status::SUCCESS ||
+              msg.get(), i,
+              static_cast<int>(cfg.packet.payload_size + cfg.packet.header_size - (14 + 20)), 17,
+              ip_src, ip_dst) != daqiri::Status::SUCCESS ||
           daqiri::set_udp_header(
-              msg, i,
-              static_cast<int>(cfg.packet.payload_size +
-                               cfg.packet.header_size - (14 + 20 + 8)),
+              msg.get(), i,
+              static_cast<int>(cfg.packet.payload_size + cfg.packet.header_size - (14 + 20 + 8)),
               src_port, dst_port) != daqiri::Status::SUCCESS) {
         failed = true;
         break;
       }
 
-      auto *pkt_data =
-          static_cast<uint8_t *>(daqiri::get_segment_packet_ptr(msg, 0, i));
+      auto* pkt_data = static_cast<uint8_t*>(daqiri::get_segment_packet_ptr(msg.get(), 0, i));
       if (pkt_data == nullptr) {
         failed = true;
         break;
@@ -189,9 +186,7 @@ void tx_worker(const SequenceTxConfig &cfg, std::atomic<bool> &stop) {
                   &sequence_network_order, sizeof(sequence_network_order));
 
       if (daqiri::set_packet_lengths(
-              msg, i,
-              {static_cast<int>(cfg.packet.header_size +
-                                cfg.packet.payload_size)}) !=
+              msg.get(), i, {static_cast<int>(cfg.packet.header_size + cfg.packet.payload_size)}) !=
           daqiri::Status::SUCCESS) {
         failed = true;
         break;
@@ -199,10 +194,9 @@ void tx_worker(const SequenceTxConfig &cfg, std::atomic<bool> &stop) {
     }
 
     if (failed) {
-      daqiri::free_all_packets_and_burst_tx(msg);
       continue;
     }
-    daqiri::send_tx_burst(msg);
+    msg.send();
   }
 }
 
@@ -240,11 +234,11 @@ void rx_reorder_worker(const daqiri::bench::RawBenchRxConfig &cfg,
         static_cast<int>(daqiri::get_num_rx_queues(port_id));
     bool got_any = false;
     for (int q = 0; q < num_rx_queues; ++q) {
-      daqiri::BurstParams *burst = nullptr;
-      if (daqiri::get_rx_burst(&burst, port_id, q) != daqiri::Status::SUCCESS ||
-          burst == nullptr) {
+      daqiri::RxBurst owner;
+      if (daqiri::get_rx_burst(&owner, port_id, q) != daqiri::Status::SUCCESS) {
         continue;
       }
+      auto* burst = owner.get();
       got_any = true;
       const auto burst_size = daqiri::get_num_packets(burst);
       const bool reordered = (burst->hdr.hdr.burst_flags &
@@ -286,7 +280,6 @@ void rx_reorder_worker(const daqiri::bench::RawBenchRxConfig &cfg,
       } else {
         passthrough_packets += logical_packets;
       }
-      daqiri::free_all_packets_and_burst_rx(burst);
     }
     if (!got_any) {
       std::this_thread::sleep_for(std::chrono::microseconds(100));

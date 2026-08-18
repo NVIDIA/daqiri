@@ -130,30 +130,30 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
                         const std::string& mr_name) -> bool {
       if (outstanding >= depth) { return false; }
 
-      auto* msg = daqiri::create_tx_burst_params();
-      if (msg == nullptr) { return false; }
+      daqiri::TxBurst msg;
+      if (daqiri::create_tx_burst(&msg) != daqiri::Status::SUCCESS) {
+        return false;
+      }
 
-      if (daqiri::rdma_set_header(msg, op, conn_id, cfg.server, 1, wr_id, mr_name) !=
+      if (daqiri::rdma_set_header(msg.get(), op, conn_id, cfg.server, 1, wr_id, mr_name) !=
           daqiri::Status::SUCCESS) {
-        daqiri::free_tx_metadata(msg);
         return false;
       }
 
-      if (!daqiri::is_tx_burst_available(msg)) {
-        daqiri::free_tx_metadata(msg);
+      if (!daqiri::is_tx_burst_available(msg.get())) {
         return false;
       }
 
-      if (daqiri::get_tx_packet_burst(msg) != daqiri::Status::SUCCESS) {
-        daqiri::free_tx_metadata(msg);
+      if (daqiri::get_tx_packet_burst(&msg) != daqiri::Status::SUCCESS) {
         return false;
       }
 
-      if (daqiri::set_packet_lengths(msg, 0, {cfg.message_size}) != daqiri::Status::SUCCESS) {
-        daqiri::free_tx_burst(msg);
+      if (daqiri::set_packet_lengths(msg.get(), 0, {cfg.message_size}) != daqiri::Status::SUCCESS) {
         return false;
       }
-      if (daqiri::send_tx_burst(msg) != daqiri::Status::SUCCESS) { return false; }
+      if (msg.send() != daqiri::Status::SUCCESS) {
+        return false;
+      }
       outstanding++;
       wr_id++;
       // Only meter actual byte transmissions (SENDs), not RECEIVE-side posts.
@@ -189,12 +189,14 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
     bool posted_work = stopped ? false : refill_receives();
     bool got_completion = false;
     while (true) {
-      daqiri::BurstParams* completion = nullptr;
+      daqiri::RxBurst completion;
       const auto completion_status = daqiri::get_rx_burst(&completion, conn_id, cfg.server);
-      if (completion_status != daqiri::Status::SUCCESS || completion == nullptr) { break; }
+      if (completion_status != daqiri::Status::SUCCESS) {
+        break;
+      }
 
       got_completion = true;
-      const auto opcode = daqiri::rdma_get_opcode(completion);
+      const auto opcode = daqiri::rdma_get_opcode(completion.get());
       if (opcode == daqiri::RDMAOpCode::SEND && outstanding_send > 0) {
         outstanding_send--;
         stats.send_completions++;
@@ -204,7 +206,6 @@ void rdma_worker(const RdmaBenchConfig& cfg, daqiri::bench::TokenBucketPacer& pa
         stats.recv_completions++;
         stats.recv_bytes += static_cast<uint64_t>(cfg.message_size);
       }
-      daqiri::free_tx_burst(completion);
     }
 
     if (!stopped) { posted_work = refill_receives() || posted_work; }

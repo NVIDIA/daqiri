@@ -20,7 +20,6 @@
 #include <yaml-cpp/yaml.h>
 
 #include <atomic>
-#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -73,44 +72,45 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg, daqiri::bench::TokenB
     payload_template[i] = static_cast<uint8_t>(i & 0xff);
   }
 
-  std::unordered_set<void *> initialized_tx_buffers;
+  std::unordered_set<void*> initialized_tx_buffers;
   daqiri::bench::RawBenchQueueStats stats;
   const auto packet_size = static_cast<uint64_t>(cfg.header_size) + cfg.payload_size;
   const auto t0 = std::chrono::steady_clock::now();
 
   while (!stop.load()) {
-    auto* msg = daqiri::create_tx_burst_params();
-    daqiri::set_header(msg, static_cast<uint16_t>(port_id), static_cast<uint16_t>(cfg.queue_id),
-                       cfg.batch_size, 1);
+    daqiri::TxBurst msg;
+    if (daqiri::create_tx_burst(&msg) != daqiri::Status::SUCCESS) {
+      continue;
+    }
+    daqiri::set_header(msg.get(), static_cast<uint16_t>(port_id),
+                       static_cast<uint16_t>(cfg.queue_id), cfg.batch_size, 1);
 
-    if (!daqiri::is_tx_burst_available(msg)) {
-      daqiri::free_tx_metadata(msg);
+    if (!daqiri::is_tx_burst_available(msg.get())) {
       std::this_thread::sleep_for(std::chrono::microseconds(100));
       continue;
     }
 
-    if (daqiri::get_tx_packet_burst(msg) != daqiri::Status::SUCCESS) {
-      daqiri::free_tx_metadata(msg);
+    if (daqiri::get_tx_packet_burst(&msg) != daqiri::Status::SUCCESS) {
       continue;
     }
 
     bool failed = false;
-    const auto num_pkts = static_cast<int>(daqiri::get_num_packets(msg));
+    const auto num_pkts = static_cast<int>(daqiri::get_num_packets(msg.get()));
     for (int i = 0; i < num_pkts; ++i) {
       const uint16_t src_port = src_ports[src_idx];
       const uint16_t dst_port = dst_ports[dst_idx];
       src_idx = (src_idx + 1) % src_ports.size();
       dst_idx = (dst_idx + 1) % dst_ports.size();
 
-      auto *gpu_pkt = daqiri::get_segment_packet_ptr(msg, 0, i);
+      auto* gpu_pkt = daqiri::get_segment_packet_ptr(msg.get(), 0, i);
       if (initialized_tx_buffers.insert(gpu_pkt).second) {
-        std::vector<uint8_t> packet_template(
-            static_cast<size_t>(cfg.header_size) + cfg.payload_size);
-        daqiri::bench::populate_udp_ipv4_headers(
-            packet_template.data(), cfg.header_size, cfg.payload_size, eth_src,
-            eth_dst, ip_src, ip_dst, src_port, dst_port);
-        std::memcpy(packet_template.data() + cfg.header_size,
-                    payload_template.data(), cfg.payload_size);
+        std::vector<uint8_t> packet_template(static_cast<size_t>(cfg.header_size) +
+                                             cfg.payload_size);
+        daqiri::bench::populate_udp_ipv4_headers(packet_template.data(), cfg.header_size,
+                                                 cfg.payload_size, eth_src, eth_dst, ip_src,
+                                                 ip_dst, src_port, dst_port);
+        std::memcpy(packet_template.data() + cfg.header_size, payload_template.data(),
+                    cfg.payload_size);
         daqiri::bench::finalize_udp_ipv4_checksums(packet_template.data());
         if (cudaMemcpy(gpu_pkt, packet_template.data(), packet_template.size(),
                        cudaMemcpyHostToDevice) != cudaSuccess) {
@@ -119,8 +119,7 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg, daqiri::bench::TokenB
         }
       }
 
-      if (daqiri::set_packet_lengths(
-              msg, i, {static_cast<int>(packet_size)}) !=
+      if (daqiri::set_packet_lengths(msg.get(), i, {static_cast<int>(packet_size)}) !=
           daqiri::Status::SUCCESS) {
         failed = true;
         break;
@@ -128,10 +127,9 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg, daqiri::bench::TokenB
     }
 
     if (failed) {
-      daqiri::free_all_packets_and_burst_tx(msg);
       continue;
     }
-    if (daqiri::send_tx_burst(msg) == daqiri::Status::SUCCESS) {
+    if (msg.send() == daqiri::Status::SUCCESS) {
       stats.packets += static_cast<uint64_t>(num_pkts);
       const uint64_t burst_bytes = static_cast<uint64_t>(num_pkts) * packet_size;
       stats.bytes += burst_bytes;
@@ -148,18 +146,13 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg, daqiri::bench::TokenB
 
 int main(int argc, char** argv) {
   if (argc < 2) {
-    std::cerr << "Usage: " << argv[0]
-              << " <config.yaml> [--seconds N] [--target-gbps G]"
-                 " [--managed-rx]\n";
+    std::cerr << "Usage: " << argv[0] << " <config.yaml> [--seconds N] [--target-gbps G]\n";
     return 1;
   }
 
   const auto prometheus_metrics = daqiri::bench::grafana::init_prometheus_metrics_from_env();
   const int run_seconds = daqiri::bench::parse_run_seconds(argc, argv);
   const double target_gbps = daqiri::bench::parse_target_gbps(argc, argv);
-  const bool managed_rx = std::find_if(argv + 2, argv + argc, [](const char* arg) {
-                            return std::string(arg) == "--managed-rx";
-                          }) != argv + argc;
   const auto root = YAML::LoadFile(argv[1]);
 
   std::vector<daqiri::bench::RawBenchRxConfig> rx_configs;
@@ -189,11 +182,7 @@ int main(int argc, char** argv) {
 
   rx_threads.reserve(rx_configs.size());
   for (const auto& cfg : rx_configs) {
-    if (managed_rx) {
-      rx_threads.emplace_back(daqiri::bench::rx_count_worker_managed, cfg, std::ref(stop));
-    } else {
-      rx_threads.emplace_back(daqiri::bench::rx_count_worker, cfg, std::ref(stop));
-    }
+    rx_threads.emplace_back(daqiri::bench::rx_count_worker, cfg, std::ref(stop));
   }
   tx_threads.reserve(tx_configs.size());
   for (const auto& cfg : tx_configs) {

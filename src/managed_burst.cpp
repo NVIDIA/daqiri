@@ -42,6 +42,7 @@ struct DeferredRx {
   cudaEvent_t event = nullptr;
   int device = 0;
   uint64_t generation = 0;
+  bool connection_completion = false;
   Clock::time_point queued_at;
 };
 
@@ -94,10 +95,11 @@ bool generation_is_active(uint64_t generation) noexcept {
          runtime().active_generation.load(std::memory_order_acquire) == generation;
 }
 
-void finish_rx_release(BurstParams* burst, uint64_t generation, bool deferred) noexcept {
+void finish_rx_release(BurstParams* burst, uint64_t generation, bool deferred,
+                       bool connection_completion) noexcept {
   auto& state = runtime();
   if (generation_is_active(generation)) {
-    free_all_packets_and_burst_rx(burst);
+    managed_rx_release(burst, connection_completion);
   } else {
     record_lifecycle_error("RX owner outlived the active DAQIRI engine; burst was not returned");
   }
@@ -189,12 +191,13 @@ void deferred_worker() noexcept {
     }
 
     record_deferred_duration(item);
-    finish_rx_release(item.burst, item.generation, true);
+    finish_rx_release(item.burst, item.generation, true, item.connection_completion);
     recycle_event(item.device, item.event);
   }
 }
 
-Status enqueue_deferred_rx(BurstParams* burst, uint64_t generation, cudaStream_t stream) noexcept {
+Status enqueue_deferred_rx(BurstParams* burst, uint64_t generation, bool connection_completion,
+                           cudaStream_t stream) noexcept {
   auto& state = runtime();
   if (!generation_is_active(generation) || state.stopping.load(std::memory_order_acquire)) {
     record_lifecycle_error("cannot defer RX release without an active managed-burst runtime");
@@ -244,7 +247,8 @@ Status enqueue_deferred_rx(BurstParams* burst, uint64_t generation, cudaStream_t
     }
     state.deferred_rx.fetch_add(1, std::memory_order_relaxed);
     state.total_deferred_rx.fetch_add(1, std::memory_order_relaxed);
-    state.pending.push_back(DeferredRx{burst, event, device, generation, Clock::now()});
+    state.pending.push_back(
+        DeferredRx{burst, event, device, generation, connection_completion, Clock::now()});
     if (!state.worker.joinable()) {
       state.worker = std::thread(deferred_worker);
     }
@@ -323,34 +327,39 @@ RxBurst::~RxBurst() {
 
 RxBurst::RxBurst(RxBurst&& other) noexcept
     : burst_(std::exchange(other.burst_, nullptr)),
-      generation_(std::exchange(other.generation_, 0)) {}
+      generation_(std::exchange(other.generation_, 0)),
+      connection_completion_(std::exchange(other.connection_completion_, false)) {}
 
 RxBurst& RxBurst::operator=(RxBurst&& other) noexcept {
   if (this != &other) {
     reset();
     burst_ = std::exchange(other.burst_, nullptr);
     generation_ = std::exchange(other.generation_, 0);
+    connection_completion_ = std::exchange(other.connection_completion_, false);
   }
   return *this;
 }
 
-void RxBurst::adopt(BurstParams* burst, uint64_t generation) noexcept {
+void RxBurst::adopt(BurstParams* burst, uint64_t generation, bool connection_completion) noexcept {
   burst_ = burst;
   generation_ = generation;
+  connection_completion_ = connection_completion;
   note_rx_acquired();
 }
 
 void RxBurst::reset() noexcept {
   BurstParams* burst = std::exchange(burst_, nullptr);
   const uint64_t generation = std::exchange(generation_, 0);
+  const bool connection_completion = std::exchange(connection_completion_, false);
   if (burst != nullptr) {
-    finish_rx_release(burst, generation, false);
+    finish_rx_release(burst, generation, false, connection_completion);
   }
 }
 
 BurstParams* RxBurst::release() noexcept {
   BurstParams* burst = std::exchange(burst_, nullptr);
   generation_ = 0;
+  connection_completion_ = false;
   if (burst != nullptr) {
     runtime().outstanding_rx.fetch_sub(1, std::memory_order_relaxed);
   }
@@ -361,10 +370,11 @@ Status RxBurst::release_on_stream(cudaStream_t stream) noexcept {
   if (burst_ == nullptr) {
     return Status::NULL_PTR;
   }
-  const Status status = enqueue_deferred_rx(burst_, generation_, stream);
+  const Status status = enqueue_deferred_rx(burst_, generation_, connection_completion_, stream);
   if (status == Status::SUCCESS) {
     burst_ = nullptr;
     generation_ = 0;
+    connection_completion_ = false;
   }
   return status;
 }
@@ -449,10 +459,10 @@ Status get_rx_burst(RxBurst* burst, int port, int queue) {
   }
   const uint64_t generation = managed_burst_runtime_generation();
   if (generation == 0) {
-    free_all_packets_and_burst_rx(raw);
+    managed_rx_release(raw, false);
     return Status::INTERNAL_ERROR;
   }
-  burst->adopt(raw, generation);
+  burst->adopt(raw, generation, false);
   return Status::SUCCESS;
 }
 
@@ -473,10 +483,10 @@ Status get_rx_burst(RxBurst* burst, int port) {
   }
   const uint64_t generation = managed_burst_runtime_generation();
   if (generation == 0) {
-    free_all_packets_and_burst_rx(raw);
+    managed_rx_release(raw, false);
     return Status::INTERNAL_ERROR;
   }
-  burst->adopt(raw, generation);
+  burst->adopt(raw, generation, false);
   return Status::SUCCESS;
 }
 
@@ -497,10 +507,10 @@ Status get_rx_burst(RxBurst* burst) {
   }
   const uint64_t generation = managed_burst_runtime_generation();
   if (generation == 0) {
-    free_all_packets_and_burst_rx(raw);
+    managed_rx_release(raw, false);
     return Status::INTERNAL_ERROR;
   }
-  burst->adopt(raw, generation);
+  burst->adopt(raw, generation, false);
   return Status::SUCCESS;
 }
 
@@ -521,10 +531,10 @@ Status get_rx_burst(RxBurst* burst, uintptr_t conn_id, bool server) {
   }
   const uint64_t generation = managed_burst_runtime_generation();
   if (generation == 0) {
-    free_all_packets_and_burst_rx(raw);
+    managed_rx_release(raw, true);
     return Status::INTERNAL_ERROR;
   }
-  burst->adopt(raw, generation);
+  burst->adopt(raw, generation, true);
   return Status::SUCCESS;
 }
 

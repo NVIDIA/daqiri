@@ -120,34 +120,33 @@ void socket_worker(const SocketBenchConfig& cfg, daqiri::bench::TokenBucketPacer
     if (send_done && recv_done) { break; }
 
     if (cfg.send && !send_done) {
-      auto* msg = daqiri::create_tx_burst_params();
-      daqiri::set_header(msg, port, queue, 1, 1);
+      daqiri::TxBurst msg;
+      if (daqiri::create_tx_burst(&msg) != daqiri::Status::SUCCESS) {
+        continue;
+      }
+      daqiri::set_header(msg.get(), port, queue, 1, 1);
 
-      if (daqiri::get_tx_packet_burst(msg) == daqiri::Status::SUCCESS) {
-        auto* payload = reinterpret_cast<uint8_t*>(daqiri::get_packet_ptr(msg, 0));
+      if (daqiri::get_tx_packet_burst(&msg) == daqiri::Status::SUCCESS) {
+        auto* payload = reinterpret_cast<uint8_t*>(daqiri::get_packet_ptr(msg.get(), 0));
         std::memset(payload, static_cast<int>(stats.sent_packets & 0xff), cfg.message_size);
-        daqiri::set_packet_lengths(msg, 0, {cfg.message_size});
+        daqiri::set_packet_lengths(msg.get(), 0, {cfg.message_size});
 
-        daqiri::set_connection_id(msg, conn_id);
+        daqiri::set_connection_id(msg.get(), conn_id);
 
-        if (daqiri::send_tx_burst(msg) == daqiri::Status::SUCCESS) {
+        if (msg.send() == daqiri::Status::SUCCESS) {
           stats.sent_packets++;
           stats.sent_bytes += static_cast<uint64_t>(cfg.message_size);
           pacer.wait_for_bytes(static_cast<size_t>(cfg.message_size), stop);
         }
-      } else {
-        daqiri::free_tx_metadata(msg);
       }
     }
 
     if (cfg.receive && !recv_done) {
-      daqiri::BurstParams* burst = nullptr;
-      if (daqiri::get_rx_burst(&burst, conn_id, cfg.server) == daqiri::Status::SUCCESS &&
-          burst != nullptr) {
-        const uint64_t rx_pkts = static_cast<uint64_t>(daqiri::get_num_packets(burst));
+      daqiri::RxBurst burst;
+      if (daqiri::get_rx_burst(&burst, conn_id, cfg.server) == daqiri::Status::SUCCESS) {
+        const uint64_t rx_pkts = static_cast<uint64_t>(daqiri::get_num_packets(burst.get()));
         stats.received_packets += rx_pkts;
-        stats.received_bytes += daqiri::get_burst_tot_byte(burst);
-        daqiri::free_all_packets_and_burst_rx(burst);
+        stats.received_bytes += daqiri::get_burst_tot_byte(burst.get());
       } else {
         std::this_thread::sleep_for(std::chrono::microseconds(100));
       }

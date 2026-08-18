@@ -326,7 +326,7 @@ after the event completes. The raw-pointer and partial-release APIs remain
 available for applications that need manual ownership.
 
 When to call each `free_*` function is documented in the
-[C++ API Usage page](api-reference/cpp.md#rx-step-3-free-buffers).
+[C++ API Usage page](api-reference/cpp.md#rx-step-3-release-buffers).
 
 ## RX Packet Aggregation and Reorder
 

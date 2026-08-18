@@ -69,6 +69,7 @@ class SocketEngine : public Engine {
   void free_packet(BurstParams* burst, int pkt) override;
   void free_rx_burst(BurstParams* burst) override;
   void free_tx_burst(BurstParams* burst) override;
+  void free_managed_rx_burst(BurstParams* burst, bool connection_completion) override;
   Status set_packet_tx_time(BurstParams* burst, int idx, uint64_t time) override;
 
   void shutdown() override;

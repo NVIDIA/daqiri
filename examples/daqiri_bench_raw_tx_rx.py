@@ -319,17 +319,18 @@ def tx_worker(cfg: RawTxConfig, stop: threading.Event) -> None:
     start = time.monotonic()
 
     while not stop.is_set():
-        burst = daqiri.create_tx_burst_params()
+        status, owner = daqiri.create_tx_burst_managed()
+        if status != daqiri.Status.SUCCESS:
+            continue
+        burst = owner.burst
         daqiri.set_header(burst, port_id, cfg.queue_id, cfg.batch_size, 1)
 
         if not daqiri.is_tx_burst_available(burst):
-            daqiri.free_tx_metadata(burst)
             time.sleep(0.0001)
             continue
 
-        status = daqiri.get_tx_packet_burst(burst)
+        status = owner.allocate_packets()
         if status != daqiri.Status.SUCCESS:
-            daqiri.free_tx_metadata(burst)
             time.sleep(0.0001)
             continue
 
@@ -363,10 +364,9 @@ def tx_worker(cfg: RawTxConfig, stop: threading.Event) -> None:
                 break
 
         if failed:
-            daqiri.free_all_packets_and_burst_tx(burst)
             continue
 
-        status = daqiri.send_tx_burst(burst)
+        status = owner.send()
         if status == daqiri.Status.SUCCESS:
             sent_bursts += 1
             sent_packets += num_pkts
@@ -416,16 +416,16 @@ def rx_worker(cfg: RawRxConfig, stop: threading.Event) -> None:
     while not stop.is_set():
         got_any = False
         for queue_id in queue_ids:
-            status, burst = daqiri.get_rx_burst(port_id, queue_id)
-            if status != daqiri.Status.SUCCESS or burst is None:
+            status, owner = daqiri.get_rx_burst_managed(port_id, queue_id)
+            if status != daqiri.Status.SUCCESS:
                 continue
 
-            got_any = True
-            stats = queue_stats[queue_id]
-            stats["packets"] += daqiri.get_num_packets(burst)
-            stats["bytes"] += daqiri.get_burst_tot_byte(burst)
-            stats["bursts"] += 1
-            daqiri.free_all_packets_and_burst_rx(burst)
+            with owner as burst:
+                got_any = True
+                stats = queue_stats[queue_id]
+                stats["packets"] += daqiri.get_num_packets(burst)
+                stats["bytes"] += daqiri.get_burst_tot_byte(burst)
+                stats["bursts"] += 1
 
         if not got_any:
             time.sleep(0.0001)

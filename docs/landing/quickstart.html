@@ -71,21 +71,20 @@ cmake --install build --prefix /opt/daqiri</pre>
 <span class="cm">// Init from YAML config</span>
 daqiri::<span class="fn">daqiri_init</span>(<span class="str">"config.yaml"</span>);
 
-<span class="cm">// Non-blocking burst receive</span>
-daqiri::<span class="fn">BurstParams</span> *burst;
+<span class="cm">// Non-blocking managed burst receive</span>
+daqiri::<span class="fn">RxBurst</span> owner;
 <span class="kw">auto</span> s = daqiri::<span class="fn">get_rx_burst</span>(
-    &amp;burst, port_id, queue_id);
+    &amp;owner, port_id, queue_id);
 
 <span class="kw">if</span> (s == daqiri::<span class="fn">Status</span>::<span class="nm">SUCCESS</span>) {
+  <span class="kw">auto</span>* burst = owner.<span class="fn">get</span>();
   <span class="kw">int</span> n = daqiri::<span class="fn">get_num_packets</span>(burst);
   <span class="kw">for</span> (<span class="kw">int</span> i = <span class="nm">0</span>; i &lt; n; i++) {
     <span class="kw">void</span>* p = daqiri::<span class="fn">get_packet_ptr</span>(
         burst, i);
     <span class="cm">// process p ...</span>
   }
-  daqiri::<span class="fn">free_all_packets_and_burst_rx</span>(
-      burst);
-}</pre>
+} <span class="cm">// owner returns packets automatically</span></pre>
           </div>
           <div class="gs-code-block">
             <div class="gs-code-hdr"><span class="gs-code-title">Header-Data Split (GPU payload)</span><span class="gs-code-lang">C++</span></div>

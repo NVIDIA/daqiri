@@ -94,10 +94,11 @@ class RxBurst {
   friend Status get_rx_burst(RxBurst* burst);
   friend Status get_rx_burst(RxBurst* burst, uintptr_t conn_id, bool server);
 
-  void adopt(BurstParams* burst, uint64_t generation) noexcept;
+  void adopt(BurstParams* burst, uint64_t generation, bool connection_completion) noexcept;
 
   BurstParams* burst_ = nullptr;
   uint64_t generation_ = 0;
+  bool connection_completion_ = false;
 };
 
 /**

@@ -443,27 +443,27 @@ void tx_worker(PcapTxConfig cfg, std::atomic<bool> *stop) {
   uint64_t packets = 0;
 
   while (!stop->load(std::memory_order_relaxed)) {
-    auto *msg = daqiri::create_tx_burst_params();
-    daqiri::set_header(msg, static_cast<uint16_t>(port_id),
-                       static_cast<uint16_t>(cfg.raw.queue_id),
-                       cfg.raw.batch_size, 1);
+    daqiri::TxBurst msg;
+    if (daqiri::create_tx_burst(&msg) != daqiri::Status::SUCCESS) {
+      continue;
+    }
+    daqiri::set_header(msg.get(), static_cast<uint16_t>(port_id),
+                       static_cast<uint16_t>(cfg.raw.queue_id), cfg.raw.batch_size, 1);
 
-    if (!daqiri::is_tx_burst_available(msg)) {
-      daqiri::free_tx_metadata(msg);
+    if (!daqiri::is_tx_burst_available(msg.get())) {
       std::this_thread::sleep_for(std::chrono::microseconds(100));
       continue;
     }
 
-    if (daqiri::get_tx_packet_burst(msg) != daqiri::Status::SUCCESS) {
-      daqiri::free_tx_metadata(msg);
+    if (daqiri::get_tx_packet_burst(&msg) != daqiri::Status::SUCCESS) {
       continue;
     }
 
-    const int num_packets = daqiri::get_num_packets(msg);
+    const int num_packets = daqiri::get_num_packets(msg.get());
     bool failed = false;
 
     for (int i = 0; i < num_packets; ++i) {
-      auto *dst = daqiri::get_segment_packet_ptr(msg, 0, i);
+      auto* dst = daqiri::get_segment_packet_ptr(msg.get(), 0, i);
       if (initialized_buffers.insert(dst).second) {
         cudaError_t err =
             cudaMemcpy(dst, packet_template.data(), packet_template.size(),
@@ -477,8 +477,7 @@ void tx_worker(PcapTxConfig cfg, std::atomic<bool> *stop) {
       }
 
       if (daqiri::set_packet_lengths(
-              msg, i,
-              {static_cast<int>(cfg.raw.header_size + cfg.raw.payload_size)}) !=
+              msg.get(), i, {static_cast<int>(cfg.raw.header_size + cfg.raw.payload_size)}) !=
           daqiri::Status::SUCCESS) {
         failed = true;
         break;
@@ -486,12 +485,11 @@ void tx_worker(PcapTxConfig cfg, std::atomic<bool> *stop) {
     }
 
     if (failed) {
-      daqiri::free_all_packets_and_burst_tx(msg);
       stop->store(true, std::memory_order_relaxed);
       break;
     }
 
-    if (daqiri::send_tx_burst(msg) != daqiri::Status::SUCCESS) {
+    if (msg.send() != daqiri::Status::SUCCESS) {
       std::cerr << "send_tx_burst failed\n";
       stop->store(true, std::memory_order_relaxed);
       break;
@@ -530,17 +528,14 @@ void rx_pcap_loop(const daqiri::bench::RawBenchRxConfig &rx_cfg,
     bool got_work = false;
     int num_queues = daqiri::get_num_rx_queues(port_id);
     for (int queue_id = 0; queue_id < num_queues; ++queue_id) {
-      daqiri::BurstParams *burst = nullptr;
-      if (daqiri::get_rx_burst(&burst, port_id, queue_id) !=
-              daqiri::Status::SUCCESS ||
-          burst == nullptr) {
+      daqiri::RxBurst burst;
+      if (daqiri::get_rx_burst(&burst, port_id, queue_id) != daqiri::Status::SUCCESS) {
         continue;
       }
       got_work = true;
-      if (!writer->write_burst(burst)) {
+      if (!writer->write_burst(burst.get())) {
         stop->store(true, std::memory_order_relaxed);
       }
-      daqiri::free_all_packets_and_burst_rx(burst);
     }
 
     auto now = std::chrono::steady_clock::now();

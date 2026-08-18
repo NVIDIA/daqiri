@@ -430,6 +430,18 @@ void SocketEngine::free_tx_burst(BurstParams* burst) {
   delete burst;
 }
 
+void SocketEngine::free_managed_rx_burst(BurstParams* burst, bool connection_completion) {
+  if (connection_completion && is_roce_protocol()) {
+#if DAQIRI_ENGINE_RDMA
+    if (roce_engine_ != nullptr) {
+      roce_engine_->free_tx_burst(burst);
+    }
+#endif
+    return;
+  }
+  Engine::free_managed_rx_burst(burst, connection_completion);
+}
+
 Status SocketEngine::set_packet_tx_time(BurstParams* burst, int idx, uint64_t time) {
   return Status::NOT_SUPPORTED;
 }

@@ -283,16 +283,11 @@ class DaqiriRxOp : public holoscan::Operator {
                holoscan::ExecutionContext&) override {
     // Dequeue one RX burst from queue 0. With a reorder plan active, completed
     // reorder batches are delivered as bursts flagged DAQIRI_BURST_FLAG_REORDERED.
-    daqiri::BurstParams* burst = nullptr;
-    if (daqiri::get_rx_burst(&burst, port_id_, 0) != daqiri::Status::SUCCESS ||
-        burst == nullptr) {
+    daqiri::RxBurst burst_owner;
+    if (daqiri::get_rx_burst(&burst_owner, port_id_, 0) != daqiri::Status::SUCCESS) {
       return;  // Nothing ready this tick.
     }
-    auto burst_deleter = [](daqiri::BurstParams* owned_burst) {
-      daqiri::free_all_packets_and_burst_rx(owned_burst);
-    };
-    std::unique_ptr<daqiri::BurstParams, decltype(burst_deleter)> burst_guard(
-        burst, burst_deleter);
+    daqiri::BurstParams* burst = burst_owner.get();
 
     // Skip anything that is not a finished reorder batch (e.g. raw passthrough
     // bursts). The flag lives in the burst header.
@@ -322,8 +317,7 @@ class DaqiriRxOp : public holoscan::Operator {
     // Wrap that device buffer as a tensor and emit it zero-copy. The tensor takes
     // ownership of the burst and frees it via the DLPack deleter once downstream is
     // done — so we do NOT free the burst here.
-    auto tensor = wrap_reorder_output_as_tensor(burst_guard.get(), batch, info);
-    burst_guard.release();  // Tensor's DLPack deleter now owns the burst.
+    auto tensor = wrap_reorder_output_as_tensor(std::move(burst_owner), batch, info);
 
     holoscan::TensorMap out_message;
     out_message["rx_tensor"] = tensor;
@@ -333,7 +327,7 @@ class DaqiriRxOp : public holoscan::Operator {
  private:
   // Defined in the Tensor Emission section below.
   std::shared_ptr<holoscan::Tensor> wrap_reorder_output_as_tensor(
-      daqiri::BurstParams* burst, void* batch,
+      daqiri::RxBurst burst_owner, void* batch,
       const daqiri::ReorderBurstInfo& info);
 
   // Parameters populated from the YAML `daqiri_rx` block.
@@ -364,11 +358,11 @@ and are a useful starting point.
 
 The tensor emitted above is a zero-copy view of DAQIRI's `reorder_gpu` buffer, so the
 burst must stay alive until every downstream consumer is finished. That is why the
-burst is freed in the tensor's release callback rather than in `compute()`:
-`daqiri::free_all_packets_and_burst_rx(burst)` returns both the burst metadata and its
-packet buffers to the pool. Freeing only the burst metadata, or freeing in `compute()`
+`RxBurst` owner is destroyed in the tensor's release callback rather than in `compute()`.
+Destroying it returns both the burst metadata and its packet buffers to the pool.
+Releasing in `compute()`
 while a downstream operator still reads the tensor, leads to drops or use-after-free.
-See [RX Step 3 - Free buffers](../api-reference/cpp.md#rx-step-3-free-buffers) for the
+See [RX Step 3 - Release buffers](../api-reference/cpp.md#rx-step-3-release-buffers) for the
 full cleanup API.
 
 ## Tensor Emission
@@ -381,7 +375,7 @@ from it (`DLPack` types come from `dlpack/dlpack.h`, bundled with the Holoscan S
 
 ```cpp
 std::shared_ptr<holoscan::Tensor> DaqiriRxOp::wrap_reorder_output_as_tensor(
-    daqiri::BurstParams* burst, void* batch,
+    daqiri::RxBurst burst_owner, void* batch,
     const daqiri::ReorderBurstInfo& info) {
   // Reordered, sequence-ordered, fp32 layout: one row per sequence slot, one column
   // per payload element. shape must outlive the tensor, so the DLManagedTensor owns
@@ -403,10 +397,9 @@ std::shared_ptr<holoscan::Tensor> DaqiriRxOp::wrap_reorder_output_as_tensor(
   // The deleter is the ownership hook: it runs when the last downstream consumer
   // drops the tensor. Because the tensor is a zero-copy view of DAQIRI's buffer, this
   // is where the burst (and its packet buffers) is returned to DAQIRI.
-  dl->manager_ctx = burst;
+  dl->manager_ctx = new daqiri::RxBurst(std::move(burst_owner));
   dl->deleter = [](DLManagedTensor* self) {
-    daqiri::free_all_packets_and_burst_rx(
-        static_cast<daqiri::BurstParams*>(self->manager_ctx));
+    delete static_cast<daqiri::RxBurst*>(self->manager_ctx);
     delete[] self->dl_tensor.shape;
     delete self;
   };

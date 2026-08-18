@@ -78,6 +78,11 @@ class Engine {
   virtual void free_packet(BurstParams* burst, int pkt) = 0;
   virtual void free_rx_burst(BurstParams* burst) = 0;
   virtual void free_tx_burst(BurstParams* burst) = 0;
+  virtual void free_managed_rx_burst(BurstParams* burst, bool connection_completion) {
+    (void)connection_completion;
+    free_all_packets(burst);
+    free_rx_burst(burst);
+  }
   virtual Status set_packet_tx_time(BurstParams* burst, int idx, uint64_t time) = 0;
   virtual void shutdown() = 0;
   virtual void print_stats() = 0;

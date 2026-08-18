@@ -149,6 +149,13 @@ class RdmaEngine : public Engine {
   }
   void free_rx_burst(BurstParams* burst) override;
   void free_tx_burst(BurstParams* burst) override;
+  void free_managed_rx_burst(BurstParams* burst, bool connection_completion) override {
+    if (connection_completion) {
+      free_tx_burst(burst);
+    } else {
+      Engine::free_managed_rx_burst(burst, false);
+    }
+  }
 
   Status get_rx_burst(BurstParams** burst, int port, int q) override {
     return Status::NOT_SUPPORTED;

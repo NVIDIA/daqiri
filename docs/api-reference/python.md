@@ -151,22 +151,23 @@ if status != daqiri.Status.SUCCESS:
 
 ### RX Step 1 — Get a burst
 
-`get_rx_burst()` is non-blocking. It returns `(Status, BurstParams | None)`.
+`get_rx_burst_managed()` is non-blocking. It returns `(Status, RxBurst)`.
 `Status.SUCCESS` means a burst is ready; `Status.NOT_READY` means no burst is
 ready yet. Other statuses indicate an error.
 
 ```python
 port_id = daqiri.get_port_id("rx_port")
-status, burst = daqiri.get_rx_burst(port_id, 0)
+status, owner = daqiri.get_rx_burst_managed(port_id, 0)
+burst = owner.burst if status == daqiri.Status.SUCCESS else None
 ```
 
 Available overloads:
 
 ```python
-status, burst = daqiri.get_rx_burst(port_id, queue_id)
-status, burst = daqiri.get_rx_burst(port_id)             # any queue on a port
-status, burst = daqiri.get_rx_burst()                    # any queue on any port
-status, burst = daqiri.get_rx_burst_for_connection(conn_id, server=True)
+status, owner = daqiri.get_rx_burst_managed(port_id, queue_id)
+status, owner = daqiri.get_rx_burst_managed(port_id)   # any queue on a port
+status, owner = daqiri.get_rx_burst_managed()          # any queue on any port
+status, owner = daqiri.get_rx_burst_for_connection_managed(conn_id, server=True)
 ```
 
 ### RX Step 2 — Access packet data
@@ -204,7 +205,7 @@ with `rx.hardware_timestamps: true` and the NIC supports
 [C++ API Usage → Receiving Packets](cpp.md#receiving-packets) for the clock
 semantics; the Python wrapper exposes the same timestamps in nanoseconds.
 
-### RX Step 3 — Free buffers
+### RX Step 3 — Release buffers
 
 The recommended Python path is a managed owner and context manager:
 
@@ -221,23 +222,6 @@ The `with` block releases the burst even if processing raises an exception.
 `with` block and call `owner.release_on_stream(stream_address)` after enqueuing
 the work. On success the owner becomes closed and DAQIRI returns the buffers
 after its stream event completes; on failure the owner retains ownership.
-
-The original manual release API remains available:
-
-When you are done with a burst, free it:
-
-```python
-daqiri.free_all_packets_and_burst_rx(burst)
-```
-
-Or free incrementally:
-
-```python
-daqiri.free_packet(burst, idx)               # one packet (all segments)
-daqiri.free_packet_segment(burst, seg, idx)  # one segment of one packet
-daqiri.free_all_segment_packets(burst, seg)  # one segment across the burst
-daqiri.free_rx_burst(burst)                  # metadata only
-```
 
 ### Pointer and Buffer Semantics
 
@@ -286,16 +270,14 @@ packets in the aggregate, while `burst.hdr.hdr.num_pkts` remains `1` because the
 consumer receives one aggregate buffer.
 
 ```python
-status, burst = daqiri.get_rx_burst()
-if status == daqiri.Status.SUCCESS and burst is not None:
-    try:
+status, owner = daqiri.get_rx_burst_managed()
+if status == daqiri.Status.SUCCESS:
+    with owner as burst:
         if burst.hdr.hdr.burst_flags & daqiri.DAQIRI_BURST_FLAG_REORDERED:
             daqiri.synchronize_burst_event(burst)
             status, info = daqiri.get_reorder_burst_info(burst)
             if status == daqiri.Status.SUCCESS:
                 print(info.batch_id, info.aggregate_len)
-    finally:
-        daqiri.free_all_packets_and_burst_rx(burst)
 ```
 
 `synchronize_burst_event()` waits for the CUDA event attached to the burst, if
@@ -305,7 +287,8 @@ any.
 
 ### TX Step 1 — Allocate a burst
 
-Managed TX ownership is available when exception-safe cleanup is preferred:
+TX allocation uses a managed owner so failures release any resources acquired
+so far:
 
 ```python
 status, owner = daqiri.create_tx_burst_managed()
@@ -318,25 +301,6 @@ if status == daqiri.Status.SUCCESS:
 Call `owner.send()` after filling the packets. The owner becomes closed when
 the engine consumed the burst; otherwise it retains resources for automatic
 cleanup. `owner.close()` is safe to call repeatedly.
-
-The original manual allocation path is:
-
-```python
-port_id = daqiri.get_port_id("tx_port")
-batch_size = 1024
-
-burst = daqiri.create_tx_burst_params()
-daqiri.set_header(burst, port_id, 0, batch_size, 1)
-
-if not daqiri.is_tx_burst_available(burst):
-    daqiri.free_tx_metadata(burst)
-    # retry later
-else:
-    status = daqiri.get_tx_packet_burst(burst)
-    if status != daqiri.Status.SUCCESS:
-        daqiri.free_tx_metadata(burst)
-        # retry later
-```
 
 ### TX Step 2 — Fill packets
 
@@ -369,12 +333,11 @@ for idx in range(daqiri.get_num_packets(burst)):
 ### TX Step 3 — Send
 
 ```python
-status = daqiri.send_tx_burst(burst)
-# Do not free `burst` after a SUCCESS or NO_SPACE_AVAILABLE return — see the ownership note below.
+status = owner.send()
 ```
 
-`send_tx_burst()` takes ownership of the burst on success and on a full-ring
-failure: on `SUCCESS` the worker thread owns it, and on `NO_SPACE_AVAILABLE` (the
+`owner.send()` becomes empty when the engine takes ownership: on `SUCCESS` the
+worker thread owns it, and on `NO_SPACE_AVAILABLE` (the
 TX ring is full) it has already freed the packets and the burst internally. In
 both cases the application must **not** free or otherwise access the burst
 afterwards. `NO_SPACE_AVAILABLE` is the only failure a correctly-configured
@@ -420,24 +383,20 @@ status, conn_id = daqiri.socket_connect_to_server("192.0.2.10", 5000)
 if status == daqiri.Status.SUCCESS:
     status, port, queue = daqiri.socket_get_port_queue(conn_id)
 
-    status, rx_burst = daqiri.get_rx_burst(port, queue)
-    if status == daqiri.Status.SUCCESS and rx_burst is not None:
-        try:
+    status, rx_owner = daqiri.get_rx_burst_managed(port, queue)
+    if status == daqiri.Status.SUCCESS:
+        with rx_owner as rx_burst:
             for idx in range(daqiri.get_num_packets(rx_burst)):
                 status, data = daqiri.get_packet_bytes(rx_burst, idx)
-        finally:
-            daqiri.free_all_packets_and_burst_rx(rx_burst)
 
-    tx_burst = daqiri.create_tx_burst_params()
-    daqiri.set_header(tx_burst, port, queue, 1, 1)
-    if daqiri.get_tx_packet_burst(tx_burst) == daqiri.Status.SUCCESS:
+    status, tx_owner = daqiri.create_tx_burst_managed()
+    if status == daqiri.Status.SUCCESS:
+        tx_burst = tx_owner.burst
+        daqiri.set_header(tx_burst, port, queue, 1, 1)
+    if status == daqiri.Status.SUCCESS and tx_owner.allocate_packets() == daqiri.Status.SUCCESS:
         daqiri.copy_buffer_to_packet(tx_burst, 0, b"hello")
         daqiri.set_packet_lengths(tx_burst, 0, [5])
-        # send_tx_burst() takes ownership of tx_burst on success and on a
-        # full-ring failure, so do not free it here.
-        daqiri.send_tx_burst(tx_burst)
-    else:
-        daqiri.free_tx_metadata(tx_burst)
+        tx_owner.send()
 ```
 
 RDMA follows the same tuple-returning style:
@@ -445,16 +404,18 @@ RDMA follows the same tuple-returning style:
 ```python
 status, conn_id = daqiri.rdma_connect_to_server("192.0.2.10", 5000)
 if status == daqiri.Status.SUCCESS:
-    burst = daqiri.create_tx_burst_params()
-    daqiri.rdma_set_header(
-        burst,
-        daqiri.RDMAOpCode.SEND,
-        conn_id,
-        False,
-        1,
-        0,
-        "TX_GPU",
-    )
+    status, owner = daqiri.create_tx_burst_managed()
+    if status == daqiri.Status.SUCCESS:
+        burst = owner.burst
+        daqiri.rdma_set_header(
+            burst,
+            daqiri.RDMAOpCode.SEND,
+            conn_id,
+            False,
+            1,
+            0,
+            "TX_GPU",
+        )
 ```
 
 Look up server-side connection IDs:

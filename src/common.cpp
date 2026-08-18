@@ -393,6 +393,12 @@ bool managed_tx_send_consumed(Status status) noexcept {
   return g_daqiri_engine->tx_send_consumed(status);
 }
 
+void managed_rx_release(BurstParams* burst, bool connection_completion) noexcept {
+  if (g_daqiri_engine != nullptr) {
+    g_daqiri_engine->free_managed_rx_burst(burst, connection_completion);
+  }
+}
+
 Status get_rx_burst(BurstParams** burst, int port, int q) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
   return g_daqiri_engine->get_rx_burst(burst, port, q);

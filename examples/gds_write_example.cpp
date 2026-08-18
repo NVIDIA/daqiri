@@ -128,25 +128,25 @@ bool fill_and_send_one_burst(const daqiri::bench::RawBenchTxConfig &cfg,
   const auto packet_size =
       static_cast<size_t>(cfg.header_size) + cfg.payload_size;
 
-  auto *msg = daqiri::create_tx_burst_params();
-  daqiri::set_header(msg, static_cast<uint16_t>(port_id),
-                     static_cast<uint16_t>(cfg.queue_id), cfg.batch_size, 1);
+  daqiri::TxBurst msg;
+  if (daqiri::create_tx_burst(&msg) != daqiri::Status::SUCCESS) {
+    return false;
+  }
+  daqiri::set_header(msg.get(), static_cast<uint16_t>(port_id), static_cast<uint16_t>(cfg.queue_id),
+                     cfg.batch_size, 1);
 
-  if (!daqiri::is_tx_burst_available(msg)) {
+  if (!daqiri::is_tx_burst_available(msg.get())) {
     std::cerr << "No TX burst is available\n";
-    daqiri::free_tx_metadata(msg);
     return false;
   }
 
-  if (daqiri::get_tx_packet_burst(msg) != daqiri::Status::SUCCESS) {
+  if (daqiri::get_tx_packet_burst(&msg) != daqiri::Status::SUCCESS) {
     std::cerr << "Failed to allocate TX packet burst\n";
-    daqiri::free_tx_metadata(msg);
     return false;
   }
 
   bool failed = false;
-  for (int pkt = 0; pkt < static_cast<int>(daqiri::get_num_packets(msg));
-       ++pkt) {
+  for (int pkt = 0; pkt < static_cast<int>(daqiri::get_num_packets(msg.get())); ++pkt) {
     std::vector<uint8_t> packet(packet_size, 0);
     daqiri::bench::populate_udp_ipv4_headers(
         packet.data(), cfg.header_size, cfg.payload_size, eth_src, eth_dst,
@@ -161,11 +161,9 @@ bool fill_and_send_one_burst(const daqiri::bench::RawBenchTxConfig &cfg,
     }
     daqiri::bench::finalize_udp_ipv4_checksums(packet.data());
 
-    void *pkt_buf = daqiri::get_segment_packet_ptr(msg, 0, pkt);
-    if (pkt_buf == nullptr ||
-        !copy_packet_to_burst_buffer(pkt_buf, packet.data(), packet.size()) ||
-        daqiri::set_packet_lengths(msg, pkt,
-                                   {static_cast<int>(packet.size())}) !=
+    void* pkt_buf = daqiri::get_segment_packet_ptr(msg.get(), 0, pkt);
+    if (pkt_buf == nullptr || !copy_packet_to_burst_buffer(pkt_buf, packet.data(), packet.size()) ||
+        daqiri::set_packet_lengths(msg.get(), pkt, {static_cast<int>(packet.size())}) !=
             daqiri::Status::SUCCESS) {
       failed = true;
       break;
@@ -174,14 +172,10 @@ bool fill_and_send_one_burst(const daqiri::bench::RawBenchTxConfig &cfg,
 
   if (failed) {
     std::cerr << "Failed to populate TX burst\n";
-    daqiri::free_all_packets_and_burst_tx(msg);
     return false;
   }
 
-  if (daqiri::send_tx_burst(msg) != daqiri::Status::SUCCESS) {
-    // send_tx_burst() takes ownership of the burst: on success the TX worker
-    // owns it, and on a full-ring failure it has already freed the packets and
-    // burst. The caller must not free or otherwise touch `msg` afterwards.
+  if (msg.send() != daqiri::Status::SUCCESS) {
     std::cerr << "Failed to send TX burst\n";
     return false;
   }
@@ -189,13 +183,11 @@ bool fill_and_send_one_burst(const daqiri::bench::RawBenchTxConfig &cfg,
   return true;
 }
 
-daqiri::BurstParams *
-wait_for_rx_burst(const daqiri::bench::RawBenchRxConfig &cfg,
-                  uint64_t timeout_ms) {
+daqiri::RxBurst wait_for_rx_burst(const daqiri::bench::RawBenchRxConfig& cfg, uint64_t timeout_ms) {
   const int port_id = daqiri::get_port_id(cfg.interface_name);
   if (port_id < 0) {
     std::cerr << "Invalid RX interface_name: " << cfg.interface_name << "\n";
-    return nullptr;
+    return {};
   }
 
   const auto deadline =
@@ -204,16 +196,15 @@ wait_for_rx_burst(const daqiri::bench::RawBenchRxConfig &cfg,
     const auto num_rx_queues =
         static_cast<int>(daqiri::get_num_rx_queues(port_id));
     for (int q = 0; q < num_rx_queues; ++q) {
-      daqiri::BurstParams *burst = nullptr;
-      if (daqiri::get_rx_burst(&burst, port_id, q) == daqiri::Status::SUCCESS &&
-          burst != nullptr) {
+      daqiri::RxBurst burst;
+      if (daqiri::get_rx_burst(&burst, port_id, q) == daqiri::Status::SUCCESS) {
         return burst;
       }
     }
     std::this_thread::sleep_for(std::chrono::microseconds(100));
   }
 
-  return nullptr;
+  return {};
 }
 
 daqiri::Status write_burst_sync(daqiri::BurstParams *burst,
@@ -271,16 +262,14 @@ bool run_one_capture(const daqiri::bench::RawBenchTxConfig &tx_cfg,
                                                   "bench_rx")) {
     return false;
   }
-  daqiri::BurstParams *rx_burst = wait_for_rx_burst(rx_cfg, cli.timeout_ms);
-  if (rx_burst == nullptr) {
+  daqiri::RxBurst rx_burst = wait_for_rx_burst(rx_cfg, cli.timeout_ms);
+  if (!rx_burst) {
     std::cerr << "Timed out waiting for RX burst\n";
     return false;
   }
 
-  const auto write_status = async_write
-                                ? write_burst_async(rx_burst, cli, prefix)
-                                : write_burst_sync(rx_burst, cli, prefix);
-  daqiri::free_all_packets_and_burst_rx(rx_burst);
+  const auto write_status = async_write ? write_burst_async(rx_burst.get(), cli, prefix)
+                                        : write_burst_sync(rx_burst.get(), cli, prefix);
 
   if (write_status != daqiri::Status::SUCCESS) {
     std::cerr << (async_write ? "async" : "sync")

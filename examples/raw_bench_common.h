@@ -137,6 +137,5 @@ void wait_for_stop(int run_seconds, std::atomic<bool>& stop);
 void print_queue_stats(const char* direction, const std::string& interface_name, int queue_id,
                        const RawBenchQueueStats& stats, double seconds);
 void rx_count_worker(const RawBenchRxConfig& cfg, std::atomic<bool>& stop);
-void rx_count_worker_managed(const RawBenchRxConfig& cfg, std::atomic<bool>& stop);
 
 }  // namespace daqiri::bench

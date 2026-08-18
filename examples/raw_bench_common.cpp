@@ -522,8 +522,7 @@ void print_queue_stats(const char* direction, const std::string& interface_name,
             << " bursts=" << stats.bursts << " seconds=" << seconds << std::endl;
 }
 
-template <bool Managed>
-void rx_count_worker_impl(const RawBenchRxConfig& cfg, std::atomic<bool>& stop) {
+void rx_count_worker(const RawBenchRxConfig& cfg, std::atomic<bool>& stop) {
   if (!set_current_thread_affinity(cfg.cpu_core, "bench_rx")) {
     stop.store(true);
     return;
@@ -558,26 +557,15 @@ void rx_count_worker_impl(const RawBenchRxConfig& cfg, std::atomic<bool>& stop) 
   while (!stop.load()) {
     bool got_any = false;
     for (int q : queue_ids) {
-      daqiri::RxBurst managed_burst;
-      daqiri::BurstParams* burst = nullptr;
-      daqiri::Status status = daqiri::Status::NOT_READY;
-      if constexpr (Managed) {
-        status = daqiri::get_rx_burst(&managed_burst, port_id, q);
-        burst = managed_burst.get();
-      } else {
-        status = daqiri::get_rx_burst(&burst, port_id, q);
-      }
-      if (status != daqiri::Status::SUCCESS || burst == nullptr) {
+      daqiri::RxBurst burst;
+      if (daqiri::get_rx_burst(&burst, port_id, q) != daqiri::Status::SUCCESS) {
         continue;
       }
       got_any = true;
       auto& stats = queue_stats[static_cast<size_t>(q)];
-      stats.packets += static_cast<uint64_t>(daqiri::get_num_packets(burst));
-      stats.bytes += daqiri::get_burst_tot_byte(burst);
+      stats.packets += static_cast<uint64_t>(daqiri::get_num_packets(burst.get()));
+      stats.bytes += daqiri::get_burst_tot_byte(burst.get());
       ++stats.bursts;
-      if constexpr (!Managed) {
-        daqiri::free_all_packets_and_burst_rx(burst);
-      }
     }
     if (!got_any) {
       std::this_thread::sleep_for(std::chrono::microseconds(100));
@@ -597,14 +585,6 @@ void rx_count_worker_impl(const RawBenchRxConfig& cfg, std::atomic<bool>& stop) 
   if (queue_ids.size() > 1) {
     print_queue_stats("RX", cfg.interface_name, -1, total, secs);
   }
-}
-
-void rx_count_worker(const RawBenchRxConfig& cfg, std::atomic<bool>& stop) {
-  rx_count_worker_impl<false>(cfg, stop);
-}
-
-void rx_count_worker_managed(const RawBenchRxConfig& cfg, std::atomic<bool>& stop) {
-  rx_count_worker_impl<true>(cfg, stop);
 }
 
 }  // namespace daqiri::bench
