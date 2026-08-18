@@ -131,6 +131,22 @@ std::string describe_other_cuda_devices(int selected_ordinal) {
   return out;
 }
 
+// Guards every fallback to the legacy nvidia_peermem registration path. Without that module
+// loaded, the rte_extmem_register() the callers are about to attempt can still succeed, and the
+// real failure only surfaces later in map_memory_regions() as a bare rte_dev_dma_map "Invalid
+// argument" that names nothing (issue #242). Returns false when there is no usable path left.
+bool peermem_fallback_ok(const MemoryRegionConfig& mr, const char* why) {
+  if (nvidia_peermem_loaded()) {
+    return true;
+  }
+  DAQIRI_LOG_CRITICAL(
+      "Memory region '{}' requests kind: device on CUDA device {}, but {}, and the "
+      "nvidia_peermem module is not loaded -- there is no usable GPUDirect path for this "
+      "device. {}.",
+      mr.name_, describe_cuda_device(mr.affinity_), why, describe_other_cuda_devices(mr.affinity_));
+  return false;
+}
+
 }  // namespace
 
 Engine::HugepageEstimate Engine::estimate_required_hugepages() const {
@@ -386,13 +402,7 @@ Status Engine::register_memory_regions() {
         // and then fail several functions later in map_memory_regions() as a bare
         // rte_dev_dma_map "Invalid argument", which hides the real cause. Fail here instead,
         // naming the device that was selected (issue #242).
-        if (!nvidia_peermem_loaded()) {
-          DAQIRI_LOG_CRITICAL(
-              "Memory region '{}' requests kind: device on CUDA device {}, which cannot export "
-              "a dma-buf, and the nvidia_peermem module is not loaded -- there is no usable "
-              "GPUDirect path for this device. {}.",
-              mr.name_, describe_cuda_device(mr.affinity_),
-              describe_other_cuda_devices(mr.affinity_));
+        if (!peermem_fallback_ok(mr, "it cannot export a dma-buf")) {
           return Status::NULL_PTR;
         }
         DAQIRI_LOG_WARN(
@@ -428,9 +438,11 @@ Status Engine::register_memory_regions() {
           DAQIRI_LOG_CRITICAL(
               "cuMemGetHandleForAddressRange failed for memory region '{}' on CUDA device {}: "
               "{}. CUDA DMA-BUF export requires Linux kernel 5.12 or newer and the NVIDIA open "
-              "kernel driver. Falling back to peermem (loaded: {}).",
-              mr.name_, describe_cuda_device(mr.affinity_), err_str ? err_str : "?",
-              nvidia_peermem_loaded());
+              "kernel driver.",
+              mr.name_, describe_cuda_device(mr.affinity_), err_str ? err_str : "?");
+          if (!peermem_fallback_ok(mr, "its dma-buf export failed")) {
+            return Status::NULL_PTR;
+          }
           // GPUs have the largest page size vs CPUs, so just use that
           ret = rte_extmem_register(ext_mem->buf_ptr, ext_mem->buf_len, NULL, ext_mem->buf_iova,
                                     GPU_PAGE_SIZE);
@@ -449,6 +461,9 @@ Status Engine::register_memory_regions() {
               "registration",
               rte_version());
           close(dmabuf_fd);
+          if (!peermem_fallback_ok(mr, "this DPDK build has no rte_extmem_register_dmabuf")) {
+            return Status::NULL_PTR;
+          }
           ret = rte_extmem_register(ext_mem->buf_ptr, ext_mem->buf_len, NULL, ext_mem->buf_iova,
                                     GPU_PAGE_SIZE);
 #endif
