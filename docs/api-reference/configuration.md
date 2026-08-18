@@ -76,10 +76,24 @@ and their `kind` determines the receive mode (CPU-only, header-data split, or ba
   - values: `local`, `rdma_read`, `rdma_write`
 - **`num_bufs`**: Number of buffers in this region. Higher values give more processing
   headroom but consume more memory (GPU BAR1 for `device`). Too low risks dropped packets
-  on RX or higher latency on TX. Rule of thumb: 3x-5x `batch_size`. For Raw Ethernet
-  (`stream_type: "raw"`), `num_bufs` below 1.5x the NIC ring size deadlocks the worker;
-  `daqiri_init` auto-bumps such MRs to 3x the ring (24576 with the default 8192) and
-  logs a `WARN`.
+  on RX or a stalled TX path. Rule of thumb: 3x-5x `batch_size`.
+
+    For Raw Ethernet (`stream_type: "raw"`), a queue-backed region has to cover the NIC
+    descriptor ring **and** the TX burst headroom at the same time, because up to `ring`
+    buffers sit in the ring while the TX path still insists on `2 x batch_size` free before it
+    will accept another burst. The floor is therefore:
+
+    ```
+    num_bufs >= max(1.5 x ring, ring + 2 x batch_size)
+    ```
+
+    Below it, TX stalls outright and the RX refill path starves. `daqiri_init` auto-bumps such
+    regions to `max(3 x ring, ring + 4 x batch_size)` and logs a `WARN`; `ring + 4 x
+    batch_size` is the smallest size measured free of `rx_mbuf_allocation_errors` at line rate.
+    With the default 8192-deep ring and `batch_size: 10240` that means a floor of 28672 and a
+    bump target of 49152 (the shipped example configs use 51200). A region that clears the
+    floor but sits under the bump target still works and is left alone, with an `INFO` noting
+    that nonzero `rx_mbuf_allocation_errors` are expected at line rate.
   - type: `integer`
 - **`buf_size`**: Size of each buffer in bytes. Should match the expected packet size, or
   the segment size when using header-data split.

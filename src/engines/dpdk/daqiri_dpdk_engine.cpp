@@ -1818,32 +1818,71 @@ void* DpdkEngine::alloc_huge(size_t bytes, int numa, AllocRegion::Deallocator* d
 }
 
 void DpdkEngine::adjust_memory_regions() {
-  // num_bufs smaller than ~1.5x the NIC descriptor ring deadlock the worker once the ring
-  // fills (the ring holds every buffer in the pool with no replacement available, so the
-  // next rte_pktmbuf_alloc blocks). Bump such MRs to 3x the ring size up-front -- this runs
-  // before allocate_memory_regions(), so the underlying GPU/CPU buffer is sized correctly.
-  const uint32_t ring_size          = std::max(default_num_rx_desc, default_num_tx_desc);
-  const uint32_t deadlock_threshold = (ring_size * 3) / 2;  // 1.5x ring size
-  const uint32_t bumped_num_bufs    = ring_size * 3;        // 3x ring size
+  // A queue-backed mbuf pool has to cover two independent demands at the same time:
+  //
+  //   1. Worker refill headroom. The NIC descriptor ring can hold `ring_size` mbufs at once.
+  //      A pool barely larger than the ring leaves the refill path nothing to hand the NIC,
+  //      so rte_pktmbuf_alloc starts failing (rx_mbuf_allocation_errors) and eventually the
+  //      ring runs dry.
+  //   2. TX burst headroom. is_tx_burst_available() refuses a burst unless the pool still has
+  //      2x batch_size buffers free, *on top of* whatever the ring is holding. Miss this and
+  //      TX wedges permanently at bursts=0 with no error at all -- indistinguishable from a
+  //      dead link (see validate_config(), which now rejects that case up front).
+  //
+  // The old rule only modelled (1), as a flat 1.5x/3x of the ring, so a large batch_size could
+  // satisfy it and still deadlock: at ring=8192, batch=10240 it bumped to 3x ring = 24576,
+  // which is *below* the 28672 that (2) requires. Take the max of both instead.
+  //
+  // Constants measured on ConnectX-7 at 8 KB frames, ring=8192, batch=10240 (issue #242):
+  //   26624 (< ring + 2x batch) wedges TX at bursts=1
+  //   28672 (= ring + 2x batch) runs, but still logs 1.4e9 rx_mbuf_allocation_errors
+  //   49152 (= ring + 4x batch) is the first value with zero alloc errors and zero drops
+  // so the floor is ring + 2x batch and the bump target is ring + 4x batch. Both are maxed
+  // against the original ring-relative rule so small-batch configs keep their old sizing.
+  //
+  // This runs before allocate_memory_regions(), so the underlying GPU/CPU buffer is sized
+  // correctly.
+  const uint32_t ring_size = std::max(default_num_rx_desc, default_num_tx_desc);
 
-  std::unordered_set<std::string> queue_backed_mrs;
+  // Largest batch_size among the queues backing each MR (an MR shared by several queues has
+  // to satisfy the most demanding one).
+  std::unordered_map<std::string, uint32_t> mr_max_batch;
+  auto record_queue = [&mr_max_batch](const CommonQueueConfig& q) {
+    const uint32_t batch = q.batch_size_ > 0 ? static_cast<uint32_t>(q.batch_size_) : 0;
+    for (const auto& n : q.mrs_) {
+      auto& cur = mr_max_batch[n];
+      cur = std::max(cur, batch);
+    }
+  };
   for (const auto& intf : cfg_.ifs_) {
     for (const auto& q : intf.rx_.queues_) {
-      for (const auto& n : q.common_.mrs_) { queue_backed_mrs.insert(n); }
+      record_queue(q.common_);
     }
     for (const auto& q : intf.tx_.queues_) {
-      for (const auto& n : q.common_.mrs_) { queue_backed_mrs.insert(n); }
+      record_queue(q.common_);
     }
   }
 
   for (auto& mr : cfg_.mrs_) {
-    if (queue_backed_mrs.count(mr.second.name_) &&
-        mr.second.num_bufs_ < deadlock_threshold) {
-      DAQIRI_LOG_WARN(
-          "MR '{}' had num_bufs={} which is below the {} threshold (1.5x the {} NIC descriptors) "
-          "and would deadlock the worker once the ring fills. Bumping to {} (3x ring).",
-          mr.second.name_, mr.second.num_bufs_, deadlock_threshold, ring_size, bumped_num_bufs);
-      mr.second.num_bufs_ = bumped_num_bufs;
+    const auto batch_it = mr_max_batch.find(mr.second.name_);
+    if (batch_it != mr_max_batch.end()) {
+      const uint32_t batch = batch_it->second;
+      const uint32_t min_num_bufs = std::max((ring_size * 3) / 2, ring_size + 2 * batch);
+      const uint32_t safe_num_bufs = std::max(ring_size * 3, ring_size + 4 * batch);
+      if (mr.second.num_bufs_ < min_num_bufs) {
+        DAQIRI_LOG_WARN(
+            "MR '{}' had num_bufs={}, below the {} required by a {}-deep NIC ring and "
+            "batch_size={} (ring + 2x batch); TX would wedge with no error and the RX refill "
+            "path would starve. Bumping to {} (ring + 4x batch), the smallest size measured "
+            "free of mbuf allocation errors.",
+            mr.second.name_, mr.second.num_bufs_, min_num_bufs, ring_size, batch, safe_num_bufs);
+        mr.second.num_bufs_ = safe_num_bufs;
+      } else if (mr.second.num_bufs_ < safe_num_bufs) {
+        DAQIRI_LOG_INFO(
+            "MR '{}' num_bufs={} clears the {} deadlock floor but is below {} (ring + 4x "
+            "batch_size={}); expect nonzero rx_mbuf_allocation_errors at line rate.",
+            mr.second.name_, mr.second.num_bufs_, min_num_bufs, safe_num_bufs, batch);
+      }
     }
 
     mr.second.adj_size_ = mr.second.buf_size_ + RTE_PKTMBUF_HEADROOM;
@@ -6685,8 +6724,30 @@ bool DpdkEngine::is_tx_burst_available(BurstParams* burst) {
   }
 
   const auto& q = item->second;
+  const unsigned int required = static_cast<unsigned int>(burst->hdr.hdr.num_pkts) * 2;
   for (int seg = 0; seg < burst->hdr.hdr.num_segs; seg++) {
-    if (rte_mempool_avail_count(q->pools[seg]) < burst->hdr.hdr.num_pkts * 2) { return false; }
+    if (rte_mempool_avail_count(q->pools[seg]) >= required) {
+      continue;
+    }
+
+    // A short pool is normal backpressure -- the caller retries once the NIC drains. But if
+    // the pool is not big enough to satisfy the request even when completely idle, draining
+    // can never help: the caller spins at bursts=0 forever with no other symptom, which is
+    // indistinguishable from a dead link or a misprogrammed flow (issue #242). Say so once.
+    if (q->pools[seg]->size < required) {
+      const bool already_warned = q->warned_tx_burst_too_large.exchange(true);
+      if (!already_warned) {
+        DAQIRI_LOG_ERROR(
+            "TX queue {}/{} can never send a {}-packet burst: segment {} mempool holds {} "
+            "buffers but is_tx_burst_available() requires 2x the burst ({}). TX will stall "
+            "indefinitely. Raise the backing memory region's num_bufs to at least {}, or "
+            "reduce the burst size.",
+            burst->hdr.hdr.port_id, burst->hdr.hdr.q_id, burst->hdr.hdr.num_pkts, seg,
+            q->pools[seg]->size, required,
+            static_cast<unsigned int>(default_num_tx_desc) + required);
+      }
+    }
+    return false;
   }
 
   return true;

@@ -72,6 +72,9 @@ struct DPDKQueueConfig {
   std::vector<struct rte_mempool*> pools;
   struct rte_eth_rxconf rxconf_qsplit;
   std::vector<union rte_eth_rxseg> rx_useg;
+  // Set once is_tx_burst_available() has reported a permanently unsatisfiable burst request
+  // for this queue, so the diagnostic is not repeated on every poll (issue #242).
+  std::atomic<bool> warned_tx_burst_too_large{false};
 };
 
 struct DropTrafficConfig {

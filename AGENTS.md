@@ -110,6 +110,20 @@ A single packet can span multiple **segments** (contiguous memory regions), each
 ### DPDK is required only by the `dpdk` engine
 DPDK is **not** a dependency of `daqiri_common` or of the `rdma`/`ibverbs`/`socket` engines. Those use the libdpdk-free `daqiri::Ring` (`src/daqiri_ring.h`) and `daqiri::ObjectPool` (`src/daqiri_pool.h`) — header-only replacements for the generic `rte_ring` (a bounded MPMC/SPSC pointer ring, the DPDK C11 4-cursor algorithm) and `rte_mempool` (a fixed-size slab + free-ring) usage. `src/CMakeLists.txt` parses `DAQIRI_ENGINE` first, sets `DAQIRI_BUILD_DPDK`, and only then runs `pkg_check_modules(DPDK REQUIRED libdpdk)` and links it into `daqiri_common`. The only `rte_*` code left in `daqiri_common` lives in `dpdk_log.cpp` and `src/engine_dpdk.cpp` (the DPDK-only `Engine` base-class methods: mbuf/extmem registration, mbuf packet pools, EAL/hugepage preflight + cleanup), both compiled in **only** when `dpdk ∈ DAQIRI_ENGINE`. The `rdma`/`ibverbs` engines no longer call `rte_eal_init` at all (they only needed EAL to back the rings/pools); the `dpdk` engine still does. `MemoryKind::HUGE` allocation goes through the virtual `Engine::alloc_huge` hook — `mmap(MAP_HUGETLB)` in the base, overridden by `DpdkEngine` to use `rte_malloc_socket`. A build with `DAQIRI_ENGINE="ibverbs"` (or `""`) links no `librte_*`. **libnuma is an optional dependency** (`DAQIRI_HAVE_NUMA`, auto-detected): when present, `daqiri::Ring`/`daqiri::ObjectPool` and `alloc_huge` pin their memory to the NUMA node DPDK's socket-aware allocators used (rings/pools → the master core's node, mirroring `rte_socket_id()`; HUGE MRs → `mr.affinity_`, mirroring `rte_malloc_socket`); without it they fall back to first-touch placement. `python/tune_system.py --check numa` warns when libnuma is absent on a multi-socket host. The container build still uses patched DPDK from `dpdk_patches/` (`dmabuf.patch`, `dpdk.nvidia.patch`) for the `dpdk` engine — the `dmabuf` patch removes the peermem kernel-module requirement for GPUDirect.
 
+### Memory-region sizing (raw/DPDK)
+
+A queue-backed MR must simultaneously cover the NIC descriptor ring (up to `ring` buffers are
+parked there) and the TX burst headroom (`is_tx_burst_available()` demands `2 x batch_size`
+free before releasing a burst). `DpdkEngine::adjust_memory_regions()` enforces a floor of
+`max(1.5 x ring, ring + 2 x batch_size)` and bumps violating MRs to
+`max(3 x ring, ring + 4 x batch_size)` with a `WARN`; the batch-relative terms matter because
+the older ring-only rule (`3 x ring` = 24576 at the default 8192 ring) sits *below* the
+deadlock floor for the shipped `batch_size: 10240`, which silently wedged TX at `bursts=0`
+(issue #242). `ring + 4 x batch_size` is the smallest size measured free of
+`rx_mbuf_allocation_errors` at line rate. `is_tx_burst_available()` additionally logs once per
+queue when a requested burst is larger than the pool can *ever* satisfy, which is the one
+remaining path to a silent TX stall (an app requesting more than its configured `batch_size`).
+
 ### Reorder & quantize kernels
 `src/kernels.cu` hosts the CUDA reorder paths used by the `raw_reorder_*` benches. Compile with `-DDAQIRI_REORDER_GPU_PROFILE=ON` to instrument them with CUDA event timing.
 
