@@ -12,7 +12,16 @@ cmake --install build --prefix /opt/daqiri
 
 # Container build (compiles patched DPDK from source)
 BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
+
+# Container build against an older host driver (a CUDA runtime newer than the host driver
+# cannot init CUDA at all; cuda-compat does not apply to Tegra/IGX)
+CUDA_VERSION=13.0.0 BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
 ```
+
+`scripts/build-container.sh` env knobs beyond the CMake options: `IMAGE_TAG`, `BASE_TARGET`,
+`BASE_IMAGE` (`cuda`|`torch` selector), `CUDA_VERSION` (default `13.1.0`, applies to
+`BASE_IMAGE=cuda`), `UBUNTU_VERSION` (default `ubuntu24.04`), and `DAQIRI_OS_BASE_IMAGE` to pin
+an arbitrary base image and bypass the selectors entirely.
 
 CMake options (full table in `docs/getting-started.md`):
 - `DAQIRI_ENGINE` — space-separated list of optional engines to compile. Valid values: `dpdk` (raw Ethernet) and `ibverbs` (RDMA/RoCE). Linux sockets (UDP/TCP) are always built in, so there is no `socket` value. Default is `"dpdk ibverbs"`.

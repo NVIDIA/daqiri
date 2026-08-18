@@ -12,7 +12,7 @@ DAQIRI's baseline requirements depend on which [stream type](concepts.md#stream-
 | Component | Requirement |
 |-----------|-------------|
 | **OS** | Linux (kernel 5.4+), Ubuntu 22.04 recommended |
-| **CUDA** | CUDA Toolkit 12.2+ (the container ships CUDA 13.1) |
+| **CUDA** | CUDA Toolkit 12.2+ (the container defaults to CUDA 13.1; override with `CUDA_VERSION` when the host driver is older — see [container build](#container-build)) |
 | **NIC** *(Raw Ethernet / GPUDirect / RoCE only)* | NVIDIA ConnectX-6 Dx or later. Default Ubuntu kernel drivers (inbox) are sufficient. We recommend also installing `doca-ofed` for the diagnostic utilities (`ibstat`, `ibv_devinfo`, `ibdev2netdev`, `mlnx_perf`, `mlxconfig`, and so on). |
 | **GPU** *(GPUDirect only)* | RTX or Data Center GPU. GeForce is not supported. |
 | **DPDK** | Included in the DAQIRI container (patched for dma-buf, so `nvidia-peermem` is **not required** inside the container); see [bare-metal dependencies](#bare-metal-dependencies) below for the host build. |
@@ -101,6 +101,32 @@ Then build the DAQIRI library:
     ```bash
     BASE_IMAGE=torch BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
     ```
+
+    !!! warning "Match the CUDA version to your host driver"
+
+        A container whose CUDA runtime is **newer** than the host driver cannot initialize CUDA
+        at all — `cuInit` returns `CUDA_ERROR_SYSTEM_DRIVER_MISMATCH` (`system has unsupported
+        display driver / cuda driver combination`) and `cudaGetDeviceCount` reports 0 devices.
+        `cuda-compat` forward compatibility does **not** help on Tegra/IGX platforms, as it is
+        limited to Data Center GPUs.
+
+        The default CUDA base image is pinned to CUDA 13.1. On a host with an older driver —
+        IGX Thor, for instance, ships driver 580.00 / CUDA 13.0 — set `CUDA_VERSION` to match:
+
+        ```bash
+        CUDA_VERSION=13.0.0 BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
+        ```
+
+        `UBUNTU_VERSION` (default `ubuntu24.04`) selects the distro suffix. To pin an arbitrary
+        base image and bypass the `BASE_IMAGE`/`CUDA_VERSION` selectors entirely, set
+        `DAQIRI_OS_BASE_IMAGE`:
+
+        ```bash
+        DAQIRI_OS_BASE_IMAGE=nvcr.io/nvidia/cuda:13.0.0-devel-ubuntu24.04 scripts/build-container.sh
+        ```
+
+        Check the host driver's CUDA version with `nvidia-smi`. Note that `BASE_IMAGE=torch`
+        pins its own NGC PyTorch tag, which is unaffected by `CUDA_VERSION`.
 
     OpenTelemetry metrics are optional. Enable them with:
 
