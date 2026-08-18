@@ -424,7 +424,7 @@ The build recipe above is the same on every supported host. The notes below cove
         ```
 
         Use a different value (or extra entries) if you have a different dGPU installed.
-    - On IGX Orin, several system settings (BAR1 size, MRRS, NIC link layer) need to be applied **before** DAQIRI will run end-to-end. Follow the [IGX Orin tab in System Configuration](system_configuration.md) for the full sequence. The build itself does not require those changes.
+    - On IGX Orin, several system settings (BAR1 size, MRRS, NIC link layer) need to be applied **before** DAQIRI will run end-to-end. Follow the [IGX Series tab in System Configuration](system_configuration.md) for the full sequence. The build itself does not require those changes.
     - GPUDirect can use either the patched DPDK's dma-buf path (recommended) or the legacy `nvidia-peermem` module. The patched DPDK built in [Step 3](#step-3-build-dpdk-with-daqiri-patches) removes the peermem dependency.
     - For ARM64 (`aarch64`) hosts, set `PKG_CONFIG_PATH` to the aarch64 directory:
 

@@ -46,6 +46,24 @@ docker run --rm -it --privileged \
     | `--network=host` | Shares the host network namespace so DPDK can discover the physical NIC interfaces and their PCIe topology |
     | `-v /dev/hugepages:/dev/hugepages` | Mounts the hugepage filesystem for DPDK memory allocation (`--privileged` alone does not cover mounted filesystems) |
 
+!!! warning "Hybrid iGPU + dGPU hosts (IGX Thor)"
+
+    On Tegra/IGX systems that pair an integrated GPU with a discrete card, `--privileged` populates `/dev` with all Tegra iGPU nodes and the container runtime's device selection is ignored — `--gpus '"device=N"'` and `NVIDIA_VISIBLE_DEVICES` both leave CUDA seeing only the **iGPU**. Select the target GPU inside the container instead, by UUID:
+
+    ```bash
+    nvidia-smi --query-gpu=index,name,uuid --format=csv   # on the host
+
+    docker run --rm -it --privileged \
+      --runtime=nvidia \
+      --network=host \
+      --gpus all \
+      -e CUDA_VISIBLE_DEVICES=GPU-<uuid> \
+      -v /dev/hugepages:/dev/hugepages \
+      daqiri:local bash
+    ```
+
+    Use the UUID, not a numeric index: CUDA enumerates Tegra GPUs in the opposite order from `nvidia-smi`. The selected GPU becomes CUDA ordinal **0**, so `memory_regions[*].affinity` must be `0` regardless of what `nvidia-smi` reports. Selecting both GPUs at once fails — the Tegra CUDA driver initializes only one GPU class per process.
+
 ## Update the loopback configuration
 
 !!! tip "DGX Spark"
