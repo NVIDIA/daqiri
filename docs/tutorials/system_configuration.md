@@ -7,20 +7,41 @@ hide:
 
 DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking/ethernet-adapters/) (ConnectX-6 Dx or later) and a CUDA-capable GPU. Two reference platforms are documented in this tutorial. Pick the one closest to yours below:
 
-- **IGX Orin** with a discrete GPU (e.g. [RTX 6000 Ada](https://www.nvidia.com/en-us/design-visualization/rtx-6000/)): peermem-based GPUDirect, a separate GPU BAR1, and a discrete-PCIe path between GPU and NIC. The originally-supported reference platform.
+- **IGX series** (Orin and Thor developer kits) with a discrete GPU: peermem-based GPUDirect, a separate GPU BAR1, and a discrete-PCIe path between GPU and NIC. The originally-supported reference platform.
 - **DGX Spark** (Grace Blackwell **GB10** superchip): unified CPU/GPU memory via NVLink-C2C, integrated **ConnectX-7**, no peermem, and GPUDirect via `kind: host_pinned` data buffers.
 
 <div class="platform-tabs" markdown="1">
 
-=== "IGX Orin"
+=== "IGX Series"
 
-    This tab covers both the **required system setup** to get DAQIRI running on IGX Orin and **optional performance tuning** to maximize throughput and minimize latency. Complete the [System Setup for DAQIRI](#system-setup-for-daqiri) section first, then move on to [System Optimization](#system-optimization) as needed.
+    This tab covers both the **required system setup** to get DAQIRI running on the IGX series and **optional performance tuning** to maximize throughput and minimize latency. Complete the [System Setup for DAQIRI](#system-setup-for-daqiri) section first, then move on to [System Optimization](#system-optimization) as needed.
 
     ## System Setup for DAQIRI
 
     This section covers the essential system setup steps needed before using DAQIRI. Complete this setup before moving on to [System Optimization](#system-optimization) or [running benchmarks](../benchmarks/index.md).
 
-    In this tutorial, we will be developing on an **NVIDIA IGX Orin platform** with [IGX SW 1.1](https://docs.nvidia.com/igx-orin/user-guide/latest/base-os.html) and an [NVIDIA RTX 6000 ADA GPU](https://www.nvidia.com/en-us/design-visualization/rtx-6000/), which is the configuration that is currently actively tested. The concepts should be applicable to other systems based on Ubuntu 22.04 as well. It should also work on other Linux distributions with a glibc version of 2.35 or higher by containerizing the dependencies and applications on top of an Ubuntu 22.04 image, but this is not actively tested at this time.
+    Two IGX configurations are actively tested:
+
+    - **IGX Orin** with [IGX SW 1.1](https://docs.nvidia.com/igx-orin/user-guide/latest/base-os.html) (Ubuntu 22.04) and an [NVIDIA RTX 6000 Ada GPU](https://www.nvidia.com/en-us/design-visualization/rtx-6000/). The steps below are written against this platform.
+    - **IGX Thor developer kit** (Ubuntu 24.04, driver 580 / CUDA 13) with a discrete RTX PRO 6000 Blackwell **alongside the Thor iGPU**. Everything below applies unchanged except for GPU selection — see the admonition immediately after.
+
+    The concepts should be applicable to other systems based on Ubuntu 22.04 as well. It should also work on other Linux distributions with a glibc version of 2.35 or higher by containerizing the dependencies and applications on top of an Ubuntu 22.04 image, but this is not actively tested at this time.
+
+    !!! Warning "IGX Thor: select the discrete GPU explicitly"
+
+        Thor developer kits expose **two** GPUs: the integrated Thor iGPU and the discrete card. CUDA enumerates them in the **opposite order** from `nvidia-smi`/NVML, and the Tegra CUDA driver initializes only **one GPU class at a time** — requesting both (`CUDA_VISIBLE_DEVICES=0,1`) makes `cuInit` fail outright. Always select by **UUID**, never by index:
+
+        ```bash
+        nvidia-smi --query-gpu=index,name,uuid --format=csv
+        ```
+
+        Without an explicit selection, CUDA resolves to the **iGPU**. `tune_system.py` gates four checks on `is_any_integrated_gpu()`, so on Thor they silently skip or report an iGPU-flavored INFO instead of evaluating the discrete card: `--check peermem`, `--check gpudirect`, `--check topo`, and `--check bar1-size`. Prefix the run with the discrete GPU's UUID to get real results:
+
+        ```bash
+        sudo CUDA_VISIBLE_DEVICES=GPU-<uuid> ./python/tune_system.py --check all
+        ```
+
+        The same applies to containers — see [Running the DAQIRI container](../benchmarks/raw_benchmarking.md#running-the-daqiri-container).
 
     !!! Warning "Secure boot conflict"
 
@@ -57,8 +78,10 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
         ```bash
         sudo apt update
-        sudo apt install infiniband-diags ibverbs-utils mlnx-ofed-kernel-utils mft
+        sudo apt install infiniband-diags ibverbs-utils mlnx-tools mlnx-ofed-kernel-utils mft
         ```
+
+        `mlnx-tools` (which provides `ibdev2netdev`) comes from the NVIDIA DOCA-Host APT repository. Without that repository configured it is unavailable, so every step below that uses `ibdev2netdev` offers a `lspci` or sysfs alternative.
 
         Also upgrade the user space libraries to make sure your tools have all the symbols they need:
 
@@ -220,6 +243,23 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
         mlx5_0 port 1 ==> eth0 (Down)
         mlx5_1 port 1 ==> eth1 (Up)
         ```
+
+    ??? failure "ibdev2netdev: command not found"
+
+        `ibdev2netdev` ships in `mlnx-tools` (DOCA-Host). If it is unavailable, read the same IB-device → netdev → PCIe mapping straight out of sysfs:
+
+        ```bash
+        for dev in /sys/class/infiniband/*; do
+          echo "$(basename "$dev") ==> $(ls "$dev"/device/net) [$(basename "$(readlink -f "$dev"/device)")]"
+        done
+        ```
+
+        ```sh
+        roceP4p3s0f0 ==> enP4p3s0f0np0 [0004:03:00.0]
+        roceP4p3s0f1 ==> enP4p3s0f1np1 [0004:03:00.1]
+        ```
+
+        Link state comes from `cat /sys/class/net/<netdev>/operstate`.
 
     ??? failure "ibdev2netdev does not show the NIC"
 
