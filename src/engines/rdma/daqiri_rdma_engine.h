@@ -114,18 +114,14 @@ class RdmaEngine : public Engine {
 
   void* get_packet_ptr(BurstParams* burst, int idx) override;
   uint32_t get_packet_length(BurstParams* burst, int idx) override;
-  FlowId get_packet_flow_id(BurstParams* burst, int idx) override {
-    return 0;
-  }
+  FlowId get_packet_flow_id(BurstParams* burst, int idx) override { return 0; }
   Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) override {
     (void)burst;
     (void)idx;
     (void)timestamp_ns;
     return Status::NOT_SUPPORTED;
   }
-  void* get_packet_extra_info(BurstParams* burst, int idx) override {
-    return nullptr;
-  }
+  void* get_packet_extra_info(BurstParams* burst, int idx) override { return nullptr; }
   void* get_segment_packet_ptr(BurstParams* burst, int seg, int idx) override;
   uint32_t get_segment_packet_length(BurstParams* burst, int seg, int idx) override;
   Status get_tx_packet_burst(BurstParams* burst) override;
@@ -140,16 +136,13 @@ class RdmaEngine : public Engine {
   Status set_packet_lengths(BurstParams* burst, int idx,
                             const std::initializer_list<int>& lens) override;
   void free_all_segment_packets(BurstParams* burst, int seg) override {}
-  void free_packet_segment(BurstParams* burst, int seg, int pkt) override {
-    return;
-  }
+  void free_packet_segment(BurstParams* burst, int seg, int pkt) override { return; }
   void free_packet(BurstParams* burst, int pkt) override {}
-  void free_all_packets(BurstParams* burst) override {
-    return;
-  }
+  void free_all_packets(BurstParams* burst) override { return; }
   void free_rx_burst(BurstParams* burst) override;
   void free_tx_burst(BurstParams* burst) override;
-  void free_managed_rx_burst(BurstParams* burst, bool connection_completion) override {
+  void free_managed_rx_burst(BurstParams* burst,
+                             bool connection_completion) override {
     if (connection_completion) {
       free_tx_burst(burst);
     } else {
@@ -168,19 +161,13 @@ class RdmaEngine : public Engine {
   void free_tx_metadata(BurstParams* burst) override;
   Status get_tx_metadata_buffer(BurstParams** burst) override;
   Status send_tx_burst(BurstParams* burst) override;
-  bool tx_send_consumed(Status) const override {
-    return true;
-  }
+  bool tx_send_consumed(Status) const override { return true; }
   uint64_t get_burst_tot_byte(BurstParams* burst) override;
   BurstParams* create_tx_burst_params() override;
-  Status get_mac_addr(int port, char* mac) override {
-    return Status::SUCCESS;
-  }
+  Status get_mac_addr(int port, char* mac) override { return Status::SUCCESS; }
   void shutdown() override;
   void print_stats() override;
-  bool validate_config() const override {
-    return true;
-  }
+  bool validate_config() const override { return true; }
 
   // RDMA-specific functions
   Status rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,

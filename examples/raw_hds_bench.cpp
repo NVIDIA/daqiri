@@ -97,8 +97,8 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
 
       if (daqiri::set_eth_header(msg.get(), i, eth_dst) != daqiri::Status::SUCCESS ||
           daqiri::set_ipv4_header(msg.get(), i,
-                                  static_cast<int>(cfg.payload_size + cfg.header_size - (14 + 20)),
-                                  17, ip_src, ip_dst) != daqiri::Status::SUCCESS ||
+              static_cast<int>(cfg.payload_size + cfg.header_size - (14 + 20)),
+              17, ip_src, ip_dst) != daqiri::Status::SUCCESS ||
           daqiri::set_udp_header(
               msg.get(), i, static_cast<int>(cfg.payload_size + cfg.header_size - (14 + 20 + 8)),
               src_port, dst_port) != daqiri::Status::SUCCESS) {

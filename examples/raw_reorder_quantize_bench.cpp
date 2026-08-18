@@ -778,7 +778,7 @@ void tx_worker(const BenchConfig &cfg, const ReorderPlanConfig &plan,
     }
 
     if (!failed && daqiri::set_all_packet_lengths(msg.get(), {static_cast<int>(packet_size)}) !=
-                       daqiri::Status::SUCCESS) {
+            daqiri::Status::SUCCESS) {
       failed = true;
     }
 

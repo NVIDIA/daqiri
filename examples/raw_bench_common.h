@@ -38,7 +38,7 @@ namespace daqiri::bench {
 // jitter. Acceptable for drop-curve sweeps; tighter pacing would require
 // hardware TX timestamping (DAQIRI's accurate_send YAML flag), deferred.
 class TokenBucketPacer {
- public:
+public:
   TokenBucketPacer() = default;
   explicit TokenBucketPacer(double target_gbps);
 
@@ -47,16 +47,12 @@ class TokenBucketPacer {
   // accumulated bytes" catches up, OR `stop` flips true. Slicing keeps the
   // bench responsive to --seconds expiry / Ctrl-C without truncating the total
   // sleep (which would silently break pacing for low target rates).
-  void wait_for_bytes(size_t bytes, std::atomic<bool>& stop);
+  void wait_for_bytes(size_t bytes, std::atomic<bool> &stop);
 
-  bool enabled() const {
-    return target_bps_ > 0.0;
-  }
-  double target_gbps() const {
-    return target_bps_ / 1e9;
-  }
+  bool enabled() const { return target_bps_ > 0.0; }
+  double target_gbps() const { return target_bps_ / 1e9; }
 
- private:
+private:
   double target_bps_ = 0.0;  // 0 means disabled
   uint64_t total_bytes_ = 0;
   std::chrono::steady_clock::time_point t0_;
@@ -91,51 +87,56 @@ struct RawBenchQueueStats {
 };
 
 class PinnedHostBuffer {
- public:
+public:
   PinnedHostBuffer() = default;
-  PinnedHostBuffer(const PinnedHostBuffer&) = delete;
-  PinnedHostBuffer& operator=(const PinnedHostBuffer&) = delete;
+  PinnedHostBuffer(const PinnedHostBuffer &) = delete;
+  PinnedHostBuffer &operator=(const PinnedHostBuffer &) = delete;
 
-  PinnedHostBuffer(PinnedHostBuffer&& other) noexcept;
-  PinnedHostBuffer& operator=(PinnedHostBuffer&& other) noexcept;
+  PinnedHostBuffer(PinnedHostBuffer &&other) noexcept;
+  PinnedHostBuffer &operator=(PinnedHostBuffer &&other) noexcept;
   ~PinnedHostBuffer();
 
   bool resize(size_t size);
   void reset();
 
-  uint8_t* data();
-  const uint8_t* data() const;
+  uint8_t *data();
+  const uint8_t *data() const;
   size_t capacity() const;
 
- private:
-  void* ptr_ = nullptr;
+private:
+  void *ptr_ = nullptr;
   size_t capacity_ = 0;
 };
 
-int parse_run_seconds(int argc, char** argv);
-double parse_target_gbps(int argc, char** argv);
-bool has_bench_rx(const YAML::Node& root);
-bool has_bench_tx(const YAML::Node& root);
-RawBenchRxConfig parse_rx(const YAML::Node& root);
-RawBenchTxConfig parse_tx(const YAML::Node& root);
-std::vector<RawBenchRxConfig> parse_rx_configs(const YAML::Node& root);
-std::vector<RawBenchTxConfig> parse_tx_configs(const YAML::Node& root);
-std::vector<uint16_t> parse_udp_ports(const std::string& spec);
-bool set_current_thread_affinity(int cpu_core, const std::string& thread_name);
+int parse_run_seconds(int argc, char **argv);
+double parse_target_gbps(int argc, char **argv);
+bool has_bench_rx(const YAML::Node &root);
+bool has_bench_tx(const YAML::Node &root);
+RawBenchRxConfig parse_rx(const YAML::Node &root);
+RawBenchTxConfig parse_tx(const YAML::Node &root);
+std::vector<RawBenchRxConfig> parse_rx_configs(const YAML::Node &root);
+std::vector<RawBenchTxConfig> parse_tx_configs(const YAML::Node &root);
+std::vector<uint16_t> parse_udp_ports(const std::string &spec);
+bool set_current_thread_affinity(int cpu_core, const std::string &thread_name);
 
-void populate_udp_ipv4_headers(uint8_t* pkt_data, uint32_t header_size, uint32_t payload_size,
-                               const char* eth_src, const char* eth_dst, uint32_t ip_src_host,
-                               uint32_t ip_dst_host, uint16_t src_port, uint16_t dst_port);
+void populate_udp_ipv4_headers(uint8_t *pkt_data, uint32_t header_size,
+                               uint32_t payload_size, const char *eth_src,
+                               const char *eth_dst, uint32_t ip_src_host,
+                               uint32_t ip_dst_host, uint16_t src_port,
+                               uint16_t dst_port);
 
-void finalize_udp_ipv4_checksums(uint8_t* pkt_data);
+void finalize_udp_ipv4_checksums(uint8_t *pkt_data);
 
-cudaError_t memcpy_batch_async(const std::vector<void*>& dsts, const std::vector<const void*>& srcs,
-                               const std::vector<size_t>& sizes, cudaStream_t stream);
+cudaError_t memcpy_batch_async(const std::vector<void *> &dsts,
+                               const std::vector<const void *> &srcs,
+                               const std::vector<size_t> &sizes,
+                               cudaStream_t stream);
 
 void signal_handler(int signum);
-void wait_for_stop(int run_seconds, std::atomic<bool>& stop);
-void print_queue_stats(const char* direction, const std::string& interface_name, int queue_id,
-                       const RawBenchQueueStats& stats, double seconds);
-void rx_count_worker(const RawBenchRxConfig& cfg, std::atomic<bool>& stop);
+void wait_for_stop(int run_seconds, std::atomic<bool> &stop);
+void print_queue_stats(const char *direction, const std::string &interface_name,
+                       int queue_id, const RawBenchQueueStats &stats,
+                       double seconds);
+void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop);
 
-}  // namespace daqiri::bench
+} // namespace daqiri::bench

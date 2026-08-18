@@ -30,7 +30,6 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace py = pybind11;
@@ -41,14 +40,14 @@ namespace {
 
 constexpr int kIpProtoUdp = 17;
 
-size_t buffer_nbytes(const py::buffer_info& info) {
+size_t buffer_nbytes(const py::buffer_info &info) {
   if (info.size < 0 || info.itemsize < 0) {
     throw py::value_error("buffer has invalid size metadata");
   }
   return static_cast<size_t>(info.size) * static_cast<size_t>(info.itemsize);
 }
 
-bool is_cuda_device_pointer(const void* ptr) {
+bool is_cuda_device_pointer(const void *ptr) {
   if (ptr == nullptr) {
     return false;
   }
@@ -63,13 +62,14 @@ bool is_cuda_device_pointer(const void* ptr) {
   }
 
 #if CUDART_VERSION >= 10000
-  return attr.type == cudaMemoryTypeDevice || attr.type == cudaMemoryTypeManaged;
+  return attr.type == cudaMemoryTypeDevice ||
+         attr.type == cudaMemoryTypeManaged;
 #else
   return attr.memoryType == cudaMemoryTypeDevice;
 #endif
 }
 
-Status copy_host_to_pointer(void* dst, const void* src, size_t nbytes) {
+Status copy_host_to_pointer(void *dst, const void *src, size_t nbytes) {
   if (dst == nullptr || src == nullptr) {
     return Status::NULL_PTR;
   }
@@ -78,9 +78,11 @@ Status copy_host_to_pointer(void* dst, const void* src, size_t nbytes) {
   }
 
   if (is_cuda_device_pointer(dst)) {
-    const cudaError_t err = cudaMemcpy(dst, src, nbytes, cudaMemcpyHostToDevice);
+    const cudaError_t err =
+        cudaMemcpy(dst, src, nbytes, cudaMemcpyHostToDevice);
     if (err != cudaSuccess) {
-      DAQIRI_LOG_ERROR("cudaMemcpy host-to-device failed: {}", cudaGetErrorString(err));
+      DAQIRI_LOG_ERROR("cudaMemcpy host-to-device failed: {}",
+                       cudaGetErrorString(err));
       return Status::GENERIC_FAILURE;
     }
   } else {
@@ -90,7 +92,7 @@ Status copy_host_to_pointer(void* dst, const void* src, size_t nbytes) {
   return Status::SUCCESS;
 }
 
-Status copy_pointer_to_host(const void* src, void* dst, size_t nbytes) {
+Status copy_pointer_to_host(const void *src, void *dst, size_t nbytes) {
   if (dst == nullptr || src == nullptr) {
     return Status::NULL_PTR;
   }
@@ -99,9 +101,11 @@ Status copy_pointer_to_host(const void* src, void* dst, size_t nbytes) {
   }
 
   if (is_cuda_device_pointer(src)) {
-    const cudaError_t err = cudaMemcpy(dst, src, nbytes, cudaMemcpyDeviceToHost);
+    const cudaError_t err =
+        cudaMemcpy(dst, src, nbytes, cudaMemcpyDeviceToHost);
     if (err != cudaSuccess) {
-      DAQIRI_LOG_ERROR("cudaMemcpy device-to-host failed: {}", cudaGetErrorString(err));
+      DAQIRI_LOG_ERROR("cudaMemcpy device-to-host failed: {}",
+                       cudaGetErrorString(err));
       return Status::GENERIC_FAILURE;
     }
   } else {
@@ -111,61 +115,66 @@ Status copy_pointer_to_host(const void* src, void* dst, size_t nbytes) {
   return Status::SUCCESS;
 }
 
-Status validate_lengths(BurstParams* burst, const std::vector<int>& lens) {
+Status validate_lengths(BurstParams *burst, const std::vector<int> &lens) {
   if (burst == nullptr) {
     return Status::NULL_PTR;
   }
   if (lens.empty() || lens.size() > MAX_NUM_SEGS) {
     return Status::INVALID_PARAMETER;
   }
-  if (burst->hdr.hdr.num_segs > 0 && lens.size() != static_cast<size_t>(burst->hdr.hdr.num_segs)) {
+  if (burst->hdr.hdr.num_segs > 0 &&
+      lens.size() != static_cast<size_t>(burst->hdr.hdr.num_segs)) {
     return Status::INVALID_PARAMETER;
   }
   return Status::SUCCESS;
 }
 
-Status set_packet_lengths_from_vector(BurstParams* burst, int idx, const std::vector<int>& lens) {
+Status set_packet_lengths_from_vector(BurstParams *burst, int idx,
+                                      const std::vector<int> &lens) {
   const Status validation = validate_lengths(burst, lens);
   if (validation != Status::SUCCESS) {
     return validation;
   }
 
   switch (lens.size()) {
-    case 1:
-      return set_packet_lengths(burst, idx, {lens[0]});
-    case 2:
-      return set_packet_lengths(burst, idx, {lens[0], lens[1]});
-    case 3:
-      return set_packet_lengths(burst, idx, {lens[0], lens[1], lens[2]});
-    case 4:
-      return set_packet_lengths(burst, idx, {lens[0], lens[1], lens[2], lens[3]});
-    default:
-      return Status::INVALID_PARAMETER;
+  case 1:
+    return set_packet_lengths(burst, idx, {lens[0]});
+  case 2:
+    return set_packet_lengths(burst, idx, {lens[0], lens[1]});
+  case 3:
+    return set_packet_lengths(burst, idx, {lens[0], lens[1], lens[2]});
+  case 4:
+    return set_packet_lengths(burst, idx, {lens[0], lens[1], lens[2], lens[3]});
+  default:
+    return Status::INVALID_PARAMETER;
   }
 }
 
-Status set_all_packet_lengths_from_vector(BurstParams* burst, const std::vector<int>& lens) {
+Status set_all_packet_lengths_from_vector(BurstParams *burst,
+                                          const std::vector<int> &lens) {
   const Status validation = validate_lengths(burst, lens);
   if (validation != Status::SUCCESS) {
     return validation;
   }
 
   switch (lens.size()) {
-    case 1:
-      return set_all_packet_lengths(burst, {lens[0]});
-    case 2:
-      return set_all_packet_lengths(burst, {lens[0], lens[1]});
-    case 3:
-      return set_all_packet_lengths(burst, {lens[0], lens[1], lens[2]});
-    case 4:
-      return set_all_packet_lengths(burst, {lens[0], lens[1], lens[2], lens[3]});
-    default:
-      return Status::INVALID_PARAMETER;
+  case 1:
+    return set_all_packet_lengths(burst, {lens[0]});
+  case 2:
+    return set_all_packet_lengths(burst, {lens[0], lens[1]});
+  case 3:
+    return set_all_packet_lengths(burst, {lens[0], lens[1], lens[2]});
+  case 4:
+    return set_all_packet_lengths(burst, {lens[0], lens[1], lens[2], lens[3]});
+  default:
+    return Status::INVALID_PARAMETER;
   }
 }
 
-Status copy_buffer_to_segment_packet_impl(BurstParams* burst, int seg, int idx, py::buffer data,
-                                          py::object nbytes_obj, size_t src_offset,
+Status copy_buffer_to_segment_packet_impl(BurstParams *burst, int seg, int idx,
+                                          py::buffer data,
+                                          py::object nbytes_obj,
+                                          size_t src_offset,
                                           size_t dst_offset) {
   py::buffer_info info = data.request();
   const size_t total = buffer_nbytes(info);
@@ -174,23 +183,24 @@ Status copy_buffer_to_segment_packet_impl(BurstParams* burst, int seg, int idx, 
   }
 
   const size_t available = total - src_offset;
-  const size_t nbytes = nbytes_obj.is_none() ? available : py::cast<size_t>(nbytes_obj);
+  const size_t nbytes =
+      nbytes_obj.is_none() ? available : py::cast<size_t>(nbytes_obj);
   if (nbytes > available) {
     return Status::INVALID_PARAMETER;
   }
 
-  auto* dst = static_cast<uint8_t*>(get_segment_packet_ptr(burst, seg, idx));
+  auto *dst = static_cast<uint8_t *>(get_segment_packet_ptr(burst, seg, idx));
   if (dst == nullptr) {
     return Status::NULL_PTR;
   }
-  auto* src = static_cast<const uint8_t*>(info.ptr);
+  auto *src = static_cast<const uint8_t *>(info.ptr);
 
   py::gil_scoped_release release;
   return copy_host_to_pointer(dst + dst_offset, src + src_offset, nbytes);
 }
 
-py::tuple segment_packet_bytes_impl(BurstParams* burst, int seg, int idx, py::object nbytes_obj,
-                                    size_t src_offset) {
+py::tuple segment_packet_bytes_impl(BurstParams *burst, int seg, int idx,
+                                    py::object nbytes_obj, size_t src_offset) {
   size_t nbytes = 0;
   if (nbytes_obj.is_none()) {
     const uint32_t len = get_segment_packet_length(burst, seg, idx);
@@ -202,7 +212,8 @@ py::tuple segment_packet_bytes_impl(BurstParams* burst, int seg, int idx, py::ob
     nbytes = py::cast<size_t>(nbytes_obj);
   }
 
-  auto* src = static_cast<const uint8_t*>(get_segment_packet_ptr(burst, seg, idx));
+  auto *src =
+      static_cast<const uint8_t *>(get_segment_packet_ptr(burst, seg, idx));
   if (src == nullptr) {
     return py::make_tuple(Status::NULL_PTR, py::bytes(""));
   }
@@ -221,7 +232,8 @@ py::tuple segment_packet_bytes_impl(BurstParams* burst, int seg, int idx, py::ob
 
 Status daqiri_init_from_python(py::object config_obj) {
   try {
-    if (py::isinstance<py::str>(config_obj) || py::isinstance<py::bytes>(config_obj)) {
+    if (py::isinstance<py::str>(config_obj) ||
+        py::isinstance<py::bytes>(config_obj)) {
       const auto yaml_string_or_path = py::cast<std::string>(config_obj);
       py::gil_scoped_release release;
       return daqiri_init(yaml_string_or_path);
@@ -229,94 +241,98 @@ Status daqiri_init_from_python(py::object config_obj) {
 
     if (py::isinstance<py::dict>(config_obj)) {
       py::object yaml_module = py::module_::import("yaml");
-      py::object py_yaml_str =
-          yaml_module.attr("dump")(config_obj, py::arg("default_flow_style") = false);
+      py::object py_yaml_str = yaml_module.attr("dump")(
+          config_obj, py::arg("default_flow_style") = false);
       const auto yaml_str = py::cast<std::string>(py_yaml_str);
       py::gil_scoped_release release;
       return daqiri_init_from_yaml_string(yaml_str);
     }
 
     if (py::isinstance<NetworkConfig>(config_obj)) {
-      auto& config = config_obj.cast<NetworkConfig&>();
+      auto &config = config_obj.cast<NetworkConfig &>();
       py::gil_scoped_release release;
       return daqiri_init(config);
     }
 
     if (py::hasattr(config_obj, "value")) {
       const auto yaml_string_or_path_obj = py::str(config_obj.attr("value"));
-      const auto yaml_string_or_path = py::cast<std::string>(yaml_string_or_path_obj);
+      const auto yaml_string_or_path =
+          py::cast<std::string>(yaml_string_or_path_obj);
       py::gil_scoped_release release;
       return daqiri_init(yaml_string_or_path);
     }
 
     if (py::hasattr(config_obj, "as_dict")) {
       py::object yaml_module = py::module_::import("yaml");
-      py::object py_yaml_str = yaml_module.attr("dump")(config_obj.attr("as_dict")(),
-                                                        py::arg("default_flow_style") = false);
+      py::object py_yaml_str = yaml_module.attr("dump")(
+          config_obj.attr("as_dict")(), py::arg("default_flow_style") = false);
       const auto yaml_str = py::cast<std::string>(py_yaml_str);
       py::gil_scoped_release release;
       return daqiri_init_from_yaml_string(yaml_str);
     }
 
     const auto yaml_string_or_path_obj = py::str(config_obj);
-    const auto yaml_string_or_path = py::cast<std::string>(yaml_string_or_path_obj);
+    const auto yaml_string_or_path =
+        py::cast<std::string>(yaml_string_or_path_obj);
     py::gil_scoped_release release;
     return daqiri_init(yaml_string_or_path);
-  } catch (const py::error_already_set& e) {
+  } catch (const py::error_already_set &e) {
     DAQIRI_LOG_ERROR("Python config conversion failed: {}", e.what());
     return Status::INTERNAL_ERROR;
-  } catch (const YAML::Exception& e) {
+  } catch (const YAML::Exception &e) {
     DAQIRI_LOG_ERROR("YAML parsing error in Python config: {}", e.what());
     return Status::INVALID_PARAMETER;
-  } catch (const std::exception& e) {
-    DAQIRI_LOG_ERROR("Failed to initialize DAQIRI from Python config: {}", e.what());
+  } catch (const std::exception &e) {
+    DAQIRI_LOG_ERROR("Failed to initialize DAQIRI from Python config: {}",
+                     e.what());
     return Status::INTERNAL_ERROR;
   }
 }
 
-const char* status_to_string(Status status) {
+const char *status_to_string(Status status) {
   switch (status) {
-    case Status::SUCCESS:
-      return "SUCCESS";
-    case Status::NULL_PTR:
-      return "NULL_PTR";
-    case Status::NO_FREE_BURST_BUFFERS:
-      return "NO_FREE_BURST_BUFFERS";
-    case Status::NO_FREE_PACKET_BUFFERS:
-      return "NO_FREE_PACKET_BUFFERS";
-    case Status::NOT_READY:
-      return "NOT_READY";
-    case Status::INVALID_PARAMETER:
-      return "INVALID_PARAMETER";
-    case Status::NO_SPACE_AVAILABLE:
-      return "NO_SPACE_AVAILABLE";
-    case Status::NOT_SUPPORTED:
-      return "NOT_SUPPORTED";
-    case Status::GENERIC_FAILURE:
-      return "GENERIC_FAILURE";
-    case Status::CONNECT_FAILURE:
-      return "CONNECT_FAILURE";
-    case Status::INTERNAL_ERROR:
-      return "INTERNAL_ERROR";
+  case Status::SUCCESS:
+    return "SUCCESS";
+  case Status::NULL_PTR:
+    return "NULL_PTR";
+  case Status::NO_FREE_BURST_BUFFERS:
+    return "NO_FREE_BURST_BUFFERS";
+  case Status::NO_FREE_PACKET_BUFFERS:
+    return "NO_FREE_PACKET_BUFFERS";
+  case Status::NOT_READY:
+    return "NOT_READY";
+  case Status::INVALID_PARAMETER:
+    return "INVALID_PARAMETER";
+  case Status::NO_SPACE_AVAILABLE:
+    return "NO_SPACE_AVAILABLE";
+  case Status::NOT_SUPPORTED:
+    return "NOT_SUPPORTED";
+  case Status::GENERIC_FAILURE:
+    return "GENERIC_FAILURE";
+  case Status::CONNECT_FAILURE:
+    return "CONNECT_FAILURE";
+  case Status::INTERNAL_ERROR:
+    return "INTERNAL_ERROR";
   }
   return "UNKNOWN";
 }
 
-void throw_if_error(Status status, const char* operation) {
+void throw_if_error(Status status, const char *operation) {
   if (status == Status::SUCCESS) {
     return;
   }
-  throw std::runtime_error(std::string(operation) + " failed with DAQIRI status " +
+  throw std::runtime_error(std::string(operation) +
+                           " failed with DAQIRI status " +
                            status_to_string(status));
 }
 
 struct PyS3WriteHandle {
-  S3WriteHandle* handle = nullptr;
+  S3WriteHandle *handle = nullptr;
 
   PyS3WriteHandle() = default;
-  explicit PyS3WriteHandle(S3WriteHandle* raw_handle) : handle(raw_handle) {}
-  PyS3WriteHandle(const PyS3WriteHandle&) = delete;
-  PyS3WriteHandle& operator=(const PyS3WriteHandle&) = delete;
+  explicit PyS3WriteHandle(S3WriteHandle *raw_handle) : handle(raw_handle) {}
+  PyS3WriteHandle(const PyS3WriteHandle &) = delete;
+  PyS3WriteHandle &operator=(const PyS3WriteHandle &) = delete;
 
   ~PyS3WriteHandle() {
     if (handle != nullptr) {
@@ -363,9 +379,9 @@ struct PyS3WriteHandle {
 };
 
 struct PyS3Writer {
-  S3Writer* writer = nullptr;
+  S3Writer *writer = nullptr;
 
-  explicit PyS3Writer(const S3WriterConfig& config) {
+  explicit PyS3Writer(const S3WriterConfig &config) {
     Status rc = Status::SUCCESS;
     {
       py::gil_scoped_release release;
@@ -374,8 +390,8 @@ struct PyS3Writer {
     throw_if_error(rc, "daqiri_s3_writer_create");
   }
 
-  PyS3Writer(const PyS3Writer&) = delete;
-  PyS3Writer& operator=(const PyS3Writer&) = delete;
+  PyS3Writer(const PyS3Writer &) = delete;
+  PyS3Writer &operator=(const PyS3Writer &) = delete;
 
   ~PyS3Writer() {
     if (writer != nullptr) {
@@ -384,26 +400,28 @@ struct PyS3Writer {
     }
   }
 
-  std::unique_ptr<PyS3WriteHandle> write_raw_objects_async(BurstParams* burst,
-                                                           const std::string& object_prefix,
-                                                           uint64_t packet_data_offset) {
+  std::unique_ptr<PyS3WriteHandle>
+  write_raw_objects_async(BurstParams *burst, const std::string &object_prefix,
+                          uint64_t packet_data_offset) {
     if (writer == nullptr) {
       throw std::runtime_error("S3 writer has already been destroyed");
     }
-    S3WriteHandle* handle = nullptr;
+    S3WriteHandle *handle = nullptr;
     Status rc = Status::SUCCESS;
     {
       py::gil_scoped_release release;
-      rc = daqiri_write_raw_to_s3_objects_async(writer, burst, object_prefix, packet_data_offset,
-                                                &handle);
+      rc = daqiri_write_raw_to_s3_objects_async(
+          writer, burst, object_prefix, packet_data_offset, &handle);
     }
     throw_if_error(rc, "daqiri_write_raw_to_s3_objects_async");
     return std::make_unique<PyS3WriteHandle>(handle);
   }
 
-  S3WriteStatus write_raw_objects(BurstParams* burst, const std::string& object_prefix,
+  S3WriteStatus write_raw_objects(BurstParams *burst,
+                                  const std::string &object_prefix,
                                   uint64_t packet_data_offset) {
-    auto handle = write_raw_objects_async(burst, object_prefix, packet_data_offset);
+    auto handle =
+        write_raw_objects_async(burst, object_prefix, packet_data_offset);
     S3WriteStatus status = handle->wait();
     const Status destroy_status = handle->destroy();
     throw_if_error(destroy_status, "daqiri_s3_write_destroy");
@@ -424,7 +442,7 @@ struct PyS3Writer {
   }
 };
 
-void bind_enums(py::module_& m) {
+void bind_enums(py::module_ &m) {
   py::enum_<Status>(m, "Status")
       .value("SUCCESS", Status::SUCCESS)
       .value("NULL_PTR", Status::NULL_PTR)
@@ -557,11 +575,12 @@ void bind_enums(py::module_& m) {
       .value("SENTINEL", ErrorGlobalStats::SENTINEL);
 }
 
-void bind_config_types(py::module_& m) {
+void bind_config_types(py::module_ &m) {
   py::class_<ReorderBurstInfo>(m, "ReorderBurstInfo")
       .def(py::init<>())
       .def_readwrite("batch_id", &ReorderBurstInfo::batch_id)
-      .def_readwrite("source_packet_count", &ReorderBurstInfo::source_packet_count)
+      .def_readwrite("source_packet_count",
+                     &ReorderBurstInfo::source_packet_count)
       .def_readwrite("packets_per_batch", &ReorderBurstInfo::packets_per_batch)
       .def_readwrite("payload_len", &ReorderBurstInfo::payload_len)
       .def_readwrite("aggregate_len", &ReorderBurstInfo::aggregate_len)
@@ -589,71 +608,89 @@ void bind_config_types(py::module_& m) {
       .def(py::init<>())
       .def_readwrite("hdr", &BurstParams::hdr)
       .def_property(
-          "connection_id", [](const BurstParams& burst) { return get_connection_id(&burst); },
-          [](BurstParams& burst, uintptr_t conn_id) { set_connection_id(&burst, conn_id); })
+          "connection_id",
+          [](const BurstParams &burst) { return get_connection_id(&burst); },
+          [](BurstParams &burst, uintptr_t conn_id) {
+            set_connection_id(&burst, conn_id);
+          })
       .def_property(
-          "rdma_wr_id", [](const BurstParams& burst) { return burst.transport_hdr.wr_id; },
-          [](BurstParams& burst, uint64_t wr_id) { burst.transport_hdr.wr_id = wr_id; });
+          "rdma_wr_id",
+          [](const BurstParams &burst) { return burst.transport_hdr.wr_id; },
+          [](BurstParams &burst, uint64_t wr_id) {
+            burst.transport_hdr.wr_id = wr_id;
+          });
 
   py::class_<ManagedBurstStats>(m, "ManagedBurstStats")
       .def_readonly("outstanding_rx", &ManagedBurstStats::outstanding_rx)
       .def_readonly("outstanding_tx", &ManagedBurstStats::outstanding_tx)
       .def_readonly("deferred_rx", &ManagedBurstStats::deferred_rx)
-      .def_readonly("peak_outstanding_rx", &ManagedBurstStats::peak_outstanding_rx)
-      .def_readonly("peak_outstanding_tx", &ManagedBurstStats::peak_outstanding_tx)
-      .def_readonly("total_rx_acquired", &ManagedBurstStats::total_rx_acquired)
-      .def_readonly("total_tx_acquired", &ManagedBurstStats::total_tx_acquired)
-      .def_readonly("total_deferred_rx", &ManagedBurstStats::total_deferred_rx)
-      .def_readonly("total_deferred_wait_ns", &ManagedBurstStats::total_deferred_wait_ns)
-      .def_readonly("max_deferred_wait_ns", &ManagedBurstStats::max_deferred_wait_ns)
+      .def_readonly("peak_outstanding_rx",
+                    &ManagedBurstStats::peak_outstanding_rx)
+      .def_readonly("peak_outstanding_tx",
+                    &ManagedBurstStats::peak_outstanding_tx)
+      .def_readonly("total_rx_acquired",
+                    &ManagedBurstStats::total_rx_acquired)
+      .def_readonly("total_tx_acquired",
+                    &ManagedBurstStats::total_tx_acquired)
+      .def_readonly("total_deferred_rx",
+                    &ManagedBurstStats::total_deferred_rx)
+      .def_readonly("total_deferred_wait_ns",
+                    &ManagedBurstStats::total_deferred_wait_ns)
+      .def_readonly("max_deferred_wait_ns",
+                    &ManagedBurstStats::max_deferred_wait_ns)
       .def_readonly("lifecycle_errors", &ManagedBurstStats::lifecycle_errors);
 
   py::class_<RxBurst>(m, "RxBurst")
       .def(py::init<>())
-      .def_property_readonly("closed",
-                             [](const RxBurst& owner) { return !static_cast<bool>(owner); })
       .def_property_readonly(
-          "burst", [](RxBurst& owner) { return owner.get(); },
+          "closed", [](const RxBurst &owner) { return !owner; })
+      .def_property_readonly(
+          "burst", [](RxBurst &owner) { return owner.get(); },
           py::return_value_policy::reference_internal)
       .def("close", &RxBurst::reset)
       .def(
           "release_on_stream",
-          [](RxBurst& owner, uintptr_t stream) {
-            return owner.release_on_stream(reinterpret_cast<cudaStream_t>(stream));
+          [](RxBurst &owner, uintptr_t stream) {
+            return owner.release_on_stream(
+                reinterpret_cast<cudaStream_t>(stream));
           },
           "stream"_a = 0)
       .def(
-          "detach", [](RxBurst& owner) { return owner.release(); },
+          "detach", [](RxBurst &owner) { return owner.release(); },
           py::return_value_policy::reference)
       .def(
-          "__enter__", [](RxBurst& owner) { return owner.get(); },
+          "__enter__", [](RxBurst &owner) { return owner.get(); },
           py::return_value_policy::reference_internal)
-      .def("__exit__", [](RxBurst& owner, py::object, py::object, py::object) {
-        owner.reset();
-        return false;
-      });
+      .def("__exit__",
+           [](RxBurst &owner, py::object, py::object, py::object) {
+             owner.reset();
+             return false;
+           });
 
   py::class_<TxBurst>(m, "TxBurst")
       .def(py::init<>())
-      .def_property_readonly("closed",
-                             [](const TxBurst& owner) { return !static_cast<bool>(owner); })
-      .def_property_readonly("has_packet_buffers", &TxBurst::has_packet_buffers)
       .def_property_readonly(
-          "burst", [](TxBurst& owner) { return owner.get(); },
+          "closed", [](const TxBurst &owner) { return !owner; })
+      .def_property_readonly("has_packet_buffers",
+                             &TxBurst::has_packet_buffers)
+      .def_property_readonly(
+          "burst", [](TxBurst &owner) { return owner.get(); },
           py::return_value_policy::reference_internal)
-      .def("allocate_packets", [](TxBurst& owner) { return get_tx_packet_burst(&owner); })
+      .def("allocate_packets",
+           [](TxBurst &owner) { return get_tx_packet_burst(&owner); })
       .def("send", &TxBurst::send)
       .def("close", &TxBurst::reset)
       .def(
-          "detach", [](TxBurst& owner) { return owner.release(); },
+          "detach", [](TxBurst &owner) { return owner.release(); },
           py::return_value_policy::reference)
       .def(
-          "__enter__", [](TxBurst& owner) { return owner.get(); },
+          "__enter__", [](TxBurst &owner) { return owner.get(); },
           py::return_value_policy::reference_internal)
-      .def("__exit__", [](TxBurst& owner, py::object, py::object, py::object) {
-        owner.reset();
-        return false;
-      });
+      .def("__exit__",
+           [](TxBurst &owner, py::object, py::object, py::object) {
+             owner.reset();
+             return false;
+           });
 
   py::class_<S3WriterConfig>(m, "S3WriterConfig")
       .def(py::init<>())
@@ -661,8 +698,10 @@ void bind_config_types(py::module_& m) {
       .def_readwrite("region", &S3WriterConfig::region)
       .def_readwrite("endpoint_override", &S3WriterConfig::endpoint_override)
       .def_readwrite("path_style", &S3WriterConfig::path_style)
-      .def_readwrite("aws_sdk_already_initialized", &S3WriterConfig::aws_sdk_already_initialized)
-      .def_readwrite("max_inflight_uploads", &S3WriterConfig::max_inflight_uploads)
+      .def_readwrite("aws_sdk_already_initialized",
+                     &S3WriterConfig::aws_sdk_already_initialized)
+      .def_readwrite("max_inflight_uploads",
+                     &S3WriterConfig::max_inflight_uploads)
       .def_readwrite("max_staged_bytes", &S3WriterConfig::max_staged_bytes);
 
   py::class_<S3WriteStatus>(m, "S3WriteStatus")
@@ -676,15 +715,17 @@ void bind_config_types(py::module_& m) {
            "Return (Status, S3WriteStatus) for an asynchronous S3 write")
       .def("wait", &PyS3WriteHandle::wait,
            "Wait for asynchronous S3 writes and return S3WriteStatus")
-      .def("destroy", &PyS3WriteHandle::destroy, "Release asynchronous S3 write resources");
+      .def("destroy", &PyS3WriteHandle::destroy,
+           "Release asynchronous S3 write resources");
 
   py::class_<PyS3Writer>(m, "S3Writer")
-      .def(py::init<const S3WriterConfig&>(), "config"_a)
-      .def("write_raw_objects_async", &PyS3Writer::write_raw_objects_async, "burst"_a,
+      .def(py::init<const S3WriterConfig &>(), "config"_a)
+      .def("write_raw_objects_async", &PyS3Writer::write_raw_objects_async,
+           "burst"_a, "object_prefix"_a, "packet_data_offset"_a = 0)
+      .def("write_raw_objects", &PyS3Writer::write_raw_objects, "burst"_a,
            "object_prefix"_a, "packet_data_offset"_a = 0)
-      .def("write_raw_objects", &PyS3Writer::write_raw_objects, "burst"_a, "object_prefix"_a,
-           "packet_data_offset"_a = 0)
-      .def("destroy", &PyS3Writer::destroy, "Release S3 writer resources");
+      .def("destroy", &PyS3Writer::destroy,
+           "Release S3 writer resources");
 
   py::class_<RDMAConfig>(m, "RDMAConfig")
       .def(py::init<>())
@@ -786,7 +827,8 @@ void bind_config_types(py::module_& m) {
       .def_readwrite("local_port", &SocketConfig::local_port_)
       .def_readwrite("remote_port", &SocketConfig::remote_port_)
       .def_readwrite("max_payload_size", &SocketConfig::max_payload_size_)
-      .def_readwrite("max_burst_interval_ms", &SocketConfig::max_burst_interval_ms_)
+      .def_readwrite("max_burst_interval_ms",
+                     &SocketConfig::max_burst_interval_ms_)
       .def_readwrite("min_ipg_ns", &SocketConfig::min_ipg_ns_)
       .def_readwrite("retry_connect_s", &SocketConfig::retry_connect_s_);
 
@@ -808,39 +850,49 @@ void bind_config_types(py::module_& m) {
 
   py::class_<ReorderSeqBatchNumberConfig>(m, "ReorderSeqBatchNumberConfig")
       .def(py::init<>())
-      .def_readwrite("sequence_number", &ReorderSeqBatchNumberConfig::sequence_number_)
-      .def_readwrite("batch_number", &ReorderSeqBatchNumberConfig::batch_number_)
-      .def_readwrite("packets_per_batch", &ReorderSeqBatchNumberConfig::packets_per_batch_);
+      .def_readwrite("sequence_number",
+                     &ReorderSeqBatchNumberConfig::sequence_number_)
+      .def_readwrite("batch_number",
+                     &ReorderSeqBatchNumberConfig::batch_number_)
+      .def_readwrite("packets_per_batch",
+                     &ReorderSeqBatchNumberConfig::packets_per_batch_);
 
-  py::class_<ReorderSeqPacketsPerBatchConfig>(m, "ReorderSeqPacketsPerBatchConfig")
+  py::class_<ReorderSeqPacketsPerBatchConfig>(m,
+                                              "ReorderSeqPacketsPerBatchConfig")
       .def(py::init<>())
-      .def_readwrite("sequence_number", &ReorderSeqPacketsPerBatchConfig::sequence_number_)
-      .def_readwrite("packets_per_batch", &ReorderSeqPacketsPerBatchConfig::packets_per_batch_);
+      .def_readwrite("sequence_number",
+                     &ReorderSeqPacketsPerBatchConfig::sequence_number_)
+      .def_readwrite("packets_per_batch",
+                     &ReorderSeqPacketsPerBatchConfig::packets_per_batch_);
 
   py::class_<ReorderDataTypesConfig>(m, "ReorderDataTypesConfig")
       .def(py::init<>())
       .def_readwrite("enabled", &ReorderDataTypesConfig::enabled_)
       .def_readwrite("input_type", &ReorderDataTypesConfig::input_type_)
       .def_readwrite("output_type", &ReorderDataTypesConfig::output_type_)
-      .def_readwrite("input_endianness", &ReorderDataTypesConfig::input_endianness_);
+      .def_readwrite("input_endianness",
+                     &ReorderDataTypesConfig::input_endianness_);
 
   py::class_<ReorderConfig>(m, "ReorderConfig")
       .def(py::init<>())
       .def_readwrite("name", &ReorderConfig::name_)
       .def_readwrite("reorder_type", &ReorderConfig::reorder_type_)
       .def_readwrite("memory_region", &ReorderConfig::memory_region_)
-      .def_readwrite("payload_byte_offset", &ReorderConfig::payload_byte_offset_)
+      .def_readwrite("payload_byte_offset",
+                     &ReorderConfig::payload_byte_offset_)
       .def_readwrite("flow_ids", &ReorderConfig::flow_ids_)
       .def_readwrite("method", &ReorderConfig::method_)
       .def_readwrite("seq_batch_number", &ReorderConfig::seq_batch_number_)
-      .def_readwrite("seq_packets_per_batch", &ReorderConfig::seq_packets_per_batch_)
+      .def_readwrite("seq_packets_per_batch",
+                     &ReorderConfig::seq_packets_per_batch_)
       .def_readwrite("data_types", &ReorderConfig::data_types_);
 
   py::class_<RxConfig>(m, "RxConfig")
       .def(py::init<>())
       .def_readwrite("flow_isolation", &RxConfig::flow_isolation_)
       .def_readwrite("hardware_timestamps", &RxConfig::hardware_timestamps_)
-      .def_readwrite("dynamic_flow_capacity", &RxConfig::dynamic_flow_capacity_)
+      .def_readwrite("dynamic_flow_capacity",
+                     &RxConfig::dynamic_flow_capacity_)
       .def_readwrite("queues", &RxConfig::queues_)
       .def_readwrite("flows", &RxConfig::flows_)
       .def_readwrite("flex_items", &RxConfig::flex_items_)
@@ -874,7 +926,7 @@ void bind_config_types(py::module_& m) {
       .def_readwrite("log_level", &NetworkConfig::log_level_);
 }
 
-}  // namespace
+} // namespace
 
 PYBIND11_MODULE(_daqiri, m) {
   m.doc() = "Python bindings for the DAQIRI packet I/O library";
@@ -885,10 +937,14 @@ PYBIND11_MODULE(_daqiri, m) {
   m.attr("MAX_INTERFACES") = MAX_INTERFACES;
   m.attr("MAX_NUM_SEGS") = MAX_NUM_SEGS;
   m.attr("DAQIRI_BURST_FLAG_REORDERED") = DAQIRI_BURST_FLAG_REORDERED;
-  m.attr("DAQIRI_BURST_FLAG_REORDER_TIMEOUT") = DAQIRI_BURST_FLAG_REORDER_TIMEOUT;
-  m.attr("MEM_ACCESS_LOCAL") = py::int_(static_cast<uint32_t>(MEM_ACCESS_LOCAL));
-  m.attr("MEM_ACCESS_RDMA_WRITE") = py::int_(static_cast<uint32_t>(MEM_ACCESS_RDMA_WRITE));
-  m.attr("MEM_ACCESS_RDMA_READ") = py::int_(static_cast<uint32_t>(MEM_ACCESS_RDMA_READ));
+  m.attr("DAQIRI_BURST_FLAG_REORDER_TIMEOUT") =
+      DAQIRI_BURST_FLAG_REORDER_TIMEOUT;
+  m.attr("MEM_ACCESS_LOCAL") =
+      py::int_(static_cast<uint32_t>(MEM_ACCESS_LOCAL));
+  m.attr("MEM_ACCESS_RDMA_WRITE") =
+      py::int_(static_cast<uint32_t>(MEM_ACCESS_RDMA_WRITE));
+  m.attr("MEM_ACCESS_RDMA_READ") =
+      py::int_(static_cast<uint32_t>(MEM_ACCESS_RDMA_READ));
   m.attr("IPPROTO_UDP") = kIpProtoUdp;
 
   bind_enums(m);
@@ -897,13 +953,13 @@ PYBIND11_MODULE(_daqiri, m) {
   m.def("daqiri_init", &daqiri_init_from_python, "config"_a,
         "Initialize DAQIRI from a YAML path, YAML string, dict, or config-like "
         "object");
-  m.def("daqiri_init_from_yaml_string", &daqiri_init_from_yaml_string, "yaml_string"_a,
-        py::call_guard<py::gil_scoped_release>());
-  m.def("daqiri_init_from_yaml_file", &daqiri_init_from_yaml_file, "yaml_path"_a,
-        py::call_guard<py::gil_scoped_release>());
+  m.def("daqiri_init_from_yaml_string", &daqiri_init_from_yaml_string,
+        "yaml_string"_a, py::call_guard<py::gil_scoped_release>());
+  m.def("daqiri_init_from_yaml_file", &daqiri_init_from_yaml_file,
+        "yaml_path"_a, py::call_guard<py::gil_scoped_release>());
   m.def(
       "parse_network_config",
-      [](const std::string& yaml_string_or_path) {
+      [](const std::string &yaml_string_or_path) {
         NetworkConfig config;
         const Status status = parse_network_config(yaml_string_or_path, config);
         return py::make_tuple(status, config);
@@ -911,17 +967,19 @@ PYBIND11_MODULE(_daqiri, m) {
       "yaml_string_or_path"_a);
   m.def(
       "parse_network_config_from_yaml_string",
-      [](const std::string& yaml_string) {
+      [](const std::string &yaml_string) {
         NetworkConfig config;
-        const Status status = parse_network_config_from_yaml_string(yaml_string, config);
+        const Status status =
+            parse_network_config_from_yaml_string(yaml_string, config);
         return py::make_tuple(status, config);
       },
       "yaml_string"_a);
   m.def(
       "parse_network_config_from_yaml_file",
-      [](const std::string& yaml_path) {
+      [](const std::string &yaml_path) {
         NetworkConfig config;
-        const Status status = parse_network_config_from_yaml_file(yaml_path, config);
+        const Status status =
+            parse_network_config_from_yaml_file(yaml_path, config);
         return py::make_tuple(status, config);
       },
       "yaml_path"_a);
@@ -936,17 +994,23 @@ PYBIND11_MODULE(_daqiri, m) {
   m.def("stream_type_to_string", &stream_type_to_string, "type"_a);
   m.def("socket_protocol_from_string", &socket_protocol_from_string, "str"_a);
   m.def("socket_protocol_to_string", &socket_protocol_to_string, "protocol"_a);
-  m.def("reorder_data_type_from_string", &reorder_data_type_from_string, "str"_a);
+  m.def("reorder_data_type_from_string", &reorder_data_type_from_string,
+        "str"_a);
   m.def("reorder_data_type_to_string", &reorder_data_type_to_string, "type"_a);
-  m.def("reorder_endianness_from_string", &reorder_endianness_from_string, "str"_a);
-  m.def("reorder_endianness_to_string", &reorder_endianness_to_string, "endianness"_a);
+  m.def("reorder_endianness_from_string", &reorder_endianness_from_string,
+        "str"_a);
+  m.def("reorder_endianness_to_string", &reorder_endianness_to_string,
+        "endianness"_a);
   m.def("log_level_to_string", &LogLevel::to_string, "level"_a);
   m.def("log_level_from_string", &LogLevel::from_string, "str"_a);
 
-  m.def("create_burst_params", &create_burst_params, py::return_value_policy::reference);
-  m.def("create_tx_burst_params", &create_tx_burst_params, py::return_value_policy::reference);
+  m.def("create_burst_params", &create_burst_params,
+        py::return_value_policy::reference);
+  m.def("create_tx_burst_params", &create_tx_burst_params,
+        py::return_value_policy::reference);
 
-  m.def("set_header", &set_header, "burst"_a, "port"_a, "q"_a, "num"_a, "segs"_a);
+  m.def("set_header", &set_header, "burst"_a, "port"_a, "q"_a, "num"_a,
+        "segs"_a);
   m.def("set_num_packets", &set_num_packets, "burst"_a, "num"_a);
   m.def("get_num_packets", &get_num_packets, "burst"_a);
   m.def("get_q_id", &get_q_id, "burst"_a);
@@ -955,52 +1019,63 @@ PYBIND11_MODULE(_daqiri, m) {
 
   m.def(
       "get_segment_packet_ptr",
-      [](BurstParams* burst, int seg, int idx) {
-        return reinterpret_cast<uintptr_t>(get_segment_packet_ptr(burst, seg, idx));
+      [](BurstParams *burst, int seg, int idx) {
+        return reinterpret_cast<uintptr_t>(
+            get_segment_packet_ptr(burst, seg, idx));
       },
-      "burst"_a, "seg"_a, "idx"_a, "Return the packet segment data pointer as an integer address");
+      "burst"_a, "seg"_a, "idx"_a,
+      "Return the packet segment data pointer as an integer address");
   m.def(
       "get_packet_ptr",
-      [](BurstParams* burst, int idx) {
+      [](BurstParams *burst, int idx) {
         return reinterpret_cast<uintptr_t>(get_packet_ptr(burst, idx));
       },
-      "burst"_a, "idx"_a, "Return the packet data pointer as an integer address");
-  m.def("get_segment_packet_length", &get_segment_packet_length, "burst"_a, "seg"_a, "idx"_a);
+      "burst"_a, "idx"_a,
+      "Return the packet data pointer as an integer address");
+  m.def("get_segment_packet_length", &get_segment_packet_length, "burst"_a,
+        "seg"_a, "idx"_a);
   m.def("get_packet_length", &get_packet_length, "burst"_a, "idx"_a);
   m.def("get_packet_flow_id", &get_packet_flow_id, "burst"_a, "idx"_a);
   m.def(
       "get_packet_rx_timestamp",
-      [](BurstParams* burst, int idx) {
+      [](BurstParams *burst, int idx) {
         uint64_t timestamp_ns = 0;
-        const Status status = get_packet_rx_timestamp(burst, idx, &timestamp_ns);
+        const Status status =
+            get_packet_rx_timestamp(burst, idx, &timestamp_ns);
         return py::make_tuple(status, timestamp_ns);
       },
-      "burst"_a, "idx"_a, "Return (Status, RX timestamp nanoseconds) for a packet");
+      "burst"_a, "idx"_a,
+      "Return (Status, RX timestamp nanoseconds) for a packet");
   m.def("get_burst_tot_byte", &get_burst_tot_byte, "burst"_a);
-  m.def("daqiri_write_raw_to_file", &daqiri_write_raw_to_file, "burst"_a, "absolute_path"_a,
-        "file_prefix"_a, "packet_data_offset"_a, py::call_guard<py::gil_scoped_release>());
-  m.def("daqiri_write_pcap_to_file", &daqiri_write_pcap_to_file, "burst"_a, "absolute_path"_a,
-        "file_prefix"_a, py::call_guard<py::gil_scoped_release>());
+  m.def("daqiri_write_raw_to_file", &daqiri_write_raw_to_file, "burst"_a,
+        "absolute_path"_a, "file_prefix"_a, "packet_data_offset"_a,
+        py::call_guard<py::gil_scoped_release>());
+  m.def("daqiri_write_pcap_to_file", &daqiri_write_pcap_to_file, "burst"_a,
+        "absolute_path"_a, "file_prefix"_a,
+        py::call_guard<py::gil_scoped_release>());
 
-  m.def("copy_buffer_to_segment_packet", &copy_buffer_to_segment_packet_impl, "burst"_a, "seg"_a,
-        "idx"_a, "data"_a, "nbytes"_a = py::none(), "src_offset"_a = 0, "dst_offset"_a = 0,
+  m.def("copy_buffer_to_segment_packet", &copy_buffer_to_segment_packet_impl,
+        "burst"_a, "seg"_a, "idx"_a, "data"_a, "nbytes"_a = py::none(),
+        "src_offset"_a = 0, "dst_offset"_a = 0,
         "Copy a Python buffer into a CPU or CUDA packet segment");
   m.def(
       "copy_buffer_to_packet",
-      [](BurstParams* burst, int idx, py::buffer data, py::object nbytes_obj, size_t src_offset,
-         size_t dst_offset) {
-        return copy_buffer_to_segment_packet_impl(burst, 0, idx, data, nbytes_obj, src_offset,
-                                                  dst_offset);
+      [](BurstParams *burst, int idx, py::buffer data, py::object nbytes_obj,
+         size_t src_offset, size_t dst_offset) {
+        return copy_buffer_to_segment_packet_impl(
+            burst, 0, idx, data, nbytes_obj, src_offset, dst_offset);
       },
-      "burst"_a, "idx"_a, "data"_a, "nbytes"_a = py::none(), "src_offset"_a = 0, "dst_offset"_a = 0,
+      "burst"_a, "idx"_a, "data"_a, "nbytes"_a = py::none(), "src_offset"_a = 0,
+      "dst_offset"_a = 0,
       "Copy a Python buffer into segment 0 of a CPU or CUDA packet");
-  m.def("get_segment_packet_bytes", &segment_packet_bytes_impl, "burst"_a, "seg"_a, "idx"_a,
-        "nbytes"_a = py::none(), "src_offset"_a = 0,
+  m.def("get_segment_packet_bytes", &segment_packet_bytes_impl, "burst"_a,
+        "seg"_a, "idx"_a, "nbytes"_a = py::none(), "src_offset"_a = 0,
         "Copy a CPU or CUDA packet segment into Python bytes. Returns (Status, "
         "bytes).");
   m.def(
       "get_packet_bytes",
-      [](BurstParams* burst, int idx, py::object nbytes_obj, size_t src_offset) {
+      [](BurstParams *burst, int idx, py::object nbytes_obj,
+         size_t src_offset) {
         return segment_packet_bytes_impl(burst, 0, idx, nbytes_obj, src_offset);
       },
       "burst"_a, "idx"_a, "nbytes"_a = py::none(), "src_offset"_a = 0,
@@ -1008,28 +1083,33 @@ PYBIND11_MODULE(_daqiri, m) {
 
   m.def("is_tx_burst_available", &is_tx_burst_available, "burst"_a,
         py::call_guard<py::gil_scoped_release>());
-  m.def("get_tx_packet_burst", py::overload_cast<BurstParams*>(&get_tx_packet_burst), "burst"_a,
+  m.def("get_tx_packet_burst",
+        py::overload_cast<BurstParams *>(&get_tx_packet_burst), "burst"_a,
         py::call_guard<py::gil_scoped_release>());
-  m.def("send_tx_burst", &send_tx_burst, "burst"_a, py::call_guard<py::gil_scoped_release>());
-  m.def("set_packet_lengths", &set_packet_lengths_from_vector, "burst"_a, "idx"_a, "lens"_a);
-  m.def("set_all_packet_lengths", &set_all_packet_lengths_from_vector, "burst"_a, "lens"_a);
-  m.def("set_packet_tx_time", &set_packet_tx_time, "burst"_a, "idx"_a, "time"_a);
+  m.def("send_tx_burst", &send_tx_burst, "burst"_a,
+        py::call_guard<py::gil_scoped_release>());
+  m.def("set_packet_lengths", &set_packet_lengths_from_vector, "burst"_a,
+        "idx"_a, "lens"_a);
+  m.def("set_all_packet_lengths", &set_all_packet_lengths_from_vector,
+        "burst"_a, "lens"_a);
+  m.def("set_packet_tx_time", &set_packet_tx_time, "burst"_a, "idx"_a,
+        "time"_a);
 
   m.def(
       "set_eth_header",
-      [](BurstParams* burst, int idx, const std::string& dst_addr) {
+      [](BurstParams *burst, int idx, const std::string &dst_addr) {
         char mac_bytes[6] = {};
         format_eth_addr(mac_bytes, dst_addr);
         return set_eth_header(burst, idx, mac_bytes);
       },
       "burst"_a, "idx"_a, "dst_addr"_a);
-  m.def("set_ipv4_header", &set_ipv4_header, "burst"_a, "idx"_a, "ip_len"_a, "proto"_a,
-        "src_host"_a, "dst_host"_a);
-  m.def("set_udp_header", &set_udp_header, "burst"_a, "idx"_a, "udp_len"_a, "src_port"_a,
-        "dst_port"_a);
+  m.def("set_ipv4_header", &set_ipv4_header, "burst"_a, "idx"_a, "ip_len"_a,
+        "proto"_a, "src_host"_a, "dst_host"_a);
+  m.def("set_udp_header", &set_udp_header, "burst"_a, "idx"_a, "udp_len"_a,
+        "src_port"_a, "dst_port"_a);
   m.def(
       "set_udp_payload",
-      [](BurstParams* burst, int idx, py::buffer data) {
+      [](BurstParams *burst, int idx, py::buffer data) {
         py::buffer_info info = data.request();
         const size_t nbytes = buffer_nbytes(info);
         if (nbytes > static_cast<size_t>(std::numeric_limits<int>::max())) {
@@ -1042,46 +1122,50 @@ PYBIND11_MODULE(_daqiri, m) {
   m.def(
       "get_rx_burst",
       [](int port, int q) {
-        BurstParams* burst = nullptr;
+        BurstParams *burst = nullptr;
         Status status = Status::SUCCESS;
         {
           py::gil_scoped_release release;
           status = get_rx_burst(&burst, port, q);
         }
-        return py::make_tuple(status, py::cast(burst, py::return_value_policy::reference));
+        return py::make_tuple(
+            status, py::cast(burst, py::return_value_policy::reference));
       },
       "port"_a, "q"_a);
   m.def(
       "get_rx_burst",
       [](int port) {
-        BurstParams* burst = nullptr;
+        BurstParams *burst = nullptr;
         Status status = Status::SUCCESS;
         {
           py::gil_scoped_release release;
           status = get_rx_burst(&burst, port);
         }
-        return py::make_tuple(status, py::cast(burst, py::return_value_policy::reference));
+        return py::make_tuple(
+            status, py::cast(burst, py::return_value_policy::reference));
       },
       "port"_a);
   m.def("get_rx_burst", []() {
-    BurstParams* burst = nullptr;
+    BurstParams *burst = nullptr;
     Status status = Status::SUCCESS;
     {
       py::gil_scoped_release release;
       status = get_rx_burst(&burst);
     }
-    return py::make_tuple(status, py::cast(burst, py::return_value_policy::reference));
+    return py::make_tuple(status,
+                          py::cast(burst, py::return_value_policy::reference));
   });
   m.def(
       "get_rx_burst_for_connection",
       [](uintptr_t conn_id, bool server) {
-        BurstParams* burst = nullptr;
+        BurstParams *burst = nullptr;
         Status status = Status::SUCCESS;
         {
           py::gil_scoped_release release;
           status = get_rx_burst(&burst, conn_id, server);
         }
-        return py::make_tuple(status, py::cast(burst, py::return_value_policy::reference));
+        return py::make_tuple(
+            status, py::cast(burst, py::return_value_policy::reference));
       },
       "conn_id"_a, "server"_a);
 
@@ -1138,11 +1222,16 @@ PYBIND11_MODULE(_daqiri, m) {
   m.def("get_managed_burst_stats", &get_managed_burst_stats);
 
   m.def("free_packet", &free_packet, "burst"_a, "idx"_a);
-  m.def("free_packet_segment", &free_packet_segment, "burst"_a, "seg"_a, "idx"_a);
-  m.def("free_all_segment_packets", &free_all_segment_packets, "burst"_a, "seg"_a);
-  m.def("free_all_packets_and_burst_rx", &free_all_packets_and_burst_rx, "burst"_a);
-  m.def("free_all_packets_and_burst_tx", &free_all_packets_and_burst_tx, "burst"_a);
-  m.def("free_segment_packets_and_burst", &free_segment_packets_and_burst, "burst"_a, "seg"_a);
+  m.def("free_packet_segment", &free_packet_segment, "burst"_a, "seg"_a,
+        "idx"_a);
+  m.def("free_all_segment_packets", &free_all_segment_packets, "burst"_a,
+        "seg"_a);
+  m.def("free_all_packets_and_burst_rx", &free_all_packets_and_burst_rx,
+        "burst"_a);
+  m.def("free_all_packets_and_burst_tx", &free_all_packets_and_burst_tx,
+        "burst"_a);
+  m.def("free_segment_packets_and_burst", &free_segment_packets_and_burst,
+        "burst"_a, "seg"_a);
   m.def("free_tx_burst", &free_tx_burst, "burst"_a);
   m.def("free_rx_burst", &free_rx_burst, "burst"_a);
   m.def("free_tx_metadata", &free_tx_metadata, "burst"_a);
@@ -1157,16 +1246,20 @@ PYBIND11_MODULE(_daqiri, m) {
           return py::make_tuple(status, std::string());
         }
         char formatted[18] = {};
-        std::snprintf(formatted, sizeof(formatted), "%02x:%02x:%02x:%02x:%02x:%02x",
-                      static_cast<unsigned char>(mac[0]), static_cast<unsigned char>(mac[1]),
-                      static_cast<unsigned char>(mac[2]), static_cast<unsigned char>(mac[3]),
-                      static_cast<unsigned char>(mac[4]), static_cast<unsigned char>(mac[5]));
+        std::snprintf(formatted, sizeof(formatted),
+                      "%02x:%02x:%02x:%02x:%02x:%02x",
+                      static_cast<unsigned char>(mac[0]),
+                      static_cast<unsigned char>(mac[1]),
+                      static_cast<unsigned char>(mac[2]),
+                      static_cast<unsigned char>(mac[3]),
+                      static_cast<unsigned char>(mac[4]),
+                      static_cast<unsigned char>(mac[5]));
         return py::make_tuple(status, std::string(formatted));
       },
       "port"_a);
   m.def(
       "format_eth_addr",
-      [](const std::string& addr) {
+      [](const std::string &addr) {
         char mac[6] = {};
         format_eth_addr(mac, addr);
         return py::bytes(mac, sizeof(mac));
@@ -1177,7 +1270,7 @@ PYBIND11_MODULE(_daqiri, m) {
   m.def("allow_all_traffic", &allow_all_traffic, "port"_a);
   m.def(
       "add_rx_flow_async",
-      [](int port, const FlowRuleConfig& flow) {
+      [](int port, const FlowRuleConfig &flow) {
         FlowOpId op_id = 0;
         const Status status = add_rx_flow_async(port, flow, &op_id);
         return py::make_tuple(status, op_id);
@@ -1185,7 +1278,7 @@ PYBIND11_MODULE(_daqiri, m) {
       "port"_a, "flow"_a);
   m.def(
       "add_rx_flows_async",
-      [](int port, const std::vector<FlowRuleConfig>& flows) {
+      [](int port, const std::vector<FlowRuleConfig> &flows) {
         FlowOpId op_id = 0;
         const Status status = add_rx_flows_async(port, flows, &op_id);
         return py::make_tuple(status, op_id);
@@ -1199,24 +1292,27 @@ PYBIND11_MODULE(_daqiri, m) {
         return py::make_tuple(status, op_id);
       },
       "flow_id"_a);
-  m.def("poll_flow_op", []() {
-    FlowOpResult result;
-    const Status status = poll_flow_op(&result);
-    return py::make_tuple(status, result);
-  });
+  m.def(
+      "poll_flow_op",
+      []() {
+        FlowOpResult result;
+        const Status status = poll_flow_op(&result);
+        return py::make_tuple(status, result);
+      });
   m.def("get_num_rx_queues", &get_num_rx_queues, "port_id"_a);
   m.def("flush_port_queue", &flush_port_queue, "port"_a, "queue"_a);
 
   m.def(
       "set_reorder_cuda_stream",
-      [](const std::string& interface_name, const std::string& reorder_name, uintptr_t stream) {
+      [](const std::string &interface_name, const std::string &reorder_name,
+         uintptr_t stream) {
         return set_reorder_cuda_stream(interface_name, reorder_name,
                                        reinterpret_cast<cudaStream_t>(stream));
       },
       "interface_name"_a, "reorder_name"_a, "stream"_a = 0);
   m.def(
       "get_reorder_burst_info",
-      [](BurstParams* burst) {
+      [](BurstParams *burst) {
         ReorderBurstInfo info{};
         const Status status = get_reorder_burst_info(burst, &info);
         return py::make_tuple(status, info);
@@ -1224,7 +1320,7 @@ PYBIND11_MODULE(_daqiri, m) {
       "burst"_a);
   m.def(
       "synchronize_burst_event",
-      [](BurstParams* burst) {
+      [](BurstParams *burst) {
         if (burst == nullptr) {
           return Status::NULL_PTR;
         }
@@ -1233,7 +1329,8 @@ PYBIND11_MODULE(_daqiri, m) {
         }
         const cudaError_t err = cudaEventSynchronize(burst->event);
         if (err != cudaSuccess) {
-          DAQIRI_LOG_ERROR("cudaEventSynchronize failed: {}", cudaGetErrorString(err));
+          DAQIRI_LOG_ERROR("cudaEventSynchronize failed: {}",
+                           cudaGetErrorString(err));
           return Status::GENERIC_FAILURE;
         }
         return Status::SUCCESS;
@@ -1242,18 +1339,20 @@ PYBIND11_MODULE(_daqiri, m) {
 
   m.def(
       "socket_connect_to_server",
-      [](const std::string& server_addr, uint16_t server_port) {
+      [](const std::string &server_addr, uint16_t server_port) {
         uintptr_t conn_id = 0;
-        const Status status = socket_connect_to_server(server_addr, server_port, &conn_id);
+        const Status status =
+            socket_connect_to_server(server_addr, server_port, &conn_id);
         return py::make_tuple(status, conn_id);
       },
       "server_addr"_a, "server_port"_a);
   m.def(
       "socket_connect_to_server",
-      [](const std::string& server_addr, uint16_t server_port, const std::string& src_addr) {
+      [](const std::string &server_addr, uint16_t server_port,
+         const std::string &src_addr) {
         uintptr_t conn_id = 0;
-        const Status status =
-            socket_connect_to_server(server_addr, server_port, src_addr, &conn_id);
+        const Status status = socket_connect_to_server(server_addr, server_port,
+                                                       src_addr, &conn_id);
         return py::make_tuple(status, conn_id);
       },
       "server_addr"_a, "server_port"_a, "src_addr"_a);
@@ -1268,26 +1367,30 @@ PYBIND11_MODULE(_daqiri, m) {
       "conn_id"_a);
   m.def(
       "socket_get_server_conn_id",
-      [](const std::string& server_addr, uint16_t server_port) {
+      [](const std::string &server_addr, uint16_t server_port) {
         uintptr_t conn_id = 0;
-        const Status status = socket_get_server_conn_id(server_addr, server_port, &conn_id);
+        const Status status =
+            socket_get_server_conn_id(server_addr, server_port, &conn_id);
         return py::make_tuple(status, conn_id);
       },
       "server_addr"_a, "server_port"_a);
 
   m.def(
       "rdma_connect_to_server",
-      [](const std::string& server_addr, uint16_t server_port) {
+      [](const std::string &server_addr, uint16_t server_port) {
         uintptr_t conn_id = 0;
-        const Status status = rdma_connect_to_server(server_addr, server_port, &conn_id);
+        const Status status =
+            rdma_connect_to_server(server_addr, server_port, &conn_id);
         return py::make_tuple(status, conn_id);
       },
       "server_addr"_a, "server_port"_a);
   m.def(
       "rdma_connect_to_server",
-      [](const std::string& server_addr, uint16_t server_port, const std::string& src_addr) {
+      [](const std::string &server_addr, uint16_t server_port,
+         const std::string &src_addr) {
         uintptr_t conn_id = 0;
-        const Status status = rdma_connect_to_server(server_addr, server_port, src_addr, &conn_id);
+        const Status status = rdma_connect_to_server(server_addr, server_port,
+                                                     src_addr, &conn_id);
         return py::make_tuple(status, conn_id);
       },
       "server_addr"_a, "server_port"_a, "src_addr"_a);
@@ -1302,18 +1405,19 @@ PYBIND11_MODULE(_daqiri, m) {
       "conn_id"_a);
   m.def(
       "rdma_get_server_conn_id",
-      [](const std::string& server_addr, uint16_t server_port) {
+      [](const std::string &server_addr, uint16_t server_port) {
         uintptr_t conn_id = 0;
-        const Status status = rdma_get_server_conn_id(server_addr, server_port, &conn_id);
+        const Status status =
+            rdma_get_server_conn_id(server_addr, server_port, &conn_id);
         return py::make_tuple(status, conn_id);
       },
       "server_addr"_a, "server_port"_a);
-  m.def("rdma_set_header", &rdma_set_header, "burst"_a, "op_code"_a, "conn_id"_a, "is_server"_a,
-        "num_pkts"_a, "wr_id"_a, "local_mr_name"_a);
+  m.def("rdma_set_header", &rdma_set_header, "burst"_a, "op_code"_a,
+        "conn_id"_a, "is_server"_a, "num_pkts"_a, "wr_id"_a, "local_mr_name"_a);
   m.def("rdma_get_opcode", &rdma_get_opcode, "burst"_a);
 
   m.def("shutdown", &shutdown, "Shut down the active DAQIRI engine");
   m.def("print_stats", &print_stats, "Print DAQIRI engine statistics");
 }
 
-}  // namespace daqiri
+} // namespace daqiri
