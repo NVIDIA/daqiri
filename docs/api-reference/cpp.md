@@ -58,7 +58,7 @@ auto status = daqiri::get_rx_burst(&burst, port_id, queue_id);
 ```
 
 `get_rx_burst()` is non-blocking. It returns `Status::SUCCESS` when a complete batch is
-available, or `Status::NULL_PTR` when no burst is ready yet. There are also overloads
+available, or `Status::NOT_READY` when no burst is ready yet. There are also overloads
 that dequeue from any queue on a port, or from any queue on any port:
 
 ```cpp
@@ -107,6 +107,43 @@ for (int i = 0; i < daqiri::get_num_packets(burst); i++) {
 ```
 
 ### RX Step 3 — Free buffers
+
+The recommended C++ path is the move-only `RxBurst` owner. Its destructor
+returns all packets and metadata through the correct engine-specific free path:
+
+```cpp
+daqiri::RxBurst owner;
+if (daqiri::get_rx_burst(&owner, port_id, queue_id) ==
+    daqiri::Status::SUCCESS) {
+    daqiri::BurstParams *burst = owner.get();
+    process(burst);
+} // automatically released
+```
+
+For asynchronous GPU processing, enqueue the kernel and then transfer ownership
+to DAQIRI's CUDA completion reclaimer. `release_on_stream()` records its own
+event after all work previously enqueued in that stream; it does not retain a
+caller-owned event:
+
+```cpp
+daqiri::RxBurst owner;
+if (daqiri::get_rx_burst(&owner, port_id, queue_id) ==
+    daqiri::Status::SUCCESS) {
+    void *packet = daqiri::get_packet_ptr(owner.get(), 0);
+    process_packet<<<grid, block, 0, stream>>>(packet);
+    auto st = owner.release_on_stream(stream);
+    if (st != daqiri::Status::SUCCESS) {
+        cudaStreamSynchronize(stream); // owner still owns the burst
+    }
+}
+```
+
+`reset()` releases immediately, while `release()` detaches and returns the raw
+pointer to code that will use the manual free API. Destroy all application-held
+owners before calling `daqiri::shutdown()`; shutdown drains releases already
+deferred to CUDA streams and reports owners still held by the application.
+
+The original manual API remains available:
 
 When you are done processing, free the burst to return buffers to the pool:
 
@@ -269,16 +306,35 @@ __global__ void noop_packet_kernel(void *packet) {
 
 if (daqiri::get_num_packets(burst) > 0) {
     void *packet = daqiri::get_packet_ptr(burst, 0);
-    noop_packet_kernel<<<1, 1, 0, stream>>>(packet);
+noop_packet_kernel<<<1, 1, 0, stream>>>(packet);
 }
 
-// Free once the kernel completes
+// The manual API requires the application to prove GPU completion first.
+cudaStreamSynchronize(stream);
 daqiri::free_all_packets_and_burst_rx(burst);
 ```
 
 ## Transmitting Packets
 
 ### TX Step 1 — Allocate a burst
+
+The managed TX path tracks metadata separately from allocated packet buffers:
+
+```cpp
+daqiri::TxBurst owner;
+auto status = daqiri::create_tx_burst(&owner);
+if (status == daqiri::Status::SUCCESS) {
+    daqiri::set_header(owner.get(), port_id, queue_id, batch_size, num_segments);
+    status = daqiri::get_tx_packet_burst(&owner);
+}
+```
+
+If allocation or packet filling fails, the owner returns exactly the resources
+acquired so far. Use the `TxBurst` overload of `get_tx_packet_burst()` rather
+than passing `owner.get()` to the legacy overload, so the owner can record that
+packet buffers were acquired.
+
+The original manual allocation path is:
 
 ```cpp
 auto burst = daqiri::create_tx_burst_params();
@@ -325,6 +381,18 @@ Or construct raw packets by writing directly into the packet buffer returned by
 `get_packet_ptr()`.
 
 ### TX Step 3 — Send
+
+With managed ownership, call `send()`:
+
+```cpp
+auto status = owner.send();
+```
+
+The owner becomes empty when the selected engine consumed the burst, including
+engine-specific failure paths. If the engine retained ownership after a
+validation error, the owner remains non-empty and releases it on destruction.
+
+The equivalent manual call is:
 
 ```cpp
 daqiri::send_tx_burst(burst);
@@ -604,6 +672,7 @@ workflow sections above show the common call order and ownership rules.
 | `get_rx_burst(&burst, port)` | Dequeue from any queue on a specific port. |
 | `get_rx_burst(&burst)` | Dequeue from any queue on any port. |
 | `get_rx_burst(&burst, conn_id, server)` | Dequeue from an RDMA/socket connection ring. |
+| `get_rx_burst(&owner, ...)` | Dequeue into a move-only `RxBurst` owner. |
 | `get_connection_id(burst)` | Read the transport connection ID recorded on an RX burst. |
 | `set_reorder_cuda_stream(interface_name, reorder_name, stream)` | Set the CUDA stream for a configured GPU reorder plan. |
 | `get_reorder_burst_info(burst, &info)` | Read metadata for a reordered aggregate burst. |
@@ -613,6 +682,9 @@ workflow sections above show the common call order and ownership rules.
 | Function | Purpose |
 | --- | --- |
 | `is_tx_burst_available(burst)` | Check whether buffers are available for a TX burst. |
+| `create_tx_burst(&owner)` | Allocate move-only managed TX metadata. |
+| `get_tx_packet_burst(&owner)` | Populate managed TX metadata and record packet-buffer ownership. |
+| `owner.send()` | Send a managed TX burst and clear the owner when consumed. |
 | `get_tx_packet_burst(burst)` | Populate a TX burst with packet buffers. |
 | `set_connection_id(burst, conn_id)` | Attach a transport connection ID to a TX burst (socket/RDMA). |
 | `send_tx_burst(burst)` | Enqueue a populated TX burst. |
@@ -638,6 +710,10 @@ workflow sections above show the common call order and ownership rules.
 | `free_all_packets_and_burst_tx(burst)` | Free all TX packet buffers and TX burst metadata. |
 | `free_rx_burst(burst)` / `free_tx_burst(burst)` | Free burst metadata only. |
 | `free_rx_metadata(burst)` / `free_tx_metadata(burst)` | Free RX or TX metadata only. |
+| `owner.reset()` | Immediately release a managed RX or TX burst. |
+| `rx_owner.release_on_stream(stream)` | Defer RX release until prior CUDA work in the stream completes. |
+| `owner.release()` | Detach a raw burst from its owner for manual release. |
+| `get_managed_burst_stats()` | Snapshot outstanding, deferred, peak, timing, and lifecycle-error counters. |
 
 ### File I/O
 

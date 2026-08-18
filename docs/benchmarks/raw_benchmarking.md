@@ -224,6 +224,11 @@ After having modified the configuration file, ensure you have connected an SFP c
 
 By default the application runs for 10 seconds and then exits. You can change the duration by passing `--seconds <N>` after the YAML path, or stop it gracefully at any time with `Ctrl-C`.
 
+Pass `--managed-rx` to `daqiri_bench_raw_gpudirect` to use the move-only
+`RxBurst` ownership API in the receive worker. This is useful for comparing the
+managed cleanup path with the legacy explicit-free path using the same traffic,
+configuration, and benchmark loop.
+
 ## Flow programming smoke test
 
 Raw Ethernet flow rules are programmed into the NIC during `daqiri_init()`. Software loopback

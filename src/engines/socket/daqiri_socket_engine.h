@@ -83,6 +83,9 @@ class SocketEngine : public Engine {
   void free_tx_metadata(BurstParams* burst) override;
   Status get_tx_metadata_buffer(BurstParams** burst) override;
   Status send_tx_burst(BurstParams* burst) override;
+  bool tx_send_consumed(Status) const override {
+    return true;
+  }
   Status get_mac_addr(int port, char* mac) override;
 
   bool validate_config() const override;
@@ -104,9 +107,8 @@ class SocketEngine : public Engine {
   Status rdma_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) override;
   Status rdma_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
                                  uintptr_t* conn_id) override;
-  Status rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id,
-                         bool is_server, int num_pkts, uint64_t wr_id,
-                         const std::string& local_mr_name) override;
+  Status rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id, bool is_server,
+                         int num_pkts, uint64_t wr_id, const std::string& local_mr_name) override;
   RDMAOpCode rdma_get_opcode(BurstParams* burst) override;
 
  private:

@@ -20,6 +20,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -36,9 +37,8 @@
 
 namespace {
 
-void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
-               daqiri::bench::TokenBucketPacer &pacer,
-               std::atomic<bool> &stop) {
+void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg, daqiri::bench::TokenBucketPacer& pacer,
+               std::atomic<bool>& stop) {
   if (!daqiri::bench::set_current_thread_affinity(cfg.cpu_core, "bench_tx")) {
     stop.store(true);
     return;
@@ -75,14 +75,13 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
 
   std::unordered_set<void *> initialized_tx_buffers;
   daqiri::bench::RawBenchQueueStats stats;
-  const auto packet_size =
-      static_cast<uint64_t>(cfg.header_size) + cfg.payload_size;
+  const auto packet_size = static_cast<uint64_t>(cfg.header_size) + cfg.payload_size;
   const auto t0 = std::chrono::steady_clock::now();
 
   while (!stop.load()) {
-    auto *msg = daqiri::create_tx_burst_params();
-    daqiri::set_header(msg, static_cast<uint16_t>(port_id),
-                       static_cast<uint16_t>(cfg.queue_id), cfg.batch_size, 1);
+    auto* msg = daqiri::create_tx_burst_params();
+    daqiri::set_header(msg, static_cast<uint16_t>(port_id), static_cast<uint16_t>(cfg.queue_id),
+                       cfg.batch_size, 1);
 
     if (!daqiri::is_tx_burst_available(msg)) {
       daqiri::free_tx_metadata(msg);
@@ -141,26 +140,26 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
     }
   }
 
-  const double secs =
-      std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
-          .count();
-  daqiri::bench::print_queue_stats("TX", cfg.interface_name, cfg.queue_id,
-                                   stats, secs);
+  const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+  daqiri::bench::print_queue_stats("TX", cfg.interface_name, cfg.queue_id, stats, secs);
 }
 
-} // namespace
+}  // namespace
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0]
-              << " <config.yaml> [--seconds N] [--target-gbps G]\n";
+              << " <config.yaml> [--seconds N] [--target-gbps G]"
+                 " [--managed-rx]\n";
     return 1;
   }
 
-  const auto prometheus_metrics =
-      daqiri::bench::grafana::init_prometheus_metrics_from_env();
+  const auto prometheus_metrics = daqiri::bench::grafana::init_prometheus_metrics_from_env();
   const int run_seconds = daqiri::bench::parse_run_seconds(argc, argv);
   const double target_gbps = daqiri::bench::parse_target_gbps(argc, argv);
+  const bool managed_rx = std::find_if(argv + 2, argv + argc, [](const char* arg) {
+                            return std::string(arg) == "--managed-rx";
+                          }) != argv + argc;
   const auto root = YAML::LoadFile(argv[1]);
 
   std::vector<daqiri::bench::RawBenchRxConfig> rx_configs;
@@ -168,7 +167,7 @@ int main(int argc, char **argv) {
   try {
     rx_configs = daqiri::bench::parse_rx_configs(root);
     tx_configs = daqiri::bench::parse_tx_configs(root);
-  } catch (const std::exception &e) {
+  } catch (const std::exception& e) {
     std::cerr << "Invalid benchmark config: " << e.what() << "\n";
     return 1;
   }
@@ -189,23 +188,26 @@ int main(int argc, char **argv) {
   daqiri::bench::TokenBucketPacer tx_pacer(target_gbps);
 
   rx_threads.reserve(rx_configs.size());
-  for (const auto &cfg : rx_configs) {
-    rx_threads.emplace_back(daqiri::bench::rx_count_worker, cfg,
-                            std::ref(stop));
+  for (const auto& cfg : rx_configs) {
+    if (managed_rx) {
+      rx_threads.emplace_back(daqiri::bench::rx_count_worker_managed, cfg, std::ref(stop));
+    } else {
+      rx_threads.emplace_back(daqiri::bench::rx_count_worker, cfg, std::ref(stop));
+    }
   }
   tx_threads.reserve(tx_configs.size());
-  for (const auto &cfg : tx_configs) {
+  for (const auto& cfg : tx_configs) {
     tx_threads.emplace_back(tx_worker, cfg, std::ref(tx_pacer), std::ref(stop));
   }
 
   daqiri::bench::wait_for_stop(run_seconds, stop);
 
-  for (auto &thread : tx_threads) {
+  for (auto& thread : tx_threads) {
     if (thread.joinable()) {
       thread.join();
     }
   }
-  for (auto &thread : rx_threads) {
+  for (auto& thread : rx_threads) {
     if (thread.joinable()) {
       thread.join();
     }

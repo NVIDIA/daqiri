@@ -142,6 +142,7 @@ add_library(daqiri_common
   common.cpp
   common_gds.cpp
   common_s3.cpp
+  managed_burst.cpp
   kernels.cu
   engine.cpp
   logging.cpp

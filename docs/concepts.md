@@ -317,6 +317,14 @@ bursts after allocation. Holding bursts indefinitely drains DAQIRI's
 buffer pools and can lead to `NO_FREE_BURST_BUFFERS`,
 `NO_FREE_PACKET_BUFFERS`, queue drops, or stalled TX.
 
+The C++ `RxBurst` and `TxBurst` owners make this contract scope-based: an
+owned burst is returned automatically when its owner is destroyed. Python's
+matching owners support `with` blocks. If CUDA work continues using RX packet
+memory after the CPU scope ends, `RxBurst::release_on_stream()` records a
+DAQIRI-owned event after prior work in that stream and returns the buffers only
+after the event completes. The raw-pointer and partial-release APIs remain
+available for applications that need manual ownership.
+
 When to call each `free_*` function is documented in the
 [C++ API Usage page](api-reference/cpp.md#rx-step-3-free-buffers).
 

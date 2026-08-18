@@ -42,13 +42,13 @@ namespace {
 volatile std::sig_atomic_t g_stop_requested = 0;
 std::mutex g_stats_print_mutex;
 
-bool has_bench_config(const YAML::Node &root, const char *key) {
+bool has_bench_config(const YAML::Node& root, const char* key) {
   const auto node = root[key];
   if (!node) {
     return false;
   }
   if (node.IsSequence()) {
-    for (const auto &item : node) {
+    for (const auto& item : node) {
       if (item && item.IsMap() && item["interface_name"]) {
         return true;
       }
@@ -58,16 +58,15 @@ bool has_bench_config(const YAML::Node &root, const char *key) {
   return node.IsMap() && node["interface_name"];
 }
 
-std::vector<int> queue_ids_for_interface(const YAML::Node &root,
-                                         const std::string &interface_name,
-                                         const char *direction) {
+std::vector<int> queue_ids_for_interface(const YAML::Node& root, const std::string& interface_name,
+                                         const char* direction) {
   const auto cfg = root["daqiri"]["cfg"];
   const auto interfaces = cfg["interfaces"];
   if (!interfaces || !interfaces.IsSequence()) {
     return {};
   }
 
-  for (const auto &intf : interfaces) {
+  for (const auto& intf : interfaces) {
     if (intf["name"].as<std::string>("") != interface_name) {
       continue;
     }
@@ -79,7 +78,7 @@ std::vector<int> queue_ids_for_interface(const YAML::Node &root,
     }
 
     queue_ids.reserve(queues.size());
-    for (const auto &queue : queues) {
+    for (const auto& queue : queues) {
       queue_ids.push_back(queue["id"].as<int>());
     }
     return queue_ids;
@@ -88,34 +87,27 @@ std::vector<int> queue_ids_for_interface(const YAML::Node &root,
   return {};
 }
 
-void validate_queue_id(int queue_id, const std::vector<int> &queue_ids,
-                       const std::string &bench_key,
-                       const std::string &interface_name) {
+void validate_queue_id(int queue_id, const std::vector<int>& queue_ids,
+                       const std::string& bench_key, const std::string& interface_name) {
   if (queue_id < 0 || queue_id > std::numeric_limits<uint16_t>::max()) {
-    throw std::runtime_error(bench_key + " queue_id is out of range for " +
-                             interface_name);
+    throw std::runtime_error(bench_key + " queue_id is out of range for " + interface_name);
   }
 
-  if (!queue_ids.empty() && std::find(queue_ids.begin(), queue_ids.end(),
-                                      queue_id) == queue_ids.end()) {
-    throw std::runtime_error(bench_key + " queue_id " +
-                             std::to_string(queue_id) +
+  if (!queue_ids.empty() &&
+      std::find(queue_ids.begin(), queue_ids.end(), queue_id) == queue_ids.end()) {
+    throw std::runtime_error(bench_key + " queue_id " + std::to_string(queue_id) +
                              " does not exist on interface " + interface_name);
   }
 }
 
-int assign_queue_id(const YAML::Node &root, const YAML::Node &item,
-                    const char *direction, const char *bench_key,
-                    std::unordered_map<std::string, size_t> &next_queue_idx,
-                    std::unordered_map<std::string, size_t> &entry_counts,
-                    std::unordered_map<std::string, std::unordered_set<int>>
-                        &assigned_queue_ids) {
+int assign_queue_id(const YAML::Node& root, const YAML::Node& item, const char* direction,
+                    const char* bench_key, std::unordered_map<std::string, size_t>& next_queue_idx,
+                    std::unordered_map<std::string, size_t>& entry_counts,
+                    std::unordered_map<std::string, std::unordered_set<int>>& assigned_queue_ids) {
   const auto interface_name = item["interface_name"].as<std::string>();
-  const auto queue_ids =
-      queue_ids_for_interface(root, interface_name, direction);
+  const auto queue_ids = queue_ids_for_interface(root, interface_name, direction);
   if (queue_ids.empty()) {
-    throw std::runtime_error(std::string(bench_key) +
-                             " references interface '" + interface_name +
+    throw std::runtime_error(std::string(bench_key) + " references interface '" + interface_name +
                              "' with no DAQIRI " + direction + " queues");
   }
 
@@ -128,50 +120,45 @@ int assign_queue_id(const YAML::Node &root, const YAML::Node &item,
   } else {
     const size_t idx = next_queue_idx[interface_name]++;
     if (idx >= queue_ids.size()) {
-      throw std::runtime_error(
-          std::string(bench_key) + " has more entries for interface '" +
-          interface_name + "' than DAQIRI " + direction + " queues");
+      throw std::runtime_error(std::string(bench_key) + " has more entries for interface '" +
+                               interface_name + "' than DAQIRI " + direction + " queues");
     }
     queue_id = queue_ids[idx];
   }
 
   if (!assigned_queue_ids[interface_name].insert(queue_id).second) {
-    throw std::runtime_error(
-        std::string(bench_key) + " queue_id " + std::to_string(queue_id) +
-        " is configured more than once for interface '" + interface_name + "'");
+    throw std::runtime_error(std::string(bench_key) + " queue_id " + std::to_string(queue_id) +
+                             " is configured more than once for interface '" + interface_name +
+                             "'");
   }
   return queue_id;
 }
 
-void validate_bench_list_sizes(
-    const YAML::Node &root, const char *direction, const char *bench_key,
-    const std::unordered_map<std::string, size_t> &entry_counts) {
-  for (const auto &[interface_name, count] : entry_counts) {
-    const auto queue_ids =
-        queue_ids_for_interface(root, interface_name, direction);
+void validate_bench_list_sizes(const YAML::Node& root, const char* direction, const char* bench_key,
+                               const std::unordered_map<std::string, size_t>& entry_counts) {
+  for (const auto& [interface_name, count] : entry_counts) {
+    const auto queue_ids = queue_ids_for_interface(root, interface_name, direction);
     if (!queue_ids.empty() && count != queue_ids.size()) {
-      throw std::runtime_error(
-          std::string(bench_key) + " entries for interface '" + interface_name +
-          "' must match the DAQIRI " + direction + " queue count (" +
-          std::to_string(count) + " entries, " +
-          std::to_string(queue_ids.size()) + " queues)");
+      throw std::runtime_error(std::string(bench_key) + " entries for interface '" +
+                               interface_name + "' must match the DAQIRI " + direction +
+                               " queue count (" + std::to_string(count) + " entries, " +
+                               std::to_string(queue_ids.size()) + " queues)");
     }
   }
 }
 
-RawBenchRxConfig parse_rx_item(const YAML::Node &rx) {
+RawBenchRxConfig parse_rx_item(const YAML::Node& rx) {
   RawBenchRxConfig cfg;
   cfg.interface_name = rx["interface_name"].as<std::string>(cfg.interface_name);
   cfg.queue_id = rx["queue_id"].as<int>(cfg.queue_id);
   cfg.cpu_core = rx["cpu_core"].as<int>(cfg.cpu_core);
   if (cfg.cpu_core < -1) {
-    throw std::runtime_error("bench_rx cpu_core is out of range for " +
-                             cfg.interface_name);
+    throw std::runtime_error("bench_rx cpu_core is out of range for " + cfg.interface_name);
   }
   return cfg;
 }
 
-RawBenchTxConfig parse_tx_item(const YAML::Node &tx) {
+RawBenchTxConfig parse_tx_item(const YAML::Node& tx) {
   RawBenchTxConfig cfg;
   cfg.interface_name = tx["interface_name"].as<std::string>(cfg.interface_name);
   cfg.queue_id = tx["queue_id"].as<int>(cfg.queue_id);
@@ -187,23 +174,21 @@ RawBenchTxConfig parse_tx_item(const YAML::Node &tx) {
   cfg.eth_dst_addr = tx["eth_dst_addr"].as<std::string>(cfg.eth_dst_addr);
   validate_queue_id(cfg.queue_id, {}, "bench_tx", cfg.interface_name);
   if (cfg.cpu_core < -1) {
-    throw std::runtime_error("bench_tx cpu_core is out of range for " +
-                             cfg.interface_name);
+    throw std::runtime_error("bench_tx cpu_core is out of range for " + cfg.interface_name);
   }
   return cfg;
 }
 
-} // namespace
+}  // namespace
 
-PinnedHostBuffer::PinnedHostBuffer(PinnedHostBuffer &&other) noexcept {
+PinnedHostBuffer::PinnedHostBuffer(PinnedHostBuffer&& other) noexcept {
   ptr_ = other.ptr_;
   capacity_ = other.capacity_;
   other.ptr_ = nullptr;
   other.capacity_ = 0;
 }
 
-PinnedHostBuffer &
-PinnedHostBuffer::operator=(PinnedHostBuffer &&other) noexcept {
+PinnedHostBuffer& PinnedHostBuffer::operator=(PinnedHostBuffer&& other) noexcept {
   if (this != &other) {
     reset();
     ptr_ = other.ptr_;
@@ -214,7 +199,9 @@ PinnedHostBuffer::operator=(PinnedHostBuffer &&other) noexcept {
   return *this;
 }
 
-PinnedHostBuffer::~PinnedHostBuffer() { reset(); }
+PinnedHostBuffer::~PinnedHostBuffer() {
+  reset();
+}
 
 bool PinnedHostBuffer::resize(size_t size) {
   if (size <= capacity_) {
@@ -241,17 +228,21 @@ void PinnedHostBuffer::reset() {
   }
 }
 
-uint8_t *PinnedHostBuffer::data() { return static_cast<uint8_t *>(ptr_); }
-
-const uint8_t *PinnedHostBuffer::data() const {
-  return static_cast<const uint8_t *>(ptr_);
+uint8_t* PinnedHostBuffer::data() {
+  return static_cast<uint8_t*>(ptr_);
 }
 
-size_t PinnedHostBuffer::capacity() const { return capacity_; }
+const uint8_t* PinnedHostBuffer::data() const {
+  return static_cast<const uint8_t*>(ptr_);
+}
 
-int parse_run_seconds(int argc, char **argv) {
+size_t PinnedHostBuffer::capacity() const {
+  return capacity_;
+}
+
+int parse_run_seconds(int argc, char** argv) {
   int run_seconds = 10;
-  for (int i = 2; i + 1 < argc; i += 2) {
+  for (int i = 2; i + 1 < argc; ++i) {
     if (std::string(argv[i]) == "--seconds") {
       run_seconds = std::stoi(argv[i + 1]);
     }
@@ -259,9 +250,9 @@ int parse_run_seconds(int argc, char **argv) {
   return run_seconds;
 }
 
-double parse_target_gbps(int argc, char **argv) {
+double parse_target_gbps(int argc, char** argv) {
   double target_gbps = 0.0;
-  for (int i = 2; i + 1 < argc; i += 2) {
+  for (int i = 2; i + 1 < argc; ++i) {
     if (std::string(argv[i]) == "--target-gbps") {
       target_gbps = std::stod(argv[i + 1]);
     }
@@ -273,15 +264,14 @@ TokenBucketPacer::TokenBucketPacer(double target_gbps)
     : target_bps_(target_gbps > 0.0 ? target_gbps * 1e9 : 0.0),
       t0_(std::chrono::steady_clock::now()) {}
 
-void TokenBucketPacer::wait_for_bytes(size_t bytes, std::atomic<bool> &stop) {
+void TokenBucketPacer::wait_for_bytes(size_t bytes, std::atomic<bool>& stop) {
   if (target_bps_ <= 0.0) {
     return;
   }
   std::lock_guard<std::mutex> lock(mutex_);
   total_bytes_ += bytes;
   const double scheduled_secs = (total_bytes_ * 8.0) / target_bps_;
-  const auto scheduled = t0_ + std::chrono::duration_cast<
-                                   std::chrono::steady_clock::duration>(
+  const auto scheduled = t0_ + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                                    std::chrono::duration<double>(scheduled_secs));
   // Slice the wait into 10 ms chunks so a stop flag (--seconds expiry or
   // Ctrl-C) can break us out promptly. The total slept across the slices
@@ -293,20 +283,19 @@ void TokenBucketPacer::wait_for_bytes(size_t bytes, std::atomic<bool> &stop) {
       return;
     }
     const auto remaining = scheduled - now;
-    std::this_thread::sleep_for(
-        std::min<std::chrono::steady_clock::duration>(remaining, kSlice));
+    std::this_thread::sleep_for(std::min<std::chrono::steady_clock::duration>(remaining, kSlice));
   }
 }
 
-bool has_bench_rx(const YAML::Node &root) {
+bool has_bench_rx(const YAML::Node& root) {
   return has_bench_config(root, "bench_rx");
 }
 
-bool has_bench_tx(const YAML::Node &root) {
+bool has_bench_tx(const YAML::Node& root) {
   return has_bench_config(root, "bench_tx");
 }
 
-RawBenchRxConfig parse_rx(const YAML::Node &root) {
+RawBenchRxConfig parse_rx(const YAML::Node& root) {
   const auto configs = parse_rx_configs(root);
   if (configs.empty()) {
     return {};
@@ -314,7 +303,7 @@ RawBenchRxConfig parse_rx(const YAML::Node &root) {
   return configs.front();
 }
 
-RawBenchTxConfig parse_tx(const YAML::Node &root) {
+RawBenchTxConfig parse_tx(const YAML::Node& root) {
   const auto configs = parse_tx_configs(root);
   if (configs.empty()) {
     return {};
@@ -322,7 +311,7 @@ RawBenchTxConfig parse_tx(const YAML::Node &root) {
   return configs.front();
 }
 
-std::vector<RawBenchRxConfig> parse_rx_configs(const YAML::Node &root) {
+std::vector<RawBenchRxConfig> parse_rx_configs(const YAML::Node& root) {
   std::vector<RawBenchRxConfig> configs;
   const auto bench_rx = root["bench_rx"];
   if (!bench_rx) {
@@ -338,21 +327,20 @@ std::vector<RawBenchRxConfig> parse_rx_configs(const YAML::Node &root) {
   std::unordered_map<std::string, size_t> entry_counts;
   std::unordered_map<std::string, std::unordered_set<int>> assigned_queue_ids;
   configs.reserve(bench_rx.size());
-  for (const auto &item : bench_rx) {
+  for (const auto& item : bench_rx) {
     if (!item || !item.IsMap() || !item["interface_name"]) {
-      throw std::runtime_error(
-          "bench_rx list entries must be maps with interface_name");
+      throw std::runtime_error("bench_rx list entries must be maps with interface_name");
     }
     auto cfg = parse_rx_item(item);
-    cfg.queue_id = assign_queue_id(root, item, "rx", "bench_rx", next_queue_idx,
-                                   entry_counts, assigned_queue_ids);
+    cfg.queue_id = assign_queue_id(root, item, "rx", "bench_rx", next_queue_idx, entry_counts,
+                                   assigned_queue_ids);
     configs.push_back(std::move(cfg));
   }
   validate_bench_list_sizes(root, "rx", "bench_rx", entry_counts);
   return configs;
 }
 
-std::vector<RawBenchTxConfig> parse_tx_configs(const YAML::Node &root) {
+std::vector<RawBenchTxConfig> parse_tx_configs(const YAML::Node& root) {
   std::vector<RawBenchTxConfig> configs;
   const auto bench_tx = root["bench_tx"];
   if (!bench_tx) {
@@ -368,28 +356,26 @@ std::vector<RawBenchTxConfig> parse_tx_configs(const YAML::Node &root) {
   std::unordered_map<std::string, size_t> entry_counts;
   std::unordered_map<std::string, std::unordered_set<int>> assigned_queue_ids;
   configs.reserve(bench_tx.size());
-  for (const auto &item : bench_tx) {
+  for (const auto& item : bench_tx) {
     if (!item || !item.IsMap() || !item["interface_name"]) {
-      throw std::runtime_error(
-          "bench_tx list entries must be maps with interface_name");
+      throw std::runtime_error("bench_tx list entries must be maps with interface_name");
     }
     auto cfg = parse_tx_item(item);
-    cfg.queue_id = assign_queue_id(root, item, "tx", "bench_tx", next_queue_idx,
-                                   entry_counts, assigned_queue_ids);
+    cfg.queue_id = assign_queue_id(root, item, "tx", "bench_tx", next_queue_idx, entry_counts,
+                                   assigned_queue_ids);
     configs.push_back(std::move(cfg));
   }
   validate_bench_list_sizes(root, "tx", "bench_tx", entry_counts);
   return configs;
 }
 
-std::vector<uint16_t> parse_udp_ports(const std::string &spec) {
+std::vector<uint16_t> parse_udp_ports(const std::string& spec) {
   const auto dash = spec.find('-');
   if (dash == std::string::npos) {
     return {static_cast<uint16_t>(std::stoul(spec))};
   }
 
-  const uint16_t begin =
-      static_cast<uint16_t>(std::stoul(spec.substr(0, dash)));
+  const uint16_t begin = static_cast<uint16_t>(std::stoul(spec.substr(0, dash)));
   const uint16_t end = static_cast<uint16_t>(std::stoul(spec.substr(dash + 1)));
   if (begin > end) {
     throw std::runtime_error("invalid UDP port range");
@@ -403,36 +389,32 @@ std::vector<uint16_t> parse_udp_ports(const std::string &spec) {
   return ports;
 }
 
-bool set_current_thread_affinity(int cpu_core,
-                                 const std::string &thread_name) {
+bool set_current_thread_affinity(int cpu_core, const std::string& thread_name) {
   if (cpu_core < 0) {
     return true;
   }
   if (cpu_core >= CPU_SETSIZE) {
-    std::cerr << thread_name << " cpu_core " << cpu_core
-              << " exceeds CPU_SETSIZE " << CPU_SETSIZE << "\n";
+    std::cerr << thread_name << " cpu_core " << cpu_core << " exceeds CPU_SETSIZE " << CPU_SETSIZE
+              << "\n";
     return false;
   }
 
   cpu_set_t cpuset;
   CPU_ZERO(&cpuset);
   CPU_SET(cpu_core, &cpuset);
-  const int status =
-      pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
+  const int status = pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
   if (status != 0) {
-    std::cerr << "Failed to set " << thread_name
-              << " affinity to CPU core " << cpu_core << ": "
+    std::cerr << "Failed to set " << thread_name << " affinity to CPU core " << cpu_core << ": "
               << std::strerror(status) << "\n";
     return false;
   }
   return true;
 }
 
-uint32_t add_checksum_bytes(const void *data, size_t len, uint32_t sum) {
-  const auto *bytes = static_cast<const uint8_t *>(data);
+uint32_t add_checksum_bytes(const void* data, size_t len, uint32_t sum) {
+  const auto* bytes = static_cast<const uint8_t*>(data);
   for (size_t i = 0; i + 1 < len; i += 2) {
-    sum += (static_cast<uint32_t>(bytes[i]) << 8U) |
-           static_cast<uint32_t>(bytes[i + 1]);
+    sum += (static_cast<uint32_t>(bytes[i]) << 8U) | static_cast<uint32_t>(bytes[i + 1]);
     while ((sum >> 16U) != 0) {
       sum = (sum & 0xffffU) + (sum >> 16U);
     }
@@ -453,22 +435,19 @@ uint16_t finalize_checksum(uint32_t sum) {
   return htons(static_cast<uint16_t>(~sum & 0xffffU));
 }
 
-void populate_udp_ipv4_headers(uint8_t *pkt_data, uint32_t header_size,
-                               uint32_t payload_size, const char *eth_src,
-                               const char *eth_dst, uint32_t ip_src_host,
-                               uint32_t ip_dst_host, uint16_t src_port,
-                               uint16_t dst_port) {
+void populate_udp_ipv4_headers(uint8_t* pkt_data, uint32_t header_size, uint32_t payload_size,
+                               const char* eth_src, const char* eth_dst, uint32_t ip_src_host,
+                               uint32_t ip_dst_host, uint16_t src_port, uint16_t dst_port) {
   std::memset(pkt_data, 0, header_size + payload_size);
 
-  auto *pkt = reinterpret_cast<daqiri::UDPIPV4Pkt *>(pkt_data);
+  auto* pkt = reinterpret_cast<daqiri::UDPIPV4Pkt*>(pkt_data);
   std::memcpy(pkt->eth.h_source, eth_src, ETH_ALEN);
   std::memcpy(pkt->eth.h_dest, eth_dst, ETH_ALEN);
   pkt->eth.h_proto = htons(ETH_P_IP);
 
-  const auto ip_total_len =
-      static_cast<uint16_t>(payload_size + header_size - sizeof(ethhdr));
-  const auto udp_len = static_cast<uint16_t>(payload_size + header_size -
-                                             (sizeof(ethhdr) + sizeof(iphdr)));
+  const auto ip_total_len = static_cast<uint16_t>(payload_size + header_size - sizeof(ethhdr));
+  const auto udp_len =
+      static_cast<uint16_t>(payload_size + header_size - (sizeof(ethhdr) + sizeof(iphdr)));
 
   pkt->ip.version = 4;
   pkt->ip.ihl = 5;
@@ -478,8 +457,7 @@ void populate_udp_ipv4_headers(uint8_t *pkt_data, uint32_t header_size,
   pkt->ip.saddr = htonl(ip_src_host);
   pkt->ip.daddr = htonl(ip_dst_host);
   pkt->ip.check = 0;
-  pkt->ip.check =
-      finalize_checksum(add_checksum_bytes(&pkt->ip, sizeof(iphdr), 0));
+  pkt->ip.check = finalize_checksum(add_checksum_bytes(&pkt->ip, sizeof(iphdr), 0));
 
   pkt->udp.source = htons(src_port);
   pkt->udp.dest = htons(dst_port);
@@ -487,21 +465,19 @@ void populate_udp_ipv4_headers(uint8_t *pkt_data, uint32_t header_size,
   pkt->udp.len = htons(udp_len);
 }
 
-void finalize_udp_ipv4_checksums(uint8_t *pkt_data) {
-  auto *pkt = reinterpret_cast<daqiri::UDPIPV4Pkt *>(pkt_data);
+void finalize_udp_ipv4_checksums(uint8_t* pkt_data) {
+  auto* pkt = reinterpret_cast<daqiri::UDPIPV4Pkt*>(pkt_data);
   const size_t ip_header_len = static_cast<size_t>(pkt->ip.ihl) * 4U;
   const size_t udp_len = ntohs(pkt->udp.len);
 
   pkt->ip.check = 0;
-  pkt->ip.check =
-      finalize_checksum(add_checksum_bytes(&pkt->ip, ip_header_len, 0));
+  pkt->ip.check = finalize_checksum(add_checksum_bytes(&pkt->ip, ip_header_len, 0));
 
   pkt->udp.check = 0;
   uint32_t sum = 0;
   sum = add_checksum_bytes(&pkt->ip.saddr, sizeof(pkt->ip.saddr), sum);
   sum = add_checksum_bytes(&pkt->ip.daddr, sizeof(pkt->ip.daddr), sum);
-  const uint8_t pseudo_tail[] = {0, pkt->ip.protocol,
-                                 static_cast<uint8_t>(udp_len >> 8U),
+  const uint8_t pseudo_tail[] = {0, pkt->ip.protocol, static_cast<uint8_t>(udp_len >> 8U),
                                  static_cast<uint8_t>(udp_len & 0xffU)};
   sum = add_checksum_bytes(pseudo_tail, sizeof(pseudo_tail), sum);
   sum = add_checksum_bytes(&pkt->udp, udp_len, sum);
@@ -517,7 +493,7 @@ void signal_handler(int signum) {
   }
 }
 
-void wait_for_stop(int run_seconds, std::atomic<bool> &stop) {
+void wait_for_stop(int run_seconds, std::atomic<bool>& stop) {
   std::signal(SIGINT, signal_handler);
   auto start = std::chrono::steady_clock::now();
   while (!g_stop_requested) {
@@ -533,9 +509,8 @@ void wait_for_stop(int run_seconds, std::atomic<bool> &stop) {
   stop.store(true);
 }
 
-void print_queue_stats(const char *direction, const std::string &interface_name,
-                       int queue_id, const RawBenchQueueStats &stats,
-                       double seconds) {
+void print_queue_stats(const char* direction, const std::string& interface_name, int queue_id,
+                       const RawBenchQueueStats& stats, double seconds) {
   std::lock_guard<std::mutex> lock(g_stats_print_mutex);
   std::cout << direction << " complete: interface=" << interface_name;
   if (queue_id >= 0) {
@@ -544,11 +519,11 @@ void print_queue_stats(const char *direction, const std::string &interface_name,
     std::cout << " queues=all";
   }
   std::cout << " packets=" << stats.packets << " bytes=" << stats.bytes
-            << " bursts=" << stats.bursts << " seconds=" << seconds
-            << std::endl;
+            << " bursts=" << stats.bursts << " seconds=" << seconds << std::endl;
 }
 
-void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
+template <bool Managed>
+void rx_count_worker_impl(const RawBenchRxConfig& cfg, std::atomic<bool>& stop) {
   if (!set_current_thread_affinity(cfg.cpu_core, "bench_rx")) {
     stop.store(true);
     return;
@@ -562,8 +537,7 @@ void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
   }
 
   std::vector<int> queue_ids;
-  const auto num_rx_queues =
-      static_cast<int>(daqiri::get_num_rx_queues(port_id));
+  const auto num_rx_queues = static_cast<int>(daqiri::get_num_rx_queues(port_id));
   if (cfg.queue_id >= 0) {
     if (cfg.queue_id >= num_rx_queues) {
       std::cerr << "Invalid RX queue_id " << cfg.queue_id
@@ -584,29 +558,36 @@ void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
   while (!stop.load()) {
     bool got_any = false;
     for (int q : queue_ids) {
-      daqiri::BurstParams *burst = nullptr;
-      if (daqiri::get_rx_burst(&burst, port_id, q) != daqiri::Status::SUCCESS ||
-          burst == nullptr) {
+      daqiri::RxBurst managed_burst;
+      daqiri::BurstParams* burst = nullptr;
+      daqiri::Status status = daqiri::Status::NOT_READY;
+      if constexpr (Managed) {
+        status = daqiri::get_rx_burst(&managed_burst, port_id, q);
+        burst = managed_burst.get();
+      } else {
+        status = daqiri::get_rx_burst(&burst, port_id, q);
+      }
+      if (status != daqiri::Status::SUCCESS || burst == nullptr) {
         continue;
       }
       got_any = true;
-      auto &stats = queue_stats[static_cast<size_t>(q)];
+      auto& stats = queue_stats[static_cast<size_t>(q)];
       stats.packets += static_cast<uint64_t>(daqiri::get_num_packets(burst));
       stats.bytes += daqiri::get_burst_tot_byte(burst);
       ++stats.bursts;
-      daqiri::free_all_packets_and_burst_rx(burst);
+      if constexpr (!Managed) {
+        daqiri::free_all_packets_and_burst_rx(burst);
+      }
     }
     if (!got_any) {
       std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
   }
-  const double secs =
-      std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
-          .count();
+  const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
 
   RawBenchQueueStats total;
   for (int q : queue_ids) {
-    const auto &stats = queue_stats[static_cast<size_t>(q)];
+    const auto& stats = queue_stats[static_cast<size_t>(q)];
     total.packets += stats.packets;
     total.bytes += stats.bytes;
     total.bursts += stats.bursts;
@@ -618,4 +599,12 @@ void rx_count_worker(const RawBenchRxConfig &cfg, std::atomic<bool> &stop) {
   }
 }
 
-} // namespace daqiri::bench
+void rx_count_worker(const RawBenchRxConfig& cfg, std::atomic<bool>& stop) {
+  rx_count_worker_impl<false>(cfg, stop);
+}
+
+void rx_count_worker_managed(const RawBenchRxConfig& cfg, std::atomic<bool>& stop) {
+  rx_count_worker_impl<true>(cfg, stop);
+}
+
+}  // namespace daqiri::bench

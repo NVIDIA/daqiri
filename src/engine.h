@@ -46,7 +46,9 @@ class Engine {
   static constexpr size_t MAX_RX_Q_PER_CORE = 16;
 
   virtual void initialize() = 0;
-  virtual bool is_initialized() const { return initialized_; }
+  virtual bool is_initialized() const {
+    return initialized_;
+  }
   virtual bool set_config_and_initialize(const NetworkConfig& cfg) = 0;
   virtual void run() = 0;
 
@@ -69,8 +71,7 @@ class Engine {
 
   virtual Status set_packet_lengths(BurstParams* burst, int idx,
                                     const std::initializer_list<int>& lens) = 0;
-  virtual Status set_all_packet_lengths(BurstParams* burst,
-                                        const std::initializer_list<int>& lens);
+  virtual Status set_all_packet_lengths(BurstParams* burst, const std::initializer_list<int>& lens);
   virtual void free_all_segment_packets(BurstParams* burst, int seg) = 0;
   virtual void free_all_packets(BurstParams* burst) = 0;
   virtual void free_packet_segment(BurstParams* burst, int seg, int pkt) = 0;
@@ -87,19 +88,23 @@ class Engine {
   virtual Status get_rx_burst(BurstParams** burst, int port_id);
   virtual Status get_rx_burst(BurstParams** burst);
   virtual Status set_reorder_cuda_stream(const std::string& interface_name,
-                                         const std::string& reorder_name,
-                                         cudaStream_t stream);
+                                         const std::string& reorder_name, cudaStream_t stream);
   virtual Status get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info);
   virtual void free_rx_metadata(BurstParams* burst) = 0;
   virtual void free_tx_metadata(BurstParams* burst) = 0;
   virtual Status get_tx_metadata_buffer(BurstParams** burst) = 0;
   virtual Status send_tx_burst(BurstParams* burst) = 0;
+  // Report whether send_tx_burst() transferred or released ownership for the
+  // returned status. Raw engines retain validation failures; socket/RDMA
+  // consume every non-null burst once submission is attempted.
+  virtual bool tx_send_consumed(Status status) const {
+    return status == Status::SUCCESS || status == Status::NO_SPACE_AVAILABLE;
+  }
   virtual Status get_mac_addr(int port, char* mac) = 0;
   virtual Status drop_all_traffic(int port);
   virtual Status allow_all_traffic(int port);
   virtual Status add_rx_flow_async(int port, const FlowRuleConfig& flow, FlowOpId* op_id);
-  virtual Status add_rx_flows_async(int port,
-                                    const std::vector<FlowRuleConfig>& flows,
+  virtual Status add_rx_flows_async(int port, const std::vector<FlowRuleConfig>& flows,
                                     FlowOpId* op_id);
   virtual Status delete_flow_async(FlowId flow_id, FlowOpId* op_id);
   virtual Status poll_flow_op(FlowOpResult* result);
@@ -195,7 +200,7 @@ class Engine {
     size_t dummy_queue_bytes = 0;    // dummy MR(s) DpdkEngine injects for empty TX/RX
     size_t eal_fixed_bytes = 0;      // EAL services / memzones / ethdev tables
     size_t total_bytes = 0;
-    size_t huge_mr_count = 0;        // for diagnostic output
+    size_t huge_mr_count = 0;  // for diagnostic output
     size_t extbuf_pool_count = 0;
     size_t dummy_queue_count = 0;
   };
@@ -243,7 +248,9 @@ class EngineFactory {
     }
   }
 
-  static EngineType get_engine_type() { return EngineType_; }
+  static EngineType get_engine_type() {
+    return EngineType_;
+  }
 
   template <typename Config>
   static EngineType get_engine_type(const Config& config);
@@ -251,8 +258,12 @@ class EngineFactory {
   static EngineType get_default_engine_type();
 
   static Engine& get_active_engine() {
-    if (EngineType_ == EngineType::UNKNOWN) { throw std::logic_error("EngineType not set"); }
-    if (!EngineInstance_) { EngineInstance_ = create_instance(EngineType_); }
+    if (EngineType_ == EngineType::UNKNOWN) {
+      throw std::logic_error("EngineType not set");
+    }
+    if (!EngineInstance_) {
+      EngineInstance_ = create_instance(EngineType_);
+    }
     return *EngineInstance_;
   }
 

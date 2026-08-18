@@ -32,6 +32,9 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 - **RDMA** — RDMA verbs (READ, WRITE, SEND) over RoCE on Ethernet NICs or InfiniBand.
 - **Optional OpenTelemetry metrics** — Expose per-interface or per-queue packet,
   byte, and drop counters when built with `DAQIRI_ENABLE_OTEL_METRICS=ON`.
+- **Managed burst ownership** — Optional move-only C++ owners and Python context
+  managers automatically return RX/TX buffers, with CUDA-stream-ordered RX
+  release for asynchronous GPU processing.
 
 ### Engines
 

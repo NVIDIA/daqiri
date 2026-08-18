@@ -152,8 +152,8 @@ if status != daqiri.Status.SUCCESS:
 ### RX Step 1 — Get a burst
 
 `get_rx_burst()` is non-blocking. It returns `(Status, BurstParams | None)`.
-`Status.SUCCESS` means a burst is ready; other statuses (including `NULL_PTR`)
-mean no burst is ready yet or an error occurred.
+`Status.SUCCESS` means a burst is ready; `Status.NOT_READY` means no burst is
+ready yet. Other statuses indicate an error.
 
 ```python
 port_id = daqiri.get_port_id("rx_port")
@@ -205,6 +205,24 @@ with `rx.hardware_timestamps: true` and the NIC supports
 semantics; the Python wrapper exposes the same timestamps in nanoseconds.
 
 ### RX Step 3 — Free buffers
+
+The recommended Python path is a managed owner and context manager:
+
+```python
+status, owner = daqiri.get_rx_burst_managed(port_id, queue_id)
+if status == daqiri.Status.SUCCESS:
+    with owner as burst:
+        for idx in range(daqiri.get_num_packets(burst)):
+            process_packet(daqiri.get_packet_bytes(burst, idx)[1])
+```
+
+The `with` block releases the burst even if processing raises an exception.
+`owner.close()` releases immediately. For asynchronous CUDA work, omit the
+`with` block and call `owner.release_on_stream(stream_address)` after enqueuing
+the work. On success the owner becomes closed and DAQIRI returns the buffers
+after its stream event completes; on failure the owner retains ownership.
+
+The original manual release API remains available:
 
 When you are done with a burst, free it:
 
@@ -286,6 +304,22 @@ any.
 ## Transmitting Packets
 
 ### TX Step 1 — Allocate a burst
+
+Managed TX ownership is available when exception-safe cleanup is preferred:
+
+```python
+status, owner = daqiri.create_tx_burst_managed()
+if status == daqiri.Status.SUCCESS:
+    burst = owner.burst
+    daqiri.set_header(burst, port_id, queue_id, batch_size, num_segments)
+    status = owner.allocate_packets()
+```
+
+Call `owner.send()` after filling the packets. The owner becomes closed when
+the engine consumed the burst; otherwise it retains resources for automatic
+cleanup. `owner.close()` is safe to call repeatedly.
+
+The original manual allocation path is:
 
 ```python
 port_id = daqiri.get_port_id("tx_port")
@@ -529,6 +563,8 @@ The workflow sections above show the common call order and ownership rules.
 | `get_rx_burst(port)` | Dequeue from any queue on a port. |
 | `get_rx_burst()` | Dequeue from any queue on any port. |
 | `get_rx_burst_for_connection(conn_id, server)` | Dequeue for a socket/RDMA connection. |
+| `get_rx_burst_managed(...)` | Dequeue into an `RxBurst` context manager. |
+| `get_rx_burst_for_connection_managed(conn_id, server)` | Dequeue a connection burst into an owner. |
 | `get_connection_id(burst)` | Read the transport connection ID recorded on an RX burst. |
 | `set_reorder_cuda_stream(interface_name, reorder_name, stream=0)` | Set CUDA stream for a GPU reorder plan. |
 | `get_reorder_burst_info(burst)` | Return `(Status, ReorderBurstInfo)`. |
@@ -539,6 +575,7 @@ The workflow sections above show the common call order and ownership rules.
 | Function | Purpose |
 | --- | --- |
 | `is_tx_burst_available(burst)` | Check whether TX packet buffers are available. |
+| `create_tx_burst_managed()` | Return `(Status, TxBurst)` with managed TX metadata. |
 | `get_tx_packet_burst(burst)` | Populate a TX burst with packet buffers. |
 | `set_connection_id(burst, conn_id)` | Attach a transport connection ID to a TX burst (socket/RDMA). |
 | `send_tx_burst(burst)` | Enqueue a populated TX burst. |
@@ -561,6 +598,10 @@ The workflow sections above show the common call order and ownership rules.
 | `free_all_packets_and_burst_tx(burst)` | Free all TX packets and TX burst metadata. |
 | `free_rx_burst(burst)` / `free_tx_burst(burst)` | Free burst metadata only. |
 | `free_rx_metadata(burst)` / `free_tx_metadata(burst)` | Free only RX or TX metadata. |
+| `RxBurst.close()` / `TxBurst.close()` | Immediately release managed resources. |
+| `RxBurst.release_on_stream(stream)` | Defer RX release behind prior CUDA stream work. |
+| `RxBurst.detach()` / `TxBurst.detach()` | Transfer the raw burst to manual ownership. |
+| `get_managed_burst_stats()` | Return managed ownership and deferred-release diagnostics. |
 
 ### File I/O
 
@@ -642,6 +683,9 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | Class | Purpose |
 | --- | --- |
 | `BurstParams` | Opaque burst handle used by RX, TX, free, and packet-access helpers. Exposes `hdr`, `connection_id`, and `rdma_wr_id`. |
+| `RxBurst` | Move-only-style managed RX owner. Supports `with`, immediate `close()`, and CUDA stream-ordered `release_on_stream()`. |
+| `TxBurst` | Managed TX metadata and packet-buffer owner. Supports allocation, send, explicit close, and `with`. |
+| `ManagedBurstStats` | Snapshot of outstanding, peak, deferred-release, wait-time, and lifecycle-error counters. |
 | `BurstHeader` | Wrapper for `BurstHeaderParams`. |
 | `BurstHeaderParams` | Burst metadata: packet count, port, queue, segment count, byte totals, and reorder flags. |
 | `ReorderBurstInfo` | Metadata for reordered aggregate bursts. |
