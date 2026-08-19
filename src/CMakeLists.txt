@@ -67,12 +67,6 @@ option(DAQIRI_ENABLE_S3 "Enable AWS SDK-backed raw packet writes to S3" OFF)
 option(DAQIRI_ENABLE_PCIE "Enable the PCIe GPUDirect stream implementation" OFF)
 set(DOCA_PATH /opt/mellanox/doca)
 
-if(DAQIRI_ENABLE_PCIE AND CUDAToolkit_VERSION VERSION_LESS 12.8)
-  message(FATAL_ERROR
-    "DAQIRI_ENABLE_PCIE=ON requires CUDA Toolkit 12.8 or newer for "
-    "CU_MEM_RANGE_FLAG_DMA_BUF_MAPPING_TYPE_PCIE")
-endif()
-
 if(DAQIRI_ENABLE_OTEL_METRICS)
   add_compile_definitions(DAQIRI_ENABLE_OTEL_METRICS=1)
   find_package(opentelemetry-cpp CONFIG REQUIRED COMPONENTS api)

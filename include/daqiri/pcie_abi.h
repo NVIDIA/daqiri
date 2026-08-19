@@ -13,8 +13,13 @@
 
 #pragma once
 
+#if defined(__KERNEL__)
+#include <linux/stddef.h>
+#include <linux/types.h>
+#else
 #include <stddef.h>
 #include <stdint.h>
+#endif
 
 #if defined(__linux__)
 #include <linux/ioctl.h>
@@ -24,23 +29,23 @@
 extern "C" {
 #endif
 
-#define DAQIRI_PCIE_ABI_MAGIC UINT32_C(0x43505144) /* "DQPC" on little-endian hosts */
-#define DAQIRI_PCIE_ABI_VERSION_MAJOR UINT16_C(1)
-#define DAQIRI_PCIE_ABI_VERSION_MINOR UINT16_C(0)
+#define DAQIRI_PCIE_ABI_MAGIC 0x43505144U /* "DQPC" on little-endian hosts */
+#define DAQIRI_PCIE_ABI_VERSION_MAJOR 1U
+#define DAQIRI_PCIE_ABI_VERSION_MINOR 0U
 
 /* Production character-device discovery contract for a configured PCI BDF. */
 #define DAQIRI_PCIE_SYSFS_CHAR_ATTRIBUTE "daqiri_pcie/char"
 #define DAQIRI_PCIE_DEVNODE_PREFIX "/dev/daqiri-pcie-"
 
-#define DAQIRI_PCIE_CAP_DMABUF_PCIE (UINT64_C(1) << 0)
+#define DAQIRI_PCIE_CAP_DMABUF_PCIE (1ULL << 0)
 /* Reserved for a possible legacy nvidia_p2p_* provider; not a DAQIRI engine. */
-#define DAQIRI_PCIE_CAP_NV_P2P (UINT64_C(1) << 1)
-#define DAQIRI_PCIE_CAP_DMA_FENCE (UINT64_C(1) << 2)
-#define DAQIRI_PCIE_CAP_DEVICE_RESET (UINT64_C(1) << 3)
+#define DAQIRI_PCIE_CAP_NV_P2P (1ULL << 1)
+#define DAQIRI_PCIE_CAP_DMA_FENCE (1ULL << 2)
+#define DAQIRI_PCIE_CAP_DEVICE_RESET (1ULL << 3)
 
-#define DAQIRI_PCIE_STATUS_FLAG_RUNNING (UINT32_C(1) << 0)
-#define DAQIRI_PCIE_STATUS_FLAG_QUIESCED (UINT32_C(1) << 1)
-#define DAQIRI_PCIE_STATUS_FLAG_FATAL (UINT32_C(1) << 2)
+#define DAQIRI_PCIE_STATUS_FLAG_RUNNING (1U << 0)
+#define DAQIRI_PCIE_STATUS_FLAG_QUIESCED (1U << 1)
+#define DAQIRI_PCIE_STATUS_FLAG_FATAL (1U << 2)
 
 enum daqiri_pcie_direction {
   DAQIRI_PCIE_DIRECTION_RX = 0,

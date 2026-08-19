@@ -58,6 +58,7 @@ set(DAQIRI_BENCH_CONFIGS
   daqiri_bench_socket_udp_tx_rx.yaml
   daqiri_bench_socket_tcp_tx_rx.yaml
   daqiri_bench_pcie_sw_loopback.yaml
+  daqiri_bench_pcie_bf3.yaml
 )
 
 set(DAQIRI_PYTHON_EXAMPLES

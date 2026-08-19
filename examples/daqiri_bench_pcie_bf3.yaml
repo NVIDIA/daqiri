@@ -1,0 +1,54 @@
+%YAML 1.2
+---
+# BlueField-3 PCIe-emulation round-trip benchmark.  The BF3 controller copies
+# every submitted TX GPU slot into a distinct RX GPU slot and publishes both
+# completions only after its PCIe DMA operations have completed.
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "pcie"
+    master_core: 0
+    debug: false
+    log_level: "info"
+
+    memory_regions:
+    - name: "BF3_TX_GPU"
+      kind: "device"
+      affinity: 2                 # H100 NVL 0000:ca:00.0, NUMA-local to the BF3
+      num_bufs: 1024
+      buf_size: 1048576
+    - name: "BF3_RX_GPU"
+      kind: "device"
+      affinity: 2                 # Must be the peer-capable GPU
+      num_bufs: 1024
+      buf_size: 1048576
+
+    interfaces:
+    - name: "bf3emu0"
+      # BDF assigned to the hot-plugged BF3 generic-emulation function.
+      address: "0000:b8:00.0"
+      tx:
+        queues:
+        - name: "tx0"
+          id: 0
+          cpu_core: 2
+          batch_size: 32
+          memory_regions: ["BF3_TX_GPU"]
+      rx:
+        queues:
+        - name: "rx0"
+          id: 0
+          cpu_core: 3
+          timeout_us: 100
+          batch_size: 32
+          memory_regions: ["BF3_RX_GPU"]
+
+pcie_bench:
+  interface_name: "bf3emu0"
+  tx_cpu_core: -1
+  rx_cpu_core: -1
+  batch_size: 32
+  payload_size: 1048576
+  hold_rx_bursts: 4
+  verify: true
+  mixed_packet_frees: true

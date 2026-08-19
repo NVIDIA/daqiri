@@ -44,6 +44,18 @@ For a shorter selection guide, start with the [Benchmarking overview](../benchma
     counters, use the Grafana compose stack described in
     [Watch live OpenTelemetry metrics in Grafana](../benchmarks/raw_benchmarking.md#watch-live-opentelemetry-metrics-in-grafana).
 
+    **PCIe programmable device** (`stream_type: "pcie"`) runs on
+    `daqiri_bench_pcie` and requires `DAQIRI_ENABLE_PCIE=ON`.
+
+    - **Protocol smoke test, no device required**:
+      [`daqiri_bench_pcie_sw_loopback.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_pcie_sw_loopback.yaml).
+      It validates GPU-buffer ownership and the PCIe completion ABI, but does
+      not measure PCIe hardware performance.
+    - **BlueField-3 generic PCIe-emulation round trip**:
+      [`daqiri_bench_pcie_bf3.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_pcie_bf3.yaml).
+      Replace its BF3 BDF and CUDA GPU ordinal, then use the companion driver
+      and controller described in [PCIe / GPUDirect Benchmarking](../benchmarks/pcie_benchmarking.md#bluefield-3-pcie-emulation).
+
     **Socket (RoCE / RDMA)** (`stream_type: "socket"`, `roce://` endpoints) runs on `daqiri_bench_rdma` (use `--mode {tx,rx,both}`). Configs use `kind: host_pinned` regardless of platform.
 
     - **Generic** (template, replace IPs): [`daqiri_bench_rdma_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx.yaml).

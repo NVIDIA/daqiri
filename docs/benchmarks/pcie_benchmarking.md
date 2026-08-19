@@ -17,9 +17,9 @@ hardware operation and are not shipped by DAQIRI.
 
 ## Build
 
-PCIe support is independent of the optional Ethernet engines. CUDA Toolkit 12.8
-or newer is required because DAQIRI requests a PCIe BAR1 DMA-BUF mapping
-explicitly.
+PCIe support is independent of the optional Ethernet engines and uses the
+project's normal CUDA Toolkit 12.2-or-newer requirement. At runtime the GPU and
+open NVIDIA kernel driver must support device-memory DMA-BUF export.
 
 For a PCIe-only container image:
 
@@ -104,6 +104,37 @@ These hooks are for the software provider's verification path only; they are not
 DAQIRI configuration or public application APIs.
 
 ## Configure hardware
+
+### BlueField-3 PCIe emulation
+
+The repository ships a BF3 platform harness in
+`platforms/bf3-pcie-emu/`. It is a
+generic PCIe device controller, not a replacement for the DAQIRI ABI: its host
+driver implements the character-device protocol in
+`include/daqiri/pcie_abi.h`, and its DPU process implements the device side of
+the four ownership rings.
+
+Before building the harness, configure the BF3 in DPU mode with DOCA 2.7 or
+newer and firmware 32.41.1000 or newer. Enable
+`PCI_SWITCH_EMULATION_ENABLE=1`, reset the BF3, and configure the host for PCI
+hot-plug (`intel_iommu=on iommu=pt pci=realloc` on Intel; `iommu=pt
+pci=realloc` on AMD). Build and load the host module after the generic function
+appears, then start the DPU controller. The controller must report a healthy,
+quiesced device before DAQIRI opens it.
+
+Run the hardware round-trip only after substituting the BF3 BDF and CUDA GPU
+ordinal in the supplied configuration:
+
+```bash
+./build/examples/daqiri_bench_pcie \
+  ./build/examples/daqiri_bench_pcie_bf3.yaml --seconds 30 --mode both
+```
+
+`both` proves GPU→BF3 reads and BF3→GPU writes in one run. The supplied BF3
+controller also sinks and completes `tx` traffic independently, and generates
+the benchmark's validated payload pattern for `rx`. Do not accept a host-staged
+copy as a passing hardware result: a successful run requires CUDA DMA-BUF
+export, driver attachment to the BF3 function, and BF3 peer DMA.
 
 Start from the loopback YAML, remove `loopback: "sw"`, and replace
 `address: "loopback"` with the FPGA PCI domain/bus/device/function, for example
@@ -269,10 +300,10 @@ the quiesce acknowledgement cover every outstanding read and write.
 - The trusted FPGA bitstream implements ring backpressure, epoch/sequence
   validation, length bounds, and the required DMA fences.
 
-See [System Configuration](../tutorials/system_configuration.md#pcie-fpga-streams)
+See [System Configuration](../tutorials/system_configuration.md)
 for host checks and the
 [NVIDIA GPUDirect RDMA guide](https://docs.nvidia.com/cuda/gpudirect-rdma/)
 for platform ordering and BAR1 background.
 
-**Previous:** [Benchmarking Overview](benchmarks.md)<br>
+**Previous:** [Benchmarking Overview](index.md)<br>
 **Next:** [Socket and RDMA Benchmarking](socket_benchmarking.md)

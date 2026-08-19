@@ -17,15 +17,10 @@ DAQIRI ships with several stream types to handle different types of incoming and
 
 | Use case | DAQIRI config | Benchmark | Start here |
 |---|---|---|---|
-| Ingest from or egress to a programmable PCIe sensor, such as an FPGA on the PCIe bus. | `stream_type: "pcie"` | n/a | Under development (see note below). |
+| Ingest from or egress to a programmable PCIe sensor, such as an FPGA on the PCIe bus. | `stream_type: "pcie"` | `daqiri_bench_pcie` | [PCIe / GPUDirect Benchmarking](pcie_benchmarking.md) |
 | Compare against normal Linux networking, run on a non-NVIDIA NIC, or test a peer that speaks TCP/UDP sockets. | `stream_type: "socket"` with `tcp://` or `udp://` endpoints | `daqiri_bench_socket` | [Socket and RDMA Benchmarking](socket_benchmarking.md) |
 | Test a peer that already implements RDMA verbs over RoCE. | `stream_type: "socket"` and `roce://` endpoints | `daqiri_bench_rdma` | [Socket and RDMA Benchmarking](socket_benchmarking.md#run-the-rdma-roce-benchmark) |
 | Drive raw Ethernet packets directly from an NVIDIA NIC under DAQIRI control. | `stream_type: "raw"` | `daqiri_bench_raw_gpudirect` and the other `raw_*` benches | [Raw Ethernet Benchmarking](raw_benchmarking.md) |
-
-!!! note "PCIe stream type status"
-
-    The PCIe programmable-sensor path is under development. Once completed it will allow 3rd party PCIe devices
-    to read from and write to the GPU's BAR1 memory.
 
 !!! note "Why RDMA is listed under socket"
 
@@ -51,4 +46,5 @@ DAQIRI ships with several stream types to handle different types of incoming and
 
 - [Socket and RDMA Benchmarking](socket_benchmarking.md) covers Linux TCP/UDP and RoCE/RDMA runs with matching client/server namespace setup.
 - [Raw Ethernet Benchmarking](raw_benchmarking.md) covers the DPDK/raw Ethernet examples, hugepage sizing, physical loopback configuration, and raw benchmark troubleshooting.
+- [PCIe / GPUDirect Benchmarking](pcie_benchmarking.md) covers the PCIe completion protocol, BF3 emulator setup, GPU-buffer ownership, and software-loopback smoke test.
 - [Understanding the Configuration File](../tutorials/configuration-walkthrough.md) explains the YAML fields once you have selected the stream type and example config.

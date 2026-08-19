@@ -423,9 +423,13 @@ bool PcieEngine::register_region(InterfaceState& state, const std::string& mr_na
     }
 
     int fd = -1;
+    // The exported dma-buf is attached to the emulated BF3 PCI function below;
+    // the NVIDIA exporter then supplies that PCI device's peer-DMA mapping via
+    // dma_buf_map_attachment().  Do not force the CUDA 13 PCIe mapping flag:
+    // CUDA returns CUDA_ERROR_NOT_SUPPORTED for it on H100 even though ordinary
+    // device-memory dma-buf export and GPUDirect RDMA are supported.
     result = cuMemGetHandleForAddressRange(&fd, pointer, allocation.size_,
-                                           CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD,
-                                           CU_MEM_RANGE_FLAG_DMA_BUF_MAPPING_TYPE_PCIE);
+                                           CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD, 0);
     if (result != CUDA_SUCCESS) {
       DAQIRI_LOG_ERROR("BAR1 DMA-BUF export failed for PCIe MR '{}': {}", mr_name,
                        cuda_error(result));

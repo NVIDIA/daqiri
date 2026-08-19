@@ -7,6 +7,13 @@ BASE_IMAGE="${BASE_IMAGE:-cuda}"
 # Default only when unset; an explicitly empty string is the supported
 # PCIe/socket-only build with no optional Ethernet engines.
 DAQIRI_ENGINE="${DAQIRI_ENGINE-dpdk ibverbs}"
+# Docker treats an empty build-arg inconsistently when an ARG has a Dockerfile
+# default.  Use a private sentinel so a PCIe/socket-only build can reliably
+# request an empty CMake DAQIRI_ENGINE value.
+DAQIRI_DOCKER_ENGINE="${DAQIRI_ENGINE}"
+if [[ -z "${DAQIRI_DOCKER_ENGINE}" ]]; then
+  DAQIRI_DOCKER_ENGINE="__daqiri_no_optional_engines__"
+fi
 DAQIRI_BUILD_PYTHON="${DAQIRI_BUILD_PYTHON:-OFF}"
 DAQIRI_ENABLE_S3="${DAQIRI_ENABLE_S3:-OFF}"
 DAQIRI_ENABLE_PCIE="${DAQIRI_ENABLE_PCIE:-OFF}"
@@ -31,7 +38,7 @@ docker build \
   --target runtime \
   --build-arg DAQIRI_BASE_TARGET="${BASE_TARGET}" \
   --build-arg DAQIRI_OS_BASE_IMAGE="${DAQIRI_OS_BASE_IMAGE}" \
-  --build-arg DAQIRI_ENGINE="${DAQIRI_ENGINE}" \
+  --build-arg DAQIRI_ENGINE="${DAQIRI_DOCKER_ENGINE}" \
   --build-arg DAQIRI_BUILD_PYTHON="${DAQIRI_BUILD_PYTHON}" \
   --build-arg DAQIRI_ENABLE_S3="${DAQIRI_ENABLE_S3}" \
   --build-arg DAQIRI_ENABLE_PCIE="${DAQIRI_ENABLE_PCIE}" \

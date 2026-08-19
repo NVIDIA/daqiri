@@ -313,7 +313,11 @@ WORKDIR /workspace/daqiri
 COPY . .
 RUN rm -rf build
 
-RUN cmake -S . -B build \
+RUN DAQIRI_CMAKE_ENGINE="${DAQIRI_ENGINE}" \
+    && if [[ "${DAQIRI_CMAKE_ENGINE}" == "__daqiri_no_optional_engines__" ]]; then \
+         DAQIRI_CMAKE_ENGINE=""; \
+       fi \
+    && cmake -S . -B build \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX=/opt/daqiri \
       -DCMAKE_CUDA_ARCHITECTURES=all-major \
@@ -322,7 +326,7 @@ RUN cmake -S . -B build \
       -DDAQIRI_ENABLE_OTEL_METRICS=${DAQIRI_ENABLE_OTEL_METRICS} \
       -DDAQIRI_ENABLE_S3=${DAQIRI_ENABLE_S3} \
       -DDAQIRI_ENABLE_PCIE=${DAQIRI_ENABLE_PCIE} \
-      -DDAQIRI_ENGINE="${DAQIRI_ENGINE}" \
+      -DDAQIRI_ENGINE="${DAQIRI_CMAKE_ENGINE}" \
     && cmake --build build -j "$(nproc)" \
     && cmake --install build
 
