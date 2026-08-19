@@ -131,10 +131,25 @@ ordinal in the supplied configuration:
 ```
 
 `both` proves GPU→BF3 reads and BF3→GPU writes in one run. The supplied BF3
-controller also sinks and completes `tx` traffic independently, and generates
-the benchmark's validated payload pattern for `rx`. Do not accept a host-staged
-copy as a passing hardware result: a successful run requires CUDA DMA-BUF
-export, driver attachment to the BF3 function, and BF3 peer DMA.
+controller batches ring traffic and pipelines GPU-to-GPU DMA tasks without a
+BF3 DDR bounce. It also sinks and completes `tx` traffic independently, and
+generates the benchmark's validated payload pattern for `rx`. Do not accept a
+host-staged copy as a passing hardware result: a successful run requires CUDA
+DMA-BUF export, driver attachment to the BF3 function, and BF3 peer DMA.
+
+Payload verification intentionally performs host-to-device initialization and
+device-to-host checking. Use it for correctness, then disable it when measuring
+the PCIe transport rather than the benchmark's CPU/CUDA validation loop:
+
+```bash
+./build/examples/daqiri_bench_pcie \
+  ./build/examples/daqiri_bench_pcie_bf3.yaml --seconds 30 --mode both \
+  --verify false
+```
+
+`--verify` overrides the `pcie_bench.verify` YAML value for that run. A
+transport-only result still checks ring/completion status and reports provider
+errors, but it does not initialize or inspect packet contents.
 
 Start from the loopback YAML, remove `loopback: "sw"`, and replace
 `address: "loopback"` with the FPGA PCI domain/bus/device/function, for example

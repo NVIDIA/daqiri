@@ -215,7 +215,7 @@ void tx_worker(const BenchConfig& cfg, int port_id, std::atomic<bool>& stop,
     return;
   }
 
-  std::vector<uint8_t> payload(cfg.payload_size);
+  std::vector<uint8_t> payload(cfg.verify ? cfg.payload_size : 0);
   uint64_t sequence = 0;
   while (!stop.load()) {
     auto* burst = daqiri::create_tx_burst_params();
@@ -248,16 +248,19 @@ void tx_worker(const BenchConfig& cfg, int port_id, std::atomic<bool>& stop,
     const auto packet_count = daqiri::get_num_packets(burst);
     bool populate_failed = false;
     for (int64_t i = 0; i < packet_count; ++i) {
-      fill_payload(payload, sequence++);
-      const auto cuda_status = cudaMemcpy(daqiri::get_packet_ptr(burst, static_cast<int>(i)),
-                                          payload.data(), payload.size(), cudaMemcpyHostToDevice);
-      if (cuda_status != cudaSuccess ||
-          daqiri::set_packet_lengths(burst, static_cast<int>(i),
-                                     {static_cast<int>(cfg.payload_size)}) !=
-              daqiri::Status::SUCCESS) {
+      if (cfg.verify) {
+        fill_payload(payload, sequence++);
+        const auto cuda_status = cudaMemcpy(daqiri::get_packet_ptr(burst, static_cast<int>(i)),
+                                            payload.data(), payload.size(), cudaMemcpyHostToDevice);
         if (cuda_status != cudaSuccess) {
           std::cerr << "TX cudaMemcpy failed: " << cudaGetErrorString(cuda_status) << '\n';
+          populate_failed = true;
+          break;
         }
+      }
+      if (daqiri::set_packet_lengths(burst, static_cast<int>(i),
+                                     {static_cast<int>(cfg.payload_size)}) !=
+          daqiri::Status::SUCCESS) {
         populate_failed = true;
         break;
       }
@@ -395,12 +398,14 @@ void print_stats(const char* direction, const BenchStats& stats, double seconds)
 
 int main(int argc, char** argv) {
   if (argc < 2) {
-    std::cerr << "Usage: " << argv[0] << " <config.yaml> [--seconds N] [--mode tx|rx|both]\n";
+    std::cerr << "Usage: " << argv[0]
+              << " <config.yaml> [--seconds N] [--mode tx|rx|both] [--verify true|false]\n";
     return 1;
   }
 
   int run_seconds = 10;
   std::string mode = "both";
+  int verify_override = -1;
   try {
     for (int i = 2; i < argc; ++i) {
       const std::string option = argv[i];
@@ -411,6 +416,15 @@ int main(int argc, char** argv) {
         run_seconds = std::stoi(argv[++i]);
       } else if (option == "--mode") {
         mode = argv[++i];
+      } else if (option == "--verify") {
+        const std::string value = argv[++i];
+        if (value == "true" || value == "1") {
+          verify_override = 1;
+        } else if (value == "false" || value == "0") {
+          verify_override = 0;
+        } else {
+          throw std::runtime_error("--verify must be true or false");
+        }
       } else {
         throw std::runtime_error("unknown option " + option);
       }
@@ -429,6 +443,9 @@ int main(int argc, char** argv) {
   BenchConfig cfg;
   try {
     cfg = parse_bench_config(YAML::LoadFile(argv[1]));
+    if (verify_override >= 0) {
+      cfg.verify = verify_override != 0;
+    }
   } catch (const std::exception& e) {
     std::cerr << "Invalid benchmark config: " << e.what() << '\n';
     return 1;
