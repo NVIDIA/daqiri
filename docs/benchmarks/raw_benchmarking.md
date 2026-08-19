@@ -491,6 +491,17 @@ The `*_packets_phy` and `*_bytes_phy` counters are physical-link counters. They 
                   rx_prio0_packets: 1,562,128
     ```
 
+!!! warning "Check flow control before trusting a throughput number"
+
+    If the measured rate plateaus well below line rate with **zero** drops, suspect 802.3x pause before you suspect the transmitter. An enabled pause loop idles the link on a conservative receive watermark and leaves `rx_discards_phy` and `rx_out_of_buffer` at 0, so nothing in the counter set above distinguishes it from a sender that cannot go faster. It cost 21.7% of line rate on a 400 GbE link in our own measurements.
+
+    ```bash
+    sudo ./python/tune_system.py --check pause
+    sudo mlnx_perf -i $if_name | grep -E "pause_ctrl_phy|pause_duration"
+    ```
+
+    Non-zero `rx_pause_ctrl_phy` / `tx_pause_ctrl_phy` during a run means flow control is throttling the link. See [Step 10 of System Configuration](../tutorials/system_configuration.md#step-10-disable-ethernet-flow-control-pause) to disable it, and report the pause configuration alongside any throughput result.
+
 ??? tip "Troubleshooting"
 
     ??? failure "Cannot create HWS action since HWS is not supported"
