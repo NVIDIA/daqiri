@@ -1,4 +1,4 @@
-site_name: DAQIRI — Data Acquisition for Integrated Real-time Instruments
+site_name: "DAQIRI: Data Acquisition for Integrated Real-time Instruments"
 site_url: https://nvidia.github.io/daqiri/
 repo_url: https://github.com/nvidia/daqiri
 repo_name: nvidia/daqiri
@@ -9,20 +9,18 @@ theme:
   logo: images/logo.svg
   favicon: images/favicon-32.png
   palette:
-    - media: "(prefers-color-scheme: light)"
-      scheme: default
-      primary: black
-      accent: light green
-      toggle:
-        icon: material/brightness-7
-        name: Switch to dark mode
-    - media: "(prefers-color-scheme: dark)"
-      scheme: slate
+    - scheme: slate
       primary: black
       accent: light green
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
+    - scheme: default
+      primary: black
+      accent: light green
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
   font:
     text: Inter
     code: JetBrains Mono
@@ -58,7 +56,7 @@ nav:
   - Getting Started: getting-started.md
   - Concepts: concepts.md
   - Benchmarking:
-    - Overview: benchmarks/benchmarks.md
+    - Overview: benchmarks/index.md
     - Socket and RDMA Benchmarking: benchmarks/socket_benchmarking.md
     - Raw Ethernet Benchmarking: benchmarks/raw_benchmarking.md
     - "Performance: DGX Spark": benchmarks/performance-dgx-spark.md
@@ -72,6 +70,7 @@ nav:
     - Bare-Metal CMake Build: tutorials/bare-metal-cmake-build.md
     - Configuration YAML Walkthrough: tutorials/configuration-walkthrough.md
     - DAQIRI + Holoscan Integration: tutorials/daqiri-holoscan-integration.md
+    - DAQIRI + TensorRT Inference: tutorials/daqiri-resnet-inference.md
 
 markdown_extensions:
   - admonition
@@ -83,7 +82,11 @@ markdown_extensions:
   - toc:
       permalink: true
   - pymdownx.details
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.highlight:

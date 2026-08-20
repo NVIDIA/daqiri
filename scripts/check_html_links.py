@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Verify that MkDocs-built HTML pages link only to existing locations
+"""Verify that MkDocs-built HTML pages reference only existing locations
 in the rendered site.
 
 The landing page (docs/index.md → site/index.html) embeds raw HTML with
-href attributes. MkDocs strict mode does not validate those links, so this
-script walks each href and confirms the target resolves under site/.
+links and media references. MkDocs strict mode does not validate those
+targets, so this script walks each href/src and confirms the target resolves
+under site/.
 
 Usage: python scripts/check_html_links.py [SITE_DIR]
        (default SITE_DIR is ./site, the output of `mkdocs build`)
@@ -12,13 +13,24 @@ Usage: python scripts/check_html_links.py [SITE_DIR]
 
 from __future__ import annotations
 
-import re
 import sys
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urldefrag, urlparse
 
 HTML_PAGES = ("index.html",)
-HREF_RE = re.compile(r'href="([^"]+)"')
+TARGET_ATTRS = {"href", "src"}
+
+
+class TargetParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.targets: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        for name, value in attrs:
+            if name in TARGET_ATTRS and value:
+                self.targets.append(value)
 
 
 def is_external(href: str) -> bool:
@@ -58,9 +70,9 @@ def main() -> int:
         if not path.exists():
             errors.append(f"{page}: not present in {site}")
             continue
-        content = path.read_text(encoding="utf-8")
-        for match in HREF_RE.finditer(content):
-            href = match.group(1)
+        parser = TargetParser()
+        parser.feed(path.read_text(encoding="utf-8"))
+        for href in parser.targets:
             if is_external(href):
                 continue
             ok, msg = resolve(path.parent, site, href)

@@ -361,7 +361,9 @@ int main(int argc, char** argv) {
   int run_seconds = 10;
   double target_gbps = 0.0;
   std::string mode = "both";
-  for (int i = 2; i + 1 < argc; i += 2) {
+  // Scan every index, not every other one: a lone flag would otherwise shift
+  // the parity and hide a following "--flag value" pair.
+  for (int i = 2; i + 1 < argc; ++i) {
     if (std::string(argv[i]) == "--seconds") {
       run_seconds = std::stoi(argv[i + 1]);
     } else if (std::string(argv[i]) == "--mode") {

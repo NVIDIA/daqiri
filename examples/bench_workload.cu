@@ -60,9 +60,12 @@ cudaEvent_t as_event(void* e) {
 
 }  // namespace
 
+// The parsers below scan every index, not every other one: benches also accept
+// lone flags, and stepping by two would shift the parity so that a following
+// "--flag value" pair is never seen and silently falls back to its default.
 BenchWorkload parse_workload(int argc, char** argv) {
   BenchWorkload workload = BenchWorkload::None;
-  for (int i = 2; i + 1 < argc; i += 2) {
+  for (int i = 2; i + 1 < argc; ++i) {
     if (std::string(argv[i]) == "--workload") {
       const std::string val = argv[i + 1];
       if (val == "fft") {
@@ -84,7 +87,7 @@ BenchWorkload parse_workload(int argc, char** argv) {
 }
 
 int parse_workload_gemm_dim(int argc, char** argv) {
-  for (int i = 2; i + 1 < argc; i += 2) {
+  for (int i = 2; i + 1 < argc; ++i) {
     if (std::string(argv[i]) == "--workload-gemm-dim") {
       const long long v = std::atoll(argv[i + 1]);
       if (v > 0) {
@@ -96,7 +99,7 @@ int parse_workload_gemm_dim(int argc, char** argv) {
 }
 
 int parse_workload_fft_len(int argc, char** argv) {
-  for (int i = 2; i + 1 < argc; i += 2) {
+  for (int i = 2; i + 1 < argc; ++i) {
     if (std::string(argv[i]) == "--workload-fft-len") {
       const long long v = std::atoll(argv[i + 1]);
       if (v > 0) {
@@ -108,7 +111,7 @@ int parse_workload_fft_len(int argc, char** argv) {
 }
 
 int parse_workload_sync_interval(int argc, char** argv) {
-  for (int i = 2; i + 1 < argc; i += 2) {
+  for (int i = 2; i + 1 < argc; ++i) {
     if (std::string(argv[i]) == "--workload-sync-interval") {
       const long long v = std::atoll(argv[i + 1]);
       if (v > 0) {
@@ -120,7 +123,7 @@ int parse_workload_sync_interval(int argc, char** argv) {
 }
 
 int parse_workload_max_inflight(int argc, char** argv) {
-  for (int i = 2; i + 1 < argc; i += 2) {
+  for (int i = 2; i + 1 < argc; ++i) {
     if (std::string(argv[i]) == "--workload-max-inflight") {
       const long long v = std::atoll(argv[i + 1]);
       if (v > 0) {

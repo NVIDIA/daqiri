@@ -1,5 +1,5 @@
 ---
-title: DAQIRI — Data Acquisition for Integrated Real-time Instruments
+title: "DAQIRI: Data Acquisition for Integrated Real-time Instruments"
 template: home.html
 hide:
   - navigation

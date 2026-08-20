@@ -16,7 +16,7 @@
             <div class="gs-step-body">
               <h4>Install Prerequisites</h4>
               <p>Install the CUDA Toolkit (12.2 or newer).</p>
-              <p>For the Raw Ethernet / GPUDirect / RoCE path, you also need an NVIDIA ConnectX-6 Dx (or newer) NIC. The default Ubuntu kernel drivers are sufficient; we recommend additionally installing <code>doca-ofed</code> for the diagnostic utilities (<code>ibstat</code>, <code>ibv_devinfo</code>, <code>mlxconfig</code>, <code>mlnx_perf</code>, …).</p>
+              <p>For the Raw Ethernet / GPUDirect / RoCE path, you also need an NVIDIA ConnectX-6 Dx (or newer) NIC. The default Ubuntu kernel drivers are sufficient. We also recommend installing <code>doca-ofed</code> for the diagnostic utilities (<code>ibstat</code>, <code>ibv_devinfo</code>, <code>mlxconfig</code>, <code>mlnx_perf</code>, and so on).</p>
             </div>
           </div>
           <div class="gs-step">
@@ -37,7 +37,7 @@ cmake --install build --prefix /opt/daqiri</pre>
             <div class="gs-step-num">3</div>
             <div class="gs-step-body">
               <h4>Or Build the Container</h4>
-              <p>The Dockerfile builds DPDK from source with dmabuf patches — no peermem needed inside the container. Set <code>BASE_IMAGE=torch</code> to build on top of NGC PyTorch for Torch / TensorRT inference workflows.</p>
+              <p>The Dockerfile builds DPDK from source with dmabuf patches, so no peermem is needed inside the container. Set <code>BASE_IMAGE=torch</code> to build on top of NGC PyTorch for Torch / TensorRT inference workflows.</p>
               <pre>BASE_TARGET=dpdk \
   DAQIRI_ENGINE=<span class="str">"dpdk ibverbs"</span> \
   scripts/build-container.sh</pre>
@@ -104,7 +104,7 @@ daqiri::<span class="fn">BurstParams</span> *burst;
   uint32_t plen =
     daqiri::<span class="fn">get_segment_packet_length</span>(
         burst, <span class="nm">1</span>, i);
-  <span class="cm">// pay is already on GPU — no copy</span>
+  <span class="cm">// pay is already on GPU, no copy</span>
 }</pre>
           </details>
         </div>

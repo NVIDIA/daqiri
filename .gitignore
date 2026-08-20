@@ -7,8 +7,11 @@ bench-results/**/plots/
 bench-results/**/*.svg
 bench-results/**/*.png
 bench-results/*.log
-docs/images/rtx-pro-*.svg
-docs/images/rtx-pro-*.png
+
+# ResNet inference example: locally generated dataset + model artifacts
+# (built offline by applications/resnet50_inference/tools/, see the tutorial)
+/data/
+/models/
 
 # tune_system.py default output
 pcie_schematic.png
@@ -32,3 +35,6 @@ docs/images/packet_diagrams/reorder_quantize/*.webp
 docs/images/packet_diagrams/reorder_quantize/*.gif
 
 __pycache__/
+
+# ResNet xhost benchmark run artifacts (run_resnet_xhost.sh --results-dir)
+resnet-results/

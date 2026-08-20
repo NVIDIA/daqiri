@@ -339,7 +339,7 @@
       ① Number of memory_regions per queue picks the receive mode (1 = batched / CPU-only, 2 = header-data split). See docs/configuration.md §Memory Regions.
     </text>
     <text x="0" y="34" font-size="11" fill="#4b5563">
-      ② Same flow rule schema serves both columns: <tspan font-family="JetBrains Mono, ui-monospace, monospace">rx.flows[*].action.id</tspan> chooses the queue; mode is determined by that queue's memory_regions list.
+      ② Same flow rule schema serves both columns: <tspan font-family="JetBrains Mono, ui-monospace, monospace">rx.flows[*].action.id(s)</tspan> chooses one queue or an RSS queue list; receive mode is determined by each queue's memory_regions list.
     </text>
     <text x="0" y="50" font-size="11" fill="#4b5563">
       ③ On integrated GPUs (e.g. NVIDIA GB10 / DGX Spark) substitute <tspan font-family="JetBrains Mono, ui-monospace, monospace">kind: host_pinned</tspan> for <tspan font-family="JetBrains Mono, ui-monospace, monospace">device</tspan> — the NIC can't peer-DMA into iGPU VRAM.

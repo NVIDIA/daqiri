@@ -271,7 +271,9 @@ Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_
  *    SUCCESS: Packets allocated
  *    NULL_PTR: Burst or packet pools uninitialized
  *    NO_FREE_BURST_BUFFERS: No burst buffers to allocate
- *    NO_FREE_CPU_PACKET_BUFFERS: Not enough CPU packet buffers available
+ *    NO_FREE_PACKET_BUFFERS: Not enough packet buffers or transmit capacity available
+ *    NOT_READY: A direct queue already has a pending packet or rejected the caller
+ *    INVALID_PARAMETER: Invalid queue or non-single-packet direct request
  */
 Status get_tx_packet_burst(BurstParams *burst);
 
@@ -754,17 +756,20 @@ void set_num_packets(BurstParams *burst, int64_t num);
 /**
  * @brief Send a TX burst.
  *
- * Takes ownership of @p burst on SUCCESS and on NO_SPACE_AVAILABLE: on SUCCESS
- * the TX worker owns it; on NO_SPACE_AVAILABLE (TX ring full) it has already
- * freed the packets and the burst internally. In both cases the caller must
+ * Takes ownership of @p burst on SUCCESS and on NO_SPACE_AVAILABLE. Indirect
+ * mode hands a successful burst to the TX worker; raw ibverbs direct mode has
+ * already submitted its single packet before returning SUCCESS. On
+ * NO_SPACE_AVAILABLE it has already freed the packets and burst internally.
+ * In all ownership-consuming cases the caller must
  * NOT free or otherwise access @p burst afterwards. NO_SPACE_AVAILABLE is the
  * only failure a correctly-configured sender hits at runtime.
  *
  * @param burst Burst structure
  * @return Status indicating result. Valid values are:
- *    SUCCESS: burst enqueued to the TX worker (ownership transferred)
- *    NO_SPACE_AVAILABLE: TX ring full; burst already freed (ownership consumed)
+ *    SUCCESS: burst enqueued or directly posted (ownership transferred)
+ *    NO_SPACE_AVAILABLE: No transmit capacity; burst already freed (ownership consumed)
  *    INVALID_PARAMETER: bad port/queue; burst NOT consumed (see issue #164)
+ *    NOT_READY: direct queue called concurrently or from a non-owner thread; burst not consumed
  */
 Status send_tx_burst(BurstParams *burst);
 
@@ -776,7 +781,7 @@ Status send_tx_burst(BurstParams *burst);
  * @param q Queue ID of interface
  * @return Status indicating status. Valid values are:
  *    SUCCESS: Burst received successfully
- *    NULL_PTR: No bursts ready to receive
+ *    NULL_PTR or NOT_READY: No bursts ready to receive
  */
 Status get_rx_burst(BurstParams **burst, int port, int q);
 
@@ -787,7 +792,7 @@ Status get_rx_burst(BurstParams **burst, int port, int q);
  * @param port Port ID of interface
  * @return Status indicating status. Valid values are:
  *    SUCCESS: Burst received successfully
- *    NULL_PTR: No bursts ready to receive on any queue for this port
+ *    NULL_PTR or NOT_READY: No bursts ready to receive on any queue for this port
  */
 Status get_rx_burst(BurstParams **burst, int port);
 
@@ -797,7 +802,7 @@ Status get_rx_burst(BurstParams **burst, int port);
  * @param burst Burst structure
  * @return Status indicating status. Valid values are:
  *    SUCCESS: Burst received successfully
- *    NULL_PTR: No bursts ready to receive on any queue on any port
+ *    NULL_PTR or NOT_READY: No bursts ready to receive on any queue on any port
  */
 Status get_rx_burst(BurstParams **burst);
 
@@ -1053,10 +1058,10 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
    * otherwise.
    * @return true if parsing was successful, false otherwise.
    */
-  static bool
-  parse_tx_queue_common_config(const YAML::Node &q_item,
-                               daqiri::TxQueueConfig &tx_queue_config,
-                               bool parse_memory_regions);
+  static bool parse_tx_queue_common_config(const YAML::Node& q_item,
+                                           daqiri::TxQueueConfig& tx_queue_config,
+                                           bool parse_memory_regions,
+                                           bool require_worker_fields = true);
 
   /**
    * @brief Decode the YAML node into an NetworkConfig object.

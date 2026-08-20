@@ -31,7 +31,7 @@ include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 find_package(CUDAToolkit REQUIRED)
 
-set(DAQIRI_ABI_VERSION "0" CACHE STRING "DAQIRI shared library ABI version")
+set(DAQIRI_ABI_VERSION "1" CACHE STRING "DAQIRI shared library ABI version")
 if(NOT DAQIRI_ABI_VERSION MATCHES "^(0|[1-9][0-9]*)$")
   message(FATAL_ERROR "DAQIRI_ABI_VERSION must be a non-negative integer")
 endif()
@@ -50,6 +50,7 @@ endif()
 
 option(DAQIRI_BUILD_PYTHON "Build Python bindings" OFF)
 option(DAQIRI_BUILD_EXAMPLES "Build standalone examples" ON)
+option(DAQIRI_BUILD_APPLICATIONS "Build example applications (requires TensorRT)" OFF)
 option(DAQIRI_ENABLE_OTEL_METRICS "Enable OpenTelemetry metrics instrumentation" OFF)
 set(DAQIRI_ENGINE "dpdk ibverbs" CACHE STRING "Optional engine implementations to build: dpdk, ibverbs (Linux sockets are always built in)")
 
@@ -69,6 +70,10 @@ endif()
 
 if(DAQIRI_BUILD_EXAMPLES)
   add_subdirectory(examples)
+endif()
+
+if(DAQIRI_BUILD_APPLICATIONS)
+  add_subdirectory(applications)
 endif()
 
 install(

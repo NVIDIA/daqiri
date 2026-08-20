@@ -602,13 +602,13 @@ class EngineExtraQueueConfig {
 
 struct CommonQueueConfig {
   std::string name_;
-  int id_;
-  int batch_size_;
-  int split_boundary_;
+  int id_ = 0;
+  int batch_size_ = 0;
+  int split_boundary_ = 0;
   std::string cpu_core_;
   std::vector<std::string> mrs_;
   std::vector<std::string> offloads_;
-  EngineExtraQueueConfig* extra_queue_config_;
+  EngineExtraQueueConfig* extra_queue_config_ = nullptr;
 };
 
 struct MemoryRegionConfig {
@@ -623,16 +623,41 @@ struct MemoryRegionConfig {
   bool owned_;
 };
 
+enum class QueuePollMode { INDIRECT, DIRECT, INVALID };
+
+inline QueuePollMode queue_poll_mode_from_string(const std::string& str) {
+  if (str == "indirect") {
+    return QueuePollMode::INDIRECT;
+  }
+  if (str == "direct") {
+    return QueuePollMode::DIRECT;
+  }
+  return QueuePollMode::INVALID;
+}
+
+inline std::string queue_poll_mode_to_string(QueuePollMode mode) {
+  switch (mode) {
+    case QueuePollMode::INDIRECT:
+      return "indirect";
+    case QueuePollMode::DIRECT:
+      return "direct";
+    default:
+      return "invalid";
+  }
+}
+
 struct RxQueueConfig {
   CommonQueueConfig common_;
-  uint64_t timeout_us_;
+  uint64_t timeout_us_ = 0;
+  QueuePollMode poll_mode_ = QueuePollMode::INDIRECT;
 };
 
 struct TxQueueConfig {
   CommonQueueConfig common_;
+  QueuePollMode poll_mode_ = QueuePollMode::INDIRECT;
   // Packet pacing: average TX rate cap in megabits/sec (L2 frame bytes). 0
-  // disables pacing (line-rate). Honored only by engines/devices with accurate
-  // send scheduling (wait-on-time + real-time clock).
+  // disables pacing (line-rate). Honored only by engines/devices with hardware
+  // packet-pacing support.
   uint64_t pacing_mbps_ = 0;
 };
 
@@ -731,6 +756,10 @@ struct FlowAction {
   uint16_t id_ = 0;
   VlanActionConfig vlan_;
   TunnelConfig tunnel_;
+  // Kept after the legacy fields so positional scalar aggregate initializers
+  // remain source-compatible. A non-empty list replaces id_ as the queue
+  // destination; two or more entries request flow-affine RSS.
+  std::vector<uint16_t> ids_;
 };
 
 struct FlexItemMatch {
@@ -809,6 +838,13 @@ inline std::vector<FlowAction> flow_rule_actions(const FlowRuleConfig& flow) {
   return {flow.action_};
 }
 
+inline std::vector<FlowAction> flow_config_actions(const FlowConfig& flow) {
+  if (!flow.actions_.empty()) {
+    return flow.actions_;
+  }
+  return {flow.action_};
+}
+
 inline FlowAction flow_queue_action(const std::vector<FlowAction>& actions) {
   auto it = std::find_if(actions.begin(), actions.end(), [](const FlowAction& action) {
     return action.type_ == FlowType::QUEUE;
@@ -816,12 +852,23 @@ inline FlowAction flow_queue_action(const std::vector<FlowAction>& actions) {
   return it == actions.end() ? FlowAction{} : *it;
 }
 
+inline std::vector<uint16_t> flow_queue_ids(const FlowAction& action) {
+  if (!action.ids_.empty()) {
+    return action.ids_;
+  }
+  return {action.id_};
+}
+
+inline bool flow_queue_action_uses_rss(const FlowAction& action) {
+  return action.type_ == FlowType::QUEUE && action.ids_.size() > 1;
+}
+
 inline bool flow_actions_have_transform(const std::vector<FlowAction>& actions) {
   return std::any_of(actions.begin(), actions.end(), flow_action_is_transform);
 }
 
 inline bool flow_has_transform_actions(const FlowConfig& flow) {
-  return flow_actions_have_transform(flow.actions_);
+  return flow_actions_have_transform(flow_config_actions(flow));
 }
 
 inline bool flow_rule_has_transform_actions(const FlowRuleConfig& flow) {
@@ -873,7 +920,7 @@ inline size_t flow_max_decap_wire_overhead(const std::vector<FlowConfig>& flows)
   size_t overhead = 0;
   for (const auto& flow : flows) {
     size_t per_flow = 0;
-    for (const auto& action : flow.actions_) {
+    for (const auto& action : flow_config_actions(flow)) {
       per_flow += flow_decap_wire_overhead(action);
     }
     overhead = std::max(overhead, per_flow);
@@ -885,7 +932,7 @@ inline size_t flow_max_encap_wire_overhead(const std::vector<FlowConfig>& flows)
   size_t overhead = 0;
   for (const auto& flow : flows) {
     size_t per_flow = 0;
-    for (const auto& action : flow.actions_) {
+    for (const auto& action : flow_config_actions(flow)) {
       per_flow += flow_action_wire_overhead(action);
     }
     overhead = std::max(overhead, per_flow);
@@ -1026,9 +1073,11 @@ inline bool is_reorder_input_data_type(ReorderDataType type) {
 }
 
 inline bool is_reorder_output_data_type(ReorderDataType type) {
+  // INT8 is allowed so int8→int8 reorder can passthrough (no convert) into an
+  // INT8 TensorRT binding; same-width as wire keeps slot stride = payload len.
   return type == ReorderDataType::FP16 || type == ReorderDataType::BF16
          || type == ReorderDataType::FP32 || type == ReorderDataType::FP64
-         || type == ReorderDataType::INT32;
+         || type == ReorderDataType::INT32 || type == ReorderDataType::INT8;
 }
 
 inline uint32_t reorder_data_type_bit_width(ReorderDataType type) {

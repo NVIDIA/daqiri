@@ -122,8 +122,9 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
           std::memcpy(packet_template.data() + cfg.header_size, &seq, sizeof(seq));
         }
         daqiri::bench::finalize_udp_ipv4_checksums(packet_template.data());
+        // cudaMemcpyDefault works whether the packet buffer is GPU or CPU memory.
         if (cudaMemcpy(gpu_pkt, packet_template.data(), packet_template.size(),
-                       cudaMemcpyHostToDevice) != cudaSuccess) {
+                       cudaMemcpyDefault) != cudaSuccess) {
           failed = true;
           break;
         }

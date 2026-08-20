@@ -1,0 +1,156 @@
+name: Publish container
+
+on:
+  workflow_dispatch:
+    inputs:
+      push:
+        description: 'Push to NGC staging (clear to build only)'
+        type: boolean
+        default: true
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: nvcr.io/nvstaging/holoscan/daqiri
+  # scripts/build-container.sh calls plain `docker build`, but pin this so a
+  # runner defaulting to a buildx container driver still emits a plain
+  # manifest rather than an OCI index with a provenance attestation --
+  # `imagetools create` in the merge job needs per-arch manifests.
+  BUILDX_NO_DEFAULT_ATTESTATIONS: 1
+
+jobs:
+  build:
+    name: build ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      # Pinned by commit rather than by tag, unlike the other workflows: these
+      # jobs hold the NGC push credential, so a retagged action must not be
+      # able to reach it.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # The runtime image is ~8.5 GB and the build compiles DPDK and the AWS
+      # SDK from source. Hosted runners start with roughly 25 GB free, which
+      # does not survive the intermediate layers, so drop preinstalled
+      # toolchains this build never touches.
+      - name: Reclaim disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "${AGENT_TOOLSDIRECTORY}"
+          df -h /
+
+      - name: Resolve version
+        id: version
+        run: |
+          version="$(cat VERSION)"
+
+          # VERSION becomes the published image tag verbatim, so reject
+          # anything that is not a bare CalVer triple.
+          if ! printf '%s' "${version}" \
+            | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::VERSION '${version}' is not YYYY.MM.PATCH"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            # The trigger glob is 'v*', so require the full release format
+            # before comparing. The numeric compare below reads only a leading
+            # integer per field, which would otherwise let a prerelease tag
+            # such as v2026.07.00-rc1 publish over the stable 2026.7.0 image.
+            if ! printf '%s' "${GITHUB_REF_NAME}" \
+              | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "::error::tag ${GITHUB_REF_NAME} is not a vYYYY.MM.PATCH release tag"
+              exit 1
+            fi
+
+            # Release tags are zero-padded (v2026.07.00) while VERSION is not
+            # (2026.7.0), so compare numerically. Catches a tag pushed without
+            # the matching VERSION bump, which would publish a stale image tag.
+            tag_version="$(echo "${GITHUB_REF_NAME#v}" \
+              | awk -F. '{printf "%d.%d.%d", $1, $2, $3}')"
+            file_version="$(echo "${version}" \
+              | awk -F. '{printf "%d.%d.%d", $1, $2, $3}')"
+            if [ "${tag_version}" != "${file_version}" ]; then
+              echo "::error::tag ${GITHUB_REF_NAME} does not match VERSION ${version}"
+              exit 1
+            fi
+          fi
+
+      # Only needed to push. The CUDA base image pulls anonymously, so a
+      # build-only run works on a repository with no NGC secret configured.
+      - name: Log in to nvcr.io
+        if: github.event_name != 'workflow_dispatch' || inputs.push
+        env:
+          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+        run: |
+          if [ -z "${NGC_API_KEY}" ]; then
+            echo "::error::NGC_API_KEY secret is not set on this repository"
+            exit 1
+          fi
+          printf '%s' "${NGC_API_KEY}" \
+            | docker login nvcr.io -u '$oauthtoken' --password-stdin
+
+      # Reuse the same script developers run by hand so CI and local builds
+      # cannot drift apart on build args.
+      - name: Build
+        env:
+          IMAGE_TAG: ${{ env.IMAGE }}:${{ steps.version.outputs.version }}-${{ matrix.arch }}
+        run: scripts/build-container.sh
+
+      - name: Push
+        if: github.event_name != 'workflow_dispatch' || inputs.push
+        env:
+          IMAGE_TAG: ${{ env.IMAGE }}:${{ steps.version.outputs.version }}-${{ matrix.arch }}
+        run: |
+          docker push "${IMAGE_TAG}"
+          echo "Pushed ${IMAGE_TAG}" >> "$GITHUB_STEP_SUMMARY"
+
+  merge:
+    name: multi-arch manifest
+    needs: build
+    if: github.event_name != 'workflow_dispatch' || inputs.push
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Resolve version
+        id: version
+        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to nvcr.io
+        env:
+          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+        run: |
+          printf '%s' "${NGC_API_KEY}" \
+            | docker login nvcr.io -u '$oauthtoken' --password-stdin
+
+      - name: Join per-arch tags into one manifest list
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          docker buildx imagetools create -t "${IMAGE}:${VERSION}" \
+            "${IMAGE}:${VERSION}-amd64" \
+            "${IMAGE}:${VERSION}-arm64"
+
+      - name: Verify
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          docker buildx imagetools inspect "${IMAGE}:${VERSION}" \
+            | tee -a "$GITHUB_STEP_SUMMARY"

@@ -38,6 +38,7 @@ enum {
   MLX5_CMD_OP_CREATE_TIR = 0x900,
   MLX5_CMD_OP_CREATE_RQ = 0x908,
   MLX5_CMD_OP_MODIFY_RQ = 0x909,
+  MLX5_CMD_OP_CREATE_RQT = 0x916,
   MLX5_CMD_OP_CREATE_GENERAL_OBJECT = 0xa00,
   MLX5_CMD_OP_QUERY_GENERAL_OBJECT = 0xa02,
 };
@@ -105,9 +106,19 @@ enum {
 };
 enum {
   MLX5_TIRC_DISP_TYPE_DIRECT = 0x0,
+  MLX5_TIRC_DISP_TYPE_INDIRECT = 0x1,
 };
 enum {
   MLX5_RX_HASH_FN_NONE = 0x0,
+  MLX5_RX_HASH_FN_TOEPLITZ = 0x2,
+};
+enum {
+  MLX5_L3_PROT_TYPE_IPV4 = 0x0,
+  MLX5_L4_PROT_TYPE_UDP = 0x1,
+  MLX5_HASH_FIELD_SEL_SRC_IP = 1 << 0,
+  MLX5_HASH_FIELD_SEL_DST_IP = 1 << 1,
+  MLX5_HASH_FIELD_SEL_L4_SPORT = 1 << 2,
+  MLX5_HASH_FIELD_SEL_L4_DPORT = 1 << 3,
 };
 enum {
   MLX5_MODIFY_RQ_RST2RDY = 0x1,
@@ -231,6 +242,39 @@ struct mlx5_ifc_modify_rq_out_bits {
   uint8_t reserved_at_8[0x18];
   uint8_t syndrome[0x20];
   uint8_t reserved_at_40[0x40];
+};
+
+struct mlx5_ifc_rqtc_bits {
+  uint8_t reserved_at_0[0xa0];
+  uint8_t reserved_at_a0[0x5];
+  uint8_t list_q_type[0x3];
+  uint8_t reserved_at_a8[0x8];
+  uint8_t rqt_max_size[0x10];
+  uint8_t rq_vhca_id_format[0x1];
+  uint8_t reserved_at_c1[0xf];
+  uint8_t rqt_actual_size[0x10];
+  uint8_t reserved_at_e0[0x6a0];
+  // Flexible array of 32-bit entries (8 reserved bits + 24-bit RQN). Command
+  // buffers allocate additional entries after this sentinel.
+  uint8_t rq_num[1][0x20];
+};
+
+struct mlx5_ifc_create_rqt_in_bits {
+  uint8_t opcode[0x10];
+  uint8_t uid[0x10];
+  uint8_t reserved_at_20[0x10];
+  uint8_t op_mod[0x10];
+  uint8_t reserved_at_40[0xc0];
+  struct mlx5_ifc_rqtc_bits rqt_context;
+};
+
+struct mlx5_ifc_create_rqt_out_bits {
+  uint8_t status[0x8];
+  uint8_t reserved_at_8[0x18];
+  uint8_t syndrome[0x20];
+  uint8_t reserved_at_40[0x8];
+  uint8_t rqtn[0x18];
+  uint8_t reserved_at_60[0x20];
 };
 
 struct mlx5_ifc_rx_hash_field_select_bits {

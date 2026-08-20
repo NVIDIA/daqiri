@@ -10,16 +10,16 @@ This page is the DAQIRI glossary. It defines the terms used across the
 [Configuration Reference](api-reference/configuration.md), and
 [tutorials](tutorials/system_configuration.md): **stream types and
 endpoint URI schemes**, **GPUDirect**, **packet / burst / segment**,
-**flow / queue**, **memory region**, **zero-copy ownership**, and
-**RX reorder**.
+**flow / queue**, **memory region**, **zero-copy ownership**,
+**queue polling modes**, and **RX reorder**.
 
 ## Stream Types
 
 DAQIRI exposes a single C++ API on top of several packet-I/O stacks. The
 choice is configured per-application in YAML with:
 
-- `stream_type` — the I/O stack family.
-- endpoint URI schemes — `tcp://`, `udp://`, or `roce://` in
+- `stream_type`: the I/O stack family.
+- endpoint URI schemes: `tcp://`, `udp://`, or `roce://` in
   `socket_config.local_addr` and `socket_config.remote_addr`.
 
 The shipped Ethernet stream types use NICs as their hardware endpoint.
@@ -33,7 +33,7 @@ An **engine** is the library that *implements* a stream type. It is a
 separate concept from `stream_type`: the stream type says *what* kind of
 stream you want, the engine is the *implementation* behind it.
 
-You normally never set an engine — DAQIRI picks a sensible default from
+You normally never set an engine, since DAQIRI picks a sensible default from
 the `stream_type` and the endpoint URI scheme:
 
 | Stream | Default engine | Notes |
@@ -47,7 +47,7 @@ The engine concept exists so the implementation can be swapped without
 changing the stream type. For example, raw Ethernet is served by the
 `dpdk` engine by default but can instead use the `ibverbs` engine (a
 Multi-Packet/striding Receive Queue implementation) by setting
-`engine: "ibverbs"` on the stream; RoCE is served by the `ibverbs` engine,
+`engine: "ibverbs"` on the stream. RoCE is served by the `ibverbs` engine,
 and a future release could add a DOCA RDMA engine as an alternative for the
 same `roce://` stream.
 
@@ -63,7 +63,7 @@ Kernel-bypass raw Ethernet. The application talks directly to NIC ring
 buffers in user space, skipping the Linux network stack entirely. This
 is the highest-performance path and the only one with hardware flow
 steering (see [Flows](#flow) below). Implemented on top of
-[DPDK](https://www.dpdk.org/) by default; the DPDK dependency is an
+[DPDK](https://www.dpdk.org/) by default. The DPDK dependency is an
 implementation detail, not a user-facing concept. Setting `engine: "ibverbs"`
 on the stream instead uses a pure-libibverbs/DevX Multi-Packet (striding)
 Receive Queue engine on Mellanox/mlx5 NICs, which packs many packets into one
@@ -76,11 +76,11 @@ Requires an NVIDIA SmartNIC (ConnectX-6 Dx or later).
 *YAML:* `stream_type: "socket"`. The specific transport is chosen by endpoint
 URI schemes:
 
-- **`udp://`** / **`tcp://`** — Linux kernel UDP and TCP sockets. No NIC
+- **`udp://`** / **`tcp://`**: Linux kernel UDP and TCP sockets. No NIC
   privileges required, no special hardware. Useful
   as a comparison baseline against the kernel-bypass paths and as a way
   to get first results on a system without an NVIDIA NIC.
-- **`roce://` endpoints** — RDMA over Converged Ethernet, using the
+- **`roce://` endpoints**: RDMA over Converged Ethernet, using the
   open-source [`rdma-core`](https://github.com/linux-rdma/rdma-core)
   library. A server/client connection model, NIC-level reliable
   transport (RC), and in-order delivery. Primarily intended for
@@ -120,11 +120,11 @@ in the configuration walkthrough.
     - **Raw Ethernet** (`stream_type: "raw"`) is supported, distributed
       with the DAQIRI library, and is the only stream type actively
       tested at this time.
-    - **Socket — UDP / TCP** (`stream_type: "socket"` with `udp://` /
-      `tcp://` endpoints) is supported and distributed; integration testing is
+    - **Socket: UDP / TCP** (`stream_type: "socket"` with `udp://` /
+      `tcp://` endpoints) is supported and distributed. Integration testing is
       under development.
-    - **Socket — RoCE** (`stream_type: "socket"` and
-      `roce://` endpoints) is supported and distributed; integration
+    - **Socket: RoCE** (`stream_type: "socket"` and
+      `roce://` endpoints) is supported and distributed. Integration
       testing is under development.
     - The **PCIe programmable-sensor** path is under development.
 
@@ -182,7 +182,7 @@ For step-by-step system setup, see the
 
 DAQIRI is a batch processing library. Packets are received from DAQIRI
 and sent to DAQIRI in batches called **bursts**. Larger bursts can
-increase throughput at the expense of latency; smaller bursts decrease
+increase throughput at the expense of latency, while smaller bursts decrease
 latency but cap total throughput because of the per-burst processing
 overhead. The terms below appear throughout the API, configuration, and
 code paths.
@@ -199,7 +199,7 @@ reassembles them on the wire transparently.
 
 A **burst** is the metadata container DAQIRI uses to describe a batch
 of packets being transmitted or received. The C++ type for a burst is
-`BurstParams`. It is intentionally opaque — applications use helper
+`BurstParams`. It is intentionally opaque, so applications use helper
 functions (`get_packet_ptr`, `get_packet_length`, `get_num_packets`,
 ...) to inspect or modify it rather than touching its fields directly.
 
@@ -237,17 +237,66 @@ right application buffer.
 ### Queue
 
 A **queue** is a NIC-side buffer that an application reads from (RX) or
-writes to (TX). Each queue is assigned a CPU core in the YAML to poll
-it, but queues and cores are not strictly one-to-one: one core can poll
-multiple queues, and a TX queue can be fed from multiple cores.
+writes to (TX). By default, each queue is assigned a CPU core in the YAML
+for DAQIRI to service. Queues and cores are not strictly one-to-one: one
+core can service multiple queues.
 
 A queue points at one or more *memory regions*, which hold its packet
 buffers (CPU hugepages, GPU device memory, or pinned host memory).
 
+### Queue Polling Modes (`poll_mode`)
+
+With packet processing there is an inverse relationship between bandwidth and latency. This is mainly for two reasons:
+
+1) Batching packets allows more optimizations, but takes longer to wait
+2) Larger packet sizes are more efficient for higher bandwidth, but take longer to transmit and receive
+
+DAQIRI allows users to select whether to prefer higher bandwidth or lower latency on a per-queue basis. A typical 
+use case for this would be high bandwidth for data plane, and low latency for control plane. Note that these are extreme definitions of high bandwidth and low latency. DAQIRI already provides extremely low latency and high bandwidth by bypassing the Linux kernel, regardless of the setting. Choosing low latency may save low single digit microseconds per packet.
+
+The `poll_mode` setting is used by choosing either indirect for high bandwidth, or direct for low latency by choosing which thread polls the NIC. `indirect` mode is chosen by default to favor high bandwidth and batching.
+
+| Mode | Who services the queue? | Best suited for |
+|---|---|---|
+| `indirect` | A DAQIRI worker running on the queue's configured `cpu_core` | General use, batching, highest bandwidth |
+| `direct` | The application thread calling the RX or TX API | The lowest single-packet latency when the application can dedicate one thread to each queue |
+
+In **indirect mode**, the application and DAQIRI worker exchange bursts. The
+queue requires `cpu_core` and `batch_size`; RX queues may also use `timeout_us`
+to return a partial batch. `indirect` mode also allows more processing jitter in the application threads by using a zero-copy ring in between DAQIRI and the user. This is the existing behavior and is supported by
+all applicable engines.
+
+In **direct mode**, there is no worker between the application and the queue.
+The application thread performs the queue work as part of its normal API calls:
+
+- Direct RX returns all packets currently ready, up to 256, without waiting.
+  An empty poll returns `Status::NOT_READY`.
+- Direct TX accepts exactly one packet per `BurstParams`. A successful
+  `send_tx_burst()` means the packet was submitted; the application must not
+  access that burst afterward.
+- Exactly one application thread must own each direct queue. A direct TX queue
+  may have only one acquired-but-unsubmitted packet at a time.
+
+Direct mode is available only for the raw `ibverbs` engine. A direct queue must
+omit `cpu_core`, `batch_size`, and, for RX, `timeout_us`. Direct RX does not
+support reorder configurations. Direct and indirect queues may be mixed on the
+same interface.
+
+Direct mode removes the cross-thread handoff that can add latency, but it also
+makes application scheduling part of packet I/O. If the application thread is
+descheduled, blocked, or busy doing other work, packet processing for that queue
+stops until it calls DAQIRI again. Use indirect mode when steady progress or
+batch throughput matters more than minimum latency.
+
+See the [RX queue](api-reference/configuration.md#queues) and
+[TX queue](api-reference/configuration.md#queues_1) configuration references
+for the complete field rules.
+
 ### Flow
 
 A **flow** is a match pattern paired with one or more actions. The
-common RX action is to steer matching packets into a specific queue. For
+common RX action is to steer matching packets into one queue or a list of
+queues. For
 example, all UDP-destination-port-4096 packets can be routed into a
 queue backed by GPU memory. Matching and the resulting actions both run
 entirely in NIC hardware.
@@ -269,17 +318,26 @@ dynamic flows are not part of v1.
 
 Raw DPDK and raw ibverbs flows can also use ordered `actions:` for hardware VLAN
 pop/push and VXLAN, GRE, or NVGRE decap/encap. RX decap/pop actions deliver
-post-decap packets to application buffers; TX encap/push actions leave
+post-decap packets to application buffers, while TX encap/push actions leave
 application buffers as pre-encap packets and change only the wire frame.
 Dynamic RX flows use the same ordered action model for runtime decap/pop rules,
 while TX transform flows remain static startup configuration.
 
+A queue action with two or more queue IDs enables **receive-side scaling
+(RSS)**. The NIC computes a Toeplitz hash from the IPv4/UDP five tuple and uses
+it to select one requested queue. This is flow-affine: every packet in an
+unchanged flow stays on one queue, preserving per-flow ordering. RSS is not
+packet striping, so roughly even queue packet counts require enough distinct
+tuples with reasonably balanced traffic. Tunnel-decap rules hash the inner
+tuple; flex-item rules still hash the IPv4/UDP tuple rather than the flex value.
+eCPRI flows do not support multi-queue RSS.
+
 ### Flow Steering
 
 **Flow steering** is the NIC-level mechanism that classifies an
-incoming packet against the configured flows and writes it into the
-matching queue's buffer, entirely in hardware. Multi-queue RX works by
-routing each flow to a separate queue for parallel processing.
+incoming packet against the configured flows and writes it into a selected
+queue's buffer, entirely in hardware. Multi-queue RX can use separate scalar
+rules or one RSS rule for parallel processing.
 
 For Raw Ethernet, flow steering is implemented on top of RTE Flow in the
 DPDK engine and mlx5 Direct Rules in the ibverbs engine. Flow rules are
@@ -301,7 +359,7 @@ The kind of a memory region determines whether packet data ends up on
 the CPU or the GPU:
 
 - `huge`: CPU hugepages (recommended for CPU buffers).
-- `device`: GPU VRAM (discrete GPUs; requires GPUDirect via peermem or
+- `device`: GPU VRAM (discrete GPUs, requires GPUDirect via peermem or
   DMA-BUF).
 - `host_pinned`: pinned CPU pages allocated via `cudaHostAlloc`.
   Recommended on integrated GPUs (NVIDIA GB10 / DGX Spark), where the
@@ -324,7 +382,7 @@ pool (for headers, segment 0); its second region is a `device` GPU pool
 
 DAQIRI is designed around zero-copy packet delivery. When a receive API
 returns packet data, the application is reading the buffers the NIC
-DMA'd into; the API passes pointers and metadata, not copies.
+DMA'd into. The API passes pointers and metadata, not copies.
 
 That zero-copy model makes **buffer release part of the API contract**.
 Applications must free RX bursts after processing and free or send TX

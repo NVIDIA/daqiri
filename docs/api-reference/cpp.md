@@ -71,7 +71,7 @@ if (st != daqiri::Status::SUCCESS) {
 
 ## Receiving Packets
 
-### RX Step 1 — Get a burst
+### RX Step 1: Get a burst
 
 ```cpp
 daqiri::BurstParams *burst;
@@ -81,8 +81,9 @@ auto status = daqiri::get_rx_burst(&burst, port_id, queue_id);
 ```
 
 `get_rx_burst()` is non-blocking. It returns `Status::SUCCESS` when a complete batch is
-available, or `Status::NULL_PTR` when no burst is ready yet. There are also overloads
-that dequeue from any queue on a port, or from any queue on any port:
+available. When no burst is ready, engines return `Status::NULL_PTR` or `Status::NOT_READY`;
+applications should handle both as an empty poll. There are also overloads that dequeue from
+any queue on a port, or from any queue on any port:
 
 ```cpp
 // From any queue on port 0
@@ -92,7 +93,14 @@ daqiri::get_rx_burst(&burst, 0);
 daqiri::get_rx_burst(&burst);
 ```
 
-### RX Step 2 — Access packet data
+For an ibverbs RX queue configured with `poll_mode: direct`, the calling thread performs one
+bounded check for ready packets inside `get_rx_burst()`. A successful call returns the packets
+currently ready, up to 256, without a DAQIRI RX worker or handoff ring. Exactly one thread may
+poll each direct queue. Continue using the normal burst-free APIs; released packet buffers are
+recycled by a subsequent direct poll. An empty direct poll returns `Status::NOT_READY`. Indirect
+mode remains the default.
+
+### RX Step 2: Access packet data
 
 For a single-segment configuration (CPU-only or batched GPU):
 
@@ -129,7 +137,7 @@ for (int i = 0; i < daqiri::get_num_packets(burst); i++) {
 }
 ```
 
-### RX Step 3 — Free buffers
+### RX Step 3: Free buffers
 
 When you are done processing, free the burst to return buffers to the pool:
 
@@ -159,8 +167,11 @@ Raw Ethernet RX flows can be added and deleted after `daqiri_init()` on the
 `dpdk` and raw `ibverbs` engines. This supports queues-only startup configs,
 including `rx.flow_isolation: true` with no initial `rx.flows`. Static YAML
 flows still use explicit configured IDs and are not deletable through this API.
-The legacy `FlowRuleConfig::action_` field remains the shorthand for a single
-queue action; `FlowRuleConfig::actions_` is the ordered form used when a dynamic
+The legacy `FlowRuleConfig::action_` field remains the shorthand for a queue
+action; set `FlowAction::id_` for direct steering or `FlowAction::ids_` for a
+queue list. A list with one entry is direct steering, while two or more entries
+automatically enable flow-affine IPv4/UDP five-tuple RSS. `FlowRuleConfig::actions_`
+is the ordered form used when a dynamic
 RX rule needs hardware VLAN pop or tunnel decapsulation before queue delivery.
 Dynamic TX transform flows are not part of v1; configure TX encapsulation/push
 rules statically under `tx.flows`.
@@ -201,6 +212,21 @@ while (flow_id == 0) {
 }
 ```
 
+To distribute distinct IPv4/UDP flows across two queues, replace the scalar
+target with a queue list:
+
+```cpp
+flow.action_.ids_ = {0, 1};
+```
+
+The queue list must be non-empty, duplicate-free, and contain only configured RX
+queue IDs. Each unchanged five tuple remains on one queue; approximately even
+packet totals require many distinct tuples with reasonably balanced traffic.
+Tunnel decapsulation hashes the inner tuple. Multi-queue RSS is not available for
+eCPRI flows or flows referenced by an RX reorder configuration. Hardware creation
+failure is reported by the static initialization or dynamic operation completion;
+DAQIRI does not silently select one queue.
+
 For a dynamic VXLAN decap rule, use ordered actions and make the final action
 the target queue:
 
@@ -232,7 +258,7 @@ Packets matching a dynamic rule are marked with the same `FlowId` returned by
 the add completion, so `get_packet_flow_id()` gives the handle to pass to
 `delete_flow_async()`. `poll_flow_op()` returns `Status::NOT_READY` when no flow
 operation has completed yet. A dynamic flow is deletable only after its add
-completion has been polled successfully; deleting a flow that is still pending returns
+completion has been polled successfully. Deleting a flow that is still pending returns
 `Status::INVALID_PARAMETER`.
 
 Multiple RX flows can be added as one operation. On DPDK this maps to a single
@@ -312,7 +338,7 @@ if ((burst->hdr.hdr.burst_flags & daqiri::DAQIRI_BURST_FLAG_REORDERED) != 0U) {
 
 ### GPU packet processing on reordered bursts
 
-When using batched GPU mode, packets arrive in CUDA-addressable buffers — each at an
+When using batched GPU mode, packets arrive in CUDA-addressable buffers, each at an
 arbitrary GPU address. Launch your own CUDA work directly on the packet pointers. Packet
 reordering and aggregation should be configured through `rx.reorder_configs`; see
 `raw_reorder_seq_bench.cpp` and `raw_reorder_quantize_bench.cpp` for complete examples
@@ -334,7 +360,7 @@ daqiri::free_all_packets_and_burst_rx(burst);
 
 ## Transmitting Packets
 
-### TX Step 1 — Allocate a burst
+### TX Step 1: Allocate a burst
 
 ```cpp
 auto burst = daqiri::create_tx_burst_params();
@@ -342,7 +368,7 @@ daqiri::set_header(burst, port_id, queue_id, batch_size, num_segments);
 
 auto status = daqiri::get_tx_packet_burst(burst);
 if (status != daqiri::Status::SUCCESS) {
-    // No buffers available — retry later
+    // No buffers available, retry later
 }
 ```
 
@@ -363,7 +389,7 @@ daqiri::set_connection_id(burst, conn_id);
 auto rx_conn_id = daqiri::get_connection_id(rx_burst);
 ```
 
-### TX Step 2 — Fill packets
+### TX Step 2: Fill packets
 
 Use the header helper functions for standard UDP packets:
 
@@ -380,20 +406,26 @@ for (int i = 0; i < daqiri::get_num_packets(burst); i++) {
 Or construct raw packets by writing directly into the packet buffer returned by
 `get_packet_ptr()`.
 
-### TX Step 3 — Send
+### TX Step 3: Send
 
 ```cpp
 daqiri::send_tx_burst(burst);
 ```
 
-The burst is enqueued to the TX worker thread, which sends it to the NIC via DMA.
+In the default indirect mode, the burst is enqueued to the TX worker thread, which sends it to
+the NIC via DMA. A raw ibverbs queue configured with `poll_mode: direct` requires `batch_size`
+to be omitted and `num_pkts == 1`. The calling thread submits the packet synchronously and
+manages transmit progress. `BurstParams` is only an ownership handle; neither the metadata nor
+packet data is handed to another core.
 
-`send_tx_burst()` takes ownership of the burst on success and on a full-ring
-failure: on `SUCCESS` the TX worker owns it, and on `NO_SPACE_AVAILABLE` (the TX
-ring is full) it has already freed the packets and the burst internally. In both
+`send_tx_burst()` takes ownership of the burst on success and when transmit capacity is
+temporarily exhausted. In direct mode, `SUCCESS` means the packet has been submitted to the NIC;
+the packet buffer is reclaimed by a later caller-driven operation. On
+`NO_SPACE_AVAILABLE` it has already freed the packet reservation and metadata. In both
 cases the application must **not** free or otherwise access the burst afterwards.
 `NO_SPACE_AVAILABLE` is the only failure a correctly-configured sender encounters
-at runtime.
+at submission time. A second direct acquisition before the pending packet is sent or freed
+returns `NOT_READY`; zero- or multi-packet direct requests return `INVALID_PARAMETER`.
 
 ### Timed Transmission
 
@@ -535,7 +567,7 @@ copies each packet's post-offset logical bytes into owned host staging memory
 before submission, so the burst may be released after
 `daqiri_write_raw_to_s3_objects_async()` succeeds. Header-data split and other
 multi-segment packets are concatenated into one object. The first S3 version
-uses one single-part `PutObject` per packet; objects larger than 5 GiB return
+uses one single-part `PutObject` per packet. Objects larger than 5 GiB return
 `NOT_SUPPORTED`, and multipart/burst aggregation is future work.
 
 The Python bindings expose the same C++ writer when both
@@ -721,7 +753,7 @@ workflow sections above show the common call order and ownership rules.
 | Function | Purpose |
 | --- | --- |
 | `get_mac_addr(port, mac)` | Copy a port MAC address into a six-byte buffer. |
-| `format_eth_addr(dst, addr)` | Convert a `xx:xx:xx:xx:xx:xx` MAC string into a six-byte buffer; invalid input zeroes the buffer. |
+| `format_eth_addr(dst, addr)` | Convert a `xx:xx:xx:xx:xx:xx` MAC string into a six-byte buffer. Invalid input zeroes the buffer. |
 | `get_port_id(key)` | Resolve an interface name or PCIe address to a port ID. |
 | `get_num_rx_queues(port_id)` | Return the configured or engine-reported RX queue count. |
 | `drop_all_traffic(port)` | Install a high-priority drop rule on a port. |
@@ -747,7 +779,7 @@ All functions that can fail return `daqiri::Status`:
 | `NULL_PTR` | Burst or internal pointer not initialized / no data ready |
 | `NO_FREE_BURST_BUFFERS` | Metadata buffer pool exhausted (increase `tx/rx_meta_buffers`) |
 | `NO_FREE_PACKET_BUFFERS` | Packet buffer pool exhausted (free buffers faster or increase `num_bufs`) |
-| `NOT_READY` | System not yet initialized |
+| `NOT_READY` | Operation cannot proceed yet / no data ready |
 | `INVALID_PARAMETER` | Invalid argument passed |
 | `NO_SPACE_AVAILABLE` | Ring or queue is full |
 | `NOT_SUPPORTED` | Operation not supported by the current engine or build options |

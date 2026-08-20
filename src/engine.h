@@ -71,6 +71,8 @@ class Engine {
   virtual Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) = 0;
   virtual void* get_packet_extra_info(BurstParams* burst, int idx) = 0;
   virtual Status get_tx_packet_burst(BurstParams* burst) = 0;
+  // Engines with richer availability states can override this checked entrypoint.
+  virtual Status get_tx_packet_burst_checked(BurstParams* burst);
   virtual Status set_eth_header(BurstParams* burst, int idx, char* dst_addr) = 0;
   virtual Status set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint8_t proto,
                                  unsigned int src_host, unsigned int dst_host) = 0;

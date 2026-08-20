@@ -1,2 +1,7 @@
-{# Tab icons are wired in overrides/base.html (site_meta block). #}
 {% extends "base.html" %}
+
+{% block site_meta %}
+  {{ super() }}
+  <link rel="icon" href="{{ 'images/favicon.svg' | url }}" sizes="any" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="{{ 'images/apple-touch-icon.png' | url }}">
+{% endblock %}
