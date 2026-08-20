@@ -54,6 +54,11 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 - **Linux socket control** — TCP/UDP socket streams expose connection IDs and
   `socket_setsockopt()` for native Linux `setsockopt` tuning without YAML option
   name mappings.
+- **Flow-control telemetry** — Raw Ethernet streams warn at `daqiri_init()` when 802.3x
+  pause is enabled on a port and report the pause frames exchanged during the run with the
+  shutdown stats. A paused link throttles the sender instead of dropping, so it caps
+  throughput with every drop counter at zero. Check a host up front with
+  `python/tune_system.py --check pause`.
 - **Optional OpenTelemetry metrics** — Expose per-interface or per-queue packet,
   byte, and drop counters when built with `DAQIRI_ENABLE_OTEL_METRICS=ON`.
 
