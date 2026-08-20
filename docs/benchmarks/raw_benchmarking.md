@@ -495,12 +495,18 @@ The `*_packets_phy` and `*_bytes_phy` counters are physical-link counters. They 
 
     If the measured rate plateaus well below line rate with **zero** drops, suspect 802.3x pause before you suspect the transmitter. An enabled pause loop idles the link on a conservative receive watermark and leaves `rx_discards_phy` and `rx_out_of_buffer` at 0, so nothing in the counter set above distinguishes it from a sender that cannot go faster. It cost 21.7% of line rate on a 400 GbE link in our own measurements.
 
-    ```bash
-    sudo ./python/tune_system.py --check pause
-    sudo mlnx_perf -i $if_name | grep -E "pause_ctrl_phy|pause_duration"
+    DAQIRI reports this itself. Pause is not exposed through DPDK's xstats, so the raw engines read it from the kernel netdev: a warning at init when pause is enabled on a port, and the frames exchanged **during that run** alongside the shutdown stats dump.
+
+    ```log
+    [WARN] Flow control: port 0 (ens15f0np0) has 802.3x pause enabled (rx on, tx on). This can
+    cost over 20% of line rate with no drop counter to reveal it. ...
+          rx_pause_ctrl_phy:            34293
+          tx_pause_ctrl_phy:            0
+    [WARN] Flow control: port 0 (ens15f0np0) exchanged 34293 pause frames during this run, so
+    802.3x flow control throttled this link. ...
     ```
 
-    Non-zero `rx_pause_ctrl_phy` / `tx_pause_ctrl_phy` during a run means flow control is throttling the link. See [Step 10 of System Configuration](../tutorials/system_configuration.md#step-10-disable-ethernet-flow-control-pause) to disable it, and report the pause configuration alongside any throughput result.
+    Those counters are per-run deltas, so a non-zero value means flow control throttled *this* measurement. To check a host before running anything, use `sudo ./python/tune_system.py --check pause`. See [Step 10 of System Configuration](../tutorials/system_configuration.md#step-10-disable-ethernet-flow-control-pause) to disable it, and report the pause configuration alongside any throughput result.
 
 ??? tip "Troubleshooting"
 

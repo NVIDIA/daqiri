@@ -18,6 +18,7 @@
 #include "src/engines/ibverbs/daqiri_ibverbs_engine.h"
 #include "src/engines/ibverbs/mlx5_prm_min.h"
 #include "src/kernels.h"
+#include "src/net_pause.h"
 #include "src/rss.h"
 
 #include <cuda.h>
@@ -2589,6 +2590,12 @@ void IbverbsEngine::initialize() {
   // traffic flows (the kernel netdev MTU gates jumbo RX and TX egress on this path).
   ensure_port_mtus();
 
+  // 802.3x pause silently caps throughput and no drop counter reveals it, so
+  // flag it before traffic starts rather than after a confusing result.
+  for (const auto& intf : cfg_.ifs_) {
+    check_pause_at_init(port_netdev(intf.port_id_), intf.port_id_);
+  }
+
   // All RX queues (and their TIRs) now exist -- install per-port flow steering.
   if (install_port_flows() != Status::SUCCESS) {
     DAQIRI_LOG_CRITICAL("Failed to install RX flow steering");
@@ -3956,6 +3963,12 @@ void IbverbsEngine::print_stats() {
         q->port_id, q->queue_id, queue_poll_mode_to_string(q->poll_mode), q->slots_posted,
         completed, inflight, q->handoff_drop_bursts, q->handoff_drop_pkts, q->direct_no_space,
         q->direct_conflicts.load());
+  }
+  // Flow control leaves no trace in the per-queue counters above: a paused link
+  // simply delivers fewer packets. Report it from the netdev so a throttled run
+  // is distinguishable from a slow transmitter.
+  for (const auto& intf : cfg_.ifs_) {
+    log_pause_counters(port_netdev(intf.port_id_), intf.port_id_);
   }
 }
 

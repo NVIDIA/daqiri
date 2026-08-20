@@ -1389,6 +1389,10 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     Both ends of the link matter: disabling pause on your host does nothing if the peer, or a switch in between, is still asserting it. Verify by re-reading the pause counters after a run.
 
+    !!! tip "DAQIRI also reports this at run time"
+
+        The raw Ethernet engines warn at init when a port has pause enabled, and print the pause frames exchanged during the run next to the shutdown stats. You do not need this check to catch a pause problem mid-campaign — it is here so you can fix the host before you measure anything.
+
     With the system tuned, continue to [Benchmarking](../benchmarks/index.md) to choose and run your first DAQIRI benchmark.
 
 === "DGX Spark"
