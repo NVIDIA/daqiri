@@ -3,12 +3,12 @@
  * All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Stable userspace/kernel/FPGA control-plane ABI for DAQIRI PCIe streams.
+ * Stable userspace/kernel/3rd-party device control-plane ABI for DAQIRI PCIe streams.
  *
  * This header is deliberately C compatible. All multi-byte fields exchanged
  * with the device are little-endian. The ioctl structures are native Linux
  * UAPI structures and therefore must be copied by the kernel rather than
- * consumed by FPGA logic directly.
+ * consumed by 3rd-party device logic directly.
  */
 
 #pragma once
@@ -176,7 +176,7 @@ struct daqiri_pcie_ioctl_start {
 struct daqiri_pcie_ioctl_stop {
   struct daqiri_pcie_ioctl_header header;
   uint32_t timeout_ms;
-  uint32_t quiesced; /* nonzero only after all FPGA DMA has stopped */
+  uint32_t quiesced; /* nonzero only after all 3rd-party device DMA has stopped */
 };
 
 struct daqiri_pcie_ioctl_reset {
@@ -216,14 +216,14 @@ struct daqiri_pcie_ioctl_status {
 } /* extern "C" */
 
 static_assert(sizeof(daqiri_pcie_ring_entry) == 32,
-              "DAQIRI PCIe ring entries are part of the FPGA ABI");
+              "DAQIRI PCIe ring entries are part of the 3rd-party device ABI");
 static_assert(sizeof(daqiri_pcie_cacheline_counter) == 64,
               "DAQIRI PCIe counters must occupy one cache line");
 static_assert(sizeof(daqiri_pcie_ring_control) == 192,
               "DAQIRI PCIe ring control layout is part of the ABI");
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 _Static_assert(sizeof(struct daqiri_pcie_ring_entry) == 32,
-               "DAQIRI PCIe ring entries are part of the FPGA ABI");
+               "DAQIRI PCIe ring entries are part of the 3rd-party device ABI");
 _Static_assert(sizeof(struct daqiri_pcie_cacheline_counter) == 64,
                "DAQIRI PCIe counters must occupy one cache line");
 _Static_assert(sizeof(struct daqiri_pcie_ring_control) == 192,

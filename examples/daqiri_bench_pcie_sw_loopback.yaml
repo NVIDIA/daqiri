@@ -22,7 +22,7 @@ daqiri:
       buf_size: 4096
 
     interfaces:
-    - name: "fpga0"
+    - name: "pcie0"
       address: "loopback"
       tx:
         queues:
@@ -43,7 +43,7 @@ daqiri:
             - "PCIE_RX_GPU"
 
 pcie_bench:
-  interface_name: "fpga0"
+  interface_name: "pcie0"
   tx_cpu_core: -1
   rx_cpu_core: -1
   # Deliberately differs from the RX queue's batch size. Together with its

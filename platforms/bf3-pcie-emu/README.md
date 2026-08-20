@@ -1,7 +1,7 @@
 # BlueField-3 PCIe-emulation harness
 
 This harness turns a BlueField-3 Generic PCIe emulation function into the
-reference DAQIRI third-party PCIe device. It is deliberately outside DAQIRI's
+reference DAQIRI 3rd-party PCIe device. It is deliberately outside DAQIRI's
 normal CMake build: the host component needs matching kernel headers and the
 DPU component needs the DOCA SDK installed on the BF3.
 

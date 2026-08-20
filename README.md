@@ -9,10 +9,11 @@ DAQIRI (Data Acquisition for Integrated Real-time Instruments) connects data acq
 
 DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux kernel network stack to achieve the highest possible throughput and lowest latency for Ethernet frame transmission and reception. It targets NVIDIA ConnectX-6 Dx and later NICs and supports GPU direct memory access (GPUDirect) for zero-copy data paths between the NIC and GPU.
 
-An opt-in `stream_type: "pcie"` uses the same burst API for programmable PCIe
-devices such as FPGAs. DAQIRI includes a software-loopback provider and a
+An opt-in `stream_type: "pcie"` uses the same burst API for programmable
+3rd-party PCIe devices such as FPGAs and frame grabbers. DAQIRI includes a
+software-loopback provider and a
 DMA-BUF-based userspace ABI; production hardware requires a board-specific
-driver and FPGA implementation of the completion protocol.
+driver and 3rd-party device implementation of the completion protocol.
 
 <table>
 <tr><td align="center">📖</td><td><strong>Docs &amp; Website:</strong> <a href="https://nvidia.github.io/daqiri/">nvidia.github.io/daqiri</a></td></tr>
@@ -56,8 +57,9 @@ driver and FPGA implementation of the completion protocol.
   VLAN push/pop and VXLAN, GRE, or NVGRE encap/decap actions; socket/RDMA streams reject
   those tunnel actions.
 - **RDMA** — RDMA verbs (READ, WRITE, SEND) over RoCE on Ethernet NICs or InfiniBand.
-- **Programmable PCIe devices** — Single-queue RX/TX batches directly between an
-  FPGA and GPU BAR1 memory, with explicit ownership completions and an included
+- **Programmable PCIe devices** — Single-queue RX/TX batches directly between a
+  3rd-party device and GPU BAR1 memory, with explicit ownership completions and
+  an included
   deterministic software-loopback test.
 - **Linux socket control** — TCP/UDP socket streams expose connection IDs and
   `socket_setsockopt()` for native Linux `setsockopt` tuning without YAML option
@@ -70,7 +72,7 @@ driver and FPGA implementation of the completion protocol.
 Consult the [Benchmarking overview](https://nvidia.github.io/daqiri/benchmarks/) to learn more about generating and optimizing benchmarking on the NVIDIA platform, including:
 - [Socket and RDMA Benchmarking](https://nvidia.github.io/daqiri/benchmarks/socket_benchmarking/) for the full namespace setup and YAML templates
 - [Raw Ethernet Benchmarking](https://nvidia.github.io/daqiri/benchmarks/raw_benchmarking/) for DPDK/raw Ethernet loopback tests
-- [PCIe / GPUDirect Benchmarking](https://nvidia.github.io/daqiri/benchmarks/pcie_benchmarking/) for the software loopback and FPGA completion protocol
+- [PCIe / GPUDirect Benchmarking](https://nvidia.github.io/daqiri/benchmarks/pcie_benchmarking/) for the software loopback and 3rd-party device completion protocol
 
 ### DGX Spark Result Summary
 
@@ -104,7 +106,7 @@ Step-by-step walkthroughs to get hands-on:
 - [Benchmarking Overview](https://nvidia.github.io/daqiri/benchmarks/) — choose between Linux sockets, RoCE/RDMA, and raw Ethernet benchmarks
 - [Socket and RDMA Benchmarking](https://nvidia.github.io/daqiri/benchmarks/socket_benchmarking/) — run TCP/UDP sockets and RoCE/RDMA with matching namespace isolation
 - [Raw Ethernet Benchmarking](https://nvidia.github.io/daqiri/benchmarks/raw_benchmarking/) — run `daqiri_bench_raw_gpudirect` with a physical loopback test
-- [PCIe / GPUDirect Benchmarking](https://nvidia.github.io/daqiri/benchmarks/pcie_benchmarking/) — run `daqiri_bench_pcie` in software loopback and prepare a driver/FPGA integration
+- [PCIe / GPUDirect Benchmarking](https://nvidia.github.io/daqiri/benchmarks/pcie_benchmarking/) — run `daqiri_bench_pcie` in software loopback and prepare a driver/device integration
 - [Dynamic RX Flow Example](https://nvidia.github.io/daqiri/tutorials/configuration-walkthrough/#choosing-an-example-config) — start with RX queues only, then add and delete flow-steering rules at runtime
 - [Understanding the Configuration File](https://nvidia.github.io/daqiri/tutorials/configuration-walkthrough/) — annotated YAML walkthrough
 - [DAQIRI + Holoscan Integration](https://nvidia.github.io/daqiri/tutorials/daqiri-holoscan-integration/) — use DAQIRI RX bursts from a Holoscan source operator

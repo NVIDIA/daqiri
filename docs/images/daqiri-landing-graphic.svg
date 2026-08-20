@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 462" role="img" aria-labelledby="title desc">
   <title id="title">DAQIRI sensor data paths to CPU, NVIDIA GPU memory, and storage</title>
-  <desc id="desc">A diagram showing sensor data entering or leaving CPU memory or NVIDIA GPU memory through DAQIRI from a PCIe FPGA path or a network-capable sensor path through a NIC, then GPU-resident data writing out through GPUDirect Storage.</desc>
+  <desc id="desc">A diagram showing sensor data entering or leaving CPU memory or NVIDIA GPU memory through DAQIRI from a PCIe 3rd-party device path or a network-capable sensor path through a NIC, then GPU-resident data writing out through GPUDirect Storage.</desc>
   <defs>
     <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#171a18"/>
@@ -97,7 +97,8 @@
     <g transform="translate(18 19)">
       <rect x="0" y="0" width="82" height="82" rx="8" fill="#0b171a" stroke="#5dd8f2" stroke-opacity="0.65"/>
       <rect x="18" y="18" width="46" height="46" rx="6" fill="#12303a" stroke="#5dd8f2"/>
-      <text x="41" y="47" text-anchor="middle" class="mono" fill="#c7f7ff" font-size="10" font-weight="700">FPGA</text>
+      <text x="41" y="43" text-anchor="middle" class="mono" fill="#c7f7ff" font-size="7" font-weight="700">3rd-party</text>
+      <text x="41" y="52" text-anchor="middle" class="mono" fill="#c7f7ff" font-size="7" font-weight="700">device</text>
       <g stroke="#5dd8f2" stroke-width="2" stroke-linecap="round" opacity="0.7">
         <path d="M8 16 H0 M8 30 H0 M8 44 H0 M8 58 H0 M8 72 H0"/>
         <path d="M82 16 H74 M82 30 H74 M82 44 H74 M82 58 H74 M82 72 H74"/>

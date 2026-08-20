@@ -272,7 +272,8 @@ void PcieEngine::initialize() {
   }
   init_rx_core_q_map();
   initialized_ = true;
-  DAQIRI_LOG_INFO("PCIe stream initialized with {} FPGA interface(s)", interfaces_.size());
+  DAQIRI_LOG_INFO("PCIe stream initialized with {} 3rd-party device interface(s)",
+                  interfaces_.size());
 }
 
 void PcieEngine::run() {}

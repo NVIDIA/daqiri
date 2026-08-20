@@ -442,15 +442,15 @@ returns `NOT_READY`; zero- or multi-packet direct requests return `INVALID_PARAM
 ### PCIe GPU-buffer ordering
 
 The RX and TX calls are unchanged for `stream_type: "pcie"`, but a free or send
-call crosses the ownership boundary with the FPGA:
+call crosses the ownership boundary with the 3rd-party device:
 
 ```cpp
-// RX: complete all GPU reads before returning the FPGA's slot.
+// RX: complete all GPU reads before returning the 3rd-party device's slot.
 cudaMemcpy(host_copy, daqiri::get_packet_ptr(rx_burst, 0), bytes,
            cudaMemcpyDeviceToHost);  // synchronous example
 daqiri::free_all_packets_and_burst_rx(rx_burst);
 
-// TX: complete all GPU writes before allowing the FPGA to read the slot.
+// TX: complete all GPU writes before allowing the 3rd-party device to read the slot.
 cudaMemcpy(daqiri::get_packet_ptr(tx_burst, 0), host_data, bytes,
            cudaMemcpyHostToDevice);  // synchronous example
 daqiri::send_tx_burst(tx_burst);
@@ -462,16 +462,16 @@ Do not keep a persistent kernel touching slots after ownership transfers. DAQIRI
 does the required GPUDirect RX visibility operation before returning a completed
 burst, but it cannot infer when application CUDA work is done.
 
-An RX slot is credited back to the FPGA only when its packet is freed. A TX slot
-is reclaimed only after the FPGA reports that every PCIe read has completed.
-Holding RX bursts or a slow FPGA therefore creates normal backpressure rather
+An RX slot is credited back to the 3rd-party device only when its packet is freed. A TX slot
+is reclaimed only after the 3rd-party device reports that every PCIe read has completed.
+Holding RX bursts or a slow 3rd-party device therefore creates normal backpressure rather
 than permitting slot overwrite.
 
 PCIe has no flow IDs or network headers: `get_packet_flow_id()` returns `0`, and
 flow, MAC/header, scheduled-send, timestamp, and socket/RDMA helpers return
 `Status::NOT_SUPPORTED`. See
 [PCIe / GPUDirect Benchmarking](../benchmarks/pcie_benchmarking.md) for the full
-driver/FPGA ordering contract.
+driver/device ordering contract.
 
 ### Timed Transmission
 

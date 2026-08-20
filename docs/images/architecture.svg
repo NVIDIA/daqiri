@@ -34,10 +34,10 @@
   <!-- Arrow 1 -->
   <line x1="192" y1="84" x2="192" y2="106" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
 
-  <!-- ── FPGA ───────────────────────────────────────────── -->
+  <!-- ── 3rd-party device ───────────────────────────────────────────── -->
   <rect x="108" y="108" width="168" height="66" rx="6" fill="#5c0a0a" stroke="#cc2222" stroke-width="1.5"/>
   <text x="192" y="125" text-anchor="middle" fill="#883333" font-size="8" font-weight="700" font-family="Inter,sans-serif" letter-spacing="1">CONTROL AND LOW LATENCY</text>
-  <text x="192" y="142" text-anchor="middle" fill="#fff" font-weight="700" font-size="13" font-family="Inter,sans-serif">FPGA</text>
+  <text x="192" y="142" text-anchor="middle" fill="#fff" font-weight="700" font-size="13" font-family="Inter,sans-serif">3rd-party device</text>
   <text x="192" y="157" text-anchor="middle" fill="#ffaaaa" font-size="10" font-family="Inter,sans-serif">Control, Triggering,</text>
   <text x="192" y="169" text-anchor="middle" fill="#ffaaaa" font-size="10" font-family="Inter,sans-serif">I/O Conversion</text>
 

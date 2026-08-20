@@ -36,7 +36,7 @@
 
   <g font-family="Inter, Arial, sans-serif" fill="#121827">
     <text x="780" y="258" text-anchor="middle" font-size="30" font-weight="800">PCIe Programmable</text>
-    <text x="780" y="298" text-anchor="middle" font-size="30" font-weight="800">Sensor (FPGA, etc)?</text>
+    <text x="780" y="298" text-anchor="middle" font-size="30" font-weight="800">3rd-party PCIe device?</text>
 
     <text x="780" y="586" text-anchor="middle" font-size="34" font-weight="800">NVIDIA NIC?</text>
 

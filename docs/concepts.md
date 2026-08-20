@@ -24,7 +24,8 @@ choice is configured per-application in YAML with:
 
 The shipped Ethernet stream types use NICs as their hardware endpoint.
 The PCIe programmable-sensor path uses the same DAQIRI model for
-devices that sit directly on the PCIe bus, such as FPGAs, frame grabbers,
+3rd-party devices that sit directly on the PCIe bus, such as FPGAs, frame
+grabbers,
 or custom acquisition cards.
 
 #### Engines
@@ -87,7 +88,7 @@ URI schemes:
   open-source [`rdma-core`](https://github.com/linux-rdma/rdma-core)
   library. A server/client connection model, NIC-level reliable
   transport (RC), and in-order delivery. Primarily intended for
-  workloads where **one** endpoint is a third-party device (an FPGA, an
+  workloads where **one** endpoint is a 3rd-party device (an FPGA, an
   instrument, or another customer-supplied black box) that already
   speaks RoCE. When both peers run DAQIRI, prefer an upper-layer
   library such as MPI, NCCL, or UCX rather than wiring RoCE directly.
@@ -105,8 +106,8 @@ operation do not apply.
 DAQIRI exports the GPU allocation as a PCIe BAR1 DMA-BUF and passes it to the
 board driver. Applications do not select DMA-BUF or `nvidia-peermem`, and an
 `engine:` field is invalid for this stream type. The software-loopback provider
-is included. A board-specific character driver and FPGA implementation of the
-completion protocol are required for hardware use and are outside the
+is included. A board-specific character driver and 3rd-party device
+implementation of the completion protocol are required for hardware use and are outside the
 repository. See [PCIe / GPUDirect Benchmarking](benchmarks/pcie_benchmarking.md).
 
 ### Choosing a stream type
@@ -137,7 +138,8 @@ in the configuration walkthrough.
       `roce://` endpoints) is supported and distributed. Integration
       testing is under development.
     - **PCIe** (`stream_type: "pcie"`) includes a software-loopback provider.
-      Hardware qualification awaits a conforming board driver and FPGA bitstream.
+      Hardware qualification awaits a conforming board driver and 3rd-party
+      device implementation, such as an FPGA bitstream.
 
 ## GPUDirect
 
@@ -405,10 +407,10 @@ bursts after allocation. Holding bursts indefinitely drains DAQIRI's
 buffer pools and can lead to `NO_FREE_BURST_BUFFERS`,
 `NO_FREE_PACKET_BUFFERS`, queue drops, or stalled TX.
 
-For PCIe RX, freeing a packet is also the credit that permits the FPGA to
+For PCIe RX, freeing a packet is also the credit that permits the 3rd-party device to
 overwrite its slot again; finish all CUDA reads first. For PCIe TX,
-`send_tx_burst()` permits the FPGA to read the slot; finish all CUDA writes
-first. The slot is not reusable until the FPGA posts a read completion. See the
+`send_tx_burst()` permits the 3rd-party device to read the slot; finish all CUDA writes
+first. The slot is not reusable until the 3rd-party device posts a read completion. See the
 [PCIe ownership contract](benchmarks/pcie_benchmarking.md#buffer-ownership-and-cuda-ordering).
 
 When to call each `free_*` function is documented in the

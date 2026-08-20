@@ -5,15 +5,16 @@ hide:
 
 # PCIe / GPUDirect Benchmarking
 
-The PCIe stream moves batches directly between an FPGA and DAQIRI-owned CUDA
+The PCIe stream moves batches directly between a 3rd-party device and DAQIRI-owned CUDA
 device memory. Select it with `stream_type: "pcie"`. PCIe is a stream type, not
 an engine: do not add `engine: "pcie"`, `engine: "dmabuf"`, or
 `engine: "peermem"` to the configuration. DMA-BUF is the internal GPU-memory
 registration mechanism and is not an application choice.
 
 The repository includes a software provider for development and protocol
-testing. A board-specific character driver and FPGA bitstream are required for
-hardware operation and are not shipped by DAQIRI.
+testing. A board-specific character driver and 3rd-party device implementation are
+required for hardware operation and are not shipped by DAQIRI; an FPGA bitstream
+is one example.
 
 ## Build
 
@@ -45,7 +46,7 @@ cmake --build build -j
 
 ## Run the software loopback
 
-The shipped loopback config needs a CUDA-capable discrete GPU but no FPGA or
+The shipped loopback config needs a CUDA-capable discrete GPU but no 3rd-party device or
 PCIe driver:
 
 ```bash
@@ -73,12 +74,12 @@ ring wraps and TX completion/reclamation cycles.
 The benchmark removes the unused direction from the parsed configuration for
 `tx` or `rx` mode. Software loopback creates RX data only by copying submitted
 TX data, so use `both` for its closed-loop validation; standalone `rx` is for an
-external FPGA source.
+external 3rd-party device source.
 
 The final TX and RX lines report packets, bytes, bursts, backpressure, validation
 errors, elapsed time, and application throughput. Software-loopback numbers
 measure the mock provider and CUDA copies; they are protocol smoke-test results,
-not FPGA or PCIe performance measurements.
+not 3rd-party device or PCIe performance measurements.
 
 ### Inject completion faults
 
@@ -153,7 +154,7 @@ transport-only result still checks ring/completion status and reports provider
 errors, but it does not initialize or inspect packet contents.
 
 Start from the loopback YAML, remove `loopback: "sw"`, and replace
-`address: "loopback"` with the FPGA PCI domain/bus/device/function, for example
+`address: "loopback"` with the 3rd-party device PCI domain/bus/device/function, for example
 `0000:65:00.0`. A production interface has exactly one queue in each enabled
 direction, and every queue has ID `0`:
 
@@ -177,7 +178,7 @@ daqiri:
       buf_size: 1048576
 
     interfaces:
-    - name: "fpga0"
+    - name: "pcie0"
       address: "0000:65:00.0"
       rx:
         queues:
@@ -205,17 +206,17 @@ runtime-only APIs return `Status::NOT_SUPPORTED`.
 
 ## Buffer ownership and CUDA ordering
 
-The FPGA and application must never access the same slot concurrently.
+The 3rd-party device and application must never access the same slot concurrently.
 
-- RX ownership is free → FPGA-owned → completed → application-owned → free.
-  DAQIRI returns the slot to the FPGA only after `free_packet()` or an RX
+- RX ownership is free → 3rd-party device-owned → completed → application-owned → free.
+  DAQIRI returns the slot to the 3rd-party device only after `free_packet()` or an RX
   packet/burst free helper. Finish every CUDA kernel or copy that reads an RX
   pointer before that call.
-- TX ownership is free → application-owned → FPGA-owned → free. Finish every
+- TX ownership is free → application-owned → 3rd-party device-owned → free. Finish every
   CUDA kernel or copy that writes a TX pointer before `send_tx_burst()`.
-  `send_tx_burst()` transfers ownership on `SUCCESS`; an FPGA TX completion
+  `send_tx_burst()` transfers ownership on `SUCCESS`; a 3rd-party device TX completion
   returns the slot only after every PCIe read has completed.
-- Do not run a persistent kernel against slots that may be owned by the FPGA.
+- Do not run a persistent kernel against slots that may be owned by the 3rd-party device.
   CUDA stream ordering alone is not a substitute for completing work at the
   ownership boundary.
 
@@ -225,24 +226,25 @@ the platform's native ordering is insufficient, before publishing the burst to
 the application. Initialization fails when the platform can provide neither
 native ordering nor a supported host flush.
 
-The FPGA has a separate responsibility: an RX completion must be published only
+The 3rd-party device has a separate responsibility: an RX completion must be published only
 after all payload writes have reached GPU memory, and a TX completion only after
 all reads have returned. Firmware must use a real DMA fence and must not allow a
 completion write to pass payload traffic through PCIe Relaxed Ordering.
 
-## Driver and FPGA protocol
+## Driver and 3rd-party device protocol
 
 The production provider exports each CUDA allocation once as a PCIe BAR1
 DMA-BUF, passes the file descriptor to the board driver, and retains the
 registration for the DAQIRI lifetime. The driver is a DMA-BUF importer: it keeps
-the attachment alive, maps the complete scatter/gather list for the FPGA, and
+the attachment alive, maps the complete scatter/gather list for the 3rd-party device, and
 never exposes CUDA virtual addresses as bus addresses.
 
 Capability negotiation requires both `DMABUF_PCIE` registration and
 `DMA_FENCE`: the former promises import of the explicit CUDA PCIe mapping, and
 the latter promises that completions have the payload-ordering guarantees
 described above. `NV_P2P` is reserved for a possible legacy provider;
-`nvidia-peermem` is not the custom-FPGA registration interface. The versioned
+`nvidia-peermem` is not the registration interface for a custom 3rd-party
+device. The versioned
 driver operations are:
 
 - get capabilities;
@@ -258,10 +260,10 @@ ownership transition:
 
 | Ring | Producer → consumer | Meaning |
 | --- | --- | --- |
-| RX available | DAQIRI → FPGA | Slots the FPGA may overwrite |
-| RX completion | FPGA → DAQIRI | Completed slot, actual length, and status |
-| TX submission | DAQIRI → FPGA | GPU slot and length to read |
-| TX completion | FPGA → DAQIRI | All reads from the slot have completed |
+| RX available | DAQIRI → 3rd-party device | Slots the 3rd-party device may overwrite |
+| RX completion | 3rd-party device → DAQIRI | Completed slot, actual length, and status |
+| TX submission | DAQIRI → 3rd-party device | GPU slot and length to read |
+| TX completion | 3rd-party device → DAQIRI | All reads from the slot have completed |
 
 The canonical C-compatible layout is
 [`include/daqiri/pcie_abi.h`](https://github.com/NVIDIA/daqiri/blob/main/include/daqiri/pcie_abi.h).
@@ -298,14 +300,14 @@ status during provider open and rejects a device whose `RUNNING` flag is
 already set. A change in `reset_count`, a fatal status, or an unexpected loss
 of `RUNNING` while queues are active makes the interface unhealthy.
 
-During shutdown DAQIRI stops submission, waits for the FPGA to quiesce DMA,
+During shutdown DAQIRI stops submission, waits for the 3rd-party device to quiesce DMA,
 drains or invalidates completions, unmaps the control rings, unregisters the
 DMA-BUF regions, and only then frees CUDA memory. A hardware driver must make
 the quiesce acknowledgement cover every outstanding read and write.
 
 ## Hardware readiness checklist
 
-- The GPU, FPGA, and PCIe fabric support peer-to-peer transactions and the
+- The GPU, 3rd-party device, and PCIe fabric support peer-to-peer transactions and the
   topology keeps them under the same root complex where possible.
 - IOMMU translation is disabled for the peer path or configured for identity /
   pass-through mappings supported by the driver.
@@ -313,7 +315,8 @@ the quiesce acknowledgement cover every outstanding read and write.
   alignment overhead.
 - The board driver implements the published DAQIRI UAPI and safely handles the
   complete DMA-BUF scatter/gather mapping.
-- The trusted FPGA bitstream implements ring backpressure, epoch/sequence
+- The trusted 3rd-party device firmware or bitstream implements ring
+  backpressure, epoch/sequence
   validation, length bounds, and the required DMA fences.
 
 See [System Configuration](../tutorials/system_configuration.md)

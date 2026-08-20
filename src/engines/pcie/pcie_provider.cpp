@@ -255,11 +255,13 @@ class CharacterDeviceProvider final : public Provider {
       return false;
     }
     if ((status.status_flags & DAQIRI_PCIE_STATUS_FLAG_FATAL) != 0) {
-      set_error("FPGA driver is already in fatal status " + std::to_string(status.fatal_code));
+      set_error("3rd-party device driver is already in fatal status " +
+                std::to_string(status.fatal_code));
       return false;
     }
     if ((status.status_flags & DAQIRI_PCIE_STATUS_FLAG_RUNNING) != 0) {
-      set_error("FPGA device already has active queues; the character device must be exclusive");
+      set_error(
+          "3rd-party device already has active queues; the character device must be exclusive");
       return false;
     }
     reset_count_ = status.reset_count;
@@ -368,7 +370,7 @@ class CharacterDeviceProvider final : public Provider {
       return false;
     }
     if (request.quiesced == 0) {
-      set_error("FPGA DMA did not quiesce before the stop timeout");
+      set_error("3rd-party device DMA did not quiesce before the stop timeout");
       return false;
     }
     started_ = false;
@@ -392,7 +394,7 @@ class CharacterDeviceProvider final : public Provider {
     }
     if (std::any_of(rings_.begin(), rings_.end(),
                     [](const MappedRing& ring) { return ring.corrupted(); })) {
-      set_error("FPGA produced corrupt PCIe ring counters");
+      set_error("3rd-party device produced corrupt PCIe ring counters");
       return false;
     }
     const auto now = std::chrono::steady_clock::now();
@@ -406,15 +408,16 @@ class CharacterDeviceProvider final : public Provider {
       return false;
     }
     if ((request.status_flags & DAQIRI_PCIE_STATUS_FLAG_FATAL) != 0) {
-      set_error("FPGA driver reported fatal status " + std::to_string(request.fatal_code));
+      set_error("3rd-party device driver reported fatal status " +
+                std::to_string(request.fatal_code));
       return false;
     }
     if (request.reset_count != reset_count_) {
-      set_error("FPGA device reset while queues were active");
+      set_error("3rd-party device reset while queues were active");
       return false;
     }
     if (started_ && (request.status_flags & DAQIRI_PCIE_STATUS_FLAG_RUNNING) == 0) {
-      set_error("FPGA queues stopped unexpectedly");
+      set_error("3rd-party device queues stopped unexpectedly");
       return false;
     }
     return true;

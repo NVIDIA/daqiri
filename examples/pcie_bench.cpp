@@ -49,7 +49,7 @@ void signal_handler(int signum) {
 }
 
 struct BenchConfig {
-  std::string interface_name = "fpga0";
+  std::string interface_name = "pcie0";
   int tx_cpu_core = -1;
   int rx_cpu_core = -1;
   uint32_t batch_size = 32;
@@ -275,7 +275,7 @@ void tx_worker(const BenchConfig& cfg, int port_id, std::atomic<bool>& stop,
     }
 
     // cudaMemcpy above is synchronous: all GPU writes are complete before the
-    // FPGA is allowed to read these slots.
+    // 3rd-party device is allowed to read these slots.
     const auto status = daqiri::send_tx_burst(burst);
     if (status == daqiri::Status::SUCCESS) {
       stats.packets += static_cast<uint64_t>(packet_count);
@@ -338,7 +338,7 @@ void rx_worker(const BenchConfig& cfg, int port_id, std::atomic<bool>& stop,
       }
 
       // This synchronous copy finishes every GPU read before the RX slot is
-      // returned to the FPGA below.
+      // returned to the 3rd-party device below.
       const auto cuda_status =
           cudaMemcpy(payload.data(), daqiri::get_packet_ptr(burst, static_cast<int>(i)),
                      payload.size(), cudaMemcpyDeviceToHost);

@@ -58,7 +58,7 @@ The four `raw_*` benches share `raw_bench_common.{cpp,h}` and accept `--seconds 
 ./build/examples/daqiri_bench_pcie          ./build/examples/daqiri_bench_pcie_sw_loopback.yaml --seconds 10 --mode both
 ```
 
-YAML files contain `<angle-bracket>` placeholders (PCIe addresses, CPU cores, MACs, IPs) that **must** be replaced for your system. `daqiri_bench_raw_sw_loopback.yaml` requires no physical link; `daqiri_bench_pcie_sw_loopback.yaml` requires no FPGA or board driver.
+YAML files contain `<angle-bracket>` placeholders (PCIe addresses, CPU cores, MACs, IPs) that **must** be replaced for your system. `daqiri_bench_raw_sw_loopback.yaml` requires no physical link; `daqiri_bench_pcie_sw_loopback.yaml` requires no 3rd-party device or board driver.
 
 Configs named `raw_rx_*` are RX-only — they initialize the RX path and wait for external traffic, so a standalone run can exit cleanly with `0` packets. Use the `tx_rx` configs for closed-loop smoke tests. NIC flow programming (RX flows, dynamic RX flows, `tx_eth_src`) requires a hardware loopback or cross-host wire test — see `docs/benchmarks/raw_benchmarking.md` (Flow programming smoke test); `daqiri_bench_raw_sw_loopback.yaml` only smoke-tests the build/runtime path.
 
@@ -92,7 +92,7 @@ clang-format -style=file -i -fallback-style=none <files>
 
 `EngineType` (`include/daqiri/types.h`) is resolved from `(stream_type, engine)`: `raw` defaults to `EngineType::DPDK`; `raw` + `engine: "ibverbs"` selects `EngineType::IBVERBS` (the MPRQ engine); `socket` + a `roce://` endpoint (or `engine: "ibverbs"`) selects `EngineType::RDMA`. The stream-aware `config_engine_from_string(str, stream_type)` overload encodes the `ibverbs`→`{IBVERBS for raw, RDMA for socket}` split. `EngineFactory` (in `engine.h`) is a singleton that instantiates the active engine. `daqiri_init(...)` resolves which engine to use from the `NetworkConfig` and then delegates everything through the `Engine` vtable. There is only ever **one** active `Engine` per process.
 
-PCIe is the exception to public engine selection: `stream_type: "pcie"` directly constructs the internal `PcieEngine`, rejects any YAML `engine:` key, and reports `EngineType::DEFAULT`. It is enabled by `DAQIRI_ENABLE_PCIE`, not `DAQIRI_ENGINE`. DMA-BUF is its v1 GPU-registration mechanism, not an engine; `nvidia-peermem` is not used for custom FPGA registration. The stable C driver/RTL ABI is `include/daqiri/pcie_abi.h`; hardware operation needs a board-specific driver and FPGA implementation, while `loopback: "sw"` selects the included software provider. PCIe permits one RX and one TX queue per interface (ID 0), dedicated `MemoryKind::DEVICE` regions, and no flows, HDS, reorder, timestamps, offloads, or scheduled send.
+PCIe is the exception to public engine selection: `stream_type: "pcie"` directly constructs the internal `PcieEngine`, rejects any YAML `engine:` key, and reports `EngineType::DEFAULT`. It is enabled by `DAQIRI_ENABLE_PCIE`, not `DAQIRI_ENGINE`. DMA-BUF is its v1 GPU-registration mechanism, not an engine; `nvidia-peermem` is not used for custom 3rd-party device registration. The stable C driver/RTL ABI is `include/daqiri/pcie_abi.h`; hardware operation needs a board-specific driver and 3rd-party device implementation, while `loopback: "sw"` selects the included software provider. PCIe permits one RX and one TX queue per interface (ID 0), dedicated `MemoryKind::DEVICE` regions, and no flows, HDS, reorder, timestamps, offloads, or scheduled send.
 
 The always-built socket engine implements Linux UDP/TCP streams directly. Applications that need kernel socket tuning call `socket_setsockopt(conn_id, level, optname, optval, optlen)` after resolving a TCP/UDP connection ID; DAQIRI passes the numeric Linux constants through without maintaining a symbolic option map. `socket_setsockopt` is not supported for `roce://` connections, which delegate to the RDMA/ibverbs path.
 
@@ -140,7 +140,7 @@ The web docs live in `docs/` and are built with [MkDocs Material](https://squidf
   - `docs/benchmarks/index.md` — overview and engine-selection decision tree
   - `docs/benchmarks/socket_benchmarking.md` — "Socket and RDMA Benchmarking" (TCP/UDP and RoCE/RDMA)
   - `docs/benchmarks/raw_benchmarking.md` — "Raw Ethernet Benchmarking" (DPDK `raw_*` benches)
-  - `docs/benchmarks/pcie_benchmarking.md` — PCIe software loopback plus driver/FPGA ABI and ownership contract
+  - `docs/benchmarks/pcie_benchmarking.md` — PCIe software loopback plus driver/device ABI and ownership contract
   - `docs/benchmarks/performance-dgx-spark.md` — per-platform performance report for DGX Spark stream/protocol combinations (the long internal report lives outside the repo in `projects/daqiri-notes/`)
 - `docs/stylesheets/extra.css` — custom theme overrides
 
