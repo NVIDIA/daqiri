@@ -207,7 +207,7 @@ bool verify_and_release_held_burst(HeldRxBurst held, const BenchConfig& cfg,
   return valid;
 }
 
-void tx_worker(const BenchConfig& cfg, int port_id, std::atomic<bool>& stop,
+void tx_worker(const BenchConfig& cfg, int port_id, uint16_t queue_id, std::atomic<bool>& stop,
                std::atomic<bool>& failed, BenchStats& stats) {
   if (!set_affinity(cfg.tx_cpu_core, "pcie_bench_tx")) {
     failed.store(true);
@@ -225,7 +225,7 @@ void tx_worker(const BenchConfig& cfg, int port_id, std::atomic<bool>& stop,
       continue;
     }
 
-    daqiri::set_header(burst, static_cast<uint16_t>(port_id), 0, cfg.batch_size, 1);
+    daqiri::set_header(burst, static_cast<uint16_t>(port_id), queue_id, cfg.batch_size, 1);
     const auto allocation_status = daqiri::get_tx_packet_burst(burst);
     if (allocation_status == daqiri::Status::NO_FREE_BURST_BUFFERS ||
         allocation_status == daqiri::Status::NO_FREE_PACKET_BUFFERS ||
@@ -293,7 +293,7 @@ void tx_worker(const BenchConfig& cfg, int port_id, std::atomic<bool>& stop,
   }
 }
 
-void rx_worker(const BenchConfig& cfg, int port_id, std::atomic<bool>& stop,
+void rx_worker(const BenchConfig& cfg, int port_id, uint16_t queue_id, std::atomic<bool>& stop,
                std::atomic<bool>& failed, BenchStats& stats) {
   if (!set_affinity(cfg.rx_cpu_core, "pcie_bench_rx")) {
     failed.store(true);
@@ -305,7 +305,7 @@ void rx_worker(const BenchConfig& cfg, int port_id, std::atomic<bool>& stop,
   std::deque<HeldRxBurst> held_bursts;
   while (!stop.load()) {
     daqiri::BurstParams* burst = nullptr;
-    const auto receive_status = daqiri::get_rx_burst(&burst, port_id, 0);
+    const auto receive_status = daqiri::get_rx_burst(&burst, port_id, queue_id);
     if (receive_status == daqiri::Status::NULL_PTR || receive_status == daqiri::Status::NOT_READY) {
       std::this_thread::sleep_for(std::chrono::microseconds(50));
       continue;
@@ -386,7 +386,7 @@ void rx_worker(const BenchConfig& cfg, int port_id, std::atomic<bool>& stop,
   }
 }
 
-void print_stats(const char* direction, const BenchStats& stats, double seconds) {
+void print_stats(const std::string& direction, const BenchStats& stats, double seconds) {
   const double gbps =
       seconds > 0.0 ? (static_cast<double>(stats.bytes) * 8.0) / seconds / 1.0e9 : 0.0;
   std::cout << direction << " complete: packets=" << stats.packets << " bytes=" << stats.bytes
@@ -512,20 +512,34 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  std::vector<uint16_t> rx_queue_ids;
+  std::vector<uint16_t> tx_queue_ids;
+  for (const auto& interface : network_config.ifs_) {
+    if (interface.name_ != cfg.interface_name) {
+      continue;
+    }
+    for (const auto& queue : interface.rx_.queues_) {
+      rx_queue_ids.push_back(queue.common_.id_);
+    }
+    for (const auto& queue : interface.tx_.queues_) {
+      tx_queue_ids.push_back(queue.common_.id_);
+    }
+  }
+
   std::signal(SIGINT, signal_handler);
   std::atomic<bool> stop{false};
   std::atomic<bool> failed{false};
-  BenchStats tx_stats;
-  BenchStats rx_stats;
-  std::thread tx_thread;
-  std::thread rx_thread;
-  if (mode == "rx" || mode == "both") {
-    rx_thread = std::thread(rx_worker, std::cref(cfg), port_id, std::ref(stop), std::ref(failed),
-                            std::ref(rx_stats));
+  std::vector<BenchStats> tx_queue_stats(tx_queue_ids.size());
+  std::vector<BenchStats> rx_queue_stats(rx_queue_ids.size());
+  std::vector<std::thread> tx_threads;
+  std::vector<std::thread> rx_threads;
+  for (size_t i = 0; i < rx_queue_ids.size(); ++i) {
+    rx_threads.emplace_back(rx_worker, std::cref(cfg), port_id, rx_queue_ids[i], std::ref(stop),
+                            std::ref(failed), std::ref(rx_queue_stats[i]));
   }
-  if (mode == "tx" || mode == "both") {
-    tx_thread = std::thread(tx_worker, std::cref(cfg), port_id, std::ref(stop), std::ref(failed),
-                            std::ref(tx_stats));
+  for (size_t i = 0; i < tx_queue_ids.size(); ++i) {
+    tx_threads.emplace_back(tx_worker, std::cref(cfg), port_id, tx_queue_ids[i], std::ref(stop),
+                            std::ref(failed), std::ref(tx_queue_stats[i]));
   }
 
   const auto start = std::chrono::steady_clock::now();
@@ -539,19 +553,43 @@ int main(int argc, char** argv) {
   }
   stop.store(true);
 
-  if (tx_thread.joinable()) {
-    tx_thread.join();
+  for (auto& thread : tx_threads) {
+    thread.join();
   }
-  if (rx_thread.joinable()) {
-    rx_thread.join();
+  for (auto& thread : rx_threads) {
+    thread.join();
   }
 
   const double seconds =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-  if (mode == "tx" || mode == "both") {
+  BenchStats tx_stats;
+  BenchStats rx_stats;
+  for (size_t i = 0; i < tx_queue_stats.size(); ++i) {
+    const auto& stats = tx_queue_stats[i];
+    if (tx_queue_stats.size() > 1) {
+      print_stats("TX q" + std::to_string(tx_queue_ids[i]), stats, seconds);
+    }
+    tx_stats.packets += stats.packets;
+    tx_stats.bytes += stats.bytes;
+    tx_stats.bursts += stats.bursts;
+    tx_stats.backpressure += stats.backpressure;
+    tx_stats.errors += stats.errors;
+  }
+  for (size_t i = 0; i < rx_queue_stats.size(); ++i) {
+    const auto& stats = rx_queue_stats[i];
+    if (rx_queue_stats.size() > 1) {
+      print_stats("RX q" + std::to_string(rx_queue_ids[i]), stats, seconds);
+    }
+    rx_stats.packets += stats.packets;
+    rx_stats.bytes += stats.bytes;
+    rx_stats.bursts += stats.bursts;
+    rx_stats.backpressure += stats.backpressure;
+    rx_stats.errors += stats.errors;
+  }
+  if (!tx_queue_ids.empty()) {
     print_stats("TX", tx_stats, seconds);
   }
-  if (mode == "rx" || mode == "both") {
+  if (!rx_queue_ids.empty()) {
     print_stats("RX", rx_stats, seconds);
   }
   daqiri::print_stats();

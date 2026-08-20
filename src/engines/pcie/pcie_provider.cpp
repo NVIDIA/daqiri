@@ -62,6 +62,10 @@ uint32_t entry_length(const daqiri_pcie_ring_entry& entry) {
   return le32toh(entry.length);
 }
 
+uint32_t queue_key(daqiri_pcie_direction direction, uint16_t queue_id) {
+  return (static_cast<uint32_t>(direction) << 16U) | queue_id;
+}
+
 void set_entry_status(daqiri_pcie_ring_entry* entry, daqiri_pcie_completion_status status) {
   entry->status = htole16(static_cast<uint16_t>(status));
 }
@@ -246,6 +250,7 @@ class CharacterDeviceProvider final : public Provider {
     }
     caps_.capabilities = request.capabilities;
     caps_.max_regions = request.max_regions;
+    caps_.max_queues = request.max_queues;
     caps_.max_ring_depth = request.max_ring_depth;
     caps_.min_slot_alignment = request.min_slot_alignment;
 
@@ -293,14 +298,20 @@ class CharacterDeviceProvider final : public Provider {
   }
 
   bool configure(const QueueConfiguration& config) override {
-    if (fd_ < 0 || mapping_ != nullptr) {
+    if (fd_ < 0 || mapping_ != nullptr || config.queues.empty() ||
+        config.queues.size() > DAQIRI_PCIE_MAX_QUEUES) {
       set_error("invalid character-device provider configure sequence");
       return false;
     }
     auto request = make_ioctl_payload<daqiri_pcie_ioctl_configure_queues>();
     request.epoch = config.epoch;
-    std::copy(std::begin(config.depths), std::end(config.depths),
-              std::begin(request.requested_depth));
+    request.num_queues = static_cast<uint32_t>(config.queues.size());
+    for (size_t i = 0; i < config.queues.size(); ++i) {
+      request.queues[i].queue_id = config.queues[i].queue_id;
+      request.queues[i].direction = static_cast<uint8_t>(config.queues[i].direction);
+      request.queues[i].region_id = config.queues[i].region_id;
+      request.queues[i].requested_depth = config.queues[i].depth;
+    }
     if (::ioctl(fd_, DAQIRI_PCIE_IOCTL_CONFIGURE_QUEUES, &request) != 0) {
       set_error(errno_message("DAQIRI_PCIE_IOCTL_CONFIGURE_QUEUES failed"));
       return false;
@@ -317,14 +328,29 @@ class CharacterDeviceProvider final : public Provider {
       set_error(errno_message("mmap of DAQIRI PCIe control rings failed"));
       return false;
     }
-    for (size_t i = 0; i < rings_.size(); ++i) {
-      if (!rings_[i].bind(mapping_, mapping_bytes_, request.rings[i], &error_)) {
+    queues_.reserve(config.queues.size());
+    for (size_t i = 0; i < config.queues.size(); ++i) {
+      QueueRings queue;
+      queue.queue_id = request.queues[i].queue_id;
+      queue.direction = static_cast<daqiri_pcie_direction>(request.queues[i].direction);
+      queue.region_id = request.queues[i].region_id;
+      queue.doorbell_id = request.queues[i].doorbell_id;
+      for (size_t role = 0; role < DAQIRI_PCIE_RINGS_PER_QUEUE; ++role) {
+        if (!queue.rings[role].bind(mapping_, mapping_bytes_, request.queues[i].rings[role],
+                                    &error_)) {
+          return false;
+        }
+        if (request.queues[i].rings[role].depth != config.queues[i].depth) {
+          set_error("driver changed a requested ring depth");
+          return false;
+        }
+      }
+      if (!queue_indices_.emplace(queue_key(queue.direction, queue.queue_id), queues_.size())
+               .second) {
+        set_error("driver returned a duplicate PCIe queue");
         return false;
       }
-      if (request.rings[i].depth != config.depths[i]) {
-        set_error("driver changed a requested ring depth");
-        return false;
-      }
+      queues_.push_back(std::move(queue));
     }
     return true;
   }
@@ -343,20 +369,24 @@ class CharacterDeviceProvider final : public Provider {
     return true;
   }
 
-  bool post_rx_available(const daqiri_pcie_ring_entry* entries, size_t count) override {
-    return rings_[DAQIRI_PCIE_RING_RX_AVAILABLE].push(entries, count);
+  bool post_rx_available(uint16_t queue_id, const daqiri_pcie_ring_entry* entries,
+                         size_t count) override {
+    return push_work(DAQIRI_PCIE_DIRECTION_RX, queue_id, entries, count);
   }
 
-  bool post_tx_submission(const daqiri_pcie_ring_entry* entries, size_t count) override {
-    return rings_[DAQIRI_PCIE_RING_TX_SUBMISSION].push(entries, count);
+  bool post_tx_submission(uint16_t queue_id, const daqiri_pcie_ring_entry* entries,
+                          size_t count) override {
+    return push_work(DAQIRI_PCIE_DIRECTION_TX, queue_id, entries, count);
   }
 
-  size_t poll_rx_completion(daqiri_pcie_ring_entry* entries, size_t capacity) override {
-    return rings_[DAQIRI_PCIE_RING_RX_COMPLETION].pop(entries, capacity);
+  size_t poll_rx_completion(uint16_t queue_id, daqiri_pcie_ring_entry* entries,
+                            size_t capacity) override {
+    return pop_completion(DAQIRI_PCIE_DIRECTION_RX, queue_id, entries, capacity);
   }
 
-  size_t poll_tx_completion(daqiri_pcie_ring_entry* entries, size_t capacity) override {
-    return rings_[DAQIRI_PCIE_RING_TX_COMPLETION].pop(entries, capacity);
+  size_t poll_tx_completion(uint16_t queue_id, daqiri_pcie_ring_entry* entries,
+                            size_t capacity) override {
+    return pop_completion(DAQIRI_PCIE_DIRECTION_TX, queue_id, entries, capacity);
   }
 
   bool stop(uint32_t timeout_ms) override {
@@ -392,8 +422,11 @@ class CharacterDeviceProvider final : public Provider {
     if (fd_ < 0 || !error_.empty()) {
       return false;
     }
-    if (std::any_of(rings_.begin(), rings_.end(),
-                    [](const MappedRing& ring) { return ring.corrupted(); })) {
+    const bool corrupt = std::any_of(queues_.begin(), queues_.end(), [](const QueueRings& queue) {
+      return std::any_of(queue.rings.begin(), queue.rings.end(),
+                         [](const MappedRing& ring) { return ring.corrupted(); });
+    });
+    if (corrupt) {
       set_error("3rd-party device produced corrupt PCIe ring counters");
       return false;
     }
@@ -428,6 +461,55 @@ class CharacterDeviceProvider final : public Provider {
   }
 
  private:
+  struct QueueRings {
+    uint16_t queue_id = 0;
+    daqiri_pcie_direction direction = DAQIRI_PCIE_DIRECTION_RX;
+    uint32_t region_id = 0;
+    uint32_t doorbell_id = 0;
+    uint32_t doorbell_value = 0;
+    std::array<MappedRing, DAQIRI_PCIE_RINGS_PER_QUEUE> rings;
+  };
+
+  QueueRings* find_queue(daqiri_pcie_direction direction, uint16_t queue_id) {
+    const auto it = queue_indices_.find(queue_key(direction, queue_id));
+    return it == queue_indices_.end() ? nullptr : &queues_[it->second];
+  }
+
+  bool ring_doorbell(QueueRings& queue) {
+    auto request = make_ioctl_payload<daqiri_pcie_ioctl_ring_doorbell>();
+    request.queue_id = queue.queue_id;
+    request.direction = static_cast<uint8_t>(queue.direction);
+    request.doorbell_id = queue.doorbell_id;
+    request.value = ++queue.doorbell_value;
+    if (::ioctl(fd_, DAQIRI_PCIE_IOCTL_RING_DOORBELL, &request) != 0) {
+      set_error(errno_message("DAQIRI_PCIE_IOCTL_RING_DOORBELL failed"));
+      return false;
+    }
+    return true;
+  }
+
+  bool push_work(daqiri_pcie_direction direction, uint16_t queue_id,
+                 const daqiri_pcie_ring_entry* entries, size_t count) {
+    auto* queue = find_queue(direction, queue_id);
+    if (queue == nullptr || !queue->rings[DAQIRI_PCIE_RING_WORK].push(entries, count)) {
+      return false;
+    }
+    return count == 0 || ring_doorbell(*queue);
+  }
+
+  size_t pop_completion(daqiri_pcie_direction direction, uint16_t queue_id,
+                        daqiri_pcie_ring_entry* entries, size_t capacity) {
+    auto* queue = find_queue(direction, queue_id);
+    if (queue == nullptr) {
+      return 0;
+    }
+    const size_t count = queue->rings[DAQIRI_PCIE_RING_COMPLETION].pop(entries, capacity);
+    if (count != 0 && !ring_doorbell(*queue)) {
+      return 0;
+    }
+    return count;
+  }
+
   void set_error(std::string value) {
     error_ = std::move(value);
   }
@@ -437,7 +519,8 @@ class CharacterDeviceProvider final : public Provider {
   ProviderCaps caps_{};
   void* mapping_ = nullptr;
   size_t mapping_bytes_ = 0;
-  std::array<MappedRing, DAQIRI_PCIE_RING_COUNT> rings_{};
+  std::vector<QueueRings> queues_;
+  std::unordered_map<uint32_t, size_t> queue_indices_;
   std::vector<uint32_t> registered_regions_;
   bool started_ = false;
   uint64_t reset_count_ = 0;
@@ -537,9 +620,10 @@ class SoftwareLoopbackProvider final : public Provider {
 
   ProviderCaps capabilities() const override {
     ProviderCaps result;
-    result.capabilities =
-        DAQIRI_PCIE_CAP_DMABUF_PCIE | DAQIRI_PCIE_CAP_DMA_FENCE | DAQIRI_PCIE_CAP_DEVICE_RESET;
-    result.max_regions = 2;
+    result.capabilities = DAQIRI_PCIE_CAP_DMABUF_PCIE | DAQIRI_PCIE_CAP_DMA_FENCE |
+                          DAQIRI_PCIE_CAP_DEVICE_RESET | DAQIRI_PCIE_CAP_MULTI_QUEUE;
+    result.max_regions = DAQIRI_PCIE_MAX_QUEUES;
+    result.max_queues = DAQIRI_PCIE_MAX_QUEUES;
     result.max_ring_depth = 1U << 30;
     result.min_slot_alignment = 256;
     return result;
@@ -554,19 +638,42 @@ class SoftwareLoopbackProvider final : public Provider {
     }
     region->region_id = next_region_id_++;
     regions_[region->region_id] = *region;
-    if (region->direction == DAQIRI_PCIE_DIRECTION_RX) {
-      rx_region_id_ = region->region_id;
-    } else {
-      tx_region_id_ = region->region_id;
-    }
     return true;
   }
 
   bool configure(const QueueConfiguration& config) override {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (config.queues.empty() || config.queues.size() > DAQIRI_PCIE_MAX_QUEUES) {
+      error_ = "invalid software-loopback queue count";
+      return false;
+    }
     epoch_ = config.epoch;
-    for (size_t i = 0; i < rings_.size(); ++i) {
-      if (!rings_[i].configure(config.depths[i])) {
+    for (const auto& registration : config.queues) {
+      SoftwareQueue queue;
+      queue.queue_id = registration.queue_id;
+      queue.direction = registration.direction;
+      queue.region_id = registration.region_id;
+      for (auto& ring : queue.rings) {
+        if (!ring.configure(registration.depth)) {
+          error_ = "software-loopback ring depth is not a power of two";
+          return false;
+        }
+      }
+      if (!queue_indices_.emplace(queue_key(queue.direction, queue.queue_id), queues_.size())
+               .second) {
+        error_ = "duplicate software-loopback queue";
+        return false;
+      }
+      queues_.push_back(std::move(queue));
+    }
+    for (const auto& queue : queues_) {
+      const auto* region = find_region(queue.region_id);
+      if (region == nullptr || region->direction != queue.direction) {
+        error_ = "software-loopback queue references an invalid region";
+        return false;
+      }
+      if (!queue.rings[DAQIRI_PCIE_RING_WORK].enabled() ||
+          !queue.rings[DAQIRI_PCIE_RING_COMPLETION].enabled()) {
         error_ = "software-loopback ring depth is not a power of two";
         return false;
       }
@@ -584,26 +691,35 @@ class SoftwareLoopbackProvider final : public Provider {
     return true;
   }
 
-  bool post_rx_available(const daqiri_pcie_ring_entry* entries, size_t count) override {
+  bool post_rx_available(uint16_t queue_id, const daqiri_pcie_ring_entry* entries,
+                         size_t count) override {
     std::lock_guard<std::mutex> lock(mutex_);
-    return running_or_configured() && rings_[DAQIRI_PCIE_RING_RX_AVAILABLE].push(entries, count);
+    auto* queue = find_queue(DAQIRI_PCIE_DIRECTION_RX, queue_id);
+    return running_or_configured() && queue != nullptr &&
+           queue->rings[DAQIRI_PCIE_RING_WORK].push(entries, count);
   }
 
-  bool post_tx_submission(const daqiri_pcie_ring_entry* entries, size_t count) override {
+  bool post_tx_submission(uint16_t queue_id, const daqiri_pcie_ring_entry* entries,
+                          size_t count) override {
     std::lock_guard<std::mutex> lock(mutex_);
-    return running_ && rings_[DAQIRI_PCIE_RING_TX_SUBMISSION].push(entries, count);
+    auto* queue = find_queue(DAQIRI_PCIE_DIRECTION_TX, queue_id);
+    return running_ && queue != nullptr && queue->rings[DAQIRI_PCIE_RING_WORK].push(entries, count);
   }
 
-  size_t poll_rx_completion(daqiri_pcie_ring_entry* entries, size_t capacity) override {
+  size_t poll_rx_completion(uint16_t queue_id, daqiri_pcie_ring_entry* entries,
+                            size_t capacity) override {
     std::lock_guard<std::mutex> lock(mutex_);
     progress();
-    return rings_[DAQIRI_PCIE_RING_RX_COMPLETION].pop(entries, capacity);
+    auto* queue = find_queue(DAQIRI_PCIE_DIRECTION_RX, queue_id);
+    return queue == nullptr ? 0 : queue->rings[DAQIRI_PCIE_RING_COMPLETION].pop(entries, capacity);
   }
 
-  size_t poll_tx_completion(daqiri_pcie_ring_entry* entries, size_t capacity) override {
+  size_t poll_tx_completion(uint16_t queue_id, daqiri_pcie_ring_entry* entries,
+                            size_t capacity) override {
     std::lock_guard<std::mutex> lock(mutex_);
     progress();
-    return rings_[DAQIRI_PCIE_RING_TX_COMPLETION].pop(entries, capacity);
+    auto* queue = find_queue(DAQIRI_PCIE_DIRECTION_TX, queue_id);
+    return queue == nullptr ? 0 : queue->rings[DAQIRI_PCIE_RING_COMPLETION].pop(entries, capacity);
   }
 
   bool stop(uint32_t timeout_ms) override {
@@ -633,6 +749,13 @@ class SoftwareLoopbackProvider final : public Provider {
  private:
   enum class FaultInjection { NONE, STALE_EPOCH, BAD_LENGTH, DEVICE_RESET };
 
+  struct SoftwareQueue {
+    uint16_t queue_id = 0;
+    daqiri_pcie_direction direction = DAQIRI_PCIE_DIRECTION_RX;
+    uint32_t region_id = 0;
+    std::array<SoftwareRing, DAQIRI_PCIE_RINGS_PER_QUEUE> rings;
+  };
+
   bool running_or_configured() const {
     return running_ || epoch_ != 0;
   }
@@ -642,104 +765,117 @@ class SoftwareLoopbackProvider final : public Provider {
     return it == regions_.end() ? nullptr : &it->second;
   }
 
+  SoftwareQueue* find_queue(daqiri_pcie_direction direction, uint16_t queue_id) {
+    const auto it = queue_indices_.find(queue_key(direction, queue_id));
+    return it == queue_indices_.end() ? nullptr : &queues_[it->second];
+  }
+
   void progress() {
     if (!running_) {
       return;
     }
-    auto& submissions = rings_[DAQIRI_PCIE_RING_TX_SUBMISSION];
-    auto& tx_completions = rings_[DAQIRI_PCIE_RING_TX_COMPLETION];
-    auto& rx_available = rings_[DAQIRI_PCIE_RING_RX_AVAILABLE];
-    auto& rx_completions = rings_[DAQIRI_PCIE_RING_RX_COMPLETION];
-
-    while (submissions.available() != 0 && tx_completions.free_count() != 0) {
-      const bool has_rx = rx_available.enabled() && rx_completions.enabled();
-      if (has_rx && (rx_available.available() == 0 || rx_completions.free_count() == 0)) {
-        break;
+    for (auto& tx_queue : queues_) {
+      if (tx_queue.direction != DAQIRI_PCIE_DIRECTION_TX) {
+        continue;
       }
+      auto& submissions = tx_queue.rings[DAQIRI_PCIE_RING_WORK];
+      auto& tx_completions = tx_queue.rings[DAQIRI_PCIE_RING_COMPLETION];
+      auto* rx_queue = find_queue(DAQIRI_PCIE_DIRECTION_RX, tx_queue.queue_id);
+      SoftwareRing* rx_available =
+          rx_queue == nullptr ? nullptr : &rx_queue->rings[DAQIRI_PCIE_RING_WORK];
+      SoftwareRing* rx_completions =
+          rx_queue == nullptr ? nullptr : &rx_queue->rings[DAQIRI_PCIE_RING_COMPLETION];
 
-      daqiri_pcie_ring_entry tx{};
-      if (submissions.pop(&tx, 1) != 1) {
-        break;
-      }
-      daqiri_pcie_ring_entry tx_completion = tx;
-      set_entry_status(&tx_completion, DAQIRI_PCIE_COMPLETION_OK);
+      while (submissions.available() != 0 && tx_completions.free_count() != 0) {
+        const bool has_rx = rx_available != nullptr && rx_completions != nullptr;
+        if (has_rx && (rx_available->available() == 0 || rx_completions->free_count() == 0)) {
+          break;
+        }
 
-      if (has_rx) {
-        daqiri_pcie_ring_entry rx{};
-        (void)rx_available.pop(&rx, 1);
-        daqiri_pcie_ring_entry rx_completion = rx;
-        const auto* tx_region = find_region(entry_region(tx));
-        const auto* rx_region = find_region(entry_region(rx));
-        const uint32_t tx_slot = entry_slot(tx);
-        const uint32_t rx_slot = entry_slot(rx);
-        const uint32_t length = entry_length(tx);
-        daqiri_pcie_completion_status status = DAQIRI_PCIE_COMPLETION_OK;
+        daqiri_pcie_ring_entry tx{};
+        if (submissions.pop(&tx, 1) != 1) {
+          break;
+        }
+        daqiri_pcie_ring_entry tx_completion = tx;
+        set_entry_status(&tx_completion, DAQIRI_PCIE_COMPLETION_OK);
 
-        if (tx_region == nullptr || rx_region == nullptr ||
-            tx_region->direction != DAQIRI_PCIE_DIRECTION_TX ||
-            rx_region->direction != DAQIRI_PCIE_DIRECTION_RX || tx_slot >= tx_region->slot_count ||
-            rx_slot >= rx_region->slot_count) {
-          status = DAQIRI_PCIE_COMPLETION_BAD_DESCRIPTOR;
-        } else if (length > tx_region->slot_stride || length > rx_region->slot_stride) {
-          status = DAQIRI_PCIE_COMPLETION_LENGTH_ERROR;
-        } else if (length != 0) {
-          auto* src = static_cast<uint8_t*>(tx_region->gpu_base) +
-                      static_cast<size_t>(tx_slot) * tx_region->slot_stride;
-          auto* dst = static_cast<uint8_t*>(rx_region->gpu_base) +
-                      static_cast<size_t>(rx_slot) * rx_region->slot_stride;
-          cudaError_t copy_result = cudaSuccess;
-          if (tx_region->gpu_device == rx_region->gpu_device) {
-            static thread_local int selected_loopback_device = -1;
-            if (selected_loopback_device != rx_region->gpu_device) {
-              copy_result = cudaSetDevice(rx_region->gpu_device);
-              if (copy_result == cudaSuccess) {
-                selected_loopback_device = rx_region->gpu_device;
+        if (has_rx) {
+          daqiri_pcie_ring_entry rx{};
+          (void)rx_available->pop(&rx, 1);
+          daqiri_pcie_ring_entry rx_completion = rx;
+          const auto* tx_region = find_region(entry_region(tx));
+          const auto* rx_region = find_region(entry_region(rx));
+          const uint32_t tx_slot = entry_slot(tx);
+          const uint32_t rx_slot = entry_slot(rx);
+          const uint32_t length = entry_length(tx);
+          daqiri_pcie_completion_status status = DAQIRI_PCIE_COMPLETION_OK;
+
+          if (tx_region == nullptr || rx_region == nullptr ||
+              tx_region->direction != DAQIRI_PCIE_DIRECTION_TX ||
+              rx_region->direction != DAQIRI_PCIE_DIRECTION_RX ||
+              tx_slot >= tx_region->slot_count || rx_slot >= rx_region->slot_count) {
+            status = DAQIRI_PCIE_COMPLETION_BAD_DESCRIPTOR;
+          } else if (length > tx_region->slot_stride || length > rx_region->slot_stride) {
+            status = DAQIRI_PCIE_COMPLETION_LENGTH_ERROR;
+          } else if (length != 0) {
+            auto* src = static_cast<uint8_t*>(tx_region->gpu_base) +
+                        static_cast<size_t>(tx_slot) * tx_region->slot_stride;
+            auto* dst = static_cast<uint8_t*>(rx_region->gpu_base) +
+                        static_cast<size_t>(rx_slot) * rx_region->slot_stride;
+            cudaError_t copy_result = cudaSuccess;
+            if (tx_region->gpu_device == rx_region->gpu_device) {
+              static thread_local int selected_loopback_device = -1;
+              if (selected_loopback_device != rx_region->gpu_device) {
+                copy_result = cudaSetDevice(rx_region->gpu_device);
+                if (copy_result == cudaSuccess) {
+                  selected_loopback_device = rx_region->gpu_device;
+                }
               }
+              if (copy_result == cudaSuccess) {
+                copy_result = cudaMemcpy(dst, src, length, cudaMemcpyDeviceToDevice);
+              }
+            } else {
+              copy_result =
+                  cudaMemcpyPeer(dst, rx_region->gpu_device, src, tx_region->gpu_device, length);
             }
-            if (copy_result == cudaSuccess) {
-              copy_result = cudaMemcpy(dst, src, length, cudaMemcpyDeviceToDevice);
+            if (copy_result != cudaSuccess) {
+              status = DAQIRI_PCIE_COMPLETION_INTERNAL_ERROR;
+              (void)cudaGetLastError();
             }
-          } else {
-            copy_result =
-                cudaMemcpyPeer(dst, rx_region->gpu_device, src, tx_region->gpu_device, length);
           }
-          if (copy_result != cudaSuccess) {
-            status = DAQIRI_PCIE_COMPLETION_INTERNAL_ERROR;
-            (void)cudaGetLastError();
+          rx_completion.length = htole32(length);
+          set_entry_status(&rx_completion, status);
+          if (status != DAQIRI_PCIE_COMPLETION_OK) {
+            set_entry_status(&tx_completion, status);
           }
+          if (!fault_injected_) {
+            if (fault_ == FaultInjection::STALE_EPOCH) {
+              rx_completion.epoch = htole64(le64toh(rx_completion.epoch) ^ UINT64_C(1));
+              fault_injected_ = true;
+            } else if (fault_ == FaultInjection::BAD_LENGTH) {
+              rx_completion.length = htole32(UINT32_MAX);
+              fault_injected_ = true;
+            } else if (fault_ == FaultInjection::DEVICE_RESET) {
+              set_entry_status(&rx_completion, DAQIRI_PCIE_COMPLETION_DEVICE_RESET);
+              fault_injected_ = true;
+            }
+          }
+          (void)rx_completions->push(&rx_completion, 1);
         }
-        rx_completion.length = htole32(length);
-        set_entry_status(&rx_completion, status);
-        if (status != DAQIRI_PCIE_COMPLETION_OK) {
-          set_entry_status(&tx_completion, status);
-        }
-        if (!fault_injected_) {
+        if (!has_rx && !fault_injected_) {
           if (fault_ == FaultInjection::STALE_EPOCH) {
-            rx_completion.epoch = htole64(le64toh(rx_completion.epoch) ^ UINT64_C(1));
+            tx_completion.epoch = htole64(le64toh(tx_completion.epoch) ^ UINT64_C(1));
             fault_injected_ = true;
           } else if (fault_ == FaultInjection::BAD_LENGTH) {
-            rx_completion.length = htole32(UINT32_MAX);
+            tx_completion.length = htole32(UINT32_MAX);
             fault_injected_ = true;
           } else if (fault_ == FaultInjection::DEVICE_RESET) {
-            set_entry_status(&rx_completion, DAQIRI_PCIE_COMPLETION_DEVICE_RESET);
+            set_entry_status(&tx_completion, DAQIRI_PCIE_COMPLETION_DEVICE_RESET);
             fault_injected_ = true;
           }
         }
-        (void)rx_completions.push(&rx_completion, 1);
+        (void)tx_completions.push(&tx_completion, 1);
       }
-      if (!has_rx && !fault_injected_) {
-        if (fault_ == FaultInjection::STALE_EPOCH) {
-          tx_completion.epoch = htole64(le64toh(tx_completion.epoch) ^ UINT64_C(1));
-          fault_injected_ = true;
-        } else if (fault_ == FaultInjection::BAD_LENGTH) {
-          tx_completion.length = htole32(UINT32_MAX);
-          fault_injected_ = true;
-        } else if (fault_ == FaultInjection::DEVICE_RESET) {
-          set_entry_status(&tx_completion, DAQIRI_PCIE_COMPLETION_DEVICE_RESET);
-          fault_injected_ = true;
-        }
-      }
-      (void)tx_completions.push(&tx_completion, 1);
     }
   }
 
@@ -748,12 +884,11 @@ class SoftwareLoopbackProvider final : public Provider {
   bool running_ = false;
   uint64_t epoch_ = 0;
   uint32_t next_region_id_ = 1;
-  uint32_t rx_region_id_ = 0;
-  uint32_t tx_region_id_ = 0;
   FaultInjection fault_ = FaultInjection::NONE;
   bool fault_injected_ = false;
   std::unordered_map<uint32_t, RegionRegistration> regions_;
-  std::array<SoftwareRing, DAQIRI_PCIE_RING_COUNT> rings_{};
+  std::vector<SoftwareQueue> queues_;
+  std::unordered_map<uint32_t, size_t> queue_indices_;
   std::string error_;
 };
 

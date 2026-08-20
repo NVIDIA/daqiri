@@ -15,10 +15,13 @@ DPU component needs the DOCA SDK installed on the BF3.
   owns the hot-plugged function and services the BAR doorbells; its data plane
   must use DOCA DMA against the host mappings established by the driver.
 
-The data plane is PCIe-only. It has no Ethernet headers, flow steering, NIC
-queues, MAC/IP addressing, or network dependency. The DPU consumes ownership
-descriptors in batches, submits DMA directly against the CUDA DMA-BUF mapping,
-waits once for the batch, and then publishes a batch of completions.
+The data plane is PCIe-only. It has no Ethernet headers, flow steering,
+MAC/IP addressing, or network dependency. It retains NIC-like queue mechanics
+only for DMA parallelism and memory-region separation: every queue binds a
+different CUDA DMA-BUF mapping and has an independent work ring, completion
+ring, and BAR doorbell. The DPU consumes ownership descriptors in batches,
+submits DMA directly against each queue's mapping, waits once for the batch,
+and then publishes completions to that queue only.
 
 The implementation has one hard gate: CUDA's DMA-BUF must attach to the
 emulated BF3 PCI device and its 64 KiB SG entries must describe one adjacent

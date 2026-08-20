@@ -122,58 +122,53 @@ std::string cuda_error(CUresult result) {
 
 }  // namespace
 
+struct PcieEngine::QueueState {
+  InterfaceState* interface = nullptr;
+  uint16_t queue_id = 0;
+  bool rx = false;
+  uint64_t next_sequence = 1;
+  std::string mr_name;
+  pcie::RegionRegistration region{};
+  size_t payload_size = 0;
+  uint32_t batch_size = 1;
+  uint64_t timeout_us = 0;
+  int worker_cpu = -1;
+  int gpu = -1;
+  bool needs_cuda_flush = false;
+
+  std::mutex slot_mutex;
+  std::vector<SlotOwner> owners;
+  std::vector<uint64_t> expected_sequence;
+  std::vector<uint32_t> expected_length;
+  std::deque<uint32_t> free_slots;
+  std::deque<uint32_t> deferred_slots;
+
+  std::vector<daqiri_pcie_ring_entry> pending;
+  std::chrono::steady_clock::time_point pending_since{};
+  std::mutex ready_mutex;
+  std::deque<BurstParams*> ready;
+
+  std::thread worker;
+};
+
 struct PcieEngine::InterfaceState {
   uint16_t port = 0;
   std::string name;
   std::string address;
   bool loopback = false;
-  bool has_rx = false;
-  bool has_tx = false;
   uint64_t epoch = 0;
-  uint64_t next_sequence = 1;
-
-  std::string rx_mr_name;
-  std::string tx_mr_name;
-  pcie::RegionRegistration rx_region{};
-  pcie::RegionRegistration tx_region{};
-  size_t rx_payload_size = 0;
-  size_t tx_payload_size = 0;
-  uint32_t rx_batch_size = 1;
-  uint32_t tx_batch_size = 1;
-  uint64_t rx_timeout_us = 0;
-  int rx_worker_cpu = -1;
-  int tx_worker_cpu = -1;
-  int rx_gpu = -1;
-  int tx_gpu = -1;
-  bool rx_needs_cuda_flush = false;
-
   std::unique_ptr<pcie::Provider> provider;
   std::mutex provider_mutex;
   bool provider_started = false;
   bool quiesce_failed = false;
   std::vector<int> dmabuf_fds;
-
-  std::mutex slot_mutex;
-  std::vector<SlotOwner> rx_owners;
-  std::vector<uint64_t> rx_expected_sequence;
-  std::deque<uint32_t> deferred_rx_slots;
-  std::vector<SlotOwner> tx_owners;
-  std::vector<uint64_t> tx_expected_sequence;
-  std::vector<uint32_t> tx_expected_length;
-  std::deque<uint32_t> free_tx_slots;
-
-  std::vector<daqiri_pcie_ring_entry> pending_rx;
-  std::chrono::steady_clock::time_point pending_since{};
-  std::mutex ready_mutex;
-  std::deque<BurstParams*> ready_rx;
-
+  std::vector<std::unique_ptr<QueueState>> rx_queues;
+  std::vector<std::unique_ptr<QueueState>> tx_queues;
   std::atomic<bool> active{true};
-  std::thread rx_worker;
-  std::thread tx_worker;
 };
 
 struct PcieEngine::BurstStorage {
-  InterfaceState* interface = nullptr;
+  QueueState* queue = nullptr;
   bool rx = false;
   bool submitted = false;
   std::vector<uint32_t> slots;
@@ -202,6 +197,16 @@ const PcieEngine::InterfaceState* PcieEngine::find_interface(uint16_t port) cons
   for (const auto& state : interfaces_) {
     if (state != nullptr && state->port == port) {
       return state.get();
+    }
+  }
+  return nullptr;
+}
+
+PcieEngine::QueueState* PcieEngine::find_queue(InterfaceState& state, bool rx, uint16_t queue_id) {
+  auto& queues = rx ? state.rx_queues : state.tx_queues;
+  for (auto& queue : queues) {
+    if (queue != nullptr && queue->queue_id == queue_id) {
+      return queue.get();
     }
   }
   return nullptr;
@@ -263,11 +268,11 @@ void PcieEngine::initialize() {
   running_.store(true, std::memory_order_release);
   accepting_tx_.store(true, std::memory_order_release);
   for (auto& state : interfaces_) {
-    if (state->has_rx) {
-      state->rx_worker = std::thread(&PcieEngine::rx_worker_loop, this, state.get());
+    for (auto& queue : state->rx_queues) {
+      queue->worker = std::thread(&PcieEngine::rx_worker_loop, this, queue.get());
     }
-    if (state->has_tx) {
-      state->tx_worker = std::thread(&PcieEngine::tx_worker_loop, this, state.get());
+    for (auto& queue : state->tx_queues) {
+      queue->worker = std::thread(&PcieEngine::tx_worker_loop, this, queue.get());
     }
   }
   init_rx_core_q_map();
@@ -279,20 +284,26 @@ void PcieEngine::initialize() {
 void PcieEngine::run() {}
 
 bool PcieEngine::initialize_interface(InterfaceState& state, const InterfaceConfig& config) {
-  state.has_rx = !config.rx_.queues_.empty();
-  state.has_tx = !config.tx_.queues_.empty();
-  if (state.has_rx) {
-    const auto& queue = config.rx_.queues_.front();
-    state.rx_mr_name = queue.common_.mrs_.front();
-    state.rx_batch_size = static_cast<uint32_t>(queue.common_.batch_size_);
-    state.rx_timeout_us = queue.timeout_us_;
-    state.rx_worker_cpu = std::strtol(queue.common_.cpu_core_.c_str(), nullptr, 10);
+  for (const auto& config_queue : config.rx_.queues_) {
+    auto queue = std::make_unique<QueueState>();
+    queue->interface = &state;
+    queue->queue_id = config_queue.common_.id_;
+    queue->rx = true;
+    queue->mr_name = config_queue.common_.mrs_.front();
+    queue->batch_size = static_cast<uint32_t>(config_queue.common_.batch_size_);
+    queue->timeout_us = config_queue.timeout_us_;
+    queue->worker_cpu = std::strtol(config_queue.common_.cpu_core_.c_str(), nullptr, 10);
+    state.rx_queues.push_back(std::move(queue));
   }
-  if (state.has_tx) {
-    const auto& queue = config.tx_.queues_.front();
-    state.tx_mr_name = queue.common_.mrs_.front();
-    state.tx_batch_size = static_cast<uint32_t>(queue.common_.batch_size_);
-    state.tx_worker_cpu = std::strtol(queue.common_.cpu_core_.c_str(), nullptr, 10);
+  for (const auto& config_queue : config.tx_.queues_) {
+    auto queue = std::make_unique<QueueState>();
+    queue->interface = &state;
+    queue->queue_id = config_queue.common_.id_;
+    queue->rx = false;
+    queue->mr_name = config_queue.common_.mrs_.front();
+    queue->batch_size = static_cast<uint32_t>(config_queue.common_.batch_size_);
+    queue->worker_cpu = std::strtol(config_queue.common_.cpu_core_.c_str(), nullptr, 10);
+    state.tx_queues.push_back(std::move(queue));
   }
 
   state.provider = state.loopback ? pcie::make_software_loopback_provider()
@@ -304,54 +315,59 @@ bool PcieEngine::initialize_interface(InterfaceState& state, const InterfaceConf
   }
   const auto caps = state.provider->capabilities();
   const uint32_t region_count =
-      static_cast<uint32_t>(state.has_rx) + static_cast<uint32_t>(state.has_tx);
+      static_cast<uint32_t>(state.rx_queues.size() + state.tx_queues.size());
   if ((caps.capabilities & DAQIRI_PCIE_CAP_DMA_FENCE) == 0 ||
       (!state.loopback && (caps.capabilities & DAQIRI_PCIE_CAP_DMABUF_PCIE) == 0)) {
     DAQIRI_LOG_ERROR("PCIe provider '{}' lacks a required DMA-BUF or DMA-fence capability",
                      state.name);
     return false;
   }
-  if (caps.max_regions < region_count || caps.min_slot_alignment == 0 ||
-      caps.min_slot_alignment > kPcieSlotAlignment ||
+  const bool requires_multi_queue = state.rx_queues.size() > 1 || state.tx_queues.size() > 1;
+  if (caps.max_regions < region_count || caps.max_queues < region_count ||
+      (requires_multi_queue && (caps.capabilities & DAQIRI_PCIE_CAP_MULTI_QUEUE) == 0) ||
+      caps.min_slot_alignment == 0 || caps.min_slot_alignment > kPcieSlotAlignment ||
       (kPcieSlotAlignment % caps.min_slot_alignment) != 0) {
     DAQIRI_LOG_ERROR("PCIe provider '{}' cannot register {} regions with {}-byte slot alignment",
                      state.name, region_count, kPcieSlotAlignment);
     return false;
   }
 
-  if (state.has_rx && !register_region(state, state.rx_mr_name, true)) {
-    return false;
+  for (auto& queue : state.rx_queues) {
+    if (!register_region(state, *queue) || !initialize_cuda_ordering(*queue)) {
+      return false;
+    }
   }
-  if (state.has_tx && !register_region(state, state.tx_mr_name, false)) {
-    return false;
-  }
-  if (!initialize_cuda_ordering(state)) {
-    return false;
+  for (auto& queue : state.tx_queues) {
+    if (!register_region(state, *queue)) {
+      return false;
+    }
   }
 
   pcie::QueueConfiguration queue_config{};
   queue_config.epoch = state.epoch;
-  if (state.has_rx) {
-    const uint32_t depth = ring_depth_for(state.rx_region.slot_count);
+  auto configure_queue = [&](const QueueState& queue) {
+    const uint32_t depth = ring_depth_for(queue.region.slot_count);
     if (depth == 0) {
-      DAQIRI_LOG_ERROR("PCIe RX region for '{}' has too many slots for a v1 ring", state.name);
+      DAQIRI_LOG_ERROR("PCIe queue {} region for '{}' has too many slots", queue.queue_id,
+                       state.name);
       return false;
     }
-    queue_config.depths[DAQIRI_PCIE_RING_RX_AVAILABLE] = depth;
-    queue_config.depths[DAQIRI_PCIE_RING_RX_COMPLETION] = depth;
-  }
-  if (state.has_tx) {
-    const uint32_t depth = ring_depth_for(state.tx_region.slot_count);
-    if (depth == 0) {
-      DAQIRI_LOG_ERROR("PCIe TX region for '{}' has too many slots for a v1 ring", state.name);
-      return false;
-    }
-    queue_config.depths[DAQIRI_PCIE_RING_TX_SUBMISSION] = depth;
-    queue_config.depths[DAQIRI_PCIE_RING_TX_COMPLETION] = depth;
-  }
-  for (uint32_t depth : queue_config.depths) {
-    if (depth != 0 && (depth > caps.max_ring_depth || depth < 2)) {
+    if (depth > caps.max_ring_depth || depth < 2) {
       DAQIRI_LOG_ERROR("PCIe ring depth {} is unsupported by provider '{}'", depth, state.name);
+      return false;
+    }
+    queue_config.queues.push_back({queue.queue_id,
+                                   queue.rx ? DAQIRI_PCIE_DIRECTION_RX : DAQIRI_PCIE_DIRECTION_TX,
+                                   queue.region.region_id, depth});
+    return true;
+  };
+  for (const auto& queue : state.rx_queues) {
+    if (!configure_queue(*queue)) {
+      return false;
+    }
+  }
+  for (const auto& queue : state.tx_queues) {
+    if (!configure_queue(*queue)) {
       return false;
     }
   }
@@ -360,8 +376,10 @@ bool PcieEngine::initialize_interface(InterfaceState& state, const InterfaceConf
                      state.provider->last_error());
     return false;
   }
-  if (!post_initial_rx_slots(state)) {
-    return false;
+  for (auto& queue : state.rx_queues) {
+    if (!post_initial_rx_slots(*queue)) {
+      return false;
+    }
   }
   // Treat every START attempt as potentially active: an ioctl can fail after
   // hardware has begun DMA. Shutdown must quiesce/reset even on an error return
@@ -375,7 +393,8 @@ bool PcieEngine::initialize_interface(InterfaceState& state, const InterfaceConf
   return true;
 }
 
-bool PcieEngine::register_region(InterfaceState& state, const std::string& mr_name, bool rx) {
+bool PcieEngine::register_region(InterfaceState& state, QueueState& queue) {
+  const std::string& mr_name = queue.mr_name;
   auto config_it = cfg_.mrs_.find(mr_name);
   auto allocation_it = ar_.find(mr_name);
   if (config_it == cfg_.mrs_.end() || allocation_it == ar_.end()) {
@@ -385,7 +404,7 @@ bool PcieEngine::register_region(InterfaceState& state, const std::string& mr_na
   auto& allocation = allocation_it->second;
 
   pcie::RegionRegistration region{};
-  region.direction = rx ? DAQIRI_PCIE_DIRECTION_RX : DAQIRI_PCIE_DIRECTION_TX;
+  region.direction = queue.rx ? DAQIRI_PCIE_DIRECTION_RX : DAQIRI_PCIE_DIRECTION_TX;
   region.gpu_base = allocation.ptr_;
   region.bytes = allocation.size_;
   region.slot_stride = static_cast<uint32_t>(config.adj_size_);
@@ -445,47 +464,42 @@ bool PcieEngine::register_region(InterfaceState& state, const std::string& mr_na
                      state.provider->last_error());
     return false;
   }
-  if (rx) {
-    state.rx_region = region;
-    state.rx_payload_size = config.buf_size_;
-    state.rx_gpu = config.affinity_;
-    state.rx_owners.assign(config.num_bufs_, SlotOwner::FREE);
-    state.rx_expected_sequence.assign(config.num_bufs_, 0);
-  } else {
-    state.tx_region = region;
-    state.tx_payload_size = config.buf_size_;
-    state.tx_gpu = config.affinity_;
-    state.tx_owners.assign(config.num_bufs_, SlotOwner::FREE);
-    state.tx_expected_sequence.assign(config.num_bufs_, 0);
-    state.tx_expected_length.assign(config.num_bufs_, 0);
+  queue.region = region;
+  queue.payload_size = config.buf_size_;
+  queue.gpu = config.affinity_;
+  queue.owners.assign(config.num_bufs_, SlotOwner::FREE);
+  queue.expected_sequence.assign(config.num_bufs_, 0);
+  if (!queue.rx) {
+    queue.expected_length.assign(config.num_bufs_, 0);
     for (uint32_t slot = 0; slot < region.slot_count; ++slot) {
-      state.free_tx_slots.push_back(slot);
+      queue.free_slots.push_back(slot);
     }
   }
   return true;
 }
 
-bool PcieEngine::initialize_cuda_ordering(InterfaceState& state) {
-  if (!state.has_rx || state.loopback) {
+bool PcieEngine::initialize_cuda_ordering(QueueState& queue) {
+  InterfaceState& state = *queue.interface;
+  if (!queue.rx || state.loopback) {
     return true;
   }
-  if (cudaSetDevice(state.rx_gpu) != cudaSuccess) {
+  if (cudaSetDevice(queue.gpu) != cudaSuccess) {
     return false;
   }
   CUdevice device = 0;
-  if (cuDeviceGet(&device, state.rx_gpu) != CUDA_SUCCESS) {
+  if (cuDeviceGet(&device, queue.gpu) != CUDA_SUCCESS) {
     return false;
   }
   int ordering = CU_GPU_DIRECT_RDMA_WRITES_ORDERING_NONE;
   CUresult result =
       cuDeviceGetAttribute(&ordering, CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WRITES_ORDERING, device);
   if (result != CUDA_SUCCESS) {
-    DAQIRI_LOG_ERROR("Cannot query GPUDirect write ordering for GPU {}: {}", state.rx_gpu,
+    DAQIRI_LOG_ERROR("Cannot query GPUDirect write ordering for GPU {}: {}", queue.gpu,
                      cuda_error(result));
     return false;
   }
-  state.rx_needs_cuda_flush = ordering < CU_GPU_DIRECT_RDMA_WRITES_ORDERING_OWNER;
-  if (!state.rx_needs_cuda_flush) {
+  queue.needs_cuda_flush = ordering < CU_GPU_DIRECT_RDMA_WRITES_ORDERING_OWNER;
+  if (!queue.needs_cuda_flush) {
     return true;
   }
 
@@ -495,95 +509,99 @@ bool PcieEngine::initialize_cuda_ordering(InterfaceState& state) {
   if (result != CUDA_SUCCESS ||
       (flush_options & CU_FLUSH_GPU_DIRECT_RDMA_WRITES_OPTION_HOST) == 0) {
     DAQIRI_LOG_ERROR("GPU {} lacks native OWNER ordering and host GPUDirect write flush",
-                     state.rx_gpu);
+                     queue.gpu);
     return false;
   }
   return true;
 }
 
-bool PcieEngine::post_initial_rx_slots(InterfaceState& state) {
-  if (!state.has_rx) {
+bool PcieEngine::post_initial_rx_slots(QueueState& queue) {
+  InterfaceState& state = *queue.interface;
+  if (!queue.rx) {
     return true;
   }
   std::vector<daqiri_pcie_ring_entry> entries;
-  entries.reserve(state.rx_region.slot_count);
+  entries.reserve(queue.region.slot_count);
   {
-    std::lock_guard<std::mutex> lock(state.slot_mutex);
-    for (uint32_t slot = 0; slot < state.rx_region.slot_count; ++slot) {
-      const uint64_t sequence = state.next_sequence++;
-      state.rx_expected_sequence[slot] = sequence;
-      state.rx_owners[slot] = SlotOwner::DEVICE;
-      entries.push_back(make_entry(state.epoch, sequence, state.rx_region.region_id, slot,
-                                   static_cast<uint32_t>(state.rx_payload_size)));
+    std::lock_guard<std::mutex> lock(queue.slot_mutex);
+    for (uint32_t slot = 0; slot < queue.region.slot_count; ++slot) {
+      const uint64_t sequence = queue.next_sequence++;
+      queue.expected_sequence[slot] = sequence;
+      queue.owners[slot] = SlotOwner::DEVICE;
+      entries.push_back(make_entry(state.epoch, sequence, queue.region.region_id, slot,
+                                   static_cast<uint32_t>(queue.payload_size)));
     }
   }
   std::lock_guard<std::mutex> provider_lock(state.provider_mutex);
-  if (!state.provider->post_rx_available(entries.data(), entries.size())) {
-    DAQIRI_LOG_ERROR("Initial RX credit post failed for PCIe interface '{}'", state.name);
+  if (!state.provider->post_rx_available(queue.queue_id, entries.data(), entries.size())) {
+    DAQIRI_LOG_ERROR("Initial RX credit post failed for PCIe interface '{}' queue {}", state.name,
+                     queue.queue_id);
     return false;
   }
   return true;
 }
 
-bool PcieEngine::post_rx_slot(InterfaceState& state, uint32_t slot_id) {
-  std::lock_guard<std::mutex> slot_lock(state.slot_mutex);
-  if (slot_id >= state.rx_owners.size() || state.rx_owners[slot_id] != SlotOwner::APPLICATION) {
+bool PcieEngine::post_rx_slot(QueueState& queue, uint32_t slot_id) {
+  InterfaceState& state = *queue.interface;
+  std::lock_guard<std::mutex> slot_lock(queue.slot_mutex);
+  if (slot_id >= queue.owners.size() || queue.owners[slot_id] != SlotOwner::APPLICATION) {
     return false;
   }
   if (!state.active.load(std::memory_order_acquire)) {
-    state.rx_owners[slot_id] = SlotOwner::FREE;
+    queue.owners[slot_id] = SlotOwner::FREE;
     return true;
   }
-  const uint64_t sequence = state.next_sequence++;
-  state.rx_expected_sequence[slot_id] = sequence;
-  state.rx_owners[slot_id] = SlotOwner::REPOST;
-  const auto entry = make_entry(state.epoch, sequence, state.rx_region.region_id, slot_id,
-                                static_cast<uint32_t>(state.rx_payload_size));
+  const uint64_t sequence = queue.next_sequence++;
+  queue.expected_sequence[slot_id] = sequence;
+  queue.owners[slot_id] = SlotOwner::REPOST;
+  const auto entry = make_entry(state.epoch, sequence, queue.region.region_id, slot_id,
+                                static_cast<uint32_t>(queue.payload_size));
   std::lock_guard<std::mutex> provider_lock(state.provider_mutex);
   if (!state.active.load(std::memory_order_acquire)) {
-    state.rx_owners[slot_id] = SlotOwner::FREE;
+    queue.owners[slot_id] = SlotOwner::FREE;
     return true;
   }
-  if (!state.provider->post_rx_available(&entry, 1)) {
-    state.deferred_rx_slots.push_back(slot_id);
+  if (!state.provider->post_rx_available(queue.queue_id, &entry, 1)) {
+    queue.deferred_slots.push_back(slot_id);
     rx_backpressure_.fetch_add(1, std::memory_order_relaxed);
     return true;
   }
-  state.rx_owners[slot_id] = SlotOwner::DEVICE;
+  queue.owners[slot_id] = SlotOwner::DEVICE;
   return true;
 }
 
-void PcieEngine::retry_deferred_rx_slots(InterfaceState& state) {
+void PcieEngine::retry_deferred_rx_slots(QueueState& queue) {
+  InterfaceState& state = *queue.interface;
   if (!state.active.load(std::memory_order_acquire)) {
     return;
   }
-  std::lock_guard<std::mutex> slot_lock(state.slot_mutex);
-  while (!state.deferred_rx_slots.empty()) {
-    const uint32_t slot = state.deferred_rx_slots.front();
-    if (slot >= state.rx_owners.size() || state.rx_owners[slot] != SlotOwner::REPOST) {
+  std::lock_guard<std::mutex> slot_lock(queue.slot_mutex);
+  while (!queue.deferred_slots.empty()) {
+    const uint32_t slot = queue.deferred_slots.front();
+    if (slot >= queue.owners.size() || queue.owners[slot] != SlotOwner::REPOST) {
       mark_unhealthy(state, "deferred RX credit has invalid slot ownership");
       return;
     }
     const auto entry =
-        make_entry(state.epoch, state.rx_expected_sequence[slot], state.rx_region.region_id, slot,
-                   static_cast<uint32_t>(state.rx_payload_size));
+        make_entry(state.epoch, queue.expected_sequence[slot], queue.region.region_id, slot,
+                   static_cast<uint32_t>(queue.payload_size));
     std::lock_guard<std::mutex> provider_lock(state.provider_mutex);
     if (!state.active.load(std::memory_order_acquire)) {
       return;
     }
-    if (!state.provider->post_rx_available(&entry, 1)) {
+    if (!state.provider->post_rx_available(queue.queue_id, &entry, 1)) {
       return;
     }
-    state.rx_owners[slot] = SlotOwner::DEVICE;
-    state.deferred_rx_slots.pop_front();
+    queue.owners[slot] = SlotOwner::DEVICE;
+    queue.deferred_slots.pop_front();
   }
 }
 
-bool PcieEngine::flush_remote_writes(InterfaceState& state) {
-  if (!state.rx_needs_cuda_flush) {
+bool PcieEngine::flush_remote_writes(QueueState& queue) {
+  if (!queue.needs_cuda_flush) {
     return true;
   }
-  if (cudaSetDevice(state.rx_gpu) != cudaSuccess) {
+  if (cudaSetDevice(queue.gpu) != cudaSuccess) {
     cuda_flush_failures_.fetch_add(1, std::memory_order_relaxed);
     return false;
   }
@@ -613,66 +631,70 @@ bool PcieEngine::provider_is_healthy(InterfaceState& state) {
   return provider_healthy;
 }
 
-void PcieEngine::rx_worker_loop(InterfaceState* state) {
-  if (state == nullptr) {
+void PcieEngine::rx_worker_loop(QueueState* queue) {
+  if (queue == nullptr || queue->interface == nullptr) {
     return;
   }
-  if (state->rx_worker_cpu >= 0 && state->rx_worker_cpu < CPU_SETSIZE) {
+  InterfaceState& state = *queue->interface;
+  if (queue->worker_cpu >= 0 && queue->worker_cpu < CPU_SETSIZE) {
     cpu_set_t set;
     CPU_ZERO(&set);
-    CPU_SET(state->rx_worker_cpu, &set);
+    CPU_SET(queue->worker_cpu, &set);
     (void)pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
   }
-  (void)cudaSetDevice(state->rx_gpu);
+  (void)cudaSetDevice(queue->gpu);
 
-  while (running_.load(std::memory_order_acquire) && state->active.load()) {
-    process_rx_completions(*state);
-    if (!state->active.load(std::memory_order_acquire)) {
+  while (running_.load(std::memory_order_acquire) && state.active.load()) {
+    process_rx_completions(*queue);
+    if (!state.active.load(std::memory_order_acquire)) {
       break;
     }
-    retry_deferred_rx_slots(*state);
-    if (!provider_is_healthy(*state)) {
+    retry_deferred_rx_slots(*queue);
+    if (!provider_is_healthy(state)) {
       break;
     }
     std::this_thread::yield();
   }
 }
 
-void PcieEngine::tx_worker_loop(InterfaceState* state) {
-  if (state == nullptr) {
+void PcieEngine::tx_worker_loop(QueueState* queue) {
+  if (queue == nullptr || queue->interface == nullptr) {
     return;
   }
-  if (state->tx_worker_cpu >= 0 && state->tx_worker_cpu < CPU_SETSIZE) {
+  InterfaceState& state = *queue->interface;
+  if (queue->worker_cpu >= 0 && queue->worker_cpu < CPU_SETSIZE) {
     cpu_set_t set;
     CPU_ZERO(&set);
-    CPU_SET(state->tx_worker_cpu, &set);
+    CPU_SET(queue->worker_cpu, &set);
     (void)pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
   }
-  (void)cudaSetDevice(state->tx_gpu);
+  (void)cudaSetDevice(queue->gpu);
 
-  while (running_.load(std::memory_order_acquire) && state->active.load()) {
-    process_tx_completions(*state);
-    if (!provider_is_healthy(*state)) {
+  while (running_.load(std::memory_order_acquire) && state.active.load()) {
+    process_tx_completions(*queue);
+    if (!provider_is_healthy(state)) {
       break;
     }
     std::this_thread::yield();
   }
 }
 
-void PcieEngine::process_rx_completions(InterfaceState& state) {
-  if (!state.has_rx) {
+void PcieEngine::process_rx_completions(QueueState& queue) {
+  InterfaceState& state = *queue.interface;
+  if (!queue.rx) {
     return;
   }
   std::array<daqiri_pcie_ring_entry, kCompletionPollBatch> completions{};
   size_t count = 0;
   {
     std::lock_guard<std::mutex> provider_lock(state.provider_mutex);
-    count = state.provider->poll_rx_completion(completions.data(), completions.size());
+    count =
+        state.provider->poll_rx_completion(queue.queue_id, completions.data(), completions.size());
   }
 
   std::string failure;
   if (count != 0) {
-    std::lock_guard<std::mutex> slot_lock(state.slot_mutex);
+    std::lock_guard<std::mutex> slot_lock(queue.slot_mutex);
     for (size_t i = 0; i < count; ++i) {
       const auto& completion = completions[i];
       const uint32_t slot = completion_slot(completion);
@@ -682,18 +704,17 @@ void PcieEngine::process_rx_completions(InterfaceState& state) {
         break;
       }
       if (completion_epoch(completion) != state.epoch ||
-          completion_region(completion) != state.rx_region.region_id ||
-          slot >= state.rx_owners.size() || length > state.rx_payload_size ||
-          state.rx_owners[slot] != SlotOwner::DEVICE ||
-          completion_sequence(completion) != state.rx_expected_sequence[slot]) {
+          completion_region(completion) != queue.region.region_id || slot >= queue.owners.size() ||
+          length > queue.payload_size || queue.owners[slot] != SlotOwner::DEVICE ||
+          completion_sequence(completion) != queue.expected_sequence[slot]) {
         failure = "stale, duplicate, or malformed RX completion";
         break;
       }
-      state.rx_owners[slot] = SlotOwner::PENDING;
-      if (state.pending_rx.empty()) {
-        state.pending_since = std::chrono::steady_clock::now();
+      queue.owners[slot] = SlotOwner::PENDING;
+      if (queue.pending.empty()) {
+        queue.pending_since = std::chrono::steady_clock::now();
       }
-      state.pending_rx.push_back(completion);
+      queue.pending.push_back(completion);
     }
   }
   if (!failure.empty()) {
@@ -702,25 +723,26 @@ void PcieEngine::process_rx_completions(InterfaceState& state) {
     return;
   }
 
-  while (state.pending_rx.size() >= state.rx_batch_size && state.active.load()) {
-    if (!publish_rx_burst(state, state.rx_batch_size)) {
+  while (queue.pending.size() >= queue.batch_size && state.active.load()) {
+    if (!publish_rx_burst(queue, queue.batch_size)) {
       return;
     }
   }
-  if (!state.pending_rx.empty() && state.rx_timeout_us != 0) {
+  if (!queue.pending.empty() && queue.timeout_us != 0) {
     const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-        std::chrono::steady_clock::now() - state.pending_since);
-    if (elapsed.count() >= static_cast<int64_t>(state.rx_timeout_us)) {
-      (void)publish_rx_burst(state, state.pending_rx.size());
+        std::chrono::steady_clock::now() - queue.pending_since);
+    if (elapsed.count() >= static_cast<int64_t>(queue.timeout_us)) {
+      (void)publish_rx_burst(queue, queue.pending.size());
     }
   }
 }
 
-bool PcieEngine::publish_rx_burst(InterfaceState& state, size_t count) {
-  if (count == 0 || count > state.pending_rx.size()) {
+bool PcieEngine::publish_rx_burst(QueueState& queue, size_t count) {
+  InterfaceState& state = *queue.interface;
+  if (count == 0 || count > queue.pending.size()) {
     return false;
   }
-  if (!flush_remote_writes(state)) {
+  if (!flush_remote_writes(queue)) {
     mark_unhealthy(state, "CUDA could not make remote writes visible to the owner context");
     return false;
   }
@@ -733,41 +755,41 @@ bool PcieEngine::publish_rx_burst(InterfaceState& state, size_t count) {
     mark_unhealthy(state, "RX metadata allocation failed");
     return false;
   }
-  storage->interface = &state;
+  storage->queue = &queue;
   storage->rx = true;
   storage->slots.reserve(count);
   storage->pointers.reserve(count);
   storage->lengths.reserve(count);
   storage->released.assign(count, 0);
-  auto* base = static_cast<uint8_t*>(state.rx_region.gpu_base);
+  auto* base = static_cast<uint8_t*>(queue.region.gpu_base);
   {
-    std::lock_guard<std::mutex> slot_lock(state.slot_mutex);
+    std::lock_guard<std::mutex> slot_lock(queue.slot_mutex);
     for (size_t i = 0; i < count; ++i) {
-      const uint32_t slot = completion_slot(state.pending_rx[i]);
-      if (slot >= state.rx_owners.size() || state.rx_owners[slot] != SlotOwner::PENDING) {
+      const uint32_t slot = completion_slot(queue.pending[i]);
+      if (slot >= queue.owners.size() || queue.owners[slot] != SlotOwner::PENDING) {
         delete burst;
         delete storage;
         mark_unhealthy(state, "RX slot ownership changed before burst publication");
         return false;
       }
-      state.rx_owners[slot] = SlotOwner::APPLICATION;
+      queue.owners[slot] = SlotOwner::APPLICATION;
       storage->slots.push_back(slot);
-      storage->pointers.push_back(base + static_cast<size_t>(slot) * state.rx_region.slot_stride);
-      storage->lengths.push_back(completion_length(state.pending_rx[i]));
+      storage->pointers.push_back(base + static_cast<size_t>(slot) * queue.region.slot_stride);
+      storage->lengths.push_back(completion_length(queue.pending[i]));
     }
   }
-  state.pending_rx.erase(state.pending_rx.begin(), state.pending_rx.begin() + count);
-  if (!state.pending_rx.empty()) {
-    state.pending_since = std::chrono::steady_clock::now();
+  queue.pending.erase(queue.pending.begin(), queue.pending.begin() + count);
+  if (!queue.pending.empty()) {
+    queue.pending_since = std::chrono::steady_clock::now();
   }
 
   burst->custom_pkt_data = std::shared_ptr<void>(storage);
   burst->hdr.hdr.num_pkts = count;
   burst->hdr.hdr.port_id = state.port;
-  burst->hdr.hdr.q_id = 0;
+  burst->hdr.hdr.q_id = queue.queue_id;
   burst->hdr.hdr.num_segs = 1;
-  burst->hdr.hdr.max_pkt = state.rx_region.slot_count;
-  burst->hdr.hdr.max_pkt_size = static_cast<uint32_t>(state.rx_payload_size);
+  burst->hdr.hdr.max_pkt = queue.region.slot_count;
+  burst->hdr.hdr.max_pkt_size = static_cast<uint32_t>(queue.payload_size);
   burst->hdr.hdr.first_pkt_addr =
       count == 0 ? 0 : reinterpret_cast<uintptr_t>(storage->pointers.front());
   burst->pkts[0] = storage->pointers.data();
@@ -779,23 +801,25 @@ bool PcieEngine::publish_rx_burst(InterfaceState& state, size_t count) {
   burst->hdr.hdr.nbytes = bytes;
 
   {
-    std::lock_guard<std::mutex> ready_lock(state.ready_mutex);
-    state.ready_rx.push_back(burst);
+    std::lock_guard<std::mutex> ready_lock(queue.ready_mutex);
+    queue.ready.push_back(burst);
   }
   rx_packets_.fetch_add(count, std::memory_order_relaxed);
   rx_bytes_.fetch_add(bytes, std::memory_order_relaxed);
   return true;
 }
 
-void PcieEngine::process_tx_completions(InterfaceState& state) {
-  if (!state.has_tx) {
+void PcieEngine::process_tx_completions(QueueState& queue) {
+  InterfaceState& state = *queue.interface;
+  if (queue.rx) {
     return;
   }
   std::array<daqiri_pcie_ring_entry, kCompletionPollBatch> completions{};
   size_t count = 0;
   {
     std::lock_guard<std::mutex> provider_lock(state.provider_mutex);
-    count = state.provider->poll_tx_completion(completions.data(), completions.size());
+    count =
+        state.provider->poll_tx_completion(queue.queue_id, completions.data(), completions.size());
   }
   if (count == 0) {
     return;
@@ -803,7 +827,7 @@ void PcieEngine::process_tx_completions(InterfaceState& state) {
 
   std::string failure;
   {
-    std::lock_guard<std::mutex> slot_lock(state.slot_mutex);
+    std::lock_guard<std::mutex> slot_lock(queue.slot_mutex);
     for (size_t i = 0; i < count; ++i) {
       const auto& completion = completions[i];
       const uint32_t slot = completion_slot(completion);
@@ -812,15 +836,15 @@ void PcieEngine::process_tx_completions(InterfaceState& state) {
         break;
       }
       if (completion_epoch(completion) != state.epoch ||
-          completion_region(completion) != state.tx_region.region_id ||
-          slot >= state.tx_owners.size() || state.tx_owners[slot] != SlotOwner::DEVICE ||
-          completion_sequence(completion) != state.tx_expected_sequence[slot] ||
-          completion_length(completion) != state.tx_expected_length[slot]) {
+          completion_region(completion) != queue.region.region_id || slot >= queue.owners.size() ||
+          queue.owners[slot] != SlotOwner::DEVICE ||
+          completion_sequence(completion) != queue.expected_sequence[slot] ||
+          completion_length(completion) != queue.expected_length[slot]) {
         failure = "stale, duplicate, or malformed TX completion";
         break;
       }
-      state.tx_owners[slot] = SlotOwner::FREE;
-      state.free_tx_slots.push_back(slot);
+      queue.owners[slot] = SlotOwner::FREE;
+      queue.free_slots.push_back(slot);
     }
   }
   if (!failure.empty()) {
@@ -902,13 +926,16 @@ bool PcieEngine::is_tx_burst_available(BurstParams* burst) {
     return false;
   }
   auto* state = find_interface(burst->hdr.hdr.port_id);
-  if (state == nullptr || !state->has_tx || !state->active.load() || burst->hdr.hdr.q_id != 0 ||
-      burst->hdr.hdr.num_pkts == 0 || burst->hdr.hdr.num_pkts > state->tx_batch_size ||
-      burst->hdr.hdr.num_pkts > state->tx_region.slot_count) {
+  if (state == nullptr || !state->active.load() || burst->hdr.hdr.num_pkts == 0) {
     return false;
   }
-  std::lock_guard<std::mutex> lock(state->slot_mutex);
-  return state->free_tx_slots.size() >= burst->hdr.hdr.num_pkts;
+  auto* queue = find_queue(*state, false, burst->hdr.hdr.q_id);
+  if (queue == nullptr || burst->hdr.hdr.num_pkts > queue->batch_size ||
+      burst->hdr.hdr.num_pkts > queue->region.slot_count) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(queue->slot_mutex);
+  return queue->free_slots.size() >= burst->hdr.hdr.num_pkts;
 }
 
 Status PcieEngine::get_tx_packet_burst(BurstParams* burst) {
@@ -918,14 +945,17 @@ Status PcieEngine::get_tx_packet_burst(BurstParams* burst) {
   if (!healthy_.load(std::memory_order_acquire) || !accepting_tx_.load(std::memory_order_acquire)) {
     return Status::INTERNAL_ERROR;
   }
-  if (burst_storage(burst) != nullptr || burst->hdr.hdr.num_segs != 1 || burst->hdr.hdr.q_id != 0 ||
+  if (burst_storage(burst) != nullptr || burst->hdr.hdr.num_segs != 1 ||
       burst->hdr.hdr.num_pkts == 0) {
     return Status::INVALID_PARAMETER;
   }
   auto* state = find_interface(burst->hdr.hdr.port_id);
-  if (state == nullptr || !state->has_tx || !state->active.load(std::memory_order_acquire) ||
-      burst->hdr.hdr.num_pkts > state->tx_region.slot_count ||
-      burst->hdr.hdr.num_pkts > state->tx_batch_size) {
+  if (state == nullptr || !state->active.load(std::memory_order_acquire)) {
+    return Status::INVALID_PARAMETER;
+  }
+  auto* queue = find_queue(*state, false, burst->hdr.hdr.q_id);
+  if (queue == nullptr || burst->hdr.hdr.num_pkts > queue->region.slot_count ||
+      burst->hdr.hdr.num_pkts > queue->batch_size) {
     return Status::INVALID_PARAMETER;
   }
 
@@ -933,7 +963,7 @@ Status PcieEngine::get_tx_packet_burst(BurstParams* burst) {
   if (storage == nullptr) {
     return Status::NO_FREE_BURST_BUFFERS;
   }
-  storage->interface = state;
+  storage->queue = queue;
   storage->rx = false;
   const size_t count = burst->hdr.hdr.num_pkts;
   storage->slots.reserve(count);
@@ -941,32 +971,32 @@ Status PcieEngine::get_tx_packet_burst(BurstParams* burst) {
   storage->lengths.assign(count, 0);
   storage->released.assign(count, 0);
   {
-    std::lock_guard<std::mutex> lock(state->slot_mutex);
+    std::lock_guard<std::mutex> lock(queue->slot_mutex);
     if (!accepting_tx_.load(std::memory_order_acquire) ||
         !state->active.load(std::memory_order_acquire)) {
       delete storage;
       return Status::INTERNAL_ERROR;
     }
-    if (state->free_tx_slots.size() < count) {
+    if (queue->free_slots.size() < count) {
       delete storage;
       tx_backpressure_.fetch_add(1, std::memory_order_relaxed);
       return Status::NO_FREE_PACKET_BUFFERS;
     }
-    auto* base = static_cast<uint8_t*>(state->tx_region.gpu_base);
+    auto* base = static_cast<uint8_t*>(queue->region.gpu_base);
     for (size_t i = 0; i < count; ++i) {
-      const uint32_t slot = state->free_tx_slots.front();
-      state->free_tx_slots.pop_front();
-      state->tx_owners[slot] = SlotOwner::APPLICATION;
+      const uint32_t slot = queue->free_slots.front();
+      queue->free_slots.pop_front();
+      queue->owners[slot] = SlotOwner::APPLICATION;
       storage->slots.push_back(slot);
-      storage->pointers.push_back(base + static_cast<size_t>(slot) * state->tx_region.slot_stride);
+      storage->pointers.push_back(base + static_cast<size_t>(slot) * queue->region.slot_stride);
     }
   }
 
   burst->custom_pkt_data = std::shared_ptr<void>(storage);
   burst->pkts[0] = storage->pointers.data();
   burst->pkt_lens[0] = storage->lengths.data();
-  burst->hdr.hdr.max_pkt = state->tx_region.slot_count;
-  burst->hdr.hdr.max_pkt_size = static_cast<uint32_t>(state->tx_payload_size);
+  burst->hdr.hdr.max_pkt = queue->region.slot_count;
+  burst->hdr.hdr.max_pkt_size = static_cast<uint32_t>(queue->payload_size);
   burst->hdr.hdr.first_pkt_addr = reinterpret_cast<uintptr_t>(storage->pointers.front());
   return Status::SUCCESS;
 }
@@ -979,8 +1009,7 @@ Status PcieEngine::set_packet_lengths(BurstParams* burst, int idx,
     return Status::INVALID_PARAMETER;
   }
   const int length = *lens.begin();
-  const size_t maximum =
-      storage->rx ? storage->interface->rx_payload_size : storage->interface->tx_payload_size;
+  const size_t maximum = storage->queue->payload_size;
   if (length < 0 || static_cast<size_t>(length) > maximum) {
     return Status::INVALID_PARAMETER;
   }
@@ -1033,28 +1062,29 @@ Status PcieEngine::set_packet_tx_time(BurstParams* burst, int idx, uint64_t time
 
 bool PcieEngine::release_packet(BurstParams* burst, int pkt) {
   auto* storage = burst_storage(burst);
-  if (storage == nullptr || storage->interface == nullptr || pkt < 0 ||
-      pkt >= static_cast<int>(storage->slots.size())) {
+  if (storage == nullptr || storage->queue == nullptr || storage->queue->interface == nullptr ||
+      pkt < 0 || pkt >= static_cast<int>(storage->slots.size())) {
     return false;
   }
   std::lock_guard<std::mutex> storage_lock(storage->mutex);
   if (storage->released[pkt] != 0 || storage->submitted) {
     return false;
   }
-  InterfaceState& state = *storage->interface;
+  QueueState& queue = *storage->queue;
+  InterfaceState& state = *queue.interface;
   const uint32_t slot = storage->slots[pkt];
   if (storage->rx) {
-    if (!post_rx_slot(state, slot)) {
+    if (!post_rx_slot(queue, slot)) {
       mark_unhealthy(state, "RX credit ring rejected a returned application slot");
       return false;
     }
   } else {
-    std::lock_guard<std::mutex> slot_lock(state.slot_mutex);
-    if (slot >= state.tx_owners.size() || state.tx_owners[slot] != SlotOwner::APPLICATION) {
+    std::lock_guard<std::mutex> slot_lock(queue.slot_mutex);
+    if (slot >= queue.owners.size() || queue.owners[slot] != SlotOwner::APPLICATION) {
       return false;
     }
-    state.tx_owners[slot] = SlotOwner::FREE;
-    state.free_tx_slots.push_back(slot);
+    queue.owners[slot] = SlotOwner::FREE;
+    queue.free_slots.push_back(slot);
   }
   storage->released[pkt] = 1;
   storage->pointers[pkt] = nullptr;
@@ -1116,10 +1146,12 @@ void PcieEngine::free_tx_metadata(BurstParams* burst) {
 
 Status PcieEngine::send_tx_burst(BurstParams* burst) {
   auto* storage = burst_storage(burst);
-  if (burst == nullptr || storage == nullptr || storage->rx || storage->interface == nullptr) {
+  if (burst == nullptr || storage == nullptr || storage->rx || storage->queue == nullptr ||
+      storage->queue->interface == nullptr) {
     return Status::INVALID_PARAMETER;
   }
-  InterfaceState& state = *storage->interface;
+  QueueState& queue = *storage->queue;
+  InterfaceState& state = *queue.interface;
   if (!accepting_tx_.load(std::memory_order_acquire) || !state.active.load()) {
     return Status::INTERNAL_ERROR;
   }
@@ -1129,31 +1161,31 @@ Status PcieEngine::send_tx_burst(BurstParams* burst) {
   uint64_t bytes = 0;
   {
     std::lock_guard<std::mutex> storage_lock(storage->mutex);
-    std::lock_guard<std::mutex> slot_lock(state.slot_mutex);
+    std::lock_guard<std::mutex> slot_lock(queue.slot_mutex);
     for (size_t i = 0; i < storage->slots.size(); ++i) {
       const uint32_t slot = storage->slots[i];
-      if (storage->released[i] != 0 || slot >= state.tx_owners.size() ||
-          state.tx_owners[slot] != SlotOwner::APPLICATION ||
-          storage->lengths[i] > state.tx_payload_size) {
+      if (storage->released[i] != 0 || slot >= queue.owners.size() ||
+          queue.owners[slot] != SlotOwner::APPLICATION ||
+          storage->lengths[i] > queue.payload_size) {
         return Status::INVALID_PARAMETER;
       }
     }
     for (size_t i = 0; i < storage->slots.size(); ++i) {
       const uint32_t slot = storage->slots[i];
       const uint32_t length = storage->lengths[i];
-      const uint64_t sequence = state.next_sequence++;
-      state.tx_expected_sequence[slot] = sequence;
-      state.tx_expected_length[slot] = length;
-      state.tx_owners[slot] = SlotOwner::DEVICE;
-      entries.push_back(make_entry(state.epoch, sequence, state.tx_region.region_id, slot, length));
+      const uint64_t sequence = queue.next_sequence++;
+      queue.expected_sequence[slot] = sequence;
+      queue.expected_length[slot] = length;
+      queue.owners[slot] = SlotOwner::DEVICE;
+      entries.push_back(make_entry(state.epoch, sequence, queue.region.region_id, slot, length));
       bytes += length;
     }
     std::lock_guard<std::mutex> provider_lock(state.provider_mutex);
     if (!accepting_tx_.load(std::memory_order_acquire) ||
         !state.active.load(std::memory_order_acquire) ||
-        !state.provider->post_tx_submission(entries.data(), entries.size())) {
+        !state.provider->post_tx_submission(queue.queue_id, entries.data(), entries.size())) {
       for (uint32_t slot : storage->slots) {
-        state.tx_owners[slot] = SlotOwner::APPLICATION;
+        queue.owners[slot] = SlotOwner::APPLICATION;
       }
       tx_backpressure_.fetch_add(1, std::memory_order_relaxed);
     } else {
@@ -1181,15 +1213,19 @@ Status PcieEngine::get_rx_burst(BurstParams** burst, int port, int q) {
     return Status::INTERNAL_ERROR;
   }
   auto* state = find_interface(static_cast<uint16_t>(port));
-  if (state == nullptr || !state->has_rx || q != 0) {
+  if (state == nullptr || q < 0 || q > UINT16_MAX) {
     return Status::INVALID_PARAMETER;
   }
-  std::lock_guard<std::mutex> lock(state->ready_mutex);
-  if (state->ready_rx.empty()) {
+  auto* queue = find_queue(*state, true, static_cast<uint16_t>(q));
+  if (queue == nullptr) {
+    return Status::INVALID_PARAMETER;
+  }
+  std::lock_guard<std::mutex> lock(queue->ready_mutex);
+  if (queue->ready.empty()) {
     return Status::NULL_PTR;
   }
-  *burst = state->ready_rx.front();
-  state->ready_rx.pop_front();
+  *burst = queue->ready.front();
+  queue->ready.pop_front();
   return Status::SUCCESS;
 }
 
@@ -1229,7 +1265,6 @@ void PcieEngine::shutdown() {
   running_.store(false, std::memory_order_release);
   for (auto& state : interfaces_) {
     if (state != nullptr) {
-      std::lock_guard<std::mutex> slot_lock(state->slot_mutex);
       state->active.store(false, std::memory_order_release);
     }
   }
@@ -1257,11 +1292,18 @@ void PcieEngine::shutdown() {
     state->provider_started = false;
   }
   for (auto& state : interfaces_) {
-    if (state != nullptr && state->rx_worker.joinable()) {
-      state->rx_worker.join();
+    if (state == nullptr) {
+      continue;
     }
-    if (state != nullptr && state->tx_worker.joinable()) {
-      state->tx_worker.join();
+    for (auto& queue : state->rx_queues) {
+      if (queue->worker.joinable()) {
+        queue->worker.join();
+      }
+    }
+    for (auto& queue : state->tx_queues) {
+      if (queue->worker.joinable()) {
+        queue->worker.join();
+      }
     }
   }
 
@@ -1269,20 +1311,22 @@ void PcieEngine::shutdown() {
     if (state == nullptr) {
       continue;
     }
-    {
-      std::lock_guard<std::mutex> ready_lock(state->ready_mutex);
-      while (!state->ready_rx.empty()) {
-        delete_burst(state->ready_rx.front());
-        state->ready_rx.pop_front();
+    for (auto& queue : state->rx_queues) {
+      {
+        std::lock_guard<std::mutex> ready_lock(queue->ready_mutex);
+        while (!queue->ready.empty()) {
+          delete_burst(queue->ready.front());
+          queue->ready.pop_front();
+        }
       }
+      queue->pending.clear();
     }
-    state->pending_rx.clear();
     if (state->quiesce_failed) {
-      if (state->has_rx) {
-        ar_[state->rx_mr_name].deallocator_ = AllocRegion::Deallocator::NONE;
+      for (const auto& queue : state->rx_queues) {
+        ar_[queue->mr_name].deallocator_ = AllocRegion::Deallocator::NONE;
       }
-      if (state->has_tx) {
-        ar_[state->tx_mr_name].deallocator_ = AllocRegion::Deallocator::NONE;
+      for (const auto& queue : state->tx_queues) {
+        ar_[queue->mr_name].deallocator_ = AllocRegion::Deallocator::NONE;
       }
       (void)state->provider.release();
       state->dmabuf_fds.clear();
@@ -1322,9 +1366,12 @@ bool PcieEngine::validate_config() const {
 
   std::unordered_set<std::string> used_regions;
   for (const auto& interface : cfg_.ifs_) {
-    if (interface.rx_.queues_.size() > 1 || interface.tx_.queues_.size() > 1) {
-      DAQIRI_LOG_ERROR("PCIe interface '{}' supports only one RX and one TX queue",
-                       interface.name_);
+    const size_t queue_count = interface.rx_.queues_.size() + interface.tx_.queues_.size();
+    if (interface.rx_.queues_.size() > DAQIRI_PCIE_MAX_QUEUES_PER_DIRECTION ||
+        interface.tx_.queues_.size() > DAQIRI_PCIE_MAX_QUEUES_PER_DIRECTION ||
+        queue_count > DAQIRI_PCIE_MAX_QUEUES) {
+      DAQIRI_LOG_ERROR("PCIe interface '{}' exceeds the {}-queue limit", interface.name_,
+                       DAQIRI_PCIE_MAX_QUEUES);
       valid = false;
     }
     if (interface.rx_.queues_.empty() && interface.tx_.queues_.empty()) {
@@ -1350,13 +1397,28 @@ bool PcieEngine::validate_config() const {
       valid = false;
     }
 
+    std::unordered_set<uint16_t> rx_ids;
+    std::unordered_set<uint16_t> tx_ids;
     auto validate_queue = [&](const auto& queue, bool tx) {
-      if (queue.common_.id_ != 0 || queue.common_.batch_size_ <= 0 ||
-          queue.common_.mrs_.size() != 1 || !queue.common_.offloads_.empty() ||
-          queue.common_.split_boundary_ != 0 || queue.common_.extra_queue_config_ != nullptr) {
+      const int queue_id = queue.common_.id_;
+      if (queue_id < 0 || queue_id > UINT16_MAX) {
+        DAQIRI_LOG_ERROR("PCIe {} queue '{}' ID must be in the range [0, {}]", tx ? "TX" : "RX",
+                         queue.common_.name_, UINT16_MAX);
+        valid = false;
+        return;
+      }
+      auto& ids = tx ? tx_ids : rx_ids;
+      if (!ids.emplace(queue_id).second) {
+        DAQIRI_LOG_ERROR("PCIe {} queue ID {} is duplicated on interface '{}'", tx ? "TX" : "RX",
+                         queue.common_.id_, interface.name_);
+        valid = false;
+      }
+      if (queue.common_.batch_size_ <= 0 || queue.common_.mrs_.size() != 1 ||
+          !queue.common_.offloads_.empty() || queue.common_.split_boundary_ != 0 ||
+          queue.common_.extra_queue_config_ != nullptr) {
         DAQIRI_LOG_ERROR(
-            "PCIe {} queue '{}' must use id 0, one MR, a positive batch size, and "
-            "no HDS, offloads, or engine-specific queue data",
+            "PCIe {} queue '{}' must use one MR, a positive batch size, and no HDS, "
+            "offloads, or engine-specific queue data",
             tx ? "TX" : "RX", queue.common_.name_);
         valid = false;
         return;
@@ -1384,15 +1446,16 @@ bool PcieEngine::validate_config() const {
         valid = false;
       }
       if (!used_regions.emplace(mr_name).second) {
-        DAQIRI_LOG_ERROR("PCIe MR '{}' is shared by multiple directions/interfaces", mr_name);
+        DAQIRI_LOG_ERROR("PCIe MR '{}' is shared by multiple queues/directions/interfaces",
+                         mr_name);
         valid = false;
       }
     };
-    if (!interface.rx_.queues_.empty()) {
-      validate_queue(interface.rx_.queues_.front(), false);
+    for (const auto& queue : interface.rx_.queues_) {
+      validate_queue(queue, false);
     }
-    if (!interface.tx_.queues_.empty()) {
-      validate_queue(interface.tx_.queues_.front(), true);
+    for (const auto& queue : interface.tx_.queues_) {
+      validate_queue(queue, true);
     }
   }
   return Engine::validate_config() && valid;

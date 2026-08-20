@@ -21,6 +21,16 @@ daqiri:
       affinity: 2                 # Must be the peer-capable GPU
       num_bufs: 1024
       buf_size: 1048576
+    - name: "BF3_TX_GPU_1"
+      kind: "device"
+      affinity: 2
+      num_bufs: 1024
+      buf_size: 1048576
+    - name: "BF3_RX_GPU_1"
+      kind: "device"
+      affinity: 2
+      num_bufs: 1024
+      buf_size: 1048576
 
     interfaces:
     - name: "bf3emu0"
@@ -33,6 +43,11 @@ daqiri:
           cpu_core: 2
           batch_size: 32
           memory_regions: ["BF3_TX_GPU"]
+        - name: "tx1"
+          id: 1
+          cpu_core: 4
+          batch_size: 32
+          memory_regions: ["BF3_TX_GPU_1"]
       rx:
         queues:
         - name: "rx0"
@@ -41,6 +56,12 @@ daqiri:
           timeout_us: 100
           batch_size: 32
           memory_regions: ["BF3_RX_GPU"]
+        - name: "rx1"
+          id: 1
+          cpu_core: 5
+          timeout_us: 100
+          batch_size: 32
+          memory_regions: ["BF3_RX_GPU_1"]
 
 pcie_bench:
   interface_name: "bf3emu0"

@@ -70,26 +70,28 @@ class PcieEngine final : public Engine {
 
  private:
   struct InterfaceState;
+  struct QueueState;
   struct BurstStorage;
 
   InterfaceState* find_interface(uint16_t port);
   const InterfaceState* find_interface(uint16_t port) const;
+  static QueueState* find_queue(InterfaceState& state, bool rx, uint16_t queue_id);
   static BurstStorage* burst_storage(BurstParams* burst);
   static const BurstStorage* burst_storage(const BurstParams* burst);
 
   bool initialize_interface(InterfaceState& state, const InterfaceConfig& config);
-  bool initialize_cuda_ordering(InterfaceState& state);
-  bool register_region(InterfaceState& state, const std::string& mr_name, bool rx);
-  bool post_initial_rx_slots(InterfaceState& state);
-  bool post_rx_slot(InterfaceState& state, uint32_t slot_id);
-  void retry_deferred_rx_slots(InterfaceState& state);
-  bool flush_remote_writes(InterfaceState& state);
-  void rx_worker_loop(InterfaceState* state);
-  void tx_worker_loop(InterfaceState* state);
+  bool initialize_cuda_ordering(QueueState& queue);
+  bool register_region(InterfaceState& state, QueueState& queue);
+  bool post_initial_rx_slots(QueueState& queue);
+  bool post_rx_slot(QueueState& queue, uint32_t slot_id);
+  void retry_deferred_rx_slots(QueueState& queue);
+  bool flush_remote_writes(QueueState& queue);
+  void rx_worker_loop(QueueState* queue);
+  void tx_worker_loop(QueueState* queue);
   bool provider_is_healthy(InterfaceState& state);
-  void process_rx_completions(InterfaceState& state);
-  void process_tx_completions(InterfaceState& state);
-  bool publish_rx_burst(InterfaceState& state, size_t count);
+  void process_rx_completions(QueueState& queue);
+  void process_tx_completions(QueueState& queue);
+  bool publish_rx_burst(QueueState& queue, size_t count);
   bool release_packet(BurstParams* burst, int pkt);
   void reclaim_unsent_tx(BurstParams* burst);
   void mark_unhealthy(InterfaceState& state, const std::string& reason);

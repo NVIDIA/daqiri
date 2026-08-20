@@ -57,10 +57,10 @@ driver and 3rd-party device implementation of the completion protocol.
   VLAN push/pop and VXLAN, GRE, or NVGRE encap/decap actions; socket/RDMA streams reject
   those tunnel actions.
 - **RDMA** — RDMA verbs (READ, WRITE, SEND) over RoCE on Ethernet NICs or InfiniBand.
-- **Programmable PCIe devices** — Single-queue RX/TX batches directly between a
-  3rd-party device and GPU BAR1 memory, with explicit ownership completions and
-  an included
-  deterministic software-loopback test.
+- **Programmable PCIe devices** — Multi-queue RX/TX batches directly between a
+  3rd-party device and GPU BAR1 memory. Every queue binds a separate memory
+  region and has its own work ring, completion ring, and doorbell; an included
+  deterministic software loopback validates the ownership protocol.
 - **Linux socket control** — TCP/UDP socket streams expose connection IDs and
   `socket_setsockopt()` for native Linux `setsockopt` tuning without YAML option
   name mappings.

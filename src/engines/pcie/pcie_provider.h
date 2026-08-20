@@ -19,6 +19,7 @@ namespace daqiri::pcie {
 struct ProviderCaps {
   uint64_t capabilities = 0;
   uint32_t max_regions = 0;
+  uint32_t max_queues = 0;
   uint32_t max_ring_depth = 0;
   uint32_t min_slot_alignment = 256;
 };
@@ -34,9 +35,16 @@ struct RegionRegistration {
   int gpu_device = -1;
 };
 
+struct QueueRegistration {
+  uint16_t queue_id = 0;
+  daqiri_pcie_direction direction = DAQIRI_PCIE_DIRECTION_RX;
+  uint32_t region_id = 0;
+  uint32_t depth = 0;
+};
+
 struct QueueConfiguration {
   uint64_t epoch = 0;
-  uint32_t depths[DAQIRI_PCIE_RING_COUNT]{};
+  std::vector<QueueRegistration> queues;
 };
 
 class Provider {
@@ -49,10 +57,14 @@ class Provider {
   virtual bool configure(const QueueConfiguration& config) = 0;
   virtual bool start(uint64_t epoch) = 0;
 
-  virtual bool post_rx_available(const daqiri_pcie_ring_entry* entries, size_t count) = 0;
-  virtual bool post_tx_submission(const daqiri_pcie_ring_entry* entries, size_t count) = 0;
-  virtual size_t poll_rx_completion(daqiri_pcie_ring_entry* entries, size_t capacity) = 0;
-  virtual size_t poll_tx_completion(daqiri_pcie_ring_entry* entries, size_t capacity) = 0;
+  virtual bool post_rx_available(uint16_t queue_id, const daqiri_pcie_ring_entry* entries,
+                                 size_t count) = 0;
+  virtual bool post_tx_submission(uint16_t queue_id, const daqiri_pcie_ring_entry* entries,
+                                  size_t count) = 0;
+  virtual size_t poll_rx_completion(uint16_t queue_id, daqiri_pcie_ring_entry* entries,
+                                    size_t capacity) = 0;
+  virtual size_t poll_tx_completion(uint16_t queue_id, daqiri_pcie_ring_entry* entries,
+                                    size_t capacity) = 0;
 
   virtual bool stop(uint32_t timeout_ms) = 0;
   // A successful reset synchronously stops all DMA before returning and

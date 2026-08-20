@@ -113,7 +113,7 @@ The repository ships a BF3 platform harness in
 generic PCIe device controller, not a replacement for the DAQIRI ABI: its host
 driver implements the character-device protocol in
 `include/daqiri/pcie_abi.h`, and its DPU process implements the device side of
-the four ownership rings.
+the per-queue ownership rings and doorbells.
 
 Before building the harness, configure the BF3 in DPU mode with DOCA 2.7 or
 newer and firmware 32.41.1000 or newer. Enable
@@ -131,10 +131,10 @@ GPU ordinal in the supplied configuration:
   ./build/examples/daqiri_bench_pcie_bf3.yaml --seconds 30 --mode rx
 ```
 
-`rx` enables only the RX-available and RX-completion rings. The supplied BF3
-controller submits up to 128 independent DPU-memory-to-GPU DMA writes, waits
-once for the batch, and advances each ring counter once. There is no Ethernet
-or packet-steering data path. `tx` independently measures GPU-to-DPU reads;
+`rx` enables only RX queues. The supplied BF3 controller submits up to 128
+independent DPU-memory-to-GPU DMA writes per queue, waits once for each batch,
+and advances that queue's ring counters once. There is no Ethernet or
+packet-steering data path. `tx` independently measures GPU-to-DPU reads;
 neither direction depends on the other. Do not accept a host-staged copy as a
 passing hardware result: a successful run requires CUDA DMA-BUF export, driver
 attachment to the BF3 function, and BF3 peer DMA.
@@ -155,8 +155,9 @@ errors, but it does not initialize or inspect packet contents.
 
 Start from the loopback YAML, remove `loopback: "sw"`, and replace
 `address: "loopback"` with the 3rd-party device PCI domain/bus/device/function, for example
-`0000:65:00.0`. A production interface has exactly one queue in each enabled
-direction, and every queue has ID `0`:
+`0000:65:00.0`. An interface may have up to eight queues in each direction.
+Queue IDs must be unique within a direction, and each queue references its own
+GPU memory region:
 
 ```yaml
 daqiri:
@@ -176,6 +177,11 @@ daqiri:
       affinity: 0
       num_bufs: 4096
       buf_size: 1048576
+    - name: "RX_GPU_1"
+      kind: "device"
+      affinity: 0
+      num_bufs: 4096
+      buf_size: 1048576
 
     interfaces:
     - name: "pcie0"
@@ -188,6 +194,12 @@ daqiri:
           batch_size: 32
           timeout_us: 100
           memory_regions: ["RX_GPU"]
+        - name: "rx1"
+          id: 1
+          cpu_core: 10
+          batch_size: 32
+          timeout_us: 100
+          memory_regions: ["RX_GPU_1"]
       tx:
         queues:
         - name: "tx0"
@@ -197,12 +209,14 @@ daqiri:
           memory_regions: ["TX_GPU"]
 ```
 
-Each direction must reference one distinct, DAQIRI-owned `device` memory region.
-Regions cannot be shared between RX and TX or between interfaces. PCIe v1 does
-not support host memory, multiple segments/HDS, multiple queues, flow rules,
-reorder plans, timestamps, offloads, pacing, accurate send, or socket/RoCE
-blocks. Static use of one of those features fails initialization; corresponding
-runtime-only APIs return `Status::NOT_SUPPORTED`.
+Each queue must reference one distinct, DAQIRI-owned `device` memory region.
+Regions cannot be shared between queues, directions, or interfaces. Multiple
+queues provide independent DMA pipelines and separate destination/source memory
+regions; queue selection is performed by the application API and never by a
+flow rule. PCIe v1 does not support host memory, multiple segments/HDS, flow
+rules, reorder plans, timestamps, offloads, pacing, accurate send, or
+socket/RoCE blocks. Static use of one of those features fails initialization;
+corresponding runtime-only APIs return `Status::NOT_SUPPORTED`.
 
 ## Buffer ownership and CUDA ordering
 
@@ -250,13 +264,18 @@ driver operations are:
 - get capabilities;
 - register and unregister a region;
 - configure the queue rings;
+- ring a queue doorbell after publishing work or reclaiming completions;
 - start;
 - stop and acknowledge DMA quiescence;
 - reset; and
 - get status.
 
-One host-coherent single-producer/single-consumer ring is used for each
-ownership transition:
+Every queue owns one host-coherent single-producer/single-consumer work ring,
+one completion ring, and one BAR doorbell. Queue rings are never shared, even
+when an RX and TX queue use the same numeric queue ID. A doorbell is stateful:
+the producer increments its value after publishing work, and DAQIRI also rings
+it after consuming completions so a device stalled on a full completion ring
+can resume. The ring roles are:
 
 | Ring | Producer → consumer | Meaning |
 | --- | --- | --- |
@@ -267,7 +286,7 @@ ownership transition:
 
 The canonical C-compatible layout is
 [`include/daqiri/pcie_abi.h`](https://github.com/NVIDIA/daqiri/blob/main/include/daqiri/pcie_abi.h).
-The shared ABI has magic `DQPC`, version `1.0`, and little-endian 32-byte
+The shared ABI has magic `DQPC`, version `1.1`, and little-endian 32-byte
 entries containing `epoch:u64`, `sequence:u64`, `region_id:u32`, `slot_id:u32`,
 `length:u32`, `status:u16`, and `flags:u16`. Ring depths are powers of two;
 producer and consumer use cache-line-separated monotonic 64-bit counters. A
@@ -282,8 +301,8 @@ further submission.
 Stable completion status values are `OK`, `BAD_DESCRIPTOR`, `LENGTH_ERROR`,
 `DMA_FAULT`, `DEVICE_RESET`, and `INTERNAL_ERROR`. `DMABUF_PCIE` and
 `DMA_FENCE` are required in v1; `DEVICE_RESET` describes optional reset
-support, and `NV_P2P` remains reserved. A driver must advertise only behavior
-it implements.
+support, `MULTI_QUEUE` advertises independent queue rings and doorbells, and
+`NV_P2P` remains reserved. A driver must advertise only behavior it implements.
 
 ### Character-device discovery and exclusivity
 

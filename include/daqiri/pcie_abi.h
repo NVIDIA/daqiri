@@ -31,7 +31,7 @@ extern "C" {
 
 #define DAQIRI_PCIE_ABI_MAGIC 0x43505144U /* "DQPC" on little-endian hosts */
 #define DAQIRI_PCIE_ABI_VERSION_MAJOR 1U
-#define DAQIRI_PCIE_ABI_VERSION_MINOR 0U
+#define DAQIRI_PCIE_ABI_VERSION_MINOR 1U
 
 /* Production character-device discovery contract for a configured PCI BDF. */
 #define DAQIRI_PCIE_SYSFS_CHAR_ATTRIBUTE "daqiri_pcie/char"
@@ -42,6 +42,10 @@ extern "C" {
 #define DAQIRI_PCIE_CAP_NV_P2P (1ULL << 1)
 #define DAQIRI_PCIE_CAP_DMA_FENCE (1ULL << 2)
 #define DAQIRI_PCIE_CAP_DEVICE_RESET (1ULL << 3)
+#define DAQIRI_PCIE_CAP_MULTI_QUEUE (1ULL << 4)
+
+#define DAQIRI_PCIE_MAX_QUEUES_PER_DIRECTION 8U
+#define DAQIRI_PCIE_MAX_QUEUES (2U * DAQIRI_PCIE_MAX_QUEUES_PER_DIRECTION)
 
 #define DAQIRI_PCIE_STATUS_FLAG_RUNNING (1U << 0)
 #define DAQIRI_PCIE_STATUS_FLAG_QUIESCED (1U << 1)
@@ -52,12 +56,10 @@ enum daqiri_pcie_direction {
   DAQIRI_PCIE_DIRECTION_TX = 1,
 };
 
-enum daqiri_pcie_ring_id {
-  DAQIRI_PCIE_RING_RX_AVAILABLE = 0,
-  DAQIRI_PCIE_RING_RX_COMPLETION = 1,
-  DAQIRI_PCIE_RING_TX_SUBMISSION = 2,
-  DAQIRI_PCIE_RING_TX_COMPLETION = 3,
-  DAQIRI_PCIE_RING_COUNT = 4,
+enum daqiri_pcie_ring_role {
+  DAQIRI_PCIE_RING_WORK = 0,
+  DAQIRI_PCIE_RING_COMPLETION = 1,
+  DAQIRI_PCIE_RINGS_PER_QUEUE = 2,
 };
 
 enum daqiri_pcie_completion_status {
@@ -123,7 +125,7 @@ struct daqiri_pcie_ioctl_caps {
   uint32_t max_regions;
   uint32_t max_ring_depth;
   uint32_t min_slot_alignment;
-  uint32_t reserved0;
+  uint32_t max_queues;
   uint64_t reserved[4];
 };
 
@@ -152,20 +154,41 @@ struct daqiri_pcie_ring_mapping {
   uint32_t reserved0;
 };
 
+struct daqiri_pcie_queue_mapping {
+  uint16_t queue_id;
+  uint8_t direction;
+  uint8_t reserved0;
+  uint32_t region_id;
+  uint32_t requested_depth;
+  uint32_t doorbell_id; /* driver output */
+  struct daqiri_pcie_ring_mapping rings[DAQIRI_PCIE_RINGS_PER_QUEUE];
+};
+
 /*
- * CONFIGURE_QUEUES asks the driver to allocate one coherent mmap area. The
- * returned offsets are relative to mmap_offset within that mapping. A zero
- * depth disables the corresponding direction/ring.
+ * CONFIGURE_QUEUES asks the driver to allocate one coherent mmap area. Each
+ * queue binds exactly one registered region and owns an independent work ring,
+ * completion ring, and doorbell. Returned ring offsets are relative to
+ * mmap_offset within that mapping.
  */
 struct daqiri_pcie_ioctl_configure_queues {
   struct daqiri_pcie_ioctl_header header;
   uint64_t epoch;
-  uint32_t requested_depth[DAQIRI_PCIE_RING_COUNT];
-  uint32_t reserved0[4];
+  uint32_t num_queues;
+  uint32_t reserved0;
   uint64_t mmap_offset;
   uint64_t mmap_bytes;
-  struct daqiri_pcie_ring_mapping rings[DAQIRI_PCIE_RING_COUNT];
+  struct daqiri_pcie_queue_mapping queues[DAQIRI_PCIE_MAX_QUEUES];
   uint64_t reserved[4];
+};
+
+struct daqiri_pcie_ioctl_ring_doorbell {
+  struct daqiri_pcie_ioctl_header header;
+  uint16_t queue_id;
+  uint8_t direction;
+  uint8_t reserved0;
+  uint32_t doorbell_id;
+  uint32_t value;
+  uint32_t reserved1;
 };
 
 struct daqiri_pcie_ioctl_start {
@@ -210,6 +233,8 @@ struct daqiri_pcie_ioctl_status {
 #define DAQIRI_PCIE_IOCTL_RESET _IOW(DAQIRI_PCIE_IOCTL_TYPE, 0x06, struct daqiri_pcie_ioctl_reset)
 #define DAQIRI_PCIE_IOCTL_GET_STATUS \
   _IOWR(DAQIRI_PCIE_IOCTL_TYPE, 0x07, struct daqiri_pcie_ioctl_status)
+#define DAQIRI_PCIE_IOCTL_RING_DOORBELL \
+  _IOW(DAQIRI_PCIE_IOCTL_TYPE, 0x08, struct daqiri_pcie_ioctl_ring_doorbell)
 #endif
 
 #ifdef __cplusplus

@@ -100,8 +100,10 @@ URI schemes:
 Path for sensors that appear directly on the PCIe bus, such as FPGAs, frame
 grabbers, or custom acquisition cards. PCIe uses the normal DAQIRI burst API to
 move data to or from DAQIRI-owned NVIDIA GPU `device` memory. Each interface has
-at most one RX and one TX queue, both with ID `0`; flow steering and multi-queue
-operation do not apply.
+up to eight RX and eight TX queues. Every queue binds exactly one distinct GPU
+memory region and owns an independent work ring, completion ring, and doorbell.
+PCIe queues provide parallelism and separation between memory regions; they do
+not classify traffic, and PCIe flow steering does not exist.
 
 DAQIRI exports the GPU allocation as a PCIe BAR1 DMA-BUF and passes it to the
 board driver. Applications do not select DMA-BUF or `nvidia-peermem`, and an

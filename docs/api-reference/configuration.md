@@ -162,7 +162,9 @@ engine.
 
 - **`name`**: Queue name.
   - type: `string`
-- **`id`**: Integer ID used for flow steering and burst retrieval.
+- **`id`**: Integer ID used for burst retrieval and submission. Raw Ethernet
+  engines may also use it as a flow-steering destination. PCIe queue IDs are
+  selected explicitly by the application; they never imply flow steering.
   - type: `integer`
 - **`poll_mode`**: `indirect` uses the current DAQIRI RX worker and application handoff ring.
   `direct` makes the thread calling `get_rx_burst()` poll the NIC synchronously and is supported

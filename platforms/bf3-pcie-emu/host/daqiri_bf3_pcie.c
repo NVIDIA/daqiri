@@ -10,6 +10,7 @@
 #include <linux/mutex.h>
 #include <linux/overflow.h>
 #include <linux/pci.h>
+#include <linux/slab.h>
 #include <linux/sysfs.h>
 #include <linux/uaccess.h>
 
@@ -20,6 +21,7 @@
 #define BF3_MAX_RING_DEPTH 4096U
 #define BF3_RING_ALIGN 256U
 #define BF3_STOP_TIMEOUT_MS 5000U
+#define BF3_MAX_REGIONS DAQIRI_PCIE_MAX_QUEUES
 
 struct bf3_region {
   struct dma_buf* dmabuf;
@@ -27,6 +29,13 @@ struct bf3_region {
   struct sg_table* sgt;
   struct daqiri_pcie_ioctl_register_region desc;
   dma_addr_t dma_addr;
+};
+struct bf3_queue {
+  u16 queue_id;
+  u8 direction;
+  u32 region_id;
+  u32 doorbell_id;
+  u32 doorbell_value;
 };
 struct bf3_dev {
   struct pci_dev* pdev;
@@ -36,7 +45,9 @@ struct bf3_dev {
   bool opened;
   bool running;
   u64 epoch;
-  struct bf3_region regions[DAQIRI_BF3_REGION_COUNT];
+  struct bf3_region regions[BF3_MAX_REGIONS];
+  struct bf3_queue queues[DAQIRI_PCIE_MAX_QUEUES];
+  u32 queue_count;
   void* rings;
   dma_addr_t rings_dma;
   size_t rings_bytes;
@@ -72,19 +83,9 @@ static bool bf3_depth(u32 n) {
   return n <= BF3_MAX_RING_DEPTH && (!n || is_power_of_2(n));
 }
 
-static void bf3_clear_region_regs(struct bf3_dev* d, unsigned int index) {
-  bf3_write64(d, DAQIRI_BF3_REG_REGION_DMA_LO(index), 0);
-  bf3_write64(d, DAQIRI_BF3_REG_REGION_BYTES_LO(index), 0);
-  writel(0, d->bar0 + DAQIRI_BF3_REG_REGION_STRIDE(index));
-  writel(0, d->bar0 + DAQIRI_BF3_REG_REGION_COUNT(index));
-  writel(0, d->bar0 + DAQIRI_BF3_REG_REGION_ID(index));
-  writel(index, d->bar0 + DAQIRI_BF3_REG_REGION_DIRECTION(index));
-}
-
 static void bf3_detach_region(struct bf3_dev* d, unsigned int index) {
   struct bf3_region* r = &d->regions[index];
 
-  bf3_clear_region_regs(d, index);
   if (r->sgt) dma_buf_unmap_attachment(r->attachment, r->sgt, DMA_BIDIRECTIONAL);
   if (r->attachment) dma_buf_detach(r->dmabuf, r->attachment);
   if (r->dmabuf) dma_buf_put(r->dmabuf);
@@ -94,8 +95,12 @@ static void bf3_detach_region(struct bf3_dev* d, unsigned int index) {
 static void bf3_free_rings(struct bf3_dev* d) {
   unsigned int i;
 
-  for (i = 0; i < DAQIRI_PCIE_RING_COUNT; ++i) bf3_write64(d, DAQIRI_BF3_REG_RING_DMA_LO(i), 0);
-  writel(0, d->bar0 + DAQIRI_BF3_REG_RING_BYTES);
+  bf3_write64(d, DAQIRI_BF3_REG_QUEUE_TABLE_DMA_LO, 0);
+  writel(0, d->bar0 + DAQIRI_BF3_REG_QUEUE_TABLE_BYTES);
+  writel(0, d->bar0 + DAQIRI_BF3_REG_QUEUE_COUNT);
+  for (i = 0; i < DAQIRI_PCIE_MAX_QUEUES; ++i) writel(0, d->bar0 + DAQIRI_BF3_REG_DOORBELL(i));
+  memset(d->queues, 0, sizeof(d->queues));
+  d->queue_count = 0;
   if (d->rings) {
     dma_free_coherent(&d->pdev->dev, d->rings_bytes, d->rings, d->rings_dma);
     d->rings = NULL;
@@ -157,8 +162,9 @@ static int bf3_register_region(struct bf3_dev* d, struct daqiri_pcie_ioctl_regis
       expected_bytes > x->bytes)
     return -EINVAL;
   if (d->running) return -EBUSY;
-  index = x->direction;
-  if (d->regions[index].dmabuf) return -EBUSY;
+  for (index = 0; index < BF3_MAX_REGIONS; ++index)
+    if (!d->regions[index].dmabuf) break;
+  if (index == BF3_MAX_REGIONS) return -ENOSPC;
   r = &d->regions[index];
   r->dmabuf = dma_buf_get(x->dmabuf_fd);
   if (IS_ERR(r->dmabuf)) {
@@ -206,12 +212,6 @@ static int bf3_register_region(struct bf3_dev* d, struct daqiri_pcie_ioctl_regis
   r->desc = *x;
   x->region_id = index + 1; /* stable within a single exclusive session */
   r->desc.region_id = x->region_id;
-  bf3_write64(d, DAQIRI_BF3_REG_REGION_DMA_LO(index), r->dma_addr);
-  bf3_write64(d, DAQIRI_BF3_REG_REGION_BYTES_LO(index), x->bytes);
-  writel(x->slot_stride, d->bar0 + DAQIRI_BF3_REG_REGION_STRIDE(index));
-  writel(x->slot_count, d->bar0 + DAQIRI_BF3_REG_REGION_COUNT(index));
-  writel(x->region_id, d->bar0 + DAQIRI_BF3_REG_REGION_ID(index));
-  writel(x->direction, d->bar0 + DAQIRI_BF3_REG_REGION_DIRECTION(index));
   return 0;
 
 fail:
@@ -219,20 +219,32 @@ fail:
   return e;
 }
 static int bf3_configure(struct bf3_dev* d, struct daqiri_pcie_ioctl_configure_queues* x) {
-  size_t bytes = 0, alloc_bytes, off = 0;
-  int i;
+  struct daqiri_bf3_queue_table* table;
+  size_t bytes = ALIGN(sizeof(*table), 64), alloc_bytes, off;
+  unsigned int i, j, role;
 
-  if (!bf3_valid_header(&x->header, sizeof(*x)) || d->running || d->rings) return -EINVAL;
-  for (i = 0; i < DAQIRI_PCIE_RING_COUNT; ++i) {
+  if (!bf3_valid_header(&x->header, sizeof(*x)) || d->running || d->rings || !x->num_queues ||
+      x->num_queues > DAQIRI_PCIE_MAX_QUEUES)
+    return -EINVAL;
+  for (i = 0; i < x->num_queues; ++i) {
+    const struct daqiri_pcie_queue_mapping* q = &x->queues[i];
+    struct bf3_region* region;
     size_t ring_bytes;
 
-    if (!bf3_depth(x->requested_depth[i])) return -EINVAL;
-    if (!x->requested_depth[i]) continue;
+    if (q->direction > DAQIRI_PCIE_DIRECTION_TX || !bf3_depth(q->requested_depth) ||
+        !q->requested_depth || q->region_id < 1 || q->region_id > BF3_MAX_REGIONS)
+      return -EINVAL;
+    region = &d->regions[q->region_id - 1];
+    if (!region->dmabuf || region->desc.direction != q->direction) return -EINVAL;
+    for (j = 0; j < i; ++j)
+      if ((x->queues[j].direction == q->direction && x->queues[j].queue_id == q->queue_id) ||
+          x->queues[j].region_id == q->region_id)
+        return -EINVAL;
     ring_bytes = sizeof(struct daqiri_pcie_ring_control) +
-                 x->requested_depth[i] * sizeof(struct daqiri_pcie_ring_entry);
-    if (check_add_overflow(bytes, ALIGN(ring_bytes, 64), &bytes)) return -EOVERFLOW;
+                 q->requested_depth * sizeof(struct daqiri_pcie_ring_entry);
+    for (role = 0; role < DAQIRI_PCIE_RINGS_PER_QUEUE; ++role)
+      if (check_add_overflow(bytes, ALIGN(ring_bytes, 64), &bytes)) return -EOVERFLOW;
   }
-  if (!bytes) return -EINVAL;
   alloc_bytes = PAGE_ALIGN(bytes);
   d->rings = dma_alloc_coherent(&d->pdev->dev, alloc_bytes, &d->rings_dma, GFP_KERNEL);
   if (!d->rings) return -ENOMEM;
@@ -241,27 +253,56 @@ static int bf3_configure(struct bf3_dev* d, struct daqiri_pcie_ioctl_configure_q
   d->epoch = x->epoch;
   x->mmap_offset = 0;
   x->mmap_bytes = alloc_bytes;
-  for (i = 0; i < DAQIRI_PCIE_RING_COUNT; ++i) {
-    struct daqiri_pcie_ring_control* c;
-    size_t ring_bytes;
+  table = d->rings;
+  table->header.magic = DAQIRI_BF3_QUEUE_TABLE_MAGIC;
+  table->header.version_major = DAQIRI_PCIE_ABI_VERSION_MAJOR;
+  table->header.version_minor = DAQIRI_PCIE_ABI_VERSION_MINOR;
+  table->header.num_queues = x->num_queues;
+  table->header.descriptor_size = sizeof(struct daqiri_bf3_queue_descriptor);
+  table->header.epoch = d->epoch;
+  off = ALIGN(sizeof(*table), 64);
+  d->queue_count = x->num_queues;
+  for (i = 0; i < x->num_queues; ++i) {
+    struct daqiri_pcie_queue_mapping* q = &x->queues[i];
+    struct daqiri_bf3_queue_descriptor* desc = &table->queues[i];
+    struct bf3_region* region = &d->regions[q->region_id - 1];
 
-    if (!x->requested_depth[i]) {
-      memset(&x->rings[i], 0, sizeof(x->rings[i]));
-      bf3_write64(d, DAQIRI_BF3_REG_RING_DMA_LO(i), 0);
-      continue;
+    q->doorbell_id = i;
+    d->queues[i].queue_id = q->queue_id;
+    d->queues[i].direction = q->direction;
+    d->queues[i].region_id = q->region_id;
+    d->queues[i].doorbell_id = i;
+    desc->region_dma = region->dma_addr;
+    desc->region_bytes = region->desc.bytes;
+    desc->depth = q->requested_depth;
+    desc->stride = region->desc.slot_stride;
+    desc->slot_count = region->desc.slot_count;
+    desc->region_id = q->region_id;
+    desc->queue_id = q->queue_id;
+    desc->direction = q->direction;
+    desc->doorbell_id = i;
+    for (role = 0; role < DAQIRI_PCIE_RINGS_PER_QUEUE; ++role) {
+      struct daqiri_pcie_ring_control* c = (struct daqiri_pcie_ring_control*)((u8*)d->rings + off);
+      size_t ring_bytes;
+
+      c->depth = q->requested_depth;
+      c->mask = c->depth - 1;
+      q->rings[role].control_offset = off;
+      q->rings[role].entries_offset = off + sizeof(*c);
+      q->rings[role].depth = c->depth;
+      if (role == DAQIRI_PCIE_RING_WORK)
+        desc->work_ring_dma = d->rings_dma + off;
+      else
+        desc->completion_ring_dma = d->rings_dma + off;
+      ring_bytes = sizeof(*c) + c->depth * sizeof(struct daqiri_pcie_ring_entry);
+      off += ALIGN(ring_bytes, 64);
     }
-    c = (struct daqiri_pcie_ring_control*)((u8*)d->rings + off);
-    c->depth = x->requested_depth[i];
-    c->mask = c->depth - 1;
-    x->rings[i].control_offset = off;
-    x->rings[i].entries_offset = off + sizeof(*c);
-    x->rings[i].depth = c->depth;
-    bf3_write64(d, DAQIRI_BF3_REG_RING_DMA_LO(i), d->rings_dma + off);
-    ring_bytes = sizeof(*c) + c->depth * sizeof(struct daqiri_pcie_ring_entry);
-    off += ALIGN(ring_bytes, 64);
   }
+  dma_wmb();
   bf3_write64(d, DAQIRI_BF3_REG_EPOCH_LO, d->epoch);
-  writel(alloc_bytes, d->bar0 + DAQIRI_BF3_REG_RING_BYTES);
+  bf3_write64(d, DAQIRI_BF3_REG_QUEUE_TABLE_DMA_LO, d->rings_dma);
+  writel(alloc_bytes, d->bar0 + DAQIRI_BF3_REG_QUEUE_TABLE_BYTES);
+  writel(d->queue_count, d->bar0 + DAQIRI_BF3_REG_QUEUE_COUNT);
   writel(DAQIRI_BF3_CMD_CONFIGURE, d->bar0 + DAQIRI_BF3_REG_COMMAND);
   readl(d->bar0 + DAQIRI_BF3_REG_COMMAND);
   return bf3_wait_command(d, DAQIRI_PCIE_STATUS_FLAG_QUIESCED, BF3_STOP_TIMEOUT_MS);
@@ -285,9 +326,10 @@ static long bf3_ioctl(struct file* f, unsigned int cmd, unsigned long arg) {
         break;
       }
       memset((u8*)&x + sizeof(x.header), 0, sizeof(x) - sizeof(x.header));
-      x.capabilities =
-          DAQIRI_PCIE_CAP_DMABUF_PCIE | DAQIRI_PCIE_CAP_DMA_FENCE | DAQIRI_PCIE_CAP_DEVICE_RESET;
-      x.max_regions = DAQIRI_BF3_REGION_COUNT;
+      x.capabilities = DAQIRI_PCIE_CAP_DMABUF_PCIE | DAQIRI_PCIE_CAP_DMA_FENCE |
+                       DAQIRI_PCIE_CAP_DEVICE_RESET | DAQIRI_PCIE_CAP_MULTI_QUEUE;
+      x.max_regions = BF3_MAX_REGIONS;
+      x.max_queues = DAQIRI_PCIE_MAX_QUEUES;
       x.max_ring_depth = BF3_MAX_RING_DEPTH;
       x.min_slot_alignment = BF3_RING_ALIGN;
       e = copy_to_user(user, &x, sizeof(x)) ? -EFAULT : 0;
@@ -302,7 +344,7 @@ static long bf3_ioctl(struct file* f, unsigned int cmd, unsigned long arg) {
       }
       e = bf3_register_region(d, &x);
       if (!e && copy_to_user(user, &x, sizeof(x))) {
-        bf3_detach_region(d, x.direction);
+        bf3_detach_region(d, x.region_id - 1);
         e = -EFAULT;
       }
       break;
@@ -316,7 +358,7 @@ static long bf3_ioctl(struct file* f, unsigned int cmd, unsigned long arg) {
         break;
       }
       if (!bf3_valid_header(&x.header, sizeof(x)) || x.region_id < 1 ||
-          x.region_id > DAQIRI_BF3_REGION_COUNT || d->running) {
+          x.region_id > BF3_MAX_REGIONS || d->running) {
         e = -EINVAL;
         break;
       }
@@ -332,18 +374,50 @@ static long bf3_ioctl(struct file* f, unsigned int cmd, unsigned long arg) {
       bf3_detach_region(d, index);
       break;
     }
-    case DAQIRI_PCIE_IOCTL_CONFIGURE_QUEUES: {
-      struct daqiri_pcie_ioctl_configure_queues x;
+    case DAQIRI_PCIE_IOCTL_RING_DOORBELL: {
+      struct daqiri_pcie_ioctl_ring_doorbell x;
+      struct bf3_queue* queue;
 
       if (copy_from_user(&x, user, sizeof(x))) {
         e = -EFAULT;
         break;
       }
-      e = bf3_configure(d, &x);
-      if (!e && copy_to_user(user, &x, sizeof(x))) {
+      if (!bf3_valid_header(&x.header, sizeof(x)) || x.doorbell_id >= d->queue_count ||
+          x.direction > DAQIRI_PCIE_DIRECTION_TX) {
+        e = -EINVAL;
+        break;
+      }
+      queue = &d->queues[x.doorbell_id];
+      if (queue->queue_id != x.queue_id || queue->direction != x.direction ||
+          queue->doorbell_id != x.doorbell_id) {
+        e = -EINVAL;
+        break;
+      }
+      queue->doorbell_value = x.value;
+      dma_wmb();
+      writel(x.value, d->bar0 + DAQIRI_BF3_REG_DOORBELL(x.doorbell_id));
+      readl(d->bar0 + DAQIRI_BF3_REG_DOORBELL(x.doorbell_id));
+      break;
+    }
+    case DAQIRI_PCIE_IOCTL_CONFIGURE_QUEUES: {
+      struct daqiri_pcie_ioctl_configure_queues* x;
+
+      x = kzalloc(sizeof(*x), GFP_KERNEL);
+      if (!x) {
+        e = -ENOMEM;
+        break;
+      }
+      if (copy_from_user(x, user, sizeof(*x))) {
+        e = -EFAULT;
+        goto free_configure;
+      }
+      e = bf3_configure(d, x);
+      if (!e && copy_to_user(user, x, sizeof(*x))) {
         bf3_free_rings(d);
         e = -EFAULT;
       }
+    free_configure:
+      kfree(x);
       break;
     }
     case DAQIRI_PCIE_IOCTL_START: {
@@ -449,7 +523,7 @@ static int bf3_release(struct inode* inode, struct file* file) {
   if (bf3_quiesce(d, BF3_STOP_TIMEOUT_MS))
     dev_err(&d->pdev->dev, "device did not quiesce during close; retaining DMA mappings\n");
   else {
-    for (i = 0; i < DAQIRI_BF3_REGION_COUNT; ++i) bf3_detach_region(d, i);
+    for (i = 0; i < BF3_MAX_REGIONS; ++i) bf3_detach_region(d, i);
     bf3_free_rings(d);
   }
   d->opened = false;
@@ -540,7 +614,7 @@ static void bf3_remove(struct pci_dev* pdev) {
   mutex_lock(&d->lock);
   if (bf3_quiesce(d, BF3_STOP_TIMEOUT_MS))
     dev_err(&pdev->dev, "forcing removal after device quiesce timeout\n");
-  for (i = 0; i < DAQIRI_BF3_REGION_COUNT; ++i) bf3_detach_region(d, i);
+  for (i = 0; i < BF3_MAX_REGIONS; ++i) bf3_detach_region(d, i);
   bf3_free_rings(d);
   mutex_unlock(&d->lock);
   pci_iounmap(pdev, d->bar0);

@@ -20,6 +20,16 @@ daqiri:
       affinity: 0
       num_bufs: 256
       buf_size: 4096
+    - name: "PCIE_TX_GPU_1"
+      kind: "device"
+      affinity: 0
+      num_bufs: 256
+      buf_size: 4096
+    - name: "PCIE_RX_GPU_1"
+      kind: "device"
+      affinity: 0
+      num_bufs: 256
+      buf_size: 4096
 
     interfaces:
     - name: "pcie0"
@@ -32,6 +42,12 @@ daqiri:
           batch_size: 32
           memory_regions:
             - "PCIE_TX_GPU"
+        - name: "tx1"
+          id: 1
+          cpu_core: 4
+          batch_size: 32
+          memory_regions:
+            - "PCIE_TX_GPU_1"
       rx:
         queues:
         - name: "rx0"
@@ -41,6 +57,13 @@ daqiri:
           batch_size: 32
           memory_regions:
             - "PCIE_RX_GPU"
+        - name: "rx1"
+          id: 1
+          cpu_core: 5
+          timeout_us: 100
+          batch_size: 32
+          memory_regions:
+            - "PCIE_RX_GPU_1"
 
 pcie_bench:
   interface_name: "pcie0"
