@@ -156,49 +156,36 @@ if (daqiri::set_reorder_cuda_stream(cfg.rx.interface_name, cfg.reorder_name, reo
 }
 ```
 
-Everything else is configuration. DAQIRI's `reorder_configs:` block names the
-stream binding target, the memory region the reordered batch lands in, the dtype
-conversion, and the sequence-number field:
+Everything else is configuration. The app's `reorder:` block declares the
+geometry once — the stream binding target, the packet layout, and the
+sequence-number field:
 
 ```yaml
-reorder_configs:
-- name: "rx_reorder_resnet_int8_fp16"
-  reorder_type: "gpu"
-  memory_region: "Reorder_RX_GPU"
+reorder:
+  reorder_name: "rx_reorder_resnet_int8_fp16"
+  out_payload_len: 1176
+  output_slot_stride: 2352
+  packets_per_image: 128
   payload_byte_offset: 64
-  flow_ids: [201]
-  data_types:
-    input_type: "int8"
-    output_type: "fp16"
-    endianness: "host"
-  method:
-    seq_packets_per_batch:
-      sequence_number:
-        bit_offset: 128
-        bit_width: 16
-      packets_per_batch: 4096
+  seq_bit_offset: 128
+  seq_bit_width: 16
+  images_per_batch: 32
+  image_out_bytes: 301056
 ```
 
-!!! warning "This block is synthesized, not authored"
+`reorder_name` is the same string passed to `set_reorder_cuda_stream` above.
+The remaining knobs — reorder type, output memory region, int8→fp16 conversion,
+and which flow IDs to reorder — have defaults that suit this pipeline; see
+`applications/resnet50_inference/README.md` under **Config keys** for the full
+table.
 
-    Do **not** paste the above into your YAML. The app builds
-    `daqiri.cfg…rx.reorder_configs` at startup from its own `reorder:` section,
-    which is the single source of truth for reorder geometry, and errors out if
-    the YAML defines `reorder_configs` directly. It is shown here so you can see
-    what the app hands DAQIRI.
+`packets_per_batch` is not listed because it is derived:
+`packets_per_image × images_per_batch` = 128 × 32 = **4096**.
 
-`bit_width: 16` is deliberate and 12 would be wrong, even though 12 bits is
-exactly one `packets_per_batch`. DAQIRI derives a batch id as `seq /
-packets_per_batch`, so a 12-bit sequence over `packets_per_batch: 4096` makes
-every batch id `0` — batches lose identity, and one lost packet lets the next
-batch complete the previous one, shifting every batch after it for the rest of
-the run. 16 bits cycles the id 0..15. Two rules are enforced at config parse:
-`2^bit_width` must be divisible by `packets_per_batch`, and the seq field must
-end at or before `payload_byte_offset` (128 + 16 ≤ 64×8). Match
-`--seq-bit-width` when regenerating the pcap.
+`seq_bit_width` must match the `--seq-bit-width` used to generate the pcap.
 
 The application never launches a reorder kernel, never tracks a packet's slot,
-and never accumulates an image. It declares the geometry once and then receives
+and never accumulates an image — it declares the geometry and then receives
 finished batches.
 
 ### 3. Receive a batch
