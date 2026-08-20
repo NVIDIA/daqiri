@@ -179,9 +179,6 @@ and which flow IDs to reorder — have defaults that suit this pipeline; see
 `applications/resnet50_inference/README.md` under **Config keys** for the full
 table.
 
-`packets_per_batch` is not listed because it is derived:
-`packets_per_image × images_per_batch` = 128 × 32 = **4096**.
-
 `seq_bit_width` must match the `--seq-bit-width` used to generate the pcap.
 
 The application never launches a reorder kernel, never tracks a packet's slot,
@@ -190,9 +187,8 @@ finished batches.
 
 ### 3. Receive a batch
 
-Because `packets_per_batch` is `images_per_batch × packets_per_image`, **one
-delivered burst is exactly one inference batch**. There is no cross-burst image
-reassembly to manage.
+In this example, burst size equals an inference batch, removing the need to
+manage image reassembly across bursts.
 
 DAQIRI delivers packets in bursts of DAQIRI-owned buffers, and the pointers in a
 burst are valid only until the burst is freed (the
@@ -248,7 +244,7 @@ rather than discards. This branch is live: the configs ship
 arrives here. A flush landing mid-image leaves stragglers that integer division
 drops, counted as `remainder_dropped`.
 
-Three things still drop a burst outright, and each has its own counter so
+Four things still drop a burst outright, and each has its own counter so
 backpressure stays distinguishable from RX-side loss: a full SPSC queue
 (`queue_full` — inference could not keep up), a partial batch holding fewer
 packets than one image (`short_batch`), `get_reorder_burst_info` failing
@@ -275,6 +271,19 @@ instead of filling — usually a TX-rate symptom or misaligned queue sizes (see
 [Run across two hosts](#run-across-two-hosts)). The producer also prints a
 WARNING line for a full queue or dropped remainders, and a NOTE when more than
 half the batches closed on timeout.
+
+#### Where drops are counted
+
+Loss is counted at two stages:
+
+| Stage | Reported by | Counters |
+|-------|-------------|----------|
+| NIC | `daqiri::print_stats()` at shutdown | `imissed` (no RX descriptor), `ierrors`, `rx_nombuf`, plus mlx5 xstats |
+| Reorder / producer | `rx_producer_worker` summary | `dropped_bursts` + its four reasons, `remainder_dropped`, `non_reordered_packets` |
+
+One counter crosses stages. `queue_full` is reported by the producer but caused
+by the consumer — it means inference could not keep up, not that the link lost
+packets. Read it as backpressure; every other drop reason is genuine loss.
 
 #### Type conversion
 
