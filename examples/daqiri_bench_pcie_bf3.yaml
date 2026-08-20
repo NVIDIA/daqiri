@@ -1,8 +1,7 @@
 %YAML 1.2
 ---
-# BlueField-3 PCIe-emulation round-trip benchmark.  The BF3 controller copies
-# every submitted TX GPU slot into a distinct RX GPU slot and publishes both
-# completions only after its PCIe DMA operations have completed.
+# BlueField-3 PCIe-emulation benchmark. RX mode measures independent DPU-to-GPU
+# DMA writes; TX mode measures GPU-to-DPU reads. No network protocol is involved.
 daqiri:
   cfg:
     version: 1

@@ -15,6 +15,11 @@ DPU component needs the DOCA SDK installed on the BF3.
   owns the hot-plugged function and services the BAR doorbells; its data plane
   must use DOCA DMA against the host mappings established by the driver.
 
+The data plane is PCIe-only. It has no Ethernet headers, flow steering, NIC
+queues, MAC/IP addressing, or network dependency. The DPU consumes ownership
+descriptors in batches, submits DMA directly against the CUDA DMA-BUF mapping,
+waits once for the batch, and then publishes a batch of completions.
+
 The implementation has one hard gate: CUDA's DMA-BUF must attach to the
 emulated BF3 PCI device and its 64 KiB SG entries must describe one adjacent
 BF3 DMA-address range. A failure here is a platform P2P/IOMMU limitation, not a
@@ -29,8 +34,9 @@ condition for a host-memory fallback.
 3. Create and hot-plug the Generic PCI function with the DPU controller, then
    bind the host driver: `make -C host && sudo insmod host/daqiri_bf3_pcie.ko`.
 4. Confirm `/sys/bus/pci/devices/<BDF>/daqiri_pcie/char` and the matching
-   `/dev/daqiri-pcie-<BDF>` node exist. Run the BF3 YAML benchmark in `both`
-   mode as documented in `docs/benchmarks/pcie_benchmarking.md`.
+   `/dev/daqiri-pcie-<BDF>` node exist. Run the BF3 YAML benchmark in `rx`
+   mode for DPU-to-GPU write throughput as documented in
+   `docs/benchmarks/pcie_benchmarking.md`.
 
 The device must complete an RX entry only after its GPU write is visible and a
 TX entry only after all GPU reads have returned. The host driver refuses to

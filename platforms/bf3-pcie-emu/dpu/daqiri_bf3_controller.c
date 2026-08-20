@@ -1,12 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-/*
- * DAQIRI BF3 Generic-PCI controller core.
- *
- * The DOCA adapter supplies dma_read(), dma_write(), and BAR/doorbell polling.
- * Keeping the ownership state machine free of DOCA types makes it testable and
- * ensures the emulated endpoint observes exactly the public pcie_abi.h wire
- * layout.
- */
+/* DAQIRI BF3 Generic-PCI controller. */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -32,69 +25,6 @@
 
 #include "../daqiri_bf3_regs.h"
 
-struct bf3_dma_ops {
-  int (*read)(uint32_t region, uint32_t slot, uint32_t bytes, void* scratch);
-  int (*write)(uint32_t region, uint32_t slot, uint32_t bytes, const void* scratch);
-  int (*fence)(void);
-};
-
-struct bf3_ring {
-  struct daqiri_pcie_ring_control* control;
-  struct daqiri_pcie_ring_entry* entries;
-};
-
-struct bf3_controller {
-  uint64_t epoch;
-  uint32_t rx_region;
-  uint32_t tx_region;
-  struct bf3_ring rx_available, rx_completion, tx_submission, tx_completion;
-  struct bf3_dma_ops dma;
-  void* scratch;
-};
-
-static bool ring_pop(struct bf3_ring* ring, struct daqiri_pcie_ring_entry* entry) {
-  uint64_t consumer = __atomic_load_n(&ring->control->consumer.value, __ATOMIC_RELAXED);
-  uint64_t producer = __atomic_load_n(&ring->control->producer.value, __ATOMIC_ACQUIRE);
-  if (consumer == producer) return false;
-  *entry = ring->entries[consumer & ring->control->mask];
-  __atomic_store_n(&ring->control->consumer.value, consumer + 1, __ATOMIC_RELEASE);
-  return true;
-}
-
-static bool ring_push(struct bf3_ring* ring, const struct daqiri_pcie_ring_entry* entry) {
-  uint64_t producer = __atomic_load_n(&ring->control->producer.value, __ATOMIC_RELAXED);
-  uint64_t consumer = __atomic_load_n(&ring->control->consumer.value, __ATOMIC_ACQUIRE);
-  if (producer - consumer == ring->control->depth) return false;
-  ring->entries[producer & ring->control->mask] = *entry;
-  __atomic_store_n(&ring->control->producer.value, producer + 1, __ATOMIC_RELEASE);
-  return true;
-}
-
-/* Processes one round-trip. The caller keeps polling until both source rings drain. */
-int bf3_controller_progress(struct bf3_controller* c) {
-  struct daqiri_pcie_ring_entry tx, rx, done;
-  if (!ring_pop(&c->tx_submission, &tx) || !ring_pop(&c->rx_available, &rx)) return 0;
-  if (tx.epoch != c->epoch || rx.epoch != c->epoch || tx.region_id != c->tx_region ||
-      rx.region_id != c->rx_region || tx.length > rx.length)
-    return -1;
-  if (c->dma.read(tx.region_id, tx.slot_id, tx.length, c->scratch) ||
-      c->dma.write(rx.region_id, rx.slot_id, tx.length, c->scratch) || c->dma.fence())
-    return -1;
-  memset(&done, 0, sizeof(done));
-  done.epoch = c->epoch;
-  done.sequence = rx.sequence;
-  done.region_id = rx.region_id;
-  done.slot_id = rx.slot_id;
-  done.length = tx.length;
-  done.status = DAQIRI_PCIE_COMPLETION_OK;
-  if (!ring_push(&c->rx_completion, &done)) return -1;
-  done.sequence = tx.sequence;
-  done.region_id = tx.region_id;
-  done.slot_id = tx.slot_id;
-  done.length = tx.length;
-  return ring_push(&c->tx_completion, &done) ? 1 : -1;
-}
-
 /*
  * DOCA 2.9 DevEmu adapter. Host addresses below are IOVAs in the emulated
  * function's domain. Every access to them, including ring accesses, goes
@@ -105,6 +35,7 @@ int bf3_controller_progress(struct bf3_controller* c) {
 #define BF3_STATEFUL_START 0U
 #define BF3_BATCH_SIZE 128U
 #define BF3_DMA_TASKS BF3_BATCH_SIZE
+#define BF3_CONTROL_SCRATCH_BYTES 4096U
 #define BF3_IDLE_NS 10000L
 
 struct bf3_bar_region {
@@ -154,6 +85,7 @@ struct bf3_doca {
   struct doca_mmap* region_mmap[DAQIRI_BF3_REGION_COUNT];
   uint8_t* scratch;
   size_t scratch_bytes;
+  size_t payload_stride;
   volatile size_t dma_pending;
   doca_error_t dma_result;
   volatile bool bar_pending;
@@ -444,10 +376,19 @@ static doca_error_t bf3_create_remote_mmap(struct bf3_doca* c, uint64_t addr, ui
   return result;
 }
 
-static doca_error_t bf3_resize_scratch(struct bf3_doca* c, size_t bytes) {
-  doca_error_t result;
+static uint8_t bf3_pattern_byte(uint64_t sequence, size_t offset) {
+  return (uint8_t)((sequence + offset * 17U) & 0xffU);
+}
 
-  if (c->scratch_bytes >= bytes) return DOCA_SUCCESS;
+static doca_error_t bf3_resize_scratch(struct bf3_doca* c, size_t payload_stride) {
+  doca_error_t result;
+  size_t bytes;
+  size_t task;
+
+  if (__builtin_mul_overflow(payload_stride, (size_t)BF3_DMA_TASKS, &bytes) ||
+      __builtin_add_overflow(bytes, (size_t)BF3_CONTROL_SCRATCH_BYTES, &bytes))
+    return DOCA_ERROR_INVALID_VALUE;
+  if (c->scratch_bytes >= bytes && c->payload_stride == payload_stride) return DOCA_SUCCESS;
   bf3_destroy_mmap(&c->local_mmap);
   free(c->scratch);
   c->scratch = calloc(1, bytes);
@@ -456,6 +397,15 @@ static doca_error_t bf3_resize_scratch(struct bf3_doca* c, size_t bytes) {
     return DOCA_ERROR_NO_MEMORY;
   }
   c->scratch_bytes = bytes;
+  c->payload_stride = payload_stride;
+  for (task = 0; task < BF3_DMA_TASKS; ++task) {
+    uint8_t* payload = c->scratch + BF3_CONTROL_SCRATCH_BYTES + task * c->payload_stride;
+    size_t offset;
+
+    memcpy(payload, &task, sizeof(task));
+    for (offset = sizeof(task); offset < c->payload_stride; ++offset)
+      payload[offset] = bf3_pattern_byte(task, offset);
+  }
   result = doca_mmap_create(&c->local_mmap);
   if (result == DOCA_SUCCESS) result = doca_mmap_add_dev(c->local_mmap, c->dma_dev);
   if (result == DOCA_SUCCESS) result = doca_mmap_set_memrange(c->local_mmap, c->scratch, bytes);
@@ -580,7 +530,7 @@ static doca_error_t bf3_read_bar(struct bf3_doca* c) {
 
 static doca_error_t bf3_configure_remote(struct bf3_doca* c) {
   uint64_t min_ring = UINT64_MAX;
-  size_t scratch_bytes = sizeof(struct daqiri_pcie_ring_control);
+  size_t payload_stride = 0;
   unsigned int i;
   doca_error_t result;
 
@@ -612,9 +562,9 @@ static doca_error_t bf3_configure_remote(struct bf3_doca* c) {
       return DOCA_ERROR_INVALID_VALUE;
     result = bf3_create_remote_mmap(c, r->dma_addr, r->bytes, &c->region_mmap[i]);
     if (result != DOCA_SUCCESS) return result;
-    if (r->stride > scratch_bytes) scratch_bytes = r->stride;
+    if (r->stride > payload_stride) payload_stride = r->stride;
   }
-  result = bf3_resize_scratch(c, scratch_bytes);
+  result = payload_stride ? bf3_resize_scratch(c, payload_stride) : DOCA_ERROR_INVALID_VALUE;
   if (result == DOCA_SUCCESS) c->configured = true;
   return result;
 }
@@ -623,20 +573,6 @@ static bool bf3_valid_control(const struct daqiri_pcie_ring_control* control) {
   return control->depth && control->depth <= 4096 && !(control->depth & (control->depth - 1)) &&
          control->mask == control->depth - 1 &&
          control->producer.value - control->consumer.value <= control->depth;
-}
-
-static doca_error_t bf3_read_entry(struct bf3_doca* c, unsigned int ring_id, uint64_t counter,
-                                   uint32_t mask, struct daqiri_pcie_ring_entry* entry) {
-  uint64_t addr = c->bar.ring_dma[ring_id] + sizeof(struct daqiri_pcie_ring_control) +
-                  (counter & mask) * sizeof(*entry);
-  return bf3_dma_read(c, c->ring_mmap, addr, entry, sizeof(*entry));
-}
-
-static doca_error_t bf3_write_entry(struct bf3_doca* c, unsigned int ring_id, uint64_t counter,
-                                    uint32_t mask, const struct daqiri_pcie_ring_entry* entry) {
-  uint64_t addr = c->bar.ring_dma[ring_id] + sizeof(struct daqiri_pcie_ring_control) +
-                  (counter & mask) * sizeof(*entry);
-  return bf3_dma_write(c, c->ring_mmap, addr, entry, sizeof(*entry));
 }
 
 static doca_error_t bf3_read_entries(struct bf3_doca* c, unsigned int ring_id, uint64_t counter,
@@ -677,96 +613,145 @@ static doca_error_t bf3_write_counter(struct bf3_doca* c, unsigned int ring_id,
                        sizeof(value));
 }
 
-static doca_error_t bf3_progress_tx(struct bf3_doca* c, struct daqiri_pcie_ring_control* control,
+static uint8_t* bf3_payload_slot(struct bf3_doca* c, size_t task) {
+  return c->scratch + BF3_CONTROL_SCRATCH_BYTES + task * c->payload_stride;
+}
+
+static void bf3_release_dma_bufs(struct doca_buf** src_buf, struct doca_buf** dst_buf,
+                                 size_t count) {
+  size_t i;
+
+  for (i = 0; i < count; ++i) {
+    if (dst_buf[i]) doca_buf_dec_refcount(dst_buf[i], NULL);
+    if (src_buf[i]) doca_buf_dec_refcount(src_buf[i], NULL);
+  }
+}
+
+static doca_error_t bf3_progress_tx(struct bf3_doca* c,
+                                    const struct daqiri_pcie_ring_control* control,
                                     bool* made_progress) {
-  struct daqiri_pcie_ring_entry tx, done = {0};
   const unsigned int sub = DAQIRI_PCIE_RING_TX_SUBMISSION;
   const unsigned int comp = DAQIRI_PCIE_RING_TX_COMPLETION;
-  uint64_t tx_addr;
-  doca_error_t result;
-
-  if (control[sub].producer.value == control[sub].consumer.value ||
-      control[comp].producer.value - control[comp].consumer.value == control[comp].depth)
-    return DOCA_SUCCESS;
-  result = bf3_read_entry(c, sub, control[sub].consumer.value, control[sub].mask, &tx);
-  if (result != DOCA_SUCCESS) return result;
-  if (tx.epoch != c->bar.epoch || tx.region_id != c->bar.region[DAQIRI_BF3_REGION_TX].id ||
-      tx.slot_id >= c->bar.region[DAQIRI_BF3_REGION_TX].count || !tx.length ||
-      tx.length > c->bar.region[DAQIRI_BF3_REGION_TX].stride)
-    return DOCA_ERROR_INVALID_VALUE;
-  tx_addr = c->bar.region[DAQIRI_BF3_REGION_TX].dma_addr +
-            (uint64_t)tx.slot_id * c->bar.region[DAQIRI_BF3_REGION_TX].stride;
-  result = bf3_dma_copy(c, c->region_mmap[DAQIRI_BF3_REGION_TX], (void*)(uintptr_t)tx_addr,
-                        c->local_mmap, c->scratch, tx.length);
-  if (result != DOCA_SUCCESS) return result;
-  done = tx;
-  done.status = DAQIRI_PCIE_COMPLETION_OK;
-  result = bf3_write_entry(c, comp, control[comp].producer.value, control[comp].mask, &done);
-  if (result == DOCA_SUCCESS)
-    result = bf3_write_counter(c, comp, offsetof(struct daqiri_pcie_ring_control, producer.value),
-                               control[comp].producer.value + 1);
-  if (result == DOCA_SUCCESS)
-    result = bf3_write_counter(c, sub, offsetof(struct daqiri_pcie_ring_control, consumer.value),
-                               control[sub].consumer.value + 1);
-  if (result == DOCA_SUCCESS) {
-    ++c->bar.tx_completions;
-    *made_progress = true;
-  }
-  return result;
-}
-
-static doca_error_t bf3_progress_rx(struct bf3_doca* c, struct daqiri_pcie_ring_control* control,
-                                    bool* made_progress) {
-  struct daqiri_pcie_ring_entry rx, done = {0};
-  const unsigned int avail = DAQIRI_PCIE_RING_RX_AVAILABLE;
-  const unsigned int comp = DAQIRI_PCIE_RING_RX_COMPLETION;
-  uint64_t sequence = c->bar.rx_completions;
-  uint64_t rx_addr;
-  size_t i;
-  doca_error_t result;
-
-  if (control[avail].producer.value == control[avail].consumer.value ||
-      control[comp].producer.value - control[comp].consumer.value == control[comp].depth)
-    return DOCA_SUCCESS;
-  result = bf3_read_entry(c, avail, control[avail].consumer.value, control[avail].mask, &rx);
-  if (result != DOCA_SUCCESS) return result;
-  if (rx.epoch != c->bar.epoch || rx.region_id != c->bar.region[DAQIRI_BF3_REGION_RX].id ||
-      rx.slot_id >= c->bar.region[DAQIRI_BF3_REGION_RX].count || rx.length < sizeof(sequence) ||
-      rx.length > c->bar.region[DAQIRI_BF3_REGION_RX].stride)
-    return DOCA_ERROR_INVALID_VALUE;
-  memcpy(c->scratch, &sequence, sizeof(sequence));
-  for (i = sizeof(sequence); i < rx.length; ++i)
-    c->scratch[i] = (uint8_t)((sequence + i * 17U) & 0xffU);
-  rx_addr = c->bar.region[DAQIRI_BF3_REGION_RX].dma_addr +
-            (uint64_t)rx.slot_id * c->bar.region[DAQIRI_BF3_REGION_RX].stride;
-  result = bf3_dma_copy(c, c->local_mmap, c->scratch, c->region_mmap[DAQIRI_BF3_REGION_RX],
-                        (void*)(uintptr_t)rx_addr, rx.length);
-  if (result != DOCA_SUCCESS) return result;
-  done = rx;
-  done.status = DAQIRI_PCIE_COMPLETION_OK;
-  result = bf3_write_entry(c, comp, control[comp].producer.value, control[comp].mask, &done);
-  if (result == DOCA_SUCCESS)
-    result = bf3_write_counter(c, comp, offsetof(struct daqiri_pcie_ring_control, producer.value),
-                               control[comp].producer.value + 1);
-  if (result == DOCA_SUCCESS)
-    result = bf3_write_counter(c, avail, offsetof(struct daqiri_pcie_ring_control, consumer.value),
-                               control[avail].consumer.value + 1);
-  if (result == DOCA_SUCCESS) {
-    ++c->bar.rx_completions;
-    *made_progress = true;
-  }
-  return result;
-}
-
-static doca_error_t bf3_progress_roundtrip(struct bf3_doca* c, bool* made_progress) {
-  struct daqiri_pcie_ring_control control[DAQIRI_PCIE_RING_COUNT] = {0};
-  struct daqiri_pcie_ring_entry tx[BF3_BATCH_SIZE], rx[BF3_BATCH_SIZE];
-  struct daqiri_pcie_ring_entry tx_done[BF3_BATCH_SIZE] = {0};
-  struct daqiri_pcie_ring_entry rx_done[BF3_BATCH_SIZE] = {0};
+  struct daqiri_pcie_ring_entry tx[BF3_BATCH_SIZE];
+  struct daqiri_pcie_ring_entry done[BF3_BATCH_SIZE];
   struct doca_buf* src_buf[BF3_BATCH_SIZE] = {0};
   struct doca_buf* dst_buf[BF3_BATCH_SIZE] = {0};
-  uint64_t available, space, count;
-  unsigned int i, j;
+  uint64_t available = control[sub].producer.value - control[sub].consumer.value;
+  uint64_t space =
+      control[comp].depth - (control[comp].producer.value - control[comp].consumer.value);
+  size_t count = (size_t)(available < space ? available : space);
+  size_t i;
+  doca_error_t result = DOCA_SUCCESS;
+
+  if (count > BF3_BATCH_SIZE) count = BF3_BATCH_SIZE;
+  if (!count) return DOCA_SUCCESS;
+  result = bf3_read_entries(c, sub, control[sub].consumer.value, control[sub].depth, tx, count);
+  if (result != DOCA_SUCCESS) return result;
+  for (i = 0; i < count; ++i) {
+    if (tx[i].epoch != c->bar.epoch || tx[i].region_id != c->bar.region[DAQIRI_BF3_REGION_TX].id ||
+        tx[i].slot_id >= c->bar.region[DAQIRI_BF3_REGION_TX].count || !tx[i].length ||
+        tx[i].length > c->bar.region[DAQIRI_BF3_REGION_TX].stride)
+      return DOCA_ERROR_INVALID_VALUE;
+    done[i] = tx[i];
+    done[i].status = DAQIRI_PCIE_COMPLETION_OK;
+  }
+  c->dma_result = DOCA_ERROR_IN_PROGRESS;
+  for (i = 0; i < count; ++i) {
+    const uint64_t tx_addr = c->bar.region[DAQIRI_BF3_REGION_TX].dma_addr +
+                             (uint64_t)tx[i].slot_id * c->bar.region[DAQIRI_BF3_REGION_TX].stride;
+
+    result = bf3_dma_submit(c, c->region_mmap[DAQIRI_BF3_REGION_TX], (void*)(uintptr_t)tx_addr,
+                            c->local_mmap, bf3_payload_slot(c, i), tx[i].length, &src_buf[i],
+                            &dst_buf[i]);
+    if (result != DOCA_SUCCESS) break;
+  }
+  {
+    const doca_error_t wait_result = bf3_dma_wait(c);
+
+    bf3_release_dma_bufs(src_buf, dst_buf, count);
+    if (result == DOCA_SUCCESS) result = wait_result;
+  }
+  if (result != DOCA_SUCCESS) return result;
+  result =
+      bf3_write_entries(c, comp, control[comp].producer.value, control[comp].depth, done, count);
+  if (result == DOCA_SUCCESS)
+    result = bf3_write_counter(c, comp, offsetof(struct daqiri_pcie_ring_control, producer.value),
+                               control[comp].producer.value + count);
+  if (result == DOCA_SUCCESS)
+    result = bf3_write_counter(c, sub, offsetof(struct daqiri_pcie_ring_control, consumer.value),
+                               control[sub].consumer.value + count);
+  if (result == DOCA_SUCCESS) {
+    c->bar.tx_completions += count;
+    *made_progress = true;
+  }
+  return result;
+}
+
+static doca_error_t bf3_progress_rx(struct bf3_doca* c,
+                                    const struct daqiri_pcie_ring_control* control,
+                                    bool* made_progress) {
+  const unsigned int avail = DAQIRI_PCIE_RING_RX_AVAILABLE;
+  const unsigned int comp = DAQIRI_PCIE_RING_RX_COMPLETION;
+  struct daqiri_pcie_ring_entry rx[BF3_BATCH_SIZE];
+  struct daqiri_pcie_ring_entry done[BF3_BATCH_SIZE];
+  struct doca_buf* src_buf[BF3_BATCH_SIZE] = {0};
+  struct doca_buf* dst_buf[BF3_BATCH_SIZE] = {0};
+  uint64_t available = control[avail].producer.value - control[avail].consumer.value;
+  uint64_t space =
+      control[comp].depth - (control[comp].producer.value - control[comp].consumer.value);
+  size_t count = (size_t)(available < space ? available : space);
+  size_t i;
+  doca_error_t result = DOCA_SUCCESS;
+
+  if (count > BF3_BATCH_SIZE) count = BF3_BATCH_SIZE;
+  if (!count) return DOCA_SUCCESS;
+  result =
+      bf3_read_entries(c, avail, control[avail].consumer.value, control[avail].depth, rx, count);
+  if (result != DOCA_SUCCESS) return result;
+  for (i = 0; i < count; ++i) {
+    if (rx[i].epoch != c->bar.epoch || rx[i].region_id != c->bar.region[DAQIRI_BF3_REGION_RX].id ||
+        rx[i].slot_id >= c->bar.region[DAQIRI_BF3_REGION_RX].count ||
+        rx[i].length < sizeof(uint64_t) ||
+        rx[i].length > c->bar.region[DAQIRI_BF3_REGION_RX].stride)
+      return DOCA_ERROR_INVALID_VALUE;
+    done[i] = rx[i];
+    done[i].status = DAQIRI_PCIE_COMPLETION_OK;
+  }
+  c->dma_result = DOCA_ERROR_IN_PROGRESS;
+  for (i = 0; i < count; ++i) {
+    const uint64_t rx_addr = c->bar.region[DAQIRI_BF3_REGION_RX].dma_addr +
+                             (uint64_t)rx[i].slot_id * c->bar.region[DAQIRI_BF3_REGION_RX].stride;
+
+    result = bf3_dma_submit(c, c->local_mmap, bf3_payload_slot(c, i),
+                            c->region_mmap[DAQIRI_BF3_REGION_RX], (void*)(uintptr_t)rx_addr,
+                            rx[i].length, &src_buf[i], &dst_buf[i]);
+    if (result != DOCA_SUCCESS) break;
+  }
+  {
+    const doca_error_t wait_result = bf3_dma_wait(c);
+
+    bf3_release_dma_bufs(src_buf, dst_buf, count);
+    if (result == DOCA_SUCCESS) result = wait_result;
+  }
+  if (result != DOCA_SUCCESS) return result;
+  result =
+      bf3_write_entries(c, comp, control[comp].producer.value, control[comp].depth, done, count);
+  if (result == DOCA_SUCCESS)
+    result = bf3_write_counter(c, comp, offsetof(struct daqiri_pcie_ring_control, producer.value),
+                               control[comp].producer.value + count);
+  if (result == DOCA_SUCCESS)
+    result = bf3_write_counter(c, avail, offsetof(struct daqiri_pcie_ring_control, consumer.value),
+                               control[avail].consumer.value + count);
+  if (result == DOCA_SUCCESS) {
+    c->bar.rx_completions += count;
+    *made_progress = true;
+  }
+  return result;
+}
+
+static doca_error_t bf3_progress(struct bf3_doca* c, bool* made_progress) {
+  struct daqiri_pcie_ring_control control[DAQIRI_PCIE_RING_COUNT] = {0};
+  unsigned int i;
   doca_error_t result;
 
   *made_progress = false;
@@ -785,107 +770,12 @@ static doca_error_t bf3_progress_roundtrip(struct bf3_doca* c, bool* made_progre
       return DOCA_ERROR_INVALID_VALUE;
     }
   }
-  if (!c->has_rx) return bf3_progress_tx(c, control, made_progress);
-  if (!c->has_tx) return bf3_progress_rx(c, control, made_progress);
-  available = control[DAQIRI_PCIE_RING_TX_SUBMISSION].producer.value -
-              control[DAQIRI_PCIE_RING_TX_SUBMISSION].consumer.value;
-  count = control[DAQIRI_PCIE_RING_RX_AVAILABLE].producer.value -
-          control[DAQIRI_PCIE_RING_RX_AVAILABLE].consumer.value;
-  if (count < available) available = count;
-  space = control[DAQIRI_PCIE_RING_RX_COMPLETION].depth -
-          (control[DAQIRI_PCIE_RING_RX_COMPLETION].producer.value -
-           control[DAQIRI_PCIE_RING_RX_COMPLETION].consumer.value);
-  if (space < available) available = space;
-  space = control[DAQIRI_PCIE_RING_TX_COMPLETION].depth -
-          (control[DAQIRI_PCIE_RING_TX_COMPLETION].producer.value -
-           control[DAQIRI_PCIE_RING_TX_COMPLETION].consumer.value);
-  if (space < available) available = space;
-  count = available < BF3_BATCH_SIZE ? available : BF3_BATCH_SIZE;
-  if (!count) return DOCA_SUCCESS;
-  result = bf3_read_entries(c, DAQIRI_PCIE_RING_TX_SUBMISSION,
-                            control[DAQIRI_PCIE_RING_TX_SUBMISSION].consumer.value,
-                            control[DAQIRI_PCIE_RING_TX_SUBMISSION].depth, tx, count);
-  if (result == DOCA_SUCCESS)
-    result = bf3_read_entries(c, DAQIRI_PCIE_RING_RX_AVAILABLE,
-                              control[DAQIRI_PCIE_RING_RX_AVAILABLE].consumer.value,
-                              control[DAQIRI_PCIE_RING_RX_AVAILABLE].depth, rx, count);
-  if (result != DOCA_SUCCESS) return result;
-  /*
-   * Both GPU DMA-BUFs are PCIe-export mmaps owned by this DevEmu function.
-   * Let the BF3 DMA engine move the payload remote-to-remote in one task;
-   * staging the packet through DPU DDR doubles payload traffic and prevents
-   * the read and write sides of the PCIe link from being used together.
-   */
-  for (j = 0; j < count; ++j) {
-    if (tx[j].epoch != c->bar.epoch || rx[j].epoch != c->bar.epoch ||
-        tx[j].region_id != c->bar.region[DAQIRI_BF3_REGION_TX].id ||
-        rx[j].region_id != c->bar.region[DAQIRI_BF3_REGION_RX].id ||
-        tx[j].slot_id >= c->bar.region[DAQIRI_BF3_REGION_TX].count ||
-        rx[j].slot_id >= c->bar.region[DAQIRI_BF3_REGION_RX].count || !tx[j].length ||
-        tx[j].length > c->bar.region[DAQIRI_BF3_REGION_TX].stride || tx[j].length > rx[j].length ||
-        tx[j].length > c->bar.region[DAQIRI_BF3_REGION_RX].stride)
-      return DOCA_ERROR_INVALID_VALUE;
-    rx_done[j].epoch = c->bar.epoch;
-    rx_done[j].sequence = rx[j].sequence;
-    rx_done[j].region_id = rx[j].region_id;
-    rx_done[j].slot_id = rx[j].slot_id;
-    rx_done[j].length = tx[j].length;
-    rx_done[j].status = DAQIRI_PCIE_COMPLETION_OK;
-    tx_done[j] = rx_done[j];
-    tx_done[j].sequence = tx[j].sequence;
-    tx_done[j].region_id = tx[j].region_id;
-    tx_done[j].slot_id = tx[j].slot_id;
+  if (c->has_rx) {
+    result = bf3_progress_rx(c, control, made_progress);
+    if (result != DOCA_SUCCESS) return result;
   }
-  c->dma_result = DOCA_ERROR_IN_PROGRESS;
-  for (j = 0; j < count; ++j) {
-    const uint64_t tx_addr = c->bar.region[DAQIRI_BF3_REGION_TX].dma_addr +
-                             (uint64_t)tx[j].slot_id * c->bar.region[DAQIRI_BF3_REGION_TX].stride;
-    const uint64_t rx_addr = c->bar.region[DAQIRI_BF3_REGION_RX].dma_addr +
-                             (uint64_t)rx[j].slot_id * c->bar.region[DAQIRI_BF3_REGION_RX].stride;
-
-    result = bf3_dma_submit(c, c->region_mmap[DAQIRI_BF3_REGION_TX], (void*)(uintptr_t)tx_addr,
-                            c->region_mmap[DAQIRI_BF3_REGION_RX], (void*)(uintptr_t)rx_addr,
-                            tx[j].length, &src_buf[j], &dst_buf[j]);
-    if (result != DOCA_SUCCESS) break;
-  }
-  {
-    doca_error_t wait_result = bf3_dma_wait(c);
-
-    for (j = 0; j < count; ++j) {
-      if (dst_buf[j]) doca_buf_dec_refcount(dst_buf[j], NULL);
-      if (src_buf[j]) doca_buf_dec_refcount(src_buf[j], NULL);
-    }
-    if (result == DOCA_SUCCESS) result = wait_result;
-  }
-  if (result != DOCA_SUCCESS) return result;
-  result = bf3_write_entries(c, DAQIRI_PCIE_RING_RX_COMPLETION,
-                             control[DAQIRI_PCIE_RING_RX_COMPLETION].producer.value,
-                             control[DAQIRI_PCIE_RING_RX_COMPLETION].depth, rx_done, count);
-  if (result == DOCA_SUCCESS)
-    result = bf3_write_entries(c, DAQIRI_PCIE_RING_TX_COMPLETION,
-                               control[DAQIRI_PCIE_RING_TX_COMPLETION].producer.value,
-                               control[DAQIRI_PCIE_RING_TX_COMPLETION].depth, tx_done, count);
-  if (result == DOCA_SUCCESS)
-    result = bf3_write_counter(c, DAQIRI_PCIE_RING_RX_COMPLETION,
-                               offsetof(struct daqiri_pcie_ring_control, producer.value),
-                               control[DAQIRI_PCIE_RING_RX_COMPLETION].producer.value + count);
-  if (result == DOCA_SUCCESS)
-    result = bf3_write_counter(c, DAQIRI_PCIE_RING_TX_COMPLETION,
-                               offsetof(struct daqiri_pcie_ring_control, producer.value),
-                               control[DAQIRI_PCIE_RING_TX_COMPLETION].producer.value + count);
-  if (result == DOCA_SUCCESS)
-    result = bf3_write_counter(c, DAQIRI_PCIE_RING_RX_AVAILABLE,
-                               offsetof(struct daqiri_pcie_ring_control, consumer.value),
-                               control[DAQIRI_PCIE_RING_RX_AVAILABLE].consumer.value + count);
-  if (result == DOCA_SUCCESS)
-    result = bf3_write_counter(c, DAQIRI_PCIE_RING_TX_SUBMISSION,
-                               offsetof(struct daqiri_pcie_ring_control, consumer.value),
-                               control[DAQIRI_PCIE_RING_TX_SUBMISSION].consumer.value + count);
-  if (result != DOCA_SUCCESS) return result;
-  c->bar.rx_completions += count;
-  c->bar.tx_completions += count;
-  *made_progress = true;
-  return DOCA_SUCCESS;
+  if (c->has_tx) result = bf3_progress_tx(c, control, made_progress);
+  return result;
 }
 
 static doca_error_t bf3_handle_command(struct bf3_doca* c) {
@@ -1023,9 +913,9 @@ int main(int argc, char** argv) {
       }
     }
     if (controller.running) {
-      result = bf3_progress_roundtrip(&controller, &made_progress);
+      result = bf3_progress(&controller, &made_progress);
       if (result != DOCA_SUCCESS) {
-        fprintf(stderr, "fatal source: roundtrip progress\n");
+        fprintf(stderr, "fatal source: DMA progress\n");
         bf3_fatal(&controller, result);
       }
     }

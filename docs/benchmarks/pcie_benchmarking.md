@@ -122,20 +122,21 @@ pci=realloc` on AMD). Build and load the host module after the generic function
 appears, then start the DPU controller. The controller must report a healthy,
 quiesced device before DAQIRI opens it.
 
-Run the hardware round-trip only after substituting the BF3 BDF and CUDA GPU
-ordinal in the supplied configuration:
+Run DPU-to-GPU write throughput only after substituting the BF3 BDF and CUDA
+GPU ordinal in the supplied configuration:
 
 ```bash
 ./build/examples/daqiri_bench_pcie \
-  ./build/examples/daqiri_bench_pcie_bf3.yaml --seconds 30 --mode both
+  ./build/examples/daqiri_bench_pcie_bf3.yaml --seconds 30 --mode rx
 ```
 
-`both` proves GPU→BF3 reads and BF3→GPU writes in one run. The supplied BF3
-controller batches ring traffic and pipelines GPU-to-GPU DMA tasks without a
-BF3 DDR bounce. It also sinks and completes `tx` traffic independently, and
-generates the benchmark's validated payload pattern for `rx`. Do not accept a
-host-staged copy as a passing hardware result: a successful run requires CUDA
-DMA-BUF export, driver attachment to the BF3 function, and BF3 peer DMA.
+`rx` enables only the RX-available and RX-completion rings. The supplied BF3
+controller submits up to 128 independent DPU-memory-to-GPU DMA writes, waits
+once for the batch, and advances each ring counter once. There is no Ethernet
+or packet-steering data path. `tx` independently measures GPU-to-DPU reads;
+neither direction depends on the other. Do not accept a host-staged copy as a
+passing hardware result: a successful run requires CUDA DMA-BUF export, driver
+attachment to the BF3 function, and BF3 peer DMA.
 
 Payload verification intentionally performs host-to-device initialization and
 device-to-host checking. Use it for correctness, then disable it when measuring
@@ -143,7 +144,7 @@ the PCIe transport rather than the benchmark's CPU/CUDA validation loop:
 
 ```bash
 ./build/examples/daqiri_bench_pcie \
-  ./build/examples/daqiri_bench_pcie_bf3.yaml --seconds 30 --mode both \
+  ./build/examples/daqiri_bench_pcie_bf3.yaml --seconds 30 --mode rx \
   --verify false
 ```
 
