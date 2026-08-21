@@ -234,7 +234,9 @@ std::string Engine::generate_random_string(int len) {
 }
 
 EngineType EngineFactory::get_default_engine_type() {
-#if DAQIRI_ENGINE_DPDK
+#if DAQIRI_ENGINE_IBVERBS
+  return EngineType::IBVERBS;
+#elif DAQIRI_ENGINE_DPDK
   return EngineType::DPDK;
 #elif DAQIRI_ENGINE_SOCKET
   return EngineType::SOCKET;

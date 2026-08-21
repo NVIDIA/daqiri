@@ -38,16 +38,15 @@ the `stream_type` and the endpoint URI scheme:
 
 | Stream | Default engine | Notes |
 |---|---|---|
-| `stream_type: "raw"` | **`dpdk`** | kernel-bypass raw Ethernet |
-| `stream_type: "raw"` with `engine: "ibverbs"` | **`ibverbs`** (opt-in) | MPRQ raw Ethernet via libibverbs/DevX (Mellanox/mlx5) |
+| `stream_type: "raw"` | **`ibverbs`** | MPRQ raw Ethernet via libibverbs/DevX (Mellanox/mlx5) |
+| `stream_type: "raw"` with `engine: "dpdk"` | **`dpdk`** (opt-in) | DPDK kernel-bypass raw Ethernet |
 | `stream_type: "socket"` with `udp://`/`tcp://` endpoints | **built-in Linux sockets** | always available, nothing to build |
 | `stream_type: "socket"` with `roce://` endpoints | **`ibverbs`** | RDMA/RoCE via libibverbs |
 
 The engine concept exists so the implementation can be swapped without
 changing the stream type. For example, raw Ethernet is served by the
-`dpdk` engine by default but can instead use the `ibverbs` engine (a
-Multi-Packet/striding Receive Queue implementation) by setting
-`engine: "ibverbs"` on the stream. RoCE is served by the `ibverbs` engine,
+`ibverbs` Multi-Packet/striding Receive Queue engine by default but can instead
+use the `dpdk` engine by setting `engine: "dpdk"` on the stream. RoCE is served by the `ibverbs` engine,
 and a future release could add a DOCA RDMA engine as an alternative for the
 same `roce://` stream.
 
@@ -62,12 +61,10 @@ compiled in (`dpdk`, `ibverbs`); Linux sockets are always available. See
 Kernel-bypass raw Ethernet. The application talks directly to NIC ring
 buffers in user space, skipping the Linux network stack entirely. This
 is the highest-performance path and the only one with hardware flow
-steering (see [Flows](#flow) below). Implemented on top of
-[DPDK](https://www.dpdk.org/) by default. The DPDK dependency is an
-implementation detail, not a user-facing concept. Setting `engine: "ibverbs"`
-on the stream instead uses a pure-libibverbs/DevX Multi-Packet (striding)
-Receive Queue engine on Mellanox/mlx5 NICs, which packs many packets into one
-pre-posted buffer to avoid per-packet allocation.
+steering (see [Flows](#flow) below). The default pure-libibverbs/DevX
+Multi-Packet (striding) Receive Queue engine on Mellanox/mlx5 NICs packs many
+packets into one pre-posted buffer to avoid per-packet allocation. Set
+`engine: "dpdk"` to use the [DPDK](https://www.dpdk.org/) implementation instead.
 
 Requires an NVIDIA SmartNIC (ConnectX-6 Dx or later).
 

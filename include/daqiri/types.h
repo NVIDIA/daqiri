@@ -490,7 +490,13 @@ inline EngineType engine_type_from_stream_type(StreamType stream_type,
                                                SocketProtocol protocol = SocketProtocol::INVALID) {
   switch (stream_type) {
     case StreamType::RAW:
+#if DAQIRI_ENGINE_IBVERBS
+      return EngineType::IBVERBS;
+#elif DAQIRI_ENGINE_DPDK
       return EngineType::DPDK;
+#else
+      return EngineType::UNKNOWN;
+#endif
     case StreamType::SOCKET:
       if (protocol == SocketProtocol::ROCE) { return EngineType::RDMA; }
       return EngineType::SOCKET;
