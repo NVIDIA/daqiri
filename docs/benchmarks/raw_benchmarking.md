@@ -261,8 +261,8 @@ flow programming test.
 To meter the transmit side at a fixed rate in hardware, set a per-queue `pacing_mbps` cap
 on the TX queue. [`daqiri_bench_raw_tx_rx_pacing.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_pacing.yaml)
 is the loopback config above with `pacing_mbps: 10000` (10 Gbps) on the TX queue. Pacing is
-supported by both raw engines. The example uses the default DPDK engine; add
-`engine: "ibverbs"` beside `stream_type: "raw"` to exercise the ibverbs path. The NIC meters the
+supported by both raw engines. The example uses the default ibverbs engine; add
+`engine: "dpdk"` beside `stream_type: "raw"` to exercise the DPDK path. The NIC meters the
 queue out so its average TX rate stays at or below the configured value. The ibverbs path uses
 the mlx5 packet-pacing rate table rather than per-packet WAIT WQEs; firmware defaults determine
 the allowed burst size unless configured outside DAQIRI.
