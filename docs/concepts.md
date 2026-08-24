@@ -419,6 +419,14 @@ for the configuration constraints and
 [C++ API Usage → Reordered RX bursts](api-reference/cpp.md#reordered-rx-bursts)
 for how to consume them from C++.
 
+### Raw ibverbs flow matcher reuse
+
+The raw ibverbs engine caches matchers by their complete criteria-enable value
+and match mask. Flow rules that share that matcher key reuse the matcher while
+retaining independent match values, actions, destinations, and rule lifetimes.
+Rules with different criteria or masks never share a matcher.
+
+
 ## See also
 
 - [API Guide](api-reference/index.md): the 6-step DAQIRI application
