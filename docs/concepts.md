@@ -419,6 +419,14 @@ for the configuration constraints and
 [C++ API Usage → Reordered RX bursts](api-reference/cpp.md#reordered-rx-bursts)
 for how to consume them from C++.
 
+### Raw ibverbs BlueFlame ordering
+
+Raw ibverbs transmit posting copies each control segment to the mlx5 BlueFlame
+write-combining mapping. DAQIRI issues the required write-combining flush before
+reusing the alternating BlueFlame offset, ensuring the device observes one
+complete doorbell record before the next record can overwrite it.
+
+
 ## See also
 
 - [API Guide](api-reference/index.md): the 6-step DAQIRI application
