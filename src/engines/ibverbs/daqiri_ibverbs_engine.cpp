@@ -4819,8 +4819,6 @@ void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst) {
     ctrl->fm_ce_se = signaled ? MLX5_WQE_CTRL_CQ_UPDATE : 0;
     ctrl->imm = 0;
     memset(title + 16, 0, 16);
-    reinterpret_cast<struct mlx5_wqe_eth_seg*>(title + 16)->cs_flags =
-        MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
 
     uint8_t* dptr = title + 32;
     for (uint32_t i = 0; i < part; ++i) {
@@ -4897,13 +4895,9 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
     ctrl->dci_stream_channel_id = 0;
     ctrl->fm_ce_se = signaled ? MLX5_WQE_CTRL_CQ_UPDATE : 0;
     ctrl->imm = 0;
-    // Minimal (16-byte) Ethernet segment, no inline headers: the NIC DMAs the
-    // whole frame from the data segment. Request IPv4 + L4 checksum offload so
-    // the NIC fills the IP/UDP checksums (matches the DPDK backend, which has
-    // checksum offload always on); the application need not compute them.
+    // Minimal Ethernet segment with no offloads: DAQIRI transports complete raw
+    // Ethernet frames and must not assume their EtherType or upper-layer format.
     memset(seg + 16, 0, 16);
-    reinterpret_cast<struct mlx5_wqe_eth_seg*>(seg + 16)->cs_flags =
-        MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
     auto* dseg = reinterpret_cast<struct mlx5_wqe_data_seg*>(seg + 32);
     for (int s = 0; s < segs; s++) {
       // Each segment uses its own region's lkey (region 0 = header/CPU MR,
