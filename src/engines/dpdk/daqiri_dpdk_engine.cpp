@@ -454,6 +454,10 @@ struct TxWorkerParams {
   uint64_t pace_rem = 0;
 };
 
+struct TxWorkerMultiQParams {
+  std::vector<TxWorkerParams> q_params;
+};
+
 struct RxWorkerParams {
   int port;
   int queue;
@@ -2139,7 +2143,21 @@ void DpdkEngine::initialize() {
   for (int i = 0; i < max_nargs; i++) { _argv[i] = (char*)malloc(max_arg_size); }
 
   int arg = 0;
-  std::string cores = std::to_string(cfg_.common_.master_core_) + ",";  // Master core must be first
+  std::string cores;
+  std::unordered_set<std::string> seen_cores;
+  const auto append_core = [&](const std::string &core) {
+    if (!seen_cores.emplace(core).second) {
+      return;
+    }
+    if (!cores.empty()) {
+      cores += ",";
+    }
+    cores += core;
+  };
+
+  // DPDK selects the first listed lcore as its main lcore. A worker may serve
+  // several queues, but rte_eal_init() rejects duplicate entries in -l.
+  append_core(std::to_string(cfg_.common_.master_core_));
   std::set<std::string> ifs;
 
   std::unordered_map<uint16_t, std::string> port_id_to_name;
@@ -2173,12 +2191,15 @@ void DpdkEngine::initialize() {
     }
 
     ifs.emplace(intf.address_);
-    for (const auto& q : intf.rx_.queues_) { cores += q.common_.cpu_core_ + ","; }
+    for (const auto &q : intf.rx_.queues_) {
+      append_core(q.common_.cpu_core_);
+    }
 
-    for (const auto& q : intf.tx_.queues_) { cores += q.common_.cpu_core_ + ","; }
+    for (const auto &q : intf.tx_.queues_) {
+      append_core(q.common_.cpu_core_);
+    }
   }
 
-  cores = cores.substr(0, cores.size() - 1);
   // Get a unique set of interfaces
   num_ports = ifs.size();
   DAQIRI_LOG_INFO("Attempting to use {} ports for high-speed network", num_ports);
@@ -5825,15 +5846,12 @@ void DpdkEngine::run() {
   DAQIRI_LOG_INFO("Starting DAQIRI workers");
 
   // determine the correct process types for input/output
-  int (*rx_worker)(void*);
-  int (*tx_worker)(void*);
+  int (*rx_worker)(void *);
 
   if (loopback_ != LoopbackType::LOOPBACK_TYPE_SW) {
     rx_worker = rx_core_worker;
-    tx_worker = tx_core_worker;
   } else {
     rx_worker = rx_lb_worker;
-    tx_worker = tx_lb_worker;
   }
 
   // Launch RX workers. If the core is serving multiple queues then we launch a multi-q worker
@@ -5895,7 +5913,8 @@ void DpdkEngine::run() {
     }
   }
 
-  for (const auto& intf : cfg_.ifs_) {
+  std::map<int, TxWorkerMultiQParams *> tx_core_params;
+  for (const auto &intf : cfg_.ifs_) {
     if (intf.tx_.queues_.size() > 0) {
       const auto& tx = intf.tx_;
       for (auto& q : tx.queues_) {
@@ -5904,8 +5923,20 @@ void DpdkEngine::run() {
           continue;
         }
 
+        const int tx_core = strtol(q.common_.cpu_core_.c_str(), NULL, 10);
+        TxWorkerParams *params;
+        if (loopback_ == LoopbackType::LOOPBACK_TYPE_SW) {
+          params = new TxWorkerParams{};
+        } else {
+          auto &core_params = tx_core_params[tx_core];
+          if (core_params == nullptr) {
+            core_params = new TxWorkerMultiQParams;
+          }
+          core_params->q_params.emplace_back();
+          params = &core_params->q_params.back();
+        }
+
         uint32_t key = generate_queue_key(intf.port_id_, q.common_.id_);
-        auto params = new TxWorkerParams;
         //  params->hds    = q.common_.hds_ > 0;
         params->port = intf.port_id_;
         params->ring = tx_rings[key];
@@ -5932,9 +5963,31 @@ void DpdkEngine::run() {
                 intf.port_id_, q.common_.id_, q.pacing_mbps_);
           }
         }
-        rte_eal_remote_launch(
-            tx_worker, (void*)params, strtol(q.common_.cpu_core_.c_str(), NULL, 10));
+        if (loopback_ == LoopbackType::LOOPBACK_TYPE_SW) {
+          const int ret =
+              rte_eal_remote_launch(tx_lb_worker, (void *)params, tx_core);
+          if (ret != 0) {
+            DAQIRI_LOG_CRITICAL(
+                "Failed to launch TX loopback worker on core {}: {}", tx_core,
+                rte_strerror(-ret));
+            delete params;
+            force_quit.store(true);
+            return;
+          }
+        }
       }
+    }
+  }
+
+  for (auto &[core, params] : tx_core_params) {
+    const int ret = rte_eal_remote_launch(tx_core_worker, (void *)params, core);
+    if (ret != 0) {
+      DAQIRI_LOG_CRITICAL(
+          "Failed to launch multi-queue TX worker on core {}: {}", core,
+          rte_strerror(-ret));
+      delete params;
+      force_quit.store(true);
+      return;
     }
   }
 
@@ -6387,106 +6440,161 @@ int DpdkEngine::rx_lb_worker(void* arg) {
   return 0;
 }
 
-int DpdkEngine::tx_core_worker(void* arg) {
-  TxWorkerParams* tparams = (TxWorkerParams*)arg;
-  uint64_t seq;
-  uint64_t ttl_pkts_tx = 0;
-  BurstParams* msg;
-  int64_t bursts = 0;
-
-  DAQIRI_LOG_INFO("Starting TX Core {}, port {}, queue {} socket {} using burst pool {} ring {}",
-                    rte_lcore_id(),
-                    tparams->port,
-                    tparams->queue,
-                    rte_socket_id(),
-                    (void*)tparams->burst_pool,
-                    (void*)tparams->ring);
+int DpdkEngine::tx_core_worker(void *arg) {
+  auto *params = static_cast<TxWorkerMultiQParams *>(arg);
+  std::vector<uint64_t> total_packets(params->q_params.size(), 0);
+  std::vector<BurstParams *> active_bursts(params->q_params.size(), nullptr);
+  std::vector<size_t> packets_sent(params->q_params.size(), 0);
+  std::string queues;
+  for (const auto &q : params->q_params) {
+    if (!queues.empty()) {
+      queues += " ";
+    }
+    queues += std::to_string(q.port) + "/" + std::to_string(q.queue);
+  }
+  DAQIRI_LOG_INFO("Starting multi-queue TX Core {}, P/Q: {}, socket {}",
+                  rte_lcore_id(), queues, rte_socket_id());
 
   while (!force_quit.load()) {
-    if (rte_ring_dequeue(tparams->ring, reinterpret_cast<void**>(&msg)) != 0) {
-      continue;
-    }
-
-    // Scatter mode needs to chain all the buffers
-    if (msg->hdr.hdr.num_segs > 1) {
-      for (size_t p = 0; p < msg->hdr.hdr.num_pkts; p++) {
-        for (int seg = 0; seg < msg->hdr.hdr.num_segs - 1; seg++) {
-          auto* mbuf = reinterpret_cast<struct rte_mbuf*>(msg->pkts[seg][p]);
-          mbuf->next = reinterpret_cast<struct rte_mbuf*>(msg->pkts[seg + 1][p]);
+    for (std::size_t queue_index = 0; queue_index < params->q_params.size();
+         ++queue_index) {
+      auto *tparams = &params->q_params[queue_index];
+      auto *&msg = active_bursts[queue_index];
+      auto &pkts_tx = packets_sent[queue_index];
+      if (msg == nullptr) {
+        if (rte_ring_dequeue(tparams->ring, reinterpret_cast<void **>(&msg)) !=
+            0) {
+          continue;
         }
-
-        // The next pointer of the last segment should be nullptr
-        reinterpret_cast<struct rte_mbuf*>(msg->pkts[msg->hdr.hdr.num_segs - 1][p])->next = nullptr;
-        reinterpret_cast<struct rte_mbuf*>(msg->pkts[0][p])->nb_segs = msg->hdr.hdr.num_segs;
+        pkts_tx = 0;
       }
-    }
 
-    // Packet pacing: meter this queue at (at most) pacing_mbps on average by
-    // gating each burst behind the NIC SEND_ON_TIMESTAMP scheduler. Tag only the
-    // first packet of the burst with a scheduled release time -- the NIC holds it
-    // (one WAIT) until pace_next_ns and sends the rest of the burst right after,
-    // so no per-packet schedule is needed. pace_next_ns then advances by the time
-    // the burst's L2 frame bytes take at the configured rate.
-    if (tparams->pacing_mbps > 0 && tparams->tx_ts_dynfield_offset >= 0 &&
-        msg->hdr.hdr.num_pkts > 0) {
-      const uint64_t now = tparams->engine->now_tx_ns(static_cast<uint16_t>(tparams->port));
-      // Seed on the first burst, and never let an idle gap accrue send credit: if
-      // the virtual clock has fallen behind real time, restart it at now so a
-      // backlog cannot burst above the configured rate.
-      if (tparams->pace_next_ns == 0 || tparams->pace_next_ns < now) {
-        tparams->pace_next_ns = now;
-        tparams->pace_rem = 0;
-      }
-      auto* m0 = reinterpret_cast<struct rte_mbuf*>(msg->pkts[0][0]);
-      m0->ol_flags |= tparams->tx_ts_dynflag_mask;
-      *RTE_MBUF_DYNFIELD(m0, tparams->tx_ts_dynfield_offset, uint64_t*) = tparams->pace_next_ns;
-      // ns = bytes * 8 bits / (Mbps * 1e6 bits/s) * 1e9 ns/s = 8000 * bytes / Mbps.
-      // Carry the division remainder so the long-run average is exactly pacing_mbps.
-      // The set_*_packet_lengths helpers maintain hdr.nbytes as the burst's L2 byte
-      // total; use it directly to avoid walking the burst. Fall back to a walk for
-      // bursts populated without those helpers (nbytes left at 0).
-      uint64_t bytes = msg->hdr.hdr.nbytes;
-      if (bytes == 0) {
+      // Scatter mode needs to chain all the buffers
+      if (msg->hdr.hdr.num_segs > 1) {
         for (size_t p = 0; p < msg->hdr.hdr.num_pkts; p++) {
-          bytes += reinterpret_cast<struct rte_mbuf*>(msg->pkts[0][p])->pkt_len;
+          for (int seg = 0; seg < msg->hdr.hdr.num_segs - 1; seg++) {
+            auto *mbuf = reinterpret_cast<struct rte_mbuf *>(msg->pkts[seg][p]);
+            mbuf->next =
+                reinterpret_cast<struct rte_mbuf *>(msg->pkts[seg + 1][p]);
+          }
+
+          // The next pointer of the last segment should be nullptr
+          reinterpret_cast<struct rte_mbuf *>(
+              msg->pkts[msg->hdr.hdr.num_segs - 1][p])
+              ->next = nullptr;
+          reinterpret_cast<struct rte_mbuf *>(msg->pkts[0][p])->nb_segs =
+              msg->hdr.hdr.num_segs;
         }
       }
-      const uint64_t numer = 8000ULL * bytes + tparams->pace_rem;
-      tparams->pace_next_ns += numer / tparams->pacing_mbps;
-      tparams->pace_rem = numer % tparams->pacing_mbps;
+
+      // Packet pacing: meter this queue at (at most) pacing_mbps on average by
+      // gating each burst behind the NIC SEND_ON_TIMESTAMP scheduler. Tag only
+      // the first packet of the burst with a scheduled release time -- the NIC
+      // holds it (one WAIT) until pace_next_ns and sends the rest of the burst
+      // right after, so no per-packet schedule is needed. pace_next_ns then
+      // advances by the time the burst's L2 frame bytes take at the configured
+      // rate.
+      if (tparams->pacing_mbps > 0 && tparams->tx_ts_dynfield_offset >= 0 &&
+          msg->hdr.hdr.num_pkts > 0) {
+        const uint64_t now =
+            tparams->engine->now_tx_ns(static_cast<uint16_t>(tparams->port));
+        // Seed on the first burst, and never let an idle gap accrue send
+        // credit: if the virtual clock has fallen behind real time, restart it
+        // at now so a backlog cannot burst above the configured rate.
+        if (tparams->pace_next_ns == 0 || tparams->pace_next_ns < now) {
+          tparams->pace_next_ns = now;
+          tparams->pace_rem = 0;
+        }
+        auto *m0 = reinterpret_cast<struct rte_mbuf *>(msg->pkts[0][0]);
+        m0->ol_flags |= tparams->tx_ts_dynflag_mask;
+        *RTE_MBUF_DYNFIELD(m0, tparams->tx_ts_dynfield_offset, uint64_t *) =
+            tparams->pace_next_ns;
+        // ns = bytes * 8 bits / (Mbps * 1e6 bits/s) * 1e9 ns/s = 8000 * bytes /
+        // Mbps. Carry the division remainder so the long-run average is exactly
+        // pacing_mbps. The set_*_packet_lengths helpers maintain hdr.nbytes as
+        // the burst's L2 byte total; use it directly to avoid walking the
+        // burst. Fall back to a walk for bursts populated without those helpers
+        // (nbytes left at 0).
+        uint64_t bytes = msg->hdr.hdr.nbytes;
+        if (bytes == 0) {
+          for (size_t p = 0; p < msg->hdr.hdr.num_pkts; p++) {
+            bytes +=
+                reinterpret_cast<struct rte_mbuf *>(msg->pkts[0][p])->pkt_len;
+          }
+        }
+        const uint64_t numer = 8000ULL * bytes + tparams->pace_rem;
+        tparams->pace_next_ns += numer / tparams->pacing_mbps;
+        tparams->pace_rem = numer % tparams->pacing_mbps;
+      }
+
+      const auto to_send = static_cast<uint16_t>(
+          std::min(static_cast<size_t>(DEFAULT_NUM_TX_BURST),
+                   msg->hdr.hdr.num_pkts - pkts_tx));
+      const auto tx = rte_eth_tx_burst(
+          tparams->port, tparams->queue,
+          reinterpret_cast<rte_mbuf **>(&msg->pkts[0][pkts_tx]), to_send);
+      pkts_tx += static_cast<size_t>(tx);
+      if (pkts_tx != msg->hdr.hdr.num_pkts) {
+        // A full TX queue must not block every other queue assigned to this
+        // lcore. Retain the partially submitted burst and revisit it on the
+        // next round-robin pass.
+        continue;
+      }
+
+      total_packets[queue_index] += pkts_tx;
+
+      for (int seg = 0; seg < msg->hdr.hdr.num_segs; seg++) {
+        rte_mempool_put(tparams->burst_pool,
+                        static_cast<void *>(msg->pkts[seg]));
+      }
+
+      rte_mempool_put(tparams->meta_pool, msg);
+      msg = nullptr;
+      pkts_tx = 0;
     }
-
-    auto pkts_to_transmit = static_cast<int64_t>(msg->hdr.hdr.num_pkts);
-
-    size_t pkts_tx = 0;
-    while (pkts_tx != msg->hdr.hdr.num_pkts && !force_quit.load()) {
-      auto to_send = static_cast<uint16_t>(
-          std::min(static_cast<size_t>(DEFAULT_NUM_TX_BURST), msg->hdr.hdr.num_pkts - pkts_tx));
-
-      // CPU-only or HDS mode
-      int tx;
-      tx = rte_eth_tx_burst(tparams->port,
-                            tparams->queue,
-                            reinterpret_cast<rte_mbuf**>(&msg->pkts[0][pkts_tx]),
-                            to_send);
-
-      pkts_tx += tx;
-    }
-
-    ttl_pkts_tx += pkts_tx;
-
-    for (int seg = 0; seg < msg->hdr.hdr.num_segs; seg++) {
-      rte_mempool_put(tparams->burst_pool, static_cast<void*>(msg->pkts[seg]));
-    }
-
-    rte_mempool_put(tparams->meta_pool, msg);
-    bursts++;
   }
 
-  DAQIRI_LOG_INFO("Total packets transmitted by application (port/queue {}/{}): {}",
-                     tparams->port,
-                     tparams->queue,
-                     ttl_pkts_tx);
+  // A shutdown can interrupt a partially submitted burst or leave bursts in
+  // the per-queue rings. Free only packets that the NIC did not accept, then
+  // return the pointer arrays and metadata to their pools.
+  const auto release_unsent = [](TxWorkerParams *tparams, BurstParams *msg,
+                                 size_t first_unsent) {
+    if (msg == nullptr) {
+      return;
+    }
+    for (size_t packet = first_unsent; packet < msg->hdr.hdr.num_pkts;
+         ++packet) {
+      auto *mbuf = reinterpret_cast<rte_mbuf *>(msg->pkts[0][packet]);
+      if (mbuf != nullptr) {
+        rte_pktmbuf_free(mbuf);
+      }
+    }
+    for (int seg = 0; seg < msg->hdr.hdr.num_segs; ++seg) {
+      rte_mempool_put(tparams->burst_pool,
+                      static_cast<void *>(msg->pkts[seg]));
+    }
+    rte_mempool_put(tparams->meta_pool, msg);
+  };
+
+  for (std::size_t queue_index = 0; queue_index < params->q_params.size();
+       ++queue_index) {
+    auto *tparams = &params->q_params[queue_index];
+    release_unsent(tparams, active_bursts[queue_index],
+                   packets_sent[queue_index]);
+    BurstParams *queued = nullptr;
+    while (rte_ring_dequeue(tparams->ring,
+                            reinterpret_cast<void **>(&queued)) == 0) {
+      release_unsent(tparams, queued, 0);
+    }
+  }
+
+  for (std::size_t queue_index = 0; queue_index < params->q_params.size();
+       ++queue_index) {
+    const auto &q = params->q_params[queue_index];
+    DAQIRI_LOG_INFO(
+        "Total packets transmitted by application (port/queue {}/{}): {}",
+        q.port, q.queue, total_packets[queue_index]);
+  }
 
   return 0;
 }
@@ -6739,7 +6847,10 @@ bool DpdkEngine::is_tx_burst_available(BurstParams* burst) {
 
   const auto& q = item->second;
   for (int seg = 0; seg < burst->hdr.hdr.num_segs; seg++) {
-    if (rte_mempool_avail_count(q->pools[seg]) < burst->hdr.hdr.num_pkts * 2) { return false; }
+    const auto available = rte_mempool_avail_count(q->pools[seg]);
+    if (available < burst->hdr.hdr.num_pkts * 2) {
+      return false;
+    }
   }
 
   return true;
