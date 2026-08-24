@@ -469,7 +469,16 @@ Status Engine::allocate_memory_regions() {
             DAQIRI_LOG_CRITICAL("Could not query the current CUDA context");
             return Status::NULL_PTR;
           }
-          if (current == nullptr) {
+          bool select_device = current == nullptr;
+          if (current != nullptr) {
+            CUdevice current_device;
+            if (cuCtxGetDevice(&current_device) != CUDA_SUCCESS) {
+              DAQIRI_LOG_CRITICAL("Could not query the device for the current CUDA context");
+              return Status::NULL_PTR;
+            }
+            select_device = current_device != mr.second.affinity_;
+          }
+          if (select_device) {
             const auto set_res = cudaSetDevice(mr.second.affinity_);
             if (set_res != cudaSuccess) {
               DAQIRI_LOG_CRITICAL("Could not select CUDA device {}: {}", mr.second.affinity_,
@@ -483,18 +492,6 @@ Status Engine::allocate_memory_regions() {
                                   mr.second.affinity_);
               return Status::NULL_PTR;
             }
-          } else {
-            CUdevice current_device;
-            if (cuCtxGetDevice(&current_device) != CUDA_SUCCESS) {
-              DAQIRI_LOG_CRITICAL("Could not query the device for the current CUDA context");
-              return Status::NULL_PTR;
-            }
-            if (current_device != mr.second.affinity_) {
-              DAQIRI_LOG_CRITICAL(
-                  "Current CUDA context belongs to device {}, but MR {} requests device {}",
-                  current_device, mr.second.name_, mr.second.affinity_);
-              return Status::INVALID_PARAMETER;
-            }
           }
           ar.cuda_context_ = current;
           const auto alloc_res = cuMemAlloc(&cuptr, align);
@@ -502,8 +499,8 @@ Status Engine::allocate_memory_regions() {
           if (alloc_res != CUDA_SUCCESS) {
             const char* err_str = nullptr;
             cuGetErrorString(alloc_res, &err_str);
-            DAQIRI_LOG_CRITICAL(
-                "Could not allocate {:.2f}MB of GPU memory. Error: {}", align / 1e6, err_str);
+            DAQIRI_LOG_CRITICAL("Could not allocate {:.2f}MB of GPU memory. Error: {}", align / 1e6,
+                                err_str);
             return Status::NULL_PTR;
           }
 

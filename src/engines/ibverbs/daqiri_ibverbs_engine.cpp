@@ -523,6 +523,23 @@ Status IbverbsEngine::register_mr(struct ibv_pd* pd, const std::string& mr_name,
   if (mr.kind_ == MemoryKind::DEVICE) {
     // GPUDirect: export the CUDA allocation as a dma-buf fd and register it so
     // the NIC DMAs packets straight to/from GPU memory.
+    CUcontext previous = nullptr;
+    const auto current_res = cuCtxGetCurrent(&previous);
+    if (current_res != CUDA_SUCCESS) {
+      DAQIRI_LOG_CRITICAL("Could not query the current CUDA context for MR {}", mr_name);
+      return Status::INTERNAL_ERROR;
+    }
+    const CUcontext owning = ar_[mr_name].cuda_context_;
+    if (owning == nullptr) {
+      DAQIRI_LOG_CRITICAL("Device MR {} has no owning CUDA context", mr_name);
+      return Status::INTERNAL_ERROR;
+    }
+    const bool switched = previous != owning;
+    if (switched && cuCtxSetCurrent(owning) != CUDA_SUCCESS) {
+      DAQIRI_LOG_CRITICAL("Could not activate the owning CUDA context for MR {}", mr_name);
+      return Status::INTERNAL_ERROR;
+    }
+
     const size_t page = sysconf(_SC_PAGESIZE);
     const auto va = reinterpret_cast<uintptr_t>(base);
     const uintptr_t aligned = va & ~(static_cast<uintptr_t>(page) - 1);
@@ -532,14 +549,22 @@ Status IbverbsEngine::register_mr(struct ibv_pd* pd, const std::string& mr_name,
     CUresult cres =
         cuMemGetHandleForAddressRange(&dmabuf_fd, static_cast<CUdeviceptr>(aligned), aligned_size,
                                       CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD, 0);
+    const CUresult restore_res = switched ? cuCtxSetCurrent(previous) : CUDA_SUCCESS;
+    if (restore_res != CUDA_SUCCESS) {
+      if (dmabuf_fd >= 0) {
+        close(dmabuf_fd);
+      }
+      DAQIRI_LOG_CRITICAL("Could not restore the CUDA context after exporting MR {}", mr_name);
+      return Status::INTERNAL_ERROR;
+    }
+
     if (cres != CUDA_SUCCESS) {
       const char* es = nullptr;
       cuGetErrorString(cres, &es);
       DAQIRI_LOG_CRITICAL(
           "cuMemGetHandleForAddressRange failed for MR {}: {}. CUDA DMA-BUF export requires "
           "Linux kernel 5.12 or newer and the NVIDIA open kernel driver",
-          mr_name,
-          es ? es : "?");
+          mr_name, es ? es : "?");
       return Status::GENERIC_FAILURE;
     }
     struct ibv_mr* gmr = ibv_reg_dmabuf_mr(pd, offset, mr.ttl_size_, va, dmabuf_fd, access);
