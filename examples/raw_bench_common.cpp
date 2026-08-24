@@ -490,6 +490,14 @@ void populate_udp_ipv4_headers(uint8_t *pkt_data, uint32_t header_size,
   pkt->udp.len = htons(udp_len);
 }
 
+void finalize_ipv4_checksum(uint8_t *pkt_data) {
+  auto *pkt = reinterpret_cast<daqiri::UDPIPV4Pkt *>(pkt_data);
+  const size_t ip_header_len = static_cast<size_t>(pkt->ip.ihl) * 4U;
+  pkt->ip.check = 0;
+  pkt->ip.check =
+      finalize_checksum(add_checksum_bytes(&pkt->ip, ip_header_len, 0));
+}
+
 void finalize_udp_ipv4_checksums(uint8_t *pkt_data) {
   auto *pkt = reinterpret_cast<daqiri::UDPIPV4Pkt *>(pkt_data);
   const size_t ip_header_len = static_cast<size_t>(pkt->ip.ihl) * 4U;

@@ -419,6 +419,15 @@ for the configuration constraints and
 [C++ API Usage → Reordered RX bursts](api-reference/cpp.md#reordered-rx-bursts)
 for how to consume them from C++.
 
+### Raw ibverbs checksum ownership
+
+Raw ibverbs transmits frame bytes exactly as supplied and does not request
+IPv4 or transport checksum insertion from mlx5. Applications that construct
+IPv4 packets must therefore populate a valid IPv4 header checksum. UDP over
+IPv4 may deliberately use a zero UDP checksum; otherwise the application must
+compute the UDP checksum as well. The bundled raw examples follow this rule,
+including header-data-split and reorder transmit paths.
+
 ## See also
 
 - [API Guide](api-reference/index.md): the 6-step DAQIRI application

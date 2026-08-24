@@ -183,6 +183,7 @@ void tx_worker(const SequenceTxConfig &cfg, std::atomic<bool> &stop) {
         failed = true;
         break;
       }
+      daqiri::bench::finalize_ipv4_checksum(pkt_data);
       const uint32_t sequence_network_order = htonl(next_sequence++);
       std::memcpy(pkt_data + cfg.packet.header_size +
                       cfg.sequence_number_offset,

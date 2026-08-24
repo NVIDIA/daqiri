@@ -109,6 +109,13 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
         break;
       }
 
+      auto *header = static_cast<uint8_t *>(
+          daqiri::get_segment_packet_ptr(msg, 0, i));
+      if (header == nullptr) {
+        failed = true;
+        break;
+      }
+      daqiri::bench::finalize_ipv4_checksum(header);
       auto *gpu_payload = daqiri::get_segment_packet_ptr(msg, 1, i);
       if (initialized_payload_buffers.insert(gpu_payload).second) {
         if (cudaMemcpy(gpu_payload, payload_template.data(), cfg.payload_size,

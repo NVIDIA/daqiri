@@ -128,6 +128,7 @@ void populate_udp_ipv4_headers(uint8_t *pkt_data, uint32_t header_size,
                                uint32_t ip_dst_host, uint16_t src_port,
                                uint16_t dst_port);
 
+void finalize_ipv4_checksum(uint8_t *pkt_data);
 void finalize_udp_ipv4_checksums(uint8_t *pkt_data);
 
 cudaError_t memcpy_batch_async(const std::vector<void *> &dsts,
