@@ -53,7 +53,7 @@ python3 applications/resnet50_inference/tools/prepare_cifar10_pcap.py \
 ```
 
 Geometry (defaults): 128 pkts/image × 1176 int8 B; batch = 32 images → 4096 pkts;
-seq at bit_offset 128, width 12; signed int8 = pixel − 128.
+seq at bit_offset 128, width 16; signed int8 = pixel − 128.
 
 ## Run (xhost helper)
 
@@ -111,7 +111,7 @@ from `reorder:` at startup (and errors if the YAML defines it directly).
 | `packets_per_image` | 128 | Power of two |
 | `images_per_batch` | 32 | Inference batch size (power of two) |
 | `payload_byte_offset` | 64 | Header size before payload |
-| `seq_bit_offset` / `seq_bit_width` | 128 / 12 | Header seq field |
+| `seq_bit_offset` / `seq_bit_width` | 128 / 12 | Header seq field. Every shipped config sets **16**; leave the 12-bit default only if `packets_per_batch` is small enough that `2^width` spans more than one batch |
 
 `packets_per_batch` is derived as `packets_per_image × images_per_batch` and
 written into the synthesized `reorder_configs`. `--images-per-batch` may shrink
@@ -123,11 +123,13 @@ A reorder batch only reaches inference if it is delivered whole: a partially
 flushed batch is truncated to whole images, so the image straddling the flush
 boundary is lost. Three settings matter:
 
-- `rx.queues[].timeout_us: 0` — disables partial flushes. The dataset is padded
-  to whole batches, so a flush can only lose data, and any finite timeout loses
-  the race when the RX poller stalls mid-batch (inference backpressure, cold
-  start, CPU contention). Trade-off: a batch missing a packet is never
-  delivered, costing 32 images instead of 31.
+- `rx.queues[].timeout_us: 2000` — must stay **finite**. The accumulator fills
+  by arrival order, and DAQIRI derives the batch id as `seq / packets_per_batch`.
+  Without a timeout, one lost packet lets the next batch's first packet complete
+  this one, shifting every subsequent batch by one packet for the rest of the run
+  and misaligning image boundaries and labels. A finite timeout resyncs at the
+  batch boundary instead. Trade-off: a flush landing mid-image drops the
+  straggler packets, reported as `remainder_dropped`.
 - `rx.queues[].batch_size` — a multiple of `packets_per_batch` (8192 for 4096),
   so a batch never straddles an RX burst boundary.
 - `tx.queues[].batch_size` / `bench_tx.batch_size` — aligned to
@@ -135,6 +137,11 @@ boundary is lost. Three settings matter:
   boundary.
 
 With those set, an xhost `--replay-once` run of 256 images delivers 8 whole
-batches: `pushed 256 images (reordered_bursts=8 partial=0 dropped=0)`.
+batches:
+
+```text
+rx_producer_worker: delivered_bursts=8 pushed_images=256 dropped_bursts=0 [queue_full=0 short_batch=0 info_failure=0 null_input=0]
+rx_producer_worker: partial_bursts=0 partial_packets=0 early_flush_shortfall=0 remainder_dropped=0 info_failures=0 non_reordered_bursts=0 non_reordered_packets=0
+```
 
 See `docs/tutorials/daqiri-resnet-inference.md`.
