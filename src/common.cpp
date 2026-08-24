@@ -933,11 +933,26 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_flow_config(
 
   const YAML::Node match = flow_item["match"];
 
+  const YAML::Node ecpri_node = match["ecpri"];
+  const YAML::Node ethernet_node = match["ethernet"];
+  if (ethernet_node) {
+    static constexpr const char* kIncompatibleEthernetFields[] = {
+        "ecpri", "udp_src", "udp_dst", "ipv4_len", "ipv4_src", "ipv4_dst",
+        "flex_item_id", "val", "mask"};
+    for (const char* field : kIncompatibleEthernetFields) {
+      if (match[field]) {
+        DAQIRI_LOG_ERROR(
+            "Flow '{}' field 'match.ethernet' cannot be combined with 'match.{}'",
+            flow.name_, field);
+        return false;
+      }
+    }
+  }
+
   // eCPRI-over-Ethernet match: selected by the presence of a `match.ecpri` map.
   // Matches the eCPRI EtherType (0xAEFE) plus an optional common-header message
   // type and message identifier (pc_id/rtc_id). Detected before the UDP/IP and
   // flex-item paths because it is a distinct, mutually exclusive match class.
-  const YAML::Node ecpri_node = match["ecpri"];
   if (ecpri_node && ecpri_node.IsMap()) {
     flow.match_.type_ = daqiri::FlowMatchType::ECPRI;
     if (ecpri_node["msg_type"]) {
@@ -967,7 +982,6 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_flow_config(
   // Raw Ethernet address match: selected by the presence of a
   // `match.ethernet` map. Keep it mutually exclusive with the other match
   // classes, just like eCPRI and flex-item matching.
-  const YAML::Node ethernet_node = match["ethernet"];
   if (ethernet_node) {
     if (!ethernet_node.IsMap()) {
       DAQIRI_LOG_ERROR("Flow '{}' field 'match.ethernet' must be a map", flow.name_);

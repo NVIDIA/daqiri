@@ -276,6 +276,10 @@ RX flows can also perform hardware VLAN pop or tunnel decapsulation before queue
       - type: `string`
       - format: `xx:xx:xx:xx:xx:xx`
 
+    The `ethernet` match class is mutually exclusive with eCPRI, IPv4/UDP,
+    and flex-item criteria. A configuration that combines `match.ethernet`
+    with fields from another match class is rejected during parsing.
+
 For Raw Ethernet (`stream_type: "raw"`), each flow rule is programmed into the NIC during
 `daqiri_init()`. If any rule cannot be installed, or the send-to-kernel fallback cannot be
 created when `flow_isolation: true`, initialization fails with a critical log and
