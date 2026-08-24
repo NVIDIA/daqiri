@@ -2759,7 +2759,17 @@ void DpdkEngine::initialize() {
                         conf_ports_eth_addr[intf.port_id_].addr_bytes[4],
                         conf_ports_eth_addr[intf.port_id_].addr_bytes[5]);
 
-      if (rx.hardware_timestamps_ && !calibrate_rx_timestamp_clock(intf.port_id_)) { return; }
+      if (rx.hardware_timestamps_) {
+        if (rx.hardware_timestamp_format_ == RxTimestampFormat::NANOSECONDS) {
+          rx_timestamp_conversions_[intf.port_id_].valid = true;
+          rx_timestamp_conversions_[intf.port_id_].ticks_per_second = 1000000000ULL;
+          DAQIRI_LOG_INFO(
+              "Using PMD-provided RX hardware timestamps as nanoseconds on port {}",
+              intf.port_id_);
+        } else if (!calibrate_rx_timestamp_clock(intf.port_id_)) {
+          return;
+        }
+      }
 
       // Standard (group 3), flex-item (group 1) and eCPRI (group 2) flows use
       // separate DPDK flow groups with conflicting group-0 jump rules;
