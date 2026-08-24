@@ -1955,6 +1955,59 @@ bool DpdkEngine::calibrate_rx_timestamp_clock(uint16_t port_id) {
   return true;
 }
 
+bool DpdkEngine::validate_tx_nanosecond_clock(uint16_t port_id) {
+  struct timespec before {};
+  struct timespec after {};
+  if (clock_gettime(CLOCK_REALTIME, &before) != 0) {
+    DAQIRI_LOG_CRITICAL("clock_gettime(CLOCK_REALTIME) failed while validating TX port {}: {}",
+                        port_id,
+                        strerror(errno));
+    return false;
+  }
+
+  uint64_t device_time = 0;
+  const int ret = rte_eth_read_clock(port_id, &device_time);
+  if (ret < 0) {
+    DAQIRI_LOG_CRITICAL(
+        "tx.hardware_timestamp_format=nanoseconds requires a readable real-time NIC clock, "
+        "but rte_eth_read_clock() failed on port {}: err={} ({}). Enable the mlx5 real-time "
+        "clock and synchronize it with PTP before using epoch nanoseconds.",
+        port_id,
+        ret,
+        rte_strerror(-ret));
+    return false;
+  }
+
+  if (clock_gettime(CLOCK_REALTIME, &after) != 0) {
+    DAQIRI_LOG_CRITICAL("clock_gettime(CLOCK_REALTIME) failed while validating TX port {}: {}",
+                        port_id,
+                        strerror(errno));
+    return false;
+  }
+
+  const uint64_t before_ns = static_cast<uint64_t>(before.tv_sec) * 1000000000ULL +
+                             static_cast<uint64_t>(before.tv_nsec);
+  const uint64_t after_ns = static_cast<uint64_t>(after.tv_sec) * 1000000000ULL +
+                            static_cast<uint64_t>(after.tv_nsec);
+  constexpr uint64_t kClockToleranceNs = 1000000000ULL;
+  if (device_time + kClockToleranceNs < before_ns ||
+      device_time > after_ns + kClockToleranceNs) {
+    DAQIRI_LOG_CRITICAL(
+        "tx.hardware_timestamp_format=nanoseconds requires the NIC clock to contain epoch "
+        "nanoseconds, but port {} clock {} differs from CLOCK_REALTIME [{}, {}]. Enable the "
+        "mlx5 real-time clock and verify PTP synchronization.",
+        port_id,
+        device_time,
+        before_ns,
+        after_ns);
+    return false;
+  }
+
+  tx_nanosecond_clock_validated_[port_id] = true;
+  DAQIRI_LOG_INFO("Validated epoch-nanosecond TX hardware clock on port {}", port_id);
+  return true;
+}
+
 bool DpdkEngine::setup_tx_timestamp_dynfield() {
   static bool done = false;
   static int registered_offset = -1;
@@ -2349,6 +2402,7 @@ void DpdkEngine::initialize() {
     }
 
     port_q_num[intf.port_id_] = {intf.rx_.queues_.size(), intf.tx_.queues_.size()};
+    tx_timestamp_formats_[intf.port_id_] = intf.tx_.hardware_timestamp_format_;
     port_id_to_name[intf.port_id_] = intf.address_;
 
     DAQIRI_LOG_INFO("DPDK init ({}) -- RX: {} TX: {}",
@@ -2769,6 +2823,11 @@ void DpdkEngine::initialize() {
         } else if (!calibrate_rx_timestamp_clock(intf.port_id_)) {
           return;
         }
+      }
+      if (tx.accurate_send_ &&
+          tx.hardware_timestamp_format_ == TxTimestampFormat::NANOSECONDS &&
+          !validate_tx_nanosecond_clock(intf.port_id_)) {
+        return;
       }
 
       // Standard (group 3), flex-item (group 1) and eCPRI (group 2) flows use
@@ -6582,6 +6641,14 @@ Status DpdkEngine::set_packet_tx_time(BurstParams* burst, int idx, uint64_t time
   if (burst == nullptr) { return Status::NULL_PTR; }
   if (idx < 0 || idx >= static_cast<int>(burst->hdr.hdr.num_pkts)) {
     return Status::INVALID_PARAMETER;
+  }
+  const uint16_t port_id = burst->hdr.hdr.port_id;
+  if (port_id >= tx_timestamp_formats_.size()) { return Status::INVALID_PARAMETER; }
+  if (tx_timestamp_formats_[port_id] == TxTimestampFormat::NANOSECONDS &&
+      !tx_nanosecond_clock_validated_[port_id]) {
+    // Never pass epoch nanoseconds to a free-running device-tick scheduler.
+    // initialize() validates the selected clock domain before enabling TX.
+    return Status::NOT_SUPPORTED;
   }
   if (timestamp_dynfield_offset_ < 0 || tx_timestamp_dynflag_mask_ == 0) {
     return Status::NOT_SUPPORTED;

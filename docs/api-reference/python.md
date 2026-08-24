@@ -681,6 +681,8 @@ encapsulation/push rules are configured in YAML under `tx.flows`.
 | `FlowMatchType` | `IPV4_UDP`, `FLEX_ITEM` |
 | `FlowOpType` | `ADD_RX`, `ADD_RX_BATCH`, `DELETE` |
 | `ReorderMethod` | `INVALID`, `SEQ_BATCH_NUMBER`, `SEQ_PACKETS_PER_BATCH` |
+| `RxTimestampFormat` | `DEVICE_CLOCK_TICKS`, `NANOSECONDS` |
+| `TxTimestampFormat` | `DEVICE_CLOCK_TICKS`, `NANOSECONDS` |
 | `ReorderDataType` | `SAME`, `INT4`, `INT8`, `INT16`, `INT32`, `FP16`, `BF16`, `FP32`, `FP64`, `INVALID` |
 | `ReorderEndianness` | `HOST`, `NETWORK`, `INVALID` |
 | `LogLevel` | `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`, `CRITICAL`, `OFF` |
@@ -703,8 +705,8 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `NetworkConfig` | Top-level parsed DAQIRI configuration. |
 | `CommonConfig` | Global stream type, engine selection, direction, loopback, and core settings. (Transport protocol is derived from the endpoint URI scheme.) |
 | `InterfaceConfig` | Per-interface address, socket/RoCE/RDMA, RX, and TX configuration. |
-| `RxConfig` | RX flow isolation, timestamps, queues, flows, flex items, and reorder configs. |
-| `TxConfig` | TX accurate-send flag, queues, and flows. |
+| `RxConfig` | RX flow isolation, timestamp enable/format, queues, flows, flex items, and reorder configs. |
+| `TxConfig` | TX accurate-send flag and timestamp format, queues, and flows. |
 | `CommonQueueConfig` | Shared queue fields: name, ID, batch size, split boundary, CPU core, memory regions, and offloads. |
 | `RxQueueConfig` | RX queue wrapper with common queue fields, timeout, and `QueuePollMode`. |
 | `TxQueueConfig` | TX queue wrapper with common queue fields and `QueuePollMode`. |

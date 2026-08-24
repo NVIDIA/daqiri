@@ -188,6 +188,7 @@ class DpdkEngine : public Engine {
   bool setup_rx_timestamp_dynfield();
   bool setup_tx_timestamp_dynfield();
   bool calibrate_rx_timestamp_clock(uint16_t port_id);
+  bool validate_tx_nanosecond_clock(uint16_t port_id);
   // Current NIC clock for `port` in nanoseconds, for packet-pacing scheduling.
   // Uses rte_eth_read_clock + the calibrated ticks/sec where supported; falls
   // back to CLOCK_MONOTONIC (the NIC PTP clock free-runs from driver load unless
@@ -527,6 +528,8 @@ class DpdkEngine : public Engine {
   uint64_t rx_timestamp_dynflag_mask_{0};
   uint64_t tx_timestamp_dynflag_mask_{0};
   std::array<RxTimestampConversion, RTE_MAX_ETHPORTS> rx_timestamp_conversions_{};
+  std::array<TxTimestampFormat, RTE_MAX_ETHPORTS> tx_timestamp_formats_{};
+  std::array<bool, RTE_MAX_ETHPORTS> tx_nanosecond_clock_validated_{};
   std::array<struct rte_eth_conf, MAX_INTERFACES> local_port_conf;
   DpdkStats stats_;
   struct rte_ring* loopback_ring;

@@ -299,6 +299,8 @@ struct IbvTxQueue {
   std::vector<uint64_t> wqe_slot_cum;
   std::vector<uint64_t> wqe_wqebb_cum;
   uint64_t slots_posted = 0;
+  bool accurate_send = false;
+  TxTimestampFormat timestamp_format = TxTimestampFormat::DEVICE_CLOCK_TICKS;
   bool send_scheduling = false;  // HCA wait_on_time present + real-time clock
   uint64_t rt_timemask = 0;      // wait segment comparison mask
   bool empw_enabled = false;

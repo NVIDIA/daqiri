@@ -4321,6 +4321,15 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
   q.port_id = intf.port_id_;
   q.queue_id = qcfg.common_.id_;
   q.poll_mode = qcfg.poll_mode_;
+  q.accurate_send = intf.tx_.accurate_send_;
+  q.timestamp_format = intf.tx_.hardware_timestamp_format_;
+  if (q.accurate_send && q.timestamp_format == TxTimestampFormat::NANOSECONDS) {
+    DAQIRI_LOG_CRITICAL(
+        "tx.hardware_timestamp_format=nanoseconds is not supported by the raw-ibverbs "
+        "accurate-send path because it currently uses the device-clock CQ domain; refusing "
+        "to interpret epoch nanoseconds as device ticks");
+    return Status::NOT_SUPPORTED;
+  }
   q.batch_size = q.poll_mode == QueuePollMode::DIRECT ? 1 : std::max(1, qcfg.common_.batch_size_);
   if (!qcfg.common_.cpu_core_.empty()) {
     q.cpu_core = std::stoi(qcfg.common_.cpu_core_);

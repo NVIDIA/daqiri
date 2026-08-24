@@ -333,8 +333,14 @@ initialization fails if DAQIRI cannot provide nanosecond timestamps for the sele
 Timestamps are returned by `get_packet_rx_timestamp()` in nanoseconds in the NIC timestamp
 clock domain, not wall-clock time.
 
+`rx.hardware_timestamp_format:` Describes the hardware/PMD representation DAQIRI receives.
+Use `device_clock_ticks` (default) when DAQIRI must convert device ticks to nanoseconds, or
+`nanoseconds` when the PMD already supplies nanoseconds.
+
 - type: `boolean`
 - default: `false`
+- timestamp-format type: `string` (`device_clock_ticks` or `nanoseconds`)
+- timestamp-format default: `device_clock_ticks`
 
 ### RX Reorder Configs
 
@@ -496,8 +502,22 @@ pre-encap (TX) frame.
 `tx.accurate_send:` Enable hardware-timed packet transmission using PTP timestamps. When
 enabled, use `set_packet_tx_time()` to schedule packets. Requires ConnectX-7 or later.
 
+`tx.hardware_timestamp_format:` Selects the clock-domain representation accepted by
+`set_packet_tx_time()`:
+
+- `device_clock_ticks` preserves the historical contract and passes device-clock values through.
+- `nanoseconds` accepts epoch nanoseconds. The DPDK engine validates at startup that
+  `rte_eth_read_clock()` is readable and agrees with `CLOCK_REALTIME`; initialization fails
+  rather than sending at an incorrectly interpreted time when mlx5 real-time clock mode or PTP
+  synchronization is unavailable.
+
+The raw-ibverbs engine rejects `nanoseconds` until wall-clock send-CQ/WAIT encoding support is
+enabled; it never silently treats epoch nanoseconds as device ticks.
+
 - type: `boolean`
 - default: `false`
+- timestamp-format type: `string` (`device_clock_ticks` or `nanoseconds`)
+- timestamp-format default: `device_clock_ticks`
 
 ## Complete Example (Raw Ethernet, Header-Data Split)
 
