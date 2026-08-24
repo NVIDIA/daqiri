@@ -964,6 +964,50 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_flow_config(
     return true;
   }
 
+  // Raw Ethernet address match: selected by the presence of a
+  // `match.ethernet` map. Keep it mutually exclusive with the other match
+  // classes, just like eCPRI and flex-item matching.
+  const YAML::Node ethernet_node = match["ethernet"];
+  if (ethernet_node) {
+    if (!ethernet_node.IsMap()) {
+      DAQIRI_LOG_ERROR("Flow '{}' field 'match.ethernet' must be a map", flow.name_);
+      return false;
+    }
+
+    flow.match_.type_ = daqiri::FlowMatchType::ETHERNET;
+    auto parse_address = [&](const char* key, bool& enabled,
+                             std::array<uint8_t, 6>& address) {
+      const YAML::Node address_node = ethernet_node[key];
+      if (!address_node) { return true; }
+
+      std::array<char, daqiri::kEthAddrLength> parsed = {};
+      const std::string text = address_node.as<std::string>();
+      if (daqiri::parse_eth_addr(&parsed, text) != daqiri::Status::SUCCESS) {
+        DAQIRI_LOG_ERROR("Flow '{}' has invalid match.ethernet.{} address '{}'",
+                         flow.name_, key, text);
+        return false;
+      }
+      std::transform(parsed.begin(), parsed.end(), address.begin(),
+                     [](char octet) { return static_cast<uint8_t>(octet); });
+      enabled = true;
+      return true;
+    };
+
+    if (!parse_address("src", flow.match_.ethernet_match_.match_src_,
+                       flow.match_.ethernet_match_.src_) ||
+        !parse_address("dst", flow.match_.ethernet_match_.match_dst_,
+                       flow.match_.ethernet_match_.dst_)) {
+      return false;
+    }
+    if (!flow.match_.ethernet_match_.match_src_ &&
+        !flow.match_.ethernet_match_.match_dst_) {
+      DAQIRI_LOG_ERROR("Flow '{}' Ethernet match requires 'src' and/or 'dst'",
+                       flow.name_);
+      return false;
+    }
+    return true;
+  }
+
   try {
     flow.match_.udp_src_ = match["udp_src"].as<uint16_t>();
   } catch (const std::exception& e) {
