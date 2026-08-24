@@ -248,6 +248,13 @@ daqiri.free_rx_burst(burst)                  # metadata only
 addresses. They do not return Python-managed memory objects and they do not
 transfer ownership to Python.
 
+The bulk accessor returns the same integer addresses for the first `count`
+packets in one call:
+
+```python
+status, addresses = daqiri.get_segment_packet_ptrs(burst, seg=0, count=32)
+```
+
 Prefer the copy helpers unless the application deliberately needs raw addresses
 for CUDA or foreign-function interop. The copy helpers handle both CPU pointers
 and CUDA device pointers. Device copies use `cudaMemcpy` internally.
@@ -547,6 +554,7 @@ The workflow sections above show the common call order and ownership rules.
 | `get_burst_tot_byte(burst)` | Read total byte count for a burst. |
 | `get_packet_ptr(burst, idx)` | Return segment 0 packet address as an integer. |
 | `get_segment_packet_ptr(burst, seg, idx)` | Return segment packet address as an integer. |
+| `get_segment_packet_ptrs(burst, seg, count)` | Return `(Status, addresses)` for the first `count` packets in a segment. |
 | `get_packet_length(burst, idx)` / `get_segment_packet_length(burst, seg, idx)` | Read packet or segment length. |
 | `get_packet_flow_id(burst, idx)` | Read matched flow ID, or `0` when no flow matched. |
 | `get_packet_rx_timestamp(burst, idx)` | Return `(Status, timestamp_ns)`. |

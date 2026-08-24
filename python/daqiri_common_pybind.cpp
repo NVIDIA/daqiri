@@ -23,6 +23,7 @@
 #include <pybind11/stl.h>
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -1054,6 +1055,34 @@ PYBIND11_MODULE(_daqiri, m) {
       },
       "burst"_a, "seg"_a, "idx"_a,
       "Return the packet segment data pointer as an integer address");
+  m.def(
+      "get_segment_packet_ptrs",
+      [](BurstParams *burst, int seg, int count) {
+        std::vector<uintptr_t> addresses;
+        if (burst == nullptr) {
+          return py::make_tuple(Status::NULL_PTR, addresses);
+        }
+        if (count < 0 ||
+            static_cast<size_t>(count) > burst->hdr.hdr.num_pkts) {
+          return py::make_tuple(Status::INVALID_PARAMETER, addresses);
+        }
+
+        // Keep storage non-empty so the C++ output pointer remains valid when
+        // count is zero.
+        std::vector<void *> ptrs(static_cast<size_t>(std::max(count, 1)),
+                                 nullptr);
+        const Status status =
+            get_segment_packet_ptrs(burst, seg, ptrs.data(), count);
+        if (status == Status::SUCCESS) {
+          addresses.reserve(static_cast<size_t>(count));
+          for (int idx = 0; idx < count; ++idx) {
+            addresses.push_back(reinterpret_cast<uintptr_t>(ptrs[idx]));
+          }
+        }
+        return py::make_tuple(status, addresses);
+      },
+      "burst"_a, "seg"_a, "count"_a,
+      "Return (Status, segment packet addresses) for the first count packets");
   m.def(
       "get_packet_ptr",
       [](BurstParams *burst, int idx) {
