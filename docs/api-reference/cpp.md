@@ -120,9 +120,13 @@ for (int i = 0; i < daqiri::get_num_packets(burst); i++) {
 RX hardware timestamps are available only when Raw Ethernet (`stream_type: "raw"`) is
 configured with `rx.hardware_timestamps: true` and the NIC supports
 `RTE_ETH_RX_OFFLOAD_TIMESTAMP`. DAQIRI converts the NIC timestamp counter to nanoseconds
-internally using the matching device clock when available, or directly uses the driver's
-nanosecond timestamp format. DAQIRI does not expose NIC clock reads or
-convert timestamps to wall-clock time. For reordered aggregate bursts,
+internally using the matching device clock by default. With
+`rx.hardware_timestamp_format: nanoseconds`, the DPDK engine returns a driver-provided
+nanosecond timestamp unchanged. On mlx5 raw ibverbs, DAQIRI requests real-time CQE
+timestamps and decodes the CQE UTC representation to Unix-epoch nanoseconds.
+Applications may therefore compare that mode directly with `CLOCK_REALTIME`,
+provided the NIC and system clocks are synchronized. DAQIRI does not expose NIC
+clock reads. For reordered aggregate bursts,
 `get_packet_rx_timestamp(burst, 0, &ts)` returns the timestamp of the first source
 packet accepted into the aggregate.
 

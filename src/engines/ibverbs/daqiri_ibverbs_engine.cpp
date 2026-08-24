@@ -881,13 +881,21 @@ Status IbverbsEngine::devx_create_rq(IbvRxQueue& q, uint32_t stride_log, uint32_
   DEVX_SET(rqc, rqc, cqn, q.dv_cq.cqn);
   DEVX_SET(rqc, rqc, flush_in_error_en, 1);
   DEVX_SET(rqc, rqc, vsd, 1);  // do not strip VLAN
+  // Match the timestamp domain requested by the public RX configuration.
+  // Real-time CQEs use mlx5 UTC wire format (seconds << 32 | nanoseconds);
+  // free-running CQEs retain the legacy rdma-core conversion behavior.
+  DEVX_SET(rqc, rqc, ts_format,
+           q.timestamp_format == RxTimestampFormat::NANOSECONDS
+               ? MLX5_RQC_TIMESTAMP_FORMAT_REAL_TIME
+               : MLX5_RQC_TIMESTAMP_FORMAT_FREE_RUNNING);
 
   DEVX_SET(wq, wq, wq_type, q.striding ? MLX5_WQ_TYPE_CYCLIC_STRIDING_RQ : MLX5_WQ_TYPE_CYCLIC);
   DEVX_SET(wq, wq, log_wq_stride, log2_floor(q.wqe_stride));
   DEVX_SET(wq, wq, log_wq_sz, log2_floor(q.num_wqe));
   DEVX_SET(wq, wq, pd, dvpd.pdn);
-  // No uar_page: an RQ rings its doorbell via the memory dbr record, not a UAR.
-  DEVX_SET(wq, wq, log_wq_pg_sz, log2_floor(static_cast<uint32_t>(page)) - 12u);
+  // WQ page size is encoded relative to the mlx5 4 KiB adapter page, not the
+  // operating-system page size (which is 64 KiB on GH200).
+  DEVX_SET(wq, wq, log_wq_pg_sz, 0);
   DEVX_SET64(wq, wq, dbr_addr, dbr_off);
   DEVX_SET(wq, wq, dbr_umem_id, q.wq_umem->umem_id);
   DEVX_SET(wq, wq, wq_umem_id, q.wq_umem->umem_id);
@@ -2438,6 +2446,7 @@ Status IbverbsEngine::setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf,
   q.port_id = intf.port_id_;
   q.queue_id = qcfg.common_.id_;
   q.poll_mode = qcfg.poll_mode_;
+  q.timestamp_format = intf.rx_.hardware_timestamp_format_;
   q.batch_size = q.poll_mode == QueuePollMode::DIRECT ? static_cast<int>(kDirectPollMaxBatch)
                                                       : std::max(1, qcfg.common_.batch_size_);
   q.timeout_us = qcfg.timeout_us_;
@@ -3560,7 +3569,16 @@ Status IbverbsEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint6
   if (q == nullptr) {
     return Status::INVALID_PARAMETER;
   }
-  *timestamp_ns = ts_to_ns(q->ctx, burst_ts_arr(burst)[idx]);
+  const uint64_t raw_timestamp = burst_ts_arr(burst)[idx];
+  if (q->timestamp_format == RxTimestampFormat::NANOSECONDS) {
+    // mlx5 real-time CQEs are UTC encoded, not a linear nanosecond count.
+    // Expose the public NANOSECONDS contract as epoch nanoseconds.
+    const uint64_t seconds = raw_timestamp >> 32;
+    const uint64_t nanoseconds = raw_timestamp & 0xffffffffULL;
+    *timestamp_ns = seconds * 1000000000ULL + nanoseconds;
+  } else {
+    *timestamp_ns = ts_to_ns(q->ctx, raw_timestamp);
+  }
   return Status::SUCCESS;
 }
 

@@ -342,6 +342,20 @@ Use `device_clock_ticks` (default) when DAQIRI must convert device ticks to nano
 - timestamp-format type: `string` (`device_clock_ticks` or `nanoseconds`)
 - timestamp-format default: `device_clock_ticks`
 
+`rx.hardware_timestamp_format:` Select the hardware RX timestamp representation.
+`device_clock_ticks` preserves the default behavior: DAQIRI converts the NIC's
+free-running device-clock value to nanoseconds. With `nanoseconds`, the DPDK engine
+returns the PMD-provided nanosecond value unchanged. The mlx5 raw ibverbs engine
+configures its receive queues for real-time timestamps and decodes the mlx5 CQE
+UTC representation (seconds in the upper 32 bits and nanoseconds in the lower
+32 bits) into Unix-epoch nanoseconds. Applications that compare RX timestamps
+with `CLOCK_REALTIME` should select `nanoseconds` and ensure the NIC/system
+clocks are synchronized.
+
+- type: `string`
+- options: `device_clock_ticks`, `nanoseconds`
+- default: `device_clock_ticks`
+
 ### RX Reorder Configs
 
 `rx.reorder_configs:` Optional automatic packet reordering/aggregation plans. Implemented

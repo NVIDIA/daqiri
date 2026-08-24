@@ -124,6 +124,7 @@ struct IbvRxQueue {
   int batch_size = 1;
   uint64_t timeout_us = 0;
   QueuePollMode poll_mode = QueuePollMode::INDIRECT;
+  RxTimestampFormat timestamp_format = RxTimestampFormat::DEVICE_CLOCK_TICKS;
   int num_segs = 1;
   int split_boundary = 0;
   // Flow id reported for packets on this queue. When a single configured flow
