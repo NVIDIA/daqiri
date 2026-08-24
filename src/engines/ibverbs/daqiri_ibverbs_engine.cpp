@@ -1555,7 +1555,7 @@ Status IbverbsEngine::install_flow_rule_locked(int port, PortSteering& st,
     DEVX_SET(fte_match_set_lyr_2_4, value_buf, ip_protocol, MLX5_IP_PROTOCOL_UDP);
   };
 
-  if (rss_destination != nullptr) {
+  if (rss_destination != nullptr && mt.type_ != FlowMatchType::ETHERNET) {
     pin_ipv4_udp();
   }
 
@@ -2104,7 +2104,7 @@ Status IbverbsEngine::install_port_flows() {
         DEVX_SET(fte_match_set_lyr_2_4, mk, ip_protocol, 0xff);
         DEVX_SET(fte_match_set_lyr_2_4, vl, ip_protocol, MLX5_IP_PROTOCOL_UDP);
       };
-      if (rss_destination != nullptr) {
+      if (rss_destination != nullptr && mt.type_ != FlowMatchType::ETHERNET) {
         pin_ipv4_udp();
       }
       if (mt.udp_src_ > 0) {

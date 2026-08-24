@@ -4937,20 +4937,21 @@ struct rte_flow* DpdkEngine::add_flow(int port,
   resource->action_storage.reserve(flow_actions.size() * 2 + 2);
 
   const bool use_rss = destination.queue_ids.size() > 1;
-  int required_pattern_items = 1 + normal_match_pattern_item_count(cfg.match_, use_rss) + 1;
+  const bool force_ipv4_udp = use_rss && cfg.match_.type_ != FlowMatchType::ETHERNET;
+  int required_pattern_items = 1 + normal_match_pattern_item_count(cfg.match_, force_ipv4_udp) + 1;
   int required_action_items = 2 + 1;
   for (const auto& flow_action : flow_actions) {
     required_pattern_items += transform_pattern_item_count(flow_action);
     required_action_items += transform_action_item_count(flow_action);
   }
   if (required_pattern_items > MAX_PATTERN_NUM) {
-    DAQIRI_LOG_CRITICAL("RX flow '{}' requires {} DPDK pattern entries, maximum is {}",
-                        cfg.name_, required_pattern_items, MAX_PATTERN_NUM);
+    DAQIRI_LOG_CRITICAL("RX flow '{}' requires {} DPDK pattern entries, maximum is {}", cfg.name_,
+                        required_pattern_items, MAX_PATTERN_NUM);
     return nullptr;
   }
   if (required_action_items > MAX_ACTION_NUM) {
-    DAQIRI_LOG_CRITICAL("RX flow '{}' requires {} DPDK action entries, maximum is {}",
-                        cfg.name_, required_action_items, MAX_ACTION_NUM);
+    DAQIRI_LOG_CRITICAL("RX flow '{}' requires {} DPDK action entries, maximum is {}", cfg.name_,
+                        required_action_items, MAX_ACTION_NUM);
     return nullptr;
   }
 
@@ -4973,27 +4974,26 @@ struct rte_flow* DpdkEngine::add_flow(int port,
   if (cfg.match_.type_ == FlowMatchType::ETHERNET) {
     const auto& ethernet = cfg.match_.ethernet_match_;
     if (ethernet.match_dst_) {
-      std::memcpy(eth_spec.hdr.dst_addr.addr_bytes, ethernet.dst_.data(),
-                  ethernet.dst_.size());
-      std::memset(eth_mask.hdr.dst_addr.addr_bytes, 0xff,
-                  ethernet.dst_.size());
+      std::memcpy(eth_spec.hdr.dst_addr.addr_bytes, ethernet.dst_.data(), ethernet.dst_.size());
+      std::memset(eth_mask.hdr.dst_addr.addr_bytes, 0xff, ethernet.dst_.size());
     }
     if (ethernet.match_src_) {
-      std::memcpy(eth_spec.hdr.src_addr.addr_bytes, ethernet.src_.data(),
-                  ethernet.src_.size());
-      std::memset(eth_mask.hdr.src_addr.addr_bytes, 0xff,
-                  ethernet.src_.size());
+      std::memcpy(eth_spec.hdr.src_addr.addr_bytes, ethernet.src_.data(), ethernet.src_.size());
+      std::memset(eth_mask.hdr.src_addr.addr_bytes, 0xff, ethernet.src_.size());
     }
     pattern[pi].spec = &eth_spec;
     pattern[pi].mask = &eth_mask;
   }
   ++pi;
-  append_normal_match(pattern, &pi, cfg.match_, &ip_spec, &ip_mask, &udp_spec, &udp_mask, use_rss);
+  append_normal_match(pattern, &pi, cfg.match_, &ip_spec, &ip_mask, &udp_spec, &udp_mask,
+                      force_ipv4_udp);
   pattern[pi].type = RTE_FLOW_ITEM_TYPE_END;
 
   int ai = 0;
   for (const auto& flow_action : flow_actions) {
-    if (flow_action.type_ == FlowType::QUEUE) { continue; }
+    if (flow_action.type_ == FlowType::QUEUE) {
+      continue;
+    }
     if (!append_transform_action(action, &ai, *resource, flow_action)) {
       DAQIRI_LOG_CRITICAL("Failed to build RX action '{}' for flow '{}'",
                           flow_type_to_string(flow_action.type_), cfg.name_);
