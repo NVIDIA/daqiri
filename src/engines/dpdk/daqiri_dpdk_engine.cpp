@@ -5830,6 +5830,37 @@ bool DpdkEngine::validate_config() const {
     }
   }
 
+  // DPDK can launch only one worker function on a given remote lcore. Multiple
+  // queues in the same direction may share a worker, but an RX worker and a TX
+  // worker cannot independently occupy the same lcore.
+  std::set<int> rx_worker_cores;
+  for (const auto& intf : cfg_.ifs_) {
+    for (const auto& q : intf.rx_.queues_) {
+      if (q.common_.name_.find("UNUSED") == 0 || q.common_.cpu_core_.empty()) {
+        continue;
+      }
+      rx_worker_cores.insert(
+          static_cast<int>(strtol(q.common_.cpu_core_.c_str(), nullptr, 10)));
+    }
+  }
+  for (const auto& intf : cfg_.ifs_) {
+    for (const auto& q : intf.tx_.queues_) {
+      if (q.common_.name_.find("UNUSED_TX_P") == 0 ||
+          q.common_.cpu_core_.empty()) {
+        continue;
+      }
+      const int core =
+          static_cast<int>(strtol(q.common_.cpu_core_.c_str(), nullptr, 10));
+      if (rx_worker_cores.count(core) != 0) {
+        DAQIRI_LOG_ERROR(
+            "DPDK RX and TX queue workers cannot share cpu_core {}; assign "
+            "different cores across directions",
+            core);
+        return false;
+      }
+    }
+  }
+
   DAQIRI_LOG_INFO("Config validated successfully");
   return true;
 }
@@ -6461,16 +6492,18 @@ int DpdkEngine::tx_core_worker(void *arg) {
       auto *tparams = &params->q_params[queue_index];
       auto *&msg = active_bursts[queue_index];
       auto &pkts_tx = packets_sent[queue_index];
+      bool acquired = false;
       if (msg == nullptr) {
         if (rte_ring_dequeue(tparams->ring, reinterpret_cast<void **>(&msg)) !=
             0) {
           continue;
         }
         pkts_tx = 0;
+        acquired = true;
       }
 
       // Scatter mode needs to chain all the buffers
-      if (msg->hdr.hdr.num_segs > 1) {
+      if (acquired && msg->hdr.hdr.num_segs > 1) {
         for (size_t p = 0; p < msg->hdr.hdr.num_pkts; p++) {
           for (int seg = 0; seg < msg->hdr.hdr.num_segs - 1; seg++) {
             auto *mbuf = reinterpret_cast<struct rte_mbuf *>(msg->pkts[seg][p]);
@@ -6494,7 +6527,7 @@ int DpdkEngine::tx_core_worker(void *arg) {
       // right after, so no per-packet schedule is needed. pace_next_ns then
       // advances by the time the burst's L2 frame bytes take at the configured
       // rate.
-      if (tparams->pacing_mbps > 0 && tparams->tx_ts_dynfield_offset >= 0 &&
+      if (acquired && tparams->pacing_mbps > 0 && tparams->tx_ts_dynfield_offset >= 0 &&
           msg->hdr.hdr.num_pkts > 0) {
         const uint64_t now =
             tparams->engine->now_tx_ns(static_cast<uint16_t>(tparams->port));
@@ -6558,15 +6591,24 @@ int DpdkEngine::tx_core_worker(void *arg) {
   // the per-queue rings. Free only packets that the NIC did not accept, then
   // return the pointer arrays and metadata to their pools.
   const auto release_unsent = [](TxWorkerParams *tparams, BurstParams *msg,
-                                 size_t first_unsent) {
+                                 size_t first_unsent, bool segments_chained) {
     if (msg == nullptr) {
       return;
     }
     for (size_t packet = first_unsent; packet < msg->hdr.hdr.num_pkts;
          ++packet) {
-      auto *mbuf = reinterpret_cast<rte_mbuf *>(msg->pkts[0][packet]);
-      if (mbuf != nullptr) {
-        rte_pktmbuf_free(mbuf);
+      if (segments_chained) {
+        auto *mbuf = reinterpret_cast<rte_mbuf *>(msg->pkts[0][packet]);
+        if (mbuf != nullptr) {
+          rte_pktmbuf_free(mbuf);
+        }
+      } else {
+        for (int seg = 0; seg < msg->hdr.hdr.num_segs; ++seg) {
+          auto *mbuf = reinterpret_cast<rte_mbuf *>(msg->pkts[seg][packet]);
+          if (mbuf != nullptr) {
+            rte_pktmbuf_free(mbuf);
+          }
+        }
       }
     }
     for (int seg = 0; seg < msg->hdr.hdr.num_segs; ++seg) {
@@ -6580,11 +6622,11 @@ int DpdkEngine::tx_core_worker(void *arg) {
        ++queue_index) {
     auto *tparams = &params->q_params[queue_index];
     release_unsent(tparams, active_bursts[queue_index],
-                   packets_sent[queue_index]);
+                   packets_sent[queue_index], true);
     BurstParams *queued = nullptr;
     while (rte_ring_dequeue(tparams->ring,
                             reinterpret_cast<void **>(&queued)) == 0) {
-      release_unsent(tparams, queued, 0);
+      release_unsent(tparams, queued, 0, false);
     }
   }
 
