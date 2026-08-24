@@ -4918,6 +4918,8 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
       ctrl->fm_ce_se = (MLX5_COMP_ONLY_FIRST_ERR << MLX5_COMP_MODE_OFFSET);
       ctrl->imm = 0;
       memset(seg + 16, 0, 16);
+      reinterpret_cast<struct mlx5_wqe_eth_seg*>(seg + 16)->cs_flags =
+          MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
       auto* const dseg = reinterpret_cast<struct mlx5_wqe_data_seg*>(seg + 32);
       dseg->byte_count = htobe32(burst->pkt_lens[0][0]);
       dseg->lkey = htobe32(q.regions[0].lkey);

@@ -419,6 +419,15 @@ for the configuration constraints and
 [C++ API Usage → Reordered RX bursts](api-reference/cpp.md#reordered-rx-bursts)
 for how to consume them from C++.
 
+### Scheduled raw ibverbs eMPW bursts
+
+For an eMPW-compatible single-segment burst with only packet zero scheduled,
+the raw ibverbs engine emits a WAIT followed by a normal SEND for packet zero,
+then packs the remaining untimed packets into eMPW work requests. The first
+SEND uses the same IPv4 and transport checksum-offload flags as the existing
+raw SEND and eMPW paths. Timestamping any packet after packet zero is not
+eMPW-compatible and falls back to the ordinary SEND path.
+
 ## See also
 
 - [API Guide](api-reference/index.md): the 6-step DAQIRI application
