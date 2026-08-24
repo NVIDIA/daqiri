@@ -158,6 +158,20 @@ static inline void doorbell_store_barrier() {
 #endif
 }
 
+// Flush writes to the BlueFlame write-combining MMIO mapping. A DMA/store
+// barrier orders descriptors and the doorbell record, but on ARM it does not
+// guarantee that a WC MMIO write has reached the device before the BF offset
+// is reused. Match rdma-core's mmio_wc_start()/mmio_flush_writes() contract.
+static inline void doorbell_mmio_flush() {
+#if defined(__aarch64__)
+  asm volatile("dsb st" ::: "memory");
+#elif defined(__x86_64__) || defined(__i386__)
+  asm volatile("sfence" ::: "memory");
+#else
+  std::atomic_thread_fence(std::memory_order_seq_cst);
+#endif
+}
+
 static void append_bytes(std::vector<uint8_t>& dst, const void* src, size_t len) {
   const auto* bytes = static_cast<const uint8_t*>(src);
   dst.insert(dst.end(), bytes, bytes + len);
@@ -5062,9 +5076,10 @@ void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst) {
   doorbell_store_barrier();
   q.dv_qp.dbrec[MLX5_SND_DBR] = htobe32(static_cast<uint32_t>(q.sq_pi) & 0xffff);
   doorbell_store_barrier();
+  doorbell_mmio_flush();
   *reinterpret_cast<volatile uint64_t*>(static_cast<uint8_t*>(q.dv_qp.bf.reg) + q.bf_offset) =
       *reinterpret_cast<uint64_t*>(last_ctrl);
-  doorbell_store_barrier();
+  doorbell_mmio_flush();
   q.bf_offset ^= q.dv_qp.bf.size;
 }
 
@@ -5140,9 +5155,10 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
   doorbell_store_barrier();  // WQEs visible before the doorbell record
   q.dv_qp.dbrec[MLX5_SND_DBR] = htobe32(static_cast<uint32_t>(q.sq_pi) & 0xffff);
   doorbell_store_barrier();  // doorbell record visible before the BF write
+  doorbell_mmio_flush();
   *reinterpret_cast<volatile uint64_t*>(static_cast<uint8_t*>(q.dv_qp.bf.reg) + q.bf_offset) =
       *reinterpret_cast<uint64_t*>(last_ctrl);
-  doorbell_store_barrier();
+  doorbell_mmio_flush();
   q.bf_offset ^= q.dv_qp.bf.size;
 }
 
