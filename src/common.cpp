@@ -544,6 +544,12 @@ void* get_segment_packet_ptr(BurstParams* burst, int seg, int idx) {
   return g_daqiri_engine->get_segment_packet_ptr(burst, seg, idx);
 }
 
+Status get_segment_packet_ptrs(BurstParams* burst, int seg, void** ptrs,
+                               int count) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->get_segment_packet_ptrs(burst, seg, ptrs, count);
+}
+
 void* get_packet_ptr(BurstParams* burst, int idx) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
   return g_daqiri_engine->get_packet_ptr(burst, idx);

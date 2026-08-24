@@ -148,6 +148,21 @@ template <typename Config> EngineType get_engine_type(const Config &config);
 void *get_segment_packet_ptr(BurstParams *burst, int seg, int idx);
 
 /**
+ * @brief Returns raw packet pointers for a segment of a burst
+ *
+ * This bulk form avoids repeated engine dispatch when an application needs all
+ * packet data pointers in a burst.
+ *
+ * @param burst Burst structure containing packets
+ * @param seg Segment of each packet
+ * @param ptrs Output array with room for count pointers
+ * @param count Number of packet pointers to return
+ * @return SUCCESS, NULL_PTR, or INVALID_PARAMETER
+ */
+Status get_segment_packet_ptrs(BurstParams *burst, int seg, void **ptrs,
+                               int count);
+
+/**
  * @brief Returns a raw packet pointer from a pointer in BurstParams
  *
  * The BurstParams structure contains pointers to opaque packets which are not

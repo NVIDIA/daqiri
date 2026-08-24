@@ -6499,6 +6499,31 @@ void* DpdkEngine::get_segment_packet_ptr(BurstParams* burst, int seg, int idx) {
   return rte_pktmbuf_mtod(reinterpret_cast<rte_mbuf*>(burst->pkts[seg][idx]), void*);
 }
 
+Status DpdkEngine::get_segment_packet_ptrs(BurstParams* burst, int seg,
+                                           void** ptrs, int count) {
+  if (burst == nullptr || ptrs == nullptr) { return Status::NULL_PTR; }
+  if (seg < 0 || seg >= burst->hdr.hdr.num_segs || count < 0 ||
+      static_cast<size_t>(count) > burst->hdr.hdr.num_pkts) {
+    return Status::INVALID_PARAMETER;
+  }
+  if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {
+    if (seg != 0 || burst->pkts[0] == nullptr) {
+      return Status::INVALID_PARAMETER;
+    }
+    for (int idx = 0; idx < count; ++idx) {
+      ptrs[idx] = burst->pkts[0][idx];
+    }
+    return Status::SUCCESS;
+  }
+  if (burst->pkts[seg] == nullptr) { return Status::NULL_PTR; }
+  const auto mbufs = reinterpret_cast<rte_mbuf**>(burst->pkts[seg]);
+  for (int idx = 0; idx < count; ++idx) {
+    if (mbufs[idx] == nullptr) { return Status::NULL_PTR; }
+    ptrs[idx] = rte_pktmbuf_mtod(mbufs[idx], void*);
+  }
+  return Status::SUCCESS;
+}
+
 void* DpdkEngine::get_packet_ptr(BurstParams* burst, int idx) {
   if (burst == nullptr || idx < 0) { return nullptr; }
   if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) != 0U) {

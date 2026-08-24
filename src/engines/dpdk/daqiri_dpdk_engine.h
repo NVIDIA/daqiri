@@ -120,6 +120,8 @@ class DpdkEngine : public Engine {
   static constexpr int MAX_ETH_HDR_SIZE = 18;
 
   void* get_segment_packet_ptr(BurstParams* burst, int seg, int idx) override;
+  Status get_segment_packet_ptrs(BurstParams* burst, int seg, void** ptrs,
+                                 int count) override;
   void* get_packet_ptr(BurstParams* burst, int idx) override;
   uint32_t get_segment_packet_length(BurstParams* burst, int seg, int idx) override;
   uint32_t get_packet_length(BurstParams* burst, int idx) override;

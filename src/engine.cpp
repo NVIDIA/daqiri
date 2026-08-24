@@ -852,6 +852,24 @@ Status Engine::poll_flow_op(FlowOpResult* result) {
   return Status::NOT_SUPPORTED;
 }
 
+Status Engine::get_segment_packet_ptrs(BurstParams* burst, int seg,
+                                       void** ptrs, int count) {
+  if (burst == nullptr || ptrs == nullptr) {
+    return Status::NULL_PTR;
+  }
+  if (seg < 0 || seg >= burst->hdr.hdr.num_segs || count < 0 ||
+      static_cast<size_t>(count) > burst->hdr.hdr.num_pkts) {
+    return Status::INVALID_PARAMETER;
+  }
+  for (int idx = 0; idx < count; ++idx) {
+    ptrs[idx] = get_segment_packet_ptr(burst, seg, idx);
+    if (ptrs[idx] == nullptr) {
+      return Status::NULL_PTR;
+    }
+  }
+  return Status::SUCCESS;
+}
+
 Status Engine::get_tx_packet_burst_checked(BurstParams* burst) {
   if (!is_tx_burst_available(burst)) {
     return Status::NO_FREE_BURST_BUFFERS;
