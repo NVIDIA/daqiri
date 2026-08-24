@@ -19,6 +19,7 @@
 
 #include "src/daqiri_ring.h"
 #include <daqiri/types.h>
+#include <cuda.h>
 #include <optional>
 
 // Forward declarations of the DPDK types used only by the DPDK engine. Keeping
@@ -46,6 +47,7 @@ struct AllocRegion {
   void* ptr_ = nullptr;
   size_t size_ = 0;
   int affinity_ = -1;
+  CUcontext cuda_context_ = nullptr;
   Deallocator deallocator_ = Deallocator::NONE;
 };
 

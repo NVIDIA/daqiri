@@ -523,7 +523,6 @@ Status IbverbsEngine::register_mr(struct ibv_pd* pd, const std::string& mr_name,
   if (mr.kind_ == MemoryKind::DEVICE) {
     // GPUDirect: export the CUDA allocation as a dma-buf fd and register it so
     // the NIC DMAs packets straight to/from GPU memory.
-    cudaSetDevice(mr.affinity_);
     const size_t page = sysconf(_SC_PAGESIZE);
     const auto va = reinterpret_cast<uintptr_t>(base);
     const uintptr_t aligned = va & ~(static_cast<uintptr_t>(page) - 1);
