@@ -1337,6 +1337,31 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
             } catch (const std::exception& e) { rx_cfg.flow_isolation_ = false; }
 
             try {
+              rx_cfg.hardware_timestamps_ = rx["hardware_timestamps"].as<bool>();
+            } catch (const std::exception& e) { rx_cfg.hardware_timestamps_ = false; }
+
+            try {
+              const auto format =
+                  rx["hardware_timestamp_format"].as<std::string>();
+              if (format == "device_clock_ticks") {
+                rx_cfg.hardware_timestamp_format_ =
+                    daqiri::RxTimestampFormat::DEVICE_CLOCK_TICKS;
+              } else if (format == "nanoseconds") {
+                rx_cfg.hardware_timestamp_format_ =
+                    daqiri::RxTimestampFormat::NANOSECONDS;
+              } else {
+                DAQIRI_LOG_ERROR(
+                    "Invalid rx.hardware_timestamp_format '{}' for interface '{}': "
+                    "expected 'device_clock_ticks' or 'nanoseconds'",
+                    format, ifcfg.name_);
+                return false;
+              }
+            } catch (const std::exception& e) {
+              rx_cfg.hardware_timestamp_format_ =
+                  daqiri::RxTimestampFormat::DEVICE_CLOCK_TICKS;
+            }
+
+            try {
               rx_cfg.dynamic_flow_capacity_ =
                   rx["dynamic_flow_capacity"].as<uint32_t>();
             } catch (const std::exception& e) {
@@ -1421,6 +1446,27 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
               tx_cfg.accurate_send_ = tx["accurate_send"].as<bool>();
             } catch (const std::exception &e) {
               tx_cfg.accurate_send_ = false;
+            }
+
+            try {
+              const std::string format =
+                  tx["hardware_timestamp_format"].as<std::string>();
+              if (format == "device_clock_ticks") {
+                tx_cfg.hardware_timestamp_format_ =
+                    daqiri::TxTimestampFormat::DEVICE_CLOCK_TICKS;
+              } else if (format == "nanoseconds") {
+                tx_cfg.hardware_timestamp_format_ =
+                    daqiri::TxTimestampFormat::NANOSECONDS;
+              } else {
+                DAQIRI_LOG_ERROR(
+                    "Invalid tx.hardware_timestamp_format '{}' for interface '{}': "
+                    "expected 'device_clock_ticks' or 'nanoseconds'",
+                    format, ifcfg.name_);
+                return false;
+              }
+            } catch (const std::exception& e) {
+              tx_cfg.hardware_timestamp_format_ =
+                  daqiri::TxTimestampFormat::DEVICE_CLOCK_TICKS;
             }
 
             for (const auto &q_item : tx["queues"]) {

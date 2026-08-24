@@ -1141,9 +1141,20 @@ struct ReorderConfig {
   ReorderDataTypesConfig data_types_;
 };
 
+enum class RxTimestampFormat {
+  DEVICE_CLOCK_TICKS,
+  NANOSECONDS,
+};
+
+enum class TxTimestampFormat {
+  DEVICE_CLOCK_TICKS,
+  NANOSECONDS,
+};
+
 struct RxConfig {
   bool flow_isolation_ = false;
   bool hardware_timestamps_ = false;
+  RxTimestampFormat hardware_timestamp_format_ = RxTimestampFormat::DEVICE_CLOCK_TICKS;
   uint32_t dynamic_flow_capacity_ = DEFAULT_DYNAMIC_FLOW_CAPACITY;
   std::vector<RxQueueConfig> queues_;
   std::vector<FlowConfig> flows_;
@@ -1153,6 +1164,7 @@ struct RxConfig {
 
 struct TxConfig {
   bool accurate_send_ = false;
+  TxTimestampFormat hardware_timestamp_format_ = TxTimestampFormat::DEVICE_CLOCK_TICKS;
   std::vector<TxQueueConfig> queues_;
   std::vector<FlowConfig> flows_;
 };

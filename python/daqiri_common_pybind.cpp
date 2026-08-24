@@ -902,10 +902,20 @@ void bind_config_types(py::module_ &m) {
                      &ReorderConfig::seq_packets_per_batch_)
       .def_readwrite("data_types", &ReorderConfig::data_types_);
 
+  py::enum_<RxTimestampFormat>(m, "RxTimestampFormat")
+      .value("DEVICE_CLOCK_TICKS", RxTimestampFormat::DEVICE_CLOCK_TICKS)
+      .value("NANOSECONDS", RxTimestampFormat::NANOSECONDS);
+
+  py::enum_<TxTimestampFormat>(m, "TxTimestampFormat")
+      .value("DEVICE_CLOCK_TICKS", TxTimestampFormat::DEVICE_CLOCK_TICKS)
+      .value("NANOSECONDS", TxTimestampFormat::NANOSECONDS);
+
   py::class_<RxConfig>(m, "RxConfig")
       .def(py::init<>())
       .def_readwrite("flow_isolation", &RxConfig::flow_isolation_)
       .def_readwrite("hardware_timestamps", &RxConfig::hardware_timestamps_)
+      .def_readwrite("hardware_timestamp_format",
+                     &RxConfig::hardware_timestamp_format_)
       .def_readwrite("dynamic_flow_capacity",
                      &RxConfig::dynamic_flow_capacity_)
       .def_readwrite("queues", &RxConfig::queues_)
@@ -916,6 +926,8 @@ void bind_config_types(py::module_ &m) {
   py::class_<TxConfig>(m, "TxConfig")
       .def(py::init<>())
       .def_readwrite("accurate_send", &TxConfig::accurate_send_)
+      .def_readwrite("hardware_timestamp_format",
+                     &TxConfig::hardware_timestamp_format_)
       .def_readwrite("queues", &TxConfig::queues_)
       .def_readwrite("flows", &TxConfig::flows_);
 
