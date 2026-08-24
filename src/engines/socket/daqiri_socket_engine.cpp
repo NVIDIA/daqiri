@@ -1356,27 +1356,31 @@ void SocketEngine::udp_rx_loop(int if_index) {
       ep->udp_peer_valid = true;
     }
 
+    // One recvmmsg batch becomes one DAQIRI burst. One-packet bursts create a
+    // queue lock/unlock and metadata allocation for every UDP datagram.
+    auto* burst = create_tx_burst_params();
+    burst->hdr.hdr.port_id = ep->port;
+    burst->hdr.hdr.q_id = ep->rx_queue;
+    burst->hdr.hdr.num_pkts = received;
+    burst->hdr.hdr.num_segs = 1;
+    burst->pkts[0] = new void*[static_cast<size_t>(received)];
+    burst->pkt_lens[0] = new uint32_t[static_cast<size_t>(received)];
+
+    uint64_t received_bytes = 0;
     for (int i = 0; i < received; ++i) {
       const auto rx = static_cast<size_t>(msgs[static_cast<size_t>(i)].msg_len);
-      auto* burst = create_tx_burst_params();
-      burst->hdr.hdr.port_id = ep->port;
-      burst->hdr.hdr.q_id = ep->rx_queue;
-      burst->hdr.hdr.num_pkts = 1;
-      burst->hdr.hdr.num_segs = 1;
-      burst->pkts[0] = new void*[1];
-      burst->pkt_lens[0] = new uint32_t[1];
-
       auto* payload = new uint8_t[rx];
       std::memcpy(payload, iovs[static_cast<size_t>(i)].iov_base, rx);
-      burst->pkts[0][0] = payload;
-      burst->pkt_lens[0][0] = static_cast<uint32_t>(rx);
-      set_connection_id(burst, ep->primary_conn_id);
-
-      push_rx_burst(ep->rx_queue_state, burst);
-      rx_pkts_.fetch_add(1);
-      rx_bytes_.fetch_add(static_cast<uint64_t>(rx));
-      metrics::add_rx(ep->rx_metrics, 1, static_cast<uint64_t>(rx));
+      burst->pkts[0][i] = payload;
+      burst->pkt_lens[0][i] = static_cast<uint32_t>(rx);
+      received_bytes += rx;
     }
+    set_connection_id(burst, ep->primary_conn_id);
+
+    push_rx_burst(ep->rx_queue_state, burst);
+    rx_pkts_.fetch_add(static_cast<uint64_t>(received));
+    rx_bytes_.fetch_add(received_bytes);
+    metrics::add_rx(ep->rx_metrics, static_cast<uint64_t>(received), received_bytes);
   }
 }
 
