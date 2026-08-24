@@ -53,6 +53,29 @@ if(NOT MLX5_LIBRARIES)
     message(FATAL_ERROR "ibverbs engine requires libmlx5 (mlx5dv.h) for striding RQ / DevX")
 endif()
 
+# Hardware self-loopback needs the mlx5dv QP creation flag that asks the
+# kernel/provider to enable device-local unicast loopback. Keep older rdma-core
+# builds usable for normal ibverbs traffic and reject loopback at runtime.
+include(CheckCXXSourceCompiles)
+set(_DAQIRI_REQUIRED_INCLUDES_SAVE "${CMAKE_REQUIRED_INCLUDES}")
+set(CMAKE_REQUIRED_INCLUDES ${IBVERBS_INCLUDE_DIRS} ${MLX5_INCLUDE_DIRS})
+check_cxx_source_compiles(
+    "#include <infiniband/mlx5dv.h>
+     int main() {
+       return MLX5DV_QP_CREATE_TIR_ALLOW_SELF_LOOPBACK_UC == 0;
+     }"
+    DAQIRI_HAVE_MLX5_SELF_LOOPBACK)
+set(CMAKE_REQUIRED_INCLUDES "${_DAQIRI_REQUIRED_INCLUDES_SAVE}")
+unset(_DAQIRI_REQUIRED_INCLUDES_SAVE)
+
+if(DAQIRI_HAVE_MLX5_SELF_LOOPBACK)
+    target_compile_definitions(${ENGINE_TARGET} PRIVATE DAQIRI_HAVE_MLX5_SELF_LOOPBACK=1)
+else()
+    target_compile_definitions(${ENGINE_TARGET} PRIVATE DAQIRI_HAVE_MLX5_SELF_LOOPBACK=0)
+    message(STATUS
+        "mlx5 unicast self-loopback flag not found: ibverbs hardware loopback will be unavailable")
+endif()
+
 # The ibverbs engine no longer depends on DPDK: its rings/pools are the
 # libdpdk-free daqiri::Ring / daqiri::ObjectPool, and it drives the NIC through
 # libibverbs/mlx5dv directly.

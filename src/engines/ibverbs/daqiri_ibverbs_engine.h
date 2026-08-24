@@ -407,6 +407,7 @@ class IbverbsEngine : public Engine {
  private:
   // ---- bring-up ----
   struct ibv_context* open_device_for_interface(const InterfaceConfig& intf);
+  Status enable_hw_loopback(struct ibv_context* ctx, struct ibv_pd* pd);
   Status setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf, const RxQueueConfig& qcfg);
   Status register_rx_mr(IbvRxQueue& q);      // ibv_reg_mr (CPU); dmabuf later
   Status create_striding_rq(IbvRxQueue& q);  // verbs WQ + ind table + raw QP
@@ -546,6 +547,11 @@ class IbverbsEngine : public Engine {
   // One ibv_context + PD per opened device, keyed by device name.
   std::unordered_map<std::string, struct ibv_context*> ctx_map_;
   std::unordered_map<struct ibv_context*, struct ibv_pd*> pd_map_;
+  struct HwLoopbackActivation {
+    struct ibv_cq* cq = nullptr;
+    struct ibv_qp* qp = nullptr;
+  };
+  std::unordered_map<struct ibv_context*, HwLoopbackActivation> hw_loopback_activations_;
   // Registrations may be shared by queue setup only through their backing
   // allocation, so retain every verbs object and deregister it before its PD.
   std::vector<struct ibv_mr*> registered_mrs_;

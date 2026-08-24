@@ -539,6 +539,14 @@ bool Engine::validate_config() const {
   const bool tunnel_supported_engine =
       cfg_.common_.engine_type == EngineType::DPDK || cfg_.common_.engine_type == EngineType::IBVERBS;
 
+  if (cfg_.common_.loopback_ == LoopbackType::LOOPBACK_TYPE_HW &&
+      (cfg_.common_.stream_type != StreamType::RAW ||
+       cfg_.common_.engine_type != EngineType::IBVERBS)) {
+    DAQIRI_LOG_ERROR(
+        "Hardware loopback is supported only for stream_type 'raw' with engine 'ibverbs'");
+    pass = false;
+  }
+
   // Verify all memory regions are used in queues and all queue MRs are listed in the MR section
   for (const auto& mr : cfg_.mrs_) { mr_names.emplace(mr.second.name_); }
 

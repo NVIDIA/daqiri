@@ -390,6 +390,7 @@ bool IbverbsEngine::set_config_and_initialize(const NetworkConfig& cfg) {
   max_batch_ = 0;
   cfg_ = cfg;
   if (!validate_config()) {
+    DAQIRI_LOG_CRITICAL("Config validation failed");
     return false;
   }
   if (!reserve_static_flow_ids()) {
@@ -460,6 +461,13 @@ struct ibv_context* IbverbsEngine::open_device_for_interface(const InterfaceConf
   }
 
   if (dev == nullptr) {
+    if (cfg_.common_.loopback_ == LoopbackType::LOOPBACK_TYPE_HW) {
+      DAQIRI_LOG_CRITICAL(
+          "Hardware loopback interface '{}'/'{}' did not resolve to an ibverbs device", intf.name_,
+          intf.address_);
+      ibv_free_device_list(list);
+      return nullptr;
+    }
     DAQIRI_LOG_WARN("Could not match interface '{}'/'{}' to an IB device; using first device",
                     intf.name_, intf.address_);
     dev = list[0];
@@ -500,6 +508,56 @@ struct ibv_context* IbverbsEngine::open_device_for_interface(const InterfaceConf
   pd_map_[ctx] = pd;
   DAQIRI_LOG_INFO("Opened ibverbs device {} (ctx {}, pd {})", dev_name, (void*)ctx, (void*)pd);
   return ctx;
+}
+
+Status IbverbsEngine::enable_hw_loopback(struct ibv_context* ctx, struct ibv_pd* pd) {
+  if (cfg_.common_.loopback_ != LoopbackType::LOOPBACK_TYPE_HW) {
+    return Status::SUCCESS;
+  }
+  if (hw_loopback_activations_.find(ctx) != hw_loopback_activations_.end()) {
+    return Status::SUCCESS;
+  }
+
+#if DAQIRI_HAVE_MLX5_SELF_LOOPBACK
+  HwLoopbackActivation activation;
+  activation.cq = ibv_create_cq(ctx, 1, nullptr, nullptr, 0);
+  if (activation.cq == nullptr) {
+    DAQIRI_LOG_CRITICAL("Hardware loopback CQ creation failed: {}", strerror(errno));
+    return Status::GENERIC_FAILURE;
+  }
+
+  struct ibv_qp_init_attr_ex qp_attr {};
+  qp_attr.qp_type = IBV_QPT_RAW_PACKET;
+  qp_attr.comp_mask = IBV_QP_INIT_ATTR_PD;
+  qp_attr.pd = pd;
+  qp_attr.send_cq = activation.cq;
+  qp_attr.recv_cq = activation.cq;
+  qp_attr.cap.max_recv_wr = 1;
+
+  struct mlx5dv_qp_init_attr mlx5_attr {};
+  mlx5_attr.comp_mask = MLX5DV_QP_INIT_ATTR_MASK_QP_CREATE_FLAGS;
+  mlx5_attr.create_flags = MLX5DV_QP_CREATE_TIR_ALLOW_SELF_LOOPBACK_UC;
+  activation.qp = mlx5dv_create_qp(ctx, &qp_attr, &mlx5_attr);
+  if (activation.qp == nullptr) {
+    DAQIRI_LOG_CRITICAL(
+        "mlx5 unicast hardware-loopback activation failed: {}. Verify that the ConnectX "
+        "firmware and rdma-core provider support local RAW_PACKET loopback",
+        strerror(errno));
+    ibv_destroy_cq(activation.cq);
+    return Status::GENERIC_FAILURE;
+  }
+
+  hw_loopback_activations_.emplace(ctx, activation);
+  DAQIRI_LOG_INFO("Enabled mlx5 unicast hardware loopback on {}", ibv_get_device_name(ctx->device));
+  return Status::SUCCESS;
+#else
+  (void)ctx;
+  (void)pd;
+  DAQIRI_LOG_CRITICAL(
+      "Hardware loopback was requested, but DAQIRI was built against rdma-core headers "
+      "without MLX5DV_QP_CREATE_TIR_ALLOW_SELF_LOOPBACK_UC");
+  return Status::NOT_SUPPORTED;
+#endif
 }
 
 int IbverbsEngine::mr_access_to_ibv(uint32_t access) {
@@ -952,6 +1010,9 @@ Status IbverbsEngine::devx_create_tir(IbvRxQueue& q) {
   DEVX_SET(tirc, tirc, disp_type, MLX5_TIRC_DISP_TYPE_DIRECT);
   DEVX_SET(tirc, tirc, inline_rqn, q.rqn);
   DEVX_SET(tirc, tirc, rx_hash_fn, MLX5_RX_HASH_FN_NONE);
+  if (cfg_.common_.loopback_ == LoopbackType::LOOPBACK_TYPE_HW) {
+    DEVX_SET(tirc, tirc, self_lb_block, MLX5_TIRC_SELF_LB_BLOCK_BLOCK_UNICAST);
+  }
   DEVX_SET(tirc, tirc, transport_domain, q.td_num);
   q.tir_obj = mlx5dv_devx_obj_create(q.ctx, in, sizeof(in), out, sizeof(out));
   if (q.tir_obj == nullptr) {
@@ -1260,6 +1321,9 @@ Status IbverbsEngine::resolve_rx_destination(int port, PortSteering& st,
   DEVX_SET(tirc, tirc, disp_type, MLX5_TIRC_DISP_TYPE_INDIRECT);
   DEVX_SET(tirc, tirc, indirect_table, rqtn);
   DEVX_SET(tirc, tirc, rx_hash_fn, MLX5_RX_HASH_FN_TOEPLITZ);
+  if (cfg_.common_.loopback_ == LoopbackType::LOOPBACK_TYPE_HW) {
+    DEVX_SET(tirc, tirc, self_lb_block, MLX5_TIRC_SELF_LB_BLOCK_BLOCK_UNICAST);
+  }
   DEVX_SET(tirc, tirc, transport_domain, queues.front()->td_num);
   if (inner) {
     DEVX_SET(tirc, tirc, tunneled_offload_en, 1);
@@ -2483,6 +2547,10 @@ Status IbverbsEngine::setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf,
     return Status::GENERIC_FAILURE;
   }
   q.pd = pd_map_[q.ctx];
+
+  if (Status s = enable_hw_loopback(q.ctx, q.pd); s != Status::SUCCESS) {
+    return s;
+  }
 
   if (Status s = register_rx_mr(q); s != Status::SUCCESS) {
     return s;
@@ -3935,7 +4003,33 @@ Status IbverbsEngine::poll_flow_op(FlowOpResult* result) {
 }
 
 bool IbverbsEngine::validate_config() const {
-  return Engine::validate_config();
+  if (!Engine::validate_config()) {
+    return false;
+  }
+  if (cfg_.common_.loopback_ != LoopbackType::LOOPBACK_TYPE_HW) {
+    return true;
+  }
+
+  if (cfg_.ifs_.size() != 1) {
+    DAQIRI_LOG_ERROR("Ibverbs hardware loopback requires exactly one interface; configured {}",
+                     cfg_.ifs_.size());
+    return false;
+  }
+  const auto& intf = cfg_.ifs_.front();
+  if (intf.address_.empty() || intf.address_ == "loopback") {
+    DAQIRI_LOG_ERROR(
+        "Ibverbs hardware loopback interface '{}' must name a physical ibverbs device, netdev, "
+        "or PCI BDF",
+        intf.name_);
+    return false;
+  }
+  if (intf.tx_.queues_.empty() || intf.rx_.queues_.empty()) {
+    DAQIRI_LOG_ERROR(
+        "Ibverbs hardware loopback interface '{}' requires at least one TX queue and one RX queue",
+        intf.name_);
+    return false;
+  }
+  return true;
 }
 
 void IbverbsEngine::print_stats() {
@@ -4101,6 +4195,20 @@ void IbverbsEngine::shutdown() {
     }
   }
   tx_queues_.clear();
+
+  // The activation QP keeps mlx5 device-local loopback enabled. RX TIRs and
+  // normal TX/RX QPs must be gone before releasing it, and its PD/context must
+  // remain alive until both objects are destroyed.
+  for (auto& [ctx, activation] : hw_loopback_activations_) {
+    (void)ctx;
+    if (activation.qp && ibv_destroy_qp(activation.qp) != 0) {
+      DAQIRI_LOG_ERROR("Failed to destroy hardware-loopback activation QP: {}", strerror(errno));
+    }
+    if (activation.cq && ibv_destroy_cq(activation.cq) != 0) {
+      DAQIRI_LOG_ERROR("Failed to destroy hardware-loopback activation CQ: {}", strerror(errno));
+    }
+  }
+  hw_loopback_activations_.clear();
 
   for (auto it = registered_mrs_.rbegin(); it != registered_mrs_.rend(); ++it) {
     if (*it != nullptr && ibv_dereg_mr(*it) != 0) {

@@ -109,6 +109,11 @@ enum {
   MLX5_TIRC_DISP_TYPE_INDIRECT = 0x1,
 };
 enum {
+  // Despite the PRM field name, mlx5 uses this value to opt a TIR into
+  // receiving unicast traffic transmitted by the same device.
+  MLX5_TIRC_SELF_LB_BLOCK_BLOCK_UNICAST = 0x1,
+};
+enum {
   MLX5_RX_HASH_FN_NONE = 0x0,
   MLX5_RX_HASH_FN_TOEPLITZ = 0x2,
 };

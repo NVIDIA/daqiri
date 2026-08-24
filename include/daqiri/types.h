@@ -288,6 +288,7 @@ enum class Direction : uint8_t {
 enum class LoopbackType : uint8_t {
   DISABLED = 0,
   LOOPBACK_TYPE_SW = 1,
+  LOOPBACK_TYPE_HW = 2,
 };
 
 /**

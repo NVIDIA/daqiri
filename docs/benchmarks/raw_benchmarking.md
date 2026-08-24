@@ -238,6 +238,53 @@ After having modified the configuration file, ensure you have connected an SFP c
 
 By default the application runs for 10 seconds and then exits. You can change the duration by passing `--seconds <N>` after the YAML path, or stop it gracefully at any time with `Ctrl-C`.
 
+### Single-port hardware loopback without a cable
+
+On mlx5 systems where the NIC remains available without a cable, DAQIRI can send packets back to
+the same port internally. Start from
+`daqiri_bench_raw_hw_loopback_ibverbs.yaml`, replace its PCI/core placeholders, and set
+`bench_tx.eth_dst_addr` to the configured port's own MAC:
+
+```bash
+cat /sys/bus/pci/devices/<BDF>/net/*/address
+sudo ./build/examples/daqiri_bench_raw_gpudirect \
+  examples/daqiri_bench_raw_hw_loopback_ibverbs.yaml --seconds 10
+```
+
+The template exercises two TX and two RX queues: UDP port 4096 steers to RX queue 0,
+and UDP port 4097 steers to RX queue 1.
+
+This mode uses the normal receive flow rules and queue selection. Physical-network counters should
+remain flat while the DAQIRI TX and RX queue counters increase. It does not help on platforms such
+as DGX Spark that remove the NIC when no cable is detected.
+
+#### Performance testing in hardware-loopback mode
+
+Hardware-loopback throughput is not the same as throughput over a cable. Traffic stays inside the
+local NIC, so the test does not include a cable, another NIC, or a second host. When the packet
+buffers are in GPU memory (`kind: device`), the test also includes moving each packet from the GPU
+to the NIC and back to the GPU. The result measures this complete local path. It can differ from,
+or exceed, the speed of the physical network port and should not be presented as cabled network
+performance.
+
+Run the benchmark for at least 10 seconds and monitor the network interface at the same time:
+
+```bash
+sudo mlnx_perf -i <netdev> -t 1
+```
+
+For `loopback: "hw"`, report `vport_loopback_bytes`. This is the total loopback rate across all
+queues. Do not add the TX and RX rates because they represent the same packets and would count the
+traffic twice. Ignore the partial readings while the benchmark starts and stops; use the stable
+one-second readings in the middle of the run. The `*_bytes_phy` and `*_packets_phy` counters should
+remain flat, confirming that the traffic did not cross a cable. Use DAQIRI's per-queue counters to
+check that packets reached the expected queues and that no packets were dropped.
+
+When publishing results, label them **hardware-loopback throughput** and record the packet size,
+queue count, buffer memory type, NIC/GPU model, and whether a post-processing workload was enabled.
+Compare hardware-loopback runs only with runs using the same setup. Use a cabled TX/RX test when
+the goal is physical port speed or end-to-end network performance.
+
 `daqiri_bench_raw_gpudirect` and `daqiri_bench_raw_hds` also accept `--workload none|fft|gemm|gemm_fp16`, which runs a representative GPU workload once per received reorder window on the **actual received packet data**: `fft` (batched cuFFT C2C transform), `gemm` (FP32 `cublasSgemm`), or `gemm_fp16` (the same-size mixed-precision FP16/tensor-core matmul that models inference). Each received burst's payloads are first reordered by sequence number into a contiguous GPU buffer (`examples/bench_pipeline.{h,cu}`) that the compute then consumes. `--workload-gemm-dim N` (default 1024) pins the square GEMM side length and `--workload-fft-len N` (default 1024) the 1-D FFT transform length, so the FLOP count per call stays constant as the I/O unit is swept. The same flags are honoured by the RoCE bench (`daqiri_bench_rdma`, in-order gather) and the socket bench (`daqiri_bench_socket`, host→device stage then UDP reorder / TCP gather). See the [DGX Spark GPU-workload results](performance-dgx-spark.md#gpu-workloads-in-the-receive-path).
 
 ## Flow programming smoke test
@@ -249,6 +296,7 @@ flow programming test.
 | Step | Command / action | Expected |
 |------|------------------|----------|
 | Build smoke | `daqiri_bench_raw_sw_loopback.yaml --seconds 5` | Init succeeds, no NIC flows created |
+| Cable-free NIC flow smoke | `daqiri_bench_raw_hw_loopback_ibverbs.yaml --seconds 5` (filled placeholders, NIC still enumerated) | TX and RX complete through one mlx5 port; physical-link counters remain flat |
 | Good NIC config | `daqiri_bench_raw_tx_rx.yaml` (filled placeholders, cabled NIC) | Init succeeds; RX and `tx_eth_src` flows programmed |
 | Dynamic RX flow config | `daqiri_example_dynamic_rx_flow.yaml` with `daqiri_example_dynamic_rx_flow` | Starts with `flow_isolation: true` and no `rx.flows`, drops unmatched traffic, tests scalar queue rules, then varies UDP source ports and verifies one `[0, 1]` RSS rule reaches both queues with the expected flow ID and tolerance |
 | Bad queue target | Copy `daqiri_bench_raw_tx_rx.yaml`; try `flows[0].action.id: 99`, `ids: []`, duplicate/unknown IDs, or both `id` and `ids` | Fails validation before NIC initialization |
@@ -476,7 +524,7 @@ To inspect the speed the data is moving through the NIC, run `mlnx_perf` on one 
 sudo mlnx_perf -i $if_name
 ```
 
-The `*_packets_phy` and `*_bytes_phy` counters are physical-link counters. They increase when packets cross the wire through the QSFP/SerDes side of the NIC. If a DGX Spark same-machine loopback uses two PFs that map to the same physical port, traffic can be switched on-chip and the vport counters may rise while the physical counters stay flat.
+The `*_packets_phy` and `*_bytes_phy` counters measure traffic that crosses a physical network cable. Some same-machine tests keep traffic inside the NIC, so the internal counters may rise while the physical counters stay flat. For single-port hardware loopback, follow the [hardware-loopback performance methodology](#performance-testing-in-hardware-loopback-mode) and use `vport_loopback_bytes` instead.
 
 ??? abstract "See an example output"
 

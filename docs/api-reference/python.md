@@ -672,7 +672,7 @@ encapsulation/push rules are configured in YAML under `tx.flows`.
 | `MemoryKind` | `HOST`, `HOST_PINNED`, `HUGE`, `DEVICE`, `INVALID` |
 | `StreamType` | `RAW`, `SOCKET`, `INVALID` |
 | `QueuePollMode` | `INDIRECT`, `DIRECT`, `INVALID` |
-| `LoopbackType` | `DISABLED`, `LOOPBACK_TYPE_SW` |
+| `LoopbackType` | `DISABLED`, `LOOPBACK_TYPE_SW`, `LOOPBACK_TYPE_HW` |
 | `RDMAMode` | `CLIENT`, `SERVER`, `INVALID` |
 | `RDMATransportMode` | `RC`, `UC`, `UD`, `INVALID` |
 | `SocketMode` | `CLIENT`, `SERVER`, `INVALID` |
