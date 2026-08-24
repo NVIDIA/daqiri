@@ -378,6 +378,12 @@ For precise packet scheduling (requires ConnectX-7+):
 daqiri.set_packet_tx_time(burst, idx, ptp_timestamp_ns)
 ```
 
+Set `TxConfig.hardware_timestamp_format` to
+`TxTimestampFormat.NANOSECONDS` when the value is a Unix-epoch nanosecond
+timestamp on a PTP/phc2sys-synchronized system. The default
+`DEVICE_CLOCK_TICKS` preserves the historical NIC device-clock contract.
+DAQIRI does not convert scheduled values between these clock domains.
+
 ## Writing Bursts to Storage
 
 Received bursts can be written to local storage as raw packet data or as a
@@ -704,7 +710,7 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `CommonConfig` | Global stream type, engine selection, direction, loopback, and core settings. (Transport protocol is derived from the endpoint URI scheme.) |
 | `InterfaceConfig` | Per-interface address, socket/RoCE/RDMA, RX, and TX configuration. |
 | `RxConfig` | RX flow isolation, timestamps, queues, flows, flex items, and reorder configs. |
-| `TxConfig` | TX accurate-send flag, queues, and flows. |
+| `TxConfig` | TX accurate-send flag, `hardware_timestamp_format`, queues, and flows. |
 | `CommonQueueConfig` | Shared queue fields: name, ID, batch size, split boundary, CPU core, memory regions, and offloads. |
 | `RxQueueConfig` | RX queue wrapper with common queue fields, timeout, and `QueuePollMode`. |
 | `TxQueueConfig` | TX queue wrapper with common queue fields and `QueuePollMode`. |

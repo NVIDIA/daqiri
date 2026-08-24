@@ -499,6 +499,20 @@ enabled, use `set_packet_tx_time()` to schedule packets. Requires ConnectX-7 or 
 - type: `boolean`
 - default: `false`
 
+`tx.hardware_timestamp_format:` Select the clock domain accepted by
+`set_packet_tx_time()` when accurate send is enabled. The default
+`device_clock_ticks` preserves the historical raw-ibverbs contract and creates
+the TX CQ with device-clock completion timestamps. Selecting `nanoseconds`
+creates the raw-ibverbs TX CQ with wall-clock timestamps, so scheduled values
+are Unix-epoch nanoseconds compatible with `CLOCK_REALTIME` on a synchronized
+PTP/phc2sys system.
+
+- type: `string`
+- options: `device_clock_ticks`, `nanoseconds`
+- default: `device_clock_ticks`
+
+DAQIRI does not convert supplied scheduled values between these clock domains.
+
 ## Complete Example (Raw Ethernet, Header-Data Split)
 
 ```yaml
