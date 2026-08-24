@@ -419,6 +419,15 @@ for the configuration constraints and
 [C++ API Usage → Reordered RX bursts](api-reference/cpp.md#reordered-rx-bursts)
 for how to consume them from C++.
 
+### Raw ibverbs receive WQ memory
+
+The raw ibverbs engine registers DevX receive work-queue UMEM with access flags
+zero, matching the mlx5 receive-WQ contract. The DevX page-size field encodes
+the selected page size relative to the 4 KiB base page; it is not the absolute
+page-size logarithm. These details are internal to queue creation and require
+no application configuration.
+
+
 ## See also
 
 - [API Guide](api-reference/index.md): the 6-step DAQIRI application
