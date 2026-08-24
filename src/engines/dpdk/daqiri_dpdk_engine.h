@@ -127,6 +127,8 @@ class DpdkEngine : public Engine {
   Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) override;
   void* get_packet_extra_info(BurstParams* burst, int idx) override;
   Status get_tx_packet_burst(BurstParams* burst) override;
+  Status register_current_thread() override;
+  void unregister_current_thread() override;
   Status set_eth_header(BurstParams* burst, int idx, char* dst_addr) override;
   Status set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint8_t proto,
                             unsigned int src_host, unsigned int dst_host) override;

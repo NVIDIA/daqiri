@@ -447,6 +447,16 @@ Status get_tx_packet_burst(BurstParams* burst) {
   return g_daqiri_engine->get_tx_packet_burst_checked(burst);
 }
 
+Status register_current_thread() {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->register_current_thread();
+}
+
+void unregister_current_thread() {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  g_daqiri_engine->unregister_current_thread();
+}
+
 Status set_eth_header(BurstParams* burst, int idx, char* dst_addr) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
   return g_daqiri_engine->set_eth_header(burst, idx, dst_addr);

@@ -278,6 +278,24 @@ Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_
 Status get_tx_packet_burst(BurstParams *burst);
 
 /**
+ * @brief Register the calling application-owned data-plane thread
+ *
+ * Engines that require per-thread runtime state initialize it for the calling
+ * thread. Other engines treat this as a no-op. A successful registration must
+ * be paired with unregister_current_thread() on the same thread before engine
+ * shutdown.
+ */
+Status register_current_thread();
+
+/**
+ * @brief Unregister the calling application-owned data-plane thread
+ *
+ * This only releases state acquired by register_current_thread() on the same
+ * thread; engine-owned worker threads are unaffected.
+ */
+void unregister_current_thread();
+
+/**
  * @brief Set IPv4 header in packet
  *
  * @param burst Burst structure to populate

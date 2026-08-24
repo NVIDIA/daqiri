@@ -6597,6 +6597,34 @@ void* DpdkEngine::get_packet_extra_info(BurstParams* burst, int idx) {
   return nullptr;
 }
 
+namespace {
+thread_local bool thread_registered_by_daqiri = false;
+}
+
+Status DpdkEngine::register_current_thread() {
+  if (rte_lcore_id() != LCORE_ID_ANY) {
+    return Status::SUCCESS;
+  }
+  if (rte_thread_register() != 0) {
+    DAQIRI_LOG_ERROR("Failed to register application thread with DPDK: errno={} ({})",
+                     rte_errno, rte_strerror(rte_errno));
+    return Status::INTERNAL_ERROR;
+  }
+  thread_registered_by_daqiri = true;
+  DAQIRI_LOG_DEBUG("Registered application thread as DPDK lcore {}", rte_lcore_id());
+  return Status::SUCCESS;
+}
+
+void DpdkEngine::unregister_current_thread() {
+  if (!thread_registered_by_daqiri) {
+    return;
+  }
+  const auto lcore_id = rte_lcore_id();
+  rte_thread_unregister();
+  thread_registered_by_daqiri = false;
+  DAQIRI_LOG_DEBUG("Unregistered application DPDK lcore {}", lcore_id);
+}
+
 Status DpdkEngine::get_tx_packet_burst(BurstParams* burst) {
   const uint32_t key = generate_queue_key(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
   const auto q_it = tx_dpdk_q_map_.find(key);
