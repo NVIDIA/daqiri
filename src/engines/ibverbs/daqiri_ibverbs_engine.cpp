@@ -1514,6 +1514,36 @@ Status IbverbsEngine::install_flow_rule_locked(int port, PortSteering& st,
   bool any = false;
   auto* mask_buf = reinterpret_cast<uint8_t*>(mask.buf);
   auto* value_buf = reinterpret_cast<uint8_t*>(value.buf);
+  const auto split_mac = [](const std::array<uint8_t, 6>& mac) {
+    const uint32_t high = (static_cast<uint32_t>(mac[0]) << 24) |
+                          (static_cast<uint32_t>(mac[1]) << 16) |
+                          (static_cast<uint32_t>(mac[2]) << 8) |
+                          static_cast<uint32_t>(mac[3]);
+    const uint16_t low = (static_cast<uint16_t>(mac[4]) << 8) |
+                         static_cast<uint16_t>(mac[5]);
+    return std::pair<uint32_t, uint16_t>{high, low};
+  };
+
+  if (mt.type_ == FlowMatchType::ETHERNET) {
+    const auto& ethernet = mt.ethernet_match_;
+    if (ethernet.match_dst_) {
+      const auto [high, low] = split_mac(ethernet.dst_);
+      DEVX_SET(fte_match_set_lyr_2_4, mask_buf, dmac_47_16, 0xffffffff);
+      DEVX_SET(fte_match_set_lyr_2_4, mask_buf, dmac_15_0, 0xffff);
+      DEVX_SET(fte_match_set_lyr_2_4, value_buf, dmac_47_16, high);
+      DEVX_SET(fte_match_set_lyr_2_4, value_buf, dmac_15_0, low);
+      any = true;
+    }
+    if (ethernet.match_src_) {
+      const auto [high, low] = split_mac(ethernet.src_);
+      DEVX_SET(fte_match_set_lyr_2_4, mask_buf, smac_47_16, 0xffffffff);
+      DEVX_SET(fte_match_set_lyr_2_4, mask_buf, smac_15_0, 0xffff);
+      DEVX_SET(fte_match_set_lyr_2_4, value_buf, smac_47_16, high);
+      DEVX_SET(fte_match_set_lyr_2_4, value_buf, smac_15_0, low);
+      any = true;
+    }
+    criteria |= MLX5_DR_MATCH_CRITERIA_OUTER;
+  }
 
   auto pin_ipv4 = [&]() {
     DEVX_SET(fte_match_set_lyr_2_4, mask_buf, ethertype, 0xffff);
@@ -2043,6 +2073,36 @@ Status IbverbsEngine::install_port_flows() {
       bool any = false;
       auto* mk = reinterpret_cast<uint8_t*>(mask.buf);
       auto* vl = reinterpret_cast<uint8_t*>(val.buf);
+      const auto split_mac = [](const std::array<uint8_t, 6>& mac) {
+        const uint32_t high = (static_cast<uint32_t>(mac[0]) << 24) |
+                              (static_cast<uint32_t>(mac[1]) << 16) |
+                              (static_cast<uint32_t>(mac[2]) << 8) |
+                              static_cast<uint32_t>(mac[3]);
+        const uint16_t low = (static_cast<uint16_t>(mac[4]) << 8) |
+                             static_cast<uint16_t>(mac[5]);
+        return std::pair<uint32_t, uint16_t>{high, low};
+      };
+
+      if (mt.type_ == FlowMatchType::ETHERNET) {
+        const auto& ethernet = mt.ethernet_match_;
+        if (ethernet.match_dst_) {
+          const auto [high, low] = split_mac(ethernet.dst_);
+          DEVX_SET(fte_match_set_lyr_2_4, mk, dmac_47_16, 0xffffffff);
+          DEVX_SET(fte_match_set_lyr_2_4, mk, dmac_15_0, 0xffff);
+          DEVX_SET(fte_match_set_lyr_2_4, vl, dmac_47_16, high);
+          DEVX_SET(fte_match_set_lyr_2_4, vl, dmac_15_0, low);
+          any = true;
+        }
+        if (ethernet.match_src_) {
+          const auto [high, low] = split_mac(ethernet.src_);
+          DEVX_SET(fte_match_set_lyr_2_4, mk, smac_47_16, 0xffffffff);
+          DEVX_SET(fte_match_set_lyr_2_4, mk, smac_15_0, 0xffff);
+          DEVX_SET(fte_match_set_lyr_2_4, vl, smac_47_16, high);
+          DEVX_SET(fte_match_set_lyr_2_4, vl, smac_15_0, low);
+          any = true;
+        }
+        crit |= MLX5_DR_MATCH_CRITERIA_OUTER;
+      }
       // L3/L4 matches imply IPv4 + UDP -- pin those so the match is unambiguous.
       auto pin_ipv4 = [&]() {
         DEVX_SET(fte_match_set_lyr_2_4, mk, ethertype, 0xffff);

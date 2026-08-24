@@ -787,10 +787,18 @@ struct EcpriMatch {
   uint16_t id_ = 0;  // pc_id (msg type 0/1) or rtc_id (msg type 2), at eCPRI offset 4
 };
 
+struct EthernetMatch {
+  bool match_src_ = false;
+  std::array<uint8_t, 6> src_{};
+  bool match_dst_ = false;
+  std::array<uint8_t, 6> dst_{};
+};
+
 enum class FlowMatchType {
   IPV4_UDP,
   FLEX_ITEM,
   ECPRI,
+  ETHERNET,
 };
 
 struct FlowMatch {
@@ -802,6 +810,7 @@ struct FlowMatch {
   in_addr_t ipv4_dst_ = INADDR_ANY;
   FlexItemMatch flex_item_match_;
   EcpriMatch ecpri_match_;
+  EthernetMatch ethernet_match_;
 };
 struct FlowConfig {
   std::string name_;

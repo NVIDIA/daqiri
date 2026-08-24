@@ -3243,6 +3243,10 @@ bool DpdkEngine::validate_dynamic_rx_flow(int port, const FlowRuleConfig& flow) 
     return false;
   }
   if (is_ipv4_udp_flow_match(flow.match_)) { return true; }
+  if (flow.match_.type_ == FlowMatchType::ETHERNET) {
+    return flow.match_.ethernet_match_.match_src_ ||
+           flow.match_.ethernet_match_.match_dst_;
+  }
   if (flow.match_.type_ == FlowMatchType::FLEX_ITEM) {
     if (find_flex_item_config(cfg_, port, flow.match_.flex_item_match_.flex_item_id_) == nullptr) {
       DAQIRI_LOG_ERROR("Dynamic RX flow references invalid flex item ID {}",
@@ -4919,6 +4923,8 @@ struct rte_flow* DpdkEngine::add_flow(int port,
   DpdkRxDestination destination(flow_queue_action(flow_actions), hash_inner ? 2 : 0);
   struct rte_flow_action_mark  mark = {.id = cfg.id_};
   struct rte_flow_error error {};
+  struct rte_flow_item_eth eth_spec {};
+  struct rte_flow_item_eth eth_mask {};
   struct rte_flow_item_udp udp_spec {};
   struct rte_flow_item_udp udp_mask {};
   struct rte_flow_item_ipv4 ip_spec {};
@@ -4963,7 +4969,25 @@ struct rte_flow* DpdkEngine::add_flow(int port,
       has_outer_transform = true;
     }
   }
-  pattern[pi++].type = RTE_FLOW_ITEM_TYPE_ETH;
+  pattern[pi].type = RTE_FLOW_ITEM_TYPE_ETH;
+  if (cfg.match_.type_ == FlowMatchType::ETHERNET) {
+    const auto& ethernet = cfg.match_.ethernet_match_;
+    if (ethernet.match_dst_) {
+      std::memcpy(eth_spec.hdr.dst_addr.addr_bytes, ethernet.dst_.data(),
+                  ethernet.dst_.size());
+      std::memset(eth_mask.hdr.dst_addr.addr_bytes, 0xff,
+                  ethernet.dst_.size());
+    }
+    if (ethernet.match_src_) {
+      std::memcpy(eth_spec.hdr.src_addr.addr_bytes, ethernet.src_.data(),
+                  ethernet.src_.size());
+      std::memset(eth_mask.hdr.src_addr.addr_bytes, 0xff,
+                  ethernet.src_.size());
+    }
+    pattern[pi].spec = &eth_spec;
+    pattern[pi].mask = &eth_mask;
+  }
+  ++pi;
   append_normal_match(pattern, &pi, cfg.match_, &ip_spec, &ip_mask, &udp_spec, &udp_mask, use_rss);
   pattern[pi].type = RTE_FLOW_ITEM_TYPE_END;
 
