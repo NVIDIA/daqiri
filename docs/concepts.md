@@ -419,6 +419,14 @@ for the configuration constraints and
 [C++ API Usage → Reordered RX bursts](api-reference/cpp.md#reordered-rx-bursts)
 for how to consume them from C++.
 
+### Raw ibverbs transmit completions
+
+Raw ibverbs SEND work requests use mlx5's `ONLY_FIRST_ERR` completion mode
+until a periodically signaled request asks for a CQ update. This bounds CQ
+traffic while still reporting the first error. DAQIRI reclaims all preceding
+work-queue entries when that signaled completion arrives.
+
+
 ## See also
 
 - [API Guide](api-reference/index.md): the 6-step DAQIRI application
