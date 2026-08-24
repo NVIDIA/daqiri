@@ -46,6 +46,14 @@
 
 namespace daqiri {
 
+// mlx5 requires a completion mode on every SQ WQE. Unsignaled WQEs use
+// ONLY_FIRST_ERR; selected WQEs use ALWAYS so the CQ can drive reclamation.
+// A zero completion mode can stall an SQ containing consecutive WAIT WQEs.
+static constexpr uint8_t tx_completion_mode(bool signaled) {
+  return signaled ? MLX5_WQE_CTRL_CQ_UPDATE
+                  : (MLX5_COMP_ONLY_FIRST_ERR << MLX5_COMP_MODE_OFFSET);
+}
+
 namespace {
 // Monotonic nanosecond clock used for the TX flush timeouts. Replaces DPDK's
 // rte_get_timer_cycles()/rte_get_timer_hz() so the ibverbs engine needs no
@@ -5024,7 +5032,7 @@ void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst) {
     ctrl->qpn_ds = htobe32((q.sqn << 8) | ds);
     ctrl->signature = 0;
     ctrl->dci_stream_channel_id = 0;
-    ctrl->fm_ce_se = signaled ? MLX5_WQE_CTRL_CQ_UPDATE : 0;
+    ctrl->fm_ce_se = tx_completion_mode(signaled);
     ctrl->imm = 0;
     memset(title + 16, 0, 16);
     reinterpret_cast<struct mlx5_wqe_eth_seg*>(title + 16)->cs_flags =
@@ -5103,7 +5111,7 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
     ctrl->qpn_ds = htobe32((q.sqn << 8) | ds);
     ctrl->signature = 0;
     ctrl->dci_stream_channel_id = 0;
-    ctrl->fm_ce_se = signaled ? MLX5_WQE_CTRL_CQ_UPDATE : 0;
+    ctrl->fm_ce_se = tx_completion_mode(signaled);
     ctrl->imm = 0;
     // Minimal (16-byte) Ethernet segment, no inline headers: the NIC DMAs the
     // whole frame from the data segment. Request IPv4 + L4 checksum offload so
