@@ -229,8 +229,11 @@ RX flows can also perform hardware VLAN pop or tunnel decapsulation before queue
     - **`id`**: Queue ID under `rx.queues` on the same interface.
     - **`ids`**: Non-empty list of unique queue IDs under `rx.queues` on the same
       interface. One entry is direct steering. Two or more entries automatically
-      enable flow-affine Toeplitz RSS over source/destination IPv4 address and
-      source/destination UDP port. `id` and `ids` are mutually exclusive.
+      enable RSS. IP/UDP matches use flow-affine Toeplitz hashing over source and
+      destination IPv4 addresses and UDP ports. An Ethernet-only match remains
+      MAC-only; it does not implicitly add IPv4/UDP criteria, so matching non-IP
+      frames remain eligible for the RSS destination. `id` and `ids` are mutually
+      exclusive.
   - **`type: vlan_pop`**: Pop one VLAN tag in hardware.
   - **`type: tunnel_decap`**: Decapsulate a hardware tunnel before queue delivery.
     - **`tunnel.type`**: `vxlan`, `gre`, or `nvgre`.
