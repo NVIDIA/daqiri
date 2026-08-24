@@ -4323,10 +4323,10 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
   q.poll_mode = qcfg.poll_mode_;
   q.accurate_send = intf.tx_.accurate_send_;
   q.timestamp_format = intf.tx_.hardware_timestamp_format_;
-  if (q.accurate_send && q.timestamp_format == TxTimestampFormat::NANOSECONDS) {
+  if (q.timestamp_format == TxTimestampFormat::NANOSECONDS) {
     DAQIRI_LOG_CRITICAL(
         "tx.hardware_timestamp_format=nanoseconds is not supported by the raw-ibverbs "
-        "accurate-send path because it currently uses the device-clock CQ domain; refusing "
+        "TX scheduling path because it currently uses the device-clock CQ domain; refusing "
         "to interpret epoch nanoseconds as device ticks");
     return Status::NOT_SUPPORTED;
   }
