@@ -653,8 +653,22 @@ workflow sections above show the common call order and ownership rules.
 | `parse_network_config(...)` | Parse YAML into `NetworkConfig` without starting the engine. |
 | `get_engine_type()` | Return the active engine type after initialization. |
 | `get_engine_type(config)` | Return the engine type selected by a config object. |
+| `register_current_thread()` | Initialize engine-specific state for the calling application-owned data-plane thread. |
+| `unregister_current_thread()` | Release state acquired by `register_current_thread()` on the calling thread. |
 | `shutdown()` | Stop DAQIRI and release engine-owned resources. |
 | `print_stats()` | Print engine statistics. |
+
+Application-created threads that call data-plane APIs should call
+`register_current_thread()` after initialization and before their first packet
+operation, then call `unregister_current_thread()` on that same thread before
+`shutdown()`. Registration is per thread and idempotent.
+
+For the DPDK engine, registration makes an application-owned thread known to
+the DPDK EAL. If the thread is already EAL-managed, registration succeeds
+without taking ownership, and `unregister_current_thread()` leaves the existing
+EAL registration intact. DAQIRI-owned worker threads are managed internally.
+Engines that require no per-thread runtime state implement both calls as
+no-ops.
 
 ### Burst Metadata
 

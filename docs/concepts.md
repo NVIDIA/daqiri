@@ -263,6 +263,22 @@ queue requires `cpu_core` and `batch_size`; RX queues may also use `timeout_us`
 to return a partial batch. `indirect` mode also allows more processing jitter in the application threads by using a zero-copy ring in between DAQIRI and the user. This is the existing behavior and is supported by
 all applicable engines.
 
+#### Application-owned data-plane threads
+
+An application-created thread that calls packet burst APIs should call
+`register_current_thread()` after `daqiri_init()` and before its first
+data-plane operation. It must call `unregister_current_thread()` from that same
+thread before `shutdown()`. The lifecycle applies independently to every
+application-created data-plane thread; DAQIRI-owned queue workers are registered
+and released internally.
+
+The DPDK engine uses this lifecycle to register application-owned threads with
+the DPDK EAL. Registration is idempotent. If a thread is already EAL-managed,
+DAQIRI does not take ownership of that registration and therefore does not
+remove it during unregistration. Engines without per-thread runtime state treat
+the lifecycle calls as no-ops, allowing applications to use the same thread
+setup for every engine.
+
 In **direct mode**, there is no worker between the application and the queue.
 The application thread performs the queue work as part of its normal API calls:
 
