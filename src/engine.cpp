@@ -469,6 +469,18 @@ Status Engine::allocate_memory_regions() {
             DAQIRI_LOG_CRITICAL("Could not query the current CUDA context");
             return Status::NULL_PTR;
           }
+          const CUcontext previous = current;
+          const auto restore_previous = [&]() {
+            CUcontext active = nullptr;
+            if (cuCtxGetCurrent(&active) != CUDA_SUCCESS ||
+                (active != previous && cuCtxSetCurrent(previous) != CUDA_SUCCESS)) {
+              DAQIRI_LOG_CRITICAL(
+                  "Could not restore the CUDA context after allocating memory region {}",
+                  mr.first);
+              return false;
+            }
+            return true;
+          };
           bool select_device = current == nullptr;
           if (current != nullptr) {
             CUdevice current_device;
@@ -483,6 +495,7 @@ Status Engine::allocate_memory_regions() {
             if (set_res != cudaSuccess) {
               DAQIRI_LOG_CRITICAL("Could not select CUDA device {}: {}", mr.second.affinity_,
                                   cudaGetErrorString(set_res));
+              restore_previous();
               return Status::NULL_PTR;
             }
             const auto init_res = cudaFree(0);  // Create the primary context if needed.
@@ -490,6 +503,7 @@ Status Engine::allocate_memory_regions() {
                 current == nullptr) {
               DAQIRI_LOG_CRITICAL("Could not initialize the CUDA primary context for device {}",
                                   mr.second.affinity_);
+              restore_previous();
               return Status::NULL_PTR;
             }
           }
@@ -501,6 +515,7 @@ Status Engine::allocate_memory_regions() {
             cuGetErrorString(alloc_res, &err_str);
             DAQIRI_LOG_CRITICAL("Could not allocate {:.2f}MB of GPU memory. Error: {}", align / 1e6,
                                 err_str);
+            restore_previous();
             return Status::NULL_PTR;
           }
 
@@ -511,9 +526,18 @@ Status Engine::allocate_memory_regions() {
           if (attr_res != CUDA_SUCCESS) {
             DAQIRI_LOG_CRITICAL("Could not set pointer attributes");
             cuMemFree(cuptr);
+            restore_previous();
             return Status::NULL_PTR;
           }
           ar.deallocator_ = AllocRegion::Deallocator::CUDA_DEVICE;
+          if (!restore_previous()) {
+            if (cuCtxSetCurrent(ar.cuda_context_) == CUDA_SUCCESS) {
+              cuMemFree(cuptr);
+            }
+            ar.cuda_context_ = nullptr;
+            ar.deallocator_ = AllocRegion::Deallocator::NONE;
+            return Status::NULL_PTR;
+          }
           break;
         }
         default:

@@ -210,6 +210,13 @@ can have one segment or multiple segments:
   region. The memory regions can be of any kind (CPU or GPU) in any
   order. A common use case is *header-data split* (HDS) below.
 
+Each GPU device-memory region records the CUDA context that owns its
+allocation. When regions target different GPUs, DAQIRI temporarily activates
+each target GPU's primary context and restores the context that was current on
+entry. This preserves application-created and MPS contexts while allowing
+independent regions to use different GPUs. Cleanup similarly activates each
+region's recorded context only for the duration of the corresponding free.
+
 ### Header-Data Split (HDS)
 
 **Header-data split** is the canonical multi-segment configuration:
