@@ -1868,19 +1868,41 @@ Status IbverbsEngine::install_port_flows() {
     // Build the per-flow rules. Each flow with a queue action steers its matched
     // 5-tuple to that queue's TIR. A flow that matches no supported field, and
     // the no-flows case, fall through to a catch-all -> the first queue.
+    struct MatcherCacheEntry {
+      uint16_t criteria = 0;
+      std::vector<uint8_t> mask;
+      struct mlx5dv_dr_matcher* matcher = nullptr;
+    };
+    std::vector<MatcherCacheEntry> matcher_cache;
     auto add_rule =
         [&](uint16_t crit, struct mlx5dv_flow_match_parameters* mask,
             struct mlx5dv_flow_match_parameters* val, struct mlx5dv_dr_action* destination_action,
             const RssDestinationPtr& rss_destination, int prio, uint32_t tag, const char* desc,
             const std::vector<struct mlx5dv_dr_action*>& reformats =
                 std::vector<struct mlx5dv_dr_action*>{}) -> bool {
-      struct mlx5dv_dr_matcher* m = mlx5dv_dr_matcher_create(st.table, prio, crit, mask);
-      if (m == nullptr) {
-        DAQIRI_LOG_CRITICAL("dr_matcher_create failed (port {} {}): {}", port, desc,
-                            strerror(errno));
-        return false;
+      struct mlx5dv_dr_matcher* m = nullptr;
+      for (const auto& cached : matcher_cache) {
+        if (cached.criteria == crit && cached.mask.size() == mask->match_sz &&
+            memcmp(cached.mask.data(), mask->match_buf, mask->match_sz) == 0) {
+          m = cached.matcher;
+          break;
+        }
       }
-      st.matchers.push_back(m);
+      if (m == nullptr) {
+        m = mlx5dv_dr_matcher_create(st.table, prio, crit, mask);
+        if (m == nullptr) {
+          DAQIRI_LOG_CRITICAL("dr_matcher_create failed (port {} {}): {}", port, desc,
+                              strerror(errno));
+          return false;
+        }
+        st.matchers.push_back(m);
+        MatcherCacheEntry cached;
+        cached.criteria = crit;
+        cached.mask.resize(mask->match_sz);
+        memcpy(cached.mask.data(), mask->match_buf, mask->match_sz);
+        cached.matcher = m;
+        matcher_cache.push_back(std::move(cached));
+      }
       // A non-zero tag (the flow id) is delivered per-packet in the CQE
       // (sop_drop_qpn) so get_packet_flow_id can tell flows apart even when they
       // share a queue. The tag action precedes the dest-TIR action.
