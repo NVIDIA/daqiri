@@ -382,6 +382,7 @@ class IbverbsEngine : public Engine {
   Status get_rx_burst(BurstParams** burst, int port, int q) override;
   Status get_tx_metadata_buffer(BurstParams** burst) override;
   Status send_tx_burst(BurstParams* burst) override;
+  Status wait_for_tx_idle(uint32_t timeout_ms) override;
   BurstParams* create_tx_burst_params() override;
   uint64_t get_burst_tot_byte(BurstParams* burst) override;
 

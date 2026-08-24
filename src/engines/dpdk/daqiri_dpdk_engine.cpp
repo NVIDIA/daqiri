@@ -6905,18 +6905,152 @@ void DpdkEngine::free_tx_metadata(BurstParams* burst) {
   rte_mempool_put(tx_metadata, burst);
 }
 
-Status DpdkEngine::get_tx_metadata_buffer(BurstParams** burst) {
-  if (rte_mempool_get(tx_metadata, reinterpret_cast<void**>(burst)) != 0) {
-    DAQIRI_LOG_CRITICAL("Running out of TX meta buffers due to high rates. Either increase "\
-      "your number of metadata buffers (current: {}) with `tx_meta_buffers` (will "\
-      "increase memory usage) or increase your `batch_size` for port {} queue {} (will increase "\
-      "latency)", cfg_.tx_meta_buffers_, (*burst)->hdr.hdr.port_id, (*burst)->hdr.hdr.q_id);
+Status DpdkEngine::get_tx_metadata_buffer(BurstParams **burst) {
+  if (burst == nullptr) {
+    return Status::NULL_PTR;
+  }
+  *burst = nullptr;
+  if (rte_mempool_get(tx_metadata, reinterpret_cast<void **>(burst)) != 0) {
+    // No metadata object exists on this path, so port and queue fields are not
+    // available to report.
+    DAQIRI_LOG_CRITICAL(
+        "Running out of TX meta buffers due to high rates. Either increase "
+        "your number of metadata buffers (current: {}) with `tx_meta_buffers` "
+        "(will increase memory usage) or increase your `batch_size` (will "
+        "increase latency)",
+        cfg_.tx_meta_buffers_);
     return Status::NO_FREE_BURST_BUFFERS;
   }
   // Clear the recycled running L2 byte total (see create_tx_burst_params).
   (*burst)->hdr.hdr.nbytes = 0;
 
   return Status::SUCCESS;
+}
+
+Status DpdkEngine::wait_for_tx_idle(uint32_t timeout_ms) {
+  const auto pool_is_full = [](const rte_mempool *pool) {
+    return pool == nullptr || rte_mempool_full(pool) != 0;
+  };
+  const auto idle = [&]() {
+    // A full metadata pool proves that no worker holds an active burst. Empty
+    // handoff rings alone are insufficient because a worker may have already
+    // dequeued a burst and be waiting for its scheduled transmit time.
+    if (!pool_is_full(tx_metadata)) {
+      return false;
+    }
+    for (const auto &[key, ring] : tx_rings) {
+      (void)key;
+      if (ring != nullptr && !rte_ring_empty(ring)) {
+        return false;
+      }
+    }
+    for (const auto &[key, pool] : tx_burst_buffers) {
+      (void)key;
+      if (!pool_is_full(pool)) {
+        return false;
+      }
+    }
+    // PMDs commonly reclaim TX descriptors from a later tx_burst call. At
+    // end-of-run there is no later burst, so explicitly reap the final
+    // completion batch before testing the packet pools. This is safe here
+    // because full metadata/pointer pools and empty rings prove the workers
+    // no longer hold or submit bursts.
+    for (const auto &intf : cfg_.ifs_) {
+      for (const auto &queue : intf.tx_.queues_) {
+        (void)rte_eth_tx_done_cleanup(intf.port_id_, queue.common_.id_, 0);
+      }
+    }
+
+    // Descriptor status is the authoritative completion signal when the PMD
+    // implements it. Offset (ring size - 1) is the descriptor immediately
+    // preceding the tail (the next-send position). TX completion is ordered
+    // within a queue, so DONE there proves all prior submissions completed.
+    bool saw_descriptor_status = false;
+    bool all_descriptors_done = true;
+    for (const auto &intf : cfg_.ifs_) {
+      for (const auto &queue : intf.tx_.queues_) {
+        const int status = rte_eth_tx_descriptor_status(
+            intf.port_id_, queue.common_.id_, default_num_tx_desc - 1);
+        if (status == RTE_ETH_TX_DESC_FULL) {
+          return false;
+        }
+        if (status == RTE_ETH_TX_DESC_DONE) {
+          saw_descriptor_status = true;
+        } else {
+          all_descriptors_done = false;
+        }
+      }
+    }
+    if (saw_descriptor_status && all_descriptors_done) {
+      return true;
+    }
+
+    // TX mbufs are returned to these pools only after the PMD has reclaimed
+    // the corresponding descriptors. Requiring every pool to be full makes
+    // this a NIC-completion boundary, not merely a software-ring boundary.
+    for (const auto &[key, queue] : tx_dpdk_q_map_) {
+      (void)key;
+      if (queue == nullptr) {
+        continue;
+      }
+      for (const auto *pool : queue->pools) {
+        if (!pool_is_full(pool)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+
+  const auto deadline = steady_clock::now() + milliseconds(timeout_ms);
+  do {
+    if (idle()) {
+      return Status::SUCCESS;
+    }
+    std::this_thread::sleep_for(std::chrono::microseconds(50));
+  } while (steady_clock::now() < deadline);
+
+  if (tx_metadata != nullptr && !rte_mempool_full(tx_metadata)) {
+    DAQIRI_LOG_WARN("TX idle timeout: metadata pool available={}/{}",
+                    rte_mempool_avail_count(tx_metadata), tx_metadata->size);
+  }
+  for (const auto &intf : cfg_.ifs_) {
+    for (const auto &queue : intf.tx_.queues_) {
+      DAQIRI_LOG_WARN(
+          "TX idle timeout: descriptor status port={} queue={} tail={} next={} previous={}",
+          intf.port_id_, queue.common_.id_,
+          rte_eth_tx_descriptor_status(intf.port_id_, queue.common_.id_, 0),
+          rte_eth_tx_descriptor_status(intf.port_id_, queue.common_.id_, 1),
+          rte_eth_tx_descriptor_status(intf.port_id_, queue.common_.id_,
+                                       default_num_tx_desc - 1));
+    }
+  }
+  for (const auto &[key, ring] : tx_rings) {
+    if (ring != nullptr && !rte_ring_empty(ring)) {
+      DAQIRI_LOG_WARN("TX idle timeout: ring key={} count={}", key,
+                      rte_ring_count(ring));
+    }
+  }
+  for (const auto &[key, pool] : tx_burst_buffers) {
+    if (pool != nullptr && !rte_mempool_full(pool)) {
+      DAQIRI_LOG_WARN("TX idle timeout: burst pool key={} available={}/{}", key,
+                      rte_mempool_avail_count(pool), pool->size);
+    }
+  }
+  for (const auto &[key, queue] : tx_dpdk_q_map_) {
+    if (queue == nullptr) {
+      continue;
+    }
+    for (std::size_t segment = 0; segment < queue->pools.size(); ++segment) {
+      const auto *pool = queue->pools[segment];
+      if (pool != nullptr && !rte_mempool_full(pool)) {
+        DAQIRI_LOG_WARN(
+            "TX idle timeout: packet pool key={} segment={} available={}/{}",
+            key, segment, rte_mempool_avail_count(pool), pool->size);
+      }
+    }
+  }
+  return Status::NOT_READY;
 }
 
 Status DpdkEngine::send_tx_burst(BurstParams* burst) {
@@ -6953,6 +7087,11 @@ void DpdkEngine::shutdown() {
     cleanup_reorder_state();
     force_quit.store(true);
 
+    // Remote workers may still be reading queue rings or submitting packets.
+    // Wait for every launched lcore before releasing any worker-visible object
+    // or asking the PMD to stop its queues.
+    rte_eal_mp_wait_lcore();
+
     stats_.Shutdown();
     stats_thread_.join();
 
@@ -6970,7 +7109,29 @@ void DpdkEngine::shutdown() {
 
     cleanup_dynamic_flows();
     destroy_all_flow_rules();
+
+    // rte_eal_cleanup() cannot close a started Ethernet device. Leaving the
+    // device started also leaves PMD/EAL resources referring to registered
+    // external GPU memory, which makes a later CUDA-context teardown unsafe.
+    for (const auto &intf : cfg_.ifs_) {
+      const int stop_ret = rte_eth_dev_stop(intf.port_id_);
+      if (stop_ret != 0) {
+        DAQIRI_LOG_WARN("Failed to stop DPDK port {}: {}", intf.port_id_,
+                        stop_ret);
+      }
+      const int close_ret = rte_eth_dev_close(intf.port_id_);
+      if (close_ret != 0) {
+        DAQIRI_LOG_WARN("Failed to close DPDK port {}: {}", intf.port_id_,
+                        close_ret);
+      }
+    }
+
     cleanup_eal();
+
+    // External-memory registration is gone, so CUDA device allocations can
+    // now be released while the caller-owned CUDA context is still current.
+    // Do not defer this to Engine::~Engine(), which may run after that context.
+    free_memory_regions();
     initialized_ = false;
   }
 }

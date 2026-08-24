@@ -560,6 +560,11 @@ Status send_tx_burst(BurstParams* burst) {
   return g_daqiri_engine->send_tx_burst(burst);
 }
 
+Status wait_for_tx_idle(uint32_t timeout_ms) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->wait_for_tx_idle(timeout_ms);
+}
+
 Status get_rx_burst(BurstParams** burst, int port, int q) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
   return g_daqiri_engine->get_rx_burst(burst, port, q);

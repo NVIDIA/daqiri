@@ -110,6 +110,7 @@ class Engine {
   virtual void free_tx_metadata(BurstParams* burst) = 0;
   virtual Status get_tx_metadata_buffer(BurstParams** burst) = 0;
   virtual Status send_tx_burst(BurstParams* burst) = 0;
+  virtual Status wait_for_tx_idle(uint32_t timeout_ms);
   virtual Status get_mac_addr(int port, char* mac) = 0;
   virtual Status drop_all_traffic(int port);
   virtual Status allow_all_traffic(int port);

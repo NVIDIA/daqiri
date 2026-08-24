@@ -935,6 +935,11 @@ Status Engine::get_tx_packet_burst_checked(BurstParams* burst) {
   return get_tx_packet_burst(burst);
 }
 
+Status Engine::wait_for_tx_idle(uint32_t timeout_ms) {
+  (void)timeout_ms;
+  return Status::NOT_SUPPORTED;
+}
+
 Status Engine::get_rx_burst(BurstParams** burst, int port_id) {
   // Check if the port_id is valid
   if (port_id < 0 || port_id >= static_cast<int>(cfg_.ifs_.size())) {

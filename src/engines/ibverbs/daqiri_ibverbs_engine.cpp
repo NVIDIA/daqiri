@@ -4106,6 +4106,27 @@ bool IbverbsEngine::validate_config() const {
   return true;
 }
 
+Status IbverbsEngine::wait_for_tx_idle(uint32_t timeout_ms) {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  for (;;) {
+    bool idle = true;
+    for (const auto& q : tx_queues_) {
+      if (q->completed_tail.load(std::memory_order_acquire) != q->alloc_head) {
+        idle = false;
+        break;
+      }
+    }
+    if (idle) {
+      return Status::SUCCESS;
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      return Status::NOT_READY;
+    }
+    std::this_thread::sleep_for(std::chrono::microseconds(50));
+  }
+}
+
 void IbverbsEngine::print_stats() {
   for (auto& q : rx_queues_) {
     DAQIRI_LOG_INFO(
