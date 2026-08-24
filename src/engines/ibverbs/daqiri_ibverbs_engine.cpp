@@ -4227,9 +4227,24 @@ Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
         device_attr.max_qp_wr / 2);
   }
 
-  q.cq = ibv_create_cq(q.ctx, static_cast<int>(q.num_slots) + 1, nullptr, nullptr, 0);
+  if (q.accurate_send) {
+    // mlx5 derives a raw-packet QP/SQ timestamp domain from its send CQ. Keep
+    // the historical device-clock mode as the default, and select wall-clock
+    // explicitly for callers that pass epoch nanoseconds.
+    struct ibv_cq_init_attr_ex cq_attr {};
+    cq_attr.cqe = static_cast<uint32_t>(q.num_slots) + 1;
+    cq_attr.wc_flags =
+        q.timestamp_format == TxTimestampFormat::NANOSECONDS
+            ? IBV_WC_EX_WITH_COMPLETION_TIMESTAMP_WALLCLOCK
+            : IBV_WC_EX_WITH_COMPLETION_TIMESTAMP;
+    struct ibv_cq_ex* cq_ex = ibv_create_cq_ex(q.ctx, &cq_attr);
+    q.cq = cq_ex == nullptr ? nullptr : ibv_cq_ex_to_cq(cq_ex);
+  } else {
+    q.cq = ibv_create_cq(q.ctx, static_cast<int>(q.num_slots) + 1, nullptr, nullptr, 0);
+  }
   if (q.cq == nullptr) {
-    DAQIRI_LOG_CRITICAL("TX ibv_create_cq failed: {}", strerror(errno));
+    DAQIRI_LOG_CRITICAL("TX ibv_create_cq failed (accurate_send={}): {}",
+                        q.accurate_send, strerror(errno));
     return Status::GENERIC_FAILURE;
   }
   struct ibv_qp_init_attr attr {};
@@ -4310,9 +4325,10 @@ Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
   q.slots_posted = 0;
   q.wqe_slot_cum.assign(q.dv_qp.sq.wqe_cnt, 0);
   q.wqe_wqebb_cum.assign(q.dv_qp.sq.wqe_cnt, 0);
-  DAQIRI_LOG_INFO("TX SQ mapped q{}: sqn {}, wqe_cnt {}, stride {}, bf.size {}, cqe_cnt {}",
-                  q.queue_id, q.sqn, q.dv_qp.sq.wqe_cnt, q.dv_qp.sq.stride, q.dv_qp.bf.size,
-                  q.dv_txcq.cqe_cnt);
+  DAQIRI_LOG_INFO("TX SQ mapped q{}: sqn {}, wqe_cnt {}, stride {}, bf.reg {}, bf.size {}, "
+                  "uar_mmap_offset {:#x}, cqe_cnt {}",
+                  q.queue_id, q.sqn, q.dv_qp.sq.wqe_cnt, q.dv_qp.sq.stride, q.dv_qp.bf.reg,
+                  q.dv_qp.bf.size, q.dv_qp.uar_mmap_offset, q.dv_txcq.cqe_cnt);
   return Status::SUCCESS;
 }
 
@@ -4321,6 +4337,8 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
   q.port_id = intf.port_id_;
   q.queue_id = qcfg.common_.id_;
   q.poll_mode = qcfg.poll_mode_;
+  q.accurate_send = intf.tx_.accurate_send_;
+  q.timestamp_format = intf.tx_.hardware_timestamp_format_;
   q.batch_size = q.poll_mode == QueuePollMode::DIRECT ? 1 : std::max(1, qcfg.common_.batch_size_);
   if (!qcfg.common_.cpu_core_.empty()) {
     q.cpu_core = std::stoi(qcfg.common_.cpu_core_);
