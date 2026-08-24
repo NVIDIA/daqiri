@@ -547,8 +547,11 @@ Also expect a `kHALF` input binding, FLOAT32 (or converted) `features`, all 256
 images, and per-class means labeled with CIFAR-10 class names (`airplane` …
 `truck`).
 
-For sustained throughput rather than a fixed dataset, use `--seconds 20`; drops
-are acceptable in that mode.
+For sustained throughput rather than a fixed dataset, use `--seconds 20 --loop`;
+drops are acceptable in that mode. `--loop` is required: the RX config sets
+`dataset:`, which makes the run terminate on image count rather than elapsed
+time, so `--seconds` alone has no effect. `run_resnet_xhost.sh --seconds N`
+adds `--loop` for you.
 
 ## Output
 

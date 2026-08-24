@@ -111,7 +111,7 @@ from `reorder:` at startup (and errors if the YAML defines it directly).
 | `packets_per_image` | 128 | Power of two |
 | `images_per_batch` | 32 | Inference batch size (power of two) |
 | `payload_byte_offset` | 64 | Header size before payload |
-| `seq_bit_offset` / `seq_bit_width` | 128 / 16 | Header seq field |
+| `seq_bit_offset` / `seq_bit_width` | 128 / 12 | Header seq field. Every shipped config sets **16**; leave the 12-bit default only if `packets_per_batch` is small enough that `2^width` spans more than one batch |
 
 `packets_per_batch` is derived as `packets_per_image × images_per_batch` and
 written into the synthesized `reorder_configs`. `--images-per-batch` may shrink
