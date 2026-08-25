@@ -554,7 +554,8 @@ void bind_enums(py::module_ &m) {
 
   py::enum_<LoopbackType>(m, "LoopbackType")
       .value("DISABLED", LoopbackType::DISABLED)
-      .value("LOOPBACK_TYPE_SW", LoopbackType::LOOPBACK_TYPE_SW);
+      .value("LOOPBACK_TYPE_SW", LoopbackType::LOOPBACK_TYPE_SW)
+      .value("LOOPBACK_TYPE_HW", LoopbackType::LOOPBACK_TYPE_HW);
 
   py::enum_<RDMAMode>(m, "RDMAMode")
       .value("CLIENT", RDMAMode::CLIENT)

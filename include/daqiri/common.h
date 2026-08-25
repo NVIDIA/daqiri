@@ -1183,12 +1183,19 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
         const auto lbstr = node["loopback"].as<std::string>();
         if (lbstr == "sw") {
           input_spec.common_.loopback_ = daqiri::LoopbackType::LOOPBACK_TYPE_SW;
+        } else if (lbstr == "hw") {
+          input_spec.common_.loopback_ = daqiri::LoopbackType::LOOPBACK_TYPE_HW;
         } else if (!lbstr.empty()) {
-          DAQIRI_LOG_ERROR(
-              "Invalid loopback type: {}. Use 'sw' or empty string ''", lbstr);
+          DAQIRI_LOG_ERROR("Invalid loopback type: {}. Use 'sw', 'hw', or empty string ''", lbstr);
           return false;
         }
       } catch (const std::exception &e) {
+      }
+      if (input_spec.common_.loopback_ == daqiri::LoopbackType::LOOPBACK_TYPE_HW &&
+          (input_spec.common_.stream_type != daqiri::StreamType::RAW ||
+           input_spec.common_.engine_type != daqiri::EngineType::IBVERBS)) {
+        DAQIRI_LOG_ERROR("Hardware loopback requires stream_type 'raw' with engine 'ibverbs'");
+        return false;
       }
 
       try {

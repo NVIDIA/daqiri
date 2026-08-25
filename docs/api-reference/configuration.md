@@ -40,9 +40,12 @@ These settings apply globally to both TX and RX:
 - **`log_level`**: Engine log level.
   - type: `string`
   - values: `trace`, `debug`, `info`, `warn` (default), `error`, `critical`, `off`
-- **`loopback`**: Enable software loopback for testing without a physical link.
+- **`loopback`**: Select a loopback mode for local testing.
   - type: `string`
-  - values: `""` (disabled, default), `"sw"` (software loopback)
+  - values: `""` (disabled, default), `"sw"` (DPDK software loopback, no NIC),
+    `"hw"` (single-port mlx5 hardware loopback, raw `ibverbs` engine only)
+  - hardware loopback requires one physical interface containing both TX and RX queues;
+    transmitted unicast packets must use that port's own destination MAC
 - **`tx_meta_buffers`**: Metadata buffers for transmit. One buffer is used for each burst
   of packets.
   - type: `integer`
