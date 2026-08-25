@@ -120,8 +120,8 @@ for (int i = 0; i < daqiri::get_num_packets(burst); i++) {
 RX hardware timestamps are available only when Raw Ethernet (`stream_type: "raw"`) is
 configured with `rx.hardware_timestamps: true` and the NIC supports
 `RTE_ETH_RX_OFFLOAD_TIMESTAMP`. DAQIRI converts the NIC timestamp counter to nanoseconds
-internally using the matching device clock when available, or the PMD's nanosecond
-timestamp format when the driver already supplies nanoseconds. DAQIRI does not expose NIC clock reads or
+internally using the matching device clock when available, or directly uses the driver's
+nanosecond timestamp format. DAQIRI does not expose NIC clock reads or
 convert timestamps to wall-clock time. For reordered aggregate bursts,
 `get_packet_rx_timestamp(burst, 0, &ts)` returns the timestamp of the first source
 packet accepted into the aggregate.

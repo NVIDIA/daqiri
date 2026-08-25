@@ -328,14 +328,14 @@ a template table.
 
 `rx.hardware_timestamps:` Enable per-packet hardware RX timestamps for Raw Ethernet
 (`stream_type: "raw"`).
-When enabled, DAQIRI requires `RTE_ETH_RX_OFFLOAD_TIMESTAMP` support from the NIC/PMD and
-initialization fails if DAQIRI cannot provide nanosecond timestamps for the selected PMD.
+When enabled, DAQIRI requires hardware timestamp support from the NIC driver and
+initialization fails if DAQIRI cannot provide nanosecond timestamps for the selected driver.
 Timestamps are returned by `get_packet_rx_timestamp()` in nanoseconds in the NIC timestamp
 clock domain, not wall-clock time.
 
-`rx.hardware_timestamp_format:` Describes the hardware/PMD representation DAQIRI receives.
+`rx.hardware_timestamp_format:` Describes the timestamp representation DAQIRI receives from the driver.
 Use `device_clock_ticks` (default) when DAQIRI must convert device ticks to nanoseconds, or
-`nanoseconds` when the PMD already supplies nanoseconds.
+`nanoseconds` when the driver already supplies nanoseconds.
 
 - type: `boolean`
 - default: `false`
@@ -505,14 +505,16 @@ enabled, use `set_packet_tx_time()` to schedule packets. Requires ConnectX-7 or 
 `tx.hardware_timestamp_format:` Selects the clock-domain representation accepted by
 `set_packet_tx_time()`:
 
-- `device_clock_ticks` preserves the historical contract and passes device-clock values through.
+- `device_clock_ticks` preserves the historical contract and passes native NIC clock values
+  through. Use it when the application already reads and schedules in the NIC's clock domain,
+  including systems that do not synchronize the NIC clock to wall-clock time.
 - `nanoseconds` accepts epoch nanoseconds. The DPDK engine validates at startup that
   `rte_eth_read_clock()` is readable and agrees with `CLOCK_REALTIME`; initialization fails
   rather than sending at an incorrectly interpreted time when mlx5 real-time clock mode or PTP
   synchronization is unavailable.
 
-The raw-ibverbs engine rejects `nanoseconds` until wall-clock send-CQ/WAIT encoding support is
-enabled; it never silently treats epoch nanoseconds as device ticks.
+The raw-ibverbs engine rejects `nanoseconds` until wall-clock encoding support is available in
+its timed-send path; it never silently treats epoch nanoseconds as device ticks.
 
 - type: `boolean`
 - default: `false`
