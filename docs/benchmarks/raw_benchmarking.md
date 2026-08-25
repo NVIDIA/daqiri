@@ -499,7 +499,7 @@ The `*_packets_phy` and `*_bytes_phy` counters are physical-link counters. They 
 
     ```log
     [WARN] Flow control: port 0 (ens15f0np0) has 802.3x pause enabled (rx on, tx on). A paused
-    link idles instead of dropping, so this can cost over 20% of line rate ...
+    link idles instead of dropping, so this can prevent achieving higher rates ...
           rx_pause_ctrl_phy:            34293
           tx_pause_ctrl_phy:            0
     [WARN] Flow control: port 0 (ens15f0np0) exchanged 34293 pause frames during this run

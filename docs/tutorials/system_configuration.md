@@ -1310,6 +1310,8 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
         Pause frames on the wire are also not evidence of a misconfiguration by themselves. A peer that cannot buffer a line-rate burst — an FPGA is the common case, and it will pause often — asserts pause by design, and that is the mechanism working. Disabling pause on such a link does not recover the throughput; it converts the throttling into drops on the peer. The counters say which end asserted it: `rx_pause_ctrl_phy` counts frames **received** (the peer throttling this port's transmit) and `tx_pause_ctrl_phy` frames **sent** (this port's receive path throttling the peer). Non-zero `rx_pause_ctrl_phy` against a device known to be shallow-buffered is expected; non-zero `tx_pause_ctrl_phy` points back at this host.
 
+        When the receiver routinely needs pause to keep up, packet pacing is usually the better mechanism. A per-queue `pacing_mbps` cap meters the transmit queue out in hardware, smoothing the packet rate to one the receiver can absorb instead of waiting for its buffers to fill and having it stop the sender. See [`pacing_mbps`](../api-reference/configuration.md#transmit-configuration-tx) in the TX queue configuration.
+
     Check the current state of your interfaces:
 
     === "tune_system.py"
@@ -1321,8 +1323,8 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
         ??? abstract "See an example output"
 
             ```
-            2026-08-19 09:43:00 - WARNING - Interface eth0 has 802.3x pause enabled (RX: on, TX: on). Link-level flow control can idle the link and cost over 20% of line rate with no drop counter to reveal it. Disable both directions with `ethtool -A eth0 rx off tx off` for raw-Ethernet benchmarking; keep it on lossless RoCE/PFC fabrics.
-            2026-08-19 09:43:00 - WARNING - Interface eth0 has exchanged pause frames since boot (rx_pause_ctrl_phy=240,975, tx_pause_ctrl_phy=240,975), so flow control has actually throttled this link, not merely been enabled.
+            2026-08-19 09:43:00 - WARNING - Interface eth0 has 802.3x pause enabled (RX: on, TX: on). Link-level flow control can idle the link and prevent achieving higher rates, with no drop counter to reveal it. Disable both directions with `ethtool -A eth0 rx off tx off` if this link is meant to be lossy; keep it on lossless RoCE/PFC fabrics and on links whose peer cannot absorb line rate, where disabling it turns the throttling into drops.
+            2026-08-19 09:43:00 - WARNING - Interface eth0 has exchanged pause frames since boot (rx_pause_ctrl_phy=240,975, tx_pause_ctrl_phy=240,975): both ends have asserted pause. Flow control has actually throttled this link, not merely been enabled. Confirm the peer can absorb line rate before disabling pause: against a device that cannot (an FPGA or other shallow-buffer device) this is working backpressure, and disabling it turns the throttling into drops.
             2026-08-19 09:43:00 - INFO - Interface eth1 has 802.3x pause disabled (RX: off, TX: off).
             ```
 

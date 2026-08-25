@@ -2177,7 +2177,7 @@ def check_pause_frames():
             logging.warning(
                 f"Interface {iface} has 802.3x pause enabled "
                 f"(RX: {rx_match.group(1)}, TX: {tx_match.group(1)}). Link-level flow control "
-                f"can idle the link and cost over 20% of line rate with no drop counter to "
+                f"can idle the link and prevent achieving higher rates, with no drop counter to "
                 f"reveal it. Disable both directions with `ethtool -A {iface} rx off tx off` "
                 f"if this link is meant to be lossy; keep it on lossless RoCE/PFC fabrics and "
                 f"on links whose peer cannot absorb line rate, where disabling it turns the "

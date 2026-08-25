@@ -197,7 +197,7 @@ void check_pause_at_init(const std::string& netdev, int port_id) {
   // the actionable advice is to disable both rather than to reason about one.
   DAQIRI_LOG_WARN(
       "Flow control: port {} ({}) has 802.3x pause enabled (rx {}, tx {}). A paused link idles "
-      "instead of dropping, so this can cost over 20% of line rate with no drop counter to "
+      "instead of dropping, so this can prevent achieving higher rates with no drop counter to "
       "reveal it. Disable both directions with 'ethtool -A {} rx off tx off' if this link is "
       "meant to be lossy; leave it on for lossless RoCE/PFC fabrics and for peers that cannot "
       "absorb line rate, where disabling it turns the throttling into drops.",
