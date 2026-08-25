@@ -1523,8 +1523,8 @@ Status IbverbsEngine::install_flow_rule_locked(int port, PortSteering& st,
   auto* mask_buf = reinterpret_cast<uint8_t*>(mask.buf);
   auto* value_buf = reinterpret_cast<uint8_t*>(value.buf);
 
-  if (mt.type_ == FlowMatchType::ETHERNET) {
-    const auto& ethernet = mt.ethernet_match_;
+  const auto& ethernet = mt.ethernet_match_;
+  if (ethernet.match_src_ || ethernet.match_dst_) {
     if (ethernet.match_dst_) {
       const auto [high, low] = split_mac_address(ethernet.dst_);
       DEVX_SET(fte_match_set_lyr_2_4, mask_buf, dmac_47_16, 0xffffffff);
@@ -2073,8 +2073,8 @@ Status IbverbsEngine::install_port_flows() {
       auto* mk = reinterpret_cast<uint8_t*>(mask.buf);
       auto* vl = reinterpret_cast<uint8_t*>(val.buf);
 
-      if (mt.type_ == FlowMatchType::ETHERNET) {
-        const auto& ethernet = mt.ethernet_match_;
+      const auto& ethernet = mt.ethernet_match_;
+      if (ethernet.match_src_ || ethernet.match_dst_) {
         if (ethernet.match_dst_) {
           const auto [high, low] = split_mac_address(ethernet.dst_);
           DEVX_SET(fte_match_set_lyr_2_4, mk, dmac_47_16, 0xffffffff);

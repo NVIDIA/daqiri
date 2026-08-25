@@ -936,59 +936,11 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_flow_config(
   const YAML::Node ecpri_node = match["ecpri"];
   const YAML::Node ethernet_node = match["ethernet"];
   if (ethernet_node) {
-    static constexpr const char* kIncompatibleEthernetFields[] = {
-        "ecpri", "udp_src", "udp_dst", "ipv4_len", "ipv4_src", "ipv4_dst",
-        "flex_item_id", "val", "mask"};
-    for (const char* field : kIncompatibleEthernetFields) {
-      if (match[field]) {
-        DAQIRI_LOG_ERROR(
-            "Flow '{}' field 'match.ethernet' cannot be combined with 'match.{}'",
-            flow.name_, field);
-        return false;
-      }
-    }
-  }
-
-  // eCPRI-over-Ethernet match: selected by the presence of a `match.ecpri` map.
-  // Matches the eCPRI EtherType (0xAEFE) plus an optional common-header message
-  // type and message identifier (pc_id/rtc_id). Detected before the UDP/IP and
-  // flex-item paths because it is a distinct, mutually exclusive match class.
-  if (ecpri_node && ecpri_node.IsMap()) {
-    flow.match_.type_ = daqiri::FlowMatchType::ECPRI;
-    if (ecpri_node["msg_type"]) {
-      flow.match_.ecpri_match_.msg_type_ =
-          static_cast<uint8_t>(ecpri_node["msg_type"].as<uint16_t>() & 0xff);
-      flow.match_.ecpri_match_.match_msg_type_ = true;
-    }
-    // pc_id (msg type 0/1) and rtc_id (msg type 2) name the same 16-bit field.
-    const YAML::Node id_node = ecpri_node["pc_id"] ? ecpri_node["pc_id"] : ecpri_node["rtc_id"];
-    if (id_node) {
-      flow.match_.ecpri_match_.id_ = id_node.as<uint16_t>();
-      flow.match_.ecpri_match_.match_id_ = true;
-    }
-    if (flow.match_.ecpri_match_.match_id_ && !flow.match_.ecpri_match_.match_msg_type_) {
-      DAQIRI_LOG_ERROR(
-          "eCPRI flow '{}' matches pc_id/rtc_id but no msg_type; matching the eCPRI message "
-          "identifier requires a msg_type",
-          flow.name_);
-      return false;
-    }
-    DAQIRI_LOG_INFO("Using eCPRI match: msg_type={} (matched={}), id={} (matched={})",
-                    flow.match_.ecpri_match_.msg_type_, flow.match_.ecpri_match_.match_msg_type_,
-                    flow.match_.ecpri_match_.id_, flow.match_.ecpri_match_.match_id_);
-    return true;
-  }
-
-  // Raw Ethernet address match: selected by the presence of a
-  // `match.ethernet` map. Keep it mutually exclusive with the other match
-  // classes, just like eCPRI and flex-item matching.
-  if (ethernet_node) {
     if (!ethernet_node.IsMap()) {
       DAQIRI_LOG_ERROR("Flow '{}' field 'match.ethernet' must be a map", flow.name_);
       return false;
     }
 
-    flow.match_.type_ = daqiri::FlowMatchType::ETHERNET;
     auto parse_address = [&](const char* key, bool& enabled,
                              std::array<uint8_t, 6>& address) {
       const YAML::Node address_node = ethernet_node[key];
@@ -1019,6 +971,35 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_flow_config(
                        flow.name_);
       return false;
     }
+  }
+
+  // eCPRI-over-Ethernet match: selected by the presence of a `match.ecpri` map.
+  // Matches the eCPRI EtherType (0xAEFE) plus an optional common-header message
+  // type and message identifier (pc_id/rtc_id). Detected before the UDP/IP and
+  // flex-item paths because it is a distinct, mutually exclusive match class.
+  if (ecpri_node && ecpri_node.IsMap()) {
+    flow.match_.type_ = daqiri::FlowMatchType::ECPRI;
+    if (ecpri_node["msg_type"]) {
+      flow.match_.ecpri_match_.msg_type_ =
+          static_cast<uint8_t>(ecpri_node["msg_type"].as<uint16_t>() & 0xff);
+      flow.match_.ecpri_match_.match_msg_type_ = true;
+    }
+    // pc_id (msg type 0/1) and rtc_id (msg type 2) name the same 16-bit field.
+    const YAML::Node id_node = ecpri_node["pc_id"] ? ecpri_node["pc_id"] : ecpri_node["rtc_id"];
+    if (id_node) {
+      flow.match_.ecpri_match_.id_ = id_node.as<uint16_t>();
+      flow.match_.ecpri_match_.match_id_ = true;
+    }
+    if (flow.match_.ecpri_match_.match_id_ && !flow.match_.ecpri_match_.match_msg_type_) {
+      DAQIRI_LOG_ERROR(
+          "eCPRI flow '{}' matches pc_id/rtc_id but no msg_type; matching the eCPRI message "
+          "identifier requires a msg_type",
+          flow.name_);
+      return false;
+    }
+    DAQIRI_LOG_INFO("Using eCPRI match: msg_type={} (matched={}), id={} (matched={})",
+                    flow.match_.ecpri_match_.msg_type_, flow.match_.ecpri_match_.match_msg_type_,
+                    flow.match_.ecpri_match_.id_, flow.match_.ecpri_match_.match_id_);
     return true;
   }
 
@@ -1081,6 +1062,10 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_flow_config(
                        flow.match_.flex_item_match_.flex_item_id_,
                        flow.match_.flex_item_match_.val_,
                        flow.match_.flex_item_match_.mask_);
+  } else if (ethernet_node && flow.match_.udp_src_ == 0 && flow.match_.udp_dst_ == 0 &&
+             flow.match_.ipv4_len_ == 0 && flow.match_.ipv4_src_ == INADDR_ANY &&
+             flow.match_.ipv4_dst_ == INADDR_ANY) {
+    flow.match_.type_ = daqiri::FlowMatchType::ETHERNET;
   }
 
   return true;

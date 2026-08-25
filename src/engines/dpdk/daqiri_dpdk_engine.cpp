@@ -2772,8 +2772,8 @@ void DpdkEngine::initialize() {
         struct rte_flow* created = nullptr;
         const FlowAction queue_action = flow_queue_action(flow_config_actions(flow));
         if (flow.match_.type_ == FlowMatchType::FLEX_ITEM) {
-          created = add_flex_item_flow(intf.port_id_, flow.match_.flex_item_match_, queue_action,
-                                       flow.id_);
+          created = add_flex_item_flow(intf.port_id_, flow.match_.flex_item_match_,
+                                       flow.match_.ethernet_match_, queue_action, flow.id_);
           if (created != nullptr) {
             has_flex_item_flows = true;
           }
@@ -3566,7 +3566,8 @@ Status DpdkEngine::create_dynamic_flow_legacy_locked(int port,
   struct rte_flow* rte_flow = nullptr;
   std::shared_ptr<DpdkFlowResource> resource;
   if (cfg.match_.type_ == FlowMatchType::FLEX_ITEM) {
-    rte_flow = add_flex_item_flow(port, cfg.match_.flex_item_match_, cfg.action_, cfg.id_, false);
+    rte_flow = add_flex_item_flow(port, cfg.match_.flex_item_match_,
+                                  cfg.match_.ethernet_match_, cfg.action_, cfg.id_, false);
   } else if (cfg.match_.type_ == FlowMatchType::ECPRI) {
     rte_flow = add_ecpri_flow(port, cfg, false);
   } else {
@@ -4403,6 +4404,7 @@ void DpdkEngine::destroy_owned_flows() {
 }
 
 struct rte_flow* DpdkEngine::add_flex_item_flow(int port, const FlexItemMatch& match_info,
+                                                const EthernetMatch& ethernet_match,
                                                 const FlowAction& queue_action, FlowId mark_id,
                                                 bool track) {
   /* Declaring structs being used. 8< */
@@ -4413,6 +4415,8 @@ struct rte_flow* DpdkEngine::add_flex_item_flow(int port, const FlexItemMatch& m
   DpdkRxDestination destination(queue_action);
   struct rte_flow_action_mark mark = {.id = mark_id};
   struct rte_flow_error error;
+  struct rte_flow_item_eth eth_spec;
+  struct rte_flow_item_eth eth_mask;
   struct rte_flow_item_udp udp_spec;
   struct rte_flow_item_udp udp_mask;
   struct rte_flow_item_ipv4  ip_spec;
@@ -4429,6 +4433,8 @@ struct rte_flow* DpdkEngine::add_flex_item_flow(int port, const FlexItemMatch& m
   memset(pattern, 0, sizeof(pattern));
   memset(action, 0, sizeof(action));
   memset(&attr, 0, sizeof(struct rte_flow_attr));
+  memset(&eth_spec, 0, sizeof(struct rte_flow_item_eth));
+  memset(&eth_mask, 0, sizeof(struct rte_flow_item_eth));
   memset(&ip_spec, 0, sizeof(struct rte_flow_item_ipv4));
   memset(&ip_mask, 0, sizeof(struct rte_flow_item_ipv4));
   memset(&udp_spec, 0, sizeof(struct rte_flow_item_udp));
@@ -4443,6 +4449,20 @@ struct rte_flow* DpdkEngine::add_flex_item_flow(int port, const FlexItemMatch& m
   action[action_index].type = RTE_FLOW_ACTION_TYPE_END;
 
   pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
+  if (ethernet_match.match_dst_) {
+    std::memcpy(eth_spec.hdr.dst_addr.addr_bytes, ethernet_match.dst_.data(),
+                ethernet_match.dst_.size());
+    std::memset(eth_mask.hdr.dst_addr.addr_bytes, 0xff, ethernet_match.dst_.size());
+  }
+  if (ethernet_match.match_src_) {
+    std::memcpy(eth_spec.hdr.src_addr.addr_bytes, ethernet_match.src_.data(),
+                ethernet_match.src_.size());
+    std::memset(eth_mask.hdr.src_addr.addr_bytes, 0xff, ethernet_match.src_.size());
+  }
+  if (ethernet_match.match_src_ || ethernet_match.match_dst_) {
+    pattern[0].spec = &eth_spec;
+    pattern[0].mask = &eth_mask;
+  }
   pattern[1].type = RTE_FLOW_ITEM_TYPE_IPV4;
   //  pattern[3].type = RTE_FLOW_ITEM_TYPE_FLEX; // defined later
   pattern[4].type = RTE_FLOW_ITEM_TYPE_END;
@@ -4971,8 +4991,8 @@ struct rte_flow* DpdkEngine::add_flow(int port,
     }
   }
   pattern[pi].type = RTE_FLOW_ITEM_TYPE_ETH;
-  if (cfg.match_.type_ == FlowMatchType::ETHERNET) {
-    const auto& ethernet = cfg.match_.ethernet_match_;
+  const auto& ethernet = cfg.match_.ethernet_match_;
+  if (ethernet.match_src_ || ethernet.match_dst_) {
     if (ethernet.match_dst_) {
       std::memcpy(eth_spec.hdr.dst_addr.addr_bytes, ethernet.dst_.data(), ethernet.dst_.size());
       std::memset(eth_mask.hdr.dst_addr.addr_bytes, 0xff, ethernet.dst_.size());
@@ -5139,6 +5159,15 @@ struct rte_flow* DpdkEngine::add_ecpri_flow(int port, const FlowConfig& cfg, boo
   action[action_index].type = RTE_FLOW_ACTION_TYPE_END;
 
   // Pin the eCPRI EtherType so the rule only fires on eCPRI-over-Ethernet frames.
+  const auto& ethernet = cfg.match_.ethernet_match_;
+  if (ethernet.match_dst_) {
+    std::memcpy(eth_spec.hdr.dst_addr.addr_bytes, ethernet.dst_.data(), ethernet.dst_.size());
+    std::memset(eth_mask.hdr.dst_addr.addr_bytes, 0xff, ethernet.dst_.size());
+  }
+  if (ethernet.match_src_) {
+    std::memcpy(eth_spec.hdr.src_addr.addr_bytes, ethernet.src_.data(), ethernet.src_.size());
+    std::memset(eth_mask.hdr.src_addr.addr_bytes, 0xff, ethernet.src_.size());
+  }
   eth_spec.hdr.ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_ECPRI);
   eth_mask.hdr.ether_type = 0xffff;
   pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;

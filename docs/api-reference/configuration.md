@@ -269,9 +269,9 @@ RX flows can also perform hardware VLAN pop or tunnel decapsulation before queue
       message type to locate the identifier in the eCPRI header).
       - type: `integer`
 
-  - **`ethernet`**: Raw Ethernet address match. Presence of this map selects the Ethernet
-    flow class. It cannot be combined with UDP/IP, flex-item, or eCPRI matching and must
-    contain at least one address.
+  - **`ethernet`**: Raw Ethernet address match. The map must contain at least one address.
+    It can be used alone or combined with IPv4/UDP, flex-item, or eCPRI criteria; all
+    configured criteria must match for the rule to apply.
     - **`src`**: Source MAC address to match. Optional.
       - type: `string`
       - format: `xx:xx:xx:xx:xx:xx`
@@ -279,9 +279,6 @@ RX flows can also perform hardware VLAN pop or tunnel decapsulation before queue
       - type: `string`
       - format: `xx:xx:xx:xx:xx:xx`
 
-    The `ethernet` match class is mutually exclusive with eCPRI, IPv4/UDP,
-    and flex-item criteria. A configuration that combines `match.ethernet`
-    with fields from another match class is rejected during parsing.
 
 For Raw Ethernet (`stream_type: "raw"`), each flow rule is programmed into the NIC during
 `daqiri_init()`. If any rule cannot be installed, or the send-to-kernel fallback cannot be
@@ -293,8 +290,9 @@ firmware steering, so any interface with eCPRI flows is automatically switched t
 `dv_flow_en=1` (logged as a warning); a side effect is that the async/template dynamic-RX-flow
 API is unavailable on that interface. The `ibverbs` engine has no such restriction.
 
-A single RX interface must use exactly one flow class: standard UDP/IP, flex-item, eCPRI, or
-Ethernet.
+A single RX interface must use exactly one protocol flow class: standard UDP/IP (including
+Ethernet-only rules), flex-item, or eCPRI. Ethernet address criteria may qualify a rule in
+any of these classes and do not select a separate class when protocol criteria are present.
 Each class installs its own DPDK group-0 jump rule, and these conflict when mixed, so only one
 class is reachable per interface. `daqiri_init` rejects mixed configs with a clear error.
 Flex-item flows cannot be combined with VLAN/tunnel transform actions in v1.
