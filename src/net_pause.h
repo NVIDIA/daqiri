@@ -26,6 +26,11 @@
 ///  rx_out_of_buffer both stayed at 0, which is indistinguishable from a
 ///  transmitter that simply cannot go faster.
 ///
+///  Pause is not always a misconfiguration: a peer that cannot absorb line rate
+///  (an FPGA or another device with shallow buffers) asserts it by design, and
+///  disabling pause there converts the throttling into drops. So these helpers
+///  report which end asserted it and leave the judgement to the operator.
+///
 ///  The pause counters are not reachable through DPDK's xstats on mlx5, so these
 ///  helpers go to the kernel netdev directly via the ethtool ioctl interface.
 ///  That works alongside a bound PMD because mlx5 is a bifurcated driver and
@@ -49,7 +54,10 @@ struct PauseState {
 
   /// Cumulative pause frames since boot, or -1 when the NIC does not expose the
   /// counter. Non-zero means pause has actually fired on this link, which is the
-  /// difference between a real problem and a latent one.
+  /// difference between a real problem and a latent one. Unlike the `ethtool -A`
+  /// rx/tx knobs, these counters are unambiguous about wire direction: rx counts
+  /// frames received (the peer throttling this port's transmit) and tx counts
+  /// frames sent (this port's receive path throttling the peer).
   int64_t rx_pause_frames = -1;
   int64_t tx_pause_frames = -1;
 
@@ -77,10 +85,11 @@ PauseState read_pause_state(const std::string& netdev);
 /// No-op when the netdev cannot be read.
 void check_pause_at_init(const std::string& netdev, int port_id);
 
-/// Log the pause frames exchanged during this run, and warn if there were any.
-/// Call alongside the end-of-run stats dump, where this is the only signal that
-/// flow control throttled the run. Reports the delta against the baseline taken
-/// by check_pause_at_init; without a baseline it reports totals since boot.
+/// Log the pause frames exchanged during this run, and warn if there were any,
+/// naming the end that asserted pause without claiming it was wrong to. Call
+/// alongside the end-of-run stats dump, where this is the only signal that flow
+/// control throttled the run. Reports the delta against the baseline taken by
+/// check_pause_at_init; without a baseline it reports totals since boot.
 void log_pause_counters(const std::string& netdev, int port_id);
 
 }  // namespace daqiri

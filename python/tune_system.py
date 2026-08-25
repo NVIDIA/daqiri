@@ -2142,7 +2142,10 @@ def check_pause_frames():
     stayed at 0 throughout, so no other counter distinguishes it from a slow
     transmitter.
 
-    Keep pause enabled on lossless RoCE/PFC fabrics, where it is deliberate.
+    Pause is not always wrong, so this only reports. Keep it enabled on lossless
+    RoCE/PFC fabrics and on links whose peer cannot absorb line rate (an FPGA or
+    another shallow-buffer device), where disabling it turns the throttling into
+    drops.
     """
     try:
         nic_info = get_nic_info()
@@ -2168,15 +2171,17 @@ def check_pause_frames():
                 logging.info(f"Interface {iface} has 802.3x pause disabled (RX: off, TX: off).")
                 continue
 
-            # Deliberately no per-direction claim: ethtool and systemd-networkd
-            # document their rx/tx pause naming with opposite senses, so the
-            # actionable advice is to disable both rather than reason about one.
+            # Deliberately no per-direction claim about the configuration: ethtool
+            # and systemd-networkd document their rx/tx pause naming with opposite
+            # senses, so the advice is to disable both rather than reason about one.
             logging.warning(
                 f"Interface {iface} has 802.3x pause enabled "
                 f"(RX: {rx_match.group(1)}, TX: {tx_match.group(1)}). Link-level flow control "
                 f"can idle the link and cost over 20% of line rate with no drop counter to "
                 f"reveal it. Disable both directions with `ethtool -A {iface} rx off tx off` "
-                f"for raw-Ethernet benchmarking; keep it on lossless RoCE/PFC fabrics."
+                f"if this link is meant to be lossy; keep it on lossless RoCE/PFC fabrics and "
+                f"on links whose peer cannot absorb line rate, where disabling it turns the "
+                f"throttling into drops."
             )
 
             # Enabled but never asserted is harmless. These counters are cumulative
@@ -2196,9 +2201,21 @@ def check_pause_frames():
 
             if asserted:
                 detail = ", ".join(f"{name}={value:,}" for name, value in asserted.items())
+                # The counters, unlike the `ethtool -A` knobs, do say which end asked
+                # for backpressure: rx_pause_ctrl_phy counts frames received,
+                # tx_pause_ctrl_phy frames sent.
+                if len(asserted) > 1:
+                    cause = "both ends have asserted pause"
+                elif "rx_pause_ctrl_phy" in asserted:
+                    cause = "the link partner asserted pause, throttling this interface's transmit"
+                else:
+                    cause = "this interface asserted pause, asking the link partner to slow down"
                 logging.warning(
-                    f"Interface {iface} has exchanged pause frames since boot ({detail}), "
-                    "so flow control has actually throttled this link, not merely been enabled."
+                    f"Interface {iface} has exchanged pause frames since boot ({detail}): "
+                    f"{cause}. Flow control has actually throttled this link, not merely been "
+                    "enabled. Confirm the peer can absorb line rate before disabling pause: "
+                    "against a device that cannot (an FPGA or other shallow-buffer device) this "
+                    "is working backpressure, and disabling it turns the throttling into drops."
                 )
 
     except FileNotFoundError:

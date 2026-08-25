@@ -192,13 +192,15 @@ void check_pause_at_init(const std::string& netdev, int port_id) {
   if (!state.enabled()) {
     return;
   }
-  // Deliberately no per-direction claim: ethtool and systemd-networkd document
-  // their rx/tx pause naming with opposite senses, so the actionable advice is
-  // to disable both rather than to reason about one.
+  // Deliberately no per-direction claim about the configuration: ethtool and
+  // systemd-networkd document their rx/tx pause naming with opposite senses, so
+  // the actionable advice is to disable both rather than to reason about one.
   DAQIRI_LOG_WARN(
-      "Flow control: port {} ({}) has 802.3x pause enabled (rx {}, tx {}). This can cost over "
-      "20% of line rate with no drop counter to reveal it. Disable both directions with "
-      "'ethtool -A {} rx off tx off' for raw Ethernet; keep it on lossless RoCE/PFC fabrics.",
+      "Flow control: port {} ({}) has 802.3x pause enabled (rx {}, tx {}). A paused link idles "
+      "instead of dropping, so this can cost over 20% of line rate with no drop counter to "
+      "reveal it. Disable both directions with 'ethtool -A {} rx off tx off' if this link is "
+      "meant to be lossy; leave it on for lossless RoCE/PFC fabrics and for peers that cannot "
+      "absorb line rate, where disabling it turns the throttling into drops.",
       port_id, netdev, state.rx_enabled ? "on" : "off", state.tx_enabled ? "on" : "off", netdev);
 }
 
@@ -234,10 +236,32 @@ void log_pause_counters(const std::string& netdev, int port_id) {
   if (rx <= 0 && tx <= 0) {
     return;
   }
+
+  // The counters, unlike the ethtool -A knobs, do say which end asked for
+  // backpressure, and that is what separates a misconfigured port from a peer
+  // doing exactly what it should. Report the direction and stop there: whether
+  // the pause was legitimate depends on the peer, which DAQIRI cannot see.
+  const char* cause;
+  if (rx > 0 && tx > 0) {
+    cause =
+        "Both ends asserted pause: the link partner throttled this port's transmit and this "
+        "port throttled the partner.";
+  } else if (rx > 0) {
+    cause =
+        "The link partner asserted pause, throttling this port's transmit. That is working "
+        "backpressure when the peer cannot absorb line rate (an FPGA or other shallow-buffer "
+        "device) and a problem only when it should have kept up.";
+  } else {
+    cause =
+        "This port asserted pause, so its own receive path -- or a conservative NIC watermark "
+        "-- fell behind the sender.";
+  }
   DAQIRI_LOG_WARN(
-      "Flow control: port {} ({}) exchanged {} pause frames {}, so 802.3x flow control throttled "
-      "this link. Throughput below line rate here is flow control, not the transmitter.",
-      port_id, netdev, rx + tx, per_run ? "during this run" : "since boot");
+      "Flow control: port {} ({}) exchanged {} pause frames {} (received {}, sent {}), so the "
+      "link spent time paused and throughput below line rate here may be flow control rather "
+      "than the transmitter. {}",
+      port_id, netdev, std::max<int64_t>(rx, 0) + std::max<int64_t>(tx, 0),
+      per_run ? "during this run" : "since boot", rx, tx, cause);
 }
 
 }  // namespace daqiri

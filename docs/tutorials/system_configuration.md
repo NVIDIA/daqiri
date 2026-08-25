@@ -1304,9 +1304,11 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     **This is the one tuning problem in this guide that no drop counter reveals.** On a 400 GbE loopback we measured 308 Gb/s instead of 393.6 Gb/s — a 21.7% loss that exactly matched the time the link spent paused — while `rx_discards_phy` and `rx_out_of_buffer` both stayed at 0. A receiver that drops nothing, fed by a sender transmitting exactly what arrives, is indistinguishable from a sender that simply cannot go faster. Disabling pause reached line rate without introducing a single drop, which means the pause was never protecting against real buffer exhaustion.
 
-    !!! warning "Leave pause enabled on lossless fabrics"
+    !!! warning "Leave pause enabled on lossless fabrics and against shallow-buffer peers"
 
         On a lossless RoCE or PFC fabric, flow control is deliberate and required. Only disable pause on links dedicated to raw Ethernet where the application tolerates loss, and never on a shared fabric where your pause frames affect other tenants.
+
+        Pause frames on the wire are also not evidence of a misconfiguration by themselves. A peer that cannot buffer a line-rate burst — an FPGA is the common case, and it will pause often — asserts pause by design, and that is the mechanism working. Disabling pause on such a link does not recover the throughput; it converts the throttling into drops on the peer. The counters say which end asserted it: `rx_pause_ctrl_phy` counts frames **received** (the peer throttling this port's transmit) and `tx_pause_ctrl_phy` frames **sent** (this port's receive path throttling the peer). Non-zero `rx_pause_ctrl_phy` against a device known to be shallow-buffered is expected; non-zero `tx_pause_ctrl_phy` points back at this host.
 
     Check the current state of your interfaces:
 

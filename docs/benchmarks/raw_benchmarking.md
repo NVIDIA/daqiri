@@ -498,15 +498,18 @@ The `*_packets_phy` and `*_bytes_phy` counters are physical-link counters. They 
     DAQIRI reports this itself. Pause is not exposed through DPDK's xstats, so the raw engines read it from the kernel netdev: a warning at init when pause is enabled on a port, and the frames exchanged **during that run** alongside the shutdown stats dump.
 
     ```log
-    [WARN] Flow control: port 0 (ens15f0np0) has 802.3x pause enabled (rx on, tx on). This can
-    cost over 20% of line rate with no drop counter to reveal it. ...
+    [WARN] Flow control: port 0 (ens15f0np0) has 802.3x pause enabled (rx on, tx on). A paused
+    link idles instead of dropping, so this can cost over 20% of line rate ...
           rx_pause_ctrl_phy:            34293
           tx_pause_ctrl_phy:            0
-    [WARN] Flow control: port 0 (ens15f0np0) exchanged 34293 pause frames during this run, so
-    802.3x flow control throttled this link. ...
+    [WARN] Flow control: port 0 (ens15f0np0) exchanged 34293 pause frames during this run
+    (received 34293, sent 0), so the link spent time paused ... The link partner asserted
+    pause, throttling this port's transmit. ...
     ```
 
     Those counters are per-run deltas, so a non-zero value means flow control throttled *this* measurement. To check a host before running anything, use `sudo ./python/tune_system.py --check pause`. See [Step 10 of System Configuration](../tutorials/system_configuration.md#step-10-disable-ethernet-flow-control-pause) to disable it, and report the pause configuration alongside any throughput result.
+
+    Pause frames are not automatically a misconfiguration. `rx_pause_ctrl_phy` counts frames **received**, so it is the peer throttling this port — legitimate against a device that cannot buffer a line-rate burst, such as an FPGA, which will pause often by design. `tx_pause_ctrl_phy` counts frames **sent**, so it points at this host's receive path. Establish which end is asserting pause, and whether the peer can absorb line rate at all, before disabling it: on a link that genuinely needs backpressure, disabling pause turns the throttling into drops rather than recovering throughput.
 
 ??? tip "Troubleshooting"
 

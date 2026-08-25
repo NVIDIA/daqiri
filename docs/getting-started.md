@@ -285,7 +285,9 @@ them from the kernel netdev over the ethtool ioctls; a port with no netdev, such
 software loopback, reports nothing.
 
 A paused link throttles the sender rather than dropping, so it caps throughput while every
-drop counter stays at zero. Check a host before you measure anything with
+drop counter stays at zero. The report names the end that asserted pause, since pause can be
+legitimate backpressure from a peer that cannot absorb line rate — an FPGA, for instance —
+rather than a misconfiguration on this host. Check a host before you measure anything with
 `sudo ./python/tune_system.py --check pause`, and see
 [Step 10: Disable Ethernet Flow Control (Pause)](tutorials/system_configuration.md#step-10-disable-ethernet-flow-control-pause)
 for how to disable it.
