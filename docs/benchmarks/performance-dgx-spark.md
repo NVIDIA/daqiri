@@ -5,66 +5,129 @@ hide:
 
 # Performance: DGX Spark
 
-Measured C++-loopback throughput for each stream/protocol on a single DGX Spark
-(GB10), driven over a physical cabled loopback on one ConnectX-7. Numbers are
-from a Release build via `examples/run_spark_bench.sh` (30 s per cell).
+Measured C++ throughput for each stream/protocol on DGX Spark (GB10) hardware,
+from Release builds. Numbers come from **two testbeds**, and every table says
+which one it used:
+
+- **Cross-host, 200 GbE** — two DGX Sparks joined by one direct cable on one
+  ConnectX-7 port each. Raw Ethernet, RoCE and the end-to-end inference pipeline
+  are measured here, 3 repetitions x 30 s per cell.
+- **Single-host, 100 GbE loopback** — one DGX Spark with its two ConnectX-7 ports
+  cross-cabled, driven by `examples/run_spark_bench.sh` (30 s per cell). The
+  socket tables, the multi-queue core-scaling sweep and the CPU-utilization
+  tables come from here.
+
+The cross-host link is the faster of the two, so raw and RoCE results are not
+directly comparable to the socket results below. Where a section mixes them, it
+says so.
 
 All backends are measured **one-way** (unidirectional) by default: one side sends,
 the other receives and computes. For a bidirectional test, set `send: true` on the
 receiving role (and `receive: true` on the sending role) in the bench config.
 
-For the loopback setup these numbers depend on and the per-transport
-benchmarking procedure, see [Socket and RDMA Benchmarking](socket_benchmarking.md)
-(the `dq_wire_*` network-namespace wire loopback used by RoCE and sockets) and
+For the setups these numbers depend on and the per-transport benchmarking
+procedure, see [Socket and RDMA Benchmarking](socket_benchmarking.md) (the
+`dq_wire_*` network-namespace wire loopback used by the socket cells) and
 [Raw Ethernet Benchmarking](raw_benchmarking.md) (the two-physical-port DPDK
-loopback). The exact commands are collected under [Reproduce](#reproduce) below.
+loopback and the cross-host wire setup). The exact commands are collected under
+[Reproduce](#reproduce) below.
 
-One section is measured differently and says so: the
-[end-to-end inference pipeline](#end-to-end-inference-pipeline-resnet-50-cross-host)
-runs **cross-host** on a stacked Spark pair over a faster cable, so it is not
-comparable to the single-host tables. It also measures a whole application rather
-than a transport, so the figure of merit is images per second, not Gb/s.
+The [end-to-end inference pipeline](#end-to-end-inference-pipeline-resnet-50-cross-host)
+measures a whole application rather than a transport, so its figure of merit is
+images per second, not Gb/s.
 
 ## System under test
+
+### Cross-host, 200 GbE (raw Ethernet, RoCE, inference pipeline)
+
+| Component | Detail |
+| --------- | ------ |
+| Platform | Two DGX Sparks (GB10 Grace, 10x Cortex-X925 + 10x Cortex-A725, 120 GiB unified memory each) |
+| NIC | ConnectX-7 `0000:01:00.0` (`mlx5_0`) on each host, one direct cable, link 200000 Mb/s, firmware 28.45.4028 |
+| Build | Release, `DAQIRI_ENGINE="dpdk ibverbs"`, `DAQIRI_BUILD_APPLICATIONS=ON` |
+| Method | 3 repetitions x 30 s per cell. Wire rate is the `mlnx_perf` plateau median on both ends, cross-checked against `ethtool -S` deltas; app rate is the receiving bench's own byte counter over the transfer window. Values are medians, `±` half the observed range. |
+| Hugepages | 2048 x 2 MiB per host |
+
+Wire rate sits above app rate by design: the wire figure includes Ethernet
+framing the application never sees, plus any packet the RX path could not keep up
+with. Both columns are reported because the gap is the interesting part.
+
+### Single-host, 100 GbE loopback (sockets, multi-queue, CPU utilization)
 
 | Component | Detail |
 | --------- | ------ |
 | Platform | DGX Spark (GB10), 20 cores, isolcpus `16-19` (the multi-queue sweep expands this, see [Multi-queue core scaling](#multi-queue-core-scaling)) |
-| NIC | ConnectX-7, ports p0 ↔ p1 cross-cabled with a **100 GbE QSFP28** loopback cable (single-host loopback), MTU 9000 |
+| NIC | ConnectX-7, ports p0 ↔ p1 cross-cabled with a **100 GbE QSFP28** loopback cable, MTU 9000 |
 | Build | Release (`-DCMAKE_BUILD_TYPE=Release`), `DAQIRI_ENGINE="dpdk ibverbs"` |
 | Loopback | Raw/DPDK uses the two physical ports directly, while socket/RoCE use the `dq_wire_*` network-namespace wire loopback |
 | Core pinning | Each direction has a busy-spin queue poller and an app worker on separate isolated X925 cores (PR #149). Single-queue: DPDK pollers 17/18, workers 16/19. Multi-queue: TX pollers 16/19, RX pollers 18/9, each with its own worker core, master 8. Sockets pin each pair's send and receive to separate cores in the same CPU cluster (all with `isolcpus=5-9,15-19`). |
 
-## Results Summary (C++ loopback)
+## Results Summary
 
 Each transport at its best-case **operation size**. Raw/RoCE are
 single-stream. Socket TCP/UDP scale with the number of client/server pairs, so the
 four-pair aggregate is shown.
 
-The **100 GbE QSFP28 loopback cable sets the maximum data rate** here, not the
-ConnectX-7 (which is rated for higher line rates) or the software path. A 100 GbE
-link tops out near ~99.6 Gb/s of payload, so every large-transfer result saturates
-just under that ceiling.
+On the cross-host link, **neither the cable nor the software path is the limit** —
+the host PCIe/NIC path is. Raw Ethernet and RoCE both plateau in the 108–112 Gb/s
+range on a link that advertises 200, and they get there at every payload size at
+or above 4 KB. On the single-host loopback the **100 GbE cable** is the ceiling
+instead: it tops out near ~99.6 Gb/s of payload.
 
-| Stream / Protocol | Best case | Throughput | Drops | Notes |
-| ----------------- | --------- | ---------: | ----- | ----- |
-| Raw Ethernet / GPUDirect | 8 KB packet | **98.8 ±0.1 Gb/s** | 0 | Flat ~98.7 across 4–8 KB, all batch sizes |
-| Socket / RoCE (SEND) | 64 KB message | **97.6 ±0.1 Gb/s** | 0 | Single QP, batch 1 |
-| Socket / TCP | 8 KB × 4 pairs | **87.3 ±2.2 Gb/s** | ~0 | Flow-controlled (App TX = App RX) |
-| Socket / UDP | 8 KB × 4 pairs | **34.5 ±0.6 Gb/s** | ~48% loss | Receiver goodput, unpaced sender |
+| Stream / Protocol | Best case | Wire | App-delivered | Drops | Testbed |
+| ----------------- | --------- | ---: | ------------: | ----- | ------- |
+| Raw Ethernet / GPUDirect (ibverbs) | 4 KB packet | **109.5 ±0.1 Gb/s** | **104.9 Gb/s** | 0 | Cross-host 200 GbE |
+| Raw Ethernet / GPUDirect (dpdk) | 8 KB packet | **109.6 ±0.3 Gb/s** | 99.9 Gb/s | 0 | Cross-host 200 GbE |
+| Socket / RoCE (SEND) | 8 MB message | **112.5 ±0.2 Gb/s** | **109.0 Gb/s** | 0 | Cross-host 200 GbE |
+| Socket / TCP | 8 KB × 4 pairs | — | 87.3 ±2.2 Gb/s | ~0 | Single-host 100 GbE |
+| Socket / UDP | 8 KB × 4 pairs | — | 34.5 ±0.6 Gb/s | ~48% loss | Single-host 100 GbE |
 
 Each transport is best read at its own best-case operation size (see the per-transport
 tables below); a single cross-transport unit of work isn't meaningful here, since
-RoCE at 8 KB is op-rate-bound well below its large-message peak and TCP has no
-operation boundary.
+RoCE at 8 KB is bound by its in-flight buffer pool rather than the wire and TCP has
+no operation boundary.
 
-## Raw Ethernet / GPUDirect (DPDK)
+!!! note "Socket rows are pending a re-measurement"
+    The TCP and UDP rows are the single-host loopback figures and report App RX
+    only. They are being re-run on the cross-host pair alongside the per-pair
+    matrices below, so treat them as the older measurement until this note
+    disappears.
 
-Physical port-to-port loopback, GPU-resident payloads. Throughput saturates the
-100 GbE line at **~98.8 Gb/s** for 4–8 KB payloads, drop-free across all batch
-sizes. Packet handling is CPU-bound (see the CPU utilization table below).
-Throughput is flat across batch size and stable run-to-run (3 reps per cell,
-≤1% spread).
+## Raw Ethernet / GPUDirect
+
+GPU-resident payloads, one queue per direction, unpaced. Both raw engines are
+measured: the default `dpdk` engine and the `ibverbs` MPRQ engine.
+
+### Cross-host payload sweep (200 GbE)
+
+Both engines plateau at **~109 Gb/s on the wire** from 4 KB upward, and the
+interesting column is what reaches the application. Batch size 10240, 3 reps,
+medians in Gb/s:
+
+| Payload | dpdk wire | dpdk app | ibverbs wire | ibverbs app | Mpps |
+| ------- | --------: | -------: | -----------: | ----------: | ---: |
+| 8000 B | 109.6 ±0.3 | 99.9 | 108.6 ±0.2 | **104.1** | 1.70 |
+| 4096 B | 109.5 ±0.3 | 99.9 | 109.5 ±0.1 | **104.9** | 3.29 |
+| 1024 B | 107.1 ±0.2 | 97.5 | 107.2 ±0.1 | **102.1** | 12.3 |
+| 256 B  | 61.9 ±0.1  | 55.9 | 59.5 ±0.1  | 56.3 | 22.9–23.9 |
+| 64 B   | 25.9 ±0.7  | 23.2 | 24.3 ±0.0  | 22.5 | 23.0–24.6 |
+
+**The two engines tie on the wire and differ on delivery.** At 8 KB both sit near
+109 Gb/s, but the ibverbs striding receive queue hands the application 104.1 Gb/s
+against the DPDK path's 99.9, with less than half the NIC out-of-buffer count
+(815 k against 1.73 M over a 30 s run). If the application is the consumer that
+matters, that gap is the reason to pick an engine.
+
+**Small frames are packet-rate-bound, and the ceiling is shared.** At 64 B both
+engines converge on ~23–25 Mpps and ~25 Gb/s, so the engine choice does not move
+it — the cost is per packet in the host, not in the NIC.
+
+### Single-host loopback, payload x batch (100 GbE)
+
+On the 100 GbE loopback the cable is the ceiling instead, and throughput saturates
+at **~98.8 Gb/s** for 4–8 KB payloads, drop-free across all batch sizes. Packet
+handling is CPU-bound (see the CPU utilization table below). Throughput is flat
+across batch size and stable run-to-run (3 reps per cell, ≤1% spread).
 
 Achieved Gb/s measured at App RX (equal to App TX, since every cell is
 drop-free), unpaced, mean of 3 reps. Run-to-run spread ≤0.5 Gb/s (<1%):
@@ -96,7 +159,7 @@ pps ≈ Gb/s ÷ ((payload + 64) × 8). These small-payload cells are flat across
 size and stable run-to-run. Because every cell is drop-free, the achieved rate is
 also the no-drop rate: pacing the sender below it hits the target with zero drops.
 
-**CPU utilization** (summary-table cell, 8000 B / batch 10240, unpaced):
+**CPU utilization** (single-host loopback, 8000 B / batch 10240, unpaced):
 
 | Core                     | Busy% | Note                                  |
 | ------------------------ | ----: | ------------------------------------- |
@@ -155,32 +218,41 @@ Generated by
 
 ## Socket / RoCE
 
-RoCE SEND over the netns wire loopback, single queue-pair, batch 1. Throughput
-is App RX goodput, equal to App TX with 0 drops. Large messages up to 64 KB
-saturate the wire, while the smallest messages are bound by per-operation software
-overhead.
+RoCE RC SEND, cross-host on the 200 GbE pair, single queue-pair, batch 1, 0 drops.
+Large messages make RoCE the fastest transport on this hardware; small ones are
+bound by how many messages the configuration keeps in flight, not by the wire.
 
-**Message-size sweep (single QP, batch 1, 0 drops).** Mean ± sample std over 3
-reps. Run-to-run spread <1% in every cell.
+**Message-size sweep (single QP, batch 1, 0 drops).** Medians over 3 reps, `±`
+half the observed range.
 
-| Message size | <span style="text-transform: none">Gb/s</span> |
-| ------------ | ---: |
-| 8 MB  | 96.8 ±0.3 |
-| 1 MB  | 96.9 ±0.2 |
-| 64 KB | **97.6 ±0.1** |
-| 8 KB  | 51.8 ±0.2 |
-| 4 KB  | 28.5 ±0.0 |
+| Message size | Wire <span style="text-transform: none">Gb/s</span> | App <span style="text-transform: none">Gb/s</span> | In-flight buffers |
+| ------------ | ---: | ---: | --- |
+| 8 MB  | **112.5 ±0.2** | **109.0** | 20 |
+| 1 MB  | 112.1 ±0.3 | 108.4 | 20 |
+| 8 KB  | 1.07 ±0.01 | 1.02 | 20 (shipped config) |
+| 8 KB  | **88.7 ±1.5** | 85.5 | 512 |
+| 4 KB  | 0.62 | 0.58 | 20 (shipped config) |
+| 4 KB  | 40.1 ±9.5 | 38.5 | 512 |
 
-Messages ≥64 KB hold ~97 Gb/s at the 100 GbE wire ceiling (line rate). Below that
-the path is operation-rate-bound (per-operation software overhead, not a stall)
-rather than wire-bound, and every cell is drop-free. At 8 KB (51.8 Gb/s) and 4 KB (28.5 Gb/s)
-a dedicated bench-worker core, separate from the RoCE engine thread, sustains the
-operation rate, as it does for small DPDK packets. A per-message flow-control
-window keeps enough operations in flight to amortize that overhead: it pre-posts
-`rx_depth` receives before sending and caps the transmit side at `tx_depth`, each
-sized to the message so the in-flight window stays full.
+At 1 MB and above RoCE beats raw Ethernet outright (112.5 against 109.6 Gb/s),
+because it carries less per-byte framing overhead.
 
-**CPU utilization** (summary-table cell, 8 MB message, batch 1, unpaced):
+**Below 1 MB, size the memory region to the bandwidth-delay product.** The pair of
+8 KB rows above is the same transport, the same code and the same wire: the only
+difference is `num_bufs`. The RDMA bench's send loop stops when either `tx_depth`
+or the memory region's buffer pool runs dry, and
+`daqiri_bench_rdma_tx_rx_spark_xhost.yaml` ships with **20** buffers. Twenty 8 KB
+messages in flight is 160 KB, far under the bandwidth-delay product of a 200 Gb/s
+link, so the shipped config measures pipeline depth rather than RoCE — a **83x**
+difference at 8 KB and 65x at 4 KB. The 4 KB deep row stays noisy (±9.5) because
+at that size the per-message cost really is close to the limit.
+
+!!! note "The 64 KB row is pending a re-measurement"
+    The cross-host 64 KB cell also ran with the shipped 20-buffer pool, so its
+    result measures pool depth like the small-message rows and is omitted rather
+    than published. It is being re-run with a 512-buffer pool.
+
+**CPU utilization** (single-host loopback, 8 MB message, batch 1, unpaced):
 
 | Core                 | Busy% | Note                                            |
 | -------------------- | ----: | ----------------------------------------------- |
@@ -322,14 +394,20 @@ at an **8 KB payload** (~8 MB reorder window, 1024 packets × 8000 B), matched t
 **8 MB message** so the GPU working set and per-unit compute are the same on both.
 3 reps, 30 s each, GPU SM% from `nvidia-smi dmon`; 0 drops on every cell.
 
+!!! note "Measured on the single-host 100 GbE loopback"
+    These cells predate the cross-host raw and RoCE numbers above, so read the
+    baselines against the 100 GbE ceiling, not against 109–112 Gb/s. They are
+    being re-run cross-host; what should carry over is the *relative* cost of each
+    workload, not the absolute rate.
+
 | Workload | DPDK (Raw / GPUDirect) | RoCE (RC) |
 | -------- | ---------------------: | --------: |
 | none (baseline) | 98.7 ±0.0  | 96.6 ±0.3 |
 | FFT             | 95.7 ±0.8  | 95.6 ±0.1 |
 | GEMM (FP32)     | 96.6 ±0.2  | 90.2 ±1.1 |
 
-Throughput in Gb/s. Both `none` baselines sit at the ~97–99 Gb/s wire ceiling
-(DPDK 98.7, RoCE 96.6), as expected for two line-rate transports.
+Throughput in Gb/s. Both `none` baselines sit at that loopback's ~97–99 Gb/s wire
+ceiling (DPDK 98.7, RoCE 96.6), as expected for two line-rate transports.
 
 **GPU compute dents line rate only modestly, and stays wire-limited, not
 compute-limited** (SM well under 100% throughout). FFT is nearly free on both
@@ -347,9 +425,9 @@ CIFAR-10 images off the wire and runs TensorRT inference on them without the
 payload ever being touched by the CPU.
 
 It runs **cross-host** on a stacked Spark pair (`spark-stacked-01` TX →
-`spark-stacked-02` RX) over one direct `det1` cable, not the 100 GbE chassis
-loopback used above, so these numbers are not directly comparable to the
-single-host tables.
+`spark-stacked-02` RX) over one direct `det1` cable — the same class of link as the
+raw and RoCE tables above, and not the 100 GbE chassis loopback used for the socket
+tables.
 
 ```mermaid
 flowchart LR
@@ -376,14 +454,26 @@ table was measured on a different binary and counted the pre-traffic wait in the
 wall clock. Leave the cells empty until a dedicated pass on the current tree
 (separate DAQIRI RX+reorder from TensorRT, report `active_seconds`).
 
-The ingest-only raw bench on the same pair is ~100 Gb/s, so the interesting
-question is how much of that the model consumes, not a single combined img/s.
+The ingest-only path on the same pair — the identical wire format and GPU reorder
+with inference removed — sustains **94.5 Gb/s**, against 109.6 Gb/s for the raw
+bench at its native 8 KB payload. So the interesting question is how much of that
+94.5 the model consumes, not a single combined img/s.
 
 ## Reproduce
 
 Run inside the project container (privileged, GPUs passed through, hugepages
 mounted), as root. Build with `-DCMAKE_BUILD_TYPE=Release` and
 `cmake --install build` so the bench loads the current `libdaqiri.so`.
+
+The commands below drive the **single-host loopback** tables. The cross-host raw
+and RoCE cells use the same benches with the `_xhost` configs
+(`examples/daqiri_bench_raw_tx_spark_xhost.yaml`,
+`examples/daqiri_bench_raw_rx_spark_xhost.yaml`,
+`examples/daqiri_bench_rdma_tx_rx_spark_xhost.yaml`), one role per host, with wire
+rates read from `mlnx_perf` on both ends — see
+[Cross-host two-DGX-Spark loopback](raw_benchmarking.md#cross-host-two-dgx-spark-loopback).
+Remember that the shipped RDMA config provisions 20 in-flight buffers, which is
+what the small-message rows above measure.
 
 ```bash
 export DAQIRI_BUILD_DIR=./build
