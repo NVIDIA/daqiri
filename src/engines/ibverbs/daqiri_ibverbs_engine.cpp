@@ -123,7 +123,7 @@ static_assert(empw_burst_wqebbs(33) == 10);
 
 // Defaults for the striding-RQ geometry; clamped to device caps at setup.
 static constexpr uint32_t DEFAULT_STRIDE_LOG = 11;          // 2048 B per stride
-static constexpr uint32_t DEFAULT_STRIDES_PER_WQE_LOG = 9;  // 512 strides / WQE
+static constexpr uint32_t DEFAULT_STRIDES_PER_WQE_LOG = 6;  // 64 strides / WQE
 static constexpr uint32_t MIN_NUM_WQE = 4;                  // outstanding regions
 
 // Read barrier between observing a CQE owner flip and reading its payload.
