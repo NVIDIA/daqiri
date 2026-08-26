@@ -892,7 +892,7 @@ Status IbverbsEngine::devx_create_rq(IbvRxQueue& q, uint32_t stride_log, uint32_
   DEVX_SET(wq, wq, pd, dvpd.pdn);
   // WQ page size is encoded relative to the mlx5 4 KiB adapter page, not the
   // operating-system page size (which is 64 KiB on GH200).
-  DEVX_SET(wq, wq, log_wq_pg_sz, 0);
+  DEVX_SET(wq, wq, log_wq_pg_sz, MLX5_ADAPTER_PAGE_SIZE_4_KIB);
   DEVX_SET64(wq, wq, dbr_addr, dbr_off);
   DEVX_SET(wq, wq, dbr_umem_id, q.wq_umem->umem_id);
   DEVX_SET(wq, wq, wq_umem_id, q.wq_umem->umem_id);
