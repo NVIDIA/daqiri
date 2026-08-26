@@ -62,7 +62,6 @@ set(DAQIRI_BENCH_CONFIGS
   daqiri_example_pcap_writer_sw_loopback.yaml
   daqiri_example_pcap_writer_tx_rx.yaml
   daqiri_bench_rdma_tx_rx.yaml
-  daqiri_bench_rdma_tx_rx_rtx_pro_6000.yaml
   daqiri_bench_socket_udp_tx_rx.yaml
   daqiri_bench_socket_tcp_tx_rx.yaml
 )

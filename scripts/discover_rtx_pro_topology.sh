@@ -104,39 +104,6 @@ resolve_iface_for_bdf() {
   fi
 }
 
-# Every pair of local ports cabled to each other, one "ifaceA ifaceB" per line,
-# fastest first. A second pair is what an aggregate-throughput experiment needs;
-# on most hosts there is none, and the caller should skip that experiment rather
-# than invent a pair.
-list_loopback_pairs() {
-  mapfile -t ifaces < <(list_mlx_ifaces)
-  [[ ${#ifaces[@]} -ge 2 ]] || return 0
-
-  local iface mac
-  declare -A mac_of=()
-  declare -A iface_of_mac=()
-  for iface in "${ifaces[@]}"; do
-    mac="$(read_mac "$iface" 2>/dev/null || true)"
-    [[ -n "$mac" ]] || continue
-    mac_of["$iface"]="${mac,,}"
-    iface_of_mac["${mac,,}"]="$iface"
-  done
-
-  local peer_mac peer
-  declare -A emitted=()
-  for iface in "${ifaces[@]}"; do
-    [[ "$(read_carrier "$iface" 2>/dev/null || echo 0)" == "1" ]] || continue
-    peer_mac="$(lldp_peer_mac "$iface" || true)"
-    [[ -n "$peer_mac" ]] || continue
-    peer="${iface_of_mac[$peer_mac]:-}"
-    [[ -n "$peer" && "$peer" != "$iface" ]] || continue
-    [[ "$(lldp_peer_mac "$peer" || true)" == "${mac_of[$iface]}" ]] || continue
-    [[ -n "${emitted[$peer]:-}" ]] && continue
-    emitted["$iface"]=1
-    echo "$(read_speed "$iface") $iface $peer"
-  done | sort -rn | cut -d' ' -f2-
-}
-
 # --------------------------------------------------------------------------
 # The socket/RoCE wire loopback moves each cabled port into its own network
 # namespace (scripts/setup_spark_wire_loopback_netns.sh). Once moved, a port is
@@ -305,11 +272,6 @@ export RTX_TX_MAC="${TX_MAC:-}"
 export RTX_RX_MAC="${RX_MAC:-}"
 export ETH_DST_ADDR="${ETH_DST_ADDR:-$RX_MAC}"
 export RX_IFACE="$RX_IFACE"
-# Newline-separated "ifaceA ifaceB". Consumed by run_rtx_pro_push_400g.sh to
-# decide whether an aggregate two-cable experiment is possible at all.
-RTX_LOOPBACK_PAIRS="$(list_loopback_pairs || true)"
-export RTX_LOOPBACK_PAIRS
-
 echo "RTX PRO 6000 topology"
 echo "  TX BDF:    ${TX_BDF:-unknown}  iface=${TX_IFACE:-unknown}  mac=${TX_MAC:-unknown}  carrier=$P0_CARRIER"
 echo "  RX BDF:    ${RX_BDF:-unknown}  iface=${RX_IFACE:-unknown}  mac=${RX_MAC:-unknown}  carrier=$P1_CARRIER"

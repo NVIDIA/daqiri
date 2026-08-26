@@ -429,14 +429,10 @@ case "$BACKEND" in
     BATCHES_SWEEP=(1)
     PAYLOADS_HEADLINE=(8000000)
     BATCHES_HEADLINE=(1)
-    # Wire runs use the combined both-role netns base (split per role below); the
-    # single-process config only makes sense without a cable, where there is no
-    # namespace to cross.
-    if is_netns_backend; then
-      BASE_YAML="$SCRIPT_DIR/daqiri_bench_rdma_tx_rx_spark_netns.yaml"
-    else
-      BASE_YAML="$SCRIPT_DIR/daqiri_bench_rdma_tx_rx_rtx_pro_6000.yaml"
-    fi
+    # The combined both-role base, split per role below. RoCE always crosses a
+    # namespace here: two ports of one host resolve each other in-kernel and never
+    # reach the cable otherwise.
+    BASE_YAML="$SCRIPT_DIR/daqiri_bench_rdma_tx_rx_spark_netns.yaml"
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_rdma"
     CPU_MASTER=3
     CPU_TX=7

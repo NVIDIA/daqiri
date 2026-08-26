@@ -25,9 +25,6 @@
 #   REPEATS       repeats per (cell, payload) (default 1)
 #   RTX_TX_BDF, RTX_RX_BDF, RTX_RX_IFACE, ETH_DST_ADDR from discovery
 #   RTX_TX_GPU, RTX_RX_GPU, RTX_TX_GPU2, RTX_RX_GPU2, RTX_CPU_CORES (discovery)
-#
-# Plot afterwards:
-#   scripts/plot_rtx_pro_bench.py bench-results/<ts>-rtx-pro-mq/runs.csv
 
 set -u
 set -o pipefail
@@ -43,7 +40,6 @@ REPEATS="${REPEATS:-1}"
 
 MQ_BASE="$SCRIPT_DIR/daqiri_bench_raw_tx_rx_rtx_pro_6000_mq.yaml"
 MQ_GEN="$REPO_ROOT/scripts/gen_rtx_pro_mq_config.py"
-PLOT_SCRIPT="$REPO_ROOT/scripts/plot_rtx_pro_bench.py"
 
 # $BUILD_DIR/src first: that is where CMake writes libdaqiri.so, and with the
 # image's installed copy ahead of it a rebuild has no effect on what runs.
@@ -285,10 +281,6 @@ echo "==================================================================="
 echo
 echo "Results in: $OUT_DIR"
 echo "CSV:        $CSV"
-
-if [[ -f "$PLOT_SCRIPT" ]]; then
-  python3 "$PLOT_SCRIPT" "$CSV" "$OUT_DIR/plots" && echo "Plots:      $OUT_DIR/plots/"
-fi
 
 if [[ "$FAILURES" -ne 0 ]]; then
   echo "Failed cells: $FAILURES" >&2

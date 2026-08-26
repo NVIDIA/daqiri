@@ -3,12 +3,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Shared config rewriters for the RTX PRO 6000 benchmark runners.
-#
-# Sourced by run_rtx_pro_bench.sh and run_rtx_pro_push_400g.sh. They live here
-# rather than in each runner because the two used to carry their own copies,
-# and the copies drifted: one searched for PCIe addresses the templates no
-# longer contained, so its rewrite silently did nothing.
+# Config rewriters for the RTX PRO 6000 benchmark runner, sourced by
+# run_rtx_pro_bench.sh. Structure-aware awk rather than sed: the fields being
+# replaced (PCIe addresses, GPU ordinals, cores) repeat per queue and per memory
+# region, so a line-oriented substitution rewrites the wrong one.
 #
 # Callers must set: TX_BDF RX_BDF TX_GPU RX_GPU TX_NUMA RX_NUMA CPU_MASTER
 # CPU_TX CPU_RX CPU_TX_WORK CPU_RX_WORK IS_SW, and ETH_DST_ADDR for the wire.
