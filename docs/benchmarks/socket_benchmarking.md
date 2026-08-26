@@ -163,6 +163,36 @@ with `socket_connect_to_server()` or `socket_get_server_conn_id()`. Use
 `socket_setsockopt(conn_id, level, optname, optval, optlen)` with the integer
 constants from your system headers.
 
+### Size the receive buffer, or lose datagrams you already paid for
+
+Set `socket_config.rx_buffer_size` on any UDP receiver you intend to measure. The
+default is `net.core.rmem_default`, typically 256 KB — under four maximum-size UDP
+datagrams. A receiver descheduled for longer than that overflows, and UDP handles
+an overflow by discarding the datagram. It has already crossed the network by
+then, so the sender reports a clean send and the NIC counters show a clean link;
+the only trace is `Udp: RcvbufErrors` in the receiver's `/proc/net/snmp`. The
+result is a throughput number that looks plausible and is quietly missing data.
+
+The kernel clamps the request at `net.core.rmem_max`, which — unlike most of
+`net.core` — is **not** per-namespace, so the host value governs even a benchmark
+running inside a namespace:
+
+```bash
+sysctl -w net.core.rmem_max=67108864
+```
+
+DAQIRI reads the granted size back and logs a warning naming the sysctl when the
+request was capped. Always check the receiver's drop counter alongside the rate:
+
+```bash
+ip netns exec dq_wire_server awk '/^Udp:/ { print }' /proc/net/snmp
+```
+
+A buffer only absorbs bursts; it cannot raise a receiver's steady-state rate. If
+the drops persist at every buffer size, the receiver is simply slower than the
+sender, and the honest measurement is the loss-free rate found by pacing the
+sender with `--target-gbps`.
+
 Server-side UDP template:
 
 ```yaml
@@ -188,6 +218,7 @@ daqiri:
         mode: server
         local_addr: "udp://10.250.0.2:5021"
         max_payload_size: 65535
+        rx_buffer_size: 67108864
       rx:
         queues:
         - name: "RX_Queue"

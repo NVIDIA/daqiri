@@ -1573,6 +1573,13 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_socket_config(
     socket_cfg.max_burst_interval_ms_ = socket_item["max_burst_interval_ms"].as<uint64_t>(0);
     socket_cfg.min_ipg_ns_ = socket_item["min_ipg_ns"].as<uint32_t>(0);
     socket_cfg.retry_connect_s_ = socket_item["retry_connect_s"].as<int32_t>(1);
+    socket_cfg.rx_buffer_size_ = socket_item["rx_buffer_size"].as<int32_t>(0);
+    socket_cfg.tx_buffer_size_ = socket_item["tx_buffer_size"].as<int32_t>(0);
+
+    if (socket_cfg.rx_buffer_size_ < 0 || socket_cfg.tx_buffer_size_ < 0) {
+      DAQIRI_LOG_ERROR("socket_config.{rx,tx}_buffer_size must not be negative");
+      return false;
+    }
 
     const bool roce_client = socket_cfg.mode_ == daqiri::SocketMode::CLIENT &&
                              protocol == daqiri::SocketProtocol::ROCE;

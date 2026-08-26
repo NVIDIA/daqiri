@@ -718,7 +718,7 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `FlowOpResult` | Dynamic flow operation completion. Batch adds return `flow_ids` in input order. |
 | `FlexItemConfig` | Flexible parser item configuration. |
 | `FlexItemMatch` | Flexible parser match value and mask. |
-| `SocketConfig` | Socket client/server endpoint URI, legacy IP/port, and timing settings. |
+| `SocketConfig` | Socket client/server endpoint URI, legacy IP/port, timing settings, and `rx_buffer_size`/`tx_buffer_size` kernel socket buffer sizes. |
 | `RoCEConfig` | RoCE transport settings. |
 | `RDMAConfig` | RDMA mode, transport mode, and port. |
 | `ReorderConfig` | Reorder name, type, memory region, payload offset, flows, method, and data type conversion. |

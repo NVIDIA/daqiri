@@ -139,11 +139,33 @@ Endpoint addresses are URI strings. Supported schemes are `tcp://`, `udp://`, an
   **`socket_config.remote_ip`** / **`socket_config.remote_port`**: Legacy endpoint
   fields accepted for older configs when a top-level engine override provides the
   transport.
+- **`socket_config.rx_buffer_size`** / **`socket_config.tx_buffer_size`**: Kernel
+  socket buffer sizes in bytes (`SO_RCVBUF` / `SO_SNDBUF`).
+  - type: `int`
+  - default: `0`, meaning the system default — `net.core.rmem_default` /
+    `net.core.wmem_default`, a few hundred kilobytes on a stock host, which is
+    fewer than four maximum-size UDP datagrams
+  - The kernel caps the request at `net.core.rmem_max` / `net.core.wmem_max` and
+    stores double the value it accepts (the second half covers its own per-packet
+    overhead). DAQIRI reads the result back and logs a warning naming the sysctl
+    when the request was capped, because a receive buffer that is silently
+    smaller than configured still drops.
+  - On a UDP receiver, an overflow is answered by discarding the datagram after
+    it has already crossed the network, so neither the sender nor the NIC sees a
+    problem and only `Udp: RcvbufErrors` in `/proc/net/snmp` records it.
+  - Setting `rx_buffer_size` on TCP disables receive-window autotuning, so leave
+    it at `0` unless a measurement shows autotuning is the limit.
 
-Linux TCP/UDP socket options are intentionally not configured in YAML. Apply them
-after connection setup with `socket_setsockopt(conn_id, level, optname, optval,
-optlen)`, using the numeric constants from the target system headers. The API is
-not supported for `roce://` endpoints.
+Other Linux TCP/UDP socket options are intentionally not configured in YAML.
+Apply them after connection setup with `socket_setsockopt(conn_id, level,
+optname, optval, optlen)`, using the numeric constants from the target system
+headers. The API is not supported for `roce://` endpoints.
+
+The buffer sizes above are the exception because they cannot be set late: DAQIRI
+creates a server socket during `daqiri_init()` and starts receiving on it
+immediately, and a TCP accepted socket inherits its buffers from the listening
+socket, which the application never sees. Both are already sized by the time an
+application has a `conn_id` to call `socket_setsockopt` on.
 
 When using RoCE, set `stream_type: "socket"` and use `roce://` endpoint addresses
 plus a `roce_config` block for transport settings. A RoCE URI may include

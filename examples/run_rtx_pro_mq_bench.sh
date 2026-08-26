@@ -45,7 +45,9 @@ MQ_BASE="$SCRIPT_DIR/daqiri_bench_raw_tx_rx_rtx_pro_6000_mq.yaml"
 MQ_GEN="$REPO_ROOT/scripts/gen_rtx_pro_mq_config.py"
 PLOT_SCRIPT="$REPO_ROOT/scripts/plot_rtx_pro_bench.py"
 
-export LD_LIBRARY_PATH="/opt/daqiri/lib:$BUILD_DIR:${LD_LIBRARY_PATH:-}"
+# $BUILD_DIR/src first: that is where CMake writes libdaqiri.so, and with the
+# image's installed copy ahead of it a rebuild has no effect on what runs.
+export LD_LIBRARY_PATH="$BUILD_DIR/src:/opt/daqiri/lib:${LD_LIBRARY_PATH:-}"
 export CUDA_DEVICE_ORDER="${CUDA_DEVICE_ORDER:-PCI_BUS_ID}"
 
 if [[ -x "$DISCOVER" ]]; then
@@ -72,7 +74,22 @@ OUT_DIR="${DAQIRI_BENCH_RESULTS_DIR:-$REPO_ROOT/bench-results}/$TS-rtx-pro-mq"
 mkdir -p "$OUT_DIR"
 
 CSV="$OUT_DIR/runs.csv"
-echo "cell,tx_cores,rx_cores,payload,rep,gbps,rx_gbps,pps,drops,cpu_master,cpu_tx_q0_poll,cpu_tx_q0_work,cpu_tx_q1_poll,cpu_tx_q1_work,cpu_rx_q0_poll,cpu_rx_q0_work,cpu_rx_q1_poll,cpu_rx_q1_work,gpu_sm,gpu_mem" > "$CSV"
+echo "cell,tx_cores,rx_cores,payload,rep,gbps,rx_gbps,wire_tx_gbps,wire_rx_gbps,pps,drops,cpu_master,cpu_tx_q0_poll,cpu_tx_q0_work,cpu_tx_q1_poll,cpu_tx_q1_work,cpu_rx_q0_poll,cpu_rx_q0_work,cpu_rx_q1_poll,cpu_rx_q1_work,gpu_sm,gpu_mem" > "$CSV"
+
+# The wire measurement and its gate come from the NIC itself, shared with
+# run_rtx_pro_bench.sh so both runners agree on what "crossed the cable" means.
+# Both ports are in this namespace: the matrix is DPDK-only, and only the socket
+# and RoCE backends relocate their ports.
+WIRE_TX_IFACE="${RTX_TX_IFACE:-}"
+WIRE_RX_IFACE="${RTX_RX_IFACE:-}"
+# When the caller pinned the ports by PCIe address instead of running discovery,
+# sysfs still names the netdev that belongs to each device.
+[[ -z "$WIRE_TX_IFACE" && -n "$TX_BDF" ]] && \
+  WIRE_TX_IFACE="$(ls "/sys/bus/pci/devices/$TX_BDF/net" 2>/dev/null | head -n1)"
+[[ -z "$WIRE_RX_IFACE" && -n "$RX_BDF" ]] && \
+  WIRE_RX_IFACE="$(ls "/sys/bus/pci/devices/$RX_BDF/net" 2>/dev/null | head -n1)"
+NIC_VALIDATION_LOG="$OUT_DIR/wire_validation.txt"
+source "$SCRIPT_DIR/rtx_pro_nic_counters.sh"
 
 if [[ -x "$SCRIPT_DIR/bench_capture_environment.sh" ]]; then
   "$SCRIPT_DIR/bench_capture_environment.sh" "$OUT_DIR" || true
@@ -134,14 +151,6 @@ parse_dpdk_drops() {
   echo "$sum"
 }
 
-max_phy_counter() {
-  local key="$1" file="$2"
-  grep -oE "${key}:[[:space:]]*[0-9]+" "$file" 2>/dev/null \
-    | grep -oE '[0-9]+$' \
-    | sort -n \
-    | tail -n1
-}
-
 snapshot_cpu_stat() {
   awk '/^cpu[0-9]+/ {
     total = $2+$3+$4+$5+$6+$7+$8
@@ -201,15 +210,13 @@ run_cell() {
   local stderr="$run_dir/stderr.txt"
 
   snapshot_cpu_stat "$run_dir/cpu_stat.before"
-  local phy_before phy_after
-  phy_before="$(max_phy_counter 'rx_phy_packets' /dev/null)"
-  phy_before="${phy_before:-0}"
+  local nic_before nic_after
+  nic_before="$(nic_snapshot)"
 
   local bench_rc=0
   "$BENCH_BIN" "$tmp_cfg" --seconds "$RUN_SECONDS" > "$stdout" 2> "$stderr" || bench_rc=$?
 
-  phy_after="$(max_phy_counter 'rx_phy_packets' "$stderr")"
-  phy_after="${phy_after:-0}"
+  nic_after="$(nic_snapshot)"
   snapshot_cpu_stat "$run_dir/cpu_stat.after"
 
   local tx_pkts tx_bytes rx_pkts rx_bytes secs
@@ -230,11 +237,12 @@ run_cell() {
   rx_gbps="$(awk -v b="$rx_bytes" -v s="$secs" 'BEGIN { if (s+0>0) printf "%.3f", (b*8.0)/s/1e9; else print 0 }')"
   drops="$(parse_dpdk_drops "$stderr")"
 
-  local phy_delta=$(( phy_after - phy_before ))
-  if [[ "${rx_pkts:-0}" -gt 1000 && "${phy_after:-0}" -lt 100 ]]; then
-    echo "WARN: $cell p$payload rx_phy_packets=${phy_after:-0} flat -- check cable" >&2
-  elif [[ "$phy_delta" -gt 0 ]]; then
-    echo "INFO: $cell p$payload wire OK -- rx_phy_packets +$phy_delta" >&2
+  # Ask the NIC whether these packets crossed the cable, and at what rate. A cell
+  # that fails here is a failed cell rather than a warning: a warning scrolls past
+  # and the number still lands in the CSV as if it were real.
+  if ! nic_report "$nic_before" "$nic_after" "${rx_pkts:-0}" "$secs"; then
+    echo "       (cell $cell payload $payload)" >&2
+    return 1
   fi
 
   local cpu_vals=()
@@ -246,7 +254,7 @@ run_cell() {
   cpu_csv="$(IFS=,; echo "${cpu_vals[*]}")"
   gpu_csv="$(gpu_sample "$run_dir/gpu.txt")"
 
-  echo "$cell,$tx_cores,$rx_cores,$payload,$rep,$tx_gbps,$rx_gbps,$pps,$drops,$cpu_csv,$gpu_csv" | tee -a "$CSV"
+  echo "$cell,$tx_cores,$rx_cores,$payload,$rep,$tx_gbps,$rx_gbps,$WIRE_TX_GBPS,$WIRE_RX_GBPS,$pps,$drops,$cpu_csv,$gpu_csv" | tee -a "$CSV"
 }
 
 echo "RTX PRO 6000 multi-queue sweep -- ${RUN_SECONDS}s per (cell, payload)"

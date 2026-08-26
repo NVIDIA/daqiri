@@ -43,7 +43,10 @@ run_sweep() {
 
 [[ "${SKIP_MQ:-0}" == "1" ]] || run_mq
 [[ "${SKIP_WIRE:-0}" == "1" ]] || run_wire_smoke
-[[ "${SKIP_SW:-0}" == "1" ]] || run_sw_smoke
+# Software loopback is off by default. It never touches the NIC, so its number
+# is not a wire rate and can exceed line rate; run it with SKIP_SW=0 when you
+# want a build sanity check rather than a benchmark.
+[[ "${SKIP_SW:-1}" == "1" ]] || run_sw_smoke
 [[ "${SKIP_SWEEP:-1}" == "1" ]] || run_sweep
 
 echo

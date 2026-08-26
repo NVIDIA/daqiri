@@ -8,6 +8,11 @@
 # eth_dst_addr from discovery (ETH_DST_ADDR) or:
 #   cat /sys/class/net/<rx-iface>/address
 #
+# Prerequisites, both ports (each silently costs throughput, and a core-scaling
+# matrix run against a throttled link measures the throttle, not the cores):
+#   ethtool -A <iface> rx off tx off
+#   ip link set dev <iface> mtu 9000
+#
 # Core map (pollers are DPDK EAL lcores; workers are bench pthreads).
 # Defaults below are placeholders; run_rtx_pro_mq_bench.sh replaces them via
 # scripts/rtx_pro_discover.py (isolcpus on the NIC NUMA node + PIX GPU ordinals).
@@ -41,12 +46,12 @@ daqiri:
       buf_size: 8064
     - name: "Data_RX_GPU_0"
       kind: "device"
-      affinity: 1
+      affinity: 2
       num_bufs: 51200
       buf_size: 8064
     - name: "Data_RX_GPU_1"
       kind: "device"
-      affinity: 1
+      affinity: 3
       num_bufs: 51200
       buf_size: 8064
 

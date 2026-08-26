@@ -845,7 +845,9 @@ void bind_config_types(py::module_ &m) {
       .def_readwrite("max_burst_interval_ms",
                      &SocketConfig::max_burst_interval_ms_)
       .def_readwrite("min_ipg_ns", &SocketConfig::min_ipg_ns_)
-      .def_readwrite("retry_connect_s", &SocketConfig::retry_connect_s_);
+      .def_readwrite("retry_connect_s", &SocketConfig::retry_connect_s_)
+      .def_readwrite("rx_buffer_size", &SocketConfig::rx_buffer_size_)
+      .def_readwrite("tx_buffer_size", &SocketConfig::tx_buffer_size_);
 
   py::class_<RoCEConfig>(m, "RoCEConfig")
       .def(py::init<>())

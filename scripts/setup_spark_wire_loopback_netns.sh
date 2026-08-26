@@ -197,6 +197,12 @@ down() {
       for IF in $(ip netns exec "$NS" ls /sys/class/net 2>/dev/null); do
         [[ "$IF" == lo ]] && continue
         ip netns exec "$NS" ip link set "$IF" netns 1 2>/dev/null || true
+        # A netdev comes back administratively DOWN, which takes the carrier and
+        # the link speed with it. Everything that reads the port afterwards --
+        # lldpd's neighbour table, topology discovery, a DPDK bench -- then sees
+        # a dead port, so bring it back up here rather than leaving the host in
+        # a worse state than we found it.
+        ip link set "$IF" up 2>/dev/null || true
       done
       ip netns delete "$NS" 2>/dev/null || true
     fi

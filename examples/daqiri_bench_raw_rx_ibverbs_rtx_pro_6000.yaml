@@ -38,7 +38,7 @@ daqiri:
 
     interfaces:
       - name: "rx_port"
-        address: 0000:61:00.1
+        address: 0000:75:00.0
         rx:
           queues:
             - name: "rx_q_0"

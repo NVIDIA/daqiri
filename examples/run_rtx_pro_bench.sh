@@ -4,9 +4,27 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # RTX PRO 6000 benchmark runner (discrete dGPU, arch 120).
-# Primary: dual-port L2 wire closed-loop (real NIC traffic, any host with a link).
-# Optional: sw-smoke (no NIC, build sanity only).
+# Primary: wire closed-loop over a cabled port pair (real NIC traffic).
+# Optional: sw-smoke (no NIC, build sanity only -- not a wire rate).
 # Adapts examples/run_spark_bench.sh; override topology via discovery or CLI.
+#
+# Topology comes from scripts/discover_rtx_pro_topology.sh: it picks the two
+# ports that LLDP says are cabled to each other, reads the destination MAC from
+# the RX port, and resolves the GPU ordinals that are PIX to each NIC. Nothing
+# here is hardcoded to one machine -- pass --tx-bdf/--rx-bdf to override.
+#
+# Before a throughput run, disable 802.3x pause and raise the MTU on both ports
+# (see docs/tutorials/system_configuration.md steps 9 and 10). Pause costs over
+# 20% of line rate and leaves every drop counter at zero.
+#
+# The rdma and socket-* backends additionally need the two cabled ports in
+# separate network namespaces -- otherwise the kernel and the NIC eswitch route
+# between them internally and nothing reaches the cable. Bring that up on the
+# HOST (this image has no iproute2) before those backends, and tear it down
+# again before any dpdk/ibverbs run, which needs the ports in place:
+#   CLIENT_IF=<tx-iface> SERVER_IF=<rx-iface> \
+#     sudo -E scripts/setup_spark_wire_loopback_netns.sh up
+#   sudo scripts/setup_spark_wire_loopback_netns.sh down
 #
 # Usage:
 #   ./run_rtx_pro_bench.sh <backend> <mode> [options]
@@ -26,9 +44,9 @@
 #   --tx-bdf, --rx-bdf, --rx-mac, --tx-gpu, --rx-gpu
 #
 # Environment:
-#   DAQIRI_BUILD_DIR, ETH_DST_ADDR (required for dpdk wire modes)
+#   DAQIRI_BUILD_DIR, ETH_DST_ADDR (auto-read from the RX port when unset)
 #   WORKLOAD, WORKLOAD_BATCH, GEMM_N, SYNC_INTERVAL (GPU post-process)
-#   RTX_TX_BDF, RTX_RX_BDF (defaults 61:00.0 / 61:00.1)
+#   RTX_TX_BDF, RTX_RX_BDF (auto-discovered from the LLDP-confirmed cable)
 #
 # Run inside the project container as root (per AGENTS.md).
 
@@ -38,6 +56,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="${DAQIRI_BUILD_DIR:-$REPO_ROOT/build}"
 DISCOVER="$REPO_ROOT/scripts/discover_rtx_pro_topology.sh"
+# Splits a combined both-role netns base into a single-role config (rdma + socket).
+NETNS_GEN="$REPO_ROOT/scripts/gen_spark_netns_config.py"
 
 BACKEND="${1:-}"
 MODE="${2:-}"
@@ -146,7 +166,13 @@ if [[ "$MODE" == "build-only" ]]; then
   exit $?
 fi
 
-export LD_LIBRARY_PATH="/opt/daqiri/lib:$BUILD_DIR:${LD_LIBRARY_PATH:-}" 2>/dev/null || true
+# The build tree comes first, and it is $BUILD_DIR/src -- that is where CMake puts
+# libdaqiri.so. With /opt/daqiri/lib in front, or with the wrong build path, the
+# container image's installed copy wins every lookup and the benchmark silently
+# measures whatever library was baked into the image instead of what was just
+# compiled. /opt/daqiri/lib stays as the fallback for a container with no build
+# tree mounted.
+export LD_LIBRARY_PATH="$BUILD_DIR/src:/opt/daqiri/lib:${LD_LIBRARY_PATH:-}" 2>/dev/null || true
 
 # --------------------------------------------------------------------------
 # Discovery + wire preflight
@@ -175,7 +201,7 @@ mkdir -p "$OUT_DIR"
 
 CSV="$OUT_DIR/runs.csv"
 SUMMARY_CSV="$OUT_DIR/summary.csv"
-echo "lang,backend,post_process,payload,batch,target_gbps,seconds,tx_packets,rx_packets,bytes,pps,gbps,rx_gbps,drops,drops_kind,cpu_master_pct,cpu_tx_pct,cpu_rx_pct,gpu_sm_pct,gpu_mem_pct,post_process_batch,post_process_gemm_n,post_process_sync" > "$CSV"
+echo "lang,backend,post_process,payload,batch,target_gbps,seconds,tx_packets,rx_packets,bytes,pps,gbps,rx_gbps,wire_tx_gbps,wire_rx_gbps,drops,drops_kind,cpu_master_pct,cpu_tx_pct,cpu_rx_pct,gpu_sm_pct,gpu_mem_pct,post_process_batch,post_process_gemm_n,post_process_sync" > "$CSV"
 echo "backend,workload,config,seconds,total_data_rate_gbps,total_packets_sent,total_packets_received,total_dropped,drop_source,notes" > "$SUMMARY_CSV"
 
 "$SCRIPT_DIR/bench_capture_environment.sh" "$OUT_DIR"
@@ -183,13 +209,38 @@ echo "backend,workload,config,seconds,total_data_rate_gbps,total_packets_sent,to
 DRIVER_LOG="$OUT_DIR/last_run.stderr"
 FAILURES=0
 
-TX_BDF="${RTX_TX_BDF:-0000:61:00.0}"
-RX_BDF="${RTX_RX_BDF:-0000:61:00.1}"
+TX_BDF="${RTX_TX_BDF:-}"
+RX_BDF="${RTX_RX_BDF:-}"
 TX_GPU="${TX_GPU:-${RTX_TX_GPU:-0}}"
 RX_GPU="${RX_GPU:-${RTX_RX_GPU:-1}}"
+TX_NUMA="${RTX_TX_NUMA:-0}"
+RX_NUMA="${RTX_RX_NUMA:-0}"
 CPU_MASTER="${RTX_MASTER_CORE:-3}"
 CPU_TX="${RTX_TX_Q0_POLL:-11}"
 CPU_RX="${RTX_RX_Q0_POLL:-9}"
+CPU_TX_WORK="${RTX_TX_Q0_WORK:-$((CPU_TX + 1))}"
+CPU_RX_WORK="${RTX_RX_Q0_WORK:-$((CPU_RX + 1))}"
+
+# No fallback BDFs on purpose. A stale default that happens to name a real
+# device produces a run that transmits happily and receives nothing, which is
+# the exact failure this harness used to report as a benchmark result.
+# Only the engines that bind a PCIe device need an address; RoCE and sockets
+# name their endpoints by IP.
+if [[ "$IS_SW" != "1" && "$BACKEND" =~ ^(dpdk|dpdk-hds|ibverbs)$ ]]; then
+  if [[ -z "$TX_BDF" || -z "$RX_BDF" ]]; then
+    echo "ERROR: could not determine the TX/RX PCIe addresses." >&2
+    echo "       scripts/discover_rtx_pro_topology.sh found no LLDP-confirmed cabled pair." >&2
+    echo "       Pass --tx-bdf 0000:xx:00.0 --rx-bdf 0000:yy:00.0 explicitly." >&2
+    exit 1
+  fi
+fi
+
+WIRE_TX_IFACE=""
+WIRE_RX_IFACE=""
+# Namespace each wire port lives in ("" = the default one). Only the netns
+# backends move their ports; everything else drives them in place.
+WIRE_TX_NS=""
+WIRE_RX_NS=""
 
 wire_preflight() {
   if [[ "$IS_SW" == "1" ]]; then
@@ -197,11 +248,21 @@ wire_preflight() {
   fi
   case "$BACKEND" in
     dpdk|dpdk-hds|ibverbs)
-      : "${ETH_DST_ADDR:?ETH_DST_ADDR must be set for wire modes (source scripts/discover_rtx_pro_topology.sh)}"
       local tx_if="${RTX_TX_IFACE:-}"
       local rx_if="${RTX_RX_IFACE:-}"
       [[ -z "$tx_if" ]] && tx_if="$(resolve_iface_for_bdf "$TX_BDF" 2>/dev/null || true)"
       [[ -z "$rx_if" ]] && rx_if="$(resolve_iface_for_bdf "$RX_BDF" 2>/dev/null || true)"
+      WIRE_TX_IFACE="$tx_if"
+      WIRE_RX_IFACE="$rx_if"
+
+      # The destination MAC is a property of the RX port, so read it rather than
+      # asking the caller to keep a copy in sync.
+      if [[ -z "${ETH_DST_ADDR:-}" && -n "$rx_if" ]]; then
+        ETH_DST_ADDR="$(cat "/sys/class/net/${rx_if}/address" 2>/dev/null || true)"
+        [[ -n "$ETH_DST_ADDR" ]] && export ETH_DST_ADDR
+      fi
+      : "${ETH_DST_ADDR:?ETH_DST_ADDR must be set for wire modes (source scripts/discover_rtx_pro_topology.sh)}"
+
       if [[ -n "$tx_if" && -n "$rx_if" ]]; then
         local c0 c1
         c0="$(cat "/sys/class/net/${tx_if}/carrier" 2>/dev/null || echo 0)"
@@ -209,65 +270,126 @@ wire_preflight() {
         if [[ "$c0" != "1" || "$c1" != "1" ]]; then
           echo "WARNING: carrier not 1 on both ports ($tx_if=$c0 $rx_if=$c1); wire test may fail" >&2
         fi
+        preflight_link_settings "$tx_if" "$rx_if"
       fi
+      ;;
+    rdma|socket-*)
+      # Same two ports, just relocated: moving a netdev into a namespace does
+      # not rename it, so discovery's names still address them.
+      WIRE_TX_IFACE="${RTX_TX_IFACE:-}"
+      WIRE_RX_IFACE="${RTX_RX_IFACE:-}"
+      WIRE_TX_NS="$NETNS_CLIENT"
+      WIRE_RX_NS="$NETNS_SERVER"
       ;;
   esac
 }
 
-wire_preflight
-
-# --------------------------------------------------------------------------
-# RoCE (rdma) single-host wire loop: the client and server IPs must sit on ONE
-# connected subnet across the two cabled RoCE ports so rdma_cm can resolve the
-# peer over the cable. Assign them to the discovered TX/RX interfaces (and relax
-# rp_filter / enable accept_local for same-host cross-NIC delivery), then remove
-# the addresses we added on exit so we don't disturb the host's base config.
-# --------------------------------------------------------------------------
-RDMA_IP_CLIENT="10.100.0.1"
-RDMA_IP_SERVER="10.100.0.2"
-RDMA_NET_CIDR="24"
-RDMA_ADDED_CLIENT_IF=""
-RDMA_ADDED_SERVER_IF=""
-
-rdma_net_teardown() {
-  [[ -n "$RDMA_ADDED_CLIENT_IF" ]] && \
-    ip addr del "${RDMA_IP_CLIENT}/${RDMA_NET_CIDR}" dev "$RDMA_ADDED_CLIENT_IF" 2>/dev/null || true
-  [[ -n "$RDMA_ADDED_SERVER_IF" ]] && \
-    ip addr del "${RDMA_IP_SERVER}/${RDMA_NET_CIDR}" dev "$RDMA_ADDED_SERVER_IF" 2>/dev/null || true
-}
-
-rdma_net_setup() {
-  [[ "$BACKEND" == "rdma" && "$IS_SW" != "1" ]] || return 0
-  local tx_if="${RTX_TX_IFACE:-}" rx_if="${RTX_RX_IFACE:-}"
-  [[ -z "$tx_if" ]] && tx_if="$(resolve_iface_for_bdf "$TX_BDF" 2>/dev/null || true)"
-  [[ -z "$rx_if" ]] && rx_if="$(resolve_iface_for_bdf "$RX_BDF" 2>/dev/null || true)"
-  if [[ -z "$tx_if" || -z "$rx_if" ]]; then
-    echo "WARNING: could not resolve RoCE interfaces for auto IP setup; assign ${RDMA_IP_CLIENT}/${RDMA_IP_SERVER} manually" >&2
-    return 0
-  fi
-  if ! ip -br addr show "$tx_if" 2>/dev/null | grep -q "$RDMA_IP_CLIENT"; then
-    ip addr add "${RDMA_IP_CLIENT}/${RDMA_NET_CIDR}" dev "$tx_if" 2>/dev/null && RDMA_ADDED_CLIENT_IF="$tx_if"
-  fi
-  if ! ip -br addr show "$rx_if" 2>/dev/null | grep -q "$RDMA_IP_SERVER"; then
-    ip addr add "${RDMA_IP_SERVER}/${RDMA_NET_CIDR}" dev "$rx_if" 2>/dev/null && RDMA_ADDED_SERVER_IF="$rx_if"
-  fi
-  sysctl -q -w net.ipv4.conf.all.accept_local=1 2>/dev/null || true
-  sysctl -q -w net.ipv4.conf.all.rp_filter=0 2>/dev/null || true
-  for i in "$tx_if" "$rx_if"; do
-    sysctl -q -w "net.ipv4.conf.${i}.rp_filter=0" 2>/dev/null || true
-    sysctl -q -w "net.ipv4.conf.${i}.arp_ignore=1" 2>/dev/null || true
-    sysctl -q -w "net.ipv4.conf.${i}.arp_announce=2" 2>/dev/null || true
+# Two host settings silently distort raw-Ethernet throughput. Neither shows up
+# in any drop counter, so check them before the run rather than explaining an
+# odd number afterwards.
+preflight_link_settings() {
+  local tx_if="$1" rx_if="$2" iface pause mtu
+  # MTU excludes the Ethernet header, so a UDP payload needs exactly
+  # payload + 20 (IPv4) + 8 (UDP). Asking for more produces false alarms: the
+  # engines set the netdev MTU to the frame size they need and no higher.
+  local want_mtu=$((MAX_PAYLOAD_HINT + 28))
+  for iface in "$tx_if" "$rx_if"; do
+    if command -v ethtool >/dev/null 2>&1; then
+      pause="$(ethtool -a "$iface" 2>/dev/null | awk '/^(RX|TX):/ { printf "%s%s ", tolower($1), $2 }')"
+      if [[ "$pause" == *"on"* ]]; then
+        echo "WARNING: 802.3x pause is enabled on $iface ($pause)." >&2
+        echo "         This can cost over 20% of line rate with every drop counter at zero." >&2
+        echo "         Disable it with: ethtool -A $iface rx off tx off" >&2
+      fi
+    fi
+    mtu="$(cat "/sys/class/net/${iface}/mtu" 2>/dev/null || echo 0)"
+    if [[ "${mtu:-0}" -lt "$want_mtu" ]]; then
+      echo "WARNING: $iface MTU is $mtu but this run sends up to $MAX_PAYLOAD_HINT byte payloads." >&2
+      echo "         Raise it with: ip link set dev $iface mtu $want_mtu" >&2
+    fi
   done
-  trap rdma_net_teardown EXIT
-  echo "RoCE net: ${RDMA_IP_CLIENT} on ${tx_if}, ${RDMA_IP_SERVER} on ${rx_if}" >&2
 }
 
-rdma_net_setup
+# --------------------------------------------------------------------------
+# Socket / RoCE wire loop through network namespaces.
+#
+# Both cabled ports belong to this host, so with both IPs in one namespace the
+# kernel routes client->server locally and the NIC eswitch short-cuts RoCE: the
+# packets never reach the cable. (rdma_cm does not even get that far -- it fails
+# to resolve a peer address it sees as local.) Putting each port in its own
+# namespace removes that local knowledge, so the only path is out the wire and
+# back. scripts/setup_spark_wire_loopback_netns.sh builds exactly that, and is
+# not Spark-specific once CLIENT_IF / SERVER_IF are given.
+#
+# The namespaces are created on the HOST: this image has no iproute2. From in
+# here we enter them with nsenter, which needs /var/run/netns bind-mounted
+# (run_rtx_pro_container.sh does that).
+# --------------------------------------------------------------------------
+NETNS_CLIENT="${NETNS_CLIENT:-dq_wire_client}"
+NETNS_SERVER="${NETNS_SERVER:-dq_wire_server}"
+
+# Backends whose two endpoints must sit on opposite ends of the cable.
+is_netns_backend() {
+  [[ "$IS_SW" != "1" && ( "$BACKEND" == "rdma" || "$BACKEND" == socket-* ) ]]
+}
+
+# Command prefix that runs its argument inside a named namespace. `ip netns exec`
+# where iproute2 exists (the host), nsenter against the same handle where it does
+# not (the container).
+netns_prefix() {
+  local ns="$1"
+  if command -v ip >/dev/null 2>&1; then
+    echo "ip netns exec $ns"
+  else
+    echo "nsenter --net=/var/run/netns/$ns"
+  fi
+}
+
+netns_preflight() {
+  is_netns_backend || return 0
+  local ns missing=0
+  for ns in "$NETNS_CLIENT" "$NETNS_SERVER"; do
+    [[ -e "/var/run/netns/$ns" ]] || { echo "ERROR: network namespace '$ns' does not exist." >&2; missing=1; }
+  done
+  if [[ "$missing" == "1" ]]; then
+    echo "       $BACKEND needs the two cabled ports in separate namespaces, or the traffic" >&2
+    echo "       never leaves the host and the number is not a wire rate. On the HOST run:" >&2
+    echo "         CLIENT_IF=${RTX_TX_IFACE:-<tx-iface>} SERVER_IF=${RTX_RX_IFACE:-<rx-iface>} \\" >&2
+    echo "           sudo -E scripts/setup_spark_wire_loopback_netns.sh up" >&2
+    echo "       Tear it down again (sudo scripts/setup_spark_wire_loopback_netns.sh down)" >&2
+    echo "       before any dpdk/ibverbs run: those bind the ports in the default namespace." >&2
+    exit 1
+  fi
+  if ! command -v nsenter >/dev/null 2>&1 && ! command -v ip >/dev/null 2>&1; then
+    echo "ERROR: neither nsenter nor iproute2 is available to enter '$NETNS_CLIENT'." >&2
+    exit 1
+  fi
+}
+
+# A UDP receive socket only gets the buffer the kernel's global ceiling permits,
+# however much the config asks for, and the excess is discarded after the frames
+# are already off the wire -- so the NIC records a clean run and the application
+# just reports less. Unlike most of net.core this one is not per-namespace, so the
+# host value governs the benchmark even inside the wire-loopback namespaces.
+preflight_socket_buffers() {
+  [[ "$BACKEND" == socket-* ]] || return 0
+  local want cap
+  want="$(awk '/rx_buffer_size:/ { print $2; exit }' "$BASE_YAML" 2>/dev/null)"
+  [[ -n "${want:-}" ]] || return 0
+  cap="$(cat /proc/sys/net/core/rmem_max 2>/dev/null || echo 0)"
+  if [[ "${cap:-0}" -lt "$want" ]]; then
+    echo "WARNING: $(basename "$BASE_YAML") asks for a ${want}-byte receive buffer," >&2
+    echo "         but net.core.rmem_max caps it at ${cap}. The receiver will drop" >&2
+    echo "         datagrams that already crossed the cable." >&2
+    echo "         Raise it with: sysctl -w net.core.rmem_max=$want" >&2
+  fi
+}
 
 # --------------------------------------------------------------------------
 # Backend configuration
 # --------------------------------------------------------------------------
 TX_SENDER_BIN="$BUILD_DIR/examples/daqiri_bench_raw_gpudirect"
+DROP_CURVE_TARGETS=()
 case "$BACKEND" in
   dpdk)
     PAYLOADS_SWEEP=(8000 4096 1024 256 64)
@@ -307,7 +429,14 @@ case "$BACKEND" in
     BATCHES_SWEEP=(1)
     PAYLOADS_HEADLINE=(8000000)
     BATCHES_HEADLINE=(1)
-    BASE_YAML="$SCRIPT_DIR/daqiri_bench_rdma_tx_rx_rtx_pro_6000.yaml"
+    # Wire runs use the combined both-role netns base (split per role below); the
+    # single-process config only makes sense without a cable, where there is no
+    # namespace to cross.
+    if is_netns_backend; then
+      BASE_YAML="$SCRIPT_DIR/daqiri_bench_rdma_tx_rx_spark_netns.yaml"
+    else
+      BASE_YAML="$SCRIPT_DIR/daqiri_bench_rdma_tx_rx_rtx_pro_6000.yaml"
+    fi
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_rdma"
     CPU_MASTER=3
     CPU_TX=7
@@ -326,11 +455,21 @@ case "$BACKEND" in
     CPU_RX=8
     ;;
   socket-udp)
-    PAYLOADS_SWEEP=(1472 1024 256 64)
+    # 65507 is the largest UDP payload IPv4 allows; on a jumbo link it is also
+    # where the syscall cost per byte stops dominating, so it is the headline.
+    PAYLOADS_SWEEP=(65507 8192 1472)
     BATCHES_SWEEP=(1)
-    PAYLOADS_HEADLINE=(1472)
+    PAYLOADS_HEADLINE=(65507)
     BATCHES_HEADLINE=(1)
-    BASE_YAML="$SCRIPT_DIR/daqiri_bench_socket_udp_tx_rx.yaml"
+    # This receiver saturates around 30 Gb/s, an order of magnitude below the
+    # link, so the generic 400G ladder would put every rung but one on the far
+    # side of the knee. These bracket it.
+    DROP_CURVE_TARGETS=(5 10 20 25 28 30 35 0)
+    if is_netns_backend; then
+      BASE_YAML="$SCRIPT_DIR/daqiri_bench_socket_udp_tx_rx_spark_netns.yaml"
+    else
+      BASE_YAML="$SCRIPT_DIR/daqiri_bench_socket_udp_tx_rx.yaml"
+    fi
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_socket"
     CPU_MASTER=3
     CPU_TX=7
@@ -339,9 +478,13 @@ case "$BACKEND" in
   socket-tcp)
     PAYLOADS_SWEEP=(1048576 65536 1024)
     BATCHES_SWEEP=(1)
-    PAYLOADS_HEADLINE=(65536)
+    PAYLOADS_HEADLINE=(1048576)
     BATCHES_HEADLINE=(1)
-    BASE_YAML="$SCRIPT_DIR/daqiri_bench_socket_tcp_tx_rx.yaml"
+    if is_netns_backend; then
+      BASE_YAML="$SCRIPT_DIR/daqiri_bench_socket_tcp_tx_rx_spark_netns.yaml"
+    else
+      BASE_YAML="$SCRIPT_DIR/daqiri_bench_socket_tcp_tx_rx.yaml"
+    fi
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_socket"
     CPU_MASTER=3
     CPU_TX=7
@@ -357,8 +500,29 @@ esac
 CPU_MASTER="${RTX_MASTER_CORE:-$CPU_MASTER}"
 CPU_TX="${RTX_TX_Q0_POLL:-$CPU_TX}"
 CPU_RX="${RTX_RX_Q0_POLL:-$CPU_RX}"
+CPU_TX_WORK="${RTX_TX_Q0_WORK:-$CPU_TX_WORK}"
+CPU_RX_WORK="${RTX_RX_Q0_WORK:-$CPU_RX_WORK}"
 
-DROP_CURVE_TARGETS=(1 5 10 25 50 75 100 0)
+# Largest frame this invocation will put on the wire, used to sanity-check MTU.
+MAX_PAYLOAD_HINT=0
+for _p in "${PAYLOADS_SWEEP[@]}" "${PAYLOADS_HEADLINE[@]}"; do
+  [[ "$_p" -gt "$MAX_PAYLOAD_HINT" ]] && MAX_PAYLOAD_HINT="$_p"
+done
+# RoCE and TCP message sizes are segmented by the transport, so they say nothing
+# about frame size; cap the MTU expectation at a jumbo frame.
+[[ "$MAX_PAYLOAD_HINT" -gt 9000 ]] && MAX_PAYLOAD_HINT=8900
+
+wire_preflight
+netns_preflight
+
+preflight_socket_buffers
+# Rungs for `drop-curve`, in Gb/s, ending in 0 for "unpaced". A backend that tops
+# out well below the link sets its own ladder above; this is the 400G default.
+# TARGETS="20 24 26 28" overrides either, for narrowing in on a knee.
+if [[ -n "${TARGETS:-}" ]]; then
+  read -r -a DROP_CURVE_TARGETS <<< "$TARGETS"
+fi
+[[ "${#DROP_CURVE_TARGETS[@]}" -eq 0 ]] && DROP_CURVE_TARGETS=(1 5 10 25 50 75 100 0)
 
 # SW loopback rides the single-segment GPUDirect ring in the dpdk engine. HDS
 # (segment split), RoCE, ibverbs, and sockets have no software-loopback path,
@@ -406,12 +570,47 @@ parse_rdma_drops() {
   echo "${n:-0}"
 }
 
+# /proc/net/udp and the TCP SNMP counters are per network namespace, and for the
+# netns backends the receiving socket is in the server namespace, not this one.
+# Read from here they report a tidy zero no matter how much the kernel dropped,
+# which is the opposite of useful: the whole point of these two counters is to
+# say where the packets the NIC delivered went.
+socket_stat_prefix() {
+  if is_netns_backend && [[ -n "${WIRE_RX_NS:-}" ]]; then
+    netns_prefix "$WIRE_RX_NS" | tr ' ' '\n'
+  fi
+}
+
+# /proc/net/snmp rather than /proc/net/udp: the per-socket drop column in the
+# latter disappears along with the socket, and the receiver has usually closed
+# its socket by the time this runs, so those drops always read back as zero even
+# though the datagrams were plainly gone. The snmp counters belong to the
+# namespace and outlive any socket in it.
 snapshot_proc_net_udp() {
-  awk 'NR>1 { sum += $13 } END { print sum+0 }' /proc/net/udp 2>/dev/null || echo 0
+  local pre=()
+  mapfile -t pre < <(socket_stat_prefix)
+  "${pre[@]}" awk '
+    /^Udp:/ {
+      if (!hdr) { for (i = 2; i <= NF; i++) col[$i] = i; hdr = 1; next }
+      # InErrors alone: the kernel bumps RcvbufErrors and InErrors together for
+      # the same dropped datagram, so summing them double-counts every drop.
+      print ("InErrors" in col) ? $(col["InErrors"]) + 0 : 0
+      found = 1
+      exit
+    }
+    END { if (!found) print 0 }
+  ' /proc/net/snmp 2>/dev/null || echo 0
 }
 
 snapshot_nstat() {
-  nstat -a 2>/dev/null | awk '/TcpExtTCPLostRetransmit|TcpRetransSegs|TcpInErrs/ { s += $2 } END { print s+0 }' || echo 0
+  # Under `set -o pipefail` a missing nstat fails the pipeline, so the `|| echo`
+  # fallback used to append a second line to awk's -- and the caller's
+  # arithmetic then choked on a two-line number.
+  command -v nstat >/dev/null 2>&1 || { echo 0; return 0; }
+  local pre=()
+  mapfile -t pre < <(socket_stat_prefix)
+  "${pre[@]}" nstat -as 2>/dev/null |
+    awk '/TcpExtTCPLostRetransmit|TcpRetransSegs|TcpInErrs/ { s += $2 } END { print s+0 }'
 }
 
 snapshot_cpu_stat() {
@@ -436,126 +635,169 @@ cpu_busy_pct() {
   ' "$before" "$after"
 }
 
-max_phy_counter() {
-  local key="$1" file="$2"
-  # DPDK logs use "tx_phy_packets:\t123" (colon), not key=value.
-  grep -oE "${key}:[[:space:]]*[0-9]+" "$file" 2>/dev/null \
-    | grep -oE '[0-9]+$' \
-    | sort -n \
-    | tail -n1
+NIC_VALIDATION_LOG="$OUT_DIR/wire_validation.txt"
+source "$SCRIPT_DIR/rtx_pro_nic_counters.sh"
+
+# A software-loopback run has no port to read, so skip the snapshot entirely
+# rather than recording a row of zeros that looks like a failed wire test.
+nic_snapshot_if_wire() {
+  [[ "$IS_SW" == "1" ]] && return 0
+  nic_snapshot
 }
 
-log_phy_counters() {
-  local stderr_file="$1"
-  local tx_phy rx_phy
-  tx_phy="$(max_phy_counter 'tx_phy_packets' "$stderr_file")"
-  rx_phy="$(max_phy_counter 'rx_phy_packets' "$stderr_file")"
-  tx_phy="${tx_phy:-0}"
-  rx_phy="${rx_phy:-0}"
-  echo "post-run phy: tx_phy_packets=${tx_phy} rx_phy_packets=${rx_phy}" >> "$OUT_DIR/wire_validation.txt"
-  echo "${tx_phy} ${rx_phy}"
-}
-
-wire_phy_ok() {
-  local stderr_file="$1" rx_pkts="$2"
-  local counts tx_phy rx_phy
-  counts="$(log_phy_counters "$stderr_file")"
-  read -r tx_phy rx_phy <<< "$counts"
-  # Dual-port closed-loop: TX port drives tx_phy, RX port drives rx_phy. Take
-  # the per-port maxima from extended stats (each counter appears twice).
-  if [[ "${rx_pkts:-0}" -gt 1000 && "${rx_phy:-0}" -lt 100 ]]; then
-    echo "ERROR: rx_phy_packets=${rx_phy:-0} flat while rx_pkts=$rx_pkts -- traffic may not have crossed the link" >&2
-    return 1
-  fi
-  if [[ "${rx_pkts:-0}" -gt 1000 && "${tx_phy:-0}" -lt 100 ]]; then
-    echo "ERROR: tx_phy_packets=${tx_phy:-0} flat while rx_pkts=$rx_pkts -- TX port may not be driving the wire" >&2
-    return 1
-  fi
-  return 0
-}
+source "$SCRIPT_DIR/rtx_pro_yaml_rewrite.sh"
 
 generate_yaml() {
   local out="$1" payload="$2" batch="$3"
   case "$BACKEND" in
     dpdk)
-      # SW loopback has no NIC MAC/BDF to substitute (address is "loopback" and
-      # eth_dst is a don't-care), so only rewrite the destination MAC on the
-      # wire path where discovery populated ETH_DST_ADDR.
-      local sed_args=(
-        -e "s|^( *payload_size: ).*|\1$payload|"
-        -e "s|^( *batch_size: ).*|\1$batch|g"
-        -e "s|address: 0000:61:00.0|address: $TX_BDF|g"
-        -e "s|address: 0000:61:00.1|address: $RX_BDF|g"
-      )
-      if [[ "$IS_SW" != "1" && -n "${ETH_DST_ADDR:-}" ]]; then
-        sed_args+=(
-          -e "s|<00:00:00:00:00:00>|$ETH_DST_ADDR|g"
-          -e "s|^( *eth_dst_addr: ).*|\1$ETH_DST_ADDR|"
-        )
-      fi
-      sed -E "${sed_args[@]}" "$BASE_YAML" > "$out"
-      awk -v txg="$TX_GPU" -v rxg="$RX_GPU" '
-        /^    - name: "Data_TX_GPU"/ { in_tx=1; in_rx=0 }
-        /^    - name: "Data_RX_GPU"/ { in_rx=1; in_tx=0 }
-        in_tx && /^      affinity:/ { sub(/[0-9]+$/, txg); in_tx=0 }
-        in_rx && /^      affinity:/ { sub(/[0-9]+$/, rxg); in_rx=0 }
-        { print }
-      ' "$out" > "${out}.tmp" && mv "${out}.tmp" "$out"
       sed -E \
-        -e "s|^(    master_core:)[[:space:]]*[0-9]+|\1 $CPU_MASTER|" \
-        -e "/- name: \"tx_port\"/,/- name: \"rx_port\"/ s|^(          cpu_core:)[[:space:]]*[0-9]+|\1 $CPU_TX|" \
-        -e "/- name: \"rx_port\"/,/^bench_/ s|^(          cpu_core:)[[:space:]]*[0-9]+|\1 $CPU_RX|" \
-        "$out" > "${out}.tmp" && mv "${out}.tmp" "$out"
+        -e "s|^( *payload_size: ).*|\1$payload|" \
+        -e "s|^( *batch_size: ).*|\1$batch|g" \
+        "$BASE_YAML" > "$out"
+      rewrite_raw_topology "$out"
+      # SW loopback never puts a frame on the wire, so the destination MAC is a
+      # don't-care and discovery may not have produced one.
+      [[ "$IS_SW" == "1" ]] || rewrite_eth_dst "$out"
       ;;
     dpdk-hds)
       local ipv4_len=$((payload + 50))
       sed -E \
         -e "s|^( *payload_size: ).*|\1$payload|" \
         -e "s|^( *batch_size: ).*|\1$batch|g" \
-        -e "s|<00:00:00:00:00:00>|$ETH_DST_ADDR|g" \
-        -e "s|^( *eth_dst_addr: ).*|\1$ETH_DST_ADDR|" \
         -e "s|^( *ipv4_len: ).*|\1$ipv4_len|" \
-        -e "s|address: 0000:61:00.0|address: $TX_BDF|g" \
-        -e "s|address: 0000:61:00.1|address: $RX_BDF|g" \
         "$BASE_YAML" > "$out"
+      rewrite_raw_topology "$out"
+      rewrite_eth_dst "$out"
       ;;
     ibverbs)
-      sed -E \
-        -e "s|address: 0000:61:00.1|address: $RX_BDF|g" \
-        "$BASE_YAML" > "$out"
+      cp "$BASE_YAML" "$out"
+      rewrite_raw_topology "$out"
       ;;
     rdma)
-      sed -E "s|^( *message_size: ).*|\1$payload|g" "$BASE_YAML" > "$out"
+      sed -E \
+        -e "s|^( *message_size: ).*|\1$payload|g" \
+        "$BASE_YAML" > "$out"
+      rewrite_rdma_affinity "$out"
       ;;
     socket-udp|socket-tcp)
+      # buf_size must hold a whole message: the bench memsets message_size into
+      # one TX buffer. The netns bases already size it for the largest sweep
+      # point, so only grow it, never shrink it below the base.
       sed -E \
         -e "s|^( *message_size: ).*|\1$payload|g" \
         -e "s|^( *max_payload_size: ).*|\1$payload|g" \
-        -e "s|^( *buf_size: ).*|\1$payload|g" \
+        -e "s|^( *buf_size: ).*|\1$((payload + 1))|g" \
         "$BASE_YAML" > "$out"
       ;;
   esac
 }
 
+# Split a combined both-role netns base into the per-role config each namespace
+# runs, and put this host's cores in it (the checked-in bases carry the cores of
+# the machine they were written for).
+generate_role_yaml() {
+  local out="$1" role="$2" payload="$3" batch="$4"
+  local combined="${out%.yaml}.combined.yaml"
+  generate_yaml "$combined" "$payload" "$batch"
+  python3 "$NETNS_GEN" "$combined" --role "$role" > "$out"
+  if [[ "$role" == "server" ]]; then
+    rewrite_netns_cores "$out" "$CPU_RX" "$CPU_RX_WORK"
+  else
+    rewrite_netns_cores "$out" "$CPU_TX" "$CPU_TX_WORK"
+  fi
+}
+
 generate_tx_yaml() {
   local out="$1" payload="${2:-8000}" batch="${3:-10240}"
   sed -E \
-    -e "s|<00:00:00:00:00:00>|$ETH_DST_ADDR|g" \
-    -e "s|^( *eth_dst_addr: ).*|\1$ETH_DST_ADDR|" \
-    -e "s|address: 0000:61:00.0|address: $TX_BDF|g" \
     -e "s|^( *payload_size: ).*|\1$payload|" \
     -e "s|^( *batch_size: ).*|\1$batch|g" \
     "$TX_YAML" > "$out"
-  awk -v txg="$TX_GPU" '
-    /^    - name: "Data_TX_GPU"/ { in_tx=1 }
-    in_tx && /^      affinity:/ { sub(/[0-9]+$/, txg); in_tx=0 }
-    { print }
-  ' "$out" > "${out}.tmp" && mv "${out}.tmp" "$out"
+  rewrite_raw_topology "$out"
+  rewrite_eth_dst "$out"
 }
 
 append_summary_row() {
   local workload="$1" config="$2" secs="$3" data_rate="$4" tx_pkts="$5" rx_pkts="$6" drops="$7" drop_kind="$8" notes="$9"
   echo "$BACKEND,$workload,$config,$secs,$data_rate,$tx_pkts,$rx_pkts,$drops,$drop_kind,$notes" >> "$SUMMARY_CSV"
+}
+
+# mlnx_perf reads the NIC's own per-second counters, which is the only rate here
+# that does not depend on when the application started and stopped its timer.
+# AGENTS.md asks for it on every throughput measurement.
+MLNX_PERF_PIDS=()
+
+start_mlnx_perf() {
+  local dir="$1" iface ns pre
+  MLNX_PERF_PIDS=()
+  command -v mlnx_perf >/dev/null 2>&1 || return 0
+  for iface in "$WIRE_TX_IFACE:$WIRE_TX_NS" "$WIRE_RX_IFACE:$WIRE_RX_NS"; do
+    ns="${iface#*:}"
+    iface="${iface%%:*}"
+    [[ -n "$iface" ]] || continue
+    # A netdev that has been moved into a namespace is invisible from outside
+    # it, so the sampler has to be started in there with it.
+    pre=""
+    [[ -n "$ns" ]] && pre="$(netns_prefix "$ns")"
+    # shellcheck disable=SC2086
+    $pre mlnx_perf -i "$iface" -t 1 > "$dir/mlnx_perf.${iface}.txt" 2>&1 &
+    MLNX_PERF_PIDS+=($!)
+  done
+}
+
+stop_mlnx_perf() {
+  local dir="$1" pid iface
+  for pid in "${MLNX_PERF_PIDS[@]:-}"; do
+    [[ -n "$pid" ]] && kill "$pid" 2>/dev/null
+  done
+  for pid in "${MLNX_PERF_PIDS[@]:-}"; do
+    [[ -n "$pid" ]] && wait "$pid" 2>/dev/null
+  done
+  MLNX_PERF_PIDS=()
+  # The same NIC counters again, but sampled once a second, which gives the rate
+  # the link *held* rather than the whole-window average that nic_report writes.
+  # Report the mean of those samples, not the maximum: a peak is one bucket and
+  # says nothing about what was sustained.
+  #
+  # The first and last samples are dropped because both are partial windows --
+  # the first spans engine bring-up, and the last is however much of a second had
+  # elapsed when this function killed the sampler.
+  #
+  # TX and RX are accumulated separately; mlnx_perf prints both counters for every
+  # port, and folding them together would average a loaded direction with an idle
+  # one.
+  for iface in "$WIRE_TX_IFACE" "$WIRE_RX_IFACE"; do
+    [[ -n "$iface" && -s "$dir/mlnx_perf.${iface}.txt" ]] || continue
+    awk -v ifc="$iface" '
+      function acct(d, val) {
+        seen[d]++
+        if (seen[d] == 1) return
+        # Hold each sample back one round, so the final one is never counted.
+        if (seen[d] > 2) {
+          sum[d] += held[d]
+          n[d]++
+          if (held[d] > peak[d]) peak[d] = held[d]
+        }
+        held[d] = val
+      }
+      /tx_bytes_phy:/ { gsub(/,/, "", $2); acct("tx", $2 * 8.0 / 1e9) }
+      /rx_bytes_phy:/ { gsub(/,/, "", $2); acct("rx", $2 * 8.0 / 1e9) }
+      END {
+        split("tx rx", dirs, " ")
+        for (i = 1; i <= 2; i++) {
+          d = dirs[i]
+          if (n[d] < 1) continue
+          mean = sum[d] / n[d]
+          # An idle direction is not worth a line; every port reports both.
+          if (mean < 1.0) continue
+          printf "%s %s_phy_gbps mean=%.2f peak=%.2f samples=%d\n", \
+            ifc, d, mean, peak[d], n[d]
+        }
+      }
+    ' "$dir/mlnx_perf.${iface}.txt" >> "$dir/mlnx_perf.summary"
+  done
+  [[ -s "$dir/mlnx_perf.summary" ]] && cat "$dir/mlnx_perf.summary" >> "$OUT_DIR/wire_validation.txt"
 }
 
 run_cell() {
@@ -565,16 +807,23 @@ run_cell() {
   mkdir -p "$cell_dir"
 
   local yaml="$cell_dir/config.yaml"
-  generate_yaml "$yaml" "$payload" "$batch"
+  if is_netns_backend; then
+    generate_role_yaml "$cell_dir/server.yaml" server "$payload" "$batch"
+    generate_role_yaml "$cell_dir/client.yaml" client "$payload" "$batch"
+  else
+    generate_yaml "$yaml" "$payload" "$batch"
+  fi
 
-  local udp_before tcp_before
+  local udp_before tcp_before nic_before=""
   udp_before="$(snapshot_proc_net_udp)"
   tcp_before="$(snapshot_nstat)"
+  nic_before="$(nic_snapshot_if_wire)"
 
   snapshot_cpu_stat "$cell_dir/cpu_stat.before"
 
   ( nvidia-smi dmon -s pucvmet -c "$RUN_SECONDS" > "$cell_dir/nvidia_smi_dmon.txt" 2>&1 ) &
   local dmon_pid=$!
+  start_mlnx_perf "$cell_dir"
 
   local stdout="$cell_dir/stdout.txt"
   local stderr="$cell_dir/stderr.txt"
@@ -592,7 +841,33 @@ run_cell() {
   local tx_pid=""
   local rx_pid=""
   local bench_rc=0
-  if [[ "$BACKEND" == "ibverbs" ]]; then
+  if is_netns_backend; then
+    # Server (receiver) first: the client's connect / RoCE address resolution
+    # fails outright if the listener is not up yet. Each side runs in the
+    # namespace that owns its end of the cable, so the traffic has no local path
+    # to take. The client is the timed process -- it is the one that reports the
+    # sent/received totals for a one-way test.
+    local server_args=("$cell_dir/server.yaml" --seconds "$((RUN_SECONDS + 10))" --mode server)
+    local client_args=("$cell_dir/client.yaml" --seconds "$RUN_SECONDS" --mode client)
+    # Only the client sends in a one-way test, so it is the only side worth
+    # pacing. Without this the whole drop-curve ladder runs flat out and every
+    # rung reports the same unpaced rate under a different target.
+    [[ "$target_gbps" != "0" ]] && client_args+=(--target-gbps "$target_gbps")
+    if [[ "$workload" != "none" ]]; then
+      client_args+=(--workload "$workload")
+      server_args+=(--workload "$workload")
+    fi
+    # shellcheck disable=SC2086
+    $(netns_prefix "$NETNS_SERVER") "$BENCH_BIN" "${server_args[@]}" \
+      > "$cell_dir/server_stdout.txt" 2> "$cell_dir/server_stderr.txt" &
+    rx_pid=$!
+    sleep 3
+    # shellcheck disable=SC2086
+    $(netns_prefix "$NETNS_CLIENT") "$BENCH_BIN" "${client_args[@]}" \
+      > "$stdout" 2> "$stderr" || bench_rc=$?
+    wait "$rx_pid" 2>/dev/null || true
+    cp "$stderr" "$DRIVER_LOG"
+  elif [[ "$BACKEND" == "ibverbs" ]]; then
     # ibverbs RX init needs hugepages; start it before the DPDK TX sender so both
     # processes are not competing for the same 1G pages during EAL bring-up.
     "$BENCH_BIN" "${args[@]}" > "$stdout" 2> "$stderr" &
@@ -611,6 +886,9 @@ run_cell() {
   fi
 
   snapshot_cpu_stat "$cell_dir/cpu_stat.after"
+  local nic_after=""
+  nic_after="$(nic_snapshot_if_wire)"
+  stop_mlnx_perf "$cell_dir"
   wait "$dmon_pid" 2>/dev/null || true
 
   local tx_pkts rx_pkts bytes secs tx_bytes rx_bytes
@@ -640,7 +918,39 @@ run_cell() {
     esac
   fi
 
+  # One-way netns run: the client reports what it sent, the receiving side lives
+  # in the other namespace and reports what actually arrived. The server is given
+  # a longer --seconds so it outlives the client, so its own elapsed time would
+  # understate the rate -- the client's timed window is the measurement.
+  if is_netns_backend; then
+    local srv="$cell_dir/server_stdout.txt" srv_pkts srv_bytes
+    case "$BACKEND" in
+      rdma)
+        srv_pkts="$(extract_field 'Server complete' recv_completions "$srv")"
+        srv_bytes="$(extract_field 'Server complete' recv_bytes "$srv")"
+        ;;
+      *)
+        srv_pkts="$(extract_field 'Server complete' recv_packets "$srv")"
+        srv_bytes="$(extract_field 'Server complete' recv_bytes "$srv")"
+        ;;
+    esac
+    [[ -n "${srv_pkts:-}" ]] && rx_pkts="$srv_pkts"
+    [[ -n "${srv_bytes:-}" ]] && rx_bytes="$srv_bytes"
+  fi
+
   bytes="${rx_bytes:-${tx_bytes:-0}}"
+
+  # Ask the NIC what happened before judging the run, so that a cell which fails
+  # for any other reason still leaves the wire evidence behind to diagnose it
+  # with. A backend whose RX side never came up reports no elapsed time, and that
+  # is exactly the case where knowing whether frames reached the port matters.
+  local nic_rc=0
+  if [[ "$IS_SW" != "1" ]]; then
+    local app_units="${tx_pkts:-0}"
+    [[ "$app_units" == "0" ]] && app_units="${rx_pkts:-0}"
+    nic_report "$nic_before" "$nic_after" "$app_units" "${secs:-0}" || nic_rc=1
+  fi
+
   local stats_missing=0
   if [[ -z "${secs:-}" ]]; then
     stats_missing=1
@@ -651,14 +961,7 @@ run_cell() {
     echo "       stderr: $stderr" >&2
     return 1
   fi
-
-  if [[ "$BACKEND" =~ ^(dpdk|dpdk-hds)$ && "$IS_SW" != "1" ]]; then
-    if [[ -z "${rx_pkts:-}" || "$rx_pkts" == "0" ]]; then
-      echo "ERROR: $cell NIC RX packets zero -- check cable/MAC/flow" >&2
-      return 1
-    fi
-    wire_phy_ok "$stderr" "$rx_pkts" || return 1
-  fi
+  [[ "$nic_rc" -eq 0 ]] || return 1
 
   if [[ "$BACKEND" == "ibverbs" && "$IS_SW" != "1" ]]; then
     local tx_sender_pkts tx_sender_rc=0
@@ -722,7 +1025,7 @@ run_cell() {
       local udp_after
       udp_after="$(snapshot_proc_net_udp)"
       drops="$((udp_after - udp_before))"
-      drops_kind="udp-proc-net-udp-drops"
+      drops_kind="udp-snmp-inerrors"
       ;;
     socket-tcp)
       local tcp_after
@@ -736,6 +1039,26 @@ run_cell() {
     notes="sw-loopback-nonwire"
   fi
 
+  # A paced cell is only a data point for the rate it was asked for if the sender
+  # actually reached that rate. Two things stop it: the target can be above what
+  # the sender can do at all, or -- on a host without isolcpus -- something can
+  # land on the TX core for the length of the cell. The pacer cannot make either
+  # up, since it returns immediately once behind schedule, by design. Either way
+  # the cell is labelled "paced to 20", puts 15 on the wire, and drops nothing
+  # because the receiver was never pushed, so it reads as the cleanest point on
+  # the curve while moving it. Compare the NIC's own TX rate against the target
+  # and say so when they disagree, so the cell can be discarded rather than
+  # believed.
+  if [[ "${target_gbps:-0}" != "0" && -n "${WIRE_TX_GBPS:-}" && "$WIRE_TX_GBPS" != "0.00" ]]; then
+    local pace_pct
+    pace_pct="$(awk -v w="$WIRE_TX_GBPS" -v t="$target_gbps" \
+                    'BEGIN { printf "%.0f", (w*100.0)/t }')"
+    if [[ "$pace_pct" -lt 95 ]]; then
+      echo "WARN: $cell paced to ${target_gbps} Gb/s but the NIC sent only ${WIRE_TX_GBPS} Gb/s (${pace_pct}%); the sender never held the target, so this cell is not a measurement of it" >&2
+      notes="${notes:+$notes; }pacing-undershoot-${pace_pct}pct"
+    fi
+  fi
+
   if [[ "$BACKEND" == "ibverbs" ]]; then
     notes="host-staged"
     if [[ -n "${tx_pkts:-}" && "$tx_pkts" -gt 0 && "$rx_pkts" -lt "$tx_pkts" ]]; then
@@ -745,7 +1068,14 @@ run_cell() {
     fi
   fi
 
-  if [[ "$IS_SW" != "1" && "${drops:-0}" -gt 1000000 ]]; then
+  # A high drop rate means the wire is misbehaving for a sender that is paced to
+  # the link, so it fails the run. It means nothing of the sort for an unpaced UDP
+  # sender, which is *defined* by pushing datagrams faster than the receiver can
+  # read them -- that overrun is the measurement, not a fault, and wire integrity
+  # is checked directly against the NIC's frame counters either way.
+  if [[ "$BACKEND" == "socket-udp" ]]; then
+    notes="unpaced sender; receiver overrun is expected"
+  elif [[ "$IS_SW" != "1" && "${drops:-0}" -gt 1000000 ]]; then
     local nic_drops="$drops"
     local drop_base="${tx_pkts:-0}"
     if [[ "$BACKEND" == "ibverbs" ]]; then
@@ -779,7 +1109,7 @@ run_cell() {
   local pp_gemm_n="${GEMM_N:-derived}"
   local pp_sync="${SYNC_INTERVAL:-default}"
 
-  echo "$lang,$BACKEND,$workload,$payload,$batch,$target_gbps,$secs,$tx_pkts,$rx_pkts,$bytes,$pps,$gbps,$rx_gbps,$drops,$drops_kind,$cpu_master_pct,$cpu_tx_pct,$cpu_rx_pct,$gpu_sm,$gpu_mem,$pp_batch,$pp_gemm_n,$pp_sync" \
+  echo "$lang,$BACKEND,$workload,$payload,$batch,$target_gbps,$secs,$tx_pkts,$rx_pkts,$bytes,$pps,$gbps,$rx_gbps,$WIRE_TX_GBPS,$WIRE_RX_GBPS,$drops,$drops_kind,$cpu_master_pct,$cpu_tx_pct,$cpu_rx_pct,$gpu_sm,$gpu_mem,$pp_batch,$pp_gemm_n,$pp_sync" \
     | tee -a "$CSV"
 
   append_summary_row "$workload" "$(basename "$yaml")" "$secs" "$data_rate_gbps" "$tx_pkts" "$rx_pkts" "$drops" "$drops_kind" "$notes"

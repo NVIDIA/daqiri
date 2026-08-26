@@ -1,5 +1,13 @@
 # RTX PRO 6000 -- DPDK GPUDirect TX-only sender for ibverbs RX pairing.
-# Binds a single TX port; the RX port stays kernel-bound for ibverbs MPRQ.
+#
+# Binds a single TX port (0000:05:00.0 on the reference host); the port on the
+# other end of the cable stays kernel-bound so the ibverbs MPRQ engine can drive
+# it through libibverbs. Pair with daqiri_bench_raw_rx_ibverbs_rtx_pro_6000.yaml,
+# or let `run_rtx_pro_bench.sh ibverbs nic-smoke` start both sides.
+#
+# Prerequisites, both ports:
+#   ethtool -A <iface> rx off tx off
+#   ip link set dev <iface> mtu 9000
 #
 %YAML 1.2
 ---
@@ -21,7 +29,7 @@ daqiri:
 
     interfaces:
     - name: "tx_port"
-      address: 0000:61:00.0
+      address: 0000:05:00.0
       tx:
         queues:
         - name: "tx_q_0"

@@ -289,13 +289,31 @@ void TokenBucketPacer::wait_for_bytes(size_t bytes, std::atomic<bool> &stop) {
   // Slice the wait into 10 ms chunks so a stop flag (--seconds expiry or
   // Ctrl-C) can break us out promptly. The total slept across the slices
   // accumulates to the scheduled deadline, so pacing remains accurate.
+  //
+  // The last millisecond is spun rather than slept. The gap between messages at
+  // a useful rate is tens of microseconds -- 21 us for 65507-byte datagrams at
+  // 25 Gb/s -- and sleep_for() overshoots a wait that short by more than the
+  // wait itself. Because the deadline above is cumulative, an overshoot leaves
+  // the pacer behind schedule, and it then returns immediately for every
+  // following message until it has caught up. The average rate still comes out
+  // at the target, which is what makes this hard to notice, but the traffic
+  // arrives as full-line-rate bursts separated by sleeps. A receiver sees the
+  // burst rate, not the target, so a paced run drops packets for a reason that
+  // has nothing to do with the rate that was asked for.
   constexpr auto kSlice = std::chrono::milliseconds(10);
+  constexpr auto kSpinBelow = std::chrono::milliseconds(1);
   while (!stop.load()) {
     const auto now = std::chrono::steady_clock::now();
     if (scheduled <= now) {
       return;
     }
     const auto remaining = scheduled - now;
+    if (remaining < kSpinBelow) {
+      while (std::chrono::steady_clock::now() < scheduled && !stop.load()) {
+        // Busy-wait: this thread's whole job is to emit the next message on time.
+      }
+      return;
+    }
     std::this_thread::sleep_for(
         std::min<std::chrono::steady_clock::duration>(remaining, kSlice));
   }

@@ -60,6 +60,7 @@ nav:
     - Socket and RDMA Benchmarking: benchmarks/socket_benchmarking.md
     - Raw Ethernet Benchmarking: benchmarks/raw_benchmarking.md
     - "Performance: DGX Spark": benchmarks/performance-dgx-spark.md
+    - "Performance: RTX PRO 6000": benchmarks/performance-rtx-pro-6000.md
   - API Reference:
     - API Guide: api-reference/index.md
     - Configuration YAML Reference: api-reference/configuration.md

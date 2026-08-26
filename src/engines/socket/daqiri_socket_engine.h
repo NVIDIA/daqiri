@@ -163,6 +163,7 @@ class SocketEngine : public Engine {
                                int value,
                                const char* context,
                                bool required) const;
+  void apply_socket_buffer_sizes(int fd, const SocketConfig& socket_cfg, const char* context) const;
 
   void setup_tcp_endpoint(EndpointState& ep);
   void setup_udp_endpoint(EndpointState& ep);

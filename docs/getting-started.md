@@ -217,7 +217,13 @@ DAQIRI's shared-library ABI version is tracked separately through
 Linux UDP/TCP sockets are always available. Applications that need kernel socket
 tuning can call `socket_setsockopt()` after resolving a TCP/UDP connection ID,
 passing the numeric `level` and option constants from system headers. DAQIRI does
-not maintain symbolic socket-option mappings in YAML.
+not maintain symbolic socket-option mappings in YAML, with one exception:
+`socket_config.rx_buffer_size` and `socket_config.tx_buffer_size` set `SO_RCVBUF`
+and `SO_SNDBUF` at socket creation, because a server socket starts receiving
+during `daqiri_init()` and a TCP accepted socket inherits its buffers from the
+listener — both are already sized before an application has a connection ID to
+call `socket_setsockopt()` on. See
+[Configuration YAML Reference](api-reference/configuration.md#socket-and-rdma-endpoint-configuration).
 
 For Raw Ethernet (`stream_type: "raw"`), `daqiri_init()` validates that each `rx.flows`
 entry's legacy scalar `action.id` or queue-list `action.ids` (including the final

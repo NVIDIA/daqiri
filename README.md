@@ -53,7 +53,8 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 - **RDMA** — RDMA verbs (READ, WRITE, SEND) over RoCE on Ethernet NICs or InfiniBand.
 - **Linux socket control** — TCP/UDP socket streams expose connection IDs and
   `socket_setsockopt()` for native Linux `setsockopt` tuning without YAML option
-  name mappings.
+  name mappings. The two buffer sizes that must be set before the first packet
+  arrives, `rx_buffer_size` and `tx_buffer_size`, are YAML fields.
 - **Optional OpenTelemetry metrics** — Expose per-interface or per-queue packet,
   byte, and drop counters when built with `DAQIRI_ENABLE_OTEL_METRICS=ON`.
 
@@ -74,6 +75,18 @@ Consult the [Benchmarking overview](https://nvidia.github.io/daqiri/benchmarks/)
 
 Each transport at its best-case operation size on a single DGX Spark (GB10), driven over a physical cabled loopback on one ConnectX-7. Full methodology and per-transport breakdowns at [Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/). These tests were run using a 200G cable, which allowed transfers to reach PCIe limitations slightly over 100Gbps.
 
+### RTX PRO 6000 Result Summary
+
+| Stream / Protocol        | Best case      | Throughput          | Drops     | Notes                                              |
+|:-------------------------|:---------------|:--------------------|:----------|:---------------------------------------------------|
+| Socket / RoCE (SEND)     | 8 MB message   | **396.9 Gb/s**      | 0         | 99.2% of the port; NIC-driven sender               |
+| Raw Ethernet / GPUDirect | 8000 B packet  | **390.5 Gb/s**      | 0         | GPU to GPU, no CPU touches a payload               |
+| Raw Ethernet / HDS       | 8000 B payload | **389.0 Gb/s**      | 0         | Header to CPU, payload to GPU                      |
+| Socket / TCP             | 1 MiB write    | **64.3 Gb/s**       | 0         | One kernel thread per side                         |
+| Socket / UDP             | 65507 B datagram | **25.1 Gb/s**     | 0         | Paced; loss-free in every repetition               |
+
+Each transport over a **400 GbE loopback cable** between two ports of one x86_64 RTX PRO 6000 Blackwell host, every rate read from the NIC's own PHY counters. Full methodology, the payload and multi-queue sweeps, the UDP loss curve, and the GPU-workload results at [Performance: RTX PRO 6000](https://nvidia.github.io/daqiri/benchmarks/performance-rtx-pro-6000/).
+
 ## Documentation
 
 Reference material for the DAQIRI codebase:
@@ -85,6 +98,7 @@ Reference material for the DAQIRI codebase:
 - [C++ API Usage](https://nvidia.github.io/daqiri/api-reference/cpp/) — C++ RX/TX workflows, buffer lifecycle, file writing, utilities, and status codes
 - [Python API Usage](https://nvidia.github.io/daqiri/api-reference/python/) — Python bindings, workflow examples, enums, config classes, and helper functions
 - [Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/) — Per-platform throughput, drop, and utilization numbers for stream/protocol combinations on DGX Spark
+- [Performance: RTX PRO 6000](https://nvidia.github.io/daqiri/benchmarks/performance-rtx-pro-6000/) — The same for a 400 GbE loopback on an x86_64 RTX PRO 6000 Blackwell host, measured from NIC counters
 - [Contributing](CONTRIBUTING.md) — Contribution guidelines, coding standards, DCO sign-off
 
 ## Tutorials

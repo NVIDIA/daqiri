@@ -63,18 +63,26 @@ docker run --rm -it --privileged \
 
     For discrete Blackwell RTX PRO 6000 systems, build with [`CMAKE_CUDA_ARCHITECTURES=120`](../tutorials/bare-metal-cmake-build.md) and use these configs:
 
-    - [`daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml) — software loopback, no NIC required. Validates the GPUDirect build path; throughput is not wire-rate. See measured numbers in [`examples/rtx_pro_6000_baseline.md`](https://github.com/nvidia/daqiri/blob/main/examples/rtx_pro_6000_baseline.md).
-    - [`daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml) — prefilled dual-port NIC run (dev-box PCIe BDFs; fill `eth_dst_addr` from the rx_port MAC). Port 0 TX on GPU CUDA 0, port 1 RX on GPU CUDA 1. Requires an L2 link between the two ports (QSFP cable, passive loopback optic, or switch). `carrier=1` on both ports does not guarantee they are looped to each other.
-    - [`daqiri_bench_raw_tx_rx_rtx_pro_6000.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_rtx_pro_6000.yaml) — generic `<placeholder>` template for cross-card or custom topology (800 Gbps target once cabled).
-    - [`daqiri_bench_raw_tx_rx_rtx_pro_6000_nic_same_port.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_rtx_pro_6000_nic_same_port.yaml) — experimental same-port TX+RX; failed `daqiri_init` on the reference box.
+    - [`daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml) — the headline wire loopback, prefilled for the reference host. Two 400 GbE ports joined by one cable, `kind: device` on both sides, each memory region pinned to a GPU that is PIX to its own port.
+    - [`daqiri_bench_raw_tx_rx_rtx_pro_6000.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_rtx_pro_6000.yaml) — the same shape as a `<placeholder>` template, for a different host or a cross-card topology.
+    - [`daqiri_bench_raw_tx_rx_hds_rtx_pro_6000.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_hds_rtx_pro_6000.yaml) — header-data split over the same wire, on `daqiri_bench_raw_hds`.
+    - [`daqiri_bench_raw_tx_rx_rtx_pro_6000_mq.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_rtx_pro_6000_mq.yaml) — the TX=2/RX=2 base for the core-scaling matrix, driven by [`run_rtx_pro_mq_bench.sh`](https://github.com/nvidia/daqiri/blob/main/examples/run_rtx_pro_mq_bench.sh).
+    - [`daqiri_bench_raw_rx_ibverbs_rtx_pro_6000.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_rx_ibverbs_rtx_pro_6000.yaml) — MPRQ RX on the ibverbs engine, fed by [`daqiri_bench_raw_tx_only_rtx_pro_6000_nic.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_only_rtx_pro_6000_nic.yaml) over the cable.
+    - [`daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml) — software loopback, no NIC. Validates the GPUDirect build path only. It never touches the wire, so its throughput can exceed line rate and is not comparable to any of the above.
 
-    Unlike DGX Spark, typical RTX Pro servers expose one PF per physical port — there is no on-chip eswitch shortcut between two PFs on the same port without a link. After a NIC run, confirm whether traffic crossed the wire using `tx_phy_packets` / `rx_phy_packets` in the DPDK extended stats (near zero = on-chip or no wire loop; rising with vport counts = over-the-wire). Full constraints and baseline results: [`rtx_pro_6000_baseline.md`](https://github.com/nvidia/daqiri/blob/main/examples/rtx_pro_6000_baseline.md).
+    `carrier=1` on two ports does not mean they are cabled to each other — one may face a switch. Confirm the pairing with `lldpctl -f keyvalue <iface> | grep port.mac`, or let [`scripts/discover_rtx_pro_topology.sh`](https://github.com/nvidia/daqiri/blob/main/scripts/discover_rtx_pro_topology.sh) find the pair and fill in the PCIe addresses, destination MAC, PIX GPU ordinals, and poll cores. After a run, `tx_phy_packets` / `rx_phy_packets` rising with the vport counts confirms the frames crossed the SerDes. Measured results for every stream type on this hardware: [Performance: RTX PRO 6000](performance-rtx-pro-6000.md), with the host-specific record in [`rtx_pro_6000_baseline.md`](https://github.com/nvidia/daqiri/blob/main/examples/rtx_pro_6000_baseline.md).
 
     ```bash
-    sudo ./daqiri_bench_raw_gpudirect \
-      ./examples/daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml --seconds 30
+    # Prerequisites on both ports; see steps 9 and 10 in the system config tutorial.
+    sudo ethtool -A ens15f0np0 rx off tx off
+    sudo ethtool -A ens16f0np0 rx off tx off
+    sudo ip link set dev ens15f0np0 mtu 9000
+    sudo ip link set dev ens16f0np0 mtu 9000
 
-    # Once p0 and p1 are cabled:
+    # Headline closed-loop run, topology filled in by discovery.
+    sudo ./examples/run_rtx_pro_bench.sh dpdk nic-smoke --seconds 30
+
+    # Or drive the config directly.
     sudo ./daqiri_bench_raw_gpudirect \
       ./examples/daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml --seconds 30
     ```

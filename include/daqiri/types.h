@@ -975,6 +975,11 @@ struct SocketConfig {
   uint64_t max_burst_interval_ms_ = 0;
   uint32_t min_ipg_ns_ = 0;
   int32_t retry_connect_s_ = 1;
+  // Kernel socket buffer sizes in bytes (SO_RCVBUF / SO_SNDBUF). 0 leaves the
+  // system default, which is net.core.{r,w}mem_default -- on a stock host a few
+  // hundred kilobytes, i.e. a handful of jumbo datagrams.
+  int32_t rx_buffer_size_ = 0;
+  int32_t tx_buffer_size_ = 0;
 };
 
 struct RoCEConfig {

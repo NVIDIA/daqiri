@@ -113,6 +113,62 @@ bool SocketEngine::apply_socket_int_option(int fd,
   return !required;
 }
 
+// Size the kernel's own socket buffers, and say so when the kernel refuses.
+//
+// The default is net.core.{r,w}mem_default, a few hundred kilobytes on a stock
+// host -- under ten jumbo datagrams. A receiver that is descheduled for longer
+// than that overflows the queue, and UDP answers an overflow by discarding the
+// datagram and incrementing a counter nobody reads. The traffic is already off
+// the wire by then, so neither the NIC nor the sender notices, and the run
+// reports a plausible rate that is quietly missing data.
+//
+// The kernel stores double what is asked for (the second half covers its own
+// per-packet overhead) and clamps the total at net.core.{r,w}mem_max, so the
+// value read back is 2x the request when it was honoured in full and exactly
+// 2x the sysctl ceiling when it was not. Anything short of the request is
+// logged, because being silently capped is how a buffer that looks configured
+// still drops.
+void SocketEngine::apply_socket_buffer_sizes(int fd, const SocketConfig& socket_cfg,
+                                             const char* context) const {
+  struct Direction {
+    int optname;
+    int32_t requested;
+    const char* label;
+    const char* sysctl;
+  };
+  const Direction dirs[] = {
+      {SO_RCVBUF, socket_cfg.rx_buffer_size_, "rx_buffer_size", "net.core.rmem_max"},
+      {SO_SNDBUF, socket_cfg.tx_buffer_size_, "tx_buffer_size", "net.core.wmem_max"},
+  };
+
+  for (const auto& dir : dirs) {
+    if (dir.requested <= 0) {
+      continue;
+    }
+
+    if (!apply_socket_int_option(fd, SOL_SOCKET, dir.optname, dir.requested, context, false)) {
+      continue;
+    }
+
+    int granted = 0;
+    socklen_t granted_len = sizeof(granted);
+    if (::getsockopt(fd, SOL_SOCKET, dir.optname, &granted, &granted_len) != 0) {
+      continue;
+    }
+
+    // Widened deliberately: 2 * requested overflows int32_t above ~1 GiB, and a
+    // signed overflow there would make a capped request look honoured.
+    if (static_cast<int64_t>(granted) < 2LL * dir.requested) {
+      DAQIRI_LOG_WARN(
+          "{} {}={} but the kernel granted {} bytes of buffer; raise {} to at "
+          "least {} or this socket will drop under burst",
+          context, dir.label, dir.requested, granted / 2, dir.sysctl, dir.requested);
+    } else {
+      DAQIRI_LOG_INFO("{} {}={} bytes", context, dir.label, granted / 2);
+    }
+  }
+}
+
 bool SocketEngine::set_config_and_initialize(const NetworkConfig& cfg) {
   cfg_ = cfg;
 
@@ -1069,6 +1125,7 @@ std::shared_ptr<SocketEngine::ConnectionState> SocketEngine::create_tcp_client_c
 
   apply_socket_int_option(fd, SOL_SOCKET, SO_REUSEADDR, 1, "TCP client socket", false);
   apply_socket_int_option(fd, IPPROTO_TCP, TCP_NODELAY, 1, "TCP client socket", false);
+  apply_socket_buffer_sizes(fd, ep.socket_cfg, "TCP client socket");
 
   if (!src_addr.empty() || src_port != 0) {
     const std::string bind_ip = src_addr.empty() ? std::string("0.0.0.0") : src_addr;
@@ -1139,6 +1196,11 @@ void SocketEngine::setup_tcp_endpoint(EndpointState& ep) {
   }
 
   apply_socket_int_option(fd, SOL_SOCKET, SO_REUSEADDR, 1, "TCP listen socket", false);
+  // An accepted socket inherits its buffer sizes from the listener, so this has
+  // to be set before listen() to reach the connections that matter. It is set
+  // again on the accepted fd, which is where a non-default size also switches
+  // off TCP's receive-window autotuning.
+  apply_socket_buffer_sizes(fd, ep.socket_cfg, "TCP listen socket");
 
   sockaddr_in bind_addr{};
   if (!parse_ipv4_addr(ep.socket_cfg.local_ip_, ep.socket_cfg.local_port_, &bind_addr)) {
@@ -1173,6 +1235,7 @@ void SocketEngine::setup_udp_endpoint(EndpointState& ep) {
   if (fd < 0) { throw std::runtime_error("failed to create UDP socket"); }
 
   apply_socket_int_option(fd, SOL_SOCKET, SO_REUSEADDR, 1, "UDP socket", false);
+  apply_socket_buffer_sizes(fd, ep.socket_cfg, "UDP socket");
 
   if (ep.socket_cfg.mode_ == SocketMode::SERVER) {
     sockaddr_in bind_addr{};
@@ -1259,6 +1322,7 @@ void SocketEngine::tcp_accept_loop(int if_index) {
     }
 
     apply_socket_int_option(fd, IPPROTO_TCP, TCP_NODELAY, 1, "accepted TCP socket", false);
+    apply_socket_buffer_sizes(fd, ep->socket_cfg, "accepted TCP socket");
 
     auto conn = register_connection(
         fd, ep->port, ep->rx_queue, ep->if_index, true, false, ep->rx_queue_state, true);

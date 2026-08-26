@@ -52,3 +52,9 @@ DAQIRI ships with several stream types to handle different types of incoming and
 - [Socket and RDMA Benchmarking](socket_benchmarking.md) covers Linux TCP/UDP and RoCE/RDMA runs with matching client/server namespace setup.
 - [Raw Ethernet Benchmarking](raw_benchmarking.md) covers the DPDK/raw Ethernet examples, hugepage sizing, physical loopback configuration, and raw benchmark troubleshooting.
 - [Understanding the Configuration File](../tutorials/configuration-walkthrough.md) explains the YAML fields once you have selected the stream type and example config.
+
+Measured numbers live in a page per platform, since the link and the host decide
+what any of these transports can reach:
+
+- [Performance: DGX Spark](performance-dgx-spark.md) — every stream type over a 100 GbE loopback on an integrated GB10, plus the end-to-end ResNet-50 pipeline.
+- [Performance: RTX PRO 6000](performance-rtx-pro-6000.md) — every stream type over a 400 GbE loopback on a discrete-GPU x86_64 host, with all rates read from NIC counters.

@@ -74,15 +74,52 @@ def numa_cpu_list(node: int) -> list[int]:
     return out
 
 
-def pick_poll_cores(numa_node: int, count: int = 9) -> list[int]:
+def drop_smt_siblings(cpus: list[int]) -> list[int]:
+    """Keep one CPU per physical core.
+
+    Two poll threads that land on the two hyperthreads of one core share a
+    single set of execution units, so an apparent "2 TX queues" cell is really
+    one core doing both. That reads as poor multi-queue scaling and is an
+    artifact of core selection, not of the NIC or the code.
+    """
+    seen: set[int] = set()
+    out: list[int] = []
+    for cpu in cpus:
+        path = Path(f"/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list")
+        if path.is_file():
+            siblings = path.read_text().strip()
+            key = hash(siblings)
+        else:
+            key = cpu
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(cpu)
+    return out
+
+
+def pick_poll_cores(numa_node: int, count: int = 9, *, warn: bool = True) -> list[int]:
     isol = parse_isolcpu_sets()
-    candidates = numa_cpu_list(numa_node)
+    candidates = drop_smt_siblings(numa_cpu_list(numa_node))
     if isol:
-        pool = sorted(c for c in candidates if any(c in s for s in isol))
+        pool = [c for c in candidates if any(c in s for s in isol)]
         if len(pool) >= count:
             return pool[:count]
-    # No isolcpus (or too few on this node): use the upper half of the node's
-    # core list so we stay away from core 0 / typical IRQ housekeeping.
+        if warn:
+            print(
+                f"# WARNING: isolcpus has only {len(pool)} core(s) on NUMA {numa_node}, "
+                f"need {count}; falling back to non-isolated cores",
+                file=sys.stderr,
+            )
+    elif warn:
+        print(
+            "# WARNING: no isolcpus on the kernel cmdline. Poll threads will share "
+            "cores with the scheduler, which shows up as run-to-run jitter. See "
+            "docs/tutorials/system_configuration.md (CPU isolation).",
+            file=sys.stderr,
+        )
+    # Skip the first few cores of the node: core 0 and its neighbours carry most
+    # IRQ and housekeeping work.
     if len(candidates) >= count + 4:
         return candidates[4 : 4 + count]
     return candidates[:count]
@@ -191,7 +228,9 @@ def topo_pix_gpus(nic_label: str) -> list[str]:
 
 
 def gpu_label_to_bdf(gpu_label: str) -> str | None:
-    # Topo labels GPU1..GPUN match nvidia-smi index 1..N (not 0-based).
+    # Topo row labels carry the nvidia-smi index, which is not the same as the
+    # CUDA ordinal: a faulted board leaves a hole in the smi indices while CUDA
+    # renumbers from 0. Resolve through the PCI bus id rather than the number.
     m = re.match(r"GPU(\d+)", gpu_label)
     if not m:
         return None
@@ -246,11 +285,28 @@ def emit_exports(tx_bdf: str, rx_bdf: str) -> int:
     tx_gpu, tx_gpu2 = pick_gpu_pair(tx_pix, cuda_gpus[0][0])
     rx_gpu, rx_gpu2 = pick_gpu_pair(rx_pix, cuda_gpus[min(1, len(cuda_gpus) - 1)][0])
 
-    # Poll on the NUMA node of the TX port (both ports are usually co-located).
-    numa = pci_numa_node(tx_bdf)
-    cores = pick_poll_cores(numa, 9)
-    while len(cores) < 9:
-        cores.append(cores[-1] if cores else 0)
+    # Each side polls on its own port's NUMA node. When the two ports sit on
+    # different nodes, a shared pool would put one side's poll threads across the
+    # interconnect from both its NIC and its GPU.
+    tx_numa = pci_numa_node(tx_bdf)
+    rx_numa = pci_numa_node(rx_bdf)
+    if tx_numa == rx_numa:
+        cores = pick_poll_cores(tx_numa, 9)
+        while len(cores) < 9:
+            cores.append(cores[-1] if cores else 0)
+        core_note = f"NUMA {tx_numa}: {' '.join(str(c) for c in cores)}"
+    else:
+        tx_side = pick_poll_cores(tx_numa, 5)
+        rx_side = pick_poll_cores(rx_numa, 4, warn=False)
+        while len(tx_side) < 5:
+            tx_side.append(tx_side[-1] if tx_side else 0)
+        while len(rx_side) < 4:
+            rx_side.append(rx_side[-1] if rx_side else 0)
+        cores = tx_side + rx_side
+        core_note = (
+            f"NUMA {tx_numa} (master+TX): {' '.join(str(c) for c in tx_side)} | "
+            f"NUMA {rx_numa} (RX): {' '.join(str(c) for c in rx_side)}"
+        )
 
     # master, TX q0 poll/work, TX q1 poll/work, RX q0 poll/work, RX q1 poll/work
     layout = {
@@ -269,6 +325,10 @@ def emit_exports(tx_bdf: str, rx_bdf: str) -> int:
     print(f"export RTX_RX_GPU={rx_gpu}")
     print(f"export RTX_TX_GPU2={tx_gpu2}")
     print(f"export RTX_RX_GPU2={rx_gpu2}")
+    # `affinity` means a CUDA ordinal for kind: device and a NUMA node for
+    # kind: huge / host_pinned, so both are needed to fill in a config.
+    print(f"export RTX_TX_NUMA={tx_numa}")
+    print(f"export RTX_RX_NUMA={rx_numa}")
     print(f'export RTX_CPU_CORES="{" ".join(str(c) for c in cores)}"')
     for key, val in layout.items():
         print(f"export {key}={val}")
@@ -278,7 +338,7 @@ def emit_exports(tx_bdf: str, rx_bdf: str) -> int:
           f"TX2={tx_gpu2}({bus_by_ord.get(tx_gpu2,'?')}) "
           f"RX={rx_gpu}({bus_by_ord.get(rx_gpu,'?')}) "
           f"RX2={rx_gpu2}({bus_by_ord.get(rx_gpu2,'?')})", file=sys.stderr)
-    print(f"# poll cores NUMA {numa}: {' '.join(str(c) for c in cores)}", file=sys.stderr)
+    print(f"# poll cores {core_note}", file=sys.stderr)
     if not tx_pix:
         print(f"# WARNING: no PIX GPU found for TX BDF {tx_bdf}; using fallback ordinal {tx_gpu}", file=sys.stderr)
     if not rx_pix:

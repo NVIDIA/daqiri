@@ -18,6 +18,10 @@
 # (>= the 65507 max UDP datagram the sweep sends): the bench memsets a full
 # message_size into one TX buffer, so a smaller buf_size overflows the heap.
 #
+# The server also sets rx_buffer_size, without which the receiving socket keeps
+# the stock few-hundred-kilobyte kernel buffer and silently discards datagrams
+# that have already crossed the cable. See the comment on the field below.
+#
 %YAML 1.2
 ---
 daqiri:
@@ -47,6 +51,13 @@ daqiri:
         mode: server
         local_addr: "udp://10.250.0.2:5001"
         max_payload_size: 65535
+        # Without this the socket gets net.core.rmem_default -- 256 KB on a stock
+        # host, under four of the 65507-byte datagrams this sweep sends. UDP
+        # answers an overflow by discarding the datagram, and by then it is
+        # already off the wire, so the NIC counts a clean run and the receiver
+        # simply reports less. Needs net.core.rmem_max >= this value; the engine
+        # logs a warning naming the sysctl when the kernel caps the request.
+        rx_buffer_size: 67108864
       rx:
         queues:
         - name: "Server_RX_Queue"

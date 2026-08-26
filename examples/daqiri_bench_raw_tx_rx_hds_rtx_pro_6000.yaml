@@ -1,6 +1,14 @@
-# RTX PRO 6000 -- Header-Data Split wire closed-loop (dual-port L2 loop).
-# TX port + RX port must have L2 connectivity. Override BDFs/MAC via discovery
-# or run_rtx_pro_bench.sh --tx-bdf / --rx-bdf / --rx-mac.
+# RTX PRO 6000 -- Header-Data Split over the 400 GbE wire loopback.
+#
+# Headers land in CPU hugepage memory and payloads in GPU memory, so the two
+# `affinity` fields mean different things: a NUMA node for the kind: huge
+# regions, a CUDA ordinal for the kind: device ones. The values below are for
+# the reference host (tx_port 0000:05:00.0 / GPU 0, rx_port 0000:75:00.0 /
+# GPU 2); run scripts/discover_rtx_pro_topology.sh for yours.
+#
+# Prerequisites, both ports:
+#   ethtool -A <iface> rx off tx off    # 802.3x pause costs over 20% of line rate
+#   ip link set dev <iface> mtu 9000    # payload is 8000 bytes
 #
 # Run:
 #   sudo ./build/examples/daqiri_bench_raw_hds <this.yaml> --seconds 30 --workload fft
@@ -30,18 +38,18 @@ daqiri:
       buf_size: 8064
     - name: "Data_RX_CPU"
       kind: "huge"
-      affinity: 1
+      affinity: 0
       num_bufs: 51200
       buf_size: 64
     - name: "Data_RX_GPU"
       kind: "device"
-      affinity: 1
+      affinity: 2
       num_bufs: 51200
       buf_size: 8000
 
     interfaces:
     - name: "tx_port"
-      address: 0000:61:00.0
+      address: 0000:05:00.0
       tx:
         queues:
         - name: "tx_q_0"
@@ -54,7 +62,7 @@ daqiri:
           offloads:
             - "tx_eth_src"
     - name: "rx_port"
-      address: 0000:61:00.1
+      address: 0000:75:00.0
       rx:
         flow_isolation: true
         queues:
