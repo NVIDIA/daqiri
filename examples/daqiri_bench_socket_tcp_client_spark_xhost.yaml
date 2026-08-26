@@ -1,0 +1,83 @@
+# DGX Spark (GB10) cross-host TCP client config for daqiri_bench_socket.
+# Sending half of the pair that produced the Socket / TCP rows in
+# docs/benchmarks/performance-dgx-spark.md. Run the server half from
+# daqiri_bench_socket_tcp_server_spark_xhost.yaml on the peer host.
+#
+# Unlike the RoCE cross-host config, the socket engine binds every interface
+# listed in the file during daqiri_init, so the two roles CANNOT share one
+# config: the client host does not own the server's address and the bind would
+# fail. Hence one file per role.
+#
+# Before running, apply cross-host L3 on both boxes:
+#   sudo scripts/setup_spark_xhost_net.sh --role tx --peer-mac <SERVER_P0_MAC>
+# See docs/tutorials/system_configuration.md#cross-host-variant-two-sparks.
+#
+# Start the server first, then run the client. TCP self-paces through flow
+# control, so it runs unthrottled -- no --target-gbps:
+#   sudo ./daqiri_bench_socket <this.yaml> --mode client --seconds 30
+#
+# Reproduces the 1 MiB row as shipped; for the 1000 B and 8000 B rows set
+# message_size here AND in the server config. The buffers are sized for the
+# 1 MiB message, which covers the smaller ones too. Note that message_size
+# changes how many send() calls the app makes, not what the NIC transmits --
+# segmentation offload puts MTU-sized frames on the wire either way.
+#
+# Spark substitutions baked in here:
+#   - IPs: 1.1.1.1 (client p0), server on 2.2.2.2
+#   - cpu_core: DAQIRI queue on isolated X925 core 17, bench app thread on 7,
+#     master_core 8. The queue poller and the app thread MUST be on separate
+#     cores; sharing one costs roughly 4x on TCP. See
+#     docs/benchmarks/socket_benchmarking.md.
+#
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "socket"
+    master_core: 8
+    debug: false
+    log_level: "info"
+
+    memory_regions:
+    - name: "DATA_SOCKET_CLIENT"
+      kind: "host"
+      affinity: 0
+      num_bufs: 64
+      buf_size: 1052672
+
+    interfaces:
+    - name: tcp_client
+      address: 1.1.1.1
+      socket_config:
+        mode: client
+        local_addr: "tcp://1.1.1.1:6002"
+        remote_addr: "tcp://2.2.2.2:6001"
+        max_payload_size: 1052672
+      rx:
+        queues:
+        - name: "Client_RX_Queue"
+          id: 0
+          cpu_core: 17
+          batch_size: 1
+          memory_regions:
+            - "DATA_SOCKET_CLIENT"
+      tx:
+        queues:
+        - name: "Client_TX_Queue"
+          id: 0
+          cpu_core: 17
+          batch_size: 1
+          memory_regions:
+            - "DATA_SOCKET_CLIENT"
+
+socket_bench_client:
+  server: false
+  send: true
+  receive: false
+  cpu_core: 7
+  iterations: 1000000000
+  message_size: 1048576
+  server_address: 2.2.2.2
+  client_address: 1.1.1.1
+  server_port: 6001
