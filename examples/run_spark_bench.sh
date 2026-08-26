@@ -229,8 +229,9 @@ case "$BACKEND" in
     BATCHES_SWEEP=(1)
     PAYLOADS_HEADLINE=(8000)
     BATCHES_HEADLINE=(1)
-    # Concurrent client/server pairs. A single pair is core-bound well below line rate;
-    # the published matrix reaches ~12 Gb/s aggregate by running four pairs.
+    # Concurrent client/server pairs. A single pair is core-bound well below line
+    # rate (~49 Gb/s at 8000 B); four pairs reach ~87 Gb/s aggregate on the 100 GbE
+    # loopback. Both figures assume the per-side pinning below -- see pair_server_core.
     PAIRS_SWEEP=(1 2 4)
     PAIRS_HEADLINE=(4)
     SRV_PORT_BASE=5001; CLI_PORT_BASE=5101
@@ -538,7 +539,7 @@ run_cell() {
   if [[ "$BACKEND" =~ ^socket- ]]; then
     # `pairs` independent client/server processes, each in the wire-loopback
     # namespaces with unique ports and cores. A single pair is core-bound below line
-    # rate; the published Spark matrix reaches ~12 Gb/s by aggregating four pairs.
+    # rate, so the matrix aggregates up to four pairs to fill the link.
     # App TX (client sent) and App RX (server recv) are summed across pairs.
     local i server_pids=() client_pids=()
     for ((i = 0; i < pairs; i++)); do
