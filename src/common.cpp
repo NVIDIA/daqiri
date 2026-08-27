@@ -933,11 +933,50 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_flow_config(
 
   const YAML::Node match = flow_item["match"];
 
+  const YAML::Node ecpri_node = match["ecpri"];
+  const YAML::Node ethernet_node = match["ethernet"];
+  if (ethernet_node) {
+    if (!ethernet_node.IsMap()) {
+      DAQIRI_LOG_ERROR("Flow '{}' field 'match.ethernet' must be a map", flow.name_);
+      return false;
+    }
+
+    auto parse_address = [&](const char* key, bool& enabled,
+                             std::array<uint8_t, 6>& address) {
+      const YAML::Node address_node = ethernet_node[key];
+      if (!address_node) { return true; }
+
+      std::array<char, daqiri::kEthAddrLength> parsed = {};
+      const std::string text = address_node.as<std::string>();
+      if (daqiri::parse_eth_addr(&parsed, text) != daqiri::Status::SUCCESS) {
+        DAQIRI_LOG_ERROR("Flow '{}' has invalid match.ethernet.{} address '{}'",
+                         flow.name_, key, text);
+        return false;
+      }
+      std::transform(parsed.begin(), parsed.end(), address.begin(),
+                     [](char octet) { return static_cast<uint8_t>(octet); });
+      enabled = true;
+      return true;
+    };
+
+    if (!parse_address("src", flow.match_.ethernet_match_.match_src_,
+                       flow.match_.ethernet_match_.src_) ||
+        !parse_address("dst", flow.match_.ethernet_match_.match_dst_,
+                       flow.match_.ethernet_match_.dst_)) {
+      return false;
+    }
+    if (!flow.match_.ethernet_match_.match_src_ &&
+        !flow.match_.ethernet_match_.match_dst_) {
+      DAQIRI_LOG_ERROR("Flow '{}' Ethernet match requires 'src' and/or 'dst'",
+                       flow.name_);
+      return false;
+    }
+  }
+
   // eCPRI-over-Ethernet match: selected by the presence of a `match.ecpri` map.
   // Matches the eCPRI EtherType (0xAEFE) plus an optional common-header message
   // type and message identifier (pc_id/rtc_id). Detected before the UDP/IP and
   // flex-item paths because it is a distinct, mutually exclusive match class.
-  const YAML::Node ecpri_node = match["ecpri"];
   if (ecpri_node && ecpri_node.IsMap()) {
     flow.match_.type_ = daqiri::FlowMatchType::ECPRI;
     if (ecpri_node["msg_type"]) {
@@ -1023,6 +1062,10 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_flow_config(
                        flow.match_.flex_item_match_.flex_item_id_,
                        flow.match_.flex_item_match_.val_,
                        flow.match_.flex_item_match_.mask_);
+  } else if (ethernet_node && flow.match_.udp_src_ == 0 && flow.match_.udp_dst_ == 0 &&
+             flow.match_.ipv4_len_ == 0 && flow.match_.ipv4_src_ == INADDR_ANY &&
+             flow.match_.ipv4_dst_ == INADDR_ANY) {
+    flow.match_.type_ = daqiri::FlowMatchType::ETHERNET;
   }
 
   return true;

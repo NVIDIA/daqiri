@@ -232,8 +232,11 @@ RX flows can also perform hardware VLAN pop or tunnel decapsulation before queue
     - **`id`**: Queue ID under `rx.queues` on the same interface.
     - **`ids`**: Non-empty list of unique queue IDs under `rx.queues` on the same
       interface. One entry is direct steering. Two or more entries automatically
-      enable flow-affine Toeplitz RSS over source/destination IPv4 address and
-      source/destination UDP port. `id` and `ids` are mutually exclusive.
+      enable RSS. IP/UDP matches use flow-affine Toeplitz hashing over source and
+      destination IPv4 addresses and UDP ports. An Ethernet-only match remains
+      MAC-only; it does not implicitly add IPv4/UDP criteria, so matching non-IP
+      frames remain eligible for the RSS destination. `id` and `ids` are mutually
+      exclusive.
   - **`type: vlan_pop`**: Pop one VLAN tag in hardware.
   - **`type: tunnel_decap`**: Decapsulate a hardware tunnel before queue delivery.
     - **`tunnel.type`**: `vxlan`, `gre`, or `nvgre`.
@@ -269,6 +272,17 @@ RX flows can also perform hardware VLAN pop or tunnel decapsulation before queue
       message type to locate the identifier in the eCPRI header).
       - type: `integer`
 
+  - **`ethernet`**: Raw Ethernet address match. The map must contain at least one address.
+    It can be used alone or combined with IPv4/UDP, flex-item, or eCPRI criteria; all
+    configured criteria must match for the rule to apply.
+    - **`src`**: Source MAC address to match. Optional.
+      - type: `string`
+      - format: `xx:xx:xx:xx:xx:xx`
+    - **`dst`**: Destination MAC address to match. Optional.
+      - type: `string`
+      - format: `xx:xx:xx:xx:xx:xx`
+
+
 For Raw Ethernet (`stream_type: "raw"`), each flow rule is programmed into the NIC during
 `daqiri_init()`. If any rule cannot be installed, or the send-to-kernel fallback cannot be
 created when `flow_isolation: true`, initialization fails with a critical log and
@@ -279,7 +293,9 @@ firmware steering, so any interface with eCPRI flows is automatically switched t
 `dv_flow_en=1` (logged as a warning); a side effect is that the async/template dynamic-RX-flow
 API is unavailable on that interface. The `ibverbs` engine has no such restriction.
 
-A single RX interface must use exactly one flow class: standard UDP/IP, flex-item, or eCPRI.
+A single RX interface must use exactly one protocol flow class: standard UDP/IP (including
+Ethernet-only rules), flex-item, or eCPRI. Ethernet address criteria may qualify a rule in
+any of these classes and do not select a separate class when protocol criteria are present.
 Each class installs its own DPDK group-0 jump rule, and these conflict when mixed, so only one
 class is reachable per interface. `daqiri_init` rejects mixed configs with a clear error.
 Flex-item flows cannot be combined with VLAN/tunnel transform actions in v1.

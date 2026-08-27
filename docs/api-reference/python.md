@@ -678,7 +678,7 @@ encapsulation/push rules are configured in YAML under `tx.flows`.
 | `SocketMode` | `CLIENT`, `SERVER`, `INVALID` |
 | `FlowType` | `QUEUE`, `VLAN_PUSH`, `VLAN_POP`, `TUNNEL_ENCAP`, `TUNNEL_DECAP` |
 | `TunnelType` | `NONE`, `VXLAN`, `GRE`, `NVGRE` |
-| `FlowMatchType` | `IPV4_UDP`, `FLEX_ITEM` |
+| `FlowMatchType` | `IPV4_UDP`, `FLEX_ITEM`, `ECPRI`, `ETHERNET` |
 | `FlowOpType` | `ADD_RX`, `ADD_RX_BATCH`, `DELETE` |
 | `ReorderMethod` | `INVALID`, `SEQ_BATCH_NUMBER`, `SEQ_PACKETS_PER_BATCH` |
 | `ReorderDataType` | `SAME`, `INT4`, `INT8`, `INT16`, `INT32`, `FP16`, `BF16`, `FP32`, `FP64`, `INVALID` |
@@ -712,7 +712,8 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `VlanActionConfig` | VLAN push parameters: VLAN ID, priority, DEI, and ethertype. |
 | `TunnelConfig` | VXLAN, GRE, or NVGRE tunnel template fields for hardware encap/decap actions. |
 | `FlowAction` | Flow action type, scalar queue target `id`, queue-list target `ids`, optional VLAN config, and optional tunnel config. |
-| `FlowMatch` | Flow match fields for UDP, IPv4, and flex item matching. |
+| `EthernetMatch` | Optional source and destination MAC-address match fields. |
+| `FlowMatch` | Flow match fields for Ethernet, UDP, IPv4, eCPRI, and flex-item matching. |
 | `FlowConfig` | Static named flow rule combining legacy `action`, ordered `actions`, and match fields. |
 | `FlowRuleConfig` | Dynamic RX flow rule combining legacy `action`, ordered `actions`, and match fields. |
 | `FlowOpResult` | Dynamic flow operation completion. Batch adds return `flow_ids` in input order. |

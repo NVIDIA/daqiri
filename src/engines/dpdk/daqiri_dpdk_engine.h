@@ -213,6 +213,7 @@ class DpdkEngine : public Engine {
                                        Direction direction);
 
   struct rte_flow* add_flex_item_flow(int port, const FlexItemMatch& match,
+                                      const EthernetMatch& ethernet_match,
                                       const FlowAction& queue_action, FlowId mark_id = 0,
                                       bool track = true);
 
