@@ -3627,9 +3627,23 @@ void IbverbsEngine::free_all_packets(BurstParams* burst) {
   uint16_t* wqe_arr = burst_wqe_arr(burst);
   uint16_t* strd_arr = burst_strd_arr(burst);
   const int num = static_cast<int>(burst->hdr.hdr.num_pkts);
-  for (int i = 0; i < num; i++) {
-    release_strides(*q, wqe_arr[i], strd_arr[i]);
+  if (num == 0) {
+    return;
   }
+  // CQ order keeps packets from one striding WQE contiguous. Publish one
+  // release per WQE instead of bouncing its atomic counter once per packet.
+  uint16_t current_wqe = wqe_arr[0];
+  uint32_t released_strides = strd_arr[0];
+  for (int i = 1; i < num; ++i) {
+    if (wqe_arr[i] == current_wqe) {
+      released_strides += strd_arr[i];
+      continue;
+    }
+    release_strides(*q, current_wqe, released_strides);
+    current_wqe = wqe_arr[i];
+    released_strides = strd_arr[i];
+  }
+  release_strides(*q, current_wqe, released_strides);
 }
 
 void IbverbsEngine::free_packet_segment(BurstParams* burst, int seg, int pkt) {
