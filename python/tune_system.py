@@ -45,6 +45,9 @@ PCIE_EFFECTIVE_GB_PER_SEC_PER_LANE = {
     64.0: 7.563,
 }
 BAR1_BLACKWELL_MIN_MIB = 32768  # 32 GiB
+PCIE_DEVICE_CONTROL_REGISTER = "CAP_EXP+8.w"
+PCIE_MRRS_MASK = 0x7000
+PCIE_MRRS_4096 = 0x5000
 
 
 @dataclass
@@ -413,13 +416,17 @@ def check_mrrs():
             name = intf[0]
             pci_address = intf[1]
 
-            # Query MRRS for the NIC using setpci
+            # Device Control is eight bytes into the PCI Express capability.  Its
+            # absolute offset is not guaranteed to be 0x68 on every device.
             mrrs_result = subprocess.run(
-                ["setpci", "-s", pci_address, "68.w"], capture_output=True, text=True, check=True
+                ["setpci", "-s", pci_address, PCIE_DEVICE_CONTROL_REGISTER],
+                capture_output=True,
+                text=True,
+                check=True,
             )
 
-            # Convert MRRS value from hexadecimal to decimal
-            mrrs_value = (int(mrrs_result.stdout.strip(), 16) & 0xF000) >> 12
+            # MRRS is the three-bit Device Control field at bits 14:12.
+            mrrs_value = (int(mrrs_result.stdout.strip(), 16) & PCIE_MRRS_MASK) >> 12
 
             if mrrs_value == 5:
                 logging.info(f"{name}/{pci_address}: MRRS is correctly set to 4096.")
@@ -2130,9 +2137,8 @@ def check_mtu_size():
 def update_mrrs_for_nvidia_devices():
     """
     Updates the PCIe Maximum Read Request Size (MRRS) to 4096 for all Mellanox devices,
-    preserving the lower 12 bits of the current setting. Reads back after the write
-    so a silently-failing setpci (e.g. Secure Boot lockdown) is reported as an error
-    rather than misreported as a success.
+    Reads back after the write so a silently-failing setpci (e.g. Secure Boot
+    lockdown) is reported as an error rather than misreported as a success.
     """
     try:
         nic_info = get_nic_info()
@@ -2140,32 +2146,27 @@ def update_mrrs_for_nvidia_devices():
             pci_address = intf[1]
 
             try:
-                # Read the current MRRS value
-                read_result = subprocess.run(
-                    ["setpci", "-s", pci_address, "68.w"],
-                    capture_output=True,
-                    text=True,
+                # Update only the three-bit MRRS field in Device Control.  Use a
+                # capability-relative register because its absolute offset varies.
+                subprocess.run(
+                    [
+                        "setpci",
+                        "-s",
+                        pci_address,
+                        f"{PCIE_DEVICE_CONTROL_REGISTER}={PCIE_MRRS_4096:04x}:{PCIE_MRRS_MASK:04x}",
+                    ],
                     check=True,
                 )
 
-                current_value_hex = read_result.stdout.strip()
-                current_value = int(current_value_hex, 16)
-
-                # Calculate new value: keep lower 12 bits, set upper 4 bits to 5 (for 4096 bytes)
-                new_value = (current_value & 0x0FFF) | (0x5 << 12)
-
-                # Write the new MRRS value back
-                subprocess.run(["setpci", "-s", pci_address, f"68.w={new_value:04x}"], check=True)
-
                 # Read back to verify the write actually landed.
                 verify_result = subprocess.run(
-                    ["setpci", "-s", pci_address, "68.w"],
+                    ["setpci", "-s", pci_address, PCIE_DEVICE_CONTROL_REGISTER],
                     capture_output=True,
                     text=True,
                     check=True,
                 )
                 verified_value = int(verify_result.stdout.strip(), 16)
-                if (verified_value & 0xF000) >> 12 == 5:
+                if (verified_value & PCIE_MRRS_MASK) == PCIE_MRRS_4096:
                     logging.info(
                         f"Successfully updated MRRS to 4096 for device at PCIe address {pci_address}={hex(verified_value)}."
                     )
