@@ -157,6 +157,7 @@ class SocketEngine : public Engine {
 
   bool is_roce_protocol() const;
   Status roce_not_initialized(const char* op_name) const;
+  // Returns whether the option was set. `required` only picks the log severity.
   bool apply_socket_int_option(int fd,
                                int level,
                                int name,

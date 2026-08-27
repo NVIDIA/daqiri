@@ -110,7 +110,10 @@ bool SocketEngine::apply_socket_int_option(int fd,
                     name,
                     strerror(errno));
   }
-  return !required;
+  // `required` selects the log severity, not the return value: this reports
+  // whether the option was set, so a caller that reads the value back can tell
+  // it apart from one the kernel rejected.
+  return false;
 }
 
 // Size the kernel's own socket buffers, and say so when the kernel refuses.
@@ -146,6 +149,8 @@ void SocketEngine::apply_socket_buffer_sizes(int fd, const SocketConfig& socket_
       continue;
     }
 
+    // A rejected request must not reach the read-back below, or the size the
+    // socket still has gets logged as though it had been granted.
     if (!apply_socket_int_option(fd, SOL_SOCKET, dir.optname, dir.requested, context, false)) {
       continue;
     }

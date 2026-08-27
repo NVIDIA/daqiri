@@ -9,6 +9,11 @@
 # one implementation of "did this traffic reach the cable, and how fast" rather
 # than a per-runner reimplementation that has to be trusted separately.
 #
+# Two rates come out of here. nic_report divides one pair of counter snapshots by
+# the run; start_wire_sampler/stop_wire_sampler sample the same counters once a
+# second and report the mean. The published rate is the sampled one -- see the
+# comment above start_wire_sampler for why the two differ.
+#
 # Why ethtool and not the engine's own log: every backend here drives an mlx5
 # port whose kernel netdev stays up (the DPDK PMD is bifurcated, so the port is
 # never handed away to vfio), which means `ethtool -S` answers for all of them,
@@ -36,6 +41,10 @@ NIC_VALIDATION_LOG="${NIC_VALIDATION_LOG:-/dev/null}"
 # Rates from the most recent nic_report, for the caller's CSV.
 WIRE_TX_GBPS=0
 WIRE_RX_GBPS=0
+
+# Rates from the most recent stop_wire_sampler, for the caller's CSV.
+WIRE_TX_SAMPLED_GBPS=0
+WIRE_RX_SAMPLED_GBPS=0
 
 # `ip netns exec` where iproute2 exists, nsenter against the same handle where it
 # does not (the benchmark container has no iproute2). Only defined here if the
@@ -199,4 +208,147 @@ nic_report() {
   fi
 
   return 0
+}
+
+# Sample the same *_bytes_phy counters once a second and report the mean. This is
+# the only rate here that does not depend on when the application started and
+# stopped its timer, and it is the published one.
+#
+# It answers a different question from nic_report: two snapshots divided by the
+# run fold engine bring-up into the average, while the mean of the per-second
+# samples is what the link held once it was up. Both are recorded.
+#
+# Why this samples the counters itself instead of parsing `mlnx_perf`: mlnx_perf
+# sleeps for the interval and then divides by the *nominal* interval
+# (`secs = float(options.interval)`), never by the time that actually elapsed. Its
+# own per-iteration cost -- reading and parsing ~60 ethtool counters -- therefore
+# lands in the numerator, and every rate it prints comes out high by that
+# fraction. Measured on this host it was +1.2% (385.9 Gb/s over a window timed
+# here against 390.4 reported for the same run), which is enough to put a
+# near-saturated cell above the port's own line rate and make the table
+# self-evidently wrong. The overhead also varies with host load, so it cannot be
+# corrected after the fact with a constant.
+#
+# So each sample records the counter and the time it was read, and a rate is a
+# delta divided by the matching measured interval. mlnx_perf is still run
+# alongside for its per-counter view (AGENTS.md asks for it), but nothing is
+# derived from its rate column.
+WIRE_SAMPLER_PIDS=()
+MLNX_PERF_PIDS=()
+
+# One sampler per port, because a port that has been moved into a namespace is
+# invisible from outside it and has to be read in there.
+#
+# Each line is "<ns_since_epoch> <tx_bytes_phy> <rx_bytes_phy>". The timestamp is
+# taken after the counter read, consistently for every sample, so the read latency
+# cancels when consecutive samples are subtracted.
+_wire_sample_loop() {
+  local iface="$1" out="$2" pre="$3"
+  local tx rx
+  while :; do
+    # shellcheck disable=SC2086
+    read -r tx rx < <($pre ethtool -S "$iface" 2>/dev/null | awk '
+      /^ *tx_bytes_phy:/ { gsub(/,/, "", $2); t = $2 }
+      /^ *rx_bytes_phy:/ { gsub(/,/, "", $2); r = $2 }
+      END { printf "%s %s", (t == "" ? 0 : t), (r == "" ? 0 : r) }')
+    printf '%s %s %s\n' "$(date +%s%N)" "${tx:-0}" "${rx:-0}" >> "$out"
+    sleep 1
+  done
+}
+
+start_wire_sampler() {
+  local dir="$1" iface ns pre
+  WIRE_SAMPLER_PIDS=()
+  MLNX_PERF_PIDS=()
+  WIRE_TX_SAMPLED_GBPS=0
+  WIRE_RX_SAMPLED_GBPS=0
+  for iface in "$WIRE_TX_IFACE:$WIRE_TX_NS" "$WIRE_RX_IFACE:$WIRE_RX_NS"; do
+    ns="${iface#*:}"
+    iface="${iface%%:*}"
+    [[ -n "$iface" ]] || continue
+    pre=""
+    [[ -n "$ns" ]] && pre="$(netns_prefix "$ns")"
+    : > "$dir/wire_samples.${iface}.txt"
+    _wire_sample_loop "$iface" "$dir/wire_samples.${iface}.txt" "$pre" &
+    WIRE_SAMPLER_PIDS+=($!)
+    if command -v mlnx_perf >/dev/null 2>&1; then
+      # shellcheck disable=SC2086
+      $pre mlnx_perf -i "$iface" -t 1 > "$dir/mlnx_perf.${iface}.txt" 2>&1 &
+      MLNX_PERF_PIDS+=($!)
+    fi
+  done
+}
+
+stop_wire_sampler() {
+  local dir="$1" pid iface
+  for pid in "${WIRE_SAMPLER_PIDS[@]:-}" "${MLNX_PERF_PIDS[@]:-}"; do
+    [[ -n "$pid" ]] && kill "$pid" 2>/dev/null
+  done
+  for pid in "${WIRE_SAMPLER_PIDS[@]:-}" "${MLNX_PERF_PIDS[@]:-}"; do
+    [[ -n "$pid" ]] && wait "$pid" 2>/dev/null
+  done
+  WIRE_SAMPLER_PIDS=()
+  MLNX_PERF_PIDS=()
+
+  # Report the mean of the per-interval rates, not the maximum: a peak is one
+  # bucket and says nothing about what was sustained.
+  #
+  # The sampler is started before the benchmark and killed after it, so the run is
+  # bracketed by intervals in which the port was idle or ramping. Those are not
+  # measurements of a sustained rate: an idle interval is discarded outright, and
+  # the first and last loaded intervals go too, being the partial ones in which
+  # traffic started and stopped. What remains is the period the link was under
+  # load. (mlnx_perf got this for free by omitting counters that had not changed,
+  # which is why a mean taken from its output looked clean.)
+  #
+  # TX and RX are accumulated separately; every port reports both counters, and
+  # folding them together would average a loaded direction with an idle one.
+  for iface in "$WIRE_TX_IFACE" "$WIRE_RX_IFACE"; do
+    [[ -n "$iface" && -s "$dir/wire_samples.${iface}.txt" ]] || continue
+    awk -v ifc="$iface" '
+      # A port doing under 1 Gb/s on a 400 Gb/s link is not carrying this run.
+      function keep(d, val) { if (val >= 1.0) { k[d, ++n[d]] = val } }
+      NR > 1 {
+        dt = ($1 - pt) / 1e9
+        if (dt > 0) { keep("tx", ($2 - ptx) * 8.0 / dt / 1e9); keep("rx", ($3 - prx) * 8.0 / dt / 1e9) }
+      }
+      { pt = $1; ptx = $2; prx = $3 }
+      END {
+        split("tx rx", dirs, " ")
+        for (i = 1; i <= 2; i++) {
+          d = dirs[i]
+          if (n[d] < 1) continue
+          # Trim the ramp only when there is something left to average.
+          lo = (n[d] >= 3) ? 2 : 1
+          hi = (n[d] >= 3) ? n[d] - 1 : n[d]
+          sum = 0; cnt = 0; peak = 0
+          for (j = lo; j <= hi; j++) {
+            sum += k[d, j]; cnt++
+            if (k[d, j] > peak) peak = k[d, j]
+          }
+          if (cnt < 1) continue
+          printf "%s %s_phy_gbps mean=%.2f peak=%.2f samples=%d\n", \
+            ifc, d, sum / cnt, peak, cnt
+        }
+      }
+    ' "$dir/wire_samples.${iface}.txt" >> "$dir/wire_sampled.summary"
+  done
+  [[ -s "$dir/wire_sampled.summary" ]] || return 0
+  cat "$dir/wire_sampled.summary" >> "$NIC_VALIDATION_LOG"
+
+  # Lift the two figures the caller puts in its CSV: the sending port's transmit
+  # rate and the receiving port's receive rate. Reading them out of the summary
+  # here means a table is transcribed from a column rather than by hand out of
+  # wire_validation.txt.
+  WIRE_TX_SAMPLED_GBPS="$(sampled_mean_from_summary "$dir/wire_sampled.summary" "$WIRE_TX_IFACE" tx)"
+  WIRE_RX_SAMPLED_GBPS="$(sampled_mean_from_summary "$dir/wire_sampled.summary" "$WIRE_RX_IFACE" rx)"
+}
+
+sampled_mean_from_summary() {
+  local file="$1" iface="$2" dir="$3"
+  [[ -n "$iface" && -s "$file" ]] || { echo 0; return 0; }
+  awk -v ifc="$iface" -v want="${dir}_phy_gbps" '
+    $1 == ifc && $2 == want { sub(/^mean=/, "", $3); v = $3 }
+    END { printf "%s", (v == "" ? "0" : v) }
+  ' "$file"
 }

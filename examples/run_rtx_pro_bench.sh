@@ -30,12 +30,12 @@
 #   ./run_rtx_pro_bench.sh <backend> <mode> [options]
 #
 #   backend: dpdk | dpdk-hds | rdma | roce | ibverbs | socket-udp | socket-tcp
-#   mode:    nic-smoke | issue17 | sweep | drop-curve | drop-curve-matrix |
+#   mode:    nic-smoke | gpu-workload | sweep | drop-curve | drop-curve-matrix |
 #            sw-smoke | build-only
 #
-#   nic-smoke  : wire closed-loop sanity (TX port -> RX port over L2)
-#   issue17    : none/fft/gemm on wire
-#   sw-smoke   : optional build sanity (no NIC, non-wire)
+#   nic-smoke    : wire closed-loop sanity (TX port -> RX port over L2)
+#   gpu-workload : none/fft/gemm on wire (accepts the old name issue17)
+#   sw-smoke     : optional build sanity (no NIC, non-wire)
 #
 # Options:
 #   --seconds N
@@ -103,9 +103,11 @@ fi
 if [[ "$MODE" == "smoke" ]]; then
   MODE="nic-smoke"
 fi
-[[ "$MODE" == "workload-smoke" ]] && MODE="issue17"
-# sw-workload-smoke is the no-cable analogue of workload-smoke/issue17.
-[[ "$MODE" == "sw-workload-smoke" ]] && MODE="sw-issue17"
+# gpu-workload was called issue17 while the issue was open. Both spellings are
+# accepted so the result directories already on disk stay reproducible.
+[[ "$MODE" == "workload-smoke" || "$MODE" == "issue17" ]] && MODE="gpu-workload"
+# sw-gpu-workload is the no-cable analogue of gpu-workload.
+[[ "$MODE" == "sw-workload-smoke" || "$MODE" == "sw-issue17" ]] && MODE="sw-gpu-workload"
 
 # Software-loopback modes need no NIC/cable; all "sw-*" modes share this path.
 # Detecting it from the mode (not a single literal) keeps the wire-only guards
@@ -201,8 +203,8 @@ mkdir -p "$OUT_DIR"
 
 CSV="$OUT_DIR/runs.csv"
 SUMMARY_CSV="$OUT_DIR/summary.csv"
-echo "lang,backend,post_process,payload,batch,target_gbps,seconds,tx_packets,rx_packets,bytes,pps,gbps,rx_gbps,wire_tx_gbps,wire_rx_gbps,drops,drops_kind,cpu_master_pct,cpu_tx_pct,cpu_rx_pct,gpu_sm_pct,gpu_mem_pct,post_process_batch,post_process_gemm_n,post_process_sync" > "$CSV"
-echo "backend,workload,config,seconds,total_data_rate_gbps,total_packets_sent,total_packets_received,total_dropped,drop_source,notes" > "$SUMMARY_CSV"
+echo "lang,backend,post_process,payload,batch,target_gbps,seconds,tx_packets,rx_packets,bytes,pps,gbps,rx_gbps,wire_tx_gbps,wire_rx_gbps,wire_tx_sampled_gbps,wire_rx_sampled_gbps,drops,drops_kind,cpu_master_pct,cpu_tx_pct,cpu_rx_pct,gpu_sm_pct,gpu_mem_pct,post_process_batch,post_process_gemm_n,post_process_sync" > "$CSV"
+echo "backend,workload,config,seconds,throughput_sampled_gbps,goodput_gbps,total_packets_sent,total_packets_received,total_dropped,drop_source,notes" > "$SUMMARY_CSV"
 
 "$SCRIPT_DIR/bench_capture_environment.sh" "$OUT_DIR"
 
@@ -397,10 +399,10 @@ case "$BACKEND" in
     PAYLOADS_HEADLINE=(8000)
     BATCHES_HEADLINE=(10240)
     case "$MODE" in
-      sw-smoke|sw-issue17)
+      sw-smoke|sw-gpu-workload)
         BASE_YAML="$SCRIPT_DIR/daqiri_bench_raw_sw_loopback_rtx_pro_6000.yaml"
         ;;
-      nic-smoke|sweep|drop-curve|drop-curve-matrix|issue17)
+      nic-smoke|sweep|drop-curve|drop-curve-matrix|gpu-workload)
         BASE_YAML="$SCRIPT_DIR/daqiri_bench_raw_tx_rx_rtx_pro_6000_nic.yaml"
         ;;
       *)
@@ -492,6 +494,16 @@ case "$BACKEND" in
     ;;
 esac
 
+# The GPU-workload matrix runs an FFT and a GEMM over the received payload, and
+# cuFFT/cuBLAS are both slower on a length that is not a power of two, so an
+# 8000 B payload charges the transport for a cost that belongs to the libraries.
+# The throughput modes keep 8000 B so their numbers stay comparable to the sweep.
+if [[ "$MODE" == "gpu-workload" || "$MODE" == "sw-gpu-workload" ]]; then
+  case "$BACKEND" in
+    dpdk|dpdk-hds|ibverbs) PAYLOADS_HEADLINE=(8192) ;;
+  esac
+fi
+
 # Discovery overrides backend defaults when sourced from discover_rtx_pro_topology.sh.
 CPU_MASTER="${RTX_MASTER_CORE:-$CPU_MASTER}"
 CPU_TX="${RTX_TX_Q0_POLL:-$CPU_TX}"
@@ -524,9 +536,9 @@ fi
 # (segment split), RoCE, ibverbs, and sockets have no software-loopback path,
 # so fail early with a clear pointer rather than emitting a misleading run.
 if [[ "$IS_SW" == "1" && "$BACKEND" != "dpdk" ]]; then
-  echo "SW-loopback modes (sw-smoke / sw-issue17) are only supported on the 'dpdk' backend." >&2
-  echo "Use: $0 dpdk sw-issue17 --workload fft   (no cable needed)" >&2
-  echo "For $BACKEND, use a wire mode (nic-smoke / issue17) with a cabled link." >&2
+  echo "SW-loopback modes (sw-smoke / sw-gpu-workload) are only supported on the 'dpdk' backend." >&2
+  echo "Use: $0 dpdk sw-gpu-workload --workload fft   (no cable needed)" >&2
+  echo "For $BACKEND, use a wire mode (nic-smoke / gpu-workload) with a cabled link." >&2
   exit 1
 fi
 
@@ -643,14 +655,34 @@ nic_snapshot_if_wire() {
 
 source "$SCRIPT_DIR/rtx_pro_yaml_rewrite.sh"
 
+# The raw bases are written for an 8000 B payload, so their buf_size is 8064 --
+# the 64 B header plus the payload. A larger payload has to grow buf_size with
+# it or the region cannot hold a packet.
+#
+# Only grow: shrinking it for a small payload would also shrink the mempool, and
+# every cell of the payload sweep was measured against the base's size. Echoes
+# nothing when the base is already big enough, which the caller reads as "leave
+# the file alone".
+raw_grown_buf_size() {
+  local payload="$1" header base want
+  header="$(awk '/^ *header_size: / { print $2; exit }' "$BASE_YAML")"
+  base="$(awk '/^ *buf_size: / { if ($2+0 > m+0) m = $2 } END { printf "%d", m+0 }' "$BASE_YAML")"
+  want=$((payload + ${header:-64}))
+  [[ "$want" -gt "$base" ]] && echo "$want"
+}
+
 generate_yaml() {
   local out="$1" payload="$2" batch="$3"
   case "$BACKEND" in
     dpdk)
-      sed -E \
-        -e "s|^( *payload_size: ).*|\1$payload|" \
-        -e "s|^( *batch_size: ).*|\1$batch|g" \
-        "$BASE_YAML" > "$out"
+      local sed_args=(
+        -e "s|^( *payload_size: ).*|\1$payload|"
+        -e "s|^( *batch_size: ).*|\1$batch|g"
+      )
+      local grown_buf
+      grown_buf="$(raw_grown_buf_size "$payload")"
+      [[ -n "$grown_buf" ]] && sed_args+=(-e "s|^( *buf_size: ).*|\1$grown_buf|g")
+      sed -E "${sed_args[@]}" "$BASE_YAML" > "$out"
       rewrite_raw_topology "$out"
       # SW loopback never puts a frame on the wire, so the destination MAC is a
       # don't-care and discovery may not have produced one.
@@ -714,86 +746,12 @@ generate_tx_yaml() {
   rewrite_eth_dst "$out"
 }
 
+# Throughput is the sampled wire rate (what the link held); goodput is what the
+# receiving program read out of it. Reporting only one of the two is what let a
+# host-side shortfall read as a link result.
 append_summary_row() {
-  local workload="$1" config="$2" secs="$3" data_rate="$4" tx_pkts="$5" rx_pkts="$6" drops="$7" drop_kind="$8" notes="$9"
-  echo "$BACKEND,$workload,$config,$secs,$data_rate,$tx_pkts,$rx_pkts,$drops,$drop_kind,$notes" >> "$SUMMARY_CSV"
-}
-
-# mlnx_perf reads the NIC's own per-second counters, which is the only rate here
-# that does not depend on when the application started and stopped its timer.
-# AGENTS.md asks for it on every throughput measurement.
-MLNX_PERF_PIDS=()
-
-start_mlnx_perf() {
-  local dir="$1" iface ns pre
-  MLNX_PERF_PIDS=()
-  command -v mlnx_perf >/dev/null 2>&1 || return 0
-  for iface in "$WIRE_TX_IFACE:$WIRE_TX_NS" "$WIRE_RX_IFACE:$WIRE_RX_NS"; do
-    ns="${iface#*:}"
-    iface="${iface%%:*}"
-    [[ -n "$iface" ]] || continue
-    # A netdev that has been moved into a namespace is invisible from outside
-    # it, so the sampler has to be started in there with it.
-    pre=""
-    [[ -n "$ns" ]] && pre="$(netns_prefix "$ns")"
-    # shellcheck disable=SC2086
-    $pre mlnx_perf -i "$iface" -t 1 > "$dir/mlnx_perf.${iface}.txt" 2>&1 &
-    MLNX_PERF_PIDS+=($!)
-  done
-}
-
-stop_mlnx_perf() {
-  local dir="$1" pid iface
-  for pid in "${MLNX_PERF_PIDS[@]:-}"; do
-    [[ -n "$pid" ]] && kill "$pid" 2>/dev/null
-  done
-  for pid in "${MLNX_PERF_PIDS[@]:-}"; do
-    [[ -n "$pid" ]] && wait "$pid" 2>/dev/null
-  done
-  MLNX_PERF_PIDS=()
-  # The same NIC counters again, but sampled once a second, which gives the rate
-  # the link *held* rather than the whole-window average that nic_report writes.
-  # Report the mean of those samples, not the maximum: a peak is one bucket and
-  # says nothing about what was sustained.
-  #
-  # The first and last samples are dropped because both are partial windows --
-  # the first spans engine bring-up, and the last is however much of a second had
-  # elapsed when this function killed the sampler.
-  #
-  # TX and RX are accumulated separately; mlnx_perf prints both counters for every
-  # port, and folding them together would average a loaded direction with an idle
-  # one.
-  for iface in "$WIRE_TX_IFACE" "$WIRE_RX_IFACE"; do
-    [[ -n "$iface" && -s "$dir/mlnx_perf.${iface}.txt" ]] || continue
-    awk -v ifc="$iface" '
-      function acct(d, val) {
-        seen[d]++
-        if (seen[d] == 1) return
-        # Hold each sample back one round, so the final one is never counted.
-        if (seen[d] > 2) {
-          sum[d] += held[d]
-          n[d]++
-          if (held[d] > peak[d]) peak[d] = held[d]
-        }
-        held[d] = val
-      }
-      /tx_bytes_phy:/ { gsub(/,/, "", $2); acct("tx", $2 * 8.0 / 1e9) }
-      /rx_bytes_phy:/ { gsub(/,/, "", $2); acct("rx", $2 * 8.0 / 1e9) }
-      END {
-        split("tx rx", dirs, " ")
-        for (i = 1; i <= 2; i++) {
-          d = dirs[i]
-          if (n[d] < 1) continue
-          mean = sum[d] / n[d]
-          # An idle direction is not worth a line; every port reports both.
-          if (mean < 1.0) continue
-          printf "%s %s_phy_gbps mean=%.2f peak=%.2f samples=%d\n", \
-            ifc, d, mean, peak[d], n[d]
-        }
-      }
-    ' "$dir/mlnx_perf.${iface}.txt" >> "$dir/mlnx_perf.summary"
-  done
-  [[ -s "$dir/mlnx_perf.summary" ]] && cat "$dir/mlnx_perf.summary" >> "$OUT_DIR/wire_validation.txt"
+  local workload="$1" config="$2" secs="$3" goodput="$4" tx_pkts="$5" rx_pkts="$6" drops="$7" drop_kind="$8" notes="$9"
+  echo "$BACKEND,$workload,$config,$secs,${WIRE_TX_SAMPLED_GBPS:-0},$goodput,$tx_pkts,$rx_pkts,$drops,$drop_kind,$notes" >> "$SUMMARY_CSV"
 }
 
 run_cell() {
@@ -819,7 +777,7 @@ run_cell() {
 
   ( nvidia-smi dmon -s pucvmet -c "$RUN_SECONDS" > "$cell_dir/nvidia_smi_dmon.txt" 2>&1 ) &
   local dmon_pid=$!
-  start_mlnx_perf "$cell_dir"
+  start_wire_sampler "$cell_dir"
 
   local stdout="$cell_dir/stdout.txt"
   local stderr="$cell_dir/stderr.txt"
@@ -884,7 +842,7 @@ run_cell() {
   snapshot_cpu_stat "$cell_dir/cpu_stat.after"
   local nic_after=""
   nic_after="$(nic_snapshot_if_wire)"
-  stop_mlnx_perf "$cell_dir"
+  stop_wire_sampler "$cell_dir"
   wait "$dmon_pid" 2>/dev/null || true
 
   local tx_pkts rx_pkts bytes secs tx_bytes rx_bytes
@@ -1045,6 +1003,15 @@ run_cell() {
   # the curve while moving it. Compare the NIC's own TX rate against the target
   # and say so when they disagree, so the cell can be discarded rather than
   # believed.
+  #
+  # Overshoot fails the label for the same reason undershoot does -- a cell that
+  # sent 30 while asked for 25 is a measurement of 30 -- so both directions are
+  # flagged. The band is not symmetric about the payload rate, though: the target
+  # is payload bytes and the NIC counts the frame, CRC, preamble and interframe
+  # gap too, so a correctly paced sender always reads slightly *above* target.
+  # That overhead is under 1% at the datagram sizes on the ladder (a 65507 B
+  # datagram carries eight frames' worth of it), which is why 105% is loose
+  # enough not to fail a healthy cell.
   if [[ "${target_gbps:-0}" != "0" && -n "${WIRE_TX_GBPS:-}" && "$WIRE_TX_GBPS" != "0.00" ]]; then
     local pace_pct
     pace_pct="$(awk -v w="$WIRE_TX_GBPS" -v t="$target_gbps" \
@@ -1052,11 +1019,18 @@ run_cell() {
     if [[ "$pace_pct" -lt 95 ]]; then
       echo "WARN: $cell paced to ${target_gbps} Gb/s but the NIC sent only ${WIRE_TX_GBPS} Gb/s (${pace_pct}%); the sender never held the target, so this cell is not a measurement of it" >&2
       notes="${notes:+$notes; }pacing-undershoot-${pace_pct}pct"
+    elif [[ "$pace_pct" -gt 105 ]]; then
+      echo "WARN: $cell paced to ${target_gbps} Gb/s but the NIC sent ${WIRE_TX_GBPS} Gb/s (${pace_pct}%); the sender exceeded the target by more than framing overhead, so this cell is not a measurement of it" >&2
+      notes="${notes:+$notes; }pacing-overshoot-${pace_pct}pct"
     fi
   fi
 
   if [[ "$BACKEND" == "ibverbs" ]]; then
-    notes="host-staged"
+    # Two processes, so the sender's own count is the reference for what the
+    # receiver should have taken; a single-process cell cannot lose frames this
+    # way. host-staged records that the receive region is host memory, which is
+    # not the GPUDirect configuration the DPDK rows use.
+    notes="${notes:+$notes; }paired-dpdk-tx; host-staged"
     if [[ -n "${tx_pkts:-}" && "$tx_pkts" -gt 0 && "$rx_pkts" -lt "$tx_pkts" ]]; then
       local external_loss=$((tx_pkts - rx_pkts))
       drops=$((drops + external_loss))
@@ -1105,7 +1079,7 @@ run_cell() {
   local pp_gemm_n="${GEMM_N:-derived}"
   local pp_sync="${SYNC_INTERVAL:-default}"
 
-  echo "$lang,$BACKEND,$workload,$payload,$batch,$target_gbps,$secs,$tx_pkts,$rx_pkts,$bytes,$pps,$gbps,$rx_gbps,$WIRE_TX_GBPS,$WIRE_RX_GBPS,$drops,$drops_kind,$cpu_master_pct,$cpu_tx_pct,$cpu_rx_pct,$gpu_sm,$gpu_mem,$pp_batch,$pp_gemm_n,$pp_sync" \
+  echo "$lang,$BACKEND,$workload,$payload,$batch,$target_gbps,$secs,$tx_pkts,$rx_pkts,$bytes,$pps,$gbps,$rx_gbps,$WIRE_TX_GBPS,$WIRE_RX_GBPS,$WIRE_TX_SAMPLED_GBPS,$WIRE_RX_SAMPLED_GBPS,$drops,$drops_kind,$cpu_master_pct,$cpu_tx_pct,$cpu_rx_pct,$gpu_sm,$gpu_mem,$pp_batch,$pp_gemm_n,$pp_sync" \
     | tee -a "$CSV"
 
   append_summary_row "$workload" "$(basename "$yaml")" "$secs" "$data_rate_gbps" "$tx_pkts" "$rx_pkts" "$drops" "$drops_kind" "$notes"
@@ -1119,9 +1093,9 @@ run_cell_or_record_failure() {
 # Driver
 # --------------------------------------------------------------------------
 case "$MODE" in
-  issue17|sw-issue17)
-    # Same none/fft/gemm workload matrix on the wire (issue17) or over the
-    # software loopback (sw-issue17). The SW variant validates the FFT/GEMM
+  gpu-workload|sw-gpu-workload)
+    # Same none/fft/gemm workload matrix on the wire (gpu-workload) or over the
+    # software loopback (sw-gpu-workload). The SW variant validates the FFT/GEMM
     # post-process path end-to-end with no cable, so results are labelled
     # non-wire in the summary via the SW config name.
     for wl in none fft gemm; do

@@ -70,7 +70,7 @@ OUT_DIR="${DAQIRI_BENCH_RESULTS_DIR:-$REPO_ROOT/bench-results}/$TS-rtx-pro-mq"
 mkdir -p "$OUT_DIR"
 
 CSV="$OUT_DIR/runs.csv"
-echo "cell,tx_cores,rx_cores,payload,rep,gbps,rx_gbps,wire_tx_gbps,wire_rx_gbps,pps,drops,cpu_master,cpu_tx_q0_poll,cpu_tx_q0_work,cpu_tx_q1_poll,cpu_tx_q1_work,cpu_rx_q0_poll,cpu_rx_q0_work,cpu_rx_q1_poll,cpu_rx_q1_work,gpu_sm,gpu_mem" > "$CSV"
+echo "cell,tx_cores,rx_cores,payload,rep,gbps,rx_gbps,wire_tx_gbps,wire_rx_gbps,wire_tx_sampled_gbps,wire_rx_sampled_gbps,pps,drops,cpu_master,cpu_tx_q0_poll,cpu_tx_q0_work,cpu_tx_q1_poll,cpu_tx_q1_work,cpu_rx_q0_poll,cpu_rx_q0_work,cpu_rx_q1_poll,cpu_rx_q1_work,gpu_sm,gpu_mem" > "$CSV"
 
 # The wire measurement and its gate come from the NIC itself, shared with
 # run_rtx_pro_bench.sh so both runners agree on what "crossed the cable" means.
@@ -208,11 +208,13 @@ run_cell() {
   snapshot_cpu_stat "$run_dir/cpu_stat.before"
   local nic_before nic_after
   nic_before="$(nic_snapshot)"
+  start_wire_sampler "$run_dir"
 
   local bench_rc=0
   "$BENCH_BIN" "$tmp_cfg" --seconds "$RUN_SECONDS" > "$stdout" 2> "$stderr" || bench_rc=$?
 
   nic_after="$(nic_snapshot)"
+  stop_wire_sampler "$run_dir"
   snapshot_cpu_stat "$run_dir/cpu_stat.after"
 
   local tx_pkts tx_bytes rx_pkts rx_bytes secs
@@ -250,7 +252,7 @@ run_cell() {
   cpu_csv="$(IFS=,; echo "${cpu_vals[*]}")"
   gpu_csv="$(gpu_sample "$run_dir/gpu.txt")"
 
-  echo "$cell,$tx_cores,$rx_cores,$payload,$rep,$tx_gbps,$rx_gbps,$WIRE_TX_GBPS,$WIRE_RX_GBPS,$pps,$drops,$cpu_csv,$gpu_csv" | tee -a "$CSV"
+  echo "$cell,$tx_cores,$rx_cores,$payload,$rep,$tx_gbps,$rx_gbps,$WIRE_TX_GBPS,$WIRE_RX_GBPS,$WIRE_TX_SAMPLED_GBPS,$WIRE_RX_SAMPLED_GBPS,$pps,$drops,$cpu_csv,$gpu_csv" | tee -a "$CSV"
 }
 
 echo "RTX PRO 6000 multi-queue sweep -- ${RUN_SECONDS}s per (cell, payload)"
@@ -272,10 +274,15 @@ done
 
 echo
 echo "==================== RTX PRO multi-queue sweep ===================="
-printf "%-6s %-9s %-9s %8s %10s %10s %8s\n" "cell" "tx_cores" "rx_cores" "payload" "tx_Gbps" "rx_Gbps" "drops"
-printf "%-6s %-9s %-9s %8s %10s %10s %8s\n" "----" "--------" "--------" "-------" "-------" "-------" "-----"
-while IFS=, read -r cell tx_cores rx_cores payload rep tx_gbps rx_gbps pps drops _rest; do
-  printf "%-6s %-9s %-9s %8s %10s %10s %8s\n" "$cell" "$tx_cores" "$rx_cores" "$payload" "$tx_gbps" "$rx_gbps" "$drops"
+# Throughput is the sampled wire rate, goodput what the receiving program read.
+# Named field-by-field off the header rather than counted, since the positional
+# read silently reports the wrong column the moment one is added.
+printf "%-6s %-9s %-9s %8s %10s %10s %8s\n" "cell" "tx_cores" "rx_cores" "payload" "wire_Gbps" "app_Gbps" "drops"
+printf "%-6s %-9s %-9s %8s %10s %10s %8s\n" "----" "--------" "--------" "-------" "---------" "--------" "-----"
+while IFS=, read -r cell tx_cores rx_cores payload _rep _tx_gbps app_rx_gbps \
+                    _wire_tx _wire_rx sampled_tx _sampled_rx _pps drops _rest; do
+  printf "%-6s %-9s %-9s %8s %10s %10s %8s\n" \
+    "$cell" "$tx_cores" "$rx_cores" "$payload" "$sampled_tx" "$app_rx_gbps" "$drops"
 done < <(tail -n +2 "$CSV")
 echo "==================================================================="
 echo

@@ -12,7 +12,7 @@
 #
 # Run:
 #   sudo ./build/examples/daqiri_bench_raw_hds <this.yaml> --seconds 30 --workload fft
-#   sudo ./examples/run_rtx_pro_bench.sh dpdk-hds issue17 --seconds 30
+#   sudo ./examples/run_rtx_pro_bench.sh dpdk-hds gpu-workload --seconds 30
 #
 %YAML 1.2
 ---
