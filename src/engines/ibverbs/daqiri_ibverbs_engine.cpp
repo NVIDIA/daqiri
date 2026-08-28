@@ -4708,11 +4708,41 @@ bool IbverbsEngine::lock_direct_tx_queue(IbvTxQueue& q, std::unique_lock<std::mu
   return true;
 }
 
+// eMPW can represent a scheduled burst when its only timestamp is on packet 0:
+// one WAIT WQE gates the packed SEND WQEs, and all remaining packets follow
+// immediately. Multiple timed packets require the regular per-packet SEND path.
+static bool empw_compatible_burst(const BurstParams* burst) {
+  // A one-packet enhanced MPW session is not valid; use an ordinary SEND WQE
+  // for single-packet bursts (including queue primers).
+  if (burst->hdr.hdr.num_segs != 1 || burst->hdr.hdr.num_pkts < 2) {
+    return false;
+  }
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) == 0) {
+    return true;
+  }
+  if (burst->hdr.hdr.num_pkts < 3) {
+    return false;
+  }
+  const uint64_t* txtime = burst_ts_arr(burst);
+  if (txtime[0] == 0) {
+    return false;
+  }
+  for (uint16_t i = 1; i < burst->hdr.hdr.num_pkts; ++i) {
+    if (txtime[i] != 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
 uint64_t IbverbsEngine::tx_burst_wqebbs(const IbvTxQueue& q, const BurstParams* burst) const {
   const uint64_t packets = burst->hdr.hdr.num_pkts;
   const bool scheduled = (burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) != 0;
-  if (q.empw_enabled && burst->hdr.hdr.num_segs == 1 && !scheduled) {
-    return empw_burst_wqebbs(packets);
+  if (q.empw_enabled && empw_compatible_burst(burst)) {
+    // A timed packet must break the eMPW session: WAIT + ordinary SEND for
+    // packet 0, then pack the remaining untimed packets into eMPW WQEs.
+    return scheduled ? 2 + empw_burst_wqebbs(packets - 1)
+                     : empw_burst_wqebbs(packets);
   }
   uint64_t wqebbs = packets;
   if (scheduled) {
@@ -5000,7 +5030,7 @@ void* IbverbsEngine::emit_wait_wqe(IbvTxQueue& q, uint64_t when_ns) {
   wctrl->qpn_ds = htobe32((q.sqn << 8) | 3u);  // ctrl(1) + wseg(2) = 3 DS
   wctrl->signature = 0;
   wctrl->dci_stream_channel_id = 0;
-  wctrl->fm_ce_se = 0;  // unsignaled
+  wctrl->fm_ce_se = (MLX5_COMP_ONLY_FIRST_ERR << MLX5_COMP_MODE_OFFSET);
   wctrl->imm = 0;
   auto* ws = reinterpret_cast<struct mlx5_wqe_wseg*>(wbase + 16);
   ws->operation = htobe32(MLX5_WAIT_COND_CYCLIC_SMALLER);
@@ -5019,7 +5049,8 @@ void* IbverbsEngine::emit_wait_wqe(IbvTxQueue& q, uint64_t when_ns) {
 }
 
 // Pack multiple single-segment packets into each enhanced multi-packet WQE.
-void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst) {
+void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst,
+                                       uint16_t first_packet) {
   const int n = static_cast<int>(burst->hdr.hdr.num_pkts);
   static constexpr int SIGNAL_EVERY_WQE = 16;
   uint8_t* const sq_buf = static_cast<uint8_t*>(q.dv_qp.sq.buf);
@@ -5028,7 +5059,7 @@ void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst) {
   uint8_t* const sq_end = sq_buf + static_cast<size_t>(wqe_cnt) * stride;
   const uint32_t lkey = q.regions[0].lkey;
   void* last_ctrl = nullptr;
-  int packet = 0;
+  int packet = static_cast<int>(first_packet);
   int burst_wqe = 0;
 
   while (packet < n) {
@@ -5099,8 +5130,39 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
     return;
   }
   const bool scheduled = (burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) != 0;
-  if (q.empw_enabled && segs == 1 && !scheduled) {
-    post_tx_burst_empw(q, burst);
+  if (q.empw_enabled && empw_compatible_burst(burst)) {
+    if (scheduled) {
+      // A timestamp breaks an eMPW session. Gate packet 0 with WAIT + SEND,
+      // then pack the remaining untimed packets into eMPW WQEs.
+      emit_wait_wqe(q, burst_ts_arr(burst)[0]);
+      uint8_t* const sq_buf = static_cast<uint8_t*>(q.dv_qp.sq.buf);
+      const uint32_t wqe_cnt = q.dv_qp.sq.wqe_cnt;
+      const uint32_t stride = q.dv_qp.sq.stride;
+      const uint32_t idx = q.sq_pi % wqe_cnt;
+      uint8_t* const seg = sq_buf + static_cast<size_t>(idx) * stride;
+      auto* const ctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(seg);
+      ctrl->opmod_idx_opcode =
+          htobe32(((q.sq_pi & 0xffff) << 8) | MLX5_OPCODE_SEND);
+      ctrl->qpn_ds = htobe32((q.sqn << 8) | 3u);
+      ctrl->signature = 0;
+      ctrl->dci_stream_channel_id = 0;
+      ctrl->fm_ce_se = (MLX5_COMP_ONLY_FIRST_ERR << MLX5_COMP_MODE_OFFSET);
+      ctrl->imm = 0;
+      memset(seg + 16, 0, 16);
+      reinterpret_cast<struct mlx5_wqe_eth_seg*>(seg + 16)->cs_flags =
+          MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
+      auto* const dseg = reinterpret_cast<struct mlx5_wqe_data_seg*>(seg + 32);
+      dseg->byte_count = htobe32(burst->pkt_lens[0][0]);
+      dseg->lkey = htobe32(q.regions[0].lkey);
+      dseg->addr = htobe64(reinterpret_cast<uint64_t>(burst->pkts[0][0]));
+      ++q.slots_posted;
+      q.wqe_slot_cum[idx] = q.slots_posted;
+      ++q.sq_pi;
+      q.wqe_wqebb_cum[idx] = q.sq_pi;
+      post_tx_burst_empw(q, burst, 1);
+    } else {
+      post_tx_burst_empw(q, burst);
+    }
     return;
   }
   static constexpr int SIGNAL_EVERY = 32;
