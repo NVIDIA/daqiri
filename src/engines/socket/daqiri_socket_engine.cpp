@@ -677,21 +677,6 @@ void SocketEngine::free_tx_metadata(BurstParams* burst) {
   delete burst;
 }
 
-Status SocketEngine::get_tx_metadata_buffer(BurstParams** burst) {
-  if (is_roce_protocol()) {
-#if DAQIRI_ENGINE_RDMA
-    return roce_engine_ != nullptr ? roce_engine_->get_tx_metadata_buffer(burst)
-                                : roce_not_initialized("get_tx_metadata_buffer");
-#else
-    return roce_not_initialized("get_tx_metadata_buffer");
-#endif
-  }
-
-  if (burst == nullptr) { return Status::INVALID_PARAMETER; }
-  *burst = create_tx_burst_params();
-  return Status::SUCCESS;
-}
-
 SocketEngine::EndpointState* SocketEngine::endpoint_for_port(uint16_t port) {
   for (auto& ep : endpoints_) {
     if (ep != nullptr && ep->port == port) { return ep.get(); }

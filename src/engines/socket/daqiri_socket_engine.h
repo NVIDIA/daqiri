@@ -81,7 +81,6 @@ class SocketEngine : public Engine {
 
   void free_rx_metadata(BurstParams* burst) override;
   void free_tx_metadata(BurstParams* burst) override;
-  Status get_tx_metadata_buffer(BurstParams** burst) override;
   Status send_tx_burst(BurstParams* burst) override;
   Status get_mac_addr(int port, char* mac) override;
 

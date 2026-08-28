@@ -155,7 +155,6 @@ class DpdkEngine : public Engine {
   Status set_packet_tx_time(BurstParams* burst, int idx, uint64_t timestamp);
   void free_rx_metadata(BurstParams* burst) override;
   void free_tx_metadata(BurstParams* burst) override;
-  Status get_tx_metadata_buffer(BurstParams** burst) override;
   Status send_tx_burst(BurstParams* burst) override;
   Status wait_for_tx_idle(uint32_t timeout_ms) override;
   Status get_mac_addr(int port, char* mac) override;

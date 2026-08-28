@@ -108,7 +108,6 @@ class Engine {
   virtual Status get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info);
   virtual void free_rx_metadata(BurstParams* burst) = 0;
   virtual void free_tx_metadata(BurstParams* burst) = 0;
-  virtual Status get_tx_metadata_buffer(BurstParams** burst) = 0;
   virtual Status send_tx_burst(BurstParams* burst) = 0;
   virtual Status wait_for_tx_idle(uint32_t timeout_ms);
   virtual Status get_mac_addr(int port, char* mac) = 0;

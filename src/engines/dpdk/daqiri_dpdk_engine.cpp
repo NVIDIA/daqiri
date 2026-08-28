@@ -6905,28 +6905,6 @@ void DpdkEngine::free_tx_metadata(BurstParams* burst) {
   rte_mempool_put(tx_metadata, burst);
 }
 
-Status DpdkEngine::get_tx_metadata_buffer(BurstParams **burst) {
-  if (burst == nullptr) {
-    return Status::NULL_PTR;
-  }
-  *burst = nullptr;
-  if (rte_mempool_get(tx_metadata, reinterpret_cast<void **>(burst)) != 0) {
-    // No metadata object exists on this path, so port and queue fields are not
-    // available to report.
-    DAQIRI_LOG_CRITICAL(
-        "Running out of TX meta buffers due to high rates. Either increase "
-        "your number of metadata buffers (current: {}) with `tx_meta_buffers` "
-        "(will increase memory usage) or increase your `batch_size` (will "
-        "increase latency)",
-        cfg_.tx_meta_buffers_);
-    return Status::NO_FREE_BURST_BUFFERS;
-  }
-  // Clear the recycled running L2 byte total (see create_tx_burst_params).
-  (*burst)->hdr.hdr.nbytes = 0;
-
-  return Status::SUCCESS;
-}
-
 Status DpdkEngine::wait_for_tx_idle(uint32_t timeout_ms) {
   const auto pool_is_full = [](const rte_mempool *pool) {
     return pool == nullptr || rte_mempool_full(pool) != 0;

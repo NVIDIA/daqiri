@@ -4784,11 +4784,6 @@ BurstParams* IbverbsEngine::create_tx_burst_params() {
   return burst;
 }
 
-Status IbverbsEngine::get_tx_metadata_buffer(BurstParams** burst) {
-  *burst = create_tx_burst_params();
-  return *burst ? Status::SUCCESS : Status::NO_FREE_BURST_BUFFERS;
-}
-
 bool IbverbsEngine::is_tx_burst_available(BurstParams* burst) {
   if (burst == nullptr) {
     return false;

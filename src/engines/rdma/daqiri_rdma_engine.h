@@ -151,7 +151,6 @@ class RdmaEngine : public Engine {
   };
   void free_rx_metadata(BurstParams* burst) override;
   void free_tx_metadata(BurstParams* burst) override;
-  Status get_tx_metadata_buffer(BurstParams** burst) override;
   Status send_tx_burst(BurstParams* burst) override;
   uint64_t get_burst_tot_byte(BurstParams* burst) override;
   BurstParams* create_tx_burst_params() override;
