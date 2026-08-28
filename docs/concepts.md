@@ -270,6 +270,11 @@ queue requires `cpu_core` and `batch_size`; RX queues may also use `timeout_us`
 to return a partial batch. `indirect` mode also allows more processing jitter in the application threads by using a zero-copy ring in between DAQIRI and the user. This is the existing behavior and is supported by
 all applicable engines.
 
+The DPDK engine permits multiple RX queues to share one worker core and multiple
+TX queues to share one worker core. An RX queue worker and a TX queue worker
+cannot share the same `cpu_core`, because DPDK permits only one remote worker
+function per lcore; such configurations are rejected during validation.
+
 In **direct mode**, there is no worker between the application and the queue.
 The application thread performs the queue work as part of its normal API calls:
 
