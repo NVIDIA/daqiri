@@ -954,7 +954,11 @@ Status IbverbsEngine::devx_create_rq(IbvRxQueue& q, uint32_t stride_log, uint32_
   }
   memset(q.wq_buf, 0, umem_bytes);
   q.rq_dbr = reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(q.wq_buf) + dbr_off);
-  q.wq_umem = mlx5dv_devx_umem_reg(q.ctx, q.wq_buf, umem_bytes, 0x7 /*rw*/);
+  // Receive WQ memory is consumed by the HCA and does not require remote
+  // access permissions. Match the mlx5/DPDK DevX RQ resource path, which
+  // registers this UMEM with no access flags.
+  q.wq_umem =
+      mlx5dv_devx_umem_reg(q.ctx, q.wq_buf, umem_bytes, 0);
   if (q.wq_umem == nullptr) {
     DAQIRI_LOG_CRITICAL("mlx5dv_devx_umem_reg failed: {}", strerror(errno));
     return Status::GENERIC_FAILURE;
@@ -980,8 +984,9 @@ Status IbverbsEngine::devx_create_rq(IbvRxQueue& q, uint32_t stride_log, uint32_
   DEVX_SET(wq, wq, log_wq_stride, log2_floor(q.wqe_stride));
   DEVX_SET(wq, wq, log_wq_sz, log2_floor(q.num_wqe));
   DEVX_SET(wq, wq, pd, dvpd.pdn);
-  // No uar_page: an RQ rings its doorbell via the memory dbr record, not a UAR.
-  DEVX_SET(wq, wq, log_wq_pg_sz, log2_floor(static_cast<uint32_t>(page)) - 12u);
+  // WQ page size is encoded relative to the mlx5 4 KiB adapter page, not the
+  // operating-system page size (which is 64 KiB on GH200).
+  DEVX_SET(wq, wq, log_wq_pg_sz, MLX5_ADAPTER_PAGE_SIZE_4_KIB);
   DEVX_SET64(wq, wq, dbr_addr, dbr_off);
   DEVX_SET(wq, wq, dbr_umem_id, q.wq_umem->umem_id);
   DEVX_SET(wq, wq, wq_umem_id, q.wq_umem->umem_id);
