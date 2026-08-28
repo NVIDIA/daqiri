@@ -272,8 +272,10 @@ Status Engine::register_memory_regions() {
   for (const auto& ar : ar_) {
     const auto& mr = cfg_.mrs_[ar.second.mr_name_];
 
-    // Hugepages use the normal rte functions that don't require extmem
-    if (mr.kind_ == MemoryKind::HUGE) {
+    // DAQIRI-owned hugepages use the normal EAL-backed pool. Caller-owned
+    // hugepages must be registered as external memory so the pool uses the
+    // supplied address.
+    if (mr.kind_ == MemoryKind::HUGE && !ar.second.external_) {
       continue;
     }
 
@@ -285,6 +287,13 @@ Status Engine::register_memory_regions() {
 
     int ret = 0;
     if (mr.kind_ == MemoryKind::DEVICE) {
+      const auto resolved = external_mrs_.find(mr.name_);
+      CudaContextGuard context_guard(
+          resolved == external_mrs_.end() ? nullptr : resolved->second.cuda_context);
+      if (resolved != external_mrs_.end() && !context_guard.valid()) {
+        DAQIRI_LOG_CRITICAL("Could not make the CUDA context for MR {} current", mr.name_);
+        return Status::INVALID_PARAMETER;
+      }
       int flag = 0;
       CUresult s = cuDeviceGetAttribute(&flag, CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED, mr.affinity_);
       if (s != CUDA_SUCCESS) {
@@ -374,7 +383,9 @@ struct rte_mempool* Engine::create_pktmbuf_pool(const std::string& name,
   struct rte_mempool* pool;
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-  if (mr.kind_ == MemoryKind::HUGE) {
+  const auto ar_it = ar_.find(mr.name_);
+  const bool external = ar_it != ar_.end() && ar_it->second.external_;
+  if (mr.kind_ == MemoryKind::HUGE && !external) {
     pool =
         rte_pktmbuf_pool_create(name.c_str(), mr.num_bufs_, 0, 0, mr.adj_size_, numa_from_mem(mr));
   } else {

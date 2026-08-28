@@ -382,6 +382,7 @@ class DpdkEngine : public Engine {
     std::vector<ReorderOutputBufferState> buffers;
     size_t next_buffer = 0;
     int cuda_device_id = 0;
+    CUcontext cuda_context = nullptr;
     bool cuda_events_enabled = false;
   };
 
@@ -415,6 +416,7 @@ class DpdkEngine : public Engine {
     uint64_t timeout_cycles = 0;
     bool use_gpu_backend = false;
     int cuda_device_id = 0;
+    CUcontext cuda_context = nullptr;
     cudaStream_t stream = nullptr;
     uint32_t cuda_staging_capacity = 0;
 

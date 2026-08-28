@@ -166,6 +166,23 @@ struct UDPIPV4Pkt {
 
 enum class MemoryKind { HOST, HOST_PINNED, HUGE, DEVICE, INVALID };
 
+struct ExternalMemoryRegion {
+  void* data = nullptr;
+  size_t capacity = 0;
+};
+
+using MemoryRegionBindings = std::unordered_map<std::string, ExternalMemoryRegion>;
+
+struct MemoryRegionRequirement {
+  MemoryKind kind = MemoryKind::INVALID;
+  size_t slot_size = 0;
+  size_t num_bufs = 0;
+  size_t capacity = 0;
+  size_t alignment = 0;
+};
+
+using MemoryRegionRequirements = std::unordered_map<std::string, MemoryRegionRequirement>;
+
 enum MemoryAccess {
   MEM_ACCESS_LOCAL = 1U,
   MEM_ACCESS_RDMA_WRITE = 1U << 1,

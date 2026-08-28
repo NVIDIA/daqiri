@@ -60,6 +60,12 @@ These settings apply globally to both TX and RX:
 `memory_regions:` List of regions where packet buffers are stored. The number of regions
 and their `kind` determines the receive mode (CPU-only, header-data split, or batched GPU).
 
+YAML describes region semantics but never contains process-local pointers. C++ and Python callers
+can attach application-owned allocations by name at initialization; see
+[Application-owned memory regions](cpp.md#application-owned-memory-regions). A runtime binding
+replaces DAQIRI's allocation for that region. The legacy `owned: false` form requires a matching
+runtime binding.
+
 - **`name`**: Memory region name. Referenced by queue configurations.
   - type: `string`
 - **`kind`**: Memory type.

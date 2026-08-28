@@ -230,13 +230,13 @@ py::tuple segment_packet_bytes_impl(BurstParams *burst, int seg, int idx,
   return py::make_tuple(status, py::bytes(out));
 }
 
-Status daqiri_init_from_python(py::object config_obj) {
+Status daqiri_init_from_python(py::object config_obj, const MemoryRegionBindings& bindings) {
   try {
     if (py::isinstance<py::str>(config_obj) ||
         py::isinstance<py::bytes>(config_obj)) {
       const auto yaml_string_or_path = py::cast<std::string>(config_obj);
       py::gil_scoped_release release;
-      return daqiri_init(yaml_string_or_path);
+      return daqiri_init(yaml_string_or_path, bindings);
     }
 
     if (py::isinstance<py::dict>(config_obj)) {
@@ -245,13 +245,13 @@ Status daqiri_init_from_python(py::object config_obj) {
           config_obj, py::arg("default_flow_style") = false);
       const auto yaml_str = py::cast<std::string>(py_yaml_str);
       py::gil_scoped_release release;
-      return daqiri_init_from_yaml_string(yaml_str);
+      return daqiri_init_from_yaml_string(yaml_str, bindings);
     }
 
     if (py::isinstance<NetworkConfig>(config_obj)) {
       auto &config = config_obj.cast<NetworkConfig &>();
       py::gil_scoped_release release;
-      return daqiri_init(config);
+      return daqiri_init(config, bindings);
     }
 
     if (py::hasattr(config_obj, "value")) {
@@ -259,7 +259,7 @@ Status daqiri_init_from_python(py::object config_obj) {
       const auto yaml_string_or_path =
           py::cast<std::string>(yaml_string_or_path_obj);
       py::gil_scoped_release release;
-      return daqiri_init(yaml_string_or_path);
+      return daqiri_init(yaml_string_or_path, bindings);
     }
 
     if (py::hasattr(config_obj, "as_dict")) {
@@ -268,14 +268,14 @@ Status daqiri_init_from_python(py::object config_obj) {
           config_obj.attr("as_dict")(), py::arg("default_flow_style") = false);
       const auto yaml_str = py::cast<std::string>(py_yaml_str);
       py::gil_scoped_release release;
-      return daqiri_init_from_yaml_string(yaml_str);
+      return daqiri_init_from_yaml_string(yaml_str, bindings);
     }
 
     const auto yaml_string_or_path_obj = py::str(config_obj);
     const auto yaml_string_or_path =
         py::cast<std::string>(yaml_string_or_path_obj);
     py::gil_scoped_release release;
-    return daqiri_init(yaml_string_or_path);
+    return daqiri_init(yaml_string_or_path, bindings);
   } catch (const py::error_already_set &e) {
     DAQIRI_LOG_ERROR("Python config conversion failed: {}", e.what());
     return Status::INTERNAL_ERROR;
@@ -743,6 +743,29 @@ void bind_config_types(py::module_ &m) {
       .def_readwrite("num_bufs", &MemoryRegionConfig::num_bufs_)
       .def_readwrite("owned", &MemoryRegionConfig::owned_);
 
+  py::class_<ExternalMemoryRegion>(m, "ExternalMemoryRegion")
+      .def(py::init([](uintptr_t address, size_t capacity) {
+             return ExternalMemoryRegion{reinterpret_cast<void*>(address), capacity};
+           }),
+           "address"_a, "capacity"_a)
+      .def_property(
+          "address",
+          [](const ExternalMemoryRegion& region) {
+            return reinterpret_cast<uintptr_t>(region.data);
+          },
+          [](ExternalMemoryRegion& region, uintptr_t address) {
+            region.data = reinterpret_cast<void*>(address);
+          })
+      .def_readwrite("capacity", &ExternalMemoryRegion::capacity);
+
+  py::class_<MemoryRegionRequirement>(m, "MemoryRegionRequirement")
+      .def(py::init<>())
+      .def_readonly("kind", &MemoryRegionRequirement::kind)
+      .def_readonly("slot_size", &MemoryRegionRequirement::slot_size)
+      .def_readonly("num_bufs", &MemoryRegionRequirement::num_bufs)
+      .def_readonly("capacity", &MemoryRegionRequirement::capacity)
+      .def_readonly("alignment", &MemoryRegionRequirement::alignment);
+
   py::class_<RxQueueConfig>(m, "RxQueueConfig")
       .def(py::init<>())
       .def_readwrite("common", &RxQueueConfig::common_)
@@ -985,13 +1008,31 @@ PYBIND11_MODULE(_daqiri, m) {
   bind_enums(m);
   bind_config_types(m);
 
-  m.def("daqiri_init", &daqiri_init_from_python, "config"_a,
+  m.def("daqiri_init", &daqiri_init_from_python, "config"_a, "bindings"_a = MemoryRegionBindings{},
         "Initialize DAQIRI from a YAML path, YAML string, dict, or config-like "
         "object");
-  m.def("daqiri_init_from_yaml_string", &daqiri_init_from_yaml_string,
-        "yaml_string"_a, py::call_guard<py::gil_scoped_release>());
-  m.def("daqiri_init_from_yaml_file", &daqiri_init_from_yaml_file,
-        "yaml_path"_a, py::call_guard<py::gil_scoped_release>());
+  m.def(
+      "daqiri_init_from_yaml_string",
+      [](const std::string &yaml, const MemoryRegionBindings &bindings) {
+        return daqiri_init_from_yaml_string(yaml, bindings);
+      },
+      "yaml_string"_a, "bindings"_a = MemoryRegionBindings{},
+      py::call_guard<py::gil_scoped_release>());
+  m.def(
+      "daqiri_init_from_yaml_file",
+      [](const std::string& path, const MemoryRegionBindings& bindings) {
+        return daqiri_init_from_yaml_file(path, bindings);
+      },
+      "yaml_path"_a, "bindings"_a = MemoryRegionBindings{},
+      py::call_guard<py::gil_scoped_release>());
+  m.def(
+      "get_memory_region_requirements",
+      [](const NetworkConfig &config) {
+        MemoryRegionRequirements requirements;
+        const Status status = get_memory_region_requirements(config, requirements);
+        return py::make_tuple(status, requirements);
+      },
+      "config"_a);
   m.def(
       "parse_network_config",
       [](const std::string &yaml_string_or_path) {

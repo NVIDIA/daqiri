@@ -605,7 +605,6 @@ Status IbverbsEngine::register_mr(struct ibv_pd* pd, const std::string& mr_name,
       DAQIRI_LOG_CRITICAL("Could not activate the owning CUDA context for MR {}", mr_name);
       return Status::INTERNAL_ERROR;
     }
-
     const size_t page = sysconf(_SC_PAGESIZE);
     const auto va = reinterpret_cast<uintptr_t>(base);
     const uintptr_t aligned = va & ~(static_cast<uintptr_t>(page) - 1);
@@ -3195,10 +3194,53 @@ Status IbverbsEngine::init_reorder(IbvRxQueue& q, const InterfaceConfig& intf,
     plan.copy_source_offset = rc.payload_byte_offset_;
     plan.slot_stride = static_cast<uint32_t>(src_mr.buf_size_ - rc.payload_byte_offset_);
     plan.data_type_conversion = rdr_uses_conversion(rc);
-    plan.cuda_device_id = src_mr.affinity_;
+    if (src_mr.kind_ == MemoryKind::DEVICE && out_mr.kind_ == MemoryKind::DEVICE &&
+        src_mr.affinity_ != out_mr.affinity_) {
+      DAQIRI_LOG_CRITICAL(
+          "Reorder '{}' requires input/output memory on the same GPU (src affinity {} "
+          "!= reorder affinity {})",
+          rc.name_, src_mr.affinity_, out_mr.affinity_);
+      return Status::INVALID_PARAMETER;
+    }
+    if (src_mr.kind_ == MemoryKind::DEVICE) {
+      plan.cuda_device_id = src_mr.affinity_;
+    } else if (out_mr.kind_ == MemoryKind::DEVICE) {
+      plan.cuda_device_id = out_mr.affinity_;
+    } else {
+      plan.cuda_device_id = src_mr.affinity_;
+    }
+    const auto select_region_context = [&](const std::string& mr_name, const char* role) {
+      const auto& region = ar_.at(mr_name);
+      if (region.cuda_device_ != plan.cuda_device_id) {
+        DAQIRI_LOG_CRITICAL(
+            "Reorder '{}' {} MR '{}' uses CUDA device {}, but the plan uses device {}",
+            rc.name_,
+            role,
+            mr_name,
+            region.cuda_device_,
+            plan.cuda_device_id);
+        return Status::INVALID_PARAMETER;
+      }
+      if (plan.cuda_context != nullptr && region.cuda_context_ != nullptr &&
+          plan.cuda_context != region.cuda_context_) {
+        DAQIRI_LOG_CRITICAL("Reorder '{}' source and output use different CUDA contexts", rc.name_);
+        return Status::INVALID_PARAMETER;
+      }
+      plan.cuda_context = region.cuda_context_;
+      return Status::SUCCESS;
+    };
+    if (select_region_context(q.mr_name, "source") != Status::SUCCESS ||
+        select_region_context(rc.memory_region_, "output") != Status::SUCCESS) {
+      return Status::INVALID_PARAMETER;
+    }
     plan.acc_ptrs.reserve(plan.packets_per_batch);
 
-    cudaSetDevice(plan.cuda_device_id);
+    CudaContextGuard context_guard(plan.cuda_context);
+    if (plan.cuda_context == nullptr) {
+      cudaSetDevice(plan.cuda_device_id);
+    } else if (!context_guard.valid()) {
+      return Status::INTERNAL_ERROR;
+    }
     if (cudaMalloc(reinterpret_cast<void**>(&plan.d_input_ptrs),
                    sizeof(void*) * plan.packets_per_batch) != cudaSuccess) {
       DAQIRI_LOG_CRITICAL("Reorder '{}' cudaMalloc(d_input_ptrs) failed", rc.name_);
@@ -3299,7 +3341,12 @@ Status IbverbsEngine::reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, B
   const uint32_t out_payload = plan.acc_output_payload_len;
   const uint32_t aggregate_len = plan.packets_per_batch * out_payload;
 
-  cudaSetDevice(plan.cuda_device_id);
+  CudaContextGuard context_guard(plan.cuda_context);
+  if (plan.cuda_context == nullptr) {
+    cudaSetDevice(plan.cuda_device_id);
+  } else if (!context_guard.valid()) {
+    return Status::INTERNAL_ERROR;
+  }
   cudaMemcpyAsync(plan.d_input_ptrs, plan.acc_ptrs.data(), sizeof(void*) * num_pkts,
                   cudaMemcpyHostToDevice, plan.stream);
   packet_reorder_copy_payload_by_sequence(
@@ -3438,6 +3485,7 @@ void IbverbsEngine::reorder_cleanup(IbvRxQueue& q) {
     return;
   }
   for (auto& plan : q.reorder->plans) {
+    CudaContextGuard context_guard(plan.cuda_context);
     for (auto& ob : plan.out_bufs) {
       if (ob.event) {
         cudaEventDestroy(ob.event);
@@ -3466,6 +3514,15 @@ Status IbverbsEngine::set_reorder_cuda_stream(const std::string& interface_name,
     }
     for (auto& plan : q->reorder->plans) {
       if (plan.cfg.name_ == reorder_name) {
+        if (stream != nullptr && plan.cuda_context != nullptr) {
+          CUcontext stream_context = nullptr;
+          if (cuStreamGetCtx(reinterpret_cast<CUstream>(stream), &stream_context) != CUDA_SUCCESS ||
+              stream_context != plan.cuda_context) {
+            DAQIRI_LOG_ERROR("CUDA stream for reorder '{}' belongs to a different context",
+                             reorder_name);
+            return Status::INVALID_PARAMETER;
+          }
+        }
         plan.stream = stream;
         DAQIRI_LOG_INFO("Reorder '{}' stream set on port {} q{}", reorder_name, port, q->queue_id);
         return Status::SUCCESS;
@@ -3490,6 +3547,7 @@ Status IbverbsEngine::get_reorder_burst_info(BurstParams* burst, ReorderBurstInf
     return Status::INVALID_PARAMETER;
   }
   if (ctx->h_batch_id != nullptr) {
+    CudaContextGuard context_guard(ctx->plan != nullptr ? ctx->plan->cuda_context : nullptr);
     if (burst->event != nullptr) {
       const cudaError_t s = cudaEventQuery(burst->event);
       if (s == cudaErrorNotReady) {
