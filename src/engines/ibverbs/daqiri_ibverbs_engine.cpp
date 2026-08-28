@@ -971,6 +971,10 @@ Status IbverbsEngine::devx_create_rq(IbvRxQueue& q, uint32_t stride_log, uint32_
   DEVX_SET(rqc, rqc, cqn, q.dv_cq.cqn);
   DEVX_SET(rqc, rqc, flush_in_error_en, 1);
   DEVX_SET(rqc, rqc, vsd, 1);  // do not strip VLAN
+  // The public timestamp contract is PTP epoch nanoseconds. Request mlx5
+  // real-time CQEs, whose timestamp field uses UTC encoding
+  // (seconds << 32 | nanoseconds).
+  DEVX_SET(rqc, rqc, ts_format, MLX5_RQC_TIMESTAMP_FORMAT_REAL_TIME);
 
   DEVX_SET(wq, wq, wq_type, q.striding ? MLX5_WQ_TYPE_CYCLIC_STRIDING_RQ : MLX5_WQ_TYPE_CYCLIC);
   DEVX_SET(wq, wq, log_wq_stride, log2_floor(q.wqe_stride));
@@ -3702,7 +3706,12 @@ Status IbverbsEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint6
   if (q == nullptr) {
     return Status::INVALID_PARAMETER;
   }
-  *timestamp_ns = ts_to_ns(q->ctx, burst_ts_arr(burst)[idx]);
+  const uint64_t raw_timestamp = burst_ts_arr(burst)[idx];
+  // mlx5 real-time CQEs use UTC encoding; expose the public API's linear PTP
+  // epoch-nanosecond representation.
+  const uint64_t seconds = raw_timestamp >> 32;
+  const uint64_t nanoseconds = raw_timestamp & 0xffffffffULL;
+  *timestamp_ns = seconds * 1000000000ULL + nanoseconds;
   return Status::SUCCESS;
 }
 
@@ -4409,9 +4418,21 @@ Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
         device_attr.max_qp_wr / 2);
   }
 
-  q.cq = ibv_create_cq(q.ctx, static_cast<int>(q.num_slots) + 1, nullptr, nullptr, 0);
+  if (q.accurate_send) {
+    // mlx5 derives the raw-packet QP/SQ timestamp domain from its send CQ.
+    // Scheduled timestamps use the public PTP epoch-nanosecond contract, so
+    // select the wall-clock domain consumed by WAIT-on-time WQEs.
+    struct ibv_cq_init_attr_ex cq_attr {};
+    cq_attr.cqe = static_cast<uint32_t>(q.num_slots) + 1;
+    cq_attr.wc_flags = IBV_WC_EX_WITH_COMPLETION_TIMESTAMP_WALLCLOCK;
+    struct ibv_cq_ex* cq_ex = ibv_create_cq_ex(q.ctx, &cq_attr);
+    q.cq = cq_ex == nullptr ? nullptr : ibv_cq_ex_to_cq(cq_ex);
+  } else {
+    q.cq = ibv_create_cq(q.ctx, static_cast<int>(q.num_slots) + 1, nullptr, nullptr, 0);
+  }
   if (q.cq == nullptr) {
-    DAQIRI_LOG_CRITICAL("TX ibv_create_cq failed: {}", strerror(errno));
+    DAQIRI_LOG_CRITICAL("TX ibv_create_cq failed (accurate_send={}): {}",
+                        q.accurate_send, strerror(errno));
     return Status::GENERIC_FAILURE;
   }
   struct ibv_qp_init_attr attr {};
@@ -4502,6 +4523,7 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
                                      const TxQueueConfig& qcfg) {
   q.port_id = intf.port_id_;
   q.queue_id = qcfg.common_.id_;
+  q.accurate_send = intf.tx_.accurate_send_;
   q.poll_mode = qcfg.poll_mode_;
   q.batch_size = q.poll_mode == QueuePollMode::DIRECT ? 1 : std::max(1, qcfg.common_.batch_size_);
   if (!qcfg.common_.cpu_core_.empty()) {
@@ -4911,12 +4933,11 @@ Status IbverbsEngine::set_udp_payload(BurstParams* burst, int idx, void* data, i
 }
 
 // Accurate send scheduling: hold this packet at the NIC until `time`. `time` is
-// nanoseconds in the device's hardware clock domain -- the SAME domain as
-// get_packet_rx_timestamp -- readable as "now" via ibv_query_rt_values_ex. The
-// hardware compares over an ~8-second cyclic window, so a scheduled time must be
-// within ~8 s of the current clock (a time too far ahead never releases; one too
-// far in the past wraps). Returns NOT_SUPPORTED when the device lacks wait-on-time
-// or a real-time clock.
+// PTP epoch nanoseconds in the CLOCK_REALTIME domain -- the SAME representation
+// returned by get_packet_rx_timestamp. The hardware compares over an ~8-second
+// cyclic window, so a scheduled time must be within ~8 s of the current clock
+// (a time too far ahead never releases; one too far in the past wraps). Returns
+// NOT_SUPPORTED when the device lacks wait-on-time or a real-time clock.
 Status IbverbsEngine::set_packet_tx_time(BurstParams* burst, int idx, uint64_t time) {
   IbvTxQueue* q = find_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
   if (q == nullptr) {
