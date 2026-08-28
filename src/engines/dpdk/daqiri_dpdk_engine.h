@@ -187,7 +187,6 @@ class DpdkEngine : public Engine {
   static void flush_port_queue_impl(int port, int queue);
   bool setup_rx_timestamp_dynfield();
   bool setup_tx_timestamp_dynfield();
-  bool calibrate_rx_timestamp_clock(uint16_t port_id);
   // Current NIC clock for `port` in nanoseconds, for packet-pacing scheduling.
   // Uses rte_eth_read_clock + the calibrated ticks/sec where supported; falls
   // back to CLOCK_MONOTONIC (the NIC PTP clock free-runs from driver load unless

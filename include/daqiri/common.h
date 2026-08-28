@@ -246,8 +246,9 @@ Status poll_flow_op(FlowOpResult *result);
  *
  * Retrieves the 64-bit receive timestamp for a packet when the DPDK engine
  * was configured with rx.hardware_timestamps enabled and the NIC provided a
- * timestamp for this packet. The value is converted to nanoseconds in the NIC
- * timestamp clock domain; it is not converted to wall-clock or PTP time.
+ * timestamp for this packet as PTP epoch nanoseconds. DAQIRI assumes that the
+ * NIC clock and CLOCK_REALTIME are PTP-synchronized and does not validate
+ * synchronization. The result is invalid without working PTP.
  *
  * @param burst Burst structure containing packets
  * @param idx Index of packet
@@ -405,7 +406,10 @@ Status set_all_packet_lengths(BurstParams *burst,
 /**
  * @brief Set packet TX time
  *
- * Sets the transmit time (in PTP time) to transmit the packet. Every packet
+ * Sets the transmit time, as PTP epoch nanoseconds, to transmit the packet.
+ * DAQIRI assumes that the NIC clock and CLOCK_REALTIME are PTP-synchronized
+ * and does not validate synchronization. Scheduled transmission is invalid
+ * without working PTP. Every packet
  * transmitted after this one in the same queue will be transmitted no earlier
  * than the time listed in the function call. This feature is only available on
  * ConnectX-7 or BlueField 3 and higher cards.

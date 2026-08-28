@@ -347,10 +347,11 @@ a template table.
 
 `rx.hardware_timestamps:` Enable per-packet hardware RX timestamps for Raw Ethernet
 (`stream_type: "raw"`).
-When enabled, DAQIRI requires `RTE_ETH_RX_OFFLOAD_TIMESTAMP` support from the NIC/PMD and
-initialization fails if DAQIRI cannot provide nanosecond timestamps for the selected PMD.
-Timestamps are returned by `get_packet_rx_timestamp()` in nanoseconds in the NIC timestamp
-clock domain, not wall-clock time.
+When enabled, DAQIRI requires hardware timestamp support from the NIC and driver.
+Timestamps returned by `get_packet_rx_timestamp()` are unsigned 64-bit PTP epoch
+nanoseconds in the same clock domain as a PTP-synchronized `CLOCK_REALTIME`.
+**PTP synchronization is required.** DAQIRI does not validate the NIC or system clock
+configuration. Timestamp values are invalid if the clocks are not PTP-synchronized.
 
 - type: `boolean`
 - default: `false`
@@ -512,8 +513,12 @@ pre-encap (TX) frame.
 
 ### Accurate Send
 
-`tx.accurate_send:` Enable hardware-timed packet transmission using PTP timestamps. When
-enabled, use `set_packet_tx_time()` to schedule packets. Requires ConnectX-7 or later.
+`tx.accurate_send:` Enable hardware-timed packet transmission. When enabled, use
+`set_packet_tx_time()` to schedule packets. The supplied timestamp is always an unsigned
+64-bit PTP epoch-nanosecond value in the same clock domain as a PTP-synchronized
+`CLOCK_REALTIME`. **PTP synchronization is required.** DAQIRI does not validate the NIC or
+system clock configuration. Scheduled transmission is invalid if the clocks are not
+PTP-synchronized. Requires ConnectX-7 or later.
 
 - type: `boolean`
 - default: `false`

@@ -353,6 +353,24 @@ rejects a rule. The YAML options are documented in
 ![Flow steering](images/packet_diagrams/flow_steering/flow-steering.webp)
 </div>
 
+## Raw ibverbs hardware timestamp domain
+
+The raw ibverbs engine uses PTP epoch nanoseconds in the
+`CLOCK_REALTIME` domain for both timed transmission and receive timestamps.
+For accurate transmission, DAQIRI selects the mlx5 wall-clock completion-queue
+domain and converts the supplied linear nanosecond value to the UTC encoding
+required by the WAIT-on-time WQE. For receive timestamping, DAQIRI requests
+mlx5 real-time CQEs and converts their `seconds << 32 | nanoseconds` encoding
+back to linear epoch nanoseconds before returning it from
+`get_packet_rx_timestamp()`.
+
+**PTP synchronization is required.** The host and NIC clocks must be
+synchronized, for example with `ptp4l` and `phc2sys`. DAQIRI does not validate
+that synchronization is working. Without it, receive timestamps and scheduled
+transmit times are invalid and may behave unpredictably. Applications pass a
+`CLOCK_REALTIME` nanosecond value directly to `set_packet_tx_time()`; no
+engine-specific conversion is required.
+
 ## Memory Regions
 
 A **memory region** is a named pool of buffers where packet data lives.
