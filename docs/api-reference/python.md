@@ -215,11 +215,12 @@ flow    = daqiri.get_packet_flow_id(burst, idx)
 status, rx_ts_ns = daqiri.get_packet_rx_timestamp(burst, idx)
 ```
 
-RX hardware timestamps are available only when the DPDK engine is configured
-with `rx.hardware_timestamps: true` and the NIC supports
-`RTE_ETH_RX_OFFLOAD_TIMESTAMP`. See
-[C++ API Usage → Receiving Packets](cpp.md#receiving-packets) for the clock
-semantics. The Python wrapper exposes the same timestamps in nanoseconds.
+RX hardware timestamps are available only when DAQIRI is configured with
+`rx.hardware_timestamps: true` and the NIC and driver support hardware timestamps.
+DAQIRI returns unsigned 64-bit PTP epoch nanoseconds in the same clock domain as
+a PTP-synchronized `CLOCK_REALTIME`. Device-clock ticks are not part of the public API.
+**WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or system clock
+configuration. Timestamp values are invalid if the clocks are not PTP-synchronized.
 
 `RxQueueConfig.poll_mode` accepts `QueuePollMode.INDIRECT` (the default) or
 `QueuePollMode.DIRECT`. Direct mode is available only on raw ibverbs RX queues and makes the
@@ -377,6 +378,11 @@ For precise packet scheduling (requires ConnectX-7+):
 ```python
 daqiri.set_packet_tx_time(burst, idx, ptp_timestamp_ns)
 ```
+
+`ptp_timestamp_ns` is an unsigned 64-bit PTP epoch-nanosecond value in the same clock
+domain as a PTP-synchronized `CLOCK_REALTIME`. Device-clock ticks are not accepted.
+**WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or system clock
+configuration. Scheduled transmission is invalid if the clocks are not PTP-synchronized.
 
 ## Writing Bursts to Storage
 
@@ -549,14 +555,14 @@ The workflow sections above show the common call order and ownership rules.
 | `get_segment_packet_ptr(burst, seg, idx)` | Return segment packet address as an integer. |
 | `get_packet_length(burst, idx)` / `get_segment_packet_length(burst, seg, idx)` | Read packet or segment length. |
 | `get_packet_flow_id(burst, idx)` | Read matched flow ID, or `0` when no flow matched. |
-| `get_packet_rx_timestamp(burst, idx)` | Return `(Status, timestamp_ns)`. |
+| `get_packet_rx_timestamp(burst, idx)` | Return `(Status, timestamp_ns)` with a PTP epoch-nanosecond timestamp. |
 | `copy_buffer_to_packet(burst, idx, data, nbytes=None, src_offset=0, dst_offset=0)` | Copy a Python buffer into segment 0. |
 | `copy_buffer_to_segment_packet(burst, seg, idx, data, nbytes=None, src_offset=0, dst_offset=0)` | Copy a Python buffer into a specific segment. |
 | `get_packet_bytes(burst, idx, nbytes=None, src_offset=0)` | Return `(Status, bytes)` from segment 0. |
 | `get_segment_packet_bytes(burst, seg, idx, nbytes=None, src_offset=0)` | Return `(Status, bytes)` from a segment. |
 | `set_packet_lengths(burst, idx, lens)` | Set segment lengths for one packet. |
 | `set_all_packet_lengths(burst, lens)` | Set segment lengths for every packet. |
-| `set_packet_tx_time(burst, idx, time)` | Set scheduled TX time for one packet. |
+| `set_packet_tx_time(burst, idx, time)` | Set one packet's scheduled TX time as PTP epoch nanoseconds. |
 
 ### RX and Reorder
 

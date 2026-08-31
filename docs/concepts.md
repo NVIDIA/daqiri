@@ -358,6 +358,22 @@ rejects a rule. The YAML options are documented in
 ![Flow steering](images/packet_diagrams/flow_steering/flow-steering.webp)
 </div>
 
+## Timed Transmission and Receive Timestamps
+
+DAQIRI uses PTP epoch nanoseconds in the `CLOCK_REALTIME` domain for both timed
+transmission and receive timestamps.
+
+When hardware receive timestamps are enabled, applications use
+`get_packet_rx_timestamp()` to read each packet's PTP epoch-nanosecond timestamp.
+
+For timed transmission, applications pass the desired PTP epoch-nanosecond value
+directly to `set_packet_tx_time()`.
+
+**WARNING: PTP synchronization is required.** The host and NIC clocks must be
+synchronized, for example with `ptp4l` and `phc2sys`. DAQIRI does not validate
+that synchronization is working. Without it, receive timestamps and scheduled
+transmit times are invalid and may behave unpredictably.
+
 ## Memory Regions
 
 A **memory region** is a named pool of buffers where packet data lives.

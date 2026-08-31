@@ -111,18 +111,19 @@ for (int i = 0; i < daqiri::get_num_packets(burst); i++) {
     daqiri::FlowId flow = daqiri::get_packet_flow_id(burst, i);
     uint64_t rx_ts_ns = 0;
     if (daqiri::get_packet_rx_timestamp(burst, i, &rx_ts_ns) == daqiri::Status::SUCCESS) {
-        // rx_ts_ns is in the NIC timestamp clock domain.
+        // rx_ts_ns is a PTP epoch timestamp in nanoseconds.
     }
     // process packet...
 }
 ```
 
-RX hardware timestamps are available only when Raw Ethernet (`stream_type: "raw"`) is
-configured with `rx.hardware_timestamps: true` and the NIC supports
-`RTE_ETH_RX_OFFLOAD_TIMESTAMP`. DAQIRI converts the NIC timestamp counter to nanoseconds
-internally using the matching device clock when available, or the PMD's nanosecond
-timestamp format when the driver already supplies nanoseconds. DAQIRI does not expose NIC clock reads or
-convert timestamps to wall-clock time. For reordered aggregate bursts,
+RX hardware timestamps are available only when DAQIRI is configured with
+`rx.hardware_timestamps: true` and the NIC and driver support hardware timestamps.
+DAQIRI returns unsigned 64-bit PTP epoch nanoseconds in the same clock domain as
+a PTP-synchronized `CLOCK_REALTIME`. Device-clock ticks are not part of the public API.
+**WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or system clock
+configuration. Timestamp values are invalid if the clocks are not PTP-synchronized.
+For reordered aggregate bursts,
 `get_packet_rx_timestamp(burst, 0, &ts)` returns the timestamp of the first source
 packet accepted into the aggregate.
 
@@ -432,8 +433,13 @@ returns `NOT_READY`; zero- or multi-packet direct requests return `INVALID_PARAM
 For precise packet scheduling (requires ConnectX-7+):
 
 ```cpp
-daqiri::set_packet_tx_time(burst, idx, ptp_timestamp);
+daqiri::set_packet_tx_time(burst, idx, ptp_timestamp_ns);
 ```
+
+`ptp_timestamp_ns` is an unsigned 64-bit PTP epoch-nanosecond value in the same clock
+domain as a PTP-synchronized `CLOCK_REALTIME`. Device-clock ticks are not accepted.
+**WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or system clock
+configuration. Scheduled transmission is invalid if the clocks are not PTP-synchronized.
 
 ## Writing Bursts to Storage
 

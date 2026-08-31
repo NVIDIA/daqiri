@@ -88,11 +88,6 @@ struct FlexItemHandle {
   struct rte_flow_item_flex_handle* handle;
 };
 
-struct RxTimestampConversion {
-  bool valid = false;
-  uint64_t ticks_per_second = 0;
-};
-
 class DpdkEngine : public Engine {
  public:
   struct DpdkFlowResource;
@@ -187,11 +182,9 @@ class DpdkEngine : public Engine {
   static void flush_port_queue_impl(int port, int queue);
   bool setup_rx_timestamp_dynfield();
   bool setup_tx_timestamp_dynfield();
-  bool calibrate_rx_timestamp_clock(uint16_t port_id);
-  // Current NIC clock for `port` in nanoseconds, for packet-pacing scheduling.
-  // Uses rte_eth_read_clock + the calibrated ticks/sec where supported; falls
-  // back to CLOCK_MONOTONIC (the NIC PTP clock free-runs from driver load unless
-  // a PTP daemon disciplines it, so it tracks CLOCK_MONOTONIC, not CLOCK_REALTIME).
+  // Current NIC PTP clock for packet-pacing scheduling.
+  // REAL_TIME_CLOCK_ENABLE exposes rte_eth_read_clock values as nanoseconds.
+  // Falls back to CLOCK_MONOTONIC when the driver does not support that clock.
   uint64_t now_tx_ns(uint16_t port);
   int setup_pools_and_rings(int max_rx_batch, int max_tx_batch);
   struct rte_flow* add_flow(int port,
@@ -527,7 +520,6 @@ class DpdkEngine : public Engine {
   int timestamp_dynfield_offset_{-1};
   uint64_t rx_timestamp_dynflag_mask_{0};
   uint64_t tx_timestamp_dynflag_mask_{0};
-  std::array<RxTimestampConversion, RTE_MAX_ETHPORTS> rx_timestamp_conversions_{};
   std::array<struct rte_eth_conf, MAX_INTERFACES> local_port_conf;
   DpdkStats stats_;
   struct rte_ring* loopback_ring;

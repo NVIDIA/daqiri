@@ -503,26 +503,19 @@ struct UDPPkt {
   uint8_t payload[];
 } __attribute__((packed));
 
-static inline uint64_t convert_rx_timestamp_ticks_to_ns(uint64_t timestamp,
-                                                        const RxTimestampConversion& conversion) {
-  if (!conversion.valid || conversion.ticks_per_second == 0) { return 0; }
-  const auto ns = (static_cast<unsigned __int128>(timestamp) * 1000000000ULL) /
-                  conversion.ticks_per_second;
-  return static_cast<uint64_t>(ns);
-}
-
+// The DPDK timestamp dynamic field is the public timestamp value: unsigned
+// 64-bit PTP epoch nanoseconds in the PTP-synchronized CLOCK_REALTIME domain.
+// Do not calibrate or scale it. DAQIRI relies on external PTP synchronization
+// and does not validate that synchronization here.
 static inline bool extract_mbuf_rx_timestamp_ns(struct rte_mbuf* mbuf,
                                                 int timestamp_offset,
                                                 uint64_t timestamp_mask,
-                                                const RxTimestampConversion& conversion,
                                                 uint64_t* timestamp_ns) {
   if (mbuf == nullptr || timestamp_ns == nullptr || timestamp_offset < 0 || timestamp_mask == 0) {
     return false;
   }
-  if (!conversion.valid || conversion.ticks_per_second == 0) { return false; }
   if ((mbuf->ol_flags & timestamp_mask) == 0) { return false; }
-  const uint64_t timestamp_ticks = *RTE_MBUF_DYNFIELD(mbuf, timestamp_offset, uint64_t*);
-  *timestamp_ns = convert_rx_timestamp_ticks_to_ns(timestamp_ticks, conversion);
+  *timestamp_ns = *RTE_MBUF_DYNFIELD(mbuf, timestamp_offset, uint64_t*);
   return true;
 }
 
@@ -1148,7 +1141,6 @@ Status DpdkEngine::append_reorder_packet(ReorderPlanRuntime& plan,
         extract_mbuf_rx_timestamp_ns(mbuf,
                                      timestamp_dynfield_offset_,
                                      rx_timestamp_dynflag_mask_,
-                                     rx_timestamp_conversions_[plan.port_id],
                                      &batch.first_packet_rx_timestamp_ns);
     const uint32_t pkt_len = mbuf != nullptr ? mbuf->pkt_len : 0U;
     uint32_t copy_len = 0;
@@ -1883,81 +1875,6 @@ bool DpdkEngine::setup_rx_timestamp_dynfield() {
   return true;
 }
 
-bool DpdkEngine::calibrate_rx_timestamp_clock(uint16_t port_id) {
-  uint64_t start_clock = 0;
-  int ret = rte_eth_read_clock(port_id, &start_clock);
-  if (ret < 0) {
-    rte_eth_dev_info dev_info{};
-    const int info_ret = rte_eth_dev_info_get(port_id, &dev_info);
-    const std::string driver_name =
-        (info_ret == 0 && dev_info.driver_name != nullptr) ? dev_info.driver_name : "";
-    if (ret == -ENOTSUP && driver_name.find("mlx5") != std::string::npos) {
-      rx_timestamp_conversions_[port_id].valid = true;
-      rx_timestamp_conversions_[port_id].ticks_per_second = 1000000000ULL;
-      DAQIRI_LOG_WARN(
-          "rte_eth_read_clock() is not supported on mlx5 port {}; treating PMD-provided "
-          "RX hardware timestamps as nanoseconds",
-          port_id);
-      return true;
-    }
-
-    DAQIRI_LOG_CRITICAL(
-        "RX hardware timestamps require rte_eth_read_clock() for nanosecond conversion, "
-        "but port {} returned err={} ({})",
-        port_id,
-        ret,
-        rte_strerror(-ret));
-    return false;
-  }
-
-  const auto start_time = std::chrono::steady_clock::now();
-  rte_delay_us_block(100000);
-
-  uint64_t end_clock = 0;
-  ret = rte_eth_read_clock(port_id, &end_clock);
-  if (ret < 0) {
-    DAQIRI_LOG_CRITICAL(
-        "RX hardware timestamp clock calibration failed on port {}: err={} ({})",
-        port_id,
-        ret,
-        rte_strerror(-ret));
-    return false;
-  }
-
-  const auto elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                              std::chrono::steady_clock::now() - start_time)
-                              .count();
-  if (elapsed_ns <= 0 || end_clock <= start_clock) {
-    DAQIRI_LOG_CRITICAL(
-        "RX hardware timestamp clock calibration produced an invalid sample on port {} "
-        "(start={}, end={}, elapsed_ns={})",
-        port_id,
-        start_clock,
-        end_clock,
-        elapsed_ns);
-    return false;
-  }
-
-  const uint64_t delta_ticks = end_clock - start_clock;
-  const auto ticks_per_second =
-      (static_cast<unsigned __int128>(delta_ticks) * 1000000000ULL +
-       static_cast<uint64_t>(elapsed_ns / 2)) /
-      static_cast<uint64_t>(elapsed_ns);
-  if (ticks_per_second == 0 ||
-      ticks_per_second > static_cast<unsigned __int128>(std::numeric_limits<uint64_t>::max())) {
-    DAQIRI_LOG_CRITICAL(
-        "RX hardware timestamp clock calibration produced an invalid frequency on port {}",
-        port_id);
-    return false;
-  }
-
-  rx_timestamp_conversions_[port_id].valid = true;
-  rx_timestamp_conversions_[port_id].ticks_per_second = static_cast<uint64_t>(ticks_per_second);
-  DAQIRI_LOG_INFO("Calibrated RX timestamp clock for port {} at {} ticks/second",
-                  port_id,
-                  rx_timestamp_conversions_[port_id].ticks_per_second);
-  return true;
-}
 
 bool DpdkEngine::setup_tx_timestamp_dynfield() {
   static bool done = false;
@@ -1997,14 +1914,8 @@ uint64_t DpdkEngine::now_tx_ns(uint16_t port) {
   // clock, so prefer it.
   uint64_t clk = 0;
   if (rte_eth_read_clock(port, &clk) == 0) {
-    const uint64_t tps =
-        (port < rx_timestamp_conversions_.size() && rx_timestamp_conversions_[port].valid)
-            ? rx_timestamp_conversions_[port].ticks_per_second
-            : 0;
-    // With REAL_TIME_CLOCK_ENABLE the device clock already counts nanoseconds, so
-    // an uncalibrated tps (no RX-timestamp path active) means clk is ns as-is.
-    if (tps == 0 || tps == 1000000000ULL) { return clk; }
-    return static_cast<uint64_t>(static_cast<unsigned __int128>(clk) * 1000000000ULL / tps);
+    // REAL_TIME_CLOCK_ENABLE exposes the NIC PTP clock directly in nanoseconds.
+    return clk;
   }
   // Fallback: rte_eth_read_clock unsupported. The NIC PTP clock free-runs from ~0
   // at driver load (unless a PTP daemon disciplines it), tracking CLOCK_MONOTONIC,
@@ -2780,7 +2691,11 @@ void DpdkEngine::initialize() {
                         conf_ports_eth_addr[intf.port_id_].addr_bytes[4],
                         conf_ports_eth_addr[intf.port_id_].addr_bytes[5]);
 
-      if (rx.hardware_timestamps_ && !calibrate_rx_timestamp_clock(intf.port_id_)) { return; }
+      if (rx.hardware_timestamps_) {
+        DAQIRI_LOG_INFO(
+            "Using driver-provided RX hardware timestamps as PTP epoch nanoseconds on port {}",
+            intf.port_id_);
+      }
 
       // Standard (group 3), flex-item (group 1) and eCPRI (group 2) flows use
       // separate DPDK flow groups with conflicting group-0 jump rules;
@@ -6757,14 +6672,11 @@ Status DpdkEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t
 
   if (burst->pkts[0] == nullptr) { return Status::INVALID_PARAMETER; }
   auto* mbuf = reinterpret_cast<rte_mbuf*>(burst->pkts[0][idx]);
-  if (mbuf == nullptr || burst->hdr.hdr.port_id >= rx_timestamp_conversions_.size()) {
-    return Status::INVALID_PARAMETER;
-  }
+  if (mbuf == nullptr) { return Status::INVALID_PARAMETER; }
 
   if (!extract_mbuf_rx_timestamp_ns(mbuf,
                                     timestamp_dynfield_offset_,
                                     rx_timestamp_dynflag_mask_,
-                                    rx_timestamp_conversions_[burst->hdr.hdr.port_id],
                                     timestamp_ns)) {
     return Status::NOT_SUPPORTED;
   }
@@ -6779,6 +6691,9 @@ Status DpdkEngine::set_packet_tx_time(BurstParams* burst, int idx, uint64_t time
   if (timestamp_dynfield_offset_ < 0 || tx_timestamp_dynflag_mask_ == 0) {
     return Status::NOT_SUPPORTED;
   }
+  // Preserve the public PTP epoch-nanosecond value exactly. The mlx5 real-time
+  // clock configuration consumes this linear CLOCK_REALTIME-domain value
+  // directly; DAQIRI performs no tick-rate conversion or synchronization check.
   reinterpret_cast<struct rte_mbuf**>(burst->pkts[0])[idx]->ol_flags |= tx_timestamp_dynflag_mask_;
   *RTE_MBUF_DYNFIELD(
       reinterpret_cast<rte_mbuf**>(burst->pkts[0])[idx],
