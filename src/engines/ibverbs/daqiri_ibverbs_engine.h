@@ -198,6 +198,7 @@ struct IbvRxQueue {
   // Direct mlx5dv views (we own the CQ consumer index; rdma-core owns the RQ).
   struct mlx5dv_cq dv_cq {};
   uint32_t cq_ci = 0;  // CQ consumer index (monotonic)
+  bool realtime_timestamps = false;
 
   // Per-WQE stride accounting for the reclaim path. Indexed by WQE/region.
   std::vector<uint32_t> consumed_strides;  // strides handed to the app (verbs path)
