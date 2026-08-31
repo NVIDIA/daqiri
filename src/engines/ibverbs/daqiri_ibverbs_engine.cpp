@@ -46,6 +46,14 @@
 
 namespace daqiri {
 
+// mlx5 requires a completion mode on every SQ WQE. Unsignaled WQEs use
+// ONLY_FIRST_ERR; selected WQEs use ALWAYS so the CQ can drive reclamation.
+// A zero completion mode can stall an SQ containing consecutive WAIT WQEs.
+static constexpr uint8_t tx_completion_mode(bool signaled) {
+  return signaled ? MLX5_WQE_CTRL_CQ_UPDATE
+                  : (MLX5_COMP_ONLY_FIRST_ERR << MLX5_COMP_MODE_OFFSET);
+}
+
 namespace {
 // Monotonic nanosecond clock used for the TX flush timeouts. Replaces DPDK's
 // rte_get_timer_cycles()/rte_get_timer_hz() so the ibverbs engine needs no
@@ -123,7 +131,7 @@ static_assert(empw_burst_wqebbs(33) == 10);
 
 // Defaults for the striding-RQ geometry; clamped to device caps at setup.
 static constexpr uint32_t DEFAULT_STRIDE_LOG = 11;          // 2048 B per stride
-static constexpr uint32_t DEFAULT_STRIDES_PER_WQE_LOG = 9;  // 512 strides / WQE
+static constexpr uint32_t DEFAULT_STRIDES_PER_WQE_LOG = 6;  // 64 strides / WQE
 static constexpr uint32_t MIN_NUM_WQE = 4;                  // outstanding regions
 
 // Read barrier between observing a CQE owner flip and reading its payload.
@@ -147,6 +155,20 @@ static inline void doorbell_store_barrier() {
   asm volatile("sfence" ::: "memory");
 #else
   std::atomic_thread_fence(std::memory_order_release);
+#endif
+}
+
+// Flush writes to the BlueFlame write-combining MMIO mapping. A DMA/store
+// barrier orders descriptors and the doorbell record, but on ARM it does not
+// guarantee that a WC MMIO write has reached the device before the BF offset
+// is reused. Match rdma-core's mmio_wc_start()/mmio_flush_writes() contract.
+static inline void doorbell_mmio_flush() {
+#if defined(__aarch64__)
+  asm volatile("dsb st" ::: "memory");
+#elif defined(__x86_64__) || defined(__i386__)
+  asm volatile("sfence" ::: "memory");
+#else
+  std::atomic_thread_fence(std::memory_order_seq_cst);
 #endif
 }
 
@@ -954,7 +976,11 @@ Status IbverbsEngine::devx_create_rq(IbvRxQueue& q, uint32_t stride_log, uint32_
   }
   memset(q.wq_buf, 0, umem_bytes);
   q.rq_dbr = reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(q.wq_buf) + dbr_off);
-  q.wq_umem = mlx5dv_devx_umem_reg(q.ctx, q.wq_buf, umem_bytes, 0x7 /*rw*/);
+  // Receive WQ memory is consumed by the HCA and does not require remote
+  // access permissions. Match the mlx5/DPDK DevX RQ resource path, which
+  // registers this UMEM with no access flags.
+  q.wq_umem =
+      mlx5dv_devx_umem_reg(q.ctx, q.wq_buf, umem_bytes, 0);
   if (q.wq_umem == nullptr) {
     DAQIRI_LOG_CRITICAL("mlx5dv_devx_umem_reg failed: {}", strerror(errno));
     return Status::GENERIC_FAILURE;
@@ -971,13 +997,18 @@ Status IbverbsEngine::devx_create_rq(IbvRxQueue& q, uint32_t stride_log, uint32_
   DEVX_SET(rqc, rqc, cqn, q.dv_cq.cqn);
   DEVX_SET(rqc, rqc, flush_in_error_en, 1);
   DEVX_SET(rqc, rqc, vsd, 1);  // do not strip VLAN
+  // The public timestamp contract is PTP epoch nanoseconds. Request mlx5
+  // real-time CQEs, whose timestamp field uses UTC encoding
+  // (seconds << 32 | nanoseconds).
+  DEVX_SET(rqc, rqc, ts_format, MLX5_RQC_TIMESTAMP_FORMAT_REAL_TIME);
 
   DEVX_SET(wq, wq, wq_type, q.striding ? MLX5_WQ_TYPE_CYCLIC_STRIDING_RQ : MLX5_WQ_TYPE_CYCLIC);
   DEVX_SET(wq, wq, log_wq_stride, log2_floor(q.wqe_stride));
   DEVX_SET(wq, wq, log_wq_sz, log2_floor(q.num_wqe));
   DEVX_SET(wq, wq, pd, dvpd.pdn);
-  // No uar_page: an RQ rings its doorbell via the memory dbr record, not a UAR.
-  DEVX_SET(wq, wq, log_wq_pg_sz, log2_floor(static_cast<uint32_t>(page)) - 12u);
+  // WQ page size is encoded relative to the mlx5 4 KiB adapter page, not the
+  // operating-system page size (which is 64 KiB on GH200).
+  DEVX_SET(wq, wq, log_wq_pg_sz, MLX5_ADAPTER_PAGE_SIZE_4_KIB);
   DEVX_SET64(wq, wq, dbr_addr, dbr_off);
   DEVX_SET(wq, wq, dbr_umem_id, q.wq_umem->umem_id);
   DEVX_SET(wq, wq, wq_umem_id, q.wq_umem->umem_id);
@@ -3596,9 +3627,23 @@ void IbverbsEngine::free_all_packets(BurstParams* burst) {
   uint16_t* wqe_arr = burst_wqe_arr(burst);
   uint16_t* strd_arr = burst_strd_arr(burst);
   const int num = static_cast<int>(burst->hdr.hdr.num_pkts);
-  for (int i = 0; i < num; i++) {
-    release_strides(*q, wqe_arr[i], strd_arr[i]);
+  if (num == 0) {
+    return;
   }
+  // CQ order keeps packets from one striding WQE contiguous. Publish one
+  // release per WQE instead of bouncing its atomic counter once per packet.
+  uint16_t current_wqe = wqe_arr[0];
+  uint32_t released_strides = strd_arr[0];
+  for (int i = 1; i < num; ++i) {
+    if (wqe_arr[i] == current_wqe) {
+      released_strides += strd_arr[i];
+      continue;
+    }
+    release_strides(*q, current_wqe, released_strides);
+    current_wqe = wqe_arr[i];
+    released_strides = strd_arr[i];
+  }
+  release_strides(*q, current_wqe, released_strides);
 }
 
 void IbverbsEngine::free_packet_segment(BurstParams* burst, int seg, int pkt) {
@@ -3702,7 +3747,12 @@ Status IbverbsEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint6
   if (q == nullptr) {
     return Status::INVALID_PARAMETER;
   }
-  *timestamp_ns = ts_to_ns(q->ctx, burst_ts_arr(burst)[idx]);
+  const uint64_t raw_timestamp = burst_ts_arr(burst)[idx];
+  // mlx5 real-time CQEs use UTC encoding; expose the public API's linear PTP
+  // epoch-nanosecond representation.
+  const uint64_t seconds = raw_timestamp >> 32;
+  const uint64_t nanoseconds = raw_timestamp & 0xffffffffULL;
+  *timestamp_ns = seconds * 1000000000ULL + nanoseconds;
   return Status::SUCCESS;
 }
 
@@ -4409,9 +4459,21 @@ Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
         device_attr.max_qp_wr / 2);
   }
 
-  q.cq = ibv_create_cq(q.ctx, static_cast<int>(q.num_slots) + 1, nullptr, nullptr, 0);
+  if (q.accurate_send) {
+    // mlx5 derives the raw-packet QP/SQ timestamp domain from its send CQ.
+    // Scheduled timestamps use the public PTP epoch-nanosecond contract, so
+    // select the wall-clock domain consumed by WAIT-on-time WQEs.
+    struct ibv_cq_init_attr_ex cq_attr {};
+    cq_attr.cqe = static_cast<uint32_t>(q.num_slots) + 1;
+    cq_attr.wc_flags = IBV_WC_EX_WITH_COMPLETION_TIMESTAMP_WALLCLOCK;
+    struct ibv_cq_ex* cq_ex = ibv_create_cq_ex(q.ctx, &cq_attr);
+    q.cq = cq_ex == nullptr ? nullptr : ibv_cq_ex_to_cq(cq_ex);
+  } else {
+    q.cq = ibv_create_cq(q.ctx, static_cast<int>(q.num_slots) + 1, nullptr, nullptr, 0);
+  }
   if (q.cq == nullptr) {
-    DAQIRI_LOG_CRITICAL("TX ibv_create_cq failed: {}", strerror(errno));
+    DAQIRI_LOG_CRITICAL("TX ibv_create_cq failed (accurate_send={}): {}",
+                        q.accurate_send, strerror(errno));
     return Status::GENERIC_FAILURE;
   }
   struct ibv_qp_init_attr attr {};
@@ -4502,6 +4564,7 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
                                      const TxQueueConfig& qcfg) {
   q.port_id = intf.port_id_;
   q.queue_id = qcfg.common_.id_;
+  q.accurate_send = intf.tx_.accurate_send_;
   q.poll_mode = qcfg.poll_mode_;
   q.batch_size = q.poll_mode == QueuePollMode::DIRECT ? 1 : std::max(1, qcfg.common_.batch_size_);
   if (!qcfg.common_.cpu_core_.empty()) {
@@ -4659,11 +4722,41 @@ bool IbverbsEngine::lock_direct_tx_queue(IbvTxQueue& q, std::unique_lock<std::mu
   return true;
 }
 
+// eMPW can represent a scheduled burst when its only timestamp is on packet 0:
+// one WAIT WQE gates the packed SEND WQEs, and all remaining packets follow
+// immediately. Multiple timed packets require the regular per-packet SEND path.
+static bool empw_compatible_burst(const BurstParams* burst) {
+  // A one-packet enhanced MPW session is not valid; use an ordinary SEND WQE
+  // for single-packet bursts (including queue primers).
+  if (burst->hdr.hdr.num_segs != 1 || burst->hdr.hdr.num_pkts < 2) {
+    return false;
+  }
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) == 0) {
+    return true;
+  }
+  if (burst->hdr.hdr.num_pkts < 3) {
+    return false;
+  }
+  const uint64_t* txtime = burst_ts_arr(burst);
+  if (txtime[0] == 0) {
+    return false;
+  }
+  for (uint16_t i = 1; i < burst->hdr.hdr.num_pkts; ++i) {
+    if (txtime[i] != 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
 uint64_t IbverbsEngine::tx_burst_wqebbs(const IbvTxQueue& q, const BurstParams* burst) const {
   const uint64_t packets = burst->hdr.hdr.num_pkts;
   const bool scheduled = (burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) != 0;
-  if (q.empw_enabled && burst->hdr.hdr.num_segs == 1 && !scheduled) {
-    return empw_burst_wqebbs(packets);
+  if (q.empw_enabled && empw_compatible_burst(burst)) {
+    // A timed packet must break the eMPW session: WAIT + ordinary SEND for
+    // packet 0, then pack the remaining untimed packets into eMPW WQEs.
+    return scheduled ? 2 + empw_burst_wqebbs(packets - 1)
+                     : empw_burst_wqebbs(packets);
   }
   uint64_t wqebbs = packets;
   if (scheduled) {
@@ -4911,12 +5004,11 @@ Status IbverbsEngine::set_udp_payload(BurstParams* burst, int idx, void* data, i
 }
 
 // Accurate send scheduling: hold this packet at the NIC until `time`. `time` is
-// nanoseconds in the device's hardware clock domain -- the SAME domain as
-// get_packet_rx_timestamp -- readable as "now" via ibv_query_rt_values_ex. The
-// hardware compares over an ~8-second cyclic window, so a scheduled time must be
-// within ~8 s of the current clock (a time too far ahead never releases; one too
-// far in the past wraps). Returns NOT_SUPPORTED when the device lacks wait-on-time
-// or a real-time clock.
+// PTP epoch nanoseconds in the CLOCK_REALTIME domain -- the SAME representation
+// returned by get_packet_rx_timestamp. The hardware compares over an ~8-second
+// cyclic window, so a scheduled time must be within ~8 s of the current clock
+// (a time too far ahead never releases; one too far in the past wraps). Returns
+// NOT_SUPPORTED when the device lacks wait-on-time or a real-time clock.
 Status IbverbsEngine::set_packet_tx_time(BurstParams* burst, int idx, uint64_t time) {
   IbvTxQueue* q = find_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
   if (q == nullptr) {
@@ -4952,7 +5044,7 @@ void* IbverbsEngine::emit_wait_wqe(IbvTxQueue& q, uint64_t when_ns) {
   wctrl->qpn_ds = htobe32((q.sqn << 8) | 3u);  // ctrl(1) + wseg(2) = 3 DS
   wctrl->signature = 0;
   wctrl->dci_stream_channel_id = 0;
-  wctrl->fm_ce_se = 0;  // unsignaled
+  wctrl->fm_ce_se = (MLX5_COMP_ONLY_FIRST_ERR << MLX5_COMP_MODE_OFFSET);
   wctrl->imm = 0;
   auto* ws = reinterpret_cast<struct mlx5_wqe_wseg*>(wbase + 16);
   ws->operation = htobe32(MLX5_WAIT_COND_CYCLIC_SMALLER);
@@ -4971,7 +5063,8 @@ void* IbverbsEngine::emit_wait_wqe(IbvTxQueue& q, uint64_t when_ns) {
 }
 
 // Pack multiple single-segment packets into each enhanced multi-packet WQE.
-void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst) {
+void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst,
+                                       uint16_t first_packet) {
   const int n = static_cast<int>(burst->hdr.hdr.num_pkts);
   static constexpr int SIGNAL_EVERY_WQE = 16;
   uint8_t* const sq_buf = static_cast<uint8_t*>(q.dv_qp.sq.buf);
@@ -4980,7 +5073,7 @@ void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst) {
   uint8_t* const sq_end = sq_buf + static_cast<size_t>(wqe_cnt) * stride;
   const uint32_t lkey = q.regions[0].lkey;
   void* last_ctrl = nullptr;
-  int packet = 0;
+  int packet = static_cast<int>(first_packet);
   int burst_wqe = 0;
 
   while (packet < n) {
@@ -4998,7 +5091,7 @@ void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst) {
     ctrl->qpn_ds = htobe32((q.sqn << 8) | ds);
     ctrl->signature = 0;
     ctrl->dci_stream_channel_id = 0;
-    ctrl->fm_ce_se = signaled ? MLX5_WQE_CTRL_CQ_UPDATE : 0;
+    ctrl->fm_ce_se = tx_completion_mode(signaled);
     ctrl->imm = 0;
     memset(title + 16, 0, 16);
     reinterpret_cast<struct mlx5_wqe_eth_seg*>(title + 16)->cs_flags =
@@ -5028,9 +5121,10 @@ void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst) {
   doorbell_store_barrier();
   q.dv_qp.dbrec[MLX5_SND_DBR] = htobe32(static_cast<uint32_t>(q.sq_pi) & 0xffff);
   doorbell_store_barrier();
+  doorbell_mmio_flush();
   *reinterpret_cast<volatile uint64_t*>(static_cast<uint8_t*>(q.dv_qp.bf.reg) + q.bf_offset) =
       *reinterpret_cast<uint64_t*>(last_ctrl);
-  doorbell_store_barrier();
+  doorbell_mmio_flush();
   q.bf_offset ^= q.dv_qp.bf.size;
 }
 
@@ -5050,8 +5144,39 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
     return;
   }
   const bool scheduled = (burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) != 0;
-  if (q.empw_enabled && segs == 1 && !scheduled) {
-    post_tx_burst_empw(q, burst);
+  if (q.empw_enabled && empw_compatible_burst(burst)) {
+    if (scheduled) {
+      // A timestamp breaks an eMPW session. Gate packet 0 with WAIT + SEND,
+      // then pack the remaining untimed packets into eMPW WQEs.
+      emit_wait_wqe(q, burst_ts_arr(burst)[0]);
+      uint8_t* const sq_buf = static_cast<uint8_t*>(q.dv_qp.sq.buf);
+      const uint32_t wqe_cnt = q.dv_qp.sq.wqe_cnt;
+      const uint32_t stride = q.dv_qp.sq.stride;
+      const uint32_t idx = q.sq_pi % wqe_cnt;
+      uint8_t* const seg = sq_buf + static_cast<size_t>(idx) * stride;
+      auto* const ctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(seg);
+      ctrl->opmod_idx_opcode =
+          htobe32(((q.sq_pi & 0xffff) << 8) | MLX5_OPCODE_SEND);
+      ctrl->qpn_ds = htobe32((q.sqn << 8) | 3u);
+      ctrl->signature = 0;
+      ctrl->dci_stream_channel_id = 0;
+      ctrl->fm_ce_se = (MLX5_COMP_ONLY_FIRST_ERR << MLX5_COMP_MODE_OFFSET);
+      ctrl->imm = 0;
+      memset(seg + 16, 0, 16);
+      reinterpret_cast<struct mlx5_wqe_eth_seg*>(seg + 16)->cs_flags =
+          MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
+      auto* const dseg = reinterpret_cast<struct mlx5_wqe_data_seg*>(seg + 32);
+      dseg->byte_count = htobe32(burst->pkt_lens[0][0]);
+      dseg->lkey = htobe32(q.regions[0].lkey);
+      dseg->addr = htobe64(reinterpret_cast<uint64_t>(burst->pkts[0][0]));
+      ++q.slots_posted;
+      q.wqe_slot_cum[idx] = q.slots_posted;
+      ++q.sq_pi;
+      q.wqe_wqebb_cum[idx] = q.sq_pi;
+      post_tx_burst_empw(q, burst, 1);
+    } else {
+      post_tx_burst_empw(q, burst);
+    }
     return;
   }
   static constexpr int SIGNAL_EVERY = 32;
@@ -5077,7 +5202,7 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
     ctrl->qpn_ds = htobe32((q.sqn << 8) | ds);
     ctrl->signature = 0;
     ctrl->dci_stream_channel_id = 0;
-    ctrl->fm_ce_se = signaled ? MLX5_WQE_CTRL_CQ_UPDATE : 0;
+    ctrl->fm_ce_se = tx_completion_mode(signaled);
     ctrl->imm = 0;
     // Minimal (16-byte) Ethernet segment, no inline headers: the NIC DMAs the
     // whole frame from the data segment. Request IPv4 + L4 checksum offload so
@@ -5106,9 +5231,10 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
   doorbell_store_barrier();  // WQEs visible before the doorbell record
   q.dv_qp.dbrec[MLX5_SND_DBR] = htobe32(static_cast<uint32_t>(q.sq_pi) & 0xffff);
   doorbell_store_barrier();  // doorbell record visible before the BF write
+  doorbell_mmio_flush();
   *reinterpret_cast<volatile uint64_t*>(static_cast<uint8_t*>(q.dv_qp.bf.reg) + q.bf_offset) =
       *reinterpret_cast<uint64_t*>(last_ctrl);
-  doorbell_store_barrier();
+  doorbell_mmio_flush();
   q.bf_offset ^= q.dv_qp.bf.size;
 }
 

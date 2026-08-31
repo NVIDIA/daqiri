@@ -299,6 +299,7 @@ struct IbvTxQueue {
   std::vector<uint64_t> wqe_slot_cum;
   std::vector<uint64_t> wqe_wqebb_cum;
   uint64_t slots_posted = 0;
+  bool accurate_send = false;  // request wall-clock CQ for timed transmission
   bool send_scheduling = false;  // HCA wait_on_time present + real-time clock
   uint64_t rt_timemask = 0;      // wait segment comparison mask
   bool empw_enabled = false;
@@ -477,7 +478,8 @@ class IbverbsEngine : public Engine {
   Status create_tx_raw_qp(IbvTxQueue& q);  // IBV_QPT_RAW_PACKET, RESET->RTS
   Status configure_tx_pacing(IbvTxQueue& q, uint64_t pacing_mbps);
   void post_tx_burst(IbvTxQueue& q, BurstParams* burst);  // build send WQEs + ring doorbell
-  void post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst);
+  void post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst,
+                          uint16_t first_packet = 0);
   // Build a WAIT-on-time WQE (ctrl + wseg = 1 WQEBB, no slot) at q.sq_pi that
   // holds the following send(s) until the NIC real-time clock reaches when_ns,
   // advance sq_pi, and return its ctrl segment (for the BlueFlame doorbell).
