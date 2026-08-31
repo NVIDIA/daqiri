@@ -1825,13 +1825,6 @@ void RdmaEngine::free_tx_metadata(BurstParams* burst) {
   tx_meta->put(burst);
 }
 
-Status RdmaEngine::get_tx_metadata_buffer(BurstParams** burst) {
-  if (burst == nullptr) { return Status::INVALID_PARAMETER; }
-  *burst = create_tx_burst_params();
-  if (*burst == nullptr) { return Status::NO_FREE_BURST_BUFFERS; }
-  return Status::SUCCESS;
-}
-
 void RdmaEngine::print_stats() {
   DAQIRI_LOG_INFO("daqiri RDMA engine stats");
 

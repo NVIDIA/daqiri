@@ -365,11 +365,12 @@ void free_segment_packets_and_burst(BurstParams *burst, int seg);
 void free_all_packets_and_burst_rx(BurstParams *burst);
 
 /**
- * @brief Free all packets and a TX burst
+ * @brief Free an unsent TX burst and all of its packet buffers
  *
- * Frees all packets in a burst of packets and the associated burst buffer
+ * Releases all packet storage and TX burst metadata without submitting any
+ * packets for transmission.
  *
- * @param burst Burst structure containing packet lists
+ * @param burst Unsubmitted TX burst containing packet lists
  */
 void free_all_packets_and_burst_tx(BurstParams *burst);
 
@@ -776,6 +777,18 @@ void set_num_packets(BurstParams *burst, int64_t num);
  *    NOT_READY: direct queue called concurrently or from a non-owner thread; burst not consumed
  */
 Status send_tx_burst(BurstParams *burst);
+
+/**
+ * @brief Wait until all previously submitted TX packets have completed.
+ *
+ * This is a synchronization boundary for applications that must keep a peer
+ * receiver alive until asynchronous TX workers and the NIC have drained.
+ *
+ * @param timeout_ms Maximum time to wait in milliseconds.
+ * @return SUCCESS when idle, NOT_READY on timeout, or NOT_SUPPORTED when the
+ *         selected engine does not implement completion draining.
+ */
+Status wait_for_tx_idle(uint32_t timeout_ms);
 
 /**
  * @brief Get a RX burst

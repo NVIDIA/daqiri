@@ -192,7 +192,10 @@ void Engine::cleanup_eal() {
   // rte_eal_cleanup() releases EAL state and (on DPDK >= 22.07) unlinks the
   // per-segment hugepage files this process created. Older DPDK leaves them
   // behind, so we also do a best-effort unlink targeted at our --file-prefix.
-  rte_eal_cleanup();
+  const int cleanup_ret = rte_eal_cleanup();
+  if (cleanup_ret != 0) {
+    DAQIRI_LOG_WARN("DPDK EAL cleanup returned {}", cleanup_ret);
+  }
 
   // The patched rte_extmem_register_dmabuf() stores caller-provided fd values
   // for deferred driver DMA mapping; it does not duplicate them. They must

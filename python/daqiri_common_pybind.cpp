@@ -1216,6 +1216,7 @@ PYBIND11_MODULE(_daqiri, m) {
   m.def("free_all_packets_and_burst_rx", &free_all_packets_and_burst_rx,
         "burst"_a);
   m.def("free_all_packets_and_burst_tx", &free_all_packets_and_burst_tx,
+        "Release an unsubmitted TX burst and all of its packet buffers.",
         "burst"_a);
   m.def("free_segment_packets_and_burst", &free_segment_packets_and_burst,
         "burst"_a, "seg"_a);
