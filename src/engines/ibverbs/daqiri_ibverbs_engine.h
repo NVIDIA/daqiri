@@ -216,7 +216,7 @@ struct IbvRxQueue {
   // Direct polling transfers CQ ownership to the get_rx_burst caller. Only one
   // caller may poll a queue at a time; frees remain safe from other threads via
   // freed_strides' atomic counters.
-  std::mutex direct_poll_mutex;
+  std::atomic<uint64_t> direct_poll_owner{0};
   std::atomic<uint64_t> direct_poll_conflicts{0};
 
   // Optional GPU reordering state for this queue.
@@ -310,9 +310,7 @@ struct IbvTxQueue {
   uint64_t handoff_drop_pkts = 0;
   // Direct mode has no handoff worker. One caller thread owns the queue and may
   // have exactly one allocated-but-unposted packet at a time.
-  std::mutex direct_mutex;
-  std::thread::id direct_owner;
-  bool direct_owner_set = false;
+  std::atomic<uint64_t> direct_owner{0};
   BurstParams* direct_pending = nullptr;
   std::atomic<uint64_t> direct_conflicts{0};
   uint64_t direct_no_space = 0;
@@ -489,7 +487,7 @@ class IbverbsEngine : public Engine {
   uint64_t tx_burst_wqebbs(const IbvTxQueue& q, const BurstParams* burst) const;
   bool tx_sq_has_space(IbvTxQueue& q, uint64_t needed_wqebbs);
   void poll_tx_completions(IbvTxQueue& q);  // drain TX CQ, reclaim slot-runs
-  bool lock_direct_tx_queue(IbvTxQueue& q, std::unique_lock<std::mutex>& guard);
+  bool owns_direct_tx_queue(IbvTxQueue& q);
   // One worker services a group of TX queues sharing a cpu_core, round-robin:
   // drains each send_ring (post) + reclaims completions.
   void tx_worker(std::vector<IbvTxQueue*> group);
