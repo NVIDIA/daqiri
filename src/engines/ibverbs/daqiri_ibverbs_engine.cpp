@@ -71,6 +71,30 @@ inline uint64_t ibv_now_ns() {
                                    .count());
 }
 
+// Assign each calling thread a process-unique token. Direct queues atomically
+// remember the first token they see, avoiding a mutex on every steady-state
+// poll/post while still rejecting access from any other thread.
+uint64_t direct_thread_token() {
+  static std::atomic<uint64_t> next{1};
+  thread_local const uint64_t token = next.fetch_add(1, std::memory_order_relaxed);
+  return token;
+}
+
+bool claim_direct_owner(std::atomic<uint64_t>& owner) {
+  const uint64_t caller = direct_thread_token();
+  uint64_t current = owner.load(std::memory_order_relaxed);
+  if (current == caller) {
+    return true;
+  }
+  if (current != 0) {
+    return false;
+  }
+  uint64_t expected = 0;
+  return owner.compare_exchange_strong(expected, caller, std::memory_order_relaxed,
+                                       std::memory_order_relaxed) ||
+         expected == caller;
+}
+
 size_t next_power_of_two(size_t value) {
   if (value == 0) {
     return 0;
@@ -3572,13 +3596,12 @@ Status IbverbsEngine::get_rx_burst(BurstParams** burst, int port, int q) {
     return Status::INVALID_PARAMETER;
   }
   if (rq->poll_mode == QueuePollMode::DIRECT) {
-    std::unique_lock<std::mutex> guard(rq->direct_poll_mutex, std::try_to_lock);
-    if (!guard.owns_lock()) {
+    if (!claim_direct_owner(rq->direct_poll_owner)) {
       const uint64_t conflicts = rq->direct_poll_conflicts.fetch_add(1) + 1;
       if ((conflicts & (conflicts - 1)) == 0) {
         DAQIRI_LOG_WARN(
-            "Concurrent direct RX poll on port {} queue {} rejected ({} conflict(s)); use one "
-            "polling thread per direct queue",
+            "Direct RX port {} queue {} called from a non-owner thread ({} conflict(s)); the "
+            "first caller owns this queue",
             port, q, conflicts);
       }
       return Status::NOT_READY;
@@ -3631,7 +3654,9 @@ void IbverbsEngine::free_all_packets(BurstParams* burst) {
       return;
     }
     if (tq->poll_mode == QueuePollMode::DIRECT) {
-      std::lock_guard<std::mutex> guard(tq->direct_mutex);
+      if (!owns_direct_tx_queue(*tq)) {
+        return;
+      }
       if (tq->direct_pending == burst) {
         tq->alloc_head--;
         tq->direct_pending = nullptr;
@@ -4738,25 +4763,8 @@ void IbverbsEngine::poll_tx_completions(IbvTxQueue& q) {
   }
 }
 
-bool IbverbsEngine::lock_direct_tx_queue(IbvTxQueue& q, std::unique_lock<std::mutex>& guard) {
-  if (!guard.try_lock()) {
-    const uint64_t conflicts = q.direct_conflicts.fetch_add(1) + 1;
-    if ((conflicts & (conflicts - 1)) == 0) {
-      DAQIRI_LOG_WARN(
-          "Concurrent direct TX access on port {} queue {} rejected ({} conflict(s)); use one "
-          "thread per direct queue",
-          q.port_id, q.queue_id, conflicts);
-    }
-    return false;
-  }
-
-  const std::thread::id caller = std::this_thread::get_id();
-  if (!q.direct_owner_set) {
-    q.direct_owner = caller;
-    q.direct_owner_set = true;
-    return true;
-  }
-  if (q.direct_owner != caller) {
+bool IbverbsEngine::owns_direct_tx_queue(IbvTxQueue& q) {
+  if (!claim_direct_owner(q.direct_owner)) {
     const uint64_t conflicts = q.direct_conflicts.fetch_add(1) + 1;
     if ((conflicts & (conflicts - 1)) == 0) {
       DAQIRI_LOG_WARN(
@@ -4915,8 +4923,7 @@ bool IbverbsEngine::is_tx_burst_available(BurstParams* burst) {
     if (burst->hdr.hdr.num_pkts != 1) {
       return false;
     }
-    std::unique_lock<std::mutex> guard(q->direct_mutex, std::defer_lock);
-    if (!lock_direct_tx_queue(*q, guard) || q->direct_pending != nullptr) {
+    if (!owns_direct_tx_queue(*q) || q->direct_pending != nullptr) {
       return false;
     }
     poll_tx_completions(*q);
@@ -4936,15 +4943,13 @@ Status IbverbsEngine::get_tx_packet_burst(BurstParams* burst) {
     return Status::INVALID_PARAMETER;
   }
   const unsigned n = static_cast<unsigned>(burst->hdr.hdr.num_pkts);
-  std::unique_lock<std::mutex> direct_guard;
   if (q->poll_mode == QueuePollMode::DIRECT) {
     if (n != 1) {
       DAQIRI_LOG_WARN("Direct TX port {} queue {} requires exactly one packet; requested {}",
                       q->port_id, q->queue_id, n);
       return Status::INVALID_PARAMETER;
     }
-    direct_guard = std::unique_lock<std::mutex>(q->direct_mutex, std::defer_lock);
-    if (!lock_direct_tx_queue(*q, direct_guard)) {
+    if (!owns_direct_tx_queue(*q)) {
       return Status::NOT_READY;
     }
     if (q->direct_pending != nullptr) {
@@ -5298,8 +5303,7 @@ Status IbverbsEngine::send_tx_burst(BurstParams* burst) {
     return Status::INVALID_PARAMETER;
   }
   if (q->poll_mode == QueuePollMode::DIRECT) {
-    std::unique_lock<std::mutex> guard(q->direct_mutex, std::defer_lock);
-    if (!lock_direct_tx_queue(*q, guard)) {
+    if (!owns_direct_tx_queue(*q)) {
       return Status::NOT_READY;
     }
     if (burst->hdr.hdr.num_pkts != 1 || q->direct_pending != burst) {
