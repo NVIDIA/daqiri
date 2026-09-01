@@ -621,6 +621,9 @@ int main(int argc, char** argv) {
       std::cout << '\n';
     }
 
+    if (daqiri::wait_for_tx_idle(options.timeout_ms) != daqiri::Status::SUCCESS) {
+      std::cerr << "warning: timed out draining TX before shutdown\n";
+    }
     daqiri::print_stats();
     daqiri::shutdown();
     write_samples(options.csv_path, all_samples);
