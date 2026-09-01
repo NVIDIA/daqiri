@@ -238,6 +238,54 @@ After having modified the configuration file, ensure you have connected an SFP c
 
 By default the application runs for 10 seconds and then exits. You can change the duration by passing `--seconds <N>` after the YAML path, or stop it gracefully at any time with `Ctrl-C`.
 
+### Direct-polling latency sweep
+
+`daqiri_bench_raw_latency` measures the caller-driven raw ibverbs path with one packet
+outstanding at a time. Its template, `daqiri_bench_raw_latency_ibverbs.yaml`, configures both TX
+and RX with `poll_mode: direct`, enables per-packet RX hardware timestamps, and uses host-pinned
+buffers by default. The benchmark also supports `huge` and `device` packet memory: packet setup and
+identity checking use `cudaMemcpyDefault`, with both copies deliberately outside the reported
+`send_tx_burst()` call to `get_rx_burst()` return interval. It
+sweeps 64, 128, 256, ..., 8192-byte L2 frames; sizes exclude the Ethernet FCS added by the NIC.
+
+Replace the TX/RX PCI BDFs, master/application cores, destination MAC, and RX port's
+`ptp_device` in the template. The destination MAC must be the receiving port's MAC. Connect the
+physical loopback path, then run:
+
+```bash
+sudo ./build/examples/daqiri_bench_raw_latency \
+  examples/daqiri_bench_raw_latency_ibverbs.yaml \
+  --samples 10000 --warmup 1000 --csv latency.csv \
+  --realtime-priority 90
+```
+
+For a single-port internal comparison, merge the TX and RX queues under one interface, set both
+`bench_latency` interface names to it, use that port's MAC and PTP device, and set
+`daqiri.cfg.loopback: "hw"`. This retains the same timing boundaries while replacing the physical
+cable/peer-port return with the mlx5 hardware self-loopback path.
+
+`--realtime-priority N` locks current and future mappings with `mlockall()` and verifies that the
+latency thread is running under `SCHED_FIFO` at priority `N`. It requires the corresponding
+realtime scheduling and memory-lock privileges; omit it to retain normal `SCHED_OTHER` behavior.
+
+The summary and optional per-sample CSV use these boundaries:
+
+| Column | Start | End | What it includes |
+|--------|-------|-----|------------------|
+| `tx_call_to_return_ns` | Timestamp immediately before `send_tx_burst()` | Function return | Direct WQE construction and SQ doorbell submission |
+| `tx_call_to_rx_hw_ns` | Timestamp immediately before `send_tx_burst()` | NIC RX timestamp | TX submission, NIC transmit, physical or hardware-loopback return, and NIC receive |
+| `rx_hw_to_app_ns` | NIC RX timestamp | Successful `get_rx_burst()` return | CQ visibility, direct polling, and API return |
+| `tx_call_to_app_ns` | Timestamp immediately before `send_tx_burst()` | Successful `get_rx_burst()` return | Complete measured application round trip |
+
+`tx_call_to_rx_hw_ns` is a loopback-ingress proxy, not an actual TX egress timestamp: DAQIRI does
+not currently expose a TX hardware timestamp, so this value also contains the cable and NIC RX
+latency. When `ptp_device` is set, the benchmark uses Linux's non-mutating extended
+PHC/system cross-timestamp ioctl before and after each size and interpolates the offset for every
+sample. It prints the maximum measured cross-clock uncertainty. Without `ptp_device`, the NIC PHC
+must be synchronized with `CLOCK_REALTIME`; negative or implausibly large values indicate a clock
+problem. Pin the application core to an isolated physical core, use the performance governor, and
+save the raw CSV when investigating tails.
+
 ### Single-port hardware loopback without a cable
 
 On mlx5 systems where the NIC remains available without a cable, DAQIRI can send packets back to
