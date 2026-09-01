@@ -1005,7 +1005,7 @@ Status IbverbsEngine::devx_create_rq(IbvRxQueue& q, uint32_t stride_log, uint32_
     // the public PTP epoch-nanosecond timestamp contract.
     DEVX_SET(rqc, rqc, ts_format, MLX5_RQC_TIMESTAMP_FORMAT_REAL_TIME);
   } else {
-    DAQIRI_LOG_WARN(
+    DAQIRI_LOG_CRITICAL(
         "RX queue {}: real-time CQ timestamps are unsupported; using the device clock format",
         q.queue_id);
   }
