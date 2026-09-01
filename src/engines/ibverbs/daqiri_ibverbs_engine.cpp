@@ -997,17 +997,25 @@ Status IbverbsEngine::devx_create_rq(IbvRxQueue& q, uint32_t stride_log, uint32_
   DEVX_SET(rqc, rqc, cqn, q.dv_cq.cqn);
   DEVX_SET(rqc, rqc, flush_in_error_en, 1);
   DEVX_SET(rqc, rqc, vsd, 1);  // do not strip VLAN
-  // The public timestamp contract is PTP epoch nanoseconds. Request mlx5
-  // real-time CQEs, whose timestamp field uses UTC encoding
-  // (seconds << 32 | nanoseconds).
-  DEVX_SET(rqc, rqc, ts_format, MLX5_RQC_TIMESTAMP_FORMAT_REAL_TIME);
+  struct mlx5dv_context dv_ctx {};
+  q.realtime_timestamps = mlx5dv_query_device(q.ctx, &dv_ctx) == 0 &&
+                          (dv_ctx.flags & MLX5DV_CONTEXT_FLAGS_REAL_TIME_TS) != 0;
+  if (q.realtime_timestamps) {
+    // Real-time CQEs use UTC encoding (seconds << 32 | nanoseconds), matching
+    // the public PTP epoch-nanosecond timestamp contract.
+    DEVX_SET(rqc, rqc, ts_format, MLX5_RQC_TIMESTAMP_FORMAT_REAL_TIME);
+  } else {
+    DAQIRI_LOG_CRITICAL(
+        "RX queue {}: real-time CQ timestamps are unsupported; using the device clock format",
+        q.queue_id);
+  }
 
   DEVX_SET(wq, wq, wq_type, q.striding ? MLX5_WQ_TYPE_CYCLIC_STRIDING_RQ : MLX5_WQ_TYPE_CYCLIC);
   DEVX_SET(wq, wq, log_wq_stride, log2_floor(q.wqe_stride));
   DEVX_SET(wq, wq, log_wq_sz, log2_floor(q.num_wqe));
   DEVX_SET(wq, wq, pd, dvpd.pdn);
-  // WQ page size is encoded relative to the mlx5 4 KiB adapter page, not the
-  // operating-system page size (which is 64 KiB on GH200).
+  // The PRM field is relative to the mlx5 4 KiB adapter page, independent of
+  // the operating-system page size used to register the UMEM.
   DEVX_SET(wq, wq, log_wq_pg_sz, MLX5_ADAPTER_PAGE_SIZE_4_KIB);
   DEVX_SET64(wq, wq, dbr_addr, dbr_off);
   DEVX_SET(wq, wq, dbr_umem_id, q.wq_umem->umem_id);
@@ -3748,6 +3756,10 @@ Status IbverbsEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint6
     return Status::INVALID_PARAMETER;
   }
   const uint64_t raw_timestamp = burst_ts_arr(burst)[idx];
+  if (!q->realtime_timestamps) {
+    *timestamp_ns = ts_to_ns(q->ctx, raw_timestamp);
+    return Status::SUCCESS;
+  }
   // mlx5 real-time CQEs use UTC encoding; expose the public API's linear PTP
   // epoch-nanosecond representation.
   const uint64_t seconds = raw_timestamp >> 32;

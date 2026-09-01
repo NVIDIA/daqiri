@@ -121,6 +121,10 @@ RX hardware timestamps are available only when DAQIRI is configured with
 `rx.hardware_timestamps: true` and the NIC and driver support hardware timestamps.
 DAQIRI returns unsigned 64-bit PTP epoch nanoseconds in the same clock domain as
 a PTP-synchronized `CLOCK_REALTIME`. Device-clock ticks are not part of the public API.
+On the raw ibverbs engine, DAQIRI requests mlx5 real-time CQ timestamps only when
+the device advertises that format. Devices without that capability stay on the
+default mlx5 device-clock CQ format, and DAQIRI converts those raw ticks to
+nanoseconds before returning them.
 **WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or system clock
 configuration. Timestamp values are invalid if the clocks are not PTP-synchronized.
 For reordered aggregate bursts,

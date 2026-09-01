@@ -246,8 +246,9 @@ Status poll_flow_op(FlowOpResult *result);
  *
  * Retrieves the 64-bit receive timestamp for a packet when DAQIRI is configured
  * with rx.hardware_timestamps enabled and the NIC and driver provide hardware
- * timestamps as PTP epoch nanoseconds. DAQIRI assumes that the
- * NIC clock and CLOCK_REALTIME are PTP-synchronized and does not validate
+ * timestamps. DAQIRI returns PTP epoch nanoseconds; engines that receive raw
+ * device-clock ticks convert them before returning. DAQIRI assumes that the NIC
+ * clock and CLOCK_REALTIME are PTP-synchronized and does not validate
  * synchronization. The result is invalid without working PTP.
  *
  * @param burst Burst structure containing packets
