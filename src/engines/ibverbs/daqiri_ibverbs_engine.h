@@ -299,6 +299,7 @@ struct IbvTxQueue {
   std::vector<uint64_t> wqe_slot_cum;
   std::vector<uint64_t> wqe_wqebb_cum;
   uint64_t slots_posted = 0;
+  uint64_t last_signaled_slots = 0;
   bool accurate_send = false;  // request wall-clock CQ for timed transmission
   bool send_scheduling = false;  // HCA wait_on_time present + real-time clock
   uint64_t rt_timemask = 0;      // wait segment comparison mask
@@ -314,6 +315,9 @@ struct IbvTxQueue {
   std::atomic<uint64_t> direct_conflicts{0};
   uint64_t direct_no_space = 0;
   uint64_t full_bf_wqebbs = 0;
+  uint64_t direct_cq_polls = 0;
+  uint64_t direct_signaled_wqes = 0;
+  uint64_t direct_drain_nops = 0;
   // tx_eth_src offload: when set, set_eth_header stamps the port's MAC as the
   // Ethernet source so the application doesn't have to supply it.
   bool insert_eth_src = false;
@@ -485,6 +489,8 @@ class IbverbsEngine : public Engine {
   void* emit_wait_wqe(IbvTxQueue& q, uint64_t when_ns);
   uint64_t tx_burst_wqebbs(const IbvTxQueue& q, const BurstParams* burst) const;
   bool tx_sq_has_space(IbvTxQueue& q, uint64_t needed_wqebbs);
+  bool direct_tx_has_capacity(IbvTxQueue& q, uint64_t needed_wqebbs);
+  bool emit_direct_drain_nop(IbvTxQueue& q);
   void poll_tx_completions(IbvTxQueue& q);  // drain TX CQ, reclaim slot-runs
   bool owns_direct_tx_queue(IbvTxQueue& q);
   // One worker services a group of TX queues sharing a cpu_core, round-robin:

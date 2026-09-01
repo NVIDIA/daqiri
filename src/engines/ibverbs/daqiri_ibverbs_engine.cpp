@@ -4207,14 +4207,20 @@ bool IbverbsEngine::validate_config() const {
 }
 
 Status IbverbsEngine::wait_for_tx_idle(uint32_t timeout_ms) {
-  const auto deadline =
-      std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
   for (;;) {
     bool idle = true;
-    for (const auto& q : tx_queues_) {
+    for (auto& q : tx_queues_) {
+      if (q->poll_mode == QueuePollMode::DIRECT) {
+        ++q->direct_cq_polls;
+        poll_tx_completions(*q);
+        const uint64_t completed = q->completed_tail.load(std::memory_order_acquire);
+        if (q->slots_posted > completed && q->last_signaled_slots < q->slots_posted) {
+          emit_direct_drain_nop(*q);
+        }
+      }
       if (q->completed_tail.load(std::memory_order_acquire) != q->alloc_head) {
         idle = false;
-        break;
       }
     }
     if (idle) {
@@ -4242,10 +4248,11 @@ void IbverbsEngine::print_stats() {
     DAQIRI_LOG_INFO(
         "ibverbs TX port {} q{} ({}): posted={} completed={} inflight={} "
         "handoff_full_drops={} bursts ({} pkts) direct_no_space={} direct_conflicts={} "
-        "full_bf_wqebbs={}",
+        "full_bf_wqebbs={} direct_cq_polls={} direct_signaled_wqes={} direct_drain_nops={}",
         q->port_id, q->queue_id, queue_poll_mode_to_string(q->poll_mode), q->slots_posted,
         completed, inflight, q->handoff_drop_bursts, q->handoff_drop_pkts, q->direct_no_space,
-        q->direct_conflicts.load(), q->full_bf_wqebbs);
+        q->direct_conflicts.load(), q->full_bf_wqebbs, q->direct_cq_polls, q->direct_signaled_wqes,
+        q->direct_drain_nops);
   }
 }
 
@@ -4842,6 +4849,64 @@ bool IbverbsEngine::tx_sq_has_space(IbvTxQueue& q, uint64_t needed_wqebbs) {
   return needed_wqebbs <= q.sq_capacity_wqebbs - used;
 }
 
+// Direct callers reclaim lazily: use cached completion progress until either
+// credits are actually scarce or enough sends have accumulated to amortize a
+// CQ poll. The allocation call reserves the maximum direct cost (WAIT + SEND),
+// so send_tx_burst does not need to repeat these checks in its timed hot path.
+bool IbverbsEngine::direct_tx_has_capacity(IbvTxQueue& q, uint64_t needed_wqebbs) {
+  static constexpr uint64_t DIRECT_RECLAIM_BATCH = 256;
+  const auto has_capacity = [&]() {
+    const uint64_t in_flight = q.alloc_head - q.completed_tail.load(std::memory_order_acquire);
+    return in_flight < q.num_slots && tx_sq_has_space(q, needed_wqebbs);
+  };
+  const uint64_t reclaim_batch =
+      std::min<uint64_t>(DIRECT_RECLAIM_BATCH, std::max<uint64_t>(1, q.num_slots / 2));
+  const uint64_t outstanding = q.alloc_head - q.completed_tail.load(std::memory_order_acquire);
+  if (outstanding < reclaim_batch && has_capacity()) {
+    return true;
+  }
+  ++q.direct_cq_polls;
+  poll_tx_completions(q);
+  return has_capacity();
+}
+
+// A queue-wide unsignaled cadence may leave a short tail with no successful
+// CQE. Emit one signaled NOP at an explicit drain boundary so completion of the
+// NOP retires all earlier sends without consuming a packet slot.
+bool IbverbsEngine::emit_direct_drain_nop(IbvTxQueue& q) {
+  if (!tx_sq_has_space(q, 1)) {
+    return false;
+  }
+  uint8_t* const sq_buf = static_cast<uint8_t*>(q.dv_qp.sq.buf);
+  const uint32_t wqe_cnt = q.dv_qp.sq.wqe_cnt;
+  const uint32_t stride = q.dv_qp.sq.stride;
+  const uint32_t idx = q.sq_pi % wqe_cnt;
+  uint8_t* const seg = sq_buf + static_cast<size_t>(idx) * stride;
+  memset(seg, 0, stride);
+  auto* const ctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(seg);
+  ctrl->opmod_idx_opcode = htobe32(((q.sq_pi & 0xffff) << 8) | MLX5_OPCODE_NOP);
+  ctrl->qpn_ds = htobe32((q.sqn << 8) | 1u);
+  ctrl->fm_ce_se = tx_completion_mode(true);
+  q.wqe_slot_cum[idx] = q.slots_posted;
+  ++q.sq_pi;
+  q.wqe_wqebb_cum[idx] = q.sq_pi;
+
+  doorbell_store_barrier();
+  q.dv_qp.dbrec[MLX5_SND_DBR] = htobe32(static_cast<uint32_t>(q.sq_pi) & 0xffff);
+  doorbell_store_barrier();
+  doorbell_mmio_flush();
+  void* const bf = static_cast<uint8_t*>(q.dv_qp.bf.reg) + q.bf_offset;
+  if (q.dv_qp.bf.size < 64 || !blueflame_copy_wqebb(bf, ctrl)) {
+    *reinterpret_cast<volatile uint64_t*>(bf) = *reinterpret_cast<uint64_t*>(ctrl);
+  }
+  doorbell_mmio_flush();
+  q.bf_offset ^= q.dv_qp.bf.size;
+  q.last_signaled_slots = q.slots_posted;
+  ++q.direct_signaled_wqes;
+  ++q.direct_drain_nops;
+  return true;
+}
+
 // Pinned TX worker: drains the hand-off ring (the cheap DevX WQE build + doorbell
 // runs here, on a dedicated core, so the application's fill thread is free to keep
 // filling) and reclaims completed slots. Splitting fill and post across two cores
@@ -4926,9 +4991,7 @@ bool IbverbsEngine::is_tx_burst_available(BurstParams* burst) {
     if (!owns_direct_tx_queue(*q) || q->direct_pending != nullptr) {
       return false;
     }
-    poll_tx_completions(*q);
-    const uint64_t in_flight = q->alloc_head - q->completed_tail.load(std::memory_order_acquire);
-    return in_flight < q->num_slots && tx_sq_has_space(*q, 2);
+    return direct_tx_has_capacity(*q, 2);
   }
   const uint64_t in_flight = q->alloc_head - q->completed_tail.load(std::memory_order_acquire);
   return (q->num_slots - in_flight) >= static_cast<uint64_t>(burst->hdr.hdr.num_pkts);
@@ -4955,9 +5018,7 @@ Status IbverbsEngine::get_tx_packet_burst(BurstParams* burst) {
     if (q->direct_pending != nullptr) {
       return Status::NOT_READY;
     }
-    poll_tx_completions(*q);
-    const uint64_t in_flight = q->alloc_head - q->completed_tail.load(std::memory_order_acquire);
-    if (in_flight >= q->num_slots || !tx_sq_has_space(*q, 2)) {
+    if (!direct_tx_has_capacity(*q, 2)) {
       return Status::NO_FREE_PACKET_BUFFERS;
     }
   }
@@ -5180,8 +5241,9 @@ void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst,
 // queues and synchronously on the application thread for direct queues,
 // bypassing ibv_post_send. Each WQE is ctrl(16) + minimal eth(16) + data
 // segs(16 each); with <=2 segments it is exactly one 64B WQEBB, so the SQ
-// producer (and the CQE wqe_counter) advances by one per packet. Signals every
-// SIGNAL_EVERY-th WQE (and the last) for completion-driven slot reclaim.
+// producer (and the CQE wqe_counter) advances by one per packet. Indirect
+// bursts signal their last WQE. Direct mode instead uses a persistent
+// queue-wide cadence so a one-packet burst does not request a CQE every time.
 // Does NOT free the metadata block; the worker or direct caller does that after
 // this function returns.
 void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
@@ -5244,7 +5306,9 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
     const uint32_t idx = q.sq_pi % wqe_cnt;
     uint8_t* seg = sq_buf + static_cast<size_t>(idx) * stride;
     auto* ctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(seg);
-    const bool signaled = ((i % SIGNAL_EVERY) == (SIGNAL_EVERY - 1)) || (i == n - 1);
+    const bool signaled = q.poll_mode == QueuePollMode::DIRECT
+                              ? ((q.slots_posted + 1) % 16 == 0)
+                              : (((i % SIGNAL_EVERY) == (SIGNAL_EVERY - 1)) || (i == n - 1));
     ctrl->opmod_idx_opcode = htobe32(((q.sq_pi & 0xffff) << 8) | MLX5_OPCODE_SEND);
     ctrl->qpn_ds = htobe32((q.sqn << 8) | ds);
     ctrl->signature = 0;
@@ -5267,6 +5331,12 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
       dseg[s].addr = htobe64(reinterpret_cast<uint64_t>(burst->pkts[s][i]));
     }
     q.slots_posted++;  // this packet consumes one slot
+    if (signaled) {
+      q.last_signaled_slots = q.slots_posted;
+      if (q.poll_mode == QueuePollMode::DIRECT) {
+        ++q.direct_signaled_wqes;
+      }
+    }
     q.wqe_slot_cum[idx] = q.slots_posted;
     last_ctrl = ctrl;
     q.sq_pi++;
@@ -5310,15 +5380,6 @@ Status IbverbsEngine::send_tx_burst(BurstParams* burst) {
       DAQIRI_LOG_WARN("Direct TX port {} queue {} requires its one pending single-packet burst",
                       q->port_id, q->queue_id);
       return Status::INVALID_PARAMETER;
-    }
-    poll_tx_completions(*q);
-    const uint64_t needed_wqebbs = tx_burst_wqebbs(*q, burst);
-    if (!tx_sq_has_space(*q, needed_wqebbs)) {
-      q->alloc_head--;
-      q->direct_pending = nullptr;
-      q->direct_no_space++;
-      tx_meta_pool_->put(burst);
-      return Status::NO_SPACE_AVAILABLE;
     }
     post_tx_burst(*q, burst);
     q->direct_pending = nullptr;
