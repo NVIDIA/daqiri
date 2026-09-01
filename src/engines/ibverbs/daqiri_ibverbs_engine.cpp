@@ -54,8 +54,7 @@ namespace daqiri {
 // ONLY_FIRST_ERR; selected WQEs use ALWAYS so the CQ can drive reclamation.
 // A zero completion mode can stall an SQ containing consecutive WAIT WQEs.
 static constexpr uint8_t tx_completion_mode(bool signaled) {
-  return signaled ? MLX5_WQE_CTRL_CQ_UPDATE
-                  : (MLX5_COMP_ONLY_FIRST_ERR << MLX5_COMP_MODE_OFFSET);
+  return signaled ? MLX5_WQE_CTRL_CQ_UPDATE : (MLX5_COMP_ONLY_FIRST_ERR << MLX5_COMP_MODE_OFFSET);
 }
 
 namespace {
@@ -219,6 +218,43 @@ static inline bool blueflame_copy_wqebb(void* dst, const void* src) {
   }
 #endif
   return true;
+}
+
+// Push a complete, contiguous WQE through the BlueFlame WC mapping. The WQE
+// is staged in an aligned local buffer, so a cyclic-SQ wrap can never make the
+// 64-byte source read cross the SQ allocation boundary.
+static inline bool blueflame_copy_wqe(void* dst, const void* src, uint32_t wqebbs) {
+  auto* out = static_cast<uint8_t*>(dst);
+  const auto* in = static_cast<const uint8_t*>(src);
+  for (uint32_t i = 0; i < wqebbs; ++i) {
+    if (!blueflame_copy_wqebb(out + static_cast<size_t>(i) * MLX5_SEND_WQE_BB,
+                              in + static_cast<size_t>(i) * MLX5_SEND_WQE_BB)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static constexpr uint32_t MLX5_RAW_ETH_INLINE_HEADER = 18;
+static constexpr uint32_t MLX5_CPU_INLINE_MAX_FRAME = 128;
+
+static inline uint32_t cpu_inline_wqe_ds(uint32_t frame_len) {
+  // ctrl(1 DS) + full eth segment(2 DS) + inline segment header/payload.
+  const uint32_t remainder = frame_len - MLX5_RAW_ETH_INLINE_HEADER;
+  return 3u + (sizeof(struct mlx5_wqe_inl_data_seg) + remainder + 15u) / 16u;
+}
+
+static inline uint32_t cpu_inline_wqe_wqebbs(uint32_t frame_len) {
+  return (cpu_inline_wqe_ds(frame_len) * 16u + MLX5_SEND_WQE_BB - 1u) / MLX5_SEND_WQE_BB;
+}
+
+static inline void copy_wqe_to_cyclic_sq(uint8_t* sq_buf, uint32_t wqe_cnt, uint32_t stride,
+                                         uint32_t first_idx, const uint8_t* wqe, uint32_t wqebbs) {
+  for (uint32_t i = 0; i < wqebbs; ++i) {
+    const uint32_t idx = (first_idx + i) % wqe_cnt;
+    memcpy(sq_buf + static_cast<size_t>(idx) * stride,
+           wqe + static_cast<size_t>(i) * MLX5_SEND_WQE_BB, MLX5_SEND_WQE_BB);
+  }
 }
 
 static void append_bytes(std::vector<uint8_t>& dst, const void* src, size_t len) {
@@ -1028,8 +1064,7 @@ Status IbverbsEngine::devx_create_rq(IbvRxQueue& q, uint32_t stride_log, uint32_
   // Receive WQ memory is consumed by the HCA and does not require remote
   // access permissions. Match the mlx5/DPDK DevX RQ resource path, which
   // registers this UMEM with no access flags.
-  q.wq_umem =
-      mlx5dv_devx_umem_reg(q.ctx, q.wq_buf, umem_bytes, 0);
+  q.wq_umem = mlx5dv_devx_umem_reg(q.ctx, q.wq_buf, umem_bytes, 0);
   if (q.wq_umem == nullptr) {
     DAQIRI_LOG_CRITICAL("mlx5dv_devx_umem_reg failed: {}", strerror(errno));
     return Status::GENERIC_FAILURE;
@@ -2145,7 +2180,9 @@ Status IbverbsEngine::install_port_flows() {
       const FlowMatch& mt = fl.match_;
       std::vector<struct mlx5dv_dr_action*> flow_reformats;
       for (const auto& action : actions) {
-        if (!flow_action_is_transform(action)) { continue; }
+        if (!flow_action_is_transform(action)) {
+          continue;
+        }
         st.reformat_buffers.emplace_back();
         auto& buffer = st.reformat_buffers.back();
         enum mlx5dv_flow_action_packet_reformat_type reformat_type {};
@@ -4260,11 +4297,12 @@ void IbverbsEngine::print_stats() {
     DAQIRI_LOG_INFO(
         "ibverbs TX port {} q{} ({}): posted={} completed={} inflight={} "
         "handoff_full_drops={} bursts ({} pkts) direct_no_space={} direct_conflicts={} "
-        "full_bf_wqebbs={} direct_cq_polls={} direct_signaled_wqes={} direct_drain_nops={}",
+        "full_bf_wqebbs={} inline_wqes={} direct_cq_polls={} direct_signaled_wqes={} "
+        "direct_drain_nops={}",
         q->port_id, q->queue_id, queue_poll_mode_to_string(q->poll_mode), q->slots_posted,
         completed, inflight, q->handoff_drop_bursts, q->handoff_drop_pkts, q->direct_no_space,
-        q->direct_conflicts.load(), q->full_bf_wqebbs, q->direct_cq_polls, q->direct_signaled_wqes,
-        q->direct_drain_nops);
+        q->direct_conflicts.load(), q->full_bf_wqebbs, q->inline_wqes, q->direct_cq_polls,
+        q->direct_signaled_wqes, q->direct_drain_nops);
   }
 }
 
@@ -4563,21 +4601,25 @@ Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
     q.cq = ibv_create_cq(q.ctx, static_cast<int>(q.num_slots) + 1, nullptr, nullptr, 0);
   }
   if (q.cq == nullptr) {
-    DAQIRI_LOG_CRITICAL("TX ibv_create_cq failed (accurate_send={}): {}",
-                        q.accurate_send, strerror(errno));
+    DAQIRI_LOG_CRITICAL("TX ibv_create_cq failed (accurate_send={}): {}", q.accurate_send,
+                        strerror(errno));
     return Status::GENERIC_FAILURE;
   }
   struct ibv_qp_init_attr attr {};
   attr.qp_type = IBV_QPT_RAW_PACKET;
   attr.send_cq = q.cq;
   attr.recv_cq = q.cq;
-  // Room for 2 WQEBBs per slot: a scheduled packet emits a WAIT WQE before its
-  // send WQE, so the SQ must hold up to 2x num_slots WQEs in flight.
+  // Room for at least two send operations per slot: a scheduled packet emits a
+  // WAIT WQE before its SEND. Direct CPU inline WQEs may occupy several WQEBBs;
+  // max_inline_data below makes the provider size each SQ operation for them.
   attr.cap.max_send_wr = static_cast<uint32_t>(requested_send_wr);
   // Size the QP for the segments this queue actually uses. Requesting the
   // library-wide maximum makes mlx5 reserve larger WQEs even for a normal
   // single-region queue and can needlessly exceed the device's SQ limit.
   attr.cap.max_send_sge = static_cast<uint32_t>(q.num_segs);
+  if (q.cpu_inline_enabled) {
+    attr.cap.max_inline_data = MLX5_CPU_INLINE_MAX_FRAME;
+  }
   attr.cap.max_recv_wr = 1;
   attr.cap.max_recv_sge = 1;
   q.qp = ibv_create_qp(q.pd, &attr);
@@ -4594,6 +4636,7 @@ Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
     }
     return Status::GENERIC_FAILURE;
   }
+  q.max_inline_data = attr.cap.max_inline_data;
   // RESET -> INIT -> RTR -> RTS.
   struct ibv_qp_attr m {};
   m.qp_state = IBV_QPS_INIT;
@@ -4707,6 +4750,8 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
     q.regions.push_back(r);
     q.num_slots = std::min<uint32_t>(q.num_slots, static_cast<uint32_t>(mr.num_bufs_));
   }
+  q.cpu_inline_enabled = q.poll_mode == QueuePollMode::DIRECT && q.num_segs == 1 &&
+                         cfg_.mrs_[q.mr_name].kind_ == MemoryKind::HUGE;
   q.mr_base = q.regions[0].base;
   q.lkey = q.regions[0].lkey;
   q.slot_size = q.regions[0].slot_size;
@@ -4829,8 +4874,7 @@ uint64_t IbverbsEngine::tx_burst_wqebbs(const IbvTxQueue& q, const BurstParams* 
   if (q.empw_enabled && empw_compatible_burst(burst)) {
     // A timed packet must break the eMPW session: WAIT + ordinary SEND for
     // packet 0, then pack the remaining untimed packets into eMPW WQEs.
-    return scheduled ? 2 + empw_burst_wqebbs(packets - 1)
-                     : empw_burst_wqebbs(packets);
+    return scheduled ? 2 + empw_burst_wqebbs(packets - 1) : empw_burst_wqebbs(packets);
   }
   uint64_t wqebbs = packets;
   if (scheduled) {
@@ -5003,7 +5047,7 @@ bool IbverbsEngine::is_tx_burst_available(BurstParams* burst) {
     if (!owns_direct_tx_queue(*q) || q->direct_pending != nullptr) {
       return false;
     }
-    return direct_tx_has_capacity(*q, 2);
+    return direct_tx_has_capacity(*q, q->cpu_inline_enabled ? 3 : 2);
   }
   const uint64_t in_flight = q->alloc_head - q->completed_tail.load(std::memory_order_acquire);
   return (q->num_slots - in_flight) >= static_cast<uint64_t>(burst->hdr.hdr.num_pkts);
@@ -5030,7 +5074,7 @@ Status IbverbsEngine::get_tx_packet_burst(BurstParams* burst) {
     if (q->direct_pending != nullptr) {
       return Status::NOT_READY;
     }
-    if (!direct_tx_has_capacity(*q, 2)) {
+    if (!direct_tx_has_capacity(*q, q->cpu_inline_enabled ? 3 : 2)) {
       return Status::NO_FREE_PACKET_BUFFERS;
     }
   }
@@ -5183,8 +5227,7 @@ void* IbverbsEngine::emit_wait_wqe(IbvTxQueue& q, uint64_t when_ns) {
 }
 
 // Pack multiple single-segment packets into each enhanced multi-packet WQE.
-void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst,
-                                       uint16_t first_packet) {
+void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst, uint16_t first_packet) {
   const int n = static_cast<int>(burst->hdr.hdr.num_pkts);
   static constexpr int SIGNAL_EVERY_WQE = 16;
   uint8_t* const sq_buf = static_cast<uint8_t*>(q.dv_qp.sq.buf);
@@ -5251,11 +5294,11 @@ void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst,
 // Builds the burst's send WQEs directly into the SQ ring and rings the BlueFlame
 // doorbell once for the whole burst. This runs on the pinned worker for indirect
 // queues and synchronously on the application thread for direct queues,
-// bypassing ibv_post_send. Each WQE is ctrl(16) + minimal eth(16) + data
-// segs(16 each); with <=2 segments it is exactly one 64B WQEBB, so the SQ
-// producer (and the CQE wqe_counter) advances by one per packet. Indirect
-// bursts signal their last WQE. Direct mode instead uses a persistent
-// queue-wide cadence so a one-packet burst does not request a CQE every time.
+// bypassing ibv_post_send. Pointer WQEs are ctrl(16) + minimal eth(16) + data
+// segs(16 each), fitting in one WQEBB. Direct single-segment HUGE-memory sends
+// can instead embed a small frame in a multi-WQEBB WQE. Indirect bursts signal
+// their last WQE. Direct mode uses a persistent queue-wide cadence so a
+// one-packet burst does not request a CQE every time.
 // Does NOT free the metadata block; the worker or direct caller does that after
 // this function returns.
 void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
@@ -5276,8 +5319,7 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
       const uint32_t idx = q.sq_pi % wqe_cnt;
       uint8_t* const seg = sq_buf + static_cast<size_t>(idx) * stride;
       auto* const ctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(seg);
-      ctrl->opmod_idx_opcode =
-          htobe32(((q.sq_pi & 0xffff) << 8) | MLX5_OPCODE_SEND);
+      ctrl->opmod_idx_opcode = htobe32(((q.sq_pi & 0xffff) << 8) | MLX5_OPCODE_SEND);
       ctrl->qpn_ds = htobe32((q.sqn << 8) | 3u);
       ctrl->signature = 0;
       ctrl->dci_stream_channel_id = 0;
@@ -5307,6 +5349,8 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
   const uint8_t ds = static_cast<uint8_t>(2 + segs);  // ctrl + eth + segs data
   const uint64_t* txtime = scheduled ? burst_ts_arr(burst) : nullptr;
   void* last_ctrl = nullptr;
+  alignas(64) uint8_t inline_wqe[4 * MLX5_SEND_WQE_BB] = {};
+  uint32_t last_wqebbs = 1;
 
   for (int i = 0; i < n; i++) {
     // Accurate send scheduling (per-packet): emit a WAIT-on-time WQE so the NIC
@@ -5321,26 +5365,46 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
     const bool signaled = q.poll_mode == QueuePollMode::DIRECT
                               ? ((q.slots_posted + 1) % 16 == 0)
                               : (((i % SIGNAL_EVERY) == (SIGNAL_EVERY - 1)) || (i == n - 1));
+    const uint32_t frame_len = burst->pkt_lens[0][i];
+    const bool inline_frame = q.cpu_inline_enabled && n == 1 && segs == 1 && !scheduled &&
+                              frame_len >= MLX5_RAW_ETH_INLINE_HEADER &&
+                              frame_len <= q.max_inline_data && stride == MLX5_SEND_WQE_BB;
+    const uint32_t wqebbs = inline_frame ? cpu_inline_wqe_wqebbs(frame_len) : 1u;
+    if (inline_frame) {
+      memset(inline_wqe, 0, sizeof(inline_wqe));
+      seg = inline_wqe;
+      ctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(seg);
+    }
     ctrl->opmod_idx_opcode = htobe32(((q.sq_pi & 0xffff) << 8) | MLX5_OPCODE_SEND);
-    ctrl->qpn_ds = htobe32((q.sqn << 8) | ds);
+    ctrl->qpn_ds = htobe32((q.sqn << 8) | (inline_frame ? cpu_inline_wqe_ds(frame_len) : ds));
     ctrl->signature = 0;
     ctrl->dci_stream_channel_id = 0;
     ctrl->fm_ce_se = tx_completion_mode(signaled);
     ctrl->imm = 0;
-    // Minimal (16-byte) Ethernet segment, no inline headers: the NIC DMAs the
-    // whole frame from the data segment. Request IPv4 + L4 checksum offload so
-    // the NIC fills the IP/UDP checksums (matches the DPDK backend, which has
-    // checksum offload always on); the application need not compute them.
-    memset(seg + 16, 0, 16);
-    reinterpret_cast<struct mlx5_wqe_eth_seg*>(seg + 16)->cs_flags =
-        MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
-    auto* dseg = reinterpret_cast<struct mlx5_wqe_data_seg*>(seg + 32);
-    for (int s = 0; s < segs; s++) {
-      // Each segment uses its own region's lkey (region 0 = header/CPU MR,
-      // region 1 = payload/GPU MR for HDS).
-      dseg[s].byte_count = htobe32(burst->pkt_lens[s][i]);
-      dseg[s].lkey = htobe32(q.regions[s].lkey);
-      dseg[s].addr = htobe64(reinterpret_cast<uint64_t>(burst->pkts[s][i]));
+    if (inline_frame) {
+      auto* eth = reinterpret_cast<struct mlx5_wqe_eth_seg*>(seg + 16);
+      eth->cs_flags = MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
+      eth->inline_hdr_sz = htobe16(MLX5_RAW_ETH_INLINE_HEADER);
+      memcpy(eth->inline_hdr_start, burst->pkts[0][i], MLX5_RAW_ETH_INLINE_HEADER);
+      auto* inl = reinterpret_cast<struct mlx5_wqe_inl_data_seg*>(seg + 48);
+      const uint32_t remainder = frame_len - MLX5_RAW_ETH_INLINE_HEADER;
+      inl->byte_count = htobe32(MLX5_INLINE_SEG | remainder);
+      memcpy(inl + 1, static_cast<const uint8_t*>(burst->pkts[0][i]) + MLX5_RAW_ETH_INLINE_HEADER,
+             remainder);
+      copy_wqe_to_cyclic_sq(sq_buf, wqe_cnt, stride, idx, inline_wqe, wqebbs);
+      ++q.inline_wqes;
+    } else {
+      // Minimal (16-byte) Ethernet segment, no inline headers: the NIC DMAs the
+      // whole frame from the data segment. Request IPv4 + L4 checksum offload.
+      memset(seg + 16, 0, 16);
+      reinterpret_cast<struct mlx5_wqe_eth_seg*>(seg + 16)->cs_flags =
+          MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
+      auto* dseg = reinterpret_cast<struct mlx5_wqe_data_seg*>(seg + 32);
+      for (int s = 0; s < segs; s++) {
+        dseg[s].byte_count = htobe32(burst->pkt_lens[s][i]);
+        dseg[s].lkey = htobe32(q.regions[s].lkey);
+        dseg[s].addr = htobe64(reinterpret_cast<uint64_t>(burst->pkts[s][i]));
+      }
     }
     q.slots_posted++;  // this packet consumes one slot
     if (signaled) {
@@ -5351,7 +5415,8 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
     }
     q.wqe_slot_cum[idx] = q.slots_posted;
     last_ctrl = ctrl;
-    q.sq_pi++;
+    last_wqebbs = wqebbs;
+    q.sq_pi += wqebbs;
     q.wqe_wqebb_cum[idx] = q.sq_pi;
   }
 
@@ -5362,8 +5427,10 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
   doorbell_store_barrier();  // doorbell record visible before the BF write
   doorbell_mmio_flush();
   void* const bf = static_cast<uint8_t*>(q.dv_qp.bf.reg) + q.bf_offset;
+  const uint32_t bf_bytes = last_wqebbs * MLX5_SEND_WQE_BB;
   const bool full_bf = q.poll_mode == QueuePollMode::DIRECT && n == 1 && !scheduled &&
-                       stride == 64 && q.dv_qp.bf.size >= 64 && blueflame_copy_wqebb(bf, last_ctrl);
+                       stride == MLX5_SEND_WQE_BB && q.dv_qp.bf.size >= bf_bytes &&
+                       blueflame_copy_wqe(bf, last_ctrl, last_wqebbs);
   if (full_bf) {
     ++q.full_bf_wqebbs;
   } else {
