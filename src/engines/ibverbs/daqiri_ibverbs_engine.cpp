@@ -30,6 +30,10 @@
 #include <linux/sockios.h>
 #include <unistd.h>
 
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
+
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -170,6 +174,27 @@ static inline void doorbell_mmio_flush() {
 #else
   std::atomic_thread_fence(std::memory_order_seq_cst);
 #endif
+}
+
+// Push one complete WQEBB through the BlueFlame WC mapping. Match rdma-core's
+// mmio_memcpy_x64 contract: copy exactly 64 bytes in ascending address order
+// and never delegate the MMIO access to a generic memcpy implementation.
+static inline bool blueflame_copy_wqebb(void* dst, const void* src) {
+  constexpr uintptr_t WQEBB_MASK = 64 - 1;
+  if ((reinterpret_cast<uintptr_t>(dst) & WQEBB_MASK) != 0 ||
+      (reinterpret_cast<uintptr_t>(src) & (alignof(uint64_t) - 1)) != 0) {
+    return false;
+  }
+#if defined(__aarch64__)
+  vst4q_u64(static_cast<uint64_t*>(dst), vld4q_u64(static_cast<const uint64_t*>(src)));
+#else
+  auto* out = static_cast<volatile uint64_t*>(dst);
+  const auto* in = static_cast<const uint64_t*>(src);
+  for (size_t i = 0; i < 8; ++i) {
+    out[i] = in[i];
+  }
+#endif
+  return true;
 }
 
 static void append_bytes(std::vector<uint8_t>& dst, const void* src, size_t len) {
@@ -4203,10 +4228,11 @@ void IbverbsEngine::print_stats() {
     const uint64_t inflight = q->slots_posted - completed;
     DAQIRI_LOG_INFO(
         "ibverbs TX port {} q{} ({}): posted={} completed={} inflight={} "
-        "handoff_full_drops={} bursts ({} pkts) direct_no_space={} direct_conflicts={}",
+        "handoff_full_drops={} bursts ({} pkts) direct_no_space={} direct_conflicts={} "
+        "full_bf_wqebbs={}",
         q->port_id, q->queue_id, queue_poll_mode_to_string(q->poll_mode), q->slots_posted,
         completed, inflight, q->handoff_drop_bursts, q->handoff_drop_pkts, q->direct_no_space,
-        q->direct_conflicts.load());
+        q->direct_conflicts.load(), q->full_bf_wqebbs);
   }
 }
 
@@ -5260,8 +5286,14 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
   q.dv_qp.dbrec[MLX5_SND_DBR] = htobe32(static_cast<uint32_t>(q.sq_pi) & 0xffff);
   doorbell_store_barrier();  // doorbell record visible before the BF write
   doorbell_mmio_flush();
-  *reinterpret_cast<volatile uint64_t*>(static_cast<uint8_t*>(q.dv_qp.bf.reg) + q.bf_offset) =
-      *reinterpret_cast<uint64_t*>(last_ctrl);
+  void* const bf = static_cast<uint8_t*>(q.dv_qp.bf.reg) + q.bf_offset;
+  const bool full_bf = q.poll_mode == QueuePollMode::DIRECT && n == 1 && !scheduled &&
+                       stride == 64 && q.dv_qp.bf.size >= 64 && blueflame_copy_wqebb(bf, last_ctrl);
+  if (full_bf) {
+    ++q.full_bf_wqebbs;
+  } else {
+    *reinterpret_cast<volatile uint64_t*>(bf) = *reinterpret_cast<uint64_t*>(last_ctrl);
+  }
   doorbell_mmio_flush();
   q.bf_offset ^= q.dv_qp.bf.size;
 }

@@ -316,6 +316,7 @@ struct IbvTxQueue {
   BurstParams* direct_pending = nullptr;
   std::atomic<uint64_t> direct_conflicts{0};
   uint64_t direct_no_space = 0;
+  uint64_t full_bf_wqebbs = 0;
   // tx_eth_src offload: when set, set_eth_header stamps the port's MAC as the
   // Ethernet source so the application doesn't have to supply it.
   bool insert_eth_src = false;
