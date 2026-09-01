@@ -369,14 +369,10 @@ loss-free rate sits just under it — 23 Gb/s here, with 25 losing 2–3% in two
 of three. Ladder `--target-gbps` to find the equivalent point for your own
 message size and core layout.
 
-!!! warning "Pin each pair's send and receive to separate cores"
-    These figures depend on it. When a pair's client and server share one core they
-    ping-pong, and a single TCP stream can wedge at a fraction of its rate for a
-    whole run — the same cells measured that way read about 4x lower (11 Gb/s at
-    8000 B). `run_spark_bench.sh` handles this automatically, keeping both cores of
-    a pair inside one CPU cluster; a hand-rolled run must do it explicitly. Any
-    socket result below ~15 Gb/s per pair on this hardware is a pinning problem,
-    not a transport result.
+!!! note "Benchmark-worker affinity"
+    `socket_bench_server.cpu_core` and `socket_bench_client.cpu_core` pin the
+    benchmark workers. Keep their placement consistent when comparing runs. The
+    socket engine does not currently apply queue `cpu_core` to its I/O threads.
 
 UDP 1 MiB is intentionally skipped because Linux UDP payloads above `65507` bytes require fragmentation or segmentation behavior outside the benchmark's supported payload model. The 65507 B row does fragment (8 frames per datagram at MTU 9000, visible in its phy count) and reassembly is all-or-nothing, which is why its loss-free rate is lower than the single-frame 8000 B row: past ~15 Gb/s it collapses rather than degrading (58.8% loss at 20 Gb/s, 99.5% unpaced).
 

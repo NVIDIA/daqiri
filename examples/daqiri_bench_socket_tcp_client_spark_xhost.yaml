@@ -22,12 +22,8 @@
 # changes how many send() calls the app makes, not what the NIC transmits --
 # segmentation offload puts MTU-sized frames on the wire either way.
 #
-# Spark substitutions baked in here:
-#   - IPs: 1.1.1.1 (client p0), server on 2.2.2.2
-#   - cpu_core: DAQIRI queue on isolated X925 core 17, bench app thread on 7,
-#     master_core 8. The queue poller and the app thread MUST be on separate
-#     cores; sharing one costs roughly 4x on TCP. See
-#     docs/benchmarks/socket_benchmarking.md.
+# `socket_bench_client.cpu_core` pins the benchmark worker. The socket engine
+# does not currently apply queue `cpu_core` to its I/O threads.
 #
 %YAML 1.2
 ---
@@ -53,7 +49,6 @@ daqiri:
         mode: client
         local_addr: "tcp://1.1.1.1:6002"
         remote_addr: "tcp://2.2.2.2:6001"
-        max_payload_size: 1052672
       rx:
         queues:
         - name: "Client_RX_Queue"

@@ -26,7 +26,7 @@ receiving role (and `receive: true` on the sending role) in the bench config.
 
 For the per-transport benchmarking procedures, see
 [Socket and RDMA Benchmarking](socket_benchmarking.md) (the
-`dq_wire_*` network-namespace wire loopback used by the socket cells) and
+network-namespace wire loopback used by the socket cells) and
 [Raw Ethernet Benchmarking](raw_benchmarking.md) (the two-physical-port DPDK
 loopback and the cross-host wire setup).
 
@@ -45,21 +45,21 @@ images per second, not Gb/s.
 | NIC host attach | Independent PCIe Gen5 x4 links, each with 126 Gb/s of lane bandwidth after 128b/130b |
 | Build | Release, `DAQIRI_ENGINE="dpdk ibverbs"`, `DAQIRI_BUILD_APPLICATIONS=ON` |
 | Method | Results state their run duration and repetition count. The cross-host DPDK cells use 3 repetitions x 30 s. Wire rate is cross-checked with physical counters at both endpoints; application rate is RX-delivered bytes over the sender transfer window. A cell is loss-free only when TX/RX application counts and physical counters agree and RX hardware-buffer discards remain zero. |
-| Hugepages | 2048 x 2 MiB per host |
 
-Wire rate sits above app rate by design: the wire figure includes Ethernet
-framing the application never sees, plus any packet the RX path could not keep up
-with. Both columns are reported because the gap is the interesting part.
+Wire and application rates have different byte definitions: wire rate includes
+Ethernet framing, while application rate counts delivered payload. Both use the
+same sender transfer window. A loss-free cell can therefore still have a small
+wire/application difference.
 
 ### Single-host, 100 GbE loopback (socket pair scaling, multi-queue, CPU utilization)
 
 | Component | Detail |
 | --------- | ------ |
-| Platform | DGX Spark (GB10), 20 cores, isolcpus `16-19` (the multi-queue sweep expands this, see [Multi-queue core scaling](#multi-queue-core-scaling)) |
-| NIC | ConnectX-7, ports p0 ↔ p1 cross-cabled with a **100 GbE QSFP28** loopback cable, MTU 9000 |
+| Platform | DGX Spark (GB10), 20 cores |
+| NIC | ConnectX-7, two ports cross-cabled with a **100 GbE QSFP28** loopback cable, MTU 9000 |
 | Build | Release (`-DCMAKE_BUILD_TYPE=Release`), `DAQIRI_ENGINE="dpdk ibverbs"` |
-| Loopback | Raw/DPDK uses the two physical ports directly, while socket/RoCE use the `dq_wire_*` network-namespace wire loopback |
-| Core pinning | Each direction has a busy-spin queue poller and an app worker on separate isolated X925 cores (PR #149). Single-queue: DPDK pollers 17/18, workers 16/19. Multi-queue: TX pollers 16/19, RX pollers 18/9, each with its own worker core, master 8. Sockets pin each pair's send and receive to separate cores in the same CPU cluster (all with `isolcpus=5-9,15-19`). |
+| Loopback | Raw/DPDK uses the two physical ports directly, while socket/RoCE use a network-namespace wire loopback |
+| Core pinning | Raw/RDMA queue pollers and application workers use dedicated isolated cores. Socket benchmark-worker placement is controlled by `socket_bench_*.cpu_core`; socket queue `cpu_core` does not bind socket I/O threads. |
 
 ## Results Summary
 
@@ -167,14 +167,14 @@ also the no-drop rate: pacing the sender below it hits the target with zero drop
 
 **CPU utilization** (single-host loopback, 8000 B / batch 10240, unpaced):
 
-| Core                     | Busy% | Note                                  |
-| ------------------------ | ----: | ------------------------------------- |
-| Master (CPU 8)           |  3.7% | Orchestration only, mostly idle       |
-| TX queue poller (CPU 17) |  ~92% | Poll-mode busy-spin |
-| RX queue poller (CPU 18) |  ~92% | Poll-mode busy-spin |
+| Core            | Busy% | Note                            |
+| --------------- | ----: | ------------------------------- |
+| Master          |  3.7% | Orchestration only, mostly idle |
+| TX queue poller |  ~92% | Poll-mode busy-spin             |
+| RX queue poller |  ~92% | Poll-mode busy-spin             |
 
-The benchmark app workers run on their own cores (TX 16, RX 19) alongside these
-pollers. This run sampled only the poller cores.
+The benchmark app workers run on dedicated cores alongside these pollers. This run
+sampled only the poller cores.
 The pollers stay near 92% across every drop-curve step from 1 Gb/s to line rate,
 because DPDK's poll-mode driver spins regardless of offered load. The GPU stays idle (SM
 and memory-controller utilization both ~0%): it is a DMA target for the payload,
@@ -190,12 +190,9 @@ packet-rate-bound payloads, where **RX cores** are the lever. The matrix sweeps
 
 Each queue is served by a poll-mode driver core plus a separate bench-worker
 core, paired within one CPU cluster where possible so the poller→worker handoff
-stays local. The four-queue matrix uses the expanded isolated-core budget
-(`isolcpus=5-9,15-19`): TX pollers on 16/19, RX pollers on 18/9, each with its
-own worker core, and the master on core 8. Configs are derived from the single
-base `daqiri_bench_raw_tx_rx_spark_mq.yaml` (the balanced 2,2 superset) by
-`scripts/gen_spark_mq_config.py`; generated by `examples/run_spark_mq_bench.sh`,
-30 s per cell, 0 drops.
+stays local. The four-queue matrix uses an expanded isolated-core budget: each
+poller has its own worker, plus a separate master. Configs are generated from a
+balanced base configuration; 30 s per cell, 0 drops.
 
 Achieved Gb/s at a **256 B payload** (the packet-rate-bound regime where core
 count matters); at ≥1 KB every cell converges at the wire ceiling regardless:
@@ -240,9 +237,8 @@ half the observed range.
 | 4 KB  | 0.62 | 0.58 | 20 (shipped config) |
 | 4 KB  | 40.1 ±9.5 | 38.5 | 512 |
 
-At 1 MB and above RoCE is the fastest transport here (112.5 against raw Ethernet's
-109.6 Gb/s) and
-comes within 11% of the 126 Gb/s PCIe budget: hardware segmentation emits MTU-sized
+At 1 MB and above RoCE reaches 112.5 Gb/s on its single link and comes within 11%
+of the 126 Gb/s PCIe budget: hardware segmentation emits MTU-sized
 packets from one posted message, so the host pays its per-packet costs less often
 than the raw path does at an 8 KB frame.
 
@@ -253,10 +249,12 @@ or the memory region's buffer pool runs dry, and
 `daqiri_bench_rdma_tx_rx_spark_xhost.yaml` ships with **20** buffers. Twenty 8 KB
 messages is too little in flight to keep the send loop from stalling on
 completions, so the shipped config measures pipeline depth rather than RoCE — a
-**83x** difference at 8 KB and 65x at 4 KB. Raise `num_bufs` to 512 and the
-transport shows its real rate, 88.7 Gb/s at an 8 KB message. The 4 KB deep row
-stays noisy (±9.5) because at that size the per-message cost really is close to the
-limit.
+**83x** difference at 8 KB and 65x at 4 KB. Before raising `num_bufs`, set the
+memory region's `buf_size` to the message size being measured and bound the total
+pinned allocation to an explicit memory budget. Do not multiply a large-message
+buffer size by a deep small-message window. With 512 8 KB buffers, the transport
+reaches 88.7 Gb/s. The 4 KB deep row stays noisy (±9.5) because at that size the
+per-message cost really is close to the limit.
 
 !!! note "The 64 KB row is pending a re-measurement"
     The cross-host 64 KB cell also ran with the shipped 20-buffer pool, so its
@@ -265,11 +263,11 @@ limit.
 
 **CPU utilization** (single-host loopback, 8 MB message, batch 1, unpaced):
 
-| Core                 | Busy% | Note                                            |
-| -------------------- | ----: | ----------------------------------------------- |
-| Master (CPU 8)       |  0.7% | Orchestration only                              |
-| Client TX (CPU 17)   | 74.8% | Busy-spins posting sends and polling completions |
-| Server RX (CPU 19)   |  1.1% | HCA DMAs straight to memory, worker only reaps completions |
+| Core      | Busy% | Note                                            |
+| --------- | ----: | ----------------------------------------------- |
+| Master    |  0.7% | Orchestration only                              |
+| Client TX | 74.8% | Busy-spins posting sends and polling completions |
+| Server RX |  1.1% | HCA DMAs straight to memory, worker only reaps completions |
 
 The TX core busy-spins in a post-and-poll loop, so its ~75% busy time is set by
 that spin, not by the throughput: it stays near this level whether the link runs
@@ -370,11 +368,11 @@ host's ten performance cores.
 
 ## Socket / UDP
 
-One-way UDP client/server pairs, same per-side pinning (send and receive on
-separate cores). UDP has no flow control, so an unthrottled sender overruns the
-receiver and the receiver drops what it cannot drain. App RX is the delivered
-goodput; app-level loss is `(App TX - App RX) / App TX`. The headline figure is
-therefore the **paced loss-free rate**, with the unpaced behavior shown after it.
+One-way UDP client/server pairs. UDP has no flow control, so an unthrottled sender
+overruns the receiver and the receiver drops what it cannot drain. App RX is the
+delivered goodput; app-level loss is `(App TX - App RX) / App TX`. The headline
+figure is therefore the **paced loss-free rate**, with the unpaced behavior shown
+after it.
 
 ### Single pair, cross-host: the loss-free rate (200 GbE)
 
@@ -547,14 +545,12 @@ CIFAR-10 images off the wire and runs TensorRT inference on them without the
 payload ever being touched by the CPU. Five model sizes are measured, ResNet-18
 through ResNet-152.
 
-It runs **cross-host** on a stacked Spark pair (`spark-stacked-01` TX →
-`spark-stacked-02` RX) over one direct `det1` cable — the same class of link as the
-raw and RoCE tables above, and not the 100 GbE chassis loopback used for the socket
-tables.
+It runs **cross-host** over one direct link — the same class of link as the raw and
+RoCE tables above, and not the single-host loopback used for the socket tables.
 
 ```mermaid
 flowchart LR
-  TX["stacked-01<br/>CIFAR-10 int8 frames"] -->|"det1 cable"| N["stacked-02 NIC DMA"]
+  TX["TX host<br/>CIFAR-10 int8 frames"] -->|"direct Ethernet"| N["RX host NIC DMA"]
   N --> R["RX buffers (host_pinned,<br/>GPU-accessible)"]
   R --> K["DAQIRI reorder kernel:<br/>reassemble + int8 to fp16"]
   K -->|"REORDERED burst + CUDA event"| Q["SPSC ring"]
@@ -584,6 +580,7 @@ sustains **94.4 Gb/s** of wire (9.48 Mpkt/s, 89.2 Gb/s of image payload), which 
 | ResNet-50  | 3,701  | 8.50 / 9.49   | 3,834  | 97% | 4.46 Gb/s |
 | ResNet-101 | 2,453  | 12.80 / 13.78 | 2,502  | 98% | 2.95 Gb/s |
 | ResNet-152 | 1,746  | 18.12 / 19.38 | 1,794  | 97% | 2.10 Gb/s |
+
 **Putting a network in front of TensorRT costs 2–8%.** The `TensorRT-only` column is
 the same engine driven by `trtexec` with no network at all, and end-to-end reaches
 92% of it at ResNet-18, rising to 97–98% at the larger models. In absolute terms
@@ -597,9 +594,7 @@ models while consumed payload falls from 14.65 to 2.10 Gb/s, so swapping models
 changes inference throughput and nothing else. The remainder is dropped at the NIC
 by design: the sender is unthrottled, and inference is the bottleneck.
 
-For reference, the raw GPUDirect bench measured in the same campaign reaches
-~109 Gb/s at its native 8 KB frames, matching the transport table above. This
-pipeline's 94.4 Gb/s ceiling reflects its own RX loop and the smaller 1240 B
+This pipeline's 94.4 Gb/s ceiling reflects its own RX loop and the smaller 1240 B
 frames the image format implies.
 
 ## Reproduce
@@ -641,9 +636,9 @@ summary-table cell, one payload/batch/pairs operating point. `REPEATS=N` repeats
 every cell N times for error bars.
 
 **Raw Ethernet / GPUDirect (DPDK)** drives the two physical ports directly, so
-the `dq_wire_*` namespaces must **not** be up, since they capture the ports and
-hide them from DPDK. Tear them down first (no-op if they were never created).
-`<rx-iface>` below is the RX physical port (p1 in the p0→p1 loopback):
+the socket/RoCE network namespaces must **not** be up, since they capture the
+ports and hide them from DPDK. Tear them down first (no-op if they were never
+created). `<rx-iface>` below is the receive physical port:
 
 ```bash
 ./scripts/setup_spark_wire_loopback_netns.sh down       # ensure netns is torn down
@@ -664,9 +659,9 @@ export ETH_DST_ADDR=$(cat /sys/class/net/<rx-iface>/address)
 ./scripts/plot_mq_payload_sweep.py bench-results/<timestamp>-dpdk-mq/runs.csv
 ```
 
-**Socket / RoCE and sockets** cross the cable through the `dq_wire_client` →
-`dq_wire_server` namespaces. Bring the loopback up and confirm PHY counters move
-before running, and tear it down when finished:
+**Socket / RoCE and sockets** cross the cable through the network namespaces.
+Bring the loopback up and confirm PHY counters move before running, and tear it
+down when finished:
 
 ```bash
 ./scripts/setup_spark_wire_loopback_netns.sh up         # create the namespaces
@@ -679,9 +674,8 @@ before running, and tear it down when finished:
 
 That produces the **pair-scaling** matrices. The single-stream socket rows in the
 summary are cross-host instead: one client and one server on separate hosts, no
-namespaces, using the `_spark_xhost` configs after
-`scripts/setup_spark_xhost_net.sh` has put 1.1.1.1 on the client host and
-2.2.2.2 on the server host.
+namespaces, using the `_spark_xhost` configs after cross-host L3 connectivity is
+configured on both hosts.
 
 Sockets need **one config file per role**, unlike the RoCE cross-host config that
 carries both. `daqiri_init` binds every interface listed in the file, so a
@@ -712,8 +706,12 @@ traffic off the port while measuring. When the two deltas match and the app stil
 lost datagrams, the drops are above the NIC.
 
 Whichever setup you use, pin each pair's send and receive to **separate** cores in
-the same CPU cluster — sharing a core costs roughly 4x on TCP, and results
-gathered that way cannot be compared against these.
+the same CPU cluster. Socket affinity in these examples applies to the benchmark
+workers; queue `cpu_core` does not currently bind the socket engine's I/O threads.
+
+Use the client's `active_seconds` to calculate both sent and received application
+rates. The server deliberately outlives the client, so its whole-process
+`seconds` includes an idle tail and is not a transfer-rate denominator.
 
 **GPU workload (FFT / GEMM)** re-runs a backend with a representative GPU workload
 in the receive path by exporting `WORKLOAD` (`none` | `fft` | `gemm` |
@@ -721,8 +719,8 @@ in the receive path by exporting `WORKLOAD` (`none` | `fft` | `gemm` |
 fixed **1024³ GEMM** (override with `GEMM_DIM` / `--workload-gemm-dim`) or a batched
 **length-1024 FFT** (override with `FFT_LEN` / `--workload-fft-len`). Both compute
 sizes are held constant while the message size varies, so the FLOP count per call
-is fixed. It composes with the same netns setup as above (dpdk in the default
-namespace, rdma in the `dq_wire_*` namespaces). Use `smoke`, the single
+is fixed. It composes with the same network-namespace setup as above (DPDK in the
+default namespace). Use `smoke`, the single
 summary-table cell that the fixed-n table reports, and run all three workloads
 with error bars:
 
@@ -766,8 +764,7 @@ The ingest ceiling is the same TX driving `daqiri_bench_raw_reorder_seq` on the 
 host instead of the app — identical wire format, sequence placement and batch
 geometry, with only TensorRT removed. TX runs unthrottled in both arms, so the RX
 NIC drop counter measures the offered-to-consumed ratio rather than loss in the
-pipeline; per-queue `pacing_mbps` is not usable here because the mlx5 PMD then
-requests `tx_pp` and this NIC's firmware rejects it.
+pipeline.
 
 For a batch-size sweep, point the RX host at a config with a different
 `images_per_batch` (and `packets_per_batch` scaled with it, 128 packets per
