@@ -1441,7 +1441,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     ### Enable GPUDirect
 
-    **No GPUDirect kernel-module setup is required on GB10.** Set `kind: "host_pinned"` in the YAML and you're done. There is no system-side step to perform. Buffers are allocated by DAQIRI via `cudaHostAlloc` (so they are CUDA-addressable) and registered with DPDK via `rte_extmem_register`. End-to-end TX↔RX with `kind: "host_pinned"`, `num_bufs: 51200`, `batch_size: 10240` reaches **~109.6 Gbps** unicast on a cross-host 200 GbE pair, and ~98.7 Gbps over a single-host 100 GbE QSFP loop (the cable, not the software path, sets that lower figure). See [Performance: DGX Spark](../benchmarks/performance-dgx-spark.md).
+    **No GPUDirect kernel-module setup is required on GB10.** Set `kind: "host_pinned"` in the YAML and you're done. There is no system-side step to perform. Buffers are allocated by DAQIRI via `cudaHostAlloc` (so they are CUDA-addressable) and registered with DPDK via `rte_extmem_register`. The cross-host two-link DPDK sweep reaches **201.70 Gb/s** wire rate at 8 KB with `kind: "host_pinned"`; the single-host 100 GbE QSFP loop reaches ~98.7 Gb/s because the cable is its ceiling. See [Performance: DGX Spark](../benchmarks/performance-dgx-spark.md).
 
     `kind: "huge"` works as a fallback at the same rate. `kind: "device"` does **not** work on GB10.
 

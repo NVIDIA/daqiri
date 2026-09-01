@@ -69,13 +69,15 @@ Consult the [Benchmarking overview](https://nvidia.github.io/daqiri/benchmarks/)
 
 | Stream / Protocol        | Best case      | Wire        | App-delivered | Drops     | Testbed              |
 |:-------------------------|:---------------|:------------|:--------------|:----------|:---------------------|
-| Raw Ethernet / GPUDirect (ibverbs) | 4 KB packet | **109.5 ±0.1 Gb/s** | **104.9 Gb/s** | 0 | Cross-host 200 GbE |
-| Raw Ethernet / GPUDirect (dpdk) | 8 KB packet | **109.6 ±0.3 Gb/s** | 99.9 Gb/s | 0 | Cross-host 200 GbE |
+| Raw Ethernet / GPUDirect (dpdk) | 8 KB packet | **201.70 ±0.18 Gb/s** | 197.17 Gb/s | 0 | Cross-host two-link 200 GbE |
 | Socket / RoCE (SEND)     | 8 MB message   | **112.5 ±0.2 Gb/s** | **109.0 Gb/s** | 0 | Cross-host 200 GbE |
 | Socket / TCP             | 1 MiB message  | —           | 55.7 Gb/s      | 0         | Cross-host 200 GbE   |
 | Socket / UDP (paced)     | 8 KB message   | —           | 23.0 Gb/s      | 0         | Cross-host 200 GbE   |
 
-Each transport at its best-case operation size, measured cross-host between two DGX Sparks (GB10) over one ConnectX-7 cable. Every row is a single stream and every row is loss-free, so they are comparable. These are best read against 126 Gb/s rather than the port's 200: the ConnectX-7 attaches over PCIe Gen5 x4, which is all the host can absorb, and raw Ethernet and RoCE reach 87–89% of it. The kernel stack's cost is per core rather than per link: one TCP stream delivers 55.7 Gb/s against RoCE's 109.0, but two concurrent streams reach 105.2 Gb/s and four reach 108.5, level with the zero-copy transports at that same PCIe ceiling. UDP has no flow control, so its row is paced at the highest rate that sustained zero loss; it scales the same way, to 72.0 Gb/s loss-free on four streams. Full methodology and per-transport breakdowns at [Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/).
+The DPDK raw-Ethernet row uses two independent links; the remaining rows are
+single-link measurements and should not be compared as though they had the same
+host-attach budget. Full methodology and per-transport breakdowns are in
+[Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/).
 
 ## Documentation
 
