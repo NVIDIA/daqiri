@@ -9,10 +9,9 @@ Measured C++ throughput for each stream/protocol on DGX Spark (GB10) hardware,
 from Release builds. Numbers come from **two testbeds**, and every table says
 which one it used:
 
-- **Cross-host, 200 GbE** — two DGX Sparks joined by one direct cable on one
-  ConnectX-7 port each. Every headline number comes from here: raw Ethernet, RoCE,
-  single-stream TCP and UDP, and the end-to-end inference pipeline, 3 repetitions
-  x 30 s per cell.
+- **Cross-host** — two DGX Sparks joined by direct links. The raw DPDK sweep uses
+  two independent 100 GbE links; the other tables identify their link count.
+  Each table states its own run duration and repetition count.
 - **Single-host, 100 GbE loopback** — one DGX Spark with its two ConnectX-7 ports
   cross-cabled, driven by `examples/run_spark_bench.sh` (30 s per cell). The
   scaling studies come from here: socket pair-count scaling, the multi-queue
@@ -25,12 +24,11 @@ All backends are measured **one-way** (unidirectional) by default: one side send
 the other receives and computes. For a bidirectional test, set `send: true` on the
 receiving role (and `receive: true` on the sending role) in the bench config.
 
-For the setups these numbers depend on and the per-transport benchmarking
-procedure, see [Socket and RDMA Benchmarking](socket_benchmarking.md) (the
+For the per-transport benchmarking procedures, see
+[Socket and RDMA Benchmarking](socket_benchmarking.md) (the
 `dq_wire_*` network-namespace wire loopback used by the socket cells) and
 [Raw Ethernet Benchmarking](raw_benchmarking.md) (the two-physical-port DPDK
-loopback and the cross-host wire setup). The exact commands are collected under
-[Reproduce](#reproduce) below.
+loopback and the cross-host wire setup).
 
 The [end-to-end inference pipeline](#end-to-end-inference-pipeline-resnet-cross-host)
 measures a whole application rather than a transport, so its figure of merit is
@@ -43,10 +41,10 @@ images per second, not Gb/s.
 | Component | Detail |
 | --------- | ------ |
 | Platform | Two DGX Sparks (GB10 Grace, 10x Cortex-X925 + 10x Cortex-A725, 120 GiB unified memory each) |
-| NIC | ConnectX-7 `0000:01:00.0` (`mlx5_0`) on each host, one direct cable, link 200000 Mb/s, firmware 28.45.4028 |
-| NIC host attach | PCIe Gen5 (32 GT/s) x4, verified on both hosts — 126 Gb/s of lane bandwidth after 128b/130b, which is what actually bounds every cross-host row below |
+| NIC | ConnectX-7; raw DPDK uses two independent 100 GbE direct links |
+| NIC host attach | Independent PCIe Gen5 x4 links, each with 126 Gb/s of lane bandwidth after 128b/130b |
 | Build | Release, `DAQIRI_ENGINE="dpdk ibverbs"`, `DAQIRI_BUILD_APPLICATIONS=ON` |
-| Method | 3 repetitions x 30 s per cell. Wire rate is the `mlnx_perf` plateau median on both ends, cross-checked against `ethtool -S` deltas; app rate is the receiving bench's own byte counter over the transfer window. Values are medians, `±` half the observed range. |
+| Method | Results state their run duration and repetition count. The cross-host DPDK cells use 3 repetitions x 30 s. Wire rate is cross-checked with physical counters at both endpoints; application rate is RX-delivered bytes over the sender transfer window. A cell is loss-free only when TX/RX application counts and physical counters agree and RX hardware-buffer discards remain zero. |
 | Hugepages | 2048 x 2 MiB per host |
 
 Wire rate sits above app rate by design: the wire figure includes Ethernet
@@ -65,25 +63,23 @@ with. Both columns are reported because the gap is the interesting part.
 
 ## Results Summary
 
-Each transport at its best-case **operation size**, and every row is a
-**single stream** — one raw queue pair, one QP, one client/server socket pair — so
-the rows are comparable to each other. Sockets also scale with the number of
+Each transport is shown at its best-case **operation size**. The DPDK row is a
+two-link measurement; the remaining rows use one queue pair, QP, or
+client/server socket pair as stated. Sockets also scale with the number of
 concurrent pairs; that is a separate axis, measured in the
 [TCP](#socket-tcp) and [UDP](#socket-udp) sections below.
 
-On the cross-host link, **the NIC's host attach is the ceiling, not the cable and
-not the software.** The ConnectX-7 sits on PCIe Gen5 x4, which carries 126 Gb/s
-after 128b/130b encoding and roughly 110–116 Gb/s once TLP overhead is counted, so
-the 200 GbE port cannot move 200 Gb/s into host memory regardless of what drives
-it. Raw Ethernet and RoCE plateau at 108–112.5 Gb/s, or 87–89% of that PCIe budget,
-and hold it at every payload size at or above 4 KB. The cross-host rows are best
-read against 126 Gb/s rather than the port's 200. On the single-host loopback the
+On a single cross-host link, **the NIC's host attach is the ceiling, not the cable
+and not the software.** A Gen5 x4 connection carries 126 Gb/s after 128b/130b
+encoding and roughly 110–116 Gb/s once TLP overhead is counted, so one 200 GbE port
+cannot move 200 Gb/s into host memory regardless of what drives it. The two-link
+DPDK result has independent host attachments and therefore approaches 200 Gb/s at
+large payloads. On the single-host loopback the
 **100 GbE cable** is the ceiling instead: it tops out near ~98.8 Gb/s of payload.
 
 | Stream / Protocol | Best case | Wire | App-delivered | Drops | Testbed |
 | ----------------- | --------- | ---: | ------------: | ----- | ------- |
-| Raw Ethernet / GPUDirect (ibverbs) | 4 KB packet | **109.5 ±0.1 Gb/s** | **104.9 Gb/s** | 0 | Cross-host 200 GbE |
-| Raw Ethernet / GPUDirect (dpdk) | 8 KB packet | **109.6 ±0.3 Gb/s** | 99.9 Gb/s | 0 | Cross-host 200 GbE |
+| Raw Ethernet / GPUDirect (dpdk) | 8 KB packet | **201.70 ±0.18 Gb/s** | 197.17 Gb/s | 0 | Cross-host two-link 200 GbE |
 | Socket / RoCE (SEND) | 8 MB message | **112.5 ±0.2 Gb/s** | **109.0 Gb/s** | 0 | Cross-host 200 GbE |
 | Socket / TCP | 1 MiB message | — | 55.7 Gb/s | 0 | Cross-host 200 GbE |
 | Socket / UDP (paced) | 8 KB message | — | 23.0 Gb/s | 0 | Cross-host 200 GbE |
@@ -111,37 +107,27 @@ scales the same way: see [core scaling](#core-scaling-cross-host-200-gbe_1).
 
 ## Raw Ethernet / GPUDirect
 
-GPU-resident payloads, one queue per direction, unpaced. Both raw engines are
-measured: the `ibverbs` MPRQ engine, which `stream_type: "raw"` now selects by
-default when it is built, and the `dpdk` engine, selected with `engine: "dpdk"`.
+GPU-resident payloads. Every row uses one process per host, two independent
+links, and one queue per link. The table reports receive capability: the source
+only supplies the offered load, while the application column is RX-delivered
+throughput.
 
-### Cross-host payload sweep (200 GbE)
+### Cross-host raw Ethernet receive sweep (two links)
 
-Both engines plateau at **~109 Gb/s on the wire** from 4 KB upward, and the
-interesting column is what reaches the application. Batch size 10240, 3 reps,
-medians in Gb/s:
+Wire rate is aggregate physical TX/RX traffic; RX-delivered rate is measured over
+the sender transfer window. Each cell is loss-free: application counts and
+physical counters agree, and the receiver reports no hardware-buffer discards.
 
-| Payload | dpdk wire | dpdk app | ibverbs wire | ibverbs app | Mpps |
-| ------- | --------: | -------: | -----------: | ----------: | ---: |
-| 8000 B | 109.6 ±0.3 | 99.9 | 108.6 ±0.2 | **104.1** | 1.70 |
-| 4096 B | 109.5 ±0.3 | 99.9 | 109.5 ±0.1 | **104.9** | 3.29 |
-| 1024 B | 107.1 ±0.2 | 97.5 | 107.2 ±0.1 | **102.1** | 12.3 |
-| 256 B  | 61.9 ±0.1  | 55.9 | 59.5 ±0.1  | 56.3 | 22.9–23.9 |
-| 64 B   | 25.9 ±0.7  | 23.2 | 24.3 ±0.0  | 22.5 | 23.0–24.6 |
+| Payload | Wire Gb/s | RX-delivered Gb/s | Mpps |
+| ------- | --------: | ----------------: | ---: |
+| 8000 B | **201.70 ±0.18** | **197.17** | 3.056 |
+| 4096 B | 201.29 ±0.32 | 197.19 | 5.925 |
+| 1024 B | 198.62 ±0.15 | 194.68 | 22.367 |
+| 256 B  | 73.71 | 72.80 | 28.436 |
+| 64 B   | 30.35 | 29.43 | 28.740 |
 
-**The two engines tie on the wire and differ on delivery.** At 4 KB both measure
-109.5 Gb/s and at 8 KB they sit within 1 Gb/s of each other, both against a
-126 Gb/s PCIe budget. Where they part is delivery: at 8 KB the ibverbs striding
-receive queue hands the application 104.1 Gb/s against the DPDK path's 99.9, with
-less than half the NIC out-of-buffer count (815 k against 1.73 M over a 30 s run).
-That ~4 Gb/s gap is why `stream_type: "raw"` defaults to ibverbs; the two engines
-are within a percent of each other on the wire, so the choice between them turns on
-delivered rate and on which features each supports.
-
-**Small frames are packet-rate-bound, and the ceiling is shared.** Both engines
-converge on ~23–25 Mpps at 64 B *and* at 256 B — the same packet rate at four times
-the payload, which is what identifies the limit as per-packet host cost rather than
-bytes. Engine choice does not move it.
+At 1 KB and above, both links carry about 100 Gb/s, so the aggregate approaches
+200 Gb/s on the wire.
 
 ### Single-host loopback, payload x batch (100 GbE)
 
@@ -623,12 +609,12 @@ Run inside the project container (privileged, GPUs passed through, hugepages
 mounted), as root. Build with `-DCMAKE_BUILD_TYPE=Release` and
 `cmake --install build` so the bench loads the current `libdaqiri.so`.
 
-The commands below drive the **single-host loopback** tables. The cross-host raw
-and RoCE cells use the same benches with the `_xhost` configs
+The commands below drive the **single-host loopback** tables. The `_xhost` configs
+provide the paired roles for a manual cross-host smoke test:
 (`examples/daqiri_bench_raw_tx_spark_xhost.yaml`,
 `examples/daqiri_bench_raw_rx_spark_xhost.yaml`,
 `examples/daqiri_bench_rdma_tx_rx_spark_xhost.yaml`), one role per host, with wire
-rates read from `mlnx_perf` on both ends — see
+rates read from physical counters at both ends — see
 [Cross-host two-DGX-Spark loopback](raw_benchmarking.md#cross-host-two-dgx-spark-loopback).
 Remember that the shipped RDMA config provisions 20 in-flight buffers, which is
 what the small-message rows above measure.
