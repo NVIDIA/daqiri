@@ -41,10 +41,10 @@ images per second, not Gb/s.
 | Component | Detail |
 | --------- | ------ |
 | Platform | Two DGX Sparks (GB10 Grace, 10x Cortex-X925 + 10x Cortex-A725, 120 GiB unified memory each) |
-| NIC | ConnectX-7; raw DPDK uses two independent 100 GbE direct links |
+| NIC | ConnectX-7; raw DPDK and RoCE use two independent 100 GbE direct links |
 | NIC host attach | Independent PCIe Gen5 x4 links, each with 126 Gb/s of lane bandwidth after 128b/130b |
 | Build | Release, `DAQIRI_ENGINE="dpdk ibverbs"`, `DAQIRI_BUILD_APPLICATIONS=ON` |
-| Method | Results state their run duration and repetition count. The cross-host DPDK cells use 3 repetitions x 30 s. Wire rate is cross-checked with physical counters at both endpoints; application rate is RX-delivered bytes over the sender transfer window. A cell is loss-free only when TX/RX application counts and physical counters agree and RX hardware-buffer discards remain zero. |
+| Method | Results state their run duration and repetition count. The cross-host DPDK cells use 3 repetitions x 30 s; RoCE uses 5 x 120 s. Wire rate is cross-checked with physical counters at both endpoints; application rate is RX-delivered bytes over the sender transfer window. A cell is loss-free only when TX/RX application counts and physical counters agree and RX hardware-buffer discards remain zero. |
 
 Wire and application rates have different byte definitions: wire rate includes
 Ethernet framing, while application rate counts delivered payload. Both use the
@@ -63,45 +63,43 @@ wire/application difference.
 
 ## Results Summary
 
-Each transport is shown at its best-case **operation size**. The DPDK row is a
-two-link measurement; the remaining rows use one queue pair, QP, or
-client/server socket pair as stated. Sockets also scale with the number of
-concurrent pairs; that is a separate axis, measured in the
+Each transport is shown at its best-case **operation size**. The DPDK and RoCE
+rows are two-link measurements; the TCP and UDP rows use one client/server socket
+pair as stated. Sockets also scale with the number of concurrent pairs; that is a
+separate axis, measured in the
 [TCP](#socket-tcp) and [UDP](#socket-udp) sections below.
 
 On a single cross-host link, **the NIC's host attach is the ceiling, not the cable
 and not the software.** A Gen5 x4 connection carries 126 Gb/s after 128b/130b
 encoding and roughly 110–116 Gb/s once TLP overhead is counted, so one 200 GbE port
 cannot move 200 Gb/s into host memory regardless of what drives it. The two-link
-DPDK result has independent host attachments and therefore approaches 200 Gb/s at
-large payloads. On the single-host loopback the
+DPDK and RoCE results have independent host attachments and therefore approach 200
+Gb/s at large payloads. On the single-host loopback the
 **100 GbE cable** is the ceiling instead: it tops out near ~98.8 Gb/s of payload.
 
 | Stream / Protocol | Best case | Wire | App-delivered | Drops | Testbed |
 | ----------------- | --------- | ---: | ------------: | ----- | ------- |
 | Raw Ethernet / GPUDirect (dpdk) | 8 KB packet | **201.70 ±0.18 Gb/s** | 197.17 Gb/s | 0 | Cross-host two-link 200 GbE |
-| Socket / RoCE (SEND) | 8 MB message | **112.5 ±0.2 Gb/s** | **109.0 Gb/s** | 0 | Cross-host 200 GbE |
+| Socket / RoCE (SEND) | 8 MB message | **198.72 ±0.03 Gb/s** | **195.55 ±0.03 Gb/s** | 0 | Cross-host two-link 200 GbE |
 | Socket / TCP | 1 MiB message | — | 55.7 Gb/s | 0 | Cross-host 200 GbE |
 | Socket / UDP (paced) | 8 KB message | — | 23.0 Gb/s | 0 | Cross-host 200 GbE |
 
-Each transport is best read at its own best-case operation size (see the per-transport
-tables below); a single cross-transport unit of work isn't meaningful here, since
-RoCE at 8 KB is bound by its in-flight buffer pool rather than the wire and TCP has
-no operation boundary. The socket rows report app rates and per-port packet counts
-rather than a wire byte rate, so their Wire cells are blank.
+Each transport is best read at its own best-case operation size (see the
+per-transport tables below); a single cross-transport unit of work isn't meaningful
+here, since TCP has no operation boundary. The socket rows report app rates and
+per-port packet counts rather than a wire byte rate, so their Wire cells are blank.
 
 **Every row here is loss-free.** TCP gets that for free from flow control. UDP has
 no flow control, so its row is **paced** at the highest rate that held zero loss
 over three 30 s reps; offer more than that and the receiver's drain rate decides
 what arrives. See [Socket / UDP](#socket-udp) for that curve.
 
-**The kernel stack's cost is per core, not per link.** A single TCP stream
-delivers 55.7 Gb/s against RoCE's 109.0 on the same cable, because one stream is
-bound by per-byte copy and ACK processing on one core rather than by the wire. Add
-a second concurrent stream and TCP reaches 105.2 Gb/s, and four put it at 108.5 —
-level with the zero-copy transports at the PCIe ceiling. So the interesting
-difference between sockets and RDMA on this platform is CPU cost per byte, not
-attainable rate. UDP paced starts lower at 23.0 Gb/s for one stream, since a
+**The kernel stack's cost is per core, not per link.** A single TCP stream delivers
+55.7 Gb/s because one stream is bound by per-byte copy and ACK processing on one
+core rather than by the wire. Add a second concurrent stream and TCP reaches 105.2
+Gb/s, and four put it at 108.5 — near the one-link PCIe ceiling. RoCE's summary row
+uses two independent links, so it is not a direct rate comparator for those
+single-link TCP cells. UDP paced starts lower at 23.0 Gb/s for one stream, since a
 datagram socket gives up TCP's segmentation offload and pays per datagram, and it
 scales the same way: see [core scaling](#core-scaling-cross-host-200-gbe_1).
 
@@ -222,45 +220,26 @@ Generated by
 
 ## Socket / RoCE
 
-RoCE RC SEND, cross-host on the 200 GbE pair, single queue-pair, batch 1, 0 drops.
-Large messages make RoCE the fastest transport on this hardware; small ones are
-bound by how many messages the configuration keeps in flight, not by the wire.
+RoCE RC SEND, cross-host on two independent links, batch 1, 0 drops. Each host runs
+one process with one queue pair per link. Large messages nearly saturate both links;
+small ones are limited by per-message work.
 
-**Message-size sweep (single QP, batch 1, 0 drops).** Medians over 3 reps, `±`
-half the observed range.
+**Two-link message-size sweep (two QPs, batch 1, 0 drops).** Five 120 s samples;
+`±` is the sample standard deviation. Rates are aggregate across both links.
 
-| Message size | Wire <span style="text-transform: none">Gb/s</span> | App <span style="text-transform: none">Gb/s</span> | In-flight buffers |
-| ------------ | ---: | ---: | --- |
-| 8 MB  | **112.5 ±0.2** | **109.0** | 20 |
-| 1 MB  | 112.1 ±0.3 | 108.4 | 20 |
-| 8 KB  | 1.07 ±0.01 | 1.02 | 20 (shipped config) |
-| 8 KB  | **88.7 ±1.5** | 85.5 | 512 |
-| 4 KB  | 0.62 | 0.58 | 20 (shipped config) |
-| 4 KB  | 40.1 ±9.5 | 38.5 | 512 |
+| Message size | Wire <span style="text-transform: none">Gb/s</span> | App <span style="text-transform: none">Gb/s</span> |
+| ------------ | ---: | ---: |
+| 8 MB | **198.72 ±0.03** | **195.55 ±0.03** |
+| 1 MB | 198.16 ±0.06 | 194.92 ±0.06 |
+| 8 KB | 172.77 ±1.04 | 169.85 ±1.02 |
+| 4 KB | 72.96 ±5.03 | 71.47 ±4.93 |
 
-At 1 MB and above RoCE reaches 112.5 Gb/s on its single link and comes within 11%
-of the 126 Gb/s PCIe budget: hardware segmentation emits MTU-sized
-packets from one posted message, so the host pays its per-packet costs less often
-than the raw path does at an 8 KB frame.
+At 1 MB and above RoCE reaches 198.72 Gb/s across two links: hardware segmentation
+emits MTU-sized packets from one posted message, so the host pays its per-packet
+costs less often than the raw path does at an 8 KB frame.
 
-**Below 1 MB, size the memory region to keep enough messages in flight.** The pair of
-8 KB rows above is the same transport, the same code and the same wire: the only
-difference is `num_bufs`. The RDMA bench's send loop stops when either `tx_depth`
-or the memory region's buffer pool runs dry, and
-`daqiri_bench_rdma_tx_rx_spark_xhost.yaml` ships with **20** buffers. Twenty 8 KB
-messages is too little in flight to keep the send loop from stalling on
-completions, so the shipped config measures pipeline depth rather than RoCE — a
-**83x** difference at 8 KB and 65x at 4 KB. Before raising `num_bufs`, set the
-memory region's `buf_size` to the message size being measured and bound the total
-pinned allocation to an explicit memory budget. Do not multiply a large-message
-buffer size by a deep small-message window. With 512 8 KB buffers, the transport
-reaches 88.7 Gb/s. The 4 KB deep row stays noisy (±9.5) because at that size the
-per-message cost really is close to the limit.
-
-!!! note "The 64 KB row is pending a re-measurement"
-    The cross-host 64 KB cell also ran with the shipped 20-buffer pool, so its
-    result measures pool depth like the small-message rows and is omitted rather
-    than published. It is being re-run with a 512-buffer pool.
+Below 1 MB, per-message work becomes visible: 8 KB sustains 169.85 Gb/s
+application-delivered across both links, while the 4 KB row is slower and noisier.
 
 **CPU utilization** (single-host loopback, 8 MB message, batch 1, unpaced):
 
@@ -327,13 +306,11 @@ and the client's `tx_packets_phy` equals the server's `rx_packets_phy`:
 | 4 | 8  | **108.5 Gb/s** | ±0.03 | 0% |
 | 8 | 16 | **109.3 Gb/s** | ±0.42 | 0% |
 
-**Four cores per host is all TCP needs to reach the PCIe ceiling.** One pair is
-core-bound at 52.0 Gb/s, but a second doubles it to 105.2, and from four pairs on
-the curve is flat at 108.5–109.3 — the same 126 Gb/s PCIe budget that bounds raw
-Ethernet (109.6) and RoCE (112.5). At that point TCP is within a few percent of
-the zero-copy transports, and the remaining difference is what the transports buy
-in CPU cost per byte rather than in achievable rate. Pairs 5–8 add nothing because
-they land on the A725 efficiency cores once the ten X925 cores are spoken for.
+**Four cores per host is all TCP needs to reach the one-link PCIe ceiling.** One pair
+is core-bound at 52.0 Gb/s, but a second doubles it to 105.2, and from four pairs
+on the curve is flat at 108.5–109.3. Those are one-link cells, unlike the two-link
+raw-Ethernet and RoCE summary rates. Pairs 5–8 add nothing because they land on the
+A725 efficiency cores once the ten X925 cores are spoken for.
 
 ### Pair scaling, single-host loopback (100 GbE)
 
@@ -611,8 +588,6 @@ provide the paired roles for a manual cross-host smoke test:
 `examples/daqiri_bench_rdma_tx_rx_spark_xhost.yaml`), one role per host, with wire
 rates read from physical counters at both ends — see
 [Cross-host two-DGX-Spark loopback](raw_benchmarking.md#cross-host-two-dgx-spark-loopback).
-Remember that the shipped RDMA config provisions 20 in-flight buffers, which is
-what the small-message rows above measure.
 
 ```bash
 export DAQIRI_BUILD_DIR=./build
