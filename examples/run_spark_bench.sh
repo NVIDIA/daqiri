@@ -229,8 +229,9 @@ case "$BACKEND" in
     BATCHES_SWEEP=(1)
     PAYLOADS_HEADLINE=(8000)
     BATCHES_HEADLINE=(1)
-    # Concurrent client/server pairs. A single pair is core-bound well below line rate;
-    # the published matrix reaches ~12 Gb/s aggregate by running four pairs.
+    # Concurrent client/server pairs. A single pair is core-bound well below line
+    # rate (~49 Gb/s at 8000 B); four pairs reach ~87 Gb/s aggregate on the 100 GbE
+    # loopback. Both figures assume the per-side pinning below -- see pair_server_core.
     PAIRS_SWEEP=(1 2 4)
     PAIRS_HEADLINE=(4)
     SRV_PORT_BASE=5001; CLI_PORT_BASE=5101
@@ -538,7 +539,7 @@ run_cell() {
   if [[ "$BACKEND" =~ ^socket- ]]; then
     # `pairs` independent client/server processes, each in the wire-loopback
     # namespaces with unique ports and cores. A single pair is core-bound below line
-    # rate; the published Spark matrix reaches ~12 Gb/s by aggregating four pairs.
+    # rate, so the matrix aggregates up to four pairs to fill the link.
     # App TX (client sent) and App RX (server recv) are summed across pairs.
     local i server_pids=() client_pids=()
     for ((i = 0; i < pairs; i++)); do
@@ -561,19 +562,19 @@ run_cell() {
     for i in "${client_pids[@]}"; do wait "$i" || bench_rc=$?; done
     for i in "${server_pids[@]}"; do wait "$i" 2>/dev/null || true; done
 
-    local tx_pkts=0 tx_bytes=0 agg_rx_bytes=0 max_secs=0
+    local tx_pkts=0 tx_bytes=0 agg_rx_bytes=0 max_active_secs=0
     for ((i = 0; i < pairs; i++)); do
-      local sp sb se rb
+      local sp sb sa rb
       sp="$(extract_field 'Client complete' sent_packets "$cell_dir/client_p$i.stdout")"
       sb="$(extract_field 'Client complete' sent_bytes   "$cell_dir/client_p$i.stdout")"
-      se="$(extract_field 'Client complete' seconds      "$cell_dir/client_p$i.stdout")"
+      sa="$(extract_field 'Client complete' active_seconds "$cell_dir/client_p$i.stdout")"
       rb="$(extract_field 'Server complete' recv_bytes   "$cell_dir/server_p$i.stdout")"
       tx_pkts=$(( tx_pkts + ${sp:-0} ))
       tx_bytes=$(( tx_bytes + ${sb:-0} ))
       agg_rx_bytes=$(( agg_rx_bytes + ${rb:-0} ))
-      max_secs="$(awk -v a="$max_secs" -v b="${se:-0}" 'BEGIN { print (b+0>a+0)?b:a }')"
+      max_active_secs="$(awk -v a="$max_active_secs" -v b="${sa:-0}" 'BEGIN { print (b+0>a+0)?b:a }')"
     done
-    pkts="$tx_pkts"; bytes="$tx_bytes"; rx_bytes="$agg_rx_bytes"; secs="$max_secs"
+    pkts="$tx_pkts"; bytes="$tx_bytes"; rx_bytes="$agg_rx_bytes"; secs="$max_active_secs"
     cat "$cell_dir"/server_p*.stderr "$cell_dir"/client_p*.stderr > "$stderr" 2>/dev/null || true
     cat "$cell_dir"/client_p*.stdout "$cell_dir"/server_p*.stdout > "$stdout" 2>/dev/null || true
   elif [[ "$BACKEND" == "rdma" ]]; then

@@ -35,8 +35,10 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 - **Burst file writes** — Write received bursts as raw packet files or appendable PCAP
   captures. Host-backed buffers use POSIX writes; CUDA device-backed buffers can use cuFile/GDS.
 - **AI/ML integration** — Optional `daqiri_resnet50_inference` application
-  (`-DDAQIRI_BUILD_APPLICATIONS=ON`, TensorRT): GPUDirect RX → reorder → ResNet-50
-  feature extraction with headless PC1/PC2 output. See
+  (`-DDAQIRI_BUILD_APPLICATIONS=ON`, TensorRT): GPUDirect RX → reorder → ResNet
+  feature extraction with headless PC1/PC2 output. Cross-host on a DGX Spark pair
+  it reaches 92–98% of the same TensorRT engine's network-free throughput
+  (12,162 img/s at ResNet-18, 3,701 at ResNet-50). See
   [DAQIRI + TensorRT Inference](https://nvidia.github.io/daqiri/tutorials/daqiri-resnet-inference/).
 - **S3 raw object writes** — Optionally upload raw burst packets to Amazon S3 or an
   S3-compatible object store through the AWS SDK for C++.
@@ -65,14 +67,17 @@ Consult the [Benchmarking overview](https://nvidia.github.io/daqiri/benchmarks/)
 
 ### DGX Spark Result Summary
 
-| Stream / Protocol        | Best case      | Throughput        | Drops     | Notes                                           |
-|:-------------------------|:---------------|:------------------|:----------|:------------------------------------------------|
-| Raw Ethernet / GPUDirect | 4 KB packet    | **105.5 ±0.9 Gb/s** | 0      | 98.5 Gb/s single-queue at the 8 KB native shape |
-| Socket / RoCE (SEND)     | 8 MB message   | **102.2 ±0.3 Gb/s** | 0      | Single QP, batch 1                              |
-| Socket / TCP             | 8 KB × 4 pairs | **97.2 ±2.8 Gb/s**  | ~0     | Flow-controlled (App TX = App RX)               |
-| Socket / UDP             | 8 KB × 4 pairs | **29.8 ±0.2 Gb/s**  | ~51% loss | Receiver goodput; unpaced sender             |
+| Stream / Protocol        | Best case      | Wire        | App-delivered | Drops     | Testbed              |
+|:-------------------------|:---------------|:------------|:--------------|:----------|:---------------------|
+| Raw Ethernet / GPUDirect (dpdk) | 8 KB packet | **201.70 ±0.18 Gb/s** | 197.17 Gb/s | 0 | Cross-host two-link 200 GbE |
+| Socket / RoCE (SEND)     | 8 MB message   | **198.72 ±0.03 Gb/s** | **195.55 ±0.03 Gb/s** | 0 | Cross-host two-link 200 GbE |
+| Socket / TCP             | 1 MiB message, 8 streams | — | **174.3 ±0.9 Gb/s** | 0 | Cross-host two-link 200 GbE |
+| Socket / UDP (paced)     | 8 KB message   | —           | 23.0 Gb/s      | 0         | Cross-host 200 GbE   |
 
-Each transport at its best-case operation size on a single DGX Spark (GB10), driven over a physical cabled loopback on one ConnectX-7. Full methodology and per-transport breakdowns at [Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/). These tests were run using a 200G cable, which allowed transfers to reach PCIe limitations slightly over 100Gbps.
+The DPDK raw-Ethernet, RoCE, and scaled TCP rows use two independent links. The
+retained TCP single-pair and UDP rows are single-link measurements. Full methodology
+and per-transport breakdowns are in
+[Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/).
 
 ## Documentation
 
