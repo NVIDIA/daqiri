@@ -36,13 +36,12 @@ images per second, not Gb/s.
 
 ## System under test
 
-### Cross-host, 200 GbE (raw Ethernet, RoCE, single-stream sockets, inference pipeline)
+### Cross-host, 200 GbE (raw Ethernet, RoCE, sockets, inference pipeline)
 
 | Component | Detail |
 | --------- | ------ |
 | Platform | Two DGX Sparks (GB10 Grace, 10x Cortex-X925 + 10x Cortex-A725, 120 GiB unified memory each) |
 | NIC | ConnectX-7; raw DPDK and RoCE use two independent 100 GbE direct links |
-| NIC host attach | Independent PCIe Gen5 x4 links, each with 126 Gb/s of lane bandwidth after 128b/130b |
 | Build | Release, `DAQIRI_ENGINE="dpdk ibverbs"`, `DAQIRI_BUILD_APPLICATIONS=ON` |
 | Method | Results state their run duration and repetition count. The cross-host DPDK cells use 3 repetitions x 30 s; RoCE uses 5 x 120 s. Wire rate is cross-checked with physical counters at both endpoints; application rate is RX-delivered bytes over the sender transfer window. A cell is loss-free only when TX/RX application counts and physical counters agree and RX hardware-buffer discards remain zero. |
 
@@ -63,45 +62,36 @@ wire/application difference.
 
 ## Results Summary
 
-Each transport is shown at its best-case **operation size**. The DPDK and RoCE
-rows are two-link measurements; the TCP and UDP rows use one client/server socket
-pair as stated. Sockets also scale with the number of concurrent pairs; that is a
-separate axis, measured in the
-[TCP](#socket-tcp) and [UDP](#socket-udp) sections below.
-
-On a single cross-host link, **the NIC's host attach is the ceiling, not the cable
-and not the software.** A Gen5 x4 connection carries 126 Gb/s after 128b/130b
-encoding and roughly 110–116 Gb/s once TLP overhead is counted, so one 200 GbE port
-cannot move 200 Gb/s into host memory regardless of what drives it. The two-link
-DPDK and RoCE results have independent host attachments and therefore approach 200
-Gb/s at large payloads. On the single-host loopback the
-**100 GbE cable** is the ceiling instead: it tops out near ~98.8 Gb/s of payload.
+Each transport is shown at its best-case **operation size**. The DPDK, RoCE, and
+scaled TCP rows are two-link measurements; the retained TCP single-pair and UDP rows
+use one client/server socket pair as stated. Socket scaling is a separate axis,
+measured in the [TCP](#socket-tcp) and [UDP](#socket-udp) sections below.
 
 | Stream / Protocol | Best case | Wire | App-delivered | Drops | Testbed |
 | ----------------- | --------- | ---: | ------------: | ----- | ------- |
 | Raw Ethernet / GPUDirect (dpdk) | 8 KB packet | **201.70 ±0.18 Gb/s** | 197.17 Gb/s | 0 | Cross-host two-link 200 GbE |
 | Socket / RoCE (SEND) | 8 MB message | **198.72 ±0.03 Gb/s** | **195.55 ±0.03 Gb/s** | 0 | Cross-host two-link 200 GbE |
-| Socket / TCP | 1 MiB message | — | 55.7 Gb/s | 0 | Cross-host 200 GbE |
+| Socket / TCP | 1 MiB message, 8 streams | — | **174.3 ±0.9 Gb/s** | 0 | Cross-host two-link 200 GbE |
 | Socket / UDP (paced) | 8 KB message | — | 23.0 Gb/s | 0 | Cross-host 200 GbE |
 
 Each transport is best read at its own best-case operation size (see the
 per-transport tables below); a single cross-transport unit of work isn't meaningful
-here, since TCP has no operation boundary. The socket rows report app rates and
-per-port packet counts rather than a wire byte rate, so their Wire cells are blank.
+here, since TCP has no operation boundary. The DPDK, RoCE, and scaled TCP rows use
+two independent links. The retained TCP single-pair and UDP rows use one link. The
+socket rows report app rates and per-port packet counts rather than a wire byte rate,
+so their Wire cells are blank.
 
 **Every row here is loss-free.** TCP gets that for free from flow control. UDP has
 no flow control, so its row is **paced** at the highest rate that held zero loss
 over three 30 s reps; offer more than that and the receiver's drain rate decides
 what arrives. See [Socket / UDP](#socket-udp) for that curve.
 
-**The kernel stack's cost is per core, not per link.** A single TCP stream delivers
-55.7 Gb/s because one stream is bound by per-byte copy and ACK processing on one
-core rather than by the wire. Add a second concurrent stream and TCP reaches 105.2
-Gb/s, and four put it at 108.5 — near the one-link PCIe ceiling. RoCE's summary row
-uses two independent links, so it is not a direct rate comparator for those
-single-link TCP cells. UDP paced starts lower at 23.0 Gb/s for one stream, since a
-datagram socket gives up TCP's segmentation offload and pays per datagram, and it
-scales the same way: see [core scaling](#core-scaling-cross-host-200-gbe_1).
+**TCP scales with concurrent streams across the two links.** The retained one-stream
+cross-host result is 55.7 Gb/s at 1 MiB. With one stream per link, two worker cores
+per host deliver 110.7 ±6.6 Gb/s; four and eight streams raise that to 156.9 ±1.7
+and 174.3 ±0.9 Gb/s. UDP paced starts lower at 23.0 Gb/s for one stream, since a
+datagram socket gives up TCP's segmentation offload and pays per datagram. Its
+separate scaling result is in [Socket / UDP](#socket-udp).
 
 ## Raw Ethernet / GPUDirect
 
@@ -291,26 +281,24 @@ frames (8.6–8.9 KB, from bytes ÷ frames above), so `message_size` changes how
 spends 68.7 M calls to move 68.7 GB where the 8000 B cell moves 2.9x the bytes in
 2.8x fewer calls — the cost being amortized is the call, not the framing.
 
-### Core scaling, cross-host (200 GbE)
+### Core scaling, cross-host (two links)
 
-Concurrent client/server pairs at an 8000 B message, unpaced, medians of 3 × 30 s.
-Each pair uses one queue-poller core and one app-worker core per host, so the
-core count is twice the pair count. Clients run on one Spark and servers on the
-other, giving each side its own core budget. App TX equals App RX in every cell
-and the client's `tx_packets_phy` equals the server's `rx_packets_phy`:
+Concurrent TCP client/server streams at a 1 MiB message, split evenly over two
+physical links. Every cell is the mean ± sample standard deviation of 3 × 30 s
+runs. The core count is the number of pinned benchmark worker cores per host: one
+per stream. Socket-engine I/O threads are not affinity-pinned by the queue
+`cpu_core` fields. Client sent bytes matched server received bytes for every stream,
+and source/receiver physical-byte deltas matched with zero discard deltas:
 
-| Pairs | Cores per host | Delivered | Spread | Loss |
-| ----: | -------------: | --------: | -----: | ---: |
-| 1 | 2  | 52.0 Gb/s | ±0.10 | 0% |
-| 2 | 4  | **105.2 Gb/s** | ±0.30 | 0% |
-| 4 | 8  | **108.5 Gb/s** | ±0.03 | 0% |
-| 8 | 16 | **109.3 Gb/s** | ±0.42 | 0% |
+| TCP streams | Worker cores per host | Delivered | Spread | Loss |
+| ----------: | --------------------: | --------: | -----: | ---: |
+| 2 (1 per link) | 2 | 110.7 Gb/s | ±6.6 | 0% |
+| 4 (2 per link) | 4 | 156.9 Gb/s | ±1.7 | 0% |
+| 8 (4 per link) | 8 | **174.3 Gb/s** | ±0.9 | 0% |
 
-**Four cores per host is all TCP needs to reach the one-link PCIe ceiling.** One pair
-is core-bound at 52.0 Gb/s, but a second doubles it to 105.2, and from four pairs
-on the curve is flat at 108.5–109.3. Those are one-link cells, unlike the two-link
-raw-Ethernet and RoCE summary rates. Pairs 5–8 add nothing because they land on the
-A725 efficiency cores once the ten X925 cores are spoken for.
+The curve continues to rise through eight worker cores, but this sweep does not
+reach the two-link line rate. It therefore does not establish a TCP core count that
+saturates both links.
 
 ### Pair scaling, single-host loopback (100 GbE)
 
@@ -667,7 +655,7 @@ combined config fails on each host at the address it does not own.
   examples/daqiri_bench_socket_udp_client_spark_xhost.yaml --mode client --seconds 30 --target-gbps 23
 ```
 
-Swap in the `tcp_server` / `tcp_client` pair for the TCP rows and drop
+Swap in the `tcp_server` / `tcp_client` pair for the retained single-pair TCP rows and drop
 `--target-gbps`, since TCP self-paces. For UDP that flag drives a token-bucket
 pacer; find the loss-free rate by walking it up until the server's `recv_bytes`
 stops tracking the client's `sent_bytes`. The configs ship at 8000 B (UDP) and
