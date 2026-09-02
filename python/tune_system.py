@@ -320,8 +320,8 @@ def get_nic_info():
 
     except FileNotFoundError:
         logging.warning(
-            "The ibdev2netdev command is not found (try: apt install infiniband-diags). "
-            "Skipping NIC-dependent checks (mrrs, mps, mtu)."
+            "The ibdev2netdev command is not found (ships in mlnx-tools, from the NVIDIA "
+            "DOCA-Host APT repository). Skipping NIC-dependent checks (mrrs, mps, mtu)."
         )
         return []
     except subprocess.CalledProcessError as e:
@@ -2126,7 +2126,8 @@ def check_mtu_size():
 
     except FileNotFoundError:
         logging.error(
-            "The ibdev2netdev command is not found. Ensure that it is installed and available in your PATH."
+            "The ibdev2netdev command is not found. Install mlnx-tools from the NVIDIA "
+            "DOCA-Host APT repository."
         )
     except subprocess.CalledProcessError as e:
         logging.error(f"Error while executing a command: {e}")
@@ -2183,7 +2184,8 @@ def update_mrrs_for_nvidia_devices():
 
     except FileNotFoundError:
         logging.error(
-            "The ibdev2netdev or setpci command is not found. Ensure that they are installed and available in your PATH."
+            "The ibdev2netdev or setpci command is not found. ibdev2netdev ships in mlnx-tools "
+            "from the NVIDIA DOCA-Host APT repository; setpci ships in pciutils."
         )
     except subprocess.CalledProcessError as e:
         logging.error(f"Error while executing a command: {e}")
