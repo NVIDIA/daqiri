@@ -3783,7 +3783,9 @@ uint64_t IbverbsEngine::packed_ts_to_ns(struct ibv_context* ctx, uint64_t raw_ts
     return (packed >> 32) * 1000000000ULL + (packed & 0xffffffffULL);
   };
   const uint64_t timestamp_device_ns = decode(raw_ts);
-  const uint64_t anchor_device_ns = decode(c.info.last_cycles);
+  // clock_info.last_cycles remains a linear 1 GHz device-cycle count even
+  // when the default CQE exposes that same clock in packed seconds/nanoseconds.
+  const uint64_t anchor_device_ns = c.info.last_cycles;
   if (timestamp_device_ns >= anchor_device_ns) {
     return c.info.nsec + (timestamp_device_ns - anchor_device_ns);
   }
