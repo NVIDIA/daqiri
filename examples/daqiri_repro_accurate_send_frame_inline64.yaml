@@ -23,9 +23,9 @@ daqiri:
       kind: "huge"
       affinity: 0
       num_bufs: 16384
-      # This adapter advertises a 64-byte MPRQ stride but rejects CREATE_RQ at
-      # that minimum. A 128-byte receive slot still captures a 64-byte frame.
-      buf_size: 128
+      # Keep the known-good MPRQ stride; only the first 64 bytes contain the
+      # received frame. Some adapters reject their advertised smaller strides.
+      buf_size: 2048
 
     interfaces:
     - name: "loopback_port"
