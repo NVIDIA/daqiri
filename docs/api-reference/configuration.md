@@ -351,9 +351,9 @@ Timestamps returned by `get_packet_rx_timestamp()` are unsigned 64-bit PTP epoch
 nanoseconds in the same clock domain as a PTP-synchronized `CLOCK_REALTIME`.
 The raw ibverbs engine requests the mlx5 real-time CQ timestamp format only when
 the device advertises it; otherwise it uses the default mlx5 CQ format. DAQIRI
-decodes a default 1 GHz real-time clock directly and converts free-running
-device-clock ticks internally. Neither hardware representation is exposed by the
-public API.
+maps a default packed 1 GHz device clock through the mlx5 PHC clock-info anchor
+and converts free-running device-clock ticks internally. Neither hardware
+representation is exposed by the public API.
 **WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or system clock
 configuration. Timestamp values are invalid if the clocks are not PTP-synchronized.
 

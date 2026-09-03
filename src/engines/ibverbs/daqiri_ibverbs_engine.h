@@ -199,6 +199,7 @@ struct IbvRxQueue {
   struct mlx5dv_cq dv_cq {};
   uint32_t cq_ci = 0;  // CQ consumer index (monotonic)
   bool realtime_timestamps = false;
+  bool packed_device_timestamps = false;
 
   // Per-WQE stride accounting for the reclaim path. Indexed by WQE/region.
   std::vector<uint32_t> consumed_strides;  // strides handed to the app (verbs path)
@@ -574,6 +575,7 @@ class IbverbsEngine : public Engine {
   std::unordered_map<struct ibv_context*, ClockCache> clock_cache_;
   std::mutex clock_mtx_;
   uint64_t ts_to_ns(struct ibv_context* ctx, uint64_t raw_ts);
+  uint64_t packed_ts_to_ns(struct ibv_context* ctx, uint64_t raw_ts);
 
   // RX/TX queues, owned here. Pointers handed to worker threads are stable.
   std::vector<std::unique_ptr<IbvRxQueue>> rx_queues_;

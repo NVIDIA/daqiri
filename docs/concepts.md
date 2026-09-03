@@ -367,9 +367,9 @@ When hardware receive timestamps are enabled, applications use
 `get_packet_rx_timestamp()` to read each packet's PTP epoch-nanosecond timestamp.
 Raw ibverbs devices that support mlx5 real-time CQ timestamps produce that
 representation directly; devices without that capability use the default mlx5
-CQ format. DAQIRI decodes a default 1 GHz real-time clock directly and converts
-free-running device-clock ticks internally. Applications never handle either
-hardware representation.
+CQ format. DAQIRI maps a default packed 1 GHz device clock through the mlx5 PHC
+clock-info anchor and converts free-running device-clock ticks internally.
+Applications never handle either hardware representation.
 
 For timed transmission, applications pass the desired PTP epoch-nanosecond value
 directly to `set_packet_tx_time()`.

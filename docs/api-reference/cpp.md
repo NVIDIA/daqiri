@@ -123,8 +123,9 @@ DAQIRI returns unsigned 64-bit PTP epoch nanoseconds in the same clock domain as
 a PTP-synchronized `CLOCK_REALTIME`. Device-clock ticks are not part of the public API.
 On the raw ibverbs engine, DAQIRI requests mlx5 real-time CQ timestamps only when
 the device advertises that format. Devices without that capability stay on the
-default mlx5 CQ format. DAQIRI decodes a default 1 GHz real-time clock directly;
-otherwise it converts raw device-clock ticks to nanoseconds before returning them.
+default mlx5 CQ format. DAQIRI maps a default packed 1 GHz device clock through
+the mlx5 PHC clock-info anchor; otherwise it converts raw device-clock ticks to
+nanoseconds before returning them.
 **WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or system clock
 configuration. Timestamp values are invalid if the clocks are not PTP-synchronized.
 For reordered aggregate bursts,

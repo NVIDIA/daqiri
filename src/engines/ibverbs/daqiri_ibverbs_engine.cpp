@@ -1000,19 +1000,22 @@ Status IbverbsEngine::devx_create_rq(IbvRxQueue& q, uint32_t stride_log, uint32_
   struct mlx5dv_context dv_ctx {};
   const bool can_select_realtime = mlx5dv_query_device(q.ctx, &dv_ctx) == 0 &&
                                    (dv_ctx.flags & MLX5DV_CONTEXT_FLAGS_REAL_TIME_TS) != 0;
-  q.realtime_timestamps = can_select_realtime || probe_realtime_clock(q.ctx);
+  q.realtime_timestamps = can_select_realtime;
+  q.packed_device_timestamps = !can_select_realtime && probe_realtime_clock(q.ctx);
   if (can_select_realtime) {
     // Real-time CQEs use UTC encoding (seconds << 32 | nanoseconds), matching
     // the public PTP epoch-nanosecond timestamp contract.
     DEVX_SET(rqc, rqc, ts_format, MLX5_RQC_TIMESTAMP_FORMAT_REAL_TIME);
-  } else if (q.realtime_timestamps) {
+  } else if (q.packed_device_timestamps) {
     // Some mlx5 firmware exposes a global 1 GHz real-time clock but does not
     // support selecting the timestamp format per RQ. In that case the default
-    // CQE timestamp is already UTC encoded. Passing it to mlx5dv_ts_to_ns()
-    // treats the one-second UTC rollover as a 2^32-ns device-clock advance.
+    // CQE timestamp uses (device-seconds << 32 | nanoseconds), but its seconds
+    // are not the PHC epoch. Convert it relative to rdma-core's clock-info
+    // anchor; passing the packed value directly to mlx5dv_ts_to_ns() treats a
+    // one-second rollover as a 2^32-ns device-clock advance.
     DAQIRI_LOG_WARN(
-        "RX queue {}: per-RQ real-time timestamp selection is unsupported; decoding the "
-        "HCA's default real-time CQ timestamp format",
+        "RX queue {}: per-RQ real-time timestamp selection is unsupported; converting the "
+        "HCA's default packed device-clock CQ timestamp format",
         q.queue_id);
   } else {
     DAQIRI_LOG_CRITICAL(
@@ -3762,6 +3765,32 @@ uint64_t IbverbsEngine::ts_to_ns(struct ibv_context* ctx, uint64_t raw_ts) {
   return c.valid ? mlx5dv_ts_to_ns(&c.info, raw_ts) : 0;
 }
 
+uint64_t IbverbsEngine::packed_ts_to_ns(struct ibv_context* ctx, uint64_t raw_ts) {
+  std::lock_guard<std::mutex> lk(clock_mtx_);
+  ClockCache& c = clock_cache_[ctx];
+  const uint64_t now = ibv_now_ns();
+  if (!c.valid || (now - c.refresh_tsc) > (ibv_timer_hz / 2)) {
+    if (mlx5dv_get_clock_info(ctx, &c.info) == 0) {
+      c.refresh_tsc = now;
+      c.valid = true;
+    }
+  }
+  if (!c.valid) {
+    return 0;
+  }
+
+  const auto decode = [](uint64_t packed) {
+    return (packed >> 32) * 1000000000ULL + (packed & 0xffffffffULL);
+  };
+  const uint64_t timestamp_device_ns = decode(raw_ts);
+  const uint64_t anchor_device_ns = decode(c.info.last_cycles);
+  if (timestamp_device_ns >= anchor_device_ns) {
+    return c.info.nsec + (timestamp_device_ns - anchor_device_ns);
+  }
+  const uint64_t delta = anchor_device_ns - timestamp_device_ns;
+  return delta <= c.info.nsec ? c.info.nsec - delta : 0;
+}
+
 Status IbverbsEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) {
   if (burst == nullptr || timestamp_ns == nullptr) {
     return Status::NULL_PTR;
@@ -3780,6 +3809,10 @@ Status IbverbsEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint6
     return Status::INVALID_PARAMETER;
   }
   const uint64_t raw_timestamp = burst_ts_arr(burst)[idx];
+  if (q->packed_device_timestamps) {
+    *timestamp_ns = packed_ts_to_ns(q->ctx, raw_timestamp);
+    return Status::SUCCESS;
+  }
   if (!q->realtime_timestamps) {
     *timestamp_ns = ts_to_ns(q->ctx, raw_timestamp);
     return Status::SUCCESS;
