@@ -135,6 +135,9 @@ Endpoint addresses are URI strings. Supported schemes are `tcp://`, `udp://`, an
   `udp://10.250.0.2:5021`. Required for TCP/UDP client mode. RoCE clients choose
   the peer in application code (for example by calling `rdma_connect_to_server`),
   not in DAQIRI config.
+- **`socket_config.udp_rx_cpu_core`**: Optional CPU index for the UDP receive I/O
+  thread. The default is `-1` (unpinned); non-negative values are valid only for
+  `udp://` endpoints.
 - **`socket_config.local_ip`** / **`socket_config.local_port`** and
   **`socket_config.remote_ip`** / **`socket_config.remote_port`**: Legacy endpoint
   fields accepted for older configs when a top-level engine override provides the

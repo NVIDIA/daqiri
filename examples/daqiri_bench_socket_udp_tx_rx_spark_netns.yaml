@@ -47,6 +47,8 @@ daqiri:
         mode: server
         local_addr: "udp://10.250.0.2:5001"
         max_payload_size: 65535
+        # -1 leaves the DAQIRI UDP receive I/O thread unpinned.
+        udp_rx_cpu_core: -1
       rx:
         queues:
         - name: "Server_RX_Queue"

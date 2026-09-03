@@ -27,6 +27,8 @@
 #include <cstring>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <pthread.h>
+#include <sched.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/uio.h>
@@ -70,6 +72,31 @@ std::string sockaddr_to_ip(const sockaddr_in& addr) {
     return "";
   }
   return std::string(ip_buf);
+}
+
+void pin_udp_rx_thread(int cpu_core, uint16_t port) {
+  if (cpu_core < 0) { return; }
+  if (cpu_core >= CPU_SETSIZE) {
+    DAQIRI_LOG_ERROR("UDP RX I/O thread for port {} requested invalid CPU {}; continuing unpinned",
+                     port,
+                     cpu_core);
+    return;
+  }
+
+  cpu_set_t cpuset;
+  CPU_ZERO(&cpuset);
+  CPU_SET(cpu_core, &cpuset);
+  const int status = pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
+  if (status != 0) {
+    DAQIRI_LOG_ERROR(
+        "Failed to pin UDP RX I/O thread for port {} to CPU {}: {}; continuing unpinned",
+        port,
+        cpu_core,
+        strerror(status));
+    return;
+  }
+
+  DAQIRI_LOG_INFO("UDP RX I/O thread for port {} pinned to CPU {}", port, cpu_core);
 }
 
 }  // namespace
@@ -1317,6 +1344,7 @@ void SocketEngine::udp_rx_loop(int if_index) {
   if (if_index < 0 || if_index >= static_cast<int>(endpoints_.size())) { return; }
   auto* ep = endpoints_[if_index].get();
   if (ep == nullptr) { return; }
+  pin_udp_rx_thread(ep->socket_cfg.udp_rx_cpu_core_, ep->port);
 
   if (ep->udp_fd < 0) { return; }
 
