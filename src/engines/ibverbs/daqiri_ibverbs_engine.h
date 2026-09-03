@@ -428,6 +428,10 @@ class IbverbsEngine : public Engine {
   // Installed once, after all RX queues on every port are set up.
   Status install_port_flows();
   Status install_tx_flows();
+  // Query whether the HCA's default timestamp domain is the 1 GHz real-time
+  // clock. Older firmware may use that format without advertising per-RQ
+  // timestamp-format selection.
+  bool probe_realtime_clock(struct ibv_context* ctx);
   // Probe HCA caps for accurate-send-scheduling (wait-on-time) support. Logs
   // wait_on_time + device_frequency_khz and returns true when the WAIT-WQE TX
   // scheduling path is usable (wait_on_time + real-time clock).

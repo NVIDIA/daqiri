@@ -998,12 +998,22 @@ Status IbverbsEngine::devx_create_rq(IbvRxQueue& q, uint32_t stride_log, uint32_
   DEVX_SET(rqc, rqc, flush_in_error_en, 1);
   DEVX_SET(rqc, rqc, vsd, 1);  // do not strip VLAN
   struct mlx5dv_context dv_ctx {};
-  q.realtime_timestamps = mlx5dv_query_device(q.ctx, &dv_ctx) == 0 &&
-                          (dv_ctx.flags & MLX5DV_CONTEXT_FLAGS_REAL_TIME_TS) != 0;
-  if (q.realtime_timestamps) {
+  const bool can_select_realtime = mlx5dv_query_device(q.ctx, &dv_ctx) == 0 &&
+                                   (dv_ctx.flags & MLX5DV_CONTEXT_FLAGS_REAL_TIME_TS) != 0;
+  q.realtime_timestamps = can_select_realtime || probe_realtime_clock(q.ctx);
+  if (can_select_realtime) {
     // Real-time CQEs use UTC encoding (seconds << 32 | nanoseconds), matching
     // the public PTP epoch-nanosecond timestamp contract.
     DEVX_SET(rqc, rqc, ts_format, MLX5_RQC_TIMESTAMP_FORMAT_REAL_TIME);
+  } else if (q.realtime_timestamps) {
+    // Some mlx5 firmware exposes a global 1 GHz real-time clock but does not
+    // support selecting the timestamp format per RQ. In that case the default
+    // CQE timestamp is already UTC encoded. Passing it to mlx5dv_ts_to_ns()
+    // treats the one-second UTC rollover as a 2^32-ns device-clock advance.
+    DAQIRI_LOG_WARN(
+        "RX queue {}: per-RQ real-time timestamp selection is unsupported; decoding the "
+        "HCA's default real-time CQ timestamp format",
+        q.queue_id);
   } else {
     DAQIRI_LOG_CRITICAL(
         "RX queue {}: real-time CQ timestamps are unsupported; using the device clock format",
@@ -1751,6 +1761,20 @@ Status IbverbsEngine::install_flow_rule_locked(int port, PortSteering& st,
     cleanup_dynamic_reformats();
   }
   return ok ? Status::SUCCESS : Status::GENERIC_FAILURE;
+}
+
+bool IbverbsEngine::probe_realtime_clock(struct ibv_context* ctx) {
+  uint32_t in[DEVX_ST_SZ_DW(query_hca_cap_in)] = {0};
+  std::vector<uint32_t> out(DEVX_ST_SZ_DW(query_hca_cap_out), 0);
+  DEVX_SET(query_hca_cap_in, in, opcode, MLX5_CMD_OP_QUERY_HCA_CAP);
+  DEVX_SET(query_hca_cap_in, in, op_mod, MLX5_HCA_CAP_OPMOD_GENERAL_CUR);
+  if (mlx5dv_devx_general_cmd(ctx, in, sizeof(in), out.data(), out.size() * sizeof(uint32_t)) !=
+      0) {
+    DAQIRI_LOG_WARN("QUERY_HCA_CAP failed while probing the timestamp clock ({})", strerror(errno));
+    return false;
+  }
+  void* cap = DEVX_ADDR_OF(query_hca_cap_out, out.data(), capability);
+  return DEVX_GET(cmd_hca_cap_min, cap, device_frequency_khz) == 1000000u;
 }
 
 bool IbverbsEngine::probe_send_scheduling(struct ibv_context* ctx) {
