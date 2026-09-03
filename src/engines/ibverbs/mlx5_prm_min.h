@@ -41,6 +41,14 @@ enum {
   MLX5_CMD_OP_CREATE_RQT = 0x916,
   MLX5_CMD_OP_CREATE_GENERAL_OBJECT = 0xa00,
   MLX5_CMD_OP_QUERY_GENERAL_OBJECT = 0xa02,
+  MLX5_CMD_OP_ACCESS_REGISTER_USER = 0xb0c,
+};
+
+enum {
+  MLX5_ACCESS_REGISTER_IN_OP_MOD_READ = 0x1,
+  MLX5_REGISTER_ID_MTUTC = 0x9055,
+  MLX5_MTUTC_TIMESTAMP_MODE_INTERNAL_TIMER = 0,
+  MLX5_MTUTC_TIMESTAMP_MODE_REAL_TIME = 1,
 };
 
 // Flex-parser (parse-graph) constants for arbitrary-offset flow matching.
@@ -89,6 +97,36 @@ struct mlx5_ifc_query_hca_cap_out_bits {
   uint8_t syndrome[0x20];
   uint8_t reserved_at_40[0x40];
   struct mlx5_ifc_cmd_hca_cap_min_bits capability;
+};
+
+struct mlx5_ifc_access_register_in_bits {
+  uint8_t opcode[0x10];
+  uint8_t reserved_at_10[0x10];
+  uint8_t reserved_at_20[0x10];
+  uint8_t op_mod[0x10];
+  uint8_t reserved_at_40[0x10];
+  uint8_t register_id[0x10];
+  uint8_t argument[0x20];
+};
+
+struct mlx5_ifc_register_mtutc_bits {
+  uint8_t time_stamp_mode[0x2];
+  uint8_t time_stamp_state[0x2];
+  uint8_t reserved_at_4[0x18];
+  uint8_t operation[0x4];
+  uint8_t freq_adjustment[0x20];
+  uint8_t reserved_at_40[0x40];
+  uint8_t utc_sec[0x20];
+  uint8_t utc_nsec[0x20];
+  uint8_t time_adjustment[0x20];
+};
+
+struct mlx5_ifc_access_register_out_bits {
+  uint8_t status[0x8];
+  uint8_t reserved_at_8[0x18];
+  uint8_t syndrome[0x20];
+  uint8_t reserved_at_40[0x40];
+  struct mlx5_ifc_register_mtutc_bits register_data;
 };
 enum {
   MLX5_CQE_SIZE_64B = 0x0,

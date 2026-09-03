@@ -199,7 +199,6 @@ struct IbvRxQueue {
   struct mlx5dv_cq dv_cq {};
   uint32_t cq_ci = 0;  // CQ consumer index (monotonic)
   bool realtime_timestamps = false;
-  bool packed_device_timestamps = false;
 
   // Per-WQE stride accounting for the reclaim path. Indexed by WQE/region.
   std::vector<uint32_t> consumed_strides;  // strides handed to the app (verbs path)
@@ -303,6 +302,7 @@ struct IbvTxQueue {
   uint64_t slots_posted = 0;
   bool accurate_send = false;  // request wall-clock CQ for timed transmission
   bool send_scheduling = false;  // HCA wait_on_time present + real-time clock
+  bool realtime_clock = false;   // WAIT timestamp uses UTC seconds/nanoseconds
   uint64_t rt_timemask = 0;      // wait segment comparison mask
   bool empw_enabled = false;
   // Hand-off-ring-full drops: send_tx_burst couldn't enqueue (TX worker behind),
@@ -429,9 +429,8 @@ class IbverbsEngine : public Engine {
   // Installed once, after all RX queues on every port are set up.
   Status install_port_flows();
   Status install_tx_flows();
-  // Query whether the HCA's default timestamp domain is the 1 GHz real-time
-  // clock. Older firmware may use that format without advertising per-RQ
-  // timestamp-format selection.
+  // Query the MTUTC register for the active HCA timestamp mode, falling back to
+  // the device frequency only when firmware does not expose that register.
   bool probe_realtime_clock(struct ibv_context* ctx);
   // Probe HCA caps for accurate-send-scheduling (wait-on-time) support. Logs
   // wait_on_time + device_frequency_khz and returns true when the WAIT-WQE TX
@@ -575,7 +574,7 @@ class IbverbsEngine : public Engine {
   std::unordered_map<struct ibv_context*, ClockCache> clock_cache_;
   std::mutex clock_mtx_;
   uint64_t ts_to_ns(struct ibv_context* ctx, uint64_t raw_ts);
-  uint64_t packed_ts_to_ns(struct ibv_context* ctx, uint64_t raw_ts);
+  uint64_t ns_to_device_cycles(struct ibv_context* ctx, uint64_t timestamp_ns);
 
   // RX/TX queues, owned here. Pointers handed to worker threads are stable.
   std::vector<std::unique_ptr<IbvRxQueue>> rx_queues_;

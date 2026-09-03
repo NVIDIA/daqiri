@@ -998,25 +998,12 @@ Status IbverbsEngine::devx_create_rq(IbvRxQueue& q, uint32_t stride_log, uint32_
   DEVX_SET(rqc, rqc, flush_in_error_en, 1);
   DEVX_SET(rqc, rqc, vsd, 1);  // do not strip VLAN
   struct mlx5dv_context dv_ctx {};
-  const bool can_select_realtime = mlx5dv_query_device(q.ctx, &dv_ctx) == 0 &&
-                                   (dv_ctx.flags & MLX5DV_CONTEXT_FLAGS_REAL_TIME_TS) != 0;
-  q.realtime_timestamps = can_select_realtime;
-  q.packed_device_timestamps = !can_select_realtime && probe_realtime_clock(q.ctx);
-  if (can_select_realtime) {
+  q.realtime_timestamps = mlx5dv_query_device(q.ctx, &dv_ctx) == 0 &&
+                          (dv_ctx.flags & MLX5DV_CONTEXT_FLAGS_REAL_TIME_TS) != 0;
+  if (q.realtime_timestamps) {
     // Real-time CQEs use UTC encoding (seconds << 32 | nanoseconds), matching
     // the public PTP epoch-nanosecond timestamp contract.
     DEVX_SET(rqc, rqc, ts_format, MLX5_RQC_TIMESTAMP_FORMAT_REAL_TIME);
-  } else if (q.packed_device_timestamps) {
-    // Some mlx5 firmware exposes a global 1 GHz real-time clock but does not
-    // support selecting the timestamp format per RQ. In that case the default
-    // CQE timestamp uses (device-seconds << 32 | nanoseconds), but its seconds
-    // are not the PHC epoch. Convert it relative to rdma-core's clock-info
-    // anchor; passing the packed value directly to mlx5dv_ts_to_ns() treats a
-    // one-second rollover as a 2^32-ns device-clock advance.
-    DAQIRI_LOG_WARN(
-        "RX queue {}: per-RQ real-time timestamp selection is unsupported; converting the "
-        "HCA's default packed device-clock CQ timestamp format",
-        q.queue_id);
   } else {
     DAQIRI_LOG_CRITICAL(
         "RX queue {}: real-time CQ timestamps are unsupported; using the device clock format",
@@ -1767,6 +1754,20 @@ Status IbverbsEngine::install_flow_rule_locked(int port, PortSteering& st,
 }
 
 bool IbverbsEngine::probe_realtime_clock(struct ibv_context* ctx) {
+  uint32_t reg_in[DEVX_ST_SZ_DW(access_register_in)] = {0};
+  uint32_t reg_out[DEVX_ST_SZ_DW(access_register_out)] = {0};
+  DEVX_SET(access_register_in, reg_in, opcode, MLX5_CMD_OP_ACCESS_REGISTER_USER);
+  DEVX_SET(access_register_in, reg_in, op_mod, MLX5_ACCESS_REGISTER_IN_OP_MOD_READ);
+  DEVX_SET(access_register_in, reg_in, register_id, MLX5_REGISTER_ID_MTUTC);
+  if (mlx5dv_devx_general_cmd(ctx, reg_in, sizeof(reg_in), reg_out, sizeof(reg_out)) == 0 &&
+      DEVX_GET(access_register_out, reg_out, status) == 0) {
+    void* mtutc = DEVX_ADDR_OF(access_register_out, reg_out, register_data);
+    return DEVX_GET(register_mtutc, mtutc, time_stamp_mode) ==
+           MLX5_MTUTC_TIMESTAMP_MODE_REAL_TIME;
+  }
+
+  // Match the mlx5 PMD fallback for kernels that do not allow userspace to
+  // read MTUTC: a 1 GHz HCA clock denotes the real-time timestamp mode.
   uint32_t in[DEVX_ST_SZ_DW(query_hca_cap_in)] = {0};
   std::vector<uint32_t> out(DEVX_ST_SZ_DW(query_hca_cap_out), 0);
   DEVX_SET(query_hca_cap_in, in, opcode, MLX5_CMD_OP_QUERY_HCA_CAP);
@@ -2820,10 +2821,14 @@ void IbverbsEngine::initialize() {
         it = probed.emplace(q->ctx, probe_send_scheduling(q->ctx)).first;
       }
       q->send_scheduling = it->second;
-      // Real-time wait mask: compare the low 3 bits of seconds + 32 bits of ns,
-      // i.e. an 8-second cyclic window ((MLX5_TS_MASK_SECS=8 << 32) - 1). A full
-      // mask makes the seconds field compare wrong (the wait never satisfies).
-      q->rt_timemask = (8ULL << 32) - 1ULL;
+      q->realtime_clock = probe_realtime_clock(q->ctx);
+      if (q->realtime_clock) {
+        // Compare the low 3 bits of seconds + 32 bits of nanoseconds.
+        q->rt_timemask = (8ULL << 32) - 1ULL;
+      } else {
+        // Eight seconds at 1 GHz, rounded to the cyclic comparator's power-of-two mask.
+        q->rt_timemask = (1ULL << 33) - 1ULL;
+      }
     }
   }
 
@@ -3765,7 +3770,7 @@ uint64_t IbverbsEngine::ts_to_ns(struct ibv_context* ctx, uint64_t raw_ts) {
   return c.valid ? mlx5dv_ts_to_ns(&c.info, raw_ts) : 0;
 }
 
-uint64_t IbverbsEngine::packed_ts_to_ns(struct ibv_context* ctx, uint64_t raw_ts) {
+uint64_t IbverbsEngine::ns_to_device_cycles(struct ibv_context* ctx, uint64_t timestamp_ns) {
   std::lock_guard<std::mutex> lk(clock_mtx_);
   ClockCache& c = clock_cache_[ctx];
   const uint64_t now = ibv_now_ns();
@@ -3779,18 +3784,14 @@ uint64_t IbverbsEngine::packed_ts_to_ns(struct ibv_context* ctx, uint64_t raw_ts
     return 0;
   }
 
-  const auto decode = [](uint64_t packed) {
-    return (packed >> 32) * 1000000000ULL + (packed & 0xffffffffULL);
-  };
-  const uint64_t timestamp_device_ns = decode(raw_ts);
-  // clock_info.last_cycles remains a linear 1 GHz device-cycle count even
-  // when the default CQE exposes that same clock in packed seconds/nanoseconds.
-  const uint64_t anchor_device_ns = c.info.last_cycles;
-  if (timestamp_device_ns >= anchor_device_ns) {
-    return c.info.nsec + (timestamp_device_ns - anchor_device_ns);
+  // Accurate send is enabled only for the 1 GHz HCA clock, so one device cycle
+  // is one nanosecond. Translate the public PHC-nanosecond target back into the
+  // free-running counter domain used by WAIT when MTUTC is in internal mode.
+  if (timestamp_ns >= c.info.nsec) {
+    return c.info.last_cycles + (timestamp_ns - c.info.nsec);
   }
-  const uint64_t delta = anchor_device_ns - timestamp_device_ns;
-  return delta <= c.info.nsec ? c.info.nsec - delta : 0;
+  const uint64_t delta = c.info.nsec - timestamp_ns;
+  return delta <= c.info.last_cycles ? c.info.last_cycles - delta : 0;
 }
 
 Status IbverbsEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) {
@@ -3811,10 +3812,6 @@ Status IbverbsEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint6
     return Status::INVALID_PARAMETER;
   }
   const uint64_t raw_timestamp = burst_ts_arr(burst)[idx];
-  if (q->packed_device_timestamps) {
-    *timestamp_ns = packed_ts_to_ns(q->ctx, raw_timestamp);
-    return Status::SUCCESS;
-  }
   if (!q->realtime_timestamps) {
     *timestamp_ns = ts_to_ns(q->ctx, raw_timestamp);
     return Status::SUCCESS;
@@ -5143,9 +5140,15 @@ void* IbverbsEngine::emit_wait_wqe(IbvTxQueue& q, uint64_t when_ns) {
   ws->lkey = 0;
   ws->va_high = 0;
   ws->va_low = 0;
-  // The HW real-time clock compares in UTC format (seconds<<32 | ns), so the
-  // linear nanoseconds (same domain as get_packet_rx_timestamp) are split here.
-  const uint64_t v = (when_ns % 1000000000ULL) | ((when_ns / 1000000000ULL) << 32);
+  uint64_t v = when_ns;
+  if (q.realtime_clock) {
+    // The real-time clock compares UTC format (seconds << 32 | nanoseconds).
+    v = (when_ns % 1000000000ULL) | ((when_ns / 1000000000ULL) << 32);
+  } else {
+    // Internal-timer mode compares the free-running HCA counter. Convert from
+    // the public PHC-nanosecond domain using rdma-core's current clock anchor.
+    v = ns_to_device_cycles(q.ctx, when_ns);
+  }
   ws->value = htobe64(v);
   ws->mask = htobe64(q.rt_timemask);
   q.wqe_slot_cum[widx] = q.slots_posted;
