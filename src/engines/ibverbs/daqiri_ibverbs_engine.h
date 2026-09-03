@@ -304,6 +304,7 @@ struct IbvTxQueue {
   bool send_scheduling = false;  // HCA wait_on_time present + real-time clock
   bool realtime_clock = false;   // WAIT timestamp uses UTC seconds/nanoseconds
   uint64_t rt_timemask = 0;      // wait segment comparison mask
+  bool inline_data = false;      // packet bytes are copied into each SEND WQE
   bool empw_enabled = false;
   // Hand-off-ring-full drops: send_tx_burst couldn't enqueue (TX worker behind),
   // so the burst was dropped and its slots rolled back. App-thread-written.

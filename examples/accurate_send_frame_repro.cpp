@@ -27,8 +27,9 @@
 namespace {
 
 constexpr uint32_t kPacketsPerFrame = 4320;
-constexpr uint32_t kHeaderBytes = 62;
-constexpr uint32_t kPayloadBytes = 1440;
+constexpr uint32_t kCustomerHeaderBytes = 62;
+constexpr uint32_t kCustomerPayloadBytes = 1440;
+constexpr uint32_t kInlineFrameBytes = 64;
 constexpr uint64_t kActiveTimeNs = 16000000;
 constexpr uint64_t kFrameNumeratorNs = 1000000000;
 constexpr uint64_t kFrameDenominator = 60;
@@ -106,26 +107,32 @@ bool fill_burst(daqiri::BurstParams* burst, const daqiri::bench::RawBenchTxConfi
   ip_src = ntohl(ip_src);
   ip_dst = ntohl(ip_dst);
 
-  // The common helper initializes the complete logical packet so give it the
-  // full 1,502-byte span, then copy only segment 0 into the CPU header MR.
-  std::vector<uint8_t> packet_template(kHeaderBytes + kPayloadBytes, 0);
-  daqiri::bench::populate_udp_ipv4_headers(packet_template.data(), kHeaderBytes, kPayloadBytes,
-                                           eth_src, eth_dst, ip_src, ip_dst,
+  // The common helper initializes the complete logical packet, then this test
+  // copies the configured host segment. The normal reproduction uses a
+  // 62-byte header plus a 1,440-byte payload; the inline variant uses one
+  // complete 64-byte host segment.
+  std::vector<uint8_t> packet_template(cfg.header_size + cfg.payload_size, 0);
+  daqiri::bench::populate_udp_ipv4_headers(packet_template.data(), cfg.header_size,
+                                           cfg.payload_size, eth_src, eth_dst, ip_src, ip_dst,
                                            static_cast<uint16_t>(std::stoi(cfg.udp_src_port)),
                                            static_cast<uint16_t>(std::stoi(cfg.udp_dst_port)));
   for (uint32_t packet = 0; packet < count; ++packet) {
     auto* dst = static_cast<uint8_t*>(daqiri::get_segment_packet_ptr(burst, 0, packet));
-    std::memcpy(dst, packet_template.data(), kHeaderBytes);
+    std::memcpy(dst, packet_template.data(), cfg.header_size);
     const PacketMarker marker{htonl(kMarkerMagic), htonl(frame), htonl(packet)};
     std::memcpy(dst + kMarkerOffset, &marker, sizeof(marker));
   }
-  return daqiri::set_all_packet_lengths(
-             burst, {static_cast<int>(kHeaderBytes), static_cast<int>(kPayloadBytes)}) ==
-         daqiri::Status::SUCCESS;
+  const daqiri::Status status =
+      cfg.payload_size == 0
+          ? daqiri::set_all_packet_lengths(burst, {static_cast<int>(cfg.header_size)})
+          : daqiri::set_all_packet_lengths(
+                burst,
+                {static_cast<int>(cfg.header_size), static_cast<int>(cfg.payload_size)});
+  return status == daqiri::Status::SUCCESS;
 }
 
 daqiri::BurstParams* allocate_burst(SharedState& shared, int port_id, int queue_id,
-                                    uint32_t count) {
+                                    uint32_t count, uint16_t num_segs) {
   while (!shared.stop.load(std::memory_order_relaxed)) {
     auto* burst = daqiri::create_tx_burst_params();
     if (burst == nullptr) {
@@ -133,7 +140,7 @@ daqiri::BurstParams* allocate_burst(SharedState& shared, int port_id, int queue_
       continue;
     }
     daqiri::set_header(burst, static_cast<uint16_t>(port_id), static_cast<uint16_t>(queue_id),
-                       count, 2);
+                       count, num_segs);
     if (!daqiri::is_tx_burst_available(burst)) {
       daqiri::free_tx_metadata(burst);
       std::this_thread::yield();
@@ -148,7 +155,8 @@ daqiri::BurstParams* allocate_burst(SharedState& shared, int port_id, int queue_
 }
 
 bool send_prime(SharedState& shared, const daqiri::bench::RawBenchTxConfig& cfg, int port_id) {
-  auto* burst = allocate_burst(shared, port_id, cfg.queue_id, 1);
+  const uint16_t num_segs = cfg.payload_size == 0 ? 1 : 2;
+  auto* burst = allocate_burst(shared, port_id, cfg.queue_id, 1, num_segs);
   if (burst == nullptr) {
     return false;
   }
@@ -183,7 +191,8 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg, SharedState& shared) 
       }
     }
 
-    auto* burst = allocate_burst(shared, port_id, cfg.queue_id, kPacketsPerFrame);
+    const uint16_t num_segs = cfg.payload_size == 0 ? 1 : 2;
+    auto* burst = allocate_burst(shared, port_id, cfg.queue_id, kPacketsPerFrame, num_segs);
     if (burst == nullptr) {
       break;
     }
@@ -372,9 +381,12 @@ int main(int argc, char** argv) {
   const auto root = YAML::LoadFile(argv[1]);
   const auto tx = daqiri::bench::parse_tx(root);
   const auto rx = daqiri::bench::parse_rx(root);
-  if (tx.batch_size != kPacketsPerFrame || tx.header_size != kHeaderBytes ||
-      tx.payload_size != kPayloadBytes) {
-    std::cerr << "bench_tx must specify batch_size=4320, header_size=62, payload_size=1440\n";
+  const bool customer_packet = tx.header_size == kCustomerHeaderBytes &&
+                               tx.payload_size == kCustomerPayloadBytes;
+  const bool inline_packet = tx.header_size == kInlineFrameBytes && tx.payload_size == 0;
+  if (tx.batch_size != kPacketsPerFrame || (!customer_packet && !inline_packet)) {
+    std::cerr << "bench_tx must specify batch_size=4320 and either header_size=62, "
+                 "payload_size=1440 or header_size=64, payload_size=0\n";
     return 1;
   }
   if (cudaSetDevice(0) != cudaSuccess || cudaFree(nullptr) != cudaSuccess) {

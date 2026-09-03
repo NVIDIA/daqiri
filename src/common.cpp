@@ -1824,6 +1824,9 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_tx_queue_common_config(
     if (q_item["pacing_mbps"].IsDefined()) {
       q.pacing_mbps_ = q_item["pacing_mbps"].as<uint64_t>();
     }
+    if (q_item["inline_data"].IsDefined()) {
+      q.inline_data_ = q_item["inline_data"].as<bool>();
+    }
   } catch (const std::exception& e) {
     DAQIRI_LOG_ERROR("Error parsing TxQueueConfig: {}", e.what());
     return false;

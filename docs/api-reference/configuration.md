@@ -477,6 +477,12 @@ daqiri::set_reorder_cuda_stream("rx_port", "rx_reorder_0", stream);
   bound and typical-packet-size fields at their device defaults.
   - type: `integer`
   - default: `0`
+- **`inline_data`**: Copy each packet into its mlx5 SEND WQE instead of having the NIC DMA-read
+  packet bytes from the configured memory region. This diagnostic mode is supported by the raw
+  ibverbs engine for single-segment packets up to 64 bytes. A 64-byte packet consumes two WQEBBs;
+  with accurate send, its preceding WAIT consumes a third WQEBB.
+  - type: `boolean`
+  - default: `false`
 
 A direct TX queue creates no handoff ring or worker. One application thread owns the queue and
 may have only one acquired-but-unsubmitted packet at a time. `BurstParams` remains the ownership

@@ -4659,6 +4659,7 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
   q.port_id = intf.port_id_;
   q.queue_id = qcfg.common_.id_;
   q.accurate_send = intf.tx_.accurate_send_;
+  q.inline_data = qcfg.inline_data_;
   q.poll_mode = qcfg.poll_mode_;
   q.batch_size = q.poll_mode == QueuePollMode::DIRECT ? 1 : std::max(1, qcfg.common_.batch_size_);
   if (!qcfg.common_.cpu_core_.empty()) {
@@ -4683,6 +4684,10 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
   // >1 region = header-data split TX: each packet segment comes from its own MR
   // (region 0 = CPU header, region 1 = GPU payload), each with its own lkey.
   q.num_segs = std::min<int>(static_cast<int>(qcfg.common_.mrs_.size()), MAX_NUM_SEGS);
+  if (q.inline_data && q.num_segs != 1) {
+    DAQIRI_LOG_CRITICAL("TX queue {} inline_data requires exactly one memory region", q.queue_id);
+    return Status::INVALID_PARAMETER;
+  }
 
   q.ctx = open_device_for_interface(intf);
   if (q.ctx == nullptr) {
@@ -4692,7 +4697,7 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
 
   struct mlx5dv_context dv_ctx {};
   const uint64_t empw_flags = MLX5DV_CONTEXT_FLAGS_MPW_ALLOWED | MLX5DV_CONTEXT_FLAGS_ENHANCED_MPW;
-  q.empw_enabled = q.poll_mode == QueuePollMode::INDIRECT &&
+  q.empw_enabled = !q.inline_data && q.poll_mode == QueuePollMode::INDIRECT &&
                    mlx5dv_query_device(q.ctx, &dv_ctx) == 0 &&
                    (dv_ctx.flags & empw_flags) == empw_flags;
 
@@ -4739,9 +4744,9 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
       return Status::GENERIC_FAILURE;
     }
   }
-  DAQIRI_LOG_INFO("TX queue {} ready in {} mode: {} slots of {}B, qp {} (mr {})", q.queue_id,
-                  queue_poll_mode_to_string(q.poll_mode), q.num_slots, q.slot_size, (void*)q.qp,
-                  q.mr_name);
+  DAQIRI_LOG_INFO("TX queue {} ready in {} mode: {} slots of {}B, qp {} (mr {}, data {})",
+                  q.queue_id, queue_poll_mode_to_string(q.poll_mode), q.num_slots, q.slot_size,
+                  (void*)q.qp, q.mr_name, q.inline_data ? "inline" : "DMA");
   return Status::SUCCESS;
 }
 
@@ -4846,6 +4851,29 @@ static bool empw_compatible_burst(const BurstParams* burst) {
 uint64_t IbverbsEngine::tx_burst_wqebbs(const IbvTxQueue& q, const BurstParams* burst) const {
   const uint64_t packets = burst->hdr.hdr.num_pkts;
   const bool scheduled = (burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) != 0;
+  if (q.inline_data) {
+    uint64_t wqebbs = 0;
+    for (uint64_t i = 0; i < packets; ++i) {
+      const uint32_t packet_bytes = burst->pkt_lens[0][i];
+      if (packet_bytes > 64) {
+        DAQIRI_LOG_ERROR("TX q{} inline_data packet {} is {} bytes; maximum is 64", q.queue_id,
+                         i, packet_bytes);
+        return static_cast<uint64_t>(q.sq_capacity_wqebbs) + 1;
+      }
+      // ctrl(16) + the 14-byte Ethernet-segment prefix + the inline frame.
+      const uint64_t data_segments = (30 + packet_bytes + 15) / 16;
+      wqebbs += (data_segments + 3) / 4;
+    }
+    if (scheduled) {
+      const uint64_t* txtime = burst_ts_arr(burst);
+      for (uint64_t i = 0; i < packets; ++i) {
+        if (txtime[i] != 0) {
+          ++wqebbs;
+        }
+      }
+    }
+    return wqebbs;
+  }
   if (q.empw_enabled && empw_compatible_burst(burst)) {
     // A timed packet must break the eMPW session: WAIT + ordinary SEND for
     // packet 0, then pack the remaining untimed packets into eMPW WQEs.
@@ -5294,30 +5322,53 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
     auto* ctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(seg);
     const bool signaled = ((i % SIGNAL_EVERY) == (SIGNAL_EVERY - 1)) || (i == n - 1);
     ctrl->opmod_idx_opcode = htobe32(((q.sq_pi & 0xffff) << 8) | MLX5_OPCODE_SEND);
-    ctrl->qpn_ds = htobe32((q.sqn << 8) | ds);
+    const uint32_t packet_bytes = q.inline_data ? burst->pkt_lens[0][i] : 0;
+    const uint8_t packet_ds =
+        q.inline_data ? static_cast<uint8_t>((30 + packet_bytes + 15) / 16) : ds;
+    const uint32_t send_wqebbs = (static_cast<uint32_t>(packet_ds) + 3) / 4;
+    ctrl->qpn_ds = htobe32((q.sqn << 8) | packet_ds);
     ctrl->signature = 0;
     ctrl->dci_stream_channel_id = 0;
     ctrl->fm_ce_se = tx_completion_mode(signaled);
     ctrl->imm = 0;
-    // Minimal (16-byte) Ethernet segment, no inline headers: the NIC DMAs the
-    // whole frame from the data segment. Request IPv4 + L4 checksum offload so
-    // the NIC fills the IP/UDP checksums (matches the DPDK backend, which has
-    // checksum offload always on); the application need not compute them.
-    memset(seg + 16, 0, 16);
-    reinterpret_cast<struct mlx5_wqe_eth_seg*>(seg + 16)->cs_flags =
-        MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
-    auto* dseg = reinterpret_cast<struct mlx5_wqe_data_seg*>(seg + 32);
-    for (int s = 0; s < segs; s++) {
-      // Each segment uses its own region's lkey (region 0 = header/CPU MR,
-      // region 1 = payload/GPU MR for HDS).
-      dseg[s].byte_count = htobe32(burst->pkt_lens[s][i]);
-      dseg[s].lkey = htobe32(q.regions[s].lkey);
-      dseg[s].addr = htobe64(reinterpret_cast<uint64_t>(burst->pkts[s][i]));
+    if (q.inline_data) {
+      // mlx5 places inline Ethernet bytes immediately after the 14-byte prefix
+      // of the Ethernet WQE segment. A 64-byte frame therefore consumes 94
+      // bytes total (six 16-byte data segments, two WQEBBs). The packet copy may
+      // wrap at the end of the cyclic SQ.
+      memset(seg + 16, 0, 14);
+      auto* eth = reinterpret_cast<struct mlx5_wqe_eth_seg*>(seg + 16);
+      eth->cs_flags = MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
+      eth->inline_hdr_sz = htobe16(static_cast<uint16_t>(packet_bytes));
+      const auto* src = static_cast<const uint8_t*>(burst->pkts[0][i]);
+      uint8_t* dst = seg + 30;
+      const size_t sq_bytes = static_cast<size_t>(wqe_cnt) * stride;
+      const size_t first = std::min<size_t>(packet_bytes, sq_bytes - (dst - sq_buf));
+      memcpy(dst, src, first);
+      if (first != packet_bytes) {
+        memcpy(sq_buf, src + first, packet_bytes - first);
+      }
+    } else {
+      // Minimal (16-byte) Ethernet segment, no inline headers: the NIC DMAs the
+      // whole frame from the data segment. Request IPv4 + L4 checksum offload so
+      // the NIC fills the IP/UDP checksums (matches the DPDK backend, which has
+      // checksum offload always on); the application need not compute them.
+      memset(seg + 16, 0, 16);
+      reinterpret_cast<struct mlx5_wqe_eth_seg*>(seg + 16)->cs_flags =
+          MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
+      auto* dseg = reinterpret_cast<struct mlx5_wqe_data_seg*>(seg + 32);
+      for (int s = 0; s < segs; s++) {
+        // Each segment uses its own region's lkey (region 0 = header/CPU MR,
+        // region 1 = payload/GPU MR for HDS).
+        dseg[s].byte_count = htobe32(burst->pkt_lens[s][i]);
+        dseg[s].lkey = htobe32(q.regions[s].lkey);
+        dseg[s].addr = htobe64(reinterpret_cast<uint64_t>(burst->pkts[s][i]));
+      }
     }
     q.slots_posted++;  // this packet consumes one slot
     q.wqe_slot_cum[idx] = q.slots_posted;
     last_ctrl = ctrl;
-    q.sq_pi++;
+    q.sq_pi += send_wqebbs;
     q.wqe_wqebb_cum[idx] = q.sq_pi;
   }
 

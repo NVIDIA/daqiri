@@ -662,6 +662,10 @@ struct RxQueueConfig {
 struct TxQueueConfig {
   CommonQueueConfig common_;
   QueuePollMode poll_mode_ = QueuePollMode::INDIRECT;
+  // Copy each packet into the mlx5 SEND WQE instead of describing registered
+  // packet memory. Supported by the raw ibverbs engine for single-segment
+  // packets whose inline WQE fits in the mapped SQ.
+  bool inline_data_ = false;
   // Packet pacing: average TX rate cap in megabits/sec (L2 frame bytes). 0
   // disables pacing (line-rate). Honored only by engines/devices with hardware
   // packet-pacing support.

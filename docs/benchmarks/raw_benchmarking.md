@@ -353,6 +353,11 @@ The summary reports intra-frame spacing, frame-boundary blanking, and any non-co
 greater-than-50-us intra-frame gaps. The CSV contains the frame/packet index, requested timestamp,
 hardware RX timestamp, scheduling error, and adjacent RX delta for every received packet.
 
+For a control that removes TX packet-memory DMA while retaining the same packet rate, WAIT cadence,
+and one doorbell per frame, use `daqiri_repro_accurate_send_frame_inline64.yaml`. It sends one
+64-byte host packet inline in each SEND WQE. Each SEND occupies two WQEBBs, so a scheduled packet
+uses three WQEBBs including its WAIT and the 4,320-packet frame uses 12,960 WQEBBs.
+
 ## Tune RDMA SEND completion signaling
 
 The RDMA engine signals every SEND work request by default. For `daqiri_bench_rdma`
