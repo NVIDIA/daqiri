@@ -330,6 +330,29 @@ reports a supported range, a rate within that range. Older drivers that omit the
 check to the provider when applying the rate; unsupported requests still fail initialization
 instead of silently ignoring the cap.
 
+## Reproduce framed accurate-send timing
+
+`daqiri_repro_accurate_send_frame` exercises per-packet WAIT WQEs independently of the
+`pacing_mbps` rate table. Its fixed workload models a 60 Hz framed stream: 4,320 packets per
+frame, 62-byte CPU header plus 1,440-byte GPU payload per packet, timestamps distributed over
+16 ms, and the remaining frame period left blank. It prepares all 4,320 WAIT+SEND pairs and
+rings the SQ doorbell once, then waits until RX observes packet 3,000 before preparing the next
+frame. The 8,192 TX slots map to a 16,384-WQEBB SQ on the two-segment ibverbs path.
+
+Replace the BDF, CPU cores, and MAC placeholders in
+[`daqiri_repro_accurate_send_frame.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_repro_accurate_send_frame.yaml),
+then run on a ConnectX-7-or-newer port with hardware loopback enabled:
+
+```bash
+/opt/daqiri/bin/daqiri_repro_accurate_send_frame \
+  /opt/daqiri/bin/daqiri_repro_accurate_send_frame.yaml \
+  --seconds 12 --timing-csv /tmp/daqiri_wait_frame_timing.csv
+```
+
+The summary reports intra-frame spacing, frame-boundary blanking, and any non-contiguous or
+greater-than-50-us intra-frame gaps. The CSV contains the frame/packet index, requested timestamp,
+hardware RX timestamp, scheduling error, and adjacent RX delta for every received packet.
+
 ## Tune RDMA SEND completion signaling
 
 The RDMA engine signals every SEND work request by default. For `daqiri_bench_rdma`

@@ -4472,11 +4472,16 @@ Status IbverbsEngine::configure_tx_pacing(IbvTxQueue& q, uint64_t pacing_mbps) {
 }
 
 Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
-  // A scheduled packet may consume a WAIT WQE followed by its send WQE, so
-  // provision up to two outstanding WRs per packet slot. Check the generic
-  // device limit here to turn an otherwise opaque ibv_create_qp EINVAL into an
-  // actionable configuration warning.
-  const uint64_t requested_send_wr = static_cast<uint64_t>(q.num_slots) * 2;
+  // A scheduled packet consumes a WAIT WQE followed by its SEND WQE, so the SQ
+  // needs two WQEBBs per packet slot. mlx5 sizes a verbs RAW_PACKET send WR for
+  // its declared max_send_sge: one WQEBB for one SGE, two WQEBBs for two SGEs.
+  // We bypass verbs and build both of our WQEs as one WQEBB each, so translate
+  // the desired WQEBB capacity back into the provider's WR sizing units. This
+  // avoids doubling a two-segment HDS SQ (for example 16K desired -> 32K mapped).
+  const uint64_t wqebbs_per_verbs_wr = q.num_segs > 1 ? 2 : 1;
+  const uint64_t desired_wqebbs = static_cast<uint64_t>(q.num_slots) * 2;
+  const uint64_t requested_send_wr =
+      (desired_wqebbs + wqebbs_per_verbs_wr - 1) / wqebbs_per_verbs_wr;
   if (requested_send_wr > std::numeric_limits<uint32_t>::max()) {
     DAQIRI_LOG_CRITICAL("TX queue {} has too many buffers: {} slots require {} send WRs",
                         q.queue_id, q.num_slots, requested_send_wr);
@@ -4489,7 +4494,7 @@ Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
         "TX queue {} has {} buffers and requests {} send WRs, exceeding the device max_qp_wr "
         "of {}; QP creation may fail (reduce the TX memory region num_bufs to {} or less)",
         q.queue_id, q.num_slots, requested_send_wr, device_attr.max_qp_wr,
-        device_attr.max_qp_wr / 2);
+        (static_cast<uint64_t>(device_attr.max_qp_wr) * wqebbs_per_verbs_wr) / 2);
   }
 
   if (q.accurate_send) {

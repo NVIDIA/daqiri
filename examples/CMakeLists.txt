@@ -50,6 +50,7 @@ set(DAQIRI_BENCH_CONFIGS
   daqiri_bench_raw_rx_multi_q.yaml
   daqiri_bench_raw_sw_loopback.yaml
   daqiri_bench_raw_hw_loopback_ibverbs.yaml
+  daqiri_repro_accurate_send_frame.yaml
   daqiri_example_dynamic_rx_flow.yaml
   daqiri_example_gds_write_sw_loopback.yaml
   daqiri_example_gds_write_tx_rx.yaml
@@ -98,6 +99,7 @@ endfunction()
 
 add_daqiri_raw_bench(daqiri_bench_raw_hds raw_hds_bench.cpp)
 add_daqiri_raw_bench(daqiri_bench_raw_gpudirect raw_gpudirect_bench.cpp)
+add_daqiri_raw_bench(daqiri_repro_accurate_send_frame accurate_send_frame_repro.cpp)
 if(DAQIRI_ENABLE_OTEL_METRICS)
   find_package(opentelemetry-cpp CONFIG QUIET COMPONENTS sdk exporters_prometheus)
   if(TARGET opentelemetry-cpp::prometheus_exporter)
@@ -170,6 +172,7 @@ endforeach()
 install(TARGETS
         daqiri_bench_raw_hds
         daqiri_bench_raw_gpudirect
+        daqiri_repro_accurate_send_frame
         daqiri_bench_raw_reorder_seq
         daqiri_bench_raw_reorder_quantize
         daqiri_example_dynamic_rx_flow
