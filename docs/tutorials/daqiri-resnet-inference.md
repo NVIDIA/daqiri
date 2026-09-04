@@ -508,12 +508,6 @@ Engine cache path: `models/resnet50_features.fp16in.engine`.
 Re-export after pulling exporter changes, then delete that engine so TensorRT
 rebuilds with FLOAT32 `features` (the ONNX front-end stays FP16 input).
 
-The exporter also takes `--model resnet18|resnet34|resnet101|resnet152`, and the
-app's matching `--model` flag picks up `models/<name>_features*.engine` and the
-right feature dimension (512 for 18/34, 2048 for the rest). Everything on the
-wire is unchanged by model choice, which is what the
-[five-model table](#performance) sweeps.
-
 ## Smoke first (software loopback)
 
 No NIC and no cable. Build and prepare model/dataset as above, then:
@@ -565,29 +559,15 @@ Bench: `--seconds 20` for sustained throughput (drops OK; stats off).
 
 ## Performance
 
-Cross-host on a DGX Spark pair (stacked-01 → stacked-02), TensorRT FP16, batch of
-32, medians of 3 × 120 s. Throughput comes from the RX process's own image counter
-over its active window, not wall clock:
+Sustained img/s is not published here. Earlier draft tables used a different
+binary and counted the pre-traffic wait in the wall clock. Re-measure on the
+current tree; use `--seconds 30` and the RX `active_seconds` line.
 
-| Model | img/s | p50 / p99 ms per batch | TensorRT-only img/s | End-to-end vs TensorRT-only |
-| ----- | ----: | ---------------------: | ------------------: | --------------------------: |
-| ResNet-18  | 12,162 | 2.56 / 2.84   | 13,200 | 92% |
-| ResNet-34  | 7,278  | 4.32 / 4.79   | 7,727  | 94% |
-| ResNet-50  | 3,701  | 8.50 / 9.49   | 3,834  | 97% |
-| ResNet-101 | 2,453  | 12.80 / 13.78 | 2,502  | 98% |
-| ResNet-152 | 1,746  | 18.12 / 19.38 | 1,794  | 97% |
-
-`TensorRT-only` is the same engine driven by `trtexec` with no network at all, so
-the last column is what the ingest path costs: **2–8%**, or 0.21–0.49 ms per batch
-of 32 spent unpacking the reorder output and copying features out. That cost stays
-roughly flat across model sizes, so the percentage shrinks as the model grows.
-
-Ingest is not the constraint at any of these sizes. The same pipeline with
-inference removed — same wire format, same GPU reorder — sustains 94.4 Gb/s, or
-74,091 img/s of supply, 6x what ResNet-18 consumes. Wire rate stays at ~94 Gb/s
-across all five models; only the consumed fraction changes (14.65 Gb/s at
-ResNet-18 down to 2.10 Gb/s at ResNet-152), with the rest dropped at the NIC by
-design since the sender is unthrottled.
+On the same Spark pair, this pipeline's ingest path with inference removed — same
+wire format, same GPU reorder — sustains 94.5 Gb/s, and the raw bench at its native
+8 KB payload reaches 109.6 Gb/s. This pipeline carries a few Gb/s of image payload
+at ResNet-50, so a published number should separate DAQIRI RX+reorder from
+TensorRT.
 
 ### Batch size
 
@@ -599,7 +579,7 @@ engine. Treat batch size as a latency and queueing setting until the next
 one-cable, uint8-accounted sweep is complete.
 
 For this pipeline in the context of the platform's other transport numbers, see
-[DGX Spark performance](../benchmarks/performance-dgx-spark.md#end-to-end-inference-pipeline-resnet-cross-host).
+[DGX Spark performance](../benchmarks/performance-dgx-spark.md#end-to-end-inference-pipeline-resnet-50-cross-host).
 
 ## Output (v1)
 

@@ -32,7 +32,7 @@ procedure, see [Socket and RDMA Benchmarking](socket_benchmarking.md) (the
 loopback and the cross-host wire setup). The exact commands are collected under
 [Reproduce](#reproduce) below.
 
-The [end-to-end inference pipeline](#end-to-end-inference-pipeline-resnet-cross-host)
+The [end-to-end inference pipeline](#end-to-end-inference-pipeline-resnet-50-cross-host)
 measures a whole application rather than a transport, so its figure of merit is
 images per second, not Gb/s.
 
@@ -416,14 +416,13 @@ each unit's payload into one contiguous GPU buffer.
 
 Sockets are absent from that table because they cannot reach a comparable rate.
 
-## End-to-end inference pipeline (ResNet, cross-host)
+## End-to-end inference pipeline (ResNet-50, cross-host)
 
 Everything above measures transports in isolation. This section measures a
 complete application built on them: the
-[ResNet pipeline](../tutorials/daqiri-resnet-inference.md), which takes
+[ResNet-50 pipeline](../tutorials/daqiri-resnet-inference.md), which takes
 CIFAR-10 images off the wire and runs TensorRT inference on them without the
-payload ever being touched by the CPU. Five model sizes are measured, ResNet-18
-through ResNet-152.
+payload ever being touched by the CPU.
 
 It runs **cross-host** on a stacked Spark pair (`spark-stacked-01` TX →
 `spark-stacked-02` RX) over one direct `det1` cable — the same class of link as the
@@ -436,7 +435,7 @@ flowchart LR
   N --> R["RX buffers (host_pinned,<br/>GPU-accessible)"]
   R --> K["DAQIRI reorder kernel:<br/>reassemble + int8 to fp16"]
   K -->|"REORDERED burst + CUDA event"| Q["SPSC ring"]
-  Q --> T["TensorRT FP16<br/>ResNet (18-152)"]
+  Q --> T["TensorRT FP16<br/>ResNet-50"]
   T --> F["feature vectors"]
 ```
 
@@ -446,41 +445,19 @@ the frames and converts to fp16 in the same pass, so fp16 exists only in GPU
 memory and the network carries one byte per pixel. TensorRT reads the reorder
 output directly; there is no staging copy.
 
-Batch of 32 images, TensorRT FP16, medians of 3 × 120 s per model. Throughput
-comes from the RX process's own image counter over its active window, not wall
-clock, which would fold in the pre-traffic wait. Consumed payload counts the
-150,528 image bytes, not the frame overhead.
+Batch of 32 images. Payload Gb/s, when published, should count CIFAR-10's native
+uint8 image bytes on the wire (`3×224×224` bytes/image). The fp16 TensorRT input
+exists only after GPU reorder.
 
-**The GPU is the limit, not the network.** The ingest path with inference removed
-sustains **94.4 Gb/s** of wire (9.48 Mpkt/s, 89.2 Gb/s of image payload), which is
-**74,091 img/s** of supply — 6x what the fastest model consumes:
+Sustained img/s for this application is **not published here**. An earlier draft
+table was measured on a different binary and counted the pre-traffic wait in the
+wall clock. Leave the cells empty until a dedicated pass on the current tree
+(separate DAQIRI RX+reorder from TensorRT, report `active_seconds`).
 
-| Model | img/s | p50 / p99 ms per batch | TensorRT-only img/s | End-to-end vs TensorRT-only | Consumed payload |
-| ----- | ----: | ---------------------: | ------------------: | --------------------------: | ---------------: |
-| ResNet-18  | **12,162** | 2.56 / 2.84   | 13,200 | 92% | 14.65 Gb/s |
-| ResNet-34  | 7,278  | 4.32 / 4.79   | 7,727  | 94% | 8.76 Gb/s |
-| ResNet-50  | 3,701  | 8.50 / 9.49   | 3,834  | 97% | 4.46 Gb/s |
-| ResNet-101 | 2,453  | 12.80 / 13.78 | 2,502  | 98% | 2.95 Gb/s |
-| ResNet-152 | 1,746  | 18.12 / 19.38 | 1,794  | 97% | 2.10 Gb/s |
-
-![DAQIRI to TensorRT ResNet inference on a DGX Spark pair: throughput against the ingest ceiling, per-batch latency breakdown, and end-to-end efficiency against the pure-inference ceiling](../images/spark-resnet-results.svg)
-
-**Putting a network in front of TensorRT costs 2–8%.** The `TensorRT-only` column is
-the same engine driven by `trtexec` with no network at all, and end-to-end reaches
-92% of it at ResNet-18, rising to 97–98% at the larger models. In absolute terms
-DAQIRI adds **0.21–0.49 ms per batch of 32** — unpacking the reorder output and
-copying features out — and that cost stays roughly flat while the compute grows,
-which is why the percentage improves with model size rather than degrading.
-
-**Ingest is decoupled from the model.** Wire rate holds at ~94 Gb/s across all five
-models while consumed payload falls from 14.65 to 2.10 Gb/s, so swapping models
-changes inference throughput and nothing else. The remainder is dropped at the NIC
-by design: the sender is unthrottled, and inference is the bottleneck.
-
-For reference, the raw GPUDirect bench measured in the same campaign reaches
-~109 Gb/s at its native 8 KB frames, matching the transport table above. This
-pipeline's 94.4 Gb/s ceiling reflects its own RX loop and the smaller 1240 B
-frames the image format implies.
+The ingest-only path on the same pair — the identical wire format and GPU reorder
+with inference removed — sustains **94.5 Gb/s**, against 109.6 Gb/s for the raw
+bench at its native 8 KB payload. So the interesting question is how much of that
+94.5 the model consumes, not a single combined img/s.
 
 ## Reproduce
 
@@ -586,32 +563,19 @@ Each run writes `bench-results/<timestamp>-<backend>-<mode>/runs.csv`. See
 [Raw Ethernet Benchmarking](raw_benchmarking.md) for the namespace setup and
 per-transport details.
 
-**The ResNet pipeline** needs `-DDAQIRI_BUILD_APPLICATIONS=ON`, TensorRT (the
-`BASE_IMAGE=torch` container), and the exported models plus packetized dataset.
+**The ResNet-50 pipeline** needs `-DDAQIRI_BUILD_APPLICATIONS=ON`, TensorRT (the
+`BASE_IMAGE=torch` container), and the exported model plus packetized dataset.
 The [tutorial](../tutorials/daqiri-resnet-inference.md) covers both. Given
 passwordless `ssh` between the two hosts and a shared checkout,
-`run_resnet_xhost.sh` starts the RX side, waits for `TrtRunner ready` (TensorRT
-deserializes its plan *after* `daqiri_init`, so gating on the earlier reorder
-line opens the run with an artificial drop burst), then launches TX:
+`run_resnet_xhost.sh` starts the RX side, waits for TensorRT to report ready,
+then launches TX:
 
 ```bash
-# one cell; the table is the median of 3 such runs per model
-applications/resnet50_inference/tools/run_resnet_xhost.sh --seconds 120
+# sustained cell (do not treat wall-clock img/s as the published rate)
+applications/resnet50_inference/tools/run_resnet_xhost.sh --seconds 30
 ```
 
-The wrapper runs whichever engine the RX config points at. The other four sizes
-come from `--model resnet18|resnet34|resnet101|resnet152` on the RX binary, which
-swaps the ONNX/engine paths and the feature dimension; the wrapper does not
-forward that flag, so a model sweep drives the two sides directly.
-
-The ingest ceiling is the same TX driving `daqiri_bench_raw_reorder_seq` on the RX
-host instead of the app — identical wire format, sequence placement and batch
-geometry, with only TensorRT removed. TX runs unthrottled in both arms, so the RX
-NIC drop counter measures the offered-to-consumed ratio rather than loss in the
-pipeline; per-queue `pacing_mbps` is not usable here because the mlx5 PMD then
-requests `tx_pp` and this NIC's firmware rejects it.
-
-For a batch-size sweep, point the RX host at a config with a different
+For the batch-size sweep, point the RX host at a config with a different
 `images_per_batch` (and `packets_per_batch` scaled with it, 128 packets per
 image) and re-run. Throughput comes from the RX process's own image counter;
 wire rates come from `mlnx_perf` on both ports, since application run time over
