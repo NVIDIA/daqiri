@@ -67,17 +67,7 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 Consult the [Benchmarking overview](https://nvidia.github.io/daqiri/benchmarks/) to learn more about generating and optimizing benchmarking on the NVIDIA platform, including:
 - [Socket and RDMA Benchmarking](https://nvidia.github.io/daqiri/benchmarks/socket_benchmarking/) for the full namespace setup and YAML templates
 - [Raw Ethernet Benchmarking](https://nvidia.github.io/daqiri/benchmarks/raw_benchmarking/) for DPDK/raw Ethernet loopback tests
-
-### DGX Spark Result Summary
-
-| Stream / Protocol        | Best case      | Throughput        | Drops     | Notes                                           |
-|:-------------------------|:---------------|:------------------|:----------|:------------------------------------------------|
-| Raw Ethernet / GPUDirect | 4 KB packet    | **105.5 ±0.9 Gb/s** | 0      | 98.5 Gb/s single-queue at the 8 KB native shape |
-| Socket / RoCE (SEND)     | 8 MB message   | **102.2 ±0.3 Gb/s** | 0      | Single QP, batch 1                              |
-| Socket / TCP             | 8 KB × 4 pairs | **97.2 ±2.8 Gb/s**  | ~0     | Flow-controlled (App TX = App RX)               |
-| Socket / UDP             | 8 KB × 4 pairs | **29.8 ±0.2 Gb/s**  | ~51% loss | Receiver goodput; unpaced sender             |
-
-Each transport at its best-case operation size on a single DGX Spark (GB10), driven over a physical cabled loopback on one ConnectX-7. Full methodology and per-transport breakdowns at [Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/). These tests were run using a 200G cable, which allowed transfers to reach PCIe limitations slightly over 100Gbps.
+- [Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/) for measured benchmarks on a single DGX Spark (GB10) in cabled loopback to use as a reference target
 
 ## Documentation
 
