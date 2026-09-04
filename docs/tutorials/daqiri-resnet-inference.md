@@ -563,11 +563,9 @@ Sustained img/s is not published here. Earlier draft tables used a different
 binary and counted the pre-traffic wait in the wall clock. Re-measure on the
 current tree; use `--seconds 30` and the RX `active_seconds` line.
 
-On the same Spark pair, this pipeline's ingest path with inference removed — same
-wire format, same GPU reorder — sustains 94.5 Gb/s, and the raw bench at its native
-8 KB payload reaches 109.6 Gb/s. This pipeline carries a few Gb/s of image payload
-at ResNet-50, so a published number should separate DAQIRI RX+reorder from
-TensorRT.
+The ingest-only raw bench on the same Spark pair is ~100 Gb/s. This pipeline
+carries a few Gb/s of image payload at ResNet-50, so a published number should
+separate DAQIRI RX+reorder from TensorRT.
 
 ### Batch size
 

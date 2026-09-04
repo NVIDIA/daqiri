@@ -70,15 +70,14 @@ Consult the [Benchmarking overview](https://nvidia.github.io/daqiri/benchmarks/)
 
 ### DGX Spark Result Summary
 
-| Stream / Protocol        | Best case      | Wire        | App-delivered | Drops     | Testbed              |
-|:-------------------------|:---------------|:------------|:--------------|:----------|:---------------------|
-| Raw Ethernet / GPUDirect (ibverbs) | 4 KB packet | **109.5 ±0.1 Gb/s** | **104.9 Gb/s** | 0 | Cross-host 200 GbE |
-| Raw Ethernet / GPUDirect (dpdk) | 8 KB packet | **109.6 ±0.3 Gb/s** | 99.9 Gb/s | 0 | Cross-host 200 GbE |
-| Socket / RoCE (SEND)     | 8 MB message   | **112.5 ±0.2 Gb/s** | **109.0 Gb/s** | 0 | Cross-host 200 GbE |
-| Socket / TCP             | 8 KB × 4 pairs | —           | 87.3 ±2.2 Gb/s | ~0       | Single-host 100 GbE  |
-| Socket / UDP             | 8 KB × 4 pairs | —           | 34.5 ±0.6 Gb/s | ~48% loss | Single-host 100 GbE  |
+| Stream / Protocol        | Best case      | Throughput        | Drops     | Notes                                           |
+|:-------------------------|:---------------|:------------------|:----------|:------------------------------------------------|
+| Raw Ethernet / GPUDirect | 4 KB packet    | **105.5 ±0.9 Gb/s** | 0      | 98.5 Gb/s single-queue at the 8 KB native shape |
+| Socket / RoCE (SEND)     | 8 MB message   | **102.2 ±0.3 Gb/s** | 0      | Single QP, batch 1                              |
+| Socket / TCP             | 8 KB × 4 pairs | **97.2 ±2.8 Gb/s**  | ~0     | Flow-controlled (App TX = App RX)               |
+| Socket / UDP             | 8 KB × 4 pairs | **29.8 ±0.2 Gb/s**  | ~51% loss | Receiver goodput; unpaced sender             |
 
-Each transport at its best-case operation size on DGX Spark (GB10) hardware. Raw Ethernet and RoCE are measured cross-host between two Sparks over one ConnectX-7 cable, where the host PCIe/NIC path — not the cable or the software — is the ceiling. The socket rows are older single-host loopback figures, where the 100 GbE cable is the ceiling, and are pending a cross-host re-measurement. Full methodology and per-transport breakdowns at [Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/).
+Each transport at its best-case operation size on a single DGX Spark (GB10), driven over a physical cabled loopback on one ConnectX-7. Full methodology and per-transport breakdowns at [Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/). These tests were run using a 200G cable, which allowed transfers to reach PCIe limitations slightly over 100Gbps.
 
 ## Documentation
 
