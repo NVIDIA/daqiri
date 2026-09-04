@@ -80,7 +80,7 @@ int queue_id = 0;
 auto status = daqiri::get_rx_burst(&burst, port_id, queue_id);
 ```
 
-`get_rx_burst()` is non-blocking. It returns `Status::SUCCESS` when a complete batch is
+`get_rx_burst()` is non-blocking. It returns `Status::SUCCESS` when a burst is
 available. When no burst is ready, engines return `Status::NULL_PTR` or `Status::NOT_READY`;
 applications should handle both as an empty poll. There are also overloads that dequeue from
 any queue on a port, or from any queue on any port:

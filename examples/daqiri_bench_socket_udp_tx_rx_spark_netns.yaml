@@ -6,8 +6,9 @@
 # it as-is across namespaces (it would init the peer namespace's IP), so
 # scripts/gen_spark_netns_config.py splits it to one role at sweep time and
 # run_spark_bench.sh runs each role in its own namespace, assigning ports/cores per
-# pair (cores 16-19 across four pairs; the send and receive sides of a pair share
-# one core and self-pace, App TX ~= App RX). To split by hand:
+# pair. Server workers use [16, 18, 5, 7], client workers use [17, 19, 6, 9], and
+# the server UDP I/O thread shares its server-worker core by default.
+# SOCKET_RX_IO_CORES overrides the server I/O placement independently. To split by hand:
 #   scripts/gen_spark_netns_config.py examples/daqiri_bench_socket_udp_tx_rx_spark_netns.yaml \
 #       --role server > server.yaml
 #   ip netns exec dq_wire_server daqiri_bench_socket server.yaml --seconds N --mode server
@@ -46,13 +47,15 @@ daqiri:
       socket_config:
         mode: server
         local_addr: "udp://10.250.0.2:5001"
+        remote_addr: "udp://10.250.0.1:5002"
         max_payload_size: 65535
       rx:
         queues:
         - name: "Server_RX_Queue"
           id: 0
           cpu_core: 16
-          batch_size: 1
+          # The socket engine passes up to one recvmmsg batch per DAQIRI burst.
+          batch_size: 32
           memory_regions:
             - "DATA_SOCKET_SERVER"
       tx:
@@ -88,9 +91,9 @@ daqiri:
             - "DATA_SOCKET_CLIENT"
 
 socket_bench_server:
-  # Bench worker thread affinity (PR #149). run_spark_bench.sh rewrites this to the
-  # pair core, so the server worker, client worker, and both queues share one core
-  # per pair -- the deliberate self-pacing setup (App TX ~= App RX).
+  # Bench worker thread affinity (PR #149). run_spark_bench.sh rewrites this to
+  # the pair's server-worker core, separately from the client worker and optional
+  # UDP receive I/O core.
   cpu_core: 16
   server: true
   send: false

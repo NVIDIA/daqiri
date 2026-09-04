@@ -40,6 +40,12 @@
 #                      (--workload-sync-interval; default 2). Sweep it (1 2 4 8 16 32)
 #                      to see how much of the receive+compute ceiling is single-thread
 #                      GPU sync-stall. Recorded in post_process_sync.
+#   SOCKET_RX_IO_CORES — optional space-separated UDP receive I/O cores, one
+#                      per concurrent pair. These override the server RX queue
+#                      core independently of the socket_bench worker core.
+#   BATCHES_OVERRIDE   — optional space-separated batch sizes for one-off runs.
+#   PAIRS_OVERRIDE     — optional space-separated socket pair counts. For example,
+#                      PAIRS_OVERRIDE=1 selects the pair-0 CPU placement only.
 #
 # Optional (dpdk only): DPDK_{TX,RX}_PCI / DPDK_{TX,RX}_NETDEV override the p0/p1
 # ports used for the per-cell *_phy wire-transit check (defaults p0 0000:01:00.0 /
@@ -80,8 +86,15 @@ CSV="$OUT_DIR/runs.csv"
 # this; dpdk/rdma are always 1). `gbps` is aggregate App TX, `rx_gbps` aggregate App RX
 # (summed across pairs); App-level loss is (gbps - rx_gbps) / gbps.
 # post_process_gemm_dim = GEMM_DIM pinned dimension (default 1024).
+# CPU core/percentage columns identify the actual sampled cores. For a multi-pair
+# socket run, TX and RX are pair-0 samples rather than aggregate utilization.
 # post_process_sync (last column) = SYNC_INTERVAL, or "default" (2) when unset.
-echo "lang,backend,post_process,payload,batch,pairs,target_gbps,rep,seconds,packets,bytes,pps,gbps,rx_gbps,drops,drops_kind,cpu_master_pct,cpu_tx_pct,cpu_rx_pct,gpu_sm_pct,gpu_mem_pct,post_process_gemm_dim,post_process_sync" > "$CSV"
+CSV_HEADER="lang,backend,post_process,payload,batch,observed_max_rx_burst,pairs"
+CSV_HEADER+=",target_gbps,rep,seconds,packets,bytes,pps,gbps,rx_gbps,drops,drops_kind"
+CSV_HEADER+=",cpu_master_core,cpu_tx_core,cpu_rx_core"
+CSV_HEADER+=",cpu_master_pct,cpu_tx_pct,cpu_rx_pct,gpu_sm_pct,gpu_mem_pct"
+CSV_HEADER+=",post_process_gemm_dim,post_process_sync"
+echo "$CSV_HEADER" > "$CSV"
 
 # Capture slow-moving environment state once per result set.
 "$SCRIPT_DIR/bench_capture_environment.sh" "$OUT_DIR"
@@ -136,6 +149,16 @@ fi
 MAX_INFLIGHT="${MAX_INFLIGHT:-}"
 if [[ -n "$MAX_INFLIGHT" && ! "$MAX_INFLIGHT" =~ ^[0-9]+$ ]]; then
   echo "Invalid MAX_INFLIGHT '$MAX_INFLIGHT' (expected a positive integer)" >&2; exit 1
+fi
+SOCKET_RX_IO_PIN_CORES=()
+if [[ -n "${SOCKET_RX_IO_CORES:-}" ]]; then
+  read -r -a SOCKET_RX_IO_PIN_CORES <<< "$SOCKET_RX_IO_CORES"
+  for core in "${SOCKET_RX_IO_PIN_CORES[@]}"; do
+    if [[ ! "$core" =~ ^-1$|^[0-9]+$ ]]; then
+      echo "Invalid SOCKET_RX_IO_CORES entry '$core' (expected -1 or a CPU index)" >&2
+      exit 1
+    fi
+  done
 fi
 # NSYS: when set (NSYS=1), wrap the RoCE *server* (the receive + GPU-workload
 # process) in `nsys profile` to capture the CUDA/GPU timeline and thread states,
@@ -226,11 +249,11 @@ case "$BACKEND" in
     # carry a large buf_size so message_size never overflows the TX buffer.
   socket-udp)
     PAYLOADS_SWEEP=(8000 1000)
-    BATCHES_SWEEP=(1)
+    BATCHES_SWEEP=(32)
     PAYLOADS_HEADLINE=(8000)
-    BATCHES_HEADLINE=(1)
-    # Concurrent client/server pairs. A single pair is core-bound well below line rate;
-    # the published matrix reaches ~12 Gb/s aggregate by running four pairs.
+    BATCHES_HEADLINE=(32)
+    # Concurrent client/server pairs. A single pair is core-bound well below line
+    # rate; the published matrix scales aggregate throughput with four pairs.
     PAIRS_SWEEP=(1 2 4)
     PAIRS_HEADLINE=(4)
     SRV_PORT_BASE=5001; CLI_PORT_BASE=5101
@@ -240,9 +263,8 @@ case "$BACKEND" in
     # cutting same-host IPs through the loopback (lo) device.
     BASE_YAML="$SCRIPT_DIR/daqiri_bench_socket_udp_tx_rx_spark_netns.yaml"
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_socket"
-    # Pair 0 pins to core 16 (see pair_core); report that core's busy% as the per-pair
-    # bottleneck. cpu_tx_pct and cpu_rx_pct therefore both refer to the pair-0 core.
-    CPU_MASTER=8; CPU_TX=16; CPU_RX=16
+    # Final pair-0 TX/RX attribution is derived from the structured pinning below.
+    CPU_MASTER=8; CPU_TX=17; CPU_RX=16
     ;;
   socket-tcp)
     # 1 MiB / 8000 / 1000 to mirror the published TCP matrix. The bench memsets a full
@@ -259,9 +281,8 @@ case "$BACKEND" in
     # One combined base (both roles, netns IPs 10.250.0.1/2); see socket-udp note.
     BASE_YAML="$SCRIPT_DIR/daqiri_bench_socket_tcp_tx_rx_spark_netns.yaml"
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_socket"
-    # Pair 0 pins to core 16 (see pair_core); report that core's busy% as the per-pair
-    # bottleneck. cpu_tx_pct and cpu_rx_pct therefore both refer to the pair-0 core.
-    CPU_MASTER=8; CPU_TX=16; CPU_RX=16
+    # Final pair-0 TX/RX attribution is derived from the structured pinning below.
+    CPU_MASTER=8; CPU_TX=17; CPU_RX=16
     ;;
   *) echo "Unknown backend: $BACKEND" >&2; exit 1 ;;
 esac
@@ -275,8 +296,44 @@ esac
 if [[ "$WORKLOAD" != "none" ]]; then
   PAYLOADS_SWEEP=("${PAYLOADS_HEADLINE[@]}")
 fi
-# Optional space-separated override for the batch ladder (one-off experiments).
-[[ -n "${BATCHES_OVERRIDE:-}"  ]] && read -r -a BATCHES_SWEEP  <<< "$BATCHES_OVERRIDE"
+# Optional space-separated overrides for one-off experiments. Apply them to both
+# sweep and headline modes so smoke and drop-curve runs use the requested values.
+if [[ -n "${BATCHES_OVERRIDE:-}" ]]; then
+  read -r -a BATCHES_SWEEP <<< "$BATCHES_OVERRIDE"
+  if (( ${#BATCHES_SWEEP[@]} == 0 )); then
+    echo "BATCHES_OVERRIDE must contain at least one batch size" >&2
+    exit 1
+  fi
+  BATCHES_HEADLINE=("${BATCHES_SWEEP[@]}")
+  for batch in "${BATCHES_SWEEP[@]}"; do
+    if [[ ! "$batch" =~ ^[1-9][0-9]*$ ]]; then
+      echo "Invalid BATCHES_OVERRIDE entry '$batch' (expected a positive integer)" >&2
+      exit 1
+    fi
+    if [[ "$BACKEND" == "socket-udp" && "$batch" -gt 32 ]]; then
+      echo "Invalid UDP batch size '$batch' (expected 1-32)" >&2
+      exit 1
+    fi
+  done
+fi
+if [[ -n "${PAIRS_OVERRIDE:-}" ]]; then
+  if [[ ! "$BACKEND" =~ ^socket- ]]; then
+    echo "PAIRS_OVERRIDE is supported only for socket backends" >&2
+    exit 1
+  fi
+  read -r -a PAIRS_SWEEP <<< "$PAIRS_OVERRIDE"
+  if (( ${#PAIRS_SWEEP[@]} == 0 )); then
+    echo "PAIRS_OVERRIDE must contain at least one pair count" >&2
+    exit 1
+  fi
+  PAIRS_HEADLINE=("${PAIRS_SWEEP[@]}")
+  for pairs in "${PAIRS_SWEEP[@]}"; do
+    if [[ ! "$pairs" =~ ^[1-9][0-9]*$ ]]; then
+      echo "Invalid PAIRS_OVERRIDE entry '$pairs' (expected a positive integer)" >&2
+      exit 1
+    fi
+  done
+fi
 
 # All backends (dpdk, rdma, socket-udp, socket-tcp) now run the workload on real
 # received data, so the CSV post_process column records the requested workload
@@ -352,6 +409,10 @@ snapshot_cpu_stat() {
 # Compute busy% for a single cpu index between two /proc/stat snapshots.
 cpu_busy_pct() {
   local before="$1" after="$2" cpu_idx="$3"
+  if [[ ! "$cpu_idx" =~ ^[0-9]+$ ]]; then
+    echo "nan"
+    return
+  fi
   awk -v cpu="cpu$cpu_idx" '
     NR == FNR { b_total[$1] = $2; b_busy[$1] = $3; next }
               { a_total[$1] = $2; a_busy[$1] = $3 }
@@ -450,39 +511,71 @@ SRV_PIN_CORES=(16 18 5 7)
 CLI_PIN_CORES=(17 19 6 9)
 pair_server_core() { echo "${SRV_PIN_CORES[$(( $1 % 4 ))]}"; }
 pair_client_core() { echo "${CLI_PIN_CORES[$(( $1 % 4 ))]}"; }
+pair_server_io_core() {
+  local idx="$1" fallback="$2"
+  if (( ${#SOCKET_RX_IO_PIN_CORES[@]} == 0 )); then
+    echo "$fallback"
+  else
+    echo "${SOCKET_RX_IO_PIN_CORES[$(( idx % ${#SOCKET_RX_IO_PIN_CORES[@]} ))]}"
+  fi
+}
+
+# Socket CSV utilization samples pair 0. Attribute TX to the client application
+# worker and RX to the actual server receive role: UDP's recvmmsg() I/O thread,
+# or TCP's server application worker. An unpinned run has no meaningful core sample.
+if [[ "$BACKEND" =~ ^socket- ]]; then
+  if [[ -n "${SOCKET_NOPIN:-}" ]]; then
+    CPU_TX=-1
+    CPU_RX=-1
+  else
+    CPU_TX="$(pair_client_core 0)"
+    CPU_RX="$(pair_server_core 0)"
+    if [[ "$BACKEND" == "socket-udp" ]]; then
+      CPU_RX="$(pair_server_io_core 0 "$CPU_RX")"
+    fi
+  fi
+fi
 
 # Write the server/client YAML pair for socket pair `idx`: split the combined base
 # per role, then substitute message_size, unique ports (SRV/CLI_PORT_BASE + idx),
 # and pin the server (receive) side and client (send) side to DIFFERENT isolated
 # cores so the pair does not time-slice one CPU (see pair_server_core comment).
 generate_socket_yaml() {
-  local idx="$1" payload="$2" server_out="$3" client_out="$4"
+  local idx="$1" payload="$2" batch="$3" server_out="$4" client_out="$5"
   local srv_port=$(( SRV_PORT_BASE + idx ))
   local cli_port=$(( CLI_PORT_BASE + idx ))
   # SOCKET_NOPIN=1 runs the bench workers unpinned (cpu_core -1 -> no affinity, the
   # scheduler places them). For gathering the pinned-vs-non-pinned comparison only;
   # the published report stays pinned like the other backends.
-  local server_core client_core
+  local server_core client_core server_io_core
   if [[ -n "${SOCKET_NOPIN:-}" ]]; then
-    server_core=-1; client_core=-1
+    server_core=-1; client_core=-1; server_io_core=-1
   else
     server_core="$(pair_server_core "$idx")"
     client_core="$(pair_client_core "$idx")"
+    server_io_core="$server_core"
+    if [[ "$BACKEND" == "socket-udp" ]]; then
+      server_io_core="$(pair_server_io_core "$idx" "$server_core")"
+    fi
   fi
-  python3 "$NETNS_GEN" "$BASE_YAML" --role server | \
+  python3 "$NETNS_GEN" "$BASE_YAML" --role server \
+    --rx-queue-cpu-core "$server_io_core" --rx-queue-batch-size "$batch" \
+    --tx-queue-cpu-core "$server_core" \
+    --bench-cpu-core "$server_core" | \
   sed -E \
     -e "s|^( *message_size: ).*|\1$payload|g" \
     -e "s|^( *local_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$srv_port\2|" \
+    -e "s|^( *remote_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$cli_port\2|" \
     -e "s|^( *server_port: ).*|\1$srv_port|" \
-    -e "s|^( *cpu_core: ).*|\1$server_core|" \
     > "$server_out"
-  python3 "$NETNS_GEN" "$BASE_YAML" --role client | \
+  python3 "$NETNS_GEN" "$BASE_YAML" --role client \
+    --rx-queue-cpu-core "$client_core" --tx-queue-cpu-core "$client_core" \
+    --bench-cpu-core "$client_core" | \
   sed -E \
     -e "s|^( *message_size: ).*|\1$payload|g" \
     -e "s|^( *local_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$cli_port\2|" \
     -e "s|^( *remote_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$srv_port\2|" \
     -e "s|^( *server_port: ).*|\1$srv_port|" \
-    -e "s|^( *cpu_core: ).*|\1$client_core|" \
     > "$client_out"
 }
 
@@ -514,7 +607,7 @@ run_cell() {
   local stdout="$cell_dir/stdout.txt"
   local stderr="$cell_dir/stderr.txt"
   local bench_rc=0
-  local pkts="" bytes="" secs="" rx_bytes=""
+  local pkts="" bytes="" secs="" rx_bytes="" observed_max_rx_burst=0
 
   local bench_extra=()
   [[ "$target_gbps" != "0" ]] && bench_extra+=(--target-gbps "$target_gbps")
@@ -538,11 +631,11 @@ run_cell() {
   if [[ "$BACKEND" =~ ^socket- ]]; then
     # `pairs` independent client/server processes, each in the wire-loopback
     # namespaces with unique ports and cores. A single pair is core-bound below line
-    # rate; the published Spark matrix reaches ~12 Gb/s by aggregating four pairs.
+    # rate; the published Spark matrix scales aggregate throughput with four pairs.
     # App TX (client sent) and App RX (server recv) are summed across pairs.
     local i server_pids=() client_pids=()
     for ((i = 0; i < pairs; i++)); do
-      generate_socket_yaml "$i" "$payload" \
+      generate_socket_yaml "$i" "$payload" "$batch" \
         "$cell_dir/server_p$i.yaml" "$cell_dir/client_p$i.yaml"
     done
     for ((i = 0; i < pairs; i++)); do
@@ -563,14 +656,19 @@ run_cell() {
 
     local tx_pkts=0 tx_bytes=0 agg_rx_bytes=0 max_secs=0
     for ((i = 0; i < pairs; i++)); do
-      local sp sb se rb
+      local sp sb se rb max_burst
       sp="$(extract_field 'Client complete' sent_packets "$cell_dir/client_p$i.stdout")"
       sb="$(extract_field 'Client complete' sent_bytes   "$cell_dir/client_p$i.stdout")"
       se="$(extract_field 'Client complete' seconds      "$cell_dir/client_p$i.stdout")"
       rb="$(extract_field 'Server complete' recv_bytes   "$cell_dir/server_p$i.stdout")"
+      max_burst="$(extract_field 'Server complete' max_rx_burst \
+        "$cell_dir/server_p$i.stdout")"
       tx_pkts=$(( tx_pkts + ${sp:-0} ))
       tx_bytes=$(( tx_bytes + ${sb:-0} ))
       agg_rx_bytes=$(( agg_rx_bytes + ${rb:-0} ))
+      if (( ${max_burst:-0} > observed_max_rx_burst )); then
+        observed_max_rx_burst="${max_burst:-0}"
+      fi
       max_secs="$(awk -v a="$max_secs" -v b="${se:-0}" 'BEGIN { print (b+0>a+0)?b:a }')"
     done
     pkts="$tx_pkts"; bytes="$tx_bytes"; rx_bytes="$agg_rx_bytes"; secs="$max_secs"
@@ -747,7 +845,11 @@ run_cell() {
   local pp_gemm_dim="$GEMM_DIM"
   local pp_sync="${SYNC_INTERVAL:-default}"
   [[ -z "$pp_sync" ]] && pp_sync="default"
-  echo "$lang,$BACKEND,$WORKLOAD_EFF,$payload,$batch,$pairs,$target_gbps,$rep,$secs,$pkts,$bytes,$pps,$gbps,$rx_gbps,$drops,$drops_kind,$cpu_master_pct,$cpu_tx_pct,$cpu_rx_pct,$gpu_sm,$gpu_mem,$pp_gemm_dim,$pp_sync" \
+  local row="$lang,$BACKEND,$WORKLOAD_EFF,$payload,$batch,$observed_max_rx_burst,$pairs"
+  row+=",$target_gbps,$rep,$secs,$pkts,$bytes,$pps,$gbps,$rx_gbps,$drops,$drops_kind"
+  row+=",$CPU_MASTER,$CPU_TX,$CPU_RX,$cpu_master_pct,$cpu_tx_pct,$cpu_rx_pct"
+  row+=",$gpu_sm,$gpu_mem,$pp_gemm_dim,$pp_sync"
+  echo "$row" \
     | tee -a "$CSV"
 }
 
