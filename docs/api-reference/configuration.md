@@ -134,7 +134,9 @@ Endpoint addresses are URI strings. Supported schemes are `tcp://`, `udp://`, an
 - **`socket_config.remote_addr`**: Remote peer endpoint, for example
   `udp://10.250.0.2:5021`. Required for TCP/UDP client mode. RoCE clients choose
   the peer in application code (for example by calling `rdma_connect_to_server`),
-  not in DAQIRI config.
+  not in DAQIRI config. It is optional for UDP server mode; when present, DAQIRI
+  connects the socket to that expected peer so other sources are rejected by the
+  kernel and multi-datagram receive batching is safe.
 - **`socket_config.local_ip`** / **`socket_config.local_port`** and
   **`socket_config.remote_ip`** / **`socket_config.remote_port`**: Legacy endpoint
   fields accepted for older configs when a top-level engine override provides the
@@ -145,9 +147,10 @@ after connection setup with `socket_setsockopt(conn_id, level, optname, optval,
 optlen)`, using the numeric constants from the target system headers. The API is
 not supported for `roce://` endpoints.
 
-A UDP server endpoint accepts one peer for its lifetime. It learns the source
-address of the first datagram and drops datagrams from other source addresses or
-ports, keeping subsequent server transmissions bound to that first peer.
+For compatibility, a UDP server without `remote_addr` learns the sender of each
+received datagram and uses it for subsequent server transmissions. DAQIRI limits
+such endpoints to one datagram per receive burst. Configure `remote_addr` for
+point-to-point operation and receive batching.
 
 When using RoCE, set `stream_type: "socket"` and use `roce://` endpoint addresses
 plus a `roce_config` block for transport settings. A RoCE URI may include
@@ -181,9 +184,10 @@ engine.
   - type: `string`
 - **`batch_size`**: Maximum number of packets per batch passed to the application. Larger values
   increase throughput, and smaller values reduce latency. For `udp://` socket endpoints, one
-  `recvmmsg()` call returns up to this many datagrams; valid values are 1-32. Required in indirect
-  mode and forbidden in direct mode. A direct poll returns the packets currently ready, up to
-  256, without waiting.
+  `recvmmsg()` call returns up to this many datagrams; valid values are 1-32. UDP servers without
+  a configured `remote_addr` are limited to one datagram per burst. Required in indirect mode and
+  forbidden in direct mode. A direct poll returns the packets currently ready, up to 256, without
+  waiting.
   - type: `integer`
 - **`memory_regions`**: List of memory region names (defined in [Memory Regions](#memory-regions)).
   The order determines segment mapping: first region = segment 0, second = segment 1, etc.

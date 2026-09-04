@@ -163,6 +163,9 @@ For UDP, `rx.queues[].cpu_core` pins the DAQIRI socket I/O thread that drains
 that consumes the resulting bursts. Assign different CPUs when measuring the
 receive path without intentional time-sharing. `rx.queues[].batch_size` controls
 the maximum number of datagrams coalesced into one DAQIRI burst (up to 32).
+Set `socket_config.remote_addr` on a UDP server to identify its expected client;
+this lets the kernel reject other senders and permits receive batches larger than
+one datagram.
 `run_spark_bench.sh` normally preserves its historical self-pacing by assigning
 the server I/O and benchmark worker to the same core. Set, for example,
 `SOCKET_RX_IO_CORES="15 17 5 7"` to give concurrent UDP pairs dedicated receive
@@ -197,6 +200,7 @@ daqiri:
       socket_config:
         mode: server
         local_addr: "udp://10.250.0.2:5021"
+        remote_addr: "udp://10.250.0.1:5121"
         max_payload_size: 65535
       rx:
         queues:

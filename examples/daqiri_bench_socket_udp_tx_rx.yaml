@@ -26,6 +26,7 @@ daqiri:
       socket_config:
         mode: server
         local_addr: "udp://127.0.0.1:5001"
+        remote_addr: "udp://127.0.0.1:5002"
         max_payload_size: 2048
       rx:
         queues:

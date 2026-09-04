@@ -495,14 +495,17 @@ generate_socket_yaml() {
     fi
   fi
   python3 "$NETNS_GEN" "$BASE_YAML" --role server \
-    --rx-queue-cpu-core "$server_io_core" --bench-cpu-core "$server_core" | \
+    --rx-queue-cpu-core "$server_io_core" --tx-queue-cpu-core "$server_core" \
+    --bench-cpu-core "$server_core" | \
   sed -E \
     -e "s|^( *message_size: ).*|\1$payload|g" \
     -e "s|^( *local_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$srv_port\2|" \
+    -e "s|^( *remote_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$cli_port\2|" \
     -e "s|^( *server_port: ).*|\1$srv_port|" \
     > "$server_out"
   python3 "$NETNS_GEN" "$BASE_YAML" --role client \
-    --rx-queue-cpu-core "$client_core" --bench-cpu-core "$client_core" | \
+    --rx-queue-cpu-core "$client_core" --tx-queue-cpu-core "$client_core" \
+    --bench-cpu-core "$client_core" | \
   sed -E \
     -e "s|^( *message_size: ).*|\1$payload|g" \
     -e "s|^( *local_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$cli_port\2|" \

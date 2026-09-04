@@ -159,7 +159,7 @@ class SocketEngine : public Engine {
     std::shared_ptr<metrics::CounterSet> tx_metrics;
     sockaddr_in udp_peer_addr{};
     bool udp_peer_valid = false;
-    bool udp_peer_mismatch_warned = false;
+    bool udp_peer_configured = false;
     uintptr_t primary_conn_id = 0;
   };
 

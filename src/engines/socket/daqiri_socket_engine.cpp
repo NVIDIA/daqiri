@@ -75,11 +75,6 @@ std::string sockaddr_to_ip(const sockaddr_in& addr) {
   return std::string(ip_buf);
 }
 
-bool same_udp_peer(const sockaddr_in& lhs, const sockaddr_in& rhs) {
-  return lhs.sin_family == rhs.sin_family && lhs.sin_port == rhs.sin_port &&
-         lhs.sin_addr.s_addr == rhs.sin_addr.s_addr;
-}
-
 bool pin_udp_rx_thread(int cpu_core, uint16_t port) {
   if (cpu_core < 0) {
     return true;
@@ -204,6 +199,13 @@ void SocketEngine::initialize() {
       if (cfg_.common_.protocol == SocketProtocol::UDP) {
         ep->rx_cpu_core = select_cpu_core(if_cfg.rx_.queues_);
         ep->rx_batch_size = select_batch_size(if_cfg.rx_.queues_);
+        if (ep->socket_cfg.mode_ == SocketMode::SERVER && ep->socket_cfg.remote_ip_.empty() &&
+            ep->rx_batch_size > 1) {
+          DAQIRI_LOG_WARN(
+              "UDP server '{}' has no configured remote_addr; limiting RX batch_size to 1",
+              if_cfg.name_);
+          ep->rx_batch_size = 1;
+        }
       }
       ep->tx_batch_size = select_batch_size(if_cfg.tx_.queues_);
       ep->max_packet_size = static_cast<size_t>(std::max(1, select_max_packet_size(if_cfg)));
@@ -840,7 +842,7 @@ bool SocketEngine::send_udp_burst(EndpointState& ep, BurstParams* burst, size_t*
       return false;
     }
     peer = ep.udp_peer_addr;
-    use_sendto = true;
+    use_sendto = !ep.udp_peer_configured;
   }
 
   for (size_t i = 0; i < num_pkts; ++i) {
@@ -1243,6 +1245,23 @@ void SocketEngine::setup_udp_endpoint(EndpointState& ep) {
       close_fd(fd);
       throw std::runtime_error("failed to bind UDP server socket: " + err);
     }
+
+    if (!ep.socket_cfg.remote_ip_.empty() || ep.socket_cfg.remote_port_ != 0) {
+      sockaddr_in peer_addr{};
+      if (ep.socket_cfg.remote_ip_.empty() || ep.socket_cfg.remote_port_ == 0 ||
+          !parse_ipv4_addr(ep.socket_cfg.remote_ip_, ep.socket_cfg.remote_port_, &peer_addr)) {
+        close_fd(fd);
+        throw std::runtime_error("invalid UDP server remote address");
+      }
+      if (::connect(fd, reinterpret_cast<sockaddr*>(&peer_addr), sizeof(peer_addr)) != 0) {
+        const auto err = std::string(strerror(errno));
+        close_fd(fd);
+        throw std::runtime_error("failed to connect UDP server socket to configured peer: " + err);
+      }
+      ep.udp_peer_addr = peer_addr;
+      ep.udp_peer_valid = true;
+      ep.udp_peer_configured = true;
+    }
   } else {
     if (!ep.socket_cfg.local_ip_.empty() || ep.socket_cfg.local_port_ != 0) {
       const std::string bind_ip = ep.socket_cfg.local_ip_.empty() ? std::string("0.0.0.0") : ep.socket_cfg.local_ip_;
@@ -1395,18 +1414,21 @@ void SocketEngine::udp_rx_loop(int if_index) {
   auto* ep = endpoints_[if_index].get();
   if (ep == nullptr) { return; }
 
-  const bool affinity_ok = pin_udp_rx_thread(ep->rx_cpu_core, ep->port);
+  bool startup_ok = ep->udp_fd >= 0;
+  if (!startup_ok) {
+    DAQIRI_LOG_ERROR("UDP RX I/O thread for port {} has no socket", ep->port);
+  } else {
+    startup_ok = pin_udp_rx_thread(ep->rx_cpu_core, ep->port);
+  }
   {
     std::lock_guard<std::mutex> lock(ep->io_start_mutex);
-    ep->io_start_success = affinity_ok;
+    ep->io_start_success = startup_ok;
     ep->io_start_complete = true;
   }
   ep->io_start_cv.notify_one();
-  if (!affinity_ok) {
+  if (!startup_ok) {
     return;
   }
-
-  if (ep->udp_fd < 0) { return; }
 
   const size_t rx_batch_size = ep->rx_batch_size;
   std::vector<uint8_t> rx_storage(ep->max_packet_size * rx_batch_size);
@@ -1424,8 +1446,6 @@ void SocketEngine::udp_rx_loop(int if_index) {
     msgs[i].msg_hdr.msg_namelen = sizeof(sockaddr_in);
   }
 
-  std::vector<size_t> accepted_indices;
-  accepted_indices.reserve(rx_batch_size);
   while (running_.load()) {
     for (size_t i = 0; i < rx_batch_size; ++i) {
       msgs[i].msg_hdr.msg_namelen = sizeof(sockaddr_in);
@@ -1439,41 +1459,15 @@ void SocketEngine::udp_rx_loop(int if_index) {
       DAQIRI_LOG_WARN("UDP recvmmsg failed on port {}: {}", ep->port, strerror(errno));
       continue;
     }
+    if (!running_.load()) {
+      break;
+    }
     if (received == 0) { continue; }
 
-    accepted_indices.clear();
-    uint64_t peer_mismatch_drops = 0;
-    if (ep->socket_cfg.mode_ == SocketMode::SERVER) {
-      {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        if (!ep->udp_peer_valid) {
-          ep->udp_peer_addr = peers[0];
-          ep->udp_peer_valid = true;
-        }
-        for (int i = 0; i < received; ++i) {
-          if (same_udp_peer(ep->udp_peer_addr, peers[static_cast<size_t>(i)])) {
-            accepted_indices.push_back(static_cast<size_t>(i));
-          } else {
-            ++peer_mismatch_drops;
-          }
-        }
-      }
-      if (peer_mismatch_drops > 0) {
-        metrics::add_dropped(ep->rx_metrics, "peer_mismatch", peer_mismatch_drops);
-        if (!ep->udp_peer_mismatch_warned) {
-          DAQIRI_LOG_WARN(
-              "UDP server on port {} accepts one peer; dropping datagrams from other senders",
-              ep->port);
-          ep->udp_peer_mismatch_warned = true;
-        }
-      }
-    } else {
-      for (int i = 0; i < received; ++i) {
-        accepted_indices.push_back(static_cast<size_t>(i));
-      }
-    }
-    if (accepted_indices.empty()) {
-      continue;
+    if (ep->socket_cfg.mode_ == SocketMode::SERVER && !ep->udp_peer_configured) {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      ep->udp_peer_addr = peers[static_cast<size_t>(received - 1)];
+      ep->udp_peer_valid = true;
     }
 
     // One recvmmsg batch becomes one DAQIRI burst. One-packet bursts create a
@@ -1481,17 +1475,16 @@ void SocketEngine::udp_rx_loop(int if_index) {
     auto* burst = create_tx_burst_params();
     burst->hdr.hdr.port_id = ep->port;
     burst->hdr.hdr.q_id = ep->rx_queue;
-    burst->hdr.hdr.num_pkts = accepted_indices.size();
+    burst->hdr.hdr.num_pkts = static_cast<size_t>(received);
     burst->hdr.hdr.num_segs = 1;
-    burst->pkts[0] = new void*[accepted_indices.size()];
-    burst->pkt_lens[0] = new uint32_t[accepted_indices.size()];
+    burst->pkts[0] = new void*[static_cast<size_t>(received)];
+    burst->pkt_lens[0] = new uint32_t[static_cast<size_t>(received)];
 
     uint64_t received_bytes = 0;
-    for (size_t i = 0; i < accepted_indices.size(); ++i) {
-      const size_t source_index = accepted_indices[i];
-      const auto rx = static_cast<size_t>(msgs[source_index].msg_len);
+    for (int i = 0; i < received; ++i) {
+      const auto rx = static_cast<size_t>(msgs[static_cast<size_t>(i)].msg_len);
       auto* payload = new uint8_t[rx];
-      std::memcpy(payload, iovs[source_index].iov_base, rx);
+      std::memcpy(payload, iovs[static_cast<size_t>(i)].iov_base, rx);
       burst->pkts[0][i] = payload;
       burst->pkt_lens[0][i] = static_cast<uint32_t>(rx);
       received_bytes += rx;
@@ -1499,9 +1492,9 @@ void SocketEngine::udp_rx_loop(int if_index) {
     set_connection_id(burst, ep->primary_conn_id);
 
     push_rx_burst(ep->rx_queue_state, burst);
-    rx_pkts_.fetch_add(static_cast<uint64_t>(accepted_indices.size()));
+    rx_pkts_.fetch_add(static_cast<uint64_t>(received));
     rx_bytes_.fetch_add(received_bytes);
-    metrics::add_rx(ep->rx_metrics, static_cast<uint64_t>(accepted_indices.size()), received_bytes);
+    metrics::add_rx(ep->rx_metrics, static_cast<uint64_t>(received), received_bytes);
   }
 }
 
