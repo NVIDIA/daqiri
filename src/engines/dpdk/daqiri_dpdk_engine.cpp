@@ -39,6 +39,7 @@
 #include <rte_mbuf_dyn.h>
 
 #include "src/dpdk_log.h"
+#include "src/net_pause.h"
 #include "daqiri_dpdk_engine.h"
 #include "src/kernels.h"
 #include "src/rss.h"
@@ -2302,6 +2303,10 @@ void DpdkEngine::initialize() {
       return;
     }
     DAQIRI_LOG_INFO("{} ({}): identified as port {}", intf.name_, intf.address_, intf.port_id_);
+    // mlx5 does not surface the pause counters through xstats, so flow control
+    // is invisible to the stats dump below. Warn from the netdev instead, before
+    // any throughput number can be misread as a slow transmitter.
+    check_pause_at_init(netdev_for_pci(intf.address_), intf.port_id_);
   }
 
   for (int i = 0; i < num_ports; i++) {
@@ -5485,6 +5490,19 @@ bool DpdkEngine::apply_tx_offloads(int port) {
 ///  \brief
 ///
 ////////////////////////////////////////////////////////////////////////////////
+namespace {
+/// Resolve a DPDK port to its kernel netdev, or "" when it has none (software
+/// loopback, non-PCI devices). PrintDpdkStats is static and cannot reach cfg_,
+/// so go through DPDK's device name, which is the PCIe address for PCI ports.
+std::string port_netdev_name(int port) {
+  char name[RTE_ETH_NAME_MAX_LEN] = {0};
+  if (rte_eth_dev_get_name_by_port(static_cast<uint16_t>(port), name) != 0) {
+    return "";
+  }
+  return netdev_for_pci(name);
+}
+}  // namespace
+
 void DpdkEngine::PrintDpdkStats(int port) {
   struct rte_eth_stats eth_stats;
   int len, ret;
@@ -5532,6 +5550,10 @@ void DpdkEngine::PrintDpdkStats(int port) {
     if (xstats[i].value > 0)
     DAQIRI_LOG_INFO("      {}:\t\t{}", xstats_names[i].name, xstats[i].value);
   }
+
+  // Pause counters are absent from mlx5's xstats, so a throttled run leaves no
+  // trace in the loop above. Pull them from the netdev to close that blind spot.
+  log_pause_counters(port_netdev_name(port), port);
 
   free(xstats);
   free(xstats_names);

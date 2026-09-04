@@ -374,6 +374,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     | 7 | [GPU clocks](#step-7-prevent-the-gpu-from-going-idle) | `--check gpu-clock` | Partial. `nvidia-smi -pm 1` persists driver, clock locks need a startup script |
     | 8 | [GPU BAR1 size](#step-8-maximize-gpu-bar1-size) | `--check bar1-size` | Yes, firmware flash |
     | 9 | [Jumbo frames (MTU)](#step-9-enable-jumbo-frames) | `--check mtu` | Yes, see persistent option in section |
+    | 10 | [Ethernet flow control (pause)](#step-10-disable-ethernet-flow-control-pause) | `--check pause` | Yes, see persistent option in section |
 
     !!! tip "Plan your reboots"
 
@@ -1297,6 +1298,99 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
         maxmtu 9978
         ```
 
+    ### Step 10: Disable Ethernet Flow Control (Pause)
+
+    802.3x link-level pause lets a receiver tell the sender to stop transmitting for a while. On saturated raw-Ethernet links it can cap throughput while every drop counter stays at zero, making a paused link look like a slow transmitter.
+
+    !!! warning "Leave pause enabled on lossless fabrics and against shallow-buffer peers"
+
+        On a lossless RoCE or PFC fabric, flow control is deliberate and required. Only disable pause on links dedicated to raw Ethernet where the application tolerates loss, and never on a shared fabric where your pause frames affect other tenants.
+
+        Pause frames on the wire are not evidence of a misconfiguration by themselves. A peer that cannot buffer a line-rate burst, such as an FPGA, may assert pause by design. `rx_pause_ctrl_phy` counts frames **received** (the peer throttling this port's transmit), and `tx_pause_ctrl_phy` counts frames **sent** (this port's receive path throttling the peer).
+
+        When the receiver routinely needs pause to keep up, packet pacing is usually the better mechanism. A per-queue `pacing_mbps` cap meters the transmit queue out in hardware, smoothing the packet rate to one the receiver can absorb instead of waiting for its buffers to fill and having it stop the sender. See [`pacing_mbps`](../api-reference/configuration.md#transmit-configuration-tx) in the TX queue configuration.
+
+    Check the current state of your interfaces:
+
+    === "tune_system.py"
+
+        ```bash
+        sudo ./python/tune_system.py --check pause
+        ```
+
+        ??? abstract "See an example output excerpt"
+
+            ```
+            2026-08-19 09:43:00 - WARNING - Interface eth0 has 802.3x pause enabled (RX: on, TX: on). Link-level flow control can idle the link and prevent achieving higher rates, with no drop counter to reveal it. ...
+            2026-08-19 09:43:00 - WARNING - Interface eth0 has exchanged pause frames since boot (rx_pause_ctrl_phy=240,975, tx_pause_ctrl_phy=240,975): both ends have asserted pause. ...
+            2026-08-19 09:43:00 - INFO - Interface eth1 has 802.3x pause disabled (RX: off, TX: off).
+            ```
+
+        The second warning appears only when the pause counters are non-zero. Pause that is enabled but never asserted costs nothing, so those counters are what separate a real problem from a latent one.
+
+    === "manual"
+
+        For a given `if_name` interface:
+
+        ```bash
+        if_name=eth0
+        ethtool -a $if_name
+        ethtool -S $if_name | grep -E "pause_ctrl_phy|pause_duration"
+        ```
+
+        ??? abstract "See an example output"
+
+            ```
+            Pause parameters for eth0:
+            Autonegotiate:  off
+            RX:             on
+            TX:             on
+                 rx_pause_ctrl_phy: 240975
+                 tx_pause_ctrl_phy: 240975
+                 rx_global_pause_duration: 6523206
+            ```
+
+    Disable both directions on the interfaces carrying benchmark traffic:
+
+    === "One-time"
+
+        ```bash
+        sudo ethtool -A $if_name rx off tx off
+        ```
+
+    === "Persistent"
+
+        === "NetworkManager"
+
+            Pause autonegotiation must be off for the explicit settings to take effect:
+
+            ```bash
+            sudo nmcli connection modify $if_name ethtool.pause-autoneg off \
+                ethtool.pause-rx off ethtool.pause-tx off
+            sudo nmcli connection up $if_name
+            ```
+
+        === "systemd-networkd"
+
+            ```bash
+            sudo tee /etc/systemd/network/10-$if_name.link >/dev/null <<EOF
+            [Match]
+            Name=$if_name
+
+            [Link]
+            AutoNegotiationFlowControl=false
+            RxFlowControl=false
+            TxFlowControl=false
+            EOF
+            sudo udevadm trigger --action=add /sys/class/net/$if_name
+            ```
+
+    !!! note "Set both directions, not one"
+
+        `ethtool` and `systemd-networkd` document their `rx`/`tx` pause naming with opposite senses — `systemd.link(5)` defines `RxFlowControl=` as *generating and sending* pause frames. Rather than reason about which name means which direction, disable both on every interface in the data path. Pause only has to be active at one end of a link to throttle it.
+
+    Both ends of the link matter: disabling pause on your host does nothing if the peer, or a switch in between, is still asserting it. Verify by re-reading the pause counters after a run.
+
     With the system tuned, continue to [Benchmarking](../benchmarks/index.md) to choose and run your first DAQIRI benchmark.
 
 === "DGX Spark"
@@ -1607,6 +1701,26 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     ```bash
     ip link show enp1s0f0np0   | grep -oE "mtu [0-9]+"
     ip link show enP2p1s0f1np1 | grep -oE "mtu [0-9]+"
+    ```
+
+    ### Step 10: Disable Ethernet flow control (pause)
+
+    This step applies to Spark exactly as written in the [x86 tab](#step-10-disable-ethernet-flow-control-pause), and the `daqiri-tx` / `daqiri-rx` nmcli profiles do **not** disable pause, so check it:
+
+    ```bash
+    sudo ./python/tune_system.py --check pause
+    ```
+
+    Disable both directions on the interfaces carrying benchmark traffic, then fold it into the existing profiles to survive a reboot:
+
+    ```bash
+    for if_name in enp1s0f0np0 enP2p1s0f1np1; do
+        sudo ethtool -A $if_name rx off tx off
+    done
+    sudo nmcli connection modify daqiri-tx ethtool.pause-autoneg off \
+        ethtool.pause-rx off ethtool.pause-tx off
+    sudo nmcli connection modify daqiri-rx ethtool.pause-autoneg off \
+        ethtool.pause-rx off ethtool.pause-tx off
     ```
 
     With the system tuned, continue to [Benchmarking](../benchmarks/index.md) to choose and run your first DAQIRI benchmark.

@@ -136,6 +136,7 @@ def parse_args():
             "schematic",
             "cmdline",
             "mtu",
+            "pause",
         ],
         help=(
             "Specify the property to check:\n"
@@ -153,6 +154,7 @@ def parse_args():
             "  schematic  - Write a PCIe topology image with link speed labels\n"
             "  cmdline    - Check the kernel boot parameters\n"
             "  mtu        - Check MTU of each NVIDIA interface\n"
+            "  pause      - Check 802.3x pause (flow control), which silently caps line rate.\n"
         ),
     )
 
@@ -297,8 +299,9 @@ def get_nic_info():
     where each tuple contains the interface name and its PCIe address.
 
     Cached with lru_cache so --check all (which calls this from check_mrrs,
-    check_max_payload_size, and check_mtu_size) only invokes ibdev2netdev once
-    and only emits the "ibdev2netdev not found" warning once per run.
+    check_max_payload_size, check_mtu_size, and check_pause_frames) only invokes
+    ibdev2netdev once and only emits the "ibdev2netdev not found" warning once
+    per run.
 
     Returns:
         List[Tuple[str, str]]: A list of tuples containing the IF name and PCIe address
@@ -321,7 +324,7 @@ def get_nic_info():
     except FileNotFoundError:
         logging.warning(
             "The ibdev2netdev command is not found (try: apt install infiniband-diags). "
-            "Skipping NIC-dependent checks (mrrs, mps, mtu)."
+            "Skipping NIC-dependent checks (mrrs, mps, mtu, pause)."
         )
         return []
     except subprocess.CalledProcessError as e:
@@ -2134,6 +2137,104 @@ def check_mtu_size():
         logging.error(f"An unexpected error occurred: {e}")
 
 
+def check_pause_frames():
+    """
+    Reports 802.3x link-level pause (flow control) state on each NVIDIA NIC.
+
+    Many mlx5 ports come up with pause enabled, which silently caps raw-Ethernet
+    throughput without incrementing a single drop counter: the receiver asserts
+    XOFF on a conservative internal watermark, the sender obeys, and the link
+    sits idle. On a 400 GbE loopback this cost 21.7% of line rate (308 Gb/s
+    versus 393.6 Gb/s once disabled) while rx_discards_phy and rx_out_of_buffer
+    stayed at 0 throughout, so no other counter distinguishes it from a slow
+    transmitter.
+
+    Pause is not always wrong, so this only reports. Keep it enabled on lossless
+    RoCE/PFC fabrics and on links whose peer cannot absorb line rate (an FPGA or
+    another shallow-buffer device), where disabling it turns the throttling into
+    drops.
+    """
+    try:
+        nic_info = get_nic_info()
+        for intf in nic_info:
+            iface = intf[0]
+
+            try:
+                params = subprocess.run(
+                    ["ethtool", "-a", iface], capture_output=True, text=True, check=True
+                ).stdout
+            except subprocess.CalledProcessError as e:
+                logging.error(f"Could not read pause parameters for interface {iface}: {e}")
+                continue
+
+            # Anchored so the "RX negotiated:"/"TX negotiated:" lines cannot match.
+            rx_match = re.search(r"^RX:\s+(on|off)", params, re.MULTILINE)
+            tx_match = re.search(r"^TX:\s+(on|off)", params, re.MULTILINE)
+            if not rx_match or not tx_match:
+                logging.error(f"Could not parse pause parameters from `ethtool -a {iface}`.")
+                continue
+
+            if rx_match.group(1) == "off" and tx_match.group(1) == "off":
+                logging.info(f"Interface {iface} has 802.3x pause disabled (RX: off, TX: off).")
+                continue
+
+            # Deliberately no per-direction claim about the configuration: ethtool
+            # and systemd-networkd document their rx/tx pause naming with opposite
+            # senses, so the advice is to disable both rather than reason about one.
+            logging.warning(
+                f"Interface {iface} has 802.3x pause enabled "
+                f"(RX: {rx_match.group(1)}, TX: {tx_match.group(1)}). Link-level flow control "
+                f"can idle the link and prevent achieving higher rates, with no drop counter to "
+                f"reveal it. Disable both directions with `ethtool -A {iface} rx off tx off` "
+                f"if this link is meant to be lossy; keep it on lossless RoCE/PFC fabrics and "
+                f"on links whose peer cannot absorb line rate, where disabling it turns the "
+                f"throttling into drops."
+            )
+
+            # Enabled but never asserted is harmless. These counters are cumulative
+            # since boot, so they show that pause has fired on this link at some
+            # point, which is the difference between a real and a latent problem.
+            asserted = {}
+            try:
+                stats = subprocess.run(
+                    ["ethtool", "-S", iface], capture_output=True, text=True, check=True
+                ).stdout
+                for counter in ("rx_pause_ctrl_phy", "tx_pause_ctrl_phy"):
+                    match = re.search(rf"^\s*{counter}:\s+(\d+)", stats, re.MULTILINE)
+                    if match and int(match.group(1)) > 0:
+                        asserted[counter] = int(match.group(1))
+            except subprocess.CalledProcessError as e:
+                logging.debug(f"Could not read pause counters for interface {iface}: {e}")
+
+            if asserted:
+                detail = ", ".join(f"{name}={value:,}" for name, value in asserted.items())
+                # The counters, unlike the `ethtool -A` knobs, do say which end asked
+                # for backpressure: rx_pause_ctrl_phy counts frames received,
+                # tx_pause_ctrl_phy frames sent.
+                if len(asserted) > 1:
+                    cause = "both ends have asserted pause"
+                elif "rx_pause_ctrl_phy" in asserted:
+                    cause = "the link partner asserted pause, throttling this interface's transmit"
+                else:
+                    cause = "this interface asserted pause, asking the link partner to slow down"
+                logging.warning(
+                    f"Interface {iface} has exchanged pause frames since boot ({detail}): "
+                    f"{cause}. Flow control has actually throttled this link, not merely been "
+                    "enabled. Confirm the peer can absorb line rate before disabling pause: "
+                    "against a device that cannot (an FPGA or other shallow-buffer device) this "
+                    "is working backpressure, and disabling it turns the throttling into drops."
+                )
+
+    except FileNotFoundError:
+        logging.error(
+            "The ethtool or ibdev2netdev command is not found. Ensure that they are installed and available in your PATH."
+        )
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error while executing a command: {e}")
+    except Exception as e:
+        logging.error(f"An unexpected error occurred: {e}")
+
+
 def update_mrrs_for_nvidia_devices():
     """
     Updates the PCIe Maximum Read Request Size (MRRS) to 4096 for all Mellanox devices,
@@ -2218,6 +2319,8 @@ def main():
             check_kernel_cmdline()
         if args.check == "all" or args.check == "mtu":
             check_mtu_size()
+        if args.check == "all" or args.check == "pause":
+            check_pause_frames()
         if args.check == "all" or args.check == "gpudirect":
             check_gpudirect_support()
         if args.check == "all" or args.check == "peermem":
