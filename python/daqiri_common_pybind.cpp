@@ -554,7 +554,8 @@ void bind_enums(py::module_ &m) {
 
   py::enum_<LoopbackType>(m, "LoopbackType")
       .value("DISABLED", LoopbackType::DISABLED)
-      .value("LOOPBACK_TYPE_SW", LoopbackType::LOOPBACK_TYPE_SW);
+      .value("LOOPBACK_TYPE_SW", LoopbackType::LOOPBACK_TYPE_SW)
+      .value("LOOPBACK_TYPE_HW", LoopbackType::LOOPBACK_TYPE_HW);
 
   py::enum_<RDMAMode>(m, "RDMAMode")
       .value("CLIENT", RDMAMode::CLIENT)
@@ -587,7 +588,9 @@ void bind_enums(py::module_ &m) {
 
   py::enum_<FlowMatchType>(m, "FlowMatchType")
       .value("IPV4_UDP", FlowMatchType::IPV4_UDP)
-      .value("FLEX_ITEM", FlowMatchType::FLEX_ITEM);
+      .value("FLEX_ITEM", FlowMatchType::FLEX_ITEM)
+      .value("ECPRI", FlowMatchType::ECPRI)
+      .value("ETHERNET", FlowMatchType::ETHERNET);
 
   py::enum_<FlowOpType>(m, "FlowOpType")
       .value("ADD_RX", FlowOpType::ADD_RX)
@@ -782,6 +785,13 @@ void bind_config_types(py::module_ &m) {
       .def_readwrite("vlan", &FlowAction::vlan_)
       .def_readwrite("tunnel", &FlowAction::tunnel_);
 
+  py::class_<EthernetMatch>(m, "EthernetMatch")
+      .def(py::init<>())
+      .def_readwrite("match_src", &EthernetMatch::match_src_)
+      .def_readwrite("src", &EthernetMatch::src_)
+      .def_readwrite("match_dst", &EthernetMatch::match_dst_)
+      .def_readwrite("dst", &EthernetMatch::dst_);
+
   py::class_<FlexItemMatch>(m, "FlexItemMatch")
       .def(py::init<>())
       .def_readwrite("flex_item_id", &FlexItemMatch::flex_item_id_)
@@ -796,7 +806,8 @@ void bind_config_types(py::module_ &m) {
       .def_readwrite("ipv4_len", &FlowMatch::ipv4_len_)
       .def_readwrite("ipv4_src", &FlowMatch::ipv4_src_)
       .def_readwrite("ipv4_dst", &FlowMatch::ipv4_dst_)
-      .def_readwrite("flex_item_match", &FlowMatch::flex_item_match_);
+      .def_readwrite("flex_item_match", &FlowMatch::flex_item_match_)
+      .def_readwrite("ethernet_match", &FlowMatch::ethernet_match_);
 
   py::class_<FlowConfig>(m, "FlowConfig")
       .def(py::init<>())
@@ -1205,6 +1216,7 @@ PYBIND11_MODULE(_daqiri, m) {
   m.def("free_all_packets_and_burst_rx", &free_all_packets_and_burst_rx,
         "burst"_a);
   m.def("free_all_packets_and_burst_tx", &free_all_packets_and_burst_tx,
+        "Release an unsubmitted TX burst and all of its packet buffers.",
         "burst"_a);
   m.def("free_segment_packets_and_burst", &free_segment_packets_and_burst,
         "burst"_a, "seg"_a);

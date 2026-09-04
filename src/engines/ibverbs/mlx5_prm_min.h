@@ -101,12 +101,24 @@ enum {
   MLX5_WQ_TYPE_CYCLIC_STRIDING_RQ = 0x3,
 };
 enum {
+  MLX5_ADAPTER_PAGE_SIZE_4_KIB = 0,
+  MLX5_ADAPTER_PAGE_SIZE_8_KIB = 1,
+  MLX5_ADAPTER_PAGE_SIZE_16_KIB = 2,
+  MLX5_ADAPTER_PAGE_SIZE_32_KIB = 3,
+  MLX5_ADAPTER_PAGE_SIZE_64_KIB = 4,
+};
+enum {
   MLX5_RQC_STATE_RST = 0x0,
   MLX5_RQC_STATE_RDY = 0x1,
 };
 enum {
   MLX5_TIRC_DISP_TYPE_DIRECT = 0x0,
   MLX5_TIRC_DISP_TYPE_INDIRECT = 0x1,
+};
+enum {
+  // Despite the PRM field name, mlx5 uses this value to opt a TIR into
+  // receiving unicast traffic transmitted by the same device.
+  MLX5_TIRC_SELF_LB_BLOCK_BLOCK_UNICAST = 0x1,
 };
 enum {
   MLX5_RX_HASH_FN_NONE = 0x0,
@@ -524,6 +536,8 @@ enum {
   MLX5_OPCODE_WAIT = 0x0f,
   MLX5_OPC_MOD_WAIT_TIME = 2,
   MLX5_WAIT_COND_CYCLIC_SMALLER = 5,
+  MLX5_COMP_ONLY_FIRST_ERR = 1,
+  MLX5_COMP_MODE_OFFSET = 2,
   MLX5_OPCODE_ENHANCED_MPSW = 0x29,
   MLX5_EMPW_MAX_DSEG = 58,
 };

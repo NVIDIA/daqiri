@@ -198,6 +198,7 @@ struct IbvRxQueue {
   // Direct mlx5dv views (we own the CQ consumer index; rdma-core owns the RQ).
   struct mlx5dv_cq dv_cq {};
   uint32_t cq_ci = 0;  // CQ consumer index (monotonic)
+  bool realtime_timestamps = false;
 
   // Per-WQE stride accounting for the reclaim path. Indexed by WQE/region.
   std::vector<uint32_t> consumed_strides;  // strides handed to the app (verbs path)
@@ -299,6 +300,7 @@ struct IbvTxQueue {
   std::vector<uint64_t> wqe_slot_cum;
   std::vector<uint64_t> wqe_wqebb_cum;
   uint64_t slots_posted = 0;
+  bool accurate_send = false;  // request wall-clock CQ for timed transmission
   bool send_scheduling = false;  // HCA wait_on_time present + real-time clock
   uint64_t rt_timemask = 0;      // wait segment comparison mask
   bool empw_enabled = false;
@@ -380,8 +382,8 @@ class IbverbsEngine : public Engine {
 
   // Burst retrieval / submission
   Status get_rx_burst(BurstParams** burst, int port, int q) override;
-  Status get_tx_metadata_buffer(BurstParams** burst) override;
   Status send_tx_burst(BurstParams* burst) override;
+  Status wait_for_tx_idle(uint32_t timeout_ms) override;
   BurstParams* create_tx_burst_params() override;
   uint64_t get_burst_tot_byte(BurstParams* burst) override;
 
@@ -407,6 +409,7 @@ class IbverbsEngine : public Engine {
  private:
   // ---- bring-up ----
   struct ibv_context* open_device_for_interface(const InterfaceConfig& intf);
+  Status enable_hw_loopback(struct ibv_context* ctx, struct ibv_pd* pd);
   Status setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf, const RxQueueConfig& qcfg);
   Status register_rx_mr(IbvRxQueue& q);      // ibv_reg_mr (CPU); dmabuf later
   Status create_striding_rq(IbvRxQueue& q);  // verbs WQ + ind table + raw QP
@@ -476,7 +479,8 @@ class IbverbsEngine : public Engine {
   Status create_tx_raw_qp(IbvTxQueue& q);  // IBV_QPT_RAW_PACKET, RESET->RTS
   Status configure_tx_pacing(IbvTxQueue& q, uint64_t pacing_mbps);
   void post_tx_burst(IbvTxQueue& q, BurstParams* burst);  // build send WQEs + ring doorbell
-  void post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst);
+  void post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst,
+                          uint16_t first_packet = 0);
   // Build a WAIT-on-time WQE (ctrl + wseg = 1 WQEBB, no slot) at q.sq_pi that
   // holds the following send(s) until the NIC real-time clock reaches when_ns,
   // advance sq_pi, and return its ctrl segment (for the BlueFlame doorbell).
@@ -546,6 +550,11 @@ class IbverbsEngine : public Engine {
   // One ibv_context + PD per opened device, keyed by device name.
   std::unordered_map<std::string, struct ibv_context*> ctx_map_;
   std::unordered_map<struct ibv_context*, struct ibv_pd*> pd_map_;
+  struct HwLoopbackActivation {
+    struct ibv_cq* cq = nullptr;
+    struct ibv_qp* qp = nullptr;
+  };
+  std::unordered_map<struct ibv_context*, HwLoopbackActivation> hw_loopback_activations_;
   // Registrations may be shared by queue setup only through their backing
   // allocation, so retain every verbs object and deregister it before its PD.
   std::vector<struct ibv_mr*> registered_mrs_;

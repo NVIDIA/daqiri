@@ -47,6 +47,14 @@
 
 namespace daqiri {
 
+// mlx5 requires a completion mode on every SQ WQE. Unsignaled WQEs use
+// ONLY_FIRST_ERR; selected WQEs use ALWAYS so the CQ can drive reclamation.
+// A zero completion mode can stall an SQ containing consecutive WAIT WQEs.
+static constexpr uint8_t tx_completion_mode(bool signaled) {
+  return signaled ? MLX5_WQE_CTRL_CQ_UPDATE
+                  : (MLX5_COMP_ONLY_FIRST_ERR << MLX5_COMP_MODE_OFFSET);
+}
+
 namespace {
 // Monotonic nanosecond clock used for the TX flush timeouts. Replaces DPDK's
 // rte_get_timer_cycles()/rte_get_timer_hz() so the ibverbs engine needs no
@@ -110,13 +118,21 @@ constexpr uint64_t empw_burst_wqebbs(uint64_t packets) {
   }
   return total;
 }
+
+static std::pair<uint32_t, uint16_t> split_mac_address(const std::array<uint8_t, 6>& mac) {
+  const uint32_t high = (static_cast<uint32_t>(mac[0]) << 24) |
+                        (static_cast<uint32_t>(mac[1]) << 16) |
+                        (static_cast<uint32_t>(mac[2]) << 8) | static_cast<uint32_t>(mac[3]);
+  const uint16_t low = (static_cast<uint16_t>(mac[4]) << 8) | static_cast<uint16_t>(mac[5]);
+  return {high, low};
+}
 static_assert(empw_wqebbs(1) == 1);
 static_assert(empw_wqebbs(32) == 9);
 static_assert(empw_burst_wqebbs(33) == 10);
 
 // Defaults for the striding-RQ geometry; clamped to device caps at setup.
 static constexpr uint32_t DEFAULT_STRIDE_LOG = 11;          // 2048 B per stride
-static constexpr uint32_t DEFAULT_STRIDES_PER_WQE_LOG = 9;  // 512 strides / WQE
+static constexpr uint32_t DEFAULT_STRIDES_PER_WQE_LOG = 6;  // 64 strides / WQE
 static constexpr uint32_t MIN_NUM_WQE = 4;                  // outstanding regions
 
 // Read barrier between observing a CQE owner flip and reading its payload.
@@ -140,6 +156,20 @@ static inline void doorbell_store_barrier() {
   asm volatile("sfence" ::: "memory");
 #else
   std::atomic_thread_fence(std::memory_order_release);
+#endif
+}
+
+// Flush writes to the BlueFlame write-combining MMIO mapping. A DMA/store
+// barrier orders descriptors and the doorbell record, but on ARM it does not
+// guarantee that a WC MMIO write has reached the device before the BF offset
+// is reused. Match rdma-core's mmio_wc_start()/mmio_flush_writes() contract.
+static inline void doorbell_mmio_flush() {
+#if defined(__aarch64__)
+  asm volatile("dsb st" ::: "memory");
+#elif defined(__x86_64__) || defined(__i386__)
+  asm volatile("sfence" ::: "memory");
+#else
+  std::atomic_thread_fence(std::memory_order_seq_cst);
 #endif
 }
 
@@ -391,6 +421,7 @@ bool IbverbsEngine::set_config_and_initialize(const NetworkConfig& cfg) {
   max_batch_ = 0;
   cfg_ = cfg;
   if (!validate_config()) {
+    DAQIRI_LOG_CRITICAL("Config validation failed");
     return false;
   }
   if (!reserve_static_flow_ids()) {
@@ -461,6 +492,13 @@ struct ibv_context* IbverbsEngine::open_device_for_interface(const InterfaceConf
   }
 
   if (dev == nullptr) {
+    if (cfg_.common_.loopback_ == LoopbackType::LOOPBACK_TYPE_HW) {
+      DAQIRI_LOG_CRITICAL(
+          "Hardware loopback interface '{}'/'{}' did not resolve to an ibverbs device", intf.name_,
+          intf.address_);
+      ibv_free_device_list(list);
+      return nullptr;
+    }
     DAQIRI_LOG_WARN("Could not match interface '{}'/'{}' to an IB device; using first device",
                     intf.name_, intf.address_);
     dev = list[0];
@@ -503,6 +541,56 @@ struct ibv_context* IbverbsEngine::open_device_for_interface(const InterfaceConf
   return ctx;
 }
 
+Status IbverbsEngine::enable_hw_loopback(struct ibv_context* ctx, struct ibv_pd* pd) {
+  if (cfg_.common_.loopback_ != LoopbackType::LOOPBACK_TYPE_HW) {
+    return Status::SUCCESS;
+  }
+  if (hw_loopback_activations_.find(ctx) != hw_loopback_activations_.end()) {
+    return Status::SUCCESS;
+  }
+
+#if DAQIRI_HAVE_MLX5_SELF_LOOPBACK
+  HwLoopbackActivation activation;
+  activation.cq = ibv_create_cq(ctx, 1, nullptr, nullptr, 0);
+  if (activation.cq == nullptr) {
+    DAQIRI_LOG_CRITICAL("Hardware loopback CQ creation failed: {}", strerror(errno));
+    return Status::GENERIC_FAILURE;
+  }
+
+  struct ibv_qp_init_attr_ex qp_attr {};
+  qp_attr.qp_type = IBV_QPT_RAW_PACKET;
+  qp_attr.comp_mask = IBV_QP_INIT_ATTR_PD;
+  qp_attr.pd = pd;
+  qp_attr.send_cq = activation.cq;
+  qp_attr.recv_cq = activation.cq;
+  qp_attr.cap.max_recv_wr = 1;
+
+  struct mlx5dv_qp_init_attr mlx5_attr {};
+  mlx5_attr.comp_mask = MLX5DV_QP_INIT_ATTR_MASK_QP_CREATE_FLAGS;
+  mlx5_attr.create_flags = MLX5DV_QP_CREATE_TIR_ALLOW_SELF_LOOPBACK_UC;
+  activation.qp = mlx5dv_create_qp(ctx, &qp_attr, &mlx5_attr);
+  if (activation.qp == nullptr) {
+    DAQIRI_LOG_CRITICAL(
+        "mlx5 unicast hardware-loopback activation failed: {}. Verify that the ConnectX "
+        "firmware and rdma-core provider support local RAW_PACKET loopback",
+        strerror(errno));
+    ibv_destroy_cq(activation.cq);
+    return Status::GENERIC_FAILURE;
+  }
+
+  hw_loopback_activations_.emplace(ctx, activation);
+  DAQIRI_LOG_INFO("Enabled mlx5 unicast hardware loopback on {}", ibv_get_device_name(ctx->device));
+  return Status::SUCCESS;
+#else
+  (void)ctx;
+  (void)pd;
+  DAQIRI_LOG_CRITICAL(
+      "Hardware loopback was requested, but DAQIRI was built against rdma-core headers "
+      "without MLX5DV_QP_CREATE_TIR_ALLOW_SELF_LOOPBACK_UC");
+  return Status::NOT_SUPPORTED;
+#endif
+}
+
 int IbverbsEngine::mr_access_to_ibv(uint32_t access) {
   (void)access;
   // RX strided buffers only need local write. (Relaxed ordering is omitted: on
@@ -524,7 +612,23 @@ Status IbverbsEngine::register_mr(struct ibv_pd* pd, const std::string& mr_name,
   if (mr.kind_ == MemoryKind::DEVICE) {
     // GPUDirect: export the CUDA allocation as a dma-buf fd and register it so
     // the NIC DMAs packets straight to/from GPU memory.
-    cudaSetDevice(mr.affinity_);
+    CUcontext previous = nullptr;
+    const auto current_res = cuCtxGetCurrent(&previous);
+    if (current_res != CUDA_SUCCESS) {
+      DAQIRI_LOG_CRITICAL("Could not query the current CUDA context for MR {}", mr_name);
+      return Status::INTERNAL_ERROR;
+    }
+    const CUcontext owning = ar_[mr_name].cuda_context_;
+    if (owning == nullptr) {
+      DAQIRI_LOG_CRITICAL("Device MR {} has no owning CUDA context", mr_name);
+      return Status::INTERNAL_ERROR;
+    }
+    const bool switched = previous != owning;
+    if (switched && cuCtxSetCurrent(owning) != CUDA_SUCCESS) {
+      DAQIRI_LOG_CRITICAL("Could not activate the owning CUDA context for MR {}", mr_name);
+      return Status::INTERNAL_ERROR;
+    }
+
     const size_t page = sysconf(_SC_PAGESIZE);
     const auto va = reinterpret_cast<uintptr_t>(base);
     const uintptr_t aligned = va & ~(static_cast<uintptr_t>(page) - 1);
@@ -534,14 +638,22 @@ Status IbverbsEngine::register_mr(struct ibv_pd* pd, const std::string& mr_name,
     CUresult cres =
         cuMemGetHandleForAddressRange(&dmabuf_fd, static_cast<CUdeviceptr>(aligned), aligned_size,
                                       CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD, 0);
+    const CUresult restore_res = switched ? cuCtxSetCurrent(previous) : CUDA_SUCCESS;
+    if (restore_res != CUDA_SUCCESS) {
+      if (dmabuf_fd >= 0) {
+        close(dmabuf_fd);
+      }
+      DAQIRI_LOG_CRITICAL("Could not restore the CUDA context after exporting MR {}", mr_name);
+      return Status::INTERNAL_ERROR;
+    }
+
     if (cres != CUDA_SUCCESS) {
       const char* es = nullptr;
       cuGetErrorString(cres, &es);
       DAQIRI_LOG_CRITICAL(
           "cuMemGetHandleForAddressRange failed for MR {}: {}. CUDA DMA-BUF export requires "
           "Linux kernel 5.12 or newer and the NVIDIA open kernel driver",
-          mr_name,
-          es ? es : "?");
+          mr_name, es ? es : "?");
       return Status::GENERIC_FAILURE;
     }
     struct ibv_mr* gmr = ibv_reg_dmabuf_mr(pd, offset, mr.ttl_size_, va, dmabuf_fd, access);
@@ -865,7 +977,11 @@ Status IbverbsEngine::devx_create_rq(IbvRxQueue& q, uint32_t stride_log, uint32_
   }
   memset(q.wq_buf, 0, umem_bytes);
   q.rq_dbr = reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(q.wq_buf) + dbr_off);
-  q.wq_umem = mlx5dv_devx_umem_reg(q.ctx, q.wq_buf, umem_bytes, 0x7 /*rw*/);
+  // Receive WQ memory is consumed by the HCA and does not require remote
+  // access permissions. Match the mlx5/DPDK DevX RQ resource path, which
+  // registers this UMEM with no access flags.
+  q.wq_umem =
+      mlx5dv_devx_umem_reg(q.ctx, q.wq_buf, umem_bytes, 0);
   if (q.wq_umem == nullptr) {
     DAQIRI_LOG_CRITICAL("mlx5dv_devx_umem_reg failed: {}", strerror(errno));
     return Status::GENERIC_FAILURE;
@@ -882,13 +998,26 @@ Status IbverbsEngine::devx_create_rq(IbvRxQueue& q, uint32_t stride_log, uint32_
   DEVX_SET(rqc, rqc, cqn, q.dv_cq.cqn);
   DEVX_SET(rqc, rqc, flush_in_error_en, 1);
   DEVX_SET(rqc, rqc, vsd, 1);  // do not strip VLAN
+  struct mlx5dv_context dv_ctx {};
+  q.realtime_timestamps = mlx5dv_query_device(q.ctx, &dv_ctx) == 0 &&
+                          (dv_ctx.flags & MLX5DV_CONTEXT_FLAGS_REAL_TIME_TS) != 0;
+  if (q.realtime_timestamps) {
+    // Real-time CQEs use UTC encoding (seconds << 32 | nanoseconds), matching
+    // the public PTP epoch-nanosecond timestamp contract.
+    DEVX_SET(rqc, rqc, ts_format, MLX5_RQC_TIMESTAMP_FORMAT_REAL_TIME);
+  } else {
+    DAQIRI_LOG_CRITICAL(
+        "RX queue {}: real-time CQ timestamps are unsupported; using the device clock format",
+        q.queue_id);
+  }
 
   DEVX_SET(wq, wq, wq_type, q.striding ? MLX5_WQ_TYPE_CYCLIC_STRIDING_RQ : MLX5_WQ_TYPE_CYCLIC);
   DEVX_SET(wq, wq, log_wq_stride, log2_floor(q.wqe_stride));
   DEVX_SET(wq, wq, log_wq_sz, log2_floor(q.num_wqe));
   DEVX_SET(wq, wq, pd, dvpd.pdn);
-  // No uar_page: an RQ rings its doorbell via the memory dbr record, not a UAR.
-  DEVX_SET(wq, wq, log_wq_pg_sz, log2_floor(static_cast<uint32_t>(page)) - 12u);
+  // The PRM field is relative to the mlx5 4 KiB adapter page, independent of
+  // the operating-system page size used to register the UMEM.
+  DEVX_SET(wq, wq, log_wq_pg_sz, MLX5_ADAPTER_PAGE_SIZE_4_KIB);
   DEVX_SET64(wq, wq, dbr_addr, dbr_off);
   DEVX_SET(wq, wq, dbr_umem_id, q.wq_umem->umem_id);
   DEVX_SET(wq, wq, wq_umem_id, q.wq_umem->umem_id);
@@ -953,6 +1082,9 @@ Status IbverbsEngine::devx_create_tir(IbvRxQueue& q) {
   DEVX_SET(tirc, tirc, disp_type, MLX5_TIRC_DISP_TYPE_DIRECT);
   DEVX_SET(tirc, tirc, inline_rqn, q.rqn);
   DEVX_SET(tirc, tirc, rx_hash_fn, MLX5_RX_HASH_FN_NONE);
+  if (cfg_.common_.loopback_ == LoopbackType::LOOPBACK_TYPE_HW) {
+    DEVX_SET(tirc, tirc, self_lb_block, MLX5_TIRC_SELF_LB_BLOCK_BLOCK_UNICAST);
+  }
   DEVX_SET(tirc, tirc, transport_domain, q.td_num);
   q.tir_obj = mlx5dv_devx_obj_create(q.ctx, in, sizeof(in), out, sizeof(out));
   if (q.tir_obj == nullptr) {
@@ -1261,6 +1393,9 @@ Status IbverbsEngine::resolve_rx_destination(int port, PortSteering& st,
   DEVX_SET(tirc, tirc, disp_type, MLX5_TIRC_DISP_TYPE_INDIRECT);
   DEVX_SET(tirc, tirc, indirect_table, rqtn);
   DEVX_SET(tirc, tirc, rx_hash_fn, MLX5_RX_HASH_FN_TOEPLITZ);
+  if (cfg_.common_.loopback_ == LoopbackType::LOOPBACK_TYPE_HW) {
+    DEVX_SET(tirc, tirc, self_lb_block, MLX5_TIRC_SELF_LB_BLOCK_BLOCK_UNICAST);
+  }
   DEVX_SET(tirc, tirc, transport_domain, queues.front()->td_num);
   if (inner) {
     DEVX_SET(tirc, tirc, tunneled_offload_en, 1);
@@ -1516,6 +1651,27 @@ Status IbverbsEngine::install_flow_rule_locked(int port, PortSteering& st,
   auto* mask_buf = reinterpret_cast<uint8_t*>(mask.buf);
   auto* value_buf = reinterpret_cast<uint8_t*>(value.buf);
 
+  const auto& ethernet = mt.ethernet_match_;
+  if (ethernet.match_src_ || ethernet.match_dst_) {
+    if (ethernet.match_dst_) {
+      const auto [high, low] = split_mac_address(ethernet.dst_);
+      DEVX_SET(fte_match_set_lyr_2_4, mask_buf, dmac_47_16, 0xffffffff);
+      DEVX_SET(fte_match_set_lyr_2_4, mask_buf, dmac_15_0, 0xffff);
+      DEVX_SET(fte_match_set_lyr_2_4, value_buf, dmac_47_16, high);
+      DEVX_SET(fte_match_set_lyr_2_4, value_buf, dmac_15_0, low);
+      any = true;
+    }
+    if (ethernet.match_src_) {
+      const auto [high, low] = split_mac_address(ethernet.src_);
+      DEVX_SET(fte_match_set_lyr_2_4, mask_buf, smac_47_16, 0xffffffff);
+      DEVX_SET(fte_match_set_lyr_2_4, mask_buf, smac_15_0, 0xffff);
+      DEVX_SET(fte_match_set_lyr_2_4, value_buf, smac_47_16, high);
+      DEVX_SET(fte_match_set_lyr_2_4, value_buf, smac_15_0, low);
+      any = true;
+    }
+    criteria |= MLX5_DR_MATCH_CRITERIA_OUTER;
+  }
+
   auto pin_ipv4 = [&]() {
     DEVX_SET(fte_match_set_lyr_2_4, mask_buf, ethertype, 0xffff);
     DEVX_SET(fte_match_set_lyr_2_4, value_buf, ethertype, MLX5_ETHERTYPE_IPV4);
@@ -1527,7 +1683,7 @@ Status IbverbsEngine::install_flow_rule_locked(int port, PortSteering& st,
     DEVX_SET(fte_match_set_lyr_2_4, value_buf, ip_protocol, MLX5_IP_PROTOCOL_UDP);
   };
 
-  if (rss_destination != nullptr) {
+  if (rss_destination != nullptr && mt.type_ != FlowMatchType::ETHERNET) {
     pin_ipv4_udp();
   }
 
@@ -2044,6 +2200,27 @@ Status IbverbsEngine::install_port_flows() {
       bool any = false;
       auto* mk = reinterpret_cast<uint8_t*>(mask.buf);
       auto* vl = reinterpret_cast<uint8_t*>(val.buf);
+
+      const auto& ethernet = mt.ethernet_match_;
+      if (ethernet.match_src_ || ethernet.match_dst_) {
+        if (ethernet.match_dst_) {
+          const auto [high, low] = split_mac_address(ethernet.dst_);
+          DEVX_SET(fte_match_set_lyr_2_4, mk, dmac_47_16, 0xffffffff);
+          DEVX_SET(fte_match_set_lyr_2_4, mk, dmac_15_0, 0xffff);
+          DEVX_SET(fte_match_set_lyr_2_4, vl, dmac_47_16, high);
+          DEVX_SET(fte_match_set_lyr_2_4, vl, dmac_15_0, low);
+          any = true;
+        }
+        if (ethernet.match_src_) {
+          const auto [high, low] = split_mac_address(ethernet.src_);
+          DEVX_SET(fte_match_set_lyr_2_4, mk, smac_47_16, 0xffffffff);
+          DEVX_SET(fte_match_set_lyr_2_4, mk, smac_15_0, 0xffff);
+          DEVX_SET(fte_match_set_lyr_2_4, vl, smac_47_16, high);
+          DEVX_SET(fte_match_set_lyr_2_4, vl, smac_15_0, low);
+          any = true;
+        }
+        crit |= MLX5_DR_MATCH_CRITERIA_OUTER;
+      }
       // L3/L4 matches imply IPv4 + UDP -- pin those so the match is unambiguous.
       auto pin_ipv4 = [&]() {
         DEVX_SET(fte_match_set_lyr_2_4, mk, ethertype, 0xffff);
@@ -2055,7 +2232,7 @@ Status IbverbsEngine::install_port_flows() {
         DEVX_SET(fte_match_set_lyr_2_4, mk, ip_protocol, 0xff);
         DEVX_SET(fte_match_set_lyr_2_4, vl, ip_protocol, MLX5_IP_PROTOCOL_UDP);
       };
-      if (rss_destination != nullptr) {
+      if (rss_destination != nullptr && mt.type_ != FlowMatchType::ETHERNET) {
         pin_ipv4_udp();
       }
       if (mt.udp_src_ > 0) {
@@ -2484,6 +2661,10 @@ Status IbverbsEngine::setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf,
     return Status::GENERIC_FAILURE;
   }
   q.pd = pd_map_[q.ctx];
+
+  if (Status s = enable_hw_loopback(q.ctx, q.pd); s != Status::SUCCESS) {
+    return s;
+  }
 
   if (Status s = register_rx_mr(q); s != Status::SUCCESS) {
     return s;
@@ -3461,9 +3642,23 @@ void IbverbsEngine::free_all_packets(BurstParams* burst) {
   uint16_t* wqe_arr = burst_wqe_arr(burst);
   uint16_t* strd_arr = burst_strd_arr(burst);
   const int num = static_cast<int>(burst->hdr.hdr.num_pkts);
-  for (int i = 0; i < num; i++) {
-    release_strides(*q, wqe_arr[i], strd_arr[i]);
+  if (num == 0) {
+    return;
   }
+  // CQ order keeps packets from one striding WQE contiguous. Publish one
+  // release per WQE instead of bouncing its atomic counter once per packet.
+  uint16_t current_wqe = wqe_arr[0];
+  uint32_t released_strides = strd_arr[0];
+  for (int i = 1; i < num; ++i) {
+    if (wqe_arr[i] == current_wqe) {
+      released_strides += strd_arr[i];
+      continue;
+    }
+    release_strides(*q, current_wqe, released_strides);
+    current_wqe = wqe_arr[i];
+    released_strides = strd_arr[i];
+  }
+  release_strides(*q, current_wqe, released_strides);
 }
 
 void IbverbsEngine::free_packet_segment(BurstParams* burst, int seg, int pkt) {
@@ -3567,7 +3762,16 @@ Status IbverbsEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint6
   if (q == nullptr) {
     return Status::INVALID_PARAMETER;
   }
-  *timestamp_ns = ts_to_ns(q->ctx, burst_ts_arr(burst)[idx]);
+  const uint64_t raw_timestamp = burst_ts_arr(burst)[idx];
+  if (!q->realtime_timestamps) {
+    *timestamp_ns = ts_to_ns(q->ctx, raw_timestamp);
+    return Status::SUCCESS;
+  }
+  // mlx5 real-time CQEs use UTC encoding; expose the public API's linear PTP
+  // epoch-nanosecond representation.
+  const uint64_t seconds = raw_timestamp >> 32;
+  const uint64_t nanoseconds = raw_timestamp & 0xffffffffULL;
+  *timestamp_ns = seconds * 1000000000ULL + nanoseconds;
   return Status::SUCCESS;
 }
 
@@ -3942,7 +4146,54 @@ Status IbverbsEngine::poll_flow_op(FlowOpResult* result) {
 }
 
 bool IbverbsEngine::validate_config() const {
-  return Engine::validate_config();
+  if (!Engine::validate_config()) {
+    return false;
+  }
+  if (cfg_.common_.loopback_ != LoopbackType::LOOPBACK_TYPE_HW) {
+    return true;
+  }
+
+  if (cfg_.ifs_.size() != 1) {
+    DAQIRI_LOG_ERROR("Ibverbs hardware loopback requires exactly one interface; configured {}",
+                     cfg_.ifs_.size());
+    return false;
+  }
+  const auto& intf = cfg_.ifs_.front();
+  if (intf.address_.empty() || intf.address_ == "loopback") {
+    DAQIRI_LOG_ERROR(
+        "Ibverbs hardware loopback interface '{}' must name a physical ibverbs device, netdev, "
+        "or PCI BDF",
+        intf.name_);
+    return false;
+  }
+  if (intf.tx_.queues_.empty() || intf.rx_.queues_.empty()) {
+    DAQIRI_LOG_ERROR(
+        "Ibverbs hardware loopback interface '{}' requires at least one TX queue and one RX queue",
+        intf.name_);
+    return false;
+  }
+  return true;
+}
+
+Status IbverbsEngine::wait_for_tx_idle(uint32_t timeout_ms) {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  for (;;) {
+    bool idle = true;
+    for (const auto& q : tx_queues_) {
+      if (q->completed_tail.load(std::memory_order_acquire) != q->alloc_head) {
+        idle = false;
+        break;
+      }
+    }
+    if (idle) {
+      return Status::SUCCESS;
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      return Status::NOT_READY;
+    }
+    std::this_thread::sleep_for(std::chrono::microseconds(50));
+  }
 }
 
 void IbverbsEngine::print_stats() {
@@ -4115,6 +4366,20 @@ void IbverbsEngine::shutdown() {
   }
   tx_queues_.clear();
 
+  // The activation QP keeps mlx5 device-local loopback enabled. RX TIRs and
+  // normal TX/RX QPs must be gone before releasing it, and its PD/context must
+  // remain alive until both objects are destroyed.
+  for (auto& [ctx, activation] : hw_loopback_activations_) {
+    (void)ctx;
+    if (activation.qp && ibv_destroy_qp(activation.qp) != 0) {
+      DAQIRI_LOG_ERROR("Failed to destroy hardware-loopback activation QP: {}", strerror(errno));
+    }
+    if (activation.cq && ibv_destroy_cq(activation.cq) != 0) {
+      DAQIRI_LOG_ERROR("Failed to destroy hardware-loopback activation CQ: {}", strerror(errno));
+    }
+  }
+  hw_loopback_activations_.clear();
+
   for (auto it = registered_mrs_.rbegin(); it != registered_mrs_.rend(); ++it) {
     if (*it != nullptr && ibv_dereg_mr(*it) != 0) {
       DAQIRI_LOG_ERROR("ibv_dereg_mr failed during ibverbs shutdown: {}", strerror(errno));
@@ -4240,9 +4505,21 @@ Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
         device_attr.max_qp_wr / 2);
   }
 
-  q.cq = ibv_create_cq(q.ctx, static_cast<int>(q.num_slots) + 1, nullptr, nullptr, 0);
+  if (q.accurate_send) {
+    // mlx5 derives the raw-packet QP/SQ timestamp domain from its send CQ.
+    // Scheduled timestamps use the public PTP epoch-nanosecond contract, so
+    // select the wall-clock domain consumed by WAIT-on-time WQEs.
+    struct ibv_cq_init_attr_ex cq_attr {};
+    cq_attr.cqe = static_cast<uint32_t>(q.num_slots) + 1;
+    cq_attr.wc_flags = IBV_WC_EX_WITH_COMPLETION_TIMESTAMP_WALLCLOCK;
+    struct ibv_cq_ex* cq_ex = ibv_create_cq_ex(q.ctx, &cq_attr);
+    q.cq = cq_ex == nullptr ? nullptr : ibv_cq_ex_to_cq(cq_ex);
+  } else {
+    q.cq = ibv_create_cq(q.ctx, static_cast<int>(q.num_slots) + 1, nullptr, nullptr, 0);
+  }
   if (q.cq == nullptr) {
-    DAQIRI_LOG_CRITICAL("TX ibv_create_cq failed: {}", strerror(errno));
+    DAQIRI_LOG_CRITICAL("TX ibv_create_cq failed (accurate_send={}): {}",
+                        q.accurate_send, strerror(errno));
     return Status::GENERIC_FAILURE;
   }
   struct ibv_qp_init_attr attr {};
@@ -4333,6 +4610,7 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
                                      const TxQueueConfig& qcfg) {
   q.port_id = intf.port_id_;
   q.queue_id = qcfg.common_.id_;
+  q.accurate_send = intf.tx_.accurate_send_;
   q.poll_mode = qcfg.poll_mode_;
   q.batch_size = q.poll_mode == QueuePollMode::DIRECT ? 1 : std::max(1, qcfg.common_.batch_size_);
   if (!qcfg.common_.cpu_core_.empty()) {
@@ -4490,11 +4768,41 @@ bool IbverbsEngine::lock_direct_tx_queue(IbvTxQueue& q, std::unique_lock<std::mu
   return true;
 }
 
+// eMPW can represent a scheduled burst when its only timestamp is on packet 0:
+// one WAIT WQE gates the packed SEND WQEs, and all remaining packets follow
+// immediately. Multiple timed packets require the regular per-packet SEND path.
+static bool empw_compatible_burst(const BurstParams* burst) {
+  // A one-packet enhanced MPW session is not valid; use an ordinary SEND WQE
+  // for single-packet bursts (including queue primers).
+  if (burst->hdr.hdr.num_segs != 1 || burst->hdr.hdr.num_pkts < 2) {
+    return false;
+  }
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) == 0) {
+    return true;
+  }
+  if (burst->hdr.hdr.num_pkts < 3) {
+    return false;
+  }
+  const uint64_t* txtime = burst_ts_arr(burst);
+  if (txtime[0] == 0) {
+    return false;
+  }
+  for (uint16_t i = 1; i < burst->hdr.hdr.num_pkts; ++i) {
+    if (txtime[i] != 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
 uint64_t IbverbsEngine::tx_burst_wqebbs(const IbvTxQueue& q, const BurstParams* burst) const {
   const uint64_t packets = burst->hdr.hdr.num_pkts;
   const bool scheduled = (burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) != 0;
-  if (q.empw_enabled && burst->hdr.hdr.num_segs == 1 && !scheduled) {
-    return empw_burst_wqebbs(packets);
+  if (q.empw_enabled && empw_compatible_burst(burst)) {
+    // A timed packet must break the eMPW session: WAIT + ordinary SEND for
+    // packet 0, then pack the remaining untimed packets into eMPW WQEs.
+    return scheduled ? 2 + empw_burst_wqebbs(packets - 1)
+                     : empw_burst_wqebbs(packets);
   }
   uint64_t wqebbs = packets;
   if (scheduled) {
@@ -4592,11 +4900,6 @@ BurstParams* IbverbsEngine::create_tx_burst_params() {
   burst->pkt_lens[1] =
       reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(burst) + g_layout.off_lens1);
   return burst;
-}
-
-Status IbverbsEngine::get_tx_metadata_buffer(BurstParams** burst) {
-  *burst = create_tx_burst_params();
-  return *burst ? Status::SUCCESS : Status::NO_FREE_BURST_BUFFERS;
 }
 
 bool IbverbsEngine::is_tx_burst_available(BurstParams* burst) {
@@ -4742,12 +5045,11 @@ Status IbverbsEngine::set_udp_payload(BurstParams* burst, int idx, void* data, i
 }
 
 // Accurate send scheduling: hold this packet at the NIC until `time`. `time` is
-// nanoseconds in the device's hardware clock domain -- the SAME domain as
-// get_packet_rx_timestamp -- readable as "now" via ibv_query_rt_values_ex. The
-// hardware compares over an ~8-second cyclic window, so a scheduled time must be
-// within ~8 s of the current clock (a time too far ahead never releases; one too
-// far in the past wraps). Returns NOT_SUPPORTED when the device lacks wait-on-time
-// or a real-time clock.
+// PTP epoch nanoseconds in the CLOCK_REALTIME domain -- the SAME representation
+// returned by get_packet_rx_timestamp. The hardware compares over an ~8-second
+// cyclic window, so a scheduled time must be within ~8 s of the current clock
+// (a time too far ahead never releases; one too far in the past wraps). Returns
+// NOT_SUPPORTED when the device lacks wait-on-time or a real-time clock.
 Status IbverbsEngine::set_packet_tx_time(BurstParams* burst, int idx, uint64_t time) {
   IbvTxQueue* q = find_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
   if (q == nullptr) {
@@ -4783,7 +5085,7 @@ void* IbverbsEngine::emit_wait_wqe(IbvTxQueue& q, uint64_t when_ns) {
   wctrl->qpn_ds = htobe32((q.sqn << 8) | 3u);  // ctrl(1) + wseg(2) = 3 DS
   wctrl->signature = 0;
   wctrl->dci_stream_channel_id = 0;
-  wctrl->fm_ce_se = 0;  // unsignaled
+  wctrl->fm_ce_se = (MLX5_COMP_ONLY_FIRST_ERR << MLX5_COMP_MODE_OFFSET);
   wctrl->imm = 0;
   auto* ws = reinterpret_cast<struct mlx5_wqe_wseg*>(wbase + 16);
   ws->operation = htobe32(MLX5_WAIT_COND_CYCLIC_SMALLER);
@@ -4802,7 +5104,8 @@ void* IbverbsEngine::emit_wait_wqe(IbvTxQueue& q, uint64_t when_ns) {
 }
 
 // Pack multiple single-segment packets into each enhanced multi-packet WQE.
-void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst) {
+void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst,
+                                       uint16_t first_packet) {
   const int n = static_cast<int>(burst->hdr.hdr.num_pkts);
   static constexpr int SIGNAL_EVERY_WQE = 16;
   uint8_t* const sq_buf = static_cast<uint8_t*>(q.dv_qp.sq.buf);
@@ -4811,7 +5114,7 @@ void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst) {
   uint8_t* const sq_end = sq_buf + static_cast<size_t>(wqe_cnt) * stride;
   const uint32_t lkey = q.regions[0].lkey;
   void* last_ctrl = nullptr;
-  int packet = 0;
+  int packet = static_cast<int>(first_packet);
   int burst_wqe = 0;
 
   while (packet < n) {
@@ -4829,7 +5132,7 @@ void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst) {
     ctrl->qpn_ds = htobe32((q.sqn << 8) | ds);
     ctrl->signature = 0;
     ctrl->dci_stream_channel_id = 0;
-    ctrl->fm_ce_se = signaled ? MLX5_WQE_CTRL_CQ_UPDATE : 0;
+    ctrl->fm_ce_se = tx_completion_mode(signaled);
     ctrl->imm = 0;
     memset(title + 16, 0, 16);
     reinterpret_cast<struct mlx5_wqe_eth_seg*>(title + 16)->cs_flags =
@@ -4859,9 +5162,10 @@ void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst) {
   doorbell_store_barrier();
   q.dv_qp.dbrec[MLX5_SND_DBR] = htobe32(static_cast<uint32_t>(q.sq_pi) & 0xffff);
   doorbell_store_barrier();
+  doorbell_mmio_flush();
   *reinterpret_cast<volatile uint64_t*>(static_cast<uint8_t*>(q.dv_qp.bf.reg) + q.bf_offset) =
       *reinterpret_cast<uint64_t*>(last_ctrl);
-  doorbell_store_barrier();
+  doorbell_mmio_flush();
   q.bf_offset ^= q.dv_qp.bf.size;
 }
 
@@ -4881,8 +5185,39 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
     return;
   }
   const bool scheduled = (burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) != 0;
-  if (q.empw_enabled && segs == 1 && !scheduled) {
-    post_tx_burst_empw(q, burst);
+  if (q.empw_enabled && empw_compatible_burst(burst)) {
+    if (scheduled) {
+      // A timestamp breaks an eMPW session. Gate packet 0 with WAIT + SEND,
+      // then pack the remaining untimed packets into eMPW WQEs.
+      emit_wait_wqe(q, burst_ts_arr(burst)[0]);
+      uint8_t* const sq_buf = static_cast<uint8_t*>(q.dv_qp.sq.buf);
+      const uint32_t wqe_cnt = q.dv_qp.sq.wqe_cnt;
+      const uint32_t stride = q.dv_qp.sq.stride;
+      const uint32_t idx = q.sq_pi % wqe_cnt;
+      uint8_t* const seg = sq_buf + static_cast<size_t>(idx) * stride;
+      auto* const ctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(seg);
+      ctrl->opmod_idx_opcode =
+          htobe32(((q.sq_pi & 0xffff) << 8) | MLX5_OPCODE_SEND);
+      ctrl->qpn_ds = htobe32((q.sqn << 8) | 3u);
+      ctrl->signature = 0;
+      ctrl->dci_stream_channel_id = 0;
+      ctrl->fm_ce_se = (MLX5_COMP_ONLY_FIRST_ERR << MLX5_COMP_MODE_OFFSET);
+      ctrl->imm = 0;
+      memset(seg + 16, 0, 16);
+      reinterpret_cast<struct mlx5_wqe_eth_seg*>(seg + 16)->cs_flags =
+          MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
+      auto* const dseg = reinterpret_cast<struct mlx5_wqe_data_seg*>(seg + 32);
+      dseg->byte_count = htobe32(burst->pkt_lens[0][0]);
+      dseg->lkey = htobe32(q.regions[0].lkey);
+      dseg->addr = htobe64(reinterpret_cast<uint64_t>(burst->pkts[0][0]));
+      ++q.slots_posted;
+      q.wqe_slot_cum[idx] = q.slots_posted;
+      ++q.sq_pi;
+      q.wqe_wqebb_cum[idx] = q.sq_pi;
+      post_tx_burst_empw(q, burst, 1);
+    } else {
+      post_tx_burst_empw(q, burst);
+    }
     return;
   }
   static constexpr int SIGNAL_EVERY = 32;
@@ -4908,7 +5243,7 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
     ctrl->qpn_ds = htobe32((q.sqn << 8) | ds);
     ctrl->signature = 0;
     ctrl->dci_stream_channel_id = 0;
-    ctrl->fm_ce_se = signaled ? MLX5_WQE_CTRL_CQ_UPDATE : 0;
+    ctrl->fm_ce_se = tx_completion_mode(signaled);
     ctrl->imm = 0;
     // Minimal (16-byte) Ethernet segment, no inline headers: the NIC DMAs the
     // whole frame from the data segment. Request IPv4 + L4 checksum offload so
@@ -4937,9 +5272,10 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
   doorbell_store_barrier();  // WQEs visible before the doorbell record
   q.dv_qp.dbrec[MLX5_SND_DBR] = htobe32(static_cast<uint32_t>(q.sq_pi) & 0xffff);
   doorbell_store_barrier();  // doorbell record visible before the BF write
+  doorbell_mmio_flush();
   *reinterpret_cast<volatile uint64_t*>(static_cast<uint8_t*>(q.dv_qp.bf.reg) + q.bf_offset) =
       *reinterpret_cast<uint64_t*>(last_ctrl);
-  doorbell_store_barrier();
+  doorbell_mmio_flush();
   q.bf_offset ^= q.dv_qp.bf.size;
 }
 

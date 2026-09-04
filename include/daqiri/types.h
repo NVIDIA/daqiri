@@ -288,6 +288,7 @@ enum class Direction : uint8_t {
 enum class LoopbackType : uint8_t {
   DISABLED = 0,
   LOOPBACK_TYPE_SW = 1,
+  LOOPBACK_TYPE_HW = 2,
 };
 
 /**
@@ -490,7 +491,13 @@ inline EngineType engine_type_from_stream_type(StreamType stream_type,
                                                SocketProtocol protocol = SocketProtocol::INVALID) {
   switch (stream_type) {
     case StreamType::RAW:
+#if DAQIRI_ENGINE_IBVERBS
+      return EngineType::IBVERBS;
+#elif DAQIRI_ENGINE_DPDK
       return EngineType::DPDK;
+#else
+      return EngineType::UNKNOWN;
+#endif
     case StreamType::SOCKET:
       if (protocol == SocketProtocol::ROCE) { return EngineType::RDMA; }
       return EngineType::SOCKET;
@@ -781,10 +788,18 @@ struct EcpriMatch {
   uint16_t id_ = 0;  // pc_id (msg type 0/1) or rtc_id (msg type 2), at eCPRI offset 4
 };
 
+struct EthernetMatch {
+  bool match_src_ = false;
+  std::array<uint8_t, 6> src_{};
+  bool match_dst_ = false;
+  std::array<uint8_t, 6> dst_{};
+};
+
 enum class FlowMatchType {
   IPV4_UDP,
   FLEX_ITEM,
   ECPRI,
+  ETHERNET,
 };
 
 struct FlowMatch {
@@ -796,6 +811,7 @@ struct FlowMatch {
   in_addr_t ipv4_dst_ = INADDR_ANY;
   FlexItemMatch flex_item_match_;
   EcpriMatch ecpri_match_;
+  EthernetMatch ethernet_match_;
 };
 struct FlowConfig {
   std::string name_;

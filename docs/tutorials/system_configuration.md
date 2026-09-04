@@ -1599,7 +1599,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     ### Step 3: Maximize the NIC's MRRS via a systemd unit
 
-    `tune_system.py --set mrrs` writes `0x68.w`. On Spark, write to `CAP_EXP+8.w` (capability-relative) so the change is robust to capability-layout differences and easy to do in a unit file. **Secure Boot must be disabled** for `setpci` writes to succeed (otherwise the kernel's lockdown policy returns EPERM).
+    `tune_system.py --set mrrs` writes `CAP_EXP+8.w` (capability-relative), so the command is robust to capability-layout differences. **Secure Boot must be disabled** for `setpci` writes to succeed (otherwise the kernel's lockdown policy returns EPERM).
 
     ```bash
     cat << 'EOF' | sudo tee /etc/systemd/system/nic-mrrs.service
@@ -1609,7 +1609,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     [Service]
     Type=oneshot
-    ExecStart=/usr/bin/bash -c 'for d in 0000:01:00.0 0000:01:00.1 0002:01:00.0 0002:01:00.1; do setpci -s "$d" CAP_EXP+8.w=0x5000:0xf000; done'
+    ExecStart=/usr/bin/bash -c 'for d in 0000:01:00.0 0000:01:00.1 0002:01:00.0 0002:01:00.1; do setpci -s "$d" CAP_EXP+8.w=0x5000:0x7000; done'
     RemainAfterExit=true
 
     [Install]
@@ -1625,7 +1625,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     for d in 0000:01:00.0 0000:01:00.1 0002:01:00.0 0002:01:00.1; do
         sudo setpci -s "$d" CAP_EXP+8.w
     done
-    # Each line should print 5xxx (high nibble 5 = 4096-byte MRRS).
+    # Bits 14:12 should be 5 (4096-byte MRRS).
     ```
 
     ### Step 4: Enable Huge pages (grub drop-in pattern)

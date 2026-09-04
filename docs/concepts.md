@@ -38,16 +38,15 @@ the `stream_type` and the endpoint URI scheme:
 
 | Stream | Default engine | Notes |
 |---|---|---|
-| `stream_type: "raw"` | **`dpdk`** | kernel-bypass raw Ethernet |
-| `stream_type: "raw"` with `engine: "ibverbs"` | **`ibverbs`** (opt-in) | MPRQ raw Ethernet via libibverbs/DevX (Mellanox/mlx5) |
+| `stream_type: "raw"` | **`ibverbs`** | MPRQ raw Ethernet via libibverbs/DevX (Mellanox/mlx5) |
+| `stream_type: "raw"` with `engine: "dpdk"` | **`dpdk`** (opt-in) | DPDK kernel-bypass raw Ethernet |
 | `stream_type: "socket"` with `udp://`/`tcp://` endpoints | **built-in Linux sockets** | always available, nothing to build |
 | `stream_type: "socket"` with `roce://` endpoints | **`ibverbs`** | RDMA/RoCE via libibverbs |
 
 The engine concept exists so the implementation can be swapped without
 changing the stream type. For example, raw Ethernet is served by the
-`dpdk` engine by default but can instead use the `ibverbs` engine (a
-Multi-Packet/striding Receive Queue implementation) by setting
-`engine: "ibverbs"` on the stream. RoCE is served by the `ibverbs` engine,
+`ibverbs` Multi-Packet/striding Receive Queue engine by default but can instead
+use the `dpdk` engine by setting `engine: "dpdk"` on the stream. RoCE is served by the `ibverbs` engine,
 and a future release could add a DOCA RDMA engine as an alternative for the
 same `roce://` stream.
 
@@ -62,12 +61,10 @@ compiled in (`dpdk`, `ibverbs`); Linux sockets are always available. See
 Kernel-bypass raw Ethernet. The application talks directly to NIC ring
 buffers in user space, skipping the Linux network stack entirely. This
 is the highest-performance path and the only one with hardware flow
-steering (see [Flows](#flow) below). Implemented on top of
-[DPDK](https://www.dpdk.org/) by default. The DPDK dependency is an
-implementation detail, not a user-facing concept. Setting `engine: "ibverbs"`
-on the stream instead uses a pure-libibverbs/DevX Multi-Packet (striding)
-Receive Queue engine on Mellanox/mlx5 NICs, which packs many packets into one
-pre-posted buffer to avoid per-packet allocation.
+steering (see [Flows](#flow) below). The default pure-libibverbs/DevX
+Multi-Packet (striding) Receive Queue engine on Mellanox/mlx5 NICs packs many
+packets into one pre-posted buffer to avoid per-packet allocation. Set
+`engine: "dpdk"` to use the [DPDK](https://www.dpdk.org/) implementation instead.
 
 Requires an NVIDIA SmartNIC (ConnectX-6 Dx or later).
 
@@ -213,6 +210,13 @@ can have one segment or multiple segments:
   region. The memory regions can be of any kind (CPU or GPU) in any
   order. A common use case is *header-data split* (HDS) below.
 
+Each GPU device-memory region records the CUDA context that owns its
+allocation. When regions target different GPUs, DAQIRI temporarily activates
+each target GPU's primary context and restores the context that was current on
+entry. This preserves application-created and MPS contexts while allowing
+independent regions to use different GPUs. Cleanup similarly activates each
+region's recorded context only for the duration of the corresponding free.
+
 ### Header-Data Split (HDS)
 
 **Header-data split** is the canonical multi-segment configuration:
@@ -265,6 +269,11 @@ In **indirect mode**, the application and DAQIRI worker exchange bursts. The
 queue requires `cpu_core` and `batch_size`; RX queues may also use `timeout_us`
 to return a partial batch. `indirect` mode also allows more processing jitter in the application threads by using a zero-copy ring in between DAQIRI and the user. This is the existing behavior and is supported by
 all applicable engines.
+
+The DPDK engine permits multiple RX queues to share one worker core and multiple
+TX queues to share one worker core. An RX queue worker and a TX queue worker
+cannot share the same `cpu_core`, because DPDK permits only one remote worker
+function per lcore; such configurations are rejected during validation.
 
 In **direct mode**, there is no worker between the application and the queue.
 The application thread performs the queue work as part of its normal API calls:
@@ -348,6 +357,26 @@ rejects a rule. The YAML options are documented in
 <div class="packet-diagram" markdown="1">
 ![Flow steering](images/packet_diagrams/flow_steering/flow-steering.webp)
 </div>
+
+## Timed Transmission and Receive Timestamps
+
+DAQIRI uses PTP epoch nanoseconds in the `CLOCK_REALTIME` domain for both timed
+transmission and receive timestamps.
+
+When hardware receive timestamps are enabled, applications use
+`get_packet_rx_timestamp()` to read each packet's PTP epoch-nanosecond timestamp.
+Raw ibverbs devices that support mlx5 real-time CQ timestamps produce that
+representation directly; devices without that capability use the default mlx5
+device-clock CQ format, which DAQIRI converts internally before returning the
+timestamp. Applications never handle raw device-clock ticks.
+
+For timed transmission, applications pass the desired PTP epoch-nanosecond value
+directly to `set_packet_tx_time()`.
+
+**WARNING: PTP synchronization is required.** The host and NIC clocks must be
+synchronized, for example with `ptp4l` and `phc2sys`. DAQIRI does not validate
+that synchronization is working. Without it, receive timestamps and scheduled
+transmit times are invalid and may behave unpredictably.
 
 ## Memory Regions
 

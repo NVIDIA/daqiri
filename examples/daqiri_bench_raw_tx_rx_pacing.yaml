@@ -3,11 +3,11 @@
 # Packet-pacing demo: hardware-metered TX rate.
 #
 # This is daqiri_bench_raw_tx_rx.yaml with a per-queue pacing_mbps cap added to
-# the TX queue (no "engine" key, so it uses the default raw engine, DPDK). The
-# NIC meters the queue out so its average TX rate stays at or below the
-# configured value. To exercise the ibverbs path, add `engine: "ibverbs"` beside
-# `stream_type: "raw"`; it programs the mlx5 hardware packet-pacing rate table
-# for the TX QP and uses the device defaults for burst sizing.
+# the TX queue (no "engine" key, so it uses the default raw engine, ibverbs).
+# The NIC meters the queue out so its average TX rate stays at or below the
+# configured value. Add `engine: "dpdk"` beside `stream_type: "raw"` to exercise
+# the DPDK path instead. The ibverbs path programs the mlx5 hardware
+# packet-pacing rate table for the TX QP and uses the device defaults for burst sizing.
 #
 # Requirements: the DPDK path needs its hardware send-scheduling offload and
 # warns/runs at line rate without it. The ibverbs path requires RAW_PACKET packet

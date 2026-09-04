@@ -1,0 +1,129 @@
+# Single-port mlx5 hardware loopback for the pure ibverbs raw engine.
+#
+# Replace the PCI BDF, CPU cores, and destination MAC for your system. The
+# destination MAC must be this same port's MAC, for example:
+#   cat /sys/bus/pci/devices/<BDF>/net/*/address
+#
+# The NIC must remain enumerated when the cable is absent. Traffic traverses
+# the normal TX path, loops inside the NIC, and then enters the normal NIC_RX
+# flow-steering domain. This template pairs TX/RX queue 0 on UDP port 4096 and
+# TX/RX queue 1 on UDP port 4097.
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    engine: "ibverbs"
+    master_core: <3>
+    debug: false
+    log_level: "info"
+    loopback: "hw"
+
+    memory_regions:
+    - name: "Data_TX_GPU_0"
+      kind: "device"
+      affinity: 0
+      num_bufs: 16384
+      buf_size: 8192
+    - name: "Data_TX_GPU_1"
+      kind: "device"
+      affinity: 0
+      num_bufs: 16384
+      buf_size: 8192
+    - name: "Data_RX_GPU_0"
+      kind: "device"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8192
+    - name: "Data_RX_GPU_1"
+      kind: "device"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 8192
+
+    interfaces:
+    - name: "loopback_port"
+      address: <0000:00:00.0>
+      tx:
+        queues:
+        - name: "tx_q_0"
+          id: 0
+          batch_size: 10240
+          cpu_core: <11>
+          memory_regions:
+            - "Data_TX_GPU_0"
+          offloads:
+            - "tx_eth_src"
+        - name: "tx_q_1"
+          id: 1
+          batch_size: 10240
+          cpu_core: <10>
+          memory_regions:
+            - "Data_TX_GPU_1"
+          offloads:
+            - "tx_eth_src"
+      rx:
+        flow_isolation: true
+        queues:
+        - name: "rx_q_0"
+          id: 0
+          cpu_core: <9>
+          batch_size: 10240
+          memory_regions:
+            - "Data_RX_GPU_0"
+        - name: "rx_q_1"
+          id: 1
+          cpu_core: <8>
+          batch_size: 10240
+          memory_regions:
+            - "Data_RX_GPU_1"
+        flows:
+        - name: "flow_0"
+          id: 0
+          action:
+            type: queue
+            id: 0
+          match:
+            udp_src: 4096
+            udp_dst: 4096
+        - name: "flow_1"
+          id: 1
+          action:
+            type: queue
+            id: 1
+          match:
+            udp_src: 4097
+            udp_dst: 4097
+
+bench_rx:
+- interface_name: "loopback_port"
+  queue_id: 0
+  cpu_core: <7>
+- interface_name: "loopback_port"
+  queue_id: 1
+  cpu_core: <6>
+
+bench_tx:
+- interface_name: "loopback_port"
+  queue_id: 0
+  cpu_core: <5>
+  batch_size: 10240
+  payload_size: 8000
+  header_size: 64
+  eth_dst_addr: <00:00:00:00:00:00>
+  ip_src_addr: <1.2.3.4>
+  ip_dst_addr: <5.6.7.8>
+  udp_src_port: 4096
+  udp_dst_port: 4096
+- interface_name: "loopback_port"
+  queue_id: 1
+  cpu_core: <4>
+  batch_size: 10240
+  payload_size: 8000
+  header_size: 64
+  eth_dst_addr: <00:00:00:00:00:00>
+  ip_src_addr: <1.2.3.5>
+  ip_dst_addr: <5.6.7.9>
+  udp_src_port: 4097
+  udp_dst_port: 4097

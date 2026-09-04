@@ -19,6 +19,7 @@
 
 #include "src/daqiri_ring.h"
 #include <daqiri/types.h>
+#include <cuda.h>
 #include <optional>
 
 // Forward declarations of the DPDK types used only by the DPDK engine. Keeping
@@ -46,6 +47,7 @@ struct AllocRegion {
   void* ptr_ = nullptr;
   size_t size_ = 0;
   int affinity_ = -1;
+  CUcontext cuda_context_ = nullptr;
   Deallocator deallocator_ = Deallocator::NONE;
 };
 
@@ -106,8 +108,8 @@ class Engine {
   virtual Status get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info);
   virtual void free_rx_metadata(BurstParams* burst) = 0;
   virtual void free_tx_metadata(BurstParams* burst) = 0;
-  virtual Status get_tx_metadata_buffer(BurstParams** burst) = 0;
   virtual Status send_tx_burst(BurstParams* burst) = 0;
+  virtual Status wait_for_tx_idle(uint32_t timeout_ms);
   virtual Status get_mac_addr(int port, char* mac) = 0;
   virtual Status drop_all_traffic(int port);
   virtual Status allow_all_traffic(int port);

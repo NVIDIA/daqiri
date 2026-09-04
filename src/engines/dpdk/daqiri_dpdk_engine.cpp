@@ -455,6 +455,10 @@ struct TxWorkerParams {
   uint64_t pace_rem = 0;
 };
 
+struct TxWorkerMultiQParams {
+  std::vector<TxWorkerParams> q_params;
+};
+
 struct RxWorkerParams {
   int port;
   int queue;
@@ -500,26 +504,19 @@ struct UDPPkt {
   uint8_t payload[];
 } __attribute__((packed));
 
-static inline uint64_t convert_rx_timestamp_ticks_to_ns(uint64_t timestamp,
-                                                        const RxTimestampConversion& conversion) {
-  if (!conversion.valid || conversion.ticks_per_second == 0) { return 0; }
-  const auto ns = (static_cast<unsigned __int128>(timestamp) * 1000000000ULL) /
-                  conversion.ticks_per_second;
-  return static_cast<uint64_t>(ns);
-}
-
+// The DPDK timestamp dynamic field is the public timestamp value: unsigned
+// 64-bit PTP epoch nanoseconds in the PTP-synchronized CLOCK_REALTIME domain.
+// Do not calibrate or scale it. DAQIRI relies on external PTP synchronization
+// and does not validate that synchronization here.
 static inline bool extract_mbuf_rx_timestamp_ns(struct rte_mbuf* mbuf,
                                                 int timestamp_offset,
                                                 uint64_t timestamp_mask,
-                                                const RxTimestampConversion& conversion,
                                                 uint64_t* timestamp_ns) {
   if (mbuf == nullptr || timestamp_ns == nullptr || timestamp_offset < 0 || timestamp_mask == 0) {
     return false;
   }
-  if (!conversion.valid || conversion.ticks_per_second == 0) { return false; }
   if ((mbuf->ol_flags & timestamp_mask) == 0) { return false; }
-  const uint64_t timestamp_ticks = *RTE_MBUF_DYNFIELD(mbuf, timestamp_offset, uint64_t*);
-  *timestamp_ns = convert_rx_timestamp_ticks_to_ns(timestamp_ticks, conversion);
+  *timestamp_ns = *RTE_MBUF_DYNFIELD(mbuf, timestamp_offset, uint64_t*);
   return true;
 }
 
@@ -1145,7 +1142,6 @@ Status DpdkEngine::append_reorder_packet(ReorderPlanRuntime& plan,
         extract_mbuf_rx_timestamp_ns(mbuf,
                                      timestamp_dynfield_offset_,
                                      rx_timestamp_dynflag_mask_,
-                                     rx_timestamp_conversions_[plan.port_id],
                                      &batch.first_packet_rx_timestamp_ns);
     const uint32_t pkt_len = mbuf != nullptr ? mbuf->pkt_len : 0U;
     uint32_t copy_len = 0;
@@ -1880,81 +1876,6 @@ bool DpdkEngine::setup_rx_timestamp_dynfield() {
   return true;
 }
 
-bool DpdkEngine::calibrate_rx_timestamp_clock(uint16_t port_id) {
-  uint64_t start_clock = 0;
-  int ret = rte_eth_read_clock(port_id, &start_clock);
-  if (ret < 0) {
-    rte_eth_dev_info dev_info{};
-    const int info_ret = rte_eth_dev_info_get(port_id, &dev_info);
-    const std::string driver_name =
-        (info_ret == 0 && dev_info.driver_name != nullptr) ? dev_info.driver_name : "";
-    if (ret == -ENOTSUP && driver_name.find("mlx5") != std::string::npos) {
-      rx_timestamp_conversions_[port_id].valid = true;
-      rx_timestamp_conversions_[port_id].ticks_per_second = 1000000000ULL;
-      DAQIRI_LOG_WARN(
-          "rte_eth_read_clock() is not supported on mlx5 port {}; treating PMD-provided "
-          "RX hardware timestamps as nanoseconds",
-          port_id);
-      return true;
-    }
-
-    DAQIRI_LOG_CRITICAL(
-        "RX hardware timestamps require rte_eth_read_clock() for nanosecond conversion, "
-        "but port {} returned err={} ({})",
-        port_id,
-        ret,
-        rte_strerror(-ret));
-    return false;
-  }
-
-  const auto start_time = std::chrono::steady_clock::now();
-  rte_delay_us_block(100000);
-
-  uint64_t end_clock = 0;
-  ret = rte_eth_read_clock(port_id, &end_clock);
-  if (ret < 0) {
-    DAQIRI_LOG_CRITICAL(
-        "RX hardware timestamp clock calibration failed on port {}: err={} ({})",
-        port_id,
-        ret,
-        rte_strerror(-ret));
-    return false;
-  }
-
-  const auto elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                              std::chrono::steady_clock::now() - start_time)
-                              .count();
-  if (elapsed_ns <= 0 || end_clock <= start_clock) {
-    DAQIRI_LOG_CRITICAL(
-        "RX hardware timestamp clock calibration produced an invalid sample on port {} "
-        "(start={}, end={}, elapsed_ns={})",
-        port_id,
-        start_clock,
-        end_clock,
-        elapsed_ns);
-    return false;
-  }
-
-  const uint64_t delta_ticks = end_clock - start_clock;
-  const auto ticks_per_second =
-      (static_cast<unsigned __int128>(delta_ticks) * 1000000000ULL +
-       static_cast<uint64_t>(elapsed_ns / 2)) /
-      static_cast<uint64_t>(elapsed_ns);
-  if (ticks_per_second == 0 ||
-      ticks_per_second > static_cast<unsigned __int128>(std::numeric_limits<uint64_t>::max())) {
-    DAQIRI_LOG_CRITICAL(
-        "RX hardware timestamp clock calibration produced an invalid frequency on port {}",
-        port_id);
-    return false;
-  }
-
-  rx_timestamp_conversions_[port_id].valid = true;
-  rx_timestamp_conversions_[port_id].ticks_per_second = static_cast<uint64_t>(ticks_per_second);
-  DAQIRI_LOG_INFO("Calibrated RX timestamp clock for port {} at {} ticks/second",
-                  port_id,
-                  rx_timestamp_conversions_[port_id].ticks_per_second);
-  return true;
-}
 
 bool DpdkEngine::setup_tx_timestamp_dynfield() {
   static bool done = false;
@@ -1994,14 +1915,8 @@ uint64_t DpdkEngine::now_tx_ns(uint16_t port) {
   // clock, so prefer it.
   uint64_t clk = 0;
   if (rte_eth_read_clock(port, &clk) == 0) {
-    const uint64_t tps =
-        (port < rx_timestamp_conversions_.size() && rx_timestamp_conversions_[port].valid)
-            ? rx_timestamp_conversions_[port].ticks_per_second
-            : 0;
-    // With REAL_TIME_CLOCK_ENABLE the device clock already counts nanoseconds, so
-    // an uncalibrated tps (no RX-timestamp path active) means clk is ns as-is.
-    if (tps == 0 || tps == 1000000000ULL) { return clk; }
-    return static_cast<uint64_t>(static_cast<unsigned __int128>(clk) * 1000000000ULL / tps);
+    // REAL_TIME_CLOCK_ENABLE exposes the NIC PTP clock directly in nanoseconds.
+    return clk;
   }
   // Fallback: rte_eth_read_clock unsupported. The NIC PTP clock free-runs from ~0
   // at driver load (unless a PTP daemon disciplines it), tracking CLOCK_MONOTONIC,
@@ -2140,7 +2055,21 @@ void DpdkEngine::initialize() {
   for (int i = 0; i < max_nargs; i++) { _argv[i] = (char*)malloc(max_arg_size); }
 
   int arg = 0;
-  std::string cores = std::to_string(cfg_.common_.master_core_) + ",";  // Master core must be first
+  std::string cores;
+  std::unordered_set<std::string> seen_cores;
+  const auto append_core = [&](const std::string &core) {
+    if (!seen_cores.emplace(core).second) {
+      return;
+    }
+    if (!cores.empty()) {
+      cores += ",";
+    }
+    cores += core;
+  };
+
+  // DPDK selects the first listed lcore as its main lcore. A worker may serve
+  // several queues, but rte_eal_init() rejects duplicate entries in -l.
+  append_core(std::to_string(cfg_.common_.master_core_));
   std::set<std::string> ifs;
 
   std::unordered_map<uint16_t, std::string> port_id_to_name;
@@ -2174,12 +2103,15 @@ void DpdkEngine::initialize() {
     }
 
     ifs.emplace(intf.address_);
-    for (const auto& q : intf.rx_.queues_) { cores += q.common_.cpu_core_ + ","; }
+    for (const auto &q : intf.rx_.queues_) {
+      append_core(q.common_.cpu_core_);
+    }
 
-    for (const auto& q : intf.tx_.queues_) { cores += q.common_.cpu_core_ + ","; }
+    for (const auto &q : intf.tx_.queues_) {
+      append_core(q.common_.cpu_core_);
+    }
   }
 
-  cores = cores.substr(0, cores.size() - 1);
   // Get a unique set of interfaces
   num_ports = ifs.size();
   DAQIRI_LOG_INFO("Attempting to use {} ports for high-speed network", num_ports);
@@ -2764,7 +2696,11 @@ void DpdkEngine::initialize() {
                         conf_ports_eth_addr[intf.port_id_].addr_bytes[4],
                         conf_ports_eth_addr[intf.port_id_].addr_bytes[5]);
 
-      if (rx.hardware_timestamps_ && !calibrate_rx_timestamp_clock(intf.port_id_)) { return; }
+      if (rx.hardware_timestamps_) {
+        DAQIRI_LOG_INFO(
+            "Using driver-provided RX hardware timestamps as PTP epoch nanoseconds on port {}",
+            intf.port_id_);
+      }
 
       // Standard (group 3), flex-item (group 1) and eCPRI (group 2) flows use
       // separate DPDK flow groups with conflicting group-0 jump rules;
@@ -2777,8 +2713,8 @@ void DpdkEngine::initialize() {
         struct rte_flow* created = nullptr;
         const FlowAction queue_action = flow_queue_action(flow_config_actions(flow));
         if (flow.match_.type_ == FlowMatchType::FLEX_ITEM) {
-          created = add_flex_item_flow(intf.port_id_, flow.match_.flex_item_match_, queue_action,
-                                       flow.id_);
+          created = add_flex_item_flow(intf.port_id_, flow.match_.flex_item_match_,
+                                       flow.match_.ethernet_match_, queue_action, flow.id_);
           if (created != nullptr) {
             has_flex_item_flows = true;
           }
@@ -3248,6 +3184,10 @@ bool DpdkEngine::validate_dynamic_rx_flow(int port, const FlowRuleConfig& flow) 
     return false;
   }
   if (is_ipv4_udp_flow_match(flow.match_)) { return true; }
+  if (flow.match_.type_ == FlowMatchType::ETHERNET) {
+    return flow.match_.ethernet_match_.match_src_ ||
+           flow.match_.ethernet_match_.match_dst_;
+  }
   if (flow.match_.type_ == FlowMatchType::FLEX_ITEM) {
     if (find_flex_item_config(cfg_, port, flow.match_.flex_item_match_.flex_item_id_) == nullptr) {
       DAQIRI_LOG_ERROR("Dynamic RX flow references invalid flex item ID {}",
@@ -3567,7 +3507,8 @@ Status DpdkEngine::create_dynamic_flow_legacy_locked(int port,
   struct rte_flow* rte_flow = nullptr;
   std::shared_ptr<DpdkFlowResource> resource;
   if (cfg.match_.type_ == FlowMatchType::FLEX_ITEM) {
-    rte_flow = add_flex_item_flow(port, cfg.match_.flex_item_match_, cfg.action_, cfg.id_, false);
+    rte_flow = add_flex_item_flow(port, cfg.match_.flex_item_match_,
+                                  cfg.match_.ethernet_match_, cfg.action_, cfg.id_, false);
   } else if (cfg.match_.type_ == FlowMatchType::ECPRI) {
     rte_flow = add_ecpri_flow(port, cfg, false);
   } else {
@@ -4404,6 +4345,7 @@ void DpdkEngine::destroy_owned_flows() {
 }
 
 struct rte_flow* DpdkEngine::add_flex_item_flow(int port, const FlexItemMatch& match_info,
+                                                const EthernetMatch& ethernet_match,
                                                 const FlowAction& queue_action, FlowId mark_id,
                                                 bool track) {
   /* Declaring structs being used. 8< */
@@ -4414,6 +4356,8 @@ struct rte_flow* DpdkEngine::add_flex_item_flow(int port, const FlexItemMatch& m
   DpdkRxDestination destination(queue_action);
   struct rte_flow_action_mark mark = {.id = mark_id};
   struct rte_flow_error error;
+  struct rte_flow_item_eth eth_spec;
+  struct rte_flow_item_eth eth_mask;
   struct rte_flow_item_udp udp_spec;
   struct rte_flow_item_udp udp_mask;
   struct rte_flow_item_ipv4  ip_spec;
@@ -4430,6 +4374,8 @@ struct rte_flow* DpdkEngine::add_flex_item_flow(int port, const FlexItemMatch& m
   memset(pattern, 0, sizeof(pattern));
   memset(action, 0, sizeof(action));
   memset(&attr, 0, sizeof(struct rte_flow_attr));
+  memset(&eth_spec, 0, sizeof(struct rte_flow_item_eth));
+  memset(&eth_mask, 0, sizeof(struct rte_flow_item_eth));
   memset(&ip_spec, 0, sizeof(struct rte_flow_item_ipv4));
   memset(&ip_mask, 0, sizeof(struct rte_flow_item_ipv4));
   memset(&udp_spec, 0, sizeof(struct rte_flow_item_udp));
@@ -4444,6 +4390,20 @@ struct rte_flow* DpdkEngine::add_flex_item_flow(int port, const FlexItemMatch& m
   action[action_index].type = RTE_FLOW_ACTION_TYPE_END;
 
   pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
+  if (ethernet_match.match_dst_) {
+    std::memcpy(eth_spec.hdr.dst_addr.addr_bytes, ethernet_match.dst_.data(),
+                ethernet_match.dst_.size());
+    std::memset(eth_mask.hdr.dst_addr.addr_bytes, 0xff, ethernet_match.dst_.size());
+  }
+  if (ethernet_match.match_src_) {
+    std::memcpy(eth_spec.hdr.src_addr.addr_bytes, ethernet_match.src_.data(),
+                ethernet_match.src_.size());
+    std::memset(eth_mask.hdr.src_addr.addr_bytes, 0xff, ethernet_match.src_.size());
+  }
+  if (ethernet_match.match_src_ || ethernet_match.match_dst_) {
+    pattern[0].spec = &eth_spec;
+    pattern[0].mask = &eth_mask;
+  }
   pattern[1].type = RTE_FLOW_ITEM_TYPE_IPV4;
   //  pattern[3].type = RTE_FLOW_ITEM_TYPE_FLEX; // defined later
   pattern[4].type = RTE_FLOW_ITEM_TYPE_END;
@@ -4924,6 +4884,8 @@ struct rte_flow* DpdkEngine::add_flow(int port,
   DpdkRxDestination destination(flow_queue_action(flow_actions), hash_inner ? 2 : 0);
   struct rte_flow_action_mark  mark = {.id = cfg.id_};
   struct rte_flow_error error {};
+  struct rte_flow_item_eth eth_spec {};
+  struct rte_flow_item_eth eth_mask {};
   struct rte_flow_item_udp udp_spec {};
   struct rte_flow_item_udp udp_mask {};
   struct rte_flow_item_ipv4 ip_spec {};
@@ -4936,20 +4898,21 @@ struct rte_flow* DpdkEngine::add_flow(int port,
   resource->action_storage.reserve(flow_actions.size() * 2 + 2);
 
   const bool use_rss = destination.queue_ids.size() > 1;
-  int required_pattern_items = 1 + normal_match_pattern_item_count(cfg.match_, use_rss) + 1;
+  const bool force_ipv4_udp = use_rss && cfg.match_.type_ != FlowMatchType::ETHERNET;
+  int required_pattern_items = 1 + normal_match_pattern_item_count(cfg.match_, force_ipv4_udp) + 1;
   int required_action_items = 2 + 1;
   for (const auto& flow_action : flow_actions) {
     required_pattern_items += transform_pattern_item_count(flow_action);
     required_action_items += transform_action_item_count(flow_action);
   }
   if (required_pattern_items > MAX_PATTERN_NUM) {
-    DAQIRI_LOG_CRITICAL("RX flow '{}' requires {} DPDK pattern entries, maximum is {}",
-                        cfg.name_, required_pattern_items, MAX_PATTERN_NUM);
+    DAQIRI_LOG_CRITICAL("RX flow '{}' requires {} DPDK pattern entries, maximum is {}", cfg.name_,
+                        required_pattern_items, MAX_PATTERN_NUM);
     return nullptr;
   }
   if (required_action_items > MAX_ACTION_NUM) {
-    DAQIRI_LOG_CRITICAL("RX flow '{}' requires {} DPDK action entries, maximum is {}",
-                        cfg.name_, required_action_items, MAX_ACTION_NUM);
+    DAQIRI_LOG_CRITICAL("RX flow '{}' requires {} DPDK action entries, maximum is {}", cfg.name_,
+                        required_action_items, MAX_ACTION_NUM);
     return nullptr;
   }
 
@@ -4968,13 +4931,30 @@ struct rte_flow* DpdkEngine::add_flow(int port,
       has_outer_transform = true;
     }
   }
-  pattern[pi++].type = RTE_FLOW_ITEM_TYPE_ETH;
-  append_normal_match(pattern, &pi, cfg.match_, &ip_spec, &ip_mask, &udp_spec, &udp_mask, use_rss);
+  pattern[pi].type = RTE_FLOW_ITEM_TYPE_ETH;
+  const auto& ethernet = cfg.match_.ethernet_match_;
+  if (ethernet.match_src_ || ethernet.match_dst_) {
+    if (ethernet.match_dst_) {
+      std::memcpy(eth_spec.hdr.dst_addr.addr_bytes, ethernet.dst_.data(), ethernet.dst_.size());
+      std::memset(eth_mask.hdr.dst_addr.addr_bytes, 0xff, ethernet.dst_.size());
+    }
+    if (ethernet.match_src_) {
+      std::memcpy(eth_spec.hdr.src_addr.addr_bytes, ethernet.src_.data(), ethernet.src_.size());
+      std::memset(eth_mask.hdr.src_addr.addr_bytes, 0xff, ethernet.src_.size());
+    }
+    pattern[pi].spec = &eth_spec;
+    pattern[pi].mask = &eth_mask;
+  }
+  ++pi;
+  append_normal_match(pattern, &pi, cfg.match_, &ip_spec, &ip_mask, &udp_spec, &udp_mask,
+                      force_ipv4_udp);
   pattern[pi].type = RTE_FLOW_ITEM_TYPE_END;
 
   int ai = 0;
   for (const auto& flow_action : flow_actions) {
-    if (flow_action.type_ == FlowType::QUEUE) { continue; }
+    if (flow_action.type_ == FlowType::QUEUE) {
+      continue;
+    }
     if (!append_transform_action(action, &ai, *resource, flow_action)) {
       DAQIRI_LOG_CRITICAL("Failed to build RX action '{}' for flow '{}'",
                           flow_type_to_string(flow_action.type_), cfg.name_);
@@ -5120,6 +5100,15 @@ struct rte_flow* DpdkEngine::add_ecpri_flow(int port, const FlowConfig& cfg, boo
   action[action_index].type = RTE_FLOW_ACTION_TYPE_END;
 
   // Pin the eCPRI EtherType so the rule only fires on eCPRI-over-Ethernet frames.
+  const auto& ethernet = cfg.match_.ethernet_match_;
+  if (ethernet.match_dst_) {
+    std::memcpy(eth_spec.hdr.dst_addr.addr_bytes, ethernet.dst_.data(), ethernet.dst_.size());
+    std::memset(eth_mask.hdr.dst_addr.addr_bytes, 0xff, ethernet.dst_.size());
+  }
+  if (ethernet.match_src_) {
+    std::memcpy(eth_spec.hdr.src_addr.addr_bytes, ethernet.src_.data(), ethernet.src_.size());
+    std::memset(eth_mask.hdr.src_addr.addr_bytes, 0xff, ethernet.src_.size());
+  }
   eth_spec.hdr.ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_ECPRI);
   eth_mask.hdr.ether_type = 0xffff;
   pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
@@ -5778,6 +5767,37 @@ bool DpdkEngine::validate_config() const {
     }
   }
 
+  // DPDK can launch only one worker function on a given remote lcore. Multiple
+  // queues in the same direction may share a worker, but an RX worker and a TX
+  // worker cannot independently occupy the same lcore.
+  std::set<int> rx_worker_cores;
+  for (const auto& intf : cfg_.ifs_) {
+    for (const auto& q : intf.rx_.queues_) {
+      if (q.common_.name_.find("UNUSED") == 0 || q.common_.cpu_core_.empty()) {
+        continue;
+      }
+      rx_worker_cores.insert(
+          static_cast<int>(strtol(q.common_.cpu_core_.c_str(), nullptr, 10)));
+    }
+  }
+  for (const auto& intf : cfg_.ifs_) {
+    for (const auto& q : intf.tx_.queues_) {
+      if (q.common_.name_.find("UNUSED_TX_P") == 0 ||
+          q.common_.cpu_core_.empty()) {
+        continue;
+      }
+      const int core =
+          static_cast<int>(strtol(q.common_.cpu_core_.c_str(), nullptr, 10));
+      if (rx_worker_cores.count(core) != 0) {
+        DAQIRI_LOG_ERROR(
+            "DPDK RX and TX queue workers cannot share cpu_core {}; assign "
+            "different cores across directions",
+            core);
+        return false;
+      }
+    }
+  }
+
   DAQIRI_LOG_INFO("Config validated successfully");
   return true;
 }
@@ -5794,15 +5814,12 @@ void DpdkEngine::run() {
   DAQIRI_LOG_INFO("Starting DAQIRI workers");
 
   // determine the correct process types for input/output
-  int (*rx_worker)(void*);
-  int (*tx_worker)(void*);
+  int (*rx_worker)(void *);
 
   if (loopback_ != LoopbackType::LOOPBACK_TYPE_SW) {
     rx_worker = rx_core_worker;
-    tx_worker = tx_core_worker;
   } else {
     rx_worker = rx_lb_worker;
-    tx_worker = tx_lb_worker;
   }
 
   // Launch RX workers. If the core is serving multiple queues then we launch a multi-q worker
@@ -5864,7 +5881,8 @@ void DpdkEngine::run() {
     }
   }
 
-  for (const auto& intf : cfg_.ifs_) {
+  std::map<int, TxWorkerMultiQParams *> tx_core_params;
+  for (const auto &intf : cfg_.ifs_) {
     if (intf.tx_.queues_.size() > 0) {
       const auto& tx = intf.tx_;
       for (auto& q : tx.queues_) {
@@ -5873,8 +5891,20 @@ void DpdkEngine::run() {
           continue;
         }
 
+        const int tx_core = strtol(q.common_.cpu_core_.c_str(), NULL, 10);
+        TxWorkerParams *params;
+        if (loopback_ == LoopbackType::LOOPBACK_TYPE_SW) {
+          params = new TxWorkerParams{};
+        } else {
+          auto &core_params = tx_core_params[tx_core];
+          if (core_params == nullptr) {
+            core_params = new TxWorkerMultiQParams;
+          }
+          core_params->q_params.emplace_back();
+          params = &core_params->q_params.back();
+        }
+
         uint32_t key = generate_queue_key(intf.port_id_, q.common_.id_);
-        auto params = new TxWorkerParams;
         //  params->hds    = q.common_.hds_ > 0;
         params->port = intf.port_id_;
         params->ring = tx_rings[key];
@@ -5901,9 +5931,31 @@ void DpdkEngine::run() {
                 intf.port_id_, q.common_.id_, q.pacing_mbps_);
           }
         }
-        rte_eal_remote_launch(
-            tx_worker, (void*)params, strtol(q.common_.cpu_core_.c_str(), NULL, 10));
+        if (loopback_ == LoopbackType::LOOPBACK_TYPE_SW) {
+          const int ret =
+              rte_eal_remote_launch(tx_lb_worker, (void *)params, tx_core);
+          if (ret != 0) {
+            DAQIRI_LOG_CRITICAL(
+                "Failed to launch TX loopback worker on core {}: {}", tx_core,
+                rte_strerror(-ret));
+            delete params;
+            force_quit.store(true);
+            return;
+          }
+        }
       }
+    }
+  }
+
+  for (auto &[core, params] : tx_core_params) {
+    const int ret = rte_eal_remote_launch(tx_core_worker, (void *)params, core);
+    if (ret != 0) {
+      DAQIRI_LOG_CRITICAL(
+          "Failed to launch multi-queue TX worker on core {}: {}", core,
+          rte_strerror(-ret));
+      delete params;
+      force_quit.store(true);
+      return;
     }
   }
 
@@ -6356,106 +6408,172 @@ int DpdkEngine::rx_lb_worker(void* arg) {
   return 0;
 }
 
-int DpdkEngine::tx_core_worker(void* arg) {
-  TxWorkerParams* tparams = (TxWorkerParams*)arg;
-  uint64_t seq;
-  uint64_t ttl_pkts_tx = 0;
-  BurstParams* msg;
-  int64_t bursts = 0;
-
-  DAQIRI_LOG_INFO("Starting TX Core {}, port {}, queue {} socket {} using burst pool {} ring {}",
-                    rte_lcore_id(),
-                    tparams->port,
-                    tparams->queue,
-                    rte_socket_id(),
-                    (void*)tparams->burst_pool,
-                    (void*)tparams->ring);
+int DpdkEngine::tx_core_worker(void *arg) {
+  auto *params = static_cast<TxWorkerMultiQParams *>(arg);
+  std::vector<uint64_t> total_packets(params->q_params.size(), 0);
+  std::vector<BurstParams *> active_bursts(params->q_params.size(), nullptr);
+  std::vector<size_t> packets_sent(params->q_params.size(), 0);
+  std::string queues;
+  for (const auto &q : params->q_params) {
+    if (!queues.empty()) {
+      queues += " ";
+    }
+    queues += std::to_string(q.port) + "/" + std::to_string(q.queue);
+  }
+  DAQIRI_LOG_INFO("Starting multi-queue TX Core {}, P/Q: {}, socket {}",
+                  rte_lcore_id(), queues, rte_socket_id());
 
   while (!force_quit.load()) {
-    if (rte_ring_dequeue(tparams->ring, reinterpret_cast<void**>(&msg)) != 0) {
-      continue;
-    }
-
-    // Scatter mode needs to chain all the buffers
-    if (msg->hdr.hdr.num_segs > 1) {
-      for (size_t p = 0; p < msg->hdr.hdr.num_pkts; p++) {
-        for (int seg = 0; seg < msg->hdr.hdr.num_segs - 1; seg++) {
-          auto* mbuf = reinterpret_cast<struct rte_mbuf*>(msg->pkts[seg][p]);
-          mbuf->next = reinterpret_cast<struct rte_mbuf*>(msg->pkts[seg + 1][p]);
+    for (std::size_t queue_index = 0; queue_index < params->q_params.size();
+         ++queue_index) {
+      auto *tparams = &params->q_params[queue_index];
+      auto *&msg = active_bursts[queue_index];
+      auto &pkts_tx = packets_sent[queue_index];
+      bool acquired = false;
+      if (msg == nullptr) {
+        if (rte_ring_dequeue(tparams->ring, reinterpret_cast<void **>(&msg)) !=
+            0) {
+          continue;
         }
-
-        // The next pointer of the last segment should be nullptr
-        reinterpret_cast<struct rte_mbuf*>(msg->pkts[msg->hdr.hdr.num_segs - 1][p])->next = nullptr;
-        reinterpret_cast<struct rte_mbuf*>(msg->pkts[0][p])->nb_segs = msg->hdr.hdr.num_segs;
+        pkts_tx = 0;
+        acquired = true;
       }
-    }
 
-    // Packet pacing: meter this queue at (at most) pacing_mbps on average by
-    // gating each burst behind the NIC SEND_ON_TIMESTAMP scheduler. Tag only the
-    // first packet of the burst with a scheduled release time -- the NIC holds it
-    // (one WAIT) until pace_next_ns and sends the rest of the burst right after,
-    // so no per-packet schedule is needed. pace_next_ns then advances by the time
-    // the burst's L2 frame bytes take at the configured rate.
-    if (tparams->pacing_mbps > 0 && tparams->tx_ts_dynfield_offset >= 0 &&
-        msg->hdr.hdr.num_pkts > 0) {
-      const uint64_t now = tparams->engine->now_tx_ns(static_cast<uint16_t>(tparams->port));
-      // Seed on the first burst, and never let an idle gap accrue send credit: if
-      // the virtual clock has fallen behind real time, restart it at now so a
-      // backlog cannot burst above the configured rate.
-      if (tparams->pace_next_ns == 0 || tparams->pace_next_ns < now) {
-        tparams->pace_next_ns = now;
-        tparams->pace_rem = 0;
-      }
-      auto* m0 = reinterpret_cast<struct rte_mbuf*>(msg->pkts[0][0]);
-      m0->ol_flags |= tparams->tx_ts_dynflag_mask;
-      *RTE_MBUF_DYNFIELD(m0, tparams->tx_ts_dynfield_offset, uint64_t*) = tparams->pace_next_ns;
-      // ns = bytes * 8 bits / (Mbps * 1e6 bits/s) * 1e9 ns/s = 8000 * bytes / Mbps.
-      // Carry the division remainder so the long-run average is exactly pacing_mbps.
-      // The set_*_packet_lengths helpers maintain hdr.nbytes as the burst's L2 byte
-      // total; use it directly to avoid walking the burst. Fall back to a walk for
-      // bursts populated without those helpers (nbytes left at 0).
-      uint64_t bytes = msg->hdr.hdr.nbytes;
-      if (bytes == 0) {
+      // Scatter mode needs to chain all the buffers
+      if (acquired && msg->hdr.hdr.num_segs > 1) {
         for (size_t p = 0; p < msg->hdr.hdr.num_pkts; p++) {
-          bytes += reinterpret_cast<struct rte_mbuf*>(msg->pkts[0][p])->pkt_len;
+          for (int seg = 0; seg < msg->hdr.hdr.num_segs - 1; seg++) {
+            auto *mbuf = reinterpret_cast<struct rte_mbuf *>(msg->pkts[seg][p]);
+            mbuf->next =
+                reinterpret_cast<struct rte_mbuf *>(msg->pkts[seg + 1][p]);
+          }
+
+          // The next pointer of the last segment should be nullptr
+          reinterpret_cast<struct rte_mbuf *>(
+              msg->pkts[msg->hdr.hdr.num_segs - 1][p])
+              ->next = nullptr;
+          reinterpret_cast<struct rte_mbuf *>(msg->pkts[0][p])->nb_segs =
+              msg->hdr.hdr.num_segs;
         }
       }
-      const uint64_t numer = 8000ULL * bytes + tparams->pace_rem;
-      tparams->pace_next_ns += numer / tparams->pacing_mbps;
-      tparams->pace_rem = numer % tparams->pacing_mbps;
+
+      // Packet pacing: meter this queue at (at most) pacing_mbps on average by
+      // gating each burst behind the NIC SEND_ON_TIMESTAMP scheduler. Tag only
+      // the first packet of the burst with a scheduled release time -- the NIC
+      // holds it (one WAIT) until pace_next_ns and sends the rest of the burst
+      // right after, so no per-packet schedule is needed. pace_next_ns then
+      // advances by the time the burst's L2 frame bytes take at the configured
+      // rate.
+      if (acquired && tparams->pacing_mbps > 0 && tparams->tx_ts_dynfield_offset >= 0 &&
+          msg->hdr.hdr.num_pkts > 0) {
+        const uint64_t now =
+            tparams->engine->now_tx_ns(static_cast<uint16_t>(tparams->port));
+        // Seed on the first burst, and never let an idle gap accrue send
+        // credit: if the virtual clock has fallen behind real time, restart it
+        // at now so a backlog cannot burst above the configured rate.
+        if (tparams->pace_next_ns == 0 || tparams->pace_next_ns < now) {
+          tparams->pace_next_ns = now;
+          tparams->pace_rem = 0;
+        }
+        auto *m0 = reinterpret_cast<struct rte_mbuf *>(msg->pkts[0][0]);
+        m0->ol_flags |= tparams->tx_ts_dynflag_mask;
+        *RTE_MBUF_DYNFIELD(m0, tparams->tx_ts_dynfield_offset, uint64_t *) =
+            tparams->pace_next_ns;
+        // ns = bytes * 8 bits / (Mbps * 1e6 bits/s) * 1e9 ns/s = 8000 * bytes /
+        // Mbps. Carry the division remainder so the long-run average is exactly
+        // pacing_mbps. The set_*_packet_lengths helpers maintain hdr.nbytes as
+        // the burst's L2 byte total; use it directly to avoid walking the
+        // burst. Fall back to a walk for bursts populated without those helpers
+        // (nbytes left at 0).
+        uint64_t bytes = msg->hdr.hdr.nbytes;
+        if (bytes == 0) {
+          for (size_t p = 0; p < msg->hdr.hdr.num_pkts; p++) {
+            bytes +=
+                reinterpret_cast<struct rte_mbuf *>(msg->pkts[0][p])->pkt_len;
+          }
+        }
+        const uint64_t numer = 8000ULL * bytes + tparams->pace_rem;
+        tparams->pace_next_ns += numer / tparams->pacing_mbps;
+        tparams->pace_rem = numer % tparams->pacing_mbps;
+      }
+
+      const auto to_send = static_cast<uint16_t>(
+          std::min(static_cast<size_t>(DEFAULT_NUM_TX_BURST),
+                   msg->hdr.hdr.num_pkts - pkts_tx));
+      const auto tx = rte_eth_tx_burst(
+          tparams->port, tparams->queue,
+          reinterpret_cast<rte_mbuf **>(&msg->pkts[0][pkts_tx]), to_send);
+      pkts_tx += static_cast<size_t>(tx);
+      if (pkts_tx != msg->hdr.hdr.num_pkts) {
+        // A full TX queue must not block every other queue assigned to this
+        // lcore. Retain the partially submitted burst and revisit it on the
+        // next round-robin pass.
+        continue;
+      }
+
+      total_packets[queue_index] += pkts_tx;
+
+      for (int seg = 0; seg < msg->hdr.hdr.num_segs; seg++) {
+        rte_mempool_put(tparams->burst_pool,
+                        static_cast<void *>(msg->pkts[seg]));
+      }
+
+      rte_mempool_put(tparams->meta_pool, msg);
+      msg = nullptr;
+      pkts_tx = 0;
     }
-
-    auto pkts_to_transmit = static_cast<int64_t>(msg->hdr.hdr.num_pkts);
-
-    size_t pkts_tx = 0;
-    while (pkts_tx != msg->hdr.hdr.num_pkts && !force_quit.load()) {
-      auto to_send = static_cast<uint16_t>(
-          std::min(static_cast<size_t>(DEFAULT_NUM_TX_BURST), msg->hdr.hdr.num_pkts - pkts_tx));
-
-      // CPU-only or HDS mode
-      int tx;
-      tx = rte_eth_tx_burst(tparams->port,
-                            tparams->queue,
-                            reinterpret_cast<rte_mbuf**>(&msg->pkts[0][pkts_tx]),
-                            to_send);
-
-      pkts_tx += tx;
-    }
-
-    ttl_pkts_tx += pkts_tx;
-
-    for (int seg = 0; seg < msg->hdr.hdr.num_segs; seg++) {
-      rte_mempool_put(tparams->burst_pool, static_cast<void*>(msg->pkts[seg]));
-    }
-
-    rte_mempool_put(tparams->meta_pool, msg);
-    bursts++;
   }
 
-  DAQIRI_LOG_INFO("Total packets transmitted by application (port/queue {}/{}): {}",
-                     tparams->port,
-                     tparams->queue,
-                     ttl_pkts_tx);
+  // A shutdown can interrupt a partially submitted burst or leave bursts in
+  // the per-queue rings. Free only packets that the NIC did not accept, then
+  // return the pointer arrays and metadata to their pools.
+  const auto release_unsent = [](TxWorkerParams *tparams, BurstParams *msg,
+                                 size_t first_unsent, bool segments_chained) {
+    if (msg == nullptr) {
+      return;
+    }
+    for (size_t packet = first_unsent; packet < msg->hdr.hdr.num_pkts;
+         ++packet) {
+      if (segments_chained) {
+        auto *mbuf = reinterpret_cast<rte_mbuf *>(msg->pkts[0][packet]);
+        if (mbuf != nullptr) {
+          rte_pktmbuf_free(mbuf);
+        }
+      } else {
+        for (int seg = 0; seg < msg->hdr.hdr.num_segs; ++seg) {
+          auto *mbuf = reinterpret_cast<rte_mbuf *>(msg->pkts[seg][packet]);
+          if (mbuf != nullptr) {
+            rte_pktmbuf_free(mbuf);
+          }
+        }
+      }
+    }
+    for (int seg = 0; seg < msg->hdr.hdr.num_segs; ++seg) {
+      rte_mempool_put(tparams->burst_pool,
+                      static_cast<void *>(msg->pkts[seg]));
+    }
+    rte_mempool_put(tparams->meta_pool, msg);
+  };
+
+  for (std::size_t queue_index = 0; queue_index < params->q_params.size();
+       ++queue_index) {
+    auto *tparams = &params->q_params[queue_index];
+    release_unsent(tparams, active_bursts[queue_index],
+                   packets_sent[queue_index], true);
+    BurstParams *queued = nullptr;
+    while (rte_ring_dequeue(tparams->ring,
+                            reinterpret_cast<void **>(&queued)) == 0) {
+      release_unsent(tparams, queued, 0, false);
+    }
+  }
+
+  for (std::size_t queue_index = 0; queue_index < params->q_params.size();
+       ++queue_index) {
+    const auto &q = params->q_params[queue_index];
+    DAQIRI_LOG_INFO(
+        "Total packets transmitted by application (port/queue {}/{}): {}",
+        q.port, q.queue, total_packets[queue_index]);
+  }
 
   return 0;
 }
@@ -6576,14 +6694,11 @@ Status DpdkEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t
 
   if (burst->pkts[0] == nullptr) { return Status::INVALID_PARAMETER; }
   auto* mbuf = reinterpret_cast<rte_mbuf*>(burst->pkts[0][idx]);
-  if (mbuf == nullptr || burst->hdr.hdr.port_id >= rx_timestamp_conversions_.size()) {
-    return Status::INVALID_PARAMETER;
-  }
+  if (mbuf == nullptr) { return Status::INVALID_PARAMETER; }
 
   if (!extract_mbuf_rx_timestamp_ns(mbuf,
                                     timestamp_dynfield_offset_,
                                     rx_timestamp_dynflag_mask_,
-                                    rx_timestamp_conversions_[burst->hdr.hdr.port_id],
                                     timestamp_ns)) {
     return Status::NOT_SUPPORTED;
   }
@@ -6598,6 +6713,9 @@ Status DpdkEngine::set_packet_tx_time(BurstParams* burst, int idx, uint64_t time
   if (timestamp_dynfield_offset_ < 0 || tx_timestamp_dynflag_mask_ == 0) {
     return Status::NOT_SUPPORTED;
   }
+  // Preserve the public PTP epoch-nanosecond value exactly. The mlx5 real-time
+  // clock configuration consumes this linear CLOCK_REALTIME-domain value
+  // directly; DAQIRI performs no tick-rate conversion or synchronization check.
   reinterpret_cast<struct rte_mbuf**>(burst->pkts[0])[idx]->ol_flags |= tx_timestamp_dynflag_mask_;
   *RTE_MBUF_DYNFIELD(
       reinterpret_cast<rte_mbuf**>(burst->pkts[0])[idx],
@@ -6708,7 +6826,10 @@ bool DpdkEngine::is_tx_burst_available(BurstParams* burst) {
 
   const auto& q = item->second;
   for (int seg = 0; seg < burst->hdr.hdr.num_segs; seg++) {
-    if (rte_mempool_avail_count(q->pools[seg]) < burst->hdr.hdr.num_pkts * 2) { return false; }
+    const auto available = rte_mempool_avail_count(q->pools[seg]);
+    if (available < burst->hdr.hdr.num_pkts * 2) {
+      return false;
+    }
   }
 
   return true;
@@ -6874,18 +6995,130 @@ void DpdkEngine::free_tx_metadata(BurstParams* burst) {
   rte_mempool_put(tx_metadata, burst);
 }
 
-Status DpdkEngine::get_tx_metadata_buffer(BurstParams** burst) {
-  if (rte_mempool_get(tx_metadata, reinterpret_cast<void**>(burst)) != 0) {
-    DAQIRI_LOG_CRITICAL("Running out of TX meta buffers due to high rates. Either increase "\
-      "your number of metadata buffers (current: {}) with `tx_meta_buffers` (will "\
-      "increase memory usage) or increase your `batch_size` for port {} queue {} (will increase "\
-      "latency)", cfg_.tx_meta_buffers_, (*burst)->hdr.hdr.port_id, (*burst)->hdr.hdr.q_id);
-    return Status::NO_FREE_BURST_BUFFERS;
-  }
-  // Clear the recycled running L2 byte total (see create_tx_burst_params).
-  (*burst)->hdr.hdr.nbytes = 0;
+Status DpdkEngine::wait_for_tx_idle(uint32_t timeout_ms) {
+  const auto pool_is_full = [](const rte_mempool *pool) {
+    return pool == nullptr || rte_mempool_full(pool) != 0;
+  };
+  const auto idle = [&]() {
+    // A full metadata pool proves that no worker holds an active burst. Empty
+    // handoff rings alone are insufficient because a worker may have already
+    // dequeued a burst and be waiting for its scheduled transmit time.
+    if (!pool_is_full(tx_metadata)) {
+      return false;
+    }
+    for (const auto &[key, ring] : tx_rings) {
+      (void)key;
+      if (ring != nullptr && !rte_ring_empty(ring)) {
+        return false;
+      }
+    }
+    for (const auto &[key, pool] : tx_burst_buffers) {
+      (void)key;
+      if (!pool_is_full(pool)) {
+        return false;
+      }
+    }
+    // PMDs commonly reclaim TX descriptors from a later tx_burst call. At
+    // end-of-run there is no later burst, so explicitly reap the final
+    // completion batch before testing the packet pools. This is safe here
+    // because full metadata/pointer pools and empty rings prove the workers
+    // no longer hold or submit bursts.
+    for (const auto &intf : cfg_.ifs_) {
+      for (const auto &queue : intf.tx_.queues_) {
+        (void)rte_eth_tx_done_cleanup(intf.port_id_, queue.common_.id_, 0);
+      }
+    }
 
-  return Status::SUCCESS;
+    // Descriptor status is the authoritative completion signal when the PMD
+    // implements it. Offset (ring size - 1) is the descriptor immediately
+    // preceding the tail (the next-send position). TX completion is ordered
+    // within a queue, so DONE there proves all prior submissions completed.
+    bool saw_descriptor_status = false;
+    bool all_descriptors_done = true;
+    for (const auto &intf : cfg_.ifs_) {
+      for (const auto &queue : intf.tx_.queues_) {
+        const int status = rte_eth_tx_descriptor_status(
+            intf.port_id_, queue.common_.id_, default_num_tx_desc - 1);
+        if (status == RTE_ETH_TX_DESC_FULL) {
+          return false;
+        }
+        if (status == RTE_ETH_TX_DESC_DONE) {
+          saw_descriptor_status = true;
+        } else {
+          all_descriptors_done = false;
+        }
+      }
+    }
+    if (saw_descriptor_status && all_descriptors_done) {
+      return true;
+    }
+
+    // TX mbufs are returned to these pools only after the PMD has reclaimed
+    // the corresponding descriptors. Requiring every pool to be full makes
+    // this a NIC-completion boundary, not merely a software-ring boundary.
+    for (const auto &[key, queue] : tx_dpdk_q_map_) {
+      (void)key;
+      if (queue == nullptr) {
+        continue;
+      }
+      for (const auto *pool : queue->pools) {
+        if (!pool_is_full(pool)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+
+  const auto deadline = steady_clock::now() + milliseconds(timeout_ms);
+  do {
+    if (idle()) {
+      return Status::SUCCESS;
+    }
+    std::this_thread::sleep_for(std::chrono::microseconds(50));
+  } while (steady_clock::now() < deadline);
+
+  if (tx_metadata != nullptr && !rte_mempool_full(tx_metadata)) {
+    DAQIRI_LOG_WARN("TX idle timeout: metadata pool available={}/{}",
+                    rte_mempool_avail_count(tx_metadata), tx_metadata->size);
+  }
+  for (const auto &intf : cfg_.ifs_) {
+    for (const auto &queue : intf.tx_.queues_) {
+      DAQIRI_LOG_WARN(
+          "TX idle timeout: descriptor status port={} queue={} tail={} next={} previous={}",
+          intf.port_id_, queue.common_.id_,
+          rte_eth_tx_descriptor_status(intf.port_id_, queue.common_.id_, 0),
+          rte_eth_tx_descriptor_status(intf.port_id_, queue.common_.id_, 1),
+          rte_eth_tx_descriptor_status(intf.port_id_, queue.common_.id_,
+                                       default_num_tx_desc - 1));
+    }
+  }
+  for (const auto &[key, ring] : tx_rings) {
+    if (ring != nullptr && !rte_ring_empty(ring)) {
+      DAQIRI_LOG_WARN("TX idle timeout: ring key={} count={}", key,
+                      rte_ring_count(ring));
+    }
+  }
+  for (const auto &[key, pool] : tx_burst_buffers) {
+    if (pool != nullptr && !rte_mempool_full(pool)) {
+      DAQIRI_LOG_WARN("TX idle timeout: burst pool key={} available={}/{}", key,
+                      rte_mempool_avail_count(pool), pool->size);
+    }
+  }
+  for (const auto &[key, queue] : tx_dpdk_q_map_) {
+    if (queue == nullptr) {
+      continue;
+    }
+    for (std::size_t segment = 0; segment < queue->pools.size(); ++segment) {
+      const auto *pool = queue->pools[segment];
+      if (pool != nullptr && !rte_mempool_full(pool)) {
+        DAQIRI_LOG_WARN(
+            "TX idle timeout: packet pool key={} segment={} available={}/{}",
+            key, segment, rte_mempool_avail_count(pool), pool->size);
+      }
+    }
+  }
+  return Status::NOT_READY;
 }
 
 Status DpdkEngine::send_tx_burst(BurstParams* burst) {
@@ -6922,6 +7155,11 @@ void DpdkEngine::shutdown() {
     cleanup_reorder_state();
     force_quit.store(true);
 
+    // Remote workers may still be reading queue rings or submitting packets.
+    // Wait for every launched lcore before releasing any worker-visible object
+    // or asking the PMD to stop its queues.
+    rte_eal_mp_wait_lcore();
+
     stats_.Shutdown();
     stats_thread_.join();
 
@@ -6939,7 +7177,29 @@ void DpdkEngine::shutdown() {
 
     cleanup_dynamic_flows();
     destroy_all_flow_rules();
+
+    // rte_eal_cleanup() cannot close a started Ethernet device. Leaving the
+    // device started also leaves PMD/EAL resources referring to registered
+    // external GPU memory, which makes a later CUDA-context teardown unsafe.
+    for (const auto &intf : cfg_.ifs_) {
+      const int stop_ret = rte_eth_dev_stop(intf.port_id_);
+      if (stop_ret != 0) {
+        DAQIRI_LOG_WARN("Failed to stop DPDK port {}: {}", intf.port_id_,
+                        stop_ret);
+      }
+      const int close_ret = rte_eth_dev_close(intf.port_id_);
+      if (close_ret != 0) {
+        DAQIRI_LOG_WARN("Failed to close DPDK port {}: {}", intf.port_id_,
+                        close_ret);
+      }
+    }
+
     cleanup_eal();
+
+    // External-memory registration is gone, so CUDA device allocations can
+    // now be released while the caller-owned CUDA context is still current.
+    // Do not defer this to Engine::~Engine(), which may run after that context.
+    free_memory_regions();
     initialized_ = false;
   }
 }

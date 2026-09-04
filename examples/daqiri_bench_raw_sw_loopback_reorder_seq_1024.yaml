@@ -4,6 +4,7 @@ daqiri:
   cfg:
     version: 1
     stream_type: "raw"
+    engine: "dpdk"
     master_core: 3
     debug: false
     log_level: "info"

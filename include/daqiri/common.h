@@ -244,10 +244,12 @@ Status poll_flow_op(FlowOpResult *result);
 /**
  * @brief Get the hardware RX timestamp of a packet in nanoseconds
  *
- * Retrieves the 64-bit receive timestamp for a packet when the DPDK engine
- * was configured with rx.hardware_timestamps enabled and the NIC provided a
- * timestamp for this packet. The value is converted to nanoseconds in the NIC
- * timestamp clock domain; it is not converted to wall-clock or PTP time.
+ * Retrieves the 64-bit receive timestamp for a packet when DAQIRI is configured
+ * with rx.hardware_timestamps enabled and the NIC and driver provide hardware
+ * timestamps. DAQIRI returns PTP epoch nanoseconds; engines that receive raw
+ * device-clock ticks convert them before returning. DAQIRI assumes that the NIC
+ * clock and CLOCK_REALTIME are PTP-synchronized and does not validate
+ * synchronization. The result is invalid without working PTP.
  *
  * @param burst Burst structure containing packets
  * @param idx Index of packet
@@ -364,11 +366,12 @@ void free_segment_packets_and_burst(BurstParams *burst, int seg);
 void free_all_packets_and_burst_rx(BurstParams *burst);
 
 /**
- * @brief Free all packets and a TX burst
+ * @brief Free an unsent TX burst and all of its packet buffers
  *
- * Frees all packets in a burst of packets and the associated burst buffer
+ * Releases all packet storage and TX burst metadata without submitting any
+ * packets for transmission.
  *
- * @param burst Burst structure containing packet lists
+ * @param burst Unsubmitted TX burst containing packet lists
  */
 void free_all_packets_and_burst_tx(BurstParams *burst);
 
@@ -405,7 +408,10 @@ Status set_all_packet_lengths(BurstParams *burst,
 /**
  * @brief Set packet TX time
  *
- * Sets the transmit time (in PTP time) to transmit the packet. Every packet
+ * Sets the transmit time, as PTP epoch nanoseconds, to transmit the packet.
+ * DAQIRI assumes that the NIC clock and CLOCK_REALTIME are PTP-synchronized
+ * and does not validate synchronization. Scheduled transmission is invalid
+ * without working PTP. Every packet
  * transmitted after this one in the same queue will be transmitted no earlier
  * than the time listed in the function call. This feature is only available on
  * ConnectX-7 or BlueField 3 and higher cards.
@@ -772,6 +778,18 @@ void set_num_packets(BurstParams *burst, int64_t num);
  *    NOT_READY: direct queue called concurrently or from a non-owner thread; burst not consumed
  */
 Status send_tx_burst(BurstParams *burst);
+
+/**
+ * @brief Wait until all previously submitted TX packets have completed.
+ *
+ * This is a synchronization boundary for applications that must keep a peer
+ * receiver alive until asynchronous TX workers and the NIC have drained.
+ *
+ * @param timeout_ms Maximum time to wait in milliseconds.
+ * @return SUCCESS when idle, NOT_READY on timeout, or NOT_SUPPORTED when the
+ *         selected engine does not implement completion draining.
+ */
+Status wait_for_tx_idle(uint32_t timeout_ms);
 
 /**
  * @brief Get a RX burst
@@ -1183,12 +1201,19 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
         const auto lbstr = node["loopback"].as<std::string>();
         if (lbstr == "sw") {
           input_spec.common_.loopback_ = daqiri::LoopbackType::LOOPBACK_TYPE_SW;
+        } else if (lbstr == "hw") {
+          input_spec.common_.loopback_ = daqiri::LoopbackType::LOOPBACK_TYPE_HW;
         } else if (!lbstr.empty()) {
-          DAQIRI_LOG_ERROR(
-              "Invalid loopback type: {}. Use 'sw' or empty string ''", lbstr);
+          DAQIRI_LOG_ERROR("Invalid loopback type: {}. Use 'sw', 'hw', or empty string ''", lbstr);
           return false;
         }
       } catch (const std::exception &e) {
+      }
+      if (input_spec.common_.loopback_ == daqiri::LoopbackType::LOOPBACK_TYPE_HW &&
+          (input_spec.common_.stream_type != daqiri::StreamType::RAW ||
+           input_spec.common_.engine_type != daqiri::EngineType::IBVERBS)) {
+        DAQIRI_LOG_ERROR("Hardware loopback requires stream_type 'raw' with engine 'ibverbs'");
+        return false;
       }
 
       try {

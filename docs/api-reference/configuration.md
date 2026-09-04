@@ -32,17 +32,20 @@ These settings apply globally to both TX and RX:
   - values: `raw`, `socket`
 - **`engine`**: Optional implementation engine for the selected stream type. Omit this
   unless you need a specific implementation override. For `stream_type: "raw"` the
-  default is `dpdk`; set `engine: "ibverbs"` to use the Multi-Packet (striding) Receive
-  Queue engine on Mellanox/mlx5 NICs instead. RoCE configs infer `ibverbs` from
+  default is `ibverbs`, which uses the Multi-Packet (striding) Receive Queue engine on
+  Mellanox/mlx5 NICs; set `engine: "dpdk"` to use DPDK instead. RoCE configs infer `ibverbs` from
   `roce://` endpoint URIs by default.
   - type: `string`
   - values: `dpdk`, `socket`, `ibverbs`
 - **`log_level`**: Engine log level.
   - type: `string`
   - values: `trace`, `debug`, `info`, `warn` (default), `error`, `critical`, `off`
-- **`loopback`**: Enable software loopback for testing without a physical link.
+- **`loopback`**: Select a loopback mode for local testing.
   - type: `string`
-  - values: `""` (disabled, default), `"sw"` (software loopback)
+  - values: `""` (disabled, default), `"sw"` (DPDK software loopback, no NIC),
+    `"hw"` (single-port mlx5 hardware loopback, raw `ibverbs` engine only)
+  - hardware loopback requires one physical interface containing both TX and RX queues;
+    transmitted unicast packets must use that port's own destination MAC
 - **`tx_meta_buffers`**: Metadata buffers for transmit. One buffer is used for each burst
   of packets.
   - type: `integer`
@@ -229,8 +232,11 @@ RX flows can also perform hardware VLAN pop or tunnel decapsulation before queue
     - **`id`**: Queue ID under `rx.queues` on the same interface.
     - **`ids`**: Non-empty list of unique queue IDs under `rx.queues` on the same
       interface. One entry is direct steering. Two or more entries automatically
-      enable flow-affine Toeplitz RSS over source/destination IPv4 address and
-      source/destination UDP port. `id` and `ids` are mutually exclusive.
+      enable RSS. IP/UDP matches use flow-affine Toeplitz hashing over source and
+      destination IPv4 addresses and UDP ports. An Ethernet-only match remains
+      MAC-only; it does not implicitly add IPv4/UDP criteria, so matching non-IP
+      frames remain eligible for the RSS destination. `id` and `ids` are mutually
+      exclusive.
   - **`type: vlan_pop`**: Pop one VLAN tag in hardware.
   - **`type: tunnel_decap`**: Decapsulate a hardware tunnel before queue delivery.
     - **`tunnel.type`**: `vxlan`, `gre`, or `nvgre`.
@@ -266,6 +272,17 @@ RX flows can also perform hardware VLAN pop or tunnel decapsulation before queue
       message type to locate the identifier in the eCPRI header).
       - type: `integer`
 
+  - **`ethernet`**: Raw Ethernet address match. The map must contain at least one address.
+    It can be used alone or combined with IPv4/UDP, flex-item, or eCPRI criteria; all
+    configured criteria must match for the rule to apply.
+    - **`src`**: Source MAC address to match. Optional.
+      - type: `string`
+      - format: `xx:xx:xx:xx:xx:xx`
+    - **`dst`**: Destination MAC address to match. Optional.
+      - type: `string`
+      - format: `xx:xx:xx:xx:xx:xx`
+
+
 For Raw Ethernet (`stream_type: "raw"`), each flow rule is programmed into the NIC during
 `daqiri_init()`. If any rule cannot be installed, or the send-to-kernel fallback cannot be
 created when `flow_isolation: true`, initialization fails with a critical log and
@@ -276,7 +293,9 @@ firmware steering, so any interface with eCPRI flows is automatically switched t
 `dv_flow_en=1` (logged as a warning); a side effect is that the async/template dynamic-RX-flow
 API is unavailable on that interface. The `ibverbs` engine has no such restriction.
 
-A single RX interface must use exactly one flow class: standard UDP/IP, flex-item, or eCPRI.
+A single RX interface must use exactly one protocol flow class: standard UDP/IP (including
+Ethernet-only rules), flex-item, or eCPRI. Ethernet address criteria may qualify a rule in
+any of these classes and do not select a separate class when protocol criteria are present.
 Each class installs its own DPDK group-0 jump rule, and these conflict when mixed, so only one
 class is reachable per interface. `daqiri_init` rejects mixed configs with a clear error.
 Flex-item flows cannot be combined with VLAN/tunnel transform actions in v1.
@@ -326,12 +345,16 @@ a template table.
 
 ### Hardware Timestamps
 
-`rx.hardware_timestamps:` Enable per-packet hardware RX timestamps for Raw Ethernet
-(`stream_type: "raw"`).
-When enabled, DAQIRI requires `RTE_ETH_RX_OFFLOAD_TIMESTAMP` support from the NIC/PMD and
-initialization fails if DAQIRI cannot provide nanosecond timestamps for the selected PMD.
-Timestamps are returned by `get_packet_rx_timestamp()` in nanoseconds in the NIC timestamp
-clock domain, not wall-clock time.
+`rx.hardware_timestamps:` Enable per-packet hardware RX timestamps.
+When enabled, DAQIRI requires hardware timestamp support from the NIC and driver.
+Timestamps returned by `get_packet_rx_timestamp()` are unsigned 64-bit PTP epoch
+nanoseconds in the same clock domain as a PTP-synchronized `CLOCK_REALTIME`.
+The raw ibverbs engine requests the mlx5 real-time CQ timestamp format only when
+the device advertises it; otherwise it uses the default mlx5 device-clock CQ
+format and converts those ticks to nanoseconds internally. Device-clock ticks are
+not exposed by the public API.
+**WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or system clock
+configuration. Timestamp values are invalid if the clocks are not PTP-synchronized.
 
 - type: `boolean`
 - default: `false`
@@ -493,8 +516,12 @@ pre-encap (TX) frame.
 
 ### Accurate Send
 
-`tx.accurate_send:` Enable hardware-timed packet transmission using PTP timestamps. When
-enabled, use `set_packet_tx_time()` to schedule packets. Requires ConnectX-7 or later.
+`tx.accurate_send:` Enable hardware-timed packet transmission. When enabled, use
+`set_packet_tx_time()` to schedule packets. The supplied timestamp is always an unsigned
+64-bit PTP epoch-nanosecond value in the same clock domain as a PTP-synchronized
+`CLOCK_REALTIME`. **WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or
+system clock configuration. Scheduled transmission is invalid if the clocks are not
+PTP-synchronized. Requires ConnectX-7 or later.
 
 - type: `boolean`
 - default: `false`

@@ -215,11 +215,16 @@ flow    = daqiri.get_packet_flow_id(burst, idx)
 status, rx_ts_ns = daqiri.get_packet_rx_timestamp(burst, idx)
 ```
 
-RX hardware timestamps are available only when the DPDK engine is configured
-with `rx.hardware_timestamps: true` and the NIC supports
-`RTE_ETH_RX_OFFLOAD_TIMESTAMP`. See
-[C++ API Usage → Receiving Packets](cpp.md#receiving-packets) for the clock
-semantics. The Python wrapper exposes the same timestamps in nanoseconds.
+RX hardware timestamps are available only when DAQIRI is configured with
+`rx.hardware_timestamps: true` and the NIC and driver support hardware timestamps.
+DAQIRI returns unsigned 64-bit PTP epoch nanoseconds in the same clock domain as
+a PTP-synchronized `CLOCK_REALTIME`. Device-clock ticks are not part of the public API.
+On the raw ibverbs engine, DAQIRI requests mlx5 real-time CQ timestamps only when
+the device advertises that format. Devices without that capability stay on the
+default mlx5 device-clock CQ format, and DAQIRI converts those raw ticks to
+nanoseconds before returning them.
+**WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or system clock
+configuration. Timestamp values are invalid if the clocks are not PTP-synchronized.
 
 `RxQueueConfig.poll_mode` accepts `QueuePollMode.INDIRECT` (the default) or
 `QueuePollMode.DIRECT`. Direct mode is available only on raw ibverbs RX queues and makes the
@@ -377,6 +382,11 @@ For precise packet scheduling (requires ConnectX-7+):
 ```python
 daqiri.set_packet_tx_time(burst, idx, ptp_timestamp_ns)
 ```
+
+`ptp_timestamp_ns` is an unsigned 64-bit PTP epoch-nanosecond value in the same clock
+domain as a PTP-synchronized `CLOCK_REALTIME`. Device-clock ticks are not accepted.
+**WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or system clock
+configuration. Scheduled transmission is invalid if the clocks are not PTP-synchronized.
 
 ## Writing Bursts to Storage
 
@@ -549,14 +559,14 @@ The workflow sections above show the common call order and ownership rules.
 | `get_segment_packet_ptr(burst, seg, idx)` | Return segment packet address as an integer. |
 | `get_packet_length(burst, idx)` / `get_segment_packet_length(burst, seg, idx)` | Read packet or segment length. |
 | `get_packet_flow_id(burst, idx)` | Read matched flow ID, or `0` when no flow matched. |
-| `get_packet_rx_timestamp(burst, idx)` | Return `(Status, timestamp_ns)`. |
+| `get_packet_rx_timestamp(burst, idx)` | Return `(Status, timestamp_ns)` with a PTP epoch-nanosecond timestamp. |
 | `copy_buffer_to_packet(burst, idx, data, nbytes=None, src_offset=0, dst_offset=0)` | Copy a Python buffer into segment 0. |
 | `copy_buffer_to_segment_packet(burst, seg, idx, data, nbytes=None, src_offset=0, dst_offset=0)` | Copy a Python buffer into a specific segment. |
 | `get_packet_bytes(burst, idx, nbytes=None, src_offset=0)` | Return `(Status, bytes)` from segment 0. |
 | `get_segment_packet_bytes(burst, seg, idx, nbytes=None, src_offset=0)` | Return `(Status, bytes)` from a segment. |
 | `set_packet_lengths(burst, idx, lens)` | Set segment lengths for one packet. |
 | `set_all_packet_lengths(burst, lens)` | Set segment lengths for every packet. |
-| `set_packet_tx_time(burst, idx, time)` | Set scheduled TX time for one packet. |
+| `set_packet_tx_time(burst, idx, time)` | Set one packet's scheduled TX time as PTP epoch nanoseconds. |
 
 ### RX and Reorder
 
@@ -672,13 +682,13 @@ encapsulation/push rules are configured in YAML under `tx.flows`.
 | `MemoryKind` | `HOST`, `HOST_PINNED`, `HUGE`, `DEVICE`, `INVALID` |
 | `StreamType` | `RAW`, `SOCKET`, `INVALID` |
 | `QueuePollMode` | `INDIRECT`, `DIRECT`, `INVALID` |
-| `LoopbackType` | `DISABLED`, `LOOPBACK_TYPE_SW` |
+| `LoopbackType` | `DISABLED`, `LOOPBACK_TYPE_SW`, `LOOPBACK_TYPE_HW` |
 | `RDMAMode` | `CLIENT`, `SERVER`, `INVALID` |
 | `RDMATransportMode` | `RC`, `UC`, `UD`, `INVALID` |
 | `SocketMode` | `CLIENT`, `SERVER`, `INVALID` |
 | `FlowType` | `QUEUE`, `VLAN_PUSH`, `VLAN_POP`, `TUNNEL_ENCAP`, `TUNNEL_DECAP` |
 | `TunnelType` | `NONE`, `VXLAN`, `GRE`, `NVGRE` |
-| `FlowMatchType` | `IPV4_UDP`, `FLEX_ITEM` |
+| `FlowMatchType` | `IPV4_UDP`, `FLEX_ITEM`, `ECPRI`, `ETHERNET` |
 | `FlowOpType` | `ADD_RX`, `ADD_RX_BATCH`, `DELETE` |
 | `ReorderMethod` | `INVALID`, `SEQ_BATCH_NUMBER`, `SEQ_PACKETS_PER_BATCH` |
 | `ReorderDataType` | `SAME`, `INT4`, `INT8`, `INT16`, `INT32`, `FP16`, `BF16`, `FP32`, `FP64`, `INVALID` |
@@ -712,7 +722,8 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `VlanActionConfig` | VLAN push parameters: VLAN ID, priority, DEI, and ethertype. |
 | `TunnelConfig` | VXLAN, GRE, or NVGRE tunnel template fields for hardware encap/decap actions. |
 | `FlowAction` | Flow action type, scalar queue target `id`, queue-list target `ids`, optional VLAN config, and optional tunnel config. |
-| `FlowMatch` | Flow match fields for UDP, IPv4, and flex item matching. |
+| `EthernetMatch` | Optional source and destination MAC-address match fields. |
+| `FlowMatch` | Flow match fields for Ethernet, UDP, IPv4, eCPRI, and flex-item matching. |
 | `FlowConfig` | Static named flow rule combining legacy `action`, ordered `actions`, and match fields. |
 | `FlowRuleConfig` | Dynamic RX flow rule combining legacy `action`, ordered `actions`, and match fields. |
 | `FlowOpResult` | Dynamic flow operation completion. Batch adds return `flow_ids` in input order. |
