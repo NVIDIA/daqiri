@@ -613,6 +613,11 @@ void print_stats() {
 }
 
 Status daqiri_init(NetworkConfig& config) {
+  static const MemoryRegionBindings no_bindings;
+  return daqiri_init(config, no_bindings);
+}
+
+Status daqiri_init(NetworkConfig& config, const MemoryRegionBindings& bindings) {
   if (g_daqiri_engine != nullptr) {
     DAQIRI_LOG_ERROR("DAQIRI is already initialized; call shutdown() before daqiri_init()");
     return Status::INTERNAL_ERROR;
@@ -652,6 +657,10 @@ Status daqiri_init(NetworkConfig& config) {
   if (config.common_.stream_type == StreamType::SOCKET &&
       (config.common_.protocol == SocketProtocol::TCP ||
        config.common_.protocol == SocketProtocol::UDP)) {
+    if (!bindings.empty()) {
+      DAQIRI_LOG_ERROR("External memory bindings are not supported for direct TCP/UDP sockets");
+      return Status::NOT_SUPPORTED;
+    }
     std::unordered_set<std::string> gpu_mrs;
     for (const auto& intf : config.ifs_) {
       for (const auto& q : intf.rx_.queues_) {
@@ -687,9 +696,29 @@ Status daqiri_init(NetworkConfig& config) {
     }
   }
 
+  if (config.common_.engine_type == EngineType::DPDK) {
+    for (const auto& [name, binding] : bindings) {
+      (void)binding;
+      const auto mr = config.mrs_.find(name);
+      if (mr != config.mrs_.end() && mr->second.kind_ == MemoryKind::HUGE) {
+        DAQIRI_LOG_ERROR(
+            "DPDK cannot safely retain caller-owned hugepage mapping '{}' across EAL cleanup; "
+            "use kind=host, kind=host_pinned, or an ibverbs/RDMA engine",
+            name);
+        return Status::NOT_SUPPORTED;
+      }
+    }
+  }
+
   EngineFactory::set_engine_type(config.common_.engine_type);
 
   auto engine = &(EngineFactory::get_active_engine());
+
+  if (engine->set_external_memory_regions(config, bindings) != Status::SUCCESS) {
+    reset_active_engine();
+    metrics::shutdown();
+    return Status::INVALID_PARAMETER;
+  }
 
   if (!engine->set_config_and_initialize(config)) {
     reset_active_engine();
@@ -788,25 +817,134 @@ Status parse_network_config(const std::string& yaml_string_or_path, NetworkConfi
   return parse_network_config_from_yaml_string(yaml_string_or_path, config);
 }
 
+namespace {
+
+size_t ceil_power_of_two(size_t value) {
+  if (value <= 1) {
+    return 1;
+  }
+  --value;
+  for (size_t shift = 1; shift < sizeof(size_t) * 8; shift <<= 1) {
+    value |= value >> shift;
+  }
+  return value + 1;
+}
+
+size_t ceil_to(size_t value, size_t alignment) {
+  return (value + alignment - 1) & ~(alignment - 1);
+}
+
+EngineType effective_engine_type(const NetworkConfig& config) {
+  if (is_explicit_engine_type(config.common_.engine_type)) {
+    return config.common_.engine_type;
+  }
+  if (is_explicit_engine_type(config.common_.engine)) {
+    return config.common_.engine;
+  }
+  return engine_type_from_stream_type(config.common_.stream_type, config.common_.protocol);
+}
+
+}  // namespace
+
+Status get_memory_region_requirements(const NetworkConfig& config,
+                                      MemoryRegionRequirements& requirements) {
+  requirements.clear();
+  const EngineType engine = effective_engine_type(config);
+  if (engine == EngineType::SOCKET && config.common_.protocol != SocketProtocol::ROCE) {
+    DAQIRI_LOG_ERROR("Direct TCP/UDP socket streams do not use configured memory-region pools");
+    return Status::NOT_SUPPORTED;
+  }
+
+  std::unordered_set<std::string> queue_mrs;
+  for (const auto& intf : config.ifs_) {
+    for (const auto& queue : intf.rx_.queues_) {
+      queue_mrs.insert(queue.common_.mrs_.begin(), queue.common_.mrs_.end());
+    }
+    for (const auto& queue : intf.tx_.queues_) {
+      queue_mrs.insert(queue.common_.mrs_.begin(), queue.common_.mrs_.end());
+    }
+  }
+
+  constexpr size_t gpu_page_size = 1UL << 16;
+  for (const auto& [name, mr] : config.mrs_) {
+    MemoryRegionRequirement req;
+    req.kind = mr.kind_;
+    req.num_bufs = mr.num_bufs_;
+    switch (engine) {
+      case EngineType::DPDK:
+#if DAQIRI_ENGINE_DPDK
+        req.slot_size = mr.buf_size_ + RTE_PKTMBUF_HEADROOM;
+#else
+        return Status::NOT_SUPPORTED;
+#endif
+        if (queue_mrs.count(name) != 0 && req.num_bufs < 8192UL * 3 / 2) {
+          req.num_bufs = 8192UL * 3;
+        }
+        break;
+      case EngineType::IBVERBS:
+        req.slot_size = ceil_power_of_two(mr.buf_size_);
+        break;
+      case EngineType::RDMA:
+        req.slot_size = ceil_to(mr.buf_size_, gpu_page_size);
+        break;
+      default:
+        DAQIRI_LOG_ERROR("Cannot compute memory requirements for engine {}",
+                         static_cast<int>(engine));
+        return Status::NOT_SUPPORTED;
+    }
+    if (engine == EngineType::DPDK) {
+      req.alignment = gpu_page_size;
+    } else if (engine == EngineType::IBVERBS && mr.kind_ == MemoryKind::DEVICE) {
+      req.alignment = 4096;
+    } else {
+      req.alignment = mr.kind_ == MemoryKind::DEVICE ? 256 : 128;
+    }
+    if (req.slot_size != 0 && req.num_bufs > std::numeric_limits<size_t>::max() / req.slot_size) {
+      DAQIRI_LOG_ERROR("Memory region '{}' size overflows", name);
+      return Status::INVALID_PARAMETER;
+    }
+    req.capacity = ceil_to(req.slot_size * req.num_bufs, gpu_page_size);
+    requirements.emplace(name, req);
+  }
+  return Status::SUCCESS;
+}
+
 Status daqiri_init_from_yaml_string(const std::string& yaml_string) {
+  static const MemoryRegionBindings no_bindings;
+  return daqiri_init_from_yaml_string(yaml_string, no_bindings);
+}
+
+Status daqiri_init_from_yaml_string(const std::string& yaml_string,
+                                    const MemoryRegionBindings& bindings) {
   NetworkConfig config;
   const Status parse_status = parse_network_config_from_yaml_string(yaml_string, config);
   if (parse_status != Status::SUCCESS) { return parse_status; }
-  return daqiri_init(config);
+  return daqiri_init(config, bindings);
 }
 
 Status daqiri_init_from_yaml_file(const std::string& yaml_path) {
+  static const MemoryRegionBindings no_bindings;
+  return daqiri_init_from_yaml_file(yaml_path, no_bindings);
+}
+
+Status daqiri_init_from_yaml_file(const std::string& yaml_path,
+                                  const MemoryRegionBindings& bindings) {
   NetworkConfig config;
   const Status parse_status = parse_network_config_from_yaml_file(yaml_path, config);
   if (parse_status != Status::SUCCESS) { return parse_status; }
-  return daqiri_init(config);
+  return daqiri_init(config, bindings);
 }
 
 Status daqiri_init(const std::string& yaml_string_or_path) {
+  static const MemoryRegionBindings no_bindings;
+  return daqiri_init(yaml_string_or_path, no_bindings);
+}
+
+Status daqiri_init(const std::string& yaml_string_or_path, const MemoryRegionBindings& bindings) {
   NetworkConfig config;
   const Status parse_status = parse_network_config(yaml_string_or_path, config);
   if (parse_status != Status::SUCCESS) { return parse_status; }
-  return daqiri_init(config);
+  return daqiri_init(config, bindings);
 }
 
 // Generic socket functions

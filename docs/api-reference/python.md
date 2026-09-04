@@ -144,6 +144,30 @@ config = {
 status = daqiri.daqiri_init(config)
 ```
 
+Application-owned CUDA buffers use the same requirements-and-bindings workflow as C++. Addresses
+are integers, and the Python allocation owner must stay alive until after `shutdown()`:
+
+```python
+status, parsed = daqiri.parse_network_config("config.yaml")
+status, requirements = daqiri.get_memory_region_requirements(parsed)
+rx_req = requirements["RX_GPU"]
+
+# For example, gpu_owner may be a CuPy allocation made in the desired context.
+bindings = {
+    "RX_GPU": daqiri.ExternalMemoryRegion(int(gpu_owner.data.ptr), rx_req.capacity),
+}
+status = daqiri.daqiri_init(parsed, bindings)
+
+# Return outstanding bursts first.
+daqiri.shutdown()
+del gpu_owner
+```
+
+Bindings may cover only a subset of regions. They are supported by DPDK, raw ibverbs, and
+RoCE/RDMA, but not direct TCP/UDP sockets. DPDK rejects external `huge` regions because EAL cannot
+preserve ownership of hugepage mappings that predate initialization; use `host`, `host_pinned`, or
+ibverbs/RDMA for caller-owned CPU hugepages.
+
 Parse without starting the engine:
 
 ```python
@@ -523,6 +547,8 @@ The workflow sections above show the common call order and ownership rules.
 | Function | Returns |
 | --- | --- |
 | `daqiri_init(config)` | `Status` |
+| `daqiri_init(config, bindings)` | `Status` |
+| `get_memory_region_requirements(config)` | `(Status, dict[str, MemoryRegionRequirement])` |
 | `daqiri_init_from_yaml_string(yaml_string)` | `Status` |
 | `daqiri_init_from_yaml_file(yaml_path)` | `Status` |
 | `parse_network_config(yaml_string_or_path)` | `(Status, NetworkConfig)` |
@@ -719,6 +745,8 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `RxQueueConfig` | RX queue wrapper with common queue fields, timeout, and `QueuePollMode`. |
 | `TxQueueConfig` | TX queue wrapper with common queue fields and `QueuePollMode`. |
 | `MemoryRegionConfig` | Memory region kind, affinity, access flags, sizes, counts, and ownership. |
+| `ExternalMemoryRegion` | Non-owning integer address and byte capacity. |
+| `MemoryRegionRequirement` | Effective kind, slot size, buffer count, capacity, and alignment. |
 | `VlanActionConfig` | VLAN push parameters: VLAN ID, priority, DEI, and ethertype. |
 | `TunnelConfig` | VXLAN, GRE, or NVGRE tunnel template fields for hardware encap/decap actions. |
 | `FlowAction` | Flow action type, scalar queue target `id`, queue-list target `ids`, optional VLAN config, and optional tunnel config. |

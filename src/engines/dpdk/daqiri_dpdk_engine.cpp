@@ -722,6 +722,7 @@ bool DpdkEngine::init_reorder_queue_state(const InterfaceConfig& intf, const RxQ
     }
 
     int cuda_device_id = 0;
+    CUcontext cuda_context = nullptr;
     if (use_gpu_backend) {
       if (copy_src_mr->kind_ == MemoryKind::DEVICE) {
         cuda_device_id = copy_src_mr->affinity_;
@@ -730,6 +731,29 @@ bool DpdkEngine::init_reorder_queue_state(const InterfaceConfig& intf, const RxQ
       } else {
         cuda_device_id = copy_src_mr->affinity_;
       }
+      const auto select_region_context = [&](const std::string& mr_name, const char* role) {
+        const auto& region = ar_.at(mr_name);
+        if (region.cuda_device_ != cuda_device_id) {
+          DAQIRI_LOG_ERROR(
+              "Reorder '{}' {} MR '{}' uses CUDA device {}, but the plan uses device {}",
+              reorder_cfg.name_,
+              role,
+              mr_name,
+              region.cuda_device_,
+              cuda_device_id);
+          return false;
+        }
+        if (cuda_context != nullptr && region.cuda_context_ != nullptr &&
+            cuda_context != region.cuda_context_) {
+          DAQIRI_LOG_ERROR("Reorder '{}' source and output use different CUDA contexts",
+                           reorder_cfg.name_);
+          return false;
+        }
+        cuda_context = region.cuda_context_;
+        return true;
+      };
+      if (!select_region_context(source_mr_name, "source") ||
+          !select_region_context(out_mr.name_, "output")) { return false; }
     }
 
     auto pool_it = reorder_output_pools_.find(out_mr.name_);
@@ -760,9 +784,15 @@ bool DpdkEngine::init_reorder_queue_state(const InterfaceConfig& intf, const RxQ
       buffer.event_complete = true;
     };
     const auto enable_cuda_events = [&destroy_cuda_events](ReorderOutputPool& pool,
-                                                           int device_id) -> bool {
+                                                           int device_id,
+                                                           CUcontext context) -> bool {
       if (pool.cuda_events_enabled) { return true; }
-      cudaSetDevice(device_id);
+      CudaContextGuard context_guard(context);
+      if (context == nullptr) {
+        cudaSetDevice(device_id);
+      } else if (!context_guard.valid()) {
+        return false;
+      }
       for (size_t i = 0; i < pool.buffers.size(); ++i) {
         auto& buffer = pool.buffers[i];
         if (cudaEventCreateWithFlags(&buffer.event, cudaEventDisableTiming) != cudaSuccess) {
@@ -807,7 +837,8 @@ bool DpdkEngine::init_reorder_queue_state(const InterfaceConfig& intf, const RxQ
         auto* buf_ptr = base + (i * out_mr.adj_size_);
         output_pool->buffers[i].ptr = buf_ptr;
       }
-      if (use_gpu_backend && !enable_cuda_events(*output_pool, cuda_device_id)) {
+      output_pool->cuda_context = cuda_context;
+      if (use_gpu_backend && !enable_cuda_events(*output_pool, cuda_device_id, cuda_context)) {
         DAQIRI_LOG_ERROR("Failed to create CUDA events for reorder output MR '{}'", out_mr.name_);
         return false;
       }
@@ -824,7 +855,11 @@ bool DpdkEngine::init_reorder_queue_state(const InterfaceConfig& intf, const RxQ
             cuda_device_id);
         return false;
       }
-      if (use_gpu_backend && !enable_cuda_events(*output_pool, cuda_device_id)) {
+      if (use_gpu_backend && output_pool->cuda_context != cuda_context) {
+        DAQIRI_LOG_ERROR("Reorder output MR '{}' is shared across CUDA contexts", out_mr.name_);
+        return false;
+      }
+      if (use_gpu_backend && !enable_cuda_events(*output_pool, cuda_device_id, cuda_context)) {
         DAQIRI_LOG_ERROR("Failed to create CUDA events for reorder output MR '{}'", out_mr.name_);
         return false;
       }
@@ -856,13 +891,19 @@ bool DpdkEngine::init_reorder_queue_state(const InterfaceConfig& intf, const RxQ
     plan.h_input_ptrs.resize(plan.cuda_staging_capacity);
     plan.h_source_mbufs.resize(plan.cuda_staging_capacity);
     plan.cuda_device_id = cuda_device_id;
+    plan.cuda_context = cuda_context;
     plan.timeout_cycles = (qcfg.timeout_us_ == 0)
                               ? 0
                               : (static_cast<uint64_t>(qcfg.timeout_us_)
                                  * rte_get_timer_hz() / 1000000ULL);
 
     if (use_gpu_backend) {
-      cudaSetDevice(plan.cuda_device_id);
+      CudaContextGuard context_guard(plan.cuda_context);
+      if (plan.cuda_context == nullptr) {
+        cudaSetDevice(plan.cuda_device_id);
+      } else if (!context_guard.valid()) {
+        return false;
+      }
       if (cudaMalloc(reinterpret_cast<void**>(&plan.d_input_ptrs),
                      sizeof(void*) * plan.cuda_staging_capacity) != cudaSuccess) {
         DAQIRI_LOG_ERROR("Failed to allocate CUDA staging buffers for reorder config '{}'",
@@ -927,6 +968,7 @@ void DpdkEngine::cleanup_reorder_state() {
   for (auto& [qkey, qstate] : reorder_queue_states_) {
     (void)qkey;
     for (auto& plan : qstate.plans) {
+      CudaContextGuard context_guard(plan.cuda_context);
 #if DAQIRI_REORDER_GPU_PROFILE
       if (plan.gpu_profile.gpu_kernel_samples != 0) {
         const double avg_kernel_us =
@@ -985,7 +1027,10 @@ void DpdkEngine::cleanup_reorder_state() {
   for (auto& [mr_name, output_pool] : reorder_output_pools_) {
     (void)mr_name;
     if (output_pool == nullptr) { continue; }
-    if (output_pool->cuda_events_enabled) { cudaSetDevice(output_pool->cuda_device_id); }
+    CudaContextGuard context_guard(output_pool->cuda_context);
+    if (output_pool->cuda_context == nullptr && output_pool->cuda_events_enabled) {
+      cudaSetDevice(output_pool->cuda_device_id);
+    }
     for (auto& buffer : output_pool->buffers) {
       if (buffer.event != nullptr) {
         cudaEventDestroy(buffer.event);
@@ -1056,6 +1101,10 @@ void DpdkEngine::release_reorder_output_buffer(std::shared_ptr<ReorderOutputPool
 }
 
 Status DpdkEngine::poll_reorder_events(ReorderPlanRuntime& plan) {
+  CudaContextGuard context_guard(plan.cuda_context);
+  if (plan.cuda_context != nullptr && !context_guard.valid()) {
+    return Status::INTERNAL_ERROR;
+  }
   Status final_status = Status::SUCCESS;
 
   for (auto it = plan.pending_copies.begin(); it != plan.pending_copies.end();) {
@@ -1233,10 +1282,14 @@ Status DpdkEngine::create_reorder_output_burst(ReorderPlanRuntime& plan,
 }
 
 Status DpdkEngine::flush_reorder_batch(ReorderPlanRuntime& plan,
-                                    uint32_t batch_id,
-                                    bool timeout_flush,
-                                    BurstParams** out_burst) {
+                                       uint32_t batch_id,
+                                       bool timeout_flush,
+                                       BurstParams** out_burst) {
   if (out_burst == nullptr) { return Status::NULL_PTR; }
+  CudaContextGuard context_guard(plan.cuda_context);
+  if (plan.cuda_context != nullptr && !context_guard.valid()) {
+    return Status::INTERNAL_ERROR;
+  }
   *out_burst = nullptr;
   (void)batch_id;
 
@@ -1685,6 +1738,8 @@ Status DpdkEngine::get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* 
   if (!ctx) { return Status::INVALID_PARAMETER; }
 
   if (ctx->h_batch_id != nullptr) {
+    CudaContextGuard context_guard(ctx->output_pool != nullptr ? ctx->output_pool->cuda_context
+                                                               : nullptr);
     if (burst->event != nullptr) {
       const cudaError_t event_status = cudaEventQuery(burst->event);
       if (event_status == cudaErrorNotReady) { return Status::NOT_READY; }
@@ -1724,7 +1779,21 @@ Status DpdkEngine::set_reorder_cuda_stream(const std::string& interface_name,
         }
         const auto mr_it = cfg_.mrs_.find(plan.memory_region_name);
         if (mr_it == cfg_.mrs_.end()) { return Status::INVALID_PARAMETER; }
-        cudaSetDevice(plan.cuda_device_id);
+        CudaContextGuard context_guard(plan.cuda_context);
+        if (plan.cuda_context == nullptr) {
+          cudaSetDevice(plan.cuda_device_id);
+        } else if (!context_guard.valid()) {
+          return Status::INTERNAL_ERROR;
+        }
+        if (stream != nullptr && plan.cuda_context != nullptr) {
+          CUcontext stream_context = nullptr;
+          if (cuStreamGetCtx(reinterpret_cast<CUstream>(stream), &stream_context) != CUDA_SUCCESS ||
+              stream_context != plan.cuda_context) {
+            DAQIRI_LOG_ERROR("CUDA stream for reorder '{}' belongs to a different context",
+                             reorder_name);
+            return Status::INVALID_PARAMETER;
+          }
+        }
         plan.stream = stream;
         found = true;
       }

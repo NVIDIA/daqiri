@@ -18,6 +18,7 @@
 #pragma once
 
 #include "src/daqiri_ring.h"
+#include <cuda.h>
 #include <daqiri/types.h>
 #include <cuda.h>
 #include <optional>
@@ -48,7 +49,39 @@ struct AllocRegion {
   size_t size_ = 0;
   int affinity_ = -1;
   CUcontext cuda_context_ = nullptr;
+  int cuda_device_ = -1;
   Deallocator deallocator_ = Deallocator::NONE;
+  bool external_ = false;
+};
+
+struct ResolvedExternalMemoryRegion {
+  void* data = nullptr;
+  size_t capacity = 0;
+  CUcontext cuda_context = nullptr;
+  int cuda_device = -1;
+};
+
+class CudaContextGuard {
+ public:
+  explicit CudaContextGuard(CUcontext context) : active_(context != nullptr) {
+    if (active_ && cuCtxPushCurrent(context) != CUDA_SUCCESS) {
+      active_ = false;
+    }
+  }
+  ~CudaContextGuard() {
+    if (active_) {
+      CUcontext popped = nullptr;
+      (void)cuCtxPopCurrent(&popped);
+    }
+  }
+  CudaContextGuard(const CudaContextGuard&) = delete;
+  CudaContextGuard& operator=(const CudaContextGuard&) = delete;
+  bool valid() const {
+    return active_;
+  }
+
+ private:
+  bool active_ = false;
 };
 
 /**
@@ -62,6 +95,8 @@ class Engine {
   virtual void initialize() = 0;
   virtual bool is_initialized() const { return initialized_; }
   virtual bool set_config_and_initialize(const NetworkConfig& cfg) = 0;
+  Status set_external_memory_regions(const NetworkConfig& cfg,
+                                     const MemoryRegionBindings& bindings);
   virtual void run() = 0;
 
   // Common free functions to override
@@ -174,6 +209,7 @@ class Engine {
   bool initialized_ = false;
   NetworkConfig cfg_;
   std::unordered_map<std::string, AllocRegion> ar_;
+  std::unordered_map<std::string, ResolvedExternalMemoryRegion> external_mrs_;
   // shared_ptr to an incomplete type -- only populated by the DPDK engine
   // (engine_dpdk.cpp). Layout is identical in every build.
   std::unordered_map<std::string, std::shared_ptr<struct rte_pktmbuf_extmem>> ext_pktmbufs_;

@@ -71,6 +71,7 @@ struct IbvReorderPlan {
   uint32_t slot_stride = 0;
   bool data_type_conversion = false;
   int cuda_device_id = 0;
+  CUcontext cuda_context = nullptr;
   cudaStream_t stream = nullptr;
   void** d_input_ptrs = nullptr;
   std::vector<IbvReorderOutBuf> out_bufs;

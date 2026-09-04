@@ -36,6 +36,7 @@
 #include <cuda.h>
 #include <dirent.h>
 #include <fstream>
+#include <limits>
 #include <random>
 #include <regex>
 #include <sstream>
@@ -360,6 +361,117 @@ size_t Engine::get_alignment(MemoryKind kind) {
   }
 }
 
+Status Engine::set_external_memory_regions(const NetworkConfig& cfg,
+                                           const MemoryRegionBindings& bindings) {
+  external_mrs_.clear();
+  std::vector<std::pair<uintptr_t, uintptr_t>> ranges;
+  ranges.reserve(bindings.size());
+
+  for (const auto& [name, binding] : bindings) {
+    const auto mr_it = cfg.mrs_.find(name);
+    if (mr_it == cfg.mrs_.end()) {
+      DAQIRI_LOG_ERROR("External memory binding '{}' does not name a configured memory region",
+                       name);
+      return Status::INVALID_PARAMETER;
+    }
+    if (binding.data == nullptr || binding.capacity == 0) {
+      DAQIRI_LOG_ERROR("External memory binding '{}' has a null pointer or zero capacity", name);
+      return Status::INVALID_PARAMETER;
+    }
+    const uintptr_t begin = reinterpret_cast<uintptr_t>(binding.data);
+    if (binding.capacity > std::numeric_limits<uintptr_t>::max() - begin) {
+      DAQIRI_LOG_ERROR("External memory binding '{}' address range overflows", name);
+      return Status::INVALID_PARAMETER;
+    }
+    const uintptr_t end = begin + binding.capacity;
+    for (const auto& range : ranges) {
+      if (begin < range.second && range.first < end) {
+        DAQIRI_LOG_ERROR("External memory binding '{}' overlaps another bound region", name);
+        return Status::INVALID_PARAMETER;
+      }
+    }
+    ranges.emplace_back(begin, end);
+
+    ResolvedExternalMemoryRegion resolved{binding.data, binding.capacity, nullptr, -1};
+    const MemoryKind kind = mr_it->second.kind_;
+    if (kind == MemoryKind::DEVICE || kind == MemoryKind::HOST_PINNED) {
+      CUmemorytype memory_type{};
+      CUcontext context = nullptr;
+      const CUdeviceptr ptr = reinterpret_cast<CUdeviceptr>(binding.data);
+      if (cuPointerGetAttribute(&context, CU_POINTER_ATTRIBUTE_CONTEXT, ptr) != CUDA_SUCCESS ||
+          cuPointerGetAttribute(&memory_type, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, ptr) !=
+              CUDA_SUCCESS ||
+          context == nullptr) {
+        DAQIRI_LOG_ERROR("External memory binding '{}' is not CUDA-registered memory", name);
+        return Status::INVALID_PARAMETER;
+      }
+      const CUmemorytype expected =
+          kind == MemoryKind::DEVICE ? CU_MEMORYTYPE_DEVICE : CU_MEMORYTYPE_HOST;
+      if (memory_type != expected) {
+        DAQIRI_LOG_ERROR("External memory binding '{}' does not match configured memory kind",
+                         name);
+        return Status::INVALID_PARAMETER;
+      }
+      resolved.cuda_context = context;
+      {
+        CudaContextGuard guard(context);
+        CUdevice context_device = -1;
+        if (!guard.valid() || cuCtxGetDevice(&context_device) != CUDA_SUCCESS) {
+          DAQIRI_LOG_ERROR("Could not determine the CUDA context device for '{}'", name);
+          return Status::INVALID_PARAMETER;
+        }
+        resolved.cuda_device = context_device;
+      }
+      if (kind == MemoryKind::DEVICE) {
+        CUdeviceptr range_start = 0;
+        size_t range_size = 0;
+        if (cuPointerGetAttribute(&range_start, CU_POINTER_ATTRIBUTE_RANGE_START_ADDR, ptr) !=
+                CUDA_SUCCESS ||
+            cuPointerGetAttribute(&range_size, CU_POINTER_ATTRIBUTE_RANGE_SIZE, ptr) !=
+                CUDA_SUCCESS ||
+            ptr < range_start || (ptr - range_start) > range_size ||
+            binding.capacity > range_size - (ptr - range_start)) {
+          DAQIRI_LOG_ERROR(
+              "External device binding '{}' capacity exceeds its CUDA allocation range", name);
+          return Status::INVALID_PARAMETER;
+        }
+        int ordinal = -1;
+        if (cuPointerGetAttribute(&ordinal, CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL, ptr) !=
+                CUDA_SUCCESS ||
+            ordinal != mr_it->second.affinity_) {
+          DAQIRI_LOG_ERROR(
+              "External device binding '{}' is on CUDA device {}, configured affinity is {}", name,
+              ordinal, mr_it->second.affinity_);
+          return Status::INVALID_PARAMETER;
+        }
+        int capable = 0;
+        if (cuPointerGetAttribute(&capable, CU_POINTER_ATTRIBUTE_IS_GPU_DIRECT_RDMA_CAPABLE, ptr) ==
+                CUDA_SUCCESS &&
+            capable == 0) {
+          DAQIRI_LOG_ERROR("External device binding '{}' is not GPUDirect RDMA capable", name);
+          return Status::INVALID_PARAMETER;
+        }
+        CudaContextGuard guard(context);
+        unsigned int sync_memops = 1;
+        if (!guard.valid() || cuPointerSetAttribute(&sync_memops, CU_POINTER_ATTRIBUTE_SYNC_MEMOPS,
+                                                    ptr) != CUDA_SUCCESS) {
+          DAQIRI_LOG_ERROR("Could not enable synchronous memory operations for '{}'", name);
+          return Status::INVALID_PARAMETER;
+        }
+      }
+    }
+    external_mrs_.emplace(name, resolved);
+  }
+  for (const auto& [name, mr] : cfg.mrs_) {
+    if (!mr.owned_ && external_mrs_.find(name) == external_mrs_.end()) {
+      DAQIRI_LOG_ERROR("Memory region '{}' has owned=false but no external binding", name);
+      external_mrs_.clear();
+      return Status::INVALID_PARAMETER;
+    }
+  }
+  return Status::SUCCESS;
+}
+
 Status Engine::populate_pool(daqiri::Ring* ring, const std::string& mr_name) {
   auto mr = cfg_.mrs_[mr_name];
   auto base = reinterpret_cast<char*>(ar_[mr_name].ptr_);
@@ -438,7 +550,37 @@ Status Engine::allocate_memory_regions() {
     mr.second.ttl_size_ = align_ceil(mr.second.adj_size_ * mr.second.num_bufs_, GPU_PAGE_SIZE);
     ar.size_ = mr.second.ttl_size_;
 
-    if (mr.second.owned_) {
+    const auto external = external_mrs_.find(mr.first);
+    if (external != external_mrs_.end()) {
+      if (external->second.capacity < mr.second.ttl_size_) {
+        DAQIRI_LOG_ERROR(
+            "External memory region '{}' supplies {} bytes but requires {} bytes "
+            "({} buffers at a {} byte stride)",
+            mr.first, external->second.capacity, mr.second.ttl_size_, mr.second.num_bufs_,
+            mr.second.adj_size_);
+        return Status::INVALID_PARAMETER;
+      }
+      size_t alignment = get_alignment(mr.second.kind_);
+      if (cfg_.common_.engine_type == EngineType::DPDK) {
+        alignment = GPU_PAGE_SIZE;
+      } else if (cfg_.common_.engine_type == EngineType::IBVERBS &&
+                 mr.second.kind_ == MemoryKind::DEVICE) {
+        alignment = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+      }
+      if ((reinterpret_cast<uintptr_t>(external->second.data) % alignment) != 0) {
+        DAQIRI_LOG_ERROR("External memory region '{}' pointer is not {}-byte aligned", mr.first,
+                         alignment);
+        return Status::INVALID_PARAMETER;
+      }
+      ptr = external->second.data;
+      ar.external_ = true;
+      ar.cuda_context_ = external->second.cuda_context;
+      ar.cuda_device_ = external->second.cuda_device;
+      ar.deallocator_ = AllocRegion::Deallocator::NONE;
+    } else if (!mr.second.owned_) {
+      DAQIRI_LOG_ERROR("Memory region '{}' has owned=false but no external binding", mr.first);
+      return Status::INVALID_PARAMETER;
+    } else {
       switch (mr.second.kind_) {
         case MemoryKind::HOST:
           if (posix_memalign(&ptr, GPU_PAGE_SIZE, mr.second.ttl_size_) != 0) {
@@ -453,6 +595,12 @@ Status Engine::allocate_memory_regions() {
             DAQIRI_LOG_CRITICAL("Failed to allocate CUDA pinned host memory!");
             return Status::NULL_PTR;
           }
+          if (cuCtxGetCurrent(&ar.cuda_context_) != CUDA_SUCCESS || ar.cuda_context_ == nullptr) {
+            DAQIRI_LOG_CRITICAL("Failed to capture CUDA context for pinned host memory!");
+            cudaFreeHost(ptr);
+            return Status::NULL_PTR;
+          }
+          ar.cuda_device_ = mr.second.affinity_;
           ar.deallocator_ = AllocRegion::Deallocator::CUDA_HOST;
           break;
         case MemoryKind::HUGE:
@@ -464,6 +612,14 @@ Status Engine::allocate_memory_regions() {
           CUdeviceptr cuptr;
           CUcontext current = nullptr;
 
+          const auto driver_init_res = cuInit(0);
+          if (driver_init_res != CUDA_SUCCESS) {
+            const char* err_str = nullptr;
+            cuGetErrorString(driver_init_res, &err_str);
+            DAQIRI_LOG_CRITICAL("Could not initialize the CUDA driver: {}",
+                                err_str != nullptr ? err_str : "unknown error");
+            return Status::NULL_PTR;
+          }
           const auto current_res = cuCtxGetCurrent(&current);
           if (current_res != CUDA_SUCCESS) {
             DAQIRI_LOG_CRITICAL("Could not query the current CUDA context");
@@ -529,6 +685,7 @@ Status Engine::allocate_memory_regions() {
             restore_previous();
             return Status::NULL_PTR;
           }
+          ar.cuda_device_ = mr.second.affinity_;
           ar.deallocator_ = AllocRegion::Deallocator::CUDA_DEVICE;
           if (!restore_previous()) {
             if (cuCtxSetCurrent(ar.cuda_context_) == CUDA_SUCCESS) {

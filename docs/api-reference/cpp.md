@@ -56,6 +56,44 @@ Only one engine may be active in a process. Calling `daqiri_init()` again before
 After `shutdown()` completes, a later `daqiri_init()` creates a fresh engine instance and
 allocates/registers its resources again.
 
+### Application-owned memory regions
+
+Applications that need allocations in a specific CUDA context (including MPS applications) can
+bind their own storage to configured memory-region names. Query the engine-adjusted requirements
+first; the returned capacity includes packet headroom, slot alignment, and any DPDK buffer-count
+safety adjustment.
+
+```cpp
+daqiri::NetworkConfig config;
+if (daqiri::parse_network_config("config.yaml", config) != daqiri::Status::SUCCESS) {
+  throw std::runtime_error("invalid DAQIRI config");
+}
+
+daqiri::MemoryRegionRequirements requirements;
+daqiri::get_memory_region_requirements(config, requirements);
+const auto& rx = requirements.at("RX_GPU");
+
+void* rx_gpu = nullptr;
+cudaMalloc(&rx_gpu, rx.capacity);  // Uses the application's current context.
+daqiri::MemoryRegionBindings bindings{{"RX_GPU", {rx_gpu, rx.capacity}}};
+
+if (daqiri::daqiri_init(config, bindings) != daqiri::Status::SUCCESS) {
+  cudaFree(rx_gpu);
+  throw std::runtime_error("DAQIRI initialization failed");
+}
+
+// Return every outstanding burst before shutdown.
+daqiri::shutdown();
+cudaFree(rx_gpu);
+```
+
+Bindings may cover only some regions; DAQIRI allocates the rest. Bound memory is borrowed, so its
+allocation and CUDA context must remain alive until `shutdown()` completes. DAQIRI deregisters it
+from the NIC but never frees, unpins, or unmaps it. Direct TCP/UDP sockets reject bindings because
+their configured regions are not packet pools. DPDK also rejects externally bound `huge` regions:
+EAL assumes ownership of pre-existing hugepage mappings during initialization and unmaps them at
+cleanup. External `huge` regions remain supported by ibverbs/RDMA.
+
 If GPU RX `reorder_configs` are configured for Raw Ethernet (`stream_type: "raw"`), set
 one CUDA stream per GPU reorder plan before pulling reordered bursts. CPU reorder configs do not use a
 CUDA stream. See the [Configuration YAML Reference](configuration.md#rx-reorder-configs)
@@ -657,10 +695,12 @@ workflow sections above show the common call order and ownership rules.
 | `version_year()` / `version_month()` / `version_patch()` | Return the CalVer components. |
 | `abi_version()` | Return the DAQIRI shared-library ABI version. |
 | `daqiri_init(NetworkConfig &config)` | Initialize DAQIRI from an already-populated config object. |
+| `daqiri_init(config, bindings)` | Initialize with non-owning external memory bindings. |
 | `daqiri_init(const std::string &yaml_string_or_path)` | Initialize from a YAML string or YAML file path. |
 | `daqiri_init_from_yaml_string(const std::string &yaml_string)` | Initialize from YAML content. |
 | `daqiri_init_from_yaml_file(const std::string &yaml_path)` | Initialize from a YAML file path. |
 | `parse_network_config(...)` | Parse YAML into `NetworkConfig` without starting the engine. |
+| `get_memory_region_requirements(config, requirements)` | Return effective slot size, count, capacity, and alignment. |
 | `get_engine_type()` | Return the active engine type after initialization. |
 | `get_engine_type(config)` | Return the engine type selected by a config object. |
 | `shutdown()` | Stop DAQIRI and release engine-owned resources. |
