@@ -1,0 +1,45 @@
+%YAML 1.2
+---
+# Host A: replace the BDF and destination MAC. The 95-Gbit/s L2 cap is the
+# verified lossless Spark setting; remove pacing_mbps for overload testing.
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    engine: "ibverbs"
+    master_core: 8
+    debug: false
+    log_level: "info"
+    loopback: ""
+    memory_regions:
+    - name: "Raw_TX"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 4096
+      buf_size: 8272
+    interfaces:
+    - name: "tx_port"
+      address: <HOST_A_LINK1_PCIE_BDF>
+      tx:
+        queues:
+        - name: "tx_q_0"
+          id: 0
+          batch_size: 2048
+          cpu_core: 17
+          pacing_mbps: 95000
+          memory_regions:
+          - "Raw_TX"
+          offloads:
+          - "tx_eth_src"
+
+ucx_gpu_raw_source:
+  interface_name: "tx_port"
+  queue_id: 0
+  cpu_core: 16
+  burst_packets: 2048
+  source_epoch: 1311768467463790320
+  eth_dst_addr: "<HOST_B_LINK1_MAC>"
+  ip_src_addr: "1.1.1.1"
+  ip_dst_addr: "2.2.2.2"
+  udp_src_port: 4096
+  udp_dst_port: 4096

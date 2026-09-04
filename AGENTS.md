@@ -18,7 +18,9 @@ CMake options (full table in `docs/getting-started.md`):
 - `DAQIRI_ENGINE` — space-separated list of optional engines to compile. Valid values: `dpdk` (raw Ethernet) and `ibverbs` (RDMA/RoCE). Linux sockets (UDP/TCP) are always built in, so there is no `socket` value. Default is `"dpdk ibverbs"`.
 - `DAQIRI_BUILD_PYTHON` — builds `pybind11` bindings from `python/`.
 - `DAQIRI_BUILD_EXAMPLES` — builds the benchmark executables (default `ON`).
-- `DAQIRI_BUILD_APPLICATIONS` — builds the end-to-end example applications under `applications/` (default `OFF`; requires TensorRT, e.g. the `BASE_IMAGE=torch` container). Currently builds `applications/resnet50_inference/` (DAQIRI → TensorRT ResNet inference).
+- `DAQIRI_BUILD_APPLICATIONS` — umbrella for opt-in applications under `applications/` (default `OFF`).
+- `DAQIRI_BUILD_RESNET50_INFERENCE` — builds the TensorRT ResNet50 application when the umbrella is enabled (default `ON`; requires `BASE_IMAGE=torch`).
+- `DAQIRI_BUILD_UCX_GPU_EGRESS` — builds the experimental raw-Ethernet → batched CUDA → UCX/UCP application when the umbrella is enabled (default `OFF`; use `BASE_TARGET=ucx`).
 - `DAQIRI_ENABLE_OTEL_METRICS` — enables OpenTelemetry metrics instrumentation (default `OFF`).
 - `DAQIRI_REORDER_GPU_PROFILE` — enable CUDA event timing in the DPDK reorder kernels (off by default).
 - `DAQIRI_ENABLE_S3` — enable AWS SDK-backed asynchronous raw packet writes to S3 (off by default).
@@ -76,6 +78,7 @@ Beyond the benchmarks, end-to-end **example applications** live under `applicati
 | Executable | Source | Typical config |
 |---|---|---|
 | `daqiri_resnet50_inference` | `applications/resnet50_inference/` | `configs/resnet50_{tx,rx}_spark_xhost.yaml` (Spark-to-Spark: TX on stacked-01, RX+inference on stacked-02). Config-based GPU reorder + int8→fp16 quantize → TensorRT FP16 tensor-core inference, RX/inference decoupled via SPSC ring. Also `resnet50_sw_loopback.yaml` (no NIC), `resnet50_wire_loopback.yaml` / `resnet50_bench_spark.yaml` for optional single-host smoke. Requires TensorRT (`BASE_IMAGE=torch`). See `docs/tutorials/daqiri-resnet-inference.md`. |
+| `daqiri_ucx_gpu_transport_bench`, `daqiri_ucx_raw_source`, `daqiri_ucx_raw_pipeline` | `applications/ucx_gpu_egress/` | Containerized UCX-only and composed raw-Ethernet → 16-image CUDA batch → UCP Active Message examples. Portable configs are under `configs/`; use `BASE_TARGET=ucx`, disable the ResNet sub-option, and see `docs/tutorials/daqiri-ucx-gpu-egress.md`. |
 
 ## Formatting
 

@@ -208,6 +208,9 @@ DAQIRI's shared-library ABI version is tracked separately through
 | `DAQIRI_ENGINE` | `"dpdk ibverbs"` | Space-separated list of optional engine implementations to compile in. Valid values: `dpdk` (Raw Ethernet) and `ibverbs`. `ibverbs` builds two libibverbs-based engines: RDMA/RoCE (for `stream_type: "socket"` with `roce://` endpoints) and the default Mellanox/mlx5 Multi-Packet (striding) Receive Queue engine for `stream_type: "raw"`. Set `engine: "dpdk"` on a raw stream to select the compiled DPDK implementation instead. Linux UDP/TCP sockets are always built in, so there is no `socket` value. |
 | `DAQIRI_BUILD_PYTHON` | `OFF` | Build pybind11 Python bindings. |
 | `DAQIRI_BUILD_EXAMPLES` | `ON` | Build benchmark executables. |
+| `DAQIRI_BUILD_APPLICATIONS` | `OFF` | Build opt-in end-to-end applications under `applications/`. |
+| `DAQIRI_BUILD_RESNET50_INFERENCE` | `ON` | Build the TensorRT ResNet50 application when applications are enabled. Disable it for a UCX-only application image. |
+| `DAQIRI_BUILD_UCX_GPU_EGRESS` | `OFF` | Build the experimental raw-Ethernet → batched CUDA → UCX/UCP application. Use the `ucx` container target for UCX 1.20 with CUDA support. |
 | `DAQIRI_ENABLE_GDS` | `OFF` | Enable cuFile-backed burst file writes from CUDA device memory. Host-memory writes use POSIX APIs without GDS. |
 | `DAQIRI_ENABLE_OTEL_METRICS` | `OFF` | Enable OpenTelemetry C++ metrics instrumentation. When enabled, OpenTelemetry C++ API package metadata must be available to CMake. |
 | `DAQIRI_ENABLE_S3` | `OFF` | Enable AWS SDK-backed asynchronous raw packet writes to S3. |
