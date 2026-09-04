@@ -1,0 +1,2293 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+  
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://nvidia.github.io/daqiri/tutorials/daqiri-resnet-inference/">
+      
+      
+        <link rel="prev" href="../daqiri-holoscan-integration/">
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../images/favicon-32.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+  <link rel="icon" href="../../images/favicon.svg" sizes="any" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="../../images/apple-touch-icon.png">
+
+    
+      
+        <title>DAQIRI + TensorRT Inference - DAQIRI: Data Acquisition for Integrated Real-time Instruments</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  <script>window.NV_NAV = {"Benchmarking": [{"label": "Overview", "url": "benchmarks/"}, {"label": "Socket and RDMA Benchmarking", "url": "benchmarks/socket_benchmarking/"}, {"label": "Raw Ethernet Benchmarking", "url": "benchmarks/raw_benchmarking/"}, {"label": "Performance: DGX Spark", "url": "benchmarks/performance-dgx-spark/"}], "API Reference": [{"label": "API Guide", "url": "api-reference/"}, {"label": "Configuration YAML Reference", "url": "api-reference/configuration/"}, {"label": "C++ API Usage", "url": "api-reference/cpp/"}, {"label": "Python API Usage", "url": "api-reference/python/"}], "Tutorials": [{"label": "System Configuration", "url": "tutorials/system_configuration/"}, {"label": "Bare-Metal CMake Build", "url": "tutorials/bare-metal-cmake-build/"}, {"label": "Configuration YAML Walkthrough", "url": "tutorials/configuration-walkthrough/"}, {"label": "DAQIRI + Holoscan Integration", "url": "tutorials/daqiri-holoscan-integration/"}, {"label": "DAQIRI + TensorRT Inference", "url": "tutorials/daqiri-resnet-inference/"}]};</script></head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="light-green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#daqiri-tensorrt-resnet-inference" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="DAQIRI: Data Acquisition for Integrated Real-time Instruments" class="md-header__button md-logo" aria-label="DAQIRI: Data Acquisition for Integrated Real-time Instruments" data-md-component="logo">
+      
+  <img src="../../images/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            DAQIRI: Data Acquisition for Integrated Real-time Instruments
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              DAQIRI + TensorRT Inference
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="light-green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="light-green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/nvidia/daqiri" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    nvidia/daqiri
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../getting-started/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Getting Started
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../concepts/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Concepts
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../benchmarks/" class="md-tabs__link">
+          
+  
+  
+  Benchmarking
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../api-reference/" class="md-tabs__link">
+          
+  
+  
+  API Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../system_configuration/" class="md-tabs__link">
+          
+  
+  
+  Tutorials
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+                
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" hidden>
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="DAQIRI: Data Acquisition for Integrated Real-time Instruments" class="md-nav__button md-logo" aria-label="DAQIRI: Data Acquisition for Integrated Real-time Instruments" data-md-component="logo">
+      
+  <img src="../../images/logo.svg" alt="logo">
+
+    </a>
+    DAQIRI: Data Acquisition for Integrated Real-time Instruments
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/nvidia/daqiri" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    nvidia/daqiri
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Benchmarking
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Benchmarking
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/socket_benchmarking/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Socket and RDMA Benchmarking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/raw_benchmarking/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Raw Ethernet Benchmarking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/performance-dgx-spark/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance: DGX Spark
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration YAML Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/cpp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    C++ API Usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API Usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorials
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tutorials
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../system_configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../bare-metal-cmake-build/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bare-Metal CMake Build
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration-walkthrough/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration YAML Walkthrough
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../daqiri-holoscan-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DAQIRI + Holoscan Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DAQIRI + TensorRT Inference
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DAQIRI + TensorRT Inference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Summary
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Summary">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#key-parameter-values" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key parameter values
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The pipeline
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-threads-and-cuda-streams" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Threads and CUDA streams
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-configure-gpu-reorder" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Configure GPU reorder
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-receive-a-batch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Receive a batch
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Receive a batch">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#where-drops-are-counted" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where drops are counted
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#type-conversion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Type conversion
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-pass-the-batch-to-the-inference-thread" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Pass the batch to the inference thread
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-run-inference-and-free-the-burst" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Run inference and free the burst
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-shut-down" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Shut down
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#build" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Build
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prepare-model-dataset" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prepare model + dataset
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#run-without-a-nic-software-loopback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run without a NIC (software loopback)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#run-across-two-hosts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run across two hosts
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Run across two hosts">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#adapting-to-your-hosts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adapting to your hosts
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#queue-sizing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Queue sizing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-a-good-run-looks-like" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a good run looks like
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+                
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Summary
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Summary">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#key-parameter-values" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key parameter values
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The pipeline
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-threads-and-cuda-streams" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Threads and CUDA streams
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-configure-gpu-reorder" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Configure GPU reorder
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-receive-a-batch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Receive a batch
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Receive a batch">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#where-drops-are-counted" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where drops are counted
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#type-conversion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Type conversion
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-pass-the-batch-to-the-inference-thread" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Pass the batch to the inference thread
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-run-inference-and-free-the-burst" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Run inference and free the burst
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-shut-down" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Shut down
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#build" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Build
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prepare-model-dataset" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prepare model + dataset
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#run-without-a-nic-software-loopback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run without a NIC (software loopback)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#run-across-two-hosts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run across two hosts
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Run across two hosts">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#adapting-to-your-hosts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adapting to your hosts
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#queue-sizing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Queue sizing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-a-good-run-looks-like" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a good run looks like
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+  
+
+
+
+  
+  
+
+
+<h1 id="daqiri-tensorrt-resnet-inference">DAQIRI → TensorRT ResNet Inference<a class="headerlink" href="#daqiri-tensorrt-resnet-inference" title="Permanent link">&para;</a></h1>
+<p>This tutorial connects DAQIRI packet ingestion to a GPU inference pipeline.
+Config-based GPU reorder converts wire <strong>int8</strong> samples into a contiguous
+<strong>fp16</strong> NCHW batch, an SPSC ring decouples RX from TensorRT, and ResNet-50
+emits one embedding vector per image — with no host bounce on the data path.
+Source: <code>applications/resnet50_inference/</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>wire int8 packets (raw Ethernet, NIC-DMA into GPU-accessible buffers)
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  → config-based GPU reorder + int8→fp16 (one burst = one inference batch)
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>  → SPSC handoff (RX producer | inference consumer)
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>  → ResNet-50 feature extraction (TensorRT, FP16 tensor cores)
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>  → FeatureSink (sample features + per-class mean-feature stats)
+</code></pre></div>
+<p>The pipeline needs <strong>two hosts and one link</strong>: one transmits, the other receives
+and infers. The shipped configs and the <code>run_resnet_xhost.sh</code> helper default to a
+pair of DGX Sparks cabled p0↔p0, but nothing in the application is
+platform-specific — see <a href="#run-across-two-hosts">Run across two hosts</a> for what a
+different pair needs to change. A single-host software loopback needs no NIC at
+all and is the fastest way to check a build.</p>
+<h2 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Dataset</strong></td>
+<td>CIFAR-10, 224×224, 3-channel color images</td>
+</tr>
+<tr>
+<td><strong>Model</strong></td>
+<td>ResNet-50 feature extractor via TensorRT (FP16 input binding + tensor cores)</td>
+</tr>
+<tr>
+<td><strong>Output</strong></td>
+<td>Tensor <code>features</code>, FP32, shape <code>[batch, 2048]</code> — one <strong>2048-length embedding vector per image</strong></td>
+</tr>
+<tr>
+<td><strong>Data path</strong></td>
+<td>NIC DMA → RX buffers → reorder MR → TRT zero-copy read of reorder output → FeatureSink</td>
+</tr>
+</tbody>
+</table>
+<h3 id="key-parameter-values">Key parameter values<a class="headerlink" href="#key-parameter-values" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Image dimensions</td>
+<td>3 × 224 × 224 (CIFAR-10 upscaled)</td>
+</tr>
+<tr>
+<td>Wire payload per packet</td>
+<td>1176 B int8</td>
+</tr>
+<tr>
+<td>Packets per image</td>
+<td>128</td>
+</tr>
+<tr>
+<td>Images per inference batch</td>
+<td>32</td>
+</tr>
+</tbody>
+</table>
+<p>Images travel as signed int8 — one byte per pixel, <code>pixel − 128</code>, which is
+lossless over 0..255 and costs no extra bytes. The reorder kernel reassembles
+the packets and converts to fp16 in the same pass, so the network never carries
+fp16 and the CPU never touches a pixel. One delivered burst is exactly one
+<code>[32,3,224,224]</code> fp16 batch.</p>
+<p>Two constraints are worth knowing before you change any of the four values
+above:</p>
+<ul>
+<li><code>packets_per_image</code> and <code>images_per_batch</code> must both be powers of two, and
+  <code>--images-per-batch</code> must stay a power-of-two divisor of
+  <code>packets_per_batch / packets_per_image</code>.</li>
+<li><code>Data_RX_GPU</code>'s <code>buf_size</code> <strong>must</strong> equal <code>payload_byte_offset +
+  out_payload_len</code> (64 + 1176 = 1240). The reorder slot stride is derived from
+  <code>buf_size - payload_byte_offset</code>, so any slack pads the fp16 batch and breaks
+  the tensor layout.</li>
+</ul>
+<p>The full parameter table — including <code>output_slot_stride</code>, <code>seq_bit_offset</code> /
+<code>seq_bit_width</code>, and the derived <code>packets_per_batch</code> — is in
+<code>applications/resnet50_inference/README.md</code> under <strong>Config keys</strong>.</p>
+<h2 id="the-pipeline">The pipeline<a class="headerlink" href="#the-pipeline" title="Permanent link">&para;</a></h2>
+<p>Two threads, two CUDA streams, and one ring between them. The NIC and the
+reorder kernel fill batches on the reorder stream; TensorRT drains them on the
+inference stream; the SPSC queue is the only thing the two app threads share.</p>
+<pre class="mermaid"><code>flowchart LR
+  subgraph txHost ["TX host"]
+    Pcap["pcap / synthetic"]
+    TxW["pcap_tx_worker"]
+    Pcap --&gt; TxW --&gt; Wire["wire"]
+  end
+  subgraph rxHost ["RX + inference host"]
+    Wire --&gt; NicRx["DPDK RX + GPU reorder"]
+    NicRx --&gt;|"REORDERED burst"| Prod["rx_producer_worker"]
+    Prod --&gt;|"InferenceJob"| SPSC["InferenceQueue kCap=8"]
+    SPSC --&gt; Cons["inference_consumer_worker"]
+    Cons --&gt; TRT["TrtRunner fp16 in"]
+    TRT --&gt; Sink["FeatureSink samples + class means"]
+  end</code></pre>
+<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<p>The walkthrough below follows one batch from the wire to an embedding vector
+(<code>applications/resnet50_inference/main.cpp</code>, <code>inference_pipeline.cu</code>,
+<code>spsc_queue.h</code>, <code>trt_runner.cu</code>).</p>
+<h3 id="1-threads-and-cuda-streams">1. Threads and CUDA streams<a class="headerlink" href="#1-threads-and-cuda-streams" title="Permanent link">&para;</a></h3>
+<p>The RX side has a <strong>reorder stream</strong>, created by <code>main</code> and handed to the
+engine; the inference side has its own stream owned by the consumer thread. Two
+application threads sit on either side of the SPSC queue.</p>
+<table>
+<thead>
+<tr>
+<th>Thread</th>
+<th style="text-align: right;">Core</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>DPDK EAL master</td>
+<td style="text-align: right;">8</td>
+<td><code>master_core</code></td>
+</tr>
+<tr>
+<td>DPDK RX poller</td>
+<td style="text-align: right;">18</td>
+<td><code>rx.queues[].cpu_core</code></td>
+</tr>
+<tr>
+<td>App RX producer</td>
+<td style="text-align: right;">19</td>
+<td><code>bench_rx.cpu_core</code>: <code>get_rx_burst</code> → SPSC push</td>
+</tr>
+<tr>
+<td>Inference consumer</td>
+<td style="text-align: right;">15</td>
+<td><code>inference.cpu_core</code>: TRT + FeatureSink</td>
+</tr>
+<tr>
+<td>reorder CUDA stream</td>
+<td style="text-align: right;">n/a</td>
+<td><code>set_reorder_cuda_stream</code> (bound once after init)</td>
+</tr>
+<tr>
+<td>inference CUDA stream</td>
+<td style="text-align: right;">n/a</td>
+<td>owned by consumer</td>
+</tr>
+</tbody>
+</table>
+<p>Core numbers are from <code>resnet50_rx_spark_xhost.yaml</code>; the TX config uses 8 / 16
+/ 17 (master / app TX / TX queue). <code>resnet50_sw_loopback.yaml</code> uses a different
+set entirely (master 3, RX queue 9, producer 8, inference 7), so pick cores for
+your own host rather than copying these.</p>
+<p>The consumer is launched <strong>first</strong>, and the producer only after it signals
+<code>rx_ready</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">consumer_thread</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="kr">thread</span><span class="p">(</span><span class="n">app</span><span class="o">::</span><span class="n">inference_consumer_worker</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">cref</span><span class="p">(</span><span class="n">cfg</span><span class="p">),</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">ref</span><span class="p">(</span><span class="n">sink</span><span class="p">),</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">                              </span><span class="n">std</span><span class="o">::</span><span class="n">ref</span><span class="p">(</span><span class="n">inf_queue</span><span class="p">),</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">ref</span><span class="p">(</span><span class="n">producer_done</span><span class="p">),</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">ref</span><span class="p">(</span><span class="n">rx_ready</span><span class="p">),</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">                              </span><span class="n">std</span><span class="o">::</span><span class="n">ref</span><span class="p">(</span><span class="n">stop</span><span class="p">));</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">rx_ready</span><span class="p">.</span><span class="n">load</span><span class="p">()</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="o">!</span><span class="n">stop</span><span class="p">.</span><span class="n">load</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="n">this_thread</span><span class="o">::</span><span class="n">sleep_for</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">chrono</span><span class="o">::</span><span class="n">milliseconds</span><span class="p">(</span><span class="mi">10</span><span class="p">));</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="p">}</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="n">producer_thread</span><span class="w"> </span><span class="o">=</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="kr">thread</span><span class="p">(</span><span class="n">app</span><span class="o">::</span><span class="n">rx_producer_worker</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">cref</span><span class="p">(</span><span class="n">cfg</span><span class="p">),</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">ref</span><span class="p">(</span><span class="n">inf_queue</span><span class="p">),</span><span class="w"> </span><span class="n">expected_images</span><span class="p">,</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">                </span><span class="n">std</span><span class="o">::</span><span class="n">ref</span><span class="p">(</span><span class="n">producer_done</span><span class="p">),</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">ref</span><span class="p">(</span><span class="n">stop</span><span class="p">));</span>
+</code></pre></div>
+<p><code>rx_ready</code> is set only after <code>TrtRunner::initialize()</code> returns, which on a cold
+run <em>builds</em> the engine and can take minutes. The producer has a finite patience
+budget for that:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">kQuiesceIters</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">50000</span><span class="p">;</span><span class="w">        </span><span class="c1">// ~5 s after data started</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">kStartupIdleIters</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1800000</span><span class="p">;</span><span class="w">  </span><span class="c1">// ~3 min before any data</span>
+</code></pre></div>
+<p>Start the producer before the engine is ready and a cold build eats straight
+into that ~3-minute window. These are the same two numbers that govern how long
+you have to start TX after RX — see
+<a href="#run-across-two-hosts">Run across two hosts</a>.</p>
+<h3 id="2-configure-gpu-reorder">2. Configure GPU reorder<a class="headerlink" href="#2-configure-gpu-reorder" title="Permanent link">&para;</a></h3>
+<p>Creating and binding one CUDA stream is the entire application side of reorder.
+<code>main</code> does it immediately after <code>daqiri_init</code> and before any thread starts:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">cudaStreamCreateWithFlags</span><span class="p">(</span><span class="o">&amp;</span><span class="n">reorder_stream</span><span class="p">,</span><span class="w"> </span><span class="n">cudaStreamNonBlocking</span><span class="p">);</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">daqiri</span><span class="o">::</span><span class="n">set_reorder_cuda_stream</span><span class="p">(</span><span class="n">cfg</span><span class="p">.</span><span class="n">rx</span><span class="p">.</span><span class="n">interface_name</span><span class="p">,</span><span class="w"> </span><span class="n">cfg</span><span class="p">.</span><span class="n">reorder_name</span><span class="p">,</span><span class="w"> </span><span class="n">reorder_stream</span><span class="p">)</span><span class="w"> </span><span class="o">!=</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="n">daqiri</span><span class="o">::</span><span class="n">Status</span><span class="o">::</span><span class="n">SUCCESS</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="c1">// fatal: reorder cannot run on a stream the app can observe</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="p">}</span>
+</code></pre></div>
+<p>Everything else is configuration. The app's <code>reorder:</code> block declares the
+geometry once — the stream binding target, the packet layout, and the
+sequence-number field:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nt">reorder</span><span class="p">:</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">reorder_name</span><span class="p">:</span><span class="w"> </span><span class="s">"rx_reorder_resnet_int8_fp16"</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">out_payload_len</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1176</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">output_slot_stride</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2352</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span><span class="nt">packets_per_image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span><span class="nt">payload_byte_offset</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">64</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span><span class="nt">seq_bit_offset</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span><span class="nt">seq_bit_width</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">16</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">  </span><span class="nt">images_per_batch</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">32</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">  </span><span class="nt">image_out_bytes</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">301056</span>
+</code></pre></div>
+<p><code>reorder_name</code> is the same string passed to <code>set_reorder_cuda_stream</code> above.
+The remaining knobs — reorder type, output memory region, int8→fp16 conversion,
+and which flow IDs to reorder — have defaults that suit this pipeline; see
+<code>applications/resnet50_inference/README.md</code> under <strong>Config keys</strong> for the full
+table.</p>
+<p><code>seq_bit_width</code> must match the <code>--seq-bit-width</code> used to generate the pcap.</p>
+<p>The application never launches a reorder kernel, never tracks a packet's slot,
+and never accumulates an image — it declares the geometry and then receives
+finished batches.</p>
+<h3 id="3-receive-a-batch">3. Receive a batch<a class="headerlink" href="#3-receive-a-batch" title="Permanent link">&para;</a></h3>
+<p>In this example, burst size equals an inference batch, removing the need to
+manage image reassembly across bursts.</p>
+<p>DAQIRI delivers packets in bursts of DAQIRI-owned buffers, and the pointers in a
+burst are valid only until the burst is freed (the
+<a href="../../concepts/">zero-copy ownership</a> rule):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">daqiri</span><span class="o">::</span><span class="n">BurstParams</span><span class="o">*</span><span class="w"> </span><span class="n">burst</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">;</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">daqiri</span><span class="o">::</span><span class="n">get_rx_burst</span><span class="p">(</span><span class="o">&amp;</span><span class="n">burst</span><span class="p">,</span><span class="w"> </span><span class="n">port_id</span><span class="p">,</span><span class="w"> </span><span class="n">queue_id</span><span class="p">)</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">daqiri</span><span class="o">::</span><span class="n">Status</span><span class="o">::</span><span class="n">SUCCESS</span><span class="w"> </span><span class="o">||</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="n">burst</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="c1">// no packets this poll — back off, count an idle poll, retry</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="p">}</span>
+</code></pre></div>
+<p>A burst is only usable here if reorder actually ran on it. That is a flag check,
+and a burst without it is freed on the spot:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">const</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">flags</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">burst</span><span class="o">-&gt;</span><span class="n">hdr</span><span class="p">.</span><span class="n">hdr</span><span class="p">.</span><span class="n">burst_flags</span><span class="p">;</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="k">if</span><span class="w"> </span><span class="p">((</span><span class="n">flags</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="n">daqiri</span><span class="o">::</span><span class="n">DAQIRI_BURST_FLAG_REORDERED</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0U</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="o">++</span><span class="n">bursts_not_reordered</span><span class="p">;</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="n">packets_not_reordered</span><span class="w"> </span><span class="o">+=</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">      </span><span class="k">static_cast</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">max</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">daqiri</span><span class="o">::</span><span class="n">get_num_packets</span><span class="p">(</span><span class="n">burst</span><span class="p">)));</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="n">daqiri</span><span class="o">::</span><span class="n">free_all_packets_and_burst_rx</span><span class="p">(</span><span class="n">burst</span><span class="p">);</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span><span class="k">continue</span><span class="p">;</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="p">}</span>
+</code></pre></div>
+<p>A full batch carries <code>images_per_batch</code> images. A <strong>timeout-flushed</strong> batch does
+not, and its true image count has to be queried — but the query can race the
+reorder kernel that is still finishing:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kt">uint32_t</span><span class="w"> </span><span class="n">n_img</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cfg</span><span class="p">.</span><span class="n">images_per_batch</span><span class="p">;</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="k">if</span><span class="w"> </span><span class="p">((</span><span class="n">flags</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="n">daqiri</span><span class="o">::</span><span class="n">DAQIRI_BURST_FLAG_REORDER_TIMEOUT</span><span class="p">)</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">0U</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="n">daqiri</span><span class="o">::</span><span class="n">ReorderBurstInfo</span><span class="w"> </span><span class="n">info</span><span class="p">{};</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="c1">// A timeout-flushed burst can still have its reorder event in flight, in</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="c1">// which case the info query reports NOT_READY: wait it out instead of</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">  </span><span class="c1">// discarding a partially filled batch.</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">  </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">kInfoRetries</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2000</span><span class="p">;</span><span class="w">  </span><span class="c1">// ~100 ms at 50 us per retry</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">  </span><span class="n">daqiri</span><span class="o">::</span><span class="n">Status</span><span class="w"> </span><span class="n">info_status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">daqiri</span><span class="o">::</span><span class="n">Status</span><span class="o">::</span><span class="n">NOT_READY</span><span class="p">;</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">  </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">attempt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">attempt</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">kInfoRetries</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">attempt</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">    </span><span class="n">info_status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">daqiri</span><span class="o">::</span><span class="n">get_reorder_burst_info</span><span class="p">(</span><span class="n">burst</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">info</span><span class="p">);</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">info_status</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">daqiri</span><span class="o">::</span><span class="n">Status</span><span class="o">::</span><span class="n">NOT_READY</span><span class="p">)</span><span class="w"> </span><span class="k">break</span><span class="p">;</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">this_thread</span><span class="o">::</span><span class="n">sleep_for</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">chrono</span><span class="o">::</span><span class="n">microseconds</span><span class="p">(</span><span class="mi">50</span><span class="p">));</span>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="w">  </span><span class="n">n_img</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">info</span><span class="p">.</span><span class="n">source_packet_count</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">cfg</span><span class="p">.</span><span class="n">packets_per_image</span><span class="p">;</span>
+<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a><span class="p">}</span>
+</code></pre></div>
+<p><code>NOT_READY</code> means the data is coming, not that it is bad, so the loop retries
+rather than discards. This branch is live: the configs ship
+<code>timeout_us: 2000</code>, so any batch that does not fill before a 2 ms idle gap
+arrives here. A flush landing mid-image leaves stragglers that integer division
+drops, counted as <code>remainder_dropped</code>.</p>
+<p>Four things still drop a burst outright, and each has its own counter so
+backpressure stays distinguishable from RX-side loss: a full SPSC queue
+(<code>queue_full</code> — inference could not keep up), a partial batch holding fewer
+packets than one image (<code>short_batch</code>), <code>get_reorder_burst_info</code> failing
+(<code>info_failure</code>), and a null device pointer (<code>null_input</code>).</p>
+<p>The reordered batch itself is a single pointer — the whole fp16 NCHW tensor,
+contiguous, at packet 0 of the reorder output region:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kt">void</span><span class="o">*</span><span class="w"> </span><span class="n">dev_input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">daqiri</span><span class="o">::</span><span class="n">get_packet_ptr</span><span class="p">(</span><span class="n">burst</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+</code></pre></div>
+<p>When the producer exits it prints every counter it kept, and these two lines are
+the first thing to read after a run:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>rx_producer_worker: delivered_bursts=8 pushed_images=256 dropped_bursts=0 [queue_full=0 short_batch=0 info_failure=0 null_input=0]
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>rx_producer_worker: partial_bursts=0 partial_packets=0 early_flush_shortfall=0 remainder_dropped=0 info_failures=0 non_reordered_bursts=0 non_reordered_packets=0
+</code></pre></div>
+<p><code>dropped_bursts</code> above zero means images were lost; the bracketed breakdown says
+why. <code>partial_bursts</code> above zero means batches are closing on the idle timeout
+instead of filling — usually a TX-rate symptom or misaligned queue sizes (see
+<a href="#run-across-two-hosts">Run across two hosts</a>). The producer also prints a
+WARNING line for a full queue or dropped remainders, and a NOTE when more than
+half the batches closed on timeout.</p>
+<h4 id="where-drops-are-counted">Where drops are counted<a class="headerlink" href="#where-drops-are-counted" title="Permanent link">&para;</a></h4>
+<p>Loss is counted at two stages:</p>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Reported by</th>
+<th>Counters</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NIC</td>
+<td><code>daqiri::print_stats()</code> at shutdown</td>
+<td><code>imissed</code> (no RX descriptor), <code>ierrors</code>, <code>rx_nombuf</code>, plus mlx5 xstats</td>
+</tr>
+<tr>
+<td>Reorder / producer</td>
+<td><code>rx_producer_worker</code> summary</td>
+<td><code>dropped_bursts</code> + its four reasons, <code>remainder_dropped</code>, <code>non_reordered_packets</code></td>
+</tr>
+</tbody>
+</table>
+<p>One counter crosses stages. <code>queue_full</code> is reported by the producer but caused
+by the consumer — it means inference could not keep up, not that the link lost
+packets. Read it as backpressure; every other drop reason is genuine loss.</p>
+<h4 id="type-conversion">Type conversion<a class="headerlink" href="#type-conversion" title="Permanent link">&para;</a></h4>
+<p>The reorder kernel does register-only int8→fp16 (load int8, convert, store
+half). No fp32 buffer is materialized. ONNX prepends Mul/Add so
+<code>y_c = x_fp16 * a_c + b_c</code> with <code>a_c = 1/(255*std_c)</code>,
+<code>b_c = (128/255 - mean_c)/std_c</code> (R,G,B = channel 0,1,2). Shared constants live
+in both <code>export_resnet_onnx.py</code> and <code>prepare_cifar10_pcap.py</code>. The <code>128/255</code>
+term is the prep tool's pixel−128 offset being added back, so the round trip
+through signed int8 is exact.</p>
+<h3 id="4-pass-the-batch-to-the-inference-thread">4. Pass the batch to the inference thread<a class="headerlink" href="#4-pass-the-batch-to-the-inference-thread" title="Permanent link">&para;</a></h3>
+<p>The producer packages the batch as a descriptor and pushes it to the consumer,
+so a slow TensorRT call never stalls the RX poll loop:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="k">struct</span><span class="w"> </span><span class="nc">InferenceJob</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="n">daqiri</span><span class="o">::</span><span class="n">BurstParams</span><span class="o">*</span><span class="w"> </span><span class="n">burst</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">;</span><span class="w">  </span><span class="c1">// reordered burst; free after TRT consumes it</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span><span class="kt">void</span><span class="o">*</span><span class="w"> </span><span class="n">dev_input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">;</span><span class="w">             </span><span class="c1">// fp16 NCHW batch = get_packet_ptr(burst, 0)</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">batch_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w">               </span><span class="c1">// images in this batch</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">  </span><span class="n">cudaEvent_t</span><span class="w"> </span><span class="n">input_ready</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">;</span><span class="w">     </span><span class="c1">// burst-&gt;event (reorder-kernel completion)</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="p">};</span>
+</code></pre></div>
+<p>The queue is a fixed-capacity single-producer/single-consumer ring with no locks
+and no allocation:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kt">bool</span><span class="w"> </span><span class="nf">try_push</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">InferenceJob</span><span class="o">&amp;</span><span class="w"> </span><span class="n">job</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="w"> </span><span class="n">head</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">head_</span><span class="p">.</span><span class="n">load</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">memory_order_relaxed</span><span class="p">);</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="w"> </span><span class="n">next</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">head</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="p">(</span><span class="n">kCap</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">next</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">tail_</span><span class="p">.</span><span class="n">load</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">memory_order_acquire</span><span class="p">))</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">  </span><span class="n">slots_</span><span class="p">[</span><span class="n">head</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">job</span><span class="p">;</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">  </span><span class="n">head_</span><span class="p">.</span><span class="n">store</span><span class="p">(</span><span class="n">next</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">memory_order_release</span><span class="p">);</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="p">}</span>
+</code></pre></div>
+<p>What happens when it is full is a policy split:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">backpressure</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w">                                    </span><span class="c1">// example mode</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span><span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="p">(</span><span class="n">pushed</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">queue</span><span class="p">.</span><span class="n">try_push</span><span class="p">(</span><span class="n">job</span><span class="p">))</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="o">!</span><span class="n">stop</span><span class="p">.</span><span class="n">load</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">this_thread</span><span class="o">::</span><span class="n">sleep_for</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">chrono</span><span class="o">::</span><span class="n">microseconds</span><span class="p">(</span><span class="mi">50</span><span class="p">));</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span><span class="w">                                               </span><span class="c1">// benchmark mode</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="w">  </span><span class="n">pushed</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">queue</span><span class="p">.</span><span class="n">try_push</span><span class="p">(</span><span class="n">job</span><span class="p">);</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="p">}</span>
+</code></pre></div>
+<p>Example mode blocks: the dataset is finite and every image must be classified,
+so correctness wins over rate. Benchmark mode drops the burst and moves on,
+because a producer that stalls is no longer measuring the receive path. The mode
+is selected purely by whether a dataset is configured (<code>dataset:</code> in YAML or
+<code>--dataset</code>) — so the xhost RX config, which sets one, blocks even under
+<code>--seconds</code>.</p>
+<p>Capacity: <code>full()</code> is <code>depth() == kCap - 1</code>, so with <code>kCap = 8</code> the ring holds at
+most 7 jobs; add the batch TensorRT is working on and the one the consumer holds
+as <code>prev_burst</code> (step 5) and peak occupancy is 9 reorder-output buffers, against
+<code>num_bufs: 16</code> in <code>Reorder_RX_GPU</code>.</p>
+<h3 id="5-run-inference-and-free-the-burst">5. Run inference and free the burst<a class="headerlink" href="#5-run-inference-and-free-the-burst" title="Permanent link">&para;</a></h3>
+<p>The consumer pops a job, infers, and frees the <em>previous</em> burst:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="k">const</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">ok</span><span class="w"> </span><span class="o">=</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">    </span><span class="n">trt</span><span class="p">.</span><span class="n">infer</span><span class="p">(</span><span class="n">job</span><span class="p">.</span><span class="n">dev_input</span><span class="p">,</span><span class="w"> </span><span class="n">job</span><span class="p">.</span><span class="n">batch_size</span><span class="p">,</span><span class="w"> </span><span class="n">job</span><span class="p">.</span><span class="n">input_ready</span><span class="p">,</span><span class="w"> </span><span class="n">release_evt</span><span class="p">,</span><span class="w"> </span><span class="n">host_prev</span><span class="p">,</span><span class="w"> </span><span class="n">n_prev</span><span class="p">);</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">ok</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">host_prev</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">)</span><span class="w"> </span><span class="n">sink</span><span class="p">.</span><span class="n">consume</span><span class="p">(</span><span class="n">host_prev</span><span class="p">,</span><span class="w"> </span><span class="n">n_prev</span><span class="p">);</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">prev_burst</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">    </span><span class="n">daqiri</span><span class="o">::</span><span class="n">free_all_packets_and_burst_rx</span><span class="p">(</span><span class="n">prev_burst</span><span class="p">);</span>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="w">  </span><span class="n">prev_burst</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">job</span><span class="p">.</span><span class="n">burst</span><span class="p">;</span>
+<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a><span class="w">  </span><span class="n">daqiri</span><span class="o">::</span><span class="n">free_all_packets_and_burst_rx</span><span class="p">(</span><span class="n">job</span><span class="p">.</span><span class="n">burst</span><span class="p">);</span>
+<a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a><span class="p">}</span>
+</code></pre></div>
+<p>Rotate <code>prev_burst</code> only on success; free the current burst on failure. Never
+skip a free — a leaked burst drains the RX pool and produces
+<code>NO_FREE_BURST_BUFFERS</code> / <code>NO_FREE_PACKET_BUFFERS</code> errors and NIC-level drops.</p>
+<p>Deferring the free by one batch is safe because of what <code>infer</code> does before it
+returns:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">input_ready</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span><span class="n">cudaStreamWaitEvent</span><span class="p">(</span><span class="n">stream</span><span class="p">,</span><span class="w"> </span><span class="n">input_ready</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span><span class="w">        </span><span class="c1">// reorder kernel finished this batch</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="p">}</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="n">cudaEventRecord</span><span class="p">(</span><span class="n">start_evt_</span><span class="p">[</span><span class="n">buf</span><span class="p">],</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="c1">// ... (CUDA-graph fast path elided; disabled by default) ...</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="n">ctx</span><span class="o">-&gt;</span><span class="n">setInputShape</span><span class="p">(</span><span class="n">cfg_</span><span class="p">.</span><span class="n">input_name</span><span class="p">.</span><span class="n">c_str</span><span class="p">(),</span><span class="w"> </span><span class="n">dims</span><span class="p">);</span><span class="w">    </span><span class="c1">// dynamic batch dim</span>
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="n">ctx</span><span class="o">-&gt;</span><span class="n">setTensorAddress</span><span class="p">(</span><span class="n">cfg_</span><span class="p">.</span><span class="n">input_name</span><span class="p">.</span><span class="n">c_str</span><span class="p">(),</span><span class="w"> </span><span class="n">dev_input</span><span class="p">);</span>
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="n">ctx</span><span class="o">-&gt;</span><span class="n">setTensorAddress</span><span class="p">(</span><span class="n">cfg_</span><span class="p">.</span><span class="n">output_name</span><span class="p">.</span><span class="n">c_str</span><span class="p">(),</span><span class="w"> </span><span class="n">out_ptr</span><span class="p">);</span>
+<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="n">ctx</span><span class="o">-&gt;</span><span class="n">enqueueV3</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span>
+<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a>
+<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a><span class="n">cudaMemcpyAsync</span><span class="p">(</span><span class="n">host_buf_</span><span class="p">[</span><span class="n">buf</span><span class="p">],</span><span class="w"> </span><span class="n">out_ptr</span><span class="p">,</span><span class="w"> </span><span class="n">out_bytes</span><span class="p">,</span><span class="w"> </span><span class="n">cudaMemcpyDeviceToHost</span><span class="p">,</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span>
+<a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a><span class="n">cudaEventRecord</span><span class="p">(</span><span class="n">d2h_event_</span><span class="p">[</span><span class="n">buf</span><span class="p">],</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span>
+<a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a><span class="n">cudaEventRecord</span><span class="p">(</span><span class="n">release_evt</span><span class="p">,</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span><span class="w">                 </span><span class="c1">// back-edge: input buffer reusable</span>
+<a id="__codelineno-14-14" name="__codelineno-14-14" href="#__codelineno-14-14"></a>
+<a id="__codelineno-14-15" name="__codelineno-14-15" href="#__codelineno-14-15"></a><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">prev</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">parity_</span><span class="p">;</span>
+<a id="__codelineno-14-16" name="__codelineno-14-16" href="#__codelineno-14-16"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">has_pending_</span><span class="p">[</span><span class="n">prev</span><span class="p">])</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-14-17" name="__codelineno-14-17" href="#__codelineno-14-17"></a><span class="w">  </span><span class="n">cudaEventSynchronize</span><span class="p">(</span><span class="n">d2h_event_</span><span class="p">[</span><span class="n">prev</span><span class="p">]);</span><span class="w">             </span><span class="c1">// &lt;-- prior batch fully read</span>
+<a id="__codelineno-14-18" name="__codelineno-14-18" href="#__codelineno-14-18"></a><span class="w">  </span><span class="n">host_out_prev</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">host_buf_</span><span class="p">[</span><span class="n">prev</span><span class="p">];</span><span class="w">                    </span><span class="c1">// features, one batch late</span>
+<a id="__codelineno-14-19" name="__codelineno-14-19" href="#__codelineno-14-19"></a><span class="w">  </span><span class="n">host_out_prev_n</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">pending_n_</span><span class="p">[</span><span class="n">prev</span><span class="p">];</span>
+<a id="__codelineno-14-20" name="__codelineno-14-20" href="#__codelineno-14-20"></a><span class="w">  </span><span class="n">has_pending_</span><span class="p">[</span><span class="n">prev</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+<a id="__codelineno-14-21" name="__codelineno-14-21" href="#__codelineno-14-21"></a><span class="p">}</span>
+</code></pre></div>
+<p>By the time <code>infer</code> returns successfully, that <code>cudaEventSynchronize</code> guarantees
+the GPU has finished reading the previous batch's input and copying its output to
+the host, so freeing that burst needs no blocking sync of our own. Features come
+back <strong>one batch late</strong> for the same reason — double buffering by parity, so the
+host never stalls the batch currently in flight.</p>
+<p><code>enable_cuda_graph</code> and <code>enable_dual_context</code> both default to off and are unset
+in every shipped config, so the documented path runs eagerly on the consumer's
+single inference stream.</p>
+<h3 id="6-shut-down">6. Shut down<a class="headerlink" href="#6-shut-down" title="Permanent link">&para;</a></h3>
+<p>Because features arrive one batch late, the last batch is still in flight when
+the loop exits. The consumer flushes it before it returns:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="kt">float</span><span class="o">*</span><span class="w"> </span><span class="n">host_final</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">;</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="kt">uint32_t</span><span class="w"> </span><span class="n">n_final</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="n">trt</span><span class="p">.</span><span class="n">drain_final</span><span class="p">(</span><span class="n">host_final</span><span class="p">,</span><span class="w"> </span><span class="n">n_final</span><span class="p">);</span><span class="w">        </span><span class="c1">// recover the one-batch-late tail</span>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">host_final</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">)</span><span class="w"> </span><span class="n">sink</span><span class="p">.</span><span class="n">consume</span><span class="p">(</span><span class="n">host_final</span><span class="p">,</span><span class="w"> </span><span class="n">n_final</span><span class="p">);</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">prev_burst</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="w">  </span><span class="n">daqiri</span><span class="o">::</span><span class="n">free_all_packets_and_burst_rx</span><span class="p">(</span><span class="n">prev_burst</span><span class="p">);</span>
+<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="p">}</span>
+</code></pre></div>
+<p>Shutdown order in <code>main</code> then matters in both directions:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="n">producer_thread</span><span class="p">.</span><span class="n">join</span><span class="p">();</span><span class="w">          </span><span class="c1">// no more pushes</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="n">producer_done</span><span class="p">.</span><span class="n">store</span><span class="p">(</span><span class="nb">true</span><span class="p">);</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="n">consumer_thread</span><span class="p">.</span><span class="n">join</span><span class="p">();</span><span class="w">          </span><span class="c1">// drain_final has run; every burst is freed</span>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="c1">// ...</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="n">sink</span><span class="p">.</span><span class="n">log_final_summary</span><span class="p">(</span><span class="n">summary_seconds</span><span class="p">);</span>
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="n">daqiri</span><span class="o">::</span><span class="n">print_stats</span><span class="p">();</span>
+<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="n">daqiri</span><span class="o">::</span><span class="n">shutdown</span><span class="p">();</span>
+<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="n">cudaStreamDestroy</span><span class="p">(</span><span class="n">reorder_stream</span><span class="p">);</span>
+</code></pre></div>
+<p><code>log_final_summary</code> comes <strong>after</strong> the consumer join, so the tail batch
+recovered by <code>drain_final</code> is counted in the totals and the per-class stats — and
+<strong>before</strong> <code>shutdown()</code>. The reorder stream is destroyed last, because the engine
+holds it until <code>shutdown()</code> returns.</p>
+<h2 id="build">Build<a class="headerlink" href="#build" title="Permanent link">&para;</a></h2>
+<p>TensorRT is required, so build in the <code>torch</code> base container:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="nv">BASE_IMAGE</span><span class="o">=</span>torch<span class="w"> </span><span class="nv">BASE_TARGET</span><span class="o">=</span>dpdk<span class="w"> </span><span class="nv">DAQIRI_ENGINE</span><span class="o">=</span><span class="s2">"dpdk ibverbs"</span><span class="w"> </span>scripts/build-container.sh
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>cmake<span class="w"> </span>-S<span class="w"> </span>.<span class="w"> </span>-B<span class="w"> </span>build-resnet<span class="w"> </span>-DCMAKE_BUILD_TYPE<span class="o">=</span>Release<span class="w"> </span>-DBUILD_SHARED_LIBS<span class="o">=</span>ON<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="w">  </span>-DDAQIRI_BUILD_PYTHON<span class="o">=</span>OFF<span class="w"> </span>-DDAQIRI_ENGINE<span class="o">=</span><span class="s2">"dpdk ibverbs"</span><span class="w"> </span>-DDAQIRI_BUILD_APPLICATIONS<span class="o">=</span>ON
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>cmake<span class="w"> </span>--build<span class="w"> </span>build-resnet<span class="w"> </span>-j<span class="w"> </span>--target<span class="w"> </span>daqiri_resnet50_inference
+</code></pre></div>
+<p><code>build-resnet</code> is the directory <code>run_resnet_xhost.sh</code> expects. If you build
+elsewhere, pass <code>--build-dir &lt;dir&gt;</code> to that script.</p>
+<h2 id="prepare-model-dataset">Prepare model + dataset<a class="headerlink" href="#prepare-model-dataset" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>python3<span class="w"> </span>applications/resnet50_inference/tools/export_resnet_onnx.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="w">  </span>--model<span class="w"> </span>resnet50<span class="w"> </span>--output<span class="w"> </span>models/resnet50_features.onnx<span class="w"> </span>--check
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>python3<span class="w"> </span>applications/resnet50_inference/tools/prepare_cifar10_pcap.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="w">  </span>--num-images<span class="w"> </span><span class="m">256</span><span class="w"> </span>--images-per-batch<span class="w"> </span><span class="m">32</span><span class="w"> </span>--out<span class="w"> </span>data/cifar10_resnet.pcap
+</code></pre></div>
+<p>Engine cache path: <code>models/resnet50_features.fp16in.engine</code>. Re-export after
+pulling exporter changes, then delete the cached engines so TensorRT rebuilds
+with FLOAT32 <code>features</code> (the ONNX front-end stays FP16 input):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>rm<span class="w"> </span>-f<span class="w"> </span>models/resnet50_features.fp16in.engine<span class="w"> </span>models/resnet50_features.fp16in.*.engine
+</code></pre></div>
+<h2 id="run-without-a-nic-software-loopback">Run without a NIC (software loopback)<a class="headerlink" href="#run-without-a-nic-software-loopback" title="Permanent link">&para;</a></h2>
+<p>No NIC and no cable. Build and prepare model/dataset as above, then:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>sudo<span class="w"> </span>./build-resnet/applications/resnet50_inference/daqiri_resnet50_inference<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="w">  </span>./build-resnet/applications/resnet50_inference/configs/resnet50_sw_loopback.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a><span class="w">  </span>--replay-once<span class="w"> </span>--dataset<span class="w"> </span>data/cifar10_resnet.pcap<span class="w"> </span>--expected-images<span class="w"> </span><span class="m">256</span>
+</code></pre></div>
+<p>Expect: TensorRT ready; <code>set_reorder_cuda_stream OK</code>; sample feature vectors and
+per-class means on stderr; clean shutdown with 256 images.</p>
+<h2 id="run-across-two-hosts">Run across two hosts<a class="headerlink" href="#run-across-two-hosts" title="Permanent link">&para;</a></h2>
+<p>Start RX first, wait for <code>set_reorder_cuda_stream OK</code> / <code>TrtRunner ready</code>, then
+start TX with <code>ETH_DST_ADDR</code> set to the RX interface's MAC. The helper script
+does both over SSH:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>./applications/resnet50_inference/tools/run_resnet_xhost.sh<span class="w"> </span>--replay-once
+</code></pre></div>
+<p>Start TX within ~3 minutes of RX: with no traffic at all the producer gives up on
+a startup idle timeout (a shorter ~5 s quiescence timeout applies once frames
+have arrived). Those are the <code>kStartupIdleIters</code> / <code>kQuiesceIters</code> budgets from
+<a href="#1-threads-and-cuda-streams">step 1</a>.</p>
+<p>Results land in <code>resnet-results/&lt;run-id&gt;.{summary,timeseries,rx.log,tx.log}</code>.</p>
+<h3 id="adapting-to-your-hosts">Adapting to your hosts<a class="headerlink" href="#adapting-to-your-hosts" title="Permanent link">&para;</a></h3>
+<p>The script and configs default to two DGX Sparks, but every platform-specific
+value is overridable:</p>
+<table>
+<thead>
+<tr>
+<th>What</th>
+<th>Where</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Host names</td>
+<td><code>TX_HOST</code> / <code>RX_HOST</code> env</td>
+<td><code>spark-stacked-01</code> / <code>spark-stacked-02</code></td>
+</tr>
+<tr>
+<td>RX netdev (used to read the peer MAC)</td>
+<td><code>RX_IFACE</code> env</td>
+<td><code>det1</code> (<code>enp1s0f0np0</code> on most NICs)</td>
+</tr>
+<tr>
+<td>Build directory</td>
+<td><code>--build-dir</code></td>
+<td><code>build-resnet</code></td>
+</tr>
+<tr>
+<td>NIC PCIe address</td>
+<td><code>interfaces[].address</code> in both xhost configs</td>
+<td><code>0000:01:00.0</code></td>
+</tr>
+<tr>
+<td>CPU cores</td>
+<td><code>master_core</code>, <code>rx/tx.queues[].cpu_core</code>, <code>bench_{rx,tx}.cpu_core</code>, <code>inference.cpu_core</code></td>
+<td>see <a href="#1-threads-and-cuda-streams">step 1</a></td>
+</tr>
+</tbody>
+</table>
+<p>Network prep is Spark-specific: <code>scripts/setup_spark_xhost_net.sh</code> on both hosts
+(see <a href="../system_configuration/">system configuration</a>). On other platforms,
+configure MTU and addressing for your NIC by hand.</p>
+<h3 id="queue-sizing">Queue sizing<a class="headerlink" href="#queue-sizing" title="Permanent link">&para;</a></h3>
+<p>Three settings must stay aligned with <code>packets_per_batch</code> (4096), or batches
+straddle burst boundaries and flush partially:</p>
+<ul>
+<li><code>rx.queues[].timeout_us: 2000</code> — finite, so a stalled batch resyncs at the
+  batch boundary instead of being completed by the <em>next</em> batch's first packet.</li>
+<li><code>rx.queues[].batch_size: 8192</code> — a multiple of <code>packets_per_batch</code>.</li>
+<li><code>tx.queues[].batch_size</code> and <code>bench_tx.batch_size: 4096</code> — aligned to
+  <code>packets_per_batch</code>, so a gap between TX bursts falls on a batch boundary.</li>
+</ul>
+<p>Misalignment is quiet: the run completes but reports non-zero <code>partial_bursts</code> /
+<code>dropped_bursts</code> and fewer images than sent. Rationale is in
+<code>applications/resnet50_inference/README.md</code> under <strong>Queue sizing vs. reorder
+batches</strong>.</p>
+<h3 id="what-a-good-run-looks-like">What a good run looks like<a class="headerlink" href="#what-a-good-run-looks-like" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>pcap_tx_worker: sent 32768/32768 frames in 0.0510741 s (send_failures=0 fill_failures=0 no_burst_polls=0)
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>rx_producer_worker: delivered_bursts=8 pushed_images=256 dropped_bursts=0 [queue_full=0 short_batch=0 info_failure=0 null_input=0]
+<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>inference latency (ms): mean=8.78 p50=8.41 p99=9.36 (per batch of 32 images, n=8)
+</code></pre></div>
+<p>Also expect a <code>kHALF</code> input binding, FLOAT32 (or converted) <code>features</code>, all 256
+images, and per-class means labeled with CIFAR-10 class names (<code>airplane</code> …
+<code>truck</code>).</p>
+<p>For sustained throughput rather than a fixed dataset, use <code>--seconds 20 --loop</code>.
+Both flags are needed; drops are acceptable in that mode.</p>
+<h2 id="output">Output<a class="headerlink" href="#output" title="Permanent link">&para;</a></h2>
+<p><code>FeatureSink</code> writes everything to <strong>stderr</strong>. It prints the first two feature
+vectors as they arrive, then a summary at shutdown with per-class mean feature
+vectors keyed by <strong>ground-truth</strong> labels from the <code>.labels</code> sidecar. A
+predicted-class / softmax head is a follow-up.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>  feature[image 0, class 6 (frog)] = [0.1842, 0.0000, 0.4521, ...] (dim=2048)
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>  feature[image 1, class 9 (truck)] = [0.0000, 0.2310, 0.1102, ...] (dim=2048)
+<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>
+<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a>=== ResNet inference summary ===
+<a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a>images=256 batches=8 seconds=2.15 =&gt; 119.07 img/s (wall)
+<a id="__codelineno-23-6" name="__codelineno-23-6" href="#__codelineno-23-6"></a>active_seconds=1.97 =&gt; 116.24 img/s (excludes 0.18 s before first batch)
+<a id="__codelineno-23-7" name="__codelineno-23-7" href="#__codelineno-23-7"></a>
+<a id="__codelineno-23-8" name="__codelineno-23-8" href="#__codelineno-23-8"></a>Per-class mean-feature stats (first 8 dims + L2 norm of the mean vector):
+<a id="__codelineno-23-9" name="__codelineno-23-9" href="#__codelineno-23-9"></a>  class  0   airplane (n=    25): mean=[0.2014, 0.0331, 0.3895, ...]  |mean|=3.8421
+<a id="__codelineno-23-10" name="__codelineno-23-10" href="#__codelineno-23-10"></a>  class  1 automobile (n=    26): mean=[0.1577, 0.0902, 0.2233, ...]  |mean|=3.5108
+<a id="__codelineno-23-11" name="__codelineno-23-11" href="#__codelineno-23-11"></a>  ...
+<a id="__codelineno-23-12" name="__codelineno-23-12" href="#__codelineno-23-12"></a>  class  9      truck (n=    27): mean=[0.2588, 0.0117, 0.4410, ...]  |mean|=4.0072
+</code></pre></div>
+<p>Each printed vector is 2048 elements long — one embedding per image. Distinct
+per-class means, and their differing L2 norms, indicate ResNet separates the
+classes in latent space.</p>
+<p>Quote <code>active_seconds</code>, not the <code>(wall)</code> figure: the wall clock starts when the
+process does, but on a cross-host run packets only arrive once the peer has
+finished its own startup.</p>
+<h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
+<ul>
+<li>App README: <code>applications/resnet50_inference/README.md</code></li>
+<li>Raw Ethernet reorder config: <a href="../../api-reference/configuration/">configuration</a></li>
+<li>Platform context for this pipeline alongside other transports:
+  <a href="../../benchmarks/performance-dgx-spark/#end-to-end-inference-pipeline-resnet-50-cross-host">DGX Spark performance</a></li>
+<li>Raw Ethernet benches: <a href="../../benchmarks/raw_benchmarking/">raw benchmarking</a></li>
+</ul>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+  
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+        
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../daqiri-holoscan-integration/" class="md-footer__link md-footer__link--prev" aria-label="Previous: DAQIRI + Holoscan Integration">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                DAQIRI + Holoscan Integration
+              </div>
+            </div>
+          </a>
+        
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["content.code.annotate", "content.code.copy", "content.tabs.link", "navigation.tabs", "navigation.sections", "navigation.top", "navigation.footer", "search.highlight", "search.suggest", "toc.follow"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+        <script src="../../javascripts/platform-tab-toc.js"></script>
+      
+        <script src="../../javascripts/tab-dropdowns.js"></script>
+      
+        <script src="../../javascripts/image-overlay.js"></script>
+      
+    
+  </body>
+</html>
