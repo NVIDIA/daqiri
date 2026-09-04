@@ -4,6 +4,7 @@ Standalone benchmark applications for testing performance of DAQIRI with various
 
 - `daqiri_bench_raw_gpudirect`: raw TX/RX with one device-memory packet segment
 - `daqiri_bench_raw_hds`: raw TX/RX with header-data split
+- `daqiri_bench_raw_latency`: direct-polling single-packet TX/RX latency sweep
 - `daqiri_bench_raw_reorder_seq`: raw RX sequence-number reorder benchmark
 - `daqiri_bench_raw_reorder_quantize`: raw RX sequence reorder with payload conversion
 - `daqiri_example_pcap_writer`: RX pcap writer with optional GPUDirect demo TX traffic
@@ -57,6 +58,7 @@ Run:
 ./build/examples/daqiri_bench_raw_gpudirect ./build/examples/daqiri_bench_raw_tx_rx.yaml --seconds 10
 ./build/examples/daqiri_bench_raw_gpudirect ./build/examples/daqiri_bench_raw_tx_rx_4q.yaml --seconds 10
 ./build/examples/daqiri_bench_raw_hds ./build/examples/daqiri_bench_raw_tx_rx_hds.yaml --seconds 10
+./build/examples/daqiri_bench_raw_latency ./build/examples/daqiri_bench_raw_latency_ibverbs.yaml --samples 10000 --warmup 1000 --csv latency.csv
 ./build/examples/daqiri_bench_raw_reorder_seq ./build/examples/daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml --seconds 10
 ./build/examples/daqiri_bench_raw_reorder_quantize ./build/examples/daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml --seconds 10
 ./build/examples/daqiri_example_pcap_writer ./build/examples/daqiri_example_pcap_writer_sw_loopback.yaml /tmp/daqiri-capture.pcap --tx
@@ -89,6 +91,7 @@ Included configs:
 | `daqiri_bench_raw_tx_rx_4q.yaml` | `daqiri_bench_raw_gpudirect` |
 | `daqiri_bench_raw_sw_loopback.yaml` | `daqiri_bench_raw_gpudirect` |
 | `daqiri_bench_raw_hw_loopback_ibverbs.yaml` | `daqiri_bench_raw_gpudirect` |
+| `daqiri_bench_raw_latency_ibverbs.yaml` | `daqiri_bench_raw_latency` |
 | `daqiri_example_dynamic_rx_flow.yaml` | `daqiri_example_dynamic_rx_flow` |
 | `daqiri_example_gds_write_sw_loopback.yaml` | `daqiri_example_gds_write` |
 | `daqiri_example_gds_write_tx_rx.yaml` | `daqiri_example_gds_write` |

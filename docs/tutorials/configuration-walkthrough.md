@@ -59,6 +59,11 @@ For a shorter selection guide, start with the [Benchmarking overview](../benchma
     - **TCP**: [`daqiri_bench_socket_tcp_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_socket_tcp_tx_rx.yaml).
     - **TCP, DGX Spark netns wire loopback** (combined base): [`daqiri_bench_socket_tcp_tx_rx_spark_netns.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_socket_tcp_tx_rx_spark_netns.yaml). Carries both roles. `examples/run_spark_bench.sh` (via `scripts/gen_spark_netns_config.py`) splits it per role and runs each in its own network namespace (`--mode server` / `--mode client`). See [Socket and RDMA Benchmarking](../benchmarks/socket_benchmarking.md#run-the-linux-socket-benchmark).
 
+??? question "I want to measure direct-polling packet latency"
+    Use [`daqiri_bench_raw_latency_ibverbs.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_latency_ibverbs.yaml) with `daqiri_bench_raw_latency`. It sweeps one outstanding packet at a time from 64 through 8192 L2 bytes, using powers of two, with both queues in caller-driven `poll_mode: direct`.
+
+    The benchmark reports direct `send_tx_burst()` call-to-return time, submit-to-hardware-RX time, hardware-RX-to-`get_rx_burst()` return time, and total submit-to-application time. It requires a physical loopback path, raw `ibverbs`, RX hardware timestamps, host-pinned buffers, and PTP synchronization between the NIC and `CLOCK_REALTIME`. See [Direct-polling latency sweep](../benchmarks/raw_benchmarking.md#direct-polling-latency-sweep) for the measurement boundaries and run command.
+
 ??? question "2. I have out-of-order UDP packets that need to be reordered on the GPU"
     DAQIRI's flagship pipeline: a CUDA kernel reads a sequence number from each packet's header and places packets at the correct offset in a GPU buffer, so a downstream consumer sees a fully ordered stream without a CPU touch. Configs run on `daqiri_bench_raw_reorder_seq` unless 2.4 applies. Sub-questions:
 
