@@ -541,9 +541,9 @@ The `*_packets_phy` and `*_bytes_phy` counters measure traffic that crosses a ph
 
 !!! warning "Check flow control before trusting a throughput number"
 
-    If the measured rate plateaus well below line rate with **zero** drops, suspect 802.3x pause before you suspect the transmitter. An enabled pause loop idles the link on a conservative receive watermark and leaves `rx_discards_phy` and `rx_out_of_buffer` at 0, so nothing in the counter set above distinguishes it from a sender that cannot go faster. It cost 21.7% of line rate on a 400 GbE link in our own measurements.
+    If the measured rate plateaus well below line rate with **zero** drops, suspect 802.3x pause before you suspect the transmitter. A paused link idles instead of dropping, so nothing in the counter set above distinguishes it from a sender that cannot go faster.
 
-    DAQIRI reports this itself. Pause is not exposed through DPDK's xstats, so the raw engines read it from the kernel netdev: a warning at init when pause is enabled on a port, and the frames exchanged **during that run** alongside the shutdown stats dump.
+    DAQIRI reports this itself. Pause is not exposed through DPDK's xstats, so the raw engines read it from the kernel netdev: a warning at init when pause is enabled on a port, and the `rx_pause_ctrl_phy` / `tx_pause_ctrl_phy` frames exchanged **during that run** alongside the shutdown stats dump.
 
     ```log
     [WARN] Flow control: port 0 (ens15f0np0) has 802.3x pause enabled (rx on, tx on). A paused
@@ -555,9 +555,9 @@ The `*_packets_phy` and `*_bytes_phy` counters measure traffic that crosses a ph
     pause, throttling this port's transmit. ...
     ```
 
-    Those counters are per-run deltas, so a non-zero value means flow control throttled *this* measurement. To check a host before running anything, use `sudo ./python/tune_system.py --check pause`. See [Step 10 of System Configuration](../tutorials/system_configuration.md#step-10-disable-ethernet-flow-control-pause) to disable it, and report the pause configuration alongside any throughput result.
+    `rx_pause_ctrl_phy` counts frames **received**, so it is the peer throttling this port's transmit. `tx_pause_ctrl_phy` counts frames **sent**, so it points at this host's receive path. Because these are per-run deltas, a non-zero value means flow control throttled *this* measurement.
 
-    Pause frames are not automatically a misconfiguration. `rx_pause_ctrl_phy` counts frames **received**, so it is the peer throttling this port — legitimate against a device that cannot buffer a line-rate burst, such as an FPGA, which will pause often by design. `tx_pause_ctrl_phy` counts frames **sent**, so it points at this host's receive path. Establish which end is asserting pause, and whether the peer can absorb line rate at all, before disabling it: on a link that genuinely needs backpressure, disabling pause turns the throttling into drops rather than recovering throughput.
+    Pause frames are not automatically a misconfiguration: shallow-buffer peers can use them as intended backpressure. Establish which end is asserting pause, and whether the peer can absorb line rate at all, before disabling it. To check a host before running anything, use `sudo ./python/tune_system.py --check pause`; see [Step 10 of System Configuration](../tutorials/system_configuration.md#step-10-disable-ethernet-flow-control-pause) for disablement guidance.
 
 ??? tip "Troubleshooting"
 

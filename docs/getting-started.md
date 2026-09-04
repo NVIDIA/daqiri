@@ -275,23 +275,6 @@ On a single RX interface, use either standard UDP/IP flow rules or flex-item flo
 rules, not both. Mixed configs are rejected at `daqiri_init`. See
 [Configuration reference](api-reference/configuration.md#flows).
 
-### Raw Ethernet flow control (802.3x pause)
-
-Both raw Ethernet engines report link-level pause without any build option or extra
-dependency. `daqiri_init()` logs a warning for each port that has pause enabled, and the
-shutdown stats dump prints the `rx_pause_ctrl_phy` / `tx_pause_ctrl_phy` frames exchanged
-during that run. mlx5 does not expose these counters through DPDK xstats, so DAQIRI reads
-them from the kernel netdev over the ethtool ioctls; a port with no netdev, such as a
-software loopback, reports nothing.
-
-A paused link throttles the sender rather than dropping, so it caps throughput while every
-drop counter stays at zero. The report names the end that asserted pause, since pause can be
-legitimate backpressure from a peer that cannot absorb line rate — an FPGA, for instance —
-rather than a misconfiguration on this host. Check a host before you measure anything with
-`sudo ./python/tune_system.py --check pause`, and see
-[Step 10: Disable Ethernet Flow Control (Pause)](tutorials/system_configuration.md#step-10-disable-ethernet-flow-control-pause)
-for how to disable it.
-
 ## Next Steps
 
 Once DAQIRI is built, follow the tutorials to configure your system and run your first benchmark:

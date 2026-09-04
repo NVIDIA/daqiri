@@ -1300,15 +1300,13 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     ### Step 10: Disable Ethernet Flow Control (Pause)
 
-    802.3x link-level pause lets a receiver tell the sender to stop transmitting for a while. Many NIC ports come up with it enabled, and on a saturated raw-Ethernet link that silently caps throughput: the receiver asserts pause on a conservative internal watermark, the sender obeys, and the link sits idle for a fraction of every second.
-
-    **This is the one tuning problem in this guide that no drop counter reveals.** On a 400 GbE loopback we measured 308 Gb/s instead of 393.6 Gb/s — a 21.7% loss that exactly matched the time the link spent paused — while `rx_discards_phy` and `rx_out_of_buffer` both stayed at 0. A receiver that drops nothing, fed by a sender transmitting exactly what arrives, is indistinguishable from a sender that simply cannot go faster. Disabling pause reached line rate without introducing a single drop, which means the pause was never protecting against real buffer exhaustion.
+    802.3x link-level pause lets a receiver tell the sender to stop transmitting for a while. On saturated raw-Ethernet links it can cap throughput while every drop counter stays at zero, making a paused link look like a slow transmitter.
 
     !!! warning "Leave pause enabled on lossless fabrics and against shallow-buffer peers"
 
         On a lossless RoCE or PFC fabric, flow control is deliberate and required. Only disable pause on links dedicated to raw Ethernet where the application tolerates loss, and never on a shared fabric where your pause frames affect other tenants.
 
-        Pause frames on the wire are also not evidence of a misconfiguration by themselves. A peer that cannot buffer a line-rate burst — an FPGA is the common case, and it will pause often — asserts pause by design, and that is the mechanism working. Disabling pause on such a link does not recover the throughput; it converts the throttling into drops on the peer. The counters say which end asserted it: `rx_pause_ctrl_phy` counts frames **received** (the peer throttling this port's transmit) and `tx_pause_ctrl_phy` frames **sent** (this port's receive path throttling the peer). Non-zero `rx_pause_ctrl_phy` against a device known to be shallow-buffered is expected; non-zero `tx_pause_ctrl_phy` points back at this host.
+        Pause frames on the wire are not evidence of a misconfiguration by themselves. A peer that cannot buffer a line-rate burst, such as an FPGA, may assert pause by design. `rx_pause_ctrl_phy` counts frames **received** (the peer throttling this port's transmit), and `tx_pause_ctrl_phy` counts frames **sent** (this port's receive path throttling the peer).
 
         When the receiver routinely needs pause to keep up, packet pacing is usually the better mechanism. A per-queue `pacing_mbps` cap meters the transmit queue out in hardware, smoothing the packet rate to one the receiver can absorb instead of waiting for its buffers to fill and having it stop the sender. See [`pacing_mbps`](../api-reference/configuration.md#transmit-configuration-tx) in the TX queue configuration.
 
@@ -1320,11 +1318,11 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
         sudo ./python/tune_system.py --check pause
         ```
 
-        ??? abstract "See an example output"
+        ??? abstract "See an example output excerpt"
 
             ```
-            2026-08-19 09:43:00 - WARNING - Interface eth0 has 802.3x pause enabled (RX: on, TX: on). Link-level flow control can idle the link and prevent achieving higher rates, with no drop counter to reveal it. Disable both directions with `ethtool -A eth0 rx off tx off` if this link is meant to be lossy; keep it on lossless RoCE/PFC fabrics and on links whose peer cannot absorb line rate, where disabling it turns the throttling into drops.
-            2026-08-19 09:43:00 - WARNING - Interface eth0 has exchanged pause frames since boot (rx_pause_ctrl_phy=240,975, tx_pause_ctrl_phy=240,975): both ends have asserted pause. Flow control has actually throttled this link, not merely been enabled. Confirm the peer can absorb line rate before disabling pause: against a device that cannot (an FPGA or other shallow-buffer device) this is working backpressure, and disabling it turns the throttling into drops.
+            2026-08-19 09:43:00 - WARNING - Interface eth0 has 802.3x pause enabled (RX: on, TX: on). Link-level flow control can idle the link and prevent achieving higher rates, with no drop counter to reveal it. ...
+            2026-08-19 09:43:00 - WARNING - Interface eth0 has exchanged pause frames since boot (rx_pause_ctrl_phy=240,975, tx_pause_ctrl_phy=240,975): both ends have asserted pause. ...
             2026-08-19 09:43:00 - INFO - Interface eth1 has 802.3x pause disabled (RX: off, TX: off).
             ```
 
@@ -1392,10 +1390,6 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
         `ethtool` and `systemd-networkd` document their `rx`/`tx` pause naming with opposite senses — `systemd.link(5)` defines `RxFlowControl=` as *generating and sending* pause frames. Rather than reason about which name means which direction, disable both on every interface in the data path. Pause only has to be active at one end of a link to throttle it.
 
     Both ends of the link matter: disabling pause on your host does nothing if the peer, or a switch in between, is still asserting it. Verify by re-reading the pause counters after a run.
-
-    !!! tip "DAQIRI also reports this at run time"
-
-        The raw Ethernet engines warn at init when a port has pause enabled, and print the pause frames exchanged during the run next to the shutdown stats. You do not need this check to catch a pause problem mid-campaign — it is here so you can fix the host before you measure anything.
 
     With the system tuned, continue to [Benchmarking](../benchmarks/index.md) to choose and run your first DAQIRI benchmark.
 
@@ -1717,7 +1711,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     sudo ./python/tune_system.py --check pause
     ```
 
-    Pause left enabled cost 21.7% of line rate on a 400 GbE link, and no drop counter reports it. Disable both directions on the interfaces carrying benchmark traffic, then fold it into the existing profiles to survive a reboot:
+    Disable both directions on the interfaces carrying benchmark traffic, then fold it into the existing profiles to survive a reboot:
 
     ```bash
     for if_name in enp1s0f0np0 enP2p1s0f1np1; do
