@@ -654,12 +654,12 @@ run_cell() {
     for i in "${client_pids[@]}"; do wait "$i" || bench_rc=$?; done
     for i in "${server_pids[@]}"; do wait "$i" 2>/dev/null || true; done
 
-    local tx_pkts=0 tx_bytes=0 agg_rx_bytes=0 max_secs=0
+    local tx_pkts=0 tx_bytes=0 agg_rx_bytes=0 max_active_secs=0
     for ((i = 0; i < pairs; i++)); do
-      local sp sb se rb max_burst
+      local sp sb sa rb max_burst
       sp="$(extract_field 'Client complete' sent_packets "$cell_dir/client_p$i.stdout")"
       sb="$(extract_field 'Client complete' sent_bytes   "$cell_dir/client_p$i.stdout")"
-      se="$(extract_field 'Client complete' seconds      "$cell_dir/client_p$i.stdout")"
+      sa="$(extract_field 'Client complete' active_seconds "$cell_dir/client_p$i.stdout")"
       rb="$(extract_field 'Server complete' recv_bytes   "$cell_dir/server_p$i.stdout")"
       max_burst="$(extract_field 'Server complete' max_rx_burst \
         "$cell_dir/server_p$i.stdout")"
@@ -669,9 +669,9 @@ run_cell() {
       if (( ${max_burst:-0} > observed_max_rx_burst )); then
         observed_max_rx_burst="${max_burst:-0}"
       fi
-      max_secs="$(awk -v a="$max_secs" -v b="${se:-0}" 'BEGIN { print (b+0>a+0)?b:a }')"
+      max_active_secs="$(awk -v a="$max_active_secs" -v b="${sa:-0}" 'BEGIN { print (b+0>a+0)?b:a }')"
     done
-    pkts="$tx_pkts"; bytes="$tx_bytes"; rx_bytes="$agg_rx_bytes"; secs="$max_secs"
+    pkts="$tx_pkts"; bytes="$tx_bytes"; rx_bytes="$agg_rx_bytes"; secs="$max_active_secs"
     cat "$cell_dir"/server_p*.stderr "$cell_dir"/client_p*.stderr > "$stderr" 2>/dev/null || true
     cat "$cell_dir"/client_p*.stdout "$cell_dir"/server_p*.stdout > "$stdout" 2>/dev/null || true
   elif [[ "$BACKEND" == "rdma" ]]; then

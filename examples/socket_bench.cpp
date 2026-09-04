@@ -61,7 +61,26 @@ struct SocketWorkerStats {
   uint64_t sent_bytes = 0;
   uint64_t received_bytes = 0;
   uint32_t max_rx_burst = 0;
+  bool has_activity = false;
+  std::chrono::steady_clock::time_point first_activity;
+  std::chrono::steady_clock::time_point last_activity;
 };
+
+void record_activity(SocketWorkerStats& stats) {
+  const auto now = std::chrono::steady_clock::now();
+  if (!stats.has_activity) {
+    stats.first_activity = now;
+    stats.has_activity = true;
+  }
+  stats.last_activity = now;
+}
+
+double activity_seconds(const SocketWorkerStats& stats) {
+  if (!stats.has_activity) {
+    return 0.0;
+  }
+  return std::chrono::duration<double>(stats.last_activity - stats.first_activity).count();
+}
 
 SocketBenchConfig parse_socket_cfg(const YAML::Node& node) {
   SocketBenchConfig cfg;
@@ -197,6 +216,7 @@ void socket_worker(const SocketBenchConfig& cfg, daqiri::bench::TokenBucketPacer
         if (daqiri::send_tx_burst(msg) == daqiri::Status::SUCCESS) {
           stats.sent_packets++;
           stats.sent_bytes += static_cast<uint64_t>(cfg.message_size);
+          record_activity(stats);
           pacer.wait_for_bytes(static_cast<size_t>(cfg.message_size), stop);
         }
       } else {
@@ -211,6 +231,10 @@ void socket_worker(const SocketBenchConfig& cfg, daqiri::bench::TokenBucketPacer
         const int num_pkts = static_cast<int>(daqiri::get_num_packets(burst));
         stats.received_packets += static_cast<uint64_t>(num_pkts);
         stats.received_bytes += daqiri::get_burst_tot_byte(burst);
+        stats.max_rx_burst = std::max(stats.max_rx_burst, static_cast<uint32_t>(num_pkts));
+        if (num_pkts > 0) {
+          record_activity(stats);
+        }
         stats.max_rx_burst = std::max(stats.max_rx_burst, static_cast<uint32_t>(num_pkts));
 
         if (run_workload) {
@@ -351,14 +375,18 @@ int main(int argc, char** argv) {
               << " recv_packets=" << server_stats.received_packets
               << " sent_bytes=" << server_stats.sent_bytes
               << " recv_bytes=" << server_stats.received_bytes
-              << " max_rx_burst=" << server_stats.max_rx_burst << " seconds=" << secs << '\n';
+              << " seconds=" << secs
+              << " active_seconds=" << activity_seconds(server_stats)
+              << " max_rx_burst=" << server_stats.max_rx_burst << '\n';
   }
   if (run_client) {
     std::cout << "Client complete: sent_packets=" << client_stats.sent_packets
               << " recv_packets=" << client_stats.received_packets
               << " sent_bytes=" << client_stats.sent_bytes
               << " recv_bytes=" << client_stats.received_bytes
-              << " max_rx_burst=" << client_stats.max_rx_burst << " seconds=" << secs << '\n';
+              << " seconds=" << secs
+              << " active_seconds=" << activity_seconds(client_stats)
+              << " max_rx_burst=" << client_stats.max_rx_burst << '\n';
   }
 
   daqiri::print_stats();

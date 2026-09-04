@@ -25,12 +25,8 @@
 # set message_size to 1000 or 65507 here AND in the server config; the buffers
 # are already sized for the largest of them.
 #
-# Spark substitutions baked in here:
-#   - IPs: 1.1.1.1 (client p0), server on 2.2.2.2
-#   - cpu_core: DAQIRI queue on isolated X925 core 17, bench app thread on 7,
-#     master_core 8. The queue poller and the app thread MUST be on separate
-#     cores; sharing one costs roughly 4x. See
-#     docs/benchmarks/socket_benchmarking.md.
+# `socket_bench_client.cpu_core` pins the benchmark worker. The socket engine
+# does not currently apply queue `cpu_core` to its I/O threads.
 #
 %YAML 1.2
 ---
