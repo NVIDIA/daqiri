@@ -40,6 +40,9 @@
 #                      (--workload-sync-interval; default 2). Sweep it (1 2 4 8 16 32)
 #                      to see how much of the receive+compute ceiling is single-thread
 #                      GPU sync-stall. Recorded in post_process_sync.
+#   SOCKET_RX_IO_CORES — optional space-separated UDP receive I/O cores, one
+#                      per concurrent pair. These override the server RX queue
+#                      core independently of the socket_bench worker core.
 #
 # Optional (dpdk only): DPDK_{TX,RX}_PCI / DPDK_{TX,RX}_NETDEV override the p0/p1
 # ports used for the per-cell *_phy wire-transit check (defaults p0 0000:01:00.0 /
@@ -136,6 +139,16 @@ fi
 MAX_INFLIGHT="${MAX_INFLIGHT:-}"
 if [[ -n "$MAX_INFLIGHT" && ! "$MAX_INFLIGHT" =~ ^[0-9]+$ ]]; then
   echo "Invalid MAX_INFLIGHT '$MAX_INFLIGHT' (expected a positive integer)" >&2; exit 1
+fi
+SOCKET_RX_IO_PIN_CORES=()
+if [[ -n "${SOCKET_RX_IO_CORES:-}" ]]; then
+  read -r -a SOCKET_RX_IO_PIN_CORES <<< "$SOCKET_RX_IO_CORES"
+  for core in "${SOCKET_RX_IO_PIN_CORES[@]}"; do
+    if [[ ! "$core" =~ ^-1$|^[0-9]+$ ]]; then
+      echo "Invalid SOCKET_RX_IO_CORES entry '$core' (expected -1 or a CPU index)" >&2
+      exit 1
+    fi
+  done
 fi
 # NSYS: when set (NSYS=1), wrap the RoCE *server* (the receive + GPU-workload
 # process) in `nsys profile` to capture the CUDA/GPU timeline and thread states,
@@ -450,6 +463,14 @@ SRV_PIN_CORES=(16 18 5 7)
 CLI_PIN_CORES=(17 19 6 9)
 pair_server_core() { echo "${SRV_PIN_CORES[$(( $1 % 4 ))]}"; }
 pair_client_core() { echo "${CLI_PIN_CORES[$(( $1 % 4 ))]}"; }
+pair_server_io_core() {
+  local idx="$1" fallback="$2"
+  if (( ${#SOCKET_RX_IO_PIN_CORES[@]} == 0 )); then
+    echo "$fallback"
+  else
+    echo "${SOCKET_RX_IO_PIN_CORES[$(( idx % ${#SOCKET_RX_IO_PIN_CORES[@]} ))]}"
+  fi
+}
 
 # Write the server/client YAML pair for socket pair `idx`: split the combined base
 # per role, then substitute message_size, unique ports (SRV/CLI_PORT_BASE + idx),
@@ -462,27 +483,31 @@ generate_socket_yaml() {
   # SOCKET_NOPIN=1 runs the bench workers unpinned (cpu_core -1 -> no affinity, the
   # scheduler places them). For gathering the pinned-vs-non-pinned comparison only;
   # the published report stays pinned like the other backends.
-  local server_core client_core
+  local server_core client_core server_io_core
   if [[ -n "${SOCKET_NOPIN:-}" ]]; then
-    server_core=-1; client_core=-1
+    server_core=-1; client_core=-1; server_io_core=-1
   else
     server_core="$(pair_server_core "$idx")"
     client_core="$(pair_client_core "$idx")"
+    server_io_core="$server_core"
+    if [[ "$BACKEND" == "socket-udp" ]]; then
+      server_io_core="$(pair_server_io_core "$idx" "$server_core")"
+    fi
   fi
-  python3 "$NETNS_GEN" "$BASE_YAML" --role server | \
+  python3 "$NETNS_GEN" "$BASE_YAML" --role server \
+    --rx-queue-cpu-core "$server_io_core" --bench-cpu-core "$server_core" | \
   sed -E \
     -e "s|^( *message_size: ).*|\1$payload|g" \
     -e "s|^( *local_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$srv_port\2|" \
     -e "s|^( *server_port: ).*|\1$srv_port|" \
-    -e "s|^( *cpu_core: ).*|\1$server_core|" \
     > "$server_out"
-  python3 "$NETNS_GEN" "$BASE_YAML" --role client | \
+  python3 "$NETNS_GEN" "$BASE_YAML" --role client \
+    --rx-queue-cpu-core "$client_core" --bench-cpu-core "$client_core" | \
   sed -E \
     -e "s|^( *message_size: ).*|\1$payload|g" \
     -e "s|^( *local_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$cli_port\2|" \
     -e "s|^( *remote_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$srv_port\2|" \
     -e "s|^( *server_port: ).*|\1$srv_port|" \
-    -e "s|^( *cpu_core: ).*|\1$client_core|" \
     > "$client_out"
 }
 

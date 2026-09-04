@@ -7,7 +7,8 @@
 # scripts/gen_spark_netns_config.py splits it to one role at sweep time and
 # run_spark_bench.sh runs each role in its own namespace, assigning ports/cores per
 # pair (cores 16-19 across four pairs; the send and receive sides of a pair share
-# one core and self-pace, App TX ~= App RX). To split by hand:
+# one core and self-pace, App TX ~= App RX). SOCKET_RX_IO_CORES can instead assign
+# dedicated server I/O cores without changing the benchmark-worker cores. To split by hand:
 #   scripts/gen_spark_netns_config.py examples/daqiri_bench_socket_udp_tx_rx_spark_netns.yaml \
 #       --role server > server.yaml
 #   ip netns exec dq_wire_server daqiri_bench_socket server.yaml --seconds N --mode server
@@ -47,14 +48,13 @@ daqiri:
         mode: server
         local_addr: "udp://10.250.0.2:5001"
         max_payload_size: 65535
-        # -1 leaves the DAQIRI UDP receive I/O thread unpinned.
-        udp_rx_cpu_core: -1
       rx:
         queues:
         - name: "Server_RX_Queue"
           id: 0
           cpu_core: 16
-          batch_size: 1
+          # The socket engine passes up to one recvmmsg batch per DAQIRI burst.
+          batch_size: 32
           memory_regions:
             - "DATA_SOCKET_SERVER"
       tx:

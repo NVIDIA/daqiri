@@ -981,7 +981,6 @@ struct SocketConfig {
   uint64_t max_burst_interval_ms_ = 0;
   uint32_t min_ipg_ns_ = 0;
   int32_t retry_connect_s_ = 1;
-  int32_t udp_rx_cpu_core_ = -1;
 };
 
 struct RoCEConfig {

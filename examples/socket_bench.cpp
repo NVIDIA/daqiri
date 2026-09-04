@@ -210,8 +210,8 @@ void socket_worker(const SocketBenchConfig& cfg, daqiri::bench::TokenBucketPacer
 
         if (run_workload) {
           // Stage each received (host) payload to the GPU; the copy persists in
-          // the pipeline's device buffer, so a batch can accumulate across bursts
-          // (UDP bursts are one datagram). When a batch fills, reorder/gather it
+          // the pipeline's device buffer, so a batch can accumulate across bursts.
+          // A UDP burst can contain multiple datagrams. When a batch fills, reorder/gather it
           // and run the compute. TCP (packets_per_batch == 1) flushes per chunk.
           for (int i = 0; i < num_pkts; ++i) {
             const auto len = daqiri::get_packet_length(burst, i);

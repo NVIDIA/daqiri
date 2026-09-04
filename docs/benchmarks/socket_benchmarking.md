@@ -158,6 +158,16 @@ The shipped configs run both endpoints on `127.0.0.1` and are useful for a smoke
 
 For an on-wire namespace test, use separate server and client YAML files. The important fields are the endpoint URI scheme, namespace IPs, server port, `max_payload_size`, memory-region `buf_size`, and benchmark `message_size`.
 
+For UDP, `rx.queues[].cpu_core` pins the DAQIRI socket I/O thread that drains
+`recvmmsg()`. The separate `socket_bench_*.cpu_core` pins the application worker
+that consumes the resulting bursts. Assign different CPUs when measuring the
+receive path without intentional time-sharing. `rx.queues[].batch_size` controls
+the maximum number of datagrams coalesced into one DAQIRI burst (up to 32).
+`run_spark_bench.sh` normally preserves its historical self-pacing by assigning
+the server I/O and benchmark worker to the same core. Set, for example,
+`SOCKET_RX_IO_CORES="15 17 5 7"` to give concurrent UDP pairs dedicated receive
+I/O cores while leaving their benchmark-worker placement unchanged.
+
 Applications can tune the underlying TCP/UDP socket after resolving a connection ID
 with `socket_connect_to_server()` or `socket_get_server_conn_id()`. Use
 `socket_setsockopt(conn_id, level, optname, optval, optlen)` with the integer
@@ -193,7 +203,7 @@ daqiri:
         - name: "RX_Queue"
           id: 0
           cpu_core: 8
-          batch_size: 1
+          batch_size: 32
           memory_regions: ["DATA_SOCKET_SERVER"]
       tx:
         queues:
@@ -246,7 +256,7 @@ daqiri:
         - name: "RX_Queue"
           id: 0
           cpu_core: 8
-          batch_size: 1
+          batch_size: 32
           memory_regions: ["DATA_SOCKET_CLIENT"]
       tx:
         queues:

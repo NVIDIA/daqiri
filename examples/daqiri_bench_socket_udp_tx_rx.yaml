@@ -32,7 +32,7 @@ daqiri:
         - name: "Server_RX_Queue"
           id: 0
           cpu_core: 8
-          batch_size: 1
+          batch_size: 32
           memory_regions:
             - "DATA_SOCKET_SERVER"
       tx:
@@ -56,7 +56,7 @@ daqiri:
         - name: "Client_RX_Queue"
           id: 0
           cpu_core: 7
-          batch_size: 1
+          batch_size: 32
           memory_regions:
             - "DATA_SOCKET_CLIENT"
       tx:

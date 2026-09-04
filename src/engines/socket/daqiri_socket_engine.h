@@ -18,14 +18,15 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <netinet/in.h>
 #include <queue>
 #include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
-#include <netinet/in.h>
 
 #include <daqiri/daqiri.h>
 #include "src/engine.h"
@@ -139,6 +140,8 @@ class SocketEngine : public Engine {
     std::string address;
     uint16_t tx_queue = 0;
     uint16_t rx_queue = 0;
+    int rx_cpu_core = -1;
+    uint32_t rx_batch_size = 1;
     uint32_t tx_batch_size = 1;
     size_t max_packet_size = 65536;
     SocketConfig socket_cfg;
@@ -147,11 +150,16 @@ class SocketEngine : public Engine {
     std::atomic<bool> accept_running{false};
     std::thread accept_thread;
     std::thread io_thread;
+    std::mutex io_start_mutex;
+    std::condition_variable io_start_cv;
+    bool io_start_complete = false;
+    bool io_start_success = false;
     std::shared_ptr<RxQueueState> rx_queue_state;
     std::shared_ptr<metrics::CounterSet> rx_metrics;
     std::shared_ptr<metrics::CounterSet> tx_metrics;
     sockaddr_in udp_peer_addr{};
     bool udp_peer_valid = false;
+    bool udp_peer_mismatch_warned = false;
     uintptr_t primary_conn_id = 0;
   };
 
@@ -188,6 +196,8 @@ class SocketEngine : public Engine {
   int select_max_packet_size(const InterfaceConfig& if_cfg) const;
   uint16_t select_queue_id(const std::vector<RxQueueConfig>& queues) const;
   uint16_t select_queue_id(const std::vector<TxQueueConfig>& queues) const;
+  int select_cpu_core(const std::vector<RxQueueConfig>& queues) const;
+  uint32_t select_batch_size(const std::vector<RxQueueConfig>& queues) const;
   uint32_t select_batch_size(const std::vector<TxQueueConfig>& queues) const;
 
   Status pop_rx_burst(const std::shared_ptr<RxQueueState>& qstate, BurstParams** burst);

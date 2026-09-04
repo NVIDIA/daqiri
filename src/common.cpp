@@ -1573,15 +1573,6 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_socket_config(
     socket_cfg.max_burst_interval_ms_ = socket_item["max_burst_interval_ms"].as<uint64_t>(0);
     socket_cfg.min_ipg_ns_ = socket_item["min_ipg_ns"].as<uint32_t>(0);
     socket_cfg.retry_connect_s_ = socket_item["retry_connect_s"].as<int32_t>(1);
-    socket_cfg.udp_rx_cpu_core_ = socket_item["udp_rx_cpu_core"].as<int32_t>(-1);
-    if (socket_cfg.udp_rx_cpu_core_ < -1) {
-      DAQIRI_LOG_ERROR("socket_config.udp_rx_cpu_core must be -1 or a non-negative CPU index");
-      return false;
-    }
-    if (socket_cfg.udp_rx_cpu_core_ >= 0 && protocol != daqiri::SocketProtocol::UDP) {
-      DAQIRI_LOG_ERROR("socket_config.udp_rx_cpu_core is valid only for udp:// endpoints");
-      return false;
-    }
 
     const bool roce_client = socket_cfg.mode_ == daqiri::SocketMode::CLIENT &&
                              protocol == daqiri::SocketProtocol::ROCE;
