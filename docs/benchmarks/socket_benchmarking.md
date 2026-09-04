@@ -166,10 +166,19 @@ the maximum number of datagrams coalesced into one DAQIRI burst (up to 32).
 Set `socket_config.remote_addr` on a UDP server to identify its expected client;
 this lets the kernel reject other senders and permits receive batches larger than
 one datagram.
-`run_spark_bench.sh` normally preserves its historical self-pacing by assigning
-the server I/O and benchmark worker to the same core. Set, for example,
-`SOCKET_RX_IO_CORES="15 17 5 7"` to give concurrent UDP pairs dedicated receive
-I/O cores while leaving their benchmark-worker placement unchanged.
+`run_spark_bench.sh` normally preserves its historical server-side placement by
+assigning the server I/O and benchmark worker to the same core. To measure a
+fully separated pair on DGX Spark, select pair 0 and the spare core 15:
+
+```bash
+PAIRS_OVERRIDE=1 SOCKET_RX_IO_CORES=15 \
+  ./examples/run_spark_bench.sh socket-udp smoke
+```
+
+That places the master on 8, server worker on 16, client worker on 17, and UDP
+I/O on 15. The fixed four-pair map consumes the other big cores, so a four-pair
+run cannot give every I/O thread a dedicated core without changing the worker
+map or allowing deliberate overlap.
 
 Applications can tune the underlying TCP/UDP socket after resolving a connection ID
 with `socket_connect_to_server()` or `socket_get_server_conn_id()`. Use

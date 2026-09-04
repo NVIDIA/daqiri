@@ -38,7 +38,9 @@ namespace {
 volatile std::sig_atomic_t g_stop_requested = 0;
 
 void signal_handler(int signum) {
-  if (signum == SIGINT) { g_stop_requested = 1; }
+  if (signum == SIGINT) {
+    g_stop_requested = 1;
+  }
 }
 
 struct SocketBenchConfig {
@@ -58,6 +60,7 @@ struct SocketWorkerStats {
   uint64_t received_packets = 0;
   uint64_t sent_bytes = 0;
   uint64_t received_bytes = 0;
+  uint32_t max_rx_burst = 0;
 };
 
 SocketBenchConfig parse_socket_cfg(const YAML::Node& node) {
@@ -104,8 +107,7 @@ void socket_worker(const SocketBenchConfig& cfg, daqiri::bench::TokenBucketPacer
                    std::atomic<bool>& stop, SocketWorkerStats& stats,
                    daqiri::bench::BenchWorkload workload, bool is_tcp, int workload_gemm_dim,
                    int workload_sync_interval, int workload_fft_len) {
-  const char *thread_name =
-      cfg.server ? "socket_bench_server" : "socket_bench_client";
+  const char* thread_name = cfg.server ? "socket_bench_server" : "socket_bench_client";
   if (!daqiri::bench::set_current_thread_affinity(cfg.cpu_core, thread_name)) {
     stop.store(true);
     return;
@@ -147,8 +149,8 @@ void socket_worker(const SocketBenchConfig& cfg, daqiri::bench::TokenBucketPacer
       if (cfg.server) {
         s = daqiri::socket_get_server_conn_id(cfg.server_address, cfg.server_port, &conn_id);
       } else {
-        s = daqiri::socket_connect_to_server(
-            cfg.server_address, cfg.server_port, cfg.client_address, &conn_id);
+        s = daqiri::socket_connect_to_server(cfg.server_address, cfg.server_port,
+                                             cfg.client_address, &conn_id);
       }
 
       if (s != daqiri::Status::SUCCESS) {
@@ -165,13 +167,15 @@ void socket_worker(const SocketBenchConfig& cfg, daqiri::bench::TokenBucketPacer
 
     // When cfg.iterations <= 0, the loop is time-bounded (driven by stop.load()
     // set by --seconds). Otherwise the iteration cap applies as before.
-    const bool send_done = !cfg.send ||
-                           (cfg.iterations > 0 &&
-                            stats.sent_packets >= static_cast<uint64_t>(cfg.iterations));
-    const bool recv_done = !cfg.receive ||
-                           (cfg.iterations > 0 &&
-                            stats.received_packets >= static_cast<uint64_t>(cfg.iterations));
-    if (send_done && recv_done) { break; }
+    const bool send_done =
+        !cfg.send ||
+        (cfg.iterations > 0 && stats.sent_packets >= static_cast<uint64_t>(cfg.iterations));
+    const bool recv_done =
+        !cfg.receive ||
+        (cfg.iterations > 0 && stats.received_packets >= static_cast<uint64_t>(cfg.iterations));
+    if (send_done && recv_done) {
+      break;
+    }
 
     if (cfg.send && !send_done) {
       auto* msg = daqiri::create_tx_burst_params();
@@ -207,6 +211,7 @@ void socket_worker(const SocketBenchConfig& cfg, daqiri::bench::TokenBucketPacer
         const int num_pkts = static_cast<int>(daqiri::get_num_packets(burst));
         stats.received_packets += static_cast<uint64_t>(num_pkts);
         stats.received_bytes += daqiri::get_burst_tot_byte(burst);
+        stats.max_rx_burst = std::max(stats.max_rx_burst, static_cast<uint32_t>(num_pkts));
 
         if (run_workload) {
           // Stage each received (host) payload to the GPU; the copy persists in
@@ -293,7 +298,7 @@ int main(int argc, char** argv) {
       run_client = true;
       client_cfg = parse_socket_cfg(root["socket_bench_client"]);
     }
-  } catch (const std::exception &e) {
+  } catch (const std::exception& e) {
     std::cerr << "Invalid benchmark config: " << e.what() << "\n";
     daqiri::shutdown();
     return 1;
@@ -322,33 +327,38 @@ int main(int argc, char** argv) {
     if (run_seconds > 0) {
       const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
           std::chrono::steady_clock::now() - start);
-      if (elapsed.count() >= run_seconds) { break; }
+      if (elapsed.count() >= run_seconds) {
+        break;
+      }
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
 
   stop.store(true);
 
-  if (server_thread.joinable()) { server_thread.join(); }
-  if (client_thread.joinable()) { client_thread.join(); }
+  if (server_thread.joinable()) {
+    server_thread.join();
+  }
+  if (client_thread.joinable()) {
+    client_thread.join();
+  }
 
   const double secs =
-      std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
-          .count();
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 
   if (run_server) {
     std::cout << "Server complete: sent_packets=" << server_stats.sent_packets
               << " recv_packets=" << server_stats.received_packets
               << " sent_bytes=" << server_stats.sent_bytes
               << " recv_bytes=" << server_stats.received_bytes
-              << " seconds=" << secs << '\n';
+              << " max_rx_burst=" << server_stats.max_rx_burst << " seconds=" << secs << '\n';
   }
   if (run_client) {
     std::cout << "Client complete: sent_packets=" << client_stats.sent_packets
               << " recv_packets=" << client_stats.received_packets
               << " sent_bytes=" << client_stats.sent_bytes
               << " recv_bytes=" << client_stats.received_bytes
-              << " seconds=" << secs << '\n';
+              << " max_rx_burst=" << client_stats.max_rx_burst << " seconds=" << secs << '\n';
   }
 
   daqiri::print_stats();

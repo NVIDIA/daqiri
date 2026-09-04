@@ -15,13 +15,14 @@ memory regions, both bench sections -- and split it to a role here:
   * interfaces: keep the one whose socket_config.mode == role.
   * memory regions: keep those whose name contains the role (SERVER / CLIENT).
   * bench sections: drop the other role's <prefix>_bench_<role> mapping.
-  * optional core overrides: update RX queue, TX queue, and benchmark-worker
-    affinity independently without text substitutions that conflate them.
+  * optional queue overrides: update RX batch size plus RX queue, TX queue, and
+    benchmark-worker affinity without text substitutions that conflate them.
 
 This is the structural inverse of unioning the old _netns_server / _netns_client
-files. run_spark_bench.sh supplies optional structured core overrides, then pipes
-the output through per-message-size awk/sed rewrites (num_bufs/buf_size/depths
-for RDMA; payload and ports for sockets). Output goes to stdout.
+files. run_spark_bench.sh supplies optional structured queue overrides, then
+pipes the output through per-message-size awk/sed rewrites
+(num_bufs/buf_size/depths for RDMA; payload and ports for sockets). Output goes
+to stdout.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ def split_role(
     base: dict,
     role: str,
     rx_queue_cpu_core: int | None = None,
+    rx_queue_batch_size: int | None = None,
     tx_queue_cpu_core: int | None = None,
     bench_cpu_core: int | None = None,
 ) -> dict:
@@ -50,6 +52,10 @@ def split_role(
         for interface in cfg["interfaces"]:
             for queue in interface.get("rx", {}).get("queues", []):
                 queue["cpu_core"] = rx_queue_cpu_core
+    if rx_queue_batch_size is not None:
+        for interface in cfg["interfaces"]:
+            for queue in interface.get("rx", {}).get("queues", []):
+                queue["batch_size"] = rx_queue_batch_size
     if tx_queue_cpu_core is not None:
         for interface in cfg["interfaces"]:
             for queue in interface.get("tx", {}).get("queues", []):
@@ -75,6 +81,7 @@ def main() -> int:
     ap.add_argument("base", help="path to the combined (both-role) netns base YAML")
     ap.add_argument("--role", choices=("server", "client"), required=True)
     ap.add_argument("--rx-queue-cpu-core", type=int)
+    ap.add_argument("--rx-queue-batch-size", type=int)
     ap.add_argument("--tx-queue-cpu-core", type=int)
     ap.add_argument("--bench-cpu-core", type=int)
     args = ap.parse_args()
@@ -86,6 +93,7 @@ def main() -> int:
         base,
         args.role,
         rx_queue_cpu_core=args.rx_queue_cpu_core,
+        rx_queue_batch_size=args.rx_queue_batch_size,
         tx_queue_cpu_core=args.tx_queue_cpu_core,
         bench_cpu_core=args.bench_cpu_core,
     )

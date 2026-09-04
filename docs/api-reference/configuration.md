@@ -147,10 +147,12 @@ after connection setup with `socket_setsockopt(conn_id, level, optname, optval,
 optlen)`, using the numeric constants from the target system headers. The API is
 not supported for `roce://` endpoints.
 
-For compatibility, a UDP server without `remote_addr` learns the sender of each
-received datagram and uses it for subsequent server transmissions. DAQIRI limits
-such endpoints to one datagram per receive burst. Configure `remote_addr` for
-point-to-point operation and receive batching.
+For compatibility, a UDP server without `remote_addr` operates in a
+single-active-peer mode: each received datagram replaces the endpoint's current
+reply target. This does not preserve request/reply association when multiple
+clients interleave traffic. DAQIRI limits such endpoints to one datagram per
+receive burst. Configure `remote_addr` for point-to-point operation, peer
+filtering, and receive batching.
 
 When using RoCE, set `stream_type: "socket"` and use `roce://` endpoint addresses
 plus a `roce_config` block for transport settings. A RoCE URI may include
@@ -189,6 +191,8 @@ engine.
   forbidden in direct mode. A direct poll returns the packets currently ready, up to 256, without
   waiting.
   - type: `integer`
+  - C++ or Python callers constructing an indirect UDP RX queue programmatically must set this
+    field explicitly. The default `CommonQueueConfig` value of `0` is not a valid UDP batch size.
 - **`memory_regions`**: List of memory region names (defined in [Memory Regions](#memory-regions)).
   The order determines segment mapping: first region = segment 0, second = segment 1, etc.
   A single region means all packet data lands in one place, while two regions enables header-data
