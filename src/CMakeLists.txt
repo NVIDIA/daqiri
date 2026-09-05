@@ -145,6 +145,7 @@ add_library(daqiri_common
   kernels.cu
   engine.cpp
   logging.cpp
+  net_pause.cpp
 )
 if(DAQIRI_ENABLE_OTEL_METRICS)
   target_sources(daqiri_common PRIVATE metrics.cpp)

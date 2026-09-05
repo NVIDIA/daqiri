@@ -47,10 +47,12 @@
 namespace daqiri {
 
 struct IbvReorderPlan;
+struct IbvReorderState;
 
 // Stable per-output context referenced by the BurstParams handed to the
 // application. Both objects are allocated with the output pool at startup.
 struct IbvReorderBurstCtx {
+  IbvReorderState* state = nullptr;
   IbvReorderPlan* plan = nullptr;
   size_t out_idx = 0;
   std::array<void*, 1> pkt_ptrs{};
@@ -89,6 +91,7 @@ struct IbvReorderPlan {
   uint32_t slot_stride = 0;
   bool data_type_conversion = false;
   int cuda_device_id = 0;
+  CUcontext cuda_context = nullptr;
   cudaStream_t stream = nullptr;
   void** d_input_ptrs = nullptr;
   std::vector<IbvReorderOutBuf> out_bufs;
@@ -230,7 +233,7 @@ struct IbvRxQueue {
   // Direct polling transfers CQ ownership to the get_rx_burst caller. Only one
   // caller may poll a queue at a time; frees remain safe from other threads via
   // freed_strides' atomic counters.
-  std::mutex direct_poll_mutex;
+  std::atomic<uint64_t> direct_poll_owner{0};
   std::atomic<uint64_t> direct_poll_conflicts{0};
 
   // Optional GPU reordering state for this queue.
@@ -299,7 +302,11 @@ struct IbvTxQueue {
   uint64_t sq_completed = 0;
   uint32_t sq_capacity_wqebbs = 0;
   uint32_t bf_offset = 0;  // toggles between 0 and bf.size each doorbell
-  uint32_t tx_cq_ci = 0;   // TX CQ consumer index
+  // Direct, one-segment pinned-CPU-memory queues may embed small frames in the WQE.
+  // The mlx5 QP must be created with matching inline capacity first.
+  bool cpu_inline_enabled = false;
+  uint32_t max_inline_data = 0;
+  uint32_t tx_cq_ci = 0;  // TX CQ consumer index
   // Slots are handed out cyclically and posted/completed in order, so the whole
   // free/in-flight lifecycle is two counters instead of rings (slot k lives at
   // mr_base + (k % num_slots) * slot_size). alloc_head is owned by the app fill
@@ -314,6 +321,7 @@ struct IbvTxQueue {
   std::vector<uint64_t> wqe_slot_cum;
   std::vector<uint64_t> wqe_wqebb_cum;
   uint64_t slots_posted = 0;
+  uint64_t last_signaled_slots = 0;
   bool accurate_send = false;    // request wall-clock CQ for timed transmission
   bool send_scheduling = false;  // HCA wait_on_time present + real-time clock
   uint64_t rt_timemask = 0;      // wait segment comparison mask
@@ -324,12 +332,15 @@ struct IbvTxQueue {
   uint64_t handoff_drop_pkts = 0;
   // Direct mode has no handoff worker. One caller thread owns the queue and may
   // have exactly one allocated-but-unposted packet at a time.
-  std::mutex direct_mutex;
-  std::thread::id direct_owner;
-  bool direct_owner_set = false;
+  std::atomic<uint64_t> direct_owner{0};
   BurstParams* direct_pending = nullptr;
   std::atomic<uint64_t> direct_conflicts{0};
   uint64_t direct_no_space = 0;
+  uint64_t full_bf_wqebbs = 0;
+  uint64_t inline_wqes = 0;
+  uint64_t direct_cq_polls = 0;
+  uint64_t direct_signaled_wqes = 0;
+  uint64_t direct_drain_nops = 0;
   // tx_eth_src offload: when set, set_eth_header stamps the port's MAC as the
   // Ethernet source so the application doesn't have to supply it.
   bool insert_eth_src = false;
@@ -501,8 +512,10 @@ class IbverbsEngine : public Engine {
   void* emit_wait_wqe(IbvTxQueue& q, uint64_t when_ns);
   uint64_t tx_burst_wqebbs(const IbvTxQueue& q, const BurstParams* burst) const;
   bool tx_sq_has_space(IbvTxQueue& q, uint64_t needed_wqebbs);
+  bool direct_tx_has_capacity(IbvTxQueue& q, uint64_t needed_wqebbs);
+  bool emit_direct_drain_nop(IbvTxQueue& q);
   void poll_tx_completions(IbvTxQueue& q);  // drain TX CQ, reclaim slot-runs
-  bool lock_direct_tx_queue(IbvTxQueue& q, std::unique_lock<std::mutex>& guard);
+  bool owns_direct_tx_queue(IbvTxQueue& q);
   // One worker services a group of TX queues sharing a cpu_core, round-robin:
   // drains each send_ring (post) + reclaims completions.
   void tx_worker(std::vector<IbvTxQueue*> group);

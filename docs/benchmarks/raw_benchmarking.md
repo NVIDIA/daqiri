@@ -238,6 +238,63 @@ After having modified the configuration file, ensure you have connected an SFP c
 
 By default the application runs for 10 seconds and then exits. You can change the duration by passing `--seconds <N>` after the YAML path, or stop it gracefully at any time with `Ctrl-C`.
 
+### Direct-polling latency sweep
+
+`daqiri_bench_raw_latency` measures the caller-driven raw ibverbs path with one packet
+outstanding at a time. Its template, `daqiri_bench_raw_latency_ibverbs.yaml`, configures both TX
+and RX with `poll_mode: direct`, enables per-packet RX hardware timestamps, and uses host-pinned
+buffers by default. The benchmark also supports `huge` and `device` packet memory: packet setup and
+identity checking use `cudaMemcpyDefault`, with both copies deliberately outside the reported
+`send_tx_burst()` call to `get_rx_burst()` return interval. It
+sweeps 64, 128, 256, ..., 8192-byte L2 frames; sizes exclude the Ethernet FCS added by the NIC.
+
+Replace the TX/RX PCI BDFs, master/application cores, destination MAC, and RX port's
+`ptp_device` in the template. The destination MAC must be the receiving port's MAC. Connect the
+physical loopback path, then run:
+
+```bash
+sudo ./build/examples/daqiri_bench_raw_latency \
+  examples/daqiri_bench_raw_latency_ibverbs.yaml \
+  --samples 10000 --warmup 1000 --csv latency.csv \
+  --realtime-priority 90
+```
+
+For a single-port internal comparison, merge the TX and RX queues under one interface, set both
+`bench_latency` interface names to it, use that port's MAC and PTP device, and set
+`daqiri.cfg.loopback: "hw"`. This retains the same timing boundaries while replacing the physical
+cable/peer-port return with the mlx5 hardware self-loopback path.
+
+`--realtime-priority N` locks current and future mappings with `mlockall()` and verifies that the
+latency thread is running under `SCHED_FIFO` at priority `N`. It requires the corresponding
+realtime scheduling and memory-lock privileges; omit it to retain normal `SCHED_OTHER` behavior.
+
+For each packet, the measured path follows this timeline:
+
+```text
+t0  Application timestamps immediately before send_tx_burst()
+t1  send_tx_burst() returns
+t2  NIC records the packet's RX hardware timestamp
+t3  get_rx_burst() returns the matching packet to the application
+```
+
+The summary and optional per-sample CSV combine those points into these boundaries:
+
+| Column | Start | End | What it includes |
+|--------|-------|-----|------------------|
+| `tx_call_to_return_ns` | `t0` | `t1` | Direct WQE construction and SQ doorbell submission |
+| `tx_call_to_rx_hw_ns` | `t0` | `t2` | TX submission, NIC transmit, physical or hardware-loopback return, and NIC receive |
+| `rx_hw_to_app_ns` | `t2` | `t3` | CQ visibility, direct polling, and API return |
+| `tx_call_to_app_ns` | `t0` | `t3` | Complete measured application round trip |
+
+`tx_call_to_rx_hw_ns` is a loopback-ingress proxy, not an actual TX egress timestamp: DAQIRI does
+not currently expose a TX hardware timestamp, so this value also contains the cable and NIC RX
+latency. When `ptp_device` is set, the benchmark uses Linux's non-mutating extended
+PHC/system cross-timestamp ioctl before and after each size and interpolates the offset for every
+sample. It prints the maximum measured cross-clock uncertainty. Without `ptp_device`, the NIC PHC
+must be synchronized with `CLOCK_REALTIME`; negative or implausibly large values indicate a clock
+problem. Pin the application core to an isolated physical core, use the performance governor, and
+save the raw CSV when investigating tails.
+
 ### Single-port hardware loopback without a cable
 
 On mlx5 systems where the NIC remains available without a cable, DAQIRI can send packets back to
@@ -538,6 +595,26 @@ The `*_packets_phy` and `*_bytes_phy` counters measure traffic that crosses a ph
                     rx_prio0_bytes: 12,603,256,772 Bps   = 100,826.5 Mbps
                   rx_prio0_packets: 1,562,128
     ```
+
+!!! warning "Check flow control before trusting a throughput number"
+
+    If the measured rate plateaus well below line rate with **zero** drops, suspect 802.3x pause before you suspect the transmitter. A paused link idles instead of dropping, so nothing in the counter set above distinguishes it from a sender that cannot go faster.
+
+    DAQIRI reports this itself. Pause is not exposed through DPDK's xstats, so the raw engines read it from the kernel netdev: a warning at init when pause is enabled on a port, and the `rx_pause_ctrl_phy` / `tx_pause_ctrl_phy` frames exchanged **during that run** alongside the shutdown stats dump.
+
+    ```log
+    [WARN] Flow control: port 0 (ens15f0np0) has 802.3x pause enabled (rx on, tx on). A paused
+    link idles instead of dropping, so this can prevent achieving higher rates ...
+          rx_pause_ctrl_phy:            34293
+          tx_pause_ctrl_phy:            0
+    [WARN] Flow control: port 0 (ens15f0np0) exchanged 34293 pause frames during this run
+    (received 34293, sent 0), so the link spent time paused ... The link partner asserted
+    pause, throttling this port's transmit. ...
+    ```
+
+    `rx_pause_ctrl_phy` counts frames **received**, so it is the peer throttling this port's transmit. `tx_pause_ctrl_phy` counts frames **sent**, so it points at this host's receive path. Because these are per-run deltas, a non-zero value means flow control throttled *this* measurement.
+
+    Pause frames are not automatically a misconfiguration: shallow-buffer peers can use them as intended backpressure. Establish which end is asserting pause, and whether the peer can absorb line rate at all, before disabling it. To check a host before running anything, use `sudo ./python/tune_system.py --check pause`; see [Step 10 of System Configuration](../tutorials/system_configuration.md#step-10-disable-ethernet-flow-control-pause) for disablement guidance.
 
 ??? tip "Troubleshooting"
 

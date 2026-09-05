@@ -18,6 +18,7 @@
 #include "src/engines/ibverbs/daqiri_ibverbs_engine.h"
 #include "src/engines/ibverbs/mlx5_prm_min.h"
 #include "src/kernels.h"
+#include "src/net_pause.h"
 #include "src/rss.h"
 
 #include <cuda.h>
@@ -29,6 +30,10 @@
 #include <sys/socket.h>
 #include <linux/sockios.h>
 #include <unistd.h>
+
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -64,6 +69,30 @@ inline uint64_t ibv_now_ns() {
   return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                    std::chrono::steady_clock::now().time_since_epoch())
                                    .count());
+}
+
+// Assign each calling thread a process-unique token. Direct queues atomically
+// remember the first token they see, avoiding a mutex on every steady-state
+// poll/post while still rejecting access from any other thread.
+uint64_t direct_thread_token() {
+  static std::atomic<uint64_t> next{1};
+  thread_local const uint64_t token = next.fetch_add(1, std::memory_order_relaxed);
+  return token;
+}
+
+bool claim_direct_owner(std::atomic<uint64_t>& owner) {
+  const uint64_t caller = direct_thread_token();
+  uint64_t current = owner.load(std::memory_order_relaxed);
+  if (current == caller) {
+    return true;
+  }
+  if (current != 0) {
+    return false;
+  }
+  uint64_t expected = 0;
+  return owner.compare_exchange_strong(expected, caller, std::memory_order_relaxed,
+                                       std::memory_order_relaxed) ||
+         expected == caller;
 }
 
 size_t next_power_of_two(size_t value) {
@@ -169,6 +198,64 @@ static inline void doorbell_mmio_flush() {
 #else
   std::atomic_thread_fence(std::memory_order_seq_cst);
 #endif
+}
+
+// Push one complete WQEBB through the BlueFlame WC mapping. Match rdma-core's
+// mmio_memcpy_x64 contract: copy exactly 64 bytes in ascending address order
+// and never delegate the MMIO access to a generic memcpy implementation.
+static inline bool blueflame_copy_wqebb(void* dst, const void* src) {
+  constexpr uintptr_t WQEBB_MASK = 64 - 1;
+  if ((reinterpret_cast<uintptr_t>(dst) & WQEBB_MASK) != 0 ||
+      (reinterpret_cast<uintptr_t>(src) & (alignof(uint64_t) - 1)) != 0) {
+    return false;
+  }
+#if defined(__aarch64__)
+  vst4q_u64(static_cast<uint64_t*>(dst), vld4q_u64(static_cast<const uint64_t*>(src)));
+#else
+  auto* out = static_cast<volatile uint64_t*>(dst);
+  const auto* in = static_cast<const uint64_t*>(src);
+  for (size_t i = 0; i < 8; ++i) {
+    out[i] = in[i];
+  }
+#endif
+  return true;
+}
+
+// Push a complete, contiguous WQE through the BlueFlame WC mapping. The WQE
+// is staged in an aligned local buffer, so a cyclic-SQ wrap can never make the
+// 64-byte source read cross the SQ allocation boundary.
+static inline bool blueflame_copy_wqe(void* dst, const void* src, uint32_t wqebbs) {
+  auto* out = static_cast<uint8_t*>(dst);
+  const auto* in = static_cast<const uint8_t*>(src);
+  for (uint32_t i = 0; i < wqebbs; ++i) {
+    if (!blueflame_copy_wqebb(out + static_cast<size_t>(i) * MLX5_SEND_WQE_BB,
+                              in + static_cast<size_t>(i) * MLX5_SEND_WQE_BB)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static constexpr uint32_t MLX5_RAW_ETH_INLINE_HEADER = 18;
+static constexpr uint32_t MLX5_CPU_INLINE_MAX_FRAME = 128;
+
+static inline uint32_t cpu_inline_wqe_ds(uint32_t frame_len) {
+  // ctrl(1 DS) + full eth segment(2 DS) + inline segment header/payload.
+  const uint32_t remainder = frame_len - MLX5_RAW_ETH_INLINE_HEADER;
+  return 3u + (sizeof(struct mlx5_wqe_inl_data_seg) + remainder + 15u) / 16u;
+}
+
+static inline uint32_t cpu_inline_wqe_wqebbs(uint32_t frame_len) {
+  return (cpu_inline_wqe_ds(frame_len) * 16u + MLX5_SEND_WQE_BB - 1u) / MLX5_SEND_WQE_BB;
+}
+
+static inline void copy_wqe_to_cyclic_sq(uint8_t* sq_buf, uint32_t wqe_cnt, uint32_t stride,
+                                         uint32_t first_idx, const uint8_t* wqe, uint32_t wqebbs) {
+  for (uint32_t i = 0; i < wqebbs; ++i) {
+    const uint32_t idx = (first_idx + i) % wqe_cnt;
+    memcpy(sq_buf + static_cast<size_t>(idx) * stride,
+           wqe + static_cast<size_t>(i) * MLX5_SEND_WQE_BB, MLX5_SEND_WQE_BB);
+  }
 }
 
 static void append_bytes(std::vector<uint8_t>& dst, const void* src, size_t len) {
@@ -652,7 +739,6 @@ Status IbverbsEngine::register_mr(struct ibv_pd* pd, const std::string& mr_name,
       DAQIRI_LOG_CRITICAL("Could not activate the owning CUDA context for MR {}", mr_name);
       return Status::INTERNAL_ERROR;
     }
-
     const size_t page = sysconf(_SC_PAGESIZE);
     const auto va = reinterpret_cast<uintptr_t>(base);
     const uintptr_t aligned = va & ~(static_cast<uintptr_t>(page) - 1);
@@ -2796,6 +2882,12 @@ void IbverbsEngine::initialize() {
   // traffic flows (the kernel netdev MTU gates jumbo RX and TX egress on this path).
   ensure_port_mtus();
 
+  // 802.3x pause silently caps throughput and no drop counter reveals it, so
+  // flag it before traffic starts rather than after a confusing result.
+  for (const auto& intf : cfg_.ifs_) {
+    check_pause_at_init(port_netdev(intf.port_id_), intf.port_id_);
+  }
+
   // All RX queues (and their TIRs) now exist -- install per-port flow steering.
   if (install_port_flows() != Status::SUCCESS) {
     DAQIRI_LOG_CRITICAL("Failed to install RX flow steering");
@@ -3268,7 +3360,41 @@ Status IbverbsEngine::init_reorder(IbvRxQueue& q, const InterfaceConfig& intf,
     plan.copy_source_offset = rc.payload_byte_offset_;
     plan.slot_stride = static_cast<uint32_t>(src_mr.buf_size_ - rc.payload_byte_offset_);
     plan.data_type_conversion = rdr_uses_conversion(rc);
-    plan.cuda_device_id = src_mr.affinity_;
+    if (src_mr.kind_ == MemoryKind::DEVICE && out_mr.kind_ == MemoryKind::DEVICE &&
+        src_mr.affinity_ != out_mr.affinity_) {
+      DAQIRI_LOG_CRITICAL(
+          "Reorder '{}' requires input/output memory on the same GPU (src affinity {} "
+          "!= reorder affinity {})",
+          rc.name_, src_mr.affinity_, out_mr.affinity_);
+      return Status::INVALID_PARAMETER;
+    }
+    if (src_mr.kind_ == MemoryKind::DEVICE) {
+      plan.cuda_device_id = src_mr.affinity_;
+    } else if (out_mr.kind_ == MemoryKind::DEVICE) {
+      plan.cuda_device_id = out_mr.affinity_;
+    } else {
+      plan.cuda_device_id = src_mr.affinity_;
+    }
+    const auto select_region_context = [&](const std::string& mr_name, const char* role) {
+      const auto& region = ar_.at(mr_name);
+      if (region.cuda_device_ != plan.cuda_device_id) {
+        DAQIRI_LOG_CRITICAL(
+            "Reorder '{}' {} MR '{}' uses CUDA device {}, but the plan uses device {}", rc.name_,
+            role, mr_name, region.cuda_device_, plan.cuda_device_id);
+        return Status::INVALID_PARAMETER;
+      }
+      if (plan.cuda_context != nullptr && region.cuda_context_ != nullptr &&
+          plan.cuda_context != region.cuda_context_) {
+        DAQIRI_LOG_CRITICAL("Reorder '{}' source and output use different CUDA contexts", rc.name_);
+        return Status::INVALID_PARAMETER;
+      }
+      plan.cuda_context = region.cuda_context_;
+      return Status::SUCCESS;
+    };
+    if (select_region_context(q.mr_name, "source") != Status::SUCCESS ||
+        select_region_context(rc.memory_region_, "output") != Status::SUCCESS) {
+      return Status::INVALID_PARAMETER;
+    }
     plan.acc_ptrs.reserve(plan.packets_per_batch);
     plan.acc_wqe.reserve(plan.packets_per_batch);
     plan.acc_strd.reserve(plan.packets_per_batch);
@@ -3292,10 +3418,16 @@ Status IbverbsEngine::init_reorder(IbvRxQueue& q, const InterfaceConfig& intf,
           rc.name_, batch_id_space);
     }
 
-    if (cudaSetDevice(plan.cuda_device_id) != cudaSuccess) {
-      DAQIRI_LOG_CRITICAL("Reorder '{}' could not select CUDA device {}", rc.name_,
-                          plan.cuda_device_id);
-      return Status::GENERIC_FAILURE;
+    CudaContextGuard context_guard(plan.cuda_context);
+    if (plan.cuda_context == nullptr) {
+      if (cudaSetDevice(plan.cuda_device_id) != cudaSuccess) {
+        DAQIRI_LOG_CRITICAL("Reorder '{}' could not select CUDA device {}", rc.name_,
+                            plan.cuda_device_id);
+        return Status::GENERIC_FAILURE;
+      }
+    } else if (!context_guard.valid()) {
+      DAQIRI_LOG_CRITICAL("Reorder '{}' could not activate its CUDA context", rc.name_);
+      return Status::INTERNAL_ERROR;
     }
     if (cudaMalloc(reinterpret_cast<void**>(&plan.d_input_ptrs),
                    sizeof(void*) * plan.packets_per_batch) != cudaSuccess) {
@@ -3310,6 +3442,7 @@ Status IbverbsEngine::init_reorder(IbvRxQueue& q, const InterfaceConfig& intf,
       auto& ob = plan.out_bufs[i];
       ob.ptr = out_base + i * out_mr.adj_size_;
       ob.context = std::make_shared<IbvReorderBurstCtx>();
+      ob.context->state = st.get();
       ob.src_wqe.reserve(plan.packets_per_batch);
       ob.src_strd.reserve(plan.packets_per_batch);
       if (cudaEventCreateWithFlags(&ob.event, cudaEventDisableTiming) != cudaSuccess ||
@@ -3345,6 +3478,13 @@ Status IbverbsEngine::init_reorder(IbvRxQueue& q, const InterfaceConfig& intf,
 }
 
 Status IbverbsEngine::reorder_poll_events(IbvRxQueue& q, IbvReorderPlan& plan) {
+  CudaContextGuard context_guard(plan.cuda_context);
+  if ((plan.cuda_context != nullptr && !context_guard.valid()) ||
+      (plan.cuda_context == nullptr && cudaSetDevice(plan.cuda_device_id) != cudaSuccess)) {
+    DAQIRI_LOG_ERROR("Reorder '{}' could not activate its CUDA context while polling",
+                     plan.cfg.name_);
+    return Status::INTERNAL_ERROR;
+  }
   for (auto& ob : plan.out_bufs) {
     if (ob.event_complete || ob.event == nullptr) {
       continue;
@@ -3424,9 +3564,22 @@ Status IbverbsEngine::reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, B
   const uint32_t out_payload = plan.acc_output_payload_len;
   const uint32_t aggregate_len = plan.packets_per_batch * out_payload;
 
-  cudaError_t cuda_status = cudaSetDevice(plan.cuda_device_id);
-  if (cuda_status != cudaSuccess) {
-    return fail_cuda_batch("CUDA device selection", cuda_status, false);
+  CudaContextGuard context_guard(plan.cuda_context);
+  cudaError_t cuda_status = cudaSuccess;
+  if (plan.cuda_context == nullptr) {
+    cuda_status = cudaSetDevice(plan.cuda_device_id);
+    if (cuda_status != cudaSuccess) {
+      return fail_cuda_batch("CUDA device selection", cuda_status, false);
+    }
+  } else if (!context_guard.valid()) {
+    DAQIRI_LOG_ERROR("Reorder '{}' could not activate its CUDA context", plan.cfg.name_);
+    for (uint32_t i = 0; i < num_pkts; ++i) {
+      release_strides(q, plan.acc_wqe[i], plan.acc_strd[i]);
+    }
+    reset_reorder_accumulation(plan);
+    ob.consumer_done = true;
+    ob.event_complete = true;
+    return Status::INTERNAL_ERROR;
   }
   cuda_status = cudaMemcpyAsync(plan.d_input_ptrs, plan.acc_ptrs.data(), sizeof(void*) * num_pkts,
                                 cudaMemcpyHostToDevice, plan.stream);
@@ -3625,7 +3778,11 @@ void IbverbsEngine::reorder_release_output(BurstParams* burst) {
     return;
   }
   auto ctx = std::static_pointer_cast<IbvReorderBurstCtx>(burst->custom_pkt_data);
-  if (ctx && !ctx->released && ctx->plan != nullptr && ctx->out_idx < ctx->plan->out_bufs.size()) {
+  if (!ctx || ctx->state == nullptr) {
+    return;
+  }
+  std::lock_guard<std::mutex> guard(ctx->state->lock);
+  if (!ctx->released && ctx->plan != nullptr && ctx->out_idx < ctx->plan->out_bufs.size()) {
     ctx->plan->out_bufs[ctx->out_idx].consumer_done = true;
     ctx->released = true;
   }
@@ -3636,7 +3793,12 @@ void IbverbsEngine::reorder_cleanup(IbvRxQueue& q) {
     return;
   }
   for (auto& plan : q.reorder->plans) {
-    if (cudaSetDevice(plan.cuda_device_id) == cudaSuccess && plan.stream != nullptr) {
+    CudaContextGuard context_guard(plan.cuda_context);
+    bool context_ready = context_guard.valid();
+    if (plan.cuda_context == nullptr) {
+      context_ready = cudaSetDevice(plan.cuda_device_id) == cudaSuccess;
+    }
+    if (context_ready && plan.stream != nullptr) {
       const cudaError_t status = cudaStreamSynchronize(plan.stream);
       if (status != cudaSuccess) {
         DAQIRI_LOG_ERROR("Reorder '{}' stream synchronization during cleanup failed: {}",
@@ -3689,6 +3851,15 @@ Status IbverbsEngine::set_reorder_cuda_stream(const std::string& interface_name,
     }
     for (auto& plan : q->reorder->plans) {
       if (plan.cfg.name_ == reorder_name) {
+        if (stream != nullptr && plan.cuda_context != nullptr) {
+          CUcontext stream_context = nullptr;
+          if (cuStreamGetCtx(reinterpret_cast<CUstream>(stream), &stream_context) != CUDA_SUCCESS ||
+              stream_context != plan.cuda_context) {
+            DAQIRI_LOG_ERROR("CUDA stream for reorder '{}' belongs to a different context",
+                             reorder_name);
+            return Status::INVALID_PARAMETER;
+          }
+        }
         plan.stream = stream;
         DAQIRI_LOG_INFO("Reorder '{}' stream set on port {} q{}", reorder_name, port, q->queue_id);
         return Status::SUCCESS;
@@ -3713,6 +3884,12 @@ Status IbverbsEngine::get_reorder_burst_info(BurstParams* burst, ReorderBurstInf
     return Status::INVALID_PARAMETER;
   }
   if (ctx->h_batch_id != nullptr) {
+    CudaContextGuard context_guard(ctx->plan != nullptr ? ctx->plan->cuda_context : nullptr);
+    if (ctx->plan == nullptr || (ctx->plan->cuda_context != nullptr && !context_guard.valid()) ||
+        (ctx->plan->cuda_context == nullptr &&
+         cudaSetDevice(ctx->plan->cuda_device_id) != cudaSuccess)) {
+      return Status::INTERNAL_ERROR;
+    }
     if (burst->event != nullptr) {
       const cudaError_t s = cudaEventQuery(burst->event);
       if (s == cudaErrorNotReady) {
@@ -3739,13 +3916,12 @@ Status IbverbsEngine::get_rx_burst(BurstParams** burst, int port, int q) {
     return Status::INVALID_PARAMETER;
   }
   if (rq->poll_mode == QueuePollMode::DIRECT) {
-    std::unique_lock<std::mutex> guard(rq->direct_poll_mutex, std::try_to_lock);
-    if (!guard.owns_lock()) {
+    if (!claim_direct_owner(rq->direct_poll_owner)) {
       const uint64_t conflicts = rq->direct_poll_conflicts.fetch_add(1) + 1;
       if ((conflicts & (conflicts - 1)) == 0) {
         DAQIRI_LOG_WARN(
-            "Concurrent direct RX poll on port {} queue {} rejected ({} conflict(s)); use one "
-            "polling thread per direct queue",
+            "Direct RX port {} queue {} called from a non-owner thread ({} conflict(s)); the "
+            "first caller owns this queue",
             port, q, conflicts);
       }
       return Status::NOT_READY;
@@ -3798,7 +3974,9 @@ void IbverbsEngine::free_all_packets(BurstParams* burst) {
       return;
     }
     if (tq->poll_mode == QueuePollMode::DIRECT) {
-      std::lock_guard<std::mutex> guard(tq->direct_mutex);
+      if (!owns_direct_tx_queue(*tq)) {
+        return;
+      }
       if (tq->direct_pending == burst) {
         tq->alloc_head--;
         tq->direct_pending = nullptr;
@@ -4356,10 +4534,17 @@ Status IbverbsEngine::wait_for_tx_idle(uint32_t timeout_ms) {
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
   for (;;) {
     bool idle = true;
-    for (const auto& q : tx_queues_) {
+    for (auto& q : tx_queues_) {
+      if (q->poll_mode == QueuePollMode::DIRECT) {
+        ++q->direct_cq_polls;
+        poll_tx_completions(*q);
+        const uint64_t completed = q->completed_tail.load(std::memory_order_acquire);
+        if (q->slots_posted > completed && q->last_signaled_slots < q->slots_posted) {
+          emit_direct_drain_nop(*q);
+        }
+      }
       if (q->completed_tail.load(std::memory_order_acquire) != q->alloc_head) {
         idle = false;
-        break;
       }
     }
     if (idle) {
@@ -4386,10 +4571,19 @@ void IbverbsEngine::print_stats() {
     const uint64_t inflight = q->slots_posted - completed;
     DAQIRI_LOG_INFO(
         "ibverbs TX port {} q{} ({}): posted={} completed={} inflight={} "
-        "handoff_full_drops={} bursts ({} pkts) direct_no_space={} direct_conflicts={}",
+        "handoff_full_drops={} bursts ({} pkts) direct_no_space={} direct_conflicts={} "
+        "full_bf_wqebbs={} inline_wqes={} direct_cq_polls={} direct_signaled_wqes={} "
+        "direct_drain_nops={}",
         q->port_id, q->queue_id, queue_poll_mode_to_string(q->poll_mode), q->slots_posted,
         completed, inflight, q->handoff_drop_bursts, q->handoff_drop_pkts, q->direct_no_space,
-        q->direct_conflicts.load());
+        q->direct_conflicts.load(), q->full_bf_wqebbs, q->inline_wqes, q->direct_cq_polls,
+        q->direct_signaled_wqes, q->direct_drain_nops);
+  }
+  // Flow control leaves no trace in the per-queue counters above: a paused link
+  // simply delivers fewer packets. Report it from the netdev so a throttled run
+  // is distinguishable from a slow transmitter.
+  for (const auto& intf : cfg_.ifs_) {
+    log_pause_counters(port_netdev(intf.port_id_), intf.port_id_);
   }
 }
 
@@ -4696,13 +4890,17 @@ Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
   attr.qp_type = IBV_QPT_RAW_PACKET;
   attr.send_cq = q.cq;
   attr.recv_cq = q.cq;
-  // Room for 2 WQEBBs per slot: a scheduled packet emits a WAIT WQE before its
-  // send WQE, so the SQ must hold up to 2x num_slots WQEs in flight.
+  // Room for at least two send operations per slot: a scheduled packet emits a
+  // WAIT WQE before its SEND. Direct CPU inline WQEs may occupy several WQEBBs;
+  // max_inline_data below makes the provider size each SQ operation for them.
   attr.cap.max_send_wr = static_cast<uint32_t>(requested_send_wr);
   // Size the QP for the segments this queue actually uses. Requesting the
   // library-wide maximum makes mlx5 reserve larger WQEs even for a normal
   // single-region queue and can needlessly exceed the device's SQ limit.
   attr.cap.max_send_sge = static_cast<uint32_t>(q.num_segs);
+  if (q.cpu_inline_enabled) {
+    attr.cap.max_inline_data = MLX5_CPU_INLINE_MAX_FRAME;
+  }
   attr.cap.max_recv_wr = 1;
   attr.cap.max_recv_sge = 1;
   q.qp = ibv_create_qp(q.pd, &attr);
@@ -4719,6 +4917,7 @@ Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
     }
     return Status::GENERIC_FAILURE;
   }
+  q.max_inline_data = attr.cap.max_inline_data;
   // RESET -> INIT -> RTR -> RTS.
   struct ibv_qp_attr m {};
   m.qp_state = IBV_QPS_INIT;
@@ -4832,6 +5031,10 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
     q.regions.push_back(r);
     q.num_slots = std::min<uint32_t>(q.num_slots, static_cast<uint32_t>(mr.num_bufs_));
   }
+  const MemoryKind tx_memory_kind = cfg_.mrs_[q.mr_name].kind_;
+  q.cpu_inline_enabled =
+      q.poll_mode == QueuePollMode::DIRECT && q.num_segs == 1 &&
+      (tx_memory_kind == MemoryKind::HUGE || tx_memory_kind == MemoryKind::HOST_PINNED);
   q.mr_base = q.regions[0].base;
   q.lkey = q.regions[0].lkey;
   q.slot_size = q.regions[0].slot_size;
@@ -4907,25 +5110,8 @@ void IbverbsEngine::poll_tx_completions(IbvTxQueue& q) {
   }
 }
 
-bool IbverbsEngine::lock_direct_tx_queue(IbvTxQueue& q, std::unique_lock<std::mutex>& guard) {
-  if (!guard.try_lock()) {
-    const uint64_t conflicts = q.direct_conflicts.fetch_add(1) + 1;
-    if ((conflicts & (conflicts - 1)) == 0) {
-      DAQIRI_LOG_WARN(
-          "Concurrent direct TX access on port {} queue {} rejected ({} conflict(s)); use one "
-          "thread per direct queue",
-          q.port_id, q.queue_id, conflicts);
-    }
-    return false;
-  }
-
-  const std::thread::id caller = std::this_thread::get_id();
-  if (!q.direct_owner_set) {
-    q.direct_owner = caller;
-    q.direct_owner_set = true;
-    return true;
-  }
-  if (q.direct_owner != caller) {
+bool IbverbsEngine::owns_direct_tx_queue(IbvTxQueue& q) {
+  if (!claim_direct_owner(q.direct_owner)) {
     const uint64_t conflicts = q.direct_conflicts.fetch_add(1) + 1;
     if ((conflicts & (conflicts - 1)) == 0) {
       DAQIRI_LOG_WARN(
@@ -5000,6 +5186,64 @@ bool IbverbsEngine::tx_sq_has_space(IbvTxQueue& q, uint64_t needed_wqebbs) {
     return false;
   }
   return needed_wqebbs <= q.sq_capacity_wqebbs - used;
+}
+
+// Direct callers reclaim lazily: use cached completion progress until either
+// credits are actually scarce or enough sends have accumulated to amortize a
+// CQ poll. The allocation call reserves the maximum direct cost (WAIT + SEND),
+// so send_tx_burst does not need to repeat these checks in its timed hot path.
+bool IbverbsEngine::direct_tx_has_capacity(IbvTxQueue& q, uint64_t needed_wqebbs) {
+  static constexpr uint64_t DIRECT_RECLAIM_BATCH = 256;
+  const auto has_capacity = [&]() {
+    const uint64_t in_flight = q.alloc_head - q.completed_tail.load(std::memory_order_acquire);
+    return in_flight < q.num_slots && tx_sq_has_space(q, needed_wqebbs);
+  };
+  const uint64_t reclaim_batch =
+      std::min<uint64_t>(DIRECT_RECLAIM_BATCH, std::max<uint64_t>(1, q.num_slots / 2));
+  const uint64_t outstanding = q.alloc_head - q.completed_tail.load(std::memory_order_acquire);
+  if (outstanding < reclaim_batch && has_capacity()) {
+    return true;
+  }
+  ++q.direct_cq_polls;
+  poll_tx_completions(q);
+  return has_capacity();
+}
+
+// A queue-wide unsignaled cadence may leave a short tail with no successful
+// CQE. Emit one signaled NOP at an explicit drain boundary so completion of the
+// NOP retires all earlier sends without consuming a packet slot.
+bool IbverbsEngine::emit_direct_drain_nop(IbvTxQueue& q) {
+  if (!tx_sq_has_space(q, 1)) {
+    return false;
+  }
+  uint8_t* const sq_buf = static_cast<uint8_t*>(q.dv_qp.sq.buf);
+  const uint32_t wqe_cnt = q.dv_qp.sq.wqe_cnt;
+  const uint32_t stride = q.dv_qp.sq.stride;
+  const uint32_t idx = q.sq_pi % wqe_cnt;
+  uint8_t* const seg = sq_buf + static_cast<size_t>(idx) * stride;
+  memset(seg, 0, stride);
+  auto* const ctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(seg);
+  ctrl->opmod_idx_opcode = htobe32(((q.sq_pi & 0xffff) << 8) | MLX5_OPCODE_NOP);
+  ctrl->qpn_ds = htobe32((q.sqn << 8) | 1u);
+  ctrl->fm_ce_se = tx_completion_mode(true);
+  q.wqe_slot_cum[idx] = q.slots_posted;
+  ++q.sq_pi;
+  q.wqe_wqebb_cum[idx] = q.sq_pi;
+
+  doorbell_store_barrier();
+  q.dv_qp.dbrec[MLX5_SND_DBR] = htobe32(static_cast<uint32_t>(q.sq_pi) & 0xffff);
+  doorbell_store_barrier();
+  doorbell_mmio_flush();
+  void* const bf = static_cast<uint8_t*>(q.dv_qp.bf.reg) + q.bf_offset;
+  if (q.dv_qp.bf.size < 64 || !blueflame_copy_wqebb(bf, ctrl)) {
+    *reinterpret_cast<volatile uint64_t*>(bf) = *reinterpret_cast<uint64_t*>(ctrl);
+  }
+  doorbell_mmio_flush();
+  q.bf_offset ^= q.dv_qp.bf.size;
+  q.last_signaled_slots = q.slots_posted;
+  ++q.direct_signaled_wqes;
+  ++q.direct_drain_nops;
+  return true;
 }
 
 // Pinned TX worker: drains the hand-off ring (the cheap DevX WQE build + doorbell
@@ -5083,13 +5327,10 @@ bool IbverbsEngine::is_tx_burst_available(BurstParams* burst) {
     if (burst->hdr.hdr.num_pkts != 1) {
       return false;
     }
-    std::unique_lock<std::mutex> guard(q->direct_mutex, std::defer_lock);
-    if (!lock_direct_tx_queue(*q, guard) || q->direct_pending != nullptr) {
+    if (!owns_direct_tx_queue(*q) || q->direct_pending != nullptr) {
       return false;
     }
-    poll_tx_completions(*q);
-    const uint64_t in_flight = q->alloc_head - q->completed_tail.load(std::memory_order_acquire);
-    return in_flight < q->num_slots && tx_sq_has_space(*q, 2);
+    return direct_tx_has_capacity(*q, q->cpu_inline_enabled ? 3 : 2);
   }
   const uint64_t in_flight = q->alloc_head - q->completed_tail.load(std::memory_order_acquire);
   return (q->num_slots - in_flight) >= static_cast<uint64_t>(burst->hdr.hdr.num_pkts);
@@ -5104,23 +5345,19 @@ Status IbverbsEngine::get_tx_packet_burst(BurstParams* burst) {
     return Status::INVALID_PARAMETER;
   }
   const unsigned n = static_cast<unsigned>(burst->hdr.hdr.num_pkts);
-  std::unique_lock<std::mutex> direct_guard;
   if (q->poll_mode == QueuePollMode::DIRECT) {
     if (n != 1) {
       DAQIRI_LOG_WARN("Direct TX port {} queue {} requires exactly one packet; requested {}",
                       q->port_id, q->queue_id, n);
       return Status::INVALID_PARAMETER;
     }
-    direct_guard = std::unique_lock<std::mutex>(q->direct_mutex, std::defer_lock);
-    if (!lock_direct_tx_queue(*q, direct_guard)) {
+    if (!owns_direct_tx_queue(*q)) {
       return Status::NOT_READY;
     }
     if (q->direct_pending != nullptr) {
       return Status::NOT_READY;
     }
-    poll_tx_completions(*q);
-    const uint64_t in_flight = q->alloc_head - q->completed_tail.load(std::memory_order_acquire);
-    if (in_flight >= q->num_slots || !tx_sq_has_space(*q, 2)) {
+    if (!direct_tx_has_capacity(*q, q->cpu_inline_enabled ? 3 : 2)) {
       return Status::NO_FREE_PACKET_BUFFERS;
     }
   }
@@ -5340,10 +5577,11 @@ void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst, uint16
 // Builds the burst's send WQEs directly into the SQ ring and rings the BlueFlame
 // doorbell once for the whole burst. This runs on the pinned worker for indirect
 // queues and synchronously on the application thread for direct queues,
-// bypassing ibv_post_send. Each WQE is ctrl(16) + minimal eth(16) + data
-// segs(16 each); with <=2 segments it is exactly one 64B WQEBB, so the SQ
-// producer (and the CQE wqe_counter) advances by one per packet. Signals every
-// SIGNAL_EVERY-th WQE (and the last) for completion-driven slot reclaim.
+// bypassing ibv_post_send. Pointer WQEs are ctrl(16) + minimal eth(16) + data
+// segs(16 each), fitting in one WQEBB. Direct single-segment pinned-CPU-memory
+// sends can instead embed a small frame in a multi-WQEBB WQE. Indirect bursts signal
+// their last WQE. Direct mode uses a persistent queue-wide cadence so a
+// one-packet burst does not request a CQE every time.
 // Does NOT free the metadata block; the worker or direct caller does that after
 // this function returns.
 void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
@@ -5394,6 +5632,8 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
   const uint8_t ds = static_cast<uint8_t>(2 + segs);  // ctrl + eth + segs data
   const uint64_t* txtime = scheduled ? burst_ts_arr(burst) : nullptr;
   void* last_ctrl = nullptr;
+  alignas(64) uint8_t inline_wqe[4 * MLX5_SEND_WQE_BB] = {};
+  uint32_t last_wqebbs = 1;
 
   for (int i = 0; i < n; i++) {
     // Accurate send scheduling (per-packet): emit a WAIT-on-time WQE so the NIC
@@ -5405,32 +5645,61 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
     const uint32_t idx = q.sq_pi % wqe_cnt;
     uint8_t* seg = sq_buf + static_cast<size_t>(idx) * stride;
     auto* ctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(seg);
-    const bool signaled = ((i % SIGNAL_EVERY) == (SIGNAL_EVERY - 1)) || (i == n - 1);
+    const bool signaled = q.poll_mode == QueuePollMode::DIRECT
+                              ? ((q.slots_posted + 1) % 16 == 0)
+                              : (((i % SIGNAL_EVERY) == (SIGNAL_EVERY - 1)) || (i == n - 1));
+    const uint32_t frame_len = burst->pkt_lens[0][i];
+    const bool inline_frame = q.cpu_inline_enabled && n == 1 && segs == 1 && !scheduled &&
+                              frame_len >= MLX5_RAW_ETH_INLINE_HEADER &&
+                              frame_len <= q.max_inline_data && stride == MLX5_SEND_WQE_BB;
+    const uint32_t wqebbs = inline_frame ? cpu_inline_wqe_wqebbs(frame_len) : 1u;
+    if (inline_frame) {
+      memset(inline_wqe, 0, sizeof(inline_wqe));
+      seg = inline_wqe;
+      ctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(seg);
+    }
     ctrl->opmod_idx_opcode = htobe32(((q.sq_pi & 0xffff) << 8) | MLX5_OPCODE_SEND);
-    ctrl->qpn_ds = htobe32((q.sqn << 8) | ds);
+    ctrl->qpn_ds = htobe32((q.sqn << 8) | (inline_frame ? cpu_inline_wqe_ds(frame_len) : ds));
     ctrl->signature = 0;
     ctrl->dci_stream_channel_id = 0;
     ctrl->fm_ce_se = tx_completion_mode(signaled);
     ctrl->imm = 0;
-    // Minimal (16-byte) Ethernet segment, no inline headers: the NIC DMAs the
-    // whole frame from the data segment. Request IPv4 + L4 checksum offload so
-    // the NIC fills the IP/UDP checksums (matches the DPDK backend, which has
-    // checksum offload always on); the application need not compute them.
-    memset(seg + 16, 0, 16);
-    reinterpret_cast<struct mlx5_wqe_eth_seg*>(seg + 16)->cs_flags =
-        MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
-    auto* dseg = reinterpret_cast<struct mlx5_wqe_data_seg*>(seg + 32);
-    for (int s = 0; s < segs; s++) {
-      // Each segment uses its own region's lkey (region 0 = header/CPU MR,
-      // region 1 = payload/GPU MR for HDS).
-      dseg[s].byte_count = htobe32(burst->pkt_lens[s][i]);
-      dseg[s].lkey = htobe32(q.regions[s].lkey);
-      dseg[s].addr = htobe64(reinterpret_cast<uint64_t>(burst->pkts[s][i]));
+    if (inline_frame) {
+      auto* eth = reinterpret_cast<struct mlx5_wqe_eth_seg*>(seg + 16);
+      eth->cs_flags = MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
+      eth->inline_hdr_sz = htobe16(MLX5_RAW_ETH_INLINE_HEADER);
+      memcpy(eth->inline_hdr_start, burst->pkts[0][i], MLX5_RAW_ETH_INLINE_HEADER);
+      auto* inl = reinterpret_cast<struct mlx5_wqe_inl_data_seg*>(seg + 48);
+      const uint32_t remainder = frame_len - MLX5_RAW_ETH_INLINE_HEADER;
+      inl->byte_count = htobe32(MLX5_INLINE_SEG | remainder);
+      memcpy(inl + 1, static_cast<const uint8_t*>(burst->pkts[0][i]) + MLX5_RAW_ETH_INLINE_HEADER,
+             remainder);
+      copy_wqe_to_cyclic_sq(sq_buf, wqe_cnt, stride, idx, inline_wqe, wqebbs);
+      ++q.inline_wqes;
+    } else {
+      // Minimal (16-byte) Ethernet segment, no inline headers: the NIC DMAs the
+      // whole frame from the data segment. Request IPv4 + L4 checksum offload.
+      memset(seg + 16, 0, 16);
+      reinterpret_cast<struct mlx5_wqe_eth_seg*>(seg + 16)->cs_flags =
+          MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
+      auto* dseg = reinterpret_cast<struct mlx5_wqe_data_seg*>(seg + 32);
+      for (int s = 0; s < segs; s++) {
+        dseg[s].byte_count = htobe32(burst->pkt_lens[s][i]);
+        dseg[s].lkey = htobe32(q.regions[s].lkey);
+        dseg[s].addr = htobe64(reinterpret_cast<uint64_t>(burst->pkts[s][i]));
+      }
     }
     q.slots_posted++;  // this packet consumes one slot
+    if (signaled) {
+      q.last_signaled_slots = q.slots_posted;
+      if (q.poll_mode == QueuePollMode::DIRECT) {
+        ++q.direct_signaled_wqes;
+      }
+    }
     q.wqe_slot_cum[idx] = q.slots_posted;
     last_ctrl = ctrl;
-    q.sq_pi++;
+    last_wqebbs = wqebbs;
+    q.sq_pi += wqebbs;
     q.wqe_wqebb_cum[idx] = q.sq_pi;
   }
 
@@ -5440,8 +5709,16 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
   q.dv_qp.dbrec[MLX5_SND_DBR] = htobe32(static_cast<uint32_t>(q.sq_pi) & 0xffff);
   doorbell_store_barrier();  // doorbell record visible before the BF write
   doorbell_mmio_flush();
-  *reinterpret_cast<volatile uint64_t*>(static_cast<uint8_t*>(q.dv_qp.bf.reg) + q.bf_offset) =
-      *reinterpret_cast<uint64_t*>(last_ctrl);
+  void* const bf = static_cast<uint8_t*>(q.dv_qp.bf.reg) + q.bf_offset;
+  const uint32_t bf_bytes = last_wqebbs * MLX5_SEND_WQE_BB;
+  const bool full_bf = q.poll_mode == QueuePollMode::DIRECT && n == 1 && !scheduled &&
+                       stride == MLX5_SEND_WQE_BB && q.dv_qp.bf.size >= bf_bytes &&
+                       blueflame_copy_wqe(bf, last_ctrl, last_wqebbs);
+  if (full_bf) {
+    ++q.full_bf_wqebbs;
+  } else {
+    *reinterpret_cast<volatile uint64_t*>(bf) = *reinterpret_cast<uint64_t*>(last_ctrl);
+  }
   doorbell_mmio_flush();
   q.bf_offset ^= q.dv_qp.bf.size;
 }
@@ -5458,23 +5735,13 @@ Status IbverbsEngine::send_tx_burst(BurstParams* burst) {
     return Status::INVALID_PARAMETER;
   }
   if (q->poll_mode == QueuePollMode::DIRECT) {
-    std::unique_lock<std::mutex> guard(q->direct_mutex, std::defer_lock);
-    if (!lock_direct_tx_queue(*q, guard)) {
+    if (!owns_direct_tx_queue(*q)) {
       return Status::NOT_READY;
     }
     if (burst->hdr.hdr.num_pkts != 1 || q->direct_pending != burst) {
       DAQIRI_LOG_WARN("Direct TX port {} queue {} requires its one pending single-packet burst",
                       q->port_id, q->queue_id);
       return Status::INVALID_PARAMETER;
-    }
-    poll_tx_completions(*q);
-    const uint64_t needed_wqebbs = tx_burst_wqebbs(*q, burst);
-    if (!tx_sq_has_space(*q, needed_wqebbs)) {
-      q->alloc_head--;
-      q->direct_pending = nullptr;
-      q->direct_no_space++;
-      tx_meta_pool_->put(burst);
-      return Status::NO_SPACE_AVAILABLE;
     }
     post_tx_burst(*q, burst);
     q->direct_pending = nullptr;

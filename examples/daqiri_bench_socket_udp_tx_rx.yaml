@@ -26,13 +26,14 @@ daqiri:
       socket_config:
         mode: server
         local_addr: "udp://127.0.0.1:5001"
+        remote_addr: "udp://127.0.0.1:5002"
         max_payload_size: 2048
       rx:
         queues:
         - name: "Server_RX_Queue"
           id: 0
           cpu_core: 8
-          batch_size: 1
+          batch_size: 32
           memory_regions:
             - "DATA_SOCKET_SERVER"
       tx:
@@ -56,7 +57,7 @@ daqiri:
         - name: "Client_RX_Queue"
           id: 0
           cpu_core: 7
-          batch_size: 1
+          batch_size: 32
           memory_regions:
             - "DATA_SOCKET_CLIENT"
       tx:

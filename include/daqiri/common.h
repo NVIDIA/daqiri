@@ -107,9 +107,19 @@ inline int EnabledDirections(const std::string &dir) {
  *    INTERNAL_ERROR: Internal error
  */
 Status daqiri_init(NetworkConfig &config);
+Status daqiri_init(NetworkConfig &config, const MemoryRegionBindings &bindings);
 Status daqiri_init(const std::string &yaml_string_or_path);
+Status daqiri_init(const std::string &yaml_string_or_path,
+                   const MemoryRegionBindings &bindings);
 Status daqiri_init_from_yaml_string(const std::string &yaml_string);
+Status daqiri_init_from_yaml_string(const std::string &yaml_string,
+                                    const MemoryRegionBindings &bindings);
 Status daqiri_init_from_yaml_file(const std::string &yaml_path);
+Status daqiri_init_from_yaml_file(const std::string &yaml_path,
+                                  const MemoryRegionBindings &bindings);
+
+Status get_memory_region_requirements(const NetworkConfig &config,
+                                      MemoryRegionRequirements &requirements);
 
 Status parse_network_config(const std::string &yaml_string_or_path,
                             NetworkConfig &config);

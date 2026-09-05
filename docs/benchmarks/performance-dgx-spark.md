@@ -468,7 +468,11 @@ client/server pairs (sockets). The workload lands in the CSV `post_process` colu
 (with the GEMM dimension in `post_process_gemm_dim`); compare each `gbps` /
 `gpu_sm_pct` against the `WORKLOAD=none` baseline from the same loop.
 
-Each run writes `bench-results/<timestamp>-<backend>-<mode>/runs.csv`. See
+Each run writes `bench-results/<timestamp>-<backend>-<mode>/runs.csv`. The CSV
+records the configured `batch`; for socket runs, `observed_max_rx_burst` reports
+the largest burst returned to the application. Its CPU core columns identify the
+actual sampled cores; socket runs with multiple pairs report pair 0 rather than
+aggregate CPU utilization. See
 [Socket and RDMA Benchmarking](socket_benchmarking.md) and
 [Raw Ethernet Benchmarking](raw_benchmarking.md) for the namespace setup and
 per-transport details.

@@ -422,6 +422,12 @@ buffer pools and can lead to `NO_FREE_BURST_BUFFERS`,
 When to call each `free_*` function is documented in the
 [C++ API Usage page](api-reference/cpp.md#rx-step-3-free-buffers).
 
+The backing allocation may be DAQIRI-owned or application-owned. For application-owned regions,
+the caller binds an address and capacity to a configured region name during initialization.
+DAQIRI owns the temporary NIC registration and packet-pool bookkeeping; the caller retains the
+allocation and its CUDA context until shutdown finishes. DAQIRI never frees externally bound
+memory.
+
 ## RX Packet Aggregation and Reorder
 
 DAQIRI can perform GPU- or CPU-side packet aggregation and reordering
