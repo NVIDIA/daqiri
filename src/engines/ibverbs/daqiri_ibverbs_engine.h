@@ -86,7 +86,6 @@ struct IbvReorderPlan {
 
 struct IbvReorderState {
   bool enabled = false;
-  bool single_plan = false;
   std::vector<IbvReorderPlan> plans;
   std::unordered_map<FlowId, size_t> flow_to_plan;
   std::deque<BurstParams*> ready;
@@ -104,6 +103,104 @@ struct IbvReorderBurstCtx {
   ReorderBurstInfo info{};
   const uint64_t* h_batch_id = nullptr;
   bool released = false;
+};
+
+// ---- First-DMA hardware reorder ------------------------------------------
+// A hardware plan replaces one public RX queue with private RQs, one per
+// (batch, sequence) destination.  Every private RQ scatters the fixed header
+// into a null MR and the payload directly into its final aggregate slot.  The
+// application still sees one logical DAQIRI queue and one aggregate
+// BurstParams notification per completed batch.
+enum class IbvDirectBatchState : uint8_t {
+  RECEIVING,
+  READY_PENDING,
+  READY,
+  OWNED,
+  REARMING,
+};
+
+struct IbvDirectReorderPlan;
+
+struct IbvDirectDestination {
+  uint32_t destination = 0;
+  uint64_t wq_offset = 0;
+  uint64_t dbr_offset = 0;
+  uint8_t* wq = nullptr;
+  uint32_t* dbr = nullptr;
+  struct mlx5dv_devx_obj* rq_obj = nullptr;
+  struct mlx5dv_devx_obj* tir_obj = nullptr;
+  struct mlx5dv_dr_action* dest_action = nullptr;
+  uint32_t rqn = 0;
+  uint32_t producer = 0;
+  uint32_t consumer = 0;
+};
+
+struct IbvDirectBatchSlot {
+  IbvDirectReorderPlan* plan = nullptr;
+  uint32_t batch_id = 0;
+  uint32_t remaining = 0;
+  std::vector<uint64_t> seen;
+  std::atomic<IbvDirectBatchState> state{IbvDirectBatchState::RECEIVING};
+  BurstParams burst{};
+  std::array<void*, 1> pkt_ptrs{};
+  std::array<uint32_t, 1> pkt_lens{};
+  ReorderBurstInfo info{};
+};
+
+struct IbvDirectFlexSample {
+  // Aligned four-byte sample offset from the start of the UDP payload.
+  uint16_t parser_offset = 0;
+  uint32_t sample_field_id = 0;
+};
+
+struct IbvDirectReorderPlan {
+  ReorderConfig cfg;
+  uint16_t port_id = 0;
+  uint16_t queue_id = 0;
+  uint32_t packets_per_batch = 0;
+  uint32_t batch_count = 0;
+  uint32_t destination_count = 0;
+  // Hardware routes the low bits needed to address the finite output ring.
+  uint16_t sequence_match_bit_offset = 0;
+  uint8_t sequence_match_bit_width = 0;
+  uint16_t batch_match_bit_offset = 0;
+  uint8_t batch_match_bit_width = 0;
+  uint32_t header_bytes = 0;
+  uint32_t packet_size = 0;
+  // Keep a cyclic WQ for firmware compatibility, but expose only one credit
+  // per destination until the application releases the owning batch.
+  uint32_t rq_depth = 64;
+  MemoryKind output_kind = MemoryKind::INVALID;
+  int cuda_device_id = 0;
+  bool gpu_flush_required = false;
+  uint8_t* output_base = nullptr;
+  uint32_t output_lkey = 0;
+  uint32_t pdn = 0;
+  size_t output_buffer_stride = 0;
+  struct ibv_mr* null_mr = nullptr;
+
+  void* wq_memory = nullptr;
+  size_t wq_memory_bytes = 0;
+  size_t wq_block_bytes = 0;
+  struct mlx5dv_devx_umem* wq_umem = nullptr;
+  std::vector<std::unique_ptr<IbvDirectDestination>> destinations;
+  std::vector<std::unique_ptr<IbvDirectBatchSlot>> batches;
+  std::deque<uint32_t> pending_ready;
+
+  struct mlx5dv_devx_obj* parser_node = nullptr;
+  std::vector<IbvDirectFlexSample> samples;
+
+  uint64_t packets = 0;
+  uint64_t placements = 0;
+  uint64_t completed_batches = 0;
+  uint64_t duplicate_packets = 0;
+  uint64_t malformed_packets = 0;
+  uint64_t cq_errors = 0;
+  uint64_t tag_errors = 0;
+  uint64_t wqe_errors = 0;
+  uint64_t ownership_violations = 0;
+  uint64_t ring_full_retries = 0;
+  std::atomic<uint64_t> reposts{0};
 };
 
 /**
@@ -222,6 +319,10 @@ struct IbvRxQueue {
 
   // Optional GPU reordering state for this queue.
   std::unique_ptr<IbvReorderState> reorder;
+
+  // Optional first-DMA hardware reorder state.  Mutually exclusive with the
+  // software/GPU reorder state above.
+  std::unique_ptr<IbvDirectReorderPlan> direct_reorder;
 
   // In-progress burst accumulator (kept in the queue, not on the worker stack,
   // so one poller thread can round-robin several queues and hold a partial
@@ -416,6 +517,8 @@ class IbverbsEngine : public Engine {
   Status get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info) override;
 
  private:
+  struct PortSteering;
+
   // ---- bring-up ----
   struct ibv_context* open_device_for_interface(const InterfaceConfig& intf);
   Status enable_hw_loopback(struct ibv_context* ctx, struct ibv_pd* pd);
@@ -441,6 +544,7 @@ class IbverbsEngine : public Engine {
   // wait_on_time + device_frequency_khz and returns true when the WAIT-WQE TX
   // scheduling path is usable (wait_on_time + real-time clock).
   bool probe_send_scheduling(struct ibv_context* ctx);
+  bool probe_flex_parser(struct ibv_context* ctx);
   // Create a flex-parser (parse-graph) node anchored at `arc_node` (entered when
   // that node's transition value equals `compare_value`) that samples 4 bytes at
   // `offset`; returns the DevX object and the device-assigned sample field id
@@ -471,6 +575,20 @@ class IbverbsEngine : public Engine {
   Status reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, BurstParams** out);
   void reorder_release_output(BurstParams* burst);  // free a delivered reordered burst
   void reorder_cleanup(IbvRxQueue& q);
+
+  // ---- first-DMA hardware reorder ----
+  Status init_direct_reorder(IbvRxQueue& q, const InterfaceConfig& intf, const RxQueueConfig& qcfg);
+  Status create_direct_reorder_resources(IbvRxQueue& q, IbvDirectReorderPlan& plan);
+  Status create_direct_destination(IbvRxQueue& q, IbvDirectReorderPlan& plan, uint32_t destination);
+  Status install_direct_reorder_flows(IbvRxQueue& q, const InterfaceConfig& intf,
+                                      PortSteering& steering);
+  struct mlx5dv_devx_obj* create_direct_reorder_parser(struct ibv_context* ctx,
+                                                       uint16_t udp_dst_port,
+                                                       std::vector<IbvDirectFlexSample>* samples);
+  void direct_poll_queue(IbvRxQueue* q);
+  void direct_publish_ready(IbvRxQueue& q, IbvDirectReorderPlan& plan);
+  void direct_release_output(BurstParams* burst);
+  void direct_cleanup(IbvRxQueue& q);
 
   // ---- RX hot path ----
   // One poller thread services a group of RX queues that share a cpu_core,
@@ -565,6 +683,7 @@ class IbverbsEngine : public Engine {
     struct ibv_qp* qp = nullptr;
   };
   std::unordered_map<struct ibv_context*, HwLoopbackActivation> hw_loopback_activations_;
+  std::unordered_map<struct ibv_context*, bool> flex_parser_caps_;
   // Registrations may be shared by queue setup only through their backing
   // allocation, so retain every verbs object and deregister it before its PD.
   std::vector<struct ibv_mr*> registered_mrs_;
@@ -596,10 +715,18 @@ class IbverbsEngine : public Engine {
     std::vector<struct mlx5dv_dr_action*> tag_actions;  // per-flow MARK tag actions
     std::vector<struct mlx5dv_dr_action*> reformat_actions;
     std::vector<std::vector<uint8_t>> reformat_buffers;
+    // Non-root tables used by first-DMA reorder plans and the actions that
+    // jump/drop within them.  Rules and matchers still live in the common
+    // vectors above so drop/allow and teardown preserve dependency ordering.
+    std::vector<struct mlx5dv_dr_table*> child_tables;
+    std::vector<struct mlx5dv_dr_action*> table_actions;
+    std::vector<struct mlx5dv_dr_action*> drop_actions;
     // Enough to recreate each rule for allow_all_traffic after a drop_all.
     struct RuleSpec {
       struct mlx5dv_dr_matcher* matcher;
-      struct mlx5dv_dr_action* action;         // dest-TIR
+      // Terminal action: a queue TIR for ordinary flows or a child-table jump
+      // for a hardware-reorder virtual queue.
+      struct mlx5dv_dr_action* action;
       struct mlx5dv_dr_action* tag = nullptr;  // optional MARK tag action
       std::vector<struct mlx5dv_dr_action*> reformats;
       RssDestinationPtr rss_destination;
@@ -608,6 +735,11 @@ class IbverbsEngine : public Engine {
     };
     std::vector<RuleSpec> rule_specs;
     std::unordered_map<std::string, std::weak_ptr<RssDestination>> rss_destinations;
+    // Hardware-reorder placement/drop rules remain installed across
+    // drop_all_traffic; only root outer-classifier rules after these indices
+    // are removed.
+    size_t persistent_rule_count = 0;
+    size_t persistent_rule_spec_count = 0;
     // Flex-parser (parse-graph) nodes for arbitrary-offset / ipv4_len matching,
     // keyed by the config flex-item id. The DevX object must outlive any matcher
     // that references its sample_field_id, so these are torn down after rules.
@@ -645,13 +777,15 @@ class IbverbsEngine : public Engine {
                              const RssDestinationPtr& rss_destination, int priority, FlowId flow_id,
                              const char* desc, DynamicFlowEntry* dynamic_entry,
                              const std::vector<struct mlx5dv_dr_action*>& reformats =
-                                 std::vector<struct mlx5dv_dr_action*>{});
+                                 std::vector<struct mlx5dv_dr_action*>{},
+                             struct mlx5dv_dr_action* terminal_action = nullptr);
   Status resolve_rx_destination(int port, PortSteering& st, const FlowAction& queue_action,
                                 bool inner, struct mlx5dv_dr_action** action,
                                 uint16_t* primary_queue, RssDestinationPtr* rss_destination);
   Status install_flow_rule_locked(int port, PortSteering& st, const InterfaceConfig& intf,
                                   const FlowRuleConfig& flow, FlowId flow_id, int priority,
-                                  DynamicFlowEntry* dynamic_entry);
+                                  DynamicFlowEntry* dynamic_entry,
+                                  struct mlx5dv_dr_action* terminal_action = nullptr);
   // Fill an eCPRI flow's match mask/value (always pinning the eCPRI EtherType in
   // outer_headers, and the message type / identifier in misc_parameters_4 when
   // requested), lazily creating the port's shared eCPRI parse-graph node.

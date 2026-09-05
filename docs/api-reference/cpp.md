@@ -357,6 +357,9 @@ Reordered RX bursts can be identified from `burst->hdr.hdr.burst_flags`:
 - `DAQIRI_BURST_FLAG_REORDERED` means the burst contains one aggregated reorder buffer.
 - `DAQIRI_BURST_FLAG_REORDER_TIMEOUT` means that aggregate was emitted by the timeout path
   rather than by filling the configured `packets_per_batch`.
+- `DAQIRI_BURST_FLAG_DIRECT_PLACED` means hardware wrote every payload directly into its final
+  aggregate slot. DAQIRI withholds replacement RX credits for those slots until the caller frees
+  the burst, so holding a direct-placed burst applies backpressure and may drop the next cycle.
 - For reordered bursts, `burst->hdr.hdr.max_pkt` is the logical number of source packets in the
   aggregate, while `burst->hdr.hdr.num_pkts` remains `1` because the consumer receives one
   aggregate buffer.

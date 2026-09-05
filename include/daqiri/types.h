@@ -45,6 +45,7 @@ static inline constexpr uint32_t MAX_INTERFACES = 4;
 static inline constexpr int MAX_NUM_SEGS = 4;
 static inline constexpr uint32_t DAQIRI_BURST_FLAG_REORDERED = (1U << 28);
 static inline constexpr uint32_t DAQIRI_BURST_FLAG_REORDER_TIMEOUT = (1U << 29);
+static inline constexpr uint32_t DAQIRI_BURST_FLAG_DIRECT_PLACED = (1U << 30);
 static inline constexpr uint32_t DEFAULT_DYNAMIC_FLOW_CAPACITY = 0;
 
 using FlowId = uint32_t;
@@ -1158,9 +1159,12 @@ struct ReorderDataTypesConfig {
 
 struct ReorderConfig {
   std::string name_;
+  std::string reorder_engine_ = "sw";
+  bool cyclic_sequence_ = false;
   std::string reorder_type_;
   std::string memory_region_;
   uint32_t payload_byte_offset_ = 0;
+  uint32_t packet_size_ = 0;
   std::vector<FlowId> flow_ids_;
   ReorderMethod method_ = ReorderMethod::INVALID;
   ReorderSeqBatchNumberConfig seq_batch_number_;

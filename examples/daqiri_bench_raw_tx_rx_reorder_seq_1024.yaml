@@ -4,6 +4,7 @@ daqiri:
   cfg:
     version: 1
     stream_type: "raw"
+    engine: "ibverbs"
     master_core: 3
     debug: false
     log_level: "info"
@@ -14,19 +15,19 @@ daqiri:
       kind: "huge"
       affinity: 0
       num_bufs: 16384
-      buf_size: 2048
+      buf_size: 8256
     - name: "Data_RX_GPU"
-      kind: "device"
+      # Host-pinned memory is directly accessible by both the NIC and GPU.
+      kind: "host_pinned"
       affinity: 0
       num_bufs: 16384
-      buf_size: 2048
+      buf_size: 8256
     - name: "Reorder_RX_GPU"
-      kind: "device"
+      kind: "host_pinned"
       affinity: 0
-      num_bufs: 128
-      # Must hold one fully reordered batch:
-      # (source buf_size - payload_byte_offset) * packets_per_batch = (2048 - 64) * 1024 = 2,031,616 bytes.
-      buf_size: 2031616
+      # Two cyclic batch slots, each holding 1024 8192-byte packets.
+      num_bufs: 2
+      buf_size: 8388608
 
     interfaces:
     - name: "tx_port"
@@ -50,7 +51,7 @@ daqiri:
           id: 0
           cpu_core: 9
           batch_size: 1024
-          timeout_us: 2000
+          timeout_us: 0
           memory_regions:
             - "Data_RX_GPU"
         flows:
@@ -60,21 +61,22 @@ daqiri:
             type: queue
             id: 0
           match:
-            udp_src: 5000
             udp_dst: 5000
         reorder_configs:
         - name: "rx_reorder_seq_1024"
+          reorder_engine: "hw"
+          cyclic_sequence: true
           reorder_type: "gpu"
           memory_region: "Reorder_RX_GPU"
-          # Copy beginning at payload start for this benchmark template.
-          payload_byte_offset: 64
+          payload_byte_offset: 42
+          packet_size: 8192
           flow_ids:
             - 201
           method:
             seq_packets_per_batch:
-              # 32-bit sequence starts at byte 64 (payload start in this benchmark template).
+              # The NIC matches the two-buffer cyclic sequence value directly.
               sequence_number:
-                bit_offset: 512
+                bit_offset: 336
                 bit_width: 32
               packets_per_batch: 1024
 
@@ -86,14 +88,16 @@ bench_tx:
   interface_name: "tx_port"
   cpu_core: 10
   batch_size: 1024
-  payload_size: 1000
-  header_size: 64
+  payload_size: 8192
+  header_size: 42
   eth_dst_addr: <00:00:00:00:00:00>
   ip_src_addr: <1.2.3.4>
   ip_dst_addr: <5.6.7.8>
   udp_src_port: 5000
   udp_dst_port: 5000
 
-  # Writes a monotonic network-order uint32 into UDP payload bytes [0:4].
+  # Writes a cyclic network-order uint32 into UDP payload bytes [0:4].
   sequence_number_offset: 0
   sequence_number_start: 0
+  # The hardware table addresses two 1024-packet output buffers directly.
+  sequence_number_modulus: 2048

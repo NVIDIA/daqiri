@@ -405,6 +405,17 @@ v1 batch-size requirement:
 
 - **`name`**: Reorder config name. Must be unique per interface.
   - type: `string`
+- **`reorder_engine`**: Reorder implementation. `sw` preserves the CUDA/CPU copy path;
+  `hw` selects ibverbs first-DMA placement on supported mlx5 NICs.
+  - type: `string`
+  - values: `sw`, `hw`
+  - default: `sw`
+- **`cyclic_sequence`**: Required acknowledgement for `reorder_engine: hw`. Hardware placement
+  uses exact 32-bit programmable-parser samples, so the sampled destination value must cycle over
+  the finite output ring and all non-address bits in each sampled word must remain zero. Wide
+  monotonic sequence values are unsupported; use `reorder_engine: sw` for those streams.
+  - type: `boolean`
+  - default: `false`
 - **`reorder_type`**: Reorder implementation (`gpu` or `cpu`).
   - type: `string`
   - values: `gpu`, `cpu`
@@ -415,6 +426,12 @@ v1 batch-size requirement:
 - **`payload_byte_offset`**: Byte offset in each packet where copied payload starts. Bytes before
   this offset are skipped.
   - type: `integer`
+- **`packet_size`**: Payload bytes placed in each output slot by `reorder_engine: hw`, excluding
+  the bytes skipped by `payload_byte_offset`. Required for hardware reorder and ignored by the
+  software path.
+  - type: `integer`
+  - performance note: values below 4000 bytes are accepted but emit a warning because the current
+    ibverbs direct-placement implementation performs much better with larger packets
 - **`data_types`**: Optional payload data type conversion for GPU reorder. If omitted, payload
   bytes are copied as-is.
   - `input_type`: On-wire input element type. Values: `int4`, `int8`, `int16`, `int32`

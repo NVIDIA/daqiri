@@ -925,15 +925,16 @@ void bind_config_types(py::module_ &m) {
   py::class_<ReorderConfig>(m, "ReorderConfig")
       .def(py::init<>())
       .def_readwrite("name", &ReorderConfig::name_)
+      .def_readwrite("reorder_engine", &ReorderConfig::reorder_engine_)
+      .def_readwrite("cyclic_sequence", &ReorderConfig::cyclic_sequence_)
       .def_readwrite("reorder_type", &ReorderConfig::reorder_type_)
       .def_readwrite("memory_region", &ReorderConfig::memory_region_)
-      .def_readwrite("payload_byte_offset",
-                     &ReorderConfig::payload_byte_offset_)
+      .def_readwrite("payload_byte_offset", &ReorderConfig::payload_byte_offset_)
+      .def_readwrite("packet_size", &ReorderConfig::packet_size_)
       .def_readwrite("flow_ids", &ReorderConfig::flow_ids_)
       .def_readwrite("method", &ReorderConfig::method_)
       .def_readwrite("seq_batch_number", &ReorderConfig::seq_batch_number_)
-      .def_readwrite("seq_packets_per_batch",
-                     &ReorderConfig::seq_packets_per_batch_)
+      .def_readwrite("seq_packets_per_batch", &ReorderConfig::seq_packets_per_batch_)
       .def_readwrite("data_types", &ReorderConfig::data_types_);
 
   py::class_<RxConfig>(m, "RxConfig")
@@ -988,6 +989,7 @@ PYBIND11_MODULE(_daqiri, m) {
   m.attr("DAQIRI_BURST_FLAG_REORDERED") = DAQIRI_BURST_FLAG_REORDERED;
   m.attr("DAQIRI_BURST_FLAG_REORDER_TIMEOUT") =
       DAQIRI_BURST_FLAG_REORDER_TIMEOUT;
+  m.attr("DAQIRI_BURST_FLAG_DIRECT_PLACED") = DAQIRI_BURST_FLAG_DIRECT_PLACED;
   m.attr("__version__") = version_string();
   m.attr("__version_info__") =
       py::make_tuple(version_year(), version_month(), version_patch());

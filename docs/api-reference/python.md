@@ -312,6 +312,8 @@ Reordered RX bursts are identified by flags on `burst.hdr.hdr.burst_flags`:
 - `DAQIRI_BURST_FLAG_REORDERED`: burst contains one aggregated reorder buffer.
 - `DAQIRI_BURST_FLAG_REORDER_TIMEOUT`: the aggregate was emitted by the
   timeout path rather than by filling the configured `packets_per_batch`.
+- `DAQIRI_BURST_FLAG_DIRECT_PLACED`: the ibverbs hardware path placed payloads directly in their
+  final aggregate slots. The slots are not rearmed until `free_rx_burst()` releases the burst.
 
 For reordered bursts, `burst.hdr.hdr.max_pkt` is the logical number of source
 packets in the aggregate, while `burst.hdr.hdr.num_pkts` remains `1` because the
@@ -691,6 +693,7 @@ encapsulation/push rules are configured in YAML under `tx.flows`.
 | `DAQIRI_ABI_VERSION` | DAQIRI shared-library ABI version. |
 | `DAQIRI_BURST_FLAG_REORDERED` | Burst flag indicating a reordered aggregate. |
 | `DAQIRI_BURST_FLAG_REORDER_TIMEOUT` | Burst flag indicating a reorder timeout aggregate. |
+| `DAQIRI_BURST_FLAG_DIRECT_PLACED` | Burst flag indicating an ibverbs hardware-placed aggregate. |
 | `MEM_ACCESS_LOCAL` | Local memory access flag. |
 | `MEM_ACCESS_RDMA_WRITE` | RDMA write memory access flag. |
 | `MEM_ACCESS_RDMA_READ` | RDMA read memory access flag. |
@@ -760,7 +763,7 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `SocketConfig` | Socket client/server endpoint URI, legacy IP/port, and timing settings. |
 | `RoCEConfig` | RoCE transport settings. |
 | `RDMAConfig` | RDMA mode, transport mode, and port. |
-| `ReorderConfig` | Reorder name, type, memory region, payload offset, flows, method, and data type conversion. |
+| `ReorderConfig` | Reorder engine/cyclic-sequence contract, type, memory region, payload offset, flows, method, and data type conversion. |
 | `ReorderBitFieldConfig` | Bit offset and width for extracting reorder fields. |
 | `ReorderSeqBatchNumberConfig` | Sequence-number, batch-number, and packets-per-batch field config. |
 | `ReorderSeqPacketsPerBatchConfig` | Sequence-number and packets-per-batch field config. |

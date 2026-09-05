@@ -399,6 +399,156 @@ static inline uint8_t rdr_batch_width(const ReorderConfig& c) {
   return c.method_ == ReorderMethod::SEQ_BATCH_NUMBER ? c.seq_batch_number_.batch_number_.bit_width_
                                                       : 0U;
 }
+static inline uint32_t rdr_packets_per_batch(const ReorderConfig& c) {
+  return c.method_ == ReorderMethod::SEQ_BATCH_NUMBER ? c.seq_batch_number_.packets_per_batch_
+                                                      : c.seq_packets_per_batch_.packets_per_batch_;
+}
+static inline bool direct_is_power_of_two(uint64_t value) {
+  return value != 0 && (value & (value - 1U)) == 0;
+}
+
+static inline uint8_t direct_log2(uint64_t value) {
+  uint8_t result = 0;
+  while (value > 1U) {
+    value >>= 1U;
+    ++result;
+  }
+  return result;
+}
+
+struct DirectMatchFields {
+  uint16_t sequence_offset = 0;
+  uint8_t sequence_width = 0;
+  uint16_t batch_offset = 0;
+  uint8_t batch_width = 0;
+};
+
+// Hardware reorder addresses a finite ring of batch buffers. Match only the
+// low bits needed for that ring instead of requiring an RQ for every value of a
+// potentially wide (for example, 32-bit monotonic) wire field.
+static bool direct_compute_match_fields(const ReorderConfig& cfg, uint64_t packets_per_batch,
+                                        uint64_t batch_count, DirectMatchFields* fields,
+                                        std::string* error) {
+  if (fields == nullptr || !direct_is_power_of_two(packets_per_batch) ||
+      !direct_is_power_of_two(batch_count)) {
+    if (error) {
+      *error = "packets_per_batch and output num_bufs must be powers of two";
+    }
+    return false;
+  }
+
+  const uint8_t slot_bits = direct_log2(packets_per_batch);
+  const uint8_t ring_bits = direct_log2(batch_count);
+  fields->sequence_offset = rdr_seq_off(cfg);
+  fields->batch_offset = rdr_batch_off(cfg);
+
+  if (cfg.method_ == ReorderMethod::SEQ_BATCH_NUMBER) {
+    if (rdr_seq_width(cfg) < slot_bits || rdr_batch_width(cfg) < ring_bits) {
+      if (error) {
+        *error = "sequence or batch field is too narrow for the configured output ring";
+      }
+      return false;
+    }
+    fields->sequence_width = slot_bits;
+    fields->sequence_offset =
+        static_cast<uint16_t>(rdr_seq_off(cfg) + rdr_seq_width(cfg) - slot_bits);
+    fields->batch_width = ring_bits;
+    fields->batch_offset =
+        static_cast<uint16_t>(rdr_batch_off(cfg) + rdr_batch_width(cfg) - ring_bits);
+  } else {
+    const uint64_t destinations = packets_per_batch * batch_count;
+    const uint8_t destination_bits = direct_log2(destinations);
+    if (rdr_seq_width(cfg) < destination_bits) {
+      if (error) {
+        *error = "sequence field is too narrow for the configured output ring";
+      }
+      return false;
+    }
+    fields->sequence_width = destination_bits;
+    fields->sequence_offset =
+        static_cast<uint16_t>(rdr_seq_off(cfg) + rdr_seq_width(cfg) - destination_bits);
+    fields->batch_width = 0;
+  }
+
+  if (fields->sequence_width == 0 && fields->batch_width == 0) {
+    if (error) {
+      *error = "hardware reorder requires at least two destination slots";
+    }
+    return false;
+  }
+  return true;
+}
+
+// Reorder bit offsets are absolute from Ethernet byte zero. The supported
+// hardware path uses fixed-size Ethernet/IPv4/UDP headers and anchors the flex
+// parser after UDP so normal outer-header fields remain available to steering.
+static constexpr uint32_t kDirectParserBitOffset =
+    static_cast<uint32_t>(sizeof(ethhdr) + sizeof(iphdr) + sizeof(udphdr)) * 8U;
+
+static bool direct_collect_flex_samples(const DirectMatchFields& fields,
+                                        std::vector<IbvDirectFlexSample>* samples,
+                                        std::string* error) {
+  if (samples == nullptr) {
+    return false;
+  }
+  std::set<uint16_t> offsets;
+  auto collect = [&](uint16_t bit_offset, uint8_t bit_width, const char* name) {
+    if (bit_width == 0) {
+      return true;
+    }
+    const uint32_t begin = bit_offset;
+    const uint32_t end = begin + bit_width;
+    if (begin < kDirectParserBitOffset) {
+      if (error) {
+        *error = std::string(name) + " begins before the UDP payload";
+      }
+      return false;
+    }
+    const uint32_t relative_begin = begin - kDirectParserBitOffset;
+    const uint32_t relative_end = end - kDirectParserBitOffset;
+    const uint32_t first = (relative_begin / 32U) * 4U;
+    const uint32_t last = ((relative_end - 1U) / 32U) * 4U;
+    if (last > 255U) {
+      if (error) {
+        *error = std::string(name) + " needs a flex sample beyond the 8-bit parser offset";
+      }
+      return false;
+    }
+    for (uint32_t offset = first; offset <= last; offset += 4U) {
+      offsets.insert(static_cast<uint16_t>(offset));
+    }
+    return true;
+  };
+
+  if (!collect(fields.sequence_offset, fields.sequence_width, "sequence_number")) {
+    return false;
+  }
+  if (!collect(fields.batch_offset, fields.batch_width, "batch_number")) {
+    return false;
+  }
+  if (offsets.size() > 4U) {
+    if (error) {
+      *error = "batch/sequence fields require more than four misc4 samples";
+    }
+    return false;
+  }
+  samples->clear();
+  for (uint16_t offset : offsets) {
+    samples->push_back(IbvDirectFlexSample{offset, 0});
+  }
+  return true;
+}
+
+static bool direct_fields_overlap(const ReorderConfig& cfg) {
+  if (cfg.method_ != ReorderMethod::SEQ_BATCH_NUMBER) {
+    return false;
+  }
+  const uint32_t seq_begin = rdr_seq_off(cfg);
+  const uint32_t seq_end = seq_begin + rdr_seq_width(cfg);
+  const uint32_t batch_begin = rdr_batch_off(cfg);
+  const uint32_t batch_end = batch_begin + rdr_batch_width(cfg);
+  return seq_begin < batch_end && batch_begin < seq_end;
+}
 static inline bool rdr_uses_conversion(const ReorderConfig& c) {
   if (!c.data_types_.enabled_) {
     return false;
@@ -513,6 +663,10 @@ bool IbverbsEngine::set_config_and_initialize(const NetworkConfig& cfg) {
     return false;
   }
   initialize();
+  if (!initialized_) {
+    shutdown();
+    free_memory_regions();
+  }
   return initialized_;
 }
 
@@ -1518,7 +1672,8 @@ bool IbverbsEngine::create_dr_rule_locked(
     struct mlx5dv_flow_match_parameters* value, struct mlx5dv_dr_action* destination_action,
     uint16_t primary_queue, const RssDestinationPtr& rss_destination, int priority, FlowId flow_id,
     const char* desc, DynamicFlowEntry* dynamic_entry,
-    const std::vector<struct mlx5dv_dr_action*>& reformats) {
+    const std::vector<struct mlx5dv_dr_action*>& reformats,
+    struct mlx5dv_dr_action* terminal_action) {
   struct mlx5dv_dr_matcher* matcher = mlx5dv_dr_matcher_create(st.table, priority, criteria, mask);
   if (matcher == nullptr) {
     DAQIRI_LOG_CRITICAL("dr_matcher_create failed (port {} {}): {}", port, desc, strerror(errno));
@@ -1549,7 +1704,17 @@ bool IbverbsEngine::create_dr_rule_locked(
     }
     actions[num_actions++] = reformat;
   }
-  actions[num_actions++] = destination_action;
+  struct mlx5dv_dr_action* terminal =
+      terminal_action != nullptr ? terminal_action : destination_action;
+  if (terminal == nullptr) {
+    DAQIRI_LOG_CRITICAL("Flow '{}' on port {} has no terminal steering action", desc, port);
+    if (tag_action != nullptr) {
+      mlx5dv_dr_action_destroy(tag_action);
+    }
+    mlx5dv_dr_matcher_destroy(matcher);
+    return false;
+  }
+  actions[num_actions++] = terminal;
 
   struct mlx5dv_dr_rule* rule = mlx5dv_dr_rule_create(matcher, value, num_actions, actions);
   if (rule == nullptr) {
@@ -1579,7 +1744,7 @@ bool IbverbsEngine::create_dr_rule_locked(
   }
 
   PortSteering::RuleSpec spec{
-      matcher, destination_action, tag_action, reformats, rss_destination, 0, {}};
+      matcher, terminal, tag_action, reformats, rss_destination, 0, {}};
   spec.value_sz = std::min(value->match_sz, sizeof(spec.value));
   memcpy(spec.value, value->match_buf, spec.value_sz);
   st.rule_specs.push_back(spec);
@@ -1589,7 +1754,8 @@ bool IbverbsEngine::create_dr_rule_locked(
 Status IbverbsEngine::install_flow_rule_locked(int port, PortSteering& st,
                                                const InterfaceConfig& intf,
                                                const FlowRuleConfig& flow, FlowId flow_id,
-                                               int priority, DynamicFlowEntry* dynamic_entry) {
+                                               int priority, DynamicFlowEntry* dynamic_entry,
+                                               struct mlx5dv_dr_action* terminal_action) {
   if (st.dropped) {
     DAQIRI_LOG_ERROR("Cannot modify dynamic RX flows while port {} is dropped", port);
     return Status::INVALID_PARAMETER;
@@ -1606,13 +1772,25 @@ Status IbverbsEngine::install_flow_rule_locked(int port, PortSteering& st,
   struct mlx5dv_dr_action* destination_action = nullptr;
   uint16_t primary_queue = 0;
   RssDestinationPtr rss_destination;
-  const Status destination_status = resolve_rx_destination(
-      port, st, queue_action, inner, &destination_action, &primary_queue, &rss_destination);
-  if (destination_status != Status::SUCCESS) {
-    return destination_status;
+  if (terminal_action != nullptr) {
+    const auto queue_ids = flow_queue_ids(queue_action);
+    if (queue_ids.size() != 1) {
+      DAQIRI_LOG_ERROR("Hardware reorder flow '{}' requires one queue destination", flow.name_);
+      return Status::INVALID_PARAMETER;
+    }
+    primary_queue = queue_ids.front();
+    destination_action = terminal_action;
+  } else {
+    const Status destination_status = resolve_rx_destination(
+        port, st, queue_action, inner, &destination_action, &primary_queue, &rss_destination);
+    if (destination_status != Status::SUCCESS) {
+      return destination_status;
+    }
   }
   IbvRxQueue* primary = find_rx_queue(port, primary_queue);
   if (primary == nullptr) {
+    DAQIRI_LOG_ERROR("Flow '{}' targets unknown queue id {} on port {}", flow.name_, primary_queue,
+                     port);
     return Status::INVALID_PARAMETER;
   }
 
@@ -1701,7 +1879,7 @@ Status IbverbsEngine::install_flow_rule_locked(int port, PortSteering& st,
                               reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&mask),
                               reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&value),
                               destination_action, primary_queue, rss_destination, priority, flow_id,
-                              flow.name_.c_str(), dynamic_entry, flow_reformats);
+                              flow.name_.c_str(), dynamic_entry, flow_reformats, terminal_action);
     if (!ok) {
       cleanup_dynamic_reformats();
     }
@@ -1721,7 +1899,8 @@ Status IbverbsEngine::install_flow_rule_locked(int port, PortSteering& st,
     return create_dr_rule_locked(
                port, st, criteria, reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&mask),
                reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&value), destination_action,
-               primary_queue, rss_destination, priority, flow_id, flow.name_.c_str(), dynamic_entry)
+               primary_queue, rss_destination, priority, flow_id, flow.name_.c_str(), dynamic_entry,
+               {}, terminal_action)
                ? Status::SUCCESS
                : Status::GENERIC_FAILURE;
   }
@@ -1830,7 +2009,7 @@ Status IbverbsEngine::install_flow_rule_locked(int port, PortSteering& st,
       port, st, criteria, reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&mask),
       reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&value), destination_action,
       primary_queue, rss_destination, priority, flow_id, flow.name_.c_str(), dynamic_entry,
-      flow_reformats);
+      flow_reformats, terminal_action);
   if (!ok) {
     cleanup_dynamic_reformats();
   }
@@ -1862,6 +2041,65 @@ bool IbverbsEngine::probe_send_scheduling(struct ibv_context* ctx) {
       "real_time_clock={} -> set_packet_tx_time {}",
       ibv_get_device_name(ctx->device), wot, wod, freq, real_time ? "yes" : "no",
       usable ? "ENABLED" : "disabled");
+  return usable;
+}
+
+bool IbverbsEngine::probe_flex_parser(struct ibv_context* ctx) {
+  auto query_general = [&](uint16_t op_mod, const char* mode, bool* supported) {
+    uint32_t in[DEVX_ST_SZ_DW(query_hca_cap_in)] = {0};
+    std::vector<uint32_t> out(DEVX_ST_SZ_DW(query_hca_cap_out), 0);
+    DEVX_SET(query_hca_cap_in, in, opcode, MLX5_CMD_OP_QUERY_HCA_CAP);
+    DEVX_SET(query_hca_cap_in, in, op_mod, op_mod);
+    if (mlx5dv_devx_general_cmd(ctx, in, sizeof(in), out.data(), out.size() * sizeof(uint32_t)) !=
+        0) {
+      DAQIRI_LOG_ERROR("QUERY_HCA_CAP general/{} failed on {}: {}", mode,
+                       ibv_get_device_name(ctx->device), strerror(errno));
+      return false;
+    }
+    void* cap = DEVX_ADDR_OF(query_hca_cap_out, out.data(), capability);
+    const uint64_t types = DEVX_GET64(cmd_hca_cap_min, cap, general_obj_types);
+    *supported = ((types >> MLX5_GENERAL_OBJ_TYPE_FLEX_PARSE_GRAPH) & 1ULL) != 0;
+    return true;
+  };
+
+  auto query_flow_table = [&](uint16_t op_mod, const char* mode, bool* supported,
+                              uint32_t* max_level, uint32_t* log_size) {
+    uint32_t in[DEVX_ST_SZ_DW(query_hca_cap_in)] = {0};
+    std::vector<uint32_t> out(DEVX_ST_SZ_DW(query_flow_table_cap_out), 0);
+    DEVX_SET(query_hca_cap_in, in, opcode, MLX5_CMD_OP_QUERY_HCA_CAP);
+    DEVX_SET(query_hca_cap_in, in, op_mod, op_mod);
+    if (mlx5dv_devx_general_cmd(ctx, in, sizeof(in), out.data(), out.size() * sizeof(uint32_t)) !=
+        0) {
+      DAQIRI_LOG_ERROR("QUERY_HCA_CAP flow-table/{} failed on {}: {}", mode,
+                       ibv_get_device_name(ctx->device), strerror(errno));
+      return false;
+    }
+    void* cap = DEVX_ADDR_OF(query_flow_table_cap_out, out.data(), capability);
+    void* rx = DEVX_ADDR_OF(flow_table_nic_cap_min, cap, flow_table_properties_nic_receive);
+    *supported = DEVX_GET(flow_table_prop_layout_min, rx, ft_support) != 0;
+    *max_level = DEVX_GET(flow_table_prop_layout_min, rx, max_ft_level);
+    *log_size = DEVX_GET(flow_table_prop_layout_min, rx, log_max_ft_size);
+    return true;
+  };
+
+  bool flex_max = false, flex_cur = false;
+  bool ft_max = false, ft_cur = false;
+  uint32_t level_max = 0, level_cur = 0, log_max = 0, log_cur = 0;
+  if (!query_general(MLX5_HCA_CAP_OPMOD_GENERAL_MAX, "max", &flex_max) ||
+      !query_general(MLX5_HCA_CAP_OPMOD_GENERAL_CUR, "current", &flex_cur) ||
+      !query_flow_table(MLX5_HCA_CAP_OPMOD_FLOW_TABLE_MAX, "max", &ft_max, &level_max, &log_max) ||
+      !query_flow_table(MLX5_HCA_CAP_OPMOD_FLOW_TABLE_CUR, "current", &ft_cur, &level_cur,
+                        &log_cur)) {
+    return false;
+  }
+
+  const bool usable =
+      flex_max && flex_cur && ft_max && ft_cur && level_max >= 1U && level_cur >= 1U;
+  DAQIRI_LOG_INFO(
+      "HCA hardware-reorder caps ({}): flex(max/current)={}/{} "
+      "rx_ft(max/current)={}/{} max_level={}/{} log_max_size={}/{} -> {}",
+      ibv_get_device_name(ctx->device), flex_max, flex_cur, ft_max, ft_cur, level_max, level_cur,
+      log_max, log_cur, usable ? "SUPPORTED" : "not supported");
   return usable;
 }
 
@@ -1922,6 +2160,71 @@ struct mlx5dv_devx_obj* IbverbsEngine::create_flex_parser_node(struct ibv_contex
   DAQIRI_LOG_INFO(
       "Flex parser node created: id {} arc {} compare {} offset {} -> sample_field_id {}", node_id,
       arc_node, compare_value, offset, *out_sample_id);
+  return obj;
+}
+
+struct mlx5dv_devx_obj* IbverbsEngine::create_direct_reorder_parser(
+    struct ibv_context* ctx, uint16_t udp_dst_port, std::vector<IbvDirectFlexSample>* samples) {
+  if (samples == nullptr || samples->empty() || samples->size() > 4U) {
+    return nullptr;
+  }
+
+  uint32_t in[DEVX_ST_SZ_DW(create_flex_parser_in)] = {0};
+  uint32_t out[DEVX_ST_SZ_DW(create_flex_parser_out)] = {0};
+  void* hdr = DEVX_ADDR_OF(create_flex_parser_in, in, hdr);
+  void* flex = DEVX_ADDR_OF(create_flex_parser_in, in, flex);
+  DEVX_SET(general_obj_in_cmd_hdr, hdr, opcode, MLX5_CMD_OP_CREATE_GENERAL_OBJECT);
+  DEVX_SET(general_obj_in_cmd_hdr, hdr, obj_type, MLX5_GENERAL_OBJ_TYPE_FLEX_PARSE_GRAPH);
+  DEVX_SET(parse_graph_flex, flex, header_length_mode, MLX5_GRAPH_NODE_LEN_FIXED);
+  const uint16_t parser_bytes = static_cast<uint16_t>(samples->back().parser_offset + 4U);
+  DEVX_SET(parse_graph_flex, flex, header_length_base_value, parser_bytes);
+
+  auto* sample0 = static_cast<uint8_t*>(DEVX_ADDR_OF(parse_graph_flex, flex, sample_table));
+  for (size_t i = 0; i < samples->size(); ++i) {
+    void* sample = sample0 + i * DEVX_ST_SZ_BYTES(parse_graph_flow_match_sample);
+    DEVX_SET(parse_graph_flow_match_sample, sample, flow_match_sample_en, 1);
+    DEVX_SET(parse_graph_flow_match_sample, sample, flow_match_sample_offset_mode,
+             MLX5_GRAPH_SAMPLE_OFFSET_FIXED);
+    DEVX_SET(parse_graph_flow_match_sample, sample, flow_match_sample_field_base_offset,
+             (*samples)[i].parser_offset);
+  }
+
+  void* in_arc = DEVX_ADDR_OF(parse_graph_flex, flex, input_arc);
+  DEVX_SET(parse_graph_arc, in_arc, arc_parse_graph_node, MLX5_GRAPH_ARC_NODE_UDP);
+  DEVX_SET(parse_graph_arc, in_arc, compare_condition_value, udp_dst_port);
+
+  struct mlx5dv_devx_obj* obj = mlx5dv_devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
+  if (obj == nullptr) {
+    DAQIRI_LOG_CRITICAL(
+        "Hardware reorder UDP FLEX_PARSE_GRAPH creation failed: {} (status 0x{:x}, "
+        "syndrome 0x{:x}); no software fallback is performed",
+        strerror(errno), DEVX_GET(general_obj_out_cmd_hdr, out, status),
+        DEVX_GET(general_obj_out_cmd_hdr, out, syndrome));
+    return nullptr;
+  }
+  const uint32_t node_id = DEVX_GET(general_obj_out_cmd_hdr, out, obj_id);
+
+  uint32_t qin[DEVX_ST_SZ_DW(general_obj_in_cmd_hdr)] = {0};
+  uint32_t qout[DEVX_ST_SZ_DW(create_flex_parser_out)] = {0};
+  DEVX_SET(general_obj_in_cmd_hdr, qin, opcode, MLX5_CMD_OP_QUERY_GENERAL_OBJECT);
+  DEVX_SET(general_obj_in_cmd_hdr, qin, obj_type, MLX5_GENERAL_OBJ_TYPE_FLEX_PARSE_GRAPH);
+  DEVX_SET(general_obj_in_cmd_hdr, qin, obj_id, node_id);
+  if (mlx5dv_devx_obj_query(obj, qin, sizeof(qin), qout, sizeof(qout)) != 0) {
+    DAQIRI_LOG_CRITICAL("Hardware reorder FLEX_PARSE_GRAPH query failed: {} (syndrome 0x{:x})",
+                        strerror(errno), DEVX_GET(general_obj_out_cmd_hdr, qout, syndrome));
+    mlx5dv_devx_obj_destroy(obj);
+    return nullptr;
+  }
+  void* qflex = DEVX_ADDR_OF(create_flex_parser_out, qout, flex);
+  auto* qsample0 = static_cast<uint8_t*>(DEVX_ADDR_OF(parse_graph_flex, qflex, sample_table));
+  for (size_t i = 0; i < samples->size(); ++i) {
+    void* sample = qsample0 + i * DEVX_ST_SZ_BYTES(parse_graph_flow_match_sample);
+    (*samples)[i].sample_field_id =
+        DEVX_GET(parse_graph_flow_match_sample, sample, flow_match_sample_field_id);
+  }
+  DAQIRI_LOG_INFO(
+      "Hardware reorder UDP flex parser created: node={} udp_dst={} samples={} parser_bytes={}",
+      node_id, udp_dst_port, samples->size(), parser_bytes);
   return obj;
 }
 
@@ -2054,6 +2357,242 @@ Status IbverbsEngine::build_ecpri_match_locked(struct ibv_context* ctx, PortStee
   return Status::SUCCESS;
 }
 
+Status IbverbsEngine::install_direct_reorder_flows(IbvRxQueue& q, const InterfaceConfig& intf,
+                                                   PortSteering& st) {
+  if (!q.direct_reorder) {
+    return Status::INVALID_PARAMETER;
+  }
+  auto& plan = *q.direct_reorder;
+  if (plan.cfg.flow_ids_.size() != 1U) {
+    return Status::INVALID_PARAMETER;
+  }
+  const FlowId flow_id = plan.cfg.flow_ids_.front();
+  auto flow = std::find_if(intf.rx_.flows_.begin(), intf.rx_.flows_.end(),
+                           [flow_id](const FlowConfig& f) { return f.id_ == flow_id; });
+  if (flow == intf.rx_.flows_.end()) {
+    return Status::INVALID_PARAMETER;
+  }
+  const FlowMatch& gate_match = flow->match_;
+  auto set_gate_match = [&](void* mask, void* value) {
+    DEVX_SET(fte_match_set_lyr_2_4, mask, ethertype, 0xffffU);
+    DEVX_SET(fte_match_set_lyr_2_4, value, ethertype, MLX5_ETHERTYPE_IPV4);
+    DEVX_SET(fte_match_set_lyr_2_4, mask, ip_protocol, 0xffU);
+    DEVX_SET(fte_match_set_lyr_2_4, value, ip_protocol, MLX5_IP_PROTOCOL_UDP);
+    DEVX_SET(fte_match_set_lyr_2_4, mask, udp_dport, 0xffffU);
+    DEVX_SET(fte_match_set_lyr_2_4, value, udp_dport, gate_match.udp_dst_);
+  };
+
+  std::array<uint32_t, 4> sample_masks{};
+  auto encode_field = [&](uint16_t bit_offset, uint8_t bit_width, uint32_t field_value,
+                          std::array<uint32_t, 4>* masks, std::array<uint32_t, 4>* values) -> bool {
+    for (uint8_t i = 0; i < bit_width; ++i) {
+      const uint32_t relative_bit =
+          static_cast<uint32_t>(bit_offset) - kDirectParserBitOffset + static_cast<uint32_t>(i);
+      const uint16_t sample_offset = static_cast<uint16_t>((relative_bit / 32U) * 4U);
+      auto sample = std::find_if(plan.samples.begin(), plan.samples.end(),
+                                 [sample_offset](const IbvDirectFlexSample& s) {
+                                   return s.parser_offset == sample_offset;
+                                 });
+      if (sample == plan.samples.end()) {
+        return false;
+      }
+      const size_t index = static_cast<size_t>(sample - plan.samples.begin());
+      const uint32_t register_bit = 31U - (relative_bit % 32U);
+      (*masks)[index] |= 1U << register_bit;
+      const uint32_t value_bit = bit_width - 1U - i;
+      if ((field_value >> value_bit) & 1U) {
+        (*values)[index] |= 1U << register_bit;
+      }
+    }
+    return true;
+  };
+  std::array<uint32_t, 4> ignored_values{};
+  if (!encode_field(plan.sequence_match_bit_offset, plan.sequence_match_bit_width, 0, &sample_masks,
+                    &ignored_values) ||
+      (plan.batch_match_bit_width != 0 &&
+       !encode_field(plan.batch_match_bit_offset, plan.batch_match_bit_width, 0, &sample_masks,
+                     &ignored_values))) {
+    DAQIRI_LOG_CRITICAL("Hardware reorder failed to encode the configured flex fields");
+    return Status::INVALID_PARAMETER;
+  }
+  // CX-7 firmware accepts these programmable samples only as exact 32-bit
+  // matches. The sender therefore cycles the address value over the finite
+  // destination space and keeps the other sampled bits zero.
+  for (auto& mask : sample_masks) {
+    if (mask != 0U) {
+      mask = 0xffffffffU;
+    }
+  }
+  auto set_sample = [](void* mask, void* value, size_t slot, uint32_t field_id,
+                       uint32_t sample_mask, uint32_t sample_value) {
+    switch (slot) {
+      case 0:
+        DEVX_SET(fte_match_set_misc4, mask, prog_sample_field_id_0, field_id);
+        DEVX_SET(fte_match_set_misc4, value, prog_sample_field_id_0, field_id);
+        DEVX_SET(fte_match_set_misc4, mask, prog_sample_field_value_0, sample_mask);
+        DEVX_SET(fte_match_set_misc4, value, prog_sample_field_value_0, sample_value & sample_mask);
+        break;
+      case 1:
+        DEVX_SET(fte_match_set_misc4, mask, prog_sample_field_id_1, field_id);
+        DEVX_SET(fte_match_set_misc4, value, prog_sample_field_id_1, field_id);
+        DEVX_SET(fte_match_set_misc4, mask, prog_sample_field_value_1, sample_mask);
+        DEVX_SET(fte_match_set_misc4, value, prog_sample_field_value_1, sample_value & sample_mask);
+        break;
+      case 2:
+        DEVX_SET(fte_match_set_misc4, mask, prog_sample_field_id_2, field_id);
+        DEVX_SET(fte_match_set_misc4, value, prog_sample_field_id_2, field_id);
+        DEVX_SET(fte_match_set_misc4, mask, prog_sample_field_value_2, sample_mask);
+        DEVX_SET(fte_match_set_misc4, value, prog_sample_field_value_2, sample_value & sample_mask);
+        break;
+      case 3:
+        DEVX_SET(fte_match_set_misc4, mask, prog_sample_field_id_3, field_id);
+        DEVX_SET(fte_match_set_misc4, value, prog_sample_field_id_3, field_id);
+        DEVX_SET(fte_match_set_misc4, mask, prog_sample_field_value_3, sample_mask);
+        DEVX_SET(fte_match_set_misc4, value, prog_sample_field_value_3, sample_value & sample_mask);
+        break;
+      default:
+        break;
+    }
+  };
+
+  DrMatchParam exact_mask{};
+  exact_mask.match_sz = sizeof(exact_mask.buf);
+  void* outer_mask = DEVX_ADDR_OF(fte_match_param, exact_mask.buf, outer_headers);
+  DrMatchParam gate_value{};
+  gate_value.match_sz = sizeof(gate_value.buf);
+  void* outer_gate_value = DEVX_ADDR_OF(fte_match_param, gate_value.buf, outer_headers);
+  set_gate_match(outer_mask, outer_gate_value);
+  void* m4_mask = DEVX_ADDR_OF(fte_match_param, exact_mask.buf, misc_parameters_4);
+  DrMatchParam selector_value{};
+  selector_value.match_sz = sizeof(selector_value.buf);
+  void* selector_m4 = DEVX_ADDR_OF(fte_match_param, selector_value.buf, misc_parameters_4);
+  for (size_t i = 0; i < plan.samples.size(); ++i) {
+    set_sample(m4_mask, selector_m4, i, plan.samples[i].sample_field_id, sample_masks[i], 0);
+  }
+  struct mlx5dv_dr_matcher* exact = mlx5dv_dr_matcher_create(
+      st.table, 0, MLX5_DR_MATCH_CRITERIA_OUTER | MLX5_DR_MATCH_CRITERIA_MISC4,
+      reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&exact_mask));
+  if (exact == nullptr) {
+    DAQIRI_LOG_CRITICAL("Hardware reorder exact matcher creation failed: {}", strerror(errno));
+    return Status::GENERIC_FAILURE;
+  }
+  st.matchers.push_back(exact);
+  struct mlx5dv_dr_matcher_layout layout {};
+  layout.flags = MLX5DV_DR_MATCHER_LAYOUT_NUM_RULE;
+  const uint64_t exact_rule_count = plan.destination_count;
+  layout.log_num_of_rules_hint =
+      log2_floor(static_cast<uint32_t>(next_power_of_two(static_cast<size_t>(exact_rule_count))));
+  if (mlx5dv_dr_matcher_set_layout(exact, &layout) != 0) {
+    DAQIRI_LOG_WARN("Hardware reorder matcher layout hint was rejected: {}", strerror(errno));
+  }
+
+  for (uint32_t destination = 0; destination < plan.destination_count; ++destination) {
+    const uint32_t batch = destination / plan.packets_per_batch;
+    struct mlx5dv_dr_action* tag = mlx5dv_dr_action_create_tag(destination + 1U);
+    if (tag == nullptr) {
+      DAQIRI_LOG_CRITICAL("Hardware reorder tag action {} failed: {}", destination,
+                          strerror(errno));
+      return Status::GENERIC_FAILURE;
+    }
+    st.tag_actions.push_back(tag);
+    struct mlx5dv_dr_action* actions[] = {tag, plan.destinations[destination]->dest_action};
+    auto add_exact_rule = [&](uint32_t sequence_value) -> Status {
+      std::array<uint32_t, 4> masks{};
+      std::array<uint32_t, 4> values{};
+      if (!encode_field(plan.sequence_match_bit_offset, plan.sequence_match_bit_width,
+                        sequence_value, &masks, &values) ||
+          (plan.batch_match_bit_width != 0 &&
+           !encode_field(plan.batch_match_bit_offset, plan.batch_match_bit_width, batch, &masks,
+                         &values))) {
+        return Status::INTERNAL_ERROR;
+      }
+      DrMatchParam value{};
+      value.match_sz = sizeof(value.buf);
+      void* outer_value = DEVX_ADDR_OF(fte_match_param, value.buf, outer_headers);
+      set_gate_match(outer_mask, outer_value);
+      void* m4_value = DEVX_ADDR_OF(fte_match_param, value.buf, misc_parameters_4);
+      for (size_t i = 0; i < plan.samples.size(); ++i) {
+        set_sample(m4_mask, m4_value, i, plan.samples[i].sample_field_id, sample_masks[i],
+                   values[i]);
+      }
+      struct mlx5dv_dr_rule* rule = mlx5dv_dr_rule_create(
+          exact, reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&value), 2, actions);
+      if (rule == nullptr) {
+        DAQIRI_LOG_CRITICAL("Hardware reorder rule destination {}/{} failed: {}", destination,
+                            plan.destination_count, strerror(errno));
+        return Status::GENERIC_FAILURE;
+      }
+      st.rules.push_back(rule);
+      PortSteering::RuleSpec spec{exact, plan.destinations[destination]->dest_action, tag, {}, 0,
+                                  {}};
+      spec.value_sz = sizeof(value.buf);
+      memcpy(spec.value, value.buf, spec.value_sz);
+      st.rule_specs.push_back(spec);
+      return Status::SUCCESS;
+    };
+    const uint32_t sequence_value = plan.cfg.method_ == ReorderMethod::SEQ_BATCH_NUMBER
+                                        ? destination % plan.packets_per_batch
+                                        : destination;
+    if (Status s = add_exact_rule(sequence_value); s != Status::SUCCESS) {
+      return s;
+    }
+    if ((destination + 1U) % 1000U == 0U || destination + 1U == plan.destination_count) {
+      DAQIRI_LOG_INFO("Hardware reorder installed destinations {}/{}", destination + 1U,
+                      plan.destination_count);
+    }
+  }
+
+  DrMatchParam drop_mask{};
+  drop_mask.match_sz = sizeof(drop_mask.buf);
+  DrMatchParam drop_value{};
+  drop_value.match_sz = sizeof(drop_value.buf);
+  void* drop_outer_mask = DEVX_ADDR_OF(fte_match_param, drop_mask.buf, outer_headers);
+  void* drop_outer_value = DEVX_ADDR_OF(fte_match_param, drop_value.buf, outer_headers);
+  set_gate_match(drop_outer_mask, drop_outer_value);
+  struct mlx5dv_dr_matcher* drop_matcher =
+      mlx5dv_dr_matcher_create(st.table, 1, MLX5_DR_MATCH_CRITERIA_OUTER,
+                               reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&drop_mask));
+  if (drop_matcher == nullptr) {
+    DAQIRI_LOG_CRITICAL("Hardware reorder default-drop matcher creation failed: {}",
+                        strerror(errno));
+    return Status::GENERIC_FAILURE;
+  }
+  st.matchers.push_back(drop_matcher);
+  struct mlx5dv_dr_action* drop = mlx5dv_dr_action_create_drop();
+  if (drop == nullptr) {
+    DAQIRI_LOG_CRITICAL("Hardware reorder default-drop action creation failed: {}",
+                        strerror(errno));
+    return Status::GENERIC_FAILURE;
+  }
+  st.drop_actions.push_back(drop);
+  struct mlx5dv_dr_action* drop_actions[] = {drop};
+  struct mlx5dv_dr_rule* drop_rule = mlx5dv_dr_rule_create(
+      drop_matcher, reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&drop_value), 1,
+      drop_actions);
+  if (drop_rule == nullptr) {
+    DAQIRI_LOG_CRITICAL("Hardware reorder default-drop rule creation failed: {}", strerror(errno));
+    return Status::GENERIC_FAILURE;
+  }
+  st.rules.push_back(drop_rule);
+  PortSteering::RuleSpec drop_spec{drop_matcher, drop, nullptr, {}, 0, {}};
+  drop_spec.value_sz = sizeof(drop_value.buf);
+  memcpy(drop_spec.value, drop_value.buf, drop_spec.value_sz);
+  st.rule_specs.push_back(drop_spec);
+  st.persistent_rule_count = st.rules.size();
+  st.persistent_rule_spec_count = st.rule_specs.size();
+
+  if (mlx5dv_dr_domain_sync(st.domain,
+                            MLX5DV_DR_DOMAIN_SYNC_FLAGS_SW | MLX5DV_DR_DOMAIN_SYNC_FLAGS_HW) != 0) {
+    DAQIRI_LOG_CRITICAL("Hardware reorder flow sync failed: {}", strerror(errno));
+    return Status::GENERIC_FAILURE;
+  }
+  DAQIRI_LOG_INFO(
+      "Hardware reorder steering active on port {}: flow '{}' (id {}) virtual queue {} -> {} "
+      "root-table batch/sequence destinations",
+      q.port_id, flow->name_, flow_id, q.queue_id, plan.destination_count);
+  return Status::SUCCESS;
+}
+
 Status IbverbsEngine::install_port_flows() {
   for (const auto& intf : cfg_.ifs_) {
     if (intf.rx_.queues_.empty()) {
@@ -2084,6 +2623,26 @@ Status IbverbsEngine::install_port_flows() {
     if (st.table == nullptr) {
       DAQIRI_LOG_CRITICAL("mlx5dv_dr_table_create failed (port {}): {}", port, strerror(errno));
       return Status::GENERIC_FAILURE;
+    }
+
+    IbvRxQueue* direct_queue = nullptr;
+    for (const auto& [id, candidate] : by_id) {
+      (void)id;
+      if (!candidate->direct_reorder) {
+        continue;
+      }
+      if (direct_queue != nullptr) {
+        DAQIRI_LOG_CRITICAL("Only one hardware reorder queue is supported per port {}", port);
+        return Status::INVALID_PARAMETER;
+      }
+      direct_queue = candidate;
+    }
+    if (direct_queue != nullptr) {
+      if (Status s = install_direct_reorder_flows(*direct_queue, intf, st); s != Status::SUCCESS) {
+        return s;
+      }
+      st.next_dynamic_priority = 0;
+      continue;
     }
 
     // Create a flex-parser (parse-graph) node per configured flex item. Each
@@ -2696,6 +3255,451 @@ void IbverbsEngine::devx_destroy(IbvRxQueue& q) {
   q.rq_dbr = nullptr;
 }
 
+Status IbverbsEngine::create_direct_destination(IbvRxQueue& q, IbvDirectReorderPlan& plan,
+                                                uint32_t destination) {
+  static constexpr uint32_t kWqeBytes = 32U;
+  auto rq = std::make_unique<IbvDirectDestination>();
+  rq->destination = destination;
+  rq->wq_offset = static_cast<uint64_t>(destination) * plan.wq_block_bytes;
+  rq->dbr_offset = rq->wq_offset + static_cast<uint64_t>(plan.rq_depth) * kWqeBytes;
+  rq->wq = static_cast<uint8_t*>(plan.wq_memory) + rq->wq_offset;
+  rq->dbr = reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(plan.wq_memory) + rq->dbr_offset);
+
+  const uint32_t batch = destination / plan.packets_per_batch;
+  const uint32_t slot = destination % plan.packets_per_batch;
+  const uint64_t payload_addr = reinterpret_cast<uint64_t>(plan.output_base) +
+                                static_cast<uint64_t>(batch) * plan.output_buffer_stride +
+                                static_cast<uint64_t>(slot) * plan.packet_size;
+  for (uint32_t wqe = 0; wqe < plan.rq_depth; ++wqe) {
+    auto* segments = reinterpret_cast<struct mlx5_wqe_data_seg_min*>(
+        rq->wq + static_cast<size_t>(wqe) * kWqeBytes);
+    segments[0].byte_count = htobe32(plan.header_bytes);
+    segments[0].lkey = htobe32(plan.null_mr->lkey);
+    segments[0].addr = 0;
+    segments[1].byte_count = htobe32(plan.packet_size);
+    segments[1].lkey = htobe32(plan.output_lkey);
+    segments[1].addr = htobe64(payload_addr);
+  }
+
+  uint32_t in[DEVX_ST_SZ_DW(create_rq_in)] = {0};
+  uint32_t out[DEVX_ST_SZ_DW(create_rq_out)] = {0};
+  void* rqc = DEVX_ADDR_OF(create_rq_in, in, ctx);
+  void* wq = DEVX_ADDR_OF(rqc, rqc, wq);
+  DEVX_SET(create_rq_in, in, opcode, MLX5_CMD_OP_CREATE_RQ);
+  DEVX_SET(rqc, rqc, state, MLX5_RQC_STATE_RST);
+  DEVX_SET(rqc, rqc, cqn, q.dv_cq.cqn);
+  DEVX_SET(rqc, rqc, user_index, destination + 1U);
+  DEVX_SET(rqc, rqc, flush_in_error_en, 1);
+  DEVX_SET(rqc, rqc, vsd, 1);
+  DEVX_SET(wq, wq, wq_type, MLX5_WQ_TYPE_CYCLIC);
+  DEVX_SET(wq, wq, log_wq_stride, log2_floor(kWqeBytes));
+  DEVX_SET(wq, wq, log_wq_sz, log2_floor(plan.rq_depth));
+  DEVX_SET(wq, wq, pd, plan.pdn);
+  DEVX_SET(wq, wq, log_wq_pg_sz, log2_floor(static_cast<uint32_t>(sysconf(_SC_PAGESIZE))) - 12U);
+  DEVX_SET64(wq, wq, dbr_addr, rq->dbr_offset);
+  DEVX_SET(wq, wq, dbr_umem_id, plan.wq_umem->umem_id);
+  DEVX_SET(wq, wq, wq_umem_id, plan.wq_umem->umem_id);
+  DEVX_SET64(wq, wq, wq_umem_offset, rq->wq_offset);
+  DEVX_SET(wq, wq, dbr_umem_valid, 1);
+  DEVX_SET(wq, wq, wq_umem_valid, 1);
+  rq->rq_obj = mlx5dv_devx_obj_create(q.ctx, in, sizeof(in), out, sizeof(out));
+  if (rq->rq_obj == nullptr) {
+    DAQIRI_LOG_CRITICAL(
+        "Hardware reorder CREATE_RQ destination {}/{} failed: {} "
+        "(syndrome 0x{:x})",
+        destination, plan.destination_count, strerror(errno),
+        DEVX_GET(create_rq_out, out, syndrome));
+    return Status::GENERIC_FAILURE;
+  }
+  rq->rqn = DEVX_GET(create_rq_out, out, rqn);
+
+  uint32_t min[DEVX_ST_SZ_DW(modify_rq_in)] = {0};
+  uint32_t mout[DEVX_ST_SZ_DW(modify_rq_out)] = {0};
+  void* mrqc = DEVX_ADDR_OF(modify_rq_in, min, ctx);
+  DEVX_SET(modify_rq_in, min, opcode, MLX5_CMD_OP_MODIFY_RQ);
+  DEVX_SET(modify_rq_in, min, rqn, rq->rqn);
+  DEVX_SET(modify_rq_in, min, rq_state, MLX5_RQC_STATE_RST);
+  DEVX_SET(rqc, mrqc, state, MLX5_RQC_STATE_RDY);
+  if (mlx5dv_devx_obj_modify(rq->rq_obj, min, sizeof(min), mout, sizeof(mout)) != 0) {
+    DAQIRI_LOG_CRITICAL(
+        "Hardware reorder MODIFY_RQ destination {} failed: {} "
+        "(syndrome 0x{:x})",
+        destination, strerror(errno), DEVX_GET(modify_rq_out, mout, syndrome));
+    mlx5dv_devx_obj_destroy(rq->rq_obj);
+    rq->rq_obj = nullptr;
+    return Status::GENERIC_FAILURE;
+  }
+  uint32_t tin[DEVX_ST_SZ_DW(create_tir_in)] = {0};
+  uint32_t tout[DEVX_ST_SZ_DW(create_tir_out)] = {0};
+  void* tirc = DEVX_ADDR_OF(create_tir_in, tin, ctx);
+  DEVX_SET(create_tir_in, tin, opcode, MLX5_CMD_OP_CREATE_TIR);
+  DEVX_SET(tirc, tirc, disp_type, MLX5_TIRC_DISP_TYPE_DIRECT);
+  DEVX_SET(tirc, tirc, inline_rqn, rq->rqn);
+  DEVX_SET(tirc, tirc, rx_hash_fn, MLX5_RX_HASH_FN_NONE);
+  DEVX_SET(tirc, tirc, transport_domain, q.td_num);
+  rq->tir_obj = mlx5dv_devx_obj_create(q.ctx, tin, sizeof(tin), tout, sizeof(tout));
+  if (rq->tir_obj == nullptr) {
+    DAQIRI_LOG_CRITICAL(
+        "Hardware reorder CREATE_TIR destination {} failed: {} "
+        "(syndrome 0x{:x})",
+        destination, strerror(errno), DEVX_GET(create_tir_out, tout, syndrome));
+    mlx5dv_devx_obj_destroy(rq->rq_obj);
+    rq->rq_obj = nullptr;
+    return Status::GENERIC_FAILURE;
+  }
+  rq->dest_action = mlx5dv_dr_action_create_dest_devx_tir(rq->tir_obj);
+  if (rq->dest_action == nullptr) {
+    DAQIRI_LOG_CRITICAL("Hardware reorder destination action {} failed: {}", destination,
+                        strerror(errno));
+    mlx5dv_devx_obj_destroy(rq->tir_obj);
+    mlx5dv_devx_obj_destroy(rq->rq_obj);
+    rq->tir_obj = nullptr;
+    rq->rq_obj = nullptr;
+    return Status::GENERIC_FAILURE;
+  }
+
+  plan.destinations.push_back(std::move(rq));
+  return Status::SUCCESS;
+}
+
+Status IbverbsEngine::create_direct_reorder_resources(IbvRxQueue& q, IbvDirectReorderPlan& plan) {
+  static constexpr uint32_t kMaxCqe = 1U << 17;
+  static constexpr uint32_t kWqeBytes = 32U;
+  static constexpr size_t kDbrBytes = 64U;
+
+  q.devx_uar = mlx5dv_devx_alloc_uar(q.ctx, MLX5DV_UAR_ALLOC_TYPE_NC);
+  if (q.devx_uar == nullptr) {
+    q.devx_uar = mlx5dv_devx_alloc_uar(q.ctx, MLX5DV_UAR_ALLOC_TYPE_BF);
+  }
+  if (q.devx_uar == nullptr) {
+    DAQIRI_LOG_CRITICAL("Hardware reorder UAR allocation failed: {}", strerror(errno));
+    return Status::GENERIC_FAILURE;
+  }
+  const uint64_t desired_cqe = std::max<uint64_t>(4096U, plan.destination_count);
+  q.num_wqe = static_cast<uint32_t>(
+      std::min<uint64_t>(kMaxCqe, next_power_of_two(static_cast<size_t>(desired_cqe))));
+  q.strides_per_wqe = 1;
+  q.cq_ci = 0;
+  if (Status s = devx_create_cq(q); s != Status::SUCCESS) {
+    return s;
+  }
+
+  struct mlx5dv_pd dvpd {};
+  struct mlx5dv_obj pdobj {};
+  pdobj.pd.in = q.pd;
+  pdobj.pd.out = &dvpd;
+  if (mlx5dv_init_obj(&pdobj, MLX5DV_OBJ_PD) != 0) {
+    DAQIRI_LOG_CRITICAL("Hardware reorder mlx5dv_init_obj(PD) failed");
+    return Status::GENERIC_FAILURE;
+  }
+  plan.pdn = dvpd.pdn;
+
+  uint32_t tdin[DEVX_ST_SZ_DW(alloc_transport_domain_in)] = {0};
+  uint32_t tdout[DEVX_ST_SZ_DW(alloc_transport_domain_out)] = {0};
+  DEVX_SET(alloc_transport_domain_in, tdin, opcode, MLX5_CMD_OP_ALLOC_TRANSPORT_DOMAIN);
+  q.td_obj = mlx5dv_devx_obj_create(q.ctx, tdin, sizeof(tdin), tdout, sizeof(tdout));
+  if (q.td_obj == nullptr) {
+    DAQIRI_LOG_CRITICAL("Hardware reorder transport-domain allocation failed: {}", strerror(errno));
+    return Status::GENERIC_FAILURE;
+  }
+  q.td_num = DEVX_GET(alloc_transport_domain_out, tdout, transport_domain);
+
+  if (Status s = register_mr(q.pd, plan.cfg.memory_region_, &plan.output_base, &plan.output_lkey);
+      s != Status::SUCCESS) {
+    return s;
+  }
+  plan.null_mr = ibv_alloc_null_mr(q.pd);
+  if (plan.null_mr == nullptr) {
+    DAQIRI_LOG_CRITICAL("Hardware reorder requires ibv_alloc_null_mr to discard packet headers: {}",
+                        strerror(errno));
+    return errno == EOPNOTSUPP ? Status::NOT_SUPPORTED : Status::GENERIC_FAILURE;
+  }
+
+  const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+  const size_t wq_bytes = static_cast<size_t>(plan.rq_depth) * kWqeBytes;
+  plan.wq_block_bytes = (wq_bytes + kDbrBytes + page - 1U) & ~(page - 1U);
+  const size_t wq_blocks = static_cast<size_t>(plan.destination_count) + 1U;
+  if (wq_blocks > std::numeric_limits<size_t>::max() / plan.wq_block_bytes) {
+    return Status::INVALID_PARAMETER;
+  }
+  // Keep one trailing, page-aligned guard block in the shared WQ UMEM. CX-7
+  // firmware rejects the second RQ when the populated destination blocks end
+  // exactly at the UMEM boundary (syndrome 0x357275).
+  plan.wq_memory_bytes = wq_blocks * plan.wq_block_bytes;
+  if (posix_memalign(&plan.wq_memory, page, plan.wq_memory_bytes) != 0) {
+    DAQIRI_LOG_CRITICAL("Hardware reorder WQ memory allocation failed ({} bytes)",
+                        plan.wq_memory_bytes);
+    return Status::GENERIC_FAILURE;
+  }
+  memset(plan.wq_memory, 0, plan.wq_memory_bytes);
+  plan.wq_umem = mlx5dv_devx_umem_reg(q.ctx, plan.wq_memory, plan.wq_memory_bytes, 0x7U);
+  if (plan.wq_umem == nullptr) {
+    DAQIRI_LOG_CRITICAL("Hardware reorder WQ UMEM registration failed: {}", strerror(errno));
+    return Status::GENERIC_FAILURE;
+  }
+
+  plan.destinations.reserve(plan.destination_count);
+  for (uint32_t destination = 0; destination < plan.destination_count; ++destination) {
+    if (Status s = create_direct_destination(q, plan, destination); s != Status::SUCCESS) {
+      DAQIRI_LOG_CRITICAL("Hardware reorder resource creation stopped at destination {}/{}",
+                          destination, plan.destination_count);
+      return s;
+    }
+    if ((destination + 1U) % 500U == 0U || destination + 1U == plan.destination_count) {
+      DAQIRI_LOG_INFO("Hardware reorder created {}/{} private RQs/TIRs", destination + 1U,
+                      plan.destination_count);
+    }
+  }
+  doorbell_store_barrier();
+  for (const auto& destination : plan.destinations) {
+    // Each fixed output slot gets exactly one outstanding receive credit. A
+    // replacement credit is published only when its aggregate batch is freed.
+    destination->producer = 1U;
+    destination->dbr[0] = htobe32(destination->producer & 0xffffU);
+  }
+
+  plan.batches.reserve(plan.batch_count);
+  for (uint32_t batch_id = 0; batch_id < plan.batch_count; ++batch_id) {
+    auto batch = std::make_unique<IbvDirectBatchSlot>();
+    batch->plan = &plan;
+    batch->batch_id = batch_id;
+    batch->remaining = plan.packets_per_batch;
+    batch->seen.assign((plan.packets_per_batch + 63U) / 64U, 0);
+    batch->pkt_ptrs[0] =
+        plan.output_base + static_cast<size_t>(batch_id) * plan.output_buffer_stride;
+    batch->pkt_lens[0] = plan.packets_per_batch * plan.packet_size;
+    batch->info.batch_id = batch_id;
+    batch->info.source_packet_count = plan.packets_per_batch;
+    batch->info.packets_per_batch = plan.packets_per_batch;
+    batch->info.payload_len = plan.packet_size;
+    batch->info.aggregate_len = batch->pkt_lens[0];
+    batch->info.burst_flags = DAQIRI_BURST_FLAG_REORDERED | DAQIRI_BURST_FLAG_DIRECT_PLACED;
+    auto& burst = batch->burst;
+    burst.hdr.hdr.port_id = plan.port_id;
+    burst.hdr.hdr.q_id = plan.queue_id;
+    burst.hdr.hdr.num_segs = 1;
+    burst.hdr.hdr.num_pkts = 1;
+    burst.hdr.hdr.nbytes = batch->pkt_lens[0];
+    burst.hdr.hdr.max_pkt = plan.packets_per_batch;
+    burst.hdr.hdr.max_pkt_size = plan.packet_size;
+    burst.hdr.hdr.burst_flags = batch->info.burst_flags;
+    burst.pkts[0] = batch->pkt_ptrs.data();
+    burst.pkt_lens[0] = batch->pkt_lens.data();
+    burst.custom_pkt_data = std::static_pointer_cast<void>(
+        std::shared_ptr<IbvDirectBatchSlot>(batch.get(), [](IbvDirectBatchSlot*) {}));
+    memcpy(burst.hdr.custom_burst_data, &batch->info, sizeof(batch->info));
+    plan.batches.push_back(std::move(batch));
+  }
+  return Status::SUCCESS;
+}
+
+Status IbverbsEngine::init_direct_reorder(IbvRxQueue& q, const InterfaceConfig& intf,
+                                          const RxQueueConfig& qcfg) {
+  (void)qcfg;
+  const ReorderConfig* selected = nullptr;
+  for (const auto& rc : intf.rx_.reorder_configs_) {
+    if (rc.reorder_engine_ != "hw") {
+      continue;
+    }
+    bool mine = false;
+    for (FlowId id : rc.flow_ids_) {
+      auto flow = std::find_if(intf.rx_.flows_.begin(), intf.rx_.flows_.end(),
+                               [id](const FlowConfig& f) { return f.id_ == id; });
+      if (flow == intf.rx_.flows_.end()) {
+        continue;
+      }
+      FlowAction action = flow->action_;
+      if (!flow->actions_.empty()) {
+        auto it = std::find_if(flow->actions_.begin(), flow->actions_.end(),
+                               [](const FlowAction& a) { return a.type_ == FlowType::QUEUE; });
+        if (it != flow->actions_.end()) {
+          action = *it;
+        }
+      }
+      if (action.type_ == FlowType::QUEUE && action.id_ == q.queue_id) {
+        mine = true;
+      }
+    }
+    if (mine) {
+      selected = &rc;
+    }
+  }
+  if (selected == nullptr) {
+    return Status::SUCCESS;
+  }
+  const FlowId gate_flow_id = selected->flow_ids_.front();
+  auto gate_flow =
+      std::find_if(intf.rx_.flows_.begin(), intf.rx_.flows_.end(),
+                   [gate_flow_id](const FlowConfig& flow) { return flow.id_ == gate_flow_id; });
+  if (gate_flow == intf.rx_.flows_.end() || gate_flow->match_.udp_dst_ == 0) {
+    DAQIRI_LOG_CRITICAL("Hardware reorder '{}' requires its flow to match udp_dst",
+                        selected->name_);
+    return Status::INVALID_PARAMETER;
+  }
+
+  auto plan = std::make_unique<IbvDirectReorderPlan>();
+  plan->cfg = *selected;
+  plan->port_id = q.port_id;
+  plan->queue_id = q.queue_id;
+  plan->packets_per_batch = rdr_packets_per_batch(*selected);
+  plan->header_bytes = selected->payload_byte_offset_;
+  plan->packet_size = selected->packet_size_;
+  const auto& output_mr = cfg_.mrs_.at(selected->memory_region_);
+  plan->batch_count = static_cast<uint32_t>(output_mr.num_bufs_);
+  const uint64_t destination_count =
+      static_cast<uint64_t>(plan->packets_per_batch) * plan->batch_count;
+  if (destination_count > std::numeric_limits<uint32_t>::max()) {
+    return Status::INVALID_PARAMETER;
+  }
+  plan->destination_count = static_cast<uint32_t>(destination_count);
+  plan->output_kind = output_mr.kind_;
+  plan->cuda_device_id = output_mr.affinity_;
+  plan->output_buffer_stride = output_mr.adj_size_;
+  std::string sample_error;
+  DirectMatchFields fields;
+  if (!direct_compute_match_fields(*selected, plan->packets_per_batch, plan->batch_count, &fields,
+                                   &sample_error) ||
+      !direct_collect_flex_samples(fields, &plan->samples, &sample_error)) {
+    DAQIRI_LOG_CRITICAL("Hardware reorder '{}': {}", selected->name_, sample_error);
+    return Status::INVALID_PARAMETER;
+  }
+  plan->sequence_match_bit_offset = fields.sequence_offset;
+  plan->sequence_match_bit_width = fields.sequence_width;
+  plan->batch_match_bit_offset = fields.batch_offset;
+  plan->batch_match_bit_width = fields.batch_width;
+
+  struct mlx5dv_context dv_context {};
+  if (mlx5dv_query_device(q.ctx, &dv_context) != 0 ||
+      (dv_context.flags & MLX5DV_CONTEXT_FLAGS_CQE_V1) == 0) {
+    DAQIRI_LOG_CRITICAL(
+        "Hardware reorder '{}' requires mlx5 CQE version 1 for per-RQ user_index decoding",
+        selected->name_);
+    return Status::NOT_SUPPORTED;
+  }
+
+  if (plan->output_kind == MemoryKind::DEVICE) {
+#if defined(CUDA_VERSION) && CUDA_VERSION >= 11030
+    const cudaError_t set_device = cudaSetDevice(plan->cuda_device_id);
+    CUdevice device = CU_DEVICE_INVALID;
+    int ordering = CU_GPU_DIRECT_RDMA_WRITES_ORDERING_NONE;
+    int flush_options = 0;
+    if (set_device != cudaSuccess || cuDeviceGet(&device, plan->cuda_device_id) != CUDA_SUCCESS ||
+        cuDeviceGetAttribute(&ordering, CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WRITES_ORDERING,
+                             device) != CUDA_SUCCESS ||
+        cuDeviceGetAttribute(&flush_options,
+                             CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_FLUSH_WRITES_OPTIONS,
+                             device) != CUDA_SUCCESS) {
+      DAQIRI_LOG_CRITICAL(
+          "Hardware reorder '{}' could not query GPUDirect write ordering for GPU {}",
+          selected->name_, plan->cuda_device_id);
+      return Status::NOT_SUPPORTED;
+    }
+    if (ordering < CU_GPU_DIRECT_RDMA_WRITES_ORDERING_OWNER) {
+      if ((flush_options & CU_FLUSH_GPU_DIRECT_RDMA_WRITES_OPTION_HOST) == 0) {
+        DAQIRI_LOG_CRITICAL(
+            "Hardware reorder '{}' DEVICE output has neither native owner ordering nor host "
+            "GPUDirect write flush support; use a host_pinned output MR",
+            selected->name_);
+        return Status::NOT_SUPPORTED;
+      }
+      plan->gpu_flush_required = true;
+      if (cuFlushGPUDirectRDMAWrites(CU_FLUSH_GPU_DIRECT_RDMA_WRITES_TARGET_CURRENT_CTX,
+                                     CU_FLUSH_GPU_DIRECT_RDMA_WRITES_TO_OWNER) != CUDA_SUCCESS) {
+        DAQIRI_LOG_CRITICAL(
+            "Hardware reorder '{}' could not initialize GPUDirect write flushing; use a "
+            "host_pinned output MR",
+            selected->name_);
+        return Status::NOT_SUPPORTED;
+      }
+    }
+    DAQIRI_LOG_INFO(
+        "Hardware reorder '{}' GPU visibility: native_ordering={} flush_options=0x{:x} "
+        "host_flush_required={}",
+        selected->name_, ordering, flush_options, plan->gpu_flush_required);
+#else
+    DAQIRI_LOG_CRITICAL(
+        "Hardware reorder '{}' DEVICE output requires CUDA 11.3+ visibility APIs; use a "
+        "host_pinned output MR",
+        selected->name_);
+    return Status::NOT_SUPPORTED;
+#endif
+  }
+
+  auto cap = flex_parser_caps_.find(q.ctx);
+  if (cap == flex_parser_caps_.end()) {
+    cap = flex_parser_caps_.emplace(q.ctx, probe_flex_parser(q.ctx)).first;
+  }
+  if (!cap->second) {
+    DAQIRI_LOG_CRITICAL(
+        "Hardware reorder '{}' requires FLEX_PARSE_GRAPH RX steering on {}; "
+        "set reorder_engine: 'sw' explicitly to use GPU reordering",
+        selected->name_, ibv_get_device_name(q.ctx->device));
+    return Status::NOT_SUPPORTED;
+  }
+  q.direct_reorder = std::move(plan);
+  const Status status = create_direct_reorder_resources(q, *q.direct_reorder);
+  if (status != Status::SUCCESS) {
+    direct_cleanup(q);
+    devx_destroy(q);
+    return status;
+  }
+  // Match the standalone DevX path's proven resource order: create all private
+  // RQ/TIR resources before activating the programmable parser.
+  q.direct_reorder->parser_node =
+      create_direct_reorder_parser(q.ctx, gate_flow->match_.udp_dst_, &q.direct_reorder->samples);
+  if (q.direct_reorder->parser_node == nullptr) {
+    direct_cleanup(q);
+    devx_destroy(q);
+    return Status::NOT_SUPPORTED;
+  }
+  DAQIRI_LOG_INFO(
+      "Hardware reorder '{}' virtual q{}: batches={} packets/batch={} destinations={} "
+      "sequence_match={}:{} batch_match={}:{} packet_size={} header_discard={} output='{}'",
+      selected->name_, q.queue_id, q.direct_reorder->batch_count,
+      q.direct_reorder->packets_per_batch, q.direct_reorder->destination_count,
+      q.direct_reorder->sequence_match_bit_offset, q.direct_reorder->sequence_match_bit_width,
+      q.direct_reorder->batch_match_bit_offset, q.direct_reorder->batch_match_bit_width,
+      q.direct_reorder->packet_size, q.direct_reorder->header_bytes, selected->memory_region_);
+  return Status::SUCCESS;
+}
+
+void IbverbsEngine::direct_cleanup(IbvRxQueue& q) {
+  if (!q.direct_reorder) {
+    return;
+  }
+  auto& plan = *q.direct_reorder;
+  for (auto it = plan.destinations.rbegin(); it != plan.destinations.rend(); ++it) {
+    auto& rq = **it;
+    if (rq.dest_action) {
+      mlx5dv_dr_action_destroy(rq.dest_action);
+    }
+    if (rq.tir_obj) {
+      mlx5dv_devx_obj_destroy(rq.tir_obj);
+    }
+    if (rq.rq_obj) {
+      mlx5dv_devx_obj_destroy(rq.rq_obj);
+    }
+  }
+  plan.destinations.clear();
+  if (plan.wq_umem) {
+    mlx5dv_devx_umem_dereg(plan.wq_umem);
+  }
+  plan.wq_umem = nullptr;
+  if (plan.wq_memory) {
+    free(plan.wq_memory);
+  }
+  plan.wq_memory = nullptr;
+  if (plan.null_mr) {
+    ibv_dereg_mr(plan.null_mr);
+  }
+  plan.null_mr = nullptr;
+  if (plan.parser_node) {
+    mlx5dv_devx_obj_destroy(plan.parser_node);
+  }
+  plan.parser_node = nullptr;
+  q.direct_reorder.reset();
+}
+
 Status IbverbsEngine::setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf,
                                      const RxQueueConfig& qcfg) {
   q.port_id = intf.port_id_;
@@ -2751,14 +3755,20 @@ Status IbverbsEngine::setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf,
     return s;
   }
 
-  if (Status s = register_rx_mr(q); s != Status::SUCCESS) {
+  if (Status s = init_direct_reorder(q, intf, qcfg); s != Status::SUCCESS) {
     return s;
   }
-  if (Status s = create_striding_rq(q); s != Status::SUCCESS) {
-    return s;
+  if (!q.direct_reorder) {
+    if (Status s = register_rx_mr(q); s != Status::SUCCESS) {
+      return s;
+    }
+    if (Status s = create_striding_rq(q); s != Status::SUCCESS) {
+      devx_destroy(q);
+      return s;
+    }
   }
 
-  if (q.poll_mode == QueuePollMode::INDIRECT) {
+  if (q.direct_reorder || q.poll_mode == QueuePollMode::INDIRECT) {
     // App-facing burst ring for the background worker handoff. Direct queues
     // return the completed metadata block from get_rx_burst without a ring.
     const std::string ring_name =
@@ -2771,8 +3781,14 @@ Status IbverbsEngine::setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf,
     }
   }
 
-  if (Status s = init_reorder(q, intf, qcfg); s != Status::SUCCESS) {
-    return s;
+  if (!q.direct_reorder) {
+    if (Status s = init_reorder(q, intf, qcfg); s != Status::SUCCESS) {
+      reorder_cleanup(q);
+      daqiri::Ring::free(q.ring);
+      q.ring = nullptr;
+      devx_destroy(q);
+      return s;
+    }
   }
 
   return Status::SUCCESS;
@@ -3215,6 +4231,192 @@ Status IbverbsEngine::rx_poll_queue(IbvRxQueue* q, BurstParams** direct_burst) {
                 : Status::SUCCESS;
 }
 
+void IbverbsEngine::direct_publish_ready(IbvRxQueue& q, IbvDirectReorderPlan& plan) {
+  if (plan.pending_ready.empty()) {
+    return;
+  }
+  bool needs_visibility_barrier = false;
+  for (uint32_t batch_id : plan.pending_ready) {
+    if (plan.batches[batch_id]->state.load(std::memory_order_acquire) ==
+        IbvDirectBatchState::READY_PENDING) {
+      needs_visibility_barrier = true;
+      break;
+    }
+  }
+  if (needs_visibility_barrier) {
+    if (plan.output_kind == MemoryKind::DEVICE && plan.gpu_flush_required) {
+      if (cudaSetDevice(plan.cuda_device_id) != cudaSuccess) {
+        DAQIRI_LOG_ERROR("Hardware reorder could not select GPU {} for GPUDirect visibility",
+                         plan.cuda_device_id);
+        plan.cq_errors++;
+        return;
+      }
+#if defined(CUDA_VERSION) && CUDA_VERSION >= 11030
+      const CUresult result =
+          cuFlushGPUDirectRDMAWrites(CU_FLUSH_GPU_DIRECT_RDMA_WRITES_TARGET_CURRENT_CTX,
+                                     CU_FLUSH_GPU_DIRECT_RDMA_WRITES_TO_OWNER);
+      if (result != CUDA_SUCCESS) {
+        const char* error = nullptr;
+        cuGetErrorString(result, &error);
+        DAQIRI_LOG_ERROR("Hardware reorder GPUDirect visibility flush failed: {}",
+                         error ? error : "unknown CUDA error");
+        plan.cq_errors++;
+        return;
+      }
+#endif
+    } else {
+      cqe_read_barrier();
+    }
+    for (uint32_t batch_id : plan.pending_ready) {
+      auto& batch = *plan.batches[batch_id];
+      IbvDirectBatchState expected = IbvDirectBatchState::READY_PENDING;
+      batch.state.compare_exchange_strong(expected, IbvDirectBatchState::READY,
+                                          std::memory_order_release, std::memory_order_relaxed);
+    }
+  }
+
+  const size_t pending = plan.pending_ready.size();
+  for (size_t i = 0; i < pending; ++i) {
+    const uint32_t batch_id = plan.pending_ready.front();
+    plan.pending_ready.pop_front();
+    auto& batch = *plan.batches[batch_id];
+    if (batch.state.load(std::memory_order_acquire) != IbvDirectBatchState::READY ||
+        !q.ring->enqueue(&batch.burst)) {
+      plan.pending_ready.push_back(batch_id);
+      plan.ring_full_retries++;
+      continue;
+    }
+    plan.completed_batches++;
+  }
+}
+
+void IbverbsEngine::direct_poll_queue(IbvRxQueue* q) {
+  auto& plan = *q->direct_reorder;
+  const uint32_t cqe_count = q->dv_cq.cqe_cnt;
+  const uint32_t cqe_size = q->dv_cq.cqe_size;
+  auto* cq = static_cast<uint8_t*>(q->dv_cq.buf);
+  const uint32_t rq_mask = plan.rq_depth - 1U;
+  const uint32_t start_ci = q->cq_ci;
+  const uint32_t budget = static_cast<uint32_t>(std::max(q->batch_size, 256));
+  uint32_t processed = 0;
+
+  auto consume_credit = [&](uint32_t destination, uint16_t wqe_counter) {
+    auto& rq = *plan.destinations[destination];
+    const uint32_t slot = static_cast<uint32_t>(wqe_counter) & rq_mask;
+    if (slot != (rq.consumer & rq_mask)) {
+      plan.wqe_errors++;
+    }
+    rq.consumer++;
+  };
+  auto retry_credit = [&](uint32_t destination) {
+    auto& batch = *plan.batches[destination / plan.packets_per_batch];
+    if (batch.state.load(std::memory_order_acquire) != IbvDirectBatchState::RECEIVING) {
+      plan.ownership_violations++;
+      force_quit_.store(true, std::memory_order_relaxed);
+      return;
+    }
+    auto& rq = *plan.destinations[destination];
+    rq.producer++;
+    doorbell_store_barrier();
+    rq.dbr[0] = htobe32(rq.producer & 0xffffU);
+    plan.reposts.fetch_add(1U, std::memory_order_relaxed);
+  };
+
+  while (processed < budget) {
+    uint8_t* raw = cq + (q->cq_ci & (cqe_count - 1U)) * cqe_size;
+    auto* cqe = reinterpret_cast<struct mlx5_cqe64*>(raw + (cqe_size - sizeof(struct mlx5_cqe64)));
+    const uint8_t opcode = cqe->op_own >> 4U;
+    const uint8_t owner = cqe->op_own & 1U;
+    const uint8_t phase = static_cast<uint8_t>((q->cq_ci / cqe_count) & 1U);
+    if (opcode == MLX5_CQE_INVALID || owner != phase) {
+      break;
+    }
+    cqe_read_barrier();
+    q->cq_ci++;
+    processed++;
+    plan.packets++;
+
+    if (opcode == MLX5_CQE_RESP_ERR || opcode == MLX5_CQE_REQ_ERR) {
+      plan.cq_errors++;
+      const auto* error = reinterpret_cast<const struct mlx5_err_cqe*>(cqe);
+      if (plan.cq_errors <= 4U) {
+        DAQIRI_LOG_ERROR("Hardware reorder CQE error opcode={} syndrome=0x{:02x} vendor=0x{:02x}",
+                         opcode, error->syndrome, error->vendor_err_synd);
+      }
+      if (opcode == MLX5_CQE_RESP_ERR) {
+        // With CQE-v1, the srqn word carries the RQC user_index rather than the
+        // RQN. Return the errored WQE credit even though it cannot complete the
+        // logical batch.
+        const uint32_t user_index = be32toh(error->srqn) & 0x00ffffffU;
+        if (user_index != 0 && user_index <= plan.destination_count) {
+          const uint32_t destination = user_index - 1U;
+          consume_credit(destination, be16toh(error->wqe_counter));
+          retry_credit(destination);
+        } else {
+          plan.tag_errors++;
+          force_quit_.store(true, std::memory_order_relaxed);
+        }
+      } else {
+        // A request error is not expected on an RX-only direct RQ and does not
+        // carry a usable destination user_index.
+        force_quit_.store(true, std::memory_order_relaxed);
+      }
+      continue;
+    }
+    if (opcode != MLX5_CQE_RESP_SEND) {
+      plan.cq_errors++;
+      continue;
+    }
+
+    const uint32_t user_index = be32toh(cqe->srqn_uidx) & 0x00ffffffU;
+    const uint32_t tag = be32toh(cqe->sop_drop_qpn) & 0x00ffffffU;
+    if (user_index == 0 || user_index > plan.destination_count) {
+      plan.tag_errors++;
+      continue;
+    }
+    const uint32_t destination = user_index - 1U;
+    consume_credit(destination, be16toh(cqe->wqe_counter));
+    if (tag != user_index) {
+      plan.tag_errors++;
+      retry_credit(destination);
+      continue;
+    }
+    const uint32_t frame_length = be32toh(cqe->byte_cnt) & 0x00ffffffU;
+    if (frame_length != plan.header_bytes + plan.packet_size) {
+      plan.malformed_packets++;
+      retry_credit(destination);
+      continue;
+    }
+
+    const uint32_t batch_id = destination / plan.packets_per_batch;
+    const uint32_t sequence = destination % plan.packets_per_batch;
+    auto& batch = *plan.batches[batch_id];
+    if (batch.state.load(std::memory_order_acquire) != IbvDirectBatchState::RECEIVING) {
+      plan.ownership_violations++;
+      force_quit_.store(true, std::memory_order_relaxed);
+      continue;
+    }
+    uint64_t& word = batch.seen[sequence / 64U];
+    const uint64_t bit = 1ULL << (sequence % 64U);
+    if (word & bit) {
+      plan.duplicate_packets++;
+      force_quit_.store(true, std::memory_order_relaxed);
+      continue;
+    }
+    word |= bit;
+    plan.placements++;
+    if (--batch.remaining == 0) {
+      batch.state.store(IbvDirectBatchState::READY_PENDING, std::memory_order_release);
+      plan.pending_ready.push_back(batch_id);
+    }
+  }
+
+  if (q->cq_ci != start_ci) {
+    *q->dv_cq.dbrec = htobe32(q->cq_ci & 0x00ffffffU);
+  }
+  direct_publish_ready(*q, plan);
+}
+
 void IbverbsEngine::rx_worker(std::vector<IbvRxQueue*> group) {
   if (group.empty()) {
     return;
@@ -3234,15 +4436,21 @@ void IbverbsEngine::rx_worker(std::vector<IbvRxQueue*> group) {
   while (leader->running.load(std::memory_order_relaxed) &&
          !force_quit_.load(std::memory_order_relaxed)) {
     for (auto* q : group) {
-      (void)rx_poll_queue(q);
+      if (q->direct_reorder) {
+        direct_poll_queue(q);
+      } else {
+        rx_poll_queue(q);
+      }
     }
   }
 
   for (auto* q : group) {
-    rx_flush_burst(q);
-    if (q->cur_burst) {
-      rx_meta_pool_->put(q->cur_burst);
-      q->cur_burst = nullptr;
+    if (!q->direct_reorder) {
+      rx_flush_burst(q);
+      if (q->cur_burst) {
+        rx_meta_pool_->put(q->cur_burst);
+        q->cur_burst = nullptr;
+      }
     }
     DAQIRI_LOG_INFO(
         "RX worker stopped for port {} queue {}: cqe_seen={} data={} filler={} err={} cq_ci={} "
@@ -3290,7 +4498,7 @@ Status IbverbsEngine::init_reorder(IbvRxQueue& q, const InterfaceConfig& intf,
 
   auto st = std::make_unique<IbvReorderState>();
   for (const auto& rc : intf.rx_.reorder_configs_) {
-    if (rc.reorder_type_ != "gpu") {
+    if (rc.reorder_engine_ != "sw" || rc.reorder_type_ != "gpu") {
       continue;
     }
     // Does this reorder config map to this queue?
@@ -3412,7 +4620,6 @@ Status IbverbsEngine::init_reorder(IbvRxQueue& q, const InterfaceConfig& intf,
   if (st->plans.empty()) {
     return Status::SUCCESS;
   }
-  st->single_plan = (st->plans.size() == 1);
   st->enabled = true;
   q.reorder = std::move(st);
   return Status::SUCCESS;
@@ -3544,16 +4751,13 @@ void IbverbsEngine::reorder_process_raw(IbvRxQueue& q, BurstParams* raw) {
   uint16_t* strd_arr = burst_strd_arr(raw);
   const int num = static_cast<int>(raw->hdr.hdr.num_pkts);
   for (int i = 0; i < num; i++) {
-    // Route to a plan. Single plan: index 0; else by this queue's flow id.
-    size_t plan_idx = 0;
-    if (!st.single_plan) {
-      auto it = st.flow_to_plan.find(q.flow_id);
-      if (it == st.flow_to_plan.end()) {
-        release_strides(q, wqe_arr[i], strd_arr[i]);  // unmatched -> drop
-        continue;
-      }
-      plan_idx = it->second;
+    const FlowId flow_id = get_packet_flow_id(raw, i);
+    auto it = st.flow_to_plan.find(flow_id);
+    if (it == st.flow_to_plan.end()) {
+      release_strides(q, wqe_arr[i], strd_arr[i]);  // unmatched -> drop
+      continue;
     }
+    const size_t plan_idx = it->second;
     auto& plan = st.plans[plan_idx];
     if (plan.acc_ptrs.empty()) {
       const uint32_t len = raw->pkt_lens[0][i];
@@ -3641,6 +4845,10 @@ Status IbverbsEngine::set_reorder_cuda_stream(const std::string& interface_name,
                                               cudaStream_t stream) {
   const int port = get_port_id(interface_name);
   for (auto& q : rx_queues_) {
+    if (q->port_id == port && q->direct_reorder && q->direct_reorder->cfg.name_ == reorder_name) {
+      DAQIRI_LOG_INFO("Hardware reorder '{}' does not require a CUDA stream", reorder_name);
+      return Status::SUCCESS;
+    }
     if (q->port_id != port || !q->reorder) {
       continue;
     }
@@ -3673,6 +4881,14 @@ Status IbverbsEngine::get_reorder_burst_info(BurstParams* burst, ReorderBurstInf
   if (!(burst->hdr.hdr.burst_flags & DAQIRI_BURST_FLAG_REORDERED) ||
       burst->custom_pkt_data == nullptr) {
     return Status::INVALID_PARAMETER;
+  }
+  if (burst->hdr.hdr.burst_flags & DAQIRI_BURST_FLAG_DIRECT_PLACED) {
+    auto batch = std::static_pointer_cast<IbvDirectBatchSlot>(burst->custom_pkt_data);
+    if (!batch || batch->plan == nullptr) {
+      return Status::INVALID_PARAMETER;
+    }
+    *info = batch->info;
+    return Status::SUCCESS;
   }
   auto ctx = std::static_pointer_cast<IbvReorderBurstCtx>(burst->custom_pkt_data);
   if (!ctx) {
@@ -3725,8 +4941,56 @@ Status IbverbsEngine::get_rx_burst(BurstParams** burst, int port, int q) {
   if (!rq->ring->dequeue(&b)) {
     return Status::NOT_READY;
   }
-  *burst = static_cast<BurstParams*>(b);
+  auto* result = static_cast<BurstParams*>(b);
+  if (rq->direct_reorder) {
+    auto batch = std::static_pointer_cast<IbvDirectBatchSlot>(result->custom_pkt_data);
+    if (!batch) {
+      return Status::INTERNAL_ERROR;
+    }
+    IbvDirectBatchState expected = IbvDirectBatchState::READY;
+    if (!batch->state.compare_exchange_strong(expected, IbvDirectBatchState::OWNED,
+                                              std::memory_order_acq_rel,
+                                              std::memory_order_relaxed)) {
+      DAQIRI_LOG_ERROR("Hardware reorder batch {} dequeued in invalid state {}", batch->batch_id,
+                       static_cast<unsigned>(expected));
+      return Status::INTERNAL_ERROR;
+    }
+  }
+  *burst = result;
   return Status::SUCCESS;
+}
+
+void IbverbsEngine::direct_release_output(BurstParams* burst) {
+  if (burst == nullptr || burst->custom_pkt_data == nullptr) {
+    return;
+  }
+  auto batch = std::static_pointer_cast<IbvDirectBatchSlot>(burst->custom_pkt_data);
+  if (!batch || batch->plan == nullptr) {
+    return;
+  }
+  IbvDirectBatchState expected = IbvDirectBatchState::OWNED;
+  if (!batch->state.compare_exchange_strong(expected, IbvDirectBatchState::REARMING,
+                                            std::memory_order_acq_rel, std::memory_order_relaxed)) {
+    DAQIRI_LOG_ERROR("Hardware reorder batch {} released in invalid state {}", batch->batch_id,
+                     static_cast<unsigned>(expected));
+    return;
+  }
+  std::fill(batch->seen.begin(), batch->seen.end(), 0);
+  batch->remaining = batch->plan->packets_per_batch;
+  batch->state.store(IbvDirectBatchState::RECEIVING, std::memory_order_release);
+
+  // No destination in this batch has an outstanding WQE while the burst is
+  // READY or OWNED. Publish one new credit per fixed slot only after the
+  // caller has relinquished the entire aggregate buffer.
+  const uint32_t first = batch->batch_id * batch->plan->packets_per_batch;
+  const uint32_t end = first + batch->plan->packets_per_batch;
+  doorbell_store_barrier();
+  for (uint32_t destination = first; destination < end; ++destination) {
+    auto& rq = *batch->plan->destinations[destination];
+    rq.producer++;
+    rq.dbr[0] = htobe32(rq.producer & 0xffffU);
+  }
+  batch->plan->reposts.fetch_add(batch->plan->packets_per_batch, std::memory_order_relaxed);
 }
 
 // Releasing packet data (free_*_packets) reclaims strides and reposts WQEs;
@@ -3737,6 +5001,9 @@ Status IbverbsEngine::get_rx_burst(BurstParams** burst, int port, int q) {
 // and the block returned exactly once.
 void IbverbsEngine::free_packet(BurstParams* burst, int pkt) {
   if (burst == nullptr) {
+    return;
+  }
+  if (burst->hdr.hdr.burst_flags & DAQIRI_BURST_FLAG_REORDERED) {
     return;
   }
   IbvRxQueue* q = find_rx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
@@ -3823,6 +5090,10 @@ void IbverbsEngine::free_rx_burst(BurstParams* burst) {
   if (burst == nullptr) {
     return;
   }
+  if (burst->hdr.hdr.burst_flags & DAQIRI_BURST_FLAG_DIRECT_PLACED) {
+    direct_release_output(burst);
+    return;
+  }
   if (burst->hdr.hdr.burst_flags & DAQIRI_BURST_FLAG_REORDERED) {
     // Heap-allocated reordered burst: release its output buffer and delete it.
     reorder_release_output(burst);
@@ -3833,6 +5104,10 @@ void IbverbsEngine::free_rx_burst(BurstParams* burst) {
 
 void IbverbsEngine::free_rx_metadata(BurstParams* burst) {
   if (burst == nullptr) {
+    return;
+  }
+  if (burst->hdr.hdr.burst_flags & DAQIRI_BURST_FLAG_DIRECT_PLACED) {
+    direct_release_output(burst);
     return;
   }
   if (burst->hdr.hdr.burst_flags & DAQIRI_BURST_FLAG_REORDERED) {
@@ -3865,6 +5140,10 @@ FlowId IbverbsEngine::get_packet_flow_id(BurstParams* burst, int idx) {
   // Per-packet MARK tag captured from the CQE (set by the flow's tag action).
   // Distinguishes flows that share a queue. Falls back to the per-queue flow_id
   // for untagged packets (tag 0), e.g. catch-all traffic or single-flow configs.
+  if (burst->hdr.hdr.burst_flags & DAQIRI_BURST_FLAG_REORDERED) {
+    IbvRxQueue* q = find_rx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
+    return q ? q->flow_id : 0;
+  }
   const uint32_t tag = burst_flowtag_arr(burst)[idx];
   if (tag != 0) {
     return tag;
@@ -4294,28 +5573,387 @@ bool IbverbsEngine::validate_config() const {
   if (!Engine::validate_config()) {
     return false;
   }
-  if (cfg_.common_.loopback_ != LoopbackType::LOOPBACK_TYPE_HW) {
-    return true;
-  }
+  std::unordered_set<FlowId> reordered_flows;
+  std::unordered_set<std::string> hardware_outputs;
+  for (const auto& intf : cfg_.ifs_) {
+    std::unordered_map<uint16_t, const RxQueueConfig*> queues;
+    for (const auto& queue : intf.rx_.queues_) {
+      if (!queues.emplace(queue.common_.id_, &queue).second) {
+        DAQIRI_LOG_ERROR("Duplicate RX queue id {} on interface '{}'", queue.common_.id_,
+                         intf.name_);
+        return false;
+      }
+    }
+    std::unordered_map<FlowId, const FlowConfig*> flows;
+    std::unordered_map<FlowId, uint16_t> flow_queues;
+    for (const auto& flow : intf.rx_.flows_) {
+      if (flow.id_ == 0 || !flows.emplace(flow.id_, &flow).second) {
+        DAQIRI_LOG_ERROR("RX flow '{}' on interface '{}' has zero or duplicate id {}", flow.name_,
+                         intf.name_, flow.id_);
+        return false;
+      }
+      FlowAction queue_action = flow.action_;
+      if (!flow.actions_.empty()) {
+        auto action = std::find_if(
+            flow.actions_.begin(), flow.actions_.end(),
+            [](const FlowAction& candidate) { return candidate.type_ == FlowType::QUEUE; });
+        if (action != flow.actions_.end()) {
+          queue_action = *action;
+        }
+      }
+      if (queue_action.type_ != FlowType::QUEUE || queues.find(queue_action.id_) == queues.end()) {
+        DAQIRI_LOG_ERROR("RX flow '{}' targets unknown queue {} on interface '{}'", flow.name_,
+                         queue_action.id_, intf.name_);
+        return false;
+      }
+      flow_queues.emplace(flow.id_, queue_action.id_);
+    }
 
-  if (cfg_.ifs_.size() != 1) {
-    DAQIRI_LOG_ERROR("Ibverbs hardware loopback requires exactly one interface; configured {}",
-                     cfg_.ifs_.size());
-    return false;
+    std::unordered_map<uint16_t, std::string> queue_reorder_engine;
+    size_t hardware_plans = 0;
+    std::unordered_set<FlowId> hardware_gate_flows;
+    std::unordered_set<std::string> reorder_names;
+    for (const auto& reorder : intf.rx_.reorder_configs_) {
+      if (reorder.name_.empty() || !reorder_names.insert(reorder.name_).second) {
+        DAQIRI_LOG_ERROR("Reorder config name '{}' is empty or duplicated on interface '{}'",
+                         reorder.name_, intf.name_);
+        return false;
+      }
+      if (reorder.reorder_engine_ != "hw" && reorder.reorder_engine_ != "sw") {
+        DAQIRI_LOG_ERROR("Reorder '{}' has unsupported reorder_engine '{}'", reorder.name_,
+                         reorder.reorder_engine_);
+        return false;
+      }
+      if (reorder.reorder_type_ != "gpu" && reorder.reorder_type_ != "cpu") {
+        DAQIRI_LOG_ERROR("Reorder '{}' has unsupported reorder_type '{}'", reorder.name_,
+                         reorder.reorder_type_);
+        return false;
+      }
+      if (!intf.rx_.flow_isolation_) {
+        DAQIRI_LOG_ERROR("Reorder '{}' requires rx.flow_isolation: true", reorder.name_);
+        return false;
+      }
+      if (reorder.reorder_engine_ == "hw" && reorder.flow_ids_.size() != 1U) {
+        DAQIRI_LOG_ERROR("Hardware reorder '{}' requires exactly one flow_id for its virtual queue",
+                         reorder.name_);
+        return false;
+      }
+      int queue_id = -1;
+      for (FlowId flow_id : reorder.flow_ids_) {
+        auto flow = flows.find(flow_id);
+        if (flow == flows.end()) {
+          DAQIRI_LOG_ERROR("Reorder '{}' references unknown flow id {} on interface '{}'",
+                           reorder.name_, flow_id, intf.name_);
+          return false;
+        }
+        if (!reordered_flows.insert(flow_id).second) {
+          DAQIRI_LOG_ERROR("Flow id {} appears in more than one reorder config", flow_id);
+          return false;
+        }
+        const int target = flow_queues.at(flow_id);
+        if (queue_id < 0) {
+          queue_id = target;
+        } else if (queue_id != target) {
+          DAQIRI_LOG_ERROR("Reorder '{}' maps flows to multiple RX queues", reorder.name_);
+          return false;
+        }
+        const FlowMatch& match = flow->second->match_;
+        const bool has_standard_match =
+            match.type_ == FlowMatchType::IPV4_UDP &&
+            (match.udp_src_ != 0 || match.udp_dst_ != 0 || match.ipv4_src_ != INADDR_ANY ||
+             match.ipv4_dst_ != INADDR_ANY || match.ipv4_len_ != 0);
+        if (!has_standard_match) {
+          DAQIRI_LOG_ERROR("Reorder '{}' flow '{}' must use a non-empty native IPv4/UDP match",
+                           reorder.name_, flow->second->name_);
+          return false;
+        }
+        if (reorder.reorder_engine_ == "hw") {
+          const bool has_native_match = match.udp_src_ != 0 || match.udp_dst_ != 0 ||
+                                        match.ipv4_src_ != INADDR_ANY ||
+                                        match.ipv4_dst_ != INADDR_ANY;
+          if (match.ipv4_len_ != 0 || !has_native_match) {
+            DAQIRI_LOG_ERROR(
+                "Hardware reorder '{}' requires one non-empty native IPv4/UDP flow using only "
+                "ipv4_src, ipv4_dst, udp_src, and/or udp_dst (ipv4_len is not supported)",
+                reorder.name_);
+            return false;
+          }
+          if (match.udp_dst_ == 0) {
+            DAQIRI_LOG_ERROR("Hardware reorder '{}' requires its flow to match udp_dst",
+                             reorder.name_);
+            return false;
+          }
+          if (match.udp_src_ != 0 || match.ipv4_src_ != INADDR_ANY ||
+              match.ipv4_dst_ != INADDR_ANY || match.ipv4_len_ != 0) {
+            DAQIRI_LOG_ERROR(
+                "Hardware reorder '{}' currently supports only udp_dst in its outer flow match",
+                reorder.name_);
+            return false;
+          }
+          if (flow_has_transform_actions(*flow->second) || flow->second->actions_.size() != 1U ||
+              flow->second->actions_.back().type_ != FlowType::QUEUE) {
+            DAQIRI_LOG_ERROR(
+                "Hardware reorder '{}' gate flow '{}' must contain only its final queue action",
+                reorder.name_, flow->second->name_);
+            return false;
+          }
+          hardware_gate_flows.insert(flow_id);
+        }
+      }
+      if (queue_id < 0) {
+        DAQIRI_LOG_ERROR("Reorder '{}' has no resolvable flow", reorder.name_);
+        return false;
+      }
+      auto queue = queues.find(static_cast<uint16_t>(queue_id));
+      if (queue == queues.end()) {
+        return false;
+      }
+      auto prior =
+          queue_reorder_engine.emplace(static_cast<uint16_t>(queue_id), reorder.reorder_engine_);
+      if (!prior.second) {
+        DAQIRI_LOG_ERROR("RX queue {} on interface '{}' has multiple reorder plans", queue_id,
+                         intf.name_);
+        return false;
+      }
+      if (queue->second->common_.mrs_.size() != 1U) {
+        DAQIRI_LOG_ERROR("Reorder '{}' requires exactly one queue source MR", reorder.name_);
+        return false;
+      }
+      const std::string& source_name = queue->second->common_.mrs_[0];
+      auto source = cfg_.mrs_.find(source_name);
+      auto output = cfg_.mrs_.find(reorder.memory_region_);
+      if (source == cfg_.mrs_.end() || output == cfg_.mrs_.end()) {
+        DAQIRI_LOG_ERROR("Reorder '{}' references an unknown source or output MR", reorder.name_);
+        return false;
+      }
+
+      if (reorder.reorder_engine_ == "sw") {
+        if (reorder.reorder_type_ != "gpu") {
+          DAQIRI_LOG_ERROR(
+              "ibverbs software reorder '{}' supports reorder_type: gpu; use DPDK for CPU "
+              "software reorder",
+              reorder.name_);
+          return false;
+        }
+        if (source->second.kind_ != MemoryKind::DEVICE &&
+            source->second.kind_ != MemoryKind::HOST_PINNED) {
+          DAQIRI_LOG_ERROR(
+              "ibverbs software GPU reorder '{}' requires a DEVICE or HOST_PINNED source MR",
+              reorder.name_);
+          return false;
+        }
+        if (output->second.kind_ != MemoryKind::DEVICE &&
+            output->second.kind_ != MemoryKind::HOST_PINNED) {
+          DAQIRI_LOG_ERROR(
+              "ibverbs software GPU reorder '{}' requires a DEVICE or HOST_PINNED output MR",
+              reorder.name_);
+          return false;
+        }
+        if (source->second.kind_ == MemoryKind::DEVICE &&
+            output->second.kind_ == MemoryKind::DEVICE &&
+            source->second.affinity_ != output->second.affinity_) {
+          DAQIRI_LOG_ERROR(
+              "ibverbs software GPU reorder '{}' source/output DEVICE MRs must use the same GPU "
+              "affinity",
+              reorder.name_);
+          return false;
+        }
+        if (reorder.payload_byte_offset_ >= source->second.buf_size_) {
+          DAQIRI_LOG_ERROR(
+              "Software reorder '{}' payload_byte_offset {} exceeds source buf_size {}",
+              reorder.name_, reorder.payload_byte_offset_, source->second.buf_size_);
+          return false;
+        }
+        const uint64_t input_bytes = source->second.buf_size_ - reorder.payload_byte_offset_;
+        if (input_bytes > std::numeric_limits<uint32_t>::max()) {
+          DAQIRI_LOG_ERROR("Software reorder '{}' source slot exceeds 32-bit kernel geometry",
+                           reorder.name_);
+          return false;
+        }
+        const uint32_t output_bytes =
+            rdr_output_payload_len(reorder, static_cast<uint32_t>(input_bytes));
+        const uint64_t required =
+            static_cast<uint64_t>(output_bytes) * rdr_packets_per_batch(reorder);
+        if (output_bytes == 0 || required > output->second.buf_size_) {
+          DAQIRI_LOG_ERROR(
+              "Software reorder '{}' output MR '{}' is too small or conversion geometry is "
+              "invalid (required {}, buf_size {})",
+              reorder.name_, reorder.memory_region_, required, output->second.buf_size_);
+          return false;
+        }
+        continue;
+      }
+
+      hardware_plans++;
+      if (!reorder.cyclic_sequence_) {
+        DAQIRI_LOG_ERROR(
+            "Hardware reorder '{}' requires cyclic_sequence: true; wide monotonic sequence "
+            "values are not supported by exact programmable-sample matching",
+            reorder.name_);
+        return false;
+      }
+      if (!intf.rx_.flow_isolation_) {
+        DAQIRI_LOG_ERROR("Hardware reorder '{}' requires rx.flow_isolation: true", reorder.name_);
+        return false;
+      }
+      if (intf.rx_.dynamic_flow_capacity_ != 0 || !intf.rx_.flex_items_.empty()) {
+        DAQIRI_LOG_ERROR(
+            "Hardware reorder '{}' does not support dynamic RX flows or user flex_items on the "
+            "same interface",
+            reorder.name_);
+        return false;
+      }
+      if (queue->second->timeout_us_ != 0) {
+        DAQIRI_LOG_ERROR("Hardware reorder '{}' requires queue timeout_us: 0", reorder.name_);
+        return false;
+      }
+      if (reorder.packet_size_ == 0) {
+        DAQIRI_LOG_ERROR("Hardware reorder '{}' requires packet_size > 0", reorder.name_);
+        return false;
+      }
+      const uint64_t frame_bytes =
+          static_cast<uint64_t>(reorder.payload_byte_offset_) + reorder.packet_size_;
+      if (frame_bytes > source->second.buf_size_ || frame_bytes > 0x00ffffffU) {
+        DAQIRI_LOG_ERROR(
+            "Hardware reorder '{}' frame geometry {}+{} exceeds source MR '{}' buf_size {} or "
+            "the 24-bit CQE length",
+            reorder.name_, reorder.payload_byte_offset_, reorder.packet_size_, source_name,
+            source->second.buf_size_);
+        return false;
+      }
+      const uint32_t field_end = std::max<uint32_t>(
+          static_cast<uint32_t>(rdr_seq_off(reorder)) + rdr_seq_width(reorder),
+          reorder.method_ == ReorderMethod::SEQ_BATCH_NUMBER
+              ? static_cast<uint32_t>(rdr_batch_off(reorder)) + rdr_batch_width(reorder)
+              : 0U);
+      if (field_end > frame_bytes * 8ULL) {
+        DAQIRI_LOG_ERROR("Hardware reorder '{}' batch/sequence field exceeds the fixed frame",
+                         reorder.name_);
+        return false;
+      }
+      if (direct_fields_overlap(reorder)) {
+        DAQIRI_LOG_ERROR(
+            "Hardware reorder '{}' has overlapping batch/sequence fields, unsupported in v1",
+            reorder.name_);
+        return false;
+      }
+      if (reorder.data_types_.enabled_) {
+        DAQIRI_LOG_ERROR(
+            "Hardware reorder '{}' cannot perform data-type conversion; use reorder_engine: sw",
+            reorder.name_);
+        return false;
+      }
+      const bool gpu_output = reorder.reorder_type_ == "gpu";
+      const bool cpu_output = reorder.reorder_type_ == "cpu";
+      if ((!gpu_output && !cpu_output) ||
+          (gpu_output && output->second.kind_ != MemoryKind::DEVICE &&
+           output->second.kind_ != MemoryKind::HOST_PINNED) ||
+          (cpu_output && output->second.kind_ != MemoryKind::HOST &&
+           output->second.kind_ != MemoryKind::HOST_PINNED &&
+           output->second.kind_ != MemoryKind::HUGE)) {
+        DAQIRI_LOG_ERROR("Hardware reorder '{}' output MR kind does not match reorder_type '{}'",
+                         reorder.name_, reorder.reorder_type_);
+        return false;
+      }
+      if (!hardware_outputs.insert(reorder.memory_region_).second) {
+        DAQIRI_LOG_ERROR("Hardware output MR '{}' is shared by multiple reorder plans",
+                         reorder.memory_region_);
+        return false;
+      }
+      if ((output->second.buf_size_ % reorder.packet_size_) != 0) {
+        DAQIRI_LOG_ERROR(
+            "Hardware reorder '{}' output buf_size {} must be divisible by packet_size {}",
+            reorder.name_, output->second.buf_size_, reorder.packet_size_);
+        return false;
+      }
+      const uint64_t packets_per_batch = rdr_packets_per_batch(reorder);
+      const uint64_t slots_per_buffer = output->second.buf_size_ / reorder.packet_size_;
+      const uint64_t batch_count = output->second.num_bufs_;
+      if (output->second.buf_size_ > std::numeric_limits<uint32_t>::max()) {
+        DAQIRI_LOG_ERROR(
+            "Hardware reorder '{}' aggregate buffer {} exceeds 32-bit BurstParams length",
+            reorder.name_, output->second.buf_size_);
+        return false;
+      }
+      if (slots_per_buffer != packets_per_batch) {
+        DAQIRI_LOG_ERROR(
+            "Hardware reorder '{}' output buf_size must be packet_size*packets_per_batch "
+            "(got slots/buffer={}, expected {})",
+            reorder.name_, slots_per_buffer, packets_per_batch);
+        return false;
+      }
+      if (!direct_is_power_of_two(slots_per_buffer) || !direct_is_power_of_two(batch_count)) {
+        DAQIRI_LOG_ERROR(
+            "Hardware reorder '{}' requires power-of-two packets_per_batch and output num_bufs",
+            reorder.name_);
+        return false;
+      }
+      if (slots_per_buffer > std::numeric_limits<uint64_t>::max() / batch_count) {
+        DAQIRI_LOG_ERROR("Hardware reorder '{}' destination count overflows", reorder.name_);
+        return false;
+      }
+      const uint64_t destinations = slots_per_buffer * batch_count;
+      if (destinations > kMaxIbverbsFlowTag ||
+          destinations > std::numeric_limits<uint32_t>::max()) {
+        DAQIRI_LOG_ERROR(
+            "Hardware reorder '{}' destination count {} exceeds the 24-bit hardware tag space",
+            reorder.name_, destinations);
+        return false;
+      }
+      DirectMatchFields match_fields;
+      std::vector<IbvDirectFlexSample> samples;
+      std::string sample_error;
+      if (!direct_compute_match_fields(reorder, slots_per_buffer, batch_count, &match_fields,
+                                       &sample_error) ||
+          !direct_collect_flex_samples(match_fields, &samples, &sample_error)) {
+        DAQIRI_LOG_ERROR("Hardware reorder '{}': {}", reorder.name_, sample_error);
+        return false;
+      }
+      if (destinations > 16384U) {
+        DAQIRI_LOG_WARN(
+            "Hardware reorder '{}' creates {} private destinations; values above ~16K can have "
+            "high setup time and device-resource cost",
+            reorder.name_, destinations);
+      }
+      if (reorder.packet_size_ < 4000U) {
+        DAQIRI_LOG_WARN(
+            "Hardware reorder '{}' packet_size {} is below 4000 bytes; the direct-placement path "
+            "performs much better with larger packets",
+            reorder.name_, reorder.packet_size_);
+      }
+    }
+
+    if (hardware_plans != 0) {
+      if (hardware_plans != 1U || intf.rx_.queues_.size() != 1U || intf.rx_.flows_.size() != 1U ||
+          hardware_gate_flows.size() != 1U) {
+        DAQIRI_LOG_ERROR(
+            "Hardware reorder v1 requires exactly one RX flow, one virtual RX queue, and one "
+            "reorder plan per interface");
+        return false;
+      }
+    }
   }
-  const auto& intf = cfg_.ifs_.front();
-  if (intf.address_.empty() || intf.address_ == "loopback") {
-    DAQIRI_LOG_ERROR(
-        "Ibverbs hardware loopback interface '{}' must name a physical ibverbs device, netdev, "
-        "or PCI BDF",
-        intf.name_);
-    return false;
-  }
-  if (intf.tx_.queues_.empty() || intf.rx_.queues_.empty()) {
-    DAQIRI_LOG_ERROR(
-        "Ibverbs hardware loopback interface '{}' requires at least one TX queue and one RX queue",
-        intf.name_);
-    return false;
+  if (cfg_.common_.loopback_ == LoopbackType::LOOPBACK_TYPE_HW) {
+    if (cfg_.ifs_.size() != 1) {
+      DAQIRI_LOG_ERROR("Ibverbs hardware loopback requires exactly one interface; configured {}",
+                       cfg_.ifs_.size());
+      return false;
+    }
+    const auto& intf = cfg_.ifs_.front();
+    if (intf.address_.empty() || intf.address_ == "loopback") {
+      DAQIRI_LOG_ERROR(
+          "Ibverbs hardware loopback interface '{}' must name a physical ibverbs device, netdev, "
+          "or PCI BDF",
+          intf.name_);
+      return false;
+    }
+    if (intf.tx_.queues_.empty() || intf.rx_.queues_.empty()) {
+      DAQIRI_LOG_ERROR(
+          "Ibverbs hardware loopback interface '{}' requires at least one TX queue and one RX "
+          "queue",
+          intf.name_);
+      return false;
+    }
   }
   return true;
 }
@@ -4349,6 +5987,18 @@ Status IbverbsEngine::wait_for_tx_idle(uint32_t timeout_ms) {
 
 void IbverbsEngine::print_stats() {
   for (auto& q : rx_queues_) {
+    if (q->direct_reorder) {
+      const auto& plan = *q->direct_reorder;
+      DAQIRI_LOG_INFO(
+          "ibverbs HW reorder port {} q{}: packets={} placements={} completed_batches={} "
+          "duplicates={} malformed={} ownership_violations={} cq_errors={} tag_errors={} "
+          "wqe_errors={} reposts={} ring_full_retries={} destinations={}",
+          q->port_id, q->queue_id, plan.packets, plan.placements, plan.completed_batches,
+          plan.duplicate_packets, plan.malformed_packets, plan.ownership_violations, plan.cq_errors,
+          plan.tag_errors, plan.wqe_errors, plan.reposts.load(std::memory_order_relaxed),
+          plan.ring_full_retries, plan.destination_count);
+      continue;
+    }
     DAQIRI_LOG_INFO(
         "ibverbs RX port {} q{} ({}): packets={} fillers={} cqe_errors={} reposts={} "
         "app_ring_full_drops={} bursts ({} pkts) direct_poll_conflicts={}",
@@ -4398,7 +6048,12 @@ void IbverbsEngine::shutdown() {
   // Tear down per-port flow steering first: rules reference the queues' TIRs/
   // actions, so they must go before devx_destroy frees those.
   for (auto& [port, st] : port_steering_) {
-    for (auto* r : st.rules) {
+    (void)port;
+    // Root outer-classifier rules are appended last; destroy in reverse so
+    // traffic can no longer enter a hardware-reorder child table before its
+    // rules go away.
+    for (auto rule = st.rules.rbegin(); rule != st.rules.rend(); ++rule) {
+      auto* r = *rule;
       if (r) {
         mlx5dv_dr_rule_destroy(r);
       }
@@ -4418,9 +6073,24 @@ void IbverbsEngine::shutdown() {
         mlx5dv_dr_action_destroy(a);
       }
     }
+    for (auto* a : st.table_actions) {
+      if (a) {
+        mlx5dv_dr_action_destroy(a);
+      }
+    }
+    for (auto* a : st.drop_actions) {
+      if (a) {
+        mlx5dv_dr_action_destroy(a);
+      }
+    }
     for (auto* m : st.matchers) {
       if (m) {
         mlx5dv_dr_matcher_destroy(m);
+      }
+    }
+    for (auto table = st.child_tables.rbegin(); table != st.child_tables.rend(); ++table) {
+      if (*table) {
+        mlx5dv_dr_table_destroy(*table);
       }
     }
     if (st.table) {
@@ -4481,6 +6151,7 @@ void IbverbsEngine::shutdown() {
       q->cur_n = 0;
     }
     reorder_cleanup(*q);
+    direct_cleanup(*q);
     devx_destroy(*q);
     if (q->qp) {
       ibv_destroy_qp(q->qp);
@@ -4547,6 +6218,7 @@ void IbverbsEngine::shutdown() {
     }
   }
   pd_map_.clear();
+  flex_parser_caps_.clear();
   clock_cache_.clear();
   for (auto& c : ctx_map_) {
     if (c.second && ibv_close_device(c.second) != 0) {
@@ -5589,12 +7261,13 @@ Status IbverbsEngine::drop_all_traffic(int port) {
     return Status::SUCCESS;
   }
   PortSteering& st = it->second;
-  for (auto* r : st.rules) {
-    if (r) {
-      mlx5dv_dr_rule_destroy(r);
+  const size_t keep = std::min(st.persistent_rule_count, st.rules.size());
+  for (size_t i = st.rules.size(); i > keep; --i) {
+    if (st.rules[i - 1]) {
+      mlx5dv_dr_rule_destroy(st.rules[i - 1]);
     }
   }
-  st.rules.clear();
+  st.rules.resize(keep);
   st.dropped = true;
   return Status::SUCCESS;
 }
@@ -5608,7 +7281,17 @@ Status IbverbsEngine::allow_all_traffic(int port) {
   if (!st.dropped) {
     return Status::SUCCESS;
   }
-  for (auto& spec : st.rule_specs) {
+  const size_t first_spec = std::min(st.persistent_rule_spec_count, st.rule_specs.size());
+  for (size_t spec_index = first_spec; spec_index < st.rule_specs.size(); ++spec_index) {
+    auto& spec = st.rule_specs[spec_index];
+    if (std::find(st.table_actions.begin(), st.table_actions.end(), spec.action) !=
+        st.table_actions.end()) {
+      if (mlx5dv_dr_domain_sync(
+              st.domain, MLX5DV_DR_DOMAIN_SYNC_FLAGS_SW | MLX5DV_DR_DOMAIN_SYNC_FLAGS_HW) != 0) {
+        DAQIRI_LOG_ERROR("allow_all_traffic: child-table sync failed on port {}", port);
+        return Status::GENERIC_FAILURE;
+      }
+    }
     DrMatchParam val{};
     val.match_sz = spec.value_sz;
     memcpy(val.buf, spec.value, spec.value_sz);
