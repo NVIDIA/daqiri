@@ -14,8 +14,8 @@
 #
 # Start the server first, then run the client. UDP has no flow control, so pace
 # it: --target-gbps drives a token-bucket pacer, and the published rows are the
-# highest rate that held zero loss over three reps (23 Gb/s at 8000 B).
-#   sudo ./daqiri_bench_socket <this.yaml> --mode client --seconds 30 --target-gbps 23
+# highest rate that held zero loss over three reps (25 Gb/s at 8000 B).
+#   sudo ./daqiri_bench_socket <this.yaml> --mode client --seconds 30 --target-gbps 25
 # Omit --target-gbps to measure the unpaced rate, where the receiver's drain
 # rate decides what arrives. Walk the target up until the server's recv_bytes
 # stops tracking the client's sent_bytes to find the loss-free rate for a
@@ -25,8 +25,9 @@
 # set message_size to 1000 or 65507 here AND in the server config; the buffers
 # are already sized for the largest of them.
 #
-# `socket_bench_client.cpu_core` pins the benchmark worker. The socket engine
-# does not currently apply queue `cpu_core` to its I/O threads.
+# `socket_bench_client.cpu_core` pins the benchmark worker. For UDP,
+# `rx.queues[].cpu_core` pins the separate socket receive-I/O thread. Keep an
+# RX I/O/worker pair in one performance cluster when measuring receive rate.
 #
 %YAML 1.2
 ---

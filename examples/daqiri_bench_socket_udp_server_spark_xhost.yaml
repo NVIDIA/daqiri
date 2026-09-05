@@ -20,8 +20,9 @@
 # set message_size to 1000 or 65507 here AND in the client config; the buffers
 # are already sized for the largest of them.
 #
-# `socket_bench_server.cpu_core` pins the benchmark worker. The socket engine
-# does not currently apply queue `cpu_core` to its I/O threads.
+# `socket_bench_server.cpu_core` pins the benchmark worker. For UDP,
+# `rx.queues[].cpu_core` pins the separate socket receive-I/O thread. Keep an
+# RX I/O/worker pair in one performance cluster when measuring receive rate.
 #
 %YAML 1.2
 ---
@@ -46,13 +47,14 @@ daqiri:
       socket_config:
         mode: server
         local_addr: "udp://2.2.2.2:5001"
+        remote_addr: "udp://1.1.1.1:5002"
         max_payload_size: 65535
       rx:
         queues:
         - name: "Server_RX_Queue"
           id: 0
-          cpu_core: 18
-          batch_size: 1
+          cpu_core: 15
+          batch_size: 32
           memory_regions:
             - "DATA_SOCKET_SERVER"
       tx:
@@ -68,7 +70,7 @@ socket_bench_server:
   server: true
   send: false
   receive: true
-  cpu_core: 9
+  cpu_core: 16
   iterations: 1000000000
   message_size: 8000
   server_address: 2.2.2.2

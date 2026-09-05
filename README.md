@@ -72,11 +72,11 @@ Consult the [Benchmarking overview](https://nvidia.github.io/daqiri/benchmarks/)
 | Raw Ethernet / GPUDirect (dpdk) | 8 KB packet | **201.70 ±0.18 Gb/s** | 197.17 Gb/s | 0 | Cross-host two-link 200 GbE |
 | Socket / RoCE (SEND)     | 8 MB message   | **198.72 ±0.03 Gb/s** | **195.55 ±0.03 Gb/s** | 0 | Cross-host two-link 200 GbE |
 | Socket / TCP             | 1 MiB message, 8 streams | — | **174.3 ±0.9 Gb/s** | 0 | Cross-host two-link 200 GbE |
-| Socket / UDP (paced)     | 8 KB message   | —           | 23.0 Gb/s      | 0         | Cross-host 200 GbE   |
+| Socket / UDP (paced)     | 8 KB message, 8 pairs | —    | 95.98 Gb/s     | 0         | Cross-host two-link 200 GbE |
 
-The DPDK raw-Ethernet, RoCE, and scaled TCP rows use two independent links. The
-retained TCP single-pair and UDP rows are single-link measurements. Full methodology
-and per-transport breakdowns are in
+The DPDK raw-Ethernet, RoCE, scaled TCP, and scaled UDP rows use two independent
+links. The retained TCP single-pair result is a single-link measurement. Full
+methodology and per-transport breakdowns are in
 [Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/).
 
 ## Documentation

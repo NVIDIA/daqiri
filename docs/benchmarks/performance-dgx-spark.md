@@ -62,22 +62,22 @@ wire/application difference.
 
 ## Results Summary
 
-Each transport is shown at its best-case **operation size**. The DPDK, RoCE, and
-scaled TCP rows are two-link measurements; the retained TCP single-pair and UDP rows
-use one client/server socket pair as stated. Socket scaling is a separate axis,
-measured in the [TCP](#socket-tcp) and [UDP](#socket-udp) sections below.
+Each transport is shown at its best-case **operation size**. The DPDK, RoCE,
+scaled TCP, and scaled UDP rows are two-link measurements. Socket scaling is a
+separate axis, measured in the [TCP](#socket-tcp) and [UDP](#socket-udp) sections
+below.
 
 | Stream / Protocol | Best case | Wire | App-delivered | Drops | Testbed |
 | ----------------- | --------- | ---: | ------------: | ----- | ------- |
 | Raw Ethernet / GPUDirect (dpdk) | 8 KB packet | **201.70 ±0.18 Gb/s** | 197.17 Gb/s | 0 | Cross-host two-link 200 GbE |
 | Socket / RoCE (SEND) | 8 MB message | **198.72 ±0.03 Gb/s** | **195.55 ±0.03 Gb/s** | 0 | Cross-host two-link 200 GbE |
 | Socket / TCP | 1 MiB message, 8 streams | — | **174.3 ±0.9 Gb/s** | 0 | Cross-host two-link 200 GbE |
-| Socket / UDP (paced) | 8 KB message | — | 23.0 Gb/s | 0 | Cross-host 200 GbE |
+| Socket / UDP (paced) | 8 KB message, 8 pairs | — | 95.98 ±0.00 Gb/s | 0 | Cross-host two-link 200 GbE |
 
 Each transport is best read at its own best-case operation size (see the
 per-transport tables below); a single cross-transport unit of work isn't meaningful
 here, since TCP has no operation boundary. The DPDK, RoCE, and scaled TCP rows use
-two independent links. The retained TCP single-pair and UDP rows use one link. The
+two independent links. The retained TCP single-pair result uses one link. The
 socket rows report app rates and per-port packet counts rather than a wire byte rate,
 so their Wire cells are blank.
 
@@ -89,9 +89,8 @@ what arrives. See [Socket / UDP](#socket-udp) for that curve.
 **TCP scales with concurrent streams across the two links.** The retained one-stream
 cross-host result is 55.7 Gb/s at 1 MiB. With one stream per link, two worker cores
 per host deliver 110.7 ±6.6 Gb/s; four and eight streams raise that to 156.9 ±1.7
-and 174.3 ±0.9 Gb/s. UDP paced starts lower at 23.0 Gb/s for one stream, since a
-datagram socket gives up TCP's segmentation offload and pays per datagram. Its
-separate scaling result is in [Socket / UDP](#socket-udp).
+and 174.3 ±0.9 Gb/s. UDP reaches 95.98 Gb/s with eight paced flows over the two
+links; its separate scaling result is in [Socket / UDP](#socket-udp).
 
 ## Raw Ethernet / GPUDirect
 
@@ -348,36 +347,20 @@ every rep:
 
 | Message size | Paced rate | Delivered | Loss | Frames on the wire |
 | ------------ | ---------: | --------: | ---: | -----------------: |
-| 8000 B  | 23 Gb/s | **23.00 Gb/s** | 0% | 10,781,563 |
+| 8000 B  | 25 Gb/s | **25.00 Gb/s** | 0% | ≈11.74 million |
 | 65507 B | 15 Gb/s | 15.00 Gb/s | 0% | 6,889,553 |
 | 1000 B  | 4 Gb/s  | 4.00 Gb/s  | 0% | 15,045,910 |
 
-Zero here means a **teardown tail of at most 30 datagrams** out of 6.9–15 million,
-still in flight when the receiver stopped. The residual does not grow with run
-length, so it is not a loss rate.
+Every accepted repetition had matching application packet and byte counts, zero
+receiver UDP errors, zero NIC receive-buffer discards, and physical TX/RX counters
+that agreed to sampling precision.
 
 ### Beyond the loss-free rate
 
-The receiving core's drain rate sets the ceiling here, not the wire. Unpaced, the
-same 8000 B cell offers 50.1 Gb/s and delivers 26.5, and the phy counters still
-match exactly: every datagram crossed the cable, and the ones the receive path
-could not keep up with were dropped in the host.
-
-| Offered | Delivered | Loss |
-| ------: | --------: | ---: |
-| 23 Gb/s | 23.00 Gb/s | 0% |
-| 25 Gb/s | 24.3–25.0 Gb/s | 0–2.8% (loss in 2 of 3 reps) |
-| 26 Gb/s | 24.4 Gb/s | 6.0% |
-| 27 Gb/s | 24.8 Gb/s | 8.1% |
-| 31 Gb/s | 25.7 Gb/s | 17.1% |
-| 50.1 Gb/s (unpaced) | 26.5 Gb/s | 47.1% |
-
-**Delivered throughput is flat near 25 Gb/s across that whole range**: offering
-27 Gb/s beyond the loss-free rate returns 3.5 Gb/s more goodput, so most of the
-extra load is spent rather than delivered. UDP has no backpressure, so the sender
-cannot be told to slow down and the receiver sheds what it cannot drain. 25 Gb/s
-sits close enough to the drain rate that it held zero loss in only one rep of
-three, which is why the published rate is 23.
+The receive path, not the wire, sets this limit. UDP has no backpressure, so an
+unpaced sender can overrun the receiver even when physical TX/RX counters match.
+Treat 25 Gb/s as the validated one-flow operating point for this pinned placement;
+repeat the rate ladder after changing message size, thread placement, or host setup.
 
 Give the receiver GPU work per datagram and the drain rate falls further, because
 the socket path has to stage each payload host-to-device before the GPU can touch
@@ -391,29 +374,24 @@ two reps, and 99.5–99.8% unpaced, where it delivers 0.1–0.3 Gb/s.
 
 ### Core scaling, cross-host (200 GbE)
 
-Concurrent pairs at an 8000 B datagram, each paced at the highest per-pair rate
-that held zero loss across 3 × 30 s reps. One queue-poller core and one app-worker
-core per pair per host, clients on one Spark and servers on the other:
+Concurrent pairs at an 8000 B datagram, split evenly over two links. Each pair
+uses a pinned socket receive-I/O thread and a separate pinned application worker
+on each host; the two threads are placed in the same performance cluster. Every
+cell is the mean ± sample standard deviation of 3 × 30 s reps at the highest
+per-pair rate that held zero loss:
 
-| Pairs | Cores per host | Paced per pair | Delivered | Loss |
-| ----: | -------------: | -------------: | --------: | ---: |
-| 1 | 2  | 23 Gb/s | 23.0 Gb/s | 0% |
-| 2 | 4  | 22 Gb/s | **44.0 Gb/s** | 0% |
-| 4 | 8  | 18 Gb/s | **72.0 Gb/s** | 0% |
-| 8 | 16 | 9 Gb/s  | 72.0 Gb/s | 0% |
+| Pairs | Pinned logical CPUs per host (I/O + worker) | Distribution | Paced per pair | Delivered | Loss |
+| ----: | ------------------------------------------: | -----------: | -------------: | --------: | ---: |
+| 2 | 4 (2 + 2) | 1 pair per link | 25 Gb/s | **50.00 ±0.00 Gb/s** | 0% |
+| 4 | 8 (4 + 4) | 2 pairs per link | 20 Gb/s | **79.99 ±0.01 Gb/s** | 0% |
+| 8 | 16 (8 + 8) | 4 pairs per link | 12 Gb/s | **95.98 ±0.00 Gb/s** | 0% |
 
-**Loss-free UDP scales with receiving cores, at a falling rate per pair.** One
-pair drains 23 Gb/s, two drain 22 each, and four drain 18 each, for 72 Gb/s
-aggregate; the per-pair rate drops as the pairs contend for the same NIC and
-memory. Eight pairs deliver the same 72 Gb/s as four, because pairs 5–8 land on
-the A725 efficiency cores after the ten X925 cores are taken, so they add
-scheduling pressure rather than drain capacity.
-
-Run unpaced instead and four pairs offer 96.8 Gb/s and deliver 91.9 at 5.0% loss,
-so the delivered peak is higher than the loss-free rate but no longer clean. The
-choice between 72 Gb/s at zero loss and ~92 Gb/s at a few percent is an
-application decision, and the wire is loss-free either way —
-`tx_packets_phy` matches `rx_packets_phy` in every cell, so every drop is host-side.
+**Loss-free UDP scales with concurrent flows, with a falling rate per pair.** The
+eight-flow point increases delivered rate to 95.98 Gb/s, but it uses 16 pinned
+logical CPUs per host. That placement shares physical cores through SMT, so it is
+not an eight-physical-core comparison with TCP. At 13 Gb/s per pair, two of three
+eight-pair repetitions lost packets; at 14 Gb/s every repetition lost packets.
+The 12-Gb/s row is therefore the loss-free knee for this layout.
 
 The sweep stops at 8000 B, one Ethernet frame. Larger datagrams fragment above the
 ~8972 B MTU payload and reassembly is all-or-nothing, which is why the 65507 B
