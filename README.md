@@ -38,6 +38,11 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
   (`-DDAQIRI_BUILD_APPLICATIONS=ON`, TensorRT): GPUDirect RX → reorder → ResNet-50
   feature extraction with headless PC1/PC2 output. See
   [DAQIRI + TensorRT Inference](https://nvidia.github.io/daqiri/tutorials/daqiri-resnet-inference/).
+- **UCX GPU egress example** — Optional containerized raw-Ethernet ingress →
+  batched CUDA processing → UCP Active Message egress application. Build with
+  `BASE_TARGET=ucx DAQIRI_BUILD_APPLICATIONS=ON DAQIRI_BUILD_RESNET50_INFERENCE=OFF
+  DAQIRI_BUILD_UCX_GPU_EGRESS=ON scripts/build-container.sh`. See
+  [DAQIRI + UCX GPU Egress](https://nvidia.github.io/daqiri/tutorials/daqiri-ucx-gpu-egress/).
 - **S3 raw object writes** — Optionally upload raw burst packets to Amazon S3 or an
   S3-compatible object store through the AWS SDK for C++.
 - **Flow Steering** — Configure the NIC's hardware flow engine to route packets by UDP
@@ -80,6 +85,7 @@ Reference material for the DAQIRI codebase:
 - [C++ API Usage](https://nvidia.github.io/daqiri/api-reference/cpp/) — C++ RX/TX workflows, buffer lifecycle, file writing, utilities, and status codes
 - [Python API Usage](https://nvidia.github.io/daqiri/api-reference/python/) — Python bindings, workflow examples, enums, config classes, and helper functions
 - [Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/) — Per-platform throughput, drop, and utilization numbers for stream/protocol combinations on DGX Spark
+- [DAQIRI + UCX GPU Egress](https://nvidia.github.io/daqiri/tutorials/daqiri-ucx-gpu-egress/) — Raw Ethernet ingress → CUDA assembly/processing → UCP Active Message egress
 - [Contributing](CONTRIBUTING.md) — Contribution guidelines, coding standards, DCO sign-off
 
 ## Tutorials
@@ -94,6 +100,7 @@ Step-by-step walkthroughs to get hands-on:
 - [Understanding the Configuration File](https://nvidia.github.io/daqiri/tutorials/configuration-walkthrough/) — annotated YAML walkthrough
 - [DAQIRI + Holoscan Integration](https://nvidia.github.io/daqiri/tutorials/daqiri-holoscan-integration/) — use DAQIRI RX bursts from a Holoscan source operator
 - [DAQIRI + TensorRT Inference](https://nvidia.github.io/daqiri/tutorials/daqiri-resnet-inference/) — packet ingest → ResNet-50 feature extraction with TensorRT
+- [DAQIRI + UCX GPU Egress](https://nvidia.github.io/daqiri/tutorials/daqiri-ucx-gpu-egress/) — packetized images → batched CUDA transform → remote GPU-accessible receive slots over UCP
 
 ## License
 

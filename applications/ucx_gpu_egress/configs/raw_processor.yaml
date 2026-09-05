@@ -1,0 +1,65 @@
+%YAML 1.2
+---
+# Host B: replace the Link 1 BDF and Link 2 listener address. The DQRI source
+# epoch must match raw_source.yaml; it is independent of the UCP epoch.
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    engine: "ibverbs"
+    master_core: 8
+    debug: false
+    log_level: "info"
+    loopback: ""
+    memory_regions:
+    - name: "Raw_RX"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 16384
+      buf_size: 8272
+    interfaces:
+    - name: "rx_port"
+      address: <HOST_B_LINK1_PCIE_BDF>
+      rx:
+        flow_isolation: true
+        queues:
+        - name: "rx_q_0"
+          id: 0
+          cpu_core: 18
+          batch_size: 1024
+          timeout_us: 2000
+          memory_regions:
+          - "Raw_RX"
+        flows:
+        - name: "dqri"
+          id: 0
+          action:
+            type: queue
+            id: 0
+          match:
+            udp_src: 4096
+            udp_dst: 4096
+
+ucx_gpu_raw_processor:
+  interface_name: "rx_port"
+  queue_id: 0
+  gpu_id: 0
+  rx_core: 19
+  processing_core: 17
+  sink_core: 16
+  ucx_core: 16
+  ring_slots: 16
+  batch_slot_count: 16
+  descriptor_pool_depth: 32
+  max_burst_packets: 1024
+  max_receiver_depth: 256
+  listen_endpoint: "<HOST_B_LINK2_IP>:13341"
+  memory_kind: "host_pinned_mapped"
+  source_epoch: 1311768467463790320
+  assembly_timeout_us: 2000
+  timeout_seconds: 120
+  overall_timeout_seconds: 300
+  idle_timeout_seconds: 10
+  scale: 1.25
+  offset: -32.0
+  poison_rejected_slots: true

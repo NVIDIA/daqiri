@@ -18,10 +18,16 @@
 ARG DAQIRI_BASE_TARGET=dpdk
 ARG DAQIRI_ENGINE="dpdk ibverbs"
 ARG DAQIRI_BUILD_PYTHON=OFF
+ARG DAQIRI_BUILD_EXAMPLES=ON
+ARG DAQIRI_BUILD_APPLICATIONS=OFF
+ARG DAQIRI_BUILD_RESNET50_INFERENCE=ON
+ARG DAQIRI_BUILD_UCX_GPU_EGRESS=OFF
 ARG DAQIRI_ENABLE_S3=OFF
 ARG BUILD_SHARED_LIBS=ON
 ARG DAQIRI_ENABLE_OTEL_METRICS=OFF
 ARG AWS_SDK_CPP_VERSION=1.11.822
+ARG UCX_VERSION=1.20.0
+ARG UCX_SHA256=7c8a6093cada179aa1d851b83625e3b25ed5658966e309de5118c27a038c7ef9
 ARG DAQIRI_OS_BASE_IMAGE=nvcr.io/nvidia/cuda:13.1.0-devel-ubuntu24.04
 
 # ============================================================
@@ -225,6 +231,49 @@ RUN if [ "${DAQIRI_ENABLE_OTEL_METRICS}" = "ON" ]; then \
 # ==============================================================
 FROM dpdk AS rdma
 
+# ==============================================================
+# ucx: UCP with verbs, mlx5, and CUDA memory support
+# ==============================================================
+FROM rdma AS ucx
+
+ARG UCX_VERSION
+ARG UCX_SHA256
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        autoconf \
+        automake \
+        libtool \
+        pkgconf \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fL \
+        "https://github.com/openucx/ucx/releases/download/v${UCX_VERSION}/ucx-${UCX_VERSION}.tar.gz" \
+        -o /tmp/ucx.tar.gz \
+    && echo "${UCX_SHA256}  /tmp/ucx.tar.gz" | sha256sum --check - \
+    && tar -xzf /tmp/ucx.tar.gz -C /tmp \
+    && mkdir /tmp/ucx-build \
+    && cd /tmp/ucx-build \
+    && /tmp/ucx-${UCX_VERSION}/contrib/configure-release \
+        --prefix=/opt/ucx \
+        --enable-mt \
+        --with-verbs \
+        --with-rdmacm \
+        --with-mlx5 \
+        --with-cuda=/usr/local/cuda \
+        --without-gdrcopy \
+        --without-rocm \
+        --without-java \
+        --without-go \
+    && make -j "$(nproc)" \
+    && make install \
+    && /opt/ucx/bin/ucx_info -v \
+    && PKG_CONFIG_PATH=/opt/ucx/lib/pkgconfig \
+        pkg-config --atleast-version="${UCX_VERSION}" ucx \
+    && rm -rf /tmp/ucx.tar.gz /tmp/ucx-${UCX_VERSION} /tmp/ucx-build
+
+ENV PATH=/opt/ucx/bin:${PATH}
+ENV LD_LIBRARY_PATH=/opt/ucx/lib:${LD_LIBRARY_PATH}
+ENV PKG_CONFIG_PATH=/opt/ucx/lib/pkgconfig
+
 # ==============================
 # Rivermax Target
 # This stage is only built when --target rivermax is specified. It installs and configures Rivermax SDK.
@@ -303,6 +352,10 @@ FROM ${DAQIRI_BASE_TARGET} AS daqiri-build
 
 ARG DAQIRI_ENGINE
 ARG DAQIRI_BUILD_PYTHON
+ARG DAQIRI_BUILD_EXAMPLES
+ARG DAQIRI_BUILD_APPLICATIONS
+ARG DAQIRI_BUILD_RESNET50_INFERENCE
+ARG DAQIRI_BUILD_UCX_GPU_EGRESS
 ARG DAQIRI_ENABLE_S3
 ARG BUILD_SHARED_LIBS
 ARG DAQIRI_ENABLE_OTEL_METRICS
@@ -317,6 +370,10 @@ RUN cmake -S . -B build \
       -DCMAKE_CUDA_ARCHITECTURES=all-major \
       -DBUILD_SHARED_LIBS=${BUILD_SHARED_LIBS} \
       -DDAQIRI_BUILD_PYTHON=${DAQIRI_BUILD_PYTHON} \
+      -DDAQIRI_BUILD_EXAMPLES=${DAQIRI_BUILD_EXAMPLES} \
+      -DDAQIRI_BUILD_APPLICATIONS=${DAQIRI_BUILD_APPLICATIONS} \
+      -DDAQIRI_BUILD_RESNET50_INFERENCE=${DAQIRI_BUILD_RESNET50_INFERENCE} \
+      -DDAQIRI_BUILD_UCX_GPU_EGRESS=${DAQIRI_BUILD_UCX_GPU_EGRESS} \
       -DDAQIRI_ENABLE_OTEL_METRICS=${DAQIRI_ENABLE_OTEL_METRICS} \
       -DDAQIRI_ENABLE_S3=${DAQIRI_ENABLE_S3} \
       -DDAQIRI_ENGINE="${DAQIRI_ENGINE}" \
@@ -330,6 +387,7 @@ FROM ${DAQIRI_BASE_TARGET} AS runtime
 
 COPY --from=daqiri-build /opt/daqiri /opt/daqiri
 ENV CMAKE_PREFIX_PATH=/opt/daqiri
-ENV LD_LIBRARY_PATH=/opt/daqiri/lib
+ENV PATH=/opt/daqiri/bin:${PATH}
+ENV LD_LIBRARY_PATH=/opt/daqiri/lib:${LD_LIBRARY_PATH}
 EXPOSE 9464
 WORKDIR /opt/daqiri
