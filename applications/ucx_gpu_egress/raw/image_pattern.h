@@ -16,7 +16,7 @@ namespace daqiri::ucx_example {
 // The first four uint16 pixels carry the full image sequence in little-endian
 // word order. The rest deliberately depends only on the image's position in a
 // 16-image source batch, so a raw TX packet buffer can be initialized once and
-// reused while only its eight-byte sequence tag and DQRI header change.
+// reused while only its sequence field and first image fragment change.
 DAQIRI_UCX_HOST_DEVICE inline std::uint16_t raw_image_pixel(std::uint64_t sequence,
                                                             std::uint32_t pixel_index) noexcept {
   if (pixel_index < 4) {

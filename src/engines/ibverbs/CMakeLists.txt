@@ -91,3 +91,10 @@ target_link_libraries(${ENGINE_TARGET}
     PRIVATE
         CUDA::cuda_driver
 )
+
+if(BUILD_TESTING)
+    add_executable(daqiri_test_ibverbs_reorder_tracker reorder_batch_tracker_test.cpp)
+    target_compile_features(daqiri_test_ibverbs_reorder_tracker PRIVATE cxx_std_17)
+    add_test(NAME daqiri_test_ibverbs_reorder_tracker
+             COMMAND daqiri_test_ibverbs_reorder_tracker)
+endif()

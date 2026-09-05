@@ -20,7 +20,7 @@ cudaError_t fill_image_async(void* device_data, std::uint64_t sequence, cudaStre
 cudaError_t validate_image_async(const void* device_data, std::uint64_t sequence,
                                  ValidationResult* device_result, cudaStream_t stream);
 
-// Validate the deterministic DQRI raw-image pattern after the example's
+// Validate the deterministic raw-source image pattern after the example's
 // saturating scale/offset transform. Only ValidationResult is copied to the CPU.
 cudaError_t validate_transformed_raw_image_async(const void* device_data, std::uint64_t sequence,
                                                  float scale, float offset,

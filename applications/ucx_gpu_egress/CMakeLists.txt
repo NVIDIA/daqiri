@@ -7,6 +7,22 @@ find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
 pkg_check_modules(UCX REQUIRED IMPORTED_TARGET ucx>=1.20.0)
 
+if(NOT DAQIRI_YAML_TARGET)
+  find_package(yaml-cpp QUIET)
+  if(TARGET yaml-cpp::yaml-cpp)
+    set(DAQIRI_YAML_TARGET yaml-cpp::yaml-cpp)
+  elseif(TARGET yaml-cpp)
+    set(DAQIRI_YAML_TARGET yaml-cpp)
+  elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/yaml-cpp/CMakeLists.txt")
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/yaml-cpp
+                     ${CMAKE_CURRENT_BINARY_DIR}/third_party/yaml-cpp)
+    set(DAQIRI_YAML_TARGET yaml-cpp)
+  else()
+    message(FATAL_ERROR
+      "yaml-cpp not found; install yaml-cpp-dev or initialize third_party/yaml-cpp")
+  endif()
+endif()
+
 add_library(daqiri_ucx_gpu_transport STATIC
   protocol.cpp
   external_batch_policy.cpp
@@ -20,17 +36,6 @@ set_target_properties(daqiri_ucx_gpu_transport PROPERTIES
   CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
   POSITION_INDEPENDENT_CODE ON)
 
-add_library(daqiri_ucx_raw_assembly STATIC
-  raw/dqri_header.cpp
-  raw/fragment_placement.cu
-  raw/image_assembler.cpp)
-target_compile_features(daqiri_ucx_raw_assembly PUBLIC cxx_std_17)
-target_include_directories(daqiri_ucx_raw_assembly PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(daqiri_ucx_raw_assembly PUBLIC CUDA::cudart)
-set_target_properties(daqiri_ucx_raw_assembly PROPERTIES
-  CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
-  POSITION_INDEPENDENT_CODE ON)
-
 add_executable(daqiri_ucx_gpu_transport_bench ucx_gpu_transport_bench.cpp)
 target_compile_features(daqiri_ucx_gpu_transport_bench PRIVATE cxx_std_17)
 target_link_libraries(daqiri_ucx_gpu_transport_bench PRIVATE daqiri_ucx_gpu_transport)
@@ -39,8 +44,7 @@ add_executable(daqiri_ucx_raw_source raw_tx_bench.cpp)
 target_compile_features(daqiri_ucx_raw_source PRIVATE cxx_std_17)
 target_include_directories(daqiri_ucx_raw_source PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(daqiri_ucx_raw_source
-  PRIVATE daqiri::daqiri daqiri_ucx_raw_assembly ${DAQIRI_YAML_TARGET}
-          CUDA::cudart Threads::Threads)
+  PRIVATE daqiri::daqiri ${DAQIRI_YAML_TARGET} CUDA::cudart Threads::Threads)
 
 add_executable(daqiri_ucx_raw_pipeline
   raw_pipeline_bench.cu)
@@ -48,8 +52,8 @@ target_compile_features(daqiri_ucx_raw_pipeline PRIVATE cxx_std_17)
 target_include_directories(daqiri_ucx_raw_pipeline
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(daqiri_ucx_raw_pipeline
-  PRIVATE daqiri::daqiri daqiri_ucx_gpu_transport daqiri_ucx_raw_assembly
-          daqiri_ucx_scale_offset ${DAQIRI_YAML_TARGET} CUDA::cudart Threads::Threads)
+  PRIVATE daqiri::daqiri daqiri_ucx_gpu_transport daqiri_ucx_scale_offset
+          ${DAQIRI_YAML_TARGET} CUDA::cudart Threads::Threads)
 set_target_properties(daqiri_ucx_raw_pipeline PROPERTIES
   CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
 
@@ -66,38 +70,10 @@ if(BUILD_TESTING)
   target_compile_features(daqiri_test_ucx_spsc_queue PRIVATE cxx_std_17)
   target_link_libraries(daqiri_test_ucx_spsc_queue PRIVATE Threads::Threads)
 
-  add_executable(daqiri_test_ucx_raw_header
-    raw/dqri_header.cpp
-    raw/tests/dqri_header_test.cpp)
-  target_compile_features(daqiri_test_ucx_raw_header PRIVATE cxx_std_17)
-  target_include_directories(daqiri_test_ucx_raw_header PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-
-  add_executable(daqiri_test_ucx_fragment_placement
-    raw/dqri_header.cpp
-    raw/fragment_placement.cu
-    raw/tests/fragment_placement_test.cu)
-  target_compile_features(daqiri_test_ucx_fragment_placement PRIVATE cxx_std_17)
-  target_include_directories(daqiri_test_ucx_fragment_placement
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-  target_link_libraries(daqiri_test_ucx_fragment_placement PRIVATE CUDA::cudart)
-  set_target_properties(daqiri_test_ucx_fragment_placement PROPERTIES
-    CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
-
-  add_executable(daqiri_test_ucx_image_assembler
-    raw/tests/image_assembler_test.cpp)
-  target_compile_features(daqiri_test_ucx_image_assembler PRIVATE cxx_std_17)
-  target_include_directories(daqiri_test_ucx_image_assembler
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-  target_link_libraries(daqiri_test_ucx_image_assembler
-    PRIVATE daqiri_ucx_raw_assembly)
-
   add_test(NAME daqiri_test_ucx_gpu_protocol COMMAND daqiri_test_ucx_gpu_protocol)
   add_test(NAME daqiri_test_ucx_external_batch_policy
            COMMAND daqiri_test_ucx_external_batch_policy)
   add_test(NAME daqiri_test_ucx_spsc_queue COMMAND daqiri_test_ucx_spsc_queue)
-  add_test(NAME daqiri_test_ucx_raw_header COMMAND daqiri_test_ucx_raw_header)
-  add_test(NAME daqiri_test_ucx_fragment_placement COMMAND daqiri_test_ucx_fragment_placement)
-  add_test(NAME daqiri_test_ucx_image_assembler COMMAND daqiri_test_ucx_image_assembler)
 endif()
 
 install(TARGETS daqiri_ucx_gpu_transport_bench daqiri_ucx_raw_source

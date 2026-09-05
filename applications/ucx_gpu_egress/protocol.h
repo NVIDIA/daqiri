@@ -12,17 +12,14 @@
 namespace daqiri::ucx_gpu {
 
 constexpr std::uint16_t kProtocolMajor = 1;
-constexpr std::uint16_t kProtocolMinor = 0;
-constexpr std::uint64_t kLogicalStreamId = 1;
-constexpr std::uint32_t kImageSchemaId = 1;
 constexpr std::size_t kImageWidth = ucx_example::geometry::kImageWidth;
 constexpr std::size_t kImageHeight = ucx_example::geometry::kImageHeight;
 constexpr std::size_t kImagePixels = ucx_example::geometry::kImagePixels;
 constexpr std::size_t kImageBytes = ucx_example::geometry::kImageBytes;
 constexpr std::uint16_t kControlAmId = 0x10;
 constexpr std::uint16_t kDataAmId = 0x20;
-constexpr std::size_t kControlWireBytes = 64;
-constexpr std::size_t kDataHeaderWireBytes = 72;
+constexpr std::size_t kControlWireBytes = 56;
+constexpr std::size_t kDataHeaderWireBytes = 40;
 
 enum class MemoryKind : std::uint32_t {
   host_pinned_mapped = 1,
@@ -32,33 +29,25 @@ enum class MemoryKind : std::uint32_t {
 enum class ControlType : std::uint16_t {
   hello = 1,
   accept = 2,
-  reject = 3,
-  credit = 4,
-  eos = 5,
-  eos_ack = 6,
+  credit = 3,
+  eos = 4,
+  eos_ack = 5,
 };
 
 struct ControlMessage {
-  ControlType type{ControlType::reject};
-  std::uint32_t flags{0};
-  std::uint64_t stream_id{kLogicalStreamId};
+  ControlType type{ControlType::hello};
   std::uint64_t connection_epoch{0};
   std::uint64_t value0{0};
   std::uint64_t value1{0};
   std::uint64_t value2{0};
-  MemoryKind memory_kind{MemoryKind::host_pinned_mapped};
+  std::uint64_t value3{0};
 };
 
 struct DataHeader {
-  std::uint32_t flags{0};
-  std::uint64_t stream_id{kLogicalStreamId};
   std::uint64_t connection_epoch{0};
-  std::uint64_t sequence{0};
-  std::uint32_t payload_length{kImageBytes};
-  std::uint32_t schema_id{kImageSchemaId};
-  std::uint64_t timestamp_ns{0};
-  std::uint32_t payload_crc32c{0};
-  std::uint64_t admission_ordinal{0};
+  std::uint64_t first_sequence{0};
+  std::uint32_t image_count{0};
+  std::uint64_t batch_ordinal{0};
 };
 
 std::array<std::uint8_t, kControlWireBytes> encode_control(const ControlMessage& message);

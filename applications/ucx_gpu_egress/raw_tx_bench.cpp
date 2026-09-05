@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "raw/dqri_header.h"
+#include "image_geometry.h"
 #include "raw/image_pattern.h"
 
 #include <daqiri/daqiri.h>
@@ -29,14 +29,27 @@
 
 namespace {
 
-using namespace daqiri::ucx_example;
+namespace geometry = daqiri::ucx_example::geometry;
+using daqiri::ucx_example::raw_image_pixel;
+
+constexpr std::size_t kEtherIpv4UdpBytes = 42;
+constexpr std::size_t kSequenceOffset = kEtherIpv4UdpBytes;
+constexpr std::size_t kPayloadOffset = 80;
+constexpr std::size_t kPacketsPerImage = 16;
+constexpr std::size_t kFragmentBytes = geometry::kImageBytes / kPacketsPerImage;
+constexpr std::size_t kPacketsPerBatch = geometry::kImagesPerBatch * kPacketsPerImage;
+constexpr std::size_t kFrameBytes = kPayloadOffset + kFragmentBytes;
+constexpr std::uint64_t kSequenceSpace = std::uint64_t{1} << 32U;
+constexpr std::uint64_t kBatchSpace = kSequenceSpace / kPacketsPerBatch;
+
+static_assert(geometry::kImageBytes % kPacketsPerImage == 0);
+static_assert(kFrameBytes <= std::numeric_limits<std::uint16_t>::max());
 
 struct SourceConfig {
   std::string interface_name{"tx_port"};
   int queue_id{0};
   int cpu_core{-1};
   std::uint32_t burst_packets{2048};
-  std::uint64_t source_epoch{1};
   std::string eth_dst_addr;
   std::string ip_src_addr{"1.1.1.1"};
   std::string ip_dst_addr{"2.2.2.2"};
@@ -49,9 +62,21 @@ struct BufferState {
   bool initialized{false};
 };
 
+struct RunLimit {
+  std::optional<int> seconds;
+  std::optional<std::uint64_t> batches;
+};
+
 void store_u16_be(std::uint8_t* output, std::uint16_t value) {
   output[0] = static_cast<std::uint8_t>(value >> 8U);
   output[1] = static_cast<std::uint8_t>(value);
+}
+
+void store_u32_be(std::uint8_t* output, std::uint32_t value) {
+  output[0] = static_cast<std::uint8_t>(value >> 24U);
+  output[1] = static_cast<std::uint8_t>(value >> 16U);
+  output[2] = static_cast<std::uint8_t>(value >> 8U);
+  output[3] = static_cast<std::uint8_t>(value);
 }
 
 bool parse_mac(const std::string& text, std::array<std::uint8_t, 6>& output) {
@@ -71,8 +96,8 @@ bool parse_mac(const std::string& text, std::array<std::uint8_t, 6>& output) {
 }
 
 void pin_current_thread(int core) {
-  if (core < 0) {
-    return;
+  if (core < 0 || core >= CPU_SETSIZE) {
+    throw std::runtime_error("invalid source cpu_core " + std::to_string(core));
   }
   cpu_set_t set;
   CPU_ZERO(&set);
@@ -93,26 +118,20 @@ SourceConfig load_source_config(const YAML::Node& root) {
   config.queue_id = node["queue_id"].as<int>(config.queue_id);
   config.cpu_core = node["cpu_core"].as<int>(config.cpu_core);
   config.burst_packets = node["burst_packets"].as<std::uint32_t>(config.burst_packets);
-  config.source_epoch = node["source_epoch"].as<std::uint64_t>(config.source_epoch);
   config.eth_dst_addr = node["eth_dst_addr"].as<std::string>("");
   config.ip_src_addr = node["ip_src_addr"].as<std::string>(config.ip_src_addr);
   config.ip_dst_addr = node["ip_dst_addr"].as<std::string>(config.ip_dst_addr);
   config.udp_src_port = node["udp_src_port"].as<std::uint16_t>(config.udp_src_port);
   config.udp_dst_port = node["udp_dst_port"].as<std::uint16_t>(config.udp_dst_port);
-  if (config.queue_id < 0 || config.cpu_core < -1 || config.source_epoch == 0 ||
-      config.burst_packets == 0 || config.burst_packets % kFragmentsPerBatch != 0 ||
+  if (config.interface_name.empty() || config.queue_id < 0 || config.cpu_core < 0 ||
+      config.burst_packets == 0 || config.burst_packets % kPacketsPerBatch != 0 ||
       config.eth_dst_addr.empty()) {
     throw std::runtime_error(
-        "source_epoch and burst_packets must be nonzero, burst_packets must be a multiple of "
-        "256, and interface/queue/MAC fields must be valid");
+        "interface, queue, core, and destination MAC must be valid; burst_packets must be a "
+        "nonzero multiple of 256");
   }
   return config;
 }
-
-struct RunLimit {
-  std::optional<int> seconds;
-  std::optional<std::uint64_t> batches;
-};
 
 RunLimit parse_limit(int argc, char** argv) {
   RunLimit limit;
@@ -131,8 +150,11 @@ RunLimit parse_limit(int argc, char** argv) {
     }
   }
   if (limit.seconds.has_value() == limit.batches.has_value() ||
-      (limit.seconds && *limit.seconds <= 0) || (limit.batches && *limit.batches == 0)) {
-    throw std::runtime_error("specify exactly one positive run limit: --seconds N or --batches N");
+      (limit.seconds && *limit.seconds <= 0) || (limit.batches && *limit.batches == 0) ||
+      (limit.batches && *limit.batches > kBatchSpace)) {
+    throw std::runtime_error(
+        "specify exactly one positive run limit; --batches must not exceed the 32-bit sequence "
+        "space");
   }
   return limit;
 }
@@ -140,31 +162,28 @@ RunLimit parse_limit(int argc, char** argv) {
 void initialize_outer_header(std::uint8_t* frame, const SourceConfig& config,
                              const std::array<std::uint8_t, 6>& destination_mac,
                              const in_addr& source_address, const in_addr& destination_address) {
-  std::memset(frame, 0, kRawFrameBytes);
+  std::memset(frame, 0, kFrameBytes);
   std::memcpy(frame, destination_mac.data(), destination_mac.size());
-  // Source MAC bytes 6..11 are filled by the ibverbs tx_eth_src offload.
   store_u16_be(frame + 12, 0x0800);
   frame[14] = 0x45;
-  store_u16_be(frame + 16, static_cast<std::uint16_t>(kRawFrameBytes - 14));
-  store_u16_be(frame + 20, 0x4000);  // Do not fragment.
+  store_u16_be(frame + 16, static_cast<std::uint16_t>(kFrameBytes - 14));
+  store_u16_be(frame + 20, 0x4000);
   frame[22] = 64;
   frame[23] = IPPROTO_UDP;
   std::memcpy(frame + 26, &source_address.s_addr, sizeof(source_address.s_addr));
   std::memcpy(frame + 30, &destination_address.s_addr, sizeof(destination_address.s_addr));
   store_u16_be(frame + 34, config.udp_src_port);
   store_u16_be(frame + 36, config.udp_dst_port);
-  store_u16_be(frame + 38, static_cast<std::uint16_t>(kRawFrameBytes - 34));
-  // IPv4 and UDP checksums remain zero in memory. The ibverbs TX WQE requests
-  // L3/L4 checksum offload for raw packets.
+  store_u16_be(frame + 38, static_cast<std::uint16_t>(kFrameBytes - 34));
 }
 
 void initialize_fragment_payload(std::uint8_t* payload, std::uint16_t fragment_slot) {
-  const std::uint64_t image_sequence = fragment_slot / kFragmentsPerImage;
+  const std::uint64_t image_sequence = fragment_slot / kPacketsPerImage;
   const std::uint32_t first_pixel =
-      static_cast<std::uint32_t>(fragment_slot % kFragmentsPerImage) *
-      static_cast<std::uint32_t>(kFragmentPayloadBytes / sizeof(std::uint16_t));
+      static_cast<std::uint32_t>(fragment_slot % kPacketsPerImage) *
+      static_cast<std::uint32_t>(kFragmentBytes / sizeof(std::uint16_t));
   auto* pixels = reinterpret_cast<std::uint16_t*>(payload);
-  for (std::uint32_t index = 0; index < kFragmentPayloadBytes / sizeof(std::uint16_t); ++index) {
+  for (std::uint32_t index = 0; index < kFragmentBytes / sizeof(std::uint16_t); ++index) {
     pixels[index] = raw_image_pixel(image_sequence, first_pixel + index);
   }
 }
@@ -211,11 +230,11 @@ int run(const char* config_path, const RunLimit& limit) {
       start + std::chrono::seconds(limit.seconds.value_or(std::numeric_limits<int>::max()));
 
   while ((!limit.seconds || std::chrono::steady_clock::now() < deadline) &&
-         (!limit.batches || next_packet / kFragmentsPerBatch < *limit.batches)) {
+         (!limit.batches || next_packet / kPacketsPerBatch < *limit.batches)) {
     std::uint32_t requested_packets = config.burst_packets;
     if (limit.batches) {
       const std::uint64_t remaining_packets =
-          (*limit.batches - next_packet / kFragmentsPerBatch) * kFragmentsPerBatch;
+          (*limit.batches - next_packet / kPacketsPerBatch) * kPacketsPerBatch;
       requested_packets =
           static_cast<std::uint32_t>(std::min<std::uint64_t>(requested_packets, remaining_packets));
     }
@@ -233,7 +252,7 @@ int run(const char* config_path, const RunLimit& limit) {
     }
 
     const auto packet_count = static_cast<std::size_t>(daqiri::get_num_packets(burst));
-    bool failed = packet_count == 0 || packet_count % kFragmentsPerBatch != 0;
+    bool failed = packet_count == 0 || packet_count % kPacketsPerBatch != 0;
     for (std::size_t packet_index = 0; packet_index < packet_count && !failed; ++packet_index) {
       auto* frame = static_cast<std::uint8_t*>(
           daqiri::get_segment_packet_ptr(burst, 0, static_cast<int>(packet_index)));
@@ -243,9 +262,7 @@ int run(const char* config_path, const RunLimit& limit) {
       }
 
       const std::uint64_t packet_sequence = next_packet + packet_index;
-      const std::uint64_t unwrapped_batch = packet_sequence / kFragmentsPerBatch;
-      const auto batch_id = static_cast<std::uint32_t>(unwrapped_batch);
-      const auto fragment_slot = static_cast<std::uint16_t>(packet_sequence % kFragmentsPerBatch);
+      const auto fragment_slot = static_cast<std::uint16_t>(packet_sequence % kPacketsPerBatch);
       BufferState& state = buffers[frame];
       if (!state.initialized || state.fragment_slot != fragment_slot) {
         cudaPointerAttributes attributes{};
@@ -257,25 +274,18 @@ int run(const char* config_path, const RunLimit& limit) {
         }
         initialize_outer_header(frame, config, destination_mac, source_address,
                                 destination_address);
-        initialize_fragment_payload(frame + kPayloadOffsetBytes, fragment_slot);
+        initialize_fragment_payload(frame + kPayloadOffset, fragment_slot);
         state.fragment_slot = fragment_slot;
         state.initialized = true;
       }
 
-      const DqriHeader header = make_dqri_header(batch_id, config.source_epoch, fragment_slot);
-      if (serialize_dqri_header(header, frame + kEtherIpv4UdpBytes, kDqriHeaderBytes) !=
-          HeaderStatus::kOk) {
-        failed = true;
-        break;
-      }
-      if (fragment_slot % kFragmentsPerImage == 0) {
-        const std::uint64_t image_sequence =
-            unwrapped_batch * kImagesPerBatch + fragment_slot / kFragmentsPerImage;
-        update_image_sequence_tag(frame + kPayloadOffsetBytes, image_sequence);
+      store_u32_be(frame + kSequenceOffset, static_cast<std::uint32_t>(packet_sequence));
+      if (fragment_slot % kPacketsPerImage == 0) {
+        const std::uint64_t image_sequence = packet_sequence / kPacketsPerImage;
+        update_image_sequence_tag(frame + kPayloadOffset, image_sequence);
       }
       if (daqiri::set_packet_lengths(burst, static_cast<int>(packet_index),
-                                     {static_cast<int>(kRawFrameBytes)}) !=
-          daqiri::Status::SUCCESS) {
+                                     {static_cast<int>(kFrameBytes)}) != daqiri::Status::SUCCESS) {
         failed = true;
       }
     }
@@ -283,13 +293,13 @@ int run(const char* config_path, const RunLimit& limit) {
     if (failed) {
       daqiri::free_all_packets_and_burst_tx(burst);
       daqiri::shutdown();
-      throw std::runtime_error("failed to prepare a DQRI TX burst");
+      throw std::runtime_error("failed to prepare a raw sequence TX burst");
     }
     const daqiri::Status send_status = daqiri::send_tx_burst(burst);
     if (send_status == daqiri::Status::SUCCESS) {
       next_packet += packet_count;
       sent_packets += packet_count;
-      sent_bytes += packet_count * kRawFrameBytes;
+      sent_bytes += packet_count * kFrameBytes;
       ++sent_bursts;
     } else if (send_status != daqiri::Status::NO_SPACE_AVAILABLE) {
       daqiri::free_all_packets_and_burst_tx(burst);
@@ -306,8 +316,8 @@ int run(const char* config_path, const RunLimit& limit) {
   daqiri::shutdown();
   const double elapsed =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-  std::cout << "DQRI TX complete: packets=" << sent_packets
-            << " batches=" << sent_packets / kFragmentsPerBatch << " bytes=" << sent_bytes
+  std::cout << "raw TX complete: packets=" << sent_packets
+            << " batches=" << sent_packets / kPacketsPerBatch << " bytes=" << sent_bytes
             << " bursts=" << sent_bursts << " seconds=" << elapsed << '\n';
   return 0;
 }

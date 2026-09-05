@@ -41,22 +41,35 @@ struct Cli {
   ValidationMode validation{ValidationMode::generated};
   float scale{1.0F};
   float offset{0.0F};
+  bool listen_set{false};
+  bool connect_set{false};
+  bool local_set{false};
+  bool batch_slots_set{false};
+  bool credit_mode_set{false};
+  bool validation_set{false};
+  bool scale_set{false};
+  bool offset_set{false};
 };
 
 void usage(const char* program) {
   std::cout << "Usage:\n"
             << "  " << program << " --mode producer --listen IP:PORT [options]\n"
             << "  " << program << " --mode receiver --connect IP:PORT --local IP:0 [options]\n\n"
-            << "Options:\n"
-            << "  --images N            fixed generated image count (default 1024)\n"
-            << "  --queue-depth N       producer/receiver slot count (default 64)\n"
-            << "  --batch-slots N       producer 2-MiB batch slots (default 16)\n"
+            << "Shared options:\n"
+            << "  --images N            fixed image sequence space (default 1024)\n"
+            << "  --queue-depth N       receiver batch slots, agreed by both roles (default 64)\n"
             << "  --gpu-id N            CUDA device (default 0)\n"
-            << "  --cpu-core N          UCX progress-thread CPU core\n"
-            << "  --memory-kind KIND    host_pinned_mapped|cuda_device\n"
-            << "  --credit-mode MODE    wait|drop (default wait)\n"
-            << "  --timeout-seconds N   connection/EOS timeout (default 30)\n"
-            << "  --validation MODE     generated|raw-transform (receiver, default generated)\n"
+            << "  --cpu-core N          producer progress or receiver caller CPU core\n"
+            << "  --memory-kind KIND    local host_pinned_mapped|cuda_device allocation\n"
+            << "  --timeout-seconds N   connection/EOS timeout (default 30)\n\n"
+            << "Producer options:\n"
+            << "  --listen IP:PORT      listen endpoint (default 0.0.0.0:13341)\n"
+            << "  --batch-slots N       producer 2-MiB batch slots (default 16)\n"
+            << "  --credit-mode MODE    wait|drop (default wait)\n\n"
+            << "Receiver options:\n"
+            << "  --connect IP:PORT     producer endpoint\n"
+            << "  --local IP:0          local source address\n"
+            << "  --validation MODE     generated|raw-transform (default generated)\n"
             << "  --scale F             raw-transform scale (default 1)\n"
             << "  --offset F            raw-transform offset (default 0)\n";
 }
@@ -86,10 +99,13 @@ Cli parse_cli(int argc, char** argv) {
       cli.mode = value;
     } else if (option == "--listen") {
       cli.listen = value;
+      cli.listen_set = true;
     } else if (option == "--connect") {
       cli.connect = value;
+      cli.connect_set = true;
     } else if (option == "--local") {
       cli.local = value;
+      cli.local_set = true;
     } else if (option == "--images") {
       cli.images = parse_u64(value, "--images");
     } else if (option == "--queue-depth") {
@@ -100,6 +116,7 @@ Cli parse_cli(int argc, char** argv) {
       cli.queue_depth = static_cast<std::size_t>(parsed);
     } else if (option == "--batch-slots") {
       cli.batch_slots = static_cast<std::size_t>(parse_u64(value, "--batch-slots"));
+      cli.batch_slots_set = true;
     } else if (option == "--gpu-id") {
       cli.gpu_id = static_cast<int>(parse_u64(value, "--gpu-id"));
     } else if (option == "--cpu-core") {
@@ -109,6 +126,7 @@ Cli parse_cli(int argc, char** argv) {
         throw std::invalid_argument("unknown --memory-kind: " + value);
       }
     } else if (option == "--credit-mode") {
+      cli.credit_mode_set = true;
       if (value == "wait") {
         cli.wait_for_credit = true;
       } else if (value == "drop") {
@@ -119,6 +137,7 @@ Cli parse_cli(int argc, char** argv) {
     } else if (option == "--timeout-seconds") {
       cli.timeout_seconds = static_cast<int>(parse_u64(value, "--timeout-seconds"));
     } else if (option == "--validation") {
+      cli.validation_set = true;
       if (value == "generated") {
         cli.validation = ValidationMode::generated;
       } else if (value == "raw-transform") {
@@ -128,8 +147,10 @@ Cli parse_cli(int argc, char** argv) {
       }
     } else if (option == "--scale") {
       cli.scale = std::stof(value);
+      cli.scale_set = true;
     } else if (option == "--offset") {
       cli.offset = std::stof(value);
+      cli.offset_set = true;
     } else {
       throw std::invalid_argument("unknown option: " + option);
     }
@@ -146,6 +167,13 @@ Cli parse_cli(int argc, char** argv) {
   if (cli.mode == "receiver" && (cli.connect.empty() || cli.local.empty())) {
     throw std::invalid_argument("receiver requires --connect and --local");
   }
+  if (cli.mode == "producer" &&
+      (cli.connect_set || cli.local_set || cli.validation_set || cli.scale_set || cli.offset_set)) {
+    throw std::invalid_argument("producer received a receiver-only option");
+  }
+  if (cli.mode == "receiver" && (cli.listen_set || cli.batch_slots_set || cli.credit_mode_set)) {
+    throw std::invalid_argument("receiver received a producer-only option");
+  }
   return cli;
 }
 
@@ -156,12 +184,12 @@ void print_stats(const daqiri::ucx_gpu::TransportStats& stats, double seconds) {
   const double gib_per_second =
       seconds == 0 ? 0 : static_cast<double>(stats.bytes) * 8.0 / seconds / 1e9;
   std::cout << "generated=" << stats.generated << " admitted=" << stats.admitted
-            << " dropped_no_connection=" << stats.dropped_no_connection
             << " dropped_no_credit=" << stats.dropped_no_credit
-            << " send_completed=" << stats.send_completed << " send_failed=" << stats.send_failed
-            << " outstanding=" << stats.outstanding
-            << " delivery_unknown=" << stats.delivery_unknown << " delivered=" << stats.delivered
-            << " released=" << stats.released << " sequence_gaps=" << stats.sequence_gaps
+            << " delivery_unknown=" << stats.delivery_unknown
+            << " batches_sent=" << stats.batches_sent
+            << " batches_delivered=" << stats.batches_delivered
+            << " batches_released=" << stats.batches_released
+            << " sequence_gaps=" << stats.sequence_gaps
             << " validation_failures=" << stats.validation_failures << " bytes=" << stats.bytes
             << " elapsed_s=" << std::fixed << std::setprecision(6) << seconds
             << " payload_Gbit_s=" << gib_per_second << '\n';
@@ -196,8 +224,6 @@ int run_producer(const Cli& cli) {
     producer.wait_for_receiver();
     std::uint64_t next_sequence = 0;
     while (next_sequence < cli.images) {
-      while (producer.poll_retired()) {
-      }
       if (std::optional<std::string> error = producer.error()) {
         throw std::runtime_error(*error);
       }
@@ -207,10 +233,8 @@ int run_producer(const Cli& cli) {
         continue;
       }
       const std::uint64_t remaining = cli.images - next_sequence;
-      const std::uint64_t credit_limited =
-          cli.wait_for_credit ? std::min<std::uint64_t>(remaining, cli.queue_depth) : remaining;
       const std::uint32_t image_count = static_cast<std::uint32_t>(
-          std::min<std::uint64_t>(credit_limited, daqiri::ucx_example::geometry::kImagesPerBatch));
+          std::min<std::uint64_t>(remaining, daqiri::ucx_example::geometry::kImagesPerBatch));
       for (std::uint32_t image = 0; image < image_count; ++image) {
         auto* destination = static_cast<std::uint8_t*>(lease->device_data()) +
                             static_cast<std::size_t>(image) * daqiri::ucx_gpu::kImageBytes;
@@ -310,20 +334,25 @@ int run_receiver(const Cli& cli) {
       }
       activity_deadline =
           std::chrono::steady_clock::now() + std::chrono::seconds(cli.timeout_seconds);
-      auto& image = *result.image;
-      if (cli.validation == ValidationMode::generated) {
-        cuda_status = daqiri::ucx_gpu::validate_image_async(image.device_data(), image.sequence(),
-                                                            device_result, stream);
-      } else {
-        cuda_status = daqiri::ucx_gpu::validate_transformed_raw_image_async(
-            image.device_data(), image.sequence(), cli.scale, cli.offset, device_result, stream);
+      auto& batch = *result.batch;
+      for (std::uint32_t image = 0; image < batch.image_count(); ++image) {
+        auto* image_data = static_cast<std::uint8_t*>(batch.device_data()) +
+                           static_cast<std::size_t>(image) * daqiri::ucx_gpu::kImageBytes;
+        const std::uint64_t sequence = batch.first_sequence() + image;
+        if (cli.validation == ValidationMode::generated) {
+          cuda_status =
+              daqiri::ucx_gpu::validate_image_async(image_data, sequence, device_result, stream);
+        } else {
+          cuda_status = daqiri::ucx_gpu::validate_transformed_raw_image_async(
+              image_data, sequence, cli.scale, cli.offset, device_result, stream);
+        }
+        if (cuda_status != cudaSuccess) {
+          receiver.release_after(std::move(batch), stream);
+          throw std::runtime_error(std::string("CUDA validation: ") +
+                                   cudaGetErrorString(cuda_status));
+        }
       }
-      if (cuda_status != cudaSuccess) {
-        receiver.release_after(std::move(image), stream);
-        throw std::runtime_error(std::string("CUDA validation: ") +
-                                 cudaGetErrorString(cuda_status));
-      }
-      receiver.release_after(std::move(image), stream);
+      receiver.release_after(std::move(batch), stream);
     }
   } catch (...) {
     primary_error = std::current_exception();

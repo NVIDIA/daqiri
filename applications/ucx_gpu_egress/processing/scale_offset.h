@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "../image_geometry.h"
+
 #include <cuda_runtime_api.h>
 
 #include <cstddef>
@@ -10,12 +12,10 @@
 
 namespace daqiri::ucx_gpu {
 
-constexpr std::size_t kProcessingImageWidth = 256;
-constexpr std::size_t kProcessingImageHeight = 256;
-constexpr std::size_t kProcessingImagePixels = kProcessingImageWidth * kProcessingImageHeight;
-constexpr std::size_t kProcessingBatchImages = 16;
+constexpr std::size_t kProcessingImagePixels = ucx_example::geometry::kImagePixels;
+constexpr std::size_t kProcessingBatchImages = ucx_example::geometry::kImagesPerBatch;
 constexpr std::size_t kProcessingBatchPixels = kProcessingBatchImages * kProcessingImagePixels;
-constexpr std::size_t kProcessingBatchBytes = kProcessingBatchPixels * sizeof(std::uint16_t);
+constexpr std::size_t kProcessingBatchBytes = ucx_example::geometry::kBatchBytes;
 
 // Launches an in-place transform over exactly sixteen contiguous 256x256 uint16
 // images. The function is stream-asynchronous: successful return only means the

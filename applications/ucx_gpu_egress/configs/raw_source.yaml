@@ -37,7 +37,6 @@ ucx_gpu_raw_source:
   queue_id: 0
   cpu_core: 16
   burst_packets: 2048
-  source_epoch: 1311768467463790320
   eth_dst_addr: "<HOST_B_LINK1_MAC>"
   ip_src_addr: "1.1.1.1"
   ip_dst_addr: "2.2.2.2"
