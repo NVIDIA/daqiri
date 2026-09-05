@@ -64,6 +64,7 @@ daqiri:
             udp_dst: 5000
         reorder_configs:
         - name: "rx_reorder_quantize_seq_batch"
+          reorder_engine: "sw"
           reorder_type: "gpu"
           memory_region: "Reorder_RX_GPU"
           payload_byte_offset: 64

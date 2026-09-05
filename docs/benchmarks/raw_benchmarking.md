@@ -110,6 +110,25 @@ The benchmark executables and example YAML configurations are located at:
 
 The fields in the YAML configs will be explained in more detail in [Understanding the Configuration File](../tutorials/configuration-walkthrough.md). For now, we'll stick to modifying the strict minimum required fields to run the application as-is on your system.
 
+### Hardware reorder benchmark
+
+`daqiri_bench_raw_reorder_seq` can exercise ibverbs hardware direct placement on ConnectX-7 or
+newer NICs. The `*_reorder_seq_*.yaml` hardware examples select `engine: "ibverbs"`, set
+`reorder_engine: "hw"` and `cyclic_sequence: true`, and make the benchmark TX sequence wrap with
+`sequence_number_modulus`. The reorder output memory region may use `kind: device` for GPUDirect
+placement or a CPU-addressable kind.
+
+The current hardware path uses the mlx5 flex parser and private receive queues; a host CPU polls
+CQEs and releases only complete aggregates to the application. It does not use DPA and it does not
+launch the software reorder kernel. Successful output includes a non-zero
+`direct_placed_batches` count. Always free each received burst promptly, because its fixed output
+slots are rearmed only by `free_rx_burst()`.
+
+Use `mlnx_perf -i <rx-netdev> -t 1` during a run of at least 10 seconds and report stable RX
+samples after discarding startup and shutdown. For a cabled test, report the physical receive
+rate. For single-port hardware loopback, report `vport_loopback_bytes` as described below and do
+not add TX and RX for the same returned traffic.
+
 ### Hardware tunnel transform examples
 
 Raw DPDK and raw ibverbs builds can program hardware flow actions that push or

@@ -430,14 +430,26 @@ memory.
 
 ## RX Packet Aggregation and Reorder
 
-DAQIRI can perform GPU- or CPU-side packet aggregation and reordering
-on RX through `rx.reorder_configs`:
+DAQIRI can perform packet aggregation and reordering on RX through
+`rx.reorder_configs`. Software reorder remains the default:
 
 - **GPU reorder configs** copy selected packet payloads into a configured
   output memory region and deliver the result as one *reordered
   aggregate burst*.
 - **CPU reorder configs** provide the same aggregate-burst model for
   CPU-addressable packet and output memory.
+- **Hardware reorder configs** (`reorder_engine: hw`) use the raw ibverbs engine's mlx5 flex
+  parser and flow steering to make the NIC DMA each payload directly into its final aggregate
+  slot. A host poller consumes CQEs and publishes the burst after the batch is complete; no DPA or
+  reorder-copy kernel is involved. The destination may be CPU or GPU memory.
+
+Hardware reorder is an explicit, hardware-specific optimization for ConnectX-7 or newer NICs. It
+requires a cyclic sequence/address value over the finite output ring because the current mlx5
+rules use exact 32-bit programmable-sample matches. Use software reorder for wide monotonic
+sequence fields, data-type conversion, timeout-flushed partial batches, or unsupported hardware.
+Direct-placed slots remain caller-owned until the aggregate burst is freed: DAQIRI withholds their
+replacement receive credits, so retaining a burst backpressures that batch and can cause drops on
+the next sequence cycle.
 
 This is the path to use when packets arrive out of order (e.g. across
 multiple NIC queues) and need to be reassembled into a single, contiguous

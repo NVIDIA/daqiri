@@ -537,6 +537,13 @@ bool DpdkEngine::init_reorder_queue_state(const InterfaceConfig& intf, const RxQ
   }
 
   for (const auto& reorder_cfg : intf.rx_.reorder_configs_) {
+    if (reorder_cfg.reorder_engine_ != "sw") {
+      DAQIRI_LOG_ERROR(
+          "DPDK reorder config '{}' requests reorder_engine '{}'; the DPDK engine supports only "
+          "reorder_engine: sw. Select engine: ibverbs for hardware direct placement",
+          reorder_cfg.name_, reorder_cfg.reorder_engine_);
+      return false;
+    }
     const bool use_gpu_backend = reorder_cfg.reorder_type_ == "gpu";
     int flow_queue_id = -1;
     std::vector<FlowId> queue_flow_ids;
@@ -932,7 +939,6 @@ bool DpdkEngine::init_reorder_queue_state(const InterfaceConfig& intf, const RxQ
 
   if (!qstate.plans.empty()) {
     qstate.enabled = true;
-    qstate.single_plan_fast_path = qstate.plans.size() == 1;
     const auto queue_batch_size = static_cast<size_t>(qcfg.common_.batch_size_);
     qstate.plan_pkt_indices.resize(qstate.plans.size());
     qstate.plan_pkt_counts.resize(qstate.plans.size());
@@ -1525,50 +1531,6 @@ Status DpdkEngine::process_burst_for_reorder(uint32_t key, ReorderQueueState& qs
   const uint64_t now_cycles = rte_get_timer_cycles();
   const int num_pkts = static_cast<int>(burst->hdr.hdr.num_pkts);
 
-  if (qstate.single_plan_fast_path && qstate.plans.size() == 1) {
-    auto& plan = qstate.plans[0];
-
-    if (plan.use_gpu_backend && plan.stream == nullptr) {
-      DAQIRI_LOG_ERROR("Reorder stream is not set for interface port {} queue {} config '{}'",
-                       plan.port_id,
-                       plan.queue_id,
-                       plan.config->name_);
-      free_all_packets(burst);
-      free_rx_burst(burst);
-      return Status::INVALID_PARAMETER;
-    }
-
-    for (int pkt_idx = 0; pkt_idx < num_pkts; ++pkt_idx) {
-      auto* mbuf = reinterpret_cast<rte_mbuf*>(burst->pkts[0][pkt_idx]);
-
-      void* pkt_ptr = rte_pktmbuf_mtod(mbuf, void*);
-
-      size_t batch_size = 0;
-      const auto append_status =
-          append_reorder_packet(plan, mbuf, pkt_ptr, now_cycles, &batch_size);
-      if (append_status != Status::SUCCESS) {
-        if (final_status == Status::SUCCESS) { final_status = append_status; }
-        rte_pktmbuf_free(mbuf);
-        continue;
-      }
-      if (batch_size >= plan.packets_per_batch) {
-        BurstParams* out = nullptr;
-        const auto status = flush_reorder_batch(plan, 0, false, &out);
-        if (status != Status::SUCCESS && final_status == Status::SUCCESS) {
-          final_status = status;
-        }
-        if (out != nullptr) {
-          qstate.ready_outputs.push_back(out);
-        }
-      }
-    }
-
-    // In the queue-owned fast path all source packets are retained by reorder state until
-    // their CUDA event completes. The raw burst metadata is not exposed to the consumer.
-    free_rx_burst(burst);
-    return final_status;
-  }
-
   std::fill(qstate.plan_pkt_counts.begin(), qstate.plan_pkt_counts.end(), 0U);
   auto& unmatched_indices = qstate.unmatched_indices;
   qstate.unmatched_count = 0;
@@ -1648,13 +1610,19 @@ Status DpdkEngine::process_burst_for_reorder(uint32_t key, ReorderQueueState& qs
 
   const int unmatched_count = static_cast<int>(qstate.unmatched_count);
   if (unmatched_count > 0) {
+    uint64_t unmatched_bytes = 0;
     for (int out_idx = 0; out_idx < unmatched_count; ++out_idx) {
       const int in_idx = unmatched_indices[out_idx];
       for (int seg = 0; seg < burst->hdr.hdr.num_segs; ++seg) {
         burst->pkts[seg][out_idx] = burst->pkts[seg][in_idx];
       }
+      const auto* mbuf = reinterpret_cast<const rte_mbuf*>(burst->pkts[0][out_idx]);
+      if (mbuf != nullptr) {
+        unmatched_bytes += mbuf->pkt_len;
+      }
     }
     burst->hdr.hdr.num_pkts = unmatched_count;
+    burst->hdr.hdr.nbytes = unmatched_bytes;
     qstate.ready_outputs.push_back(burst);
   } else {
     // Matched packets are kept in reorder state and freed when output is emitted.
@@ -5602,6 +5570,7 @@ bool DpdkEngine::validate_config() const {
     }
 
     std::unordered_map<FlowId, uint16_t> flow_to_queue;
+    std::unordered_map<FlowId, const FlowConfig*> flow_by_id;
     bool has_standard_flows = false;
     bool has_flex_item_flows = false;
     bool has_ecpri_flows = false;
@@ -5619,6 +5588,7 @@ bool DpdkEngine::validate_config() const {
         }
       }
       flow_to_queue.emplace(flow.id_, destination_ids.front());
+      flow_by_id.emplace(flow.id_, &flow);
       if (flow.match_.type_ == FlowMatchType::FLEX_ITEM) {
         has_flex_item_flows = true;
         const uint16_t flex_item_id = flow.match_.flex_item_match_.flex_item_id_;
@@ -5660,7 +5630,24 @@ bool DpdkEngine::validate_config() const {
     }
 
     std::unordered_set<FlowId> reorder_flow_ids;
+    std::unordered_set<std::string> reorder_names;
     for (const auto& reorder_cfg : intf.rx_.reorder_configs_) {
+      if (!reorder_names.insert(reorder_cfg.name_).second) {
+        DAQIRI_LOG_ERROR("Duplicate reorder config name '{}' on interface '{}'", reorder_cfg.name_,
+                         intf.name_);
+        return false;
+      }
+      if (!intf.rx_.flow_isolation_) {
+        DAQIRI_LOG_ERROR("Reorder config '{}' requires rx.flow_isolation: true", reorder_cfg.name_);
+        return false;
+      }
+      if (reorder_cfg.reorder_engine_ != "sw") {
+        DAQIRI_LOG_ERROR(
+            "DPDK reorder config '{}' requests reorder_engine '{}'; the DPDK engine supports "
+            "only reorder_engine: sw. Select engine: ibverbs for hardware direct placement",
+            reorder_cfg.name_, reorder_cfg.reorder_engine_);
+        return false;
+      }
       const bool use_gpu_backend = reorder_cfg.reorder_type_ == "gpu";
       const bool use_cpu_backend = reorder_cfg.reorder_type_ == "cpu";
       if (!use_gpu_backend && !use_cpu_backend) {
@@ -5679,6 +5666,20 @@ bool DpdkEngine::validate_config() const {
                            reorder_cfg.name_,
                            flow_id,
                            intf.name_);
+          return false;
+        }
+        const auto flow_it = flow_by_id.find(flow_id);
+        const bool has_native_match =
+            flow_it != flow_by_id.end() &&
+            (flow_it->second->match_.udp_src_ != 0 || flow_it->second->match_.udp_dst_ != 0 ||
+             flow_it->second->match_.ipv4_src_ != INADDR_ANY ||
+             flow_it->second->match_.ipv4_dst_ != INADDR_ANY ||
+             flow_it->second->match_.ipv4_len_ != 0);
+        if (flow_it == flow_by_id.end() ||
+            flow_it->second->match_.type_ != FlowMatchType::IPV4_UDP || !has_native_match) {
+          DAQIRI_LOG_ERROR(
+              "Reorder config '{}' flow ID {} must use a non-empty native IPv4/UDP match",
+              reorder_cfg.name_, flow_id);
           return false;
         }
         if (reorder_queue_id < 0) {

@@ -439,7 +439,6 @@ class DpdkEngine : public Engine {
 
   struct ReorderQueueState {
     bool enabled = false;
-    bool single_plan_fast_path = false;
     std::unordered_map<FlowId, size_t> flow_id_to_plan;
     std::vector<ReorderPlanRuntime> plans;
     std::vector<std::vector<int>> plan_pkt_indices;

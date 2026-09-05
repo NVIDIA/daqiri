@@ -238,6 +238,15 @@ actions are not part of that template fast path. The dynamic RX-flow example lea
 setting at `0` so it runs on devices whose mlx5 async flow setup is unavailable or resource
 limited.
 
+The raw ibverbs engine also supports opt-in first-DMA hardware reorder on ConnectX-7 or newer
+mlx5 NICs. Set `reorder_engine: "hw"` and acknowledge the finite-ring sequence contract with
+`cyclic_sequence: true`; software reorder remains the default. The NIC flex parser places each
+payload directly into its final CPU- or GPU-memory aggregate slot while a host CPU polls CQEs—no
+DPA is used. Exact 32-bit parser-sample matching requires the sampled destination value to cycle
+over the configured ring with other sampled bits held at zero. Direct-placed slots are rearmed
+only after the application frees the aggregate burst. See [Raw Ethernet Benchmarking](benchmarks/raw_benchmarking.md#hardware-reorder-benchmark)
+and the [configuration reference](api-reference/configuration.md#rx-reorder-configs).
+
 CUDA architectures default to `80;90` (A100, H100), with `121` (GB10) added
 when configuring with CUDA Toolkit 13.0 or newer. Override
 `CMAKE_CUDA_ARCHITECTURES` when targeting other GPUs.

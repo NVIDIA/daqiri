@@ -52,9 +52,13 @@ enum {
   MLX5_GRAPH_SAMPLE_OFFSET_FIXED = 0x0,
 };
 
-// QUERY_HCA_CAP op_mod: general device caps, current values.
+// QUERY_HCA_CAP op_mod = (capability type << 1) | capability mode, where
+// mode 0 queries the maximum capabilities and mode 1 queries current values.
 enum {
+  MLX5_HCA_CAP_OPMOD_GENERAL_MAX = (0x0 << 1) | 0x0,
   MLX5_HCA_CAP_OPMOD_GENERAL_CUR = (0x0 << 1) | 0x1,
+  MLX5_HCA_CAP_OPMOD_FLOW_TABLE_MAX = (0x7 << 1) | 0x0,
+  MLX5_HCA_CAP_OPMOD_FLOW_TABLE_CUR = (0x7 << 1) | 0x1,
 };
 
 // ---- HCA capability probe (wait_on_time for accurate TX send scheduling) ----
@@ -71,9 +75,9 @@ struct mlx5_ifc_query_hca_cap_in_bits {
 // prefixes (DEVX_GET uses offsetof, so the intervening fields need not be named
 // -- only the cumulative offset must match DPDK's mlx5_ifc_cmd_hca_cap_bits).
 struct mlx5_ifc_cmd_hca_cap_min_bits {
-  uint8_t reserved_at_0[0x420];
-  uint8_t general_obj_types[0x40];  // at bit 0x420; bit 0x22 = FLEX_PARSE_GRAPH
-  uint8_t reserved_at_460[0x80];
+  uint8_t reserved_at_0[0x400];
+  uint8_t general_obj_types[0x40];  // at bit 0x400; bit 0x22 = FLEX_PARSE_GRAPH
+  uint8_t reserved_at_440[0xa0];
   uint8_t device_frequency_khz[0x20];  // at bit 0x4e0
   uint8_t reserved_at_500[0x18b];
   uint8_t wait_on_data[0x1];  // at bit 0x68b
@@ -90,6 +94,33 @@ struct mlx5_ifc_query_hca_cap_out_bits {
   uint8_t reserved_at_40[0x40];
   struct mlx5_ifc_cmd_hca_cap_min_bits capability;
 };
+
+// Minimal NIC flow-table capability view. The receive flow-table properties
+// start at bit 0x200 of the flow-table capability blob; fields within the
+// property retain their PRM offsets. The remainder is padding because firmware
+// writes the complete 0x8000-bit capability blob for QUERY_HCA_CAP.
+struct mlx5_ifc_flow_table_prop_layout_min_bits {
+  uint8_t ft_support[0x1];  // at bit 0x0
+  uint8_t reserved_at_1[0x21];
+  uint8_t log_max_ft_size[0x6];  // at bit 0x22
+  uint8_t reserved_at_28[0x10];
+  uint8_t max_ft_level[0x8];  // at bit 0x38
+};
+
+struct mlx5_ifc_flow_table_nic_cap_min_bits {
+  uint8_t reserved_at_0[0x200];
+  struct mlx5_ifc_flow_table_prop_layout_min_bits flow_table_properties_nic_receive;
+  uint8_t reserved_at_240[0x7dc0];
+};
+
+struct mlx5_ifc_query_flow_table_cap_out_bits {
+  uint8_t status[0x8];
+  uint8_t reserved_at_8[0x18];
+  uint8_t syndrome[0x20];
+  uint8_t reserved_at_40[0x40];
+  struct mlx5_ifc_flow_table_nic_cap_min_bits capability;
+};
+
 enum {
   MLX5_CQE_SIZE_64B = 0x0,
   MLX5_CQE_SIZE_128B = 0x1,

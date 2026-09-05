@@ -64,6 +64,7 @@ daqiri:
             udp_dst: 5000
         reorder_configs:
         - name: "rx_reorder_seq_1024"
+          reorder_engine: "sw"
           reorder_type: "cpu"
           memory_region: "Reorder_RX_CPU"
           payload_byte_offset: 64
