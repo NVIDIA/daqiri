@@ -132,18 +132,14 @@ sockets are not included in this comparison.
 DPDK uses 8 KB packets and RoCE uses 8 MB messages, yielding the same approximate
 working-set size per workload invocation.
 
-!!! warning "Provisional loopback baseline; cross-host re-run pending"
-    These are single-host 100 GbE loopback results, retained here pending a
-    cross-host re-run. Do not compare their absolute rates with the cross-host
-    results above.
-
-**Single-host loopback throughput. Average of three 30 s samples.**
+**Cross-host, one-link receive throughput with GPU workloads. Average of three
+30 s samples; `±` is the sample standard deviation.**
 
 | Workload | DPDK <span class="unit">Gbps</span> | RoCE <span class="unit">Gbps</span> |
 | -------- | ------------------------------------: | -----------------------------------: |
-| none (baseline) | 98.7 ±0.0  | 96.6 ±0.3 |
-| FFT             | 95.7 ±0.8  | 95.6 ±0.1 |
-| GEMM (FP32)     | 96.6 ±0.2  | 90.2 ±1.1 |
+| none (baseline) | 97.918 ±0.008 | 96.633 ±0.265 |
+| FFT             | 97.904 ±0.002 | 95.953 ±1.041 |
+| GEMM (FP32)     | 97.906 ±0.013 | 91.468 ±4.516 |
 
 ### End-to-end inference pipeline (ResNet)
 
