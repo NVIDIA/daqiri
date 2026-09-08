@@ -31,23 +31,19 @@
 
 namespace daqiri::ucx_gpu {
 
-ReceivedBatch::ReceivedBatch(void* device_data, std::size_t size, std::uint64_t first_sequence,
-                             std::uint32_t image_count, std::uint64_t preceding_gap,
-                             std::size_t slot, std::uint64_t generation) noexcept
+ReceivedBatch::ReceivedBatch(void* device_data, std::uint64_t first_sequence,
+                             std::uint32_t image_count, std::size_t slot,
+                             std::uint64_t generation) noexcept
     : device_data_(device_data),
-      size_(size),
       first_sequence_(first_sequence),
       image_count_(image_count),
-      preceding_gap_(preceding_gap),
       slot_(slot),
       generation_(generation) {}
 
 ReceivedBatch::ReceivedBatch(ReceivedBatch&& other) noexcept
     : device_data_(other.device_data_),
-      size_(other.size_),
       first_sequence_(other.first_sequence_),
       image_count_(other.image_count_),
-      preceding_gap_(other.preceding_gap_),
       slot_(other.slot_),
       generation_(other.generation_) {
   other.invalidate();
@@ -55,25 +51,18 @@ ReceivedBatch::ReceivedBatch(ReceivedBatch&& other) noexcept
 
 void ReceivedBatch::invalidate() noexcept {
   device_data_ = nullptr;
-  size_ = 0;
   first_sequence_ = 0;
   image_count_ = 0;
-  preceding_gap_ = 0;
   slot_ = 0;
   generation_ = 0;
 }
 
-BatchLease::BatchLease(void* ucx_data, void* device_data, std::size_t size, std::size_t slot,
+BatchLease::BatchLease(void* device_data, std::size_t size, std::size_t slot,
                        std::uint64_t generation) noexcept
-    : ucx_data_(ucx_data),
-      device_data_(device_data),
-      size_(size),
-      slot_(slot),
-      generation_(generation) {}
+    : device_data_(device_data), size_(size), slot_(slot), generation_(generation) {}
 
 BatchLease::BatchLease(BatchLease&& other) noexcept
-    : ucx_data_(other.ucx_data_),
-      device_data_(other.device_data_),
+    : device_data_(other.device_data_),
       size_(other.size_),
       slot_(other.slot_),
       generation_(other.generation_) {
@@ -81,7 +70,6 @@ BatchLease::BatchLease(BatchLease&& other) noexcept
 }
 
 void BatchLease::invalidate() noexcept {
-  ucx_data_ = nullptr;
   device_data_ = nullptr;
   size_ = 0;
   slot_ = 0;
@@ -253,6 +241,18 @@ class RegisteredPool {
     kind_ = kind;
     slot_bytes_ = slot_bytes;
     bytes_ = slots * slot_bytes_;
+    struct InitializationGuard {
+      RegisteredPool* pool;
+      ucp_context_h context;
+      ~InitializationGuard() {
+        if (pool != nullptr) {
+          pool->destroy(context);
+        }
+      }
+      void release() noexcept {
+        pool = nullptr;
+      }
+    } guard{this, context};
     check_cuda(cudaSetDevice(gpu_id), "cudaSetDevice");
     if (kind == MemoryKind::host_pinned_mapped) {
       check_cuda(cudaHostAlloc(&ucx_base_, bytes_, cudaHostAllocMapped | cudaHostAllocPortable),
@@ -270,6 +270,7 @@ class RegisteredPool {
     params.length = bytes_;
     params.memory_type = ucs_memory_type();
     check_ucs(ucp_mem_map(context, &params, &memh_), "ucp_mem_map(pool)");
+    guard.release();
   }
 
   void destroy(ucp_context_h context) noexcept {
@@ -280,9 +281,10 @@ class RegisteredPool {
       }
       memh_ = nullptr;
     }
-    if (device_base_ != nullptr) {
-      const cudaError_t status = kind_ == MemoryKind::host_pinned_mapped ? cudaFreeHost(ucx_base_)
-                                                                         : cudaFree(device_base_);
+    void* allocation = kind_ == MemoryKind::host_pinned_mapped ? ucx_base_ : device_base_;
+    if (allocation != nullptr) {
+      const cudaError_t status =
+          kind_ == MemoryKind::host_pinned_mapped ? cudaFreeHost(allocation) : cudaFree(allocation);
       if (status != cudaSuccess) {
         std::cerr << "CUDA pool release failed: " << cudaGetErrorString(status) << '\n';
       }
@@ -500,11 +502,19 @@ class ExternalBatchProducer::Impl {
 
   void wait_for_receiver() {
     const Clock::time_point deadline = Clock::now() + options_.timeout;
-    while (!receiver_ready_.load(std::memory_order_acquire)) {
+    while (true) {
       if (failed_.load(std::memory_order_acquire)) {
         std::lock_guard<std::mutex> lock(error_mutex_);
         throw std::runtime_error(error_.empty() ? "external producer failed before ACCEPT"
                                                 : error_);
+      }
+      if (receiver_ready_.load(std::memory_order_acquire)) {
+        if (failed_.load(std::memory_order_acquire)) {
+          std::lock_guard<std::mutex> lock(error_mutex_);
+          throw std::runtime_error(error_.empty() ? "external producer failed during ACCEPT"
+                                                  : error_);
+        }
+        return;
       }
       if (!running_.load(std::memory_order_acquire)) {
         throw std::runtime_error("external producer stopped before ACCEPT");
@@ -547,8 +557,7 @@ class ExternalBatchProducer::Impl {
     const std::uint64_t generation = free.generation + 1;
     slot.generation.store(generation, std::memory_order_release);
     leases_issued_.store(true, std::memory_order_release);
-    return ExternalBatchProducer::AcquiredSlot{pool_.ucx_slot(free.slot),
-                                               pool_.device_slot(free.slot),
+    return ExternalBatchProducer::AcquiredSlot{pool_.device_slot(free.slot),
                                                detail::kExternalBatchBytes, free.slot, generation};
   }
 
@@ -839,7 +848,6 @@ class ExternalBatchProducer::Impl {
       note_activity();
       send_control({ControlType::accept, connection_epoch_, options_.image_count, requested_depth,
                     detail::kExternalBatchImages, 0});
-      receiver_ready_.store(true, std::memory_order_release);
       return;
     }
     if (!active_ || message.connection_epoch != connection_epoch_) {
@@ -888,6 +896,11 @@ class ExternalBatchProducer::Impl {
     if (operation.status != UCS_OK) {
       self->fail(std::string("external producer control send failed: ") +
                  ucs_status_string(operation.status));
+      return;
+    }
+    if (operation.control_type == ControlType::accept &&
+        !self->failed_.load(std::memory_order_acquire)) {
+      self->receiver_ready_.store(true, std::memory_order_release);
     }
   }
 
@@ -1256,10 +1269,8 @@ class Receiver::Impl {
       std::size_t slot_index = 0;
       if (pop_completed(slot_index)) {
         Slot& slot = slots_[slot_index];
-        const std::size_t bytes = static_cast<std::size_t>(slot.header.image_count) * kImageBytes;
-        ReceivedBatch batch(pool_.device_slot(slot_index), bytes, slot.header.first_sequence,
-                            slot.header.image_count, slot.preceding_gap, slot_index,
-                            slot.generation);
+        ReceivedBatch batch(pool_.device_slot(slot_index), slot.header.first_sequence,
+                            slot.header.image_count, slot_index, slot.generation);
         return {ReceiveStatus::batch, std::move(batch), {}};
       }
       if (failed_) {
@@ -1841,8 +1852,7 @@ std::optional<BatchLease> ExternalBatchProducer::try_acquire() {
   if (!acquired) {
     return std::nullopt;
   }
-  return BatchLease(acquired->ucx_data, acquired->device_data, acquired->size, acquired->slot,
-                    acquired->generation);
+  return BatchLease(acquired->device_data, acquired->size, acquired->slot, acquired->generation);
 }
 void ExternalBatchProducer::submit_after(BatchLease&& lease, std::uint64_t first_sequence,
                                          std::uint32_t image_count,

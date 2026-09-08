@@ -113,6 +113,7 @@ struct IbvReorderPlan {
 };
 
 struct IbvReorderState {
+  ~IbvReorderState();
   bool enabled = false;
   bool single_plan = false;
   Status failure_status = Status::SUCCESS;

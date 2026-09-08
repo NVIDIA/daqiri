@@ -67,17 +67,11 @@ class ReceivedBatch {
   void* device_data() const noexcept {
     return device_data_;
   }
-  std::size_t size() const noexcept {
-    return size_;
-  }
   std::uint64_t first_sequence() const noexcept {
     return first_sequence_;
   }
   std::uint32_t image_count() const noexcept {
     return image_count_;
-  }
-  std::uint64_t preceding_gap() const noexcept {
-    return preceding_gap_;
   }
   explicit operator bool() const noexcept {
     return generation_ != 0;
@@ -85,16 +79,13 @@ class ReceivedBatch {
 
  private:
   friend class Receiver;
-  ReceivedBatch(void* device_data, std::size_t size, std::uint64_t first_sequence,
-                std::uint32_t image_count, std::uint64_t preceding_gap, std::size_t slot,
-                std::uint64_t generation) noexcept;
+  ReceivedBatch(void* device_data, std::uint64_t first_sequence, std::uint32_t image_count,
+                std::size_t slot, std::uint64_t generation) noexcept;
   void invalidate() noexcept;
 
   void* device_data_{nullptr};
-  std::size_t size_{0};
   std::uint64_t first_sequence_{0};
   std::uint32_t image_count_{0};
-  std::uint64_t preceding_gap_{0};
   std::size_t slot_{0};
   std::uint64_t generation_{0};
 };
@@ -119,20 +110,11 @@ class BatchLease {
   BatchLease(BatchLease&& other) noexcept;
   BatchLease& operator=(BatchLease&& other) = delete;
 
-  void* ucx_data() const noexcept {
-    return ucx_data_;
-  }
   void* device_data() const noexcept {
     return device_data_;
   }
   std::size_t size() const noexcept {
     return size_;
-  }
-  std::size_t slot() const noexcept {
-    return slot_;
-  }
-  std::uint64_t generation() const noexcept {
-    return generation_;
   }
   explicit operator bool() const noexcept {
     return generation_ != 0;
@@ -140,11 +122,10 @@ class BatchLease {
 
  private:
   friend class ExternalBatchProducer;
-  BatchLease(void* ucx_data, void* device_data, std::size_t size, std::size_t slot,
+  BatchLease(void* device_data, std::size_t size, std::size_t slot,
              std::uint64_t generation) noexcept;
   void invalidate() noexcept;
 
-  void* ucx_data_{nullptr};
   void* device_data_{nullptr};
   std::size_t size_{0};
   std::size_t slot_{0};
@@ -194,7 +175,6 @@ class ExternalBatchProducer {
 
  private:
   struct AcquiredSlot {
-    void* ucx_data{nullptr};
     void* device_data{nullptr};
     std::size_t size{0};
     std::size_t slot{0};
