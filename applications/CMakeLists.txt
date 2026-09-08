@@ -15,5 +15,13 @@
 
 # End-to-end example applications that build ON TOP of the DAQIRI library
 # (downstream consumers). Gated by DAQIRI_BUILD_APPLICATIONS in the top-level
-# CMakeLists because they pull in heavier optional dependencies (TensorRT).
-add_subdirectory(resnet50_inference)
+# CMakeLists because they pull in heavier optional dependencies. The individual
+# application switches are declared beside the umbrella option at the top level.
+
+if(DAQIRI_BUILD_RESNET50_INFERENCE)
+  add_subdirectory(resnet50_inference)
+endif()
+
+if(DAQIRI_BUILD_UCX_GPU_EGRESS)
+  add_subdirectory(ucx_gpu_egress)
+endif()

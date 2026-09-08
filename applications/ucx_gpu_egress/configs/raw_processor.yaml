@@ -1,0 +1,77 @@
+%YAML 1.2
+---
+# Host B: replace the Link 1 BDF and Link 2 listener address.
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    engine: "ibverbs"
+    master_core: 8
+    debug: false
+    log_level: "info"
+    loopback: ""
+    memory_regions:
+    - name: "Raw_RX"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 16384
+      buf_size: 8272
+    - name: "Reorder_RX"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 32
+      # 256 packets * 8192 payload bytes = sixteen 256x256 uint16 images.
+      buf_size: 2097152
+    interfaces:
+    - name: "rx_port"
+      address: <HOST_B_LINK1_PCIE_BDF>
+      rx:
+        flow_isolation: true
+        queues:
+        - name: "rx_q_0"
+          id: 0
+          cpu_core: 18
+          batch_size: 1024
+          timeout_us: 2000
+          memory_regions:
+          - "Raw_RX"
+        flows:
+        - name: "image_fragments"
+          id: 101
+          action:
+            type: queue
+            id: 0
+          match:
+            udp_src: 4096
+            udp_dst: 4096
+        reorder_configs:
+        - name: "rx_image_batches"
+          reorder_type: "gpu"
+          memory_region: "Reorder_RX"
+          # Bytes [0,80) hold Ethernet/IPv4/UDP, the sequence, and padding.
+          payload_byte_offset: 80
+          flow_ids:
+          - 101
+          method:
+            seq_packets_per_batch:
+              sequence_number:
+                # Network-order uint32 at frame byte 42.
+                bit_offset: 336
+                bit_width: 32
+              packets_per_batch: 256
+
+ucx_gpu_raw_processor:
+  interface_name: "rx_port"
+  reorder_name: "rx_image_batches"
+  queue_id: 0
+  gpu_id: 0
+  app_core: 17
+  ucx_core: 16
+  slot_count: 16
+  listen_endpoint: "<HOST_B_LINK2_IP>:13341"
+  memory_kind: "host_pinned_mapped"
+  timeout_seconds: 120
+  overall_timeout_seconds: 300
+  idle_timeout_seconds: 10
+  scale: 1.25
+  offset: -32.0

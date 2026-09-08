@@ -50,9 +50,18 @@ endif()
 
 option(DAQIRI_BUILD_PYTHON "Build Python bindings" OFF)
 option(DAQIRI_BUILD_EXAMPLES "Build standalone examples" ON)
-option(DAQIRI_BUILD_APPLICATIONS "Build example applications (requires TensorRT)" OFF)
+option(DAQIRI_BUILD_APPLICATIONS "Build opt-in example applications" OFF)
+option(DAQIRI_BUILD_RESNET50_INFERENCE
+       "Build the TensorRT ResNet50 example application" ON)
+option(DAQIRI_BUILD_UCX_GPU_EGRESS
+       "Build the raw-Ethernet to UCX GPU example application" OFF)
+option(BUILD_TESTING "Build component tests" OFF)
 option(DAQIRI_ENABLE_OTEL_METRICS "Enable OpenTelemetry metrics instrumentation" OFF)
 set(DAQIRI_ENGINE "dpdk ibverbs" CACHE STRING "Optional engine implementations to build: dpdk, ibverbs (Linux sockets are always built in)")
+
+if(BUILD_TESTING)
+  enable_testing()
+endif()
 
 add_subdirectory(src)
 
@@ -116,18 +125,23 @@ else()
 endif()
 
 set(DAQIRI_PC_REQUIRES "")
-set(DAQIRI_PC_REQUIRES_PRIVATE "libdpdk")
 set(DAQIRI_PC_LIBS "-lyaml-cpp")
 if(DAQIRI_ENABLE_OTEL_METRICS)
   string(APPEND DAQIRI_PC_LIBS " -lopentelemetry_api")
 endif()
+separate_arguments(DAQIRI_PC_ENGINE_LIST UNIX_COMMAND "${DAQIRI_ENGINE}")
+set(DAQIRI_PC_REQUIRES_PRIVATE_LIST "")
+list(FIND DAQIRI_PC_ENGINE_LIST "dpdk" DAQIRI_PC_HAS_DPDK_IDX)
+if(NOT DAQIRI_PC_HAS_DPDK_IDX EQUAL -1)
+  list(APPEND DAQIRI_PC_REQUIRES_PRIVATE_LIST libdpdk)
+endif()
 # The ibverbs engine (and the socket RoCE path it backs) needs libibverbs /
 # librdmacm. Plain Linux UDP/TCP sockets need nothing extra.
-separate_arguments(DAQIRI_PC_ENGINE_LIST UNIX_COMMAND "${DAQIRI_ENGINE}")
 list(FIND DAQIRI_PC_ENGINE_LIST "ibverbs" DAQIRI_PC_HAS_IBVERBS_IDX)
 if(NOT DAQIRI_PC_HAS_IBVERBS_IDX EQUAL -1)
-  string(APPEND DAQIRI_PC_REQUIRES_PRIVATE " libibverbs librdmacm")
+  list(APPEND DAQIRI_PC_REQUIRES_PRIVATE_LIST libibverbs librdmacm)
 endif()
+list(JOIN DAQIRI_PC_REQUIRES_PRIVATE_LIST " " DAQIRI_PC_REQUIRES_PRIVATE)
 
 set(DAQIRI_PC_REQUIRES_LINE "")
 if(DAQIRI_PC_REQUIRES)

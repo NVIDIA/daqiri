@@ -399,6 +399,32 @@ static inline uint8_t rdr_batch_width(const ReorderConfig& c) {
   return c.method_ == ReorderMethod::SEQ_BATCH_NUMBER ? c.seq_batch_number_.batch_number_.bit_width_
                                                       : 0U;
 }
+
+static inline uint32_t extract_bits_be_host(const void* data, uint16_t bit_offset,
+                                            uint8_t bit_width) {
+  const auto* bytes = static_cast<const uint8_t*>(data);
+  uint32_t value = 0;
+  for (uint8_t bit = 0; bit < bit_width; ++bit) {
+    const uint32_t source_bit = static_cast<uint32_t>(bit_offset) + bit;
+    value = (value << 1U) |
+            ((static_cast<uint32_t>(bytes[source_bit / 8U]) >> (7U - (source_bit % 8U))) & 1U);
+  }
+  return value;
+}
+
+static inline bool bit_field_fits(size_t bytes, uint16_t bit_offset, uint8_t bit_width) {
+  return bit_width > 0 && bit_width <= 32 &&
+         static_cast<uint64_t>(bit_offset) + bit_width <= static_cast<uint64_t>(bytes) * 8U;
+}
+
+static inline void reset_reorder_accumulation(IbvReorderPlan& plan) {
+  plan.acc_ptrs.clear();
+  plan.acc_wqe.clear();
+  plan.acc_strd.clear();
+  plan.acc_input_payload_len = 0;
+  plan.acc_output_payload_len = 0;
+}
+
 static inline bool rdr_uses_conversion(const ReorderConfig& c) {
   if (!c.data_types_.enabled_) {
     return false;
@@ -3275,6 +3301,52 @@ IbvRxQueue* IbverbsEngine::find_rx_queue(int port, int q) {
 // GPU packet reordering (reuses the src/kernels.cu C ABI). Mirrors the DPDK
 // reorder path but feeds it from the MPRQ RX bursts. Single plan per queue.
 // ---------------------------------------------------------------------------
+static void destroy_reorder_cuda_resources(IbvReorderPlan& plan) noexcept {
+  CudaContextGuard context_guard(plan.cuda_context);
+  cudaError_t context_status = cudaSuccess;
+  if (plan.cuda_context == nullptr) {
+    context_status = cudaSetDevice(plan.cuda_device_id);
+  } else if (!context_guard.valid()) {
+    context_status = cudaErrorInvalidDevice;
+  }
+  if (context_status != cudaSuccess) {
+    DAQIRI_LOG_ERROR("Reorder '{}' could not activate CUDA while releasing reorder state",
+                     plan.cfg.name_);
+    return;
+  }
+
+  const auto log_cleanup_error = [&](cudaError_t status, const char* operation) {
+    if (status != cudaSuccess) {
+      DAQIRI_LOG_ERROR("Reorder '{}' {} failed during cleanup: {}", plan.cfg.name_, operation,
+                       cudaGetErrorString(status));
+    }
+  };
+  for (auto& ob : plan.out_bufs) {
+    if (ob.event != nullptr) {
+      log_cleanup_error(cudaEventDestroy(ob.event), "event destruction");
+      ob.event = nullptr;
+    }
+    if (ob.h_batch_id != nullptr) {
+      log_cleanup_error(cudaFreeHost(ob.h_batch_id), "host batch-ID release");
+      ob.h_batch_id = nullptr;
+    }
+    if (ob.d_batch_id != nullptr) {
+      log_cleanup_error(cudaFree(ob.d_batch_id), "device batch-ID release");
+      ob.d_batch_id = nullptr;
+    }
+  }
+  if (plan.d_input_ptrs != nullptr) {
+    log_cleanup_error(cudaFree(plan.d_input_ptrs), "input-pointer release");
+    plan.d_input_ptrs = nullptr;
+  }
+}
+
+IbvReorderState::~IbvReorderState() {
+  for (auto& plan : plans) {
+    destroy_reorder_cuda_resources(plan);
+  }
+}
+
 Status IbverbsEngine::init_reorder(IbvRxQueue& q, const InterfaceConfig& intf,
                                    const RxQueueConfig& qcfg) {
   if (intf.rx_.reorder_configs_.empty()) {
@@ -3323,6 +3395,14 @@ Status IbverbsEngine::init_reorder(IbvRxQueue& q, const InterfaceConfig& intf,
       DAQIRI_LOG_CRITICAL("Reorder '{}' packets_per_batch is 0", rc.name_);
       return Status::INVALID_PARAMETER;
     }
+    if (rc.payload_byte_offset_ > src_mr.buf_size_ ||
+        !bit_field_fits(src_mr.buf_size_, rdr_seq_off(rc), rdr_seq_width(rc)) ||
+        (rc.method_ == ReorderMethod::SEQ_BATCH_NUMBER &&
+         !bit_field_fits(src_mr.buf_size_, rdr_batch_off(rc), rdr_batch_width(rc)))) {
+      DAQIRI_LOG_CRITICAL("Reorder '{}' fields exceed source buffer size {}", rc.name_,
+                          src_mr.buf_size_);
+      return Status::INVALID_PARAMETER;
+    }
     plan.copy_source_offset = rc.payload_byte_offset_;
     plan.slot_stride = static_cast<uint32_t>(src_mr.buf_size_ - rc.payload_byte_offset_);
     plan.data_type_conversion = rdr_uses_conversion(rc);
@@ -3345,12 +3425,8 @@ Status IbverbsEngine::init_reorder(IbvRxQueue& q, const InterfaceConfig& intf,
       const auto& region = ar_.at(mr_name);
       if (region.cuda_device_ != plan.cuda_device_id) {
         DAQIRI_LOG_CRITICAL(
-            "Reorder '{}' {} MR '{}' uses CUDA device {}, but the plan uses device {}",
-            rc.name_,
-            role,
-            mr_name,
-            region.cuda_device_,
-            plan.cuda_device_id);
+            "Reorder '{}' {} MR '{}' uses CUDA device {}, but the plan uses device {}", rc.name_,
+            role, mr_name, region.cuda_device_, plan.cuda_device_id);
         return Status::INVALID_PARAMETER;
       }
       if (plan.cuda_context != nullptr && region.cuda_context_ != nullptr &&
@@ -3366,27 +3442,59 @@ Status IbverbsEngine::init_reorder(IbvRxQueue& q, const InterfaceConfig& intf,
       return Status::INVALID_PARAMETER;
     }
     plan.acc_ptrs.reserve(plan.packets_per_batch);
+    plan.acc_wqe.reserve(plan.packets_per_batch);
+    plan.acc_strd.reserve(plan.packets_per_batch);
+    const uint64_t batch_id_space =
+        rc.method_ == ReorderMethod::SEQ_BATCH_NUMBER
+            ? (uint64_t{1} << rc.seq_batch_number_.batch_number_.bit_width_)
+            : (uint64_t{1} << rc.seq_packets_per_batch_.sequence_number_.bit_width_) /
+                  plan.packets_per_batch;
+    const bool track_batch_boundaries = src_mr.kind_ != MemoryKind::DEVICE && batch_id_space > 2U;
+    if (track_batch_boundaries) {
+      plan.batch_tracker.emplace(plan.packets_per_batch, batch_id_space);
+    } else if (src_mr.kind_ == MemoryKind::DEVICE) {
+      DAQIRI_LOG_WARN(
+          "Reorder '{}' uses device RX memory; sequence-derived batch-boundary and duplicate "
+          "checks are unavailable",
+          rc.name_);
+    } else {
+      DAQIRI_LOG_WARN(
+          "Reorder '{}' has only {} distinct batch IDs; boundary direction is ambiguous and "
+          "sequence-derived checks are unavailable",
+          rc.name_, batch_id_space);
+    }
 
-    CudaContextGuard context_guard(plan.cuda_context);
-    if (plan.cuda_context == nullptr) {
-      cudaSetDevice(plan.cuda_device_id);
+    const size_t plan_idx = st->plans.size();
+    st->plans.push_back(std::move(plan));
+    auto& owned_plan = st->plans.back();
+
+    CudaContextGuard context_guard(owned_plan.cuda_context);
+    if (owned_plan.cuda_context == nullptr) {
+      if (cudaSetDevice(owned_plan.cuda_device_id) != cudaSuccess) {
+        DAQIRI_LOG_CRITICAL("Reorder '{}' could not select CUDA device {}", rc.name_,
+                            owned_plan.cuda_device_id);
+        return Status::GENERIC_FAILURE;
+      }
     } else if (!context_guard.valid()) {
+      DAQIRI_LOG_CRITICAL("Reorder '{}' could not activate its CUDA context", rc.name_);
       return Status::INTERNAL_ERROR;
     }
-    if (cudaMalloc(reinterpret_cast<void**>(&plan.d_input_ptrs),
-                   sizeof(void*) * plan.packets_per_batch) != cudaSuccess) {
+    if (cudaMalloc(reinterpret_cast<void**>(&owned_plan.d_input_ptrs),
+                   sizeof(void*) * owned_plan.packets_per_batch) != cudaSuccess) {
       DAQIRI_LOG_CRITICAL("Reorder '{}' cudaMalloc(d_input_ptrs) failed", rc.name_);
       return Status::GENERIC_FAILURE;
     }
 
     // Output pool: carve the output MR into num_bufs buffers.
     auto* out_base = static_cast<uint8_t*>(ar_[rc.memory_region_].ptr_);
-    plan.out_bufs.resize(out_mr.num_bufs_);
+    owned_plan.out_bufs.resize(out_mr.num_bufs_);
     for (size_t i = 0; i < out_mr.num_bufs_; i++) {
-      auto& ob = plan.out_bufs[i];
+      auto& ob = owned_plan.out_bufs[i];
       ob.ptr = out_base + i * out_mr.adj_size_;
-      ob.src_wqe.reserve(plan.packets_per_batch);
-      ob.src_strd.reserve(plan.packets_per_batch);
+      ob.context = std::make_shared<IbvReorderBurstCtx>();
+      ob.context->state = st.get();
+      ob.src_wqe.reserve(owned_plan.packets_per_batch);
+      ob.src_strd.reserve(owned_plan.packets_per_batch);
       if (cudaEventCreateWithFlags(&ob.event, cudaEventDisableTiming) != cudaSuccess ||
           cudaHostAlloc(reinterpret_cast<void**>(&ob.h_batch_id), sizeof(uint64_t),
                         cudaHostAllocDefault) != cudaSuccess ||
@@ -3397,16 +3505,15 @@ Status IbverbsEngine::init_reorder(IbvRxQueue& q, const InterfaceConfig& intf,
       *ob.h_batch_id = 0;
     }
 
-    const size_t plan_idx = st->plans.size();
-    st->plans.push_back(std::move(plan));
     for (FlowId fid : rc.flow_ids_) {
       if (flow_to_queue[fid] == static_cast<uint16_t>(q.queue_id)) {
         st->flow_to_plan[fid] = plan_idx;
       }
     }
-    DAQIRI_LOG_INFO("Reorder plan '{}' on q{}: ppb={} offset={} out_bufs={}", rc.name_, q.queue_id,
-                    st->plans.back().packets_per_batch, st->plans.back().copy_source_offset,
-                    out_mr.num_bufs_);
+    DAQIRI_LOG_INFO("Reorder plan '{}' on q{}: ppb={} offset={} out_bufs={} boundary_checks={}",
+                    rc.name_, q.queue_id, st->plans.back().packets_per_batch,
+                    st->plans.back().copy_source_offset, out_mr.num_bufs_,
+                    st->plans.back().batch_tracker.has_value());
   }
 
   if (st->plans.empty()) {
@@ -3418,14 +3525,28 @@ Status IbverbsEngine::init_reorder(IbvRxQueue& q, const InterfaceConfig& intf,
   return Status::SUCCESS;
 }
 
-void IbverbsEngine::reorder_poll_events(IbvRxQueue& q, IbvReorderPlan& plan) {
+Status IbverbsEngine::reorder_poll_events(IbvRxQueue& q, IbvReorderPlan& plan) {
+  CudaContextGuard context_guard(plan.cuda_context);
+  if ((plan.cuda_context != nullptr && !context_guard.valid()) ||
+      (plan.cuda_context == nullptr && cudaSetDevice(plan.cuda_device_id) != cudaSuccess)) {
+    DAQIRI_LOG_ERROR("Reorder '{}' could not activate its CUDA context while polling",
+                     plan.cfg.name_);
+    return Status::INTERNAL_ERROR;
+  }
   for (auto& ob : plan.out_bufs) {
     if (ob.event_complete || ob.event == nullptr) {
       continue;
     }
-    if (cudaEventQuery(ob.event) != cudaSuccess) {
+    const cudaError_t status = cudaEventQuery(ob.event);
+    if (status == cudaErrorNotReady) {
       continue;
-    }  // still running
+    }
+    if (status != cudaSuccess) {
+      DAQIRI_LOG_ERROR("Reorder '{}' completion event query failed: {}", plan.cfg.name_,
+                       cudaGetErrorString(status));
+      (void)cudaGetLastError();
+      return Status::INTERNAL_ERROR;
+    }
     // Kernel finished reading the source packets -> release their strides.
     for (uint32_t i = 0; i < ob.src_count; i++) {
       release_strides(q, ob.src_wqe[i], ob.src_strd[i]);
@@ -3435,6 +3556,7 @@ void IbverbsEngine::reorder_poll_events(IbvRxQueue& q, IbvReorderPlan& plan) {
     ob.src_count = 0;
     ob.event_complete = true;
   }
+  return Status::SUCCESS;
 }
 
 Status IbverbsEngine::reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, BurstParams** out) {
@@ -3460,27 +3582,58 @@ Status IbverbsEngine::reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, B
     for (uint32_t i = 0; i < num_pkts; i++) {
       release_strides(q, plan.acc_wqe[i], plan.acc_strd[i]);
     }
-    plan.acc_ptrs.clear();
-    plan.acc_wqe.clear();
-    plan.acc_strd.clear();
+    reset_reorder_accumulation(plan);
     return Status::NO_FREE_PACKET_BUFFERS;
   }
   auto& ob = plan.out_bufs[idx];
   ob.consumer_done = false;
   ob.event_complete = false;
 
+  auto fail_cuda_batch = [&](const char* operation, cudaError_t error, bool synchronize) {
+    DAQIRI_LOG_ERROR("Reorder '{}' {} failed: {}", plan.cfg.name_, operation,
+                     cudaGetErrorString(error));
+    if (synchronize) {
+      const cudaError_t synchronize_status = cudaStreamSynchronize(plan.stream);
+      if (synchronize_status != cudaSuccess) {
+        DAQIRI_LOG_ERROR("Reorder '{}' stream synchronization after failure also failed: {}",
+                         plan.cfg.name_, cudaGetErrorString(synchronize_status));
+      }
+    }
+    for (uint32_t i = 0; i < num_pkts; ++i) {
+      release_strides(q, plan.acc_wqe[i], plan.acc_strd[i]);
+    }
+    reset_reorder_accumulation(plan);
+    ob.consumer_done = true;
+    ob.event_complete = true;
+    return Status::INTERNAL_ERROR;
+  };
+
   const ReorderConfig& c = plan.cfg;
   const uint32_t out_payload = plan.acc_output_payload_len;
   const uint32_t aggregate_len = plan.packets_per_batch * out_payload;
 
   CudaContextGuard context_guard(plan.cuda_context);
+  cudaError_t cuda_status = cudaSuccess;
   if (plan.cuda_context == nullptr) {
-    cudaSetDevice(plan.cuda_device_id);
+    cuda_status = cudaSetDevice(plan.cuda_device_id);
+    if (cuda_status != cudaSuccess) {
+      return fail_cuda_batch("CUDA device selection", cuda_status, false);
+    }
   } else if (!context_guard.valid()) {
+    DAQIRI_LOG_ERROR("Reorder '{}' could not activate its CUDA context", plan.cfg.name_);
+    for (uint32_t i = 0; i < num_pkts; ++i) {
+      release_strides(q, plan.acc_wqe[i], plan.acc_strd[i]);
+    }
+    reset_reorder_accumulation(plan);
+    ob.consumer_done = true;
+    ob.event_complete = true;
     return Status::INTERNAL_ERROR;
   }
-  cudaMemcpyAsync(plan.d_input_ptrs, plan.acc_ptrs.data(), sizeof(void*) * num_pkts,
-                  cudaMemcpyHostToDevice, plan.stream);
+  cuda_status = cudaMemcpyAsync(plan.d_input_ptrs, plan.acc_ptrs.data(), sizeof(void*) * num_pkts,
+                                cudaMemcpyHostToDevice, plan.stream);
+  if (cuda_status != cudaSuccess) {
+    return fail_cuda_batch("input pointer copy", cuda_status, true);
+  }
   packet_reorder_copy_payload_by_sequence(
       ob.ptr, reinterpret_cast<const void* const*>(plan.d_input_ptrs), plan.acc_input_payload_len,
       out_payload, plan.copy_source_offset, num_pkts, rdr_seq_off(c), rdr_seq_width(c),
@@ -3490,26 +3643,29 @@ Status IbverbsEngine::reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, B
       plan.data_type_conversion ? static_cast<uint8_t>(c.data_types_.output_type_) : 0U,
       plan.data_type_conversion ? static_cast<uint8_t>(c.data_types_.input_endianness_) : 0U,
       ob.d_batch_id, plan.stream);
-  if (cudaGetLastError() != cudaSuccess) {
-    DAQIRI_LOG_ERROR("Reorder '{}' kernel launch failed", plan.cfg.name_);
-    ob.consumer_done = true;
-    ob.event_complete = true;
-    return Status::INTERNAL_ERROR;
+  cuda_status = cudaGetLastError();
+  if (cuda_status != cudaSuccess) {
+    return fail_cuda_batch("kernel launch", cuda_status, true);
   }
-  cudaMemcpyAsync(ob.h_batch_id, ob.d_batch_id, sizeof(uint64_t), cudaMemcpyDeviceToHost,
-                  plan.stream);
-  cudaEventRecord(ob.event, plan.stream);
+  cuda_status = cudaMemcpyAsync(ob.h_batch_id, ob.d_batch_id, sizeof(uint64_t),
+                                cudaMemcpyDeviceToHost, plan.stream);
+  if (cuda_status != cudaSuccess) {
+    return fail_cuda_batch("batch ID copy", cuda_status, true);
+  }
+  cuda_status = cudaEventRecord(ob.event, plan.stream);
+  if (cuda_status != cudaSuccess) {
+    return fail_cuda_batch("completion event record", cuda_status, true);
+  }
 
   // Hand the source strides to the output buffer; released when the event fires.
-  ob.src_wqe = std::move(plan.acc_wqe);
-  ob.src_strd = std::move(plan.acc_strd);
+  ob.src_wqe.assign(plan.acc_wqe.begin(), plan.acc_wqe.end());
+  ob.src_strd.assign(plan.acc_strd.begin(), plan.acc_strd.end());
   ob.src_count = num_pkts;
-  plan.acc_wqe.clear();
-  plan.acc_strd.clear();
-  plan.acc_ptrs.clear();
+  reset_reorder_accumulation(plan);
 
-  // Build the reordered output burst (a heap BurstParams, like the DPDK path).
-  auto* burst = new BurstParams{};
+  // Populate metadata allocated with this output slot; the steady-state path
+  // does not allocate.
+  auto* burst = &ob.burst;
   burst->hdr.hdr.port_id = plan.port_id;
   burst->hdr.hdr.q_id = plan.queue_id;
   burst->hdr.hdr.num_segs = 1;
@@ -3518,8 +3674,7 @@ Status IbverbsEngine::reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, B
   burst->hdr.hdr.max_pkt = num_pkts;
   burst->hdr.hdr.burst_flags = DAQIRI_BURST_FLAG_REORDERED;
   burst->event = ob.event;
-  auto ctx = std::make_shared<IbvReorderBurstCtx>();
-  ctx->state = q.reorder.get();
+  auto ctx = ob.context;
   ctx->plan = &plan;
   ctx->out_idx = idx;
   ctx->pkt_ptrs[0] = ob.ptr;
@@ -3530,6 +3685,7 @@ Status IbverbsEngine::reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, B
   ctx->info.aggregate_len = aggregate_len;
   ctx->info.burst_flags = burst->hdr.hdr.burst_flags;
   ctx->h_batch_id = ob.h_batch_id;
+  ctx->released = false;
   std::memcpy(burst->hdr.custom_burst_data, &ctx->info, sizeof(ctx->info));
   burst->custom_pkt_data = std::static_pointer_cast<void>(ctx);
   burst->pkts[0] = ctx->pkt_ptrs.data();
@@ -3538,7 +3694,7 @@ Status IbverbsEngine::reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, B
   return Status::SUCCESS;
 }
 
-void IbverbsEngine::reorder_process_raw(IbvRxQueue& q, BurstParams* raw) {
+Status IbverbsEngine::reorder_process_raw(IbvRxQueue& q, BurstParams* raw) {
   auto& st = *q.reorder;
   uint16_t* wqe_arr = burst_wqe_arr(raw);
   uint16_t* strd_arr = burst_strd_arr(raw);
@@ -3555,6 +3711,46 @@ void IbverbsEngine::reorder_process_raw(IbvRxQueue& q, BurstParams* raw) {
       plan_idx = it->second;
     }
     auto& plan = st.plans[plan_idx];
+
+    if (plan.batch_tracker) {
+      const void* packet = raw->pkts[0][i];
+      const size_t packet_len = raw->pkt_lens[0][i];
+      if (packet == nullptr ||
+          !bit_field_fits(packet_len, rdr_seq_off(plan.cfg), rdr_seq_width(plan.cfg)) ||
+          (plan.cfg.method_ == ReorderMethod::SEQ_BATCH_NUMBER &&
+           !bit_field_fits(packet_len, rdr_batch_off(plan.cfg), rdr_batch_width(plan.cfg)))) {
+        release_strides(q, wqe_arr[i], strd_arr[i]);
+        ++plan.dropped_stale_packets;
+        continue;
+      }
+      const uint32_t sequence =
+          extract_bits_be_host(packet, rdr_seq_off(plan.cfg), rdr_seq_width(plan.cfg));
+      const uint32_t packet_batch =
+          plan.cfg.method_ == ReorderMethod::SEQ_BATCH_NUMBER
+              ? extract_bits_be_host(packet, rdr_batch_off(plan.cfg), rdr_batch_width(plan.cfg))
+              : sequence / plan.packets_per_batch;
+      const uint32_t slot = sequence % plan.packets_per_batch;
+      const ibverbs_detail::PacketDecision decision =
+          plan.batch_tracker->observe(packet_batch, slot);
+      if (decision.closed_incomplete_batch) {
+        for (size_t accumulated = 0; accumulated < plan.acc_wqe.size(); ++accumulated) {
+          release_strides(q, plan.acc_wqe[accumulated], plan.acc_strd[accumulated]);
+        }
+        reset_reorder_accumulation(plan);
+        ++plan.dropped_incomplete_batches;
+      }
+      if (decision.disposition == ibverbs_detail::PacketDisposition::duplicate) {
+        release_strides(q, wqe_arr[i], strd_arr[i]);
+        ++plan.dropped_duplicate_packets;
+        continue;
+      }
+      if (decision.disposition == ibverbs_detail::PacketDisposition::stale) {
+        release_strides(q, wqe_arr[i], strd_arr[i]);
+        ++plan.dropped_stale_packets;
+        continue;
+      }
+    }
+
     if (plan.acc_ptrs.empty()) {
       const uint32_t len = raw->pkt_lens[0][i];
       uint32_t in_payload = (len > plan.copy_source_offset) ? (len - plan.copy_source_offset) : 0;
@@ -3566,8 +3762,19 @@ void IbverbsEngine::reorder_process_raw(IbvRxQueue& q, BurstParams* raw) {
     plan.acc_wqe.push_back(wqe_arr[i]);
     plan.acc_strd.push_back(strd_arr[i]);
     if (plan.acc_ptrs.size() >= plan.packets_per_batch) {
+      if (plan.batch_tracker) {
+        plan.batch_tracker->complete_batch();
+      }
       BurstParams* out = nullptr;
-      if (reorder_flush_batch(q, plan, &out) == Status::SUCCESS && out != nullptr) {
+      const Status flush_status = reorder_flush_batch(q, plan, &out);
+      if (flush_status != Status::SUCCESS) {
+        for (int remaining = i + 1; remaining < num; ++remaining) {
+          release_strides(q, wqe_arr[remaining], strd_arr[remaining]);
+        }
+        rx_meta_pool_->put(raw);
+        return flush_status;
+      }
+      if (out != nullptr) {
         st.ready.push_back(out);
       }
     }
@@ -3575,13 +3782,21 @@ void IbverbsEngine::reorder_process_raw(IbvRxQueue& q, BurstParams* raw) {
   // Source strides stay held by reorder state until their kernel completes;
   // return only the raw burst metadata block to the pool.
   rx_meta_pool_->put(raw);
+  return Status::SUCCESS;
 }
 
 Status IbverbsEngine::reorder_get_rx(IbvRxQueue& q, BurstParams** burst) {
   auto& st = *q.reorder;
   std::lock_guard<std::mutex> guard(st.lock);
+  if (st.failure_status != Status::SUCCESS) {
+    return st.failure_status;
+  }
   for (auto& plan : st.plans) {
-    reorder_poll_events(q, plan);
+    const Status poll_status = reorder_poll_events(q, plan);
+    if (poll_status != Status::SUCCESS) {
+      st.failure_status = poll_status;
+      return poll_status;
+    }
   }
   if (!st.ready.empty()) {
     *burst = st.ready.front();
@@ -3590,7 +3805,13 @@ Status IbverbsEngine::reorder_get_rx(IbvRxQueue& q, BurstParams** burst) {
   }
   void* b = nullptr;
   while (q.ring->dequeue(&b)) {
-    reorder_process_raw(q, static_cast<BurstParams*>(b));
+    const Status process_status = reorder_process_raw(q, static_cast<BurstParams*>(b));
+    if (process_status != Status::SUCCESS) {
+      if (process_status == Status::INTERNAL_ERROR || process_status == Status::GENERIC_FAILURE) {
+        st.failure_status = process_status;
+      }
+      return process_status;
+    }
     if (!st.ready.empty()) {
       *burst = st.ready.front();
       st.ready.pop_front();
@@ -3605,11 +3826,14 @@ void IbverbsEngine::reorder_release_output(BurstParams* burst) {
     return;
   }
   auto ctx = std::static_pointer_cast<IbvReorderBurstCtx>(burst->custom_pkt_data);
-  if (ctx && !ctx->released && ctx->plan != nullptr && ctx->out_idx < ctx->plan->out_bufs.size()) {
+  if (!ctx || ctx->state == nullptr) {
+    return;
+  }
+  std::lock_guard<std::mutex> guard(ctx->state->lock);
+  if (!ctx->released && ctx->plan != nullptr && ctx->out_idx < ctx->plan->out_bufs.size()) {
     ctx->plan->out_bufs[ctx->out_idx].consumer_done = true;
     ctx->released = true;
   }
-  delete burst;
 }
 
 void IbverbsEngine::reorder_cleanup(IbvRxQueue& q) {
@@ -3618,19 +3842,36 @@ void IbverbsEngine::reorder_cleanup(IbvRxQueue& q) {
   }
   for (auto& plan : q.reorder->plans) {
     CudaContextGuard context_guard(plan.cuda_context);
-    for (auto& ob : plan.out_bufs) {
-      if (ob.event) {
-        cudaEventDestroy(ob.event);
-      }
-      if (ob.h_batch_id) {
-        cudaFreeHost(ob.h_batch_id);
-      }
-      if (ob.d_batch_id) {
-        cudaFree(ob.d_batch_id);
+    bool context_ready = context_guard.valid();
+    if (plan.cuda_context == nullptr) {
+      context_ready = cudaSetDevice(plan.cuda_device_id) == cudaSuccess;
+    }
+    if (context_ready && plan.stream != nullptr) {
+      const cudaError_t status = cudaStreamSynchronize(plan.stream);
+      if (status != cudaSuccess) {
+        DAQIRI_LOG_ERROR("Reorder '{}' stream synchronization during cleanup failed: {}",
+                         plan.cfg.name_, cudaGetErrorString(status));
       }
     }
-    if (plan.d_input_ptrs) {
-      cudaFree(plan.d_input_ptrs);
+    for (size_t i = 0; i < plan.acc_wqe.size(); ++i) {
+      release_strides(q, plan.acc_wqe[i], plan.acc_strd[i]);
+    }
+    reset_reorder_accumulation(plan);
+    if (plan.dropped_incomplete_batches != 0 || plan.dropped_duplicate_packets != 0 ||
+        plan.dropped_stale_packets != 0) {
+      DAQIRI_LOG_INFO(
+          "Reorder '{}' boundary drops: incomplete_batches={} duplicate_packets={} "
+          "stale_packets={}",
+          plan.cfg.name_, plan.dropped_incomplete_batches, plan.dropped_duplicate_packets,
+          plan.dropped_stale_packets);
+    }
+    for (auto& ob : plan.out_bufs) {
+      for (size_t i = 0; i < ob.src_wqe.size(); ++i) {
+        release_strides(q, ob.src_wqe[i], ob.src_strd[i]);
+      }
+      ob.src_wqe.clear();
+      ob.src_strd.clear();
+      ob.src_count = 0;
     }
   }
   q.reorder.reset();
@@ -3680,6 +3921,11 @@ Status IbverbsEngine::get_reorder_burst_info(BurstParams* burst, ReorderBurstInf
   }
   if (ctx->h_batch_id != nullptr) {
     CudaContextGuard context_guard(ctx->plan != nullptr ? ctx->plan->cuda_context : nullptr);
+    if (ctx->plan == nullptr || (ctx->plan->cuda_context != nullptr && !context_guard.valid()) ||
+        (ctx->plan->cuda_context == nullptr &&
+         cudaSetDevice(ctx->plan->cuda_device_id) != cudaSuccess)) {
+      return Status::INTERNAL_ERROR;
+    }
     if (burst->event != nullptr) {
       const cudaError_t s = cudaEventQuery(burst->event);
       if (s == cudaErrorNotReady) {
@@ -3824,7 +4070,7 @@ void IbverbsEngine::free_rx_burst(BurstParams* burst) {
     return;
   }
   if (burst->hdr.hdr.burst_flags & DAQIRI_BURST_FLAG_REORDERED) {
-    // Heap-allocated reordered burst: release its output buffer and delete it.
+    // Reordered metadata is owned by its output slot; mark the slot reusable.
     reorder_release_output(burst);
     return;
   }

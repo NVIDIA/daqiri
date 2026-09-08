@@ -29,6 +29,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <string>
 #include <thread>
@@ -41,8 +42,25 @@
 
 #include "src/daqiri_ring.h"
 #include "src/daqiri_pool.h"
+#include "src/engines/ibverbs/reorder_batch_tracker.h"
 
 namespace daqiri {
+
+struct IbvReorderPlan;
+struct IbvReorderState;
+
+// Stable per-output context referenced by the BurstParams handed to the
+// application. Both objects are allocated with the output pool at startup.
+struct IbvReorderBurstCtx {
+  IbvReorderState* state = nullptr;
+  IbvReorderPlan* plan = nullptr;
+  size_t out_idx = 0;
+  std::array<void*, 1> pkt_ptrs{};
+  std::array<uint32_t, 1> pkt_lens{};
+  ReorderBurstInfo info{};
+  const uint64_t* h_batch_id = nullptr;
+  bool released = false;
+};
 
 // ---- GPU packet reordering (mirrors the DPDK reorder path, on MPRQ RX) ----
 // One output buffer in the reorder output pool. The kernel reorders a batch of
@@ -50,6 +68,8 @@ namespace daqiri {
 // point the source strides (src_wqe/src_strd) are released.
 struct IbvReorderOutBuf {
   uint8_t* ptr = nullptr;
+  BurstParams burst{};
+  std::shared_ptr<IbvReorderBurstCtx> context;
   bool consumer_done = true;
   bool event_complete = true;
   cudaEvent_t event = nullptr;
@@ -82,28 +102,25 @@ struct IbvReorderPlan {
   std::vector<uint16_t> acc_strd;
   uint32_t acc_input_payload_len = 0;
   uint32_t acc_output_payload_len = 0;
+  // CPU-visible RX memory can be checked before accumulation so one lost or
+  // duplicated packet cannot shift every later fixed-size batch. Device RX
+  // memory retains the legacy count-only behavior because its headers cannot
+  // be read safely from the polling thread.
+  std::optional<ibverbs_detail::ReorderBatchTracker> batch_tracker;
+  uint64_t dropped_incomplete_batches = 0;
+  uint64_t dropped_duplicate_packets = 0;
+  uint64_t dropped_stale_packets = 0;
 };
 
 struct IbvReorderState {
+  ~IbvReorderState();
   bool enabled = false;
   bool single_plan = false;
+  Status failure_status = Status::SUCCESS;
   std::vector<IbvReorderPlan> plans;
   std::unordered_map<FlowId, size_t> flow_to_plan;
   std::deque<BurstParams*> ready;
   std::mutex lock;
-};
-
-// Per-output-burst context (held in burst->custom_pkt_data) for a reordered
-// burst handed to the application.
-struct IbvReorderBurstCtx {
-  IbvReorderState* state = nullptr;
-  IbvReorderPlan* plan = nullptr;
-  size_t out_idx = 0;
-  std::array<void*, 1> pkt_ptrs{};
-  std::array<uint32_t, 1> pkt_lens{};
-  ReorderBurstInfo info{};
-  const uint64_t* h_batch_id = nullptr;
-  bool released = false;
 };
 
 /**
@@ -465,9 +482,10 @@ class IbverbsEngine : public Engine {
   // ---- GPU reorder ----
   Status init_reorder(IbvRxQueue& q, const InterfaceConfig& intf, const RxQueueConfig& qcfg);
   Status reorder_get_rx(IbvRxQueue& q, BurstParams** burst);  // reorder path of get_rx_burst
-  void reorder_poll_events(IbvRxQueue& q,
-                           IbvReorderPlan& plan);             // free sources of finished batches
-  void reorder_process_raw(IbvRxQueue& q, BurstParams* raw);  // route + accumulate + flush
+  Status reorder_poll_events(IbvRxQueue& q,
+                             IbvReorderPlan& plan);  // free sources of finished batches
+  Status reorder_process_raw(IbvRxQueue& q,
+                             BurstParams* raw);  // route + accumulate + flush
   Status reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, BurstParams** out);
   void reorder_release_output(BurstParams* burst);  // free a delivered reordered burst
   void reorder_cleanup(IbvRxQueue& q);

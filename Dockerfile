@@ -18,10 +18,17 @@
 ARG DAQIRI_BASE_TARGET=dpdk
 ARG DAQIRI_ENGINE="dpdk ibverbs"
 ARG DAQIRI_BUILD_PYTHON=OFF
+ARG DAQIRI_BUILD_EXAMPLES=ON
+ARG DAQIRI_BUILD_APPLICATIONS=OFF
+ARG DAQIRI_BUILD_RESNET50_INFERENCE=ON
+ARG DAQIRI_BUILD_UCX_GPU_EGRESS=OFF
+ARG BUILD_TESTING=OFF
 ARG DAQIRI_ENABLE_S3=OFF
 ARG BUILD_SHARED_LIBS=ON
 ARG DAQIRI_ENABLE_OTEL_METRICS=OFF
 ARG AWS_SDK_CPP_VERSION=1.11.822
+ARG UCX_VERSION=1.20.0
+ARG UCX_SHA256=7c8a6093cada179aa1d851b83625e3b25ed5658966e309de5118c27a038c7ef9
 ARG DAQIRI_OS_BASE_IMAGE=nvcr.io/nvidia/cuda:13.1.0-devel-ubuntu24.04
 
 # ============================================================
@@ -36,7 +43,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         infiniband-diags \
         gnupg \
-        python3-pip \
         git \
         build-essential \
         clang-format \
@@ -66,6 +72,8 @@ ARG CACHEBUST=1
 ARG DEBIAN_FRONTEND=noninteractive
 ARG DOCA_VERSION=3.2.1
 ARG AWS_SDK_CPP_VERSION
+ARG DAQIRI_BUILD_PYTHON
+ARG DAQIRI_ENABLE_S3
 
 WORKDIR /opt
 
@@ -95,24 +103,22 @@ RUN if [ "${TARGETARCH}" = "amd64" ]; then \
 # - libibverbs-dev, librdmacm-dev: RDMA/ibverbs support for Mellanox NICs
 # - libmlx5-1: Mellanox ConnectX driver
 # - ibverbs-utils: utilities
-# - python3-dev: for building python bindings
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        libibverbs-dev \
-        librdmacm-dev \
-        libmlx5-1 \
-        ibverbs-utils \
-        python3-dev \
-        pybind11-dev \
-        libcurl4-openssl-dev \
-        libssl-dev \
-        uuid-dev \
-        zlib1g-dev \
+# Python and AWS development packages are included only when their DAQIRI
+# features are enabled.
+RUN packages=(libibverbs-dev librdmacm-dev libmlx5-1 ibverbs-utils) \
+    && if [[ "${DAQIRI_BUILD_PYTHON}" == "ON" ]]; then \
+         packages+=(python3-dev python3-pip pybind11-dev); \
+       fi \
+    && if [[ "${DAQIRI_ENABLE_S3}" == "ON" ]]; then \
+         packages+=(libcurl4-openssl-dev libssl-dev uuid-dev zlib1g-dev); \
+       fi \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends "${packages[@]}" \
     && rm -rf /var/lib/apt/lists/*
 
-# Build only the AWS SDK for C++ S3 component. DAQIRI links this SDK only when
-# configured with -DDAQIRI_ENABLE_S3=ON, but installing it here keeps the
-# recommended container build path self-contained.
-RUN git clone --depth 1 --recurse-submodules --shallow-submodules \
+# Build only the AWS SDK for C++ S3 component when S3 support is enabled.
+RUN if [[ "${DAQIRI_ENABLE_S3}" == "ON" ]]; then \
+      git clone --depth 1 --recurse-submodules --shallow-submodules \
         --branch "${AWS_SDK_CPP_VERSION}" \
         https://github.com/aws/aws-sdk-cpp.git /tmp/aws-sdk-cpp \
     && cmake -S /tmp/aws-sdk-cpp -B /tmp/aws-sdk-cpp/build \
@@ -126,16 +132,19 @@ RUN git clone --depth 1 --recurse-submodules --shallow-submodules \
     && cmake --build /tmp/aws-sdk-cpp/build -j "$(nproc)" \
     && cmake --install /tmp/aws-sdk-cpp/build \
     && ldconfig \
-    && rm -rf /tmp/aws-sdk-cpp
+    && rm -rf /tmp/aws-sdk-cpp; \
+    fi
 
 # PIP installs
 # - pytest: test harness
 # - pyyaml: to parse yaml configs in tests
 # - scapy: for debugging and mocking network packets for tests
-RUN python3 -m pip install --no-cache-dir --break-system-packages \
+RUN if [[ "${DAQIRI_BUILD_PYTHON}" == "ON" ]]; then \
+      python3 -m pip install --no-cache-dir --break-system-packages \
         pytest \
         pyyaml \
-        scapy
+        scapy; \
+    fi
 
 # ==============================================================
 # dpdk-deps: Build upstream DPDK from source
@@ -225,6 +234,52 @@ RUN if [ "${DAQIRI_ENABLE_OTEL_METRICS}" = "ON" ]; then \
 # ==============================================================
 FROM dpdk AS rdma
 
+# ==============================================================
+# ucx: UCP with verbs, mlx5, and CUDA memory support
+# Start from the verbs-capable base directly; this target does not need DPDK.
+# ==============================================================
+FROM base-deps AS ucx
+
+ARG UCX_VERSION
+ARG UCX_SHA256
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        autoconf \
+        automake \
+        libnuma-dev \
+        libtool \
+        pkgconf \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fL \
+        "https://github.com/openucx/ucx/releases/download/v${UCX_VERSION}/ucx-${UCX_VERSION}.tar.gz" \
+        -o /tmp/ucx.tar.gz \
+    && echo "${UCX_SHA256}  /tmp/ucx.tar.gz" | sha256sum --check - \
+    && tar -xzf /tmp/ucx.tar.gz -C /tmp \
+    && mkdir /tmp/ucx-build \
+    && cd /tmp/ucx-build \
+    && /tmp/ucx-${UCX_VERSION}/contrib/configure-release \
+        --prefix=/opt/ucx \
+        --enable-mt \
+        --with-verbs \
+        --with-rdmacm \
+        --with-mlx5 \
+        --with-cuda=/usr/local/cuda \
+        --without-gdrcopy \
+        --without-rocm \
+        --without-java \
+        --without-go \
+    && make -j "$(nproc)" \
+    && make install \
+    && echo /opt/ucx/lib > /etc/ld.so.conf.d/ucx.conf \
+    && ldconfig \
+    && mkdir -p /usr/local/lib/pkgconfig \
+    && ln -s /opt/ucx/lib/pkgconfig/*.pc /usr/local/lib/pkgconfig/ \
+    && /opt/ucx/bin/ucx_info -v \
+    && pkg-config --atleast-version="${UCX_VERSION}" ucx \
+    && rm -rf /tmp/ucx.tar.gz /tmp/ucx-${UCX_VERSION} /tmp/ucx-build
+
+ENV PATH=/opt/ucx/bin:${PATH}
+
 # ==============================
 # Rivermax Target
 # This stage is only built when --target rivermax is specified. It installs and configures Rivermax SDK.
@@ -303,6 +358,11 @@ FROM ${DAQIRI_BASE_TARGET} AS daqiri-build
 
 ARG DAQIRI_ENGINE
 ARG DAQIRI_BUILD_PYTHON
+ARG DAQIRI_BUILD_EXAMPLES
+ARG DAQIRI_BUILD_APPLICATIONS
+ARG DAQIRI_BUILD_RESNET50_INFERENCE
+ARG DAQIRI_BUILD_UCX_GPU_EGRESS
+ARG BUILD_TESTING
 ARG DAQIRI_ENABLE_S3
 ARG BUILD_SHARED_LIBS
 ARG DAQIRI_ENABLE_OTEL_METRICS
@@ -317,6 +377,11 @@ RUN cmake -S . -B build \
       -DCMAKE_CUDA_ARCHITECTURES=all-major \
       -DBUILD_SHARED_LIBS=${BUILD_SHARED_LIBS} \
       -DDAQIRI_BUILD_PYTHON=${DAQIRI_BUILD_PYTHON} \
+      -DDAQIRI_BUILD_EXAMPLES=${DAQIRI_BUILD_EXAMPLES} \
+      -DDAQIRI_BUILD_APPLICATIONS=${DAQIRI_BUILD_APPLICATIONS} \
+      -DDAQIRI_BUILD_RESNET50_INFERENCE=${DAQIRI_BUILD_RESNET50_INFERENCE} \
+      -DDAQIRI_BUILD_UCX_GPU_EGRESS=${DAQIRI_BUILD_UCX_GPU_EGRESS} \
+      -DBUILD_TESTING=${BUILD_TESTING} \
       -DDAQIRI_ENABLE_OTEL_METRICS=${DAQIRI_ENABLE_OTEL_METRICS} \
       -DDAQIRI_ENABLE_S3=${DAQIRI_ENABLE_S3} \
       -DDAQIRI_ENGINE="${DAQIRI_ENGINE}" \
@@ -329,7 +394,8 @@ RUN cmake -S . -B build \
 FROM ${DAQIRI_BASE_TARGET} AS runtime
 
 COPY --from=daqiri-build /opt/daqiri /opt/daqiri
+RUN echo /opt/daqiri/lib > /etc/ld.so.conf.d/daqiri.conf && ldconfig
 ENV CMAKE_PREFIX_PATH=/opt/daqiri
-ENV LD_LIBRARY_PATH=/opt/daqiri/lib
+ENV PATH=/opt/daqiri/bin:${PATH}
 EXPOSE 9464
 WORKDIR /opt/daqiri
