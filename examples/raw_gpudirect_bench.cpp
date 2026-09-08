@@ -22,10 +22,12 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <thread>
 #include <unordered_set>
@@ -36,6 +38,18 @@
 #include <daqiri/daqiri.h>
 
 namespace {
+
+uint32_t parse_positive_u32_arg(int argc, char** argv, const char* name, uint32_t fallback) {
+  for (int i = 2; i + 1 < argc; ++i) {
+    if (std::string(argv[i]) == name) {
+      const long long value = std::atoll(argv[i + 1]);
+      if (value > 0 && value <= std::numeric_limits<uint32_t>::max()) {
+        return static_cast<uint32_t>(value);
+      }
+    }
+  }
+  return fallback;
+}
 
 void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
                daqiri::bench::TokenBucketPacer &pacer,
@@ -165,7 +179,9 @@ int main(int argc, char **argv) {
     std::cerr << "Usage: " << argv[0]
               << " <config.yaml> [--seconds N] [--target-gbps G] "
                  "[--workload none|fft|gemm|gemm_fp16] [--workload-gemm-dim N] "
-                 "[--workload-fft-len N] [--workload-sync-interval N]\n";
+                 "[--workload-fft-len N] [--workload-sync-interval N] "
+                 "[--workload-payload-size N] [--workload-header-size N] "
+                 "[--workload-packets-per-batch N]\n";
     return 1;
   }
 
@@ -177,6 +193,12 @@ int main(int argc, char **argv) {
   const int workload_gemm_dim = daqiri::bench::parse_workload_gemm_dim(argc, argv);
   const int workload_fft_len = daqiri::bench::parse_workload_fft_len(argc, argv);
   const int workload_sync_interval = daqiri::bench::parse_workload_sync_interval(argc, argv);
+  const uint32_t workload_payload_size =
+      parse_positive_u32_arg(argc, argv, "--workload-payload-size", 0);
+  const uint32_t workload_header_size =
+      parse_positive_u32_arg(argc, argv, "--workload-header-size", 0);
+  const uint32_t workload_packets_per_batch =
+      parse_positive_u32_arg(argc, argv, "--workload-packets-per-batch", 1024);
   const auto root = YAML::LoadFile(argv[1]);
 
   std::vector<daqiri::bench::RawBenchRxConfig> rx_configs;
@@ -221,6 +243,15 @@ int main(int argc, char **argv) {
     // n*n*elem_size bytes of this window (GEMM dimension pinned via
     // --workload-gemm-dim), so the window must be at least that large.
     geom.packets_per_batch = std::min<uint32_t>(1024, tx.batch_size);
+  } else if (workload_payload_size > 0) {
+    // RX-only cross-host runs have no local bench_tx stanza from which to infer
+    // the packet layout. Supply the actual received layout explicitly.
+    geom.payload_segment = 0;
+    geom.payload_byte_offset = workload_header_size;
+    geom.seq_bit_offset = static_cast<uint16_t>(workload_header_size * 8);
+    geom.seq_bit_width = 32;
+    geom.out_payload_len = workload_payload_size;
+    geom.packets_per_batch = workload_packets_per_batch;
   }
   rx_threads.reserve(rx_configs.size());
   for (const auto &cfg : rx_configs) {
