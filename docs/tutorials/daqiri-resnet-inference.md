@@ -476,7 +476,7 @@ The exporter also takes `--model resnet18|resnet34|resnet101|resnet152`, and the
 app's matching `--model` flag picks up `models/<name>_features*.engine` and the
 right feature dimension (512 for 18/34, 2048 for the rest). Everything on the
 wire is unchanged by model choice, which is what the
-[five-model table](../benchmarks/performance-dgx-spark.md#end-to-end-inference-pipeline-resnet-cross-host)
+[five-model table](../benchmarks/performance-dgx-spark.md#end-to-end-inference-pipeline-resnet)
 sweeps.
 
 ## Run without a NIC (software loopback)
@@ -592,5 +592,5 @@ finished its own startup.
 - App README: `applications/resnet50_inference/README.md`
 - Raw Ethernet reorder config: [configuration](../api-reference/configuration.md)
 - Platform context for this pipeline alongside other transports:
-  [DGX Spark performance](../benchmarks/performance-dgx-spark.md#end-to-end-inference-pipeline-resnet-cross-host)
+  [DGX Spark performance](../benchmarks/performance-dgx-spark.md#end-to-end-inference-pipeline-resnet)
 - Raw Ethernet benches: [raw benchmarking](../benchmarks/raw_benchmarking.md)
