@@ -4336,6 +4336,7 @@ bool IbverbsEngine::direct_rearm_reset_batch(IbvRxQueue& q, IbvDirectBatchSlot& 
   std::fill(batch.missing_bitmap.begin(), batch.missing_bitmap.end(), 0);
   batch.remaining = batch.plan->packets_per_batch;
   batch.first_packet_ns = 0;
+  batch.quiesce_cq_ci = 0;
   batch.rqs_reset = false;
   batch.info.source_packet_count = batch.plan->packets_per_batch;
   batch.info.burst_flags = DAQIRI_BURST_FLAG_REORDERED | DAQIRI_BURST_FLAG_DIRECT_PLACED;
@@ -4493,11 +4494,14 @@ void IbverbsEngine::direct_poll_queue(IbvRxQueue* q) {
   }
   const bool cq_drained = processed < budget;
 
-  // Keep RESET batches quiescing for one complete poll to drain any CQE that
-  // raced the timeout before exposing or recycling their aggregate storage.
+  // Keep RESET batches quiescing until the CQ is observed empty or one full
+  // CQ ring has been consumed. Either condition drains every completion that
+  // could have raced RESET without requiring an idle shared CQ.
   for (auto& batch_ptr : plan.batches) {
     auto& batch = *batch_ptr;
-    if (!cq_drained ||
+    const bool pre_reset_cqes_drained =
+        cq_drained || (q->cq_ci - batch.quiesce_cq_ci) >= cqe_count;
+    if (!pre_reset_cqes_drained ||
         batch.state.load(std::memory_order_acquire) != IbvDirectBatchState::QUIESCING ||
         !batch.rqs_reset) {
       continue;
@@ -4532,6 +4536,7 @@ void IbverbsEngine::direct_poll_queue(IbvRxQueue* q) {
       }
       batch.info.source_packet_count = plan.packets_per_batch - batch.remaining;
       batch.state.store(IbvDirectBatchState::QUIESCING, std::memory_order_release);
+      batch.quiesce_cq_ci = q->cq_ci;
       batch.rqs_reset =
           direct_set_batch_rq_state(*q, batch, MLX5_RQC_STATE_RDY, MLX5_RQC_STATE_RST);
       if (batch.rqs_reset) {
@@ -5220,6 +5225,7 @@ void IbverbsEngine::direct_release_output(BurstParams* burst) {
   std::fill(batch->missing_bitmap.begin(), batch->missing_bitmap.end(), 0);
   batch->remaining = batch->plan->packets_per_batch;
   batch->first_packet_ns = 0;
+  batch->quiesce_cq_ci = 0;
   batch->info.source_packet_count = batch->plan->packets_per_batch;
   batch->info.burst_flags = DAQIRI_BURST_FLAG_REORDERED | DAQIRI_BURST_FLAG_DIRECT_PLACED;
   batch->burst.hdr.hdr.max_pkt = batch->plan->packets_per_batch;

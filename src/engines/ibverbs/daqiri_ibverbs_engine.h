@@ -150,6 +150,7 @@ struct IbvDirectBatchSlot {
   std::vector<uint64_t> seen;
   std::vector<uint64_t> missing_bitmap;
   uint64_t first_packet_ns = 0;
+  uint32_t quiesce_cq_ci = 0;
   bool rqs_reset = false;
   std::atomic<IbvDirectBatchState> state{IbvDirectBatchState::RECEIVING};
   BurstParams burst{};
