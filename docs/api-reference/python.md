@@ -663,6 +663,11 @@ The workflow sections above show the common call order and ownership rules.
 | `add_rx_flows_async(port, flows)` | Return `(Status, op_id)` after enqueueing a dynamic RX flow batch create. One completion returns `flow_ids` in input order. |
 | `delete_flow_async(flow_id)` | Return `(Status, op_id)` after enqueueing deletion of one dynamic flow. |
 | `poll_flow_op()` | Return `(Status, FlowOpResult)`, or `NOT_READY` when no dynamic flow operation has completed. |
+| `add_memory_region_async(config[, binding])` | Add an owned or externally bound ibverbs memory region and return `(Status, op_id)`. |
+| `delete_memory_region_async(name)` | Remove an unused runtime memory region and return `(Status, op_id)`. |
+| `add_rx_queue_async(port, config)` / `add_tx_queue_async(port, config)` | Add a raw-ibverbs queue and return `(Status, op_id)`. |
+| `delete_rx_queue_async(port, queue_id)` / `delete_tx_queue_async(port, queue_id)` | Begin drain-based queue removal and return `(Status, op_id)`. |
+| `poll_resource_op()` | Return `(Status, ResourceOpResult)`, or `NOT_READY` while no operation has completed. |
 | `socket_connect_to_server(server_addr, server_port[, src_addr])` | Return `(Status, conn_id)`. |
 | `socket_get_port_queue(conn_id)` | Return `(Status, port, queue)`. |
 | `socket_get_server_conn_id(server_addr, server_port)` | Return `(Status, conn_id)`. |

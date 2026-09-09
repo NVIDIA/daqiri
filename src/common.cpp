@@ -357,6 +357,47 @@ Status poll_flow_op(FlowOpResult* result) {
   return g_daqiri_engine->poll_flow_op(result);
 }
 
+Status add_memory_region_async(const MemoryRegionConfig& config, ResourceOpId* op_id) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->add_memory_region_async(config, nullptr, op_id);
+}
+
+Status add_memory_region_async(const MemoryRegionConfig& config,
+                               const ExternalMemoryRegion& binding, ResourceOpId* op_id) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->add_memory_region_async(config, &binding, op_id);
+}
+
+Status delete_memory_region_async(const std::string& name, ResourceOpId* op_id) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->delete_memory_region_async(name, op_id);
+}
+
+Status add_rx_queue_async(int port, const RxQueueConfig& config, ResourceOpId* op_id) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->add_rx_queue_async(port, config, op_id);
+}
+
+Status delete_rx_queue_async(int port, int queue_id, ResourceOpId* op_id) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->delete_rx_queue_async(port, queue_id, op_id);
+}
+
+Status add_tx_queue_async(int port, const TxQueueConfig& config, ResourceOpId* op_id) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->add_tx_queue_async(port, config, op_id);
+}
+
+Status delete_tx_queue_async(int port, int queue_id, ResourceOpId* op_id) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->delete_tx_queue_async(port, queue_id, op_id);
+}
+
+Status poll_resource_op(ResourceOpResult* result) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->poll_resource_op(result);
+}
+
 Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
   return g_daqiri_engine->get_packet_rx_timestamp(burst, idx, timestamp_ns);

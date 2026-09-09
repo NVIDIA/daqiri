@@ -1088,6 +1088,54 @@ Status Engine::poll_flow_op(FlowOpResult* result) {
   return Status::NOT_SUPPORTED;
 }
 
+Status Engine::add_memory_region_async(const MemoryRegionConfig& config,
+                                       const ExternalMemoryRegion* binding,
+                                       ResourceOpId* op_id) {
+  (void)config;
+  (void)binding;
+  (void)op_id;
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::delete_memory_region_async(const std::string& name, ResourceOpId* op_id) {
+  (void)name;
+  (void)op_id;
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::add_rx_queue_async(int port, const RxQueueConfig& config, ResourceOpId* op_id) {
+  (void)port;
+  (void)config;
+  (void)op_id;
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::delete_rx_queue_async(int port, int queue_id, ResourceOpId* op_id) {
+  (void)port;
+  (void)queue_id;
+  (void)op_id;
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::add_tx_queue_async(int port, const TxQueueConfig& config, ResourceOpId* op_id) {
+  (void)port;
+  (void)config;
+  (void)op_id;
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::delete_tx_queue_async(int port, int queue_id, ResourceOpId* op_id) {
+  (void)port;
+  (void)queue_id;
+  (void)op_id;
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::poll_resource_op(ResourceOpResult* result) {
+  (void)result;
+  return Status::NOT_SUPPORTED;
+}
+
 Status Engine::get_tx_packet_burst_checked(BurstParams* burst) {
   if (!is_tx_burst_available(burst)) {
     return Status::NO_FREE_BURST_BUFFERS;

@@ -155,6 +155,17 @@ class Engine {
                                     FlowOpId* op_id);
   virtual Status delete_flow_async(FlowId flow_id, FlowOpId* op_id);
   virtual Status poll_flow_op(FlowOpResult* result);
+  virtual Status add_memory_region_async(const MemoryRegionConfig& config,
+                                         const ExternalMemoryRegion* binding,
+                                         ResourceOpId* op_id);
+  virtual Status delete_memory_region_async(const std::string& name, ResourceOpId* op_id);
+  virtual Status add_rx_queue_async(int port, const RxQueueConfig& config,
+                                    ResourceOpId* op_id);
+  virtual Status delete_rx_queue_async(int port, int queue_id, ResourceOpId* op_id);
+  virtual Status add_tx_queue_async(int port, const TxQueueConfig& config,
+                                    ResourceOpId* op_id);
+  virtual Status delete_tx_queue_async(int port, int queue_id, ResourceOpId* op_id);
+  virtual Status poll_resource_op(ResourceOpResult* result);
   virtual int get_port_id(const std::string& key) final;  // NOLINT(readability/inheritance)
   virtual bool validate_config() const;
   virtual uint16_t get_num_rx_queues(int port_id) const;

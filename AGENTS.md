@@ -24,7 +24,7 @@ CMake options (full table in `docs/getting-started.md`):
 - `DAQIRI_ENABLE_S3` — enable AWS SDK-backed asynchronous raw packet writes to S3 (off by default).
 - `DAQIRI_PREFER_SYSTEM_YAML_CPP` — prefer system `yaml-cpp` over the vendored `third_party/yaml-cpp` submodule (off by default; keep off when a conda/miniforge env is on `PATH`).
 
-Package versions use CalVer (`YYYY.MM.PATCH`) from the top-level `VERSION` file. CMake reads that value into `project(daqiri VERSION ...)`, generates `daqiri/version.h`, feeds pkg-config/CMake package metadata, and exposes the same value in Python. `DAQIRI_ABI_VERSION` is separate and currently `1`; do not tie ABI policy to the CalVer year.
+Package versions use CalVer (`YYYY.MM.PATCH`) from the top-level `VERSION` file. CMake reads that value into `project(daqiri VERSION ...)`, generates `daqiri/version.h`, feeds pkg-config/CMake package metadata, and exposes the same value in Python. `DAQIRI_ABI_VERSION` is separate and currently `2`; do not tie ABI policy to the CalVer year.
 
 CUDA architectures default to `80;90` (A100, H100), with `121` (GB10) added when configuring with CUDA Toolkit 13.0 or newer. Override `CMAKE_CUDA_ARCHITECTURES` when targeting other GPUs.
 
@@ -39,6 +39,7 @@ There is no unit test suite. Verification is done via the benchmark executables 
 | `daqiri_bench_raw_gpudirect` | `raw_gpudirect_bench.cpp` | `daqiri_bench_raw_tx_rx.yaml`, `daqiri_bench_raw_tx_rx_4q.yaml`, `daqiri_bench_raw_tx_rx_spark.yaml`, `daqiri_bench_raw_{tx,rx}_spark_xhost.yaml`, `daqiri_bench_raw_sw_loopback.yaml`, `daqiri_bench_raw_hw_loopback_ibverbs.yaml`, `daqiri_bench_raw_rx_multi_q.yaml`, `daqiri_bench_raw_tx_rx_vxlan.yaml`, `daqiri_bench_raw_tx_rx_vlan.yaml`, `daqiri_bench_raw_tx_rx_gre.yaml`, `daqiri_bench_raw_tx_rx_nvgre.yaml`, `daqiri_bench_raw_tx_rx_spark_mq.yaml` (mq base; `run_spark_mq_bench.sh` derives the 4 cells via `scripts/gen_spark_mq_config.py`), `daqiri_bench_raw_tx_rx_pacing.yaml` (per-queue `pacing_mbps`; DPDK engine only) |
 | `daqiri_bench_raw_latency` | `raw_latency_bench.cpp` | `daqiri_bench_raw_latency_ibverbs.yaml` — caller-driven direct TX/RX, RX hardware timestamps, 64–8192-byte power-of-two latency sweep |
 | `daqiri_example_dynamic_rx_flow` | `dynamic_rx_flow_example.cpp` | `daqiri_example_dynamic_rx_flow.yaml` — `flow_isolation: true` startup followed by runtime scalar queue steering, multi-queue RSS, and raw-engine decap/pop flow add/delete |
+| `daqiri_example_dynamic_resource` | `dynamic_resource_example.cpp` | Any ibverbs config with at least one RX and TX queue (for example `daqiri_bench_raw_hw_loopback_ibverbs.yaml`) — clones queue/MR geometry and exercises runtime MR and RX/TX queue add/delete |
 | `daqiri_bench_raw_hds` | `raw_hds_bench.cpp` | `daqiri_bench_raw_tx_rx_hds.yaml` |
 | `daqiri_bench_raw_reorder_seq` | `raw_reorder_seq_bench.cpp` | `daqiri_bench_raw_tx_rx_reorder_seq_1024*.yaml`, `daqiri_bench_raw_rx_reorder_seq_*.yaml` |
 | `daqiri_bench_raw_reorder_quantize` | `raw_reorder_quantize_bench.cpp` | `daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml` |
