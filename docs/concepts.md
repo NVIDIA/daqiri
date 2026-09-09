@@ -446,10 +446,15 @@ DAQIRI can perform packet aggregation and reordering on RX through
 Hardware reorder is an explicit, hardware-specific optimization for ConnectX-7 or newer NICs. It
 requires a cyclic sequence/address value over the finite output ring because the current mlx5
 rules use exact 32-bit programmable-sample matches. Use software reorder for wide monotonic
-sequence fields, data-type conversion, timeout-flushed partial batches, or unsupported hardware.
+sequence fields, data-type conversion, or unsupported hardware.
 Direct-placed slots remain caller-owned until the aggregate burst is freed: DAQIRI withholds their
 replacement receive credits, so retaining a burst backpressures that batch and can cause drops on
 the next sequence cycle.
+
+All reorder engines apply the queue's `timeout_us` from the first observed packet. On expiry,
+`missing_action: drop` discards the batch, while `missing_action: passthrough` publishes the
+aggregate with a timeout flag and a missing-slot bitmap. Hardware reorder resets the batch's RQs
+before either action so no late DMA can touch the output.
 
 This is the path to use when packets arrive out of order (e.g. across
 multiple NIC queues) and need to be reassembled into a single, contiguous

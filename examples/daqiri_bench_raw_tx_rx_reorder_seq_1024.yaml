@@ -66,6 +66,7 @@ daqiri:
         - name: "rx_reorder_seq_1024"
           reorder_engine: "hw"
           cyclic_sequence: true
+          missing_action: "passthrough"
           reorder_type: "gpu"
           memory_region: "Reorder_RX_GPU"
           payload_byte_offset: 42
@@ -101,3 +102,5 @@ bench_tx:
   sequence_number_start: 0
   # The hardware table addresses two 1024-packet output buffers directly.
   sequence_number_modulus: 2048
+  # Set non-zero to omit every Nth sequence value for timeout testing.
+  sequence_drop_every: 0

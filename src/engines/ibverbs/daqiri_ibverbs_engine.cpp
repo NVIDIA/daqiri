@@ -3465,6 +3465,7 @@ Status IbverbsEngine::create_direct_reorder_resources(IbvRxQueue& q, IbvDirectRe
     batch->batch_id = batch_id;
     batch->remaining = plan.packets_per_batch;
     batch->seen.assign((plan.packets_per_batch + 63U) / 64U, 0);
+    batch->missing_bitmap.assign(batch->seen.size(), 0);
     batch->pkt_ptrs[0] =
         plan.output_base + static_cast<size_t>(batch_id) * plan.output_buffer_stride;
     batch->pkt_lens[0] = plan.packets_per_batch * plan.packet_size;
@@ -3544,6 +3545,7 @@ Status IbverbsEngine::init_direct_reorder(IbvRxQueue& q, const InterfaceConfig& 
   plan->packets_per_batch = rdr_packets_per_batch(*selected);
   plan->header_bytes = selected->payload_byte_offset_;
   plan->packet_size = selected->packet_size_;
+  plan->timeout_ns = qcfg.timeout_us_ * 1000ULL;
   const auto& output_mr = cfg_.mrs_.at(selected->memory_region_);
   plan->batch_count = static_cast<uint32_t>(output_mr.num_bufs_);
   const uint64_t destination_count =
@@ -4290,6 +4292,67 @@ void IbverbsEngine::direct_publish_ready(IbvRxQueue& q, IbvDirectReorderPlan& pl
   }
 }
 
+bool IbverbsEngine::direct_set_batch_rq_state(IbvRxQueue& q, IbvDirectBatchSlot& batch,
+                                              uint8_t current_state, uint8_t new_state) {
+  const uint32_t first = batch.batch_id * batch.plan->packets_per_batch;
+  const uint32_t end = first + batch.plan->packets_per_batch;
+  for (uint32_t destination = first; destination < end; ++destination) {
+    auto& rq = *batch.plan->destinations[destination];
+    uint32_t in[DEVX_ST_SZ_DW(modify_rq_in)] = {0};
+    uint32_t out[DEVX_ST_SZ_DW(modify_rq_out)] = {0};
+    void* rqc = DEVX_ADDR_OF(modify_rq_in, in, ctx);
+    DEVX_SET(modify_rq_in, in, opcode, MLX5_CMD_OP_MODIFY_RQ);
+    DEVX_SET(modify_rq_in, in, rqn, rq.rqn);
+    DEVX_SET(modify_rq_in, in, rq_state, current_state);
+    DEVX_SET(rqc, rqc, state, new_state);
+    if (mlx5dv_devx_obj_modify(rq.rq_obj, in, sizeof(in), out, sizeof(out)) != 0) {
+      DAQIRI_LOG_ERROR(
+          "Hardware reorder batch {} MODIFY_RQ destination {} state {}->{} failed: {} "
+          "(syndrome 0x{:x})",
+          batch.batch_id, destination, current_state, new_state, strerror(errno),
+          DEVX_GET(modify_rq_out, out, syndrome));
+      batch.plan->cq_errors++;
+      force_quit_.store(true, std::memory_order_relaxed);
+      return false;
+    }
+  }
+  (void)q;
+  return true;
+}
+
+bool IbverbsEngine::direct_rearm_reset_batch(IbvRxQueue& q, IbvDirectBatchSlot& batch) {
+  const uint32_t first = batch.batch_id * batch.plan->packets_per_batch;
+  const uint32_t end = first + batch.plan->packets_per_batch;
+  for (uint32_t destination = first; destination < end; ++destination) {
+    auto& rq = *batch.plan->destinations[destination];
+    rq.producer = 0;
+    rq.consumer = 0;
+    rq.dbr[0] = 0;
+  }
+  if (!direct_set_batch_rq_state(q, batch, MLX5_RQC_STATE_RST, MLX5_RQC_STATE_RDY)) {
+    return false;
+  }
+  std::fill(batch.seen.begin(), batch.seen.end(), 0);
+  std::fill(batch.missing_bitmap.begin(), batch.missing_bitmap.end(), 0);
+  batch.remaining = batch.plan->packets_per_batch;
+  batch.first_packet_ns = 0;
+  batch.rqs_reset = false;
+  batch.info.source_packet_count = batch.plan->packets_per_batch;
+  batch.info.burst_flags = DAQIRI_BURST_FLAG_REORDERED | DAQIRI_BURST_FLAG_DIRECT_PLACED;
+  batch.burst.hdr.hdr.max_pkt = batch.plan->packets_per_batch;
+  batch.burst.hdr.hdr.burst_flags = batch.info.burst_flags;
+  memcpy(batch.burst.hdr.custom_burst_data, &batch.info, sizeof(batch.info));
+  batch.state.store(IbvDirectBatchState::RECEIVING, std::memory_order_release);
+  doorbell_store_barrier();
+  for (uint32_t destination = first; destination < end; ++destination) {
+    auto& rq = *batch.plan->destinations[destination];
+    rq.producer = 1;
+    rq.dbr[0] = htobe32(1U);
+  }
+  batch.plan->reposts.fetch_add(batch.plan->packets_per_batch, std::memory_order_relaxed);
+  return true;
+}
+
 void IbverbsEngine::direct_poll_queue(IbvRxQueue* q) {
   auto& plan = *q->direct_reorder;
   const uint32_t cqe_count = q->dv_cq.cqe_cnt;
@@ -4310,7 +4373,11 @@ void IbverbsEngine::direct_poll_queue(IbvRxQueue* q) {
   };
   auto retry_credit = [&](uint32_t destination) {
     auto& batch = *plan.batches[destination / plan.packets_per_batch];
-    if (batch.state.load(std::memory_order_acquire) != IbvDirectBatchState::RECEIVING) {
+    const auto state = batch.state.load(std::memory_order_acquire);
+    if (state == IbvDirectBatchState::QUIESCING) {
+      return;
+    }
+    if (state != IbvDirectBatchState::RECEIVING) {
       plan.ownership_violations++;
       force_quit_.store(true, std::memory_order_relaxed);
       return;
@@ -4391,9 +4458,15 @@ void IbverbsEngine::direct_poll_queue(IbvRxQueue* q) {
     const uint32_t batch_id = destination / plan.packets_per_batch;
     const uint32_t sequence = destination % plan.packets_per_batch;
     auto& batch = *plan.batches[batch_id];
-    if (batch.state.load(std::memory_order_acquire) != IbvDirectBatchState::RECEIVING) {
+    const auto batch_state = batch.state.load(std::memory_order_acquire);
+    if (batch_state != IbvDirectBatchState::RECEIVING &&
+        batch_state != IbvDirectBatchState::QUIESCING) {
       plan.ownership_violations++;
       force_quit_.store(true, std::memory_order_relaxed);
+      continue;
+    }
+    if (batch_state == IbvDirectBatchState::QUIESCING) {
+      // The timeout snapshot is final; discard a completion that raced RESET.
       continue;
     }
     uint64_t& word = batch.seen[sequence / 64U];
@@ -4404,8 +4477,12 @@ void IbverbsEngine::direct_poll_queue(IbvRxQueue* q) {
       continue;
     }
     word |= bit;
+    if (batch.first_packet_ns == 0) {
+      batch.first_packet_ns = ibv_now_ns();
+    }
     plan.placements++;
     if (--batch.remaining == 0) {
+      batch.first_packet_ns = 0;
       batch.state.store(IbvDirectBatchState::READY_PENDING, std::memory_order_release);
       plan.pending_ready.push_back(batch_id);
     }
@@ -4413,6 +4490,54 @@ void IbverbsEngine::direct_poll_queue(IbvRxQueue* q) {
 
   if (q->cq_ci != start_ci) {
     *q->dv_cq.dbrec = htobe32(q->cq_ci & 0x00ffffffU);
+  }
+  const bool cq_drained = processed < budget;
+
+  // Keep RESET batches quiescing for one complete poll to drain any CQE that
+  // raced the timeout before exposing or recycling their aggregate storage.
+  for (auto& batch_ptr : plan.batches) {
+    auto& batch = *batch_ptr;
+    if (!cq_drained ||
+        batch.state.load(std::memory_order_acquire) != IbvDirectBatchState::QUIESCING ||
+        !batch.rqs_reset) {
+      continue;
+    }
+    if (plan.cfg.missing_action_ == ReorderMissingAction::DROP) {
+      plan.dropped_batches++;
+      direct_rearm_reset_batch(*q, batch);
+      continue;
+    }
+    batch.info.burst_flags = DAQIRI_BURST_FLAG_REORDERED | DAQIRI_BURST_FLAG_DIRECT_PLACED |
+                             DAQIRI_BURST_FLAG_REORDER_TIMEOUT;
+    batch.burst.hdr.hdr.max_pkt = batch.info.source_packet_count;
+    batch.burst.hdr.hdr.burst_flags = batch.info.burst_flags;
+    memcpy(batch.burst.hdr.custom_burst_data, &batch.info, sizeof(batch.info));
+    batch.state.store(IbvDirectBatchState::READY_PENDING, std::memory_order_release);
+    plan.pending_ready.push_back(batch.batch_id);
+  }
+
+  if (plan.timeout_ns != 0) {
+    const uint64_t now_ns = ibv_now_ns();
+    for (auto& batch_ptr : plan.batches) {
+      auto& batch = *batch_ptr;
+      if (batch.state.load(std::memory_order_acquire) != IbvDirectBatchState::RECEIVING ||
+          batch.first_packet_ns == 0 || now_ns - batch.first_packet_ns < plan.timeout_ns) {
+        continue;
+      }
+      for (size_t word = 0; word < batch.seen.size(); ++word) {
+        batch.missing_bitmap[word] = ~batch.seen[word];
+      }
+      if (!batch.missing_bitmap.empty() && (plan.packets_per_batch % 64U) != 0U) {
+        batch.missing_bitmap.back() &= (1ULL << (plan.packets_per_batch % 64U)) - 1ULL;
+      }
+      batch.info.source_packet_count = plan.packets_per_batch - batch.remaining;
+      batch.state.store(IbvDirectBatchState::QUIESCING, std::memory_order_release);
+      batch.rqs_reset =
+          direct_set_batch_rq_state(*q, batch, MLX5_RQC_STATE_RDY, MLX5_RQC_STATE_RST);
+      if (batch.rqs_reset) {
+        plan.timed_out_batches++;
+      }
+    }
   }
   direct_publish_ready(*q, plan);
 }
@@ -4574,6 +4699,7 @@ Status IbverbsEngine::init_reorder(IbvRxQueue& q, const InterfaceConfig& intf,
       return Status::INVALID_PARAMETER;
     }
     plan.acc_ptrs.reserve(plan.packets_per_batch);
+    plan.timeout_ns = qcfg.timeout_us_ * 1000ULL;
 
     CudaContextGuard context_guard(plan.cuda_context);
     if (plan.cuda_context == nullptr) {
@@ -4595,10 +4721,16 @@ Status IbverbsEngine::init_reorder(IbvRxQueue& q, const InterfaceConfig& intf,
       ob.ptr = out_base + i * out_mr.adj_size_;
       ob.src_wqe.reserve(plan.packets_per_batch);
       ob.src_strd.reserve(plan.packets_per_batch);
+      ob.bitmap_word_count = (plan.packets_per_batch + 63U) / 64U;
+      const size_t bitmap_bytes = static_cast<size_t>(ob.bitmap_word_count) * sizeof(uint64_t);
       if (cudaEventCreateWithFlags(&ob.event, cudaEventDisableTiming) != cudaSuccess ||
           cudaHostAlloc(reinterpret_cast<void**>(&ob.h_batch_id), sizeof(uint64_t),
                         cudaHostAllocDefault) != cudaSuccess ||
-          cudaMalloc(reinterpret_cast<void**>(&ob.d_batch_id), sizeof(uint64_t)) != cudaSuccess) {
+          cudaMalloc(reinterpret_cast<void**>(&ob.d_batch_id), sizeof(uint64_t)) != cudaSuccess ||
+          cudaHostAlloc(reinterpret_cast<void**>(&ob.h_received_bitmap), bitmap_bytes,
+                        cudaHostAllocDefault) != cudaSuccess ||
+          cudaMalloc(reinterpret_cast<void**>(&ob.d_received_bitmap), bitmap_bytes) !=
+              cudaSuccess) {
         DAQIRI_LOG_CRITICAL("Reorder '{}' CUDA event/batch-id alloc failed", rc.name_);
         return Status::GENERIC_FAILURE;
       }
@@ -4644,7 +4776,8 @@ void IbverbsEngine::reorder_poll_events(IbvRxQueue& q, IbvReorderPlan& plan) {
   }
 }
 
-Status IbverbsEngine::reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, BurstParams** out) {
+Status IbverbsEngine::reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, bool timeout_flush,
+                                          BurstParams** out) {
   *out = nullptr;
   const uint32_t num_pkts = static_cast<uint32_t>(plan.acc_ptrs.size());
   if (num_pkts == 0) {
@@ -4686,6 +4819,8 @@ Status IbverbsEngine::reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, B
   } else if (!context_guard.valid()) {
     return Status::INTERNAL_ERROR;
   }
+  const size_t bitmap_bytes = static_cast<size_t>(ob.bitmap_word_count) * sizeof(uint64_t);
+  cudaMemsetAsync(ob.d_received_bitmap, 0, bitmap_bytes, plan.stream);
   cudaMemcpyAsync(plan.d_input_ptrs, plan.acc_ptrs.data(), sizeof(void*) * num_pkts,
                   cudaMemcpyHostToDevice, plan.stream);
   packet_reorder_copy_payload_by_sequence(
@@ -4696,7 +4831,7 @@ Status IbverbsEngine::reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, B
       plan.data_type_conversion ? static_cast<uint8_t>(c.data_types_.input_type_) : 0U,
       plan.data_type_conversion ? static_cast<uint8_t>(c.data_types_.output_type_) : 0U,
       plan.data_type_conversion ? static_cast<uint8_t>(c.data_types_.input_endianness_) : 0U,
-      ob.d_batch_id, plan.stream);
+      ob.d_batch_id, ob.d_received_bitmap, plan.stream);
   if (cudaGetLastError() != cudaSuccess) {
     DAQIRI_LOG_ERROR("Reorder '{}' kernel launch failed", plan.cfg.name_);
     ob.consumer_done = true;
@@ -4704,6 +4839,8 @@ Status IbverbsEngine::reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, B
     return Status::INTERNAL_ERROR;
   }
   cudaMemcpyAsync(ob.h_batch_id, ob.d_batch_id, sizeof(uint64_t), cudaMemcpyDeviceToHost,
+                  plan.stream);
+  cudaMemcpyAsync(ob.h_received_bitmap, ob.d_received_bitmap, bitmap_bytes, cudaMemcpyDeviceToHost,
                   plan.stream);
   cudaEventRecord(ob.event, plan.stream);
 
@@ -4714,6 +4851,7 @@ Status IbverbsEngine::reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, B
   plan.acc_wqe.clear();
   plan.acc_strd.clear();
   plan.acc_ptrs.clear();
+  plan.first_packet_ns = 0;
 
   // Build the reordered output burst (a heap BurstParams, like the DPDK path).
   auto* burst = new BurstParams{};
@@ -4723,7 +4861,8 @@ Status IbverbsEngine::reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, B
   burst->hdr.hdr.num_pkts = 1;
   burst->hdr.hdr.nbytes = aggregate_len;
   burst->hdr.hdr.max_pkt = num_pkts;
-  burst->hdr.hdr.burst_flags = DAQIRI_BURST_FLAG_REORDERED;
+  burst->hdr.hdr.burst_flags =
+      DAQIRI_BURST_FLAG_REORDERED | (timeout_flush ? DAQIRI_BURST_FLAG_REORDER_TIMEOUT : 0U);
   burst->event = ob.event;
   auto ctx = std::make_shared<IbvReorderBurstCtx>();
   ctx->state = q.reorder.get();
@@ -4737,6 +4876,7 @@ Status IbverbsEngine::reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, B
   ctx->info.aggregate_len = aggregate_len;
   ctx->info.burst_flags = burst->hdr.hdr.burst_flags;
   ctx->h_batch_id = ob.h_batch_id;
+  ctx->h_received_bitmap = ob.h_received_bitmap;
   std::memcpy(burst->hdr.custom_burst_data, &ctx->info, sizeof(ctx->info));
   burst->custom_pkt_data = std::static_pointer_cast<void>(ctx);
   burst->pkts[0] = ctx->pkt_ptrs.data();
@@ -4760,6 +4900,7 @@ void IbverbsEngine::reorder_process_raw(IbvRxQueue& q, BurstParams* raw) {
     const size_t plan_idx = it->second;
     auto& plan = st.plans[plan_idx];
     if (plan.acc_ptrs.empty()) {
+      plan.first_packet_ns = ibv_now_ns();
       const uint32_t len = raw->pkt_lens[0][i];
       uint32_t in_payload = (len > plan.copy_source_offset) ? (len - plan.copy_source_offset) : 0;
       in_payload = std::min(in_payload, plan.slot_stride);
@@ -4771,7 +4912,7 @@ void IbverbsEngine::reorder_process_raw(IbvRxQueue& q, BurstParams* raw) {
     plan.acc_strd.push_back(strd_arr[i]);
     if (plan.acc_ptrs.size() >= plan.packets_per_batch) {
       BurstParams* out = nullptr;
-      if (reorder_flush_batch(q, plan, &out) == Status::SUCCESS && out != nullptr) {
+      if (reorder_flush_batch(q, plan, false, &out) == Status::SUCCESS && out != nullptr) {
         st.ready.push_back(out);
       }
     }
@@ -4787,6 +4928,32 @@ Status IbverbsEngine::reorder_get_rx(IbvRxQueue& q, BurstParams** burst) {
   for (auto& plan : st.plans) {
     reorder_poll_events(q, plan);
   }
+  const auto handle_timeouts = [&]() -> bool {
+    const uint64_t now_ns = ibv_now_ns();
+    for (auto& plan : st.plans) {
+      if (plan.timeout_ns == 0 || plan.first_packet_ns == 0 ||
+          now_ns - plan.first_packet_ns < plan.timeout_ns) {
+        continue;
+      }
+      if (plan.cfg.missing_action_ == ReorderMissingAction::DROP) {
+        for (size_t i = 0; i < plan.acc_ptrs.size(); ++i) {
+          release_strides(q, plan.acc_wqe[i], plan.acc_strd[i]);
+        }
+        plan.acc_ptrs.clear();
+        plan.acc_wqe.clear();
+        plan.acc_strd.clear();
+        plan.first_packet_ns = 0;
+        continue;
+      }
+      BurstParams* timed_out = nullptr;
+      if (reorder_flush_batch(q, plan, true, &timed_out) == Status::SUCCESS &&
+          timed_out != nullptr) {
+        *burst = timed_out;
+        return true;
+      }
+    }
+    return false;
+  };
   if (!st.ready.empty()) {
     *burst = st.ready.front();
     st.ready.pop_front();
@@ -4795,11 +4962,17 @@ Status IbverbsEngine::reorder_get_rx(IbvRxQueue& q, BurstParams** burst) {
   void* b = nullptr;
   while (q.ring->dequeue(&b)) {
     reorder_process_raw(q, static_cast<BurstParams*>(b));
+    if (handle_timeouts()) {
+      return Status::SUCCESS;
+    }
     if (!st.ready.empty()) {
       *burst = st.ready.front();
       st.ready.pop_front();
       return Status::SUCCESS;
     }
+  }
+  if (handle_timeouts()) {
+    return Status::SUCCESS;
   }
   return Status::NOT_READY;
 }
@@ -4831,6 +5004,12 @@ void IbverbsEngine::reorder_cleanup(IbvRxQueue& q) {
       }
       if (ob.d_batch_id) {
         cudaFree(ob.d_batch_id);
+      }
+      if (ob.h_received_bitmap) {
+        cudaFreeHost(ob.h_received_bitmap);
+      }
+      if (ob.d_received_bitmap) {
+        cudaFree(ob.d_received_bitmap);
       }
     }
     if (plan.d_input_ptrs) {
@@ -4912,6 +5091,61 @@ Status IbverbsEngine::get_reorder_burst_info(BurstParams* burst, ReorderBurstInf
   return Status::SUCCESS;
 }
 
+Status IbverbsEngine::get_reorder_missing_info(BurstParams* burst, ReorderMissingInfo* info) {
+  if (burst == nullptr || info == nullptr) {
+    return Status::NULL_PTR;
+  }
+  if (!(burst->hdr.hdr.burst_flags & DAQIRI_BURST_FLAG_REORDERED) ||
+      burst->custom_pkt_data == nullptr) {
+    return Status::INVALID_PARAMETER;
+  }
+  std::vector<uint64_t>* missing_bitmap = nullptr;
+  if (burst->hdr.hdr.burst_flags & DAQIRI_BURST_FLAG_DIRECT_PLACED) {
+    auto batch = std::static_pointer_cast<IbvDirectBatchSlot>(burst->custom_pkt_data);
+    if (!batch) {
+      return Status::INVALID_PARAMETER;
+    }
+    missing_bitmap = &batch->missing_bitmap;
+  } else {
+    auto ctx = std::static_pointer_cast<IbvReorderBurstCtx>(burst->custom_pkt_data);
+    if (!ctx) {
+      return Status::INVALID_PARAMETER;
+    }
+    if (ctx->h_received_bitmap != nullptr) {
+      CudaContextGuard context_guard(ctx->plan != nullptr ? ctx->plan->cuda_context : nullptr);
+      if (burst->event != nullptr) {
+        const cudaError_t status = cudaEventQuery(burst->event);
+        if (status == cudaErrorNotReady) {
+          return Status::NOT_READY;
+        }
+        if (status != cudaSuccess) {
+          (void)cudaGetLastError();
+          return Status::INTERNAL_ERROR;
+        }
+      }
+      const uint32_t slots = ctx->info.packets_per_batch;
+      const uint32_t words = (slots + 63U) / 64U;
+      ctx->missing_bitmap.resize(words);
+      for (uint32_t word = 0; word < words; ++word) {
+        ctx->missing_bitmap[word] = ~ctx->h_received_bitmap[word];
+      }
+      if (words != 0U && (slots % 64U) != 0U) {
+        ctx->missing_bitmap.back() &= (1ULL << (slots % 64U)) - 1ULL;
+      }
+      ctx->h_received_bitmap = nullptr;
+    }
+    missing_bitmap = &ctx->missing_bitmap;
+  }
+  uint32_t missing = 0;
+  for (const auto word : *missing_bitmap) {
+    missing += static_cast<uint32_t>(__builtin_popcountll(word));
+  }
+  info->missing_packet_count = missing;
+  info->bitmap_word_count = static_cast<uint32_t>(missing_bitmap->size());
+  info->bitmap = missing_bitmap->empty() ? nullptr : missing_bitmap->data();
+  return Status::SUCCESS;
+}
+
 Status IbverbsEngine::get_rx_burst(BurstParams** burst, int port, int q) {
   if (burst == nullptr) {
     return Status::NULL_PTR;
@@ -4975,8 +5209,22 @@ void IbverbsEngine::direct_release_output(BurstParams* burst) {
                      static_cast<unsigned>(expected));
     return;
   }
+  if (batch->rqs_reset) {
+    auto* q = find_rx_queue(batch->plan->port_id, batch->plan->queue_id);
+    if (q == nullptr || !direct_rearm_reset_batch(*q, *batch)) {
+      force_quit_.store(true, std::memory_order_relaxed);
+    }
+    return;
+  }
   std::fill(batch->seen.begin(), batch->seen.end(), 0);
+  std::fill(batch->missing_bitmap.begin(), batch->missing_bitmap.end(), 0);
   batch->remaining = batch->plan->packets_per_batch;
+  batch->first_packet_ns = 0;
+  batch->info.source_packet_count = batch->plan->packets_per_batch;
+  batch->info.burst_flags = DAQIRI_BURST_FLAG_REORDERED | DAQIRI_BURST_FLAG_DIRECT_PLACED;
+  batch->burst.hdr.hdr.max_pkt = batch->plan->packets_per_batch;
+  batch->burst.hdr.hdr.burst_flags = batch->info.burst_flags;
+  memcpy(batch->burst.hdr.custom_burst_data, &batch->info, sizeof(batch->info));
   batch->state.store(IbvDirectBatchState::RECEIVING, std::memory_order_release);
 
   // No destination in this batch has an outstanding WQE while the burst is
@@ -5614,6 +5862,10 @@ bool IbverbsEngine::validate_config() const {
     std::unordered_set<FlowId> hardware_gate_flows;
     std::unordered_set<std::string> reorder_names;
     for (const auto& reorder : intf.rx_.reorder_configs_) {
+      if (reorder.missing_action_ == ReorderMissingAction::INVALID) {
+        DAQIRI_LOG_ERROR("Reorder '{}' has invalid missing_action", reorder.name_);
+        return false;
+      }
       if (reorder.name_.empty() || !reorder_names.insert(reorder.name_).second) {
         DAQIRI_LOG_ERROR("Reorder config name '{}' is empty or duplicated on interface '{}'",
                          reorder.name_, intf.name_);
@@ -5803,10 +6055,6 @@ bool IbverbsEngine::validate_config() const {
             reorder.name_);
         return false;
       }
-      if (queue->second->timeout_us_ != 0) {
-        DAQIRI_LOG_ERROR("Hardware reorder '{}' requires queue timeout_us: 0", reorder.name_);
-        return false;
-      }
       if (reorder.packet_size_ == 0) {
         DAQIRI_LOG_ERROR("Hardware reorder '{}' requires packet_size > 0", reorder.name_);
         return false;
@@ -5991,12 +6239,14 @@ void IbverbsEngine::print_stats() {
       const auto& plan = *q->direct_reorder;
       DAQIRI_LOG_INFO(
           "ibverbs HW reorder port {} q{}: packets={} placements={} completed_batches={} "
-          "duplicates={} malformed={} ownership_violations={} cq_errors={} tag_errors={} "
+          "timed_out_batches={} dropped_batches={} duplicates={} malformed={} "
+          "ownership_violations={} cq_errors={} tag_errors={} "
           "wqe_errors={} reposts={} ring_full_retries={} destinations={}",
           q->port_id, q->queue_id, plan.packets, plan.placements, plan.completed_batches,
-          plan.duplicate_packets, plan.malformed_packets, plan.ownership_violations, plan.cq_errors,
-          plan.tag_errors, plan.wqe_errors, plan.reposts.load(std::memory_order_relaxed),
-          plan.ring_full_retries, plan.destination_count);
+          plan.timed_out_batches, plan.dropped_batches, plan.duplicate_packets,
+          plan.malformed_packets, plan.ownership_violations, plan.cq_errors, plan.tag_errors,
+          plan.wqe_errors, plan.reposts.load(std::memory_order_relaxed), plan.ring_full_retries,
+          plan.destination_count);
       continue;
     }
     DAQIRI_LOG_INFO(

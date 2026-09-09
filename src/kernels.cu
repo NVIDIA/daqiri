@@ -491,23 +491,13 @@ __device__ static inline void copy_payload_vectorized(uint8_t* __restrict__ dst,
 }
 
 __global__ void packet_reorder_copy_payload_by_sequence_kernel(
-    void* __restrict__ out,
-    const void* const* const __restrict__ in,
-    uint32_t input_payload_len,
-    uint32_t output_payload_len,
-    uint32_t payload_byte_offset,
-    uint32_t num_pkts,
-    uint16_t seq_bit_offset,
-    uint8_t seq_bit_width,
-    uint16_t batch_bit_offset,
-    uint8_t batch_bit_width,
-    uint8_t has_batch_number,
-    uint32_t packets_per_batch,
-    uint32_t max_slot_idx,
-    uint8_t input_data_type,
-    uint8_t output_data_type,
-    uint8_t input_endianness,
-    uint64_t* __restrict__ batch_id_out) {
+    void* __restrict__ out, const void* const* const __restrict__ in, uint32_t input_payload_len,
+    uint32_t output_payload_len, uint32_t payload_byte_offset, uint32_t num_pkts,
+    uint16_t seq_bit_offset, uint8_t seq_bit_width, uint16_t batch_bit_offset,
+    uint8_t batch_bit_width, uint8_t has_batch_number, uint32_t packets_per_batch,
+    uint32_t max_slot_idx, uint8_t input_data_type, uint8_t output_data_type,
+    uint8_t input_endianness, uint64_t* __restrict__ batch_id_out,
+    uint64_t* __restrict__ received_bitmap_out) {
   const uint32_t pkt_idx = static_cast<uint32_t>(blockIdx.x);
   if (pkt_idx >= num_pkts) { return; }
 
@@ -525,6 +515,10 @@ __global__ void packet_reorder_copy_payload_by_sequence_kernel(
 
   const uint32_t slot_idx = seq % packets_per_batch;
   if (slot_idx > max_slot_idx) { return; }
+  if (received_bitmap_out != nullptr && threadIdx.x == 0) {
+    atomicOr(reinterpret_cast<unsigned long long*>(&received_bitmap_out[slot_idx / 64U]),
+             1ULL << (slot_idx % 64U));
+  }
 
   const auto* src = src_pkt + payload_byte_offset;
   auto* dst = static_cast<uint8_t*>(out) + (static_cast<size_t>(slot_idx) * output_payload_len);
@@ -538,47 +532,23 @@ __global__ void packet_reorder_copy_payload_by_sequence_kernel(
       dst, src, input_payload_len, input_data_type, output_data_type, input_endianness, src_pkt);
 }
 
-extern "C" void packet_reorder_copy_payload_by_sequence(void* out,
-                                                        const void* const* const in,
-                                                        uint32_t input_payload_len,
-                                                        uint32_t output_payload_len,
-                                                        uint32_t payload_byte_offset,
-                                                        uint32_t num_pkts,
-                                                        uint16_t seq_bit_offset,
-                                                        uint8_t seq_bit_width,
-                                                        uint16_t batch_bit_offset,
-                                                        uint8_t batch_bit_width,
-                                                        uint8_t has_batch_number,
-                                                        uint32_t packets_per_batch,
-                                                        uint32_t max_slot_idx,
-                                                        uint8_t input_data_type,
-                                                        uint8_t output_data_type,
-                                                        uint8_t input_endianness,
-                                                        uint64_t* batch_id_out,
-                                                        cudaStream_t stream) {
+extern "C" void packet_reorder_copy_payload_by_sequence(
+    void* out, const void* const* const in, uint32_t input_payload_len, uint32_t output_payload_len,
+    uint32_t payload_byte_offset, uint32_t num_pkts, uint16_t seq_bit_offset, uint8_t seq_bit_width,
+    uint16_t batch_bit_offset, uint8_t batch_bit_width, uint8_t has_batch_number,
+    uint32_t packets_per_batch, uint32_t max_slot_idx, uint8_t input_data_type,
+    uint8_t output_data_type, uint8_t input_endianness, uint64_t* batch_id_out,
+    uint64_t* received_bitmap_out, cudaStream_t stream) {
   if (out == nullptr || in == nullptr || input_payload_len == 0 || output_payload_len == 0
       || num_pkts == 0 || packets_per_batch == 0) {
     return;
   }
 
   packet_reorder_copy_payload_by_sequence_kernel<<<num_pkts, 128, 0, stream>>>(
-      out,
-      in,
-      input_payload_len,
-      output_payload_len,
-      payload_byte_offset,
-      num_pkts,
-      seq_bit_offset,
-      seq_bit_width,
-      batch_bit_offset,
-      batch_bit_width,
-      has_batch_number,
-      packets_per_batch,
-      max_slot_idx,
-      input_data_type,
-      output_data_type,
-      input_endianness,
-      batch_id_out);
+      out, in, input_payload_len, output_payload_len, payload_byte_offset, num_pkts, seq_bit_offset,
+      seq_bit_width, batch_bit_offset, batch_bit_width, has_batch_number, packets_per_batch,
+      max_slot_idx, input_data_type, output_data_type, input_endianness, batch_id_out,
+      received_bitmap_out);
 }
 
 __global__ void packet_gather_copy_payload_kernel(void* __restrict__ out,

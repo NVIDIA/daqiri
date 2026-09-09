@@ -328,6 +328,9 @@ if status == daqiri.Status.SUCCESS and burst is not None:
             status, info = daqiri.get_reorder_burst_info(burst)
             if status == daqiri.Status.SUCCESS:
                 print(info.batch_id, info.aggregate_len)
+                status, missing_indices = daqiri.get_reorder_missing_info(burst)
+                if status == daqiri.Status.SUCCESS:
+                    print(missing_indices)
     finally:
         daqiri.free_all_packets_and_burst_rx(burst)
 ```
@@ -607,6 +610,7 @@ The workflow sections above show the common call order and ownership rules.
 | `get_connection_id(burst)` | Read the transport connection ID recorded on an RX burst. |
 | `set_reorder_cuda_stream(interface_name, reorder_name, stream=0)` | Set CUDA stream for a GPU reorder plan. |
 | `get_reorder_burst_info(burst)` | Return `(Status, ReorderBurstInfo)`. |
+| `get_reorder_missing_info(burst)` | Return `(Status, list[int])` of missing sequence slots. |
 | `synchronize_burst_event(burst)` | Wait for the CUDA event attached to a burst, if any. |
 
 ### TX and Header Fill

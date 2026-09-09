@@ -416,6 +416,13 @@ v1 batch-size requirement:
   monotonic sequence values are unsupported; use `reorder_engine: sw` for those streams.
   - type: `boolean`
   - default: `false`
+- **`missing_action`**: Action when the owning RX queue's `timeout_us` elapses before every
+  sequence slot arrives. `drop` frees the partial batch without delivering it. `passthrough`
+  delivers the fixed-size aggregate with `DAQIRI_BURST_FLAG_REORDER_TIMEOUT`; received slots are
+  valid and missing slots are unspecified, so consult `get_reorder_missing_info()` first.
+  - type: `string`
+  - values: `drop`, `passthrough`
+  - default: `passthrough`
 - **`reorder_type`**: Reorder implementation (`gpu` or `cpu`).
   - type: `string`
   - values: `gpu`, `cpu`
@@ -473,6 +480,12 @@ configs do not use CUDA streams:
 ```cpp
 daqiri::set_reorder_cuda_stream("rx_port", "rx_reorder_0", stream);
 ```
+
+For reorder queues, `timeout_us` is a fixed deadline measured from the first observed packet; later
+arrivals do not extend it, and an empty batch has no timer. Hardware reorder quiesces the batch's
+private RQs before dropping or exposing its output, preventing late DMA into caller-owned or
+recycled storage. A cyclic hardware sender must treat timeout as final for that sequence cycle:
+without an epoch field, an old late packet is indistinguishable from the same slot in a new cycle.
 
 ## Transmit Configuration (tx)
 

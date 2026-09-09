@@ -41,6 +41,7 @@ struct SequenceTxConfig {
   uint32_t sequence_number_offset = 0;
   uint32_t sequence_number_start = 0;
   uint32_t sequence_number_modulus = 0;
+  uint32_t sequence_drop_every = 0;
 };
 
 SequenceTxConfig parse_sequence_tx(const YAML::Node &root) {
@@ -58,6 +59,7 @@ SequenceTxConfig parse_sequence_tx(const YAML::Node &root) {
       tx["sequence_number_start"].as<uint32_t>(cfg.sequence_number_start);
   cfg.sequence_number_modulus =
       tx["sequence_number_modulus"].as<uint32_t>(cfg.sequence_number_modulus);
+  cfg.sequence_drop_every = tx["sequence_drop_every"].as<uint32_t>(cfg.sequence_drop_every);
   return cfg;
 }
 
@@ -142,6 +144,7 @@ void tx_worker(const SequenceTxConfig &cfg, std::atomic<bool> &stop) {
   uint32_t next_sequence = cfg.sequence_number_modulus == 0
                                ? cfg.sequence_number_start
                                : cfg.sequence_number_start % cfg.sequence_number_modulus;
+  uint64_t generated_packets = 0;
 
   while (!stop.load()) {
     auto *msg = daqiri::create_tx_burst_params();
@@ -188,6 +191,13 @@ void tx_worker(const SequenceTxConfig &cfg, std::atomic<bool> &stop) {
       if (pkt_data == nullptr) {
         failed = true;
         break;
+      }
+      ++generated_packets;
+      if (cfg.sequence_drop_every != 0 && generated_packets % cfg.sequence_drop_every == 0) {
+        ++next_sequence;
+        if (cfg.sequence_number_modulus != 0) {
+          next_sequence %= cfg.sequence_number_modulus;
+        }
       }
       const uint32_t sequence_network_order = htonl(next_sequence);
       next_sequence++;
@@ -241,6 +251,8 @@ void rx_reorder_worker(const daqiri::bench::RawBenchRxConfig &cfg,
   uint64_t reorder_info_success = 0;
   uint64_t reorder_info_not_ready = 0;
   uint64_t reorder_info_errors = 0;
+  uint64_t missing_packets = 0;
+  uint64_t missing_info_errors = 0;
   uint64_t first_batch_id = 0;
   uint64_t last_batch_id = 0;
   bool have_batch_id = false;
@@ -298,6 +310,13 @@ void rx_reorder_worker(const daqiri::bench::RawBenchRxConfig &cfg,
           } else {
             ++reorder_info_errors;
           }
+          daqiri::ReorderMissingInfo missing{};
+          const auto missing_status = daqiri::get_reorder_missing_info(burst, &missing);
+          if (missing_status == daqiri::Status::SUCCESS) {
+            missing_packets += missing.missing_packet_count;
+          } else {
+            ++missing_info_errors;
+          }
         }
       } else {
         passthrough_packets += logical_packets;
@@ -319,8 +338,9 @@ void rx_reorder_worker(const daqiri::bench::RawBenchRxConfig &cfg,
     std::cout << " reorder_info_success=" << reorder_info_success
               << " reorder_info_not_ready=" << reorder_info_not_ready
               << " reorder_info_errors=" << reorder_info_errors
-              << " first_batch_id=" << first_batch_id
-              << " last_batch_id=" << last_batch_id;
+              << " missing_packets=" << missing_packets
+              << " missing_info_errors=" << missing_info_errors
+              << " first_batch_id=" << first_batch_id << " last_batch_id=" << last_batch_id;
   }
   std::cout << "\n";
 }

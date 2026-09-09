@@ -60,6 +60,16 @@ struct ReorderBurstInfo {
   uint32_t burst_flags;
 };
 
+/** Missing sequence slots for a timed-out reordered burst.
+ * Bit i is one when sequence slot i was not received. The bitmap is owned by
+ * the burst and remains valid until the burst is freed.
+ */
+struct ReorderMissingInfo {
+  uint32_t missing_packet_count = 0;
+  uint32_t bitmap_word_count = 0;
+  const uint64_t* bitmap = nullptr;
+};
+
 /**
  * @brief Return status codes from communication with the NIC
  *
@@ -1028,6 +1038,33 @@ enum class ReorderMethod {
   SEQ_PACKETS_PER_BATCH,
 };
 
+enum class ReorderMissingAction : uint8_t {
+  DROP = 0,
+  PASSTHROUGH,
+  INVALID,
+};
+
+inline ReorderMissingAction reorder_missing_action_from_string(const std::string& str) {
+  if (str == "drop") {
+    return ReorderMissingAction::DROP;
+  }
+  if (str == "passthrough") {
+    return ReorderMissingAction::PASSTHROUGH;
+  }
+  return ReorderMissingAction::INVALID;
+}
+
+inline std::string reorder_missing_action_to_string(ReorderMissingAction action) {
+  switch (action) {
+    case ReorderMissingAction::DROP:
+      return "drop";
+    case ReorderMissingAction::PASSTHROUGH:
+      return "passthrough";
+    default:
+      return "invalid";
+  }
+}
+
 enum class ReorderDataType : uint8_t {
   SAME = 0,
   INT4,
@@ -1167,6 +1204,7 @@ struct ReorderConfig {
   uint32_t packet_size_ = 0;
   std::vector<FlowId> flow_ids_;
   ReorderMethod method_ = ReorderMethod::INVALID;
+  ReorderMissingAction missing_action_ = ReorderMissingAction::PASSTHROUGH;
   ReorderSeqBatchNumberConfig seq_batch_number_;
   ReorderSeqPacketsPerBatchConfig seq_packets_per_batch_;
   ReorderDataTypesConfig data_types_;

@@ -1242,6 +1242,13 @@ Status Engine::get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info
   return Status::NOT_SUPPORTED;
 }
 
+Status Engine::get_reorder_missing_info(BurstParams* burst, ReorderMissingInfo* info) {
+  (void)burst;
+  (void)info;
+  DAQIRI_LOG_ERROR("get_reorder_missing_info not implemented for this engine type");
+  return Status::NOT_SUPPORTED;
+}
+
 Status Engine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id,
                                 bool is_server, int num_pkts, uint64_t wr_id,
                                 const std::string& local_mr_name) {

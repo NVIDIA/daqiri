@@ -378,6 +378,10 @@ if ((burst->hdr.hdr.burst_flags & daqiri::DAQIRI_BURST_FLAG_REORDERED) != 0U) {
     auto st = daqiri::get_reorder_burst_info(burst, &info);
     if (st == daqiri::Status::SUCCESS) {
         // info.batch_id identifies the aggregate batch.
+        daqiri::ReorderMissingInfo missing{};
+        if (daqiri::get_reorder_missing_info(burst, &missing) == daqiri::Status::SUCCESS) {
+            // Bit i == 1 means sequence slot i is missing; storage is valid until free.
+        }
     }
 }
 ```
@@ -751,6 +755,7 @@ workflow sections above show the common call order and ownership rules.
 | `get_connection_id(burst)` | Read the transport connection ID recorded on an RX burst. |
 | `set_reorder_cuda_stream(interface_name, reorder_name, stream)` | Set the CUDA stream for a configured GPU reorder plan. |
 | `get_reorder_burst_info(burst, &info)` | Read metadata for a reordered aggregate burst. |
+| `get_reorder_missing_info(burst, &info)` | Read the burst-owned missing-slot bitmap. |
 
 ### TX and Header Fill
 

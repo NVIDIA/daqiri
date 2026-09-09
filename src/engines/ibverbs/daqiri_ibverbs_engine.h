@@ -55,6 +55,9 @@ struct IbvReorderOutBuf {
   cudaEvent_t event = nullptr;
   uint64_t* h_batch_id = nullptr;
   uint64_t* d_batch_id = nullptr;
+  uint64_t* h_received_bitmap = nullptr;
+  uint64_t* d_received_bitmap = nullptr;
+  uint32_t bitmap_word_count = 0;
   std::vector<uint16_t> src_wqe;
   std::vector<uint16_t> src_strd;
   uint32_t src_count = 0;
@@ -82,6 +85,8 @@ struct IbvReorderPlan {
   std::vector<uint16_t> acc_strd;
   uint32_t acc_input_payload_len = 0;
   uint32_t acc_output_payload_len = 0;
+  uint64_t first_packet_ns = 0;
+  uint64_t timeout_ns = 0;
 };
 
 struct IbvReorderState {
@@ -101,6 +106,8 @@ struct IbvReorderBurstCtx {
   std::array<void*, 1> pkt_ptrs{};
   std::array<uint32_t, 1> pkt_lens{};
   ReorderBurstInfo info{};
+  std::vector<uint64_t> missing_bitmap;
+  const uint64_t* h_received_bitmap = nullptr;
   const uint64_t* h_batch_id = nullptr;
   bool released = false;
 };
@@ -113,6 +120,7 @@ struct IbvReorderBurstCtx {
 // BurstParams notification per completed batch.
 enum class IbvDirectBatchState : uint8_t {
   RECEIVING,
+  QUIESCING,
   READY_PENDING,
   READY,
   OWNED,
@@ -140,6 +148,9 @@ struct IbvDirectBatchSlot {
   uint32_t batch_id = 0;
   uint32_t remaining = 0;
   std::vector<uint64_t> seen;
+  std::vector<uint64_t> missing_bitmap;
+  uint64_t first_packet_ns = 0;
+  bool rqs_reset = false;
   std::atomic<IbvDirectBatchState> state{IbvDirectBatchState::RECEIVING};
   BurstParams burst{};
   std::array<void*, 1> pkt_ptrs{};
@@ -170,6 +181,7 @@ struct IbvDirectReorderPlan {
   // Keep a cyclic WQ for firmware compatibility, but expose only one credit
   // per destination until the application releases the owning batch.
   uint32_t rq_depth = 64;
+  uint64_t timeout_ns = 0;
   MemoryKind output_kind = MemoryKind::INVALID;
   int cuda_device_id = 0;
   bool gpu_flush_required = false;
@@ -193,6 +205,8 @@ struct IbvDirectReorderPlan {
   uint64_t packets = 0;
   uint64_t placements = 0;
   uint64_t completed_batches = 0;
+  uint64_t timed_out_batches = 0;
+  uint64_t dropped_batches = 0;
   uint64_t duplicate_packets = 0;
   uint64_t malformed_packets = 0;
   uint64_t cq_errors = 0;
@@ -515,6 +529,7 @@ class IbverbsEngine : public Engine {
   Status set_reorder_cuda_stream(const std::string& interface_name, const std::string& reorder_name,
                                  cudaStream_t stream) override;
   Status get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info) override;
+  Status get_reorder_missing_info(BurstParams* burst, ReorderMissingInfo* info) override;
 
  private:
   struct PortSteering;
@@ -572,7 +587,8 @@ class IbverbsEngine : public Engine {
   void reorder_poll_events(IbvRxQueue& q,
                            IbvReorderPlan& plan);             // free sources of finished batches
   void reorder_process_raw(IbvRxQueue& q, BurstParams* raw);  // route + accumulate + flush
-  Status reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, BurstParams** out);
+  Status reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, bool timeout_flush,
+                             BurstParams** out);
   void reorder_release_output(BurstParams* burst);  // free a delivered reordered burst
   void reorder_cleanup(IbvRxQueue& q);
 
@@ -587,6 +603,9 @@ class IbverbsEngine : public Engine {
                                                        std::vector<IbvDirectFlexSample>* samples);
   void direct_poll_queue(IbvRxQueue* q);
   void direct_publish_ready(IbvRxQueue& q, IbvDirectReorderPlan& plan);
+  bool direct_set_batch_rq_state(IbvRxQueue& q, IbvDirectBatchSlot& batch, uint8_t current_state,
+                                 uint8_t new_state);
+  bool direct_rearm_reset_batch(IbvRxQueue& q, IbvDirectBatchSlot& batch);
   void direct_release_output(BurstParams* burst);
   void direct_cleanup(IbvRxQueue& q);
 

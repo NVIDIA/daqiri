@@ -119,10 +119,15 @@ newer NICs. The `*_reorder_seq_*.yaml` hardware examples select `engine: "ibverb
 placement or a CPU-addressable kind.
 
 The current hardware path uses the mlx5 flex parser and private receive queues; a host CPU polls
-CQEs and releases only complete aggregates to the application. It does not use DPA and it does not
-launch the software reorder kernel. Successful output includes a non-zero
+CQEs and releases complete aggregates or configured timeout passthroughs to the application. It
+does not use DPA and it does not launch the software reorder kernel. Successful output includes a non-zero
 `direct_placed_batches` count. Always free each received burst promptly, because its fixed output
 slots are rearmed only by `free_rx_burst()`.
+
+For deterministic loss testing, set `bench_tx.sequence_drop_every` to a non-zero N, set the RX
+queue's `timeout_us`, and select `missing_action: drop` or `passthrough`. With
+`DAQIRI_BENCH_CHECK_REORDER_INFO=1`, the final summary reports `missing_packets` and metadata
+errors. Restore `sequence_drop_every: 0` for throughput measurements.
 
 Use `mlnx_perf -i <rx-netdev> -t 1` during a run of at least 10 seconds and report stable RX
 samples after discarding startup and shutdown. For a cabled test, report the physical receive
