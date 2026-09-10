@@ -263,7 +263,7 @@ values:
 sudo mst start
 MLXCONFIG_DEVICE=/dev/mst/mt4129_pciconf0  # Or a PCI BDF such as 0005:03:00.0
 
-sudo mlxconfig -d "$MLXCONFIG_DEVICE" query | \
+sudo mlxconfig --enable_verbosity -d "$MLXCONFIG_DEVICE" query | \
   grep -E 'PROG_PARSE_GRAPH|FLEX_PARSER_PROFILE_ENABLE'
 ```
 
