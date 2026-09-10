@@ -16,13 +16,14 @@
 # Usage:
 #   ./run_spark_bench.sh <backend> [mode]
 #     backend ∈ {dpdk, rdma, socket-udp, socket-tcp}
-#     mode    ∈ {smoke, sweep, drop-curve, drop-curve-matrix}  (default: smoke)
+#     mode    ∈ {smoke, sweep, drop-curve, drop-curve-matrix, rate-sweep}
+#       (default: smoke)
 #
 # Required environment in current shell:
 #   DAQIRI_BUILD_DIR — path to the cmake build dir (defaults to ../build).
 #   ETH_DST_ADDR     — required for dpdk backend (the RX iface MAC).
-#   REPEATS          — repeats per cell for error bars (default 1; use 3 for the
-#                      published re-run). Each rep is an independent run + CSV row.
+#   REPEATS          — independent repetitions per cell for error bars (default 3).
+#                      Each rep is an independent 30-second run + CSV row.
 #   WORKLOAD         — representative GPU workload run on the REAL received data
 #                      in the receive path (preceded by a reorder/gather step):
 #                      none (default) | fft | gemm (FP32) | gemm_fp16 (FP16
@@ -83,14 +84,17 @@ mkdir -p "$OUT_DIR"
 
 CSV="$OUT_DIR/runs.csv"
 # `pairs` = number of concurrent client/server process pairs (socket backends sweep
-# this; dpdk/rdma are always 1). `gbps` is aggregate App TX, `rx_gbps` aggregate App RX
-# (summed across pairs); App-level loss is (gbps - rx_gbps) / gbps.
+# this; dpdk/rdma are always 1). `gbps` is aggregate App TX, `rx_packets` / `rx_gbps`
+# are aggregate App RX (summed across pairs), and `wire_gbps` is the receiver's physical-byte counter over
+# the same active transfer window. `app_loss_pct` compares the endpoint byte totals;
+# it catches drops above the kernel UDP-drop counter as well as conventional socket loss.
 # post_process_gemm_dim = GEMM_DIM pinned dimension (default 1024).
 # CPU core/percentage columns identify the actual sampled cores. For a multi-pair
 # socket run, TX and RX are pair-0 samples rather than aggregate utilization.
 # post_process_sync (last column) = SYNC_INTERVAL, or "default" (2) when unset.
 CSV_HEADER="lang,backend,post_process,payload,batch,observed_max_rx_burst,pairs"
-CSV_HEADER+=",target_gbps,rep,seconds,packets,bytes,pps,gbps,rx_gbps,drops,drops_kind"
+CSV_HEADER+=",target_gbps,rep,seconds,packets,bytes,rx_packets,pps,gbps,rx_gbps,app_loss_pct,wire_gbps"
+CSV_HEADER+=",tx_packets_phy,rx_packets_phy,tx_bytes_phy,rx_bytes_phy,hw_rx_buffer_discards,drops,ip_reasm_fails,drops_kind"
 CSV_HEADER+=",cpu_master_core,cpu_tx_core,cpu_rx_core"
 CSV_HEADER+=",cpu_master_pct,cpu_tx_pct,cpu_rx_pct,gpu_sm_pct,gpu_mem_pct"
 CSV_HEADER+=",post_process_gemm_dim,post_process_sync"
@@ -105,8 +109,8 @@ if [[ ! "$RUN_SECONDS" =~ ^[0-9]+$ || "$RUN_SECONDS" -lt 1 ]]; then
 fi
 # Repeats per cell for error bars. Each rep is a full independent run with its own
 # capture dir (<cell>-r<rep>) and CSV row; the perf-doc tables report mean +/- std
-# across reps. Default 1; set REPEATS=3 for the published re-run.
-REPEATS="${REPEATS:-1}"
+# across reps. Default 3.
+REPEATS="${REPEATS:-3}"
 # Representative GPU workload run on the REAL received data (after a reorder/
 # gather step) in the receive path: none | fft | gemm (FP32 SGEMM) | gemm_fp16
 # (mixed-precision FP16/tensor-core matmul, the inference-style GEMM). Recorded in
@@ -265,6 +269,10 @@ case "$BACKEND" in
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_socket"
     # Final pair-0 TX/RX attribution is derived from the structured pinning below.
     CPU_MASTER=8; CPU_TX=17; CPU_RX=16
+    SOCKET_SERVER_NS="${SOCKET_SERVER_NS:-dq_wire_server}"
+    SOCKET_CLIENT_NS="${SOCKET_CLIENT_NS:-dq_wire_client}"
+    SOCKET_SERVER_NETDEV="${SOCKET_SERVER_NETDEV:-$(ip netns exec "$SOCKET_SERVER_NS" ls /sys/class/net 2>/dev/null | grep -vx lo | head -n1 || true)}"
+    SOCKET_CLIENT_NETDEV="${SOCKET_CLIENT_NETDEV:-$(ip netns exec "$SOCKET_CLIENT_NS" ls /sys/class/net 2>/dev/null | grep -vx lo | head -n1 || true)}"
     ;;
   socket-tcp)
     # 1 MiB / 8000 / 1000 to mirror the published TCP matrix. The bench memsets a full
@@ -283,6 +291,10 @@ case "$BACKEND" in
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_socket"
     # Final pair-0 TX/RX attribution is derived from the structured pinning below.
     CPU_MASTER=8; CPU_TX=17; CPU_RX=16
+    SOCKET_SERVER_NS="${SOCKET_SERVER_NS:-dq_wire_server}"
+    SOCKET_CLIENT_NS="${SOCKET_CLIENT_NS:-dq_wire_client}"
+    SOCKET_SERVER_NETDEV="${SOCKET_SERVER_NETDEV:-$(ip netns exec "$SOCKET_SERVER_NS" ls /sys/class/net 2>/dev/null | grep -vx lo | head -n1 || true)}"
+    SOCKET_CLIENT_NETDEV="${SOCKET_CLIENT_NETDEV:-$(ip netns exec "$SOCKET_CLIENT_NS" ls /sys/class/net 2>/dev/null | grep -vx lo | head -n1 || true)}"
     ;;
   *) echo "Unknown backend: $BACKEND" >&2; exit 1 ;;
 esac
@@ -298,6 +310,24 @@ if [[ "$WORKLOAD" != "none" ]]; then
 fi
 # Optional space-separated overrides for one-off experiments. Apply them to both
 # sweep and headline modes so smoke and drop-curve runs use the requested values.
+if [[ -n "${PAYLOADS_OVERRIDE:-}" ]]; then
+  read -r -a PAYLOADS_SWEEP <<< "$PAYLOADS_OVERRIDE"
+  if (( ${#PAYLOADS_SWEEP[@]} == 0 )); then
+    echo "PAYLOADS_OVERRIDE must contain at least one payload size" >&2
+    exit 1
+  fi
+  PAYLOADS_HEADLINE=("${PAYLOADS_SWEEP[@]}")
+  for payload in "${PAYLOADS_SWEEP[@]}"; do
+    if [[ ! "$payload" =~ ^[1-9][0-9]*$ ]]; then
+      echo "Invalid PAYLOADS_OVERRIDE entry '$payload' (expected a positive integer)" >&2
+      exit 1
+    fi
+    if [[ "$BACKEND" == "socket-udp" && "$payload" -gt 65507 ]]; then
+      echo "Invalid UDP payload '$payload' (maximum is 65507)" >&2
+      exit 1
+    fi
+  done
+fi
 if [[ -n "${BATCHES_OVERRIDE:-}" ]]; then
   read -r -a BATCHES_SWEEP <<< "$BATCHES_OVERRIDE"
   if (( ${#BATCHES_SWEEP[@]} == 0 )); then
@@ -341,6 +371,20 @@ fi
 WORKLOAD_EFF="$WORKLOAD"
 
 DROP_CURVE_TARGETS=(1 5 10 25 50 75 100 0)  # 0 means unpaced (line rate)
+RATE_SWEEP_TARGETS=()
+if [[ -n "${RATE_TARGETS:-}" ]]; then
+  read -r -a RATE_SWEEP_TARGETS <<< "$RATE_TARGETS"
+  if (( ${#RATE_SWEEP_TARGETS[@]} == 0 )); then
+    echo "RATE_TARGETS must contain at least one target in Gbps" >&2
+    exit 1
+  fi
+  for rate in "${RATE_SWEEP_TARGETS[@]}"; do
+    if [[ ! "$rate" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+      echo "Invalid RATE_TARGETS entry '$rate' (expected a non-negative Gbps value)" >&2
+      exit 1
+    fi
+  done
+fi
 
 # --------------------------------------------------------------------------
 # Helpers
@@ -353,14 +397,21 @@ extract_field() {
   grep -E "^$prefix" "$file" | tail -n1 | grep -oE " $field=[^ ]+" | head -n1 | sed -E "s/.*$field=//"
 }
 
-# Sum DPDK drop counters from the engine log emitted via DAQIRI_LOG_INFO.
+# Sum DPDK receive-drop counters from the engine log emitted via DAQIRI_LOG_INFO.
+# mlx5 reports queue-buffer overflow as rx_prio<N>_buf_discard_packets rather
+# than rte_eth_stats.imissed.  Omitting it made a saturated small-packet RX
+# path look loss-free even while its hardware discard counter grew by billions.
 parse_dpdk_drops() {
   local log="$1"
-  local sum=0 v
+  local sum=0 v prio_discards
   for key in imissed ierrors rx_nombuf; do
     v="$(grep -oE "$key=[0-9]+" "$log" 2>/dev/null | tail -n1 | sed -E "s/.*=//" || true)"
     [[ -n "${v:-}" ]] && sum=$((sum + v))
   done
+  prio_discards="$(grep -E 'rx_prio[0-9]+_buf_discard_packets:' "$log" 2>/dev/null \
+    | sed -E 's/.*:[[:space:]]*([0-9]+)[[:space:]]*$/\1/' \
+    | awk '{ s += $1 } END { printf "%d", s+0 }')"
+  sum=$((sum + ${prio_discards:-0}))
   echo "$sum"
 }
 
@@ -374,20 +425,40 @@ parse_rdma_drops() {
   echo "${n:-0}"
 }
 
-# Snapshot socket drops on the kernel side.
-# /proc/net/udp column 13 ("drops") is printed in decimal (%lu in
-# net/ipv4/udp.c). The local_address / rem_address columns are hex.
+# Snapshot UDP receive errors on the kernel side. Per-socket `/proc/net/udp`
+# counters disappear when the benchmark closes its socket, so reading them
+# after the run can falsely report zero drops. `Udp: InErrors` in
+# `/proc/net/snmp` persists after close and includes receive-buffer errors.
 # Both helpers take an optional namespace: in the netns wire-loopback setup the
 # UDP receiver lives in the server netns and TCP retransmits are counted in the
 # client (sender) netns, so the counters must be read inside the right namespace
 # rather than the default one.
-snapshot_proc_net_udp() {
-  local ns="${1:-}"
+snapshot_snmp_counter() {
+  local ns="${1:-}" protocol="$2" counter="$3"
+  local command=(awk '
+    $1 == (proto ":") && !seen_header {
+      for (i = 2; i <= NF; ++i) field[$i] = i
+      seen_header = 1
+      next
+    }
+    $1 == (proto ":") && seen_header {
+      if (counter in field) print $(field[counter])
+      else print 0
+      exit
+    }
+  ' -v proto="$protocol" -v counter="$counter" /proc/net/snmp)
   if [[ -n "$ns" ]]; then
-    ip netns exec "$ns" cat /proc/net/udp 2>/dev/null | awk 'NR>1 { sum += $13 } END { print sum+0 }' || echo 0
+    ip netns exec "$ns" "${command[@]}" 2>/dev/null || echo 0
   else
-    awk 'NR>1 { sum += $13 } END { print sum+0 }' /proc/net/udp 2>/dev/null || echo 0
+    "${command[@]}" 2>/dev/null || echo 0
   fi
+}
+
+# Per-socket UDP counters disappear on close. The protocol counters in
+# /proc/net/snmp persist, so they cover both receive-buffer errors and IP
+# reassembly failures from fragmented datagrams.
+snapshot_proc_net_udp() {
+  snapshot_snmp_counter "${1:-}" Udp InErrors
 }
 snapshot_nstat() {
   local ns="${1:-}"
@@ -435,6 +506,19 @@ phy_counter() {
   { if [[ -n "$ns" ]]; then ip netns exec "$ns" ethtool -S "$netdev" 2>/dev/null
     else ethtool -S "$netdev" 2>/dev/null; fi; } \
     | awk -F'[: ]+' -v k="$key" '$2 == k { s += $3 } END { printf "%d", s+0 }'
+}
+
+# mlx5 accounts host-visible receive-buffer overflow separately from physical
+# packet reception. Count all priority-buffer discard counters, which are the
+# relevant hardware-loss signal for socket RX as well as the raw engine.
+phy_rx_buffer_discards() {
+  local netdev="$1" ns="${2:-}"
+  [[ -z "$netdev" ]] && { echo 0; return; }
+  { if [[ -n "$ns" ]]; then ip netns exec "$ns" ethtool -S "$netdev" 2>/dev/null
+    else ethtool -S "$netdev" 2>/dev/null; fi; } \
+    | awk -F'[: ]+' '$2 == "rx_out_of_buffer" ||
+                      $2 ~ /^rx_prio[0-9]+_buf_discard(_packets)?$/ { s += $3 }
+                      END { printf "%d", s+0 }'
 }
 
 # Substitute payload / batch into the base YAML and write a temp config (dpdk + rdma;
@@ -592,8 +676,9 @@ run_cell() {
   local udp_ns="" tcp_ns=""
   [[ "$BACKEND" == "socket-udp" ]] && udp_ns="dq_wire_server"
   [[ "$BACKEND" == "socket-tcp" ]] && tcp_ns="dq_wire_client"
-  local udp_before tcp_before
+  local udp_before tcp_before ip_reasm_before
   udp_before="$(snapshot_proc_net_udp "$udp_ns")"
+  ip_reasm_before="$(snapshot_snmp_counter "$udp_ns" Ip ReasmFails)"
   tcp_before="$(snapshot_nstat "$tcp_ns")"
 
   # Snapshot per-cpu stats just before the bench starts.
@@ -607,7 +692,9 @@ run_cell() {
   local stdout="$cell_dir/stdout.txt"
   local stderr="$cell_dir/stderr.txt"
   local bench_rc=0
-  local pkts="" bytes="" secs="" rx_bytes="" observed_max_rx_burst=0
+  local pkts="" bytes="" secs="" rx_pkts="" rx_bytes="" wire_bytes="" observed_max_rx_burst=0
+  local tx_phy_packets="" rx_phy_packets="" tx_phy_bytes="" rx_phy_bytes=""
+  local socket_hw_rx_discards_before=0 hw_rx_buffer_discards=""
 
   local bench_extra=()
   [[ "$target_gbps" != "0" ]] && bench_extra+=(--target-gbps "$target_gbps")
@@ -625,7 +712,11 @@ run_cell() {
   # Error"), a burst that pollutes the byte/drop counters and can cut the run
   # short. The client starts STARTUP_SLEEP after the server, so give the server
   # STARTUP_SLEEP + SERVER_GRACE extra seconds to outlive it.
-  local startup_sleep=3 server_grace=5
+  # Socket RX has an engine-to-application queue in addition to the kernel
+  # socket receive queue. Keep the server alive long enough to drain its final
+  # partial recvmmsg burst after the client exits; five seconds was occasionally
+  # insufficient under high-rate UDP load.
+  local startup_sleep=3 server_grace=15
   local server_seconds=$(( RUN_SECONDS + startup_sleep + server_grace ))
 
   if [[ "$BACKEND" =~ ^socket- ]]; then
@@ -633,6 +724,12 @@ run_cell() {
     # namespaces with unique ports and cores. A single pair is core-bound below line
     # rate; the published Spark matrix scales aggregate throughput with four pairs.
     # App TX (client sent) and App RX (server recv) are summed across pairs.
+    local phy_tx_packets_before phy_rx_packets_before phy_tx_bytes_before phy_rx_bytes_before
+    phy_tx_packets_before="$(phy_counter "$SOCKET_CLIENT_NETDEV" tx_packets_phy "$SOCKET_CLIENT_NS")"
+    phy_rx_packets_before="$(phy_counter "$SOCKET_SERVER_NETDEV" rx_packets_phy "$SOCKET_SERVER_NS")"
+    phy_tx_bytes_before="$(phy_counter "$SOCKET_CLIENT_NETDEV" tx_bytes_phy "$SOCKET_CLIENT_NS")"
+    phy_rx_bytes_before="$(phy_counter "$SOCKET_SERVER_NETDEV" rx_bytes_phy "$SOCKET_SERVER_NS")"
+    socket_hw_rx_discards_before="$(phy_rx_buffer_discards "$SOCKET_SERVER_NETDEV" "$SOCKET_SERVER_NS")"
     local i server_pids=() client_pids=()
     for ((i = 0; i < pairs; i++)); do
       generate_socket_yaml "$i" "$payload" "$batch" \
@@ -654,24 +751,32 @@ run_cell() {
     for i in "${client_pids[@]}"; do wait "$i" || bench_rc=$?; done
     for i in "${server_pids[@]}"; do wait "$i" 2>/dev/null || true; done
 
-    local tx_pkts=0 tx_bytes=0 agg_rx_bytes=0 max_active_secs=0
+    local tx_pkts=0 tx_bytes=0 agg_rx_pkts=0 agg_rx_bytes=0 max_active_secs=0
     for ((i = 0; i < pairs; i++)); do
-      local sp sb sa rb max_burst
+      local sp sb sa rp rb max_burst
       sp="$(extract_field 'Client complete' sent_packets "$cell_dir/client_p$i.stdout")"
       sb="$(extract_field 'Client complete' sent_bytes   "$cell_dir/client_p$i.stdout")"
       sa="$(extract_field 'Client complete' active_seconds "$cell_dir/client_p$i.stdout")"
+      rp="$(extract_field 'Server complete' recv_packets "$cell_dir/server_p$i.stdout")"
       rb="$(extract_field 'Server complete' recv_bytes   "$cell_dir/server_p$i.stdout")"
       max_burst="$(extract_field 'Server complete' max_rx_burst \
         "$cell_dir/server_p$i.stdout")"
       tx_pkts=$(( tx_pkts + ${sp:-0} ))
       tx_bytes=$(( tx_bytes + ${sb:-0} ))
+      agg_rx_pkts=$(( agg_rx_pkts + ${rp:-0} ))
       agg_rx_bytes=$(( agg_rx_bytes + ${rb:-0} ))
       if (( ${max_burst:-0} > observed_max_rx_burst )); then
         observed_max_rx_burst="${max_burst:-0}"
       fi
       max_active_secs="$(awk -v a="$max_active_secs" -v b="${sa:-0}" 'BEGIN { print (b+0>a+0)?b:a }')"
     done
-    pkts="$tx_pkts"; bytes="$tx_bytes"; rx_bytes="$agg_rx_bytes"; secs="$max_active_secs"
+    pkts="$tx_pkts"; bytes="$tx_bytes"; rx_pkts="$agg_rx_pkts"; rx_bytes="$agg_rx_bytes"; secs="$max_active_secs"
+    tx_phy_packets=$(( $(phy_counter "$SOCKET_CLIENT_NETDEV" tx_packets_phy "$SOCKET_CLIENT_NS") - phy_tx_packets_before ))
+    rx_phy_packets=$(( $(phy_counter "$SOCKET_SERVER_NETDEV" rx_packets_phy "$SOCKET_SERVER_NS") - phy_rx_packets_before ))
+    tx_phy_bytes=$(( $(phy_counter "$SOCKET_CLIENT_NETDEV" tx_bytes_phy "$SOCKET_CLIENT_NS") - phy_tx_bytes_before ))
+    rx_phy_bytes=$(( $(phy_counter "$SOCKET_SERVER_NETDEV" rx_bytes_phy "$SOCKET_SERVER_NS") - phy_rx_bytes_before ))
+    hw_rx_buffer_discards=$(( $(phy_rx_buffer_discards "$SOCKET_SERVER_NETDEV" "$SOCKET_SERVER_NS") - socket_hw_rx_discards_before ))
+    wire_bytes="$rx_phy_bytes"
     cat "$cell_dir"/server_p*.stderr "$cell_dir"/client_p*.stderr > "$stderr" 2>/dev/null || true
     cat "$cell_dir"/client_p*.stdout "$cell_dir"/server_p*.stdout > "$stdout" 2>/dev/null || true
   elif [[ "$BACKEND" == "rdma" ]]; then
@@ -689,9 +794,11 @@ run_cell() {
     # Snapshot the netns *_phy counters around the run to assert the RoCE traffic
     # actually crossed the cable (client tx -> server rx over the wire), not the
     # on-chip eswitch short-cut that lets a loopback exceed the 100GbE line rate.
-    local phy_tx_before phy_rx_before
+    local phy_tx_before phy_rx_before phy_tx_bytes_before phy_rx_bytes_before
     phy_tx_before="$(phy_counter "$RDMA_CLIENT_NETDEV" tx_packets_phy "$RDMA_CLIENT_NS")"
     phy_rx_before="$(phy_counter "$RDMA_SERVER_NETDEV" rx_packets_phy "$RDMA_SERVER_NS")"
+    phy_tx_bytes_before="$(phy_counter "$RDMA_CLIENT_NETDEV" tx_bytes_phy "$RDMA_CLIENT_NS")"
+    phy_rx_bytes_before="$(phy_counter "$RDMA_SERVER_NETDEV" rx_bytes_phy "$RDMA_SERVER_NS")"
     ip netns exec dq_wire_server "${nsys_pre[@]}" "$BENCH_BIN" "$yaml" \
         --seconds "$server_seconds" "${bench_extra[@]}" --mode server \
         > "$cell_dir/server_stdout.txt" 2> "$cell_dir/server_stderr.txt" &
@@ -712,14 +819,25 @@ run_cell() {
           "$cell_dir/roce_server.nsys-rep" >&2 || true
       echo "nsys report: $cell_dir/roce_server.nsys-rep" >&2
     fi
-    local phy_tx_delta phy_rx_delta
+    local phy_tx_delta phy_rx_delta phy_rx_bytes_delta
     phy_tx_delta=$(( $(phy_counter "$RDMA_CLIENT_NETDEV" tx_packets_phy "$RDMA_CLIENT_NS") - phy_tx_before ))
     phy_rx_delta=$(( $(phy_counter "$RDMA_SERVER_NETDEV" rx_packets_phy "$RDMA_SERVER_NS") - phy_rx_before ))
+    phy_rx_bytes_delta=$(( $(phy_counter "$RDMA_SERVER_NETDEV" rx_bytes_phy "$RDMA_SERVER_NS") - phy_rx_bytes_before ))
+    wire_bytes="$phy_rx_bytes_delta"
     # RDMA prints "Client complete: ... send_completions=N send_bytes=N seconds=S".
     pkts="$(extract_field 'Client complete' send_completions "$stdout")"
     bytes="$(extract_field 'Client complete' send_bytes "$stdout")"
     secs="$(extract_field 'Client complete' seconds "$stdout")"
-    rx_bytes="$bytes"
+    rx_pkts="$(extract_field 'Server complete' recv_completions "$stdout")"
+    rx_bytes="$(extract_field 'Server complete' recv_bytes "$stdout")"
+    # RC is reliable, so a completed one-way run must account for exactly the
+    # same messages and payload at both endpoints.  Do not silently publish
+    # the sender rate as "RX" when the receiver failed to report or drained a
+    # different amount.
+    if [[ -z "$rx_pkts" || -z "$rx_bytes" || "$rx_pkts" != "$pkts" || "$rx_bytes" != "$bytes" ]]; then
+      echo "ERROR: $cell RoCE endpoint totals disagree: client packets=${pkts:-missing} bytes=${bytes:-missing}; server packets=${rx_pkts:-missing} bytes=${rx_bytes:-missing}" >&2
+      bench_rc=1
+    fi
     # Wire-transit check. On the cable the server's rx_*_phy advances by at least one
     # SerDes packet per RDMA message -- many more once a message exceeds the MTU and
     # segments -- so a genuine over-the-wire run shows phy_rx_delta >= the message
@@ -741,14 +859,18 @@ run_cell() {
     generate_yaml "$yaml" "$payload" "$batch"
     # Snapshot the p0/p1 *_phy counters around the run to assert the packets crossed
     # the cable (tx_port -> rx_port over the wire), not the on-chip eswitch short-cut.
-    local phy_tx_before phy_rx_before
+    local phy_tx_before phy_rx_before phy_tx_bytes_before phy_rx_bytes_before
     phy_tx_before="$(phy_counter "$DPDK_TX_NETDEV" tx_packets_phy)"
     phy_rx_before="$(phy_counter "$DPDK_RX_NETDEV" rx_packets_phy)"
+    phy_tx_bytes_before="$(phy_counter "$DPDK_TX_NETDEV" tx_bytes_phy)"
+    phy_rx_bytes_before="$(phy_counter "$DPDK_RX_NETDEV" rx_bytes_phy)"
     "$BENCH_BIN" "$yaml" --seconds "$RUN_SECONDS" "${bench_extra[@]}" \
         > "$stdout" 2> "$stderr" || bench_rc=$?
-    local phy_tx_delta phy_rx_delta
+    local phy_tx_delta phy_rx_delta phy_rx_bytes_delta
     phy_tx_delta=$(( $(phy_counter "$DPDK_TX_NETDEV" tx_packets_phy) - phy_tx_before ))
     phy_rx_delta=$(( $(phy_counter "$DPDK_RX_NETDEV" rx_packets_phy) - phy_rx_before ))
+    phy_rx_bytes_delta=$(( $(phy_counter "$DPDK_RX_NETDEV" rx_bytes_phy) - phy_rx_bytes_before ))
+    wire_bytes="$phy_rx_bytes_delta"
     # For RX-bearing benches "RX complete" is authoritative; fall back to "TX complete".
     pkts="$(extract_field 'RX complete' packets "$stdout")"
     bytes="$(extract_field 'RX complete' bytes   "$stdout")"
@@ -798,26 +920,40 @@ run_cell() {
     return 1
   fi
 
-  local pps gbps rx_gbps
+  local pps gbps rx_gbps app_loss_pct wire_gbps
   pps="$(awk -v p="$pkts" -v s="$secs" 'BEGIN { if (s+0>0) printf "%.0f", p/s; else print 0 }')"
   gbps="$(awk -v b="$bytes" -v s="$secs" 'BEGIN { if (s+0>0) printf "%.3f", (b*8.0)/s/1e9; else print 0 }')"
   rx_gbps="$(awk -v b="${rx_bytes:-0}" -v s="$secs" 'BEGIN { if (s+0>0) printf "%.3f", (b*8.0)/s/1e9; else print 0 }')"
+  app_loss_pct="$(awk -v tx="${bytes:-0}" -v rx="${rx_bytes:-0}" 'BEGIN {
+    if (tx <= 0) { print ""; exit }
+    loss = (tx - rx) * 100.0 / tx
+    if (loss < 0) loss = 0
+    printf "%.6f", loss
+  }')"
+  if [[ -n "$wire_bytes" && "$wire_bytes" -ge 0 ]]; then
+    wire_gbps="$(awk -v b="$wire_bytes" -v s="$secs" 'BEGIN { if (s+0>0) printf "%.3f", (b*8.0)/s/1e9; else print 0 }')"
+  else
+    wire_gbps=""
+  fi
 
   # Drops per backend.
-  local drops drops_kind
+  local drops ip_reasm_fails="" drops_kind
   case "$BACKEND" in
     dpdk)
       drops="$(parse_dpdk_drops "$stderr")"
-      drops_kind="dpdk-imissed+ierrors+nombuf"
+      drops_kind="dpdk-imissed+ierrors+nombuf+rx-prio-buf-discard"
       ;;
     rdma)
       drops="$(parse_rdma_drops "$stderr")"
       drops_kind="rdma-cqe-error"
       ;;
     socket-udp)
-      local udp_after; udp_after="$(snapshot_proc_net_udp "$udp_ns")"
-      drops="$((udp_after - udp_before))"
-      drops_kind="udp-proc-net-udp-drops"
+      local udp_after ip_reasm_after
+      udp_after="$(snapshot_proc_net_udp "$udp_ns")"
+      ip_reasm_after="$(snapshot_snmp_counter "$udp_ns" Ip ReasmFails)"
+      drops="$((udp_after - udp_before + hw_rx_buffer_discards))"
+      ip_reasm_fails="$((ip_reasm_after - ip_reasm_before))"
+      drops_kind="udp-snmp-inerrors+mlx5-rx-prio-buf-discard"
       ;;
     socket-tcp)
       local tcp_after; tcp_after="$(snapshot_nstat "$tcp_ns")"
@@ -846,11 +982,29 @@ run_cell() {
   local pp_sync="${SYNC_INTERVAL:-default}"
   [[ -z "$pp_sync" ]] && pp_sync="default"
   local row="$lang,$BACKEND,$WORKLOAD_EFF,$payload,$batch,$observed_max_rx_burst,$pairs"
-  row+=",$target_gbps,$rep,$secs,$pkts,$bytes,$pps,$gbps,$rx_gbps,$drops,$drops_kind"
+  row+=",$target_gbps,$rep,$secs,$pkts,$bytes,${rx_pkts:-},$pps,$gbps,$rx_gbps,$app_loss_pct,$wire_gbps"
+  row+=",$tx_phy_packets,$rx_phy_packets,$tx_phy_bytes,$rx_phy_bytes,$hw_rx_buffer_discards,$drops,$ip_reasm_fails,$drops_kind"
   row+=",$CPU_MASTER,$CPU_TX,$CPU_RX,$cpu_master_pct,$cpu_tx_pct,$cpu_rx_pct"
   row+=",$gpu_sm,$gpu_mem,$pp_gemm_dim,$pp_sync"
   echo "$row" \
     | tee -a "$CSV"
+
+  # UDP's I/O-to-application hand-off is batched. At the timed boundary a
+  # receiver can retain one final partial batch per pair, so tolerate that
+  # bounded accounting tail. Kernel and NIC discard counters remain fatal.
+  if [[ "$BACKEND" == "socket-udp" ]]; then
+    local tail_packets=$(( pairs * batch ))
+    local packet_delta=$(( pkts - ${rx_pkts:-0} ))
+    local byte_delta=$(( bytes - ${rx_bytes:-0} ))
+    if (( drops != 0 || ${ip_reasm_fails:-0} != 0 || packet_delta < 0 ||
+          packet_delta > tail_packets || byte_delta != packet_delta * payload )); then
+      echo "ERROR: $cell UDP accounting/counter failure: client packets=$pkts bytes=$bytes; server packets=${rx_pkts:-missing} bytes=${rx_bytes:-missing}; kernel-or-NIC-drops=$drops; ip-reassembly-fails=${ip_reasm_fails:-0}" >&2
+      return 1
+    fi
+    if (( packet_delta > 0 )); then
+      echo "INFO: $cell retained $packet_delta final UDP datagram(s), within the $tail_packets-packet retrieval batch bound" >&2
+    fi
+  fi
 }
 
 # Run a cell REPEATS times (each an independent run + CSV row) for error bars.
@@ -904,6 +1058,23 @@ case "$MODE" in
       for b in "${BATCHES_HEADLINE[@]}"; do
         for n in "${PAIRS_HEADLINE[@]}"; do
           for g in "${DROP_CURVE_TARGETS[@]}"; do
+            run_cell_or_record_failure cpp "$p" "$b" "$n" "$g"
+          done
+        done
+      done
+    done
+    ;;
+  rate-sweep)
+    # Explicit offered-rate matrix.  Unlike drop-curve, this uses caller-provided
+    # targets so UDP loss-free knees can be resolved at a useful granularity.
+    if (( ${#RATE_SWEEP_TARGETS[@]} == 0 )); then
+      echo "rate-sweep requires RATE_TARGETS='...'" >&2
+      exit 1
+    fi
+    for p in "${PAYLOADS_HEADLINE[@]}"; do
+      for b in "${BATCHES_HEADLINE[@]}"; do
+        for n in "${PAIRS_HEADLINE[@]}"; do
+          for g in "${RATE_SWEEP_TARGETS[@]}"; do
             run_cell_or_record_failure cpp "$p" "$b" "$n" "$g"
           done
         done
