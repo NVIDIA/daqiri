@@ -1,0 +1,42 @@
+schema_version: daqiri.benchmark-suite/v1
+name: physical-udp-publication
+description: One-link 8 KB physical cross-host UDP publication point.
+topology: physical_cross_host
+evidence_class: physical_cross_host
+adapter: udp_socket
+workload: none
+duration_seconds: 30
+repetitions: 3
+drain_seconds: 5
+readiness_timeout_seconds: 30
+cleanup_timeout_seconds: 5
+execution_order: sequential
+rate_scope: per_pair
+allow_cpu_overlap: false
+matrix:
+  message_size_bytes: [8000]
+  pair_count: [1]
+  requested_rate_gbps: [25]
+  batch_size: [32]
+  buffer_size_bytes: [65536]
+  buffers_per_region: [4096]
+collectors:
+  - application
+  - cpu
+  - daqiri_queue
+  - kernel_udp
+  - mlnx_perf
+  - nic
+  - phy
+  - provenance
+acceptance:
+  max_delivery_loss_packets: 0
+  max_kernel_udp_errors: 0
+  max_nic_rx_discards: 0
+  phy_packet_tolerance_percent: 0.5
+  minimum_rate_percent: 95
+  minimum_mlnx_samples: 20
+  minimum_duration_percent: 95
+requirements:
+  gpu: false
+  hugepages: false
