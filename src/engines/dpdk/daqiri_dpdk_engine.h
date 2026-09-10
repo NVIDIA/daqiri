@@ -147,6 +147,7 @@ class DpdkEngine : public Engine {
                                  const std::string& reorder_name,
                                  cudaStream_t stream) override;
   Status get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info) override;
+  Status get_reorder_missing_info(BurstParams* burst, ReorderMissingInfo* info) override;
   Status set_packet_tx_time(BurstParams* burst, int idx, uint64_t timestamp);
   void free_rx_metadata(BurstParams* burst) override;
   void free_tx_metadata(BurstParams* burst) override;
@@ -362,6 +363,9 @@ class DpdkEngine : public Engine {
     cudaEvent_t event = nullptr;
     uint64_t* h_batch_id = nullptr;
     uint64_t* d_batch_id = nullptr;
+    uint64_t* h_received_bitmap = nullptr;
+    uint64_t* d_received_bitmap = nullptr;
+    uint32_t bitmap_word_count = 0;
     std::vector<struct rte_mbuf*> source_mbufs;
     uint32_t source_packet_count = 0;
 #if DAQIRI_REORDER_GPU_PROFILE
@@ -431,6 +435,8 @@ class DpdkEngine : public Engine {
     std::array<void*, 1> pkt_ptrs{};
     std::array<uint32_t, 1> pkt_lens{};
     ReorderBurstInfo info{};
+    std::vector<uint64_t> missing_bitmap;
+    const uint64_t* h_received_bitmap = nullptr;
     const uint64_t* h_batch_id = nullptr;
     uint64_t rx_timestamp_ns = 0;
     bool rx_timestamp_ns_valid = false;
@@ -439,7 +445,6 @@ class DpdkEngine : public Engine {
 
   struct ReorderQueueState {
     bool enabled = false;
-    bool single_plan_fast_path = false;
     std::unordered_map<FlowId, size_t> flow_id_to_plan;
     std::vector<ReorderPlanRuntime> plans;
     std::vector<std::vector<int>> plan_pkt_indices;

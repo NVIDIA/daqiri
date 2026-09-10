@@ -163,7 +163,7 @@ const void* ReorderPipeline::finish_batch() {
         seq_bit_offset_, seq_bit_width_, /*batch_bit_offset=*/0,
         /*batch_bit_width=*/0, /*has_batch_number=*/0, packets_per_batch_,
         /*max_slot_idx=*/packets_per_batch_ - 1, kDataTypeSame, kDataTypeSame, kEndianNetwork,
-        /*batch_id_out=*/nullptr, as_stream(stream_));
+        /*batch_id_out=*/nullptr, /*received_bitmap_out=*/nullptr, as_stream(stream_));
   } else {
     packet_gather_copy_payload(ordered_, in, out_payload_len_, payload_byte_offset_, collected_,
                                as_stream(stream_));

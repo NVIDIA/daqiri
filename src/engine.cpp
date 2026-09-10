@@ -858,6 +858,9 @@ bool Engine::validate_config() const {
       for (const auto& mr : txq.common_.mrs_) { q_mr_names.emplace(mr); }
       max_tx_payload_frame = std::max(max_tx_payload_frame, queue_frame_size(txq.common_));
     }
+    for (const auto& reorder : intf.rx_.reorder_configs_) {
+      q_mr_names.emplace(reorder.memory_region_);
+    }
 
     for (const auto& flow : intf.rx_.flows_) {
       const auto actions = flow_config_actions(flow);
@@ -1236,6 +1239,13 @@ Status Engine::get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info
   (void)burst;
   (void)info;
   DAQIRI_LOG_ERROR("get_reorder_burst_info not implemented for this engine type");
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::get_reorder_missing_info(BurstParams* burst, ReorderMissingInfo* info) {
+  (void)burst;
+  (void)info;
+  DAQIRI_LOG_ERROR("get_reorder_missing_info not implemented for this engine type");
   return Status::NOT_SUPPORTED;
 }
 

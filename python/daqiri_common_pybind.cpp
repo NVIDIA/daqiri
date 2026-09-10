@@ -602,6 +602,11 @@ void bind_enums(py::module_ &m) {
       .value("SEQ_BATCH_NUMBER", ReorderMethod::SEQ_BATCH_NUMBER)
       .value("SEQ_PACKETS_PER_BATCH", ReorderMethod::SEQ_PACKETS_PER_BATCH);
 
+  py::enum_<ReorderMissingAction>(m, "ReorderMissingAction")
+      .value("DROP", ReorderMissingAction::DROP)
+      .value("PASSTHROUGH", ReorderMissingAction::PASSTHROUGH)
+      .value("INVALID", ReorderMissingAction::INVALID);
+
   py::enum_<ReorderDataType>(m, "ReorderDataType")
       .value("SAME", ReorderDataType::SAME)
       .value("INT4", ReorderDataType::INT4)
@@ -925,15 +930,17 @@ void bind_config_types(py::module_ &m) {
   py::class_<ReorderConfig>(m, "ReorderConfig")
       .def(py::init<>())
       .def_readwrite("name", &ReorderConfig::name_)
+      .def_readwrite("reorder_engine", &ReorderConfig::reorder_engine_)
+      .def_readwrite("cyclic_sequence", &ReorderConfig::cyclic_sequence_)
       .def_readwrite("reorder_type", &ReorderConfig::reorder_type_)
       .def_readwrite("memory_region", &ReorderConfig::memory_region_)
-      .def_readwrite("payload_byte_offset",
-                     &ReorderConfig::payload_byte_offset_)
+      .def_readwrite("payload_byte_offset", &ReorderConfig::payload_byte_offset_)
+      .def_readwrite("packet_size", &ReorderConfig::packet_size_)
       .def_readwrite("flow_ids", &ReorderConfig::flow_ids_)
       .def_readwrite("method", &ReorderConfig::method_)
+      .def_readwrite("missing_action", &ReorderConfig::missing_action_)
       .def_readwrite("seq_batch_number", &ReorderConfig::seq_batch_number_)
-      .def_readwrite("seq_packets_per_batch",
-                     &ReorderConfig::seq_packets_per_batch_)
+      .def_readwrite("seq_packets_per_batch", &ReorderConfig::seq_packets_per_batch_)
       .def_readwrite("data_types", &ReorderConfig::data_types_);
 
   py::class_<RxConfig>(m, "RxConfig")
@@ -988,6 +995,7 @@ PYBIND11_MODULE(_daqiri, m) {
   m.attr("DAQIRI_BURST_FLAG_REORDERED") = DAQIRI_BURST_FLAG_REORDERED;
   m.attr("DAQIRI_BURST_FLAG_REORDER_TIMEOUT") =
       DAQIRI_BURST_FLAG_REORDER_TIMEOUT;
+  m.attr("DAQIRI_BURST_FLAG_DIRECT_PLACED") = DAQIRI_BURST_FLAG_DIRECT_PLACED;
   m.attr("__version__") = version_string();
   m.attr("__version_info__") =
       py::make_tuple(version_year(), version_month(), version_patch());
@@ -1345,6 +1353,26 @@ PYBIND11_MODULE(_daqiri, m) {
         ReorderBurstInfo info{};
         const Status status = get_reorder_burst_info(burst, &info);
         return py::make_tuple(status, info);
+      },
+      "burst"_a);
+  m.def(
+      "get_reorder_missing_info",
+      [](BurstParams* burst) {
+        ReorderMissingInfo info{};
+        const Status status = get_reorder_missing_info(burst, &info);
+        std::vector<uint32_t> missing;
+        if (status == Status::SUCCESS) {
+          missing.reserve(info.missing_packet_count);
+          for (uint32_t word = 0; word < info.bitmap_word_count; ++word) {
+            uint64_t bits = info.bitmap[word];
+            while (bits != 0U) {
+              const uint32_t bit = static_cast<uint32_t>(__builtin_ctzll(bits));
+              missing.push_back(word * 64U + bit);
+              bits &= bits - 1U;
+            }
+          }
+        }
+        return py::make_tuple(status, missing);
       },
       "burst"_a);
   m.def(

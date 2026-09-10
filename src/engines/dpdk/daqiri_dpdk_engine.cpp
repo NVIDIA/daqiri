@@ -536,7 +536,18 @@ bool DpdkEngine::init_reorder_queue_state(const InterfaceConfig& intf, const RxQ
         flow_queue_ids(flow_queue_action(flow_config_actions(flow))).front();
   }
 
-  for (const auto& reorder_cfg : intf.rx_.reorder_configs_) {
+    for (const auto& reorder_cfg : intf.rx_.reorder_configs_) {
+      if (reorder_cfg.missing_action_ == ReorderMissingAction::INVALID) {
+        DAQIRI_LOG_ERROR("Reorder '{}' has invalid missing_action", reorder_cfg.name_);
+        return false;
+      }
+      if (reorder_cfg.reorder_engine_ != "sw") {
+      DAQIRI_LOG_ERROR(
+          "DPDK reorder config '{}' requests reorder_engine '{}'; the DPDK engine supports only "
+          "reorder_engine: sw. Select engine: ibverbs for hardware direct placement",
+          reorder_cfg.name_, reorder_cfg.reorder_engine_);
+      return false;
+    }
     const bool use_gpu_backend = reorder_cfg.reorder_type_ == "gpu";
     int flow_queue_id = -1;
     std::vector<FlowId> queue_flow_ids;
@@ -772,6 +783,15 @@ bool DpdkEngine::init_reorder_queue_state(const InterfaceConfig& intf, const RxQ
         cudaFree(buffer.d_batch_id);
         buffer.d_batch_id = nullptr;
       }
+      if (buffer.h_received_bitmap != nullptr) {
+        cudaFreeHost(buffer.h_received_bitmap);
+        buffer.h_received_bitmap = nullptr;
+      }
+      if (buffer.d_received_bitmap != nullptr) {
+        cudaFree(buffer.d_received_bitmap);
+        buffer.d_received_bitmap = nullptr;
+      }
+      buffer.bitmap_word_count = 0;
 #if DAQIRI_REORDER_GPU_PROFILE
       if (buffer.kernel_start_event != nullptr) {
         cudaEventDestroy(buffer.kernel_start_event);
@@ -870,6 +890,33 @@ bool DpdkEngine::init_reorder_queue_state(const InterfaceConfig& intf, const RxQ
         buffer.source_mbufs.resize(packets_per_batch);
       }
       buffer.source_packet_count = 0;
+      const uint32_t bitmap_words = (packets_per_batch + 63U) / 64U;
+      if (use_gpu_backend && buffer.bitmap_word_count < bitmap_words) {
+        CudaContextGuard context_guard(cuda_context);
+        if (cuda_context == nullptr) {
+          cudaSetDevice(cuda_device_id);
+        } else if (!context_guard.valid()) {
+          return false;
+        }
+        if (buffer.h_received_bitmap != nullptr) {
+          cudaFreeHost(buffer.h_received_bitmap);
+        }
+        if (buffer.d_received_bitmap != nullptr) {
+          cudaFree(buffer.d_received_bitmap);
+        }
+        buffer.h_received_bitmap = nullptr;
+        buffer.d_received_bitmap = nullptr;
+        const size_t bitmap_bytes = static_cast<size_t>(bitmap_words) * sizeof(uint64_t);
+        if (cudaHostAlloc(reinterpret_cast<void**>(&buffer.h_received_bitmap), bitmap_bytes,
+                          cudaHostAllocDefault) != cudaSuccess ||
+            cudaMalloc(reinterpret_cast<void**>(&buffer.d_received_bitmap), bitmap_bytes) !=
+                cudaSuccess) {
+          DAQIRI_LOG_ERROR("Failed to allocate missing-packet bitmap for reorder config '{}'",
+                           reorder_cfg.name_);
+          return false;
+        }
+        buffer.bitmap_word_count = bitmap_words;
+      }
     }
 
     ReorderPlanRuntime plan;
@@ -932,7 +979,6 @@ bool DpdkEngine::init_reorder_queue_state(const InterfaceConfig& intf, const RxQ
 
   if (!qstate.plans.empty()) {
     qstate.enabled = true;
-    qstate.single_plan_fast_path = qstate.plans.size() == 1;
     const auto queue_batch_size = static_cast<size_t>(qcfg.common_.batch_size_);
     qstate.plan_pkt_indices.resize(qstate.plans.size());
     qstate.plan_pkt_counts.resize(qstate.plans.size());
@@ -1045,6 +1091,15 @@ void DpdkEngine::cleanup_reorder_state() {
         cudaFree(buffer.d_batch_id);
         buffer.d_batch_id = nullptr;
       }
+      if (buffer.h_received_bitmap != nullptr) {
+        cudaFreeHost(buffer.h_received_bitmap);
+        buffer.h_received_bitmap = nullptr;
+      }
+      if (buffer.d_received_bitmap != nullptr) {
+        cudaFree(buffer.d_received_bitmap);
+        buffer.d_received_bitmap = nullptr;
+      }
+      buffer.bitmap_word_count = 0;
 #if DAQIRI_REORDER_GPU_PROFILE
       if (buffer.kernel_start_event != nullptr) {
         cudaEventDestroy(buffer.kernel_start_event);
@@ -1310,6 +1365,8 @@ Status DpdkEngine::flush_reorder_batch(ReorderPlanRuntime& plan,
 
   const uint32_t num_pkts = batch->packet_count;
   const uint32_t output_slots = plan.packets_per_batch;
+  const uint32_t bitmap_words = (output_slots + 63U) / 64U;
+  std::vector<uint64_t> received_bitmap(bitmap_words, 0U);
   const uint64_t aggregate_len64 =
       static_cast<uint64_t>(output_slots) * static_cast<uint64_t>(output_payload_len);
   if (aggregate_len64 > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
@@ -1349,6 +1406,16 @@ Status DpdkEngine::flush_reorder_batch(ReorderPlanRuntime& plan,
     }
     output_batch_id_host = output_state.h_batch_id;
 
+    const size_t bitmap_bytes = static_cast<size_t>(bitmap_words) * sizeof(uint64_t);
+    if (output_state.d_received_bitmap == nullptr || output_state.h_received_bitmap == nullptr ||
+        output_state.bitmap_word_count < bitmap_words ||
+        cudaMemsetAsync(output_state.d_received_bitmap, 0, bitmap_bytes, plan.stream) !=
+            cudaSuccess) {
+      DAQIRI_LOG_ERROR("Failed to clear reorder missing-packet bitmap");
+      release_reorder_output_buffer(plan.output_pool, output_buffer_idx);
+      return Status::INTERNAL_ERROR;
+    }
+
     if (cudaMemcpyAsync(plan.d_input_ptrs,
                         input_ptrs.data(),
                         sizeof(void*) * num_pkts,
@@ -1374,24 +1441,15 @@ Status DpdkEngine::flush_reorder_batch(ReorderPlanRuntime& plan,
 
     const auto& cfg = *(plan.config);
     packet_reorder_copy_payload_by_sequence(
-        output_buffer,
-        reinterpret_cast<const void* const*>(plan.d_input_ptrs),
-        input_payload_len,
-        output_payload_len,
-        plan.copy_source_offset,
-        num_pkts,
-        get_reorder_seq_bit_offset(cfg),
-        get_reorder_seq_bit_width(cfg),
-        get_reorder_batch_bit_offset(cfg),
-        get_reorder_batch_bit_width(cfg),
-        cfg.method_ == ReorderMethod::SEQ_BATCH_NUMBER ? 1U : 0U,
-        plan.packets_per_batch,
-        output_slots - 1U,
+        output_buffer, reinterpret_cast<const void* const*>(plan.d_input_ptrs), input_payload_len,
+        output_payload_len, plan.copy_source_offset, num_pkts, get_reorder_seq_bit_offset(cfg),
+        get_reorder_seq_bit_width(cfg), get_reorder_batch_bit_offset(cfg),
+        get_reorder_batch_bit_width(cfg), cfg.method_ == ReorderMethod::SEQ_BATCH_NUMBER ? 1U : 0U,
+        plan.packets_per_batch, output_slots - 1U,
         plan.data_type_conversion_enabled ? static_cast<uint8_t>(plan.input_data_type) : 0U,
         plan.data_type_conversion_enabled ? static_cast<uint8_t>(plan.output_data_type) : 0U,
         plan.data_type_conversion_enabled ? static_cast<uint8_t>(plan.input_endianness) : 0U,
-        output_state.d_batch_id,
-        plan.stream);
+        output_state.d_batch_id, output_state.d_received_bitmap, plan.stream);
     if (cudaGetLastError() != cudaSuccess) {
       DAQIRI_LOG_ERROR("Failed to launch reorder payload copy kernel");
       release_reorder_output_buffer(plan.output_pool, output_buffer_idx);
@@ -1412,6 +1470,12 @@ Status DpdkEngine::flush_reorder_batch(ReorderPlanRuntime& plan,
                         cudaMemcpyDeviceToHost,
                         plan.stream) != cudaSuccess) {
       DAQIRI_LOG_ERROR("Failed to copy reorder batch ID to host");
+      release_reorder_output_buffer(plan.output_pool, output_buffer_idx);
+      return Status::INTERNAL_ERROR;
+    }
+    if (cudaMemcpyAsync(output_state.h_received_bitmap, output_state.d_received_bitmap,
+                        bitmap_bytes, cudaMemcpyDeviceToHost, plan.stream) != cudaSuccess) {
+      DAQIRI_LOG_ERROR("Failed to copy reorder missing-packet bitmap to host");
       release_reorder_output_buffer(plan.output_pool, output_buffer_idx);
       return Status::INTERNAL_ERROR;
     }
@@ -1444,6 +1508,7 @@ Status DpdkEngine::flush_reorder_batch(ReorderPlanRuntime& plan,
           extract_bits_be_host(src_pkt, get_reorder_seq_bit_offset(cfg), get_reorder_seq_bit_width(cfg));
       const uint32_t slot_idx = seq % plan.packets_per_batch;
       if (slot_idx >= output_slots) { continue; }
+      received_bitmap[slot_idx / 64U] |= 1ULL << (slot_idx % 64U);
 
       std::memcpy(out_bytes + (static_cast<size_t>(slot_idx) * output_payload_len),
                   src_pkt + plan.copy_source_offset,
@@ -1469,6 +1534,22 @@ Status DpdkEngine::flush_reorder_batch(ReorderPlanRuntime& plan,
   if (status != Status::SUCCESS) {
     release_reorder_output_buffer(plan.output_pool, output_buffer_idx);
     return status;
+  }
+
+  auto output_ctx = std::static_pointer_cast<ReorderBurstContext>((*out_burst)->custom_pkt_data);
+  if (output_ctx != nullptr) {
+    if (plan.use_gpu_backend) {
+      output_ctx->h_received_bitmap =
+          plan.output_pool->buffers[output_buffer_idx].h_received_bitmap;
+    } else {
+      output_ctx->missing_bitmap.resize(bitmap_words);
+      for (uint32_t word = 0; word < bitmap_words; ++word) {
+        output_ctx->missing_bitmap[word] = ~received_bitmap[word];
+      }
+      if ((output_slots % 64U) != 0U) {
+        output_ctx->missing_bitmap.back() &= (1ULL << (output_slots % 64U)) - 1ULL;
+      }
+    }
   }
 
   if (plan.use_gpu_backend) {
@@ -1503,6 +1584,12 @@ Status DpdkEngine::flush_reorder_timeouts(ReorderQueueState& qstate, uint64_t no
     auto& batch = plan.direct_arrival_batch;
     if (batch.first_packet_cycles != 0 && batch.packet_count != 0
         && now_cycles - batch.first_packet_cycles >= plan.timeout_cycles) {
+      if (plan.config->missing_action_ == ReorderMissingAction::DROP) {
+        rte_pktmbuf_free_bulk(plan.h_source_mbufs.data(),
+                              static_cast<unsigned int>(batch.packet_count));
+        batch = ReorderBatchState{};
+        continue;
+      }
       BurstParams* out = nullptr;
       const auto status = flush_reorder_batch(plan, 0, true, &out);
       if (status != Status::SUCCESS && final_status == Status::SUCCESS) {
@@ -1524,50 +1611,6 @@ Status DpdkEngine::process_burst_for_reorder(uint32_t key, ReorderQueueState& qs
   Status final_status = Status::SUCCESS;
   const uint64_t now_cycles = rte_get_timer_cycles();
   const int num_pkts = static_cast<int>(burst->hdr.hdr.num_pkts);
-
-  if (qstate.single_plan_fast_path && qstate.plans.size() == 1) {
-    auto& plan = qstate.plans[0];
-
-    if (plan.use_gpu_backend && plan.stream == nullptr) {
-      DAQIRI_LOG_ERROR("Reorder stream is not set for interface port {} queue {} config '{}'",
-                       plan.port_id,
-                       plan.queue_id,
-                       plan.config->name_);
-      free_all_packets(burst);
-      free_rx_burst(burst);
-      return Status::INVALID_PARAMETER;
-    }
-
-    for (int pkt_idx = 0; pkt_idx < num_pkts; ++pkt_idx) {
-      auto* mbuf = reinterpret_cast<rte_mbuf*>(burst->pkts[0][pkt_idx]);
-
-      void* pkt_ptr = rte_pktmbuf_mtod(mbuf, void*);
-
-      size_t batch_size = 0;
-      const auto append_status =
-          append_reorder_packet(plan, mbuf, pkt_ptr, now_cycles, &batch_size);
-      if (append_status != Status::SUCCESS) {
-        if (final_status == Status::SUCCESS) { final_status = append_status; }
-        rte_pktmbuf_free(mbuf);
-        continue;
-      }
-      if (batch_size >= plan.packets_per_batch) {
-        BurstParams* out = nullptr;
-        const auto status = flush_reorder_batch(plan, 0, false, &out);
-        if (status != Status::SUCCESS && final_status == Status::SUCCESS) {
-          final_status = status;
-        }
-        if (out != nullptr) {
-          qstate.ready_outputs.push_back(out);
-        }
-      }
-    }
-
-    // In the queue-owned fast path all source packets are retained by reorder state until
-    // their CUDA event completes. The raw burst metadata is not exposed to the consumer.
-    free_rx_burst(burst);
-    return final_status;
-  }
 
   std::fill(qstate.plan_pkt_counts.begin(), qstate.plan_pkt_counts.end(), 0U);
   auto& unmatched_indices = qstate.unmatched_indices;
@@ -1648,13 +1691,19 @@ Status DpdkEngine::process_burst_for_reorder(uint32_t key, ReorderQueueState& qs
 
   const int unmatched_count = static_cast<int>(qstate.unmatched_count);
   if (unmatched_count > 0) {
+    uint64_t unmatched_bytes = 0;
     for (int out_idx = 0; out_idx < unmatched_count; ++out_idx) {
       const int in_idx = unmatched_indices[out_idx];
       for (int seg = 0; seg < burst->hdr.hdr.num_segs; ++seg) {
         burst->pkts[seg][out_idx] = burst->pkts[seg][in_idx];
       }
+      const auto* mbuf = reinterpret_cast<const rte_mbuf*>(burst->pkts[0][out_idx]);
+      if (mbuf != nullptr) {
+        unmatched_bytes += mbuf->pkt_len;
+      }
     }
     burst->hdr.hdr.num_pkts = unmatched_count;
+    burst->hdr.hdr.nbytes = unmatched_bytes;
     qstate.ready_outputs.push_back(burst);
   } else {
     // Matched packets are kept in reorder state and freed when output is emitted.
@@ -1755,6 +1804,49 @@ Status DpdkEngine::get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* 
   }
 
   *info = ctx->info;
+  return Status::SUCCESS;
+}
+
+Status DpdkEngine::get_reorder_missing_info(BurstParams* burst, ReorderMissingInfo* info) {
+  if (burst == nullptr || info == nullptr) {
+    return Status::NULL_PTR;
+  }
+  if ((burst->hdr.hdr.burst_flags & kBurstFlagDpdkReordered) == 0U ||
+      burst->custom_pkt_data == nullptr) {
+    return Status::INVALID_PARAMETER;
+  }
+  auto ctx = std::static_pointer_cast<ReorderBurstContext>(burst->custom_pkt_data);
+  if (!ctx) {
+    return Status::INVALID_PARAMETER;
+  }
+  if (burst->event != nullptr && ctx->h_received_bitmap != nullptr) {
+    CudaContextGuard context_guard(ctx->output_pool != nullptr ? ctx->output_pool->cuda_context
+                                                               : nullptr);
+    const cudaError_t event_status = cudaEventQuery(burst->event);
+    if (event_status == cudaErrorNotReady) {
+      return Status::NOT_READY;
+    }
+    if (event_status != cudaSuccess) {
+      (void)cudaGetLastError();
+      return Status::INTERNAL_ERROR;
+    }
+    const uint32_t words = (ctx->info.packets_per_batch + 63U) / 64U;
+    ctx->missing_bitmap.resize(words);
+    for (uint32_t word = 0; word < words; ++word) {
+      ctx->missing_bitmap[word] = ~ctx->h_received_bitmap[word];
+    }
+    if (words != 0U && (ctx->info.packets_per_batch % 64U) != 0U) {
+      ctx->missing_bitmap.back() &= (1ULL << (ctx->info.packets_per_batch % 64U)) - 1ULL;
+    }
+    ctx->h_received_bitmap = nullptr;
+  }
+  uint32_t missing = 0;
+  for (const auto word : ctx->missing_bitmap) {
+    missing += static_cast<uint32_t>(__builtin_popcountll(word));
+  }
+  info->missing_packet_count = missing;
+  info->bitmap_word_count = static_cast<uint32_t>(ctx->missing_bitmap.size());
+  info->bitmap = ctx->missing_bitmap.empty() ? nullptr : ctx->missing_bitmap.data();
   return Status::SUCCESS;
 }
 
@@ -5602,6 +5694,7 @@ bool DpdkEngine::validate_config() const {
     }
 
     std::unordered_map<FlowId, uint16_t> flow_to_queue;
+    std::unordered_map<FlowId, const FlowConfig*> flow_by_id;
     bool has_standard_flows = false;
     bool has_flex_item_flows = false;
     bool has_ecpri_flows = false;
@@ -5619,6 +5712,7 @@ bool DpdkEngine::validate_config() const {
         }
       }
       flow_to_queue.emplace(flow.id_, destination_ids.front());
+      flow_by_id.emplace(flow.id_, &flow);
       if (flow.match_.type_ == FlowMatchType::FLEX_ITEM) {
         has_flex_item_flows = true;
         const uint16_t flex_item_id = flow.match_.flex_item_match_.flex_item_id_;
@@ -5660,7 +5754,24 @@ bool DpdkEngine::validate_config() const {
     }
 
     std::unordered_set<FlowId> reorder_flow_ids;
+    std::unordered_set<std::string> reorder_names;
     for (const auto& reorder_cfg : intf.rx_.reorder_configs_) {
+      if (!reorder_names.insert(reorder_cfg.name_).second) {
+        DAQIRI_LOG_ERROR("Duplicate reorder config name '{}' on interface '{}'", reorder_cfg.name_,
+                         intf.name_);
+        return false;
+      }
+      if (!intf.rx_.flow_isolation_) {
+        DAQIRI_LOG_ERROR("Reorder config '{}' requires rx.flow_isolation: true", reorder_cfg.name_);
+        return false;
+      }
+      if (reorder_cfg.reorder_engine_ != "sw") {
+        DAQIRI_LOG_ERROR(
+            "DPDK reorder config '{}' requests reorder_engine '{}'; the DPDK engine supports "
+            "only reorder_engine: sw. Select engine: ibverbs for hardware direct placement",
+            reorder_cfg.name_, reorder_cfg.reorder_engine_);
+        return false;
+      }
       const bool use_gpu_backend = reorder_cfg.reorder_type_ == "gpu";
       const bool use_cpu_backend = reorder_cfg.reorder_type_ == "cpu";
       if (!use_gpu_backend && !use_cpu_backend) {
@@ -5679,6 +5790,20 @@ bool DpdkEngine::validate_config() const {
                            reorder_cfg.name_,
                            flow_id,
                            intf.name_);
+          return false;
+        }
+        const auto flow_it = flow_by_id.find(flow_id);
+        const bool has_native_match =
+            flow_it != flow_by_id.end() &&
+            (flow_it->second->match_.udp_src_ != 0 || flow_it->second->match_.udp_dst_ != 0 ||
+             flow_it->second->match_.ipv4_src_ != INADDR_ANY ||
+             flow_it->second->match_.ipv4_dst_ != INADDR_ANY ||
+             flow_it->second->match_.ipv4_len_ != 0);
+        if (flow_it == flow_by_id.end() ||
+            flow_it->second->match_.type_ != FlowMatchType::IPV4_UDP || !has_native_match) {
+          DAQIRI_LOG_ERROR(
+              "Reorder config '{}' flow ID {} must use a non-empty native IPv4/UDP match",
+              reorder_cfg.name_, flow_id);
           return false;
         }
         if (reorder_queue_id < 0) {

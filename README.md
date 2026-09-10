@@ -32,6 +32,8 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 - **GPUDirect** — Receive data directly into GPU memory via two modes:
   - *Header-Data Split*: Headers to CPU, payload to GPU (recommended for most workloads).
   - *Batched GPU*: Entire packets to GPU memory (maximum bandwidth, GPU-side parsing required).
+- **Hardware RX reorder** — On ConnectX-7 or newer NICs, the raw ibverbs engine can use the mlx5
+  flex parser for first-DMA placement into ordered CPU or GPU aggregates while the host polls CQEs.
 - **Burst file writes** — Write received bursts as raw packet files or appendable PCAP
   captures. Host-backed buffers use POSIX writes; CUDA device-backed buffers can use cuFile/GDS.
 - **AI/ML integration** — Optional `daqiri_resnet50_inference` application

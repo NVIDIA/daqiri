@@ -64,6 +64,8 @@ daqiri:
             udp_dst: 5000
         reorder_configs:
         - name: "rx_reorder_seq_1024"
+          reorder_engine: "sw"
+          missing_action: "passthrough"
           reorder_type: "cpu"
           memory_region: "Reorder_RX_CPU"
           payload_byte_offset: 64
@@ -93,3 +95,5 @@ bench_tx:
   udp_dst_port: 5000
   sequence_number_offset: 0
   sequence_number_start: 0
+  # Set non-zero to omit every Nth sequence value for timeout testing.
+  sequence_drop_every: 0

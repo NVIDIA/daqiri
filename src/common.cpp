@@ -597,6 +597,11 @@ Status get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info) {
   return g_daqiri_engine->get_reorder_burst_info(burst, info);
 }
 
+Status get_reorder_missing_info(BurstParams* burst, ReorderMissingInfo* info) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->get_reorder_missing_info(burst, info);
+}
+
 uint16_t get_num_rx_queues(int port_id) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
   return g_daqiri_engine->get_num_rx_queues(port_id);
@@ -1283,9 +1288,14 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_reorder_config(
 
   try {
     reorder_config.name_ = reorder_item["name"].as<std::string>();
+    reorder_config.reorder_engine_ = reorder_item["reorder_engine"].as<std::string>("sw");
+    reorder_config.cyclic_sequence_ = reorder_item["cyclic_sequence"].as<bool>(false);
+    reorder_config.missing_action_ = daqiri::reorder_missing_action_from_string(
+        reorder_item["missing_action"].as<std::string>("passthrough"));
     reorder_config.reorder_type_ = reorder_item["reorder_type"].as<std::string>();
     reorder_config.memory_region_ = reorder_item["memory_region"].as<std::string>();
     reorder_config.payload_byte_offset_ = reorder_item["payload_byte_offset"].as<uint32_t>();
+    reorder_config.packet_size_ = reorder_item["packet_size"].as<uint32_t>(0);
 
     if (!reorder_item["flow_ids"] || !reorder_item["flow_ids"].IsSequence()) {
       DAQIRI_LOG_ERROR("Reorder config '{}' requires a non-empty flow_ids sequence",
@@ -1294,7 +1304,7 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_reorder_config(
     }
 
     for (const auto& flow_id_node : reorder_item["flow_ids"]) {
-      reorder_config.flow_ids_.push_back(flow_id_node.as<uint16_t>());
+      reorder_config.flow_ids_.push_back(flow_id_node.as<daqiri::FlowId>());
     }
     if (reorder_config.flow_ids_.empty()) {
       DAQIRI_LOG_ERROR("Reorder config '{}' requires at least one flow ID",
@@ -1303,6 +1313,21 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_reorder_config(
     }
   } catch (const std::exception& e) {
     DAQIRI_LOG_ERROR("Error parsing ReorderConfig: {}", e.what());
+    return false;
+  }
+
+  if (reorder_config.reorder_engine_ != "hw" && reorder_config.reorder_engine_ != "sw") {
+    DAQIRI_LOG_ERROR(
+        "Unsupported reorder_engine '{}' in reorder config '{}'. Valid values are 'hw' and 'sw'",
+        reorder_config.reorder_engine_, reorder_config.name_);
+    return false;
+  }
+
+  if (reorder_config.missing_action_ == daqiri::ReorderMissingAction::INVALID) {
+    DAQIRI_LOG_ERROR(
+        "Unsupported missing_action in reorder config '{}'. Valid values are 'drop' and "
+        "'passthrough'",
+        reorder_config.name_);
     return false;
   }
 

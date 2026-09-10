@@ -869,6 +869,9 @@ Status set_reorder_cuda_stream(const std::string &interface_name,
  */
 Status get_reorder_burst_info(BurstParams *burst, ReorderBurstInfo *info);
 
+/** Get burst-owned missing-slot metadata. Bit i is one when slot i is missing. */
+Status get_reorder_missing_info(BurstParams* burst, ReorderMissingInfo* info);
+
 /**
  * @brief Set the header fields in a burst
  *

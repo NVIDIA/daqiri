@@ -65,7 +65,7 @@ For a shorter selection guide, start with the [Benchmarking overview](../benchma
     The benchmark reports direct `send_tx_burst()` call-to-return time, submit-to-hardware-RX time, hardware-RX-to-`get_rx_burst()` return time, and total submit-to-application time. It requires a physical loopback path, raw `ibverbs`, RX hardware timestamps, host-pinned buffers, and PTP synchronization between the NIC and `CLOCK_REALTIME`. See [Direct-polling latency sweep](../benchmarks/raw_benchmarking.md#direct-polling-latency-sweep) for the measurement boundaries and run command.
 
 ??? question "2. I have out-of-order UDP packets that need to be reordered on the GPU"
-    DAQIRI's flagship pipeline: a CUDA kernel reads a sequence number from each packet's header and places packets at the correct offset in a GPU buffer, so a downstream consumer sees a fully ordered stream without a CPU touch. Configs run on `daqiri_bench_raw_reorder_seq` unless 2.4 applies. Sub-questions:
+    DAQIRI's reorder pipeline places packet payloads at the correct offset in a GPU buffer, so a downstream consumer sees a fully ordered stream. Software reorder uses a CUDA kernel and remains the default. On ConnectX-7 or newer hardware, the ibverbs engine can instead use the flex parser for first-DMA placement when the sequence value cycles over a finite ring (`reorder_engine: hw`, `cyclic_sequence: true`). Configs run on `daqiri_bench_raw_reorder_seq` unless 2.4 applies. Sub-questions:
 
     **2.1 Which algorithm matches how your packets encode batches?**
 
@@ -99,7 +99,7 @@ For a shorter selection guide, start with the [Benchmarking overview](../benchma
 
     *Requires: Raw Ethernet build (`DAQIRI_ENGINE` includes `dpdk`) + NVIDIA ConnectX-class NIC (or the SW-loopback variant for first-time validation).*
 
-    A [diff-style walkthrough](#packet-reordering-on-the-gpu) of `daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml` appears below.
+    A [diff-style walkthrough](#hardware-packet-reordering) of `daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml` appears below.
 
 ??? question "3. I need to parse small per-packet metadata on the CPU while keeping payload on the GPU"
     - [`daqiri_bench_raw_tx_rx_hds.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_hds.yaml) (runs on `daqiri_bench_raw_hds`).
@@ -362,54 +362,53 @@ The HDS bench runs on `daqiri_bench_raw_hds`:
 ./build/examples/daqiri_bench_raw_hds ./build/examples/daqiri_bench_raw_tx_rx_hds.yaml --seconds 10
 ```
 
-### Packet reordering on the GPU
+### Hardware packet reordering
 
-For UDP workloads where packets arrive out-of-order and need to be placed at their correct offset in a GPU buffer before the application sees them, DAQIRI provides a **GPU reorder kernel**: the kernel reads a sequence number from each packet and writes the packet into a dedicated landing region at the correct slot. The downstream consumer reads a fully ordered batch with no CPU touch.
+For cyclic UDP sequence spaces on ConnectX-7 or newer NICs, DAQIRI can use the ibverbs engine's
+mlx5 flex parser to DMA each payload directly into its final aggregate slot. A host CPU polls CQEs
+and publishes the batch after every slot completes; no DPA or reorder-copy kernel is involved.
 
 <div class="packet-diagram" markdown="1">
 ![GPU packet reorder](../images/packet_diagrams/reorder/packet-reorder.webp)
 </div>
 
-The canonical reorder config is [`daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml) (`seq_packets_per_batch` algorithm, GPU kernel, closed-loop TX+RX). It builds on the base TX+RX config above. Only the deltas are shown here.
+The canonical hardware config is [`daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml) (`seq_packets_per_batch`, closed-loop TX+RX). It explicitly selects `engine: "ibverbs"`. Only the relevant blocks are shown here.
 
-**New `Reorder_RX_GPU` memory region.** A large, dedicated GPU region that holds one fully reordered batch.
+**Add cyclic aggregate slots.** Each `Reorder_RX_GPU` buffer holds one complete batch of 1024
+8192-byte payloads. The example uses host-pinned memory, which is accessible by both NIC and GPU;
+use `kind: "device"` for direct placement in GPU device memory.
 
-```yaml hl_lines="5 9 16"
+```yaml hl_lines="7 9 10"
 memory_regions:
-- name: "Data_TX_CPU"
-  kind: "huge"
-  num_bufs: 16384
-  buf_size: 2048
 - name: "Data_RX_GPU"
-  kind: "device"
-  num_bufs: 16384      # (1)!
-  buf_size: 2048
+  kind: "host_pinned"
+  num_bufs: 16384
+  buf_size: 8256
 - name: "Reorder_RX_GPU"  # (2)!
-  kind: "device"
+  kind: "host_pinned"     # (1)!
   affinity: 0
-  num_bufs: 128
-  # (source buf_size - payload_byte_offset) * packets_per_batch
-  # = (2048 - 64) * 1024 = 2,031,616 bytes per reordered batch.
-  buf_size: 2031616    # (3)!
+  num_bufs: 2              # (2)!
+  buf_size: 8388608        # (3)!
 ```
 
-1. :material-package-variant: **`num_bufs`** · `integer` · *required*: Shrunk from the base config's 51200 to 16384. Reorder works at smaller batches with smaller per-packet buffers (`buf_size: 2048` here vs. 8064 in the base), so the buffer pool is correspondingly smaller.
-2. **New region for the kernel output.** Each buffer holds one fully reordered batch of `packets_per_batch` packets, payload-only (the header is stripped via `payload_byte_offset`).
-3. :material-package-variant: **`buf_size`** · `integer (bytes)` · *required*: Sized as `(source buf_size − payload_byte_offset) × packets_per_batch`. For this config: `(2048 − 64) × 1024 = 2,031,616` bytes. Re-derive when you change any of the three inputs.
+1. **`kind`**: `host_pinned` permits NIC DMA and GPU access. `device` uses GPUDirect device memory.
+2. **`num_bufs`**: Two output buffers form a 2048-packet cyclic destination ring.
+3. **`buf_size`**: `packet_size × packets_per_batch` = 8192 × 1024 = 8,388,608 bytes.
 
-**Match queue `batch_size` to `packets_per_batch`.** The reorder kernel processes exactly one batch per invocation. The queue must hand it that many packets at once.
+**Give the host poller a core.** Hardware placement bypasses the normal source-buffer batch, but
+the queue still identifies the virtual queue and the CPU that polls its CQ.
 
 ```yaml hl_lines="3 4"
 rx:
   queues:
   - batch_size: 1024     # (1)!
-    timeout_us: 2000     # (2)!
+    timeout_us: 0        # (2)!
     memory_regions:
       - "Data_RX_GPU"
 ```
 
-1. :material-package-variant: **`batch_size`** · `integer (packets)` · *required*: Must equal `packets_per_batch` in the reorder config below.
-2. :material-package-variant: **`timeout_us`** · `integer (microseconds)` · *default: none (waits forever)*: Maximum time the queue waits for a partial batch to fill before flushing. Without it, a stalled flow can stall the reorder kernel indefinitely.
+1. **`batch_size`**: Kept equal to `packets_per_batch` for the benchmark's aggregate accounting.
+2. **`timeout_us`**: Hardware reorder v1 emits complete batches only, so timeout flushing is disabled.
 
 **Flow `id` tags packets for the reorder config.** The reorder block selects packets to reorder by flow ID.
 
@@ -421,7 +420,6 @@ flows:
     type: queue
     id: 0
   match:
-    udp_src: 5000
     udp_dst: 5000
 ```
 
@@ -429,44 +427,56 @@ flows:
 
 **The `reorder_configs:` block.** The core of the feature, it sits inside the `rx:` section alongside `queues` and `flows`.
 
-```yaml hl_lines="5 11 12 13"
+```yaml hl_lines="3 4 7 8 14 16"
 reorder_configs:
 - name: "rx_reorder_seq_1024"
-  reorder_type: "gpu"           # (1)!
-  memory_region: "Reorder_RX_GPU"  # (2)!
-  payload_byte_offset: 64       # (3)!
+  reorder_engine: "hw"          # (1)!
+  cyclic_sequence: true         # (2)!
+  reorder_type: "gpu"
+  memory_region: "Reorder_RX_GPU"  # (3)!
+  payload_byte_offset: 42       # (4)!
+  packet_size: 8192             # (5)!
   flow_ids:
-    - 201                       # (4)!
+    - 201                       # (6)!
   method:
-    seq_packets_per_batch:      # (5)!
+    seq_packets_per_batch:
       sequence_number:
-        bit_offset: 512         # (6)!
+        bit_offset: 336         # (7)!
         bit_width: 32
-      packets_per_batch: 1024   # (7)!
+      packets_per_batch: 1024   # (8)!
 ```
 
-1. **`reorder_type`** · `string` · *required*: Where the kernel runs. **Supported:** `"gpu"` (CUDA kernel, recommended), `"cpu"` (throughput-bounded, comparison baseline, see `daqiri_bench_raw_tx_rx_reorder_seq_1024_cpu.yaml`).
-2. **`memory_region`** · `string` · *required*: Name of the landing region for reordered output. Must match a region defined in the top-level `memory_regions:` (here, `Reorder_RX_GPU`).
-3. :material-package-variant: **`payload_byte_offset`** · `integer (bytes)` · *required*: Number of leading bytes (typically the header) to skip when copying packets into the reorder region. The kernel copies from this offset to the end of the source buffer.
-4. List of flow IDs whose packets feed this reorder config. Must match the `id` field of one or more `flows:` entries above.
-5. **`method`**: Algorithm choice. `seq_packets_per_batch` (used here) groups a fixed number of packets per batch, identified by a sequence number within the batch. The alternative `seq_batch_number` encodes the batch index directly in the seqno. See [`daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml).
-6. :material-package-variant: **`bit_offset`** / **`bit_width`** · `integer (bits)` · *required*: Location and size of the sequence number within the packet. Here, the seqno starts at byte 64 (`bit_offset: 512` = 64 × 8) and is 32 bits wide, matching a `uint32` at the start of the UDP payload.
-7. :material-package-variant: **`packets_per_batch`** · `integer (packets)` · *required*: Number of packets the kernel groups per reordered batch. Must equal the queue `batch_size` above.
+1. **`reorder_engine`**: Explicitly opts into ibverbs hardware direct placement; the default is `sw`.
+2. **`cyclic_sequence`**: Acknowledges that the sampled value cycles over the finite destination ring and other sampled bits stay zero. Use software reorder for wide monotonic values.
+3. **`memory_region`**: Names the fixed-slot output region.
+4. **`payload_byte_offset`**: Discards the 42-byte Ethernet/IPv4/UDP header before placement.
+5. **`packet_size`**: Places exactly 8192 payload bytes in each destination slot.
+6. **`flow_ids`**: Selects the single gate flow used by hardware reorder v1.
+7. **`bit_offset`**: The sequence begins at bit 336 (byte 42), the first UDP payload byte.
+8. **`packets_per_batch`**: Each 1024-packet range fills one output buffer.
 
-**TX-side seqno injection.** The benchmark TX path writes a monotonic big-endian `uint32` into the configured payload offset.
+**TX-side cyclic sequence injection.** The benchmark writes a big-endian `uint32` at the start of
+the UDP payload and wraps it over the two-buffer destination ring.
 
 ```yaml hl_lines="3 4 7"
 bench_tx:
   batch_size: 1024
-  payload_size: 1000
-  header_size: 64
+  payload_size: 8192
+  header_size: 42
   udp_src_port: 5000
   udp_dst_port: 5000
   sequence_number_offset: 0   # (1)!
   sequence_number_start: 0
+  sequence_number_modulus: 2048  # (2)!
 ```
 
-1. :material-package-variant: **`sequence_number_offset`** · `integer (bytes)`: Byte offset into the UDP payload where the TX path writes the monotonic seqno. Must align with `sequence_number.bit_offset` in the RX reorder config (after subtracting the header size). Here the seqno is at the very start of the payload.
+1. **`sequence_number_offset`**: Payload-relative byte offset; zero aligns with packet bit 336 after the 42-byte header.
+2. **`sequence_number_modulus`**: Wraps at 2048 = two output buffers × 1024 packets.
+
+The application must free each direct-placed burst promptly. Its fixed receive slots are not
+rearmed until `free_rx_burst()` releases the aggregate, preventing DMA into caller-owned memory.
+For software reorder or payload conversion, use an example with `reorder_engine: "sw"`, such as
+`daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml`.
 
 The reorder bench runs on `daqiri_bench_raw_reorder_seq`:
 

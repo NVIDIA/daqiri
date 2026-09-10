@@ -40,6 +40,8 @@ struct SequenceTxConfig {
   daqiri::bench::RawBenchTxConfig packet;
   uint32_t sequence_number_offset = 0;
   uint32_t sequence_number_start = 0;
+  uint32_t sequence_number_modulus = 0;
+  uint32_t sequence_drop_every = 0;
 };
 
 SequenceTxConfig parse_sequence_tx(const YAML::Node &root) {
@@ -55,6 +57,9 @@ SequenceTxConfig parse_sequence_tx(const YAML::Node &root) {
       tx["sequence_number_offset"].as<uint32_t>(cfg.sequence_number_offset);
   cfg.sequence_number_start =
       tx["sequence_number_start"].as<uint32_t>(cfg.sequence_number_start);
+  cfg.sequence_number_modulus =
+      tx["sequence_number_modulus"].as<uint32_t>(cfg.sequence_number_modulus);
+  cfg.sequence_drop_every = tx["sequence_drop_every"].as<uint32_t>(cfg.sequence_drop_every);
   return cfg;
 }
 
@@ -84,7 +89,8 @@ parse_gpu_reorder_plans(const YAML::Node &root) {
     for (const auto &reorder_cfg : reorder_configs) {
       const auto reorder_name = reorder_cfg["name"].as<std::string>("");
       const auto reorder_type = reorder_cfg["reorder_type"].as<std::string>("");
-      if (reorder_name.empty() || reorder_type != "gpu") {
+      const auto reorder_engine = reorder_cfg["reorder_engine"].as<std::string>("sw");
+      if (reorder_name.empty() || reorder_type != "gpu" || reorder_engine != "sw") {
         continue;
       }
 
@@ -135,7 +141,10 @@ void tx_worker(const SequenceTxConfig &cfg, std::atomic<bool> &stop) {
       daqiri::bench::parse_udp_ports(cfg.packet.udp_dst_port);
   size_t src_idx = 0;
   size_t dst_idx = 0;
-  uint32_t next_sequence = cfg.sequence_number_start;
+  uint32_t next_sequence = cfg.sequence_number_modulus == 0
+                               ? cfg.sequence_number_start
+                               : cfg.sequence_number_start % cfg.sequence_number_modulus;
+  uint64_t generated_packets = 0;
 
   while (!stop.load()) {
     auto *msg = daqiri::create_tx_burst_params();
@@ -183,7 +192,18 @@ void tx_worker(const SequenceTxConfig &cfg, std::atomic<bool> &stop) {
         failed = true;
         break;
       }
-      const uint32_t sequence_network_order = htonl(next_sequence++);
+      ++generated_packets;
+      if (cfg.sequence_drop_every != 0 && generated_packets % cfg.sequence_drop_every == 0) {
+        ++next_sequence;
+        if (cfg.sequence_number_modulus != 0) {
+          next_sequence %= cfg.sequence_number_modulus;
+        }
+      }
+      const uint32_t sequence_network_order = htonl(next_sequence);
+      next_sequence++;
+      if (cfg.sequence_number_modulus != 0) {
+        next_sequence %= cfg.sequence_number_modulus;
+      }
       std::memcpy(pkt_data + cfg.packet.header_size +
                       cfg.sequence_number_offset,
                   &sequence_network_order, sizeof(sequence_network_order));
@@ -224,12 +244,15 @@ void rx_reorder_worker(const daqiri::bench::RawBenchRxConfig &cfg,
   uint64_t bytes = 0;
   uint64_t bursts = 0;
   uint64_t aggregated_batches = 0;
+  uint64_t direct_placed_batches = 0;
   uint64_t timeout_batches = 0;
   uint64_t aggregated_packets = 0;
   uint64_t passthrough_packets = 0;
   uint64_t reorder_info_success = 0;
   uint64_t reorder_info_not_ready = 0;
   uint64_t reorder_info_errors = 0;
+  uint64_t missing_packets = 0;
+  uint64_t missing_info_errors = 0;
   uint64_t first_batch_id = 0;
   uint64_t last_batch_id = 0;
   bool have_batch_id = false;
@@ -249,6 +272,8 @@ void rx_reorder_worker(const daqiri::bench::RawBenchRxConfig &cfg,
       const auto burst_size = daqiri::get_num_packets(burst);
       const bool reordered = (burst->hdr.hdr.burst_flags &
                               daqiri::DAQIRI_BURST_FLAG_REORDERED) != 0U;
+      const bool direct_placed =
+          (burst->hdr.hdr.burst_flags & daqiri::DAQIRI_BURST_FLAG_DIRECT_PLACED) != 0U;
       const bool timeout_flush =
           (burst->hdr.hdr.burst_flags &
            daqiri::DAQIRI_BURST_FLAG_REORDER_TIMEOUT) != 0U;
@@ -260,6 +285,9 @@ void rx_reorder_worker(const daqiri::bench::RawBenchRxConfig &cfg,
       bytes += daqiri::get_burst_tot_byte(burst);
       if (reordered) {
         ++aggregated_batches;
+        if (direct_placed) {
+          ++direct_placed_batches;
+        }
         if (timeout_flush) {
           ++timeout_batches;
         }
@@ -282,6 +310,13 @@ void rx_reorder_worker(const daqiri::bench::RawBenchRxConfig &cfg,
           } else {
             ++reorder_info_errors;
           }
+          daqiri::ReorderMissingInfo missing{};
+          const auto missing_status = daqiri::get_reorder_missing_info(burst, &missing);
+          if (missing_status == daqiri::Status::SUCCESS) {
+            missing_packets += missing.missing_packet_count;
+          } else {
+            ++missing_info_errors;
+          }
         }
       } else {
         passthrough_packets += logical_packets;
@@ -293,9 +328,9 @@ void rx_reorder_worker(const daqiri::bench::RawBenchRxConfig &cfg,
     }
   }
 
-  std::cout << "RX complete: packets=" << pkts << " bytes=" << bytes
-            << " bursts=" << bursts
+  std::cout << "RX complete: packets=" << pkts << " bytes=" << bytes << " bursts=" << bursts
             << " aggregated_batches=" << aggregated_batches
+            << " direct_placed_batches=" << direct_placed_batches
             << " timeout_batches=" << timeout_batches
             << " aggregated_packets=" << aggregated_packets
             << " passthrough_packets=" << passthrough_packets;
@@ -303,8 +338,9 @@ void rx_reorder_worker(const daqiri::bench::RawBenchRxConfig &cfg,
     std::cout << " reorder_info_success=" << reorder_info_success
               << " reorder_info_not_ready=" << reorder_info_not_ready
               << " reorder_info_errors=" << reorder_info_errors
-              << " first_batch_id=" << first_batch_id
-              << " last_batch_id=" << last_batch_id;
+              << " missing_packets=" << missing_packets
+              << " missing_info_errors=" << missing_info_errors
+              << " first_batch_id=" << first_batch_id << " last_batch_id=" << last_batch_id;
   }
   std::cout << "\n";
 }

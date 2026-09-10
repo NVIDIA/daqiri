@@ -4,6 +4,7 @@ daqiri:
   cfg:
     version: 1
     stream_type: "raw"
+    engine: "ibverbs"
     master_core: 3
     debug: false
     log_level: "info"
@@ -11,15 +12,17 @@ daqiri:
 
     memory_regions:
     - name: "Data_RX_GPU"
-      kind: "device"
+      # Host-pinned is GPU-accessible and is required on integrated GPUs such as GB10.
+      kind: "host_pinned"
       affinity: 0
       num_bufs: 16384
       buf_size: 2048
     - name: "Reorder_RX_GPU"
-      kind: "device"
+      kind: "host_pinned"
       affinity: 0
-      num_bufs: 4096
-      buf_size: 262144
+      # A 10-bit sequence space split into eight 128-packet batches.
+      num_bufs: 8
+      buf_size: 253952
 
     interfaces:
     - name: "rx_port"
@@ -31,7 +34,7 @@ daqiri:
           id: 0
           cpu_core: 9
           batch_size: 1024
-          timeout_us: 2000
+          timeout_us: 0
           memory_regions:
             - "Data_RX_GPU"
         flows:
@@ -41,19 +44,21 @@ daqiri:
             type: queue
             id: 0
           match:
-            udp_src: 4097
             udp_dst: 4097
         reorder_configs:
         - name: "rx_reorder_seq_ppb"
+          reorder_engine: "hw"
+          cyclic_sequence: true
           reorder_type: "gpu"
           memory_region: "Reorder_RX_GPU"
           payload_byte_offset: 64
+          packet_size: 1984
           flow_ids:
             - 101
           method:
             seq_packets_per_batch:
               sequence_number:
-                bit_offset: 128
+                bit_offset: 352
                 bit_width: 10
               packets_per_batch: 128
 

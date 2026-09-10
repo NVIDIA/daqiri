@@ -312,6 +312,8 @@ Reordered RX bursts are identified by flags on `burst.hdr.hdr.burst_flags`:
 - `DAQIRI_BURST_FLAG_REORDERED`: burst contains one aggregated reorder buffer.
 - `DAQIRI_BURST_FLAG_REORDER_TIMEOUT`: the aggregate was emitted by the
   timeout path rather than by filling the configured `packets_per_batch`.
+- `DAQIRI_BURST_FLAG_DIRECT_PLACED`: the ibverbs hardware path placed payloads directly in their
+  final aggregate slots. The slots are not rearmed until `free_rx_burst()` releases the burst.
 
 For reordered bursts, `burst.hdr.hdr.max_pkt` is the logical number of source
 packets in the aggregate, while `burst.hdr.hdr.num_pkts` remains `1` because the
@@ -326,6 +328,9 @@ if status == daqiri.Status.SUCCESS and burst is not None:
             status, info = daqiri.get_reorder_burst_info(burst)
             if status == daqiri.Status.SUCCESS:
                 print(info.batch_id, info.aggregate_len)
+                status, missing_indices = daqiri.get_reorder_missing_info(burst)
+                if status == daqiri.Status.SUCCESS:
+                    print(missing_indices)
     finally:
         daqiri.free_all_packets_and_burst_rx(burst)
 ```
@@ -605,6 +610,7 @@ The workflow sections above show the common call order and ownership rules.
 | `get_connection_id(burst)` | Read the transport connection ID recorded on an RX burst. |
 | `set_reorder_cuda_stream(interface_name, reorder_name, stream=0)` | Set CUDA stream for a GPU reorder plan. |
 | `get_reorder_burst_info(burst)` | Return `(Status, ReorderBurstInfo)`. |
+| `get_reorder_missing_info(burst)` | Return `(Status, list[int])` of missing sequence slots. |
 | `synchronize_burst_event(burst)` | Wait for the CUDA event attached to a burst, if any. |
 
 ### TX and Header Fill
@@ -691,6 +697,7 @@ encapsulation/push rules are configured in YAML under `tx.flows`.
 | `DAQIRI_ABI_VERSION` | DAQIRI shared-library ABI version. |
 | `DAQIRI_BURST_FLAG_REORDERED` | Burst flag indicating a reordered aggregate. |
 | `DAQIRI_BURST_FLAG_REORDER_TIMEOUT` | Burst flag indicating a reorder timeout aggregate. |
+| `DAQIRI_BURST_FLAG_DIRECT_PLACED` | Burst flag indicating an ibverbs hardware-placed aggregate. |
 | `MEM_ACCESS_LOCAL` | Local memory access flag. |
 | `MEM_ACCESS_RDMA_WRITE` | RDMA write memory access flag. |
 | `MEM_ACCESS_RDMA_READ` | RDMA read memory access flag. |
@@ -760,7 +767,7 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `SocketConfig` | Socket client/server endpoint URI, legacy IP/port, and timing settings. |
 | `RoCEConfig` | RoCE transport settings. |
 | `RDMAConfig` | RDMA mode, transport mode, and port. |
-| `ReorderConfig` | Reorder name, type, memory region, payload offset, flows, method, and data type conversion. |
+| `ReorderConfig` | Reorder engine/cyclic-sequence contract, type, memory region, payload offset, flows, method, and data type conversion. |
 | `ReorderBitFieldConfig` | Bit offset and width for extracting reorder fields. |
 | `ReorderSeqBatchNumberConfig` | Sequence-number, batch-number, and packets-per-batch field config. |
 | `ReorderSeqPacketsPerBatchConfig` | Sequence-number and packets-per-batch field config. |
