@@ -129,6 +129,20 @@ receiving adapter and cold reboot it. See
 [Enable programmable flex parsing](../getting-started.md#enable-programmable-flex-parsing) for the
 complete `mlxconfig` procedure and verification command.
 
+If initialization reports the following capability failure, the settings are disabled or have
+not taken effect on the receiving adapter:
+
+```text
+HCA hardware-reorder caps (mlx5_0): flex(max/current)=false/false rx_ft(max/current)=true/true ... -> not supported
+Hardware reorder requires FLEX_PARSE_GRAPH RX steering
+```
+
+Apply both settings with `mlxconfig` and cold reboot the adapter; changing the next-boot values
+without rebooting does not alter the `current` capability reported above. If the probe still
+reports `flex(max/current)=false/false` after reboot, confirm that `mlxconfig` targeted the same
+adapter as the reported `mlx5_N` device and that its NIC firmware supports programmable parse
+graphs.
+
 For deterministic loss testing, set `bench_tx.sequence_drop_every` to a non-zero N, set the RX
 queue's `timeout_us`, and select `missing_action: drop` or `passthrough`. With
 `DAQIRI_BENCH_CHECK_REORDER_INFO=1`, the final summary reports `missing_packets` and metadata
