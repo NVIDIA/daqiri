@@ -31,8 +31,7 @@ This report covers DAQIRI receive performance in two configurations.
 | CPU placement | Dedicated isolated CPU placement for raw/RDMA pollers and workers. Socket worker and I/O-thread placement is stated with each scaling result. |
 
 Rates report received payload unless a table explicitly labels a wire rate.
-The standard run is three independent 30 s samples; any historical exception is
-called out at its table and must be rerun before publication.
+Each result is the average of three independent 30 s samples.
 
 ### Results summary
 
@@ -41,7 +40,7 @@ called out at its table and must be rerun before publication.
 | Stream / Protocol | Message size | Receive setup | Delivered <span class="unit">Gbps</span> |
 | ----------------- | -----------: | ------------- | -------------: |
 | Raw Ethernet / GPUDirect (DPDK) | 8 KB | 1 queue/link | 197.17 |
-| Socket / RoCE (RC SEND) | 8 MB | 1 RX queue/link | **195.55 ±0.03** |
+| Socket / RoCE (RC SEND) | 8 MB | 1 RX queue/link | **194.51 ±0.11** |
 | Socket / TCP | 1 MiB | 4 RX cores/link | 174.3 ±0.9 |
 | Socket / UDP (paced) | 8 KB | 4 RX cores/link | 95.98 ±0.00 |
 
@@ -60,15 +59,14 @@ loss-free two-link results.**
 
 ### Socket / RoCE
 
-**RoCE RC SEND receive throughput vs message size. Historical five × 120 s
-samples; rerun as three independent 30 s samples before publication.**
+**RoCE RC SEND receive throughput vs message size. Average of three 30 s samples.**
 
-| Message size | Wire <span class="unit">Gbps</span> | App <span class="unit">Gbps</span> |
-| ------------ | --------: | -------: |
-| 8 MB | **198.72 ±0.03** | **195.55 ±0.03** |
-| 1 MB | 198.16 ±0.06 | 194.92 ±0.06 |
-| 8 KB | 172.77 ±1.04 | 169.85 ±1.02 |
-| 4 KB | 72.96 ±5.03 | 71.47 ±4.93 |
+| Message size | App <span class="unit">Gbps</span> |
+| ------------ | -------: |
+| 8 MB | **194.51 ±0.11** |
+| 1 MB | 194.23 ±0.54 |
+| 8 KB | 171.05 ±0.46 |
+| 4 KB | 66.97 ±5.92 |
 
 ### Socket / TCP
 
@@ -162,20 +160,16 @@ flowchart LR
 Each image is 224×224×3 signed int8 (150,528 B), sent as 128 frames. The GPU
 reorder kernel reassembles and converts the input to FP16 for TensorRT.
 
-**ResNet inference throughput. Batch 32, TensorRT FP16. Historical three × 120 s
-samples; rerun as three independent 30 s samples before publication.**
+**ResNet receive throughput at the highest loss-free offered rate for each model.
+Batch 32, TensorRT FP16; average of three 30 s samples.**
 
-| Model | img/s | p50 / p99 ms per batch | TensorRT-only img/s | End-to-end vs TensorRT-only | Consumed payload <span class="unit">Gbps</span> |
-| ----- | ----: | ---------------------: | ------------------: | --------------------------: | ---------------: |
-| ResNet-18  | **12,162** | 2.56 / 2.84   | 13,200 | 92% | 14.65 Gbps |
-| ResNet-34  | 7,278  | 4.32 / 4.79   | 7,727  | 94% | 8.76 Gbps |
-| ResNet-50  | 3,701  | 8.50 / 9.49   | 3,834  | 97% | 4.46 Gbps |
-| ResNet-101 | 2,453  | 12.80 / 13.78 | 2,502  | 98% | 2.95 Gbps |
-| ResNet-152 | 1,746  | 18.12 / 19.38 | 1,794  | 97% | 2.10 Gbps |
-
-Without inference, the input path reaches 74,091 img/s (89.2 Gbps payload).
-Inference is therefore the bottleneck for every model in this table. The end-to-end
-pipeline reaches 92–98% of the TensorRT-only rate.
+| Model | img/s | p50 / p99 ms per batch | Delivered payload <span class="unit">Gbps</span> |
+| ----- | ----: | ---------------------: | -----------------------------------------------: |
+| ResNet-18  | **11,833** | 2.58 / 3.09 | 14.25 |
+| ResNet-34  | 7,174  | 4.35 / 4.94 | 8.64 |
+| ResNet-50  | 3,550  | 8.60 / 9.54 | 4.28 |
+| ResNet-101 | 2,367  | 13.28 / 14.17 | 2.85 |
+| ResNet-152 | 1,590  | 18.38 / 19.46 | 1.92 |
 
 ## Single-host loopback benchmarks
 

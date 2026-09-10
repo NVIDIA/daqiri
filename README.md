@@ -37,8 +37,8 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 - **AI/ML integration** — Optional `daqiri_resnet50_inference` application
   (`-DDAQIRI_BUILD_APPLICATIONS=ON`, TensorRT): GPUDirect RX → reorder → ResNet
   feature extraction with headless PC1/PC2 output. Cross-host on a DGX Spark pair
-  it reaches 92–98% of the same TensorRT engine's network-free throughput
-  (12,162 img/s at ResNet-18, 3,701 at ResNet-50). See
+  it reaches 11,833 img/s at ResNet-18 and 3,550 img/s at ResNet-50 in loss-free
+  receive measurements. See
   [DAQIRI + TensorRT Inference](https://nvidia.github.io/daqiri/tutorials/daqiri-resnet-inference/).
 - **S3 raw object writes** — Optionally upload raw burst packets to Amazon S3 or an
   S3-compatible object store through the AWS SDK for C++.
@@ -70,7 +70,7 @@ Consult the [Benchmarking overview](https://nvidia.github.io/daqiri/benchmarks/)
 | Stream / Protocol        | Best case      | Wire        | App-delivered | Drops     | Testbed              |
 |:-------------------------|:---------------|:------------|:--------------|:----------|:---------------------|
 | Raw Ethernet / GPUDirect (dpdk) | 8 KB packet | **201.70 ±0.18 Gb/s** | 197.17 Gb/s | 0 | Cross-host two-link 200 GbE |
-| Socket / RoCE (SEND)     | 8 MB message   | **198.72 ±0.03 Gb/s** | **195.55 ±0.03 Gb/s** | 0 | Cross-host two-link 200 GbE |
+| Socket / RoCE (SEND)     | 8 MB message   | — | **194.51 ±0.11 Gb/s** | 0 | Cross-host two-link 200 GbE |
 | Socket / TCP             | 1 MiB message, 8 streams | — | **174.3 ±0.9 Gb/s** | 0 | Cross-host two-link 200 GbE |
 | Socket / UDP (paced)     | 8 KB message, 8 pairs | —    | 95.98 Gb/s     | 0         | Cross-host two-link 200 GbE |
 
