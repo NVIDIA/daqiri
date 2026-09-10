@@ -247,6 +247,41 @@ over the configured ring with other sampled bits held at zero. Direct-placed slo
 only after the application frees the aggregate burst. See [Raw Ethernet Benchmarking](benchmarks/raw_benchmarking.md#hardware-reorder-benchmark)
 and the [configuration reference](api-reference/configuration.md#rx-reorder-configs).
 
+### Enable programmable flex parsing
+
+Hardware reorder requires these persistent NIC firmware settings:
+
+```ini
+PROG_PARSE_GRAPH=1
+FLEX_PARSER_PROFILE_ENABLE=4
+```
+
+Start MFT, select the adapter by its PCI BDF or MST device, and inspect its current and next-boot
+values:
+
+```bash
+sudo mst start
+MLXCONFIG_DEVICE=/dev/mst/mt4129_pciconf0  # Or a PCI BDF such as 0005:03:00.0
+
+sudo mlxconfig -d "$MLXCONFIG_DEVICE" query | \
+  grep -E 'PROG_PARSE_GRAPH|FLEX_PARSER_PROFILE_ENABLE'
+```
+
+If either setting differs, enable both:
+
+```bash
+sudo mlxconfig -d "$MLXCONFIG_DEVICE" --yes set \
+  PROG_PARSE_GRAPH=1 \
+  FLEX_PARSER_PROFILE_ENABLE=4
+```
+
+The output is a next-boot configuration. Cold reboot or power-cycle the host so the NIC reloads
+it; restarting the DAQIRI process or rebinding the driver is insufficient. Then repeat the query
+and confirm it reports `PROG_PARSE_GRAPH True(1)` and `FLEX_PARSER_PROFILE_ENABLE 4`. Repeat the
+procedure for every adapter that will perform hardware reorder. DAQIRI also probes the effective
+`FLEX_PARSE_GRAPH` capability during initialization and rejects `reorder_engine: "hw"` with a
+diagnostic naming these settings when it is unavailable.
+
 CUDA architectures default to `80;90` (A100, H100), with `121` (GB10) added
 when configuring with CUDA Toolkit 13.0 or newer. Override
 `CMAKE_CUDA_ARCHITECTURES` when targeting other GPUs.

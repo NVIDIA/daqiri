@@ -124,6 +124,11 @@ does not use DPA and it does not launch the software reorder kernel. Successful 
 `direct_placed_batches` count. Always free each received burst promptly, because its fixed output
 slots are rearmed only by `free_rx_burst()`.
 
+Before running, set `PROG_PARSE_GRAPH=1` and `FLEX_PARSER_PROFILE_ENABLE=4` persistently on the
+receiving adapter and cold reboot it. See
+[Enable programmable flex parsing](../getting-started.md#enable-programmable-flex-parsing) for the
+complete `mlxconfig` procedure and verification command.
+
 For deterministic loss testing, set `bench_tx.sequence_drop_every` to a non-zero N, set the RX
 queue's `timeout_us`, and select `missing_action: drop` or `passthrough`. With
 `DAQIRI_BENCH_CHECK_REORDER_INFO=1`, the final summary reports `missing_packets` and metadata

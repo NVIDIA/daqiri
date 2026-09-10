@@ -2197,7 +2197,8 @@ struct mlx5dv_devx_obj* IbverbsEngine::create_direct_reorder_parser(
   if (obj == nullptr) {
     DAQIRI_LOG_CRITICAL(
         "Hardware reorder UDP FLEX_PARSE_GRAPH creation failed: {} (status 0x{:x}, "
-        "syndrome 0x{:x}); no software fallback is performed",
+        "syndrome 0x{:x}); verify PROG_PARSE_GRAPH=1 and FLEX_PARSER_PROFILE_ENABLE=4 with "
+        "mlxconfig, then cold reboot the adapter; no software fallback is performed",
         strerror(errno), DEVX_GET(general_obj_out_cmd_hdr, out, status),
         DEVX_GET(general_obj_out_cmd_hdr, out, syndrome));
     return nullptr;
@@ -3634,7 +3635,8 @@ Status IbverbsEngine::init_direct_reorder(IbvRxQueue& q, const InterfaceConfig& 
   if (!cap->second) {
     DAQIRI_LOG_CRITICAL(
         "Hardware reorder '{}' requires FLEX_PARSE_GRAPH RX steering on {}; "
-        "set reorder_engine: 'sw' explicitly to use GPU reordering",
+        "enable PROG_PARSE_GRAPH=1 and FLEX_PARSER_PROFILE_ENABLE=4 with mlxconfig, then cold "
+        "reboot the adapter; set reorder_engine: 'sw' explicitly to use software reordering",
         selected->name_, ibv_get_device_name(q.ctx->device));
     return Status::NOT_SUPPORTED;
   }
