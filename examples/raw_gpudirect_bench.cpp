@@ -156,12 +156,20 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
       daqiri::free_all_packets_and_burst_tx(msg);
       continue;
     }
+    const uint64_t burst_bytes = static_cast<uint64_t>(num_pkts) * packet_size;
+    // Pace before enqueueing.  Pacing after send lets the application build a
+    // backlog in the TX ring while the NIC is metered, which defeats a
+    // loss-free offered-load measurement and can exhaust TX metadata at small
+    // batch sizes.
+    pacer.wait_for_bytes(burst_bytes, stop);
+    if (stop.load()) {
+      daqiri::free_all_packets_and_burst_tx(msg);
+      break;
+    }
     if (daqiri::send_tx_burst(msg) == daqiri::Status::SUCCESS) {
       stats.packets += static_cast<uint64_t>(num_pkts);
-      const uint64_t burst_bytes = static_cast<uint64_t>(num_pkts) * packet_size;
       stats.bytes += burst_bytes;
       ++stats.bursts;
-      pacer.wait_for_bytes(burst_bytes, stop);
     }
   }
 
@@ -215,7 +223,6 @@ int main(int argc, char **argv) {
     std::cerr << "Config must define at least one of bench_rx or bench_tx\n";
     return 1;
   }
-
   if (daqiri::daqiri_init(argv[1]) != daqiri::Status::SUCCESS) {
     std::cerr << "daqiri_init failed\n";
     return 1;

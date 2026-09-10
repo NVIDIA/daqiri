@@ -49,6 +49,9 @@ daqiri:
   cfg:
     version: 1
     stream_type: "raw"
+    # This report configuration exercises the DPDK raw-Ethernet engine.  Raw
+    # otherwise defaults to ibverbs when that engine is compiled.
+    engine: "dpdk"
     master_core: 8
     debug: false
     log_level: "info"

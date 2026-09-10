@@ -286,18 +286,31 @@ void TokenBucketPacer::wait_for_bytes(size_t bytes, std::atomic<bool> &stop) {
   const auto scheduled = t0_ + std::chrono::duration_cast<
                                    std::chrono::steady_clock::duration>(
                                    std::chrono::duration<double>(scheduled_secs));
-  // Slice the wait into 10 ms chunks so a stop flag (--seconds expiry or
-  // Ctrl-C) can break us out promptly. The total slept across the slices
-  // accumulates to the scheduled deadline, so pacing remains accurate.
+  // Slice long waits so a stop flag (--seconds expiry or Ctrl-C) can break
+  // them promptly. Finish the final 100 us by spinning: scheduler sleep
+  // granularity is too coarse for high-rate small-packet bursts, where an
+  // oversleep would otherwise create a catch-up microburst.
   constexpr auto kSlice = std::chrono::milliseconds(10);
+  constexpr auto kSpinWindow = std::chrono::microseconds(100);
   while (!stop.load()) {
     const auto now = std::chrono::steady_clock::now();
     if (scheduled <= now) {
+      // A scheduler delay must not turn into a sequence of immediate sends:
+      // that creates a catch-up microburst larger than the configured rate.
+      // Rebase the virtual clock at this completed burst, discarding elapsed
+      // credit so the following burst is paced one interval from now.
+      t0_ = now - std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                      std::chrono::duration<double>(scheduled_secs));
       return;
     }
     const auto remaining = scheduled - now;
+    if (remaining <= kSpinWindow) {
+      while (!stop.load() && std::chrono::steady_clock::now() < scheduled) {
+      }
+      return;
+    }
     std::this_thread::sleep_for(
-        std::min<std::chrono::steady_clock::duration>(remaining, kSlice));
+        std::min<std::chrono::steady_clock::duration>(remaining - kSpinWindow, kSlice));
   }
 }
 
