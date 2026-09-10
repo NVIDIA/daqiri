@@ -374,6 +374,20 @@ and publishes the batch after every slot completes; no DPA or reorder-copy kerne
 
 The canonical hardware config is [`daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml) (`seq_packets_per_batch`, closed-loop TX+RX). It explicitly selects `engine: "ibverbs"`. Only the relevant blocks are shown here.
 
+**Keep the transmit ring in GPU memory.** The sequence benchmark detects the returned packet
+memory type. For device memory it constructs changed packets in host memory and copies them with
+CUDA, without dereferencing device pointers on the CPU. Once the cyclic contents of a returned slot
+already match, the slot is reused directly.
+
+```yaml
+memory_regions:
+- name: "Data_TX_GPU"
+  kind: "device"
+  affinity: 0
+  num_bufs: 16384
+  buf_size: 8256
+```
+
 **Add cyclic aggregate slots.** Each `Reorder_RX_GPU` buffer holds one complete batch of 1024
 8192-byte payloads. The example uses host-pinned memory, which is accessible by both NIC and GPU;
 use `kind: "device"` for direct placement in GPU device memory.

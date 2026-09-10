@@ -11,8 +11,9 @@ daqiri:
     loopback: ""
 
     memory_regions:
-    - name: "Data_TX_CPU"
-      kind: "huge"
+    - name: "Data_TX_GPU"
+      # The benchmark initializes device-resident cyclic packets through CUDA.
+      kind: "device"
       affinity: 0
       num_bufs: 16384
       buf_size: 8256
@@ -39,7 +40,7 @@ daqiri:
           batch_size: 1024
           cpu_core: 11
           memory_regions:
-            - "Data_TX_CPU"
+            - "Data_TX_GPU"
           offloads:
             - "tx_eth_src"
     - name: "rx_port"

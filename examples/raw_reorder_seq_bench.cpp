@@ -27,6 +27,7 @@
 #include <iostream>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -43,6 +44,24 @@ struct SequenceTxConfig {
   uint32_t sequence_number_modulus = 0;
   uint32_t sequence_drop_every = 0;
 };
+
+bool pointer_uses_device_memory(const void* ptr, bool& device_memory) {
+  cudaPointerAttributes attributes{};
+  const cudaError_t status = cudaPointerGetAttributes(&attributes, ptr);
+  if (status == cudaErrorInvalidValue) {
+    // Unregistered host memory is not known to the CUDA runtime.
+    (void)cudaGetLastError();
+    device_memory = false;
+    return true;
+  }
+  if (status != cudaSuccess) {
+    std::cerr << "cudaPointerGetAttributes failed: " << cudaGetErrorString(status) << "\n";
+    return false;
+  }
+  device_memory =
+      attributes.type == cudaMemoryTypeDevice || attributes.type == cudaMemoryTypeManaged;
+  return true;
+}
 
 SequenceTxConfig parse_sequence_tx(const YAML::Node &root) {
   SequenceTxConfig cfg;
@@ -126,6 +145,8 @@ void tx_worker(const SequenceTxConfig &cfg, std::atomic<bool> &stop) {
   }
 
   char eth_dst[6] = {0};
+  char eth_src[6] = {0};
+  daqiri::format_eth_addr(eth_src, cfg.packet.eth_src_addr);
   daqiri::format_eth_addr(eth_dst, cfg.packet.eth_dst_addr);
 
   uint32_t ip_src = 0;
@@ -145,6 +166,13 @@ void tx_worker(const SequenceTxConfig &cfg, std::atomic<bool> &stop) {
                                ? cfg.sequence_number_start
                                : cfg.sequence_number_start % cfg.sequence_number_modulus;
   uint64_t generated_packets = 0;
+  bool tx_memory_resolved = false;
+  bool device_tx = false;
+  // Cyclic streams normally revisit each device slot with identical contents.
+  // Upload a slot only when its sequence or UDP ports change.
+  std::unordered_map<void*, uint64_t> device_packet_states;
+  std::vector<uint8_t> device_packet_template(static_cast<size_t>(cfg.packet.header_size) +
+                                              cfg.packet.payload_size);
 
   while (!stop.load()) {
     auto *msg = daqiri::create_tx_burst_params();
@@ -171,26 +199,19 @@ void tx_worker(const SequenceTxConfig &cfg, std::atomic<bool> &stop) {
       src_idx = (src_idx + 1) % src_ports.size();
       dst_idx = (dst_idx + 1) % dst_ports.size();
 
-      if (daqiri::set_eth_header(msg, i, eth_dst) != daqiri::Status::SUCCESS ||
-          daqiri::set_ipv4_header(
-              msg, i,
-              static_cast<int>(cfg.packet.payload_size +
-                               cfg.packet.header_size - (14 + 20)),
-              17, ip_src, ip_dst) != daqiri::Status::SUCCESS ||
-          daqiri::set_udp_header(
-              msg, i,
-              static_cast<int>(cfg.packet.payload_size +
-                               cfg.packet.header_size - (14 + 20 + 8)),
-              src_port, dst_port) != daqiri::Status::SUCCESS) {
-        failed = true;
-        break;
-      }
-
       auto *pkt_data =
           static_cast<uint8_t *>(daqiri::get_segment_packet_ptr(msg, 0, i));
       if (pkt_data == nullptr) {
         failed = true;
         break;
+      }
+      if (!tx_memory_resolved) {
+        if (!pointer_uses_device_memory(pkt_data, device_tx)) {
+          failed = true;
+          stop.store(true);
+          break;
+        }
+        tx_memory_resolved = true;
       }
       ++generated_packets;
       if (cfg.sequence_drop_every != 0 && generated_packets % cfg.sequence_drop_every == 0) {
@@ -199,14 +220,51 @@ void tx_worker(const SequenceTxConfig &cfg, std::atomic<bool> &stop) {
           next_sequence %= cfg.sequence_number_modulus;
         }
       }
-      const uint32_t sequence_network_order = htonl(next_sequence);
+      const uint32_t sequence = next_sequence;
+      const uint32_t sequence_network_order = htonl(sequence);
       next_sequence++;
       if (cfg.sequence_number_modulus != 0) {
         next_sequence %= cfg.sequence_number_modulus;
       }
-      std::memcpy(pkt_data + cfg.packet.header_size +
-                      cfg.sequence_number_offset,
-                  &sequence_network_order, sizeof(sequence_network_order));
+      if (device_tx) {
+        const uint64_t packet_state = (static_cast<uint64_t>(sequence) << 32U) |
+                                      (static_cast<uint64_t>(src_port) << 16U) | dst_port;
+        const auto state = device_packet_states.find(pkt_data);
+        if (state == device_packet_states.end() || state->second != packet_state) {
+          daqiri::bench::populate_udp_ipv4_headers(
+              device_packet_template.data(), cfg.packet.header_size, cfg.packet.payload_size,
+              eth_src, eth_dst, ip_src, ip_dst, src_port, dst_port);
+          std::memcpy(
+              device_packet_template.data() + cfg.packet.header_size + cfg.sequence_number_offset,
+              &sequence_network_order, sizeof(sequence_network_order));
+          daqiri::bench::finalize_udp_ipv4_checksums(device_packet_template.data());
+          const cudaError_t copy_status =
+              cudaMemcpy(pkt_data, device_packet_template.data(), device_packet_template.size(),
+                         cudaMemcpyHostToDevice);
+          if (copy_status != cudaSuccess) {
+            std::cerr << "TX packet copy failed: " << cudaGetErrorString(copy_status) << "\n";
+            failed = true;
+            stop.store(true);
+            break;
+          }
+          device_packet_states[pkt_data] = packet_state;
+        }
+      } else {
+        if (daqiri::set_eth_header(msg, i, eth_dst) != daqiri::Status::SUCCESS ||
+            daqiri::set_ipv4_header(
+                msg, i,
+                static_cast<int>(cfg.packet.payload_size + cfg.packet.header_size - (14 + 20)), 17,
+                ip_src, ip_dst) != daqiri::Status::SUCCESS ||
+            daqiri::set_udp_header(
+                msg, i,
+                static_cast<int>(cfg.packet.payload_size + cfg.packet.header_size - (14 + 20 + 8)),
+                src_port, dst_port) != daqiri::Status::SUCCESS) {
+          failed = true;
+          break;
+        }
+        std::memcpy(pkt_data + cfg.packet.header_size + cfg.sequence_number_offset,
+                    &sequence_network_order, sizeof(sequence_network_order));
+      }
 
       if (daqiri::set_packet_lengths(
               msg, i,
