@@ -9,9 +9,14 @@
 # Assumes passwordless SSH and a shared NFS checkout. Start from either host.
 #
 # Usage:
-#   ./tools/run_resnet_xhost.sh [--replay-once|--seconds N] [--dataset PATH]
+#   ./tools/run_resnet_xhost.sh [--replay-once|--seconds N] [--repeats N] [--dataset PATH]
+#
+# Timed benchmarks default to three independent 30-second runs. `--replay-once`
+# remains available for a one-pass functional check.
 #
 set -euo pipefail
+
+INPUT_ARGS=("$@")
 
 TX_HOST="${TX_HOST:-spark-stacked-01}"
 RX_HOST="${RX_HOST:-spark-stacked-02}"
@@ -27,17 +32,21 @@ RX_CFG="${BUILD_DIR}/applications/resnet50_inference/configs/resnet50_rx_spark_x
 
 RESULTS_DIR="${RESULTS_DIR:-${REPO_ROOT}/resnet-results}"
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
-RUN_SECONDS=""
+RUN_SECONDS="${SECONDS_PER:-30}"
+REPEATS="${REPEATS:-3}"
+REPEATS_SET=0
 
-MODE_ARGS=(--replay-once)
+MODE_ARGS=(--loop)
 DATASET_ARGS=()
-SECONDS_ARGS=()
+SECONDS_ARGS=(--seconds "${RUN_SECONDS}")
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --replay-once) MODE_ARGS=(--replay-once); shift ;;
+    --replay-once) MODE_ARGS=(--replay-once); SECONDS_ARGS=(); RUN_SECONDS="";
+                   [[ "$REPEATS_SET" == "1" ]] || REPEATS=1; shift ;;
     --loop) MODE_ARGS=(--loop); shift ;;
     --seconds) SECONDS_ARGS=(--seconds "$2"); MODE_ARGS=(--loop); RUN_SECONDS="$2"; shift 2 ;;
+    --repeats) REPEATS="$2"; REPEATS_SET=1; shift 2 ;;
     --results-dir) RESULTS_DIR="$2"; shift 2 ;;
     --run-id) RUN_ID="$2"; shift 2 ;;
     --dataset) DATASET_ARGS=(--dataset "$2"); shift 2 ;;
@@ -48,6 +57,25 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown arg: $1" >&2; exit 1 ;;
   esac
 done
+
+if [[ ! "$REPEATS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "--repeats must be a positive integer" >&2
+  exit 1
+fi
+if [[ -n "$RUN_SECONDS" && ! "$RUN_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "--seconds must be a positive integer" >&2
+  exit 1
+fi
+
+if [[ "${RESNET_XHOST_CHILD:-}" != "1" && "$REPEATS" -gt 1 ]]; then
+  status=0
+  for rep in $(seq 1 "$REPEATS"); do
+    echo "=== repetition ${rep}/${REPEATS} ==="
+    RESNET_XHOST_CHILD=1 REPEATS=1 RUN_ID="${RUN_ID}-r${rep}" \
+      "$0" "${INPUT_ARGS[@]}" --run-id "${RUN_ID}-r${rep}" || status=$?
+  done
+  exit "$status"
+fi
 
 if [[ ! -x "${BIN}" ]]; then
   echo "Binary not found: ${BIN}" >&2

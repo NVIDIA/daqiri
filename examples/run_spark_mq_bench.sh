@@ -59,8 +59,8 @@
 #   RUN_SECONDS      — per-(cell,payload) run length in seconds (default 30).
 #   PAYLOADS         — space-separated payload byte sizes (default "64 256 1024 4096 8000").
 #   ETH_DST_ADDR     — rx_port MAC filled into the generated configs (see above).
-#   REPEATS          — repeats per (cell, payload) for error bars (default 1; use 3
-#                      for the published re-run). Each rep is an independent run + row.
+#   REPEATS          — independent repetitions per (cell, payload) for error bars
+#                      (default 3). Each rep is a separate 30-second run + row.
 
 set -u
 set -o pipefail
@@ -76,8 +76,8 @@ RUN_SECONDS="${RUN_SECONDS:-30}"
 PAYLOADS="${PAYLOADS:-64 256 1024 4096 8000}"
 # Repeats per (cell, payload) for error bars. Each rep is an independent run with
 # its own dir (<cell>/p<payload>/r<rep>) and CSV row; report mean +/- std across
-# reps. Default 1; set REPEATS=3 for the published re-run.
-REPEATS="${REPEATS:-1}"
+# reps. Default 3.
+REPEATS="${REPEATS:-3}"
 
 # Single checked-in base + the generator that prunes it to each cell.
 MQ_BASE="$SCRIPT_DIR/daqiri_bench_raw_tx_rx_spark_mq.yaml"
@@ -166,14 +166,19 @@ max_field() {
     | awk '{ if ($1+0 > m+0) m = $1 } END { printf "%s", (m == "" ? 0 : m) }'
 }
 
-# Sum DPDK drop counters from the engine log emitted via DAQIRI_LOG_INFO.
+# Sum DPDK receive-drop counters from the engine log emitted via DAQIRI_LOG_INFO.
+# mlx5's queue-buffer overflow counter is separate from imissed/ierrors.
 parse_dpdk_drops() {
   local log="$1"
-  local sum=0 v
+  local sum=0 v prio_discards
   for key in imissed ierrors rx_nombuf; do
     v="$(grep -oE "$key=[0-9]+" "$log" 2>/dev/null | tail -n1 | sed -E "s/.*=//" || true)"
     [[ -n "${v:-}" ]] && sum=$((sum + v))
   done
+  prio_discards="$(grep -E 'rx_prio[0-9]+_buf_discard_packets:' "$log" 2>/dev/null \
+    | sed -E 's/.*:[[:space:]]*([0-9]+)[[:space:]]*$/\1/' \
+    | awk '{ s += $1 } END { printf "%d", s+0 }')"
+  sum=$((sum + ${prio_discards:-0}))
   echo "$sum"
 }
 
