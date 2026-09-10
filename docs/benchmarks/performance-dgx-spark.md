@@ -31,6 +31,8 @@ This report covers DAQIRI receive performance in two configurations.
 | CPU placement | Dedicated isolated CPU placement for raw/RDMA pollers and workers. Socket worker and I/O-thread placement is stated with each scaling result. |
 
 Rates report received payload unless a table explicitly labels a wire rate.
+The standard run is three independent 30 s samples; any historical exception is
+called out at its table and must be rerun before publication.
 
 ### Results summary
 
@@ -58,8 +60,8 @@ loss-free two-link results.**
 
 ### Socket / RoCE
 
-**RoCE RC SEND receive throughput vs message size. Average of five 120 s samples;
-`±` is the sample standard deviation.**
+**RoCE RC SEND receive throughput vs message size. Historical five × 120 s
+samples; rerun as three independent 30 s samples before publication.**
 
 | Message size | Wire <span class="unit">Gbps</span> | App <span class="unit">Gbps</span> |
 | ------------ | --------: | -------: |
@@ -110,8 +112,8 @@ Average of three 30 s samples.**
 **Loss-free UDP receive throughput vs RX cores per link at 8 KB. Average of three
 30 s samples.**
 
-| Rx workers | Rx cores per link | Pace per flow (<span class="unit">Gbps</span>) | App <span class="unit">Gbps</span> |
-| ---------: | ----------------: | ----------------------------------------------: | -------: |
+| Rx workers | Rx cores per link | Pacer target / flow (<span class="unit">Gbps</span>) | App <span class="unit">Gbps</span> |
+| ---------: | ----------------: | ------------------------------------------------------: | -------: |
 | 2 | 1 | 25 | **50.00** |
 | 4 | 2 | 20 | **79.99** |
 | 8 | 4 | 12 | **95.98** |
@@ -160,7 +162,8 @@ flowchart LR
 Each image is 224×224×3 signed int8 (150,528 B), sent as 128 frames. The GPU
 reorder kernel reassembles and converts the input to FP16 for TensorRT.
 
-**ResNet inference throughput. Batch 32, TensorRT FP16; median of three 120 s samples.**
+**ResNet inference throughput. Batch 32, TensorRT FP16. Historical three × 120 s
+samples; rerun as three independent 30 s samples before publication.**
 
 | Model | img/s | p50 / p99 ms per batch | TensorRT-only img/s | End-to-end vs TensorRT-only | Consumed payload <span class="unit">Gbps</span> |
 | ----- | ----: | ---------------------: | ------------------: | --------------------------: | ---------------: |
@@ -203,28 +206,37 @@ effects. They are not cross-host performance claims.
 
 | Stream / Protocol | Message size | Receive setup | Delivered <span class="unit">Gbps</span> |
 | ----------------- | -----------: | ------------- | -----------------------------------------: |
-| Raw Ethernet / GPUDirect (DPDK) | 8 KB | 1 RX queue | 98.7–98.8 |
-| Raw Ethernet / GPUDirect (DPDK) | 256 B | 2 RX pollers | 66.4 |
-| Socket / TCP | 8 KB | 4 RX workers | 87.3 ±2.2 |
-| Socket / RoCE | — | — | pending payload sweep |
-| Socket / UDP | — | — | pending loss-free sweep |
+| Raw Ethernet / GPUDirect (DPDK) | 8 KB | 1 RX queue | **98.65 ±0.01** |
+| Raw Ethernet / GPUDirect (DPDK) | 256 B | 1 RX queue, paced | **46.11 ±0.08** |
+| Socket / RoCE | 8 KB | one receive queue, TX depth 512 | **96.37 ±0.06** |
+| Socket / TCP | 1 MiB | 4 RX workers | **97.68 ±0.17** |
+| Socket / UDP | 8 KiB | 4 RX workers | **64.73 ±0.66** |
 
-RoCE and UDP need loopback throughput sweeps before they can be compared with the
-cross-host results.
+All results are three 30 s samples. UDP results are loss-free by physical and
+kernel receive counters. The receiver may retain one final message-retrieval
+batch when the timed window ends; that bounded accounting tail does not affect
+the reported rate or loss classification.
 
 ### Raw Ethernet / GPUDirect
 
-**DPDK loopback throughput vs payload. Average of three 30 s samples; zero drops.**
-Batch sizes from 256 to 10,240 packets differed by at most 0.4 Gbps, so the table
-shows their observed range rather than every batch-size cell.
+**DPDK loopback receive throughput vs payload. Average of three 30 s samples;
+no hardware drops.**
 
 | Payload | App <span class="unit">Gbps</span> |
 | ------- | -----------------------------------: |
-| 8000 B | 98.7–98.8 |
-| 4096 B | 98.6–98.8 |
-| 1024 B | 97.1–97.2 |
-| 256 B  | 49.5–49.7 |
-| 64 B   | 20.2–20.4 |
+| 8000 B | **98.65 ±0.01** |
+| 4096 B | 98.52 ±0.00 |
+| 1024 B | 97.05 ±0.00 |
+
+**Loss-free small-packet receive points. Average of three 30 s samples.**
+
+| Payload | Offered rate | App <span class="unit">Gbps</span> |
+| ------- | -----------: | -----------------------------------: |
+| 256 B | 50 Gbps | **46.11 ±0.08** |
+| 64 B  | 24.5 Gbps | **20.14 ±0.05** |
+
+Unpaced 256 B and 64 B transmission overruns the receive buffer. The paced rows
+are the highest offered rates with no reported DPDK hardware-buffer discards.
 
 **CPU utilization** (8000 B / batch 10240, unpaced):
 
@@ -238,30 +250,30 @@ The GPU is a DMA target in this test (SM and memory-controller utilization ~0%).
 
 #### Multi-queue core scaling
 
-**DPDK loopback throughput at 256 B. Average of three 30 s samples; zero drops.**
+**DPDK loopback unpaced saturation at 256 B. Average of three 30 s samples.**
 
-| Cell | TX pollers | RX pollers | Achieved <span style="text-transform: none">Gbps</span> |
-| ---- | ---------- | ---------- | ------------: |
-| (1,1) | 1 | 1 | 50.0 |
-| (1,2) | 1 | 2 | **66.4** |
-| (2,1) | 2 | 1 | 49.0 |
-| (2,2) | 2 | 2 | 64.7 |
+| Cell | TX pollers | RX pollers | App <span class="unit">Gbps</span> | Hardware discards / run |
+| ---- | ---------- | ---------- | -----------------------------------: | ----------------------: |
+| (1,1) | 1 | 1 | 48.77 | 511 M |
+| (1,2) | 1 | 2 | **64.52** | 326 M |
+| (2,1) | 2 | 1 | 47.96 | 518 M |
+| (2,2) | 2 | 2 | 63.83 | 332 M |
 
-At 256 B, the second RX poller raises throughput to 66.4 Gbps; the second TX
-poller does not improve the one-RX-poller result.
+The second RX poller raises unpaced delivered throughput, but every cell drops
+packets. This is a saturation diagnostic, not a loss-free result.
 
 ### Socket / RoCE
 
-#### CPU utilization
+**RoCE RC SEND loopback receive throughput vs message size. Average of three
+30 s samples.**
 
-No loopback throughput sweep is available yet. The CPU sample below is retained
-as a diagnostic at 8 MB, batch 1, unpaced:
-
-| Core      | Busy% | Note                                            |
-| --------- | ----: | ----------------------------------------------- |
-| Master    |  0.7% | Orchestration only                              |
-| Client TX | 74.8% | Busy-spins posting sends and polling completions |
-| Server RX |  1.1% | HCA DMAs straight to memory, worker only reaps completions |
+| Message size | TX depth | App <span class="unit">Gbps</span> |
+| -----------: | -------: | -----------------------------------: |
+| 8 MiB | 128 | 96.79 ±0.09 |
+| 1 MiB | 128 | 96.51 ±0.06 |
+| 64 KiB | 128 | **97.65 ±0.05** |
+| 8 KiB | 512 | 96.37 ±0.06 |
+| 4 KiB | 512 | 56.80 ±0.76 |
 
 ### Socket / TCP
 
@@ -272,9 +284,9 @@ Average of three 30 s samples.**
 
 | Message size | App <span class="unit">Gbps</span> |
 | ------------ | -----------------------------------: |
-| 1 MiB | **32.1 ±2.2** |
-| 8000 B | 28.9 ±2.9 |
-| 1000 B | 14.2 ±0.4 |
+| 1 MiB | **52.52 ±3.63** |
+| 8000 B | 49.11 ±0.31 |
+| 1000 B | 13.16 ±0.05 |
 
 #### Multiple Rx cores, one link
 
@@ -283,14 +295,35 @@ samples.**
 
 | Rx workers | App <span class="unit">Gbps</span> |
 | ---------: | -----------------------------------: |
-| 1 | 32.1 ±2.2 |
-| 2 | 51.5 ±2.4 |
-| 4 | **83.7 ±0.4** |
+| 1 | 49.74 ±0.53 |
+| 2 | 79.20 ±1.92 |
+| 4 | **97.68 ±0.17** |
 
 ### Socket / UDP
 
-No loopback loss-free throughput sweep is available yet. Add a message-size and
-core-scaling sweep before using UDP as a loopback diagnostic.
+**Loss-free UDP loopback receive throughput vs message size with one RX worker.
+Average of three 30 s samples.**
+
+| Message size | Pacer target | App <span class="unit">Gbps</span> |
+| -----------: | -----------: | -----------------------------------: |
+| 8000 B  | 22 Gbps | **20.64 ±0.19** |
+| 1000 B  | 6 Gbps  | 4.96 ±0.09 |
+| 65507 B | 15 Gbps | 15.00 ±0.00 |
+
+**Loss-free UDP loopback receive throughput vs RX workers at an 8000 B message.
+Average of three 30 s samples.**
+
+| RX workers | Pacer target / worker | App <span class="unit">Gbps</span> |
+| ---------: | ---------------------: | -----------------------------------: |
+| 1 | 22 Gbps | 20.64 ±0.19 |
+| 2 | 24 Gbps | 39.33 ±0.49 |
+| 4 | 18 Gbps | **64.73 ±0.66** |
+
+The source and receiver physical counters matched for every listed sample, and
+the receiver reported no UDP kernel or IP-reassembly errors. Endpoint totals may
+differ by up to one final 32-message retrieval batch at shutdown.
+Pacer target is the requested software rate; scheduling delays are not recovered
+by a catch-up burst, so measured application throughput can be lower.
 
 ## Reproduce
 
@@ -298,7 +331,114 @@ Run inside the project container (privileged, GPUs passed through, hugepages
 mounted), as root. Build with `-DCMAKE_BUILD_TYPE=Release` and
 `cmake --install build` so the bench loads the current `libdaqiri.so`.
 
-The commands below drive the **single-host loopback** tables. The `_xhost` configs
+### Uniform role controller
+
+`scripts/run_crosshost_bench.sh` is the common controller for one measured cell.
+It runs either `--topology crosshost` or `--topology loopback`; loopback uses
+`local` for both roles. The testbed and role YAMLs remain external inputs, so the
+controller contains no site-specific networking or CPU placement.
+
+The same file also owns the complete loopback matrix through
+`--suite spark-loopback-report`. `examples/run_spark_loopback_report.sh` is only
+a compatibility forwarder; it contains no benchmark orchestration.
+
+```bash
+scripts/run_crosshost_bench.sh \
+  --topology <crosshost|loopback> \
+  --tx-host <ssh-destination|local> --rx-host <ssh-destination|local> \
+  --workdir <repository-on-each-host> \
+  --bench <benchmark-binary> \
+  --tx-config <tx-role-config> --rx-config <rx-role-config> \
+  --seconds 30 --repeats 3 \
+  --protocol <raw|roce|tcp|udp> --tx-engine <engine> --rx-engine <engine> \
+  --pace <unpaced|software|nic>
+```
+
+It starts RX first, uses the TX active window for the result, retains an RX drain
+period, and writes an invocation manifest, one log per role and repetition, and a
+normalized run-status CSV. Add `--tx-snapshot` and `--rx-snapshot` commands to
+retain before/after application, kernel, NIC, and PHY counters with each
+repetition; `--require-snapshots` makes a failed requested snapshot fail the run.
+
+For UDP, pin the receive-I/O thread and application worker to separate cores in
+the same performance cluster, and record both in the local profile. For raw
+Ethernet, select TX and RX engines independently: on this platform DPDK is the
+high-rate unpaced TX/RX choice, while ibverbs TX with NIC/QP pacing avoids
+batch-sized software-pacer bursts at small payloads. This is a platform-profile
+choice, not a general engine ranking.
+
+Matching physical counters show wire transit, not application delivery. A
+loss-free physical result also requires clean application, kernel, and NIC
+counters. For UDP, a bounded final I/O-to-application retrieval batch may remain
+at shutdown; record it separately from transport loss.
+
+### Topology setup and reset
+
+The controller never creates or changes host networking. Prepare the topology
+before starting it, and restore the topology afterwards.
+
+**Cross-host** uses normal host networking on both hosts; it does **not** use
+network namespaces. For TCP, UDP, and RoCE, configure each selected link with
+its local address, a route to the peer, and a static peer neighbor before running
+the controller. `scripts/setup_spark_xhost_net.sh` can install the route and
+neighbor after the local network profile has assigned the addresses:
+
+```bash
+# Run once on each host. Values belong in a local profile, not in this report.
+SPARK_XHOST_IFACE=<local-data-interface> \
+SPARK_TX_IP=<tx-benchmark-address> SPARK_RX_IP=<rx-benchmark-address> \
+  sudo -E scripts/setup_spark_xhost_net.sh --role <tx|rx> \
+  --peer-ip <peer-benchmark-address> --peer-mac <peer-data-mac>
+```
+
+Raw Ethernet uses the role configs and physical ports directly; it needs no IP
+route or namespace. For every cross-host result, capture application, kernel,
+NIC, and PHY counters on both hosts. To return an address-based cross-host setup
+to its previous state, remove the benchmark-specific route and neighbor on each
+host, then reapply the host's normal network profile:
+
+```bash
+sudo ip route del <peer-benchmark-address>/32 dev <local-data-interface>
+sudo ip neigh del <peer-benchmark-address> dev <local-data-interface>
+```
+
+**Single-host loopback** uses two cabled ports. Raw phases require the default
+host namespace. TCP, UDP, and RoCE phases use the `dq_wire_client` and
+`dq_wire_server` namespaces so traffic cannot be shortcut locally. Run the full
+suite as follows; it creates those namespaces for the socket/RoCE phases and
+tears them down before it returns:
+
+```bash
+scripts/run_crosshost_bench.sh \
+  --suite spark-loopback-report --topology loopback \
+  --loopback-tx-netdev <cabled-transmit-interface> \
+  --loopback-rx-netdev <cabled-receive-interface>
+```
+
+For an individual loopback socket or RoCE cell, create and later remove the
+namespaces explicitly. Use the controller's `--tx-prefix` / `--rx-prefix` to run
+the two roles in their respective namespaces. Do not leave the namespaces up
+before a raw DPDK run.
+
+```bash
+CLIENT_IF=<cabled-transmit-interface> SERVER_IF=<cabled-receive-interface> \
+  scripts/setup_spark_wire_loopback_netns.sh up
+
+# Run the chosen --topology loopback controller cell here.
+
+CLIENT_IF=<cabled-transmit-interface> SERVER_IF=<cabled-receive-interface> \
+  scripts/setup_spark_wire_loopback_netns.sh down
+```
+
+`down` moves the ports and RDMA devices back to the host namespace and restores
+shared RDMA namespace mode. The setup helper flushes the selected host-interface
+addresses when it creates the namespaces, so `down` cannot recreate a prior host
+network profile; reapply that profile after teardown if one was present.
+
+### Spark loopback suite
+
+The commands below are the underlying **single-host loopback** adapters. The
+suite above is the normal report reproduction path. The `_xhost` configs
 provide the paired roles for a manual cross-host smoke test:
 (`examples/daqiri_bench_raw_tx_spark_xhost.yaml`,
 `examples/daqiri_bench_raw_rx_spark_xhost.yaml`,
@@ -399,8 +539,9 @@ traffic off the port while measuring. When the two deltas match and the app stil
 lost datagrams, the drops are above the NIC.
 
 Whichever setup you use, pin each pair's send and receive to **separate** cores in
-the same CPU cluster. Socket affinity in these examples applies to the benchmark
-workers; queue `cpu_core` does not currently bind the socket engine's I/O threads.
+the same CPU cluster. For UDP, queue `cpu_core` pins the socket receive-I/O
+thread and `socket_bench_*.cpu_core` pins its application worker; both placements
+must be recorded. TCP has no separate receive-I/O pin in this configuration.
 
 Use the client's `active_seconds` to calculate both sent and received application
 rates. The server deliberately outlives the client, so its whole-process
@@ -448,8 +589,8 @@ deserializes its plan *after* `daqiri_init`, so gating on the earlier reorder
 line opens the run with an artificial drop burst), then launches TX:
 
 ```bash
-# one cell; the table is the median of 3 such runs per model
-applications/resnet50_inference/tools/run_resnet_xhost.sh --seconds 120
+# Three independent 30-second samples per model.
+applications/resnet50_inference/tools/run_resnet_xhost.sh --seconds 30 --repeats 3
 ```
 
 The wrapper runs whichever engine the RX config points at. The other four sizes
