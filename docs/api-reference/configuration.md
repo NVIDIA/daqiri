@@ -172,6 +172,12 @@ engine.
   - type: `string`
   - values: `RC` (Reliable Connected), `UC` (Unreliable Connected)
 
+Each RoCE client connection consumes a TX queue position on the interface
+selected by `socket_config.local_addr`. Queue positions are scoped per interface:
+the first connection on each interface uses position 0, while further connections
+on that interface use the next free position. A connection fails with
+`NO_SPACE_AVAILABLE` when that interface has no free TX queue.
+
 ## Receive Configuration (rx)
 
 ### Queues
