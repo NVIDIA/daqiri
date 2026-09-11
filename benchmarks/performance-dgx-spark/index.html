@@ -1,0 +1,2569 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+  
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/">
+      
+      
+        <link rel="prev" href="../raw_benchmarking/">
+      
+      
+        <link rel="next" href="../../api-reference/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../images/favicon-32.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+  <link rel="icon" href="../../images/favicon.svg" sizes="any" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="../../images/apple-touch-icon.png">
+
+    
+      
+        <title>Performance: DGX Spark - DAQIRI: Data Acquisition for Integrated Real-time Instruments</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  <script>window.NV_NAV = {"Benchmarking": [{"label": "Overview", "url": "benchmarks/"}, {"label": "Socket and RDMA Benchmarking", "url": "benchmarks/socket_benchmarking/"}, {"label": "Raw Ethernet Benchmarking", "url": "benchmarks/raw_benchmarking/"}, {"label": "Performance: DGX Spark", "url": "benchmarks/performance-dgx-spark/"}], "API Reference": [{"label": "API Guide", "url": "api-reference/"}, {"label": "Configuration YAML Reference", "url": "api-reference/configuration/"}, {"label": "C++ API Usage", "url": "api-reference/cpp/"}, {"label": "Python API Usage", "url": "api-reference/python/"}], "Tutorials": [{"label": "System Configuration", "url": "tutorials/system_configuration/"}, {"label": "Bare-Metal CMake Build", "url": "tutorials/bare-metal-cmake-build/"}, {"label": "Configuration YAML Walkthrough", "url": "tutorials/configuration-walkthrough/"}, {"label": "DAQIRI + Holoscan Integration", "url": "tutorials/daqiri-holoscan-integration/"}, {"label": "DAQIRI + TensorRT Inference", "url": "tutorials/daqiri-resnet-inference/"}]};</script></head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="light-green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#performance-dgx-spark" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="DAQIRI: Data Acquisition for Integrated Real-time Instruments" class="md-header__button md-logo" aria-label="DAQIRI: Data Acquisition for Integrated Real-time Instruments" data-md-component="logo">
+      
+  <img src="../../images/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            DAQIRI: Data Acquisition for Integrated Real-time Instruments
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Performance: DGX Spark
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="light-green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="light-green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/nvidia/daqiri" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    nvidia/daqiri
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../getting-started/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Getting Started
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../concepts/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Concepts
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  Benchmarking
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../api-reference/" class="md-tabs__link">
+          
+  
+  
+  API Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../tutorials/system_configuration/" class="md-tabs__link">
+          
+  
+  
+  Tutorials
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+                
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" hidden>
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="DAQIRI: Data Acquisition for Integrated Real-time Instruments" class="md-nav__button md-logo" aria-label="DAQIRI: Data Acquisition for Integrated Real-time Instruments" data-md-component="logo">
+      
+  <img src="../../images/logo.svg" alt="logo">
+
+    </a>
+    DAQIRI: Data Acquisition for Integrated Real-time Instruments
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/nvidia/daqiri" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    nvidia/daqiri
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Benchmarking
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Benchmarking
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../socket_benchmarking/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Socket and RDMA Benchmarking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../raw_benchmarking/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Raw Ethernet Benchmarking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance: DGX Spark
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance: DGX Spark
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#cross-host-benchmarks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-host benchmarks
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Cross-host benchmarks">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cross-host-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-host setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#results-summary-for-two-link-receive-throughput" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Results summary for two-link receive throughput
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#raw-ethernet-gpudirect-throughput-by-payload-size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Raw Ethernet / GPUDirect throughput by payload size
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#roce-rc-send-throughput-by-message-size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RoCE RC SEND throughput by message size
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tcp-receive-throughput" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TCP receive throughput
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TCP receive throughput">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#single-core-one-link-throughput-by-message-size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Single-core, one-link throughput by message size
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#multi-core-two-link-throughput-by-worker-count-at-1-mib" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-core, two-link throughput by worker count at 1 MiB
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#udp-receive-throughput" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UDP receive throughput
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="UDP receive throughput">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#single-core-one-link-throughput-by-message-size_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Single-core, one-link throughput by message size
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#multi-core-two-link-throughput-by-pair-count-at-8-kb" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-core, two-link throughput by pair count at 8 KB
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#two-link-receive-throughput-with-gpu-workloads" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two-link receive throughput with GPU workloads
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#end-to-end-resnet-inference-throughput" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        End-to-end ResNet inference throughput
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#single-host-loopback-benchmarks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Single-host loopback benchmarks
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Single-host loopback benchmarks">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#single-host-loopback-benchmark-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Single-host loopback benchmark setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#results-summary-for-single-host-loopback-throughput" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Results summary for single-host loopback throughput
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#raw-ethernet-gpudirect-throughput-by-payload-size_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Raw Ethernet / GPUDirect throughput by payload size
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Raw Ethernet / GPUDirect throughput by payload size">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#paced-small-packet-throughput" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Paced small-packet throughput
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cpu-utilization-at-8-kb" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CPU utilization at 8 KB
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#roce-rc-send-throughput-by-message-size_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RoCE RC SEND throughput by message size
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tcp-receive-throughput_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TCP receive throughput
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TCP receive throughput">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#single-core-throughput-by-message-size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Single-core throughput by message size
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#multi-core-throughput-by-worker-count-at-1-mib" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-core throughput by worker count at 1 MiB
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#udp-throughput-by-message-size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UDP throughput by message size
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="UDP throughput by message size">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#udp-throughput-by-worker-count-at-8-kb" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UDP throughput by worker count at 8 KB
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration YAML Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/cpp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    C++ API Usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API Usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorials
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tutorials
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/system_configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/bare-metal-cmake-build/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bare-Metal CMake Build
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/configuration-walkthrough/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration YAML Walkthrough
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/daqiri-holoscan-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DAQIRI + Holoscan Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/daqiri-resnet-inference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DAQIRI + TensorRT Inference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+                
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#cross-host-benchmarks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-host benchmarks
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Cross-host benchmarks">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cross-host-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-host setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#results-summary-for-two-link-receive-throughput" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Results summary for two-link receive throughput
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#raw-ethernet-gpudirect-throughput-by-payload-size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Raw Ethernet / GPUDirect throughput by payload size
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#roce-rc-send-throughput-by-message-size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RoCE RC SEND throughput by message size
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tcp-receive-throughput" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TCP receive throughput
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TCP receive throughput">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#single-core-one-link-throughput-by-message-size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Single-core, one-link throughput by message size
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#multi-core-two-link-throughput-by-worker-count-at-1-mib" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-core, two-link throughput by worker count at 1 MiB
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#udp-receive-throughput" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UDP receive throughput
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="UDP receive throughput">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#single-core-one-link-throughput-by-message-size_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Single-core, one-link throughput by message size
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#multi-core-two-link-throughput-by-pair-count-at-8-kb" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-core, two-link throughput by pair count at 8 KB
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#two-link-receive-throughput-with-gpu-workloads" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two-link receive throughput with GPU workloads
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#end-to-end-resnet-inference-throughput" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        End-to-end ResNet inference throughput
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#single-host-loopback-benchmarks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Single-host loopback benchmarks
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Single-host loopback benchmarks">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#single-host-loopback-benchmark-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Single-host loopback benchmark setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#results-summary-for-single-host-loopback-throughput" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Results summary for single-host loopback throughput
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#raw-ethernet-gpudirect-throughput-by-payload-size_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Raw Ethernet / GPUDirect throughput by payload size
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Raw Ethernet / GPUDirect throughput by payload size">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#paced-small-packet-throughput" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Paced small-packet throughput
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cpu-utilization-at-8-kb" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CPU utilization at 8 KB
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#roce-rc-send-throughput-by-message-size_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RoCE RC SEND throughput by message size
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tcp-receive-throughput_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TCP receive throughput
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TCP receive throughput">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#single-core-throughput-by-message-size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Single-core throughput by message size
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#multi-core-throughput-by-worker-count-at-1-mib" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-core throughput by worker count at 1 MiB
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#udp-throughput-by-message-size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UDP throughput by message size
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="UDP throughput by message size">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#udp-throughput-by-worker-count-at-8-kb" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UDP throughput by worker count at 8 KB
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+  
+
+
+
+  
+  
+
+
+<h1 id="performance-dgx-spark">Performance: DGX Spark<a class="headerlink" href="#performance-dgx-spark" title="Permanent link">&para;</a></h1>
+<p>This report covers DAQIRI receive performance in two configurations.
+<a href="#cross-host-benchmarks">Cross-host measurements</a> include <a href="#raw-ethernet-gpudirect-throughput-by-payload-size">I/O throughput</a>,
+<a href="#two-link-receive-throughput-with-gpu-workloads">I/O with GPU workloads</a>, and
+<a href="#end-to-end-resnet-inference-throughput">I/O with ResNet inference</a>.
+<a href="#single-host-loopback-benchmarks">Single-host wire-loopback diagnostics</a> cover I/O only.
+The transport setup and validation checks are described in
+<a href="../raw_benchmarking/">Raw Ethernet Benchmarking</a> and
+<a href="../socket_benchmarking/">Socket and RDMA Benchmarking</a>.</p>
+<h2 id="cross-host-benchmarks">Cross-host benchmarks<a class="headerlink" href="#cross-host-benchmarks" title="Permanent link">&para;</a></h2>
+<h3 id="cross-host-setup">Cross-host setup<a class="headerlink" href="#cross-host-setup" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Platform</td>
+<td>NVIDIA DGX Spark (receiver)</td>
+</tr>
+<tr>
+<td>Data source</td>
+<td>Another DGX Spark for these measurements. The report is about receiver performance; another source may be used when it can sustain the required offered load.</td>
+</tr>
+<tr>
+<td>CPU</td>
+<td>NVIDIA GB10 Armv9: 10 Cortex-X925 performance cores + 10 Cortex-A725 efficiency cores</td>
+</tr>
+<tr>
+<td>GPU and memory</td>
+<td>NVIDIA GB10 GPU; 120 GiB unified memory per host</td>
+</tr>
+<tr>
+<td>NIC</td>
+<td>NVIDIA ConnectX-7; two 100 GbE Ethernet ports per host</td>
+</tr>
+<tr>
+<td>NIC firmware</td>
+<td>28.45.4028</td>
+</tr>
+<tr>
+<td>NIC attachment</td>
+<td>Two independently attached NIC connections are used for the two-link 200 GbE tests</td>
+</tr>
+<tr>
+<td>Network</td>
+<td>Direct one- and two-link 100 GbE cross-host tests; MTU 9000</td>
+</tr>
+<tr>
+<td>Host software</td>
+<td>Ubuntu 24.04.4 LTS; Linux 6.17.0-1014-nvidia</td>
+</tr>
+<tr>
+<td>GPU software</td>
+<td>NVIDIA driver 580.142; CUDA Toolkit 13.1.0 in the benchmark container</td>
+</tr>
+<tr>
+<td>DAQIRI build</td>
+<td>Release; <code>DAQIRI_ENGINE="dpdk ibverbs"</code>; <code>DAQIRI_BUILD_APPLICATIONS=ON</code> when running the inference pipeline</td>
+</tr>
+<tr>
+<td>CPU placement</td>
+<td>Dedicated isolated CPU placement for raw/RDMA pollers and workers. Socket worker and I/O-thread placement is stated with each scaling result.</td>
+</tr>
+</tbody>
+</table>
+<p>Rates report received payload unless a table explicitly labels a wire rate.
+For each accepted cross-host repetition, the receiver was ready before the
+30-second sender window, stable <code>mlnx_perf</code> samples were retained, and matching
+directional PHY deltas confirmed the physical path. Application delivery and
+the relevant UDP/kernel, NIC, raw-queue, or RDMA completion errors were checked
+for loss. All reported results are loss-free. Each result is the average of
+three independent samples except the two-link GPU-workload results marked <code>†</code>.</p>
+<h3 id="results-summary-for-two-link-receive-throughput">Results summary for two-link receive throughput<a class="headerlink" href="#results-summary-for-two-link-receive-throughput" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Stream / Protocol</th>
+<th style="text-align: right;">Message size</th>
+<th>Receive setup</th>
+<th style="text-align: right;">Delivered <span class="unit">Gbps</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Raw Ethernet / GPUDirect (DPDK)</td>
+<td style="text-align: right;">8 KB</td>
+<td>1 queue/link</td>
+<td style="text-align: right;">197.2</td>
+</tr>
+<tr>
+<td>Socket / RoCE (RC SEND)</td>
+<td style="text-align: right;">8 MB</td>
+<td>1 RX queue/link</td>
+<td style="text-align: right;"><strong>194.5 ±0.1</strong></td>
+</tr>
+<tr>
+<td>Socket / TCP</td>
+<td style="text-align: right;">1 MiB</td>
+<td>4 RX cores/link</td>
+<td style="text-align: right;">174 ±1</td>
+</tr>
+<tr>
+<td>Socket / UDP (paced)</td>
+<td style="text-align: right;">8 KB</td>
+<td>4 pairs/link; 8 pinned CPUs/link</td>
+<td style="text-align: right;">96</td>
+</tr>
+</tbody>
+</table>
+<h3 id="raw-ethernet-gpudirect-throughput-by-payload-size">Raw Ethernet / GPUDirect throughput by payload size<a class="headerlink" href="#raw-ethernet-gpudirect-throughput-by-payload-size" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Payload</th>
+<th style="text-align: right;">Wire <span class="unit">Gbps</span></th>
+<th style="text-align: right;">App <span class="unit">Gbps</span></th>
+<th style="text-align: right;">Mpps</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>8000 B</td>
+<td style="text-align: right;"><strong>201.7</strong></td>
+<td style="text-align: right;"><strong>197.2</strong></td>
+<td style="text-align: right;">3.1</td>
+</tr>
+<tr>
+<td>4096 B</td>
+<td style="text-align: right;">201.3</td>
+<td style="text-align: right;">197.2</td>
+<td style="text-align: right;">5.9</td>
+</tr>
+<tr>
+<td>1024 B</td>
+<td style="text-align: right;">198.6</td>
+<td style="text-align: right;">194.7</td>
+<td style="text-align: right;">22.4</td>
+</tr>
+<tr>
+<td>256 B</td>
+<td style="text-align: right;">73.7</td>
+<td style="text-align: right;">72.8</td>
+<td style="text-align: right;">28.4</td>
+</tr>
+<tr>
+<td>64 B</td>
+<td style="text-align: right;">30.4</td>
+<td style="text-align: right;">29.4</td>
+<td style="text-align: right;">28.7</td>
+</tr>
+</tbody>
+</table>
+<h3 id="roce-rc-send-throughput-by-message-size">RoCE RC SEND throughput by message size<a class="headerlink" href="#roce-rc-send-throughput-by-message-size" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Message size</th>
+<th style="text-align: right;">App <span class="unit">Gbps</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>8 MB</td>
+<td style="text-align: right;"><strong>194.5 ±0.1</strong></td>
+</tr>
+<tr>
+<td>1 MB</td>
+<td style="text-align: right;">194.2 ±0.5</td>
+</tr>
+<tr>
+<td>8 KB</td>
+<td style="text-align: right;">171.1 ±0.5</td>
+</tr>
+<tr>
+<td>4 KB</td>
+<td style="text-align: right;">67 ±6</td>
+</tr>
+</tbody>
+</table>
+<h3 id="tcp-receive-throughput">TCP receive throughput<a class="headerlink" href="#tcp-receive-throughput" title="Permanent link">&para;</a></h3>
+<h4 id="single-core-one-link-throughput-by-message-size">Single-core, one-link throughput by message size<a class="headerlink" href="#single-core-one-link-throughput-by-message-size" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>Message size</th>
+<th style="text-align: right;">App <span class="unit">Gbps</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1 MiB</td>
+<td style="text-align: right;"><strong>56</strong></td>
+</tr>
+<tr>
+<td>8000 B</td>
+<td style="text-align: right;">53</td>
+</tr>
+<tr>
+<td>1000 B</td>
+<td style="text-align: right;">18</td>
+</tr>
+</tbody>
+</table>
+<h4 id="multi-core-two-link-throughput-by-worker-count-at-1-mib">Multi-core, two-link throughput by worker count at 1 MiB<a class="headerlink" href="#multi-core-two-link-throughput-by-worker-count-at-1-mib" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">Rx workers</th>
+<th style="text-align: right;">Rx workers per link</th>
+<th style="text-align: right;">App <span class="unit">Gbps</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">111 ±7</td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">157 ±2</td>
+</tr>
+<tr>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;"><strong>174 ±1</strong></td>
+</tr>
+</tbody>
+</table>
+<h3 id="udp-receive-throughput">UDP receive throughput<a class="headerlink" href="#udp-receive-throughput" title="Permanent link">&para;</a></h3>
+<h4 id="single-core-one-link-throughput-by-message-size_1">Single-core, one-link throughput by message size<a class="headerlink" href="#single-core-one-link-throughput-by-message-size_1" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>Message size</th>
+<th style="text-align: right;">App <span class="unit">Gbps</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>8000 B</td>
+<td style="text-align: right;"><strong>25</strong></td>
+</tr>
+<tr>
+<td>65507 B</td>
+<td style="text-align: right;">15</td>
+</tr>
+<tr>
+<td>1000 B</td>
+<td style="text-align: right;">4</td>
+</tr>
+</tbody>
+</table>
+<h4 id="multi-core-two-link-throughput-by-pair-count-at-8-kb">Multi-core, two-link throughput by pair count at 8 KB<a class="headerlink" href="#multi-core-two-link-throughput-by-pair-count-at-8-kb" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">Pairs</th>
+<th style="text-align: right;">Pinned CPUs / host (I/O + worker)</th>
+<th style="text-align: right;">Pairs / link</th>
+<th style="text-align: right;">Pacer target / flow (<span class="unit">Gbps</span>)</th>
+<th style="text-align: right;">App <span class="unit">Gbps</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">4 (2 + 2)</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">25</td>
+<td style="text-align: right;"><strong>50</strong></td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">8 (4 + 4)</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">20</td>
+<td style="text-align: right;"><strong>80</strong></td>
+</tr>
+<tr>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">16 (8 + 8)</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">12</td>
+<td style="text-align: right;"><strong>96</strong></td>
+</tr>
+</tbody>
+</table>
+<p>For UDP scaling, every pair has a receive-I/O thread and an application worker;
+the table counts both. Keep each pair on separate CPUs in one cluster and
+distribute pairs evenly across the two links.</p>
+<h3 id="two-link-receive-throughput-with-gpu-workloads">Two-link receive throughput with GPU workloads<a class="headerlink" href="#two-link-receive-throughput-with-gpu-workloads" title="Permanent link">&para;</a></h3>
+<p>Each workload runs once per ~8 MB received-data window after DAQIRI assembles it
+into a contiguous GPU buffer. This table reports only the raw/DPDK results;
+socket and RoCE/RDMA measurements are not included.</p>
+<ul>
+<li><strong>FFT</strong> — batched FP32, length-1024 complex-to-complex forward transforms.</li>
+<li><strong>GEMM</strong> — FP32 1024×1024 matrix multiply (2.15 GFLOP; 4 MB input).</li>
+</ul>
+<p>DPDK uses 8 KB packets and an approximately 8 MB working set per workload
+invocation.</p>
+<table>
+<thead>
+<tr>
+<th>Workload</th>
+<th style="text-align: right;">DPDK <span class="unit">Gbps</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>none (baseline)</td>
+<td style="text-align: right;">197.2<sup>†</sup></td>
+</tr>
+<tr>
+<td>FFT</td>
+<td style="text-align: right;">197.2<sup>†</sup></td>
+</tr>
+<tr>
+<td>GEMM (FP32)</td>
+<td style="text-align: right;">197.1<sup>†</sup></td>
+</tr>
+</tbody>
+</table>
+<p><code>†</code> Preliminary: one accepted 30 s sample per cell; two further repetitions are
+required for a mean.</p>
+<h3 id="end-to-end-resnet-inference-throughput">End-to-end ResNet inference throughput<a class="headerlink" href="#end-to-end-resnet-inference-throughput" title="Permanent link">&para;</a></h3>
+<p>The <a href="../../tutorials/daqiri-resnet-inference/">ResNet pipeline</a> receives CIFAR-10
+images, reassembles and converts them on the GPU, then runs TensorRT FP16
+inference. The results cover ResNet-18 through ResNet-152.</p>
+<pre class="mermaid"><code>flowchart LR
+  TX["TX host&lt;br/&gt;CIFAR-10 int8 frames"] --&gt;|"direct Ethernet"| N["RX host NIC DMA"]
+  N --&gt; R["RX buffers (host_pinned,&lt;br/&gt;GPU-accessible)"]
+  R --&gt; K["DAQIRI reorder kernel:&lt;br/&gt;reassemble + int8 to fp16"]
+  K --&gt;|"REORDERED burst + CUDA event"| Q["SPSC ring"]
+  Q --&gt; T["TensorRT FP16&lt;br/&gt;ResNet (18-152)"]
+  T --&gt; F["feature vectors"]</code></pre>
+<p>Each image is 224×224×3 signed int8 (150,528 B), sent as 128 frames. The GPU
+reorder kernel reassembles and converts the input to FP16 for TensorRT.</p>
+<p>Batch size is 32 and TensorRT uses FP16. Each row reports the highest accepted
+offered rate for that model.</p>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th style="text-align: right;">img/s</th>
+<th style="text-align: right;">p50 / p99 ms per batch</th>
+<th style="text-align: right;">Delivered payload <span class="unit">Gbps</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ResNet-18</td>
+<td style="text-align: right;"><strong>11,833</strong></td>
+<td style="text-align: right;">2.6 / 3.1</td>
+<td style="text-align: right;">14.3</td>
+</tr>
+<tr>
+<td>ResNet-34</td>
+<td style="text-align: right;">7,174</td>
+<td style="text-align: right;">4.4 / 4.9</td>
+<td style="text-align: right;">8.6</td>
+</tr>
+<tr>
+<td>ResNet-50</td>
+<td style="text-align: right;">3,550</td>
+<td style="text-align: right;">8.6 / 9.5</td>
+<td style="text-align: right;">4.3</td>
+</tr>
+<tr>
+<td>ResNet-101</td>
+<td style="text-align: right;">2,367</td>
+<td style="text-align: right;">13.3 / 14.2</td>
+<td style="text-align: right;">2.9</td>
+</tr>
+<tr>
+<td>ResNet-152</td>
+<td style="text-align: right;">1,590</td>
+<td style="text-align: right;">18.4 / 19.5</td>
+<td style="text-align: right;">1.9</td>
+</tr>
+</tbody>
+</table>
+<h2 id="single-host-loopback-benchmarks">Single-host loopback benchmarks<a class="headerlink" href="#single-host-loopback-benchmarks" title="Permanent link">&para;</a></h2>
+<h3 id="single-host-loopback-benchmark-setup">Single-host loopback benchmark setup<a class="headerlink" href="#single-host-loopback-benchmark-setup" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Platform</td>
+<td>NVIDIA DGX Spark</td>
+</tr>
+<tr>
+<td>Data source</td>
+<td>The same DGX Spark acts as sender and receiver</td>
+</tr>
+<tr>
+<td>CPU</td>
+<td>NVIDIA GB10 Armv9: 10 Cortex-X925 performance cores + 10 Cortex-A725 efficiency cores</td>
+</tr>
+<tr>
+<td>GPU and memory</td>
+<td>NVIDIA GB10 GPU; 120 GiB unified memory</td>
+</tr>
+<tr>
+<td>NIC</td>
+<td>NVIDIA ConnectX-7; two 100 GbE Ethernet ports</td>
+</tr>
+<tr>
+<td>NIC firmware</td>
+<td>28.45.4028</td>
+</tr>
+<tr>
+<td>NIC attachment</td>
+<td>The two ports are joined by a 100 GbE cable</td>
+</tr>
+<tr>
+<td>Network</td>
+<td>Single-host wire loopback; MTU 9000</td>
+</tr>
+<tr>
+<td>Host software</td>
+<td>Ubuntu 24.04.4 LTS; Linux 6.17.0-1014-nvidia</td>
+</tr>
+<tr>
+<td>GPU software</td>
+<td>NVIDIA driver 580.142; CUDA Toolkit 13.1.0 in the benchmark container</td>
+</tr>
+<tr>
+<td>DAQIRI build</td>
+<td>Release; <code>DAQIRI_ENGINE="dpdk ibverbs"</code></td>
+</tr>
+<tr>
+<td>CPU placement</td>
+<td>Dedicated isolated CPU placement for raw/RDMA pollers and workers. Socket worker and I/O-thread placement is stated with each scaling result.</td>
+</tr>
+<tr>
+<td>Transport setup</td>
+<td>Raw/DPDK uses the physical ports directly; sockets and RoCE use a network-namespace wire loopback</td>
+</tr>
+</tbody>
+</table>
+<p>These I/O-only diagnostics isolate polling, batching, queue, and CPU-placement
+effects. They are not cross-host performance claims.</p>
+<h3 id="results-summary-for-single-host-loopback-throughput">Results summary for single-host loopback throughput<a class="headerlink" href="#results-summary-for-single-host-loopback-throughput" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Stream / Protocol</th>
+<th style="text-align: right;">Message size</th>
+<th>Receive setup</th>
+<th style="text-align: right;">Delivered <span class="unit">Gbps</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Raw Ethernet / GPUDirect (DPDK)</td>
+<td style="text-align: right;">8 KB</td>
+<td>1 RX queue</td>
+<td style="text-align: right;"><strong>98.7</strong></td>
+</tr>
+<tr>
+<td>Socket / RoCE</td>
+<td style="text-align: right;">8 KB</td>
+<td>one receive queue, TX depth 512</td>
+<td style="text-align: right;"><strong>96.4 ±0.1</strong></td>
+</tr>
+<tr>
+<td>Socket / TCP</td>
+<td style="text-align: right;">1 MiB</td>
+<td>4 RX workers</td>
+<td style="text-align: right;"><strong>97.7 ±0.2</strong></td>
+</tr>
+<tr>
+<td>Socket / UDP</td>
+<td style="text-align: right;">8 KiB</td>
+<td>4 RX workers</td>
+<td style="text-align: right;"><strong>64.7 ±0.7</strong></td>
+</tr>
+</tbody>
+</table>
+<h3 id="raw-ethernet-gpudirect-throughput-by-payload-size_1">Raw Ethernet / GPUDirect throughput by payload size<a class="headerlink" href="#raw-ethernet-gpudirect-throughput-by-payload-size_1" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Payload</th>
+<th style="text-align: right;">App <span class="unit">Gbps</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>8000 B</td>
+<td style="text-align: right;"><strong>98.7</strong></td>
+</tr>
+<tr>
+<td>4096 B</td>
+<td style="text-align: right;">98.5</td>
+</tr>
+<tr>
+<td>1024 B</td>
+<td style="text-align: right;">97.1</td>
+</tr>
+</tbody>
+</table>
+<h4 id="paced-small-packet-throughput">Paced small-packet throughput<a class="headerlink" href="#paced-small-packet-throughput" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>Payload</th>
+<th style="text-align: right;">Offered rate</th>
+<th style="text-align: right;">App <span class="unit">Gbps</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>256 B</td>
+<td style="text-align: right;">50 Gbps</td>
+<td style="text-align: right;"><strong>46.1 ±0.1</strong></td>
+</tr>
+<tr>
+<td>64 B</td>
+<td style="text-align: right;">24.5 Gbps</td>
+<td style="text-align: right;"><strong>20.1 ±0.1</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Unpaced 256 B and 64 B transmission overruns the receive buffer. The paced rows
+are the highest offered rates with no reported DPDK hardware-buffer discards.</p>
+<h4 id="cpu-utilization-at-8-kb">CPU utilization at 8 KB<a class="headerlink" href="#cpu-utilization-at-8-kb" title="Permanent link">&para;</a></h4>
+<p>Batch size is 10,240 and transmission is unpaced.</p>
+<table>
+<thead>
+<tr>
+<th>Core</th>
+<th style="text-align: right;">Busy%</th>
+<th>Note</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Master</td>
+<td style="text-align: right;">3.7%</td>
+<td>Orchestration only, mostly idle</td>
+</tr>
+<tr>
+<td>TX queue poller</td>
+<td style="text-align: right;">~92%</td>
+<td>Poll-mode busy-spin</td>
+</tr>
+<tr>
+<td>RX queue poller</td>
+<td style="text-align: right;">~92%</td>
+<td>Poll-mode busy-spin</td>
+</tr>
+</tbody>
+</table>
+<p>The GPU is a DMA target in this test (SM and memory-controller utilization ~0%).</p>
+<h3 id="roce-rc-send-throughput-by-message-size_1">RoCE RC SEND throughput by message size<a class="headerlink" href="#roce-rc-send-throughput-by-message-size_1" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">Message size</th>
+<th style="text-align: right;">TX depth</th>
+<th style="text-align: right;">App <span class="unit">Gbps</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">8 MiB</td>
+<td style="text-align: right;">128</td>
+<td style="text-align: right;">96.8 ±0.1</td>
+</tr>
+<tr>
+<td style="text-align: right;">1 MiB</td>
+<td style="text-align: right;">128</td>
+<td style="text-align: right;">96.5 ±0.1</td>
+</tr>
+<tr>
+<td style="text-align: right;">64 KiB</td>
+<td style="text-align: right;">128</td>
+<td style="text-align: right;"><strong>97.7 ±0.1</strong></td>
+</tr>
+<tr>
+<td style="text-align: right;">8 KiB</td>
+<td style="text-align: right;">512</td>
+<td style="text-align: right;">96.4 ±0.1</td>
+</tr>
+<tr>
+<td style="text-align: right;">4 KiB</td>
+<td style="text-align: right;">512</td>
+<td style="text-align: right;">57 ±1</td>
+</tr>
+</tbody>
+</table>
+<h3 id="tcp-receive-throughput_1">TCP receive throughput<a class="headerlink" href="#tcp-receive-throughput_1" title="Permanent link">&para;</a></h3>
+<h4 id="single-core-throughput-by-message-size">Single-core throughput by message size<a class="headerlink" href="#single-core-throughput-by-message-size" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>Message size</th>
+<th style="text-align: right;">App <span class="unit">Gbps</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1 MiB</td>
+<td style="text-align: right;"><strong>53 ±4</strong></td>
+</tr>
+<tr>
+<td>8000 B</td>
+<td style="text-align: right;">49.1 ±0.3</td>
+</tr>
+<tr>
+<td>1000 B</td>
+<td style="text-align: right;">13.2 ±0.1</td>
+</tr>
+</tbody>
+</table>
+<h4 id="multi-core-throughput-by-worker-count-at-1-mib">Multi-core throughput by worker count at 1 MiB<a class="headerlink" href="#multi-core-throughput-by-worker-count-at-1-mib" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">Rx workers</th>
+<th style="text-align: right;">App <span class="unit">Gbps</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">49.7 ±0.5</td>
+</tr>
+<tr>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">79 ±2</td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;"><strong>97.7 ±0.2</strong></td>
+</tr>
+</tbody>
+</table>
+<h3 id="udp-throughput-by-message-size">UDP throughput by message size<a class="headerlink" href="#udp-throughput-by-message-size" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">Message size</th>
+<th style="text-align: right;">Pacer target</th>
+<th style="text-align: right;">App <span class="unit">Gbps</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">8000 B</td>
+<td style="text-align: right;">22 Gbps</td>
+<td style="text-align: right;"><strong>20.6 ±0.2</strong></td>
+</tr>
+<tr>
+<td style="text-align: right;">1000 B</td>
+<td style="text-align: right;">6 Gbps</td>
+<td style="text-align: right;">5.0 ±0.1</td>
+</tr>
+<tr>
+<td style="text-align: right;">65507 B</td>
+<td style="text-align: right;">15 Gbps</td>
+<td style="text-align: right;">15</td>
+</tr>
+</tbody>
+</table>
+<h4 id="udp-throughput-by-worker-count-at-8-kb">UDP throughput by worker count at 8 KB<a class="headerlink" href="#udp-throughput-by-worker-count-at-8-kb" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">RX workers</th>
+<th style="text-align: right;">Pacer target / worker</th>
+<th style="text-align: right;">App <span class="unit">Gbps</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">22 Gbps</td>
+<td style="text-align: right;">20.6 ±0.2</td>
+</tr>
+<tr>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">24 Gbps</td>
+<td style="text-align: right;">39.3 ±0.5</td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">18 Gbps</td>
+<td style="text-align: right;"><strong>64.7 ±0.7</strong></td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+  
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+        
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../raw_benchmarking/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Raw Ethernet Benchmarking">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Raw Ethernet Benchmarking
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../../api-reference/" class="md-footer__link md-footer__link--next" aria-label="Next: API Guide">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                API Guide
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["content.code.annotate", "content.code.copy", "content.tabs.link", "navigation.tabs", "navigation.sections", "navigation.top", "navigation.footer", "search.highlight", "search.suggest", "toc.follow"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+        <script src="../../javascripts/platform-tab-toc.js"></script>
+      
+        <script src="../../javascripts/tab-dropdowns.js"></script>
+      
+        <script src="../../javascripts/image-overlay.js"></script>
+      
+    
+  </body>
+</html>
