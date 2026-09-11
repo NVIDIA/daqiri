@@ -21,6 +21,7 @@
 #include <unistd.h>
 #include <mqueue.h>
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstdlib>
 #include <cstring>
@@ -29,6 +30,7 @@
 #include "src/daqiri_pool.h"
 #include "src/metrics.h"
 #include "daqiri_rdma_engine.h"
+#include "rdma_queue_index.h"
 
 /* The ordering of most RDMA/CM setup follows the ordering specified here:
    https://man7.org/linux/man-pages/man7/rdma_cm.7.html
@@ -40,6 +42,17 @@ namespace daqiri {
 std::atomic<bool> rdma_force_quit = false;
 
 namespace {
+
+constexpr std::array<detail::RdmaClientQueueAssignment, 1> kQueueOnInterfaceZero{{{0, 0}}};
+static_assert(detail::first_available_rdma_client_queue(1, 1, kQueueOnInterfaceZero) == 0);
+static_assert(detail::first_available_rdma_client_queue(0, 2, kQueueOnInterfaceZero) == 1);
+
+constexpr std::array<detail::RdmaClientQueueAssignment, 2> kQueuesZeroAndTwo{{{0, 0}, {0, 2}}};
+static_assert(detail::first_available_rdma_client_queue(0, 3, kQueuesZeroAndTwo) == 1);
+
+constexpr std::array<detail::RdmaClientQueueAssignment, 2> kTwoQueuesOnInterfaceZero{
+    {{0, 0}, {0, 1}}};
+static_assert(detail::first_available_rdma_client_queue(0, 2, kTwoQueuesOnInterfaceZero) == -1);
 
 void reset_rdma_burst_metadata(BurstParams* burst) {
   if (burst == nullptr) { return; }
@@ -1115,23 +1128,45 @@ Status RdmaEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t 
     return Status::INVALID_PARAMETER;
   }
 
-  // Construct the params directly in the map using try_emplace
-  client_params_mutex_.lock();
-  auto [iter, inserted] = client_q_params_.try_emplace(cm_id);
+  rdma_thread_params* params = nullptr;
+  bool queue_exhausted = false;
+  {
+    std::lock_guard<std::mutex> lock(client_params_mutex_);
+    std::vector<detail::RdmaClientQueueAssignment> assignments;
+    assignments.reserve(client_q_params_.size());
+    for (const auto& entry : client_q_params_) {
+      assignments.push_back({entry.second.if_idx, entry.second.queue_idx});
+    }
 
-  if (!inserted) {
-    client_params_mutex_.unlock();
-    DAQIRI_LOG_CRITICAL("Failed to insert client params into map");
-    return Status::CONNECT_FAILURE;
+    // queue_idx addresses the queue vector on one interface, so reserve the
+    // lowest free index on that interface rather than using the global client count.
+    const auto queue_count = cfg_.ifs_[client_port].tx_.queues_.size();
+    const int queue_idx =
+        detail::first_available_rdma_client_queue(client_port, queue_count, assignments);
+    queue_exhausted = queue_idx < 0;
+    if (!queue_exhausted) {
+      auto [iter, inserted] = client_q_params_.try_emplace(cm_id);
+      if (inserted) {
+        params = &iter->second;
+        params->client_id = cm_id;
+        params->pd = pd_map_[cm_id->verbs];
+        params->if_idx = client_port;
+        params->queue_idx = queue_idx;
+      }
+    }
   }
 
-  auto& params = iter->second;
-  params.client_id = cm_id;
-  params.pd = pd_map_[cm_id->verbs];
-  params.if_idx = client_port;
-  params.queue_idx = client_q_params_.size() - 1;
-  client_params_mutex_.unlock();
-  setup_thread_params(&params, false);
+  if (params == nullptr) {
+    if (queue_exhausted) {
+      DAQIRI_LOG_ERROR("No available client TX queue for source address {}", source_addr_str);
+    } else {
+      DAQIRI_LOG_CRITICAL("Failed to insert client params into map");
+    }
+    rdma_destroy_id(cm_id);
+    rdma_destroy_event_channel(ec);
+    return queue_exhausted ? Status::NO_SPACE_AVAILABLE : Status::CONNECT_FAILURE;
+  }
+  setup_thread_params(params, false);
 
   // Set up connection parameters
   memset(&conn_param, 0, sizeof(conn_param));
@@ -1142,7 +1177,7 @@ Status RdmaEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t 
   // Connect to server
   if (rdma_connect(cm_id, &conn_param) != 0) {
     DAQIRI_LOG_CRITICAL("Failed to connect to server");
-    destroy_thread_params(&params);
+    destroy_thread_params(params);
     rdma_destroy_event_channel(ec);
     return Status::CONNECT_FAILURE;
   } else {
@@ -1152,7 +1187,7 @@ Status RdmaEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t 
   // Wait for connection established event
   if (rdma_get_cm_event(ec, &event)) {
     DAQIRI_LOG_CRITICAL("Failed to get CM event");
-    destroy_thread_params(&params);
+    destroy_thread_params(params);
     rdma_destroy_event_channel(ec);
     return Status::CONNECT_FAILURE;
   }
@@ -1166,7 +1201,7 @@ Status RdmaEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t 
     }
     rdma_ack_cm_event(event);
     rdma_destroy_event_channel(ec);
-    destroy_thread_params(&params);
+    destroy_thread_params(params);
     return Status::CONNECT_FAILURE;
   } else {
     DAQIRI_LOG_INFO("Client {} established connection to server", (void*)cm_id);
@@ -1178,7 +1213,7 @@ Status RdmaEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t 
 
   // Store the connection ID for later use
   threads_mutex_.lock();
-  worker_threads_[cm_id] = std::thread(&RdmaEngine::rdma_thread, this, false, &params);
+  worker_threads_[cm_id] = std::thread(&RdmaEngine::rdma_thread, this, false, params);
   threads_mutex_.unlock();
 
   *conn_id = reinterpret_cast<uintptr_t>(cm_id);
