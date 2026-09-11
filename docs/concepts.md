@@ -337,8 +337,8 @@ New queues are inactive from a traffic-routing perspective until a dynamic flow
 targets them. Queue deletion drains outstanding packet ownership before
 destroying its DevX objects; an application-held burst therefore delays the
 delete completion. A memory region cannot be deleted while any live or draining
-queue references it. Static startup flows are immutable and keep their target
-queues from being removed.
+queue or software/hardware reorder output references it. Static startup flows
+are immutable and keep their target queues from being removed.
 
 A queue action with two or more queue IDs enables **receive-side scaling
 (RSS)**. The NIC computes a Toeplitz hash from the IPv4/UDP five tuple and uses

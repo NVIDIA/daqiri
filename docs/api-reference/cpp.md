@@ -357,15 +357,22 @@ returns an operation ID; poll `poll_resource_op()` until its matching
 daqiri::MemoryRegionConfig mr{/* populate name, kind, affinity, access,
                                 buf_size, num_bufs, and owned */};
 daqiri::ResourceOpId op = 0;
-auto status = daqiri::add_memory_region_async(mr, &op);
+const auto accepted = daqiri::add_memory_region_async(mr, &op);
+if (accepted != daqiri::Status::SUCCESS) {
+    throw std::runtime_error("resource request was rejected");
+}
 
 daqiri::ResourceOpResult result;
-while (status == daqiri::Status::SUCCESS) {
-    status = daqiri::poll_resource_op(&result);
-    if (status == daqiri::Status::NOT_READY) {
+for (;;) {
+    const auto poll_status = daqiri::poll_resource_op(&result);
+    if (poll_status == daqiri::Status::NOT_READY) {
         continue;
     }
-    if (status == daqiri::Status::SUCCESS && result.op_id_ == op) {
+    if (poll_status != daqiri::Status::SUCCESS) {
+        // Handle a terminal polling error.
+        break;
+    }
+    if (result.op_id_ == op) {
         break;
     }
 }
@@ -380,9 +387,10 @@ Queue removal is drain-based. It stops accepting new work and completes only
 after application-held RX packet storage, reordered output, or TX work has been
 returned/completed. Therefore applications must continue polling
 `poll_resource_op()` and release held bursts. Removing an MR still referenced by
-a queue returns `RESOURCE_IN_USE`. Removing an RX queue referenced by a static or
-dynamic flow or RSS destination also returns `RESOURCE_IN_USE`; delete dynamic
-flows first. Static startup flows remain immutable.
+a queue or by a software/hardware reorder output returns `RESOURCE_IN_USE`.
+Removing an RX queue referenced by a static or dynamic flow or RSS destination
+also returns `RESOURCE_IN_USE`; delete dynamic flows first. Static startup flows
+remain immutable.
 
 Runtime queue batch sizes cannot exceed the largest batch size used to create
 the engine's metadata pools. An engine initialized without queues reserves room

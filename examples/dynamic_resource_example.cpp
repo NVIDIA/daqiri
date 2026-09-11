@@ -16,7 +16,7 @@
 
 namespace {
 
-daqiri::ResourceOpResult wait_for(daqiri::ResourceOpId wanted) {
+daqiri::ResourceOpResult wait_for_resource(daqiri::ResourceOpId wanted) {
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
   while (std::chrono::steady_clock::now() < deadline) {
     daqiri::ResourceOpResult result;
@@ -39,9 +39,57 @@ void require_success(daqiri::Status accepted, daqiri::ResourceOpId op_id) {
   if (accepted != daqiri::Status::SUCCESS) {
     throw std::runtime_error("runtime resource operation was rejected");
   }
-  const auto result = wait_for(op_id);
+  const auto result = wait_for_resource(op_id);
   if (result.status_ != daqiri::Status::SUCCESS) {
     throw std::runtime_error("runtime resource operation failed");
+  }
+}
+
+daqiri::FlowOpResult wait_for_flow(daqiri::FlowOpId wanted) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (std::chrono::steady_clock::now() < deadline) {
+    daqiri::FlowOpResult result;
+    const daqiri::Status status = daqiri::poll_flow_op(&result);
+    if (status == daqiri::Status::NOT_READY) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      continue;
+    }
+    if (status != daqiri::Status::SUCCESS) {
+      throw std::runtime_error("poll_flow_op failed");
+    }
+    if (result.op_id_ == wanted) {
+      return result;
+    }
+  }
+  throw std::runtime_error("dynamic flow operation timed out");
+}
+
+daqiri::FlowId add_runtime_flow(int port, int queue_id) {
+  daqiri::FlowRuleConfig flow;
+  flow.name_ = "runtime_queue_flow";
+  flow.action_.type_ = daqiri::FlowType::QUEUE;
+  flow.action_.id_ = static_cast<uint16_t>(queue_id);
+  flow.match_.type_ = daqiri::FlowMatchType::IPV4_UDP;
+  flow.match_.udp_dst_ = 65500;
+
+  daqiri::FlowOpId op = 0;
+  if (daqiri::add_rx_flow_async(port, flow, &op) != daqiri::Status::SUCCESS) {
+    throw std::runtime_error("runtime RX flow was rejected");
+  }
+  const auto result = wait_for_flow(op);
+  if (result.status_ != daqiri::Status::SUCCESS || result.flow_id_ == 0) {
+    throw std::runtime_error("runtime RX flow creation failed");
+  }
+  return result.flow_id_;
+}
+
+void delete_runtime_flow(daqiri::FlowId flow_id) {
+  daqiri::FlowOpId op = 0;
+  if (daqiri::delete_flow_async(flow_id, &op) != daqiri::Status::SUCCESS) {
+    throw std::runtime_error("runtime RX flow deletion was rejected");
+  }
+  if (wait_for_flow(op).status_ != daqiri::Status::SUCCESS) {
+    throw std::runtime_error("runtime RX flow deletion failed");
   }
 }
 
@@ -92,6 +140,11 @@ int main(int argc, char** argv) {
   try {
     auto rx_queue = config.ifs_[0].rx_.queues_.front();
     auto tx_queue = config.ifs_[0].tx_.queues_.front();
+    if (tx_queue.common_.mrs_.size() != 1) {
+      throw std::runtime_error(
+          "the lifecycle example requires a single-region TX queue; HDS TX initialization is "
+          "outside its scope");
+    }
     rx_queue.common_.id_ = unused_queue_id(config.ifs_[0].rx_.queues_);
     tx_queue.common_.id_ = unused_queue_id(config.ifs_[0].tx_.queues_);
     rx_queue.common_.name_ = "runtime_rx";
@@ -106,6 +159,13 @@ int main(int argc, char** argv) {
     rx_queue.common_.mrs_[0] = rx_mr.name_;
     tx_queue.common_.mrs_[0] = tx_mr.name_;
 
+    // Exercise the first-queue path: initialization opens the port through TX,
+    // then runtime RX creation must also initialize its steering domain/table.
+    config.common_.loopback_ = daqiri::LoopbackType::DISABLED;
+    config.ifs_[0].rx_.queues_.clear();
+    config.ifs_[0].rx_.flows_.clear();
+    config.ifs_[0].rx_.reorder_configs_.clear();
+
     if (daqiri::daqiri_init(config) != daqiri::Status::SUCCESS) {
       throw std::runtime_error("daqiri_init failed");
     }
@@ -116,6 +176,7 @@ int main(int argc, char** argv) {
     finish(daqiri::add_memory_region_async(tx_mr, &op));
     finish(daqiri::add_rx_queue_async(0, rx_queue, &op));
     finish(daqiri::add_tx_queue_async(0, tx_queue, &op));
+    const daqiri::FlowId runtime_flow = add_runtime_flow(0, rx_queue.common_.id_);
 
     daqiri::BurstParams* tx = daqiri::create_tx_burst_params();
     if (tx == nullptr) {
@@ -143,6 +204,7 @@ int main(int argc, char** argv) {
       throw std::runtime_error("could not submit a runtime TX packet");
     }
 
+    delete_runtime_flow(runtime_flow);
     finish(daqiri::delete_rx_queue_async(0, rx_queue.common_.id_, &op));
     finish(daqiri::delete_tx_queue_async(0, tx_queue.common_.id_, &op));
     finish(daqiri::delete_memory_region_async(rx_mr.name_, &op));

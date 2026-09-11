@@ -232,6 +232,7 @@ struct IbvDirectReorderPlan {
  */
 struct IbvRxQueue {
   std::atomic<ResourceState> state{ResourceState::CREATING};
+  std::atomic<uint64_t> active_users{0};
   int if_idx = 0;
   int port_id = 0;
   int queue_id = 0;
@@ -372,6 +373,7 @@ struct IbvRxQueue {
  */
 struct IbvTxQueue {
   std::atomic<ResourceState> state{ResourceState::CREATING};
+  std::atomic<uint64_t> active_users{0};
   int port_id = 0;
   int queue_id = 0;
   QueuePollMode poll_mode = QueuePollMode::INDIRECT;
@@ -439,6 +441,11 @@ struct IbvTxQueue {
   // have exactly one allocated-but-unposted packet at a time.
   std::atomic<uint64_t> direct_owner{0};
   BurstParams* direct_pending = nullptr;
+  // The indirect worker may stop while an oldest dequeued burst is waiting
+  // for SQ credits. Preserve it across worker regrouping; it cannot be rolled
+  // back independently from newer allocations still queued behind it.
+  BurstParams* worker_pending = nullptr;
+  uint64_t worker_pending_wqebbs = 0;
   std::atomic<uint64_t> direct_conflicts{0};
   uint64_t direct_no_space = 0;
   uint64_t full_bf_wqebbs = 0;
@@ -655,6 +662,7 @@ class IbverbsEngine : public Engine {
   void tx_worker(std::vector<IbvTxQueue*> group);
   IbvTxQueue* find_tx_queue(int port, int q);
   IbvTxQueue* find_tx_queue_any(int port, int q);
+  IbvTxQueue* acquire_tx_queue(int port, int q, bool allow_draining = false);
 
   // ---- helpers ----
   static int mr_access_to_ibv(uint32_t access);
@@ -664,6 +672,7 @@ class IbverbsEngine : public Engine {
                      uint32_t* out_lkey);
   IbvRxQueue* find_rx_queue(int port, int q);
   IbvRxQueue* find_rx_queue_any(int port, int q);
+  IbvRxQueue* acquire_rx_queue(int port, int q, bool allow_draining = false);
   // Resolve a port's kernel netdev name via sysfs (ibv device -> .../device/net).
   std::string port_netdev(int port) const;
   // Raise each port's netdev MTU to cover the largest configured frame. Unlike
@@ -701,7 +710,7 @@ class IbverbsEngine : public Engine {
   bool has_dynamic_flow_id_capacity_locked(size_t count) const;
   FlowId allocate_dynamic_flow_id_locked();
   void release_dynamic_flow_id_locked(FlowId flow_id);
-  bool validate_dynamic_rx_flow_locked(int port, const FlowRuleConfig& flow) const;
+  bool validate_dynamic_rx_flow_locked(int port, const FlowRuleConfig& flow);
   Status create_dynamic_flow_locked(int port, const FlowRuleConfig& flow, FlowId flow_id);
   void destroy_dynamic_flow_entry_locked(DynamicFlowEntry& entry);
   void cleanup_dynamic_flows_locked();
@@ -740,6 +749,9 @@ class IbverbsEngine : public Engine {
   std::vector<std::unique_ptr<IbvRxQueue>> rx_queues_;
   std::vector<std::unique_ptr<IbvTxQueue>> tx_queues_;
 
+  // When both lifecycle locks are needed, acquire flow_lock_ before
+  // resource_lock_. Queue-use references are acquired under resource_lock_ so
+  // DRAINING and active_users form one atomic lifetime transition.
   std::recursive_mutex resource_lock_;
   std::mutex resource_operation_lock_;
   ResourceOpId next_resource_op_id_ = 1;
@@ -821,6 +833,10 @@ class IbverbsEngine : public Engine {
     int next_dynamic_priority = 0;
   };
   std::map<int, PortSteering> port_steering_;  // port_id -> steering
+
+  Status initialize_port_steering_locked(int port, const InterfaceConfig& intf,
+                                         struct ibv_context* ctx, bool initialize_flex,
+                                         PortSteering** steering);
 
   bool create_dr_rule_locked(int port, PortSteering& st, uint16_t criteria,
                              struct mlx5dv_flow_match_parameters* mask,
