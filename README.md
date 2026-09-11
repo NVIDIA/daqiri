@@ -67,6 +67,7 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 ## Benchmarking
 
 Consult the [Benchmarking overview](https://nvidia.github.io/daqiri/benchmarks/) to learn more about generating and optimizing benchmarking on the NVIDIA platform, including:
+- [Reproducible Benchmark Harness](https://nvidia.github.io/daqiri/benchmarks/reproducible-harness/) for publication-oriented physical cross-host UDP orchestration, provenance, evidence validation, and result bundles
 - [Socket and RDMA Benchmarking](https://nvidia.github.io/daqiri/benchmarks/socket_benchmarking/) for the full namespace setup and YAML templates
 - [Raw Ethernet Benchmarking](https://nvidia.github.io/daqiri/benchmarks/raw_benchmarking/) for DPDK/raw Ethernet loopback tests
 - [Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/) for measured benchmarks on a single DGX Spark (GB10) in cabled loopback to use as a reference target
@@ -82,6 +83,7 @@ Reference material for the DAQIRI codebase:
 - [C++ API Usage](https://nvidia.github.io/daqiri/api-reference/cpp/) — C++ RX/TX workflows, buffer lifecycle, file writing, utilities, and status codes
 - [Python API Usage](https://nvidia.github.io/daqiri/api-reference/python/) — Python bindings, workflow examples, enums, config classes, and helper functions
 - [Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/) — Per-platform throughput, drop, and utilization numbers for stream/protocol combinations on DGX Spark
+- [Reproducible Benchmark Harness](https://nvidia.github.io/daqiri/benchmarks/reproducible-harness/) — plan, run, validate, resume, and report physical cross-host UDP suites
 - [Contributing](CONTRIBUTING.md) — Contribution guidelines, coding standards, DCO sign-off
 
 ## Tutorials
@@ -90,6 +92,7 @@ Step-by-step walkthroughs to get hands-on:
 
 - [System Configuration](https://nvidia.github.io/daqiri/tutorials/system_configuration/) — NIC drivers, link layers, GPUDirect, hugepages, CPU isolation, GPU clocks
 - [Benchmarking Overview](https://nvidia.github.io/daqiri/benchmarks/) — choose between Linux sockets, RoCE/RDMA, and raw Ethernet benchmarks
+- [Reproducible Benchmark Harness](https://nvidia.github.io/daqiri/benchmarks/reproducible-harness/) — produce one provenance-complete physical UDP result bundle with canonical verdicts
 - [Socket and RDMA Benchmarking](https://nvidia.github.io/daqiri/benchmarks/socket_benchmarking/) — run TCP/UDP sockets and RoCE/RDMA with matching namespace isolation
 - [Raw Ethernet Benchmarking](https://nvidia.github.io/daqiri/benchmarks/raw_benchmarking/) — run `daqiri_bench_raw_gpudirect` with a physical loopback test
 - [Dynamic RX Flow Example](https://nvidia.github.io/daqiri/tutorials/configuration-walkthrough/#choosing-an-example-config) — start with RX queues only, then add and delete flow-steering rules at runtime

@@ -33,6 +33,13 @@ DAQIRI ships with several stream types to handle different types of incoming and
 
 ## Common benchmark workflow
 
+For repeatable physical cross-host UDP runs, use the
+[reproducible benchmark harness](reproducible-harness.md). It resolves portable
+experiment intent against site-local bindings, controls exact remote process
+groups, preserves active and shutdown evidence separately, and requires a
+machine-readable verdict. The adapter is intentionally UDP-only in version 1;
+use the transport-specific manual guides for unsupported paths.
+
 1. Build the examples with the engines you plan to test. The default container build enables every stream type:
 
     ```bash
@@ -49,6 +56,7 @@ DAQIRI ships with several stream types to handle different types of incoming and
 
 ## Page map
 
+- [Reproducible Benchmark Harness](reproducible-harness.md) covers manifest/profile separation, safe orchestration, provenance, physical UDP evidence, canonical verdicts, and resume.
 - [Socket and RDMA Benchmarking](socket_benchmarking.md) covers Linux TCP/UDP and RoCE/RDMA runs with matching client/server namespace setup.
 - [Raw Ethernet Benchmarking](raw_benchmarking.md) covers the DPDK/raw Ethernet examples, hugepage sizing, physical loopback configuration, and raw benchmark troubleshooting.
 - [Understanding the Configuration File](../tutorials/configuration-walkthrough.md) explains the YAML fields once you have selected the stream type and example config.

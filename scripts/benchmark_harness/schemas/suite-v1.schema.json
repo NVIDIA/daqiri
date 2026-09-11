@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nvidia.github.io/daqiri/schemas/benchmark-suite-v1.json",
+  "title": "DAQIRI benchmark suite v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "name",
+    "topology",
+    "evidence_class",
+    "adapter",
+    "workload",
+    "duration_seconds",
+    "repetitions",
+    "drain_seconds",
+    "readiness_timeout_seconds",
+    "cleanup_timeout_seconds",
+    "execution_order",
+    "rate_scope",
+    "allow_cpu_overlap",
+    "matrix",
+    "collectors",
+    "acceptance",
+    "requirements"
+  ],
+  "properties": {
+    "schema_version": {"const": "daqiri.benchmark-suite/v1"},
+    "name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "description": {"type": "string"},
+    "topology": {"const": "physical_cross_host"},
+    "evidence_class": {"const": "physical_cross_host"},
+    "adapter": {"const": "udp_socket"},
+    "workload": {"const": "none"},
+    "duration_seconds": {"type": "integer", "minimum": 1},
+    "repetitions": {"type": "integer", "minimum": 1},
+    "drain_seconds": {"type": "integer", "minimum": 1},
+    "readiness_timeout_seconds": {"type": "integer", "minimum": 1},
+    "cleanup_timeout_seconds": {"type": "integer", "minimum": 1},
+    "execution_order": {"const": "sequential"},
+    "rate_scope": {"enum": ["per_pair", "per_link", "aggregate"]},
+    "allow_cpu_overlap": {"type": "boolean"},
+    "matrix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "message_size_bytes",
+        "pair_count",
+        "requested_rate_gbps",
+        "batch_size",
+        "buffer_size_bytes",
+        "buffers_per_region"
+      ],
+      "properties": {
+        "message_size_bytes": {"$ref": "#/$defs/positiveIntegerList"},
+        "pair_count": {"$ref": "#/$defs/positiveIntegerList"},
+        "requested_rate_gbps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "number", "exclusiveMinimum": 0}
+        },
+        "batch_size": {"$ref": "#/$defs/positiveIntegerList"},
+        "buffer_size_bytes": {"$ref": "#/$defs/positiveIntegerList"},
+        "buffers_per_region": {"$ref": "#/$defs/positiveIntegerList"}
+      }
+    },
+    "collectors": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": ["application", "cpu", "daqiri_queue", "kernel_udp", "mlnx_perf", "nic", "phy", "provenance"]
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_delivery_loss_packets",
+        "max_kernel_udp_errors",
+        "max_nic_rx_discards",
+        "phy_packet_tolerance_percent",
+        "minimum_rate_percent",
+        "minimum_mlnx_samples",
+        "minimum_duration_percent"
+      ],
+      "properties": {
+        "max_delivery_loss_packets": {"type": "integer", "minimum": 0},
+        "max_kernel_udp_errors": {"type": "integer", "minimum": 0},
+        "max_nic_rx_discards": {"type": "integer", "minimum": 0},
+        "phy_packet_tolerance_percent": {"type": "number", "minimum": 0},
+        "minimum_rate_percent": {"type": "number", "minimum": 0, "maximum": 100},
+        "minimum_mlnx_samples": {"type": "integer", "minimum": 1},
+        "minimum_duration_percent": {"type": "number", "minimum": 0, "maximum": 100}
+      }
+    },
+    "requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gpu", "hugepages"],
+      "properties": {
+        "gpu": {"type": "boolean"},
+        "hugepages": {"type": "boolean"}
+      }
+    }
+  },
+  "$defs": {
+    "positiveIntegerList": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "integer", "minimum": 1}
+    }
+  }
+}

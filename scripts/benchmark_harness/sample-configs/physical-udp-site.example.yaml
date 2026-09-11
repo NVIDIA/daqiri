@@ -1,0 +1,84 @@
+schema_version: daqiri.benchmark-site/v1
+name: example-two-host-site
+topology_ownership: external
+hosts:
+  tx-host:
+    transport: ssh
+    destination: tx.example.invalid
+    worktree: /opt/daqiri-src
+    runtime_root: /tmp/daqiri-benchmark-runs
+    python: python3
+    worker_prefix: [sudo, -n]
+    benchmark_binary: build/examples/daqiri_bench_socket
+    expected_binary_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    expected_commit: "0000000000000000000000000000000000000000"
+    require_clean: true
+    container:
+      runtime: none
+      image: ""
+      digest: ""
+      workdir: ""
+      gpus: false
+  rx-host:
+    transport: ssh
+    destination: rx.example.invalid
+    worktree: /opt/daqiri-src
+    runtime_root: /tmp/daqiri-benchmark-runs
+    python: python3
+    worker_prefix: [sudo, -n]
+    benchmark_binary: build/examples/daqiri_bench_socket
+    expected_binary_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    expected_commit: "0000000000000000000000000000000000000000"
+    require_clean: true
+    container:
+      runtime: none
+      image: ""
+      digest: ""
+      workdir: ""
+      gpus: false
+links:
+  link-0:
+    tx:
+      host: tx-host
+      netdev: enp1s0f0np0
+      pci: "0000:01:00.0"
+      ip: 192.0.2.1
+      mac: "02:00:00:00:00:01"
+      mtu: 9000
+      speed_mbps: 100000
+      irq_cpus: [0]
+      napi_cpus: [0]
+      queue_capacity: 8
+    rx:
+      host: rx-host
+      netdev: enp1s0f0np0
+      pci: "0000:01:00.0"
+      ip: 192.0.2.2
+      mac: "02:00:00:00:00:02"
+      mtu: 9000
+      speed_mbps: 100000
+      irq_cpus: [0]
+      napi_cpus: [0]
+      queue_capacity: 8
+pairs:
+  - id: pair-0
+    link: link-0
+    tx:
+      local_port: 5101
+      remote_port: 5001
+      queue_id: 0
+      io_cpu: 1
+      worker_cpu: 2
+      master_cpu: 3
+      numa_node: 0
+      cpu_cluster: cluster-0
+    rx:
+      local_port: 5001
+      remote_port: 5101
+      queue_id: 0
+      io_cpu: 1
+      worker_cpu: 2
+      master_cpu: 3
+      numa_node: 0
+      cpu_cluster: cluster-0
+contamination_checks: []
