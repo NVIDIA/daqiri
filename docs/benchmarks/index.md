@@ -33,6 +33,13 @@ DAQIRI ships with several stream types to handle different types of incoming and
 
 ## Common benchmark workflow
 
+Label the path before comparing benchmark results. A physical cross-host run,
+a two-port cabled loopback, NIC hardware loopback, and namespace or software
+loopback exercise different parts of the system and are not interchangeable.
+For cabled runs, advancing directional PHY counters prove that traffic crossed
+the intended link. For NIC hardware loopback, `vport_loopback_bytes` advances
+while the PHY counters remain flat.
+
 1. Build the examples with the engines you plan to test. The default container build enables every stream type:
 
     ```bash
@@ -46,6 +53,13 @@ DAQIRI ships with several stream types to handle different types of incoming and
 4. Run the DAQIRI benchmark and a known baseline such as `iperf3` or `ib_send_bw` with the same namespace, interface, and message-size assumptions.
 
 5. Monitor line rate with NIC counters or `mlnx_perf`; application-side byte counts are useful, but hardware counters answer whether packets actually reached the physical path.
+
+For a result you intend to compare or publish, also record the DAQIRI commit
+and build, hardware and link setup, exact config, CPU placement, message size,
+queue count, requested rate, and measured duration. Run for at least 10 seconds,
+exclude partial startup and shutdown samples, and check application delivery
+together with the transport-specific error and drop counters described on the
+pages below.
 
 ## Page map
 

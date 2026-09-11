@@ -338,6 +338,10 @@
   letter-spacing: 0.08em;
   border-bottom: 1px solid var(--nv-border);
 }
+.md-typeset table:not([class]) th .unit {
+  text-transform: none;
+  letter-spacing: normal;
+}
 [data-md-color-scheme="default"] .md-typeset table:not([class]) td {
   border-bottom: 1px solid var(--nv-table-row-border);
   color: var(--nv-text-mut);
