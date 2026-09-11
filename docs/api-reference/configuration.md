@@ -172,11 +172,15 @@ engine.
   - type: `string`
   - values: `RC` (Reliable Connected), `UC` (Unreliable Connected)
 
-Each RoCE client connection consumes a TX queue position on the interface
-selected by `socket_config.local_addr`. Queue positions are scoped per interface:
-the first connection on each interface uses position 0, while further connections
-on that interface use the next free position. A connection fails with
-`NO_SPACE_AVAILABLE` when that interface has no free TX queue.
+Each RoCE client connection uses one TX queue from the interface whose `address`
+field matches the connection's local IP address. An application can choose that
+local IP by passing a source address to `rdma_connect_to_server`. If it does not,
+Linux chooses the local IP and network interface it would normally use to reach the
+server.
+Queue positions are independent for each interface: the first connection through
+an interface uses position 0, and later connections through the same interface use
+the lowest unused position. A connection fails with `NO_SPACE_AVAILABLE` when all
+TX queues on that interface are already in use.
 
 ## Receive Configuration (rx)
 
