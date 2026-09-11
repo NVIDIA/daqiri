@@ -523,13 +523,14 @@ without an epoch field, an old late packet is indistinguishable from the same sl
 - **`pacing_mbps`**: Packet-pacing rate cap for this queue, in megabits per second of L2 frame
   bytes (the data the application transmits, excluding preamble/IFG/FCS). The NIC meters the queue
   out so its long-run average TX rate stays at or below this value. `0` (the default) disables
-  pacing and sends at line rate. Both raw engines support this setting, with different capability
-  requirements: `dpdk` uses hardware send scheduling and falls back to line rate with a warning
-  when that offload is unavailable; `ibverbs` assigns the QP to an mlx5 hardware packet-pacing
-  rate-table entry and fails initialization if RAW_PACKET pacing is unavailable or the requested
-  rate is outside a range advertised by the device. Older drivers that omit the range defer bounds
-  checking to the provider when the rate is applied. The ibverbs engine leaves the optional burst
-  bound and typical-packet-size fields at their device defaults.
+  pacing and sends at line rate. DAQIRI supports packet pacing on ConnectX-7 or later. The two raw
+  engines use different mechanisms: `dpdk` uses the native wait-on-time `SEND_ON_TIMESTAMP`
+  offload and falls back to line rate with a warning when that offload is unavailable; `ibverbs`
+  assigns the QP to an mlx5 hardware packet-pacing rate-table entry and fails initialization if
+  RAW_PACKET pacing is unavailable or the requested rate is outside a range advertised by the
+  device. Older drivers that omit the range defer bounds checking to the provider when the rate is
+  applied. The ibverbs engine leaves the optional burst bound and typical-packet-size fields at
+  their device defaults.
   - type: `integer`
   - default: `0`
 
@@ -576,7 +577,7 @@ pre-encap (TX) frame.
 64-bit PTP epoch-nanosecond value in the same clock domain as a PTP-synchronized
 `CLOCK_REALTIME`. **WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or
 system clock configuration. Scheduled transmission is invalid if the clocks are not
-PTP-synchronized. Requires ConnectX-7 or later.
+PTP-synchronized. DAQIRI requires ConnectX-7 or later for send-on-timestamp.
 
 - type: `boolean`
 - default: `false`

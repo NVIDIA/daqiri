@@ -409,10 +409,10 @@ flow programming test.
 To meter the transmit side at a fixed rate in hardware, set a per-queue `pacing_mbps` cap
 on the TX queue. [`daqiri_bench_raw_tx_rx_pacing.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_pacing.yaml)
 is the loopback config above with `pacing_mbps: 10000` (10 Gbps) on the TX queue. Pacing is
-supported by both raw engines. The example uses the default ibverbs engine; add
-`engine: "dpdk"` beside `stream_type: "raw"` to exercise the DPDK path. The NIC meters the
-queue out so its average TX rate stays at or below the configured value. The ibverbs path uses
-the mlx5 packet-pacing rate table rather than per-packet WAIT WQEs; firmware defaults determine
+supported by both raw engines on ConnectX-7 or later. The example uses the default ibverbs
+engine; add `engine: "dpdk"` beside `stream_type: "raw"` to exercise the DPDK path. The NIC
+meters the queue out so its average TX rate stays at or below the configured value. The ibverbs
+path uses the mlx5 packet-pacing rate table rather than per-packet WAIT WQEs; firmware defaults determine
 the allowed burst size unless configured outside DAQIRI.
 
 ```bash
@@ -424,11 +424,11 @@ Validate the cap from the `RX complete:` line: `Gbps = bytes * 8 / seconds / 1e9
 link speed. Change `pacing_mbps` (or set it to `0` to disable pacing and send at line rate)
 and re-run to see the cap move.
 
-The DPDK path requires hardware send scheduling; if unavailable, it logs a warning and runs at
-line rate. The ibverbs path requires packet-pacing support for RAW_PACKET QPs and, when the driver
-reports a supported range, a rate within that range. Older drivers that omit the range defer the
-check to the provider when applying the rate; unsupported requests still fail initialization
-instead of silently ignoring the cap.
+The DPDK path requires ConnectX-7 or later native wait-on-time `SEND_ON_TIMESTAMP` support; if unavailable,
+it logs a warning and runs at line rate. The ibverbs path requires ConnectX-7 or later plus
+packet-pacing support for RAW_PACKET QPs and, when the driver reports a supported range, a rate
+within that range. Older drivers that omit the range defer the check to the provider when applying
+the rate; unsupported requests still fail initialization instead of silently ignoring the cap.
 
 ## Tune RDMA SEND completion signaling
 

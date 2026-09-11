@@ -2067,8 +2067,8 @@ bool DpdkEngine::setup_tx_timestamp_dynfield() {
 }
 
 uint64_t DpdkEngine::now_tx_ns(uint16_t port) {
-  // The mlx5 send scheduler (tx_pp / SEND_ON_TIMESTAMP) releases packets when its
-  // own PTP hardware clock reaches the per-packet timestamp. To pace accurately we
+  // The mlx5 native wait-on-time scheduler releases packets when its PTP hardware
+  // clock reaches the per-packet SEND_ON_TIMESTAMP value. To pace accurately we
   // MUST seed pace_next_ns from that same clock: any offset between the seed clock
   // and the NIC clock becomes a fixed per-burst scheduling latency (e.g. seeding
   // from a host clock that runs ~0.2 s ahead parks every burst ~0.2 s in the NIC's
@@ -2306,27 +2306,6 @@ void DpdkEngine::initialize() {
     strncpy(_argv[arg++], "--iova-mode=va", max_arg_size - 1);
   }
 
-  // Accurate send scheduling (accurate_send) and packet pacing (pacing_mbps)
-  // ride the mlx5 send-on-timestamp scheduler, which only runs when the tx_pp
-  // devarg (pacing granularity in ns) is set. Add it once when any TX path needs
-  // scheduling so the offload enabled later actually engages.
-  bool needs_send_sched = false;
-  for (const auto& intf : cfg_.ifs_) {
-    if (intf.tx_.accurate_send_) {
-      needs_send_sched = true;
-      break;
-    }
-    for (const auto& q : intf.tx_.queues_) {
-      if (q.pacing_mbps_ > 0) {
-        needs_send_sched = true;
-        break;
-      }
-    }
-    if (needs_send_sched) {
-      break;
-    }
-  }
-
   // The mlx5 native eCPRI flow item (RTE_FLOW_ITEM_TYPE_ECPRI) is honored only
   // under software/firmware steering (dv_flow_en=1); HW steering (dv_flow_en=2)
   // silently fails to match it on ConnectX-class NICs. Switch any interface with
@@ -2358,9 +2337,9 @@ void DpdkEngine::initialize() {
             name);
       }
       std::string devargs = name + ",txq_inline_max=0,dv_flow_en=" + std::to_string(dv_flow_en);
-      if (needs_send_sched) {
-        devargs += ",tx_pp=500";  // 500 ns scheduling granularity
-      }
+      // Precise packet scheduling requires ConnectX-7 or later, where mlx5 uses
+      // native wait-on-time when tx_pp is omitted. Setting tx_pp would select
+      // the legacy Clock/Rearm scheduler instead.
       strncpy(_argv[arg++], devargs.c_str(), max_arg_size - 1);
     }
   }

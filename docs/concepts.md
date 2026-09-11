@@ -66,7 +66,8 @@ Multi-Packet (striding) Receive Queue engine on Mellanox/mlx5 NICs packs many
 packets into one pre-posted buffer to avoid per-packet allocation. Set
 `engine: "dpdk"` to use the [DPDK](https://www.dpdk.org/) implementation instead.
 
-Requires an NVIDIA SmartNIC (ConnectX-6 Dx or later).
+Raw Ethernet requires an NVIDIA ConnectX-6 Dx or later NIC.
+Packet pacing and timed transmission require ConnectX-7 or later.
 
 ### Socket
 
@@ -370,8 +371,10 @@ representation directly; devices without that capability use the default mlx5
 device-clock CQ format, which DAQIRI converts internally before returning the
 timestamp. Applications never handle raw device-clock ticks.
 
-For timed transmission, applications pass the desired PTP epoch-nanosecond value
-directly to `set_packet_tx_time()`.
+Raw Ethernet transport is supported on ConnectX-6 Dx and later. Packet pacing
+and precise timed transmission require ConnectX-7 or later. For timed
+transmission, applications pass the desired PTP epoch-nanosecond value directly
+to `set_packet_tx_time()`.
 
 **WARNING: PTP synchronization is required.** The host and NIC clocks must be
 synchronized, for example with `ptp4l` and `phc2sys`. DAQIRI does not validate

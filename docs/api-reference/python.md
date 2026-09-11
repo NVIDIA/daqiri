@@ -406,7 +406,8 @@ sender encounters at runtime.
 
 ### Timed Transmission
 
-For precise packet scheduling (requires ConnectX-7+):
+Raw Ethernet transport supports ConnectX-6 Dx and later. Packet pacing and
+precise timed transmission require ConnectX-7 or later:
 
 ```python
 daqiri.set_packet_tx_time(burst, idx, ptp_timestamp_ns)
@@ -597,7 +598,7 @@ The workflow sections above show the common call order and ownership rules.
 | `get_segment_packet_bytes(burst, seg, idx, nbytes=None, src_offset=0)` | Return `(Status, bytes)` from a segment. |
 | `set_packet_lengths(burst, idx, lens)` | Set segment lengths for one packet. |
 | `set_all_packet_lengths(burst, lens)` | Set segment lengths for every packet. |
-| `set_packet_tx_time(burst, idx, time)` | Set one packet's scheduled TX time as PTP epoch nanoseconds. |
+| `set_packet_tx_time(burst, idx, time)` | Set one packet's scheduled TX time as PTP epoch nanoseconds (ConnectX-7+). |
 
 ### RX and Reorder
 

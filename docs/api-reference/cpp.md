@@ -479,7 +479,8 @@ returns `NOT_READY`; zero- or multi-packet direct requests return `INVALID_PARAM
 
 ### Timed Transmission
 
-For precise packet scheduling (requires ConnectX-7+):
+Raw Ethernet transport supports ConnectX-6 Dx and later. Packet pacing and
+precise timed transmission require ConnectX-7 or later:
 
 ```cpp
 daqiri::set_packet_tx_time(burst, idx, ptp_timestamp_ns);
@@ -767,7 +768,7 @@ workflow sections above show the common call order and ownership rules.
 | `send_tx_burst(burst)` | Enqueue a populated TX burst. |
 | `set_packet_lengths(burst, idx, lens)` | Set segment lengths for one packet. |
 | `set_all_packet_lengths(burst, lens)` | Set segment lengths for every packet in a burst. |
-| `set_packet_tx_time(burst, idx, time)` | Set scheduled transmit time for one packet. |
+| `set_packet_tx_time(burst, idx, time)` | Set scheduled transmit time for one packet (ConnectX-7+). |
 | `set_eth_header(burst, idx, dst_addr)` | Fill the Ethernet destination header. |
 | `set_ipv4_header(burst, idx, ip_len, proto, src_host, dst_host)` | Fill an IPv4 header. |
 | `set_udp_header(burst, idx, udp_len, src_port, dst_port)` | Fill a UDP header. |
