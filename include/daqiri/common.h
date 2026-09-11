@@ -252,6 +252,53 @@ Status delete_flow_async(FlowId flow_id, FlowOpId *op_id);
 Status poll_flow_op(FlowOpResult *result);
 
 /**
+ * @brief Add a DAQIRI-owned memory region while the engine is running.
+ *
+ * @param config Memory layout and ownership configuration
+ * @param op_id Output operation ID used to track completion
+ * @return Status indicating whether the operation was accepted
+ */
+Status add_memory_region_async(const MemoryRegionConfig &config, ResourceOpId *op_id);
+
+/**
+ * @brief Register application-owned storage as a runtime memory region.
+ *
+ * DAQIRI unregisters but never frees the supplied storage. The caller must keep
+ * it alive until deletion completes through poll_resource_op().
+ *
+ * @param config Memory layout configuration; owned_ must be false
+ * @param binding Storage address and capacity
+ * @param op_id Output operation ID used to track completion
+ * @return Status indicating whether the operation was accepted
+ */
+Status add_memory_region_async(const MemoryRegionConfig &config,
+                               const ExternalMemoryRegion &binding,
+                               ResourceOpId *op_id);
+
+/** @brief Delete an unreferenced runtime memory region. */
+Status delete_memory_region_async(const std::string &name, ResourceOpId *op_id);
+
+/** @brief Add a runtime RX queue on a raw ibverbs port. */
+Status add_rx_queue_async(int port, const RxQueueConfig &config, ResourceOpId *op_id);
+
+/** @brief Begin drain-based removal of an unreferenced runtime RX queue. */
+Status delete_rx_queue_async(int port, int queue_id, ResourceOpId *op_id);
+
+/** @brief Add a runtime TX queue on a raw ibverbs port. */
+Status add_tx_queue_async(int port, const TxQueueConfig &config, ResourceOpId *op_id);
+
+/** @brief Begin drain-based removal of a runtime TX queue. */
+Status delete_tx_queue_async(int port, int queue_id, ResourceOpId *op_id);
+
+/**
+ * @brief Poll one runtime resource operation completion.
+ *
+ * @param result Output completion details
+ * @return SUCCESS when a completion was returned, NOT_READY when none are ready
+ */
+Status poll_resource_op(ResourceOpResult *result);
+
+/**
  * @brief Get the hardware RX timestamp of a packet in nanoseconds
  *
  * Retrieves the 64-bit receive timestamp for a packet when DAQIRI is configured

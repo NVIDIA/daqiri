@@ -23,19 +23,19 @@ equivalent `NetworkConfig` struct built in code). The configuration
 defines the active stream type, optional engine, endpoint URIs, NIC interfaces, RX and TX
 queues, memory regions, flow steering rules, flow isolation,
 hardware flow transform actions, header-data split, and optional reorder plans. After initialization,
-the language API operates on those configured ports, queues, buffers,
-and flows.
+the language API operates on that topology and, where supported, can extend it explicitly at runtime.
 
-The language APIs do **not** discover queues, memory, or flow steering
-rules on their own. They are runtime handles over the topology declared
-in the configuration (YAML file or `NetworkConfig` struct). The
-configuration is the source of truth for queue IDs, memory placement,
-stream-type / engine / endpoint selection, flow routing, and static TX
-tunnel/VLAN transforms. Dynamic RX flow APIs can add and delete runtime
-queue-steering rules and, on raw DPDK or raw ibverbs, runtime RX decap/pop
-rules using the same ordered action model. TCP/UDP socket options are also
-runtime state: after resolving a connection ID, applications can call
-`socket_setsockopt()` with native Linux `level` and option constants.
+The APIs do **not** discover queues, memory, or flow steering rules on their
+own. The startup configuration remains the source of truth for stream-type,
+engine, endpoint selection, and immutable static flows. Applications may then
+add and delete RX flow rules on raw DPDK or raw ibverbs. The raw ibverbs engine
+also accepts explicit runtime memory-region and RX/TX queue creation and
+drain-based deletion through the C++ and Python APIs. A newly added RX queue
+does not receive traffic until a dynamic flow targets it, and that flow must be
+deleted before its queue can be removed. Static startup flows and TX transform
+flows remain immutable. TCP/UDP socket options are also runtime state: after
+resolving a connection ID, applications can call `socket_setsockopt()` with
+native Linux `level` and option constants.
 
 The configuration schema lives in the
 [Configuration YAML Reference](configuration.md). For an annotated
@@ -50,6 +50,8 @@ The typical DAQIRI application lifecycle has six steps:
 2. **Initialize DAQIRI** from that configuration (`daqiri_init`).
 3. **Receive or transmit packet bursts** through configured queues
    (`get_rx_burst` / `get_tx_packet_burst` + `send_tx_burst`).
+   Raw-ibverbs applications may also add or drain queues and memory regions,
+   and redirect dynamic RX flows, while the engine is running.
 4. **Access packet data** through `BurstParams` helper functions
    (`get_packet_ptr`, `get_segment_packet_ptr`, ...).
 5. **Explicitly release packet and burst buffers** when the

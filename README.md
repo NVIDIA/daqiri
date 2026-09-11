@@ -52,6 +52,10 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
   flex-item flows, not both. Raw DPDK and raw ibverbs flows can also use hardware-only
   VLAN push/pop and VXLAN, GRE, or NVGRE encap/decap actions; socket/RDMA streams reject
   those tunnel actions.
+- **Runtime ibverbs resources** — Add and remove raw-ibverbs RX/TX queues and owned or
+  application-backed memory regions after initialization. Queue removal drains outstanding
+  zero-copy ownership, and dynamic RX flows can be redirected to newly created queues before
+  old queues and regions are retired.
 - **RDMA** — RDMA verbs (READ, WRITE, SEND) over RoCE on Ethernet NICs or InfiniBand.
 - **Linux socket control** — TCP/UDP socket streams expose connection IDs and
   `socket_setsockopt()` for native Linux `setsockopt` tuning without YAML option
@@ -93,6 +97,7 @@ Step-by-step walkthroughs to get hands-on:
 - [Socket and RDMA Benchmarking](https://nvidia.github.io/daqiri/benchmarks/socket_benchmarking/) — run TCP/UDP sockets and RoCE/RDMA with matching namespace isolation
 - [Raw Ethernet Benchmarking](https://nvidia.github.io/daqiri/benchmarks/raw_benchmarking/) — run `daqiri_bench_raw_gpudirect` with a physical loopback test
 - [Dynamic RX Flow Example](https://nvidia.github.io/daqiri/tutorials/configuration-walkthrough/#choosing-an-example-config) — start with RX queues only, then add and delete flow-steering rules at runtime
+- `daqiri_example_dynamic_resource` — exercise raw-ibverbs first-RX-queue steering plus runtime memory-region and RX/TX queue creation and drain-based deletion
 - [Understanding the Configuration File](https://nvidia.github.io/daqiri/tutorials/configuration-walkthrough/) — annotated YAML walkthrough
 - [DAQIRI + Holoscan Integration](https://nvidia.github.io/daqiri/tutorials/daqiri-holoscan-integration/) — use DAQIRI RX bursts from a Holoscan source operator
 - [DAQIRI + TensorRT Inference](https://nvidia.github.io/daqiri/tutorials/daqiri-resnet-inference/) — packet ingest → ResNet-50 feature extraction with TensorRT

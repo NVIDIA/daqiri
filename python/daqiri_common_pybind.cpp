@@ -313,6 +313,10 @@ const char *status_to_string(Status status) {
     return "CONNECT_FAILURE";
   case Status::INTERNAL_ERROR:
     return "INTERNAL_ERROR";
+  case Status::RESOURCE_IN_USE:
+    return "RESOURCE_IN_USE";
+  case Status::ALREADY_EXISTS:
+    return "ALREADY_EXISTS";
   }
   return "UNKNOWN";
 }
@@ -495,7 +499,9 @@ void bind_enums(py::module_ &m) {
       .value("NOT_SUPPORTED", Status::NOT_SUPPORTED)
       .value("GENERIC_FAILURE", Status::GENERIC_FAILURE)
       .value("CONNECT_FAILURE", Status::CONNECT_FAILURE)
-      .value("INTERNAL_ERROR", Status::INTERNAL_ERROR);
+      .value("INTERNAL_ERROR", Status::INTERNAL_ERROR)
+      .value("RESOURCE_IN_USE", Status::RESOURCE_IN_USE)
+      .value("ALREADY_EXISTS", Status::ALREADY_EXISTS);
 
   py::enum_<RDMAOpCode>(m, "RDMAOpCode")
       .value("CONNECT", RDMAOpCode::CONNECT)
@@ -596,6 +602,21 @@ void bind_enums(py::module_ &m) {
       .value("ADD_RX", FlowOpType::ADD_RX)
       .value("ADD_RX_BATCH", FlowOpType::ADD_RX_BATCH)
       .value("DELETE", FlowOpType::DELETE);
+
+  py::enum_<ResourceOpType>(m, "ResourceOpType")
+      .value("ADD_MEMORY_REGION", ResourceOpType::ADD_MEMORY_REGION)
+      .value("DELETE_MEMORY_REGION", ResourceOpType::DELETE_MEMORY_REGION)
+      .value("ADD_RX_QUEUE", ResourceOpType::ADD_RX_QUEUE)
+      .value("DELETE_RX_QUEUE", ResourceOpType::DELETE_RX_QUEUE)
+      .value("ADD_TX_QUEUE", ResourceOpType::ADD_TX_QUEUE)
+      .value("DELETE_TX_QUEUE", ResourceOpType::DELETE_TX_QUEUE);
+
+  py::enum_<ResourceState>(m, "ResourceState")
+      .value("CREATING", ResourceState::CREATING)
+      .value("ACTIVE", ResourceState::ACTIVE)
+      .value("DRAINING", ResourceState::DRAINING)
+      .value("REMOVED", ResourceState::REMOVED)
+      .value("FAILED", ResourceState::FAILED);
 
   py::enum_<ReorderMethod>(m, "ReorderMethod")
       .value("INVALID", ReorderMethod::INVALID)
@@ -859,6 +880,16 @@ void bind_config_types(py::module_ &m) {
       .def_readwrite("status", &FlowOpResult::status_)
       .def_readwrite("flow_id", &FlowOpResult::flow_id_)
       .def_readwrite("flow_ids", &FlowOpResult::flow_ids_);
+
+  py::class_<ResourceOpResult>(m, "ResourceOpResult")
+      .def(py::init<>())
+      .def_readwrite("op_id", &ResourceOpResult::op_id_)
+      .def_readwrite("type", &ResourceOpResult::type_)
+      .def_readwrite("state", &ResourceOpResult::state_)
+      .def_readwrite("status", &ResourceOpResult::status_)
+      .def_readwrite("memory_region", &ResourceOpResult::memory_region_)
+      .def_readwrite("port_id", &ResourceOpResult::port_id_)
+      .def_readwrite("queue_id", &ResourceOpResult::queue_id_);
 
   py::class_<CommonConfig>(m, "CommonConfig")
       .def(py::init<>())
@@ -1334,6 +1365,62 @@ PYBIND11_MODULE(_daqiri, m) {
       []() {
         FlowOpResult result;
         const Status status = poll_flow_op(&result);
+        return py::make_tuple(status, result);
+      });
+  m.def(
+      "add_memory_region_async",
+      [](const MemoryRegionConfig &config) {
+        ResourceOpId op_id = 0;
+        return py::make_tuple(add_memory_region_async(config, &op_id), op_id);
+      },
+      "config"_a);
+  m.def(
+      "add_memory_region_async",
+      [](const MemoryRegionConfig &config, const ExternalMemoryRegion &binding) {
+        ResourceOpId op_id = 0;
+        return py::make_tuple(add_memory_region_async(config, binding, &op_id), op_id);
+      },
+      "config"_a, "binding"_a);
+  m.def(
+      "delete_memory_region_async",
+      [](const std::string &name) {
+        ResourceOpId op_id = 0;
+        return py::make_tuple(delete_memory_region_async(name, &op_id), op_id);
+      },
+      "name"_a);
+  m.def(
+      "add_rx_queue_async",
+      [](int port, const RxQueueConfig &config) {
+        ResourceOpId op_id = 0;
+        return py::make_tuple(add_rx_queue_async(port, config, &op_id), op_id);
+      },
+      "port"_a, "config"_a);
+  m.def(
+      "delete_rx_queue_async",
+      [](int port, int queue_id) {
+        ResourceOpId op_id = 0;
+        return py::make_tuple(delete_rx_queue_async(port, queue_id, &op_id), op_id);
+      },
+      "port"_a, "queue_id"_a);
+  m.def(
+      "add_tx_queue_async",
+      [](int port, const TxQueueConfig &config) {
+        ResourceOpId op_id = 0;
+        return py::make_tuple(add_tx_queue_async(port, config, &op_id), op_id);
+      },
+      "port"_a, "config"_a);
+  m.def(
+      "delete_tx_queue_async",
+      [](int port, int queue_id) {
+        ResourceOpId op_id = 0;
+        return py::make_tuple(delete_tx_queue_async(port, queue_id, &op_id), op_id);
+      },
+      "port"_a, "queue_id"_a);
+  m.def(
+      "poll_resource_op",
+      []() {
+        ResourceOpResult result;
+        const Status status = poll_resource_op(&result);
         return py::make_tuple(status, result);
       });
   m.def("get_num_rx_queues", &get_num_rx_queues, "port_id"_a);
