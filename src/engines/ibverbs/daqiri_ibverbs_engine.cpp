@@ -3887,23 +3887,28 @@ void IbverbsEngine::initialize() {
     return;
   }
 
-  // Determine the largest batch (RX + TX) and build the burst metadata pools.
+  // Determine the largest batch (RX + TX) and build the burst metadata pools. Reserve the
+  // direct-poll ceiling even when smaller startup queues exist so a runtime queue is not
+  // accidentally constrained by an unrelated bootstrap queue's batch size.
+  bool has_startup_queue = false;
   for (const auto& intf : cfg_.ifs_) {
     for (const auto& q : intf.rx_.queues_) {
+      has_startup_queue = true;
       const uint32_t batch = q.poll_mode_ == QueuePollMode::DIRECT
                                  ? kDirectPollMaxBatch
                                  : static_cast<uint32_t>(std::max(1, q.common_.batch_size_));
       max_batch_ = std::max(max_batch_, batch);
     }
     for (const auto& q : intf.tx_.queues_) {
+      has_startup_queue = true;
       max_batch_ = std::max<uint32_t>(max_batch_, std::max(1, q.common_.batch_size_));
     }
   }
-  if (max_batch_ == 0) {
+  if (!has_startup_queue) {
     DAQIRI_LOG_WARN(
         "No RX/TX queues configured for ibverbs backend; reserving metadata for runtime queues");
-    max_batch_ = kDirectPollMaxBatch;
   }
+  max_batch_ = std::max(max_batch_, kDirectPollMaxBatch);
   g_layout = compute_layout(max_batch_);
   rx_meta_pool_size_ = cfg_.rx_meta_buffers_ ? cfg_.rx_meta_buffers_ : 4096;
   const int pool_numa = daqiri::detail::numa_node_for_cpu(cfg_.common_.master_core_);

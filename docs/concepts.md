@@ -415,6 +415,13 @@ is expressed in the YAML: queue 0's first memory region is a `huge` CPU
 pool (for headers, segment 0); its second region is a `device` GPU pool
 (for payload, segment 1).
 
+With the raw ibverbs engine, memory regions can also be created after
+initialization from a `MemoryRegionConfig`, either as DAQIRI-owned storage or
+as registered application-owned storage. A region can be removed only after
+all queues and reorder outputs that reference it have been removed. This makes
+live migration explicit: create the replacement region and queue, redirect
+dynamic flows, drain the old queue, and then remove the old region.
+
 ## Zero-Copy Ownership
 
 DAQIRI is designed around zero-copy packet delivery. When a receive API

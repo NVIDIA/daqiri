@@ -52,6 +52,10 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
   flex-item flows, not both. Raw DPDK and raw ibverbs flows can also use hardware-only
   VLAN push/pop and VXLAN, GRE, or NVGRE encap/decap actions; socket/RDMA streams reject
   those tunnel actions.
+- **Runtime ibverbs resources** — Add and remove raw-ibverbs RX/TX queues and owned or
+  application-backed memory regions after initialization. Queue removal drains outstanding
+  zero-copy ownership, and dynamic RX flows can be redirected to newly created queues before
+  old queues and regions are retired.
 - **RDMA** — RDMA verbs (READ, WRITE, SEND) over RoCE on Ethernet NICs or InfiniBand.
 - **Linux socket control** — TCP/UDP socket streams expose connection IDs and
   `socket_setsockopt()` for native Linux `setsockopt` tuning without YAML option

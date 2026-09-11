@@ -90,7 +90,7 @@ clang-format -style=file -i -fallback-style=none <files>
 
 ## Architecture
 
-**Single C++/CUDA shared library** (`libdaqiri.so`) exposing a C++ API through `#include <daqiri/daqiri.h>`. The public surface is intentionally flat free-function helpers (`get_rx_burst`, `get_packet_ptr`, `set_udp_header`, `socket_setsockopt`, …) that all operate on opaque DAQIRI-owned buffers or connection IDs. Applications never touch engine types directly.
+**Single C++/CUDA shared library** (`libdaqiri.so`) exposing a C++ API through `#include <daqiri/daqiri.h>`. The public surface is intentionally flat free-function helpers (`get_rx_burst`, `get_packet_ptr`, `set_udp_header`, `socket_setsockopt`, runtime flow/resource operations, …) that all operate on opaque DAQIRI-owned buffers, operation IDs, or connection IDs. Applications never touch engine types directly.
 
 `include/daqiri/daqiri.h` also includes the generated `daqiri/version.h`, exposing `DAQIRI_VERSION`, CalVer component macros, `DAQIRI_ABI_VERSION`, and inline helpers such as `daqiri::version_string()` and `daqiri::abi_version()`.
 

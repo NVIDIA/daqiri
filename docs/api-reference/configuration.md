@@ -218,6 +218,13 @@ worker or handoff ring, so an application stall also stops packet reception and 
 A direct queue cannot be targeted by an RX reorder configuration. Unsupported engines, reorder,
 or forbidden worker fields produce a warning followed by configuration failure.
 
+For the raw ibverbs engine, the same `RxQueueConfig` represented by this YAML block can be passed
+to `add_rx_queue_async()` after initialization. Its memory regions must already exist, and its
+batch capacity cannot exceed the metadata capacity fixed at initialization: at least 256 packets,
+or the largest startup queue batch when that is greater. Runtime queues are not written back to
+the YAML file. Install a dynamic RX flow after queue creation to route traffic to it; delete that
+flow before requesting queue removal.
+
 ### Flex Items
 
 `rx.flex_items:` Flexible parser items for custom flow matching beyond standard UDP fields.
@@ -539,6 +546,11 @@ handle, but neither it nor the packet data crosses another CPU core: the caller 
 to the packet buffer and `send_tx_burst()` submits it directly. Completed packet buffers are
 reclaimed on later availability, allocation, or send calls. Unsupported engines and forbidden
 worker fields produce a warning followed by configuration failure.
+
+For the raw ibverbs engine, an equivalent `TxQueueConfig` can be passed to
+`add_tx_queue_async()` after initialization. The queue must reference existing memory regions and
+fit the metadata capacity reserved at initialization. Runtime TX queues require no flow rule;
+delete completion waits for submitted work and application-held allocations to be returned.
 
 ### Transmit Flows
 

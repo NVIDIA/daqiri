@@ -392,11 +392,11 @@ Removing an RX queue referenced by a static or dynamic flow or RSS destination
 also returns `RESOURCE_IN_USE`; delete dynamic flows first. Static startup flows
 remain immutable.
 
-Runtime queue batch sizes cannot exceed the largest batch size used to create
-the engine's metadata pools. An engine initialized without queues reserves room
-for batches of 256. To migrate to a differently sized MR without reinitializing
-DAQIRI, add the new MR and queue, redirect dynamic flows, then remove the old
-queue and MR.
+Runtime queue batch sizes cannot exceed the capacity used to create the engine's
+metadata pools. The raw ibverbs engine always reserves room for batches of at
+least 256 packets; a larger startup queue raises that capacity. To migrate to a
+differently sized MR without reinitializing DAQIRI, add the new MR and queue,
+redirect dynamic flows, then remove the old queue and MR.
 
 Queue topology changes briefly quiesce and rebuild the ibverbs worker groups so
 queues sharing a `cpu_core` continue to use one round-robin poller. NIC queues
@@ -905,3 +905,5 @@ All functions that can fail return `daqiri::Status`:
 | `GENERIC_FAILURE` | Unspecified failure |
 | `CONNECT_FAILURE` | RDMA connection failed |
 | `INTERNAL_ERROR` | Internal error in the engine |
+| `RESOURCE_IN_USE` | A queue or memory region still has a live dependency or outstanding ownership |
+| `ALREADY_EXISTS` | A runtime resource already uses the requested name or queue ID |
