@@ -69,7 +69,7 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 Consult the [Benchmarking overview](https://nvidia.github.io/daqiri/benchmarks/) to learn more about generating and optimizing benchmarking on the NVIDIA platform, including:
 - [Socket and RDMA Benchmarking](https://nvidia.github.io/daqiri/benchmarks/socket_benchmarking/) for the full namespace setup and YAML templates
 - [Raw Ethernet Benchmarking](https://nvidia.github.io/daqiri/benchmarks/raw_benchmarking/) for DPDK/raw Ethernet loopback tests
-- [Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/) for measured benchmarks on a single DGX Spark (GB10) in cabled loopback to use as a reference target
+- [Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/) for measured cross-host and single-host cabled-loopback benchmarks on DGX Spark (GB10)
 
 ## Documentation
 

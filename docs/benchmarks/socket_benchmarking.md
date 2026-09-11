@@ -142,6 +142,22 @@ wait
 
 Then check the counters again. Treat the result as on-wire only when the client `tx_packets_phy` and server `rx_packets_phy` counters increase by matching packet counts. If only vport counters move, pick a different port pair.
 
+For a measured run, use the sender's active interval as the measurement window
+and omit partial `mlnx_perf` samples while the processes start and stop. Keep
+the requested UDP pacing rate, delivered application payload rate, and physical
+wire rate as separate values. Matching PHY counts prove the path, but the
+application and transport counters determine whether the data was delivered:
+
+- For UDP, require matching application TX/RX packet and byte totals and no
+  increase in `Udp: InErrors`, `RcvbufErrors`, IP reassembly failures, or NIC
+  receive discards.
+- For TCP, report delivered and achieved rates and retain retransmission and
+  socket-error counters. Flow control may reduce the achieved rate without
+  producing application loss.
+- For RoCE/RDMA, require non-zero send and receive completions with no RDMA-CM,
+  completion-queue, retry, or queue-resource errors. Record the TX/RX depths and
+  backing buffer counts with the result.
+
 ## Run the Linux socket benchmark
 
 The shipped configs run both endpoints on `127.0.0.1` and are useful for a smoke test:
@@ -166,19 +182,11 @@ the maximum number of datagrams coalesced into one DAQIRI burst (up to 32).
 Set `socket_config.remote_addr` on a UDP server to identify its expected client;
 this lets the kernel reject other senders and permits receive batches larger than
 one datagram.
-`run_spark_bench.sh` normally preserves its historical server-side placement by
-assigning the server I/O and benchmark worker to the same core. To measure a
-fully separated pair on DGX Spark, select pair 0 and the spare core 15:
-
-```bash
-PAIRS_OVERRIDE=1 SOCKET_RX_IO_CORES=15 \
-  ./examples/run_spark_bench.sh socket-udp smoke
-```
-
-That places the master on 8, server worker on 16, client worker on 17, and UDP
-I/O on 15. The fixed four-pair map consumes the other big cores, so a four-pair
-run cannot give every I/O thread a dedicated core without changing the worker
-map or allowing deliberate overlap.
+For a cross-host scaling measurement, place each receive-I/O/worker pair within
+one performance cluster and record that placement with the result. The two-link
+UDP sweep uses one flow per link at two pairs, two flows per link at four pairs,
+and four flows per link at eight pairs. The eight-pair point consumes 16 pinned
+CPUs per host: eight receive-I/O threads and eight application workers.
 
 Applications can tune the underlying TCP/UDP socket after resolving a connection ID
 with `socket_connect_to_server()` or `socket_get_server_conn_id()`. Use
@@ -361,18 +369,41 @@ Use `ib_send_bw` or `ib_write_bw` in the same namespaces as a comparison baselin
 
 ## Example Spark socket results
 
-The following DAQIRI socket matrix was run on the verified physical path `enp1s0f0np0 -> enp1s0f1np1` with four client/server process pairs:
+One client/server pair between two DGX Sparks over one direct link, measured in
+three independent 30 s repetitions. **Every row is loss-free.** TCP self-paces
+through flow control, so it runs unthrottled; UDP has no flow control, so each
+UDP row is paced at the highest rate that sustained zero loss across all three
+reps (App TX is that rate). The phy columns come from `ethtool -S` on each
+host, sampled immediately before and after the measured window and subtracted,
+so they are whole-run packet totals for the port rather than rates:
 
 | Protocol | Message size | App TX | App RX | Loss | Client `tx_packets_phy` | Server `rx_packets_phy` |
 |---|---:|---:|---:|---:|---:|---:|
-| TCP | 1000 | 10.93 Gb/s | 10.93 Gb/s | 0.00% | 1,513,047 | 1,513,047 |
-| TCP | 8000 | 11.20 Gb/s | 11.20 Gb/s | 0.00% | 1,550,052 | 1,550,052 |
-| TCP | 1 MiB | 11.67 Gb/s | 11.67 Gb/s | 0.00% | 1,615,399 | 1,615,399 |
-| UDP | 1000 | 12.28 Gb/s | 11.68 Gb/s | 4.88% | 15,350,463 | 15,350,463 |
-| UDP | 8000 | 12.93 Gb/s | 10.10 Gb/s | 21.91% | 2,020,461 | 2,020,461 |
-| UDP | 65507 | 12.84 Gb/s | 12.41 Gb/s | 3.34% | 1,960,392 | 1,960,392 |
+| TCP | 1000 | 18.28 Gb/s | 18.28 Gb/s | 0.00% | 7,994,650 | 7,994,650 |
+| TCP | 8000 | 52.90 Gb/s | 52.90 Gb/s | 0.00% | 22,460,342 | 22,460,342 |
+| TCP | 1 MiB | 55.69 Gb/s | 55.69 Gb/s | 0.00% | 23,439,344 | 23,439,344 |
+| UDP | 1000 | 4.00 Gb/s | 4.00 Gb/s | 0.00% | 15,045,910 | 15,045,910 |
+| UDP | 8000 | 25.00 Gb/s | 25.00 Gb/s | 0.00% | ≈11.74 M | ≈11.74 M |
+| UDP | 65507 | 15.00 Gb/s | 15.00 Gb/s | 0.00% | 6,889,553 | 6,889,553 |
 
-UDP 1 MiB is intentionally skipped because Linux UDP payloads above `65507` bytes require fragmentation or segmentation behavior outside the benchmark's supported payload model.
+The two phy columns agree to sampling precision in every accepted repetition:
+the receiving port took in the same traffic that the sending port put out, so
+nothing was lost on the wire. Application packet and byte counts, receiver UDP
+errors, and NIC receive-buffer counters were also flat for every UDP row.
+
+Above those rates the receiver sets the pace rather than the wire. The 8 KB
+single-flow result reaches 25 Gb/s only with the receive-I/O and application
+worker pinned within one performance cluster. Ladder `--target-gbps` to find the
+equivalent point after changing message size, host setup, or thread placement.
+
+!!! note "UDP receive-thread placement"
+    `rx.queues[].cpu_core` pins the socket receive-I/O thread, while
+    `socket_bench_server.cpu_core` and `socket_bench_client.cpu_core` pin the
+    separate benchmark workers. Keep each receive-I/O/worker pair in one
+    performance cluster and use different CPUs unless intentional sharing is
+    part of the measurement.
+
+UDP 1 MiB is intentionally skipped because Linux UDP payloads above `65507` bytes require fragmentation or segmentation behavior outside the benchmark's supported payload model. The 65507 B row does fragment (8 frames per datagram at MTU 9000, visible in its phy count) and reassembly is all-or-nothing, which is why its loss-free rate is lower than the single-frame 8000 B row: past ~15 Gb/s it collapses rather than degrading (58.8% loss at 20 Gb/s, 99.5% unpaced).
 
 ## Restore host networking
 

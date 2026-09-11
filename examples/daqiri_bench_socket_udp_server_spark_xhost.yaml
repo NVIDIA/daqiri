@@ -1,0 +1,80 @@
+# DGX Spark (GB10) cross-host UDP server config for daqiri_bench_socket.
+# Receiving half of the pair that produced the Socket / UDP rows in
+# docs/benchmarks/performance-dgx-spark.md. Run the client half from
+# daqiri_bench_socket_udp_client_spark_xhost.yaml on the peer host.
+#
+# Unlike the RoCE cross-host config, the socket engine binds every interface
+# listed in the file during daqiri_init, so the two roles CANNOT share one
+# config: the server host does not own the client's address and the bind would
+# fail. Hence one file per role.
+#
+# Replace <client-ip>, <server-ip>, and the CPU placeholders for each host
+# before running. Keep the same endpoint values in the peer client config.
+#
+# Before running, apply cross-host L3 on both boxes:
+#   sudo scripts/setup_spark_xhost_net.sh --role rx --peer-mac <CLIENT_P0_MAC>
+# See docs/tutorials/system_configuration.md#cross-host-variant-two-sparks.
+#
+# Run the server first and let it outlive the client, so it is receiving before
+# the first datagram and still draining after the last:
+#   sudo ./daqiri_bench_socket <this.yaml> --mode server --seconds 42
+#
+# Reproduces the 8000 B row as shipped. For the other published message sizes
+# set message_size to 1000 or 65507 here AND in the client config; the buffers
+# are already sized for the largest of them.
+#
+# `socket_bench_server.cpu_core` pins the benchmark worker. For UDP,
+# `rx.queues[].cpu_core` pins the separate socket receive-I/O thread. Keep an
+# RX I/O/worker pair in one performance cluster when measuring receive rate.
+#
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "socket"
+    master_core: <master-core>
+    debug: false
+    log_level: "info"
+
+    memory_regions:
+    - name: "DATA_SOCKET_SERVER"
+      kind: "host"
+      affinity: 0
+      num_bufs: 1024
+      buf_size: 65536
+
+    interfaces:
+    - name: udp_server
+      address: <server-ip>
+      socket_config:
+        mode: server
+        local_addr: "udp://<server-ip>:5001"
+        remote_addr: "udp://<client-ip>:5002"
+        max_payload_size: 65535
+      rx:
+        queues:
+        - name: "Server_RX_Queue"
+          id: 0
+          cpu_core: <server-rx-io-core>
+          batch_size: 32
+          memory_regions:
+            - "DATA_SOCKET_SERVER"
+      tx:
+        queues:
+        - name: "Server_TX_Queue"
+          id: 0
+          cpu_core: <server-tx-core>
+          batch_size: 1
+          memory_regions:
+            - "DATA_SOCKET_SERVER"
+
+socket_bench_server:
+  server: true
+  send: false
+  receive: true
+  cpu_core: <server-worker-core>
+  iterations: 1000000000
+  message_size: 8000
+  server_address: <server-ip>
+  server_port: 5001
