@@ -9,10 +9,11 @@
 # the DPDK path instead. The ibverbs path programs the mlx5 hardware
 # packet-pacing rate table for the TX QP and uses the device defaults for burst sizing.
 #
-# Requirements: the DPDK path needs its hardware send-scheduling offload and
-# warns/runs at line rate without it. The ibverbs path requires RAW_PACKET packet
-# pacing and an accepted rate; older drivers that omit their supported range
-# defer validation to the provider when the rate is applied.
+# Requirements: ConnectX-7 or later. The DPDK path uses native wait-on-time
+# SEND_ON_TIMESTAMP and warns/runs at line rate when that offload is unavailable.
+# The ibverbs path requires RAW_PACKET packet pacing and an accepted rate; older
+# drivers that omit their supported range defer validation to the provider when
+# the rate is applied.
 #
 # Validate: run daqiri_bench_raw_gpudirect with this config and compute the
 # achieved rate from the RX line's bytes/seconds (Gbps = bytes * 8 / seconds /

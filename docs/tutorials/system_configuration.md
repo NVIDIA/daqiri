@@ -1308,7 +1308,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
         Pause frames on the wire are not evidence of a misconfiguration by themselves. A peer that cannot buffer a line-rate burst, such as an FPGA, may assert pause by design. `rx_pause_ctrl_phy` counts frames **received** (the peer throttling this port's transmit), and `tx_pause_ctrl_phy` counts frames **sent** (this port's receive path throttling the peer).
 
-        When the receiver routinely needs pause to keep up, packet pacing is usually the better mechanism. A per-queue `pacing_mbps` cap meters the transmit queue out in hardware, smoothing the packet rate to one the receiver can absorb instead of waiting for its buffers to fill and having it stop the sender. See [`pacing_mbps`](../api-reference/configuration.md#transmit-configuration-tx) in the TX queue configuration.
+        When the receiver routinely needs pause to keep up, packet pacing is usually the better mechanism. A per-queue `pacing_mbps` cap meters the transmit queue out in hardware, smoothing the packet rate to one the receiver can absorb instead of waiting for its buffers to fill and having it stop the sender. See [`pacing_mbps`](../api-reference/configuration.md#transmit-configuration-tx) in the TX queue configuration. Packet pacing requires ConnectX-7 or later.
 
     Check the current state of your interfaces:
 
