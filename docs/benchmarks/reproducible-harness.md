@@ -71,9 +71,10 @@ Before launch, resolution rejects:
   unless the suite explicitly sets `allow_cpu_overlap: true`.
 
 The host preflight then verifies the declared CPUs, interface, address, route,
-MAC, MTU, link state, speed, PCI identity, binary, commit, dirty-state policy,
-privilege path, hugepage/GPU requirements, `mlnx_perf`, unused UDP ports, and the
-absence of an already running copy of the exact benchmark binary. Optional
+MAC, MTU, link state, speed, PCI identity, binary hash, linked-library
+resolution in the declared execution environment, commit, dirty-state policy,
+privilege path, hugepage/GPU requirements, `mlnx_perf`, unused UDP ports, and
+the absence of an already running copy of the exact benchmark binary. Optional
 site-defined contamination checks are read-only commands whose success and
 output are archived.
 

@@ -244,6 +244,7 @@ class Harness:
                             "--rm",
                             "--pull",
                             "never",
+                            *(["--gpus", "all"] if container["gpus"] else []),
                             "--entrypoint",
                             "ldd",
                             container["digest"],

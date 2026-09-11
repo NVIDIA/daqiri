@@ -15,6 +15,8 @@ from benchmark_harness import remote_worker
 from benchmark_harness.executor import ExecutorError, HostExecutor
 from benchmark_harness.remote_worker import (
     _container_available_cpus,
+    _container_binary_dependencies,
+    _dependency_probe_error,
     _owned_container,
     _preflight,
     _terminate,
@@ -253,3 +255,48 @@ def test_container_cpu_preflight_matches_privileged_execution(monkeypatch):
         18,
         19,
     ]
+
+
+def test_container_dependency_probe_uses_declared_gpu_runtime(monkeypatch):
+    def run(argv, **_kwargs):
+        assert argv == [
+            "/usr/bin/docker",
+            "run",
+            "--rm",
+            "--pull",
+            "never",
+            "--gpus",
+            "all",
+            "--entrypoint",
+            "ldd",
+            "sha256:image",
+            "/opt/daqiri/bin/daqiri_bench_socket",
+        ]
+        return subprocess.CompletedProcess(
+            argv, 0, "libcuda.so.1 => /lib/libcuda.so.1\n", ""
+        )
+
+    monkeypatch.setattr(remote_worker.subprocess, "run", run)
+
+    completed = _container_binary_dependencies(
+        "/usr/bin/docker",
+        "sha256:image",
+        "/opt/daqiri/bin/daqiri_bench_socket",
+        gpus=True,
+    )
+    assert completed.returncode == 0
+    assert "libcuda.so.1" in completed.stdout
+
+
+def test_dependency_probe_rejects_unresolved_libraries():
+    completed = subprocess.CompletedProcess(
+        ["ldd", "benchmark"],
+        0,
+        "libdaqiri.so.1 => not found\nlibcuda.so.1 => not found\n",
+        "",
+    )
+
+    assert _dependency_probe_error(completed, "host") == (
+        "host binary dependencies are unresolved: libcuda.so.1 => not found; "
+        "libdaqiri.so.1 => not found"
+    )

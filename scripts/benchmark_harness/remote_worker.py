@@ -687,6 +687,35 @@ def _container_available_cpus(docker: str, digest: str) -> list[int]:
     return sorted(set(cpus))
 
 
+def _container_binary_dependencies(
+    docker: str, digest: str, binary: str, *, gpus: bool
+) -> subprocess.CompletedProcess[str]:
+    argv = [docker, "run", "--rm", "--pull", "never"]
+    if gpus:
+        argv.extend(["--gpus", "all"])
+    argv.extend(["--entrypoint", "ldd", digest, binary])
+    return subprocess.run(
+        argv,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _dependency_probe_error(
+    completed: subprocess.CompletedProcess[str], context: str
+) -> str | None:
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        return f"{context} binary dependency probe failed: {detail}"
+    missing = sorted(
+        line.strip() for line in completed.stdout.splitlines() if "=> not found" in line
+    )
+    if missing:
+        return f"{context} binary dependencies are unresolved: " + "; ".join(missing)
+    return None
+
+
 def _preflight(payload: dict[str, Any]) -> dict[str, Any]:
     errors: list[str] = []
     facts: dict[str, Any] = {}
@@ -742,6 +771,16 @@ def _preflight(payload: dict[str, Any]) -> dict[str, Any]:
                 )
             else:
                 facts["binary_sha256"] = binary_check.stdout.split()[0]
+            dependency_check = _container_binary_dependencies(
+                docker,
+                container["digest"],
+                str(binary),
+                gpus=container["gpus"],
+            )
+            facts["binary_dependencies"] = dependency_check.stdout.splitlines()
+            dependency_error = _dependency_probe_error(dependency_check, "container")
+            if dependency_error:
+                errors.append(dependency_error)
             workdir_check = subprocess.run(
                 [
                     docker,
@@ -773,6 +812,13 @@ def _preflight(payload: dict[str, Any]) -> dict[str, Any]:
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                 binary_hash.update(chunk)
         facts["binary_sha256"] = binary_hash.hexdigest()
+        dependency_check = subprocess.run(
+            ["ldd", str(binary)], capture_output=True, text=True, check=False
+        )
+        facts["binary_dependencies"] = dependency_check.stdout.splitlines()
+        dependency_error = _dependency_probe_error(dependency_check, "host")
+        if dependency_error:
+            errors.append(dependency_error)
     if (
         "binary_sha256" in facts
         and facts["binary_sha256"] != payload["expected_binary_sha256"].lower()
