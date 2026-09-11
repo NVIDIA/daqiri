@@ -13,7 +13,12 @@ from pathlib import Path
 
 from benchmark_harness import remote_worker
 from benchmark_harness.executor import ExecutorError, HostExecutor
-from benchmark_harness.remote_worker import _owned_container, _preflight, _terminate
+from benchmark_harness.remote_worker import (
+    _container_available_cpus,
+    _owned_container,
+    _preflight,
+    _terminate,
+)
 
 WORKER = (
     Path(__file__).resolve().parents[2] / "scripts/benchmark_harness/remote_worker.py"
@@ -224,3 +229,27 @@ def test_cleanup_refuses_container_with_failed_identity(tmp_path, monkeypatch):
     assert result["ok"] is False
     assert result["errors"] == ["container identity changed"]
     assert result["escalated_to_kill"] is False
+
+
+def test_container_cpu_preflight_matches_privileged_execution(monkeypatch):
+    def run(argv, **_kwargs):
+        assert argv[:7] == [
+            "/usr/bin/docker",
+            "run",
+            "--rm",
+            "--pull",
+            "never",
+            "--privileged",
+            "--entrypoint",
+        ]
+        return subprocess.CompletedProcess(argv, 0, "[0, 16, 17, 18, 19]\n", "")
+
+    monkeypatch.setattr(remote_worker.subprocess, "run", run)
+
+    assert _container_available_cpus("/usr/bin/docker", "sha256:image") == [
+        0,
+        16,
+        17,
+        18,
+        19,
+    ]

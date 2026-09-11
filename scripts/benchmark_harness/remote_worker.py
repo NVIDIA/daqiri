@@ -653,6 +653,40 @@ def _binary_processes(binary: str) -> list[int]:
     return sorted(matches)
 
 
+def _container_available_cpus(docker: str, digest: str) -> list[int]:
+    completed = subprocess.run(
+        [
+            docker,
+            "run",
+            "--rm",
+            "--pull",
+            "never",
+            "--privileged",
+            "--entrypoint",
+            "python3",
+            digest,
+            "-c",
+            "import json,os; print(json.dumps(sorted(os.sched_getaffinity(0))))",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "cannot inspect container CPU affinity: " + completed.stderr.strip()
+        )
+    try:
+        cpus = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("container CPU affinity returned invalid JSON") from exc
+    if not isinstance(cpus, list) or any(
+        isinstance(cpu, bool) or not isinstance(cpu, int) or cpu < 0 for cpu in cpus
+    ):
+        raise RuntimeError("container CPU affinity returned invalid CPU indices")
+    return sorted(set(cpus))
+
+
 def _preflight(payload: dict[str, Any]) -> dict[str, Any]:
     errors: list[str] = []
     facts: dict[str, Any] = {}
@@ -773,7 +807,15 @@ def _preflight(payload: dict[str, Any]) -> dict[str, Any]:
         elif payload["require_clean"] and facts["dirty"]:
             errors.append("remote worktree is dirty")
 
-    available_cpus = sorted(os.sched_getaffinity(0))
+    worker_available_cpus = sorted(os.sched_getaffinity(0))
+    facts["worker_available_cpus"] = worker_available_cpus
+    available_cpus = worker_available_cpus
+    if container["runtime"] == "docker" and docker is not None:
+        try:
+            available_cpus = _container_available_cpus(docker, container["digest"])
+        except RuntimeError as exc:
+            available_cpus = []
+            errors.append(str(exc))
     facts["available_cpus"] = available_cpus
     missing_cpus = sorted(cpu for cpu in payload["cpus"] if cpu not in available_cpus)
     if missing_cpus:
