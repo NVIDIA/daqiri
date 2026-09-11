@@ -304,25 +304,30 @@ status, data = daqiri.get_segment_packet_bytes(
 ## Runtime Queues and Memory Regions
 
 The raw `ibverbs` engine exposes the same runtime resource lifecycle in Python.
-Each accepted request returns `(Status.SUCCESS, op_id)`; poll until the matching
-completion arrives because completions from independent requests may be
-interleaved:
+Each accepted request returns `(Status.SUCCESS, op_id)`. Completions from
+independent requests may be interleaved, so retain results for operations other
+than the one currently being awaited:
 
 ```python
+completed = {}
+
+def wait_for_resource(op_id):
+    while op_id not in completed:
+        status, result = daqiri.poll_resource_op()
+        if status == daqiri.Status.NOT_READY:
+            continue
+        if status != daqiri.Status.SUCCESS:
+            raise RuntimeError("resource polling failed")
+        completed[result.op_id] = result
+    return completed.pop(op_id)
+
 status, op_id = daqiri.add_memory_region_async(memory_region_config)
 if status != daqiri.Status.SUCCESS:
     raise RuntimeError("resource request was rejected")
 
-while True:
-    status, result = daqiri.poll_resource_op()
-    if status == daqiri.Status.NOT_READY:
-        continue
-    if status != daqiri.Status.SUCCESS:
-        raise RuntimeError("resource polling failed")
-    if result.op_id == op_id:
-        if result.status != daqiri.Status.SUCCESS:
-            raise RuntimeError("resource operation failed")
-        break
+result = wait_for_resource(op_id)
+if result.status != daqiri.Status.SUCCESS:
+    raise RuntimeError("resource operation failed")
 ```
 
 Runtime RX queues receive traffic only after a dynamic flow targets them. Delete
