@@ -75,8 +75,13 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="${DAQIRI_BUILD_DIR:-$SCRIPT_DIR/../build}"
-# Splits a combined both-role netns base into a single-role config (rdma + socket).
-NETNS_GEN="$SCRIPT_DIR/../scripts/gen_spark_netns_config.py"
+# Shared production/benchmark configuration generator. It emits complete,
+# independently runnable role configs from the cell's actual parameters.
+CONFIG_GEN="$SCRIPT_DIR/../scripts/gen_daqiri_config.py"
+if [[ ! -f "$CONFIG_GEN" ]]; then
+  echo "Configuration generator not found: $CONFIG_GEN" >&2
+  exit 1
+fi
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT_DIR="$SCRIPT_DIR/../bench-results/$TS-$BACKEND-$MODE"
 mkdir -p "$OUT_DIR"
@@ -197,7 +202,6 @@ case "$BACKEND" in
     BATCHES_HEADLINE=(10240)
     PAIRS_SWEEP=(1)
     PAIRS_HEADLINE=(1)
-    BASE_YAML="$SCRIPT_DIR/daqiri_bench_raw_tx_rx_spark.yaml"
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_raw_gpudirect"
     CPU_MASTER=8; CPU_TX=17; CPU_RX=18
     : "${ETH_DST_ADDR:?ETH_DST_ADDR must be set for dpdk backend (cat /sys/class/net/<rx-iface>/address)}"
@@ -218,11 +222,6 @@ case "$BACKEND" in
     BATCHES_HEADLINE=(1)
     PAIRS_SWEEP=(1)
     PAIRS_HEADLINE=(1)
-    # One combined base (both roles, netns IPs 10.250.0.1/2); generate_yaml splits
-    # it per role at run time so each process runs inside its own network namespace
-    # and RDMA-CM resolves addresses over the wire rather than short-cutting through
-    # the kernel's local routing table.
-    BASE_YAML="$SCRIPT_DIR/daqiri_bench_rdma_tx_rx_spark_netns.yaml"
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_rdma"
     # One-way roles: the client (send-only) drives the TX-queue core 17; the server
     # (receive-only) runs its RX-queue poller AND bench worker on core 19. Measure
@@ -257,11 +256,6 @@ case "$BACKEND" in
     PAIRS_SWEEP=(1 2 4)
     PAIRS_HEADLINE=(4)
     SRV_PORT_BASE=5001; CLI_PORT_BASE=5101
-    # One combined base (both roles, netns IPs 10.250.0.1/2); generate_socket_yaml
-    # splits it per role at run time so each process runs inside its own network
-    # namespace and the kernel sends client->server over the wire instead of short-
-    # cutting same-host IPs through the loopback (lo) device.
-    BASE_YAML="$SCRIPT_DIR/daqiri_bench_socket_udp_tx_rx_spark_netns.yaml"
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_socket"
     # Final pair-0 TX/RX attribution is derived from the structured pinning below.
     CPU_MASTER=8; CPU_TX=17; CPU_RX=16
@@ -278,8 +272,6 @@ case "$BACKEND" in
     PAIRS_SWEEP=(1 2 4)
     PAIRS_HEADLINE=(4)
     SRV_PORT_BASE=6001; CLI_PORT_BASE=6101
-    # One combined base (both roles, netns IPs 10.250.0.1/2); see socket-udp note.
-    BASE_YAML="$SCRIPT_DIR/daqiri_bench_socket_tcp_tx_rx_spark_netns.yaml"
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_socket"
     # Final pair-0 TX/RX attribution is derived from the structured pinning below.
     CPU_MASTER=8; CPU_TX=17; CPU_RX=16
@@ -437,17 +429,21 @@ phy_counter() {
     | awk -F'[: ]+' -v k="$key" '$2 == k { s += $3 } END { printf "%d", s+0 }'
 }
 
-# Substitute payload / batch into the base YAML and write a temp config (dpdk + rdma;
-# sockets use generate_socket_yaml so each pair gets unique ports/cores).
+# Generate a complete config from the cell parameters (DPDK + RoCE; sockets use
+# generate_socket_yaml so each concurrent pair gets unique ports/cores).
 generate_yaml() {
   local out="$1" payload="$2" batch="$3"
   case "$BACKEND" in
     dpdk)
-      sed -E \
-        -e "s|^( *payload_size: ).*|\1$payload|" \
-        -e "s|^( *batch_size: ).*|\1$batch|" \
-        -e "s|<00:00:00:00:00:00>|$ETH_DST_ADDR|g" \
-        "$BASE_YAML" > "$out"
+      python3 "$CONFIG_GEN" raw-pair \
+        --tx-address "$DPDK_TX_PCI" --rx-address "$DPDK_RX_PCI" \
+        --master-core 8 --engine dpdk --memory-kind host_pinned \
+        --tx-queue-cores 17 --rx-queue-cores 18 \
+        --tx-worker-cores 16 --rx-worker-cores 19 \
+        --payload-size "$payload" --batch-size "$batch" --num-bufs 51200 \
+        --eth-dst-addr "$ETH_DST_ADDR" \
+        --ip-src-addr 1.1.1.1 --ip-dst-addr 2.2.2.2 \
+        --output "$out" || return 1
       ;;
     rdma)
       # Size the flow-control window per message size (PR #144). buf_size tracks the
@@ -463,31 +459,30 @@ generate_yaml() {
       local cap=$(( budget / payload )); (( cap < 1 )) && cap=1
       local rx_nb=${RDMA_RX_NB:-512}; (( rx_nb > cap )) && rx_nb=$cap
       local tx_nb=${RDMA_TX_NB:-128}; (( tx_nb > cap )) && tx_nb=$cap
-      # Split the combined base per role, then apply the per-message-size window
-      # rewrite to each. Server -> $out, client -> ${out%.yaml}_client.yaml.
-      local role dst
-      for role in server client; do
-        if [[ "$role" == server ]]; then dst="$out"; else dst="${out%.yaml}_client.yaml"; fi
-        # name-anchored num_bufs rewrite: RX regions -> rx_nb, TX regions -> tx_nb.
-        # Depths are clamped to their region's num_bufs so the window never exceeds
-        # the buffers backing it. One-way (server receive-only + GEMM, client
-        # send-only) is baked into the base config, matching the DPDK and socket
-        # benches -- see the send:/receive: notes in the base YAML.
-        python3 "$NETNS_GEN" "$BASE_YAML" --role "$role" | \
-        awk -v p="$payload" -v bs="$payload" -v rxnb="$rx_nb" -v txnb="$tx_nb" '
-          /^[[:space:]]*- name:/ { region = $0 }
-          /^[[:space:]]*num_bufs:/ {
-            if (region ~ /RX/)      { sub(/num_bufs:.*/, "num_bufs: " rxnb) }
-            else if (region ~ /TX/) { sub(/num_bufs:.*/, "num_bufs: " txnb) }
-            print; next
-          }
-          /^[[:space:]]*buf_size:/      { sub(/buf_size:.*/,      "buf_size: " bs);   print; next }
-          /^[[:space:]]*message_size:/  { sub(/message_size:.*/,  "message_size: " p); print; next }
-          /^[[:space:]]*rx_depth:/      { sub(/rx_depth:.*/,      "rx_depth: " rxnb); print; next }
-          /^[[:space:]]*tx_depth:/      { sub(/tx_depth:.*/,      "tx_depth: " txnb); print; next }
-          { print }
-        ' > "$dst"
-      done
+      # Direction-specific region counts and queue depths keep the flow-control
+      # window within the buffers that back it. Server -> $out; client -> sibling.
+      python3 "$CONFIG_GEN" socket-pair --transport roce \
+        --client-address 10.250.0.1 --server-address 10.250.0.2 \
+        --client-port 4096 --server-port 4096 \
+        --client-master-core 8 --server-master-core 8 \
+        --client-rx-core 18 --client-tx-core 17 \
+        --server-rx-core 19 --server-tx-core 16 \
+        --client-worker-core 18 --server-worker-core 19 \
+        --message-size "$payload" --buffer-size "$payload" --num-bufs 1 \
+        --rx-num-bufs "$rx_nb" --tx-num-bufs "$tx_nb" \
+        --rx-depth "$rx_nb" --tx-depth "$tx_nb" --memory-kind host_pinned \
+        --role rx --output "$out" || return 1
+      python3 "$CONFIG_GEN" socket-pair --transport roce \
+        --client-address 10.250.0.1 --server-address 10.250.0.2 \
+        --client-port 4096 --server-port 4096 \
+        --client-master-core 8 --server-master-core 8 \
+        --client-rx-core 18 --client-tx-core 17 \
+        --server-rx-core 19 --server-tx-core 16 \
+        --client-worker-core 18 --server-worker-core 19 \
+        --message-size "$payload" --buffer-size "$payload" --num-bufs 1 \
+        --rx-num-bufs "$rx_nb" --tx-num-bufs "$tx_nb" \
+        --rx-depth "$rx_nb" --tx-depth "$tx_nb" --memory-kind host_pinned \
+        --role tx --output "${out%.yaml}_client.yaml" || return 1
       ;;
   esac
 }
@@ -536,10 +531,8 @@ if [[ "$BACKEND" =~ ^socket- ]]; then
   fi
 fi
 
-# Write the server/client YAML pair for socket pair `idx`: split the combined base
-# per role, then substitute message_size, unique ports (SRV/CLI_PORT_BASE + idx),
-# and pin the server (receive) side and client (send) side to DIFFERENT isolated
-# cores so the pair does not time-slice one CPU (see pair_server_core comment).
+# Write a complete server/client YAML pair with unique ports and independent
+# server/client placement, so the pair does not time-slice one CPU.
 generate_socket_yaml() {
   local idx="$1" payload="$2" batch="$3" server_out="$4" client_out="$5"
   local srv_port=$(( SRV_PORT_BASE + idx ))
@@ -558,25 +551,27 @@ generate_socket_yaml() {
       server_io_core="$(pair_server_io_core "$idx" "$server_core")"
     fi
   fi
-  python3 "$NETNS_GEN" "$BASE_YAML" --role server \
-    --rx-queue-cpu-core "$server_io_core" --rx-queue-batch-size "$batch" \
-    --tx-queue-cpu-core "$server_core" \
-    --bench-cpu-core "$server_core" | \
-  sed -E \
-    -e "s|^( *message_size: ).*|\1$payload|g" \
-    -e "s|^( *local_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$srv_port\2|" \
-    -e "s|^( *remote_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$cli_port\2|" \
-    -e "s|^( *server_port: ).*|\1$srv_port|" \
-    > "$server_out"
-  python3 "$NETNS_GEN" "$BASE_YAML" --role client \
-    --rx-queue-cpu-core "$client_core" --tx-queue-cpu-core "$client_core" \
-    --bench-cpu-core "$client_core" | \
-  sed -E \
-    -e "s|^( *message_size: ).*|\1$payload|g" \
-    -e "s|^( *local_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$cli_port\2|" \
-    -e "s|^( *remote_addr: \"?[a-z]+://[0-9.]+:)[0-9]+(\"?)|\1$srv_port\2|" \
-    -e "s|^( *server_port: ).*|\1$srv_port|" \
-    > "$client_out"
+  local transport="${BACKEND#socket-}"
+  local buffer_size=65536 num_bufs=1024
+  if [[ "$transport" == "tcp" ]]; then
+    buffer_size=1048576
+    num_bufs=64
+  fi
+  local common_args=(
+    --transport "$transport"
+    --client-address 10.250.0.1 --server-address 10.250.0.2
+    --client-port "$cli_port" --server-port "$srv_port"
+    --client-master-core 8 --server-master-core 8
+    --client-rx-core "$client_core" --client-tx-core "$client_core"
+    --server-rx-core "$server_io_core" --server-tx-core "$server_core"
+    --client-worker-core "$client_core" --server-worker-core "$server_core"
+    --message-size "$payload" --buffer-size "$buffer_size"
+    --num-bufs "$num_bufs" --rx-batch-size "$batch"
+  )
+  python3 "$CONFIG_GEN" socket-pair "${common_args[@]}" --role rx \
+    --output "$server_out" || return 1
+  python3 "$CONFIG_GEN" socket-pair "${common_args[@]}" --role tx \
+    --output "$client_out" || return 1
 }
 
 # Run one cell. Echoes the CSV row to stdout.

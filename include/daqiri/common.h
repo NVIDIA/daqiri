@@ -1356,42 +1356,48 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
               return false;
             }
           } else {
-            if (intf["socket_config"].IsDefined() ||
-                intf["roce_config"].IsDefined()) {
-              DAQIRI_LOG_ERROR("'socket_config'/'roce_config' are only valid "
-                               "for stream_type 'socket' "
-                               "(interface '{}')",
-                               ifcfg.name_);
+            if (intf["socket_config"].IsDefined() || intf["roce_config"].IsDefined()) {
+              DAQIRI_LOG_ERROR(
+                  "'socket_config'/'roce_config' are only valid "
+                  "for stream_type 'socket' "
+                  "(interface '{}')",
+                  ifcfg.name_);
               return false;
             }
           }
 
           try {
-            const auto &rx = intf["rx"];
+            const auto& rx = intf["rx"];
             daqiri::RxConfig rx_cfg;
 
             try {
               rx_cfg.flow_isolation_ = rx["flow_isolation"].as<bool>();
-            } catch (const std::exception& e) { rx_cfg.flow_isolation_ = false; }
+            } catch (const std::exception& e) {
+              rx_cfg.flow_isolation_ = false;
+            }
 
             try {
-              rx_cfg.dynamic_flow_capacity_ =
-                  rx["dynamic_flow_capacity"].as<uint32_t>();
+              rx_cfg.hardware_timestamps_ = rx["hardware_timestamps"].as<bool>();
+            } catch (const std::exception& e) {
+              rx_cfg.hardware_timestamps_ = false;
+            }
+
+            try {
+              rx_cfg.dynamic_flow_capacity_ = rx["dynamic_flow_capacity"].as<uint32_t>();
             } catch (const std::exception& e) {
               rx_cfg.dynamic_flow_capacity_ = daqiri::DEFAULT_DYNAMIC_FLOW_CAPACITY;
             }
 
-            for (const auto &q_item : rx["queues"]) {
+            for (const auto& q_item : rx["queues"]) {
               daqiri::RxQueueConfig q;
-              if (!parse_rx_queue_config(
-                      q_item, input_spec.common_.engine_type, q, !roce_used)) {
+              if (!parse_rx_queue_config(q_item, input_spec.common_.engine_type, q, !roce_used)) {
                 DAQIRI_LOG_ERROR("Failed to parse RxQueueConfig");
                 return false;
               }
 
               try {
                 q.timeout_us_ = q_item["timeout_us"].as<uint64_t>();
-              } catch (const std::exception &e) {
+              } catch (const std::exception& e) {
                 q.timeout_us_ = 0;
               }
 
@@ -1448,8 +1454,8 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
             } // No reorder_configs defined for this interface.
 
             ifcfg.rx_ = rx_cfg;
-          } catch (const std::exception &e) {
-          } // No RX queues defined for this interface.
+          } catch (const std::exception& e) {
+          }  // No RX queues defined for this interface.
 
           try {
             const auto &tx = intf["tx"];
