@@ -76,6 +76,14 @@ if(DAQIRI_BUILD_APPLICATIONS)
   add_subdirectory(applications)
 endif()
 
+install(PROGRAMS scripts/gen_daqiri_config.py
+        DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(DIRECTORY scripts/daqiri_config
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/daqiri/config-generator
+        PATTERN "__pycache__" EXCLUDE)
+install(FILES schemas/daqiri-config-v1.schema.json
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/daqiri/schemas)
+
 install(
   EXPORT daqiriTargets
   NAMESPACE daqiri::

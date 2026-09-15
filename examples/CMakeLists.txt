@@ -145,6 +145,15 @@ set_target_properties(daqiri_bench_socket PROPERTIES
   BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
 )
 
+# Parse-only validation uses the same yaml-cpp decoder as daqiri_init(), without
+# allocating memory or touching a NIC. This is the authoritative second stage
+# after JSON Schema validation of generated configs.
+add_executable(daqiri_config_validate config_validate.cpp)
+link_daqiri_bench(daqiri_config_validate)
+set_target_properties(daqiri_config_validate PROPERTIES
+  BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
+)
+
 # Microbenchmark for the daqiri::Ring / daqiri::ObjectPool primitives. Always
 # built (the primitives are header-only); when the dpdk engine is present it also
 # compiles the rte_ring / rte_mempool comparison arm.
@@ -185,6 +194,7 @@ install(TARGETS
         daqiri_example_pcap_writer
         daqiri_bench_rdma
         daqiri_bench_socket
+        daqiri_config_validate
         daqiri_pool_ring_bench
         RUNTIME DESTINATION bin)
 install(FILES ${DAQIRI_BENCH_CONFIGS}

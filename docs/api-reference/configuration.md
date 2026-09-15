@@ -10,7 +10,11 @@ Either form defines memory regions, NIC interfaces, TX/RX queues, and flow rules
 is passed to `daqiri_init()` at startup. The struct form is useful for customers who
 want to interoperate with existing configuration code.
 
-See `examples/daqiri_bench_*.yaml` for complete working examples.
+See the machine-readable
+[`daqiri-config-v1.schema.json`](https://github.com/nvidia/daqiri/blob/main/schemas/daqiri-config-v1.schema.json)
+for structural validation, and [Generate and Validate Configurations](../config-generation.md)
+for deterministic production, benchmark, multi-queue, and cross-host role generation.
+The commented files under `examples/` remain the canonical teaching examples.
 
 OpenTelemetry metrics do not add YAML fields. Metrics-enabled builds use the
 same interface, queue, and flow names from the active configuration as metric

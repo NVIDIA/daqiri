@@ -17,10 +17,8 @@
 #   2t1r  16,19       18
 #   2t2r  16,19       18,9
 #
-# All four are derived from the single checked-in base
-# examples/daqiri_bench_raw_tx_rx_spark_mq.yaml (the balanced 2,2 superset) by
-# scripts/gen_spark_mq_config.py, which prunes queues/flows/memory-regions/bench
-# entries down to each cell. They share host_pinned memory, an over-the-wire
+# All four are emitted directly by scripts/gen_daqiri_config.py from the cell's
+# queue counts, placement, and host bindings. They share host_pinned memory, an over-the-wire
 # loopback (tx 0000:01:00.0 -> rx 0002:01:00.1), and master_core 8. The native
 # shape is an 8000 B payload; this script sweeps PAYLOADS (default 64..8000 B),
 # generating a fresh config per (cell, payload) -- it NEVER edits the base.
@@ -79,9 +77,8 @@ PAYLOADS="${PAYLOADS:-64 256 1024 4096 8000}"
 # reps. Default 1; set REPEATS=3 for the published re-run.
 REPEATS="${REPEATS:-1}"
 
-# Single checked-in base + the generator that prunes it to each cell.
-MQ_BASE="$SCRIPT_DIR/daqiri_bench_raw_tx_rx_spark_mq.yaml"
-MQ_GEN="$SCRIPT_DIR/../scripts/gen_spark_mq_config.py"
+# Shared production/benchmark configuration generator.
+CONFIG_GEN="$SCRIPT_DIR/../scripts/gen_daqiri_config.py"
 
 # Resolve the DAQIRI shared libs from the build tree first. The per-engine
 # sub-libraries (libdaqiri_dpdk.so.0 etc.) live in $BUILD_DIR/src, not $BUILD_DIR,
@@ -109,8 +106,8 @@ if [[ ! -x "$BENCH_BIN" ]]; then
   exit 1
 fi
 
-if [[ ! -f "$MQ_BASE" || ! -f "$MQ_GEN" ]]; then
-  echo "ERROR: multi-queue base/generator missing: $MQ_BASE / $MQ_GEN" >&2
+if [[ ! -f "$CONFIG_GEN" ]]; then
+  echo "ERROR: config generator missing: $CONFIG_GEN" >&2
   exit 1
 fi
 
@@ -121,6 +118,14 @@ RX_PCI="0002:01:00.1"
 RX_NETDEV="${RX_NETDEV:-}"
 if [[ -z "$RX_NETDEV" ]]; then
   RX_NETDEV="$(ls "/sys/bus/pci/devices/$RX_PCI/net" 2>/dev/null | head -n1 || true)"
+fi
+ETH_DST_ADDR="${ETH_DST_ADDR:-}"
+if [[ -z "$ETH_DST_ADDR" && -n "$RX_NETDEV" ]]; then
+  ETH_DST_ADDR="$(cat "/sys/class/net/$RX_NETDEV/address" 2>/dev/null || true)"
+fi
+if [[ -z "$ETH_DST_ADDR" ]]; then
+  echo "ERROR: could not resolve the RX-port MAC; set ETH_DST_ADDR" >&2
+  exit 1
 fi
 
 # cell name -> "tx_queue_count rx_queue_count". The CSV's tx_cores/rx_cores
@@ -223,13 +228,20 @@ run_cell() {
   local run_dir="$OUT_DIR/$cell/p$payload/r$rep"
   mkdir -p "$run_dir"
 
-  # Generate the cell from the single base -- never touch the base. Fill the
-  # rx_port MAC from ETH_DST_ADDR when set (the RX queue runs flow_isolation).
+  # Generate the complete cell directly from its topology and placement.
   local tmp_cfg="$run_dir/config.yaml"
-  local eth_dst_arg=()
-  [[ -n "${ETH_DST_ADDR:-}" ]] && eth_dst_arg=(--eth-dst "$ETH_DST_ADDR")
-  if ! python3 "$MQ_GEN" "$MQ_BASE" --tx "$tx_count" --rx "$rx_count" \
-        --payload "$payload" "${eth_dst_arg[@]}" > "$tmp_cfg" 2> "$run_dir/gen.err"; then
+  local tx_queue_cores="16" tx_worker_cores="15"
+  local rx_queue_cores="18" rx_worker_cores="17"
+  [[ "$tx_count" == 2 ]] && tx_queue_cores="16,19" && tx_worker_cores="15,6"
+  [[ "$rx_count" == 2 ]] && rx_queue_cores="18,9" && rx_worker_cores="17,7"
+  if ! python3 "$CONFIG_GEN" raw-pair \
+        --tx-address 0000:01:00.0 --rx-address 0002:01:00.1 \
+        --master-core 8 --engine dpdk --memory-kind host_pinned \
+        --tx-queue-cores "$tx_queue_cores" --rx-queue-cores "$rx_queue_cores" \
+        --tx-worker-cores "$tx_worker_cores" --rx-worker-cores "$rx_worker_cores" \
+        --payload-size "$payload" --batch-size 10240 --num-bufs 51200 \
+        --eth-dst-addr "$ETH_DST_ADDR" --ip-src-addr 1.1.1.1 --ip-dst-addr 2.2.2.2 \
+        > "$tmp_cfg" 2> "$run_dir/gen.err"; then
     echo "ERROR: $cell p$payload config generation failed" >&2
     cat "$run_dir/gen.err" >&2
     return 1
