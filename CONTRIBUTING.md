@@ -69,6 +69,24 @@ find samples components -iname *.h -o -iname *.c -o -iname *.cpp -o -iname *.hpp
 
 - Thanks in advance for your patience as we review your contributions; we do appreciate them!
 
+#### Testing
+
+Portable Python tests run directly from a source checkout:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install --requirement tests/requirements.txt
+.venv/bin/python -m pytest
+```
+
+The default invocation collects only `tests/portable/`. Tests importing the compiled
+`daqiri` module belong under `tests/bindings/` and require a container built with
+`DAQIRI_BUILD_PYTHON=ON`. Future C++ tests belong under `tests/cpp/`. Tests requiring
+a GPU, NIC, hugepages, privileged access, or a particular host topology belong under
+`tests/platform/` and are selected by dedicated CI/CD jobs on compatible provisioned
+runners. See `tests/README.md` for the container dependency command, supported
+invocations, and marker policy.
+
 #### Pull Requests
 
 Developer workflow for code contributions is as follows:
@@ -90,7 +108,10 @@ git push -u origin <local-branch>:<remote-branch>
    * At least one DAQIRI engineer will be assigned for the review.
    * While under review, mark your PRs as work-in-progress by prefixing the PR title with `[WIP]`.
 
-4. Since there is no CI/CD process in place yet, the PR will be accepted and the corresponding issue closed only after adequate testing has been completed, manually, by the developer and/or DAQIRI engineer reviewing the code.
+4. GitHub Actions runs portable Python and documentation checks. Platform-dependent
+   behavior belongs in dedicated CI/CD jobs on compatible provisioned runners; until
+   a required platform job exists, it must still be verified manually by the developer
+   and/or DAQIRI engineer reviewing the code before the corresponding issue is closed.
 
 #### Automated PR Review (Greptile)
 
