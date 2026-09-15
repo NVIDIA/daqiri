@@ -127,6 +127,16 @@ For a shorter selection guide, start with the [Benchmarking overview](../benchma
 
     A [diff-style walkthrough](#flow-steering) of multi-queue RX routing appears below.
 
+??? question "4.1 I need to replace queues or memory without restarting"
+    Run `daqiri_example_dynamic_resource` with an ibverbs raw config that has at least one RX
+    queue and one single-region TX queue, such as
+    [`daqiri_bench_raw_hw_loopback_ibverbs.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_hw_loopback_ibverbs.yaml).
+    The example starts the engine with no RX queues, creates owned memory regions and the first RX
+    queue at runtime, installs a dynamic steering flow, submits through a runtime TX queue, then
+    removes the flow, drains both queues, and removes both regions.
+
+    *Requires: Raw Ethernet with `engine: "ibverbs"` and an NVIDIA ConnectX-class NIC.*
+
 ??? question "5. I need to record packet data to disk"
     Sub-question: **which output format?**
 

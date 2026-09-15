@@ -301,6 +301,43 @@ status, data = daqiri.get_segment_packet_bytes(
 )
 ```
 
+## Runtime Queues and Memory Regions
+
+The raw `ibverbs` engine exposes the same runtime resource lifecycle in Python.
+Each accepted request returns `(Status.SUCCESS, op_id)`. Completions from
+independent requests may be interleaved, so retain results for operations other
+than the one currently being awaited:
+
+```python
+completed = {}
+
+def wait_for_resource(op_id):
+    while op_id not in completed:
+        status, result = daqiri.poll_resource_op()
+        if status == daqiri.Status.NOT_READY:
+            continue
+        if status != daqiri.Status.SUCCESS:
+            raise RuntimeError("resource polling failed")
+        completed[result.op_id] = result
+    return completed.pop(op_id)
+
+status, op_id = daqiri.add_memory_region_async(memory_region_config)
+if status != daqiri.Status.SUCCESS:
+    raise RuntimeError("resource request was rejected")
+
+result = wait_for_resource(op_id)
+if result.status != daqiri.Status.SUCCESS:
+    raise RuntimeError("resource operation failed")
+```
+
+Runtime RX queues receive traffic only after a dynamic flow targets them. Delete
+those dynamic flows before deleting the queue; static flows cannot be removed
+and keep their queues in use. Queue deletion drains application-held RX buffers
+and pending TX work, so continue releasing bursts while polling. A memory region
+cannot be deleted until every queue or reorder output that references it has
+been removed. Metadata supports runtime batches up to at least 256 packets, or
+the largest startup queue batch if greater.
+
 ## Reordered RX Bursts
 
 For an overview of what RX reorder is and when to use it, see
@@ -664,6 +701,11 @@ The workflow sections above show the common call order and ownership rules.
 | `add_rx_flows_async(port, flows)` | Return `(Status, op_id)` after enqueueing a dynamic RX flow batch create. One completion returns `flow_ids` in input order. |
 | `delete_flow_async(flow_id)` | Return `(Status, op_id)` after enqueueing deletion of one dynamic flow. |
 | `poll_flow_op()` | Return `(Status, FlowOpResult)`, or `NOT_READY` when no dynamic flow operation has completed. |
+| `add_memory_region_async(config[, binding])` | Add an owned or externally bound ibverbs memory region and return `(Status, op_id)`. |
+| `delete_memory_region_async(name)` | Remove an unused runtime memory region and return `(Status, op_id)`. |
+| `add_rx_queue_async(port, config)` / `add_tx_queue_async(port, config)` | Add a raw-ibverbs queue and return `(Status, op_id)`. |
+| `delete_rx_queue_async(port, queue_id)` / `delete_tx_queue_async(port, queue_id)` | Begin drain-based queue removal and return `(Status, op_id)`. |
+| `poll_resource_op()` | Return `(Status, ResourceOpResult)`, or `NOT_READY` while no operation has completed. |
 | `socket_connect_to_server(server_addr, server_port[, src_addr])` | Return `(Status, conn_id)`. |
 | `socket_get_port_queue(conn_id)` | Return `(Status, port, queue)`. |
 | `socket_get_server_conn_id(server_addr, server_port)` | Return `(Status, conn_id)`. |
@@ -707,7 +749,7 @@ encapsulation/push rules are configured in YAML under `tx.flows`.
 
 | Enum | Values |
 | --- | --- |
-| `Status` | `SUCCESS`, `NULL_PTR`, `NO_FREE_BURST_BUFFERS`, `NO_FREE_PACKET_BUFFERS`, `NOT_READY`, `INVALID_PARAMETER`, `NO_SPACE_AVAILABLE`, `NOT_SUPPORTED`, `GENERIC_FAILURE`, `CONNECT_FAILURE`, `INTERNAL_ERROR` |
+| `Status` | `SUCCESS`, `NULL_PTR`, `NO_FREE_BURST_BUFFERS`, `NO_FREE_PACKET_BUFFERS`, `NOT_READY`, `INVALID_PARAMETER`, `NO_SPACE_AVAILABLE`, `NOT_SUPPORTED`, `GENERIC_FAILURE`, `CONNECT_FAILURE`, `INTERNAL_ERROR`, `RESOURCE_IN_USE`, `ALREADY_EXISTS` |
 | `RDMAOpCode` | `CONNECT`, `SEND`, `RECEIVE`, `RDMA_WRITE`, `RDMA_WRITE_IMM`, `RDMA_READ`, `RDMA_READ_IMM`, `INVALID` |
 | `RDMACompletionType` | `RX`, `TX`, `INVALID` |
 | `EngineType` | `UNKNOWN`, `DEFAULT`, `DPDK`, `SOCKET`, `RDMA` |
@@ -724,6 +766,8 @@ encapsulation/push rules are configured in YAML under `tx.flows`.
 | `TunnelType` | `NONE`, `VXLAN`, `GRE`, `NVGRE` |
 | `FlowMatchType` | `IPV4_UDP`, `FLEX_ITEM`, `ECPRI`, `ETHERNET` |
 | `FlowOpType` | `ADD_RX`, `ADD_RX_BATCH`, `DELETE` |
+| `ResourceOpType` | `ADD_MEMORY_REGION`, `DELETE_MEMORY_REGION`, `ADD_RX_QUEUE`, `DELETE_RX_QUEUE`, `ADD_TX_QUEUE`, `DELETE_TX_QUEUE` |
+| `ResourceState` | `CREATING`, `ACTIVE`, `DRAINING`, `REMOVED`, `FAILED` |
 | `ReorderMethod` | `INVALID`, `SEQ_BATCH_NUMBER`, `SEQ_PACKETS_PER_BATCH` |
 | `ReorderDataType` | `SAME`, `INT4`, `INT8`, `INT16`, `INT32`, `FP16`, `BF16`, `FP32`, `FP64`, `INVALID` |
 | `ReorderEndianness` | `HOST`, `NETWORK`, `INVALID` |
@@ -763,6 +807,7 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `FlowConfig` | Static named flow rule combining legacy `action`, ordered `actions`, and match fields. |
 | `FlowRuleConfig` | Dynamic RX flow rule combining legacy `action`, ordered `actions`, and match fields. |
 | `FlowOpResult` | Dynamic flow operation completion. Batch adds return `flow_ids` in input order. |
+| `ResourceOpResult` | Runtime memory-region or queue completion with operation ID, type, state, status, and resource identity. |
 | `FlexItemConfig` | Flexible parser item configuration. |
 | `FlexItemMatch` | Flexible parser match value and mask. |
 | `SocketConfig` | Socket client/server endpoint URI, legacy IP/port, and timing settings. |

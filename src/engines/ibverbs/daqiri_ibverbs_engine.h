@@ -110,6 +110,7 @@ struct IbvReorderBurstCtx {
   const uint64_t* h_received_bitmap = nullptr;
   const uint64_t* h_batch_id = nullptr;
   bool released = false;
+  std::atomic<uint64_t>* outstanding_outputs = nullptr;
 };
 
 // ---- First-DMA hardware reorder ------------------------------------------
@@ -230,6 +231,8 @@ struct IbvDirectReorderPlan {
  * application -- this per-WQE reclaim replaces the DPDK per-mbuf free.
  */
 struct IbvRxQueue {
+  std::atomic<ResourceState> state{ResourceState::CREATING};
+  std::atomic<uint64_t> active_users{0};
   int if_idx = 0;
   int port_id = 0;
   int queue_id = 0;
@@ -273,6 +276,7 @@ struct IbvRxQueue {
     uint32_t seg_len = 0;    // scatter length for this region's data seg
   };
   std::vector<RxRegion> regions;
+  std::vector<struct ibv_mr*> registrations;
   std::vector<std::string> mr_names;  // configured MR list for this queue
   std::string mr_name;
   uint8_t* mr_base = nullptr;  // base VA of the stride pool (striding path)
@@ -322,6 +326,8 @@ struct IbvRxQueue {
   uint32_t cur_wqe = 0;              // region currently being filled
   uint32_t cur_consumed = 0;         // strides consumed in cur_wqe
   std::atomic<uint64_t> reposts{0};  // diagnostic: WQE reposts
+  std::atomic<uint64_t> outstanding_strides{0};
+  std::atomic<uint64_t> outstanding_reorder_outputs{0};
 
   // Indirect-mode app-facing burst ring (worker enqueues, get_rx_burst dequeues).
   daqiri::Ring* ring = nullptr;
@@ -367,6 +373,8 @@ struct IbvRxQueue {
  * reclaim on their owner thread. No per-packet memory allocation.
  */
 struct IbvTxQueue {
+  std::atomic<ResourceState> state{ResourceState::CREATING};
+  std::atomic<uint64_t> active_users{0};
   int port_id = 0;
   int queue_id = 0;
   QueuePollMode poll_mode = QueuePollMode::INDIRECT;
@@ -383,6 +391,7 @@ struct IbvTxQueue {
     uint32_t slot_size = 0;
   };
   std::vector<TxRegion> regions;
+  std::vector<struct ibv_mr*> registrations;
   std::vector<std::string> mr_names;
   std::string mr_name;
   uint8_t* mr_base = nullptr;
@@ -434,6 +443,11 @@ struct IbvTxQueue {
   // have exactly one allocated-but-unposted packet at a time.
   std::atomic<uint64_t> direct_owner{0};
   BurstParams* direct_pending = nullptr;
+  // The indirect worker may stop while an oldest dequeued burst is waiting
+  // for SQ credits. Preserve it across worker regrouping; it cannot be rolled
+  // back independently from newer allocations still queued behind it.
+  BurstParams* worker_pending = nullptr;
+  uint64_t worker_pending_wqebbs = 0;
   std::atomic<uint64_t> direct_conflicts{0};
   uint64_t direct_no_space = 0;
   uint64_t full_bf_wqebbs = 0;
@@ -507,6 +521,7 @@ class IbverbsEngine : public Engine {
 
   // Burst retrieval / submission
   Status get_rx_burst(BurstParams** burst, int port, int q) override;
+  Status get_rx_burst(BurstParams** burst, int port) override;
   Status send_tx_burst(BurstParams* burst) override;
   Status wait_for_tx_idle(uint32_t timeout_ms) override;
   BurstParams* create_tx_burst_params() override;
@@ -521,6 +536,14 @@ class IbverbsEngine : public Engine {
                             FlowOpId* op_id) override;
   Status delete_flow_async(FlowId flow_id, FlowOpId* op_id) override;
   Status poll_flow_op(FlowOpResult* result) override;
+  Status add_memory_region_async(const MemoryRegionConfig& config,
+                                 const ExternalMemoryRegion* binding, ResourceOpId* op_id) override;
+  Status delete_memory_region_async(const std::string& name, ResourceOpId* op_id) override;
+  Status add_rx_queue_async(int port, const RxQueueConfig& config, ResourceOpId* op_id) override;
+  Status delete_rx_queue_async(int port, int queue_id, ResourceOpId* op_id) override;
+  Status add_tx_queue_async(int port, const TxQueueConfig& config, ResourceOpId* op_id) override;
+  Status delete_tx_queue_async(int port, int queue_id, ResourceOpId* op_id) override;
+  Status poll_resource_op(ResourceOpResult* result) override;
   uint16_t get_num_rx_queues(int port_id) const override;
   bool validate_config() const override;
   void shutdown() override;
@@ -619,7 +642,7 @@ class IbverbsEngine : public Engine {
   void rx_flush_burst(IbvRxQueue* q);  // enqueue q->cur_burst to the app ring
   // Release `strd` strides belonging to `wqe_idx`; repost the region if fully
   // released. This is the per-burst free hot path.
-  void release_strides(IbvRxQueue& q, uint32_t wqe_idx, uint32_t strd);
+  void release_strides(IbvRxQueue& q, uint32_t wqe_idx, uint32_t strd, bool tracked_packet = true);
 
   // ---- TX path ----
   Status setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf, const TxQueueConfig& qcfg);
@@ -641,14 +664,19 @@ class IbverbsEngine : public Engine {
   // drains each send_ring (post) + reclaims completions.
   void tx_worker(std::vector<IbvTxQueue*> group);
   IbvTxQueue* find_tx_queue(int port, int q);
+  IbvTxQueue* find_tx_queue_any(int port, int q);
+  IbvTxQueue* acquire_tx_queue(int port, int q, bool allow_draining = false);
 
   // ---- helpers ----
   static int mr_access_to_ibv(uint32_t access);
   // Register a configured MR (host/huge via ibv_reg_mr, device via dmabuf) and
   // return its base pointer + lkey.
   Status register_mr(struct ibv_pd* pd, const std::string& mr_name, uint8_t** out_base,
-                     uint32_t* out_lkey);
+                     uint32_t* out_lkey, struct ibv_mr** out_mr);
+  void deregister_queue_mrs(std::vector<struct ibv_mr*>& registrations);
   IbvRxQueue* find_rx_queue(int port, int q);
+  IbvRxQueue* find_rx_queue_any(int port, int q);
+  IbvRxQueue* acquire_rx_queue(int port, int q, bool allow_draining = false);
   // Resolve a port's kernel netdev name via sysfs (ibv device -> .../device/net).
   std::string port_netdev(int port) const;
   // Raise each port's netdev MTU to cover the largest configured frame. Unlike
@@ -686,7 +714,7 @@ class IbverbsEngine : public Engine {
   bool has_dynamic_flow_id_capacity_locked(size_t count) const;
   FlowId allocate_dynamic_flow_id_locked();
   void release_dynamic_flow_id_locked(FlowId flow_id);
-  bool validate_dynamic_rx_flow_locked(int port, const FlowRuleConfig& flow) const;
+  bool validate_dynamic_rx_flow_locked(int port, const FlowRuleConfig& flow);
   Status create_dynamic_flow_locked(int port, const FlowRuleConfig& flow, FlowId flow_id);
   void destroy_dynamic_flow_entry_locked(DynamicFlowEntry& entry);
   void cleanup_dynamic_flows_locked();
@@ -707,6 +735,7 @@ class IbverbsEngine : public Engine {
   // Registrations may be shared by queue setup only through their backing
   // allocation, so retain every verbs object and deregister it before its PD.
   std::vector<struct ibv_mr*> registered_mrs_;
+  std::unordered_map<std::string, std::vector<struct ibv_mr*>> registered_mrs_by_name_;
 
   // Cached mlx5 clock-info per device for converting the CQE's free-running HW
   // timestamp to nanoseconds (mlx5dv_ts_to_ns). Refreshed lazily (the HW clock
@@ -723,6 +752,26 @@ class IbverbsEngine : public Engine {
   // RX/TX queues, owned here. Pointers handed to worker threads are stable.
   std::vector<std::unique_ptr<IbvRxQueue>> rx_queues_;
   std::vector<std::unique_ptr<IbvTxQueue>> tx_queues_;
+
+  // When both lifecycle locks are needed, acquire flow_lock_ before
+  // resource_lock_. Queue-use references are acquired under resource_lock_ so
+  // DRAINING and active_users form one atomic lifetime transition.
+  mutable std::recursive_mutex resource_lock_;
+  std::mutex resource_operation_lock_;
+  ResourceOpId next_resource_op_id_ = 1;
+  std::queue<ResourceOpResult> ready_resource_ops_;
+  std::vector<ResourceOpResult> draining_resource_ops_;
+
+  ResourceOpId allocate_resource_op_id_locked();
+  void enqueue_resource_result_locked(ResourceOpResult result);
+  Status allocate_runtime_mr(MemoryRegionConfig config, const ExternalMemoryRegion* binding);
+  Status free_runtime_mr(const std::string& name);
+  bool memory_region_in_use_locked(const std::string& name) const;
+  bool rx_queue_has_flow_dependency(int port, int queue_id) const;
+  void stop_workers();
+  void destroy_rx_queue(IbvRxQueue& q);
+  void destroy_tx_queue(IbvTxQueue& q);
+  void drain_tx_queue(IbvTxQueue& q);
 
   // Per-port mlx5dv_dr flow steering: one domain + table shared by all RX
   // queues on the port; one matcher+rule per flow (or a catch-all). Torn down
@@ -789,6 +838,10 @@ class IbverbsEngine : public Engine {
     int next_dynamic_priority = 0;
   };
   std::map<int, PortSteering> port_steering_;  // port_id -> steering
+
+  Status initialize_port_steering_locked(int port, const InterfaceConfig& intf,
+                                         struct ibv_context* ctx, bool initialize_flex,
+                                         PortSteering** steering);
 
   bool create_dr_rule_locked(int port, PortSteering& st, uint16_t criteria,
                              struct mlx5dv_flow_match_parameters* mask,
