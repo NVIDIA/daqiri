@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests/portable"]
+pythonpath = ["."]
+addopts = [
+  "-ra",
+  "--strict-markers",
+]
+markers = [
+  "bindings: requires DAQIRI built with DAQIRI_BUILD_PYTHON=ON",
+  "platform: requires a provisioned CI/CD platform with the declared capabilities",
+]

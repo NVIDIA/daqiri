@@ -30,9 +30,19 @@ CUDA architectures default to `80;90` (A100, H100), with `121` (GB10) added when
 
 **Socket / ibverbs relationship**: the socket engine is always built and provides UDP/TCP directly; its RoCE path delegates to the `ibverbs` engine (internally the `rdma` engine — `src/engines/rdma/`, target `daqiri_rdma`, define `DAQIRI_ENGINE_RDMA`; `ibverbs` is only the user-facing name). `src/CMakeLists.txt` builds the ibverbs/rdma engine only when `ibverbs` is in `DAQIRI_ENGINE`, and the socket engine links it conditionally — so `socket` RoCE is available only when `ibverbs` was built, while plain UDP/TCP always works.
 
-## Benchmarks (the "tests")
+## Testing and benchmarks
 
-There is no unit test suite. Verification is done via the benchmark executables in `examples/`, driven by YAML configs. Build outputs (`examples/CMakeLists.txt:59-71`):
+Portable Python unit tests run without configuring or compiling DAQIRI:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install --requirement tests/requirements.txt
+.venv/bin/python -m pytest
+```
+
+The default suite collects only `tests/portable/`. Future build-backed C++ tests live under `tests/cpp/`; Python-binding tests live under `tests/bindings/` and require a container built with `DAQIRI_BUILD_PYTHON=ON`. Platform tests live under `tests/platform/` and are selected by CI/CD jobs running on provisioned GPU/NIC systems; they are never part of the default pytest collection. The project container already includes the current test packages; use the container-specific dependency command in `tests/README.md` when `tests/requirements.txt` changes.
+
+Integration and performance verification is done via the benchmark executables in `examples/`, driven by YAML configs. Build outputs (`examples/CMakeLists.txt:59-71`):
 
 | Executable | Source | Typical config |
 |---|---|---|
@@ -125,7 +135,6 @@ Vendored under `third_party/` as submodules (`.gitmodules`): `yaml-cpp` (config 
 - Raw Ethernet tunnel/VLAN transform flows are hardware-only on the DPDK and ibverbs raw engines. TX flows may contain only push/encap transform actions and RX transform flows must use pop/decap actions ending in a queue; socket/RDMA engines reject these actions instead of adding a software fallback.
 - Raw Ethernet RX flow steering: a single interface cannot mix standard (UDP/IP) and
   flex-item flows, and flex-item flows cannot combine with tunnel/VLAN transform actions; `DpdkEngine::validate_config()` rejects mixed configs at init.
-- No CI yet — contributors and reviewers verify manually (CONTRIBUTING.md).
 
 ## Documentation
 
