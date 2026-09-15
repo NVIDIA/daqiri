@@ -1089,8 +1089,7 @@ Status Engine::poll_flow_op(FlowOpResult* result) {
 }
 
 Status Engine::add_memory_region_async(const MemoryRegionConfig& config,
-                                       const ExternalMemoryRegion* binding,
-                                       ResourceOpId* op_id) {
+                                       const ExternalMemoryRegion* binding, ResourceOpId* op_id) {
   (void)config;
   (void)binding;
   (void)op_id;

@@ -276,6 +276,7 @@ struct IbvRxQueue {
     uint32_t seg_len = 0;    // scatter length for this region's data seg
   };
   std::vector<RxRegion> regions;
+  std::vector<struct ibv_mr*> registrations;
   std::vector<std::string> mr_names;  // configured MR list for this queue
   std::string mr_name;
   uint8_t* mr_base = nullptr;  // base VA of the stride pool (striding path)
@@ -390,6 +391,7 @@ struct IbvTxQueue {
     uint32_t slot_size = 0;
   };
   std::vector<TxRegion> regions;
+  std::vector<struct ibv_mr*> registrations;
   std::vector<std::string> mr_names;
   std::string mr_name;
   uint8_t* mr_base = nullptr;
@@ -519,6 +521,7 @@ class IbverbsEngine : public Engine {
 
   // Burst retrieval / submission
   Status get_rx_burst(BurstParams** burst, int port, int q) override;
+  Status get_rx_burst(BurstParams** burst, int port) override;
   Status send_tx_burst(BurstParams* burst) override;
   Status wait_for_tx_idle(uint32_t timeout_ms) override;
   BurstParams* create_tx_burst_params() override;
@@ -669,7 +672,8 @@ class IbverbsEngine : public Engine {
   // Register a configured MR (host/huge via ibv_reg_mr, device via dmabuf) and
   // return its base pointer + lkey.
   Status register_mr(struct ibv_pd* pd, const std::string& mr_name, uint8_t** out_base,
-                     uint32_t* out_lkey);
+                     uint32_t* out_lkey, struct ibv_mr** out_mr);
+  void deregister_queue_mrs(std::vector<struct ibv_mr*>& registrations);
   IbvRxQueue* find_rx_queue(int port, int q);
   IbvRxQueue* find_rx_queue_any(int port, int q);
   IbvRxQueue* acquire_rx_queue(int port, int q, bool allow_draining = false);
@@ -752,7 +756,7 @@ class IbverbsEngine : public Engine {
   // When both lifecycle locks are needed, acquire flow_lock_ before
   // resource_lock_. Queue-use references are acquired under resource_lock_ so
   // DRAINING and active_users form one atomic lifetime transition.
-  std::recursive_mutex resource_lock_;
+  mutable std::recursive_mutex resource_lock_;
   std::mutex resource_operation_lock_;
   ResourceOpId next_resource_op_id_ = 1;
   std::queue<ResourceOpResult> ready_resource_ops_;
@@ -767,6 +771,7 @@ class IbverbsEngine : public Engine {
   void stop_workers();
   void destroy_rx_queue(IbvRxQueue& q);
   void destroy_tx_queue(IbvTxQueue& q);
+  void drain_tx_queue(IbvTxQueue& q);
 
   // Per-port mlx5dv_dr flow steering: one domain + table shared by all RX
   // queues on the port; one matcher+rule per flow (or a catch-all). Torn down

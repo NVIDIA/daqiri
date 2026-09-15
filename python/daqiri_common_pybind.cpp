@@ -1369,28 +1369,28 @@ PYBIND11_MODULE(_daqiri, m) {
       });
   m.def(
       "add_memory_region_async",
-      [](const MemoryRegionConfig &config) {
+      [](const MemoryRegionConfig& config) {
         ResourceOpId op_id = 0;
         return py::make_tuple(add_memory_region_async(config, &op_id), op_id);
       },
       "config"_a);
   m.def(
       "add_memory_region_async",
-      [](const MemoryRegionConfig &config, const ExternalMemoryRegion &binding) {
+      [](const MemoryRegionConfig& config, const ExternalMemoryRegion& binding) {
         ResourceOpId op_id = 0;
         return py::make_tuple(add_memory_region_async(config, binding, &op_id), op_id);
       },
       "config"_a, "binding"_a);
   m.def(
       "delete_memory_region_async",
-      [](const std::string &name) {
+      [](const std::string& name) {
         ResourceOpId op_id = 0;
         return py::make_tuple(delete_memory_region_async(name, &op_id), op_id);
       },
       "name"_a);
   m.def(
       "add_rx_queue_async",
-      [](int port, const RxQueueConfig &config) {
+      [](int port, const RxQueueConfig& config) {
         ResourceOpId op_id = 0;
         return py::make_tuple(add_rx_queue_async(port, config, &op_id), op_id);
       },
@@ -1404,7 +1404,7 @@ PYBIND11_MODULE(_daqiri, m) {
       "port"_a, "queue_id"_a);
   m.def(
       "add_tx_queue_async",
-      [](int port, const TxQueueConfig &config) {
+      [](int port, const TxQueueConfig& config) {
         ResourceOpId op_id = 0;
         return py::make_tuple(add_tx_queue_async(port, config, &op_id), op_id);
       },
@@ -1416,13 +1416,11 @@ PYBIND11_MODULE(_daqiri, m) {
         return py::make_tuple(delete_tx_queue_async(port, queue_id, &op_id), op_id);
       },
       "port"_a, "queue_id"_a);
-  m.def(
-      "poll_resource_op",
-      []() {
-        ResourceOpResult result;
-        const Status status = poll_resource_op(&result);
-        return py::make_tuple(status, result);
-      });
+  m.def("poll_resource_op", []() {
+    ResourceOpResult result;
+    const Status status = poll_resource_op(&result);
+    return py::make_tuple(status, result);
+  });
   m.def("get_num_rx_queues", &get_num_rx_queues, "port_id"_a);
   m.def("flush_port_queue", &flush_port_queue, "port"_a, "queue"_a);
 

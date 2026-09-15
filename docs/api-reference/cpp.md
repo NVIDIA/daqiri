@@ -362,20 +362,26 @@ if (accepted != daqiri::Status::SUCCESS) {
     throw std::runtime_error("resource request was rejected");
 }
 
-daqiri::ResourceOpResult result;
-for (;;) {
-    const auto poll_status = daqiri::poll_resource_op(&result);
-    if (poll_status == daqiri::Status::NOT_READY) {
-        continue;
+// Keep completions for other in-flight operations instead of discarding them.
+std::unordered_map<daqiri::ResourceOpId, daqiri::ResourceOpResult> completions;
+auto wait_for_resource = [&](daqiri::ResourceOpId wanted) {
+    while (completions.find(wanted) == completions.end()) {
+        daqiri::ResourceOpResult completed;
+        const auto poll_status = daqiri::poll_resource_op(&completed);
+        if (poll_status == daqiri::Status::NOT_READY) {
+            continue;
+        }
+        if (poll_status != daqiri::Status::SUCCESS) {
+            throw std::runtime_error("resource completion polling failed");
+        }
+        completions.insert_or_assign(completed.op_id_, std::move(completed));
     }
-    if (poll_status != daqiri::Status::SUCCESS) {
-        // Handle a terminal polling error.
-        break;
-    }
-    if (result.op_id_ == op) {
-        break;
-    }
-}
+    auto result = std::move(completions.at(wanted));
+    completions.erase(wanted);
+    return result;
+};
+
+const daqiri::ResourceOpResult result = wait_for_resource(op);
 ```
 
 Owned regions use the same host, pinned-host, hugepage, and GPU allocation paths
