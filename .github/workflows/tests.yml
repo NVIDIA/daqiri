@@ -4,21 +4,7 @@ on:
   push:
     branches:
       - main
-    paths:
-      - '.github/workflows/tests.yml'
-      - 'pyproject.toml'
-      - 'python/**/*.py'
-      - 'scripts/*.py'
-      - 'scripts/**/*.py'
-      - 'tests/**'
   pull_request:
-    paths:
-      - '.github/workflows/tests.yml'
-      - 'pyproject.toml'
-      - 'python/**/*.py'
-      - 'scripts/*.py'
-      - 'scripts/**/*.py'
-      - 'tests/**'
 
 permissions:
   contents: read

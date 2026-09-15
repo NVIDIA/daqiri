@@ -122,13 +122,16 @@ Then build the DAQIRI library:
 
 ### Bare-metal dependencies
 
-The Ubuntu apt packages mirror the Dockerfile. Build DPDK from source with the patches under `dpdk_patches/` if you want GPUDirect without the `nvidia-peermem` kernel module.
+The Ubuntu build packages mirror the Dockerfile; `python3-venv` additionally supports
+the host-side portable test environment. Build DPDK from source with the patches under
+`dpdk_patches/` if you want GPUDirect without the `nvidia-peermem` kernel module.
 
 ```bash
 # Core build deps
 sudo apt install -y \
     build-essential cmake git curl ca-certificates gnupg \
-    pkgconf ninja-build meson python3-pip python3-dev python3-pyelftools
+    pkgconf ninja-build meson python3-pip python3-dev python3-pyelftools \
+    python3-venv
 
 # Raw Ethernet (DPDK) build deps
 sudo apt install -y libnuma-dev

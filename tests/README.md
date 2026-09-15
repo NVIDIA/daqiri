@@ -18,6 +18,13 @@ These tests run directly from a source checkout and must not import the compiled
 `daqiri` Python module. On the host, use a virtual environment so the command also
 works on distributions that protect the system Python environment:
 
+On Debian and Ubuntu, install the virtual-environment support package first if it is
+not already present:
+
+```bash
+sudo apt install python3-venv
+```
+
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install --requirement tests/requirements.txt
