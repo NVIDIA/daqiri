@@ -11,18 +11,24 @@ BUILD_SHARED_LIBS="${BUILD_SHARED_LIBS:-ON}"
 DAQIRI_ENABLE_OTEL_METRICS="${DAQIRI_ENABLE_OTEL_METRICS:-OFF}"
 AWS_SDK_CPP_VERSION="${AWS_SDK_CPP_VERSION:-1.11.822}"
 
-case "${BASE_IMAGE}" in
-  cuda)
-    DAQIRI_OS_BASE_IMAGE="nvcr.io/nvidia/cuda:13.1.0-devel-ubuntu24.04"
-    ;;
-  torch)
-    DAQIRI_OS_BASE_IMAGE="nvcr.io/nvidia/pytorch:26.01-py3"
-    ;;
-  *)
-    echo "ERROR: invalid BASE_IMAGE='${BASE_IMAGE}'. Choose from: cuda, torch" >&2
-    exit 1
-    ;;
-esac
+if [[ -z "${DAQIRI_OS_BASE_IMAGE:-}" ]]; then
+  case "${BASE_IMAGE}" in
+    cuda)
+      CUDA_VERSION="${CUDA_VERSION:-13.1.0}"
+      UBUNTU_VERSION="${UBUNTU_VERSION:-ubuntu24.04}"
+      DAQIRI_OS_BASE_IMAGE="nvcr.io/nvidia/cuda:${CUDA_VERSION}-devel-${UBUNTU_VERSION}"
+      ;;
+    torch)
+      DAQIRI_OS_BASE_IMAGE="nvcr.io/nvidia/pytorch:26.01-py3"
+      ;;
+    *)
+      echo "ERROR: invalid BASE_IMAGE='${BASE_IMAGE}'. Choose from: cuda, torch" >&2
+      exit 1
+      ;;
+  esac
+fi
+
+echo "Building ${IMAGE_TAG} on ${DAQIRI_OS_BASE_IMAGE} (target ${BASE_TARGET})"
 
 docker build \
   --target runtime \

@@ -810,7 +810,9 @@ bool DpdkEngine::init_reorder_queue_state(const InterfaceConfig& intf, const RxQ
       if (pool.cuda_events_enabled) { return true; }
       CudaContextGuard context_guard(context);
       if (context == nullptr) {
-        cudaSetDevice(device_id);
+        if (!select_cuda_device(device_id, "allocating CUDA reorder events")) {
+          return false;
+        }
       } else if (!context_guard.valid()) {
         return false;
       }
@@ -894,7 +896,9 @@ bool DpdkEngine::init_reorder_queue_state(const InterfaceConfig& intf, const RxQ
       if (use_gpu_backend && buffer.bitmap_word_count < bitmap_words) {
         CudaContextGuard context_guard(cuda_context);
         if (cuda_context == nullptr) {
-          cudaSetDevice(cuda_device_id);
+          if (!select_cuda_device(cuda_device_id, "allocating CUDA reorder bitmaps")) {
+            return false;
+          }
         } else if (!context_guard.valid()) {
           return false;
         }
@@ -948,7 +952,9 @@ bool DpdkEngine::init_reorder_queue_state(const InterfaceConfig& intf, const RxQ
     if (use_gpu_backend) {
       CudaContextGuard context_guard(plan.cuda_context);
       if (plan.cuda_context == nullptr) {
-        cudaSetDevice(plan.cuda_device_id);
+        if (!select_cuda_device(plan.cuda_device_id, "allocating CUDA reorder staging buffers")) {
+          return false;
+        }
       } else if (!context_guard.valid()) {
         return false;
       }
@@ -1976,36 +1982,46 @@ void* DpdkEngine::alloc_huge(size_t bytes, int numa, AllocRegion::Deallocator* d
 }
 
 void DpdkEngine::adjust_memory_regions() {
-  // num_bufs smaller than ~1.5x the NIC descriptor ring deadlock the worker once the ring
-  // fills (the ring holds every buffer in the pool with no replacement available, so the
-  // next rte_pktmbuf_alloc blocks). Bump such MRs to 3x the ring size up-front -- this runs
-  // before allocate_memory_regions(), so the underlying GPU/CPU buffer is sized correctly.
-  const uint32_t ring_size          = std::max(default_num_rx_desc, default_num_tx_desc);
-  const uint32_t deadlock_threshold = (ring_size * 3) / 2;  // 1.5x ring size
-  const uint32_t bumped_num_bufs    = ring_size * 3;        // 3x ring size
-
-  std::unordered_set<std::string> queue_backed_mrs;
+  // A queue-backed pool must cover descriptor ownership plus burst headroom.
+  // Record the largest batch for each shared MR before allocating its storage.
+  const uint32_t ring_size = std::max(default_num_rx_desc, default_num_tx_desc);
+  std::unordered_map<std::string, uint32_t> mr_max_batch;
+  const auto record_queue = [&mr_max_batch](const CommonQueueConfig& queue) {
+    const uint32_t batch = static_cast<uint32_t>(std::max(0, queue.batch_size_));
+    for (const auto& name : queue.mrs_) {
+      mr_max_batch[name] = std::max(mr_max_batch[name], batch);
+    }
+  };
   for (const auto& intf : cfg_.ifs_) {
     for (const auto& q : intf.rx_.queues_) {
-      for (const auto& n : q.common_.mrs_) { queue_backed_mrs.insert(n); }
+      record_queue(q.common_);
     }
     for (const auto& q : intf.tx_.queues_) {
-      for (const auto& n : q.common_.mrs_) { queue_backed_mrs.insert(n); }
+      record_queue(q.common_);
     }
   }
 
-  for (auto& mr : cfg_.mrs_) {
-    if (queue_backed_mrs.count(mr.second.name_) &&
-        mr.second.num_bufs_ < deadlock_threshold) {
-      DAQIRI_LOG_WARN(
-          "MR '{}' had num_bufs={} which is below the {} threshold (1.5x the {} NIC descriptors) "
-          "and would deadlock the worker once the ring fills. Bumping to {} (3x ring).",
-          mr.second.name_, mr.second.num_bufs_, deadlock_threshold, ring_size, bumped_num_bufs);
-      mr.second.num_bufs_ = bumped_num_bufs;
+  for (auto& [name, mr] : cfg_.mrs_) {
+    const auto batch = mr_max_batch.find(name);
+    if (batch != mr_max_batch.end()) {
+      const auto sizing = dpdk_memory_region_sizing(ring_size, batch->second);
+      if (mr.num_bufs_ < sizing.floor) {
+        const size_t configured = mr.num_bufs_;
+        mr.num_bufs_ = sizing.target;
+        DAQIRI_LOG_WARN(
+            "MR '{}' num_bufs={} is below the {} required for a {}-descriptor ring and "
+            "batch_size={}; TX can stall and RX can run out of buffers. Using num_bufs={}. "
+            "Configure num_bufs: {} to remove this warning.",
+            name, configured, sizing.floor, ring_size, batch->second, sizing.target, sizing.target);
+      } else if (mr.num_bufs_ < sizing.target) {
+        DAQIRI_LOG_WARN(
+            "MR '{}' num_bufs={} meets the minimum {} but provides limited burst headroom for a "
+            "{}-descriptor ring and batch_size={}. Configure num_bufs: {}.",
+            name, mr.num_bufs_, sizing.floor, ring_size, batch->second, sizing.target);
+      }
     }
-
-    mr.second.adj_size_ = mr.second.buf_size_ + RTE_PKTMBUF_HEADROOM;
-    DAQIRI_LOG_INFO("Adjusting buffer size to {} for headroom", mr.second.adj_size_);
+    mr.adj_size_ = mr.buf_size_ + RTE_PKTMBUF_HEADROOM;
+    DAQIRI_LOG_INFO("Adjusting buffer size to {} for headroom", mr.adj_size_);
   }
 }
 
