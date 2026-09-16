@@ -11,7 +11,7 @@ DAQIRI's baseline requirements depend on which [stream type](concepts.md#stream-
 
 | Component | Requirement |
 |-----------|-------------|
-| **OS** | Linux (kernel 5.4+), Ubuntu 22.04 recommended |
+| **OS** | Linux (kernel 5.15+), Ubuntu 22.04 recommended |
 | **CUDA** | CUDA Toolkit 12.2+ (the container ships CUDA 13.1) |
 | **NIC** *(Raw Ethernet / GPUDirect / RoCE only)* | NVIDIA ConnectX-6 Dx or later. Packet pacing and timed transmission require ConnectX-7 or later. Default Ubuntu kernel drivers (inbox) are sufficient. We recommend also installing `doca-ofed` for the diagnostic utilities (`ibstat`, `ibv_devinfo`, `ibdev2netdev`, `mlnx_perf`, `mlxconfig`, and so on). |
 | **GPU** *(GPUDirect only)* | RTX or Data Center GPU. GeForce is not supported. |
