@@ -176,7 +176,17 @@ int main(int argc, char** argv) {
     finish(daqiri::add_memory_region_async(tx_mr, &op));
     finish(daqiri::add_rx_queue_async(0, rx_queue, &op));
     finish(daqiri::add_tx_queue_async(0, tx_queue, &op));
-    const daqiri::FlowId runtime_flow = add_runtime_flow(0, rx_queue.common_.id_);
+    // mlx5 steering supports only a bounded set of matcher priorities. Exercise
+    // more than that many add/delete lifecycles so deleted dynamic flows must
+    // return their priority for reuse.
+    constexpr int kFlowLifecycleCycles = 20;
+    daqiri::FlowId runtime_flow = 0;
+    for (int cycle = 0; cycle < kFlowLifecycleCycles; ++cycle) {
+      runtime_flow = add_runtime_flow(0, rx_queue.common_.id_);
+      if (cycle + 1 < kFlowLifecycleCycles) {
+        delete_runtime_flow(runtime_flow);
+      }
+    }
 
     daqiri::BurstParams* tx = daqiri::create_tx_burst_params();
     if (tx == nullptr) {
