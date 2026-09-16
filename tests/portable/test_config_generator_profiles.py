@@ -35,8 +35,8 @@ def socket_spec(transport: str) -> SocketPairSpec:
         message_size=1024,
         buffer_size=65536,
         num_bufs=128,
-        rx_num_bufs=256,
-        tx_num_bufs=64,
+        rx_num_bufs=256 if transport == "roce" else None,
+        tx_num_bufs=64 if transport == "roce" else None,
         rx_batch_size=32,
         tx_depth=64,
     )
@@ -167,6 +167,9 @@ def test_invalid_profile_inputs_fail_before_rendering() -> None:
     with pytest.raises(ConfigError, match="rx_batch_size must not exceed num_bufs"):
         spec = socket_spec("udp")
         spec.__class__(**{**spec.__dict__, "num_bufs": 16, "rx_batch_size": 32})
+    with pytest.raises(ConfigError, match="supported only for RoCE"):
+        spec = socket_spec("udp")
+        spec.__class__(**{**spec.__dict__, "rx_num_bufs": 512})
 
 
 def test_production_profiles_do_not_require_benchmark_worker_cores() -> None:

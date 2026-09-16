@@ -10,12 +10,12 @@
     "version": {"const": 1},
     "stream_type": {"enum": ["raw", "socket"]},
     "engine": {"enum": ["default", "dpdk", "socket", "ibverbs"]},
-    "master_core": {"type": "integer", "minimum": -1},
+    "master_core": {"type": "integer", "minimum": -1, "maximum": 2147483647},
     "debug": {"type": "boolean"},
     "log_level": {"enum": ["trace", "debug", "info", "warn", "error", "critical", "off"]},
     "loopback": {"enum": ["", "sw", "hw"]},
-    "tx_meta_buffers": {"type": "integer", "minimum": 1},
-    "rx_meta_buffers": {"type": "integer", "minimum": 1},
+    "tx_meta_buffers": {"$ref": "#/definitions/positiveUint32"},
+    "rx_meta_buffers": {"$ref": "#/definitions/positiveUint32"},
     "memory_regions": {
       "type": "array",
       "minItems": 1,
@@ -30,13 +30,17 @@
   "definitions": {
     "core": {
       "oneOf": [
-        {"type": "integer", "minimum": -1},
+        {"type": "integer", "minimum": -1, "maximum": 2147483647},
         {"type": "string", "pattern": "^-?[0-9]+$"}
       ]
     },
     "uint8": {"type": "integer", "minimum": 0, "maximum": 255},
     "uint16": {"type": "integer", "minimum": 0, "maximum": 65535},
     "uint32": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+    "uint64": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+    "positiveInt32": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+    "positiveUint32": {"type": "integer", "minimum": 1, "maximum": 4294967295},
+    "positiveUint64": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
     "memoryRegion": {
       "type": "object",
       "additionalProperties": false,
@@ -44,14 +48,14 @@
       "properties": {
         "name": {"type": "string", "minLength": 1},
         "kind": {"enum": ["huge", "device", "host_pinned", "host"]},
-        "affinity": {"type": "integer", "minimum": 0},
+        "affinity": {"$ref": "#/definitions/uint16"},
         "access": {
           "type": "array",
           "uniqueItems": true,
           "items": {"enum": ["local", "rdma_read", "rdma_write"]}
         },
-        "num_bufs": {"type": "integer", "minimum": 1},
-        "buf_size": {"type": "integer", "minimum": 1},
+        "num_bufs": {"$ref": "#/definitions/positiveUint64"},
+        "buf_size": {"$ref": "#/definitions/positiveUint64"},
         "owned": {
           "type": "boolean",
           "description": "Deprecated compatibility field. Prefer runtime external-memory bindings."
@@ -84,9 +88,9 @@
         "local_addr": {"type": "string", "minLength": 1},
         "remote_addr": {"type": "string", "minLength": 1},
         "max_payload_size": {"type": "integer", "minimum": 1, "maximum": 65535},
-        "max_burst_interval_ms": {"type": "integer", "minimum": 0},
-        "min_ipg_ns": {"type": "integer", "minimum": 0},
-        "retry_connect_s": {"type": "integer", "minimum": 0},
+        "max_burst_interval_ms": {"$ref": "#/definitions/uint64"},
+        "min_ipg_ns": {"$ref": "#/definitions/uint32"},
+        "retry_connect_s": {"type": "integer", "minimum": 0, "maximum": 2147483647},
         "local_ip": {"type": "string", "description": "Deprecated; use local_addr."},
         "local_port": {"$ref": "#/definitions/uint16"},
         "remote_ip": {"type": "string", "description": "Deprecated; use remote_addr."},
@@ -107,7 +111,7 @@
       "required": ["queues"],
       "properties": {
         "flow_isolation": {"type": "boolean"},
-        "dynamic_flow_capacity": {"type": "integer", "minimum": 0},
+        "dynamic_flow_capacity": {"$ref": "#/definitions/uint32"},
         "hardware_timestamps": {"type": "boolean"},
         "queues": {"type": "array", "minItems": 1, "items": {"$ref": "#/definitions/rxQueue"}},
         "flows": {"type": "array", "items": {"$ref": "#/definitions/flow"}},
@@ -134,13 +138,13 @@
         "id": {"$ref": "#/definitions/uint16"},
         "poll_mode": {"enum": ["indirect", "direct"]},
         "cpu_core": {"$ref": "#/definitions/core"},
-        "batch_size": {"type": "integer", "minimum": 1},
+        "batch_size": {"$ref": "#/definitions/positiveInt32"},
         "memory_regions": {
           "type": "array",
           "minItems": 1,
           "items": {"type": "string", "minLength": 1}
         },
-        "timeout_us": {"type": "integer", "minimum": 0}
+        "timeout_us": {"$ref": "#/definitions/uint64"}
       }
     },
     "txQueue": {
@@ -152,7 +156,7 @@
         "id": {"$ref": "#/definitions/uint16"},
         "poll_mode": {"enum": ["indirect", "direct"]},
         "cpu_core": {"$ref": "#/definitions/core"},
-        "batch_size": {"type": "integer", "minimum": 1},
+        "batch_size": {"$ref": "#/definitions/positiveInt32"},
         "memory_regions": {
           "type": "array",
           "minItems": 1,
@@ -163,10 +167,9 @@
           "uniqueItems": true,
           "items": {"enum": ["tx_eth_src"]}
         },
-        "pacing_mbps": {"type": "integer", "minimum": 0},
+        "pacing_mbps": {"$ref": "#/definitions/uint64"},
         "timeout_us": {
-          "type": "integer",
-          "minimum": 0,
+          "$ref": "#/definitions/uint64",
           "description": "Deprecated ignored field retained for checked-in config compatibility."
         }
       }
@@ -188,7 +191,7 @@
       "required": ["name", "id"],
       "properties": {
         "name": {"type": "string", "minLength": 1},
-        "id": {"type": "integer", "minimum": 0},
+        "id": {"$ref": "#/definitions/uint32"},
         "match": {"$ref": "#/definitions/flowMatch"},
         "action": {"$ref": "#/definitions/flowAction"},
         "actions": {"type": "array", "minItems": 1, "items": {"$ref": "#/definitions/flowAction"}}
@@ -314,7 +317,7 @@
         "memory_region": {"type": "string", "minLength": 1},
         "payload_byte_offset": {"$ref": "#/definitions/uint32"},
         "packet_size": {"$ref": "#/definitions/uint32"},
-        "flow_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 0}},
+        "flow_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/definitions/uint32"}},
         "data_types": {"$ref": "#/definitions/dataTypes"},
         "method": {"$ref": "#/definitions/reorderMethod"}
       }
@@ -377,7 +380,7 @@
       "required": ["sequence_number", "packets_per_batch"],
       "properties": {
         "sequence_number": {"$ref": "#/definitions/bitField"},
-        "packets_per_batch": {"type": "integer", "minimum": 1}
+        "packets_per_batch": {"$ref": "#/definitions/positiveUint32"}
       }
     }
   }

@@ -8,10 +8,15 @@
 from __future__ import annotations
 
 import argparse
+import copy
+import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from daqiri_config import (
     RawPairSpec,
@@ -43,8 +48,8 @@ def _socket_spec(transport: str) -> SocketPairSpec:
         message_size=message_size,
         buffer_size=message_size if transport != "udp" else 65536,
         num_bufs=128,
-        rx_num_bufs=512,
-        tx_num_bufs=128,
+        rx_num_bufs=512 if transport == "roce" else None,
+        tx_num_bufs=128 if transport == "roce" else None,
         rx_batch_size=32 if transport == "udp" else 1,
         memory_kind="host_pinned" if transport == "roce" else "host",
         rx_depth=512,
@@ -97,6 +102,66 @@ def generated_matrix() -> dict[str, dict[str, Any]]:
     return documents
 
 
+def _rendered_matrix() -> bytes:
+    output: list[str] = []
+    for name, document in sorted(generated_matrix().items()):
+        validate_document(document)
+        output.append(f"# {name}\n")
+        output.append(render_document(document))
+    return "".join(output).encode("utf-8")
+
+
+def _generate_matrix_in_subprocess(hash_seed: int) -> bytes:
+    environment = os.environ.copy()
+    environment["PYTHONHASHSEED"] = str(hash_seed)
+    result = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve()), "--emit-matrix"],
+        check=True,
+        capture_output=True,
+        env=environment,
+    )
+    return result.stdout
+
+
+def _cpp_rejection_documents(
+    documents: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    invalid: dict[str, dict[str, Any]] = {}
+
+    unknown_queue_key = copy.deepcopy(documents["raw-ibverbs-none"])
+    queue = unknown_queue_key["daqiri"]["cfg"]["interfaces"][1]["rx"]["queues"][0]
+    queue["batch_sise"] = queue.pop("batch_size")
+    invalid["unknown-queue-key"] = unknown_queue_key
+
+    dynamic_flow_overflow = copy.deepcopy(documents["raw-ibverbs-none"])
+    dynamic_flow_overflow["daqiri"]["cfg"]["interfaces"][1]["rx"][
+        "dynamic_flow_capacity"
+    ] = 1 << 32
+    invalid["dynamic-flow-capacity-overflow"] = dynamic_flow_overflow
+
+    metadata_overflow = copy.deepcopy(documents["raw-ibverbs-none"])
+    metadata_overflow["daqiri"]["cfg"]["tx_meta_buffers"] = 1 << 32
+    invalid["metadata-overflow"] = metadata_overflow
+
+    min_ipg_overflow = copy.deepcopy(documents["socket-udp-rx"])
+    min_ipg_overflow["daqiri"]["cfg"]["interfaces"][0]["socket_config"][
+        "min_ipg_ns"
+    ] = 1 << 32
+    invalid["min-ipg-overflow"] = min_ipg_overflow
+
+    affinity_overflow = copy.deepcopy(documents["raw-ibverbs-none"])
+    affinity_overflow["daqiri"]["cfg"]["memory_regions"][0]["affinity"] = 1 << 16
+    invalid["affinity-overflow"] = affinity_overflow
+
+    unknown_offload = copy.deepcopy(documents["raw-ibverbs-none"])
+    unknown_offload["daqiri"]["cfg"]["interfaces"][0]["tx"]["queues"][0][
+        "offloads"
+    ] = ["tx_eth_scr"]
+    invalid["unknown-offload"] = unknown_offload
+
+    return invalid
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -104,7 +169,19 @@ def main() -> int:
         type=Path,
         help="also parse every document with the built daqiri_config_validate binary",
     )
+    parser.add_argument("--emit-matrix", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+
+    if args.emit_matrix:
+        sys.stdout.buffer.write(_rendered_matrix())
+        return 0
+
+    first_generation = _generate_matrix_in_subprocess(1)
+    second_generation = _generate_matrix_in_subprocess(2)
+    if first_generation != second_generation:
+        raise RuntimeError(
+            "non-deterministic generation across independent processes"
+        )
 
     documents = generated_matrix()
     with tempfile.TemporaryDirectory(prefix="daqiri-generated-configs-") as temp_dir:
@@ -112,8 +189,6 @@ def main() -> int:
         for name, document in documents.items():
             validate_document(document)
             rendered = render_document(document)
-            if rendered != render_document(document):
-                raise RuntimeError(f"non-deterministic rendering for {name}")
             path = Path(temp_dir) / f"{name}.yaml"
             path.write_text(rendered, encoding="utf-8")
             paths.append(path)
@@ -122,8 +197,25 @@ def main() -> int:
             subprocess.run(
                 [str(args.validator), *(str(path) for path in paths)], check=True
             )
+            for name, document in _cpp_rejection_documents(documents).items():
+                path = Path(temp_dir) / f"invalid-{name}.yaml"
+                path.write_text(
+                    "%YAML 1.2\n---\n"
+                    + yaml.safe_dump(document, sort_keys=False, width=1000),
+                    encoding="utf-8",
+                )
+                result = subprocess.run(
+                    [str(args.validator), str(path)],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 1:
+                    raise RuntimeError(
+                        f"C++ decoder did not cleanly reject invalid configuration {name} "
+                        f"(exit {result.returncode})\n{result.stdout}{result.stderr}"
+                    )
 
-    suffix = " and the C++ decoder" if args.validator else ""
+    suffix = " and the C++ decoder rejection checks" if args.validator else ""
     print(f"Validated {len(documents)} generated configurations with JSON Schema{suffix}.")
     return 0
 

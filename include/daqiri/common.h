@@ -18,12 +18,18 @@
 #pragma once
 #include <daqiri/logging.hpp>
 #include <daqiri/types.h>
+#include <cerrno>
 #include <cstddef>
+#include <cstdlib>
+#include <initializer_list>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdint.h>
 #include <string>
+#include <string_view>
 #include <tuple>
+#include <type_traits>
 #include <unordered_set>
 #include <vector>
 #include <yaml-cpp/yaml.h>
@@ -72,6 +78,99 @@ struct S3WriteStatus {
 static constexpr uint32_t DEFAULT_TX_META_BUFFERS = 1UL << 8;
 static constexpr uint32_t DEFAULT_RX_META_BUFFERS = 1UL << 8;
 namespace detail {
+inline bool validate_yaml_mapping_keys(const YAML::Node& node,
+                                       std::initializer_list<const char*> allowed_keys,
+                                       std::string_view context) {
+  if (!node.IsMap()) {
+    DAQIRI_LOG_ERROR("{} must be a mapping", context);
+    return false;
+  }
+  for (const auto& entry : node) {
+    if (!entry.first.IsScalar()) {
+      DAQIRI_LOG_ERROR("{} contains a non-scalar key", context);
+      return false;
+    }
+    const std::string key = entry.first.as<std::string>();
+    bool known = false;
+    for (const char* allowed : allowed_keys) {
+      if (key == allowed) {
+        known = true;
+        break;
+      }
+    }
+    if (!known) {
+      DAQIRI_LOG_ERROR("Unknown key '{}.{}'", context, key);
+      return false;
+    }
+  }
+  return true;
+}
+
+template <typename T>
+inline bool parse_optional_yaml_scalar(const YAML::Node& node, const char* key, T default_value,
+                                       T& value, std::string_view context) {
+  if (!node[key].IsDefined()) {
+    value = default_value;
+    return true;
+  }
+  try {
+    value = node[key].as<T>();
+    return true;
+  } catch (const std::exception& e) {
+    DAQIRI_LOG_ERROR("Invalid value for '{}.{}': {}", context, key, e.what());
+    return false;
+  }
+}
+
+template <typename T>
+inline bool parse_yaml_integer(const YAML::Node& node, T& value) {
+  static_assert(std::is_integral_v<T> && !std::is_same_v<T, bool>);
+  if (!node.IsScalar()) {
+    return false;
+  }
+  try {
+    const std::string text = node.as<std::string>();
+    char* end = nullptr;
+    errno = 0;
+    if constexpr (std::is_signed_v<T>) {
+      const long long parsed = std::strtoll(text.c_str(), &end, 0);
+      if (errno != 0 || end == text.c_str() || *end != '\0' ||
+          parsed < static_cast<long long>(std::numeric_limits<T>::min()) ||
+          parsed > static_cast<long long>(std::numeric_limits<T>::max())) {
+        return false;
+      }
+      value = static_cast<T>(parsed);
+    } else {
+      if (!text.empty() && text.front() == '-') {
+        return false;
+      }
+      const unsigned long long parsed = std::strtoull(text.c_str(), &end, 0);
+      if (errno != 0 || end == text.c_str() || *end != '\0' ||
+          parsed > static_cast<unsigned long long>(std::numeric_limits<T>::max())) {
+        return false;
+      }
+      value = static_cast<T>(parsed);
+    }
+    return true;
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+template <typename T>
+inline bool parse_optional_yaml_integer(const YAML::Node& node, const char* key, T default_value,
+                                        T& value, std::string_view context) {
+  if (!node[key].IsDefined()) {
+    value = default_value;
+    return true;
+  }
+  if (!parse_yaml_integer(node[key], value)) {
+    DAQIRI_LOG_ERROR("Invalid integer for '{}.{}'", context, key);
+    return false;
+  }
+  return true;
+}
+
 inline Direction DirectionStringToType(const std::string &dir) {
   if (dir == "rx") {
     return Direction::RX;
@@ -1111,6 +1210,14 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
       DAQIRI_LOG_ERROR("InputSpec: expected a map");
       return false;
     }
+    if (!daqiri::detail::validate_yaml_mapping_keys(
+            node,
+            {"version", "stream_type", "engine", "master_core", "debug", "log_level", "loopback",
+             "tx_meta_buffers", "rx_meta_buffers", "memory_regions", "interfaces", "manager",
+             "protocol"},
+            "daqiri.cfg")) {
+      return false;
+    }
 
     // YAML is using exceptions, catch them
     try {
@@ -1121,8 +1228,20 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
         return false;
       }
 
-      input_spec.common_.version = node["version"].as<int32_t>();
-      input_spec.common_.master_core_ = node["master_core"].as<int32_t>();
+      if (!daqiri::detail::parse_yaml_integer(node["version"], input_spec.common_.version) ||
+          !daqiri::detail::parse_yaml_integer(node["master_core"],
+                                              input_spec.common_.master_core_)) {
+        DAQIRI_LOG_ERROR("version and master_core must be 32-bit integers");
+        return false;
+      }
+      if (input_spec.common_.version != 1) {
+        DAQIRI_LOG_ERROR("Unsupported config version {}; expected 1", input_spec.common_.version);
+        return false;
+      }
+      if (input_spec.common_.master_core_ < -1) {
+        DAQIRI_LOG_ERROR("master_core must be -1 or a non-negative CPU index");
+        return false;
+      }
 
       if (!node["stream_type"].IsDefined()) {
         DAQIRI_LOG_ERROR(
@@ -1210,17 +1329,18 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
       }
 
       input_spec.common_.loopback_ = daqiri::LoopbackType::DISABLED;
-      try {
-        const auto lbstr = node["loopback"].as<std::string>();
-        if (lbstr == "sw") {
-          input_spec.common_.loopback_ = daqiri::LoopbackType::LOOPBACK_TYPE_SW;
-        } else if (lbstr == "hw") {
-          input_spec.common_.loopback_ = daqiri::LoopbackType::LOOPBACK_TYPE_HW;
-        } else if (!lbstr.empty()) {
-          DAQIRI_LOG_ERROR("Invalid loopback type: {}. Use 'sw', 'hw', or empty string ''", lbstr);
-          return false;
-        }
-      } catch (const std::exception &e) {
+      std::string loopback;
+      if (!daqiri::detail::parse_optional_yaml_scalar(node, "loopback", std::string{}, loopback,
+                                                      "daqiri.cfg")) {
+        return false;
+      }
+      if (loopback == "sw") {
+        input_spec.common_.loopback_ = daqiri::LoopbackType::LOOPBACK_TYPE_SW;
+      } else if (loopback == "hw") {
+        input_spec.common_.loopback_ = daqiri::LoopbackType::LOOPBACK_TYPE_HW;
+      } else if (!loopback.empty()) {
+        DAQIRI_LOG_ERROR("Invalid loopback type: {}. Use 'sw', 'hw', or empty string ''", loopback);
+        return false;
       }
       if (input_spec.common_.loopback_ == daqiri::LoopbackType::LOOPBACK_TYPE_HW &&
           (input_spec.common_.stream_type != daqiri::StreamType::RAW ||
@@ -1229,32 +1349,34 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
         return false;
       }
 
-      try {
-        input_spec.debug_ = node["debug"].as<bool>(false);
-      } catch (const std::exception &e) {
-        input_spec.debug_ = false;
+      bool debug = false;
+      if (!daqiri::detail::parse_optional_yaml_scalar(node, "debug", false, debug, "daqiri.cfg")) {
+        return false;
+      }
+      input_spec.debug_ = debug;
+
+      std::string log_level;
+      if (!daqiri::detail::parse_optional_yaml_scalar(
+              node, "log_level", daqiri::LogLevel::to_string(daqiri::LogLevel::WARN), log_level,
+              "daqiri.cfg")) {
+        return false;
+      }
+      input_spec.log_level_ = daqiri::LogLevel::from_string(log_level);
+
+      if (!daqiri::detail::parse_optional_yaml_integer(node, "tx_meta_buffers",
+                                                       daqiri::DEFAULT_TX_META_BUFFERS,
+                                                       input_spec.tx_meta_buffers_, "daqiri.cfg") ||
+          input_spec.tx_meta_buffers_ == 0) {
+        DAQIRI_LOG_ERROR("tx_meta_buffers must be greater than zero");
+        return false;
       }
 
-      try {
-        input_spec.log_level_ =
-            daqiri::LogLevel::from_string(node["log_level"].as<std::string>(
-                daqiri::LogLevel::to_string(daqiri::LogLevel::WARN)));
-      } catch (const std::exception &e) {
-        input_spec.log_level_ = daqiri::LogLevel::WARN;
-      }
-
-      try {
-        input_spec.tx_meta_buffers_ = node["tx_meta_buffers"].as<uint32_t>(
-            daqiri::DEFAULT_TX_META_BUFFERS);
-      } catch (const std::exception &e) {
-        input_spec.tx_meta_buffers_ = daqiri::DEFAULT_TX_META_BUFFERS;
-      }
-
-      try {
-        input_spec.rx_meta_buffers_ = node["rx_meta_buffers"].as<uint32_t>(
-            daqiri::DEFAULT_RX_META_BUFFERS);
-      } catch (const std::exception &e) {
-        input_spec.rx_meta_buffers_ = daqiri::DEFAULT_RX_META_BUFFERS;
+      if (!daqiri::detail::parse_optional_yaml_integer(node, "rx_meta_buffers",
+                                                       daqiri::DEFAULT_RX_META_BUFFERS,
+                                                       input_spec.rx_meta_buffers_, "daqiri.cfg") ||
+          input_spec.rx_meta_buffers_ == 0) {
+        DAQIRI_LOG_ERROR("rx_meta_buffers must be greater than zero");
+        return false;
       }
 
       try {
@@ -1280,6 +1402,13 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
         const auto &intfs = node["interfaces"];
         for (const auto &intf : intfs) {
           daqiri::InterfaceConfig ifcfg;
+
+          if (!daqiri::detail::validate_yaml_mapping_keys(
+                  intf,
+                  {"name", "address", "socket_config", "roce_config", "rx", "tx", "rdma_config"},
+                  "daqiri.cfg.interfaces[]")) {
+            return false;
+          }
 
           ifcfg.name_ = intf["name"].as<std::string>();
           ifcfg.address_ = intf["address"].as<std::string>();
@@ -1366,26 +1495,34 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
             }
           }
 
+          if (intf["rx"].IsDefined() &&
+              !daqiri::detail::validate_yaml_mapping_keys(
+                  intf["rx"],
+                  {"flow_isolation", "dynamic_flow_capacity", "hardware_timestamps", "queues",
+                   "flows", "flex_items", "reorder_configs"},
+                  "daqiri.cfg.interfaces[].rx")) {
+            return false;
+          }
           try {
             const auto& rx = intf["rx"];
             daqiri::RxConfig rx_cfg;
 
-            try {
-              rx_cfg.flow_isolation_ = rx["flow_isolation"].as<bool>();
-            } catch (const std::exception& e) {
-              rx_cfg.flow_isolation_ = false;
+            if (!daqiri::detail::parse_optional_yaml_scalar(rx, "flow_isolation", false,
+                                                            rx_cfg.flow_isolation_,
+                                                            "daqiri.cfg.interfaces[].rx")) {
+              return false;
             }
 
-            try {
-              rx_cfg.hardware_timestamps_ = rx["hardware_timestamps"].as<bool>();
-            } catch (const std::exception& e) {
-              rx_cfg.hardware_timestamps_ = false;
+            if (!daqiri::detail::parse_optional_yaml_scalar(rx, "hardware_timestamps", false,
+                                                            rx_cfg.hardware_timestamps_,
+                                                            "daqiri.cfg.interfaces[].rx")) {
+              return false;
             }
 
-            try {
-              rx_cfg.dynamic_flow_capacity_ = rx["dynamic_flow_capacity"].as<uint32_t>();
-            } catch (const std::exception& e) {
-              rx_cfg.dynamic_flow_capacity_ = daqiri::DEFAULT_DYNAMIC_FLOW_CAPACITY;
+            if (!daqiri::detail::parse_optional_yaml_integer(
+                    rx, "dynamic_flow_capacity", daqiri::DEFAULT_DYNAMIC_FLOW_CAPACITY,
+                    rx_cfg.dynamic_flow_capacity_, "daqiri.cfg.interfaces[].rx")) {
+              return false;
             }
 
             for (const auto& q_item : rx["queues"]) {
@@ -1395,10 +1532,10 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
                 return false;
               }
 
-              try {
-                q.timeout_us_ = q_item["timeout_us"].as<uint64_t>();
-              } catch (const std::exception& e) {
-                q.timeout_us_ = 0;
+              if (!daqiri::detail::parse_optional_yaml_integer(
+                      q_item, "timeout_us", uint64_t{0}, q.timeout_us_,
+                      "daqiri.cfg.interfaces[].rx.queues[]")) {
+                return false;
               }
 
               rx_cfg.queues_.emplace_back(std::move(q));
@@ -1457,14 +1594,19 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
           } catch (const std::exception& e) {
           }  // No RX queues defined for this interface.
 
+          if (intf["tx"].IsDefined() &&
+              !daqiri::detail::validate_yaml_mapping_keys(
+                  intf["tx"], {"accurate_send", "queues", "flows"}, "daqiri.cfg.interfaces[].tx")) {
+            return false;
+          }
           try {
             const auto &tx = intf["tx"];
             daqiri::TxConfig tx_cfg;
 
-            try {
-              tx_cfg.accurate_send_ = tx["accurate_send"].as<bool>();
-            } catch (const std::exception &e) {
-              tx_cfg.accurate_send_ = false;
+            if (!daqiri::detail::parse_optional_yaml_scalar(tx, "accurate_send", false,
+                                                            tx_cfg.accurate_send_,
+                                                            "daqiri.cfg.interfaces[].tx")) {
+              return false;
             }
 
             for (const auto &q_item : tx["queues"]) {

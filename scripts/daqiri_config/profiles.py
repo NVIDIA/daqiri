@@ -85,6 +85,10 @@ class SocketPairSpec:
             raise ConfigError(
                 f"transport must be one of {', '.join(SUPPORTED_SOCKET_TRANSPORTS)}"
             )
+        if self.transport != "roce" and (
+            self.rx_num_bufs is not None or self.tx_num_bufs is not None
+        ):
+            raise ConfigError("rx_num_bufs and tx_num_bufs are supported only for RoCE")
         for name in ("client_port", "server_port"):
             _require_port(name, getattr(self, name))
         for name in ("client_address", "server_address"):

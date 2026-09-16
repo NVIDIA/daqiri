@@ -74,8 +74,12 @@ def _socket_parser(subparsers: argparse._SubParsersAction) -> None:
     parser.add_argument("--message-size", type=int, required=True)
     parser.add_argument("--buffer-size", type=int, required=True)
     parser.add_argument("--num-bufs", type=int, required=True)
-    parser.add_argument("--rx-num-bufs", type=int)
-    parser.add_argument("--tx-num-bufs", type=int)
+    parser.add_argument(
+        "--rx-num-bufs", type=int, help="RoCE RX memory-region buffer count"
+    )
+    parser.add_argument(
+        "--tx-num-bufs", type=int, help="RoCE TX memory-region buffer count"
+    )
     parser.add_argument("--rx-batch-size", type=int, default=1)
     parser.add_argument("--affinity", type=int, default=0)
     parser.add_argument("--memory-kind", choices=("huge", "device", "host_pinned", "host"))

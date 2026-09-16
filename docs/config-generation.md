@@ -145,7 +145,8 @@ The repository runs two complementary checks:
    outside the schema.
 2. `python3 scripts/check_generated_configs.py` generates socket, RoCE, raw,
    transform, multi-queue, and cross-host role matrices and checks schema validity
-   plus deterministic rendering.
+   plus byte-identical generation in independent processes with different Python
+   hash seeds.
 
 After building DAQIRI, add the authoritative C++ decoder used by the runtime:
 
@@ -154,8 +155,9 @@ python3 scripts/check_generated_configs.py \
   --validator build/examples/daqiri_config_validate
 ```
 
-Schema validation provides precise unknown-key and structural errors. The C++
-decoder remains authoritative for what the installed DAQIRI library accepts.
+Schema validation provides precise structural errors. The C++ decoder remains
+authoritative for what the installed DAQIRI library accepts and independently
+rejects unknown DAQIRI-owned keys and out-of-range fixed-width values.
 
 ## Spark verification checklist
 
