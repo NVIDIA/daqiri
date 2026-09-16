@@ -250,10 +250,16 @@ bool parse_flow_action_config(const YAML::Node& action_node, FlowAction& action)
     return false;
   }
 
-  action.tunnel_.outer_eth_src_ = tunnel["outer_eth_src"].as<std::string>("");
-  action.tunnel_.outer_eth_dst_ = tunnel["outer_eth_dst"].as<std::string>("");
-  action.tunnel_.outer_ipv4_src_ = tunnel["outer_ipv4_src"].as<std::string>("");
-  action.tunnel_.outer_ipv4_dst_ = tunnel["outer_ipv4_dst"].as<std::string>("");
+  if (!detail::parse_optional_yaml_scalar(tunnel, "outer_eth_src", std::string{},
+                                          action.tunnel_.outer_eth_src_, "tunnel") ||
+      !detail::parse_optional_yaml_scalar(tunnel, "outer_eth_dst", std::string{},
+                                          action.tunnel_.outer_eth_dst_, "tunnel") ||
+      !detail::parse_optional_yaml_scalar(tunnel, "outer_ipv4_src", std::string{},
+                                          action.tunnel_.outer_ipv4_src_, "tunnel") ||
+      !detail::parse_optional_yaml_scalar(tunnel, "outer_ipv4_dst", std::string{},
+                                          action.tunnel_.outer_ipv4_dst_, "tunnel")) {
+    return false;
+  }
   if (tunnel["outer_ipv4_ttl"] &&
       !parse_u8_field(tunnel, "outer_ipv4_ttl", &action.tunnel_.outer_ipv4_ttl_)) {
     DAQIRI_LOG_ERROR("tunnel action has invalid 'outer_ipv4_ttl'");
@@ -1180,7 +1186,11 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_flow_config(
   // Matches the eCPRI EtherType (0xAEFE) plus an optional common-header message
   // type and message identifier (pc_id/rtc_id). Detected before the UDP/IP and
   // flex-item paths because it is a distinct, mutually exclusive match class.
-  if (ecpri_node && ecpri_node.IsMap()) {
+  if (ecpri_node && !ecpri_node.IsMap()) {
+    DAQIRI_LOG_ERROR("Flow '{}' field 'match.ecpri' must be a map", flow.name_);
+    return false;
+  }
+  if (ecpri_node) {
     if (!daqiri::detail::validate_yaml_mapping_keys(ecpri_node, {"msg_type", "pc_id", "rtc_id"},
                                                     "flow.match.ecpri")) {
       return false;
@@ -1233,28 +1243,38 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_flow_config(
     return false;
   }
 
-  try {
-    std::string ipv4_src = match["ipv4_src"].as<std::string>();
+  flow.match_.ipv4_src_ = INADDR_ANY;
+  if (match["ipv4_src"].IsDefined()) {
+    std::string ipv4_src;
+    try {
+      ipv4_src = match["ipv4_src"].as<std::string>();
+    } catch (const std::exception& e) {
+      DAQIRI_LOG_ERROR("Flow '{}' has invalid ipv4_src: {}", flow.name_, e.what());
+      return false;
+    }
     if (inet_pton(AF_INET, ipv4_src.c_str(), &addr) != 1) {
       DAQIRI_LOG_ERROR("Error parsing ipv4_src : {}", ipv4_src);
       return false;
     } else {
       flow.match_.ipv4_src_ = addr.s_addr;
     }
-  } catch (const std::exception& e) {
-    flow.match_.ipv4_src_ = INADDR_ANY;
   }
 
-  try {
-    std::string ipv4_dst = match["ipv4_dst"].as<std::string>();
+  flow.match_.ipv4_dst_ = INADDR_ANY;
+  if (match["ipv4_dst"].IsDefined()) {
+    std::string ipv4_dst;
+    try {
+      ipv4_dst = match["ipv4_dst"].as<std::string>();
+    } catch (const std::exception& e) {
+      DAQIRI_LOG_ERROR("Flow '{}' has invalid ipv4_dst: {}", flow.name_, e.what());
+      return false;
+    }
     if (inet_pton(AF_INET, ipv4_dst.c_str(), &addr) != 1) {
       DAQIRI_LOG_ERROR("Error parsing ipv4_dst : {}", ipv4_dst);
       return false;
     } else {
       flow.match_.ipv4_dst_ = addr.s_addr;
     }
-  } catch (const std::exception& e) {
-    flow.match_.ipv4_dst_ = INADDR_ANY;
   }
 
   // if none of the normal match criteria are defined, use flex item match
@@ -1375,10 +1395,19 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_reorder_config(
 
   try {
     reorder_config.name_ = reorder_item["name"].as<std::string>();
-    reorder_config.reorder_engine_ = reorder_item["reorder_engine"].as<std::string>("sw");
-    reorder_config.cyclic_sequence_ = reorder_item["cyclic_sequence"].as<bool>(false);
-    reorder_config.missing_action_ = daqiri::reorder_missing_action_from_string(
-        reorder_item["missing_action"].as<std::string>("passthrough"));
+    std::string missing_action;
+    if (!daqiri::detail::parse_optional_yaml_scalar(
+            reorder_item, "reorder_engine", std::string{"sw"}, reorder_config.reorder_engine_,
+            "reorder config") ||
+        !daqiri::detail::parse_optional_yaml_scalar(reorder_item, "cyclic_sequence", false,
+                                                    reorder_config.cyclic_sequence_,
+                                                    "reorder config") ||
+        !daqiri::detail::parse_optional_yaml_scalar(reorder_item, "missing_action",
+                                                    std::string{"passthrough"}, missing_action,
+                                                    "reorder config")) {
+      return false;
+    }
+    reorder_config.missing_action_ = daqiri::reorder_missing_action_from_string(missing_action);
     reorder_config.reorder_type_ = reorder_item["reorder_type"].as<std::string>();
     reorder_config.memory_region_ = reorder_item["memory_region"].as<std::string>();
     if (!daqiri::detail::parse_yaml_integer(reorder_item["payload_byte_offset"],
@@ -1642,6 +1671,15 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_memory_region_config(
     tmr.name_ = mr["name"].as<std::string>();
     tmr.kind_ =
         daqiri::GetMemoryKindFromString(mr["kind"].template as<std::string>());
+    if (tmr.name_.empty()) {
+      DAQIRI_LOG_ERROR("Memory-region name must not be empty");
+      return false;
+    }
+    if (tmr.kind_ == daqiri::MemoryKind::INVALID) {
+      DAQIRI_LOG_ERROR(
+          "Invalid memory-region kind; valid values are huge, device, host_pinned, and host");
+      return false;
+    }
     if (!daqiri::detail::parse_yaml_integer(mr["buf_size"], tmr.buf_size_) ||
         !daqiri::detail::parse_yaml_integer(mr["num_bufs"], tmr.num_bufs_) ||
         !daqiri::detail::parse_yaml_integer(mr["affinity"], tmr.affinity_)) {
@@ -1653,7 +1691,29 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_memory_region_config(
       return false;
     }
     if (mr["access"].IsDefined()) {
-        tmr.access_ = daqiri::GetMemoryAccessPropertiesFromList(mr["access"]);
+      if (!mr["access"].IsSequence()) {
+        DAQIRI_LOG_ERROR("Memory-region access must be a sequence");
+        return false;
+      }
+      tmr.access_ = 0;
+      std::unordered_set<std::string> seen_access;
+      for (const auto& access_node : mr["access"]) {
+        const std::string access = access_node.as<std::string>();
+        if (!seen_access.insert(access).second) {
+          DAQIRI_LOG_ERROR("Duplicate memory-region access value '{}'", access);
+          return false;
+        }
+        if (access == "local") {
+          tmr.access_ |= daqiri::MEM_ACCESS_LOCAL;
+        } else if (access == "rdma_write") {
+          tmr.access_ |= daqiri::MEM_ACCESS_RDMA_WRITE;
+        } else if (access == "rdma_read") {
+          tmr.access_ |= daqiri::MEM_ACCESS_RDMA_READ;
+        } else {
+          DAQIRI_LOG_ERROR("Unknown memory-region access value '{}'", access);
+          return false;
+        }
+      }
     } else {
       tmr.access_ = daqiri::MEM_ACCESS_LOCAL;
     }
@@ -1866,8 +1926,12 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_socket_config(
       return false;
     }
 
-    socket_cfg.local_addr_ = socket_item["local_addr"].template as<std::string>("");
-    socket_cfg.remote_addr_ = socket_item["remote_addr"].template as<std::string>("");
+    if (!daqiri::detail::parse_optional_yaml_scalar(socket_item, "local_addr", std::string{},
+                                                    socket_cfg.local_addr_, "socket_config") ||
+        !daqiri::detail::parse_optional_yaml_scalar(socket_item, "remote_addr", std::string{},
+                                                    socket_cfg.remote_addr_, "socket_config")) {
+      return false;
+    }
     const bool has_local_addr = !socket_cfg.local_addr_.empty();
     const bool has_remote_addr = !socket_cfg.remote_addr_.empty();
     const bool has_legacy_local = socket_item["local_ip"].IsDefined() ||
@@ -1886,8 +1950,12 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_socket_config(
       return false;
     }
 
-    socket_cfg.local_ip_ = socket_item["local_ip"].template as<std::string>("");
-    socket_cfg.remote_ip_ = socket_item["remote_ip"].template as<std::string>("");
+    if (!daqiri::detail::parse_optional_yaml_scalar(socket_item, "local_ip", std::string{},
+                                                    socket_cfg.local_ip_, "socket_config") ||
+        !daqiri::detail::parse_optional_yaml_scalar(socket_item, "remote_ip", std::string{},
+                                                    socket_cfg.remote_ip_, "socket_config")) {
+      return false;
+    }
     if (!daqiri::detail::parse_optional_yaml_integer(socket_item, "local_port", uint16_t{0},
                                                      socket_cfg.local_port_, "socket_config") ||
         !daqiri::detail::parse_optional_yaml_integer(socket_item, "remote_port", uint16_t{0},
@@ -2050,13 +2118,17 @@ bool parse_common_queue_config(const YAML::Node& q_item, daqiri::CommonQueueConf
     }
     common.extra_queue_config_ = nullptr;
     if (q_item["memory_regions"].IsDefined()) {
+      const auto& mrs = q_item["memory_regions"];
+      if (!mrs.IsSequence() || mrs.size() == 0) {
+        DAQIRI_LOG_ERROR("Queue '{}' memory_regions must be a non-empty sequence", common.name_);
+        return false;
+      }
       if (!parse_memory_regions) {
         DAQIRI_LOG_WARN("Memory regions in queue section not used in RoCE engine for queue: {}",
           common.name_);
       }
       else {
-        const auto& mrs = q_item["memory_regions"];
-        if (mrs.size() > 0) { common.mrs_.reserve(mrs.size()); }
+        common.mrs_.reserve(mrs.size());
         for (const auto& mr : mrs) { common.mrs_.push_back(mr.as<std::string>()); }
       }
     }

@@ -178,3 +178,64 @@ def test_render_cli_accepts_bare_network_mapping(tmp_path: Path) -> None:
         text=True,
     )
     assert yaml.safe_load(result.stdout) == bare
+
+
+@pytest.mark.parametrize(
+    "transport,extra,error",
+    [
+        ("roce", ["--rx-batch-size", "32"], "supported only for TCP/UDP"),
+        ("roce", ["--iterations", "10"], "supported only for TCP/UDP"),
+        ("udp", ["--rx-depth", "7"], "supported only for RoCE"),
+        ("udp", ["--tx-depth", "9"], "supported only for RoCE"),
+        ("tcp", ["--roce-transport-mode", "UD"], "supported only for RoCE"),
+    ],
+)
+def test_socket_cli_rejects_inapplicable_transport_options(
+    transport: str, extra: list[str], error: str
+) -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPOSITORY_ROOT / "scripts/gen_daqiri_config.py"),
+            "socket-pair",
+            "--transport",
+            transport,
+            "--client-address",
+            "10.0.0.1",
+            "--server-address",
+            "10.0.0.2",
+            "--client-port",
+            "5002",
+            "--server-port",
+            "5001",
+            "--client-master-core",
+            "1",
+            "--server-master-core",
+            "2",
+            "--client-rx-core",
+            "3",
+            "--client-tx-core",
+            "4",
+            "--server-rx-core",
+            "5",
+            "--server-tx-core",
+            "6",
+            "--client-worker-core",
+            "7",
+            "--server-worker-core",
+            "8",
+            "--message-size",
+            "1024",
+            "--buffer-size",
+            "2048",
+            "--num-bufs",
+            "128",
+            "--role",
+            "tx",
+            *extra,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert error in result.stderr

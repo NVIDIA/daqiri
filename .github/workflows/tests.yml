@@ -4,27 +4,7 @@ on:
   push:
     branches:
       - main
-    paths:
-      - '.github/workflows/tests.yml'
-      - 'pyproject.toml'
-      - 'python/**/*.py'
-      - 'schemas/**'
-      - 'scripts/*.py'
-      - 'scripts/**/*.py'
-      - 'examples/*.yaml'
-      - 'applications/**/configs/*.yaml'
-      - 'tests/**'
   pull_request:
-    paths:
-      - '.github/workflows/tests.yml'
-      - 'pyproject.toml'
-      - 'python/**/*.py'
-      - 'schemas/**'
-      - 'scripts/*.py'
-      - 'scripts/**/*.py'
-      - 'examples/*.yaml'
-      - 'applications/**/configs/*.yaml'
-      - 'tests/**'
 
 permissions:
   contents: read
@@ -53,3 +33,36 @@ jobs:
 
       - name: Validate generated configuration matrix
         run: python scripts/check_generated_configs.py
+
+  cpp-config:
+    name: C++ configuration validator
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build and exercise the runtime decoder
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace/source:ro" \
+            -w /workspace/source \
+            nvcr.io/nvidia/cuda:13.1.0-devel-ubuntu24.04 \
+            bash -lc '
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                cmake g++ ninja-build python3 python3-jsonschema python3-yaml
+              cmake -S . -B /tmp/daqiri-config-build -G Ninja \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DBUILD_SHARED_LIBS=ON \
+                -DDAQIRI_BUILD_PYTHON=OFF \
+                -DDAQIRI_BUILD_APPLICATIONS=OFF \
+                -DDAQIRI_ENGINE=""
+              cmake --build /tmp/daqiri-config-build \
+                --target daqiri_config_validate --parallel 2
+              ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /tmp/libcuda.so.1
+              export LD_LIBRARY_PATH=/tmp:/tmp/daqiri-config-build/src:/tmp/daqiri-config-build/src/third_party/yaml-cpp
+              python3 scripts/check_generated_configs.py \
+                --validator /tmp/daqiri-config-build/examples/daqiri_config_validate \
+                --validator-socket-only
+            '

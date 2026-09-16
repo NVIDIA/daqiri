@@ -37,8 +37,8 @@ def socket_spec(transport: str) -> SocketPairSpec:
         num_bufs=128,
         rx_num_bufs=256 if transport == "roce" else None,
         tx_num_bufs=64 if transport == "roce" else None,
-        rx_batch_size=32,
-        tx_depth=64,
+        rx_batch_size=32 if transport != "roce" else None,
+        tx_depth=64 if transport == "roce" else None,
     )
 
 
@@ -170,6 +170,22 @@ def test_invalid_profile_inputs_fail_before_rendering() -> None:
     with pytest.raises(ConfigError, match="supported only for RoCE"):
         spec = socket_spec("udp")
         spec.__class__(**{**spec.__dict__, "rx_num_bufs": 512})
+    with pytest.raises(
+        ConfigError, match="rx_batch_size is supported only for TCP/UDP"
+    ):
+        spec = socket_spec("roce")
+        spec.__class__(**{**spec.__dict__, "rx_batch_size": 32})
+    with pytest.raises(
+        ConfigError, match="iterations is supported only for TCP/UDP"
+    ):
+        spec = socket_spec("roce")
+        spec.__class__(**{**spec.__dict__, "iterations": 10})
+    with pytest.raises(ConfigError, match="supported only for RoCE"):
+        spec = socket_spec("udp")
+        spec.__class__(**{**spec.__dict__, "rx_depth": 7})
+    with pytest.raises(ConfigError, match="supported only for RoCE"):
+        spec = socket_spec("tcp")
+        spec.__class__(**{**spec.__dict__, "roce_transport_mode": "UD"})
 
 
 def test_production_profiles_do_not_require_benchmark_worker_cores() -> None:

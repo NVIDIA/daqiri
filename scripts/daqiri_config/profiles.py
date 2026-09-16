@@ -71,13 +71,13 @@ class SocketPairSpec:
     num_bufs: int
     rx_num_bufs: int | None = None
     tx_num_bufs: int | None = None
-    rx_batch_size: int = 1
+    rx_batch_size: int | None = None
     affinity: int = 0
     memory_kind: str | None = None
-    iterations: int = 1_000_000_000
-    rx_depth: int = 128
-    tx_depth: int = 128
-    roce_transport_mode: str = "RC"
+    iterations: int | None = None
+    rx_depth: int | None = None
+    tx_depth: int | None = None
+    roce_transport_mode: str | None = None
     include_benchmark: bool = True
 
     def __post_init__(self) -> None:
@@ -89,6 +89,18 @@ class SocketPairSpec:
             self.rx_num_bufs is not None or self.tx_num_bufs is not None
         ):
             raise ConfigError("rx_num_bufs and tx_num_bufs are supported only for RoCE")
+        if self.transport == "roce" and self.rx_batch_size is not None:
+            raise ConfigError("rx_batch_size is supported only for TCP/UDP")
+        if self.transport == "roce" and self.iterations is not None:
+            raise ConfigError("iterations is supported only for TCP/UDP")
+        if self.transport != "roce" and (
+            self.rx_depth is not None
+            or self.tx_depth is not None
+            or self.roce_transport_mode is not None
+        ):
+            raise ConfigError(
+                "rx_depth, tx_depth, and roce_transport_mode are supported only for RoCE"
+            )
         for name in ("client_port", "server_port"):
             _require_port(name, getattr(self, name))
         for name in ("client_address", "server_address"):
@@ -117,12 +129,12 @@ class SocketPairSpec:
             "message_size",
             "buffer_size",
             "num_bufs",
-            "rx_batch_size",
-            "iterations",
-            "rx_depth",
-            "tx_depth",
         ):
             _require_positive(name, getattr(self, name))
+        for name in ("rx_batch_size", "iterations", "rx_depth", "tx_depth"):
+            value = getattr(self, name)
+            if value is not None:
+                _require_positive(name, value)
         if self.rx_num_bufs is not None:
             _require_positive("rx_num_bufs", self.rx_num_bufs)
         if self.tx_num_bufs is not None:
@@ -131,13 +143,19 @@ class SocketPairSpec:
             raise ConfigError("buffer_size must be at least message_size")
         if self.transport == "udp" and self.message_size > 65507:
             raise ConfigError("UDP message_size must not exceed 65507 bytes")
-        if self.transport == "udp" and self.rx_batch_size > 32:
+        rx_batch_size = self.rx_batch_size if self.rx_batch_size is not None else 1
+        if self.transport == "udp" and rx_batch_size > 32:
             raise ConfigError("UDP rx_batch_size must not exceed 32")
-        if self.transport in ("udp", "tcp") and self.rx_batch_size > self.num_bufs:
+        if self.transport in ("udp", "tcp") and rx_batch_size > self.num_bufs:
             raise ConfigError("rx_batch_size must not exceed num_bufs")
         if self.transport in ("udp", "tcp") and self.memory_kind == "device":
             raise ConfigError("TCP/UDP socket profiles cannot use device memory")
-        if self.transport == "roce" and self.roce_transport_mode not in ("RC", "UC", "UD"):
+        if self.transport == "roce" and self.roce_transport_mode not in (
+            None,
+            "RC",
+            "UC",
+            "UD",
+        ):
             raise ConfigError("roce_transport_mode must be RC, UC, or UD")
         if self.transport == "roce":
             queue_cores = (
@@ -150,9 +168,11 @@ class SocketPairSpec:
             )
             if any(core < 0 for core in queue_cores):
                 raise ConfigError("RoCE master and queue cores must be non-negative")
-            if self.rx_depth > (self.rx_num_bufs or self.num_bufs):
+            rx_depth = self.rx_depth if self.rx_depth is not None else 128
+            tx_depth = self.tx_depth if self.tx_depth is not None else 128
+            if rx_depth > (self.rx_num_bufs or self.num_bufs):
                 raise ConfigError("rx_depth must not exceed RX memory-region num_bufs")
-            if self.tx_depth > (self.tx_num_bufs or self.num_bufs):
+            if tx_depth > (self.tx_num_bufs or self.num_bufs):
                 raise ConfigError("tx_depth must not exceed TX memory-region num_bufs")
 
 
@@ -221,7 +241,7 @@ def _socket_role_document(spec: SocketPairSpec, role: str) -> dict[str, Any]:
         "socket_config": socket_config,
     }
     if spec.transport == "roce":
-        interface["roce_config"] = {"transport_mode": spec.roce_transport_mode}
+        interface["roce_config"] = {"transport_mode": spec.roce_transport_mode or "RC"}
         interface["rx"] = {
             "queues": [
                 {
@@ -250,7 +270,7 @@ def _socket_role_document(spec: SocketPairSpec, role: str) -> dict[str, Any]:
                     "name": f"{suffix}_RX_Queue",
                     "id": 0,
                     "cpu_core": rx_core,
-                    "batch_size": spec.rx_batch_size if not is_client else 1,
+                    "batch_size": (spec.rx_batch_size or 1) if not is_client else 1,
                     "memory_regions": [region_name],
                 }
             ]
@@ -292,13 +312,15 @@ def _socket_role_document(spec: SocketPairSpec, role: str) -> dict[str, Any]:
             "server_port": spec.server_port,
         }
         if spec.transport == "roce":
-            bench["rx_depth"] = spec.rx_depth
-            bench["tx_depth"] = spec.tx_depth
+            bench["rx_depth"] = spec.rx_depth if spec.rx_depth is not None else 128
+            bench["tx_depth"] = spec.tx_depth if spec.tx_depth is not None else 128
             if is_client:
                 bench["client_address"] = spec.client_address
             document[f"rdma_bench_{mode}"] = bench
         else:
-            bench["iterations"] = spec.iterations
+            bench["iterations"] = (
+                spec.iterations if spec.iterations is not None else 1_000_000_000
+            )
             if is_client:
                 bench["client_address"] = spec.client_address
             document[f"socket_bench_{mode}"] = bench

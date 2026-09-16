@@ -24,6 +24,7 @@ from daqiri_config import (
     generate_raw_pair,
     generate_raw_roles,
     generate_socket_pair,
+    load_document,
     render_document,
     validate_document,
 )
@@ -50,10 +51,10 @@ def _socket_spec(transport: str) -> SocketPairSpec:
         num_bufs=128,
         rx_num_bufs=512 if transport == "roce" else None,
         tx_num_bufs=128 if transport == "roce" else None,
-        rx_batch_size=32 if transport == "udp" else 1,
+        rx_batch_size=32 if transport == "udp" else None,
         memory_kind="host_pinned" if transport == "roce" else "host",
-        rx_depth=512,
-        tx_depth=128,
+        rx_depth=512 if transport == "roce" else None,
+        tx_depth=128 if transport == "roce" else None,
     )
 
 
@@ -128,18 +129,18 @@ def _cpp_rejection_documents(
 ) -> dict[str, dict[str, Any]]:
     invalid: dict[str, dict[str, Any]] = {}
 
-    unknown_queue_key = copy.deepcopy(documents["raw-ibverbs-none"])
-    queue = unknown_queue_key["daqiri"]["cfg"]["interfaces"][1]["rx"]["queues"][0]
+    unknown_queue_key = copy.deepcopy(documents["socket-udp-tx"])
+    queue = unknown_queue_key["daqiri"]["cfg"]["interfaces"][0]["rx"]["queues"][0]
     queue["batch_sise"] = queue.pop("batch_size")
     invalid["unknown-queue-key"] = unknown_queue_key
 
-    dynamic_flow_overflow = copy.deepcopy(documents["raw-ibverbs-none"])
-    dynamic_flow_overflow["daqiri"]["cfg"]["interfaces"][1]["rx"][
+    dynamic_flow_overflow = copy.deepcopy(documents["socket-udp-tx"])
+    dynamic_flow_overflow["daqiri"]["cfg"]["interfaces"][0]["rx"][
         "dynamic_flow_capacity"
     ] = 1 << 32
     invalid["dynamic-flow-capacity-overflow"] = dynamic_flow_overflow
 
-    metadata_overflow = copy.deepcopy(documents["raw-ibverbs-none"])
+    metadata_overflow = copy.deepcopy(documents["socket-udp-tx"])
     metadata_overflow["daqiri"]["cfg"]["tx_meta_buffers"] = 1 << 32
     invalid["metadata-overflow"] = metadata_overflow
 
@@ -149,17 +150,68 @@ def _cpp_rejection_documents(
     ] = 1 << 32
     invalid["min-ipg-overflow"] = min_ipg_overflow
 
-    affinity_overflow = copy.deepcopy(documents["raw-ibverbs-none"])
+    affinity_overflow = copy.deepcopy(documents["socket-udp-tx"])
     affinity_overflow["daqiri"]["cfg"]["memory_regions"][0]["affinity"] = 1 << 16
     invalid["affinity-overflow"] = affinity_overflow
 
-    unknown_offload = copy.deepcopy(documents["raw-ibverbs-none"])
+    unknown_offload = copy.deepcopy(documents["socket-udp-tx"])
     unknown_offload["daqiri"]["cfg"]["interfaces"][0]["tx"]["queues"][0][
         "offloads"
     ] = ["tx_eth_scr"]
     invalid["unknown-offload"] = unknown_offload
 
+    malformed_tx_flows = copy.deepcopy(documents["socket-udp-tx"])
+    malformed_tx_flows["daqiri"]["cfg"]["interfaces"][0]["tx"]["flows"] = "typo"
+    invalid["malformed-tx-flows"] = malformed_tx_flows
+
+    malformed_ecpri = copy.deepcopy(documents["socket-udp-tx"])
+    malformed_ecpri["daqiri"]["cfg"]["interfaces"][0]["tx"]["flows"] = [
+        {
+            "name": "malformed_ecpri",
+            "id": 0,
+            "match": {"ecpri": "ecpri_typo"},
+            "action": {"type": "queue", "id": 0},
+        }
+    ]
+    invalid["malformed-ecpri"] = malformed_ecpri
+
+    malformed_ipv4 = copy.deepcopy(documents["socket-udp-tx"])
+    malformed_ipv4["daqiri"]["cfg"]["interfaces"][0]["tx"]["flows"] = [
+        {
+            "name": "malformed_ipv4",
+            "id": 0,
+            "match": {"ipv4_src": ["10.0.0.1"]},
+            "action": {"type": "queue", "id": 0},
+        }
+    ]
+    invalid["malformed-ipv4"] = malformed_ipv4
+
+    invalid_memory_kind = copy.deepcopy(documents["socket-udp-tx"])
+    invalid_memory_kind["daqiri"]["cfg"]["memory_regions"][0]["kind"] = "devcie"
+    invalid["invalid-memory-kind"] = invalid_memory_kind
+
+    invalid_memory_access = copy.deepcopy(documents["socket-udp-tx"])
+    invalid_memory_access["daqiri"]["cfg"]["memory_regions"][0]["access"] = ["locla"]
+    invalid["invalid-memory-access"] = invalid_memory_access
+
+    quoted_integer = copy.deepcopy(documents["socket-udp-tx"])
+    quoted_integer["daqiri"]["cfg"]["memory_regions"][0]["num_bufs"] = "128"
+    invalid["quoted-integer"] = quoted_integer
+
+    quoted_boolean = copy.deepcopy(documents["socket-udp-tx"])
+    quoted_boolean["daqiri"]["cfg"]["debug"] = "false"
+    invalid["quoted-boolean"] = quoted_boolean
+
     return invalid
+
+
+def _replace_first_num_bufs(document: dict[str, Any], value: str) -> str:
+    rendered = render_document(document)
+    count = document["daqiri"]["cfg"]["memory_regions"][0]["num_bufs"]
+    marker = f"num_bufs: {count}"
+    if marker not in rendered:
+        raise RuntimeError(f"generated profile no longer contains {marker!r}")
+    return rendered.replace(marker, f"num_bufs: {value}", 1)
 
 
 def main() -> int:
@@ -168,6 +220,11 @@ def main() -> int:
         "--validator",
         type=Path,
         help="also parse every document with the built daqiri_config_validate binary",
+    )
+    parser.add_argument(
+        "--validator-socket-only",
+        action="store_true",
+        help="limit C++ validation to TCP/UDP for builds without optional engines",
     )
     parser.add_argument("--emit-matrix", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -185,18 +242,35 @@ def main() -> int:
 
     documents = generated_matrix()
     with tempfile.TemporaryDirectory(prefix="daqiri-generated-configs-") as temp_dir:
-        paths = []
+        paths: dict[str, Path] = {}
         for name, document in documents.items():
             validate_document(document)
             rendered = render_document(document)
             path = Path(temp_dir) / f"{name}.yaml"
             path.write_text(rendered, encoding="utf-8")
-            paths.append(path)
+            paths[name] = path
 
         if args.validator:
+            validator_paths = [
+                path
+                for name, path in paths.items()
+                if not args.validator_socket_only
+                or name.startswith(("socket-udp-", "socket-tcp-"))
+            ]
             subprocess.run(
-                [str(args.validator), *(str(path) for path in paths)], check=True
+                [str(args.validator), *(str(path) for path in validator_paths)], check=True
             )
+
+            explicit_octal_path = Path(temp_dir) / "valid-explicit-octal.yaml"
+            octal_base = documents["socket-udp-tx"]
+            count = octal_base["daqiri"]["cfg"]["memory_regions"][0]["num_bufs"]
+            explicit_octal_path.write_text(
+                _replace_first_num_bufs(octal_base, f"0o{count:o}"),
+                encoding="utf-8",
+            )
+            validate_document(load_document(explicit_octal_path))
+            subprocess.run([str(args.validator), str(explicit_octal_path)], check=True)
+
             for name, document in _cpp_rejection_documents(documents).items():
                 path = Path(temp_dir) / f"invalid-{name}.yaml"
                 path.write_text(
@@ -214,6 +288,22 @@ def main() -> int:
                         f"C++ decoder did not cleanly reject invalid configuration {name} "
                         f"(exit {result.returncode})\n{result.stdout}{result.stderr}"
                     )
+
+            leading_zero_path = Path(temp_dir) / "invalid-leading-zero.yaml"
+            leading_zero_path.write_text(
+                _replace_first_num_bufs(documents["socket-udp-tx"], "010"),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [str(args.validator), str(leading_zero_path)],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 1:
+                raise RuntimeError(
+                    "C++ decoder did not cleanly reject invalid configuration leading-zero "
+                    f"(exit {result.returncode})\n{result.stdout}{result.stderr}"
+                )
 
     suffix = " and the C++ decoder rejection checks" if args.validator else ""
     print(f"Validated {len(documents)} generated configurations with JSON Schema{suffix}.")

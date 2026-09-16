@@ -80,13 +80,21 @@ def _socket_parser(subparsers: argparse._SubParsersAction) -> None:
     parser.add_argument(
         "--tx-num-bufs", type=int, help="RoCE TX memory-region buffer count"
     )
-    parser.add_argument("--rx-batch-size", type=int, default=1)
+    parser.add_argument(
+        "--rx-batch-size", type=int, help="TCP/UDP RX batch size (default: 1)"
+    )
     parser.add_argument("--affinity", type=int, default=0)
     parser.add_argument("--memory-kind", choices=("huge", "device", "host_pinned", "host"))
-    parser.add_argument("--iterations", type=int, default=1_000_000_000)
-    parser.add_argument("--rx-depth", type=int, default=128)
-    parser.add_argument("--tx-depth", type=int, default=128)
-    parser.add_argument("--roce-transport-mode", choices=("RC", "UC", "UD"), default="RC")
+    parser.add_argument(
+        "--iterations", type=int, help="TCP/UDP benchmark iterations (default: 1000000000)"
+    )
+    parser.add_argument("--rx-depth", type=int, help="RoCE RX depth (default: 128)")
+    parser.add_argument("--tx-depth", type=int, help="RoCE TX depth (default: 128)")
+    parser.add_argument(
+        "--roce-transport-mode",
+        choices=("RC", "UC", "UD"),
+        help="RoCE transport mode (default: RC)",
+    )
     parser.add_argument(
         "--role",
         choices=("tx", "rx", "both"),

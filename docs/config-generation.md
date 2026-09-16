@@ -71,6 +71,11 @@ benchmark input. This omits `bench_tx` and `bench_rx`.
 `socket-pair` emits separate TX/client and RX/server documents. The same command
 works with `--transport udp`, `tcp`, or `roce`:
 
+Transport-specific options are checked rather than ignored: `--rx-batch-size`
+and `--iterations` apply only to TCP/UDP, while `--rx-num-bufs`,
+`--tx-num-bufs`, `--rx-depth`, `--tx-depth`, and `--roce-transport-mode` apply
+only to RoCE.
+
 ```bash
 python3 scripts/gen_daqiri_config.py socket-pair \
   --transport udp \
