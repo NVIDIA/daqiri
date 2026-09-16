@@ -161,7 +161,7 @@
         "offloads": {
           "type": "array",
           "uniqueItems": true,
-          "items": {"type": "string"}
+          "items": {"enum": ["tx_eth_src"]}
         },
         "pacing_mbps": {"type": "integer", "minimum": 0},
         "timeout_us": {

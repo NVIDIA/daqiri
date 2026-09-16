@@ -16,6 +16,9 @@ from .core import ConfigError, validate_document
 SUPPORTED_TRANSFORMS = ("none", "vlan", "vxlan", "gre", "nvgre")
 SUPPORTED_SOCKET_TRANSPORTS = ("udp", "tcp", "roce")
 MAC_ADDRESS_RE = re.compile(r"^(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$")
+ETHERNET_HEADER_SIZE = 14
+UDP_IPV4_HEADER_SIZE = 42
+IPV4_MAX_TOTAL_LENGTH = 65535
 
 
 def _require_positive(name: str, value: int) -> None:
@@ -126,6 +129,8 @@ class SocketPairSpec:
             raise ConfigError("UDP message_size must not exceed 65507 bytes")
         if self.transport == "udp" and self.rx_batch_size > 32:
             raise ConfigError("UDP rx_batch_size must not exceed 32")
+        if self.transport in ("udp", "tcp") and self.rx_batch_size > self.num_bufs:
+            raise ConfigError("rx_batch_size must not exceed num_bufs")
         if self.transport in ("udp", "tcp") and self.memory_kind == "device":
             raise ConfigError("TCP/UDP socket profiles cannot use device memory")
         if self.transport == "roce" and self.roce_transport_mode not in ("RC", "UC", "UD"):
@@ -378,6 +383,23 @@ class RawPairSpec:
             raise ConfigError("unsupported memory_kind")
         for name in ("payload_size", "header_size", "batch_size", "num_bufs"):
             _require_positive(name, getattr(self, name))
+        if self.num_bufs < self.batch_size:
+            raise ConfigError("num_bufs must be at least batch_size")
+        if self.engine in (None, "dpdk") and self.num_bufs < 2 * self.batch_size:
+            raise ConfigError("DPDK raw profiles require num_bufs to be at least twice batch_size")
+        if self.include_benchmark:
+            if self.header_size < UDP_IPV4_HEADER_SIZE:
+                raise ConfigError(
+                    f"benchmark raw header_size must be at least {UDP_IPV4_HEADER_SIZE} bytes"
+                )
+            if (
+                self.header_size + self.payload_size - ETHERNET_HEADER_SIZE
+                > IPV4_MAX_TOTAL_LENGTH
+            ):
+                raise ConfigError(
+                    "benchmark raw header_size + payload_size exceeds the IPv4 "
+                    "total-length limit"
+                )
         for name in ("master_core", "tx_queue_cores", "rx_queue_cores"):
             values = getattr(self, name)
             values = values if isinstance(values, tuple) else (values,)

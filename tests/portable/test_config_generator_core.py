@@ -72,6 +72,26 @@ def test_unknown_nested_daqiri_key_is_rejected_with_path() -> None:
         validate_document(document)
 
 
+def test_unknown_tx_offload_is_rejected() -> None:
+    document = minimal_document()
+    interface = document["daqiri"]["cfg"]["interfaces"][0]
+    interface.pop("rx")
+    interface["tx"] = {
+        "queues": [
+            {
+                "name": "txq0",
+                "id": 0,
+                "cpu_core": 2,
+                "batch_size": 4,
+                "memory_regions": ["RX"],
+                "offloads": ["tx_eth_scr"],
+            }
+        ]
+    }
+    with pytest.raises(ConfigError, match=r"offloads\[0\].*tx_eth_scr"):
+        validate_document(document)
+
+
 def test_overrides_fill_typed_placeholders() -> None:
     document = minimal_document()
     document["daqiri"]["cfg"]["master_core"] = "<core>"

@@ -8,16 +8,22 @@ on:
       - '.github/workflows/tests.yml'
       - 'pyproject.toml'
       - 'python/**/*.py'
+      - 'schemas/**'
       - 'scripts/*.py'
       - 'scripts/**/*.py'
+      - 'examples/*.yaml'
+      - 'applications/**/configs/*.yaml'
       - 'tests/**'
   pull_request:
     paths:
       - '.github/workflows/tests.yml'
       - 'pyproject.toml'
       - 'python/**/*.py'
+      - 'schemas/**'
       - 'scripts/*.py'
       - 'scripts/**/*.py'
+      - 'examples/*.yaml'
+      - 'applications/**/configs/*.yaml'
       - 'tests/**'
 
 permissions:
@@ -41,3 +47,9 @@ jobs:
 
       - name: Run portable tests
         run: python -m pytest tests/portable
+
+      - name: Validate checked-in configurations
+        run: python scripts/check_daqiri_configs.py
+
+      - name: Validate generated configuration matrix
+        run: python scripts/check_generated_configs.py

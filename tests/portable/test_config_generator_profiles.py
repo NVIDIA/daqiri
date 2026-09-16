@@ -156,11 +156,28 @@ def test_invalid_profile_inputs_fail_before_rendering() -> None:
         raw_spec(tx_queue_cores=(4, 5), tx_worker_cores=(6,))
     with pytest.raises(ConfigError, match="explicit dpdk or ibverbs"):
         raw_spec(transform="vlan", engine=None)
+    with pytest.raises(ConfigError, match="header_size must be at least 42"):
+        raw_spec(header_size=41)
+    with pytest.raises(ConfigError, match="IPv4 total-length"):
+        raw_spec(header_size=42, payload_size=65508)
+    with pytest.raises(ConfigError, match="at least batch_size"):
+        raw_spec(engine="ibverbs", batch_size=2, num_bufs=1)
+    with pytest.raises(ConfigError, match="at least twice batch_size"):
+        raw_spec(engine="dpdk", batch_size=2, num_bufs=3)
+    with pytest.raises(ConfigError, match="rx_batch_size must not exceed num_bufs"):
+        spec = socket_spec("udp")
+        spec.__class__(**{**spec.__dict__, "num_bufs": 16, "rx_batch_size": 32})
 
 
 def test_production_profiles_do_not_require_benchmark_worker_cores() -> None:
     raw = generate_raw_pair(
-        raw_spec(include_benchmark=False, tx_worker_cores=(), rx_worker_cores=())
+        raw_spec(
+            include_benchmark=False,
+            tx_worker_cores=(),
+            rx_worker_cores=(),
+            header_size=1,
+            payload_size=1,
+        )
     )
     assert "bench_tx" not in raw and "bench_rx" not in raw
 
