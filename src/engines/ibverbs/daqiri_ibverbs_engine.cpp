@@ -2753,7 +2753,7 @@ Status IbverbsEngine::install_port_flows() {
       if (Status s = install_direct_reorder_flows(*direct_queue, intf, st); s != Status::SUCCESS) {
         return s;
       }
-      st.next_dynamic_priority = 0;
+      st.dynamic_priority = 0;
       continue;
     }
 
@@ -3063,7 +3063,7 @@ Status IbverbsEngine::install_port_flows() {
       }
       DAQIRI_LOG_INFO("DevX catch-all flow -> queue {} (port {})", dest->queue_id, port);
     }
-    st.next_dynamic_priority = std::max(st.next_dynamic_priority, prio);
+    st.dynamic_priority = std::max(st.dynamic_priority, prio);
   }
   return Status::SUCCESS;
 }
@@ -5850,23 +5850,10 @@ Status IbverbsEngine::create_dynamic_flow_locked(int port, const FlowRuleConfig&
   PortSteering& steering = steering_it->second;
   DynamicFlowEntry entry;
   entry.flow_id = flow_id;
-  const bool reused_priority = !steering.free_dynamic_priorities.empty();
-  const int priority =
-      reused_priority ? steering.free_dynamic_priorities.top() : steering.next_dynamic_priority;
-  if (reused_priority) {
-    steering.free_dynamic_priorities.pop();
-  }
-  entry.priority = priority;
-  const Status status =
-      install_flow_rule_locked(port, steering, *intf, flow, flow_id, priority, &entry);
+  const Status status = install_flow_rule_locked(port, steering, *intf, flow, flow_id,
+                                                 steering.dynamic_priority, &entry);
   if (status != Status::SUCCESS) {
-    if (reused_priority) {
-      steering.free_dynamic_priorities.push(priority);
-    }
     return status;
-  }
-  if (!reused_priority) {
-    ++steering.next_dynamic_priority;
   }
 
   dynamic_flows_[flow_id] = entry;
@@ -5892,13 +5879,6 @@ void IbverbsEngine::destroy_dynamic_flow_entry_locked(DynamicFlowEntry& entry) {
   if (entry.matcher != nullptr) {
     mlx5dv_dr_matcher_destroy(entry.matcher);
     entry.matcher = nullptr;
-  }
-  if (entry.priority >= 0) {
-    const auto steering = port_steering_.find(entry.port);
-    if (steering != port_steering_.end()) {
-      steering->second.free_dynamic_priorities.push(entry.priority);
-    }
-    entry.priority = -1;
   }
 }
 

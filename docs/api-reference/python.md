@@ -336,7 +336,9 @@ and keep their queues in use. Queue deletion drains application-held RX buffers
 and pending TX work, so continue releasing bursts while polling. A memory region
 cannot be deleted until every queue or reorder output that references it has
 been removed. Metadata supports runtime batches up to at least 256 packets, or
-the largest startup queue batch if greater.
+the largest startup queue batch if greater. Raw ibverbs dynamic flows share one
+internal matcher priority, so use non-overlapping match criteria until explicit
+flow priorities are exposed.
 
 ## Reordered RX Bursts
 

@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <cuda_runtime_api.h>
 
@@ -64,13 +65,13 @@ daqiri::FlowOpResult wait_for_flow(daqiri::FlowOpId wanted) {
   throw std::runtime_error("dynamic flow operation timed out");
 }
 
-daqiri::FlowId add_runtime_flow(int port, int queue_id) {
+daqiri::FlowId add_runtime_flow(int port, int queue_id, uint16_t udp_dst) {
   daqiri::FlowRuleConfig flow;
-  flow.name_ = "runtime_queue_flow";
+  flow.name_ = "runtime_queue_flow_" + std::to_string(udp_dst);
   flow.action_.type_ = daqiri::FlowType::QUEUE;
   flow.action_.id_ = static_cast<uint16_t>(queue_id);
   flow.match_.type_ = daqiri::FlowMatchType::IPV4_UDP;
-  flow.match_.udp_dst_ = 65500;
+  flow.match_.udp_dst_ = udp_dst;
 
   daqiri::FlowOpId op = 0;
   if (daqiri::add_rx_flow_async(port, flow, &op) != daqiri::Status::SUCCESS) {
@@ -176,17 +177,19 @@ int main(int argc, char** argv) {
     finish(daqiri::add_memory_region_async(tx_mr, &op));
     finish(daqiri::add_rx_queue_async(0, rx_queue, &op));
     finish(daqiri::add_tx_queue_async(0, tx_queue, &op));
-    // mlx5 steering supports only a bounded set of matcher priorities. Exercise
-    // more than that many add/delete lifecycles so deleted dynamic flows must
-    // return their priority for reuse.
+    // Exercise more simultaneous matchers than the mlx5 priority depth, then
+    // clean them up. Their criteria do not overlap, so all dynamic matchers can
+    // intentionally share one hardware priority level.
     constexpr int kFlowLifecycleCycles = 20;
-    daqiri::FlowId runtime_flow = 0;
+    std::vector<daqiri::FlowId> runtime_flows;
     for (int cycle = 0; cycle < kFlowLifecycleCycles; ++cycle) {
-      runtime_flow = add_runtime_flow(0, rx_queue.common_.id_);
-      if (cycle + 1 < kFlowLifecycleCycles) {
-        delete_runtime_flow(runtime_flow);
-      }
+      runtime_flows.push_back(
+          add_runtime_flow(0, rx_queue.common_.id_, static_cast<uint16_t>(65500 + cycle)));
     }
+    for (size_t i = 0; i + 1 < runtime_flows.size(); ++i) {
+      delete_runtime_flow(runtime_flows[i]);
+    }
+    const daqiri::FlowId runtime_flow = runtime_flows.back();
 
     daqiri::BurstParams* tx = daqiri::create_tx_burst_params();
     if (tx == nullptr) {

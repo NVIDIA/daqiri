@@ -344,7 +344,9 @@ auto delete_status = daqiri::delete_flow_async(flow_id, &delete_op);
 
 Dynamic flow support is RX-only in v1. Socket, RDMA/RoCE, and software loopback
 engines return `NOT_SUPPORTED`; tunnel/VLAN transform actions are accepted only
-by raw DPDK and raw ibverbs.
+by raw DPDK and raw ibverbs. Raw ibverbs dynamic flows currently share one
+internal matcher priority. Avoid overlapping match criteria because mlx5 does
+not define the relative order of same-priority matchers.
 
 ## Runtime Queues and Memory Regions
 

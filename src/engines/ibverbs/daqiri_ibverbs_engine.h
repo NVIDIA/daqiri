@@ -26,7 +26,6 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
-#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -700,7 +699,6 @@ class IbverbsEngine : public Engine {
   struct DynamicFlowEntry {
     FlowId flow_id = 0;
     int port = 0;
-    int priority = -1;
     uint16_t queue = 0;
     struct mlx5dv_dr_matcher* matcher = nullptr;
     struct mlx5dv_dr_rule* rule = nullptr;
@@ -835,10 +833,10 @@ class IbverbsEngine : public Engine {
     };
     EcpriNode ecpri_node;
     bool dropped = false;
-    // Continue directly after static rules and recycle deleted dynamic slots;
-    // mlx5 DR exposes only a bounded number of distinct matcher priorities.
-    int next_dynamic_priority = 0;
-    std::priority_queue<int, std::vector<int>, std::greater<int>> free_dynamic_priorities;
+    // All dynamic matchers share one level directly after static rules. Their
+    // relative order is intentionally undefined until the public API exposes
+    // explicit flow priorities.
+    int dynamic_priority = 0;
   };
   std::map<int, PortSteering> port_steering_;  // port_id -> steering
 
