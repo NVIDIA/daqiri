@@ -158,6 +158,110 @@ bool validate_flow_action_config(const FlowAction& action, const std::string& fl
 
 }  // namespace
 
+bool Engine::select_cuda_device(int ordinal, const std::string& operation) {
+  const cudaError_t result = cudaSetDevice(ordinal);
+  if (result == cudaSuccess) {
+    return true;
+  }
+  DAQIRI_LOG_CRITICAL("Could not select CUDA device {} before {}: {}", ordinal, operation,
+                      cudaGetErrorString(result));
+  return false;
+}
+
+Engine::CudaDeviceInfo Engine::get_cuda_device_info(int ordinal) {
+  CudaDeviceInfo info;
+  info.ordinal = ordinal;
+  cudaDeviceProp properties{};
+  if (cudaGetDeviceProperties(&properties, ordinal) != cudaSuccess) {
+    return info;
+  }
+  info.name = properties.name;
+  info.classification =
+      properties.integrated != 0 ? CudaDeviceClass::INTEGRATED : CudaDeviceClass::DISCRETE;
+  return info;
+}
+
+bool Engine::get_cuda_dmabuf_support(int ordinal, bool* supported) {
+  CUdevice device;
+  const CUresult device_result = cuDeviceGet(&device, ordinal);
+  int value = 0;
+  const CUresult attribute_result =
+      device_result == CUDA_SUCCESS
+          ? cuDeviceGetAttribute(&value, CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED, device)
+          : device_result;
+  if (attribute_result != CUDA_SUCCESS) {
+    const char* error_string = nullptr;
+    cuGetErrorString(attribute_result, &error_string);
+    DAQIRI_LOG_CRITICAL("Failed to query DMA-BUF support for CUDA device {}: {}", ordinal,
+                        error_string != nullptr ? error_string : "unknown CUDA error");
+    return false;
+  }
+  *supported = value != 0;
+  return true;
+}
+
+void Engine::log_cuda_dmabuf_unavailable(const MemoryRegionConfig& mr) {
+  const CudaDeviceInfo selected = get_cuda_device_info(mr.affinity_);
+  const char* classification = "unknown";
+  if (selected.classification == CudaDeviceClass::INTEGRATED) {
+    classification = "integrated";
+  } else if (selected.classification == CudaDeviceClass::DISCRETE) {
+    classification = "discrete";
+  }
+  DAQIRI_LOG_CRITICAL("CUDA device {} ('{}', {}) does not support DMA-BUF export.",
+                      selected.ordinal, selected.name, classification);
+
+  int count = 0;
+  bool found_discrete = false;
+  bool classification_unknown = selected.classification == CudaDeviceClass::UNKNOWN;
+  const cudaError_t count_result = cudaGetDeviceCount(&count);
+  if (count_result == cudaSuccess) {
+    for (int ordinal = 0; ordinal < count; ++ordinal) {
+      if (ordinal == selected.ordinal) {
+        continue;
+      }
+      const CudaDeviceInfo candidate = get_cuda_device_info(ordinal);
+      if (candidate.classification == CudaDeviceClass::UNKNOWN) {
+        classification_unknown = true;
+        continue;
+      }
+      if (candidate.classification != CudaDeviceClass::DISCRETE) {
+        continue;
+      }
+      found_discrete = true;
+      DAQIRI_LOG_CRITICAL(
+          "CUDA-visible discrete GPU {} ('{}') is available. To use device memory on that GPU, "
+          "configure memory region '{}' with:\n\n    kind: device\n    affinity: {}",
+          candidate.ordinal, candidate.name, mr.name_, candidate.ordinal);
+    }
+  }
+  if (count_result != cudaSuccess) {
+    DAQIRI_LOG_CRITICAL("Could not enumerate other CUDA-visible devices: {}",
+                        cudaGetErrorString(count_result));
+  } else if (!found_discrete && classification_unknown) {
+    DAQIRI_LOG_CRITICAL(
+        "No other CUDA-visible GPU could be confirmed as discrete because a device "
+        "classification query failed. Set memory region '{}' affinity only after confirming a "
+        "discrete GPU's process-local CUDA ordinal.",
+        mr.name_);
+  } else if (!found_discrete && selected.classification == CudaDeviceClass::DISCRETE) {
+    DAQIRI_LOG_CRITICAL(
+        "No other CUDA-visible discrete GPU candidate is available for memory region '{}'.",
+        mr.name_);
+  } else if (!found_discrete) {
+    DAQIRI_LOG_CRITICAL(
+        "No discrete GPU is CUDA-visible. The discrete GPU must first be exposed to the runtime "
+        "container; on mixed-GPU container hosts, select the intended GPU by UUID with both "
+        "NVIDIA_VISIBLE_DEVICES and CUDA_VISIBLE_DEVICES. Then set memory region '{}' affinity "
+        "to its process-local CUDA ordinal.",
+        mr.name_);
+  }
+  DAQIRI_LOG_CRITICAL(
+      "To continue using the selected {} GPU, configure memory region '{}' with:\n\n"
+      "    kind: host_pinned\n    affinity: {}",
+      classification, mr.name_, selected.ordinal);
+}
+
 Engine::~Engine() {
   free_memory_regions();
 }
@@ -590,7 +694,10 @@ Status Engine::allocate_memory_regions() {
           ar.deallocator_ = AllocRegion::Deallocator::FREE;
           break;
         case MemoryKind::HOST_PINNED:
-          cudaSetDevice(mr.second.affinity_);
+          if (!select_cuda_device(mr.second.affinity_,
+                                  "allocating pinned host memory region '" + mr.first + "'")) {
+            return Status::NULL_PTR;
+          }
           if (cudaHostAlloc(&ptr, mr.second.ttl_size_, 0) != cudaSuccess) {
             DAQIRI_LOG_CRITICAL("Failed to allocate CUDA pinned host memory!");
             return Status::NULL_PTR;
@@ -610,7 +717,6 @@ Status Engine::allocate_memory_regions() {
           unsigned int flag = 1;
           const auto align = align_ceil(mr.second.ttl_size_, GPU_PAGE_SIZE);
           CUdeviceptr cuptr;
-          CUcontext current = nullptr;
 
           const auto driver_init_res = cuInit(0);
           if (driver_init_res != CUDA_SUCCESS) {
@@ -620,12 +726,11 @@ Status Engine::allocate_memory_regions() {
                                 err_str != nullptr ? err_str : "unknown error");
             return Status::NULL_PTR;
           }
-          const auto current_res = cuCtxGetCurrent(&current);
-          if (current_res != CUDA_SUCCESS) {
+          CUcontext previous = nullptr;
+          if (cuCtxGetCurrent(&previous) != CUDA_SUCCESS) {
             DAQIRI_LOG_CRITICAL("Could not query the current CUDA context");
             return Status::NULL_PTR;
           }
-          const CUcontext previous = current;
           const auto restore_previous = [&]() {
             CUcontext active = nullptr;
             if (cuCtxGetCurrent(&active) != CUDA_SUCCESS ||
@@ -637,32 +742,26 @@ Status Engine::allocate_memory_regions() {
             }
             return true;
           };
-          bool select_device = current == nullptr;
-          if (current != nullptr) {
-            CUdevice current_device;
-            if (cuCtxGetDevice(&current_device) != CUDA_SUCCESS) {
-              DAQIRI_LOG_CRITICAL("Could not query the device for the current CUDA context");
-              return Status::NULL_PTR;
-            }
-            select_device = current_device != mr.second.affinity_;
+
+          if (!select_cuda_device(mr.second.affinity_,
+                                  "allocating device memory region '" + mr.first + "'")) {
+            return Status::NULL_PTR;
           }
-          if (select_device) {
-            const auto set_res = cudaSetDevice(mr.second.affinity_);
-            if (set_res != cudaSuccess) {
-              DAQIRI_LOG_CRITICAL("Could not select CUDA device {}: {}", mr.second.affinity_,
-                                  cudaGetErrorString(set_res));
-              restore_previous();
-              return Status::NULL_PTR;
-            }
-            const auto init_res = cudaFree(0);  // Create the primary context if needed.
-            if (init_res != cudaSuccess || cuCtxGetCurrent(&current) != CUDA_SUCCESS ||
-                current == nullptr) {
-              DAQIRI_LOG_CRITICAL("Could not initialize the CUDA primary context for device {}",
-                                  mr.second.affinity_);
-              restore_previous();
-              return Status::NULL_PTR;
-            }
+          const auto init_res = cudaFree(0);  // Create the selected device's primary context.
+          if (init_res != cudaSuccess) {
+            DAQIRI_LOG_CRITICAL("Could not initialize the CUDA primary context for device {}: {}",
+                                mr.second.affinity_, cudaGetErrorString(init_res));
+            restore_previous();
+            return Status::NULL_PTR;
           }
+          CUcontext current = nullptr;
+          if (cuCtxGetCurrent(&current) != CUDA_SUCCESS || current == nullptr) {
+            DAQIRI_LOG_CRITICAL("Could not query the CUDA context for device {}",
+                                mr.second.affinity_);
+            restore_previous();
+            return Status::NULL_PTR;
+          }
+
           ar.cuda_context_ = current;
           const auto alloc_res = cuMemAlloc(&cuptr, align);
 
