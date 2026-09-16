@@ -238,6 +238,13 @@ actions are not part of that template fast path. The dynamic RX-flow example lea
 setting at `0` so it runs on devices whose mlx5 async flow setup is unavailable or resource
 limited.
 
+The raw ibverbs engine can also add and remove memory regions and RX/TX queues after
+`daqiri_init()`. These are explicit C++/Python operations rather than YAML mutations. Runtime RX
+queues can become dynamic-flow destinations; queue deletion is drain-based and is rejected while
+a static or dynamic flow still targets the queue. See
+[C++ API Usage](api-reference/cpp.md#runtime-queues-and-memory-regions) for the lifecycle and
+ownership rules.
+
 The raw ibverbs engine also supports opt-in first-DMA hardware reorder on ConnectX-7 or newer
 mlx5 NICs. Set `reorder_engine: "hw"` and acknowledge the finite-ring sequence contract with
 `cyclic_sequence: true`; software reorder remains the default. The NIC flex parser places each

@@ -344,7 +344,71 @@ auto delete_status = daqiri::delete_flow_async(flow_id, &delete_op);
 
 Dynamic flow support is RX-only in v1. Socket, RDMA/RoCE, and software loopback
 engines return `NOT_SUPPORTED`; tunnel/VLAN transform actions are accepted only
-by raw DPDK and raw ibverbs.
+by raw DPDK and raw ibverbs. Raw ibverbs dynamic flows currently share one
+internal matcher priority. Avoid overlapping match criteria because mlx5 does
+not define the relative order of same-priority matchers.
+
+## Runtime Queues and Memory Regions
+
+The raw `ibverbs` engine can add and remove RX queues, TX queues, and memory
+regions after `daqiri_init()`. Other engines return `NOT_SUPPORTED`. Each call
+returns an operation ID; poll `poll_resource_op()` until its matching
+`ResourceOpResult` is available.
+
+```cpp
+daqiri::MemoryRegionConfig mr{/* populate name, kind, affinity, access,
+                                buf_size, num_bufs, and owned */};
+daqiri::ResourceOpId op = 0;
+const auto accepted = daqiri::add_memory_region_async(mr, &op);
+if (accepted != daqiri::Status::SUCCESS) {
+    throw std::runtime_error("resource request was rejected");
+}
+
+// Keep completions for other in-flight operations instead of discarding them.
+std::unordered_map<daqiri::ResourceOpId, daqiri::ResourceOpResult> completions;
+auto wait_for_resource = [&](daqiri::ResourceOpId wanted) {
+    while (completions.find(wanted) == completions.end()) {
+        daqiri::ResourceOpResult completed;
+        const auto poll_status = daqiri::poll_resource_op(&completed);
+        if (poll_status == daqiri::Status::NOT_READY) {
+            continue;
+        }
+        if (poll_status != daqiri::Status::SUCCESS) {
+            throw std::runtime_error("resource completion polling failed");
+        }
+        completions.insert_or_assign(completed.op_id_, std::move(completed));
+    }
+    auto result = std::move(completions.at(wanted));
+    completions.erase(wanted);
+    return result;
+};
+
+const daqiri::ResourceOpResult result = wait_for_resource(op);
+```
+
+Owned regions use the same host, pinned-host, hugepage, and GPU allocation paths
+as startup regions. The overload accepting `ExternalMemoryRegion` registers but
+never frees caller-owned storage. A runtime queue may reference startup or
+runtime regions.
+
+Queue removal is drain-based. It stops accepting new work and completes only
+after application-held RX packet storage, reordered output, or TX work has been
+returned/completed. Therefore applications must continue polling
+`poll_resource_op()` and release held bursts. Removing an MR still referenced by
+a queue or by a software/hardware reorder output returns `RESOURCE_IN_USE`.
+Removing an RX queue referenced by a static or dynamic flow or RSS destination
+also returns `RESOURCE_IN_USE`; delete dynamic flows first. Static startup flows
+remain immutable.
+
+Runtime queue batch sizes cannot exceed the capacity used to create the engine's
+metadata pools. The raw ibverbs engine always reserves room for batches of at
+least 256 packets; a larger startup queue raises that capacity. To migrate to a
+differently sized MR without reinitializing DAQIRI, add the new MR and queue,
+redirect dynamic flows, then remove the old queue and MR.
+
+Queue topology changes briefly quiesce and rebuild the ibverbs worker groups so
+queues sharing a `cpu_core` continue to use one round-robin poller. NIC queues
+and application-held buffers on unrelated queues remain allocated throughout.
 
 ## Reordered RX Bursts
 
@@ -744,6 +808,11 @@ workflow sections above show the common call order and ownership rules.
 | `add_rx_flows_async(port, flows, &op_id)` | Enqueue a dynamic RX flow batch create. One completion returns allocated `FlowId`s in input order. |
 | `delete_flow_async(flow_id, &op_id)` | Enqueue deletion of an active dynamic flow. Static YAML flows and unknown IDs return `INVALID_PARAMETER`. |
 | `poll_flow_op(&result)` | Return one completed flow operation, or `NOT_READY` when none are ready. |
+| `add_memory_region_async(config[, binding], &op_id)` | Add an owned or externally bound raw-ibverbs memory region. |
+| `delete_memory_region_async(name, &op_id)` | Delete an unused raw-ibverbs memory region. |
+| `add_rx_queue_async(port, config, &op_id)` / `add_tx_queue_async(...)` | Add a runtime raw-ibverbs queue. |
+| `delete_rx_queue_async(port, queue, &op_id)` / `delete_tx_queue_async(...)` | Begin drain-based queue removal. |
+| `poll_resource_op(&result)` | Return one completed resource operation, or `NOT_READY`. |
 
 ### RX and Reorder
 
@@ -845,3 +914,5 @@ All functions that can fail return `daqiri::Status`:
 | `GENERIC_FAILURE` | Unspecified failure |
 | `CONNECT_FAILURE` | RDMA connection failed |
 | `INTERNAL_ERROR` | Internal error in the engine |
+| `RESOURCE_IN_USE` | A queue or memory region still has a live dependency or outstanding ownership |
+| `ALREADY_EXISTS` | A runtime resource already uses the requested name or queue ID |
