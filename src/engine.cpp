@@ -30,11 +30,15 @@
 #include "src/engines/ibverbs/daqiri_ibverbs_engine.h"
 #endif
 
-#include <chrono>
+#include <algorithm>
 #include <arpa/inet.h>
+#include <cerrno>
+#include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <cuda.h>
 #include <dirent.h>
+#include <exception>
 #include <fstream>
 #include <limits>
 #include <random>
@@ -49,6 +53,7 @@
 
 #if DAQIRI_HAVE_NUMA
 #include <numa.h>
+#include <numaif.h>
 #endif
 
 namespace daqiri {
@@ -214,7 +219,10 @@ void Engine::free_memory_regions() noexcept {
         break;
       }
       case AllocRegion::Deallocator::MUNMAP:
-        munmap(region.ptr_, region.size_);
+        if (munmap(region.ptr_, region.mapped_size_) != 0) {
+          DAQIRI_LOG_ERROR("Could not unmap {} byte memory region '{}': {}", region.mapped_size_,
+                           name, std::strerror(errno));
+        }
         break;
       case AllocRegion::Deallocator::EAL:
       case AllocRegion::Deallocator::NONE:
@@ -223,6 +231,21 @@ void Engine::free_memory_regions() noexcept {
     region.ptr_ = nullptr;
   }
   ar_.clear();
+
+  // Pooled slices above never own their individual addresses. Release each
+  // backing arena once, after all logical region records are gone. Engines
+  // must deregister their MRs before this base-class cleanup.
+  for (auto& arena : hugepage_arenas_) {
+    if (arena.ptr_ == nullptr) {
+      continue;
+    }
+    if (munmap(arena.ptr_, arena.mapped_size_) != 0) {
+      DAQIRI_LOG_ERROR("Could not unmap {} byte hugetlb arena on NUMA node {}: {}",
+                       arena.mapped_size_, arena.affinity_, std::strerror(errno));
+    }
+    arena.ptr_ = nullptr;
+  }
+  hugepage_arenas_.clear();
 }
 
 std::string Engine::generate_random_string(int len) {
@@ -493,62 +516,333 @@ static inline size_t align_ceil(size_t value, size_t align) {
 
 // Bind [p, p+bytes) to NUMA node `numa` (>=0) when libnuma is available, so a
 // kind: HUGE region lands on the same node DPDK's rte_malloc_socket(mr.affinity_)
-// used. Policy-only (no forced touch): a HUGE region may be large, so let it
-// fault on `numa` as it is used. No-op without libnuma or for numa < 0.
-static void bind_region_numa(void* p, size_t bytes, int numa) {
+// used. The caller populates the mapping only after this policy is installed.
+// No-op without libnuma or for numa < 0.
+static bool bind_region_numa(void* p, size_t bytes, int numa) {
 #if DAQIRI_HAVE_NUMA
   // Single-node systems: pinning is a no-op (skip to avoid mbind noise). The
-  // region here is mmap/posix_memalign(GPU_PAGE_SIZE)-backed, so it is already
-  // page-aligned as mbind requires.
+  // The allocation is page-aligned as mbind requires.
   if (p != nullptr && numa >= 0 && numa_available() != -1 && numa_max_node() > 0) {
-    numa_tonode_memory(p, bytes, numa);
-    return;
+    constexpr size_t kBitsPerWord = sizeof(unsigned long) * 8;
+    const unsigned long max_node = static_cast<unsigned long>(numa) + 1;
+    std::vector<unsigned long> node_mask((max_node + kBitsPerWord - 1) / kBitsPerWord, 0);
+    node_mask[static_cast<size_t>(numa) / kBitsPerWord] |=
+        1UL << (static_cast<unsigned int>(numa) % kBitsPerWord);
+    if (mbind(p, bytes, MPOL_BIND, node_mask.data(), max_node, 0) != 0) {
+      DAQIRI_LOG_WARN("Could not bind {} byte memory region to NUMA node {}: {}", bytes, numa,
+                      std::strerror(errno));
+      return false;
+    }
   }
 #endif
   (void)p;
   (void)bytes;
   (void)numa;
+  return true;
 }
 
-void* Engine::alloc_huge(size_t bytes, int numa, AllocRegion::Deallocator* deallocator) {
-  // Base (non-DPDK) implementation: try a real hugepage-backed mapping, falling
-  // back to ordinary page-aligned host memory if MAP_HUGETLB is unavailable.
+namespace {
+
+struct HugepageCandidate {
+  size_t page_size = 0;
+  size_t mapped_size = 0;
+  size_t available_pages = 0;
+  bool availability_known = false;
+  bool availability_is_numa_local = false;
+};
+
+struct HugepageAllocation {
+  void* ptr = nullptr;
+  size_t mapped_size = 0;
+  size_t page_size = 0;
+};
+
+static bool round_up_checked(size_t value, size_t alignment, size_t* result) {
+  if (result == nullptr || alignment == 0 ||
+      value > std::numeric_limits<size_t>::max() - (alignment - 1)) {
+    return false;
+  }
+  *result = ((value + alignment - 1) / alignment) * alignment;
+  return true;
+}
+
+static bool read_size_t_file(const std::string& path, size_t* value) {
+  if (value == nullptr) {
+    return false;
+  }
+  std::ifstream input(path);
+  unsigned long long parsed = 0;
+  if (!(input >> parsed) || parsed > std::numeric_limits<size_t>::max()) {
+    return false;
+  }
+  *value = static_cast<size_t>(parsed);
+  return true;
+}
+
+static std::vector<HugepageCandidate> discover_hugepage_candidates(size_t bytes, int numa) {
+  std::string root;
+  bool node_specific = false;
+  if (numa >= 0) {
+    root = "/sys/devices/system/node/node" + std::to_string(numa) + "/hugepages";
+    DIR* node_dir = opendir(root.c_str());
+    if (node_dir != nullptr) {
+      closedir(node_dir);
+      node_specific = true;
+    } else {
+      // Kernels without per-node hugepage accounting still expose the global
+      // pool. NUMA placement remains governed by bind_region_numa().
+      root.clear();
+    }
+  }
+  if (root.empty()) {
+    root = "/sys/kernel/mm/hugepages";
+  }
+
+  DIR* dir = opendir(root.c_str());
+  if (dir == nullptr) {
+    return {};
+  }
+
+  constexpr const char* kPrefix = "hugepages-";
+  constexpr const char* kSuffix = "kB";
+  const size_t prefix_length = std::strlen(kPrefix);
+  const size_t suffix_length = std::strlen(kSuffix);
+  std::vector<HugepageCandidate> candidates;
+  while (const dirent* entry = readdir(dir)) {
+    const std::string name(entry->d_name);
+    if (name.size() <= prefix_length + suffix_length ||
+        name.compare(0, prefix_length, kPrefix) != 0 ||
+        name.compare(name.size() - suffix_length, suffix_length, kSuffix) != 0) {
+      continue;
+    }
+
+    size_t page_kib = 0;
+    try {
+      const std::string digits =
+          name.substr(prefix_length, name.size() - prefix_length - suffix_length);
+      size_t consumed = 0;
+      const unsigned long long parsed = std::stoull(digits, &consumed);
+      if (consumed != digits.size() || parsed == 0 || parsed > std::numeric_limits<size_t>::max()) {
+        continue;
+      }
+      page_kib = static_cast<size_t>(parsed);
+    } catch (const std::exception&) {
+      continue;
+    }
+    if (page_kib > std::numeric_limits<size_t>::max() / 1024) {
+      continue;
+    }
+    const size_t page_size = page_kib * 1024;
+    if ((page_size & (page_size - 1)) != 0) {
+      continue;
+    }
+
+    size_t free_pages = 0;
+    const bool availability_known =
+        read_size_t_file(root + "/" + name + "/free_hugepages", &free_pages);
+    size_t reserved_pages = 0;
+    (void)read_size_t_file(root + "/" + name + "/resv_hugepages", &reserved_pages);
+    const size_t available_pages = free_pages > reserved_pages ? free_pages - reserved_pages : 0;
+
+    size_t mapped_size = 0;
+    if (!round_up_checked(bytes, page_size, &mapped_size)) {
+      continue;
+    }
+    if (mapped_size == 0) {
+      continue;
+    }
+    // Sysfs counters are advisory and can race with other allocators. Attempt
+    // every compatible mapping and let mmap() determine actual availability.
+    candidates.push_back(
+        {page_size, mapped_size, available_pages, availability_known, node_specific});
+  }
+  closedir(dir);
+
+  // Minimize bytes reserved first, then prefer fewer/larger pages on a tie.
+  // A 704 MiB request therefore uses 2 MiB pages when available, but can still
+  // be backed by a single 1 GiB page instead of falling back to regular memory.
+  std::sort(candidates.begin(), candidates.end(), [](const auto& lhs, const auto& rhs) {
+    if (lhs.mapped_size != rhs.mapped_size) {
+      return lhs.mapped_size < rhs.mapped_size;
+    }
+    return lhs.page_size > rhs.page_size;
+  });
+  return candidates;
+}
+
+static HugepageAllocation allocate_hugetlb_arena(size_t bytes, int numa) {
+#if defined(MAP_HUGETLB)
+#if defined(MAP_HUGE_SHIFT)
+  constexpr int kMapHugeShift = MAP_HUGE_SHIFT;
+#else
+  constexpr int kMapHugeShift = 26;
+#endif
+  for (const auto& candidate : discover_hugepage_candidates(bytes, numa)) {
+    const size_t required_pages = candidate.mapped_size / candidate.page_size;
+    if (candidate.availability_is_numa_local && candidate.availability_known &&
+        candidate.available_pages < required_pages) {
+      DAQIRI_LOG_WARN(
+          "Skipping {} byte hugetlb arena candidate on NUMA node {}: {} byte pages require "
+          "{} pages, but sysfs reports {} available on that node",
+          candidate.mapped_size, numa, candidate.page_size, required_pages,
+          candidate.available_pages);
+      continue;
+    }
+    unsigned int page_shift = 0;
+    for (size_t value = candidate.page_size; value > 1; value >>= 1) {
+      ++page_shift;
+    }
+    const unsigned int hugepage_bits = page_shift << kMapHugeShift;
+    const int hugepage_flag = static_cast<int>(hugepage_bits);
+    const int flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | hugepage_flag;
+    void* ptr = mmap(nullptr, candidate.mapped_size, PROT_READ | PROT_WRITE, flags, -1, 0);
+    if (ptr == MAP_FAILED) {
+      const int error = errno;
+      const std::string availability =
+          candidate.availability_known ? std::to_string(candidate.available_pages) : "unknown";
+      DAQIRI_LOG_WARN(
+          "Hugetlb arena mmap failed for {} bytes using {} byte pages on NUMA node "
+          "{} (sysfs available pages: {}, required pages: {}): {}",
+          candidate.mapped_size, candidate.page_size, numa, availability,
+          candidate.mapped_size / candidate.page_size, std::strerror(error));
+      continue;
+    }
+
+    if (!bind_region_numa(ptr, candidate.mapped_size, numa)) {
+      munmap(ptr, candidate.mapped_size);
+      continue;
+    }
+#if defined(MADV_POPULATE_WRITE)
+    // Populate after applying the NUMA policy. Unlike manually touching the
+    // mapping, MADV_POPULATE_WRITE reports allocation failure instead of
+    // delivering SIGBUS when the requested node cannot satisfy the policy.
+    if (madvise(ptr, candidate.mapped_size, MADV_POPULATE_WRITE) != 0) {
+      const int error = errno;
+      munmap(ptr, candidate.mapped_size);
+      DAQIRI_LOG_WARN(
+          "Could not populate {} byte hugetlb arena using {} byte pages on NUMA node {}: {}",
+          candidate.mapped_size, candidate.page_size, numa, std::strerror(error));
+      continue;
+    }
+#endif
+    return {ptr, candidate.mapped_size, candidate.page_size};
+  }
+#else
+  (void)bytes;
+  (void)numa;
+#endif
+  return {};
+}
+
+}  // namespace
+
+void* Engine::alloc_huge(size_t bytes, int numa, AllocRegion::Deallocator* deallocator,
+                         size_t* mapped_size) {
+  // Base (non-DPDK) implementation: kind: HUGE means explicit hugetlb memory.
+  // It never silently degrades to regular or transparent-hugepage memory.
   // The DPDK engine overrides this to use rte_malloc_socket (EAL hugepages,
   // IOVA-contiguous for the NIC) -- see DpdkEngine::alloc_huge.
-  if (deallocator == nullptr) {
+  if (deallocator == nullptr || mapped_size == nullptr) {
     return nullptr;
   }
-#if defined(MAP_HUGETLB)
-  void* p = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB,
-                 -1, 0);
-  if (p != MAP_FAILED) {
-    bind_region_numa(p, bytes, numa);
+  const HugepageAllocation allocation = allocate_hugetlb_arena(bytes, numa);
+  if (allocation.ptr != nullptr) {
     *deallocator = AllocRegion::Deallocator::MUNMAP;
-    return p;
+    *mapped_size = allocation.mapped_size;
+    return allocation.ptr;
   }
-  DAQIRI_LOG_WARN(
-      "MAP_HUGETLB allocation of {} bytes failed; falling back to regular pages. "
-      "Configure hugepages per docs/tutorials/system_configuration.md for best performance.",
-      bytes);
-#endif
-  void* ptr = nullptr;
-  if (posix_memalign(&ptr, GPU_PAGE_SIZE, bytes) != 0) {
-    return nullptr;
-  }
-  bind_region_numa(ptr, bytes, numa);
-  *deallocator = AllocRegion::Deallocator::FREE;
-  return ptr;
+  DAQIRI_LOG_CRITICAL(
+      "kind: huge requires hugetlb backing, but no compatible hugepage pool can back the {} "
+      "byte region on NUMA node {}",
+      bytes, numa);
+  return nullptr;
 }
 
 Status Engine::allocate_memory_regions() {
   DAQIRI_LOG_INFO("Registering memory regions");
+  const bool pool_huge_regions = use_hugepage_arenas();
+
+  // Compute logical region spans before allocating anything. Besides avoiding
+  // overflow, this lets raw ibverbs aggregate many small HUGE regions into the
+  // minimum number of hugetlb mappings.
+  for (auto& [name, mr] : cfg_.mrs_) {
+    if (mr.num_bufs_ != 0 && mr.adj_size_ > std::numeric_limits<size_t>::max() / mr.num_bufs_) {
+      DAQIRI_LOG_ERROR("Memory region '{}' size overflows", name);
+      return Status::INVALID_PARAMETER;
+    }
+    const size_t bytes = mr.adj_size_ * mr.num_bufs_;
+    if (!round_up_checked(bytes, GPU_PAGE_SIZE, &mr.ttl_size_)) {
+      DAQIRI_LOG_ERROR("Memory region '{}' aligned size overflows", name);
+      return Status::INVALID_PARAMETER;
+    }
+  }
+
+  std::unordered_map<int, size_t> arena_index_by_numa;
+  if (pool_huge_regions) {
+    std::unordered_map<int, size_t> bytes_by_numa;
+    for (const auto& [name, mr] : cfg_.mrs_) {
+      if (!mr.owned_ || mr.kind_ != MemoryKind::HUGE || external_mrs_.count(name) != 0) {
+        continue;
+      }
+      if (mr.ttl_size_ == 0) {
+        DAQIRI_LOG_ERROR("Pooled HUGE memory region '{}' has zero size", name);
+        return Status::INVALID_PARAMETER;
+      }
+      size_t& total = bytes_by_numa[mr.affinity_];
+      if (total > std::numeric_limits<size_t>::max() - mr.ttl_size_) {
+        DAQIRI_LOG_ERROR("Hugetlb arena size overflows on NUMA node {}", mr.affinity_);
+        return Status::INVALID_PARAMETER;
+      }
+      total += mr.ttl_size_;
+    }
+
+    std::vector<std::pair<int, size_t>> arena_plans(bytes_by_numa.begin(), bytes_by_numa.end());
+    std::sort(arena_plans.begin(), arena_plans.end(), [](const auto& lhs, const auto& rhs) {
+      if (lhs.first < 0 || rhs.first < 0) {
+        return lhs.first >= 0 && rhs.first < 0;
+      }
+      return lhs.first < rhs.first;
+    });
+
+    hugepage_arenas_.reserve(arena_plans.size());
+    for (const auto& [numa, used_size] : arena_plans) {
+      if (used_size == 0) {
+        continue;
+      }
+      HugepageArena arena;
+      arena.affinity_ = numa;
+      arena.used_size_ = used_size;
+
+      const HugepageAllocation allocation = allocate_hugetlb_arena(used_size, numa);
+      if (allocation.ptr != nullptr) {
+        arena.ptr_ = allocation.ptr;
+        arena.mapped_size_ = allocation.mapped_size;
+        arena.page_size_ = allocation.page_size;
+        DAQIRI_LOG_INFO(
+            "Allocated hugetlb arena on NUMA node {}: {} useful bytes in a {} byte "
+            "mapping ({} byte pages, {} bytes unused)",
+            numa, used_size, arena.mapped_size_, arena.page_size_,
+            arena.mapped_size_ - arena.used_size_);
+      } else {
+        DAQIRI_LOG_CRITICAL(
+            "kind: huge requires hugetlb backing, but no compatible hugepage pool can back the "
+            "{} byte arena on NUMA node {}",
+            used_size, numa);
+        return Status::NULL_PTR;
+      }
+
+      arena_index_by_numa[numa] = hugepage_arenas_.size();
+      hugepage_arenas_.push_back(arena);
+    }
+  }
+
   for (auto& mr : cfg_.mrs_) {
     void* ptr = nullptr;
     AllocRegion ar;
     ar.mr_name_ = mr.second.name_;
     ar.affinity_ = mr.second.affinity_;
-    mr.second.ttl_size_ = align_ceil(mr.second.adj_size_ * mr.second.num_bufs_, GPU_PAGE_SIZE);
     ar.size_ = mr.second.ttl_size_;
+    ar.mapped_size_ = ar.size_;
 
     const auto external = external_mrs_.find(mr.first);
     if (external != external_mrs_.end()) {
@@ -604,7 +898,26 @@ Status Engine::allocate_memory_regions() {
           ar.deallocator_ = AllocRegion::Deallocator::CUDA_HOST;
           break;
         case MemoryKind::HUGE:
-          ptr = alloc_huge(mr.second.ttl_size_, mr.second.affinity_, &ar.deallocator_);
+          if (pool_huge_regions) {
+            const auto arena_it = arena_index_by_numa.find(mr.second.affinity_);
+            if (arena_it == arena_index_by_numa.end()) {
+              DAQIRI_LOG_CRITICAL("Missing pooled HUGE memory arena for MR {}", mr.first);
+              return Status::NULL_PTR;
+            }
+            HugepageArena& arena = hugepage_arenas_[arena_it->second];
+            if (arena.next_offset_ > arena.used_size_ ||
+                mr.second.ttl_size_ > arena.used_size_ - arena.next_offset_) {
+              DAQIRI_LOG_CRITICAL("Pooled HUGE memory arena overflow while assigning MR {}",
+                                  mr.first);
+              return Status::NULL_PTR;
+            }
+            ptr = static_cast<unsigned char*>(arena.ptr_) + arena.next_offset_;
+            arena.next_offset_ += mr.second.ttl_size_;
+            ar.deallocator_ = AllocRegion::Deallocator::NONE;
+          } else {
+            ptr = alloc_huge(mr.second.ttl_size_, mr.second.affinity_, &ar.deallocator_,
+                             &ar.mapped_size_);
+          }
           break;
         case MemoryKind::DEVICE: {
           unsigned int flag = 1;

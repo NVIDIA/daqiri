@@ -820,3 +820,8 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `ReorderSeqBatchNumberConfig` | Sequence-number, batch-number, and packets-per-batch field config. |
 | `ReorderSeqPacketsPerBatchConfig` | Sequence-number and packets-per-batch field config. |
 | `ReorderDataTypesConfig` | Optional reorder input/output data type conversion settings. |
+
+`MemoryKind.HUGE` explicitly requires hugetlb-backed memory. Initialization fails if a
+compatible hugepage pool cannot satisfy a DAQIRI-owned region; DAQIRI does not silently use
+regular pages or transparent hugepages. Select `MemoryKind.HOST` when regular host memory is
+intended.

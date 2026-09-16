@@ -558,6 +558,10 @@ class IbverbsEngine : public Engine {
  private:
   struct PortSteering;
 
+  bool use_hugepage_arenas() const override {
+    return true;
+  }
+
   // ---- bring-up ----
   struct ibv_context* open_device_for_interface(const InterfaceConfig& intf);
   Status enable_hw_loopback(struct ibv_context* ctx, struct ibv_pd* pd);

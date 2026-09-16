@@ -24,6 +24,12 @@ Supported platforms include [NVIDIA Data Center](https://www.nvidia.com/en-us/da
 
 For detailed instructions on verifying NIC drivers, configuring link layers, enabling GPUDirect, and tuning your system for maximum performance, see the [System Configuration tutorial](tutorials/system_configuration.md).
 
+Configs that declare a DAQIRI-owned memory region with `kind: huge` must have a compatible
+hugetlb pool provisioned before startup. DAQIRI treats that kind as a requirement and fails
+initialization instead of falling back to regular or transparent-hugepage memory. The raw
+ibverbs engine packs same-NUMA startup regions into shared arenas so smaller regions can use a
+larger page efficiently. External memory bindings remain the caller's responsibility.
+
 ## Build the DAQIRI Library
 
 First, add the [DOCA apt repository](https://developer.nvidia.com/doca-downloads?deployment_platform=Host-Server&deployment_package=DOCA-Host&target_os=Linux) which holds some of DAQIRI's dependencies:

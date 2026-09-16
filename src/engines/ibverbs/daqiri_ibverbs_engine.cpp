@@ -6287,6 +6287,7 @@ Status IbverbsEngine::allocate_runtime_mr(MemoryRegionConfig config,
   allocation.mr_name_ = config.name_;
   allocation.affinity_ = config.affinity_;
   allocation.size_ = config.ttl_size_;
+  allocation.mapped_size_ = allocation.size_;
   void* ptr = nullptr;
 
   if (binding != nullptr) {
@@ -6382,7 +6383,8 @@ Status IbverbsEngine::allocate_runtime_mr(MemoryRegionConfig config,
         allocation.deallocator_ = AllocRegion::Deallocator::FREE;
         break;
       case MemoryKind::HUGE:
-        ptr = alloc_huge(config.ttl_size_, config.affinity_, &allocation.deallocator_);
+        ptr = alloc_huge(config.ttl_size_, config.affinity_, &allocation.deallocator_,
+                         &allocation.mapped_size_);
         break;
       case MemoryKind::HOST_PINNED: {
         CUcontext previous = nullptr;
@@ -6495,7 +6497,11 @@ Status IbverbsEngine::free_runtime_mr(const std::string& name) {
         break;
       }
       case AllocRegion::Deallocator::MUNMAP:
-        munmap(region.ptr_, region.size_);
+        if (munmap(region.ptr_, region.mapped_size_) != 0) {
+          DAQIRI_LOG_ERROR("Could not unmap {} byte runtime memory region '{}': {}",
+                           region.mapped_size_, name, strerror(errno));
+          return Status::GENERIC_FAILURE;
+        }
         break;
       case AllocRegion::Deallocator::EAL:
       case AllocRegion::Deallocator::NONE:
