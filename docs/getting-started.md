@@ -11,7 +11,7 @@ DAQIRI's baseline requirements depend on which [stream type](concepts.md#stream-
 
 | Component | Requirement |
 |-----------|-------------|
-| **OS** | Linux (kernel 5.4+), Ubuntu 22.04 recommended |
+| **OS** | Linux (kernel 5.15+), Ubuntu 22.04 recommended |
 | **CUDA** | CUDA Toolkit 12.2+ (the container ships CUDA 13.1) |
 | **NIC** *(Raw Ethernet / GPUDirect / RoCE only)* | NVIDIA ConnectX-6 Dx or later. Packet pacing and timed transmission require ConnectX-7 or later. Default Ubuntu kernel drivers (inbox) are sufficient. We recommend also installing `doca-ofed` for the diagnostic utilities (`ibstat`, `ibv_devinfo`, `ibdev2netdev`, `mlnx_perf`, `mlxconfig`, and so on). |
 | **GPU** *(GPUDirect only)* | RTX or Data Center GPU. GeForce is not supported. |
@@ -23,6 +23,12 @@ DAQIRI's baseline requirements depend on which [stream type](concepts.md#stream-
 Supported platforms include [NVIDIA Data Center](https://www.nvidia.com/en-us/data-center/) systems, edge systems like [NVIDIA IGX](https://www.nvidia.com/en-us/edge-computing/products/igx/) and [NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/workstations/dgx-spark/), and `x86_64` systems with the above components.
 
 For detailed instructions on verifying NIC drivers, configuring link layers, enabling GPUDirect, and tuning your system for maximum performance, see the [System Configuration tutorial](tutorials/system_configuration.md).
+
+Configs that declare a DAQIRI-owned memory region with `kind: huge` must have a compatible
+hugetlb pool provisioned before startup. DAQIRI treats that kind as a requirement and fails
+initialization instead of falling back to regular or transparent-hugepage memory. The raw
+ibverbs engine packs same-NUMA startup regions into shared arenas so smaller regions can use a
+larger page efficiently. External memory bindings remain the caller's responsibility.
 
 ## Build the DAQIRI Library
 

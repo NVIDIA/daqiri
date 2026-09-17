@@ -51,6 +51,11 @@ auto status = daqiri::daqiri_init(config);
 After `daqiri_init()` returns `Status::SUCCESS`, all memory regions are allocated, NIC
 queues are configured, and worker threads are running.
 
+`MemoryKind::HUGE` is an explicit hugetlb request for DAQIRI-owned memory. DAQIRI does not
+substitute regular or transparent-hugepage memory when the requested hugetlb allocation is
+unavailable; initialization fails instead. Use `MemoryKind::HOST` or `MemoryKind::HOST_PINNED` when regular host memory is
+intended. Callers supplying an external memory binding remain responsible for its backing.
+
 Only one engine may be active in a process. Calling `daqiri_init()` again before
 `shutdown()` returns `Status::INTERNAL_ERROR` and leaves the running engine unchanged.
 After `shutdown()` completes, a later `daqiri_init()` creates a fresh engine instance and
@@ -386,10 +391,10 @@ auto wait_for_resource = [&](daqiri::ResourceOpId wanted) {
 const daqiri::ResourceOpResult result = wait_for_resource(op);
 ```
 
-Owned regions use the same host, pinned-host, hugepage, and GPU allocation paths
-as startup regions. The overload accepting `ExternalMemoryRegion` registers but
-never frees caller-owned storage. A runtime queue may reference startup or
-runtime regions.
+Owned regions use the same host, pinned-host, strict-hugetlb, and GPU memory kinds as startup
+regions. Runtime `HUGE` regions are mapped independently; the shared raw-ibverbs arenas apply to
+DAQIRI-owned startup regions. The overload accepting `ExternalMemoryRegion` registers but never
+frees caller-owned storage. A runtime queue may reference startup or runtime regions.
 
 Queue removal is drain-based. It stops accepting new work and completes only
 after application-held RX packet storage, reordered output, or TX work has been

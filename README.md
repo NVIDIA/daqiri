@@ -29,6 +29,10 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 
 - **High Throughput** — Sustained line rate with proper hardware and tuning.
 - **Low Latency** — Direct access to NIC ring buffers; most latency is PCIe transit only.
+- **Explicit hugepage allocation** — `kind: huge` always means hugetlb-backed memory for
+  DAQIRI-owned regions and fails initialization when the pool is unavailable. Raw ibverbs packs
+  same-NUMA startup regions into shared arenas so, for example, many 32 MiB regions can use one
+  1 GiB page without regular-page fallback.
 - **GPUDirect** — Receive data directly into GPU memory via two modes:
   - *Header-Data Split*: Headers to CPU, payload to GPU (recommended for most workloads).
   - *Batched GPU*: Entire packets to GPU memory (maximum bandwidth, GPU-side parsing required).

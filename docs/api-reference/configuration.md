@@ -78,6 +78,14 @@ runtime binding.
       into device memory and CUDA reports DMA-BUF unsupported. On discrete-GPU systems,
       prefer `device` for high-throughput RX/TX paths.
     - `host`: Regular CPU memory (not recommended)
+
+  With the raw ibverbs engine, DAQIRI-owned `huge` regions declared in the startup configuration
+  and having the same NUMA affinity share a hugetlb arena. DAQIRI chooses the available page size
+  that can back the regions with the least rounding, while registering every region separately.
+  For example, twenty-two 32 MiB regions require one 1 GiB page—not twenty-two—when the host has
+  only 1 GiB hugepages. `kind: huge` requires explicit hugetlb backing for DAQIRI-owned memory;
+  initialization fails if no compatible pool has enough pages. It never falls back to regular
+  pages or transparent hugepages.
 - **`affinity`**: GPU ID for `device` memory, or NUMA node ID for CPU memory.
   - type: `integer`
 - **`access`**: Memory access permissions.

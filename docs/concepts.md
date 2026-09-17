@@ -398,7 +398,12 @@ name from each queue.
 The kind of a memory region determines whether packet data ends up on
 the CPU or the GPU:
 
-- `huge`: CPU hugepages (recommended for CPU buffers).
+- `huge`: CPU hugetlb memory (recommended for CPU buffers). This is an explicit
+  allocation requirement: initialization fails if a compatible hugepage pool
+  cannot satisfy the DAQIRI-owned region. DAQIRI never substitutes regular or
+  transparent-hugepage memory. Raw ibverbs packs DAQIRI-owned startup `huge`
+  regions with the same NUMA affinity into a shared arena while registering
+  each region separately. External bindings remain the caller's responsibility.
 - `device`: GPU VRAM (discrete GPUs, requires GPUDirect via peermem or
   DMA-BUF).
 - `host_pinned`: pinned CPU pages allocated via `cudaHostAlloc`.

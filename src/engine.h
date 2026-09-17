@@ -22,6 +22,7 @@
 #include <daqiri/types.h>
 #include <cuda.h>
 #include <optional>
+#include <vector>
 
 // Forward declarations of the DPDK types used only by the DPDK engine. Keeping
 // them as forward declarations (the members are a pointer-returning helper and a
@@ -47,6 +48,7 @@ struct AllocRegion {
   std::string mr_name_;
   void* ptr_ = nullptr;
   size_t size_ = 0;
+  size_t mapped_size_ = 0;
   int affinity_ = -1;
   CUcontext cuda_context_ = nullptr;
   int cuda_device_ = -1;
@@ -218,6 +220,18 @@ class Engine {
   bool initialized_ = false;
   NetworkConfig cfg_;
   std::unordered_map<std::string, AllocRegion> ar_;
+  // Engines that opt into pooled HUGE allocation share one hugetlb arena per
+  // NUMA node. Each configured memory region remains a separate logical slice,
+  // while the arena owns the rounded hugepage mapping exactly once.
+  struct HugepageArena {
+    void* ptr_ = nullptr;
+    size_t mapped_size_ = 0;
+    size_t used_size_ = 0;
+    size_t page_size_ = 0;
+    size_t next_offset_ = 0;
+    int affinity_ = -1;
+  };
+  std::vector<HugepageArena> hugepage_arenas_;
   std::unordered_map<std::string, ResolvedExternalMemoryRegion> external_mrs_;
   // shared_ptr to an incomplete type -- only populated by the DPDK engine
   // (engine_dpdk.cpp). Layout is identical in every build.
@@ -238,12 +252,16 @@ class Engine {
   std::unordered_map<int, size_t> next_queue_index_map_;  // For get_rx_burst next queue check
 
   virtual Status allocate_memory_regions();
+  virtual bool use_hugepage_arenas() const {
+    return false;
+  }
   virtual void adjust_memory_regions() {}
-  // Allocate hugepage-backed memory for a kind: HUGE region. The base provides
-  // a libdpdk-free implementation (MAP_HUGETLB with a regular-page fallback);
-  // DpdkEngine overrides it with rte_malloc_socket so HUGE regions come from EAL
+  // Allocate hugetlb-backed memory for a kind: HUGE region. The base uses
+  // MAP_HUGETLB and fails rather than falling back to regular pages. DpdkEngine
+  // overrides it with rte_malloc_socket so HUGE regions come from EAL
   // hugepages that are IOVA-contiguous for the NIC.
-  virtual void* alloc_huge(size_t bytes, int numa, AllocRegion::Deallocator* deallocator);
+  virtual void* alloc_huge(size_t bytes, int numa, AllocRegion::Deallocator* deallocator,
+                           size_t* mapped_size);
   void free_memory_regions() noexcept;
   void init_rx_core_q_map();
   static std::string generate_random_string(int len);
