@@ -26,7 +26,7 @@ For detailed instructions on verifying NIC drivers, configuring link layers, ena
 
 ## Build the DAQIRI Library
 
-First, add the [DOCA apt repository](https://developer.nvidia.com/doca-downloads?deployment_platform=Host-Server&deployment_package=DOCA-Host&target_os=Linux) which holds some of DAQIRI's dependencies:
+For a bare-metal build, first add the [DOCA apt repository](https://developer.nvidia.com/doca-downloads?deployment_platform=Host-Server&deployment_package=DOCA-Host&target_os=Linux), which holds some of DAQIRI's dependencies. Container builds do not require this host setup.
 
 === "IGX OS 1.1"
 
@@ -96,6 +96,13 @@ Then build the DAQIRI library:
     BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
     ```
 
+    IGX Thor ships CUDA 13.0. Match that version instead of the default CUDA 13.1 image:
+
+    ```bash
+    CUDA_VERSION=13.0.0 BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" \
+      scripts/build-container.sh
+    ```
+
     Set `BASE_IMAGE=torch` to build on top of NGC PyTorch instead of the default CUDA base. This is useful for Torch / TensorRT inference workflows that ingest packets directly into GPU memory:
 
     ```bash
@@ -122,7 +129,7 @@ Then build the DAQIRI library:
 
 ### Bare-metal dependencies
 
-The Ubuntu apt packages mirror the Dockerfile. Build DPDK from source with the patches under `dpdk_patches/` if you want GPUDirect without the `nvidia-peermem` kernel module.
+Build DPDK from source with the patches under `dpdk_patches/` if you want GPUDirect without the `nvidia-peermem` kernel module.
 
 ```bash
 # Core build deps
@@ -136,7 +143,7 @@ sudo apt install -y libnuma-dev
 # RoCE / RDMA + diagnostic utilities (from the DOCA APT repo, see above)
 sudo apt install -y \
     libibverbs-dev librdmacm-dev libmlx5-1 ibverbs-utils infiniband-diags \
-    mlnx-ofed-kernel-utils mft
+    mlnx-tools mlnx-ofed-kernel-utils mft
 
 # Python bindings (only if -DDAQIRI_BUILD_PYTHON=ON)
 sudo apt install -y pybind11-dev
@@ -213,30 +220,6 @@ DAQIRI's shared-library ABI version is tracked separately through
 | `DAQIRI_ENABLE_S3` | `OFF` | Enable AWS SDK-backed asynchronous raw packet writes to S3. |
 | `DAQIRI_PREFER_SYSTEM_YAML_CPP` | `OFF` | Prefer a system-installed `yaml-cpp` over the vendored `third_party/yaml-cpp` submodule. Keep `OFF` if a conda/miniforge env is on `PATH`. |
 | `BUILD_SHARED_LIBS` | n/a | Build as shared library. |
-
-Linux UDP/TCP sockets are always available. Applications that need kernel socket
-tuning can call `socket_setsockopt()` after resolving a TCP/UDP connection ID,
-passing the numeric `level` and option constants from system headers. DAQIRI does
-not maintain symbolic socket-option mappings in YAML.
-
-For Raw Ethernet (`stream_type: "raw"`), `daqiri_init()` validates that each `rx.flows`
-entry's legacy scalar `action.id` or queue-list `action.ids` (including the final
-queue action in ordered `actions:`) references configured `rx.queues` IDs on the
-same interface, then programs flow rules into the NIC. Two or more queue IDs
-automatically enable flow-affine IPv4/UDP five-tuple RSS.
-Initialization fails if any RX flow rule, TX transform flow, send-to-kernel fallback
-(when `flow_isolation: true`), or `tx_eth_src` offload rule cannot be installed.
-Raw DPDK and raw ibverbs can offload VLAN push/pop and VXLAN, GRE, or NVGRE
-encap/decap through flow actions. Socket/RDMA streams reject those actions.
-`rx.flows` may also be omitted for queues-only startup, and applications can then add and delete
-RX flow rules at runtime with `add_rx_flow_async()` / `delete_flow_async()`. Dynamic
-RX flows can use the same decap/pop action ordering as static RX flows. The DPDK template
-fast path is enabled and sized by `rx.dynamic_flow_capacity` (default `0`, set a positive
-value such as `1024` to create template tables on NICs that support the async flow API);
-dynamic transform rules fall back to regular hardware flow creation because packet reformat
-actions are not part of that template fast path. The dynamic RX-flow example leaves this
-setting at `0` so it runs on devices whose mlx5 async flow setup is unavailable or resource
-limited.
 
 The raw ibverbs engine can also add and remove memory regions and RX/TX queues after
 `daqiri_init()`. These are explicit C++/Python operations rather than YAML mutations. Runtime RX
@@ -319,12 +302,6 @@ Configure credentials through the AWS SDK provider chain, such as environment
 variables, a shared AWS profile, container credentials, or an EC2 instance role.
 DAQIRI writes one object per packet with a single `PutObject`; multipart uploads
 and PCAP output are not part of the S3 path.
-
-### Raw Ethernet RX flows
-
-On a single RX interface, use either standard UDP/IP flow rules or flex-item flow
-rules, not both. Mixed configs are rejected at `daqiri_init`. See
-[Configuration reference](api-reference/configuration.md#flows).
 
 ## Next Steps
 

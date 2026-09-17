@@ -7,7 +7,7 @@ hide:
 
 DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking/ethernet-adapters/) (ConnectX-6 Dx or later) and a CUDA-capable GPU. Two reference platforms are documented in this tutorial. Pick the one closest to yours below:
 
-- **IGX series** (Orin and Thor developer kits) with a discrete GPU: peermem-based GPUDirect, a separate GPU BAR1, and a discrete-PCIe path between GPU and NIC. The originally-supported reference platform.
+- **IGX series** (Orin and Thor developer kits) with a discrete GPU: GPUDirect into GPU memory, a separate GPU BAR1, and a discrete-PCIe path between GPU and NIC.
 - **DGX Spark** (Grace Blackwell **GB10** superchip): unified CPU/GPU memory via NVLink-C2C, integrated **ConnectX-7**, no peermem, and GPUDirect via `kind: host_pinned` data buffers.
 
 <div class="platform-tabs" markdown="1">
@@ -23,25 +23,18 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     Two IGX configurations are actively tested:
 
     - **IGX Orin** with [IGX SW 1.1](https://docs.nvidia.com/igx-orin/user-guide/latest/base-os.html) (Ubuntu 22.04) and an [NVIDIA RTX 6000 Ada GPU](https://www.nvidia.com/en-us/design-visualization/rtx-6000/). The steps below are written against this platform.
-    - **IGX Thor developer kit** (Ubuntu 24.04, driver 580 / CUDA 13) with a discrete RTX PRO 6000 Blackwell **alongside the Thor iGPU**. Everything below applies unchanged except for GPU selection — see the admonition immediately after.
+    - **IGX Thor developer kit** (Ubuntu 24.04, driver 580 / CUDA 13) with a discrete RTX PRO 6000 Blackwell. Most steps also apply to this platform; GPU selection and the container CUDA version differ as noted below.
 
-    The concepts should be applicable to other systems based on Ubuntu 22.04 as well. It should also work on other Linux distributions with a glibc version of 2.35 or higher by containerizing the dependencies and applications on top of an Ubuntu 22.04 image, but this is not actively tested at this time.
+    !!! Warning "IGX Thor: select the discrete GPU"
 
-    !!! Warning "IGX Thor: select the discrete GPU explicitly"
-
-        Thor developer kits expose **two** GPUs: the integrated Thor iGPU and the discrete card. CUDA enumerates them in the **opposite order** from `nvidia-smi`/NVML, and the Tegra CUDA driver initializes only **one GPU class at a time** — requesting both (`CUDA_VISIBLE_DEVICES=0,1`) makes `cuInit` fail outright. Always select by **UUID**, never by index:
+        CUDA ordinals on IGX Thor may not match the indices reported by `nvidia-smi`. Select the discrete GPU by UUID for `kind: device` memory:
 
         ```bash
         nvidia-smi --query-gpu=index,name,uuid --format=csv
-        ```
-
-        Without an explicit selection, CUDA resolves to the **iGPU**. `tune_system.py` gates four checks on `is_any_integrated_gpu()`, so on Thor they silently skip or report an iGPU-flavored INFO instead of evaluating the discrete card: `--check peermem`, `--check gpudirect`, `--check topo`, and `--check bar1-size`. Prefix the run with the discrete GPU's UUID to get real results:
-
-        ```bash
         sudo CUDA_VISIBLE_DEVICES=GPU-<uuid> ./python/tune_system.py --check all
         ```
 
-        The same applies to containers — see [Running the DAQIRI container](../benchmarks/raw_benchmarking.md#running-the-daqiri-container).
+        Run `tune_system.py` with the discrete GPU visible so its peermem, PCIe-topology, and BAR1 checks evaluate that GPU. For the container command and process-local `affinity`, see [Running the DAQIRI container](../benchmarks/raw_benchmarking.md#running-the-daqiri-container).
 
     !!! Warning "Secure boot conflict"
 
