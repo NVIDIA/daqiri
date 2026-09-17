@@ -4,7 +4,23 @@ on:
   push:
     branches:
       - main
+    paths: &test-paths
+      - '.github/workflows/tests.yml'
+      - 'CMakeLists.txt'
+      - 'applications/**/configs/*.yaml'
+      - 'examples/CMakeLists.txt'
+      - 'examples/config_validate.cpp'
+      - 'examples/*.yaml'
+      - 'include/daqiri/common.h'
+      - 'pyproject.toml'
+      - 'python/**/*.py'
+      - 'schemas/**'
+      - 'scripts/*.py'
+      - 'scripts/**/*.py'
+      - 'src/common.cpp'
+      - 'tests/**'
   pull_request:
+    paths: *test-paths
 
 permissions:
   contents: read

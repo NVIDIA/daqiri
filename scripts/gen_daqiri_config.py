@@ -11,13 +11,17 @@ import argparse
 import sys
 from pathlib import Path
 
-# The source tree places daqiri_config beside this script. An installed tree
-# keeps the module under share so bin contains only executable entry points.
-INSTALLED_MODULES = (
-    Path(__file__).resolve().parent.parent / "share" / "daqiri" / "config-generator"
-)
-if INSTALLED_MODULES.is_dir():
-    sys.path.insert(0, str(INSTALLED_MODULES))
+# CMake replaces this token in the installed launcher with either a path
+# relative to CMAKE_INSTALL_BINDIR or an absolute GNUInstallDirs data path.
+# In the source tree the unresolved token is ignored and Python finds the
+# sibling daqiri_config package normally.
+CONFIGURED_MODULE_HINT = "@DAQIRI_CONFIG_GENERATOR_MODULE_HINT@"
+UNCONFIGURED_MODULE_HINT = "@" + "DAQIRI_CONFIG_GENERATOR_MODULE_HINT" + "@"
+if CONFIGURED_MODULE_HINT != UNCONFIGURED_MODULE_HINT:
+    installed_modules = Path(CONFIGURED_MODULE_HINT)
+    if not installed_modules.is_absolute():
+        installed_modules = Path(__file__).resolve().parent / installed_modules
+    sys.path.insert(0, str(installed_modules.resolve()))
 
 from daqiri_config import (
     ConfigError,

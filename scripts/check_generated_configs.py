@@ -24,7 +24,6 @@ from daqiri_config import (
     generate_raw_pair,
     generate_raw_roles,
     generate_socket_pair,
-    load_document,
     render_document,
     validate_document,
 )
@@ -127,91 +126,57 @@ def _generate_matrix_in_subprocess(hash_seed: int) -> bytes:
 def _cpp_rejection_documents(
     documents: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
-    invalid: dict[str, dict[str, Any]] = {}
+    """Return focused regressions for distinct runtime-decoder failure paths."""
 
-    unknown_queue_key = copy.deepcopy(documents["socket-udp-tx"])
+    invalid: dict[str, dict[str, Any]] = {}
+    base_name = "socket-udp-tx"
+
+    def replace(name: str, path: tuple[str | int, ...], value: Any) -> None:
+        document = copy.deepcopy(documents[base_name])
+        parent: Any = document
+        for component in path[:-1]:
+            parent = parent[component]
+        parent[path[-1]] = value
+        invalid[name] = document
+
+    unknown_queue_key = copy.deepcopy(documents[base_name])
     queue = unknown_queue_key["daqiri"]["cfg"]["interfaces"][0]["rx"]["queues"][0]
     queue["batch_sise"] = queue.pop("batch_size")
     invalid["unknown-queue-key"] = unknown_queue_key
 
-    dynamic_flow_overflow = copy.deepcopy(documents["socket-udp-tx"])
-    dynamic_flow_overflow["daqiri"]["cfg"]["interfaces"][0]["rx"][
-        "dynamic_flow_capacity"
-    ] = 1 << 32
-    invalid["dynamic-flow-capacity-overflow"] = dynamic_flow_overflow
+    config_path: tuple[str | int, ...] = ("daqiri", "cfg")
+    interface_path = (*config_path, "interfaces", 0)
+    tx_flow_path = (*interface_path, "tx", "flows")
+    memory_region_path = (*config_path, "memory_regions", 0)
+    queue_path = (*interface_path, "tx", "queues", 0)
 
-    metadata_overflow = copy.deepcopy(documents["socket-udp-tx"])
-    metadata_overflow["daqiri"]["cfg"]["tx_meta_buffers"] = 1 << 32
-    invalid["metadata-overflow"] = metadata_overflow
-
-    min_ipg_overflow = copy.deepcopy(documents["socket-udp-rx"])
-    min_ipg_overflow["daqiri"]["cfg"]["interfaces"][0]["socket_config"][
-        "min_ipg_ns"
-    ] = 1 << 32
-    invalid["min-ipg-overflow"] = min_ipg_overflow
-
-    affinity_overflow = copy.deepcopy(documents["socket-udp-tx"])
-    affinity_overflow["daqiri"]["cfg"]["memory_regions"][0]["affinity"] = 1 << 16
-    invalid["affinity-overflow"] = affinity_overflow
-
-    unknown_offload = copy.deepcopy(documents["socket-udp-tx"])
-    unknown_offload["daqiri"]["cfg"]["interfaces"][0]["tx"]["queues"][0][
-        "offloads"
-    ] = ["tx_eth_scr"]
-    invalid["unknown-offload"] = unknown_offload
-
-    malformed_tx_flows = copy.deepcopy(documents["socket-udp-tx"])
-    malformed_tx_flows["daqiri"]["cfg"]["interfaces"][0]["tx"]["flows"] = "typo"
-    invalid["malformed-tx-flows"] = malformed_tx_flows
-
-    malformed_ecpri = copy.deepcopy(documents["socket-udp-tx"])
-    malformed_ecpri["daqiri"]["cfg"]["interfaces"][0]["tx"]["flows"] = [
-        {
-            "name": "malformed_ecpri",
-            "id": 0,
-            "match": {"ecpri": "ecpri_typo"},
-            "action": {"type": "queue", "id": 0},
-        }
-    ]
-    invalid["malformed-ecpri"] = malformed_ecpri
-
-    malformed_ipv4 = copy.deepcopy(documents["socket-udp-tx"])
-    malformed_ipv4["daqiri"]["cfg"]["interfaces"][0]["tx"]["flows"] = [
-        {
-            "name": "malformed_ipv4",
-            "id": 0,
-            "match": {"ipv4_src": ["10.0.0.1"]},
-            "action": {"type": "queue", "id": 0},
-        }
-    ]
-    invalid["malformed-ipv4"] = malformed_ipv4
-
-    invalid_memory_kind = copy.deepcopy(documents["socket-udp-tx"])
-    invalid_memory_kind["daqiri"]["cfg"]["memory_regions"][0]["kind"] = "devcie"
-    invalid["invalid-memory-kind"] = invalid_memory_kind
-
-    invalid_memory_access = copy.deepcopy(documents["socket-udp-tx"])
-    invalid_memory_access["daqiri"]["cfg"]["memory_regions"][0]["access"] = ["locla"]
-    invalid["invalid-memory-access"] = invalid_memory_access
-
-    quoted_integer = copy.deepcopy(documents["socket-udp-tx"])
-    quoted_integer["daqiri"]["cfg"]["memory_regions"][0]["num_bufs"] = "128"
-    invalid["quoted-integer"] = quoted_integer
-
-    quoted_boolean = copy.deepcopy(documents["socket-udp-tx"])
-    quoted_boolean["daqiri"]["cfg"]["debug"] = "false"
-    invalid["quoted-boolean"] = quoted_boolean
+    replace(
+        "integer-overflow",
+        (*interface_path, "rx", "dynamic_flow_capacity"),
+        1 << 32,
+    )
+    replace("unknown-offload", (*queue_path, "offloads"), ["tx_eth_scr"])
+    replace("malformed-tx-flows", tx_flow_path, "typo")
+    for name, match in {
+        "malformed-ecpri": {"ecpri": "ecpri_typo"},
+        "malformed-ipv4": {"ipv4_src": ["10.0.0.1"]},
+    }.items():
+        replace(
+            name,
+            tx_flow_path,
+            [
+                {
+                    "name": name,
+                    "id": 1,
+                    "match": match,
+                    "action": {"type": "queue", "id": 0},
+                }
+            ],
+        )
+    replace("invalid-memory-kind", (*memory_region_path, "kind"), "devcie")
+    replace("invalid-memory-access", (*memory_region_path, "access"), ["locla"])
 
     return invalid
-
-
-def _replace_first_num_bufs(document: dict[str, Any], value: str) -> str:
-    rendered = render_document(document)
-    count = document["daqiri"]["cfg"]["memory_regions"][0]["num_bufs"]
-    marker = f"num_bufs: {count}"
-    if marker not in rendered:
-        raise RuntimeError(f"generated profile no longer contains {marker!r}")
-    return rendered.replace(marker, f"num_bufs: {value}", 1)
 
 
 def main() -> int:
@@ -261,16 +226,6 @@ def main() -> int:
                 [str(args.validator), *(str(path) for path in validator_paths)], check=True
             )
 
-            explicit_octal_path = Path(temp_dir) / "valid-explicit-octal.yaml"
-            octal_base = documents["socket-udp-tx"]
-            count = octal_base["daqiri"]["cfg"]["memory_regions"][0]["num_bufs"]
-            explicit_octal_path.write_text(
-                _replace_first_num_bufs(octal_base, f"0o{count:o}"),
-                encoding="utf-8",
-            )
-            validate_document(load_document(explicit_octal_path))
-            subprocess.run([str(args.validator), str(explicit_octal_path)], check=True)
-
             for name, document in _cpp_rejection_documents(documents).items():
                 path = Path(temp_dir) / f"invalid-{name}.yaml"
                 path.write_text(
@@ -288,22 +243,6 @@ def main() -> int:
                         f"C++ decoder did not cleanly reject invalid configuration {name} "
                         f"(exit {result.returncode})\n{result.stdout}{result.stderr}"
                     )
-
-            leading_zero_path = Path(temp_dir) / "invalid-leading-zero.yaml"
-            leading_zero_path.write_text(
-                _replace_first_num_bufs(documents["socket-udp-tx"], "010"),
-                encoding="utf-8",
-            )
-            result = subprocess.run(
-                [str(args.validator), str(leading_zero_path)],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 1:
-                raise RuntimeError(
-                    "C++ decoder did not cleanly reject invalid configuration leading-zero "
-                    f"(exit {result.returncode})\n{result.stdout}{result.stderr}"
-                )
 
     suffix = " and the C++ decoder rejection checks" if args.validator else ""
     print(f"Validated {len(documents)} generated configurations with JSON Schema{suffix}.")

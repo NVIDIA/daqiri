@@ -581,6 +581,26 @@ run_cell() {
   local cell_dir="$OUT_DIR/$cell"
   mkdir -p "$cell_dir"
 
+  # Generate every input before starting monitors or benchmark processes. A
+  # failed generator must fail this cell rather than launching with missing or
+  # partially written YAML.
+  local yaml="" i
+  if [[ "$BACKEND" =~ ^socket- ]]; then
+    for ((i = 0; i < pairs; i++)); do
+      if ! generate_socket_yaml "$i" "$payload" "$batch" \
+          "$cell_dir/server_p$i.yaml" "$cell_dir/client_p$i.yaml"; then
+        echo "ERROR: $cell configuration generation failed for socket pair $i" >&2
+        return 1
+      fi
+    done
+  else
+    yaml="$cell_dir/config.yaml"
+    if ! generate_yaml "$yaml" "$payload" "$batch"; then
+      echo "ERROR: $cell configuration generation failed" >&2
+      return 1
+    fi
+  fi
+
   # Snapshot kernel-side drop counters. In the netns wire loopback the UDP
   # receiver lives in the server netns and TCP retransmits are counted on the
   # client (sender) netns, so read each counter inside the relevant namespace.
@@ -628,11 +648,7 @@ run_cell() {
     # namespaces with unique ports and cores. A single pair is core-bound below line
     # rate; the published Spark matrix scales aggregate throughput with four pairs.
     # App TX (client sent) and App RX (server recv) are summed across pairs.
-    local i server_pids=() client_pids=()
-    for ((i = 0; i < pairs; i++)); do
-      generate_socket_yaml "$i" "$payload" "$batch" \
-        "$cell_dir/server_p$i.yaml" "$cell_dir/client_p$i.yaml"
-    done
+    local server_pids=() client_pids=()
     for ((i = 0; i < pairs; i++)); do
       ip netns exec dq_wire_server "$BENCH_BIN" "$cell_dir/server_p$i.yaml" \
           --seconds "$server_seconds" "${bench_extra[@]}" --mode server \
@@ -672,8 +688,6 @@ run_cell() {
   elif [[ "$BACKEND" == "rdma" ]]; then
     # Split server/client processes in separate namespaces so RDMA-CM resolves
     # addresses over the wire rather than short-cutting the kernel's local table.
-    local yaml="$cell_dir/config.yaml"
-    generate_yaml "$yaml" "$payload" "$batch"
     # Optionally wrap the server (receive + GPU-workload) in nsys. Placed AFTER the
     # netns exec so nsys traces the bench, not `ip netns exec`.
     local -a nsys_pre=()
@@ -732,8 +746,6 @@ run_cell() {
       echo "INFO: $cell wire OK -- client tx_packets_phy +$phy_tx_delta, server rx_packets_phy +$phy_rx_delta (>= $phy_min msgs)" >&2
     fi
   else
-    local yaml="$cell_dir/config.yaml"
-    generate_yaml "$yaml" "$payload" "$batch"
     # Snapshot the p0/p1 *_phy counters around the run to assert the packets crossed
     # the cable (tx_port -> rx_port over the wire), not the on-chip eswitch short-cut.
     local phy_tx_before phy_rx_before

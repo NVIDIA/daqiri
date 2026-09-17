@@ -97,6 +97,14 @@ def apply_overrides(
         except yaml.YAMLError as exc:
             raise ConfigError(f"invalid YAML value for {pointer}: {exc}") from exc
 
+        def list_index(token: str, length: int) -> int:
+            if re.fullmatch(r"0|[1-9][0-9]*", token) is None:
+                raise ConfigError(f"override path does not exist: {pointer}")
+            index = int(token)
+            if index >= length:
+                raise ConfigError(f"override path does not exist: {pointer}")
+            return index
+
         parent: Any = document
         for token in tokens[:-1]:
             if isinstance(parent, dict):
@@ -104,10 +112,7 @@ def apply_overrides(
                     raise ConfigError(f"override path does not exist: {pointer}")
                 parent = parent[token]
             elif isinstance(parent, list):
-                try:
-                    parent = parent[int(token)]
-                except (ValueError, IndexError) as exc:
-                    raise ConfigError(f"override path does not exist: {pointer}") from exc
+                parent = parent[list_index(token, len(parent))]
             else:
                 raise ConfigError(f"override path does not exist: {pointer}")
 
@@ -117,10 +122,7 @@ def apply_overrides(
                 raise ConfigError(f"override path does not exist: {pointer}")
             parent[leaf] = value
         elif isinstance(parent, list):
-            try:
-                parent[int(leaf)] = value
-            except (ValueError, IndexError) as exc:
-                raise ConfigError(f"override path does not exist: {pointer}") from exc
+            parent[list_index(leaf, len(parent))] = value
         else:
             raise ConfigError(f"override path does not exist: {pointer}")
     return document

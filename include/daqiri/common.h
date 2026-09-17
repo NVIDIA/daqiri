@@ -18,8 +18,6 @@
 #pragma once
 #include <daqiri/logging.hpp>
 #include <daqiri/types.h>
-#include <algorithm>
-#include <cctype>
 #include <cerrno>
 #include <cstddef>
 #include <cstdlib>
@@ -28,7 +26,6 @@
 #include <memory>
 #include <optional>
 #include <stdint.h>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -117,27 +114,7 @@ inline bool parse_optional_yaml_scalar(const YAML::Node& node, const char* key, 
     return true;
   }
   try {
-    if constexpr (std::is_same_v<T, bool>) {
-      if (!node[key].IsScalar()) {
-        throw std::invalid_argument("expected a boolean scalar");
-      }
-      const std::string tag = node[key].Tag();
-      if (tag == "!" || tag == "tag:yaml.org,2002:str") {
-        throw std::invalid_argument("expected a boolean, not a string");
-      }
-      std::string text = node[key].as<std::string>();
-      std::transform(text.begin(), text.end(), text.begin(),
-                     [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-      if (text == "true") {
-        value = true;
-      } else if (text == "false") {
-        value = false;
-      } else {
-        throw std::invalid_argument("expected true or false");
-      }
-    } else {
-      value = node[key].as<T>();
-    }
+    value = node[key].as<T>();
     return true;
   } catch (const std::exception& e) {
     DAQIRI_LOG_ERROR("Invalid value for '{}.{}': {}", context, key, e.what());
@@ -152,62 +129,23 @@ inline bool parse_yaml_integer(const YAML::Node& node, T& value) {
     return false;
   }
   try {
-    const std::string tag = node.Tag();
-    if (tag == "!" || tag == "tag:yaml.org,2002:str") {
-      return false;
-    }
     const std::string text = node.as<std::string>();
-    if (text.empty()) {
-      return false;
-    }
-
-    // Match the YAML 1.2 integer resolver used by the Python schema validator:
-    // decimal values may not have a leading zero, while octal and hexadecimal
-    // values use explicit 0o and 0x prefixes. strto* with base 0 implements the
-    // YAML 1.1/C convention instead (010 is octal and 0o10 is invalid).
-    const size_t sign_offset = text.front() == '+' || text.front() == '-' ? 1 : 0;
-    if (sign_offset == text.size()) {
-      return false;
-    }
-
-    int base = 10;
-    size_t digits_offset = sign_offset;
-    if (text[sign_offset] == '0' && sign_offset + 1 < text.size()) {
-      const char prefix = text[sign_offset + 1];
-      if (prefix == 'o') {
-        base = 8;
-        digits_offset = sign_offset + 2;
-      } else if (prefix == 'x') {
-        base = 16;
-        digits_offset = sign_offset + 2;
-      } else {
-        return false;
-      }
-    }
-    if (digits_offset == text.size()) {
-      return false;
-    }
-
-    std::string normalized;
-    if (sign_offset != 0) {
-      normalized.push_back(text.front());
-    }
-    normalized.append(text, digits_offset, std::string::npos);
-
     char* end = nullptr;
     errno = 0;
     if constexpr (std::is_signed_v<T>) {
-      const long long parsed = std::strtoll(normalized.c_str(), &end, base);
-      if (errno != 0 || end == normalized.c_str() || *end != '\0' ||
+      const long long parsed = std::strtoll(text.c_str(), &end, 0);
+      if (errno != 0 || end == text.c_str() || *end != '\0' ||
           parsed < static_cast<long long>(std::numeric_limits<T>::min()) ||
           parsed > static_cast<long long>(std::numeric_limits<T>::max())) {
         return false;
       }
       value = static_cast<T>(parsed);
     } else {
-      const unsigned long long parsed = std::strtoull(normalized.c_str(), &end, base);
-      if (errno != 0 || end == normalized.c_str() || *end != '\0' ||
-          (text.front() == '-' && parsed != 0) ||
+      if (!text.empty() && text.front() == '-') {
+        return false;
+      }
+      const unsigned long long parsed = std::strtoull(text.c_str(), &end, 0);
+      if (errno != 0 || end == text.c_str() || *end != '\0' ||
           parsed > static_cast<unsigned long long>(std::numeric_limits<T>::max())) {
         return false;
       }

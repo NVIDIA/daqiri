@@ -76,10 +76,25 @@ if(DAQIRI_BUILD_APPLICATIONS)
   add_subdirectory(applications)
 endif()
 
-install(PROGRAMS scripts/gen_daqiri_config.py
+set(DAQIRI_CONFIG_GENERATOR_DATA_SUBDIR "daqiri/config-generator")
+if(IS_ABSOLUTE "${CMAKE_INSTALL_DATADIR}")
+  set(DAQIRI_CONFIG_GENERATOR_MODULE_HINT
+      "${CMAKE_INSTALL_DATADIR}/${DAQIRI_CONFIG_GENERATOR_DATA_SUBDIR}")
+elseif(IS_ABSOLUTE "${CMAKE_INSTALL_BINDIR}")
+  set(DAQIRI_CONFIG_GENERATOR_MODULE_HINT
+      "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/${DAQIRI_CONFIG_GENERATOR_DATA_SUBDIR}")
+else()
+  file(RELATIVE_PATH DAQIRI_CONFIG_GENERATOR_MODULE_HINT
+       "/${CMAKE_INSTALL_BINDIR}"
+       "/${CMAKE_INSTALL_DATADIR}/${DAQIRI_CONFIG_GENERATOR_DATA_SUBDIR}")
+endif()
+configure_file(scripts/gen_daqiri_config.py
+               ${CMAKE_CURRENT_BINARY_DIR}/gen_daqiri_config.py
+               @ONLY)
+install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/gen_daqiri_config.py
         DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(DIRECTORY scripts/daqiri_config
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/daqiri/config-generator
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/${DAQIRI_CONFIG_GENERATOR_DATA_SUBDIR}
         PATTERN "__pycache__" EXCLUDE)
 install(FILES schemas/daqiri-config-v1.schema.json
         DESTINATION ${CMAKE_INSTALL_DATADIR}/daqiri/schemas)

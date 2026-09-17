@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -146,6 +147,15 @@ def test_override_rejects_unknown_path() -> None:
         apply_overrides(minimal_document(), ["/daqiri/cfg/master_cores=3"])
 
 
+@pytest.mark.parametrize("index", ["-1", "01", "+1", "2"])
+def test_override_rejects_invalid_array_index(index: str) -> None:
+    with pytest.raises(ConfigError, match="does not exist"):
+        apply_overrides(
+            minimal_document(),
+            [f"/daqiri/cfg/interfaces/{index}/name=changed"],
+        )
+
+
 def test_render_rejects_application_owned_placeholders() -> None:
     document = minimal_document()
     document["application_owned"]["address"] = "<peer-address>"
@@ -178,6 +188,48 @@ def test_render_cli_accepts_bare_network_mapping(tmp_path: Path) -> None:
         text=True,
     )
     assert yaml.safe_load(result.stdout) == bare
+
+
+def test_installed_launcher_supports_custom_gnu_data_directory(tmp_path: Path) -> None:
+    prefix = tmp_path / "prefix"
+    bindir = prefix / "tools"
+    module_root = prefix / "libdata" / "daqiri" / "config-generator"
+    schema_dir = prefix / "libdata" / "daqiri" / "schemas"
+    bindir.mkdir(parents=True)
+    schema_dir.mkdir(parents=True)
+    shutil.copytree(
+        REPOSITORY_ROOT / "scripts/daqiri_config",
+        module_root / "daqiri_config",
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
+    shutil.copy2(
+        REPOSITORY_ROOT / "schemas/daqiri-config-v1.schema.json",
+        schema_dir,
+    )
+
+    launcher = (REPOSITORY_ROOT / "scripts/gen_daqiri_config.py").read_text(
+        encoding="utf-8"
+    )
+    launcher = launcher.replace(
+        "@DAQIRI_CONFIG_GENERATOR_MODULE_HINT@",
+        "../libdata/daqiri/config-generator",
+    )
+    launcher_path = bindir / "gen_daqiri_config.py"
+    launcher_path.write_text(launcher, encoding="utf-8")
+
+    source = tmp_path / "input.yaml"
+    source.write_text(
+        yaml.safe_dump(minimal_document(), sort_keys=False),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(launcher_path), "render", str(source)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert yaml.safe_load(result.stdout) == minimal_document()
 
 
 @pytest.mark.parametrize(
