@@ -10,6 +10,8 @@ on:
       - 'mkdocs.yml'
       - 'overrides/**'
       - '.github/workflows/docs.yml'
+      - 'scripts/check_html_links.py'
+      - 'scripts/check_doc_refs.py'
       - 'examples/CMakeLists.txt'
       - 'examples/*.yaml'
       - 'docs/images/packet_diagrams/**'
@@ -36,6 +38,12 @@ jobs:
 
       - name: Build site (strict mode)
         run: mkdocs build --strict
+
+      - name: Verify landing page HTML link targets
+        run: python scripts/check_html_links.py site
+
+      - name: Verify benchmark and config references in docs
+        run: python scripts/check_doc_refs.py
 
   deploy:
     needs: check

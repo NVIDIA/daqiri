@@ -6,11 +6,11 @@ These notes are the long-form context that pairs with the structured rules in
 ## What DAQIRI is
 
 DAQIRI is a single C++/CUDA shared library (`libdaqiri.so`) that provides
-GPU-direct packet I/O for RF / scientific instrument capture. It exposes a flat
-free-function C++ API (in `src/common.h`) on top of an opaque `BurstParams*`
-batch type, and dispatches to one of three engines (DPDK, RDMA, sockets) via
-the `daqiri::Engine` virtual interface in `src/engine.h`. Applications never
-touch engine types directly.
+GPU-direct packet I/O for RF / scientific instrument capture. Its flat public
+C++ API is exposed through `include/daqiri/daqiri.h` and operates on opaque
+`BurstParams*` batches. Calls delegate to one active implementation through the
+`daqiri::Engine` virtual interface in `src/engine.h`; applications never touch
+engine types directly.
 
 This is a low-level networking library with hardware dependencies — be biased
 toward fewer, higher-confidence comments. Pieces of code that look "wrong" by
@@ -36,8 +36,8 @@ bug.
 When reviewing any new code path that calls `get_rx_burst`, `get_tx_burst`,
 `create_burst_params`, or `create_tx_burst_params`, walk every exit path
 (success, error, early return, exception, `goto cleanup`) and verify there is
-a matching free. This is high-severity. See `docs/api-guide.md` and
-`src/common.h`.
+a matching free. This is high-severity. See `docs/api-reference/cpp.md` and
+`include/daqiri/common.h`.
 
 ### 2. Engine selection lives behind the Engine vtable
 
@@ -53,7 +53,7 @@ Reject PRs that:
   `SocketEngine*`) from `src/common*` or from application code.
 - Add a new engine by extending `src/common.cpp` instead of adding a
   `src/engines/<name>/` directory and a new `Engine` subclass.
-- Expose engine types in the public API surface in `src/common.h`.
+- Expose engine types in the public API surface under `include/daqiri/`.
 
 The point of the abstraction is that an application written against the
 free-function API can switch engines with a config change. New code must
@@ -61,63 +61,42 @@ preserve that.
 
 ### 3. `DAQIRI_ENGINE` values and the socket / ibverbs rule
 
-`DAQIRI_ENGINE` selects the **optional** engines: valid values are `dpdk`
-and `ibverbs` only. Linux UDP/TCP sockets are always available, so the
-socket engine is always built and `socket` is **not** a value. `rdma` is
-also not a value — `ibverbs` is the user-facing name for that engine
-(internally still `src/engines/rdma`, target `daqiri_rdma`, define
-`DAQIRI_ENGINE_RDMA`).
+`DAQIRI_ENGINE` selects optional engines; valid values are `dpdk` and `ibverbs`
+only. Linux UDP/TCP sockets are always built, so `socket` is not a value, and
+the internal name `rdma` is not user-facing either.
 
-`src/CMakeLists.txt` translates `ibverbs` → the internal `rdma` engine,
-always appends `socket`, and builds `rdma` first when present (the socket
-engine links it for the RoCE path):
+Selecting `ibverbs` builds two internal libibverbs-based engines: `rdma` for
+socket `roce://` endpoints and `ibverbs` for pure-DevX raw Ethernet. Both must
+retain their `DAQIRI_ENGINE_<NAME>=1` compile definitions.
 
-```cmake
-foreach(ENGINE IN LISTS DAQIRI_ENGINE_LIST)
-  if(ENGINE STREQUAL "dpdk")
-    list(APPEND DAQIRI_ENGINE_INTERNAL_LIST "dpdk")
-  elseif(ENGINE STREQUAL "ibverbs")
-    list(APPEND DAQIRI_ENGINE_INTERNAL_LIST "rdma")
-  else()
-    message(FATAL_ERROR "Invalid DAQIRI_ENGINE value '${ENGINE}'...")
-  endif()
-endforeach()
-list(APPEND DAQIRI_ENGINE_INTERNAL_LIST "socket")   # always built
-# ...then move "rdma" first if present so its target exists for socket.
-```
+The always-built socket engine implements UDP/TCP directly and links the rdma
+engine conditionally. Thus `roce://` is available only when `ibverbs` was
+selected, while plain UDP/TCP works in every build.
 
-The socket engine links `daqiri_rdma` **conditionally** (`if(TARGET
-daqiri_rdma)`), so `roce://` endpoints are available only when `ibverbs`
-was built; plain UDP/TCP always works.
-
-If a PR touches this block, or refactors how `DAQIRI_ENGINE_INTERNAL_LIST`
-is consumed later (the `foreach` that emits `DAQIRI_ENGINE_<NAME>=1`
-compile definitions), verify: valid values stay `{dpdk, ibverbs}`, socket
-is always built, `ibverbs` maps to the rdma engine, and the conditional
-socket→rdma link is preserved. A regression here turns into a confusing
-link error or a silently missing RoCE path.
-
-DPDK is also load-bearing for the common library itself — `src/common.cpp`
-uses `rte_ring` / `rte_mbuf` directly, so DPDK is a build dependency even of
-`rdma`-only or `socket`-only configurations. Do not "remove DPDK" without
-removing those uses.
+If a PR changes engine-list handling, verify the user-facing values remain
+`{dpdk, ibverbs}`, both ibverbs-backed internal engines are included, socket is
+always built, the socket-to-rdma link stays conditional, and compile definitions
+are emitted for every built engine. DPDK must remain optional: ibverbs-only and
+socket-only configurations must not link `librte_*`.
 
 ### 4. Doc-sync on code changes
 
-There is no automated doc-sync gate beyond `mkdocs --strict` link checks. If
-the code in a PR changes but the corresponding docs don't, drift goes
-unnoticed until the next external user files an issue.
+The retained documentation workflow is the sole GitHub Actions exception. It
+runs `mkdocs --strict`, `check_html_links.py`, and `check_doc_refs.py`. Those
+checks catch structural reference drift, but semantic content drift still
+requires review against the mapping below.
 
 The mapping (mirrored from `.claude/rules/docs-sync.md`):
 
 | Source path | Docs to update in the same PR |
 | --- | --- |
-| `src/common.h` | `docs/api-guide.md`, `docs/daqiri-api.html`, `AGENTS.md` (Architecture / API summary) |
-| `src/types.h` | `docs/api-guide.md`, `docs/daqiri-api.html`, `AGENTS.md` (Architecture / BurstParams) |
-| `src/engine.h` | `docs/api-guide.md`, `AGENTS.md` (Engine abstraction) |
-| `src/engines/*/` | `docs/getting-started.md`, `docs/configuration.md`, `docs/tutorials/configuration-walkthrough.md`, `README.md` (Engines), `AGENTS.md` |
+| `include/daqiri/common.h`, `include/daqiri/daqiri.h` | `docs/api-reference/index.md`, `docs/api-reference/cpp.md`, `docs/api-reference/python.md`, `docs/concepts.md`, `AGENTS.md` |
+| `include/daqiri/types.h` | `docs/api-reference/index.md`, `docs/api-reference/cpp.md`, `docs/api-reference/python.md`, `docs/concepts.md`, `AGENTS.md` |
+| `src/engine.h` | `docs/api-reference/cpp.md`, `docs/concepts.md`, `AGENTS.md` |
+| `src/engines/*/` | `docs/getting-started.md`, `docs/concepts.md`, `docs/api-reference/configuration.md`, `docs/tutorials/configuration-walkthrough.md`, `README.md`, `AGENTS.md` |
 | `src/CMakeLists.txt` (CMake options, `DAQIRI_ENGINE` default, CUDA arch) | `docs/getting-started.md`, `AGENTS.md` (Build & run), `README.md` (Quick Start) |
 | `src/kernels.cu` / `src/kernels.h` | `docs/benchmarks/raw_benchmarking.md`, `AGENTS.md` (Reorder & quantize kernels) |
+| `python/daqiri_common_pybind.cpp` | `docs/api-reference/python.md`, `AGENTS.md` |
 | `examples/*.cpp`, `examples/*.yaml` (new bench, new CLI flag, new YAML key) | `docs/benchmarks/raw_benchmarking.md`, `docs/tutorials/configuration-walkthrough.md`, `AGENTS.md` (benchmark table) |
 | `mkdocs.yml` nav | `docs/index.md`, `docs/landing/` (landing page links) |
 | Any `docs/*` rename or move | `README.md` (Documentation table), `AGENTS.md` (Documentation section), `mkdocs.yml`, `docs/index.md`, `docs/landing/` |
@@ -158,6 +137,23 @@ findings. Greptile should catch them so a human reviewer doesn't have to.
 
 - **Builds clean.** No new warnings. No commented-out code. Each new
   component ships with a README and an accompanying test/benchmark.
+
+- **Local PR checks.** Every PR must run `scripts/check_pr.sh`; changes to the
+  Docker base stage also run `scripts/check_pr.sh --docker-base`. Ask for the
+  local results when the PR description does not include them.
+
+## GitHub Actions and local release tooling
+
+`.github/workflows/docs.yml` is the only allowed GitHub Actions workflow. Its
+scope is documentation build, documentation-specific validation, and deployment.
+Do not request hosted Actions for portable tests, general builds, platform tests,
+or container publication; those intentionally run through local scripts.
+
+Container releases are assembled locally. `PUSH=1 scripts/publish_container.sh`
+builds and pushes the current host's `-amd64` or `-arm64` tag. After both tags
+exist, `PUBLISH_MANIFEST=1 scripts/publish_container.sh` must create and inspect
+the canonical multi-architecture version tag. Treat loss of that final manifest
+step as a release regression.
 
 ## Things to *not* nit on
 
