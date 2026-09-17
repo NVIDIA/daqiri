@@ -139,8 +139,10 @@ findings. Greptile should catch them so a human reviewer doesn't have to.
   component ships with a README and an accompanying test/benchmark.
 
 - **Local PR checks.** Every PR must run `scripts/check_pr.sh`; changes to the
-  Docker base stage also run `scripts/check_pr.sh --docker-base`. Ask for the
-  local results when the PR description does not include them.
+  `docs/images/packet_diagrams/` tree require `--diagrams`, and changes to the
+  Docker base stage require `--docker-base`. Combine both flags when both areas
+  change. Ask for the local results when the PR description does not include
+  them.
 
 ## GitHub Actions and local release tooling
 

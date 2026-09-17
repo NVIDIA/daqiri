@@ -10,7 +10,7 @@
     },
     {
       "path": "scripts/check_pr.sh",
-      "description": "Required local pre-PR entry point. It creates an isolated virtual environment, runs portable tests and documentation validation, and optionally builds the Docker base stage.",
+      "description": "Required local pre-PR entry point. It creates an isolated virtual environment, runs portable tests and fast documentation validation, and optionally regenerates packet diagrams or builds the Docker base stage.",
       "scope": [".github/**", "scripts/**", "tests/**", "docs/**", "AGENTS.md", "CONTRIBUTING.md"]
     },
     {

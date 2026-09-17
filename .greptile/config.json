@@ -75,7 +75,7 @@
     },
     {
       "id": "local-pr-checks",
-      "rule": "GitHub Actions intentionally retains only the documentation build, deployment, and documentation-specific validators. Every PR must run scripts/check_pr.sh locally; use --docker-base when the Docker base stage changes. Do not request hosted Actions for portable tests, general builds, or container publication. Ask for local test evidence when the PR description omits it. Container publication changes must preserve per-architecture tags and the canonical multi-architecture manifest.",
+      "rule": "GitHub Actions intentionally retains only the documentation build, deployment, and documentation-specific validators. Every PR must run scripts/check_pr.sh locally. If a PR changes anything under docs/images/packet_diagrams/, require --diagrams; if it changes the Docker base stage, require --docker-base; combine both flags when both areas change. Do not request hosted Actions for portable tests, general builds, or container publication. Ask for local test evidence when the PR description omits it. Container publication changes must preserve per-architecture tags and the canonical multi-architecture manifest.",
       "scope": [".github/**", "scripts/**", "tests/**", "AGENTS.md", "CONTRIBUTING.md"],
       "severity": "medium"
     },

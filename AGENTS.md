@@ -185,7 +185,10 @@ From `CONTRIBUTING.md`:
 - An issue must exist and be approved before coding.
 - Prefer toggling features via new CMake options (with backward-compatible defaults) rather than wrapping entire files in `#if` guards. Use `#if` only for minor in-file changes.
 - Keep PRs narrowly scoped — one concern per PR, dependencies noted in the description.
-- Run `scripts/check_pr.sh` before opening or updating every PR; add `--docker-base` when the Docker base stage changes.
+- Run `scripts/check_pr.sh` before opening or updating every PR. If the PR changes
+  anything under `docs/images/packet_diagrams/`, run `scripts/check_pr.sh --diagrams`.
+  If it changes the Docker base stage, add `--docker-base`; combine both flags when
+  both areas change.
 - When opening a PR that touches `src/`, `examples/`, or `mkdocs.yml`, scan the doc-sync agent rule and update affected docs in the same PR.
 
 ## Compiling and Running
