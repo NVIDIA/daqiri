@@ -108,10 +108,15 @@ git push -u origin <local-branch>:<remote-branch>
    * At least one DAQIRI engineer will be assigned for the review.
    * While under review, mark your PRs as work-in-progress by prefixing the PR title with `[WIP]`.
 
-4. GitHub Actions runs portable Python and documentation checks. Platform-dependent
-   behavior belongs in dedicated CI/CD jobs on compatible provisioned runners; until
-   a required platform job exists, it must still be verified manually by the developer
-   and/or DAQIRI engineer reviewing the code before the corresponding issue is closed.
+4. Before opening or updating every PR, run `scripts/check_pr.sh`; add
+   `--diagrams` if the PR changes anything under `docs/images/packet_diagrams/`, and
+   `--docker-base` if it changes the Docker base stage. Combine both flags when both
+   areas change. GitHub Actions retains only the automated documentation build,
+   deployment, and documentation-specific validators.
+   Other portable checks run locally. Platform-dependent behavior belongs in dedicated
+   CI/CD jobs on compatible provisioned runners; until a required platform job exists,
+   it must still be verified manually by the developer and/or DAQIRI engineer reviewing
+   the code before the corresponding issue is closed.
 
 #### Automated PR Review (Greptile)
 

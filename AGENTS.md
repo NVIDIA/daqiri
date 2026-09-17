@@ -14,6 +14,11 @@ cmake --install build --prefix /opt/daqiri
 BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
 ```
 
+Container releases run locally. Run `PUSH=1 scripts/publish_container.sh` on
+each supported architecture; after both per-architecture tags exist, run
+`PUBLISH_MANIFEST=1 scripts/publish_container.sh` to publish and inspect the
+canonical multi-architecture version tag.
+
 CMake options (full table in `docs/getting-started.md`):
 - `DAQIRI_ENGINE` — space-separated list of optional engines to compile. Valid values: `dpdk` (raw Ethernet) and `ibverbs` (RDMA/RoCE). Linux sockets (UDP/TCP) are always built in, so there is no `socket` value. Default is `"dpdk ibverbs"`.
 - `DAQIRI_BUILD_PYTHON` — builds `pybind11` bindings from `python/`.
@@ -180,6 +185,10 @@ From `CONTRIBUTING.md`:
 - An issue must exist and be approved before coding.
 - Prefer toggling features via new CMake options (with backward-compatible defaults) rather than wrapping entire files in `#if` guards. Use `#if` only for minor in-file changes.
 - Keep PRs narrowly scoped — one concern per PR, dependencies noted in the description.
+- Run `scripts/check_pr.sh` before opening or updating every PR. If the PR changes
+  anything under `docs/images/packet_diagrams/`, run `scripts/check_pr.sh --diagrams`.
+  If it changes the Docker base stage, add `--docker-base`; combine both flags when
+  both areas change.
 - When opening a PR that touches `src/`, `examples/`, or `mkdocs.yml`, scan the doc-sync agent rule and update affected docs in the same PR.
 
 ## Compiling and Running
