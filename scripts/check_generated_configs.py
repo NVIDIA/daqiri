@@ -181,6 +181,23 @@ def _cpp_rejection_documents(
     return invalid
 
 
+def _integer_scalar_documents(document: dict[str, Any]) -> dict[str, tuple[str, bool]]:
+    """Return YAML 1.2 integer spellings and whether C++ should accept them."""
+
+    rendered = render_document(document)
+    needle = "master_core: 8"
+    if rendered.count(needle) != 1:
+        raise RuntimeError("integer scalar regression fixture changed")
+    return {
+        "decimal": (rendered, True),
+        "signed-decimal": (rendered.replace(needle, "master_core: +8"), True),
+        "octal": (rendered.replace(needle, "master_core: 0o10"), True),
+        "hexadecimal": (rendered.replace(needle, "master_core: 0x8"), True),
+        "legacy-leading-zero": (rendered.replace(needle, "master_core: 010"), False),
+        "quoted-string": (rendered.replace(needle, "master_core: '8'"), False),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -244,6 +261,23 @@ def main() -> int:
                 raise RuntimeError(
                     f"C++ decoder did not cleanly reject invalid configuration {name} "
                     f"(exit {result.returncode})\n{result.stdout}{result.stderr}"
+                )
+
+        for name, (rendered, accepted) in _integer_scalar_documents(
+            documents["socket-udp-tx"]
+        ).items():
+            path = Path(temp_dir) / f"integer-{name}.yaml"
+            path.write_text(rendered, encoding="utf-8")
+            result = subprocess.run(
+                [str(args.validator), str(path)],
+                capture_output=True,
+                text=True,
+            )
+            expected = 0 if accepted else 1
+            if result.returncode != expected:
+                raise RuntimeError(
+                    f"C++ decoder integer case {name} exited {result.returncode}; "
+                    f"expected {expected}\n{result.stdout}{result.stderr}"
                 )
 
     print(

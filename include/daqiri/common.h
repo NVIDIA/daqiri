@@ -18,9 +18,8 @@
 #pragma once
 #include <daqiri/logging.hpp>
 #include <daqiri/types.h>
-#include <cerrno>
+#include <charconv>
 #include <cstddef>
-#include <cstdlib>
 #include <initializer_list>
 #include <limits>
 #include <memory>
@@ -125,31 +124,76 @@ inline bool parse_optional_yaml_scalar(const YAML::Node& node, const char* key, 
 template <typename T>
 inline bool parse_yaml_integer(const YAML::Node& node, T& value) {
   static_assert(std::is_integral_v<T> && !std::is_same_v<T, bool>);
-  if (!node.IsScalar()) {
+  static_assert(sizeof(T) <= sizeof(unsigned long long));
+  if (!node.IsScalar() || (node.Tag() != "?" && node.Tag() != "tag:yaml.org,2002:int")) {
     return false;
   }
   try {
     const std::string text = node.as<std::string>();
-    char* end = nullptr;
-    errno = 0;
+    if (text.empty()) {
+      return false;
+    }
+
+    size_t offset = 0;
+    bool negative = false;
+    if (text[offset] == '+' || text[offset] == '-') {
+      negative = text[offset] == '-';
+      if (++offset == text.size()) {
+        return false;
+      }
+    }
+    if constexpr (std::is_unsigned_v<T>) {
+      if (negative) {
+        return false;
+      }
+    }
+
+    int base = 10;
+    if (text.compare(offset, 2, "0o") == 0) {
+      base = 8;
+      offset += 2;
+    } else if (text.compare(offset, 2, "0x") == 0) {
+      base = 16;
+      offset += 2;
+    } else if (text[offset] == '0' && offset + 1 != text.size()) {
+      // YAML 1.2 requires 0o for octal. Reject ambiguous legacy YAML 1.1
+      // spellings instead of letting C's base-0 conversion reinterpret them.
+      return false;
+    }
+    if (offset == text.size()) {
+      return false;
+    }
+
+    unsigned long long magnitude = 0;
+    const char* begin = text.data() + offset;
+    const char* end = text.data() + text.size();
+    const auto result = std::from_chars(begin, end, magnitude, base);
+    if (result.ec != std::errc{} || result.ptr != end) {
+      return false;
+    }
+
     if constexpr (std::is_signed_v<T>) {
-      const long long parsed = std::strtoll(text.c_str(), &end, 0);
-      if (errno != 0 || end == text.c_str() || *end != '\0' ||
-          parsed < static_cast<long long>(std::numeric_limits<T>::min()) ||
-          parsed > static_cast<long long>(std::numeric_limits<T>::max())) {
-        return false;
+      using U = std::make_unsigned_t<T>;
+      const auto positive_limit =
+          static_cast<unsigned long long>(static_cast<U>(std::numeric_limits<T>::max()));
+      const auto negative_limit = positive_limit + 1;
+      if (negative) {
+        if (magnitude > negative_limit) {
+          return false;
+        }
+        value = magnitude == negative_limit ? std::numeric_limits<T>::min()
+                                            : static_cast<T>(-static_cast<long long>(magnitude));
+      } else {
+        if (magnitude > positive_limit) {
+          return false;
+        }
+        value = static_cast<T>(magnitude);
       }
-      value = static_cast<T>(parsed);
     } else {
-      if (!text.empty() && text.front() == '-') {
+      if (magnitude > static_cast<unsigned long long>(std::numeric_limits<T>::max())) {
         return false;
       }
-      const unsigned long long parsed = std::strtoull(text.c_str(), &end, 0);
-      if (errno != 0 || end == text.c_str() || *end != '\0' ||
-          parsed > static_cast<unsigned long long>(std::numeric_limits<T>::max())) {
-        return false;
-      }
-      value = static_cast<T>(parsed);
+      value = static_cast<T>(magnitude);
     }
     return true;
   } catch (const std::exception&) {
