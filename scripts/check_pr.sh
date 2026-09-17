@@ -4,6 +4,8 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 run_docker_base=0
+PYTHON="${PYTHON:-python3}"
+VENV="${VENV:-.venv}"
 
 usage() {
   cat <<'USAGE'
@@ -36,6 +38,14 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+
+if [ ! -x "${VENV}/bin/python" ]; then
+  "${PYTHON}" -m venv "${VENV}"
+fi
+
+VENV="$(cd "${VENV}" && pwd -P)"
+PYTHON="${VENV}/bin/python"
+export PYTHON VENV
 
 scripts/check_portable_tests.sh
 scripts/check_docs.sh
