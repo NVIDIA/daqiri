@@ -13,7 +13,6 @@ from scripts.daqiri_config import (
     generate_raw_roles,
     generate_socket_pair,
     render_document,
-    validate_document,
 )
 
 
@@ -47,7 +46,6 @@ def test_socket_pair_emits_independent_concrete_roles(transport: str) -> None:
     documents = generate_socket_pair(socket_spec(transport))
     assert set(documents) == {"tx", "rx"}
     for role, document in documents.items():
-        validate_document(document)
         assert "<" not in render_document(document)
         config = document["daqiri"]["cfg"]
         assert len(config["interfaces"]) == 1
@@ -90,9 +88,8 @@ def raw_spec(**overrides) -> RawPairSpec:
 
 @pytest.mark.parametrize("engine", ["dpdk", "ibverbs"])
 @pytest.mark.parametrize("transform", ["none", "vlan", "vxlan", "gre", "nvgre"])
-def test_raw_transform_matrix_is_schema_valid(transform: str, engine: str) -> None:
+def test_raw_transform_matrix(transform: str, engine: str) -> None:
     document = generate_raw_pair(raw_spec(transform=transform, engine=engine))
-    validate_document(document)
     tx = document["daqiri"]["cfg"]["interfaces"][0]["tx"]
     if transform == "none":
         assert "flows" not in tx

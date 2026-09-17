@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from .core import ConfigError, validate_document
+from .core import ConfigError
 
 
 SUPPORTED_TRANSFORMS = ("none", "vlan", "vxlan", "gre", "nvgre")
@@ -325,7 +325,6 @@ def _socket_role_document(spec: SocketPairSpec, role: str) -> dict[str, Any]:
                 bench["client_address"] = spec.client_address
             document[f"socket_bench_{mode}"] = bench
 
-    validate_document(document)
     return document
 
 
@@ -655,7 +654,6 @@ def generate_raw_pair(spec: RawPairSpec) -> dict[str, Any]:
             )
         document["bench_tx"] = bench_tx
 
-    validate_document(document)
     return document
 
 
@@ -691,7 +689,6 @@ def generate_raw_roles(spec: RawPairSpec) -> dict[str, dict[str, Any]]:
         document: dict[str, Any] = {"daqiri": {"cfg": role_config}}
         if spec.include_benchmark:
             document[bench_key] = combined[bench_key]
-        validate_document(document)
         return document
 
     return {

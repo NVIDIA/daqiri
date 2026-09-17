@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exercise the generated configuration matrix and optionally the C++ decoder."""
+"""Exercise the generated configuration matrix with the C++ runtime decoder."""
 
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ from daqiri_config import (
     generate_raw_roles,
     generate_socket_pair,
     render_document,
-    validate_document,
 )
 
 
@@ -102,10 +101,13 @@ def generated_matrix() -> dict[str, dict[str, Any]]:
     return documents
 
 
+def _explicit_engine(document: dict[str, Any]) -> str | None:
+    return document.get("daqiri", {}).get("cfg", {}).get("engine")
+
+
 def _rendered_matrix() -> bytes:
     output: list[str] = []
     for name, document in sorted(generated_matrix().items()):
-        validate_document(document)
         output.append(f"# {name}\n")
         output.append(render_document(document))
     return "".join(output).encode("utf-8")
@@ -184,12 +186,12 @@ def main() -> int:
     parser.add_argument(
         "--validator",
         type=Path,
-        help="also parse every document with the built daqiri_config_validate binary",
+        help="built daqiri_config_validate binary used for authoritative validation",
     )
     parser.add_argument(
-        "--validator-socket-only",
+        "--exclude-dpdk",
         action="store_true",
-        help="limit C++ validation to TCP/UDP for builds without optional engines",
+        help="skip profiles that explicitly require DPDK",
     )
     parser.add_argument("--emit-matrix", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -197,6 +199,10 @@ def main() -> int:
     if args.emit_matrix:
         sys.stdout.buffer.write(_rendered_matrix())
         return 0
+    if args.validator is None:
+        parser.error(
+            "--validator is required; configuration validation uses the C++ decoder"
+        )
 
     first_generation = _generate_matrix_in_subprocess(1)
     second_generation = _generate_matrix_in_subprocess(2)
@@ -205,47 +211,44 @@ def main() -> int:
             "non-deterministic generation across independent processes"
         )
 
-    documents = generated_matrix()
+    documents = {
+        name: document
+        for name, document in generated_matrix().items()
+        if not args.exclude_dpdk or _explicit_engine(document) != "dpdk"
+    }
     with tempfile.TemporaryDirectory(prefix="daqiri-generated-configs-") as temp_dir:
         paths: dict[str, Path] = {}
         for name, document in documents.items():
-            validate_document(document)
             rendered = render_document(document)
             path = Path(temp_dir) / f"{name}.yaml"
             path.write_text(rendered, encoding="utf-8")
             paths[name] = path
 
-        if args.validator:
-            validator_paths = [
-                path
-                for name, path in paths.items()
-                if not args.validator_socket_only
-                or name.startswith(("socket-udp-", "socket-tcp-"))
-            ]
-            subprocess.run(
-                [str(args.validator), *(str(path) for path in validator_paths)], check=True
+        subprocess.run(
+            [str(args.validator), *(str(path) for path in paths.values())], check=True
+        )
+
+        for name, document in _cpp_rejection_documents(documents).items():
+            path = Path(temp_dir) / f"invalid-{name}.yaml"
+            path.write_text(
+                "%YAML 1.2\n---\n"
+                + yaml.safe_dump(document, sort_keys=False, width=1000),
+                encoding="utf-8",
             )
-
-            for name, document in _cpp_rejection_documents(documents).items():
-                path = Path(temp_dir) / f"invalid-{name}.yaml"
-                path.write_text(
-                    "%YAML 1.2\n---\n"
-                    + yaml.safe_dump(document, sort_keys=False, width=1000),
-                    encoding="utf-8",
+            result = subprocess.run(
+                [str(args.validator), str(path)],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 1:
+                raise RuntimeError(
+                    f"C++ decoder did not cleanly reject invalid configuration {name} "
+                    f"(exit {result.returncode})\n{result.stdout}{result.stderr}"
                 )
-                result = subprocess.run(
-                    [str(args.validator), str(path)],
-                    capture_output=True,
-                    text=True,
-                )
-                if result.returncode != 1:
-                    raise RuntimeError(
-                        f"C++ decoder did not cleanly reject invalid configuration {name} "
-                        f"(exit {result.returncode})\n{result.stdout}{result.stderr}"
-                    )
 
-    suffix = " and the C++ decoder rejection checks" if args.validator else ""
-    print(f"Validated {len(documents)} generated configurations with JSON Schema{suffix}.")
+    print(
+        f"Validated {len(documents)} generated configurations with the C++ runtime decoder."
+    )
     return 0
 
 

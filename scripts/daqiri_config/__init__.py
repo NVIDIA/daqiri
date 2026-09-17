@@ -8,7 +8,6 @@ from .core import (
     apply_overrides,
     load_document,
     render_document,
-    validate_document,
 )
 from .profiles import (
     RawPairSpec,
@@ -28,5 +27,4 @@ __all__ = [
     "generate_socket_pair",
     "load_document",
     "render_document",
-    "validate_document",
 ]

@@ -37,7 +37,7 @@ rules using the same ordered action model. TCP/UDP socket options are also
 runtime state: after resolving a connection ID, applications can call
 `socket_setsockopt()` with native Linux `level` and option constants.
 
-The configuration schema lives in the
+The configuration format is documented in the
 [Configuration YAML Reference](configuration.md). For an annotated
 end-to-end example, see the
 [configuration walkthrough tutorial](../tutorials/configuration-walkthrough.md).

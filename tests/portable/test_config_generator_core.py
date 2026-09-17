@@ -18,7 +18,6 @@ from scripts.daqiri_config import (
     ConfigError,
     apply_overrides,
     render_document,
-    validate_document,
 )
 
 
@@ -61,84 +60,10 @@ def minimal_document() -> dict:
     }
 
 
-def test_application_owned_sections_are_not_interpreted() -> None:
-    validate_document(minimal_document())
-
-
-def test_unknown_nested_daqiri_key_is_rejected_with_path() -> None:
-    document = minimal_document()
-    queue = document["daqiri"]["cfg"]["interfaces"][0]["rx"]["queues"][0]
-    queue["batch_sise"] = queue.pop("batch_size")
-    with pytest.raises(ConfigError, match=r"interfaces\[0\].rx.queues\[0\].*batch_sise"):
-        validate_document(document)
-
-
-def test_unknown_tx_offload_is_rejected() -> None:
-    document = minimal_document()
-    interface = document["daqiri"]["cfg"]["interfaces"][0]
-    interface.pop("rx")
-    interface["tx"] = {
-        "queues": [
-            {
-                "name": "txq0",
-                "id": 0,
-                "cpu_core": 2,
-                "batch_size": 4,
-                "memory_regions": ["RX"],
-                "offloads": ["tx_eth_scr"],
-            }
-        ]
-    }
-    with pytest.raises(ConfigError, match=r"offloads\[0\].*tx_eth_scr"):
-        validate_document(document)
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("tx_meta_buffers", 1 << 32),
-        ("rx_meta_buffers", 1 << 32),
-        ("master_core", 1 << 31),
-    ],
-)
-def test_fixed_width_top_level_overflow_is_rejected(field: str, value: int) -> None:
-    document = minimal_document()
-    document["daqiri"]["cfg"][field] = value
-    with pytest.raises(ConfigError, match=field):
-        validate_document(document)
-
-
-def test_memory_affinity_overflow_is_rejected() -> None:
-    document = minimal_document()
-    config = document["daqiri"]["cfg"]
-    config["memory_regions"][0]["affinity"] = 1 << 16
-    with pytest.raises(ConfigError, match="affinity"):
-        validate_document(document)
-
-
-def test_dynamic_flow_capacity_overflow_is_rejected() -> None:
-    document = minimal_document()
-    config = document["daqiri"]["cfg"]
-    config["interfaces"][0]["rx"]["dynamic_flow_capacity"] = 1 << 32
-    with pytest.raises(ConfigError, match="dynamic_flow_capacity"):
-        validate_document(document)
-
-
-def test_socket_fixed_width_overflow_is_rejected() -> None:
-    document = minimal_document()
-    document["daqiri"]["cfg"]["interfaces"][0]["socket_config"] = {
-        "mode": "client",
-        "min_ipg_ns": 1 << 32,
-    }
-    with pytest.raises(ConfigError, match="min_ipg_ns"):
-        validate_document(document)
-
-
 def test_overrides_fill_typed_placeholders() -> None:
     document = minimal_document()
     document["daqiri"]["cfg"]["master_core"] = "<core>"
     apply_overrides(document, ["/daqiri/cfg/master_core=3"])
-    validate_document(document)
     assert document["daqiri"]["cfg"]["master_core"] == 3
 
 
@@ -194,17 +119,11 @@ def test_installed_launcher_supports_custom_gnu_data_directory(tmp_path: Path) -
     prefix = tmp_path / "prefix"
     bindir = prefix / "tools"
     module_root = prefix / "libdata" / "daqiri" / "config-generator"
-    schema_dir = prefix / "libdata" / "daqiri" / "schemas"
     bindir.mkdir(parents=True)
-    schema_dir.mkdir(parents=True)
     shutil.copytree(
         REPOSITORY_ROOT / "scripts/daqiri_config",
         module_root / "daqiri_config",
         ignore=shutil.ignore_patterns("__pycache__"),
-    )
-    shutil.copy2(
-        REPOSITORY_ROOT / "schemas/daqiri-config-v1.schema.json",
-        schema_dir,
     )
 
     launcher = (REPOSITORY_ROOT / "scripts/gen_daqiri_config.py").read_text(

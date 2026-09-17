@@ -1,16 +1,16 @@
 # Generate and Validate Configurations
 
 `scripts/gen_daqiri_config.py` is the deterministic path from deployment
-parameters to DAQIRI YAML. It validates the `daqiri.cfg` portion against
-[`schemas/daqiri-config-v1.schema.json`](https://github.com/nvidia/daqiri/blob/main/schemas/daqiri-config-v1.schema.json),
-preserves application-owned top-level sections, and writes byte-identical output
-for identical inputs.
+parameters to DAQIRI YAML. It preserves application-owned top-level sections and
+writes byte-identical output for identical inputs. The generator checks its own
+profile arguments; the C++ `parse_network_config` implementation used by DAQIRI
+is the single authority for the emitted configuration.
 
-The generator requires Python 3, PyYAML, and `jsonschema`. They are installed in
-the DAQIRI development container. For a host Python environment:
+The generator requires Python 3 and PyYAML. They are installed in the DAQIRI
+development container. For a host Python environment:
 
 ```bash
-python3 -m pip install pyyaml jsonschema
+python3 -m pip install pyyaml
 ```
 
 A CMake install exposes the same entry point as
@@ -115,10 +115,10 @@ and benchmark matrix. It does not maintain or mutate Spark-specific base YAMLs.
 
 The profiles cover common deployment pairs. For HDS, reorder, dynamic-flow, or
 application-specific documents, `render` is the general path: it accepts either
-a complete document or a bare `daqiri.cfg` mapping, validates it, and emits the
-canonical deterministic serialization. Existing values can be replaced with
-repeatable JSON Pointer assignments; assignment values are parsed as YAML 1.2
-scalars or collections.
+a complete document or a bare `daqiri.cfg` mapping and emits the canonical
+deterministic serialization. Existing values can be replaced with repeatable
+JSON Pointer assignments; assignment values are parsed as YAML 1.2 scalars or
+collections.
 
 ```bash
 python3 scripts/gen_daqiri_config.py render \
@@ -138,40 +138,43 @@ python3 scripts/gen_daqiri_config.py render \
 
 An override may replace only an existing path. A misspelled path fails instead
 of silently adding a new key. The final document must contain concrete values;
-typed placeholders such as `master_core: <3>` fail schema validation unless
-replaced.
+unresolved angle-bracket placeholders are rejected during rendering.
 
-## Validation layers
+## Authoritative validation
 
-The repository runs two complementary checks:
-
-1. `python3 scripts/check_daqiri_configs.py` validates canonical checked-in
-   examples against the JSON Schema. Application-owned siblings are deliberately
-   outside the schema.
-2. `python3 scripts/check_generated_configs.py` generates socket, RoCE, raw,
-   transform, multi-queue, and cross-host role matrices and checks schema validity
-   plus byte-identical generation in independent processes with different Python
-   hash seeds.
-
-After building DAQIRI, add the authoritative C++ decoder used by the runtime:
+The generator does not maintain a second model of the DAQIRI configuration
+language. After building DAQIRI, validate configurations with the parse-only
+executable, which calls the same `parse_network_config` implementation used by
+`daqiri_init()` without allocating packet memory or touching a NIC:
 
 ```bash
+python3 scripts/check_daqiri_configs.py \
+  --validator build/examples/daqiri_config_validate
 python3 scripts/check_generated_configs.py \
   --validator build/examples/daqiri_config_validate
 ```
 
-Schema validation provides precise structural errors. The C++ decoder remains
-authoritative for what the installed DAQIRI library accepts and independently
-rejects unknown DAQIRI-owned keys and out-of-range fixed-width values.
+The first command materializes only the typed placeholders in the canonical
+teaching configurations before parsing them. The second checks deterministic
+generation across independent Python processes, parses every socket, RoCE, raw,
+transform, multi-queue, and cross-host role configuration, and verifies focused
+invalid cases are rejected. Unknown keys, required fields, types, ranges, and
+semantic constraints are all owned by the C++ decoder.
+
+Pull-request CI builds the ibverbs engines and validates all compatible
+checked-in and generated configurations. The full container-publish build also
+validates the explicitly DPDK configurations; both jobs invoke this same C++
+decoder rather than implementing validation in Python.
 
 ## Spark verification checklist
 
 After copying this branch to a Spark and rebuilding the container, first run the
-hardware-free checks:
+portable generator tests and hardware-free parser checks:
 
 ```bash
 python3 -m pytest
-python3 scripts/check_daqiri_configs.py
+python3 scripts/check_daqiri_configs.py \
+  --validator build/examples/daqiri_config_validate
 python3 scripts/check_generated_configs.py \
   --validator build/examples/daqiri_config_validate
 ```

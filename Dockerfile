@@ -131,12 +131,10 @@ RUN git clone --depth 1 --recurse-submodules --shallow-submodules \
 # PIP installs
 # - pytest: test harness
 # - pyyaml: to parse yaml configs in tests
-# - jsonschema: validate generated DAQIRI configs before the C++ decoder sees them
 # - scapy: for debugging and mocking network packets for tests
 RUN python3 -m pip install --no-cache-dir --break-system-packages \
         pytest \
         pyyaml \
-        jsonschema \
         scapy
 
 # ==============================================================

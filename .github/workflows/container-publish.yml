@@ -126,6 +126,8 @@ jobs:
               # executable needs libcuda symbols but never calls them.
               ln -s /usr/local/cuda/lib64/stubs/libcuda.so /tmp/libcuda.so.1
               export LD_LIBRARY_PATH=/tmp:/opt/daqiri/lib
+              python3 scripts/check_daqiri_configs.py \
+                --validator /opt/daqiri/bin/daqiri_config_validate
               python3 scripts/check_generated_configs.py \
                 --validator /opt/daqiri/bin/daqiri_config_validate
             '

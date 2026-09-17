@@ -1,25 +1,19 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Schema validation and deterministic YAML serialization."""
+"""Deterministic YAML loading, overrides, and serialization."""
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import Any
 
 import yaml
-from jsonschema import Draft7Validator
 
 
 class ConfigError(ValueError):
-    """Raised when a generated DAQIRI configuration is invalid."""
-
-
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-SCHEMA_PATH = REPOSITORY_ROOT / "schemas" / "daqiri-config-v1.schema.json"
+    """Raised when generator input cannot be loaded, overridden, or rendered."""
 
 
 class Yaml12SafeLoader(yaml.SafeLoader):
@@ -128,49 +122,6 @@ def apply_overrides(
     return document
 
 
-def _network_config(document: dict[str, Any]) -> dict[str, Any]:
-    if "daqiri" not in document:
-        return document
-    daqiri = document["daqiri"]
-    if not isinstance(daqiri, dict) or not isinstance(daqiri.get("cfg"), dict):
-        raise ConfigError("daqiri.cfg must be a mapping")
-    return daqiri["cfg"]
-
-
-def _schema() -> dict[str, Any]:
-    try:
-        with SCHEMA_PATH.open(encoding="utf-8") as stream:
-            return json.load(stream)
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ConfigError(f"cannot load schema {SCHEMA_PATH}: {exc}") from exc
-
-
-def _error_path(error: Any) -> str:
-    path = "daqiri.cfg"
-    for component in error.absolute_path:
-        if isinstance(component, int):
-            path += f"[{component}]"
-        else:
-            path += f".{component}"
-    return path
-
-
-def validate_document(document: dict[str, Any]) -> None:
-    """Validate the DAQIRI-owned portion of a document against schema v1."""
-
-    config = _network_config(document)
-    validator = Draft7Validator(_schema())
-    errors = sorted(
-        validator.iter_errors(config),
-        key=lambda error: (list(error.absolute_path), error.message),
-    )
-    if errors:
-        detail = "\n".join(
-            f"{_error_path(error)}: {error.message}" for error in errors
-        )
-        raise ConfigError(f"invalid DAQIRI configuration:\n{detail}")
-
-
 def _placeholder_paths(value: Any, path: str = "") -> list[str]:
     paths: list[str] = []
     if isinstance(value, dict):
@@ -185,9 +136,8 @@ def _placeholder_paths(value: Any, path: str = "") -> list[str]:
 
 
 def render_document(document: dict[str, Any]) -> str:
-    """Validate and serialize a document with stable ordering and formatting."""
+    """Serialize a concrete document with stable ordering and formatting."""
 
-    validate_document(document)
     placeholders = _placeholder_paths(document)
     if placeholders:
         detail = ", ".join(placeholders)

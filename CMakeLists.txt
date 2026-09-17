@@ -96,8 +96,6 @@ install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/gen_daqiri_config.py
 install(DIRECTORY scripts/daqiri_config
         DESTINATION ${CMAKE_INSTALL_DATADIR}/${DAQIRI_CONFIG_GENERATOR_DATA_SUBDIR}
         PATTERN "__pycache__" EXCLUDE)
-install(FILES schemas/daqiri-config-v1.schema.json
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/daqiri/schemas)
 
 install(
   EXPORT daqiriTargets

@@ -14,7 +14,6 @@ on:
       - 'include/daqiri/common.h'
       - 'pyproject.toml'
       - 'python/**/*.py'
-      - 'schemas/**'
       - 'scripts/*.py'
       - 'scripts/**/*.py'
       - 'src/common.cpp'
@@ -44,14 +43,8 @@ jobs:
       - name: Run portable tests
         run: python -m pytest tests/portable
 
-      - name: Validate checked-in configurations
-        run: python scripts/check_daqiri_configs.py
-
-      - name: Validate generated configuration matrix
-        run: python scripts/check_generated_configs.py
-
   cpp-config:
-    name: C++ configuration validator
+    name: C++ configuration validator (ibverbs)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,18 +60,24 @@ jobs:
             bash -lc '
               apt-get update
               DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-                cmake g++ ninja-build python3 python3-jsonschema python3-yaml
+                cmake g++ ninja-build pkg-config python3 python3-yaml \
+                libibverbs-dev librdmacm-dev
               cmake -S . -B /tmp/daqiri-config-build -G Ninja \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DBUILD_SHARED_LIBS=ON \
                 -DDAQIRI_BUILD_PYTHON=OFF \
                 -DDAQIRI_BUILD_APPLICATIONS=OFF \
-                -DDAQIRI_ENGINE=""
+                -DDAQIRI_ENGINE="ibverbs"
               cmake --build /tmp/daqiri-config-build \
                 --target daqiri_config_validate --parallel 2
               ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /tmp/libcuda.so.1
               export LD_LIBRARY_PATH=/tmp:/tmp/daqiri-config-build/src:/tmp/daqiri-config-build/src/third_party/yaml-cpp
+              # The PR gate uses the inexpensive ibverbs build. The full
+              # container-publish build validates the DPDK profiles as well.
+              python3 scripts/check_daqiri_configs.py \
+                --validator /tmp/daqiri-config-build/examples/daqiri_config_validate \
+                --exclude-dpdk
               python3 scripts/check_generated_configs.py \
                 --validator /tmp/daqiri-config-build/examples/daqiri_config_validate \
-                --validator-socket-only
+                --exclude-dpdk
             '

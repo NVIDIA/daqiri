@@ -145,9 +145,8 @@ set_target_properties(daqiri_bench_socket PROPERTIES
   BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
 )
 
-# Parse-only validation uses the same yaml-cpp decoder as daqiri_init(), without
-# allocating memory or touching a NIC. This is the authoritative second stage
-# after JSON Schema validation of generated configs.
+# Parse-only validation uses the same authoritative yaml-cpp decoder as
+# daqiri_init(), without allocating memory or touching a NIC.
 add_executable(daqiri_config_validate config_validate.cpp)
 link_daqiri_bench(daqiri_config_validate)
 set_target_properties(daqiri_config_validate PROPERTIES

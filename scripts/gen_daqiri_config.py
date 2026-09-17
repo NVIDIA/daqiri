@@ -166,7 +166,7 @@ def _raw_parser(subparsers: argparse._SubParsersAction) -> None:
 
 def _render_parser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
-        "render", help="validate and deterministically render an arbitrary DAQIRI document"
+        "render", help="deterministically render an arbitrary DAQIRI document"
     )
     parser.add_argument("input", help="YAML document or bare daqiri.cfg mapping")
     parser.add_argument(
@@ -175,7 +175,7 @@ def _render_parser(subparsers: argparse._SubParsersAction) -> None:
         action="append",
         default=[],
         metavar="/JSON/POINTER=VALUE",
-        help="replace an existing value before validation; repeat as needed",
+        help="replace an existing value before rendering; repeat as needed",
     )
     _add_output_argument(parser)
 
