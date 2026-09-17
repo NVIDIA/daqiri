@@ -2,3 +2,4 @@
 # SPDX-License-Identifier: Apache-2.0
 
 pytest>=8,<10
+PyYAML>=6,<7

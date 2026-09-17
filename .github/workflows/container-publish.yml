@@ -113,6 +113,25 @@ jobs:
           IMAGE_TAG: ${{ env.IMAGE }}:${{ steps.version.outputs.version }}-${{ matrix.arch }}
         run: scripts/build-container.sh
 
+      - name: Parse generated configuration matrix
+        env:
+          IMAGE_TAG: ${{ env.IMAGE }}:${{ steps.version.outputs.version }}-${{ matrix.arch }}
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace/source:ro" \
+            -w /workspace/source \
+            "${IMAGE_TAG}" \
+            bash -lc '
+              # Hosted release runners have no GPU driver. The parse-only
+              # executable needs libcuda symbols but never calls them.
+              ln -s /usr/local/cuda/lib64/stubs/libcuda.so /tmp/libcuda.so.1
+              export LD_LIBRARY_PATH=/tmp:/opt/daqiri/lib
+              python3 scripts/check_daqiri_configs.py \
+                --validator /opt/daqiri/bin/daqiri_config_validate
+              python3 scripts/check_generated_configs.py \
+                --validator /opt/daqiri/bin/daqiri_config_validate
+            '
+
       - name: Push
         if: github.event_name != 'workflow_dispatch' || inputs.push
         env:

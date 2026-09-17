@@ -10,7 +10,10 @@ Either form defines memory regions, NIC interfaces, TX/RX queues, and flow rules
 is passed to `daqiri_init()` at startup. The struct form is useful for customers who
 want to interoperate with existing configuration code.
 
-See `examples/daqiri_bench_*.yaml` for complete working examples.
+See [Generate and Validate Configurations](../config-generation.md) for
+deterministic production, benchmark, multi-queue, and cross-host role generation.
+The C++ `parse_network_config` implementation is the single validation authority;
+the commented files under `examples/` remain the canonical teaching examples.
 
 OpenTelemetry metrics do not add YAML fields. Metrics-enabled builds use the
 same interface, queue, and flow names from the active configuration as metric
@@ -349,7 +352,7 @@ weights.
 RSS is flow-affine: every packet with an unchanged five tuple stays on one
 queue. Roughly even packet counts require enough distinct tuples with reasonably
 balanced traffic; this is not packet striping or exact round-robin delivery.
-There is no queue-action mode field in schema v1; a future stripe mode can be
+There is no queue-action mode field in configuration version 1; a future stripe mode can be
 added without changing the multi-ID RSS default. If
 the NIC rejects an RSS action, static initialization or the dynamic flow
 completion fails rather than falling back to one queue.

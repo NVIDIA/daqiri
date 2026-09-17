@@ -3,7 +3,7 @@
 # Adds the host route and static neighbor the kernel needs to reach the peer
 # when daqiri-tx / daqiri-rx nmcli profiles are split across two boxes.
 #
-# Matches examples/*_spark_xhost.yaml (1.1.1.1 on TX, 2.2.2.2 on RX).
+# Matches raw-pair configs generated with 1.1.1.1 on TX and 2.2.2.2 on RX.
 # Re-running is safe: replaces route and neighbor entries.
 #
 # Conflicts with scripts/setup_spark_rdma_loopback.sh on the same host: that
