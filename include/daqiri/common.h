@@ -1418,11 +1418,18 @@ template <> struct YAML::convert<daqiri::NetworkConfig> {
 
             try {
               rx_cfg.flow_isolation_ = rx["flow_isolation"].as<bool>();
-            } catch (const std::exception& e) { rx_cfg.flow_isolation_ = false; }
+            } catch (const std::exception& e) {
+              rx_cfg.flow_isolation_ = false;
+            }
 
             try {
-              rx_cfg.dynamic_flow_capacity_ =
-                  rx["dynamic_flow_capacity"].as<uint32_t>();
+              rx_cfg.hardware_timestamps_ = rx["hardware_timestamps"].as<bool>();
+            } catch (const std::exception& e) {
+              rx_cfg.hardware_timestamps_ = false;
+            }
+
+            try {
+              rx_cfg.dynamic_flow_capacity_ = rx["dynamic_flow_capacity"].as<uint32_t>();
             } catch (const std::exception& e) {
               rx_cfg.dynamic_flow_capacity_ = daqiri::DEFAULT_DYNAMIC_FLOW_CAPACITY;
             }
