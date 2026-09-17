@@ -53,7 +53,7 @@ queues are configured, and worker threads are running.
 
 `MemoryKind::HUGE` is an explicit hugetlb request for DAQIRI-owned memory. DAQIRI does not
 substitute regular or transparent-hugepage memory when the requested hugetlb allocation is
-unavailable; initialization fails instead. Use `MemoryKind::HOST` when regular host memory is
+unavailable; initialization fails instead. Use `MemoryKind::HOST` or `MemoryKind::HOST_PINNED` when regular host memory is
 intended. Callers supplying an external memory binding remain responsible for its backing.
 
 Only one engine may be active in a process. Calling `daqiri_init()` again before
