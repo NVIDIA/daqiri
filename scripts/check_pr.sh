@@ -17,7 +17,7 @@ Runs the standard local checks before opening a PR:
   - documentation build and documentation reference checks
 
 Options:
-  --diagrams    Regenerate packet diagram assets before checking docs.
+  --diagrams     Force regeneration of packet diagram assets before checking docs.
   --docker-base  Also build the Docker base stage.
   -h, --help     Show this help.
 USAGE
