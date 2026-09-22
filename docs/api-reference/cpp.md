@@ -48,6 +48,13 @@ daqiri::NetworkConfig config;
 auto status = daqiri::daqiri_init(config);
 ```
 
+The YAML overloads use the production parser, and every initialization overload applies the shared
+common semantic checks before allocating packet memory or initializing a transport engine. A
+failed check returns a non-success status before hardware resources are touched. Application
+startup performs this validation automatically; use the installed `daqiri_config_validate`
+command only when a hardware-free preflight is useful. See
+[Validate without hardware initialization](configuration.md#validate-without-hardware-initialization).
+
 After `daqiri_init()` returns `Status::SUCCESS`, all memory regions are allocated, NIC
 queues are configured, and worker threads are running.
 
