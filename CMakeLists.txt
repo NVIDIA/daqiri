@@ -55,6 +55,7 @@ option(DAQIRI_ENABLE_OTEL_METRICS "Enable OpenTelemetry metrics instrumentation"
 set(DAQIRI_ENGINE "dpdk ibverbs" CACHE STRING "Optional engine implementations to build: dpdk, ibverbs (Linux sockets are always built in)")
 
 add_subdirectory(src)
+add_subdirectory(tools)
 
 if(TARGET yaml-cpp)
   install(

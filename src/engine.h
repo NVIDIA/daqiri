@@ -35,8 +35,8 @@ struct rte_pktmbuf_extmem;
 
 namespace daqiri {
 
-// Run the hardware-independent semantic checks shared by every engine.
-// This does not allocate memory, initialize a runtime, or touch a NIC.
+// Apply the common semantic checks used before engine initialization. This path
+// does not allocate packet memory, initialize an engine, or access a NIC.
 bool validate_network_config(const NetworkConfig& config);
 
 struct AllocRegion {

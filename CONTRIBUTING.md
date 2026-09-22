@@ -87,6 +87,11 @@ a GPU, NIC, hugepages, privileged access, or a particular host topology belong u
 runners. See `tests/README.md` for the container dependency command, supported
 invocations, and marker policy.
 
+Build `daqiri_config_validate` in the required project container before running
+`scripts/check_pr.sh`. The check script validates representative checked-in configurations
+through the production C++ parser and hardware-independent semantic checks. Set
+`DAQIRI_CONFIG_VALIDATOR` when the executable is not at `build/tools/daqiri_config_validate`.
+
 #### Pull Requests
 
 Developer workflow for code contributions is as follows:
