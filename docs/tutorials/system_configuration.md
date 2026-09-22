@@ -1541,7 +1541,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     initialization fails if the requested hugepages are unavailable. `kind: "device"` does
     **not** work on GB10.
 
-    See the ready-to-run [`examples/daqiri_bench_raw_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark.yaml) for the complete config.
+    Use [`daqiri_bench_raw_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx.yaml) to see how these settings fit into a complete configuration. For repeatable runs, [`scripts/gen_daqiri_config.py`](../config-generation.md#generate-a-raw-ethernet-pair) can apply the Spark addresses, cores, host-pinned memory, and RX MAC for you.
 
     ??? info "Why peermem and DMA-BUF don't apply on GB10"
 
@@ -1626,7 +1626,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     ### Step 4: Enable Huge pages (grub drop-in pattern)
 
-    Spark composes its `GRUB_CMDLINE_LINUX` from drop-ins under `/etc/default/grub.d/`. Edit a new file rather than `/etc/default/grub` directly so Spark platform updates don't fight your changes. The shipped `daqiri_bench_raw_tx_rx_spark.yaml` needs ~4 GiB of hugepages (kind: HUGE dummy queues + DPDK per-pool overhead); 4 × 1 GiB pages is enough:
+    Spark composes its `GRUB_CMDLINE_LINUX` from drop-ins under `/etc/default/grub.d/`. Edit a new file rather than `/etc/default/grub` directly so Spark platform updates don't fight your changes. The generated Spark DPDK profile needs ~4 GiB of hugepages (kind: HUGE dummy queues + DPDK per-pool overhead); 4 × 1 GiB pages is enough:
 
     ```bash
     cat << 'EOF' | sudo tee /etc/default/grub.d/daqiri-tuning.cfg

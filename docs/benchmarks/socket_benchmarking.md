@@ -7,7 +7,7 @@ hide:
 
 Use this page when the peer transport is TCP, UDP, or RoCE/RDMA. These benchmarks use the Linux networking stack for TCP/UDP and RDMA verbs for RoCE, so the same client/server namespace shape is useful for proving that traffic leaves the host through the expected NIC path.
 
-For **two-host Spark cross-cable** tests (not netns), RoCE/RDMA still needs kernel reachability to the peer, so apply the host route and static neighbor steps in [System Configuration → Cross-host variant](../tutorials/system_configuration.md#cross-host-variant-two-sparks) before running `daqiri_bench_rdma` with the `_xhost` configs.
+For **two-host Spark cross-cable** tests (not netns), RoCE/RDMA still needs kernel reachability to the peer, so apply the host route and static neighbor steps in [System Configuration → Cross-host variant](../tutorials/system_configuration.md#cross-host-variant-two-sparks) before running `daqiri_bench_rdma` with the generated client and server configs.
 
 Make sure to [build DAQIRI](../getting-started.md#build-the-daqiri-library) with the `ibverbs` engine first (for the RoCE/RDMA benchmark); Linux UDP/TCP sockets are always available.
 
@@ -172,7 +172,10 @@ The shipped configs run both endpoints on `127.0.0.1` and are useful for a smoke
   --seconds 10 --mode both
 ```
 
-For an on-wire namespace test, use separate server and client YAML files. The important fields are the endpoint URI scheme, namespace IPs, server port, `max_payload_size`, memory-region `buf_size`, and benchmark `message_size`.
+For an on-wire namespace test, generate separate server and client YAML files
+with [`gen_daqiri_config.py socket-pair`](../config-generation.md#generate-udp-tcp-or-roce-roles).
+The important inputs are the endpoint URI scheme, namespace IPs, ports,
+memory-region buffer size, and benchmark message size.
 
 For UDP, `rx.queues[].cpu_core` pins the DAQIRI socket I/O thread that drains
 `recvmmsg()`. The separate `socket_bench_*.cpu_core` pins the application worker
@@ -322,11 +325,13 @@ For a four-process run, create four server/client YAML pairs with unique server 
 
 ## Run the RDMA RoCE benchmark
 
-Start from `examples/daqiri_bench_rdma_tx_rx.yaml` or `examples/daqiri_bench_rdma_tx_rx_spark.yaml`. The full config can run both endpoints in one process:
+Start from the canonical `examples/daqiri_bench_rdma_tx_rx.yaml` for a one-process
+smoke test, or generate independent roles for namespace/cross-host runs. The full
+canonical config can run both endpoints in one process:
 
 ```bash
 ./build-socket-rdma/examples/daqiri_bench_rdma \
-  examples/daqiri_bench_rdma_tx_rx_spark.yaml \
+  examples/daqiri_bench_rdma_tx_rx.yaml \
   --seconds 10 --mode both
 ```
 

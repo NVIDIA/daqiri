@@ -24,15 +24,6 @@ STRING_PLACEHOLDERS = {
     "<client-ip>": "192.0.2.1",
     "<server-ip>": "192.0.2.2",
 }
-DEFAULT_CONFIGS = (
-    "examples/daqiri_bench_raw_sw_loopback.yaml",
-    "examples/daqiri_bench_raw_tx_rx.yaml",
-    "examples/daqiri_bench_raw_tx_rx_hds.yaml",
-    "examples/daqiri_bench_rdma_tx_rx.yaml",
-    "examples/daqiri_bench_socket_udp_tx_rx.yaml",
-    "examples/daqiri_bench_socket_tcp_tx_rx.yaml",
-    "examples/daqiri_example_dynamic_rx_flow.yaml",
-)
 SEMANTIC_FIXTURE = "examples/daqiri_bench_raw_rx_reorder_seq_batch.yaml"
 ZERO_ID_FIXTURE = "examples/daqiri_bench_raw_tx_rx.yaml"
 PARSER_FIXTURE = "examples/daqiri_bench_socket_udp_tx_rx.yaml"
@@ -70,7 +61,11 @@ def materialize_integer_placeholders(text: str) -> str:
 
 
 def checked_in_paths() -> list[Path]:
-    return [REPOSITORY_ROOT / relative_path for relative_path in DEFAULT_CONFIGS]
+    paths = sorted((REPOSITORY_ROOT / "examples").glob("daqiri_*.yaml"))
+    paths.extend(
+        sorted((REPOSITORY_ROOT / "applications").glob("**/configs/*.yaml"))
+    )
+    return paths
 
 
 def zero_id_multi_interface_case() -> str:

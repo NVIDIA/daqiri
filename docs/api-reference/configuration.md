@@ -10,13 +10,19 @@ Either form defines memory regions, NIC interfaces, TX/RX queues, and flow rules
 is passed to `daqiri_init()` at startup. The struct form is useful for customers who
 want to interoperate with existing configuration code.
 
-See `examples/daqiri_bench_*.yaml` for complete working examples.
+Start with the commented configurations under `examples/` to see complete,
+readable configurations and understand how the fields fit together. When you
+need repeatable production, benchmark, multi-queue, or cross-host variants, use
+[Configuration Generation](../config-generation.md) to apply system and topology
+parameters consistently.
 
-## Validate without hardware initialization
+## Optional validation without hardware initialization
 
-`daqiri_config_validate` parses one or more YAML files and applies the same common semantic
-checks used before `daqiri_init()`. It does not allocate packet memory, initialize CUDA or a
-network engine, or access a NIC:
+`daqiri_init()` parses and validates each configuration at application startup.
+For CI, batch checks, or development machines without the target hardware,
+`daqiri_config_validate` applies the same parser and common semantic checks
+without allocating packet memory, initializing CUDA or a network engine, or
+accessing a NIC:
 
 ```bash
 daqiri_config_validate config.yaml another-config.yaml
@@ -54,6 +60,7 @@ These settings apply globally to both TX and RX:
 - **`log_level`**: Engine log level.
   - type: `string`
   - values: `trace`, `debug`, `info`, `warn` (default), `error`, `critical`, `off`
+  - any other value is rejected during configuration parsing
 - **`loopback`**: Select a loopback mode for local testing.
   - type: `string`
   - values: `""` (disabled, default), `"sw"` (DPDK software loopback, no NIC),
@@ -371,7 +378,7 @@ weights.
 RSS is flow-affine: every packet with an unchanged five tuple stays on one
 queue. Roughly even packet counts require enough distinct tuples with reasonably
 balanced traffic; this is not packet striping or exact round-robin delivery.
-There is no queue-action mode field in schema v1; a future stripe mode can be
+There is no queue-action mode field in configuration version 1; a future stripe mode can be
 added without changing the multi-ID RSS default. If
 the NIC rejects an RSS action, static initialization or the dynamic flow
 completion fails rather than falling back to one queue.
