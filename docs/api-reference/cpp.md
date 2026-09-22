@@ -462,10 +462,18 @@ daqiri::send_tx_burst(sender_id, queue_id, burst);
 
 The burst must have been acquired from the same queue, so its existing
 `port_id` and `q_id` must identify `queue_id` on the sender's interface. This
-checked overload returns `INVALID_PARAMETER` without consuming the burst when
-the sender, interface, or queue does not match. A sender can consequently be
-used on different queues for different bursts. Requests sent on different
-queues have no cross-queue ordering guarantee.
+checked overload copies the sender's cached 42-byte Ethernet/IPv4/UDP template
+to the beginning of segment 0 for every packet. It derives the IPv4 and UDP
+lengths from the sum of that packet's segment lengths and leaves both checksum
+fields zero for the existing mlx5 hardware-checksum flags. Applications must
+therefore reserve the first `sizeof(UDPIPV4Pkt)` bytes of segment 0, place the
+UDP payload after that reservation (or in segment 1 for HDS), and set segment
+lengths before submission.
+
+The overload returns `INVALID_PARAMETER` without consuming the burst when the
+sender, interface, queue, header reservation, or frame length is invalid. A
+sender can be used on different queues for different bursts. Requests sent on
+different queues have no cross-queue ordering guarantee.
 
 In the default indirect mode, the burst is enqueued to the TX worker thread, which sends it to
 the NIC via DMA. A raw ibverbs queue configured with `poll_mode: direct` requires `batch_size`
@@ -767,7 +775,7 @@ workflow sections above show the common call order and ownership rules.
 | `get_tx_packet_burst(burst)` | Populate a TX burst with packet buffers. |
 | `set_connection_id(burst, conn_id)` | Attach a transport connection ID to a TX burst (socket/RDMA). |
 | `send_tx_burst(burst)` | Enqueue a populated TX burst. |
-| `send_tx_burst(sender_id, queue_id, burst)` | Validate and enqueue an ibverbs burst through a named sender on the selected queue. |
+| `send_tx_burst(sender_id, queue_id, burst)` | Copy cached raw-UDP headers, validate, and enqueue an ibverbs burst on the selected queue. |
 | `add_sender(config, &sender_id)` | Add a named raw-UDP sender to the active ibverbs engine. |
 | `get_sender_id(name, &sender_id)` | Resolve a sender name outside the TX hot path. |
 | `delete_sender(sender_id)` | Delete a runtime sender. A name overload is also available. |

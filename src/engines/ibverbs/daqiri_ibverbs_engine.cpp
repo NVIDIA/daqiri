@@ -4475,8 +4475,14 @@ Status IbverbsEngine::add_sender(const RawUdpSenderConfig& config, SenderId* sen
   sender.header_template.ip.frag_off = htobe16(IP_DF);
   sender.header_template.ip.ttl = 64;
   sender.header_template.ip.protocol = IPPROTO_UDP;
+  sender.header_template.ip.tot_len =
+      htobe16(static_cast<uint16_t>(config.mtu_ - sizeof(struct ethhdr)));
+  sender.header_template.ip.check = 0;
   sender.header_template.udp.source = htobe16(config.src_port_);
   sender.header_template.udp.dest = htobe16(config.dst_port_);
+  sender.header_template.udp.len =
+      htobe16(static_cast<uint16_t>(config.mtu_ - sizeof(struct ethhdr) - sizeof(struct iphdr)));
+  sender.header_template.udp.check = 0;
 
   std::lock_guard<std::mutex> guard(sender_mutex_);
   if (sender_names_.find(config.name_) != sender_names_.end()) {
@@ -5384,17 +5390,60 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
 Status IbverbsEngine::send_tx_burst(SenderId sender_id, uint16_t queue_id, BurstParams* burst) {
   if (burst == nullptr) return Status::NULL_PTR;
 
-  int port_id = -1;
+  RawUdpSender sender;
   {
     std::lock_guard<std::mutex> guard(sender_mutex_);
-    const auto sender = senders_.find(sender_id);
-    if (sender == senders_.end()) return Status::INVALID_PARAMETER;
-    port_id = sender->second.port_id;
+    const auto it = senders_.find(sender_id);
+    if (it == senders_.end()) return Status::INVALID_PARAMETER;
+    sender = it->second;
   }
 
-  if (find_tx_queue(port_id, queue_id) == nullptr || burst->hdr.hdr.port_id != port_id ||
-      burst->hdr.hdr.q_id != queue_id) {
+  IbvTxQueue* q = find_tx_queue(sender.port_id, queue_id);
+  if (q == nullptr || burst->hdr.hdr.port_id != sender.port_id || burst->hdr.hdr.q_id != queue_id ||
+      burst->hdr.hdr.num_segs != q->num_segs || q->mr_names.empty()) {
     return Status::INVALID_PARAMETER;
+  }
+
+  const size_t packets = burst->hdr.hdr.num_pkts;
+  for (size_t packet = 0; packet < packets; ++packet) {
+    uint64_t frame_length = 0;
+    for (int segment = 0; segment < q->num_segs; ++segment) {
+      if (burst->pkts[segment][packet] == nullptr) return Status::INVALID_PARAMETER;
+      frame_length += burst->pkt_lens[segment][packet];
+    }
+    if (burst->pkt_lens[0][packet] < sizeof(UDPIPV4Pkt) || frame_length < sizeof(UDPIPV4Pkt) ||
+        frame_length > sender.mtu || frame_length - sizeof(struct ethhdr) > UINT16_MAX) {
+      return Status::INVALID_PARAMETER;
+    }
+  }
+
+  const auto mr = cfg_.mrs_.find(q->mr_names[0]);
+  if (mr == cfg_.mrs_.end()) return Status::INTERNAL_ERROR;
+  if (mr->second.kind_ == MemoryKind::DEVICE &&
+      cudaSetDevice(static_cast<int>(mr->second.affinity_)) != cudaSuccess) {
+    return Status::GENERIC_FAILURE;
+  }
+
+  for (size_t packet = 0; packet < packets; ++packet) {
+    UDPIPV4Pkt header = sender.header_template;
+    uint32_t frame_length = 0;
+    for (int segment = 0; segment < q->num_segs; ++segment) {
+      frame_length += burst->pkt_lens[segment][packet];
+    }
+    header.ip.tot_len = htobe16(static_cast<uint16_t>(frame_length - sizeof(struct ethhdr)));
+    header.ip.check = 0;
+    header.udp.len =
+        htobe16(static_cast<uint16_t>(frame_length - sizeof(struct ethhdr) - sizeof(struct iphdr)));
+    header.udp.check = 0;
+
+    if (mr->second.kind_ == MemoryKind::DEVICE) {
+      if (cudaMemcpy(burst->pkts[0][packet], &header, sizeof(header), cudaMemcpyHostToDevice) !=
+          cudaSuccess) {
+        return Status::GENERIC_FAILURE;
+      }
+    } else {
+      memcpy(burst->pkts[0][packet], &header, sizeof(header));
+    }
   }
   return send_tx_burst(burst);
 }

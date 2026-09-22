@@ -783,7 +783,11 @@ Status send_tx_burst(BurstParams *burst);
  * @brief Send a TX burst through a named sender on an explicitly selected queue.
  *
  * The burst must have been allocated from @p queue_id on the sender's
- * interface. Validation failures do not consume the burst.
+ * interface. Each packet must reserve the first sizeof(UDPIPV4Pkt) bytes of
+ * segment 0 for DAQIRI. The cached sender header is copied there, its IPv4 and
+ * UDP lengths are patched from the packet's segment lengths, and checksum
+ * fields are left zero for NIC offload. Validation failures do not consume the
+ * burst.
  */
 Status send_tx_burst(SenderId sender_id, uint16_t queue_id, BurstParams* burst);
 
