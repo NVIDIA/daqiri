@@ -35,6 +35,10 @@ struct rte_pktmbuf_extmem;
 
 namespace daqiri {
 
+// Run the hardware-independent semantic checks shared by every engine.
+// This does not allocate memory, initialize a runtime, or touch a NIC.
+bool validate_network_config(const NetworkConfig& config);
+
 struct AllocRegion {
   enum class Deallocator {
     NONE,
