@@ -16,6 +16,7 @@ Usage: scripts/check_pr.sh [--diagrams] [--docker-base]
 Runs the standard local checks before opening a PR:
   - portable Python tests
   - checked-in configuration validation
+  - generated configuration matrix validation
   - documentation build and documentation reference checks
 
 Set DAQIRI_CONFIG_VALIDATOR to the validator built in the project container.
@@ -64,6 +65,7 @@ if [ ! -x "${DAQIRI_CONFIG_VALIDATOR}" ]; then
   exit 1
 fi
 "${PYTHON}" scripts/check_daqiri_configs.py --validator "${DAQIRI_CONFIG_VALIDATOR}"
+"${PYTHON}" scripts/check_generated_configs.py --validator "${DAQIRI_CONFIG_VALIDATOR}"
 
 docs_args=()
 if [ "${run_diagrams}" -eq 1 ]; then

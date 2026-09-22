@@ -41,7 +41,7 @@ endpoints after initialization, resolve their opaque `EndpointId` handles, and
 select a configured TX queue for each submission. These endpoints provide
 payload-only TX buffers and are separate from socket endpoint URIs.
 
-The configuration schema lives in the
+The configuration format is documented in the
 [Configuration YAML Reference](configuration.md). For an annotated
 end-to-end example, see the
 [configuration walkthrough tutorial](../tutorials/configuration-walkthrough.md).

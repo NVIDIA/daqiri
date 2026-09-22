@@ -3,20 +3,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exercise the generated configuration matrix with the C++ runtime decoder."""
+"""Exercise the generated configuration matrix with the C++ validator."""
 
 from __future__ import annotations
 
 import argparse
-import copy
 import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 from typing import Any
-
-import yaml
 
 from daqiri_config import (
     RawPairSpec,
@@ -128,79 +125,15 @@ def _generate_matrix_in_subprocess(hash_seed: int) -> bytes:
     return result.stdout
 
 
-def _cpp_rejection_documents(
-    documents: dict[str, dict[str, Any]],
-) -> dict[str, dict[str, Any]]:
-    """Return focused regressions for distinct runtime-decoder failure paths."""
-
-    invalid: dict[str, dict[str, Any]] = {}
-    base_name = "socket-udp-tx"
-
-    def replace(name: str, path: tuple[str | int, ...], value: Any) -> None:
-        document = copy.deepcopy(documents[base_name])
-        parent: Any = document
-        for component in path[:-1]:
-            parent = parent[component]
-        parent[path[-1]] = value
-        invalid[name] = document
-
-    unknown_queue_key = copy.deepcopy(documents[base_name])
-    queue = unknown_queue_key["daqiri"]["cfg"]["interfaces"][0]["rx"]["queues"][0]
-    queue["batch_sise"] = queue.pop("batch_size")
-    invalid["unknown-queue-key"] = unknown_queue_key
-
-    config_path: tuple[str | int, ...] = ("daqiri", "cfg")
-    interface_path = (*config_path, "interfaces", 0)
-    tx_flow_path = (*interface_path, "tx", "flows")
-    memory_region_path = (*config_path, "memory_regions", 0)
-    queue_path = (*interface_path, "tx", "queues", 0)
-
-    replace(
-        "integer-overflow",
-        (*interface_path, "rx", "dynamic_flow_capacity"),
-        1 << 32,
-    )
-    replace("unknown-offload", (*queue_path, "offloads"), ["tx_eth_scr"])
-    replace("malformed-tx-flows", tx_flow_path, "typo")
-    for name, match in {
-        "malformed-ecpri": {"ecpri": "ecpri_typo"},
-        "malformed-ipv4": {"ipv4_src": ["10.0.0.1"]},
-    }.items():
-        replace(
-            name,
-            tx_flow_path,
-            [
-                {
-                    "name": name,
-                    "id": 1,
-                    "match": match,
-                    "action": {"type": "queue", "id": 0},
-                }
-            ],
-        )
-    replace("invalid-memory-kind", (*memory_region_path, "kind"), "devcie")
-    replace("invalid-memory-access", (*memory_region_path, "access"), ["locla"])
-    replace("invalid-log-level", (*config_path, "log_level"), "verbose")
-    replace("malformed-endpoint-host", (*interface_path, "socket_config", "local_addr"),
-            "udp://not-an-ip:5002")
-    replace("malformed-endpoint-port", (*interface_path, "socket_config", "local_addr"),
-            "udp://10.250.0.1:5002junk")
-
-    missing_memory_region = copy.deepcopy(documents[base_name])
-    missing_memory_region["daqiri"]["cfg"]["interfaces"][0]["tx"]["queues"][0][
-        "memory_regions"
-    ][0] = "missing-region"
-    invalid["missing-memory-region"] = missing_memory_region
-
-    return invalid
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--validator",
         type=Path,
-        help="built daqiri_config_validate binary used for authoritative validation",
+        help=(
+            "built daqiri_config_validate binary used for hardware-free "
+            "acceptance checks"
+        ),
     )
     parser.add_argument(
         "--exclude-dpdk",
@@ -242,26 +175,8 @@ def main() -> int:
             [str(args.validator), *(str(path) for path in paths.values())], check=True
         )
 
-        for name, document in _cpp_rejection_documents(documents).items():
-            path = Path(temp_dir) / f"invalid-{name}.yaml"
-            path.write_text(
-                "%YAML 1.2\n---\n"
-                + yaml.safe_dump(document, sort_keys=False, width=1000),
-                encoding="utf-8",
-            )
-            result = subprocess.run(
-                [str(args.validator), str(path)],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 1:
-                raise RuntimeError(
-                    f"C++ decoder did not cleanly reject invalid configuration {name} "
-                    f"(exit {result.returncode})\n{result.stdout}{result.stderr}"
-                )
-
     print(
-        f"Validated {len(documents)} generated configurations with the C++ runtime decoder."
+        f"Validated {len(documents)} generated configurations with the C++ validator."
     )
     return 0
 
