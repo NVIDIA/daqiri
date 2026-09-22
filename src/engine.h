@@ -109,6 +109,7 @@ class Engine {
   virtual void free_rx_metadata(BurstParams* burst) = 0;
   virtual void free_tx_metadata(BurstParams* burst) = 0;
   virtual Status send_tx_burst(BurstParams* burst) = 0;
+  virtual Status send_tx_burst(SenderId sender_id, uint16_t queue_id, BurstParams* burst);
   virtual Status add_sender(const RawUdpSenderConfig& config, SenderId* sender_id);
   virtual Status get_sender_id(const std::string& name, SenderId* sender_id);
   virtual Status delete_sender(SenderId sender_id);

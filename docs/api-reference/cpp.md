@@ -376,7 +376,6 @@ MAC from the NIC, and caches a binary header template for subsequent sends.
 daqiri::RawUdpSenderConfig sender;
 sender.name_ = "camera-0";
 sender.interface_ = "nic0";       // Config name or PCI address.
-sender.queue_ = 0;
 sender.dst_mac_ = "02:00:00:00:00:02";
 sender.src_ipv4_ = "192.0.2.1";
 sender.dst_ipv4_ = "192.0.2.2";
@@ -397,9 +396,10 @@ daqiri::delete_sender(sender_id);  // The name overload is also available.
 ```
 
 Sender IDs are process-local and remain valid until deletion or DAQIRI
-shutdown. The DPDK, socket, and RDMA engines return `NOT_SUPPORTED`. These APIs
-establish sender lifecycle and cached wire metadata; pointer-range submission by
-`SenderId` is the next layer of the large-buffer TX path.
+shutdown. A sender does not bind to a TX queue; the queue is selected for each
+submission. The DPDK, socket, and RDMA engines return `NOT_SUPPORTED`. These
+APIs establish sender lifecycle and cached wire metadata; pointer-range
+submission by `SenderId` is the next layer of the large-buffer TX path.
 
 ### TX Step 1: Allocate a burst
 
@@ -452,6 +452,20 @@ Or construct raw packets by writing directly into the packet buffer returned by
 ```cpp
 daqiri::send_tx_burst(burst);
 ```
+
+When using a runtime sender, select the queue at submission instead of binding
+it to the sender:
+
+```cpp
+daqiri::send_tx_burst(sender_id, queue_id, burst);
+```
+
+The burst must have been acquired from the same queue, so its existing
+`port_id` and `q_id` must identify `queue_id` on the sender's interface. This
+checked overload returns `INVALID_PARAMETER` without consuming the burst when
+the sender, interface, or queue does not match. A sender can consequently be
+used on different queues for different bursts. Requests sent on different
+queues have no cross-queue ordering guarantee.
 
 In the default indirect mode, the burst is enqueued to the TX worker thread, which sends it to
 the NIC via DMA. A raw ibverbs queue configured with `poll_mode: direct` requires `batch_size`
@@ -753,6 +767,10 @@ workflow sections above show the common call order and ownership rules.
 | `get_tx_packet_burst(burst)` | Populate a TX burst with packet buffers. |
 | `set_connection_id(burst, conn_id)` | Attach a transport connection ID to a TX burst (socket/RDMA). |
 | `send_tx_burst(burst)` | Enqueue a populated TX burst. |
+| `send_tx_burst(sender_id, queue_id, burst)` | Validate and enqueue an ibverbs burst through a named sender on the selected queue. |
+| `add_sender(config, &sender_id)` | Add a named raw-UDP sender to the active ibverbs engine. |
+| `get_sender_id(name, &sender_id)` | Resolve a sender name outside the TX hot path. |
+| `delete_sender(sender_id)` | Delete a runtime sender. A name overload is also available. |
 | `set_packet_lengths(burst, idx, lens)` | Set segment lengths for one packet. |
 | `set_all_packet_lengths(burst, lens)` | Set segment lengths for every packet in a burst. |
 | `set_packet_tx_time(burst, idx, time)` | Set scheduled transmit time for one packet. |

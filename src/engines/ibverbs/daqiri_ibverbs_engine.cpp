@@ -4455,14 +4455,11 @@ Status IbverbsEngine::add_sender(const RawUdpSenderConfig& config, SenderId* sen
       break;
     }
   }
-  if (interface == nullptr || find_tx_queue(interface->port_id_, config.queue_) == nullptr) {
-    return Status::INVALID_PARAMETER;
-  }
+  if (interface == nullptr) return Status::INVALID_PARAMETER;
 
   RawUdpSender sender;
   sender.name = config.name_;
   sender.port_id = interface->port_id_;
-  sender.queue_id = config.queue_;
   sender.mtu = config.mtu_;
   if (!parse_mac_address(config.dst_mac_, sender.header_template.eth.h_dest) ||
       inet_pton(AF_INET, config.src_ipv4_.c_str(), &sender.header_template.ip.saddr) != 1 ||
@@ -5384,6 +5381,24 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
 // Submit a filled TX burst. Indirect queues hand it to the pinned worker so WQE
 // posting overlaps application fill; direct queues post one packet inline on
 // the owner thread and return only after ringing the doorbell.
+Status IbverbsEngine::send_tx_burst(SenderId sender_id, uint16_t queue_id, BurstParams* burst) {
+  if (burst == nullptr) return Status::NULL_PTR;
+
+  int port_id = -1;
+  {
+    std::lock_guard<std::mutex> guard(sender_mutex_);
+    const auto sender = senders_.find(sender_id);
+    if (sender == senders_.end()) return Status::INVALID_PARAMETER;
+    port_id = sender->second.port_id;
+  }
+
+  if (find_tx_queue(port_id, queue_id) == nullptr || burst->hdr.hdr.port_id != port_id ||
+      burst->hdr.hdr.q_id != queue_id) {
+    return Status::INVALID_PARAMETER;
+  }
+  return send_tx_burst(burst);
+}
+
 Status IbverbsEngine::send_tx_burst(BurstParams* burst) {
   if (burst == nullptr) {
     return Status::NULL_PTR;

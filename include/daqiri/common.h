@@ -779,6 +779,14 @@ void set_num_packets(BurstParams *burst, int64_t num);
  */
 Status send_tx_burst(BurstParams *burst);
 
+/**
+ * @brief Send a TX burst through a named sender on an explicitly selected queue.
+ *
+ * The burst must have been allocated from @p queue_id on the sender's
+ * interface. Validation failures do not consume the burst.
+ */
+Status send_tx_burst(SenderId sender_id, uint16_t queue_id, BurstParams* burst);
+
 /** Add a named raw IPv4/UDP sender to the active ibverbs engine. */
 Status add_sender(const RawUdpSenderConfig& config, SenderId* sender_id);
 

@@ -383,6 +383,7 @@ class IbverbsEngine : public Engine {
   // Burst retrieval / submission
   Status get_rx_burst(BurstParams** burst, int port, int q) override;
   Status send_tx_burst(BurstParams* burst) override;
+  Status send_tx_burst(SenderId sender_id, uint16_t queue_id, BurstParams* burst) override;
   Status add_sender(const RawUdpSenderConfig& config, SenderId* sender_id) override;
   Status get_sender_id(const std::string& name, SenderId* sender_id) override;
   Status delete_sender(SenderId sender_id) override;
@@ -415,7 +416,6 @@ class IbverbsEngine : public Engine {
     SenderId id = INVALID_SENDER_ID;
     std::string name;
     int port_id = -1;
-    uint16_t queue_id = 0;
     uint32_t mtu = 0;
     UDPIPV4Pkt header_template{};
   };

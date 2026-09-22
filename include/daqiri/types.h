@@ -177,7 +177,6 @@ struct UDPIPV4Pkt {
 struct RawUdpSenderConfig {
   std::string name_;
   std::string interface_;
-  uint16_t queue_ = 0;
   std::string dst_mac_;
   std::string src_ipv4_;
   std::string dst_ipv4_;

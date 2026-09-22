@@ -935,6 +935,13 @@ Status Engine::get_tx_packet_burst_checked(BurstParams* burst) {
   return get_tx_packet_burst(burst);
 }
 
+Status Engine::send_tx_burst(SenderId sender_id, uint16_t queue_id, BurstParams* burst) {
+  (void)sender_id;
+  (void)queue_id;
+  (void)burst;
+  return Status::NOT_SUPPORTED;
+}
+
 Status Engine::add_sender(const RawUdpSenderConfig& config, SenderId* sender_id) {
   (void)config;
   (void)sender_id;

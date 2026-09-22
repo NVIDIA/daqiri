@@ -560,6 +560,11 @@ Status send_tx_burst(BurstParams* burst) {
   return g_daqiri_engine->send_tx_burst(burst);
 }
 
+Status send_tx_burst(SenderId sender_id, uint16_t queue_id, BurstParams* burst) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->send_tx_burst(sender_id, queue_id, burst);
+}
+
 Status add_sender(const RawUdpSenderConfig& config, SenderId* sender_id) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
   return g_daqiri_engine->add_sender(config, sender_id);
