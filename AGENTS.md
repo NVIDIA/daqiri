@@ -24,6 +24,8 @@ CMake options (full table in `docs/getting-started.md`):
 - `DAQIRI_BUILD_PYTHON` — builds `pybind11` bindings from `python/`.
 - `DAQIRI_BUILD_EXAMPLES` — builds the benchmark executables (default `ON`). The
   hardware-free `daqiri_config_validate` tool is always built and installed.
+- `BUILD_TESTING` — builds and registers the hardware-free C++ tests under
+  `tests/cpp/` with CTest (default `ON`). Set it to `OFF` to omit test targets.
 - `DAQIRI_BUILD_APPLICATIONS` — builds the end-to-end example applications under `applications/` (default `OFF`; requires TensorRT, e.g. the `BASE_IMAGE=torch` container). Currently builds `applications/resnet50_inference/` (DAQIRI → TensorRT ResNet inference).
 - `DAQIRI_ENABLE_OTEL_METRICS` — enables OpenTelemetry metrics instrumentation (default `OFF`).
 - `DAQIRI_REORDER_GPU_PROFILE` — enable CUDA event timing in the DPDK reorder kernels (off by default).
@@ -53,7 +55,13 @@ without initializing hardware:
 python3 scripts/check_daqiri_configs.py --validator build/tools/daqiri_config_validate
 ```
 
-The default suite collects only `tests/portable/`. Future build-backed C++ tests live under `tests/cpp/`; Python-binding tests live under `tests/bindings/` and require a container built with `DAQIRI_BUILD_PYTHON=ON`. Platform tests live under `tests/platform/` and are selected by CI/CD jobs running on provisioned GPU/NIC systems; they are never part of the default pytest collection. The project container already includes the current test packages; use the container-specific dependency command in `tests/README.md` when `tests/requirements.txt` changes.
+The default pytest suite collects only `tests/portable/`. Build-backed C++ tests live under
+`tests/cpp/` and run through CTest; Python-binding tests live under `tests/bindings/` and
+require a container built with `DAQIRI_BUILD_PYTHON=ON`. Platform tests live under
+`tests/platform/` and are selected by CI/CD jobs running on provisioned GPU/NIC systems;
+they are never part of the default pytest collection. The project container already includes
+the current test packages; use the container-specific dependency command in
+`tests/README.md` when `tests/requirements.txt` changes.
 
 Integration and performance verification is done via the benchmark executables in `examples/`, driven by YAML configs. Build outputs (`examples/CMakeLists.txt:59-71`):
 

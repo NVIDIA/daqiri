@@ -81,7 +81,8 @@ python3 -m venv .venv
 
 The default invocation collects only `tests/portable/`. Tests importing the compiled
 `daqiri` module belong under `tests/bindings/` and require a container built with
-`DAQIRI_BUILD_PYTHON=ON`. Future C++ tests belong under `tests/cpp/`. Tests requiring
+`DAQIRI_BUILD_PYTHON=ON`. Build-backed C++ tests belong under `tests/cpp/` and run
+through CTest. Tests requiring
 a GPU, NIC, hugepages, privileged access, or a particular host topology belong under
 `tests/platform/` and are selected by dedicated CI/CD jobs on compatible provisioned
 runners. See `tests/README.md` for the container dependency command, supported
