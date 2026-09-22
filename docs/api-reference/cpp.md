@@ -463,12 +463,17 @@ daqiri::send_tx_burst(sender_id, queue_id, burst);
 The burst must have been acquired from the same queue, so its existing
 `port_id` and `q_id` must identify `queue_id` on the sender's interface. This
 checked overload copies the sender's cached 42-byte Ethernet/IPv4/UDP template
-to the beginning of segment 0 for every packet. It derives the IPv4 and UDP
-lengths from the sum of that packet's segment lengths and leaves both checksum
-fields zero for the existing mlx5 hardware-checksum flags. Applications must
-therefore reserve the first `sizeof(UDPIPV4Pkt)` bytes of segment 0, place the
-UDP payload after that reservation (or in segment 1 for HDS), and set segment
-lengths before submission.
+directly into each mlx5 SEND WQE. It patches the IPv4 and UDP lengths there and
+leaves both checksum fields zero for the existing mlx5 hardware-checksum flags.
+One registered data segment gathers the UDP payload from the burst's last
+packet segment. Packet buffers therefore contain payload only; applications do
+not reserve or populate header bytes.
+
+For a one-region queue, segment 0 is the payload. For an HDS queue, segment 1
+is the payload and the queue's segment-0 header slot is not transmitted by this
+sender-aware path. Set the payload segment's length before submission. Each
+sender-aware SEND WQE occupies two 64-byte WQEBBs; enhanced MPW is bypassed for
+these bursts.
 
 The overload returns `INVALID_PARAMETER` without consuming the burst when the
 sender, interface, queue, header reservation, or frame length is invalid. A
@@ -775,7 +780,7 @@ workflow sections above show the common call order and ownership rules.
 | `get_tx_packet_burst(burst)` | Populate a TX burst with packet buffers. |
 | `set_connection_id(burst, conn_id)` | Attach a transport connection ID to a TX burst (socket/RDMA). |
 | `send_tx_burst(burst)` | Enqueue a populated TX burst. |
-| `send_tx_burst(sender_id, queue_id, burst)` | Copy cached raw-UDP headers, validate, and enqueue an ibverbs burst on the selected queue. |
+| `send_tx_burst(sender_id, queue_id, burst)` | Inline cached raw-UDP headers, gather payload pointers, and enqueue an ibverbs burst on the selected queue. |
 | `add_sender(config, &sender_id)` | Add a named raw-UDP sender to the active ibverbs engine. |
 | `get_sender_id(name, &sender_id)` | Resolve a sender name outside the TX hot path. |
 | `delete_sender(sender_id)` | Delete a runtime sender. A name overload is also available. |
