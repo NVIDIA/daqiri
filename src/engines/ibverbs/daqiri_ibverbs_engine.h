@@ -383,6 +383,10 @@ class IbverbsEngine : public Engine {
   // Burst retrieval / submission
   Status get_rx_burst(BurstParams** burst, int port, int q) override;
   Status send_tx_burst(BurstParams* burst) override;
+  Status add_sender(const RawUdpSenderConfig& config, SenderId* sender_id) override;
+  Status get_sender_id(const std::string& name, SenderId* sender_id) override;
+  Status delete_sender(SenderId sender_id) override;
+  Status delete_sender(const std::string& name) override;
   Status wait_for_tx_idle(uint32_t timeout_ms) override;
   BurstParams* create_tx_burst_params() override;
   uint64_t get_burst_tot_byte(BurstParams* burst) override;
@@ -407,6 +411,20 @@ class IbverbsEngine : public Engine {
   Status get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info) override;
 
  private:
+  struct RawUdpSender {
+    SenderId id = INVALID_SENDER_ID;
+    std::string name;
+    int port_id = -1;
+    uint16_t queue_id = 0;
+    uint32_t mtu = 0;
+    UDPIPV4Pkt header_template{};
+  };
+
+  mutable std::mutex sender_mutex_;
+  SenderId next_sender_id_ = 1;
+  std::unordered_map<SenderId, RawUdpSender> senders_;
+  std::unordered_map<std::string, SenderId> sender_names_;
+
   // ---- bring-up ----
   struct ibv_context* open_device_for_interface(const InterfaceConfig& intf);
   Status enable_hw_loopback(struct ibv_context* ctx, struct ibv_pd* pd);

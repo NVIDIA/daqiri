@@ -935,6 +935,28 @@ Status Engine::get_tx_packet_burst_checked(BurstParams* burst) {
   return get_tx_packet_burst(burst);
 }
 
+Status Engine::add_sender(const RawUdpSenderConfig& config, SenderId* sender_id) {
+  (void)config;
+  (void)sender_id;
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::get_sender_id(const std::string& name, SenderId* sender_id) {
+  (void)name;
+  (void)sender_id;
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::delete_sender(SenderId sender_id) {
+  (void)sender_id;
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::delete_sender(const std::string& name) {
+  (void)name;
+  return Status::NOT_SUPPORTED;
+}
+
 Status Engine::wait_for_tx_idle(uint32_t timeout_ms) {
   (void)timeout_ms;
   return Status::NOT_SUPPORTED;

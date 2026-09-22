@@ -49,6 +49,9 @@ static inline constexpr uint32_t DEFAULT_DYNAMIC_FLOW_CAPACITY = 0;
 
 using FlowId = uint32_t;
 using FlowOpId = uint64_t;
+using SenderId = uint64_t;
+
+static inline constexpr SenderId INVALID_SENDER_ID = 0;
 
 struct ReorderBurstInfo {
   uint64_t batch_id;
@@ -163,6 +166,25 @@ struct UDPIPV4Pkt {
   struct iphdr ip;
   struct udphdr udp;
 } __attribute__((packed));
+
+/**
+ * @brief Runtime raw-Ethernet IPv4/UDP sender definition.
+ *
+ * A sender binds a stable process-local ID and unique name to one configured
+ * ibverbs TX queue and its wire destination. The source MAC is resolved from
+ * the selected interface when the sender is added.
+ */
+struct RawUdpSenderConfig {
+  std::string name_;
+  std::string interface_;
+  uint16_t queue_ = 0;
+  std::string dst_mac_;
+  std::string src_ipv4_;
+  std::string dst_ipv4_;
+  uint16_t src_port_ = 0;
+  uint16_t dst_port_ = 0;
+  uint32_t mtu_ = 1514;  // Maximum L2 frame bytes, excluding Ethernet FCS.
+};
 
 enum class MemoryKind { HOST, HOST_PINNED, HUGE, DEVICE, INVALID };
 

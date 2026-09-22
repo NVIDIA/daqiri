@@ -779,6 +779,18 @@ void set_num_packets(BurstParams *burst, int64_t num);
  */
 Status send_tx_burst(BurstParams *burst);
 
+/** Add a named raw IPv4/UDP sender to the active ibverbs engine. */
+Status add_sender(const RawUdpSenderConfig& config, SenderId* sender_id);
+
+/** Resolve a runtime sender name to its process-local ID. */
+Status get_sender_id(const std::string& name, SenderId* sender_id);
+
+/** Delete a runtime sender by ID. */
+Status delete_sender(SenderId sender_id);
+
+/** Delete a runtime sender by name. */
+Status delete_sender(const std::string& name);
+
 /**
  * @brief Wait until all previously submitted TX packets have completed.
  *

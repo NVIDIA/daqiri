@@ -365,6 +365,42 @@ daqiri::free_all_packets_and_burst_rx(burst);
 
 ## Transmitting Packets
 
+### Runtime named senders (raw ibverbs)
+
+A runtime sender binds a unique name and numeric `SenderId` to one configured
+raw-ibverbs TX queue and an Ethernet/IPv4/UDP destination. Creating the sender
+validates the interface and queue, parses the addresses once, obtains the source
+MAC from the NIC, and caches a binary header template for subsequent sends.
+
+```cpp
+daqiri::RawUdpSenderConfig sender;
+sender.name_ = "camera-0";
+sender.interface_ = "nic0";       // Config name or PCI address.
+sender.queue_ = 0;
+sender.dst_mac_ = "02:00:00:00:00:02";
+sender.src_ipv4_ = "192.0.2.1";
+sender.dst_ipv4_ = "192.0.2.2";
+sender.src_port_ = 5000;
+sender.dst_port_ = 5001;
+sender.mtu_ = 1514;               // Maximum L2 frame bytes, excluding FCS.
+
+daqiri::SenderId sender_id = daqiri::INVALID_SENDER_ID;
+if (daqiri::add_sender(sender, &sender_id) != daqiri::Status::SUCCESS) {
+    // Invalid interface/queue/address, duplicate name, or unsupported engine.
+}
+
+// Resolve once outside a hot path when only the configured name is known.
+daqiri::SenderId resolved = daqiri::INVALID_SENDER_ID;
+daqiri::get_sender_id("camera-0", &resolved);
+
+daqiri::delete_sender(sender_id);  // The name overload is also available.
+```
+
+Sender IDs are process-local and remain valid until deletion or DAQIRI
+shutdown. The DPDK, socket, and RDMA engines return `NOT_SUPPORTED`. These APIs
+establish sender lifecycle and cached wire metadata; pointer-range submission by
+`SenderId` is the next layer of the large-buffer TX path.
+
 ### TX Step 1: Allocate a burst
 
 ```cpp

@@ -80,6 +80,25 @@ size_t next_power_of_two(size_t value) {
   }
   return rounded;
 }
+
+int hex_nibble(char value) {
+  if (value >= '0' && value <= '9') return value - '0';
+  if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+  if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+  return -1;
+}
+
+bool parse_mac_address(const std::string& value, uint8_t (&bytes)[ETH_ALEN]) {
+  if (value.size() != 17) return false;
+  for (size_t i = 0; i < ETH_ALEN; ++i) {
+    const size_t offset = i * 3;
+    const int high = hex_nibble(value[offset]);
+    const int low = hex_nibble(value[offset + 1]);
+    if (high < 0 || low < 0 || (i + 1 < ETH_ALEN && value[offset + 2] != ':')) return false;
+    bytes[i] = static_cast<uint8_t>((high << 4) | low);
+  }
+  return true;
+}
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -4395,6 +4414,12 @@ void IbverbsEngine::shutdown() {
     daqiri::ObjectPool::free(tx_meta_pool_);
     tx_meta_pool_ = nullptr;
   }
+  {
+    std::lock_guard<std::mutex> guard(sender_mutex_);
+    senders_.clear();
+    sender_names_.clear();
+    next_sender_id_ = 1;
+  }
   initialized_ = false;
   force_quit_.store(false, std::memory_order_relaxed);
   max_batch_ = 0;
@@ -4411,6 +4436,96 @@ IbvTxQueue* IbverbsEngine::find_tx_queue(int port, int q) {
     }
   }
   return nullptr;
+}
+
+Status IbverbsEngine::add_sender(const RawUdpSenderConfig& config, SenderId* sender_id) {
+  if (sender_id == nullptr) return Status::NULL_PTR;
+  *sender_id = INVALID_SENDER_ID;
+  if (!initialized_) return Status::NOT_READY;
+  if (config.name_.empty() || config.interface_.empty() || config.src_port_ == 0 ||
+      config.dst_port_ == 0 || config.mtu_ <= sizeof(UDPIPV4Pkt) ||
+      config.mtu_ > ETH_HLEN + UINT16_MAX) {
+    return Status::INVALID_PARAMETER;
+  }
+
+  const InterfaceConfig* interface = nullptr;
+  for (const auto& candidate : cfg_.ifs_) {
+    if (candidate.name_ == config.interface_ || candidate.address_ == config.interface_) {
+      interface = &candidate;
+      break;
+    }
+  }
+  if (interface == nullptr || find_tx_queue(interface->port_id_, config.queue_) == nullptr) {
+    return Status::INVALID_PARAMETER;
+  }
+
+  RawUdpSender sender;
+  sender.name = config.name_;
+  sender.port_id = interface->port_id_;
+  sender.queue_id = config.queue_;
+  sender.mtu = config.mtu_;
+  if (!parse_mac_address(config.dst_mac_, sender.header_template.eth.h_dest) ||
+      inet_pton(AF_INET, config.src_ipv4_.c_str(), &sender.header_template.ip.saddr) != 1 ||
+      inet_pton(AF_INET, config.dst_ipv4_.c_str(), &sender.header_template.ip.daddr) != 1 ||
+      get_mac_addr(sender.port_id, reinterpret_cast<char*>(sender.header_template.eth.h_source)) !=
+          Status::SUCCESS) {
+    return Status::INVALID_PARAMETER;
+  }
+
+  sender.header_template.eth.h_proto = htobe16(ETH_P_IP);
+  sender.header_template.ip.version = 4;
+  sender.header_template.ip.ihl = 5;
+  sender.header_template.ip.frag_off = htobe16(IP_DF);
+  sender.header_template.ip.ttl = 64;
+  sender.header_template.ip.protocol = IPPROTO_UDP;
+  sender.header_template.udp.source = htobe16(config.src_port_);
+  sender.header_template.udp.dest = htobe16(config.dst_port_);
+
+  std::lock_guard<std::mutex> guard(sender_mutex_);
+  if (sender_names_.find(config.name_) != sender_names_.end()) {
+    return Status::INVALID_PARAMETER;
+  }
+  while (next_sender_id_ != INVALID_SENDER_ID && senders_.count(next_sender_id_) != 0) {
+    ++next_sender_id_;
+  }
+  if (next_sender_id_ == INVALID_SENDER_ID) return Status::NO_SPACE_AVAILABLE;
+  sender.id = next_sender_id_++;
+  const SenderId id = sender.id;
+  senders_.emplace(id, std::move(sender));
+  sender_names_.emplace(config.name_, id);
+  *sender_id = id;
+  return Status::SUCCESS;
+}
+
+Status IbverbsEngine::get_sender_id(const std::string& name, SenderId* sender_id) {
+  if (sender_id == nullptr) return Status::NULL_PTR;
+  *sender_id = INVALID_SENDER_ID;
+  if (name.empty()) return Status::INVALID_PARAMETER;
+  std::lock_guard<std::mutex> guard(sender_mutex_);
+  const auto it = sender_names_.find(name);
+  if (it == sender_names_.end()) return Status::INVALID_PARAMETER;
+  *sender_id = it->second;
+  return Status::SUCCESS;
+}
+
+Status IbverbsEngine::delete_sender(SenderId sender_id) {
+  if (sender_id == INVALID_SENDER_ID) return Status::INVALID_PARAMETER;
+  std::lock_guard<std::mutex> guard(sender_mutex_);
+  const auto it = senders_.find(sender_id);
+  if (it == senders_.end()) return Status::INVALID_PARAMETER;
+  sender_names_.erase(it->second.name);
+  senders_.erase(it);
+  return Status::SUCCESS;
+}
+
+Status IbverbsEngine::delete_sender(const std::string& name) {
+  if (name.empty()) return Status::INVALID_PARAMETER;
+  std::lock_guard<std::mutex> guard(sender_mutex_);
+  const auto name_it = sender_names_.find(name);
+  if (name_it == sender_names_.end()) return Status::INVALID_PARAMETER;
+  senders_.erase(name_it->second);
+  sender_names_.erase(name_it);
+  return Status::SUCCESS;
 }
 
 Status IbverbsEngine::configure_tx_pacing(IbvTxQueue& q, uint64_t pacing_mbps) {
