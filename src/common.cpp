@@ -560,29 +560,29 @@ Status send_tx_burst(BurstParams* burst) {
   return g_daqiri_engine->send_tx_burst(burst);
 }
 
-Status send_tx_burst(SenderId sender_id, uint16_t queue_id, BurstParams* burst) {
+Status send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
-  return g_daqiri_engine->send_tx_burst(sender_id, queue_id, burst);
+  return g_daqiri_engine->send_tx_burst(endpoint_id, queue_id, burst);
 }
 
-Status add_sender(const RawUdpSenderConfig& config, SenderId* sender_id) {
+Status add_endpoint(const RawUdpEndpointConfig& config, EndpointId* endpoint_id) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
-  return g_daqiri_engine->add_sender(config, sender_id);
+  return g_daqiri_engine->add_endpoint(config, endpoint_id);
 }
 
-Status get_sender_id(const std::string& name, SenderId* sender_id) {
+Status get_endpoint_id(const std::string& name, EndpointId* endpoint_id) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
-  return g_daqiri_engine->get_sender_id(name, sender_id);
+  return g_daqiri_engine->get_endpoint_id(name, endpoint_id);
 }
 
-Status delete_sender(SenderId sender_id) {
+Status delete_endpoint(EndpointId endpoint_id) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
-  return g_daqiri_engine->delete_sender(sender_id);
+  return g_daqiri_engine->delete_endpoint(endpoint_id);
 }
 
-Status delete_sender(const std::string& name) {
+Status delete_endpoint(const std::string& name) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
-  return g_daqiri_engine->delete_sender(name);
+  return g_daqiri_engine->delete_endpoint(name);
 }
 
 Status wait_for_tx_idle(uint32_t timeout_ms) {

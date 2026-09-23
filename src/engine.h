@@ -109,11 +109,11 @@ class Engine {
   virtual void free_rx_metadata(BurstParams* burst) = 0;
   virtual void free_tx_metadata(BurstParams* burst) = 0;
   virtual Status send_tx_burst(BurstParams* burst) = 0;
-  virtual Status send_tx_burst(SenderId sender_id, uint16_t queue_id, BurstParams* burst);
-  virtual Status add_sender(const RawUdpSenderConfig& config, SenderId* sender_id);
-  virtual Status get_sender_id(const std::string& name, SenderId* sender_id);
-  virtual Status delete_sender(SenderId sender_id);
-  virtual Status delete_sender(const std::string& name);
+  virtual Status send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst);
+  virtual Status add_endpoint(const RawUdpEndpointConfig& config, EndpointId* endpoint_id);
+  virtual Status get_endpoint_id(const std::string& name, EndpointId* endpoint_id);
+  virtual Status delete_endpoint(EndpointId endpoint_id);
+  virtual Status delete_endpoint(const std::string& name);
   virtual Status wait_for_tx_idle(uint32_t timeout_ms);
   virtual Status get_mac_addr(int port, char* mac) = 0;
   virtual Status drop_all_traffic(int port);

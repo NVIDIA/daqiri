@@ -38,11 +38,11 @@ namespace {
 
 struct NamedEndpointTx {
   daqiri::bench::RawBenchTxConfig tx;
-  daqiri::SenderId sender_id = daqiri::INVALID_SENDER_ID;
+  daqiri::EndpointId endpoint_id = daqiri::INVALID_ENDPOINT_ID;
 };
 
 bool add_named_endpoint(const daqiri::bench::RawBenchTxConfig& tx, size_t index,
-                        daqiri::SenderId* sender_id) {
+                        daqiri::EndpointId* endpoint_id) {
   const auto src_ports = daqiri::bench::parse_udp_ports(tx.udp_src_port);
   const auto dst_ports = daqiri::bench::parse_udp_ports(tx.udp_dst_port);
   if (src_ports.size() != 1 || dst_ports.size() != 1) {
@@ -50,31 +50,31 @@ bool add_named_endpoint(const daqiri::bench::RawBenchTxConfig& tx, size_t index,
     return false;
   }
 
-  daqiri::RawUdpSenderConfig sender;
-  sender.name_ = "example-endpoint-" + std::to_string(index);
-  sender.interface_ = tx.interface_name;
-  sender.dst_mac_ = tx.eth_dst_addr;
-  sender.src_ipv4_ = tx.ip_src_addr;
-  sender.dst_ipv4_ = tx.ip_dst_addr;
-  sender.src_port_ = src_ports.front();
-  sender.dst_port_ = dst_ports.front();
-  // Named-sender MTU is the complete L2 frame size. The TX packet buffers
+  daqiri::RawUdpEndpointConfig endpoint;
+  endpoint.name_ = "example-endpoint-" + std::to_string(index);
+  endpoint.interface_ = tx.interface_name;
+  endpoint.dst_mac_ = tx.eth_dst_addr;
+  endpoint.src_ipv4_ = tx.ip_src_addr;
+  endpoint.dst_ipv4_ = tx.ip_dst_addr;
+  endpoint.src_port_ = src_ports.front();
+  endpoint.dst_port_ = dst_ports.front();
+  // Named-endpoint MTU is the complete L2 frame size. The TX packet buffers
   // below still contain only payload bytes.
-  sender.mtu_ = static_cast<uint32_t>(sizeof(daqiri::UDPIPV4Pkt)) + tx.payload_size;
+  endpoint.mtu_ = static_cast<uint32_t>(sizeof(daqiri::UDPIPV4Pkt)) + tx.payload_size;
 
-  const auto status = daqiri::add_sender(sender, sender_id);
+  const auto status = daqiri::add_endpoint(endpoint, endpoint_id);
   if (status != daqiri::Status::SUCCESS) {
-    std::cerr << "add_sender failed for " << sender.name_ << " (status " << static_cast<int>(status)
-              << ")\n";
+    std::cerr << "add_endpoint failed for " << endpoint.name_ << " (status "
+              << static_cast<int>(status) << ")\n";
     return false;
   }
 
-  daqiri::SenderId resolved = daqiri::INVALID_SENDER_ID;
-  if (daqiri::get_sender_id(sender.name_, &resolved) != daqiri::Status::SUCCESS ||
-      resolved != *sender_id) {
-    std::cerr << "get_sender_id failed for " << sender.name_ << "\n";
-    daqiri::delete_sender(*sender_id);
-    *sender_id = daqiri::INVALID_SENDER_ID;
+  daqiri::EndpointId resolved = daqiri::INVALID_ENDPOINT_ID;
+  if (daqiri::get_endpoint_id(endpoint.name_, &resolved) != daqiri::Status::SUCCESS ||
+      resolved != *endpoint_id) {
+    std::cerr << "get_endpoint_id failed for " << endpoint.name_ << "\n";
+    daqiri::delete_endpoint(*endpoint_id);
+    *endpoint_id = daqiri::INVALID_ENDPOINT_ID;
     return false;
   }
   return true;
@@ -136,7 +136,7 @@ void tx_worker(const NamedEndpointTx& endpoint, daqiri::bench::TokenBucketPacer&
           break;
         }
       }
-      // The inline sender header is not part of segment 0 or its packet length.
+      // The inline endpoint header is not part of segment 0 or its packet length.
       if (daqiri::set_packet_lengths(burst, packet, {static_cast<int>(cfg.payload_size)}) !=
           daqiri::Status::SUCCESS) {
         failed = true;
@@ -150,10 +150,10 @@ void tx_worker(const NamedEndpointTx& endpoint, daqiri::bench::TokenBucketPacer&
       break;
     }
 
-    // Queue selection is per submission; the named sender contains only the
+    // Queue selection is per submission; the named endpoint contains only the
     // interface and cached destination/header fields.
     const auto status =
-        daqiri::send_tx_burst(endpoint.sender_id, static_cast<uint16_t>(cfg.queue_id), burst);
+        daqiri::send_tx_burst(endpoint.endpoint_id, static_cast<uint16_t>(cfg.queue_id), burst);
     if (status == daqiri::Status::SUCCESS) {
       stats.packets += static_cast<uint64_t>(num_pkts);
       const uint64_t burst_bytes = static_cast<uint64_t>(num_pkts) * wire_packet_size;
@@ -216,8 +216,8 @@ int main(int argc, char** argv) {
   for (size_t index = 0; index < tx_configs.size(); ++index) {
     NamedEndpointTx endpoint;
     endpoint.tx = tx_configs[index];
-    if (!add_named_endpoint(endpoint.tx, index, &endpoint.sender_id)) {
-      for (const auto& added : named_endpoints) daqiri::delete_sender(added.sender_id);
+    if (!add_named_endpoint(endpoint.tx, index, &endpoint.endpoint_id)) {
+      for (const auto& added : named_endpoints) daqiri::delete_endpoint(added.endpoint_id);
       daqiri::shutdown();
       return 1;
     }
@@ -255,7 +255,7 @@ int main(int argc, char** argv) {
     if (thread.joinable()) thread.join();
   }
 
-  for (const auto& endpoint : named_endpoints) daqiri::delete_sender(endpoint.sender_id);
+  for (const auto& endpoint : named_endpoints) daqiri::delete_endpoint(endpoint.endpoint_id);
   daqiri::print_stats();
   daqiri::shutdown();
   return 0;

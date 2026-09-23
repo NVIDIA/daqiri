@@ -49,9 +49,9 @@ static inline constexpr uint32_t DEFAULT_DYNAMIC_FLOW_CAPACITY = 0;
 
 using FlowId = uint32_t;
 using FlowOpId = uint64_t;
-using SenderId = uint64_t;
+using EndpointId = uint64_t;
 
-static inline constexpr SenderId INVALID_SENDER_ID = 0;
+static inline constexpr EndpointId INVALID_ENDPOINT_ID = 0;
 
 struct ReorderBurstInfo {
   uint64_t batch_id;
@@ -168,14 +168,14 @@ struct UDPIPV4Pkt {
 } __attribute__((packed));
 
 /**
- * @brief Runtime raw-Ethernet IPv4/UDP sender definition.
+ * @brief Runtime raw-Ethernet IPv4/UDP endpoint definition.
  *
- * A sender binds a stable process-local ID and unique name to one configured
+ * An endpoint binds a stable process-local ID and unique name to one configured
  * ibverbs interface and its wire destination. The source MAC is resolved from
- * the selected interface when the sender is added; the TX queue is selected
+ * the selected interface when the endpoint is added; the TX queue is selected
  * for each submission.
  */
-struct RawUdpSenderConfig {
+struct RawUdpEndpointConfig {
   std::string name_;
   std::string interface_;
   std::string dst_mac_;

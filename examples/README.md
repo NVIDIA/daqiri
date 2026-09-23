@@ -11,7 +11,7 @@ Standalone benchmark applications for testing performance of DAQIRI with various
   isolation and no configured flows, dynamically steers UDP traffic to queues 0
   and 1 in sequence, then verifies five-tuple RSS across both queues and flow IDs
 - `daqiri_example_named_endpoints`: raw ibverbs TX/RX example that creates a named
-  Ethernet/IPv4/UDP sender at runtime and transmits payload-only GPU buffers
+  Ethernet/IPv4/UDP endpoint at runtime and transmits payload-only GPU buffers
 - `daqiri_bench_rdma`: RDMA benchmark logic (former `rdma_bench.h`)
 - `daqiri_bench_socket`: TCP/UDP socket benchmark logic
 - `daqiri_example_gds_write`: one-shot capture that demonstrates synchronous and
@@ -119,21 +119,21 @@ stress case, so dropped-packet counters can increase when the sender outruns CPU
 
 `daqiri_example_named_endpoints` is the runtime named-endpoints counterpart to the
 raw TX/RX benchmark. It is specific to the raw ibverbs engine. For each
-`bench_tx` entry it constructs a `RawUdpSenderConfig`, calls `add_sender()`,
-verifies name lookup with `get_sender_id()`, and selects the TX queue when it
-calls `send_tx_burst(sender_id, queue_id, burst)`.
+`bench_tx` entry it constructs a `RawUdpEndpointConfig`, calls `add_endpoint()`,
+verifies name lookup with `get_endpoint_id()`, and selects the TX queue when it
+calls `send_tx_burst(endpoint_id, queue_id, burst)`.
 
 The application writes only `payload_size` bytes into segment 0. It does not
 reserve, populate, or copy Ethernet/IP/UDP header bytes into the packet buffer.
-DAQIRI copies the cached 42-byte sender template into the inline mlx5 WQE,
+DAQIRI copies the cached 42-byte endpoint template into the inline mlx5 WQE,
 patches the IP and UDP lengths, enables NIC checksum offload, and adds one data
-segment that points at the GPU payload. Named senders currently require a
+segment that points at the GPU payload. Named endpoints currently require a
 single-segment TX queue and burst; this example deliberately does not configure
 HDS.
 
 Replace the PCI addresses, CPU cores, destination MAC, and IP addresses in
 `daqiri_example_named_endpoints_tx_rx.yaml`. The destination MAC must belong to the
-RX port on a cabled setup. The sender source MAC is obtained from `tx_port` by
+RX port on a cabled setup. The endpoint source MAC is obtained from `tx_port` by
 DAQIRI, so the example has no `eth_src_addr` field and does not use the
 `tx_eth_src` flow offload.
 

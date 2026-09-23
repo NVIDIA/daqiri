@@ -117,7 +117,7 @@ static constexpr uint32_t MPRQ_LEN_MASK = 0x0000ffffu;
 // it to the TX slot ring rather than the RX stride-release path.
 static constexpr uint32_t IBV_TX_BURST_FLAG = 1u << 27;
 static constexpr uint32_t IBV_TX_SCHEDULED_FLAG = 1u << 26;
-static constexpr uint32_t IBV_TX_SENDER_INLINE_FLAG = 1u << 25;
+static constexpr uint32_t IBV_TX_ENDPOINT_INLINE_FLAG = 1u << 25;
 
 static constexpr uint32_t EMPW_MAX_PACKETS = 32;
 static_assert(EMPW_MAX_PACKETS <= MLX5_EMPW_MAX_DSEG);
@@ -371,18 +371,18 @@ static inline uint32_t rdr_output_payload_len(const ReorderConfig& c, uint32_t i
 // paths recover the arrays from a BurstParams* via the fixed offsets below.
 // ---------------------------------------------------------------------------
 namespace {
-struct SenderInlineTxMetadata {
+struct EndpointInlineTxMetadata {
   UDPIPV4Pkt header;
 };
 
-static_assert(sizeof(SenderInlineTxMetadata) <= sizeof(BurstHeader::custom_burst_data));
+static_assert(sizeof(EndpointInlineTxMetadata) <= sizeof(BurstHeader::custom_burst_data));
 
-SenderInlineTxMetadata* sender_inline_metadata(BurstParams* burst) {
-  return reinterpret_cast<SenderInlineTxMetadata*>(burst->hdr.custom_burst_data);
+EndpointInlineTxMetadata* endpoint_inline_metadata(BurstParams* burst) {
+  return reinterpret_cast<EndpointInlineTxMetadata*>(burst->hdr.custom_burst_data);
 }
 
-const SenderInlineTxMetadata* sender_inline_metadata(const BurstParams* burst) {
-  return reinterpret_cast<const SenderInlineTxMetadata*>(burst->hdr.custom_burst_data);
+const EndpointInlineTxMetadata* endpoint_inline_metadata(const BurstParams* burst) {
+  return reinterpret_cast<const EndpointInlineTxMetadata*>(burst->hdr.custom_burst_data);
 }
 
 struct IbvBurstLayout {
@@ -2730,8 +2730,8 @@ Status IbverbsEngine::setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf,
 void IbverbsEngine::initialize() {
   DAQIRI_LOG_INFO("Initializing ibverbs (MPRQ) raw backend");
 
-  if (!initialize_sender_slots()) {
-    DAQIRI_LOG_CRITICAL("Failed to allocate runtime sender slots");
+  if (!initialize_endpoint_slots()) {
+    DAQIRI_LOG_CRITICAL("Failed to allocate runtime endpoint slots");
     return;
   }
 
@@ -4436,9 +4436,9 @@ void IbverbsEngine::shutdown() {
     tx_meta_pool_ = nullptr;
   }
   {
-    std::lock_guard<std::mutex> guard(sender_mutex_);
-    sender_names_.clear();
-    destroy_sender_slots();
+    std::lock_guard<std::mutex> guard(endpoint_mutex_);
+    endpoint_names_.clear();
+    destroy_endpoint_slots();
   }
   initialized_ = false;
   force_quit_.store(false, std::memory_order_relaxed);
@@ -4458,71 +4458,72 @@ IbvTxQueue* IbverbsEngine::find_tx_queue(int port, int q) {
   return nullptr;
 }
 
-bool IbverbsEngine::initialize_sender_slots() {
-  if (sender_slots_ != nullptr) return true;
+bool IbverbsEngine::initialize_endpoint_slots() {
+  if (endpoint_slots_ != nullptr) return true;
 
   void* storage = nullptr;
-  const size_t bytes = sizeof(SenderSlot) * kMaxSenderSlots;
-  if (posix_memalign(&storage, alignof(SenderSlot), bytes) != 0) return false;
+  const size_t bytes = sizeof(EndpointSlot) * kMaxEndpointSlots;
+  if (posix_memalign(&storage, alignof(EndpointSlot), bytes) != 0) return false;
   daqiri::detail::numa_bind(storage, bytes,
                             daqiri::detail::numa_node_for_cpu(cfg_.common_.master_core_));
 
-  sender_slots_ = static_cast<SenderSlot*>(storage);
-  for (uint32_t slot = 0; slot < kMaxSenderSlots; ++slot) {
-    new (&sender_slots_[slot]) SenderSlot();
+  endpoint_slots_ = static_cast<EndpointSlot*>(storage);
+  for (uint32_t slot = 0; slot < kMaxEndpointSlots; ++slot) {
+    new (&endpoint_slots_[slot]) EndpointSlot();
   }
 
-  free_sender_slots_.clear();
-  free_sender_slots_.reserve(kMaxSenderSlots);
-  sender_slot_names_.clear();
-  sender_slot_names_.resize(kMaxSenderSlots);
-  sender_names_.reserve(kMaxSenderSlots);
-  for (uint32_t slot = kMaxSenderSlots; slot > 0; --slot) {
-    free_sender_slots_.push_back(slot - 1);
+  free_endpoint_slots_.clear();
+  free_endpoint_slots_.reserve(kMaxEndpointSlots);
+  endpoint_slot_names_.clear();
+  endpoint_slot_names_.resize(kMaxEndpointSlots);
+  endpoint_names_.reserve(kMaxEndpointSlots);
+  for (uint32_t slot = kMaxEndpointSlots; slot > 0; --slot) {
+    free_endpoint_slots_.push_back(slot - 1);
   }
   return true;
 }
 
-void IbverbsEngine::destroy_sender_slots() {
-  if (sender_slots_ == nullptr) return;
+void IbverbsEngine::destroy_endpoint_slots() {
+  if (endpoint_slots_ == nullptr) return;
 
-  for (uint32_t slot = 0; slot < kMaxSenderSlots; ++slot) {
-    sender_slots_[slot].published_id.store(INVALID_SENDER_ID);
-    while (sender_slots_[slot].readers.load() != 0) {
+  for (uint32_t slot = 0; slot < kMaxEndpointSlots; ++slot) {
+    endpoint_slots_[slot].published_id.store(INVALID_ENDPOINT_ID);
+    while (endpoint_slots_[slot].readers.load() != 0) {
       daqiri::detail::ring_cpu_pause();
     }
-    sender_slots_[slot].~SenderSlot();
+    endpoint_slots_[slot].~EndpointSlot();
   }
-  std::free(sender_slots_);
-  sender_slots_ = nullptr;
-  free_sender_slots_.clear();
-  sender_slot_names_.clear();
+  std::free(endpoint_slots_);
+  endpoint_slots_ = nullptr;
+  free_endpoint_slots_.clear();
+  endpoint_slot_names_.clear();
 }
 
-bool IbverbsEngine::snapshot_sender(SenderId sender_id, SenderFastPath* sender) const {
-  if (sender == nullptr || sender_id == INVALID_SENDER_ID || sender_slots_ == nullptr) return false;
+bool IbverbsEngine::snapshot_endpoint(EndpointId endpoint_id, EndpointFastPath* endpoint) const {
+  if (endpoint == nullptr || endpoint_id == INVALID_ENDPOINT_ID || endpoint_slots_ == nullptr)
+    return false;
 
-  const uint32_t encoded_slot = static_cast<uint32_t>(sender_id);
-  if (encoded_slot == 0 || encoded_slot > kMaxSenderSlots) return false;
+  const uint32_t encoded_slot = static_cast<uint32_t>(endpoint_id);
+  if (encoded_slot == 0 || encoded_slot > kMaxEndpointSlots) return false;
   const uint32_t slot_index = encoded_slot - 1;
-  SenderSlot& slot = sender_slots_[slot_index];
-  if (slot.published_id.load() != sender_id) return false;
+  EndpointSlot& slot = endpoint_slots_[slot_index];
+  if (slot.published_id.load() != endpoint_id) return false;
 
   slot.readers.fetch_add(1);
-  if (slot.published_id.load() != sender_id) {
+  if (slot.published_id.load() != endpoint_id) {
     slot.readers.fetch_sub(1);
     return false;
   }
-  sender->header_template = slot.header_template;
-  sender->mtu = slot.mtu;
-  sender->port_id = slot.port_id;
+  endpoint->header_template = slot.header_template;
+  endpoint->mtu = slot.mtu;
+  endpoint->port_id = slot.port_id;
   slot.readers.fetch_sub(1);
   return true;
 }
 
-Status IbverbsEngine::add_sender(const RawUdpSenderConfig& config, SenderId* sender_id) {
-  if (sender_id == nullptr) return Status::NULL_PTR;
-  *sender_id = INVALID_SENDER_ID;
+Status IbverbsEngine::add_endpoint(const RawUdpEndpointConfig& config, EndpointId* endpoint_id) {
+  if (endpoint_id == nullptr) return Status::NULL_PTR;
+  *endpoint_id = INVALID_ENDPOINT_ID;
   if (!initialized_) return Status::NOT_READY;
   if (config.name_.empty() || config.interface_.empty() || config.src_port_ == 0 ||
       config.dst_port_ == 0 || config.mtu_ <= sizeof(UDPIPV4Pkt) ||
@@ -4539,95 +4540,96 @@ Status IbverbsEngine::add_sender(const RawUdpSenderConfig& config, SenderId* sen
   }
   if (interface == nullptr) return Status::INVALID_PARAMETER;
 
-  SenderFastPath sender;
-  sender.port_id = static_cast<uint16_t>(interface->port_id_);
-  sender.mtu = config.mtu_;
-  if (!parse_mac_address(config.dst_mac_, sender.header_template.eth.h_dest) ||
-      inet_pton(AF_INET, config.src_ipv4_.c_str(), &sender.header_template.ip.saddr) != 1 ||
-      inet_pton(AF_INET, config.dst_ipv4_.c_str(), &sender.header_template.ip.daddr) != 1 ||
-      get_mac_addr(sender.port_id, reinterpret_cast<char*>(sender.header_template.eth.h_source)) !=
+  EndpointFastPath endpoint;
+  endpoint.port_id = static_cast<uint16_t>(interface->port_id_);
+  endpoint.mtu = config.mtu_;
+  if (!parse_mac_address(config.dst_mac_, endpoint.header_template.eth.h_dest) ||
+      inet_pton(AF_INET, config.src_ipv4_.c_str(), &endpoint.header_template.ip.saddr) != 1 ||
+      inet_pton(AF_INET, config.dst_ipv4_.c_str(), &endpoint.header_template.ip.daddr) != 1 ||
+      get_mac_addr(endpoint.port_id,
+                   reinterpret_cast<char*>(endpoint.header_template.eth.h_source)) !=
           Status::SUCCESS) {
     return Status::INVALID_PARAMETER;
   }
 
-  sender.header_template.eth.h_proto = htobe16(ETH_P_IP);
-  sender.header_template.ip.version = 4;
-  sender.header_template.ip.ihl = 5;
-  sender.header_template.ip.frag_off = htobe16(IP_DF);
-  sender.header_template.ip.ttl = 64;
-  sender.header_template.ip.protocol = IPPROTO_UDP;
-  sender.header_template.ip.tot_len =
+  endpoint.header_template.eth.h_proto = htobe16(ETH_P_IP);
+  endpoint.header_template.ip.version = 4;
+  endpoint.header_template.ip.ihl = 5;
+  endpoint.header_template.ip.frag_off = htobe16(IP_DF);
+  endpoint.header_template.ip.ttl = 64;
+  endpoint.header_template.ip.protocol = IPPROTO_UDP;
+  endpoint.header_template.ip.tot_len =
       htobe16(static_cast<uint16_t>(config.mtu_ - sizeof(struct ethhdr)));
-  sender.header_template.ip.check = 0;
-  sender.header_template.udp.source = htobe16(config.src_port_);
-  sender.header_template.udp.dest = htobe16(config.dst_port_);
-  sender.header_template.udp.len =
+  endpoint.header_template.ip.check = 0;
+  endpoint.header_template.udp.source = htobe16(config.src_port_);
+  endpoint.header_template.udp.dest = htobe16(config.dst_port_);
+  endpoint.header_template.udp.len =
       htobe16(static_cast<uint16_t>(config.mtu_ - sizeof(struct ethhdr) - sizeof(struct iphdr)));
-  sender.header_template.udp.check = 0;
+  endpoint.header_template.udp.check = 0;
 
-  std::lock_guard<std::mutex> guard(sender_mutex_);
-  if (sender_names_.find(config.name_) != sender_names_.end()) {
+  std::lock_guard<std::mutex> guard(endpoint_mutex_);
+  if (endpoint_names_.find(config.name_) != endpoint_names_.end()) {
     return Status::INVALID_PARAMETER;
   }
-  if (free_sender_slots_.empty()) return Status::NO_SPACE_AVAILABLE;
+  if (free_endpoint_slots_.empty()) return Status::NO_SPACE_AVAILABLE;
 
-  const uint32_t slot_index = free_sender_slots_.back();
-  free_sender_slots_.pop_back();
-  SenderSlot& slot = sender_slots_[slot_index];
+  const uint32_t slot_index = free_endpoint_slots_.back();
+  free_endpoint_slots_.pop_back();
+  EndpointSlot& slot = endpoint_slots_[slot_index];
   if (++slot.generation == 0) ++slot.generation;
-  const SenderId id = (static_cast<SenderId>(slot.generation) << 32) | (slot_index + 1);
-  slot.header_template = sender.header_template;
-  slot.mtu = sender.mtu;
-  slot.port_id = sender.port_id;
-  sender_slot_names_[slot_index] = config.name_;
-  sender_names_.emplace(config.name_, id);
+  const EndpointId id = (static_cast<EndpointId>(slot.generation) << 32) | (slot_index + 1);
+  slot.header_template = endpoint.header_template;
+  slot.mtu = endpoint.mtu;
+  slot.port_id = endpoint.port_id;
+  endpoint_slot_names_[slot_index] = config.name_;
+  endpoint_names_.emplace(config.name_, id);
   slot.published_id.store(id);
-  *sender_id = id;
+  *endpoint_id = id;
   return Status::SUCCESS;
 }
 
-Status IbverbsEngine::get_sender_id(const std::string& name, SenderId* sender_id) {
-  if (sender_id == nullptr) return Status::NULL_PTR;
-  *sender_id = INVALID_SENDER_ID;
+Status IbverbsEngine::get_endpoint_id(const std::string& name, EndpointId* endpoint_id) {
+  if (endpoint_id == nullptr) return Status::NULL_PTR;
+  *endpoint_id = INVALID_ENDPOINT_ID;
   if (name.empty()) return Status::INVALID_PARAMETER;
-  std::lock_guard<std::mutex> guard(sender_mutex_);
-  const auto it = sender_names_.find(name);
-  if (it == sender_names_.end()) return Status::INVALID_PARAMETER;
-  *sender_id = it->second;
+  std::lock_guard<std::mutex> guard(endpoint_mutex_);
+  const auto it = endpoint_names_.find(name);
+  if (it == endpoint_names_.end()) return Status::INVALID_PARAMETER;
+  *endpoint_id = it->second;
   return Status::SUCCESS;
 }
 
-Status IbverbsEngine::delete_sender(SenderId sender_id) {
-  if (sender_id == INVALID_SENDER_ID) return Status::INVALID_PARAMETER;
-  std::lock_guard<std::mutex> guard(sender_mutex_);
-  return delete_sender_locked(sender_id);
+Status IbverbsEngine::delete_endpoint(EndpointId endpoint_id) {
+  if (endpoint_id == INVALID_ENDPOINT_ID) return Status::INVALID_PARAMETER;
+  std::lock_guard<std::mutex> guard(endpoint_mutex_);
+  return delete_endpoint_locked(endpoint_id);
 }
 
-Status IbverbsEngine::delete_sender(const std::string& name) {
+Status IbverbsEngine::delete_endpoint(const std::string& name) {
   if (name.empty()) return Status::INVALID_PARAMETER;
-  std::lock_guard<std::mutex> guard(sender_mutex_);
-  const auto name_it = sender_names_.find(name);
-  if (name_it == sender_names_.end()) return Status::INVALID_PARAMETER;
-  return delete_sender_locked(name_it->second);
+  std::lock_guard<std::mutex> guard(endpoint_mutex_);
+  const auto name_it = endpoint_names_.find(name);
+  if (name_it == endpoint_names_.end()) return Status::INVALID_PARAMETER;
+  return delete_endpoint_locked(name_it->second);
 }
 
-Status IbverbsEngine::delete_sender_locked(SenderId sender_id) {
-  const uint32_t encoded_slot = static_cast<uint32_t>(sender_id);
-  if (encoded_slot == 0 || encoded_slot > kMaxSenderSlots || sender_slots_ == nullptr) {
+Status IbverbsEngine::delete_endpoint_locked(EndpointId endpoint_id) {
+  const uint32_t encoded_slot = static_cast<uint32_t>(endpoint_id);
+  if (encoded_slot == 0 || encoded_slot > kMaxEndpointSlots || endpoint_slots_ == nullptr) {
     return Status::INVALID_PARAMETER;
   }
 
   const uint32_t slot_index = encoded_slot - 1;
-  SenderSlot& slot = sender_slots_[slot_index];
-  if (slot.published_id.load() != sender_id) return Status::INVALID_PARAMETER;
+  EndpointSlot& slot = endpoint_slots_[slot_index];
+  if (slot.published_id.load() != endpoint_id) return Status::INVALID_PARAMETER;
 
-  slot.published_id.store(INVALID_SENDER_ID);
+  slot.published_id.store(INVALID_ENDPOINT_ID);
   while (slot.readers.load() != 0) {
     daqiri::detail::ring_cpu_pause();
   }
-  sender_names_.erase(sender_slot_names_[slot_index]);
-  sender_slot_names_[slot_index].clear();
-  free_sender_slots_.push_back(slot_index);
+  endpoint_names_.erase(endpoint_slot_names_[slot_index]);
+  endpoint_slot_names_[slot_index].clear();
+  free_endpoint_slots_.push_back(slot_index);
   return Status::SUCCESS;
 }
 
@@ -4980,7 +4982,7 @@ bool IbverbsEngine::lock_direct_tx_queue(IbvTxQueue& q, std::unique_lock<std::mu
 static bool empw_compatible_burst(const BurstParams* burst) {
   // A one-packet enhanced MPW session is not valid; use an ordinary SEND WQE
   // for single-packet bursts (including queue primers).
-  if ((burst->hdr.hdr.burst_flags & IBV_TX_SENDER_INLINE_FLAG) != 0 ||
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_ENDPOINT_INLINE_FLAG) != 0 ||
       burst->hdr.hdr.num_segs != 1 || burst->hdr.hdr.num_pkts < 2) {
     return false;
   }
@@ -5005,7 +5007,7 @@ static bool empw_compatible_burst(const BurstParams* burst) {
 uint64_t IbverbsEngine::tx_burst_wqebbs(const IbvTxQueue& q, const BurstParams* burst) const {
   const uint64_t packets = burst->hdr.hdr.num_pkts;
   const bool scheduled = (burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) != 0;
-  if ((burst->hdr.hdr.burst_flags & IBV_TX_SENDER_INLINE_FLAG) != 0) {
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_ENDPOINT_INLINE_FLAG) != 0) {
     uint64_t wqebbs = packets * 2;
     if (scheduled) {
       const uint64_t* txtime = burst_ts_arr(burst);
@@ -5386,10 +5388,10 @@ void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst,
   q.bf_offset ^= q.dv_qp.bf.size;
 }
 
-// Build sender-aware WQEs with an inline Ethernet/IPv4/UDP header and one
+// Build endpoint-aware WQEs with an inline Ethernet/IPv4/UDP header and one
 // gathered payload data segment. The 42-byte cached template is copied into the
 // SQ, not into the host/GPU payload buffer. A 96-byte WQE occupies two WQEBBs.
-void IbverbsEngine::post_sender_inline_burst(IbvTxQueue& q, BurstParams* burst) {
+void IbverbsEngine::post_endpoint_inline_burst(IbvTxQueue& q, BurstParams* burst) {
   constexpr uint32_t WQEBBS_PER_SEND = 2;
   constexpr uint8_t DS_PER_SEND = 6;  // ctrl(1) + inline eth/header(4) + payload dseg(1)
   constexpr size_t PAYLOAD_DSEG_OFFSET = 80;
@@ -5402,7 +5404,7 @@ void IbverbsEngine::post_sender_inline_burst(IbvTxQueue& q, BurstParams* burst) 
   const int packets = static_cast<int>(burst->hdr.hdr.num_pkts);
   const bool scheduled = (burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) != 0;
   const uint64_t* txtime = scheduled ? burst_ts_arr(burst) : nullptr;
-  const SenderInlineTxMetadata* metadata = sender_inline_metadata(burst);
+  const EndpointInlineTxMetadata* metadata = endpoint_inline_metadata(burst);
   uint8_t* const sq_buf = static_cast<uint8_t*>(q.dv_qp.sq.buf);
   const uint32_t wqe_cnt = q.dv_qp.sq.wqe_cnt;
   const uint32_t stride = q.dv_qp.sq.stride;
@@ -5478,8 +5480,8 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
   if (n <= 0) {
     return;
   }
-  if ((burst->hdr.hdr.burst_flags & IBV_TX_SENDER_INLINE_FLAG) != 0) {
-    post_sender_inline_burst(q, burst);
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_ENDPOINT_INLINE_FLAG) != 0) {
+    post_endpoint_inline_burst(q, burst);
     return;
   }
   const bool scheduled = (burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) != 0;
@@ -5580,33 +5582,34 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
 // Submit a filled TX burst. Indirect queues hand it to the pinned worker so WQE
 // posting overlaps application fill; direct queues post one packet inline on
 // the owner thread and return only after ringing the doorbell.
-Status IbverbsEngine::send_tx_burst(SenderId sender_id, uint16_t queue_id, BurstParams* burst) {
+Status IbverbsEngine::send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst) {
   if (burst == nullptr) return Status::NULL_PTR;
 
-  SenderFastPath sender;
-  if (!snapshot_sender(sender_id, &sender)) return Status::INVALID_PARAMETER;
+  EndpointFastPath endpoint;
+  if (!snapshot_endpoint(endpoint_id, &endpoint)) return Status::INVALID_PARAMETER;
 
-  IbvTxQueue* q = find_tx_queue(sender.port_id, queue_id);
-  if (q == nullptr || burst->hdr.hdr.port_id != sender.port_id || burst->hdr.hdr.q_id != queue_id ||
-      burst->hdr.hdr.num_segs != 1 || q->num_segs != 1 || q->regions.size() != 1) {
+  IbvTxQueue* q = find_tx_queue(endpoint.port_id, queue_id);
+  if (q == nullptr || burst->hdr.hdr.port_id != endpoint.port_id ||
+      burst->hdr.hdr.q_id != queue_id || burst->hdr.hdr.num_segs != 1 || q->num_segs != 1 ||
+      q->regions.size() != 1) {
     return Status::INVALID_PARAMETER;
   }
 
   const size_t packets = burst->hdr.hdr.num_pkts;
   for (size_t packet = 0; packet < packets; ++packet) {
     const uint32_t payload_length = burst->pkt_lens[0][packet];
-    if (burst->pkts[0][packet] == nullptr || payload_length > sender.mtu - sizeof(UDPIPV4Pkt) ||
+    if (burst->pkts[0][packet] == nullptr || payload_length > endpoint.mtu - sizeof(UDPIPV4Pkt) ||
         payload_length > UINT16_MAX - sizeof(struct iphdr) - sizeof(struct udphdr)) {
       return Status::INVALID_PARAMETER;
     }
   }
 
-  SenderInlineTxMetadata* metadata = sender_inline_metadata(burst);
-  metadata->header = sender.header_template;
-  burst->hdr.hdr.burst_flags |= IBV_TX_SENDER_INLINE_FLAG;
+  EndpointInlineTxMetadata* metadata = endpoint_inline_metadata(burst);
+  metadata->header = endpoint.header_template;
+  burst->hdr.hdr.burst_flags |= IBV_TX_ENDPOINT_INLINE_FLAG;
   const Status status = send_tx_burst(burst);
   if (status != Status::SUCCESS && status != Status::NO_SPACE_AVAILABLE) {
-    burst->hdr.hdr.burst_flags &= ~IBV_TX_SENDER_INLINE_FLAG;
+    burst->hdr.hdr.burst_flags &= ~IBV_TX_ENDPOINT_INLINE_FLAG;
   }
   return status;
 }

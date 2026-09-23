@@ -365,45 +365,45 @@ daqiri::free_all_packets_and_burst_rx(burst);
 
 ## Transmitting Packets
 
-### Runtime named senders (raw ibverbs)
+### Runtime named endpoints (raw ibverbs)
 
-A runtime sender binds a unique name and numeric `SenderId` to one configured
-raw-ibverbs interface and an Ethernet/IPv4/UDP destination. Creating the sender
+A runtime endpoint binds a unique name and numeric `EndpointId` to one configured
+raw-ibverbs interface and an Ethernet/IPv4/UDP destination. Creating the endpoint
 validates the interface and destination fields, parses the addresses once,
 obtains the source MAC from the NIC, and caches a binary header template for
 subsequent sends.
 
 ```cpp
-daqiri::RawUdpSenderConfig sender;
-sender.name_ = "camera-0";
-sender.interface_ = "nic0";       // Config name or PCI address.
-sender.dst_mac_ = "02:00:00:00:00:02";
-sender.src_ipv4_ = "192.0.2.1";
-sender.dst_ipv4_ = "192.0.2.2";
-sender.src_port_ = 5000;
-sender.dst_port_ = 5001;
-sender.mtu_ = 1514;               // Maximum L2 frame bytes, excluding FCS.
+daqiri::RawUdpEndpointConfig endpoint;
+endpoint.name_ = "camera-0";
+endpoint.interface_ = "nic0";       // Config name or PCI address.
+endpoint.dst_mac_ = "02:00:00:00:00:02";
+endpoint.src_ipv4_ = "192.0.2.1";
+endpoint.dst_ipv4_ = "192.0.2.2";
+endpoint.src_port_ = 5000;
+endpoint.dst_port_ = 5001;
+endpoint.mtu_ = 1514;               // Maximum L2 frame bytes, excluding FCS.
 
-daqiri::SenderId sender_id = daqiri::INVALID_SENDER_ID;
-if (daqiri::add_sender(sender, &sender_id) != daqiri::Status::SUCCESS) {
-    // Invalid interface/queue/address, duplicate name, or unsupported engine.
+daqiri::EndpointId endpoint_id = daqiri::INVALID_ENDPOINT_ID;
+if (daqiri::add_endpoint(endpoint, &endpoint_id) != daqiri::Status::SUCCESS) {
+    // Invalid interface/address, duplicate name, or unsupported engine.
 }
 
 // Resolve once outside a hot path when only the configured name is known.
-daqiri::SenderId resolved = daqiri::INVALID_SENDER_ID;
-daqiri::get_sender_id("camera-0", &resolved);
+daqiri::EndpointId resolved = daqiri::INVALID_ENDPOINT_ID;
+daqiri::get_endpoint_id("camera-0", &resolved);
 
-daqiri::delete_sender(sender_id);  // The name overload is also available.
+daqiri::delete_endpoint(endpoint_id);  // The name overload is also available.
 ```
 
-Sender IDs are process-local and remain valid until deletion or DAQIRI
-shutdown. A sender does not bind to a TX queue; the queue is selected for each
+Endpoint IDs are process-local and remain valid until deletion or DAQIRI
+shutdown. An endpoint does not bind to a TX queue; the queue is selected for each
 submission. The DPDK, socket, and RDMA engines return `NOT_SUPPORTED`. These
-APIs establish sender lifecycle and cached wire metadata; pointer-range
-submission by `SenderId` is the next layer of the large-buffer TX path.
+APIs establish endpoint lifecycle and cached wire metadata; pointer-range
+submission by `EndpointId` is the next layer of the large-buffer TX path.
 
-The raw-ibverbs engine supports up to 4096 active runtime senders. Sender names
-are used only by the lifecycle APIs. Submission by `SenderId` directly indexes
+The raw-ibverbs engine supports up to 4096 active runtime endpoints. Endpoint names
+are used only by the lifecycle APIs. Submission by `EndpointId` directly indexes
 a preallocated, cache-line-aligned, NUMA-local slot containing only the cached
 header, MTU, and interface ID; it does not lock or search the name map. Deleted
 slots may be reused, but generation-tagged IDs keep stale handles invalid.
@@ -464,16 +464,16 @@ Or construct raw packets by writing directly into the packet buffer returned by
 daqiri::send_tx_burst(burst);
 ```
 
-When using a runtime sender, select the queue at submission instead of binding
-it to the sender:
+When using a runtime endpoint, select the queue at submission instead of binding
+it to the endpoint:
 
 ```cpp
-daqiri::send_tx_burst(sender_id, queue_id, burst);
+daqiri::send_tx_burst(endpoint_id, queue_id, burst);
 ```
 
 The burst must have been acquired from the same queue, so its existing
-`port_id` and `q_id` must identify `queue_id` on the sender's interface. This
-checked overload copies the sender's cached 42-byte Ethernet/IPv4/UDP template
+`port_id` and `q_id` must identify `queue_id` on the endpoint's interface. This
+checked overload copies the endpoint's cached 42-byte Ethernet/IPv4/UDP template
 directly into each mlx5 SEND WQE. It patches the IPv4 and UDP lengths there and
 leaves both checksum fields zero for the existing mlx5 hardware-checksum flags.
 One registered data segment gathers the UDP payload from segment 0. Packet
@@ -481,17 +481,17 @@ buffers therefore contain payload only; applications do not reserve or
 populate header bytes.
 
 !!! warning "Single-segment limitation"
-    Named senders currently support only a one-segment raw-ibverbs TX queue and
+    Named endpoints currently support only a one-segment raw-ibverbs TX queue and
     a one-segment burst. Segment 0 is the payload. HDS/two-region queues and all
     other multi-segment bursts are rejected with `INVALID_PARAMETER`; this path
     does not support header-data gather.
 
-Set segment 0's payload length before submission. Each sender-aware SEND WQE
+Set segment 0's payload length before submission. Each endpoint-aware SEND WQE
 occupies two 64-byte WQEBBs; enhanced MPW is bypassed for these bursts.
 
 The overload returns `INVALID_PARAMETER` without consuming the burst when the
-sender, interface, queue, header reservation, or frame length is invalid. A
-sender can be used on different queues for different bursts. Requests sent on
+endpoint, interface, queue, header reservation, or frame length is invalid. A
+endpoint can be used on different queues for different bursts. Requests sent on
 different queues have no cross-queue ordering guarantee.
 
 In the default indirect mode, the burst is enqueued to the TX worker thread, which sends it to
@@ -505,7 +505,7 @@ temporarily exhausted. In direct mode, `SUCCESS` means the packet has been submi
 the packet buffer is reclaimed by a later caller-driven operation. On
 `NO_SPACE_AVAILABLE` it has already freed the packet reservation and metadata. In both
 cases the application must **not** free or otherwise access the burst afterwards.
-`NO_SPACE_AVAILABLE` is the only failure a correctly-configured sender encounters
+`NO_SPACE_AVAILABLE` is the only failure a correctly-configured endpoint encounters
 at submission time. A second direct acquisition before the pending packet is sent or freed
 returns `NOT_READY`; zero- or multi-packet direct requests return `INVALID_PARAMETER`.
 
@@ -794,10 +794,10 @@ workflow sections above show the common call order and ownership rules.
 | `get_tx_packet_burst(burst)` | Populate a TX burst with packet buffers. |
 | `set_connection_id(burst, conn_id)` | Attach a transport connection ID to a TX burst (socket/RDMA). |
 | `send_tx_burst(burst)` | Enqueue a populated TX burst. |
-| `send_tx_burst(sender_id, queue_id, burst)` | Inline cached raw-UDP headers, gather payload pointers, and enqueue an ibverbs burst on the selected queue. |
-| `add_sender(config, &sender_id)` | Add a named raw-UDP sender to the active ibverbs engine. |
-| `get_sender_id(name, &sender_id)` | Resolve a sender name outside the TX hot path. |
-| `delete_sender(sender_id)` | Delete a runtime sender. A name overload is also available. |
+| `send_tx_burst(endpoint_id, queue_id, burst)` | Inline cached raw-UDP headers, gather payload pointers, and enqueue an ibverbs burst on the selected queue. |
+| `add_endpoint(config, &endpoint_id)` | Add a named raw-UDP endpoint to the active ibverbs engine. |
+| `get_endpoint_id(name, &endpoint_id)` | Resolve an endpoint name outside the TX hot path. |
+| `delete_endpoint(endpoint_id)` | Delete a runtime endpoint. A name overload is also available. |
 | `set_packet_lengths(burst, idx, lens)` | Set segment lengths for one packet. |
 | `set_all_packet_lengths(burst, lens)` | Set segment lengths for every packet in a burst. |
 | `set_packet_tx_time(burst, idx, time)` | Set scheduled transmit time for one packet. |

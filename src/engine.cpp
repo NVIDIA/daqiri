@@ -935,31 +935,31 @@ Status Engine::get_tx_packet_burst_checked(BurstParams* burst) {
   return get_tx_packet_burst(burst);
 }
 
-Status Engine::send_tx_burst(SenderId sender_id, uint16_t queue_id, BurstParams* burst) {
-  (void)sender_id;
+Status Engine::send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst) {
+  (void)endpoint_id;
   (void)queue_id;
   (void)burst;
   return Status::NOT_SUPPORTED;
 }
 
-Status Engine::add_sender(const RawUdpSenderConfig& config, SenderId* sender_id) {
+Status Engine::add_endpoint(const RawUdpEndpointConfig& config, EndpointId* endpoint_id) {
   (void)config;
-  (void)sender_id;
+  (void)endpoint_id;
   return Status::NOT_SUPPORTED;
 }
 
-Status Engine::get_sender_id(const std::string& name, SenderId* sender_id) {
+Status Engine::get_endpoint_id(const std::string& name, EndpointId* endpoint_id) {
   (void)name;
-  (void)sender_id;
+  (void)endpoint_id;
   return Status::NOT_SUPPORTED;
 }
 
-Status Engine::delete_sender(SenderId sender_id) {
-  (void)sender_id;
+Status Engine::delete_endpoint(EndpointId endpoint_id) {
+  (void)endpoint_id;
   return Status::NOT_SUPPORTED;
 }
 
-Status Engine::delete_sender(const std::string& name) {
+Status Engine::delete_endpoint(const std::string& name) {
   (void)name;
   return Status::NOT_SUPPORTED;
 }

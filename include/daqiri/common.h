@@ -780,31 +780,31 @@ void set_num_packets(BurstParams *burst, int64_t num);
 Status send_tx_burst(BurstParams *burst);
 
 /**
- * @brief Send a TX burst through a named sender on an explicitly selected queue.
+ * @brief Send a TX burst through a named endpoint on an explicitly selected queue.
  *
- * The burst must have been allocated from @p queue_id on the sender's
- * interface. Named senders currently require a one-segment TX queue and burst;
+ * The burst must have been allocated from @p queue_id on the endpoint's
+ * interface. Named endpoints currently require a one-segment TX queue and burst;
  * segment 0 is treated as the UDP payload. HDS and other multi-segment bursts
  * are rejected with INVALID_PARAMETER; header-data gather is not supported.
  * DAQIRI
- * copies the cached sender template into an inline mlx5 SEND WQE, patches its
+ * copies the cached endpoint template into an inline mlx5 SEND WQE, patches its
  * IPv4 and UDP lengths, and gathers the payload through one registered data
  * segment. Packet buffers contain payload only; checksum fields remain zero
  * for NIC offload. Validation failures do not consume the burst.
  */
-Status send_tx_burst(SenderId sender_id, uint16_t queue_id, BurstParams* burst);
+Status send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst);
 
-/** Add a named raw IPv4/UDP sender to the active ibverbs engine. */
-Status add_sender(const RawUdpSenderConfig& config, SenderId* sender_id);
+/** Add a named raw IPv4/UDP endpoint to the active ibverbs engine. */
+Status add_endpoint(const RawUdpEndpointConfig& config, EndpointId* endpoint_id);
 
-/** Resolve a runtime sender name to its process-local ID. */
-Status get_sender_id(const std::string& name, SenderId* sender_id);
+/** Resolve a runtime endpoint name to its process-local ID. */
+Status get_endpoint_id(const std::string& name, EndpointId* endpoint_id);
 
-/** Delete a runtime sender by ID. */
-Status delete_sender(SenderId sender_id);
+/** Delete a runtime endpoint by ID. */
+Status delete_endpoint(EndpointId endpoint_id);
 
-/** Delete a runtime sender by name. */
-Status delete_sender(const std::string& name);
+/** Delete a runtime endpoint by name. */
+Status delete_endpoint(const std::string& name);
 
 /**
  * @brief Wait until all previously submitted TX packets have completed.
