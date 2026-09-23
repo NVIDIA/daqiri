@@ -402,6 +402,12 @@ submission. The DPDK, socket, and RDMA engines return `NOT_SUPPORTED`. These
 APIs establish sender lifecycle and cached wire metadata; pointer-range
 submission by `SenderId` is the next layer of the large-buffer TX path.
 
+The raw-ibverbs engine supports up to 4096 active runtime senders. Sender names
+are used only by the lifecycle APIs. Submission by `SenderId` directly indexes
+a preallocated, cache-line-aligned, NUMA-local slot containing only the cached
+header, MTU, and interface ID; it does not lock or search the name map. Deleted
+slots may be reused, but generation-tagged IDs keep stale handles invalid.
+
 ### TX Step 1: Allocate a burst
 
 ```cpp

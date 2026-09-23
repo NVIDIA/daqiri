@@ -412,18 +412,34 @@ class IbverbsEngine : public Engine {
   Status get_reorder_burst_info(BurstParams* burst, ReorderBurstInfo* info) override;
 
  private:
-  struct RawUdpSender {
-    SenderId id = INVALID_SENDER_ID;
-    std::string name;
-    int port_id = -1;
-    uint32_t mtu = 0;
+  static constexpr uint32_t kMaxSenderSlots = 4096;
+
+  struct SenderFastPath {
     UDPIPV4Pkt header_template{};
+    uint32_t mtu = 0;
+    uint16_t port_id = 0;
   };
 
+  struct alignas(64) SenderSlot {
+    std::atomic<SenderId> published_id{INVALID_SENDER_ID};
+    std::atomic<uint32_t> readers{0};
+    uint32_t generation = 0;
+    uint32_t mtu = 0;
+    uint16_t port_id = 0;
+    UDPIPV4Pkt header_template{};
+  };
+  static_assert(sizeof(SenderSlot) == 64);
+
   mutable std::mutex sender_mutex_;
-  SenderId next_sender_id_ = 1;
-  std::unordered_map<SenderId, RawUdpSender> senders_;
+  SenderSlot* sender_slots_ = nullptr;
+  std::vector<uint32_t> free_sender_slots_;
+  std::vector<std::string> sender_slot_names_;
   std::unordered_map<std::string, SenderId> sender_names_;
+
+  bool initialize_sender_slots();
+  void destroy_sender_slots();
+  bool snapshot_sender(SenderId sender_id, SenderFastPath* sender) const;
+  Status delete_sender_locked(SenderId sender_id);
 
   // ---- bring-up ----
   struct ibv_context* open_device_for_interface(const InterfaceConfig& intf);

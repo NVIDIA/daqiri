@@ -171,8 +171,9 @@ struct UDPIPV4Pkt {
  * @brief Runtime raw-Ethernet IPv4/UDP sender definition.
  *
  * A sender binds a stable process-local ID and unique name to one configured
- * ibverbs TX queue and its wire destination. The source MAC is resolved from
- * the selected interface when the sender is added.
+ * ibverbs interface and its wire destination. The source MAC is resolved from
+ * the selected interface when the sender is added; the TX queue is selected
+ * for each submission.
  */
 struct RawUdpSenderConfig {
   std::string name_;

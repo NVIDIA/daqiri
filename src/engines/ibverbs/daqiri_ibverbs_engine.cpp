@@ -35,6 +35,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <new>
 #include <set>
 #include <string>
 #include <vector>
@@ -2729,6 +2730,11 @@ Status IbverbsEngine::setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf,
 void IbverbsEngine::initialize() {
   DAQIRI_LOG_INFO("Initializing ibverbs (MPRQ) raw backend");
 
+  if (!initialize_sender_slots()) {
+    DAQIRI_LOG_CRITICAL("Failed to allocate runtime sender slots");
+    return;
+  }
+
   // Assign port ids and compute MR sizing (one large contiguous region per MR).
   int if_num = 0;
   for (auto& intf : cfg_.ifs_) {
@@ -4431,9 +4437,8 @@ void IbverbsEngine::shutdown() {
   }
   {
     std::lock_guard<std::mutex> guard(sender_mutex_);
-    senders_.clear();
     sender_names_.clear();
-    next_sender_id_ = 1;
+    destroy_sender_slots();
   }
   initialized_ = false;
   force_quit_.store(false, std::memory_order_relaxed);
@@ -4451,6 +4456,68 @@ IbvTxQueue* IbverbsEngine::find_tx_queue(int port, int q) {
     }
   }
   return nullptr;
+}
+
+bool IbverbsEngine::initialize_sender_slots() {
+  if (sender_slots_ != nullptr) return true;
+
+  void* storage = nullptr;
+  const size_t bytes = sizeof(SenderSlot) * kMaxSenderSlots;
+  if (posix_memalign(&storage, alignof(SenderSlot), bytes) != 0) return false;
+  daqiri::detail::numa_bind(storage, bytes,
+                            daqiri::detail::numa_node_for_cpu(cfg_.common_.master_core_));
+
+  sender_slots_ = static_cast<SenderSlot*>(storage);
+  for (uint32_t slot = 0; slot < kMaxSenderSlots; ++slot) {
+    new (&sender_slots_[slot]) SenderSlot();
+  }
+
+  free_sender_slots_.clear();
+  free_sender_slots_.reserve(kMaxSenderSlots);
+  sender_slot_names_.clear();
+  sender_slot_names_.resize(kMaxSenderSlots);
+  sender_names_.reserve(kMaxSenderSlots);
+  for (uint32_t slot = kMaxSenderSlots; slot > 0; --slot) {
+    free_sender_slots_.push_back(slot - 1);
+  }
+  return true;
+}
+
+void IbverbsEngine::destroy_sender_slots() {
+  if (sender_slots_ == nullptr) return;
+
+  for (uint32_t slot = 0; slot < kMaxSenderSlots; ++slot) {
+    sender_slots_[slot].published_id.store(INVALID_SENDER_ID);
+    while (sender_slots_[slot].readers.load() != 0) {
+      daqiri::detail::ring_cpu_pause();
+    }
+    sender_slots_[slot].~SenderSlot();
+  }
+  std::free(sender_slots_);
+  sender_slots_ = nullptr;
+  free_sender_slots_.clear();
+  sender_slot_names_.clear();
+}
+
+bool IbverbsEngine::snapshot_sender(SenderId sender_id, SenderFastPath* sender) const {
+  if (sender == nullptr || sender_id == INVALID_SENDER_ID || sender_slots_ == nullptr) return false;
+
+  const uint32_t encoded_slot = static_cast<uint32_t>(sender_id);
+  if (encoded_slot == 0 || encoded_slot > kMaxSenderSlots) return false;
+  const uint32_t slot_index = encoded_slot - 1;
+  SenderSlot& slot = sender_slots_[slot_index];
+  if (slot.published_id.load() != sender_id) return false;
+
+  slot.readers.fetch_add(1);
+  if (slot.published_id.load() != sender_id) {
+    slot.readers.fetch_sub(1);
+    return false;
+  }
+  sender->header_template = slot.header_template;
+  sender->mtu = slot.mtu;
+  sender->port_id = slot.port_id;
+  slot.readers.fetch_sub(1);
+  return true;
 }
 
 Status IbverbsEngine::add_sender(const RawUdpSenderConfig& config, SenderId* sender_id) {
@@ -4472,9 +4539,8 @@ Status IbverbsEngine::add_sender(const RawUdpSenderConfig& config, SenderId* sen
   }
   if (interface == nullptr) return Status::INVALID_PARAMETER;
 
-  RawUdpSender sender;
-  sender.name = config.name_;
-  sender.port_id = interface->port_id_;
+  SenderFastPath sender;
+  sender.port_id = static_cast<uint16_t>(interface->port_id_);
   sender.mtu = config.mtu_;
   if (!parse_mac_address(config.dst_mac_, sender.header_template.eth.h_dest) ||
       inet_pton(AF_INET, config.src_ipv4_.c_str(), &sender.header_template.ip.saddr) != 1 ||
@@ -4503,14 +4569,19 @@ Status IbverbsEngine::add_sender(const RawUdpSenderConfig& config, SenderId* sen
   if (sender_names_.find(config.name_) != sender_names_.end()) {
     return Status::INVALID_PARAMETER;
   }
-  while (next_sender_id_ != INVALID_SENDER_ID && senders_.count(next_sender_id_) != 0) {
-    ++next_sender_id_;
-  }
-  if (next_sender_id_ == INVALID_SENDER_ID) return Status::NO_SPACE_AVAILABLE;
-  sender.id = next_sender_id_++;
-  const SenderId id = sender.id;
-  senders_.emplace(id, std::move(sender));
+  if (free_sender_slots_.empty()) return Status::NO_SPACE_AVAILABLE;
+
+  const uint32_t slot_index = free_sender_slots_.back();
+  free_sender_slots_.pop_back();
+  SenderSlot& slot = sender_slots_[slot_index];
+  if (++slot.generation == 0) ++slot.generation;
+  const SenderId id = (static_cast<SenderId>(slot.generation) << 32) | (slot_index + 1);
+  slot.header_template = sender.header_template;
+  slot.mtu = sender.mtu;
+  slot.port_id = sender.port_id;
+  sender_slot_names_[slot_index] = config.name_;
   sender_names_.emplace(config.name_, id);
+  slot.published_id.store(id);
   *sender_id = id;
   return Status::SUCCESS;
 }
@@ -4529,11 +4600,7 @@ Status IbverbsEngine::get_sender_id(const std::string& name, SenderId* sender_id
 Status IbverbsEngine::delete_sender(SenderId sender_id) {
   if (sender_id == INVALID_SENDER_ID) return Status::INVALID_PARAMETER;
   std::lock_guard<std::mutex> guard(sender_mutex_);
-  const auto it = senders_.find(sender_id);
-  if (it == senders_.end()) return Status::INVALID_PARAMETER;
-  sender_names_.erase(it->second.name);
-  senders_.erase(it);
-  return Status::SUCCESS;
+  return delete_sender_locked(sender_id);
 }
 
 Status IbverbsEngine::delete_sender(const std::string& name) {
@@ -4541,8 +4608,26 @@ Status IbverbsEngine::delete_sender(const std::string& name) {
   std::lock_guard<std::mutex> guard(sender_mutex_);
   const auto name_it = sender_names_.find(name);
   if (name_it == sender_names_.end()) return Status::INVALID_PARAMETER;
-  senders_.erase(name_it->second);
-  sender_names_.erase(name_it);
+  return delete_sender_locked(name_it->second);
+}
+
+Status IbverbsEngine::delete_sender_locked(SenderId sender_id) {
+  const uint32_t encoded_slot = static_cast<uint32_t>(sender_id);
+  if (encoded_slot == 0 || encoded_slot > kMaxSenderSlots || sender_slots_ == nullptr) {
+    return Status::INVALID_PARAMETER;
+  }
+
+  const uint32_t slot_index = encoded_slot - 1;
+  SenderSlot& slot = sender_slots_[slot_index];
+  if (slot.published_id.load() != sender_id) return Status::INVALID_PARAMETER;
+
+  slot.published_id.store(INVALID_SENDER_ID);
+  while (slot.readers.load() != 0) {
+    daqiri::detail::ring_cpu_pause();
+  }
+  sender_names_.erase(sender_slot_names_[slot_index]);
+  sender_slot_names_[slot_index].clear();
+  free_sender_slots_.push_back(slot_index);
   return Status::SUCCESS;
 }
 
@@ -5498,13 +5583,8 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
 Status IbverbsEngine::send_tx_burst(SenderId sender_id, uint16_t queue_id, BurstParams* burst) {
   if (burst == nullptr) return Status::NULL_PTR;
 
-  RawUdpSender sender;
-  {
-    std::lock_guard<std::mutex> guard(sender_mutex_);
-    const auto it = senders_.find(sender_id);
-    if (it == senders_.end()) return Status::INVALID_PARAMETER;
-    sender = it->second;
-  }
+  SenderFastPath sender;
+  if (!snapshot_sender(sender_id, &sender)) return Status::INVALID_PARAMETER;
 
   IbvTxQueue* q = find_tx_queue(sender.port_id, queue_id);
   if (q == nullptr || burst->hdr.hdr.port_id != sender.port_id || burst->hdr.hdr.q_id != queue_id ||
