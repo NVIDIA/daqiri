@@ -14,6 +14,11 @@ cmake --install build --prefix /opt/daqiri
 BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
 ```
 
+Container releases run locally. Run `PUSH=1 scripts/publish_container.sh` on
+each supported architecture; after both per-architecture tags exist, run
+`PUBLISH_MANIFEST=1 scripts/publish_container.sh` to publish and inspect the
+canonical multi-architecture version tag.
+
 CMake options (full table in `docs/getting-started.md`):
 - `DAQIRI_ENGINE` — space-separated list of optional engines to compile. Valid values: `dpdk` (raw Ethernet) and `ibverbs` (RDMA/RoCE). Linux sockets (UDP/TCP) are always built in, so there is no `socket` value. Default is `"dpdk ibverbs"`.
 - `DAQIRI_BUILD_PYTHON` — builds `pybind11` bindings from `python/`.
@@ -24,7 +29,7 @@ CMake options (full table in `docs/getting-started.md`):
 - `DAQIRI_ENABLE_S3` — enable AWS SDK-backed asynchronous raw packet writes to S3 (off by default).
 - `DAQIRI_PREFER_SYSTEM_YAML_CPP` — prefer system `yaml-cpp` over the vendored `third_party/yaml-cpp` submodule (off by default; keep off when a conda/miniforge env is on `PATH`).
 
-Package versions use CalVer (`YYYY.MM.PATCH`) from the top-level `VERSION` file. CMake reads that value into `project(daqiri VERSION ...)`, generates `daqiri/version.h`, feeds pkg-config/CMake package metadata, and exposes the same value in Python. `DAQIRI_ABI_VERSION` is separate and currently `1`; do not tie ABI policy to the CalVer year.
+Package versions use CalVer (`YYYY.MM.PATCH`) from the top-level `VERSION` file. CMake reads that value into `project(daqiri VERSION ...)`, generates `daqiri/version.h`, feeds pkg-config/CMake package metadata, and exposes the same value in Python. `DAQIRI_ABI_VERSION` is separate and currently `2`; do not tie ABI policy to the CalVer year.
 
 CUDA architectures default to `80;90` (A100, H100), with `121` (GB10) added when configuring with CUDA Toolkit 13.0 or newer. Override `CMAKE_CUDA_ARCHITECTURES` when targeting other GPUs.
 
@@ -49,6 +54,7 @@ Integration and performance verification is done via the benchmark executables i
 | `daqiri_bench_raw_gpudirect` | `raw_gpudirect_bench.cpp` | `daqiri_bench_raw_tx_rx.yaml`, `daqiri_bench_raw_tx_rx_4q.yaml`, `daqiri_bench_raw_tx_rx_spark.yaml`, `daqiri_bench_raw_{tx,rx}_spark_xhost.yaml`, `daqiri_bench_raw_sw_loopback.yaml`, `daqiri_bench_raw_hw_loopback_ibverbs.yaml`, `daqiri_bench_raw_rx_multi_q.yaml`, `daqiri_bench_raw_tx_rx_vxlan.yaml`, `daqiri_bench_raw_tx_rx_vlan.yaml`, `daqiri_bench_raw_tx_rx_gre.yaml`, `daqiri_bench_raw_tx_rx_nvgre.yaml`, `daqiri_bench_raw_tx_rx_spark_mq.yaml` (mq base; `run_spark_mq_bench.sh` derives the 4 cells via `scripts/gen_spark_mq_config.py`), `daqiri_bench_raw_tx_rx_pacing.yaml` (per-queue `pacing_mbps`; DPDK engine only) |
 | `daqiri_bench_raw_latency` | `raw_latency_bench.cpp` | `daqiri_bench_raw_latency_ibverbs.yaml` — caller-driven direct TX/RX, RX hardware timestamps, 64–8192-byte power-of-two latency sweep |
 | `daqiri_example_dynamic_rx_flow` | `dynamic_rx_flow_example.cpp` | `daqiri_example_dynamic_rx_flow.yaml` — `flow_isolation: true` startup followed by runtime scalar queue steering, multi-queue RSS, and raw-engine decap/pop flow add/delete |
+| `daqiri_example_dynamic_resource` | `dynamic_resource_example.cpp` | Any ibverbs config with at least one RX queue and one single-region TX queue (for example `daqiri_bench_raw_hw_loopback_ibverbs.yaml`) — initializes without RX queues, repeatedly adds/removes the first RX queue's steering flow, and exercises runtime MR and RX/TX queue add/delete |
 | `daqiri_bench_raw_hds` | `raw_hds_bench.cpp` | `daqiri_bench_raw_tx_rx_hds.yaml` |
 | `daqiri_bench_raw_reorder_seq` | `raw_reorder_seq_bench.cpp` | `daqiri_bench_raw_tx_rx_reorder_seq_1024*.yaml`, `daqiri_bench_raw_rx_reorder_seq_*.yaml` |
 | `daqiri_bench_raw_reorder_quantize` | `raw_reorder_quantize_bench.cpp` | `daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml` |
@@ -99,7 +105,7 @@ clang-format -style=file -i -fallback-style=none <files>
 
 ## Architecture
 
-**Single C++/CUDA shared library** (`libdaqiri.so`) exposing a C++ API through `#include <daqiri/daqiri.h>`. The public surface is intentionally flat free-function helpers (`get_rx_burst`, `get_packet_ptr`, `set_udp_header`, `socket_setsockopt`, …) that all operate on opaque DAQIRI-owned buffers or connection IDs. Applications never touch engine types directly.
+**Single C++/CUDA shared library** (`libdaqiri.so`) exposing a C++ API through `#include <daqiri/daqiri.h>`. The public surface is intentionally flat free-function helpers (`get_rx_burst`, `get_packet_ptr`, `set_udp_header`, `socket_setsockopt`, runtime flow/resource operations, …) that all operate on opaque DAQIRI-owned buffers, operation IDs, or connection IDs. Applications never touch engine types directly.
 
 `include/daqiri/daqiri.h` also includes the generated `daqiri/version.h`, exposing `DAQIRI_VERSION`, CalVer component macros, `DAQIRI_ABI_VERSION`, and inline helpers such as `daqiri::version_string()` and `daqiri::abi_version()`.
 
@@ -114,6 +120,8 @@ The opt-in `dpdk` raw engine (`src/engines/dpdk/`, `DpdkEngine`) programs RX ste
 
 The `ibverbs` raw engine (`src/engines/ibverbs/`, `IbverbsEngine`) drives a Mellanox/mlx5 Multi-Packet (striding) Receive Queue via **DevX** (`mlx5dv_devx_obj_create` against vendored PRM structs in `mlx5_prm_min.h`): a DevX CQ + striding RQ + TIR + `mlx5dv_dr` flow steering, with manual WQE/doorbell management and worker-driven cyclic refill. RX packets DMA strided into one pre-posted MR (host or GPU via `ibv_reg_dmabuf_mr`); a queue with >1 memory region instead uses a non-striding DevX *regular* RQ with multi-segment scatter WQEs for **physical** header-data split (header → CPU MR, payload → GPU MR). TX builds mlx5 send WQEs directly on a raw-packet QP's SQ (via `mlx5dv_init_obj`, bypassing `ibv_post_send`) from a slab of registered slots tracked by cyclic index counters, with NIC checksum offload and a `tx_eth_src` offload. `loopback: "hw"` enables single-port unicast self-loopback through a retained mlx5dv activation QP and opts both direct and RSS TIRs into receiving the internally returned packets. It uses the libdpdk-free `daqiri::Ring`/`daqiri::ObjectPool` for the worker→app burst handoff (like the rdma engine — neither links DPDK) and drives the NIC through libibverbs/mlx5dv directly. Feature set: RX (MPRQ), TX, GPUDirect, physical/logical HDS, multi-queue 5-tuple flow steering with per-packet flow IDs, flex-item arbitrary-offset, IPv4-total-length and eCPRI-over-Ethernet (EtherType `0xAEFE`, message type + pc_id/rtc_id) flow matching (mlx5 flex parser / `misc_parameters_4`), per-packet RX hardware timestamps, per-queue hardware packet pacing through the mlx5 QP rate table, accurate TX send scheduling (wait-on-time WAIT WQE), GPU/CPU software reorder and quantize, and ConnectX-7+ first-DMA hardware reorder. Hardware reorder is explicit opt-in (`reorder_engine: "hw"`, `cyclic_sequence: true`): the mlx5 flex parser steers finite-ring sequence values to private fixed-slot RQs, the host poller aggregates CQEs, and destinations may be CPU or GPU memory. It does not use DPA. Exact 32-bit parser-sample matching means wide monotonic sequence fields are unsupported; use software reorder for those streams. Each destination exposes one receive credit, and a direct-placed batch is rearmed only when the application frees its burst, preventing DMA into caller-owned output. Packet pacing and accurate send are independent: `pacing_mbps` configures the QP's average rate, while `set_packet_tx_time()` emits WAIT WQEs for absolute per-packet times. Because it uses the kernel netdev directly, `ensure_port_mtus` raises the netdev MTU at init to cover the configured frame size in either direction — RX (post-decap) and TX egress (post-encap) — sizing each direction with its own transform wire overhead (jumbo frames silently drop otherwise). It also uses `src/net_pause.{h,cpp}` to warn when pause is enabled and to report per-run pause frame deltas from `print_stats()`. Queues sharing a `cpu_core` are serviced round-robin by one poller thread.
 
+Raw ibverbs pools DAQIRI-owned startup `MemoryKind::HUGE` regions with the same NUMA affinity in one hugetlb arena while retaining separate logical regions and registrations. Runtime regions are allocated independently. `MemoryKind::HUGE` is strict across engines: allocation failure aborts the operation rather than silently falling back to regular or transparent-hugepage memory.
+
 ### Zero-copy / BurstParams
 All packet data flows through `BurstParams`, a batch of packets. Only pointers are passed between NIC, DAQIRI internals, and the application — the caller reads directly from the buffers the NIC DMA'd into. **The caller must explicitly free bursts**; a missed free drains the pool and produces `NO_FREE_BURST_BUFFERS` / `NO_FREE_PACKET_BUFFERS` errors and NIC drops. See `docs/concepts.md` (Zero-Copy Ownership) and `docs/api-reference/cpp.md` (free-function call patterns).
 
@@ -122,6 +130,8 @@ A single packet can span multiple **segments** (contiguous memory regions), each
 
 ### DPDK is required only by the `dpdk` engine
 DPDK is **not** a dependency of `daqiri_common` or of the `rdma`/`ibverbs`/`socket` engines. Those use the libdpdk-free `daqiri::Ring` (`src/daqiri_ring.h`) and `daqiri::ObjectPool` (`src/daqiri_pool.h`) — header-only replacements for the generic `rte_ring` (a bounded MPMC/SPSC pointer ring, the DPDK C11 4-cursor algorithm) and `rte_mempool` (a fixed-size slab + free-ring) usage. `src/CMakeLists.txt` parses `DAQIRI_ENGINE` first, sets `DAQIRI_BUILD_DPDK`, and only then runs `pkg_check_modules(DPDK REQUIRED libdpdk)` and links it into `daqiri_common`. The only `rte_*` code left in `daqiri_common` lives in `dpdk_log.cpp` and `src/engine_dpdk.cpp` (the DPDK-only `Engine` base-class methods: mbuf/extmem registration, mbuf packet pools, EAL/hugepage preflight + cleanup), both compiled in **only** when `dpdk ∈ DAQIRI_ENGINE`. `net_pause.cpp` is compiled into `daqiri_common` unconditionally and uses only Linux ethtool ioctls, so it adds no DPDK or libibverbs dependency. The `rdma`/`ibverbs` engines no longer call `rte_eal_init` at all (they only needed EAL to back the rings/pools); the `dpdk` engine still does. `MemoryKind::HUGE` allocation goes through the virtual `Engine::alloc_huge` hook — `mmap(MAP_HUGETLB)` in the base, overridden by `DpdkEngine` to use `rte_malloc_socket`. A build with `DAQIRI_ENGINE="ibverbs"` (or `""`) links no `librte_*`. **libnuma is an optional dependency** (`DAQIRI_HAVE_NUMA`, auto-detected): when present, `daqiri::Ring`/`daqiri::ObjectPool` and `alloc_huge` pin their memory to the NUMA node DPDK's socket-aware allocators used (rings/pools → the master core's node, mirroring `rte_socket_id()`; HUGE MRs → `mr.affinity_`, mirroring `rte_malloc_socket`); without it they fall back to first-touch placement. `python/tune_system.py --check numa` warns when libnuma is absent on a multi-socket host. The container build still uses patched DPDK from `dpdk_patches/` (`dmabuf.patch`, `dpdk.nvidia.patch`) for the `dpdk` engine — the `dmabuf` patch removes the peermem kernel-module requirement for GPUDirect.
+
+The base and DPDK `MemoryKind::HUGE` allocators are both strict: neither substitutes regular memory when hugetlb/EAL hugepage allocation fails.
 
 ### Reorder & quantize kernels
 `src/kernels.cu` hosts the CUDA reorder paths used by the `raw_reorder_*` benches. Compile with `-DDAQIRI_REORDER_GPU_PROFILE=ON` to instrument them with CUDA event timing.
@@ -179,6 +189,10 @@ From `CONTRIBUTING.md`:
 - An issue must exist and be approved before coding.
 - Prefer toggling features via new CMake options (with backward-compatible defaults) rather than wrapping entire files in `#if` guards. Use `#if` only for minor in-file changes.
 - Keep PRs narrowly scoped — one concern per PR, dependencies noted in the description.
+- Run `scripts/check_pr.sh` before opening or updating every PR. If the PR changes
+  anything under `docs/images/packet_diagrams/`, run `scripts/check_pr.sh --diagrams`.
+  If it changes the Docker base stage, add `--docker-base`; combine both flags when
+  both areas change.
 - When opening a PR that touches `src/`, `examples/`, or `mkdocs.yml`, scan the doc-sync agent rule and update affected docs in the same PR.
 
 ## Compiling and Running

@@ -1972,12 +1972,14 @@ Status DpdkEngine::get_mac_addr(int port, char* mac) {
   return Status::SUCCESS;
 }
 
-void* DpdkEngine::alloc_huge(size_t bytes, int numa, AllocRegion::Deallocator* deallocator) {
+void* DpdkEngine::alloc_huge(size_t bytes, int numa, AllocRegion::Deallocator* deallocator,
+                             size_t* mapped_size) {
   // EAL hugepage allocation: IOVA-contiguous and registrable with the NIC.
-  if (deallocator == nullptr) {
+  if (deallocator == nullptr || mapped_size == nullptr) {
     return nullptr;
   }
   *deallocator = AllocRegion::Deallocator::EAL;
+  *mapped_size = bytes;
   return rte_malloc_socket(nullptr, bytes, 0, numa);
 }
 

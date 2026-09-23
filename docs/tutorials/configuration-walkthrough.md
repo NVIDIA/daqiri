@@ -127,6 +127,16 @@ For a shorter selection guide, start with the [Benchmarking overview](../benchma
 
     A [diff-style walkthrough](#flow-steering) of multi-queue RX routing appears below.
 
+??? question "4.1 I need to replace queues or memory without restarting"
+    Run `daqiri_example_dynamic_resource` with an ibverbs raw config that has at least one RX
+    queue and one single-region TX queue, such as
+    [`daqiri_bench_raw_hw_loopback_ibverbs.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_hw_loopback_ibverbs.yaml).
+    The example starts the engine with no RX queues, creates owned memory regions and the first RX
+    queue at runtime, installs a dynamic steering flow, submits through a runtime TX queue, then
+    removes the flow, drains both queues, and removes both regions.
+
+    *Requires: Raw Ethernet with `engine: "ibverbs"` and an NVIDIA ConnectX-class NIC.*
+
 ??? question "5. I need to record packet data to disk"
     Sub-question: **which output format?**
 
@@ -252,7 +262,7 @@ bench_tx: # (25)!
 3. :material-wrench: **`master_core`** · `integer (CPU core ID)` · *required*: Core used for DAQIRI setup. Does not need to be isolated, and it is recommended to differ from the `cpu_core` fields below that poll the NIC.
 4. **`loopback`** · `string` · *default: `""`*: Loopback mode. **Supported:** `""` (disabled), `"sw"` (DPDK software loopback, no NIC), and `"hw"` (single-port mlx5 hardware loopback for the raw ibverbs engine). Hardware loopback requires one interface with both TX and RX queues and packets addressed to that port's own MAC.
 5. The `memory_regions` section lists where the NIC will write/read data from/to when bypassing the OS kernel. Tip: when using GPU buffer regions, keeping the sum of their buffer sizes below 80% of your BAR1 size is generally a good rule of thumb.
-6. :material-package-variant: **`kind`** · `string` · *required*: Type of memory backing the region. **Supported:** `device` (GPU memory via GPUDirect, preferred on discrete GPUs), `host_pinned` (CPU pinned memory, required on integrated GPUs like NVIDIA GB10/DGX Spark where peer-DMA isn't available), `huge` (hugepages, CPU), `host` (CPU unpinned). IGX Thor has an integrated GPU and a discrete GPU: use `kind: device` with the discrete GPU, or `kind: host_pinned` when remaining on the integrated GPU. See the [memory regions reference](../api-reference/configuration.md#memory-regions).
+6. :material-package-variant: **`kind`** · `string` · *required*: Type of memory backing the region. **Supported:** `device` (GPU memory via GPUDirect, preferred on discrete GPUs), `host_pinned` (CPU pinned memory, required on integrated GPUs like NVIDIA GB10/DGX Spark where peer-DMA isn't available), `huge` (explicit hugetlb memory; initialization fails if the configured pool cannot satisfy it), `host` (CPU unpinned). DAQIRI never silently substitutes regular pages for `huge`; choose `host` when that is intended. IGX Thor has an integrated GPU and a discrete GPU: use `kind: device` with the discrete GPU, or `kind: host_pinned` when remaining on the integrated GPU. See the [memory regions reference](../api-reference/configuration.md#memory-regions).
 7. :material-wrench: **`affinity`** · `integer (CUDA ordinal / NUMA node)` · *required*: Process-local CUDA ordinal when `kind: device` or `kind: host_pinned`. The ordinal is relative to the GPUs visible to the process, not necessarily the host-wide GPU index. Use the visible discrete GPU's ordinal for `kind: device`. Use the selected integrated GPU's ordinal with `kind: host_pinned`. On mixed-GPU container hosts, the [memory regions reference](../api-reference/configuration.md#memory-regions) shows how to select the discrete GPU by UUID. For `huge` and `host`, use a NUMA node ID.
 8. :material-package-variant: **`num_bufs`** · `integer` · *required*: Number of buffers in the region. Higher gives more time to process packets but uses more memory. Raw DPDK applies a ring-and-batch floor and bump target; raw ibverbs separately caps usable TX slots at `max_qp_wr / 2`. See the [memory regions reference](../api-reference/configuration.md#memory-regions) for the formulas, examples, and warning behavior.
 9. :material-package-variant: **`buf_size`** · `integer (bytes)` · *required*: Size of each buffer in the region. Should equal your maximum packet size, or smaller when chaining regions per packet (e.g. header-data split, see the [HDS walkthrough](#header-data-split-hds) below).

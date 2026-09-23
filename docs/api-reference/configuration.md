@@ -71,7 +71,9 @@ runtime binding.
 - **`kind`**: Memory type.
   - type: `string`
   - values:
-    - `huge`: CPU hugepages (recommended for CPU buffers)
+    - `huge`: Explicit hugetlb CPU memory (recommended for CPU buffers). Initialization fails
+      if the configured hugetlb pool cannot satisfy it; DAQIRI never silently substitutes
+      regular pages or transparent hugepages.
     - `device`: GPU memory (requires GPUDirect via peermem or DMA-BUF). On a system such as
       IGX Thor with both an integrated and a discrete GPU, set `affinity` to the discrete GPU's
       process-local CUDA ordinal.
@@ -81,6 +83,12 @@ runtime binding.
       the integrated GPU in a hybrid-GPU system such as IGX Thor. On discrete-GPU systems,
       prefer `device` for high-throughput RX/TX paths.
     - `host`: Regular CPU memory (not recommended)
+  With the raw ibverbs engine, DAQIRI-owned `huge` regions declared in the startup configuration
+  and having the same NUMA affinity share a hugetlb arena. DAQIRI chooses the available page size
+  that can back the regions with the least rounding, while registering every region separately.
+  For example, twenty-two 32 MiB regions require one 1 GiB page—not twenty-two—when the host has
+  only 1 GiB hugepages.
+
 - **`affinity`**: Process-local CUDA ordinal for `device` and `host_pinned` memory, or NUMA
   node ID for `huge` and `host` memory. CUDA ordinals reflect only the devices visible to the
   process and need not match host-wide GPU indices.
@@ -253,6 +261,13 @@ Direct queues must be polled by exactly one user thread per queue. They do not c
 worker or handoff ring, so an application stall also stops packet reception and buffer recycling.
 A direct queue cannot be targeted by an RX reorder configuration. Unsupported engines, reorder,
 or forbidden worker fields produce a warning followed by configuration failure.
+
+For the raw ibverbs engine, the same `RxQueueConfig` represented by this YAML block can be passed
+to `add_rx_queue_async()` after initialization. Its memory regions must already exist, and its
+batch capacity cannot exceed the metadata capacity fixed at initialization: at least 256 packets,
+or the largest startup queue batch when that is greater. Runtime queues are not written back to
+the YAML file. Install a dynamic RX flow after queue creation to route traffic to it; delete that
+flow before requesting queue removal.
 
 ### Flex Items
 
@@ -576,6 +591,11 @@ handle, but neither it nor the packet data crosses another CPU core: the caller 
 to the packet buffer and `send_tx_burst()` submits it directly. Completed packet buffers are
 reclaimed on later availability, allocation, or send calls. Unsupported engines and forbidden
 worker fields produce a warning followed by configuration failure.
+
+For the raw ibverbs engine, an equivalent `TxQueueConfig` can be passed to
+`add_tx_queue_async()` after initialization. The queue must reference existing memory regions and
+fit the metadata capacity reserved at initialization. Runtime TX queues require no flow rule;
+delete completion waits for submitted work and application-held allocations to be returned.
 
 ### Transmit Flows
 

@@ -34,9 +34,9 @@ python3 -m pip install --break-system-packages \
 python3 -m pytest
 ```
 
-GitHub Actions runs `tests/portable/` on Python 3.12. Feature-specific Python
-dependencies belong in `tests/requirements.txt` and should be added by the feature
-that needs them.
+`scripts/check_pr.sh` runs `tests/portable/` in its local virtual environment.
+Feature-specific Python dependencies belong in `tests/requirements.txt` and should be
+added by the feature that needs them.
 
 ## C++ tests
 
@@ -81,7 +81,7 @@ the subset for a runner based on its GPU, NIC, engine, privileges, and host topo
 The job owns container launch, device assignment, platform configuration, and resource
 serialization.
 
-These tests are excluded from the hosted GitHub Actions workflow. A developer can
+These tests are excluded from the standard local PR check. A developer can
 reproduce a selected platform test in the Python-enabled image built above on a system
 with matching capabilities:
 

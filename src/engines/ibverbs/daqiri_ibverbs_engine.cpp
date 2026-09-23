@@ -27,6 +27,7 @@
 #include <dirent.h>
 #include <net/if.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <linux/sockios.h>
 #include <unistd.h>
@@ -94,6 +95,35 @@ bool claim_direct_owner(std::atomic<uint64_t>& owner) {
                                        std::memory_order_relaxed) ||
          expected == caller;
 }
+
+template <typename Queue>
+class QueueUse {
+ public:
+  explicit QueueUse(Queue* queue) : queue_(queue) {}
+  QueueUse(const QueueUse&) = delete;
+  QueueUse& operator=(const QueueUse&) = delete;
+  ~QueueUse() {
+    if (queue_ != nullptr) {
+      queue_->active_users.fetch_sub(1, std::memory_order_release);
+    }
+  }
+
+  Queue* get() const {
+    return queue_;
+  }
+  Queue* operator->() const {
+    return queue_;
+  }
+  Queue& operator*() const {
+    return *queue_;
+  }
+  explicit operator bool() const {
+    return queue_ != nullptr;
+  }
+
+ private:
+  Queue* queue_;
+};
 
 size_t next_power_of_two(size_t value) {
   if (value == 0) {
@@ -839,7 +869,7 @@ int IbverbsEngine::mr_access_to_ibv(uint32_t access) {
 }
 
 Status IbverbsEngine::register_mr(struct ibv_pd* pd, const std::string& mr_name, uint8_t** out_base,
-                                  uint32_t* out_lkey) {
+                                  uint32_t* out_lkey, struct ibv_mr** out_mr) {
   const auto& mr = cfg_.mrs_[mr_name];
   void* base = ar_[mr_name].ptr_;
   if (base == nullptr) {
@@ -921,8 +951,10 @@ Status IbverbsEngine::register_mr(struct ibv_pd* pd, const std::string& mr_name,
       return Status::NULL_PTR;
     }
     registered_mrs_.push_back(gmr);
+    registered_mrs_by_name_[mr_name].push_back(gmr);
     *out_base = static_cast<uint8_t*>(base);
     *out_lkey = gmr->lkey;
+    *out_mr = gmr;
     DAQIRI_LOG_INFO("Registered GPU MR {} (dmabuf) base {} size {} lkey {}", mr_name, base,
                     mr.ttl_size_, *out_lkey);
     return Status::SUCCESS;
@@ -934,11 +966,37 @@ Status IbverbsEngine::register_mr(struct ibv_pd* pd, const std::string& mr_name,
     return Status::NULL_PTR;
   }
   registered_mrs_.push_back(ib_mr);
+  registered_mrs_by_name_[mr_name].push_back(ib_mr);
   *out_base = static_cast<uint8_t*>(base);
   *out_lkey = ib_mr->lkey;
+  *out_mr = ib_mr;
   DAQIRI_LOG_INFO("Registered MR {} base {} size {} lkey {}", mr_name, base, mr.ttl_size_,
                   *out_lkey);
   return Status::SUCCESS;
+}
+
+void IbverbsEngine::deregister_queue_mrs(std::vector<struct ibv_mr*>& registrations) {
+  for (auto* mr : registrations) {
+    if (mr == nullptr) {
+      continue;
+    }
+    if (ibv_dereg_mr(mr) != 0) {
+      DAQIRI_LOG_ERROR("Could not deregister queue MR: {}", strerror(errno));
+      continue;
+    }
+    registered_mrs_.erase(std::remove(registered_mrs_.begin(), registered_mrs_.end(), mr),
+                          registered_mrs_.end());
+    for (auto it = registered_mrs_by_name_.begin(); it != registered_mrs_by_name_.end();) {
+      auto& named = it->second;
+      named.erase(std::remove(named.begin(), named.end(), mr), named.end());
+      if (named.empty()) {
+        it = registered_mrs_by_name_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+  registrations.clear();
 }
 
 Status IbverbsEngine::register_rx_mr(IbvRxQueue& q) {
@@ -948,9 +1006,11 @@ Status IbverbsEngine::register_rx_mr(IbvRxQueue& q) {
   q.regions.clear();
   for (const std::string& name : q.mr_names) {
     IbvRxQueue::RxRegion r;
-    if (Status s = register_mr(q.pd, name, &r.base, &r.lkey); s != Status::SUCCESS) {
+    struct ibv_mr* registration = nullptr;
+    if (Status s = register_mr(q.pd, name, &r.base, &r.lkey, &registration); s != Status::SUCCESS) {
       return s;
     }
+    q.registrations.push_back(registration);
     const auto& mr = cfg_.mrs_[name];
     r.slot_size = static_cast<uint32_t>(mr.adj_size_);
     r.seg_len = r.slot_size;
@@ -1476,7 +1536,7 @@ void IbverbsEngine::release_dynamic_flow_id_locked(FlowId flow_id) {
   free_dynamic_flow_ids_.push(flow_id);
 }
 
-bool IbverbsEngine::validate_dynamic_rx_flow_locked(int port, const FlowRuleConfig& flow) const {
+bool IbverbsEngine::validate_dynamic_rx_flow_locked(int port, const FlowRuleConfig& flow) {
   if (!initialized_) {
     DAQIRI_LOG_ERROR("Cannot add dynamic RX flow before DAQIRI initialization");
     return false;
@@ -1505,10 +1565,7 @@ bool IbverbsEngine::validate_dynamic_rx_flow_locked(int port, const FlowRuleConf
       DAQIRI_LOG_ERROR("Dynamic RX flow '{}' repeats queue id {}", flow.name_, queue_id);
       return false;
     }
-    const auto queue_it =
-        std::find_if(intf->rx_.queues_.begin(), intf->rx_.queues_.end(),
-                     [&](const RxQueueConfig& q) { return q.common_.id_ == queue_id; });
-    if (queue_it == intf->rx_.queues_.end()) {
+    if (find_rx_queue(port, queue_id) == nullptr) {
       DAQIRI_LOG_ERROR("Dynamic RX flow targets invalid port/queue {}/{}", port, queue_id);
       return false;
     }
@@ -1914,11 +1971,11 @@ Status IbverbsEngine::install_flow_rule_locked(int port, PortSteering& st,
             reinterpret_cast<uint8_t*>(value.buf), &criteria) != Status::SUCCESS) {
       return Status::GENERIC_FAILURE;
     }
-    return create_dr_rule_locked(
-               port, st, criteria, reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&mask),
-               reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&value), destination_action,
-               primary_queue, rss_destination, priority, flow_id, flow.name_.c_str(), dynamic_entry,
-               {}, terminal_action)
+    return create_dr_rule_locked(port, st, criteria,
+                                 reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&mask),
+                                 reinterpret_cast<struct mlx5dv_flow_match_parameters*>(&value),
+                                 destination_action, primary_queue, rss_destination, priority,
+                                 flow_id, flow.name_.c_str(), dynamic_entry, {}, terminal_action)
                ? Status::SUCCESS
                : Status::GENERIC_FAILURE;
   }
@@ -2612,6 +2669,65 @@ Status IbverbsEngine::install_direct_reorder_flows(IbvRxQueue& q, const Interfac
   return Status::SUCCESS;
 }
 
+Status IbverbsEngine::initialize_port_steering_locked(int port, const InterfaceConfig& intf,
+                                                      struct ibv_context* ctx, bool initialize_flex,
+                                                      PortSteering** steering) {
+  if (ctx == nullptr || steering == nullptr) {
+    return Status::NULL_PTR;
+  }
+  *steering = nullptr;
+  auto existing = port_steering_.find(port);
+  const bool created = existing == port_steering_.end();
+  if (created) {
+    PortSteering fresh;
+    fresh.domain = mlx5dv_dr_domain_create(ctx, MLX5DV_DR_DOMAIN_TYPE_NIC_RX);
+    if (fresh.domain == nullptr) {
+      DAQIRI_LOG_ERROR("mlx5dv_dr_domain_create failed (port {}): {}", port, strerror(errno));
+      return Status::GENERIC_FAILURE;
+    }
+    fresh.table = mlx5dv_dr_table_create(fresh.domain, 0);
+    if (fresh.table == nullptr) {
+      DAQIRI_LOG_ERROR("mlx5dv_dr_table_create failed (port {}): {}", port, strerror(errno));
+      mlx5dv_dr_domain_destroy(fresh.domain);
+      return Status::GENERIC_FAILURE;
+    }
+    existing = port_steering_.emplace(port, std::move(fresh)).first;
+  }
+
+  PortSteering& st = existing->second;
+  std::vector<uint16_t> added_flex_ids;
+  if (initialize_flex) {
+    for (const auto& fi : intf.rx_.flex_items_) {
+      if (st.flex_nodes.find(fi.id_) != st.flex_nodes.end()) {
+        continue;
+      }
+      uint32_t sample_id = 0;
+      struct mlx5dv_devx_obj* node = create_flex_parser_node(
+          ctx, MLX5_GRAPH_ARC_NODE_UDP, fi.udp_dst_port_, fi.offset_, &sample_id);
+      if (node == nullptr) {
+        DAQIRI_LOG_ERROR("Flex item '{}' (id {}): parse-graph node creation failed on port {}",
+                         fi.name_, fi.id_, port);
+        for (const uint16_t id : added_flex_ids) {
+          mlx5dv_devx_obj_destroy(st.flex_nodes[id].obj);
+          st.flex_nodes.erase(id);
+        }
+        if (created) {
+          mlx5dv_dr_table_destroy(st.table);
+          mlx5dv_dr_domain_destroy(st.domain);
+          port_steering_.erase(existing);
+        }
+        return Status::GENERIC_FAILURE;
+      }
+      st.flex_nodes[fi.id_] = PortSteering::FlexNode{node, sample_id};
+      added_flex_ids.push_back(fi.id_);
+      DAQIRI_LOG_INFO("Flex item '{}' id {} -> udp_dst {} offset {} sample_field_id {} (port {})",
+                      fi.name_, fi.id_, fi.udp_dst_port_, fi.offset_, sample_id, port);
+    }
+  }
+  *steering = &st;
+  return Status::SUCCESS;
+}
+
 Status IbverbsEngine::install_port_flows() {
   for (const auto& intf : cfg_.ifs_) {
     if (intf.rx_.queues_.empty()) {
@@ -2632,17 +2748,12 @@ Status IbverbsEngine::install_port_flows() {
       continue;
     }
 
-    PortSteering& st = port_steering_[port];
-    st.domain = mlx5dv_dr_domain_create(ctx, MLX5DV_DR_DOMAIN_TYPE_NIC_RX);
-    if (st.domain == nullptr) {
-      DAQIRI_LOG_CRITICAL("mlx5dv_dr_domain_create failed (port {}): {}", port, strerror(errno));
-      return Status::GENERIC_FAILURE;
+    PortSteering* steering = nullptr;
+    if (Status status = initialize_port_steering_locked(port, intf, ctx, false, &steering);
+        status != Status::SUCCESS) {
+      return status;
     }
-    st.table = mlx5dv_dr_table_create(st.domain, 0);
-    if (st.table == nullptr) {
-      DAQIRI_LOG_CRITICAL("mlx5dv_dr_table_create failed (port {}): {}", port, strerror(errno));
-      return Status::GENERIC_FAILURE;
-    }
+    PortSteering& st = *steering;
 
     IbvRxQueue* direct_queue = nullptr;
     for (const auto& [id, candidate] : by_id) {
@@ -2660,27 +2771,13 @@ Status IbverbsEngine::install_port_flows() {
       if (Status s = install_direct_reorder_flows(*direct_queue, intf, st); s != Status::SUCCESS) {
         return s;
       }
-      st.next_dynamic_priority = 0;
+      st.dynamic_priority = 0;
       continue;
     }
 
-    // Create a flex-parser (parse-graph) node per configured flex item. Each
-    // node anchors after the UDP header (selected by udp_dst_port) and exposes a
-    // 4-byte sample at the configured offset; the device-assigned sample field
-    // id is matched later via misc_parameters_4. Flows reference a flex item by
-    // id (FlowMatchType::FLEX_ITEM).
-    for (const auto& fi : intf.rx_.flex_items_) {
-      uint32_t sample_id = 0;
-      struct mlx5dv_devx_obj* node = create_flex_parser_node(
-          ctx, MLX5_GRAPH_ARC_NODE_UDP, fi.udp_dst_port_, fi.offset_, &sample_id);
-      if (node == nullptr) {
-        DAQIRI_LOG_CRITICAL("Flex item '{}' (id {}): parse-graph node creation failed on port {}",
-                            fi.name_, fi.id_, port);
-        return Status::GENERIC_FAILURE;
-      }
-      st.flex_nodes[fi.id_] = PortSteering::FlexNode{node, sample_id};
-      DAQIRI_LOG_INFO("Flex item '{}' id {} -> udp_dst {} offset {} sample_field_id {} (port {})",
-                      fi.name_, fi.id_, fi.udp_dst_port_, fi.offset_, sample_id, port);
+    if (Status status = initialize_port_steering_locked(port, intf, ctx, true, &steering);
+        status != Status::SUCCESS) {
+      return status;
     }
 
     // Build the per-flow rules. Each flow with a queue action steers its matched
@@ -2984,7 +3081,7 @@ Status IbverbsEngine::install_port_flows() {
       }
       DAQIRI_LOG_INFO("DevX catch-all flow -> queue {} (port {})", dest->queue_id, port);
     }
-    st.next_dynamic_priority = std::max(st.next_dynamic_priority, prio);
+    st.dynamic_priority = std::max(st.dynamic_priority, prio);
   }
   return Status::SUCCESS;
 }
@@ -3423,10 +3520,13 @@ Status IbverbsEngine::create_direct_reorder_resources(IbvRxQueue& q, IbvDirectRe
   }
   q.td_num = DEVX_GET(alloc_transport_domain_out, tdout, transport_domain);
 
-  if (Status s = register_mr(q.pd, plan.cfg.memory_region_, &plan.output_base, &plan.output_lkey);
+  struct ibv_mr* registration = nullptr;
+  if (Status s = register_mr(q.pd, plan.cfg.memory_region_, &plan.output_base, &plan.output_lkey,
+                             &registration);
       s != Status::SUCCESS) {
     return s;
   }
+  q.registrations.push_back(registration);
   plan.null_mr = ibv_alloc_null_mr(q.pd);
   if (plan.null_mr == nullptr) {
     DAQIRI_LOG_CRITICAL("Hardware reorder requires ibv_alloc_null_mr to discard packet headers: {}",
@@ -3835,23 +3935,28 @@ void IbverbsEngine::initialize() {
     return;
   }
 
-  // Determine the largest batch (RX + TX) and build the burst metadata pools.
+  // Determine the largest batch (RX + TX) and build the burst metadata pools. Reserve the
+  // direct-poll ceiling even when smaller startup queues exist so a runtime queue is not
+  // accidentally constrained by an unrelated bootstrap queue's batch size.
+  bool has_startup_queue = false;
   for (const auto& intf : cfg_.ifs_) {
     for (const auto& q : intf.rx_.queues_) {
+      has_startup_queue = true;
       const uint32_t batch = q.poll_mode_ == QueuePollMode::DIRECT
                                  ? kDirectPollMaxBatch
                                  : static_cast<uint32_t>(std::max(1, q.common_.batch_size_));
       max_batch_ = std::max(max_batch_, batch);
     }
     for (const auto& q : intf.tx_.queues_) {
+      has_startup_queue = true;
       max_batch_ = std::max<uint32_t>(max_batch_, std::max(1, q.common_.batch_size_));
     }
   }
-  if (max_batch_ == 0) {
-    DAQIRI_LOG_WARN("No RX/TX queues configured for ibverbs backend");
-    initialized_ = true;
-    return;
+  if (!has_startup_queue) {
+    DAQIRI_LOG_WARN(
+        "No RX/TX queues configured for ibverbs backend; reserving metadata for runtime queues");
   }
+  max_batch_ = std::max(max_batch_, kDirectPollMaxBatch);
   g_layout = compute_layout(max_batch_);
   rx_meta_pool_size_ = cfg_.rx_meta_buffers_ ? cfg_.rx_meta_buffers_ : 4096;
   const int pool_numa = daqiri::detail::numa_node_for_cpu(cfg_.common_.master_core_);
@@ -3878,6 +3983,7 @@ void IbverbsEngine::initialize() {
         return;
       }
       rx_queues_.push_back(std::move(q));
+      rx_queues_.back()->state.store(ResourceState::ACTIVE, std::memory_order_release);
     }
     for (const auto& qcfg : intf.tx_.queues_) {
       auto q = std::make_unique<IbvTxQueue>();
@@ -3887,6 +3993,7 @@ void IbverbsEngine::initialize() {
         return;
       }
       tx_queues_.push_back(std::move(q));
+      tx_queues_.back()->state.store(ResourceState::ACTIVE, std::memory_order_release);
     }
   }
 
@@ -3966,6 +4073,9 @@ void IbverbsEngine::run() {
   std::map<int, std::vector<IbvRxQueue*>> rx_groups;
   std::vector<std::vector<IbvRxQueue*>> rx_threads;
   for (auto& q : rx_queues_) {
+    if (q->state.load(std::memory_order_acquire) != ResourceState::ACTIVE) {
+      continue;
+    }
     if (q->poll_mode == QueuePollMode::DIRECT) {
       DAQIRI_LOG_INFO("RX queue port {} q{} uses caller-driven direct polling", q->port_id,
                       q->queue_id);
@@ -3989,6 +4099,9 @@ void IbverbsEngine::run() {
   std::map<int, std::vector<IbvTxQueue*>> tx_groups;
   std::vector<std::vector<IbvTxQueue*>> tx_threads;
   for (auto& q : tx_queues_) {
+    if (q->state.load(std::memory_order_acquire) != ResourceState::ACTIVE) {
+      continue;
+    }
     if (q->poll_mode == QueuePollMode::DIRECT) {
       DAQIRI_LOG_INFO("TX queue port {} q{} uses caller-driven direct posting", q->port_id,
                       q->queue_id);
@@ -4166,7 +4279,7 @@ Status IbverbsEngine::rx_poll_queue(IbvRxQueue* q, BurstParams** direct_burst) {
     if (q->striding && (byte_cnt & MPRQ_FILLER_FLAG)) {
       // Region padding -- no packet. Release immediately so it can be reposted.
       q->dbg_filler++;
-      release_strides(*q, region, strd);
+      release_strides(*q, region, strd, false);
       continue;
     }
     q->dbg_data++;
@@ -4214,6 +4327,7 @@ Status IbverbsEngine::rx_poll_queue(IbvRxQueue* q, BurstParams** direct_burst) {
     // delivers it in sop_drop_qpn (24-bit). 0 = untagged.
     burst_flowtag_arr(q->cur_burst)[n] = be32toh(cqe64->sop_drop_qpn) & 0x00ffffffu;
     q->cur_n++;
+    q->outstanding_strides.fetch_add(strd, std::memory_order_relaxed);
     if (!direct && q->cur_n == 1) {
       q->last_flush_tsc = ibv_now_ns();
     }
@@ -4610,19 +4724,68 @@ void IbverbsEngine::rx_worker(std::vector<IbvRxQueue*> group) {
   }
 }
 
-void IbverbsEngine::release_strides(IbvRxQueue& q, uint32_t wqe_idx, uint32_t strd) {
+void IbverbsEngine::stop_workers() {
+  for (auto& q : rx_queues_) {
+    q->running.store(false, std::memory_order_release);
+  }
+  for (auto& q : tx_queues_) {
+    q->running.store(false, std::memory_order_release);
+  }
+  for (auto& q : rx_queues_) {
+    if (q->worker.joinable()) {
+      q->worker.join();
+    }
+  }
+  for (auto& q : tx_queues_) {
+    if (q->compl_worker.joinable()) {
+      q->compl_worker.join();
+    }
+  }
+}
+
+void IbverbsEngine::release_strides(IbvRxQueue& q, uint32_t wqe_idx, uint32_t strd,
+                                    bool tracked_packet) {
   // Both the striding and the regular RQ are DevX: record the freed strides
   // (regular RQ = 1 per packet); the queue's poller drains and reposts WQEs in
   // cyclic order (devx_advance_producer). Safe from the app and poller threads.
   q.freed_strides[wqe_idx].fetch_add(strd, std::memory_order_release);
+  if (tracked_packet) {
+    q.outstanding_strides.fetch_sub(strd, std::memory_order_release);
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Burst retrieval / free
 // ---------------------------------------------------------------------------
 IbvRxQueue* IbverbsEngine::find_rx_queue(int port, int q) {
+  std::lock_guard<std::recursive_mutex> guard(resource_lock_);
   for (auto& rq : rx_queues_) {
-    if (rq->port_id == port && rq->queue_id == q) {
+    if (rq->port_id == port && rq->queue_id == q &&
+        rq->state.load(std::memory_order_acquire) == ResourceState::ACTIVE) {
+      return rq.get();
+    }
+  }
+  return nullptr;
+}
+
+IbvRxQueue* IbverbsEngine::find_rx_queue_any(int port, int q) {
+  std::lock_guard<std::recursive_mutex> guard(resource_lock_);
+  for (auto& rq : rx_queues_) {
+    if (rq->port_id == port && rq->queue_id == q &&
+        rq->state.load(std::memory_order_acquire) != ResourceState::REMOVED) {
+      return rq.get();
+    }
+  }
+  return nullptr;
+}
+
+IbvRxQueue* IbverbsEngine::acquire_rx_queue(int port, int q, bool allow_draining) {
+  std::lock_guard<std::recursive_mutex> guard(resource_lock_);
+  for (auto& rq : rx_queues_) {
+    const ResourceState state = rq->state.load(std::memory_order_acquire);
+    if (rq->port_id == port && rq->queue_id == q &&
+        (state == ResourceState::ACTIVE || (allow_draining && state == ResourceState::DRAINING))) {
+      rq->active_users.fetch_add(1, std::memory_order_relaxed);
       return rq.get();
     }
   }
@@ -4703,12 +4866,8 @@ Status IbverbsEngine::init_reorder(IbvRxQueue& q, const InterfaceConfig& intf,
       const auto& region = ar_.at(mr_name);
       if (region.cuda_device_ != plan.cuda_device_id) {
         DAQIRI_LOG_CRITICAL(
-            "Reorder '{}' {} MR '{}' uses CUDA device {}, but the plan uses device {}",
-            rc.name_,
-            role,
-            mr_name,
-            region.cuda_device_,
-            plan.cuda_device_id);
+            "Reorder '{}' {} MR '{}' uses CUDA device {}, but the plan uses device {}", rc.name_,
+            role, mr_name, region.cuda_device_, plan.cuda_device_id);
         return Status::INVALID_PARAMETER;
       }
       if (plan.cuda_context != nullptr && region.cuda_context_ != nullptr &&
@@ -4904,6 +5063,8 @@ Status IbverbsEngine::reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, b
   ctx->info.burst_flags = burst->hdr.hdr.burst_flags;
   ctx->h_batch_id = ob.h_batch_id;
   ctx->h_received_bitmap = ob.h_received_bitmap;
+  ctx->outstanding_outputs = &q.outstanding_reorder_outputs;
+  q.outstanding_reorder_outputs.fetch_add(1, std::memory_order_relaxed);
   std::memcpy(burst->hdr.custom_burst_data, &ctx->info, sizeof(ctx->info));
   burst->custom_pkt_data = std::static_pointer_cast<void>(ctx);
   burst->pkts[0] = ctx->pkt_ptrs.data();
@@ -5005,13 +5166,20 @@ Status IbverbsEngine::reorder_get_rx(IbvRxQueue& q, BurstParams** burst) {
 }
 
 void IbverbsEngine::reorder_release_output(BurstParams* burst) {
-  if (burst == nullptr || burst->custom_pkt_data == nullptr) {
+  if (burst == nullptr) {
+    return;
+  }
+  QueueUse<IbvRxQueue> queue(acquire_rx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id, true));
+  if (!queue || burst->custom_pkt_data == nullptr) {
     return;
   }
   auto ctx = std::static_pointer_cast<IbvReorderBurstCtx>(burst->custom_pkt_data);
   if (ctx && !ctx->released && ctx->plan != nullptr && ctx->out_idx < ctx->plan->out_bufs.size()) {
     ctx->plan->out_bufs[ctx->out_idx].consumer_done = true;
     ctx->released = true;
+    if (ctx->outstanding_outputs != nullptr) {
+      ctx->outstanding_outputs->fetch_sub(1, std::memory_order_release);
+    }
   }
   delete burst;
 }
@@ -5049,6 +5217,7 @@ void IbverbsEngine::reorder_cleanup(IbvRxQueue& q) {
 Status IbverbsEngine::set_reorder_cuda_stream(const std::string& interface_name,
                                               const std::string& reorder_name,
                                               cudaStream_t stream) {
+  std::lock_guard<std::recursive_mutex> guard(resource_lock_);
   const int port = get_port_id(interface_name);
   for (auto& q : rx_queues_) {
     if (q->port_id == port && q->direct_reorder && q->direct_reorder->cfg.name_ == reorder_name) {
@@ -5178,8 +5347,8 @@ Status IbverbsEngine::get_rx_burst(BurstParams** burst, int port, int q) {
     return Status::NULL_PTR;
   }
   *burst = nullptr;
-  IbvRxQueue* rq = find_rx_queue(port, q);
-  if (rq == nullptr) {
+  QueueUse<IbvRxQueue> rq(acquire_rx_queue(port, q));
+  if (!rq) {
     return Status::INVALID_PARAMETER;
   }
   if (rq->poll_mode == QueuePollMode::DIRECT) {
@@ -5193,7 +5362,7 @@ Status IbverbsEngine::get_rx_burst(BurstParams** burst, int port, int q) {
       }
       return Status::NOT_READY;
     }
-    return rx_poll_queue(rq, burst);
+    return rx_poll_queue(rq.get(), burst);
   }
   if (rq->reorder && rq->reorder->enabled) {
     return reorder_get_rx(*rq, burst);
@@ -5216,13 +5385,52 @@ Status IbverbsEngine::get_rx_burst(BurstParams** burst, int port, int q) {
                        static_cast<unsigned>(expected));
       return Status::INTERNAL_ERROR;
     }
+    rq->outstanding_reorder_outputs.fetch_add(1, std::memory_order_relaxed);
   }
   *burst = result;
   return Status::SUCCESS;
 }
 
+Status IbverbsEngine::get_rx_burst(BurstParams** burst, int port) {
+  if (burst == nullptr) {
+    return Status::NULL_PTR;
+  }
+  *burst = nullptr;
+  std::lock_guard<std::recursive_mutex> guard(resource_lock_);
+  if (port < 0 || static_cast<size_t>(port) >= cfg_.ifs_.size()) {
+    return Status::INVALID_PARAMETER;
+  }
+  std::vector<int> queue_ids;
+  for (const auto& queue : rx_queues_) {
+    if (queue->port_id == port &&
+        queue->state.load(std::memory_order_acquire) == ResourceState::ACTIVE) {
+      queue_ids.push_back(queue->queue_id);
+    }
+  }
+  if (queue_ids.empty()) {
+    return Status::NULL_PTR;
+  }
+  size_t& next = next_queue_index_map_[port];
+  next %= queue_ids.size();
+  bool saw_not_ready = false;
+  for (size_t i = 0; i < queue_ids.size(); ++i) {
+    const size_t index = (next + i) % queue_ids.size();
+    const Status status = get_rx_burst(burst, port, queue_ids[index]);
+    if (status != Status::NULL_PTR && status != Status::NOT_READY) {
+      next = (index + 1) % queue_ids.size();
+      return status;
+    }
+    saw_not_ready = saw_not_ready || status == Status::NOT_READY;
+  }
+  return saw_not_ready ? Status::NOT_READY : Status::NULL_PTR;
+}
+
 void IbverbsEngine::direct_release_output(BurstParams* burst) {
-  if (burst == nullptr || burst->custom_pkt_data == nullptr) {
+  if (burst == nullptr) {
+    return;
+  }
+  QueueUse<IbvRxQueue> queue(acquire_rx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id, true));
+  if (!queue || burst->custom_pkt_data == nullptr) {
     return;
   }
   auto batch = std::static_pointer_cast<IbvDirectBatchSlot>(burst->custom_pkt_data);
@@ -5236,9 +5444,9 @@ void IbverbsEngine::direct_release_output(BurstParams* burst) {
                      static_cast<unsigned>(expected));
     return;
   }
+  queue->outstanding_reorder_outputs.fetch_sub(1, std::memory_order_release);
   if (batch->rqs_reset) {
-    auto* q = find_rx_queue(batch->plan->port_id, batch->plan->queue_id);
-    if (q == nullptr || !direct_rearm_reset_batch(*q, *batch)) {
+    if (!direct_rearm_reset_batch(*queue, *batch)) {
       force_quit_.store(true, std::memory_order_relaxed);
     }
     return;
@@ -5282,8 +5490,8 @@ void IbverbsEngine::free_packet(BurstParams* burst, int pkt) {
   if (burst->hdr.hdr.burst_flags & DAQIRI_BURST_FLAG_REORDERED) {
     return;
   }
-  IbvRxQueue* q = find_rx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
-  if (q == nullptr) {
+  QueueUse<IbvRxQueue> q(acquire_rx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id, true));
+  if (!q) {
     return;
   }
   release_strides(*q, burst_wqe_arr(burst)[pkt], burst_strd_arr(burst)[pkt]);
@@ -5302,8 +5510,8 @@ void IbverbsEngine::free_all_packets(BurstParams* burst) {
     // TX burst the app allocated but never sent (a local fill failure): roll
     // back the allocation. The bench only does this for the just-allocated
     // burst, so these are the most-recent (unposted) cyclic slots.
-    IbvTxQueue* tq = find_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
-    if (tq == nullptr) {
+    QueueUse<IbvTxQueue> tq(acquire_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id, true));
+    if (!tq) {
       return;
     }
     if (tq->poll_mode == QueuePollMode::DIRECT) {
@@ -5323,8 +5531,8 @@ void IbverbsEngine::free_all_packets(BurstParams* burst) {
     tq->alloc_head -= static_cast<uint64_t>(burst->hdr.hdr.num_pkts);
     return;
   }
-  IbvRxQueue* q = find_rx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
-  if (q == nullptr) {
+  QueueUse<IbvRxQueue> q(acquire_rx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id, true));
+  if (!q) {
     return;
   }
   uint16_t* wqe_arr = burst_wqe_arr(burst);
@@ -5417,14 +5625,14 @@ FlowId IbverbsEngine::get_packet_flow_id(BurstParams* burst, int idx) {
   // Distinguishes flows that share a queue. Falls back to the per-queue flow_id
   // for untagged packets (tag 0), e.g. catch-all traffic or single-flow configs.
   if (burst->hdr.hdr.burst_flags & DAQIRI_BURST_FLAG_REORDERED) {
-    IbvRxQueue* q = find_rx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
+    QueueUse<IbvRxQueue> q(acquire_rx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id, true));
     return q ? q->flow_id : 0;
   }
   const uint32_t tag = burst_flowtag_arr(burst)[idx];
   if (tag != 0) {
     return tag;
   }
-  IbvRxQueue* q = find_rx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
+  QueueUse<IbvRxQueue> q(acquire_rx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id, true));
   return q ? q->flow_id : 0;
 }
 
@@ -5458,8 +5666,8 @@ Status IbverbsEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint6
   if (burst->hdr.hdr.burst_flags & DAQIRI_BURST_FLAG_REORDERED) {
     return Status::NOT_SUPPORTED;
   }
-  IbvRxQueue* q = find_rx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
-  if (q == nullptr) {
+  QueueUse<IbvRxQueue> q(acquire_rx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id, true));
+  if (!q) {
     return Status::INVALID_PARAMETER;
   }
   const uint64_t raw_timestamp = burst_ts_arr(burst)[idx];
@@ -5490,9 +5698,11 @@ uint64_t IbverbsEngine::get_burst_tot_byte(BurstParams* burst) {
 }
 
 uint16_t IbverbsEngine::get_num_rx_queues(int port_id) const {
+  std::lock_guard<std::recursive_mutex> guard(resource_lock_);
   uint16_t n = 0;
   for (const auto& q : rx_queues_) {
-    if (q->port_id == port_id) {
+    if (q->port_id == port_id &&
+        q->state.load(std::memory_order_acquire) == ResourceState::ACTIVE) {
       ++n;
     }
   }
@@ -5500,6 +5710,7 @@ uint16_t IbverbsEngine::get_num_rx_queues(int port_id) const {
 }
 
 std::string IbverbsEngine::port_netdev(int port) const {
+  std::lock_guard<std::recursive_mutex> guard(resource_lock_);
   // Resolve port -> ibv device -> netdev. The RDMA device exposes its netdev
   // under /sys/class/infiniband/<dev>/device/net/<netdev>.
   struct ibv_context* ctx = nullptr;
@@ -5659,9 +5870,8 @@ Status IbverbsEngine::create_dynamic_flow_locked(int port, const FlowRuleConfig&
   PortSteering& steering = steering_it->second;
   DynamicFlowEntry entry;
   entry.flow_id = flow_id;
-  const int priority = steering.next_dynamic_priority++;
-  const Status status =
-      install_flow_rule_locked(port, steering, *intf, flow, flow_id, priority, &entry);
+  const Status status = install_flow_rule_locked(port, steering, *intf, flow, flow_id,
+                                                 steering.dynamic_priority, &entry);
   if (status != Status::SUCCESS) {
     return status;
   }
@@ -5713,6 +5923,7 @@ Status IbverbsEngine::add_rx_flow_async(int port, const FlowRuleConfig& flow, Fl
   *op_id = 0;
 
   std::lock_guard<std::mutex> guard(flow_lock_);
+  std::lock_guard<std::recursive_mutex> resource_guard(resource_lock_);
   if (!validate_dynamic_rx_flow_locked(port, flow)) {
     return Status::INVALID_PARAMETER;
   }
@@ -5751,6 +5962,7 @@ Status IbverbsEngine::add_rx_flows_async(int port, const std::vector<FlowRuleCon
   }
 
   std::lock_guard<std::mutex> guard(flow_lock_);
+  std::lock_guard<std::recursive_mutex> resource_guard(resource_lock_);
   for (const auto& flow : flows) {
     if (!validate_dynamic_rx_flow_locked(port, flow)) {
       return Status::INVALID_PARAMETER;
@@ -5842,6 +6054,794 @@ Status IbverbsEngine::poll_flow_op(FlowOpResult* result) {
   }
   *result = ready_flow_ops_.front();
   ready_flow_ops_.pop();
+  return Status::SUCCESS;
+}
+
+ResourceOpId IbverbsEngine::allocate_resource_op_id_locked() {
+  if (next_resource_op_id_ == 0) {
+    next_resource_op_id_ = 1;
+  }
+  return next_resource_op_id_++;
+}
+
+void IbverbsEngine::enqueue_resource_result_locked(ResourceOpResult result) {
+  ready_resource_ops_.push(std::move(result));
+}
+
+bool IbverbsEngine::memory_region_in_use_locked(const std::string& name) const {
+  const auto uses = [&](const auto& queues) {
+    return std::any_of(queues.begin(), queues.end(), [&](const auto& q) {
+      return q->state.load(std::memory_order_acquire) != ResourceState::REMOVED &&
+             std::find(q->mr_names.begin(), q->mr_names.end(), name) != q->mr_names.end();
+    });
+  };
+  if (uses(rx_queues_) || uses(tx_queues_)) {
+    return true;
+  }
+  return std::any_of(rx_queues_.begin(), rx_queues_.end(), [&](const auto& queue) {
+    if (queue->state.load(std::memory_order_acquire) == ResourceState::REMOVED) {
+      return false;
+    }
+    if (queue->direct_reorder != nullptr && queue->direct_reorder->cfg.memory_region_ == name) {
+      return true;
+    }
+    if (queue->reorder == nullptr) {
+      return false;
+    }
+    return std::any_of(queue->reorder->plans.begin(), queue->reorder->plans.end(),
+                       [&](const IbvReorderPlan& plan) { return plan.cfg.memory_region_ == name; });
+  });
+}
+
+bool IbverbsEngine::rx_queue_has_flow_dependency(int port, int queue_id) const {
+  if (port < 0 || static_cast<size_t>(port) >= cfg_.ifs_.size()) {
+    return false;
+  }
+  for (const auto& flow : cfg_.ifs_[port].rx_.flows_) {
+    const auto ids = flow_queue_ids(flow_queue_action(flow_config_actions(flow)));
+    if (std::find(ids.begin(), ids.end(), static_cast<uint16_t>(queue_id)) != ids.end()) {
+      return true;
+    }
+  }
+  for (const auto& [id, entry] : dynamic_flows_) {
+    (void)id;
+    if (entry.port != port || entry.state != DynamicFlowState::ACTIVE) {
+      continue;
+    }
+    if (entry.queue == static_cast<uint16_t>(queue_id) ||
+        (entry.rss_destination != nullptr &&
+         std::find(entry.rss_destination->queue_ids.begin(), entry.rss_destination->queue_ids.end(),
+                   static_cast<uint16_t>(queue_id)) != entry.rss_destination->queue_ids.end())) {
+      return true;
+    }
+  }
+  const auto steering = port_steering_.find(port);
+  if (steering != port_steering_.end()) {
+    const mlx5dv_dr_action* target_action = nullptr;
+    for (const auto& queue : rx_queues_) {
+      if (queue->port_id == port && queue->queue_id == queue_id) {
+        target_action = queue->dr_action;
+        break;
+      }
+    }
+    for (const auto& spec : steering->second.rule_specs) {
+      if ((target_action != nullptr && spec.action == target_action) ||
+          (spec.rss_destination != nullptr &&
+           std::find(spec.rss_destination->queue_ids.begin(), spec.rss_destination->queue_ids.end(),
+                     static_cast<uint16_t>(queue_id)) != spec.rss_destination->queue_ids.end())) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+Status IbverbsEngine::add_rx_queue_async(int port, const RxQueueConfig& config,
+                                         ResourceOpId* op_id) {
+  std::lock_guard<std::mutex> operation_guard(resource_operation_lock_);
+  if (op_id == nullptr) {
+    return Status::NULL_PTR;
+  }
+  *op_id = 0;
+  if (!initialized_ || port < 0 || static_cast<size_t>(port) >= cfg_.ifs_.size()) {
+    return Status::INVALID_PARAMETER;
+  }
+  const uint32_t effective_batch =
+      config.poll_mode_ == QueuePollMode::DIRECT
+          ? kDirectPollMaxBatch
+          : static_cast<uint32_t>(std::max(1, config.common_.batch_size_));
+  if (config.poll_mode_ == QueuePollMode::INVALID || effective_batch > max_batch_ ||
+      config.common_.id_ < 0 || static_cast<uint32_t>(config.common_.id_) >= MAX_NUM_RX_QUEUES ||
+      config.common_.mrs_.empty()) {
+    return Status::INVALID_PARAMETER;
+  }
+  {
+    std::lock_guard<std::mutex> flow_guard(flow_lock_);
+    std::lock_guard<std::recursive_mutex> guard(resource_lock_);
+    if (find_rx_queue_any(port, config.common_.id_) != nullptr) {
+      return Status::ALREADY_EXISTS;
+    }
+    if (get_num_rx_queues(port) >= MAX_NUM_RX_QUEUES) {
+      return Status::NO_SPACE_AVAILABLE;
+    }
+    for (const auto& name : config.common_.mrs_) {
+      if (cfg_.mrs_.find(name) == cfg_.mrs_.end()) {
+        return Status::INVALID_PARAMETER;
+      }
+    }
+    *op_id = allocate_resource_op_id_locked();
+  }
+
+  stop_workers();
+  ResourceOpResult result{*op_id,
+                          ResourceOpType::ADD_RX_QUEUE,
+                          ResourceState::FAILED,
+                          Status::GENERIC_FAILURE,
+                          "",
+                          port,
+                          config.common_.id_};
+  {
+    std::lock_guard<std::mutex> flow_guard(flow_lock_);
+    std::lock_guard<std::recursive_mutex> guard(resource_lock_);
+    auto queue = std::make_unique<IbvRxQueue>();
+    try {
+      result.status_ = setup_rx_queue(*queue, cfg_.ifs_[port], config);
+    } catch (const std::exception& error) {
+      DAQIRI_LOG_ERROR("Could not add RX queue {}: {}", config.common_.id_, error.what());
+      result.status_ = Status::INVALID_PARAMETER;
+    }
+    if (result.status_ == Status::SUCCESS) {
+      PortSteering* steering = nullptr;
+      result.status_ =
+          initialize_port_steering_locked(port, cfg_.ifs_[port], queue->ctx, true, &steering);
+    }
+    if (result.status_ == Status::SUCCESS) {
+      queue->state.store(ResourceState::ACTIVE, std::memory_order_release);
+      rx_queues_.push_back(std::move(queue));
+      cfg_.ifs_[port].rx_.queues_.push_back(config);
+      ensure_port_mtus();
+      result.state_ = ResourceState::ACTIVE;
+    } else {
+      destroy_rx_queue(*queue);
+    }
+    enqueue_resource_result_locked(result);
+  }
+  run();
+  return Status::SUCCESS;
+}
+
+Status IbverbsEngine::add_tx_queue_async(int port, const TxQueueConfig& config,
+                                         ResourceOpId* op_id) {
+  std::lock_guard<std::mutex> operation_guard(resource_operation_lock_);
+  if (op_id == nullptr) {
+    return Status::NULL_PTR;
+  }
+  *op_id = 0;
+  const uint32_t effective_batch =
+      config.poll_mode_ == QueuePollMode::DIRECT
+          ? 1u
+          : static_cast<uint32_t>(std::max(1, config.common_.batch_size_));
+  if (!initialized_ || port < 0 || static_cast<size_t>(port) >= cfg_.ifs_.size() ||
+      config.poll_mode_ == QueuePollMode::INVALID || effective_batch > max_batch_) {
+    return Status::INVALID_PARAMETER;
+  }
+  if (config.common_.id_ < 0 || static_cast<uint32_t>(config.common_.id_) >= MAX_NUM_TX_QUEUES ||
+      config.common_.mrs_.empty()) {
+    return Status::INVALID_PARAMETER;
+  }
+  {
+    std::lock_guard<std::recursive_mutex> guard(resource_lock_);
+    if (find_tx_queue_any(port, config.common_.id_) != nullptr) {
+      return Status::ALREADY_EXISTS;
+    }
+    const size_t active_tx =
+        std::count_if(tx_queues_.begin(), tx_queues_.end(), [&](const auto& queue) {
+          return queue->port_id == port &&
+                 queue->state.load(std::memory_order_acquire) == ResourceState::ACTIVE;
+        });
+    if (active_tx >= MAX_NUM_TX_QUEUES) {
+      return Status::NO_SPACE_AVAILABLE;
+    }
+    for (const auto& name : config.common_.mrs_) {
+      if (cfg_.mrs_.find(name) == cfg_.mrs_.end()) {
+        return Status::INVALID_PARAMETER;
+      }
+    }
+    *op_id = allocate_resource_op_id_locked();
+  }
+
+  stop_workers();
+  ResourceOpResult result{*op_id,
+                          ResourceOpType::ADD_TX_QUEUE,
+                          ResourceState::FAILED,
+                          Status::GENERIC_FAILURE,
+                          "",
+                          port,
+                          config.common_.id_};
+  {
+    std::lock_guard<std::recursive_mutex> guard(resource_lock_);
+    auto queue = std::make_unique<IbvTxQueue>();
+    try {
+      result.status_ = setup_tx_queue(*queue, cfg_.ifs_[port], config);
+    } catch (const std::exception& error) {
+      DAQIRI_LOG_ERROR("Could not add TX queue {}: {}", config.common_.id_, error.what());
+      result.status_ = Status::INVALID_PARAMETER;
+    }
+    if (result.status_ == Status::SUCCESS) {
+      queue->send_scheduling = probe_send_scheduling(queue->ctx);
+      queue->rt_timemask = (8ULL << 32) - 1ULL;
+      if (queue->insert_eth_src &&
+          get_mac_addr(port, reinterpret_cast<char*>(queue->eth_src)) != Status::SUCCESS) {
+        DAQIRI_LOG_ERROR("tx_eth_src: could not resolve port {} MAC; source MAC not stamped", port);
+        queue->insert_eth_src = false;
+      }
+      queue->state.store(ResourceState::ACTIVE, std::memory_order_release);
+      tx_queues_.push_back(std::move(queue));
+      cfg_.ifs_[port].tx_.queues_.push_back(config);
+      ensure_port_mtus();
+      result.state_ = ResourceState::ACTIVE;
+    } else {
+      destroy_tx_queue(*queue);
+    }
+    enqueue_resource_result_locked(result);
+  }
+  run();
+  return Status::SUCCESS;
+}
+
+Status IbverbsEngine::allocate_runtime_mr(MemoryRegionConfig config,
+                                          const ExternalMemoryRegion* binding) {
+  if (config.name_.empty() || config.buf_size_ == 0 || config.num_bufs_ == 0 ||
+      config.kind_ == MemoryKind::INVALID) {
+    return Status::INVALID_PARAMETER;
+  }
+  config.adj_size_ = next_power_of_two(config.buf_size_);
+  if (config.adj_size_ == 0 ||
+      config.num_bufs_ > std::numeric_limits<size_t>::max() / config.adj_size_) {
+    return Status::INVALID_PARAMETER;
+  }
+  const size_t bytes = config.adj_size_ * config.num_bufs_;
+  config.ttl_size_ = ((bytes + GPU_PAGE_SIZE - 1) / GPU_PAGE_SIZE) * GPU_PAGE_SIZE;
+
+  AllocRegion allocation;
+  allocation.mr_name_ = config.name_;
+  allocation.affinity_ = config.affinity_;
+  allocation.size_ = config.ttl_size_;
+  allocation.mapped_size_ = allocation.size_;
+  void* ptr = nullptr;
+
+  if (binding != nullptr) {
+    if (binding->data == nullptr || binding->capacity < config.ttl_size_) {
+      return Status::INVALID_PARAMETER;
+    }
+    const uintptr_t begin = reinterpret_cast<uintptr_t>(binding->data);
+    if (binding->capacity > std::numeric_limits<uintptr_t>::max() - begin) {
+      return Status::INVALID_PARAMETER;
+    }
+    const uintptr_t end = begin + binding->capacity;
+    for (const auto& [existing_name, existing] : ar_) {
+      (void)existing_name;
+      const uintptr_t existing_begin = reinterpret_cast<uintptr_t>(existing.ptr_);
+      const uintptr_t existing_end = existing_begin + existing.size_;
+      if (begin < existing_end && existing_begin < end) {
+        return Status::INVALID_PARAMETER;
+      }
+    }
+    size_t alignment = get_alignment(config.kind_);
+    if (config.kind_ == MemoryKind::DEVICE) {
+      alignment = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+    }
+    if ((reinterpret_cast<uintptr_t>(binding->data) % alignment) != 0) {
+      return Status::INVALID_PARAMETER;
+    }
+    ptr = binding->data;
+    allocation.external_ = true;
+    allocation.deallocator_ = AllocRegion::Deallocator::NONE;
+    if (config.kind_ == MemoryKind::DEVICE || config.kind_ == MemoryKind::HOST_PINNED) {
+      CUmemorytype type{};
+      CUcontext context = nullptr;
+      const CUdeviceptr device_ptr = reinterpret_cast<CUdeviceptr>(ptr);
+      if (cuPointerGetAttribute(&context, CU_POINTER_ATTRIBUTE_CONTEXT, device_ptr) !=
+              CUDA_SUCCESS ||
+          cuPointerGetAttribute(&type, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, device_ptr) !=
+              CUDA_SUCCESS ||
+          context == nullptr) {
+        return Status::INVALID_PARAMETER;
+      }
+      const CUmemorytype expected =
+          config.kind_ == MemoryKind::DEVICE ? CU_MEMORYTYPE_DEVICE : CU_MEMORYTYPE_HOST;
+      if (type != expected) {
+        return Status::INVALID_PARAMETER;
+      }
+      allocation.cuda_context_ = context;
+      CudaContextGuard guard(context);
+      CUdevice context_device = -1;
+      if (!guard.valid() || cuCtxGetDevice(&context_device) != CUDA_SUCCESS) {
+        return Status::INVALID_PARAMETER;
+      }
+      allocation.cuda_device_ = context_device;
+      if (config.kind_ == MemoryKind::DEVICE) {
+        CUdeviceptr range_start = 0;
+        size_t range_size = 0;
+        if (cuPointerGetAttribute(&range_start, CU_POINTER_ATTRIBUTE_RANGE_START_ADDR,
+                                  device_ptr) != CUDA_SUCCESS ||
+            cuPointerGetAttribute(&range_size, CU_POINTER_ATTRIBUTE_RANGE_SIZE, device_ptr) !=
+                CUDA_SUCCESS ||
+            device_ptr < range_start || device_ptr - range_start > range_size ||
+            binding->capacity > range_size - (device_ptr - range_start)) {
+          return Status::INVALID_PARAMETER;
+        }
+        int ordinal = -1;
+        if (cuPointerGetAttribute(&ordinal, CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL, device_ptr) !=
+                CUDA_SUCCESS ||
+            ordinal != config.affinity_) {
+          return Status::INVALID_PARAMETER;
+        }
+        int capable = 0;
+        if (cuPointerGetAttribute(&capable, CU_POINTER_ATTRIBUTE_IS_GPU_DIRECT_RDMA_CAPABLE,
+                                  device_ptr) == CUDA_SUCCESS &&
+            capable == 0) {
+          return Status::INVALID_PARAMETER;
+        }
+        unsigned int sync_memops = 1;
+        if (cuPointerSetAttribute(&sync_memops, CU_POINTER_ATTRIBUTE_SYNC_MEMOPS, device_ptr) !=
+            CUDA_SUCCESS) {
+          return Status::INVALID_PARAMETER;
+        }
+      } else if (context_device != config.affinity_) {
+        return Status::INVALID_PARAMETER;
+      }
+    }
+  } else if (!config.owned_) {
+    return Status::INVALID_PARAMETER;
+  } else {
+    switch (config.kind_) {
+      case MemoryKind::HOST:
+        if (posix_memalign(&ptr, GPU_PAGE_SIZE, config.ttl_size_) != 0) {
+          return Status::NULL_PTR;
+        }
+        allocation.deallocator_ = AllocRegion::Deallocator::FREE;
+        break;
+      case MemoryKind::HUGE:
+        ptr = alloc_huge(config.ttl_size_, config.affinity_, &allocation.deallocator_,
+                         &allocation.mapped_size_);
+        break;
+      case MemoryKind::HOST_PINNED: {
+        CUcontext previous = nullptr;
+        cuCtxGetCurrent(&previous);
+        if (cudaSetDevice(config.affinity_) != cudaSuccess ||
+            cudaHostAlloc(&ptr, config.ttl_size_, 0) != cudaSuccess ||
+            cuCtxGetCurrent(&allocation.cuda_context_) != CUDA_SUCCESS) {
+          if (ptr != nullptr) {
+            cudaFreeHost(ptr);
+          }
+          if (previous != allocation.cuda_context_) {
+            cuCtxSetCurrent(previous);
+          }
+          return Status::NULL_PTR;
+        }
+        allocation.cuda_device_ = config.affinity_;
+        allocation.deallocator_ = AllocRegion::Deallocator::CUDA_HOST;
+        if (previous != allocation.cuda_context_) {
+          cuCtxSetCurrent(previous);
+        }
+        break;
+      }
+      case MemoryKind::DEVICE: {
+        CUcontext previous = nullptr;
+        cuCtxGetCurrent(&previous);
+        if (cuInit(0) != CUDA_SUCCESS || cudaSetDevice(config.affinity_) != cudaSuccess ||
+            cudaFree(0) != cudaSuccess ||
+            cuCtxGetCurrent(&allocation.cuda_context_) != CUDA_SUCCESS) {
+          cuCtxSetCurrent(previous);
+          return Status::NULL_PTR;
+        }
+        CUdeviceptr device_ptr = 0;
+        if (cuMemAlloc(&device_ptr, config.ttl_size_) != CUDA_SUCCESS) {
+          cuCtxSetCurrent(previous);
+          return Status::NULL_PTR;
+        }
+        unsigned int sync_memops = 1;
+        if (cuPointerSetAttribute(&sync_memops, CU_POINTER_ATTRIBUTE_SYNC_MEMOPS, device_ptr) !=
+            CUDA_SUCCESS) {
+          cuMemFree(device_ptr);
+          cuCtxSetCurrent(previous);
+          return Status::GENERIC_FAILURE;
+        }
+        ptr = reinterpret_cast<void*>(device_ptr);
+        allocation.cuda_device_ = config.affinity_;
+        allocation.deallocator_ = AllocRegion::Deallocator::CUDA_DEVICE;
+        if (previous != allocation.cuda_context_) {
+          cuCtxSetCurrent(previous);
+        }
+        break;
+      }
+      default:
+        return Status::INVALID_PARAMETER;
+    }
+    if (ptr == nullptr) {
+      return Status::NULL_PTR;
+    }
+  }
+
+  allocation.ptr_ = ptr;
+  cfg_.mrs_.emplace(config.name_, config);
+  ar_.emplace(config.name_, allocation);
+  if (binding != nullptr) {
+    external_mrs_.emplace(config.name_, ResolvedExternalMemoryRegion{
+                                            binding->data, binding->capacity,
+                                            allocation.cuda_context_, allocation.cuda_device_});
+  }
+  return Status::SUCCESS;
+}
+
+Status IbverbsEngine::free_runtime_mr(const std::string& name) {
+  auto registrations = registered_mrs_by_name_.find(name);
+  if (registrations != registered_mrs_by_name_.end()) {
+    while (!registrations->second.empty()) {
+      ibv_mr* mr = registrations->second.back();
+      if (mr != nullptr) {
+        if (ibv_dereg_mr(mr) != 0) {
+          DAQIRI_LOG_ERROR("Could not deregister runtime MR '{}': {}", name, strerror(errno));
+          return Status::GENERIC_FAILURE;
+        }
+        registered_mrs_.erase(std::remove(registered_mrs_.begin(), registered_mrs_.end(), mr),
+                              registered_mrs_.end());
+      }
+      registrations->second.pop_back();
+    }
+    registered_mrs_by_name_.erase(registrations);
+  }
+
+  auto allocation = ar_.find(name);
+  if (allocation != ar_.end()) {
+    AllocRegion& region = allocation->second;
+    switch (region.deallocator_) {
+      case AllocRegion::Deallocator::FREE:
+        std::free(region.ptr_);
+        break;
+      case AllocRegion::Deallocator::CUDA_HOST:
+        cudaSetDevice(region.affinity_);
+        cudaFreeHost(region.ptr_);
+        break;
+      case AllocRegion::Deallocator::CUDA_DEVICE: {
+        CUcontext previous = nullptr;
+        cuCtxGetCurrent(&previous);
+        if (region.cuda_context_ != nullptr) {
+          cuCtxSetCurrent(region.cuda_context_);
+        }
+        cuMemFree(reinterpret_cast<CUdeviceptr>(region.ptr_));
+        if (previous != region.cuda_context_) {
+          cuCtxSetCurrent(previous);
+        }
+        break;
+      }
+      case AllocRegion::Deallocator::MUNMAP:
+        if (munmap(region.ptr_, region.mapped_size_) != 0) {
+          DAQIRI_LOG_ERROR("Could not unmap {} byte runtime memory region '{}': {}",
+                           region.mapped_size_, name, strerror(errno));
+          return Status::GENERIC_FAILURE;
+        }
+        break;
+      case AllocRegion::Deallocator::EAL:
+      case AllocRegion::Deallocator::NONE:
+        break;
+    }
+    ar_.erase(allocation);
+  }
+  external_mrs_.erase(name);
+  cfg_.mrs_.erase(name);
+  return Status::SUCCESS;
+}
+
+Status IbverbsEngine::add_memory_region_async(const MemoryRegionConfig& config,
+                                              const ExternalMemoryRegion* binding,
+                                              ResourceOpId* op_id) {
+  std::lock_guard<std::mutex> operation_guard(resource_operation_lock_);
+  if (op_id == nullptr) {
+    return Status::NULL_PTR;
+  }
+  *op_id = 0;
+  if (!initialized_) {
+    return Status::NOT_READY;
+  }
+  std::lock_guard<std::recursive_mutex> guard(resource_lock_);
+  if (cfg_.mrs_.find(config.name_) != cfg_.mrs_.end()) {
+    return Status::ALREADY_EXISTS;
+  }
+  *op_id = allocate_resource_op_id_locked();
+  const Status status = allocate_runtime_mr(config, binding);
+  enqueue_resource_result_locked(
+      {*op_id, ResourceOpType::ADD_MEMORY_REGION,
+       status == Status::SUCCESS ? ResourceState::ACTIVE : ResourceState::FAILED, status,
+       config.name_, -1, -1});
+  return Status::SUCCESS;
+}
+
+Status IbverbsEngine::delete_memory_region_async(const std::string& name, ResourceOpId* op_id) {
+  std::lock_guard<std::mutex> operation_guard(resource_operation_lock_);
+  if (op_id == nullptr) {
+    return Status::NULL_PTR;
+  }
+  *op_id = 0;
+  std::lock_guard<std::recursive_mutex> guard(resource_lock_);
+  if (cfg_.mrs_.find(name) == cfg_.mrs_.end()) {
+    return Status::INVALID_PARAMETER;
+  }
+  if (memory_region_in_use_locked(name)) {
+    return Status::RESOURCE_IN_USE;
+  }
+  *op_id = allocate_resource_op_id_locked();
+  const Status status = free_runtime_mr(name);
+  enqueue_resource_result_locked(
+      {*op_id, ResourceOpType::DELETE_MEMORY_REGION,
+       status == Status::SUCCESS ? ResourceState::REMOVED : ResourceState::FAILED, status, name, -1,
+       -1});
+  return Status::SUCCESS;
+}
+
+Status IbverbsEngine::delete_rx_queue_async(int port, int queue_id, ResourceOpId* op_id) {
+  std::lock_guard<std::mutex> operation_guard(resource_operation_lock_);
+  if (op_id == nullptr) {
+    return Status::NULL_PTR;
+  }
+  *op_id = 0;
+  {
+    std::lock_guard<std::mutex> flow_guard(flow_lock_);
+    std::lock_guard<std::recursive_mutex> resource_guard(resource_lock_);
+    if (rx_queue_has_flow_dependency(port, queue_id)) {
+      return Status::RESOURCE_IN_USE;
+    }
+    IbvRxQueue* queue = find_rx_queue(port, queue_id);
+    if (queue == nullptr) {
+      return Status::INVALID_PARAMETER;
+    }
+    queue->state.store(ResourceState::DRAINING, std::memory_order_release);
+    *op_id = allocate_resource_op_id_locked();
+    draining_resource_ops_.push_back({*op_id, ResourceOpType::DELETE_RX_QUEUE,
+                                      ResourceState::DRAINING, Status::NOT_READY, "", port,
+                                      queue_id});
+  }
+  stop_workers();
+  run();
+  return Status::SUCCESS;
+}
+
+Status IbverbsEngine::delete_tx_queue_async(int port, int queue_id, ResourceOpId* op_id) {
+  std::lock_guard<std::mutex> operation_guard(resource_operation_lock_);
+  if (op_id == nullptr) {
+    return Status::NULL_PTR;
+  }
+  *op_id = 0;
+  {
+    std::lock_guard<std::recursive_mutex> guard(resource_lock_);
+    IbvTxQueue* queue = find_tx_queue(port, queue_id);
+    if (queue == nullptr) {
+      return Status::INVALID_PARAMETER;
+    }
+    queue->state.store(ResourceState::DRAINING, std::memory_order_release);
+    *op_id = allocate_resource_op_id_locked();
+    draining_resource_ops_.push_back({*op_id, ResourceOpType::DELETE_TX_QUEUE,
+                                      ResourceState::DRAINING, Status::NOT_READY, "", port,
+                                      queue_id});
+  }
+  stop_workers();
+  run();
+  return Status::SUCCESS;
+}
+
+void IbverbsEngine::destroy_rx_queue(IbvRxQueue& q) {
+  void* raw = nullptr;
+  while (q.ring != nullptr && q.ring->dequeue(&raw)) {
+    auto* burst = static_cast<BurstParams*>(raw);
+    if ((burst->hdr.hdr.burst_flags & DAQIRI_BURST_FLAG_DIRECT_PLACED) == 0) {
+      free_all_packets(burst);
+      rx_meta_pool_->put(burst);
+    }
+  }
+  if (q.cur_burst != nullptr) {
+    uint16_t* wqe = burst_wqe_arr(q.cur_burst);
+    uint16_t* strides = burst_strd_arr(q.cur_burst);
+    for (int i = 0; i < q.cur_n; ++i) {
+      release_strides(q, wqe[i], strides[i]);
+    }
+    rx_meta_pool_->put(q.cur_burst);
+    q.cur_burst = nullptr;
+    q.cur_n = 0;
+  }
+  if (q.reorder != nullptr) {
+    while (!q.reorder->ready.empty()) {
+      BurstParams* burst = q.reorder->ready.front();
+      q.reorder->ready.pop_front();
+      reorder_release_output(burst);
+    }
+  }
+  reorder_cleanup(q);
+  direct_cleanup(q);
+  devx_destroy(q);
+  if (q.qp != nullptr) {
+    ibv_destroy_qp(q.qp);
+    q.qp = nullptr;
+  }
+  if (q.ind_table != nullptr) {
+    ibv_destroy_rwq_ind_table(q.ind_table);
+    q.ind_table = nullptr;
+  }
+  if (q.wq != nullptr) {
+    ibv_destroy_wq(q.wq);
+    q.wq = nullptr;
+  }
+  if (q.cq != nullptr) {
+    ibv_destroy_cq(q.cq);
+    q.cq = nullptr;
+  }
+  deregister_queue_mrs(q.registrations);
+  if (q.ring != nullptr) {
+    daqiri::Ring::free(q.ring);
+    q.ring = nullptr;
+  }
+  q.state.store(ResourceState::REMOVED, std::memory_order_release);
+  if (q.port_id >= 0 && static_cast<size_t>(q.port_id) < cfg_.ifs_.size()) {
+    auto& configs = cfg_.ifs_[q.port_id].rx_.queues_;
+    configs.erase(std::remove_if(configs.begin(), configs.end(),
+                                 [&](const RxQueueConfig& config) {
+                                   return config.common_.id_ == q.queue_id;
+                                 }),
+                  configs.end());
+  }
+}
+
+void IbverbsEngine::destroy_tx_queue(IbvTxQueue& q) {
+  void* raw = nullptr;
+  while (q.send_ring != nullptr && q.send_ring->dequeue(&raw)) {
+    auto* burst = static_cast<BurstParams*>(raw);
+    q.alloc_head -= static_cast<uint64_t>(burst->hdr.hdr.num_pkts);
+    tx_meta_pool_->put(burst);
+  }
+  if (q.worker_pending != nullptr) {
+    q.alloc_head -= static_cast<uint64_t>(q.worker_pending->hdr.hdr.num_pkts);
+    tx_meta_pool_->put(q.worker_pending);
+    q.worker_pending = nullptr;
+    q.worker_pending_wqebbs = 0;
+  }
+  if (q.direct_pending != nullptr) {
+    q.alloc_head--;
+    tx_meta_pool_->put(q.direct_pending);
+    q.direct_pending = nullptr;
+  }
+  if (q.qp != nullptr) {
+    ibv_destroy_qp(q.qp);
+    q.qp = nullptr;
+  }
+  if (q.cq != nullptr) {
+    ibv_destroy_cq(q.cq);
+    q.cq = nullptr;
+  }
+  deregister_queue_mrs(q.registrations);
+  if (q.send_ring != nullptr) {
+    daqiri::Ring::free(q.send_ring);
+    q.send_ring = nullptr;
+  }
+  q.state.store(ResourceState::REMOVED, std::memory_order_release);
+  if (q.port_id >= 0 && static_cast<size_t>(q.port_id) < cfg_.ifs_.size()) {
+    auto& configs = cfg_.ifs_[q.port_id].tx_.queues_;
+    configs.erase(std::remove_if(configs.begin(), configs.end(),
+                                 [&](const TxQueueConfig& config) {
+                                   return config.common_.id_ == q.queue_id;
+                                 }),
+                  configs.end());
+  }
+}
+
+void IbverbsEngine::drain_tx_queue(IbvTxQueue& q) {
+  poll_tx_completions(q);
+  if (q.poll_mode == QueuePollMode::INDIRECT) {
+    for (;;) {
+      if (q.worker_pending == nullptr) {
+        void* raw = nullptr;
+        if (q.send_ring == nullptr || !q.send_ring->dequeue(&raw)) {
+          break;
+        }
+        q.worker_pending = static_cast<BurstParams*>(raw);
+        q.worker_pending_wqebbs = tx_burst_wqebbs(q, q.worker_pending);
+      }
+      if (!tx_sq_has_space(q, q.worker_pending_wqebbs)) {
+        break;
+      }
+      post_tx_burst(q, q.worker_pending);
+      tx_meta_pool_->put(q.worker_pending);
+      q.worker_pending = nullptr;
+      q.worker_pending_wqebbs = 0;
+      poll_tx_completions(q);
+    }
+  } else if (q.direct_pending == nullptr && q.slots_posted > q.completed_tail.load() &&
+             q.last_signaled_slots < q.slots_posted) {
+    (void)emit_direct_drain_nop(q);
+    poll_tx_completions(q);
+  }
+}
+
+Status IbverbsEngine::poll_resource_op(ResourceOpResult* result) {
+  std::lock_guard<std::mutex> operation_guard(resource_operation_lock_);
+  if (result == nullptr) {
+    return Status::NULL_PTR;
+  }
+  std::lock_guard<std::recursive_mutex> guard(resource_lock_);
+  for (auto it = draining_resource_ops_.begin(); it != draining_resource_ops_.end();) {
+    bool complete = false;
+    if (it->type_ == ResourceOpType::DELETE_RX_QUEUE) {
+      IbvRxQueue* queue = find_rx_queue_any(it->port_id_, it->queue_id_);
+      if (queue == nullptr) {
+        complete = true;
+      } else if (queue->active_users.load(std::memory_order_acquire) != 0) {
+        ++it;
+        continue;
+      } else {
+        void* raw = nullptr;
+        while (queue->ring != nullptr && queue->ring->dequeue(&raw)) {
+          auto* burst = static_cast<BurstParams*>(raw);
+          if ((burst->hdr.hdr.burst_flags & DAQIRI_BURST_FLAG_DIRECT_PLACED) == 0) {
+            free_all_packets(burst);
+            rx_meta_pool_->put(burst);
+          }
+        }
+        if (queue->reorder != nullptr) {
+          for (auto& plan : queue->reorder->plans) {
+            reorder_poll_events(*queue, plan);
+          }
+          while (!queue->reorder->ready.empty()) {
+            BurstParams* burst = queue->reorder->ready.front();
+            queue->reorder->ready.pop_front();
+            reorder_release_output(burst);
+          }
+        }
+        if (queue->active_users.load(std::memory_order_acquire) == 0 &&
+            queue->outstanding_strides.load(std::memory_order_acquire) == 0 &&
+            queue->outstanding_reorder_outputs.load(std::memory_order_acquire) == 0) {
+          destroy_rx_queue(*queue);
+          rx_queues_.erase(
+              std::remove_if(rx_queues_.begin(), rx_queues_.end(),
+                             [&](const auto& candidate) { return candidate.get() == queue; }),
+              rx_queues_.end());
+          complete = true;
+        }
+      }
+    } else if (it->type_ == ResourceOpType::DELETE_TX_QUEUE) {
+      IbvTxQueue* queue = find_tx_queue_any(it->port_id_, it->queue_id_);
+      if (queue == nullptr) {
+        complete = true;
+      } else if (queue->active_users.load(std::memory_order_acquire) != 0) {
+        ++it;
+        continue;
+      } else {
+        drain_tx_queue(*queue);
+        if (queue->active_users.load(std::memory_order_acquire) == 0 &&
+            queue->direct_pending == nullptr && queue->worker_pending == nullptr &&
+            (queue->send_ring == nullptr || queue->send_ring->count() == 0) &&
+            queue->completed_tail.load(std::memory_order_acquire) == queue->alloc_head) {
+          destroy_tx_queue(*queue);
+          tx_queues_.erase(
+              std::remove_if(tx_queues_.begin(), tx_queues_.end(),
+                             [&](const auto& candidate) { return candidate.get() == queue; }),
+              tx_queues_.end());
+          complete = true;
+        }
+      }
+    }
+    if (complete) {
+      it->state_ = ResourceState::REMOVED;
+      it->status_ = Status::SUCCESS;
+      ready_resource_ops_.push(*it);
+      it = draining_resource_ops_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  if (ready_resource_ops_.empty()) {
+    return Status::NOT_READY;
+  }
+  *result = std::move(ready_resource_ops_.front());
+  ready_resource_ops_.pop();
   return Status::SUCCESS;
 }
 
@@ -6238,17 +7238,24 @@ Status IbverbsEngine::wait_for_tx_idle(uint32_t timeout_ms) {
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
   for (;;) {
     bool idle = true;
-    for (auto& q : tx_queues_) {
-      if (q->poll_mode == QueuePollMode::DIRECT) {
-        ++q->direct_cq_polls;
-        poll_tx_completions(*q);
-        const uint64_t completed = q->completed_tail.load(std::memory_order_acquire);
-        if (q->slots_posted > completed && q->last_signaled_slots < q->slots_posted) {
-          emit_direct_drain_nop(*q);
+    {
+      std::lock_guard<std::recursive_mutex> guard(resource_lock_);
+      for (auto& q : tx_queues_) {
+        if (q->state.load(std::memory_order_acquire) == ResourceState::REMOVED ||
+            q->cq == nullptr || q->qp == nullptr) {
+          continue;
         }
-      }
-      if (q->completed_tail.load(std::memory_order_acquire) != q->alloc_head) {
-        idle = false;
+        if (q->poll_mode == QueuePollMode::DIRECT) {
+          ++q->direct_cq_polls;
+          poll_tx_completions(*q);
+          const uint64_t completed = q->completed_tail.load(std::memory_order_acquire);
+          if (q->slots_posted > completed && q->last_signaled_slots < q->slots_posted) {
+            emit_direct_drain_nop(*q);
+          }
+        }
+        if (q->completed_tail.load(std::memory_order_acquire) != q->alloc_head) {
+          idle = false;
+        }
       }
     }
     if (idle) {
@@ -6262,6 +7269,7 @@ Status IbverbsEngine::wait_for_tx_idle(uint32_t timeout_ms) {
 }
 
 void IbverbsEngine::print_stats() {
+  std::lock_guard<std::recursive_mutex> guard(resource_lock_);
   for (auto& q : rx_queues_) {
     if (q->direct_reorder) {
       const auto& plan = *q->direct_reorder;
@@ -6449,6 +7457,12 @@ void IbverbsEngine::shutdown() {
   }
   rx_queues_.clear();
   for (auto& q : tx_queues_) {
+    if (q->worker_pending != nullptr) {
+      q->alloc_head -= static_cast<uint64_t>(q->worker_pending->hdr.hdr.num_pkts);
+      tx_meta_pool_->put(q->worker_pending);
+      q->worker_pending = nullptr;
+      q->worker_pending_wqebbs = 0;
+    }
     if (q->poll_mode == QueuePollMode::DIRECT && q->direct_pending != nullptr) {
       DAQIRI_LOG_WARN(
           "Direct TX port {} queue {} shut down with one unsubmitted packet; reclaiming it",
@@ -6489,6 +7503,7 @@ void IbverbsEngine::shutdown() {
     }
   }
   registered_mrs_.clear();
+  registered_mrs_by_name_.clear();
 
   for (auto& pd : pd_map_) {
     if (pd.second && ibv_dealloc_pd(pd.second) != 0) {
@@ -6522,8 +7537,34 @@ void IbverbsEngine::shutdown() {
 // TX path: raw-packet QP send from a slab of registered slots.
 // ---------------------------------------------------------------------------
 IbvTxQueue* IbverbsEngine::find_tx_queue(int port, int q) {
+  std::lock_guard<std::recursive_mutex> guard(resource_lock_);
   for (auto& tq : tx_queues_) {
-    if (tq->port_id == port && tq->queue_id == q) {
+    if (tq->port_id == port && tq->queue_id == q &&
+        tq->state.load(std::memory_order_acquire) == ResourceState::ACTIVE) {
+      return tq.get();
+    }
+  }
+  return nullptr;
+}
+
+IbvTxQueue* IbverbsEngine::find_tx_queue_any(int port, int q) {
+  std::lock_guard<std::recursive_mutex> guard(resource_lock_);
+  for (auto& tq : tx_queues_) {
+    if (tq->port_id == port && tq->queue_id == q &&
+        tq->state.load(std::memory_order_acquire) != ResourceState::REMOVED) {
+      return tq.get();
+    }
+  }
+  return nullptr;
+}
+
+IbvTxQueue* IbverbsEngine::acquire_tx_queue(int port, int q, bool allow_draining) {
+  std::lock_guard<std::recursive_mutex> guard(resource_lock_);
+  for (auto& tq : tx_queues_) {
+    const ResourceState state = tq->state.load(std::memory_order_acquire);
+    if (tq->port_id == port && tq->queue_id == q &&
+        (state == ResourceState::ACTIVE || (allow_draining && state == ResourceState::DRAINING))) {
+      tq->active_users.fetch_add(1, std::memory_order_relaxed);
       return tq.get();
     }
   }
@@ -6769,9 +7810,11 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
   q.num_slots = UINT32_MAX;
   for (const std::string& name : q.mr_names) {
     IbvTxQueue::TxRegion r;
-    if (Status s = register_mr(q.pd, name, &r.base, &r.lkey); s != Status::SUCCESS) {
+    struct ibv_mr* registration = nullptr;
+    if (Status s = register_mr(q.pd, name, &r.base, &r.lkey, &registration); s != Status::SUCCESS) {
       return s;
     }
+    q.registrations.push_back(registration);
     const auto& mr = cfg_.mrs_[name];
     r.slot_size = static_cast<uint32_t>(mr.adj_size_);
     q.regions.push_back(r);
@@ -7012,6 +8055,12 @@ void IbverbsEngine::tx_worker(std::vector<IbvTxQueue*> group) {
     uint64_t needed_wqebbs = 0;
   };
   std::vector<PendingBurst> pending(group.size());
+  for (size_t i = 0; i < group.size(); ++i) {
+    pending[i].burst = group[i]->worker_pending;
+    pending[i].needed_wqebbs = group[i]->worker_pending_wqebbs;
+    group[i]->worker_pending = nullptr;
+    group[i]->worker_pending_wqebbs = 0;
+  }
   while (leader->running.load(std::memory_order_relaxed) &&
          !force_quit_.load(std::memory_order_relaxed)) {
     for (size_t i = 0; i < group.size(); ++i) {
@@ -7037,9 +8086,11 @@ void IbverbsEngine::tx_worker(std::vector<IbvTxQueue*> group) {
       }
     }
   }
-  for (PendingBurst& item : pending) {
+  for (size_t i = 0; i < pending.size(); ++i) {
+    PendingBurst& item = pending[i];
     if (item.burst != nullptr) {
-      tx_meta_pool_->put(item.burst);
+      group[i]->worker_pending = item.burst;
+      group[i]->worker_pending_wqebbs = item.needed_wqebbs;
     }
   }
 }
@@ -7065,8 +8116,8 @@ bool IbverbsEngine::is_tx_burst_available(BurstParams* burst) {
   if (burst == nullptr) {
     return false;
   }
-  IbvTxQueue* q = find_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
-  if (q == nullptr) {
+  QueueUse<IbvTxQueue> q(acquire_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id));
+  if (!q) {
     return false;
   }
   if (q->poll_mode == QueuePollMode::DIRECT) {
@@ -7086,8 +8137,8 @@ Status IbverbsEngine::get_tx_packet_burst(BurstParams* burst) {
   if (burst == nullptr) {
     return Status::NULL_PTR;
   }
-  IbvTxQueue* q = find_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
-  if (q == nullptr) {
+  QueueUse<IbvTxQueue> q(acquire_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id));
+  if (!q) {
     return Status::INVALID_PARAMETER;
   }
   const unsigned n = static_cast<unsigned>(burst->hdr.hdr.num_pkts);
@@ -7134,8 +8185,8 @@ Status IbverbsEngine::get_tx_packet_burst(BurstParams* burst) {
 
 Status IbverbsEngine::get_tx_packet_burst_checked(BurstParams* burst) {
   if (burst != nullptr) {
-    IbvTxQueue* q = find_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
-    if (q != nullptr && q->poll_mode == QueuePollMode::DIRECT) {
+    QueueUse<IbvTxQueue> q(acquire_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id));
+    if (q && q->poll_mode == QueuePollMode::DIRECT) {
       return get_tx_packet_burst(burst);
     }
   }
@@ -7160,8 +8211,8 @@ Status IbverbsEngine::set_eth_header(BurstParams* burst, int idx, char* dst_addr
   memcpy(pkt->eth.h_dest, dst_addr, 6);
   pkt->eth.h_proto = htons(0x0800);  // IPv4
   // tx_eth_src offload: stamp the port MAC as the Ethernet source.
-  IbvTxQueue* q = find_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
-  if (q != nullptr && q->insert_eth_src) {
+  QueueUse<IbvTxQueue> q(acquire_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id, true));
+  if (q && q->insert_eth_src) {
     memcpy(pkt->eth.h_source, q->eth_src, 6);
   }
   return Status::SUCCESS;
@@ -7203,8 +8254,8 @@ Status IbverbsEngine::set_udp_payload(BurstParams* burst, int idx, void* data, i
 // (a time too far ahead never releases; one too far in the past wraps). Returns
 // NOT_SUPPORTED when the device lacks wait-on-time or a real-time clock.
 Status IbverbsEngine::set_packet_tx_time(BurstParams* burst, int idx, uint64_t time) {
-  IbvTxQueue* q = find_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
-  if (q == nullptr) {
+  QueueUse<IbvTxQueue> q(acquire_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id));
+  if (!q) {
     return Status::INVALID_PARAMETER;
   }
   if (!q->send_scheduling) {
@@ -7476,8 +8527,8 @@ Status IbverbsEngine::send_tx_burst(BurstParams* burst) {
   if (burst == nullptr) {
     return Status::NULL_PTR;
   }
-  IbvTxQueue* q = find_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id);
-  if (q == nullptr) {
+  QueueUse<IbvTxQueue> q(acquire_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id));
+  if (!q) {
     return Status::INVALID_PARAMETER;
   }
   if (q->poll_mode == QueuePollMode::DIRECT) {

@@ -50,6 +50,7 @@ static inline constexpr uint32_t DEFAULT_DYNAMIC_FLOW_CAPACITY = 0;
 
 using FlowId = uint32_t;
 using FlowOpId = uint64_t;
+using ResourceOpId = uint64_t;
 
 struct ReorderBurstInfo {
   uint64_t batch_id;
@@ -86,6 +87,8 @@ enum class Status {
   GENERIC_FAILURE,
   CONNECT_FAILURE,
   INTERNAL_ERROR,
+  RESOURCE_IN_USE,
+  ALREADY_EXISTS,
 };
 
 enum class RDMAOpCode {
@@ -870,6 +873,33 @@ struct FlowOpResult {
   Status status_ = Status::NOT_READY;
   FlowId flow_id_ = 0;
   std::vector<FlowId> flow_ids_;
+};
+
+enum class ResourceOpType {
+  ADD_MEMORY_REGION,
+  DELETE_MEMORY_REGION,
+  ADD_RX_QUEUE,
+  DELETE_RX_QUEUE,
+  ADD_TX_QUEUE,
+  DELETE_TX_QUEUE,
+};
+
+enum class ResourceState {
+  CREATING,
+  ACTIVE,
+  DRAINING,
+  REMOVED,
+  FAILED,
+};
+
+struct ResourceOpResult {
+  ResourceOpId op_id_ = 0;
+  ResourceOpType type_ = ResourceOpType::ADD_MEMORY_REGION;
+  ResourceState state_ = ResourceState::FAILED;
+  Status status_ = Status::NOT_READY;
+  std::string memory_region_;
+  int port_id_ = -1;
+  int queue_id_ = -1;
 };
 
 inline bool flow_action_is_transform(const FlowAction& action) {
