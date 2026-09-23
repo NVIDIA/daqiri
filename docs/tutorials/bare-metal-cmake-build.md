@@ -324,7 +324,7 @@ A successful run prints a stream of `[INFO]` lines followed by an RX/TX rate sum
 
 !!! tip "DGX Spark"
 
-    On DGX Spark, use the prefilled `daqiri_bench_raw_tx_rx_spark.yaml` instead. Only `eth_dst_addr` needs an edit. See the [DGX Spark profile callout](../benchmarks/raw_benchmarking.md#update-the-loopback-configuration) for the exact MAC-lookup command.
+    On DGX Spark, use [`daqiri_bench_raw_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx.yaml) to understand the complete TX/RX configuration. Adapt the NIC addresses, use host-pinned memory, select the Spark cores, and set the destination MAC to the RX port. [Generate a raw-Ethernet pair](../config-generation.md#generate-a-raw-ethernet-pair) can apply those parameters for you.
 
 !!! note "No NIC available?"
 
@@ -411,9 +411,9 @@ The build recipe above is the same on every supported host. The notes below cove
 
     - The integrated **ConnectX-7** appears in `ibv_devinfo` as one or two `mlx5_*` HCAs depending on link configuration. No separate driver install beyond the [DOCA repository setup](#step-1-configure-the-doca-apt-repository) is needed.
     - GB10 is **compute capability 12.1** (`sm_121`). DAQIRI's default arch list adds `121` automatically when configuring with **CUDA Toolkit 13.0 or newer**; on those toolkits no override is needed. On older toolkits, GB10 is not supported.
-    - DGX Spark uses **NVLink-C2C unified memory** and has no separate GPU BAR1, so data buffers in YAML configs use `kind: host_pinned` rather than `kind: device`. The DGX-Spark-prefilled YAMLs in `examples/*_spark.yaml` already encode this.
+    - DGX Spark uses **NVLink-C2C unified memory** and has no separate GPU BAR1, so generate data buffers with `--memory-kind host_pinned` rather than `device`.
     - `nvidia-peermem` is not used; GPUDirect goes through the dma-buf path enabled by the DPDK patches in [Step 3](#step-3-build-dpdk-with-daqiri-patches).
-    - For a runnable end-to-end test after the build completes, follow the [DGX Spark profile callout](../benchmarks/raw_benchmarking.md#update-the-loopback-configuration) in Raw Ethernet Benchmarking: the prefilled `daqiri_bench_raw_tx_rx_spark.yaml` and `daqiri_bench_rdma_tx_rx_spark.yaml` need only an `eth_dst_addr` edit.
+    - For a runnable end-to-end test after the build completes, start with [`daqiri_bench_raw_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx.yaml) or [`daqiri_bench_rdma_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx.yaml), then follow the [DGX Spark profile callout](../benchmarks/raw_benchmarking.md#update-the-loopback-configuration) to adapt or generate a concrete pair from the discovered system parameters.
 
 === "IGX Orin + dGPU"
 
