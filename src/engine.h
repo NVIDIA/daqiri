@@ -20,7 +20,6 @@
 #include "src/daqiri_ring.h"
 #include <cuda.h>
 #include <daqiri/types.h>
-#include <cuda.h>
 #include <optional>
 #include <vector>
 
@@ -56,6 +55,18 @@ struct AllocRegion {
   bool external_ = false;
 };
 
+struct DpdkMemoryRegionSizing {
+  size_t floor;
+  size_t target;
+};
+
+inline DpdkMemoryRegionSizing dpdk_memory_region_sizing(size_t ring_size, size_t batch_size) {
+  return {
+      std::max(ring_size * 3 / 2, ring_size + 2 * batch_size),
+      std::max(ring_size * 3, ring_size + 4 * batch_size),
+  };
+}
+
 struct ResolvedExternalMemoryRegion {
   void* data = nullptr;
   size_t capacity = 0;
@@ -84,6 +95,29 @@ class CudaContextGuard {
 
  private:
   bool active_ = false;
+};
+
+class CudaContextRestoreGuard {
+ public:
+  CudaContextRestoreGuard() : valid_(cuCtxGetCurrent(&previous_) == CUDA_SUCCESS) {}
+  ~CudaContextRestoreGuard() {
+    if (!valid_) {
+      return;
+    }
+    CUcontext current = nullptr;
+    if (cuCtxGetCurrent(&current) == CUDA_SUCCESS && current != previous_) {
+      (void)cuCtxSetCurrent(previous_);
+    }
+  }
+  CudaContextRestoreGuard(const CudaContextRestoreGuard&) = delete;
+  CudaContextRestoreGuard& operator=(const CudaContextRestoreGuard&) = delete;
+  bool valid() const {
+    return valid_;
+  }
+
+ private:
+  CUcontext previous_ = nullptr;
+  bool valid_ = false;
 };
 
 /**
@@ -204,6 +238,14 @@ class Engine {
   virtual ~Engine();
 
  protected:
+  enum class CudaDeviceClass { UNKNOWN, INTEGRATED, DISCRETE };
+
+  struct CudaDeviceInfo {
+    int ordinal = -1;
+    std::string name = "unknown";
+    CudaDeviceClass classification = CudaDeviceClass::UNKNOWN;
+  };
+
   static constexpr int MAX_IFS = 4;
   static constexpr int MAX_GPUS = 8;
   static constexpr uint32_t GPU_PAGE_SHIFT = 16;
@@ -255,6 +297,10 @@ class Engine {
   virtual bool use_hugepage_arenas() const {
     return false;
   }
+  static bool select_cuda_device(int ordinal, const std::string& operation);
+  static CudaDeviceInfo get_cuda_device_info(int ordinal);
+  static bool get_cuda_dmabuf_support(int ordinal, bool* supported);
+  static void log_cuda_dmabuf_unavailable(const MemoryRegionConfig& mr);
   virtual void adjust_memory_regions() {}
   // Allocate hugetlb-backed memory for a kind: HUGE region. The base uses
   // MAP_HUGETLB and fails rather than falling back to regular pages. DpdkEngine

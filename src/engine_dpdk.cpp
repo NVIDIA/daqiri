@@ -45,6 +45,32 @@
 
 namespace daqiri {
 
+namespace {
+
+bool nvidia_peermem_loaded() {
+  std::ifstream modules("/proc/modules");
+  std::string line;
+  while (std::getline(modules, line)) {
+    if (line.rfind("nvidia_peermem ", 0) == 0 || line.rfind("nvidia-peermem ", 0) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool require_peermem_fallback(const MemoryRegionConfig& mr, const char* reason) {
+  if (nvidia_peermem_loaded()) {
+    return true;
+  }
+  DAQIRI_LOG_CRITICAL(
+      "Memory region '{}' cannot use DMA-BUF because {}, and the "
+      "nvidia_peermem fallback is not loaded",
+      mr.name_, reason);
+  return false;
+}
+
+}  // namespace
+
 Engine::HugepageEstimate Engine::estimate_required_hugepages() const {
   HugepageEstimate est;
   est.eal_fixed_bytes = DPDK_EAL_FIXED_OVERHEAD;
@@ -290,6 +316,16 @@ Status Engine::register_memory_regions() {
 
     int ret = 0;
     if (mr.kind_ == MemoryKind::DEVICE) {
+      CudaContextRestoreGuard entry_context;
+      if (!entry_context.valid()) {
+        DAQIRI_LOG_CRITICAL("Could not capture the CUDA context before registering MR {}",
+                            mr.name_);
+        return Status::INTERNAL_ERROR;
+      }
+      if (!select_cuda_device(mr.affinity_,
+                              "registering device memory region '" + mr.name_ + "' with DPDK")) {
+        return Status::NULL_PTR;
+      }
       const auto resolved = external_mrs_.find(mr.name_);
       CudaContextGuard context_guard(
           resolved == external_mrs_.end() ? nullptr : resolved->second.cuda_context);
@@ -297,17 +333,24 @@ Status Engine::register_memory_regions() {
         DAQIRI_LOG_CRITICAL("Could not make the CUDA context for MR {} current", mr.name_);
         return Status::INVALID_PARAMETER;
       }
-      int flag = 0;
-      CUresult s = cuDeviceGetAttribute(&flag, CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED, mr.affinity_);
-      if (s != CUDA_SUCCESS) {
-        DAQIRI_LOG_CRITICAL("Failed to get dma-buf supported for device {}", mr.affinity_);
+      bool dmabuf_supported = false;
+      if (!get_cuda_dmabuf_support(mr.affinity_, &dmabuf_supported)) {
         return Status::NULL_PTR;
       }
 
-      if (flag == 0) {
-        DAQIRI_LOG_WARN("dma-buf not supported for device {}. Attempting to use nvidia-peermem",
-                        mr.affinity_);
-        // GPUs have the largest page size vs CPUs, so just use that
+      if (!dmabuf_supported) {
+        const CudaDeviceInfo selected = get_cuda_device_info(mr.affinity_);
+        if (selected.classification != CudaDeviceClass::DISCRETE || !nvidia_peermem_loaded()) {
+          log_cuda_dmabuf_unavailable(mr);
+          if (selected.classification == CudaDeviceClass::DISCRETE) {
+            require_peermem_fallback(mr, "CUDA reports it unavailable");
+          }
+          return Status::NOT_SUPPORTED;
+        }
+        DAQIRI_LOG_WARN(
+            "CUDA device {} ('{}', discrete) does not support DMA-BUF export; falling back to "
+            "nvidia_peermem for memory region '{}'",
+            selected.ordinal, selected.name, mr.name_);
         ret = rte_extmem_register(ext_mem->buf_ptr, ext_mem->buf_len, NULL, ext_mem->buf_iova,
                                   GPU_PAGE_SIZE);
       } else {
@@ -330,9 +373,14 @@ Status Engine::register_memory_regions() {
                                           aligned_size, CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD, 0);
 
         if (error != CUDA_SUCCESS) {
-          DAQIRI_LOG_CRITICAL("cuMemGetHandleForAddressRange error={}. Falling back to peermem",
-                              static_cast<int>(error));
-          // GPUs have the largest page size vs CPUs, so just use that
+          const char* error_string = nullptr;
+          cuGetErrorString(error, &error_string);
+          DAQIRI_LOG_CRITICAL("DMA-BUF export failed for memory region '{}': {}", mr.name_,
+                              error_string != nullptr ? error_string : "unknown CUDA error");
+          if (!require_peermem_fallback(mr, "DMA-BUF export failed")) {
+            return Status::NULL_PTR;
+          }
+          DAQIRI_LOG_WARN("Falling back to nvidia_peermem for memory region '{}'", mr.name_);
           ret = rte_extmem_register(ext_mem->buf_ptr, ext_mem->buf_len, NULL, ext_mem->buf_iova,
                                     GPU_PAGE_SIZE);
         } else {
@@ -350,6 +398,9 @@ Status Engine::register_memory_regions() {
               "registration",
               rte_version());
           close(dmabuf_fd);
+          if (!require_peermem_fallback(mr, "this DPDK build lacks DMA-BUF registration")) {
+            return Status::NULL_PTR;
+          }
           ret = rte_extmem_register(ext_mem->buf_ptr, ext_mem->buf_len, NULL, ext_mem->buf_iova,
                                     GPU_PAGE_SIZE);
 #endif
@@ -362,8 +413,8 @@ Status Engine::register_memory_regions() {
     if (ret) {
       if (mr.kind_ == MemoryKind::DEVICE) {
         DAQIRI_LOG_CRITICAL(
-            "Unable to register addr {}, ret {} errno {}. Either nvidia-peermem is not running "
-            "or the memory kind is not supported",
+            "Unable to register device-memory address {}, ret {} errno {}; see the preceding "
+            "DMA-BUF or nvidia_peermem diagnostic",
             ext_mem->buf_ptr, ret, rte_strerror(rte_errno));
       } else {
         DAQIRI_LOG_CRITICAL("Unable to register addr {}, ret {} errno {} for memory kind {}",

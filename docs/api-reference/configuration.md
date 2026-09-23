@@ -71,32 +71,58 @@ runtime binding.
 - **`kind`**: Memory type.
   - type: `string`
   - values:
-    - `huge`: CPU hugepages (recommended for CPU buffers)
-    - `device`: GPU VRAM (discrete GPUs only, requires GPUDirect via peermem or DMA-BUF)
+    - `huge`: Explicit hugetlb CPU memory (recommended for CPU buffers). Initialization fails
+      if the configured hugetlb pool cannot satisfy it; DAQIRI never silently substitutes
+      regular pages or transparent hugepages.
+    - `device`: GPU memory (requires GPUDirect via peermem or DMA-BUF). On a system such as
+      IGX Thor with both an integrated and a discrete GPU, set `affinity` to the discrete GPU's
+      process-local CUDA ordinal.
     - `host_pinned`: Pinned CPU pages allocated via `cudaHostAlloc`. **Recommended on
       integrated GPUs (e.g. NVIDIA GB10 / DGX Spark)**, where the NIC cannot peer-DMA
-      into device memory and CUDA reports DMA-BUF unsupported. On discrete-GPU systems,
+      into device memory and CUDA reports DMA-BUF unsupported. Use this kind when remaining on
+      the integrated GPU in a hybrid-GPU system such as IGX Thor. On discrete-GPU systems,
       prefer `device` for high-throughput RX/TX paths.
     - `host`: Regular CPU memory (not recommended)
-
   With the raw ibverbs engine, DAQIRI-owned `huge` regions declared in the startup configuration
   and having the same NUMA affinity share a hugetlb arena. DAQIRI chooses the available page size
   that can back the regions with the least rounding, while registering every region separately.
   For example, twenty-two 32 MiB regions require one 1 GiB page—not twenty-two—when the host has
-  only 1 GiB hugepages. `kind: huge` requires explicit hugetlb backing for DAQIRI-owned memory;
-  initialization fails if no compatible pool has enough pages. It never falls back to regular
-  pages or transparent hugepages.
-- **`affinity`**: GPU ID for `device` memory, or NUMA node ID for CPU memory.
+  only 1 GiB hugepages.
+
+- **`affinity`**: Process-local CUDA ordinal for `device` and `host_pinned` memory, or NUMA
+  node ID for `huge` and `host` memory. CUDA ordinals reflect only the devices visible to the
+  process and need not match host-wide GPU indices.
+
+  On a mixed integrated/discrete GPU host, select the intended discrete GPU by its stable UUID
+  when starting a privileged NVIDIA container. For example, after identifying the UUID with
+  `nvidia-smi --query-gpu=uuid,name --format=csv,noheader`, pass it to both visibility variables:
+
+  ```bash
+  docker run --privileged --runtime=nvidia \
+    -e NVIDIA_VISIBLE_DEVICES=<discrete-GPU-UUID> \
+    -e CUDA_VISIBLE_DEVICES=<discrete-GPU-UUID> ...
+  ```
+
+  When that is the only CUDA-visible GPU, it has process-local ordinal `0`, even if it has a
+  different host-wide index. Configure `affinity` using the process-local ordinal, not the host
+  index. On the tested IGX Thor privileged-container setup, UUID-based selection prevents the
+  integrated GPU from remaining selected.
   - type: `integer`
 - **`access`**: Memory access permissions.
   - type: `list`
   - values: `local`, `rdma_read`, `rdma_write`
 - **`num_bufs`**: Number of buffers in this region. Higher values give more processing
   headroom but consume more memory (GPU BAR1 for `device`). Too low risks dropped packets
-  on RX or higher latency on TX. Rule of thumb: 3x-5x `batch_size`. For Raw Ethernet
-  (`stream_type: "raw"`), `num_bufs` below 1.5x the NIC ring size deadlocks the worker;
-  `daqiri_init` auto-bumps such MRs to 3x the ring (24576 with the default 8192) and
-  logs a `WARN`.
+  on RX or a TX stall. Raw DPDK queue regions use a floor of
+  `max(1.5 * ring, ring + 2 * batch_size)`. DAQIRI bumps values below that floor to
+  `max(3 * ring, ring + 4 * batch_size)` and warns with the exact `num_bufs` to configure.
+  With the default 8192-descriptor ring and `batch_size: 10240`, the floor is 28672 and the
+  bump target is 49152; the shipped `num_bufs: 51200` is sufficient.
+
+  Raw ibverbs uses a separate hardware limit. A scheduled packet can consume two send work
+  requests, so usable TX slots are capped at `max_qp_wr / 2`. DAQIRI warns when configured
+  storage exceeds that cap and fails initialization with the exact maximum when `batch_size`
+  exceeds it.
   - type: `integer`
 - **`buf_size`**: Size of each buffer in bytes. Should match the expected packet size, or
   the segment size when using header-data split.

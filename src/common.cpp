@@ -901,13 +901,19 @@ Status get_memory_region_requirements(const NetworkConfig& config,
     return Status::NOT_SUPPORTED;
   }
 
-  std::unordered_set<std::string> queue_mrs;
+  std::unordered_map<std::string, size_t> queue_mr_batches;
+  const auto record_queue = [&queue_mr_batches](const CommonQueueConfig& queue) {
+    const size_t batch = static_cast<size_t>(std::max(0, queue.batch_size_));
+    for (const auto& name : queue.mrs_) {
+      queue_mr_batches[name] = std::max(queue_mr_batches[name], batch);
+    }
+  };
   for (const auto& intf : config.ifs_) {
     for (const auto& queue : intf.rx_.queues_) {
-      queue_mrs.insert(queue.common_.mrs_.begin(), queue.common_.mrs_.end());
+      record_queue(queue.common_);
     }
     for (const auto& queue : intf.tx_.queues_) {
-      queue_mrs.insert(queue.common_.mrs_.begin(), queue.common_.mrs_.end());
+      record_queue(queue.common_);
     }
   }
 
@@ -923,8 +929,12 @@ Status get_memory_region_requirements(const NetworkConfig& config,
 #else
         return Status::NOT_SUPPORTED;
 #endif
-        if (queue_mrs.count(name) != 0 && req.num_bufs < 8192UL * 3 / 2) {
-          req.num_bufs = 8192UL * 3;
+        if (const auto batch = queue_mr_batches.find(name); batch != queue_mr_batches.end()) {
+          constexpr size_t ring_size = 8192;
+          const auto sizing = dpdk_memory_region_sizing(ring_size, batch->second);
+          if (req.num_bufs < sizing.floor) {
+            req.num_bufs = sizing.target;
+          }
         }
         break;
       case EngineType::IBVERBS:

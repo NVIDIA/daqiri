@@ -879,6 +879,24 @@ Status IbverbsEngine::register_mr(struct ibv_pd* pd, const std::string& mr_name,
   const int access = mr_access_to_ibv(mr.access_);
 
   if (mr.kind_ == MemoryKind::DEVICE) {
+    CudaContextRestoreGuard entry_context;
+    if (!entry_context.valid()) {
+      DAQIRI_LOG_CRITICAL("Could not capture the CUDA context before registering MR {}", mr_name);
+      return Status::INTERNAL_ERROR;
+    }
+    if (!select_cuda_device(mr.affinity_,
+                            "registering device memory region '" + mr_name + "' with ibverbs")) {
+      return Status::NULL_PTR;
+    }
+    bool dmabuf_supported = false;
+    if (!get_cuda_dmabuf_support(mr.affinity_, &dmabuf_supported)) {
+      return Status::NULL_PTR;
+    }
+    if (!dmabuf_supported) {
+      log_cuda_dmabuf_unavailable(mr);
+      return Status::NOT_SUPPORTED;
+    }
+
     // GPUDirect: export the CUDA allocation as a dma-buf fd and register it so
     // the NIC DMAs packets straight to/from GPU memory.
     CUcontext previous = nullptr;
@@ -4869,7 +4887,9 @@ Status IbverbsEngine::init_reorder(IbvRxQueue& q, const InterfaceConfig& intf,
 
     CudaContextGuard context_guard(plan.cuda_context);
     if (plan.cuda_context == nullptr) {
-      cudaSetDevice(plan.cuda_device_id);
+      if (!select_cuda_device(plan.cuda_device_id, "allocating raw-ibverbs CUDA reorder buffers")) {
+        return Status::NULL_PTR;
+      }
     } else if (!context_guard.valid()) {
       return Status::INTERNAL_ERROR;
     }
@@ -7611,24 +7631,36 @@ Status IbverbsEngine::configure_tx_pacing(IbvTxQueue& q, uint64_t pacing_mbps) {
 
 Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
   // A scheduled packet may consume a WAIT WQE followed by its send WQE, so
-  // provision up to two outstanding WRs per packet slot. Check the generic
-  // device limit here to turn an otherwise opaque ibv_create_qp EINVAL into an
-  // actionable configuration warning.
-  const uint64_t requested_send_wr = static_cast<uint64_t>(q.num_slots) * 2;
-  if (requested_send_wr > std::numeric_limits<uint32_t>::max()) {
-    DAQIRI_LOG_CRITICAL("TX queue {} has too many buffers: {} slots require {} send WRs",
-                        q.queue_id, q.num_slots, requested_send_wr);
+  // no more than half of max_qp_wr can be exposed as packet slots.
+  struct ibv_device_attr device_attr {};
+  const int query_result = ibv_query_device(q.ctx, &device_attr);
+  if (query_result != 0) {
+    const int error = query_result > 0 ? query_result : errno;
+    DAQIRI_LOG_CRITICAL("TX queue {} could not query max_qp_wr: {}", q.queue_id, strerror(error));
+    return Status::GENERIC_FAILURE;
+  }
+  const uint32_t max_slots = static_cast<uint32_t>(device_attr.max_qp_wr) / 2;
+  if (max_slots == 0) {
+    DAQIRI_LOG_CRITICAL("TX queue {} device max_qp_wr {} provides no usable TX slots", q.queue_id,
+                        device_attr.max_qp_wr);
+    return Status::NOT_SUPPORTED;
+  }
+  if (q.batch_size > max_slots) {
+    DAQIRI_LOG_CRITICAL(
+        "TX queue {} batch_size {} exceeds the maximum {} packets supported by device "
+        "max_qp_wr {}; reduce batch_size to {} or less",
+        q.queue_id, q.batch_size, max_slots, device_attr.max_qp_wr, max_slots);
     return Status::INVALID_PARAMETER;
   }
-  struct ibv_device_attr device_attr {};
-  const bool have_device_attr = ibv_query_device(q.ctx, &device_attr) == 0;
-  if (have_device_attr && requested_send_wr > device_attr.max_qp_wr) {
+  if (q.num_slots > max_slots) {
     DAQIRI_LOG_WARN(
-        "TX queue {} has {} buffers and requests {} send WRs, exceeding the device max_qp_wr "
-        "of {}; QP creation may fail (reduce the TX memory region num_bufs to {} or less)",
-        q.queue_id, q.num_slots, requested_send_wr, device_attr.max_qp_wr,
-        device_attr.max_qp_wr / 2);
+        "TX queue {} storage provides {} slots, but device max_qp_wr {} limits usable TX "
+        "capacity to {} slots; using the effective limit {}",
+        q.queue_id, q.num_slots, device_attr.max_qp_wr, max_slots, max_slots);
+    q.num_slots = max_slots;
   }
+
+  const uint64_t requested_send_wr = static_cast<uint64_t>(q.num_slots) * 2;
 
   if (q.accurate_send) {
     // mlx5 derives the raw-packet QP/SQ timestamp domain from its send CQ.
@@ -7666,16 +7698,10 @@ Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
   attr.cap.max_recv_sge = 1;
   q.qp = ibv_create_qp(q.pd, &attr);
   if (q.qp == nullptr) {
-    if (have_device_attr) {
-      DAQIRI_LOG_CRITICAL(
-          "TX ibv_create_qp (RAW_PACKET) failed: {} ({} slots, {} send WRs, {} send SGEs; "
-          "device max_qp_wr {})",
-          strerror(errno), q.num_slots, requested_send_wr, q.num_segs, device_attr.max_qp_wr);
-    } else {
-      DAQIRI_LOG_CRITICAL(
-          "TX ibv_create_qp (RAW_PACKET) failed: {} ({} slots, {} send WRs, {} send SGEs)",
-          strerror(errno), q.num_slots, requested_send_wr, q.num_segs);
-    }
+    DAQIRI_LOG_CRITICAL(
+        "TX ibv_create_qp (RAW_PACKET) failed: {} ({} slots, {} send WRs, {} send SGEs; "
+        "device max_qp_wr {})",
+        strerror(errno), q.num_slots, requested_send_wr, q.num_segs, device_attr.max_qp_wr);
     return Status::GENERIC_FAILURE;
   }
   q.max_inline_data = attr.cap.max_inline_data;
