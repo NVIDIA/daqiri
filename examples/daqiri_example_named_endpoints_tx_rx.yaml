@@ -2,7 +2,7 @@
 #
 # Replace both PCI BDFs, CPU cores, and eth_dst_addr for your system. The TX
 # packet buffers contain only the 8000-byte payload. daqiri_example_named_endpoints
-# creates the Ethernet/IPv4/UDP template at runtime with add_sender(), then the
+# creates the Ethernet/IPv4/UDP template at runtime with add_endpoint(), then the
 # NIC sends that template inline and gathers segment 0 as the payload.
 %YAML 1.2
 ---
