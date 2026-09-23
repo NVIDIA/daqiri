@@ -12,7 +12,7 @@
     );
     if (blocks.length < 2) return;
 
-    var tabKeys = ["igx-orin", "dgx-spark"];
+    var tabKeys = ["igx-series", "dgx-spark"];
 
     var anchorTab = {};
     blocks.forEach(function (block, i) {

@@ -46,6 +46,24 @@ docker run --rm -it --privileged \
     | `--network=host` | Shares the host network namespace so DPDK can discover the physical NIC interfaces and their PCIe topology |
     | `-v /dev/hugepages:/dev/hugepages` | Mounts the hugepage filesystem for DPDK memory allocation (`--privileged` alone does not cover mounted filesystems) |
 
+!!! warning "Hybrid iGPU + dGPU hosts (IGX Thor)"
+
+    Select the discrete GPU by UUID in both visibility variables:
+
+    ```bash
+    nvidia-smi --query-gpu=index,name,uuid --format=csv   # on the host
+
+    docker run --rm -it --privileged \
+      --runtime=nvidia \
+      --network=host \
+      -e NVIDIA_VISIBLE_DEVICES=GPU-<uuid> \
+      -e CUDA_VISIBLE_DEVICES=GPU-<uuid> \
+      -v /dev/hugepages:/dev/hugepages \
+      daqiri:local bash
+    ```
+
+    The selected GPU becomes CUDA ordinal **0**, so set `memory_regions[*].affinity: 0` regardless of its host-wide index.
+
 ## Update the loopback configuration
 
 !!! tip "DGX Spark"
