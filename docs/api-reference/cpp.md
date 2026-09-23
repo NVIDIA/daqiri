@@ -408,8 +408,8 @@ a preallocated, cache-line-aligned, NUMA-local slot containing only the cached
 header, MTU, and interface ID; it does not lock or search the name map. Deleted
 slots may be reused, but generation-tagged IDs keep stale handles invalid.
 
-See [`daqiri_example_named_sender`](https://github.com/nvidia/daqiri/blob/main/examples/named_sender_example.cpp)
-and its [TX/RX configuration](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_example_named_sender_tx_rx.yaml)
+See [`daqiri_example_named_endpoints`](https://github.com/nvidia/daqiri/blob/main/examples/named_endpoints_example.cpp)
+and its [TX/RX configuration](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_example_named_endpoints_tx_rx.yaml)
 for a complete raw-ibverbs example using payload-only GPU buffers.
 
 ### TX Step 1: Allocate a burst

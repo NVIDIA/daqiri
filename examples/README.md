@@ -10,7 +10,7 @@ Standalone benchmark applications for testing performance of DAQIRI with various
 - `daqiri_example_dynamic_rx_flow`: raw TX/RX example that starts with RX flow
   isolation and no configured flows, dynamically steers UDP traffic to queues 0
   and 1 in sequence, then verifies five-tuple RSS across both queues and flow IDs
-- `daqiri_example_named_sender`: raw ibverbs TX/RX example that creates a named
+- `daqiri_example_named_endpoints`: raw ibverbs TX/RX example that creates a named
   Ethernet/IPv4/UDP sender at runtime and transmits payload-only GPU buffers
 - `daqiri_bench_rdma`: RDMA benchmark logic (former `rdma_bench.h`)
 - `daqiri_bench_socket`: TCP/UDP socket benchmark logic
@@ -63,7 +63,7 @@ Run:
 ./build/examples/daqiri_bench_raw_reorder_quantize ./build/examples/daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml --seconds 10
 ./build/examples/daqiri_example_pcap_writer ./build/examples/daqiri_example_pcap_writer_sw_loopback.yaml /tmp/daqiri-capture.pcap --tx
 ./build/examples/daqiri_example_dynamic_rx_flow ./build/examples/daqiri_example_dynamic_rx_flow.yaml --target-gbps 10
-./build/examples/daqiri_example_named_sender ./build/examples/daqiri_example_named_sender_tx_rx.yaml --seconds 10
+./build/examples/daqiri_example_named_endpoints ./build/examples/daqiri_example_named_endpoints_tx_rx.yaml --seconds 10
 ./build/examples/daqiri_bench_rdma ./build/examples/daqiri_bench_rdma_tx_rx.yaml --seconds 10 --mode both
 ./build/examples/daqiri_bench_socket ./build/examples/daqiri_bench_socket_udp_tx_rx.yaml --seconds 10 --mode both
 ./build/examples/daqiri_bench_socket ./build/examples/daqiri_bench_socket_tcp_tx_rx.yaml --seconds 10 --mode both
@@ -93,7 +93,7 @@ Included configs:
 | `daqiri_bench_raw_sw_loopback.yaml` | `daqiri_bench_raw_gpudirect` |
 | `daqiri_bench_raw_hw_loopback_ibverbs.yaml` | `daqiri_bench_raw_gpudirect` |
 | `daqiri_example_dynamic_rx_flow.yaml` | `daqiri_example_dynamic_rx_flow` |
-| `daqiri_example_named_sender_tx_rx.yaml` | `daqiri_example_named_sender` |
+| `daqiri_example_named_endpoints_tx_rx.yaml` | `daqiri_example_named_endpoints` |
 | `daqiri_example_gds_write_sw_loopback.yaml` | `daqiri_example_gds_write` |
 | `daqiri_example_gds_write_tx_rx.yaml` | `daqiri_example_gds_write` |
 | `daqiri_bench_raw_rx_multi_q.yaml` | `daqiri_bench_raw_gpudirect` |
@@ -115,9 +115,9 @@ external traffic; when run by themselves they may exit successfully with `0` pac
 TX/RX reorder configs are full closed-loop examples. The CPU reorder config is a throughput
 stress case, so dropped-packet counters can increase when the sender outruns CPU reorder.
 
-## Named Sender Example
+## Named Endpoints Example
 
-`daqiri_example_named_sender` is the runtime named-sender counterpart to the
+`daqiri_example_named_endpoints` is the runtime named-endpoints counterpart to the
 raw TX/RX benchmark. It is specific to the raw ibverbs engine. For each
 `bench_tx` entry it constructs a `RawUdpSenderConfig`, calls `add_sender()`,
 verifies name lookup with `get_sender_id()`, and selects the TX queue when it
@@ -132,7 +132,7 @@ single-segment TX queue and burst; this example deliberately does not configure
 HDS.
 
 Replace the PCI addresses, CPU cores, destination MAC, and IP addresses in
-`daqiri_example_named_sender_tx_rx.yaml`. The destination MAC must belong to the
+`daqiri_example_named_endpoints_tx_rx.yaml`. The destination MAC must belong to the
 RX port on a cabled setup. The sender source MAC is obtained from `tx_port` by
 DAQIRI, so the example has no `eth_src_addr` field and does not use the
 `tx_eth_src` flow offload.

@@ -50,7 +50,7 @@ set(DAQIRI_BENCH_CONFIGS
   daqiri_bench_raw_rx_multi_q.yaml
   daqiri_bench_raw_sw_loopback.yaml
   daqiri_bench_raw_hw_loopback_ibverbs.yaml
-  daqiri_example_named_sender_tx_rx.yaml
+  daqiri_example_named_endpoints_tx_rx.yaml
   daqiri_example_dynamic_rx_flow.yaml
   daqiri_example_gds_write_sw_loopback.yaml
   daqiri_example_gds_write_tx_rx.yaml
@@ -115,7 +115,7 @@ endif()
 add_daqiri_raw_bench(daqiri_bench_raw_reorder_seq raw_reorder_seq_bench.cpp)
 add_daqiri_raw_bench(daqiri_bench_raw_reorder_quantize raw_reorder_quantize_bench.cpp)
 add_daqiri_raw_bench(daqiri_example_dynamic_rx_flow dynamic_rx_flow_example.cpp)
-add_daqiri_raw_bench(daqiri_example_named_sender named_sender_example.cpp)
+add_daqiri_raw_bench(daqiri_example_named_endpoints named_endpoints_example.cpp)
 add_daqiri_raw_bench(daqiri_example_gds_write gds_write_example.cpp)
 add_daqiri_raw_bench(daqiri_example_pcap_writer pcap_writer_example.cpp)
 

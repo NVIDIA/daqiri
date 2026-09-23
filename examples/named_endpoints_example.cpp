@@ -36,22 +36,22 @@
 
 namespace {
 
-struct NamedSenderTx {
+struct NamedEndpointTx {
   daqiri::bench::RawBenchTxConfig tx;
   daqiri::SenderId sender_id = daqiri::INVALID_SENDER_ID;
 };
 
-bool add_named_sender(const daqiri::bench::RawBenchTxConfig& tx, size_t index,
-                      daqiri::SenderId* sender_id) {
+bool add_named_endpoint(const daqiri::bench::RawBenchTxConfig& tx, size_t index,
+                        daqiri::SenderId* sender_id) {
   const auto src_ports = daqiri::bench::parse_udp_ports(tx.udp_src_port);
   const auto dst_ports = daqiri::bench::parse_udp_ports(tx.udp_dst_port);
   if (src_ports.size() != 1 || dst_ports.size() != 1) {
-    std::cerr << "Named sender example requires exactly one UDP source and destination port\n";
+    std::cerr << "Named endpoints example requires exactly one UDP source and destination port\n";
     return false;
   }
 
   daqiri::RawUdpSenderConfig sender;
-  sender.name_ = "example-sender-" + std::to_string(index);
+  sender.name_ = "example-endpoint-" + std::to_string(index);
   sender.interface_ = tx.interface_name;
   sender.dst_mac_ = tx.eth_dst_addr;
   sender.src_ipv4_ = tx.ip_src_addr;
@@ -80,10 +80,10 @@ bool add_named_sender(const daqiri::bench::RawBenchTxConfig& tx, size_t index,
   return true;
 }
 
-void tx_worker(const NamedSenderTx& named, daqiri::bench::TokenBucketPacer& pacer,
+void tx_worker(const NamedEndpointTx& endpoint, daqiri::bench::TokenBucketPacer& pacer,
                std::atomic<bool>& stop) {
-  const auto& cfg = named.tx;
-  if (!daqiri::bench::set_current_thread_affinity(cfg.cpu_core, "named_sender_tx")) {
+  const auto& cfg = endpoint.tx;
+  if (!daqiri::bench::set_current_thread_affinity(cfg.cpu_core, "named_endpoint_tx")) {
     stop.store(true);
     return;
   }
@@ -153,7 +153,7 @@ void tx_worker(const NamedSenderTx& named, daqiri::bench::TokenBucketPacer& pace
     // Queue selection is per submission; the named sender contains only the
     // interface and cached destination/header fields.
     const auto status =
-        daqiri::send_tx_burst(named.sender_id, static_cast<uint16_t>(cfg.queue_id), burst);
+        daqiri::send_tx_burst(endpoint.sender_id, static_cast<uint16_t>(cfg.queue_id), burst);
     if (status == daqiri::Status::SUCCESS) {
       stats.packets += static_cast<uint64_t>(num_pkts);
       const uint64_t burst_bytes = static_cast<uint64_t>(num_pkts) * wire_packet_size;
@@ -211,17 +211,17 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  std::vector<NamedSenderTx> named_senders;
-  named_senders.reserve(tx_configs.size());
+  std::vector<NamedEndpointTx> named_endpoints;
+  named_endpoints.reserve(tx_configs.size());
   for (size_t index = 0; index < tx_configs.size(); ++index) {
-    NamedSenderTx named;
-    named.tx = tx_configs[index];
-    if (!add_named_sender(named.tx, index, &named.sender_id)) {
-      for (const auto& added : named_senders) daqiri::delete_sender(added.sender_id);
+    NamedEndpointTx endpoint;
+    endpoint.tx = tx_configs[index];
+    if (!add_named_endpoint(endpoint.tx, index, &endpoint.sender_id)) {
+      for (const auto& added : named_endpoints) daqiri::delete_sender(added.sender_id);
       daqiri::shutdown();
       return 1;
     }
-    named_senders.push_back(std::move(named));
+    named_endpoints.push_back(std::move(endpoint));
   }
 
   std::atomic<bool> stop{false};
@@ -242,9 +242,9 @@ int main(int argc, char** argv) {
     rx_threads.emplace_back(daqiri::bench::rx_count_worker, cfg, std::ref(stop), workload, geometry,
                             workload_gemm_dim, workload_sync_interval, workload_fft_len);
   }
-  tx_threads.reserve(named_senders.size());
-  for (const auto& named : named_senders) {
-    tx_threads.emplace_back(tx_worker, std::cref(named), std::ref(tx_pacer), std::ref(stop));
+  tx_threads.reserve(named_endpoints.size());
+  for (const auto& endpoint : named_endpoints) {
+    tx_threads.emplace_back(tx_worker, std::cref(endpoint), std::ref(tx_pacer), std::ref(stop));
   }
 
   daqiri::bench::wait_for_stop(run_seconds, stop);
@@ -255,7 +255,7 @@ int main(int argc, char** argv) {
     if (thread.joinable()) thread.join();
   }
 
-  for (const auto& named : named_senders) daqiri::delete_sender(named.sender_id);
+  for (const auto& endpoint : named_endpoints) daqiri::delete_sender(endpoint.sender_id);
   daqiri::print_stats();
   daqiri::shutdown();
   return 0;
