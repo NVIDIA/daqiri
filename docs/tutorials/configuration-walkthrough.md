@@ -21,6 +21,11 @@ If you don't have any NIC at all, the `*_sw_loopback*` variants of the Raw Ether
 
 For a shorter selection guide, start with the [Benchmarking overview](../benchmarks/index.md). With a stream type in mind, read down the questions below and stop at the first one that matches what you're trying to do. Each section names the YAML, the binary that consumes it, and any platform-specific notes.
 
+??? question "0. I need to receive a preconfigured GigE Vision camera stream"
+    Use [`daqiri_example_gvsp_receiver.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_example_gvsp_receiver.yaml) with `daqiri_example_gvsp_receiver`. The template is pre-filled for DGX Spark but the application is portable to other ConnectX systems. It uses the raw `ibverbs` engine, an indirect high-throughput receive queue, and one `host_pinned` region. Camera discovery and control remain external to this example.
+
+    Follow [Receive preconfigured GVSP image streams](daqiri-gvsp-receiver.md) for camera setup, packet-size accounting, offline tests, and the cabled-peer fixture.
+
 ??? question "1. I want to measure baseline throughput"
     Pick the stream type that matches your stack (see the [overview](#choosing-the-appropriate-daqiri-stream-type-for-your-setup) above), then the hardware or transport variant.
 

@@ -69,6 +69,7 @@ nav:
     - System Configuration: tutorials/system_configuration.md
     - Bare-Metal CMake Build: tutorials/bare-metal-cmake-build.md
     - Configuration YAML Walkthrough: tutorials/configuration-walkthrough.md
+    - Receive GVSP Image Streams: tutorials/daqiri-gvsp-receiver.md
     - DAQIRI + Holoscan Integration: tutorials/daqiri-holoscan-integration.md
     - DAQIRI + TensorRT Inference: tutorials/daqiri-resnet-inference.md
 

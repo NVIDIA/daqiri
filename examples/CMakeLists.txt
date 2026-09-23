@@ -56,6 +56,7 @@ set(DAQIRI_BENCH_CONFIGS
   daqiri_example_gds_write_tx_rx.yaml
   daqiri_example_pcap_writer_sw_loopback.yaml
   daqiri_example_pcap_writer_tx_rx.yaml
+  daqiri_example_gvsp_receiver.yaml
   daqiri_bench_rdma_tx_rx.yaml
   daqiri_bench_socket_udp_tx_rx.yaml
   daqiri_bench_socket_tcp_tx_rx.yaml
@@ -69,7 +70,7 @@ function(link_daqiri_bench target)
   target_compile_features(${target} PRIVATE cxx_std_17)
   if(NOT BUILD_SHARED_LIBS AND UNIX AND NOT APPLE)
     set(DAQIRI_EXAMPLE_STATIC_LIBS daqiri::daqiri)
-    foreach(engine IN ITEMS dpdk socket rdma)
+    foreach(engine IN ITEMS dpdk socket rdma ibverbs)
       if(TARGET daqiri_${engine})
         list(APPEND DAQIRI_EXAMPLE_STATIC_LIBS daqiri_${engine})
       endif()
@@ -148,6 +149,18 @@ set_target_properties(daqiri_bench_socket PROPERTIES
   BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
 )
 
+add_executable(daqiri_example_gvsp_receiver
+  gvsp/gvsp_receiver.cpp
+  gvsp/ethernet_udp_view.cpp
+  gvsp/gvsp_packet.cpp
+  gvsp/frame_assembler.cpp
+)
+link_daqiri_bench(daqiri_example_gvsp_receiver)
+target_link_libraries(daqiri_example_gvsp_receiver PRIVATE CUDA::cudart)
+set_target_properties(daqiri_example_gvsp_receiver PROPERTIES
+  BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp"
+)
+
 # Microbenchmark for the daqiri::Ring / daqiri::ObjectPool primitives. Always
 # built (the primitives are header-only); when the dpdk engine is present it also
 # compiles the rte_ring / rte_mempool comparison arm.
@@ -188,6 +201,7 @@ install(TARGETS
         daqiri_example_gds_write
         daqiri_example_pcap_writer
         daqiri_bench_rdma
+        daqiri_example_gvsp_receiver
         daqiri_bench_socket
         daqiri_pool_ring_bench
         RUNTIME DESTINATION bin)
@@ -198,3 +212,7 @@ install(FILES ${DAQIRI_PYTHON_EXAMPLES}
         PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
                     GROUP_EXECUTE GROUP_READ
                     WORLD_EXECUTE WORLD_READ)
+install(PROGRAMS
+        gvsp/send_test_stream.py
+        DESTINATION bin
+        RENAME daqiri_send_gvsp_test_stream.py)

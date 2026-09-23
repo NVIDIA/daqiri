@@ -1,0 +1,74 @@
+# ==============================================================================
+# IMPORTANT: THIS TEMPLATE IS PRE-FILLED FOR NVIDIA DGX SPARK
+# ==============================================================================
+# The core placement and host_pinned memory choice below target DGX Spark. Adjust
+# them for other platforms. The camera must already be configured to send
+# conventional GVSP image leader/data/trailer packets to this NIC MAC, receiver
+# IPv4 address, and UDP destination port. Replace every <placeholder> first.
+#
+# The single host_pinned region is CPU/GPU accessible on GB10 unified memory and
+# preserves the high-throughput raw ibverbs receive path. This example intentionally
+# omits optional header splitting, built-in packet reordering, direct polling, camera
+# discovery, and camera control.
+%YAML 1.2
+---
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    engine: "ibverbs"
+    master_core: 8
+    debug: false
+    log_level: "info"
+    loopback: ""
+
+    memory_regions:
+    - name: "GVSP_RX"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 51200
+      # Complete Ethernet frame bytes, not image-data or UDP-payload bytes.
+      buf_size: <maximum-ethernet-frame-bytes>
+
+    interfaces:
+    - name: "gvsp_port"
+      address: "<camera-facing-nic-pci-bdf>"
+      rx:
+        flow_isolation: true
+        queues:
+        - name: "gvsp_rx_q0"
+          id: 0
+          poll_mode: "indirect"
+          cpu_core: 18
+          batch_size: 10240
+          timeout_us: 100
+          memory_regions:
+          - "GVSP_RX"
+        flows:
+        - name: "gvsp_stream"
+          id: 0
+          action:
+            type: queue
+            id: 0
+          match:
+            ethernet:
+              dst: "<receiver-nic-mac>"
+            ipv4_src: "<camera-ip>"
+            ipv4_dst: "<receiver-ip>"
+            udp_dst: <gvsp-destination-port>
+
+gvsp_receiver:
+  interface_name: "gvsp_port"
+  queue_id: 0
+  cpu_core: 19
+
+  width: 1920
+  height: 1080
+  pixel_format_code: "0x01080001"
+  frame_bytes: 2073600
+  # Nominal image bytes after the GVSP header in every non-final data packet.
+  data_payload_bytes: <gvsp-image-data-bytes-per-packet>
+
+  frame_timeout_ms: 100
+  incomplete_frame_policy: "log"
+  report_interval_seconds: 2

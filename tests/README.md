@@ -4,7 +4,7 @@ DAQIRI organizes tests by their execution requirements:
 
 - `tests/portable/` contains tests that need only the source checkout. Pytest collects
   only this directory by default.
-- `tests/cpp/` is reserved for build-backed C++ tests registered with CTest.
+- `tests/cpp/` contains build-backed C++ tests registered with CTest.
 - `tests/bindings/` contains tests that import the compiled `daqiri` module.
 - `tests/platform/` contains qualification tests selected by CI/CD jobs on provisioned
   GPU/NIC platforms.
@@ -40,10 +40,18 @@ added by the feature that needs them.
 
 ## C++ tests
 
-Future C++ unit and build-backed integration tests belong under `tests/cpp/`. They
-should be registered with CTest and use a native C++ test framework where appropriate.
-CTest can also register the binding and platform pytest commands so a configured build
-has one test entry point without making pytest the C++ unit-test framework.
+Build C++ tests explicitly and run them with CTest:
+
+```bash
+cmake -S . -B build -DDAQIRI_BUILD_TESTS=ON
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+```
+
+The GVSP test is dependency-free and exercises complete synthetic
+Ethernet/IPv4/UDP/GVSP frames plus frame assembly edge cases. Future C++ tests
+should also be registered with CTest and use a native C++ test framework when
+that dependency is justified.
 
 ## Python-binding tests
 

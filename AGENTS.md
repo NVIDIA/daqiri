@@ -23,6 +23,7 @@ CMake options (full table in `docs/getting-started.md`):
 - `DAQIRI_ENGINE` — space-separated list of optional engines to compile. Valid values: `dpdk` (raw Ethernet) and `ibverbs` (RDMA/RoCE). Linux sockets (UDP/TCP) are always built in, so there is no `socket` value. Default is `"dpdk ibverbs"`.
 - `DAQIRI_BUILD_PYTHON` — builds `pybind11` bindings from `python/`.
 - `DAQIRI_BUILD_EXAMPLES` — builds the benchmark executables (default `ON`).
+- `DAQIRI_BUILD_TESTS` — builds C++ tests under `tests/cpp/` and registers them with CTest (default `OFF`).
 - `DAQIRI_BUILD_APPLICATIONS` — builds the end-to-end example applications under `applications/` (default `OFF`; requires TensorRT, e.g. the `BASE_IMAGE=torch` container). Currently builds `applications/resnet50_inference/` (DAQIRI → TensorRT ResNet inference).
 - `DAQIRI_ENABLE_OTEL_METRICS` — enables OpenTelemetry metrics instrumentation (default `OFF`).
 - `DAQIRI_REORDER_GPU_PROFILE` — enable CUDA event timing in the DPDK reorder kernels (off by default).
@@ -45,7 +46,7 @@ python3 -m venv .venv
 .venv/bin/python -m pytest
 ```
 
-The default suite collects only `tests/portable/`. Future build-backed C++ tests live under `tests/cpp/`; Python-binding tests live under `tests/bindings/` and require a container built with `DAQIRI_BUILD_PYTHON=ON`. Platform tests live under `tests/platform/` and are selected by CI/CD jobs running on provisioned GPU/NIC systems; they are never part of the default pytest collection. The project container already includes the current test packages; use the container-specific dependency command in `tests/README.md` when `tests/requirements.txt` changes.
+The default suite collects only `tests/portable/`. Build-backed C++ tests live under `tests/cpp/` and are enabled with `DAQIRI_BUILD_TESTS=ON`; Python-binding tests live under `tests/bindings/` and require a container built with `DAQIRI_BUILD_PYTHON=ON`. Platform tests live under `tests/platform/` and are selected by CI/CD jobs running on provisioned GPU/NIC systems; they are never part of the default pytest collection. The project container already includes the current test packages; use the container-specific dependency command in `tests/README.md` when `tests/requirements.txt` changes.
 
 Integration and performance verification is done via the benchmark executables in `examples/`, driven by YAML configs. Build outputs (`examples/CMakeLists.txt:59-71`):
 
@@ -55,6 +56,7 @@ Integration and performance verification is done via the benchmark executables i
 | `daqiri_bench_raw_latency` | `raw_latency_bench.cpp` | `daqiri_bench_raw_latency_ibverbs.yaml` — caller-driven direct TX/RX, RX hardware timestamps, 64–8192-byte power-of-two latency sweep |
 | `daqiri_example_dynamic_rx_flow` | `dynamic_rx_flow_example.cpp` | `daqiri_example_dynamic_rx_flow.yaml` — `flow_isolation: true` startup followed by runtime scalar queue steering, multi-queue RSS, and raw-engine decap/pop flow add/delete |
 | `daqiri_example_dynamic_resource` | `dynamic_resource_example.cpp` | Any ibverbs config with at least one RX queue and one single-region TX queue (for example `daqiri_bench_raw_hw_loopback_ibverbs.yaml`) — initializes without RX queues, repeatedly adds/removes the first RX queue's steering flow, and exercises runtime MR and RX/TX queue add/delete |
+| `daqiri_example_gvsp_receiver` | `gvsp/gvsp_receiver.cpp` | `daqiri_example_gvsp_receiver.yaml` — RX-only GVSP image reconstruction with a Spark-prefilled config using raw ibverbs, indirect polling, and one `host_pinned` region |
 | `daqiri_bench_raw_hds` | `raw_hds_bench.cpp` | `daqiri_bench_raw_tx_rx_hds.yaml` |
 | `daqiri_bench_raw_reorder_seq` | `raw_reorder_seq_bench.cpp` | `daqiri_bench_raw_tx_rx_reorder_seq_1024*.yaml`, `daqiri_bench_raw_rx_reorder_seq_*.yaml` |
 | `daqiri_bench_raw_reorder_quantize` | `raw_reorder_quantize_bench.cpp` | `daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml` |

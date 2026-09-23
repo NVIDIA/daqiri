@@ -11,6 +11,8 @@ Standalone benchmark applications for testing performance of DAQIRI with various
 - `daqiri_example_dynamic_rx_flow`: raw TX/RX example that starts with RX flow
   isolation and no configured flows, dynamically steers UDP traffic to queues 0
   and 1 in sequence, then verifies five-tuple RSS across both queues and flow IDs
+- `daqiri_example_gvsp_receiver`: raw ibverbs receiver for a preconfigured GVSP
+  image stream; reconstructs complete frames into a pinned host buffer
 - `daqiri_bench_rdma`: RDMA benchmark logic (former `rdma_bench.h`)
 - `daqiri_bench_socket`: TCP/UDP socket benchmark logic
 - `daqiri_example_gds_write`: one-shot capture that demonstrates synchronous and
@@ -63,6 +65,7 @@ Run:
 ./build/examples/daqiri_bench_raw_reorder_quantize ./build/examples/daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml --seconds 10
 ./build/examples/daqiri_example_pcap_writer ./build/examples/daqiri_example_pcap_writer_sw_loopback.yaml /tmp/daqiri-capture.pcap --tx
 ./build/examples/daqiri_example_dynamic_rx_flow ./build/examples/daqiri_example_dynamic_rx_flow.yaml --target-gbps 10
+sudo ./build/examples/daqiri_example_gvsp_receiver ./build/examples/daqiri_example_gvsp_receiver.yaml --seconds 10
 ./build/examples/daqiri_bench_rdma ./build/examples/daqiri_bench_rdma_tx_rx.yaml --seconds 10 --mode both
 ./build/examples/daqiri_bench_socket ./build/examples/daqiri_bench_socket_udp_tx_rx.yaml --seconds 10 --mode both
 ./build/examples/daqiri_bench_socket ./build/examples/daqiri_bench_socket_tcp_tx_rx.yaml --seconds 10 --mode both
@@ -93,6 +96,7 @@ Included configs:
 | `daqiri_bench_raw_hw_loopback_ibverbs.yaml` | `daqiri_bench_raw_gpudirect` |
 | `daqiri_bench_raw_latency_ibverbs.yaml` | `daqiri_bench_raw_latency` |
 | `daqiri_example_dynamic_rx_flow.yaml` | `daqiri_example_dynamic_rx_flow` |
+| `daqiri_example_gvsp_receiver.yaml` | `daqiri_example_gvsp_receiver` |
 | `daqiri_example_gds_write_sw_loopback.yaml` | `daqiri_example_gds_write` |
 | `daqiri_example_gds_write_tx_rx.yaml` | `daqiri_example_gds_write` |
 | `daqiri_bench_raw_rx_multi_q.yaml` | `daqiri_bench_raw_gpudirect` |
@@ -113,6 +117,14 @@ Configs named `raw_rx_*` are RX-only. They initialize the RX path and wait for m
 external traffic; when run by themselves they may exit successfully with `0` packets. The
 TX/RX reorder configs are full closed-loop examples. The CPU reorder config is a throughput
 stress case, so dropped-packet counters can increase when the sender outruns CPU reorder.
+
+## GVSP Receiver Example
+
+`daqiri_example_gvsp_receiver` is an RX-only data-plane example. Its
+configuration is pre-filled for DGX Spark. Replace every placeholder in its config, configure the camera separately,
+then start the receiver before camera acquisition. It uses raw `ibverbs`, indirect polling, and one `host_pinned` memory region.
+Frame assembly stays within the example. See the [GVSP receiver tutorial](../docs/tutorials/daqiri-gvsp-receiver.md)
+for the supported packet profile and camera-free validation fixture.
 
 ## PCAP Writer Example
 
