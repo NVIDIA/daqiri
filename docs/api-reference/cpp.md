@@ -368,9 +368,10 @@ daqiri::free_all_packets_and_burst_rx(burst);
 ### Runtime named senders (raw ibverbs)
 
 A runtime sender binds a unique name and numeric `SenderId` to one configured
-raw-ibverbs TX queue and an Ethernet/IPv4/UDP destination. Creating the sender
-validates the interface and queue, parses the addresses once, obtains the source
-MAC from the NIC, and caches a binary header template for subsequent sends.
+raw-ibverbs interface and an Ethernet/IPv4/UDP destination. Creating the sender
+validates the interface and destination fields, parses the addresses once,
+obtains the source MAC from the NIC, and caches a binary header template for
+subsequent sends.
 
 ```cpp
 daqiri::RawUdpSenderConfig sender;
@@ -465,15 +466,18 @@ The burst must have been acquired from the same queue, so its existing
 checked overload copies the sender's cached 42-byte Ethernet/IPv4/UDP template
 directly into each mlx5 SEND WQE. It patches the IPv4 and UDP lengths there and
 leaves both checksum fields zero for the existing mlx5 hardware-checksum flags.
-One registered data segment gathers the UDP payload from the burst's last
-packet segment. Packet buffers therefore contain payload only; applications do
-not reserve or populate header bytes.
+One registered data segment gathers the UDP payload from segment 0. Packet
+buffers therefore contain payload only; applications do not reserve or
+populate header bytes.
 
-For a one-region queue, segment 0 is the payload. For an HDS queue, segment 1
-is the payload and the queue's segment-0 header slot is not transmitted by this
-sender-aware path. Set the payload segment's length before submission. Each
-sender-aware SEND WQE occupies two 64-byte WQEBBs; enhanced MPW is bypassed for
-these bursts.
+!!! warning "Single-segment limitation"
+    Named senders currently support only a one-segment raw-ibverbs TX queue and
+    a one-segment burst. Segment 0 is the payload. HDS/two-region queues and all
+    other multi-segment bursts are rejected with `INVALID_PARAMETER`; this path
+    does not support header-data gather.
+
+Set segment 0's payload length before submission. Each sender-aware SEND WQE
+occupies two 64-byte WQEBBs; enhanced MPW is bypassed for these bursts.
 
 The overload returns `INVALID_PARAMETER` without consuming the burst when the
 sender, interface, queue, header reservation, or frame length is invalid. A

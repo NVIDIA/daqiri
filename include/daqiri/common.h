@@ -783,7 +783,10 @@ Status send_tx_burst(BurstParams *burst);
  * @brief Send a TX burst through a named sender on an explicitly selected queue.
  *
  * The burst must have been allocated from @p queue_id on the sender's
- * interface. The last packet segment is treated as the UDP payload. DAQIRI
+ * interface. Named senders currently require a one-segment TX queue and burst;
+ * segment 0 is treated as the UDP payload. HDS and other multi-segment bursts
+ * are rejected with INVALID_PARAMETER; header-data gather is not supported.
+ * DAQIRI
  * copies the cached sender template into an inline mlx5 SEND WQE, patches its
  * IPv4 and UDP lengths, and gathers the payload through one registered data
  * segment. Packet buffers contain payload only; checksum fields remain zero

@@ -372,7 +372,6 @@ static inline uint32_t rdr_output_payload_len(const ReorderConfig& c, uint32_t i
 namespace {
 struct SenderInlineTxMetadata {
   UDPIPV4Pkt header;
-  uint8_t payload_segment;
 };
 
 static_assert(sizeof(SenderInlineTxMetadata) <= sizeof(BurstHeader::custom_burst_data));
@@ -5319,7 +5318,6 @@ void IbverbsEngine::post_sender_inline_burst(IbvTxQueue& q, BurstParams* burst) 
   const bool scheduled = (burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) != 0;
   const uint64_t* txtime = scheduled ? burst_ts_arr(burst) : nullptr;
   const SenderInlineTxMetadata* metadata = sender_inline_metadata(burst);
-  const uint8_t payload_segment = metadata->payload_segment;
   uint8_t* const sq_buf = static_cast<uint8_t*>(q.dv_qp.sq.buf);
   const uint32_t wqe_cnt = q.dv_qp.sq.wqe_cnt;
   const uint32_t stride = q.dv_qp.sq.stride;
@@ -5344,7 +5342,7 @@ void IbverbsEngine::post_sender_inline_burst(IbvTxQueue& q, BurstParams* burst) 
     eth->cs_flags = MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
     eth->inline_hdr_sz = htobe16(sizeof(UDPIPV4Pkt));
     UDPIPV4Pkt header = metadata->header;
-    const uint32_t payload_length = burst->pkt_lens[payload_segment][packet];
+    const uint32_t payload_length = burst->pkt_lens[0][packet];
     header.ip.tot_len = htobe16(
         static_cast<uint16_t>(sizeof(struct iphdr) + sizeof(struct udphdr) + payload_length));
     header.ip.check = 0;
@@ -5355,8 +5353,8 @@ void IbverbsEngine::post_sender_inline_burst(IbvTxQueue& q, BurstParams* burst) 
 
     auto* dseg = reinterpret_cast<struct mlx5_wqe_data_seg*>(wqe.data() + PAYLOAD_DSEG_OFFSET);
     dseg->byte_count = htobe32(payload_length);
-    dseg->lkey = htobe32(q.regions[payload_segment].lkey);
-    dseg->addr = htobe64(reinterpret_cast<uint64_t>(burst->pkts[payload_segment][packet]));
+    dseg->lkey = htobe32(q.regions[0].lkey);
+    dseg->addr = htobe64(reinterpret_cast<uint64_t>(burst->pkts[0][packet]));
 
     uint8_t* first = sq_buf + static_cast<size_t>(first_idx) * stride;
     uint8_t* second = sq_buf + static_cast<size_t>(second_idx) * stride;
@@ -5510,16 +5508,14 @@ Status IbverbsEngine::send_tx_burst(SenderId sender_id, uint16_t queue_id, Burst
 
   IbvTxQueue* q = find_tx_queue(sender.port_id, queue_id);
   if (q == nullptr || burst->hdr.hdr.port_id != sender.port_id || burst->hdr.hdr.q_id != queue_id ||
-      burst->hdr.hdr.num_segs != q->num_segs || q->num_segs < 1 || q->regions.empty()) {
+      burst->hdr.hdr.num_segs != 1 || q->num_segs != 1 || q->regions.size() != 1) {
     return Status::INVALID_PARAMETER;
   }
 
-  const uint8_t payload_segment = static_cast<uint8_t>(q->num_segs - 1);
   const size_t packets = burst->hdr.hdr.num_pkts;
   for (size_t packet = 0; packet < packets; ++packet) {
-    const uint32_t payload_length = burst->pkt_lens[payload_segment][packet];
-    if (burst->pkts[payload_segment][packet] == nullptr ||
-        payload_length > sender.mtu - sizeof(UDPIPV4Pkt) ||
+    const uint32_t payload_length = burst->pkt_lens[0][packet];
+    if (burst->pkts[0][packet] == nullptr || payload_length > sender.mtu - sizeof(UDPIPV4Pkt) ||
         payload_length > UINT16_MAX - sizeof(struct iphdr) - sizeof(struct udphdr)) {
       return Status::INVALID_PARAMETER;
     }
@@ -5527,7 +5523,6 @@ Status IbverbsEngine::send_tx_burst(SenderId sender_id, uint16_t queue_id, Burst
 
   SenderInlineTxMetadata* metadata = sender_inline_metadata(burst);
   metadata->header = sender.header_template;
-  metadata->payload_segment = payload_segment;
   burst->hdr.hdr.burst_flags |= IBV_TX_SENDER_INLINE_FLAG;
   const Status status = send_tx_burst(burst);
   if (status != Status::SUCCESS && status != Status::NO_SPACE_AVAILABLE) {
