@@ -71,6 +71,7 @@ Integration and performance verification is done via the benchmark executables i
 | `daqiri_bench_raw_latency` | `raw_latency_bench.cpp` | `daqiri_bench_raw_latency_ibverbs.yaml` — caller-driven direct TX/RX, RX hardware timestamps, 64–8192-byte power-of-two latency sweep |
 | `daqiri_example_dynamic_rx_flow` | `dynamic_rx_flow_example.cpp` | `daqiri_example_dynamic_rx_flow.yaml` — `flow_isolation: true` startup followed by runtime scalar queue steering, multi-queue RSS, and raw-engine decap/pop flow add/delete |
 | `daqiri_example_dynamic_resource` | `dynamic_resource_example.cpp` | Any ibverbs config with at least one RX queue and one single-region TX queue (for example `daqiri_bench_raw_hw_loopback_ibverbs.yaml`) — initializes without RX queues, repeatedly adds/removes the first RX queue's steering flow, and exercises runtime MR and RX/TX queue add/delete |
+| `daqiri_example_named_sender` | `named_sender_example.cpp` | `daqiri_example_named_sender_tx_rx.yaml` — raw ibverbs runtime sender with inline Ethernet/IPv4/UDP header and one gathered payload segment |
 | `daqiri_bench_raw_hds` | `raw_hds_bench.cpp` | `daqiri_bench_raw_tx_rx_hds.yaml` |
 | `daqiri_bench_raw_reorder_seq` | `raw_reorder_seq_bench.cpp` | `daqiri_bench_raw_tx_rx_reorder_seq_1024*.yaml`, `daqiri_bench_raw_rx_reorder_seq_*.yaml` |
 | `daqiri_bench_raw_reorder_quantize` | `raw_reorder_quantize_bench.cpp` | `daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml` |

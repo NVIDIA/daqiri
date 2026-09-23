@@ -51,6 +51,7 @@ set(DAQIRI_BENCH_CONFIGS
   daqiri_bench_raw_sw_loopback.yaml
   daqiri_bench_raw_hw_loopback_ibverbs.yaml
   daqiri_bench_raw_latency_ibverbs.yaml
+  daqiri_example_named_sender_tx_rx.yaml
   daqiri_example_dynamic_rx_flow.yaml
   daqiri_example_gds_write_sw_loopback.yaml
   daqiri_example_gds_write_tx_rx.yaml
@@ -124,6 +125,7 @@ add_daqiri_raw_bench(daqiri_example_dynamic_rx_flow dynamic_rx_flow_example.cpp)
 add_executable(daqiri_example_dynamic_resource dynamic_resource_example.cpp)
 link_daqiri_bench(daqiri_example_dynamic_resource)
 target_link_libraries(daqiri_example_dynamic_resource PRIVATE CUDA::cudart)
+add_daqiri_raw_bench(daqiri_example_named_sender named_sender_example.cpp)
 add_daqiri_raw_bench(daqiri_example_gds_write gds_write_example.cpp)
 add_daqiri_raw_bench(daqiri_example_pcap_writer pcap_writer_example.cpp)
 
