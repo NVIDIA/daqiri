@@ -74,9 +74,9 @@ ssh "${RX_HOST}" "cd '${REPO_ROOT}' && sudo '${BIN}' '${RX_CFG}' --mode rx ${DAT
   >"${RX_LOG}" 2>&1 &
 RX_SSH_PID=$!
 
-echo "Waiting for set_reorder_cuda_stream and TrtRunner ready..."
+echo "Waiting for RX reorder and TrtRunner ready..."
 for _ in $(seq 1 600); do
-  if grep -q "set_reorder_cuda_stream OK" "${RX_LOG}" 2>/dev/null && \
+  if grep -q "RX reorder ready" "${RX_LOG}" 2>/dev/null && \
      grep -q "TrtRunner ready" "${RX_LOG}" 2>/dev/null; then
     break
   fi
@@ -88,7 +88,7 @@ for _ in $(seq 1 600); do
   sleep 1
 done
 
-if ! grep -q "set_reorder_cuda_stream OK" "${RX_LOG}" 2>/dev/null || \
+if ! grep -q "RX reorder ready" "${RX_LOG}" 2>/dev/null || \
    ! grep -q "TrtRunner ready" "${RX_LOG}" 2>/dev/null; then
   echo "Timed out waiting for RX ready; log:" >&2
   cat "${RX_LOG}" >&2

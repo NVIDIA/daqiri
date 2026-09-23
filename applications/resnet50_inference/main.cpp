@@ -86,7 +86,6 @@ int main(int argc, char** argv) {
   try {
     root = YAML::LoadFile(argv[1]);
     cfg = app::AppConfig::from_yaml(root);
-    cfg.materialize_daqiri_reorder(root);
   } catch (const std::exception& e) {
     std::cerr << "Invalid config: " << e.what() << "\n";
     return 1;
@@ -185,8 +184,6 @@ int main(int argc, char** argv) {
     }
   }
 
-  // App reorder: is authoritative; materialize_daqiri_reorder() already injected
-  // daqiri…rx.reorder_configs into `root` for RX roles.
   if (daqiri::daqiri_init_from_yaml_string(YAML::Dump(root)) != daqiri::Status::SUCCESS) {
     std::cerr << "daqiri_init failed\n";
     return 1;
@@ -194,20 +191,32 @@ int main(int argc, char** argv) {
 
   cudaStream_t reorder_stream = nullptr;
   if (cfg.role != app::AppRole::Tx) {
-    if (cudaStreamCreateWithFlags(&reorder_stream, cudaStreamNonBlocking) != cudaSuccess) {
-      std::cerr << "cudaStreamCreate(reorder_stream) failed\n";
-      daqiri::shutdown();
-      return 1;
+    if (cfg.reorder_engine == "hw") {
+      if (daqiri::set_reorder_cuda_stream(cfg.rx.interface_name, cfg.reorder_name, nullptr) !=
+          daqiri::Status::SUCCESS) {
+        std::cerr << "hardware reorder plan " << cfg.reorder_name << " not found on "
+                  << cfg.rx.interface_name << "\n";
+        daqiri::shutdown();
+        return 1;
+      }
+    } else {
+      if (cudaStreamCreateWithFlags(&reorder_stream, cudaStreamNonBlocking) != cudaSuccess) {
+        std::cerr << "cudaStreamCreate(reorder_stream) failed\n";
+        daqiri::shutdown();
+        return 1;
+      }
+      if (daqiri::set_reorder_cuda_stream(cfg.rx.interface_name, cfg.reorder_name,
+                                          reorder_stream) != daqiri::Status::SUCCESS) {
+        std::cerr << "set_reorder_cuda_stream(" << cfg.rx.interface_name << ", " << cfg.reorder_name
+                  << ") failed\n";
+        cudaStreamDestroy(reorder_stream);
+        daqiri::shutdown();
+        return 1;
+      }
+      std::cerr << "set_reorder_cuda_stream OK (" << cfg.reorder_name << ")\n";
     }
-    if (daqiri::set_reorder_cuda_stream(cfg.rx.interface_name, cfg.reorder_name, reorder_stream) !=
-        daqiri::Status::SUCCESS) {
-      std::cerr << "set_reorder_cuda_stream(" << cfg.rx.interface_name << ", " << cfg.reorder_name
-                << ") failed\n";
-      cudaStreamDestroy(reorder_stream);
-      daqiri::shutdown();
-      return 1;
-    }
-    std::cerr << "set_reorder_cuda_stream OK (" << cfg.reorder_name << ")\n";
+    std::cerr << "RX reorder ready (" << cfg.reorder_name
+              << ", engine=" << cfg.reorder_engine << ")\n";
   }
 
   const bool example_stats =

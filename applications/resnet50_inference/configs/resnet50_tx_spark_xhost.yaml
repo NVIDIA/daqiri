@@ -47,37 +47,16 @@ bench_tx:
   udp_src_port: 4096
   udp_dst_port: 4096
 
-# App reorder geometry (single source of truth; RX synthesizes
-# daqiri.cfg…rx.reorder_configs from this at startup).
-reorder:
+# App packetization geometry for TX replay. RX reorder behavior lives in
+# the companion RX config's native daqiri.cfg...rx.reorder_configs.
+packetization:
   reorder_name: "rx_reorder_resnet_int8_fp16"
   out_payload_len: 1176
-  output_slot_stride: 2352
   packets_per_image: 128
+  images_per_batch: 32
   payload_byte_offset: 64
   seq_bit_offset: 128
-  # 16, not 12: DAQIRI derives the reorder batch id as seq / packets_per_batch,
-  # so a 12-bit sequence over packets_per_batch 4096 makes every batch id 0 and
-  # batches have no identity -- a lost packet then lets the next batch complete
-  # the previous one and shifts every batch after it. 16 bits cycles the id 0..15.
-  # Must match --seq-bit-width used to regenerate the pcap.
   seq_bit_width: 16
-  images_per_batch: 32
-  image_out_bytes: 301056
-
-inference:
-  onnx_path: "models/resnet50_features.onnx"
-  engine_path: "models/resnet50_features.fp16in.engine"
-  enable_fp16: true
-  channels: 3
-  height: 224
-  width: 224
-  feature_dim: 2048
-  opt_min: 1
-  opt_avg: 32
-  opt_max: 256
-  input_name: "input"
-  output_name: "features"
 
 dataset:
   pcap_path: "data/cifar10_resnet.pcap"

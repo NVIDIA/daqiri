@@ -21,7 +21,6 @@
 
 #include <cstdint>
 #include <string>
-#include <vector>
 
 #include "raw_bench_common.h"
 #include "trt_runner.hpp"
@@ -32,10 +31,9 @@ enum class AppRole { Both, Tx, Rx };
 
 // Resolved configuration for the ResNet inference application.
 //
-// App-level `reorder:` is the single source of truth for reorder geometry.
-// Before daqiri_init, call materialize_daqiri_reorder() to synthesize
-// daqiri.cfg…rx.reorder_configs from that block (do not author reorder_configs
-// in the YAML). packets_per_batch = packets_per_image * images_per_batch.
+// DAQIRI's native daqiri.cfg...rx.reorder_configs block is the source of truth
+// for RX reorder behavior. The app-level packetization block carries only the
+// image framing facts the TX/replay side needs.
 struct AppConfig {
   AppRole role = AppRole::Both;
   bool has_rx = false;
@@ -46,12 +44,10 @@ struct AppConfig {
   TrtRunnerConfig trt;
 
   std::string reorder_name;
+  std::string reorder_engine = "sw";
   // "fp16" (int8→fp16 convert) or "int8" (passthrough into INT8 TRT).
   std::string reorder_output_type = "fp16";
-  std::string reorder_type = "gpu";
   std::string reorder_memory_region = "Reorder_RX_GPU";
-  // Empty => all flow IDs on the RX interface (must be non-empty after resolve).
-  std::vector<uint32_t> reorder_flow_ids;
 
   uint32_t out_payload_len = 1176;     // wire int8 bytes per packet
   uint32_t output_slot_stride = 2352;  // bytes per packet slot (2352 fp16 / 1176 int8)
@@ -78,11 +74,6 @@ struct AppConfig {
   bool example_mode() const { return !dataset_pcap.empty(); }
 
   static AppConfig from_yaml(const YAML::Node& root);
-
-  // Inject daqiri.cfg…rx.reorder_configs from this app config. Errors if the
-  // YAML already defines reorder_configs (remove them; use app reorder: only).
-  // No-op when has_rx is false.
-  void materialize_daqiri_reorder(YAML::Node& root) const;
 
   // Clamp --images-per-batch to a power-of-two divisor of
   // (packets_per_batch / packets_per_image). Does not change packets_per_batch.

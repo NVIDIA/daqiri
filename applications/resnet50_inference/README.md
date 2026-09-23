@@ -4,6 +4,9 @@ End-to-end example: raw Ethernet RX with **config-based GPU reorder** (int8→fp
 **SPSC-decoupled** RX producer / inference consumer, and TensorRT FP16 tensor-core
 feature extraction.
 
+Follow-up work lives in `ROADMAP.md` so future sessions can resume the remaining
+ResNet/MobileNet/Thor benchmark plan without chat history.
+
 ## Primary setup: Spark-to-Spark (xhost)
 
 | Role | Host | Config |
@@ -14,8 +17,10 @@ feature extraction.
 **One cable** p0↔p0 (a second cable is not used). Net prep:
 `scripts/setup_spark_xhost_net.sh` on both hosts.
 
-New here? Run [software loopback smoke](#software-loopback-smoke-no-nic) first
-(no NIC required), then come back to xhost for reported numbers.
+New here? Run the [cabled loopback smoke](#cabled-loopback-smoke)
+first on a host with a p0↔p1 loopback cable, then come back to xhost for
+reported numbers. `resnet50_sw_loopback.yaml` remains a no-NIC fallback, but it
+is not the release smoke path.
 
 ## Pipeline
 
@@ -79,43 +84,55 @@ sudo -E ./build/applications/resnet50_inference/daqiri_resnet50_inference \
   --mode tx --replay-once --dataset data/cifar10_resnet.pcap
 ```
 
-Expect: `kHALF` input binding, `set_reorder_cuda_stream OK`, per-class mean
+Expect: `kHALF` input binding, `RX reorder ready`, per-class mean
 features with CIFAR-10 class names, clean shutdown.
 
-## Software loopback smoke (no NIC)
+## Cabled loopback smoke
+
+Use `resnet50_wire_loopback.yaml` for commit smoke. It is a real cabled raw
+Ethernet path (`loopback: ""`), uses the ibverbs raw engine, and caps TX with
+`pacing_mbps: 50` so the test verifies reorder/inference correctness rather
+than receiver saturation.
 
 ```bash
+# Replace <tx-pcie-addr>, <rx-pcie-addr>, and <rx-port-mac> for the host.
 sudo ./build/applications/resnet50_inference/daqiri_resnet50_inference \
-  ./build/applications/resnet50_inference/configs/resnet50_sw_loopback.yaml \
-  --replay-once --dataset data/cifar10_resnet.pcap --expected-images 256
+  ./build/applications/resnet50_inference/configs/resnet50_wire_loopback.yaml \
+  --replay-once --dataset data/cifar10_resnet.pcap --expected-images 512
 ```
 
-Uses `loopback: "sw"` / `address: "loopback"` (same pattern as
-`daqiri_bench_raw_sw_loopback.yaml`). No PCIe placeholders or cable required.
+Expect `RX reorder ready`, `TrtRunner ready`, `pushed_images=512`,
+`dropped_bursts=0`, `partial_bursts=0`, and RX/TX packet counters at 65536.
+If a cached TensorRT engine was built for a different GPU, delete it or point
+`inference.engine_path` at a host-local cache so TensorRT rebuilds it.
 
-## Config keys (app `reorder:`)
+## Config keys (native reorder + app packetization)
 
-The app `reorder:` block is the **single source of truth** for reorder geometry.
-Do **not** hand-write `daqiri.cfg…rx.reorder_configs`; the app synthesizes it
-from `reorder:` at startup (and errors if the YAML defines it directly).
+RX reorder behavior now lives in DAQIRI's native
+`daqiri.cfg.interfaces[].rx.reorder_configs` block. The application reads that
+config to discover the reorder name, sequence field, payload offset, output
+memory region, conversion type, and `packets_per_batch`; it no longer
+synthesizes `reorder_configs` at startup.
 
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `reorder_name` | — | Name given to the synthesized reorder config |
-| `output_type` | fp16 | `fp16` (int8→fp16 convert) or `int8` (passthrough) |
-| `reorder_type` | gpu | Reorder engine type |
-| `memory_region` | Reorder_RX_GPU | Output MR (must exist in `daqiri.cfg.memory_regions`) |
-| `flow_ids` | RX flows | Flow IDs to reorder (defaults to all RX flow IDs) |
-| `out_payload_len` | 1176 | Wire int8 bytes/packet |
-| `output_slot_stride` | 2352 | fp16 bytes/slot (1176 for int8) |
-| `packets_per_image` | 128 | Power of two |
-| `images_per_batch` | 32 | Inference batch size (power of two) |
-| `payload_byte_offset` | 64 | Header size before payload |
-| `seq_bit_offset` / `seq_bit_width` | 128 / 12 | Header seq field. Every shipped config sets **16**; leave the 12-bit default only if `packets_per_batch` is small enough that `2^width` spans more than one batch |
+The small app-level `packetization:` block carries only image framing facts:
 
-`packets_per_batch` is derived as `packets_per_image × images_per_batch` and
-written into the synthesized `reorder_configs`. `--images-per-batch` may shrink
-the TRT batch afterward without changing the engine reorder window.
+| Key | Meaning |
+|-----|---------|
+| `reorder_name` | Native `rx.reorder_configs[].name` used by RX setup |
+| `packets_per_image` | Number of packets that make one image; power of two |
+| `images_per_batch` | Images handed to TensorRT from each reorder window |
+
+TX-only configs have no RX reorder config to inspect, so they also declare the
+wire geometry needed to generate or validate packets: `out_payload_len`,
+`payload_byte_offset`, `seq_bit_offset`, and `seq_bit_width`. RX configs may
+include those same keys as assertions, but the native reorder config remains
+authoritative.
+
+For the shipped FP16 path, the native reorder config uses `data_types:
+input_type: int8, output_type: fp16`; for hardware NIC reorder, omit
+`data_types`, set `reorder_engine: "hw"`, and use an INT8 TensorRT input.
+`--images-per-batch` may shrink the TensorRT batch afterward without changing
+the engine reorder window.
 
 ## Queue sizing vs. reorder batches
 

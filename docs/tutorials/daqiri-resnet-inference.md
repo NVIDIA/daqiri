@@ -23,8 +23,8 @@ The pipeline needs **two hosts and one link**: one transmits, the other receives
 and infers. The shipped configs and the `run_resnet_xhost.sh` helper default to a
 pair of DGX Sparks cabled p0↔p0, but nothing in the application is
 platform-specific — see [Run across two hosts](#run-across-two-hosts) for what a
-different pair needs to change. A single-host software loopback needs no NIC at
-all and is the fastest way to check a build.
+different pair needs to change. For pre-commit smoke on Thor, use the
+single-host p0↔p1 cabled loopback path rather than software loopback.
 
 ## Summary
 
@@ -56,14 +56,13 @@ above:
 - `packets_per_image` and `images_per_batch` must both be powers of two, and
   `--images-per-batch` must stay a power-of-two divisor of
   `packets_per_batch / packets_per_image`.
-- `Data_RX_GPU`'s `buf_size` **must** equal `payload_byte_offset +
-  out_payload_len` (64 + 1176 = 1240). The reorder slot stride is derived from
-  `buf_size - payload_byte_offset`, so any slack pads the fp16 batch and breaks
-  the tensor layout.
+- For software reorder, `Data_RX_GPU`'s `buf_size` **must** equal
+  `payload_byte_offset + out_payload_len` (64 + 1176 = 1240). DAQIRI derives
+  the software reorder slot stride from the source buffer size.
 
-The full parameter table — including `output_slot_stride`, `seq_bit_offset` /
-`seq_bit_width`, and the derived `packets_per_batch` — is in
-`applications/resnet50_inference/README.md` under **Config keys**.
+The full parameter table is split between native `rx.reorder_configs` and the
+app-level `packetization:` block; see `applications/resnet50_inference/README.md`
+under **Config keys**.
 
 ## The pipeline
 
@@ -143,10 +142,46 @@ into that ~3-minute window. These are the same two numbers that govern how long
 you have to start TX after RX — see
 [Run across two hosts](#run-across-two-hosts).
 
-### 2. Configure GPU reorder
+### 2. Configure DAQIRI reorder
 
-Creating and binding one CUDA stream is the entire application side of reorder.
-`main` does it immediately after `daqiri_init` and before any thread starts:
+DAQIRI reorder is configured in the normal raw-Ethernet config under
+`daqiri.cfg.interfaces[].rx.reorder_configs`. The shipped software path names
+the output memory region, selects GPU reorder, declares int8-to-fp16 conversion,
+and uses `seq_packets_per_batch` to derive each batch from the sequence field:
+
+```yaml
+rx:
+  reorder_configs:
+  - name: "rx_reorder_resnet_int8_fp16"
+    reorder_engine: "sw"
+    reorder_type: "gpu"
+    memory_region: "Reorder_RX_GPU"
+    payload_byte_offset: 64
+    flow_ids: [201]
+    data_types:
+      input_type: "int8"
+      output_type: "fp16"
+      endianness: "host"
+    method:
+      seq_packets_per_batch:
+        sequence_number:
+          bit_offset: 128
+          bit_width: 16
+        packets_per_batch: 4096
+```
+
+The application's `packetization:` block now carries only image framing facts
+that DAQIRI itself should not know:
+
+```yaml
+packetization:
+  reorder_name: "rx_reorder_resnet_int8_fp16"
+  packets_per_image: 128
+  images_per_batch: 32
+```
+
+For software GPU reorder, `main` creates one CUDA stream and binds it to the
+named DAQIRI reorder plan after `daqiri_init`:
 
 ```cpp
 cudaStreamCreateWithFlags(&reorder_stream, cudaStreamNonBlocking);
@@ -156,34 +191,15 @@ if (daqiri::set_reorder_cuda_stream(cfg.rx.interface_name, cfg.reorder_name, reo
 }
 ```
 
-Everything else is configuration. The app's `reorder:` block declares the
-geometry once — the stream binding target, the packet layout, and the
-sequence-number field:
-
-```yaml
-reorder:
-  reorder_name: "rx_reorder_resnet_int8_fp16"
-  out_payload_len: 1176
-  output_slot_stride: 2352
-  packets_per_image: 128
-  payload_byte_offset: 64
-  seq_bit_offset: 128
-  seq_bit_width: 16
-  images_per_batch: 32
-  image_out_bytes: 301056
-```
-
-`reorder_name` is the same string passed to `set_reorder_cuda_stream` above.
-The remaining knobs — reorder type, output memory region, int8→fp16 conversion,
-and which flow IDs to reorder — have defaults that suit this pipeline; see
-`applications/resnet50_inference/README.md` under **Config keys** for the full
-table.
+Hardware NIC reorder uses the same native `reorder_configs` location but sets
+`reorder_engine: "hw"`, `cyclic_sequence: true`, and `packet_size`; it omits
+`data_types` because the NIC direct-placement path cannot convert int8 to fp16.
+That path pairs with an INT8 TensorRT input.
 
 `seq_bit_width` must match the `--seq-bit-width` used to generate the pcap.
-
-The application never launches a reorder kernel, never tracks a packet's slot,
-and never accumulates an image — it declares the geometry and then receives
-finished batches.
+The application never launches a reorder kernel itself, never tracks a packet's
+slot, and never accumulates an image — it consumes DAQIRI-delivered reordered
+batches.
 
 ### 3. Receive a batch
 
@@ -479,22 +495,28 @@ wire is unchanged by model choice, which is what the
 [five-model table](../benchmarks/performance-dgx-spark.md#end-to-end-resnet-inference-throughput)
 sweeps.
 
-## Run without a NIC (software loopback)
+## Run cabled loopback on one host
 
-No NIC and no cable. Build and prepare model/dataset as above, then:
+For smoke testing on Thor, use a real p0↔p1 loopback cable and
+`resnet50_wire_loopback.yaml`. Replace the PCIe placeholders and RX MAC for the
+host. The config uses the ibverbs raw engine with conservative TX hardware
+pacing, so it checks the cabled NIC → reorder → TensorRT path without relying on
+software loopback.
 
 ```bash
 sudo ./build-resnet/applications/resnet50_inference/daqiri_resnet50_inference \
-  ./build-resnet/applications/resnet50_inference/configs/resnet50_sw_loopback.yaml \
-  --replay-once --dataset data/cifar10_resnet.pcap --expected-images 256
+  ./build-resnet/applications/resnet50_inference/configs/resnet50_wire_loopback.yaml \
+  --replay-once --dataset data/cifar10_resnet.pcap --expected-images 512
 ```
 
-Expect: TensorRT ready; `set_reorder_cuda_stream OK`; sample feature vectors and
-per-class means on stderr; clean shutdown with 256 images.
+Expect: TensorRT ready; `RX reorder ready`; `pushed_images=512`;
+`dropped_bursts=0`; `partial_bursts=0`; clean shutdown with 65536 RX/TX
+packets. If a cached TensorRT engine was built for a different GPU, delete it
+or point `inference.engine_path` at a host-local cache before running.
 
 ## Run across two hosts
 
-Start RX first, wait for `set_reorder_cuda_stream OK` / `TrtRunner ready`, then
+Start RX first, wait for `RX reorder ready` / `TrtRunner ready`, then
 start TX with `ETH_DST_ADDR` set to the RX interface's MAC. The helper script
 does both over SSH:
 
