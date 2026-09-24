@@ -22,7 +22,10 @@ canonical multi-architecture version tag.
 CMake options (full table in `docs/getting-started.md`):
 - `DAQIRI_ENGINE` — space-separated list of optional engines to compile. Valid values: `dpdk` (raw Ethernet) and `ibverbs` (RDMA/RoCE). Linux sockets (UDP/TCP) are always built in, so there is no `socket` value. Default is `"dpdk ibverbs"`.
 - `DAQIRI_BUILD_PYTHON` — builds `pybind11` bindings from `python/`.
-- `DAQIRI_BUILD_EXAMPLES` — builds the benchmark executables (default `ON`).
+- `DAQIRI_BUILD_EXAMPLES` — builds the benchmark executables (default `ON`). The
+  hardware-free `daqiri_config_validate` tool is always built and installed.
+- `BUILD_TESTING` — builds and registers the hardware-free C++ tests under
+  `tests/cpp/` with CTest (default `ON`). Set it to `OFF` to omit test targets.
 - `DAQIRI_BUILD_APPLICATIONS` — builds the end-to-end example applications under `applications/` (default `OFF`; requires TensorRT, e.g. the `BASE_IMAGE=torch` container). Currently builds `applications/resnet50_inference/` (DAQIRI → TensorRT ResNet inference).
 - `DAQIRI_ENABLE_OTEL_METRICS` — enables OpenTelemetry metrics instrumentation (default `OFF`).
 - `DAQIRI_REORDER_GPU_PROFILE` — enable CUDA event timing in the DPDK reorder kernels (off by default).
@@ -45,7 +48,20 @@ python3 -m venv .venv
 .venv/bin/python -m pytest
 ```
 
-The default suite collects only `tests/portable/`. Future build-backed C++ tests live under `tests/cpp/`; Python-binding tests live under `tests/bindings/` and require a container built with `DAQIRI_BUILD_PYTHON=ON`. Platform tests live under `tests/platform/` and are selected by CI/CD jobs running on provisioned GPU/NIC systems; they are never part of the default pytest collection. The project container already includes the current test packages; use the container-specific dependency command in `tests/README.md` when `tests/requirements.txt` changes.
+Validate checked-in configurations through the production parser and common semantic checks
+without initializing hardware:
+
+```bash
+python3 scripts/check_daqiri_configs.py --validator build/tools/daqiri_config_validate
+```
+
+The default pytest suite collects only `tests/portable/`. Build-backed C++ tests live under
+`tests/cpp/` and run through CTest; Python-binding tests live under `tests/bindings/` and
+require a container built with `DAQIRI_BUILD_PYTHON=ON`. Platform tests live under
+`tests/platform/` and are selected by CI/CD jobs running on provisioned GPU/NIC systems;
+they are never part of the default pytest collection. The project container already includes
+the current test packages; use the container-specific dependency command in
+`tests/README.md` when `tests/requirements.txt` changes.
 
 Integration and performance verification is done via the benchmark executables in `examples/`, driven by YAML configs. Build outputs (`examples/CMakeLists.txt:59-71`):
 
@@ -112,7 +128,7 @@ clang-format -style=file -i -fallback-style=none <files>
 ### Engine abstraction
 `src/engine.h` defines `daqiri::Engine` — an (almost) ABC with ~50 virtual methods covering init, RX/TX burst dequeue/enqueue, header-fill helpers, buffer free, socket connection helpers, runtime TCP/UDP `setsockopt` passthrough, and RDMA connection setup. Engines live in `src/engines/<name>/` (`dpdk/`, `rdma/`, `socket/`, `ibverbs/`). `DAQIRI_ENGINE` selects the optional `dpdk` and `ibverbs` engines at CMake configure time; the `socket` engine is always built. The user-facing value `ibverbs` builds **two** internal engines that both use libibverbs: `rdma` (`src/engines/rdma/`, `DAQIRI_ENGINE_RDMA`, RoCE/InfiniBand for socket `roce://`) and `ibverbs` (`src/engines/ibverbs/`, `DAQIRI_ENGINE_IBVERBS`, the pure-DevX MPRQ raw-Ethernet engine). Each engine produces its own static library (`daqiri_dpdk`, `daqiri_rdma`, `daqiri_socket`, `daqiri_ibverbs`) linked into `daqiri_common`, and each adds a `DAQIRI_ENGINE_<NAME>=1` compile definition.
 
-`EngineType` (`include/daqiri/types.h`) is resolved from `(stream_type, engine)`: `raw` defaults to `EngineType::IBVERBS` when that engine is built (falling back to `EngineType::DPDK` in DPDK-only builds); `raw` + `engine: "dpdk"` explicitly selects `EngineType::DPDK`; `socket` + a `roce://` endpoint (or `engine: "ibverbs"`) selects `EngineType::RDMA`. The stream-aware `config_engine_from_string(str, stream_type)` overload encodes the `ibverbs`→`{IBVERBS for raw, RDMA for socket}` split. `EngineFactory` (in `engine.h`) is a singleton that instantiates the active engine. `daqiri_init(...)` resolves which engine to use from the `NetworkConfig` and then delegates everything through the `Engine` vtable. There is only ever **one** active `Engine` per process.
+`EngineType` (`include/daqiri/types.h`) is resolved from `(stream_type, engine)`: `raw` defaults to `EngineType::IBVERBS` when that engine is built (falling back to `EngineType::DPDK` in DPDK-only builds); `raw` + `engine: "dpdk"` explicitly selects `EngineType::DPDK`; `socket` + a `roce://` endpoint (or `engine: "ibverbs"`) selects `EngineType::RDMA`. The stream-aware `config_engine_from_string(str, stream_type)` overload encodes the `ibverbs`→`{IBVERBS for raw, RDMA for socket}` split. `EngineFactory` (in `engine.h`) is a singleton that instantiates the active engine. `daqiri_init(...)` resolves which engine to use from the `NetworkConfig`, runs the shared hardware-independent semantic validation, and only then delegates initialization through the `Engine` vtable. The standalone `daqiri_config_validate` tool calls the same parser and shared checks without creating an engine. There is only ever **one** active `Engine` per process.
 
 The always-built socket engine implements Linux UDP/TCP streams directly. Applications that need kernel socket tuning call `socket_setsockopt(conn_id, level, optname, optval, optlen)` after resolving a TCP/UDP connection ID; DAQIRI passes the numeric Linux constants through without maintaining a symbolic option map. `socket_setsockopt` is not supported for `roce://` connections, which delegate to the RDMA/ibverbs path.
 

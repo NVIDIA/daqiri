@@ -110,6 +110,19 @@ sockets), see
 [Choosing an example config](tutorials/configuration-walkthrough.md#choosing-an-example-config)
 in the configuration walkthrough.
 
+### Configuration validation
+
+Application startup is the authority for configuration acceptance. The YAML `daqiri_init()` entry
+points use the production parser, and every initialization path applies hardware-independent
+common semantic checks before it allocates packet memory or initializes the selected engine.
+Engine- and device-specific capability checks still occur during initialization because they
+depend on the compiled engines and available hardware.
+
+The installed `daqiri_config_validate` command is an optional hardware-free preflight for CI,
+batch validation, or development away from the target system. It runs the same parser and common
+checks as initialization, but it does not claim that a particular NIC can program every requested
+feature. See the [Configuration YAML Reference](api-reference/configuration.md#validate-without-hardware-initialization).
+
 ??? example "Support and testing"
 
     The DAQIRI library integration testing infrastructure is under active

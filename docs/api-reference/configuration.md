@@ -12,6 +12,20 @@ want to interoperate with existing configuration code.
 
 See `examples/daqiri_bench_*.yaml` for complete working examples.
 
+## Validate without hardware initialization
+
+`daqiri_config_validate` parses one or more YAML files and applies the same common semantic
+checks used before `daqiri_init()`. It does not allocate packet memory, initialize CUDA or a
+network engine, or access a NIC:
+
+```bash
+daqiri_config_validate config.yaml another-config.yaml
+```
+
+The command exits with status `0` when every file is valid, `1` when any file is invalid, and
+`2` when no file was provided. It is built and installed even when
+`DAQIRI_BUILD_EXAMPLES=OFF`.
+
 OpenTelemetry metrics do not add YAML fields. Metrics-enabled builds use the
 same interface, queue, and flow names from the active configuration as metric
 labels, and applications are still responsible for configuring the OpenTelemetry

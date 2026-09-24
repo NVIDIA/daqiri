@@ -1169,33 +1169,37 @@ int Engine::get_port_id(const std::string& key) {
   return -1;
 }
 
-bool Engine::validate_config() const {
+bool validate_network_config(const NetworkConfig& config) {
   bool pass = true;
   std::set<std::string> mr_names;
   std::set<std::string> q_mr_names;
-  const bool tunnel_supported_engine =
-      cfg_.common_.engine_type == EngineType::DPDK || cfg_.common_.engine_type == EngineType::IBVERBS;
+  std::unordered_set<FlowId> static_rx_flow_ids;
+  const bool tunnel_supported_engine = config.common_.engine_type == EngineType::DPDK ||
+                                       config.common_.engine_type == EngineType::IBVERBS;
 
-  if (cfg_.common_.loopback_ == LoopbackType::LOOPBACK_TYPE_HW &&
-      (cfg_.common_.stream_type != StreamType::RAW ||
-       cfg_.common_.engine_type != EngineType::IBVERBS)) {
+  if (config.common_.loopback_ == LoopbackType::LOOPBACK_TYPE_HW &&
+      (config.common_.stream_type != StreamType::RAW ||
+       config.common_.engine_type != EngineType::IBVERBS)) {
     DAQIRI_LOG_ERROR(
         "Hardware loopback is supported only for stream_type 'raw' with engine 'ibverbs'");
     pass = false;
   }
 
   // Verify all memory regions are used in queues and all queue MRs are listed in the MR section
-  for (const auto& mr : cfg_.mrs_) { mr_names.emplace(mr.second.name_); }
+  for (const auto& mr : config.mrs_) {
+    mr_names.emplace(mr.second.name_);
+  }
 
-  for (const auto& intf : cfg_.ifs_) {
+  for (const auto& intf : config.ifs_) {
     std::set<uint16_t> rx_queue_ids;
     std::set<uint16_t> direct_rx_queue_ids;
+    std::unordered_set<FlowId> interface_rx_flow_ids;
     for (const auto& rxq : intf.rx_.queues_) {
       rx_queue_ids.insert(rxq.common_.id_);
       if (rxq.poll_mode_ == QueuePollMode::DIRECT) {
         direct_rx_queue_ids.insert(rxq.common_.id_);
-        if (cfg_.common_.stream_type != StreamType::RAW ||
-            cfg_.common_.engine_type != EngineType::IBVERBS) {
+        if (config.common_.stream_type != StreamType::RAW ||
+            config.common_.engine_type != EngineType::IBVERBS) {
           DAQIRI_LOG_WARN(
               "RX queue '{}' requests direct polling, which is supported only by the raw "
               "ibverbs engine",
@@ -1223,8 +1227,8 @@ bool Engine::validate_config() const {
     }
     for (const auto& txq : intf.tx_.queues_) {
       if (txq.poll_mode_ == QueuePollMode::DIRECT) {
-        if (cfg_.common_.stream_type != StreamType::RAW ||
-            cfg_.common_.engine_type != EngineType::IBVERBS) {
+        if (config.common_.stream_type != StreamType::RAW ||
+            config.common_.engine_type != EngineType::IBVERBS) {
           DAQIRI_LOG_WARN(
               "TX queue '{}' requests direct polling, which is supported only by the raw "
               "ibverbs engine",
@@ -1255,8 +1259,8 @@ bool Engine::validate_config() const {
     auto queue_frame_size = [&](const CommonQueueConfig& queue) {
       size_t total = 0;
       for (const auto& mr_name : queue.mrs_) {
-        auto it = cfg_.mrs_.find(mr_name);
-        if (it != cfg_.mrs_.end()) {
+        auto it = config.mrs_.find(mr_name);
+        if (it != config.mrs_.end()) {
           total += it->second.buf_size_;
         }
       }
@@ -1275,6 +1279,13 @@ bool Engine::validate_config() const {
     }
 
     for (const auto& flow : intf.rx_.flows_) {
+      if (!interface_rx_flow_ids.insert(flow.id_).second) {
+        DAQIRI_LOG_ERROR("Duplicate flow ID {} in interface '{}'", flow.id_, intf.name_);
+        pass = false;
+      } else if (flow.id_ != 0 && !static_rx_flow_ids.insert(flow.id_).second) {
+        DAQIRI_LOG_ERROR("Duplicate static flow ID {}", flow.id_);
+        pass = false;
+      }
       const auto actions = flow_config_actions(flow);
       if (actions.size() > kMaxFlowActions) {
         DAQIRI_LOG_ERROR("RX flow '{}' on interface '{}' has {} actions; maximum supported is {}",
@@ -1288,7 +1299,7 @@ bool Engine::validate_config() const {
       } else {
         const FlowAction& queue_action = actions.back();
         const auto queue_ids = flow_queue_ids(queue_action);
-        flow_rx_queue_ids[flow.id_] = queue_ids;
+        flow_rx_queue_ids.emplace(flow.id_, queue_ids);
         std::set<uint16_t> unique_ids;
         for (const uint16_t queue_id : queue_ids) {
           if (!unique_ids.insert(queue_id).second) {
@@ -1318,7 +1329,8 @@ bool Engine::validate_config() const {
                          flow.name_, intf.name_);
         pass = false;
       }
-      if (has_transform && (cfg_.common_.stream_type != StreamType::RAW || !tunnel_supported_engine)) {
+      if (has_transform &&
+          (config.common_.stream_type != StreamType::RAW || !tunnel_supported_engine)) {
         DAQIRI_LOG_ERROR("RX flow '{}' uses tunnel/VLAN actions, which are supported only for raw "
                          "DPDK or raw ibverbs engines",
                          flow.name_);
@@ -1352,15 +1364,19 @@ bool Engine::validate_config() const {
           pass = false;
         }
         const auto queues_it = flow_rx_queue_ids.find(flow_id);
-        if (queues_it != flow_rx_queue_ids.end()) {
-          for (const uint16_t queue_id : queues_it->second) {
-            if (direct_rx_queue_ids.find(queue_id) != direct_rx_queue_ids.end()) {
-              DAQIRI_LOG_WARN(
-                  "Reorder config '{}' targets direct RX queue {} on interface '{}'; direct "
-                  "polling does not support reorder",
-                  reorder.name_, queue_id, intf.name_);
-              pass = false;
-            }
+        if (queues_it == flow_rx_queue_ids.end()) {
+          DAQIRI_LOG_ERROR("Reorder config '{}' references unknown flow ID {} on interface '{}'",
+                           reorder.name_, flow_id, intf.name_);
+          pass = false;
+          continue;
+        }
+        for (const uint16_t queue_id : queues_it->second) {
+          if (direct_rx_queue_ids.find(queue_id) != direct_rx_queue_ids.end()) {
+            DAQIRI_LOG_WARN(
+                "Reorder config '{}' targets direct RX queue {} on interface '{}'; direct "
+                "polling does not support reorder",
+                reorder.name_, queue_id, intf.name_);
+            pass = false;
           }
         }
       }
@@ -1403,7 +1419,7 @@ bool Engine::validate_config() const {
         pass = false;
       }
       if (has_transform &&
-          (cfg_.common_.stream_type != StreamType::RAW || !tunnel_supported_engine)) {
+          (config.common_.stream_type != StreamType::RAW || !tunnel_supported_engine)) {
         DAQIRI_LOG_ERROR("TX flow '{}' uses tunnel/VLAN actions, which are supported only for raw "
                          "DPDK or raw ibverbs engines",
                          flow.name_);
@@ -1434,6 +1450,10 @@ bool Engine::validate_config() const {
   }
 
   return pass;
+}
+
+bool Engine::validate_config() const {
+  return validate_network_config(cfg_);
 }
 
 void Engine::init_rx_core_q_map() {

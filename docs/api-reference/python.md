@@ -83,6 +83,12 @@ or a config-like object that provides `as_dict()`.
 - `daqiri.NetworkConfig` instance
 - config-like object with a `value` attribute or `as_dict()` method
 
+The YAML and dictionary forms use the production parser, and every form is checked for common
+semantic errors before packet memory or transport resources are initialized. This happens
+automatically during normal application startup. For a hardware-free preflight outside the Python
+process, use the installed `daqiri_config_validate` command described in the
+[configuration reference](configuration.md#validate-without-hardware-initialization).
+
 ```python
 import daqiri
 

@@ -157,7 +157,6 @@ class RdmaEngine : public Engine {
   Status get_mac_addr(int port, char* mac) override { return Status::SUCCESS; }
   void shutdown() override;
   void print_stats() override;
-  bool validate_config() const override { return true; }
 
   // RDMA-specific functions
   Status rdma_connect_to_server(const std::string& dst_addr, uint16_t dst_port,

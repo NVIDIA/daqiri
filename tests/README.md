@@ -40,10 +40,19 @@ added by the feature that needs them.
 
 ## C++ tests
 
-Future C++ unit and build-backed integration tests belong under `tests/cpp/`. They
-should be registered with CTest and use a native C++ test framework where appropriate.
-CTest can also register the binding and platform pytest commands so a configured build
-has one test entry point without making pytest the C++ unit-test framework.
+C++ unit and build-backed integration tests live under `tests/cpp/` and are registered
+with CTest when `BUILD_TESTING=ON` (the default). The current
+`daqiri_init_validation_test` exercises common semantic validation through the production
+socket initialization path and verifies rejection before socket resources are initialized.
+After building in the required project container, run:
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+Use a native C++ test framework where appropriate. CTest can also register binding and
+platform pytest commands so a configured build has one test entry point without making
+pytest the C++ unit-test framework.
 
 ## Python-binding tests
 

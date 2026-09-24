@@ -25,6 +25,13 @@ queues, memory regions, flow steering rules, flow isolation,
 hardware flow transform actions, header-data split, and optional reorder plans. After initialization,
 the language API operates on that topology and, where supported, can extend it explicitly at runtime.
 
+The YAML `daqiri_init` entry points use the production parser, and every initialization path
+applies the shared common semantic checks before allocating memory or initializing a transport
+engine. Application startup remains the normal validation path. For CI, batch checks, or
+development without target hardware, the installed `daqiri_config_validate` command runs the same
+parser and common checks without creating an engine; see the
+[configuration reference](configuration.md#validate-without-hardware-initialization).
+
 The APIs do **not** discover queues, memory, or flow steering rules on their
 own. The startup configuration remains the source of truth for stream-type,
 engine, endpoint selection, and immutable static flows. Applications may then

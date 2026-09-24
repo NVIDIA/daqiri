@@ -27,6 +27,9 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 
 ## Features
 
+- **Hardware-free configuration validation** — The installed
+  `daqiri_config_validate` tool uses DAQIRI's production parser and common semantic checks
+  without allocating packet memory, initializing an engine, or accessing a NIC.
 - **High Throughput** — Sustained line rate with proper hardware and tuning.
 - **Low Latency** — Direct access to NIC ring buffers; most latency is PCIe transit only.
 - **Explicit hugepage allocation** — `kind: huge` always means hugetlb-backed memory for

@@ -7,6 +7,7 @@ run_docker_base=0
 run_diagrams=0
 PYTHON="${PYTHON:-python3}"
 VENV="${VENV:-.venv}"
+DAQIRI_CONFIG_VALIDATOR="${DAQIRI_CONFIG_VALIDATOR:-build/tools/daqiri_config_validate}"
 
 usage() {
   cat <<'USAGE'
@@ -14,7 +15,10 @@ Usage: scripts/check_pr.sh [--diagrams] [--docker-base]
 
 Runs the standard local checks before opening a PR:
   - portable Python tests
+  - checked-in configuration validation
   - documentation build and documentation reference checks
+
+Set DAQIRI_CONFIG_VALIDATOR to the validator built in the project container.
 
 Options:
   --diagrams     Force regeneration of packet diagram assets before checking docs.
@@ -53,6 +57,13 @@ PYTHON="${VENV}/bin/python"
 export PYTHON VENV
 
 scripts/check_portable_tests.sh
+
+if [ ! -x "${DAQIRI_CONFIG_VALIDATOR}" ]; then
+  echo "ERROR: configuration validator not found at '${DAQIRI_CONFIG_VALIDATOR}'" >&2
+  echo "Build daqiri_config_validate in the project container or set DAQIRI_CONFIG_VALIDATOR." >&2
+  exit 1
+fi
+"${PYTHON}" scripts/check_daqiri_configs.py --validator "${DAQIRI_CONFIG_VALIDATOR}"
 
 docs_args=()
 if [ "${run_diagrams}" -eq 1 ]; then
