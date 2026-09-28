@@ -55,14 +55,14 @@ def _socket_spec(transport: str) -> SocketPairSpec:
 
 def _raw_spec(**overrides: Any) -> RawPairSpec:
     values: dict[str, Any] = {
-        "tx_address": "0005:03:00.0",
-        "rx_address": "0005:03:00.1",
+        "tx_address": "0000:01:00.0",
+        "rx_address": "0000:01:00.1",
         "master_core": 3,
         "tx_queue_cores": (4,),
         "rx_queue_cores": (5,),
         "tx_worker_cores": (6,),
         "rx_worker_cores": (7,),
-        "eth_dst_addr": "48:b0:2d:f4:04:24",
+        "eth_dst_addr": "02:00:00:00:00:02",
         "engine": "ibverbs",
     }
     values.update(overrides)

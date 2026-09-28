@@ -40,7 +40,7 @@ def minimal_document() -> dict:
                 "interfaces": [
                     {
                         "name": "rx",
-                        "address": "0005:03:00.1",
+                        "address": "0000:01:00.1",
                         "rx": {
                             "queues": [
                                 {
@@ -93,7 +93,7 @@ def test_render_is_byte_deterministic_and_quotes_pci_bdf() -> None:
     second = render_document(minimal_document())
     assert first == second
     assert first.startswith("%YAML 1.2\n---\n")
-    assert "address: '0005:03:00.1'" in first
+    assert "address: '0000:01:00.1'" in first
     assert yaml.safe_load(first)["application_owned"] == {"arbitrary": True}
 
 

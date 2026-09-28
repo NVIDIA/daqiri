@@ -18,30 +18,32 @@ A CMake install exposes the same entry point as
 
 ## Generate a raw-Ethernet pair
 
-Supply the actual local topology rather than editing a copied YAML. This example
-uses the two ports and discrete GPU on an IGX-style loopback system:
+Supply the actual local topology rather than editing a copied YAML. Set
+`TX_PCI`, `RX_PCI`, and `RX_MAC` to your system's TX port, RX port, and RX port
+MAC before running this IGX-style loopback example:
 
 ```bash
 python3 scripts/gen_daqiri_config.py raw-pair \
-  --tx-address 0005:03:00.0 --rx-address 0005:03:00.1 \
+  --tx-address "$TX_PCI" --rx-address "$RX_PCI" \
   --master-core 3 --engine ibverbs --memory-kind device \
   --tx-queue-cores 4 --rx-queue-cores 5 \
   --tx-worker-cores 6 --rx-worker-cores 7 \
-  --eth-dst-addr 48:b0:2d:f4:04:24 \
-  --ip-src-addr 1.1.1.1 --ip-dst-addr 2.2.2.2 \
+  --eth-dst-addr "$RX_MAC" \
   --output raw-loopback.yaml
 ```
 
 `--role loopback` is the default and emits one document containing TX and RX.
-For two hosts, generate one independently runnable file per role:
+For two hosts, set `TX_PCI` and `RX_PCI` to the ports on their respective hosts
+and `RX_MAC` to the receiving host's port MAC, then generate one independently
+runnable file per role:
 
 ```bash
 python3 scripts/gen_daqiri_config.py raw-pair \
-  --tx-address 0000:01:00.0 --rx-address 0000:01:00.0 \
+  --tx-address "$TX_PCI" --rx-address "$RX_PCI" \
   --master-core 8 --engine dpdk --memory-kind host_pinned \
   --tx-queue-cores 17 --rx-queue-cores 18 \
   --tx-worker-cores 16 --rx-worker-cores 19 \
-  --eth-dst-addr 4c:bb:47:2a:ea:ee \
+  --eth-dst-addr "$RX_MAC" \
   --role both --output-dir generated/raw-xhost
 ```
 
@@ -77,17 +79,20 @@ program that offload.
 ## Generate UDP, TCP, or RoCE roles
 
 `socket-pair` emits separate TX/client and RX/server documents. The same command
-works with `--transport udp`, `tcp`, or `roce`:
+works with `--transport udp`, `tcp`, or `roce`.
 
 Transport-specific options are checked rather than ignored: `--rx-batch-size`
 and `--iterations` apply only to TCP/UDP, while `--rx-num-bufs`,
 `--tx-num-bufs`, `--rx-depth`, `--tx-depth`, and `--roce-transport-mode` apply
 only to RoCE.
 
+Set `CLIENT_IP` and `SERVER_IP` to the addresses assigned to the two endpoints
+before generating this UDP namespace example:
+
 ```bash
 python3 scripts/gen_daqiri_config.py socket-pair \
   --transport udp \
-  --client-address 10.250.0.1 --server-address 10.250.0.2 \
+  --client-address "$CLIENT_IP" --server-address "$SERVER_IP" \
   --client-port 5101 --server-port 5001 \
   --client-master-core 8 --server-master-core 8 \
   --client-rx-core 17 --client-tx-core 17 \
@@ -98,13 +103,17 @@ python3 scripts/gen_daqiri_config.py socket-pair \
   --role both --output-dir generated/udp
 ```
 
-For RoCE, use host-pinned memory and size receive/transmit windows explicitly
-when needed:
+For the two-host Spark RoCE setup, set `TX_HOST_IP` and `RX_HOST_IP` to the
+addresses assigned to the `daqiri-tx` and `daqiri-rx` profiles in the
+[system configuration tutorial](tutorials/system_configuration.md#cross-host-variant-two-sparks).
+Complete that tutorial's route and neighbor setup on both hosts before running
+the benchmark. Use host-pinned memory and size receive/transmit windows
+explicitly when needed:
 
 ```bash
 python3 scripts/gen_daqiri_config.py socket-pair \
   --transport roce \
-  --client-address 10.250.0.1 --server-address 10.250.0.2 \
+  --client-address "$TX_HOST_IP" --server-address "$RX_HOST_IP" \
   --client-port 4096 --server-port 4096 \
   --client-master-core 8 --server-master-core 8 \
   --client-rx-core 18 --client-tx-core 17 \
@@ -128,19 +137,22 @@ deterministic serialization. Existing values can be replaced with repeatable
 JSON Pointer assignments; assignment values are parsed as YAML 1.2 scalars or
 collections.
 
+Set `TX_PCI`, `RX_PCI`, and `RX_MAC` as described in the raw-Ethernet example
+above. Set `TX_IP` and `RX_IP` to the packet-header addresses for your flow:
+
 ```bash
 python3 scripts/gen_daqiri_config.py render \
   examples/daqiri_bench_raw_tx_rx.yaml \
   --set /daqiri/cfg/master_core=3 \
-  --set /daqiri/cfg/interfaces/0/address=0005:03:00.0 \
-  --set /daqiri/cfg/interfaces/1/address=0005:03:00.1 \
+  --set /daqiri/cfg/interfaces/0/address="$TX_PCI" \
+  --set /daqiri/cfg/interfaces/1/address="$RX_PCI" \
   --set /daqiri/cfg/interfaces/0/tx/queues/0/cpu_core=4 \
   --set /daqiri/cfg/interfaces/1/rx/queues/0/cpu_core=5 \
   --set /bench_tx/0/cpu_core=6 \
   --set /bench_rx/0/cpu_core=7 \
-  --set /bench_tx/0/eth_dst_addr=48:b0:2d:f4:04:24 \
-  --set /bench_tx/0/ip_src_addr=1.1.1.1 \
-  --set /bench_tx/0/ip_dst_addr=2.2.2.2 \
+  --set /bench_tx/0/eth_dst_addr="$RX_MAC" \
+  --set /bench_tx/0/ip_src_addr="$TX_IP" \
+  --set /bench_tx/0/ip_dst_addr="$RX_IP" \
   --output generated/raw.yaml
 ```
 
