@@ -48,8 +48,8 @@ daqiri::NetworkConfig config;
 auto status = daqiri::daqiri_init(config);
 ```
 
-After `daqiri_init()` returns `Status::SUCCESS`, all memory regions are allocated, NIC
-queues are configured, and worker threads are running.
+`daqiri_init()` checks the configuration, prepares packet memory, and starts the selected engine.
+It returns `Status::SUCCESS` when DAQIRI is ready.
 
 `MemoryKind::HUGE` is an explicit hugetlb request for DAQIRI-owned memory. DAQIRI does not
 substitute regular or transparent-hugepage memory when the requested hugetlb allocation is

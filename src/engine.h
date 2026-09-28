@@ -34,6 +34,10 @@ struct rte_pktmbuf_extmem;
 
 namespace daqiri {
 
+// Apply the common semantic checks used before engine initialization. This path
+// does not allocate packet memory, initialize an engine, or access a NIC.
+bool validate_network_config(const NetworkConfig& config);
+
 struct AllocRegion {
   enum class Deallocator {
     NONE,

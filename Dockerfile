@@ -321,6 +321,8 @@ RUN cmake -S . -B build \
       -DDAQIRI_ENABLE_S3=${DAQIRI_ENABLE_S3} \
       -DDAQIRI_ENGINE="${DAQIRI_ENGINE}" \
     && cmake --build build -j "$(nproc)" \
+    && python3 scripts/check_daqiri_configs.py \
+         --validator build/tools/daqiri_config_validate \
     && cmake --install build
 
 # ==============================

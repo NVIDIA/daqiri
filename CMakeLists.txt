@@ -29,6 +29,7 @@ project(daqiri VERSION ${DAQIRI_PROJECT_VERSION} LANGUAGES C CXX CUDA)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
+include(CTest)
 find_package(CUDAToolkit REQUIRED)
 
 set(DAQIRI_ABI_VERSION "2" CACHE STRING "DAQIRI shared library ABI version")
@@ -55,6 +56,11 @@ option(DAQIRI_ENABLE_OTEL_METRICS "Enable OpenTelemetry metrics instrumentation"
 set(DAQIRI_ENGINE "dpdk ibverbs" CACHE STRING "Optional engine implementations to build: dpdk, ibverbs (Linux sockets are always built in)")
 
 add_subdirectory(src)
+add_subdirectory(tools)
+
+if(BUILD_TESTING)
+  add_subdirectory(tests/cpp)
+endif()
 
 if(TARGET yaml-cpp)
   install(

@@ -112,6 +112,10 @@ bool RdmaEngine::set_config_and_initialize(const NetworkConfig& cfg) {
   DAQIRI_LOG_INFO("Setting up RDMA engine");
   rdma_force_quit.store(false, std::memory_order_relaxed);
   cfg_ = cfg;
+  if (!validate_config()) {
+    DAQIRI_LOG_CRITICAL("Config validation failed");
+    return false;
+  }
   initialize();
 
   return initialized_;

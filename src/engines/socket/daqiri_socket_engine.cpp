@@ -142,6 +142,11 @@ bool SocketEngine::apply_socket_int_option(int fd,
 bool SocketEngine::set_config_and_initialize(const NetworkConfig& cfg) {
   cfg_ = cfg;
 
+  if (!Engine::validate_config()) {
+    DAQIRI_LOG_CRITICAL("Config validation failed");
+    return false;
+  }
+
   for (size_t i = 0; i < cfg_.ifs_.size(); ++i) {
     cfg_.ifs_[i].port_id_ = static_cast<uint16_t>(i);
   }
