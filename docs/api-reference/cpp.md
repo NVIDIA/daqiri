@@ -48,15 +48,8 @@ daqiri::NetworkConfig config;
 auto status = daqiri::daqiri_init(config);
 ```
 
-The YAML overloads use the production parser, and every initialization overload applies the shared
-common semantic checks before allocating packet memory or initializing a transport engine. A
-failed check returns a non-success status before hardware resources are touched. Application
-startup performs this validation automatically; use the installed `daqiri_config_validate`
-command only when a hardware-free preflight is useful. See
-[Validate without hardware initialization](configuration.md#validate-without-hardware-initialization).
-
-After `daqiri_init()` returns `Status::SUCCESS`, all memory regions are allocated, NIC
-queues are configured, and worker threads are running.
+`daqiri_init()` checks the configuration, prepares packet memory, and starts the selected engine.
+It returns `Status::SUCCESS` when DAQIRI is ready.
 
 `MemoryKind::HUGE` is an explicit hugetlb request for DAQIRI-owned memory. DAQIRI does not
 substitute regular or transparent-hugepage memory when the requested hugetlb allocation is

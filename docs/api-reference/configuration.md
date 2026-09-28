@@ -14,9 +14,10 @@ See `examples/daqiri_bench_*.yaml` for complete working examples.
 
 ## Validate without hardware initialization
 
-`daqiri_config_validate` parses one or more YAML files and applies the same common semantic
-checks used before `daqiri_init()`. It does not allocate packet memory, initialize CUDA or a
-network engine, or access a NIC:
+Use `daqiri_config_validate` to check YAML files before running an application, such as in CI or
+on a machine without the target NIC. `daqiri_init()` performs these checks during startup. The
+command cannot determine whether the selected engine and hardware support every requested
+setting.
 
 ```bash
 daqiri_config_validate config.yaml another-config.yaml
