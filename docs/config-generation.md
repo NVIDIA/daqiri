@@ -18,9 +18,26 @@ A CMake install exposes the same entry point as
 
 ## Generate a raw-Ethernet pair
 
-Supply the actual local topology rather than editing a copied YAML. Set
-`TX_PCI`, `RX_PCI`, and `RX_MAC` to your system's TX port, RX port, and RX port
-MAC before running this IGX-style loopback example:
+Supply the actual local topology rather than editing a copied YAML. After
+identifying the physical TX and RX netdevs, set `TX_IF` and `RX_IF` to their
+names. Read the PCI addresses and receiving port's MAC from sysfs:
+
+```bash
+TX_PCI="$(basename "$(readlink -f "/sys/class/net/$TX_IF/device")")"
+RX_PCI="$(basename "$(readlink -f "/sys/class/net/$RX_IF/device")")"
+RX_MAC="$(cat "/sys/class/net/$RX_IF/address")"
+printf 'TX_PCI=%s\nRX_PCI=%s\nRX_MAC=%s\n' "$TX_PCI" "$RX_PCI" "$RX_MAC"
+```
+
+Example output with invented addresses (use the values printed on your system):
+
+```text
+TX_PCI=0000:aa:00.0
+RX_PCI=0000:aa:00.1
+RX_MAC=02:00:00:00:00:02
+```
+
+Pass the full values to this IGX-style loopback example:
 
 ```bash
 python3 scripts/gen_daqiri_config.py raw-pair \
@@ -33,9 +50,9 @@ python3 scripts/gen_daqiri_config.py raw-pair \
 ```
 
 `--role loopback` is the default and emits one document containing TX and RX.
-For two hosts, set `TX_PCI` and `RX_PCI` to the ports on their respective hosts
-and `RX_MAC` to the receiving host's port MAC, then generate one independently
-runnable file per role:
+For two hosts, run the lookup on each host. Set `TX_PCI` and `RX_PCI` to the
+ports on their respective hosts and `RX_MAC` to the receiving host's port MAC,
+then generate one independently runnable file per role:
 
 ```bash
 python3 scripts/gen_daqiri_config.py raw-pair \
@@ -106,6 +123,20 @@ python3 scripts/gen_daqiri_config.py socket-pair \
 For the two-host Spark RoCE setup, set `TX_HOST_IP` and `RX_HOST_IP` to the
 addresses assigned to the `daqiri-tx` and `daqiri-rx` profiles in the
 [system configuration tutorial](tutorials/system_configuration.md#cross-host-variant-two-sparks).
+Read each profile on its host:
+
+```bash
+# TX host
+nmcli -g ipv4.addresses connection show daqiri-tx
+# RX host
+nmcli -g ipv4.addresses connection show daqiri-rx
+```
+
+Example output with the final octets obscured is `1.1.1.x/24` on TX and
+`2.2.2.x/24` on RX. Use the complete addresses without `/24` for `TX_HOST_IP`
+and `RX_HOST_IP`. The generated `tx.yaml` uses the TX address as its local
+endpoint; `rx.yaml` uses the RX address.
+
 Complete that tutorial's route and neighbor setup on both hosts before running
 the benchmark. Use host-pinned memory and size receive/transmit windows
 explicitly when needed:
