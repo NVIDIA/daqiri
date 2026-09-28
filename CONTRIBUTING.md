@@ -93,6 +93,10 @@ Build `daqiri_config_validate` in the required project container before running
 through the production C++ parser and hardware-independent semantic checks. Set
 `DAQIRI_CONFIG_VALIDATOR` when the executable is not at `build/tools/daqiri_config_validate`.
 
+When a new example config exercises a configuration form these cases do not cover, add a
+representative case to `scripts/check_daqiri_configs.py`. Add a focused fixture for any new
+validation rule.
+
 #### Pull Requests
 
 Developer workflow for code contributions is as follows:
