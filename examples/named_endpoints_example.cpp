@@ -251,6 +251,14 @@ int main(int argc, char** argv) {
   for (auto& thread : tx_threads) {
     if (thread.joinable()) thread.join();
   }
+
+  bool success = true;
+  if (daqiri::wait_for_tx_idle(5000) != daqiri::Status::SUCCESS) {
+    std::cerr << "Timed out waiting for named-endpoint TX completion\n";
+    success = false;
+  } else {
+    std::cout << "Named-endpoint TX completion drain succeeded\n";
+  }
   for (auto& thread : rx_threads) {
     if (thread.joinable()) thread.join();
   }
@@ -258,5 +266,5 @@ int main(int argc, char** argv) {
   for (const auto& endpoint : named_endpoints) daqiri::delete_endpoint(endpoint.endpoint_id);
   daqiri::print_stats();
   daqiri::shutdown();
-  return 0;
+  return success ? 0 : 1;
 }

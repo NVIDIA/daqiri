@@ -11,7 +11,7 @@ the marker, preflight, and local-reproduction policy.
 `test_named_endpoints.py` materializes the checked-in
 `examples/daqiri_example_named_endpoints_tx_rx.yaml` template for one mlx5 device,
 initializes the ibverbs engine, creates the runtime endpoint, and requires the example
-to report at least one successful named-endpoint TX packet. Set:
+to report at least one named-endpoint TX packet and a successful NIC completion drain. Set:
 
 - `DAQIRI_PLATFORM_IBVERBS_BDF` to the mlx5 PCI BDF (for example `0000:01:00.0`).
 - `DAQIRI_NAMED_ENDPOINTS_EXAMPLE` when the executable is not at

@@ -128,5 +128,6 @@ def test_named_endpoint_initialization_and_send(tmp_path: Path) -> None:
     assert result.returncode == 0, output
     assert "daqiri_init failed" not in output, output
     assert "named send_tx_burst failed" not in output, output
+    assert "Named-endpoint TX completion drain succeeded" in output, output
     packet_counts = [int(count) for count in TX_PACKETS.findall(output)]
     assert packet_counts and max(packet_counts) > 0, output
