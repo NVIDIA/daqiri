@@ -112,9 +112,9 @@ bool parse_ipv4(const std::string &text, std::array<uint8_t, 4> *out) {
   return true;
 }
 
-std::vector<uint8_t>
-make_udp_packet_template(const daqiri::bench::RawBenchTxConfig &cfg,
-                         const std::string &eth_src_addr) {
+std::vector<uint8_t> make_udp_packet_template(const daqiri::bench::RawBenchTxConfig& cfg,
+                                              const std::string& eth_src_addr,
+                                              const char* dst_mac) {
   if (cfg.header_size < kUdpIpv4EthernetHeaderLen) {
     throw std::runtime_error("bench_tx.header_size must be at least 42 bytes");
   }
@@ -138,13 +138,11 @@ make_udp_packet_template(const daqiri::bench::RawBenchTxConfig &cfg,
   const auto src_ports = daqiri::bench::parse_udp_ports(cfg.udp_src_port);
   const auto dst_ports = daqiri::bench::parse_udp_ports(cfg.udp_dst_port);
 
-  char dst_mac[6] = {0};
   char src_mac[6] = {0};
-  daqiri::format_eth_addr(dst_mac, cfg.eth_dst_addr);
   daqiri::format_eth_addr(src_mac, eth_src_addr);
 
   std::vector<uint8_t> packet(packet_len, 0);
-  std::memcpy(packet.data(), dst_mac, sizeof(dst_mac));
+  std::memcpy(packet.data(), dst_mac, 6);
   std::memcpy(packet.data() + 6, src_mac, sizeof(src_mac));
   store_be16(packet.data() + 12, kEtherTypeIpv4);
 
@@ -437,7 +435,13 @@ void tx_worker(PcapTxConfig cfg, std::atomic<bool> *stop) {
     return;
   }
 
-  auto packet_template = make_udp_packet_template(cfg.raw, cfg.eth_src_addr);
+  char eth_dst[6] = {};
+  if (!daqiri::bench::resolve_tx_eth_dst(port_id, cfg.raw.ip_dst_addr, cfg.raw.eth_dst_addr,
+                                         eth_dst)) {
+    stop->store(true, std::memory_order_relaxed);
+    return;
+  }
+  auto packet_template = make_udp_packet_template(cfg.raw, cfg.eth_src_addr, eth_dst);
   std::unordered_set<void *> initialized_buffers;
   uint64_t bursts = 0;
   uint64_t packets = 0;

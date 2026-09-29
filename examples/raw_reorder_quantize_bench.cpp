@@ -92,7 +92,7 @@ struct BenchConfig {
   uint32_t payload_size = 256;
   uint32_t header_size = 64;
   std::string eth_src_addr = "00:00:00:00:00:00";
-  std::string eth_dst_addr = "00:00:00:00:00:00";
+  std::string eth_dst_addr;
   std::string ip_src_addr = "1.2.3.4";
   std::string ip_dst_addr = "5.6.7.8";
   uint16_t udp_src_port = 4096;
@@ -629,7 +629,11 @@ void tx_worker(const BenchConfig &cfg, const ReorderPlanConfig &plan,
   char eth_dst[6] = {0};
   char eth_src[6] = {0};
   daqiri::format_eth_addr(eth_src, cfg.eth_src_addr);
-  daqiri::format_eth_addr(eth_dst, cfg.eth_dst_addr);
+  if (!daqiri::bench::resolve_tx_eth_dst(port_id, cfg.ip_dst_addr, cfg.eth_dst_addr, eth_dst)) {
+    stats.failures.fetch_add(1);
+    stop.store(true);
+    return;
+  }
 
   uint32_t ip_src = 0;
   uint32_t ip_dst = 0;

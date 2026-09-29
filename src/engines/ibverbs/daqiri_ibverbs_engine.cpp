@@ -18,6 +18,7 @@
 #include "src/engines/ibverbs/daqiri_ibverbs_engine.h"
 #include "src/engines/ibverbs/mlx5_prm_min.h"
 #include "src/kernels.h"
+#include "src/net_neighbor.h"
 #include "src/net_pause.h"
 #include "src/rss.h"
 
@@ -8216,6 +8217,33 @@ Status IbverbsEngine::set_eth_header(BurstParams* burst, int idx, char* dst_addr
     memcpy(pkt->eth.h_source, q->eth_src, 6);
   }
   return Status::SUCCESS;
+}
+
+Status IbverbsEngine::resolve_ipv4_mac(int port, uint32_t dst_host, char* mac,
+                                       uint32_t timeout_ms) {
+  if (mac == nullptr) {
+    return Status::NULL_PTR;
+  }
+  if (port < 0 || port >= static_cast<int>(cfg_.ifs_.size()) || dst_host == INADDR_ANY ||
+      dst_host == INADDR_BROADCAST || IN_MULTICAST(dst_host) || IN_BADCLASS(dst_host) ||
+      timeout_ms == 0) {
+    return Status::INVALID_PARAMETER;
+  }
+  if (cfg_.common_.loopback_ != LoopbackType::DISABLED) {
+    return Status::NOT_SUPPORTED;
+  }
+  const std::string netdev = port_netdev(port);
+  if (netdev.empty()) {
+    DAQIRI_LOG_ERROR("ARP: no kernel netdev found for ibverbs port {}", port);
+    return Status::CONNECT_FAILURE;
+  }
+  if (!cfg_.ifs_[port].rx_.flow_isolation_) {
+    DAQIRI_LOG_WARN(
+        "ARP: port {} does not enable rx.flow_isolation; catch-all application steering may "
+        "consume ARP traffic before Linux receives it",
+        port);
+  }
+  return resolve_ipv4_neighbor(netdev, dst_host, mac, timeout_ms);
 }
 
 Status IbverbsEngine::set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint8_t proto,

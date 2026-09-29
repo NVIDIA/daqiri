@@ -55,7 +55,10 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
   char eth_dst[6] = {0};
   char eth_src[6] = {0};
   daqiri::format_eth_addr(eth_src, cfg.eth_src_addr);
-  daqiri::format_eth_addr(eth_dst, cfg.eth_dst_addr);
+  if (!daqiri::bench::resolve_tx_eth_dst(port_id, cfg.ip_dst_addr, cfg.eth_dst_addr, eth_dst)) {
+    stop.store(true);
+    return;
+  }
 
   uint32_t ip_src = 0;
   uint32_t ip_dst = 0;

@@ -5,7 +5,7 @@ hide:
 
 # Raw Ethernet Benchmarking
 
-DAQIRI provides raw Ethernet benchmark applications that use DPDK to drive an NVIDIA NIC directly. This page walks through `daqiri_bench_raw_gpudirect`, the TX/RX loopback config, and the raw Ethernet checks needed before interpreting throughput results.
+DAQIRI provides raw Ethernet benchmark applications that use the DPDK or ibverbs engine to drive an NVIDIA NIC directly. This page walks through `daqiri_bench_raw_gpudirect`, the TX/RX loopback config, and the raw Ethernet checks needed before interpreting throughput results.
 
 Make sure to [build the DAQIRI library](../getting-started.md#build-the-daqiri-library) beforehand.
 
@@ -81,14 +81,14 @@ docker run --rm -it --privileged \
 
 If you have two DGX Sparks cross-cabled p0↔p0 instead of a chassis QSFP loop on one machine, use the `_xhost` configs. Each host runs only its own role, so the YAML on each side configures one port instead of two. Both hosts must already be set up per the [DGX Spark profile](../tutorials/system_configuration.md#dgx-spark-profile), with one adjustment: the `daqiri-tx` (`1.1.1.1/24`) and `daqiri-rx` (`2.2.2.2/24`) nmcli profiles are *split across* the two hosts. Bring up `daqiri-tx` on the TX host's p0 and `daqiri-rx` on the RX host's p0, instead of both on one box.
 
-**Network prerequisite (required for RDMA, recommended for raw).** Assigning `/24` addresses on each host is not enough for the kernel to reach the peer over a direct cable. RDMA-CM uses the kernel stack, so you need a host route and a static neighbor on the cabled port before ping or RoCE will work. Run [`scripts/setup_spark_xhost_net.sh`](https://github.com/nvidia/daqiri/blob/main/scripts/setup_spark_xhost_net.sh) on **both** hosts after bringing up the nmcli profile. See the [cross-host variant](../tutorials/system_configuration.md#cross-host-variant-two-sparks) in System Configuration for the full steps.
+**Network prerequisite.** Assigning `/24` addresses on each host is not enough for the kernel to reach the peer over a direct cable. Install a host route on the cabled port by running [`scripts/setup_spark_xhost_net.sh`](https://github.com/nvidia/daqiri/blob/main/scripts/setup_spark_xhost_net.sh) on **both** hosts after bringing up the nmcli profile. The ibverbs raw engine uses that route and Linux ARP when `eth_dst_addr` is omitted; RDMA-CM uses the same kernel route. See the [cross-host variant](../tutorials/system_configuration.md#cross-host-variant-two-sparks) in System Configuration for the full steps.
 
 ```bash
-# TX host (peer MAC from RX: cat /sys/class/net/enp1s0f0np0/address)
-sudo scripts/setup_spark_xhost_net.sh --role tx --peer-mac <RX_P0_MAC>
+# TX host
+sudo scripts/setup_spark_xhost_net.sh --role tx
 
-# RX host (peer MAC from TX)
-sudo scripts/setup_spark_xhost_net.sh --role rx --peer-mac <TX_P0_MAC>
+# RX host
+sudo scripts/setup_spark_xhost_net.sh --role rx
 
 # Verify on each host before starting benches
 ping -c 3 <peer-ip>    # 2.2.2.2 on TX, 1.1.1.1 on RX
@@ -101,7 +101,7 @@ ip route get <peer-ip> # must name enp1s0f0np0, not lo
 # RX host
 sudo ./daqiri_bench_raw_gpudirect daqiri_bench_raw_rx_spark_xhost.yaml --seconds 30
 
-# TX host (set eth_dst_addr to the RX host p0's MAC first: cat /sys/class/net/enp1s0f0np0/address on the RX host)
+# TX host (the ibverbs config resolves the RX MAC through Linux ARP)
 sudo ./daqiri_bench_raw_gpudirect daqiri_bench_raw_tx_spark_xhost.yaml --seconds 30
 ```
 

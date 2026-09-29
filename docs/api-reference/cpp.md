@@ -886,6 +886,7 @@ workflow sections above show the common call order and ownership rules.
 | Function | Purpose |
 | --- | --- |
 | `get_mac_addr(port, mac)` | Copy a port MAC address into a six-byte buffer. |
+| `resolve_ipv4_mac(port, dst_host, mac, timeout_ms)` | Resolve an IPv4 destination's next-hop MAC through the raw ibverbs port's Linux route and ARP table. |
 | `format_eth_addr(dst, addr)` | Convert a `xx:xx:xx:xx:xx:xx` MAC string into a six-byte buffer. Invalid input zeroes the buffer. |
 | `get_port_id(key)` | Resolve an interface name or PCIe address to a port ID. |
 | `get_num_rx_queues(port_id)` | Return the configured or engine-reported RX queue count. |

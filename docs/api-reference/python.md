@@ -693,6 +693,7 @@ The workflow sections above show the common call order and ownership rules.
 | Function | Purpose |
 | --- | --- |
 | `get_mac_addr(port)` | Return `(Status, "aa:bb:cc:dd:ee:ff")`. |
+| `resolve_ipv4_mac(port, dst_host, timeout_ms)` | Return `(Status, mac_string)` after resolving the next hop through the raw ibverbs port's Linux route and ARP table. The binding releases the GIL while waiting. |
 | `format_eth_addr(addr)` | Return six MAC-address bytes from a `xx:xx:xx:xx:xx:xx` MAC string. Invalid input returns zero bytes. |
 | `get_port_id(key)` | Resolve an interface name or PCIe address to a port ID. |
 | `get_num_rx_queues(port_id)` | Return configured RX queue count for a port. |

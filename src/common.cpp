@@ -496,6 +496,11 @@ Status get_mac_addr(int port, char* mac) {
   return g_daqiri_engine->get_mac_addr(port, mac);
 }
 
+Status resolve_ipv4_mac(int port, uint32_t dst_host, char* mac, uint32_t timeout_ms) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->resolve_ipv4_mac(port, dst_host, mac, timeout_ms);
+}
+
 Status drop_all_traffic(int port) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
   return g_daqiri_engine->drop_all_traffic(port);

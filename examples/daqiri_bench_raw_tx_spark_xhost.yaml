@@ -10,11 +10,8 @@
 #   - master_core: 8; cpu_core: 17 for the DAQIRI TX queue and 16 for the app
 #     TX worker -- separate cores so they don't contend (isolated big-cluster
 #     X925 16-19)
-#   - eth_dst_addr is the *peer* RX port's MAC -- replace with your own:
-#       cat /sys/class/net/<peer rx ifname>/address  # on the RX host
-#   - ip_src/ip_dst: arbitrary 1.1.1.1 -> 2.2.2.2 (kernel stack bypassed by
-#     the DPDK PMD; only the UDP src/dst ports below are matched by the RX
-#     flow rule in daqiri_bench_raw_rx_spark_xhost.yaml)
+#   - engine: ibverbs leaves ARP on the kernel path. eth_dst_addr is omitted,
+#     so DAQIRI resolves 2.2.2.2 through the kernel route and neighbour tables.
 #
 %YAML 1.2
 ---
@@ -22,6 +19,7 @@ daqiri:
   cfg:
     version: 1
     stream_type: "raw"
+    engine: "ibverbs"
     master_core: 8
     debug: false
     log_level: "info"
@@ -37,6 +35,8 @@ daqiri:
     interfaces:
     - name: "tx_port"
       address: 0000:01:00.0
+      rx:
+        flow_isolation: true
       tx:
         queues:
         - name: "tx_q_0"
@@ -54,7 +54,6 @@ bench_tx:
   batch_size: 10240
   payload_size: 8000
   header_size: 64
-  eth_dst_addr: <00:00:00:00:00:00>
   ip_src_addr: 1.1.1.1
   ip_dst_addr: 2.2.2.2
   udp_src_port: 4096

@@ -18,6 +18,7 @@ daqiri:
   cfg:
     version: 1
     stream_type: "raw"
+    engine: "ibverbs"
     master_core: 8
     debug: false
     log_level: "info"
