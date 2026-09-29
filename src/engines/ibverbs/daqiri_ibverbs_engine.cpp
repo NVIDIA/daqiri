@@ -67,6 +67,16 @@ namespace {
 constexpr uint64_t ibv_timer_hz = 1'000'000'000ULL;
 constexpr FlowId kMaxIbverbsFlowTag = 0x00ffffffU;
 constexpr int kIbverbsCatchAllPriority = 1'000'000;
+std::atomic<uint32_t> g_next_endpoint_generation{1};
+
+uint32_t next_endpoint_generation() {
+  uint32_t generation = g_next_endpoint_generation.fetch_add(1, std::memory_order_relaxed);
+  if (generation == 0) {
+    generation = g_next_endpoint_generation.fetch_add(1, std::memory_order_relaxed);
+  }
+  return generation;
+}
+
 inline uint64_t ibv_now_ns() {
   return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                    std::chrono::steady_clock::now().time_since_epoch())
@@ -7734,7 +7744,7 @@ Status IbverbsEngine::add_endpoint(const RawUdpEndpointConfig& config, EndpointI
   const uint32_t slot_index = free_endpoint_slots_.back();
   free_endpoint_slots_.pop_back();
   EndpointSlot& slot = endpoint_slots_[slot_index];
-  if (++slot.generation == 0) ++slot.generation;
+  slot.generation = next_endpoint_generation();
   const EndpointId id = (static_cast<EndpointId>(slot.generation) << 32) | (slot_index + 1);
   slot.header_template = endpoint.header_template;
   slot.mtu = endpoint.mtu;
@@ -8853,7 +8863,8 @@ Status IbverbsEngine::send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, B
   const size_t packets = burst->hdr.hdr.num_pkts;
   for (size_t packet = 0; packet < packets; ++packet) {
     const uint32_t payload_length = burst->pkt_lens[0][packet];
-    if (burst->pkts[0][packet] == nullptr || payload_length > endpoint.mtu - sizeof(UDPIPV4Pkt) ||
+    if (burst->pkts[0][packet] == nullptr || payload_length > q->regions[0].slot_size ||
+        payload_length > endpoint.mtu - sizeof(UDPIPV4Pkt) ||
         payload_length > UINT16_MAX - sizeof(struct iphdr) - sizeof(struct udphdr)) {
       return Status::INVALID_PARAMETER;
     }

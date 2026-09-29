@@ -179,6 +179,29 @@ samples after discarding startup and shutdown. For a cabled test, report the phy
 rate. For single-port hardware loopback, report `vport_loopback_bytes` as described below and do
 not add TX and RX for the same returned traffic.
 
+### Runtime named endpoints example
+
+The raw-ibverbs-only `daqiri_example_named_endpoints` application demonstrates
+runtime Ethernet/IPv4/UDP destinations and payload-only TX buffers. Start with
+[`daqiri_example_named_endpoints_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_example_named_endpoints_tx_rx.yaml),
+replace its PCIe, CPU-core, MAC, and IP placeholders, then run:
+
+```bash
+sudo ./build/examples/daqiri_example_named_endpoints \
+  ./examples/daqiri_example_named_endpoints_tx_rx.yaml --seconds 10
+```
+
+For each `bench_tx` entry, the application adds a named endpoint, verifies name
+resolution to an `EndpointId`, and submits bursts on the configured queue. The
+packet buffers contain only the UDP payload; DAQIRI inserts the cached header
+inline in the mlx5 send WQE. The endpoint MTU and the queue's TX slot size both
+bound the accepted payload. Named endpoints currently require one TX memory
+region and one packet segment, so HDS configurations are rejected.
+
+See [Runtime Named Endpoints](../concepts.md#runtime-named-endpoints) for the
+concept and [C++ API Usage](../api-reference/cpp.md#runtime-named-endpoints-raw-ibverbs)
+for lifecycle and ownership details.
+
 ### Hardware tunnel transform examples
 
 Raw DPDK and raw ibverbs builds can program hardware flow actions that push or

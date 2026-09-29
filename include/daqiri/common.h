@@ -1004,7 +1004,8 @@ Status send_tx_burst(BurstParams *burst);
  * copies the cached endpoint template into an inline mlx5 SEND WQE, patches its
  * IPv4 and UDP lengths, and gathers the payload through one registered data
  * segment. Packet buffers contain payload only; checksum fields remain zero
- * for NIC offload. Validation failures do not consume the burst.
+ * for NIC offload. Each payload must fit both the endpoint MTU and the selected
+ * TX queue's packet-buffer slot. Validation failures do not consume the burst.
  */
 Status send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst);
 

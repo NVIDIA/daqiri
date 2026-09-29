@@ -601,7 +601,9 @@ populate header bytes.
     does not support header-data gather.
 
 Set segment 0's payload length before submission. Each endpoint-aware SEND WQE
-occupies two 64-byte WQEBBs; enhanced MPW is bypassed for these bursts.
+occupies two 64-byte WQEBBs; enhanced MPW is bypassed for these bursts. The
+payload length must fit both the endpoint MTU and the selected TX queue's
+packet-buffer slot.
 
 The overload returns `INVALID_PARAMETER` without consuming the burst when the
 endpoint, interface, queue, header reservation, or frame length is invalid. A
