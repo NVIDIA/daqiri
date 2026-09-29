@@ -501,6 +501,17 @@ Status resolve_ipv4_mac(int port, uint32_t dst_host, char* mac, uint32_t timeout
   return g_daqiri_engine->resolve_ipv4_mac(port, dst_host, mac, timeout_ms);
 }
 
+Status resolve_ipv4_mac(int port, const std::string& dst_addr, char* mac, uint32_t timeout_ms) {
+  if (mac == nullptr) {
+    return Status::NULL_PTR;
+  }
+  in_addr dst{};
+  if (inet_pton(AF_INET, dst_addr.c_str(), &dst) != 1) {
+    return Status::INVALID_PARAMETER;
+  }
+  return resolve_ipv4_mac(port, ntohl(dst.s_addr), mac, timeout_ms);
+}
+
 Status drop_all_traffic(int port) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
   return g_daqiri_engine->drop_all_traffic(port);

@@ -233,12 +233,7 @@ bool resolve_tx_eth_dst(int port, const std::string& ip_dst_addr, const std::str
     return true;
   }
 
-  in_addr dst{};
-  if (inet_pton(AF_INET, ip_dst_addr.c_str(), &dst) != 1) {
-    std::cerr << "Cannot resolve MAC for invalid ip_dst_addr: " << ip_dst_addr << "\n";
-    return false;
-  }
-  const Status status = daqiri::resolve_ipv4_mac(port, ntohl(dst.s_addr), eth_dst, timeout_ms);
+  const Status status = daqiri::resolve_ipv4_mac(port, ip_dst_addr, eth_dst, timeout_ms);
   if (status != Status::SUCCESS) {
     std::cerr << "Failed to resolve MAC for " << ip_dst_addr << " (DAQIRI status "
               << static_cast<int>(status) << ")\n";

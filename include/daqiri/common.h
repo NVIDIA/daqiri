@@ -950,6 +950,20 @@ Status get_mac_addr(int port, char *mac);
 Status resolve_ipv4_mac(int port, uint32_t dst_host, char* mac, uint32_t timeout_ms);
 
 /**
+ * @brief Resolve an IPv4 destination's next-hop MAC from dotted-decimal text
+ *
+ * This overload has the same behavior as the host-order overload and returns
+ * INVALID_PARAMETER when @p dst_addr is not a valid IPv4 address.
+ *
+ * @param port Port number of interface
+ * @param dst_addr IPv4 destination in dotted-decimal notation
+ * @param mac Output buffer of at least six bytes
+ * @param timeout_ms Maximum time to wait for ARP resolution
+ * @return See the host-order resolve_ipv4_mac overload
+ */
+Status resolve_ipv4_mac(int port, const std::string& dst_addr, char* mac, uint32_t timeout_ms);
+
+/**
  * @brief Drop all traffic on a port
  *
  * Creates a high-priority flow rule that drops all incoming traffic on the

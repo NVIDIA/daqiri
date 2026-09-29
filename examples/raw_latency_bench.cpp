@@ -349,13 +349,9 @@ std::array<uint8_t, ETH_ALEN> resolve_mac(int port, const BenchConfig& cfg) {
   if (!cfg.eth_dst_addr.empty()) {
     return parse_mac(cfg.eth_dst_addr);
   }
-  in_addr dst{};
-  if (inet_pton(AF_INET, cfg.ip_dst_addr.c_str(), &dst) != 1) {
-    throw std::invalid_argument("invalid bench_latency ip_dst_addr");
-  }
   std::array<uint8_t, ETH_ALEN> mac{};
   const daqiri::Status status =
-      daqiri::resolve_ipv4_mac(port, ntohl(dst.s_addr), reinterpret_cast<char*>(mac.data()), 3000);
+      daqiri::resolve_ipv4_mac(port, cfg.ip_dst_addr, reinterpret_cast<char*>(mac.data()), 3000);
   if (status != daqiri::Status::SUCCESS) {
     throw std::runtime_error("failed to resolve bench_latency destination MAC (DAQIRI status " +
                              std::to_string(static_cast<int>(status)) + ")");
