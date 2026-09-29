@@ -87,6 +87,11 @@
               <td class="ex-desc-cell">Splits each incoming packet into two segments: headers land in CPU memory for inspection, while the payload goes directly to the GPU. Useful when your application needs to read per-packet metadata without touching the payload on the CPU.</td>
             </tr>
             <tr>
+              <td class="ex-name"><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/named_endpoints_example.cpp" target="_blank">Runtime Named Endpoints ↗</a></td>
+              <td><span class="ex-badge ex-badge-cpp">C++</span></td>
+              <td class="ex-desc-cell">Registers raw Ethernet/IPv4/UDP destinations at runtime and sends payload-only GPU buffers. DAQIRI reuses each cached header inline in the mlx5 send WQE while the application selects the TX queue per burst.</td>
+            </tr>
+            <tr>
               <td class="ex-name"><a class="ex-code-link" href="https://github.com/NVIDIA/daqiri/blob/main/examples/raw_reorder_seq_bench.cpp" target="_blank">Sequence Reorder ↗</a></td>
               <td><span class="ex-badge ex-badge-cuda">C++/CUDA</span></td>
               <td class="ex-desc-cell">Reassembles out-of-order UDP packets into a correctly ordered GPU buffer. A CUDA kernel reads the sequence number embedded in each packet header and places the packet at the right position, so downstream compute always sees a clean, ordered stream.</td>
