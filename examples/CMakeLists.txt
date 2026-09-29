@@ -187,6 +187,7 @@ install(TARGETS
         daqiri_bench_raw_reorder_quantize
         daqiri_example_dynamic_rx_flow
         daqiri_example_dynamic_resource
+        daqiri_example_named_endpoints
         daqiri_example_gds_write
         daqiri_example_pcap_writer
         daqiri_bench_rdma

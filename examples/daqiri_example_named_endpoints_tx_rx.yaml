@@ -52,7 +52,7 @@ daqiri:
             - "Data_RX_GPU"
         flows:
         - name: "named_endpoint_flow"
-          id: 0
+          id: 1
           action:
             type: queue
             id: 0

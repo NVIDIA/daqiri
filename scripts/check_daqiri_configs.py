@@ -32,6 +32,7 @@ DEFAULT_CONFIGS = (
     "examples/daqiri_bench_socket_udp_tx_rx.yaml",
     "examples/daqiri_bench_socket_tcp_tx_rx.yaml",
     "examples/daqiri_example_dynamic_rx_flow.yaml",
+    "examples/daqiri_example_named_endpoints_tx_rx.yaml",
 )
 SEMANTIC_FIXTURE = "examples/daqiri_bench_raw_rx_reorder_seq_batch.yaml"
 ZERO_ID_FIXTURE = "examples/daqiri_bench_raw_tx_rx.yaml"
