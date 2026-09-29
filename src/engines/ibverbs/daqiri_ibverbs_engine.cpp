@@ -7923,8 +7923,7 @@ Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
   attr.cap.max_send_sge = static_cast<uint32_t>(q.num_segs);
   attr.cap.max_inline_data = sizeof(UDPIPV4Pkt);
   if (q.cpu_inline_enabled) {
-    attr.cap.max_inline_data =
-        std::max<uint32_t>(MLX5_CPU_INLINE_MAX_FRAME, sizeof(UDPIPV4Pkt));
+    attr.cap.max_inline_data = std::max<uint32_t>(MLX5_CPU_INLINE_MAX_FRAME, sizeof(UDPIPV4Pkt));
   }
   attr.cap.max_recv_wr = 1;
   attr.cap.max_recv_sge = 1;

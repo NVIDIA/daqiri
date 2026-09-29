@@ -991,7 +991,7 @@ void set_num_packets(BurstParams *burst, int64_t num);
  *    INVALID_PARAMETER: bad port/queue; burst NOT consumed (see issue #164)
  *    NOT_READY: direct queue called concurrently or from a non-owner thread; burst not consumed
  */
-Status send_tx_burst(BurstParams *burst);
+Status send_tx_burst(BurstParams* burst);
 
 /**
  * @brief Send a TX burst through a named endpoint on an explicitly selected queue.
