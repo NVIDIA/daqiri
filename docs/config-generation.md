@@ -172,6 +172,7 @@ Set `TX_PCI`, `RX_PCI`, and `RX_MAC` as described in the raw-Ethernet example
 above. Set `TX_IP` and `RX_IP` to the packet-header addresses for your flow:
 
 ```bash
+mkdir -p generated
 python3 scripts/gen_daqiri_config.py render \
   examples/daqiri_bench_raw_tx_rx.yaml \
   --set /daqiri/cfg/master_core=3 \
