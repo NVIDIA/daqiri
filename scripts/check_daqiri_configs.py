@@ -14,6 +14,14 @@ import sys
 import tempfile
 from pathlib import Path
 
+from config_validation import (
+    ENGINE_QUERY_ERROR,
+    NO_SUPPORTED_CONFIGURATIONS,
+    query_compiled_engines,
+    required_engines_from_text,
+    select_supported_paths,
+)
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 INTEGER_PLACEHOLDER = re.compile(
@@ -210,6 +218,18 @@ def main(argv: list[str] | None = None) -> int:
     if not paths:
         parser.error("no configuration files were found")
 
+    available_engines: frozenset[str] | None = None
+    if not args.paths:
+        try:
+            available_engines = query_compiled_engines(args.validator)
+        except RuntimeError:
+            print(ENGINE_QUERY_ERROR, file=sys.stderr)
+            return 1
+        paths = select_supported_paths(paths, available_engines)
+        if not paths:
+            print(NO_SUPPORTED_CONFIGURATIONS, file=sys.stderr)
+            return 1
+
     compatibility_count = 0
     invalid_count = 0
     with tempfile.TemporaryDirectory(prefix="daqiri-checked-configs-") as temp_dir:
@@ -240,21 +260,30 @@ def main(argv: list[str] | None = None) -> int:
             except (OSError, ValueError) as error:
                 print(error, file=sys.stderr)
                 return 1
-            compatibility_path = Path(temp_dir) / "zero-flow-id-per-interface.yaml"
-            compatibility_path.write_text(compatibility_case, encoding="utf-8")
-            result = subprocess.run(
-                [str(args.validator), str(compatibility_path)], check=False
-            )
-            if result.returncode != 0:
-                print(
-                    "zero-flow-id-per-interface.yaml: expected validator exit status 0, "
-                    f"got {result.returncode}",
-                    file=sys.stderr,
+            if "dpdk" in available_engines:
+                compatibility_path = Path(temp_dir) / "zero-flow-id-per-interface.yaml"
+                compatibility_path.write_text(compatibility_case, encoding="utf-8")
+                result = subprocess.run(
+                    [str(args.validator), str(compatibility_path)], check=False
                 )
-                return 1
-            compatibility_count = 1
-            invalid_count = len(invalid_cases)
-            for name, text in invalid_cases.items():
+                if result.returncode != 0:
+                    print(
+                        "zero-flow-id-per-interface.yaml: expected validator exit status 0, "
+                        f"got {result.returncode}",
+                        file=sys.stderr,
+                    )
+                    return 1
+                compatibility_count = 1
+            supported_invalid_cases = {
+                name: text
+                for name, text in invalid_cases.items()
+                if (
+                    (required := required_engines_from_text(text)) is None
+                    or required & available_engines
+                )
+            }
+            invalid_count = len(supported_invalid_cases)
+            for name, text in supported_invalid_cases.items():
                 invalid_path = Path(temp_dir) / name
                 invalid_path.write_text(text, encoding="utf-8")
                 result = subprocess.run(

@@ -213,8 +213,8 @@ parser and validator.
 ### Maintainer checks
 
 The standard local pull-request check exercises the portable generator tests,
-validates every retained and generated configuration, and builds the
-documentation:
+validates retained and generated configurations supported by the validator's
+compiled engines, and builds the documentation:
 
 ```bash
 scripts/check_pr.sh
@@ -222,6 +222,11 @@ scripts/check_pr.sh
 
 Container release builds validate the same configuration sets with both DPDK
 and ibverbs enabled.
+
+Both configuration check scripts query the validator's compiled engines before
+selecting their default cases. Files passed explicitly to
+`scripts/check_daqiri_configs.py` are always checked, including files that require
+an unavailable engine.
 
 ## Spark verification checklist
 

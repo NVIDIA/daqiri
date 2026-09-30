@@ -15,6 +15,12 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from config_validation import (
+    ENGINE_QUERY_ERROR,
+    NO_SUPPORTED_CONFIGURATIONS,
+    query_compiled_engines,
+    supports_engines,
+)
 from daqiri_config import (
     RawPairSpec,
     SocketPairSpec,
@@ -150,6 +156,11 @@ def main() -> int:
         parser.error(
             "--validator is required; configuration validation uses the C++ decoder"
         )
+    try:
+        available_engines = query_compiled_engines(args.validator)
+    except RuntimeError:
+        print(ENGINE_QUERY_ERROR, file=sys.stderr)
+        return 1
 
     first_generation = _generate_matrix_in_subprocess(1)
     second_generation = _generate_matrix_in_subprocess(2)
@@ -161,8 +172,12 @@ def main() -> int:
     documents = {
         name: document
         for name, document in generated_matrix().items()
-        if not args.exclude_dpdk or _explicit_engine(document) != "dpdk"
+        if (not args.exclude_dpdk or _explicit_engine(document) != "dpdk")
+        and supports_engines(document, available_engines)
     }
+    if not documents:
+        print(NO_SUPPORTED_CONFIGURATIONS, file=sys.stderr)
+        return 1
     with tempfile.TemporaryDirectory(prefix="daqiri-generated-configs-") as temp_dir:
         paths: dict[str, Path] = {}
         for name, document in documents.items():

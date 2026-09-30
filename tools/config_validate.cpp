@@ -9,10 +9,23 @@
 #include "src/engine.h"
 
 #include <iostream>
+#include <string>
 
 int main(int argc, char** argv) {
+  if (argc == 2 && std::string(argv[1]) == "--list-engines") {
+    std::cout << "socket";
+#if DAQIRI_ENGINE_DPDK
+    std::cout << " dpdk";
+#endif
+#if DAQIRI_ENGINE_IBVERBS || DAQIRI_ENGINE_RDMA
+    std::cout << " ibverbs";
+#endif
+    std::cout << '\n';
+    return 0;
+  }
+
   if (argc < 2) {
-    std::cerr << "Usage: daqiri_config_validate <config.yaml> [...]\n";
+    std::cerr << "Usage: daqiri_config_validate <config.yaml> [...] | --list-engines\n";
     return 2;
   }
 

@@ -28,8 +28,9 @@ daqiri_config_validate config.yaml another-config.yaml
 ```
 
 The command exits with status `0` when every file is valid, `1` when any file is invalid, and
-`2` when no file was provided. It is built and installed even when
-`DAQIRI_BUILD_EXAMPLES=OFF`.
+`2` when no file was provided. Use `daqiri_config_validate --list-engines` to print the
+engines compiled into the validator and exit successfully without checking files.
+It is built and installed even when `DAQIRI_BUILD_EXAMPLES=OFF`.
 
 OpenTelemetry metrics do not add YAML fields. Metrics-enabled builds use the
 same interface, queue, and flow names from the active configuration as metric
