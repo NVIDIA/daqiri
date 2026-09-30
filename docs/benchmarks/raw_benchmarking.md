@@ -307,7 +307,7 @@ bench_tx:
     - The benchmark reuses the resolved MAC for the entire run; it does not monitor Linux neighbor changes. Long-running applications should define their own refresh policy and call `resolve_ipv4_mac()` again when a peer, gateway, route, link, or namespace may have changed. See [Destination MAC resolution](../concepts.md#destination-mac-resolution).
     - `cpu_core` - the benchmark application's own TX worker thread affinity. Set the matching `bench_rx.cpu_core` for RX workers too. These app-thread fields are distinct from the DAQIRI queue `cpu_core` values that poll the NIC.
     - We ignore the IP fields (`ip_src_addr`, `ip_dst_addr`) for now, as we are testing on a layer 2 network by just connecting a cable between the two interfaces on our system, therefore having mock values has no impact.
-    - You might have noted the lack of a `eth_src_addr` field in this `bench_tx` section. This is because the source Ethernet MAC address can be inferred automatically by the DAQIRI library from the PCIe address of the Tx interface referenced above.
+    - You might have noted the lack of an `eth_src_addr` field in this `bench_tx` section. The DPDK `tx_eth_src` egress flow rewrites the source MAC from the TX interface. For an ibverbs benchmark profile, supply the TX port MAC as `eth_src_addr` because the benchmark copies a complete packet-header template into its buffers.
 
 ## Run the loopback test
 

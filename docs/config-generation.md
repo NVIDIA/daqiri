@@ -20,13 +20,15 @@ A CMake install exposes the same entry point as
 
 Supply the actual local topology rather than editing a copied YAML. After
 identifying the physical TX and RX netdevs, set `TX_IF` and `RX_IF` to their
-names. Read the PCI addresses and receiving port's MAC from sysfs:
+names. Read the PCI addresses and both port MAC addresses from sysfs:
 
 ```bash
 TX_PCI="$(basename "$(readlink -f "/sys/class/net/$TX_IF/device")")"
 RX_PCI="$(basename "$(readlink -f "/sys/class/net/$RX_IF/device")")"
+TX_MAC="$(cat "/sys/class/net/$TX_IF/address")"
 RX_MAC="$(cat "/sys/class/net/$RX_IF/address")"
-printf 'TX_PCI=%s\nRX_PCI=%s\nRX_MAC=%s\n' "$TX_PCI" "$RX_PCI" "$RX_MAC"
+printf 'TX_PCI=%s\nRX_PCI=%s\nTX_MAC=%s\nRX_MAC=%s\n' \
+  "$TX_PCI" "$RX_PCI" "$TX_MAC" "$RX_MAC"
 ```
 
 Example output with invented addresses (use the values printed on your system):
@@ -34,6 +36,7 @@ Example output with invented addresses (use the values printed on your system):
 ```text
 TX_PCI=0000:aa:00.0
 RX_PCI=0000:aa:00.1
+TX_MAC=02:00:00:00:00:01
 RX_MAC=02:00:00:00:00:02
 ```
 
@@ -45,14 +48,15 @@ python3 scripts/gen_daqiri_config.py raw-pair \
   --master-core 3 --engine ibverbs --memory-kind device \
   --tx-queue-cores 4 --rx-queue-cores 5 \
   --tx-worker-cores 6 --rx-worker-cores 7 \
-  --eth-dst-addr "$RX_MAC" \
+  --eth-src-addr "$TX_MAC" --eth-dst-addr "$RX_MAC" \
   --output raw-loopback.yaml
 ```
 
 `--role loopback` is the default and emits one document containing TX and RX.
 For two hosts, run the lookup on each host. Set `TX_PCI` and `RX_PCI` to the
-ports on their respective hosts and `RX_MAC` to the receiving host's port MAC,
-then generate one independently runnable file per role:
+ports on their respective hosts, `TX_MAC` to the transmitting host's port MAC,
+and `RX_MAC` to the receiving host's port MAC. Then generate one independently
+runnable file per role:
 
 ```bash
 python3 scripts/gen_daqiri_config.py raw-pair \
@@ -81,6 +85,11 @@ Raw memory-region `buf_size` defaults to `header_size + payload_size`. Set
 fixed across a payload sweep; both Spark DPDK harnesses use `8064` bytes to
 preserve their published methodology.
 
+When `--batch-size` is omitted, DPDK profiles use `10240` packets per burst and
+ibverbs or engine-default profiles use `1024`. The ibverbs engine also checks
+the NIC's `max_qp_wr` during initialization and permits at most half that value;
+pass a smaller explicit batch size if the runtime reports a lower limit.
+
 Add one of `--transform vlan`, `--transform vxlan`, `--transform gre`, or
 `--transform nvgre` to generate the corresponding raw hardware encap/decap
 configuration. Transform profiles currently require one TX and one RX queue.
@@ -92,6 +101,12 @@ benchmark input. This omits `bench_tx` and `bench_rx`. Raw TX queues enable the
 optional `tx_eth_src` offload by default; pass `--no-tx-eth-src` when the
 application supplies the Ethernet source address itself or the NIC cannot
 program that offload.
+
+Benchmark-owned ibverbs profiles require `--eth-src-addr` because the raw
+benchmark copies a complete Ethernet/IP/UDP template directly into each packet
+buffer. DPDK benchmark profiles may omit it because the DPDK egress flow
+rewrites the source MAC. Applications generated with `--daqiri-only` may omit
+it and use DAQIRI's header helpers with `tx_eth_src` instead.
 
 ## Generate UDP, TCP, or RoCE roles
 

@@ -151,6 +151,48 @@ def test_installed_launcher_supports_custom_gnu_data_directory(tmp_path: Path) -
     assert yaml.safe_load(result.stdout) == minimal_document()
 
 
+def test_raw_ibverbs_cli_requires_source_and_defaults_batch_size() -> None:
+    argv = [
+        sys.executable,
+        str(REPOSITORY_ROOT / "scripts/gen_daqiri_config.py"),
+        "raw-pair",
+        "--tx-address",
+        "0000:01:00.0",
+        "--rx-address",
+        "0000:01:00.1",
+        "--master-core",
+        "1",
+        "--tx-queue-cores",
+        "2",
+        "--rx-queue-cores",
+        "3",
+        "--tx-worker-cores",
+        "4",
+        "--rx-worker-cores",
+        "5",
+        "--eth-dst-addr",
+        "02:00:00:00:00:02",
+        "--engine",
+        "ibverbs",
+    ]
+    with_source = subprocess.run(
+        [*argv, "--eth-src-addr", "02:00:00:00:00:01"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    document = yaml.safe_load(with_source.stdout)
+    assert document["bench_tx"][0]["eth_src_addr"] == "02:00:00:00:00:01"
+    assert document["bench_tx"][0]["batch_size"] == 1024
+
+    without_source = subprocess.run(argv, capture_output=True, text=True)
+    assert without_source.returncode != 0
+    assert (
+        "eth_src_addr is required for ibverbs or engine-default benchmark profiles"
+        in without_source.stderr
+    )
+
+
 @pytest.mark.parametrize(
     "transport,extra,error",
     [

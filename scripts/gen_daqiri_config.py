@@ -137,7 +137,11 @@ def _raw_parser(subparsers: argparse._SubParsersAction) -> None:
         type=int,
         help="packet-buffer capacity (default: header size + payload size)",
     )
-    parser.add_argument("--batch-size", type=int, default=10240)
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        help="packets per burst (default: 10240 for dpdk, 1024 for ibverbs or engine default)",
+    )
     parser.add_argument("--num-bufs", type=int, default=51200)
     parser.add_argument("--affinity", type=int, default=0)
     parser.add_argument(
@@ -146,6 +150,10 @@ def _raw_parser(subparsers: argparse._SubParsersAction) -> None:
         default="device",
     )
     parser.add_argument("--engine", choices=("dpdk", "ibverbs"))
+    parser.add_argument(
+        "--eth-src-addr",
+        help="Ethernet source address for benchmark packet templates; required for ibverbs benchmark profiles",
+    )
     parser.add_argument(
         "--tx-eth-src",
         action=argparse.BooleanOptionalAction,
@@ -244,6 +252,7 @@ def _raw_spec(args: argparse.Namespace) -> RawPairSpec:
         affinity=args.affinity,
         memory_kind=args.memory_kind,
         engine=args.engine,
+        eth_src_addr=args.eth_src_addr,
         tx_eth_src=args.tx_eth_src,
         transform=args.transform,
         vlan_id=args.vlan_id,

@@ -363,11 +363,12 @@ class RawPairSpec:
     payload_size: int = 8000
     header_size: int = 64
     buffer_size: int | None = None
-    batch_size: int = 10240
+    batch_size: int | None = None
     num_bufs: int = 51200
     affinity: int = 0
     memory_kind: str = "device"
     engine: str | None = None
+    eth_src_addr: str | None = None
     tx_eth_src: bool = True
     transform: str = "none"
     vlan_id: int = 100
@@ -385,6 +386,14 @@ class RawPairSpec:
         if self.buffer_size is not None:
             return self.buffer_size
         return self.payload_size + self.header_size
+
+    @property
+    def resolved_batch_size(self) -> int:
+        """Return the configured burst size or its backend-specific default."""
+
+        if self.batch_size is not None:
+            return self.batch_size
+        return 10240 if self.engine == "dpdk" else 1024
 
     def __post_init__(self) -> None:
         if not self.tx_queue_cores or not self.rx_queue_cores:
@@ -424,14 +433,21 @@ class RawPairSpec:
             raise ConfigError("raw-pair engine must be dpdk, ibverbs, or omitted")
         if self.memory_kind not in ("huge", "device", "host_pinned", "host"):
             raise ConfigError("unsupported memory_kind")
-        for name in ("payload_size", "header_size", "batch_size", "num_bufs"):
+        for name in ("payload_size", "header_size", "num_bufs"):
             _require_positive(name, getattr(self, name))
+        if self.batch_size is not None:
+            _require_positive("batch_size", self.batch_size)
+        batch_size = self.resolved_batch_size
         _require_positive("buffer_size", self.resolved_buffer_size)
-        if self.num_bufs < self.batch_size:
+        if self.num_bufs < batch_size:
             raise ConfigError("num_bufs must be at least batch_size")
-        if self.engine in (None, "dpdk") and self.num_bufs < 2 * self.batch_size:
+        if self.engine in (None, "dpdk") and self.num_bufs < 2 * batch_size:
             raise ConfigError("DPDK raw profiles require num_bufs to be at least twice batch_size")
         if self.include_benchmark:
+            if self.eth_src_addr is None and self.engine in (None, "ibverbs"):
+                raise ConfigError(
+                    "eth_src_addr is required for ibverbs or engine-default benchmark profiles"
+                )
             if self.header_size < UDP_IPV4_HEADER_SIZE:
                 raise ConfigError(
                     f"benchmark raw header_size must be at least {UDP_IPV4_HEADER_SIZE} bytes"
@@ -469,6 +485,8 @@ class RawPairSpec:
         if self.affinity < 0:
             raise ConfigError("affinity must not be negative")
         _require_mac("eth_dst_addr", self.eth_dst_addr)
+        if self.eth_src_addr is not None:
+            _require_mac("eth_src_addr", self.eth_src_addr)
         _require_ip("ip_src_addr", self.ip_src_addr)
         _require_ip("ip_dst_addr", self.ip_dst_addr)
         if self.transform in ("vxlan", "gre", "nvgre"):
@@ -569,7 +587,7 @@ def generate_raw_pair(spec: RawPairSpec) -> dict[str, Any]:
         queue = {
             "name": f"tx_q_{index}",
             "id": index,
-            "batch_size": spec.batch_size,
+            "batch_size": spec.resolved_batch_size,
             "cpu_core": core,
             "memory_regions": [tx_regions[index]["name"]],
         }
@@ -584,7 +602,7 @@ def generate_raw_pair(spec: RawPairSpec) -> dict[str, Any]:
                 "name": f"rx_q_{index}",
                 "id": index,
                 "cpu_core": core,
-                "batch_size": spec.batch_size,
+                "batch_size": spec.resolved_batch_size,
                 "memory_regions": [rx_regions[index]["name"]],
             }
         )
@@ -670,21 +688,22 @@ def generate_raw_pair(spec: RawPairSpec) -> dict[str, Any]:
                 port: int | str = f"{spec.udp_port_base}-{spec.udp_port_base + flow_count - 1}"
             else:
                 port = first_port
-            bench_tx.append(
-                {
-                    "interface_name": "tx_port",
-                    "queue_id": index,
-                    "cpu_core": spec.tx_worker_cores[index],
-                    "batch_size": spec.batch_size,
-                    "payload_size": spec.payload_size,
-                    "header_size": spec.header_size,
-                    "eth_dst_addr": spec.eth_dst_addr,
-                    "ip_src_addr": spec.ip_src_addr,
-                    "ip_dst_addr": spec.ip_dst_addr,
-                    "udp_src_port": port,
-                    "udp_dst_port": port,
-                }
-            )
+            entry = {
+                "interface_name": "tx_port",
+                "queue_id": index,
+                "cpu_core": spec.tx_worker_cores[index],
+                "batch_size": spec.resolved_batch_size,
+                "payload_size": spec.payload_size,
+                "header_size": spec.header_size,
+                "eth_dst_addr": spec.eth_dst_addr,
+                "ip_src_addr": spec.ip_src_addr,
+                "ip_dst_addr": spec.ip_dst_addr,
+                "udp_src_port": port,
+                "udp_dst_port": port,
+            }
+            if spec.eth_src_addr is not None:
+                entry["eth_src_addr"] = spec.eth_src_addr
+            bench_tx.append(entry)
         document["bench_tx"] = bench_tx
 
     return document

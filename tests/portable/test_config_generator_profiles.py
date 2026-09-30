@@ -80,6 +80,7 @@ def raw_spec(**overrides) -> RawPairSpec:
         "tx_worker_cores": (6,),
         "rx_worker_cores": (7,),
         "eth_dst_addr": "02:00:00:00:00:02",
+        "eth_src_addr": "02:00:00:00:00:01",
         "engine": "ibverbs",
     }
     values.update(overrides)
@@ -154,6 +155,63 @@ def test_raw_buffer_size_and_tx_source_offload_are_configurable() -> None:
     assert "offloads" not in tx_queue
 
 
+def test_raw_batch_size_defaults_follow_backend_and_preserve_explicit_values() -> None:
+    dpdk = generate_raw_pair(raw_spec(engine="dpdk", eth_src_addr=None))
+    ibverbs = generate_raw_pair(raw_spec(engine="ibverbs"))
+    engine_default = generate_raw_pair(raw_spec(engine=None))
+    explicit = generate_raw_pair(raw_spec(engine="ibverbs", batch_size=2048))
+
+    assert (
+        dpdk["daqiri"]["cfg"]["interfaces"][0]["tx"]["queues"][0]["batch_size"]
+        == 10240
+    )
+    assert dpdk["daqiri"]["cfg"]["interfaces"][1]["rx"]["queues"][0]["batch_size"] == 10240
+    assert dpdk["bench_tx"][0]["batch_size"] == 10240
+    assert (
+        ibverbs["daqiri"]["cfg"]["interfaces"][0]["tx"]["queues"][0]["batch_size"]
+        == 1024
+    )
+    assert ibverbs["daqiri"]["cfg"]["interfaces"][1]["rx"]["queues"][0]["batch_size"] == 1024
+    assert ibverbs["bench_tx"][0]["batch_size"] == 1024
+    assert engine_default["bench_tx"][0]["batch_size"] == 1024
+    assert explicit["bench_tx"][0]["batch_size"] == 2048
+
+
+@pytest.mark.parametrize("engine", ["ibverbs", None])
+def test_raw_ibverbs_benchmark_requires_source_address(engine: str | None) -> None:
+    with pytest.raises(
+        ConfigError,
+        match="eth_src_addr is required for ibverbs or engine-default benchmark profiles",
+    ):
+        raw_spec(engine=engine, eth_src_addr=None)
+
+
+def test_raw_ibverbs_benchmark_emits_source_address_for_each_tx_queue() -> None:
+    document = generate_raw_pair(
+        raw_spec(
+            eth_src_addr="02:00:00:00:00:03",
+            tx_queue_cores=(4, 5),
+            tx_worker_cores=(6, 7),
+        )
+    )
+    assert [entry["eth_src_addr"] for entry in document["bench_tx"]] == [
+        "02:00:00:00:00:03",
+        "02:00:00:00:00:03",
+    ]
+
+    with pytest.raises(ConfigError, match="eth_src_addr must be a six-octet MAC address"):
+        raw_spec(eth_src_addr="invalid")
+
+
+def test_raw_dpdk_source_address_is_optional_and_daqiri_only_needs_no_source() -> None:
+    dpdk = generate_raw_pair(raw_spec(engine="dpdk", eth_src_addr=None))
+    production = generate_raw_pair(
+        raw_spec(engine="ibverbs", include_benchmark=False, eth_src_addr=None)
+    )
+    assert "eth_src_addr" not in dpdk["bench_tx"][0]
+    assert "bench_tx" not in production
+
+
 def test_invalid_profile_inputs_fail_before_rendering() -> None:
     with pytest.raises(ConfigError, match="UDP message_size"):
         socket_spec("udp").__class__(
@@ -177,6 +235,8 @@ def test_invalid_profile_inputs_fail_before_rendering() -> None:
         raw_spec(engine="ibverbs", batch_size=2, num_bufs=1)
     with pytest.raises(ConfigError, match="at least twice batch_size"):
         raw_spec(engine="dpdk", batch_size=2, num_bufs=3)
+    with pytest.raises(ConfigError, match="at least twice batch_size"):
+        raw_spec(engine=None, batch_size=None, num_bufs=2047)
     with pytest.raises(ConfigError, match="rx_batch_size must not exceed num_bufs"):
         spec = socket_spec("udp")
         spec.__class__(**{**spec.__dict__, "num_bufs": 16, "rx_batch_size": 32})

@@ -69,6 +69,7 @@ def _raw_spec(**overrides: Any) -> RawPairSpec:
         "tx_worker_cores": (6,),
         "rx_worker_cores": (7,),
         "eth_dst_addr": "02:00:00:00:00:02",
+        "eth_src_addr": "02:00:00:00:00:01",
         "engine": "ibverbs",
     }
     values.update(overrides)
