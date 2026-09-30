@@ -23,3 +23,25 @@ else()
 endif()
 
 add_test(NAME daqiri_init_validation_test COMMAND daqiri_init_validation_test)
+
+add_executable(daqiri_socket_rx_queue_test socket_rx_queue_test.cpp)
+target_compile_features(daqiri_socket_rx_queue_test PRIVATE cxx_std_17)
+target_include_directories(daqiri_socket_rx_queue_test PRIVATE ${PROJECT_SOURCE_DIR})
+if(BUILD_SHARED_LIBS AND UNIX AND NOT APPLE)
+  # daqiri_common and the engine DSOs reference each other. Keep daqiri_common
+  # loaded while this internal test links directly to the socket engine.
+  target_link_options(daqiri_socket_rx_queue_test PRIVATE "LINKER:--no-as-needed")
+endif()
+
+if(NOT BUILD_SHARED_LIBS AND UNIX AND NOT APPLE)
+  target_link_libraries(daqiri_socket_rx_queue_test PRIVATE
+    "-Wl,--start-group"
+    ${DAQIRI_TEST_STATIC_LIBS}
+    "-Wl,--end-group"
+    ${DAQIRI_YAML_TARGET})
+else()
+  target_link_libraries(daqiri_socket_rx_queue_test PRIVATE daqiri_socket daqiri::daqiri
+                        ${DAQIRI_YAML_TARGET})
+endif()
+
+add_test(NAME daqiri_socket_rx_queue_test COMMAND daqiri_socket_rx_queue_test)
