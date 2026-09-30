@@ -82,10 +82,8 @@ def _materialize_config(tmp_path: Path, bdf: str, mac: str, cpus: list[int]) -> 
             pytest.fail(f"named-endpoint config placeholder changed: {placeholder}")
         text = text.replace(placeholder, value)
 
-    # Keep the checked-in topology and endpoint fields while bounding platform-test
-    # allocation and runtime. The example remains a device-memory/GPUDirect send.
-    text = text.replace("num_bufs: 51200", "num_bufs: 512")
-    text = text.replace("batch_size: 10240", "batch_size: 8")
+    # Preserve the checked-in memory and batch sizing so this platform test
+    # exercises the published example's device-capacity requirements.
     config = tmp_path / CONFIG_TEMPLATE.name
     config.write_text(text, encoding="utf-8")
     return config

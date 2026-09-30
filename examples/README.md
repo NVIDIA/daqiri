@@ -140,6 +140,13 @@ RX port on a cabled setup. The endpoint source MAC is obtained from `tx_port` by
 DAQIRI, so the example has no `eth_src_addr` field and does not use the
 `tx_eth_src` flow offload.
 
+The checked-in TX region uses 8192 slots and a 256-packet batch. Raw ibverbs may
+consume two send work requests per TX slot, and some providers reject a QP sized
+at the device's exact advertised `max_qp_wr`. These defaults leave headroom on a
+device reporting `max_qp_wr: 32768`. Increase `num_bufs` only after checking the
+device limit; keep the configured and application batch sizes within the
+effective TX capacity.
+
 ## PCAP Writer Example
 
 `daqiri_example_pcap_writer` is an RX-first capture example. It runs until Ctrl+C,

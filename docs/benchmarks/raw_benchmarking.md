@@ -198,6 +198,13 @@ inline in the mlx5 send WQE. The endpoint MTU and the queue's TX slot size both
 bound the accepted payload. Named endpoints currently require one TX memory
 region and one packet segment, so HDS configurations are rejected.
 
+The checked-in config deliberately uses 8192 TX slots and a 256-packet batch.
+Raw ibverbs may need two send work requests per TX slot, and a provider can
+reject a QP request at the exact advertised `max_qp_wr`; these values leave
+headroom on a device reporting `max_qp_wr: 32768`. Larger TX regions require
+correspondingly greater device capacity, and both TX batch-size settings must
+fit within the engine's effective TX capacity.
+
 See [Runtime Named Endpoints](../concepts.md#runtime-named-endpoints) for the
 concept and [C++ API Usage](../api-reference/cpp.md#runtime-named-endpoints-raw-ibverbs)
 for lifecycle and ownership details.
