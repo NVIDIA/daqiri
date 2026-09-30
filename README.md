@@ -63,7 +63,10 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 - **RDMA** — RDMA verbs (READ, WRITE, SEND) over RoCE on Ethernet NICs or InfiniBand.
 - **Linux socket control** — TCP/UDP socket streams expose connection IDs and
   `socket_setsockopt()` for native Linux `setsockopt` tuning without YAML option
-  name mappings.
+  name mappings. TCP RX queues bound their internal backlog using the smallest
+  referenced memory-region `num_bufs`, so a slow consumer propagates TCP
+  backpressure instead of growing an unbounded process queue. See
+  [TCP receive backpressure and queue sizing](https://nvidia.github.io/daqiri/benchmarks/socket_benchmarking/#tcp-receive-backpressure-and-queue-sizing).
 - **Flow-control telemetry** — Raw Ethernet streams warn at `daqiri_init()` when 802.3x
   pause is enabled on a port and report the pause frames exchanged during the run with the
   shutdown stats. A paused link throttles the sender instead of dropping, so it caps

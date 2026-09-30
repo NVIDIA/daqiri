@@ -101,6 +101,8 @@ bool pin_udp_rx_thread(int cpu_core, uint16_t port) {
 
 }  // namespace
 
+SocketEngine::SocketEngine() = default;
+
 SocketEngine::~SocketEngine() {
   shutdown();
 }

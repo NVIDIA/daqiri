@@ -77,7 +77,10 @@ URI schemes:
 - **`udp://`** / **`tcp://`**: Linux kernel UDP and TCP sockets. No NIC
   privileges required, no special hardware. Useful
   as a comparison baseline against the kernel-bypass paths and as a way
-  to get first results on a system without an NVIDIA NIC.
+  to get first results on a system without an NVIDIA NIC. TCP RX queues use
+  the smallest referenced memory-region `num_bufs` as their internal burst
+  limit; when full, DAQIRI stops consuming socket data so kernel TCP flow
+  control reaches the sender. See [TCP receive backpressure and queue sizing](benchmarks/socket_benchmarking.md#tcp-receive-backpressure-and-queue-sizing).
 - **`roce://` endpoints**: RDMA over Converged Ethernet, using the
   open-source [`rdma-core`](https://github.com/linux-rdma/rdma-core)
   library. A server/client connection model, NIC-level reliable

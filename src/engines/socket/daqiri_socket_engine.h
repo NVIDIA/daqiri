@@ -39,7 +39,7 @@ class SocketEngineQueueTestPeer;
 
 class SocketEngine : public Engine {
  public:
-  SocketEngine() = default;
+  SocketEngine();
   ~SocketEngine() override;
 
   bool set_config_and_initialize(const NetworkConfig& cfg) override;
