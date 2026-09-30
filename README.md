@@ -60,6 +60,9 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
   application-backed memory regions after initialization. Queue removal drains outstanding
   zero-copy ownership, and dynamic RX flows can be redirected to newly created queues before
   old queues and regions are retired.
+- **Runtime named endpoints** — Register raw-ibverbs Ethernet/IPv4/UDP destinations once, resolve
+  them to opaque IDs, and select a TX queue per submission. DAQIRI inlines each cached header in
+  the mlx5 send WQE, so application packet buffers contain only the UDP payload.
 - **RDMA** — RDMA verbs (READ, WRITE, SEND) over RoCE on Ethernet NICs or InfiniBand.
 - **Linux socket control** — TCP/UDP socket streams expose connection IDs and
   `socket_setsockopt()` for native Linux `setsockopt` tuning without YAML option
@@ -102,6 +105,7 @@ Step-by-step walkthroughs to get hands-on:
 - [Raw Ethernet Benchmarking](https://nvidia.github.io/daqiri/benchmarks/raw_benchmarking/) — run `daqiri_bench_raw_gpudirect` with a physical loopback test
 - [Dynamic RX Flow Example](https://nvidia.github.io/daqiri/tutorials/configuration-walkthrough/#choosing-an-example-config) — start with RX queues only, then add and delete flow-steering rules at runtime
 - `daqiri_example_dynamic_resource` — exercise raw-ibverbs first-RX-queue steering, repeated dynamic-flow add/delete, and runtime memory-region and RX/TX queue creation and drain-based deletion
+- [`daqiri_example_named_endpoints`](https://nvidia.github.io/daqiri/benchmarks/raw_benchmarking/#runtime-named-endpoints-example) — create named raw-UDP destinations at runtime and transmit payload-only GPU buffers with cached inline headers
 - [Understanding the Configuration File](https://nvidia.github.io/daqiri/tutorials/configuration-walkthrough/) — annotated YAML walkthrough
 - [DAQIRI + Holoscan Integration](https://nvidia.github.io/daqiri/tutorials/daqiri-holoscan-integration/) — use DAQIRI RX bursts from a Holoscan source operator
 - [DAQIRI + TensorRT Inference](https://nvidia.github.io/daqiri/tutorials/daqiri-resnet-inference/) — packet ingest → ResNet-50 feature extraction with TensorRT

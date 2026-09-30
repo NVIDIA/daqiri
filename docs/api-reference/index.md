@@ -36,6 +36,10 @@ deleted before its queue can be removed. Static startup flows and TX transform
 flows remain immutable. TCP/UDP socket options are also runtime state: after
 resolving a connection ID, applications can call `socket_setsockopt()` with
 native Linux `level` and option constants.
+Raw-ibverbs applications can likewise create runtime named Ethernet/IPv4/UDP
+endpoints after initialization, resolve their opaque `EndpointId` handles, and
+select a configured TX queue for each submission. These endpoints provide
+payload-only TX buffers and are separate from socket endpoint URIs.
 
 The configuration schema lives in the
 [Configuration YAML Reference](configuration.md). For an annotated
@@ -51,7 +55,8 @@ The typical DAQIRI application lifecycle has six steps:
 3. **Receive or transmit packet bursts** through configured queues
    (`get_rx_burst` / `get_tx_packet_burst` + `send_tx_burst`).
    Raw-ibverbs applications may also add or drain queues and memory regions,
-   and redirect dynamic RX flows, while the engine is running.
+   redirect dynamic RX flows, and add or resolve a runtime named endpoint while
+   the engine is running.
 4. **Access packet data** through `BurstParams` helper functions
    (`get_packet_ptr`, `get_segment_packet_ptr`, ...).
 5. **Explicitly release packet and burst buffers** when the

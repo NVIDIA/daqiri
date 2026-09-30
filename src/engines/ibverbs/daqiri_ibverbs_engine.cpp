@@ -41,6 +41,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <new>
 #include <set>
 #include <string>
 #include <vector>
@@ -66,6 +67,16 @@ namespace {
 constexpr uint64_t ibv_timer_hz = 1'000'000'000ULL;
 constexpr FlowId kMaxIbverbsFlowTag = 0x00ffffffU;
 constexpr int kIbverbsCatchAllPriority = 1'000'000;
+std::atomic<uint32_t> g_next_endpoint_generation{1};
+
+uint32_t next_endpoint_generation() {
+  uint32_t generation = g_next_endpoint_generation.fetch_add(1, std::memory_order_relaxed);
+  if (generation == 0) {
+    generation = g_next_endpoint_generation.fetch_add(1, std::memory_order_relaxed);
+  }
+  return generation;
+}
+
 inline uint64_t ibv_now_ns() {
   return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                    std::chrono::steady_clock::now().time_since_epoch())
@@ -138,6 +149,25 @@ size_t next_power_of_two(size_t value) {
   }
   return rounded;
 }
+
+int hex_nibble(char value) {
+  if (value >= '0' && value <= '9') return value - '0';
+  if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+  if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+  return -1;
+}
+
+bool parse_mac_address(const std::string& value, uint8_t (&bytes)[ETH_ALEN]) {
+  if (value.size() != 17) return false;
+  for (size_t i = 0; i < ETH_ALEN; ++i) {
+    const size_t offset = i * 3;
+    const int high = hex_nibble(value[offset]);
+    const int low = hex_nibble(value[offset + 1]);
+    if (high < 0 || low < 0 || (i + 1 < ETH_ALEN && value[offset + 2] != ':')) return false;
+    bytes[i] = static_cast<uint8_t>((high << 4) | low);
+  }
+  return true;
+}
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -155,6 +185,7 @@ static constexpr uint32_t MPRQ_LEN_MASK = 0x0000ffffu;
 // it to the TX slot ring rather than the RX stride-release path.
 static constexpr uint32_t IBV_TX_BURST_FLAG = 1u << 27;
 static constexpr uint32_t IBV_TX_SCHEDULED_FLAG = 1u << 26;
+static constexpr uint32_t IBV_TX_ENDPOINT_INLINE_FLAG = 1u << 25;
 
 static constexpr uint32_t EMPW_MAX_PACKETS = 32;
 static_assert(EMPW_MAX_PACKETS <= MLX5_EMPW_MAX_DSEG);
@@ -616,6 +647,20 @@ static inline uint32_t rdr_output_payload_len(const ReorderConfig& c, uint32_t i
 // paths recover the arrays from a BurstParams* via the fixed offsets below.
 // ---------------------------------------------------------------------------
 namespace {
+struct EndpointInlineTxMetadata {
+  UDPIPV4Pkt header;
+};
+
+static_assert(sizeof(EndpointInlineTxMetadata) <= sizeof(BurstHeader::custom_burst_data));
+
+EndpointInlineTxMetadata* endpoint_inline_metadata(BurstParams* burst) {
+  return reinterpret_cast<EndpointInlineTxMetadata*>(burst->hdr.custom_burst_data);
+}
+
+const EndpointInlineTxMetadata* endpoint_inline_metadata(const BurstParams* burst) {
+  return reinterpret_cast<const EndpointInlineTxMetadata*>(burst->hdr.custom_burst_data);
+}
+
 struct IbvBurstLayout {
   size_t off_pkts0;
   size_t off_lens0;
@@ -3918,6 +3963,11 @@ Status IbverbsEngine::setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf,
 
 void IbverbsEngine::initialize() {
   DAQIRI_LOG_INFO("Initializing ibverbs (MPRQ) raw backend");
+
+  if (!initialize_endpoint_slots()) {
+    DAQIRI_LOG_CRITICAL("Failed to allocate runtime endpoint slots");
+    return;
+  }
 
   // Assign port ids and compute MR sizing (one large contiguous region per MR).
   int if_num = 0;
@@ -7527,6 +7577,11 @@ void IbverbsEngine::shutdown() {
     daqiri::ObjectPool::free(tx_meta_pool_);
     tx_meta_pool_ = nullptr;
   }
+  {
+    std::lock_guard<std::mutex> guard(endpoint_mutex_);
+    endpoint_names_.clear();
+    destroy_endpoint_slots();
+  }
   initialized_ = false;
   force_quit_.store(false, std::memory_order_relaxed);
   max_batch_ = 0;
@@ -7569,6 +7624,181 @@ IbvTxQueue* IbverbsEngine::acquire_tx_queue(int port, int q, bool allow_draining
     }
   }
   return nullptr;
+}
+
+bool IbverbsEngine::initialize_endpoint_slots() {
+  if (endpoint_slots_ != nullptr) return true;
+
+  void* storage = nullptr;
+  const size_t bytes = sizeof(EndpointSlot) * kMaxEndpointSlots;
+  if (posix_memalign(&storage, alignof(EndpointSlot), bytes) != 0) return false;
+  daqiri::detail::numa_bind(storage, bytes,
+                            daqiri::detail::numa_node_for_cpu(cfg_.common_.master_core_));
+
+  endpoint_slots_ = static_cast<EndpointSlot*>(storage);
+  for (uint32_t slot = 0; slot < kMaxEndpointSlots; ++slot) {
+    new (&endpoint_slots_[slot]) EndpointSlot();
+  }
+
+  free_endpoint_slots_.clear();
+  free_endpoint_slots_.reserve(kMaxEndpointSlots);
+  endpoint_slot_names_.clear();
+  endpoint_slot_names_.resize(kMaxEndpointSlots);
+  endpoint_names_.reserve(kMaxEndpointSlots);
+  for (uint32_t slot = kMaxEndpointSlots; slot > 0; --slot) {
+    free_endpoint_slots_.push_back(slot - 1);
+  }
+  return true;
+}
+
+void IbverbsEngine::destroy_endpoint_slots() {
+  if (endpoint_slots_ == nullptr) return;
+
+  for (uint32_t slot = 0; slot < kMaxEndpointSlots; ++slot) {
+    endpoint_slots_[slot].published_id.store(INVALID_ENDPOINT_ID);
+    while (endpoint_slots_[slot].readers.load() != 0) {
+      daqiri::detail::ring_cpu_pause();
+    }
+    endpoint_slots_[slot].~EndpointSlot();
+  }
+  std::free(endpoint_slots_);
+  endpoint_slots_ = nullptr;
+  free_endpoint_slots_.clear();
+  endpoint_slot_names_.clear();
+}
+
+bool IbverbsEngine::snapshot_endpoint(EndpointId endpoint_id, EndpointFastPath* endpoint) const {
+  if (endpoint == nullptr || endpoint_id == INVALID_ENDPOINT_ID || endpoint_slots_ == nullptr)
+    return false;
+
+  const uint32_t encoded_slot = static_cast<uint32_t>(endpoint_id);
+  if (encoded_slot == 0 || encoded_slot > kMaxEndpointSlots) return false;
+  const uint32_t slot_index = encoded_slot - 1;
+  EndpointSlot& slot = endpoint_slots_[slot_index];
+  if (slot.published_id.load() != endpoint_id) return false;
+
+  slot.readers.fetch_add(1);
+  if (slot.published_id.load() != endpoint_id) {
+    slot.readers.fetch_sub(1);
+    return false;
+  }
+  endpoint->header_template = slot.header_template;
+  endpoint->mtu = slot.mtu;
+  endpoint->port_id = slot.port_id;
+  slot.readers.fetch_sub(1);
+  return true;
+}
+
+Status IbverbsEngine::add_endpoint(const RawUdpEndpointConfig& config, EndpointId* endpoint_id) {
+  if (endpoint_id == nullptr) return Status::NULL_PTR;
+  *endpoint_id = INVALID_ENDPOINT_ID;
+  if (!initialized_) return Status::NOT_READY;
+  if (config.name_.empty() || config.interface_.empty() || config.src_port_ == 0 ||
+      config.dst_port_ == 0 || config.mtu_ <= sizeof(UDPIPV4Pkt) ||
+      config.mtu_ > ETH_HLEN + UINT16_MAX) {
+    return Status::INVALID_PARAMETER;
+  }
+
+  const InterfaceConfig* interface = nullptr;
+  for (const auto& candidate : cfg_.ifs_) {
+    if (candidate.name_ == config.interface_ || candidate.address_ == config.interface_) {
+      interface = &candidate;
+      break;
+    }
+  }
+  if (interface == nullptr) return Status::INVALID_PARAMETER;
+
+  EndpointFastPath endpoint;
+  endpoint.port_id = static_cast<uint16_t>(interface->port_id_);
+  endpoint.mtu = config.mtu_;
+  if (!parse_mac_address(config.dst_mac_, endpoint.header_template.eth.h_dest) ||
+      inet_pton(AF_INET, config.src_ipv4_.c_str(), &endpoint.header_template.ip.saddr) != 1 ||
+      inet_pton(AF_INET, config.dst_ipv4_.c_str(), &endpoint.header_template.ip.daddr) != 1 ||
+      get_mac_addr(endpoint.port_id,
+                   reinterpret_cast<char*>(endpoint.header_template.eth.h_source)) !=
+          Status::SUCCESS) {
+    return Status::INVALID_PARAMETER;
+  }
+
+  endpoint.header_template.eth.h_proto = htobe16(ETH_P_IP);
+  endpoint.header_template.ip.version = 4;
+  endpoint.header_template.ip.ihl = 5;
+  endpoint.header_template.ip.frag_off = htobe16(IP_DF);
+  endpoint.header_template.ip.ttl = 64;
+  endpoint.header_template.ip.protocol = IPPROTO_UDP;
+  endpoint.header_template.ip.tot_len =
+      htobe16(static_cast<uint16_t>(config.mtu_ - sizeof(struct ethhdr)));
+  endpoint.header_template.ip.check = 0;
+  endpoint.header_template.udp.source = htobe16(config.src_port_);
+  endpoint.header_template.udp.dest = htobe16(config.dst_port_);
+  endpoint.header_template.udp.len =
+      htobe16(static_cast<uint16_t>(config.mtu_ - sizeof(struct ethhdr) - sizeof(struct iphdr)));
+  endpoint.header_template.udp.check = 0;
+
+  std::lock_guard<std::mutex> guard(endpoint_mutex_);
+  if (endpoint_names_.find(config.name_) != endpoint_names_.end()) {
+    return Status::INVALID_PARAMETER;
+  }
+  if (free_endpoint_slots_.empty()) return Status::NO_SPACE_AVAILABLE;
+
+  const uint32_t slot_index = free_endpoint_slots_.back();
+  free_endpoint_slots_.pop_back();
+  EndpointSlot& slot = endpoint_slots_[slot_index];
+  slot.generation = next_endpoint_generation();
+  const EndpointId id = (static_cast<EndpointId>(slot.generation) << 32) | (slot_index + 1);
+  slot.header_template = endpoint.header_template;
+  slot.mtu = endpoint.mtu;
+  slot.port_id = endpoint.port_id;
+  endpoint_slot_names_[slot_index] = config.name_;
+  endpoint_names_.emplace(config.name_, id);
+  slot.published_id.store(id);
+  *endpoint_id = id;
+  return Status::SUCCESS;
+}
+
+Status IbverbsEngine::get_endpoint_id(const std::string& name, EndpointId* endpoint_id) {
+  if (endpoint_id == nullptr) return Status::NULL_PTR;
+  *endpoint_id = INVALID_ENDPOINT_ID;
+  if (name.empty()) return Status::INVALID_PARAMETER;
+  std::lock_guard<std::mutex> guard(endpoint_mutex_);
+  const auto it = endpoint_names_.find(name);
+  if (it == endpoint_names_.end()) return Status::INVALID_PARAMETER;
+  *endpoint_id = it->second;
+  return Status::SUCCESS;
+}
+
+Status IbverbsEngine::delete_endpoint(EndpointId endpoint_id) {
+  if (endpoint_id == INVALID_ENDPOINT_ID) return Status::INVALID_PARAMETER;
+  std::lock_guard<std::mutex> guard(endpoint_mutex_);
+  return delete_endpoint_locked(endpoint_id);
+}
+
+Status IbverbsEngine::delete_endpoint(const std::string& name) {
+  if (name.empty()) return Status::INVALID_PARAMETER;
+  std::lock_guard<std::mutex> guard(endpoint_mutex_);
+  const auto name_it = endpoint_names_.find(name);
+  if (name_it == endpoint_names_.end()) return Status::INVALID_PARAMETER;
+  return delete_endpoint_locked(name_it->second);
+}
+
+Status IbverbsEngine::delete_endpoint_locked(EndpointId endpoint_id) {
+  const uint32_t encoded_slot = static_cast<uint32_t>(endpoint_id);
+  if (encoded_slot == 0 || encoded_slot > kMaxEndpointSlots || endpoint_slots_ == nullptr) {
+    return Status::INVALID_PARAMETER;
+  }
+
+  const uint32_t slot_index = encoded_slot - 1;
+  EndpointSlot& slot = endpoint_slots_[slot_index];
+  if (slot.published_id.load() != endpoint_id) return Status::INVALID_PARAMETER;
+
+  slot.published_id.store(INVALID_ENDPOINT_ID);
+  while (slot.readers.load() != 0) {
+    daqiri::detail::ring_cpu_pause();
+  }
+  endpoint_names_.erase(endpoint_slot_names_[slot_index]);
+  endpoint_slot_names_[slot_index].clear();
+  free_endpoint_slots_.push_back(slot_index);
+  return Status::SUCCESS;
 }
 
 Status IbverbsEngine::configure_tx_pacing(IbvTxQueue& q, uint64_t pacing_mbps) {
@@ -7691,8 +7921,9 @@ Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
   // library-wide maximum makes mlx5 reserve larger WQEs even for a normal
   // single-region queue and can needlessly exceed the device's SQ limit.
   attr.cap.max_send_sge = static_cast<uint32_t>(q.num_segs);
+  attr.cap.max_inline_data = sizeof(UDPIPV4Pkt);
   if (q.cpu_inline_enabled) {
-    attr.cap.max_inline_data = MLX5_CPU_INLINE_MAX_FRAME;
+    attr.cap.max_inline_data = std::max<uint32_t>(MLX5_CPU_INLINE_MAX_FRAME, sizeof(UDPIPV4Pkt));
   }
   attr.cap.max_recv_wr = 1;
   attr.cap.max_recv_sge = 1;
@@ -7919,7 +8150,8 @@ bool IbverbsEngine::owns_direct_tx_queue(IbvTxQueue& q) {
 static bool empw_compatible_burst(const BurstParams* burst) {
   // A one-packet enhanced MPW session is not valid; use an ordinary SEND WQE
   // for single-packet bursts (including queue primers).
-  if (burst->hdr.hdr.num_segs != 1 || burst->hdr.hdr.num_pkts < 2) {
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_ENDPOINT_INLINE_FLAG) != 0 ||
+      burst->hdr.hdr.num_segs != 1 || burst->hdr.hdr.num_pkts < 2) {
     return false;
   }
   if ((burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) == 0) {
@@ -7943,6 +8175,16 @@ static bool empw_compatible_burst(const BurstParams* burst) {
 uint64_t IbverbsEngine::tx_burst_wqebbs(const IbvTxQueue& q, const BurstParams* burst) const {
   const uint64_t packets = burst->hdr.hdr.num_pkts;
   const bool scheduled = (burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) != 0;
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_ENDPOINT_INLINE_FLAG) != 0) {
+    uint64_t wqebbs = packets * 2;
+    if (scheduled) {
+      const uint64_t* txtime = burst_ts_arr(burst);
+      for (uint64_t i = 0; i < packets; ++i) {
+        if (txtime[i] != 0) ++wqebbs;
+      }
+    }
+    return wqebbs;
+  }
   if (q.empw_enabled && empw_compatible_burst(burst)) {
     // A timed packet must break the eMPW session: WAIT + ordinary SEND for
     // packet 0, then pack the remaining untimed packets into eMPW WQEs.
@@ -8371,6 +8613,83 @@ void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst, uint16
   q.bf_offset ^= q.dv_qp.bf.size;
 }
 
+// Build endpoint-aware WQEs with an inline Ethernet/IPv4/UDP header and one
+// gathered payload data segment. The 42-byte cached template is copied into the
+// SQ, not into the host/GPU payload buffer. A 96-byte WQE occupies two WQEBBs.
+void IbverbsEngine::post_endpoint_inline_burst(IbvTxQueue& q, BurstParams* burst) {
+  constexpr uint32_t WQEBBS_PER_SEND = 2;
+  constexpr uint8_t DS_PER_SEND = 6;  // ctrl(1) + inline eth/header(4) + payload dseg(1)
+  constexpr size_t PAYLOAD_DSEG_OFFSET = 80;
+  constexpr size_t WQE_BYTES = WQEBBS_PER_SEND * MLX5_SEND_WQE_BB;
+  static_assert(16 + offsetof(struct mlx5_wqe_eth_seg, inline_hdr_start) + sizeof(UDPIPV4Pkt) <=
+                PAYLOAD_DSEG_OFFSET);
+  static_assert(PAYLOAD_DSEG_OFFSET + sizeof(struct mlx5_wqe_data_seg) == DS_PER_SEND * 16);
+  static constexpr int SIGNAL_EVERY = 32;
+
+  const int packets = static_cast<int>(burst->hdr.hdr.num_pkts);
+  const bool scheduled = (burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) != 0;
+  const uint64_t* txtime = scheduled ? burst_ts_arr(burst) : nullptr;
+  const EndpointInlineTxMetadata* metadata = endpoint_inline_metadata(burst);
+  uint8_t* const sq_buf = static_cast<uint8_t*>(q.dv_qp.sq.buf);
+  const uint32_t wqe_cnt = q.dv_qp.sq.wqe_cnt;
+  const uint32_t stride = q.dv_qp.sq.stride;
+  void* last_ctrl = nullptr;
+
+  for (int packet = 0; packet < packets; ++packet) {
+    if (scheduled && txtime[packet] != 0) {
+      last_ctrl = emit_wait_wqe(q, txtime[packet]);
+    }
+
+    const uint32_t first_idx = q.sq_pi % wqe_cnt;
+    const uint32_t second_idx = (first_idx + 1) % wqe_cnt;
+    alignas(16) std::array<uint8_t, WQE_BYTES> wqe{};
+    auto* ctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(wqe.data());
+    const bool signaled =
+        ((packet % SIGNAL_EVERY) == (SIGNAL_EVERY - 1)) || (packet == packets - 1);
+    ctrl->opmod_idx_opcode = htobe32(((q.sq_pi & 0xffff) << 8) | MLX5_OPCODE_SEND);
+    ctrl->qpn_ds = htobe32((q.sqn << 8) | DS_PER_SEND);
+    ctrl->fm_ce_se = tx_completion_mode(signaled);
+
+    auto* eth = reinterpret_cast<struct mlx5_wqe_eth_seg*>(wqe.data() + 16);
+    eth->cs_flags = MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
+    eth->inline_hdr_sz = htobe16(sizeof(UDPIPV4Pkt));
+    UDPIPV4Pkt header = metadata->header;
+    const uint32_t payload_length = burst->pkt_lens[0][packet];
+    header.ip.tot_len = htobe16(
+        static_cast<uint16_t>(sizeof(struct iphdr) + sizeof(struct udphdr) + payload_length));
+    header.ip.check = 0;
+    header.udp.len = htobe16(static_cast<uint16_t>(sizeof(struct udphdr) + payload_length));
+    header.udp.check = 0;
+    memcpy(wqe.data() + 16 + offsetof(struct mlx5_wqe_eth_seg, inline_hdr_start), &header,
+           sizeof(header));
+
+    auto* dseg = reinterpret_cast<struct mlx5_wqe_data_seg*>(wqe.data() + PAYLOAD_DSEG_OFFSET);
+    dseg->byte_count = htobe32(payload_length);
+    dseg->lkey = htobe32(q.regions[0].lkey);
+    dseg->addr = htobe64(reinterpret_cast<uint64_t>(burst->pkts[0][packet]));
+
+    uint8_t* first = sq_buf + static_cast<size_t>(first_idx) * stride;
+    uint8_t* second = sq_buf + static_cast<size_t>(second_idx) * stride;
+    memcpy(first, wqe.data(), MLX5_SEND_WQE_BB);
+    memcpy(second, wqe.data() + MLX5_SEND_WQE_BB, MLX5_SEND_WQE_BB);
+
+    ++q.slots_posted;
+    q.wqe_slot_cum[first_idx] = q.slots_posted;
+    q.sq_pi += WQEBBS_PER_SEND;
+    q.wqe_wqebb_cum[first_idx] = q.sq_pi;
+    last_ctrl = first;
+  }
+
+  doorbell_store_barrier();
+  q.dv_qp.dbrec[MLX5_SND_DBR] = htobe32(static_cast<uint32_t>(q.sq_pi) & 0xffff);
+  doorbell_store_barrier();
+  doorbell_mmio_flush();
+  *reinterpret_cast<volatile uint64_t*>(static_cast<uint8_t*>(q.dv_qp.bf.reg) + q.bf_offset) =
+      *reinterpret_cast<uint64_t*>(last_ctrl);
+  doorbell_mmio_flush();
+  q.bf_offset ^= q.dv_qp.bf.size;
+}
+
 // Builds the burst's send WQEs directly into the SQ ring and rings the BlueFlame
 // doorbell once for the whole burst. This runs on the pinned worker for indirect
 // queues and synchronously on the application thread for direct queues,
@@ -8385,6 +8704,10 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
   const int n = static_cast<int>(burst->hdr.hdr.num_pkts);
   const int segs = burst->hdr.hdr.num_segs;
   if (n <= 0) {
+    return;
+  }
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_ENDPOINT_INLINE_FLAG) != 0) {
+    post_endpoint_inline_burst(q, burst);
     return;
   }
   const bool scheduled = (burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) != 0;
@@ -8523,6 +8846,39 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
 // Submit a filled TX burst. Indirect queues hand it to the pinned worker so WQE
 // posting overlaps application fill; direct queues post one packet inline on
 // the owner thread and return only after ringing the doorbell.
+Status IbverbsEngine::send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst) {
+  if (burst == nullptr) return Status::NULL_PTR;
+
+  EndpointFastPath endpoint;
+  if (!snapshot_endpoint(endpoint_id, &endpoint)) return Status::INVALID_PARAMETER;
+
+  IbvTxQueue* q = find_tx_queue(endpoint.port_id, queue_id);
+  if (q == nullptr || burst->hdr.hdr.port_id != endpoint.port_id ||
+      burst->hdr.hdr.q_id != queue_id || burst->hdr.hdr.num_segs != 1 || q->num_segs != 1 ||
+      q->regions.size() != 1) {
+    return Status::INVALID_PARAMETER;
+  }
+
+  const size_t packets = burst->hdr.hdr.num_pkts;
+  for (size_t packet = 0; packet < packets; ++packet) {
+    const uint32_t payload_length = burst->pkt_lens[0][packet];
+    if (burst->pkts[0][packet] == nullptr || payload_length > q->regions[0].slot_size ||
+        payload_length > endpoint.mtu - sizeof(UDPIPV4Pkt) ||
+        payload_length > UINT16_MAX - sizeof(struct iphdr) - sizeof(struct udphdr)) {
+      return Status::INVALID_PARAMETER;
+    }
+  }
+
+  EndpointInlineTxMetadata* metadata = endpoint_inline_metadata(burst);
+  metadata->header = endpoint.header_template;
+  burst->hdr.hdr.burst_flags |= IBV_TX_ENDPOINT_INLINE_FLAG;
+  const Status status = send_tx_burst(burst);
+  if (status != Status::SUCCESS && status != Status::NO_SPACE_AVAILABLE) {
+    burst->hdr.hdr.burst_flags &= ~IBV_TX_ENDPOINT_INLINE_FLAG;
+  }
+  return status;
+}
+
 Status IbverbsEngine::send_tx_burst(BurstParams* burst) {
   if (burst == nullptr) {
     return Status::NULL_PTR;

@@ -634,6 +634,31 @@ Status send_tx_burst(BurstParams* burst) {
   return g_daqiri_engine->send_tx_burst(burst);
 }
 
+Status send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->send_tx_burst(endpoint_id, queue_id, burst);
+}
+
+Status add_endpoint(const RawUdpEndpointConfig& config, EndpointId* endpoint_id) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->add_endpoint(config, endpoint_id);
+}
+
+Status get_endpoint_id(const std::string& name, EndpointId* endpoint_id) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->get_endpoint_id(name, endpoint_id);
+}
+
+Status delete_endpoint(EndpointId endpoint_id) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->delete_endpoint(endpoint_id);
+}
+
+Status delete_endpoint(const std::string& name) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->delete_endpoint(name);
+}
+
 Status wait_for_tx_idle(uint32_t timeout_ms) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
   return g_daqiri_engine->wait_for_tx_idle(timeout_ms);

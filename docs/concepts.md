@@ -87,6 +87,25 @@ URI schemes:
   speaks RoCE. When both peers run DAQIRI, prefer an upper-layer
   library such as MPI, NCCL, or UCX rather than wiring RoCE directly.
 
+### Runtime Named Endpoints
+
+A **runtime named endpoint** is a process-local raw-ibverbs transmit
+destination. It combines a unique name with an Ethernet/IPv4/UDP destination,
+source addressing, and an MTU. Applications create endpoints after
+`daqiri_init()`, resolve names to opaque `EndpointId` handles outside the hot
+path, and select the TX queue when submitting each burst.
+
+Named endpoints are distinct from the `udp://`, `tcp://`, and `roce://` URI
+endpoints used by `stream_type: "socket"`. They apply only to raw Ethernet with
+the `ibverbs` engine. Their packet buffers contain only the UDP payload; DAQIRI
+inlines the cached Ethernet/IPv4/UDP header into the mlx5 send WQE. The current
+implementation requires a single-segment TX queue and burst.
+
+Endpoint IDs remain valid until deletion or DAQIRI shutdown. Stale IDs are
+rejected, including IDs retained across shutdown and reinitialization. See the
+[C++ API usage](api-reference/cpp.md#runtime-named-endpoints-raw-ibverbs) and
+[named-endpoints example](benchmarks/raw_benchmarking.md#runtime-named-endpoints-example).
+
 ### PCIe (future)
 
 *YAML:* `stream_type: "pcie"`.

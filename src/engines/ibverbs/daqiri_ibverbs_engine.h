@@ -523,6 +523,11 @@ class IbverbsEngine : public Engine {
   Status get_rx_burst(BurstParams** burst, int port, int q) override;
   Status get_rx_burst(BurstParams** burst, int port) override;
   Status send_tx_burst(BurstParams* burst) override;
+  Status send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst) override;
+  Status add_endpoint(const RawUdpEndpointConfig& config, EndpointId* endpoint_id) override;
+  Status get_endpoint_id(const std::string& name, EndpointId* endpoint_id) override;
+  Status delete_endpoint(EndpointId endpoint_id) override;
+  Status delete_endpoint(const std::string& name) override;
   Status wait_for_tx_idle(uint32_t timeout_ms) override;
   BurstParams* create_tx_burst_params() override;
   uint64_t get_burst_tot_byte(BurstParams* burst) override;
@@ -561,6 +566,35 @@ class IbverbsEngine : public Engine {
   bool use_hugepage_arenas() const override {
     return true;
   }
+
+  static constexpr uint32_t kMaxEndpointSlots = 4096;
+
+  struct EndpointFastPath {
+    UDPIPV4Pkt header_template{};
+    uint32_t mtu = 0;
+    uint16_t port_id = 0;
+  };
+
+  struct alignas(64) EndpointSlot {
+    std::atomic<EndpointId> published_id{INVALID_ENDPOINT_ID};
+    std::atomic<uint32_t> readers{0};
+    uint32_t generation = 0;
+    uint32_t mtu = 0;
+    uint16_t port_id = 0;
+    UDPIPV4Pkt header_template{};
+  };
+  static_assert(sizeof(EndpointSlot) == 64);
+
+  mutable std::mutex endpoint_mutex_;
+  EndpointSlot* endpoint_slots_ = nullptr;
+  std::vector<uint32_t> free_endpoint_slots_;
+  std::vector<std::string> endpoint_slot_names_;
+  std::unordered_map<std::string, EndpointId> endpoint_names_;
+
+  bool initialize_endpoint_slots();
+  void destroy_endpoint_slots();
+  bool snapshot_endpoint(EndpointId endpoint_id, EndpointFastPath* endpoint) const;
+  Status delete_endpoint_locked(EndpointId endpoint_id);
 
   // ---- bring-up ----
   struct ibv_context* open_device_for_interface(const InterfaceConfig& intf);
@@ -653,6 +687,7 @@ class IbverbsEngine : public Engine {
   Status create_tx_raw_qp(IbvTxQueue& q);  // IBV_QPT_RAW_PACKET, RESET->RTS
   Status configure_tx_pacing(IbvTxQueue& q, uint64_t pacing_mbps);
   void post_tx_burst(IbvTxQueue& q, BurstParams* burst);  // build send WQEs + ring doorbell
+  void post_endpoint_inline_burst(IbvTxQueue& q, BurstParams* burst);
   void post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst, uint16_t first_packet = 0);
   // Build a WAIT-on-time WQE (ctrl + wseg = 1 WQEBB, no slot) at q.sq_pi that
   // holds the following send(s) until the NIC real-time clock reaches when_ns,

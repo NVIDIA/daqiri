@@ -137,7 +137,10 @@ runtime binding.
   Raw ibverbs uses a separate hardware limit. A scheduled packet can consume two send work
   requests, so usable TX slots are capped at `max_qp_wr / 2`. DAQIRI warns when configured
   storage exceeds that cap and fails initialization with the exact maximum when `batch_size`
-  exceeds it.
+  exceeds it. Providers can also reject a QP request at the exact advertised maximum, so
+  portable configs should leave headroom. The named-endpoint example uses 8192 TX slots and
+  a 256-packet batch, requiring at most 16384 send work requests rather than the 32768
+  reported by the demonstrated ConnectX-7 device.
   - type: `integer`
 - **`buf_size`**: Size of each buffer in bytes. Should match the expected packet size, or
   the segment size when using header-data split.

@@ -991,7 +991,35 @@ void set_num_packets(BurstParams *burst, int64_t num);
  *    INVALID_PARAMETER: bad port/queue; burst NOT consumed (see issue #164)
  *    NOT_READY: direct queue called concurrently or from a non-owner thread; burst not consumed
  */
-Status send_tx_burst(BurstParams *burst);
+Status send_tx_burst(BurstParams* burst);
+
+/**
+ * @brief Send a TX burst through a named endpoint on an explicitly selected queue.
+ *
+ * The burst must have been allocated from @p queue_id on the endpoint's
+ * interface. Named endpoints currently require a one-segment TX queue and burst;
+ * segment 0 is treated as the UDP payload. HDS and other multi-segment bursts
+ * are rejected with INVALID_PARAMETER; header-data gather is not supported.
+ * DAQIRI
+ * copies the cached endpoint template into an inline mlx5 SEND WQE, patches its
+ * IPv4 and UDP lengths, and gathers the payload through one registered data
+ * segment. Packet buffers contain payload only; checksum fields remain zero
+ * for NIC offload. Each payload must fit both the endpoint MTU and the selected
+ * TX queue's packet-buffer slot. Validation failures do not consume the burst.
+ */
+Status send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst);
+
+/** Add a named raw IPv4/UDP endpoint to the active ibverbs engine. */
+Status add_endpoint(const RawUdpEndpointConfig& config, EndpointId* endpoint_id);
+
+/** Resolve a runtime endpoint name to its process-local ID. */
+Status get_endpoint_id(const std::string& name, EndpointId* endpoint_id);
+
+/** Delete a runtime endpoint by ID. */
+Status delete_endpoint(EndpointId endpoint_id);
+
+/** Delete a runtime endpoint by name. */
+Status delete_endpoint(const std::string& name);
 
 /**
  * @brief Wait until all previously submitted TX packets have completed.

@@ -1574,6 +1574,35 @@ Status Engine::get_tx_packet_burst_checked(BurstParams* burst) {
   return get_tx_packet_burst(burst);
 }
 
+Status Engine::send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst) {
+  (void)endpoint_id;
+  (void)queue_id;
+  (void)burst;
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::add_endpoint(const RawUdpEndpointConfig& config, EndpointId* endpoint_id) {
+  (void)config;
+  (void)endpoint_id;
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::get_endpoint_id(const std::string& name, EndpointId* endpoint_id) {
+  (void)name;
+  (void)endpoint_id;
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::delete_endpoint(EndpointId endpoint_id) {
+  (void)endpoint_id;
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::delete_endpoint(const std::string& name) {
+  (void)name;
+  return Status::NOT_SUPPORTED;
+}
+
 Status Engine::wait_for_tx_idle(uint32_t timeout_ms) {
   (void)timeout_ms;
   return Status::NOT_SUPPORTED;
