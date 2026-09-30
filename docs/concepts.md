@@ -69,6 +69,40 @@ packets into one pre-posted buffer to avoid per-packet allocation. Set
 Raw Ethernet requires an NVIDIA ConnectX-6 Dx or later NIC.
 Packet pacing and timed transmission require ConnectX-7 or later.
 
+#### Destination MAC resolution
+
+A raw-Ethernet application constructs the complete layer-2 frame in user
+space. Unlike a UDP or TCP socket send, that packet does not pass through the
+Linux IP stack, so Linux does not automatically select a route, identify the
+next hop, run ARP, or fill the destination MAC address. Merely configuring an
+IP destination in the packet header is therefore insufficient: userspace
+packet processing cannot rely on the kernel routing and neighbor tables being
+consulted when the packet is transmitted.
+
+The raw ibverbs engine provides `resolve_ipv4_mac()` as an explicit bridge to
+Linux routing and ARP. After `daqiri_init()`, the application supplies a DAQIRI
+port and IPv4 destination. DAQIRI asks Linux for the route constrained to that
+port's kernel netdev and primary IPv4 source, resolves the gateway when the
+route is off-link or the destination when it is on-link, and returns the
+current six-byte next-hop MAC. An existing usable Linux neighbor entry returns
+immediately; otherwise Linux performs ARP while DAQIRI waits up to the caller's
+deadline. This API is available only for the raw ibverbs engine. DPDK and the
+socket/RDMA engines return `NOT_SUPPORTED`.
+
+Resolution is deliberately a one-shot operation. DAQIRI does not maintain a
+second neighbor cache, start a refresh thread, or change a MAC already placed
+in application packet templates. For efficiency, resolve once and reuse the
+result while the route and peer are stable. The application is responsible for
+calling `resolve_ipv4_mac()` again when its refresh policy requires it—for
+example after a link, peer NIC, gateway, route, or network-namespace change, or
+after a transmission/reachability failure. Re-querying still uses Linux's
+neighbor table and is inexpensive while its entry remains usable.
+
+Automatic ARP also requires the NIC's control traffic to remain visible to the
+kernel. Configure `rx.flow_isolation: true` on the raw ibverbs interface so
+DAQIRI installs only explicit application flow rules and unmatched ARP traffic
+continues on the kernel path.
+
 ### Socket
 
 *YAML:* `stream_type: "socket"`. The specific transport is chosen by endpoint

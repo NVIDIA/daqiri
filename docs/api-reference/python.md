@@ -690,6 +690,16 @@ The workflow sections above show the common call order and ownership rules.
 
 ### Ports, Traffic, Socket, and RDMA
 
+Raw userspace TX bypasses the automatic route and ARP processing performed for
+Linux sockets. With the raw ibverbs engine, call
+`resolve_ipv4_mac(port, dst, timeout_ms)` after initialization, then reuse the
+returned MAC in packet templates. This is a one-shot lookup: DAQIRI does not
+cache or refresh the returned value, so the application must re-query after a
+peer, gateway, route, link, or network-namespace change, or according to its
+own failure/refresh policy. Configure `rx.flow_isolation: true` so unmatched
+ARP traffic remains on the kernel path. See
+[Destination MAC resolution](../concepts.md#destination-mac-resolution).
+
 | Function | Purpose |
 | --- | --- |
 | `get_mac_addr(port)` | Return `(Status, "aa:bb:cc:dd:ee:ff")`. |
