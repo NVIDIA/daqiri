@@ -1422,9 +1422,21 @@ void SocketEngine::tcp_rx_loop(std::shared_ptr<ConnectionState> conn) {
   std::vector<uint8_t> tmp(max_size);
 
   while (running_.load() && conn->running.load()) {
-    // Reserve queue capacity before recv(). Once the application falls behind,
-    // this thread stops draining the kernel socket so TCP flow control can
-    // propagate backpressure to the sender without growing DAQIRI's heap.
+    // Wait for data without consuming it or reserving shared queue capacity.
+    // Otherwise an idle peer could reserve the last slot while blocked in
+    // recv(), preventing active peers on the same endpoint from making progress.
+    uint8_t marker = 0;
+    const ssize_t ready = ::recv(conn->fd, &marker, sizeof(marker), MSG_PEEK);
+    if (ready == 0) { break; }
+    if (ready < 0) {
+      if (errno == EINTR) { continue; }
+      if (!running_.load()) { break; }
+      DAQIRI_LOG_WARN("TCP recv peek failed on conn_id={}: {}", conn->conn_id, strerror(errno));
+      break;
+    }
+
+    // Once the application falls behind, stop draining the kernel socket so
+    // TCP flow control can propagate backpressure without growing DAQIRI's heap.
     if (!reserve_rx_burst(conn->rx_queue, conn->running)) { break; }
 
     const ssize_t rx = ::recv(conn->fd, tmp.data(), tmp.size(), 0);
