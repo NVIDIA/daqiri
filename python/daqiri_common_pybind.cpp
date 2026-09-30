@@ -1344,7 +1344,7 @@ PYBIND11_MODULE(_daqiri, m) {
                       static_cast<unsigned char>(mac[4]), static_cast<unsigned char>(mac[5]));
         return py::make_tuple(status, std::string(formatted));
       },
-      "port"_a, "dst_host"_a, "timeout_ms"_a);
+      "port"_a, "dst"_a, "timeout_ms"_a);
   m.def(
       "resolve_ipv4_mac",
       [](int port, const std::string& dst_addr, uint32_t timeout_ms) {
@@ -1364,7 +1364,7 @@ PYBIND11_MODULE(_daqiri, m) {
                       static_cast<unsigned char>(mac[4]), static_cast<unsigned char>(mac[5]));
         return py::make_tuple(status, std::string(formatted));
       },
-      "port"_a, "dst_addr"_a, "timeout_ms"_a);
+      "port"_a, "dst"_a, "timeout_ms"_a);
   m.def(
       "format_eth_addr",
       [](const std::string &addr) {
