@@ -153,6 +153,13 @@ struct NeighborResult {
   std::array<char, 6> mac{};
 };
 
+bool is_terminal(const NeighborResult& result) {
+  return result.state == NeighborState::USABLE || result.state == NeighborState::FAILED;
+}
+
+using Deadline = std::chrono::steady_clock::time_point;
+using NetlinkConsumer = std::function<bool(const nlmsghdr*)>;
+
 void parse_attrs(rtattr** attrs, size_t count, rtattr* attr, int len) {
   std::fill(attrs, attrs + count, nullptr);
   while (RTA_OK(attr, len)) {
@@ -163,10 +170,30 @@ void parse_attrs(rtattr** attrs, size_t count, rtattr* attr, int len) {
   }
 }
 
-int receive_for_sequence(NetlinkSocket& sock, uint32_t sequence,
-                         const std::function<bool(const nlmsghdr*)>& consume) {
+int receive_for_sequence(NetlinkSocket& sock, uint32_t sequence, const Deadline& deadline,
+                         const NetlinkConsumer& consume,
+                         const NetlinkConsumer& consume_notification = {}) {
   std::array<uint8_t, 8192> buffer{};
   while (true) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) {
+      return -ETIMEDOUT;
+    }
+    const auto time_remaining =
+        std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+    pollfd descriptor{sock.fd(), POLLIN, 0};
+    const int wait_ms = static_cast<int>(std::min<int64_t>(time_remaining.count() + 1, INT_MAX));
+    const int ready = poll(&descriptor, 1, wait_ms);
+    if (ready < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return -errno;
+    }
+    if (ready == 0) {
+      return -ETIMEDOUT;
+    }
+
     const ssize_t size = recv(sock.fd(), buffer.data(), buffer.size(), 0);
     if (size < 0) {
       if (errno == EINTR) {
@@ -178,6 +205,9 @@ int receive_for_sequence(NetlinkSocket& sock, uint32_t sequence,
     for (auto* hdr = reinterpret_cast<nlmsghdr*>(buffer.data()); NLMSG_OK(hdr, remaining);
          hdr = NLMSG_NEXT(hdr, remaining)) {
       if (hdr->nlmsg_seq != sequence) {
+        if (consume_notification) {
+          consume_notification(hdr);
+        }
         continue;
       }
       if (hdr->nlmsg_type == NLMSG_ERROR) {
@@ -194,8 +224,8 @@ int receive_for_sequence(NetlinkSocket& sock, uint32_t sequence,
   }
 }
 
-int lookup_route(NetlinkSocket& sock, int requested_ifindex, uint32_t dst_network,
-                 RouteResult* result) {
+int lookup_route(NetlinkSocket& sock, int requested_ifindex, uint32_t src_network,
+                 uint32_t dst_network, const Deadline& deadline, RouteResult* result) {
   NetlinkRequest request;
   nlmsghdr* hdr = request.header();
   hdr->nlmsg_len = NLMSG_LENGTH(sizeof(rtmsg));
@@ -206,9 +236,11 @@ int lookup_route(NetlinkSocket& sock, int requested_ifindex, uint32_t dst_networ
   auto* route = static_cast<rtmsg*>(NLMSG_DATA(hdr));
   route->rtm_family = AF_INET;
   route->rtm_dst_len = 32;
+  route->rtm_src_len = 32;
   route->rtm_table = RT_TABLE_UNSPEC;
 
   if (!request.add_attr(RTA_DST, &dst_network, sizeof(dst_network)) ||
+      !request.add_attr(RTA_SRC, &src_network, sizeof(src_network)) ||
       !request.add_attr(RTA_OIF, &requested_ifindex, sizeof(requested_ifindex))) {
     return -EMSGSIZE;
   }
@@ -217,29 +249,30 @@ int lookup_route(NetlinkSocket& sock, int requested_ifindex, uint32_t dst_networ
   }
 
   bool found = false;
-  const int status = receive_for_sequence(sock, hdr->nlmsg_seq, [&](const nlmsghdr* response) {
-    if (response->nlmsg_type != RTM_NEWROUTE) {
-      return false;
-    }
-    const auto* message = static_cast<const rtmsg*>(NLMSG_DATA(response));
-    if (message->rtm_family != AF_INET || message->rtm_type != RTN_UNICAST) {
-      return false;
-    }
-    int attr_len = RTM_PAYLOAD(response);
-    std::array<rtattr*, RTA_MAX + 1> attrs{};
-    parse_attrs(attrs.data(), attrs.size(), RTM_RTA(message), attr_len);
-    if (attrs[RTA_OIF] == nullptr) {
-      return false;
-    }
-    std::memcpy(&result->ifindex, RTA_DATA(attrs[RTA_OIF]), sizeof(result->ifindex));
-    result->next_hop_network = dst_network;
-    if (attrs[RTA_GATEWAY] != nullptr) {
-      std::memcpy(&result->next_hop_network, RTA_DATA(attrs[RTA_GATEWAY]),
-                  sizeof(result->next_hop_network));
-    }
-    found = true;
-    return true;
-  });
+  const int status =
+      receive_for_sequence(sock, hdr->nlmsg_seq, deadline, [&](const nlmsghdr* response) {
+        if (response->nlmsg_type != RTM_NEWROUTE) {
+          return false;
+        }
+        const auto* message = static_cast<const rtmsg*>(NLMSG_DATA(response));
+        if (message->rtm_family != AF_INET || message->rtm_type != RTN_UNICAST) {
+          return false;
+        }
+        int attr_len = RTM_PAYLOAD(response);
+        std::array<rtattr*, RTA_MAX + 1> attrs{};
+        parse_attrs(attrs.data(), attrs.size(), RTM_RTA(message), attr_len);
+        if (attrs[RTA_OIF] == nullptr) {
+          return false;
+        }
+        std::memcpy(&result->ifindex, RTA_DATA(attrs[RTA_OIF]), sizeof(result->ifindex));
+        result->next_hop_network = dst_network;
+        if (attrs[RTA_GATEWAY] != nullptr) {
+          std::memcpy(&result->next_hop_network, RTA_DATA(attrs[RTA_GATEWAY]),
+                      sizeof(result->next_hop_network));
+        }
+        found = true;
+        return true;
+      });
   if (status != 0) {
     return status;
   }
@@ -283,7 +316,8 @@ bool parse_neighbor(const nlmsghdr* hdr, int ifindex, uint32_t address_network,
 }
 
 int lookup_neighbor(NetlinkSocket& sock, int ifindex, uint32_t address_network,
-                    NeighborResult* result) {
+                    const Deadline& deadline, NeighborResult* result,
+                    bool consume_notifications = false) {
   NetlinkRequest request;
   nlmsghdr* hdr = request.header();
   hdr->nlmsg_len = NLMSG_LENGTH(sizeof(ndmsg));
@@ -302,24 +336,36 @@ int lookup_neighbor(NetlinkSocket& sock, int ifindex, uint32_t address_network,
   }
 
   bool found = false;
-  const int status = receive_for_sequence(sock, hdr->nlmsg_seq, [&](const nlmsghdr* response) {
-    found = parse_neighbor(response, ifindex, address_network, result);
-    return found;
-  });
+  NeighborResult queried;
+  const auto notification = [&](const nlmsghdr* response) {
+    return parse_neighbor(response, ifindex, address_network, result);
+  };
+  const int status = receive_for_sequence(
+      sock, hdr->nlmsg_seq, deadline,
+      [&](const nlmsghdr* response) {
+        found = parse_neighbor(response, ifindex, address_network, &queried);
+        return found;
+      },
+      consume_notifications ? NetlinkConsumer(notification) : NetlinkConsumer{});
   if (status == -ENOENT) {
-    result->state = NeighborState::MISSING;
+    if (!is_terminal(*result)) {
+      result->state = NeighborState::MISSING;
+    }
     return 0;
   }
   if (status != 0) {
     return status;
   }
-  if (!found) {
+  if (found && !is_terminal(*result)) {
+    *result = queried;
+  } else if (!found && !is_terminal(*result)) {
     result->state = NeighborState::MISSING;
   }
   return 0;
 }
 
-int trigger_neighbor(NetlinkSocket& sock, int ifindex, uint32_t address_network) {
+int trigger_neighbor(NetlinkSocket& sock, int ifindex, uint32_t address_network,
+                     const Deadline& deadline, NeighborResult* result) {
   NetlinkRequest request;
   nlmsghdr* hdr = request.header();
   hdr->nlmsg_len = NLMSG_LENGTH(sizeof(ndmsg));
@@ -338,7 +384,11 @@ int trigger_neighbor(NetlinkSocket& sock, int ifindex, uint32_t address_network)
   if (!sock.send(hdr)) {
     return -errno;
   }
-  return receive_for_sequence(sock, hdr->nlmsg_seq, [](const nlmsghdr*) { return false; });
+  return receive_for_sequence(
+      sock, hdr->nlmsg_seq, deadline, [](const nlmsghdr*) { return false; },
+      [&](const nlmsghdr* response) {
+        return parse_neighbor(response, ifindex, address_network, result);
+      });
 }
 
 const char* ipv4_text(uint32_t network, char* buffer, size_t size) {
@@ -357,6 +407,8 @@ Status resolve_ipv4_neighbor(const std::string& netdev, uint32_t dst_host, char*
       IN_MULTICAST(dst_host) || IN_BADCLASS(dst_host) || timeout_ms == 0) {
     return Status::INVALID_PARAMETER;
   }
+  const Deadline deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
 
   const unsigned int ifindex = if_nametoindex(netdev.c_str());
   if (ifindex == 0) {
@@ -378,12 +430,27 @@ Status resolve_ipv4_neighbor(const std::string& netdev, uint32_t dst_host, char*
                      strerror(error));
     return Status::CONNECT_FAILURE;
   }
-  close(control_fd);
   if ((request.ifr_flags & IFF_UP) == 0) {
+    close(control_fd);
     DAQIRI_LOG_ERROR("ARP: kernel netdev '{}' is down; bring it up before resolving neighbors",
                      netdev);
     return Status::CONNECT_FAILURE;
   }
+
+  ifreq address_request{};
+  std::snprintf(address_request.ifr_name, sizeof(address_request.ifr_name), "%s", netdev.c_str());
+  if (ioctl(control_fd, SIOCGIFADDR, &address_request) != 0) {
+    const int error = errno;
+    close(control_fd);
+    DAQIRI_LOG_ERROR(
+        "ARP: kernel netdev '{}' has no usable primary IPv4 address: {}. Configure the source "
+        "address before resolving neighbors",
+        netdev, strerror(error));
+    return Status::CONNECT_FAILURE;
+  }
+  const auto* source = reinterpret_cast<const sockaddr_in*>(&address_request.ifr_addr);
+  const uint32_t src_network = source->sin_addr.s_addr;
+  close(control_fd);
 
   NetlinkSocket sock;
   if (!sock.valid()) {
@@ -393,10 +460,20 @@ Status resolve_ipv4_neighbor(const std::string& netdev, uint32_t dst_host, char*
 
   const uint32_t dst_network = htonl(dst_host);
   RouteResult route;
-  int error = lookup_route(sock, static_cast<int>(ifindex), dst_network, &route);
+  // Supplying the netdev's primary IPv4 source makes Linux apply source-based
+  // policy routing instead of selecting a gateway from destination + oif alone.
+  int error =
+      lookup_route(sock, static_cast<int>(ifindex), src_network, dst_network, deadline, &route);
   if (error != 0) {
-    DAQIRI_LOG_ERROR("ARP: no IPv4 route to destination on netdev '{}': {}", netdev,
-                     strerror(-error));
+    if (error == -ETIMEDOUT) {
+      DAQIRI_LOG_ERROR("ARP: IPv4 route lookup on '{}' exceeded the {} ms deadline", netdev,
+                       timeout_ms);
+    } else {
+      DAQIRI_LOG_ERROR(
+          "ARP: no IPv4 route to destination from the primary address on netdev "
+          "'{}': {}",
+          netdev, strerror(-error));
+    }
     return Status::CONNECT_FAILURE;
   }
   if (route.ifindex != static_cast<int>(ifindex)) {
@@ -406,8 +483,13 @@ Status resolve_ipv4_neighbor(const std::string& netdev, uint32_t dst_host, char*
   }
 
   NeighborResult neighbor;
-  error = lookup_neighbor(sock, route.ifindex, route.next_hop_network, &neighbor);
+  error = lookup_neighbor(sock, route.ifindex, route.next_hop_network, deadline, &neighbor);
   if (error != 0) {
+    if (error == -ETIMEDOUT) {
+      DAQIRI_LOG_ERROR("ARP: neighbor lookup on '{}' exceeded the {} ms deadline", netdev,
+                       timeout_ms);
+      return Status::NOT_READY;
+    }
     DAQIRI_LOG_ERROR("ARP: failed to query the neighbor table on '{}': {}", netdev,
                      strerror(-error));
     return Status::CONNECT_FAILURE;
@@ -417,8 +499,17 @@ Status resolve_ipv4_neighbor(const std::string& netdev, uint32_t dst_host, char*
     return Status::SUCCESS;
   }
 
-  error = trigger_neighbor(sock, route.ifindex, route.next_hop_network);
+  error = trigger_neighbor(sock, route.ifindex, route.next_hop_network, deadline, &neighbor);
+  if (neighbor.state == NeighborState::USABLE) {
+    std::memcpy(mac, neighbor.mac.data(), neighbor.mac.size());
+    return Status::SUCCESS;
+  }
   if (error != 0) {
+    if (error == -ETIMEDOUT) {
+      DAQIRI_LOG_ERROR("ARP: neighbor trigger on '{}' exceeded the {} ms deadline", netdev,
+                       timeout_ms);
+      return Status::NOT_READY;
+    }
     DAQIRI_LOG_ERROR(
         "ARP: failed to trigger neighbor resolution on '{}': {}. Check CAP_NET_ADMIN/root access",
         netdev, strerror(-error));
@@ -427,11 +518,18 @@ Status resolve_ipv4_neighbor(const std::string& netdev, uint32_t dst_host, char*
 
   // Query once after the trigger to close the ACK/notification race, then wait
   // on RTMGRP_NEIGH for state changes until the caller's deadline.
-  error = lookup_neighbor(sock, route.ifindex, route.next_hop_network, &neighbor);
-  if (error != 0) {
-    return Status::CONNECT_FAILURE;
+  error = lookup_neighbor(sock, route.ifindex, route.next_hop_network, deadline, &neighbor, true);
+  if (neighbor.state == NeighborState::USABLE) {
+    std::memcpy(mac, neighbor.mac.data(), neighbor.mac.size());
+    return Status::SUCCESS;
   }
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  if (error != 0) {
+    if (error != -ETIMEDOUT) {
+      DAQIRI_LOG_ERROR("ARP: failed to recheck the neighbor table on '{}': {}", netdev,
+                       strerror(-error));
+      return Status::CONNECT_FAILURE;
+    }
+  }
   std::array<uint8_t, 8192> buffer{};
   while (neighbor.state != NeighborState::USABLE && neighbor.state != NeighborState::FAILED) {
     const auto now = std::chrono::steady_clock::now();

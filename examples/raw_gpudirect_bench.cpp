@@ -37,10 +37,10 @@
 
 namespace {
 
-void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
-               daqiri::bench::TokenBucketPacer &pacer,
-               std::atomic<bool> &stop) {
+void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg, daqiri::bench::TokenBucketPacer& pacer,
+               std::atomic<bool>& stop, std::atomic<bool>& failed) {
   if (!daqiri::bench::set_current_thread_affinity(cfg.cpu_core, "bench_tx")) {
+    failed.store(true);
     stop.store(true);
     return;
   }
@@ -48,6 +48,7 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
   const int port_id = daqiri::get_port_id(cfg.interface_name);
   if (port_id < 0) {
     std::cerr << "Invalid TX interface_name: " << cfg.interface_name << "\n";
+    failed.store(true);
     stop.store(true);
     return;
   }
@@ -56,6 +57,7 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig &cfg,
   char eth_src[6] = {0};
   daqiri::format_eth_addr(eth_src, cfg.eth_src_addr);
   if (!daqiri::bench::resolve_tx_eth_dst(port_id, cfg.ip_dst_addr, cfg.eth_dst_addr, eth_dst)) {
+    failed.store(true);
     stop.store(true);
     return;
   }
@@ -203,6 +205,7 @@ int main(int argc, char **argv) {
   }
 
   std::atomic<bool> stop{false};
+  std::atomic<bool> failed{false};
   std::vector<std::thread> tx_threads;
   std::vector<std::thread> rx_threads;
   daqiri::bench::TokenBucketPacer tx_pacer(target_gbps);
@@ -232,7 +235,7 @@ int main(int argc, char **argv) {
   }
   tx_threads.reserve(tx_configs.size());
   for (const auto &cfg : tx_configs) {
-    tx_threads.emplace_back(tx_worker, cfg, std::ref(tx_pacer), std::ref(stop));
+    tx_threads.emplace_back(tx_worker, cfg, std::ref(tx_pacer), std::ref(stop), std::ref(failed));
   }
 
   daqiri::bench::wait_for_stop(run_seconds, stop);
@@ -253,5 +256,5 @@ int main(int argc, char **argv) {
   if (prometheus_metrics) {
     daqiri::bench::grafana::shutdown_prometheus_metrics();
   }
-  return 0;
+  return failed.load() ? 1 : 0;
 }

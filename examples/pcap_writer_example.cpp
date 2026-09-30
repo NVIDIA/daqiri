@@ -420,9 +420,10 @@ PcapTxConfig parse_pcap_tx_config(const YAML::Node &root) {
   return cfg;
 }
 
-void tx_worker(PcapTxConfig cfg, std::atomic<bool> *stop) {
+void tx_worker(PcapTxConfig cfg, std::atomic<bool>* stop, std::atomic<bool>* failed) {
   if (!daqiri::bench::set_current_thread_affinity(cfg.raw.cpu_core,
                                                   "bench_tx")) {
+    failed->store(true, std::memory_order_relaxed);
     stop->store(true, std::memory_order_relaxed);
     return;
   }
@@ -431,6 +432,7 @@ void tx_worker(PcapTxConfig cfg, std::atomic<bool> *stop) {
   if (port_id < 0) {
     std::cerr << "Invalid TX interface_name: " << cfg.raw.interface_name
               << "\n";
+    failed->store(true, std::memory_order_relaxed);
     stop->store(true, std::memory_order_relaxed);
     return;
   }
@@ -438,6 +440,7 @@ void tx_worker(PcapTxConfig cfg, std::atomic<bool> *stop) {
   char eth_dst[6] = {};
   if (!daqiri::bench::resolve_tx_eth_dst(port_id, cfg.raw.ip_dst_addr, cfg.raw.eth_dst_addr,
                                          eth_dst)) {
+    failed->store(true, std::memory_order_relaxed);
     stop->store(true, std::memory_order_relaxed);
     return;
   }
@@ -464,7 +467,7 @@ void tx_worker(PcapTxConfig cfg, std::atomic<bool> *stop) {
     }
 
     const int num_packets = daqiri::get_num_packets(msg);
-    bool failed = false;
+    bool burst_failed = false;
 
     for (int i = 0; i < num_packets; ++i) {
       auto *dst = daqiri::get_segment_packet_ptr(msg, 0, i);
@@ -475,7 +478,8 @@ void tx_worker(PcapTxConfig cfg, std::atomic<bool> *stop) {
         if (err != cudaSuccess) {
           std::cerr << "TX cudaMemcpy failed: " << cudaGetErrorString(err)
                     << "\n";
-          failed = true;
+          failed->store(true, std::memory_order_relaxed);
+          burst_failed = true;
           break;
         }
       }
@@ -484,12 +488,13 @@ void tx_worker(PcapTxConfig cfg, std::atomic<bool> *stop) {
               msg, i,
               {static_cast<int>(cfg.raw.header_size + cfg.raw.payload_size)}) !=
           daqiri::Status::SUCCESS) {
-        failed = true;
+        failed->store(true, std::memory_order_relaxed);
+        burst_failed = true;
         break;
       }
     }
 
-    if (failed) {
+    if (burst_failed) {
       daqiri::free_all_packets_and_burst_tx(msg);
       stop->store(true, std::memory_order_relaxed);
       break;
@@ -497,6 +502,7 @@ void tx_worker(PcapTxConfig cfg, std::atomic<bool> *stop) {
 
     if (daqiri::send_tx_burst(msg) != daqiri::Status::SUCCESS) {
       std::cerr << "send_tx_burst failed\n";
+      failed->store(true, std::memory_order_relaxed);
       stop->store(true, std::memory_order_relaxed);
       break;
     }
@@ -604,9 +610,10 @@ int main(int argc, char **argv) {
     writer.open_file();
 
     std::atomic<bool> stop{false};
+    std::atomic<bool> failed{false};
     std::thread tx_thread;
     if (tx_cfg) {
-      tx_thread = std::thread(tx_worker, *tx_cfg, &stop);
+      tx_thread = std::thread(tx_worker, *tx_cfg, &stop, &failed);
     }
 
     std::cout << "Capturing to " << args.output_path
@@ -623,7 +630,7 @@ int main(int argc, char **argv) {
     daqiri::print_stats();
     daqiri::shutdown();
     daqiri_initialized = false;
-    return 0;
+    return failed.load(std::memory_order_relaxed) ? 1 : 0;
   } catch (const std::exception &e) {
     std::cerr << "pcap writer failed: " << e.what() << "\n";
     if (daqiri_initialized) {

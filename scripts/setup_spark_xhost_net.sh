@@ -122,6 +122,8 @@ fi
 ip route replace "${peer_ip}/32" dev "${iface}" src "${local_ip}"
 if [[ -n "${peer_mac}" ]]; then
   ip neigh replace "${peer_ip}" lladdr "${peer_mac}" dev "${iface}" nud permanent
+else
+  ip neigh del "${peer_ip}" dev "${iface}" 2>/dev/null || true
 fi
 
 # Cable internal address (169.254.x on p0): route for SSH between hosts.
@@ -133,6 +135,9 @@ if [[ "$role" == "tx" ]]; then
 else
   peer_int_ip="${peer_int_ip:-$tx_int_ip}"
   local_int_ip="$rx_int_ip"
+fi
+if [[ -z "${peer_mac}" && -n "${peer_int_ip}" ]]; then
+  ip neigh del "${peer_int_ip}" dev "${iface}" 2>/dev/null || true
 fi
 if [[ -n "$peer_int_ip" && "$peer_int_ip" != "$peer_ip" ]] && \
    ip -4 -o addr show dev "${iface}" | grep -qw "${local_int_ip}"; then
