@@ -9,6 +9,12 @@ hide:
 
 DAQIRI's baseline requirements depend on which [stream type](concepts.md#stream-types) you plan to use. The Linux Sockets path (`stream_type: "socket"` with `udp://` or `tcp://` endpoints) runs on any modern Linux box. The Raw Ethernet kernel-bypass path and GPUDirect impose additional hardware requirements, listed below.
 
+The built-in TCP path bounds each internal RX backlog by the smallest
+memory-region `num_bufs` referenced by that queue. A sustained slow consumer
+therefore applies TCP backpressure rather than allowing DAQIRI's process queue
+to grow without limit. See
+[TCP receive backpressure and queue sizing](benchmarks/socket_benchmarking.md#tcp-receive-backpressure-and-queue-sizing).
+
 | Component | Requirement |
 |-----------|-------------|
 | **OS** | Linux (kernel 5.15+), Ubuntu 22.04 recommended |

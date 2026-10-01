@@ -35,10 +35,11 @@
 namespace daqiri {
 
 class RdmaEngine;
+class SocketEngineQueueTestPeer;
 
 class SocketEngine : public Engine {
  public:
-  SocketEngine() = default;
+  SocketEngine();
   ~SocketEngine() override;
 
   bool set_config_and_initialize(const NetworkConfig& cfg) override;
@@ -112,10 +113,15 @@ class SocketEngine : public Engine {
   RDMAOpCode rdma_get_opcode(BurstParams* burst) override;
 
  private:
+  friend class SocketEngineQueueTestPeer;
+
   struct RxQueueState {
     uint16_t port = 0;
     uint16_t queue = 0;
+    size_t max_bursts = 1;
+    size_t reserved_bursts = 0;
     std::mutex mutex;
+    std::condition_variable capacity_cv;
     std::queue<BurstParams*> bursts;
   };
 
@@ -193,6 +199,7 @@ class SocketEngine : public Engine {
   const EndpointState* endpoint_for_port(uint16_t port) const;
 
   int select_max_packet_size(const InterfaceConfig& if_cfg) const;
+  size_t select_rx_queue_capacity(const InterfaceConfig& if_cfg) const;
   uint16_t select_queue_id(const std::vector<RxQueueConfig>& queues) const;
   uint16_t select_queue_id(const std::vector<TxQueueConfig>& queues) const;
   int select_cpu_core(const std::vector<RxQueueConfig>& queues) const;
@@ -200,7 +207,11 @@ class SocketEngine : public Engine {
   uint32_t select_batch_size(const std::vector<TxQueueConfig>& queues) const;
 
   Status pop_rx_burst(const std::shared_ptr<RxQueueState>& qstate, BurstParams** burst);
-  void push_rx_burst(const std::shared_ptr<RxQueueState>& qstate, BurstParams* burst);
+  bool reserve_rx_burst(const std::shared_ptr<RxQueueState>& qstate,
+                        const std::atomic<bool>& connection_running);
+  void cancel_rx_burst_reservation(const std::shared_ptr<RxQueueState>& qstate);
+  void push_rx_burst(const std::shared_ptr<RxQueueState>& qstate, BurstParams* burst,
+                     bool reserved = false);
 
   void free_packet_arrays(BurstParams* burst);
   void close_fd(int& fd);

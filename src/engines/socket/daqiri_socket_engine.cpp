@@ -36,6 +36,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -99,6 +100,8 @@ bool pin_udp_rx_thread(int cpu_core, uint16_t port) {
 }
 
 }  // namespace
+
+SocketEngine::SocketEngine() = default;
 
 SocketEngine::~SocketEngine() {
   shutdown();
@@ -215,6 +218,13 @@ void SocketEngine::initialize() {
       ep->tx_batch_size = select_batch_size(if_cfg.tx_.queues_);
       ep->max_packet_size = static_cast<size_t>(std::max(1, select_max_packet_size(if_cfg)));
       ep->rx_queue_state = get_or_create_rx_queue(ep->port, ep->rx_queue);
+      ep->rx_queue_state->max_bursts = select_rx_queue_capacity(if_cfg);
+      if (cfg_.common_.protocol == SocketProtocol::TCP) {
+        DAQIRI_LOG_INFO("TCP RX queue port={} queue={} capacity={} bursts",
+                        ep->port,
+                        ep->rx_queue,
+                        ep->rx_queue_state->max_bursts);
+      }
       ep->rx_metrics = metrics::get_or_create_queue("socket",
                                                      if_cfg.name_.empty() ? if_cfg.address_
                                                                           : if_cfg.name_,
@@ -522,7 +532,15 @@ void SocketEngine::close_all_connections() {
 
   for (auto& conn : conn_copy) {
     if (conn == nullptr) { continue; }
-    conn->running.store(false);
+    if (conn->rx_queue != nullptr) {
+      {
+        std::lock_guard<std::mutex> lock(conn->rx_queue->mutex);
+        conn->running.store(false);
+      }
+      conn->rx_queue->capacity_cv.notify_all();
+    } else {
+      conn->running.store(false);
+    }
     close_fd(conn->fd);
   }
 
@@ -628,7 +646,7 @@ BurstParams* SocketEngine::create_tx_burst_params() {
 Status SocketEngine::pop_rx_burst(const std::shared_ptr<RxQueueState>& qstate, BurstParams** burst) {
   if (burst == nullptr || qstate == nullptr) { return Status::INVALID_PARAMETER; }
 
-  std::lock_guard<std::mutex> lock(qstate->mutex);
+  std::unique_lock<std::mutex> lock(qstate->mutex);
   if (qstate->bursts.empty()) {
     *burst = nullptr;
     return Status::NULL_PTR;
@@ -636,11 +654,41 @@ Status SocketEngine::pop_rx_burst(const std::shared_ptr<RxQueueState>& qstate, B
 
   *burst = qstate->bursts.front();
   qstate->bursts.pop();
+  lock.unlock();
+  qstate->capacity_cv.notify_one();
   return Status::SUCCESS;
 }
 
-void SocketEngine::push_rx_burst(const std::shared_ptr<RxQueueState>& qstate, BurstParams* burst) {
+bool SocketEngine::reserve_rx_burst(const std::shared_ptr<RxQueueState>& qstate,
+                                    const std::atomic<bool>& connection_running) {
+  if (qstate == nullptr) { return false; }
+
+  std::unique_lock<std::mutex> lock(qstate->mutex);
+  qstate->capacity_cv.wait(lock, [&] {
+    if (!running_.load() || !connection_running.load()) { return true; }
+    return qstate->reserved_bursts < qstate->max_bursts &&
+           qstate->bursts.size() < qstate->max_bursts - qstate->reserved_bursts;
+  });
+  if (!running_.load() || !connection_running.load()) { return false; }
+
+  ++qstate->reserved_bursts;
+  return true;
+}
+
+void SocketEngine::cancel_rx_burst_reservation(const std::shared_ptr<RxQueueState>& qstate) {
+  if (qstate == nullptr) { return; }
+
+  {
+    std::lock_guard<std::mutex> lock(qstate->mutex);
+    if (qstate->reserved_bursts > 0) { --qstate->reserved_bursts; }
+  }
+  qstate->capacity_cv.notify_one();
+}
+
+void SocketEngine::push_rx_burst(const std::shared_ptr<RxQueueState>& qstate, BurstParams* burst,
+                                 bool reserved) {
   if (burst == nullptr) {
+    if (reserved) { cancel_rx_burst_reservation(qstate); }
     return;
   }
   if (qstate == nullptr) {
@@ -650,6 +698,7 @@ void SocketEngine::push_rx_burst(const std::shared_ptr<RxQueueState>& qstate, Bu
     return;
   }
   std::lock_guard<std::mutex> lock(qstate->mutex);
+  if (reserved && qstate->reserved_bursts > 0) { --qstate->reserved_bursts; }
   qstate->bursts.push(burst);
 }
 
@@ -1031,6 +1080,17 @@ int SocketEngine::select_max_packet_size(const InterfaceConfig& if_cfg) const {
   return max_size;
 }
 
+size_t SocketEngine::select_rx_queue_capacity(const InterfaceConfig& if_cfg) const {
+  if (if_cfg.rx_.queues_.empty()) { return 1; }
+
+  size_t capacity = std::numeric_limits<size_t>::max();
+  for (const auto& mr_name : if_cfg.rx_.queues_.front().common_.mrs_) {
+    const auto mr_it = cfg_.mrs_.find(mr_name);
+    if (mr_it != cfg_.mrs_.end()) { capacity = std::min(capacity, mr_it->second.num_bufs_); }
+  }
+  return capacity == std::numeric_limits<size_t>::max() ? 1 : std::max<size_t>(1, capacity);
+}
+
 uint16_t SocketEngine::select_queue_id(const std::vector<RxQueueConfig>& queues) const {
   if (queues.empty()) { return 0; }
   return static_cast<uint16_t>(queues.front().common_.id_);
@@ -1364,11 +1424,30 @@ void SocketEngine::tcp_rx_loop(std::shared_ptr<ConnectionState> conn) {
   std::vector<uint8_t> tmp(max_size);
 
   while (running_.load() && conn->running.load()) {
+    // Wait for data without consuming it or reserving shared queue capacity.
+    // Otherwise an idle peer could reserve the last slot while blocked in
+    // recv(), preventing active peers on the same endpoint from making progress.
+    uint8_t marker = 0;
+    const ssize_t ready = ::recv(conn->fd, &marker, sizeof(marker), MSG_PEEK);
+    if (ready == 0) { break; }
+    if (ready < 0) {
+      if (errno == EINTR) { continue; }
+      if (!running_.load()) { break; }
+      DAQIRI_LOG_WARN("TCP recv peek failed on conn_id={}: {}", conn->conn_id, strerror(errno));
+      break;
+    }
+
+    // Once the application falls behind, stop draining the kernel socket so
+    // TCP flow control can propagate backpressure without growing DAQIRI's heap.
+    if (!reserve_rx_burst(conn->rx_queue, conn->running)) { break; }
+
     const ssize_t rx = ::recv(conn->fd, tmp.data(), tmp.size(), 0);
     if (rx == 0) {
+      cancel_rx_burst_reservation(conn->rx_queue);
       break;
     }
     if (rx < 0) {
+      cancel_rx_burst_reservation(conn->rx_queue);
       if (errno == EINTR) { continue; }
       if (!running_.load()) { break; }
       DAQIRI_LOG_WARN("TCP recv failed on conn_id={}: {}", conn->conn_id, strerror(errno));
@@ -1389,7 +1468,7 @@ void SocketEngine::tcp_rx_loop(std::shared_ptr<ConnectionState> conn) {
     burst->pkt_lens[0][0] = static_cast<uint32_t>(rx);
     set_connection_id(burst, conn->conn_id);
 
-    push_rx_burst(conn->rx_queue, burst);
+    push_rx_burst(conn->rx_queue, burst, true);
     rx_pkts_.fetch_add(1);
     rx_bytes_.fetch_add(static_cast<uint64_t>(rx));
     metrics::add_rx(conn->rx_metrics, 1, static_cast<uint64_t>(rx));
