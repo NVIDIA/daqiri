@@ -899,8 +899,9 @@ The result is a snapshot, not a managed DAQIRI neighbor entry. Reuse it for
 packet templates to keep the data path efficient, and call
 `resolve_ipv4_mac()` again if the peer, gateway, route, link, or network
 namespace may have changed. DAQIRI does not refresh previously returned MAC
-addresses in the background. Configure `rx.flow_isolation: true` so unmatched
-ARP traffic stays on the kernel path. See
+addresses in the background. If the port also has DAQIRI RX queues, configure
+`rx.flow_isolation: true` so unmatched ARP traffic stays on the kernel path; a
+TX-only interface with no `rx.queues` needs no `rx` section. See
 [Destination MAC resolution](../concepts.md#destination-mac-resolution) for the
 full ownership model.
 

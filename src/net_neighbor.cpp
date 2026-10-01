@@ -41,8 +41,8 @@
 namespace daqiri {
 namespace {
 
-constexpr uint16_t kUsableNeighborStates =
-    NUD_REACHABLE | NUD_STALE | NUD_DELAY | NUD_PROBE | NUD_PERMANENT | NUD_NOARP;
+constexpr uint16_t kConfirmedNeighborStates = NUD_REACHABLE | NUD_PERMANENT | NUD_NOARP;
+constexpr uint16_t kRefreshNeighborStates = NUD_STALE | NUD_DELAY | NUD_PROBE;
 
 struct NetlinkRequest {
   std::array<uint8_t, 512> storage{};
@@ -146,7 +146,7 @@ struct RouteResult {
   uint32_t next_hop_network = 0;
 };
 
-enum class NeighborState { MISSING, PENDING, USABLE, FAILED };
+enum class NeighborState { MISSING, PENDING, REFRESH_NEEDED, USABLE, FAILED };
 
 struct NeighborResult {
   NeighborState state = NeighborState::MISSING;
@@ -305,10 +305,12 @@ bool parse_neighbor(const nlmsghdr* hdr, int ifindex, uint32_t address_network,
 
   if ((message->ndm_state & NUD_FAILED) != 0) {
     result->state = NeighborState::FAILED;
-  } else if ((message->ndm_state & kUsableNeighborStates) != 0 && attrs[NDA_LLADDR] != nullptr &&
-             RTA_PAYLOAD(attrs[NDA_LLADDR]) == result->mac.size()) {
+  } else if (attrs[NDA_LLADDR] != nullptr && RTA_PAYLOAD(attrs[NDA_LLADDR]) == result->mac.size() &&
+             (message->ndm_state & (kConfirmedNeighborStates | kRefreshNeighborStates)) != 0) {
     std::memcpy(result->mac.data(), RTA_DATA(attrs[NDA_LLADDR]), result->mac.size());
-    result->state = NeighborState::USABLE;
+    result->state = (message->ndm_state & kConfirmedNeighborStates) != 0
+                        ? NeighborState::USABLE
+                        : NeighborState::REFRESH_NEEDED;
   } else {
     result->state = NeighborState::PENDING;
   }
@@ -364,20 +366,21 @@ int lookup_neighbor(NetlinkSocket& sock, int ifindex, uint32_t address_network,
   return 0;
 }
 
-int trigger_neighbor(NetlinkSocket& sock, int ifindex, uint32_t address_network,
-                     const Deadline& deadline, NeighborResult* result) {
+int update_neighbor(NetlinkSocket& sock, int ifindex, uint32_t address_network,
+                    uint16_t request_flags, uint16_t neighbor_state, uint8_t neighbor_flags,
+                    const Deadline& deadline, NeighborResult* result) {
   NetlinkRequest request;
   nlmsghdr* hdr = request.header();
   hdr->nlmsg_len = NLMSG_LENGTH(sizeof(ndmsg));
   hdr->nlmsg_type = RTM_NEWNEIGH;
-  hdr->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK | NLM_F_CREATE;
+  hdr->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK | request_flags;
   hdr->nlmsg_seq = sock.next_sequence();
   hdr->nlmsg_pid = sock.pid();
   auto* message = static_cast<ndmsg*>(NLMSG_DATA(hdr));
   message->ndm_family = AF_INET;
   message->ndm_ifindex = ifindex;
-  message->ndm_state = NUD_NONE;
-  message->ndm_flags = NTF_USE;
+  message->ndm_state = neighbor_state;
+  message->ndm_flags = neighbor_flags;
   if (!request.add_attr(NDA_DST, &address_network, sizeof(address_network))) {
     return -EMSGSIZE;
   }
@@ -389,6 +392,23 @@ int trigger_neighbor(NetlinkSocket& sock, int ifindex, uint32_t address_network,
       [&](const nlmsghdr* response) {
         return parse_neighbor(response, ifindex, address_network, result);
       });
+}
+
+int trigger_neighbor(NetlinkSocket& sock, int ifindex, uint32_t address_network,
+                     const Deadline& deadline, NeighborResult* result) {
+  if (result->state == NeighborState::REFRESH_NEEDED) {
+    // NTF_USE transitions a stale entry only to NUD_DELAY, and NUD_PROBE sends
+    // unicast solicitations to the cached MAC. Neither can discover a peer
+    // whose MAC changed while raw TX bypassed Linux's neighbor-use path. First
+    // invalidate the entry; NTF_USE below then starts a fresh broadcast ARP.
+    const int error = update_neighbor(sock, ifindex, address_network, NLM_F_REPLACE, NUD_NONE, 0,
+                                      deadline, result);
+    if (error != 0) {
+      return error;
+    }
+  }
+  return update_neighbor(sock, ifindex, address_network, NLM_F_CREATE, NUD_NONE, NTF_USE, deadline,
+                         result);
 }
 
 const char* ipv4_text(uint32_t network, char* buffer, size_t size) {
@@ -576,7 +596,8 @@ Status resolve_ipv4_neighbor(const std::string& netdev, uint32_t dst_host, char*
   char next_hop[INET_ADDRSTRLEN] = {};
   DAQIRI_LOG_ERROR(
       "ARP: neighbor {} on '{}' did not resolve within {} ms; ensure the peer is reachable and "
-      "rx.flow_isolation is true so ARP remains on the kernel path",
+      "if this port has DAQIRI RX queues, ensure rx.flow_isolation is true so ARP remains on the "
+      "kernel path",
       ipv4_text(route.next_hop_network, next_hop, sizeof(next_hop)), netdev, timeout_ms);
   return Status::NOT_READY;
 }

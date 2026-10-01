@@ -697,7 +697,8 @@ returned MAC in packet templates. This is a one-shot lookup: DAQIRI does not
 cache or refresh the returned value, so the application must re-query after a
 peer, gateway, route, link, or network-namespace change, or according to its
 own failure/refresh policy. Configure `rx.flow_isolation: true` so unmatched
-ARP traffic remains on the kernel path. See
+ARP traffic remains on the kernel path when the port also has DAQIRI RX queues.
+A TX-only interface with no `rx.queues` needs no `rx` section. See
 [Destination MAC resolution](../concepts.md#destination-mac-resolution).
 
 | Function | Purpose |

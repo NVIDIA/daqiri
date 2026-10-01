@@ -8237,7 +8237,7 @@ Status IbverbsEngine::resolve_ipv4_mac(int port, uint32_t dst_host, char* mac,
     DAQIRI_LOG_ERROR("ARP: no kernel netdev found for ibverbs port {}", port);
     return Status::CONNECT_FAILURE;
   }
-  if (!cfg_.ifs_[port].rx_.flow_isolation_) {
+  if (!cfg_.ifs_[port].rx_.queues_.empty() && !cfg_.ifs_[port].rx_.flow_isolation_) {
     DAQIRI_LOG_WARN(
         "ARP: port {} does not enable rx.flow_isolation; catch-all application steering may "
         "consume ARP traffic before Linux receives it",
