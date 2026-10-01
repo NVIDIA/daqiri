@@ -966,9 +966,32 @@ workflow sections above show the common call order and ownership rules.
 
 ### Ports, Traffic, Socket, and RDMA
 
+Raw userspace TX must supply a destination MAC because transmitting a completed
+Ethernet frame bypasses the kernel route and ARP processing used by sockets.
+The raw ibverbs engine can perform that lookup explicitly:
+
+```cpp
+char dst_mac[6] = {};
+daqiri::Status status = daqiri::resolve_ipv4_mac(port, "192.0.2.20", dst_mac, 3000);
+if (status != daqiri::Status::SUCCESS) {
+  // Stop before sending data packets.
+}
+```
+
+The result is a snapshot, not a managed DAQIRI neighbor entry. Reuse it for
+packet templates to keep the data path efficient, and call
+`resolve_ipv4_mac()` again if the peer, gateway, route, link, or network
+namespace may have changed. DAQIRI does not refresh previously returned MAC
+addresses in the background. If the port also has DAQIRI RX queues, configure
+`rx.flow_isolation: true` so unmatched ARP traffic stays on the kernel path; a
+TX-only interface with no `rx.queues` needs no `rx` section. See
+[Destination MAC resolution](../concepts.md#destination-mac-resolution) for the
+full ownership model.
+
 | Function | Purpose |
 | --- | --- |
 | `get_mac_addr(port, mac)` | Copy a port MAC address into a six-byte buffer. |
+| `resolve_ipv4_mac(port, dst, mac, timeout_ms)` | Resolve an IPv4 destination's next-hop MAC through the raw ibverbs port's Linux route and ARP table. `dst` may be a host-order `uint32_t` or a dotted-decimal string. |
 | `format_eth_addr(dst, addr)` | Convert a `xx:xx:xx:xx:xx:xx` MAC string into a six-byte buffer. Invalid input zeroes the buffer. |
 | `get_port_id(key)` | Resolve an interface name or PCIe address to a port ID. |
 | `get_num_rx_queues(port_id)` | Return the configured or engine-reported RX queue count. |

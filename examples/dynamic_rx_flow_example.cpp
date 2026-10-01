@@ -144,12 +144,12 @@ void rx_worker(const daqiri::bench::RawBenchRxConfig& cfg, RxCounter& counter,
   }
 }
 
-void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg,
-               daqiri::bench::TokenBucketPacer& pacer,
-               std::atomic<bool>& stop) {
+void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg, daqiri::bench::TokenBucketPacer& pacer,
+               std::atomic<bool>& stop, std::atomic<bool>& failed) {
   const int port_id = daqiri::get_port_id(cfg.interface_name);
   if (port_id < 0) {
     std::cerr << "Invalid TX interface_name: " << cfg.interface_name << "\n";
+    failed.store(true);
     stop.store(true);
     return;
   }
@@ -157,7 +157,11 @@ void tx_worker(const daqiri::bench::RawBenchTxConfig& cfg,
   char eth_dst[6] = {0};
   char eth_src[6] = {0};
   daqiri::format_eth_addr(eth_src, cfg.eth_src_addr);
-  daqiri::format_eth_addr(eth_dst, cfg.eth_dst_addr);
+  if (!daqiri::bench::resolve_tx_eth_dst(port_id, cfg.ip_dst_addr, cfg.eth_dst_addr, eth_dst)) {
+    failed.store(true);
+    stop.store(true);
+    return;
+  }
 
   const uint32_t ip_src = parse_ipv4_host_order(cfg.ip_src_addr);
   const uint32_t ip_dst = parse_ipv4_host_order(cfg.ip_dst_addr);
@@ -358,6 +362,7 @@ void print_rx_counter(const daqiri::bench::RawBenchRxConfig& cfg,
 int main(int argc, char** argv) {
   bool daqiri_initialized = false;
   std::atomic<bool> stop{false};
+  std::atomic<bool> failed{false};
   std::atomic<daqiri::FlowId> expected_flow_id{0};
   std::thread tx_thread;
   std::vector<std::thread> rx_threads;
@@ -395,12 +400,16 @@ int main(int argc, char** argv) {
     }
 
     daqiri::bench::TokenBucketPacer pacer(args.target_gbps);
-    tx_thread = std::thread(tx_worker, std::cref(tx_configs[0]), std::ref(pacer), std::ref(stop));
+    tx_thread = std::thread(tx_worker, std::cref(tx_configs[0]), std::ref(pacer), std::ref(stop),
+                            std::ref(failed));
 
     std::cout << "Initial drop window: varied UDP source ports (base " << udp_src
               << ") -> destination " << udp_dst << " have no configured flow for " << args.drop_ms
               << " ms\n";
     std::this_thread::sleep_for(std::chrono::milliseconds(args.drop_ms));
+    if (failed.load()) {
+      throw std::runtime_error("TX worker failed before sending packets");
+    }
     const uint64_t dropped_window_packets = packets(counters[0]) + packets(counters[1]);
     if (dropped_window_packets != 0) {
       throw std::runtime_error("Packets arrived during the initial flow-isolated drop window");

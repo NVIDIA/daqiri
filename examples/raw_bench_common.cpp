@@ -58,6 +58,19 @@ bool has_bench_config(const YAML::Node &root, const char *key) {
   return node.IsMap() && node["interface_name"];
 }
 
+int mac_hex_digit(char value) {
+  if (value >= '0' && value <= '9') {
+    return value - '0';
+  }
+  if (value >= 'a' && value <= 'f') {
+    return value - 'a' + 10;
+  }
+  if (value >= 'A' && value <= 'F') {
+    return value - 'A' + 10;
+  }
+  return -1;
+}
+
 std::vector<int> queue_ids_for_interface(const YAML::Node &root,
                                          const std::string &interface_name,
                                          const char *direction) {
@@ -194,6 +207,40 @@ RawBenchTxConfig parse_tx_item(const YAML::Node &tx) {
 }
 
 } // namespace
+
+bool resolve_tx_eth_dst(int port, const std::string& ip_dst_addr, const std::string& eth_dst_addr,
+                        char* eth_dst, uint32_t timeout_ms) {
+  if (eth_dst == nullptr) {
+    std::cerr << "Missing Ethernet destination output buffer\n";
+    return false;
+  }
+
+  if (!eth_dst_addr.empty()) {
+    if (eth_dst_addr.size() != 17) {
+      std::cerr << "Invalid eth_dst_addr: " << eth_dst_addr << "\n";
+      return false;
+    }
+    for (size_t octet = 0; octet < 6; ++octet) {
+      const size_t offset = octet * 3;
+      if ((octet != 5 && eth_dst_addr[offset + 2] != ':') ||
+          mac_hex_digit(eth_dst_addr[offset]) < 0 || mac_hex_digit(eth_dst_addr[offset + 1]) < 0) {
+        std::cerr << "Invalid eth_dst_addr: " << eth_dst_addr << "\n";
+        return false;
+      }
+      eth_dst[octet] = static_cast<char>((mac_hex_digit(eth_dst_addr[offset]) << 4) |
+                                         mac_hex_digit(eth_dst_addr[offset + 1]));
+    }
+    return true;
+  }
+
+  const Status status = daqiri::resolve_ipv4_mac(port, ip_dst_addr, eth_dst, timeout_ms);
+  if (status != Status::SUCCESS) {
+    std::cerr << "Failed to resolve MAC for " << ip_dst_addr << " (DAQIRI status "
+              << static_cast<int>(status) << ")\n";
+    return false;
+  }
+  return true;
+}
 
 PinnedHostBuffer::PinnedHostBuffer(PinnedHostBuffer &&other) noexcept {
   ptr_ = other.ptr_;

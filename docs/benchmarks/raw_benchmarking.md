@@ -5,7 +5,7 @@ hide:
 
 # Raw Ethernet Benchmarking
 
-DAQIRI provides raw Ethernet benchmark applications that use DPDK to drive an NVIDIA NIC directly. This page walks through `daqiri_bench_raw_gpudirect`, the TX/RX loopback config, and the raw Ethernet checks needed before interpreting throughput results.
+DAQIRI provides raw Ethernet benchmark applications that use the DPDK or ibverbs engine to drive an NVIDIA NIC directly. This page walks through `daqiri_bench_raw_gpudirect`, the TX/RX loopback config, and the raw Ethernet checks needed before interpreting throughput results.
 
 Make sure to [build the DAQIRI library](../getting-started.md#build-the-daqiri-library) beforehand.
 
@@ -81,14 +81,14 @@ docker run --rm -it --privileged \
 
 If you have two DGX Sparks cross-cabled p0↔p0 instead of a chassis QSFP loop on one machine, use the `_xhost` configs. Each host runs only its own role, so the YAML on each side configures one port instead of two. Both hosts must already be set up per the [DGX Spark profile](../tutorials/system_configuration.md#dgx-spark-profile), with one adjustment: the `daqiri-tx` (`1.1.1.1/24`) and `daqiri-rx` (`2.2.2.2/24`) nmcli profiles are *split across* the two hosts. Bring up `daqiri-tx` on the TX host's p0 and `daqiri-rx` on the RX host's p0, instead of both on one box.
 
-**Network prerequisite (required for RDMA, recommended for raw).** Assigning `/24` addresses on each host is not enough for the kernel to reach the peer over a direct cable. RDMA-CM uses the kernel stack, so you need a host route and a static neighbor on the cabled port before ping or RoCE will work. Run [`scripts/setup_spark_xhost_net.sh`](https://github.com/nvidia/daqiri/blob/main/scripts/setup_spark_xhost_net.sh) on **both** hosts after bringing up the nmcli profile. See the [cross-host variant](../tutorials/system_configuration.md#cross-host-variant-two-sparks) in System Configuration for the full steps.
+**Network prerequisite.** Assigning `/24` addresses on each host is not enough for the kernel to reach the peer over a direct cable. Install a host route on the cabled port by running [`scripts/setup_spark_xhost_net.sh`](https://github.com/nvidia/daqiri/blob/main/scripts/setup_spark_xhost_net.sh) on **both** hosts after bringing up the nmcli profile. The ibverbs raw engine uses that route and Linux ARP when `eth_dst_addr` is omitted; RDMA-CM uses the same kernel route. See the [cross-host variant](../tutorials/system_configuration.md#cross-host-variant-two-sparks) in System Configuration for the full steps.
 
 ```bash
-# TX host (peer MAC from RX: cat /sys/class/net/enp1s0f0np0/address)
-sudo scripts/setup_spark_xhost_net.sh --role tx --peer-mac <RX_P0_MAC>
+# TX host
+sudo scripts/setup_spark_xhost_net.sh --role tx
 
-# RX host (peer MAC from TX)
-sudo scripts/setup_spark_xhost_net.sh --role rx --peer-mac <TX_P0_MAC>
+# RX host
+sudo scripts/setup_spark_xhost_net.sh --role rx
 
 # Verify on each host before starting benches
 ping -c 3 <peer-ip>    # 2.2.2.2 on TX, 1.1.1.1 on RX
@@ -101,7 +101,7 @@ ip route get <peer-ip> # must name enp1s0f0np0, not lo
 # RX host
 sudo ./daqiri_bench_raw_gpudirect daqiri_bench_raw_rx_spark_xhost.yaml --seconds 30
 
-# TX host (set eth_dst_addr to the RX host p0's MAC first: cat /sys/class/net/enp1s0f0np0/address on the RX host)
+# TX host (the ibverbs config resolves the RX MAC through Linux ARP)
 sudo ./daqiri_bench_raw_gpudirect daqiri_bench_raw_tx_spark_xhost.yaml --seconds 30
 ```
 
@@ -285,7 +285,7 @@ interfaces:
 
 To run the benchmarking application to run a loopback on your system, you'll need to modify the `bench_tx` section which configures the application itself, to create the packet headers, pin the application TX worker, and direct the packets to the NIC. Make sure to remove the template brackets `< >`.
 
-- `eth_dst_addr` with the MAC address (and not the PCIe address) of the NIC interface you want to use for Rx. You can get the MAC address of your `if_name` interface with `#!bash cat /sys/class/net/$if_name/address`:
+- `eth_dst_addr` with the MAC address (and not the PCIe address) of the NIC interface you want to use for Rx. You can get the MAC address of your `if_name` interface with `#!bash cat /sys/class/net/$if_name/address`. Keep this field for DPDK and loopback configurations. A cross-host raw ibverbs configuration may omit it when the TX netdev has a usable IPv4 address and route; the benchmark then resolves `ip_dst_addr` through Linux routing and ARP once before its TX loop:
 - `cpu_core` with the CPU core for the benchmark application's TX thread. This is separate from the DAQIRI TX queue `cpu_core`; use a different isolated core when you have one, or deliberately share when the machine has a tight core budget.
 
 ```yaml hl_lines="3 5"
@@ -293,7 +293,7 @@ bench_tx:
 - interface_name: "tx_port" # Name of the TX port from the daqiri config
   cpu_core: 10              # Benchmark application TX thread affinity
   ...
-  eth_dst_addr: <00:00:00:00:00:00> # Destination MAC address - required when Rx flow_isolation=true
+  eth_dst_addr: <00:00:00:00:00:00> # Explicit MAC for DPDK or loopback
   ...
 ```
 
@@ -304,13 +304,14 @@ bench_tx:
     - interface_name: "tx_port" # Name of the TX port from the daqiri config
       cpu_core: 10              # Benchmark application TX thread affinity
       ...
-      eth_dst_addr: 48:b0:2d:ee:83:ad # Destination MAC address - required when Rx flow_isolation=true
+      eth_dst_addr: 48:b0:2d:ee:83:ad # Explicit MAC for DPDK or loopback
       ...
     ```
 
 ??? info "Show explanation"
 
-    - `eth_dst_addr` - the destination ethernet MAC address - will be embedded in the packet headers by the application. This is required here because the Rx interface above has `flow_isolation: true` (explained in more details below). In that configuration, only the packets listing the adequate destination MAC address will be accepted by the Rx interface.
+    - `eth_dst_addr` - when present, this destination Ethernet MAC is embedded in packet headers without a route or neighbor lookup. When it is absent on raw ibverbs, the benchmark resolves the next-hop MAC from `ip_dst_addr` once before sending. Raw userspace TX does not otherwise invoke Linux routing or ARP because the application supplies complete Ethernet frames. If the interface also has DAQIRI RX queues, use `rx.flow_isolation: true` so ARP remains on the kernel path. A TX-only interface with no `rx.queues` needs no `rx` section.
+    - The benchmark reuses the resolved MAC for the entire run; it does not monitor Linux neighbor changes. Long-running applications should define their own refresh policy and call `resolve_ipv4_mac()` again when a peer, gateway, route, link, or namespace may have changed. See [Destination MAC resolution](../concepts.md#destination-mac-resolution).
     - `cpu_core` - the benchmark application's own TX worker thread affinity. Set the matching `bench_rx.cpu_core` for RX workers too. These app-thread fields are distinct from the DAQIRI queue `cpu_core` values that poll the NIC.
     - We ignore the IP fields (`ip_src_addr`, `ip_dst_addr`) for now, as we are testing on a layer 2 network by just connecting a cable between the two interfaces on our system, therefore having mock values has no impact.
     - You might have noted the lack of a `eth_src_addr` field in this `bench_tx` section. This is because the source Ethernet MAC address can be inferred automatically by the DAQIRI library from the PCIe address of the Tx interface referenced above.

@@ -1,10 +1,11 @@
 #!/bin/bash
 # Host network config for two-DGX-Spark cross-cable benches (p0 <-> p0).
-# Adds the host route and static neighbor the kernel needs to reach the peer
+# Adds the host route the kernel needs to reach the peer
 # when daqiri-tx / daqiri-rx nmcli profiles are split across two boxes.
 #
 # Matches examples/*_spark_xhost.yaml (1.1.1.1 on TX, 2.2.2.2 on RX).
-# Re-running is safe: replaces route and neighbor entries.
+# Re-running is safe: replaces the route. An optional peer MAC preserves the
+# old static-neighbor setup, but DAQIRI's ibverbs raw engine can resolve it.
 #
 # Conflicts with scripts/setup_spark_rdma_loopback.sh on the same host: that
 # script reassigns 1.1.1.1 / 2.2.2.2 across two local ports for inter-port
@@ -12,8 +13,8 @@
 # re-up the right nmcli profile (daqiri-tx or daqiri-rx), then re-run this.
 #
 # Usage:
-#   sudo scripts/setup_spark_xhost_net.sh --role tx --peer-mac <RX_P0_MAC>
-#   sudo scripts/setup_spark_xhost_net.sh --role rx --peer-mac <TX_P0_MAC>
+#   sudo scripts/setup_spark_xhost_net.sh --role tx
+#   sudo scripts/setup_spark_xhost_net.sh --role rx
 #
 # Env overrides: SPARK_XHOST_IFACE, SPARK_TX_IP, SPARK_RX_IP,
 # SPARK_TX_INT_IP, SPARK_RX_INT_IP (169.254 cable-side addresses for SSH/mgmt)
@@ -31,13 +32,12 @@ peer_mac=""
 
 usage() {
   cat <<EOF
-Usage: $0 --role tx|rx --peer-mac <MAC> [--iface IFACE] [--peer-ip IP]
+Usage: $0 --role tx|rx [--iface IFACE] [--peer-ip IP] [--peer-mac MAC]
 
   tx  local ${tx_ip} on IFACE; peer defaults to ${rx_ip}
   rx  local ${rx_ip} on IFACE; peer defaults to ${tx_ip}
 
-Read the peer MAC on the other host:
-  cat /sys/class/net/${iface}/address
+--peer-mac is optional and installs a permanent neighbor for compatibility.
 
 Verify after running:
   ping -c1 <peer-ip>
@@ -86,8 +86,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$role" || -z "$peer_mac" ]]; then
-  echo "error: --role and --peer-mac are required" >&2
+if [[ -z "$role" ]]; then
+  echo "error: --role is required" >&2
   usage
   exit 1
 fi
@@ -120,9 +120,13 @@ fi
 
 # Bench peer: pin egress source to the local bench address, not 169.254/16.
 ip route replace "${peer_ip}/32" dev "${iface}" src "${local_ip}"
-ip neigh replace "${peer_ip}" lladdr "${peer_mac}" dev "${iface}" nud permanent
+if [[ -n "${peer_mac}" ]]; then
+  ip neigh replace "${peer_ip}" lladdr "${peer_mac}" dev "${iface}" nud permanent
+else
+  ip neigh del "${peer_ip}" dev "${iface}" 2>/dev/null || true
+fi
 
-# Cable internal address (169.254.x on p0): route + neighbor for SSH between hosts.
+# Cable internal address (169.254.x on p0): route for SSH between hosts.
 # Only applied when the configured local_int_ip is actually assigned to iface;
 # some hosts put 169.254/16 on the *other* cable instead, in which case skip.
 if [[ "$role" == "tx" ]]; then
@@ -132,10 +136,15 @@ else
   peer_int_ip="${peer_int_ip:-$tx_int_ip}"
   local_int_ip="$rx_int_ip"
 fi
+if [[ -z "${peer_mac}" && -n "${peer_int_ip}" ]]; then
+  ip neigh del "${peer_int_ip}" dev "${iface}" 2>/dev/null || true
+fi
 if [[ -n "$peer_int_ip" && "$peer_int_ip" != "$peer_ip" ]] && \
    ip -4 -o addr show dev "${iface}" | grep -qw "${local_int_ip}"; then
   ip route replace "${peer_int_ip}/32" dev "${iface}" src "${local_int_ip}"
-  ip neigh replace "${peer_int_ip}" lladdr "${peer_mac}" dev "${iface}" nud permanent
+  if [[ -n "${peer_mac}" ]]; then
+    ip neigh replace "${peer_int_ip}" lladdr "${peer_mac}" dev "${iface}" nud permanent
+  fi
   int_applied=1
 else
   int_applied=0
@@ -143,9 +152,13 @@ fi
 
 echo "Cross-host network config applied (${role} role)."
 echo "  ${iface} (${local_mac}) bench ${local_ip}/24"
-echo "  peer bench ${peer_ip} -> ${peer_mac}"
+if [[ -n "${peer_mac}" ]]; then
+  echo "  peer bench ${peer_ip} -> ${peer_mac} (static neighbor)"
+else
+  echo "  peer bench ${peer_ip} (dynamic ARP)"
+fi
 if [[ "${int_applied}" == "1" ]]; then
-  echo "  peer internal ${peer_int_ip} -> ${peer_mac} (via ${iface}, src ${local_int_ip})"
+  echo "  peer internal ${peer_int_ip} (via ${iface}, src ${local_int_ip})"
 else
   echo "  peer internal route skipped (${local_int_ip} not on ${iface})"
 fi

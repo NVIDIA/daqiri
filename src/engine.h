@@ -192,6 +192,7 @@ class Engine {
   virtual Status delete_endpoint(const std::string& name);
   virtual Status wait_for_tx_idle(uint32_t timeout_ms);
   virtual Status get_mac_addr(int port, char* mac) = 0;
+  virtual Status resolve_ipv4_mac(int port, uint32_t dst_host, char* mac, uint32_t timeout_ms);
   virtual Status drop_all_traffic(int port);
   virtual Status allow_all_traffic(int port);
   virtual Status add_rx_flow_async(int port, const FlowRuleConfig& flow, FlowOpId* op_id);

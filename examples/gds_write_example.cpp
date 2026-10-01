@@ -114,7 +114,9 @@ bool fill_and_send_one_burst(const daqiri::bench::RawBenchTxConfig &cfg,
   char eth_dst[6] = {};
   char eth_src[6] = {};
   daqiri::format_eth_addr(eth_src, cfg.eth_src_addr);
-  daqiri::format_eth_addr(eth_dst, cfg.eth_dst_addr);
+  if (!daqiri::bench::resolve_tx_eth_dst(port_id, cfg.ip_dst_addr, cfg.eth_dst_addr, eth_dst)) {
+    return false;
+  }
 
   uint32_t ip_src = 0;
   uint32_t ip_dst = 0;

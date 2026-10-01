@@ -690,9 +690,21 @@ The workflow sections above show the common call order and ownership rules.
 
 ### Ports, Traffic, Socket, and RDMA
 
+Raw userspace TX bypasses the automatic route and ARP processing performed for
+Linux sockets. With the raw ibverbs engine, call
+`resolve_ipv4_mac(port, dst, timeout_ms)` after initialization, then reuse the
+returned MAC in packet templates. This is a one-shot lookup: DAQIRI does not
+cache or refresh the returned value, so the application must re-query after a
+peer, gateway, route, link, or network-namespace change, or according to its
+own failure/refresh policy. Configure `rx.flow_isolation: true` so unmatched
+ARP traffic remains on the kernel path when the port also has DAQIRI RX queues.
+A TX-only interface with no `rx.queues` needs no `rx` section. See
+[Destination MAC resolution](../concepts.md#destination-mac-resolution).
+
 | Function | Purpose |
 | --- | --- |
 | `get_mac_addr(port)` | Return `(Status, "aa:bb:cc:dd:ee:ff")`. |
+| `resolve_ipv4_mac(port, dst, timeout_ms)` | Return `(Status, mac_string)` after resolving a host-order integer or dotted-decimal IPv4 destination through the raw ibverbs port's Linux route and ARP table. The binding releases the GIL while waiting. |
 | `format_eth_addr(addr)` | Return six MAC-address bytes from a `xx:xx:xx:xx:xx:xx` MAC string. Invalid input returns zero bytes. |
 | `get_port_id(key)` | Resolve an interface name or PCIe address to a port ID. |
 | `get_num_rx_queues(port_id)` | Return configured RX queue count for a port. |

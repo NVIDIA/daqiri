@@ -498,6 +498,7 @@ class IbverbsEngine : public Engine {
   // TX construction / header fill (implemented in the TX milestone)
   Status get_tx_packet_burst(BurstParams* burst) override;
   Status get_tx_packet_burst_checked(BurstParams* burst) override;
+  Status resolve_ipv4_mac(int port, uint32_t dst_host, char* mac, uint32_t timeout_ms) override;
   Status set_eth_header(BurstParams* burst, int idx, char* dst_addr) override;
   Status set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint8_t proto,
                          unsigned int src_host, unsigned int dst_host) override;

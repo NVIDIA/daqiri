@@ -104,9 +104,10 @@ parse_gpu_reorder_plans(const YAML::Node &root) {
   return plans;
 }
 
-void tx_worker(const SequenceTxConfig &cfg, std::atomic<bool> &stop) {
+void tx_worker(const SequenceTxConfig& cfg, std::atomic<bool>& stop, std::atomic<bool>& failed) {
   if (!daqiri::bench::set_current_thread_affinity(cfg.packet.cpu_core,
                                                   "bench_tx")) {
+    failed.store(true);
     stop.store(true);
     return;
   }
@@ -115,18 +116,25 @@ void tx_worker(const SequenceTxConfig &cfg, std::atomic<bool> &stop) {
   if (port_id < 0) {
     std::cerr << "Invalid TX interface_name: " << cfg.packet.interface_name
               << "\n";
+    failed.store(true);
     stop.store(true);
     return;
   }
 
   if (cfg.sequence_number_offset + sizeof(uint32_t) > cfg.packet.payload_size) {
     std::cerr << "sequence_number_offset out of payload range\n";
+    failed.store(true);
     stop.store(true);
     return;
   }
 
   char eth_dst[6] = {0};
-  daqiri::format_eth_addr(eth_dst, cfg.packet.eth_dst_addr);
+  if (!daqiri::bench::resolve_tx_eth_dst(port_id, cfg.packet.ip_dst_addr, cfg.packet.eth_dst_addr,
+                                         eth_dst)) {
+    failed.store(true);
+    stop.store(true);
+    return;
+  }
 
   uint32_t ip_src = 0;
   uint32_t ip_dst = 0;
@@ -397,6 +405,7 @@ int main(int argc, char **argv) {
   }
 
   std::atomic<bool> stop{false};
+  std::atomic<bool> failed{false};
   std::thread tx_thread;
   std::thread rx_thread;
 
@@ -405,7 +414,7 @@ int main(int argc, char **argv) {
                             std::ref(stop));
   }
   if (has_tx) {
-    tx_thread = std::thread(tx_worker, parse_sequence_tx(root), std::ref(stop));
+    tx_thread = std::thread(tx_worker, parse_sequence_tx(root), std::ref(stop), std::ref(failed));
   }
 
   daqiri::bench::wait_for_stop(run_seconds, stop);
@@ -422,5 +431,5 @@ int main(int argc, char **argv) {
     cudaStreamDestroy(reorder_stream);
   }
   daqiri::shutdown();
-  return 0;
+  return failed.load() ? 1 : 0;
 }

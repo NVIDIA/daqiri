@@ -18,6 +18,7 @@ daqiri:
   cfg:
     version: 1
     stream_type: "raw"
+    engine: "ibverbs"
     master_core: 8
     debug: false
     log_level: "info"
@@ -44,7 +45,7 @@ daqiri:
             - "Data_RX_GPU"
         flows:
         - name: "flow_0"
-          id: 0
+          id: 1
           action:
             type: queue
             id: 0

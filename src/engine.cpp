@@ -1608,6 +1608,18 @@ Status Engine::wait_for_tx_idle(uint32_t timeout_ms) {
   return Status::NOT_SUPPORTED;
 }
 
+Status Engine::resolve_ipv4_mac(int port, uint32_t dst_host, char* mac, uint32_t timeout_ms) {
+  if (mac == nullptr) {
+    return Status::NULL_PTR;
+  }
+  if (port < 0 || port >= static_cast<int>(cfg_.ifs_.size()) || dst_host == INADDR_ANY ||
+      dst_host == INADDR_BROADCAST || IN_MULTICAST(dst_host) || IN_BADCLASS(dst_host) ||
+      timeout_ms == 0) {
+    return Status::INVALID_PARAMETER;
+  }
+  return Status::NOT_SUPPORTED;
+}
+
 Status Engine::get_rx_burst(BurstParams** burst, int port_id) {
   // Check if the port_id is valid
   if (port_id < 0 || port_id >= static_cast<int>(cfg_.ifs_.size())) {

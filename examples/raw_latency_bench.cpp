@@ -190,7 +190,7 @@ BenchConfig parse_bench_config(const YAML::Node& root) {
   cfg.rx_queue_id = node["rx_queue_id"].as<int>(common_queue);
   cfg.cpu_core = node["cpu_core"].as<int>(cfg.cpu_core);
   cfg.ptp_device = node["ptp_device"].as<std::string>("");
-  cfg.eth_dst_addr = node["eth_dst_addr"].as<std::string>();
+  cfg.eth_dst_addr = node["eth_dst_addr"].as<std::string>("");
   cfg.ip_src_addr = node["ip_src_addr"].as<std::string>(cfg.ip_src_addr);
   cfg.ip_dst_addr = node["ip_dst_addr"].as<std::string>(cfg.ip_dst_addr);
   cfg.udp_src_port = node["udp_src_port"].as<uint16_t>(cfg.udp_src_port);
@@ -318,24 +318,51 @@ void initialize_cuda() {
 
 std::array<uint8_t, ETH_ALEN> parse_mac(const std::string& value) {
   std::array<uint8_t, ETH_ALEN> mac{};
-  unsigned int bytes[ETH_ALEN]{};
-  if (std::sscanf(value.c_str(), "%x:%x:%x:%x:%x:%x", &bytes[0], &bytes[1], &bytes[2], &bytes[3],
-                  &bytes[4], &bytes[5]) != ETH_ALEN) {
+  const auto hex_digit = [](char digit) {
+    if (digit >= '0' && digit <= '9') {
+      return digit - '0';
+    }
+    if (digit >= 'a' && digit <= 'f') {
+      return digit - 'a' + 10;
+    }
+    if (digit >= 'A' && digit <= 'F') {
+      return digit - 'A' + 10;
+    }
+    return -1;
+  };
+  if (value.size() != 17) {
     throw std::invalid_argument("invalid eth_dst_addr: " + value);
   }
   for (size_t i = 0; i < mac.size(); ++i) {
-    if (bytes[i] > 0xff) {
+    const size_t offset = i * 3;
+    const int high = hex_digit(value[offset]);
+    const int low = hex_digit(value[offset + 1]);
+    if (high < 0 || low < 0 || (i != mac.size() - 1 && value[offset + 2] != ':')) {
       throw std::invalid_argument("invalid eth_dst_addr: " + value);
     }
-    mac[i] = static_cast<uint8_t>(bytes[i]);
+    mac[i] = static_cast<uint8_t>((high << 4) | low);
   }
   return mac;
 }
 
-std::vector<uint8_t> make_packet_template(uint32_t packet_size, const BenchConfig& cfg) {
+std::array<uint8_t, ETH_ALEN> resolve_mac(int port, const BenchConfig& cfg) {
+  if (!cfg.eth_dst_addr.empty()) {
+    return parse_mac(cfg.eth_dst_addr);
+  }
+  std::array<uint8_t, ETH_ALEN> mac{};
+  const daqiri::Status status =
+      daqiri::resolve_ipv4_mac(port, cfg.ip_dst_addr, reinterpret_cast<char*>(mac.data()), 3000);
+  if (status != daqiri::Status::SUCCESS) {
+    throw std::runtime_error("failed to resolve bench_latency destination MAC (DAQIRI status " +
+                             std::to_string(static_cast<int>(status)) + ")");
+  }
+  return mac;
+}
+
+std::vector<uint8_t> make_packet_template(uint32_t packet_size, const BenchConfig& cfg,
+                                          const std::array<uint8_t, ETH_ALEN>& dst) {
   std::vector<uint8_t> data(packet_size, 0);
   auto* pkt = reinterpret_cast<daqiri::UDPIPV4Pkt*>(data.data());
-  const auto dst = parse_mac(cfg.eth_dst_addr);
   std::memcpy(pkt->eth.h_dest, dst.data(), dst.size());
   pkt->eth.h_proto = htons(ETH_P_IP);
   pkt->ip.version = 4;
@@ -536,6 +563,7 @@ int main(int argc, char** argv) {
       daqiri::shutdown();
       return 1;
     }
+    const auto dst_mac = resolve_mac(tx_port_id, cfg);
 
     std::vector<Sample> all_samples;
     all_samples.reserve(static_cast<size_t>(options.samples) * 8);
@@ -556,7 +584,7 @@ int main(int argc, char** argv) {
     std::cout << '\n';
 
     for (uint32_t packet_size = kMinPacketSize; packet_size <= kMaxPacketSize; packet_size *= 2) {
-      const auto packet_template = make_packet_template(packet_size, cfg);
+      const auto packet_template = make_packet_template(packet_size, cfg, dst_mac);
       drain_rx(rx_port_id, cfg.rx_queue_id);
       const std::optional<ClockCalibration> clock_before =
           cfg.ptp_device.empty()

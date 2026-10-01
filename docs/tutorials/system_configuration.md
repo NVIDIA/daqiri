@@ -1547,14 +1547,14 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     - TX host: `sudo nmcli connection up daqiri-tx` only (`1.1.1.1/24` on `enp1s0f0np0`)
     - RX host: `sudo nmcli connection up daqiri-rx` only (`2.2.2.2/24` on `enp1s0f0np0`)
 
-    The `/24` assignment alone does not give the kernel a route to the peer. On **each** host, add a host route and static neighbor for the peer on the cabled port (read the peer's MAC on the other box with `cat /sys/class/net/enp1s0f0np0/address`):
+    The `/24` assignment alone does not give the kernel a route to the peer. On **each** host, add a host route on the cabled port. The ibverbs raw engine can then ask Linux to resolve the peer with ARP when `bench_tx.eth_dst_addr` is omitted:
 
     ```bash
     # TX host
-    sudo scripts/setup_spark_xhost_net.sh --role tx --peer-mac <RX_P0_MAC>
+    sudo scripts/setup_spark_xhost_net.sh --role tx
 
     # RX host
-    sudo scripts/setup_spark_xhost_net.sh --role rx --peer-mac <TX_P0_MAC>
+    sudo scripts/setup_spark_xhost_net.sh --role rx
     ```
 
     Verify before running `_xhost` benchmarks (raw or RDMA):

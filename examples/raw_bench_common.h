@@ -74,7 +74,7 @@ struct RawBenchTxConfig {
   std::string ip_src_addr = "1.2.3.4";
   std::string ip_dst_addr = "5.6.7.8";
   std::string eth_src_addr = "00:00:00:00:00:00";
-  std::string eth_dst_addr = "00:00:00:00:00:00";
+  std::string eth_dst_addr;
 };
 
 struct RawBenchRxConfig {
@@ -121,6 +121,8 @@ std::vector<RawBenchRxConfig> parse_rx_configs(const YAML::Node &root);
 std::vector<RawBenchTxConfig> parse_tx_configs(const YAML::Node &root);
 std::vector<uint16_t> parse_udp_ports(const std::string &spec);
 bool set_current_thread_affinity(int cpu_core, const std::string &thread_name);
+bool resolve_tx_eth_dst(int port, const std::string& ip_dst_addr, const std::string& eth_dst_addr,
+                        char* eth_dst, uint32_t timeout_ms = 3000);
 
 void populate_udp_ipv4_headers(uint8_t *pkt_data, uint32_t header_size,
                                uint32_t payload_size, const char *eth_src,
