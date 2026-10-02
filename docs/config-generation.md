@@ -152,9 +152,10 @@ Example output with the final octets obscured is `1.1.1.x/24` on TX and
 and `RX_HOST_IP`. The generated `tx.yaml` uses the TX address as its local
 endpoint; `rx.yaml` uses the RX address.
 
-Complete that tutorial's route and neighbor setup on both hosts before running
-the benchmark. Use host-pinned memory and size receive/transmit windows
-explicitly when needed:
+Set up the host route on both hosts as shown in that tutorial before running
+the benchmark. Without a peer MAC, the setup script leaves neighbor resolution
+to Linux ARP; supplying one installs a static neighbor. Use host-pinned memory
+and size receive/transmit windows explicitly when needed:
 
 ```bash
 python3 scripts/gen_daqiri_config.py socket-pair \
