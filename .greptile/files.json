@@ -20,7 +20,7 @@
     },
     {
       "path": ".github/workflows/docs.yml",
-      "description": "The sole retained GitHub Actions workflow. It may build, validate, and deploy documentation; general tests, builds, and container publication must remain local.",
+      "description": "The retained documentation GitHub Actions workflow. It may build, validate, and deploy documentation. A separate Blossom CI wrapper under .github/workflows/ is also allowed when it only dispatches or monitors Jenkins Blossom; general tests, builds, and container publication must remain local or in provisioned CI.",
       "scope": [".github/**", "docs/**", "mkdocs.yml", "scripts/check_docs.sh", "scripts/check_html_links.py", "scripts/check_doc_refs.py"]
     },
     {

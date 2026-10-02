@@ -122,7 +122,8 @@ git push -u origin <local-branch>:<remote-branch>
    `--diagrams` if the PR changes anything under `docs/images/packet_diagrams/`, and
    `--docker-base` if it changes the Docker base stage. Combine both flags when both
    areas change. GitHub Actions retains only the automated documentation build,
-   deployment, and documentation-specific validators.
+   deployment, documentation-specific validators, and a narrow Blossom CI wrapper
+   that dispatches or monitors Jenkins Blossom.
    Other portable checks run locally. Platform-dependent behavior belongs in dedicated
    CI/CD jobs on compatible provisioned runners; until a required platform job exists,
    it must still be verified manually by the developer and/or DAQIRI engineer reviewing
