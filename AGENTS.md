@@ -19,7 +19,7 @@ each supported architecture; after both per-architecture tags exist, run
 `PUBLISH_MANIFEST=1 scripts/publish_container.sh` to publish and inspect the
 canonical multi-architecture version tag.
 
-CMake options (full table in `docs/getting-started.md`):
+CMake options (full table in `docs/tutorials/bare-metal-cmake-build.md`):
 - `DAQIRI_ENGINE` — space-separated list of optional engines to compile. Valid values: `dpdk` (raw Ethernet) and `ibverbs` (RDMA/RoCE). Linux sockets (UDP/TCP) are always built in, so there is no `socket` value. Default is `"dpdk ibverbs"`.
 - `DAQIRI_BUILD_PYTHON` — builds `pybind11` bindings from `python/`.
 - `DAQIRI_BUILD_EXAMPLES` — builds the benchmark executables (default `ON`). The
@@ -171,7 +171,7 @@ The web docs live in `docs/` and are built with [MkDocs Material](https://squidf
 - `docs/index.md` — landing page orchestrator (includes `docs/landing/*.html` snippets via pymdownx snippets)
 - `docs/landing/` — landing section HTML fragments (hero, features, quick start, examples, tutorials, news, CTA, footer, overlay)
 - `overrides/home.html` — Material theme override for the landing layout
-- `docs/getting-started.md` — system requirements, build instructions, CMake options
+- `docs/getting-started.md` — system requirements, build instructions, and first benchmark smoke-test guidance. Only add information to Getting Started when it directly affects requirements, library build steps, or benchmark smoke-test instructions.
 - `docs/concepts.md` — terminology glossary (stream types and endpoint URI schemes, GPUDirect, packet/burst/segment, flow/queue, memory region, zero-copy ownership, RX reorder). Meant to be opened in parallel with the rest of the docs.
 - `docs/api-reference/index.md` — API guide (6-step application lifecycle, configuration-first model)
 - `docs/api-reference/configuration.md`, `docs/api-reference/cpp.md`, `docs/api-reference/python.md` — YAML schema, C++ API, and Python bindings docs

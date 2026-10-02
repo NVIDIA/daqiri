@@ -54,7 +54,61 @@ Before installing anything, run the checks below and resolve any failures. They 
 
 ## Step 1: Configure the DOCA APT repository
 
-DAQIRI's RDMA/ibverbs dependencies (`libibverbs-dev`, `librdmacm-dev`, `libmlx5-1`, `mlnx-ofed-kernel-utils`, `mft`) come from the DOCA repository. The exact apt setup commands for IGX OS 1.1, SBSA Ubuntu 22.04, and x86_64 Ubuntu 22.04 are in [Getting Started → Build the DAQIRI library](../getting-started.md#build-the-daqiri-library). Run the tab that matches your platform, then return here.
+DAQIRI's RDMA/ibverbs dependencies (`libibverbs-dev`, `librdmacm-dev`,
+`libmlx5-1`, `mlnx-ofed-kernel-utils`, `mft`) come from the DOCA repository.
+Run the tab that matches your platform.
+
+=== "IGX OS 1.1"
+
+    ```bash
+    export DOCA_URL="https://linux.mellanox.com/public/repo/doca/2.8.0/ubuntu22.04/arm64-sbsa/"
+    wget -qO- https://linux.mellanox.com/public/repo/doca/GPG-KEY-Mellanox.pub | gpg --dearmor - | sudo tee /etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub > /dev/null
+    echo "deb [signed-by=/etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub] $DOCA_URL ./"  | sudo tee /etc/apt/sources.list.d/doca.list > /dev/null
+
+    sudo apt update
+    ```
+
+=== "SBSA (Ubuntu 22.04)"
+
+    ```bash
+    export DOCA_URL="https://linux.mellanox.com/public/repo/doca/2.8.0/ubuntu22.04/arm64-sbsa/"
+    wget -qO- https://linux.mellanox.com/public/repo/doca/GPG-KEY-Mellanox.pub | gpg --dearmor - | sudo tee /etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub > /dev/null
+    echo "deb [signed-by=/etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub] $DOCA_URL ./"  | sudo tee /etc/apt/sources.list.d/doca.list > /dev/null
+
+    # Also need the CUDA repository: https://developer.nvidia.com/cuda-downloads?target_os=Linux
+    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/sbsa/cuda-keyring_1.1-1_all.deb
+    sudo dpkg -i cuda-keyring_1.1-1_all.deb
+
+    sudo apt update
+    ```
+
+=== "x86_64 (Ubuntu 22.04)"
+
+    ```bash
+    export DOCA_URL="https://linux.mellanox.com/public/repo/doca/2.8.0/ubuntu22.04/x86_64/"
+    wget -qO- https://linux.mellanox.com/public/repo/doca/GPG-KEY-Mellanox.pub | gpg --dearmor - | sudo tee /etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub > /dev/null
+    echo "deb [signed-by=/etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub] $DOCA_URL ./"  | sudo tee /etc/apt/sources.list.d/doca.list > /dev/null
+
+    # Also need the CUDA repository: https://developer.nvidia.com/cuda-downloads?target_os=Linux
+    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+    sudo dpkg -i cuda-keyring_1.1-1_all.deb
+
+    sudo apt update
+    ```
+
+=== "x86_64 (Ubuntu 24.04)"
+
+    ```bash
+    export DOCA_URL="https://linux.mellanox.com/public/repo/doca/3.2.1/ubuntu24.04/x86_64/"
+    wget -qO- https://linux.mellanox.com/public/repo/doca/GPG-KEY-Mellanox.pub | gpg --dearmor - | sudo tee /etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub > /dev/null
+    echo "deb [signed-by=/etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub] $DOCA_URL ./"  | sudo tee /etc/apt/sources.list.d/doca.list > /dev/null
+
+    # Also need the CUDA repository: https://developer.nvidia.com/cuda-downloads?target_os=Linux
+    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+    sudo dpkg -i cuda-keyring_1.1-1_all.deb
+
+    sudo apt update
+    ```
 
 !!! note
 
@@ -118,7 +172,7 @@ cmake --version   # expect >= 3.20
 
 ??? note "Optional: GDS (cuFile) for device-memory file writes"
 
-    Skip this unless you plan to enable `-DDAQIRI_ENABLE_GDS=ON`. The cuFile headers and `libcufile` are installed as part of the CUDA Toolkit (`cuda-toolkit-*` metapackage) and need no separate apt step. The runtime requirements (`nvidia-fs` kernel module, supported destination filesystem) are documented in [Getting Started](../getting-started.md#cmake-options).
+    Skip this unless you plan to enable `-DDAQIRI_ENABLE_GDS=ON`. The cuFile headers and `libcufile` are installed as part of the CUDA Toolkit (`cuda-toolkit-*` metapackage) and need no separate apt step. Runtime verification is covered in [`DAQIRI_ENABLE_GDS`: cuFile burst writes](#daqiri_enable_gds-cufile-burst-writes).
 
 ## Step 3: Build DPDK with DAQIRI patches
 
@@ -213,7 +267,29 @@ cmake -S . -B build \
 
     DAQIRI itself prefers the vendored `third_party/yaml-cpp` submodule by default, so example benchmarks link correctly even when conda is active. Initialize submodules before configuring: `git submodule update --init third_party/yaml-cpp`. Set `-DDAQIRI_PREFER_SYSTEM_YAML_CPP=ON` only if you intentionally want the system package.
 
-The sections below explain each option you can flip from the default, with explicit "when to use" guidance. The full reference is the [CMake Options table](../getting-started.md#cmake-options).
+### CMake options reference
+
+Most users can start with the configure command above. Use this table when you
+need to enable a specific feature or adjust the build for a particular host.
+
+| Option | Default | When to change it |
+|---|---|---|
+| `CMAKE_BUILD_TYPE` | n/a | Use `Release` for benchmarks and installed builds. |
+| `BUILD_SHARED_LIBS` | n/a | Use `ON` to produce `libdaqiri.so` and exported package metadata; use `OFF` only when you intentionally need static libraries. |
+| `DAQIRI_ENGINE` | `"dpdk ibverbs"` | Space-separated optional engines to compile. Valid values are `dpdk` and `ibverbs`; Linux UDP/TCP sockets are always built in. Use a smaller set only when packaging a narrower build. |
+| `DAQIRI_BUILD_EXAMPLES` | `ON` | Builds the `daqiri_bench_*` executables under `build/examples/`. Leave on for smoke tests and benchmark workflows. The `daqiri_config_validate` tool is always built and installed, including when this option is `OFF`. |
+| `DAQIRI_BUILD_APPLICATIONS` | `OFF` | Builds heavier end-to-end examples under `applications/`, currently the TensorRT ResNet inference app. Requires the extra application dependencies. |
+| `DAQIRI_BUILD_PYTHON` | `OFF` | Builds pybind11 Python bindings. Enable only when you need `import daqiri`. |
+| `BUILD_TESTING` | `ON` | Builds and registers the hardware-free C++ tests under `tests/cpp/` with CTest. Set to `OFF` to omit test targets from a production-only build. |
+| `DAQIRI_ENABLE_GDS` | `OFF` | Enables cuFile-backed burst file writes from CUDA device memory. Enable only on systems with a working GDS runtime. |
+| `DAQIRI_ENABLE_OTEL_METRICS` | `OFF` | Enables OpenTelemetry metrics instrumentation. Applications still configure the SDK reader/exporter. |
+| `DAQIRI_ENABLE_S3` | `OFF` | Enables AWS SDK-backed asynchronous raw packet writes to S3-compatible object stores. |
+| `DAQIRI_REORDER_GPU_PROFILE` | `OFF` | Adds CUDA event timing around reorder kernels. Enable only while profiling. |
+| `DAQIRI_PREFER_SYSTEM_YAML_CPP` | `OFF` | Prefer a system `yaml-cpp` instead of the vendored submodule. Keep `OFF` when a conda/miniforge environment is on `PATH`. |
+| `CMAKE_CUDA_ARCHITECTURES` | `80;90`, plus `121` with CUDA Toolkit 13.0+ | Override when your GPU is not covered by the default architecture list. |
+
+The sections below explain the options that most often need case-by-case
+guidance.
 
 ### `DAQIRI_ENGINE`: engine selection
 
@@ -235,7 +311,18 @@ The sections below explain each option you can flip from the default, with expli
 
 ### `DAQIRI_ENABLE_GDS`: cuFile burst writes
 
-`-DDAQIRI_ENABLE_GDS=ON` enables the `cuFile`-backed file-write path for bursts whose payload lives in CUDA device memory. The build requires `cufile.h` and `libcufile` (both shipped with the CUDA Toolkit). At runtime you also need the `nvidia-fs` kernel module loaded and a GDS-supported destination filesystem. Verify with the snippet in [Getting Started](../getting-started.md#cmake-options). Without this flag, device-memory burst writes return `NOT_SUPPORTED`, and host-memory writes are unaffected.
+`-DDAQIRI_ENABLE_GDS=ON` enables the `cuFile`-backed file-write path for bursts whose payload lives in CUDA device memory. The build requires `cufile.h` and `libcufile` (both shipped with the CUDA Toolkit). At runtime you also need the `nvidia-fs` kernel module loaded and a GDS-supported destination filesystem. Verify with:
+
+```bash
+lsmod | grep nvidia_fs
+/usr/local/cuda/gds/tools/gdscheck.py -p
+```
+
+For regular cuFile/GDS over local NVMe, `gdscheck.py -p` should report `NVMe :
+Supported`, and ext4 destinations must be mounted with `data=ordered` or use another
+GDS-supported filesystem such as XFS. If `nvidia-fs` is not loaded, or the destination
+storage is not supported, DAQIRI returns `NOT_SUPPORTED` for CUDA device-backed burst
+writes. Host-backed burst writes continue to use POSIX APIs and do not require GDS.
 
 ### `CMAKE_CUDA_ARCHITECTURES`: GPU compute capability
 
@@ -273,12 +360,6 @@ The override is honored because `src/CMakeLists.txt` only sets `CMAKE_CUDA_ARCHI
 !!! warning "`sm_121` requires a recent CUDA Toolkit"
 
     `sm_121` (GB10 / DGX Spark) is only known to CUDA Toolkit 13.0 and newer. On CUDA 12.x the automatic append is suppressed, but if you explicitly pass `-DCMAKE_CUDA_ARCHITECTURES="...;121"` on an older toolkit you will get `nvcc fatal: Unsupported gpu architecture 'compute_121'`. Drop the `121` entry or upgrade the toolkit.
-
-### Other flags
-
-- `-DBUILD_SHARED_LIBS=ON`: produces `libdaqiri.so` (recommended). With `OFF`, you get a static library.
-- `-DDAQIRI_BUILD_EXAMPLES=ON`: builds the `daqiri_bench_*` executables under `build/examples/`. Required for the smoke test in [Step 5.3](#53-smoke-test). On by default.
-- `-DDAQIRI_REORDER_GPU_PROFILE=ON`: instruments the CUDA reorder kernels with CUDA event timing. Off by default. Turn on only when profiling.
 
 ## Step 5: Build, install, and verify
 
@@ -383,7 +464,7 @@ A successful run prints a stream of `[INFO]` lines followed by an RX/TX rate sum
     /usr/local/cuda/gds/tools/gdscheck.py -p
     ```
 
-    Full setup notes are in [Getting Started → CMake Options](../getting-started.md#cmake-options). If `nvidia-fs` cannot be loaded on this host, drop `-DDAQIRI_ENABLE_GDS=ON` from the CMake configure step. Host-memory burst writes do not require it.
+    Full setup notes are in [`DAQIRI_ENABLE_GDS`: cuFile burst writes](#daqiri_enable_gds-cufile-burst-writes). If `nvidia-fs` cannot be loaded on this host, drop `-DDAQIRI_ENABLE_GDS=ON` from the CMake configure step. Host-memory burst writes do not require it.
 
 ??? failure "`pkg-config: command not found`"
 
@@ -468,4 +549,13 @@ scripts/cleanup.sh cmake --yes       # non-interactive
 
 The script reads `build/install_manifest.txt` (written by [Step 5.2](#52-install)) for the canonical list of installed paths, then refuses to remove anything unless every manifest entry is under `DAQIRI_PREFIX`. Manifest entries that are already absent are reported and skipped so cleanup can be rerun after a partial removal. Verification still runs and decides the final exit status. Override the install prefix with `DAQIRI_PREFIX=...` if you installed somewhere other than `/opt/daqiri`, or `BUILD_DIR=...` if your build tree is named something other than `build`. When the manifest is missing, the script falls back to a name-scoped scan that auto-removes only DAQIRI-owned artifacts and flags vendored `spdlog/`, `yaml-cpp/`, and `libyaml-cpp.so*` for manual review. The final step runs verification (`ls /opt/daqiri`, `pkg-config --modversion daqiri`, `ldconfig -p | grep daqiri`) and exits non-zero if any DAQIRI artifact is still present.
 
-Pass `all` instead of `cmake` to also remove the container image (`docker image rm "$IMAGE_TAG"`) in the same run.
+To remove only DAQIRI's container image, use the `container` target:
+
+```bash
+scripts/cleanup.sh container             # interactive
+scripts/cleanup.sh container --dry-run   # show what would be removed
+```
+
+Override `IMAGE_TAG=...` if you built with a non-default tag. Pass `all`
+instead of `cmake` or `container` to remove both the CMake install and the
+container image in one run.
