@@ -10,9 +10,13 @@ Either form defines memory regions, NIC interfaces, TX/RX queues, and flow rules
 is passed to `daqiri_init()` at startup. The struct form is useful for customers who
 want to interoperate with existing configuration code.
 
-See `examples/daqiri_bench_*.yaml` for complete working examples.
+Start with the commented configurations under `examples/` to see complete,
+readable configurations and understand how the fields fit together. When you
+need repeatable production, benchmark, multi-queue, or cross-host variants, use
+[Configuration Generation](../config-generation.md) to apply system and topology
+parameters consistently.
 
-## Validate without hardware initialization
+## Optional validation without hardware initialization
 
 Use `daqiri_config_validate` to check YAML files before running an application, such as in CI or
 on a machine without the target NIC. `daqiri_init()` performs these checks during startup. The
@@ -24,8 +28,9 @@ daqiri_config_validate config.yaml another-config.yaml
 ```
 
 The command exits with status `0` when every file is valid, `1` when any file is invalid, and
-`2` when no file was provided. It is built and installed even when
-`DAQIRI_BUILD_EXAMPLES=OFF`.
+`2` when no file was provided. Use `daqiri_config_validate --list-engines` to print the
+engines compiled into the validator and exit successfully without checking files.
+It is built and installed even when `DAQIRI_BUILD_EXAMPLES=OFF`.
 
 OpenTelemetry metrics do not add YAML fields. Metrics-enabled builds use the
 same interface, queue, and flow names from the active configuration as metric
@@ -55,6 +60,7 @@ These settings apply globally to both TX and RX:
 - **`log_level`**: Engine log level.
   - type: `string`
   - values: `trace`, `debug`, `info`, `warn` (default), `error`, `critical`, `off`
+  - any other value is rejected during configuration parsing
 - **`loopback`**: Select a loopback mode for local testing.
   - type: `string`
   - values: `""` (disabled, default), `"sw"` (DPDK software loopback, no NIC),
@@ -406,7 +412,7 @@ weights.
 RSS is flow-affine: every packet with an unchanged five tuple stays on one
 queue. Roughly even packet counts require enough distinct tuples with reasonably
 balanced traffic; this is not packet striping or exact round-robin delivery.
-There is no queue-action mode field in schema v1; a future stripe mode can be
+There is no queue-action mode field in configuration version 1; a future stripe mode can be
 added without changing the multi-ID RSS default. If
 the NIC rejects an RSS action, static initialization or the dynamic flow
 completion fails rather than falling back to one queue.

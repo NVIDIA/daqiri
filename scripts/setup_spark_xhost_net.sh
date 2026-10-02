@@ -3,9 +3,9 @@
 # Adds the host route the kernel needs to reach the peer
 # when daqiri-tx / daqiri-rx nmcli profiles are split across two boxes.
 #
-# Matches examples/*_spark_xhost.yaml (1.1.1.1 on TX, 2.2.2.2 on RX).
-# Re-running is safe: replaces the route. An optional peer MAC preserves the
-# old static-neighbor setup, but DAQIRI's ibverbs raw engine can resolve it.
+# Matches raw-pair configs generated with 1.1.1.1 on TX and 2.2.2.2 on RX.
+# Re-running replaces the route. --peer-mac optionally installs a static
+# neighbor; without it, the kernel can resolve the peer with ARP.
 #
 # Conflicts with scripts/setup_spark_rdma_loopback.sh on the same host: that
 # script reassigns 1.1.1.1 / 2.2.2.2 across two local ports for inter-port

@@ -3,7 +3,7 @@
 # Adapted from a colleague's single-adapter script for this host's
 # inter-port loopback: Adapter1:port0 (1.1.1.1) <-> Adapter2:port1 (2.2.2.2).
 #
-# Matches examples/daqiri_bench_rdma_tx_rx_spark.yaml (1.1.1.1 / 2.2.2.2).
+# Matches the generated Spark RoCE pair (1.1.1.1 / 2.2.2.2).
 # Re-running is safe: replaces addresses, flushes per-port tables, and
 # deletes any matching rules before re-adding.
 #
