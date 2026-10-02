@@ -1,123 +1,107 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
-# All rights reserved. SPDX-License-Identifier: Apache-2.0
-"""Export a torchvision ResNet *feature extractor* to ONNX with in-model norm.
-
-FP16 path (default): ONNX input is FLOAT16; features output is FLOAT32.
-DAQIRI does int8→fp16 before TRT. INT8 path (--input-dtype int8): ONNX input
-is INT8; DAQIRI reorders int8 passthrough and TRT casts+norms inside the graph
-(drops the reorder convert). Features stay FLOAT32 for FeatureSink.
-  python3 export_resnet_onnx.py --model resnet50 --output models/resnet50_features.onnx
-  python3 export_resnet_onnx.py --model resnet50 --input-dtype int8 \
-      --output models/resnet50_features.int8in.onnx
-"""
+# SPDX-License-Identifier: Apache-2.0
+"""Export catalogued vision feature extractors to ONNX with in-model normalization."""
 
 import argparse
-import os
-
-import torch
-import torchvision
+import json
+from pathlib import Path
 
 INT8_OFFSET = 128.0
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
-
-FEATURE_DIM = {
-    "resnet18": 512,
-    "resnet34": 512,
-    "resnet50": 2048,
-    "resnet101": 2048,
-    "resnet152": 2048,
-}
+CATALOG_PATH = Path(__file__).resolve().parents[1] / "model_catalog.json"
 
 
-class ResNetFeaturesWithNorm(torch.nn.Module):
-    """Pixels in (fp16 or int8), ImageNet-normalized FP32 features out.
+def load_catalog(path: Path) -> dict[str, dict[str, object]]:
+    with path.open() as catalog_file:
+        return json.load(catalog_file)
 
-    For fp16 input: x is already (pixel_uint8 - INT8_OFFSET) as half.
-    For int8 input: cast to half first, then same affine.
-      a_c = 1 / (255 * std_c)
-      b_c = (INT8_OFFSET / 255 - mean_c) / std_c
 
-    Backbone runs in fp16; features are cast to float32 so the ONNX/TRT
-    output binding matches FeatureSink (host float32).
-    """
+class FeaturesWithNorm:
+    """Construct the Torch module only after argument-only catalog operations."""
 
-    def __init__(self, backbone: torch.nn.Module, input_dtype: str):
-        super().__init__()
-        self.backbone = backbone
-        self.input_dtype = input_dtype
-        a = [1.0 / (255.0 * s) for s in IMAGENET_STD]
-        b = [(INT8_OFFSET / 255.0 - m) / s for m, s in zip(IMAGENET_MEAN, IMAGENET_STD)]
-        self.register_buffer("scale", torch.tensor(a, dtype=torch.float16).view(1, 3, 1, 1))
-        self.register_buffer("bias", torch.tensor(b, dtype=torch.float16).view(1, 3, 1, 1))
+    @staticmethod
+    def build(profile: dict[str, object], input_dtype: str):
+        import torch
+        import torchvision
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.input_dtype == "int8":
-            x = x.to(dtype=torch.float16)
-        x = x * self.scale + self.bias
-        return self.backbone(x).float()
+        architecture = str(profile["architecture"])
+        backbone = getattr(torchvision.models, architecture)(weights="DEFAULT")
+        if architecture.startswith("resnet"):
+            backbone.fc = torch.nn.Identity()
+        else:
+            backbone.classifier = torch.nn.Identity()
+
+        class NormalizedFeatures(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.backbone = backbone
+                scale = [1.0 / (255.0 * stddev) for stddev in IMAGENET_STD]
+                bias = [(INT8_OFFSET / 255.0 - mean) / stddev
+                        for mean, stddev in zip(IMAGENET_MEAN, IMAGENET_STD)]
+                self.register_buffer("scale", torch.tensor(scale, dtype=torch.float16).view(1, 3, 1, 1))
+                self.register_buffer("bias", torch.tensor(bias, dtype=torch.float16).view(1, 3, 1, 1))
+
+            def forward(self, image):
+                if input_dtype == "int8":
+                    image = image.to(dtype=torch.float16)
+                return self.backbone(image * self.scale + self.bias).float()
+
+        return NormalizedFeatures().eval().half()
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--model", default="resnet50", choices=sorted(FEATURE_DIM))
-    ap.add_argument("--output", default=None,
-                    help="output .onnx path")
-    ap.add_argument("--weights", default="DEFAULT", choices=["DEFAULT", "none"])
-    ap.add_argument("--opset", type=int, default=18)
-    ap.add_argument("--input-dtype", default="fp16", choices=["fp16", "int8"])
-    ap.add_argument("--check", action="store_true")
-    args = ap.parse_args()
+    catalog = load_catalog(CATALOG_PATH)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model", default="resnet50", choices=sorted(catalog))
+    parser.add_argument("--output", help="output .onnx path; defaults to catalog path")
+    parser.add_argument("--input-dtype", choices=["fp16", "int8"], help="defaults to catalog input_type")
+    parser.add_argument("--opset", type=int, default=18)
+    parser.add_argument("--check", action="store_true")
+    parser.add_argument("--list-models", action="store_true")
+    parser.add_argument("--print-field", choices=["onnx_path", "engine_path", "feature_dim", "input_type"])
+    args = parser.parse_args()
 
-    default_name = (f"{args.model}_features.int8in.onnx" if args.input_dtype == "int8"
-                    else f"{args.model}_features.onnx")
-    out = args.output or os.path.join("models", default_name)
-    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    if args.list_models:
+        print(" ".join(sorted(catalog)))
+        return
 
-    weights = None if args.weights == "none" else "DEFAULT"
-    backbone = getattr(torchvision.models, args.model)(weights=weights)
-    backbone.fc = torch.nn.Identity()
-    model = ResNetFeaturesWithNorm(backbone, args.input_dtype)
-    model.eval()
-    model.half()
+    profile = catalog[args.model]
+    if args.print_field:
+        print(profile[args.print_field])
+        return
 
-    if args.input_dtype == "int8":
+    input_dtype = args.input_dtype or str(profile["input_type"])
+    output = Path(args.output or str(profile["onnx_path"]))
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    import torch
+
+    model = FeaturesWithNorm.build(profile, input_dtype)
+    if input_dtype == "int8":
         dummy = torch.randint(-128, 128, (1, 3, 224, 224), dtype=torch.int8)
     else:
         dummy = torch.randn(1, 3, 224, 224, dtype=torch.float16)
 
     torch.onnx.export(
-        model,
-        dummy,
-        out,
-        export_params=True,
-        opset_version=args.opset,
-        do_constant_folding=True,
-        input_names=["input"],
-        output_names=["features"],
+        model, dummy, output, export_params=True, opset_version=args.opset,
+        do_constant_folding=True, input_names=["input"], output_names=["features"],
         dynamic_axes={"input": {0: "batch"}, "features": {0: "batch"}},
     )
-    print(f"Exported {args.model} feature extractor "
-          f"({args.input_dtype} in + in-model norm) -> {out} "
-          f"(feature_dim={FEATURE_DIM[args.model]}, weights={args.weights})")
+    print(f"Exported {args.model} ({input_dtype} input) -> {output} "
+          f"(feature_dim={profile['feature_dim']})")
 
     if args.check:
         import onnx
-        m = onnx.load(out)
-        onnx.checker.check_model(m)
-        inp = m.graph.input[0]
-        outp = m.graph.output[0]
-        in_elem = inp.type.tensor_type.elem_type
-        out_elem = outp.type.tensor_type.elem_type
-        # FLOAT=1, FLOAT16=10, INT8=3
-        print(f"onnx.checker OK; input elem_type={in_elem} (10=FLOAT16, 3=INT8); "
-              f"name={inp.name}")
-        print(f"output elem_type={out_elem} (1=FLOAT); name={outp.name}")
-        if out_elem != 1:
-            raise SystemExit(
-                f"features output must be FLOAT (1), got elem_type={out_elem}; "
-                "ensure forward() ends with .float()")
+        exported = onnx.load(output)
+        onnx.checker.check_model(exported)
+        input_type = exported.graph.input[0].type.tensor_type.elem_type
+        output_type = exported.graph.output[0].type.tensor_type.elem_type
+        expected_input = 3 if input_dtype == "int8" else 10
+        if input_type != expected_input or output_type != 1:
+            raise SystemExit(f"unexpected ONNX types: input={input_type}, output={output_type}")
+        print(f"onnx.checker OK; input elem_type={input_type}; output elem_type={output_type}")
 
 
 if __name__ == "__main__":

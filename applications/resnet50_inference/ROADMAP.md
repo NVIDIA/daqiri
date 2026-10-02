@@ -11,39 +11,25 @@ sessions can continue without relying on chat history.
   TX-only packet geometry.
 - The commit smoke path is cabled Thor p0↔p1 using `resnet50_wire_loopback.yaml`,
   the ibverbs raw engine, and conservative `pacing_mbps: 50`.
+- The hardware-reorder config and its INT8 ONNX/engine and sequence-at-336 PCAP
+  are prepared, but the hardware path is **untested**: the Thor RX HCA needs
+  programmable flex parsing enabled and a cold reboot before it can initialize.
+- Cross-host and cabled benchmark configs explicitly select the ibverbs raw engine;
+  the runners persist engine, packet/burst, and inference summaries.
+- `model_catalog.json` drives ResNet-18/34/50/101/152 and MobileNetV3 Small/Large
+  export, TensorRT cache selection, and application feature dimensions.
 
 ## Remaining planned updates
 
-1. **NIC hardware reorder path**
-   - Add a hardware-reorder ResNet RX config using `reorder_engine: "hw"`,
-     `cyclic_sequence: true`, and the required packet sizing fields.
-   - Keep software reorder configs as correctness/perf comparison baselines.
-   - Verify the hardware path uses INT8 TensorRT input because hardware reorder
-     does placement only; it does not perform app-level int8→fp16 conversion.
+1. **IGX Thor publishable benchmark pass** *(deferred until the device receives traffic from a peer)*
 
-2. **Ibverbs backend benchmark coverage**
-   - Add or extend benchmark configs/scripts so ResNet smoke and publish runs can
-     exercise ibverbs raw explicitly, not only DPDK raw.
-   - Capture packet counters, drop counters, burst counters, and inference
-     summaries in machine-readable output where practical.
-
-3. **MobileNetV3 small and large benchmarks**
-   - Add export/build/run coverage for MobileNetV3 Small and Large using the
-     same DAQIRI packetization path.
-   - Avoid duplicating model metadata in multiple places; prefer a small model
-     catalog for ONNX path, engine-cache path, feature dimension, and input type.
-   - Update tutorial/performance docs once cabled benchmark numbers are stable.
-
-4. **IGX Thor publishable benchmark pass**
    - Use cabled loopback or cross-host hardware paths only; do not use software
      loopback for publishable numbers.
    - Record exact host, GPU, NIC, driver/container, engine, pacing, packet counts,
      drops, latency percentiles, and stable throughput windows.
    - Separate correctness smoke numbers from publishable performance numbers.
 
-5. **Complexity cleanup from reviewer pass**
-   - Consider a model catalog to remove scattered `--model` conditionals.
-   - Add machine-readable final summaries to reduce grep/sed parsing in runners.
+2. **Complexity cleanup from reviewer pass**
    - If MobileNet lands, rename generic pipeline pieces that are ResNet-specific
      only by history.
    - Deduplicate Python/tool constants for packet geometry where possible.

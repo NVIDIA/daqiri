@@ -26,7 +26,7 @@ is not the release smoke path.
 
 ```
 TX host:  pcap / synthetic → pcap_tx_worker → wire (int8 samples + header seq)
-RX host:  DPDK RX + GPU reorder (int8→fp16, packets_per_batch=4096)
+RX host:  ibverbs raw RX + GPU reorder (int8→fp16, packets_per_batch=4096)
        → rx_producer_worker → InferenceQueue (SPSC)
        → inference_consumer_worker → TrtRunner (fp16 in) → FeatureSink
 ```
@@ -43,6 +43,19 @@ BASE_IMAGE=torch BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-con
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
   -DDAQIRI_BUILD_PYTHON=OFF -DDAQIRI_ENGINE="dpdk ibverbs" -DDAQIRI_BUILD_APPLICATIONS=ON
 cmake --build build -j --target daqiri_resnet50_inference
+```
+
+## Models, data + ONNX
+
+`model_catalog.json` is the single source of truth for model architecture, ONNX and
+engine-cache paths, feature dimension, and input type. The default catalog includes
+ResNet-18/34/50/101/152 plus MobileNetV3 Small and Large. The app and
+`run_resnet_bench.sh` both resolve `--model` through it.
+
+```bash
+python3 applications/resnet50_inference/tools/export_resnet_onnx.py --list-models
+python3 applications/resnet50_inference/tools/export_resnet_onnx.py \
+  --model mobilenet_v3_small --check
 ```
 
 ## Data + ONNX
@@ -86,6 +99,16 @@ sudo -E ./build/applications/resnet50_inference/daqiri_resnet50_inference \
 
 Expect: `kHALF` input binding, `RX reorder ready`, per-class mean
 features with CIFAR-10 class names, clean shutdown.
+
+## Ibverbs benchmark sweep
+
+The cabled synthetic benchmark config explicitly selects the ibverbs raw engine.
+It runs every catalogued model by default and writes one CSV row per model/repeat:
+
+```bash
+export ETH_DST_ADDR=$(cat /sys/class/net/<rx-iface>/address)
+BUILD_DIR=./build applications/resnet50_inference/tools/run_resnet_bench.sh
+```
 
 ## Cabled loopback smoke
 
@@ -133,6 +156,11 @@ input_type: int8, output_type: fp16`; for hardware NIC reorder, omit
 `data_types`, set `reorder_engine: "hw"`, and use an INT8 TensorRT input.
 `--images-per-batch` may shrink the TensorRT batch afterward without changing
 the engine reorder window.
+
+Hardware reorder samples the UDP payload, so its sequence field is at bit 336,
+not the software path's header field at bit 128. Its 16-bit cyclic sequence
+requires all 16 `Reorder_RX_GPU` buffers (4096 packets each) so every exact
+sampled value has a hardware destination.
 
 ## Queue sizing vs. reorder batches
 

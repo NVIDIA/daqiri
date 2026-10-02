@@ -78,6 +78,7 @@ set(DAQIRI_EXAMPLES_DIR "${CMAKE_SOURCE_DIR}/examples")
 add_executable(daqiri_resnet50_inference
   main.cpp
   app_config.cpp
+  model_catalog.cpp
   pcap_replayer.cpp
   feature_sink.cpp
   inference_pipeline.cu
@@ -106,8 +107,13 @@ set_target_properties(daqiri_resnet50_inference PROPERTIES
   CUDA_ARCHITECTURES "${DAQIRI_APP_CUDA_ARCHITECTURES}"
   BUILD_RPATH "$ORIGIN/../../src;$ORIGIN/../../src/third_party/yaml-cpp")
 
+set(DAQIRI_RESNET_CATALOG model_catalog.json)
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${DAQIRI_RESNET_CATALOG}
+               ${CMAKE_CURRENT_BINARY_DIR}/${DAQIRI_RESNET_CATALOG} COPYONLY)
+
 set(DAQIRI_RESNET_CONFIGS
   configs/resnet50_wire_loopback.yaml
+  configs/resnet50_wire_loopback_hw.yaml
   configs/resnet50_sw_loopback.yaml
   configs/resnet50_bench_spark.yaml
   configs/resnet50_tx_spark_xhost.yaml
@@ -118,4 +124,4 @@ foreach(cfg IN LISTS DAQIRI_RESNET_CONFIGS)
 endforeach()
 
 install(TARGETS daqiri_resnet50_inference RUNTIME DESTINATION bin)
-install(FILES ${DAQIRI_RESNET_CONFIGS} DESTINATION bin/resnet50_inference)
+install(FILES ${DAQIRI_RESNET_CONFIGS} ${DAQIRI_RESNET_CATALOG} DESTINATION bin/resnet50_inference)

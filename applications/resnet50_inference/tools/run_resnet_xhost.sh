@@ -119,6 +119,7 @@ mkdir -p "${RESULTS_DIR}"
   # Fields the results table needs to be reproducible: what was run, for how
   # long, how many batches it actually completed, and what it dropped.
   echo "run_id,${RUN_ID}"
+  echo "engine,ibverbs"
   echo "rx_host,${RX_HOST}"
   echo "tx_host,${TX_HOST}"
   echo "rx_config,${RX_CFG}"

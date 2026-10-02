@@ -5018,8 +5018,10 @@ Status IbverbsEngine::reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, b
       plan.data_type_conversion ? static_cast<uint8_t>(c.data_types_.output_type_) : 0U,
       plan.data_type_conversion ? static_cast<uint8_t>(c.data_types_.input_endianness_) : 0U,
       ob.d_batch_id, ob.d_received_bitmap, plan.stream);
-  if (cudaGetLastError() != cudaSuccess) {
-    DAQIRI_LOG_ERROR("Reorder '{}' kernel launch failed", plan.cfg.name_);
+  const cudaError_t launch_status = cudaGetLastError();
+  if (launch_status != cudaSuccess) {
+    DAQIRI_LOG_ERROR("Reorder '{}' kernel launch failed: {} ({})", plan.cfg.name_,
+                     cudaGetErrorName(launch_status), cudaGetErrorString(launch_status));
     ob.consumer_done = true;
     ob.event_complete = true;
     return Status::INTERNAL_ERROR;

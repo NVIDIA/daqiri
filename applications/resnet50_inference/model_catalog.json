@@ -1,0 +1,51 @@
+{
+  "resnet18": {
+    "architecture": "resnet18",
+    "onnx_path": "models/resnet18_features.onnx",
+    "engine_path": "models/resnet18_features.fp16in.engine",
+    "feature_dim": 512,
+    "input_type": "fp16"
+  },
+  "resnet34": {
+    "architecture": "resnet34",
+    "onnx_path": "models/resnet34_features.onnx",
+    "engine_path": "models/resnet34_features.fp16in.engine",
+    "feature_dim": 512,
+    "input_type": "fp16"
+  },
+  "resnet50": {
+    "architecture": "resnet50",
+    "onnx_path": "models/resnet50_features.onnx",
+    "engine_path": "models/resnet50_features.fp16in.engine",
+    "feature_dim": 2048,
+    "input_type": "fp16"
+  },
+  "resnet101": {
+    "architecture": "resnet101",
+    "onnx_path": "models/resnet101_features.onnx",
+    "engine_path": "models/resnet101_features.fp16in.engine",
+    "feature_dim": 2048,
+    "input_type": "fp16"
+  },
+  "resnet152": {
+    "architecture": "resnet152",
+    "onnx_path": "models/resnet152_features.onnx",
+    "engine_path": "models/resnet152_features.fp16in.engine",
+    "feature_dim": 2048,
+    "input_type": "fp16"
+  },
+  "mobilenet_v3_small": {
+    "architecture": "mobilenet_v3_small",
+    "onnx_path": "models/mobilenet_v3_small_features.onnx",
+    "engine_path": "models/mobilenet_v3_small_features.fp16in.engine",
+    "feature_dim": 576,
+    "input_type": "fp16"
+  },
+  "mobilenet_v3_large": {
+    "architecture": "mobilenet_v3_large",
+    "onnx_path": "models/mobilenet_v3_large_features.onnx",
+    "engine_path": "models/mobilenet_v3_large_features.fp16in.engine",
+    "feature_dim": 960,
+    "input_type": "fp16"
+  }
+}

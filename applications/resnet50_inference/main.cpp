@@ -35,6 +35,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -43,6 +44,7 @@
 #include "app_config.h"
 #include "feature_sink.h"
 #include "inference_pipeline.h"
+#include "model_catalog.h"
 #include "pcap_replayer.h"
 #include "raw_bench_common.h"
 #include "spsc_queue.h"
@@ -74,7 +76,7 @@ int main(int argc, char** argv) {
     std::cerr << "Usage: " << argv[0]
               << " <config.yaml> [--mode tx|rx] [--seconds N] [--dataset <pcap>]"
                  " [--replay-once|--loop] [--images-per-batch N]"
-                 " [--expected-images N] [--model resnet18|34|50|101|152]\n";
+                 " [--expected-images N] [--model <catalog-name>]\n";
     return 1;
   }
 
@@ -122,10 +124,23 @@ int main(int argc, char** argv) {
     }
   }
   if (const char* model = find_flag_value(argc, argv, "--model")) {
-    const std::string m = model;
-    cfg.trt.onnx_path = "models/" + m + "_features.onnx";
-    cfg.trt.engine_path = "models/" + m + "_features.fp16in.engine";
-    cfg.trt.feature_dim = (m == "resnet18" || m == "resnet34") ? 512 : 2048;
+    try {
+      const std::filesystem::path catalog_path =
+          std::filesystem::path(argv[1]).parent_path().parent_path() / "model_catalog.json";
+      const app::ModelProfile profile =
+          app::load_model_profile(catalog_path.string(), model);
+      cfg.trt.onnx_path = profile.onnx_path;
+      cfg.trt.engine_path = profile.engine_path;
+      cfg.trt.feature_dim = profile.feature_dim;
+      if (profile.input_type != cfg.reorder_output_type) {
+        std::cerr << "Model " << profile.name << " expects " << profile.input_type
+                  << " input but the reorder output is " << cfg.reorder_output_type << "\n";
+        return 1;
+      }
+    } catch (const std::exception& e) {
+      std::cerr << "Invalid --model: " << e.what() << "\n";
+      return 1;
+    }
   }
 
   bool loop = !cfg.example_mode();
