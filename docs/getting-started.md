@@ -23,7 +23,7 @@ capabilities. Start with the hardware you plan to exercise.
 | **Linux host** | All paths | Linux kernel 5.15+; Ubuntu 22.04 or 24.04 recommended |
 | **NVIDIA NIC** | Raw Ethernet, RoCE, GPUDirect | ConnectX-6 Dx or later. Packet pacing, accurate timed transmission, and hardware reorder require ConnectX-7 or later. |
 | **NVIDIA GPU** | GPUDirect and GPU post-processing | RTX or Data Center GPU. GeForce is not supported. |
-| **Hugepages** | DPDK Raw Ethernet or `kind: huge` memory regions | Reserved 2 MiB hugepages on the host or in the container runtime environment. |
+| **Hugepages** | DPDK Raw Ethernet or `kind: huge` memory regions | Reserved hugepages on the host or in the container runtime environment. |
 
 Supported platforms include NVIDIA Data Center systems, NVIDIA IGX, NVIDIA DGX
 Spark, and `x86_64` systems with the NIC/GPU requirements above.
@@ -56,6 +56,8 @@ builds, install the matching packages yourself by following the
 
 ## Build {#build-the-daqiri-library}
 
+<span id="container-build"></span>
+
 Choose either the container build or a bare-metal CMake build. The container is
 the recommended first pass because it carries the DAQIRI source build, patched
 DPDK, CUDA user-space dependencies, and RDMA libraries in one image.
@@ -76,12 +78,15 @@ DPDK, CUDA user-space dependencies, and RDMA libraries in one image.
       scripts/build-container.sh
     ```
 
-    Use `BASE_IMAGE=torch` when you want the example applications that depend on
-    Torch or TensorRT:
+    Use `BASE_IMAGE=torch` when you need the Torch or TensorRT dependencies:
 
     ```bash
     BASE_IMAGE=torch BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
     ```
+
+    This selects the base image only; building the opt-in TensorRT example
+    applications is a separate `DAQIRI_BUILD_APPLICATIONS=ON` source-build
+    workflow covered in the [TensorRT inference tutorial](tutorials/daqiri-resnet-inference.md#build).
 
 === "CMake build (bare-metal)"
 
@@ -129,13 +134,35 @@ and programmable flex parsing are covered in
 DAQIRI benchmarks pair an executable with a YAML configuration. If you have a
 cable looped back between NIC ports on the system, start with a closed-loop Raw
 Ethernet run after replacing the `<angle-bracket>` placeholders in the YAML for
-your system:
+your system.
 
-```bash
-./build/examples/daqiri_bench_raw_gpudirect \
-    ./build/examples/daqiri_bench_raw_tx_rx.yaml \
-    --seconds 10
-```
+=== "Container build"
+
+    Launch the container with hardware access:
+
+    ```bash
+    docker run --rm -it --privileged \
+      --runtime=nvidia \
+      --network=host \
+      -v /dev/hugepages:/dev/hugepages \
+      daqiri:local bash
+    ```
+
+    Then run the installed benchmark inside the container:
+
+    ```bash
+    /opt/daqiri/bin/daqiri_bench_raw_gpudirect \
+        /opt/daqiri/bin/daqiri_bench_raw_tx_rx.yaml \
+        --seconds 10
+    ```
+
+=== "CMake build"
+
+    ```bash
+    ./build/examples/daqiri_bench_raw_gpudirect \
+        ./build/examples/daqiri_bench_raw_tx_rx.yaml \
+        --seconds 10
+    ```
 
 Other smoke tests exist if you do not have a cable loopback, including hardware
 loopback on supported NICs and software loopback when no NIC is available. For
