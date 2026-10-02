@@ -25,7 +25,7 @@
   "confidenceScoreSection": {
     "included": true
   },
-  "instructions": "DAQIRI is a single C++/CUDA shared library (libdaqiri.so) for GPU-direct packet I/O over DPDK, ibverbs/RDMA, and sockets. The full reviewer context lives in .greptile/rules.md and the linked context files in .greptile/files.json, especially AGENTS.md, CONTRIBUTING.md, .claude/rules/docs-sync.md, scripts/check_pr.sh, scripts/publish_container.sh, and .github/workflows/docs.yml. Always read them before commenting. Prefer few high-signal comments over many nits; this is a low-level networking library where idiomatic-looking code is often deliberate.",
+  "instructions": "DAQIRI is a single C++/CUDA shared library (libdaqiri.so) for GPU-direct packet I/O over DPDK, ibverbs/RDMA, and sockets. The full reviewer context lives in .greptile/rules.md and the linked context files in .greptile/files.json, especially AGENTS.md, CONTRIBUTING.md, .claude/rules/docs-sync.md, scripts/check_pr.sh, scripts/publish_container.sh, .github/workflows/docs.yml, and any Blossom CI wrapper under .github/workflows/. Always read them before commenting. Prefer few high-signal comments over many nits; this is a low-level networking library where idiomatic-looking code is often deliberate.",
   "rules": [
     {
       "id": "dco-signoff",
@@ -75,7 +75,7 @@
     },
     {
       "id": "local-pr-checks",
-      "rule": "GitHub Actions intentionally retains only the documentation build, deployment, and documentation-specific validators. Every PR must run scripts/check_pr.sh locally. If a PR changes anything under docs/images/packet_diagrams/, require --diagrams; if it changes the Docker base stage, require --docker-base; combine both flags when both areas change. Do not request hosted Actions for portable tests, general builds, or container publication. Ask for local test evidence when the PR description omits it. Container publication changes must preserve per-architecture tags and the canonical multi-architecture manifest.",
+      "rule": "GitHub Actions intentionally retains only the documentation build/deploy workflow and a narrow Blossom CI wrapper that dispatches or monitors Jenkins Blossom. The Blossom wrapper may report Jenkins status, but must not run portable tests, general builds, platform tests, container builds, or container publication directly on GitHub-hosted Actions. Every PR must run scripts/check_pr.sh locally. If a PR changes anything under docs/images/packet_diagrams/, require --diagrams; if it changes the Docker base stage, require --docker-base; combine both flags when both areas change. Do not request other hosted Actions for portable tests, general builds, or container publication. Ask for local test evidence when the PR description omits it. Container publication changes must preserve per-architecture tags and the canonical multi-architecture manifest.",
       "scope": [".github/**", "scripts/**", "tests/**", "AGENTS.md", "CONTRIBUTING.md"],
       "severity": "medium"
     },
