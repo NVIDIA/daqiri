@@ -81,10 +81,11 @@ socket-only configurations must not link `librte_*`.
 
 ### 4. Doc-sync on code changes
 
-The retained documentation workflow is the sole GitHub Actions exception. It
-runs `mkdocs --strict`, `check_html_links.py`, and `check_doc_refs.py`. Those
-checks catch structural reference drift, but semantic content drift still
-requires review against the mapping below.
+The retained documentation workflow and a narrow Jenkins Blossom wrapper are
+the only GitHub Actions exceptions. The documentation workflow runs
+`mkdocs --strict`, `check_html_links.py`, and `check_doc_refs.py`. Those checks
+catch structural reference drift, but semantic content drift still requires
+review against the mapping below.
 
 The mapping (mirrored from `.claude/rules/docs-sync.md`):
 
@@ -144,12 +145,16 @@ findings. Greptile should catch them so a human reviewer doesn't have to.
   change. Ask for the local results when the PR description does not include
   them.
 
-## GitHub Actions and local release tooling
+## GitHub Actions, Blossom, and local release tooling
 
-`.github/workflows/docs.yml` is the only allowed GitHub Actions workflow. Its
+Allowed GitHub Actions workflows are limited to `.github/workflows/docs.yml` and
+a Blossom CI wrapper under `.github/workflows/`. The documentation workflow's
 scope is documentation build, documentation-specific validation, and deployment.
-Do not request hosted Actions for portable tests, general builds, platform tests,
-or container publication; those intentionally run through local scripts.
+The Blossom wrapper may dispatch or monitor Jenkins Blossom and report its
+status back to GitHub, but it must not run portable tests, general builds,
+platform tests, container builds, or container publication directly on
+GitHub-hosted Actions. Do not request other hosted Actions for those jobs; they
+intentionally run through local scripts or provisioned CI.
 
 Container releases are assembled locally. `PUSH=1 scripts/publish_container.sh`
 builds and pushes the current host's `-amd64` or `-arm64` tag. After both tags
