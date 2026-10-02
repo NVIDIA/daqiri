@@ -483,7 +483,7 @@ v1 batch-size requirement:
   `hw` selects ibverbs first-DMA placement on supported mlx5 NICs.
   Hardware mode requires the adapter settings `PROG_PARSE_GRAPH=1` and
   `FLEX_PARSER_PROFILE_ENABLE=4`; follow the
-  [mlxconfig setup procedure](../getting-started.md#enable-programmable-flex-parsing) and cold
+  [mlxconfig setup procedure](../tutorials/system_configuration.md#enable-programmable-flex-parsing) and cold
   reboot the adapter after changing them.
   - type: `string`
   - values: `sw`, `hw`

@@ -57,7 +57,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
         mlx_compat             20480  11 rdma_cm,ib_ipoib,mlxdevm,iw_cm,ib_umad,ib_core,rdma_ucm,ib_uverbs,mlx5_ib,ib_cm,mlx5_core
         ```
 
-    If this is empty, install the latest OFED drivers from DOCA (the DOCA APT repository should already be configured from the [DAQIRI build setup](../getting-started.md#build-the-daqiri-library)), and reboot your system:
+    If this is empty, install the latest OFED drivers from DOCA (the DOCA APT repository should already be configured from [Bare-Metal CMake Build → Step 1](bare-metal-cmake-build.md#step-1-configure-the-doca-apt-repository)), and reboot your system:
 
     ```bash
     sudo apt update
@@ -1761,3 +1761,45 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     With the system tuned, continue to [Benchmarking](../benchmarks/index.md) to choose and run your first DAQIRI benchmark.
 
 </div>
+
+## Enable Programmable Flex Parsing
+
+Hardware reorder uses the mlx5 flex parser, so the receiving adapter must load
+the programmable parser profile at boot. This is only required for hardware
+reorder benchmarks and configurations that set `reorder_engine: "hw"`.
+
+The required persistent NIC firmware settings are:
+
+```ini
+PROG_PARSE_GRAPH=1
+FLEX_PARSER_PROFILE_ENABLE=4
+```
+
+Start MFT, select the adapter by PCI BDF or MST device, and inspect the current
+and next-boot values:
+
+```bash
+sudo mst start
+MLXCONFIG_DEVICE=/dev/mst/mt4129_pciconf0  # Or a PCI BDF such as 0005:03:00.0
+
+sudo mlxconfig --enable_verbosity -d "$MLXCONFIG_DEVICE" query | \
+  grep -E 'PROG_PARSE_GRAPH|FLEX_PARSER_PROFILE_ENABLE'
+```
+
+If either setting differs, enable both:
+
+```bash
+sudo mlxconfig -d "$MLXCONFIG_DEVICE" --yes set \
+  PROG_PARSE_GRAPH=1 \
+  FLEX_PARSER_PROFILE_ENABLE=4
+```
+
+The output is a next-boot configuration. Cold reboot or power-cycle the host so
+the NIC reloads it; restarting DAQIRI or rebinding the driver is insufficient.
+Then repeat the query and confirm it reports `PROG_PARSE_GRAPH True(1)` and
+`FLEX_PARSER_PROFILE_ENABLE 4`. Repeat the procedure for every adapter that will
+perform hardware reorder.
+
+DAQIRI also probes the effective `FLEX_PARSE_GRAPH` capability during
+initialization and rejects `reorder_engine: "hw"` with a diagnostic naming these
+settings when it is unavailable.

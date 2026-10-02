@@ -152,8 +152,8 @@ slots are rearmed only by `free_rx_burst()`.
 
 Before running, set `PROG_PARSE_GRAPH=1` and `FLEX_PARSER_PROFILE_ENABLE=4` persistently on the
 receiving adapter and cold reboot it. See
-[Enable programmable flex parsing](../getting-started.md#enable-programmable-flex-parsing) for the
-complete `mlxconfig` procedure and verification command.
+[Enable programmable flex parsing](../tutorials/system_configuration.md#enable-programmable-flex-parsing)
+for the complete `mlxconfig` procedure and verification command.
 
 If initialization reports the following capability failure, the settings are disabled or have
 not taken effect on the receiving adapter:

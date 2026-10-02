@@ -5,102 +5,62 @@ hide:
 
 # Getting Started
 
+DAQIRI's first-run path is: **build the library**, optionally **tune the host**
+for maximum performance, then **run a benchmark**. This page covers the basic
+startup steps and links to long-form guides when you need platform-specific
+setup, bare-metal packaging, or the full API reference.
+
 ## System Requirements
 
-DAQIRI's baseline requirements depend on which [stream type](concepts.md#stream-types) you plan to use. The Linux Sockets path (`stream_type: "socket"` with `udp://` or `tcp://` endpoints) runs on any modern Linux box. The Raw Ethernet kernel-bypass path and GPUDirect impose additional hardware requirements, listed below.
+DAQIRI can run a plain Linux socket path on modest hardware, but the common
+Raw Ethernet, RoCE, and GPUDirect paths depend on NVIDIA networking and GPU
+capabilities. Start with the hardware you plan to exercise.
 
-The built-in TCP path bounds each internal RX backlog by the smallest
-memory-region `num_bufs` referenced by that queue. A sustained slow consumer
-therefore applies TCP backpressure rather than allowing DAQIRI's process queue
-to grow without limit. See
-[TCP receive backpressure and queue sizing](benchmarks/socket_benchmarking.md#tcp-receive-backpressure-and-queue-sizing).
+### Hardware
 
-| Component | Requirement |
-|-----------|-------------|
-| **OS** | Linux (kernel 5.15+), Ubuntu 22.04 recommended |
-| **CUDA** | CUDA Toolkit 12.2+ (the container ships CUDA 13.1) |
-| **NIC** *(Raw Ethernet / GPUDirect / RoCE only)* | NVIDIA ConnectX-6 Dx or later. Packet pacing and timed transmission require ConnectX-7 or later. Default Ubuntu kernel drivers (inbox) are sufficient. We recommend also installing `doca-ofed` for the diagnostic utilities (`ibstat`, `ibv_devinfo`, `ibdev2netdev`, `mlnx_perf`, `mlxconfig`, and so on). |
-| **GPU** *(GPUDirect only)* | RTX or Data Center GPU. GeForce is not supported. |
-| **DPDK** | Included in the DAQIRI container (patched for dma-buf, so `nvidia-peermem` is **not required** inside the container); see [bare-metal dependencies](#bare-metal-dependencies) below for the host build. |
-| **RoCE** | `libibverbs` and `librdmacm` (for `stream_type: "socket"` and `roce://` endpoints). |
-| **GDS** | Optional `cufile.h` and `libcufile` for file writes from CUDA device memory. Runtime device-memory writes require a working cuFile installation. For regular `nvidia-fs` mode, the `nvidia-fs` kernel module must be loaded and the destination storage stack must be supported. |
-| **S3** | Optional AWS SDK for C++ with the `s3` component for raw packet uploads to Amazon S3 or S3-compatible object stores. The DAQIRI container builds this SDK from source. |
+| Component | Required for | Requirement |
+|---|---|---|
+| **Linux host** | All paths | Linux kernel 5.15+; Ubuntu 22.04 or 24.04 recommended |
+| **NVIDIA NIC** | Raw Ethernet, RoCE, GPUDirect | ConnectX-6 Dx or later. Packet pacing, accurate timed transmission, and hardware reorder require ConnectX-7 or later. |
+| **NVIDIA GPU** | GPUDirect and GPU post-processing | RTX or Data Center GPU. GeForce is not supported. |
+| **Hugepages** | DPDK Raw Ethernet or `kind: huge` memory regions | Reserved 2 MiB hugepages on the host or in the container runtime environment. |
 
-Supported platforms include [NVIDIA Data Center](https://www.nvidia.com/en-us/data-center/) systems, edge systems like [NVIDIA IGX](https://www.nvidia.com/en-us/edge-computing/products/igx/) and [NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/workstations/dgx-spark/), and `x86_64` systems with the above components.
+Supported platforms include NVIDIA Data Center systems, NVIDIA IGX, NVIDIA DGX
+Spark, and `x86_64` systems with the NIC/GPU requirements above.
 
-For detailed instructions on verifying NIC drivers, configuring link layers, enabling GPUDirect, and tuning your system for maximum performance, see the [System Configuration tutorial](tutorials/system_configuration.md).
+### Required Libraries And Tools
 
-Configs that declare a DAQIRI-owned memory region with `kind: huge` must have a compatible
-hugetlb pool provisioned before startup. DAQIRI treats that kind as a requirement and fails
-initialization instead of falling back to regular or transparent-hugepage memory. The raw
-ibverbs engine packs same-NUMA startup regions into shared arenas so smaller regions can use a
-larger page efficiently. External memory bindings remain the caller's responsibility.
+The container build is the recommended starting point because it bundles the
+user-space libraries and builds the patched DPDK used by DAQIRI. For bare-metal
+builds, install the matching packages yourself by following the
+[Bare-Metal CMake Build](tutorials/bare-metal-cmake-build.md) tutorial.
 
-## Build the DAQIRI Library
+| Component | Required for | Notes |
+|---|---|---|
+| **CUDA Toolkit 12.2+** | Build and GPU paths | The container currently ships CUDA 13.1. CUDA Toolkit 13.0+ adds the default GB10 (`sm_121`) build target. |
+| **CMake 3.20+ and C++ build tools** | All source builds | `cmake`, a C++ compiler, `git`, `pkg-config`, Python, and standard build tooling. |
+| **DPDK** | DPDK Raw Ethernet engine | Included in the DAQIRI container and patched for dma-buf GPUDirect, so `nvidia-peermem` is not required inside the container. |
+| **libibverbs / librdmacm / mlx5 provider** | RoCE and ibverbs Raw Ethernet engine | Needed for `roce://` socket endpoints and the pure-DevX ibverbs raw engine. |
+| **NIC diagnostic utilities** | System setup and benchmarks | `ibstat`, `ibv_devinfo`, `ibdev2netdev`, `mlnx_perf`, `mlxconfig`, and related tools are strongly recommended. |
+| **Vendored submodules** | All source builds | `third_party/yaml-cpp` and `third_party/spdlog`; initialize submodules before configuring. |
 
-For a bare-metal build, first add the [DOCA apt repository](https://developer.nvidia.com/doca-downloads?deployment_platform=Host-Server&deployment_package=DOCA-Host&target_os=Linux), which holds some of DAQIRI's dependencies. Container builds do not require this host setup.
+### Optional Libraries
 
-=== "IGX OS 1.1"
+| Component | Enables | Notes |
+|---|---|---|
+| **pybind11** | Python bindings | Only needed with `-DDAQIRI_BUILD_PYTHON=ON`. |
+| **cuFile / GDS** | CUDA device-memory burst file writes | Only needed with `-DDAQIRI_ENABLE_GDS=ON`; host-memory writes use POSIX APIs without GDS. |
+| **AWS SDK for C++ with S3** | Raw packet writes to S3-compatible object stores | Only needed with `-DDAQIRI_ENABLE_S3=ON`; the container can build this SDK from source. |
+| **OpenTelemetry C++** | Metrics instrumentation | Only needed with `-DDAQIRI_ENABLE_OTEL_METRICS=ON`; applications still configure the SDK reader/exporter. |
+| **libnuma** | NUMA-aware ring, pool, and huge-memory placement | Auto-detected. DAQIRI falls back to first-touch placement when absent. |
 
-    ```bash
-    export DOCA_URL="https://linux.mellanox.com/public/repo/doca/2.8.0/ubuntu22.04/arm64-sbsa/"
-    wget -qO- https://linux.mellanox.com/public/repo/doca/GPG-KEY-Mellanox.pub | gpg --dearmor - | sudo tee /etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub > /dev/null
-    echo "deb [signed-by=/etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub] $DOCA_URL ./"  | sudo tee /etc/apt/sources.list.d/doca.list > /dev/null
+## Build {#build-the-daqiri-library}
 
-    sudo apt update
-    ```
-
-=== "SBSA (Ubuntu 22.04)"
-
-    ```bash
-    export DOCA_URL="https://linux.mellanox.com/public/repo/doca/2.8.0/ubuntu22.04/arm64-sbsa/"
-    wget -qO- https://linux.mellanox.com/public/repo/doca/GPG-KEY-Mellanox.pub | gpg --dearmor - | sudo tee /etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub > /dev/null
-    echo "deb [signed-by=/etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub] $DOCA_URL ./"  | sudo tee /etc/apt/sources.list.d/doca.list > /dev/null
-
-    # Also need the CUDA repository: https://developer.nvidia.com/cuda-downloads?target_os=Linux
-    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/sbsa/cuda-keyring_1.1-1_all.deb
-    sudo dpkg -i cuda-keyring_1.1-1_all.deb
-
-    sudo apt update
-    ```
-
-=== "x86_64 (Ubuntu 22.04)"
-
-    ```bash
-    export DOCA_URL="https://linux.mellanox.com/public/repo/doca/2.8.0/ubuntu22.04/x86_64/"
-    wget -qO- https://linux.mellanox.com/public/repo/doca/GPG-KEY-Mellanox.pub | gpg --dearmor - | sudo tee /etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub > /dev/null
-    echo "deb [signed-by=/etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub] $DOCA_URL ./"  | sudo tee /etc/apt/sources.list.d/doca.list > /dev/null
-
-    # Also need the CUDA repository: https://developer.nvidia.com/cuda-downloads?target_os=Linux
-    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
-    sudo dpkg -i cuda-keyring_1.1-1_all.deb
-
-    sudo apt update
-    ```
-
-=== "x86_64 (Ubuntu 24.04)"
-
-    ```bash
-    export DOCA_URL="https://linux.mellanox.com/public/repo/doca/3.2.1/ubuntu24.04/x86_64/"
-    wget -qO- https://linux.mellanox.com/public/repo/doca/GPG-KEY-Mellanox.pub | gpg --dearmor - | sudo tee /etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub > /dev/null
-    echo "deb [signed-by=/etc/apt/trusted.gpg.d/GPG-KEY-Mellanox.pub] $DOCA_URL ./"  | sudo tee /etc/apt/sources.list.d/doca.list > /dev/null
-
-    # Also need the CUDA repository: https://developer.nvidia.com/cuda-downloads?target_os=Linux
-    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
-    sudo dpkg -i cuda-keyring_1.1-1_all.deb
-
-    sudo apt update
-    ```
-
-    DOCA `3.2.1` matches the `Dockerfile`'s `DOCA_VERSION`, so the bare-metal recipe stays in lockstep with the container build. Earlier DOCA releases that publish an `ubuntu24.04/x86_64` directory also work.
-
-Then build the DAQIRI library:
-
-### Container build {#container-build}
+Choose either the container build or a bare-metal CMake build. The container is
+the recommended first pass because it carries the DAQIRI source build, patched
+DPDK, CUDA user-space dependencies, and RDMA libraries in one image.
 
 === "Container build (recommended)"
-
-    The container bundles all user-space libraries for each stream type, avoiding dependency issues on the host:
 
     ```bash
     git clone git@github.com:NVIDIA/daqiri.git
@@ -108,28 +68,28 @@ Then build the DAQIRI library:
     BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
     ```
 
-    IGX Thor ships CUDA 13.0. Match that version instead of the default CUDA 13.1 image:
+    IGX Thor ships CUDA 13.0. Match that version instead of the default CUDA
+    13.1 image:
 
     ```bash
     CUDA_VERSION=13.0.0 BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" \
       scripts/build-container.sh
     ```
 
-    Set `BASE_IMAGE=torch` to build on top of NGC PyTorch instead of the default CUDA base. This is useful for Torch / TensorRT inference workflows that ingest packets directly into GPU memory:
+    Use `BASE_IMAGE=torch` when you want the example applications that depend on
+    Torch or TensorRT:
 
     ```bash
     BASE_IMAGE=torch BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
     ```
 
-    OpenTelemetry metrics are optional. Enable them with:
-
-    ```bash
-    DAQIRI_ENABLE_OTEL_METRICS=ON BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
-    ```
-
 === "CMake build (bare-metal)"
 
-    Install the dependencies listed under [Bare-metal dependencies](#bare-metal-dependencies) below first, then:
+    Bare-metal builds are supported, but the full setup depends on the host
+    distribution, DOCA/CUDA repositories, and DPDK install prefix. Follow
+    [Bare-Metal CMake Build](tutorials/bare-metal-cmake-build.md) for the full
+    dependency list, DPDK patch workflow, installation checks, cleanup commands,
+    and troubleshooting.
 
     ```bash
     git clone git@github.com:NVIDIA/daqiri.git
@@ -139,189 +99,71 @@ Then build the DAQIRI library:
     cmake --install build --prefix /opt/daqiri
     ```
 
-### Bare-metal dependencies
+    After installation, CMake consumers link the exported target with
+    `find_package(daqiri REQUIRED)` and
+    `target_link_libraries(my_app PRIVATE daqiri::daqiri)`. Pkg-config
+    consumers can use `pkg-config --cflags --libs daqiri`.
 
-Build DPDK from source with the patches under `dpdk_patches/` if you want GPUDirect without the `nvidia-peermem` kernel module.
+    Most users can keep the defaults. Change CMake flags when enabling Python
+    bindings, GDS, S3, OpenTelemetry, a smaller engine set, tests, or a GPU
+    architecture not covered by the default build. See
+    [CMake options reference](tutorials/bare-metal-cmake-build.md#cmake-options-reference).
 
-```bash
-# Core build deps
-sudo apt install -y \
-    build-essential cmake git curl ca-certificates gnupg \
-    pkgconf ninja-build meson python3-pip python3-dev python3-pyelftools
+## Tune The System
 
-# Raw Ethernet (DPDK) build deps
-sudo apt install -y libnuma-dev
-
-# RoCE / RDMA + diagnostic utilities (from the DOCA APT repo, see above)
-sudo apt install -y \
-    libibverbs-dev librdmacm-dev libmlx5-1 ibverbs-utils infiniband-diags \
-    mlnx-tools mlnx-ofed-kernel-utils mft
-
-# Python bindings (only if -DDAQIRI_BUILD_PYTHON=ON)
-sudo apt install -y pybind11-dev
-```
-
-### Cleanup
-
-To remove DAQIRI's container image or bare-metal install without touching the build prerequisites (DPDK, DOCA libraries, CUDA, hugepages, NIC drivers), use [`scripts/cleanup.sh`](https://github.com/NVIDIA/daqiri/blob/main/scripts/cleanup.sh):
-
-=== "Container"
-
-    ```bash
-    scripts/cleanup.sh container             # interactive
-    scripts/cleanup.sh container --dry-run   # show what would be removed
-    ```
-
-    Override `IMAGE_TAG=` if you built with a non-default tag.
-
-=== "CMake build (bare-metal)"
-
-    ```bash
-    scripts/cleanup.sh cmake             # interactive, manifest-driven
-    scripts/cleanup.sh cmake --dry-run   # show what would be removed
-    scripts/cleanup.sh cmake --yes       # non-interactive
-    ```
-
-    See [Cleanup](tutorials/bare-metal-cmake-build.md#cleanup) in the bare-metal tutorial for manifest semantics, the `DAQIRI_PREFIX` override, and verification details.
-
-Pass `all` instead of `container` or `cmake` to remove both.
-
-### Use an Installed Library
-
-After installation, CMake consumers can link against the exported target:
-
-```cmake
-find_package(daqiri REQUIRED)
-target_link_libraries(my_app PRIVATE daqiri::daqiri)
-```
-
-DAQIRI uses CalVer package versions in `YYYY.MM.PATCH` form. Consumers that need
-a minimum DAQIRI release can request it from CMake:
-
-```cmake
-find_package(daqiri 2026.7.0 REQUIRED)
-```
-
-Pkg-config consumers can use the installed `daqiri.pc` file:
+This step is optional, but recommended before collecting performance numbers.
+The built-in host checks surface common networking, GPUDirect, hugepage, and
+affinity issues before you spend time debugging benchmark output.
 
 ```bash
-c++ my_app.cpp -o my_app $(pkg-config --cflags --libs daqiri)
-pkg-config --modversion daqiri
+sudo python3 python/tune_system.py --check all
 ```
 
-Both methods use the same public C++ include:
+The script reports what it can inspect automatically. Persistent host changes
+such as NIC link layer, hugepages, BAR1 size, MRRS, CPU isolation, GPU clocks,
+and programmable flex parsing are covered in
+[System Configuration](tutorials/system_configuration.md).
 
-```cpp
-#include <daqiri/daqiri.h>
-```
+## Run A Benchmark
 
-`daqiri/version.h` is included by `daqiri/daqiri.h` and provides
-`DAQIRI_VERSION`, `daqiri::version_string()`, and related CalVer helpers.
-DAQIRI's shared-library ABI version is tracked separately through
-`DAQIRI_ABI_VERSION` / `daqiri::abi_version()`.
-
-### CMake Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `DAQIRI_ENGINE` | `"dpdk ibverbs"` | Space-separated list of optional engine implementations to compile in. Valid values: `dpdk` (Raw Ethernet) and `ibverbs`. `ibverbs` builds two libibverbs-based engines: RDMA/RoCE (for `stream_type: "socket"` with `roce://` endpoints) and the default Mellanox/mlx5 Multi-Packet (striding) Receive Queue engine for `stream_type: "raw"`. Set `engine: "dpdk"` on a raw stream to select the compiled DPDK implementation instead. Linux UDP/TCP sockets are always built in, so there is no `socket` value. |
-| `DAQIRI_BUILD_PYTHON` | `OFF` | Build pybind11 Python bindings. |
-| `DAQIRI_BUILD_EXAMPLES` | `ON` | Build benchmark executables. The `daqiri_config_validate` tool is always built and installed, including when this option is `OFF`. |
-| `BUILD_TESTING` | `ON` | Build and register the hardware-free C++ tests under `tests/cpp/` with CTest. Set this to `OFF` to omit test targets from a production-only build. |
-| `DAQIRI_ENABLE_GDS` | `OFF` | Enable cuFile-backed burst file writes from CUDA device memory. Host-memory writes use POSIX APIs without GDS. |
-| `DAQIRI_ENABLE_OTEL_METRICS` | `OFF` | Enable OpenTelemetry C++ metrics instrumentation. When enabled, OpenTelemetry C++ API package metadata must be available to CMake. |
-| `DAQIRI_ENABLE_S3` | `OFF` | Enable AWS SDK-backed asynchronous raw packet writes to S3. |
-| `DAQIRI_PREFER_SYSTEM_YAML_CPP` | `OFF` | Prefer a system-installed `yaml-cpp` over the vendored `third_party/yaml-cpp` submodule. Keep `OFF` if a conda/miniforge env is on `PATH`. |
-| `BUILD_SHARED_LIBS` | n/a | Build as shared library. |
-
-The raw ibverbs engine can also add and remove memory regions and RX/TX queues after
-`daqiri_init()`. These are explicit C++/Python operations rather than YAML mutations. Runtime RX
-queues can become dynamic-flow destinations; queue deletion is drain-based and is rejected while
-a static or dynamic flow still targets the queue. See
-[C++ API Usage](api-reference/cpp.md#runtime-queues-and-memory-regions) for the lifecycle and
-ownership rules.
-
-The raw ibverbs engine also supports opt-in first-DMA hardware reorder on ConnectX-7 or newer
-mlx5 NICs. Set `reorder_engine: "hw"` and acknowledge the finite-ring sequence contract with
-`cyclic_sequence: true`; software reorder remains the default. The NIC flex parser places each
-payload directly into its final CPU- or GPU-memory aggregate slot while a host CPU polls CQEs—no
-DPA is used. Exact 32-bit parser-sample matching requires the sampled destination value to cycle
-over the configured ring with other sampled bits held at zero. Direct-placed slots are rearmed
-only after the application frees the aggregate burst. See [Raw Ethernet Benchmarking](benchmarks/raw_benchmarking.md#hardware-reorder-benchmark)
-and the [configuration reference](api-reference/configuration.md#rx-reorder-configs).
-
-### Enable programmable flex parsing
-
-Hardware reorder requires these persistent NIC firmware settings:
-
-```ini
-PROG_PARSE_GRAPH=1
-FLEX_PARSER_PROFILE_ENABLE=4
-```
-
-Start MFT, select the adapter by its PCI BDF or MST device, and inspect its current and next-boot
-values:
+DAQIRI benchmarks pair an executable with a YAML configuration. If you have a
+cable looped back between NIC ports on the system, start with a closed-loop Raw
+Ethernet run after replacing the `<angle-bracket>` placeholders in the YAML for
+your system:
 
 ```bash
-sudo mst start
-MLXCONFIG_DEVICE=/dev/mst/mt4129_pciconf0  # Or a PCI BDF such as 0005:03:00.0
-
-sudo mlxconfig --enable_verbosity -d "$MLXCONFIG_DEVICE" query | \
-  grep -E 'PROG_PARSE_GRAPH|FLEX_PARSER_PROFILE_ENABLE'
+./build/examples/daqiri_bench_raw_gpudirect \
+    ./build/examples/daqiri_bench_raw_tx_rx.yaml \
+    --seconds 10
 ```
 
-If either setting differs, enable both:
+Other smoke tests exist if you do not have a cable loopback, including hardware
+loopback on supported NICs and software loopback when no NIC is available. For
+those paths, or for throughput and latency measurements, follow the benchmark
+guide that matches your stream:
 
-```bash
-sudo mlxconfig -d "$MLXCONFIG_DEVICE" --yes set \
-  PROG_PARSE_GRAPH=1 \
-  FLEX_PARSER_PROFILE_ENABLE=4
-```
-
-The output is a next-boot configuration. Cold reboot or power-cycle the host so the NIC reloads
-it; restarting the DAQIRI process or rebinding the driver is insufficient. Then repeat the query
-and confirm it reports `PROG_PARSE_GRAPH True(1)` and `FLEX_PARSER_PROFILE_ENABLE 4`. Repeat the
-procedure for every adapter that will perform hardware reorder. DAQIRI also probes the effective
-`FLEX_PARSE_GRAPH` capability during initialization and rejects `reorder_engine: "hw"` with a
-diagnostic naming these settings when it is unavailable.
-
-CUDA architectures default to `80;90` (A100, H100), with `121` (GB10) added
-when configuring with CUDA Toolkit 13.0 or newer. Override
-`CMAKE_CUDA_ARCHITECTURES` when targeting other GPUs.
-
-When using `DAQIRI_ENABLE_GDS=ON` for CUDA device-memory storage writes, verify the
-runtime stack before running DAQIRI:
-
-```bash
-lsmod | grep nvidia_fs
-/usr/local/cuda/gds/tools/gdscheck.py -p
-```
-
-For regular cuFile/GDS over local NVMe, `gdscheck.py -p` should report `NVMe :
-Supported`, and ext4 destinations must be mounted with `data=ordered` or use another
-GDS-supported filesystem such as XFS. If `nvidia-fs` is not loaded, or the destination
-storage is not supported, DAQIRI returns `NOT_SUPPORTED` for CUDA device-backed burst
-writes. Host-backed burst writes continue to use POSIX APIs and do not require GDS.
-
-OpenTelemetry metrics builds register observable counters for received packets,
-transmitted packets, received bytes, transmitted bytes, and dropped packets. DAQIRI
-does not configure an SDK reader or exporter. Applications that want exported data
-must configure the OpenTelemetry C++ SDK before or during DAQIRI initialization.
-
-When using `DAQIRI_ENABLE_S3=ON`, the container build installs AWS SDK for C++
-with S3 support. Bare-metal builds must provide `aws-cpp-sdk-core` and
-`aws-cpp-sdk-s3` so CMake can resolve `find_package(AWSSDK COMPONENTS s3)`.
-Configure credentials through the AWS SDK provider chain, such as environment
-variables, a shared AWS profile, container credentials, or an EC2 instance role.
-DAQIRI writes one object per packet with a single `PutObject`; multipart uploads
-and PCAP output are not part of the S3 path.
+- [Benchmarking overview](benchmarks/index.md): choose a stream type and engine.
+- [Raw Ethernet Benchmarking](benchmarks/raw_benchmarking.md): DPDK or ibverbs
+  raw packet benchmarks, loopback setup, flow programming, hardware reorder, and
+  throughput measurement with `mlnx_perf`.
+- [Socket and RDMA Benchmarking](benchmarks/socket_benchmarking.md): UDP/TCP and
+  RoCE examples.
 
 ## Next Steps
 
-Once DAQIRI is built, follow the tutorials to configure your system and run your first benchmark:
+Keep these pages nearby as you go deeper:
 
-1. [**Concepts**](concepts.md): terminology (stream types, engines, endpoint URI schemes, packet, burst, segment, flow, queue, memory region), GPUDirect, and zero-copy ownership. Keep this open in a second tab.
-2. [**API Guide**](api-reference/index.md): the six-step DAQIRI application lifecycle and configuration-first model
-3. [**System Configuration**](tutorials/system_configuration.md): NIC drivers, link layers, GPUDirect, hugepages, CPU isolation, GPU clocks, and more
-4. [**Benchmarking**](benchmarks/index.md): choose an engine, then run socket/RDMA or raw Ethernet benchmarks
-5. [**Understanding the Configuration File**](tutorials/configuration-walkthrough.md): annotated YAML walkthrough
+1. [Concepts](concepts.md): stream types, engines, endpoint URI schemes,
+   packets, bursts, segments, flows, queues, memory regions, GPUDirect, and
+   zero-copy ownership.
+2. [Configuration YAML Walkthrough](tutorials/configuration-walkthrough.md):
+   annotated examples and a decision tree for choosing an example config.
+3. [System Configuration](tutorials/system_configuration.md): NIC drivers, link
+   layers, GPUDirect, hugepages, CPU isolation, GPU clocks, and performance
+   tuning.
+4. [Benchmarking](benchmarks/index.md): choose an engine, then run socket/RDMA
+   or Raw Ethernet benchmarks.
+5. [API Guide](api-reference/index.md): the DAQIRI application lifecycle and
+   configuration-first model. Runtime queues, memory regions, and dynamic RX
+   flows are covered in [C++ API Usage](api-reference/cpp.md) and
+   [Python API Usage](api-reference/python.md).
