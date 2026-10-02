@@ -213,5 +213,5 @@ From `CONTRIBUTING.md`:
 
 ## Compiling and Running
 
-Compiling should always be done inside of the container built from the project's Dockerfile. The container should be started in privileged mode with all GPUs passed though. Hugepages mounted on the host should be passed through into the container via a volume mount. When compiling the container should be started with the current user. When running the  
+Compiling should always be done inside of the container built from the project's Dockerfile. The container should be started in privileged mode with all GPUs passed through. Hugepages mounted on the host should be passed through into the container via a volume mount. When compiling the container should be started with the current user. When running the  
 container should run as root.
