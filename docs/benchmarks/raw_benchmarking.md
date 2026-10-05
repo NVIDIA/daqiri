@@ -68,20 +68,15 @@ docker run --rm -it --privileged \
 
 !!! tip "DGX Spark"
 
-    For systems configured per the [DGX Spark profile](../tutorials/system_configuration.md#dgx-spark-profile), use these configs to skip the PCIe/IP/CPU-core edits below:
+    Start with [`daqiri_bench_raw_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx.yaml) to see how the TX and RX configuration fits together. On a system configured per the [DGX Spark profile](../tutorials/system_configuration.md#dgx-spark-profile), adapt the NIC addresses, use `host_pinned` memory, place the queue and application workers on the high-frequency cores, and set the destination MAC to the receiving port. [Generate a raw-Ethernet pair](../config-generation.md#generate-a-raw-ethernet-pair) can apply those system parameters and produce the concrete loopback. The `rx_port` is `0002:01:00.1` (physical port p1), so read its MAC with `cat /sys/class/net/enP2p1s0f1np1/address`.
 
-    - [`daqiri_bench_raw_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark.yaml) for `daqiri_bench_raw_gpudirect`. Still set `eth_dst_addr` to the RX MAC. The rx_port is `0002:01:00.1` (physical port p1), so read its MAC: `cat /sys/class/net/enP2p1s0f1np1/address`. This p0-to-p1 pairing is intentional for an over-the-wire single-machine loopback. Using two PFs that map to the same physical port exercises the on-chip eswitch path instead.
-    - [`daqiri_bench_rdma_tx_rx_spark.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx_spark.yaml) for `daqiri_bench_rdma`. No further edits needed.
-
-    For the multi-queue core-scaling matrix, use the single base config [`daqiri_bench_raw_tx_rx_spark_mq.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_spark_mq.yaml) (the balanced TX=2/RX=2 superset) with `daqiri_bench_raw_gpudirect`, driven by [`run_spark_mq_bench.sh`](https://github.com/nvidia/daqiri/blob/main/examples/run_spark_mq_bench.sh). It derives the four `(TX, RX)` cells from the base (via `scripts/gen_spark_mq_config.py`) and sweeps the payload.
-
-    The Spark configs also pin the benchmark application's `bench_tx.cpu_core` / `bench_rx.cpu_core` fields to the high-frequency Cortex-X925 cores. Keep both the DAQIRI queue cores and the application worker cores on cores 16-19 unless you intentionally want a lower-power core in the measurement.
+    For multiple queues, [`daqiri_bench_raw_tx_rx_4q.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_4q.yaml) shows how queues, memory regions, flow steering, and application workers relate. [`run_spark_bench.sh`](https://github.com/nvidia/daqiri/blob/main/examples/run_spark_bench.sh) generates each single-queue benchmark cell, while [`run_spark_mq_bench.sh`](https://github.com/nvidia/daqiri/blob/main/examples/run_spark_mq_bench.sh) generates all four `(TX, RX)` multi-queue combinations.
 
 #### Cross-host two-DGX-Spark loopback
 
-If you have two DGX Sparks cross-cabled p0↔p0 instead of a chassis QSFP loop on one machine, use the `_xhost` configs. Each host runs only its own role, so the YAML on each side configures one port instead of two. Both hosts must already be set up per the [DGX Spark profile](../tutorials/system_configuration.md#dgx-spark-profile), with one adjustment: the `daqiri-tx` (`1.1.1.1/24`) and `daqiri-rx` (`2.2.2.2/24`) nmcli profiles are *split across* the two hosts. Bring up `daqiri-tx` on the TX host's p0 and `daqiri-rx` on the RX host's p0, instead of both on one box.
+If you have two DGX Sparks cross-cabled p0↔p0 instead of a chassis QSFP loop on one machine, generate independent TX and RX files with `raw-pair --role both`. Each host runs only its own role, so the YAML on each side configures one port instead of two. Both hosts must already be set up per the [DGX Spark profile](../tutorials/system_configuration.md#dgx-spark-profile), with one adjustment: the `daqiri-tx` (`1.1.1.1/24`) and `daqiri-rx` (`2.2.2.2/24`) nmcli profiles are *split across* the two hosts. Bring up `daqiri-tx` on the TX host's p0 and `daqiri-rx` on the RX host's p0, instead of both on one box.
 
-**Network prerequisite.** Assigning `/24` addresses on each host is not enough for the kernel to reach the peer over a direct cable. Install a host route on the cabled port by running [`scripts/setup_spark_xhost_net.sh`](https://github.com/nvidia/daqiri/blob/main/scripts/setup_spark_xhost_net.sh) on **both** hosts after bringing up the nmcli profile. The ibverbs raw engine uses that route and Linux ARP when `eth_dst_addr` is omitted; RDMA-CM uses the same kernel route. See the [cross-host variant](../tutorials/system_configuration.md#cross-host-variant-two-sparks) in System Configuration for the full steps.
+**Network setup.** Assigning `/24` addresses on each host is not enough for the kernel to reach the peer over a direct cable. Install a host route on the cabled port by running [`scripts/setup_spark_xhost_net.sh`](https://github.com/nvidia/daqiri/blob/main/scripts/setup_spark_xhost_net.sh) on **both** hosts after bringing up the nmcli profile. RDMA-CM uses that route; raw ibverbs can also use it with Linux ARP when `eth_dst_addr` is omitted. The generated raw pair below supplies the RX port MAC explicitly. See the [cross-host variant](../tutorials/system_configuration.md#cross-host-variant-two-sparks) in System Configuration for the full steps.
 
 ```bash
 # TX host
@@ -99,10 +94,10 @@ ip route get <peer-ip> # must name enp1s0f0np0, not lo
 
 ```bash
 # RX host
-sudo ./daqiri_bench_raw_gpudirect daqiri_bench_raw_rx_spark_xhost.yaml --seconds 30
+sudo ./daqiri_bench_raw_gpudirect generated/raw-xhost/rx.yaml --seconds 30
 
-# TX host (the ibverbs config resolves the RX MAC through Linux ARP)
-sudo ./daqiri_bench_raw_gpudirect daqiri_bench_raw_tx_spark_xhost.yaml --seconds 30
+# TX host; supply the RX port MAC when generating this file
+sudo ./daqiri_bench_raw_gpudirect generated/raw-xhost/tx.yaml --seconds 30
 ```
 
 Verify both sides report non-zero packet counts and no `NO_FREE_BURST_BUFFERS` / `NO_FREE_PACKET_BUFFERS` errors.
@@ -119,10 +114,10 @@ intended queue.
 
 ```bash
 # RX (server) host
-sudo ./daqiri_bench_rdma daqiri_bench_rdma_tx_rx_spark_xhost.yaml --mode server --seconds 30
+sudo ./daqiri_bench_rdma generated/roce/rx.yaml --mode server --seconds 30
 
 # TX (client) host
-sudo ./daqiri_bench_rdma daqiri_bench_rdma_tx_rx_spark_xhost.yaml --mode client --seconds 30
+sudo ./daqiri_bench_rdma generated/roce/tx.yaml --mode client --seconds 30
 ```
 
 Verify both sides report non-zero send/receive completions and no `CQ error` / `RETRY_EXC_ERR` lines in the client log.
@@ -216,12 +211,10 @@ encapsulate on TX and pop or decapsulate on RX. The application packet buffers
 remain pre-encap on TX and post-decap on RX; DAQIRI accounts for outer-header
 overhead when sizing MTU/wire frames.
 
-| Transform | YAML config | Binary |
-|---|---|---|
-| VXLAN encap + decap | [`daqiri_bench_raw_tx_rx_vxlan.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_vxlan.yaml) | `daqiri_bench_raw_gpudirect` |
-| VLAN push + pop | [`daqiri_bench_raw_tx_rx_vlan.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_vlan.yaml) | `daqiri_bench_raw_gpudirect` |
-| GRE encap + decap | [`daqiri_bench_raw_tx_rx_gre.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_gre.yaml) | `daqiri_bench_raw_gpudirect` |
-| NVGRE encap + decap | [`daqiri_bench_raw_tx_rx_nvgre.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_nvgre.yaml) | `daqiri_bench_raw_gpudirect` |
+Generate each variant with the same raw-pair command and one of
+`--transform vlan`, `--transform vxlan`, `--transform gre`, or
+`--transform nvgre`; see [configuration generation](../config-generation.md#generate-a-raw-ethernet-pair).
+All four outputs run on `daqiri_bench_raw_gpudirect`.
 
 ##### Identify your NIC's PCIe addresses
 
@@ -314,7 +307,7 @@ bench_tx:
     - The benchmark reuses the resolved MAC for the entire run; it does not monitor Linux neighbor changes. Long-running applications should define their own refresh policy and call `resolve_ipv4_mac()` again when a peer, gateway, route, link, or namespace may have changed. See [Destination MAC resolution](../concepts.md#destination-mac-resolution).
     - `cpu_core` - the benchmark application's own TX worker thread affinity. Set the matching `bench_rx.cpu_core` for RX workers too. These app-thread fields are distinct from the DAQIRI queue `cpu_core` values that poll the NIC.
     - We ignore the IP fields (`ip_src_addr`, `ip_dst_addr`) for now, as we are testing on a layer 2 network by just connecting a cable between the two interfaces on our system, therefore having mock values has no impact.
-    - You might have noted the lack of a `eth_src_addr` field in this `bench_tx` section. This is because the source Ethernet MAC address can be inferred automatically by the DAQIRI library from the PCIe address of the Tx interface referenced above.
+    - You might have noted the lack of an `eth_src_addr` field in this `bench_tx` section. The DPDK `tx_eth_src` egress flow rewrites the source MAC from the TX interface. For an ibverbs benchmark profile, supply the TX port MAC as `eth_src_addr` because the benchmark copies a complete packet-header template into its buffers.
 
 ## Run the loopback test
 

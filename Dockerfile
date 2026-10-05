@@ -323,6 +323,8 @@ RUN cmake -S . -B build \
     && cmake --build build -j "$(nproc)" \
     && python3 scripts/check_daqiri_configs.py \
          --validator build/tools/daqiri_config_validate \
+    && python3 scripts/check_generated_configs.py \
+         --validator build/tools/daqiri_config_validate \
     && cmake --install build
 
 # ==============================

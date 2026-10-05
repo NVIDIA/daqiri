@@ -748,9 +748,10 @@ bool IbverbsEngine::set_config_and_initialize(const NetworkConfig& cfg) {
 
 // Resolve a configured interface to an ibverbs device context. Matching order:
 //   1) interface address_/name_ equal to an IB device name (e.g. "mlx5_0")
-//   2) interface name_ is a netdev whose IB device is found under
+//   2) interface address_ is a PCIe BDF with an infiniband device in sysfs
+//   3) interface address_/name_ is a netdev whose IB device is found under
 //      /sys/class/net/<name>/device/infiniband/
-//   3) first mlx5dv-capable device (with a warning)
+//   4) first mlx5dv-capable device (with a warning)
 struct ibv_context* IbverbsEngine::open_device_for_interface(const InterfaceConfig& intf) {
   int num = 0;
   struct ibv_device** list = ibv_get_device_list(&num);
@@ -801,7 +802,11 @@ struct ibv_context* IbverbsEngine::open_device_for_interface(const InterfaceConf
     dev = ibdev_in("/sys/bus/pci/devices/" + intf.address_ + "/infiniband/");
   }
 
-  // netdev -> ibdev via sysfs
+  // netdev -> ibdev via sysfs. Raw configs store the user-supplied
+  // interface identifier in address_; name_ is the DAQIRI logical name.
+  if (dev == nullptr && !intf.address_.empty()) {
+    dev = ibdev_in("/sys/class/net/" + intf.address_ + "/device/infiniband/");
+  }
   if (dev == nullptr && !intf.name_.empty()) {
     dev = ibdev_in("/sys/class/net/" + intf.name_ + "/device/infiniband/");
   }
@@ -1864,8 +1869,7 @@ bool IbverbsEngine::create_dr_rule_locked(
     st.tag_actions.push_back(tag_action);
   }
 
-  PortSteering::RuleSpec spec{
-      matcher, terminal, tag_action, reformats, rss_destination, 0, {}};
+  PortSteering::RuleSpec spec{matcher, terminal, tag_action, reformats, rss_destination, 0, {}};
   spec.value_sz = std::min(value->match_sz, sizeof(spec.value));
   memcpy(spec.value, value->match_buf, spec.value_sz);
   st.rule_specs.push_back(spec);
@@ -4684,8 +4688,7 @@ void IbverbsEngine::direct_poll_queue(IbvRxQueue* q) {
   // could have raced RESET without requiring an idle shared CQ.
   for (auto& batch_ptr : plan.batches) {
     auto& batch = *batch_ptr;
-    const bool pre_reset_cqes_drained =
-        cq_drained || (q->cq_ci - batch.quiesce_cq_ci) >= cqe_count;
+    const bool pre_reset_cqes_drained = cq_drained || (q->cq_ci - batch.quiesce_cq_ci) >= cqe_count;
     if (!pre_reset_cqes_drained ||
         batch.state.load(std::memory_order_acquire) != IbvDirectBatchState::QUIESCING ||
         !batch.rqs_reset) {
