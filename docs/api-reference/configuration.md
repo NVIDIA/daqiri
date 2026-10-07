@@ -99,8 +99,10 @@ runtime binding.
       IGX Thor with both an integrated and a discrete GPU, set `affinity` to the discrete GPU's
       process-local CUDA ordinal.
     - `host_pinned`: Pinned CPU pages allocated via `cudaHostAlloc`. **Recommended on
-      integrated GPUs (e.g. NVIDIA GB10 / DGX Spark)**, where the NIC cannot peer-DMA
-      into device memory and CUDA reports DMA-BUF unsupported. Use this kind when remaining on
+      integrated GPUs (e.g. NVIDIA GB10 / DGX Spark)**. GB10 uses unified CPU/GPU
+      physical memory with no separate GPU VRAM. Use `kind: "host_pinned"` for
+      GPU-accessible packet buffers: the NIC and GPU access the same allocation,
+      without a host-to-device staging copy. Use this kind when remaining on
       the integrated GPU in a hybrid-GPU system such as IGX Thor. On discrete-GPU systems,
       prefer `device` for high-throughput RX/TX paths.
     - `host`: Regular CPU memory (not recommended)

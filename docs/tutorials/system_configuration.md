@@ -1568,7 +1568,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
     ### Enable GPUDirect
 
-    **No GPUDirect kernel-module setup is required on GB10.** Set `kind: "host_pinned"` in the YAML and you're done. There is no system-side step to perform. Buffers are allocated by DAQIRI via `cudaHostAlloc` (so they are CUDA-addressable) and registered with DPDK via `rte_extmem_register`. The cross-host two-link DPDK sweep reaches **201.7 Gb/s** wire rate at 8 KB with `kind: "host_pinned"`; the single-host 100 GbE QSFP loop reaches ~98.7 Gb/s because the cable is its ceiling. See [Performance: DGX Spark](../benchmarks/performance-dgx-spark.md).
+    **GB10 uses unified CPU/GPU physical memory with no separate GPU VRAM.** Set `kind: "host_pinned"` in the YAML for GPU-accessible packet buffers. DAQIRI allocates them via `cudaHostAlloc` and registers them with DPDK via `rte_extmem_register`; the NIC and GPU access the same buffers without a host-to-device staging copy. This is the expected GB10 data path and requires no GPUDirect kernel-module setup. The cross-host two-link DPDK sweep reaches **201.7 Gb/s** wire rate at 8 KB with `kind: "host_pinned"`; the single-host 100 GbE QSFP loop reaches ~98.7 Gb/s because the cable is its ceiling. See [Performance: DGX Spark](../benchmarks/performance-dgx-spark.md).
 
     `kind: "huge"` is an alternative at the same rate when a hugetlb pool is configured;
     initialization fails if the requested hugepages are unavailable. `kind: "device"` does
@@ -1580,7 +1580,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
         `sudo modprobe nvidia_peermem` returns `Invalid argument` (EINVAL, exit=1) on GB10. The module file ships in `/lib/modules/$(uname -r)/kernel/nvidia-580-open/nvidia-peermem.ko`, but loading fails by design: peermem maps the NIC into a separate GPU BAR1, and GB10's NVLink-C2C unified memory has no separate BAR1.
 
-        The Open kernel module on Grace platforms expects the standard Linux **DMA-BUF** path instead of peermem, but as of CUDA 13.1 / driver 580.142 the device-attribute query reports `flag=0`:
+        Discrete-GPU GPUDirect RDMA registration via peermem or CUDA device-memory **DMA-BUF** does not apply to GB10's shared physical memory. NVIDIA recommends `cudaHostAlloc` communication buffers for this platform; see the [Spark CUDA porting guide](https://docs.nvidia.com/dgx/dgx-spark-porting-guide/porting/cuda.html). On the tested CUDA 13.1 / driver 580.142 stack, the device-attribute queries confirm this:
 
         ```text
         cuDeviceGetAttribute(CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED, 0)         → SUCCESS, flag=0
@@ -1588,7 +1588,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
         cuDeviceGetAttribute(CU_DEVICE_ATTRIBUTE_INTEGRATED, 0)                → SUCCESS, flag=1
         ```
 
-        DAQIRI's CUDA-DMA-BUF code path is therefore unreachable on Spark; `dpdk_patches/dmabuf.patch` still ships and is mandatory for the build, but the daqiri-side dma-buf branch never fires. The `host_pinned` path above sidesteps both interfaces entirely.
+        DAQIRI therefore uses `host_pinned` for GPU-accessible packet buffers on Spark. The unsupported device-memory registration attributes are expected for this architecture, not a prerequisite to fix before benchmarking. `dpdk_patches/dmabuf.patch` still ships and is mandatory for the DPDK build, but DAQIRI's CUDA-DMA-BUF branch is not used on Spark.
 
     ---
 

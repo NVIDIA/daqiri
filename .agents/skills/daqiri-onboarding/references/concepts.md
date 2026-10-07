@@ -22,7 +22,7 @@ Setup implications:
 - Requires a supported NVIDIA RTX or Data Center GPU; GeForce is not supported.
 - Uses `memory_regions` with `kind: "device"` for GPU VRAM when the platform supports it.
 - The DAQIRI container's patched DPDK path uses dma-buf support, so `nvidia-peermem` is not required inside that container for DPDK.
-- On integrated GPU systems such as DGX Spark / GB10, `host_pinned` may be the right memory kind because NIC peer-DMA into discrete GPU VRAM is not the same model.
+- DGX Spark / GB10 uses unified CPU/GPU physical memory with no separate GPU VRAM. Use `kind: "host_pinned"`: the NIC and GPU access the same packet buffers without a host-to-device staging copy. This is the expected platform path; discrete-GPU GPUDirect RDMA registration via peermem or DMA-BUF does not apply.
 - GPU visibility and affinity matter; in a container, selected GPU UUIDs may become CUDA ordinal `0`.
 
 Benchmark implications:
@@ -77,7 +77,7 @@ Common kinds:
 
 - `huge`: explicit hugetlb CPU memory; required or recommended for hot CPU buffers and DPDK/raw paths. DAQIRI fails instead of silently falling back when huge allocation fails.
 - `device`: GPU VRAM; requires GPUDirect support.
-- `host_pinned`: CUDA-pinned CPU memory; useful on integrated GPU systems.
+- `host_pinned`: CUDA-pinned CPU memory, also GPU-accessible; use on GB10's unified CPU/GPU physical memory.
 - `host`: regular CPU memory; not recommended for hot paths.
 
 Onboarding implication: raw benchmarks may fail early if hugepages are not mounted or sized. GPUDirect paths need correct GPU visibility and memory-region affinity.

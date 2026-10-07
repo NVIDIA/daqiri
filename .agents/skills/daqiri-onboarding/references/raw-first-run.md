@@ -28,6 +28,8 @@ If hugepages are short, DAQIRI preflight usually prints the exact `echo N | sudo
 
 For IGX Thor or hybrid iGPU/dGPU hosts, select the discrete GPU by UUID in both `NVIDIA_VISIBLE_DEVICES` and `CUDA_VISIBLE_DEVICES`. Inside the container, that GPU becomes CUDA ordinal `0`; configs should use `memory_regions[*].affinity: 0`.
 
+For DGX Spark / GB10, use `kind: "host_pinned"` for GPU-accessible packet buffers (or `--memory-kind host_pinned` when generating configs). GB10 uses unified CPU/GPU physical memory with no separate GPU VRAM. The NIC and GPU access the same buffers without a host-to-device staging copy; peermem and CUDA device-memory DMA-BUF registration do not apply. Explain this as the expected platform path, rather than reporting that "device-memory GPUDirect is blocked." A successful `host_pinned` run validates this shared-memory path, not discrete-GPU device-memory GPUDirect RDMA. See `docs/concepts.md` and the DGX Spark profile in `docs/tutorials/system_configuration.md`.
+
 ## Build and Container
 
 Recommended build:

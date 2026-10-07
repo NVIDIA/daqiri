@@ -492,7 +492,7 @@ The build recipe above is the same on every supported host. The notes below cove
 
     - The integrated **ConnectX-7** appears in `ibv_devinfo` as one or two `mlx5_*` HCAs depending on link configuration. No separate driver install beyond the [DOCA repository setup](#step-1-configure-the-doca-apt-repository) is needed.
     - GB10 is **compute capability 12.1** (`sm_121`). DAQIRI's default arch list adds `121` automatically when configuring with **CUDA Toolkit 13.0 or newer**; on those toolkits no override is needed. On older toolkits, GB10 is not supported.
-    - DGX Spark uses **NVLink-C2C unified memory** and has no separate GPU BAR1, so generate data buffers with `--memory-kind host_pinned` rather than `device`.
+    - DGX Spark uses **unified CPU/GPU physical memory** with no separate GPU VRAM. Generate GPU-accessible packet buffers with `--memory-kind host_pinned`: the NIC and GPU access the same allocation without a host-to-device staging copy. See the [memory regions reference](../api-reference/configuration.md#memory-regions).
     - `nvidia-peermem` is not used; GPUDirect goes through the dma-buf path enabled by the DPDK patches in [Step 3](#step-3-build-dpdk-with-daqiri-patches).
     - For a runnable end-to-end test after the build completes, start with [`daqiri_bench_raw_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx.yaml) or [`daqiri_bench_rdma_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx.yaml), then follow the [DGX Spark profile callout](../benchmarks/raw_benchmarking.md#update-the-loopback-configuration) to adapt or generate a concrete pair from the discovered system parameters.
 

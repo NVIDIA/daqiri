@@ -466,8 +466,12 @@ the CPU or the GPU:
 - `device`: GPU VRAM (discrete GPUs, requires GPUDirect via peermem or
   DMA-BUF).
 - `host_pinned`: pinned CPU pages allocated via `cudaHostAlloc`.
-  Recommended on integrated GPUs (NVIDIA GB10 / DGX Spark), where the
-  NIC cannot peer-DMA into device memory.
+  Recommended on integrated GPUs (NVIDIA GB10 / DGX Spark). GB10 uses unified
+  CPU/GPU physical memory with no separate GPU VRAM, so the NIC and GPU can
+  access the same `host_pinned` packet buffers without a host-to-device staging
+  copy. This is the expected GB10 data path; discrete-GPU GPUDirect RDMA
+  registration via peermem or DMA-BUF does not apply. See the
+  [NVIDIA Spark CUDA porting guide](https://docs.nvidia.com/dgx/dgx-spark-porting-guide/porting/cuda.html).
 - `host`: regular CPU memory (not recommended for hot paths).
 
 The size of the memory region (`buf_size`) dictates the largest
