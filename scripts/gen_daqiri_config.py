@@ -143,6 +143,7 @@ def _raw_parser(subparsers: argparse._SubParsersAction) -> None:
         help="packets per burst (default: 10240 for dpdk, 1024 for ibverbs or engine default)",
     )
     parser.add_argument("--num-bufs", type=int, default=51200)
+    parser.add_argument("--pacing-mbps", type=int, default=0)
     parser.add_argument("--affinity", type=int, default=0)
     parser.add_argument(
         "--memory-kind",
@@ -248,6 +249,7 @@ def _raw_spec(args: argparse.Namespace) -> RawPairSpec:
         header_size=args.header_size,
         buffer_size=args.buffer_size,
         batch_size=args.batch_size,
+        pacing_mbps=args.pacing_mbps,
         num_bufs=args.num_bufs,
         affinity=args.affinity,
         memory_kind=args.memory_kind,

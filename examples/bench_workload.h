@@ -70,7 +70,7 @@ constexpr int kMaxWorkloadInflight = 63;
 // parse_workload's stride. Ignored by the run()+sync() DPDK/socket path.
 int parse_workload_max_inflight(int argc, char** argv);
 
-// Lower-case name ("none"/"fft"/"gemm"); used for the run_spark_bench.sh
+// Lower-case name ("none"/"fft"/"gemm"); used for the cabled-loopback harness
 // post_process CSV column and log lines.
 const char* workload_name(BenchWorkload workload);
 

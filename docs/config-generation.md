@@ -82,13 +82,18 @@ all four 1×1, 1×2, 2×1, and 2×2 cells.
 
 Raw memory-region `buf_size` defaults to `header_size + payload_size`. Set
 `--buffer-size` (also accepted as `--buf-size`) to keep packet-buffer capacity
-fixed across a payload sweep; both Spark DPDK harnesses use `8064` bytes to
-preserve their published methodology.
+fixed across a payload sweep. The shared cabled-loopback harness keeps DPDK at
+`8064` bytes and right-sizes raw ibverbs buffers so MPRQ does not retain an
+8-KiB stride for small packets.
 
 When `--batch-size` is omitted, DPDK profiles use `10240` packets per burst and
 ibverbs or engine-default profiles use `1024`. The ibverbs engine also checks
 the NIC's `max_qp_wr` during initialization and permits at most half that value;
 pass a smaller explicit batch size if the runtime reports a lower limit.
+
+Set `--pacing-mbps` to emit a raw TX queue hardware-rate cap. The shared
+cabled-loopback harness uses this instead of application sleep-based pacing for
+raw DPDK and ibverbs drop curves.
 
 Add one of `--transform vlan`, `--transform vxlan`, `--transform gre`, or
 `--transform nvgre` to generate the corresponding raw hardware encap/decap
@@ -172,8 +177,10 @@ python3 scripts/gen_daqiri_config.py socket-pair \
   --role both --output-dir generated/roce
 ```
 
-`examples/run_spark_bench.sh` uses these profiles directly for its namespace
-and benchmark matrix. It does not maintain or mutate Spark-specific base YAMLs.
+`examples/run_cabled_loopback_bench.sh` uses these profiles directly for its
+namespace and benchmark matrix. It loads reviewable platform defaults from
+`examples/cabled_loopback_hardware.yaml`, resolves live NIC and GPU identities,
+and does not maintain or mutate platform-specific base YAMLs.
 
 ## Render any DAQIRI configuration
 
@@ -244,27 +251,31 @@ selecting their default cases. Files passed explicitly to
 `scripts/check_daqiri_configs.py` are always checked, including files that require
 an unavailable engine.
 
-## Spark verification checklist
+## Cabled-loopback verification checklist
 
-After copying this branch to a Spark and rebuilding the container, first run the
-standard pull-request check:
+After rebuilding the container on DGX Spark or IGX Thor, first run the standard
+pull-request check:
 
 ```bash
 scripts/check_pr.sh
 ```
 
-Then run one generated cell per transport. Bring the namespace wire loopback up
-for RoCE/TCP/UDP and down for DPDK as described by each harness:
+Inspect the detected hardware defaults, then run one generated cell per
+transport. Bring the namespace wire loopback up for RoCE/TCP/UDP and down for
+DPDK:
 
 ```bash
+examples/run_cabled_loopback_bench.sh --platform igx-thor --show-hardware
+
 # Default namespace, physical p0-to-p1 cable
-ETH_DST_ADDR="$(cat /sys/class/net/enP2p1s0f1np1/address)" \
-  RUN_SECONDS=10 examples/run_spark_bench.sh dpdk smoke
+sudo scripts/setup_cabled_loopback_netns.sh --platform igx-thor down
+RUN_SECONDS=10 examples/run_cabled_loopback_bench.sh --platform igx-thor dpdk smoke
 
 # dq_wire_client / dq_wire_server namespaces
-RUN_SECONDS=10 examples/run_spark_bench.sh rdma smoke
-RUN_SECONDS=10 PAIRS_OVERRIDE=1 examples/run_spark_bench.sh socket-udp smoke
-RUN_SECONDS=10 PAIRS_OVERRIDE=1 examples/run_spark_bench.sh socket-tcp smoke
+sudo scripts/setup_cabled_loopback_netns.sh --platform igx-thor up
+RUN_SECONDS=10 examples/run_cabled_loopback_bench.sh --platform igx-thor rdma smoke
+RUN_SECONDS=10 PAIRS_OVERRIDE=1 examples/run_cabled_loopback_bench.sh --platform igx-thor socket-udp smoke
+RUN_SECONDS=10 PAIRS_OVERRIDE=1 examples/run_cabled_loopback_bench.sh --platform igx-thor socket-tcp smoke
 ```
 
 Finally, exercise every raw multi-queue topology at one payload:

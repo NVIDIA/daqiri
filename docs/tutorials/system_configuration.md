@@ -899,6 +899,26 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
     isolcpus=8-11 irqaffinity=0-7 nohz_full=8-11 rcu_nocbs=8-11 rcu_nocb_poll
     ```
 
+    !!! note "IGX Thor cabled-loopback profile"
+
+        The shared cabled-loopback harness uses cores 8-13 on the 14-core IGX
+        Thor DevKit. This provides three non-overlapping socket client/server
+        pairs and leaves cores 0-7 for the OS and interrupts:
+
+        ```bash
+        isolcpus=8-13 irqaffinity=0-7 nohz_full=8-13 rcu_nocbs=8-13 rcu_nocb_poll
+        ```
+
+        The corresponding queue, worker, and socket-pair assignments are kept in
+        `examples/cabled_loopback_hardware.yaml`.
+
+        On the reference Thor DevKit, apply and verify the remaining persistent
+        NIC and discrete-GPU settings from the repository root:
+
+        ```bash
+        sudo scripts/tune_igx_thor_cabled_loopback.sh
+        ```
+
     ??? info "Show explanation"
 
         | Parameter | Description |

@@ -1,51 +1,30 @@
 #!/usr/bin/env bash
 #
-# Force true over-the-wire RoCE loopback on the DGX Spark via network namespaces.
+# Force true over-the-wire socket/RoCE loopback via network namespaces.
 #
 # WHY THIS EXISTS
 # ---------------
-# The Spark has ONE ConnectX-7 whose ports share a single eswitch (switchid).
+# Same-host ports can share an embedded switch and the kernel's local routes.
 # When both the client and server IP live in the same (default) network
 # namespace, the NIC's embedded switch + the kernel's local routing recognize
 # the peer as locally-owned and short-cut the packets internally -- they never
 # hit the cable. Putting each cabled port in its own netns removes that local
 # knowledge, so the only path from client to server is OUT the wire and back.
 #
-# This is the RDMA-aware version of a colleague's netdev-only script: it also
-# flips the RDMA subsystem into "exclusive" netns mode and moves each RDMA
-# device into its namespace, which `ib_send_bw` requires to see a valid GID.
-#
-# CAVEAT ON PRIOR NUMBERS: the ~108 Gb/s ib_send_bw figures in
-# rdma-bench-tuning-log.md were measured in the SHARED-namespace setup, i.e.
-# they may have been short-cut internally rather than crossing the cable. The
-# number you get here is the real over-the-wire figure and may differ.
+# RDMA is handled as well as the netdevs: the script tries exclusive RDMA netns
+# mode and falls back to shared mode when other namespaces make that impossible.
 #
 # USAGE
-#   sudo ./setup_spark_wire_loopback_netns.sh up       # create namespaces + move ports
-#   sudo ./setup_spark_wire_loopback_netns.sh down     # tear everything back down
-#   sudo ./setup_spark_wire_loopback_netns.sh verify   # sanity-check the result
-#   sudo ./setup_spark_wire_loopback_netns.sh monitor  # live PHY-counter (on-the-wire) rates
+#   sudo ./setup_cabled_loopback_netns.sh --platform dgx-spark|igx-thor up
+#   sudo ./setup_cabled_loopback_netns.sh --platform dgx-spark|igx-thor down
+#   sudo ./setup_cabled_loopback_netns.sh --platform dgx-spark|igx-thor verify
+#   sudo ./setup_cabled_loopback_netns.sh --platform dgx-spark|igx-thor monitor
 #
 # Run as root, inside the privileged run-container (or on the host as root).
-# Do NOT run this at the same time as setup_spark_rdma_loopback.sh -- that
-# script configures the same ports in the shared namespace and will conflict.
-#
-# =====================================================================
-# >>> FILL THESE IN FOR YOUR MACHINE <<<
-# =====================================================================
-# Discover the right values first (read-only):
-#
-#   ip -br link show | grep -E 'enp|enP'      # interface names + MACs + state
-#   cat /sys/class/net/<IF>/address           # MAC of one interface
-#   rdma link show                            # rdma dev <-> netdev mapping
-#   ibdev2netdev                              # (mlnx) same mapping, friendlier
-#   ethtool <IF> | grep -i 'link detected'    # the two CABLED ports show "yes"
+# Do not run another network setup against the same ports at the same time.
 #
 # CLIENT_IF / SERVER_IF must be on the TWO DIFFERENT PHYSICAL PORTS (p0, p1) of
-# the CX-7 -- the on-chip loopback the QSFP cable closes. Confirm each netdev's
-# physical port with `cat /sys/class/net/<IF>/phys_port_name` (p0 / p1); a cabled
-# loopback lights carrier on all four PFs, so carrier alone does not distinguish
-# them. See docs/tutorials/system_configuration.md "Port topology: 4 PFs, 2 ports".
+# the NIC. Hardware defaults and live discovery choose them unless overridden.
 #
 # CLIENT_RDMA / SERVER_RDMA are the RDMA devices bound to those netdevs
 # (from `rdma link show` / `ibdev2netdev`).
@@ -55,6 +34,11 @@
 
 CLIENT_NS=dq_wire_client
 SERVER_NS=dq_wire_server
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+HARDWARE_RESOLVER="$SCRIPT_DIR/resolve_benchmark_hardware.py"
+HARDWARE_DEFAULTS="$REPO_ROOT/examples/cabled_loopback_hardware.yaml"
+PLATFORM=""
 
 # Leave CLIENT_IF / SERVER_IF blank to AUTO-DETECT the cabled data-plane ports
 # (recommended): autodetect_ports() collects the carrier-up RoCE netdevs, groups
@@ -64,7 +48,7 @@ SERVER_NS=dq_wire_server
 # (a stale name aborts setup, the netns never gets created, and the netns-based
 # benches silently have nowhere to run); phys_port_name does not drift. Override
 # from the environment only if auto-detect picks the wrong pair, e.g.:
-#   CLIENT_IF=enp1s0f1np1 SERVER_IF=enp1s0f0np0 sudo -E ./setup_spark_wire_loopback_netns.sh up
+#   CLIENT_IF=enp1s0f1np1 SERVER_IF=enp1s0f0np0 sudo -E ./setup_cabled_loopback_netns.sh --platform igx-thor up
 CLIENT_IF="${CLIENT_IF:-}"
 SERVER_IF="${SERVER_IF:-}"
 
@@ -82,8 +66,7 @@ SERVER_MAC=""
 CLIENT_IP=10.250.0.1
 SERVER_IP=10.250.0.2
 
-MTU=9000                       # colleague used 9082; 9000 matches the data-plane ports
-# =====================================================================
+MTU=9000
 
 set -euo pipefail
 
@@ -105,50 +88,15 @@ rdma_for_netdev() {  # netdev -> backing RDMA device name (sysfs); empty if none
 }
 
 autodetect_ports() {
-  # Pick the cabled data-plane ports automatically when not overridden. Spark's
-  # single ConnectX-7 exposes each of its TWO physical ports (p0, p1) over BOTH
-  # PCIe segments (socket-direct), so it presents up to 4 PFs and a cabled
-  # loopback lights carrier on ALL of them at once -- not just two. Counting
-  # carrier-up netdevs therefore over-counts the physical ports. Instead group by
-  # phys_port_name (the hardware port label, stable across PCIe re-enumeration and
-  # interface renames) and keep ONE netdev per physical port, so CLIENT_IF and
-  # SERVER_IF always land on DIFFERENT physical ports (over-the-wire, never the
-  # on-chip same-port eswitch shortcut). See docs/tutorials/system_configuration.md
-  # "Port topology: 4 PFs, 2 ports". Ports must be in init_net here (up() calls
-  # down() first, returning any moved netdevs), same precondition as detect_macs.
+  # Ports must be in init_net here. up() calls down() first so the shared
+  # resolver sees the same live inventory used by the benchmark harness.
   if [[ -z "$CLIENT_IF" || -z "$SERVER_IF" ]]; then
-    local ifc port pci
-    declare -A rep_for_port=() pci_for_port=()
-    for ifc in $(ls /sys/class/net 2>/dev/null | sort); do
-      [[ "$ifc" == lo ]] && continue
-      rdma_for_netdev "$ifc" >/dev/null 2>&1 || continue
-      [[ "$(cat "/sys/class/net/$ifc/carrier" 2>/dev/null || echo 0)" == 1 ]] || continue
-      port="$(cat "/sys/class/net/$ifc/phys_port_name" 2>/dev/null || true)"
-      # Without phys_port_name we cannot fold the two PCIe reps of a port
-      # together; fall back to the netdev name as its own group so the 2-port
-      # check below still guards (it just won't dedupe).
-      [[ -z "$port" ]] && port="$ifc"
-      pci="$(basename "$(readlink -f "/sys/class/net/$ifc/device" 2>/dev/null || echo "$ifc")")"
-      # Prefer the lowest-BDF rep per port (the 0000: segment, matching the doc's
-      # canonical enp1s0f{0,1}np{0,1} names) for a stable, least-surprise pick.
-      if [[ -z "${rep_for_port[$port]:-}" || "$pci" < "${pci_for_port[$port]}" ]]; then
-        rep_for_port["$port"]="$ifc"
-        pci_for_port["$port"]="$pci"
-      fi
-    done
-    local ports
-    mapfile -t ports < <(printf '%s\n' "${!rep_for_port[@]}" | LC_ALL=C sort)
-    if [[ "${#ports[@]}" -ne 2 ]]; then
-      echo "ERROR: auto-detect expected exactly 2 carrier-up physical ports, found ${#ports[@]}: ${ports[*]:-none}." >&2
-      echo "       (netdevs are grouped by phys_port_name; Spark exposes each port over 2 PCIe segments.)" >&2
-      echo "       Cable the loopback, or set CLIENT_IF / SERVER_IF explicitly, e.g.:" >&2
-      echo "         CLIENT_IF=enp1s0f1np1 SERVER_IF=enp1s0f0np0 sudo -E $0 up" >&2
-      echo "       List candidates and their ports with:" >&2
-      echo "         for d in /sys/class/net/*/device; do n=\${d%/device}; n=\${n##*/}; printf '%s port=%s\\n' \"\$n\" \"\$(cat /sys/class/net/\$n/phys_port_name 2>/dev/null)\"; done" >&2
-      exit 1
-    fi
-    [[ -z "$CLIENT_IF" ]] && CLIENT_IF="${rep_for_port[${ports[0]}]}"
-    [[ -z "$SERVER_IF" ]] && SERVER_IF="${rep_for_port[${ports[1]}]}"
+    local resolved
+    resolved="$(python3 "$HARDWARE_RESOLVER" --defaults "$HARDWARE_DEFAULTS" \
+      --platform "$PLATFORM" --format shell)" || exit 1
+    eval "$resolved"
+    [[ -z "$CLIENT_IF" ]] && CLIENT_IF="$DEFAULT_DPDK_TX_NETDEV"
+    [[ -z "$SERVER_IF" ]] && SERVER_IF="$DEFAULT_DPDK_RX_NETDEV"
   fi
   [[ -z "$CLIENT_RDMA" ]] && CLIENT_RDMA="$(rdma_for_netdev "$CLIENT_IF" || true)"
   [[ -z "$SERVER_RDMA" ]] && SERVER_RDMA="$(rdma_for_netdev "$SERVER_IF" || true)"
@@ -316,8 +264,8 @@ monitor() {
   # counters (SerDes) prove it crossed the cable. vport moving while phy stays
   # flat == on-chip short-cut. NOTE: ethtool wants the NETDEV (enp1s0f0np0 /
   # enP2p1s0f0np0), not the rdma device (rocep1s0f0).
-  # Auto-detects whether the ports live in the netns (this script's setup) or
-  # the default namespace (the policy-routed setup_spark_rdma_loopback.sh setup).
+  # Auto-detects whether the ports live in this script's namespaces or the
+  # default namespace.
   resolve_ports
   local cns sns
   if ip netns list 2>/dev/null | grep -qw "$CLIENT_NS"; then
@@ -368,17 +316,32 @@ wire). You must pass the RoCEv2 GID index -- find it per-namespace with
   sudo ip netns exec $SERVER_NS ib_send_bw -d $SERVER_RDMA -i 1 -x <GID> -F --report_gbits -s 8388608 -D 30
   sudo ip netns exec $CLIENT_NS ib_send_bw -d $CLIENT_RDMA -i 1 -x <GID> -F --report_gbits -s 8388608 -D 30 $SERVER_IP
 
-Add -b for bidirectional. Compare against the shared-namespace numbers in
-rdma-bench-tuning-log.md -- a real drop here means the old run was short-cut.
+Add -b for bidirectional. Confirm the directional *_phy counters move before
+treating the result as cabled-loopback throughput.
 =============================================================================
 EOF
 }
 
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --platform)
+      [[ $# -ge 2 ]] || { echo "--platform requires a value" >&2; exit 1; }
+      PLATFORM="$2"
+      shift 2
+      ;;
+    *) break ;;
+  esac
+done
+
+if [[ -z "$PLATFORM" ]]; then
+  echo "--platform is required (dgx-spark or igx-thor)" >&2
+  exit 1
+fi
 require_root
 case "${1:-up}" in
   up)      up ;;
   down)    down ;;
   verify)  verify ;;
   monitor) monitor ;;
-  *) echo "usage: $0 {up|down|verify|monitor}" >&2; exit 1 ;;
+  *) echo "usage: $0 --platform dgx-spark|igx-thor {up|down|verify|monitor}" >&2; exit 1 ;;
 esac

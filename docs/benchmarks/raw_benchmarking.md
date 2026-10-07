@@ -70,7 +70,7 @@ docker run --rm -it --privileged \
 
     Start with [`daqiri_bench_raw_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx.yaml) to see how the TX and RX configuration fits together. On a system configured per the [DGX Spark profile](../tutorials/system_configuration.md#dgx-spark-profile), adapt the NIC addresses, use `host_pinned` memory, place the queue and application workers on the high-frequency cores, and set the destination MAC to the receiving port. [Generate a raw-Ethernet pair](../config-generation.md#generate-a-raw-ethernet-pair) can apply those system parameters and produce the concrete loopback. The `rx_port` is `0002:01:00.1` (physical port p1), so read its MAC with `cat /sys/class/net/enP2p1s0f1np1/address`.
 
-    For multiple queues, [`daqiri_bench_raw_tx_rx_4q.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_4q.yaml) shows how queues, memory regions, flow steering, and application workers relate. [`run_spark_bench.sh`](https://github.com/nvidia/daqiri/blob/main/examples/run_spark_bench.sh) generates each single-queue benchmark cell, while [`run_spark_mq_bench.sh`](https://github.com/nvidia/daqiri/blob/main/examples/run_spark_mq_bench.sh) generates all four `(TX, RX)` multi-queue combinations.
+    For multiple queues, [`daqiri_bench_raw_tx_rx_4q.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_4q.yaml) shows how queues, memory regions, flow steering, and application workers relate. [`run_cabled_loopback_bench.sh`](https://github.com/nvidia/daqiri/blob/main/examples/run_cabled_loopback_bench.sh) generates each single-queue benchmark cell from detected platform defaults, while [`run_spark_mq_bench.sh`](https://github.com/nvidia/daqiri/blob/main/examples/run_spark_mq_bench.sh) generates the Spark-specific `(TX, RX)` multi-queue combinations.
 
 #### Cross-host two-DGX-Spark loopback
 
@@ -173,6 +173,13 @@ Use `mlnx_perf -i <rx-netdev> -t 1` during a run of at least 10 seconds and repo
 samples after discarding startup and shutdown. For a cabled test, report the physical receive
 rate. For single-port hardware loopback, report `vport_loopback_bytes` as described below and do
 not add TX and RX for the same returned traffic.
+
+For a cabled test, `rx_bytes_phy` is the **offered wire rate** at the receive port. It includes
+frames that the NIC later discards, so it is a delivered-throughput result only when receive
+discard counters remain flat. Report the benchmark's application rate as **delivered app
+throughput**, and reject or clearly label any cell with `rx_prio*_buf_discard`, `imissed`,
+`ierrors`, `rx_nombuf`, CQ errors, or application-ring drops. A high physical rate paired with a
+lower app rate and rising priority-buffer discards is receiver overload, not useful throughput.
 
 ### Runtime named endpoints example
 

@@ -364,6 +364,7 @@ class RawPairSpec:
     header_size: int = 64
     buffer_size: int | None = None
     batch_size: int | None = None
+    pacing_mbps: int = 0
     num_bufs: int = 51200
     affinity: int = 0
     memory_kind: str = "device"
@@ -437,6 +438,8 @@ class RawPairSpec:
             _require_positive(name, getattr(self, name))
         if self.batch_size is not None:
             _require_positive("batch_size", self.batch_size)
+        if self.pacing_mbps < 0:
+            raise ConfigError("pacing_mbps must be non-negative")
         batch_size = self.resolved_batch_size
         _require_positive("buffer_size", self.resolved_buffer_size)
         if self.num_bufs < batch_size:
@@ -593,6 +596,8 @@ def generate_raw_pair(spec: RawPairSpec) -> dict[str, Any]:
         }
         if spec.tx_eth_src:
             queue["offloads"] = ["tx_eth_src"]
+        if spec.pacing_mbps:
+            queue["pacing_mbps"] = spec.pacing_mbps
         tx_queues.append(queue)
 
     rx_queues = []

@@ -1,0 +1,63 @@
+version: 1
+platforms:
+  dgx-spark:
+    workload_gpu: '^NVIDIA GB10$'
+    expected_link_mbps: 100000
+    isolated_cpus: '16-19'
+    preferred_tx_bdf: '0000:01:00.0'
+    preferred_rx_bdf: '0002:01:00.1'
+    tx_phys_port: p0
+    rx_phys_port: p1
+    dpdk_memory_kind: host_pinned
+    dpdk_payload_batches: []
+    dpdk_payload_pacing_gbps: []
+    ibverbs_memory_kind: host_pinned
+    ibverbs_batch_size: 4096
+    ibverbs_num_bufs: 8192
+    ibverbs_payload_batches: []
+    ibverbs_payload_pacing_gbps: []
+    rdma_memory_kind: host_pinned
+    master_core: 8
+    dpdk_tx_queue_core: 17
+    dpdk_rx_queue_core: 18
+    dpdk_tx_worker_core: 16
+    dpdk_rx_worker_core: 19
+    rdma_client_rx_core: 18
+    rdma_client_tx_core: 17
+    rdma_server_rx_core: 19
+    rdma_server_tx_core: 16
+    socket_server_cores: [16, 18, 5, 7]
+    socket_client_cores: [17, 19, 6, 9]
+    socket_pair_counts: [1, 2, 4]
+    socket_headline_pairs: [4]
+
+  igx-thor:
+    workload_gpu: '^NVIDIA RTX PRO 6000 Blackwell.*$'
+    expected_link_mbps: 200000
+    isolated_cpus: '8-13'
+    preferred_tx_bdf: '0004:03:00.0'
+    preferred_rx_bdf: '0004:03:00.1'
+    tx_phys_port: p0
+    rx_phys_port: p1
+    dpdk_memory_kind: device
+    dpdk_payload_batches: ['256:1024', '64:1024']
+    dpdk_payload_pacing_gbps: ['256:50', '64:20']
+    ibverbs_memory_kind: device
+    ibverbs_batch_size: 4096
+    ibverbs_num_bufs: 8192
+    ibverbs_payload_batches: ['1024:512', '256:256', '64:512']
+    ibverbs_payload_pacing_gbps: ['256:125', '64:65']
+    rdma_memory_kind: host_pinned
+    master_core: 5
+    dpdk_tx_queue_core: 9
+    dpdk_rx_queue_core: 10
+    dpdk_tx_worker_core: 8
+    dpdk_rx_worker_core: 11
+    rdma_client_rx_core: 10
+    rdma_client_tx_core: 11
+    rdma_server_rx_core: 9
+    rdma_server_tx_core: 8
+    socket_server_cores: [8, 10, 12]
+    socket_client_cores: [9, 11, 13]
+    socket_pair_counts: [1, 2, 3]
+    socket_headline_pairs: [3]
