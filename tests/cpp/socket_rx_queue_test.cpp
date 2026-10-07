@@ -207,12 +207,17 @@ class SocketEngineQueueTestPeer {
     auto* endpoint_ptr = endpoint.get();
     engine.endpoints_.push_back(std::move(endpoint));
 
-    std::thread rx_thread(&SocketEngine::udp_rx_loop, &engine, 0);
-
     constexpr uint8_t payload = 42;
+    int sent = 0;
     for (int i = 0; i < 256; ++i) {
-      ::send(fds[1], &payload, sizeof(payload), MSG_DONTWAIT);
+      if (::send(fds[1], &payload, sizeof(payload), MSG_DONTWAIT) == sizeof(payload)) {
+        ++sent;
+      }
     }
+
+    // Pre-fill the socket so the first recvmmsg() deterministically creates a
+    // multi-packet burst, then start the receiver and let it reach capacity.
+    std::thread rx_thread(&SocketEngine::udp_rx_loop, &engine, 0);
 
     bool reached_capacity = false;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
@@ -234,6 +239,31 @@ class SocketEngineQueueTestPeer {
       bounded = queue->queued_packets + queue->reserved_packets <= queue->max_packets;
     }
 
+    // Draining the first three-packet burst must wake the receiver. It should
+    // consume exactly the three newly available slots and stop at the bound.
+    const uint64_t packets_before_pop = engine.rx_pkts_.load();
+    BurstParams* resumed_burst = nullptr;
+    const bool popped_multi_packet_burst =
+        engine.pop_rx_burst(queue, &resumed_burst) == Status::SUCCESS &&
+        resumed_burst->hdr.hdr.num_pkts > 1;
+    engine.free_all_packets(resumed_burst);
+    engine.free_rx_burst(resumed_burst);
+
+    bool resumed_at_capacity = false;
+    const auto resume_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (std::chrono::steady_clock::now() < resume_deadline) {
+      {
+        std::lock_guard<std::mutex> lock(queue->mutex);
+        resumed_at_capacity = engine.rx_pkts_.load() > packets_before_pop &&
+                              queue->queued_packets == queue->max_packets &&
+                              queue->reserved_packets == 0;
+      }
+      if (resumed_at_capacity) {
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
     engine.running_.store(false);
     queue->capacity_cv.notify_all();
     ::shutdown(fds[0], SHUT_RDWR);
@@ -250,8 +280,9 @@ class SocketEngineQueueTestPeer {
     }
     engine.endpoints_.clear();
 
-    return reached_capacity && bounded && engine.rx_pkts_.load() == queue->max_packets &&
-           queue->queued_packets == 0 && queue->reserved_packets == 0;
+    return sent > static_cast<int>(queue->max_packets) && reached_capacity && bounded &&
+           popped_multi_packet_burst && resumed_at_capacity && queue->queued_packets == 0 &&
+           queue->reserved_packets == 0;
   }
 };
 
