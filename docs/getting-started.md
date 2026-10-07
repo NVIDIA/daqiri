@@ -16,6 +16,13 @@ DAQIRI can run a plain Linux socket path on modest hardware, but the common
 Raw Ethernet, RoCE, and GPUDirect paths depend on NVIDIA networking and GPU
 capabilities. Start with the hardware you plan to exercise.
 
+The built-in TCP and UDP paths bound each internal RX backlog by the smallest
+memory-region `num_bufs` referenced by that queue. A sustained slow consumer
+therefore cannot grow DAQIRI's process queue without limit. TCP applies
+backpressure to the sender; UDP leaves overflow in the bounded kernel socket
+buffer, where excess datagrams are dropped. See
+[TCP receive backpressure and queue sizing](benchmarks/socket_benchmarking.md#tcp-receive-backpressure-and-queue-sizing).
+
 ### Hardware
 
 | Component | Required for | Requirement |

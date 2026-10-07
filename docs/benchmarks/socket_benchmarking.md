@@ -174,11 +174,13 @@ The shipped configs run both endpoints on `127.0.0.1` and are useful for a smoke
 
 ### TCP receive backpressure and queue sizing
 
-DAQIRI bounds each TCP RX queue by the smallest `num_bufs` value among the
-memory regions referenced by that queue. Each successful TCP `recv()` becomes
-one DAQIRI burst and consumes one slot until the application calls
-`get_rx_burst()` to remove it from the internal queue. For example, this queue
-allows at most 64 received bursts to wait inside DAQIRI:
+DAQIRI bounds each TCP or UDP RX queue by the smallest `num_bufs` value among
+the memory regions referenced by that queue. The limit counts packets, not
+bursts. Each successful TCP `recv()` becomes one DAQIRI packet; each UDP
+datagram is one packet even when `recvmmsg()` coalesces several datagrams into
+one burst. A packet consumes capacity until the application calls
+`get_rx_burst()` to remove its containing burst from the internal queue. For
+example, this queue allows at most 64 received packets to wait inside DAQIRI:
 
 ```yaml
 memory_regions:
@@ -203,30 +205,37 @@ interfaces:
       memory_regions: ["TCP_RX"]
 ```
 
-When all slots are occupied, the receive threads stop consuming bytes from the
-kernel sockets. The kernel TCP receive window then contracts and eventually
-slows or blocks the sender. This is normal TCP flow control: a sustained slow
+When all slots are occupied, the receive thread stops consuming from the kernel
+socket. For TCP, the kernel receive window contracts and eventually slows or
+blocks the sender. This is normal TCP flow control: a sustained slow
 GPU/application consumer should reduce achieved throughput instead of causing
 DAQIRI's internal queue to grow until the process runs out of memory. An idle
-connection waits for readable data without reserving a slot, so it does not
+TCP connection waits for readable data without reserving a slot, so it does not
 prevent an active connection sharing the endpoint queue from receiving.
+
+UDP has no sender backpressure. When its DAQIRI queue is full, the receive thread
+stops calling `recvmmsg()`. The bounded kernel socket receive buffer then fills
+and the kernel drops excess datagrams. If only part of a configured UDP
+`batch_size` remains available, DAQIRI passes that smaller count to `recvmmsg()`;
+the internal packet backlog therefore never exceeds `num_bufs`.
 
 Choose `num_bufs` according to the amount of receive jitter to absorb:
 
 - Increase it to tolerate longer temporary compute stalls, at the cost of more
   queued payload memory and later backpressure.
-- Decrease it to apply backpressure sooner and reduce the maximum internal
-  backlog. A value of `1` permits one waiting burst.
+- Decrease it to apply TCP backpressure or UDP kernel dropping sooner and reduce
+  the maximum internal backlog. A value of `1` permits one waiting packet.
 - Size from observed `recv()` chunks, not application message count. TCP is a
   byte stream, so one application write is not guaranteed to equal one DAQIRI
   burst.
 
-The bound covers bursts waiting inside DAQIRI. It does not include bytes still
-in the kernel socket receive buffer or bursts already returned to and retained
-by the application. The application must continue to free every received burst
-after processing it. TCP `rx.queues[].batch_size` does not change this bound;
-the socket TCP path surfaces one packet per `recv()` chunk. UDP retains its
-existing datagram receive behavior and does not wait for this TCP queue capacity.
+The bound covers packets waiting inside DAQIRI. It does not include bytes or
+datagrams still in the kernel socket receive buffer, or bursts already returned
+to and retained by the application. The application must continue to free every
+received burst after processing it. TCP `rx.queues[].batch_size` does not change
+this bound; the socket TCP path surfaces one packet per `recv()` chunk. UDP
+`rx.queues[].batch_size` controls coalescing only and does not multiply the
+`num_bufs` limit.
 
 For an on-wire namespace test, generate separate server and client YAML files
 with [`gen_daqiri_config.py socket-pair`](../config-generation.md#generate-udp-tcp-or-roce-roles).

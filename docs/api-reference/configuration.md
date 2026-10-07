@@ -134,10 +134,11 @@ runtime binding.
   - values: `local`, `rdma_read`, `rdma_write`
 - **`num_bufs`**: Number of buffers in this region. Higher values give more processing
   headroom but consume more memory (GPU BAR1 for `device`). Too low risks dropped packets
-  on RX or a TX stall. For socket TCP RX queues, the smallest `num_bufs` among the queue's
-  memory regions bounds the number of bursts DAQIRI holds internally. When that queue fills,
-  DAQIRI stops calling `recv()`, allowing TCP flow control to backpressure the sender. UDP RX
-  does not wait for this internal queue capacity. See
+  on RX or a TX stall. For socket TCP and UDP RX queues, the smallest `num_bufs` among the
+  queue's memory regions bounds the number of packets DAQIRI holds internally. When that
+  queue fills, DAQIRI stops consuming from the socket. TCP flow control backpressures the
+  sender; UDP fills the bounded kernel receive buffer and drops excess datagrams. A UDP burst
+  may contain up to `batch_size` datagrams, but every datagram counts against the limit. See
   [TCP receive backpressure and queue sizing](../benchmarks/socket_benchmarking.md#tcp-receive-backpressure-and-queue-sizing)
   for sizing guidance and ownership details. Raw DPDK queue regions use a floor of
   `max(1.5 * ring, ring + 2 * batch_size)`. DAQIRI bumps values below that floor to
