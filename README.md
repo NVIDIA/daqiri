@@ -23,6 +23,7 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 - [Benchmarking](#benchmarking)
 - [Documentation](#documentation)
 - [Tutorials](#tutorials)
+- [Releases](#releases)
 - [License](#license)
 
 ## Features
@@ -113,6 +114,10 @@ Step-by-step walkthroughs to get hands-on:
 - [Understanding the Configuration File](https://nvidia.github.io/daqiri/tutorials/configuration-walkthrough/) — annotated YAML walkthrough
 - [DAQIRI + Holoscan Integration](https://nvidia.github.io/daqiri/tutorials/daqiri-holoscan-integration/) — use DAQIRI RX bursts from a Holoscan source operator
 - [DAQIRI + TensorRT Inference](https://nvidia.github.io/daqiri/tutorials/daqiri-resnet-inference/) — packet ingest → ResNet-50 feature extraction with TensorRT
+
+## Releases
+
+DAQIRI ships formal releases quarterly using [calendar versioning](https://calver.org/). New features and fixes land on `main` continuously — pull and build from there for the latest.
 
 ## License
 
