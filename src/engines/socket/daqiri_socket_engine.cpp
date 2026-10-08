@@ -218,12 +218,12 @@ void SocketEngine::initialize() {
       ep->tx_batch_size = select_batch_size(if_cfg.tx_.queues_);
       ep->max_packet_size = static_cast<size_t>(std::max(1, select_max_packet_size(if_cfg)));
       ep->rx_queue_state = get_or_create_rx_queue(ep->port, ep->rx_queue);
-      ep->rx_queue_state->max_bursts = select_rx_queue_capacity(if_cfg);
-      if (cfg_.common_.protocol == SocketProtocol::TCP) {
-        DAQIRI_LOG_INFO("TCP RX queue port={} queue={} capacity={} bursts",
-                        ep->port,
-                        ep->rx_queue,
-                        ep->rx_queue_state->max_bursts);
+      ep->rx_queue_state->max_packets = select_rx_queue_capacity(if_cfg);
+      if (cfg_.common_.protocol == SocketProtocol::TCP ||
+          cfg_.common_.protocol == SocketProtocol::UDP) {
+        DAQIRI_LOG_INFO("{} RX queue port={} queue={} capacity={} packets",
+                        socket_protocol_to_string(cfg_.common_.protocol), ep->port, ep->rx_queue,
+                        ep->rx_queue_state->max_packets);
       }
       ep->rx_metrics = metrics::get_or_create_queue("socket",
                                                      if_cfg.name_.empty() ? if_cfg.address_
@@ -563,6 +563,8 @@ void SocketEngine::clear_rx_queues() {
         free_rx_burst(burst);
       }
     }
+    ep->rx_queue_state->queued_packets = 0;
+    ep->rx_queue_state->reserved_packets = 0;
   }
 }
 
@@ -654,41 +656,53 @@ Status SocketEngine::pop_rx_burst(const std::shared_ptr<RxQueueState>& qstate, B
 
   *burst = qstate->bursts.front();
   qstate->bursts.pop();
+  qstate->queued_packets -= (*burst)->hdr.hdr.num_pkts;
   lock.unlock();
   qstate->capacity_cv.notify_one();
   return Status::SUCCESS;
 }
 
-bool SocketEngine::reserve_rx_burst(const std::shared_ptr<RxQueueState>& qstate,
-                                    const std::atomic<bool>& connection_running) {
-  if (qstate == nullptr) { return false; }
+size_t SocketEngine::reserve_rx_packets(const std::shared_ptr<RxQueueState>& qstate,
+                                        size_t requested_packets,
+                                        const std::atomic<bool>* connection_running) {
+  if (qstate == nullptr || requested_packets == 0) {
+    return 0;
+  }
 
   std::unique_lock<std::mutex> lock(qstate->mutex);
   qstate->capacity_cv.wait(lock, [&] {
-    if (!running_.load() || !connection_running.load()) { return true; }
-    return qstate->reserved_bursts < qstate->max_bursts &&
-           qstate->bursts.size() < qstate->max_bursts - qstate->reserved_bursts;
+    if (!running_.load() || (connection_running != nullptr && !connection_running->load())) {
+      return true;
+    }
+    return qstate->queued_packets + qstate->reserved_packets < qstate->max_packets;
   });
-  if (!running_.load() || !connection_running.load()) { return false; }
+  if (!running_.load() || (connection_running != nullptr && !connection_running->load())) {
+    return 0;
+  }
 
-  ++qstate->reserved_bursts;
-  return true;
+  const size_t available = qstate->max_packets - qstate->queued_packets - qstate->reserved_packets;
+  const size_t reserved = std::min(requested_packets, available);
+  qstate->reserved_packets += reserved;
+  return reserved;
 }
 
-void SocketEngine::cancel_rx_burst_reservation(const std::shared_ptr<RxQueueState>& qstate) {
-  if (qstate == nullptr) { return; }
+void SocketEngine::cancel_rx_packet_reservation(const std::shared_ptr<RxQueueState>& qstate,
+                                                size_t reserved_packets) {
+  if (qstate == nullptr || reserved_packets == 0) {
+    return;
+  }
 
   {
     std::lock_guard<std::mutex> lock(qstate->mutex);
-    if (qstate->reserved_bursts > 0) { --qstate->reserved_bursts; }
+    qstate->reserved_packets -= reserved_packets;
   }
   qstate->capacity_cv.notify_one();
 }
 
 void SocketEngine::push_rx_burst(const std::shared_ptr<RxQueueState>& qstate, BurstParams* burst,
-                                 bool reserved) {
+                                 size_t reserved_packets) {
   if (burst == nullptr) {
-    if (reserved) { cancel_rx_burst_reservation(qstate); }
+    cancel_rx_packet_reservation(qstate, reserved_packets);
     return;
   }
   if (qstate == nullptr) {
@@ -698,7 +712,8 @@ void SocketEngine::push_rx_burst(const std::shared_ptr<RxQueueState>& qstate, Bu
     return;
   }
   std::lock_guard<std::mutex> lock(qstate->mutex);
-  if (reserved && qstate->reserved_bursts > 0) { --qstate->reserved_bursts; }
+  qstate->reserved_packets -= reserved_packets;
+  qstate->queued_packets += burst->hdr.hdr.num_pkts;
   qstate->bursts.push(burst);
 }
 
@@ -1439,15 +1454,18 @@ void SocketEngine::tcp_rx_loop(std::shared_ptr<ConnectionState> conn) {
 
     // Once the application falls behind, stop draining the kernel socket so
     // TCP flow control can propagate backpressure without growing DAQIRI's heap.
-    if (!reserve_rx_burst(conn->rx_queue, conn->running)) { break; }
+    const size_t reserved_packets = reserve_rx_packets(conn->rx_queue, 1, &conn->running);
+    if (reserved_packets == 0) {
+      break;
+    }
 
     const ssize_t rx = ::recv(conn->fd, tmp.data(), tmp.size(), 0);
     if (rx == 0) {
-      cancel_rx_burst_reservation(conn->rx_queue);
+      cancel_rx_packet_reservation(conn->rx_queue, reserved_packets);
       break;
     }
     if (rx < 0) {
-      cancel_rx_burst_reservation(conn->rx_queue);
+      cancel_rx_packet_reservation(conn->rx_queue, reserved_packets);
       if (errno == EINTR) { continue; }
       if (!running_.load()) { break; }
       DAQIRI_LOG_WARN("TCP recv failed on conn_id={}: {}", conn->conn_id, strerror(errno));
@@ -1468,7 +1486,7 @@ void SocketEngine::tcp_rx_loop(std::shared_ptr<ConnectionState> conn) {
     burst->pkt_lens[0][0] = static_cast<uint32_t>(rx);
     set_connection_id(burst, conn->conn_id);
 
-    push_rx_burst(conn->rx_queue, burst, true);
+    push_rx_burst(conn->rx_queue, burst, reserved_packets);
     rx_pkts_.fetch_add(1);
     rx_bytes_.fetch_add(static_cast<uint64_t>(rx));
     metrics::add_rx(conn->rx_metrics, 1, static_cast<uint64_t>(rx));
@@ -1516,22 +1534,36 @@ void SocketEngine::udp_rx_loop(int if_index) {
   }
 
   while (running_.load()) {
+    // Reserve packet capacity before consuming datagrams. Once the application
+    // falls behind, leave excess UDP traffic in the kernel socket so its bounded
+    // receive buffer drops overflow instead of growing DAQIRI's heap queue.
+    const size_t reserved_packets = reserve_rx_packets(ep->rx_queue_state, rx_batch_size);
+    if (reserved_packets == 0) {
+      break;
+    }
+
     for (size_t i = 0; i < rx_batch_size; ++i) {
       msgs[i].msg_hdr.msg_namelen = sizeof(sockaddr_in);
     }
 
-    const int received = ::recvmmsg(
-        ep->udp_fd, msgs.data(), static_cast<unsigned int>(rx_batch_size), MSG_WAITFORONE, nullptr);
+    const int received =
+        ::recvmmsg(ep->udp_fd, msgs.data(), static_cast<unsigned int>(reserved_packets),
+                   MSG_WAITFORONE, nullptr);
     if (received < 0) {
+      cancel_rx_packet_reservation(ep->rx_queue_state, reserved_packets);
       if (errno == EINTR) { continue; }
       if (!running_.load()) { break; }
       DAQIRI_LOG_WARN("UDP recvmmsg failed on port {}: {}", ep->port, strerror(errno));
       continue;
     }
     if (!running_.load()) {
+      cancel_rx_packet_reservation(ep->rx_queue_state, reserved_packets);
       break;
     }
-    if (received == 0) { continue; }
+    if (received == 0) {
+      cancel_rx_packet_reservation(ep->rx_queue_state, reserved_packets);
+      continue;
+    }
 
     if (ep->socket_cfg.mode_ == SocketMode::SERVER && !ep->udp_peer_configured) {
       std::lock_guard<std::mutex> lock(state_mutex_);
@@ -1560,7 +1592,7 @@ void SocketEngine::udp_rx_loop(int if_index) {
     }
     set_connection_id(burst, ep->primary_conn_id);
 
-    push_rx_burst(ep->rx_queue_state, burst);
+    push_rx_burst(ep->rx_queue_state, burst, reserved_packets);
     rx_pkts_.fetch_add(static_cast<uint64_t>(received));
     rx_bytes_.fetch_add(received_bytes);
     metrics::add_rx(ep->rx_metrics, static_cast<uint64_t>(received), received_bytes);

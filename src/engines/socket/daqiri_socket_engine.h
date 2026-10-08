@@ -118,8 +118,9 @@ class SocketEngine : public Engine {
   struct RxQueueState {
     uint16_t port = 0;
     uint16_t queue = 0;
-    size_t max_bursts = 1;
-    size_t reserved_bursts = 0;
+    size_t max_packets = 1;
+    size_t queued_packets = 0;
+    size_t reserved_packets = 0;
     std::mutex mutex;
     std::condition_variable capacity_cv;
     std::queue<BurstParams*> bursts;
@@ -207,11 +208,12 @@ class SocketEngine : public Engine {
   uint32_t select_batch_size(const std::vector<TxQueueConfig>& queues) const;
 
   Status pop_rx_burst(const std::shared_ptr<RxQueueState>& qstate, BurstParams** burst);
-  bool reserve_rx_burst(const std::shared_ptr<RxQueueState>& qstate,
-                        const std::atomic<bool>& connection_running);
-  void cancel_rx_burst_reservation(const std::shared_ptr<RxQueueState>& qstate);
+  size_t reserve_rx_packets(const std::shared_ptr<RxQueueState>& qstate, size_t requested_packets,
+                            const std::atomic<bool>* connection_running = nullptr);
+  void cancel_rx_packet_reservation(const std::shared_ptr<RxQueueState>& qstate,
+                                    size_t reserved_packets);
   void push_rx_burst(const std::shared_ptr<RxQueueState>& qstate, BurstParams* burst,
-                     bool reserved = false);
+                     size_t reserved_packets = 0);
 
   void free_packet_arrays(BurstParams* burst);
   void close_fd(int& fd);
