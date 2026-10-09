@@ -1,0 +1,252 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 462" role="img" aria-labelledby="title desc">
+  <title id="title">DAQIRI sensor data paths to CPU, NVIDIA GPU memory, and storage</title>
+  <desc id="desc">A diagram showing sensor data entering or leaving CPU memory or NVIDIA GPU memory through DAQIRI from a PCIe FPGA path or a network-capable sensor path through a NIC, then GPU-resident data writing out through GPUDirect Storage.</desc>
+  <defs>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#171a18"/>
+      <stop offset="1" stop-color="#080a08"/>
+    </linearGradient>
+    <linearGradient id="greenPanel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#203a09"/>
+      <stop offset="1" stop-color="#0d1704"/>
+    </linearGradient>
+    <linearGradient id="gpuPanel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#193609"/>
+      <stop offset="0.58" stop-color="#102404"/>
+      <stop offset="1" stop-color="#070b05"/>
+    </linearGradient>
+    <linearGradient id="pciePanel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#132e36"/>
+      <stop offset="1" stop-color="#071316"/>
+    </linearGradient>
+    <linearGradient id="networkPanel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#18293d"/>
+      <stop offset="1" stop-color="#070d16"/>
+    </linearGradient>
+    <linearGradient id="storagePanel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3c2a10"/>
+      <stop offset="1" stop-color="#120d05"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="45%" r="62%">
+      <stop offset="0" stop-color="#76b900" stop-opacity="0.18"/>
+      <stop offset="0.55" stop-color="#76b900" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#76b900" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <marker id="arrowGreen" markerWidth="5" markerHeight="5" refX="4.3" refY="2.5" orient="auto-start-reverse">
+      <path d="M0.8 0.7 L4.6 2.5 L0.8 4.3 Z" fill="#76b900"/>
+    </marker>
+    <marker id="arrowCyan" markerWidth="5" markerHeight="5" refX="4.3" refY="2.5" orient="auto-start-reverse">
+      <path d="M0.8 0.7 L4.6 2.5 L0.8 4.3 Z" fill="#5dd8f2"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="5" markerHeight="5" refX="4.3" refY="2.5" orient="auto-start-reverse">
+      <path d="M0.8 0.7 L4.6 2.5 L0.8 4.3 Z" fill="#82aaff"/>
+    </marker>
+    <marker id="arrowMuted" markerWidth="5" markerHeight="5" refX="4.3" refY="2.5" orient="auto-start-reverse">
+      <path d="M0.8 0.7 L4.6 2.5 L0.8 4.3 Z" fill="#888"/>
+    </marker>
+    <marker id="arrowAmber" markerWidth="5" markerHeight="5" refX="4.3" refY="2.5" orient="auto">
+      <path d="M0.8 0.7 L4.6 2.5 L0.8 4.3 Z" fill="#ffcb6b"/>
+    </marker>
+    <style>
+      .label { font-family: Inter, "Segoe UI", Arial, sans-serif; letter-spacing: 0; }
+      .mono { font-family: "JetBrains Mono", "Fira Code", Consolas, monospace; letter-spacing: 0; }
+      .flow-green { animation: flow 2.6s linear infinite; stroke-dasharray: 6 10; }
+      .flow-cyan { animation: flow 3.1s linear infinite; stroke-dasharray: 6 10; }
+      .flow-blue { animation: flow 3.4s linear infinite; stroke-dasharray: 6 10; }
+      .flow-amber { animation: flow 2.9s linear infinite; stroke-dasharray: 6 10; }
+      .travel-dot { opacity: 0.95; }
+      .pulse { animation: pulse 2.8s ease-in-out infinite; transform-origin: center; }
+      .pulse-2 { animation-delay: 0.85s; }
+      .pulse-3 { animation-delay: 1.55s; }
+      .pulse-4 { animation-delay: 2.15s; }
+      @keyframes flow { to { stroke-dashoffset: -52; } }
+      @keyframes pulse {
+        0%, 100% { opacity: 0.35; transform: scale(1); }
+        50% { opacity: 1; transform: scale(1.18); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .flow-green, .flow-cyan, .flow-blue, .flow-amber, .pulse { animation: none; }
+      }
+    </style>
+  </defs>
+
+  <rect width="820" height="462" rx="24" fill="#090a09"/>
+  <rect x="1" y="1" width="818" height="460" rx="23" fill="none" stroke="#1d2518"/>
+  <rect width="820" height="462" fill="url(#glow)"/>
+
+  <g opacity="0.4">
+    <path d="M40 88 H780 M40 144 H780 M40 200 H780 M40 256 H780 M40 312 H780 M40 368 H780 M40 424 H780 M40 480 H780" stroke="#76b900" stroke-opacity="0.08"/>
+    <path d="M84 52 V520 M148 52 V520 M212 52 V520 M276 52 V520 M340 52 V520 M404 52 V520 M468 52 V520 M532 52 V520 M596 52 V520 M660 52 V520 M724 52 V520 M788 52 V520" stroke="#76b900" stroke-opacity="0.08"/>
+  </g>
+
+  <g class="label">
+    <text x="410" y="48" text-anchor="middle" fill="#f0f0f0" font-size="24" font-weight="800">Sensor Streams Meet CPU or GPU Memory</text>
+    <text x="410" y="74" text-anchor="middle" fill="#8f9a88" font-size="13">DAQIRI carries PCIe and network-capable streams into memory, then GPU data out to storage</text>
+  </g>
+
+  <!-- PCIe sensor path -->
+  <g transform="translate(30 302)">
+    <rect width="222" height="142" rx="12" fill="url(#pciePanel)" stroke="#2e7180" stroke-width="1.5"/>
+    <g transform="translate(18 19)">
+      <rect x="0" y="0" width="82" height="82" rx="8" fill="#0b171a" stroke="#5dd8f2" stroke-opacity="0.65"/>
+      <rect x="18" y="18" width="46" height="46" rx="6" fill="#12303a" stroke="#5dd8f2"/>
+      <text x="41" y="47" text-anchor="middle" class="mono" fill="#c7f7ff" font-size="10" font-weight="700">FPGA</text>
+      <g stroke="#5dd8f2" stroke-width="2" stroke-linecap="round" opacity="0.7">
+        <path d="M8 16 H0 M8 30 H0 M8 44 H0 M8 58 H0 M8 72 H0"/>
+        <path d="M82 16 H74 M82 30 H74 M82 44 H74 M82 58 H74 M82 72 H74"/>
+        <path d="M16 8 V0 M30 8 V0 M44 8 V0 M58 8 V0 M72 8 V0"/>
+        <path d="M16 82 V74 M30 82 V74 M44 82 V74 M58 82 V74 M72 82 V74"/>
+      </g>
+    </g>
+    <text x="118" y="35" fill="#f0f0f0" font-size="18" font-weight="800">PCIe Device</text>
+    <text x="118" y="57" fill="#9fb0b4" font-size="11">FPGA / frame grabber</text>
+    <text x="118" y="73" fill="#9fb0b4" font-size="11">sensor front-end</text>
+    <rect x="118" y="92" width="82" height="26" rx="5" fill="#061216" stroke="#2e7180"/>
+    <text x="159" y="109" text-anchor="middle" class="mono" fill="#5dd8f2" font-size="11" font-weight="700">PCIe BAR</text>
+  </g>
+
+  <!-- Network-capable sensor path -->
+  <g transform="translate(30 116)">
+    <rect width="222" height="142" rx="12" fill="url(#networkPanel)" stroke="#394d86" stroke-width="1.5"/>
+    <g transform="translate(16 26)" fill="none" stroke="#82aaff" stroke-width="2">
+      <circle cx="18" cy="18" r="12" fill="#0b1320"/>
+      <circle cx="58" cy="18" r="12" fill="#0b1320"/>
+      <circle cx="38" cy="58" r="12" fill="#0b1320"/>
+      <path d="M28 20 H48 M24 29 L34 47 M53 29 L43 47"/>
+      <circle cx="18" cy="18" r="4" fill="#82aaff"/>
+      <circle cx="58" cy="18" r="4" fill="#82aaff"/>
+      <circle cx="38" cy="58" r="4" fill="#82aaff"/>
+    </g>
+    <text x="96" y="30" fill="#f0f0f0" font-size="14" font-weight="800">Network-Capable</text>
+    <text x="96" y="48" fill="#f0f0f0" font-size="14" font-weight="800">Sensor</text>
+    <rect x="96" y="64" width="104" height="30" rx="5" fill="#07101c" stroke="#394d86"/>
+    <text x="148" y="77" text-anchor="middle" class="mono" fill="#d1ddff" font-size="8.5" font-weight="800">Raw Ethernet</text>
+    <text x="148" y="89" text-anchor="middle" class="mono" fill="#82aaff" font-size="8.5" font-weight="700">UDP/TCP</text>
+    <rect x="96" y="102" width="104" height="30" rx="5" fill="#07101c" stroke="#394d86"/>
+    <text x="148" y="121" text-anchor="middle" class="mono" fill="#82aaff" font-size="10" font-weight="800">RoCE</text>
+  </g>
+
+  <!-- Host NIC between the network-capable sensor and DAQIRI -->
+  <g transform="translate(283 188)">
+    <rect width="32" height="100" rx="9" fill="#091119" stroke="#82aaff" stroke-width="1.5"/>
+    <text x="16" y="20" text-anchor="middle" class="mono" fill="#d1ddff" font-size="11" font-weight="900">NIC</text>
+    <g fill="#07101c" stroke="#82aaff" stroke-width="1">
+      <rect x="7" y="34" width="8" height="8" rx="1.5"/>
+      <rect x="18" y="34" width="8" height="8" rx="1.5"/>
+      <rect x="7" y="49" width="8" height="8" rx="1.5"/>
+      <rect x="18" y="49" width="8" height="8" rx="1.5"/>
+    </g>
+    <circle cx="9" cy="76" r="2.2" fill="#82aaff"/>
+    <circle cx="16" cy="76" r="2.2" fill="#76b900"/>
+    <circle cx="23" cy="76" r="2.2" fill="#82aaff"/>
+    <text x="16" y="92" text-anchor="middle" class="mono" fill="#82aaff" font-size="7" font-weight="700">RX/TX</text>
+  </g>
+
+  <!-- DAQIRI core -->
+  <g transform="translate(346 168)">
+    <rect width="142" height="224" rx="14" fill="url(#greenPanel)" stroke="#76b900" stroke-width="2" filter="url(#softGlow)"/>
+    <rect x="17" y="18" width="108" height="32" rx="6" fill="#76b900"/>
+    <text x="71" y="40" text-anchor="middle" class="mono" fill="#050805" font-size="18" font-weight="900">DAQIRI</text>
+    <text x="71" y="72" text-anchor="middle" fill="#a0d000" font-size="10" font-weight="700">C++/Python Library</text>
+
+    <g transform="translate(22 88)">
+      <rect width="98" height="26" rx="5" fill="#0a0f08" stroke="#385b16"/>
+      <text x="49" y="17" text-anchor="middle" class="mono" fill="#c8e840" font-size="10">RX/TX Bursts</text>
+      <rect y="32" width="98" height="26" rx="5" fill="#0a0f08" stroke="#385b16"/>
+      <text x="49" y="49" text-anchor="middle" class="mono" fill="#c8e840" font-size="10">Flow Steering</text>
+      <rect y="64" width="98" height="26" rx="5" fill="#0a0f08" stroke="#385b16"/>
+      <text x="49" y="81" text-anchor="middle" class="mono" fill="#c8e840" font-size="10">Zero-Copy API</text>
+      <rect y="96" width="98" height="26" rx="5" fill="#0a0f08" stroke="#385b16"/>
+      <text x="49" y="113" text-anchor="middle" class="mono" fill="#c8e840" font-size="10">GDS Writes</text>
+    </g>
+  </g>
+
+  <!-- Zero-copy destination/source targets -->
+  <g transform="translate(532 142)">
+    <text x="95" y="22" text-anchor="middle" fill="#f0f0f0" font-size="13" font-weight="900">Zero-copy to GPU or CPU</text>
+
+    <g transform="translate(20 42)">
+      <rect width="150" height="82" rx="12" fill="url(#gpuPanel)" stroke="#76b900" stroke-width="2"/>
+      <rect x="16" y="16" width="58" height="50" rx="8" fill="#162d08" stroke="#a0d000"/>
+      <text x="45" y="40" text-anchor="middle" class="mono" fill="#f0f0f0" font-size="16" font-weight="900">GPU</text>
+      <text x="45" y="56" text-anchor="middle" fill="#a0d000" font-size="9" font-weight="700">NVIDIA</text>
+      <rect x="86" y="17" width="48" height="48" rx="8" fill="#050805" stroke="#76b900" stroke-opacity="0.75"/>
+      <text x="110" y="36" text-anchor="middle" fill="#ffffff" font-size="9" font-weight="900">GPU</text>
+      <text x="110" y="50" text-anchor="middle" fill="#ffffff" font-size="9" font-weight="900">Memory</text>
+      <rect x="97" y="57" width="26" height="4" rx="2" fill="#76b900" opacity="0.9"/>
+    </g>
+
+    <g transform="translate(194 42)">
+      <rect width="86" height="82" rx="12" fill="url(#storagePanel)" stroke="#ffcb6b" stroke-width="1.8"/>
+      <g transform="translate(21 9)" fill="none" stroke="#ffcb6b" stroke-width="1.25">
+        <ellipse cx="22" cy="7" rx="22" ry="6" fill="#171006"/>
+        <path d="M0 7 V25 C0 29 10 32 22 32 C34 32 44 29 44 25 V7"/>
+        <path d="M0 16 C0 20 10 23 22 23 C34 23 44 20 44 16"/>
+      </g>
+      <rect x="11" y="51" width="64" height="26" rx="5" fill="#120d05" stroke="#5b431c"/>
+      <text x="43" y="63" text-anchor="middle" class="mono" fill="#ffefc7" font-size="8" font-weight="900">GPUDirect</text>
+      <text x="43" y="74" text-anchor="middle" fill="#ffcb6b" font-size="9.5" font-weight="900">Storage</text>
+    </g>
+
+    <g transform="translate(20 154)">
+      <rect width="150" height="82" rx="12" fill="#101208" stroke="#b8e85a" stroke-width="2"/>
+      <rect x="16" y="16" width="58" height="50" rx="8" fill="#181c10" stroke="#b8e85a"/>
+      <text x="45" y="46" text-anchor="middle" class="mono" fill="#f0f0f0" font-size="16" font-weight="900">CPU</text>
+      <rect x="86" y="17" width="48" height="48" rx="8" fill="#080a05" stroke="#b8e85a" stroke-opacity="0.75"/>
+      <text x="110" y="36" text-anchor="middle" fill="#ffffff" font-size="9" font-weight="900">CPU</text>
+      <text x="110" y="50" text-anchor="middle" fill="#ffffff" font-size="9" font-weight="900">Memory</text>
+      <rect x="97" y="57" width="26" height="4" rx="2" fill="#b8e85a" opacity="0.9"/>
+    </g>
+  </g>
+
+  <!-- Path labels -->
+  <g class="label">
+    <rect x="270" y="330" width="58" height="24" rx="6" fill="#061216" stroke="#2e7180"/>
+    <text x="299" y="346" text-anchor="middle" class="mono" fill="#5dd8f2" font-size="10" font-weight="800">PCIe</text>
+  </g>
+
+  <!-- Data paths -->
+  <path d="M252 378 C286 378 314 362 346 362" fill="none" stroke="#5dd8f2" stroke-width="2.5" stroke-linecap="round" marker-start="url(#arrowCyan)" marker-end="url(#arrowCyan)"/>
+  <path class="flow-cyan" d="M252 378 C286 378 314 362 346 362" fill="none" stroke="#c7f7ff" stroke-width="1" stroke-linecap="round" opacity="0.75"/>
+
+  <path d="M252 238 H283" fill="none" stroke="#82aaff" stroke-width="2" stroke-linecap="round" marker-start="url(#arrowBlue)" marker-end="url(#arrowBlue)"/>
+  <path class="flow-blue" d="M252 238 H283" fill="none" stroke="#d1ddff" stroke-width="0.8" stroke-linecap="round" opacity="0.75"/>
+  <path d="M315 238 H346" fill="none" stroke="#82aaff" stroke-width="2" stroke-linecap="round" marker-start="url(#arrowBlue)" marker-end="url(#arrowBlue)"/>
+  <path class="flow-blue" d="M315 238 H346" fill="none" stroke="#d1ddff" stroke-width="0.8" stroke-linecap="round" opacity="0.75"/>
+
+  <path d="M488 236 C505 218 520 218 552 225" fill="none" stroke="#76b900" stroke-width="2.6" stroke-linecap="round" marker-start="url(#arrowGreen)" marker-end="url(#arrowGreen)"/>
+  <path class="flow-green" d="M488 236 C505 218 520 218 552 225" fill="none" stroke="#d8ff6a" stroke-width="1.1" stroke-linecap="round" opacity="0.75"/>
+  <path d="M686 225 H726" fill="none" stroke="#ffcb6b" stroke-width="2.3" stroke-linecap="round" marker-end="url(#arrowAmber)"/>
+  <path class="flow-amber" d="M686 225 H726" fill="none" stroke="#ffefc7" stroke-width="0.9" stroke-linecap="round" opacity="0.8"/>
+  <path d="M488 318 C506 332 522 336 552 338" fill="none" stroke="#b8e85a" stroke-width="2.4" stroke-linecap="round" marker-start="url(#arrowGreen)" marker-end="url(#arrowGreen)"/>
+  <path class="flow-green" d="M488 318 C506 332 522 336 552 338" fill="none" stroke="#ecffb0" stroke-width="1" stroke-linecap="round" opacity="0.72"/>
+
+  <text x="509" y="206" text-anchor="middle" class="mono" fill="#a0d000" font-size="8.5" font-weight="700">GPU</text>
+  <text x="509" y="350" text-anchor="middle" class="mono" fill="#d3f08a" font-size="8.5" font-weight="700">CPU</text>
+
+  <!-- Activity dots -->
+  <g filter="url(#softGlow)">
+    <circle class="travel-dot" r="3.2" fill="#82aaff">
+      <animateMotion dur="3.2s" repeatCount="indefinite" calcMode="linear" keyPoints="0;1;0" keyTimes="0;0.5;1" path="M252 238 H346"/>
+    </circle>
+    <circle class="travel-dot" r="3.2" fill="#5dd8f2">
+      <animateMotion dur="3.4s" repeatCount="indefinite" calcMode="linear" keyPoints="0;1;0" keyTimes="0;0.5;1" path="M252 378 C286 378 314 362 346 362"/>
+    </circle>
+    <circle class="travel-dot" r="3.4" fill="#76b900">
+      <animateMotion dur="3s" repeatCount="indefinite" calcMode="linear" keyPoints="0;1;0" keyTimes="0;0.5;1" path="M488 236 C505 218 520 218 552 225"/>
+    </circle>
+    <circle class="travel-dot" r="3.2" fill="#b8e85a">
+      <animateMotion dur="3.2s" repeatCount="indefinite" calcMode="linear" keyPoints="0;1;0" keyTimes="0;0.5;1" path="M488 318 C506 332 522 336 552 338"/>
+    </circle>
+    <circle class="pulse pulse-4" cx="706" cy="225" r="3" fill="#ffcb6b"/>
+  </g>
+
+
+</svg>
