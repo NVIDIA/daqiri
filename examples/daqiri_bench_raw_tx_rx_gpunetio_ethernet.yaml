@@ -1,12 +1,12 @@
 %YAML 1.2
 ---
-# Closed-loop raw TX+RX on the experimental gpunetio engine (DOCA GPUNetIO): CUDA kernels drive
-# the NIC queues. Build with gpunetio in DAQIRI_ENGINE and run as root.
+# Closed-loop raw TX+RX on the experimental gpunetio_ethernet engine (DOCA GPUNetIO): CUDA kernels drive
+# the NIC queues. Build with gpunetio_ethernet in DAQIRI_ENGINE and run as root.
 daqiri:
   cfg:
     version: 1
     stream_type: "raw"
-    engine: "gpunetio"
+    engine: "gpunetio_ethernet"
     master_core: 3
     debug: false
     log_level: "info"
@@ -37,7 +37,7 @@ daqiri:
           cpu_core: 11
           memory_regions:
             - "Data_TX_GPU"
-          gpunetio:
+          gpunetio_ethernet:
             # persistent: a resident kernel takes the bursts, several in flight
             # per_burst: one kernel launch per send_tx_burst()
             tx_kernel: "persistent"

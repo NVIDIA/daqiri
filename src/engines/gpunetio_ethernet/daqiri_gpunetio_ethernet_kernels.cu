@@ -20,7 +20,7 @@
 
 #include <cuda/atomic>
 
-#include "src/engines/gpunetio/daqiri_gpunetio_kernels.h"
+#include "src/engines/gpunetio_ethernet/daqiri_gpunetio_ethernet_kernels.h"
 
 namespace daqiri::gpunetio {
 

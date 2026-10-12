@@ -53,7 +53,7 @@ builds, install the matching packages yourself by following the
 | **AWS SDK for C++ with S3** | Raw packet writes to S3-compatible object stores | Only needed with `-DDAQIRI_ENABLE_S3=ON`; the container can build this SDK from source. |
 | **OpenTelemetry C++** | Metrics instrumentation | Only needed with `-DDAQIRI_ENABLE_OTEL_METRICS=ON`; applications still configure the SDK reader/exporter. |
 | **libnuma** | NUMA-aware ring, pool, and huge-memory placement | Auto-detected. DAQIRI falls back to first-touch placement when absent. |
-| **DOCA 3.6+ GPUNetIO, Ethernet and Flow SDKs** | Experimental `gpunetio` raw Ethernet engine | Only needed with `gpunetio` in `DAQIRI_ENGINE` (`libdoca-sdk-gpunetio-dev`, `libdoca-sdk-eth-dev`, `libdoca-sdk-flow-dev`). The container installs them with `BASE_TARGET=gpunetio`. |
+| **DOCA 3.6+ GPUNetIO, Ethernet and Flow SDKs** | Experimental `gpunetio_ethernet` raw Ethernet engine | Only needed with `gpunetio_ethernet` in `DAQIRI_ENGINE` (`libdoca-sdk-gpunetio-dev`, `libdoca-sdk-eth-dev`, `libdoca-sdk-flow-dev`). The container installs them with `BASE_TARGET=gpunetio_ethernet`. |
 
 ## Build {#build-the-daqiri-library}
 

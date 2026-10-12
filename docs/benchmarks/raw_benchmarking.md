@@ -439,22 +439,22 @@ the goal is physical port speed or end-to-end network performance.
 
 ### GPUNetIO engine (experimental)
 
-With a build that includes `gpunetio` in `DAQIRI_ENGINE`, `daqiri_bench_raw_tx_rx_gpunetio.yaml`
+With a build that includes `gpunetio_ethernet` in `DAQIRI_ENGINE`, `daqiri_bench_raw_tx_rx_gpunetio_ethernet.yaml`
 runs the same closed-loop test with CUDA kernels driving the NIC queues (DOCA GPUNetIO). Cable the
 TX port to the RX port, replace the placeholders, and run it as root:
 
 ```bash
 sudo env CUDA_MODULE_LOADING=EAGER ./build/examples/daqiri_bench_raw_gpudirect \
-  examples/daqiri_bench_raw_tx_rx_gpunetio.yaml --seconds 10
+  examples/daqiri_bench_raw_tx_rx_gpunetio_ethernet.yaml --seconds 10
 ```
 
-Set the TX queue's `gpunetio.tx_kernel` to `persistent` (a resident kernel, several bursts in
+Set the TX queue's `gpunetio_ethernet.tx_kernel` to `persistent` (a resident kernel, several bursts in
 flight) or `per_burst` (one kernel launch per burst) to compare the two TX models. Measure with
 `mlnx_perf` as above. `CUDA_MODULE_LOADING=EAGER` loads every kernel at startup: with lazy
 loading, a kernel launched for the first time waits for the engine's resident kernels to exit.
 Keep `--workload none` for now: the workload modes free GPU memory with `cudaFree()` before
 shutdown, which also waits for the resident kernels. See the
-[GPUNetIO engine reference](../api-reference/configuration.md#gpunetio-engine) for the receive ring
+[GPUNetIO engine reference](../api-reference/configuration.md#gpunetio-ethernet-engine) for the receive ring
 sizing and the packet ownership rules.
 
 ## Flow programming smoke test

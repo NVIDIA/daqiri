@@ -53,7 +53,7 @@ option(DAQIRI_BUILD_PYTHON "Build Python bindings" OFF)
 option(DAQIRI_BUILD_EXAMPLES "Build standalone examples" ON)
 option(DAQIRI_BUILD_APPLICATIONS "Build example applications (requires TensorRT)" OFF)
 option(DAQIRI_ENABLE_OTEL_METRICS "Enable OpenTelemetry metrics instrumentation" OFF)
-set(DAQIRI_ENGINE "dpdk ibverbs" CACHE STRING "Optional engine implementations to build: dpdk, ibverbs, gpunetio (Linux sockets are always built in)")
+set(DAQIRI_ENGINE "dpdk ibverbs" CACHE STRING "Optional engine implementations to build: dpdk, ibverbs, gpunetio_ethernet (Linux sockets are always built in)")
 
 add_subdirectory(src)
 add_subdirectory(tools)

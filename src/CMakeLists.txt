@@ -92,9 +92,9 @@ endif()
 # entirely in src/engines/dpdk and src/engine_dpdk.cpp. daqiri_common and the
 # rdma/ibverbs/socket engines use the libdpdk-free daqiri::Ring / ObjectPool.
 if(NOT DEFINED DAQIRI_ENGINE)
-    set(DAQIRI_ENGINE "dpdk ibverbs" CACHE STRING "Optional engine implementations to build: dpdk, ibverbs, gpunetio (Linux sockets are always built in)")
+    set(DAQIRI_ENGINE "dpdk ibverbs" CACHE STRING "Optional engine implementations to build: dpdk, ibverbs, gpunetio_ethernet (Linux sockets are always built in)")
 endif()
-set_property(CACHE DAQIRI_ENGINE PROPERTY STRINGS "dpdk" "ibverbs" "gpunetio")
+set_property(CACHE DAQIRI_ENGINE PROPERTY STRINGS "dpdk" "ibverbs" "gpunetio_ethernet")
 separate_arguments(DAQIRI_ENGINE_LIST UNIX_COMMAND ${DAQIRI_ENGINE})
 list(FIND DAQIRI_ENGINE_LIST "dpdk" _daqiri_dpdk_idx)
 if(_daqiri_dpdk_idx EQUAL -1)
@@ -276,7 +276,7 @@ endif()
 # and is NOT a DAQIRI_ENGINE value. Valid values:
 #   dpdk     - raw Ethernet via kernel bypass
 #   ibverbs  - RDMA/RoCE via libibverbs (also enables the socket RoCE path)
-#   gpunetio - raw Ethernet with the NIC datapath on the GPU via DOCA GPUNetIO (DOCA 3.6+)
+#   gpunetio_ethernet - raw Ethernet with the NIC datapath on the GPU via DOCA GPUNetIO (DOCA 3.6+)
 # DAQIRI_ENGINE / DAQIRI_ENGINE_LIST / DAQIRI_BUILD_DPDK were already parsed above
 # (before the libdpdk lookup), so they are reused here.
 
@@ -294,11 +294,11 @@ foreach(ENGINE IN LISTS DAQIRI_ENGINE_LIST)
     # engine: ibverbs).
     list(APPEND DAQIRI_ENGINE_INTERNAL_LIST "rdma")
     list(APPEND DAQIRI_ENGINE_INTERNAL_LIST "ibverbs")
-  elseif(ENGINE STREQUAL "gpunetio")
-    list(APPEND DAQIRI_ENGINE_INTERNAL_LIST "gpunetio")
+  elseif(ENGINE STREQUAL "gpunetio_ethernet")
+    list(APPEND DAQIRI_ENGINE_INTERNAL_LIST "gpunetio_ethernet")
   else()
     message(FATAL_ERROR
-      "Invalid DAQIRI_ENGINE value '${ENGINE}'. Valid values: dpdk, ibverbs, gpunetio. "
+      "Invalid DAQIRI_ENGINE value '${ENGINE}'. Valid values: dpdk, ibverbs, gpunetio_ethernet. "
       "Linux sockets are always built in (there is no 'socket' value); "
       "use 'ibverbs' for RDMA/RoCE.")
   endif()

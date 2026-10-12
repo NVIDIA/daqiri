@@ -2410,7 +2410,7 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_tx_queue_config(
   if (!daqiri::detail::validate_yaml_mapping_keys(
           q_item,
           {"name", "id", "poll_mode", "cpu_core", "batch_size", "memory_regions", "offloads",
-           "pacing_mbps", "timeout_us", "gpunetio"},
+           "pacing_mbps", "timeout_us", "gpunetio_ethernet"},
           "TX queue")) {
     return false;
   }
@@ -2456,23 +2456,24 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_tx_queue_config(
       return false;
     }
 
-    if (q_item["gpunetio"].IsDefined()) {
-      const auto& gpunetio = q_item["gpunetio"];
-      if (_engine_type != daqiri::EngineType::GPUNETIO) {
-        DAQIRI_LOG_ERROR("TX queue '{}' sets gpunetio options, which need engine 'gpunetio'",
-                         q.common_.name_);
+    if (q_item["gpunetio_ethernet"].IsDefined()) {
+      const auto& gpunetio_ethernet = q_item["gpunetio_ethernet"];
+      if (_engine_type != daqiri::EngineType::GPUNETIO_ETHERNET) {
+        DAQIRI_LOG_ERROR(
+            "TX queue '{}' sets gpunetio_ethernet options, which need engine 'gpunetio_ethernet'",
+            q.common_.name_);
         return false;
       }
-      if (!daqiri::detail::validate_yaml_mapping_keys(gpunetio, {"tx_kernel"},
-                                                      "TX queue gpunetio")) {
+      if (!daqiri::detail::validate_yaml_mapping_keys(gpunetio_ethernet, {"tx_kernel"},
+                                                      "TX queue gpunetio_ethernet")) {
         return false;
       }
-      if (gpunetio["tx_kernel"].IsDefined()) {
-        const auto tx_kernel = gpunetio["tx_kernel"].as<std::string>();
+      if (gpunetio_ethernet["tx_kernel"].IsDefined()) {
+        const auto tx_kernel = gpunetio_ethernet["tx_kernel"].as<std::string>();
         q.gpunetio_tx_kernel_ = daqiri::gpunetio_tx_kernel_from_string(tx_kernel);
         if (q.gpunetio_tx_kernel_ == daqiri::GpunetioTxKernel::INVALID) {
           DAQIRI_LOG_ERROR(
-              "TX queue '{}' has an invalid gpunetio tx_kernel '{}'; valid values "
+              "TX queue '{}' has an invalid gpunetio_ethernet tx_kernel '{}'; valid values "
               "are persistent and per_burst",
               q.common_.name_, tx_kernel);
           return false;

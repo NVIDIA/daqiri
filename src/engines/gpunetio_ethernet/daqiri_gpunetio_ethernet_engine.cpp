@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-#include "src/engines/gpunetio/daqiri_gpunetio_engine.h"
+#include "src/engines/gpunetio_ethernet/daqiri_gpunetio_ethernet_engine.h"
 
 #include <doca_ctx.h>
 #include <doca_dev.h>
@@ -50,7 +50,7 @@
 #include <thread>
 
 #include "src/daqiri_ring.h"
-#include "src/engines/gpunetio/daqiri_gpunetio_kernels.h"
+#include "src/engines/gpunetio_ethernet/daqiri_gpunetio_ethernet_kernels.h"
 #include <daqiri/logging.hpp>
 
 namespace daqiri {
@@ -280,7 +280,7 @@ std::vector<uint16_t> flow_queues(const FlowConfig& flow) {
 }  // namespace
 
 // NIC port, shared by the interfaces configured on it
-struct GpunetioEngine::Device {
+struct GpunetioEthernetEngine::Device {
   struct doca_dev* dev = nullptr;
   std::string pci_addr;
   std::string ibdev_name;
@@ -294,7 +294,7 @@ struct GpunetioEngine::Device {
 // GPU running the datapath. One resident RX kernel serves all the RX queues of the GPU, and one
 // resident TX kernel its persistent TX queues, one block per queue. Each kernel has its own stream:
 // on a shared stream, the second kernel would wait for the first to exit.
-struct GpunetioEngine::Gpu {
+struct GpunetioEthernetEngine::Gpu {
   int ordinal = -1;
   int cc_major = 0;
   struct doca_gpu* gpu = nullptr;
@@ -306,14 +306,14 @@ struct GpunetioEngine::Gpu {
 };
 
 // Registration of a memory region with the NICs of the queues using it
-struct GpunetioEngine::MemoryMap {
+struct GpunetioEthernetEngine::MemoryMap {
   struct doca_mmap* mmap = nullptr;
   int dmabuf_fd = -1;
   std::vector<Device*> devices;
   Gpu* gpu = nullptr;
 };
 
-struct GpunetioEngine::RxQueue {
+struct GpunetioEthernetEngine::RxQueue {
   // Configuration
   int port = 0;
   int id = 0;
@@ -359,7 +359,7 @@ struct GpunetioEngine::RxQueue {
   std::atomic<uint64_t> ring_full{0};
 };
 
-struct GpunetioEngine::TxQueue {
+struct GpunetioEthernetEngine::TxQueue {
   // Configuration
   int port = 0;
   int id = 0;
@@ -427,18 +427,18 @@ struct GpunetioEngine::TxQueue {
   std::atomic<uint64_t> send_ring_full{0};
 };
 
-GpunetioEngine::GpunetioEngine() = default;
+GpunetioEthernetEngine::GpunetioEthernetEngine() = default;
 
-GpunetioEngine::~GpunetioEngine() {
+GpunetioEthernetEngine::~GpunetioEthernetEngine() {
   shutdown();
 }
 
 // ---------------------------------------------------------------------------
 // Bring-up
 // ---------------------------------------------------------------------------
-bool GpunetioEngine::set_config_and_initialize(const NetworkConfig& cfg) {
+bool GpunetioEthernetEngine::set_config_and_initialize(const NetworkConfig& cfg) {
   if (initialized_) {
-    DAQIRI_LOG_ERROR("gpunetio engine is already initialized; call shutdown() first");
+    DAQIRI_LOG_ERROR("gpunetio_ethernet engine is already initialized; call shutdown() first");
     return false;
   }
 
@@ -454,7 +454,7 @@ bool GpunetioEngine::set_config_and_initialize(const NetworkConfig& cfg) {
   return initialized_;
 }
 
-void GpunetioEngine::initialize() {
+void GpunetioEthernetEngine::initialize() {
   DAQIRI_LOG_INFO("Initializing GPUNetIO raw backend (experimental)");
   set_doca_sdk_log_level(cfg_.log_level_);
 
@@ -532,7 +532,7 @@ void GpunetioEngine::initialize() {
   }
 
   initialized_ = true;
-  DAQIRI_LOG_INFO("gpunetio backend initialized with {} RX queue(s), {} TX queue(s)",
+  DAQIRI_LOG_INFO("gpunetio_ethernet backend initialized with {} RX queue(s), {} TX queue(s)",
                   rx_queues_.size(), tx_queues_.size());
 
   // Engines self-start their workers at the end of initialize()
@@ -541,7 +541,7 @@ void GpunetioEngine::initialize() {
 
 // Resolves every interface address, then name, to a DOCA device. Interfaces on the same NIC
 // share one device; only one of them may have RX queues, and only one TX queues.
-bool GpunetioEngine::open_devices() {
+bool GpunetioEthernetEngine::open_devices() {
   struct doca_devinfo** list = nullptr;
   uint32_t num = 0;
   doca_error_t ret = doca_devinfo_create_list(&list, &num);
@@ -660,7 +660,7 @@ bool GpunetioEngine::open_devices() {
   return true;
 }
 
-GpunetioEngine::Gpu* GpunetioEngine::get_gpu(int ordinal) {
+GpunetioEthernetEngine::Gpu* GpunetioEthernetEngine::get_gpu(int ordinal) {
   const auto it = gpus_.find(ordinal);
   if (it != gpus_.end()) {
     return it->second.get();
@@ -688,7 +688,7 @@ GpunetioEngine::Gpu* GpunetioEngine::get_gpu(int ordinal) {
                         doca_error_get_descr(ret));
     return nullptr;
   }
-  DAQIRI_LOG_INFO("CUDA device {} ({}) runs the gpunetio datapath", ordinal, bus_id);
+  DAQIRI_LOG_INFO("CUDA device {} ({}) runs the gpunetio_ethernet datapath", ordinal, bus_id);
   Gpu* ptr = gpu.get();
   gpus_[ordinal] = std::move(gpu);
   return ptr;
@@ -696,7 +696,7 @@ GpunetioEngine::Gpu* GpunetioEngine::get_gpu(int ordinal) {
 
 // The region of an RX queue becomes the receive ring: DOCA needs a power-of-two stride up to
 // 8 kB, and a ring of a power-of-two number of slots, at least 512.
-bool GpunetioEngine::size_memory_regions() {
+bool GpunetioEthernetEngine::size_memory_regions() {
   for (auto& [name, mr] : cfg_.mrs_) {
     mr.adj_size_ = round_up(std::max<size_t>(mr.buf_size_, 1), 64);
   }
@@ -752,7 +752,7 @@ bool GpunetioEngine::size_memory_regions() {
 }
 
 // One DOCA mmap per memory region, registered with the NICs of all the queues using it
-bool GpunetioEngine::map_memory_regions() {
+bool GpunetioEthernetEngine::map_memory_regions() {
   const auto add_user = [this](const std::string& mr_name, Device* dev, Gpu* gpu) {
     auto& map = memory_maps_[mr_name];
     if (!map) {
@@ -819,7 +819,7 @@ bool GpunetioEngine::map_memory_regions() {
 }
 
 // DOCA Flow steers received packets to the RX queues; the TX queues need the port started too
-bool GpunetioEngine::start_flow() {
+bool GpunetioEthernetEngine::start_flow() {
   if (devices_.empty()) {
     return true;
   }
@@ -873,7 +873,7 @@ bool GpunetioEngine::start_flow() {
   return true;
 }
 
-bool GpunetioEngine::create_rx_queue(RxQueue& q) {
+bool GpunetioEthernetEngine::create_rx_queue(RxQueue& q) {
   if (!select_cuda_device(q.gpu->ordinal, "creating RX queue '" + q.name + "'")) {
     return false;
   }
@@ -986,7 +986,7 @@ bool GpunetioEngine::create_rx_queue(RxQueue& q) {
   return true;
 }
 
-bool GpunetioEngine::create_tx_queue(TxQueue& q) {
+bool GpunetioEthernetEngine::create_tx_queue(TxQueue& q) {
   if (!select_cuda_device(q.gpu->ordinal, "creating TX queue '" + q.name + "'")) {
     return false;
   }
@@ -1097,7 +1097,7 @@ bool GpunetioEngine::create_tx_queue(TxQueue& q) {
 // A root control pipe matches the configured flows in order; each forwards to a pipe spreading
 // packets over its RX queues. Unmatched packets go to the kernel with flow_isolation, otherwise
 // to the first RX queue.
-bool GpunetioEngine::program_steering(Device& dev, const InterfaceConfig& intf) {
+bool GpunetioEthernetEngine::program_steering(Device& dev, const InterfaceConfig& intf) {
   std::map<std::vector<uint16_t>, struct doca_flow_pipe*> rss_pipes;
   const auto rss_pipe = [&](const std::vector<uint16_t>& queues) -> struct doca_flow_pipe* {
     const auto it = rss_pipes.find(queues);
@@ -1261,7 +1261,7 @@ bool GpunetioEngine::program_steering(Device& dev, const InterfaceConfig& intf) 
   return true;
 }
 
-bool GpunetioEngine::create_burst_pools() {
+bool GpunetioEthernetEngine::create_burst_pools() {
   const auto construct = [this](daqiri::ObjectPool* pool) {
     std::vector<void*> objs(pool->size());
     for (auto& obj : objs) {
@@ -1304,16 +1304,16 @@ bool GpunetioEngine::create_burst_pools() {
 
 // On each GPU, one RX kernel with a block per RX queue and one TX kernel with a block per
 // persistent TX queue. The per_burst TX queues launch their kernels from their worker.
-bool GpunetioEngine::start_kernels() {
+bool GpunetioEthernetEngine::start_kernels() {
   // Under CUDA lazy loading, a kernel launched for the first time waits for the running kernels to
   // exit, and the resident kernels exit only at shutdown: load every kernel of the engine first
   for (auto& [ordinal, gpu] : gpus_) {
-    if (!select_cuda_device(ordinal, "loading the gpunetio kernels")) {
+    if (!select_cuda_device(ordinal, "loading the gpunetio_ethernet kernels")) {
       return false;
     }
     const cudaError_t err = gpunetio::load_kernels();
     if (err != cudaSuccess) {
-      DAQIRI_LOG_CRITICAL("GPU {}: could not load the gpunetio kernels: {}", ordinal,
+      DAQIRI_LOG_CRITICAL("GPU {}: could not load the gpunetio_ethernet kernels: {}", ordinal,
                           cudaGetErrorString(err));
       return false;
     }
@@ -1347,7 +1347,7 @@ bool GpunetioEngine::start_kernels() {
         std::count_if(tx_queues_.begin(), tx_queues_.end(), [&](const auto& q) {
           return q->gpu == gpu.get() && q->kernel == GpunetioTxKernel::PER_BURST;
         });
-    if (!select_cuda_device(ordinal, "launching the gpunetio kernels")) {
+    if (!select_cuda_device(ordinal, "launching the gpunetio_ethernet kernels")) {
       return false;
     }
     // The RX and TX kernels share the GPU: check that all their blocks, and the blocks of the
@@ -1374,7 +1374,7 @@ bool GpunetioEngine::start_kernels() {
 
 // Asks the kernels to exit and waits for their streams to drain. The queues of a kernel that
 // doesn't stop stay alive: destroying them under a running kernel would fault the GPU.
-void GpunetioEngine::stop_kernels() {
+void GpunetioEthernetEngine::stop_kernels() {
   for (auto& q : rx_queues_) {
     if (q->ctrl != nullptr) {
       store_release(&q->ctrl->exit, 1u);
@@ -1413,13 +1413,13 @@ void GpunetioEngine::stop_kernels() {
   }
 }
 
-void GpunetioEngine::run() {
+void GpunetioEthernetEngine::run() {
   workers_running_.store(true);
   for (auto& q : rx_queues_) {
-    q->worker = std::thread(&GpunetioEngine::rx_worker, this, q.get());
+    q->worker = std::thread(&GpunetioEthernetEngine::rx_worker, this, q.get());
   }
   for (auto& q : tx_queues_) {
-    q->worker = std::thread(&GpunetioEngine::tx_worker, this, q.get());
+    q->worker = std::thread(&GpunetioEthernetEngine::tx_worker, this, q.get());
   }
 }
 
@@ -1429,7 +1429,7 @@ void GpunetioEngine::run() {
 
 // Turns the bursts published by the RX kernel into BurstParams for the application, and reports
 // the packets the application freed back to the kernel, oldest first.
-void GpunetioEngine::rx_worker(RxQueue* q) {
+void GpunetioEthernetEngine::rx_worker(RxQueue* q) {
   pin_thread(q->cpu_core, "RX queue '" + q->name + "'");
   const uint64_t ring_mask = q->ring_size - 1;
 
@@ -1518,7 +1518,7 @@ void GpunetioEngine::rx_worker(RxQueue* q) {
 
 // Hands the bursts sent by the application to the GPU, then retires them once the NIC
 // completes them: their TX slots and BurstParams become free again.
-void GpunetioEngine::tx_worker(TxQueue* q) {
+void GpunetioEthernetEngine::tx_worker(TxQueue* q) {
   pin_thread(q->cpu_core, "TX queue '" + q->name + "'");
   (void)select_cuda_device(q->gpu->ordinal, "running the TX worker");
   const uint32_t max_inflight =
@@ -1601,7 +1601,7 @@ void GpunetioEngine::tx_worker(TxQueue* q) {
 // ---------------------------------------------------------------------------
 // Shutdown
 // ---------------------------------------------------------------------------
-void GpunetioEngine::shutdown() {
+void GpunetioEthernetEngine::shutdown() {
   workers_running_.store(false);
   for (auto& q : rx_queues_) {
     if (q->worker.joinable()) {
@@ -1750,11 +1750,11 @@ void GpunetioEngine::shutdown() {
   initialized_ = false;
 }
 
-void GpunetioEngine::print_stats() {
+void GpunetioEthernetEngine::print_stats() {
   for (const auto& q : rx_queues_) {
     const uint64_t gpu_pkts = q->ctrl != nullptr ? load_acquire(&q->ctrl->pkts) : 0;
     DAQIRI_LOG_INFO(
-        "gpunetio RX port {} q{} '{}': bursts={} pkts={} bytes={} gpu_pkts={} released={} "
+        "gpunetio_ethernet RX port {} q{} '{}': bursts={} pkts={} bytes={} gpu_pkts={} released={} "
         "burst_pool_empty={} app_ring_full={}",
         q->port, q->id, q->name, q->bursts.load(), q->pkts.load(), q->bytes.load(), gpu_pkts,
         q->released_pkts, q->pool_empty.load(), q->ring_full.load());
@@ -1762,14 +1762,15 @@ void GpunetioEngine::print_stats() {
   for (const auto& q : tx_queues_) {
     const uint64_t done = q->ctrl != nullptr ? load_acquire(&q->ctrl->completed_bursts) : 0;
     DAQIRI_LOG_INFO(
-        "gpunetio TX port {} q{} '{}' ({} kernel): bursts={} pkts={} bytes={} completed_bursts={} "
+        "gpunetio_ethernet TX port {} q{} '{}' ({} kernel): bursts={} pkts={} bytes={} "
+        "completed_bursts={} "
         "send_ring_full={}",
         q->port, q->id, q->name, gpunetio_tx_kernel_to_string(q->kernel), q->sent_bursts.load(),
         q->sent_pkts.load(), q->sent_bytes.load(), done, q->send_ring_full.load());
   }
 }
 
-Status GpunetioEngine::get_mac_addr(int port, char* mac) {
+Status GpunetioEthernetEngine::get_mac_addr(int port, char* mac) {
   if (mac == nullptr) {
     return Status::NULL_PTR;
   }
@@ -1789,7 +1790,7 @@ Status GpunetioEngine::get_mac_addr(int port, char* mac) {
   return Status::SUCCESS;
 }
 
-GpunetioEngine::RxQueue* GpunetioEngine::find_rx_queue(int port, int q) const {
+GpunetioEthernetEngine::RxQueue* GpunetioEthernetEngine::find_rx_queue(int port, int q) const {
   for (const auto& rxq : rx_queues_) {
     if (rxq->port == port && rxq->id == q) {
       return rxq.get();
@@ -1798,7 +1799,7 @@ GpunetioEngine::RxQueue* GpunetioEngine::find_rx_queue(int port, int q) const {
   return nullptr;
 }
 
-GpunetioEngine::TxQueue* GpunetioEngine::find_tx_queue(int port, int q) const {
+GpunetioEthernetEngine::TxQueue* GpunetioEthernetEngine::find_tx_queue(int port, int q) const {
   for (const auto& txq : tx_queues_) {
     if (txq->port == port && txq->id == q) {
       return txq.get();
@@ -1810,43 +1811,43 @@ GpunetioEngine::TxQueue* GpunetioEngine::find_tx_queue(int port, int q) const {
 // ---------------------------------------------------------------------------
 // Packet accessors
 // ---------------------------------------------------------------------------
-void* GpunetioEngine::get_packet_ptr(BurstParams* burst, int idx) {
+void* GpunetioEthernetEngine::get_packet_ptr(BurstParams* burst, int idx) {
   return burst->pkts[0][idx];
 }
 
-uint32_t GpunetioEngine::get_packet_length(BurstParams* burst, int idx) {
+uint32_t GpunetioEthernetEngine::get_packet_length(BurstParams* burst, int idx) {
   return burst->pkt_lens[0][idx];
 }
 
-void* GpunetioEngine::get_segment_packet_ptr(BurstParams* burst, int seg, int idx) {
+void* GpunetioEthernetEngine::get_segment_packet_ptr(BurstParams* burst, int seg, int idx) {
   return burst->pkts[seg][idx];
 }
 
-uint32_t GpunetioEngine::get_segment_packet_length(BurstParams* burst, int seg, int idx) {
+uint32_t GpunetioEthernetEngine::get_segment_packet_length(BurstParams* burst, int seg, int idx) {
   return burst->pkt_lens[seg][idx];
 }
 
-FlowId GpunetioEngine::get_packet_flow_id(BurstParams* burst, int idx) {
+FlowId GpunetioEthernetEngine::get_packet_flow_id(BurstParams* burst, int idx) {
   (void)burst;
   (void)idx;
   return 0;
 }
 
-Status GpunetioEngine::get_packet_rx_timestamp(BurstParams* burst, int idx,
-                                               uint64_t* timestamp_ns) {
+Status GpunetioEthernetEngine::get_packet_rx_timestamp(BurstParams* burst, int idx,
+                                                       uint64_t* timestamp_ns) {
   (void)burst;
   (void)idx;
   (void)timestamp_ns;
   return Status::NOT_SUPPORTED;
 }
 
-void* GpunetioEngine::get_packet_extra_info(BurstParams* burst, int idx) {
+void* GpunetioEthernetEngine::get_packet_extra_info(BurstParams* burst, int idx) {
   (void)burst;
   (void)idx;
   return nullptr;
 }
 
-uint64_t GpunetioEngine::get_burst_tot_byte(BurstParams* burst) {
+uint64_t GpunetioEthernetEngine::get_burst_tot_byte(BurstParams* burst) {
   uint64_t total = 0;
   for (size_t i = 0; i < burst->hdr.hdr.num_pkts; i++) {
     total += burst->pkt_lens[0][i];
@@ -1857,7 +1858,7 @@ uint64_t GpunetioEngine::get_burst_tot_byte(BurstParams* burst) {
 // ---------------------------------------------------------------------------
 // RX
 // ---------------------------------------------------------------------------
-Status GpunetioEngine::get_rx_burst(BurstParams** burst, int port, int q) {
+Status GpunetioEthernetEngine::get_rx_burst(BurstParams** burst, int port, int q) {
   if (burst == nullptr) {
     return Status::NULL_PTR;
   }
@@ -1874,7 +1875,7 @@ Status GpunetioEngine::get_rx_burst(BurstParams** burst, int port, int q) {
   return Status::SUCCESS;
 }
 
-void GpunetioEngine::free_all_packets(BurstParams* burst) {
+void GpunetioEthernetEngine::free_all_packets(BurstParams* burst) {
   if (burst == nullptr) {
     return;
   }
@@ -1903,7 +1904,7 @@ void GpunetioEngine::free_all_packets(BurstParams* burst) {
   }
 }
 
-void GpunetioEngine::free_packet(BurstParams* burst, int pkt) {
+void GpunetioEthernetEngine::free_packet(BurstParams* burst, int pkt) {
   (void)pkt;
   if (burst == nullptr || !(burst->hdr.hdr.burst_flags & GPUNETIO_RX_BURST_FLAG)) {
     return;
@@ -1918,32 +1919,32 @@ void GpunetioEngine::free_packet(BurstParams* burst, int pkt) {
   }
 }
 
-void GpunetioEngine::free_all_segment_packets(BurstParams* burst, int seg) {
+void GpunetioEthernetEngine::free_all_segment_packets(BurstParams* burst, int seg) {
   if (seg == 0) {
     free_all_packets(burst);
   }
 }
 
-void GpunetioEngine::free_packet_segment(BurstParams* burst, int seg, int pkt) {
+void GpunetioEthernetEngine::free_packet_segment(BurstParams* burst, int seg, int pkt) {
   if (seg == 0) {
     free_packet(burst, pkt);
   }
 }
 
-void GpunetioEngine::free_rx_burst(BurstParams* burst) {
+void GpunetioEthernetEngine::free_rx_burst(BurstParams* burst) {
   if (burst != nullptr && rx_meta_pool_ != nullptr) {
     rx_meta_pool_->put(burst);
   }
 }
 
-void GpunetioEngine::free_rx_metadata(BurstParams* burst) {
+void GpunetioEthernetEngine::free_rx_metadata(BurstParams* burst) {
   free_rx_burst(burst);
 }
 
 // ---------------------------------------------------------------------------
 // TX
 // ---------------------------------------------------------------------------
-BurstParams* GpunetioEngine::create_tx_burst_params() {
+BurstParams* GpunetioEthernetEngine::create_tx_burst_params() {
   BurstParams* burst = nullptr;
   if (tx_meta_pool_ == nullptr || !tx_meta_pool_->get(reinterpret_cast<void**>(&burst))) {
     return nullptr;
@@ -1962,7 +1963,7 @@ BurstParams* GpunetioEngine::create_tx_burst_params() {
   return burst;
 }
 
-bool GpunetioEngine::is_tx_burst_available(BurstParams* burst) {
+bool GpunetioEthernetEngine::is_tx_burst_available(BurstParams* burst) {
   if (burst == nullptr) {
     return false;
   }
@@ -1974,7 +1975,7 @@ bool GpunetioEngine::is_tx_burst_available(BurstParams* burst) {
   return q->num_slots - in_flight >= burst->hdr.hdr.num_pkts;
 }
 
-Status GpunetioEngine::get_tx_packet_burst(BurstParams* burst) {
+Status GpunetioEthernetEngine::get_tx_packet_burst(BurstParams* burst) {
   if (burst == nullptr) {
     return Status::NULL_PTR;
   }
@@ -2004,8 +2005,8 @@ Status GpunetioEngine::get_tx_packet_burst(BurstParams* burst) {
   return Status::SUCCESS;
 }
 
-Status GpunetioEngine::set_packet_lengths(BurstParams* burst, int idx,
-                                          const std::initializer_list<int>& lens) {
+Status GpunetioEthernetEngine::set_packet_lengths(BurstParams* burst, int idx,
+                                                  const std::initializer_list<int>& lens) {
   if (lens.size() != 1) {
     return Status::INVALID_PARAMETER;
   }
@@ -2013,7 +2014,7 @@ Status GpunetioEngine::set_packet_lengths(BurstParams* burst, int idx,
   return Status::SUCCESS;
 }
 
-Status GpunetioEngine::set_packet_tx_time(BurstParams* burst, int idx, uint64_t time) {
+Status GpunetioEthernetEngine::set_packet_tx_time(BurstParams* burst, int idx, uint64_t time) {
   (void)burst;
   (void)idx;
   (void)time;
@@ -2021,14 +2022,14 @@ Status GpunetioEngine::set_packet_tx_time(BurstParams* burst, int idx, uint64_t 
 }
 
 // The TX slots are usually in GPU memory: write through CUDA
-Status GpunetioEngine::write_packet(BurstParams* burst, int idx, size_t offset, const void* data,
-                                    size_t len) {
+Status GpunetioEthernetEngine::write_packet(BurstParams* burst, int idx, size_t offset,
+                                            const void* data, size_t len) {
   auto* dst = static_cast<uint8_t*>(burst->pkts[0][idx]) + offset;
   return cudaMemcpy(dst, data, len, cudaMemcpyDefault) == cudaSuccess ? Status::SUCCESS
                                                                       : Status::GENERIC_FAILURE;
 }
 
-Status GpunetioEngine::set_eth_header(BurstParams* burst, int idx, char* dst_addr) {
+Status GpunetioEthernetEngine::set_eth_header(BurstParams* burst, int idx, char* dst_addr) {
   struct ethhdr eth {};
   std::memcpy(eth.h_dest, dst_addr, ETH_ALEN);
   if (get_mac_addr(burst->hdr.hdr.port_id, reinterpret_cast<char*>(eth.h_source)) !=
@@ -2039,8 +2040,9 @@ Status GpunetioEngine::set_eth_header(BurstParams* burst, int idx, char* dst_add
   return write_packet(burst, idx, 0, &eth, sizeof(eth));
 }
 
-Status GpunetioEngine::set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint8_t proto,
-                                       unsigned int src_host, unsigned int dst_host) {
+Status GpunetioEthernetEngine::set_ipv4_header(BurstParams* burst, int idx, int ip_len,
+                                               uint8_t proto, unsigned int src_host,
+                                               unsigned int dst_host) {
   struct iphdr ip {};
   ip.version = 4;
   ip.ihl = 5;
@@ -2052,8 +2054,8 @@ Status GpunetioEngine::set_ipv4_header(BurstParams* burst, int idx, int ip_len, 
   return write_packet(burst, idx, sizeof(struct ethhdr), &ip, sizeof(ip));
 }
 
-Status GpunetioEngine::set_udp_header(BurstParams* burst, int idx, int udp_len, uint16_t src_port,
-                                      uint16_t dst_port) {
+Status GpunetioEthernetEngine::set_udp_header(BurstParams* burst, int idx, int udp_len,
+                                              uint16_t src_port, uint16_t dst_port) {
   struct udphdr udp {};
   udp.source = htons(src_port);
   udp.dest = htons(dst_port);
@@ -2061,11 +2063,11 @@ Status GpunetioEngine::set_udp_header(BurstParams* burst, int idx, int udp_len, 
   return write_packet(burst, idx, sizeof(struct ethhdr) + sizeof(struct iphdr), &udp, sizeof(udp));
 }
 
-Status GpunetioEngine::set_udp_payload(BurstParams* burst, int idx, void* data, int len) {
+Status GpunetioEthernetEngine::set_udp_payload(BurstParams* burst, int idx, void* data, int len) {
   return write_packet(burst, idx, sizeof(UDPIPV4Pkt), data, static_cast<size_t>(len));
 }
 
-Status GpunetioEngine::send_tx_burst(BurstParams* burst) {
+Status GpunetioEthernetEngine::send_tx_burst(BurstParams* burst) {
   if (burst == nullptr) {
     return Status::NULL_PTR;
   }
@@ -2089,13 +2091,13 @@ Status GpunetioEngine::send_tx_burst(BurstParams* burst) {
   return Status::SUCCESS;
 }
 
-void GpunetioEngine::free_tx_burst(BurstParams* burst) {
+void GpunetioEthernetEngine::free_tx_burst(BurstParams* burst) {
   if (burst != nullptr && tx_meta_pool_ != nullptr) {
     tx_meta_pool_->put(burst);
   }
 }
 
-void GpunetioEngine::free_tx_metadata(BurstParams* burst) {
+void GpunetioEthernetEngine::free_tx_metadata(BurstParams* burst) {
   free_tx_burst(burst);
 }
 

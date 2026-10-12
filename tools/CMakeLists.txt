@@ -40,7 +40,7 @@ endif()
 
 if(NOT BUILD_SHARED_LIBS AND UNIX AND NOT APPLE)
   set(DAQIRI_TOOL_STATIC_LIBS daqiri::daqiri)
-  foreach(engine IN ITEMS dpdk socket rdma ibverbs gpunetio)
+  foreach(engine IN ITEMS dpdk socket rdma ibverbs gpunetio_ethernet)
     if(TARGET daqiri_${engine})
       list(APPEND DAQIRI_TOOL_STATIC_LIBS daqiri_${engine})
     endif()

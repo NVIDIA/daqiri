@@ -524,7 +524,7 @@ void bind_enums(py::module_ &m) {
       .value("DPDK", EngineType::DPDK)
       .value("SOCKET", EngineType::SOCKET)
       .value("RDMA", EngineType::RDMA)
-      .value("GPUNETIO", EngineType::GPUNETIO);
+      .value("GPUNETIO_ETHERNET", EngineType::GPUNETIO_ETHERNET);
 
   py::enum_<Direction>(m, "Direction")
       .value("RX", Direction::RX)

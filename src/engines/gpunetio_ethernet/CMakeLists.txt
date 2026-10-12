@@ -18,14 +18,14 @@ message(STATUS "PROJECT_NAME: ${ENGINE_TARGET}")
 
 target_include_directories(${ENGINE_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_sources(${ENGINE_TARGET} PRIVATE daqiri_gpunetio_engine.cpp daqiri_gpunetio_kernels.cu)
+target_sources(${ENGINE_TARGET} PRIVATE daqiri_gpunetio_ethernet_engine.cpp daqiri_gpunetio_ethernet_kernels.cu)
 
 # DOCA 3.6 is the oldest supported release. DOCA installs its pkg-config files under
 # ${DOCA_PATH}/lib/<multiarch>/pkgconfig, which FindPkgConfig searches once the DOCA prefix
 # is in CMAKE_PREFIX_PATH.
 set(DAQIRI_GPUNETIO_MIN_DOCA_VERSION 3.6)
 if(NOT PKG_CONFIG_FOUND)
-  message(FATAL_ERROR "pkg-config is required to locate DOCA for the gpunetio engine")
+  message(FATAL_ERROR "pkg-config is required to locate DOCA for the gpunetio_ethernet engine")
 endif()
 list(APPEND CMAKE_PREFIX_PATH "${DOCA_PATH}")
 pkg_check_modules(DOCA_GPUNETIO REQUIRED

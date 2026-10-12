@@ -766,7 +766,7 @@ encapsulation/push rules are configured in YAML under `tx.flows`.
 | `Status` | `SUCCESS`, `NULL_PTR`, `NO_FREE_BURST_BUFFERS`, `NO_FREE_PACKET_BUFFERS`, `NOT_READY`, `INVALID_PARAMETER`, `NO_SPACE_AVAILABLE`, `NOT_SUPPORTED`, `GENERIC_FAILURE`, `CONNECT_FAILURE`, `INTERNAL_ERROR`, `RESOURCE_IN_USE`, `ALREADY_EXISTS` |
 | `RDMAOpCode` | `CONNECT`, `SEND`, `RECEIVE`, `RDMA_WRITE`, `RDMA_WRITE_IMM`, `RDMA_READ`, `RDMA_READ_IMM`, `INVALID` |
 | `RDMACompletionType` | `RX`, `TX`, `INVALID` |
-| `EngineType` | `UNKNOWN`, `DEFAULT`, `DPDK`, `SOCKET`, `RDMA`, `GPUNETIO` |
+| `EngineType` | `UNKNOWN`, `DEFAULT`, `DPDK`, `SOCKET`, `RDMA`, `GPUNETIO_ETHERNET` |
 | `Direction` | `RX`, `TX`, `TX_RX` |
 | `BufferLocation` | `CPU`, `GPU`, `CPU_GPU_SPLIT` |
 | `MemoryKind` | `HOST`, `HOST_PINNED`, `HUGE`, `DEVICE`, `INVALID` |

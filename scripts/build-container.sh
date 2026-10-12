@@ -10,7 +10,7 @@ DAQIRI_ENABLE_S3="${DAQIRI_ENABLE_S3:-OFF}"
 BUILD_SHARED_LIBS="${BUILD_SHARED_LIBS:-ON}"
 DAQIRI_ENABLE_OTEL_METRICS="${DAQIRI_ENABLE_OTEL_METRICS:-OFF}"
 AWS_SDK_CPP_VERSION="${AWS_SDK_CPP_VERSION:-1.11.822}"
-# DOCA release installed by BASE_TARGET=gpunetio (the gpunetio engine needs 3.6 or newer)
+# DOCA release installed by BASE_TARGET=gpunetio_ethernet (the gpunetio_ethernet engine needs 3.6 or newer)
 DOCA_GPUNETIO_VERSION="${DOCA_GPUNETIO_VERSION:-3.6.0}"
 
 if [[ -z "${DAQIRI_OS_BASE_IMAGE:-}" ]]; then

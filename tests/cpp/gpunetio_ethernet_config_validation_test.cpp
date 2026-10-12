@@ -15,9 +15,9 @@
  * limitations under the License.
  */
 
-// Checks, without a GPU or NIC, that the shared validation rejects the features the gpunetio
-// engine does not support, and that the engine refuses caller-owned memory regions before it
-// opens a device.
+// Checks, without a GPU or NIC, that the shared validation rejects the features the
+// gpunetio_ethernet engine does not support, and that the engine refuses caller-owned memory
+// regions before it opens a device.
 
 #include <cstdio>
 #include <string>
@@ -35,7 +35,7 @@ daqiri:
   cfg:
     version: 1
     stream_type: "raw"
-    engine: "gpunetio"
+    engine: "gpunetio_ethernet"
     master_core: 0
     log_level: "info"
     memory_regions:
@@ -138,8 +138,8 @@ int main() {
 
   daqiri::NetworkConfig base;
   expect(parse(kBaseConfig, &base), "base config parses");
-  expect(base.common_.engine_type == daqiri::EngineType::GPUNETIO,
-         "base config resolves to the gpunetio engine");
+  expect(base.common_.engine_type == daqiri::EngineType::GPUNETIO_ETHERNET,
+         "base config resolves to the gpunetio_ethernet engine");
   expect(daqiri::validate_network_config(base), "base config is valid");
 
   expect(base.ifs_[0].tx_.queues_[0].gpunetio_tx_kernel_ == daqiri::GpunetioTxKernel::PERSISTENT,
@@ -161,7 +161,8 @@ int main() {
   const std::string tx_kernel_from = "          - \"DATA_TX\"\n";
   std::string per_burst = kBaseConfig;
   expect(patch(&per_burst, tx_kernel_from,
-               tx_kernel_from + "          gpunetio:\n            tx_kernel: \"per_burst\"\n"),
+               tx_kernel_from +
+                   "          gpunetio_ethernet:\n            tx_kernel: \"per_burst\"\n"),
          "tx_kernel marker");
   daqiri::NetworkConfig per_burst_config;
   expect(parse(per_burst, &per_burst_config) &&
@@ -170,7 +171,8 @@ int main() {
          "tx_kernel per_burst parses");
   std::string bad_kernel = kBaseConfig;
   expect(patch(&bad_kernel, tx_kernel_from,
-               tx_kernel_from + "          gpunetio:\n            tx_kernel: \"sometimes\"\n"),
+               tx_kernel_from +
+                   "          gpunetio_ethernet:\n            tx_kernel: \"sometimes\"\n"),
          "bad tx_kernel marker");
   daqiri::NetworkConfig bad_kernel_config;
   expect(!parse(bad_kernel, &bad_kernel_config), "an invalid tx_kernel is rejected");

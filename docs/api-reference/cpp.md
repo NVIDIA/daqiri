@@ -97,18 +97,18 @@ allocation and CUDA context must remain alive until `shutdown()` completes. DAQI
 from the NIC but never frees, unpins, or unmaps it. Direct TCP/UDP sockets reject bindings because
 their configured regions are not packet pools. DPDK also rejects externally bound `huge` regions:
 EAL assumes ownership of pre-existing hugepage mappings during initialization and unmaps them at
-cleanup. External `huge` regions remain supported by ibverbs/RDMA. The `gpunetio` engine does not
+cleanup. External `huge` regions remain supported by ibverbs/RDMA. The `gpunetio_ethernet` engine does not
 support bindings yet: `daqiri_init()` with bindings returns `Status::NOT_SUPPORTED`, and
 `get_memory_region_requirements()` cannot report requirements for it.
 
-### gpunetio engine notes
+### GPUNetIO Ethernet engine notes
 
-The experimental raw `gpunetio` engine (`engine: "gpunetio"`, built with `gpunetio` in
+The experimental raw `gpunetio_ethernet` engine (`engine: "gpunetio_ethernet"`, built with `gpunetio_ethernet` in
 `DAQIRI_ENGINE`, DOCA 3.6 or newer) drives the NIC queues with CUDA kernels. Applications use the
 same burst API as the other raw engines, with these differences:
 
-- **Engine selection.** It is chosen only by an explicit `engine: "gpunetio"`, never by default.
-  The TX queue option `gpunetio.tx_kernel` (`persistent`, the default, or `per_burst`) selects how
+- **Engine selection.** It is chosen only by an explicit `engine: "gpunetio_ethernet"`, never by default.
+  The TX queue option `gpunetio_ethernet.tx_kernel` (`persistent`, the default, or `per_burst`) selects how
   a TX queue's packets reach the GPU kernel.
 - **Memory.** Each queue needs a memory region of its own, of kind `device` or `host_pinned`; a
   region shared with another queue, including between TX queues, is rejected at validation. RX

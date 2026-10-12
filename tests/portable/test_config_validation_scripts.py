@@ -138,7 +138,7 @@ def validation_names(log: Path) -> list[str]:
             {"socket-roce-tx.yaml", "raw-dpdk-none.yaml", "raw-ibverbs-none.yaml"},
         ),
         (
-            "socket gpunetio",
+            "socket gpunetio_ethernet",
             {"socket-udp-tx.yaml", "socket-tcp-tx.yaml"},
             {"socket-roce-tx.yaml", "raw-dpdk-none.yaml", "raw-ibverbs-none.yaml"},
         ),
@@ -196,8 +196,8 @@ def test_check_fails_when_capability_query_fails(tmp_path: Path, script: Path) -
         "socket dpdk",
         "socket ibverbs",
         "socket dpdk ibverbs",
-        "socket gpunetio",
-        "socket dpdk ibverbs gpunetio",
+        "socket gpunetio_ethernet",
+        "socket dpdk ibverbs gpunetio_ethernet",
     ],
 )
 def test_checked_in_default_selects_supported_cases(tmp_path: Path, engines: str) -> None:
@@ -246,7 +246,7 @@ def test_checked_in_explicit_path_is_unfiltered_and_validator_failure_is_reporte
         ("default", {"dpdk", "ibverbs"}),
         ("dpdk", {"dpdk"}),
         ("ibverbs", {"ibverbs"}),
-        ("gpunetio", {"gpunetio"}),
+        ("gpunetio_ethernet", {"gpunetio_ethernet"}),
     ],
 )
 def test_raw_config_requires_its_engine(engine: str | None, required: set[str]) -> None:
@@ -257,13 +257,13 @@ def test_raw_config_requires_its_engine(engine: str | None, required: set[str]) 
     assert required_engines({"daqiri": {"cfg": config}}) == frozenset(required)
 
 
-def test_capability_query_accepts_gpunetio(
+def test_capability_query_accepts_gpunetio_ethernet(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     validator, log = fake_validator(tmp_path)
     monkeypatch.setenv("FAKE_VALIDATOR_LOG", str(log))
-    monkeypatch.setenv("FAKE_VALIDATOR_ENGINES", "socket ibverbs gpunetio")
+    monkeypatch.setenv("FAKE_VALIDATOR_ENGINES", "socket ibverbs gpunetio_ethernet")
 
     assert query_compiled_engines(validator) == frozenset(
-        ("socket", "ibverbs", "gpunetio")
+        ("socket", "ibverbs", "gpunetio_ethernet")
     )

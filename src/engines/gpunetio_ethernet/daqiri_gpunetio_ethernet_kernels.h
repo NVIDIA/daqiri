@@ -15,8 +15,8 @@
  * limitations under the License.
  */
 
-// Interface between the gpunetio engine and its CUDA kernels. The kernels drive the NIC queues
-// through DOCA GPUNetIO; the engine exchanges bursts with them through rings in pinned host
+// Interface between the gpunetio_ethernet engine and its CUDA kernels. The kernels drive the NIC
+// queues through DOCA GPUNetIO; the engine exchanges bursts with them through rings in pinned host
 // memory, which both the CPU and the GPU access.
 
 #pragma once

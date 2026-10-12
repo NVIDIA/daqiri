@@ -37,12 +37,12 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 - **GPUDirect** — Receive data directly into GPU memory via two modes:
   - *Header-Data Split*: Headers to CPU, payload to GPU (recommended for most workloads).
   - *Batched GPU*: Entire packets to GPU memory (maximum bandwidth, GPU-side parsing required).
-- **GPU-driven raw Ethernet (experimental)** — The opt-in `gpunetio` engine
-  (`-DDAQIRI_ENGINE="... gpunetio"`, `engine: "gpunetio"`, DOCA 3.6 or newer) runs CUDA kernels
+- **GPU-driven raw Ethernet (experimental)** — The opt-in `gpunetio_ethernet` engine
+  (`-DDAQIRI_ENGINE="... gpunetio_ethernet"`, `engine: "gpunetio_ethernet"`, DOCA 3.6 or newer) runs CUDA kernels
   that poll the NIC completion queues and post send WQEs, so the CPU only hands bursts over
   and frees them. It has no runtime resources, reorder, or caller-owned memory regions; see
   the [configuration reference](https://nvidia.github.io/daqiri/api-reference/configuration/) and
-  the [C++ API notes](https://nvidia.github.io/daqiri/api-reference/cpp/#gpunetio-engine-notes).
+  the [C++ API notes](https://nvidia.github.io/daqiri/api-reference/cpp/#gpunetio-ethernet-engine-notes).
 - **Hardware RX reorder** — On ConnectX-7 or newer NICs, the raw ibverbs engine can use the mlx5
   flex parser for first-DMA placement into ordered CPU or GPU aggregates while the host polls CQEs.
 - **Burst file writes** — Write received bursts as raw packet files or appendable PCAP

@@ -226,11 +226,11 @@ RUN if [ "${DAQIRI_ENABLE_OTEL_METRICS}" = "ON" ]; then \
 FROM dpdk AS rdma
 
 # ==============================================================
-# gpunetio: dpdk plus the DOCA SDK libraries of the gpunetio engine.
+# gpunetio_ethernet: dpdk plus the DOCA SDK libraries of the gpunetio_ethernet engine.
 # The engine needs DOCA 3.6 or newer, so this stage points the DOCA APT
 # repository at DOCA_GPUNETIO_VERSION before installing them.
 # ==============================================================
-FROM dpdk AS gpunetio
+FROM dpdk AS gpunetio_ethernet
 
 ARG TARGETARCH
 ARG DOCA_GPUNETIO_VERSION=3.6.0
