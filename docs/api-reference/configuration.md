@@ -279,6 +279,11 @@ TX queues on that interface are already in use.
   The order determines segment mapping: first region = segment 0, second = segment 1, etc.
   A single region means all packet data lands in one place, while two regions enables header-data
   split.
+  For raw ibverbs RX, up to four regions are supported. Each region receives up to
+  its configured `buf_size` bytes, in list order; allocation padding does not change
+  the split boundaries. A short packet can leave later segments with zero length.
+  Multi-region queues always use a regular scatter RQ, including when
+  `DAQIRI_IBV_STRIDING=1` is set. Raw ibverbs TX remains limited to two regions.
   - type: `list`
 - **`timeout_us`**: Timeout in microseconds. A partial batch is delivered if this time elapses
   before `batch_size` packets are collected. Set to `0` to disable (wait for full batch only).

@@ -37,3 +37,40 @@ python3 -m pytest tests/platform/test_named_endpoints.py \
 ```
 
 Host networking exposes the mlx5 netdev used to discover the endpoint source MAC.
+
+## Raw ibverbs multi-region RX
+
+`test_multi_region_rx.py` uses single-port mlx5 hardware loopback to verify separate
+CPU/GPU destinations for two-, three-, and four-region RX queues. It checks segment
+lengths, all application bytes, GPU residence, multiple packet slots, short packets
+with unused trailing segments, direct RX polling, and rejection of five regions.
+It also verifies that `DAQIRI_IBV_STRIDING=1` cannot disable physical scattering.
+
+Set `DAQIRI_PLATFORM_IBVERBS_BDF` to the mlx5 PCI BDF. The test discovers its MAC and
+chooses three allowed CPU cores; override these with `DAQIRI_PLATFORM_RX_MAC` and
+`DAQIRI_PLATFORM_{MASTER,TX,RX}_CPU`. `DAQIRI_PLATFORM_GPU` and
+`DAQIRI_PLATFORM_NUMA` default to `0`. Set
+`DAQIRI_PLATFORM_REQUIRE_MULTI_REGION_RX=1` in qualification jobs to fail missing
+capabilities rather than skip.
+
+Compile `multi_region_rx.cpp` as the current user inside the project container,
+against the SDK being tested:
+
+```bash
+c++ -std=c++17 -O2 -pthread tests/platform/multi_region_rx.cpp \
+  -o /tmp/multi_region_rx $(pkg-config --cflags --libs daqiri) \
+  -I/usr/local/cuda/include -L/usr/local/cuda/lib64 -lcudart
+```
+
+Then run as root in the privileged GPU/NIC container with hugepages mounted:
+
+```bash
+DAQIRI_MULTI_REGION_RX_EXECUTABLE=/tmp/multi_region_rx \
+DAQIRI_PLATFORM_IBVERBS_BDF=0000:01:00.0 \
+DAQIRI_PLATFORM_REQUIRE_MULTI_REGION_RX=1 \
+python3 -m pytest tests/platform/test_multi_region_rx.py -m platform -p no:cacheprovider
+```
+
+With no executable override, the pytest fixture compiles a temporary executable
+against the SDK selected by `PKG_CONFIG_PATH`. Keep hardware tests serialized on
+the selected port.

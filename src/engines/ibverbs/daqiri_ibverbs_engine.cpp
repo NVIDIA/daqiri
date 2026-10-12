@@ -663,10 +663,8 @@ const EndpointInlineTxMetadata* endpoint_inline_metadata(const BurstParams* burs
 }
 
 struct IbvBurstLayout {
-  size_t off_pkts0;
-  size_t off_lens0;
-  size_t off_pkts1;
-  size_t off_lens1;
+  std::array<size_t, MAX_NUM_SEGS> off_pkts;
+  std::array<size_t, MAX_NUM_SEGS> off_lens;
   size_t off_wqe;      // uint16_t[max_batch] -- region per packet
   size_t off_strd;     // uint16_t[max_batch] -- strides per packet
   size_t off_ts;       // uint64_t[max_batch] -- raw HW RX timestamp per packet
@@ -683,10 +681,10 @@ IbvBurstLayout compute_layout(uint32_t max_batch) {
     off += bytes;
     return at;
   };
-  l.off_pkts0 = place(sizeof(void*) * max_batch);
-  l.off_lens0 = place(sizeof(uint32_t) * max_batch);
-  l.off_pkts1 = place(sizeof(void*) * max_batch);
-  l.off_lens1 = place(sizeof(uint32_t) * max_batch);
+  for (int seg = 0; seg < MAX_NUM_SEGS; ++seg) {
+    l.off_pkts[seg] = place(sizeof(void*) * max_batch);
+    l.off_lens[seg] = place(sizeof(uint32_t) * max_batch);
+  }
   l.off_wqe = place(sizeof(uint16_t) * max_batch);
   l.off_strd = place(sizeof(uint16_t) * max_batch);
   l.off_ts = place(sizeof(uint64_t) * max_batch);
@@ -697,6 +695,14 @@ IbvBurstLayout compute_layout(uint32_t max_batch) {
 
 // Recovered once at setup; arrays are addressed relative to each block.
 IbvBurstLayout g_layout{};
+
+void init_burst_segment_arrays(BurstParams* burst) {
+  auto* base = reinterpret_cast<uint8_t*>(burst);
+  for (int seg = 0; seg < MAX_NUM_SEGS; ++seg) {
+    burst->pkts[seg] = reinterpret_cast<void**>(base + g_layout.off_pkts[seg]);
+    burst->pkt_lens[seg] = reinterpret_cast<uint32_t*>(base + g_layout.off_lens[seg]);
+  }
+}
 
 inline uint16_t* burst_wqe_arr(BurstParams* b) {
   return reinterpret_cast<uint16_t*>(reinterpret_cast<uint8_t*>(b) + g_layout.off_wqe);
@@ -1064,14 +1070,8 @@ Status IbverbsEngine::register_rx_mr(IbvRxQueue& q) {
     q.registrations.push_back(registration);
     const auto& mr = cfg_.mrs_[name];
     r.slot_size = static_cast<uint32_t>(mr.adj_size_);
-    r.seg_len = r.slot_size;
+    r.seg_len = static_cast<uint32_t>(mr.buf_size_);
     q.regions.push_back(r);
-  }
-  // Region 0 = CPU header in HDS mode: its scatter length is the split boundary,
-  // so the first split_boundary bytes land in the (CPU) header MR and the rest
-  // overflow into region 1 (the GPU payload MR).
-  if (q.num_segs == 2 && q.split_boundary > 0 && q.regions.size() >= 2) {
-    q.regions[0].seg_len = static_cast<uint32_t>(q.split_boundary);
   }
   q.mr_base = q.regions[0].base;
   q.lkey = q.regions[0].lkey;
@@ -3889,20 +3889,25 @@ Status IbverbsEngine::setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf,
   }
   q.mr_names = qcfg.common_.mrs_;
   q.mr_name = qcfg.common_.mrs_[0];
-  // A queue with >1 memory region is header-data split: region 0 (CPU) holds the
-  // header, region 1 (GPU) the payload, split at region 0's buf_size. Physical
-  // HDS needs per-packet multi-segment scatter, which MPRQ can't express -- those
-  // queues use the (slower) regular RQ. MPRQ stays the default everywhere else.
-  if (qcfg.common_.mrs_.size() > 1) {
-    q.num_segs = std::min<int>(static_cast<int>(qcfg.common_.mrs_.size()), MAX_NUM_SEGS);
-    q.split_boundary = static_cast<int>(cfg_.mrs_[q.mr_name].buf_size_);
-    q.striding = false;
-  } else {
-    q.num_segs = 1;
-    q.split_boundary = 0;
+  if (q.mr_names.size() > MAX_NUM_SEGS) {
+    DAQIRI_LOG_CRITICAL("RX queue {} configures {} memory regions; at most {} are supported",
+                        q.queue_id, q.mr_names.size(), MAX_NUM_SEGS);
+    return Status::INVALID_PARAMETER;
   }
+  q.num_segs = static_cast<int>(q.mr_names.size());
+  // Separate destinations require a regular RQ scatter list. MPRQ can only
+  // receive into one region, even when DAQIRI_IBV_STRIDING requests it.
+  q.striding = q.num_segs == 1;
+  q.split_boundary = q.num_segs > 1 ? static_cast<int>(cfg_.mrs_[q.mr_name].buf_size_) : 0;
   if (const char* s = getenv("DAQIRI_IBV_STRIDING")) {
-    q.striding = (s[0] != '0');
+    if (q.num_segs == 1) {
+      q.striding = (s[0] != '0');
+    } else if (s[0] != '0') {
+      DAQIRI_LOG_WARN(
+          "RX queue {} requires a regular RQ for {} memory regions; ignoring "
+          "DAQIRI_IBV_STRIDING",
+          q.queue_id, q.num_segs);
+    }
   }
 
   // Per-queue flow id: if a configured flow steers to this queue, report its id
@@ -4192,10 +4197,7 @@ bool IbverbsEngine::rx_alloc_burst(IbvRxQueue* q) {
   b->hdr.hdr.num_pkts = 0;
   b->hdr.hdr.num_segs = q->num_segs;
   b->hdr.hdr.burst_flags = 0;
-  b->pkts[0] = reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(b) + g_layout.off_pkts0);
-  b->pkt_lens[0] = reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(b) + g_layout.off_lens0);
-  b->pkts[1] = reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(b) + g_layout.off_pkts1);
-  b->pkt_lens[1] = reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(b) + g_layout.off_lens1);
+  init_burst_segment_arrays(b);
   q->cur_n = 0;
   return true;
 }
@@ -4340,38 +4342,22 @@ Status IbverbsEngine::rx_poll_queue(IbvRxQueue* q, BurstParams** direct_burst) {
     q->dbg_data++;
 
     const int n = q->cur_n;
-    const uint32_t hdr = (static_cast<uint32_t>(q->split_boundary) < len)
-                             ? static_cast<uint32_t>(q->split_boundary)
-                             : len;
     if (!q->striding) {
-      // Regular RQ: each segment is in its own region (physical split). Slot
-      // `region` indexes the per-packet buffer within each region.
-      uint8_t* hbuf = q->regions[0].base + static_cast<size_t>(region) * q->regions[0].slot_size;
-      if (q->num_segs == 2) {
-        uint8_t* pbuf = q->regions[1].base + static_cast<size_t>(region) * q->regions[1].slot_size;
-        q->cur_burst->pkts[0][n] = hbuf;
-        q->cur_burst->pkt_lens[0][n] = hdr;
-        q->cur_burst->pkts[1][n] = pbuf;
-        q->cur_burst->pkt_lens[1][n] = len - hdr;
-      } else {
-        q->cur_burst->pkts[0][n] = hbuf;
-        q->cur_burst->pkt_lens[0][n] = len;
+      // The NIC fills each configured scatter span in order. Buffer addresses
+      // still use the padded allocation stride, independently of wire lengths.
+      uint32_t remaining = len;
+      for (int seg = 0; seg < q->num_segs; ++seg) {
+        const auto& reg = q->regions[seg];
+        const uint32_t seg_len = std::min(remaining, reg.seg_len);
+        q->cur_burst->pkts[seg][n] = reg.base + static_cast<size_t>(region) * reg.slot_size;
+        q->cur_burst->pkt_lens[seg][n] = seg_len;
+        remaining -= seg_len;
       }
     } else {
       uint8_t* pkt = q->mr_base + static_cast<size_t>(region) * q->region_size +
                      static_cast<size_t>(strd_off) * q->stride_size + q->two_byte_shift * 2;
-      if (q->num_segs == 2) {
-        // Logical header-data split: seg 0 = first split_boundary bytes (header),
-        // seg 1 = remaining payload. Both alias the same contiguous stride; one
-        // stride-release frees the whole packet (not a physical CPU/GPU split).
-        q->cur_burst->pkts[0][n] = pkt;
-        q->cur_burst->pkt_lens[0][n] = hdr;
-        q->cur_burst->pkts[1][n] = pkt + hdr;
-        q->cur_burst->pkt_lens[1][n] = len - hdr;
-      } else {
-        q->cur_burst->pkts[0][n] = pkt;
-        q->cur_burst->pkt_lens[0][n] = len;
-      }
+      q->cur_burst->pkts[0][n] = pkt;
+      q->cur_burst->pkt_lens[0][n] = len;
     }
     wqe_arr[n] = static_cast<uint16_t>(region);
     strd_arr[n] = static_cast<uint16_t>(strd);
@@ -8349,12 +8335,7 @@ BurstParams* IbverbsEngine::create_tx_burst_params() {
   burst->hdr.hdr.num_pkts = 0;
   burst->hdr.hdr.num_segs = 1;
   burst->hdr.hdr.burst_flags = IBV_TX_BURST_FLAG;
-  burst->pkts[0] = reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(burst) + g_layout.off_pkts0);
-  burst->pkt_lens[0] =
-      reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(burst) + g_layout.off_lens0);
-  burst->pkts[1] = reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(burst) + g_layout.off_pkts1);
-  burst->pkt_lens[1] =
-      reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(burst) + g_layout.off_lens1);
+  init_burst_segment_arrays(burst);
   return burst;
 }
 
