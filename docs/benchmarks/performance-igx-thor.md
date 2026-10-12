@@ -147,9 +147,5 @@ deltas confirm traffic crosses the cable.
 | 1000 B | 2 | 1.75 Gbps | 2.821 ±0.007 |
 | 1000 B | 3 | 0.50 Gbps | 1.500 (σ <0.001) |
 
-Receive rates are aggregate; TX caps apply per pair and may exceed the achieved
-send rate. All 1000-byte cases use the same paced sweep: 0.50–2.25 Gbps per pair
-in 0.25 Gbps steps. Rows show the highest caps that passed three 30-second runs
-without loss. Higher caps failed confirmation for two and three pairs with NIC
-receive-buffer drops, sometimes intermittently. These are validated operating
-points on the tested grid, not proven maximum rates.
+For 1000-byte messages, we report the highest paced TX results without drops
+across all three repeat runs.
