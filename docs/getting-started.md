@@ -176,6 +176,13 @@ guide that matches your stream:
 - [Socket and RDMA Benchmarking](benchmarks/socket_benchmarking.md): UDP/TCP and
   RoCE examples.
 
+To smoke-test separate CPU/CPU/GPU RX destinations on one port, run the
+[raw ibverbs multi-region RX platform test](https://github.com/nvidia/daqiri/blob/main/tests/platform/README.md#raw-ibverbs-multi-region-rx)
+with hardware loopback. It checks exact segment lengths and CPU/GPU bytes,
+including short packets. Raw ibverbs RX supports up to four regions per queue;
+TX supports up to two. The split boundaries follow configured `buf_size` values,
+so allocation padding must not appear in the received lengths.
+
 ## Next Steps
 
 Keep these pages nearby as you go deeper:

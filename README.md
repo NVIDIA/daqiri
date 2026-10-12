@@ -37,6 +37,10 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 - **GPUDirect** — Receive data directly into GPU memory via two modes:
   - *Header-Data Split*: Headers to CPU, payload to GPU (recommended for most workloads).
   - *Batched GPU*: Entire packets to GPU memory (maximum bandwidth, GPU-side parsing required).
+- **Multi-region RX** — The raw ibverbs engine supports up to four CPU/GPU regions
+  per packet, such as separate CPU headers, CPU metadata, and GPU payload. Each
+  region's configured `buf_size` defines its scatter span; short packets leave
+  unused trailing segments at zero length. Raw ibverbs TX supports up to two regions.
 - **Hardware RX reorder** — On ConnectX-7 or newer NICs, the raw ibverbs engine can use the mlx5
   flex parser for first-DMA placement into ordered CPU or GPU aggregates while the host polls CQEs.
 - **Burst file writes** — Write received bursts as raw packet files or appendable PCAP
