@@ -20,6 +20,9 @@ int main(int argc, char** argv) {
 #if DAQIRI_ENGINE_IBVERBS || DAQIRI_ENGINE_RDMA
     std::cout << " ibverbs";
 #endif
+#if DAQIRI_ENGINE_GPUNETIO_ETHERNET
+    std::cout << " gpunetio_ethernet";
+#endif
     std::cout << '\n';
     return 0;
   }

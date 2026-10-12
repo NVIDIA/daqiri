@@ -29,6 +29,9 @@
 #if DAQIRI_ENGINE_IBVERBS
 #include "src/engines/ibverbs/daqiri_ibverbs_engine.h"
 #endif
+#if DAQIRI_ENGINE_GPUNETIO_ETHERNET
+#include "src/engines/gpunetio_ethernet/daqiri_gpunetio_ethernet_engine.h"
+#endif
 
 #include <algorithm>
 #include <arpa/inet.h>
@@ -411,6 +414,11 @@ std::unique_ptr<Engine> EngineFactory::create_instance(EngineType type) {
 #if DAQIRI_ENGINE_IBVERBS
     case EngineType::IBVERBS:
       _engine = std::make_unique<IbverbsEngine>();
+      break;
+#endif
+#if DAQIRI_ENGINE_GPUNETIO_ETHERNET
+    case EngineType::GPUNETIO_ETHERNET:
+      _engine = std::make_unique<GpunetioEthernetEngine>();
       break;
 #endif
     case EngineType::DEFAULT:
@@ -1169,6 +1177,143 @@ int Engine::get_port_id(const std::string& key) {
   return -1;
 }
 
+// Features outside the scope of the gpunetio_ethernet engine. They are rejected here, in the shared
+// hardware-independent checks, so that daqiri_config_validate reports them without a GPU or NIC.
+static bool validate_gpunetio_ethernet_network_config(const NetworkConfig& config) {
+  bool pass = true;
+
+  // Hardware loopback is rejected by the shared checks for every engine but ibverbs
+  if (config.common_.loopback_ == LoopbackType::LOOPBACK_TYPE_SW) {
+    DAQIRI_LOG_ERROR("The gpunetio_ethernet engine does not support software loopback");
+    pass = false;
+  }
+
+  const auto check_queue = [&](const CommonQueueConfig& queue, const char* direction) {
+    if (queue.mrs_.size() != 1) {
+      DAQIRI_LOG_ERROR(
+          "{} queue '{}' lists {} memory regions; gpunetio_ethernet queues need exactly one",
+          direction, queue.name_, queue.mrs_.size());
+      pass = false;
+    }
+    for (const auto& mr_name : queue.mrs_) {
+      const auto mr = config.mrs_.find(mr_name);
+      if (mr != config.mrs_.end() && mr->second.kind_ != MemoryKind::DEVICE &&
+          mr->second.kind_ != MemoryKind::HOST_PINNED) {
+        DAQIRI_LOG_ERROR(
+            "{} queue '{}' uses memory region '{}'; gpunetio_ethernet needs kind 'device' or "
+            "'host_pinned'",
+            direction, queue.name_, mr_name);
+        pass = false;
+      }
+    }
+  };
+
+  std::unordered_map<std::string, int> mr_queues;
+  for (const auto& intf : config.ifs_) {
+    for (const auto& rxq : intf.rx_.queues_) {
+      for (const auto& mr_name : rxq.common_.mrs_) {
+        mr_queues[mr_name]++;
+      }
+    }
+    for (const auto& txq : intf.tx_.queues_) {
+      for (const auto& mr_name : txq.common_.mrs_) {
+        mr_queues[mr_name]++;
+      }
+    }
+  }
+
+  for (const auto& intf : config.ifs_) {
+    for (const auto& rxq : intf.rx_.queues_) {
+      check_queue(rxq.common_, "RX");
+      // The region of an RX queue is the receive ring the NIC writes into
+      for (const auto& mr_name : rxq.common_.mrs_) {
+        if (mr_queues[mr_name] > 1) {
+          DAQIRI_LOG_ERROR(
+              "RX queue '{}' shares memory region '{}' with another queue; a gpunetio_ethernet RX "
+              "queue "
+              "needs a region of its own",
+              rxq.common_.name_, mr_name);
+          pass = false;
+        }
+        const auto mr = config.mrs_.find(mr_name);
+        if (mr != config.mrs_.end() &&
+            mr->second.num_bufs_ < static_cast<size_t>(std::max(0, rxq.common_.batch_size_))) {
+          DAQIRI_LOG_ERROR(
+              "RX queue '{}' has batch_size {} but memory region '{}' holds only {} buffers",
+              rxq.common_.name_, rxq.common_.batch_size_, mr_name, mr->second.num_bufs_);
+          pass = false;
+        }
+      }
+    }
+    for (const auto& txq : intf.tx_.queues_) {
+      check_queue(txq.common_, "TX");
+      // A TX queue hands out the packet slots of its whole region, so another queue on the same
+      // region would be given the same packet addresses
+      for (const auto& mr_name : txq.common_.mrs_) {
+        if (mr_queues[mr_name] > 1) {
+          DAQIRI_LOG_ERROR(
+              "TX queue '{}' shares memory region '{}' with another queue; a gpunetio_ethernet TX "
+              "queue "
+              "needs a region of its own",
+              txq.common_.name_, mr_name);
+          pass = false;
+        }
+      }
+      if (!txq.common_.offloads_.empty()) {
+        DAQIRI_LOG_ERROR("TX queue '{}' requests offloads; gpunetio_ethernet supports none",
+                         txq.common_.name_);
+        pass = false;
+      }
+      if (txq.pacing_mbps_ != 0) {
+        DAQIRI_LOG_ERROR("TX queue '{}' sets pacing_mbps; gpunetio_ethernet has no packet pacing",
+                         txq.common_.name_);
+        pass = false;
+      }
+    }
+    if (intf.tx_.accurate_send_) {
+      DAQIRI_LOG_ERROR(
+          "Interface '{}' enables accurate_send; gpunetio_ethernet does not support it yet",
+          intf.name_);
+      pass = false;
+    }
+    if (intf.rx_.hardware_timestamps_) {
+      DAQIRI_LOG_ERROR(
+          "Interface '{}' enables hardware_timestamps; gpunetio_ethernet does not support them yet",
+          intf.name_);
+      pass = false;
+    }
+    if (intf.rx_.dynamic_flow_capacity_ != 0) {
+      DAQIRI_LOG_ERROR(
+          "Interface '{}' sets dynamic_flow_capacity; gpunetio_ethernet has no runtime flows yet",
+          intf.name_);
+      pass = false;
+    }
+    if (!intf.rx_.flex_items_.empty()) {
+      DAQIRI_LOG_ERROR("Interface '{}' defines flex items; gpunetio_ethernet does not support them",
+                       intf.name_);
+      pass = false;
+    }
+    if (!intf.rx_.reorder_configs_.empty()) {
+      DAQIRI_LOG_ERROR(
+          "Interface '{}' defines reorder configs; gpunetio_ethernet has no reorder yet",
+          intf.name_);
+      pass = false;
+    }
+    for (const auto& flow : intf.rx_.flows_) {
+      if (flow.match_.type_ != FlowMatchType::IPV4_UDP &&
+          flow.match_.type_ != FlowMatchType::ETHERNET) {
+        DAQIRI_LOG_ERROR(
+            "RX flow '{}' on interface '{}' needs an IPv4/UDP or Ethernet match with "
+            "gpunetio_ethernet",
+            flow.name_, intf.name_);
+        pass = false;
+      }
+    }
+  }
+
+  return pass;
+}
+
 bool validate_network_config(const NetworkConfig& config) {
   bool pass = true;
   std::set<std::string> mr_names;
@@ -1447,6 +1592,11 @@ bool validate_network_config(const NetworkConfig& config) {
           "Queue found using MR {}, but that MR doesn't exist in the memory_region config", mr);
       pass = false;
     }
+  }
+
+  if (config.common_.engine_type == EngineType::GPUNETIO_ETHERNET &&
+      !validate_gpunetio_ethernet_network_config(config)) {
+    pass = false;
   }
 
   return pass;

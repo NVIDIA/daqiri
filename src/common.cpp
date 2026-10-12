@@ -834,6 +834,12 @@ Status daqiri_init(NetworkConfig& config, const MemoryRegionBindings& bindings) 
 
   auto engine = &(EngineFactory::get_active_engine());
 
+  if (!bindings.empty() && !engine->supports_external_memory_regions()) {
+    DAQIRI_LOG_ERROR("The selected engine does not support caller-owned memory regions");
+    reset_active_engine();
+    metrics::shutdown();
+    return Status::NOT_SUPPORTED;
+  }
   if (engine->set_external_memory_regions(config, bindings) != Status::SUCCESS) {
     reset_active_engine();
     metrics::shutdown();
@@ -2404,7 +2410,7 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_tx_queue_config(
   if (!daqiri::detail::validate_yaml_mapping_keys(
           q_item,
           {"name", "id", "poll_mode", "cpu_core", "batch_size", "memory_regions", "offloads",
-           "pacing_mbps", "timeout_us"},
+           "pacing_mbps", "timeout_us", "gpunetio_ethernet"},
           "TX queue")) {
     return false;
   }
@@ -2448,6 +2454,31 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_tx_queue_config(
     if (!parse_tx_queue_common_config(q_item, q, parse_memory_regions,
                                       q.poll_mode_ == daqiri::QueuePollMode::INDIRECT)) {
       return false;
+    }
+
+    if (q_item["gpunetio_ethernet"].IsDefined()) {
+      const auto& gpunetio_ethernet = q_item["gpunetio_ethernet"];
+      if (_engine_type != daqiri::EngineType::GPUNETIO_ETHERNET) {
+        DAQIRI_LOG_ERROR(
+            "TX queue '{}' sets gpunetio_ethernet options, which need engine 'gpunetio_ethernet'",
+            q.common_.name_);
+        return false;
+      }
+      if (!daqiri::detail::validate_yaml_mapping_keys(gpunetio_ethernet, {"tx_kernel"},
+                                                      "TX queue gpunetio_ethernet")) {
+        return false;
+      }
+      if (gpunetio_ethernet["tx_kernel"].IsDefined()) {
+        const auto tx_kernel = gpunetio_ethernet["tx_kernel"].as<std::string>();
+        q.gpunetio_tx_kernel_ = daqiri::gpunetio_tx_kernel_from_string(tx_kernel);
+        if (q.gpunetio_tx_kernel_ == daqiri::GpunetioTxKernel::INVALID) {
+          DAQIRI_LOG_ERROR(
+              "TX queue '{}' has an invalid gpunetio_ethernet tx_kernel '{}'; valid values "
+              "are persistent and per_burst",
+              q.common_.name_, tx_kernel);
+          return false;
+        }
+      }
     }
 
   } catch (const std::exception& e) {

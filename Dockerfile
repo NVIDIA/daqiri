@@ -225,6 +225,40 @@ RUN if [ "${DAQIRI_ENABLE_OTEL_METRICS}" = "ON" ]; then \
 # ==============================================================
 FROM dpdk AS rdma
 
+# ==============================================================
+# gpunetio_ethernet: dpdk plus the DOCA SDK libraries of the gpunetio_ethernet engine.
+# The engine needs DOCA 3.6 or newer, so this stage points the DOCA APT
+# repository at DOCA_GPUNETIO_VERSION before installing them.
+# ==============================================================
+FROM dpdk AS gpunetio_ethernet
+
+ARG TARGETARCH
+ARG DOCA_GPUNETIO_VERSION=3.6.0
+
+RUN if [ "${TARGETARCH}" = "amd64" ]; then \
+        DOCA_ARCH="x86_64"; \
+    elif [ "$TARGETARCH" = "arm64" ]; then \
+        DOCA_ARCH="arm64-sbsa"; \
+    else \
+        echo "Unknown architecture: $TARGETARCH"; \
+        exit 1; \
+    fi \
+    && DISTRO=$(. /etc/os-release && echo ${ID}${VERSION_ID}) \
+    && DOCA_REPO_LINK=https://linux.mellanox.com/public/repo/doca/${DOCA_GPUNETIO_VERSION}/${DISTRO}/${DOCA_ARCH} \
+    && echo "Using DOCA_REPO_LINK=${DOCA_REPO_LINK}" \
+    && LOCAL_GPG_KEY_PATH="/usr/share/keyrings/mellanox-archive-keyring.gpg" \
+    && curl -fsSL ${DOCA_REPO_LINK}/GPG-KEY-Mellanox.pub | gpg --dearmor | tee ${LOCAL_GPG_KEY_PATH} > /dev/null \
+    && echo "deb [signed-by=${LOCAL_GPG_KEY_PATH}] ${DOCA_REPO_LINK} ./" | tee /etc/apt/sources.list.d/mellanox.list
+
+# - libdoca-sdk-gpunetio-dev: DOCA GPUNetIO (GPU datapath of the NIC queues)
+# - libdoca-sdk-eth-dev: DOCA Ethernet RX/TX queues
+# - libdoca-sdk-flow-dev: DOCA Flow, steers received packets to the RX queues
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libdoca-sdk-gpunetio-dev \
+        libdoca-sdk-eth-dev \
+        libdoca-sdk-flow-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # ==============================
 # Rivermax Target
 # This stage is only built when --target rivermax is specified. It installs and configures Rivermax SDK.

@@ -354,13 +354,16 @@ enum class EngineType {
   DPDK,
   SOCKET,
   RDMA,
-  IBVERBS,  // pure-DevX MPRQ raw-Ethernet engine (stream_type: raw, engine: ibverbs)
+  IBVERBS,            // pure-DevX MPRQ raw-Ethernet engine (stream_type: raw, engine: ibverbs)
+  GPUNETIO_ETHERNET,  // DOCA GPUNetIO raw-Ethernet engine (stream_type: raw, engine:
+                      // gpunetio_ethernet)
 };
 
 static constexpr const char* DAQIRI_ENGINE_STR__DPDK = "dpdk";
 static constexpr const char* DAQIRI_ENGINE_STR__SOCKET = "socket";
 static constexpr const char* DAQIRI_ENGINE_STR__RDMA = "rdma";
 static constexpr const char* DAQIRI_ENGINE_STR__IBVERBS = "ibverbs";
+static constexpr const char* DAQIRI_ENGINE_STR__GPUNETIO_ETHERNET = "gpunetio_ethernet";
 static constexpr const char* DAQIRI_ENGINE_STR__DEFAULT = "default";
 /**
  * @brief Convert string to engine type
@@ -399,6 +402,13 @@ inline EngineType engine_type_from_string(const std::string& str) {
   if (str == DAQIRI_ENGINE_STR__IBVERBS || str == DAQIRI_ENGINE_STR__RDMA) {
     is_known_but_unavailable = true;
   }
+#endif
+
+#if DAQIRI_ENGINE_GPUNETIO_ETHERNET
+  if (str == DAQIRI_ENGINE_STR__GPUNETIO_ETHERNET) return EngineType::GPUNETIO_ETHERNET;
+  available_engines += std::string(DAQIRI_ENGINE_STR__GPUNETIO_ETHERNET) + " ";
+#else
+  if (str == DAQIRI_ENGINE_STR__GPUNETIO_ETHERNET) is_known_but_unavailable = true;
 #endif
 
   if (!available_engines.empty()) {
@@ -475,6 +485,8 @@ inline std::string engine_type_to_string(EngineType type) {
       return DAQIRI_ENGINE_STR__RDMA;
     case EngineType::IBVERBS:
       return DAQIRI_ENGINE_STR__IBVERBS;
+    case EngineType::GPUNETIO_ETHERNET:
+      return DAQIRI_ENGINE_STR__GPUNETIO_ETHERNET;
     case EngineType::DEFAULT:
       return DAQIRI_ENGINE_STR__DEFAULT;
   }
@@ -505,20 +517,27 @@ inline EngineType config_engine_from_string(const std::string& str) {
   if (str == DAQIRI_ENGINE_STR__IBVERBS) is_known_but_unavailable = true;
 #endif
 
+#if DAQIRI_ENGINE_GPUNETIO_ETHERNET
+  if (str == DAQIRI_ENGINE_STR__GPUNETIO_ETHERNET) return EngineType::GPUNETIO_ETHERNET;
+#else
+  if (str == DAQIRI_ENGINE_STR__GPUNETIO_ETHERNET) is_known_but_unavailable = true;
+#endif
+
   if (str == DAQIRI_ENGINE_STR__RDMA) {
     throw std::invalid_argument(
         "Engine 'rdma' is not valid in config. Use 'ibverbs' for RoCE.");
   }
 
   if (is_known_but_unavailable) {
-    throw std::invalid_argument(
-        "Engine '" + str + "' is not available in this build. Rebuild with "
-        "-DDAQIRI_ENGINE including '" + str + "' (valid values: dpdk, ibverbs).");
+    throw std::invalid_argument("Engine '" + str +
+                                "' is not available in this build. Rebuild with "
+                                "-DDAQIRI_ENGINE including '" +
+                                str + "' (valid values: dpdk, ibverbs, gpunetio_ethernet).");
   }
 
-  throw std::invalid_argument(
-      "Unknown engine '" + str + "'. Valid options: dpdk, socket, ibverbs, " +
-      DAQIRI_ENGINE_STR__DEFAULT);
+  throw std::invalid_argument("Unknown engine '" + str +
+                              "'. Valid options: dpdk, socket, ibverbs, gpunetio_ethernet, " +
+                              DAQIRI_ENGINE_STR__DEFAULT);
 }
 
 // Stream-aware engine resolution. The user-facing name "ibverbs" maps to two
@@ -566,7 +585,8 @@ inline bool is_explicit_engine_type(EngineType type) {
 inline bool engine_type_supports_stream_type(EngineType type, StreamType stream_type) {
   switch (stream_type) {
     case StreamType::RAW:
-      return type == EngineType::DPDK || type == EngineType::IBVERBS;
+      return type == EngineType::DPDK || type == EngineType::IBVERBS ||
+             type == EngineType::GPUNETIO_ETHERNET;
     case StreamType::SOCKET:
       return type == EngineType::SOCKET || type == EngineType::RDMA;
     default:
@@ -712,6 +732,35 @@ struct RxQueueConfig {
   QueuePollMode poll_mode_ = QueuePollMode::INDIRECT;
 };
 
+// How the gpunetio_ethernet engine runs the CUDA kernel that posts the packets of a TX queue to the
+// NIC
+enum class GpunetioTxKernel {
+  PERSISTENT,  // a block of a resident kernel takes bursts from a ring, several bursts in flight
+  PER_BURST,   // one kernel launch per send_tx_burst(), which waits for the NIC to send the burst
+  INVALID,
+};
+
+inline GpunetioTxKernel gpunetio_tx_kernel_from_string(const std::string& str) {
+  if (str == "persistent") {
+    return GpunetioTxKernel::PERSISTENT;
+  }
+  if (str == "per_burst") {
+    return GpunetioTxKernel::PER_BURST;
+  }
+  return GpunetioTxKernel::INVALID;
+}
+
+inline std::string gpunetio_tx_kernel_to_string(GpunetioTxKernel kernel) {
+  switch (kernel) {
+    case GpunetioTxKernel::PERSISTENT:
+      return "persistent";
+    case GpunetioTxKernel::PER_BURST:
+      return "per_burst";
+    default:
+      return "invalid";
+  }
+}
+
 struct TxQueueConfig {
   CommonQueueConfig common_;
   QueuePollMode poll_mode_ = QueuePollMode::INDIRECT;
@@ -719,6 +768,8 @@ struct TxQueueConfig {
   // disables pacing (line-rate). Honored only by engines/devices with hardware
   // packet-pacing support.
   uint64_t pacing_mbps_ = 0;
+  // Used only by the gpunetio_ethernet engine
+  GpunetioTxKernel gpunetio_tx_kernel_ = GpunetioTxKernel::PERSISTENT;
 };
 
 // struct FlowConfig {

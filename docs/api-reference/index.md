@@ -36,6 +36,9 @@ deleted before its queue can be removed. Static startup flows and TX transform
 flows remain immutable. TCP/UDP socket options are also runtime state: after
 resolving a connection ID, applications can call `socket_setsockopt()` with
 native Linux `level` and option constants.
+The experimental raw `gpunetio_ethernet` engine runs its queues with CUDA kernels and supports
+only the static startup topology: no runtime flows, queues, memory regions, or reorder, and
+no caller-owned memory regions (see [gpunetio_ethernet engine notes](cpp.md#gpunetio-ethernet-engine-notes)).
 Raw-ibverbs applications can likewise create runtime named Ethernet/IPv4/UDP
 endpoints after initialization, resolve their opaque `EndpointId` handles, and
 select a configured TX queue for each submission. These endpoints provide

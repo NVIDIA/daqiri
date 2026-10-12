@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from scripts.config_validation import query_compiled_engines, required_engines
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 GENERATED_CHECK = REPOSITORY_ROOT / "scripts/check_generated_configs.py"
@@ -135,6 +137,11 @@ def validation_names(log: Path) -> list[str]:
             {"socket-udp-tx.yaml", "socket-tcp-tx.yaml"},
             {"socket-roce-tx.yaml", "raw-dpdk-none.yaml", "raw-ibverbs-none.yaml"},
         ),
+        (
+            "socket gpunetio_ethernet",
+            {"socket-udp-tx.yaml", "socket-tcp-tx.yaml"},
+            {"socket-roce-tx.yaml", "raw-dpdk-none.yaml", "raw-ibverbs-none.yaml"},
+        ),
     ],
 )
 def test_generated_check_selects_only_supported_engine_profiles(
@@ -183,7 +190,15 @@ def test_check_fails_when_capability_query_fails(tmp_path: Path, script: Path) -
 
 
 @pytest.mark.parametrize(
-    "engines", ["socket", "socket dpdk", "socket ibverbs", "socket dpdk ibverbs"]
+    "engines",
+    [
+        "socket",
+        "socket dpdk",
+        "socket ibverbs",
+        "socket dpdk ibverbs",
+        "socket gpunetio_ethernet",
+        "socket dpdk ibverbs gpunetio_ethernet",
+    ],
 )
 def test_checked_in_default_selects_supported_cases(tmp_path: Path, engines: str) -> None:
     validator, log = fake_validator(tmp_path)
@@ -222,3 +237,33 @@ def test_checked_in_explicit_path_is_unfiltered_and_validator_failure_is_reporte
 
     assert result.returncode == 1
     assert any(line.endswith("\tinvalid") for line in log.read_text().splitlines())
+
+
+@pytest.mark.parametrize(
+    ("engine", "required"),
+    [
+        (None, {"dpdk", "ibverbs"}),
+        ("default", {"dpdk", "ibverbs"}),
+        ("dpdk", {"dpdk"}),
+        ("ibverbs", {"ibverbs"}),
+        ("gpunetio_ethernet", {"gpunetio_ethernet"}),
+    ],
+)
+def test_raw_config_requires_its_engine(engine: str | None, required: set[str]) -> None:
+    config: dict[str, str] = {"stream_type": "raw"}
+    if engine is not None:
+        config["engine"] = engine
+
+    assert required_engines({"daqiri": {"cfg": config}}) == frozenset(required)
+
+
+def test_capability_query_accepts_gpunetio_ethernet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    validator, log = fake_validator(tmp_path)
+    monkeypatch.setenv("FAKE_VALIDATOR_LOG", str(log))
+    monkeypatch.setenv("FAKE_VALIDATOR_ENGINES", "socket ibverbs gpunetio_ethernet")
+
+    assert query_compiled_engines(validator) == frozenset(
+        ("socket", "ibverbs", "gpunetio_ethernet")
+    )

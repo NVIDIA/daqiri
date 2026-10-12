@@ -276,7 +276,7 @@ need to enable a specific feature or adjust the build for a particular host.
 |---|---|---|
 | `CMAKE_BUILD_TYPE` | n/a | Use `Release` for benchmarks and installed builds. |
 | `BUILD_SHARED_LIBS` | n/a | Use `ON` to produce `libdaqiri.so` and exported package metadata; use `OFF` only when you intentionally need static libraries. |
-| `DAQIRI_ENGINE` | `"dpdk ibverbs"` | Space-separated optional engines to compile. Valid values are `dpdk` and `ibverbs`; Linux UDP/TCP sockets are always built in. Use a smaller set only when packaging a narrower build. |
+| `DAQIRI_ENGINE` | `"dpdk ibverbs"` | Space-separated optional engines to compile. Valid values are `dpdk`, `ibverbs`, and the experimental `gpunetio_ethernet`; Linux UDP/TCP sockets are always built in. Use a smaller set only when packaging a narrower build. |
 | `DAQIRI_BUILD_EXAMPLES` | `ON` | Builds the `daqiri_bench_*` executables under `build/examples/`. Leave on for smoke tests and benchmark workflows. The `daqiri_config_validate` tool is always built and installed, including when this option is `OFF`. |
 | `DAQIRI_BUILD_APPLICATIONS` | `OFF` | Builds heavier end-to-end examples under `applications/`, currently the TensorRT ResNet inference app. Requires the extra application dependencies. |
 | `DAQIRI_BUILD_PYTHON` | `OFF` | Builds pybind11 Python bindings. Enable only when you need `import daqiri`. |
@@ -293,7 +293,7 @@ guidance.
 
 ### `DAQIRI_ENGINE`: engine selection
 
-`DAQIRI_ENGINE` is a space-separated list controlling which **optional** engines are compiled into `libdaqiri.so`. Linux UDP/TCP sockets are always built in, so the only values are `dpdk` and `ibverbs`. Three recipes cover most use cases:
+`DAQIRI_ENGINE` is a space-separated list controlling which **optional** engines are compiled into `libdaqiri.so`. Linux UDP/TCP sockets are always built in, so the only values are `dpdk`, `ibverbs`, and the experimental `gpunetio_ethernet`. Three recipes cover most use cases:
 
 | Recipe | What you get | When to use |
 |---|---|---|
@@ -304,6 +304,10 @@ guidance.
 !!! note "Sockets are always available; `ibverbs` backs RoCE"
 
     The socket engine (Linux UDP/TCP) is always built, so it never appears in `DAQIRI_ENGINE`. Its RoCE path delegates to the `ibverbs` engine, so `roce://` endpoints work only when `ibverbs` is in the list. Internally the ibverbs engine lives under [`src/engines/rdma`](https://github.com/NVIDIA/daqiri/blob/main/src/engines/rdma) (target `daqiri_rdma`); `ibverbs` is just the user-facing name, chosen so an alternative RDMA engine (such as DOCA) could be added later.
+
+!!! warning "`gpunetio_ethernet` is experimental and needs DOCA 3.6 or newer"
+
+    Adding `gpunetio_ethernet` (for example `-DDAQIRI_ENGINE="dpdk ibverbs gpunetio_ethernet"`) builds the DOCA GPUNetIO raw Ethernet engine, which a stream selects with `engine: "gpunetio_ethernet"`; it is never a default. CMake locates the DOCA 3.6+ GPUNetIO, Ethernet and Flow SDKs (`libdoca-sdk-gpunetio-dev`, `libdoca-sdk-eth-dev`, `libdoca-sdk-flow-dev`) with pkg-config under `/opt/mellanox/doca`, and fails at configure time when they are missing or older. Running the engine needs root, as DOCA Flow and the raw NIC queues do.
 
 ### `DAQIRI_BUILD_PYTHON`: pybind11 bindings
 

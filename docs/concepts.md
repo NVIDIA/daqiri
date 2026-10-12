@@ -40,6 +40,7 @@ the `stream_type` and the endpoint URI scheme:
 |---|---|---|
 | `stream_type: "raw"` | **`ibverbs`** | MPRQ raw Ethernet via libibverbs/DevX (Mellanox/mlx5) |
 | `stream_type: "raw"` with `engine: "dpdk"` | **`dpdk`** (opt-in) | DPDK kernel-bypass raw Ethernet |
+| `stream_type: "raw"` with `engine: "gpunetio_ethernet"` | **`gpunetio_ethernet`** (opt-in, experimental) | DOCA GPUNetIO raw Ethernet: CUDA kernels drive the NIC queues |
 | `stream_type: "socket"` with `udp://`/`tcp://` endpoints | **built-in Linux sockets** | always available, nothing to build |
 | `stream_type: "socket"` with `roce://` endpoints | **`ibverbs`** | RDMA/RoCE via libibverbs |
 
@@ -51,7 +52,7 @@ and a future release could add a DOCA RDMA engine as an alternative for the
 same `roce://` stream.
 
 At build time, `DAQIRI_ENGINE` selects which optional engines are
-compiled in (`dpdk`, `ibverbs`); Linux sockets are always available. See
+compiled in (`dpdk`, `ibverbs`, `gpunetio_ethernet`); Linux sockets are always available. See
 [Getting Started](getting-started.md) for the build options.
 
 ### Raw Ethernet

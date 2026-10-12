@@ -135,6 +135,10 @@ class Engine {
   virtual void initialize() = 0;
   virtual bool is_initialized() const { return initialized_; }
   virtual bool set_config_and_initialize(const NetworkConfig& cfg) = 0;
+  // Whether the engine can run on caller-owned memory regions (set_external_memory_regions)
+  virtual bool supports_external_memory_regions() const {
+    return true;
+  }
   Status set_external_memory_regions(const NetworkConfig& cfg,
                                      const MemoryRegionBindings& bindings);
   virtual void run() = 0;

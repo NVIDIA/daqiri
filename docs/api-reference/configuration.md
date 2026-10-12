@@ -54,9 +54,10 @@ These settings apply globally to both TX and RX:
   unless you need a specific implementation override. For `stream_type: "raw"` the
   default is `ibverbs`, which uses the Multi-Packet (striding) Receive Queue engine on
   Mellanox/mlx5 NICs; set `engine: "dpdk"` to use DPDK instead. RoCE configs infer `ibverbs` from
-  `roce://` endpoint URIs by default.
+  `roce://` endpoint URIs by default. `engine: "gpunetio_ethernet"` selects the experimental DOCA GPUNetIO
+  raw engine, which is never a default; see [GPUNetIO Ethernet engine](#gpunetio-ethernet-engine).
   - type: `string`
-  - values: `dpdk`, `socket`, `ibverbs`
+  - values: `dpdk`, `socket`, `ibverbs`, `gpunetio_ethernet`
 - **`log_level`**: Engine log level.
   - type: `string`
   - values: `trace`, `debug`, `info`, `warn` (default), `error`, `critical`, `off`
@@ -613,6 +614,14 @@ without an epoch field, an old late packet is indistinguishable from the same sl
   their device defaults.
   - type: `integer`
   - default: `0`
+- **`gpunetio_ethernet.tx_kernel`**: How the `gpunetio_ethernet` engine runs the CUDA kernel that posts this queue's
+  packets to the NIC. `persistent` serves the queue from a block of a resident kernel that takes
+  bursts from a ring, with several bursts in flight; one such kernel per GPU runs a block for each
+  of its persistent queues. `per_burst` launches one kernel per `send_tx_burst()`; the
+  kernel waits for the NIC to send its burst, so bursts don't overlap. Accepted only with
+  `engine: "gpunetio_ethernet"`.
+  - type: `string`
+  - values: `persistent` (default), `per_burst`
 
 A direct TX queue creates no handoff ring or worker. One application thread owns the queue and
 may have only one acquired-but-unsubmitted packet at a time. `BurstParams` remains the ownership
@@ -625,6 +634,44 @@ For the raw ibverbs engine, an equivalent `TxQueueConfig` can be passed to
 `add_tx_queue_async()` after initialization. The queue must reference existing memory regions and
 fit the metadata capacity reserved at initialization. Runtime TX queues require no flow rule;
 delete completion waits for submitted work and application-held allocations to be returned.
+
+### GPUNetIO Ethernet engine
+
+`engine: "gpunetio_ethernet"` (experimental) drives the NIC queues of a raw stream from CUDA kernels with
+DOCA GPUNetIO. On each GPU, one resident RX kernel serves all the RX queues with one CUDA block
+per queue; a block receives into its queue's memory region and publishes bursts. Each TX queue
+sends from its memory region with the kernel selected by `gpunetio_ethernet.tx_kernel`. One CPU thread per
+queue, on the queue's `cpu_core`, moves bursts between the kernels and the application.
+
+- **Receive ring:** the single memory region of an RX queue becomes the NIC receive ring and can't
+  be shared with another queue. Its slots are rounded up to a power of two up to 8 kB, and its
+  `num_bufs` to a power of two of at least 512 and at least `batch_size`. A received packet bigger
+  than a slot stops the queue, so keep the port MTU below the slot size.
+- **Transmit slots:** the single memory region of a TX queue can't be shared with another queue
+  either: the queue hands out the packet slots of its whole region.
+- **Ownership:** received packets stay valid until the application frees their burst with
+  `free_all_packets()` (or `free_packet()` for each packet); only then does the NIC reuse their
+  slots. Bursts can be freed in any order, but slots return to the NIC in arrival order, so a
+  burst held for long blocks the reuse of the newer ones. When the ring is full the NIC drops
+  incoming packets.
+- **Bursts:** a burst holds `batch_size` packets, except at the end of the ring and when
+  `timeout_us` elapses first. The packet pointers point into the region, and the lengths into
+  pinned host memory.
+- **Steering:** DOCA Flow matches the RX flows (IPv4/UDP or Ethernet fields) in configuration
+  order, and spreads a flow with several queue IDs over them. With `flow_isolation: true`,
+  unmatched packets go to the kernel, otherwise to the first RX queue.
+- **Not supported:** header-data split, memory regions other than `device` and `host_pinned`,
+  caller-owned memory regions, software and hardware loopback, TX offloads, `pacing_mbps`,
+  `accurate_send`, `hardware_timestamps`, per-packet flow IDs (reported as `0`), dynamic and runtime
+  flows, runtime resources, flex items, eCPRI matches, reorder, and direct polling.
+- **CUDA:** the resident kernels run until `shutdown()`, and the GPU must run all their blocks at
+  once: `daqiri_init()` fails if it can't fit one block per queue. `cudaDeviceSynchronize()` and
+  `cudaFree()` of a valid pointer wait for every running kernel, so they block until then:
+  synchronize streams instead, and free device memory with `cudaFreeAsync()` or after
+  `shutdown()`. With CUDA lazy loading, the default, the first launch of an application kernel
+  after `daqiri_init()` blocks the same way: set `CUDA_MODULE_LOADING=EAGER`, or load the kernels
+  before `daqiri_init()`, for example with `cudaFuncGetAttributes()`. `cudaMalloc()`,
+  `cudaMemcpy()` and work on other streams are not affected.
 
 ### Transmit Flows
 

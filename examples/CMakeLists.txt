@@ -39,6 +39,7 @@ endif()
 set(DAQIRI_BENCH_CONFIGS
   daqiri_bench_raw_tx_rx.yaml
   daqiri_bench_raw_tx_rx_4q.yaml
+  daqiri_bench_raw_tx_rx_gpunetio_ethernet.yaml
   daqiri_bench_raw_tx_rx_pacing.yaml
   daqiri_bench_raw_tx_rx_hds.yaml
   daqiri_bench_raw_tx_rx_reorder_seq_1024.yaml
@@ -70,7 +71,7 @@ function(link_daqiri_bench target)
   target_compile_features(${target} PRIVATE cxx_std_17)
   if(NOT BUILD_SHARED_LIBS AND UNIX AND NOT APPLE)
     set(DAQIRI_EXAMPLE_STATIC_LIBS daqiri::daqiri)
-    foreach(engine IN ITEMS dpdk socket rdma ibverbs)
+    foreach(engine IN ITEMS dpdk socket rdma ibverbs gpunetio_ethernet)
       if(TARGET daqiri_${engine})
         list(APPEND DAQIRI_EXAMPLE_STATIC_LIBS daqiri_${engine})
       endif()
