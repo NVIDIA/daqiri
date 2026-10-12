@@ -1181,7 +1181,11 @@ bool GpunetioEngine::program_steering(Device& dev, const InterfaceConfig& intf) 
     } else {
       match.parser_meta.outer_l3_type = DOCA_FLOW_L3_META_IPV4;
       match.parser_meta.outer_l4_type = DOCA_FLOW_L4_META_UDP;
-      match.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
+      // A bare l3_type is a protocol-only match, which control pipes reject; parser_meta already
+      // selects IPv4, so set it only when an IPv4 field is matched
+      if (m.ipv4_src_ != 0 || m.ipv4_dst_ != 0 || m.ipv4_len_ != 0) {
+        match.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
+      }
       match.outer.l4_type_ext = DOCA_FLOW_L4_TYPE_EXT_UDP;
       match.outer.ip4.src_ip = m.ipv4_src_;
       match.outer.ip4.dst_ip = m.ipv4_dst_;
