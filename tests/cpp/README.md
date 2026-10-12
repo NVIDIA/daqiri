@@ -4,7 +4,7 @@ This directory is reserved for build-backed C++ unit and integration tests. Regi
 them with CTest so configured builds have a common entry point for native, binding,
 and platform tests. See the parent [testing guide](../README.md) for the test taxonomy.
 
-With `DAQIRI_ENGINE="ibverbs"` and `DAQIRI_RDMA_DLOPEN=ON`, CTest also
+With `DAQIRI_ENGINE="ibverbs"` and `DAQIRI_IBVERBS_DLOPEN=ON`, CTest also
 checks real glue loading, concurrent cached loads, missing DSOs and entry
 points, incompatible/incomplete tables, and Linux socket operation without RDMA
 glue. These checks require RDMA userspace libraries but do not require a NIC.

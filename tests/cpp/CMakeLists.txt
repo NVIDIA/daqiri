@@ -46,7 +46,7 @@ endif()
 
 add_test(NAME daqiri_socket_rx_queue_test COMMAND daqiri_socket_rx_queue_test)
 
-if(DAQIRI_RDMA_DLOPEN AND TARGET daqiri_raw_verbs_glue)
+if(DAQIRI_IBVERBS_DLOPEN AND TARGET daqiri_raw_verbs_glue)
   find_package(Threads REQUIRED)
   add_executable(daqiri_rdma_glue_test rdma_glue_test.cpp
     ${PROJECT_SOURCE_DIR}/src/rdma/raw_api.cpp
@@ -55,7 +55,7 @@ if(DAQIRI_RDMA_DLOPEN AND TARGET daqiri_raw_verbs_glue)
   target_include_directories(daqiri_rdma_glue_test PRIVATE ${PROJECT_SOURCE_DIR}
     $<TARGET_PROPERTY:daqiri_ibverbs,INTERFACE_INCLUDE_DIRECTORIES>
     $<TARGET_PROPERTY:daqiri_rdma,INTERFACE_INCLUDE_DIRECTORIES>)
-  target_compile_definitions(daqiri_rdma_glue_test PRIVATE DAQIRI_RDMA_DLOPEN=1)
+  target_compile_definitions(daqiri_rdma_glue_test PRIVATE DAQIRI_IBVERBS_DLOPEN=1)
   target_link_libraries(daqiri_rdma_glue_test PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
   add_dependencies(daqiri_rdma_glue_test daqiri_raw_verbs_glue daqiri_cm_verbs_glue)
   add_test(NAME daqiri_rdma_glue_load COMMAND daqiri_rdma_glue_test load)
@@ -114,7 +114,7 @@ if(DAQIRI_RDMA_DLOPEN AND TARGET daqiri_raw_verbs_glue)
     ENVIRONMENT "DAQIRI_RDMA_GLUE_DIR=${CMAKE_CURRENT_BINARY_DIR}/missing-glue")
 endif()
 
-if(DAQIRI_RDMA_DLOPEN AND TARGET daqiri_raw_verbs_glue AND NOT BUILD_SHARED_LIBS
+if(DAQIRI_IBVERBS_DLOPEN AND TARGET daqiri_raw_verbs_glue AND NOT BUILD_SHARED_LIBS
    AND NOT TARGET daqiri_dpdk)
   find_program(DAQIRI_TEST_PKG_CONFIG pkg-config REQUIRED)
   find_program(DAQIRI_TEST_READELF readelf REQUIRED)
