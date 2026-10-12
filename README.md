@@ -69,7 +69,7 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
   name mappings. TCP and UDP RX queues bound their internal backlog using the
   smallest referenced memory-region `num_bufs`. A slow TCP consumer propagates
   backpressure; a slow UDP consumer leaves overflow for the kernel to drop. See
-  [TCP receive backpressure and queue sizing](https://nvidia.github.io/daqiri/benchmarks/socket_benchmarking/#tcp-receive-backpressure-and-queue-sizing).
+  [Receive backpressure and queue sizing](https://nvidia.github.io/daqiri/benchmarks/socket_benchmarking/#receive-backpressure-and-queue-sizing).
 - **Flow-control telemetry** — Raw Ethernet streams warn at `daqiri_init()` when 802.3x
   pause is enabled on a port and report the pause frames exchanged during the run with the
   shutdown stats. A paused link throttles the sender instead of dropping, so it caps

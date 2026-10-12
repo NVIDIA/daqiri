@@ -172,7 +172,7 @@ The shipped configs run both endpoints on `127.0.0.1` and are useful for a smoke
   --seconds 10 --mode both
 ```
 
-### TCP receive backpressure and queue sizing
+### Receive backpressure and queue sizing
 
 DAQIRI bounds each TCP or UDP RX queue by the smallest `num_bufs` value among
 the memory regions referenced by that queue. The limit counts packets, not

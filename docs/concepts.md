@@ -118,7 +118,7 @@ URI schemes:
   use the smallest referenced memory-region `num_bufs` as their internal packet
   limit. When full, DAQIRI stops consuming socket data: TCP flow control reaches
   the sender, while UDP overflow is dropped by the kernel. See
-  [TCP receive backpressure and queue sizing](benchmarks/socket_benchmarking.md#tcp-receive-backpressure-and-queue-sizing).
+  [Receive backpressure and queue sizing](benchmarks/socket_benchmarking.md#receive-backpressure-and-queue-sizing).
 - **`roce://` endpoints**: RDMA over Converged Ethernet, using the
   open-source [`rdma-core`](https://github.com/linux-rdma/rdma-core)
   library. A server/client connection model, NIC-level reliable

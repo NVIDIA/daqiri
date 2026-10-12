@@ -139,7 +139,7 @@ runtime binding.
   queue fills, DAQIRI stops consuming from the socket. TCP flow control backpressures the
   sender; UDP fills the bounded kernel receive buffer and drops excess datagrams. A UDP burst
   may contain up to `batch_size` datagrams, but every datagram counts against the limit. See
-  [TCP receive backpressure and queue sizing](../benchmarks/socket_benchmarking.md#tcp-receive-backpressure-and-queue-sizing)
+  [Receive backpressure and queue sizing](../benchmarks/socket_benchmarking.md#receive-backpressure-and-queue-sizing)
   for sizing guidance and ownership details. Raw DPDK queue regions use a floor of
   `max(1.5 * ring, ring + 2 * batch_size)`. DAQIRI bumps values below that floor to
   `max(3 * ring, ring + 4 * batch_size)` and warns with the exact `num_bufs` to configure.
