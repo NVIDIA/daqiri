@@ -42,6 +42,10 @@
 #include "src/daqiri_ring.h"
 #include "src/daqiri_pool.h"
 
+namespace daqiri::detail {
+struct RawVerbsApi;
+}
+
 namespace daqiri {
 
 // ---- GPU packet reordering (mirrors the DPDK reorder path, on MPRQ RX) ----
@@ -562,6 +566,7 @@ class IbverbsEngine : public Engine {
   Status get_reorder_missing_info(BurstParams* burst, ReorderMissingInfo* info) override;
 
  private:
+  const detail::RawVerbsApi* verbs_ = nullptr;
   struct PortSteering;
 
   bool use_hugepage_arenas() const override {

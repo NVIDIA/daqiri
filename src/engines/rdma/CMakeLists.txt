@@ -54,8 +54,24 @@ endif()
 target_include_directories(${ENGINE_TARGET} PUBLIC ${IBVERBS_INCLUDE_DIRS})
 target_link_directories(${ENGINE_TARGET} PUBLIC ${IBVERBS_LIBRARY_DIRS})
 
-target_link_libraries(${ENGINE_TARGET}
-    PUBLIC
-        ${IBVERBS_LIBRARIES}
-        ${RDMACM_LIBRARIES}
-)
+target_sources(${ENGINE_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../rdma/cm_api.cpp)
+if(DAQIRI_RDMA_DLOPEN)
+    target_compile_definitions(${ENGINE_TARGET} PRIVATE DAQIRI_RDMA_DLOPEN=1)
+    target_link_libraries(${ENGINE_TARGET} PRIVATE ${CMAKE_DL_LIBS})
+    # Always a DSO, even when DAQIRI itself is built as static archives.
+    add_library(daqiri_cm_verbs_glue SHARED ${CMAKE_CURRENT_SOURCE_DIR}/../../rdma/cm_glue.cpp)
+    target_include_directories(daqiri_cm_verbs_glue PRIVATE ${IBVERBS_INCLUDE_DIRS} ${RDMACM_INCLUDE_DIRS})
+    target_link_directories(daqiri_cm_verbs_glue PRIVATE ${IBVERBS_LIBRARY_DIRS} ${RDMACM_LIBRARY_DIRS})
+    target_link_libraries(daqiri_cm_verbs_glue PRIVATE ${IBVERBS_LIBRARIES} ${RDMACM_LIBRARIES})
+    add_dependencies(${ENGINE_TARGET} daqiri_cm_verbs_glue)
+    target_compile_features(daqiri_cm_verbs_glue PRIVATE cxx_std_17)
+    set_target_properties(daqiri_cm_verbs_glue PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+        SOVERSION 1 VERSION 1.0.0)
+    install(TARGETS daqiri_cm_verbs_glue
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT daqiri-cpp)
+else()
+    target_compile_definitions(${ENGINE_TARGET} PRIVATE DAQIRI_RDMA_DLOPEN=0)
+    target_sources(${ENGINE_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../rdma/cm_glue.cpp)
+    target_link_libraries(${ENGINE_TARGET} PUBLIC ${IBVERBS_LIBRARIES} ${RDMACM_LIBRARIES})
+endif()

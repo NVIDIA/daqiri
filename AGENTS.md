@@ -21,6 +21,7 @@ canonical multi-architecture version tag.
 
 CMake options (full table in `docs/tutorials/bare-metal-cmake-build.md`):
 - `DAQIRI_ENGINE` — space-separated list of optional engines to compile. Valid values: `dpdk` (raw Ethernet) and `ibverbs` (RDMA/RoCE). Linux sockets (UDP/TCP) are always built in, so there is no `socket` value. Default is `"dpdk ibverbs"`.
+- `DAQIRI_RDMA_DLOPEN` — load raw-ibverbs and RoCE dependency glue DSOs at engine initialization instead of linking the engines to RDMA libraries (default `OFF`). Applies to both static and shared builds; DPDK dependencies are configured separately.
 - `DAQIRI_BUILD_PYTHON` — builds `pybind11` bindings from `python/`.
 - `DAQIRI_BUILD_EXAMPLES` — builds the benchmark executables (default `ON`). The
   hardware-free `daqiri_config_validate` tool is always built and installed.
