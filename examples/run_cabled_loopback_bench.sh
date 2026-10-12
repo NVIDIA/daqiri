@@ -15,12 +15,18 @@
 #             nstat retrans/inerrs (TCP, read inside the client netns).
 #
 # Usage:
-#   ./run_cabled_loopback_bench.sh --platform dgx-spark|igx-thor <backend> [mode]
+#   ./run_cabled_loopback_bench.sh --platform dgx-spark|igx-thor [options] <backend> [mode]
 #   ./run_cabled_loopback_bench.sh --platform dgx-spark|igx-thor --show-hardware
 #     backend ∈ {dpdk, ibverbs, rdma, socket-udp, socket-tcp}
-#     mode    ∈ {smoke, sweep, drop-curve, drop-curve-matrix}  (default: smoke)
+#     mode    ∈ {smoke, sweep, drop-curve, drop-curve-matrix, latency}  (default: smoke)
 #
-# Required environment in current shell:
+# Options:
+#   --payload-size BYTES — select a payload/message size; repeat to build a sweep.
+#   --pairs COUNT        — select concurrent socket pairs; repeat to build a sweep.
+#                          CLI values take precedence over the legacy env overrides.
+#   --help               — show usage without discovering hardware.
+#
+# Environment in current shell:
 #   DAQIRI_BUILD_DIR — path to the cmake build dir (defaults to ../build).
 #   REPEATS          — repeats per cell for error bars (default 1; use 3 for the
 #                      published re-run). Each rep is an independent run + CSV row.
@@ -51,7 +57,12 @@
 #   PAIRS_OVERRIDE     — optional space-separated socket pair counts. For example,
 #                      PAIRS_OVERRIDE=1 selects the pair-0 CPU placement only.
 #
-# Hardware defaults live in cabled_loopback_hardware.yaml. DAQIRI_GPU_UUID,
+# Latency mode (ibverbs only): LATENCY_SAMPLES=10000, LATENCY_WARMUP=1000,
+# LATENCY_TIMEOUT_MS=1000, LATENCY_REALTIME_PRIORITY=90, REPEATS=3, and
+# LATENCY_MEMORY="host_pinned device". LATENCY_GENERATE_ONLY=1 writes configs only.
+# It compares direct and indirect polling across 64–8192-byte L2 frames.
+#
+# Hardware defaults live in scripts/resolve_benchmark_hardware.py. DAQIRI_GPU_UUID,
 # DPDK_{TX,RX}_PCI, DPDK_{TX,RX}_NETDEV, ETH_{SRC,DST}_ADDR, and the DAQIRI_*_CORE
 # variables override resolved values for one-off experiments.
 #
@@ -69,8 +80,32 @@ set -o pipefail
 # Configuration
 # --------------------------------------------------------------------------
 
+usage() {
+  cat <<'USAGE'
+Usage: run_cabled_loopback_bench.sh --platform dgx-spark|igx-thor [options] <backend> [mode]
+       run_cabled_loopback_bench.sh --platform dgx-spark|igx-thor --show-hardware
+
+Backends: dpdk, ibverbs, rdma, socket-udp, socket-tcp
+Modes: smoke (default), sweep, drop-curve, drop-curve-matrix, latency (ibverbs only)
+
+Options may appear before or after the backend/mode:
+  --payload-size BYTES  Payload bytes for raw; message bytes for socket/RoCE.
+                       Repeat this flag to select multiple sweep sizes.
+  --pairs COUNT        Concurrent socket client/server pairs; repeat for a sweep.
+  --show-hardware      Print resolved hardware and exit.
+  -h, --help           Show this help.
+
+CLI payload/pair selections replace PAYLOADS_OVERRIDE/PAIRS_OVERRIDE values.
+Latency mode uses its fixed L2-frame sweep and does not accept these selections.
+See this script's header for build, duration, workload, and pacing environment settings.
+USAGE
+}
+
 PLATFORM=""
 SHOW_HARDWARE=0
+PAYLOAD_SIZES=()
+PAIR_COUNTS=()
+POSITIONAL_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --platform)
@@ -78,12 +113,30 @@ while [[ $# -gt 0 ]]; do
       PLATFORM="$2"
       shift 2
       ;;
+    --payload-size|--pairs)
+      option="$1"
+      [[ $# -ge 2 && "$2" =~ ^[1-9][0-9]*$ ]] || {
+        echo "$option requires a positive integer" >&2
+        exit 1
+      }
+      if [[ "$option" == "--payload-size" ]]; then
+        PAYLOAD_SIZES+=("$2")
+      else
+        PAIR_COUNTS+=("$2")
+      fi
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
     --show-hardware)
       SHOW_HARDWARE=1
       shift
       ;;
     --)
       shift
+      POSITIONAL_ARGS+=("$@")
       break
       ;;
     -*)
@@ -91,29 +144,52 @@ while [[ $# -gt 0 ]]; do
       exit 1
       ;;
     *)
-      break
+      POSITIONAL_ARGS+=("$1")
+      shift
       ;;
   esac
 done
 
-BACKEND="${1:-}"
-MODE="${2:-smoke}"
+if (( ${#POSITIONAL_ARGS[@]} > 2 )); then
+  echo "Expected a backend and optional mode" >&2
+  usage >&2
+  exit 1
+fi
+BACKEND="${POSITIONAL_ARGS[0]:-}"
+MODE="${POSITIONAL_ARGS[1]:-smoke}"
+if (( ${#PAYLOAD_SIZES[@]} > 0 )); then
+  PAYLOADS_OVERRIDE="${PAYLOAD_SIZES[*]}"
+fi
+if (( ${#PAIR_COUNTS[@]} > 0 )); then
+  PAIRS_OVERRIDE="${PAIR_COUNTS[*]}"
+  if [[ ! "$BACKEND" =~ ^socket- ]]; then
+    echo "--pairs is supported only for socket backends" >&2
+    exit 1
+  fi
+fi
+if [[ "$MODE" == "latency" ]] && (( ${#PAYLOAD_SIZES[@]} > 0 )); then
+  echo "--payload-size does not apply to latency mode's fixed L2-frame sweep" >&2
+  exit 1
+fi
+if [[ "$MODE" == "latency" && "$BACKEND" != "ibverbs" ]]; then
+  echo "Latency mode supports the raw ibverbs engine only" >&2
+  exit 1
+fi
 if [[ -z "$PLATFORM" ]]; then
   echo "--platform is required (dgx-spark or igx-thor)" >&2
   exit 1
 fi
 if [[ "$SHOW_HARDWARE" -eq 0 && -z "$BACKEND" ]]; then
-  echo "Usage: $0 --platform dgx-spark|igx-thor <dpdk|ibverbs|rdma|socket-udp|socket-tcp> [smoke|sweep|drop-curve|drop-curve-matrix]" >&2
+  usage >&2
   exit 1
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 HARDWARE_RESOLVER="$REPO_DIR/scripts/resolve_benchmark_hardware.py"
-HARDWARE_DEFAULTS="$SCRIPT_DIR/cabled_loopback_hardware.yaml"
 CLIENT_NS="${CLIENT_NS:-dq_wire_client}"
 SERVER_NS="${SERVER_NS:-dq_wire_server}"
-resolver_args=(--platform "$PLATFORM" --defaults "$HARDWARE_DEFAULTS")
+resolver_args=(--platform "$PLATFORM")
 if [[ "$SHOW_HARDWARE" -eq 1 ]]; then
   python3 "$HARDWARE_RESOLVER" "${resolver_args[@]}"
   exit $?
@@ -168,6 +244,205 @@ mkdir -p "$OUT_DIR"
 
 python3 "$HARDWARE_RESOLVER" "${resolver_args[@]}" > "$OUT_DIR/resolved-hardware.json"
 
+# Share hardware resolution, GPU selection, build paths, and environment capture.
+"$SCRIPT_DIR/bench_capture_environment.sh" "$OUT_DIR"
+if [[ "$MODE" == "latency" ]]; then
+  DAQIRI_MASTER_CORE="$MASTER_CORE" \
+  DAQIRI_DPDK_TX_QUEUE_CORE="$DPDK_TX_QUEUE_CORE" \
+  DAQIRI_DPDK_RX_QUEUE_CORE="$DPDK_RX_QUEUE_CORE" \
+  DAQIRI_DPDK_TX_WORKER_CORE="$DPDK_TX_WORKER_CORE" \
+    python3 - "$REPO_DIR" "$BUILD_DIR" "$OUT_DIR" <<'LATENCY_PY'
+import csv
+import json
+import math
+import os
+from pathlib import Path
+import re
+import statistics
+import subprocess
+import sys
+
+REPO = Path(sys.argv[1]).resolve()
+build_dir = Path(sys.argv[2]).resolve()
+output = Path(sys.argv[3]).resolve()
+sys.path.insert(0, str(REPO / "scripts"))
+from daqiri_config import load_document, render_document
+
+SIZES = tuple(2**power for power in range(6, 14))
+METRICS = ("tx_call_to_app_ns", "rx_hw_to_app_ns")
+
+def make_config(hardware: dict, mode: str, memory: str, ptp: str) -> dict:
+    config = load_document(REPO / "examples/daqiri_bench_raw_latency_ibverbs.yaml")
+    cfg = config["daqiri"]["cfg"]
+    cfg["master_core"] = int(os.environ["DAQIRI_MASTER_CORE"])
+    for region in cfg["memory_regions"]:
+        region["kind"] = memory
+    for interface, direction in zip(cfg["interfaces"], ("tx", "rx")):
+        interface["address"] = hardware[f"DEFAULT_DPDK_{direction.upper()}_PCI"]
+        queue = interface[direction]["queues"][0]
+        queue["poll_mode"] = mode
+        if mode == "indirect":
+            queue["batch_size"] = 1
+            queue["cpu_core"] = int(os.environ[f"DAQIRI_DPDK_{direction.upper()}_QUEUE_CORE"])
+    bench = config["bench_latency"]
+    bench["cpu_core"] = int(os.environ["DAQIRI_DPDK_TX_WORKER_CORE"])
+    bench["eth_dst_addr"] = hardware["DEFAULT_ETH_DST_ADDR"]
+    bench["ptp_device"] = ptp
+    return config
+
+
+def nic_counters(netdev: str) -> dict[str, int]:
+    text = subprocess.check_output(["ethtool", "-S", netdev], text=True)
+    return {
+        name: int(value)
+        for name, value in re.findall(r"^\s*(\w+):\s*(\d+)\s*$", text, re.M)
+        if name in {"rx_packets_phy", "tx_packets_phy", "rx_discards_phy",
+                    "rx_out_of_buffer", "rx_buff_alloc_err"}
+        or re.fullmatch(r"rx_prio[0-7]_discards", name)
+    }
+
+
+def percentile(values: list[int], fraction: float) -> int:
+    values = sorted(values)
+    return values[min(len(values) - 1, math.ceil(fraction * len(values)) - 1)]
+
+
+def main():
+    hardware = json.loads((output / "resolved-hardware.json").read_text())
+    sample_count = int(os.environ.get("LATENCY_SAMPLES", "10000"))
+    warmup = int(os.environ.get("LATENCY_WARMUP", "1000"))
+    timeout_ms = int(os.environ.get("LATENCY_TIMEOUT_MS", "1000"))
+    repeats = int(os.environ.get("REPEATS", "3"))
+    realtime_priority = int(os.environ.get("LATENCY_REALTIME_PRIORITY", "90"))
+    memory_kinds = list(dict.fromkeys(os.environ.get("LATENCY_MEMORY", "host_pinned device").split()))
+    generate_only = os.environ.get("LATENCY_GENERATE_ONLY", "0") == "1"
+    if min(sample_count, timeout_ms, repeats) <= 0 or warmup < 0:
+        raise ValueError("latency samples, timeout, repeats must be positive; warmup nonnegative")
+    if not 0 <= realtime_priority <= 99:
+        raise ValueError("LATENCY_REALTIME_PRIORITY must be 0–99")
+    if not memory_kinds or any(memory not in {"host_pinned", "device"} for memory in memory_kinds):
+        raise ValueError("LATENCY_MEMORY must contain host_pinned and/or device")
+    netdev = hardware["DEFAULT_DPDK_RX_NETDEV"]
+    clocks = sorted((Path("/sys/class/net") / netdev / "device/ptp").glob("ptp*"))
+    if len(clocks) != 1:
+        raise RuntimeError(f"expected one RX PHC for {netdev}, found {clocks}")
+    ptp = f"/dev/{clocks[0].name}"
+    configs = {}
+    for memory in memory_kinds:
+        for mode in ("direct", "indirect"):
+            path = output / f"{memory}-{mode}.yaml"
+            path.write_text(render_document(make_config(hardware, mode, memory, ptp)))
+            configs[memory, mode] = path
+    print(f"Results: {output}", flush=True)
+    if generate_only:
+        return 0
+    settings = {
+        "samples_per_size": sample_count, "warmup_per_size": warmup,
+        "repeats": repeats, "realtime_priority": realtime_priority,
+        "timeout_ms": timeout_ms,
+        "ptp_device": ptp, "memory": memory_kinds,
+    }
+    (output / "settings.json").write_text(json.dumps(settings, indent=2) + "\n")
+    binary = build_dir / "examples/daqiri_bench_raw_latency"
+    validator = build_dir / "tools/daqiri_config_validate"
+    for config in configs.values():
+        subprocess.run([str(validator), str(config)], check=True)
+    env = dict(os.environ, CUDA_VISIBLE_DEVICES=hardware["DEFAULT_GPU_UUID"])
+    env["LD_LIBRARY_PATH"] = str(build_dir / "src") + ":" + env.get("LD_LIBRARY_PATH", "")
+    summaries = []
+    uncertainties = []
+    # Alternate modes between repetitions to reduce ordering bias.
+    for rep in range(1, repeats + 1):
+        for memory in memory_kinds:
+            for mode in (("direct", "indirect") if rep % 2 else ("indirect", "direct")):
+                label = f"{memory}-{mode}-r{rep}"
+                print(f"Running {label}", flush=True)
+                before = nic_counters(netdev)
+                command = [str(binary), str(configs[memory, mode]), "--samples", str(sample_count),
+                           "--warmup", str(warmup), "--timeout-ms", str(timeout_ms),
+                           "--csv", str(output / f"{label}.csv")]
+                if realtime_priority:
+                    command += ["--realtime-priority", str(realtime_priority)]
+                with (output / f"{label}.stdout").open("w") as stdout, \
+                     (output / f"{label}.stderr").open("w") as stderr:
+                    subprocess.run(command, env=env, stdout=stdout, stderr=stderr,
+                                   check=True, timeout=600)
+                after = nic_counters(netdev)
+                delta = {key: after[key] - value for key, value in before.items()}
+                (output / f"{label}-nic.json").write_text(json.dumps(delta, indent=2) + "\n")
+                if delta.get("rx_packets_phy", 0) < len(SIZES) * sample_count:
+                    raise RuntimeError(f"{label}: physical RX counters do not confirm cable transit")
+                if any(value for key, value in delta.items()
+                       if key not in {"rx_packets_phy", "tx_packets_phy"}):
+                    raise RuntimeError(f"{label}: NIC receive errors: {delta}")
+                stdout = (output / f"{label}.stdout").read_text()
+                stderr = (output / f"{label}.stderr").read_text()
+                if "warning:" in stderr.lower():
+                    raise RuntimeError(f"{label}: benchmark warning; inspect stderr")
+                errors = re.findall(
+                    r"\b(?:cqe_errors|app_ring_full_drops|handoff_full_drops|"
+                    r"direct_poll_conflicts|direct_conflicts|direct_no_space)=(\d+)", stderr)
+                if len(errors) < 6 or any(int(value) for value in errors):
+                    raise RuntimeError(f"{label}: missing or nonzero engine error counters")
+                summary_lines = [line for line in stdout.splitlines()
+                                 if line.startswith("packet_size,") or re.match(r"^\d+,", line)]
+                rows = list(csv.DictReader(summary_lines))
+                if (len(rows) != len(SIZES)
+                    or {int(row["packet_size"]) for row in rows} != set(SIZES)
+                    or any(int(row["timeouts"]) or int(row["samples"]) != sample_count
+                           for row in rows)):
+                    raise RuntimeError(f"{label}: incomplete sweep or sample timeouts")
+                calibration = re.search(r"maximum measured uncertainty \+/- (\d+) ns", stderr)
+                if calibration is None:
+                    raise RuntimeError(f"{label}: missing clock calibration uncertainty")
+                uncertainty = int(calibration[1])
+                uncertainties.append(uncertainty)
+                with (output / f"{label}.csv").open() as stream:
+                    samples = list(csv.DictReader(stream))
+                for size in SIZES:
+                    selected = [row for row in samples if int(row["packet_size"]) == size]
+                    if len(selected) != sample_count:
+                        raise RuntimeError(f"{label}: incomplete samples for frame size {size}")
+                    item = dict(memory=memory, mode=mode, rep=rep, frame_bytes=size,
+                                clock_uncertainty_ns=uncertainty)
+                    for metric in METRICS:
+                        values = [int(row[metric]) for row in selected]
+                        if min(values) < 0:
+                            raise RuntimeError(f"{label}: negative {metric}")
+                        for quantile in (50, 99):
+                            item[f"{metric}_p{quantile}"] = percentile(values, quantile / 100)
+                    summaries.append(item)
+    with (output / "summary.csv").open("w") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(summaries[0]))
+        writer.writeheader()
+        writer.writerows(summaries)
+    with (output / "comparison.csv").open("w") as stream:
+        fields = [key for key in summaries[0] if key != "rep"]
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        for memory, mode in configs:
+            for size in SIZES:
+                selected = [row for row in summaries if row["memory"] == memory
+                            and row["mode"] == mode and row["frame_bytes"] == size]
+                item = dict(memory=memory, mode=mode, frame_bytes=size)
+                for key in fields[3:]:
+                    item[key] = (max(row[key] for row in selected) if key == "clock_uncertainty_ns"
+                                 else statistics.mean(row[key] for row in selected))
+                writer.writerow(item)
+    settings["max_clock_uncertainty_ns"] = max(uncertainties)
+    (output / "settings.json").write_text(json.dumps(settings, indent=2) + "\n")
+    return 0
+
+
+sys.exit(main())
+LATENCY_PY
+  latency_status=$?
+  [[ "$latency_status" -eq 0 ]] || exit "$latency_status"
+  echo "Results in: $OUT_DIR"
+  [[ "${LATENCY_GENERATE_ONLY:-0}" == "1" ]] || echo "CSV: $OUT_DIR/comparison.csv"
+  exit 0
+fi
+
 CSV="$OUT_DIR/runs.csv"
 # `pairs` = number of concurrent client/server process pairs (socket backends sweep
 # this; raw/RDMA are always 1). `gbps` is aggregate App TX, `rx_gbps` aggregate App RX
@@ -182,9 +457,6 @@ CSV_HEADER+=",cpu_master_core,cpu_tx_core,cpu_rx_core"
 CSV_HEADER+=",cpu_master_pct,cpu_tx_pct,cpu_rx_pct,gpu_sm_pct,gpu_mem_pct"
 CSV_HEADER+=",post_process_gemm_dim,post_process_sync"
 echo "$CSV_HEADER" > "$CSV"
-
-# Capture slow-moving environment state once per result set.
-"$SCRIPT_DIR/bench_capture_environment.sh" "$OUT_DIR"
 
 RUN_SECONDS="${RUN_SECONDS:-30}"
 if [[ ! "$RUN_SECONDS" =~ ^[0-9]+$ || "$RUN_SECONDS" -lt 1 ]]; then

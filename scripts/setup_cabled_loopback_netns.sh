@@ -37,7 +37,6 @@ SERVER_NS=dq_wire_server
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 HARDWARE_RESOLVER="$SCRIPT_DIR/resolve_benchmark_hardware.py"
-HARDWARE_DEFAULTS="$REPO_ROOT/examples/cabled_loopback_hardware.yaml"
 PLATFORM=""
 
 # Leave CLIENT_IF / SERVER_IF blank to AUTO-DETECT the cabled data-plane ports
@@ -92,7 +91,7 @@ autodetect_ports() {
   # resolver sees the same live inventory used by the benchmark harness.
   if [[ -z "$CLIENT_IF" || -z "$SERVER_IF" ]]; then
     local resolved
-    resolved="$(python3 "$HARDWARE_RESOLVER" --defaults "$HARDWARE_DEFAULTS" \
+    resolved="$(python3 "$HARDWARE_RESOLVER" \
       --platform "$PLATFORM" --format shell)" || exit 1
     eval "$resolved"
     [[ -z "$CLIENT_IF" ]] && CLIENT_IF="$DEFAULT_DPDK_TX_NETDEV"

@@ -910,14 +910,7 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
         ```
 
         The corresponding queue, worker, and socket-pair assignments are kept in
-        `examples/cabled_loopback_hardware.yaml`.
-
-        On the reference Thor DevKit, apply and verify the remaining persistent
-        NIC and discrete-GPU settings from the repository root:
-
-        ```bash
-        sudo scripts/tune_igx_thor_cabled_loopback.sh
-        ```
+        `scripts/resolve_benchmark_hardware.py`.
 
     ??? info "Show explanation"
 

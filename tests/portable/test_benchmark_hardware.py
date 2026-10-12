@@ -4,15 +4,19 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 import pytest
 
+from scripts.daqiri_config import load_document
+
 from scripts.resolve_benchmark_hardware import (
-    DEFAULTS_PATH,
+    PLATFORM_DEFAULTS,
+    RAW_TEMPLATE,
     Gpu,
     Port,
     ResolveError,
-    load_defaults,
+    fill_raw_template,
     resolve,
     select_platform,
     select_port,
@@ -29,8 +33,8 @@ def port(netdev: str, bdf: str, phys_port: str, carrier: bool = True) -> Port:
     )
 
 
-def test_checked_in_hardware_defaults_are_complete() -> None:
-    platforms = load_defaults(DEFAULTS_PATH)
+def test_platform_defaults_match_report_settings() -> None:
+    platforms = PLATFORM_DEFAULTS
     assert set(platforms) == {"dgx-spark", "igx-thor"}
     assert platforms["dgx-spark"]["dpdk_memory_kind"] == "host_pinned"
     assert platforms["igx-thor"]["dpdk_memory_kind"] == "device"
@@ -41,7 +45,7 @@ def test_checked_in_hardware_defaults_are_complete() -> None:
 
 
 def test_platform_selection_is_explicit() -> None:
-    platforms = load_defaults(DEFAULTS_PATH)
+    platforms = PLATFORM_DEFAULTS
     assert select_platform("dgx-spark", platforms) == "dgx-spark"
     assert select_platform("igx-thor", platforms) == "igx-thor"
     with pytest.raises(ResolveError, match="unknown platform"):
@@ -79,7 +83,7 @@ def test_thor_resolution_selects_discrete_gpu_and_device_memory(
     monkeypatch.delenv("DPDK_TX_PCI", raising=False)
     monkeypatch.delenv("DPDK_RX_PCI", raising=False)
     result = resolve(
-        load_defaults(DEFAULTS_PATH),
+        PLATFORM_DEFAULTS,
         "igx-thor",
         [
             Gpu("NVIDIA Thor", "GPU-INTEGRATED"),
@@ -107,8 +111,77 @@ def test_thor_resolution_selects_discrete_gpu_and_device_memory(
     assert result["DEFAULT_SOCKET_HEADLINE_PAIRS"] == "3"
 
 
-def test_defaults_loader_rejects_incomplete_document(tmp_path: Path) -> None:
-    path = tmp_path / "defaults.yaml"
-    path.write_text("version: 1\nplatforms:\n  broken: {}\n", encoding="utf-8")
-    with pytest.raises(ResolveError, match="is missing"):
-        load_defaults(path)
+@pytest.mark.parametrize("engine", ("dpdk", "ibverbs"))
+@pytest.mark.parametrize("platform,gpu_name", (
+    ("igx-thor", "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition"),
+    ("dgx-spark", "NVIDIA GB10"),
+))
+def test_fill_existing_raw_template(tmp_path, monkeypatch, platform, gpu_name, engine):
+    for name in ("DAQIRI_GPU_UUID", "DPDK_TX_PCI", "DPDK_RX_PCI"):
+        monkeypatch.delenv(name, raising=False)
+    source = RAW_TEMPLATE.read_text()
+    original = load_document(RAW_TEMPLATE)
+    path = tmp_path / "raw.yaml"
+    path.write_text(source)
+    values = resolve(
+        PLATFORM_DEFAULTS, platform, [Gpu(gpu_name, "GPU-TEST")],
+        [port("tx", "0004:03:00.0", "p0"), port("rx", "0004:03:00.1", "p1")],
+        skip_nic=False,
+    )
+    fill_raw_template(path, values, engine)
+    document = load_document(path)
+    cfg = document["daqiri"]["cfg"]
+    assert cfg["engine"] == engine
+    assert cfg["master_core"] == values["DEFAULT_MASTER_CORE"]
+    assert cfg["interfaces"][0]["address"] == "0004:03:00.0"
+    assert cfg["interfaces"][1]["address"] == "0004:03:00.1"
+    assert document["bench_tx"][0]["eth_dst_addr"] == values["DEFAULT_ETH_DST_ADDR"]
+    assert document["bench_tx"][0]["ip_src_addr"] == "192.0.2.1"
+    assert document["bench_tx"][0]["payload_size"] == original["bench_tx"][0]["payload_size"]
+    assert document["bench_tx"][0]["header_size"] == original["bench_tx"][0]["header_size"]
+    assert cfg["memory_regions"][0]["buf_size"] == original["daqiri"]["cfg"]["memory_regions"][0]["buf_size"]
+    assert cfg["memory_regions"][0]["kind"] == values[f"DEFAULT_{engine.upper()}_MEMORY_KIND"]
+    for index, direction in enumerate(("tx", "rx")):
+        queue = cfg["interfaces"][index][direction]["queues"][0]
+        assert queue["cpu_core"] == values[f"DEFAULT_DPDK_{direction.upper()}_QUEUE_CORE"]
+        assert document[f"bench_{direction}"][0]["cpu_core"] == values[f"DEFAULT_DPDK_{direction.upper()}_WORKER_CORE"]
+        if engine == "ibverbs":
+            assert queue["batch_size"] == values["DEFAULT_IBVERBS_BATCH_SIZE"]
+    if engine == "ibverbs":
+        assert cfg["interfaces"][1]["rx"]["flows"][0]["id"] > 0
+
+
+def test_fill_invalid_template_leaves_file_unchanged(tmp_path: Path) -> None:
+    path = tmp_path / "invalid.yaml"
+    source = "daqiri: {}\n"
+    path.write_text(source)
+    with pytest.raises(ResolveError, match="cannot fill raw TX/RX template"):
+        fill_raw_template(path, {}, "dpdk")
+    assert path.read_text() == source
+
+
+@pytest.mark.parametrize("arguments,message", (
+    (["--payload-size"], "--payload-size requires a positive integer"),
+    (["--payload-size", "0"], "--payload-size requires a positive integer"),
+    (["--pairs", "abc"], "--pairs requires a positive integer"),
+    (["ibverbs", "smoke", "--pairs", "2"], "--pairs is supported only for socket backends"),
+    (["ibverbs", "latency", "--payload-size", "64"], "--payload-size does not apply to latency mode"),
+))
+def test_harness_rejects_invalid_selections_before_hardware_discovery(arguments, message):
+    result = subprocess.run(
+        ["bash", str(RAW_TEMPLATE.parent / "run_cabled_loopback_bench.sh"),
+         "--platform", "igx-thor", *arguments],
+        capture_output=True, text=True,
+    )
+    assert result.returncode != 0
+    assert message in result.stderr
+
+
+def test_harness_help_does_not_require_hardware():
+    result = subprocess.run(
+        ["bash", str(RAW_TEMPLATE.parent / "run_cabled_loopback_bench.sh"), "--help"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0
+    assert "--payload-size" in result.stdout
+    assert "--pairs" in result.stdout

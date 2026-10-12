@@ -49,7 +49,7 @@ those variants the primary teaching examples.
     counters, use the Grafana compose stack described in
     [Watch live OpenTelemetry metrics in Grafana](../benchmarks/raw_benchmarking.md#watch-live-opentelemetry-metrics-in-grafana).
 
-    **Socket (RoCE / RDMA)** (`stream_type: "socket"`, `roce://` endpoints) runs on `daqiri_bench_rdma` (use `--mode {server,client,both}`). Use the memory kind appropriate for the platform; the shared cabled-loopback harness resolves it from `examples/cabled_loopback_hardware.yaml`.
+    **Socket (RoCE / RDMA)** (`stream_type: "socket"`, `roce://` endpoints) runs on `daqiri_bench_rdma` (use `--mode {server,client,both}`). Use the memory kind appropriate for the platform; the shared cabled-loopback harness resolves it from `scripts/resolve_benchmark_hardware.py`.
 
     - **Generic** (template, replace IPs): [`daqiri_bench_rdma_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx.yaml).
     - **Same-host cabled loopback or cross-host**: use the generic RoCE example above to understand the client/server configuration, then adapt endpoint addresses, cores, memory, and per-host roles. Generate concrete files with `socket-pair --transport roce --role both`; `examples/run_cabled_loopback_bench.sh` uses this path for its namespace sweep. See [configuration generation](../config-generation.md#generate-udp-tcp-or-roce-roles) and [Socket and RDMA Benchmarking](../benchmarks/socket_benchmarking.md#run-the-rdma-roce-benchmark).
@@ -63,7 +63,7 @@ those variants the primary teaching examples.
 ??? question "I want to measure direct-polling packet latency"
     Use [`daqiri_bench_raw_latency_ibverbs.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_latency_ibverbs.yaml) with `daqiri_bench_raw_latency`. It sweeps one outstanding packet at a time from 64 through 8192 L2 bytes, using powers of two, with both queues in caller-driven `poll_mode: direct`.
 
-    The benchmark reports direct `send_tx_burst()` call-to-return time, submit-to-hardware-RX time, hardware-RX-to-`get_rx_burst()` return time, and total submit-to-application time. It requires a physical loopback path, raw `ibverbs`, RX hardware timestamps, host-pinned buffers, and PTP synchronization between the NIC and `CLOCK_REALTIME`. See [Direct-polling latency sweep](../benchmarks/raw_benchmarking.md#direct-polling-latency-sweep) for the measurement boundaries and run command.
+    The benchmark reports `send_tx_burst()` call-to-return time, submit-to-hardware-RX time, hardware-RX-to-`get_rx_burst()` return time, and total submit-to-application time. It supports host-pinned and GPU buffers; set `bench_latency.ptp_device` to calibrate the NIC clock against `CLOCK_REALTIME`. See [Direct-polling latency sweep](../benchmarks/raw_benchmarking.md#direct-polling-latency-sweep) for the measurement boundaries and the runner that compares direct and indirect polling.
 
 ??? question "2. I have out-of-order UDP packets that need to be reordered on the GPU"
     DAQIRI's reorder pipeline places packet payloads at the correct offset in a GPU buffer, so a downstream consumer sees a fully ordered stream. Software reorder uses a CUDA kernel and remains the default. On ConnectX-7 or newer hardware, the ibverbs engine can instead use the flex parser for first-DMA placement when the sequence value cycles over a finite ring (`reorder_engine: hw`, `cyclic_sequence: true`). Configs run on `daqiri_bench_raw_reorder_seq` unless 2.4 applies. Sub-questions:

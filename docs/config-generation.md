@@ -178,9 +178,22 @@ python3 scripts/gen_daqiri_config.py socket-pair \
 ```
 
 `examples/run_cabled_loopback_bench.sh` uses these profiles directly for its
-namespace and benchmark matrix. It loads reviewable platform defaults from
-`examples/cabled_loopback_hardware.yaml`, resolves live NIC and GPU identities,
-and does not maintain or mutate platform-specific base YAMLs.
+namespace and benchmark matrix. `scripts/resolve_benchmark_hardware.py` supplies
+platform defaults and resolves live NIC and GPU identities. For a manual raw
+benchmark, fill the existing generic TX/RX template in place:
+
+```bash
+hardware=$(python3 scripts/resolve_benchmark_hardware.py --platform igx-thor \
+  --engine ibverbs --write-config --format shell)
+eval "$hardware"
+CUDA_VISIBLE_DEVICES="$DEFAULT_GPU_UUID" ./build/examples/daqiri_bench_raw_gpudirect \
+  examples/daqiri_bench_raw_tx_rx.yaml --seconds 30
+```
+
+`--write-config` replaces the template's PCI addresses, CPU placement, memory
+kind, and destination MAC; raw header IP placeholders become `192.0.2.1` and
+`192.0.2.2`. Pass a path after `--write-config` to fill a copy instead. The matrix
+runner continues to generate each cell's configs without editing the template.
 
 ## Render any DAQIRI configuration
 
@@ -274,9 +287,14 @@ RUN_SECONDS=10 examples/run_cabled_loopback_bench.sh --platform igx-thor dpdk sm
 # dq_wire_client / dq_wire_server namespaces
 sudo scripts/setup_cabled_loopback_netns.sh --platform igx-thor up
 RUN_SECONDS=10 examples/run_cabled_loopback_bench.sh --platform igx-thor rdma smoke
-RUN_SECONDS=10 PAIRS_OVERRIDE=1 examples/run_cabled_loopback_bench.sh --platform igx-thor socket-udp smoke
-RUN_SECONDS=10 PAIRS_OVERRIDE=1 examples/run_cabled_loopback_bench.sh --platform igx-thor socket-tcp smoke
+RUN_SECONDS=10 examples/run_cabled_loopback_bench.sh --platform igx-thor --pairs 1 socket-udp smoke
+RUN_SECONDS=10 examples/run_cabled_loopback_bench.sh --platform igx-thor --pairs 1 socket-tcp smoke
 ```
+
+Use `--payload-size 8000` to select a payload/message size and `--pairs 3` to
+select concurrent socket pairs. Repeat either flag to select a sweep; flags may
+appear before or after the engine/mode and take precedence over the corresponding
+environment overrides. Run the harness with `--help` for usage.
 
 Finally, exercise every raw multi-queue topology at one payload:
 

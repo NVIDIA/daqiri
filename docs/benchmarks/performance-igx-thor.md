@@ -76,6 +76,59 @@ when an unpaced run is already loss-free. In the small-packet rate sweeps,
 higher offered rates introduced drops and sometimes reduced delivered
 throughput. The 1024-byte and larger results above are unpaced.
 
+## Raw ibverbs latency
+
+Measured on October 12, 2026, with one packet outstanding at a time on the same
+p0→p1 cable. Each entry is
+**p50 / p99 in µs**, averaged across three independent runs of 10,000 measured
+packets per frame size after 1,000 warmup packets. Frame sizes are L2 bytes
+excluding FCS, rather than the payload sizes used in the throughput tables.
+
+The application runs on isolated CPU 8 with `SCHED_FIFO` priority 90 and locked
+memory. Direct TX/RX runs in that thread; indirect TX/RX adds workers on CPUs 9
+and 10, with both queues configured for batch size 1. GPU buffers reside on the
+discrete RTX PRO 6000. Packet preparation and received-packet identity copies
+are outside the measured interval, which ends when `get_rx_burst()` returns.
+
+### Application send→receive
+
+Measured from immediately before `send_tx_burst()` to the matching
+`get_rx_burst()` return; this includes TX submission, NIC/cable transit, and
+RX delivery.
+
+| L2 frame | Host-pinned direct | Host-pinned indirect | GPU direct | GPU indirect |
+| -------: | -----------------: | -------------------: | ---------: | -----------: |
+| 64 B | 2.43 / 3.03 | 5.11 / 5.77 | 2.70 / 3.12 | 4.65 / 4.95 |
+| 128 B | 2.45 / 3.05 | 5.13 / 5.77 | 2.73 / 2.96 | 4.68 / 4.92 |
+| 256 B | 3.28 / 3.98 | 5.18 / 5.82 | 2.76 / 3.00 | 4.71 / 4.97 |
+| 512 B | 3.33 / 4.01 | 5.23 / 5.84 | 2.79 / 3.05 | 4.73 / 4.97 |
+| 1024 B | 3.40 / 4.08 | 5.28 / 5.90 | 2.84 / 3.18 | 4.78 / 5.02 |
+| 2048 B | 3.57 / 4.21 | 5.38 / 6.02 | 2.98 / 3.40 | 4.85 / 5.14 |
+| 4096 B | 3.77 / 4.36 | 5.56 / 6.16 | 3.13 / 3.55 | 5.00 / 5.26 |
+| 8192 B | 4.25 / 4.85 | 6.06 / 6.68 | 3.43 / 3.76 | 5.31 / 5.56 |
+
+Direct polling lowers median application latency at every tested frame size.
+With GPU buffers, the median is 2.70–3.43 µs for direct polling and
+4.65–5.31 µs for indirect polling.
+
+### NIC receive→application
+
+Measured from the RX hardware timestamp to `get_rx_burst()` return.
+PHC/system cross-timestamp calibration reported a maximum uncertainty of
+**±0.782 µs**; these values provide an approximate breakdown. Application
+send→receive timing above uses only the system clock.
+
+| Memory | L2 frame | Direct p50 / p99 (µs) | Indirect p50 / p99 (µs) |
+| ------ | -------: | --------------------: | ----------------------: |
+| Host-pinned | 64 B | 1.20 / 1.75 | 2.00 / 2.40 |
+| Host-pinned | 8192 B | 1.87 / 2.22 | 2.57 / 2.86 |
+| GPU | 64 B | 1.09 / 1.30 | 1.91 / 2.07 |
+| GPU | 8192 B | 1.60 / 1.88 | 2.34 / 2.49 |
+
+All measured samples completed without timeouts, CQ errors, queue handoff
+drops, or NIC receive discards. Physical RX counter deltas confirmed cable
+transit for every run.
+
 ## Receive throughput with GPU workloads
 
 Each workload runs on the actual received data after DAQIRI assembles the raw
@@ -149,3 +202,47 @@ deltas confirm traffic crosses the cable.
 
 For 1000-byte messages, we report the highest paced TX results without drops
 across all three repeat runs.
+
+## Reproduce these Results
+
+Use the [project container](../getting-started.md#run-a-benchmark), the test-system
+settings above, and a 200 GbE p0↔p1 cable. Configure the host using the individual
+steps in [System Configuration](../tutorials/system_configuration.md).
+
+Run these commands from the repository root as root inside the privileged
+container with all GPUs and host hugepages passed through; set `DAQIRI_BUILD_DIR`
+to your Release build. The runners save configs, logs, counters, and CSVs under
+`bench-results/`.
+
+```bash
+export DAQIRI_BUILD_DIR="$PWD/build-thor-perf" RUN_SECONDS=30 REPEATS=3
+export LD_LIBRARY_PATH="$DAQIRI_BUILD_DIR/src:${LD_LIBRARY_PATH:-}"
+bench=examples/run_cabled_loopback_bench.sh
+netns=scripts/setup_cabled_loopback_netns.sh
+
+# Raw throughput and GPU workloads.
+"$netns" --platform igx-thor down
+for engine in dpdk ibverbs; do
+  for workload in none fft gemm; do
+    WORKLOAD="$workload" FFT_LEN=1024 GEMM_DIM=1024 \
+      "$bench" --platform igx-thor "$engine" sweep
+  done
+done
+"$bench" --platform igx-thor ibverbs latency
+
+# RoCE, TCP, and UDP (separate client/server namespaces).
+"$netns" --platform igx-thor up
+for engine in rdma socket-tcp; do
+  "$bench" --platform igx-thor "$engine" sweep
+done
+# UDP: give new sockets an 8 MiB receive buffer to absorb bursts and avoid kernel drops.
+# rmem_default sets the default; rmem_max sets the allowed SO_RCVBUF limit.
+sysctl -w net.core.rmem_max=8388608 net.core.rmem_default=8388608
+"$bench" --platform igx-thor --payload-size 8000 socket-udp sweep
+for cell in '1 2.25' '2 1.75' '3 0.50'; do
+  read -r pairs cap <<< "$cell"
+  DROP_CURVE_TARGETS_OVERRIDE="$cap" "$bench" --platform igx-thor \
+    --payload-size 1000 --pairs "$pairs" socket-udp drop-curve-matrix
+done
+"$netns" --platform igx-thor down
+```

@@ -340,7 +340,7 @@ By default the application runs for 10 seconds and then exits. You can change th
 
 ### Direct-polling latency sweep
 
-`daqiri_bench_raw_latency` measures the caller-driven raw ibverbs path with one packet
+`daqiri_bench_raw_latency` measures the raw ibverbs path with one packet
 outstanding at a time. Its template, `daqiri_bench_raw_latency_ibverbs.yaml`, configures both TX
 and RX with `poll_mode: direct`, enables per-packet RX hardware timestamps, and uses host-pinned
 buffers by default. The benchmark also supports `huge` and `device` packet memory: packet setup and
@@ -385,6 +385,24 @@ The summary and optional per-sample CSV combine those points into these boundari
 | `tx_call_to_rx_hw_ns` | `t0` | `t2` | TX submission, NIC transmit, physical or hardware-loopback return, and NIC receive |
 | `rx_hw_to_app_ns` | `t2` | `t3` | CQ visibility, direct polling, and API return |
 | `tx_call_to_app_ns` | `t0` | `t3` | Complete measured application round trip |
+
+For indirect polling, set both queues to `poll_mode: indirect` and add `batch_size: 1`
+and a separate isolated `cpu_core` to each. The same timing boundaries then include TX worker
+handoff and RX worker delivery; TX call-to-return measures enqueue time. To generate resolved
+configs and compare both modes in host-pinned and GPU memory, run
+the existing benchmark harness inside the privileged project container as root:
+
+```bash
+REPEATS=3 examples/run_cabled_loopback_bench.sh --platform igx-thor ibverbs latency
+```
+
+Use `--platform dgx-spark` on Spark. Latency mode respects the harness's hardware and CPU
+overrides, calibrates against the RX port's PHC, and saves per-sample CSVs, logs, NIC counter
+deltas, calibration uncertainty, and mean per-run p50/p99 comparisons under `bench-results/`.
+Defaults are 10,000 measured samples and 1,000 warmup packets per frame size; override with
+`LATENCY_SAMPLES` and `LATENCY_WARMUP`. Set `LATENCY_GENERATE_ONLY=1` to prepare configs only,
+`LATENCY_MEMORY=host_pinned` to restrict memory placement, or `LATENCY_REALTIME_PRIORITY=0`
+to use normal scheduling.
 
 `tx_call_to_rx_hw_ns` is a loopback-ingress proxy, not an actual TX egress timestamp: DAQIRI does
 not currently expose a TX hardware timestamp, so this value also contains the cable and NIC RX
