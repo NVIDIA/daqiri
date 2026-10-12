@@ -6,8 +6,8 @@ hide:
 # Performance: IGX Thor
 
 This report covers single-host cabled-loopback receive performance on the
-NVIDIA IGX Thor Developer Kit. Rates are application throughput averaged across
-three independent 30-second runs.
+NVIDIA IGX Thor Developer Kit. Rates are application throughput, reported as
+mean ± sample standard deviation across three independent 30-second runs.
 
 ## Test system
 
@@ -29,8 +29,9 @@ and UDP use separate client and server network namespaces to force traffic
 across the cable. Only application rate is reported.
 
 Raw and RoCE results have no reported queue, completion, or NIC priority-buffer
-drops. Small raw packets use hardware pacing at the highest tested loss-free
-rate.
+drops. The UDP results have zero application packet loss, kernel receive
+errors, and NIC receive discards. Small raw packets use hardware pacing at the
+highest tested loss-free rate.
 
 ## Results summary
 
@@ -41,6 +42,7 @@ rate.
 | Socket / RoCE | 1 MiB | 1 queue | **194.016 ±0.086** |
 | Socket / TCP | 8000 B | 3 pairs | **47.212 ±2.114** |
 | Socket / TCP | 1 MiB | 3 pairs | **46.268 ±0.555** |
+| Socket / UDP | 8000 B | 3 pairs | **15.838 ±0.041** |
 
 ## Raw Ethernet throughput
 
@@ -57,14 +59,22 @@ approach the 200 GbE link ceiling at payloads of 1024 bytes and larger. Raw
 ibverbs provides approximately twice the DPDK application throughput at 64-
 and 256-byte payloads.
 
-### Small-packet pacing
+### Small-packet test settings
 
-| Engine | Payload | Pacer target | App <span class="unit">Gbps</span> |
-| ------ | ------: | -----------: | -------------------------------: |
-| DPDK | 256 B | 50 Gbps | 49.246 ±0.002 |
-| ibverbs | 256 B | 125 Gbps | **98.989 ±3.116** |
-| DPDK | 64 B | 20 Gbps | 19.703 ±0.001 |
-| ibverbs | 64 B | 65 Gbps | **39.085 ±0.166** |
+The 64- and 256-byte results above use TX pacing to avoid receive drops.
+The configured caps are test settings; compare engines using the measured
+application receive rates in the throughput table above.
+
+| Payload | DPDK TX cap | Raw ibverbs TX cap |
+| ------: | ----------: | -----------------: |
+| 256 B | 50 Gbps | 125 Gbps |
+| 64 B | 20 Gbps | 65 Gbps |
+
+An unpaced run measures receive throughput under saturation, but a run with
+drops does not establish a sustainable loss-free rate. Pacing is unnecessary
+when an unpaced run is already loss-free. In the small-packet rate sweeps,
+higher offered rates introduced drops and sometimes reduced delivered
+throughput. The 1024-byte and larger results above are unpaced.
 
 ## Receive throughput with GPU workloads
 
@@ -109,24 +119,37 @@ consume all six isolated CPUs. Native `iperf3` reached approximately 25.9 Gbps
 with one stream and 43.5 Gbps with eight streams, so DAQIRI matches or exceeds
 the native Linux TCP baseline on this system.
 
-TCP remains below the DGX Spark results. The two leading platform-level
-hypotheses are Thor's lower maximum CPU frequency and additional networking
-scheduler and interrupt overhead from the supported PREEMPT_RT kernel. The
-kernel contribution has not been isolated with an RT versus non-RT comparison.
+TCP results on the IGX Thor remain below the DGX Spark results. A single-core
+[CoreMark](https://github.com/eembc/coremark) comparison measured **26,243 ±24**
+iterations/s on IGX Thor (CPU 8) and **42,463 ±16** on DGX Spark (CPU 19). Both
+systems ran the same GCC 13.3 `-O2` binary pinned to one core; scores are the mean
+and sample standard deviation of three validated performance runs. Spark's
+**1.62×** higher score suggests that lower per-core CPU performance explains
+most of the roughly **2× TCP throughput gap**.
 
-## UDP status
+## UDP throughput
 
-The current UDP sweep is not accepted for publication because every tested
-configuration reports receive drops.
+The corrected UDP sweep uses an **8 MiB kernel receive buffer per socket**.
+The RX batch size is 32 datagrams. Each pair uses one client CPU and one server
+CPU, with the server's receive-I/O thread and application worker sharing its CPU.
 
-| Message size | Pairs | Delivered App <span class="unit">Gbps</span> | Kernel drops |
-| -----------: | ----: | -----------------------------------------: | -----------: |
-| 8000 B | 1 | 5.125 ±0.170 | 5,509,474 |
-| 8000 B | 2 | 10.492 ±0.052 | 2,903,770 |
-| 8000 B | 3 | **15.213 ±0.074** | 1,250,849 |
-| 1000 B | 1 | 1.835 ±0.118 | 869,061 |
-| 1000 B | 2 | 2.393 ±0.108 | 1,386,214 |
-| 1000 B | 3 | **2.523 ±0.158** | 1,081,302 |
+Every accepted repetition has matching sent and received packet counts, zero
+kernel UDP receive errors, and zero NIC receive-buffer or priority-buffer
+discards. Stable one-second `mlnx_perf` samples and directional PHY counter
+deltas confirm traffic crosses the cable.
 
-These rows will be replaced by paced, loss-free measurements before the UDP
-results are treated as final.
+| Message size | Pairs | TX cap per pair | Delivered App <span class="unit">Gbps</span> |
+| -----------: | ----: | --------------: | -----------------------------------------: |
+| 8000 B | 1 | Unpaced | 9.031 ±0.039 |
+| 8000 B | 2 | Unpaced | 11.936 ±0.393 |
+| 8000 B | 3 | Unpaced | **15.838 ±0.041** |
+| 1000 B | 1 | 2.25 Gbps | 1.918 ±0.005 |
+| 1000 B | 2 | 1.75 Gbps | 2.821 ±0.007 |
+| 1000 B | 3 | 0.50 Gbps | 1.500 (σ <0.001) |
+
+Receive rates are aggregate; TX caps apply per pair and may exceed the achieved
+send rate. All 1000-byte cases use the same paced sweep: 0.50–2.25 Gbps per pair
+in 0.25 Gbps steps. Rows show the highest caps that passed three 30-second runs
+without loss. Higher caps failed confirmation for two and three pairs with NIC
+receive-buffer drops, sometimes intermittently. These are validated operating
+points on the tested grid, not proven maximum rates.
