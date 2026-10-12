@@ -267,8 +267,8 @@ struct IbvRxQueue {
 
   // Backing memory region(s). The striding path uses the single mr_base/lkey;
   // the regular path scatters across `regions` (one data seg per region, in
-  // order -- for HDS, region 0 = CPU header (seg_len = split_boundary), region
-  // 1 = GPU payload).
+  // order). Scatter lengths are configured buf_size values; slot_size retains
+  // allocation padding. HDS is the two-region CPU-header/GPU-payload case.
   struct RxRegion {
     uint8_t* base = nullptr;
     uint32_t lkey = 0;

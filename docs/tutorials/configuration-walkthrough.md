@@ -373,6 +373,29 @@ The HDS bench runs on `daqiri_bench_raw_hds`:
 ./build/examples/daqiri_bench_raw_hds ./build/examples/daqiri_bench_raw_tx_rx_hds.yaml --seconds 10
 ```
 
+With `engine: "ibverbs"`, raw RX also supports three or four separate regions.
+For example, declare `Headers_CPU` (`kind: huge`, `buf_size: 42`), `Metadata_CPU`
+(`kind: huge`, `buf_size: 1000`), and `Payload_GPU` (`kind: device`, `buf_size: 4100`),
+then reference them in receive order:
+
+```yaml
+rx:
+  queues:
+  - name: "rx_split"
+    id: 0
+    cpu_core: <9>
+    batch_size: 1
+    memory_regions: [Headers_CPU, Metadata_CPU, Payload_GPU]
+```
+
+A 5142-byte frame arrives as 42 header bytes, 1000 CPU metadata bytes, and 4100
+GPU payload bytes. Padding used to align allocations does not move those boundaries.
+Shorter frames can leave later segments with zero length. Each multi-region RX
+queue uses a regular scatter RQ, even if `DAQIRI_IBV_STRIDING=1` is set. Raw ibverbs
+RX accepts at most four regions per queue; TX remains limited to two. See the
+[RX queue configuration](../api-reference/configuration.md#receive-configuration-rx)
+for the complete field reference.
+
 ### Hardware packet reordering
 
 For cyclic UDP sequence spaces on ConnectX-7 or newer NICs, DAQIRI can use the ibverbs engine's

@@ -279,6 +279,12 @@ region's recorded context only for the duration of the corresponding free.
 
 ### Header-Data Split (HDS)
 
+The raw ibverbs RX engine supports up to four separate memory regions per packet,
+including two CPU regions followed by a GPU region. Regions receive bytes in queue
+list order, with each split defined by the region's configured buffer size. Buffer
+alignment padding changes allocation strides, not packet boundaries. Short packets
+report zero length for any unused trailing segments.
+
 **Header-data split** is the canonical multi-segment configuration:
 headers go to CPU memory (segment 0), payload goes to GPU memory
 (segment 1). This keeps the GPU payload path zero-copy for downstream
