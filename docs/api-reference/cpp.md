@@ -97,7 +97,37 @@ allocation and CUDA context must remain alive until `shutdown()` completes. DAQI
 from the NIC but never frees, unpins, or unmaps it. Direct TCP/UDP sockets reject bindings because
 their configured regions are not packet pools. DPDK also rejects externally bound `huge` regions:
 EAL assumes ownership of pre-existing hugepage mappings during initialization and unmaps them at
-cleanup. External `huge` regions remain supported by ibverbs/RDMA.
+cleanup. External `huge` regions remain supported by ibverbs/RDMA. The `gpunetio` engine does not
+support bindings yet: `daqiri_init()` with bindings returns `Status::NOT_SUPPORTED`, and
+`get_memory_region_requirements()` cannot report requirements for it.
+
+### gpunetio engine notes
+
+The experimental raw `gpunetio` engine (`engine: "gpunetio"`, built with `gpunetio` in
+`DAQIRI_ENGINE`, DOCA 3.6 or newer) drives the NIC queues with CUDA kernels. Applications use the
+same burst API as the other raw engines, with these differences:
+
+- **Engine selection.** It is chosen only by an explicit `engine: "gpunetio"`, never by default.
+  The TX queue option `gpunetio.tx_kernel` (`persistent`, the default, or `per_burst`) selects how
+  a TX queue's packets reach the GPU kernel.
+- **Memory.** Each queue needs a memory region of its own, of kind `device` or `host_pinned`; a
+  region shared with another queue, including between TX queues, is rejected at validation. RX
+  regions are rings of power-of-two slots up to 8 kB and at least `batch_size` slots. Packets
+  larger than a slot stop the queue.
+- **Burst ownership.** RX buffers go back to the NIC only when the application frees the burst,
+  so free RX bursts promptly. A TX burst from `get_tx_packet_burst()` that is not sent can be
+  returned with `free_all_packets()` in any order relative to other bursts; its slots become
+  reusable once the earlier slots have completed.
+- **GPU lifetime.** The RX and persistent TX kernels run until `shutdown()`, so `cudaFree()` and
+  `cudaDeviceSynchronize()` in the application block until then (`cudaMalloc()`, `cudaMemcpy()`
+  and stream work do not). Set `CUDA_MODULE_LOADING=EAGER`, or load the application's own kernels
+  with `cudaFuncGetAttributes()` before `daqiri_init()`: with lazy loading, the first launch of a
+  kernel after initialization waits for the resident kernels to exit. The GPU must be able to run
+  all the resident blocks (one per RX queue and per persistent TX queue, plus room for the
+  `per_burst` launches) at once, or `daqiri_init()` fails.
+- **Not supported.** Caller-owned memory regions, software loopback, TX offloads, pacing,
+  `accurate_send`, hardware timestamps, dynamic flows, flex items, reorder, and flow matches other
+  than IPv4/UDP or Ethernet. Per-packet flow IDs read `0`.
 
 If GPU RX `reorder_configs` are configured for Raw Ethernet (`stream_type: "raw"`), set
 one CUDA stream per GPU reorder plan before pulling reordered bursts. CPU reorder configs do not use a

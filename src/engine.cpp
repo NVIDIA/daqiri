@@ -1244,6 +1244,17 @@ static bool validate_gpunetio_network_config(const NetworkConfig& config) {
     }
     for (const auto& txq : intf.tx_.queues_) {
       check_queue(txq.common_, "TX");
+      // A TX queue hands out the packet slots of its whole region, so another queue on the same
+      // region would be given the same packet addresses
+      for (const auto& mr_name : txq.common_.mrs_) {
+        if (mr_queues[mr_name] > 1) {
+          DAQIRI_LOG_ERROR(
+              "TX queue '{}' shares memory region '{}' with another queue; a gpunetio TX queue "
+              "needs a region of its own",
+              txq.common_.name_, mr_name);
+          pass = false;
+        }
+      }
       if (!txq.common_.offloads_.empty()) {
         DAQIRI_LOG_ERROR("TX queue '{}' requests offloads; gpunetio supports none",
                          txq.common_.name_);

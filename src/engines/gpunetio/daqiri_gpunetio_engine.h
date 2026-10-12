@@ -49,6 +49,10 @@ class GpunetioEngine : public Engine {
   void run() override;
   void shutdown() override;
   void print_stats() override;
+  // The queues own their memory regions: caller-owned regions are not supported yet
+  bool supports_external_memory_regions() const override {
+    return false;
+  }
   Status get_mac_addr(int port, char* mac) override;
 
   // Packet accessors

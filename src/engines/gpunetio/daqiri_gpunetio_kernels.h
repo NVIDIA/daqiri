@@ -122,6 +122,13 @@ uint32_t rx_kernel_threads();
 // so call it before the first resident kernel starts.
 cudaError_t load_kernels();
 
+// Checks that the resident kernels of the engine on the current GPU can run together: rx_blocks
+// RX blocks and tx_persistent_blocks persistent TX blocks for good, with room left for
+// tx_burst_blocks blocks of the per_burst TX kernel. Returns cudaErrorLaunchOutOfResources if not,
+// as a resident block that finds no room would wait until shutdown and leave its queue unserved.
+cudaError_t check_gpu_capacity(uint32_t rx_blocks, uint32_t tx_persistent_blocks,
+                               uint32_t tx_burst_blocks);
+
 // The resident kernels run one block per queue, block i serving queues[i]. queues holds
 // num_queues entries in memory the GPU reads, and stays valid while the kernel runs. The launch
 // fails with cudaErrorLaunchOutOfResources if the GPU can't run all the blocks at once.

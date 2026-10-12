@@ -32,7 +32,7 @@ CMake options (full table in `docs/tutorials/bare-metal-cmake-build.md`):
 - `DAQIRI_ENABLE_S3` — enable AWS SDK-backed asynchronous raw packet writes to S3 (off by default).
 - `DAQIRI_PREFER_SYSTEM_YAML_CPP` — prefer system `yaml-cpp` over the vendored `third_party/yaml-cpp` submodule (off by default; keep off when a conda/miniforge env is on `PATH`).
 
-Package versions use CalVer (`YYYY.MM.PATCH`) from the top-level `VERSION` file. CMake reads that value into `project(daqiri VERSION ...)`, generates `daqiri/version.h`, feeds pkg-config/CMake package metadata, and exposes the same value in Python. `DAQIRI_ABI_VERSION` is separate and currently `2`; do not tie ABI policy to the CalVer year.
+Package versions use CalVer (`YYYY.MM.PATCH`) from the top-level `VERSION` file. CMake reads that value into `project(daqiri VERSION ...)`, generates `daqiri/version.h`, feeds pkg-config/CMake package metadata, and exposes the same value in Python. `DAQIRI_ABI_VERSION` is separate and currently `3`; do not tie ABI policy to the CalVer year.
 
 CUDA architectures default to `80;90` (A100, H100), with `121` (GB10) added when configuring with CUDA Toolkit 13.0 or newer. Override `CMAKE_CUDA_ARCHITECTURES` when targeting other GPUs.
 

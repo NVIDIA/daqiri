@@ -830,15 +830,16 @@ Status daqiri_init(NetworkConfig& config, const MemoryRegionBindings& bindings) 
     }
   }
 
-  if (config.common_.engine_type == EngineType::GPUNETIO && !bindings.empty()) {
-    DAQIRI_LOG_ERROR("The gpunetio engine does not support caller-owned memory regions yet");
-    return Status::NOT_SUPPORTED;
-  }
-
   EngineFactory::set_engine_type(config.common_.engine_type);
 
   auto engine = &(EngineFactory::get_active_engine());
 
+  if (!bindings.empty() && !engine->supports_external_memory_regions()) {
+    DAQIRI_LOG_ERROR("The selected engine does not support caller-owned memory regions");
+    reset_active_engine();
+    metrics::shutdown();
+    return Status::NOT_SUPPORTED;
+  }
   if (engine->set_external_memory_regions(config, bindings) != Status::SUCCESS) {
     reset_active_engine();
     metrics::shutdown();
@@ -987,10 +988,6 @@ Status get_memory_region_requirements(const NetworkConfig& config,
   const EngineType engine = effective_engine_type(config);
   if (engine == EngineType::SOCKET && config.common_.protocol != SocketProtocol::ROCE) {
     DAQIRI_LOG_ERROR("Direct TCP/UDP socket streams do not use configured memory-region pools");
-    return Status::NOT_SUPPORTED;
-  }
-  if (engine == EngineType::GPUNETIO) {
-    DAQIRI_LOG_ERROR("The gpunetio engine does not support caller-owned memory regions yet");
     return Status::NOT_SUPPORTED;
   }
 

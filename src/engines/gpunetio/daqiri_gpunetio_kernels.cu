@@ -496,6 +496,27 @@ cudaError_t check_resident(Kernel kernel, uint32_t threads, uint32_t blocks) {
                                                        : cudaErrorLaunchOutOfResources;
 }
 
+// Blocks of the other kernels that share the GPU take part of every SM: a kernel that fits one SM
+// k times uses 1/k of it per block, so the blocks of all the kernels fit if these fractions add up
+// to at most the SM count
+template <typename Kernel>
+cudaError_t add_sm_share(Kernel kernel, uint32_t threads, uint32_t blocks, double* sms_needed) {
+  if (blocks == 0) {
+    return cudaSuccess;
+  }
+  int per_sm = 0;
+  const cudaError_t err =
+      cudaOccupancyMaxActiveBlocksPerMultiprocessor(&per_sm, kernel, threads, 0);
+  if (err != cudaSuccess) {
+    return err;
+  }
+  if (per_sm <= 0) {
+    return cudaErrorLaunchOutOfResources;
+  }
+  *sms_needed += static_cast<double>(blocks) / per_sm;
+  return cudaSuccess;
+}
+
 }  // namespace
 
 uint32_t rx_kernel_threads() {
@@ -512,6 +533,30 @@ cudaError_t load_kernels() {
     err = cudaFuncGetAttributes(&attr, tx_burst_kernel);
   }
   return err;
+}
+
+cudaError_t check_gpu_capacity(uint32_t rx_blocks, uint32_t tx_persistent_blocks,
+                               uint32_t tx_burst_blocks) {
+  int device = 0;
+  int sms = 0;
+  cudaError_t err = cudaGetDevice(&device);
+  if (err == cudaSuccess) {
+    err = cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, device);
+  }
+  double needed = 0;
+  if (err == cudaSuccess) {
+    err = add_sm_share(rx_kernel, RX_THREADS, rx_blocks, &needed);
+  }
+  if (err == cudaSuccess) {
+    err = add_sm_share(tx_persistent_kernel, TX_THREADS, tx_persistent_blocks, &needed);
+  }
+  if (err == cudaSuccess) {
+    err = add_sm_share(tx_burst_kernel, TX_THREADS, tx_burst_blocks, &needed);
+  }
+  if (err != cudaSuccess) {
+    return err;
+  }
+  return needed <= static_cast<double>(sms) ? cudaSuccess : cudaErrorLaunchOutOfResources;
 }
 
 cudaError_t launch_rx_kernel(const RxKernelArgs* queues, uint32_t num_queues, cudaStream_t stream) {

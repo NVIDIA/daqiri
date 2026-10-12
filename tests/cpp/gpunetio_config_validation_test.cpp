@@ -103,6 +103,10 @@ const std::vector<UnsupportedCase> kUnsupportedCases = {
      "            ecpri: {}\n"},
     // The region of an RX queue is its receive ring
     {"shared RX region", "          - \"DATA_RX\"\n", "          - \"DATA_TX\"\n"},
+    // A TX queue hands out the packet slots of its whole region
+    {"shared TX region", "          - \"DATA_TX\"\n      rx:\n",
+     "          - \"DATA_TX\"\n        - name: \"tx_q_1\"\n          id: 1\n          cpu_core: 3\n"
+     "          batch_size: 256\n          memory_regions:\n          - \"DATA_TX\"\n      rx:\n"},
     {"ring smaller than a batch", "      num_bufs: 1024\n      buf_size: 2048\n    interfaces:",
      "      num_bufs: 128\n      buf_size: 2048\n    interfaces:"},
 };

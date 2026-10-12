@@ -43,6 +43,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <map>
 #include <mutex>
 #include <new>
 #include <string>
@@ -79,13 +80,13 @@ constexpr uint32_t BURST_MAGIC = 0x6770756eu;
 struct BurstPriv {
   uint64_t seq;  // RX: descriptor index; TX: first TX slot
   uint32_t magic;
-  uint32_t pad;
+  uint32_t reserved;  // TX: number of slots reserved from seq and not retired yet
 };
 static_assert(sizeof(BurstPriv) <= sizeof(BurstHeader::custom_burst_data),
               "BurstPriv must fit in BurstHeader::custom_burst_data");
 
-void set_priv(BurstParams* burst, uint64_t seq) {
-  const BurstPriv priv{seq, BURST_MAGIC, 0};
+void set_priv(BurstParams* burst, uint64_t seq, uint32_t reserved = 0) {
+  const BurstPriv priv{seq, BURST_MAGIC, reserved};
   std::memcpy(burst->hdr.custom_burst_data, &priv, sizeof(priv));
 }
 
@@ -381,10 +382,27 @@ struct GpunetioEngine::TxQueue {
   uint32_t sq_wqes = 0;
   uint32_t max_chunk = 0;
 
-  // Slots are cyclic: the application thread allocates at alloc_head, the worker frees up to
-  // completed_tail as the NIC completes bursts
+  // Slots are cyclic: the application thread allocates at alloc_head. A burst's range of slots is
+  // retired when the NIC completes it or when the application frees it unsent, in any order;
+  // completed_tail covers the slots before the first range still in use.
   uint64_t alloc_head = 0;
   std::atomic<uint64_t> completed_tail{0};
+  std::mutex retire_mutex;
+  std::map<uint64_t, uint64_t> retired;  // First slot to count, for ranges past completed_tail
+
+  void retire(uint64_t first, uint64_t count) {
+    if (count == 0) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(retire_mutex);
+    uint64_t tail = completed_tail.load(std::memory_order_relaxed);
+    retired[first] = count;
+    for (auto it = retired.begin(); it != retired.end() && it->first == tail;
+         it = retired.erase(it)) {
+      tail += it->second;
+    }
+    completed_tail.store(tail, std::memory_order_release);
+  }
 
   // Shared with the TX kernels
   gpunetio::TxPacket* pkts = nullptr;  // num_slots entries
@@ -1325,8 +1343,26 @@ bool GpunetioEngine::start_kernels() {
         tx_blocks.push_back(q->kernel_args);
       }
     }
-    if (!select_cuda_device(ordinal, "launching the gpunetio kernels") ||
-        !launch_resident_kernel("RX", ordinal, rx_blocks, &gpu->rx_args, &gpu->rx_stream,
+    const auto burst_queues =
+        std::count_if(tx_queues_.begin(), tx_queues_.end(), [&](const auto& q) {
+          return q->gpu == gpu.get() && q->kernel == GpunetioTxKernel::PER_BURST;
+        });
+    if (!select_cuda_device(ordinal, "launching the gpunetio kernels")) {
+      return false;
+    }
+    // The RX and TX kernels share the GPU: check that all their blocks, and the blocks of the
+    // per_burst launches, fit at once
+    const cudaError_t capacity = gpunetio::check_gpu_capacity(
+        static_cast<uint32_t>(rx_blocks.size()), static_cast<uint32_t>(tx_blocks.size()),
+        static_cast<uint32_t>(burst_queues));
+    if (capacity != cudaSuccess) {
+      DAQIRI_LOG_CRITICAL(
+          "GPU {}: the {} RX, {} persistent TX and {} per_burst TX queues need more blocks than "
+          "the GPU can run at once: {}",
+          ordinal, rx_blocks.size(), tx_blocks.size(), burst_queues, cudaGetErrorString(capacity));
+      return false;
+    }
+    if (!launch_resident_kernel("RX", ordinal, rx_blocks, &gpu->rx_args, &gpu->rx_stream,
                                 gpunetio::launch_rx_kernel) ||
         !launch_resident_kernel("TX", ordinal, tx_blocks, &gpu->tx_args, &gpu->tx_stream,
                                 gpunetio::launch_tx_persistent_kernel)) {
@@ -1502,6 +1538,7 @@ void GpunetioEngine::tx_worker(TxQueue* q) {
       const uint32_t num = static_cast<uint32_t>(burst->hdr.hdr.num_pkts);
       if (num == 0) {
         // Nothing to send, and no completion would retire it
+        q->retire(priv.seq, priv.reserved);
         tx_meta_pool_->put(burst);
         continue;
       }
@@ -1525,6 +1562,7 @@ void GpunetioEngine::tx_worker(TxQueue* q) {
           DAQIRI_LOG_ERROR("TX queue '{}': kernel launch failed: {}", q->name,
                            cudaGetErrorString(err));
           q->failed.store(true);
+          q->retire(priv.seq, priv.reserved);
           tx_meta_pool_->put(burst);
           break;
         }
@@ -1541,7 +1579,10 @@ void GpunetioEngine::tx_worker(TxQueue* q) {
     while (q->reaped < done && !q->inflight.empty()) {
       BurstParams* burst = q->inflight.front();
       q->inflight.pop_front();
-      q->completed_tail.fetch_add(burst->hdr.hdr.num_pkts, std::memory_order_release);
+      BurstPriv done_priv{};
+      if (get_priv(burst, &done_priv)) {
+        q->retire(done_priv.seq, done_priv.reserved);
+      }
       tx_meta_pool_->put(burst);
       q->reaped++;
       busy = true;
@@ -1844,11 +1885,12 @@ void GpunetioEngine::free_all_packets(BurstParams* burst) {
   const auto& hdr = burst->hdr.hdr;
 
   if (hdr.burst_flags & GPUNETIO_TX_BURST_FLAG) {
-    // A TX burst the application allocated but did not send. Only the most recent allocation
-    // can go back, as later slots may be in use.
+    // A TX burst the application allocated but did not send: its slots are retired, and become
+    // free once the earlier ones are
     TxQueue* q = find_tx_queue(hdr.port_id, hdr.q_id);
-    if (q != nullptr && q->alloc_head == priv.seq + hdr.num_pkts) {
-      q->alloc_head = priv.seq;
+    if (q != nullptr && priv.reserved != 0) {
+      q->retire(priv.seq, priv.reserved);
+      set_priv(burst, priv.seq, 0);
     }
     return;
   }
@@ -1957,7 +1999,7 @@ Status GpunetioEngine::get_tx_packet_burst(BurstParams* burst) {
   }
   burst->hdr.hdr.num_segs = 1;
   burst->hdr.hdr.burst_flags = GPUNETIO_TX_BURST_FLAG;
-  set_priv(burst, q->alloc_head);
+  set_priv(burst, q->alloc_head, static_cast<uint32_t>(num));
   q->alloc_head += num;
   return Status::SUCCESS;
 }
@@ -2035,10 +2077,10 @@ Status GpunetioEngine::send_tx_burst(BurstParams* burst) {
     return Status::GENERIC_FAILURE;
   }
   if (!q->send_ring->enqueue(burst)) {
-    // The worker is behind: give back the slots of this most recent allocation
+    // The worker is behind: give back the slots of this burst
     BurstPriv priv{};
-    if (get_priv(burst, &priv) && q->alloc_head == priv.seq + burst->hdr.hdr.num_pkts) {
-      q->alloc_head = priv.seq;
+    if (get_priv(burst, &priv)) {
+      q->retire(priv.seq, priv.reserved);
     }
     q->send_ring_full.fetch_add(1, std::memory_order_relaxed);
     tx_meta_pool_->put(burst);

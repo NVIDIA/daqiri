@@ -647,6 +647,8 @@ queue, on the queue's `cpu_core`, moves bursts between the kernels and the appli
   be shared with another queue. Its slots are rounded up to a power of two up to 8 kB, and its
   `num_bufs` to a power of two of at least 512 and at least `batch_size`. A received packet bigger
   than a slot stops the queue, so keep the port MTU below the slot size.
+- **Transmit slots:** the single memory region of a TX queue can't be shared with another queue
+  either: the queue hands out the packet slots of its whole region.
 - **Ownership:** received packets stay valid until the application frees their burst with
   `free_all_packets()` (or `free_packet()` for each packet); only then does the NIC reuse their
   slots. Bursts can be freed in any order, but slots return to the NIC in arrival order, so a
