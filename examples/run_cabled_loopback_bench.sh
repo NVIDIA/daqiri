@@ -53,6 +53,8 @@
 #   BATCHES_OVERRIDE   — optional space-separated batch sizes for one-off runs.
 #   PAYLOADS_OVERRIDE  — optional space-separated payload sizes for one-off runs.
 #   DROP_CURVE_TARGETS_OVERRIDE — optional space-separated pacing targets in Gbps.
+#                      Fractional Gbps supported; raw rates must resolve to whole Mbps.
+#                      For example, 2.25 Gbps becomes 2250 Mbps; 0 means unpaced.
 #   DAQIRI_IBVERBS_NUM_BUFS — optional raw ibverbs TX/RX slot-count override.
 #   PAIRS_OVERRIDE     — optional space-separated socket pair counts. For example,
 #                      PAIRS_OVERRIDE=1 selects the pair-0 CPU placement only.
@@ -97,6 +99,8 @@ Options may appear before or after the backend/mode:
 
 CLI payload/pair selections replace PAYLOADS_OVERRIDE/PAIRS_OVERRIDE values.
 Latency mode uses its fixed L2-frame sweep and does not accept these selections.
+Raw pacing accepts fractional Gbps at whole-Mbps resolution (2.25 Gbps = 2250 Mbps).
+A target of 0 disables pacing.
 See this script's header for build, duration, workload, and pacing environment settings.
 USAGE
 }
@@ -905,6 +909,25 @@ priority_buffer_discards() {
     | awk -F'[: ]+' '$2 ~ /^rx_prio[0-9]+_buf_discard(_packets)?$/ { s += $3 } END { printf "%d", s+0 }'
 }
 
+# Convert decimal Gbps exactly; rejecting sub-Mbps values avoids silently disabling pacing.
+gbps_to_mbps() {
+  python3 - "$1" <<'PACING_PY'
+from decimal import Decimal, InvalidOperation
+import sys
+
+try:
+    rate = Decimal(sys.argv[1])
+    if not rate.is_finite() or rate < 0:
+        raise ValueError
+    mbps = rate * 1000
+    if mbps != mbps.to_integral_value():
+        raise ValueError
+except (InvalidOperation, ValueError):
+    sys.exit("Raw pacing target must be nonnegative Gbps resolving to whole Mbps (e.g. 2.25)")
+print(int(mbps))
+PACING_PY
+}
+
 # Generate a complete config from the cell parameters (raw + RoCE; sockets use
 # generate_socket_yaml so each concurrent pair gets unique ports/cores).
 generate_yaml() {
@@ -917,7 +940,11 @@ generate_yaml() {
       local raw_buffer_size=8064
       local raw_source_args=()
       local raw_pacing_args=()
-      [[ "$target_gbps" != "0" ]] && raw_pacing_args=(--pacing-mbps "$((target_gbps * 1000))")
+      local raw_pacing_mbps
+      raw_pacing_mbps="$(gbps_to_mbps "$target_gbps")" || return 1
+      if [[ "$raw_pacing_mbps" != "0" ]]; then
+        raw_pacing_args=(--pacing-mbps "$raw_pacing_mbps")
+      fi
       if [[ "$BACKEND" == "ibverbs" ]]; then
         raw_memory_kind="$IBVERBS_MEMORY_KIND"
         raw_num_bufs="$IBVERBS_NUM_BUFS"

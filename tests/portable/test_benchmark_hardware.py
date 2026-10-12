@@ -185,3 +185,25 @@ def test_harness_help_does_not_require_hardware():
     assert result.returncode == 0
     assert "--payload-size" in result.stdout
     assert "--pairs" in result.stdout
+
+
+@pytest.mark.parametrize("target,expected", (
+    ("2.25", "2250"), ("1.75", "1750"), ("0.5", "500"),
+    ("0.001", "1"), ("200", "200000"), ("0.0", "0"),
+    ("-1", None), ("nan", None), ("inf", None),
+    ("invalid", None), ("0.0005", None),
+))
+def test_raw_pacing_converts_fractional_gbps_without_hardware(target, expected):
+    harness = (RAW_TEMPLATE.parent / "run_cabled_loopback_bench.sh").read_text()
+    body = harness.split("gbps_to_mbps() {", 1)[1].split("\n}\n", 1)[0]
+    result = subprocess.run(
+        ["bash", "-c", "gbps_to_mbps() {" + body + "\n}\ngbps_to_mbps \"$1\"",
+         "pacing-test", target],
+        capture_output=True, text=True,
+    )
+    if expected is None:
+        assert result.returncode != 0
+        assert "resolving to whole Mbps" in result.stderr
+    else:
+        assert result.returncode == 0
+        assert result.stdout.strip() == expected

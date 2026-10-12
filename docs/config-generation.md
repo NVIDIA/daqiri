@@ -93,7 +93,9 @@ pass a smaller explicit batch size if the runtime reports a lower limit.
 
 Set `--pacing-mbps` to emit a raw TX queue hardware-rate cap. The shared
 cabled-loopback harness uses this instead of application sleep-based pacing for
-raw DPDK and ibverbs drop curves.
+raw DPDK and ibverbs drop curves. The harness accepts fractional Gbps targets
+that resolve to whole Mbps: `DROP_CURVE_TARGETS_OVERRIDE=2.25` emits
+`pacing_mbps: 2250`; `0` disables pacing.
 
 Add one of `--transform vlan`, `--transform vxlan`, `--transform gre`, or
 `--transform nvgre` to generate the corresponding raw hardware encap/decap

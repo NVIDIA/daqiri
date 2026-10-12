@@ -97,8 +97,6 @@ Reference material for the DAQIRI codebase:
 - [Configuration Generation](https://nvidia.github.io/daqiri/config-generation/) — Deterministic production, benchmark, multi-queue, and cross-host configurations
 - [C++ API Usage](https://nvidia.github.io/daqiri/api-reference/cpp/) — C++ RX/TX workflows, buffer lifecycle, file writing, utilities, and status codes
 - [Python API Usage](https://nvidia.github.io/daqiri/api-reference/python/) — Python bindings, workflow examples, enums, config classes, and helper functions
-- [Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/) — Per-platform throughput, drop, and utilization numbers for stream/protocol combinations on DGX Spark
-- [Performance: IGX Thor](https://nvidia.github.io/daqiri/benchmarks/performance-igx-thor/) — Cabled-loopback throughput for DPDK, raw ibverbs, RoCE, TCP, UDP, and GPU workloads on IGX Thor
 - [Contributing](CONTRIBUTING.md) — Contribution guidelines, coding standards, DCO sign-off
 
 ## Tutorials
