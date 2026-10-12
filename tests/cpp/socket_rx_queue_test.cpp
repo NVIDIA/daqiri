@@ -35,7 +35,7 @@ class SocketEngineQueueTestPeer {
     engine.running_.store(true);
 
     auto queue = std::make_shared<SocketEngine::RxQueueState>();
-    queue->max_bursts = 1;
+    queue->max_packets = 1;
 
     int idle_fds[2] = {-1, -1};
     int active_fds[2] = {-1, -1};
@@ -106,13 +106,15 @@ class SocketEngineQueueTestPeer {
     engine.running_.store(true);
 
     auto queue = std::make_shared<SocketEngine::RxQueueState>();
-    queue->max_bursts = 1;
+    queue->max_packets = 1;
     auto* queued_burst = new BurstParams{};
+    queued_burst->hdr.hdr.num_pkts = 1;
     engine.push_rx_burst(queue, queued_burst);
 
     std::atomic<bool> connection_running{true};
-    auto reservation = std::async(
-        std::launch::async, [&] { return engine.reserve_rx_burst(queue, connection_running); });
+    auto reservation = std::async(std::launch::async, [&] {
+      return engine.reserve_rx_packets(queue, 1, &connection_running);
+    });
 
     const bool initially_blocked =
         reservation.wait_for(std::chrono::milliseconds(100)) == std::future_status::timeout;
@@ -139,14 +141,14 @@ class SocketEngineQueueTestPeer {
       reservation_ready =
           reservation.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
     }
-    const bool reserved = reservation_ready && reservation.get();
-    if (reserved) {
-      engine.cancel_rx_burst_reservation(queue);
+    const size_t reserved = reservation_ready ? reservation.get() : 0;
+    if (reserved > 0) {
+      engine.cancel_rx_packet_reservation(queue, reserved);
     }
     engine.running_.store(false);
     engine.free_rx_burst(popped_burst);
-    return initially_blocked && popped && reserved && queue->bursts.empty() &&
-           queue->reserved_bursts == 0;
+    return initially_blocked && popped && reserved == 1 && queue->bursts.empty() &&
+           queue->queued_packets == 0 && queue->reserved_packets == 0;
   }
 
   static bool shutdown_wakes_blocked_receiver() {
@@ -154,13 +156,15 @@ class SocketEngineQueueTestPeer {
     engine.running_.store(true);
 
     auto queue = std::make_shared<SocketEngine::RxQueueState>();
-    queue->max_bursts = 1;
+    queue->max_packets = 1;
     auto* queued_burst = new BurstParams{};
+    queued_burst->hdr.hdr.num_pkts = 1;
     engine.push_rx_burst(queue, queued_burst);
 
     std::atomic<bool> connection_running{true};
-    auto reservation = std::async(
-        std::launch::async, [&] { return engine.reserve_rx_burst(queue, connection_running); });
+    auto reservation = std::async(std::launch::async, [&] {
+      return engine.reserve_rx_packets(queue, 1, &connection_running);
+    });
 
     const bool initially_blocked =
         reservation.wait_for(std::chrono::milliseconds(100)) == std::future_status::timeout;
@@ -172,13 +176,113 @@ class SocketEngineQueueTestPeer {
     queue->capacity_cv.notify_all();
     const bool stopped =
         reservation.wait_for(std::chrono::seconds(1)) == std::future_status::ready &&
-        !reservation.get();
+        reservation.get() == 0;
 
     BurstParams* popped_burst = nullptr;
     engine.pop_rx_burst(queue, &popped_burst);
     engine.running_.store(false);
     engine.free_rx_burst(popped_burst);
     return initially_blocked && stopped;
+  }
+
+  static bool udp_queue_is_bounded_by_packet_capacity() {
+    SocketEngine engine;
+    engine.running_.store(true);
+
+    auto queue = std::make_shared<SocketEngine::RxQueueState>();
+    queue->max_packets = 4;
+
+    int fds[2] = {-1, -1};
+    if (::socketpair(AF_UNIX, SOCK_DGRAM, 0, fds) != 0) {
+      return false;
+    }
+
+    auto endpoint = std::make_unique<SocketEngine::EndpointState>();
+    endpoint->if_index = 0;
+    endpoint->udp_fd = fds[0];
+    endpoint->rx_batch_size = 3;
+    endpoint->max_packet_size = 64;
+    endpoint->socket_cfg.mode_ = SocketMode::CLIENT;
+    endpoint->rx_queue_state = queue;
+    auto* endpoint_ptr = endpoint.get();
+    engine.endpoints_.push_back(std::move(endpoint));
+
+    constexpr uint8_t payload = 42;
+    int sent = 0;
+    for (int i = 0; i < 256; ++i) {
+      if (::send(fds[1], &payload, sizeof(payload), MSG_DONTWAIT) == sizeof(payload)) {
+        ++sent;
+      }
+    }
+
+    // Pre-fill the socket so the first recvmmsg() deterministically creates a
+    // multi-packet burst, then start the receiver and let it reach capacity.
+    std::thread rx_thread(&SocketEngine::udp_rx_loop, &engine, 0);
+
+    bool reached_capacity = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (std::chrono::steady_clock::now() < deadline) {
+      {
+        std::lock_guard<std::mutex> lock(queue->mutex);
+        reached_capacity = queue->queued_packets == queue->max_packets;
+      }
+      if (reached_capacity) {
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    bool bounded = false;
+    {
+      std::lock_guard<std::mutex> lock(queue->mutex);
+      bounded = queue->queued_packets + queue->reserved_packets <= queue->max_packets;
+    }
+
+    // Draining the first three-packet burst must wake the receiver. It should
+    // consume exactly the three newly available slots and stop at the bound.
+    const uint64_t packets_before_pop = engine.rx_pkts_.load();
+    BurstParams* resumed_burst = nullptr;
+    const bool popped_multi_packet_burst =
+        engine.pop_rx_burst(queue, &resumed_burst) == Status::SUCCESS &&
+        resumed_burst->hdr.hdr.num_pkts > 1;
+    engine.free_all_packets(resumed_burst);
+    engine.free_rx_burst(resumed_burst);
+
+    bool resumed_at_capacity = false;
+    const auto resume_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (std::chrono::steady_clock::now() < resume_deadline) {
+      {
+        std::lock_guard<std::mutex> lock(queue->mutex);
+        resumed_at_capacity = engine.rx_pkts_.load() > packets_before_pop &&
+                              queue->queued_packets == queue->max_packets &&
+                              queue->reserved_packets == 0;
+      }
+      if (resumed_at_capacity) {
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    engine.running_.store(false);
+    queue->capacity_cv.notify_all();
+    ::shutdown(fds[0], SHUT_RDWR);
+    ::close(fds[0]);
+    endpoint_ptr->udp_fd = -1;
+    rx_thread.join();
+    ::close(fds[1]);
+
+    BurstParams* burst = nullptr;
+    while (engine.pop_rx_burst(queue, &burst) == Status::SUCCESS) {
+      engine.free_all_packets(burst);
+      engine.free_rx_burst(burst);
+      burst = nullptr;
+    }
+    engine.endpoints_.clear();
+
+    return sent > static_cast<int>(queue->max_packets) && reached_capacity && bounded &&
+           popped_multi_packet_burst && resumed_at_capacity && queue->queued_packets == 0 &&
+           queue->reserved_packets == 0;
   }
 };
 
@@ -195,6 +299,10 @@ int main() {
   }
   if (!daqiri::SocketEngineQueueTestPeer::shutdown_wakes_blocked_receiver()) {
     std::cerr << "blocked TCP RX queue did not wake for shutdown\n";
+    return 1;
+  }
+  if (!daqiri::SocketEngineQueueTestPeer::udp_queue_is_bounded_by_packet_capacity()) {
+    std::cerr << "UDP RX queue exceeded its packet capacity\n";
     return 1;
   }
   return 0;
