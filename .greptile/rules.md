@@ -81,30 +81,33 @@ socket-only configurations must not link `librte_*`.
 
 ### 4. Doc-sync on code changes
 
-The retained documentation workflow and a narrow Jenkins Blossom wrapper are
-the only GitHub Actions exceptions. The documentation workflow runs
-`mkdocs --strict`, `check_html_links.py`, and `check_doc_refs.py`. Those checks
-catch structural reference drift, but semantic content drift still requires
-review against the mapping below.
+The documentation workflow runs `mkdocs --strict`, `check_html_links.py`, and
+`check_doc_refs.py`. These checks catch structural drift; review semantic drift
+using the page scopes and conditional rules in `.claude/rules/docs-sync.md`, the
+single source of truth. Do not maintain a second source-to-doc mapping here.
 
-The mapping (mirrored from `.claude/rules/docs-sync.md`):
+A changed source path triggers inspection, not mandatory edits to every mapped
+page. Flag missing documentation only when you can identify changed user-facing
+behavior and a specific stale statement, example, command, or missing API/config
+reference entry. Request the smallest necessary update in one consolidated
+comment. Internal refactors, implementation tuning, and bug fixes restoring the
+documented contract may need no documentation changes. An untouched doc file is
+not evidence of drift; do not demand no-op edits or a doc-impact declaration.
 
-| Source path | Docs to update in the same PR |
-| --- | --- |
-| `include/daqiri/common.h`, `include/daqiri/daqiri.h` | `docs/api-reference/index.md`, `docs/api-reference/cpp.md`, `docs/api-reference/python.md`, `docs/concepts.md`, `AGENTS.md` |
-| `include/daqiri/types.h` | `docs/api-reference/index.md`, `docs/api-reference/cpp.md`, `docs/api-reference/python.md`, `docs/concepts.md`, `AGENTS.md` |
-| `src/engine.h` | `docs/api-reference/cpp.md`, `docs/concepts.md`, `AGENTS.md` |
-| `src/engines/*/` | `docs/getting-started.md`, `docs/concepts.md`, `docs/api-reference/configuration.md`, `docs/tutorials/configuration-walkthrough.md`, `README.md`, `AGENTS.md` |
-| `src/CMakeLists.txt` (CMake options, `DAQIRI_ENGINE` default, CUDA arch) | `docs/getting-started.md`, `AGENTS.md` (Build & run), `README.md` (Quick Start) |
-| `src/kernels.cu` / `src/kernels.h` | `docs/benchmarks/raw_benchmarking.md`, `AGENTS.md` (Reorder & quantize kernels) |
-| `python/daqiri_common_pybind.cpp` | `docs/api-reference/python.md`, `AGENTS.md` |
-| `examples/*.cpp`, `examples/*.yaml` (new bench, new CLI flag, new YAML key) | `docs/benchmarks/raw_benchmarking.md`, `docs/tutorials/configuration-walkthrough.md`, `AGENTS.md` (benchmark table) |
-| `mkdocs.yml` nav | `docs/index.md`, `docs/landing/` (landing page links) |
-| Any `docs/*` rename or move | `README.md` (Documentation table), `AGENTS.md` (Documentation section), `mkdocs.yml`, `docs/index.md`, `docs/landing/` |
+Keep README limited to the project overview, existing quick-start commands,
+engine/capability summaries, limitations, and entry links. Getting Started only
+needs changes affecting system requirements, library build steps, or the first
+benchmark smoke test. Route small features to the relevant reference or benchmark
+page. For `scripts/` and `applications/`, request corrections to outdated existing
+documentation only. Do not request new pages, sections, tutorials, or overview
+entries, including for new scripts/apps, unless explicitly requested by the user.
+New nav entries do not require matching additions to the landing page or README;
+fix existing links when their targets move or disappear.
 
-When a PR touches a source path on the left but does not touch the matching
-docs on the right, post a single comment listing the specific docs to update.
-One consolidated comment, not one per file.
+For the configuration walkthrough, preserve retained YAML decision-tree coverage
+and the base TX+RX reproduction check, and manually review affected HDS/hardware
+reorder snippets. Other tutorial edits require an impact on the examples or
+instructions already taught; new options alone do not require tutorial expansion.
 
 ## CONTRIBUTING.md essentials
 
