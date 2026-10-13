@@ -50,7 +50,8 @@ for the SQ/CQ and doorbells; it does not initialize a NIC or CUDA context.
 The hardware-free `daqiri_rdma_work_tracking_test` checks remote range bounds,
 batch completion ownership, and partial failures. In ibverbs builds,
 `daqiri_rdma_memory_test` additionally checks descriptor export and read/write
-metadata and worker READ/WRITE transfers, CQ errors, and partial post failures
+metadata and worker READ/WRITE/WRITE_IMM transfers, zero-byte notifications,
+immediate byte order, CQ errors, and partial post failures
 using a simulated verbs provider, without initializing a NIC.
 After building in the required project container, run:
 

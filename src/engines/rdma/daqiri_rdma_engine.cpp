@@ -617,7 +617,7 @@ Status RdmaEngine::send_tx_burst(BurstParams* burst) {
       burst->transport_hdr.opcode == RDMAOpCode::RECEIVE ? params->direct_rx : params->direct_tx;
   const auto op = burst->transport_hdr.opcode;
   if (op != RDMAOpCode::SEND && op != RDMAOpCode::RECEIVE && op != RDMAOpCode::RDMA_READ &&
-      op != RDMAOpCode::RDMA_WRITE) {
+      op != RDMAOpCode::RDMA_WRITE && op != RDMAOpCode::RDMA_WRITE_IMM) {
     if (!caller_owned) {
       free_tx_burst(burst);
     }
@@ -1231,7 +1231,8 @@ Status RdmaEngine::rdma_set_remote_memory(BurstParams* burst, const RDMAMemoryRe
     return Status::INVALID_PARAMETER;
   }
   if (burst->transport_hdr.opcode != RDMAOpCode::RDMA_READ &&
-      burst->transport_hdr.opcode != RDMAOpCode::RDMA_WRITE) {
+      burst->transport_hdr.opcode != RDMAOpCode::RDMA_WRITE &&
+      burst->transport_hdr.opcode != RDMAOpCode::RDMA_WRITE_IMM) {
     return Status::NOT_SUPPORTED;
   }
   uint64_t address = region.address + offset;
@@ -1248,13 +1249,27 @@ Status RdmaEngine::rdma_set_remote_memory(BurstParams* burst, const RDMAMemoryRe
   return Status::SUCCESS;
 }
 
+Status RdmaEngine::rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data) {
+  if (burst == nullptr || immediate_data == nullptr) {
+    return Status::INVALID_PARAMETER;
+  }
+  if (burst->transport_hdr.opcode != RDMAOpCode::RDMA_WRITE_IMM) {
+    return Status::NOT_SUPPORTED;
+  }
+  if (burst->transport_hdr.status != Status::SUCCESS) {
+    return burst->transport_hdr.status;
+  }
+  *immediate_data = burst->transport_hdr.imm;
+  return Status::SUCCESS;
+}
+
 RDMAOpCode RdmaEngine::rdma_get_opcode(BurstParams* burst) {
   return burst->transport_hdr.opcode;
 }
 
 Status RdmaEngine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id,
                                    bool is_server, int num_pkts, uint64_t wr_id,
-                                   const std::string& local_mr_name) {
+                                   const std::string& local_mr_name, uint32_t immediate_data) {
   if (burst == nullptr || conn_id == 0 || num_pkts <= 0 || num_pkts > MAX_RDMA_BATCH ||
       local_mr_name.empty() || local_mr_name.size() >= sizeof(burst->transport_hdr.local_mr_name) ||
       mrs_.find(local_mr_name) == mrs_.end() ||
@@ -1262,12 +1277,16 @@ Status RdmaEngine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintp
     return Status::INVALID_PARAMETER;
   }
   if (op_code != RDMAOpCode::SEND && op_code != RDMAOpCode::RECEIVE &&
-      op_code != RDMAOpCode::RDMA_READ && op_code != RDMAOpCode::RDMA_WRITE) {
+      op_code != RDMAOpCode::RDMA_READ && op_code != RDMAOpCode::RDMA_WRITE &&
+      op_code != RDMAOpCode::RDMA_WRITE_IMM) {
     return Status::NOT_SUPPORTED;
+  }
+  if (op_code != RDMAOpCode::RDMA_WRITE_IMM && immediate_data != 0) {
+    return Status::INVALID_PARAMETER;
   }
   burst->transport_hdr.raddr = nullptr;
   burst->transport_hdr.dst_key = 0;
-  burst->transport_hdr.imm = 0;
+  burst->transport_hdr.imm = immediate_data;
   burst->transport_hdr.status = Status::SUCCESS;
   burst->transport_hdr.opcode = op_code;
   set_connection_id(burst, conn_id);

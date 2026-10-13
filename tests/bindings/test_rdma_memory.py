@@ -19,3 +19,5 @@ def test_rdma_memory_descriptor():
     assert burst.rdma_is_tx is False
     assert callable(daqiri.rdma_get_memory_region)
     assert callable(daqiri.rdma_set_remote_memory)
+
+    assert callable(daqiri.rdma_get_immediate_data)
