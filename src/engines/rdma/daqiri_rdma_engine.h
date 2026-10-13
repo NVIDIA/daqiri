@@ -167,11 +167,13 @@ class RdmaEngine : public Engine {
   Status rdma_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
                                  uintptr_t* conn_id) override;
   Status rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id, bool is_server,
-                         int num_pkts, uint64_t wr_id, const std::string& local_mr_name) override;
+                         int num_pkts, uint64_t wr_id, const std::string& local_mr_name,
+                         uint32_t immediate_data = 0) override;
   Status rdma_get_memory_region(uintptr_t conn_id, const std::string& mr_name,
                                 RDMAMemoryRegion* region) override;
   Status rdma_set_remote_memory(BurstParams* burst, const RDMAMemoryRegion& region,
                                 uint64_t offset) override;
+  Status rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data) override;
   RDMAOpCode rdma_get_opcode(BurstParams* burst) override;
   Status register_mr(std::string name, int intf, void* addr, size_t len, int flags);
   Status wait_on_key_xchg();

@@ -552,7 +552,35 @@ for both reads and writes. The peer does not need to post receives for these
 operations. Registration permissions, descriptor lifetime, ownership, and
 partial failure behavior follow the
 [C++ read/write API](cpp.md#rdma-reads-and-writes).
-`RDMA_WRITE_IMM` and `RDMA_READ_IMM` return `NOT_SUPPORTED`.
+`RDMA_READ_IMM` returns `NOT_SUPPORTED`.
+
+Select `RDMAOpCode.RDMA_WRITE_IMM` explicitly to write with a notification,
+providing the immediate value in the creation call:
+
+```python
+daqiri.rdma_set_header(
+    request, daqiri.RDMAOpCode.RDMA_WRITE_IMM,
+    conn_id, False, 1, wr_id, "LOCAL_MEMORY",
+    immediate_data=slot_id,
+)
+```
+
+Only `RDMA_WRITE_IMM` accepts the `immediate_data` argument. Omitting it on
+`RDMA_WRITE_IMM` uses zero, which is a valid notification value. Allocate and
+submit the request normally; a packet length of zero sends only the immediate
+notification. Submit it after plain writes on the same RC connection when you
+need a separate notification. Plain writes do not automatically notify.
+Each packet in a write-with-immediate burst consumes one peer receive credit
+and produces one peer notification with the supplied value.
+
+The receiver pre-posts `RECEIVE` credits; lengths may be zero for notification
+use. Poll `get_rx_burst_for_connection(conn_id, is_server)` and check the status
+and opcode. `status, slot_id = daqiri.rdma_get_immediate_data(notification)`
+returns the host-order value. The notification has `rdma_is_tx == False` and
+local packet length zero; written data resides in the separately registered
+target. Batched receive credits produce independently owned completions, each
+released once with `free_tx_burst`. See the
+[C++ notification semantics](cpp.md#explicit-write-with-immediate-notifications).
 
 Look up server-side connection IDs:
 
@@ -686,6 +714,8 @@ The workflow sections above show the common call order and ownership rules.
 | `rdma_set_header(burst, op_code, conn_id, is_server, num_pkts, wr_id, local_mr_name)` | Fill RDMA TX metadata. |
 | `rdma_get_memory_region(conn_id, mr_name)` | Return `(Status, RDMAMemoryRegion)` for the connection's registration. |
 | `rdma_set_remote_memory(burst, region, offset=0)` | Set a checked remote range for RDMA read/write after setting packet lengths. |
+| `rdma_set_header(burst, RDMAOpCode.RDMA_WRITE_IMM, conn_id, is_server, num_pkts, wr_id, local_mr_name, immediate_data)` | Create an explicit write-with-immediate request. |
+| `rdma_get_immediate_data(burst)` | Return `(Status, value)` in host byte order for a successful write-with-immediate request/completion. |
 | `rdma_get_opcode(burst)` | Return the RDMA operation code for a burst. |
 
 ### Buffer Release

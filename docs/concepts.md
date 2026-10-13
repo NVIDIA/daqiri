@@ -134,7 +134,13 @@ local burst buffers; `RDMA_WRITE` places local data into remote memory. Neither
 requires the peer to post a receive. Applications exchange memory descriptors
 and coordinate buffer ownership explicitly. DAQIRI returns a local completion
 for each read/write batch; plain reads/writes do not generate a peer receive
-completion. See [RDMA reads and writes](api-reference/cpp.md#rdma-reads-and-writes).
+completion. **Write with immediate** (`RDMA_WRITE_IMM`) explicitly adds a 32-bit
+receiver notification, consuming a posted receive credit. A zero-byte
+write-with-immediate can notify after earlier plain writes on the same RC
+connection. Arrival notification does not acknowledge application consumption;
+buffer ownership still requires application coordination. See
+[RDMA reads and writes](api-reference/cpp.md#rdma-reads-and-writes) and
+[explicit notifications](api-reference/cpp.md#explicit-write-with-immediate-notifications).
 
 ### Runtime Named Endpoints
 

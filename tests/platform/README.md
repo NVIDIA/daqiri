@@ -91,6 +91,14 @@ WR IDs, pointers, and one completion per batch, then verifies SEND/RECEIVE
 coexistence. The final invalid-rkey test requires a `GENERIC_FAILURE` completion;
 that deliberate remote-access violation puts the client QP into error.
 
+Additional `RDMA_WRITE_IMM` cases cover zero-byte notifications, payload writes,
+batched receive credits, both directions, immediate values 0 / 0x12345678 /
+0xFFFFFFFF, and independent receive-completion ownership. Separate plain writes
+followed by zero-byte `WRITE_IMM` verify data readiness without a sender-side
+wait. Receive-credit exhaustion tests require both completions to remain pending
+until a receive is posted, then verify recovery. Batched SEND/RECEIVE also checks exact bytes and actual receive lengths.
+The suite contains 34 cases.
+
 Set `DAQIRI_PLATFORM_RDMA_CLIENT_IP` and `DAQIRI_PLATFORM_RDMA_SERVER_IP` to
 unused IPv4 addresses already configured on a local RDMA interface.
 `DAQIRI_PLATFORM_RDMA_PORT` defaults to 19485 and
@@ -122,6 +130,12 @@ hardware execution, record before/after `rx_read_requests`, `rx_write_requests`,
 and `req_remote_access_errors` under
 `/sys/class/infiniband/<device>/ports/1/hw_counters`.
 
-Verified on mlx5_0 (vendor part ID 4129, firmware 28.50.1002): all 10 cases passed,
+Initial READ/WRITE verification on mlx5_0 (vendor part ID 4129, firmware 28.50.1002): all 10 initial cases passed,
 with counter deltas of 1,001 read requests (including the rejected invalid-key
 request), 1,000 write requests, and one expected requester remote-access error.
+
+Explicit write-with-immediate verification passed all 34 cases on the same NIC.
+Counters increased by 1,001 read requests, 1,042 write requests (including 40
+explicit immediate notifications), and the one intentional invalid-rkey error.
+Both directions passed same-QP write-then-notify ordering and delayed receive
+credit recovery. Temporary test IPv4 addresses were removed after each run.

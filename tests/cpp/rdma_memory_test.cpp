@@ -8,6 +8,7 @@
 #include <deque>
 #include <chrono>
 #include <sched.h>
+#include <arpa/inet.h>
 #include "src/daqiri_ring.h"
 
 namespace daqiri {
@@ -81,21 +82,26 @@ int post_send(ibv_qp* qp, ibv_send_wr* wr, ibv_send_wr** bad_wr) {
     *bad_wr = wr;
     return EIO;
   }
-  require(wr->num_sge == 1 && wr->sg_list->lkey == 17);
+  require((wr->num_sge == 1 && wr->sg_list->lkey == 17) ||
+          (wr->num_sge == 0 && wr->sg_list == nullptr));
+  const auto length = wr->num_sge == 0 ? 0 : wr->sg_list->length;
   require(wr->wr.rdma.rkey == provider->remote_key);
   require((wr->send_flags & (IBV_SEND_SIGNALED | IBV_SEND_FENCE)) ==
           (IBV_SEND_SIGNALED | IBV_SEND_FENCE));
-  auto* local = reinterpret_cast<void*>(wr->sg_list->addr);
+  auto* local = wr->num_sge == 0 ? nullptr : reinterpret_cast<void*>(wr->sg_list->addr);
   auto* remote = reinterpret_cast<void*>(wr->wr.rdma.remote_addr);
   ibv_wc completion{};
   completion.wr_id = wr->wr_id;
   completion.status = provider->cq_error ? IBV_WC_REM_ACCESS_ERR : IBV_WC_SUCCESS;
   if (wr->opcode == IBV_WR_RDMA_READ) {
-    if (!provider->cq_error) std::memcpy(local, remote, wr->sg_list->length);
+    if (!provider->cq_error && length != 0) std::memcpy(local, remote, length);
     completion.opcode = IBV_WC_RDMA_READ;
   } else {
-    require(wr->opcode == IBV_WR_RDMA_WRITE);
-    if (!provider->cq_error) std::memcpy(remote, local, wr->sg_list->length);
+    require(wr->opcode == IBV_WR_RDMA_WRITE || wr->opcode == IBV_WR_RDMA_WRITE_WITH_IMM);
+    if (wr->opcode == IBV_WR_RDMA_WRITE_WITH_IMM) {
+      require(wr->imm_data == htonl(0xDEADBEEF));
+    }
+    if (!provider->cq_error && length != 0) std::memcpy(remote, local, length);
     completion.opcode = IBV_WC_RDMA_WRITE;
   }
   // Error CQEs need not contain a usable opcode.
@@ -105,7 +111,8 @@ int post_send(ibv_qp* qp, ibv_send_wr* wr, ibv_send_wr** bad_wr) {
   return 0;
 }
 
-void test_worker(daqiri::RDMAOpCode opcode, int fail_packet = -1, bool cq_error = false) {
+void test_worker(daqiri::RDMAOpCode opcode, int fail_packet = -1, bool cq_error = false,
+                 bool zero = false) {
   using namespace daqiri;
   RdmaEngine engine;
   SimulatedVerbs provider;
@@ -124,7 +131,7 @@ void test_worker(daqiri::RDMAOpCode opcode, int fail_packet = -1, bool cq_error 
   connection.verbs = &context;
   connection.qp = &qp;
   char local[128], remote[128];
-  std::memset(local, opcode == RDMAOpCode::RDMA_WRITE ? 0x5a : 0, sizeof(local));
+  std::memset(local, opcode != RDMAOpCode::RDMA_READ ? 0x5a : 0, sizeof(local));
   std::memset(remote, opcode == RDMAOpCode::RDMA_READ ? 0x5a : 0, sizeof(remote));
   ibv_mr mr{};
   mr.addr = local;
@@ -146,9 +153,10 @@ void test_worker(daqiri::RDMAOpCode opcode, int fail_packet = -1, bool cq_error 
   RdmaMemoryTestPeer::setup_worker(engine, params);
   BurstParams burst{};
   void* packets[]{local, local + 32};
-  uint32_t lengths[]{32, 64};
+  uint32_t lengths[]{zero ? 0U : 32U, zero ? 0U : 64U};
   const auto conn_id = reinterpret_cast<uintptr_t>(&connection);
-  require(engine.rdma_set_header(&burst, opcode, conn_id, false, 2, 999, "memory") ==
+  require(engine.rdma_set_header(&burst, opcode, conn_id, false, 2, 999, "memory",
+                                 opcode == RDMAOpCode::RDMA_WRITE_IMM ? 0xDEADBEEF : 0) ==
           Status::SUCCESS);
   burst.pkts[0] = packets;
   burst.pkt_lens[0] = lengths;
@@ -171,10 +179,10 @@ void test_worker(daqiri::RDMAOpCode opcode, int fail_packet = -1, bool cq_error 
           (fail_packet >= 0 || cq_error ? Status::GENERIC_FAILURE : Status::SUCCESS));
   require(params.qp_params.rx_ring->count() == 0);
   if (fail_packet < 0 && !cq_error) {
-    require(std::memcmp(local, remote + 16, 96) == 0);
+    require(zero || std::memcmp(local, remote + 16, 96) == 0);
     require(provider.posted.size() == 2);
     require(provider.posted[0].wr.rdma.remote_addr == region.address + 16);
-    require(provider.posted[1].wr.rdma.remote_addr == region.address + 48);
+    require(provider.posted[1].wr.rdma.remote_addr == region.address + 16 + lengths[0]);
   }
   RdmaMemoryTestPeer::release_synthetic_resources(engine);
   Ring::free(params.qp_params.tx_ring);
@@ -211,7 +219,7 @@ int main() {
   BurstParams burst{};
   uint32_t lengths[]{32, 64};
   burst.pkt_lens[0] = lengths;
-  for (auto op : {RDMAOpCode::RDMA_READ, RDMAOpCode::RDMA_WRITE}) {
+  for (auto op : {RDMAOpCode::RDMA_READ, RDMAOpCode::RDMA_WRITE, RDMAOpCode::RDMA_WRITE_IMM}) {
     require(engine.rdma_set_header(&burst, op, conn_id, false, 2, 42, "memory") == Status::SUCCESS);
     require(engine.rdma_set_remote_memory(&burst, exported, 32) == Status::SUCCESS);
     require(burst.transport_hdr.raddr == memory + 32 && burst.transport_hdr.dst_key == mr.rkey);
@@ -229,7 +237,17 @@ int main() {
   require(engine.rdma_set_header(&burst, RDMAOpCode::RDMA_READ_IMM, conn_id, false, 2, 42,
                                  "memory") == Status::NOT_SUPPORTED);
   require(engine.rdma_set_header(&burst, RDMAOpCode::RDMA_WRITE_IMM, conn_id, false, 2, 42,
-                                 "memory") == Status::NOT_SUPPORTED);
+                                 "memory", 0xDEADBEEF) == Status::SUCCESS);
+  uint32_t immediate = 0;
+  require(engine.rdma_get_immediate_data(&burst, &immediate) == Status::SUCCESS);
+  require(immediate == 0xDEADBEEF);
+  require(engine.rdma_get_immediate_data(nullptr, &immediate) == Status::INVALID_PARAMETER);
+  require(engine.rdma_get_immediate_data(&burst, nullptr) == Status::INVALID_PARAMETER);
+  require(engine.set_packet_lengths(&burst, 0, {0}) == Status::SUCCESS);
+  require(engine.set_packet_lengths(&burst, 1, {0}) == Status::SUCCESS);
+  require(engine.rdma_set_remote_memory(&burst, exported, 0) == Status::SUCCESS);
+  burst.transport_hdr.status = Status::GENERIC_FAILURE;
+  require(engine.rdma_get_immediate_data(&burst, &immediate) == Status::GENERIC_FAILURE);
   require(engine.rdma_set_header(&burst, RDMAOpCode::SEND, conn_id, false, 0, 42, "memory") ==
           Status::INVALID_PARAMETER);
   require(engine.rdma_set_header(&burst, RDMAOpCode::SEND, conn_id, false, 2, UINT64_MAX,
@@ -243,5 +261,9 @@ int main() {
   test_worker(RDMAOpCode::RDMA_READ, 0);
   test_worker(RDMAOpCode::RDMA_WRITE, 1);
   test_worker(RDMAOpCode::RDMA_READ, -1, true);
+  test_worker(RDMAOpCode::RDMA_WRITE_IMM);
+  test_worker(RDMAOpCode::RDMA_WRITE_IMM, -1, false, true);
+  test_worker(RDMAOpCode::RDMA_WRITE_IMM, 1);
+  test_worker(RDMAOpCode::RDMA_WRITE_IMM, -1, true);
   return 0;
 }

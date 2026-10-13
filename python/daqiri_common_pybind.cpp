@@ -1600,8 +1600,24 @@ PYBIND11_MODULE(_daqiri, m) {
         return py::make_tuple(status, conn_id);
       },
       "server_addr"_a, "server_port"_a);
-  m.def("rdma_set_header", &rdma_set_header, "burst"_a, "op_code"_a,
-        "conn_id"_a, "is_server"_a, "num_pkts"_a, "wr_id"_a, "local_mr_name"_a);
+  m.def("rdma_set_header",
+        py::overload_cast<BurstParams*, RDMAOpCode, uintptr_t, bool, int, uint64_t,
+                          const std::string&>(&rdma_set_header),
+        "burst"_a, "op_code"_a, "conn_id"_a, "is_server"_a, "num_pkts"_a, "wr_id"_a,
+        "local_mr_name"_a);
+  m.def("rdma_set_header",
+        py::overload_cast<BurstParams*, RDMAOpCode, uintptr_t, bool, int, uint64_t,
+                          const std::string&, uint32_t>(&rdma_set_header),
+        "burst"_a, "op_code"_a, "conn_id"_a, "is_server"_a, "num_pkts"_a, "wr_id"_a,
+        "local_mr_name"_a, "immediate_data"_a);
+  m.def(
+      "rdma_get_immediate_data",
+      [](BurstParams* burst) {
+        uint32_t immediate_data = 0;
+        const auto status = rdma_get_immediate_data(burst, &immediate_data);
+        return py::make_tuple(status, immediate_data);
+      },
+      "burst"_a);
   m.def(
       "rdma_get_memory_region",
       [](uintptr_t conn_id, const std::string& mr_name) {

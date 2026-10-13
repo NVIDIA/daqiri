@@ -1778,14 +1778,14 @@ Status SocketEngine::rdma_get_server_conn_id(const std::string& server_addr, uin
 }
 
 Status SocketEngine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id,
-                                  bool is_server, int num_pkts, uint64_t wr_id,
-                                  const std::string& local_mr_name) {
+                                     bool is_server, int num_pkts, uint64_t wr_id,
+                                     const std::string& local_mr_name, uint32_t immediate_data) {
 #if DAQIRI_ENGINE_RDMA
   if (!is_roce_protocol() || roce_engine_ == nullptr) {
     return roce_not_initialized("rdma_set_header");
   }
-  return roce_engine_->rdma_set_header(
-      burst, op_code, conn_id, is_server, num_pkts, wr_id, local_mr_name);
+  return roce_engine_->rdma_set_header(burst, op_code, conn_id, is_server, num_pkts, wr_id,
+                                       local_mr_name, immediate_data);
 #else
   return roce_not_initialized("rdma_set_header");
 #endif
@@ -1812,6 +1812,17 @@ Status SocketEngine::rdma_set_remote_memory(BurstParams* burst, const RDMAMemory
   return roce_engine_->rdma_set_remote_memory(burst, region, offset);
 #else
   return roce_not_initialized("rdma_set_remote_memory");
+#endif
+}
+
+Status SocketEngine::rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data) {
+#if DAQIRI_ENGINE_RDMA
+  if (!is_roce_protocol() || roce_engine_ == nullptr) {
+    return roce_not_initialized("rdma_get_immediate_data");
+  }
+  return roce_engine_->rdma_get_immediate_data(burst, immediate_data);
+#else
+  return roce_not_initialized("rdma_get_immediate_data");
 #endif
 }
 

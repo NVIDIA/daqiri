@@ -1218,10 +1218,18 @@ Status rdma_get_server_conn_id(const std::string &server_addr,
 Status rdma_set_header(BurstParams *burst, RDMAOpCode op_code,
                        uintptr_t conn_id, bool is_server, int num_pkts,
                        uint64_t wr_id, const std::string &local_mr_name);
+/** Create an explicit RDMA_WRITE_IMM operation with a host-order 32-bit immediate value.
+ * Each packet produces one peer notification; a zero-length packet is notification-only.
+ */
+Status rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id, bool is_server,
+                       int num_pkts, uint64_t wr_id, const std::string& local_mr_name,
+                       uint32_t immediate_data);
+/** Read the host-order immediate value from a successful RDMA_WRITE_IMM request/completion. */
+Status rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data);
 /** Return the local MR descriptor registered for this connection's protection domain. */
 Status rdma_get_memory_region(uintptr_t conn_id, const std::string& mr_name,
                               RDMAMemoryRegion* region);
-/** Set a contiguous remote range for RDMA_READ/WRITE after setting packet lengths.
+/** Set a contiguous remote range for RDMA_READ/WRITE/WRITE_IMM after setting packet lengths.
  * Packet p transfers at offset + sum(lengths[0..p-1]). Do not change lengths afterward.
  * Exchange the descriptor through an application control channel before calling this.
  */

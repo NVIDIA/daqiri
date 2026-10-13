@@ -1148,6 +1148,22 @@ Status rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id
       burst, op_code, conn_id, is_server, num_pkts, wr_id, local_mr_name);
 }
 
+Status rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id, bool is_server,
+                       int num_pkts, uint64_t wr_id, const std::string& local_mr_name,
+                       uint32_t immediate_data) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  if (op_code != RDMAOpCode::RDMA_WRITE_IMM) {
+    return Status::INVALID_PARAMETER;
+  }
+  return g_daqiri_engine->rdma_set_header(burst, op_code, conn_id, is_server, num_pkts, wr_id,
+                                          local_mr_name, immediate_data);
+}
+
+Status rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->rdma_get_immediate_data(burst, immediate_data);
+}
+
 Status rdma_get_memory_region(uintptr_t conn_id, const std::string& mr_name,
                               RDMAMemoryRegion* region) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();

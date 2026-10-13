@@ -125,13 +125,16 @@ bool RdmaEngine::set_config_and_initialize(const NetworkConfig& cfg) {
 Status RdmaEngine::set_packet_lengths(BurstParams* burst, int idx,
                                    const std::initializer_list<int>& lens) {
   if (burst == nullptr || idx < 0 || static_cast<size_t>(idx) >= burst->transport_hdr.num_pkts ||
-      burst->pkt_lens[0] == nullptr || lens.size() != 1 || *lens.begin() <= 0) {
+      burst->pkt_lens[0] == nullptr || lens.size() != 1 || *lens.begin() < 0 ||
+      (*lens.begin() == 0 && burst->transport_hdr.opcode != RDMAOpCode::RDMA_WRITE_IMM &&
+       burst->transport_hdr.opcode != RDMAOpCode::RECEIVE)) {
     return Status::INVALID_PARAMETER;
   }
   burst->pkt_lens[0][idx] = *lens.begin();
   // Changing lengths invalidates the previously checked remote range.
   if (burst->transport_hdr.opcode == RDMAOpCode::RDMA_READ ||
-      burst->transport_hdr.opcode == RDMAOpCode::RDMA_WRITE) {
+      burst->transport_hdr.opcode == RDMAOpCode::RDMA_WRITE ||
+      burst->transport_hdr.opcode == RDMAOpCode::RDMA_WRITE_IMM) {
     burst->transport_hdr.raddr = nullptr;
     burst->transport_hdr.dst_key = 0;
   }
@@ -485,11 +488,12 @@ Status RdmaEngine::send_tx_burst(BurstParams* burst) {
 
   const auto op = burst->transport_hdr.opcode;
   if (op != RDMAOpCode::SEND && op != RDMAOpCode::RECEIVE && op != RDMAOpCode::RDMA_READ &&
-      op != RDMAOpCode::RDMA_WRITE) {
+      op != RDMAOpCode::RDMA_WRITE && op != RDMAOpCode::RDMA_WRITE_IMM) {
     free_tx_burst(burst);
     return Status::NOT_SUPPORTED;
   }
-  const bool one_sided = op == RDMAOpCode::RDMA_READ || op == RDMAOpCode::RDMA_WRITE;
+  const bool one_sided = op == RDMAOpCode::RDMA_READ || op == RDMAOpCode::RDMA_WRITE ||
+                         op == RDMAOpCode::RDMA_WRITE_IMM;
   auto* connection = reinterpret_cast<rdma_cm_id*>(conn_id);
   if (one_sided && (connection->qp == nullptr || connection->qp->qp_type != IBV_QPT_RC)) {
     free_tx_burst(burst);
@@ -510,7 +514,8 @@ Status RdmaEngine::send_tx_burst(BurstParams* burst) {
   uint64_t remote = reinterpret_cast<uintptr_t>(burst->transport_hdr.raddr);
   for (size_t p = 0; p < burst->transport_hdr.num_pkts; ++p) {
     const uint64_t length = burst->pkt_lens[0][p];
-    if (length == 0 || length > mr->second.params_.buf_size_ ||
+    if ((length == 0 && op != RDMAOpCode::RDMA_WRITE_IMM && op != RDMAOpCode::RECEIVE) ||
+        length > mr->second.params_.buf_size_ ||
         !detail::rdma_range_valid(reinterpret_cast<uintptr_t>(burst->pkts[0][p]), length,
                                   reinterpret_cast<uintptr_t>(mr->second.ptr_),
                                   mr->second.params_.adj_size_ * mr->second.params_.num_bufs_) ||
@@ -548,6 +553,8 @@ RDMAOpCode RdmaEngine::ibv_opcode_to_daqiri_opcode(ibv_wc_opcode opcode) {
       return RDMAOpCode::SEND;
     case IBV_WC_RECV:
       return RDMAOpCode::RECEIVE;
+    case IBV_WC_RECV_RDMA_WITH_IMM:
+      return RDMAOpCode::RDMA_WRITE_IMM;
     case IBV_WC_RDMA_WRITE:
       return RDMAOpCode::RDMA_WRITE;
     case IBV_WC_RDMA_READ:
@@ -575,7 +582,13 @@ void RdmaEngine::rdma_thread(bool is_server, rdma_thread_params* tparams) {
   daqiri::Ring* tx_ring = tparams->qp_params.tx_ring;
   daqiri::Ring* rx_ring = tparams->qp_params.rx_ring;
   detail::RdmaWorkTracking<BurstParams> outstanding_send_wr_ids;
-  std::unordered_map<uint64_t, BurstParams*> outstanding_receive_wr_ids;
+  struct ReceiveWork {
+    BurstParams* burst;
+    size_t packet;
+  };
+  std::unordered_map<uint64_t, ReceiveWork> outstanding_receive_wr_ids;
+  std::unordered_map<BurstParams*, size_t> pending_receives;
+  uint64_t next_receive_id = 1;
   auto counters = get_rdma_metrics(cfg_, *tparams);
 
   if (set_affinity(cpu_core) != 0) {
@@ -661,61 +674,82 @@ void RdmaEngine::rdma_thread(bool is_server, rdma_thread_params* tparams) {
             shutting_down &&
             (wc.status == IBV_WC_WR_FLUSH_ERR || wc.status == IBV_WC_RETRY_EXC_ERR);
         if (benign_teardown) {
-          DAQIRI_LOG_DEBUG("RX CQ teardown status {} ({}) for WRID {} opcode {}",
-                             ibv_wc_status_str(wc.status), (int)wc.status,
-                             (int64_t)wc.wr_id, (int)wc.opcode);
+          DAQIRI_LOG_DEBUG("RX CQ teardown status {} ({}) for WRID {}",
+                           ibv_wc_status_str(wc.status), (int)wc.status, (int64_t)wc.wr_id);
         } else {
-          DAQIRI_LOG_ERROR("CQ error {} ({}) for WRID {} and opcode {}",
-                             ibv_wc_status_str(wc.status), (int)wc.status,
-                             (int64_t)wc.wr_id, (int)wc.opcode);
+          DAQIRI_LOG_ERROR("CQ error {} ({}) for WRID {}", ibv_wc_status_str(wc.status),
+                           (int)wc.status, (int64_t)wc.wr_id);
         }
         metrics::add_dropped(counters, "rx_completion_error", 1);
+      }
+
+      auto it = outstanding_receive_wr_ids.find(wc.wr_id);
+      if (it == outstanding_receive_wr_ids.end()) {
+        DAQIRI_LOG_ERROR("Unknown RQ completion WR ID {}", wc.wr_id);
+        metrics::add_dropped(counters, "rx_unknown_wr_id", 1);
         continue;
       }
-
-      if (wc.opcode == IBV_WC_RECV) {
-        auto it = outstanding_receive_wr_ids.find(wc.wr_id);
-        if (it == outstanding_receive_wr_ids.end()) {
-          DAQIRI_LOG_CRITICAL("WR ID {} not found in outstanding RECEIVE WR IDs", wc.wr_id);
-          metrics::add_dropped(counters, "rx_unknown_wr_id", 1);
-          continue;
-        }
-
-        msg = it->second;
-        metrics::add_rx(counters, 1, static_cast<uint64_t>(wc.byte_len));
-
-        const auto conn_id = get_connection_id(msg);
-        const auto expected_conn_id = reinterpret_cast<uintptr_t>(tparams->client_id);
-        if (conn_id != expected_conn_id) {
-          DAQIRI_LOG_CRITICAL("Wrong connection ID in receive completion {}: {} != {}",
-                                wc.wr_id,
-                                conn_id,
-                                expected_conn_id);
-        }
-
-        outstanding_receive_wr_ids.erase(it);
-      } else {
-        msg = create_burst_params();
-      }
-      const bool msg_owns_packets = wc.opcode == IBV_WC_RECV;
-
-      // Only populate a header to indicate which burst needs to be freed
-      msg->transport_hdr.opcode = ibv_opcode_to_daqiri_opcode(wc.opcode);
-      msg->transport_hdr.status =
-          wc.status == IBV_WC_SUCCESS ? Status::SUCCESS : Status::GENERIC_FAILURE;
-      // set_connection_id(msg, reinterpret_cast<uintptr_t>(tparams->client_id));
-      msg->transport_hdr.server = is_server;
-      msg->transport_hdr.tx = false;
-      // msg->transport_hdr.wr_id   = wc.wr_id;
-
-      if (!rx_ring->enqueue(reinterpret_cast<void*>(msg))) {
-        DAQIRI_LOG_CRITICAL("Failed to enqueue RX completion message");
-        metrics::add_dropped(counters, "rx_completion_enqueue_failure", 1);
-        if (msg_owns_packets) {
+      const auto received = it->second;
+      auto* parent = received.burst;
+      const bool split = parent->transport_hdr.num_pkts > 1;
+      msg = parent;
+      if (split) {
+        // Each posted receive credit produces its own completion, including
+        // its immediate value. Transfer exactly one packet's ownership.
+        msg = create_tx_burst_params();
+        if (msg != nullptr && tx_burst_pool_->get(reinterpret_cast<void**>(&msg->pkts[0]))) {
+          msg->pkts[0][0] = nullptr;
+          if (pkt_len_pool_->get(reinterpret_cast<void**>(&msg->pkt_lens[0]))) {
+            msg->transport_hdr = parent->transport_hdr;
+            msg->transport_hdr.num_pkts = 1;
+            msg->transport_hdr.wr_id += received.packet;
+            msg->pkts[0][0] = parent->pkts[0][received.packet];
+            parent->pkts[0][received.packet] = nullptr;
+          } else {
+            free_tx_burst(msg);
+            msg = nullptr;
+          }
+        } else if (msg != nullptr) {
           free_tx_burst(msg);
-        } else {
-          free_tx_metadata(msg);
+          msg = nullptr;
         }
+      }
+      if (msg != nullptr) {
+        const bool successful = wc.status == IBV_WC_SUCCESS;
+        msg->transport_hdr.status = successful ? Status::SUCCESS : Status::GENERIC_FAILURE;
+        msg->transport_hdr.opcode =
+            successful ? ibv_opcode_to_daqiri_opcode(wc.opcode) : RDMAOpCode::RECEIVE;
+        msg->transport_hdr.imm = 0;
+        // WRITE_IMM writes to the registered remote target, not the receive SGE.
+        msg->pkt_lens[0][0] = successful && wc.opcode == IBV_WC_RECV ? wc.byte_len : 0;
+        if (successful && wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+          if ((wc.wc_flags & IBV_WC_WITH_IMM) != 0) {
+            msg->transport_hdr.imm = ntohl(wc.imm_data);
+          } else {
+            msg->transport_hdr.status = Status::GENERIC_FAILURE;
+          }
+        }
+        msg->transport_hdr.server = is_server;
+        msg->transport_hdr.tx = false;
+        if (successful) {
+          metrics::add_rx(counters, 1, static_cast<uint64_t>(wc.byte_len));
+        }
+      } else {
+        metrics::add_dropped(counters, "rx_completion_allocation_failure", 1);
+      }
+      outstanding_receive_wr_ids.erase(it);
+      if (--pending_receives.at(parent) == 0) {
+        pending_receives.erase(parent);
+        if (split) {
+          free_tx_burst(parent);
+        }
+      }
+      if (msg == nullptr) {
+        continue;
+      }
+      if (!rx_ring->enqueue(msg)) {
+        metrics::add_dropped(counters, "rx_completion_enqueue_failure", 1);
+        free_tx_burst(msg);
         return;
       }
     }
@@ -762,18 +796,12 @@ void RdmaEngine::rdma_thread(bool is_server, rdma_thread_params* tparams) {
             shutting_down &&
             (wc.status == IBV_WC_WR_FLUSH_ERR || wc.status == IBV_WC_RETRY_EXC_ERR);
         if (benign_teardown) {
-          DAQIRI_LOG_DEBUG(
-            "TX CQ teardown status on {}: {} ({}) for WRID {} opcode {}",
-            is_server ? "server" : "client",
-            ibv_wc_status_str(wc.status), (int)wc.status,
-            (int64_t)wc.wr_id, (int)wc.opcode);
+          DAQIRI_LOG_DEBUG("TX CQ teardown status on {}: {} ({}) for WRID {}",
+                           is_server ? "server" : "client", ibv_wc_status_str(wc.status),
+                           (int)wc.status, (int64_t)wc.wr_id, (int)wc.opcode);
         } else {
-          DAQIRI_LOG_ERROR("CQ error on {}: {} ({}) for WRID {} and opcode {}",
-                             is_server ? "server" : "client",
-                             ibv_wc_status_str(wc.status),
-                             (int)wc.status,
-                             (int64_t)wc.wr_id,
-                             (int)wc.opcode);
+          DAQIRI_LOG_ERROR("CQ error on {}: {} ({}) for WRID {}", is_server ? "server" : "client",
+                           ibv_wc_status_str(wc.status), (int)wc.status, (int64_t)wc.wr_id);
         }
         metrics::add_dropped(counters, "tx_completion_error", 1);
         // On an error CQE only wr_id and status are defined.
@@ -809,6 +837,7 @@ void RdmaEngine::rdma_thread(bool is_server, rdma_thread_params* tparams) {
     switch (burst->transport_hdr.opcode) {
       case RDMAOpCode::SEND:
       case RDMAOpCode::RDMA_WRITE:
+      case RDMAOpCode::RDMA_WRITE_IMM:
       case RDMAOpCode::RDMA_READ: {
         // Get lkey for this PD
         auto pd = pd_map_.find(tparams->client_id->verbs);
@@ -841,12 +870,17 @@ void RdmaEngine::rdma_thread(bool is_server, rdma_thread_params* tparams) {
           sge.length = (uint32_t)burst->pkt_lens[0][p];
           sge.lkey = lkey->second->lkey;
           wr.wr_id = outstanding_send_wr_ids.next_id();
-          wr.sg_list = &sge;
-          wr.num_sge = 1;
+          wr.sg_list = sge.length == 0 ? nullptr : &sge;
+          wr.num_sge = sge.length == 0 ? 0 : 1;
           const bool one_sided = burst->transport_hdr.opcode != RDMAOpCode::SEND;
-          wr.opcode = burst->transport_hdr.opcode == RDMAOpCode::RDMA_READ ? IBV_WR_RDMA_READ
-                      : one_sided                                          ? IBV_WR_RDMA_WRITE
-                                                                           : IBV_WR_SEND;
+          if (burst->transport_hdr.opcode == RDMAOpCode::RDMA_READ) {
+            wr.opcode = IBV_WR_RDMA_READ;
+          } else if (burst->transport_hdr.opcode == RDMAOpCode::RDMA_WRITE_IMM) {
+            wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+            wr.imm_data = htonl(burst->transport_hdr.imm);
+          } else {
+            wr.opcode = one_sided ? IBV_WR_RDMA_WRITE : IBV_WR_SEND;
+          }
           if (one_sided) {
             wr.wr.rdma.remote_addr = remote_address;
             wr.wr.rdma.rkey = static_cast<uint32_t>(burst->transport_hdr.dst_key);
@@ -920,10 +954,10 @@ void RdmaEngine::rdma_thread(bool is_server, rdma_thread_params* tparams) {
 
           // Prepare Receive Work Request
           memset(&recv_wr, 0, sizeof(recv_wr));
-          recv_wr.wr_id = burst->transport_hdr.wr_id + p;
+          recv_wr.wr_id = next_receive_id;
           recv_wr.next = NULL;
-          recv_wr.sg_list = &sge;
-          recv_wr.num_sge = 1;
+          recv_wr.sg_list = sge.length == 0 ? nullptr : &sge;
+          recv_wr.num_sge = sge.length == 0 ? 0 : 1;
 
           // Post the receive request
           ret = ibv_post_recv(tparams->client_id->qp, &recv_wr, &bad_wr);
@@ -935,7 +969,9 @@ void RdmaEngine::rdma_thread(bool is_server, rdma_thread_params* tparams) {
           }
           posted_any = true;
 
-          outstanding_receive_wr_ids[burst->transport_hdr.wr_id + p] = burst;
+          outstanding_receive_wr_ids.emplace(next_receive_id++,
+                                             ReceiveWork{burst, static_cast<size_t>(p)});
+          ++pending_receives[burst];
         }
         break;
       }
@@ -988,13 +1024,15 @@ Status RdmaEngine::rdma_set_remote_memory(BurstParams* burst, const RDMAMemoryRe
     return Status::INVALID_PARAMETER;
   }
   if (burst->transport_hdr.opcode != RDMAOpCode::RDMA_READ &&
-      burst->transport_hdr.opcode != RDMAOpCode::RDMA_WRITE) {
+      burst->transport_hdr.opcode != RDMAOpCode::RDMA_WRITE &&
+      burst->transport_hdr.opcode != RDMAOpCode::RDMA_WRITE_IMM) {
     return Status::NOT_SUPPORTED;
   }
   uint64_t address = region.address + offset;
   for (size_t p = 0; p < burst->transport_hdr.num_pkts; ++p) {
     const uint64_t length = burst->pkt_lens[0][p];
-    if (length == 0 || !detail::rdma_range_valid(address, length, region.address, region.length)) {
+    if ((length == 0 && burst->transport_hdr.opcode != RDMAOpCode::RDMA_WRITE_IMM) ||
+        !detail::rdma_range_valid(address, length, region.address, region.length)) {
       return Status::INVALID_PARAMETER;
     }
     address += length;
@@ -1004,13 +1042,27 @@ Status RdmaEngine::rdma_set_remote_memory(BurstParams* burst, const RDMAMemoryRe
   return Status::SUCCESS;
 }
 
+Status RdmaEngine::rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data) {
+  if (burst == nullptr || immediate_data == nullptr) {
+    return Status::INVALID_PARAMETER;
+  }
+  if (burst->transport_hdr.opcode != RDMAOpCode::RDMA_WRITE_IMM) {
+    return Status::NOT_SUPPORTED;
+  }
+  if (burst->transport_hdr.status != Status::SUCCESS) {
+    return burst->transport_hdr.status;
+  }
+  *immediate_data = burst->transport_hdr.imm;
+  return Status::SUCCESS;
+}
+
 RDMAOpCode RdmaEngine::rdma_get_opcode(BurstParams* burst) {
   return burst->transport_hdr.opcode;
 }
 
 Status RdmaEngine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id,
-                                bool is_server, int num_pkts, uint64_t wr_id,
-                                const std::string& local_mr_name) {
+                                   bool is_server, int num_pkts, uint64_t wr_id,
+                                   const std::string& local_mr_name, uint32_t immediate_data) {
   if (burst == nullptr || conn_id == 0 || num_pkts <= 0 || num_pkts > MAX_RDMA_BATCH ||
       local_mr_name.empty() || local_mr_name.size() >= sizeof(burst->transport_hdr.local_mr_name) ||
       mrs_.find(local_mr_name) == mrs_.end() ||
@@ -1018,11 +1070,17 @@ Status RdmaEngine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintp
     return Status::INVALID_PARAMETER;
   }
   if (op_code != RDMAOpCode::SEND && op_code != RDMAOpCode::RECEIVE &&
-      op_code != RDMAOpCode::RDMA_READ && op_code != RDMAOpCode::RDMA_WRITE) {
+      op_code != RDMAOpCode::RDMA_READ && op_code != RDMAOpCode::RDMA_WRITE &&
+      op_code != RDMAOpCode::RDMA_WRITE_IMM) {
     return Status::NOT_SUPPORTED;
+  }
+  if (op_code != RDMAOpCode::RDMA_WRITE_IMM && immediate_data != 0) {
+    return Status::INVALID_PARAMETER;
   }
   burst->transport_hdr.raddr = nullptr;
   burst->transport_hdr.dst_key = 0;
+  burst->transport_hdr.imm = immediate_data;
+  burst->transport_hdr.status = Status::SUCCESS;
   burst->transport_hdr.opcode = op_code;
   set_connection_id(burst, conn_id);
   burst->transport_hdr.server = is_server;
@@ -1766,11 +1824,16 @@ void RdmaEngine::free_tx_burst(BurstParams* burst) {
   auto burst_pool = mem_pools_.find(burst->transport_hdr.local_mr_name);
   if (burst->transport_hdr.num_pkts > 0 && burst->pkts[0] != nullptr &&
       burst_pool != mem_pools_.end()) {
-    unsigned ret = burst_pool->second->enqueue_bulk(reinterpret_cast<void**>(burst->pkts[0]),
-                                                    burst->transport_hdr.num_pkts);
-    if (ret != burst->transport_hdr.num_pkts) {
-      DAQIRI_LOG_CRITICAL(
-          "Asked to free {} packets, only enqueued {}", burst->transport_hdr.num_pkts, ret);
+    unsigned count = 0;
+    for (size_t p = 0; p < burst->transport_hdr.num_pkts; ++p) {
+      if (burst->pkts[0][p] != nullptr) {
+        burst->pkts[0][count++] = burst->pkts[0][p];
+      }
+    }
+    const unsigned returned =
+        count == 0 ? 0 : burst_pool->second->enqueue_bulk(burst->pkts[0], count);
+    if (returned != count) {
+      DAQIRI_LOG_CRITICAL("Asked to free {} packets, only enqueued {}", count, returned);
     }
   }
 

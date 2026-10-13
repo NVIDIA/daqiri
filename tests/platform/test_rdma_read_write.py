@@ -163,6 +163,171 @@ def test_send_receive_after_rdma(endpoints):
     daqiri.free_tx_burst(received)
 
 
+@pytest.mark.parametrize("server_request", [False, True])
+@pytest.mark.parametrize("lengths", [[0], [4096], [0, 1, 64, 257]])
+@pytest.mark.parametrize("immediate", [0, 0x12345678, 0xFFFFFFFF])
+def test_write_with_immediate(endpoints, server_request, lengths, immediate):
+    daqiri, client, server = endpoints
+    conn, peer = (server, client) if server_request else (client, server)
+    status, remote = daqiri.rdma_get_memory_region(peer, "TARGET")
+    success(daqiri, status)
+    target = allocate(daqiri, peer, not server_request, daqiri.RDMAOpCode.SEND,
+                      [32768], 0, "TARGET")
+    target_address = daqiri.get_packet_ptr(target, 0)
+    total = sum(lengths)
+    ctypes.memset(target_address, 0xCC, total + 32)
+    # A batched RECEIVE must yield independently owned notification completions.
+    receive = allocate(daqiri, peer, not server_request, daqiri.RDMAOpCode.RECEIVE,
+                       [0] * len(lengths), 6000, "LOCAL")
+    success(daqiri, daqiri.send_tx_burst(receive))
+    request = daqiri.create_tx_burst_params()
+    assert request is not None
+    success(daqiri, daqiri.rdma_set_header(request, daqiri.RDMAOpCode.RDMA_WRITE_IMM,
+                                        conn, server_request, len(lengths), 5000, "LOCAL",
+                                        immediate_data=immediate))
+    success(daqiri, daqiri.get_tx_packet_burst(request))
+    expected = bytes(index % 251 for index in range(total))
+    offset = 0
+    for index, length in enumerate(lengths):
+        success(daqiri, daqiri.set_packet_lengths(request, index, [length]))
+        if length:
+            ctypes.memmove(daqiri.get_packet_ptr(request, index),
+                           expected[offset:offset + length], length)
+        offset += length
+    success(daqiri, daqiri.rdma_set_remote_memory(request, remote,
+                                               target_address + 16 - remote.address))
+    success(daqiri, daqiri.send_tx_burst(request))
+    for index in range(len(lengths)):
+        received = completion(daqiri, peer, not server_request)
+        assert received.rdma_status == daqiri.Status.SUCCESS
+        assert not received.rdma_is_tx and received.rdma_wr_id == 6000 + index
+        assert daqiri.rdma_get_opcode(received) == daqiri.RDMAOpCode.RDMA_WRITE_IMM
+        status, value = daqiri.rdma_get_immediate_data(received)
+        success(daqiri, status)
+        assert value == immediate
+        assert daqiri.get_packet_length(received, 0) == 0
+        # Returning one completion must not release another receive credit's packet.
+        daqiri.free_tx_burst(received)
+    sent = completion(daqiri, conn, server_request)
+    assert sent.rdma_status == daqiri.Status.SUCCESS and sent.rdma_wr_id == 5000
+    assert daqiri.rdma_get_opcode(sent) == daqiri.RDMAOpCode.RDMA_WRITE_IMM
+    status, value = daqiri.rdma_get_immediate_data(sent)
+    success(daqiri, status)
+    assert value == immediate
+    assert ctypes.string_at(target_address + 16, total) == expected
+    assert ctypes.string_at(target_address, 16) == b"\xCC" * 16
+    assert ctypes.string_at(target_address + 16 + total, 16) == b"\xCC" * 16
+    for connection, role in ((conn, server_request), (peer, not server_request)):
+        status, extra = daqiri.get_rx_burst_for_connection(connection, role)
+        assert status == daqiri.Status.NOT_READY and extra is None
+    daqiri.free_tx_burst(sent)
+    daqiri.free_tx_burst(target)
+
+
+@pytest.mark.parametrize("server_request", [False, True])
+def test_separate_write_then_notification(endpoints, server_request):
+    daqiri, client, server = endpoints
+    conn, peer = (server, client) if server_request else (client, server)
+    status, remote = daqiri.rdma_get_memory_region(peer, "TARGET")
+    success(daqiri, status)
+    target = allocate(daqiri, peer, not server_request, daqiri.RDMAOpCode.SEND,
+                      [32768], 0, "TARGET")
+    address = daqiri.get_packet_ptr(target, 0)
+    expected = bytes(index % 239 for index in range(4096))
+    receive = allocate(daqiri, peer, not server_request, daqiri.RDMAOpCode.RECEIVE,
+                       [0], 9000, "LOCAL")
+    success(daqiri, daqiri.send_tx_burst(receive))
+    write = allocate(daqiri, conn, server_request, daqiri.RDMAOpCode.RDMA_WRITE,
+                     [4096], 8000, "LOCAL")
+    ctypes.memmove(daqiri.get_packet_ptr(write, 0), expected, 4096)
+    success(daqiri, daqiri.rdma_set_remote_memory(write, remote, address - remote.address))
+    notify = daqiri.create_tx_burst_params()
+    assert notify is not None
+    success(daqiri, daqiri.rdma_set_header(notify, daqiri.RDMAOpCode.RDMA_WRITE_IMM,
+                                        conn, server_request, 1, 8001, "LOCAL", 0xABCD1234))
+    success(daqiri, daqiri.get_tx_packet_burst(notify))
+    success(daqiri, daqiri.set_packet_lengths(notify, 0, [0]))
+    success(daqiri, daqiri.rdma_set_remote_memory(notify, remote, address - remote.address))
+    # Post both on the same QP without waiting for the plain write's completion.
+    success(daqiri, daqiri.send_tx_burst(write))
+    success(daqiri, daqiri.send_tx_burst(notify))
+    received = completion(daqiri, peer, not server_request)
+    assert received.rdma_status == daqiri.Status.SUCCESS
+    status, immediate = daqiri.rdma_get_immediate_data(received)
+    success(daqiri, status)
+    assert immediate == 0xABCD1234
+    assert ctypes.string_at(address, 4096) == expected
+    daqiri.free_tx_burst(received)
+    for wr_id in (8000, 8001):
+        sent = completion(daqiri, conn, server_request)
+        assert sent.rdma_status == daqiri.Status.SUCCESS and sent.rdma_wr_id == wr_id
+        daqiri.free_tx_burst(sent)
+    daqiri.free_tx_burst(target)
+
+
+@pytest.mark.parametrize("server_request", [False, True])
+def test_notification_waits_for_receive_credit(endpoints, server_request):
+    daqiri, client, server = endpoints
+    conn, peer = (server, client) if server_request else (client, server)
+    status, remote = daqiri.rdma_get_memory_region(peer, "TARGET")
+    success(daqiri, status)
+    notify = daqiri.create_tx_burst_params()
+    assert notify is not None
+    success(daqiri, daqiri.rdma_set_header(notify, daqiri.RDMAOpCode.RDMA_WRITE_IMM,
+                                        conn, server_request, 1, 9100, "LOCAL", 0xFF000001))
+    success(daqiri, daqiri.get_tx_packet_burst(notify))
+    success(daqiri, daqiri.set_packet_lengths(notify, 0, [0]))
+    success(daqiri, daqiri.rdma_set_remote_memory(notify, remote))
+    success(daqiri, daqiri.send_tx_burst(notify))
+    time.sleep(0.02)
+    for connection, role in ((conn, server_request), (peer, not server_request)):
+        status, extra = daqiri.get_rx_burst_for_connection(connection, role)
+        assert status == daqiri.Status.NOT_READY and extra is None
+    receive = allocate(daqiri, peer, not server_request, daqiri.RDMAOpCode.RECEIVE,
+                       [0], 9200, "LOCAL")
+    success(daqiri, daqiri.send_tx_burst(receive))
+    received = completion(daqiri, peer, not server_request)
+    assert received.rdma_status == daqiri.Status.SUCCESS
+    status, immediate = daqiri.rdma_get_immediate_data(received)
+    success(daqiri, status)
+    assert immediate == 0xFF000001
+    daqiri.free_tx_burst(received)
+    sent = completion(daqiri, conn, server_request)
+    assert sent.rdma_status == daqiri.Status.SUCCESS and sent.rdma_wr_id == 9100
+    daqiri.free_tx_burst(sent)
+
+
+@pytest.mark.parametrize("server_request", [False, True])
+def test_batched_send_receive(endpoints, server_request):
+    daqiri, client, server = endpoints
+    conn, peer = (server, client) if server_request else (client, server)
+    lengths = [1, 64, 257, 4096]
+    receive = allocate(daqiri, peer, not server_request, daqiri.RDMAOpCode.RECEIVE,
+                       [32768] * len(lengths), 10000, "TARGET")
+    send = allocate(daqiri, conn, server_request, daqiri.RDMAOpCode.SEND,
+                    lengths, 11000, "LOCAL")
+    expected = [bytes((byte + index) % 251 for byte in range(length))
+                for index, length in enumerate(lengths)]
+    for index, data in enumerate(expected):
+        ctypes.memmove(daqiri.get_packet_ptr(send, index), data, len(data))
+    success(daqiri, daqiri.send_tx_burst(receive))
+    success(daqiri, daqiri.send_tx_burst(send))
+    for index, data in enumerate(expected):
+        received = completion(daqiri, peer, not server_request)
+        assert received.rdma_status == daqiri.Status.SUCCESS
+        assert received.rdma_wr_id == 10000 + index and not received.rdma_is_tx
+        assert daqiri.rdma_get_opcode(received) == daqiri.RDMAOpCode.RECEIVE
+        assert daqiri.get_packet_length(received, 0) == len(data)
+        assert ctypes.string_at(daqiri.get_packet_ptr(received, 0), len(data)) == data
+        status, _ = daqiri.rdma_get_immediate_data(received)
+        assert status == daqiri.Status.NOT_SUPPORTED
+        daqiri.free_tx_burst(received)
+    sent = completion(daqiri, conn, server_request)
+    assert sent.rdma_status == daqiri.Status.SUCCESS and sent.rdma_wr_id == 11000
+    assert daqiri.rdma_get_opcode(sent) == daqiri.RDMAOpCode.SEND
+    daqiri.free_tx_burst(sent)
+
+
 def test_invalid_rkey_completion(endpoints):
     # Last: a remote access violation moves this connection's QP into error.
     daqiri, client, server = endpoints

@@ -933,6 +933,8 @@ workflow sections above show the common call order and ownership rules.
 | `rdma_set_header(burst, op_code, conn_id, is_server, num_pkts, wr_id, local_mr_name)` | Fill RDMA TX metadata. |
 | `rdma_get_memory_region(conn_id, mr_name, &region)` | Export the registered address, byte length, and remote key for this connection. |
 | `rdma_set_remote_memory(burst, region, offset = 0)` | Set a checked remote range for RDMA read/write. Call after setting packet lengths. |
+| `rdma_set_header(burst, RDMA_WRITE_IMM, conn_id, is_server, num_pkts, wr_id, local_mr_name, immediate_data)` | Create an explicit write-with-immediate operation using a host-order 32-bit value. |
+| `rdma_get_immediate_data(burst, &value)` | Read a successful write-with-immediate request/completion's host-order value. |
 | `rdma_get_opcode(burst)` | Return the RDMA operation code recorded on a burst. |
 
 ### RDMA reads and writes
@@ -992,8 +994,57 @@ queuing a completion. Plain reads/writes do not notify the remote application;
 use a control message when the peer needs a notification. GPU destinations
 also require application synchronization before launching GPU work.
 
-Read/write operations require RC. `RDMA_WRITE_IMM` and `RDMA_READ_IMM` return
-`NOT_SUPPORTED`; these enum values do not imply implemented operations.
+Read/write operations require RC. `RDMA_READ_IMM` returns `NOT_SUPPORTED`.
+
+### Explicit write-with-immediate notifications
+
+Select `RDMAOpCode::RDMA_WRITE_IMM` to write and notify the peer. Supply the
+32-bit immediate value in the `rdma_set_header` creation call:
+
+```cpp
+daqiri::rdma_set_header(request, daqiri::RDMAOpCode::RDMA_WRITE_IMM,
+                        conn_id, false, 1, wr_id, "LOCAL_MEMORY", slot_id);
+```
+
+The overload with `immediate_data` accepts only `RDMA_WRITE_IMM`. The existing
+overload without the immediate argument also accepts `RDMA_WRITE_IMM` with
+value zero. Both the creation argument and `rdma_get_immediate_data` use host
+byte order; DAQIRI performs the verbs network-byte-order conversion.
+
+Allocate local packet buffers with `get_tx_packet_burst`, set their lengths,
+set the remote range with `rdma_set_remote_memory`, and submit normally.
+A zero-length `RDMA_WRITE_IMM` packet is a notification-only operation: it
+writes no payload bytes and can follow earlier plain writes on the same RC
+connection without waiting for their sender completions. The peer still needs
+a valid registered target descriptor with remote-write permission. Plain
+`RDMA_WRITE` never appends an automatic notification.
+
+Every packet/work request in a `RDMA_WRITE_IMM` burst generates one peer
+notification using the burst's immediate value. The sender receives one batch
+completion after all posted work finishes, preserving `RDMA_WRITE_IMM` as its
+opcode. The immediate value can identify a destination slot or sequence;
+the application defines its meaning and tracks the target's payload length.
+
+The receiver must post one `RECEIVE` credit per notification using the normal
+request allocation/submission path. Zero-length receive credits are supported
+for notification-only use. If there is no available receive credit, the RC
+operation waits/retries according to the connection's RNR policy. Receive
+buffers are not the write destination: DMA targets the remote address supplied
+by the sender, while the credit supplies a notification completion.
+
+Poll `get_rx_burst(&notification, conn_id, is_server)`. A successful notification
+has `transport_hdr.tx == false`, opcode `RDMA_WRITE_IMM`, and a value retrievable
+with `rdma_get_immediate_data(notification, &slot_id)`. Its local packet length
+is zero, including when the remote write carried payload. A batched `RECEIVE`
+yields one independently owned completion per credit with caller WR IDs
+`wr_id + packet_index`. Release each completion once with `free_tx_burst`.
+This also applies to normal SEND/RECEIVE completion ownership; normal receives
+report the actual received length.
+
+The notification identifies arrived data, not application consumption. Retain
+the registered target and return an application buffer credit only after the
+receiver finishes consuming it. For GPU targets, perform the required GPU
+visibility synchronization before consuming data.
 
 ### Buffer Release
 
