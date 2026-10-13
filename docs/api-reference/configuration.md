@@ -263,9 +263,10 @@ TX queues on that interface are already in use.
   - values: `indirect`, `direct`
   - default: `indirect`
 - **`cpu_core`**: CPU core ID for the RX worker thread. Required in indirect mode and forbidden
-  in direct mode. For `udp://` socket endpoints, this pins the thread that calls `recvmmsg()`;
+  in direct mode. For `udp://` and `tcp://` socket endpoints, this pins the receive thread
+  that calls `recvmmsg()` or `recv()`, respectively;
   application threads use their own affinity settings. Should be an isolated core for best
-  performance. Use `-1` to leave a socket UDP receive thread unpinned.
+  performance. Use `-1` to leave a socket receive thread unpinned.
   - type: `string`
 - **`batch_size`**: Maximum number of packets per batch passed to the application. Larger values
   increase throughput, and smaller values reduce latency. For `udp://` socket endpoints, one

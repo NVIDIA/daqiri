@@ -327,6 +327,7 @@ def fill_raw_template(path: Path, values: dict[str, Any], engine: str) -> None:
                     bench["cpu_core"] = values[f"DEFAULT_DPDK_{direction.upper()}_WORKER_CORE"]
                     if direction == "tx":
                         bench["eth_dst_addr"] = values["DEFAULT_ETH_DST_ADDR"]
+                        bench["eth_src_addr"] = values["DEFAULT_ETH_SRC_ADDR"]
                         if engine == "ibverbs":
                             bench["batch_size"] = queue["batch_size"]
                         for key, address in (("ip_src_addr", "192.0.2.1"),

@@ -136,6 +136,7 @@ def test_fill_existing_raw_template(tmp_path, monkeypatch, platform, gpu_name, e
     assert cfg["interfaces"][0]["address"] == "0004:03:00.0"
     assert cfg["interfaces"][1]["address"] == "0004:03:00.1"
     assert document["bench_tx"][0]["eth_dst_addr"] == values["DEFAULT_ETH_DST_ADDR"]
+    assert document["bench_tx"][0]["eth_src_addr"] == values["DEFAULT_ETH_SRC_ADDR"]
     assert document["bench_tx"][0]["ip_src_addr"] == "192.0.2.1"
     assert document["bench_tx"][0]["payload_size"] == original["bench_tx"][0]["payload_size"]
     assert document["bench_tx"][0]["header_size"] == original["bench_tx"][0]["header_size"]
@@ -207,3 +208,137 @@ def test_raw_pacing_converts_fractional_gbps_without_hardware(target, expected):
     else:
         assert result.returncode == 0
         assert result.stdout.strip() == expected
+
+
+def latency_namespace(tmp_path, monkeypatch):
+    import sys
+
+    harness = (RAW_TEMPLATE.parent / "run_cabled_loopback_bench.sh").read_text()
+    source = harness.split("<<'LATENCY_PY'\n", 1)[1].split("\nLATENCY_PY", 1)[0]
+    monkeypatch.setattr(sys, "argv", ["latency", str(RAW_TEMPLATE.parent.parent),
+                                     str(tmp_path / "build"), str(tmp_path)])
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    namespace = {}
+    exec(compile(source.rsplit("sys.exit(main())", 1)[0], "latency-runner", "exec"), namespace)
+    return namespace
+
+
+def test_latency_uses_destination_and_rx_device_overrides(tmp_path, monkeypatch):
+    import json
+
+    namespace = latency_namespace(tmp_path, monkeypatch)
+    monkeypatch.setenv("DAQIRI_ETH_DST_ADDR", "02:aa:bb:cc:dd:ee")
+    monkeypatch.setenv("DAQIRI_RX_NETDEV", "override-rx")
+    monkeypatch.setenv("DAQIRI_MASTER_CORE", "0")
+    monkeypatch.setenv("DAQIRI_DPDK_TX_WORKER_CORE", "1")
+    monkeypatch.setenv("DAQIRI_DPDK_TX_QUEUE_CORE", "2")
+    monkeypatch.setenv("DAQIRI_DPDK_RX_QUEUE_CORE", "3")
+    monkeypatch.setenv("LATENCY_GENERATE_ONLY", "1")
+    (tmp_path / "resolved-hardware.json").write_text(json.dumps({
+        "DEFAULT_DPDK_TX_PCI": "0000:01:00.0",
+        "DEFAULT_DPDK_RX_PCI": "0000:01:00.1",
+        "DEFAULT_ETH_DST_ADDR": "02:00:00:00:00:02",
+        "DEFAULT_DPDK_RX_NETDEV": "default-rx",
+    }))
+    requested_clocks = []
+    original_glob = Path.glob
+
+    def clock_glob(path, pattern):
+        if str(path).startswith("/sys/class/net/"):
+            requested_clocks.append(str(path))
+            return iter([path / "ptp7"])
+        return original_glob(path, pattern)
+
+    monkeypatch.setattr(Path, "glob", clock_glob)
+    assert namespace["main"]() == 0
+    assert requested_clocks == ["/sys/class/net/override-rx/device/ptp"]
+    for memory in ("host_pinned", "device"):
+        for mode in ("direct", "indirect"):
+            config = load_document(tmp_path / f"{memory}-{mode}.yaml")
+            assert config["bench_latency"]["eth_dst_addr"] == "02:aa:bb:cc:dd:ee"
+            assert config["bench_latency"]["ptp_device"] == "/dev/ptp7"
+
+
+def test_latency_captures_priority_buffer_drop_counters(tmp_path, monkeypatch):
+    namespace = latency_namespace(tmp_path, monkeypatch)
+    requested = []
+
+    def counters(command, **kwargs):
+        requested.append(command)
+        return """rx_packets_phy: 100
+rx_prio0_buf_discard: 2
+rx_prio7_buf_discard_packets: 3
+rx_prio3_discards: 4
+rx_prio0_bytes: 999
+"""
+
+    monkeypatch.setattr(subprocess, "check_output", counters)
+    assert namespace["nic_counters"]("override-rx") == {
+        "rx_packets_phy": 100, "rx_prio0_buf_discard": 2,
+        "rx_prio7_buf_discard_packets": 3, "rx_prio3_discards": 4,
+    }
+    assert requested == [["ethtool", "-S", "override-rx"]]
+
+
+@pytest.mark.parametrize("payload,settings,override,expected", (
+    (8192, "", "", [32, 64, 128, 256]),
+    (8192, "64:1024", "", [32, 64, 128, 256]),
+    (64, "64:1024", "", [1024]),
+    (64, "64:1024", "32 64", [32, 64, 128, 256]),
+))
+def test_dpdk_sweep_preserves_batches_without_matching_platform_setting(
+    payload, settings, override, expected,
+):
+    harness = (RAW_TEMPLATE.parent / "run_cabled_loopback_bench.sh").read_text()
+    function = harness.split("payload_setting() {", 1)[1].split("\n}\n", 1)[0]
+    sweep = harness.split('case "$MODE" in\n', 1)[1].split("  sweep)\n", 1)[1].split("    ;;", 1)[0]
+    program = "payload_setting() {" + function + "\n}\n" + '''
+BACKEND=dpdk
+PAYLOADS_SWEEP=("$1")
+BATCHES_SWEEP=(32 64 128 256)
+PAIRS_SWEEP=(1)
+DPDK_PAYLOAD_BATCHES="$2"
+BATCHES_OVERRIDE="$3"
+DPDK_PAYLOAD_PACING_GBPS=""
+run_cell_or_record_failure() { echo "$3"; }
+''' + sweep
+    result = subprocess.run(["bash", "-eu", "-c", program, "sweep-test", str(payload),
+                             settings, override], capture_output=True, text=True, check=True)
+    assert [int(batch) for batch in result.stdout.split()] == expected
+
+
+@pytest.mark.parametrize("termination", ("normal", "TERM", "INT"))
+def test_capture_is_stopped_and_reaped_on_exit(termination):
+    import os
+    import signal
+
+    harness = (RAW_TEMPLATE.parent / "run_cabled_loopback_bench.sh").read_text()
+    cleanup = harness.split('dmon_pid=""\n', 1)[1].split("\nrun_cell() {", 1)[0]
+    program = 'dmon_pid=""\n' + cleanup + '''
+sleep 60 &
+mlnx_perf_pid=$!
+sleep 60 &
+dmon_pid=$!
+echo "$mlnx_perf_pid $dmon_pid"
+'''
+    program += "exit 0\n" if termination == "normal" else 'wait "$mlnx_perf_pid"\n'
+    process = subprocess.Popen(["bash", "-eu", "-c", program], stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True)
+    monitor_pids = [int(pid) for pid in process.stdout.readline().split()]
+    try:
+        if termination != "normal":
+            process.send_signal(getattr(signal, f"SIG{termination}"))
+        process.communicate(timeout=5)
+        assert process.returncode == {"normal": 0, "TERM": 143, "INT": 130}[termination]
+        for pid in monitor_pids:
+            with pytest.raises(ProcessLookupError):
+                os.kill(pid, 0)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.communicate()
+        for pid in monitor_pids:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass

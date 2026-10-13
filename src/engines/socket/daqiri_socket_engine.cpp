@@ -1178,6 +1178,15 @@ std::shared_ptr<SocketEngine::ConnectionState> SocketEngine::register_connection
 
   if (start_rx_thread) {
     conn->rx_thread = std::thread(&SocketEngine::tcp_rx_loop, this, conn);
+    std::unique_lock<std::mutex> lock(conn->rx_start_mutex);
+    conn->rx_start_cv.wait(lock, [&conn] { return conn->rx_start_complete; });
+    if (!conn->rx_start_success) {
+      lock.unlock();
+      conn->rx_thread.join();
+      std::lock_guard<std::mutex> state_lock(state_mutex_);
+      connections_.erase(conn->conn_id);
+      return nullptr;
+    }
   }
 
   return conn;
@@ -1221,6 +1230,9 @@ std::shared_ptr<SocketEngine::ConnectionState> SocketEngine::create_tcp_client_c
     if (::connect(fd, reinterpret_cast<sockaddr*>(&dst), sizeof(dst)) == 0) {
       auto conn = register_connection(
           fd, ep.port, ep.rx_queue, ep.if_index, false, false, ep.rx_queue_state, true);
+      if (conn == nullptr) {
+        return nullptr;
+      }
       if (set_as_primary) {
         std::lock_guard<std::mutex> lock(state_mutex_);
         default_connection_by_port_[ep.port] = conn->conn_id;
@@ -1412,6 +1424,10 @@ void SocketEngine::tcp_accept_loop(int if_index) {
     auto conn = register_connection(
         fd, ep->port, ep->rx_queue, ep->if_index, true, false, ep->rx_queue_state, true);
 
+    if (conn == nullptr) {
+      continue;
+    }
+
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       if (ep->primary_conn_id == 0) {
@@ -1440,7 +1456,14 @@ void SocketEngine::tcp_rx_loop(std::shared_ptr<ConnectionState> conn) {
     max_size = ep->max_packet_size;
     rx_cpu_core = ep->rx_cpu_core;
   }
-  if (!pin_socket_rx_thread(rx_cpu_core, conn->port, "TCP")) {
+  const bool startup_ok = pin_socket_rx_thread(rx_cpu_core, conn->port, "TCP");
+  {
+    std::lock_guard<std::mutex> lock(conn->rx_start_mutex);
+    conn->rx_start_success = startup_ok;
+    conn->rx_start_complete = true;
+  }
+  conn->rx_start_cv.notify_one();
+  if (!startup_ok) {
     conn->running.store(false);
     close_fd(conn->fd);
     return;

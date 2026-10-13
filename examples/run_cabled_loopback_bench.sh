@@ -251,6 +251,8 @@ python3 "$HARDWARE_RESOLVER" "${resolver_args[@]}" > "$OUT_DIR/resolved-hardware
 # Share hardware resolution, GPU selection, build paths, and environment capture.
 "$SCRIPT_DIR/bench_capture_environment.sh" "$OUT_DIR"
 if [[ "$MODE" == "latency" ]]; then
+  DAQIRI_ETH_DST_ADDR="${ETH_DST_ADDR:-$DEFAULT_ETH_DST_ADDR}" \
+  DAQIRI_RX_NETDEV="${DPDK_RX_NETDEV:-$DEFAULT_DPDK_RX_NETDEV}" \
   DAQIRI_MASTER_CORE="$MASTER_CORE" \
   DAQIRI_DPDK_TX_QUEUE_CORE="$DPDK_TX_QUEUE_CORE" \
   DAQIRI_DPDK_RX_QUEUE_CORE="$DPDK_RX_QUEUE_CORE" \
@@ -290,7 +292,7 @@ def make_config(hardware: dict, mode: str, memory: str, ptp: str) -> dict:
             queue["cpu_core"] = int(os.environ[f"DAQIRI_DPDK_{direction.upper()}_QUEUE_CORE"])
     bench = config["bench_latency"]
     bench["cpu_core"] = int(os.environ["DAQIRI_DPDK_TX_WORKER_CORE"])
-    bench["eth_dst_addr"] = hardware["DEFAULT_ETH_DST_ADDR"]
+    bench["eth_dst_addr"] = os.environ["DAQIRI_ETH_DST_ADDR"]
     bench["ptp_device"] = ptp
     return config
 
@@ -302,7 +304,7 @@ def nic_counters(netdev: str) -> dict[str, int]:
         for name, value in re.findall(r"^\s*(\w+):\s*(\d+)\s*$", text, re.M)
         if name in {"rx_packets_phy", "tx_packets_phy", "rx_discards_phy",
                     "rx_out_of_buffer", "rx_buff_alloc_err"}
-        or re.fullmatch(r"rx_prio[0-7]_discards", name)
+        or re.fullmatch(r"rx_prio[0-7]_(?:discards|buf_discard(?:_packets)?)", name)
     }
 
 
@@ -326,7 +328,7 @@ def main():
         raise ValueError("LATENCY_REALTIME_PRIORITY must be 0–99")
     if not memory_kinds or any(memory not in {"host_pinned", "device"} for memory in memory_kinds):
         raise ValueError("LATENCY_MEMORY must contain host_pinned and/or device")
-    netdev = hardware["DEFAULT_DPDK_RX_NETDEV"]
+    netdev = os.environ["DAQIRI_RX_NETDEV"]
     clocks = sorted((Path("/sys/class/net") / netdev / "device/ptp").glob("ptp*"))
     if len(clocks) != 1:
         raise RuntimeError(f"expected one RX PHC for {netdev}, found {clocks}")
@@ -1082,6 +1084,24 @@ generate_socket_yaml() {
 }
 
 # Run one cell. Echoes the CSV row to stdout.
+# Track monitors in the driver shell so cancellation also stops captures.
+dmon_pid=""
+mlnx_perf_pid=""
+cleanup_monitors() {
+  local pid
+  for pid in "$mlnx_perf_pid" "$dmon_pid"; do
+    if [[ -n "$pid" ]]; then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    fi
+  done
+  mlnx_perf_pid=""
+  dmon_pid=""
+}
+trap cleanup_monitors EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 run_cell() {
   local lang="$1" payload="$2" batch="$3" pairs="$4" target_gbps="$5" rep="${6:-1}"
   local cell="$lang-$BACKEND-p$payload-b$batch-n$pairs-g$target_gbps-r$rep"
@@ -1129,7 +1149,7 @@ run_cell() {
   local dmon_args=(-s pucvmet -c "$RUN_SECONDS")
   [[ -n "$GPU_MONITOR_ID" ]] && dmon_args+=(-i "$GPU_MONITOR_ID")
   ( nvidia-smi dmon "${dmon_args[@]}" > "$cell_dir/nvidia_smi_dmon.txt" 2>&1 ) &
-  local dmon_pid=$!
+  dmon_pid=$!
 
   local perf_netdev=""
   local perf_prefix=()
@@ -1139,9 +1159,9 @@ run_cell() {
   else
     perf_netdev="$DPDK_RX_NETDEV"
   fi
-  ( "${perf_prefix[@]}" mlnx_perf -i "$perf_netdev" -t 1 \
+  ( exec "${perf_prefix[@]}" mlnx_perf -i "$perf_netdev" -t 1 \
       > "$cell_dir/mlnx_perf_rx.txt" 2>&1 ) &
-  local mlnx_perf_pid=$!
+  mlnx_perf_pid=$!
 
   # Run the bench. Stderr captures DAQIRI_LOG_* output (DPDK/RDMA drop sources).
   local stdout="$cell_dir/stdout.txt"
@@ -1342,7 +1362,9 @@ run_cell() {
   # Stop the open-ended NIC capture and reap both monitors.
   kill "$mlnx_perf_pid" 2>/dev/null || true
   wait "$mlnx_perf_pid" 2>/dev/null || true
+  mlnx_perf_pid=""
   wait "$dmon_pid"  2>/dev/null || true
+  dmon_pid=""
 
   local stats_missing=0
   if [[ -z "${pkts:-}" || -z "${bytes:-}" || -z "${secs:-}" ]]; then
@@ -1467,7 +1489,10 @@ case "$MODE" in
       cell_batches=("${BATCHES_SWEEP[@]}")
       cell_target=0
       if [[ "$BACKEND" == "dpdk" && -z "${BATCHES_OVERRIDE:-}" ]]; then
-        cell_batches=("$(payload_setting "$DPDK_PAYLOAD_BATCHES" "$p" "${BATCHES_SWEEP[0]}")")
+        payload_batch="$(payload_setting "$DPDK_PAYLOAD_BATCHES" "$p" "")"
+        if [[ -n "$payload_batch" ]]; then
+          cell_batches=("$payload_batch")
+        fi
         cell_target="$(payload_setting "$DPDK_PAYLOAD_PACING_GBPS" "$p" 0)"
       elif [[ "$BACKEND" == "ibverbs" && -z "${BATCHES_OVERRIDE:-}" ]]; then
         cell_batches=("$(payload_setting "$IBVERBS_PAYLOAD_BATCHES" "$p" "$IBVERBS_BATCH_SIZE")")

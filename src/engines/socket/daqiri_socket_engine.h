@@ -136,6 +136,10 @@ class SocketEngine : public Engine {
     bool is_udp = false;
     std::atomic<bool> running{false};
     std::thread rx_thread;
+    std::mutex rx_start_mutex;
+    std::condition_variable rx_start_cv;
+    bool rx_start_complete = false;
+    bool rx_start_success = false;
     std::shared_ptr<RxQueueState> rx_queue;
     std::shared_ptr<metrics::CounterSet> rx_metrics;
   };
