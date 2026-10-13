@@ -134,11 +134,12 @@ runtime binding.
   - values: `local`, `rdma_read`, `rdma_write`
 - **`num_bufs`**: Number of buffers in this region. Higher values give more processing
   headroom but consume more memory (GPU BAR1 for `device`). Too low risks dropped packets
-  on RX or a TX stall. For socket TCP RX queues, the smallest `num_bufs` among the queue's
-  memory regions bounds the number of bursts DAQIRI holds internally. When that queue fills,
-  DAQIRI stops calling `recv()`, allowing TCP flow control to backpressure the sender. UDP RX
-  does not wait for this internal queue capacity. See
-  [TCP receive backpressure and queue sizing](../benchmarks/socket_benchmarking.md#tcp-receive-backpressure-and-queue-sizing)
+  on RX or a TX stall. For socket TCP and UDP RX queues, the smallest `num_bufs` among the
+  queue's memory regions bounds the number of packets DAQIRI holds internally. When that
+  queue fills, DAQIRI stops consuming from the socket. TCP flow control backpressures the
+  sender; UDP fills the bounded kernel receive buffer and drops excess datagrams. A UDP burst
+  may contain up to `batch_size` datagrams, but every datagram counts against the limit. See
+  [Receive backpressure and queue sizing](../benchmarks/socket_benchmarking.md#receive-backpressure-and-queue-sizing)
   for sizing guidance and ownership details. Raw DPDK queue regions use a floor of
   `max(1.5 * ring, ring + 2 * batch_size)`. DAQIRI bumps values below that floor to
   `max(3 * ring, ring + 4 * batch_size)` and warns with the exact `num_bufs` to configure.
@@ -279,6 +280,11 @@ TX queues on that interface are already in use.
   The order determines segment mapping: first region = segment 0, second = segment 1, etc.
   A single region means all packet data lands in one place, while two regions enables header-data
   split.
+  For raw ibverbs RX, up to four regions are supported. Each region receives up to
+  its configured `buf_size` bytes, in list order; allocation padding does not change
+  the split boundaries. A short packet can leave later segments with zero length.
+  Multi-region queues always use a regular scatter RQ, including when
+  `DAQIRI_IBV_STRIDING=1` is set. Raw ibverbs TX remains limited to two regions.
   - type: `list`
 - **`timeout_us`**: Timeout in microseconds. A partial batch is delivered if this time elapses
   before `batch_size` packets are collected. Set to `0` to disable (wait for full batch only).

@@ -114,10 +114,11 @@ URI schemes:
 - **`udp://`** / **`tcp://`**: Linux kernel UDP and TCP sockets. No NIC
   privileges required, no special hardware. Useful
   as a comparison baseline against the kernel-bypass paths and as a way
-  to get first results on a system without an NVIDIA NIC. TCP RX queues use
-  the smallest referenced memory-region `num_bufs` as their internal burst
-  limit; when full, DAQIRI stops consuming socket data so kernel TCP flow
-  control reaches the sender. See [TCP receive backpressure and queue sizing](benchmarks/socket_benchmarking.md#tcp-receive-backpressure-and-queue-sizing).
+  to get first results on a system without an NVIDIA NIC. TCP and UDP RX queues
+  use the smallest referenced memory-region `num_bufs` as their internal packet
+  limit. When full, DAQIRI stops consuming socket data: TCP flow control reaches
+  the sender, while UDP overflow is dropped by the kernel. See
+  [Receive backpressure and queue sizing](benchmarks/socket_benchmarking.md#receive-backpressure-and-queue-sizing).
 - **`roce://` endpoints**: RDMA over Converged Ethernet, using the
   open-source [`rdma-core`](https://github.com/linux-rdma/rdma-core)
   library. A server/client connection model, NIC-level reliable
@@ -278,6 +279,12 @@ independent regions to use different GPUs. Cleanup similarly activates each
 region's recorded context only for the duration of the corresponding free.
 
 ### Header-Data Split (HDS)
+
+The raw ibverbs RX engine supports up to four separate memory regions per packet,
+including two CPU regions followed by a GPU region. Regions receive bytes in queue
+list order, with each split defined by the region's configured buffer size. Buffer
+alignment padding changes allocation strides, not packet boundaries. Short packets
+report zero length for any unused trailing segments.
 
 **Header-data split** is the canonical multi-segment configuration:
 headers go to CPU memory (segment 0), payload goes to GPU memory

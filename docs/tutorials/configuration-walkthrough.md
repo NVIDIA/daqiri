@@ -12,7 +12,7 @@ hide:
 DAQIRI exposes a single API on top of multiple packet I/O stacks, selected at runtime with `stream_type` and endpoint URI schemes such as `udp://`, `tcp://`, and `roce://`. Pick the row that matches your hardware and the role of the other endpoint:
 
 - **Raw Ethernet**: `stream_type: "raw"`. Kernel-bypass with GPUDirect zero-copy. Highest performance. Requires an [NVIDIA ConnectX-class NIC](https://www.nvidia.com/en-us/networking/ethernet-adapters/). `tx_port` and `rx_port` can share one physical NIC for a single-host closed-loop bench, or be split across two hosts.
-- **Socket (UDP / TCP)**: `stream_type: "socket"` with `udp://` or `tcp://` endpoints. Plain Linux kernel sockets. No NIC, no privileges, no special CMake flags. Useful as a comparison baseline and as a path to first results on a system without an NVIDIA NIC. Socket options are runtime API calls: resolve a connection ID, then pass native Linux constants to `socket_setsockopt()` rather than adding option names to YAML. For TCP RX, the smallest memory-region `num_bufs` referenced by the queue bounds DAQIRI's internal backlog and determines when [TCP backpressure](../benchmarks/socket_benchmarking.md#tcp-receive-backpressure-and-queue-sizing) begins.
+- **Socket (UDP / TCP)**: `stream_type: "socket"` with `udp://` or `tcp://` endpoints. Plain Linux kernel sockets. No NIC, no privileges, no special CMake flags. Useful as a comparison baseline and as a path to first results on a system without an NVIDIA NIC. Socket options are runtime API calls: resolve a connection ID, then pass native Linux constants to `socket_setsockopt()` rather than adding option names to YAML. For TCP and UDP RX, the smallest memory-region `num_bufs` referenced by the queue bounds DAQIRI's internal packet backlog. At the limit, [TCP applies backpressure and UDP drops overflow in the kernel](../benchmarks/socket_benchmarking.md#receive-backpressure-and-queue-sizing).
 - **Socket (RoCE / RDMA)**: `stream_type: "socket"` and `roce://` endpoints. RDMA verbs over Ethernet, with a server/client connection model and a NIC-level reliable transport. Primarily intended for setups where **one** endpoint is a third-party RoCE implementation (FPGA, instrument, customer black box). When both peers run DAQIRI, prefer an upper-layer library such as MPI / NCCL / UCX instead.
 
 If you don't have any NIC at all, the `*_sw_loopback*` variants of the Raw Ethernet configs need no hardware, which is useful for first-time build verification.
@@ -372,6 +372,29 @@ The HDS bench runs on `daqiri_bench_raw_hds`:
 ```bash
 ./build/examples/daqiri_bench_raw_hds ./build/examples/daqiri_bench_raw_tx_rx_hds.yaml --seconds 10
 ```
+
+With `engine: "ibverbs"`, raw RX also supports three or four separate regions.
+For example, declare `Headers_CPU` (`kind: huge`, `buf_size: 42`), `Metadata_CPU`
+(`kind: huge`, `buf_size: 1000`), and `Payload_GPU` (`kind: device`, `buf_size: 4100`),
+then reference them in receive order:
+
+```yaml
+rx:
+  queues:
+  - name: "rx_split"
+    id: 0
+    cpu_core: <9>
+    batch_size: 1
+    memory_regions: [Headers_CPU, Metadata_CPU, Payload_GPU]
+```
+
+A 5142-byte frame arrives as 42 header bytes, 1000 CPU metadata bytes, and 4100
+GPU payload bytes. Padding used to align allocations does not move those boundaries.
+Shorter frames can leave later segments with zero length. Each multi-region RX
+queue uses a regular scatter RQ, even if `DAQIRI_IBV_STRIDING=1` is set. Raw ibverbs
+RX accepts at most four regions per queue; TX remains limited to two. See the
+[RX queue configuration](../api-reference/configuration.md#receive-configuration-rx)
+for the complete field reference.
 
 ### Hardware packet reordering
 

@@ -23,6 +23,7 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 - [Benchmarking](#benchmarking)
 - [Documentation](#documentation)
 - [Tutorials](#tutorials)
+- [Releases](#releases)
 - [License](#license)
 
 ## Features
@@ -36,6 +37,10 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 - **GPUDirect** — Receive data directly into GPU memory via two modes:
   - *Header-Data Split*: Headers to CPU, payload to GPU (recommended for most workloads).
   - *Batched GPU*: Entire packets to GPU memory (maximum bandwidth, GPU-side parsing required).
+- **Multi-region RX** — The raw ibverbs engine supports up to four CPU/GPU regions
+  per packet, such as separate CPU headers, CPU metadata, and GPU payload. Each
+  region's configured `buf_size` defines its scatter span; short packets leave
+  unused trailing segments at zero length. Raw ibverbs TX supports up to two regions.
 - **Hardware RX reorder** — On ConnectX-7 or newer NICs, the raw ibverbs engine can use the mlx5
   flex parser for first-DMA placement into ordered CPU or GPU aggregates while the host polls CQEs.
 - **Burst file writes** — Write received bursts as raw packet files or appendable PCAP
@@ -66,10 +71,10 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 - **RDMA** — RDMA verbs (READ, WRITE, SEND) over RoCE on Ethernet NICs or InfiniBand.
 - **Linux socket control** — TCP/UDP socket streams expose connection IDs and
   `socket_setsockopt()` for native Linux `setsockopt` tuning without YAML option
-  name mappings. TCP RX queues bound their internal backlog using the smallest
-  referenced memory-region `num_bufs`, so a slow consumer propagates TCP
-  backpressure instead of growing an unbounded process queue. See
-  [TCP receive backpressure and queue sizing](https://nvidia.github.io/daqiri/benchmarks/socket_benchmarking/#tcp-receive-backpressure-and-queue-sizing).
+  name mappings. TCP and UDP RX queues bound their internal backlog using the
+  smallest referenced memory-region `num_bufs`. A slow TCP consumer propagates
+  backpressure; a slow UDP consumer leaves overflow for the kernel to drop. See
+  [Receive backpressure and queue sizing](https://nvidia.github.io/daqiri/benchmarks/socket_benchmarking/#receive-backpressure-and-queue-sizing).
 - **Flow-control telemetry** — Raw Ethernet streams warn at `daqiri_init()` when 802.3x
   pause is enabled on a port and report the pause frames exchanged during the run with the
   shutdown stats. A paused link throttles the sender instead of dropping, so it caps
@@ -113,6 +118,10 @@ Step-by-step walkthroughs to get hands-on:
 - [Understanding the Configuration File](https://nvidia.github.io/daqiri/tutorials/configuration-walkthrough/) — annotated YAML walkthrough
 - [DAQIRI + Holoscan Integration](https://nvidia.github.io/daqiri/tutorials/daqiri-holoscan-integration/) — use DAQIRI RX bursts from a Holoscan source operator
 - [DAQIRI + TensorRT Inference](https://nvidia.github.io/daqiri/tutorials/daqiri-resnet-inference/) — packet ingest → ResNet-50 feature extraction with TensorRT
+
+## Releases
+
+DAQIRI ships formal releases quarterly using [calendar versioning](https://calver.org/). New features and fixes land on `main` continuously — pull and build from there for the latest.
 
 ## License
 
