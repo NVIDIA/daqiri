@@ -34,6 +34,7 @@
 #include <mutex>
 #include <map>
 #include "rdma_direct.h"
+#include "rdma_work_tracking.h"
 
 namespace daqiri::detail {
 struct RdmaCmApi;
@@ -82,8 +83,14 @@ struct rdma_thread_params {
   RdmaDirectState* direct_state = nullptr;
   // Serialize caller-driven progress, the optional worker, and disconnect cleanup.
   std::mutex progress_mutex;
-  std::map<uint64_t, BurstParams*> outstanding_send_wr_ids;
-  std::unordered_map<uint64_t, BurstParams*> outstanding_receive_wr_ids;
+  detail::RdmaWorkTracking<BurstParams> outstanding_send_wr_ids;
+  struct ReceiveWork {
+    BurstParams* burst;
+    size_t packet;
+  };
+  std::unordered_map<uint64_t, ReceiveWork> outstanding_receive_wr_ids;
+  std::unordered_map<BurstParams*, size_t> pending_receives;
+  uint64_t next_receive_id = 1;
   int send_signal_every = 1;
   uint64_t sends_since_signal = 0;
 };
@@ -180,6 +187,10 @@ class RdmaEngine : public Engine {
                                  uintptr_t* conn_id) override;
   Status rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id, bool is_server,
                          int num_pkts, uint64_t wr_id, const std::string& local_mr_name) override;
+  Status rdma_get_memory_region(uintptr_t conn_id, const std::string& mr_name,
+                                RDMAMemoryRegion* region) override;
+  Status rdma_set_remote_memory(BurstParams* burst, const RDMAMemoryRegion& region,
+                                uint64_t offset) override;
   RDMAOpCode rdma_get_opcode(BurstParams* burst) override;
   Status register_mr(std::string name, int intf, void* addr, size_t len, int flags);
   Status wait_on_key_xchg();
@@ -188,6 +199,7 @@ class RdmaEngine : public Engine {
  private:
   friend class RdmaEnginePollingTestPeer;
   const detail::RdmaCmApi* verbs_ = nullptr;
+  friend class RdmaMemoryTestPeer;
   static constexpr int MAX_RDMA_CONNECTIONS = 128;
   static constexpr int MAX_CQ = 1024;
   static constexpr int NUM_SGE_ELS = 1024;

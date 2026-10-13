@@ -221,7 +221,8 @@ struct FakeVerbs {
   }
   static int post_recv(ibv_qp*, ibv_recv_wr* wr, ibv_recv_wr**) {
     std::lock_guard<std::mutex> lock(current->mutex);
-    require(wr->num_sge == 1, "incorrect RECEIVE encoding");
+    require((wr->num_sge == 1 && wr->sg_list) || (wr->num_sge == 0 && !wr->sg_list),
+            "incorrect RECEIVE encoding");
     if (current->recv_result) {
       return current->recv_result;
     }
@@ -231,7 +232,7 @@ struct FakeVerbs {
       wc.wr_id = wr->wr_id;
       wc.status = IBV_WC_SUCCESS;
       wc.opcode = IBV_WC_RECV;
-      wc.byte_len = wr->sg_list->length;
+      wc.byte_len = wr->num_sge ? wr->sg_list->length : 0;
       current->rx_completions.push_back(wc);
     }
     ++current->receives;
@@ -333,6 +334,9 @@ class RdmaEnginePollingTestPeer {
     auto& memory = engine.mrs_["data"];
     memory.params_.kind_ = MemoryKind::HOST_PINNED;
     memory.params_.buf_size_ = 4096;
+    memory.ptr_ = reinterpret_cast<void*>(1);
+    memory.params_.adj_size_ = UINT64_MAX - 1;
+    memory.params_.num_bufs_ = 1;
     memory.ctx_mr_map_[&pd] = &mr;
     require(engine.setup_thread_params(&params, false) == 0, "QP setup failed");
     require(fake.requested_inline == (direct_tx ? 128u : 0u), "incorrect inline request");
@@ -411,17 +415,16 @@ class RdmaEnginePollingTestPeer {
 
   void batched_timestamps() {
     if (params.direct_rx && params.direct_tx) return;
-    BurstParams burst{};
-    std::array<uint64_t, 2> timestamps{};
+    std::array<BurstParams, 2> bursts{};
     std::array<uint32_t, 2> lengths{512, 512};
-    require(engine.rdma_set_header(&burst, RDMAOpCode::RECEIVE, reinterpret_cast<uintptr_t>(&id),
-                                   false, 2, 500, "data") == Status::SUCCESS,
-            "batched RECEIVE header failed");
-    burst.pkt_lens[0] = lengths.data();
-    rdma_burst_cache(&burst).rx_timestamps = timestamps.data();
-    rdma_clear_rx_timestamps(&burst);
     for (unsigned i = 0; i < 2; ++i) {
-      params.outstanding_receive_wr_ids[500 + i] = &burst;
+      auto& burst = bursts[i];
+      require(engine.rdma_set_header(&burst, RDMAOpCode::RECEIVE, reinterpret_cast<uintptr_t>(&id),
+                                     false, 1, 500 + i, "data") == Status::SUCCESS,
+              "receive header failed");
+      burst.pkt_lens[0] = &lengths[i];
+      params.outstanding_receive_wr_ids[500 + i] = {&burst, 0};
+      params.pending_receives[&burst] = 1;
       ibv_wc wc{};
       wc.wr_id = 500 + i;
       wc.status = IBV_WC_SUCCESS;
@@ -431,21 +434,18 @@ class RdmaEnginePollingTestPeer {
     }
     engine.poll_completions(false, &params, true, false);
     for (unsigned i = 0; i < 2; ++i) {
-      uint64_t timestamp_ns = 1;
-      require(engine.get_packet_rx_timestamp(&burst, i, &timestamp_ns) ==
-                      (fake.timestamps ? Status::SUCCESS : Status::NOT_SUPPORTED) &&
-                  timestamp_ns == (fake.timestamps ? FakeVerbs::kTimestamp + 500 + i : 0) &&
-                  lengths[i] == 37 + i,
-              "batched CQE timestamp/length did not use the packet's WR ID");
+      check_timestamp(&bursts[i], true, 500 + i);
+      require(lengths[i] == 37 + i, "receive length changed");
       BurstParams* result = nullptr;
-      require(rx_ring->dequeue(reinterpret_cast<void**>(&result)) && result == &burst,
-              "batched completion lost its burst");
+      require(rx_ring->dequeue(reinterpret_cast<void**>(&result)) && result == &bursts[i],
+              "completion lost its burst");
     }
-    require(engine.rdma_set_header(&burst, RDMAOpCode::RECEIVE, reinterpret_cast<uintptr_t>(&id),
-                                   false, 2, 600, "data") == Status::SUCCESS,
-            "reused batched RECEIVE header failed");
+    require(
+        engine.rdma_set_header(&bursts[0], RDMAOpCode::RECEIVE, reinterpret_cast<uintptr_t>(&id),
+                               false, 1, 600, "data") == Status::SUCCESS,
+        "reused receive header failed");
     uint64_t timestamp_ns = 1;
-    require(engine.get_packet_rx_timestamp(&burst, 1, &timestamp_ns) == Status::NOT_SUPPORTED &&
+    require(engine.get_packet_rx_timestamp(&bursts[0], 0, &timestamp_ns) == Status::NOT_SUPPORTED &&
                 timestamp_ns == 0,
             "reused burst retained an old timestamp");
   }
@@ -987,13 +987,13 @@ daqiri:
     ibv_wc rx_wc{};
     rx_wc.status = IBV_WC_SUCCESS;
     rx_wc.opcode = IBV_WC_RECV;
-    rx_wc.wr_id = 20;
+    rx_wc.wr_id = fake.last_receive_id;
     rx_wc.byte_len = 37;
     fake.rx_completions.push_back(rx_wc);
     ibv_wc tx_wc{};
     tx_wc.status = IBV_WC_SUCCESS;
     tx_wc.opcode = IBV_WC_SEND;
-    tx_wc.wr_id = 10;
+    tx_wc.wr_id = fake.last_send_id;
     fake.tx_completions.push_back(tx_wc);
     // Worker touches only indirect CQs; caller must finish the direct ones.
     engine.poll_completions(server, &params, !direct_rx, !direct_tx);
@@ -1009,7 +1009,7 @@ daqiri:
       } else if (result == &receive) {
         require(!result->transport_hdr.tx && recv_len == 37,
                 "RX completion length/ownership incorrect");
-        check_timestamp(result, true, 20);
+        check_timestamp(result, true, fake.last_receive_id);
         got_rx = true;
       } else {
         require(false, "unexpected completion object");
@@ -1021,9 +1021,10 @@ daqiri:
 
     send.transport_hdr.wr_id = 30;
     receive.transport_hdr.wr_id = 40;
-    params.outstanding_send_wr_ids[30] = &send;
-    params.outstanding_receive_wr_ids[40] = &receive;
-    tx_wc.wr_id = 30;
+    params.outstanding_send_wr_ids.posted(&send, 0);
+    params.outstanding_receive_wr_ids[40] = {&receive, 0};
+    params.pending_receives[&receive] = 1;
+    tx_wc.wr_id = params.outstanding_send_wr_ids.next_id() - 1;
     tx_wc.status = IBV_WC_LOC_PROT_ERR;
     tx_wc.opcode = IBV_WC_RDMA_READ;
     rx_wc.wr_id = 40;
