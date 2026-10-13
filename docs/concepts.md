@@ -54,6 +54,13 @@ At build time, `DAQIRI_ENGINE` selects which optional engines are
 compiled in (`dpdk`, `ibverbs`); Linux sockets are always available. See
 [Getting Started](getting-started.md) for the build options.
 
+With `DAQIRI_IBVERBS_DLOPEN=ON` (default `OFF`), raw ibverbs and RoCE load
+versioned DAQIRI glue libraries and their system RDMA dependencies when the
+engine initializes. Deploy the glue libraries alongside compatible RDMA shared
+libraries; Linux UDP/TCP sockets do not need them. See
+[runtime RDMA library deployment](tutorials/bare-metal-cmake-build.md#daqiri_ibverbs_dlopen-runtime-rdma-libraries)
+for build requirements and library search paths.
+
 ### Raw Ethernet
 
 *YAML:* `stream_type: "raw"`.

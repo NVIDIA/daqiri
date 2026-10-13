@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -13,9 +14,15 @@
 
 int main(int argc, char** argv) {
   const std::string mode = argc > 1 ? argv[1] : "load";
+  const bool adjacent = mode == "adjacent";
+  if (adjacent && (std::getenv("DAQIRI_RDMA_GLUE_DIR") != nullptr ||
+                   std::getenv("LD_LIBRARY_PATH") != nullptr)) {
+    std::cerr << "Adjacent search requires unset environment overrides\n";
+    return 1;
+  }
   std::string error;
   const auto* raw = daqiri::detail::load_raw_api(error);
-  if (mode != "load") {
+  if (mode != "load" && !adjacent) {
     if (raw != nullptr || error.find(mode) == std::string::npos) {
       std::cerr << "Unexpected raw loader result: " << error << '\n';
       return 1;
@@ -35,6 +42,20 @@ int main(int argc, char** argv) {
   if (cm == nullptr || !error.empty()) {
     std::cerr << error << '\n';
     return 1;
+  }
+
+  // Verify that both tables came from the copied DSOs, rather than a globally
+  // installed library that could hide a broken search beside the executable.
+  if (adjacent) {
+    for (const void* table : {static_cast<const void*>(raw), static_cast<const void*>(cm)}) {
+      Dl_info info{};
+      if (dladdr(table, &info) == 0 || info.dli_fname == nullptr ||
+          std::filesystem::canonical(info.dli_fname).parent_path() !=
+              std::filesystem::current_path()) {
+        std::cerr << "Glue library was not loaded from beside the executable\n";
+        return 1;
+      }
+    }
   }
 
   // Exercise real library calls without requiring a NIC or creating resources.
