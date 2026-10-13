@@ -1,0 +1,106 @@
+# syntax=docker/dockerfile:1
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# This is an application SDK, including compilers, rather than a runtime-only image.
+# Select the CUDA or PyTorch base with scripts/build-release-container.sh.
+ARG DAQIRI_OS_BASE_IMAGE=nvcr.io/nvidia/cuda:13.1.0-devel-ubuntu24.04
+FROM ${DAQIRI_OS_BASE_IMAGE} AS release-base
+ARG DAQIRI_OS_BASE_IMAGE
+SHELL ["/bin/bash", "-eou", "pipefail", "-c"]
+RUN mkdir -p /opt/daqiri-release \
+    && printf '%s\n' "${DAQIRI_OS_BASE_IMAGE}" > /opt/daqiri-release/base-image.txt \
+    && dpkg-query -W -f='${binary:Package}\t${Version}\t${source:Package}\t${source:Version}\n' \
+       > /opt/daqiri-release/base-packages.tsv
+
+FROM release-base AS release-deps
+ARG TARGETARCH
+ARG DEBIAN_FRONTEND=noninteractive
+ARG DOCA_VERSION=3.2.1
+# Sources below are matched to these versions; do not change just the binaries.
+ARG RDMA_CORE_VERSION=2510.0.11-1
+ARG MLNX_TOOLS_VERSION=2510.0.16-1
+ARG OFED_KERNEL_UTILS_VERSION=25.10.OFED.25.10.1.7.1.1-1
+ARG MFT_VERSION=4.34.1-10
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+    && case "${TARGETARCH}" in \
+         amd64) doca_arch=x86_64 ;; \
+         arm64) doca_arch=arm64-sbsa ;; \
+         *) echo "Unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+       esac \
+    && repo="https://linux.mellanox.com/public/repo/doca/${DOCA_VERSION}/ubuntu24.04/${doca_arch}" \
+    && curl -fsSL "${repo}/GPG-KEY-Mellanox.pub" \
+       | gpg --dearmor -o /usr/share/keyrings/daqiri-mellanox.gpg \
+    && printf 'deb [signed-by=/usr/share/keyrings/daqiri-mellanox.gpg] %s ./\n' "${repo}" \
+       > /etc/apt/sources.list.d/daqiri-mellanox.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends --reinstall \
+         "libibverbs-dev=${RDMA_CORE_VERSION}" "libibverbs1=${RDMA_CORE_VERSION}" \
+         "ibverbs-providers=${RDMA_CORE_VERSION}" "ibverbs-utils=${RDMA_CORE_VERSION}" \
+         "librdmacm-dev=${RDMA_CORE_VERSION}" "librdmacm1=${RDMA_CORE_VERSION}" \
+         "infiniband-diags=${RDMA_CORE_VERSION}" \
+         "mlnx-tools=${MLNX_TOOLS_VERSION}" \
+         "mlnx-ofed-kernel-utils=${OFED_KERNEL_UTILS_VERSION}" "mft=${MFT_VERSION}" \
+    && apt-get install -y --no-install-recommends \
+         build-essential cmake pkg-config libnuma-dev \
+         python3-dev python3-pip python3-yaml pybind11-dev \
+         pciutils ethtool iproute2 iputils-ping procps kmod \
+    && rm -rf /var/lib/apt/lists/*
+
+# Prefer Ubuntu CMake 3.x over a pip CMake inherited from PyTorch.
+ENV PATH=/opt/daqiri/bin:/usr/local/cuda/bin:/usr/bin:/usr/sbin:/bin:/sbin:/usr/local/bin:/usr/local/sbin
+
+FROM release-deps AS release-build
+ARG BUILD_JOBS=8
+ARG CMAKE_CUDA_ARCHITECTURES="80;90;121"
+WORKDIR /workspace/daqiri
+COPY . .
+RUN cmake -S . -B /tmp/daqiri-build \
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/daqiri \
+      -DCMAKE_INSTALL_LIBDIR=lib \
+      -DCMAKE_CUDA_ARCHITECTURES="${CMAKE_CUDA_ARCHITECTURES}" \
+      -DBUILD_SHARED_LIBS=ON -DBUILD_TESTING=OFF \
+      -DYAML_CPP_BUILD_TOOLS=OFF -DYAML_CPP_BUILD_TESTS=OFF \
+      -DDAQIRI_ENGINE=ibverbs -DDAQIRI_BUILD_PYTHON=ON \
+      -DDAQIRI_BUILD_EXAMPLES=ON -DDAQIRI_BUILD_APPLICATIONS=OFF \
+      -DDAQIRI_ENABLE_GDS=OFF -DDAQIRI_ENABLE_S3=OFF \
+      -DDAQIRI_ENABLE_OTEL_METRICS=OFF \
+    && cmake --build /tmp/daqiri-build -j "${BUILD_JOBS}" \
+    && cmake --install /tmp/daqiri-build \
+    && tar --exclude='*/.git' --exclude='*/__pycache__' -czf \
+       /opt/daqiri-release/daqiri-source.tar.gz -C /workspace daqiri
+
+# Source retrieval happens separately so it cannot change the final package set.
+FROM release-deps AS release-sources
+ARG DOCA_VERSION=3.2.1
+ARG OFED_SOURCE_VERSION=25.10-1.7.1.0
+ARG OFED_SOURCE_SHA256=56f173e1d538a23765d639dd382abc2f5caa0facaef2f30d4575fb2d375ae16a
+COPY scripts/release/collect_sources.py /tmp/collect_sources.py
+COPY VERSION /tmp/daqiri-components/VERSION
+COPY third_party/yaml-cpp/CMakeLists.txt /tmp/daqiri-components/third_party/yaml-cpp/CMakeLists.txt
+COPY third_party/spdlog/include/spdlog/version.h /tmp/daqiri-components/third_party/spdlog/include/spdlog/version.h
+RUN python3 /tmp/collect_sources.py \
+      --output /opt/daqiri-release \
+      --component-root /tmp/daqiri-components \
+      --vendor-url "https://linux.mellanox.com/public/repo/doca/${DOCA_VERSION}/SOURCES/mlnx_ofed/MLNX_OFED_SRC-debian-${OFED_SOURCE_VERSION}.tgz" \
+      --vendor-sha256 "${OFED_SOURCE_SHA256}"
+
+FROM release-deps AS release
+ARG DAQIRI_REVISION=unknown
+ARG DAQIRI_VERSION=unknown
+LABEL org.opencontainers.image.title="DAQIRI application development SDK" \
+      org.opencontainers.image.source="https://github.com/NVIDIA/daqiri" \
+      org.opencontainers.image.revision="${DAQIRI_REVISION}" \
+      org.opencontainers.image.version="${DAQIRI_VERSION}"
+COPY --from=release-build /opt/daqiri /opt/daqiri
+COPY --from=release-build /opt/daqiri-release/daqiri-source.tar.gz /opt/daqiri-release/
+COPY --from=release-sources /opt/daqiri-release /opt/daqiri-release
+RUN printf '/opt/daqiri/lib\n' > /etc/ld.so.conf.d/daqiri.conf && ldconfig \
+    && cd /opt/daqiri-release && sha256sum daqiri-source.tar.gz >> SHA256SUMS
+ENV CMAKE_PREFIX_PATH=/opt/daqiri \
+    PKG_CONFIG_PATH=/opt/daqiri/lib/pkgconfig \
+    PYTHONPATH=/opt/daqiri/lib/python
+WORKDIR /opt/daqiri
+CMD ["/bin/bash"]

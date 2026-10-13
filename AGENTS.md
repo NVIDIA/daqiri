@@ -12,6 +12,10 @@ cmake --install build --prefix /opt/daqiri
 
 # Container build (compiles patched DPDK from source)
 BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
+
+# Application SDK release containers (ibverbs, RoCE, UDP/TCP; Python enabled)
+scripts/build-release-container.sh
+BASE_IMAGE=torch scripts/build-release-container.sh
 ```
 
 Container releases run locally. Run `PUSH=1 scripts/publish_container.sh` on
