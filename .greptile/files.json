@@ -25,8 +25,8 @@
     },
     {
       "path": ".claude/rules/docs-sync.md",
-      "description": "Source-of-truth mapping from source-file changes to the docs that must be updated in the same PR. Use this to decide whether a code-change PR also needs doc updates.",
-      "scope": ["src/**", "examples/**", "mkdocs.yml", "README.md", "AGENTS.md", "docs/**"]
+      "description": "Source of truth for conditional doc-impact review and page scope. Source paths identify docs to inspect, not mandatory edits. Require evidence of stale content or a missing user-facing reference entry; preserve example coverage and walkthrough pairing while keeping introductory pages concise.",
+      "scope": ["include/**", "src/**", "python/**", "examples/**", "applications/**", "scripts/**", "CMakeLists.txt", "**/CMakeLists.txt", "mkdocs.yml", "README.md", "AGENTS.md", "CONTRIBUTING.md", "docs/**", ".claude/rules/docs-sync.md", ".greptile/**"]
     },
     {
       "path": "include/daqiri/daqiri.h",
@@ -55,7 +55,7 @@
     },
     {
       "path": "README.md",
-      "description": "Top-level project overview: Quick Start build commands, Engines table, Documentation table, Features list, and limitations. Update in sync with engines, build configuration, public headers, and documentation renames.",
+      "description": "Concise project overview: Quick Start commands, Engines table, Documentation links, Features summary, and limitations. Update only when these existing statements or links become inaccurate; small features and additional platform reports belong in detailed docs.",
       "scope": ["src/**", "examples/**", "docs/**", "mkdocs.yml"]
     }
   ]
