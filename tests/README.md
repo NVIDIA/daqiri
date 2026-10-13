@@ -44,6 +44,11 @@ C++ unit and build-backed integration tests live under `tests/cpp/` and are regi
 with CTest when `BUILD_TESTING=ON` (the default). The current
 `daqiri_init_validation_test` exercises common semantic validation through the production
 socket initialization path and verifies rejection before socket resources are initialized.
+The hardware-free `daqiri_rdma_work_tracking_test` checks remote range bounds,
+batch completion ownership, and partial failures. In ibverbs builds,
+`daqiri_rdma_memory_test` additionally checks descriptor export and read/write
+metadata and worker READ/WRITE transfers, CQ errors, and partial post failures
+using a simulated verbs provider, without initializing a NIC.
 After building in the required project container, run:
 
 ```bash

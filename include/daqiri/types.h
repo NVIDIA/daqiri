@@ -107,6 +107,15 @@ enum class RDMAOpCode {
 
 enum class RDMACompletionType { RX, TX, INVALID };
 
+/** Registered memory descriptor to exchange with a connected RDMA peer.
+ * Values are valid only while the owning engine and registration remain alive.
+ */
+struct RDMAMemoryRegion {
+  uint64_t address = 0;
+  uint64_t length = 0;
+  uint32_t rkey = 0;
+};
+
 struct BurstTransportHeader {
   uint8_t version;
   RDMAOpCode opcode;

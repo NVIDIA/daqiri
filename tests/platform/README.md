@@ -74,3 +74,54 @@ python3 -m pytest tests/platform/test_multi_region_rx.py -m platform -p no:cache
 With no executable override, the pytest fixture compiles a temporary executable
 against the SDK selected by `PKG_CONFIG_PATH`. Keep hardware tests serialized on
 the selected port.
+
+
+## RC RDMA reads and writes
+
+`test_rdma_read_write.py` creates a client and server in one process on real
+RDMA-capable local IPv4 addresses. It uses the Python bindings and CPU `host`
+memory. Both addresses may belong to one mlx5 port for same-host NIC loopback;
+this is a correctness test, not a cable-throughput benchmark.
+
+The test reserves peer target buffers, exports their registered descriptors,
+and checks exact bytes and guard ranges for 1,000 READs and 1,000 WRITEs across
+both connection directions, single-packet requests, and four-packet batches
+with lengths 1, 64, 257, and 4096 bytes. It checks preserved opcodes, caller
+WR IDs, pointers, and one completion per batch, then verifies SEND/RECEIVE
+coexistence. The final invalid-rkey test requires a `GENERIC_FAILURE` completion;
+that deliberate remote-access violation puts the client QP into error.
+
+Set `DAQIRI_PLATFORM_RDMA_CLIENT_IP` and `DAQIRI_PLATFORM_RDMA_SERVER_IP` to
+unused IPv4 addresses already configured on a local RDMA interface.
+`DAQIRI_PLATFORM_RDMA_PORT` defaults to 19485 and
+`DAQIRI_PLATFORM_RDMA_ITERATIONS` defaults to 100 per case.
+Set `DAQIRI_PLATFORM_REQUIRE_RDMA_READ_WRITE=1` in qualification jobs so missing
+addresses, devices, bindings, or CPU cores fail instead of skipping.
+The test does not modify networking. If adding temporary addresses, remove
+only those addresses after the test, including on failure.
+
+Run against the freshly built bindings in a project container:
+
+```bash
+docker run --rm --network host --ulimit memlock=-1 \
+  --device=/dev/infiniband/uverbs0 --device=/dev/infiniband/uverbs1 \
+  --device=/dev/infiniband/rdma_cm \
+  -v "$PWD:/workspace/daqiri:ro" -w /workspace/daqiri \
+  -e PYTHONPATH=/workspace/daqiri/build/python \
+  -e DAQIRI_PLATFORM_RDMA_CLIENT_IP=<client-ip> \
+  -e DAQIRI_PLATFORM_RDMA_SERVER_IP=<server-ip> \
+  -e DAQIRI_PLATFORM_REQUIRE_RDMA_READ_WRITE=1 \
+  <daqiri-test-image> \
+  python3 -m pytest tests/platform/test_rdma_read_write.py -m platform -p no:cacheprovider
+```
+
+Expose the CUDA driver library using the container's GPU runtime or a read-only
+host-library mount; the test uses CPU buffers but the shared SDK links CUDA.
+Select the actual `uverbs` device paths present on the runner. For evidence of
+hardware execution, record before/after `rx_read_requests`, `rx_write_requests`,
+and `req_remote_access_errors` under
+`/sys/class/infiniband/<device>/ports/1/hw_counters`.
+
+Verified on mlx5_0 (vendor part ID 4129, firmware 28.50.1002): all 10 cases passed,
+with counter deltas of 1,001 read requests (including the rejected invalid-key
+request), 1,000 write requests, and one expected requester remote-access error.

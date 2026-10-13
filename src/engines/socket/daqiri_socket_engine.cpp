@@ -1791,6 +1791,30 @@ Status SocketEngine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uin
 #endif
 }
 
+Status SocketEngine::rdma_get_memory_region(uintptr_t conn_id, const std::string& mr_name,
+                                            RDMAMemoryRegion* region) {
+#if DAQIRI_ENGINE_RDMA
+  if (!is_roce_protocol() || roce_engine_ == nullptr) {
+    return roce_not_initialized("rdma_get_memory_region");
+  }
+  return roce_engine_->rdma_get_memory_region(conn_id, mr_name, region);
+#else
+  return roce_not_initialized("rdma_get_memory_region");
+#endif
+}
+
+Status SocketEngine::rdma_set_remote_memory(BurstParams* burst, const RDMAMemoryRegion& region,
+                                            uint64_t offset) {
+#if DAQIRI_ENGINE_RDMA
+  if (!is_roce_protocol() || roce_engine_ == nullptr) {
+    return roce_not_initialized("rdma_set_remote_memory");
+  }
+  return roce_engine_->rdma_set_remote_memory(burst, region, offset);
+#else
+  return roce_not_initialized("rdma_set_remote_memory");
+#endif
+}
+
 RDMAOpCode SocketEngine::rdma_get_opcode(BurstParams* burst) {
 #if DAQIRI_ENGINE_RDMA
   if (!is_roce_protocol() || roce_engine_ == nullptr) {

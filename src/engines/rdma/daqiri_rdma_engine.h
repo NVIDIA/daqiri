@@ -168,12 +168,17 @@ class RdmaEngine : public Engine {
                                  uintptr_t* conn_id) override;
   Status rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id, bool is_server,
                          int num_pkts, uint64_t wr_id, const std::string& local_mr_name) override;
+  Status rdma_get_memory_region(uintptr_t conn_id, const std::string& mr_name,
+                                RDMAMemoryRegion* region) override;
+  Status rdma_set_remote_memory(BurstParams* burst, const RDMAMemoryRegion& region,
+                                uint64_t offset) override;
   RDMAOpCode rdma_get_opcode(BurstParams* burst) override;
   Status register_mr(std::string name, int intf, void* addr, size_t len, int flags);
   Status wait_on_key_xchg();
   void poll_cm_events();
 
  private:
+  friend class RdmaMemoryTestPeer;
   static constexpr int MAX_RDMA_CONNECTIONS = 128;
   static constexpr int MAX_CQ = 1024;
   static constexpr int NUM_SGE_ELS = 1024;
@@ -198,16 +203,16 @@ class RdmaEngine : public Engine {
   std::queue<struct ibv_sge*> sge_bufs_;
   std::array<rdma_work_req, MAX_OUSTANDING_WR> out_wr_;
   uint64_t cur_wc_id_ = 0;
-  daqiri::ObjectPool* rx_meta;
-  daqiri::ObjectPool* tx_meta;
-  daqiri::ObjectPool* pkt_len_pool_;
+  daqiri::ObjectPool* rx_meta = nullptr;
+  daqiri::ObjectPool* tx_meta = nullptr;
+  daqiri::ObjectPool* pkt_len_pool_ = nullptr;
   std::queue<daqiri::Ring*> tx_rings_;
   std::queue<daqiri::Ring*> rx_rings_;
   std::unordered_map<struct rdma_cm_id*, daqiri::Ring*> tx_rings_map_;
   std::unordered_map<struct rdma_cm_id*, daqiri::Ring*> rx_rings_map_;
   std::unordered_map<std::string, daqiri::Ring*> mem_pools_;
-  daqiri::ObjectPool* tx_burst_pool_;
-  rdma_event_channel* cm_event_channel_;
+  daqiri::ObjectPool* tx_burst_pool_ = nullptr;
+  rdma_event_channel* cm_event_channel_ = nullptr;
   std::mutex threads_mutex_;
   std::mutex client_params_mutex_;
   std::thread main_thread_;

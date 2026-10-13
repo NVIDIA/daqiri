@@ -536,6 +536,24 @@ if status == daqiri.Status.SUCCESS:
     )
 ```
 
+For RC one-sided reads and writes, the peer exports its registration with
+`status, region = daqiri.rdma_get_memory_region(conn_id, "REMOTE_MEMORY")`.
+Exchange the descriptor's integer `address`, `length`, and `rkey` through your
+application's control channel. The requester selects `RDMAOpCode.RDMA_READ`
+or `RDMAOpCode.RDMA_WRITE` in `rdma_set_header`, allocates local buffers with
+`get_tx_packet_burst`, sets every packet length, then calls
+`rdma_set_remote_memory(burst, region, offset=0)` before `send_tx_burst`.
+A batch transfers consecutive remote ranges using the packet lengths.
+
+Poll `get_rx_burst_for_connection(conn_id, is_server)` for the original request. Check
+`completion.rdma_status == daqiri.Status.SUCCESS` before consuming READ data,
+then call `free_tx_burst(completion)` once. `completion.rdma_is_tx` is `True`
+for both reads and writes. The peer does not need to post receives for these
+operations. Registration permissions, descriptor lifetime, ownership, and
+partial failure behavior follow the
+[C++ read/write API](cpp.md#rdma-reads-and-writes).
+`RDMA_WRITE_IMM` and `RDMA_READ_IMM` return `NOT_SUPPORTED`.
+
 Look up server-side connection IDs:
 
 ```python
@@ -666,6 +684,8 @@ The workflow sections above show the common call order and ownership rules.
 | `set_udp_header(burst, idx, udp_len, src_port, dst_port)` | Fill a UDP header. |
 | `set_udp_payload(burst, idx, data)` | Copy UDP payload bytes. |
 | `rdma_set_header(burst, op_code, conn_id, is_server, num_pkts, wr_id, local_mr_name)` | Fill RDMA TX metadata. |
+| `rdma_get_memory_region(conn_id, mr_name)` | Return `(Status, RDMAMemoryRegion)` for the connection's registration. |
+| `rdma_set_remote_memory(burst, region, offset=0)` | Set a checked remote range for RDMA read/write after setting packet lengths. |
 | `rdma_get_opcode(burst)` | Return the RDMA operation code for a burst. |
 
 ### Buffer Release
@@ -678,7 +698,7 @@ The workflow sections above show the common call order and ownership rules.
 | `free_segment_packets_and_burst(burst, seg)` | Free one segment across all packets and free burst metadata. |
 | `free_all_packets_and_burst_rx(burst)` | Free all RX packets and RX burst metadata. |
 | `free_all_packets_and_burst_tx(burst)` | Free all TX packets and TX burst metadata. |
-| `free_rx_burst(burst)` / `free_tx_burst(burst)` | Free burst metadata only. |
+| `free_rx_burst(burst)` / `free_tx_burst(burst)` | Free burst metadata. For RDMA request completions, `free_tx_burst` also returns the packet buffers. |
 | `free_rx_metadata(burst)` / `free_tx_metadata(burst)` | Free only RX or TX metadata. |
 
 ### File I/O
@@ -798,7 +818,7 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 
 | Class | Purpose |
 | --- | --- |
-| `BurstParams` | Opaque burst handle used by RX, TX, free, and packet-access helpers. Exposes `hdr`, `connection_id`, and `rdma_wr_id`. |
+| `BurstParams` | Opaque burst handle used by RX, TX, free, and packet-access helpers. Exposes `hdr`, `connection_id`, `rdma_wr_id`, and read-only `rdma_status` / `rdma_is_tx`. |
 | `BurstHeader` | Wrapper for `BurstHeaderParams`. |
 | `BurstHeaderParams` | Burst metadata: packet count, port, queue, segment count, byte totals, and reorder flags. |
 | `ReorderBurstInfo` | Metadata for reordered aggregate bursts. |
@@ -810,6 +830,7 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `CommonQueueConfig` | Shared queue fields: name, ID, batch size, split boundary, CPU core, memory regions, and offloads. |
 | `RxQueueConfig` | RX queue wrapper with common queue fields, timeout, and `QueuePollMode`. |
 | `TxQueueConfig` | TX queue wrapper with common queue fields and `QueuePollMode`. |
+| `RDMAMemoryRegion` | Registered `address`, `length`, and `rkey` to exchange with a connected RDMA peer. |
 | `MemoryRegionConfig` | Memory region kind, affinity, access flags, sizes, counts, and ownership. |
 | `ExternalMemoryRegion` | Non-owning integer address and byte capacity. |
 | `MemoryRegionRequirement` | Effective kind, slot size, buffer count, capacity, and alignment. |

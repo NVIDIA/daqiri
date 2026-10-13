@@ -110,6 +110,10 @@ class SocketEngine : public Engine {
   Status rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id,
                          bool is_server, int num_pkts, uint64_t wr_id,
                          const std::string& local_mr_name) override;
+  Status rdma_get_memory_region(uintptr_t conn_id, const std::string& mr_name,
+                                RDMAMemoryRegion* region) override;
+  Status rdma_set_remote_memory(BurstParams* burst, const RDMAMemoryRegion& region,
+                                uint64_t offset) override;
   RDMAOpCode rdma_get_opcode(BurstParams* burst) override;
 
  private:

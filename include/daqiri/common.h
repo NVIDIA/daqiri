@@ -1218,6 +1218,15 @@ Status rdma_get_server_conn_id(const std::string &server_addr,
 Status rdma_set_header(BurstParams *burst, RDMAOpCode op_code,
                        uintptr_t conn_id, bool is_server, int num_pkts,
                        uint64_t wr_id, const std::string &local_mr_name);
+/** Return the local MR descriptor registered for this connection's protection domain. */
+Status rdma_get_memory_region(uintptr_t conn_id, const std::string& mr_name,
+                              RDMAMemoryRegion* region);
+/** Set a contiguous remote range for RDMA_READ/WRITE after setting packet lengths.
+ * Packet p transfers at offset + sum(lengths[0..p-1]). Do not change lengths afterward.
+ * Exchange the descriptor through an application control channel before calling this.
+ */
+Status rdma_set_remote_memory(BurstParams* burst, const RDMAMemoryRegion& region,
+                              uint64_t offset = 0);
 RDMAOpCode rdma_get_opcode(BurstParams *burst);
 
 }; // namespace daqiri

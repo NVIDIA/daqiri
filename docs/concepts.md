@@ -128,6 +128,14 @@ URI schemes:
   speaks RoCE. When both peers run DAQIRI, prefer an upper-layer
   library such as MPI, NCCL, or UCX rather than wiring RoCE directly.
 
+A **one-sided RDMA operation** addresses a peer's registered memory using its
+address and remote key (`rkey`). `RDMA_READ` places remote data into the caller's
+local burst buffers; `RDMA_WRITE` places local data into remote memory. Neither
+requires the peer to post a receive. Applications exchange memory descriptors
+and coordinate buffer ownership explicitly. DAQIRI returns a local completion
+for each read/write batch; plain reads/writes do not generate a peer receive
+completion. See [RDMA reads and writes](api-reference/cpp.md#rdma-reads-and-writes).
+
 ### Runtime Named Endpoints
 
 A **runtime named endpoint** is a process-local raw-ibverbs transmit

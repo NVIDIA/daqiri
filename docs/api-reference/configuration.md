@@ -132,6 +132,11 @@ runtime binding.
 - **`access`**: Memory access permissions.
   - type: `list`
   - values: `local`, `rdma_read`, `rdma_write`
+  - For one-sided RDMA, `rdma_read` permits a peer to read this region and
+    `rdma_write` permits a peer to write it. A local READ destination requires
+    `local`. The RDMA engine also enables local-write registration permission
+    whenever `rdma_write` is selected. See
+    [RDMA reads and writes](cpp.md#rdma-reads-and-writes).
 - **`num_bufs`**: Number of buffers in this region. Higher values give more processing
   headroom but consume more memory (GPU BAR1 for `device`). Too low risks dropped packets
   on RX or a TX stall. For socket TCP and UDP RX queues, the smallest `num_bufs` among the
