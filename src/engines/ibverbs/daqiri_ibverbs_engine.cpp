@@ -5693,23 +5693,27 @@ FlowId IbverbsEngine::get_packet_flow_id(BurstParams* burst, int idx) {
 // rdma-core's wrap-safe helper. The per-device clock_info is cached and
 // refreshed ~twice a second (the HW clock wraps, so a stale snapshot would
 // mis-convert). The cache is per thread so concurrent app RX-consume threads
-// never contend on a lock; the epoch invalidates it when the engine shuts down,
-// since a later context may reuse the same address.
+// never contend on a lock. It holds one entry per device the thread has read
+// (no eviction, so round-robin reads across any number of devices stay cached)
+// and is cleared when the shutdown epoch changes, since a later context may
+// reuse the same address.
 uint64_t IbverbsEngine::ts_to_ns(struct ibv_context* ctx, uint64_t raw_ts) {
   struct ClockCache {
     struct ibv_context* ctx = nullptr;
-    uint64_t epoch = 0;
     uint64_t refresh_ns = 0;
     struct mlx5dv_clock_info info {};
   };
-  static constexpr size_t kClockCacheEntries = 4;
-  thread_local ClockCache cache[kClockCacheEntries];
-  thread_local size_t next_victim = 0;
+  thread_local std::vector<ClockCache> cache;
+  thread_local uint64_t cache_epoch = 0;
 
   const uint64_t epoch = g_clock_cache_epoch.load(std::memory_order_acquire);
+  if (cache_epoch != epoch) {
+    cache.clear();
+    cache_epoch = epoch;
+  }
   ClockCache* c = nullptr;
   for (auto& entry : cache) {
-    if (entry.ctx == ctx && entry.epoch == epoch) {
+    if (entry.ctx == ctx) {
       c = &entry;
       break;
     }
@@ -5719,11 +5723,9 @@ uint64_t IbverbsEngine::ts_to_ns(struct ibv_context* ctx, uint64_t raw_ts) {
     struct mlx5dv_clock_info info {};
     if (mlx5dv_get_clock_info(ctx, &info) == 0) {
       if (c == nullptr) {
-        c = &cache[next_victim];
-        next_victim = (next_victim + 1) % kClockCacheEntries;
+        c = &cache.emplace_back();
+        c->ctx = ctx;
       }
-      c->ctx = ctx;
-      c->epoch = epoch;
       c->refresh_ns = now;
       c->info = info;
     } else if (c == nullptr) {
