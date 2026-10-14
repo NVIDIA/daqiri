@@ -114,6 +114,10 @@ DPDK, CUDA user-space dependencies, and RDMA libraries in one image.
     architecture not covered by the default build. See
     [CMake options reference](tutorials/bare-metal-cmake-build.md#cmake-options-reference).
 
+    For static consumers that need shared RDMA libraries at runtime, enable
+    [`DAQIRI_IBVERBS_DLOPEN`](tutorials/bare-metal-cmake-build.md#daqiri_ibverbs_dlopen-runtime-rdma-libraries).
+    This installs versioned glue libraries and defers RDMA loading until engine initialization.
+
 ## Tune The System
 
 This step is optional, but recommended before collecting performance numbers.

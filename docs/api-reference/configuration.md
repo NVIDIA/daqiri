@@ -57,6 +57,11 @@ These settings apply globally to both TX and RX:
   `roce://` endpoint URIs by default.
   - type: `string`
   - values: `dpdk`, `socket`, `ibverbs`
+  - Builds with `DAQIRI_IBVERBS_DLOPEN=ON` require the selected raw ibverbs or
+    RoCE engine's glue library and compatible system RDMA shared libraries at
+    initialization. This is a CMake option; YAML engine selection uses the same
+    values. See [runtime RDMA library deployment](../tutorials/bare-metal-cmake-build.md#daqiri_ibverbs_dlopen-runtime-rdma-libraries)
+    for installation and `DAQIRI_RDMA_GLUE_DIR` search-path guidance.
 - **`log_level`**: Engine log level.
   - type: `string`
   - values: `trace`, `debug`, `info`, `warn` (default), `error`, `critical`, `off`

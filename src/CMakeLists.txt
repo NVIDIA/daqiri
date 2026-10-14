@@ -136,6 +136,8 @@ else()
     "for NUMA pinning that matches DPDK). This may cost memory bandwidth on multi-socket systems.")
 endif()
 
+set(DAQIRI_HAVE_NUMA ${DAQIRI_HAVE_NUMA} PARENT_SCOPE)
+
 # Common library. dpdk_log.cpp and engine_dpdk.cpp hold the only rte_* code left
 # in daqiri_common and are added below only when the dpdk engine is built.
 add_library(daqiri_common

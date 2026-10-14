@@ -84,10 +84,25 @@ endif()
 target_include_directories(${ENGINE_TARGET} PUBLIC ${IBVERBS_INCLUDE_DIRS} ${MLX5_INCLUDE_DIRS})
 target_link_directories(${ENGINE_TARGET} PUBLIC ${IBVERBS_LIBRARY_DIRS} ${MLX5_LIBRARY_DIRS})
 
-target_link_libraries(${ENGINE_TARGET}
-    PUBLIC
-        ${IBVERBS_LIBRARIES}
-        ${MLX5_LIBRARIES}
-    PRIVATE
-        CUDA::cuda_driver
-)
+target_sources(${ENGINE_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../rdma/raw_api.cpp)
+if(DAQIRI_IBVERBS_DLOPEN)
+    target_compile_definitions(${ENGINE_TARGET} PRIVATE DAQIRI_IBVERBS_DLOPEN=1)
+    target_link_libraries(${ENGINE_TARGET} PRIVATE ${CMAKE_DL_LIBS})
+    # Always a DSO, even when DAQIRI itself is built as static archives.
+    add_library(daqiri_raw_verbs_glue SHARED ${CMAKE_CURRENT_SOURCE_DIR}/../../rdma/raw_glue.cpp)
+    target_include_directories(daqiri_raw_verbs_glue PRIVATE ${IBVERBS_INCLUDE_DIRS} ${MLX5_INCLUDE_DIRS})
+    target_link_directories(daqiri_raw_verbs_glue PRIVATE ${IBVERBS_LIBRARY_DIRS} ${MLX5_LIBRARY_DIRS})
+    target_link_libraries(daqiri_raw_verbs_glue PRIVATE ${IBVERBS_LIBRARIES} ${MLX5_LIBRARIES})
+    add_dependencies(${ENGINE_TARGET} daqiri_raw_verbs_glue)
+    target_compile_features(daqiri_raw_verbs_glue PRIVATE cxx_std_17)
+    set_target_properties(daqiri_raw_verbs_glue PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+        SOVERSION 1 VERSION 1.0.0)
+    install(TARGETS daqiri_raw_verbs_glue
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT daqiri-cpp)
+else()
+    target_compile_definitions(${ENGINE_TARGET} PRIVATE DAQIRI_IBVERBS_DLOPEN=0)
+    target_sources(${ENGINE_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../rdma/raw_glue.cpp)
+    target_link_libraries(${ENGINE_TARGET} PUBLIC ${IBVERBS_LIBRARIES} ${MLX5_LIBRARIES})
+endif()
+target_link_libraries(${ENGINE_TARGET} PRIVATE CUDA::cuda_driver)
