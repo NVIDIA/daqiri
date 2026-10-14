@@ -4,9 +4,11 @@
 #pragma once
 
 #include <dlfcn.h>
+#include <link.h>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <mutex>
 #include <string>
 
@@ -34,9 +36,19 @@ class GlueLibrary {
       handle = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
     } else {
       Dl_info info{};
-      if (dladdr(reinterpret_cast<void*>(&rdma_glue_anchor), &info) != 0 &&
+      void* link_map_info = nullptr;
+      if (dladdr1(reinterpret_cast<void*>(&rdma_glue_anchor), &info, &link_map_info,
+                  RTLD_DL_LINKMAP) != 0 &&
           info.dli_fname != nullptr) {
-        const std::string owner(info.dli_fname);
+        std::string owner(info.dli_fname);
+        const auto* object = static_cast<const link_map*>(link_map_info);
+        if (object != nullptr && object->l_name != nullptr && object->l_name[0] == '\0') {
+          // The main executable's dli_fname can be a relative argv[0]. Resolving
+          // it against cwd fails after chdir(), so ask the kernel for its path.
+          std::error_code path_error;
+          const auto executable = std::filesystem::read_symlink("/proc/self/exe", path_error);
+          owner = path_error ? std::string{} : executable.string();
+        }
         const auto slash = owner.find_last_of('/');
         if (slash != std::string::npos) {
           path = owner.substr(0, slash + 1) + filename;

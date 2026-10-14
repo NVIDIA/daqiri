@@ -14,7 +14,16 @@
 
 int main(int argc, char** argv) {
   const std::string mode = argc > 1 ? argv[1] : "load";
-  const bool adjacent = mode == "adjacent";
+  const bool change_directory = mode == "adjacent-chdir";
+  const bool adjacent = mode == "adjacent" || change_directory;
+  const auto expected_directory = std::filesystem::current_path();
+  if (change_directory) {
+    if (argc != 3) {
+      std::cerr << "adjacent-chdir requires a working directory\n";
+      return 1;
+    }
+    std::filesystem::current_path(argv[2]);
+  }
   if (adjacent && (std::getenv("DAQIRI_RDMA_GLUE_DIR") != nullptr ||
                    std::getenv("LD_LIBRARY_PATH") != nullptr)) {
     std::cerr << "Adjacent search requires unset environment overrides\n";
@@ -50,8 +59,7 @@ int main(int argc, char** argv) {
     for (const void* table : {static_cast<const void*>(raw), static_cast<const void*>(cm)}) {
       Dl_info info{};
       if (dladdr(table, &info) == 0 || info.dli_fname == nullptr ||
-          std::filesystem::canonical(info.dli_fname).parent_path() !=
-              std::filesystem::current_path()) {
+          std::filesystem::canonical(info.dli_fname).parent_path() != expected_directory) {
         std::cerr << "Glue library was not loaded from beside the executable\n";
         return 1;
       }

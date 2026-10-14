@@ -331,7 +331,10 @@ can link DAQIRI archives, but is not a fully static, self-contained deployment.
 DAQIRI loads only the glue needed by the selected engine, on initialization.
 It first checks `DAQIRI_RDMA_GLUE_DIR`, if set; this directory is authoritative.
 Otherwise it searches beside the engine DSO or executable, then uses the system
-dynamic loader search path. For an installed static consumer, for example:
+dynamic loader search path. Static consumers resolve the executable's location
+independently of the working directory, including when launched with a relative
+path and initialized after changing directories. For an installed static consumer,
+for example:
 
 ```bash
 export DAQIRI_RDMA_GLUE_DIR=/opt/daqiri/lib

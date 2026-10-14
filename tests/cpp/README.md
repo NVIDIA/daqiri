@@ -6,6 +6,7 @@ and platform tests. See the parent [testing guide](../README.md) for the test ta
 
 With `DAQIRI_ENGINE="ibverbs"` and `DAQIRI_IBVERBS_DLOPEN=ON`, CTest also
 checks real glue loading, search beside the executable with environment overrides
-unset, concurrent cached loads, missing DSOs and entry
+unset, including relative executable launches followed by a working-directory
+change before initialization, concurrent cached loads, missing DSOs and entry
 points, incompatible/incomplete tables, and Linux socket operation without RDMA
 glue. These checks require RDMA userspace libraries but do not require a NIC.

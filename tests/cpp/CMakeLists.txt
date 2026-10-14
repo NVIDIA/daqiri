@@ -70,6 +70,14 @@ if(DAQIRI_IBVERBS_DLOPEN AND TARGET daqiri_raw_verbs_glue)
       -DDAQIRI_CM_GLUE=$<TARGET_FILE:daqiri_cm_verbs_glue>
       -DDAQIRI_TEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/adjacent-glue
       -P ${CMAKE_CURRENT_SOURCE_DIR}/check_rdma_glue_adjacent.cmake)
+  add_test(NAME daqiri_rdma_glue_adjacent_chdir
+    COMMAND ${CMAKE_COMMAND}
+      -DDAQIRI_GLUE_TEST=$<TARGET_FILE:daqiri_rdma_glue_test>
+      -DDAQIRI_RAW_GLUE=$<TARGET_FILE:daqiri_raw_verbs_glue>
+      -DDAQIRI_CM_GLUE=$<TARGET_FILE:daqiri_cm_verbs_glue>
+      -DDAQIRI_TEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/adjacent-glue-chdir
+      -DDAQIRI_CHANGE_DIRECTORY=ON
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/check_rdma_glue_adjacent.cmake)
   add_test(NAME daqiri_rdma_glue_missing COMMAND daqiri_rdma_glue_test dlopen)
   set_tests_properties(daqiri_rdma_glue_missing PROPERTIES
     ENVIRONMENT "DAQIRI_RDMA_GLUE_DIR=${CMAKE_CURRENT_BINARY_DIR}/missing-glue")
