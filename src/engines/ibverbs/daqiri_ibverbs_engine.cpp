@@ -66,6 +66,8 @@ namespace {
 // rte_get_timer_cycles()/rte_get_timer_hz() so the ibverbs engine needs no
 // libdpdk: "cycles" are nanoseconds, so the timer frequency is 1e9.
 constexpr uint64_t ibv_timer_hz = 1'000'000'000ULL;
+// Bumped at engine shutdown to invalidate the per-thread ts_to_ns caches.
+std::atomic<uint64_t> g_clock_cache_epoch{1};
 constexpr FlowId kMaxIbverbsFlowTag = 0x00ffffffU;
 constexpr int kIbverbsCatchAllPriority = 1'000'000;
 std::atomic<uint32_t> g_next_endpoint_generation{1};
@@ -238,6 +240,19 @@ static inline void cqe_read_barrier() {
 
 // Store barrier ordering WQE writes before the doorbell record store the device
 // reads via DMA (outer-shareable on ARM).
+// Orders the CPU's reads of consumed CQEs before the CQ consumer-index store
+// that hands those entries back to the device. A store barrier is not enough on
+// ARM: earlier loads may otherwise be satisfied after the dbrec store.
+static inline void cq_consumer_barrier() {
+#if defined(__aarch64__)
+  asm volatile("dmb oshld" ::: "memory");
+#elif defined(__x86_64__) || defined(__i386__)
+  asm volatile("" ::: "memory");
+#else
+  std::atomic_thread_fence(std::memory_order_seq_cst);
+#endif
+}
+
 static inline void doorbell_store_barrier() {
 #if defined(__aarch64__)
   asm volatile("dmb oshst" ::: "memory");
@@ -314,7 +329,7 @@ static inline uint32_t cpu_inline_wqe_wqebbs(uint32_t frame_len) {
 static inline void copy_wqe_to_cyclic_sq(uint8_t* sq_buf, uint32_t wqe_cnt, uint32_t stride,
                                          uint32_t first_idx, const uint8_t* wqe, uint32_t wqebbs) {
   for (uint32_t i = 0; i < wqebbs; ++i) {
-    const uint32_t idx = (first_idx + i) % wqe_cnt;
+    const uint32_t idx = (first_idx + i) & (wqe_cnt - 1);
     memcpy(sq_buf + static_cast<size_t>(idx) * stride,
            wqe + static_cast<size_t>(i) * MLX5_SEND_WQE_BB, MLX5_SEND_WQE_BB);
   }
@@ -1304,15 +1319,16 @@ void IbverbsEngine::devx_ring_rq_doorbell(IbvRxQueue& q) {
 
 void IbverbsEngine::devx_advance_producer(IbvRxQueue& q) {
   // Worker-only. Refill regions that are fully freed, in cyclic producer order.
-  uint32_t slot = q.rq_pi % q.num_wqe;
+  uint32_t slot = q.rq_pi & (q.num_wqe - 1);
   bool advanced = false;
   while (q.freed_strides[slot].load(std::memory_order_acquire) >= q.strides_per_wqe) {
     q.freed_strides[slot].store(0, std::memory_order_relaxed);
-    devx_build_wqe(q, slot);  // content identical; re-arms the slot
+    // The slot's WQE still describes the same buffer (the NIC never rewrites RQ
+    // WQEs), so advancing the producer index alone re-arms it.
     q.rq_pi++;
     q.reposts.fetch_add(1, std::memory_order_relaxed);
     advanced = true;
-    slot = q.rq_pi % q.num_wqe;
+    slot = q.rq_pi & (q.num_wqe - 1);
   }
   if (advanced) {
     devx_ring_rq_doorbell(q);
@@ -4209,11 +4225,8 @@ void IbverbsEngine::rx_flush_burst(IbvRxQueue* q) {
   q->cur_burst->hdr.hdr.num_pkts = q->cur_n;
   if (!q->ring->enqueue(q->cur_burst)) {
     // Ring full: drop the burst's claims by releasing its strides.
-    uint16_t* wqe_arr = burst_wqe_arr(q->cur_burst);
-    uint16_t* strd_arr = burst_strd_arr(q->cur_burst);
-    for (int i = 0; i < q->cur_n; i++) {
-      release_strides(*q, wqe_arr[i], strd_arr[i]);
-    }
+    release_stride_runs(*q, burst_wqe_arr(q->cur_burst), burst_strd_arr(q->cur_burst),
+                        static_cast<size_t>(q->cur_n));
     rx_meta_pool_->put(q->cur_burst);
     q->ring_full_bursts++;
     q->ring_full_pkts += static_cast<uint64_t>(q->cur_n);
@@ -4274,7 +4287,7 @@ Status IbverbsEngine::rx_poll_queue(IbvRxQueue* q, BurstParams** direct_burst) {
     const uint8_t op_own = cqe64->op_own;
     const uint8_t opcode = op_own >> 4;
     const uint8_t owner = op_own & 1;
-    const uint8_t phase = (q->cq_ci / cqe_cnt) & 1;
+    const uint8_t phase = (q->cq_ci & cqe_cnt) ? 1 : 0;  // cqe_cnt is a power of two
     if (opcode == MLX5_CQE_INVALID || owner != phase) {
       // CQ drained. Reclaim freed regions and maybe flush a partial burst on
       // timeout, then yield to the next queue.
@@ -4326,7 +4339,7 @@ Status IbverbsEngine::rx_poll_queue(IbvRxQueue* q, BurstParams** direct_burst) {
       q->cur_consumed += strd;
       if (q->cur_consumed >= q->strides_per_wqe) {
         q->cur_consumed = 0;
-        q->cur_wqe = (q->cur_wqe + 1) % q->num_wqe;
+        q->cur_wqe = (q->cur_wqe + 1) & wqe_mask;
       }
     } else {
       region = be16toh(cqe64->wqe_counter) & wqe_mask;
@@ -4392,6 +4405,7 @@ Status IbverbsEngine::rx_poll_queue(IbvRxQueue* q, BurstParams** direct_burst) {
     // Periodically advance the CQ doorbell so the HW can recycle CQEs, and
     // refill freed striding regions.
     if ((q->cq_ci & 0x3f) == 0) {
+      cq_consumer_barrier();
       *q->dv_cq.dbrec = htobe32(q->cq_ci & 0xffffff);
       devx_advance_producer(*q);
     }
@@ -4399,6 +4413,7 @@ Status IbverbsEngine::rx_poll_queue(IbvRxQueue* q, BurstParams** direct_burst) {
 
   // Publish the CQ consumer index for any CQEs drained this pass.
   if (q->cq_ci != start_ci) {
+    cq_consumer_barrier();
     *q->dv_cq.dbrec = htobe32(q->cq_ci & 0xffffff);
   }
   if (direct && *direct_burst == nullptr) {
@@ -4570,7 +4585,7 @@ void IbverbsEngine::direct_poll_queue(IbvRxQueue* q) {
     auto* cqe = reinterpret_cast<struct mlx5_cqe64*>(raw + (cqe_size - sizeof(struct mlx5_cqe64)));
     const uint8_t opcode = cqe->op_own >> 4U;
     const uint8_t owner = cqe->op_own & 1U;
-    const uint8_t phase = static_cast<uint8_t>((q->cq_ci / cqe_count) & 1U);
+    const uint8_t phase = (q->cq_ci & cqe_count) ? 1 : 0;  // cqe_count is a power of two
     if (opcode == MLX5_CQE_INVALID || owner != phase) {
       break;
     }
@@ -4665,6 +4680,7 @@ void IbverbsEngine::direct_poll_queue(IbvRxQueue* q) {
   }
 
   if (q->cq_ci != start_ci) {
+    cq_consumer_barrier();
     *q->dv_cq.dbrec = htobe32(q->cq_ci & 0x00ffffffU);
   }
   const bool cq_drained = processed < budget;
@@ -4792,6 +4808,27 @@ void IbverbsEngine::release_strides(IbvRxQueue& q, uint32_t wqe_idx, uint32_t st
   if (tracked_packet) {
     q.outstanding_strides.fetch_sub(strd, std::memory_order_release);
   }
+}
+
+void IbverbsEngine::release_stride_runs(IbvRxQueue& q, const uint16_t* wqe_arr,
+                                        const uint16_t* strd_arr, size_t num) {
+  if (num == 0) {
+    return;
+  }
+  // CQ order keeps packets from one striding WQE contiguous. Publish one
+  // release per WQE run instead of bouncing its atomic counter once per packet.
+  uint16_t current_wqe = wqe_arr[0];
+  uint32_t released = strd_arr[0];
+  for (size_t i = 1; i < num; ++i) {
+    if (wqe_arr[i] == current_wqe) {
+      released += strd_arr[i];
+      continue;
+    }
+    release_strides(q, current_wqe, released);
+    current_wqe = wqe_arr[i];
+    released = strd_arr[i];
+  }
+  release_strides(q, current_wqe, released);
 }
 
 // ---------------------------------------------------------------------------
@@ -4992,9 +5029,7 @@ void IbverbsEngine::reorder_poll_events(IbvRxQueue& q, IbvReorderPlan& plan) {
       continue;
     }  // still running
     // Kernel finished reading the source packets -> release their strides.
-    for (uint32_t i = 0; i < ob.src_count; i++) {
-      release_strides(q, ob.src_wqe[i], ob.src_strd[i]);
-    }
+    release_stride_runs(q, ob.src_wqe.data(), ob.src_strd.data(), ob.src_count);
     ob.src_wqe.clear();
     ob.src_strd.clear();
     ob.src_count = 0;
@@ -5023,9 +5058,7 @@ Status IbverbsEngine::reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, b
   if (idx == plan.out_bufs.size()) {
     DAQIRI_LOG_ERROR("Reorder '{}' has no free output buffer", plan.cfg.name_);
     // Drop this batch's sources so the RQ can recycle.
-    for (uint32_t i = 0; i < num_pkts; i++) {
-      release_strides(q, plan.acc_wqe[i], plan.acc_strd[i]);
-    }
+    release_stride_runs(q, plan.acc_wqe.data(), plan.acc_strd.data(), num_pkts);
     plan.acc_ptrs.clear();
     plan.acc_wqe.clear();
     plan.acc_strd.clear();
@@ -5164,9 +5197,7 @@ Status IbverbsEngine::reorder_get_rx(IbvRxQueue& q, BurstParams** burst) {
         continue;
       }
       if (plan.cfg.missing_action_ == ReorderMissingAction::DROP) {
-        for (size_t i = 0; i < plan.acc_ptrs.size(); ++i) {
-          release_strides(q, plan.acc_wqe[i], plan.acc_strd[i]);
-        }
+        release_stride_runs(q, plan.acc_wqe.data(), plan.acc_strd.data(), plan.acc_ptrs.size());
         plan.acc_ptrs.clear();
         plan.acc_wqe.clear();
         plan.acc_strd.clear();
@@ -5575,26 +5606,8 @@ void IbverbsEngine::free_all_packets(BurstParams* burst) {
   if (!q) {
     return;
   }
-  uint16_t* wqe_arr = burst_wqe_arr(burst);
-  uint16_t* strd_arr = burst_strd_arr(burst);
-  const int num = static_cast<int>(burst->hdr.hdr.num_pkts);
-  if (num == 0) {
-    return;
-  }
-  // CQ order keeps packets from one striding WQE contiguous. Publish one
-  // release per WQE instead of bouncing its atomic counter once per packet.
-  uint16_t current_wqe = wqe_arr[0];
-  uint32_t released_strides = strd_arr[0];
-  for (int i = 1; i < num; ++i) {
-    if (wqe_arr[i] == current_wqe) {
-      released_strides += strd_arr[i];
-      continue;
-    }
-    release_strides(*q, current_wqe, released_strides);
-    current_wqe = wqe_arr[i];
-    released_strides = strd_arr[i];
-  }
-  release_strides(*q, current_wqe, released_strides);
+  release_stride_runs(*q, burst_wqe_arr(burst), burst_strd_arr(burst),
+                      static_cast<size_t>(burst->hdr.hdr.num_pkts));
 }
 
 void IbverbsEngine::free_packet_segment(BurstParams* burst, int seg, int pkt) {
@@ -5679,18 +5692,47 @@ FlowId IbverbsEngine::get_packet_flow_id(BurstParams* burst, int idx) {
 // Convert a raw free-running HW timestamp (from the CQE) to nanoseconds using
 // rdma-core's wrap-safe helper. The per-device clock_info is cached and
 // refreshed ~twice a second (the HW clock wraps, so a stale snapshot would
-// mis-convert). Thread-safe: app RX-consume threads may call concurrently.
+// mis-convert). The cache is per thread so concurrent app RX-consume threads
+// never contend on a lock. It holds one entry per device the thread has read
+// (no eviction, so round-robin reads across any number of devices stay cached)
+// and is cleared when the shutdown epoch changes, since a later context may
+// reuse the same address.
 uint64_t IbverbsEngine::ts_to_ns(struct ibv_context* ctx, uint64_t raw_ts) {
-  std::lock_guard<std::mutex> lk(clock_mtx_);
-  ClockCache& c = clock_cache_[ctx];
-  const uint64_t now = ibv_now_ns();
-  if (!c.valid || (now - c.refresh_tsc) > (ibv_timer_hz / 2)) {
-    if (mlx5dv_get_clock_info(ctx, &c.info) == 0) {
-      c.refresh_tsc = now;
-      c.valid = true;
+  struct ClockCache {
+    struct ibv_context* ctx = nullptr;
+    uint64_t refresh_ns = 0;
+    struct mlx5dv_clock_info info {};
+  };
+  thread_local std::vector<ClockCache> cache;
+  thread_local uint64_t cache_epoch = 0;
+
+  const uint64_t epoch = g_clock_cache_epoch.load(std::memory_order_acquire);
+  if (cache_epoch != epoch) {
+    cache.clear();
+    cache_epoch = epoch;
+  }
+  ClockCache* c = nullptr;
+  for (auto& entry : cache) {
+    if (entry.ctx == ctx) {
+      c = &entry;
+      break;
     }
   }
-  return c.valid ? mlx5dv_ts_to_ns(&c.info, raw_ts) : 0;
+  const uint64_t now = ibv_now_ns();
+  if (c == nullptr || (now - c->refresh_ns) > (ibv_timer_hz / 2)) {
+    struct mlx5dv_clock_info info {};
+    if (mlx5dv_get_clock_info(ctx, &info) == 0) {
+      if (c == nullptr) {
+        c = &cache.emplace_back();
+        c->ctx = ctx;
+      }
+      c->refresh_ns = now;
+      c->info = info;
+    } else if (c == nullptr) {
+      return 0;
+    }
+  }
+  return mlx5dv_ts_to_ns(&c->info, raw_ts);
 }
 
 Status IbverbsEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) {
@@ -7552,7 +7594,7 @@ void IbverbsEngine::shutdown() {
   }
   pd_map_.clear();
   flex_parser_caps_.clear();
-  clock_cache_.clear();
+  g_clock_cache_epoch.fetch_add(1, std::memory_order_acq_rel);
   for (auto& c : ctx_map_) {
     if (c.second && ibv_close_device(c.second) != 0) {
       DAQIRI_LOG_ERROR("ibv_close_device failed during ibverbs shutdown: {}", strerror(errno));
@@ -8096,7 +8138,7 @@ void IbverbsEngine::poll_tx_completions(IbvTxQueue& q) {
     const uint8_t op_own = cqe64->op_own;
     const uint8_t opcode = op_own >> 4;
     const uint8_t owner = op_own & 1;
-    const uint8_t phase = (q.tx_cq_ci / cqe_cnt) & 1;
+    const uint8_t phase = (q.tx_cq_ci & cqe_cnt) ? 1 : 0;  // cqe_cnt is a power of two
     if (opcode == MLX5_CQE_INVALID || owner != phase) {
       break;
     }
@@ -8240,7 +8282,7 @@ bool IbverbsEngine::emit_direct_drain_nop(IbvTxQueue& q) {
   uint8_t* const sq_buf = static_cast<uint8_t*>(q.dv_qp.sq.buf);
   const uint32_t wqe_cnt = q.dv_qp.sq.wqe_cnt;
   const uint32_t stride = q.dv_qp.sq.stride;
-  const uint32_t idx = q.sq_pi % wqe_cnt;
+  const uint32_t idx = q.sq_pi & (wqe_cnt - 1);
   uint8_t* const seg = sq_buf + static_cast<size_t>(idx) * stride;
   memset(seg, 0, stride);
   auto* const ctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(seg);
@@ -8534,7 +8576,7 @@ void* IbverbsEngine::emit_wait_wqe(IbvTxQueue& q, uint64_t when_ns) {
   uint8_t* const sq_buf = static_cast<uint8_t*>(q.dv_qp.sq.buf);
   const uint32_t wqe_cnt = q.dv_qp.sq.wqe_cnt;
   const uint32_t stride = q.dv_qp.sq.stride;
-  const uint32_t widx = q.sq_pi % wqe_cnt;
+  const uint32_t widx = q.sq_pi & (wqe_cnt - 1);
   uint8_t* wbase = sq_buf + static_cast<size_t>(widx) * stride;
   auto* wctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(wbase);
   wctrl->opmod_idx_opcode = htobe32((static_cast<uint32_t>(MLX5_OPC_MOD_WAIT_TIME) << 24) |
@@ -8575,7 +8617,7 @@ void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst, uint16
 
   while (packet < n) {
     const uint32_t part = std::min<uint32_t>(EMPW_MAX_PACKETS, static_cast<uint32_t>(n - packet));
-    const uint32_t widx = static_cast<uint32_t>(q.sq_pi % wqe_cnt);
+    const uint32_t widx = static_cast<uint32_t>(q.sq_pi & (wqe_cnt - 1));
     uint8_t* const title = sq_buf + static_cast<size_t>(widx) * stride;
     const uint32_t wqebbs = empw_wqebbs(part);
     const uint8_t ds = static_cast<uint8_t>(2u + part);
@@ -8652,8 +8694,8 @@ void IbverbsEngine::post_endpoint_inline_burst(IbvTxQueue& q, BurstParams* burst
       last_ctrl = emit_wait_wqe(q, txtime[packet]);
     }
 
-    const uint32_t first_idx = q.sq_pi % wqe_cnt;
-    const uint32_t second_idx = (first_idx + 1) % wqe_cnt;
+    const uint32_t first_idx = q.sq_pi & (wqe_cnt - 1);
+    const uint32_t second_idx = (first_idx + 1) & (wqe_cnt - 1);
     alignas(16) std::array<uint8_t, WQE_BYTES> wqe{};
     auto* ctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(wqe.data());
     const bool signaled =
@@ -8731,7 +8773,7 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
       uint8_t* const sq_buf = static_cast<uint8_t*>(q.dv_qp.sq.buf);
       const uint32_t wqe_cnt = q.dv_qp.sq.wqe_cnt;
       const uint32_t stride = q.dv_qp.sq.stride;
-      const uint32_t idx = q.sq_pi % wqe_cnt;
+      const uint32_t idx = q.sq_pi & (wqe_cnt - 1);
       uint8_t* const seg = sq_buf + static_cast<size_t>(idx) * stride;
       auto* const ctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(seg);
       ctrl->opmod_idx_opcode = htobe32(((q.sq_pi & 0xffff) << 8) | MLX5_OPCODE_SEND);
@@ -8774,7 +8816,7 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
       last_ctrl = emit_wait_wqe(q, txtime[i]);
     }
 
-    const uint32_t idx = q.sq_pi % wqe_cnt;
+    const uint32_t idx = q.sq_pi & (wqe_cnt - 1);
     uint8_t* seg = sq_buf + static_cast<size_t>(idx) * stride;
     auto* ctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(seg);
     const bool signaled = q.poll_mode == QueuePollMode::DIRECT
