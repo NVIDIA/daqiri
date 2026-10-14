@@ -1171,9 +1171,12 @@ std::shared_ptr<SocketEngine::ConnectionState> SocketEngine::register_connection
                                                      std::to_string(queue));
   }
 
-  {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    connections_[conn->conn_id] = conn;
+  // Keep startup private and serialize publication with shutdown's registry
+  // snapshot. Until publication, this path alone owns cleanup of the thread.
+  std::unique_lock<std::mutex> state_lock(state_mutex_);
+  if (!running_.load()) {
+    close_fd(conn->fd);
+    return nullptr;
   }
 
   if (start_rx_thread) {
@@ -1183,12 +1186,11 @@ std::shared_ptr<SocketEngine::ConnectionState> SocketEngine::register_connection
     if (!conn->rx_start_success) {
       lock.unlock();
       conn->rx_thread.join();
-      std::lock_guard<std::mutex> state_lock(state_mutex_);
-      connections_.erase(conn->conn_id);
       return nullptr;
     }
   }
 
+  connections_[conn->conn_id] = conn;
   return conn;
 }
 
