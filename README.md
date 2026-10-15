@@ -126,6 +126,13 @@ Step-by-step walkthroughs to get hands-on:
 
 DAQIRI ships formal releases quarterly using [calendar versioning](https://calver.org/). New features and fixes land on `main` continuously — pull and build from there for the latest.
 
+### Application development release containers
+
+`Dockerfile_release` provides separate CUDA and PyTorch SDK images with Python
+bindings, benchmarks, and tuning tools. They support raw ibverbs, RoCE, UDP, and
+TCP. Build with `scripts/build-release-container.sh` (`BASE_IMAGE=torch` for
+PyTorch).
+
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE) for details.

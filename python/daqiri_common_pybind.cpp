@@ -1205,7 +1205,7 @@ PYBIND11_MODULE(_daqiri, m) {
         py::call_guard<py::gil_scoped_release>());
   m.def("get_tx_packet_burst", &get_tx_packet_burst, "burst"_a,
         py::call_guard<py::gil_scoped_release>());
-  m.def("send_tx_burst", &send_tx_burst, "burst"_a,
+  m.def("send_tx_burst", py::overload_cast<BurstParams*>(&send_tx_burst), "burst"_a,
         py::call_guard<py::gil_scoped_release>());
   m.def("set_packet_lengths", &set_packet_lengths_from_vector, "burst"_a,
         "idx"_a, "lens"_a);
