@@ -371,6 +371,23 @@ struct mlx5_ifc_create_tir_out_bits {
   uint8_t reserved_at_60[0x20];
 };
 
+// RX CQE compression (legacy/basic layout). A CQE whose op_own format bits read
+// MLX5_CQE_FORMAT_COMPRESSED is a session header: it carries the shared "title"
+// fields (timestamp, flow tag) and, in byte_cnt, the number of mini-CQEs that
+// follow. Mini-CQE arrays (8 x 8 B per 64 B CQE slot) start in the next slot;
+// the second array is 7 slots after the first, later ones every 8 slots. The
+// session consumes one CQ slot per mini-CQE.
+static constexpr uint8_t MLX5_CQE_FORMAT_COMPRESSED = 0x3;
+static constexpr uint8_t MLX5_CQE_RESP_FORMAT_CSUM_STRIDX = 0x3;
+static constexpr uint8_t MLX5_CQE_INVALIDATE = 0xf0;  // opcode INVALID, owner 0
+
+struct mlx5_mini_cqe8_csum_stridx {
+  uint16_t checksum;    // big-endian
+  uint16_t stride_idx;  // big-endian
+  uint32_t byte_cnt;    // big-endian; same packing as the full CQE byte_cnt
+};
+static_assert(sizeof(mlx5_mini_cqe8_csum_stridx) == 8, "mini-CQE must be 8 bytes");
+
 struct mlx5_ifc_cqc_bits {
   uint8_t status[0x4];
   uint8_t as_notify[0x1];

@@ -1805,6 +1805,8 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_memory_region_config(
           tmr.access_ |= daqiri::MEM_ACCESS_RDMA_WRITE;
         } else if (access == "rdma_read") {
           tmr.access_ |= daqiri::MEM_ACCESS_RDMA_READ;
+        } else if (access == "relaxed_ordering") {
+          tmr.access_ |= daqiri::MEM_ACCESS_RELAXED_ORDERING;
         } else {
           DAQIRI_LOG_ERROR("Unknown memory-region access value '{}'", access);
           return false;
@@ -2285,7 +2287,8 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_rx_queue_config(
     daqiri::RxQueueConfig& q, bool parse_memory_regions) {
   if (!daqiri::detail::validate_yaml_mapping_keys(
           q_item,
-          {"name", "id", "poll_mode", "cpu_core", "batch_size", "memory_regions", "timeout_us"},
+          {"name", "id", "poll_mode", "cpu_core", "batch_size", "memory_regions", "timeout_us",
+           "cqe_compression"},
           "RX queue")) {
     return false;
   }
@@ -2302,6 +2305,18 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_rx_queue_config(
                          q_item["poll_mode"].as<std::string>());
         return false;
       }
+    }
+
+    if (!daqiri::detail::parse_optional_yaml_scalar(q_item, "cqe_compression", false,
+                                                    q.cqe_compression_, "RX queue")) {
+      return false;
+    }
+    if (q.cqe_compression_ && _engine_type != daqiri::EngineType::IBVERBS) {
+      DAQIRI_LOG_ERROR(
+          "RX cqe_compression is supported only by the raw ibverbs engine; configured engine "
+          "is {}",
+          daqiri::engine_type_to_string(_engine_type));
+      return false;
     }
 
     if (q.poll_mode_ == daqiri::QueuePollMode::DIRECT) {
