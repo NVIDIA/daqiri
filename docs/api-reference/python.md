@@ -758,7 +758,7 @@ encapsulation/push rules are configured in YAML under `tx.flows`.
 | `MEM_ACCESS_LOCAL` | Local memory access flag. |
 | `MEM_ACCESS_RDMA_WRITE` | RDMA write memory access flag. |
 | `MEM_ACCESS_RDMA_READ` | RDMA read memory access flag. |
-| `MEM_ACCESS_RELAXED_ORDERING` | Opt-in PCIe relaxed-ordering flag for NIC DMA into the region (raw `ibverbs` engine). |
+| `MEM_ACCESS_RELAXED_ORDERING` | Opt-in PCIe relaxed-ordering flag for NIC DMA into the region (raw `ibverbs` and RoCE engines). |
 
 ## Enums
 

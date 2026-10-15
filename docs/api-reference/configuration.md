@@ -139,7 +139,7 @@ runtime binding.
   - values: `local`, `rdma_read`, `rdma_write`, `relaxed_ordering`
 
   `relaxed_ordering` requests PCIe relaxed ordering for NIC DMA into the region and is honored
-  by the raw `ibverbs` engine (the RoCE engine always requests it). It can raise GPUDirect RX
+  by the raw `ibverbs` engine and the RoCE (`roce://`) engine. It can raise GPUDirect RX
   bandwidth on discrete-GPU hosts, but leave it off on Tegra/IGX: it has caused receive-side
   local protection errors there. If the device rejects the flag, DAQIRI retries the
   registration without it and logs a warning.
