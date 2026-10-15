@@ -68,6 +68,9 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 - **Runtime named endpoints** — Register raw-ibverbs Ethernet/IPv4/UDP destinations once, resolve
   them to opaque IDs, and select a TX queue per submission. DAQIRI inlines each cached header in
   the mlx5 send WQE, so application packet buffers contain only the UDP payload.
+- **Optional runtime RDMA loading** — Build with `DAQIRI_IBVERBS_DLOPEN=ON` to load
+  verbs/mlx5/RDMA CM through glue libraries at engine initialization, including for
+  static DAQIRI consumers. See the [build option](https://nvidia.github.io/daqiri/tutorials/bare-metal-cmake-build/#daqiri_ibverbs_dlopen-runtime-rdma-libraries).
 - **RDMA** — RDMA verbs (READ, WRITE, SEND) over RoCE on Ethernet NICs or InfiniBand.
 - **Linux socket control** — TCP/UDP socket streams expose connection IDs and
   `socket_setsockopt()` for native Linux `setsockopt` tuning without YAML option
@@ -128,8 +131,7 @@ DAQIRI ships formal releases quarterly using [calendar versioning](https://calve
 `Dockerfile_release` provides separate CUDA and PyTorch SDK images with Python
 bindings, benchmarks, and tuning tools. They support raw ibverbs, RoCE, UDP, and
 TCP. Build with `scripts/build-release-container.sh` (`BASE_IMAGE=torch` for
-PyTorch). See [release container instructions](docs/getting-started.md#release-sdk-containers)
-for contents, source inventories, and validation.
+PyTorch).
 
 ## License
 

@@ -19,6 +19,13 @@ If you don't have any NIC at all, the `*_sw_loopback*` variants of the Raw Ether
 
 (`DAQIRI_ENGINE` at the CMake layer selects which optional engine implementations to compile in. `dpdk` enables the default raw engine, while `ibverbs` enables both the pure-DevX raw engine and `roce://` endpoints. Linux UDP/TCP sockets are always built in. The default build is `dpdk ibverbs`.)
 
+If your build enables `DAQIRI_IBVERBS_DLOPEN` (default `OFF`), raw ibverbs and
+`roce://` configurations also require the versioned DAQIRI glue libraries and
+compatible system RDMA shared libraries when the engine initializes. Deploy
+these before running the examples; missing runtime libraries fail initialization.
+See [runtime RDMA library deployment](bare-metal-cmake-build.md#daqiri_ibverbs_dlopen-runtime-rdma-libraries)
+for the required files and library search paths.
+
 The example configs show the DAQIRI fields and application settings used for different transport
 and hardware setups.
 

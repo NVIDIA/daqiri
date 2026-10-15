@@ -277,6 +277,7 @@ need to enable a specific feature or adjust the build for a particular host.
 | `CMAKE_BUILD_TYPE` | n/a | Use `Release` for benchmarks and installed builds. |
 | `BUILD_SHARED_LIBS` | n/a | Use `ON` to produce `libdaqiri.so` and exported package metadata; use `OFF` only when you intentionally need static libraries. |
 | `DAQIRI_ENGINE` | `"dpdk ibverbs"` | Space-separated optional engines to compile. Valid values are `dpdk` and `ibverbs`; Linux UDP/TCP sockets are always built in. Use a smaller set only when packaging a narrower build. |
+| `DAQIRI_IBVERBS_DLOPEN` | `OFF` | Load the raw ibverbs and RoCE dependencies through versioned glue DSOs at engine initialization. Useful when statically linking DAQIRI while using shared RDMA libraries at runtime. |
 | `DAQIRI_BUILD_EXAMPLES` | `ON` | Builds the `daqiri_bench_*` executables under `build/examples/`. Leave on for smoke tests and benchmark workflows. The `daqiri_config_validate` tool is always built and installed, including when this option is `OFF`. |
 | `DAQIRI_BUILD_APPLICATIONS` | `OFF` | Builds heavier end-to-end examples under `applications/`, currently the TensorRT ResNet inference app. Requires the extra application dependencies. |
 | `DAQIRI_BUILD_PYTHON` | `OFF` | Builds pybind11 Python bindings. Enable only when you need `import daqiri`. |
@@ -298,12 +299,64 @@ guidance.
 | Recipe | What you get | When to use |
 |---|---|---|
 | `-DDAQIRI_ENGINE="dpdk"` | Raw Ethernet (DPDK) + built-in UDP/TCP sockets | No RoCE/RDMA, smallest NIC build |
-| `-DDAQIRI_ENGINE="ibverbs"` | RDMA/RoCE (ibverbs) + built-in UDP/TCP sockets | RDMA-only, no raw Ethernet |
+| `-DDAQIRI_ENGINE="ibverbs"` | Raw Ethernet (ibverbs), RDMA/RoCE + built-in UDP/TCP sockets | No DPDK dependency |
 | `-DDAQIRI_ENGINE="dpdk ibverbs"` | Raw Ethernet + RDMA/RoCE + built-in UDP/TCP sockets | Recommended default, matches the container |
 
 !!! note "Sockets are always available; `ibverbs` backs RoCE"
 
     The socket engine (Linux UDP/TCP) is always built, so it never appears in `DAQIRI_ENGINE`. Its RoCE path delegates to the `ibverbs` engine, so `roce://` endpoints work only when `ibverbs` is in the list. Internally the ibverbs engine lives under [`src/engines/rdma`](https://github.com/NVIDIA/daqiri/blob/main/src/engines/rdma) (target `daqiri_rdma`); `ibverbs` is just the user-facing name, chosen so an alternative RDMA engine (such as DOCA) could be added later.
+
+### `DAQIRI_IBVERBS_DLOPEN`: runtime RDMA libraries
+
+Enable `-DDAQIRI_IBVERBS_DLOPEN=ON` to keep `libibverbs`, `libmlx5`, and
+`librdmacm` out of the DAQIRI engines' link dependencies. This works with both
+static and shared DAQIRI builds. For a static build with raw ibverbs, RoCE,
+and Linux UDP/TCP sockets:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_SHARED_LIBS=OFF -DDAQIRI_ENGINE="ibverbs" \
+  -DDAQIRI_IBVERBS_DLOPEN=ON -DDAQIRI_BUILD_PYTHON=OFF
+cmake --build build -j
+cmake --install build --prefix /opt/daqiri
+```
+
+Run these build commands in the project container. The build still requires
+RDMA development headers and shared libraries to compile the glue libraries.
+Installation includes `libdaqiri_raw_verbs_glue.so.1` (verbs/mlx5) and
+`libdaqiri_cm_verbs_glue.so.1` (verbs/RDMA CM) in the library directory. Deploy
+these with compatible system RDMA shared libraries. The application executable
+can link DAQIRI archives, but is not a fully static, self-contained deployment.
+
+DAQIRI loads only the glue needed by the selected engine, on initialization.
+It first checks `DAQIRI_RDMA_GLUE_DIR`, if set; this directory is authoritative.
+Otherwise it searches beside the engine DSO or executable, then uses the system
+dynamic loader search path. Static consumers resolve the executable's location
+independently of the working directory, including when launched with a relative
+path and initialized after changing directories. For an installed static consumer,
+for example:
+
+```bash
+export DAQIRI_RDMA_GLUE_DIR=/opt/daqiri/lib
+```
+
+Adjust the path to your installation's library directory (which may be `lib64`
+or an architecture-specific subdirectory). The environment variable locates the
+DAQIRI glue libraries; their RDMA dependencies must also be discoverable by the
+system loader. For build-tree runs, use `DAQIRI_RDMA_GLUE_DIR="$PWD/build/lib"`.
+Missing libraries, missing entry points, and incompatible glue tables fail engine
+initialization with a diagnostic. Successful loads remain open for the process
+lifetime. Linux UDP/TCP sockets and hardware-free configuration validation do
+not require either glue library.
+
+The exported CMake targets and pkg-config metadata omit direct RDMA dependencies
+in this mode. For static CMake consumers, group the common and engine archives
+when required by the linker, as in the project's C++ test targets. The
+`pkg-config --static --libs daqiri` output includes that archive group.
+
+This option applies to DAQIRI's own ibverbs/RDMA engines. A DPDK-enabled build
+can still depend on verbs/mlx5 through its mlx5 PMD; configure DPDK separately
+for runtime loading, or use `DAQIRI_ENGINE="ibverbs"` to omit DPDK.
 
 ### `DAQIRI_BUILD_PYTHON`: pybind11 bindings
 

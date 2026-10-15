@@ -114,68 +114,9 @@ DPDK, CUDA user-space dependencies, and RDMA libraries in one image.
     architecture not covered by the default build. See
     [CMake options reference](tutorials/bare-metal-cmake-build.md#cmake-options-reference).
 
-### Release SDK containers {#release-sdk-containers}
-
-Use `Dockerfile_release` to develop applications against an installed DAQIRI SDK.
-It builds raw ibverbs and RoCE support plus the built-in UDP/TCP socket engine,
-Python bindings, and the benchmark examples. The CUDA variant supplies the CUDA
-development toolkit; the PyTorch variant inherits PyTorch and TensorRT from its
-NGC base. TensorRT example applications are not prebuilt.
-
-```bash
-git submodule update --init --recursive
-scripts/build-release-container.sh
-BASE_IMAGE=torch scripts/build-release-container.sh
-```
-
-The default tags are `daqiri:<VERSION>-cuda-release` and
-`daqiri:<VERSION>-torch-release`. Set `IMAGE_TAG` to override the tag,
-`BUILD_JOBS` to limit build parallelism, and `CMAKE_CUDA_ARCHITECTURES` to override
-`80;90;121`. A custom `DAQIRI_OS_BASE_IMAGE` must use Ubuntu 24.04 and a compatible
-CUDA toolkit. Use an immutable image digest for the reviewed release build.
-
-The images install DAQIRI under `/opt/daqiri` and set `PATH`, `CMAKE_PREFIX_PATH`,
-`PKG_CONFIG_PATH`, and `PYTHONPATH` for C++/CUDA and Python consumers. They retain
-the compiler, CMake, pkg-config, Python development tools, libnuma, and the
-verbs/mlx5/RDMA libraries. NIC tools include `ibv_devinfo`, `ibstat`,
-`ibdev2netdev`, `mlnx_perf`, `mlxconfig`, `ethtool`, `lspci`, and `ip`.
-`tune_system.py` is installed in `/opt/daqiri/bin`.
-
-The release build adds no DPDK, Rivermax, AWS SDK, OpenTelemetry, Scapy,
-clang-format, or test tooling. It disables DAQIRI's GDS/S3/metrics features and
-C++ tests. The PyTorch base has its own inherited dependencies; these exclusions
-describe DAQIRI additions, not packages already in that base.
-
-`/opt/daqiri-release` contains the selected base image reference, base and final
-Debian package inventories, added-package versions and license notice references,
-the Python and vendored component inventories, added OSS source archives and notices, source
-provenance, DAQIRI source (including vendored yaml-cpp/spdlog), and checksums.
-Source retrieval is mandatory and fails on unavailable exact versions of added
-OSS Debian packages. MFT bundles a private OpenSSL library outside the Debian
-dependency graph. Its unresolved vendor source/notice coverage is recorded in
-`source-review.json`; resolve this before publication or replace MFT with an
-OSS tool suite. The package inventory alone does not establish complete source
-coverage for bundled components.
-
-Validate each variant on both native amd64 and arm64 hosts:
-
-```bash
-PLATFORM=linux/arm64 IMAGE_TAG=daqiri:release-arm64 scripts/build-release-container.sh
-scripts/check-release-container.sh daqiri:release-arm64
-# On the amd64 host, repeat with PLATFORM=linux/amd64 and an amd64 image tag.
-# Repeat both architectures with BASE_IMAGE=torch.
-```
-
-The SDK check uses a privileged GPU-enabled container as the current user,
-checks imports and linking, and compiles a standalone C++/CUDA consumer. It uses
-a private CUDA driver stub for hardware-independent checks. Benchmark execution
-must use the real injected driver. Run as root with host networking and mounted
-hugepages, following the benchmark launch instructions below. Start with the
-UDP/TCP socket loopback configurations, then use ibverbs hardware loopback or a
-cabled NIC test. The raw software-loopback configurations require DPDK.
-Configurations selecting `engine: dpdk`, DPDK-only transforms/features, and
-GDS/S3 writes require a different build. Source archives retain development and
-test source files but no packaged test environment.
+    For static consumers that need shared RDMA libraries at runtime, enable
+    [`DAQIRI_IBVERBS_DLOPEN`](tutorials/bare-metal-cmake-build.md#daqiri_ibverbs_dlopen-runtime-rdma-libraries).
+    This installs versioned glue libraries and defers RDMA loading until engine initialization.
 
 ## Tune The System
 

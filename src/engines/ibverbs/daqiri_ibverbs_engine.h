@@ -42,6 +42,10 @@
 #include "src/daqiri_ring.h"
 #include "src/daqiri_pool.h"
 
+namespace daqiri::detail {
+struct RawVerbsApi;
+}
+
 namespace daqiri {
 
 // ---- GPU packet reordering (mirrors the DPDK reorder path, on MPRQ RX) ----
@@ -562,6 +566,7 @@ class IbverbsEngine : public Engine {
   Status get_reorder_missing_info(BurstParams* burst, ReorderMissingInfo* info) override;
 
  private:
+  const detail::RawVerbsApi* verbs_ = nullptr;
   struct PortSteering;
 
   bool use_hugepage_arenas() const override {
@@ -682,6 +687,10 @@ class IbverbsEngine : public Engine {
   // Release `strd` strides belonging to `wqe_idx`; repost the region if fully
   // released. This is the per-burst free hot path.
   void release_strides(IbvRxQueue& q, uint32_t wqe_idx, uint32_t strd, bool tracked_packet = true);
+  // Releases a burst's packets, coalescing consecutive packets from the same WQE
+  // into one atomic update.
+  void release_stride_runs(IbvRxQueue& q, const uint16_t* wqe_arr, const uint16_t* strd_arr,
+                           size_t num);
 
   // ---- TX path ----
   Status setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf, const TxQueueConfig& qcfg);
@@ -777,16 +786,8 @@ class IbverbsEngine : public Engine {
   std::vector<struct ibv_mr*> registered_mrs_;
   std::unordered_map<std::string, std::vector<struct ibv_mr*>> registered_mrs_by_name_;
 
-  // Cached mlx5 clock-info per device for converting the CQE's free-running HW
-  // timestamp to nanoseconds (mlx5dv_ts_to_ns). Refreshed lazily (the HW clock
-  // wraps), guarded because app RX-consume threads may convert concurrently.
-  struct ClockCache {
-    uint64_t refresh_tsc = 0;  // rte timer cycles at last refresh
-    bool valid = false;
-    struct mlx5dv_clock_info info {};
-  };
-  std::unordered_map<struct ibv_context*, ClockCache> clock_cache_;
-  std::mutex clock_mtx_;
+  // Converts the CQE's free-running HW timestamp to nanoseconds
+  // (mlx5dv_ts_to_ns) using a per-thread clock-info cache.
   uint64_t ts_to_ns(struct ibv_context* ctx, uint64_t raw_ts);
 
   // RX/TX queues, owned here. Pointers handed to worker threads are stable.
