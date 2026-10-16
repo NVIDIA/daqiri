@@ -222,7 +222,11 @@ using MemoryRegionRequirements = std::unordered_map<std::string, MemoryRegionReq
 enum MemoryAccess {
   MEM_ACCESS_LOCAL = 1U,
   MEM_ACCESS_RDMA_WRITE = 1U << 1,
-  MEM_ACCESS_RDMA_READ = 1U << 2
+  MEM_ACCESS_RDMA_READ = 1U << 2,
+  // Request PCIe relaxed ordering for NIC DMA into this region. Opt-in: it can
+  // raise GPUDirect bandwidth on discrete-GPU hosts, but has caused receive-side
+  // local protection errors on some aarch64/Tegra platforms.
+  MEM_ACCESS_RELAXED_ORDERING = 1U << 3
 };
 
 enum class StreamType {
@@ -307,6 +311,8 @@ uint32_t GetMemoryAccessPropertiesFromList(const T& list) {
       access |= MEM_ACCESS_RDMA_WRITE;
     } else if (str == "rdma_read") {
       access |= MEM_ACCESS_RDMA_READ;
+    } else if (str == "relaxed_ordering") {
+      access |= MEM_ACCESS_RELAXED_ORDERING;
     } else {
       return 0;
     }
@@ -710,6 +716,10 @@ struct RxQueueConfig {
   CommonQueueConfig common_;
   uint64_t timeout_us_ = 0;
   QueuePollMode poll_mode_ = QueuePollMode::INDIRECT;
+  // Opt-in RX CQE compression (raw ibverbs engine, single-region queues). Cuts
+  // completion PCIe traffic for small packets; per-packet hardware timestamps
+  // are unavailable on a compressed queue.
+  bool cqe_compression_ = false;
 };
 
 struct TxQueueConfig {

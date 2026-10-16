@@ -141,6 +141,84 @@ class QueueUse {
   Queue* queue_;
 };
 
+// Lock-free queue lookup (see IbverbsEngine::rx_queue_table_). A queue is
+// published when it becomes ACTIVE and unpublished only once it is closed for
+// destruction, so the per-burst and per-packet API never takes resource_lock_.
+template <typename Table>
+bool queue_table_index_valid(const Table& table, int port, int q) {
+  return port >= 0 && q >= 0 && static_cast<size_t>(port) < table.size() &&
+         static_cast<size_t>(q) < table[0].size();
+}
+
+template <typename Table, typename Queue>
+void publish_queue(Table& table, Queue* queue) {
+  if (queue_table_index_valid(table, queue->port_id, queue->queue_id)) {
+    table[queue->port_id][queue->queue_id].store(queue, std::memory_order_release);
+  }
+}
+
+template <typename Table, typename Queue>
+void unpublish_queue(Table& table, Queue* queue) {
+  if (queue_table_index_valid(table, queue->port_id, queue->queue_id)) {
+    Queue* expected = queue;
+    table[queue->port_id][queue->queue_id].compare_exchange_strong(expected, nullptr,
+                                                                   std::memory_order_acq_rel);
+  }
+}
+
+template <typename Table>
+void clear_queue_table(Table& table) {
+  for (auto& row : table) {
+    for (auto& slot : row) {
+      slot.store(nullptr, std::memory_order_release);
+    }
+  }
+}
+
+// Pairs with close_queue_for_destroy: the user count is raised before the state
+// is read, and the remover publishes REMOVED before reading the user count, so
+// (all seq_cst) either the remover sees this user or this user sees REMOVED.
+template <typename Queue>
+Queue* acquire_published_queue(std::atomic<Queue*>& slot, bool allow_draining) {
+  Queue* queue = slot.load(std::memory_order_acquire);
+  if (queue == nullptr) {
+    return nullptr;
+  }
+  queue->active_users.fetch_add(1, std::memory_order_seq_cst);
+  const ResourceState state = queue->state.load(std::memory_order_seq_cst);
+  if (state == ResourceState::ACTIVE || (allow_draining && state == ResourceState::DRAINING)) {
+    return queue;
+  }
+  queue->active_users.fetch_sub(1, std::memory_order_release);
+  return nullptr;
+}
+
+// Called with resource_lock_ held once a DRAINING queue looks idle. Moves it to
+// REMOVED so no new lock-free user can enter, then confirms none slipped in.
+template <typename Queue>
+bool close_queue_for_destroy(Queue& queue) {
+  queue.state.store(ResourceState::REMOVED, std::memory_order_seq_cst);
+  if (queue.active_users.load(std::memory_order_seq_cst) == 0) {
+    return true;
+  }
+  queue.state.store(ResourceState::DRAINING, std::memory_order_seq_cst);
+  return false;
+}
+
+// Removed queue objects stay allocated until shutdown: a lock-free reader may
+// still hold a pointer it loaded before the queue was unpublished, and only
+// inspects its state/user count. Hardware resources are already released.
+template <typename Queue>
+void retire_queue(std::vector<std::unique_ptr<Queue>>& live,
+                  std::vector<std::unique_ptr<Queue>>& retired, Queue* queue) {
+  auto it = std::find_if(live.begin(), live.end(),
+                         [&](const auto& candidate) { return candidate.get() == queue; });
+  if (it != live.end()) {
+    retired.push_back(std::move(*it));
+    live.erase(it);
+  }
+}
+
 size_t next_power_of_two(size_t value) {
   if (value == 0) {
     return 0;
@@ -242,12 +320,12 @@ static inline void cqe_read_barrier() {
 
 // Store barrier ordering WQE writes before the doorbell record store the device
 // reads via DMA (outer-shareable on ARM).
-// Orders the CPU's reads of consumed CQEs before the CQ consumer-index store
-// that hands those entries back to the device. A store barrier is not enough on
-// ARM: earlier loads may otherwise be satisfied after the dbrec store.
+// Orders the CPU's reads of consumed CQEs, and its invalidation stores into
+// compressed-session slots, before the CQ consumer-index store that hands those
+// slots back to the device.
 static inline void cq_consumer_barrier() {
 #if defined(__aarch64__)
-  asm volatile("dmb oshld" ::: "memory");
+  asm volatile("dmb osh" ::: "memory");
 #elif defined(__x86_64__) || defined(__i386__)
   asm volatile("" ::: "memory");
 #else
@@ -936,11 +1014,15 @@ Status IbverbsEngine::enable_hw_loopback(struct ibv_context* ctx, struct ibv_pd*
 }
 
 int IbverbsEngine::mr_access_to_ibv(uint32_t access) {
-  (void)access;
-  // RX strided buffers only need local write. (Relaxed ordering is omitted: on
-  // some aarch64/Tegra setups it has caused receive-side local protection
-  // errors.)
-  return IBV_ACCESS_LOCAL_WRITE;
+  // RX strided buffers only need local write. IBV_ACCESS_RELAXED_ORDERING is an
+  // rdma-core enum value (optional access range), not a macro. It is opt-in per
+  // memory region: on some aarch64/Tegra setups it has caused receive-side local
+  // protection errors, but discrete-GPU hosts can gain GPUDirect bandwidth.
+  int ibv_access = IBV_ACCESS_LOCAL_WRITE;
+  if ((access & MEM_ACCESS_RELAXED_ORDERING) != 0) {
+    ibv_access |= IBV_ACCESS_RELAXED_ORDERING;
+  }
+  return ibv_access;
 }
 
 Status IbverbsEngine::register_mr(struct ibv_pd* pd, const std::string& mr_name, uint8_t** out_base,
@@ -951,7 +1033,7 @@ Status IbverbsEngine::register_mr(struct ibv_pd* pd, const std::string& mr_name,
     DAQIRI_LOG_CRITICAL("MR {} was not allocated", mr_name);
     return Status::NULL_PTR;
   }
-  const int access = mr_access_to_ibv(mr.access_);
+  int access = mr_access_to_ibv(mr.access_);
 
   if (mr.kind_ == MemoryKind::DEVICE) {
     CudaContextRestoreGuard entry_context;
@@ -1018,7 +1100,16 @@ Status IbverbsEngine::register_mr(struct ibv_pd* pd, const std::string& mr_name,
       return Status::GENERIC_FAILURE;
     }
     struct ibv_mr* gmr = verbs_->reg_dmabuf_mr(pd, offset, mr.ttl_size_, va, dmabuf_fd, access);
-    const int reg_errno = errno;
+    int reg_errno = errno;
+    if (gmr == nullptr && (access & IBV_ACCESS_RELAXED_ORDERING) != 0) {
+      DAQIRI_LOG_WARN(
+          "ibv_reg_dmabuf_mr with relaxed ordering failed for MR {}: {}; retrying "
+          "without it",
+          mr_name, strerror(reg_errno));
+      access &= ~IBV_ACCESS_RELAXED_ORDERING;
+      gmr = verbs_->reg_dmabuf_mr(pd, offset, mr.ttl_size_, va, dmabuf_fd, access);
+      reg_errno = errno;
+    }
     close(dmabuf_fd);
     if (gmr == nullptr) {
       DAQIRI_LOG_CRITICAL("ibv_reg_dmabuf_mr failed for MR {} ({} bytes): {}", mr_name,
@@ -1030,12 +1121,19 @@ Status IbverbsEngine::register_mr(struct ibv_pd* pd, const std::string& mr_name,
     *out_base = static_cast<uint8_t*>(base);
     *out_lkey = gmr->lkey;
     *out_mr = gmr;
-    DAQIRI_LOG_INFO("Registered GPU MR {} (dmabuf) base {} size {} lkey {}", mr_name, base,
-                    mr.ttl_size_, *out_lkey);
+    DAQIRI_LOG_INFO("Registered GPU MR {} (dmabuf) base {} size {} lkey {}{}", mr_name, base,
+                    mr.ttl_size_, *out_lkey,
+                    (access & IBV_ACCESS_RELAXED_ORDERING) != 0 ? " (relaxed ordering)" : "");
     return Status::SUCCESS;
   }
 
   struct ibv_mr* ib_mr = verbs_->reg_mr(pd, base, mr.ttl_size_, access);
+  if (ib_mr == nullptr && (access & IBV_ACCESS_RELAXED_ORDERING) != 0) {
+    DAQIRI_LOG_WARN("ibv_reg_mr with relaxed ordering failed for MR {}; retrying without it",
+                    mr_name);
+    access &= ~IBV_ACCESS_RELAXED_ORDERING;
+    ib_mr = verbs_->reg_mr(pd, base, mr.ttl_size_, access);
+  }
   if (ib_mr == nullptr) {
     DAQIRI_LOG_CRITICAL("ibv_reg_mr failed for {} ({} bytes)", mr_name, mr.ttl_size_);
     return Status::NULL_PTR;
@@ -1045,8 +1143,9 @@ Status IbverbsEngine::register_mr(struct ibv_pd* pd, const std::string& mr_name,
   *out_base = static_cast<uint8_t*>(base);
   *out_lkey = ib_mr->lkey;
   *out_mr = ib_mr;
-  DAQIRI_LOG_INFO("Registered MR {} base {} size {} lkey {}", mr_name, base, mr.ttl_size_,
-                  *out_lkey);
+  DAQIRI_LOG_INFO("Registered MR {} base {} size {} lkey {}{}", mr_name, base, mr.ttl_size_,
+                  *out_lkey,
+                  (access & IBV_ACCESS_RELAXED_ORDERING) != 0 ? " (relaxed ordering)" : "");
   return Status::SUCCESS;
 }
 
@@ -3342,7 +3441,25 @@ Status IbverbsEngine::devx_create_cq(IbvRxQueue& q) {
   DEVX_SET64(create_cq_in, in, cq_umem_offset, 0);
   DEVX_SET(create_cq_in, in, cq_umem_valid, 1);
 
+  if (q.cqe_compression) {
+    // Legacy layout with stride-index mini-CQEs: each mini keeps the full MPRQ
+    // byte_cnt (filler bit, stride count, length) so decode matches a full CQE.
+    DEVX_SET(cqc, cqc, cqe_comp_en, 1);
+    DEVX_SET(cqc, cqc, cqe_comp_layout, 0);
+    DEVX_SET(cqc, cqc, mini_cqe_res_format, MLX5_CQE_RESP_FORMAT_CSUM_STRIDX);
+  }
   q.cq_obj = verbs_->dv_devx_obj_create(q.ctx, in, sizeof(in), out, sizeof(out));
+  if (q.cq_obj == nullptr && q.cqe_compression) {
+    DAQIRI_LOG_WARN(
+        "RX queue {}: CREATE_CQ with CQE compression failed: {} (syndrome 0x{:x}); "
+        "retrying uncompressed",
+        q.queue_id, strerror(errno), DEVX_GET(create_cq_out, out, syndrome));
+    q.cqe_compression = false;
+    DEVX_SET(cqc, cqc, cqe_comp_en, 0);
+    DEVX_SET(cqc, cqc, mini_cqe_res_format, 0);
+    memset(out, 0, sizeof(out));
+    q.cq_obj = verbs_->dv_devx_obj_create(q.ctx, in, sizeof(in), out, sizeof(out));
+  }
   if (q.cq_obj == nullptr) {
     DAQIRI_LOG_CRITICAL("CREATE_CQ (DevX) failed: {} (syndrome 0x{:x})", strerror(errno),
                         DEVX_GET(create_cq_out, out, syndrome));
@@ -3357,7 +3474,9 @@ Status IbverbsEngine::devx_create_cq(IbvRxQueue& q) {
   q.dv_cq.cqe_size = CQE_SZ;
   q.dv_cq.cqn = DEVX_GET(create_cq_out, out, cqn);
   q.cq_ci = 0;
-  DAQIRI_LOG_INFO("DevX CQ q{}: cqn {} cqe_cnt {} (eqn {})", q.queue_id, q.dv_cq.cqn, cqe_cnt, eqn);
+  q.zip_cnt = 0;
+  DAQIRI_LOG_INFO("DevX CQ q{}: cqn {} cqe_cnt {} (eqn {}){}", q.queue_id, q.dv_cq.cqn, cqe_cnt,
+                  eqn, q.cqe_compression ? " with CQE compression" : "");
   return Status::SUCCESS;
 }
 
@@ -3930,6 +4049,22 @@ Status IbverbsEngine::setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf,
     }
   }
 
+  q.cqe_compression = qcfg.cqe_compression_;
+  if (q.cqe_compression) {
+    const char* reason = nullptr;
+    if (!q.striding) {
+      reason = "it uses a regular (multi-region) RQ";
+    } else if (intf.rx_.hardware_timestamps_) {
+      reason = "rx.hardware_timestamps needs a per-packet CQE timestamp";
+    } else if (!intf.rx_.reorder_configs_.empty()) {
+      reason = "packet reordering needs per-packet flow tags";
+    }
+    if (reason != nullptr) {
+      DAQIRI_LOG_WARN("RX queue {}: CQE compression disabled because {}", q.queue_id, reason);
+      q.cqe_compression = false;
+    }
+  }
+
   // Per-queue flow id: if a configured flow steers to this queue, report its id
   // for packets received here (see get_packet_flow_id).
   for (const auto& fl : intf.rx_.flows_) {
@@ -4071,6 +4206,7 @@ void IbverbsEngine::initialize() {
       }
       rx_queues_.push_back(std::move(q));
       rx_queues_.back()->state.store(ResourceState::ACTIVE, std::memory_order_release);
+      publish_queue(rx_queue_table_, rx_queues_.back().get());
     }
     for (const auto& qcfg : intf.tx_.queues_) {
       auto q = std::make_unique<IbvTxQueue>();
@@ -4081,6 +4217,7 @@ void IbverbsEngine::initialize() {
       }
       tx_queues_.push_back(std::move(q));
       tx_queues_.back()->state.store(ResourceState::ACTIVE, std::memory_order_release);
+      publish_queue(tx_queue_table_, tx_queues_.back().get());
     }
   }
 
@@ -4286,51 +4423,104 @@ Status IbverbsEngine::rx_poll_queue(IbvRxQueue* q, BurstParams** direct_burst) {
   // consume that limit. Still bound one call to at most one complete CQ scan.
   const uint32_t cqe_budget = direct ? cqe_cnt : static_cast<uint32_t>(packet_budget);
   const uint32_t start_ci = q->cq_ci;
+  uint32_t published_ci = start_ci;
   uint32_t processed = 0;
-  while (processed < cqe_budget && (!direct || q->cur_n < packet_budget)) {
-    uint8_t* cqe = cq_buf + (q->cq_ci & (cqe_cnt - 1)) * cqe_size;
+  auto cqe_at = [&](uint32_t ci) {
     // For 128B CQEs the 64B CQE is in the second half.
-    struct mlx5_cqe64* cqe64 =
-        reinterpret_cast<struct mlx5_cqe64*>(cqe + (cqe_size - sizeof(struct mlx5_cqe64)));
-
-    // A CQE is valid (HW-produced) when its owner bit matches the current lap
-    // parity and the opcode is not INVALID -- matches rdma-core's get_sw_cqe.
-    const uint8_t op_own = cqe64->op_own;
-    const uint8_t opcode = op_own >> 4;
-    const uint8_t owner = op_own & 1;
-    const uint8_t phase = (q->cq_ci & cqe_cnt) ? 1 : 0;  // cqe_cnt is a power of two
-    if (opcode == MLX5_CQE_INVALID || owner != phase) {
-      // CQ drained. Reclaim freed regions and maybe flush a partial burst on
-      // timeout, then yield to the next queue.
-      devx_advance_producer(*q);
-      if (!direct && timeout_cycles && q->cur_n > 0 &&
-          (ibv_now_ns() - q->last_flush_tsc) > timeout_cycles) {
-        rx_flush_burst(q);
-        if (!rx_alloc_burst(q)) {
-          return Status::NO_FREE_BURST_BUFFERS;
+    return reinterpret_cast<struct mlx5_cqe64*>(cq_buf + (ci & (cqe_cnt - 1)) * cqe_size +
+                                                (cqe_size - sizeof(struct mlx5_cqe64)));
+  };
+  while (processed < cqe_budget && (!direct || q->cur_n < packet_budget)) {
+    uint32_t byte_cnt;
+    uint64_t raw_ts;
+    uint32_t flow_tag;
+    uint16_t wqe_counter = 0;
+    if (q->zip_cnt != 0) {
+      // Inside a compressed session: each mini-CQE stands in for one full CQE
+      // and shares the session header's timestamp and flow tag.
+      const uint32_t ai = q->zip_ai;
+      const uint32_t array_ci = q->zip_start + (ai < 8 ? 1u : (ai & ~7u));
+      const auto* minis =
+          reinterpret_cast<const volatile mlx5_mini_cqe8_csum_stridx*>(cqe_at(array_ci));
+      byte_cnt = be32toh(minis[ai & 7].byte_cnt);
+      raw_ts = q->zip_ts;
+      flow_tag = q->zip_tag;
+      q->dbg_cqe++;
+      q->compressed_cqes++;
+      processed++;
+      if (++q->zip_ai == q->zip_cnt) {
+        // Session done: mini-CQE arrays and the slots the device skipped hold
+        // stale bytes, so mark them invalid before the doorbell returns them.
+        for (uint32_t ci = q->zip_start + 1; ci != q->zip_start + q->zip_cnt; ++ci) {
+          cqe_at(ci)->op_own = MLX5_CQE_INVALIDATE;
         }
-        wqe_arr = burst_wqe_arr(q->cur_burst);
-        strd_arr = burst_strd_arr(q->cur_burst);
-        q->last_flush_tsc = ibv_now_ns();
+        q->cq_ci = q->zip_start + q->zip_cnt;
+        q->zip_cnt = 0;
       }
-      break;
-    }
-    cqe_read_barrier();
+    } else {
+      struct mlx5_cqe64* cqe64 = cqe_at(q->cq_ci);
 
-    q->cq_ci++;
-    q->dbg_cqe++;
-    processed++;
-    if (opcode == MLX5_CQE_RESP_ERR || opcode == MLX5_CQE_REQ_ERR) {
-      if (q->dbg_err < 4) {
-        auto* ecqe = reinterpret_cast<struct mlx5_err_cqe*>(cqe64);
-        DAQIRI_LOG_ERROR("RX CQE error q{} opcode {} syndrome 0x{:02x} vendor 0x{:02x}",
-                         q->queue_id, opcode, ecqe->syndrome, ecqe->vendor_err_synd);
+      // A CQE is valid (HW-produced) when its owner bit matches the current lap
+      // parity and the opcode is not INVALID -- matches rdma-core's get_sw_cqe.
+      const uint8_t op_own = cqe64->op_own;
+      const uint8_t opcode = op_own >> 4;
+      const uint8_t owner = op_own & 1;
+      const uint8_t phase = (q->cq_ci & cqe_cnt) ? 1 : 0;  // cqe_cnt is a power of two
+      if (opcode == MLX5_CQE_INVALID || owner != phase) {
+        // CQ drained. Reclaim freed regions and maybe flush a partial burst on
+        // timeout, then yield to the next queue.
+        devx_advance_producer(*q);
+        if (!direct && timeout_cycles && q->cur_n > 0 &&
+            (ibv_now_ns() - q->last_flush_tsc) > timeout_cycles) {
+          rx_flush_burst(q);
+          if (!rx_alloc_burst(q)) {
+            return Status::NO_FREE_BURST_BUFFERS;
+          }
+          wqe_arr = burst_wqe_arr(q->cur_burst);
+          strd_arr = burst_strd_arr(q->cur_burst);
+          q->last_flush_tsc = ibv_now_ns();
+        }
+        break;
       }
-      q->dbg_err++;
-      continue;
-    }
+      cqe_read_barrier();
 
-    const uint32_t byte_cnt = be32toh(cqe64->byte_cnt);
+      if (q->cqe_compression && ((op_own >> 2) & 0x3) == MLX5_CQE_FORMAT_COMPRESSED) {
+        // Session header: byte_cnt holds the mini-CQE count. Decode starts with
+        // mini-CQE 0 on the next iteration; cq_ci stays on the header.
+        q->zip_start = q->cq_ci;
+        q->zip_cnt = be32toh(cqe64->byte_cnt);
+        q->zip_ai = 0;
+        if (q->zip_cnt == 0) {
+          // Malformed header; skip it rather than re-reading it forever.
+          q->cq_ci++;
+          q->dbg_err++;
+          processed++;
+          continue;
+        }
+        q->zip_ts = be64toh(cqe64->timestamp);
+        q->zip_tag = be32toh(cqe64->sop_drop_qpn) & 0x00ffffffu;
+        q->compressed_sessions++;
+        continue;
+      }
+
+      q->cq_ci++;
+      q->dbg_cqe++;
+      processed++;
+      if (opcode == MLX5_CQE_RESP_ERR || opcode == MLX5_CQE_REQ_ERR) {
+        if (q->dbg_err < 4) {
+          auto* ecqe = reinterpret_cast<struct mlx5_err_cqe*>(cqe64);
+          DAQIRI_LOG_ERROR("RX CQE error q{} opcode {} syndrome 0x{:02x} vendor 0x{:02x}",
+                           q->queue_id, opcode, ecqe->syndrome, ecqe->vendor_err_synd);
+        }
+        q->dbg_err++;
+        continue;
+      }
+
+      byte_cnt = be32toh(cqe64->byte_cnt);
+      raw_ts = be64toh(cqe64->timestamp);
+      flow_tag = be32toh(cqe64->sop_drop_qpn) & 0x00ffffffu;
+      wqe_counter = be16toh(cqe64->wqe_counter);
+    }
     // Striding RQ packs filler/stride-count/len into byte_cnt; a plain RQ
     // reports the full packet length and consumes exactly one WQE buffer.
     const uint32_t strd =
@@ -4353,7 +4543,7 @@ Status IbverbsEngine::rx_poll_queue(IbvRxQueue* q, BurstParams** direct_burst) {
         q->cur_wqe = (q->cur_wqe + 1) & wqe_mask;
       }
     } else {
-      region = be16toh(cqe64->wqe_counter) & wqe_mask;
+      region = wqe_counter & wqe_mask;
       strd_off = 0;
     }
 
@@ -4387,10 +4577,10 @@ Status IbverbsEngine::rx_poll_queue(IbvRxQueue* q, BurstParams** direct_burst) {
     strd_arr[n] = static_cast<uint16_t>(strd);
     // Raw free-running HW timestamp from the CQE; converted to ns on demand in
     // get_packet_rx_timestamp (mlx5dv_ts_to_ns).
-    burst_ts_arr(q->cur_burst)[n] = be64toh(cqe64->timestamp);
+    burst_ts_arr(q->cur_burst)[n] = raw_ts;
     // Per-packet flow tag (MARK): the steering rule's tag action sets it, the HW
     // delivers it in sop_drop_qpn (24-bit). 0 = untagged.
-    burst_flowtag_arr(q->cur_burst)[n] = be32toh(cqe64->sop_drop_qpn) & 0x00ffffffu;
+    burst_flowtag_arr(q->cur_burst)[n] = flow_tag;
     q->cur_n++;
     q->outstanding_strides.fetch_add(strd, std::memory_order_relaxed);
     if (!direct && q->cur_n == 1) {
@@ -4414,16 +4604,18 @@ Status IbverbsEngine::rx_poll_queue(IbvRxQueue* q, BurstParams** direct_burst) {
     }
 
     // Periodically advance the CQ doorbell so the HW can recycle CQEs, and
-    // refill freed striding regions.
-    if ((q->cq_ci & 0x3f) == 0) {
+    // refill freed striding regions. cq_ci can jump past a multiple of 64 when
+    // a compressed session completes, so track the last published index.
+    if (q->cq_ci - published_ci >= 64) {
       cq_consumer_barrier();
       *q->dv_cq.dbrec = htobe32(q->cq_ci & 0xffffff);
+      published_ci = q->cq_ci;
       devx_advance_producer(*q);
     }
   }
 
   // Publish the CQ consumer index for any CQEs drained this pass.
-  if (q->cq_ci != start_ci) {
+  if (q->cq_ci != published_ci) {
     cq_consumer_barrier();
     *q->dv_cq.dbrec = htobe32(q->cq_ci & 0xffffff);
   }
@@ -4868,12 +5060,15 @@ IbvRxQueue* IbverbsEngine::find_rx_queue_any(int port, int q) {
 }
 
 IbvRxQueue* IbverbsEngine::acquire_rx_queue(int port, int q, bool allow_draining) {
+  if (queue_table_index_valid(rx_queue_table_, port, q)) {
+    return acquire_published_queue(rx_queue_table_[port][q], allow_draining);
+  }
   std::lock_guard<std::recursive_mutex> guard(resource_lock_);
   for (auto& rq : rx_queues_) {
     const ResourceState state = rq->state.load(std::memory_order_acquire);
     if (rq->port_id == port && rq->queue_id == q &&
         (state == ResourceState::ACTIVE || (allow_draining && state == ResourceState::DRAINING))) {
-      rq->active_users.fetch_add(1, std::memory_order_relaxed);
+      rq->active_users.fetch_add(1, std::memory_order_seq_cst);
       return rq.get();
     }
   }
@@ -5763,6 +5958,10 @@ Status IbverbsEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint6
   if (!q) {
     return Status::INVALID_PARAMETER;
   }
+  if (q->cqe_compression) {
+    // Mini-CQEs carry no timestamp; only the session header's is known.
+    return Status::NOT_SUPPORTED;
+  }
   const uint64_t raw_timestamp = burst_ts_arr(burst)[idx];
   if (!q->realtime_timestamps) {
     *timestamp_ns = ts_to_ns(q->ctx, raw_timestamp);
@@ -6290,6 +6489,7 @@ Status IbverbsEngine::add_rx_queue_async(int port, const RxQueueConfig& config,
     }
     if (result.status_ == Status::SUCCESS) {
       queue->state.store(ResourceState::ACTIVE, std::memory_order_release);
+      publish_queue(rx_queue_table_, queue.get());
       rx_queues_.push_back(std::move(queue));
       cfg_.ifs_[port].rx_.queues_.push_back(config);
       ensure_port_mtus();
@@ -6369,6 +6569,7 @@ Status IbverbsEngine::add_tx_queue_async(int port, const TxQueueConfig& config,
         queue->insert_eth_src = false;
       }
       queue->state.store(ResourceState::ACTIVE, std::memory_order_release);
+      publish_queue(tx_queue_table_, queue.get());
       tx_queues_.push_back(std::move(queue));
       cfg_.ifs_[port].tx_.queues_.push_back(config);
       ensure_port_mtus();
@@ -6689,7 +6890,7 @@ Status IbverbsEngine::delete_rx_queue_async(int port, int queue_id, ResourceOpId
     if (queue == nullptr) {
       return Status::INVALID_PARAMETER;
     }
-    queue->state.store(ResourceState::DRAINING, std::memory_order_release);
+    queue->state.store(ResourceState::DRAINING, std::memory_order_seq_cst);
     *op_id = allocate_resource_op_id_locked();
     draining_resource_ops_.push_back({*op_id, ResourceOpType::DELETE_RX_QUEUE,
                                       ResourceState::DRAINING, Status::NOT_READY, "", port,
@@ -6712,7 +6913,7 @@ Status IbverbsEngine::delete_tx_queue_async(int port, int queue_id, ResourceOpId
     if (queue == nullptr) {
       return Status::INVALID_PARAMETER;
     }
-    queue->state.store(ResourceState::DRAINING, std::memory_order_release);
+    queue->state.store(ResourceState::DRAINING, std::memory_order_seq_cst);
     *op_id = allocate_resource_op_id_locked();
     draining_resource_ops_.push_back({*op_id, ResourceOpType::DELETE_TX_QUEUE,
                                       ResourceState::DRAINING, Status::NOT_READY, "", port,
@@ -6890,12 +7091,11 @@ Status IbverbsEngine::poll_resource_op(ResourceOpResult* result) {
         }
         if (queue->active_users.load(std::memory_order_acquire) == 0 &&
             queue->outstanding_strides.load(std::memory_order_acquire) == 0 &&
-            queue->outstanding_reorder_outputs.load(std::memory_order_acquire) == 0) {
+            queue->outstanding_reorder_outputs.load(std::memory_order_acquire) == 0 &&
+            close_queue_for_destroy(*queue)) {
+          unpublish_queue(rx_queue_table_, queue);
           destroy_rx_queue(*queue);
-          rx_queues_.erase(
-              std::remove_if(rx_queues_.begin(), rx_queues_.end(),
-                             [&](const auto& candidate) { return candidate.get() == queue; }),
-              rx_queues_.end());
+          retire_queue(rx_queues_, retired_rx_queues_, queue);
           complete = true;
         }
       }
@@ -6912,11 +7112,13 @@ Status IbverbsEngine::poll_resource_op(ResourceOpResult* result) {
             queue->direct_pending == nullptr && queue->worker_pending == nullptr &&
             (queue->send_ring == nullptr || queue->send_ring->count() == 0) &&
             queue->completed_tail.load(std::memory_order_acquire) == queue->alloc_head) {
+          if (!close_queue_for_destroy(*queue)) {
+            ++it;
+            continue;
+          }
+          unpublish_queue(tx_queue_table_, queue);
           destroy_tx_queue(*queue);
-          tx_queues_.erase(
-              std::remove_if(tx_queues_.begin(), tx_queues_.end(),
-                             [&](const auto& candidate) { return candidate.get() == queue; }),
-              tx_queues_.end());
+          retire_queue(tx_queues_, retired_tx_queues_, queue);
           complete = true;
         }
       }
@@ -7380,10 +7582,11 @@ void IbverbsEngine::print_stats() {
     }
     DAQIRI_LOG_INFO(
         "ibverbs RX port {} q{} ({}): packets={} fillers={} cqe_errors={} reposts={} "
-        "app_ring_full_drops={} bursts ({} pkts) direct_poll_conflicts={}",
+        "app_ring_full_drops={} bursts ({} pkts) direct_poll_conflicts={} "
+        "compressed_sessions={} compressed_cqes={}",
         q->port_id, q->queue_id, queue_poll_mode_to_string(q->poll_mode), q->dbg_data,
         q->dbg_filler, q->dbg_err, q->reposts.load(), q->ring_full_bursts, q->ring_full_pkts,
-        q->direct_poll_conflicts.load());
+        q->direct_poll_conflicts.load(), q->compressed_sessions, q->compressed_cqes);
   }
   for (auto& q : tx_queues_) {
     const uint64_t completed = q->completed_tail.load(std::memory_order_relaxed);
@@ -7548,7 +7751,9 @@ void IbverbsEngine::shutdown() {
       daqiri::Ring::free(q->ring);
     }
   }
+  clear_queue_table(rx_queue_table_);
   rx_queues_.clear();
+  retired_rx_queues_.clear();
   for (auto& q : tx_queues_) {
     if (q->worker_pending != nullptr) {
       q->alloc_head -= static_cast<uint64_t>(q->worker_pending->hdr.hdr.num_pkts);
@@ -7574,7 +7779,9 @@ void IbverbsEngine::shutdown() {
       daqiri::Ring::free(q->send_ring);
     }
   }
+  clear_queue_table(tx_queue_table_);
   tx_queues_.clear();
+  retired_tx_queues_.clear();
 
   // The activation QP keeps mlx5 device-local loopback enabled. RX TIRs and
   // normal TX/RX QPs must be gone before releasing it, and its PD/context must
@@ -7657,12 +7864,15 @@ IbvTxQueue* IbverbsEngine::find_tx_queue_any(int port, int q) {
 }
 
 IbvTxQueue* IbverbsEngine::acquire_tx_queue(int port, int q, bool allow_draining) {
+  if (queue_table_index_valid(tx_queue_table_, port, q)) {
+    return acquire_published_queue(tx_queue_table_[port][q], allow_draining);
+  }
   std::lock_guard<std::recursive_mutex> guard(resource_lock_);
   for (auto& tq : tx_queues_) {
     const ResourceState state = tq->state.load(std::memory_order_acquire);
     if (tq->port_id == port && tq->queue_id == q &&
         (state == ResourceState::ACTIVE || (allow_draining && state == ResourceState::DRAINING))) {
-      tq->active_users.fetch_add(1, std::memory_order_relaxed);
+      tq->active_users.fetch_add(1, std::memory_order_seq_cst);
       return tq.get();
     }
   }

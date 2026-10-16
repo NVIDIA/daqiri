@@ -356,6 +356,18 @@ struct IbvRxQueue {
   int cur_n = 0;
   uint64_t last_flush_tsc = 0;
   uint64_t dbg_cqe = 0, dbg_data = 0, dbg_filler = 0, dbg_err = 0;
+  // Opt-in CQE compression. zip_* describe the compressed session currently
+  // being decoded (zip_cnt == 0 when none); cq_ci stays on the session header
+  // until every mini-CQE is consumed so the CQ doorbell never releases slots
+  // that still hold mini-CQE arrays.
+  bool cqe_compression = false;
+  uint32_t zip_start = 0;
+  uint32_t zip_cnt = 0;
+  uint32_t zip_ai = 0;
+  uint32_t zip_tag = 0;
+  uint64_t zip_ts = 0;
+  uint64_t compressed_sessions = 0;
+  uint64_t compressed_cqes = 0;
   // App-ring-full drops: the worker assembled a burst but get_rx_burst wasn't
   // draining fast enough, so the burst was dropped (strides released, metadata
   // returned). Worker-written, read by print_stats.
@@ -794,9 +806,22 @@ class IbverbsEngine : public Engine {
   std::vector<std::unique_ptr<IbvRxQueue>> rx_queues_;
   std::vector<std::unique_ptr<IbvTxQueue>> tx_queues_;
 
+  // Lock-free [port][queue] lookup used by acquire_rx_queue/acquire_tx_queue so
+  // the data-path API does not serialize on resource_lock_. Entries are set when
+  // a queue becomes ACTIVE and cleared when it is destroyed; removed queue
+  // objects are kept in retired_*_queues_ until shutdown because a reader may
+  // still hold a pointer it loaded just before the entry was cleared.
+  std::array<std::array<std::atomic<IbvRxQueue*>, MAX_NUM_RX_QUEUES>, MAX_INTERFACES>
+      rx_queue_table_{};
+  std::array<std::array<std::atomic<IbvTxQueue*>, MAX_NUM_TX_QUEUES>, MAX_INTERFACES>
+      tx_queue_table_{};
+  std::vector<std::unique_ptr<IbvRxQueue>> retired_rx_queues_;
+  std::vector<std::unique_ptr<IbvTxQueue>> retired_tx_queues_;
+
   // When both lifecycle locks are needed, acquire flow_lock_ before
-  // resource_lock_. Queue-use references are acquired under resource_lock_ so
-  // DRAINING and active_users form one atomic lifetime transition.
+  // resource_lock_. Control-path lookups run under resource_lock_; data-path
+  // queue-use references are taken lock-free from the queue tables, and
+  // DRAINING/REMOVED transitions pair with active_users via seq_cst ordering.
   mutable std::recursive_mutex resource_lock_;
   std::mutex resource_operation_lock_;
   ResourceOpId next_resource_op_id_ = 1;

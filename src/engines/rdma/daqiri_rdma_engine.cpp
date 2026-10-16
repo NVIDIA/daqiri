@@ -252,9 +252,12 @@ int RdmaEngine::mr_access_to_ibv(uint32_t access) {
   if (access & MEM_ACCESS_LOCAL) { ibv_access |= IBV_ACCESS_LOCAL_WRITE; }
   if (access & MEM_ACCESS_RDMA_READ) { ibv_access |= IBV_ACCESS_REMOTE_READ; }
   if (access & MEM_ACCESS_RDMA_WRITE) { ibv_access |= IBV_ACCESS_REMOTE_WRITE; }
-#ifdef IBV_ACCESS_RELAXED_ORDERING
-  ibv_access |= IBV_ACCESS_RELAXED_ORDERING;
-#endif
+  // IBV_ACCESS_RELAXED_ORDERING is an rdma-core enum value, not a macro, so an
+  // #ifdef guard compiled it out. Keep it opt-in per memory region: it has caused
+  // local protection errors on some aarch64/Tegra platforms.
+  if (access & MEM_ACCESS_RELAXED_ORDERING) {
+    ibv_access |= IBV_ACCESS_RELAXED_ORDERING;
+  }
 
   return ibv_access;
 }
@@ -270,7 +273,6 @@ int RdmaEngine::rdma_register_mr(const MemoryRegionConfig& mr, void* ptr) {
       int access = mr_access_to_ibv(mr.access_);
       params.ctx_mr_map_[pd.second] =
           verbs_->reg_mr(pd.second, ptr, mr.adj_size_ * mr.num_bufs_, access);
-#ifdef IBV_ACCESS_RELAXED_ORDERING
       if (params.ctx_mr_map_[pd.second] == nullptr &&
           (access & IBV_ACCESS_RELAXED_ORDERING) != 0) {
         const int fallback_access = access & ~IBV_ACCESS_RELAXED_ORDERING;
@@ -282,7 +284,6 @@ int RdmaEngine::rdma_register_mr(const MemoryRegionConfig& mr, void* ptr) {
             verbs_->reg_mr(pd.second, ptr, mr.adj_size_ * mr.num_bufs_, fallback_access);
         access = fallback_access;
       }
-#endif
       if (params.ctx_mr_map_[pd.second] == nullptr) {
         DAQIRI_LOG_CRITICAL("Failed to register MR {} on PD {}", mr.name_, (void*)pd.second);
         for (auto& [registered_pd, registered_mr] : params.ctx_mr_map_) {

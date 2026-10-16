@@ -796,7 +796,8 @@ void bind_config_types(py::module_ &m) {
       .def(py::init<>())
       .def_readwrite("common", &RxQueueConfig::common_)
       .def_readwrite("timeout_us", &RxQueueConfig::timeout_us_)
-      .def_readwrite("poll_mode", &RxQueueConfig::poll_mode_);
+      .def_readwrite("poll_mode", &RxQueueConfig::poll_mode_)
+      .def_readwrite("cqe_compression", &RxQueueConfig::cqe_compression_);
 
   py::class_<TxQueueConfig>(m, "TxQueueConfig")
       .def(py::init<>())
@@ -1042,6 +1043,8 @@ PYBIND11_MODULE(_daqiri, m) {
       py::int_(static_cast<uint32_t>(MEM_ACCESS_RDMA_WRITE));
   m.attr("MEM_ACCESS_RDMA_READ") =
       py::int_(static_cast<uint32_t>(MEM_ACCESS_RDMA_READ));
+  m.attr("MEM_ACCESS_RELAXED_ORDERING") =
+      py::int_(static_cast<uint32_t>(MEM_ACCESS_RELAXED_ORDERING));
   m.attr("IPPROTO_UDP") = kIpProtoUdp;
 
   bind_enums(m);
@@ -1205,7 +1208,7 @@ PYBIND11_MODULE(_daqiri, m) {
         py::call_guard<py::gil_scoped_release>());
   m.def("get_tx_packet_burst", &get_tx_packet_burst, "burst"_a,
         py::call_guard<py::gil_scoped_release>());
-  m.def("send_tx_burst", &send_tx_burst, "burst"_a,
+  m.def("send_tx_burst", py::overload_cast<BurstParams*>(&send_tx_burst), "burst"_a,
         py::call_guard<py::gil_scoped_release>());
   m.def("set_packet_lengths", &set_packet_lengths_from_vector, "burst"_a,
         "idx"_a, "lens"_a);

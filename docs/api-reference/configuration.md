@@ -136,7 +136,13 @@ runtime binding.
   - type: `integer`
 - **`access`**: Memory access permissions.
   - type: `list`
-  - values: `local`, `rdma_read`, `rdma_write`
+  - values: `local`, `rdma_read`, `rdma_write`, `relaxed_ordering`
+
+  `relaxed_ordering` requests PCIe relaxed ordering for NIC DMA into the region and is honored
+  by the raw `ibverbs` engine and the RoCE (`roce://`) engine. It can raise GPUDirect RX
+  bandwidth on discrete-GPU hosts, but leave it off on Tegra/IGX: it has caused receive-side
+  local protection errors there. If the device rejects the flag, DAQIRI retries the
+  registration without it and logs a warning.
 - **`num_bufs`**: Number of buffers in this region. Higher values give more processing
   headroom but consume more memory (GPU BAR1 for `device`). Too low risks dropped packets
   on RX or a TX stall. For socket TCP and UDP RX queues, the smallest `num_bufs` among the
@@ -296,6 +302,15 @@ TX queues on that interface are already in use.
   Forbidden in direct mode.
   - type: `integer`
   - default: `0`
+- **`cqe_compression`**: Raw `ibverbs` engine only. Enables mlx5 RX CQE compression on a
+  single-region (striding) queue: the NIC packs up to eight completions into one 64-byte CQ
+  entry, cutting completion PCIe traffic for small packets. On a compressed queue,
+  `get_packet_rx_timestamp()` returns `NOT_SUPPORTED`, and a packet's flow tag comes from the
+  first completion of its compressed group. DAQIRI ignores the option (with a warning) on
+  multi-region queues, when `rx.hardware_timestamps` is enabled, or when the interface has a
+  reorder configuration, and falls back to an uncompressed CQ if the NIC rejects it.
+  - type: `boolean`
+  - default: `false`
 
 Direct queues must be polled by exactly one user thread per queue. They do not create an RX
 worker or handoff ring, so an application stall also stops packet reception and buffer recycling.

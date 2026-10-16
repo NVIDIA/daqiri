@@ -758,6 +758,7 @@ encapsulation/push rules are configured in YAML under `tx.flows`.
 | `MEM_ACCESS_LOCAL` | Local memory access flag. |
 | `MEM_ACCESS_RDMA_WRITE` | RDMA write memory access flag. |
 | `MEM_ACCESS_RDMA_READ` | RDMA read memory access flag. |
+| `MEM_ACCESS_RELAXED_ORDERING` | Opt-in PCIe relaxed-ordering flag for NIC DMA into the region (raw `ibverbs` and RoCE engines). |
 
 ## Enums
 
@@ -808,7 +809,7 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `RxConfig` | RX flow isolation, timestamps, queues, flows, flex items, and reorder configs. |
 | `TxConfig` | TX accurate-send flag, queues, and flows. |
 | `CommonQueueConfig` | Shared queue fields: name, ID, batch size, split boundary, CPU core, memory regions, and offloads. |
-| `RxQueueConfig` | RX queue wrapper with common queue fields, timeout, and `QueuePollMode`. |
+| `RxQueueConfig` | RX queue wrapper with common queue fields, timeout, `QueuePollMode`, and the raw ibverbs `cqe_compression` flag. |
 | `TxQueueConfig` | TX queue wrapper with common queue fields and `QueuePollMode`. |
 | `MemoryRegionConfig` | Memory region kind, affinity, access flags, sizes, counts, and ownership. |
 | `ExternalMemoryRegion` | Non-owning integer address and byte capacity. |
