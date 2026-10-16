@@ -6,7 +6,7 @@ hide:
 # Performance: DGX Spark
 
 This report covers DAQIRI receive performance in two configurations.
-[Cross-host measurements](#cross-host-benchmarks) include [I/O throughput](#raw-ethernet-gpudirect-throughput-by-payload-size),
+[Cross-host measurements](#cross-host-benchmarks) include [I/O throughput](#raw-ethernet-gpudirect-ibverbs-throughput-by-payload-size),
 [I/O with GPU workloads](#two-link-receive-throughput-with-gpu-workloads), and
 [I/O with ResNet inference](#end-to-end-resnet-inference-throughput).
 [Single-host wire-loopback diagnostics](#single-host-loopback-benchmarks) cover I/O only.
@@ -31,15 +31,16 @@ The transport setup and validation checks are described in
 | Host software | Ubuntu 24.04.4 LTS; Linux 6.17.0-1014-nvidia |
 | GPU software | NVIDIA driver 580.142; CUDA Toolkit 13.1.0 in the benchmark container |
 | DAQIRI build | Release; `DAQIRI_ENGINE="dpdk ibverbs"`; `DAQIRI_BUILD_APPLICATIONS=ON` when running the inference pipeline |
-| CPU placement | Dedicated isolated CPU placement for raw/RDMA pollers and workers. Socket worker and I/O-thread placement is stated with each scaling result. |
+| CPU placement | For raw ibverbs, one CPU core polls both RX queues (one per link). Socket worker and I/O-thread placement is stated with each scaling result. |
 
-Rates report received payload unless a table explicitly labels a wire rate.
+For raw Ethernet, App counts payload plus the 64 B header; Wire counts what the
+RX NIC received, including FCS. Other transport rates count payload only.
 For each accepted cross-host repetition, the receiver was ready before the
-30-second sender window, stable `mlnx_perf` samples were retained, and matching
-directional PHY deltas confirmed the physical path. Application delivery and
+30-second sender window, stable `mlnx_perf` samples were retained, and
+directional PHY deltas were checked. Application delivery and
 the relevant UDP/kernel, NIC, raw-queue, or RDMA completion errors were checked
-for loss. All reported results are loss-free. Each result is the average of
-three independent samples except the two-link GPU-workload results marked `†`.
+for loss. All reported results are loss-free. Unless noted below, each result
+is the average of three independent samples.
 
 ### Results summary for two-link receive throughput
 
@@ -50,15 +51,15 @@ three independent samples except the two-link GPU-workload results marked `†`.
 | Socket / TCP | 1 MiB | 4 RX cores/link | 174 ±1 |
 | Socket / UDP (paced) | 8 KB | 4 pairs/link; 8 pinned CPUs/link | 96 |
 
-### Raw Ethernet / GPUDirect throughput by payload size
+### Raw Ethernet / GPUDirect (ibverbs) throughput by payload size
 
 | Payload | Wire <span class="unit">Gbps</span> | App <span class="unit">Gbps</span> | Mpps |
 | ------- | --------: | -------: | ---: |
-| 8000 B | **201.7** | **197.2** | 3.1 |
-| 4096 B | 201.3 | 197.2 | 5.9 |
-| 1024 B | 198.6 | 194.7 | 22.4 |
-| 256 B  | 73.7 | 72.8 | 28.4 |
-| 64 B   | 30.4 | 29.4 | 28.7 |
+| 8000 B | **199.1** | **199.0** | 3.1 |
+| 4096 B | 198.8 | 198.6 | 6.0 |
+| 1024 B | 194.9 | 194.2 | 22.3 |
+| 256 B  | 114.9 | 113.4 | 44.3 |
+| 64 B   | 52.9 | 51.3 | 50.1 |
 
 ### RoCE RC SEND throughput by message size
 
@@ -112,20 +113,20 @@ distribute pairs evenly across the two links.
 ### Two-link receive throughput with GPU workloads
 
 Each workload runs once per ~8 MB received-data window after DAQIRI assembles it
-into a contiguous GPU buffer. This table reports only the raw/DPDK results;
+into a contiguous GPU buffer. This table reports only the raw/ibverbs results;
 socket and RoCE/RDMA measurements are not included.
 
 - **FFT** — batched FP32, length-1024 complex-to-complex forward transforms.
 - **GEMM** — FP32 1024×1024 matrix multiply (2.15 GFLOP; 4 MB input).
 
-DPDK uses 8 KB packets and an approximately 8 MB working set per workload
+ibverbs uses 8 KB packets and an approximately 8 MB working set per workload
 invocation.
 
-| Workload | DPDK <span class="unit">Gbps</span> |
-| -------- | ------------------------------------: |
-| none (baseline) | 197.2<sup>†</sup> |
-| FFT             | 197.2<sup>†</sup> |
-| GEMM (FP32)     | 197.1<sup>†</sup> |
+| Workload | ibverbs app payload <span class="unit">Gb/s</span> |
+| -------- | ------------------------------------------------: |
+| none (baseline) | 197.4<sup>†</sup> |
+| FFT             | 197.4<sup>†</sup> |
+| GEMM (FP32)     | 197.4<sup>†</sup> |
 
 `†` Preliminary: one accepted 30 s sample per cell; two further repetitions are
 required for a mean.
