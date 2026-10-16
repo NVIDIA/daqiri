@@ -42,7 +42,7 @@
 # still up, the kernel owns those netdevs and the PMD cannot bind them. Tear it
 # down before running:
 #
-#   scripts/setup_spark_wire_loopback_netns.sh down
+#   scripts/setup_cabled_loopback_netns.sh --platform dgx-spark down
 #
 # Build + install first so /opt/daqiri/lib is not stale (see the container
 # stale-lib trap in AGENTS.md):
@@ -94,7 +94,7 @@ CSV="$OUT_DIR/runs.csv"
 echo "cell,tx_cores,rx_cores,payload,rep,gbps,pps,drops,cpu8,cpu16,cpu15,cpu19,cpu6,cpu18,cpu17,cpu9,cpu7" > "$CSV"
 
 # Capture slow-moving environment state once per result set (mirrors
-# run_spark_bench.sh). Best-effort -- skip if the helper is unavailable.
+# run_cabled_loopback_bench.sh). Best-effort -- skip if the helper is unavailable.
 if [[ -x "$SCRIPT_DIR/bench_capture_environment.sh" ]]; then
   "$SCRIPT_DIR/bench_capture_environment.sh" "$OUT_DIR" || true
 fi
@@ -147,7 +147,7 @@ CPU_CORES=(8 16 15 19 6 18 17 9 7)
 FAILURES=0
 
 # --------------------------------------------------------------------------
-# Helpers (conventions shared with run_spark_bench.sh)
+# Helpers (conventions shared with run_cabled_loopback_bench.sh)
 # --------------------------------------------------------------------------
 
 # Sum a numeric field across EVERY matching "<prefix> ..." stdout line. The
@@ -182,7 +182,7 @@ parse_dpdk_drops() {
   echo "$sum"
 }
 
-# Snapshot /proc/stat per-cpu counters to a file (same logic as run_spark_bench.sh).
+# Snapshot /proc/stat per-cpu counters (same logic as the cabled-loopback harness).
 snapshot_cpu_stat() {
   awk '/^cpu[0-9]+/ {
     total = $2+$3+$4+$5+$6+$7+$8
@@ -207,7 +207,7 @@ cpu_busy_pct() {
 }
 
 # Sum the RX-side *_phy packet counter (proves traffic crossed the cable, not an
-# on-chip vport short-cut -- see scripts/setup_spark_wire_loopback_netns.sh).
+# on-chip vport short-cut -- see scripts/setup_cabled_loopback_netns.sh).
 phy_rx_packets() {
   [[ -z "$RX_NETDEV" ]] && { echo 0; return; }
   ethtool -S "$RX_NETDEV" 2>/dev/null \

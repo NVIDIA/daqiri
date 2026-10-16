@@ -70,7 +70,7 @@ docker run --rm -it --privileged \
 
     Start with [`daqiri_bench_raw_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx.yaml) to see how the TX and RX configuration fits together. On a system configured per the [DGX Spark profile](../tutorials/system_configuration.md#dgx-spark-profile), adapt the NIC addresses, use `host_pinned` memory, place the queue and application workers on the high-frequency cores, and set the destination MAC to the receiving port. [Generate a raw-Ethernet pair](../config-generation.md#generate-a-raw-ethernet-pair) can apply those system parameters and produce the concrete loopback. The `rx_port` is `0002:01:00.1` (physical port p1), so read its MAC with `cat /sys/class/net/enP2p1s0f1np1/address`.
 
-    For multiple queues, [`daqiri_bench_raw_tx_rx_4q.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_4q.yaml) shows how queues, memory regions, flow steering, and application workers relate. [`run_spark_bench.sh`](https://github.com/nvidia/daqiri/blob/main/examples/run_spark_bench.sh) generates each single-queue benchmark cell, while [`run_spark_mq_bench.sh`](https://github.com/nvidia/daqiri/blob/main/examples/run_spark_mq_bench.sh) generates all four `(TX, RX)` multi-queue combinations.
+    For multiple queues, [`daqiri_bench_raw_tx_rx_4q.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_4q.yaml) shows how queues, memory regions, flow steering, and application workers relate. [`run_cabled_loopback_bench.sh`](https://github.com/nvidia/daqiri/blob/main/examples/run_cabled_loopback_bench.sh) generates each single-queue benchmark cell from detected platform defaults, while [`run_spark_mq_bench.sh`](https://github.com/nvidia/daqiri/blob/main/examples/run_spark_mq_bench.sh) generates the Spark-specific `(TX, RX)` multi-queue combinations.
 
 #### Cross-host two-DGX-Spark loopback
 
@@ -173,6 +173,13 @@ Use `mlnx_perf -i <rx-netdev> -t 1` during a run of at least 10 seconds and repo
 samples after discarding startup and shutdown. For a cabled test, report the physical receive
 rate. For single-port hardware loopback, report `vport_loopback_bytes` as described below and do
 not add TX and RX for the same returned traffic.
+
+For a cabled test, `rx_bytes_phy` is the **offered wire rate** at the receive port. It includes
+frames that the NIC later discards, so it is a delivered-throughput result only when receive
+discard counters remain flat. Report the benchmark's application rate as **delivered app
+throughput**, and reject or clearly label any cell with `rx_prio*_buf_discard`, `imissed`,
+`ierrors`, `rx_nombuf`, CQ errors, or application-ring drops. A high physical rate paired with a
+lower app rate and rising priority-buffer discards is receiver overload, not useful throughput.
 
 ### Runtime named endpoints example
 
@@ -333,7 +340,7 @@ By default the application runs for 10 seconds and then exits. You can change th
 
 ### Direct-polling latency sweep
 
-`daqiri_bench_raw_latency` measures the caller-driven raw ibverbs path with one packet
+`daqiri_bench_raw_latency` measures the raw ibverbs path with one packet
 outstanding at a time. Its template, `daqiri_bench_raw_latency_ibverbs.yaml`, configures both TX
 and RX with `poll_mode: direct`, enables per-packet RX hardware timestamps, and uses host-pinned
 buffers by default. The benchmark also supports `huge` and `device` packet memory: packet setup and
@@ -378,6 +385,24 @@ The summary and optional per-sample CSV combine those points into these boundari
 | `tx_call_to_rx_hw_ns` | `t0` | `t2` | TX submission, NIC transmit, physical or hardware-loopback return, and NIC receive |
 | `rx_hw_to_app_ns` | `t2` | `t3` | CQ visibility, direct polling, and API return |
 | `tx_call_to_app_ns` | `t0` | `t3` | Complete measured application round trip |
+
+For indirect polling, set both queues to `poll_mode: indirect` and add `batch_size: 1`
+and a separate isolated `cpu_core` to each. The same timing boundaries then include TX worker
+handoff and RX worker delivery; TX call-to-return measures enqueue time. To generate resolved
+configs and compare both modes in host-pinned and GPU memory, run
+the existing benchmark harness inside the privileged project container as root:
+
+```bash
+REPEATS=3 examples/run_cabled_loopback_bench.sh --platform igx-thor ibverbs latency
+```
+
+Use `--platform dgx-spark` on Spark. Latency mode respects the harness's hardware and CPU
+overrides, calibrates against the RX port's PHC, and saves per-sample CSVs, logs, NIC counter
+deltas, calibration uncertainty, and mean per-run p50/p99 comparisons under `bench-results/`.
+Defaults are 10,000 measured samples and 1,000 warmup packets per frame size; override with
+`LATENCY_SAMPLES` and `LATENCY_WARMUP`. Set `LATENCY_GENERATE_ONLY=1` to prepare configs only,
+`LATENCY_MEMORY=host_pinned` to restrict memory placement, or `LATENCY_REALTIME_PRIORITY=0`
+to use normal scheduling.
 
 `tx_call_to_rx_hw_ns` is a loopback-ingress proxy, not an actual TX egress timestamp: DAQIRI does
 not currently expose a TX hardware timestamp, so this value also contains the cable and NIC RX

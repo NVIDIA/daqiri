@@ -572,7 +572,7 @@ int main(int argc, char** argv) {
     uint64_t max_clock_uncertainty_ns = 0;
 
     std::cout << "# packet_size is the L2 frame size supplied to DAQIRI (FCS excluded)\n";
-    std::cout << "# tx_call_to_rx_hw includes direct TX submission, NIC TX, return path, and NIC "
+    std::cout << "# tx_call_to_rx_hw includes TX submission, NIC TX, return path, and NIC "
                  "RX\n";
     std::cout << "# rx_hw_to_app measures NIC ingress to get_rx_burst() return; use ptp_device "
                  "calibration or PTP sync\n";

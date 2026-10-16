@@ -76,12 +76,13 @@ std::string sockaddr_to_ip(const sockaddr_in& addr) {
   return std::string(ip_buf);
 }
 
-bool pin_udp_rx_thread(int cpu_core, uint16_t port) {
+bool pin_socket_rx_thread(int cpu_core, uint16_t port, const char* transport) {
   if (cpu_core < 0) {
     return true;
   }
   if (cpu_core >= CPU_SETSIZE) {
-    DAQIRI_LOG_ERROR("UDP RX I/O thread for port {} requested invalid CPU {}", port, cpu_core);
+    DAQIRI_LOG_ERROR("{} RX I/O thread for port {} requested invalid CPU {}", transport, port,
+                     cpu_core);
     return false;
   }
 
@@ -90,12 +91,12 @@ bool pin_udp_rx_thread(int cpu_core, uint16_t port) {
   CPU_SET(cpu_core, &cpuset);
   const int status = pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
   if (status != 0) {
-    DAQIRI_LOG_ERROR("Failed to pin UDP RX I/O thread for port {} to CPU {}: {}", port, cpu_core,
-                     strerror(status));
+    DAQIRI_LOG_ERROR("Failed to pin {} RX I/O thread for port {} to CPU {}: {}", transport, port,
+                     cpu_core, strerror(status));
     return false;
   }
 
-  DAQIRI_LOG_INFO("UDP RX I/O thread for port {} pinned to CPU {}", port, cpu_core);
+  DAQIRI_LOG_INFO("{} RX I/O thread for port {} pinned to CPU {}", transport, port, cpu_core);
   return true;
 }
 
@@ -204,8 +205,8 @@ void SocketEngine::initialize() {
       ep->socket_cfg = if_cfg.socket_;
       ep->rx_queue = select_queue_id(if_cfg.rx_.queues_);
       ep->tx_queue = select_queue_id(if_cfg.tx_.queues_);
+      ep->rx_cpu_core = select_cpu_core(if_cfg.rx_.queues_);
       if (cfg_.common_.protocol == SocketProtocol::UDP) {
-        ep->rx_cpu_core = select_cpu_core(if_cfg.rx_.queues_);
         ep->rx_batch_size = select_batch_size(if_cfg.rx_.queues_);
         if (ep->socket_cfg.mode_ == SocketMode::SERVER && ep->socket_cfg.remote_ip_.empty() &&
             ep->rx_batch_size > 1) {
@@ -1170,15 +1171,26 @@ std::shared_ptr<SocketEngine::ConnectionState> SocketEngine::register_connection
                                                      std::to_string(queue));
   }
 
-  {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    connections_[conn->conn_id] = conn;
+  // Keep startup private and serialize publication with shutdown's registry
+  // snapshot. Until publication, this path alone owns cleanup of the thread.
+  std::unique_lock<std::mutex> state_lock(state_mutex_);
+  if (!running_.load()) {
+    close_fd(conn->fd);
+    return nullptr;
   }
 
   if (start_rx_thread) {
     conn->rx_thread = std::thread(&SocketEngine::tcp_rx_loop, this, conn);
+    std::unique_lock<std::mutex> lock(conn->rx_start_mutex);
+    conn->rx_start_cv.wait(lock, [&conn] { return conn->rx_start_complete; });
+    if (!conn->rx_start_success) {
+      lock.unlock();
+      conn->rx_thread.join();
+      return nullptr;
+    }
   }
 
+  connections_[conn->conn_id] = conn;
   return conn;
 }
 
@@ -1220,6 +1232,9 @@ std::shared_ptr<SocketEngine::ConnectionState> SocketEngine::create_tcp_client_c
     if (::connect(fd, reinterpret_cast<sockaddr*>(&dst), sizeof(dst)) == 0) {
       auto conn = register_connection(
           fd, ep.port, ep.rx_queue, ep.if_index, false, false, ep.rx_queue_state, true);
+      if (conn == nullptr) {
+        return nullptr;
+      }
       if (set_as_primary) {
         std::lock_guard<std::mutex> lock(state_mutex_);
         default_connection_by_port_[ep.port] = conn->conn_id;
@@ -1411,6 +1426,10 @@ void SocketEngine::tcp_accept_loop(int if_index) {
     auto conn = register_connection(
         fd, ep->port, ep->rx_queue, ep->if_index, true, false, ep->rx_queue_state, true);
 
+    if (conn == nullptr) {
+      continue;
+    }
+
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       if (ep->primary_conn_id == 0) {
@@ -1434,7 +1453,23 @@ void SocketEngine::tcp_rx_loop(std::shared_ptr<ConnectionState> conn) {
   if (conn == nullptr) { return; }
 
   size_t max_size = 65536;
-  if (const auto* ep = endpoint_for_port(conn->port)) { max_size = ep->max_packet_size; }
+  int rx_cpu_core = -1;
+  if (const auto* ep = endpoint_for_port(conn->port)) {
+    max_size = ep->max_packet_size;
+    rx_cpu_core = ep->rx_cpu_core;
+  }
+  const bool startup_ok = pin_socket_rx_thread(rx_cpu_core, conn->port, "TCP");
+  {
+    std::lock_guard<std::mutex> lock(conn->rx_start_mutex);
+    conn->rx_start_success = startup_ok;
+    conn->rx_start_complete = true;
+  }
+  conn->rx_start_cv.notify_one();
+  if (!startup_ok) {
+    conn->running.store(false);
+    close_fd(conn->fd);
+    return;
+  }
 
   std::vector<uint8_t> tmp(max_size);
 
@@ -1505,7 +1540,7 @@ void SocketEngine::udp_rx_loop(int if_index) {
   if (!startup_ok) {
     DAQIRI_LOG_ERROR("UDP RX I/O thread for port {} has no socket", ep->port);
   } else {
-    startup_ok = pin_udp_rx_thread(ep->rx_cpu_core, ep->port);
+    startup_ok = pin_socket_rx_thread(ep->rx_cpu_core, ep->port, "UDP");
   }
   {
     std::lock_guard<std::mutex> lock(ep->io_start_mutex);

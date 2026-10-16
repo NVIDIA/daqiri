@@ -92,6 +92,7 @@ Consult the [Benchmarking overview](https://nvidia.github.io/daqiri/benchmarks/)
 - [Socket and RDMA Benchmarking](https://nvidia.github.io/daqiri/benchmarks/socket_benchmarking/) for the full namespace setup and YAML templates
 - [Raw Ethernet Benchmarking](https://nvidia.github.io/daqiri/benchmarks/raw_benchmarking/) for DPDK/raw Ethernet loopback tests
 - [Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/) for measured cross-host and single-host cabled-loopback benchmarks on DGX Spark (GB10)
+- [Performance: IGX Thor](https://nvidia.github.io/daqiri/benchmarks/performance-igx-thor/) for measured 200 GbE cabled-loopback benchmarks on the IGX Thor Developer Kit
 
 ## Documentation
 
@@ -104,7 +105,6 @@ Reference material for the DAQIRI codebase:
 - [Configuration Generation](https://nvidia.github.io/daqiri/config-generation/) — Deterministic production, benchmark, multi-queue, and cross-host configurations
 - [C++ API Usage](https://nvidia.github.io/daqiri/api-reference/cpp/) — C++ RX/TX workflows, buffer lifecycle, file writing, utilities, and status codes
 - [Python API Usage](https://nvidia.github.io/daqiri/api-reference/python/) — Python bindings, workflow examples, enums, config classes, and helper functions
-- [Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/) — Per-platform throughput, drop, and utilization numbers for stream/protocol combinations on DGX Spark
 - [Contributing](CONTRIBUTING.md) — Contribution guidelines, coding standards, DCO sign-off
 
 ## Tutorials
