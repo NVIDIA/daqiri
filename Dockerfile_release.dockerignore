@@ -24,6 +24,8 @@
 !applications/
 !applications/**
 !scripts/
+!scripts/release/
+!scripts/release/collect_sources.py
 !scripts/gen_daqiri_config.py
 !scripts/daqiri_config/
 !scripts/daqiri_config/**

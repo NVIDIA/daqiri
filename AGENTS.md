@@ -18,11 +18,12 @@ docker build -f Dockerfile_release -t daqiri:release .
 scripts/check-release-container.sh daqiri:release
 ```
 
-The single published release is the PyTorch SDK defined entirely in
+The single published release is the PyTorch SDK configured in
 `Dockerfile_release`, including its pinned base, dependencies and build settings.
-Build and validate on native amd64 and arm64 hosts, then use the direct push and
-multi-architecture manifest commands in README's Application development release
-containers section. The separate `Dockerfile` and `scripts/build-container.sh`
+`scripts/release/collect_sources.py` only collects source/notice artifacts and
+inventories using explicit inputs from the Dockerfile; it supplies no build
+parameters.
+Build and validate on native amd64 and arm64 hosts before publishing. The separate `Dockerfile` and `scripts/build-container.sh`
 serve development builds.
 
 CMake options (full table in `docs/tutorials/bare-metal-cmake-build.md`):
