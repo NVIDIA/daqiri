@@ -13,15 +13,17 @@ cmake --install build --prefix /opt/daqiri
 # Container build (compiles patched DPDK from source)
 BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
 
-# Application SDK release containers (ibverbs, RoCE, UDP/TCP; Python enabled)
-scripts/build-release-container.sh
-BASE_IMAGE=torch scripts/build-release-container.sh
+# PyTorch SDK release (ibverbs, RoCE, UDP/TCP; Python enabled)
+docker build -f Dockerfile_release -t daqiri:release .
+scripts/check-release-container.sh daqiri:release
 ```
 
-Container releases run locally. Run `PUSH=1 scripts/publish_container.sh` on
-each supported architecture; after both per-architecture tags exist, run
-`PUBLISH_MANIFEST=1 scripts/publish_container.sh` to publish and inspect the
-canonical multi-architecture version tag.
+The single published release is the PyTorch SDK defined entirely in
+`Dockerfile_release`, including its pinned base, dependencies and build settings.
+Build and validate on native amd64 and arm64 hosts, then use the direct push and
+multi-architecture manifest commands in README's Application development release
+containers section. The separate `Dockerfile` and `scripts/build-container.sh`
+serve development builds.
 
 CMake options (full table in `docs/tutorials/bare-metal-cmake-build.md`):
 - `DAQIRI_ENGINE` — space-separated list of optional engines to compile. Valid values: `dpdk` (raw Ethernet) and `ibverbs` (RDMA/RoCE). Linux sockets (UDP/TCP) are always built in, so there is no `socket` value. Default is `"dpdk ibverbs"`.

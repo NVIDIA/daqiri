@@ -24,7 +24,9 @@
 !applications/
 !applications/**
 !scripts/
-!scripts/**
+!scripts/gen_daqiri_config.py
+!scripts/daqiri_config/
+!scripts/daqiri_config/**
 !third_party/
 !third_party/**
 **/.git

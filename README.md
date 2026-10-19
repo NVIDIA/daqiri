@@ -128,10 +128,53 @@ DAQIRI ships formal releases quarterly using [calendar versioning](https://calve
 
 ### Application development release containers
 
-`Dockerfile_release` provides separate CUDA and PyTorch SDK images with Python
-bindings, benchmarks, and tuning tools. They support raw ibverbs, RoCE, UDP, and
-TCP. Build with `scripts/build-release-container.sh` (`BASE_IMAGE=torch` for
-PyTorch).
+`Dockerfile_release` defines the single published PyTorch SDK image, based on a
+pinned NGC PyTorch 26.01 manifest for amd64 and arm64. It includes Python bindings,
+benchmarks, tuning tools, and compilers, with raw ibverbs, RoCE, UDP, and TCP
+support. Package lists, pinned vendor versions, matching source retrieval, and
+build settings are in that Dockerfile; no release build script or parameter file is
+needed. DPDK, Rivermax, GDS, S3, metrics, and example applications are omitted or
+disabled. The separate `Dockerfile` remains the development image.
+
+From a checkout with initialized submodules, build and validate locally:
+
+```bash
+docker build -f Dockerfile_release -t daqiri:release .
+scripts/check-release-container.sh daqiri:release
+```
+
+The validation checks Python/PyTorch imports, SDK consumers, diagnostic tools,
+library resolution, and source checksums without requiring a GPU or NIC. Package
+inventories, matching added OSS sources, notices, and the DAQIRI source archive
+are retained in `/opt/daqiri-release`, including the resolved Ubuntu package
+versions. MFT's bundled OSS source/notice review is
+recorded in `source-review.json` and remains pending.
+
+To publish, run the following on each native architecture from the same release
+checkout. Use `amd64` on x86_64 and `arm64` on aarch64; the image tag follows
+`VERSION`. These commands only name the output image; the shipping configuration
+is fixed in `Dockerfile_release`.
+
+```bash
+daqiri_version=$(cat VERSION)
+daqiri_arch=arm64  # amd64 on x86_64
+daqiri_image=nvcr.io/nvstaging/holoscan/daqiri
+docker build --platform "linux/${daqiri_arch}" -f Dockerfile_release \
+  -t "${daqiri_image}:${daqiri_version}-${daqiri_arch}" .
+scripts/check-release-container.sh "${daqiri_image}:${daqiri_version}-${daqiri_arch}"
+docker login nvcr.io -u '$oauthtoken'  # Enter the NGC API key at the password prompt.
+docker push "${daqiri_image}:${daqiri_version}-${daqiri_arch}"
+```
+
+After both architecture images have been validated and pushed, publish and inspect
+the canonical version tag:
+
+```bash
+docker buildx imagetools create -t "${daqiri_image}:${daqiri_version}" \
+  "${daqiri_image}:${daqiri_version}-amd64" \
+  "${daqiri_image}:${daqiri_version}-arm64"
+docker buildx imagetools inspect "${daqiri_image}:${daqiri_version}"
+```
 
 ## License
 

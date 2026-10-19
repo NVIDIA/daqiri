@@ -4,19 +4,22 @@
 # Hardware-free SDK checks. GPU/NIC benchmarks are separate privileged runs.
 set -euo pipefail
 image="${1:?Usage: scripts/check-release-container.sh IMAGE}"
-docker run --rm -i --privileged --gpus all -v /dev/hugepages:/dev/hugepages \
+docker run --rm -i --network none \
   --user "$(id -u):$(id -g)" --entrypoint bash "${image}" <<'CHECK'
 set -euo pipefail
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-# The driver is injected only in GPU-enabled runs. Use a private stub for
-# these hardware-free checks, never configure it as a runtime library.
+# Use a private CUDA driver stub for hardware-free linking/import checks.
+# Never configure it as a runtime library.
 mkdir "$work/stubs"
 ln -s /usr/local/cuda/lib64/stubs/libcuda.so "$work/stubs/libcuda.so.1"
 export LD_LIBRARY_PATH="$work/stubs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 python3 - <<'PY'
 import daqiri
+import torch
 import yaml
+assert torch.ones(2).sum().item() == 2
+print("PyTorch:", torch.__version__)
 assert daqiri.__abi_version__ == 2
 assert daqiri.__version__
 assert hasattr(daqiri, 'send_tx_burst')
