@@ -92,8 +92,13 @@ RUN python3 /tmp/collect_sources.py \
 
 
 FROM release-deps AS release
+# Identification metadata only; these arguments do not select build settings.
+ARG DAQIRI_REVISION=unknown
+ARG DAQIRI_VERSION=unknown
 LABEL org.opencontainers.image.title="DAQIRI application development SDK" \
-      org.opencontainers.image.source="https://github.com/NVIDIA/daqiri"
+      org.opencontainers.image.source="https://github.com/NVIDIA/daqiri" \
+      org.opencontainers.image.revision="${DAQIRI_REVISION}" \
+      org.opencontainers.image.version="${DAQIRI_VERSION}"
 COPY --from=release-build /opt/daqiri /opt/daqiri
 COPY --from=release-build /opt/daqiri-release/daqiri-source.tar.gz /opt/daqiri-release/
 COPY --from=release-sources /opt/daqiri-release /opt/daqiri-release
