@@ -80,7 +80,7 @@ packets after 1,000 warmup packets.
 
 ### Application send→receive
 
-| Packet size | Host-pinned direct p50 / p99 (µs) | Host-pinned indirect p50 / p99 (µs) | GPU direct p50 / p99 (µs) | GPU indirect p50 / p99 (µs) |
+| Packet size | Host-pinned direct p50 / p99 (<span class="unit">μs</span>) | Host-pinned indirect p50 / p99 (<span class="unit">μs</span>) | GPU direct p50 / p99 (<span class="unit">μs</span>) | GPU indirect p50 / p99 (<span class="unit">μs</span>) |
 | -------: | -------------------------------: | ---------------------------------: | -----------------------: | -------------------------: |
 | 64 B | 2.43 / 3.03 | 5.11 / 5.77 | 2.70 / 3.12 | 4.65 / 4.95 |
 | 1024 B | 3.40 / 4.08 | 5.28 / 5.90 | 2.84 / 3.18 | 4.78 / 5.02 |
@@ -129,9 +129,7 @@ using 8000-byte payloads and raw ibverbs batches of 4,096 packets.
 | 3 | **49.1 ±2.7** |
 
 Each pair uses two isolated CPUs: one for sending and one shared by the
-receive-I/O thread and application worker. Matched native `iperf3` tests
-delivered **28.2 ±3.5 Gbps** with one stream and
-**46.9 ±1.5 Gbps** with two.
+receive-I/O thread and application worker.
 
 ## UDP receive throughput
 
