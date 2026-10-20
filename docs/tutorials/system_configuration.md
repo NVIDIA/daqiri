@@ -1762,6 +1762,82 @@ DAQIRI requires an [**NVIDIA SmartNIC**](https://www.nvidia.com/en-us/networking
 
 </div>
 
+## Enable Accurate TX Scheduling, Packet Pacing, and Hardware RX Timestamps
+
+DAQIRI requires **ConnectX-7 or later** for accurate send scheduling and packet
+pacing. These optional features need NIC and driver support in addition to the
+YAML settings:
+
+| Feature | DAQIRI configuration | System requirement |
+|---|---|---|
+| Scheduled packet transmission, either raw engine | `tx.accurate_send: true` and `set_packet_tx_time()` | Hardware timestamp scheduler, real-time NIC clock, and PTP synchronization with `CLOCK_REALTIME` |
+| DPDK packet pacing | Per-queue `pacing_mbps` greater than zero | `SEND_ON_TIMESTAMP` offload; uses the hardware timestamp scheduler |
+| ibverbs packet pacing | Per-queue `pacing_mbps` greater than zero | `RAW_PACKET` QP packet-pacing support and an accepted hardware rate limit; operates independently of timestamp scheduling |
+| Hardware RX timestamps in real-time format | `rx.hardware_timestamps: true` | `REAL_TIME_CLOCK_ENABLE=1` on the receiving adapter and PTP synchronization with `CLOCK_REALTIME` |
+
+### Enable the NIC real-time clock
+
+Inspect these persistent firmware settings on every adapter used for accurate TX
+scheduling or hardware RX timestamps. MFT provides `mst` and `mlxconfig`:
+
+| `mlxconfig` setting | Required value | Applies to |
+|---|---|---|
+| `REAL_TIME_CLOCK_ENABLE` | `1` | Real-time clock mode for accurate TX scheduling and real-time hardware RX timestamps |
+| `ACCURATE_TX_SCHEDULER` | `1`, where exposed by the firmware | Accurate TX scheduling; RX timestamping alone does not need this setting |
+
+```bash
+sudo mst start
+MLXCONFIG_DEVICE=/dev/mst/mt4129_pciconf0  # Replace with your MST device or PCI BDF
+sudo mlxconfig --enable_verbosity -d "$MLXCONFIG_DEVICE" query | \
+  grep -E 'REAL_TIME_CLOCK_ENABLE|ACCURATE_TX_SCHEDULER'
+sudo mlxconfig -d "$MLXCONFIG_DEVICE" --yes set REAL_TIME_CLOCK_ENABLE=1
+```
+
+For accurate TX scheduling, if the adapter firmware exposes
+`ACCURATE_TX_SCHEDULER`, enable it as well:
+
+```bash
+sudo mlxconfig -d "$MLXCONFIG_DEVICE" --yes set ACCURATE_TX_SCHEDULER=1
+```
+
+Firmware options vary by adapter and version; only set options exposed by your
+firmware. DAQIRI's ConnectX-7 minimum still applies. Apply changes with the
+adapter's supported firmware reset and driver restart procedure, or a host power
+cycle, then repeat the query to verify the **current** values.
+Restarting DAQIRI alone does not apply
+next-boot firmware settings. See NVIDIA's [timestamp configuration](https://networking-docs.nvidia.com/doca/archive/3-4-0/time-stamping)
+and [accurate scheduler firmware example](https://github.com/NVIDIA/5t5g#dependencies).
+
+### Synchronize clocks and verify support
+
+Enable PTP synchronization between the NIC hardware clock and the system's
+`CLOCK_REALTIME`, using `ptp4l` and `phc2sys` for your clock topology. All hosts
+participating in absolute-time scheduling must use the same clock domain.
+Enabling `REAL_TIME_CLOCK_ENABLE` selects the timestamp format; it does not
+synchronize the clocks. DAQIRI does not validate synchronization, and incorrect
+clock offsets make scheduled send times and hardware RX timestamps invalid for
+comparison with system time or other hosts.
+
+For hardware RX timestamps, also set `rx.hardware_timestamps: true` in YAML.
+The raw ibverbs engine disables CQE compression for these queues so each packet
+has its own timestamp. If real-time CQ timestamps are unavailable, it warns and
+uses the device-clock format, converting ticks to nanoseconds internally.
+`REAL_TIME_CLOCK_ENABLE=1` selects real-time encoding; hardware timestamp
+generation itself can also operate in free-running device-clock mode. See the
+[mlx5 RX timestamp guide](https://doc.dpdk.org/guides/nics/mlx5.html#rx-timestamp).
+
+For raw ibverbs accurate sending, check the initialization log for
+`wait_on_time` support, `real_time_clock=yes`, and `set_packet_tx_time ENABLED`.
+For DPDK, the driver must advertise `SEND_ON_TIMESTAMP`: DAQIRI rejects accurate
+send initialization without it, while pacing alone warns and falls back to line
+rate. See the [mlx5 TX scheduling guide](https://doc.dpdk.org/guides/nics/mlx5.html#tx-scheduling).
+Ibverbs rate-limit pacing does not require PTP or real-time timestamp mode;
+initialization fails if the NIC cannot apply the requested rate.
+
+See [Accurate Send](../api-reference/configuration.md#accurate-send) and
+[`pacing_mbps`](../api-reference/configuration.md#transmit-configuration-tx) for
+the application settings.
+
 ## Enable Programmable Flex Parsing
 
 Hardware reorder uses the mlx5 flex parser, so the receiving adapter must load

@@ -1489,10 +1489,6 @@ Status IbverbsEngine::devx_create_rq(IbvRxQueue& q, uint32_t stride_log, uint32_
     // Real-time CQEs use UTC encoding (seconds << 32 | nanoseconds), matching
     // the public PTP epoch-nanosecond timestamp contract.
     DEVX_SET(rqc, rqc, ts_format, MLX5_RQC_TIMESTAMP_FORMAT_REAL_TIME);
-  } else {
-    DAQIRI_LOG_CRITICAL(
-        "RX queue {}: real-time CQ timestamps are unsupported; using the device clock format",
-        q.queue_id);
   }
 
   DEVX_SET(wq, wq, wq_type, q.striding ? MLX5_WQ_TYPE_CYCLIC_STRIDING_RQ : MLX5_WQ_TYPE_CYCLIC);
@@ -4097,6 +4093,12 @@ Status IbverbsEngine::setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf,
     if (Status s = create_striding_rq(q); s != Status::SUCCESS) {
       devx_destroy(q);
       return s;
+    }
+    if (intf.rx_.hardware_timestamps_ && !q.realtime_timestamps) {
+      DAQIRI_LOG_WARN(
+          "RX queue {}: rx.hardware_timestamps is enabled, but real-time CQ timestamps are "
+          "unavailable; using device-clock timestamps converted to nanoseconds",
+          q.queue_id);
     }
   }
 
