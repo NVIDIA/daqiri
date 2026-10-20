@@ -41,6 +41,7 @@
 
 #include "src/daqiri_ring.h"
 #include "src/daqiri_pool.h"
+#include "shared_tx.h"
 
 namespace daqiri::detail {
 struct RawVerbsApi;
@@ -478,6 +479,8 @@ struct IbvTxQueue {
   daqiri::Ring* send_ring = nullptr;  // bursts handed off for posting
   std::thread compl_worker;
   std::atomic<bool> running{false};
+  // Optional ownership state; keep the cyclic queue fields at their existing offsets.
+  std::unique_ptr<detail::SharedTxState> shared_tx;
 };
 
 /**
@@ -528,6 +531,8 @@ class IbverbsEngine : public Engine {
 
   // Free family
   void free_all_segment_packets(BurstParams* burst, int seg) override;
+  Status clone_tx_burst(const BurstParams* source, uint32_t shared_segment_mask,
+                        BurstParams** clone) override;
   void free_all_packets(BurstParams* burst) override;
   void free_packet_segment(BurstParams* burst, int seg, int pkt) override;
   void free_packet(BurstParams* burst, int pkt) override;
@@ -707,6 +712,11 @@ class IbverbsEngine : public Engine {
                            size_t num);
 
   // ---- TX path ----
+  bool initialize_burst_pools();
+  Status validate_shared_tx_burst(const IbvTxQueue& q, const BurstParams* burst) const;
+  Status clone_shared_tx_burst(IbvTxQueue& q, const BurstParams* source, uint32_t mask,
+                               BurstParams** clone);
+  bool shared_mr_conflict(const std::vector<std::string>& names, bool shared) const;
   Status setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf, const TxQueueConfig& qcfg);
   Status create_tx_raw_qp(IbvTxQueue& q);  // IBV_QPT_RAW_PACKET, RESET->RTS
   Status configure_tx_pacing(IbvTxQueue& q, uint64_t pacing_mbps);
@@ -960,6 +970,7 @@ class IbverbsEngine : public Engine {
   // /stride arrays; see the .cpp for the layout.
   daqiri::ObjectPool* rx_meta_pool_ = nullptr;
   daqiri::ObjectPool* tx_meta_pool_ = nullptr;
+  std::vector<BurstParams*> tx_metadata_objects_;
   size_t rx_meta_pool_size_ = 0;
   uint32_t max_batch_ = 0;  // largest batch_size across RX+TX queues
   static constexpr uint32_t kDirectPollMaxBatch = 256;

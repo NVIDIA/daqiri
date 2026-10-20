@@ -184,6 +184,8 @@ class Engine {
   virtual Status get_reorder_missing_info(BurstParams* burst, ReorderMissingInfo* info);
   virtual void free_rx_metadata(BurstParams* burst) = 0;
   virtual void free_tx_metadata(BurstParams* burst) = 0;
+  virtual Status clone_tx_burst(const BurstParams* source, uint32_t shared_segment_mask,
+                                BurstParams** clone);
   virtual Status send_tx_burst(BurstParams* burst) = 0;
   virtual Status send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst);
   virtual Status add_endpoint(const RawUdpEndpointConfig& config, EndpointId* endpoint_id);

@@ -83,8 +83,153 @@ uint32_t checksum_sum(const unsigned char* bytes, size_t length, uint32_t sum = 
   return sum;
 }
 
+void run_shared(const std::vector<int>& sizes, bool endpoint, daqiri::EndpointId destination,
+                int port, const std::array<char, 6>& mac) {
+  constexpr int frame_size = kPrefix + kPayload;
+  const int segments = sizes.size();
+  auto get = [&]() {
+    auto* burst = daqiri::create_tx_burst_params();
+    require(burst != nullptr, "Shared TX metadata exhausted");
+    daqiri::set_header(burst, port, kQueue, 1, segments);
+    return burst;
+  };
+  auto transmit = [&](daqiri::BurstParams*& burst) {
+    const auto status =
+        endpoint ? daqiri::send_tx_burst(destination, kQueue, burst) : daqiri::send_tx_burst(burst);
+    if (status == daqiri::Status::SUCCESS || status == daqiri::Status::NO_SPACE_AVAILABLE)
+      burst = nullptr;
+    require(status == daqiri::Status::SUCCESS, "Shared TX submission failed");
+    require(daqiri::wait_for_tx_idle(2000) == daqiri::Status::SUCCESS,
+            "Shared TX completion timeout");
+  };
+  auto receive = [&](const std::vector<unsigned char>& expected, unsigned variant) {
+    RxLoan incoming;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (daqiri::get_rx_burst(&incoming.burst, port, kQueue) != daqiri::Status::SUCCESS) {
+      require(std::chrono::steady_clock::now() < deadline, "Shared RX timeout");
+      std::this_thread::sleep_for(std::chrono::microseconds(20));
+    }
+    std::vector<unsigned char> received;
+    for (int seg = 0; seg < incoming.burst->hdr.hdr.num_segs; ++seg) {
+      const auto bytes = incoming.burst->pkt_lens[seg][0];
+      const size_t offset = received.size();
+      received.resize(offset + bytes);
+      if (seg == 0)
+        std::memcpy(received.data() + offset, incoming.burst->pkts[seg][0], bytes);
+      else
+        cuda_check(cudaMemcpy(received.data() + offset, incoming.burst->pkts[seg][0], bytes,
+                              cudaMemcpyDeviceToHost));
+    }
+    require(received.size() == expected.size(), "Shared RX frame size differs");
+    require(std::equal(received.begin() + kHeader, received.end(), expected.begin() + kHeader),
+            "Private header or shared payload differs");
+    require(received[36] * 256 + received[37] == kUdp, "Shared UDP destination differs");
+    if (!endpoint) require(received[29] == variant, "Private source IP was not independent");
+    require(checksum_sum(received.data() + 14, 20) == 0xffff, "Shared IPv4 checksum differs");
+    const auto sum = checksum_sum(received.data() + 26, 8, 17 + frame_size - 34);
+    require(checksum_sum(received.data() + 34, frame_size - 34, sum) == 0xffff,
+            "Shared gathered UDP checksum differs");
+  };
+  auto headers = [&](daqiri::BurstParams* burst, unsigned variant,
+                     std::vector<unsigned char>& expected) {
+    int offset = endpoint ? kHeader : 0;
+    for (int seg = 0; seg + 1 < segments; ++seg) {
+      if (endpoint || seg != 0) {
+        std::memset(burst->pkts[seg][0], variant + seg, sizes[seg]);
+        std::fill_n(expected.begin() + offset, sizes[seg], variant + seg);
+      }
+      offset += sizes[seg];
+    }
+    if (!endpoint) {
+      auto* ptr = static_cast<uint8_t*>(burst->pkts[0][0]);
+      require(daqiri::set_eth_header(burst, 0, const_cast<char*>(mac.data())) ==
+                  daqiri::Status::SUCCESS,
+              "Private Ethernet header rejected");
+      std::memcpy(ptr + 6, mac.data(), mac.size());
+      require(daqiri::set_ipv4_header(burst, 0, frame_size - 14, 17, htonl(0xc0000200 | variant),
+                                      htonl(0xc0000202)) == daqiri::Status::SUCCESS,
+              "Private IP header rejected");
+      ptr[22] = 64;
+      require(
+          daqiri::set_udp_header(burst, 0, frame_size - 34, kUdp, kUdp) == daqiri::Status::SUCCESS,
+          "Private UDP header rejected");
+    }
+  };
+  for (int iteration = 0; iteration < 300; ++iteration) {
+    TxLoan original{get()}, second;
+    require(daqiri::get_tx_packet_burst(original.burst) == daqiri::Status::SUCCESS,
+            "Shared acquisition failed");
+    original.acquired = true;
+    std::vector<unsigned char> expected(frame_size);
+    for (int i = kHeader; i < frame_size; ++i)
+      expected[i] = static_cast<unsigned char>(i * 37 + iteration);
+    int offset = endpoint ? kHeader : 0;
+    for (int seg = 0; seg < segments; ++seg) {
+      original.burst->pkt_lens[seg][0] = sizes[seg];
+      if (seg + 1 == segments)
+        cuda_check(cudaMemcpy(original.burst->pkts[seg][0], expected.data() + offset, sizes[seg],
+                              cudaMemcpyHostToDevice));
+      else
+        std::memcpy(original.burst->pkts[seg][0], expected.data() + offset, sizes[seg]);
+      offset += sizes[seg];
+    }
+    headers(original.burst, 1, expected);
+    auto* payload = original.burst->pkts[segments - 1][0];
+    require(daqiri::clone_tx_burst(original.burst, 1u << (segments - 1), &second.burst) ==
+                daqiri::Status::SUCCESS,
+            "Shared clone failed");
+    second.acquired = true;
+    require(second.burst->pkts[segments - 1][0] == payload, "Payload was copied");
+    for (int seg = 0; seg + 1 < segments; ++seg)
+      require(second.burst->pkts[seg][0] != original.burst->pkts[seg][0], "Private segments alias");
+    if (iteration % 2 == 0) {
+      transmit(original.burst);
+      receive(expected, 1);
+      TxLoan blocked{get()};
+      require(daqiri::get_tx_packet_burst(blocked.burst) == daqiri::Status::NO_FREE_PACKET_BUFFERS,
+              "Original completion freed unsent clone payload");
+    } else {
+      daqiri::free_all_packets_and_burst_tx(original.burst);
+      original.burst = nullptr;
+    }
+    // Clone a clone after the original has completed/cancelled; private pool
+    // capacity two proves no extra payload/header is allocated behind the API.
+    TxLoan third;
+    require(daqiri::clone_tx_burst(second.burst, 1u << (segments - 1), &third.burst) ==
+                daqiri::Status::SUCCESS,
+            "Clone of clone failed");
+    third.acquired = true;
+    daqiri::free_all_packets_and_burst_tx(second.burst);
+    second.burst = nullptr;
+    headers(third.burst, 2, expected);
+    transmit(third.burst);
+    receive(expected, 2);
+  }
+  // Deletion must wait for an unsubmitted clone, even with no outstanding sends.
+  TxLoan held{get()};
+  require(daqiri::get_tx_packet_burst(held.burst) == daqiri::Status::SUCCESS,
+          "Deletion hold allocation failed");
+  held.acquired = true;
+  daqiri::ResourceOpId operation = 0;
+  require(daqiri::delete_tx_queue_async(port, kQueue, &operation) == daqiri::Status::SUCCESS,
+          "Queue deletion request failed");
+  daqiri::ResourceOpResult result;
+  require(daqiri::poll_resource_op(&result) == daqiri::Status::NOT_READY,
+          "Queue deleted caller-owned storage");
+  require(daqiri::delete_memory_region_async("tx-" + std::to_string(segments - 1), &operation) ==
+              daqiri::Status::RESOURCE_IN_USE,
+          "MR deleted while clone pinned queue");
+  daqiri::free_all_packets_and_burst_tx(held.burst);
+  held.burst = nullptr;
+  require(daqiri::poll_resource_op(&result) == daqiri::Status::SUCCESS &&
+              result.state_ == daqiri::ResourceState::REMOVED,
+          "Queue deletion did not finish after release");
+  std::cout << "PASS: shared TX private headers, GPU payload lifetime, clone of clone, "
+               "cancellation, checksums, and draining\n";
+}
+
 void run(int regions, int frame_size, bool direct, int tx_regions = 0, bool tx_direct = false,
-         bool endpoint = false) {
+         bool endpoint = false, bool shared = false) {
   require(regions >= 2 && regions <= 5, "RX region count must be 2..5");
   require(frame_size >= 64 && frame_size <= kPrefix + kPayload, "Invalid frame size");
   const int gpu = std::stoi(setting("DAQIRI_PLATFORM_GPU", "0"));
@@ -135,6 +280,10 @@ void run(int regions, int frame_size, bool direct, int tx_regions = 0, bool tx_d
   intf.rx_.flow_isolation_ = true;
   daqiri::TxQueueConfig tx{};
   tx.common_.id_ = kQueue;
+  if (shared) {
+    tx.buffer_mode_ = daqiri::TxBufferMode::SHARED;
+    tx.max_inflight_sends_ = 8;
+  }
   if (!tx_direct) {
     tx.common_.cpu_core_ = setting("DAQIRI_PLATFORM_TX_CPU", "1");
     tx.common_.batch_size_ = 1;
@@ -142,9 +291,10 @@ void run(int regions, int frame_size, bool direct, int tx_regions = 0, bool tx_d
   tx.poll_mode_ = tx_direct ? daqiri::QueuePollMode::DIRECT : daqiri::QueuePollMode::INDIRECT;
   for (size_t seg = 0; seg < tx_sizes.size(); ++seg) {
     const auto name = "tx-" + std::to_string(seg);
-    const bool device = seg > 0 && seg == tx_sizes.size() - 1;
+    const bool device = (seg > 0 || shared) && seg == tx_sizes.size() - 1;
     add_region(config, name, tx_sizes[seg],
                device ? daqiri::MemoryKind::DEVICE : daqiri::MemoryKind::HUGE, device ? gpu : numa);
+    if (shared) config.mrs_[name].num_bufs_ = device ? 1 : 2;
     tx.common_.mrs_.push_back(name);
   }
   intf.tx_.queues_.push_back(tx);
@@ -198,6 +348,13 @@ void run(int regions, int frame_size, bool direct, int tx_regions = 0, bool tx_d
     target.mtu_ = frame_size;
     require(daqiri::add_endpoint(target, &destination) == daqiri::Status::SUCCESS,
             "Endpoint creation failed");
+  }
+
+  if (shared) {
+    require(!tx_direct && regions == 2 && (endpoint || tx_regions > 1),
+            "Invalid shared TX test layout");
+    run_shared(tx_sizes, endpoint, destination, port, mac);
+    return;
   }
 
   // TX cases cross slot and SQ wraparound with distinct bytes per packet.
@@ -297,17 +454,18 @@ void run(int regions, int frame_size, bool direct, int tx_regions = 0, bool tx_d
 
 int main(int argc, char** argv) {
   try {
-    require(argc == 4 || argc == 7,
+    require(argc == 4 || argc == 7 || argc == 8,
             "Usage: multi_region_rx REGIONS FRAME_SIZE direct|indirect "
             "[TX_REGIONS direct|indirect raw|endpoint]");
     const std::string mode = argv[3];
     require(mode == "direct" || mode == "indirect", "Invalid polling mode");
-    const std::string tx_mode = argc == 7 ? argv[5] : "indirect";
-    const std::string headers = argc == 7 ? argv[6] : "raw";
+    const std::string tx_mode = argc >= 7 ? argv[5] : "indirect";
+    const std::string headers = argc >= 7 ? argv[6] : "raw";
     require(tx_mode == "direct" || tx_mode == "indirect", "Invalid TX polling mode");
     require(headers == "raw" || headers == "endpoint", "Invalid TX header mode");
     run(std::stoi(argv[1]), std::stoi(argv[2]), mode == "direct",
-        argc == 7 ? std::stoi(argv[4]) : 0, tx_mode == "direct", headers == "endpoint");
+        argc >= 7 ? std::stoi(argv[4]) : 0, tx_mode == "direct", headers == "endpoint",
+        argc == 8 && std::string(argv[7]) == "shared");
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "FAIL: " << error.what() << '\n';

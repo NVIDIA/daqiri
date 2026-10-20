@@ -645,6 +645,12 @@ void shutdown() {
   metrics::shutdown();
 }
 
+Status clone_tx_burst(const BurstParams* source, uint32_t shared_segment_mask,
+                      BurstParams** clone) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->clone_tx_burst(source, shared_segment_mask, clone);
+}
+
 Status send_tx_burst(BurstParams* burst) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
   return g_daqiri_engine->send_tx_burst(burst);
@@ -2393,6 +2399,20 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_tx_queue_common_config(
         return false;
       }
     }
+    if (q_item["buffer_mode"].IsDefined()) {
+      const auto mode = q_item["buffer_mode"].as<std::string>();
+      if (mode == "shared")
+        q.buffer_mode_ = daqiri::TxBufferMode::SHARED;
+      else if (mode == "cyclic")
+        q.buffer_mode_ = daqiri::TxBufferMode::CYCLIC;
+      else {
+        DAQIRI_LOG_ERROR("Invalid TX buffer_mode '{}'", mode);
+        return false;
+      }
+    }
+    if (!daqiri::detail::parse_optional_yaml_integer(q_item, "max_inflight_sends", uint32_t{0},
+                                                     q.max_inflight_sends_, "TX queue"))
+      return false;
     uint64_t ignored_timeout_us = 0;
     if (!daqiri::detail::parse_optional_yaml_integer(q_item, "timeout_us", uint64_t{0},
                                                      ignored_timeout_us, "TX queue")) {
@@ -2419,7 +2439,7 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_tx_queue_config(
   if (!daqiri::detail::validate_yaml_mapping_keys(
           q_item,
           {"name", "id", "poll_mode", "cpu_core", "batch_size", "memory_regions", "offloads",
-           "pacing_mbps", "timeout_us"},
+           "pacing_mbps", "timeout_us", "buffer_mode", "max_inflight_sends"},
           "TX queue")) {
     return false;
   }
