@@ -1026,6 +1026,15 @@ void set_num_packets(BurstParams *burst, int64_t num);
 Status send_tx_burst(BurstParams* burst);
 
 /**
+ * Clone an application-owned raw ibverbs shared-mode TX burst. Bit s shares
+ * segment s; other segments receive private CPU copies. Clone before submission.
+ * Shared bytes must remain immutable until all owners complete or cancel.
+ * Failure leaves source unchanged and sets *clone to nullptr. Scheduling and
+ * custom application metadata are not copied. Other engines return NOT_SUPPORTED.
+ */
+Status clone_tx_burst(const BurstParams* source, uint32_t shared_segment_mask, BurstParams** clone);
+
+/**
  * @brief Send a TX burst through a named endpoint on an explicitly selected queue.
  *
  * The burst must have been allocated from @p queue_id on the endpoint's

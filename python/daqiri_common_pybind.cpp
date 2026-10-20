@@ -799,10 +799,16 @@ void bind_config_types(py::module_ &m) {
       .def_readwrite("poll_mode", &RxQueueConfig::poll_mode_)
       .def_readwrite("cqe_compression", &RxQueueConfig::cqe_compression_);
 
+  py::enum_<TxBufferMode>(m, "TxBufferMode")
+      .value("CYCLIC", TxBufferMode::CYCLIC)
+      .value("SHARED", TxBufferMode::SHARED);
+
   py::class_<TxQueueConfig>(m, "TxQueueConfig")
       .def(py::init<>())
       .def_readwrite("common", &TxQueueConfig::common_)
-      .def_readwrite("poll_mode", &TxQueueConfig::poll_mode_);
+      .def_readwrite("poll_mode", &TxQueueConfig::poll_mode_)
+      .def_readwrite("buffer_mode", &TxQueueConfig::buffer_mode_)
+      .def_readwrite("max_inflight_sends", &TxQueueConfig::max_inflight_sends_);
 
   py::class_<VlanActionConfig>(m, "VlanActionConfig")
       .def(py::init<>())
@@ -1208,6 +1214,19 @@ PYBIND11_MODULE(_daqiri, m) {
         py::call_guard<py::gil_scoped_release>());
   m.def("get_tx_packet_burst", &get_tx_packet_burst, "burst"_a,
         py::call_guard<py::gil_scoped_release>());
+  m.def(
+      "clone_tx_burst",
+      [](const BurstParams* source, uint32_t mask) {
+        BurstParams* clone = nullptr;
+        Status status;
+        {
+          py::gil_scoped_release release;
+          status = clone_tx_burst(source, mask, &clone);
+        }
+        return py::make_tuple(status, py::cast(clone, py::return_value_policy::reference));
+      },
+      "source"_a, "shared_segment_mask"_a,
+      "Clone selected TX segments by reference; returns (Status, burst).");
   m.def("send_tx_burst", py::overload_cast<BurstParams*>(&send_tx_burst), "burst"_a,
         py::call_guard<py::gil_scoped_release>());
   m.def("set_packet_lengths", &set_packet_lengths_from_vector, "burst"_a,

@@ -1190,6 +1190,16 @@ bool validate_network_config(const NetworkConfig& config) {
     mr_names.emplace(mr.second.name_);
   }
 
+  // Shared TX owns the entire slot allocator for each of its MRs. Aliasing a
+  // region through another queue (including a reorder output) would bypass it.
+  std::unordered_map<std::string, size_t> region_users;
+  for (const auto& intf : config.ifs_) {
+    for (const auto& q : intf.rx_.queues_)
+      for (const auto& name : q.common_.mrs_) ++region_users[name];
+    for (const auto& q : intf.tx_.queues_)
+      for (const auto& name : q.common_.mrs_) ++region_users[name];
+    for (const auto& r : intf.rx_.reorder_configs_) ++region_users[r.memory_region_];
+  }
   for (const auto& intf : config.ifs_) {
     std::set<uint16_t> rx_queue_ids;
     std::set<uint16_t> direct_rx_queue_ids;
@@ -1226,6 +1236,46 @@ bool validate_network_config(const NetworkConfig& config) {
       }
     }
     for (const auto& txq : intf.tx_.queues_) {
+      if (txq.buffer_mode_ != TxBufferMode::CYCLIC && txq.buffer_mode_ != TxBufferMode::SHARED) {
+        DAQIRI_LOG_ERROR("TX queue '{}' has an invalid buffer mode", txq.common_.name_);
+        pass = false;
+      }
+      if (txq.buffer_mode_ == TxBufferMode::SHARED) {
+        if (config.common_.stream_type != StreamType::RAW ||
+            config.common_.engine_type != EngineType::IBVERBS ||
+            txq.poll_mode_ != QueuePollMode::INDIRECT || txq.common_.mrs_.empty() ||
+            txq.common_.mrs_.size() > MAX_NUM_SEGS) {
+          DAQIRI_LOG_ERROR("Shared TX requires a raw ibverbs indirect queue with 1–4 regions");
+          pass = false;
+        }
+        uint64_t smallest_pool = UINT32_MAX;
+        for (const auto& name : txq.common_.mrs_) {
+          auto region = config.mrs_.find(name);
+          if (region != config.mrs_.end()) {
+            const auto& mr = region->second;
+            if (mr.num_bufs_ == 0 || mr.num_bufs_ >= UINT32_MAX || mr.buf_size_ == 0 ||
+                mr.buf_size_ > UINT32_MAX)
+              pass = false;
+            smallest_pool = std::min<uint64_t>(smallest_pool, mr.num_bufs_);
+          }
+          if (region_users[name] != 1) {
+            DAQIRI_LOG_ERROR("Shared TX memory region '{}' must belong to only one segment/queue",
+                             name);
+            pass = false;
+          }
+        }
+        const uint64_t credits =
+            txq.max_inflight_sends_ ? txq.max_inflight_sends_ : smallest_pool * 2;
+        if (credits == 0 || credits > UINT32_MAX ||
+            (txq.common_.batch_size_ > 0 &&
+             static_cast<uint64_t>(txq.common_.batch_size_) > credits)) {
+          DAQIRI_LOG_ERROR("Shared TX send-credit limit is invalid or smaller than batch_size");
+          pass = false;
+        }
+      } else if (txq.max_inflight_sends_ != 0) {
+        DAQIRI_LOG_ERROR("max_inflight_sends requires buffer_mode: shared");
+        pass = false;
+      }
       if (txq.poll_mode_ == QueuePollMode::DIRECT) {
         if (config.common_.stream_type != StreamType::RAW ||
             config.common_.engine_type != EngineType::IBVERBS) {
@@ -1572,6 +1622,12 @@ Status Engine::get_tx_packet_burst_checked(BurstParams* burst) {
     return Status::NO_FREE_BURST_BUFFERS;
   }
   return get_tx_packet_burst(burst);
+}
+
+Status Engine::clone_tx_burst(const BurstParams*, uint32_t, BurstParams** clone) {
+  if (clone == nullptr) return Status::NULL_PTR;
+  *clone = nullptr;
+  return Status::NOT_SUPPORTED;
 }
 
 Status Engine::send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst) {
