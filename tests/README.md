@@ -44,6 +44,9 @@ C++ unit and build-backed integration tests live under `tests/cpp/` and are regi
 with CTest when `BUILD_TESTING=ON` (the default). The current
 `daqiri_init_validation_test` exercises common semantic validation through the production
 socket initialization path and verifies rejection before socket resources are initialized.
+The ibverbs-enabled `daqiri_ibverbs_tx_segments_test` checks gathered SEND encoding,
+SQ wraparound, completion reclamation, and endpoint validation using host memory
+for the SQ/CQ and doorbells; it does not initialize a NIC or CUDA context.
 After building in the required project container, run:
 
 ```bash

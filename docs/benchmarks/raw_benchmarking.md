@@ -189,9 +189,10 @@ sudo ./build/examples/daqiri_example_named_endpoints \
 For each `bench_tx` entry, the application adds a named endpoint, verifies name
 resolution to an `EndpointId`, and submits bursts on the configured queue. The
 packet buffers contain only the UDP payload; DAQIRI inserts the cached header
-inline in the mlx5 send WQE. The endpoint MTU and the queue's TX slot size both
-bound the accepted payload. Named endpoints currently require one TX memory
-region and one packet segment, so HDS configurations are rejected.
+inline in the mlx5 send WQE. Named endpoints support up to four TX memory regions;
+each segment must fit its region's TX slot, and the endpoint MTU bounds the combined
+payload and inline header. This example uses one region; custom applications can
+gather CPU application headers and a GPU payload from separate regions.
 
 The checked-in config deliberately uses 8192 TX slots and a 256-packet batch.
 Raw ibverbs may need two send work requests per TX slot, and a provider can

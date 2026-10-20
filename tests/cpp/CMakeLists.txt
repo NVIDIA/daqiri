@@ -46,6 +46,23 @@ endif()
 
 add_test(NAME daqiri_socket_rx_queue_test COMMAND daqiri_socket_rx_queue_test)
 
+if(TARGET daqiri_ibverbs)
+  add_executable(daqiri_ibverbs_tx_segments_test ibverbs_tx_segments_test.cpp)
+  target_compile_features(daqiri_ibverbs_tx_segments_test PRIVATE cxx_std_17)
+  target_include_directories(daqiri_ibverbs_tx_segments_test PRIVATE ${PROJECT_SOURCE_DIR})
+  if(NOT BUILD_SHARED_LIBS AND UNIX AND NOT APPLE)
+    target_link_libraries(daqiri_ibverbs_tx_segments_test PRIVATE
+      "-Wl,--start-group" ${DAQIRI_TEST_STATIC_LIBS} "-Wl,--end-group" ${DAQIRI_YAML_TARGET})
+  else()
+    if(UNIX AND NOT APPLE)
+      target_link_options(daqiri_ibverbs_tx_segments_test PRIVATE "LINKER:--no-as-needed")
+    endif()
+    target_link_libraries(daqiri_ibverbs_tx_segments_test PRIVATE
+      daqiri_ibverbs daqiri::daqiri ${DAQIRI_YAML_TARGET})
+  endif()
+  add_test(NAME daqiri_ibverbs_tx_segments_test COMMAND daqiri_ibverbs_tx_segments_test)
+endif()
+
 if(DAQIRI_IBVERBS_DLOPEN AND TARGET daqiri_raw_verbs_glue)
   find_package(Threads REQUIRED)
   add_executable(daqiri_rdma_glue_test rdma_glue_test.cpp

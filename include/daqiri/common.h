@@ -1029,15 +1029,14 @@ Status send_tx_burst(BurstParams* burst);
  * @brief Send a TX burst through a named endpoint on an explicitly selected queue.
  *
  * The burst must have been allocated from @p queue_id on the endpoint's
- * interface. Named endpoints currently require a one-segment TX queue and burst;
- * segment 0 is treated as the UDP payload. HDS and other multi-segment bursts
- * are rejected with INVALID_PARAMETER; header-data gather is not supported.
- * DAQIRI
- * copies the cached endpoint template into an inline mlx5 SEND WQE, patches its
- * IPv4 and UDP lengths, and gathers the payload through one registered data
- * segment. Packet buffers contain payload only; checksum fields remain zero
- * for NIC offload. Each payload must fit both the endpoint MTU and the selected
- * TX queue's packet-buffer slot. Validation failures do not consume the burst.
+ * interface. Named endpoints support one to four TX segments, gathered in order
+ * as the UDP payload. Application header and payload segments do not include
+ * Ethernet/IP/UDP header bytes.
+ * DAQIRI copies the cached endpoint template into an inline mlx5 SEND WQE and patches its
+ * IPv4 and UDP lengths from the sum of all segment lengths. Checksum fields
+ * remain zero for NIC offload. Each segment must fit its TX region's slot, and
+ * the aggregate frame must fit the endpoint MTU and IPv4/UDP length limits.
+ * Validation failures do not consume the burst.
  */
 Status send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst);
 

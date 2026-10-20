@@ -295,7 +295,8 @@ TX queues on that interface are already in use.
   its configured `buf_size` bytes, in list order; allocation padding does not change
   the split boundaries. A short packet can leave later segments with zero length.
   Multi-region queues always use a regular scatter RQ, including when
-  `DAQIRI_IBV_STRIDING=1` is set. Raw ibverbs TX remains limited to two regions.
+  `DAQIRI_IBV_STRIDING=1` is set. Raw ibverbs TX also supports up to four regions,
+  gathered in list order using the per-packet segment lengths set by the application.
   - type: `list`
 - **`timeout_us`**: Timeout in microseconds. A partial batch is delivered if this time elapses
   before `batch_size` packets are collected. Set to `0` to disable (wait for full batch only).
@@ -621,6 +622,13 @@ without an epoch field, an old late packet is indistinguishable from the same sl
   direct mode; direct TX requires exactly one packet per API submission.
   - type: `integer`
 - **`memory_regions`**: List of memory region names. Same segment mapping rules as RX.
+  Raw ibverbs supports one to four CPU/GPU regions in both polling modes. Each packet
+  uses one buffer from every region; the smallest `num_bufs` bounds packet capacity.
+  Set each segment's actual length before sending. The NIC concatenates the segments
+  into one wire packet, for example CPU network headers, CPU message headers, and a
+  GPU payload. Keep the Ethernet/IPv4/UDP header in segment 0 when using the header
+  helpers; its IP/UDP lengths must include the later segments. Named endpoints instead
+  insert the network header inline and treat all configured regions as UDP payload.
   - type: `list`
 - **`offloads`**: List of hardware offloads to enable. Each offload installs an RTE Flow rule
   during `daqiri_init()`; initialization fails if the NIC cannot program the rule.
