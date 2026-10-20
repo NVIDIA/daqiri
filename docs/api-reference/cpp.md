@@ -572,6 +572,23 @@ for (int i = 0; i < daqiri::get_num_packets(burst); i++) {
 Or construct raw packets by writing directly into the packet buffer returned by
 `get_packet_ptr()`.
 
+Raw ibverbs TX supports one to four segments, in both direct and indirect mode.
+The NIC gathers them in queue memory-region order into one packet. For example,
+use segment 0 for Ethernet/IPv4/UDP, segment 1 for an application header, and
+segment 2 for a CPU/GPU payload:
+
+```cpp
+// Fill each segment through get_segment_packet_ptr(burst, segment, packet).
+daqiri::set_packet_lengths(burst, i, {42, message_header_bytes, payload_bytes});
+```
+
+Keep the network header together in segment 0 for the existing header helpers.
+Set its IPv4 and UDP lengths to include every following segment. Segment buffers
+remain owned by their TX packet until completion; gathering does not share an
+allocation between different packets. `get_packet_length()` returns segment 0's
+length; use the segment-length getters or `get_burst_tot_byte()` for all data
+segments.
+
 ### TX Step 3: Send
 
 ```cpp
@@ -590,20 +607,16 @@ The burst must have been acquired from the same queue, so its existing
 checked overload copies the endpoint's cached 42-byte Ethernet/IPv4/UDP template
 directly into each mlx5 SEND WQE. It patches the IPv4 and UDP lengths there and
 leaves both checksum fields zero for the existing mlx5 hardware-checksum flags.
-One registered data segment gathers the UDP payload from segment 0. Packet
-buffers therefore contain payload only; applications do not reserve or
-populate header bytes.
+One to four registered data segments gather the UDP payload in segment order.
+Packet buffers therefore contain payload only; applications do not reserve or
+populate Ethernet/IP/UDP header bytes. Separate segments can hold application
+headers, metadata, and a GPU payload.
 
-!!! warning "Single-segment limitation"
-    Named endpoints currently support only a one-segment raw-ibverbs TX queue and
-    a one-segment burst. Segment 0 is the payload. HDS/two-region queues and all
-    other multi-segment bursts are rejected with `INVALID_PARAMETER`; this path
-    does not support header-data gather.
-
-Set segment 0's payload length before submission. Each endpoint-aware SEND WQE
-occupies two 64-byte WQEBBs; enhanced MPW is bypassed for these bursts. The
-payload length must fit both the endpoint MTU and the selected TX queue's
-packet-buffer slot.
+Set every segment's length before submission. Each segment must fit its queue's
+packet-buffer slot, and the sum of segment lengths plus the inline network header
+must fit the endpoint MTU and IPv4/UDP length limits. Endpoint-aware SEND WQEs
+occupy two 64-byte WQEBBs for one to three gathered segments, or three WQEBBs for
+four segments; enhanced MPW is bypassed for these bursts.
 
 The overload returns `INVALID_PARAMETER` without consuming the burst when the
 endpoint, interface, queue, header reservation, or frame length is invalid. A

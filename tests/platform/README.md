@@ -74,3 +74,14 @@ python3 -m pytest tests/platform/test_multi_region_rx.py -m platform -p no:cache
 With no executable override, the pytest fixture compiles a temporary executable
 against the SDK selected by `PKG_CONFIG_PATH`. Keep hardware tests serialized on
 the selected port.
+
+The same reproducer also exercises one- through four-region TX queues in direct and
+indirect mode, with explicit or named-endpoint network headers. Multi-region TX puts
+private application headers in CPU regions and the final payload in GPU memory. Each
+case sends 1100 distinct packets to exercise slot/SQ reuse and verifies every application
+byte, aggregate IPv4/UDP lengths, and hardware-generated checksums. Five-region TX is
+rejected. Run just these cases with the same environment and executable override:
+
+```bash
+python3 -m pytest tests/platform/test_multi_region_rx.py -m platform -k tx
+```

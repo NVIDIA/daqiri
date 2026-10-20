@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Hardware-loopback byte-integrity coverage for raw ibverbs multi-region RX."""
+"""Hardware-loopback byte-integrity coverage for raw ibverbs multi-region RX/TX."""
 
 import os
 from pathlib import Path
@@ -76,3 +76,29 @@ def test_multi_region_rx(reproducer, regions, frame_size, mode, striding):
     assert f"PASS: {expected}" in result.stdout
     if regions == 5:
         assert "5 memory regions; at most 4 are supported" in result.stderr
+
+
+@pytest.mark.platform
+@pytest.mark.parametrize("regions", [1, 2, 3, 4])
+@pytest.mark.parametrize("mode", ["indirect", "direct"])
+@pytest.mark.parametrize("headers", ["raw", "endpoint"])
+def test_multi_region_tx(reproducer, regions, mode, headers):
+    binary, env = reproducer
+    result = subprocess.run(
+        [str(binary), "2", "5142", "indirect", str(regions), mode, headers],
+        env=env, capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PASS: exact CPU/GPU byte integrity across 1100 packets" in result.stdout
+
+
+@pytest.mark.platform
+def test_oversized_tx_region_list(reproducer):
+    binary, env = reproducer
+    result = subprocess.run(
+        [str(binary), "2", "5142", "indirect", "5", "indirect", "raw"],
+        env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PASS: oversized TX region list rejected" in result.stdout
+    assert "5 memory regions; at most 4 are supported" in result.stderr

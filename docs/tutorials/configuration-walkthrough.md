@@ -399,7 +399,7 @@ A 5142-byte frame arrives as 42 header bytes, 1000 CPU metadata bytes, and 4100
 GPU payload bytes. Padding used to align allocations does not move those boundaries.
 Shorter frames can leave later segments with zero length. Each multi-region RX
 queue uses a regular scatter RQ, even if `DAQIRI_IBV_STRIDING=1` is set. Raw ibverbs
-RX accepts at most four regions per queue; TX remains limited to two. See the
+RX and TX support up to four regions per queue; TX gathers them in order. See the
 [RX queue configuration](../api-reference/configuration.md#receive-configuration-rx)
 for the complete field reference.
 

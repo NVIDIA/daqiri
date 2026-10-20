@@ -398,8 +398,8 @@ struct IbvTxQueue {
   int batch_size = 1;
   int num_segs = 1;
   // One TX region per packet segment. Single-region (normal) TX uses region 0
-  // only; HDS TX scatters segment s from regions[s] (region 0 = CPU header MR,
-  // region 1 = GPU payload MR), each with its own lkey. mr_base/lkey/slot_size
+  // only; multi-segment TX gathers segment s from regions[s], each with its own
+  // lkey. HDS is the two-region CPU-header/GPU-payload case. mr_base/lkey/slot_size
   // mirror region 0.
   struct TxRegion {
     uint8_t* base = nullptr;
@@ -578,6 +578,8 @@ class IbverbsEngine : public Engine {
   Status get_reorder_missing_info(BurstParams* burst, ReorderMissingInfo* info) override;
 
  private:
+  friend class IbverbsEngineTxTestPeer;
+
   const detail::RawVerbsApi* verbs_ = nullptr;
   struct PortSteering;
 
@@ -710,6 +712,8 @@ class IbverbsEngine : public Engine {
   Status configure_tx_pacing(IbvTxQueue& q, uint64_t pacing_mbps);
   void post_tx_burst(IbvTxQueue& q, BurstParams* burst);  // build send WQEs + ring doorbell
   void post_endpoint_inline_burst(IbvTxQueue& q, BurstParams* burst);
+  Status prepare_endpoint_tx_burst(const IbvTxQueue& q, const EndpointFastPath& endpoint,
+                                   BurstParams* burst);
   void post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst, uint16_t first_packet = 0);
   // Build a WAIT-on-time WQE (ctrl + wseg = 1 WQEBB, no slot) at q.sq_pi that
   // holds the following send(s) until the NIC real-time clock reaches when_ns,
