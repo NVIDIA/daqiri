@@ -1,9 +1,8 @@
 # Shared TX buffers for raw ibverbs
 
-Status: implemented on top of PR #356; tracking issue #358. Hardware-free tests
-and seven real ConnectX-7 loopback lifetime cases pass, alongside the 27 existing
-multi-region cases. The [C++ API reference](../docs/api-reference/cpp.md#shared-tx-segments)
-and [configuration reference](../docs/api-reference/configuration.md) describe usage.
+Status: implemented. Hardware-free tests and seven real ConnectX-7 loopback
+lifetime cases pass, alongside the 27 existing multi-region cases. The
+[C++ API reference](../docs/api-reference/cpp.md#shared-tx-segments) and [configuration reference](../docs/api-reference/configuration.md) describe usage.
 
 ## Recommendation
 
@@ -63,9 +62,9 @@ the payload through a data segment. Extend it to gather multiple segments for
 endpoint fan-out. The ordinary raw SEND path gathers explicit packet headers
 and payloads from their segment buffers.
 
-PR #356 supplies one-through-four-segment ordinary and endpoint TX, including
-multi-block WQE sizing, SQ wraparound, and aggregate endpoint lengths. The shared
-storage layer builds on those builders and completion mappings.
+Ordinary and endpoint TX support one through four segments, including multi-block
+WQE sizing, SQ wraparound, and aggregate endpoint lengths. The shared storage
+layer uses those builders and completion mappings.
 
 ## Initial scope and configuration
 
@@ -337,7 +336,7 @@ largest mixed WQE, then verify the resulting descriptor budget and total SQ
 capacity; optimize that reservation only with an explicit sizing calculation.
 Keep admission accounting based on actual WQEBBs emitted, even if provider
 reservation is larger. Reject counts outside 1–4; never silently truncate the
-segment list. PR #356 already enables all four segments for cyclic queues as well.
+segment list. Cyclic queues also support all four segments.
 
 ### Packet lengths and header handling
 
