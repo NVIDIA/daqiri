@@ -174,12 +174,9 @@ samples after discarding startup and shutdown. For a cabled test, report the phy
 rate. For single-port hardware loopback, report `vport_loopback_bytes` as described below and do
 not add TX and RX for the same returned traffic.
 
-For a cabled test, `rx_bytes_phy` is the **offered wire rate** at the receive port. It includes
-frames that the NIC later discards, so it is a delivered-throughput result only when receive
-discard counters remain flat. Report the benchmark's application rate as **delivered app
-throughput**, and reject or clearly label any cell with `rx_prio*_buf_discard`, `imissed`,
-`ierrors`, `rx_nombuf`, CQ errors, or application-ring drops. A high physical rate paired with a
-lower app rate and rising priority-buffer discards is receiver overload, not useful throughput.
+Physical-port counters include traffic later discarded by the NIC. Check receive-drop
+counters alongside application throughput before treating a wire-rate measurement as loss-free
+delivery.
 
 ### Runtime named endpoints example
 
@@ -396,13 +393,7 @@ the existing benchmark harness inside the privileged project container as root:
 REPEATS=3 examples/run_cabled_loopback_bench.sh --platform igx-thor ibverbs latency
 ```
 
-Use `--platform dgx-spark` on Spark. Latency mode respects the harness's hardware and CPU
-overrides, calibrates against the RX port's PHC, and saves per-sample CSVs, logs, NIC counter
-deltas, calibration uncertainty, and mean per-run p50/p99 comparisons under `bench-results/`.
-Defaults are 10,000 measured samples and 1,000 warmup packets per frame size; override with
-`LATENCY_SAMPLES` and `LATENCY_WARMUP`. Set `LATENCY_GENERATE_ONLY=1` to prepare configs only,
-`LATENCY_MEMORY=host_pinned` to restrict memory placement, or `LATENCY_REALTIME_PRIORITY=0`
-to use normal scheduling.
+Use `--platform dgx-spark` on Spark. See the script header for optional settings.
 
 `tx_call_to_rx_hw_ns` is a loopback-ingress proxy, not an actual TX egress timestamp: DAQIRI does
 not currently expose a TX hardware timestamp, so this value also contains the cable and NIC RX
