@@ -120,7 +120,7 @@ Step-by-step walkthroughs to get hands-on:
 - `daqiri_example_dynamic_resource` — exercise raw-ibverbs first-RX-queue steering, repeated dynamic-flow add/delete, and runtime memory-region and RX/TX queue creation and drain-based deletion
 - [`daqiri_example_named_endpoints`](https://nvidia.github.io/daqiri/benchmarks/raw_benchmarking/#runtime-named-endpoints-example) — create named raw-UDP destinations at runtime and transmit payload-only GPU buffers with cached inline headers
 - [Understanding the Configuration File](https://nvidia.github.io/daqiri/tutorials/configuration-walkthrough/) — annotated YAML walkthrough
-- [DAQIRI + Holoscan Integration](https://nvidia.github.io/daqiri/tutorials/daqiri-holoscan-integration/) — use DAQIRI RX bursts from a Holoscan source operator
+- [DAQIRI + Holoscan SDK (HSDK) Integration](https://nvidia.github.io/daqiri/tutorials/daqiri-holoscan-integration/) — use DAQIRI RX bursts from an HSDK source operator
 - [DAQIRI + TensorRT Inference](https://nvidia.github.io/daqiri/tutorials/daqiri-resnet-inference/) — packet ingest → ResNet-50 feature extraction with TensorRT
 
 ## Releases
