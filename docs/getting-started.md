@@ -140,6 +140,11 @@ cable looped back between NIC ports on the system, start with a closed-loop Raw
 Ethernet run after replacing the `<angle-bracket>` placeholders in the YAML for
 your system.
 
+Alternatively, use [Generate Configurations](config-generation.md): on DGX Spark
+and IGX Thor, `scripts/resolve_benchmark_hardware.py` discovers NIC/GPU identities
+and fills a cabled ibverbs benchmark config; on other systems, the configuration
+generator accepts explicit local values.
+
 === "Container build"
 
     Launch the container with hardware access:
@@ -168,8 +173,9 @@ your system.
         --seconds 10
     ```
 
-Other smoke tests exist if you do not have a cable loopback, including hardware
-loopback on supported NICs and software loopback when no NIC is available. For
+Other smoke tests exist if you do not have a cable loopback, including
+[single-port hardware loopback without a cable](benchmarks/raw_benchmarking.md#single-port-hardware-loopback-without-a-cable)
+on supported NICs and software loopback when no NIC is available. For
 those paths, or for throughput and latency measurements, follow the benchmark
 guide that matches your stream:
 
