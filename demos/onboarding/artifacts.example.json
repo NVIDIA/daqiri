@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "image": "<same-pinned-image-as-profile>",
+  "gpu_uuid": "<same-GPU-as-profile>",
+  "input_dtype": "float16",
+  "output_dtype": "float32",
+  "normalization": "pixel-minus-128-to-imagenet",
+  "images": 256,
+  "files": {
+    "onnx": {"path": "<absolute-onnx-path>", "sha256": "<sha256>"},
+    "engine": {"path": "<absolute-engine-path>", "sha256": "<sha256>"},
+    "pcap": {"path": "<absolute-pcap-path>", "sha256": "<sha256>"},
+    "labels": {"path": "<absolute-labels-path>", "sha256": "<sha256>"}
+  }
+}
