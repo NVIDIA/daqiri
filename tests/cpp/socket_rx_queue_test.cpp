@@ -20,6 +20,7 @@
 #include <future>
 #include <iostream>
 #include <memory>
+#include <sched.h>
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
@@ -30,6 +31,38 @@ namespace daqiri {
 
 class SocketEngineQueueTestPeer {
  public:
+  static bool tcp_registration_checks_affinity(int cpu_core, bool expect_success) {
+    SocketEngine engine;
+    engine.running_.store(true);
+    auto endpoint = std::make_unique<SocketEngine::EndpointState>();
+    endpoint->port = 0;
+    endpoint->rx_cpu_core = cpu_core;
+    engine.endpoints_.push_back(std::move(endpoint));
+    auto queue = std::make_shared<SocketEngine::RxQueueState>();
+    int fds[2] = {-1, -1};
+    if (::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) {
+      return false;
+    }
+    auto connection = engine.register_connection(fds[0], 0, 0, -1, false, false, queue, true);
+    bool correct = expect_success ? connection != nullptr : connection == nullptr;
+    if (connection != nullptr) {
+      cpu_set_t actual;
+      CPU_ZERO(&actual);
+      correct = correct && connection->rx_start_complete && connection->rx_start_success &&
+                pthread_getaffinity_np(connection->rx_thread.native_handle(), sizeof(actual),
+                                       &actual) == 0 &&
+                (cpu_core < 0 || (CPU_COUNT(&actual) == 1 && CPU_ISSET(cpu_core, &actual)));
+    } else {
+      uint8_t byte = 0;
+      correct = correct && engine.connections_.empty() &&
+                ::recv(fds[1], &byte, sizeof(byte), MSG_DONTWAIT) == 0;
+    }
+    engine.running_.store(false);
+    engine.close_all_connections();
+    ::close(fds[1]);
+    return correct;
+  }
+
   static bool idle_connection_does_not_reserve_capacity() {
     SocketEngine engine;
     engine.running_.store(true);
@@ -289,6 +322,25 @@ class SocketEngineQueueTestPeer {
 }  // namespace daqiri
 
 int main() {
+  cpu_set_t allowed;
+  CPU_ZERO(&allowed);
+  if (sched_getaffinity(0, sizeof(allowed), &allowed) != 0) {
+    return 1;
+  }
+  int allowed_core = -1;
+  for (int core = 0; core < CPU_SETSIZE; ++core) {
+    if (CPU_ISSET(core, &allowed)) {
+      allowed_core = core;
+      break;
+    }
+  }
+  if (allowed_core < 0 ||
+      !daqiri::SocketEngineQueueTestPeer::tcp_registration_checks_affinity(allowed_core, true) ||
+      !daqiri::SocketEngineQueueTestPeer::tcp_registration_checks_affinity(-1, true) ||
+      !daqiri::SocketEngineQueueTestPeer::tcp_registration_checks_affinity(CPU_SETSIZE, false)) {
+    std::cerr << "TCP registration did not propagate RX affinity startup results\n";
+    return 1;
+  }
   if (!daqiri::SocketEngineQueueTestPeer::idle_connection_does_not_reserve_capacity()) {
     std::cerr << "idle TCP connection blocked an active peer\n";
     return 1;

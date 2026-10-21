@@ -2,7 +2,7 @@
 # Drives the PR 1 data-fill bench runs for the DGX Spark performance report.
 #
 # Runs DPDK GPUDirect, socket-UDP, and socket-TCP through their sweep and
-# drop-curve modes via examples/run_spark_bench.sh, with pre-flight checks
+# drop-curve modes via examples/run_cabled_loopback_bench.sh, with pre-flight checks
 # and orphan-hugepage cleanup. RDMA is deferred from PR 1 (single-host
 # loopback over the cable needs a netns+two-process refactor; tracked
 # separately).
@@ -16,18 +16,14 @@
 #   ./scripts/spark_data_fill.sh socket-udp socket-tcp
 #
 # Env overrides:
-#   ETH_DST_ADDR  — RX-side MAC. Auto-detected from
-#                   /sys/class/net/enP2p1s0f1np1/address if unset.
-#   RX_IFACE      — RX netdev name (default enP2p1s0f1np1).
 #   DAQIRI_BUILD_DIR — defaults to ./build.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-WRAPPER="$REPO_ROOT/examples/run_spark_bench.sh"
+WRAPPER="$REPO_ROOT/examples/run_cabled_loopback_bench.sh"
 BUILD_DIR="${DAQIRI_BUILD_DIR:-$REPO_ROOT/build}"
-RX_IFACE="${RX_IFACE:-enP2p1s0f1np1}"
 
 BACKENDS=("$@")
 [[ ${#BACKENDS[@]} -eq 0 ]] && BACKENDS=(dpdk socket-udp socket-tcp)
@@ -54,16 +50,6 @@ if [[ " ${BACKENDS[*]} " == *" dpdk "* ]]; then
   free_hp="$(awk '/^HugePages_Free:/ { print $2 }' /proc/meminfo)"
   [[ "${free_hp:-0}" -ge 4 ]] || preflight_fail "HugePages_Free=$free_hp (need >=4); clean /mnt/huge and /dev/hugepages from prior runs"
 
-  if [[ -z "${ETH_DST_ADDR:-}" ]]; then
-    mac_path="/sys/class/net/$RX_IFACE/address"
-    [[ -r "$mac_path" ]] || preflight_fail "cannot read $mac_path; set ETH_DST_ADDR explicitly"
-    ETH_DST_ADDR="$(cat "$mac_path")"
-    export ETH_DST_ADDR
-    note "ETH_DST_ADDR auto-detected from $RX_IFACE: $ETH_DST_ADDR"
-  fi
-
-  carrier="$(cat "/sys/class/net/$RX_IFACE/carrier" 2>/dev/null || echo 0)"
-  [[ "$carrier" == "1" ]] || preflight_fail "RX iface $RX_IFACE has no carrier (cable unplugged or link down)"
 fi
 
 note "Pre-flight OK. Backends: ${BACKENDS[*]}"
@@ -112,7 +98,7 @@ run_backend_mode() {
   local log="/tmp/spark_data_fill.$backend.$mode.log"
   local rc=0
   set +e
-  "$WRAPPER" "$backend" "$mode" 2>&1 | tee "$log"
+  "$WRAPPER" --platform dgx-spark "$backend" "$mode" 2>&1 | tee "$log"
   local -a pipe_status=("${PIPESTATUS[@]}")
   set -e
   rc="${pipe_status[0]}"
