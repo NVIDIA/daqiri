@@ -1,92 +1,65 @@
 # Onboarding Flow
 
-## Intake
+Use the [documentation map](documentation-map.md) for technical instructions and helper locations. This reference defines the interview and verification decisions rather than duplicating those instructions.
 
-Start with a small set of questions unless the user already provided the answers:
+## Locate the current stage
 
-1. What are you trying to prove first: working install, GPUDirect raw path, cabled throughput, hardware-loopback throughput, UDP/TCP baseline, or RoCE/RDMA?
-2. Are you on the host, inside the DAQIRI container, or connecting to a remote system?
-3. Is a ConnectX NIC visible, and is there a cabled loopback or peer host available?
-4. Is an NVIDIA data-center/RTX GPU visible to the runtime?
-5. Has DAQIRI already been built, and if so is it installed under `/opt/daqiri` or built under `./build*`?
+Use information already supplied, then ask a small batch of unresolved questions:
 
-If the user asks to "run benchmark" and does not know the answers, run local discovery commands where possible.
+- What should the first result prove: working install, GPU-accessible acquisition, cabled throughput, hardware loopback, UDP/TCP baseline, RoCE, or diagnosis of a failure?
+- Is this the host, a container, or a remote system? Which checkout/image/install and benchmark binaries are available?
+- Which GPU and NIC are available? Is there a confirmed cable/peer, and which ports belong to the intended test?
 
-## Stage Detection
+For configuration inputs, distinguish discovered values from user estimates or examples. Mark uncertain port pairing, peer addresses and CPU choices explicitly; verify them before dependent actions. Hardware enumeration alone does not identify cable endpoints.
 
-- Repo missing: guide clone and submodule setup.
-- Repo present, no container image/build: build the container first unless the user needs bare metal.
-- Container image/build present, no shell with hardware access: launch the privileged container.
-- Binaries present, config has placeholders: discover PCIe addresses, netdevs, MACs, IPs, GPU UUIDs, CPU cores, and hugepage state; then update or generate YAML.
-- Config present, no route/counter proof: verify the physical or namespace path.
-- Prerequisites satisfied: run benchmark and interpret output.
+| Existing state | Next step |
+|---|---|
+| No checkout | Use Getting Started to obtain source/submodules; do not assume SSH credentials |
+| Source but no compatible image/build | Read the build guide, select required optional engines, and compile in the project container |
+| Build/image but no usable runtime | Inspect existing containers and propose the required launch; preserve unrelated work |
+| Runtime but no concrete config | Discover inputs and use the canonical configuration generator |
+| Concrete config | Run native semantic validation, then verify hardware/path prerequisites |
+| Prior benchmark output | Interpret or diagnose that run before proposing another |
 
-## Discovery Commands
+Do not build or launch another container when an adequate existing runtime already satisfies the request.
 
-Use these as applicable. Some require host/root privileges.
+## Choose the path
 
-```bash
-git submodule status
-docker images | grep daqiri
-find . -maxdepth 3 -type f -path '*examples/daqiri_bench_*' -perm -111
-ls -l /opt/daqiri/bin 2>/dev/null
-nvidia-smi --query-gpu=index,name,uuid --format=csv
-ibdev2netdev -v
-lspci -nn | grep -Ei 'mellanox|nvidia|network|ethernet'
-grep Huge /proc/meminfo
-ip -br link
-ip -br addr
-```
+Honor the user's stated transport and goal. Otherwise:
 
-## Build Defaults
+- ConnectX and a confirmed cable/peer: raw Ethernet using a compiled engine.
+- ConnectX without a cable/peer: supported raw hardware loopback.
+- Linux TCP/UDP compatibility or baseline: always-built socket engine.
+- RoCE/RDMA goal: `roce://` endpoints and the optional ibverbs/RDMA engine.
+- No usable NIC path or explicit hardware-free goal: software loopback smoke test.
 
-Recommend the container-first build for most users:
+Confirm compiled engine availability using the native validator's `--list-engines` when supported. Do not invent a `socket` build-option value. Read the benchmark overview for current engine choices.
 
-```bash
-BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
-```
+On GB10/Spark, use the documented `host_pinned` shared-memory path; do not mistake it for discrete-GPU device-memory registration or require peermem. On hybrid iGPU/dGPU systems, follow the platform guide for GPU UUID selection and container ordinals. Verify actual CPU affinity in the context that will execute the workload.
 
-Use `BASE_IMAGE=torch` only when TensorRT/Torch example applications are required. Use bare-metal CMake only when the user explicitly needs a host install or cannot use the container.
+## Discover, generate, validate
 
-## Container Defaults
+Use the config-generation guide's netdev-to-BDF/MAC discovery and the system-check helper as needed. Confirm GPU affinity, usable CPU cores, peer MAC/IP/header values, memory kind, frame/buffer sizing, queue counts and hugepage requirements. Read the generator's current `--help`; do not reuse another host's values.
 
-For raw/RDMA benchmark execution, use a privileged hardware-visible container. Build as the current user; run benchmark setup/execution as root when needed.
+Generate with `raw-pair` or `socket-pair` where applicable. For an existing/custom configuration, preserve application-owned sections and consult the generator's generic rendering support. Write new configs to a fresh user-appropriate directory rather than overwrite originals.
 
-Raw/installed benchmark shell:
+Discover the actual validator in the build/install/runtime, show its command, output and exit status, and resolve errors before traffic. If unavailable, report generation as unvalidated and identify the missing build/runtime prerequisite. Do not substitute YAML parsing or stub validation for native semantic validation.
 
-```bash
-docker run --rm -it --privileged \
-  --runtime=nvidia \
-  --network=host \
-  -v /dev/hugepages:/dev/hugepages \
-  daqiri:local bash
-```
+## Execute the first test
 
-Source-mounted shell:
+Read only the selected raw or socket/RDMA benchmark guide. Show concrete commands with host/container roles, configured inputs and a bounded duration. Start RX/server before TX/client where the roles are separate. For UDP/TCP/RoCE wire tests, verify the route and namespace path rather than assume same-host endpoints cross the cable.
 
-```bash
-docker run --rm -it --privileged --network=host --pid=host --ipc=host \
-  --gpus all \
-  -v "$PWD:/work" \
-  -v /dev/hugepages:/dev/hugepages \
-  -v /tmp:/tmp \
-  -w /work daqiri:local bash
-```
+Use the existing namespace/cross-host setup scripts only for a matching topology after reading their help and current behavior. Explain changes before applying them and plan cleanup for resources created by this run. A pre-existing namespace or container is not owned merely because its name matches an example. Do not delete namespaces containing moved interfaces without following the documented restoration procedure.
 
-## Engine and Stream Decision
+Keep first-smoke success separate from optional performance tuning. Do not change firmware, boot settings, MTU, pause policy, clocks or routes solely because a tutorial lists an optimization. Resolve applicability, authorization and restoration before changes.
 
-- ConnectX plus cable/peer plus GPU: raw Ethernet GPUDirect first.
-- ConnectX plus no cable/peer: raw Ethernet hardware loopback if supported.
-- Need Linux TCP/UDP behavior: socket benchmark.
-- Need RDMA/RoCE: `daqiri_bench_rdma` with `roce://` endpoints and `ibverbs` engine built.
-- No usable NIC: software loopback smoke only.
+## Interpret the evidence
 
-## Completion Criteria
+- **Cabled raw:** compare sender TX PHY with receiver RX PHY. For throughput, use `mlnx_perf` stable one-second intervals from a run of at least ten seconds; discard startup/shutdown. Count aliases once and use RX as confirmation, not an additional rate.
+- **Hardware loopback:** use `vport_loopback_bytes`; PHY counters should stay flat. Label it hardware-loopback throughput, not wire throughput.
+- **UDP:** inspect application TX/RX counts and kernel UDP/IP/NIC errors; expose loss or partial shutdown rather than assume equality.
+- **TCP:** report delivered/achieved rates and available retransmission/backpressure evidence.
+- **RoCE:** require nonzero completions and inspect RDMA-CM, CQ, retry and resource errors.
+- **All paths:** inspect queue steering, drops and no-buffer errors. Explain zero-copy burst ownership before recommending larger pools. Report shutdown-tail work and unmeasured timing scopes explicitly.
 
-Onboarding is complete when the user has:
-
-- a build or installed container/image path,
-- a selected benchmark matching their goal and hardware,
-- a concrete YAML config with placeholders replaced or generated,
-- a successful smoke run or a clearly diagnosed prerequisite failure,
-- performance interpretation rules for their selected path.
+Onboarding ends with a concrete config, its validation state, the selected runtime/benchmark, and either a verified smoke result or a diagnosed missing prerequisite. Include only the next useful command or measurement; do not label a diagnosed failure a successful benchmark.
