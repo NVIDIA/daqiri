@@ -9561,6 +9561,10 @@ Status IbverbsEngine::send_tx_burst(BurstParams* burst) {
   if (burst->hdr.hdr.num_segs != q->num_segs) {
     return Status::INVALID_PARAMETER;
   }
+  // Shared storage must stay on a queue that validates and retires its references.
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_SHARED_FLAG) != 0 && !q->shared_tx) {
+    return Status::INVALID_PARAMETER;
+  }
   if (q->shared_tx) {
     if (q->shared_tx->failed.load(std::memory_order_acquire)) return Status::NOT_READY;
     const Status valid = validate_shared_tx_burst(*q, burst);
