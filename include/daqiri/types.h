@@ -722,6 +722,8 @@ struct RxQueueConfig {
   bool cqe_compression_ = false;
 };
 
+enum class TxBufferMode { CYCLIC, SHARED };
+
 struct TxQueueConfig {
   CommonQueueConfig common_;
   QueuePollMode poll_mode_ = QueuePollMode::INDIRECT;
@@ -729,6 +731,10 @@ struct TxQueueConfig {
   // disables pacing (line-rate). Honored only by engines/devices with hardware
   // packet-pacing support.
   uint64_t pacing_mbps_ = 0;
+  // Shared storage is supported by raw ibverbs indirect TX queues only.
+  TxBufferMode buffer_mode_ = TxBufferMode::CYCLIC;
+  // 0 selects twice the smallest region pool; otherwise a fixed send-credit limit.
+  uint32_t max_inflight_sends_ = 0;
 };
 
 // struct FlowConfig {

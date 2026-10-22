@@ -269,6 +269,8 @@ static constexpr uint32_t MPRQ_LEN_MASK = 0x0000ffffu;
 static constexpr uint32_t IBV_TX_BURST_FLAG = 1u << 27;
 static constexpr uint32_t IBV_TX_SCHEDULED_FLAG = 1u << 26;
 static constexpr uint32_t IBV_TX_ENDPOINT_INLINE_FLAG = 1u << 25;
+static constexpr uint32_t IBV_TX_SHARED_FLAG = 1u << 24;
+static constexpr uint32_t IBV_TX_SHARED_OWNED_FLAG = 1u << 23;
 
 static constexpr uint32_t EMPW_MAX_PACKETS = 32;
 static_assert(EMPW_MAX_PACKETS <= MLX5_EMPW_MAX_DSEG);
@@ -782,6 +784,7 @@ struct IbvBurstLayout {
   size_t off_strd;     // uint16_t[max_batch] -- strides per packet
   size_t off_ts;       // uint64_t[max_batch] -- raw HW RX timestamp per packet
   size_t off_flowtag;  // uint32_t[max_batch] -- per-packet flow tag (MARK)
+  std::array<size_t, MAX_NUM_SEGS> off_shared;
   size_t total;
 };
 
@@ -802,6 +805,9 @@ IbvBurstLayout compute_layout(uint32_t max_batch) {
   l.off_strd = place(sizeof(uint16_t) * max_batch);
   l.off_ts = place(sizeof(uint64_t) * max_batch);
   l.off_flowtag = place(sizeof(uint32_t) * max_batch);
+  for (int seg = 0; seg < MAX_NUM_SEGS; ++seg) {
+    l.off_shared[seg] = place(sizeof(detail::SharedTxBuffer*) * max_batch);
+  }
   l.total = (off + 63) & ~static_cast<size_t>(63);
   return l;
 }
@@ -832,7 +838,86 @@ inline const uint64_t* burst_ts_arr(const BurstParams* b) {
 inline uint32_t* burst_flowtag_arr(BurstParams* b) {
   return reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(b) + g_layout.off_flowtag);
 }
+detail::SharedTxBuffer** burst_shared_arr(const BurstParams* burst, int segment) {
+  return reinterpret_cast<detail::SharedTxBuffer**>(
+      reinterpret_cast<uint8_t*>(const_cast<BurstParams*>(burst)) + g_layout.off_shared[segment]);
+}
+
+void release_shared_segment(BurstParams* burst, int segment, int packet) {
+  auto*& buffer = burst_shared_arr(burst, segment)[packet];
+  if (buffer != nullptr) {
+    buffer->release();
+    buffer = nullptr;
+    burst->pkts[segment][packet] = nullptr;
+    burst->pkt_lens[segment][packet] = 0;
+  }
+}
+
+void release_shared_burst(BurstParams* burst) {
+  for (int s = 0; s < burst->hdr.hdr.num_segs; ++s)
+    for (size_t i = 0; i < burst->hdr.hdr.num_pkts; ++i) release_shared_segment(burst, s, i);
+}
+
+Status writable_shared_header(const BurstParams* burst, int index, size_t bytes) {
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_SHARED_FLAG) == 0) return Status::SUCCESS;
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_SHARED_OWNED_FLAG) == 0)
+    return Status::INVALID_PARAMETER;
+  if (index < 0 || static_cast<size_t>(index) >= burst->hdr.hdr.num_pkts)
+    return Status::INVALID_PARAMETER;
+  auto* buffer = burst_shared_arr(burst, 0)[index];
+  if (buffer == nullptr || burst->pkts[0][index] != buffer->address || !buffer->cpu_accessible ||
+      bytes > buffer->capacity)
+    return Status::INVALID_PARAMETER;
+  return buffer->references.load(std::memory_order_acquire) == 1 ? Status::SUCCESS
+                                                                 : Status::RESOURCE_IN_USE;
+}
+
+// Move ownership before metadata can be recycled. Only the TX worker accesses
+// the ledger; accepted send credits guarantee this entry is no longer in use.
+void record_shared_sends(IbvTxQueue& q, BurstParams* burst) {
+  auto& state = *q.shared_tx;
+  assert(q.slots_posted - state.retired + burst->hdr.hdr.num_pkts <= state.ledger.size());
+  for (size_t i = 0; i < burst->hdr.hdr.num_pkts; ++i) {
+    auto& packet = state.ledger[(q.slots_posted + i) % state.ledger.size()];
+    for (int s = 0; s < q.num_segs; ++s) {
+      assert(packet[s] == nullptr);
+      packet[s] = burst_shared_arr(burst, s)[i];
+      burst_shared_arr(burst, s)[i] = nullptr;
+    }
+  }
+}
 }  // namespace
+
+bool IbverbsEngine::initialize_burst_pools() {
+  g_layout = compute_layout(max_batch_);
+  rx_meta_pool_size_ = cfg_.rx_meta_buffers_ ? cfg_.rx_meta_buffers_ : 4096;
+  const int pool_numa = daqiri::detail::numa_node_for_cpu(cfg_.common_.master_core_);
+  rx_meta_pool_ =
+      daqiri::ObjectPool::create("IBV_RX_META", rx_meta_pool_size_ - 1,
+                                 (g_layout.off_shared[0] + 63) & ~size_t{63}, pool_numa);
+  if (rx_meta_pool_ == nullptr) {
+    DAQIRI_LOG_CRITICAL("Failed to create RX metadata pool");
+    return false;
+  }
+  const size_t tx_meta_n = cfg_.tx_meta_buffers_ ? cfg_.tx_meta_buffers_ : 4096;
+  tx_meta_pool_ =
+      daqiri::ObjectPool::create("IBV_TX_META", tx_meta_n - 1, g_layout.total, pool_numa);
+  if (tx_meta_pool_ == nullptr) {
+    DAQIRI_LOG_CRITICAL("Failed to create TX metadata pool");
+    return false;
+  }
+
+  // Construct the nontrivial BurstParams members once, including shared_ptr.
+  tx_metadata_objects_.reserve(tx_meta_n - 1);
+  for (size_t i = 0; i + 1 < tx_meta_n; ++i) {
+    void* raw = nullptr;
+    if (!tx_meta_pool_->get(&raw)) return false;
+    tx_metadata_objects_.push_back(new (raw) BurstParams{});
+  }
+  for (auto* burst : tx_metadata_objects_) tx_meta_pool_->put(burst);
+
+  return true;
+}
 
 IbverbsEngine::~IbverbsEngine() {
   shutdown();
@@ -4199,22 +4284,7 @@ void IbverbsEngine::initialize() {
         "No RX/TX queues configured for ibverbs backend; reserving metadata for runtime queues");
   }
   max_batch_ = std::max(max_batch_, kDirectPollMaxBatch);
-  g_layout = compute_layout(max_batch_);
-  rx_meta_pool_size_ = cfg_.rx_meta_buffers_ ? cfg_.rx_meta_buffers_ : 4096;
-  const int pool_numa = daqiri::detail::numa_node_for_cpu(cfg_.common_.master_core_);
-  rx_meta_pool_ =
-      daqiri::ObjectPool::create("IBV_RX_META", rx_meta_pool_size_ - 1, g_layout.total, pool_numa);
-  if (rx_meta_pool_ == nullptr) {
-    DAQIRI_LOG_CRITICAL("Failed to create RX metadata pool");
-    return;
-  }
-  const size_t tx_meta_n = cfg_.tx_meta_buffers_ ? cfg_.tx_meta_buffers_ : 4096;
-  tx_meta_pool_ =
-      daqiri::ObjectPool::create("IBV_TX_META", tx_meta_n - 1, g_layout.total, pool_numa);
-  if (tx_meta_pool_ == nullptr) {
-    DAQIRI_LOG_CRITICAL("Failed to create TX metadata pool");
-    return;
-  }
+  if (!initialize_burst_pools()) return;
 
   for (auto& intf : cfg_.ifs_) {
     for (const auto& qcfg : intf.rx_.queues_) {
@@ -5784,6 +5854,13 @@ void IbverbsEngine::free_packet(BurstParams* burst, int pkt) {
   if (burst == nullptr) {
     return;
   }
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_SHARED_FLAG) != 0) {
+    if ((burst->hdr.hdr.burst_flags & IBV_TX_SHARED_OWNED_FLAG) == 0) return;
+    if (pkt >= 0 && static_cast<size_t>(pkt) < burst->hdr.hdr.num_pkts)
+      for (int seg = 0; seg < burst->hdr.hdr.num_segs; ++seg)
+        release_shared_segment(burst, seg, pkt);
+    return;
+  }
   if (burst->hdr.hdr.burst_flags & DAQIRI_BURST_FLAG_REORDERED) {
     return;
   }
@@ -5796,6 +5873,11 @@ void IbverbsEngine::free_packet(BurstParams* burst, int pkt) {
 
 void IbverbsEngine::free_all_packets(BurstParams* burst) {
   if (burst == nullptr) {
+    return;
+  }
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_SHARED_FLAG) != 0) {
+    if ((burst->hdr.hdr.burst_flags & IBV_TX_SHARED_OWNED_FLAG) == 0) return;
+    release_shared_burst(burst);
     return;
   }
   if (burst->hdr.hdr.burst_flags & DAQIRI_BURST_FLAG_REORDERED) {
@@ -5837,6 +5919,13 @@ void IbverbsEngine::free_all_packets(BurstParams* burst) {
 }
 
 void IbverbsEngine::free_packet_segment(BurstParams* burst, int seg, int pkt) {
+  if (burst != nullptr && (burst->hdr.hdr.burst_flags & IBV_TX_SHARED_FLAG) != 0) {
+    if ((burst->hdr.hdr.burst_flags & IBV_TX_SHARED_OWNED_FLAG) == 0) return;
+    if (seg >= 0 && seg < burst->hdr.hdr.num_segs && pkt >= 0 &&
+        static_cast<size_t>(pkt) < burst->hdr.hdr.num_pkts)
+      release_shared_segment(burst, seg, pkt);
+    return;
+  }
   // Segments alias one stride; releasing seg 0 releases the packet.
   if (seg == 0) {
     free_packet(burst, pkt);
@@ -5844,6 +5933,12 @@ void IbverbsEngine::free_packet_segment(BurstParams* burst, int seg, int pkt) {
 }
 
 void IbverbsEngine::free_all_segment_packets(BurstParams* burst, int seg) {
+  if (burst != nullptr && (burst->hdr.hdr.burst_flags & IBV_TX_SHARED_FLAG) != 0) {
+    if ((burst->hdr.hdr.burst_flags & IBV_TX_SHARED_OWNED_FLAG) == 0) return;
+    if (seg >= 0 && seg < burst->hdr.hdr.num_segs)
+      for (size_t i = 0; i < burst->hdr.hdr.num_pkts; ++i) release_shared_segment(burst, seg, i);
+    return;
+  }
   if (seg == 0) {
     free_all_packets(burst);
   }
@@ -6450,6 +6545,20 @@ bool IbverbsEngine::rx_queue_has_flow_dependency(int port, int queue_id) const {
   return false;
 }
 
+bool IbverbsEngine::shared_mr_conflict(const std::vector<std::string>& names, bool shared) const {
+  std::unordered_set<std::string> unique;
+  for (const auto& name : names) {
+    if (shared && (!unique.insert(name).second || memory_region_in_use_locked(name))) return true;
+    for (const auto& queue : tx_queues_) {
+      if (queue->shared_tx &&
+          queue->state.load(std::memory_order_acquire) != ResourceState::REMOVED &&
+          std::find(queue->mr_names.begin(), queue->mr_names.end(), name) != queue->mr_names.end())
+        return true;
+    }
+  }
+  return false;
+}
+
 Status IbverbsEngine::add_rx_queue_async(int port, const RxQueueConfig& config,
                                          ResourceOpId* op_id) {
   std::lock_guard<std::mutex> operation_guard(resource_operation_lock_);
@@ -6478,6 +6587,7 @@ Status IbverbsEngine::add_rx_queue_async(int port, const RxQueueConfig& config,
     if (get_num_rx_queues(port) >= MAX_NUM_RX_QUEUES) {
       return Status::NO_SPACE_AVAILABLE;
     }
+    if (shared_mr_conflict(config.common_.mrs_, false)) return Status::RESOURCE_IN_USE;
     for (const auto& name : config.common_.mrs_) {
       if (cfg_.mrs_.find(name) == cfg_.mrs_.end()) {
         return Status::INVALID_PARAMETER;
@@ -6557,6 +6667,8 @@ Status IbverbsEngine::add_tx_queue_async(int port, const TxQueueConfig& config,
     if (active_tx >= MAX_NUM_TX_QUEUES) {
       return Status::NO_SPACE_AVAILABLE;
     }
+    if (shared_mr_conflict(config.common_.mrs_, config.buffer_mode_ == TxBufferMode::SHARED))
+      return Status::RESOURCE_IN_USE;
     for (const auto& name : config.common_.mrs_) {
       if (cfg_.mrs_.find(name) == cfg_.mrs_.end()) {
         return Status::INVALID_PARAMETER;
@@ -7011,11 +7123,17 @@ void IbverbsEngine::destroy_tx_queue(IbvTxQueue& q) {
   void* raw = nullptr;
   while (q.send_ring != nullptr && q.send_ring->dequeue(&raw)) {
     auto* burst = static_cast<BurstParams*>(raw);
-    q.alloc_head -= static_cast<uint64_t>(burst->hdr.hdr.num_pkts);
+    if (q.shared_tx)
+      release_shared_burst(burst);
+    else
+      q.alloc_head -= static_cast<uint64_t>(burst->hdr.hdr.num_pkts);
     tx_meta_pool_->put(burst);
   }
   if (q.worker_pending != nullptr) {
-    q.alloc_head -= static_cast<uint64_t>(q.worker_pending->hdr.hdr.num_pkts);
+    if (q.shared_tx)
+      release_shared_burst(q.worker_pending);
+    else
+      q.alloc_head -= static_cast<uint64_t>(q.worker_pending->hdr.hdr.num_pkts);
     tx_meta_pool_->put(q.worker_pending);
     q.worker_pending = nullptr;
     q.worker_pending_wqebbs = 0;
@@ -7051,6 +7169,7 @@ void IbverbsEngine::destroy_tx_queue(IbvTxQueue& q) {
 
 void IbverbsEngine::drain_tx_queue(IbvTxQueue& q) {
   poll_tx_completions(q);
+  if (q.shared_tx && q.shared_tx->failed.load(std::memory_order_acquire)) return;
   if (q.poll_mode == QueuePollMode::INDIRECT) {
     for (;;) {
       if (q.worker_pending == nullptr) {
@@ -7133,7 +7252,8 @@ Status IbverbsEngine::poll_resource_op(ResourceOpResult* result) {
         if (queue->active_users.load(std::memory_order_acquire) == 0 &&
             queue->direct_pending == nullptr && queue->worker_pending == nullptr &&
             (queue->send_ring == nullptr || queue->send_ring->count() == 0) &&
-            queue->completed_tail.load(std::memory_order_acquire) == queue->alloc_head) {
+            queue->completed_tail.load(std::memory_order_acquire) == queue->alloc_head &&
+            (!queue->shared_tx || queue->shared_tx->idle_storage())) {
           if (!close_queue_for_destroy(*queue)) {
             ++it;
             continue;
@@ -7778,7 +7898,10 @@ void IbverbsEngine::shutdown() {
   retired_rx_queues_.clear();
   for (auto& q : tx_queues_) {
     if (q->worker_pending != nullptr) {
-      q->alloc_head -= static_cast<uint64_t>(q->worker_pending->hdr.hdr.num_pkts);
+      if (q->shared_tx)
+        release_shared_burst(q->worker_pending);
+      else
+        q->alloc_head -= static_cast<uint64_t>(q->worker_pending->hdr.hdr.num_pkts);
       tx_meta_pool_->put(q->worker_pending);
       q->worker_pending = nullptr;
       q->worker_pending_wqebbs = 0;
@@ -7791,8 +7914,40 @@ void IbverbsEngine::shutdown() {
       tx_meta_pool_->put(q->direct_pending);
       q->direct_pending = nullptr;
     }
+    if (q->shared_tx) {
+      void* raw = nullptr;
+      while (q->send_ring != nullptr && q->send_ring->dequeue(&raw)) {
+        auto* burst = static_cast<BurstParams*>(raw);
+        release_shared_burst(burst);
+        tx_meta_pool_->put(burst);
+      }
+    }
     if (q->qp) {
-      verbs_->destroy_qp(q->qp);
+      if (verbs_->destroy_qp(q->qp) != 0 && q->shared_tx) {
+        // Retain all DMA-visible storage and registrations rather than freeing
+        // memory behind a QP whose destruction failed. Process exit reclaims it.
+        DAQIRI_LOG_ERROR(
+            "Shared TX QP destruction failed; retaining DMA resources until process exit");
+        for (auto& retained : tx_queues_) (void)retained.release();
+        tx_queues_.clear();
+        ar_.clear();
+        hugepage_arenas_.clear();
+        ext_dmabuf_fds_.clear();
+        registered_mrs_.clear();
+        registered_mrs_by_name_.clear();
+        pd_map_.clear();
+        ctx_map_.clear();
+        initialized_ = false;
+        return;
+      }
+      q->qp = nullptr;
+    }
+    if (q->shared_tx) {
+      q->shared_tx->retire(q->slots_posted);
+      if (!q->shared_tx->idle_storage())
+        DAQIRI_LOG_WARN(
+            "Shared TX port {} queue {} shutdown invalidates application-owned unsent bursts",
+            q->port_id, q->queue_id);
     }
     if (q->cq) {
       verbs_->destroy_cq(q->cq);
@@ -7846,6 +8001,8 @@ void IbverbsEngine::shutdown() {
     rx_meta_pool_ = nullptr;
   }
   if (tx_meta_pool_) {
+    for (auto* burst : tx_metadata_objects_) burst->~BurstParams();
+    tx_metadata_objects_.clear();
     daqiri::ObjectPool::free(tx_meta_pool_);
     tx_meta_pool_ = nullptr;
   }
@@ -8158,6 +8315,7 @@ Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
     return Status::INVALID_PARAMETER;
   }
   if (q.num_slots > max_slots) {
+    if (q.shared_tx) return Status::INVALID_PARAMETER;
     DAQIRI_LOG_WARN(
         "TX queue {} storage provides {} slots, but device max_qp_wr {} limits usable TX "
         "capacity to {} slots; using the effective limit {}",
@@ -8289,6 +8447,12 @@ Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
 
 Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
                                      const TxQueueConfig& qcfg) {
+  if ((qcfg.buffer_mode_ != TxBufferMode::SHARED && qcfg.buffer_mode_ != TxBufferMode::CYCLIC) ||
+      (qcfg.buffer_mode_ == TxBufferMode::SHARED && qcfg.poll_mode_ != QueuePollMode::INDIRECT) ||
+      (qcfg.buffer_mode_ == TxBufferMode::CYCLIC && qcfg.max_inflight_sends_ != 0))
+    return Status::INVALID_PARAMETER;
+  if (qcfg.buffer_mode_ == TxBufferMode::SHARED)
+    q.shared_tx = std::make_unique<detail::SharedTxState>();
   q.port_id = intf.port_id_;
   q.queue_id = qcfg.common_.id_;
   q.accurate_send = intf.tx_.accurate_send_;
@@ -8324,7 +8488,7 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
 
   struct mlx5dv_context dv_ctx {};
   const uint64_t empw_flags = MLX5DV_CONTEXT_FLAGS_MPW_ALLOWED | MLX5DV_CONTEXT_FLAGS_ENHANCED_MPW;
-  q.empw_enabled = q.poll_mode == QueuePollMode::INDIRECT &&
+  q.empw_enabled = !q.shared_tx && q.poll_mode == QueuePollMode::INDIRECT &&
                    verbs_->dv_query_device(q.ctx, &dv_ctx) == 0 &&
                    (dv_ctx.flags & empw_flags) == empw_flags;
 
@@ -8344,6 +8508,25 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
     q.regions.push_back(r);
     q.num_slots = std::min<uint32_t>(q.num_slots, static_cast<uint32_t>(mr.num_bufs_));
   }
+  if (q.shared_tx) {
+    const uint64_t credits =
+        qcfg.max_inflight_sends_ ? qcfg.max_inflight_sends_ : uint64_t{q.num_slots} * 2;
+    if (credits == 0 || credits > UINT32_MAX || static_cast<uint64_t>(q.batch_size) > credits)
+      return Status::INVALID_PARAMETER;
+    q.num_slots = static_cast<uint32_t>(credits);
+    const int numa_node = detail::numa_node_for_cpu(cfg_.common_.master_core_);
+    for (int seg = 0; seg < q.num_segs; ++seg) {
+      const auto& mr = cfg_.mrs_.at(q.mr_names[seg]);
+      if (mr.num_bufs_ == 0 || mr.num_bufs_ >= UINT32_MAX || mr.buf_size_ > UINT32_MAX ||
+          mr.adj_size_ > UINT32_MAX)
+        return Status::INVALID_PARAMETER;
+      auto pool = std::make_unique<detail::SharedTxPool>();
+      if (!pool->initialize(q.regions[seg].base, q.regions[seg].slot_size, mr.buf_size_,
+                            mr.num_bufs_, mr.kind_ != MemoryKind::DEVICE, numa_node))
+        return Status::GENERIC_FAILURE;
+      q.shared_tx->pools.push_back(std::move(pool));
+    }
+  }
   const MemoryKind tx_memory_kind = cfg_.mrs_[q.mr_name].kind_;
   q.cpu_inline_enabled =
       q.poll_mode == QueuePollMode::DIRECT && q.num_segs == 1 &&
@@ -8353,6 +8536,12 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
   q.slot_size = q.regions[0].slot_size;
   if (Status s = create_tx_raw_qp(q); s != Status::SUCCESS) {
     return s;
+  }
+  if (q.shared_tx) {
+    q.shared_tx->ledger.resize(q.num_slots);
+    detail::numa_bind(q.shared_tx->ledger.data(),
+                      q.shared_tx->ledger.size() * sizeof(detail::SharedTxPacket),
+                      detail::numa_node_for_cpu(cfg_.common_.master_core_));
   }
   // Packet pacing is an SQ/QP rate-table setting, independent of the WAIT WQEs
   // used by set_packet_tx_time for absolute per-packet scheduling.
@@ -8385,6 +8574,7 @@ Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
 
 // Drain the TX CQ and reclaim packet slots and SQ WQEBBs independently.
 void IbverbsEngine::poll_tx_completions(IbvTxQueue& q) {
+  if (q.shared_tx && q.shared_tx->failed.load(std::memory_order_acquire)) return;
   uint8_t* const cq_buf = static_cast<uint8_t*>(q.dv_txcq.buf);
   const uint32_t cqe_cnt = q.dv_txcq.cqe_cnt;
   const uint32_t cqe_size = q.dv_txcq.cqe_size;
@@ -8407,6 +8597,10 @@ void IbverbsEngine::poll_tx_completions(IbvTxQueue& q) {
     if (opcode == MLX5_CQE_REQ_ERR || opcode == MLX5_CQE_RESP_ERR) {
       DAQIRI_LOG_ERROR("TX CQE error q{} opcode {}", q.queue_id, opcode);
       force_quit_.store(true, std::memory_order_relaxed);
+      if (q.shared_tx) {
+        q.shared_tx->failed.store(true, std::memory_order_release);
+        break;
+      }
     }
     const uint16_t wc_idx = be16toh(cqe64->wqe_counter);
     const uint32_t map_idx = wc_idx & (wqe_cnt - 1);
@@ -8416,6 +8610,7 @@ void IbverbsEngine::poll_tx_completions(IbvTxQueue& q) {
     any = true;
   }
   if (any) {
+    if (q.shared_tx) q.shared_tx->retire(tail);
     q.completed_tail.store(tail, std::memory_order_release);
     q.sq_completed = sq_tail;
     doorbell_store_barrier();
@@ -8611,7 +8806,8 @@ void IbverbsEngine::tx_worker(std::vector<IbvTxQueue*> group) {
           item.burst = static_cast<BurstParams*>(dequeued);
           item.needed_wqebbs = tx_burst_wqebbs(*q, item.burst);
         }
-        if (!tx_sq_has_space(*q, item.needed_wqebbs)) {
+        if ((q->shared_tx && q->shared_tx->failed.load(std::memory_order_acquire)) ||
+            !tx_sq_has_space(*q, item.needed_wqebbs)) {
           break;
         }
         post_tx_burst(*q, item.burst);
@@ -8659,6 +8855,10 @@ bool IbverbsEngine::is_tx_burst_available(BurstParams* burst) {
     }
     return direct_tx_has_capacity(*q, direct_tx_reserved_wqebbs(*q));
   }
+  if (q->shared_tx)
+    return !q->shared_tx->failed.load(std::memory_order_acquire) && burst->hdr.hdr.num_pkts > 0 &&
+           burst->hdr.hdr.num_pkts <= max_batch_ && burst->hdr.hdr.num_pkts <= q->num_slots &&
+           q->shared_tx->available(burst->hdr.hdr.num_pkts);
   const uint64_t in_flight = q->alloc_head - q->completed_tail.load(std::memory_order_acquire);
   return (q->num_slots - in_flight) >= static_cast<uint64_t>(burst->hdr.hdr.num_pkts);
 }
@@ -8672,6 +8872,31 @@ Status IbverbsEngine::get_tx_packet_burst(BurstParams* burst) {
     return Status::INVALID_PARAMETER;
   }
   const unsigned n = static_cast<unsigned>(burst->hdr.hdr.num_pkts);
+  if (q->shared_tx) {
+    if ((burst->hdr.hdr.burst_flags & IBV_TX_BURST_FLAG) == 0 ||
+        (burst->hdr.hdr.burst_flags & IBV_TX_SHARED_FLAG) != 0 || n == 0 ||
+        burst->hdr.hdr.num_pkts > max_batch_ || n > q->num_slots)
+      return Status::INVALID_PARAMETER;
+    if (q->shared_tx->failed.load(std::memory_order_acquire)) return Status::NOT_READY;
+    burst->hdr.hdr.num_segs = q->num_segs;
+    for (int seg = 0; seg < q->num_segs; ++seg)
+      std::fill_n(burst_shared_arr(burst, seg), n, nullptr);
+    burst->hdr.hdr.burst_flags |= IBV_TX_SHARED_FLAG | IBV_TX_SHARED_OWNED_FLAG;
+    for (int seg = 0; seg < q->num_segs; ++seg) {
+      for (unsigned i = 0; i < n; ++i) {
+        auto* buffer = q->shared_tx->pools[seg]->acquire();
+        if (buffer == nullptr) {
+          release_shared_burst(burst);
+          burst->hdr.hdr.burst_flags &= ~(IBV_TX_SHARED_FLAG | IBV_TX_SHARED_OWNED_FLAG);
+          return Status::NO_FREE_PACKET_BUFFERS;
+        }
+        burst_shared_arr(burst, seg)[i] = buffer;
+        burst->pkts[seg][i] = buffer->address;
+        burst->pkt_lens[seg][i] = 0;
+      }
+    }
+    return Status::SUCCESS;
+  }
   if (q->poll_mode == QueuePollMode::DIRECT) {
     if (n != 1) {
       DAQIRI_LOG_WARN("Direct TX port {} queue {} requires exactly one packet; requested {}",
@@ -8716,11 +8941,109 @@ Status IbverbsEngine::get_tx_packet_burst(BurstParams* burst) {
 Status IbverbsEngine::get_tx_packet_burst_checked(BurstParams* burst) {
   if (burst != nullptr) {
     QueueUse<IbvTxQueue> q(acquire_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id));
-    if (q && q->poll_mode == QueuePollMode::DIRECT) {
+    if (q && (q->poll_mode == QueuePollMode::DIRECT || q->shared_tx)) {
       return get_tx_packet_burst(burst);
     }
   }
   return Engine::get_tx_packet_burst_checked(burst);
+}
+
+Status IbverbsEngine::validate_shared_tx_burst(const IbvTxQueue& q,
+                                               const BurstParams* burst) const {
+  if (burst == nullptr || !q.shared_tx ||
+      (burst->hdr.hdr.burst_flags &
+       (IBV_TX_BURST_FLAG | IBV_TX_SHARED_FLAG | IBV_TX_SHARED_OWNED_FLAG)) !=
+          (IBV_TX_BURST_FLAG | IBV_TX_SHARED_FLAG | IBV_TX_SHARED_OWNED_FLAG) ||
+      burst->hdr.hdr.port_id != q.port_id || burst->hdr.hdr.q_id != q.queue_id ||
+      burst->hdr.hdr.num_segs != q.num_segs || burst->hdr.hdr.num_pkts == 0 ||
+      burst->hdr.hdr.num_pkts > max_batch_ || burst->hdr.hdr.num_pkts > q.num_slots)
+    return Status::INVALID_PARAMETER;
+  const uint64_t max_frame = ETH_HLEN + UINT16_MAX;
+  for (size_t i = 0; i < burst->hdr.hdr.num_pkts; ++i) {
+    uint64_t bytes =
+        (burst->hdr.hdr.burst_flags & IBV_TX_ENDPOINT_INLINE_FLAG) ? sizeof(UDPIPV4Pkt) : 0;
+    for (int seg = 0; seg < q.num_segs; ++seg) {
+      const auto* buffer = burst_shared_arr(burst, seg)[i];
+      if (buffer == nullptr || buffer->pool != q.shared_tx->pools[seg].get() ||
+          buffer->references.load(std::memory_order_acquire) == 0 ||
+          burst->pkts[seg][i] != buffer->address || burst->pkt_lens[seg][i] > buffer->capacity)
+        return Status::INVALID_PARAMETER;
+      bytes += burst->pkt_lens[seg][i];
+    }
+    if (bytes == 0 || bytes > max_frame) return Status::INVALID_PARAMETER;
+  }
+  return Status::SUCCESS;
+}
+
+Status IbverbsEngine::clone_tx_burst(const BurstParams* source, uint32_t mask,
+                                     BurstParams** clone) {
+  if (clone == nullptr) return Status::NULL_PTR;
+  *clone = nullptr;
+  if (source == nullptr) return Status::NULL_PTR;
+  if ((source->hdr.hdr.burst_flags & IBV_TX_SHARED_FLAG) == 0) return Status::NOT_SUPPORTED;
+  QueueUse<IbvTxQueue> q(acquire_tx_queue(source->hdr.hdr.port_id, source->hdr.hdr.q_id));
+  if (!q) return Status::INVALID_PARAMETER;
+  if (!q->shared_tx) return Status::NOT_SUPPORTED;
+  if (q->shared_tx->failed.load(std::memory_order_acquire)) return Status::NOT_READY;
+  return clone_shared_tx_burst(*q, source, mask, clone);
+}
+
+Status IbverbsEngine::clone_shared_tx_burst(IbvTxQueue& q, const BurstParams* source, uint32_t mask,
+                                            BurstParams** clone) {
+  *clone = nullptr;
+  const Status valid = validate_shared_tx_burst(q, source);
+  if (valid != Status::SUCCESS) return valid;
+  if (mask == 0 || (mask & ~((1u << q.num_segs) - 1)) != 0) return Status::INVALID_PARAMETER;
+  const size_t n = source->hdr.hdr.num_pkts;
+  for (int seg = 0; seg < q.num_segs; ++seg) {
+    if ((mask & (1u << seg)) == 0 && !burst_shared_arr(source, seg)[0]->cpu_accessible)
+      return Status::NOT_SUPPORTED;
+  }
+  BurstParams* out = create_tx_burst_params();
+  if (out == nullptr) return Status::NO_FREE_BURST_BUFFERS;
+  out->hdr = {};
+  out->hdr.hdr.port_id = q.port_id;
+  out->hdr.hdr.q_id = q.queue_id;
+  out->hdr.hdr.num_pkts = n;
+  out->hdr.hdr.num_segs = q.num_segs;
+  out->hdr.hdr.burst_flags = IBV_TX_BURST_FLAG | IBV_TX_SHARED_FLAG | IBV_TX_SHARED_OWNED_FLAG;
+  out->custom_pkt_data.reset();
+  out->event = nullptr;
+  out->pkt_extra_info = nullptr;
+  // Initialize every handle before anything that can fail, for rollback.
+  for (int seg = 0; seg < q.num_segs; ++seg) std::fill_n(burst_shared_arr(out, seg), n, nullptr);
+  Status status = Status::SUCCESS;
+  for (int seg = 0; seg < q.num_segs && status == Status::SUCCESS; ++seg) {
+    for (size_t i = 0; i < n; ++i) {
+      auto* original = burst_shared_arr(source, seg)[i];
+      detail::SharedTxBuffer* buffer = nullptr;
+      if ((mask & (1u << seg)) != 0) {
+        if (!original->retain()) {
+          status = Status::NO_SPACE_AVAILABLE;
+          break;
+        }
+        buffer = original;
+      } else {
+        buffer = q.shared_tx->pools[seg]->acquire();
+        if (buffer == nullptr) {
+          status = Status::NO_FREE_PACKET_BUFFERS;
+          break;
+        }
+        std::memcpy(buffer->address, original->address, source->pkt_lens[seg][i]);
+      }
+      burst_shared_arr(out, seg)[i] = buffer;
+      out->pkts[seg][i] = buffer->address;
+      out->pkt_lens[seg][i] = source->pkt_lens[seg][i];
+      out->hdr.hdr.nbytes += source->pkt_lens[seg][i];
+    }
+  }
+  if (status != Status::SUCCESS) {
+    release_shared_burst(out);
+    tx_meta_pool_->put(out);
+    return status;
+  }
+  *clone = out;
+  return Status::SUCCESS;
 }
 
 Status IbverbsEngine::set_packet_lengths(BurstParams* burst, int idx,
@@ -8737,6 +9060,8 @@ Status IbverbsEngine::set_packet_lengths(BurstParams* burst, int idx,
 }
 
 Status IbverbsEngine::set_eth_header(BurstParams* burst, int idx, char* dst_addr) {
+  const Status writable = writable_shared_header(burst, idx, sizeof(UDPIPV4Pkt));
+  if (writable != Status::SUCCESS) return writable;
   auto* pkt = static_cast<UDPIPV4Pkt*>(burst->pkts[0][idx]);
   memcpy(pkt->eth.h_dest, dst_addr, 6);
   pkt->eth.h_proto = htons(0x0800);  // IPv4
@@ -8777,6 +9102,8 @@ Status IbverbsEngine::resolve_ipv4_mac(int port, uint32_t dst_host, char* mac,
 
 Status IbverbsEngine::set_ipv4_header(BurstParams* burst, int idx, int ip_len, uint8_t proto,
                                       unsigned int src_host, unsigned int dst_host) {
+  const Status writable = writable_shared_header(burst, idx, sizeof(UDPIPV4Pkt));
+  if (writable != Status::SUCCESS) return writable;
   auto* pkt = static_cast<UDPIPV4Pkt*>(burst->pkts[0][idx]);
   pkt->ip.version = 4;
   pkt->ip.ihl = 5;
@@ -8790,6 +9117,8 @@ Status IbverbsEngine::set_ipv4_header(BurstParams* burst, int idx, int ip_len, u
 
 Status IbverbsEngine::set_udp_header(BurstParams* burst, int idx, int udp_len, uint16_t src_port,
                                      uint16_t dst_port) {
+  const Status writable = writable_shared_header(burst, idx, sizeof(UDPIPV4Pkt));
+  if (writable != Status::SUCCESS) return writable;
   auto* pkt = static_cast<UDPIPV4Pkt*>(burst->pkts[0][idx]);
   pkt->udp.source = htons(src_port);
   pkt->udp.dest = htons(dst_port);
@@ -8799,6 +9128,10 @@ Status IbverbsEngine::set_udp_header(BurstParams* burst, int idx, int udp_len, u
 }
 
 Status IbverbsEngine::set_udp_payload(BurstParams* burst, int idx, void* data, int len) {
+  if (len < 0 || (len != 0 && data == nullptr)) return Status::INVALID_PARAMETER;
+  const Status writable =
+      writable_shared_header(burst, idx, sizeof(UDPIPV4Pkt) + static_cast<size_t>(len));
+  if (writable != Status::SUCCESS) return writable;
   auto* p = static_cast<uint8_t*>(burst->pkts[0][idx]) + sizeof(UDPIPV4Pkt);
   memcpy(p, data, static_cast<size_t>(len));
   return Status::SUCCESS;
@@ -9023,6 +9356,7 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
   if (n <= 0) {
     return;
   }
+  if (q.shared_tx) record_shared_sends(q, burst);
   if ((burst->hdr.hdr.burst_flags & IBV_TX_ENDPOINT_INLINE_FLAG) != 0) {
     post_endpoint_inline_burst(q, burst);
     return;
@@ -9227,6 +9561,36 @@ Status IbverbsEngine::send_tx_burst(BurstParams* burst) {
   if (burst->hdr.hdr.num_segs != q->num_segs) {
     return Status::INVALID_PARAMETER;
   }
+  // Shared storage must stay on a queue that validates and retires its references.
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_SHARED_FLAG) != 0 && !q->shared_tx) {
+    return Status::INVALID_PARAMETER;
+  }
+  if (q->shared_tx) {
+    if (q->shared_tx->failed.load(std::memory_order_acquire)) return Status::NOT_READY;
+    const Status valid = validate_shared_tx_burst(*q, burst);
+    if (valid != Status::SUCCESS) return valid;
+    const uint64_t n = burst->hdr.hdr.num_pkts;
+    const uint64_t outstanding = q->alloc_head - q->completed_tail.load(std::memory_order_acquire);
+    if (n > q->num_slots - outstanding) {
+      burst->hdr.hdr.burst_flags &= ~IBV_TX_SHARED_OWNED_FLAG;
+      release_shared_burst(burst);
+      tx_meta_pool_->put(burst);
+      ++q->handoff_drop_bursts;
+      q->handoff_drop_pkts += n;
+      return Status::NO_SPACE_AVAILABLE;
+    }
+    q->alloc_head += n;
+    burst->hdr.hdr.burst_flags &= ~IBV_TX_SHARED_OWNED_FLAG;
+    if (!q->send_ring->enqueue(burst)) {
+      q->alloc_head -= n;  // Undo admission only; never a storage allocation index.
+      release_shared_burst(burst);
+      tx_meta_pool_->put(burst);
+      ++q->handoff_drop_bursts;
+      q->handoff_drop_pkts += n;
+      return Status::NO_SPACE_AVAILABLE;
+    }
+    return Status::SUCCESS;
+  }
   if (q->poll_mode == QueuePollMode::DIRECT) {
     if (!owns_direct_tx_queue(*q)) {
       return Status::NOT_READY;
@@ -9257,12 +9621,22 @@ Status IbverbsEngine::send_tx_burst(BurstParams* burst) {
 
 void IbverbsEngine::free_tx_burst(BurstParams* burst) {
   if (burst != nullptr) {
+    if ((burst->hdr.hdr.burst_flags & IBV_TX_SHARED_FLAG) != 0) {
+      if ((burst->hdr.hdr.burst_flags & IBV_TX_SHARED_OWNED_FLAG) == 0) return;
+      release_shared_burst(burst);
+      burst->hdr.hdr.burst_flags &= ~IBV_TX_SHARED_OWNED_FLAG;
+    }
     tx_meta_pool_->put(burst);
   }
 }
 
 void IbverbsEngine::free_tx_metadata(BurstParams* burst) {
   if (burst != nullptr) {
+    if ((burst->hdr.hdr.burst_flags & IBV_TX_SHARED_FLAG) != 0) {
+      if ((burst->hdr.hdr.burst_flags & IBV_TX_SHARED_OWNED_FLAG) == 0) return;
+      release_shared_burst(burst);
+      burst->hdr.hdr.burst_flags &= ~IBV_TX_SHARED_OWNED_FLAG;
+    }
     tx_meta_pool_->put(burst);
   }
 }

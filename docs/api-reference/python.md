@@ -440,8 +440,24 @@ or handoff ring touches the packet. Direct TX requires exactly one packet, one p
 and one thread per queue. On `NO_SPACE_AVAILABLE` DAQIRI has already freed the packet reservation
 and burst internally. In
 both cases the application must **not** free or otherwise access the burst
-afterwards. `NO_SPACE_AVAILABLE` is the only failure a correctly-configured
-sender encounters at runtime.
+afterwards. Other failures leave ownership with the caller, who must retry or free
+the burst.
+
+For raw ibverbs indirect TX, set `TxQueueConfig.buffer_mode = TxBufferMode.SHARED`
+(or YAML `buffer_mode: shared`). `max_inflight_sends` bounds accepted sends
+independently of each region's `num_bufs`. Clone before submitting either burst:
+
+```python
+status, second = daqiri.clone_tx_burst(original, 1 << 2)
+# Three segments: private network header, private message header, shared payload.
+```
+
+The helper releases the GIL, returns a null burst on failure, and leaves the source
+unchanged. Bits select shared segments; unselected CPU segments receive private
+copies. Shared bytes must remain immutable. Submit or cancel each burst separately;
+storage is recycled only after all references complete or cancel. See
+[Shared TX segments](cpp.md#shared-tx-segments) for ownership and limitations.
+Python packet-copy helpers expose raw writes and require the same immutability discipline.
 
 ### Timed Transmission
 
@@ -571,7 +587,7 @@ currently includes:
   invocation) still runs with the GIL held.
 - `daqiri_init_from_yaml_string` and `daqiri_init_from_yaml_file`
 - `get_rx_burst` (all overloads) and `get_rx_burst_for_connection`
-- `is_tx_burst_available`, `get_tx_packet_burst`, `send_tx_burst`
+- `is_tx_burst_available`, `get_tx_packet_burst`, `send_tx_burst`, `clone_tx_burst`
 - `copy_buffer_to_packet`, `copy_buffer_to_segment_packet`: released around
   the underlying memory copy (host or `cudaMemcpy`).
 - `get_packet_bytes`, `get_segment_packet_bytes`: released around the copy
@@ -660,6 +676,7 @@ The workflow sections above show the common call order and ownership rules.
 | `is_tx_burst_available(burst)` | Check whether TX packet buffers are available. |
 | `get_tx_packet_burst(burst)` | Populate a TX burst with packet buffers. |
 | `set_connection_id(burst, conn_id)` | Attach a transport connection ID to a TX burst (socket/RDMA). |
+| `clone_tx_burst(source, shared_segment_mask)` | Return `(Status, clone)` with shared selected segments and private CPU copies. |
 | `send_tx_burst(burst)` | Enqueue a populated TX burst. |
 | `set_eth_header(burst, idx, dst_addr)` | Fill the Ethernet header destination address. |
 | `set_ipv4_header(burst, idx, ip_len, proto, src_host, dst_host)` | Fill an IPv4 header. |
@@ -773,6 +790,7 @@ encapsulation/push rules are configured in YAML under `tx.flows`.
 | `MemoryKind` | `HOST`, `HOST_PINNED`, `HUGE`, `DEVICE`, `INVALID` |
 | `StreamType` | `RAW`, `SOCKET`, `INVALID` |
 | `QueuePollMode` | `INDIRECT`, `DIRECT`, `INVALID` |
+| `TxBufferMode` | `CYCLIC`, `SHARED` |
 | `LoopbackType` | `DISABLED`, `LOOPBACK_TYPE_SW`, `LOOPBACK_TYPE_HW` |
 | `RDMAMode` | `CLIENT`, `SERVER`, `INVALID` |
 | `RDMATransportMode` | `RC`, `UC`, `UD`, `INVALID` |
@@ -810,7 +828,7 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `TxConfig` | TX accurate-send flag, queues, and flows. |
 | `CommonQueueConfig` | Shared queue fields: name, ID, batch size, split boundary, CPU core, memory regions, and offloads. |
 | `RxQueueConfig` | RX queue wrapper with common queue fields, timeout, `QueuePollMode`, and the raw ibverbs `cqe_compression` flag. |
-| `TxQueueConfig` | TX queue wrapper with common queue fields and `QueuePollMode`. |
+| `TxQueueConfig` | TX queue wrapper with common fields, `QueuePollMode`, `TxBufferMode`, and `max_inflight_sends`. |
 | `MemoryRegionConfig` | Memory region kind, affinity, access flags, sizes, counts, and ownership. |
 | `ExternalMemoryRegion` | Non-owning integer address and byte capacity. |
 | `MemoryRegionRequirement` | Effective kind, slot size, buffer count, capacity, and alignment. |
