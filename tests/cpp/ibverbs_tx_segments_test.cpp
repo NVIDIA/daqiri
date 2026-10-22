@@ -246,6 +246,57 @@ class IbverbsEngineTxTestPeer {
       engine.poll_tx_completions(q);
     };
     const uint32_t mask = 1u << (segments - 1);
+    // Retargeting must not let a cyclic queue consume shared storage or recycle
+    // its metadata without releasing the source queue's references.
+    {
+      IbvTxQueue cyclic;
+      cyclic.queue_id = 1;
+      cyclic.num_segs = segments;
+      cyclic.num_slots = 4;
+      cyclic.state = ResourceState::ACTIVE;
+      cyclic.send_ring = Ring::create("cyclic_test", 8, RingMode::SPSC);
+      require(cyclic.send_ring != nullptr, "cyclic handoff setup failed");
+      engine.tx_queue_table_[0][1].store(&cyclic);
+      for (bool direct : {false, true}) {
+        cyclic.poll_mode = direct ? QueuePollMode::DIRECT : QueuePollMode::INDIRECT;
+        auto* original = allocate();
+        require(engine.get_tx_packet_burst(original) == Status::SUCCESS,
+                "wrong-queue source allocation failed");
+        for (int seg = 0; seg < segments; ++seg) original->pkt_lens[seg][0] = 42;
+        BurstParams* clone = nullptr;
+        require(engine.clone_tx_burst(original, mask, &clone) == Status::SUCCESS,
+                "wrong-queue clone failed");
+        const auto metadata_available = engine.tx_meta_pool_->avail_count();
+        for (auto* burst : {original, clone}) {
+          set_header(burst, 0, 1, 1, segments);
+          const auto flags = burst->hdr.hdr.burst_flags;
+          std::array<void*, MAX_NUM_SEGS> pointers{};
+          for (int seg = 0; seg < segments; ++seg) pointers[seg] = burst->pkts[seg][0];
+          require(engine.send_tx_burst(burst) == Status::INVALID_PARAMETER,
+                  "cyclic queue accepted shared storage");
+          require(burst->hdr.hdr.burst_flags == flags &&
+                      engine.tx_meta_pool_->avail_count() == metadata_available,
+                  "wrong-queue rejection consumed ownership or metadata");
+          for (int seg = 0; seg < segments; ++seg)
+            require(burst->pkts[seg][0] == pointers[seg] && burst->pkt_lens[seg][0] == 42,
+                    "wrong-queue rejection changed packet storage");
+        }
+        void* raw = nullptr;
+        require(!cyclic.send_ring->dequeue(&raw) && cyclic.alloc_head == 0 &&
+                    cyclic.slots_posted == 0 && cyclic.direct_pending == nullptr,
+                "wrong-queue rejection changed cyclic queue state");
+        require(!q.shared_tx->idle_storage() && q.alloc_head == 0,
+                "wrong-queue rejection changed source ownership");
+        engine.free_tx_burst(original);
+        require(q.shared_tx->pools.back()->available() == 0,
+                "cancelling source freed rejected clone's payload");
+        engine.free_tx_burst(clone);
+        require(q.shared_tx->idle_storage(), "wrong-queue cancellation leaked storage");
+      }
+      engine.tx_queue_table_[0][1].store(nullptr);
+      Ring::free(cyclic.send_ring);
+      cyclic.send_ring = nullptr;
+    }
     for (unsigned iteration = 0; iteration < 40; ++iteration) {
       auto* original = allocate();
       require(engine.get_tx_packet_burst(original) == Status::SUCCESS, "shared allocation failed");
