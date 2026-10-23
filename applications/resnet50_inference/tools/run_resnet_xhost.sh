@@ -134,8 +134,8 @@ for _ in $(seq 1 600); do
     break
   fi
   if ! kill -0 "${RX_SSH_PID}" 2>/dev/null; then
-    echo "RX exited early; log:" >&2
-    cat "${RX_LOG}" >&2
+    echo "RX exited early; log tail:" >&2
+    tail -n "${LOG_TAIL_LINES:-200}" "${RX_LOG}" >&2
     exit 1
   fi
   sleep 1
@@ -143,8 +143,8 @@ done
 
 if ! grep -q "RX reorder ready" "${RX_LOG}" 2>/dev/null || \
    ! grep -qE "TrtRunner ready|no-inference mode" "${RX_LOG}" 2>/dev/null; then
-  echo "Timed out waiting for RX ready; log:" >&2
-  cat "${RX_LOG}" >&2
+  echo "Timed out waiting for RX ready; log tail:" >&2
+  tail -n "${LOG_TAIL_LINES:-200}" "${RX_LOG}" >&2
   exit 1
 fi
 
@@ -161,14 +161,15 @@ RX_RC=0
 wait "${RX_SSH_PID}" || RX_RC=$?
 
 echo "=== TX log (${TX_LOG}) ==="
-cat "${TX_LOG}"
+tail -n "${LOG_TAIL_LINES:-200}" "${TX_LOG}"
 echo "=== RX log (${RX_LOG}) ==="
-cat "${RX_LOG}"
+tail -n "${LOG_TAIL_LINES:-200}" "${RX_LOG}"
 
 mkdir -p "${RESULTS_DIR}"
 
 TX_START_NS="$(grep -oE 'tx_start unix_ns=[0-9]+' "${TX_LOG}" | head -1 | cut -d= -f2 || true)"
 TX_SENT_FRAMES="$(grep -oE 'pcap_tx_worker: sent [0-9]+' "${TX_LOG}" | tail -1 | awk '{print $3}' || true)"
+TX_ACTIVE_SECONDS="$(grep -E 'pcap_tx_worker: sent [0-9]+/[0-9]+ frames in ' "${TX_LOG}" | tail -1 | sed -E 's/.* frames in ([0-9.]+) s.*/\1/' || true)"
 FIRST_DELIVERY_NS="$(grep -oE 'batch_delivered index=0 unix_ns=[0-9]+' "${RX_LOG}" | head -1 | sed -E 's/.*=//' || true)"
 FIRST_RESULT_NS="$(grep -oE 'first_application_result unix_ns=[0-9]+' "${RX_LOG}" | head -1 | cut -d= -f2 || true)"
 TX_TO_DELIVERY_MS=NA
@@ -178,6 +179,12 @@ if [[ "${CLOCK_SYNC_OK}" == "1" && -n "${TX_START_NS}" ]]; then
   [[ -n "${FIRST_RESULT_NS}" ]] && TX_TO_RESULT_MS="$(awk -v a="${TX_START_NS}" -v b="${FIRST_RESULT_NS}" 'BEGIN {printf "%.3f", (b-a)/1e6}')"
 fi
 ACTIVE_SECONDS="$(grep -E '^active_seconds=' "${RX_LOG}" | tail -1 | sed -E 's/^active_seconds=([0-9.]+).*/\1/' || true)"
+RX_REPORTED_IMG_S="$(grep -E '^active_seconds=' "${RX_LOG}" | tail -1 | sed -E 's/.* => ([0-9.]+) img\/s.*/\1/' || true)"
+PUSHED_IMAGES="$(grep -oE 'pushed_images=[0-9]+' "${RX_LOG}" | head -1 | cut -d= -f2 || true)"
+CAMPAIGN_IMG_S=NA
+if [[ -n "${PUSHED_IMAGES}" && -n "${TX_ACTIVE_SECONDS}" ]]; then
+  CAMPAIGN_IMG_S="$(awk -v n="${PUSHED_IMAGES}" -v s="${TX_ACTIVE_SECONDS}" 'BEGIN {if(s>0) printf "%.2f", n/s; else print "NA"}')"
+fi
 KERNEL_TOTAL_US="$(grep -oE 'total_kernel_us=[0-9.]+' "${RX_LOG}" | tail -1 | cut -d= -f2 || true)"
 KERNEL_SHARE_PCT=NA
 if [[ -n "${ACTIVE_SECONDS}" && -n "${KERNEL_TOTAL_US}" ]]; then
@@ -208,8 +215,10 @@ rx_counter() {
   echo "no_inference,${RX_NO_INFERENCE}"
   [[ "${RX_NO_INFERENCE}" == "1" ]] && echo "mode,daqiri_only" || echo "mode,e2e"
   grep -oE 'images_per_batch=[0-9]+' "${RX_LOG}" | head -1 | sed 's/=/,/' || true
-  grep -E '^active_seconds=' "${RX_LOG}" | tail -1 |
-    sed -E 's/^active_seconds=([0-9.]+) => ([0-9.]+) img\/s.*/active_seconds,\1\nimg_s,\2/' || true
+  echo "active_seconds,${ACTIVE_SECONDS}"
+  echo "rx_reported_img_s,${RX_REPORTED_IMG_S}"
+  echo "tx_active_seconds,${TX_ACTIVE_SECONDS}"
+  echo "img_s,${CAMPAIGN_IMG_S}"
   grep -E "^inference_consumer_worker: [0-9]+ inference batches" "${RX_LOG}" |
     sed -E 's/^inference_consumer_worker: ([0-9]+) inference batches in ([0-9.]+) s.*/inference_batches,\1\nelapsed_s,\2/' || true
   grep -E "^inference latency \(ms\)" "${RX_LOG}" |
@@ -229,7 +238,7 @@ rx_counter() {
   echo "tx_start_to_first_delivery_ms,${TX_TO_DELIVERY_MS}"
   echo "tx_start_to_first_result_ms,${TX_TO_RESULT_MS}"
   echo "delivered_bursts,$(rx_counter delivered_bursts)"
-  echo "pushed_images,$(rx_counter pushed_images)"
+  echo "pushed_images,${PUSHED_IMAGES}"
   echo "dropped_bursts,$(rx_counter dropped_bursts)"
   echo "queue_full,$(rx_counter queue_full)"
   echo "partial_bursts,$(rx_counter partial_bursts)"

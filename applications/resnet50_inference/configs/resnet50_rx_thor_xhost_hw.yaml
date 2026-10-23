@@ -32,7 +32,8 @@ daqiri:
           id: 0
           cpu_core: 2
           batch_size: 4096
-          timeout_us: 2000
+          # Match the paced software-reorder campaign geometry.
+          timeout_us: 20000
           memory_regions: ["Data_RX_GPU"]
         flows:
         - name: "flow_resnet"

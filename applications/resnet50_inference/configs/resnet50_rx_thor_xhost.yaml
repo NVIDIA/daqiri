@@ -33,7 +33,9 @@ daqiri:
           id: 0
           cpu_core: 2
           batch_size: 8192
-          timeout_us: 2000
+          # A 4096-packet batch takes about 5.4 ms at the fixed 7.5-Gbps
+          # campaign pacing rate. Keep the flush timeout comfortably above it.
+          timeout_us: 20000
           memory_regions: ["Data_RX_GPU"]
         flows:
         - name: "flow_resnet"

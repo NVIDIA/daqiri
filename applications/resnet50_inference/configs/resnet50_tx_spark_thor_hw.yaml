@@ -26,6 +26,8 @@ daqiri:
           id: 0
           batch_size: 4096
           cpu_core: 4
+          # Match the primary software-reorder campaign rate.
+          pacing_mbps: 7500
           memory_regions: ["Data_TX_GPU"]
           offloads: ["tx_eth_src"]
 bench_tx:

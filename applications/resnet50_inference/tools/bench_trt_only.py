@@ -29,7 +29,7 @@ def torch_dtype(dtype):
     return TRT_TO_TORCH[dtype]
 
 
-def benchmark(engine, context, batch, iterations, warmup):
+def benchmark(engine, context, batch, iterations, warmup, duration):
     names = [engine.get_tensor_name(i) for i in range(engine.num_io_tensors)]
     inputs = [name for name in names if engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT]
     outputs = [name for name in names if engine.get_tensor_mode(name) == trt.TensorIOMode.OUTPUT]
@@ -50,24 +50,35 @@ def benchmark(engine, context, batch, iterations, warmup):
             context.execute_async_v3(stream.cuda_stream)
     stream.synchronize()
 
-    with torch.cuda.stream(stream):
-        start = time.perf_counter()
-        for _ in range(iterations):
-            context.execute_async_v3(stream.cuda_stream)
+    completed = 0
+    start = time.perf_counter()
+    if duration > 0:
+        while time.perf_counter() - start < duration:
+            with torch.cuda.stream(stream):
+                for _ in range(100):
+                    context.execute_async_v3(stream.cuda_stream)
+            stream.synchronize()
+            completed += 100
+    else:
+        with torch.cuda.stream(stream):
+            for _ in range(iterations):
+                context.execute_async_v3(stream.cuda_stream)
         stream.synchronize()
-        elapsed = time.perf_counter() - start
+        completed = iterations
+    elapsed = time.perf_counter() - start
 
     latencies = []
     with torch.cuda.stream(stream):
-        for _ in range(min(iterations, 200)):
+        for _ in range(min(completed, 200)):
             start = time.perf_counter()
             context.execute_async_v3(stream.cuda_stream)
             stream.synchronize()
             latencies.append((time.perf_counter() - start) * 1e3)
     latencies.sort()
     return {
-        "img_s": batch * iterations / elapsed,
+        "img_s": batch * completed / elapsed,
         "elapsed": elapsed,
+        "batches": completed,
         "p50": latencies[len(latencies) // 2],
         "p99": latencies[int(len(latencies) * 0.99) - 1],
     }
@@ -81,6 +92,8 @@ def main():
     parser.add_argument("--engine", help="override catalog engine_path")
     parser.add_argument("--batches", default="32")
     parser.add_argument("--iters", type=int, default=500)
+    parser.add_argument("--seconds", type=float, default=0,
+                        help="run each batch size for at least this duration; overrides --iters")
     parser.add_argument("--warmup", type=int, default=50)
     parser.add_argument("--csv", help="append campaign-format rows")
     parser.add_argument("--rep", default="1")
@@ -111,11 +124,11 @@ def main():
     rows = []
     print(f"model={args.model} engine={engine_path} feature_dim={profile['feature_dim']}")
     for batch in (int(value) for value in args.batches.split(",")):
-        result = benchmark(engine, context, batch, args.iters, args.warmup)
+        result = benchmark(engine, context, batch, args.iters, args.warmup, args.seconds)
         print(f"batch={batch} img_s={result['img_s']:.2f} p50_ms={result['p50']:.3f} p99_ms={result['p99']:.3f}")
         rows.append([
             args.model, profile["feature_dim"], "trt_only", batch,
-            f"{result['elapsed']:.6f}", args.rep, f"{result['img_s']:.2f}", args.iters,
+            f"{result['elapsed']:.6f}", args.rep, f"{result['img_s']:.2f}", result["batches"],
             f"{result['p50']:.3f}", f"{result['p99']:.3f}", "NA", "NA", "NA", "NA",
             "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA",
             "0", "0", f"trt_only-{args.model}-b{batch}-r{args.rep}",

@@ -47,11 +47,24 @@ for model in ${MODELS}; do
         tx_rc="$(sv "${sum}" tx_rc)"; rx_rc="$(sv "${sum}" rx_rc)"
         tx_frames="$(sv "${sum}" tx_sent_frames)"; rx_frames="$(pv "${phy}" rx_packets_phy_delta)"
         pushed_images="$(sv "${sum}" pushed_images)"
+        dropped="$(sv "${sum}" dropped_bursts)"
         remainder="$(sv "${sum}" remainder_dropped)"; partial="$(sv "${sum}" partial_bursts)"
         qfull="$(sv "${sum}" queue_full)"; nonreorder="$(sv "${sum}" non_reordered_bursts)"
         discards="$(pv "${phy}" rx_discards_phy_delta)"
+        counters_match=0
+        if [[ "${tx_frames}" =~ ^[0-9]+$ && "${rx_frames}" =~ ^[0-9]+$ && \
+              "${pushed_images}" =~ ^[0-9]+$ ]]; then
+          phy_delta=$((rx_frames - tx_frames))
+          if ((phy_delta < 0)); then phy_delta=$((-phy_delta)); fi
+          # The port-wide physical counter may include a few unrelated link
+          # packets. The flow-matched application count must remain exact.
+          if ((phy_delta <= 64 && pushed_images * 128 == tx_frames)); then
+            counters_match=1
+          fi
+        fi
         if [[ "${rc}" == 0 && "${tx_rc}" == 0 && "${rx_rc}" == 0 && \
-              "${tx_frames}" == "${rx_frames}" && "$((pushed_images * 128))" == "${rx_frames}" && \
+              "${counters_match}" == 1 && \
+              "${dropped}" == 0 && \
               "${remainder}" == 0 && \
               "${partial}" == 0 && "${qfull}" == 0 && "${nonreorder}" == 0 && \
               "${discards}" == 0 ]]; then
@@ -62,14 +75,14 @@ for model in ${MODELS}; do
             "$(na "$(sv "${sum}" inference_batches)")" "$(na "$(sv "${sum}" latency_p50_ms)")" \
             "$(na "$(sv "${sum}" latency_p99_ms)")" "${tx_rc}" "${rx_rc}" "${tx_frames}" \
             "${rx_frames}" "${remainder}" "${partial}" "${qfull}" "${nonreorder}" "${discards}" \
-            "$(na "$(pv "${phy}" wire_gbps_over_wall)")" "$(na "$(pv "${phy}" wire_pps_over_wall)")" \
+            "$(na "$(pv "${phy}" wire_gbps_over_tx_active)")" "$(na "$(pv "${phy}" wire_pps_over_tx_active)")" \
             "$(na "$(sv "${sum}" clock_sync_ok)")" "$(na "$(sv "${sum}" tx_start_to_first_delivery_ms)")" \
             "$(na "$(sv "${sum}" tx_start_to_first_result_ms)")" "$(na "$(sv "${sum}" delivery_to_result_p50_ms)")" \
             "$(na "$(sv "${sum}" reorder_gpu_kernel_total_us)")" \
             "$(na "$(sv "${sum}" reorder_gpu_kernel_share_pct)")" "${run_id}" >> "${OUT}"
           break
         fi
-        echo "REJECT ${run_id}: rc=${rc} tx_rc=${tx_rc:-NA} rx_rc=${rx_rc:-NA} tx/rx=${tx_frames:-NA}/${rx_frames:-NA} pushed_images=${pushed_images:-NA} remainder=${remainder:-NA} partial=${partial:-NA} queue_full=${qfull:-NA} non_reordered=${nonreorder:-NA} discards=${discards:-NA}" >&2
+        echo "REJECT ${run_id}: rc=${rc} tx_rc=${tx_rc:-NA} rx_rc=${rx_rc:-NA} tx/rx=${tx_frames:-NA}/${rx_frames:-NA} pushed_images=${pushed_images:-NA} dropped=${dropped:-NA} remainder=${remainder:-NA} partial=${partial:-NA} queue_full=${qfull:-NA} non_reordered=${nonreorder:-NA} discards=${discards:-NA}" >&2
       done
       [[ "${accepted}" == 1 ]] || { echo "ERROR: no accepted run for ${model} ${mode} rep ${rep}" >&2; exit 1; }
     done
