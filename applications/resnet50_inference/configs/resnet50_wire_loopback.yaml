@@ -1,8 +1,8 @@
 %YAML 1.2
 ---
-# Cabled single-host p0→p1 smoke (no software loopback). Prefer
+# Optional cabled single-host p0→p1 test (no software loopback). Prefer
 # resnet50_{tx,rx}_spark_xhost.yaml for Spark-to-Spark. int8→fp16 reorder.
-# Uses the ibverbs raw engine so Thor/CX-7 can hardware-pace TX during smoke.
+# Uses the ibverbs raw engine so the NIC can hardware-pace TX.
 daqiri:
   cfg:
     version: 1
@@ -45,7 +45,7 @@ daqiri:
           # bursts lands on a batch boundary instead of splitting a batch.
           batch_size: 4096
           cpu_core: 11
-          # Conservative smoke cap: keep the cabled replay below inference
+          # Conservative test cap: keep the cabled replay below inference
           # backpressure so the RX side verifies reorder correctness, not line rate.
           pacing_mbps: 50
           memory_regions:

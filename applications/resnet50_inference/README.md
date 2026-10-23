@@ -17,11 +17,6 @@ ResNet/MobileNet/Thor benchmark plan without chat history.
 **One cable** p0↔p0 (a second cable is not used). Net prep:
 `scripts/setup_spark_xhost_net.sh` on both hosts.
 
-New here? Run the [cabled loopback smoke](#cabled-loopback-smoke)
-first on a host with a p0↔p1 loopback cable, then come back to xhost for
-reported numbers. `resnet50_sw_loopback.yaml` remains a no-NIC fallback, but it
-is not the release smoke path.
-
 ## Pipeline
 
 ```
@@ -110,12 +105,12 @@ export ETH_DST_ADDR=$(cat /sys/class/net/<rx-iface>/address)
 BUILD_DIR=./build applications/resnet50_inference/tools/run_resnet_bench.sh
 ```
 
-## Cabled loopback smoke
+## Optional local cabled test
 
-Use `resnet50_wire_loopback.yaml` for commit smoke. It is a real cabled raw
-Ethernet path (`loopback: ""`), uses the ibverbs raw engine, and caps TX with
-`pacing_mbps: 50` so the test verifies reorder/inference correctness rather
-than receiver saturation.
+`resnet50_wire_loopback.yaml` provides a convenient single-host p0↔p1 test. It
+is a real cabled raw Ethernet path (`loopback: ""`), uses the ibverbs raw engine,
+and caps TX with `pacing_mbps: 50` so the test checks reorder/inference
+correctness rather than receiver saturation.
 
 ```bash
 # Replace <tx-pcie-addr>, <rx-pcie-addr>, and <rx-port-mac> for the host.

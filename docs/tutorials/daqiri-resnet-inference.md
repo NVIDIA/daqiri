@@ -23,8 +23,7 @@ The pipeline needs **two hosts and one link**: one transmits, the other receives
 and infers. The shipped configs and the `run_resnet_xhost.sh` helper default to a
 pair of DGX Sparks cabled p0↔p0, but nothing in the application is
 platform-specific — see [Run across two hosts](#run-across-two-hosts) for what a
-different pair needs to change. For pre-commit smoke on Thor, use the
-single-host p0↔p1 cabled loopback path rather than software loopback.
+different pair needs to change.
 
 ## Summary
 
@@ -78,7 +77,7 @@ flowchart LR
     Pcap --> TxW --> Wire["wire"]
   end
   subgraph rxHost ["RX + inference host"]
-    Wire --> NicRx["DPDK RX + GPU reorder"]
+    Wire --> NicRx["raw Ethernet RX + configured reorder"]
     NicRx -->|"REORDERED burst"| Prod["rx_producer_worker"]
     Prod -->|"InferenceJob"| SPSC["InferenceQueue kCap=8"]
     SPSC --> Cons["inference_consumer_worker"]
@@ -97,50 +96,14 @@ The walkthrough below follows one batch from the wire to an embedding vector
 
 The RX side has a **reorder stream**, created by `main` and handed to the
 engine; the inference side has its own stream owned by the consumer thread. Two
-application threads sit on either side of the SPSC queue.
+application threads sit on either side of the SPSC queue. Pin the engine,
+producer, and consumer threads with `master_core`, `rx.queues[].cpu_core`,
+`bench_rx.cpu_core`, and `inference.cpu_core` in the target host's config.
 
-| Thread | Core | Role |
-|--------|-----:|------|
-| DPDK EAL master | 8 | `master_core` |
-| DPDK RX poller | 18 | `rx.queues[].cpu_core` |
-| App RX producer | 19 | `bench_rx.cpu_core`: `get_rx_burst` → SPSC push |
-| Inference consumer | 15 | `inference.cpu_core`: TRT + FeatureSink |
-| reorder CUDA stream | n/a | `set_reorder_cuda_stream` (bound once after init) |
-| inference CUDA stream | n/a | owned by consumer |
-
-Core numbers are from `resnet50_rx_spark_xhost.yaml`; the TX config uses 8 / 16
-/ 17 (master / app TX / TX queue). `resnet50_sw_loopback.yaml` uses a different
-set entirely (master 3, RX queue 9, producer 8, inference 7), so pick cores for
-your own host rather than copying these.
-
-The consumer is launched **first**, and the producer only after it signals
-`rx_ready`:
-
-```cpp
-consumer_thread = std::thread(app::inference_consumer_worker, std::cref(cfg), std::ref(sink),
-                              std::ref(inf_queue), std::ref(producer_done), std::ref(rx_ready),
-                              std::ref(stop));
-while (!rx_ready.load() && !stop.load()) {
-  std::this_thread::sleep_for(std::chrono::milliseconds(10));
-}
-producer_thread =
-    std::thread(app::rx_producer_worker, std::cref(cfg), std::ref(inf_queue), expected_images,
-                std::ref(producer_done), std::ref(stop));
-```
-
-`rx_ready` is set only after `TrtRunner::initialize()` returns, which on a cold
-run *builds* the engine and can take minutes. The producer has a finite patience
-budget for that:
-
-```cpp
-constexpr uint32_t kQuiesceIters = 50000;        // ~5 s after data started
-constexpr uint32_t kStartupIdleIters = 1800000;  // ~3 min before any data
-```
-
-Start the producer before the engine is ready and a cold build eats straight
-into that ~3-minute window. These are the same two numbers that govern how long
-you have to start TX after RX — see
-[Run across two hosts](#run-across-two-hosts).
+The consumer initializes TensorRT before the producer begins receiving. A cold
+run may spend several minutes building the TensorRT engine, so start TX only
+after RX reports `RX reorder ready` and `TrtRunner ready`. The RX worker exits
+after a finite idle period if traffic never starts or stops unexpectedly.
 
 ### 2. Configure DAQIRI reorder
 
@@ -319,49 +282,17 @@ so a slow TensorRT call never stalls the RX poll loop:
 ```cpp
 struct InferenceJob {
   daqiri::BurstParams* burst = nullptr;  // reordered burst; free after TRT consumes it
-  void* dev_input = nullptr;             // fp16 NCHW batch = get_packet_ptr(burst, 0)
+  void* dev_input = nullptr;             // contiguous NCHW batch = get_packet_ptr(burst, 0)
   uint32_t batch_size = 0;               // images in this batch
   cudaEvent_t input_ready = nullptr;     // burst->event (reorder-kernel completion)
+  std::chrono::steady_clock::time_point delivered_at{};  // host delivery timing
 };
 ```
 
 The queue is a fixed-capacity single-producer/single-consumer ring with no locks
-and no allocation:
-
-```cpp
-bool try_push(const InferenceJob& job) {
-  const std::size_t head = head_.load(std::memory_order_relaxed);
-  const std::size_t next = (head + 1) & (kCap - 1);
-  if (next == tail_.load(std::memory_order_acquire)) return false;
-  slots_[head] = job;
-  head_.store(next, std::memory_order_release);
-  return true;
-}
-```
-
-What happens when it is full is a policy split:
-
-```cpp
-if (backpressure) {                                    // example mode
-  while (!(pushed = queue.try_push(job)) && !stop.load()) {
-    std::this_thread::sleep_for(std::chrono::microseconds(50));
-  }
-} else {                                               // benchmark mode
-  pushed = queue.try_push(job);
-}
-```
-
-Example mode blocks: the dataset is finite and every image must be classified,
-so correctness wins over rate. Benchmark mode drops the burst and moves on,
-because a producer that stalls is no longer measuring the receive path. The mode
-is selected purely by whether a dataset is configured (`dataset:` in YAML or
-`--dataset`) — so the xhost RX config, which sets one, blocks even under
-`--seconds`.
-
-Capacity: `full()` is `depth() == kCap - 1`, so with `kCap = 8` the ring holds at
-most 7 jobs; add the batch TensorRT is working on and the one the consumer holds
-as `prev_burst` (step 5) and peak occupancy is 9 reorder-output buffers, against
-`num_bufs: 16` in `Reorder_RX_GPU`.
+or allocation. Dataset mode applies backpressure so every image is processed;
+benchmark mode drops a burst when the queue is full so RX is not hidden behind
+inference stalls. Select dataset mode with `dataset:` in YAML or `--dataset`.
 
 ### 5. Run inference and free the burst
 
@@ -385,30 +316,18 @@ Rotate `prev_burst` only on success; free the current burst on failure. Never
 skip a free — a leaked burst drains the RX pool and produces
 `NO_FREE_BURST_BUFFERS` / `NO_FREE_PACKET_BUFFERS` errors and NIC-level drops.
 
-Deferring the free by one batch is safe because of what `infer` does before it
-returns:
+Deferring the free by one batch is safe because `infer` establishes this CUDA
+event sequence:
 
 ```cpp
 if (input_ready != nullptr) {
-  cudaStreamWaitEvent(stream, input_ready, 0);        // reorder kernel finished this batch
+  cudaStreamWaitEvent(stream, input_ready, 0);  // reorder finished this batch
 }
-cudaEventRecord(start_evt_[buf], stream);
-// ... (CUDA-graph fast path elided; disabled by default) ...
-ctx->setInputShape(cfg_.input_name.c_str(), dims);    // dynamic batch dim
-ctx->setTensorAddress(cfg_.input_name.c_str(), dev_input);
-ctx->setTensorAddress(cfg_.output_name.c_str(), out_ptr);
 ctx->enqueueV3(stream);
-
 cudaMemcpyAsync(host_buf_[buf], out_ptr, out_bytes, cudaMemcpyDeviceToHost, stream);
-cudaEventRecord(d2h_event_[buf], stream);
-cudaEventRecord(release_evt, stream);                 // back-edge: input buffer reusable
-
-const int prev = 1 - parity_;
+cudaEventRecord(release_evt, stream);           // input buffer becomes reusable
 if (has_pending_[prev]) {
-  cudaEventSynchronize(d2h_event_[prev]);             // <-- prior batch fully read
-  host_out_prev = host_buf_[prev];                    // features, one batch late
-  host_out_prev_n = pending_n_[prev];
-  has_pending_[prev] = false;
+  cudaEventSynchronize(d2h_event_[prev]);        // previous output is host-visible
 }
 ```
 
@@ -418,42 +337,14 @@ the host, so freeing that burst needs no blocking sync of our own. Features come
 back **one batch late** for the same reason — double buffering by parity, so the
 host never stalls the batch currently in flight.
 
-`enable_cuda_graph` and `enable_dual_context` both default to off and are unset
-in every shipped config, so the documented path runs eagerly on the consumer's
-single inference stream.
-
 ### 6. Shut down
 
 Because features arrive one batch late, the last batch is still in flight when
-the loop exits. The consumer flushes it before it returns:
-
-```cpp
-float* host_final = nullptr;
-uint32_t n_final = 0;
-trt.drain_final(host_final, n_final);        // recover the one-batch-late tail
-if (host_final != nullptr) sink.consume(host_final, n_final);
-if (prev_burst != nullptr) {
-  daqiri::free_all_packets_and_burst_rx(prev_burst);
-}
-```
-
-Shutdown order in `main` then matters in both directions:
-
-```cpp
-producer_thread.join();          // no more pushes
-producer_done.store(true);
-consumer_thread.join();          // drain_final has run; every burst is freed
-// ...
-sink.log_final_summary(summary_seconds);
-daqiri::print_stats();
-daqiri::shutdown();
-cudaStreamDestroy(reorder_stream);
-```
-
-`log_final_summary` comes **after** the consumer join, so the tail batch
-recovered by `drain_final` is counted in the totals and the per-class stats — and
-**before** `shutdown()`. The reorder stream is destroyed last, because the engine
-holds it until `shutdown()` returns.
+`drain_final` recovers that tail output, and the last retained burst is freed.
+The producer joins before the consumer; the final summary and DAQIRI statistics
+are emitted after both join; `daqiri::shutdown()` runs before the reorder stream
+is destroyed. This order ensures every output is counted and every DAQIRI-owned
+burst is returned.
 
 ## Build
 
@@ -488,13 +379,6 @@ with FLOAT32 `features` (the ONNX front-end stays FP16 input):
 rm -f models/resnet50_features.fp16in.engine models/resnet50_features.fp16in.*.engine
 ```
 
-The exporter also takes `--model resnet18|resnet34|resnet101|resnet152`, and the
-app's matching `--model` flag picks up `models/<name>_features*.engine` and the
-right feature dimension (512 for 18/34, 2048 for the rest). Everything on the
-wire is unchanged by model choice, which is what the
-[five-model table](../benchmarks/performance-dgx-spark.md#end-to-end-resnet-inference-throughput)
-sweeps.
-
 ## Run across two hosts
 
 Start RX first, wait for `RX reorder ready` / `TrtRunner ready`, then
@@ -505,10 +389,8 @@ does both over SSH:
 ./applications/resnet50_inference/tools/run_resnet_xhost.sh --replay-once
 ```
 
-Start TX within ~3 minutes of RX: with no traffic at all the producer gives up on
-a startup idle timeout (a shorter ~5 s quiescence timeout applies once frames
-have arrived). Those are the `kStartupIdleIters` / `kQuiesceIters` budgets from
-[step 1](#1-threads-and-cuda-streams).
+Start TX promptly after RX is ready. The producer exits after a finite idle
+period if no traffic arrives or if an active stream goes quiet.
 
 Results land in `resnet-results/<run-id>.{summary,timeseries,rx.log,tx.log}`.
 
@@ -523,7 +405,7 @@ value is overridable:
 | RX netdev (used to read the peer MAC) | `RX_IFACE` env | `det1` (`enp1s0f0np0` on most NICs) |
 | Build directory | `--build-dir` | `build-resnet` |
 | NIC PCIe address | `interfaces[].address` in both xhost configs | `0000:01:00.0` |
-| CPU cores | `master_core`, `rx/tx.queues[].cpu_core`, `bench_{rx,tx}.cpu_core`, `inference.cpu_core` | see [step 1](#1-threads-and-cuda-streams) |
+| CPU cores | `master_core`, `rx/tx.queues[].cpu_core`, `bench_{rx,tx}.cpu_core`, `inference.cpu_core` | shipped configs |
 
 Network prep is Spark-specific: `scripts/setup_spark_xhost_net.sh` on both hosts
 (see [system configuration](system_configuration.md)). On other platforms,
@@ -551,63 +433,41 @@ batches**.
 ### What a good run looks like
 
 ```text
-pcap_tx_worker: tx_start unix_ns=1792692003228611087
-rx_producer_worker: batch_delivered index=0 unix_ns=1792692004052194077 images=32
-pcap_tx_worker: sent 16384/16384 frames in 3.33 s (send_failures=0 fill_failures=0 no_burst_polls=...)
-rx_producer_worker: delivered_bursts=4 pushed_images=128 dropped_bursts=0 [queue_full=0 short_batch=0 info_failure=0 null_input=0]
-inference latency (ms): mean=2.49 p50=1.57 p99=1.58 (per batch of 32 images, n=4)
-batch delivery->inference submit (us): first=57.8 mean=75.0 p50=57.8 p99=81.6 n=4
-batch delivery->application-visible result (ms): first=822.4 mean=628.4 p50=822.4 p99=823.3 n=4
+pcap_tx_worker: tx_start unix_ns=<timestamp>
+rx_producer_worker: batch_delivered index=0 unix_ns=<timestamp> images=32
+pcap_tx_worker: sent <expected>/<expected> frames ... (send_failures=0 fill_failures=0 ...)
+rx_producer_worker: delivered_bursts=<N> pushed_images=<expected> dropped_bursts=0 [queue_full=0 short_batch=0 info_failure=0 null_input=0]
+inference latency (ms): mean=<...> p50=<...> p99=<...> (per batch of 32 images, n=<N>)
+batch delivery->inference submit (us): first=<...> mean=<...> p50=<...> p99=<...> n=<N>
+batch delivery->application-visible result (ms): first=<...> mean=<...> p50=<...> p99=<...> n=<N>
 ```
 
 The `batch_delivered` timestamp is captured before the producer pushes the
-complete reordered batch onto the inference queue. Subtract `tx_start` to
-compare first-batch delivery between reorder engines without including model
-execution. Application-visible result latency includes the one-batch-delayed
-output pipeline; `inference latency` measures TensorRT execution with CUDA
-events.
-
-Also expect a `kHALF` input binding, FLOAT32 (or converted) `features`, all 256
-images, and per-class means labeled with CIFAR-10 class names (`airplane` …
-`truck`).
-
-For sustained throughput rather than a fixed dataset, use `--seconds 20 --loop`.
-Both flags are needed; drops are acceptable in that mode.
+complete reordered batch onto the inference queue. `tx_start` and
+`batch_delivered` are host wall-clock timestamps, not NIC hardware timestamps;
+subtract them across hosts only when the hosts' clocks are synchronized. The
+application-visible result includes the runner's one-batch-delayed output
+pipeline, while `inference latency` measures TensorRT execution with CUDA
+events. Also expect a `kHALF` input binding, FLOAT32 (or converted) `features`,
+the requested image count, and CIFAR-10 labels in the feature summary.
 
 ## Output
 
-`FeatureSink` writes everything to **stderr**. It prints the first two feature
-vectors as they arrive, then a summary at shutdown with per-class mean feature
-vectors keyed by **ground-truth** labels from the `.labels` sidecar. A
-predicted-class / softmax head is a follow-up.
+`FeatureSink` writes everything to **stderr**. It prints sample feature vectors
+as they arrive, then a summary at shutdown with per-class means keyed by
+**ground-truth** labels from the `.labels` sidecar.
 
 ```text
-  feature[image 0, class 6 (frog)] = [0.1842, 0.0000, 0.4521, ...] (dim=2048)
-  feature[image 1, class 9 (truck)] = [0.0000, 0.2310, 0.1102, ...] (dim=2048)
+  feature[image 0, class 6 (frog)] = [<2048 embedding values>] (dim=2048)
 
 === ResNet inference summary ===
-images=256 batches=8 seconds=2.15 => 119.07 img/s (wall)
-active_seconds=1.97 => 116.24 img/s (excludes 0.18 s before first batch)
+images=<expected> batches=<N> seconds=<...> => <...> img/s (wall)
 
 Per-class mean-feature stats (first 8 dims + L2 norm of the mean vector):
-  class  0   airplane (n=    25): mean=[0.2014, 0.0331, 0.3895, ...]  |mean|=3.8421
-  class  1 automobile (n=    26): mean=[0.1577, 0.0902, 0.2233, ...]  |mean|=3.5108
-  ...
-  class  9      truck (n=    27): mean=[0.2588, 0.0117, 0.4410, ...]  |mean|=4.0072
+  class  0   airplane (n=<...>): mean=[<first 8 values>, ...]  |mean|=<...>
 ```
-
-Each printed vector is 2048 elements long — one embedding per image. Distinct
-per-class means, and their differing L2 norms, indicate ResNet separates the
-classes in latent space.
-
-Quote `active_seconds`, not the `(wall)` figure: the wall clock starts when the
-process does, but on a cross-host run packets only arrive once the peer has
-finished its own startup.
 
 ## See also
 
 - App README: `applications/resnet50_inference/README.md`
 - Raw Ethernet reorder config: [configuration](../api-reference/configuration.md)
-- Platform context for this pipeline alongside other transports:
-  [DGX Spark performance](../benchmarks/performance-dgx-spark.md#end-to-end-resnet-inference-throughput)
-- Raw Ethernet benches: [raw benchmarking](../benchmarks/raw_benchmarking.md)

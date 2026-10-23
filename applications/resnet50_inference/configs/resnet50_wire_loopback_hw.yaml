@@ -1,6 +1,6 @@
 %YAML 1.2
 ---
-# Cabled p0->p1 NIC hardware-reorder smoke. The cyclic 16-bit sequence occupies
+# Optional cabled p0->p1 NIC hardware-reorder test. The cyclic 16-bit sequence occupies
 # UDP payload bytes 0-1 (bit 336); bytes 2-3 remain zero for exact matching.
 daqiri:
   cfg:

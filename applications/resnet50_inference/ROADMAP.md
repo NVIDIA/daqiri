@@ -9,11 +9,11 @@ sessions can continue without relying on chat history.
   the RX reorder source of truth.
 - The app-level `packetization:` block now carries only image framing facts and
   TX-only packet geometry.
-- The commit smoke path is cabled Thor p0↔p1 using `resnet50_wire_loopback.yaml`,
-  the ibverbs raw engine, and conservative `pacing_mbps: 50`.
-- The hardware-reorder config and its INT8 ONNX/engine and sequence-at-336 PCAP
-  are prepared, but the hardware path is **untested**: the Thor RX HCA needs
-  programmable flex parsing enabled and a cold reboot before it can initialize.
+- `resnet50_wire_loopback.yaml` is retained as an optional single-host p0↔p1
+  convenience config with conservative `pacing_mbps: 50`.
+- The hardware-reorder config pairs an INT8 TensorRT input with a cyclic
+  sequence field at bit 336. The path is validated on ConnectX-7 after enabling
+  programmable flex parsing and cold-rebooting the host.
 - Cross-host and cabled benchmark configs explicitly select the ibverbs raw engine;
   the runners persist engine, packet/burst, and inference summaries.
 - `model_catalog.json` drives ResNet-18/34/50/101/152 and MobileNetV3 Small/Large
@@ -34,13 +34,12 @@ sessions can continue without relying on chat history.
      only by history.
    - Deduplicate Python/tool constants for packet geometry where possible.
 
-## Smoke gate after each major update
+## Validation after each major update
 
 Run these before committing substantial app/config changes:
 
 1. Parse all app YAML configs.
 2. Rebuild `daqiri_resnet50_inference` inside the TensorRT container.
-3. Run Thor cabled p0↔p1 smoke from `resnet50_wire_loopback.yaml` with host PCIe
-   addresses and RX MAC filled in.
+3. Run an applicable hardware path for the target deployment.
 4. Require `RX reorder ready`, `TrtRunner ready`, expected image count, zero
    dropped bursts, zero partial bursts, and matching TX/RX packet counters.
