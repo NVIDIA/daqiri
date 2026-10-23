@@ -76,7 +76,7 @@ int main(int argc, char** argv) {
     std::cerr << "Usage: " << argv[0]
               << " <config.yaml> [--mode tx|rx] [--seconds N] [--dataset <pcap>]"
                  " [--replay-once|--loop] [--images-per-batch N]"
-                 " [--expected-images N] [--model <catalog-name>]\n";
+                 " [--expected-images N] [--model <catalog-name>] [--no-inference]\n";
     return 1;
   }
 
@@ -146,6 +146,7 @@ int main(int argc, char** argv) {
   bool loop = !cfg.example_mode();
   if (has_flag(argc, argv, "--loop")) loop = true;
   if (has_flag(argc, argv, "--replay-once")) loop = false;
+  cfg.no_inference = has_flag(argc, argv, "--no-inference");
 
   std::string eth_dst = cfg.tx.eth_dst_addr;
   if (const char* env = std::getenv("ETH_DST_ADDR")) {
@@ -170,6 +171,7 @@ int main(int argc, char** argv) {
             << " out_payload_len=" << cfg.out_payload_len
             << " packets_per_batch=" << cfg.packets_per_batch
             << " images_per_batch=" << cfg.images_per_batch;
+  if (cfg.no_inference) std::cerr << " no_inference=1";
   if (cfg.role != app::AppRole::Rx) std::cerr << " eth_dst=" << eth_dst;
   std::cerr << "\n";
 
@@ -249,9 +251,10 @@ int main(int argc, char** argv) {
   std::thread tx_thread;
 
   if (cfg.role != app::AppRole::Tx) {
-    consumer_thread = std::thread(app::inference_consumer_worker, std::cref(cfg), std::ref(sink),
-                                  std::ref(inf_queue), std::ref(producer_done), std::ref(rx_ready),
-                                  std::ref(stop));
+    auto* consumer =
+        cfg.no_inference ? &app::no_inference_consumer_worker : &app::inference_consumer_worker;
+    consumer_thread = std::thread(consumer, std::cref(cfg), std::ref(sink), std::ref(inf_queue),
+                                  std::ref(producer_done), std::ref(rx_ready), std::ref(stop));
     while (!rx_ready.load() && !stop.load()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }

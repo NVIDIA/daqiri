@@ -42,4 +42,12 @@ void inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
                                std::atomic<bool>& producer_done, std::atomic<bool>& ready,
                                std::atomic<bool>& stop);
 
+// DAQIRI-only consumer. It uses the same queue, CUDA completion dependency,
+// sink accounting, affinity, and one-batch-late burst lifetime as the TensorRT
+// consumer, but omits engine execution.
+void no_inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
+                                  InferenceQueue<kInferenceQueueCap>& queue,
+                                  std::atomic<bool>& producer_done, std::atomic<bool>& ready,
+                                  std::atomic<bool>& stop);
+
 }  // namespace daqiri::apps::resnet

@@ -67,6 +67,9 @@ struct AppConfig {
   std::string labels_path;
 
   bool stats_enabled = true;
+  // CLI-only measurement mode for the DAQIRI-alone campaign row. The RX
+  // producer stays identical; only the consumer skips TensorRT.
+  bool no_inference = false;
   int stats_top_k = 8;
 
   uint32_t frame_bytes() const { return tx.header_size + out_payload_len; }

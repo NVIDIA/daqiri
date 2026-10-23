@@ -44,6 +44,10 @@
 
 namespace daqiri {
 
+#ifndef DAQIRI_REORDER_GPU_PROFILE
+#define DAQIRI_REORDER_GPU_PROFILE 0
+#endif
+
 // ---- GPU packet reordering (mirrors the DPDK reorder path, on MPRQ RX) ----
 // One output buffer in the reorder output pool. The kernel reorders a batch of
 // input packets into `ptr`; `event` fires when the copy completes, at which
@@ -53,6 +57,10 @@ struct IbvReorderOutBuf {
   bool consumer_done = true;
   bool event_complete = true;
   cudaEvent_t event = nullptr;
+#if DAQIRI_REORDER_GPU_PROFILE
+  cudaEvent_t kernel_start_event = nullptr;
+  cudaEvent_t kernel_stop_event = nullptr;
+#endif
   uint64_t* h_batch_id = nullptr;
   uint64_t* d_batch_id = nullptr;
   uint64_t* h_received_bitmap = nullptr;
@@ -87,6 +95,11 @@ struct IbvReorderPlan {
   uint32_t acc_output_payload_len = 0;
   uint64_t first_packet_ns = 0;
   uint64_t timeout_ns = 0;
+#if DAQIRI_REORDER_GPU_PROFILE
+  uint64_t gpu_kernel_samples = 0;
+  double gpu_kernel_total_us = 0.0;
+  double gpu_kernel_max_us = 0.0;
+#endif
 };
 
 struct IbvReorderState {

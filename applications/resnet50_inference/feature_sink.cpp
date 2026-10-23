@@ -73,9 +73,10 @@ void FeatureSink::consume(const float* host_features, uint32_t n) {
   ++batches_;
 
   for (uint32_t i = 0; i < n; ++i) {
-    const float* row = host_features + static_cast<size_t>(i) * feature_dim_;
-
+    // --no-inference keeps the sink for identical throughput accounting but
+    // supplies no feature tensor. Nothing outside this guard dereferences it.
     if (example_mode_ && !labels_.empty()) {
+      const float* row = host_features + static_cast<size_t>(i) * feature_dim_;
       const int label = labels_[static_cast<size_t>(images_ % labels_.size())];
       if (label >= 0 && label < num_classes_) {
         double* acc = class_sum_.data() + static_cast<size_t>(label) * feature_dim_;

@@ -57,7 +57,7 @@ endif()
 
 add_compile_definitions(ALLOW_EXPERIMENTAL_API)
 add_compile_definitions(DOCA_ALLOW_EXPERIMENTAL_API)
-option(DAQIRI_REORDER_GPU_PROFILE "Enable CUDA event timing for DPDK reorder kernels" OFF)
+option(DAQIRI_REORDER_GPU_PROFILE "Enable CUDA event timing for software reorder kernels" OFF)
 if(DAQIRI_REORDER_GPU_PROFILE)
   add_compile_definitions(DAQIRI_REORDER_GPU_PROFILE=1)
 endif()

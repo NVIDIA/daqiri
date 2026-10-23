@@ -237,6 +237,135 @@ void rx_producer_worker(const AppConfig& cfg, InferenceQueue<kInferenceQueueCap>
   std::cerr << os.str();
 }
 
+void no_inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
+                                  InferenceQueue<kInferenceQueueCap>& queue,
+                                  std::atomic<bool>& producer_done, std::atomic<bool>& ready,
+                                  std::atomic<bool>& stop) {
+  if (cfg.inference_cpu_core >= 0 &&
+      !daqiri::bench::set_current_thread_affinity(cfg.inference_cpu_core, "resnet_inf")) {
+    stop.store(true);
+    ready.store(true);
+    return;
+  }
+
+  cudaStream_t sync_stream = nullptr;
+  if (cudaStreamCreateWithFlags(&sync_stream, cudaStreamNonBlocking) != cudaSuccess) {
+    std::cerr << "inference_consumer_worker: cudaStreamCreate failed\n";
+    stop.store(true);
+    ready.store(true);
+    return;
+  }
+
+  std::cerr << "no-inference mode: TensorRT skipped, measuring the DAQIRI RX path alone\n";
+  ready.store(true);
+
+  daqiri::BurstParams* prev_burst = nullptr;
+  uint32_t prev_n = 0;
+  uint64_t batches = 0;
+  std::vector<float> waits_ms;
+  const auto t0 = std::chrono::steady_clock::now();
+  constexpr double kReportIntervalSec = 1.0;
+  auto interval_t0 = t0;
+  uint64_t interval_images = 0;
+  std::chrono::steady_clock::time_point t_first_job{};
+  bool first_job_seen = false;
+  bool first_result_logged = false;
+
+  while (true) {
+    InferenceJob job{};
+    if (!queue.try_pop(job)) {
+      if ((producer_done.load() || stop.load()) && queue.empty()) break;
+      std::this_thread::sleep_for(std::chrono::microseconds(50));
+      continue;
+    }
+
+    if (!first_job_seen) {
+      first_job_seen = true;
+      t_first_job = std::chrono::steady_clock::now();
+    }
+
+    const auto wait_start = std::chrono::steady_clock::now();
+    cudaStreamWaitEvent(sync_stream, job.input_ready, 0);
+    const cudaError_t sync_status = cudaStreamSynchronize(sync_stream);
+    if (sync_status != cudaSuccess) {
+      std::cerr << "no-inference consumer: reorder wait failed: "
+                << cudaGetErrorString(sync_status) << "\n";
+      daqiri::free_all_packets_and_burst_rx(job.burst);
+      stop.store(true);
+      break;
+    }
+    waits_ms.push_back(std::chrono::duration<float, std::milli>(
+                           std::chrono::steady_clock::now() - wait_start)
+                           .count());
+
+    if (prev_n > 0) {
+      if (!first_result_logged) {
+        const auto unix_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                 std::chrono::system_clock::now().time_since_epoch())
+                                 .count();
+        std::cerr << "inference_consumer_worker: first_application_result unix_ns=" << unix_ns
+                  << "\n";
+        first_result_logged = true;
+      }
+      sink.consume(nullptr, prev_n);
+    }
+    if (prev_burst != nullptr) daqiri::free_all_packets_and_burst_rx(prev_burst);
+    prev_burst = job.burst;
+    prev_n = job.batch_size;
+    ++batches;
+
+    interval_images += job.batch_size;
+    const auto now = std::chrono::steady_clock::now();
+    const double interval_s = std::chrono::duration<double>(now - interval_t0).count();
+    if (interval_s >= kReportIntervalSec) {
+      const double elapsed_s = std::chrono::duration<double>(now - t0).count();
+      std::cerr << "inference_consumer_worker: t=" << std::fixed << std::setprecision(1)
+                << elapsed_s << "s " << std::setprecision(0)
+                << (static_cast<double>(interval_images) / interval_s) << " img/s"
+                << " (queue_depth=" << queue.depth() << ")\n"
+                << std::defaultfloat;
+      interval_t0 = now;
+      interval_images = 0;
+    }
+  }
+
+  if (prev_n > 0) {
+    if (!first_result_logged) {
+      const auto unix_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                               std::chrono::system_clock::now().time_since_epoch())
+                               .count();
+      std::cerr << "inference_consumer_worker: first_application_result unix_ns=" << unix_ns
+                << "\n";
+    }
+    sink.consume(nullptr, prev_n);
+  }
+  if (prev_burst != nullptr) daqiri::free_all_packets_and_burst_rx(prev_burst);
+
+  const auto t_end = std::chrono::steady_clock::now();
+  const double secs = std::chrono::duration<double>(t_end - t0).count();
+  const double active_secs =
+      first_job_seen ? std::chrono::duration<double>(t_end - t_first_job).count() : 0.0;
+  std::ostringstream os;
+  os << "inference_consumer_worker: " << batches << " inference batches in " << secs
+     << " s (active " << active_secs << " s, idle-before-traffic " << (secs - active_secs)
+     << " s)\n";
+  if (!waits_ms.empty()) {
+    std::sort(waits_ms.begin(), waits_ms.end());
+    const double mean = std::accumulate(waits_ms.begin(), waits_ms.end(), 0.0) /
+                        static_cast<double>(waits_ms.size());
+    const auto pct = [&waits_ms](double p) {
+      const size_t idx = std::min(
+          waits_ms.size() - 1, static_cast<size_t>(p * (static_cast<double>(waits_ms.size()) - 1)));
+      return waits_ms[idx];
+    };
+    os << "no-inference reorder wait (ms): mean=" << mean << " p50=" << pct(0.50)
+       << " p99=" << pct(0.99) << " (per batch of " << cfg.images_per_batch
+       << " images, n=" << waits_ms.size() << ")\n";
+  }
+  std::cerr << os.str();
+  cudaStreamDestroy(sync_stream);
+}
+
 void inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
                                InferenceQueue<kInferenceQueueCap>& queue,
                                std::atomic<bool>& producer_done, std::atomic<bool>& ready,
@@ -280,6 +409,7 @@ void inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
   std::vector<double> delivery_to_result_ms;
   std::chrono::steady_clock::time_point prev_delivery_at{};
   bool prev_delivery_valid = false;
+  bool first_result_logged = false;
 
   while (true) {
     InferenceJob job{};
@@ -304,6 +434,14 @@ void inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
       delivery_to_submit_us.push_back(
           std::chrono::duration<double, std::micro>(submit_at - job.delivered_at).count());
       if (host_prev != nullptr) {
+        if (!first_result_logged) {
+          const auto unix_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                   std::chrono::system_clock::now().time_since_epoch())
+                                   .count();
+          std::cerr << "inference_consumer_worker: first_application_result unix_ns=" << unix_ns
+                    << "\n";
+          first_result_logged = true;
+        }
         if (prev_delivery_valid) {
           delivery_to_result_ms.push_back(std::chrono::duration<double, std::milli>(
                                               std::chrono::steady_clock::now() - prev_delivery_at)
@@ -340,6 +478,13 @@ void inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
   uint32_t n_final = 0;
   trt.drain_final(host_final, n_final);
   if (host_final != nullptr) {
+    if (!first_result_logged) {
+      const auto unix_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                               std::chrono::system_clock::now().time_since_epoch())
+                               .count();
+      std::cerr << "inference_consumer_worker: first_application_result unix_ns=" << unix_ns
+                << "\n";
+    }
     if (prev_delivery_valid) {
       delivery_to_result_ms.push_back(std::chrono::duration<double, std::milli>(
                                           std::chrono::steady_clock::now() - prev_delivery_at)

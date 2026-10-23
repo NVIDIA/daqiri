@@ -4910,6 +4910,10 @@ Status IbverbsEngine::init_reorder(IbvRxQueue& q, const InterfaceConfig& intf,
       ob.bitmap_word_count = (plan.packets_per_batch + 63U) / 64U;
       const size_t bitmap_bytes = static_cast<size_t>(ob.bitmap_word_count) * sizeof(uint64_t);
       if (cudaEventCreateWithFlags(&ob.event, cudaEventDisableTiming) != cudaSuccess ||
+#if DAQIRI_REORDER_GPU_PROFILE
+          cudaEventCreate(&ob.kernel_start_event) != cudaSuccess ||
+          cudaEventCreate(&ob.kernel_stop_event) != cudaSuccess ||
+#endif
           cudaHostAlloc(reinterpret_cast<void**>(&ob.h_batch_id), sizeof(uint64_t),
                         cudaHostAllocDefault) != cudaSuccess ||
           cudaMalloc(reinterpret_cast<void**>(&ob.d_batch_id), sizeof(uint64_t)) != cudaSuccess ||
@@ -4951,6 +4955,18 @@ void IbverbsEngine::reorder_poll_events(IbvRxQueue& q, IbvReorderPlan& plan) {
     if (cudaEventQuery(ob.event) != cudaSuccess) {
       continue;
     }  // still running
+#if DAQIRI_REORDER_GPU_PROFILE
+    float kernel_ms = 0.0F;
+    if (cudaEventElapsedTime(&kernel_ms, ob.kernel_start_event, ob.kernel_stop_event) ==
+        cudaSuccess) {
+      const double kernel_us = static_cast<double>(kernel_ms) * 1000.0;
+      ++plan.gpu_kernel_samples;
+      plan.gpu_kernel_total_us += kernel_us;
+      plan.gpu_kernel_max_us = std::max(plan.gpu_kernel_max_us, kernel_us);
+    } else {
+      DAQIRI_LOG_ERROR("Failed to compute ibverbs reorder kernel time for '{}'", plan.cfg.name_);
+    }
+#endif
     // Kernel finished reading the source packets -> release their strides.
     for (uint32_t i = 0; i < ob.src_count; i++) {
       release_strides(q, ob.src_wqe[i], ob.src_strd[i]);
@@ -5009,6 +5025,9 @@ Status IbverbsEngine::reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, b
   cudaMemsetAsync(ob.d_received_bitmap, 0, bitmap_bytes, plan.stream);
   cudaMemcpyAsync(plan.d_input_ptrs, plan.acc_ptrs.data(), sizeof(void*) * num_pkts,
                   cudaMemcpyHostToDevice, plan.stream);
+#if DAQIRI_REORDER_GPU_PROFILE
+  cudaEventRecord(ob.kernel_start_event, plan.stream);
+#endif
   packet_reorder_copy_payload_by_sequence(
       ob.ptr, reinterpret_cast<const void* const*>(plan.d_input_ptrs), plan.acc_input_payload_len,
       out_payload, plan.copy_source_offset, num_pkts, rdr_seq_off(c), rdr_seq_width(c),
@@ -5018,6 +5037,9 @@ Status IbverbsEngine::reorder_flush_batch(IbvRxQueue& q, IbvReorderPlan& plan, b
       plan.data_type_conversion ? static_cast<uint8_t>(c.data_types_.output_type_) : 0U,
       plan.data_type_conversion ? static_cast<uint8_t>(c.data_types_.input_endianness_) : 0U,
       ob.d_batch_id, ob.d_received_bitmap, plan.stream);
+#if DAQIRI_REORDER_GPU_PROFILE
+  cudaEventRecord(ob.kernel_stop_event, plan.stream);
+#endif
   const cudaError_t launch_status = cudaGetLastError();
   if (launch_status != cudaSuccess) {
     DAQIRI_LOG_ERROR("Reorder '{}' kernel launch failed: {} ({})", plan.cfg.name_,
@@ -5196,6 +5218,14 @@ void IbverbsEngine::reorder_cleanup(IbvRxQueue& q) {
       if (ob.event) {
         cudaEventDestroy(ob.event);
       }
+#if DAQIRI_REORDER_GPU_PROFILE
+      if (ob.kernel_start_event) {
+        cudaEventDestroy(ob.kernel_start_event);
+      }
+      if (ob.kernel_stop_event) {
+        cudaEventDestroy(ob.kernel_stop_event);
+      }
+#endif
       if (ob.h_batch_id) {
         cudaFreeHost(ob.h_batch_id);
       }
@@ -7293,6 +7323,21 @@ void IbverbsEngine::print_stats() {
         q->port_id, q->queue_id, queue_poll_mode_to_string(q->poll_mode), q->dbg_data,
         q->dbg_filler, q->dbg_err, q->reposts.load(), q->ring_full_bursts, q->ring_full_pkts,
         q->direct_poll_conflicts.load());
+#if DAQIRI_REORDER_GPU_PROFILE
+    if (q->reorder) {
+      for (const auto& plan : q->reorder->plans) {
+        const double avg_us =
+            plan.gpu_kernel_samples == 0
+                ? 0.0
+                : plan.gpu_kernel_total_us / static_cast<double>(plan.gpu_kernel_samples);
+        DAQIRI_LOG_INFO(
+            "ibverbs reorder GPU profile '{}': kernel_samples={} total_kernel_us={:.2f} "
+            "avg_kernel_us={:.2f} max_kernel_us={:.2f}",
+            plan.cfg.name_, plan.gpu_kernel_samples, plan.gpu_kernel_total_us, avg_us,
+            plan.gpu_kernel_max_us);
+      }
+    }
+#endif
   }
   for (auto& q : tx_queues_) {
     const uint64_t completed = q->completed_tail.load(std::memory_order_relaxed);
