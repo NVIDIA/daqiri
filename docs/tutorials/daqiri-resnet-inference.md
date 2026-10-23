@@ -495,25 +495,6 @@ wire is unchanged by model choice, which is what the
 [five-model table](../benchmarks/performance-dgx-spark.md#end-to-end-resnet-inference-throughput)
 sweeps.
 
-## Run cabled loopback on one host
-
-For smoke testing on Thor, use a real p0↔p1 loopback cable and
-`resnet50_wire_loopback.yaml`. Replace the PCIe placeholders and RX MAC for the
-host. The config uses the ibverbs raw engine with conservative TX hardware
-pacing, so it checks the cabled NIC → reorder → TensorRT path without relying on
-software loopback.
-
-```bash
-sudo ./build-resnet/applications/resnet50_inference/daqiri_resnet50_inference \
-  ./build-resnet/applications/resnet50_inference/configs/resnet50_wire_loopback.yaml \
-  --replay-once --dataset data/cifar10_resnet.pcap --expected-images 512
-```
-
-Expect: TensorRT ready; `RX reorder ready`; `pushed_images=512`;
-`dropped_bursts=0`; `partial_bursts=0`; clean shutdown with 65536 RX/TX
-packets. If a cached TensorRT engine was built for a different GPU, delete it
-or point `inference.engine_path` at a host-local cache before running.
-
 ## Run across two hosts
 
 Start RX first, wait for `RX reorder ready` / `TrtRunner ready`, then
