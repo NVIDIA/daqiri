@@ -117,7 +117,11 @@ set(DAQIRI_RESNET_CONFIGS
   configs/resnet50_sw_loopback.yaml
   configs/resnet50_bench_spark.yaml
   configs/resnet50_tx_spark_xhost.yaml
-  configs/resnet50_rx_spark_xhost.yaml)
+  configs/resnet50_rx_spark_xhost.yaml
+  configs/resnet50_tx_spark_thor.yaml
+  configs/resnet50_rx_thor_xhost.yaml
+  configs/resnet50_tx_spark_thor_hw.yaml
+  configs/resnet50_rx_thor_xhost_hw.yaml)
 foreach(cfg IN LISTS DAQIRI_RESNET_CONFIGS)
   configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${cfg}
                  ${CMAKE_CURRENT_BINARY_DIR}/${cfg} COPYONLY)

@@ -1,0 +1,81 @@
+%YAML 1.2
+---
+# IGX Thor RX+inference from DGX Spark over the direct 200 GbE cable. The CDI
+# launcher exposes only the discrete RTX PRO 6000, which is CUDA affinity 0 in
+# the container.
+daqiri:
+  cfg:
+    version: 1
+    stream_type: "raw"
+    engine: "ibverbs"
+    master_core: 0
+    debug: false
+    log_level: "info"
+    loopback: ""
+    memory_regions:
+    - name: "Data_RX_GPU"
+      kind: "device"
+      affinity: 0
+      num_bufs: 51200
+      buf_size: 1240
+    - name: "Reorder_RX_GPU"
+      kind: "device"
+      affinity: 0
+      num_bufs: 16
+      buf_size: 9633792
+    interfaces:
+    - name: "rx_port"
+      address: "0004:03:00.1"
+      rx:
+        flow_isolation: true
+        queues:
+        - name: "rq_q_0"
+          id: 0
+          cpu_core: 2
+          batch_size: 8192
+          timeout_us: 2000
+          memory_regions: ["Data_RX_GPU"]
+        flows:
+        - name: "flow_resnet"
+          id: 201
+          action: {type: queue, id: 0}
+          match: {udp_src: 4096, udp_dst: 4096}
+        reorder_configs:
+        - name: "rx_reorder_resnet_int8_fp16"
+          reorder_engine: "sw"
+          reorder_type: "gpu"
+          memory_region: "Reorder_RX_GPU"
+          payload_byte_offset: 64
+          flow_ids: [201]
+          data_types:
+            input_type: "int8"
+            output_type: "fp16"
+            endianness: "host"
+          method:
+            seq_packets_per_batch:
+              sequence_number: {bit_offset: 128, bit_width: 16}
+              packets_per_batch: 4096
+bench_rx:
+- interface_name: "rx_port"
+  cpu_core: 3
+packetization:
+  reorder_name: "rx_reorder_resnet_int8_fp16"
+  packets_per_image: 128
+  images_per_batch: 32
+inference:
+  onnx_path: "models/resnet50_features.onnx"
+  engine_path: "models/resnet50_features.fp16in.engine"
+  enable_fp16: true
+  channels: 3
+  height: 224
+  width: 224
+  feature_dim: 2048
+  opt_min: 1
+  opt_avg: 32
+  opt_max: 256
+  cpu_core: 4
+  input_name: "input"
+  output_name: "features"
+stats:
+  enabled: true
+  top_k: 8
