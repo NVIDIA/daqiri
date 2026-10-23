@@ -299,6 +299,10 @@ void pcap_tx_worker(const AppConfig& cfg, const std::vector<PcapFrame>& frames,
   uint64_t fill_failures = 0;
   uint64_t no_burst_polls = 0;
   const auto tx_t0 = std::chrono::steady_clock::now();
+  const auto tx_start_unix_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                    std::chrono::system_clock::now().time_since_epoch())
+                                    .count();
+  std::cerr << "pcap_tx_worker: tx_start unix_ns=" << tx_start_unix_ns << "\n";
   // Every failure path below backs off by 100 us, so a NIC or TX pool that never
   // recovers would otherwise spin here for the life of the process with no output.
   constexpr uint64_t kStallIters = 100000;  // ~10 s without a single frame sent

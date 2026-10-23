@@ -18,6 +18,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 
@@ -35,6 +36,9 @@ struct InferenceJob {
   void* dev_input = nullptr;             // fp16 NCHW batch = get_packet_ptr(burst, 0)
   uint32_t batch_size = 0;               // images in this batch
   cudaEvent_t input_ready = nullptr;     // burst->event (reorder-kernel completion)
+  // Host timestamp captured immediately after DAQIRI returns a complete
+  // reordered burst and before the producer pushes it onto this queue.
+  std::chrono::steady_clock::time_point delivered_at{};
 };
 
 // Fixed-capacity SPSC ring (power-of-two kCap). Modeled on the reference
@@ -68,8 +72,12 @@ class InferenceQueue {
     return (head - tail) & (kCap - 1);
   }
 
-  bool empty() const { return depth() == 0; }
-  bool full() const { return depth() == kCap - 1; }
+  bool empty() const {
+    return depth() == 0;
+  }
+  bool full() const {
+    return depth() == kCap - 1;
+  }
 
  private:
   InferenceJob slots_[kCap]{};

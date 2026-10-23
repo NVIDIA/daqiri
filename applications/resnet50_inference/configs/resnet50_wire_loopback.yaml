@@ -60,9 +60,9 @@ daqiri:
         - name: "rq_q_0"
           id: 0
           cpu_core: 9
-          # Multiple of packets_per_batch (4096) so a batch never straddles an RX
-          # burst boundary.
-          batch_size: 8192
+          # Equal to packets_per_batch so each completed reorder batch is handed
+          # to inference without waiting for a larger RX burst to fill.
+          batch_size: 4096
           # Flush a partial reorder batch after this idle gap. Keep finite: the
           # accumulator closes a batch on arrival count alone, so without a timeout
           # a single lost packet shifts every subsequent batch by one for the rest

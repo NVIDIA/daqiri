@@ -175,18 +175,31 @@ boundary is lost. Three settings matter:
   and misaligning image boundaries and labels. A finite timeout resyncs at the
   batch boundary instead. Trade-off: a flush landing mid-image drops the
   straggler packets, reported as `remainder_dropped`.
-- `rx.queues[].batch_size` — a multiple of `packets_per_batch` (8192 for 4096),
-  so a batch never straddles an RX burst boundary.
+- `rx.queues[].batch_size` — set equal to `packets_per_batch` (4096) for latency
+  measurements. Larger multiples remain correctness-safe, but the indirect
+  software RX path may wait for the larger RX burst before handing completed
+  reorder batches to the application, adding whole-batch delivery latency.
 - `tx.queues[].batch_size` / `bench_tx.batch_size` — aligned to
   `packets_per_batch` (4096), so a gap between TX bursts falls on a batch
   boundary.
 
-With those set, an xhost `--replay-once` run of 256 images delivers 8 whole
+With those set, an xhost `--replay-once` run of 128 images delivers 4 whole
 batches:
 
 ```text
-rx_producer_worker: delivered_bursts=8 pushed_images=256 dropped_bursts=0 [queue_full=0 short_batch=0 info_failure=0 null_input=0]
+pcap_tx_worker: tx_start unix_ns=1792692003228611087
+rx_producer_worker: batch_delivered index=0 unix_ns=1792692004052194077 images=32
+rx_producer_worker: delivered_bursts=4 pushed_images=128 dropped_bursts=0 [queue_full=0 short_batch=0 info_failure=0 null_input=0]
 rx_producer_worker: partial_bursts=0 partial_packets=0 early_flush_shortfall=0 remainder_dropped=0 info_failures=0 non_reordered_bursts=0 non_reordered_packets=0
+batch delivery->inference submit (us): first=57.834 mean=74.998 p50=57.834 p99=81.575 n=4
+batch delivery->application-visible result (ms): first=822.421 mean=628.439 p50=822.421 p99=823.251 n=4
 ```
+
+`batch_delivered` is captured immediately after DAQIRI returns a complete
+reordered burst and before it is pushed to the inference SPSC queue. Subtract
+the `tx_start` timestamp to compare first-batch delivery across reorder engines.
+The application-visible result includes the runner's one-batch-delayed output
+pipeline; the separate TensorRT `inference latency` line remains CUDA-event
+timing for the model execution itself.
 
 See `docs/tutorials/daqiri-resnet-inference.md`.

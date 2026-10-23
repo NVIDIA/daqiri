@@ -55,6 +55,7 @@ void rx_producer_worker(const AppConfig& cfg, InferenceQueue<kInferenceQueueCap>
 
   uint64_t images_pushed = 0;
   uint64_t bursts_reordered = 0;
+  uint64_t batches_delivered = 0;
   uint64_t bursts_not_reordered = 0;
   uint64_t packets_not_reordered = 0;
   uint64_t bursts_partial = 0;
@@ -160,7 +161,11 @@ void rx_producer_worker(const AppConfig& cfg, InferenceQueue<kInferenceQueueCap>
       continue;
     }
 
-    InferenceJob job{burst, dev_input, n_img, burst->event};
+    const auto delivered_at = std::chrono::steady_clock::now();
+    const auto delivered_unix_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                       std::chrono::system_clock::now().time_since_epoch())
+                                       .count();
+    InferenceJob job{burst, dev_input, n_img, burst->event, delivered_at};
     bool pushed = false;
     if (backpressure) {
       while (!(pushed = queue.try_push(job)) && !stop.load()) {
@@ -175,6 +180,14 @@ void rx_producer_worker(const AppConfig& cfg, InferenceQueue<kInferenceQueueCap>
       if (backpressure) break;
       continue;
     }
+
+    if (cfg.stats_enabled) {
+      std::ostringstream delivery;
+      delivery << "rx_producer_worker: batch_delivered index=" << batches_delivered
+               << " unix_ns=" << delivered_unix_ns << " images=" << n_img << "\n";
+      std::cerr << delivery.str();
+    }
+    ++batches_delivered;
 
     images_pushed += n_img;
     if (expected_images > 0 && images_pushed >= expected_images) break;
@@ -197,10 +210,9 @@ void rx_producer_worker(const AppConfig& cfg, InferenceQueue<kInferenceQueueCap>
      << " [queue_full=" << dropped_queue_full << " short_batch=" << dropped_short_batch
      << " info_failure=" << dropped_info_failure << " null_input=" << dropped_null_input << "]\n";
   os << "rx_producer_worker: partial_bursts=" << bursts_partial
-     << " partial_packets=" << partial_packets
-     << " early_flush_shortfall=" << early_flush_shortfall
-     << " remainder_dropped=" << remainder_packets_dropped
-     << " info_failures=" << info_failures << " non_reordered_bursts=" << bursts_not_reordered
+     << " partial_packets=" << partial_packets << " early_flush_shortfall=" << early_flush_shortfall
+     << " remainder_dropped=" << remainder_packets_dropped << " info_failures=" << info_failures
+     << " non_reordered_bursts=" << bursts_not_reordered
      << " non_reordered_packets=" << packets_not_reordered << "\n";
   if (dropped_queue_full > 0) {
     os << "rx_producer_worker: WARNING " << dropped_queue_full
@@ -216,8 +228,7 @@ void rx_producer_worker(const AppConfig& cfg, InferenceQueue<kInferenceQueueCap>
   // call it out so the shortfall above is not misread as packets dropped.
   if (bursts_reordered > 0 && bursts_partial * 2 > bursts_reordered) {
     os << "rx_producer_worker: NOTE " << bursts_partial << "/" << bursts_reordered
-       << " batches closed on the idle timeout rather than filling "
-       << cfg.packets_per_batch
+       << " batches closed on the idle timeout rather than filling " << cfg.packets_per_batch
        << " packets. The source is not sustaining a full batch between gaps; this is a "
           "TX-rate symptom. Whether any packets were also LOST cannot be determined here -- "
           "ReorderBurstInfo reports a count, not which sequence slots are covered. Compare "
@@ -265,6 +276,10 @@ void inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
   // Start of the active window: when the first job actually arrives.
   std::chrono::steady_clock::time_point t_first_job{};
   bool first_job_seen = false;
+  std::vector<double> delivery_to_submit_us;
+  std::vector<double> delivery_to_result_ms;
+  std::chrono::steady_clock::time_point prev_delivery_at{};
+  bool prev_delivery_valid = false;
 
   while (true) {
     InferenceJob job{};
@@ -280,16 +295,28 @@ void inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
       t_first_job = std::chrono::steady_clock::now();
     }
 
+    const auto submit_at = std::chrono::steady_clock::now();
     float* host_prev = nullptr;
     uint32_t n_prev = 0;
     const bool ok =
         trt.infer(job.dev_input, job.batch_size, job.input_ready, release_evt, host_prev, n_prev);
     if (ok) {
-      if (host_prev != nullptr) sink.consume(host_prev, n_prev);
+      delivery_to_submit_us.push_back(
+          std::chrono::duration<double, std::micro>(submit_at - job.delivered_at).count());
+      if (host_prev != nullptr) {
+        if (prev_delivery_valid) {
+          delivery_to_result_ms.push_back(std::chrono::duration<double, std::milli>(
+                                              std::chrono::steady_clock::now() - prev_delivery_at)
+                                              .count());
+        }
+        sink.consume(host_prev, n_prev);
+      }
       if (prev_burst != nullptr) {
         daqiri::free_all_packets_and_burst_rx(prev_burst);
       }
       prev_burst = job.burst;
+      prev_delivery_at = job.delivered_at;
+      prev_delivery_valid = true;
     } else {
       daqiri::free_all_packets_and_burst_rx(job.burst);
     }
@@ -312,7 +339,14 @@ void inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
   float* host_final = nullptr;
   uint32_t n_final = 0;
   trt.drain_final(host_final, n_final);
-  if (host_final != nullptr) sink.consume(host_final, n_final);
+  if (host_final != nullptr) {
+    if (prev_delivery_valid) {
+      delivery_to_result_ms.push_back(std::chrono::duration<double, std::milli>(
+                                          std::chrono::steady_clock::now() - prev_delivery_at)
+                                          .count());
+    }
+    sink.consume(host_final, n_final);
+  }
   if (prev_burst != nullptr) {
     daqiri::free_all_packets_and_burst_rx(prev_burst);
   }
@@ -328,8 +362,8 @@ void inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
   // may still be logging, and the runner greps these lines ^-anchored.
   std::ostringstream os;
   os << "inference_consumer_worker: " << trt.total_batches_inferred() << " inference batches in "
-     << secs << " s (active " << active_secs << " s, idle-before-traffic "
-     << (secs - active_secs) << " s)\n";
+     << secs << " s (active " << active_secs << " s, idle-before-traffic " << (secs - active_secs)
+     << " s)\n";
 
   std::vector<float> lat = trt.batch_latencies_ms();
   if (!lat.empty()) {
@@ -344,6 +378,23 @@ void inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
     os << "inference latency (ms): mean=" << mean << " p50=" << pct(0.50) << " p99=" << pct(0.99)
        << " (per batch of " << cfg.images_per_batch << " images, n=" << lat.size() << ")\n";
   }
+  const auto append_latency_summary = [&os](const char* label, std::vector<double> values,
+                                            const char* unit) {
+    if (values.empty()) return;
+    const double first = values.front();
+    std::sort(values.begin(), values.end());
+    const double mean =
+        std::accumulate(values.begin(), values.end(), 0.0) / static_cast<double>(values.size());
+    const auto pct = [&values](double p) {
+      const size_t idx = std::min(
+          values.size() - 1, static_cast<size_t>(p * (static_cast<double>(values.size()) - 1)));
+      return values[idx];
+    };
+    os << label << " (" << unit << "): first=" << first << " mean=" << mean << " p50=" << pct(0.50)
+       << " p99=" << pct(0.99) << " n=" << values.size() << "\n";
+  };
+  append_latency_summary("batch delivery->inference submit", delivery_to_submit_us, "us");
+  append_latency_summary("batch delivery->application-visible result", delivery_to_result_ms, "ms");
   std::cerr << os.str();
 
   cudaEventDestroy(release_evt);

@@ -555,7 +555,10 @@ straddle burst boundaries and flush partially:
 
 - `rx.queues[].timeout_us: 2000` — finite, so a stalled batch resyncs at the
   batch boundary instead of being completed by the *next* batch's first packet.
-- `rx.queues[].batch_size: 8192` — a multiple of `packets_per_batch`.
+- `rx.queues[].batch_size: 4096` — equal to `packets_per_batch` for latency
+  measurements. Larger multiples are correctness-safe, but can make the
+  indirect software path wait for a larger RX burst before delivering an
+  already-complete reorder batch.
 - `tx.queues[].batch_size` and `bench_tx.batch_size: 4096` — aligned to
   `packets_per_batch`, so a gap between TX bursts falls on a batch boundary.
 
@@ -567,10 +570,21 @@ batches**.
 ### What a good run looks like
 
 ```text
-pcap_tx_worker: sent 32768/32768 frames in 0.0510741 s (send_failures=0 fill_failures=0 no_burst_polls=0)
-rx_producer_worker: delivered_bursts=8 pushed_images=256 dropped_bursts=0 [queue_full=0 short_batch=0 info_failure=0 null_input=0]
-inference latency (ms): mean=8.78 p50=8.41 p99=9.36 (per batch of 32 images, n=8)
+pcap_tx_worker: tx_start unix_ns=1792692003228611087
+rx_producer_worker: batch_delivered index=0 unix_ns=1792692004052194077 images=32
+pcap_tx_worker: sent 16384/16384 frames in 3.33 s (send_failures=0 fill_failures=0 no_burst_polls=...)
+rx_producer_worker: delivered_bursts=4 pushed_images=128 dropped_bursts=0 [queue_full=0 short_batch=0 info_failure=0 null_input=0]
+inference latency (ms): mean=2.49 p50=1.57 p99=1.58 (per batch of 32 images, n=4)
+batch delivery->inference submit (us): first=57.8 mean=75.0 p50=57.8 p99=81.6 n=4
+batch delivery->application-visible result (ms): first=822.4 mean=628.4 p50=822.4 p99=823.3 n=4
 ```
+
+The `batch_delivered` timestamp is captured before the producer pushes the
+complete reordered batch onto the inference queue. Subtract `tx_start` to
+compare first-batch delivery between reorder engines without including model
+execution. Application-visible result latency includes the one-batch-delayed
+output pipeline; `inference latency` measures TensorRT execution with CUDA
+events.
 
 Also expect a `kHALF` input binding, FLOAT32 (or converted) `features`, all 256
 images, and per-class means labeled with CIFAR-10 class names (`airplane` …

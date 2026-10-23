@@ -48,7 +48,9 @@ daqiri:
         - name: "rq_q_0"
           id: 0
           cpu_core: 9
-          batch_size: 8192
+          # Match the reorder window for an apples-to-apples delivery-latency
+          # comparison with software reorder.
+          batch_size: 4096
           timeout_us: 2000
           memory_regions: ["Data_RX_GPU"]
         flows:
