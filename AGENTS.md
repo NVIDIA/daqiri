@@ -12,12 +12,20 @@ cmake --install build --prefix /opt/daqiri
 
 # Container build (compiles patched DPDK from source)
 BASE_TARGET=dpdk DAQIRI_ENGINE="dpdk ibverbs" scripts/build-container.sh
+
+# PyTorch SDK release (ibverbs, RoCE, UDP/TCP; Python enabled)
+docker build -f Dockerfile_release -t daqiri:release .
+scripts/check-release-container.sh daqiri:release
 ```
 
 Container releases run locally. Run `PUSH=1 scripts/publish_container.sh` on
 each supported architecture; after both per-architecture tags exist, run
 `PUBLISH_MANIFEST=1 scripts/publish_container.sh` to publish and inspect the
 canonical multi-architecture version tag.
+
+The separate PyTorch SDK build in `Dockerfile_release` prepares the minimal
+dependency image for NGC. Publishing that image is managed outside this
+repository.
 
 CMake options (full table in `docs/tutorials/bare-metal-cmake-build.md`):
 - `DAQIRI_ENGINE` — space-separated list of optional engines to compile. Valid values: `dpdk` (raw Ethernet) and `ibverbs` (RDMA/RoCE). Linux sockets (UDP/TCP) are always built in, so there is no `socket` value. Default is `"dpdk ibverbs"`.
