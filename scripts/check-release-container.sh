@@ -75,6 +75,14 @@ sha256sum --check SHA256SUMS >/dev/null
 test -s daqiri-source.tar.gz
 test -s added-packages.tsv
 test -s components.tsv
+test -s /opt/daqiri/THIRD-PARTY-NOTICES
+test -s /opt/daqiri-release/THIRD-PARTY-NOTICES
+cmp /opt/daqiri/THIRD-PARTY-NOTICES /opt/daqiri-release/THIRD-PARTY-NOTICES
+grep -Fq 'Component: yaml-cpp' /opt/daqiri/THIRD-PARTY-NOTICES
+grep -Fq 'Component: spdlog' /opt/daqiri/THIRD-PARTY-NOTICES
+grep -Fq 'Component: fmt' /opt/daqiri/THIRD-PARTY-NOTICES
+grep -Fq 'ADDED RELEASE-CONTAINER PACKAGES' /opt/daqiri/THIRD-PARTY-NOTICES
+grep -Eq '  THIRD-PARTY-NOTICES$' /opt/daqiri-release/SHA256SUMS
 echo 'Release SDK checks passed'
 if [[ -f source-review.json ]]; then
   echo 'Publication source review remains pending; see /opt/daqiri-release/source-review.json'

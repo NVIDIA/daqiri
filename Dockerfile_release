@@ -79,6 +79,7 @@ RUN cmake -S . -B /tmp/daqiri-build \
 # Source retrieval happens separately so it cannot change the final package set.
 FROM release-deps AS release-sources
 COPY VERSION /tmp/daqiri-components/VERSION
+COPY THIRD-PARTY-NOTICES /tmp/daqiri-components/THIRD-PARTY-NOTICES
 COPY third_party/yaml-cpp/CMakeLists.txt /tmp/daqiri-components/third_party/yaml-cpp/CMakeLists.txt
 COPY third_party/spdlog/include/spdlog/version.h /tmp/daqiri-components/third_party/spdlog/include/spdlog/version.h
 # Artifact bookkeeping only: the helper does not install binary packages or
@@ -87,6 +88,7 @@ COPY scripts/release/collect_sources.py /tmp/collect_sources.py
 RUN python3 /tmp/collect_sources.py \
       --output /opt/daqiri-release \
       --component-root /tmp/daqiri-components \
+      --project-notices /tmp/daqiri-components/THIRD-PARTY-NOTICES \
       --vendor-url "https://linux.mellanox.com/public/repo/doca/${DOCA_VERSION}/SOURCES/mlnx_ofed/MLNX_OFED_SRC-debian-${OFED_SOURCE_VERSION}.tgz" \
       --vendor-sha256 "${OFED_SOURCE_SHA256}"
 
@@ -102,6 +104,7 @@ LABEL org.opencontainers.image.title="DAQIRI application development SDK" \
 COPY --from=release-build /opt/daqiri /opt/daqiri
 COPY --from=release-build /opt/daqiri-release/daqiri-source.tar.gz /opt/daqiri-release/
 COPY --from=release-sources /opt/daqiri-release /opt/daqiri-release
+COPY --from=release-sources /opt/daqiri-release/THIRD-PARTY-NOTICES /opt/daqiri/THIRD-PARTY-NOTICES
 RUN printf '/opt/daqiri/lib\n' > /etc/ld.so.conf.d/daqiri.conf && ldconfig \
     && cd /opt/daqiri-release && sha256sum daqiri-source.tar.gz >> SHA256SUMS
 ENV CMAKE_PREFIX_PATH=/opt/daqiri \

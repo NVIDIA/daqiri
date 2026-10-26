@@ -24,6 +24,62 @@ import tarfile
 
 QUERY = "${binary:Package}\t${Version}\t${source:Package}\t${source:Version}\n"
 
+NOTICE_WORDS = ("license", "copying", "eula", "notice")
+NON_OSS_PACKAGE_SOURCES = frozenset({"mft"})
+
+
+def find_notice_files(doc, required=True):
+    files = []
+    copyright_file = doc / "copyright"
+    if copyright_file.is_file():
+        files.append(copyright_file)
+    if doc.is_dir():
+        files.extend(
+            path
+            for path in doc.rglob("*")
+            if path.is_file()
+            and path != copyright_file
+            and any(word in path.name.lower() for word in NOTICE_WORDS)
+        )
+    files.sort(key=lambda path: (path != copyright_file, path.relative_to(doc).as_posix()))
+    if not files and required:
+        raise RuntimeError(f"No attribution material found in {doc}")
+    return files
+
+
+def find_package_notice_files(source, doc):
+    return find_notice_files(doc, required=source not in NON_OSS_PACKAGE_SOURCES)
+
+
+def render_third_party_notices(project_notice, packages):
+    if not project_notice.strip():
+        raise RuntimeError("Project attribution file is empty")
+    sections = [project_notice.rstrip(), "", "ADDED RELEASE-CONTAINER PACKAGES", ""]
+    for row, documents in sorted(packages, key=lambda item: item[0][0]):
+        package, version, source, source_version = row
+        sections.extend(
+            [
+                "=" * 72,
+                f"Package: {package}",
+                f"Version: {version}",
+                f"Source package: {source}",
+                f"Source version: {source_version}",
+                "",
+            ]
+        )
+        for name, content in sorted(
+            documents, key=lambda item: (item[0] != "copyright", item[0])
+        ):
+            sections.extend(
+                [
+                    f"Document: {name}",
+                    "-" * 72,
+                    content.rstrip(),
+                    "",
+                ]
+            )
+    return "\n".join(sections).rstrip() + "\n"
+
 
 def run(*args, **kwargs):
     return subprocess.run(args, check=True, text=True, **kwargs)
@@ -65,6 +121,7 @@ def main():
     parser.add_argument("--vendor-url", required=True)
     parser.add_argument("--vendor-sha256", required=True)
     parser.add_argument("--component-root", type=Path, required=True)
+    parser.add_argument("--project-notices", type=Path, required=True)
     args = parser.parse_args()
     output = args.output
     yaml_cmake = (args.component_root / "third_party/yaml-cpp/CMakeLists.txt").read_text()
@@ -143,23 +200,27 @@ def main():
                 run("apt-get", "source", "--download-only", f"{source}={version}", cwd=destination)
                 provenance.append({"source": source, "version": version, "kind": "Ubuntu source package"})
 
+    package_notices = []
     rows = []
     for name, row in sorted(added.items()):
         package = name.split(":", 1)[0]
         doc = Path("/usr/share/doc") / package
-        notice = doc / "copyright"
         license_names = []
-        if notice.exists():
-            target = notices / f"{package}.copyright"
-            shutil.copyfile(notice, target)
-            license_names = sorted(set(re.findall(r"^License:\s*(.+)$", notice.read_text(errors="replace"), re.M)))
-        # Retain all small package terms, including MFT's proprietary license.
-        if doc.exists():
-            for path in doc.rglob("*"):
-                if path.is_file() and any(word in path.name.lower() for word in ("license", "copying", "eula", "notice")):
-                    target = notices / package / path.relative_to(doc)
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(path, target)
+        documents = []
+        notice_files = find_package_notice_files(row[2], doc)
+        for path in notice_files:
+            rel = path.relative_to(doc).as_posix()
+            text = path.read_text(errors="replace")
+            documents.append((rel, text))
+            if path == doc / "copyright":
+                shutil.copyfile(path, notices / f"{package}.copyright")
+                license_names = sorted(set(re.findall(r"^License:\s*(.+)$", text, re.M)))
+            else:
+                target = notices / package / path.relative_to(doc)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, target)
+        if notice_files and row[2] not in NON_OSS_PACKAGE_SOURCES:
+            package_notices.append((row, documents))
         rows.append([*row, "; ".join(license_names) or "See package notices and source archive"])
     with (output / "added-packages.tsv").open("w") as stream:
         writer = csv.writer(stream, delimiter="\t")
@@ -172,6 +233,9 @@ def main():
         key=lambda row: (row["name"] or "").lower(),
     )
     (output / "python-packages.json").write_text(json.dumps(python_packages, indent=2) + "\n")
+    (output / "THIRD-PARTY-NOTICES").write_text(
+        render_third_party_notices(args.project_notices.read_text(), package_notices)
+    )
     checksums = []
     for path in sorted(output.rglob("*")):
         if path.is_file():
