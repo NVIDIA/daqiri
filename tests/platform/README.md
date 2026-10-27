@@ -85,3 +85,49 @@ rejected. Run just these cases with the same environment and executable override
 ```bash
 python3 -m pytest tests/platform/test_multi_region_rx.py -m platform -k tx
 ```
+
+## RDMA application round-trip latency
+
+`rdma_latency.cpp` runs RC SEND ping-pong between two existing, physically
+connected RoCE endpoints. It uses 32 preposted receives and one outstanding ping,
+preallocates all packet buffers and metadata, and echoes directly from the received
+buffer. A receive buffer is reposted only after its SEND completion. Both endpoints
+verify the sequence and all payload bytes; server verification occurs after SEND
+completion. The timed interval starts immediately before client SEND submission
+and ends when the client polls the matching RECEIVE completion. Allocation,
+client packet initialization, and client payload validation are outside that
+interval. Server validation can still compete with subsequent requests; this is
+an application RTT test, not a NIC timestamp measurement.
+
+Compile as the current user in the project container against the tested SDK:
+
+```bash
+c++ -std=c++17 -O3 -pthread tests/platform/rdma_latency.cpp \
+  -o /tmp/rdma_latency $(pkg-config --cflags --libs daqiri) \
+  -I/usr/local/cuda/include
+```
+
+Supply a separate DAQIRI YAML for each endpoint. Each config needs memory regions
+named `TX` and `RX`, each with at least 64 buffers and a `buf_size` covering the
+message size. Use `host_pinned` for CPU payload checks. Configure one paired RX/TX
+queue, a local `roce://` address, and RC transport. The server local URI must use
+port `18491`. Select `poll_mode` independently for each direction; fully direct
+connections use one application thread for both directions. Choose distinct
+application, CM (`master_core`), and indirect worker cores on the same CPU topology
+for each comparison. Run as root in the privileged GPU/NIC container:
+
+```bash
+# Arguments: config server bytes warmup samples app_cpu client_ip server_ip csv
+ip netns exec <server-ns> /tmp/rdma_latency /tmp/server.yaml \
+  1 64 2000 20000 10 10.253.91.1 10.253.91.2 /tmp/server.csv &
+ip netns exec <client-ns> /tmp/rdma_latency /tmp/client.yaml \
+  0 64 2000 20000 6 10.253.91.1 10.253.91.2 /tmp/client.csv
+wait
+```
+
+Repeat with both directions indirect, both direct, and each mixed combination.
+Require matching PHY counters to prove that traffic traverses the cable. The test
+prints RTT percentiles, completion totals, payload verification, and allocation
+counts. The CSV contains measured client RTT samples in microseconds. There are
+no timed handle allocations or server payload copies. Repeat runs and alternate
+mode order. `ib_send_lat` reports half RTT, so double its latency before comparison.

@@ -253,7 +253,7 @@ configuration. Timestamp values are invalid if the clocks are not PTP-synchroniz
 `RxQueueConfig.poll_mode` accepts `QueuePollMode.INDIRECT` (the default) or
 `QueuePollMode.DIRECT`. Direct mode is available on raw ibverbs and RDMA (`roce://`)
 queues. The Python thread calling `get_rx_burst()` checks for ready packets while the GIL is
-released. For RDMA, use the connection overload to drive direct RX and TX completions;
+released. For RDMA, use `get_rx_burst_for_connection(conn_id, server)` to drive direct RX and TX completions;
 direct SEND and RECEIVE postings contain exactly one packet each.
 
 ### RX Step 3: Free buffers
@@ -435,8 +435,8 @@ status = daqiri.send_tx_burst(burst)
 # Do not free `burst` after a SUCCESS or NO_SPACE_AVAILABLE return. See the ownership note below.
 ```
 
-`send_tx_burst()` takes ownership of the burst on success and when transmit capacity is
-temporarily exhausted. `TxQueueConfig.poll_mode = QueuePollMode.DIRECT` selects single-packet raw
+For raw ibverbs, `send_tx_burst()` takes ownership of the burst on success and when
+transmit capacity is temporarily exhausted. `TxQueueConfig.poll_mode = QueuePollMode.DIRECT` selects single-packet raw
 ibverbs direct TX. The Python thread submits the packet and manages transmit progress; no worker
 or handoff ring touches the packet. Direct TX requires exactly one packet, one pending handle,
 and one thread per queue. On `NO_SPACE_AVAILABLE` DAQIRI has already freed the packet reservation
@@ -446,12 +446,21 @@ afterwards. `NO_SPACE_AVAILABLE` is the only failure a correctly-configured
 sender encounters at runtime.
 
 For RDMA (`roce://`), direct TX posts the SEND on the Python thread and
-`get_rx_burst(conn_id, server)` drives its completion. A successful submission
+`get_rx_burst_for_connection(conn_id, server)` drives its completion. A successful submission
 retains the burst until DAQIRI returns it as a completion. Keep polling even
 for send-only applications, then free completed bursts as usual. Direct SENDs
 from `huge` or `host_pinned` memory use inline payloads when they fit the QP's
 inline capacity (128 bytes requested); GPU payloads use DMA. A failed direct
-RDMA posting retains caller ownership so it can be retried or freed.
+RDMA posting retains caller ownership so it can be retried or freed. For a fully
+direct RDMA connection, the same Python thread must submit and poll both
+directions; calls from another thread return `NOT_READY`. Each direction has
+1,024 request credits. `NO_SPACE_AVAILABLE` on this path retains caller ownership;
+poll completions and retry.
+
+Once `get_rx_burst_for_connection()` returns a completion, reuse its registered
+buffers and metadata by setting the next RDMA header and packet lengths, then
+resubmitting it. Acquire packet buffers only once and free the handle after its
+last completion.
 
 ### Timed Transmission
 

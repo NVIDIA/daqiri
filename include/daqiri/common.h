@@ -1008,20 +1008,23 @@ void set_num_packets(BurstParams *burst, int64_t num);
 /**
  * @brief Send a TX burst.
  *
- * Takes ownership of @p burst on SUCCESS and on NO_SPACE_AVAILABLE. Indirect
- * mode hands a successful burst to the TX worker; raw ibverbs direct mode has
- * already submitted its single packet before returning SUCCESS. On
- * NO_SPACE_AVAILABLE it has already freed the packets and burst internally.
- * In all ownership-consuming cases the caller must
- * NOT free or otherwise access @p burst afterwards. NO_SPACE_AVAILABLE is the
- * only failure a correctly-configured sender hits at runtime.
+ * Takes ownership of @p burst on SUCCESS. Indirect mode hands it to a TX
+ * worker; direct mode posts it synchronously. The caller must not access the
+ * submitted burst until RDMA returns it as a completion (raw TX reclaims it
+ * internally). A returned RDMA completion may be reused or freed.
+ *
+ * Raw/socket TX and an indirect RDMA work-ring overflow also consume and free
+ * the burst on NO_SPACE_AVAILABLE. Fully direct RDMA instead retains caller
+ * ownership on queue-credit exhaustion: poll completions before retrying.
+ * Failed direct RDMA posts retain caller ownership on every error status.
  *
  * @param burst Burst structure
  * @return Status indicating result. Valid values are:
  *    SUCCESS: burst enqueued or directly posted (ownership transferred)
- *    NO_SPACE_AVAILABLE: No transmit capacity; burst already freed (ownership consumed)
- *    INVALID_PARAMETER: bad port/queue; burst NOT consumed (see issue #164)
- *    NOT_READY: direct queue called concurrently or from a non-owner thread; burst not consumed
+ *    NO_SPACE_AVAILABLE: No transmit capacity; see the ownership rules above
+ *    INVALID_PARAMETER: bad port/queue or invalid direct request; burst not consumed
+ *    NOT_READY: direct queue stopped or called by a non-owner thread; burst not consumed
+ *    GENERIC_FAILURE: direct RDMA posting failed; burst not consumed
  */
 Status send_tx_burst(BurstParams* burst);
 
