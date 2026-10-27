@@ -48,6 +48,7 @@ RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 RUN_SECONDS=""
 MODEL="${MODEL:-resnet50}"
 PASS_MODEL="${PASS_MODEL:-1}"
+TX_PACING_MBPS="${TX_PACING_MBPS:-}"
 REP="${REP:-}"
 RX_NO_INFERENCE="${RX_NO_INFERENCE:-0}"
 CLOCK_SYNC_MAX_MS="${CLOCK_SYNC_MAX_MS:-50}"
@@ -79,8 +80,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-MODEL_ARGS=()
-[[ "${PASS_MODEL}" == "1" ]] && MODEL_ARGS=(--model "${MODEL}")
+RX_MODEL_ARGS=()
+[[ "${PASS_MODEL}" == "1" ]] && RX_MODEL_ARGS=(--model "${MODEL}")
+# TX packetization is identical across catalog models. Omitting --model also
+# lets a generated pacing config live outside the application config directory.
+TX_MODEL_ARGS=()
 NOINF_ARGS=()
 [[ "${RX_NO_INFERENCE}" == "1" ]] && NOINF_ARGS=(--no-inference)
 FEATURE_DIM="$(python3 "${CATALOG_TOOL}" --model "${MODEL}" --print-field feature_dim)"
@@ -113,17 +117,29 @@ echo "Clock preflight: synchronized=${CLOCK_SYNC_OK} estimated_pair_skew_ms=${CL
 echo "TX ${TX_HOST}: ${TX_LAUNCHER} ${TX_BIN} ${TX_CFG}"
 echo "RX ${RX_HOST}: ${RX_LAUNCHER} ${RX_BIN} ${RX_CFG}"
 
+TX_RUN_CFG="${TX_CFG}"
+TX_GENERATED_CFG=""
+if [[ -n "${TX_PACING_MBPS}" ]]; then
+  tx_source_host="${TX_CFG/#\/workspace\/daqiri/${TX_REPO}}"
+  tx_generated_host="/tmp/${RUN_ID}.tx.yaml"
+  on_host "${TX_HOST}" "sed -E 's/^([[:space:]]*)pacing_mbps:.*/\\1pacing_mbps: ${TX_PACING_MBPS}/' '${tx_source_host}' > '${tx_generated_host}'"
+  TX_RUN_CFG="/campaign/${RUN_ID}.tx.yaml"
+  TX_GENERATED_CFG="${tx_generated_host}"
+  echo "TX pacing: ${TX_PACING_MBPS} Mb/s per path (${TX_RUN_CFG})"
+fi
+
 RX_LOG="$(mktemp /tmp/resnet-rx.XXXXXX.log)"
 TX_LOG="$(mktemp /tmp/resnet-tx.XXXXXX.log)"
 cleanup() {
   on_host "${RX_HOST}" "pkill -f '${APP_BIN}' || true" 2>/dev/null || true
   on_host "${TX_HOST}" "pkill -f '${APP_BIN}' || true" 2>/dev/null || true
+  [[ -z "${TX_GENERATED_CFG}" ]] || on_host "${TX_HOST}" "rm -f -- '${TX_GENERATED_CFG}'" || true
 }
 trap cleanup EXIT
 
 echo "Starting RX on ${RX_HOST}..."
 # shellcheck disable=SC2029
-on_host "${RX_HOST}" "cd '${RX_REPO}' && ${RX_LAUNCHER} '${RX_BIN}' '${RX_CFG}' --mode rx ${DATASET_ARGS[*]} ${RX_SECONDS_ARGS[*]} ${MODE_ARGS[*]} ${MODEL_ARGS[*]} ${NOINF_ARGS[*]}" \
+on_host "${RX_HOST}" "cd '${RX_REPO}' && ${RX_LAUNCHER} '${RX_BIN}' '${RX_CFG}' --mode rx ${DATASET_ARGS[*]} ${RX_SECONDS_ARGS[*]} ${MODE_ARGS[*]} ${RX_MODEL_ARGS[*]} ${NOINF_ARGS[*]}" \
   >"${RX_LOG}" 2>&1 &
 RX_SSH_PID=$!
 
@@ -153,7 +169,7 @@ echo "Starting TX on ${TX_HOST}..."
 # script before the log dump below, which is exactly when the logs are needed.
 TX_RC=0
 # shellcheck disable=SC2029
-on_host "${TX_HOST}" "cd '${TX_REPO}' && export ETH_DST_ADDR='${RX_MAC}' && ${TX_LAUNCHER} '${TX_BIN}' '${TX_CFG}' --mode tx ${DATASET_ARGS[*]} ${SECONDS_ARGS[*]} ${MODE_ARGS[*]} ${MODEL_ARGS[*]}" \
+on_host "${TX_HOST}" "cd '${TX_REPO}' && export ETH_DST_ADDR='${RX_MAC}' && ${TX_LAUNCHER} '${TX_BIN}' '${TX_RUN_CFG}' --mode tx ${DATASET_ARGS[*]} ${SECONDS_ARGS[*]} ${MODE_ARGS[*]} ${TX_MODEL_ARGS[*]}" \
   >"${TX_LOG}" 2>&1 || TX_RC=$?
 
 echo "Waiting for RX to finish..."
@@ -167,9 +183,14 @@ tail -n "${LOG_TAIL_LINES:-200}" "${RX_LOG}"
 
 mkdir -p "${RESULTS_DIR}"
 
-TX_START_NS="$(grep -oE 'tx_start unix_ns=[0-9]+' "${TX_LOG}" | head -1 | cut -d= -f2 || true)"
-TX_SENT_FRAMES="$(grep -oE 'pcap_tx_worker: sent [0-9]+' "${TX_LOG}" | tail -1 | awk '{print $3}' || true)"
-TX_ACTIVE_SECONDS="$(grep -E 'pcap_tx_worker: sent [0-9]+/[0-9]+ frames in ' "${TX_LOG}" | tail -1 | sed -E 's/.* frames in ([0-9.]+) s.*/\1/' || true)"
+TX_START_NS="$(grep -oE 'tx_start unix_ns=[0-9]+' "${TX_LOG}" | cut -d= -f2 | sort -n | head -1 || true)"
+# The two TX workers can interleave their final stdout lines.  The per-queue
+# ibverbs statistics are emitted serially and report the same posted-frame
+# total, so use those for the campaign count.
+TX_SENT_FRAMES="$(grep -oE 'ibverbs TX port [0-9]+ q[0-9]+ \([^)]*\): posted=[0-9]+' "${TX_LOG}" |
+  sed -E 's/.*posted=//' | awk '{s += $1} END {print s+0}')"
+TX_ACTIVE_SECONDS="$(grep -oE 'frames in [0-9.]+ s' "${TX_LOG}" | awk '{print $3}' | sort -nr | head -1 || true)"
+[[ -n "${TX_ACTIVE_SECONDS}" ]] || TX_ACTIVE_SECONDS="${RUN_SECONDS}"
 FIRST_DELIVERY_NS="$(grep -oE 'batch_delivered index=0 unix_ns=[0-9]+' "${RX_LOG}" | head -1 | sed -E 's/.*=//' || true)"
 FIRST_RESULT_NS="$(grep -oE 'first_application_result unix_ns=[0-9]+' "${RX_LOG}" | head -1 | cut -d= -f2 || true)"
 TX_TO_DELIVERY_MS=NA
@@ -185,11 +206,14 @@ CAMPAIGN_IMG_S=NA
 if [[ -n "${PUSHED_IMAGES}" && -n "${TX_ACTIVE_SECONDS}" ]]; then
   CAMPAIGN_IMG_S="$(awk -v n="${PUSHED_IMAGES}" -v s="${TX_ACTIVE_SECONDS}" 'BEGIN {if(s>0) printf "%.2f", n/s; else print "NA"}')"
 fi
-KERNEL_TOTAL_US="$(grep -oE 'total_kernel_us=[0-9.]+' "${RX_LOG}" | tail -1 | cut -d= -f2 || true)"
+KERNEL_TOTAL_US="$(grep -E 'ibverbs reorder GPU profile' "${RX_LOG}" | tail -1 | grep -oE 'total_kernel_us=[0-9.]+' | cut -d= -f2 || true)"
 KERNEL_SHARE_PCT=NA
 if [[ -n "${ACTIVE_SECONDS}" && -n "${KERNEL_TOTAL_US}" ]]; then
   KERNEL_SHARE_PCT="$(awk -v us="${KERNEL_TOTAL_US}" -v s="${ACTIVE_SECONDS}" 'BEGIN {if(s>0) printf "%.6f", us/(s*1e6)*100; else print "NA"}')"
 fi
+CONVERSION_TOTAL_US="$(grep -E '^post-reorder INT8->FP16 profile:' "${RX_LOG}" | tail -1 | grep -oE 'total_kernel_us=[0-9.eE+-]+' | cut -d= -f2 || true)"
+CONVERSION_MEAN_US="$(grep -E '^post-reorder INT8->FP16 profile:' "${RX_LOG}" | tail -1 | grep -oE 'mean_kernel_us=[0-9.eE+-]+' | cut -d= -f2 || true)"
+CONVERSION_SHARE_PCT="$(grep -E '^post-reorder INT8->FP16 profile:' "${RX_LOG}" | tail -1 | grep -oE 'active_share_pct=[0-9.eE+-]+' | cut -d= -f2 || true)"
 REORDER_ENGINE="$(grep -oE 'RX reorder ready \([^,]+, engine=[^)]+\)' "${RX_LOG}" | head -1 | sed -E 's/.*engine=([^)]+).*/\1/' || true)"
 
 rx_counter() {
@@ -204,6 +228,7 @@ rx_counter() {
   echo "tx_host,${TX_HOST}"
   echo "rx_config,${RX_CFG}"
   echo "tx_config,${TX_CFG}"
+  echo "tx_pacing_mbps_per_path,${TX_PACING_MBPS}"
   echo "seconds_requested,${RUN_SECONDS:-}"
   echo "tx_rc,${TX_RC}"
   echo "rx_rc,${RX_RC}"
@@ -215,6 +240,7 @@ rx_counter() {
   echo "no_inference,${RX_NO_INFERENCE}"
   [[ "${RX_NO_INFERENCE}" == "1" ]] && echo "mode,daqiri_only" || echo "mode,e2e"
   grep -oE 'images_per_batch=[0-9]+' "${RX_LOG}" | head -1 | sed 's/=/,/' || true
+  grep -oE 'packets_per_image=[0-9]+' "${RX_LOG}" | head -1 | sed 's/=/,/' || true
   echo "active_seconds,${ACTIVE_SECONDS}"
   echo "rx_reported_img_s,${RX_REPORTED_IMG_S}"
   echo "tx_active_seconds,${TX_ACTIVE_SECONDS}"
@@ -247,6 +273,9 @@ rx_counter() {
   echo "non_reordered_bursts,$(rx_counter non_reordered_bursts)"
   echo "reorder_gpu_kernel_total_us,${KERNEL_TOTAL_US:-0}"
   echo "reorder_gpu_kernel_share_pct,${KERNEL_SHARE_PCT}"
+  echo "post_reorder_conversion_total_us,${CONVERSION_TOTAL_US:-0}"
+  echo "post_reorder_conversion_mean_us,${CONVERSION_MEAN_US:-0}"
+  echo "post_reorder_conversion_share_pct,${CONVERSION_SHARE_PCT:-0}"
   grep -E "ibverbs reorder GPU profile" "${RX_LOG}" | tail -1 || true
 } >"${RESULTS_DIR}/${RUN_ID}.summary"
 

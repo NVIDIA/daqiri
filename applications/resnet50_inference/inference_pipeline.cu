@@ -17,6 +17,7 @@
 
 #include "inference_pipeline.h"
 
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 
 #include <algorithm>
@@ -34,6 +35,117 @@
 #include <daqiri/daqiri.h>
 
 namespace daqiri::apps::resnet {
+
+namespace {
+
+__global__ void contiguous_int8_to_fp16_kernel(const int8_t* input, __half* output,
+                                               size_t elements) {
+  const size_t stride = static_cast<size_t>(blockDim.x) * gridDim.x;
+  for (size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x; i < elements;
+       i += stride) {
+    output[i] = __float2half(static_cast<float>(input[i]));
+  }
+}
+
+class PostReorderConverter {
+ public:
+  PostReorderConverter(const AppConfig& cfg, cudaStream_t stream, bool profile)
+      : enabled_(cfg.needs_post_reorder_conversion()),
+        stream_(stream),
+        profile_(profile),
+        elements_per_image_(static_cast<size_t>(cfg.trt.channels) * cfg.trt.height * cfg.trt.width),
+        max_elements_(static_cast<size_t>(cfg.images_per_batch) * elements_per_image_) {}
+
+  ~PostReorderConverter() {
+    if (ready_ != nullptr) cudaEventDestroy(ready_);
+    if (start_ != nullptr) cudaEventDestroy(start_);
+    if (output_ != nullptr) cudaFree(output_);
+  }
+
+  bool initialize() {
+    if (!enabled_) return true;
+    if (cudaMalloc(&output_, max_elements_ * sizeof(__half)) != cudaSuccess ||
+        (profile_ && cudaEventCreate(&start_) != cudaSuccess) ||
+        cudaEventCreate(&ready_) != cudaSuccess) {
+      std::cerr << "hardware post-reorder conversion setup failed\n";
+      return false;
+    }
+
+    // Trigger CUDA module/context initialization before advertising readiness.
+    // A zero-element launch exercises the measured kernel without touching
+    // packet data or contributing to the profile.
+    contiguous_int8_to_fp16_kernel<<<1, 1, 0, stream_>>>(nullptr, output_, 0);
+    const cudaError_t status = cudaStreamSynchronize(stream_);
+    if (status != cudaSuccess) {
+      std::cerr << "hardware post-reorder conversion warm-up failed: " << cudaGetErrorString(status)
+                << "\n";
+      return false;
+    }
+    std::cerr << "hardware reorder INT8->FP16 conversion enabled\n";
+    return true;
+  }
+
+  bool enabled() const {
+    return enabled_;
+  }
+  void* output() const {
+    return output_;
+  }
+  cudaEvent_t ready_event() const {
+    return ready_;
+  }
+
+  bool enqueue(const InferenceJob& job) {
+    if (!enabled_) return true;
+    if (job.input_ready != nullptr &&
+        cudaStreamWaitEvent(stream_, job.input_ready, 0) != cudaSuccess) {
+      return false;
+    }
+    if (profile_ && cudaEventRecord(start_, stream_) != cudaSuccess) return false;
+
+    const size_t elements = static_cast<size_t>(job.batch_size) * elements_per_image_;
+    constexpr uint32_t kThreads = 256;
+    const uint32_t blocks = static_cast<uint32_t>((elements + kThreads - 1) / kThreads);
+    contiguous_int8_to_fp16_kernel<<<blocks, kThreads, 0, stream_>>>(
+        static_cast<const int8_t*>(job.dev_input), output_, elements);
+    return cudaEventRecord(ready_, stream_) == cudaSuccess;
+  }
+
+  bool synchronize_and_profile() {
+    if (!enabled_) return true;
+    if (cudaEventSynchronize(ready_) != cudaSuccess) return false;
+    if (!profile_) return true;
+
+    float elapsed_ms = 0.0f;
+    if (cudaEventElapsedTime(&elapsed_ms, start_, ready_) != cudaSuccess) return false;
+    total_us_ += static_cast<double>(elapsed_ms) * 1000.0;
+    ++samples_;
+    return true;
+  }
+
+  void append_profile(std::ostringstream& os, double active_secs) const {
+    if (!enabled_ || !profile_) return;
+    const double mean_us = samples_ == 0 ? 0.0 : total_us_ / samples_;
+    const double share_pct = active_secs > 0.0 ? total_us_ / (active_secs * 1.0e6) * 100.0 : 0.0;
+    os << "post-reorder INT8->FP16 profile: samples=" << samples_
+       << " total_kernel_us=" << total_us_ << " mean_kernel_us=" << mean_us
+       << " active_share_pct=" << share_pct << "\n";
+  }
+
+ private:
+  bool enabled_ = false;
+  cudaStream_t stream_ = nullptr;
+  bool profile_ = false;
+  size_t elements_per_image_ = 0;
+  size_t max_elements_ = 0;
+  __half* output_ = nullptr;
+  cudaEvent_t start_ = nullptr;
+  cudaEvent_t ready_ = nullptr;
+  double total_us_ = 0.0;
+  uint64_t samples_ = 0;
+};
+
+}  // namespace
 
 void rx_producer_worker(const AppConfig& cfg, InferenceQueue<kInferenceQueueCap>& queue,
                         uint64_t expected_images, std::atomic<bool>& producer_done,
@@ -181,7 +293,10 @@ void rx_producer_worker(const AppConfig& cfg, InferenceQueue<kInferenceQueueCap>
       continue;
     }
 
-    if (cfg.stats_enabled) {
+    // Preserve the first-delivery timestamp used by the campaign summary and
+    // sparse checkpoints for diagnostics without putting synchronous stderr
+    // writes on every burst-recycle path.
+    if (cfg.stats_enabled && (batches_delivered == 0 || batches_delivered % 1024 == 0)) {
       std::ostringstream delivery;
       delivery << "rx_producer_worker: batch_delivered index=" << batches_delivered
                << " unix_ns=" << delivered_unix_ns << " images=" << n_img << "\n";
@@ -256,6 +371,16 @@ void no_inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
     return;
   }
 
+  // Hardware reorder direct-places wire INT8 bytes. The shared converter keeps
+  // the application contract identical to the software-reorder FP16 path.
+  PostReorderConverter converter(cfg, sync_stream, /*profile=*/true);
+  if (!converter.initialize()) {
+    cudaStreamDestroy(sync_stream);
+    stop.store(true);
+    ready.store(true);
+    return;
+  }
+
   std::cerr << "no-inference mode: TensorRT skipped, measuring the DAQIRI RX path alone\n";
   ready.store(true);
 
@@ -285,11 +410,16 @@ void no_inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
     }
 
     const auto wait_start = std::chrono::steady_clock::now();
-    cudaStreamWaitEvent(sync_stream, job.input_ready, 0);
-    const cudaError_t sync_status = cudaStreamSynchronize(sync_stream);
-    if (sync_status != cudaSuccess) {
+    bool sync_ok = true;
+    if (converter.enabled()) {
+      sync_ok = converter.enqueue(job) && converter.synchronize_and_profile();
+    } else {
+      sync_ok = cudaStreamWaitEvent(sync_stream, job.input_ready, 0) == cudaSuccess &&
+                cudaStreamSynchronize(sync_stream) == cudaSuccess;
+    }
+    if (!sync_ok) {
       std::cerr << "no-inference consumer: reorder wait failed: "
-                << cudaGetErrorString(sync_status) << "\n";
+                << cudaGetErrorString(cudaGetLastError()) << "\n";
       daqiri::free_all_packets_and_burst_rx(job.burst);
       stop.store(true);
       break;
@@ -362,6 +492,7 @@ void no_inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
        << " p99=" << pct(0.99) << " (per batch of " << cfg.images_per_batch
        << " images, n=" << waits_ms.size() << ")\n";
   }
+  converter.append_profile(os, active_secs);
   std::cerr << os.str();
   cudaStreamDestroy(sync_stream);
 }
@@ -388,6 +519,14 @@ void inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
 
   TrtRunner trt(cfg.trt, inf_stream);
   trt.initialize();
+
+  PostReorderConverter converter(cfg, inf_stream, /*profile=*/false);
+  if (!converter.initialize()) {
+    cudaStreamDestroy(inf_stream);
+    stop.store(true);
+    ready.store(true);
+    return;
+  }
 
   cudaEvent_t release_evt = nullptr;
   cudaEventCreateWithFlags(&release_evt, cudaEventDisableTiming);
@@ -428,8 +567,16 @@ void inference_consumer_worker(const AppConfig& cfg, FeatureSink& sink,
     const auto submit_at = std::chrono::steady_clock::now();
     float* host_prev = nullptr;
     uint32_t n_prev = 0;
-    const bool ok =
-        trt.infer(job.dev_input, job.batch_size, job.input_ready, release_evt, host_prev, n_prev);
+    void* trt_input = job.dev_input;
+    cudaEvent_t trt_input_ready = job.input_ready;
+    bool conversion_ok = true;
+    if (converter.enabled()) {
+      conversion_ok = converter.enqueue(job);
+      trt_input = converter.output();
+      trt_input_ready = converter.ready_event();
+    }
+    const bool ok = conversion_ok && trt.infer(trt_input, job.batch_size, trt_input_ready,
+                                               release_evt, host_prev, n_prev);
     if (ok) {
       delivery_to_submit_us.push_back(
           std::chrono::duration<double, std::micro>(submit_at - job.delivered_at).count());

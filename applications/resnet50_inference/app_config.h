@@ -46,7 +46,8 @@ struct AppConfig {
 
   std::string reorder_name;
   std::string reorder_engine = "sw";
-  // "fp16" (int8→fp16 convert) or "int8" (passthrough into INT8 TRT).
+  // Native reorder output in GPU memory. Hardware reorder produces int8; the
+  // application may convert that buffer to fp16 before TensorRT.
   std::string reorder_output_type = "fp16";
   std::string reorder_memory_region = "Reorder_RX_GPU";
 
@@ -76,6 +77,14 @@ struct AppConfig {
   uint32_t frame_bytes() const { return tx.header_size + out_payload_len; }
 
   bool example_mode() const { return !dataset_pcap.empty(); }
+
+  bool needs_post_reorder_conversion() const {
+    return reorder_engine == "hw" && reorder_output_type == "int8" && !trt.enable_int8;
+  }
+
+  const char* trt_input_type() const {
+    return trt.enable_int8 ? "int8" : "fp16";
+  }
 
   static AppConfig from_yaml(const YAML::Node& root);
 

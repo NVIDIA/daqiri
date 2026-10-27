@@ -132,9 +132,10 @@ int main(int argc, char** argv) {
       cfg.trt.onnx_path = profile.onnx_path;
       cfg.trt.engine_path = profile.engine_path;
       cfg.trt.feature_dim = profile.feature_dim;
-      if (profile.input_type != cfg.reorder_output_type) {
+      if (profile.input_type != cfg.trt_input_type()) {
         std::cerr << "Model " << profile.name << " expects " << profile.input_type
-                  << " input but the reorder output is " << cfg.reorder_output_type << "\n";
+                  << " input but the configured TensorRT path expects " << cfg.trt_input_type()
+                  << "\n";
         return 1;
       }
     } catch (const std::exception& e) {

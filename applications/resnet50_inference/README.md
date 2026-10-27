@@ -148,14 +148,15 @@ authoritative.
 
 For the shipped FP16 path, the native reorder config uses `data_types:
 input_type: int8, output_type: fp16`; for hardware NIC reorder, omit
-`data_types`, set `reorder_engine: "hw"`, and use an INT8 TensorRT input.
+`data_types` and set `reorder_engine: "hw"`. The NIC direct-places INT8 and the
+application converts the completed batch to FP16 before using the same catalog
+TensorRT engines as software reorder.
 `--images-per-batch` may shrink the TensorRT batch afterward without changing
 the engine reorder window.
 
-Hardware reorder samples the UDP payload, so its sequence field is at bit 336,
-not the software path's header field at bit 128. Its 16-bit cyclic sequence
-requires all 16 `Reorder_RX_GPU` buffers (4096 packets each) so every exact
-sampled value has a hardware destination.
+Hardware reorder samples the UDP payload, so the Thor campaign sequence field
+is at bit 336. Its 16-bit cyclic sequence uses 16 `Reorder_RX_GPU` buffers of
+1024 packets each, staying within the 16K private-destination ceiling.
 
 ## Queue sizing vs. reorder batches
 

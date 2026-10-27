@@ -1,13 +1,12 @@
 %YAML 1.2
 ---
-# Optional ConnectX-7 hardware-reorder comparison at normal application packet
-# geometry. Run with --no-inference because the hardware path outputs int8.
+# Primary ConnectX-7 hardware-reorder path at normal application packet geometry.
 daqiri:
   cfg:
     version: 1
     stream_type: "raw"
     engine: "ibverbs"
-    master_core: 0
+    master_core: 3
     debug: false
     log_level: "info"
     loopback: ""
@@ -16,10 +15,13 @@ daqiri:
       kind: "device"
       affinity: 0
       num_bufs: 51200
-      buf_size: 1240
+      buf_size: 4768
     - name: "Reorder_RX_GPU"
       kind: "device"
       affinity: 0
+      # Sixteen cyclic batches stay at the engine's recommended 16K private-
+      # destination ceiling and provide enough time for destination rearm at
+      # the lossless campaign pacing.
       num_bufs: 16
       buf_size: 4816896
     interfaces:
@@ -30,10 +32,12 @@ daqiri:
         queues:
         - name: "rq_q_0"
           id: 0
-          cpu_core: 2
-          batch_size: 4096
-          # Match the paced software-reorder campaign geometry.
-          timeout_us: 20000
+          cpu_core: 9
+          batch_size: 1024
+          # The two Spark TX functions contribute alternating halves of each
+          # batch. Allow inter-path startup skew without prematurely resetting
+          # a direct-placement batch while the CQ is continuously busy.
+          timeout_us: 1000000
           memory_regions: ["Data_RX_GPU"]
         flows:
         - name: "flow_resnet"
@@ -48,24 +52,23 @@ daqiri:
           reorder_type: "gpu"
           memory_region: "Reorder_RX_GPU"
           payload_byte_offset: 64
-          packet_size: 1176
+          packet_size: 4704
           flow_ids: [201]
           method:
             seq_packets_per_batch:
               sequence_number: {bit_offset: 336, bit_width: 16}
-              packets_per_batch: 4096
+              packets_per_batch: 1024
 bench_rx:
 - interface_name: "rx_port"
-  cpu_core: 3
+  cpu_core: 8
 packetization:
   reorder_name: "rx_reorder_resnet_int8_hw"
-  packets_per_image: 128
+  packets_per_image: 32
   images_per_batch: 32
 inference:
-  onnx_path: "models/resnet50_features.int8in.onnx"
-  engine_path: "models/resnet50_features.int8in.engine"
+  onnx_path: "models/resnet50_features.onnx"
+  engine_path: "models/resnet50_features.fp16in.engine"
   enable_fp16: true
-  enable_int8: true
   channels: 3
   height: 224
   width: 224
@@ -73,7 +76,7 @@ inference:
   opt_min: 1
   opt_avg: 32
   opt_max: 256
-  cpu_core: 4
+  cpu_core: 10
   input_name: "input"
   output_name: "features"
 stats:

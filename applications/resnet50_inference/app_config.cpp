@@ -320,7 +320,8 @@ AppConfig AppConfig::from_yaml(const YAML::Node& root) {
     }
     if (reorder.reorder_engine == "hw" && reorder.has_data_types) {
       throw std::runtime_error(
-          "hardware reorder cannot use data_types conversion; use INT8 TRT input");
+          "hardware reorder cannot use data_types conversion; omit data_types and convert in the "
+          "application when FP16 TensorRT input is required");
     }
 
     if (reorder.packet_size != 0) {
@@ -417,8 +418,12 @@ AppConfig AppConfig::from_yaml(const YAML::Node& root) {
   if (!int8_out && cfg.reorder_output_type != "fp16") {
     throw std::runtime_error("reorder output_type must be fp16 or int8");
   }
-  if (cfg.has_rx && int8_out && !cfg.trt.enable_int8) {
-    throw std::runtime_error("INT8 reorder output requires inference.enable_int8: true");
+  if (cfg.has_rx && int8_out && !cfg.trt.enable_int8 && cfg.reorder_engine != "hw") {
+    throw std::runtime_error("INT8 software-reorder output requires inference.enable_int8: true");
+  }
+  if (cfg.needs_post_reorder_conversion() && cfg.trt.enable_dual_context) {
+    throw std::runtime_error(
+        "hardware post-reorder INT8-to-FP16 conversion does not support dual TensorRT contexts");
   }
 
   const uint32_t elems_per_image =

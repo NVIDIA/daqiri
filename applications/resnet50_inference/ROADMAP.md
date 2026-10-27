@@ -11,8 +11,9 @@ sessions can continue without relying on chat history.
   TX-only packet geometry.
 - `resnet50_wire_loopback.yaml` is retained as an optional single-host p0↔p1
   convenience config with conservative `pacing_mbps: 50`.
-- The hardware-reorder config pairs an INT8 TensorRT input with a cyclic
-  sequence field at bit 336. The path is validated on ConnectX-7 after enabling
+- The hardware-reorder config uses a cyclic sequence field at bit 336. The NIC
+  direct-places INT8, and the shared consumer conversion supplies FP16 to the
+  catalog TensorRT engines. The path is validated on ConnectX-7 after enabling
   programmable flex parsing and cold-rebooting the host.
 - Cross-host and cabled benchmark configs explicitly select the ibverbs raw engine;
   the runners persist engine, packet/burst, and inference summaries.
@@ -21,10 +22,10 @@ sessions can continue without relying on chat history.
 
 ## Remaining planned updates
 
-1. **IGX Thor publishable benchmark pass** *(deferred until the device receives traffic from a peer)*
+1. **Complete the IGX Thor end-to-end publication sweep**
 
-   - Use cabled loopback or cross-host hardware paths only; do not use software
-     loopback for publishable numbers.
+   - Run all seven catalog models for three 30-second repetitions over the
+     Spark-to-Thor hardware-reorder path.
    - Record exact host, GPU, NIC, driver/container, engine, pacing, packet counts,
      drops, latency percentiles, and stable throughput windows.
    - Separate correctness smoke numbers from publishable performance numbers.
