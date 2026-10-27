@@ -41,6 +41,7 @@ struct AppConfig {
 
   daqiri::bench::RawBenchRxConfig rx;
   daqiri::bench::RawBenchTxConfig tx;
+  std::vector<daqiri::bench::RawBenchTxConfig> tx_all;
   TrtRunnerConfig trt;
 
   std::string reorder_name;

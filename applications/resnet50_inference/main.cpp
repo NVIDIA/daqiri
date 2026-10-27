@@ -248,7 +248,9 @@ int main(int argc, char** argv) {
   app::InferenceQueue<app::kInferenceQueueCap> inf_queue;
   std::thread consumer_thread;
   std::thread producer_thread;
-  std::thread tx_thread;
+  std::vector<std::thread> tx_threads;
+  std::atomic<uint32_t> tx_workers_left{0};
+  std::atomic<uint64_t> tx_stripes_completed{0};
 
   if (cfg.role != app::AppRole::Tx) {
     auto* consumer =
@@ -267,8 +269,14 @@ int main(int argc, char** argv) {
 
   const auto run_t0 = std::chrono::steady_clock::now();
   if (cfg.role != app::AppRole::Rx) {
-    tx_thread = std::thread(app::pcap_tx_worker, std::cref(cfg), std::cref(frames),
-                            std::cref(eth_dst), loop, std::ref(tx_done), std::ref(stop));
+    const uint32_t worker_count = static_cast<uint32_t>(cfg.tx_all.size());
+    tx_workers_left.store(worker_count);
+    for (uint32_t worker = 0; worker < worker_count; ++worker) {
+      tx_threads.emplace_back(app::pcap_tx_worker, std::cref(cfg), std::cref(cfg.tx_all[worker]),
+                              worker, worker_count, std::cref(frames), std::cref(eth_dst), loop,
+                              std::ref(tx_workers_left), std::ref(tx_stripes_completed),
+                              std::ref(tx_done), std::ref(stop));
+    }
   } else {
     tx_done.store(true);
   }
@@ -278,7 +286,9 @@ int main(int argc, char** argv) {
     if (loop) {
       daqiri::bench::wait_for_stop(run_seconds, stop);
     }
-    if (tx_thread.joinable()) tx_thread.join();
+    for (auto& thread : tx_threads) {
+      if (thread.joinable()) thread.join();
+    }
     summary_seconds =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - run_t0).count();
   } else if (cfg.role == app::AppRole::Rx) {
@@ -296,9 +306,13 @@ int main(int argc, char** argv) {
     if (loop) {
       daqiri::bench::wait_for_stop(run_seconds, stop);
     } else {
-      if (tx_thread.joinable()) tx_thread.join();
+      for (auto& thread : tx_threads) {
+        if (thread.joinable()) thread.join();
+      }
     }
-    if (tx_thread.joinable()) tx_thread.join();
+    for (auto& thread : tx_threads) {
+      if (thread.joinable()) thread.join();
+    }
     if (producer_thread.joinable()) producer_thread.join();
     producer_done.store(true);
     if (consumer_thread.joinable()) consumer_thread.join();

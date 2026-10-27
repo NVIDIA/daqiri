@@ -27,6 +27,7 @@
 #include <fstream>
 #include <iostream>
 #include <thread>
+#include <unordered_set>
 
 #include <daqiri/daqiri.h>
 
@@ -257,10 +258,21 @@ std::vector<PcapFrame> build_synthetic_frames(const AppConfig& cfg) {
   return frames;
 }
 
-void pcap_tx_worker(const AppConfig& cfg, const std::vector<PcapFrame>& frames,
-                    const std::string& eth_dst_addr, bool loop, std::atomic<bool>& tx_done,
+void pcap_tx_worker(const AppConfig& cfg, const daqiri::bench::RawBenchTxConfig& tx,
+                    uint32_t worker_idx, uint32_t worker_count,
+                    const std::vector<PcapFrame>& frames, const std::string& eth_dst_addr,
+                    bool loop, std::atomic<uint32_t>& workers_left,
+                    std::atomic<uint64_t>& stripes_completed, std::atomic<bool>& tx_done,
                     std::atomic<bool>& stop) {
-  if (!daqiri::bench::set_current_thread_affinity(cfg.tx.cpu_core, "resnet_tx")) {
+  struct WorkerExit {
+    std::atomic<uint32_t>& left;
+    std::atomic<bool>& done;
+    ~WorkerExit() {
+      if (left.fetch_sub(1) == 1) done.store(true);
+    }
+  } worker_exit{workers_left, tx_done};
+
+  if (!daqiri::bench::set_current_thread_affinity(tx.cpu_core, "resnet_tx")) {
     stop.store(true);
     return;
   }
@@ -270,9 +282,9 @@ void pcap_tx_worker(const AppConfig& cfg, const std::vector<PcapFrame>& frames,
     return;
   }
 
-  const int port_id = daqiri::get_port_id(cfg.tx.interface_name);
+  const int port_id = daqiri::get_port_id(tx.interface_name);
   if (port_id < 0) {
-    std::cerr << "pcap_tx_worker: invalid TX interface " << cfg.tx.interface_name << "\n";
+    std::cerr << "pcap_tx_worker: invalid TX interface " << tx.interface_name << "\n";
     stop.store(true);
     return;
   }
@@ -283,6 +295,12 @@ void pcap_tx_worker(const AppConfig& cfg, const std::vector<PcapFrame>& frames,
   daqiri::format_eth_addr(dst_mac, eth_dst_addr);
   const size_t expected_frame_bytes = static_cast<size_t>(cfg.frame_bytes());
 
+  if (!loop && worker_count > 1) {
+    std::cerr << "pcap_tx_worker: --replay-once requires one bench_tx entry\n";
+    stop.store(true);
+    return;
+  }
+
   // Checked once, before any traffic: a geometry mismatch here corrupts every
   // image silently, so failing to start is strictly better than transmitting.
   if (!validate_sequence_geometry(frames, cfg)) {
@@ -291,13 +309,17 @@ void pcap_tx_worker(const AppConfig& cfg, const std::vector<PcapFrame>& frames,
   }
 
   std::vector<uint8_t> scratch;  // staging for a device-backed TX region only
+  std::unordered_set<void*> initialized_tx_buffers;
   bool fill_probed = false;
   bool dst_is_host = false;
-  size_t cursor = 0;
+  const size_t stripe_advance = static_cast<size_t>(tx.batch_size) * (worker_count - 1);
+  size_t cursor = (static_cast<size_t>(tx.batch_size) * worker_idx) % frames.size();
   uint64_t total_sent = 0;
   uint64_t send_failures = 0;
   uint64_t fill_failures = 0;
   uint64_t no_burst_polls = 0;
+  uint64_t stripe = 0;
+  constexpr uint64_t kStripeSyncInterval = 8;
   const auto tx_t0 = std::chrono::steady_clock::now();
   const auto tx_start_unix_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                     std::chrono::system_clock::now().time_since_epoch())
@@ -326,15 +348,14 @@ void pcap_tx_worker(const AppConfig& cfg, const std::vector<PcapFrame>& frames,
     // dataset is sent exactly once. `batch_size` (>> packets_per_image) would
     // otherwise over-send by up to a full burst, wrapping the cursor and
     // re-sending the first images -- skewing the per-class sample counts.
-    uint32_t want = cfg.tx.batch_size;
+    uint32_t want = tx.batch_size;
     if (!loop) {
       if (total_sent >= frames.size()) break;
-      want =
-          static_cast<uint32_t>(std::min<uint64_t>(cfg.tx.batch_size, frames.size() - total_sent));
+      want = static_cast<uint32_t>(std::min<uint64_t>(tx.batch_size, frames.size() - total_sent));
     }
 
     auto* msg = daqiri::create_tx_burst_params();
-    daqiri::set_header(msg, static_cast<uint16_t>(port_id), static_cast<uint16_t>(cfg.tx.queue_id),
+    daqiri::set_header(msg, static_cast<uint16_t>(port_id), static_cast<uint16_t>(tx.queue_id),
                        want, 1);
 
     if (!daqiri::is_tx_burst_available(msg)) {
@@ -393,9 +414,12 @@ void pcap_tx_worker(const AppConfig& cfg, const std::vector<PcapFrame>& frames,
       }
 
       if (dst_is_host) {
-        // Copy straight into the packet buffer, then stamp the destination MAC
-        // over the first 6 bytes: no staging copy, no CUDA call per packet.
-        std::memcpy(pkt_dst, frame.data(), frame.size());
+        // In timed loop mode, cyclic TX slots retain their payload. Refresh the
+        // header (including the sequence field and checksums) on reuse instead
+        // of recopying the unchanged inference input every transmission.
+        const bool first_fill = initialized_tx_buffers.insert(pkt_dst).second;
+        const size_t copy_bytes = loop && !first_fill ? tx.header_size : frame.size();
+        std::memcpy(pkt_dst, frame.data(), copy_bytes);
         if (frame.size() >= 6) {
           std::memcpy(pkt_dst, dst_mac, 6);
         }
@@ -436,6 +460,15 @@ void pcap_tx_worker(const AppConfig& cfg, const std::vector<PcapFrame>& frames,
     const daqiri::Status send_status = daqiri::send_tx_burst(msg);
     if (send_status == daqiri::Status::SUCCESS) {
       total_sent += static_cast<uint64_t>(num_pkts);
+      if (stripe_advance != 0) cursor = (cursor + stripe_advance) % frames.size();
+      ++stripe;
+      if (worker_count > 1 && stripe % kStripeSyncInterval == 0) {
+        stripes_completed.fetch_add(1);
+        const uint64_t target = (stripe / kStripeSyncInterval) * worker_count;
+        while (!stop.load() && stripes_completed.load() < target) {
+          std::this_thread::yield();
+        }
+      }
     } else {
       cursor = cursor_at_burst_start;
       if (send_status != daqiri::Status::NO_SPACE_AVAILABLE) {
@@ -459,9 +492,7 @@ void pcap_tx_worker(const AppConfig& cfg, const std::vector<PcapFrame>& frames,
             << tx_secs << " s (send_failures=" << send_failures
             << " fill_failures=" << fill_failures << " no_burst_polls=" << no_burst_polls << ")\n";
 
-  // Signal the RX worker that no more packets are coming so it can drain the
-  // ring to quiescence and stop (example / --replay-once mode).
-  tx_done.store(true);
+  // WorkerExit signals tx_done after the final TX path exits.
 }
 
 }  // namespace daqiri::apps::resnet

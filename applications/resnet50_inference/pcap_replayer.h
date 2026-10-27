@@ -57,10 +57,13 @@ std::vector<PcapFrame> build_synthetic_frames(const AppConfig& cfg);
 // Replay `frames` into the DAQIRI TX path forever (or once if loop==false),
 // patching each frame's destination MAC to `eth_dst_addr` at send time so one
 // pcap works on any host. Mirrors the bench tx_worker burst/send sequence.
-// Sets `tx_done` true on return (the whole dataset has been sent once, in
-// replay-once mode) so the RX worker knows to drain the ring and stop.
-void pcap_tx_worker(const AppConfig& cfg, const std::vector<PcapFrame>& frames,
-                    const std::string& eth_dst_addr, bool loop, std::atomic<bool>& tx_done,
+// Workers stripe complete reorder batches across cfg.tx_all. The last worker
+// sets `tx_done` so the RX side sees one end-of-stream edge.
+void pcap_tx_worker(const AppConfig& cfg, const daqiri::bench::RawBenchTxConfig& tx,
+                    uint32_t worker_idx, uint32_t worker_count,
+                    const std::vector<PcapFrame>& frames, const std::string& eth_dst_addr,
+                    bool loop, std::atomic<uint32_t>& workers_left,
+                    std::atomic<uint64_t>& stripes_completed, std::atomic<bool>& tx_done,
                     std::atomic<bool>& stop);
 
 }  // namespace daqiri::apps::resnet

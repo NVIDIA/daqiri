@@ -1,41 +1,67 @@
 %YAML 1.2
 ---
 # DGX Spark TX -> IGX Thor RX over the direct 200 GbE cable. Native software
-# reorder geometry: 1176 payload bytes, 128 packets/image, 4096 packets/batch.
+# reorder geometry: 4704 payload bytes, 32 packets/image, 1024 packets/batch.
+# This matches the hardware-reorder comparison geometry exactly.
 daqiri:
   cfg:
     version: 1
     stream_type: "raw"
     engine: "ibverbs"
-    master_core: 0
+    master_core: 8
     debug: false
     log_level: "info"
     loopback: ""
     memory_regions:
-    - name: "Data_TX_GPU"
+    - name: "Data_TX_0"
       kind: "host_pinned"
       affinity: 0
-      num_bufs: 51200
-      buf_size: 2048
+      num_bufs: 12800
+      buf_size: 8192
+    - name: "Data_TX_1"
+      kind: "host_pinned"
+      affinity: 0
+      num_bufs: 12800
+      buf_size: 8192
     interfaces:
-    - name: "tx_port"
+    # Both PCIe functions multiplex onto the Spark's physical p1 data port.
+    - name: "tx_path_0"
+      address: "0000:01:00.1"
+      tx:
+        queues:
+        - name: "tx_q_0"
+          id: 0
+          batch_size: 1024
+          cpu_core: 17
+          pacing_mbps: 0
+          memory_regions: ["Data_TX_0"]
+          offloads: ["tx_eth_src"]
+    - name: "tx_path_1"
       address: "0002:01:00.1"
       tx:
         queues:
         - name: "tx_q_0"
           id: 0
-          batch_size: 4096
-          cpu_core: 4
-          # One fixed rate for all seven models; leaves headroom below the
-          # slowest warmed TensorRT engine (ResNet-152) so RX never drops.
-          pacing_mbps: 7500
-          memory_regions: ["Data_TX_GPU"]
+          batch_size: 1024
+          cpu_core: 19
+          pacing_mbps: 0
+          memory_regions: ["Data_TX_1"]
           offloads: ["tx_eth_src"]
 bench_tx:
-- interface_name: "tx_port"
-  cpu_core: 3
-  batch_size: 4096
-  payload_size: 1176
+- interface_name: "tx_path_0"
+  cpu_core: 16
+  batch_size: 1024
+  payload_size: 4704
+  header_size: 64
+  eth_dst_addr: ac:3a:e2:86:7a:0f
+  ip_src_addr: 1.1.1.1
+  ip_dst_addr: 2.2.2.2
+  udp_src_port: 4096
+  udp_dst_port: 4096
+- interface_name: "tx_path_1"
+  cpu_core: 18
+  batch_size: 1024
+  payload_size: 4704
   header_size: 64
   eth_dst_addr: ac:3a:e2:86:7a:0f
   ip_src_addr: 1.1.1.1
@@ -44,14 +70,14 @@ bench_tx:
   udp_dst_port: 4096
 packetization:
   reorder_name: "rx_reorder_resnet_int8_fp16"
-  out_payload_len: 1176
-  packets_per_image: 128
+  out_payload_len: 4704
+  packets_per_image: 32
   images_per_batch: 32
   payload_byte_offset: 64
-  seq_bit_offset: 128
+  seq_bit_offset: 336
   seq_bit_width: 16
 dataset:
-  pcap_path: "data/cifar10_resnet.pcap"
+  pcap_path: "data/cifar10_resnet_hw_4704_seq336.pcap"
 stats:
   enabled: false
   top_k: 8

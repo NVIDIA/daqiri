@@ -262,7 +262,10 @@ AppConfig AppConfig::from_yaml(const YAML::Node& root) {
     throw std::runtime_error("config must define bench_rx and/or bench_tx");
   }
   if (cfg.has_rx) cfg.rx = rx_cfgs.front();
-  if (cfg.has_tx) cfg.tx = tx_cfgs.front();
+  if (cfg.has_tx) {
+    cfg.tx_all = tx_cfgs;
+    cfg.tx = tx_cfgs.front();
+  }
 
   if (cfg.has_rx && cfg.has_tx) {
     cfg.role = AppRole::Both;
