@@ -3,6 +3,7 @@
 
 #include <array>
 #include <chrono>
+#include <mutex>
 #include <cerrno>
 #include <deque>
 #include <iostream>
@@ -23,7 +24,9 @@ struct FakeVerbs {
   ibv_cq rx{}, tx{};
   ibv_qp qp{};
   std::deque<ibv_wc> rx_completions, tx_completions;
-  unsigned rx_polls = 0, tx_polls = 0, sends = 0, receives = 0;
+  std::atomic<unsigned> rx_polls{0}, tx_polls{0}, sends{0}, receives{0};
+  std::mutex mutex;
+  bool auto_complete = false;
   unsigned last_flags = 0;
   int send_result = 0, recv_result = 0;
   uint32_t requested_inline = 0;
@@ -41,6 +44,7 @@ struct FakeVerbs {
     return 0;
   }
   static int poll_cq(ibv_cq* cq, int, ibv_wc* wc) {
+    std::lock_guard<std::mutex> lock(current->mutex);
     const bool rx = cq == &current->rx;
     ++(rx ? current->rx_polls : current->tx_polls);
     auto& completions = rx ? current->rx_completions : current->tx_completions;
@@ -50,18 +54,35 @@ struct FakeVerbs {
     return 1;
   }
   static int post_send(ibv_qp*, ibv_send_wr* wr, ibv_send_wr**) {
+    std::lock_guard<std::mutex> lock(current->mutex);
     require(wr->opcode == IBV_WR_SEND && wr->num_sge == 1, "incorrect SEND encoding");
     if (current->send_result) {
       return current->send_result;
+    }
+    if (current->auto_complete && (wr->send_flags & IBV_SEND_SIGNALED)) {
+      ibv_wc wc{};
+      wc.wr_id = wr->wr_id;
+      wc.status = IBV_WC_SUCCESS;
+      wc.opcode = IBV_WC_SEND;
+      current->tx_completions.push_back(wc);
     }
     current->last_flags = wr->send_flags;
     ++current->sends;
     return 0;
   }
   static int post_recv(ibv_qp*, ibv_recv_wr* wr, ibv_recv_wr**) {
+    std::lock_guard<std::mutex> lock(current->mutex);
     require(wr->num_sge == 1, "incorrect RECEIVE encoding");
     if (current->recv_result) {
       return current->recv_result;
+    }
+    if (current->auto_complete) {
+      ibv_wc wc{};
+      wc.wr_id = wr->wr_id;
+      wc.status = IBV_WC_SUCCESS;
+      wc.opcode = IBV_WC_RECV;
+      wc.byte_len = wr->sg_list->length;
+      current->rx_completions.push_back(wc);
     }
     ++current->receives;
     return 0;
@@ -121,8 +142,8 @@ class RdmaEnginePollingTestPeer {
     while (cpu < CPU_SETSIZE && !CPU_ISSET(cpu, &allowed)) ++cpu;
     intf.rx_.queues_[0].common_.cpu_core_ = std::to_string(cpu);
     intf.tx_.queues_[0].common_.cpu_core_ = std::to_string(cpu);
-    tx_ring = Ring::create("rdma_test_tx", 16, RingMode::MPMC);
-    rx_ring = Ring::create("rdma_test_rx", 16, RingMode::MPMC);
+    tx_ring = Ring::create("rdma_test_tx", 1024, RingMode::MPMC);
+    rx_ring = Ring::create("rdma_test_rx", 1024, RingMode::MPMC);
     require(tx_ring && rx_ring, "cannot allocate rings");
     engine.tx_rings_.push(tx_ring);
     engine.rx_rings_.push(rx_ring);
@@ -208,6 +229,63 @@ daqiri:
             "UDP unexpectedly accepted direct polling");
   }
 
+  void concurrent_worker(bool server) {
+    fake.auto_complete = true;
+    engine.launch_worker(&params, server);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!params.worker_started.load() && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::yield();
+    }
+    require(params.worker_started.load(), "concurrent worker failed to start");
+    constexpr size_t count = 128;
+    std::array<BurstParams, 2 * count> bursts{};
+    std::array<void*, 2 * count> pointers{};
+    std::array<uint32_t, 2 * count> lengths{};
+    std::array<bool, 2 * count> seen{};
+    std::array<uint64_t, 2 * count> data{};
+    size_t completed = 0;
+    for (size_t i = 0; i < bursts.size(); ++i) {
+      const bool receive = i % 2 == 0;
+      auto& burst = bursts[i];
+      pointers[i] = &data[i];
+      lengths[i] = sizeof(uint64_t);
+      engine.rdma_set_header(&burst, receive ? RDMAOpCode::RECEIVE : RDMAOpCode::SEND,
+                             reinterpret_cast<uintptr_t>(&id), server, 1, 10000 + i, "data");
+      burst.pkts[0] = &pointers[i];
+      burst.pkt_lens[0] = &lengths[i];
+      require(engine.send_tx_burst(&burst) == Status::SUCCESS, "concurrent submission failed");
+      BurstParams* result = nullptr;
+      while (engine.get_rx_burst(&result, reinterpret_cast<uintptr_t>(&id), server) ==
+             Status::SUCCESS) {
+        const auto index = result->transport_hdr.wr_id - 10000;
+        require(index < bursts.size() && !seen[index] && result == &bursts[index],
+                "concurrent completion lost ownership or was returned twice");
+        require(result->transport_hdr.status == Status::SUCCESS, "concurrent completion failed");
+        seen[index] = true;
+        ++completed;
+      }
+    }
+    while (completed < bursts.size() && std::chrono::steady_clock::now() < deadline) {
+      BurstParams* result = nullptr;
+      if (engine.get_rx_burst(&result, reinterpret_cast<uintptr_t>(&id), server) !=
+          Status::SUCCESS) {
+        std::this_thread::yield();
+        continue;
+      }
+      const auto index = result->transport_hdr.wr_id - 10000;
+      require(index < bursts.size() && !seen[index] && result == &bursts[index],
+              "concurrent completion lost ownership or was returned twice");
+      require(result->transport_hdr.status == Status::SUCCESS, "concurrent completion failed");
+      seen[index] = true;
+      ++completed;
+    }
+    require(completed == bursts.size() && fake.sends == count && fake.receives == count,
+            "caller and live worker did not complete all mixed-mode work");
+    params.ready_to_exit.store(true);
+    for (auto& [id, thread] : engine.worker_threads_) thread.join();
+    engine.worker_threads_.clear();
+  }
+
   void run(bool direct_rx, bool direct_tx, bool server) {
     engine.launch_worker(&params, server);
     // Repeated launch events must not create a second worker or reset state.
@@ -237,7 +315,8 @@ daqiri:
     for (auto& [id, thread] : engine.worker_threads_) thread.join();
     engine.worker_threads_.clear();
     params.ready_to_exit.store(false);
-    fake.rx_polls = fake.tx_polls = 0;
+    fake.rx_polls.store(0);
+    fake.tx_polls.store(0);
     BurstParams* result = reinterpret_cast<BurstParams*>(1);
     require(
         engine.get_rx_burst(&result, reinterpret_cast<uintptr_t>(&id), server) == Status::NOT_READY,
@@ -383,6 +462,10 @@ int main() {
         for (bool server : {false, true}) {
           daqiri::RdmaEnginePollingTestPeer test(rx, tx);
           test.run(rx, tx, server);
+          if (!rx || !tx) {
+            daqiri::RdmaEnginePollingTestPeer concurrent(rx, tx);
+            concurrent.concurrent_worker(server);
+          }
         }
       }
     }

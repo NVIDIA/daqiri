@@ -253,7 +253,7 @@ configuration. Timestamp values are invalid if the clocks are not PTP-synchroniz
 `RxQueueConfig.poll_mode` accepts `QueuePollMode.INDIRECT` (the default) or
 `QueuePollMode.DIRECT`. Direct mode is available on raw ibverbs and RDMA (`roce://`)
 queues. The Python thread calling `get_rx_burst()` checks for ready packets while the GIL is
-released. For RDMA, use the connection overload to drive direct RX and TX completions;
+released. For RDMA, use `get_rx_burst_for_connection(conn_id, server)` to drive direct RX and TX completions;
 direct SEND and RECEIVE postings contain exactly one packet each.
 
 ### RX Step 3: Free buffers
@@ -446,7 +446,7 @@ afterwards. `NO_SPACE_AVAILABLE` is the only failure a correctly-configured
 sender encounters at runtime.
 
 For RDMA (`roce://`), direct TX posts the SEND on the Python thread and
-`get_rx_burst(conn_id, server)` drives its completion. A successful submission
+`get_rx_burst_for_connection(conn_id, server)` drives its completion. A successful submission
 retains the burst until DAQIRI returns it as a completion. Keep polling even
 for send-only applications, then free completed bursts as usual. Direct SENDs
 from `huge` or `host_pinned` memory use inline payloads when they fit the QP's
