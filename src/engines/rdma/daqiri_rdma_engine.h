@@ -33,6 +33,7 @@
 #include <daqiri/daqiri.h>
 #include <mutex>
 #include <map>
+#include "rdma_direct.h"
 
 namespace daqiri::detail {
 struct RdmaCmApi;
@@ -75,7 +76,8 @@ struct rdma_thread_params {
   bool direct_rx = false;
   bool direct_tx = false;
   uint32_t max_inline_data = 0;
-  uint64_t inline_wqes = 0;
+  std::atomic<uint64_t> inline_wqes{0};
+  RdmaDirectState* direct_state = nullptr;
   // Serialize caller-driven progress, the optional worker, and disconnect cleanup.
   std::mutex progress_mutex;
   std::map<uint64_t, BurstParams*> outstanding_send_wr_ids;
@@ -229,6 +231,16 @@ class RdmaEngine : public Engine {
   std::mutex client_params_mutex_;
   std::thread main_thread_;
   std::unordered_map<struct rdma_cm_id*, rdma_thread_params*> connection_params_;
+  static constexpr size_t kDirectConnections = 1024;
+  std::array<std::atomic<RdmaDirectState*>, kDirectConnections> direct_connections_{};
+  std::vector<std::unique_ptr<RdmaDirectState>> direct_states_;
+  RdmaDirectState* find_direct(uintptr_t connection_id) const;
+  bool publish_direct(rdma_thread_params* params);
+  Status send_direct(RdmaDirectState& state, BurstParams* burst);
+  Status get_direct(RdmaDirectState& state, BurstParams** burst, bool server);
+  Status poll_direct(RdmaDirectState& state, bool tx, bool server);
+  const RdmaDirectMr* direct_region(RdmaDirectState& state, BurstParams* burst);
+  Ring* burst_pool(BurstParams* burst);
   void initialize_progress(bool is_server, rdma_thread_params* params);
   void poll_completions(bool is_server, rdma_thread_params* params, bool poll_rx, bool poll_tx);
   Status post_burst(rdma_thread_params* params, BurstParams* burst);

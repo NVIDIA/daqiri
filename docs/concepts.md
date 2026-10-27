@@ -369,7 +369,10 @@ independently. Direct RECEIVE postings and SEND submissions contain one packet.
 `get_rx_burst(&burst, conn_id, server)` polls the direct completion queues and
 returns one RX or TX completion per successful call. The application retains
 buffers until their completion and then frees them using the usual RDMA burst
-APIs. When both directions are direct, no data-path worker is created.
+APIs. When both directions are direct, no data-path worker is created and the
+same application thread must own both directions. Returned completion handles
+can be reused with their existing registered buffers; retain them until SEND or
+RECEIVE completion and free them only when finished.
 Small direct SENDs from `huge` or `host_pinned` memory use inline payloads when
 they fit the QP's inline capacity (128 bytes requested); GPU payloads use DMA.
 

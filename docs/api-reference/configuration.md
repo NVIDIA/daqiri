@@ -620,7 +620,9 @@ without an epoch field, an old late packet is indistinguishable from the same sl
   per direct SEND or RECEIVE posting. Connections pair RX and TX queues by list position;
   configure both directions for a direct connection. Polling modes may differ. The worker
   uses the TX `cpu_core` when TX is indirect, otherwise the RX `cpu_core`. When both directions
-  are direct, no data-path worker is created.
+  are direct, no data-path worker is created and one application thread must own the
+  entire connection. Fully direct progress avoids the connection mutex, request maps,
+  and handoff ring; mixed modes keep the synchronized worker path.
   - type: `string`
   - values: `indirect`, `direct`
   - default: `indirect`

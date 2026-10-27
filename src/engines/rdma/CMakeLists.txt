@@ -18,7 +18,7 @@ message(STATUS "PROJECT_NAME: ${ENGINE_TARGET}")
 
 target_include_directories(${ENGINE_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_sources(${ENGINE_TARGET} PRIVATE daqiri_rdma_engine.cpp)
+target_sources(${ENGINE_TARGET} PRIVATE daqiri_rdma_engine.cpp rdma_direct.cpp)
 
 pkg_check_modules(IBVERBS libibverbs)
 pkg_check_modules(RDMACM librdmacm)

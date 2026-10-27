@@ -153,6 +153,22 @@ completions even when the application only sends. Each direction can independent
 use indirect mode; a fully direct connection has no data-path worker. A failed direct
 RDMA posting retains caller ownership so the burst can be retried or freed.
 
+When both RDMA directions are direct, one application thread must own the entire
+connection. Calls from another thread return `NOT_READY`. This path uses fixed
+request tables and returns completions without a worker handoff ring. Internal
+request tags preserve the application's `wr_id`, which need not be monotonic.
+Each direction supports at most 1,024 outstanding requests. Exhausting these
+credits returns `NO_SPACE_AVAILABLE` and retains caller ownership; poll
+completions before retrying. Mixed-mode connections retain their synchronized
+worker path.
+
+After a completion returns a burst, its registered buffers and metadata may be
+reused: call `rdma_set_header()` for the next SEND or RECEIVE, restore the packet
+lengths, and submit it again. Do not call `get_tx_packet_burst()` again on that
+handle, and free it with `free_tx_burst()` only when finished. A RECEIVE buffer
+can be sent as a zero-copy echo using the same local MR name. Repost it for
+RECEIVE only after its SEND completion, including for inline SENDs.
+
 ### RX Step 2: Access packet data
 
 For a single-segment configuration (CPU-only or batched GPU):
@@ -639,8 +655,8 @@ to be omitted and `num_pkts == 1`. The calling thread submits the packet synchro
 manages transmit progress. `BurstParams` is only an ownership handle; neither the metadata nor
 packet data is handed to another core.
 
-`send_tx_burst()` takes ownership of the burst on success and when transmit capacity is
-temporarily exhausted. In direct mode, `SUCCESS` means the packet has been submitted to the NIC;
+For raw ibverbs, `send_tx_burst()` takes ownership of the burst on success and when
+transmit capacity is temporarily exhausted. In direct mode, `SUCCESS` means the packet has been submitted to the NIC;
 the packet buffer is reclaimed by a later caller-driven operation. On
 `NO_SPACE_AVAILABLE` it has already freed the packet reservation and metadata. In both
 cases the application must **not** free or otherwise access the burst afterwards.

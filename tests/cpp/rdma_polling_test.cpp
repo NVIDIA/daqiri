@@ -3,7 +3,9 @@
 
 #include <array>
 #include <chrono>
+#include <future>
 #include <mutex>
+#include <vector>
 #include <cerrno>
 #include <deque>
 #include <iostream>
@@ -27,6 +29,7 @@ struct FakeVerbs {
   std::atomic<unsigned> rx_polls{0}, tx_polls{0}, sends{0}, receives{0};
   std::mutex mutex;
   bool auto_complete = false;
+  uint64_t last_send_id = 0, last_receive_id = 0;
   unsigned last_flags = 0;
   int send_result = 0, recv_result = 0;
   uint32_t requested_inline = 0;
@@ -59,6 +62,7 @@ struct FakeVerbs {
     if (current->send_result) {
       return current->send_result;
     }
+    current->last_send_id = wr->wr_id;
     if (current->auto_complete && (wr->send_flags & IBV_SEND_SIGNALED)) {
       ibv_wc wc{};
       wc.wr_id = wr->wr_id;
@@ -76,6 +80,7 @@ struct FakeVerbs {
     if (current->recv_result) {
       return current->recv_result;
     }
+    current->last_receive_id = wr->wr_id;
     if (current->auto_complete) {
       ibv_wc wc{};
       wc.wr_id = wr->wr_id;
@@ -155,6 +160,7 @@ class RdmaEnginePollingTestPeer {
     engine.pd_map_[&context] = &pd;
     auto& memory = engine.mrs_["data"];
     memory.params_.kind_ = MemoryKind::HOST_PINNED;
+    memory.params_.buf_size_ = 4096;
     memory.ctx_mr_map_[&pd] = &mr;
     require(engine.setup_thread_params(&params, false) == 0, "QP setup failed");
     require(fake.requested_inline == (direct_tx ? 128u : 0u), "incorrect inline request");
@@ -286,6 +292,168 @@ daqiri:
     engine.worker_threads_.clear();
   }
 
+  void fully_direct(bool server) {
+    auto* state = params.direct_state;
+    require(state != nullptr && engine.worker_threads_.empty(), "missing fully direct state");
+    const auto polls_before = fake.rx_polls.load() + fake.tx_polls.load();
+    BurstParams* empty = reinterpret_cast<BurstParams*>(1);
+    require(engine.get_rx_burst(&empty, reinterpret_cast<uintptr_t>(&id), server) ==
+                    Status::NOT_READY &&
+                empty == nullptr && fake.rx_polls.load() + fake.tx_polls.load() == polls_before,
+            "direct empty request tables polled a CQ");
+    fake.auto_complete = true;
+    BurstParams send{}, receive{};
+    std::array<char, 512> data{};
+    void* pointer = data.data();
+    uint32_t length = 64;
+    auto prepare = [&](BurstParams& burst, RDMAOpCode opcode, uint64_t external_id) {
+      engine.rdma_set_header(&burst, opcode, reinterpret_cast<uintptr_t>(&id), server, 1,
+                             external_id, "data");
+      burst.pkts[0] = &pointer;
+      burst.pkt_lens[0] = &length;
+    };
+    auto complete = [&](BurstParams& expected) {
+      BurstParams* result = nullptr;
+      require(engine.get_rx_burst(&result, reinterpret_cast<uintptr_t>(&id), server) ==
+                      Status::SUCCESS &&
+                  result == &expected,
+              "direct completion not returned");
+      require(rx_ring->count() == 0 && params.outstanding_send_wr_ids.empty() &&
+                  params.outstanding_receive_wr_ids.empty(),
+              "direct path used a handoff ring or request map");
+    };
+    // Reuse the same caller-owned handles after completion, wrap both hardware
+    // request tables, and preserve deliberately nonmonotonic application IDs.
+    for (uint64_t i = 0; i < RdmaDirectState::kRequests + 17; ++i) {
+      prepare(send, RDMAOpCode::SEND, 100000 - i);
+      require(engine.send_tx_burst(&send) == Status::SUCCESS, "direct SEND failed");
+      require(fake.last_flags & IBV_SEND_INLINE, "direct small SEND not inline");
+      complete(send);
+      require(send.transport_hdr.wr_id == 100000 - i, "application SEND ID changed");
+      prepare(receive, RDMAOpCode::RECEIVE, i % 13);
+      require(engine.send_tx_burst(&receive) == Status::SUCCESS, "direct RECEIVE failed");
+      complete(receive);
+      require(receive.transport_hdr.wr_id == i % 13, "application RECEIVE ID changed");
+    }
+    for (auto kind :
+         {MemoryKind::HOST_PINNED, MemoryKind::HUGE, MemoryKind::HOST, MemoryKind::DEVICE}) {
+      engine.mrs_["data"].params_.kind_ = kind;
+      for (uint32_t size : {160u, 161u}) {
+        length = size;
+        prepare(send, RDMAOpCode::SEND, 99);
+        require(engine.send_tx_burst(&send) == Status::SUCCESS, "direct boundary SEND failed");
+        const bool expected =
+            size <= 160 && (kind == MemoryKind::HOST_PINNED || kind == MemoryKind::HUGE);
+        require(bool(fake.last_flags & IBV_SEND_INLINE) == expected,
+                "direct inline boundary wrong");
+        complete(send);
+      }
+    }
+    engine.mrs_["data"].params_.kind_ = MemoryKind::HOST_PINNED;
+    fake.auto_complete = false;
+    for (auto opcode : {RDMAOpCode::SEND, RDMAOpCode::RECEIVE}) {
+      auto& burst = opcode == RDMAOpCode::SEND ? send : receive;
+      prepare(burst, opcode, 123);
+      require(engine.send_tx_burst(&burst) == Status::SUCCESS, "error test posting failed");
+      ibv_wc wc{};
+      wc.wr_id = opcode == RDMAOpCode::SEND ? fake.last_send_id : fake.last_receive_id;
+      wc.status = IBV_WC_LOC_PROT_ERR;
+      wc.opcode = IBV_WC_RDMA_READ;
+      (opcode == RDMAOpCode::SEND ? fake.tx_completions : fake.rx_completions).push_back(wc);
+      complete(burst);
+      require(burst.transport_hdr.status == Status::GENERIC_FAILURE,
+              "direct failed CQE lost error status");
+    }
+    // Fill both fixed tables, retain ownership on backpressure, then reclaim
+    // every slot. Application IDs are unrelated to the internal CQE tags.
+    {
+      constexpr size_t capacity = RdmaDirectState::kRequests;
+      std::vector<BurstParams> work(capacity + 1);
+      std::vector<void*> pointers(capacity + 1, data.data());
+      std::vector<uint32_t> lengths(capacity + 1, 64);
+      for (auto opcode : {RDMAOpCode::SEND, RDMAOpCode::RECEIVE}) {
+        const uint64_t first_tag =
+            opcode == RDMAOpCode::SEND ? state->sends_posted + 1 : state->receives_posted + 1;
+        for (size_t i = 0; i <= capacity; ++i) {
+          engine.rdma_set_header(&work[i], opcode, reinterpret_cast<uintptr_t>(&id), server, 1,
+                                 capacity - i, "data");
+          work[i].pkts[0] = &pointers[i];
+          work[i].pkt_lens[0] = &lengths[i];
+          const auto status = engine.send_tx_burst(&work[i]);
+          require(status == (i < capacity ? Status::SUCCESS : Status::NO_SPACE_AVAILABLE),
+                  "direct queue credit limit was not enforced");
+          require(work[i].pkts[0] == &pointers[i], "backpressure consumed caller ownership");
+        }
+        for (size_t i = 0; i < capacity; ++i) {
+          ibv_wc wc{};
+          wc.wr_id = first_tag + i;
+          wc.status = IBV_WC_SUCCESS;
+          wc.opcode = opcode == RDMAOpCode::SEND ? IBV_WC_SEND : IBV_WC_RECV;
+          wc.byte_len = 64;
+          (opcode == RDMAOpCode::SEND ? fake.tx_completions : fake.rx_completions).push_back(wc);
+          complete(work[i]);
+          require(work[i].transport_hdr.wr_id == capacity - i,
+                  "credit reclamation changed caller ID");
+        }
+      }
+      require(state->receive_count == 0 && state->sends_posted == state->sends_completed,
+              "full tables did not reclaim all credits");
+    }
+    // One signaled CQE must return the preceding unsignaled SENDs through the
+    // local completion array without a producer/consumer ring.
+    {
+      std::array<BurstParams, 16> work{};
+      params.send_signal_every = 16;
+      for (size_t i = 0; i < work.size(); ++i) {
+        prepare(work[i], RDMAOpCode::SEND, 1000 - i);
+        require(engine.send_tx_burst(&work[i]) == Status::SUCCESS, "unsignaled posting failed");
+        require(bool(fake.last_flags & IBV_SEND_SIGNALED) == (i == 15),
+                "incorrect signaling cadence");
+      }
+      ibv_wc wc{};
+      wc.wr_id = fake.last_send_id;
+      wc.status = IBV_WC_SUCCESS;
+      wc.opcode = IBV_WC_SEND;
+      fake.tx_completions.push_back(wc);
+      for (auto& burst : work) complete(burst);
+      params.send_signal_every = 1;
+    }
+    fake.send_result = ENOMEM;
+    prepare(send, RDMAOpCode::SEND, 456);
+    require(engine.send_tx_burst(&send) == Status::GENERIC_FAILURE && send.pkts[0] == &pointer,
+            "direct failed post consumed caller ownership");
+    fake.send_result = 0;
+    send.transport_hdr.num_pkts = 2;
+    require(engine.send_tx_burst(&send) == Status::INVALID_PARAMETER,
+            "direct accepted multiple packets");
+    prepare(send, RDMAOpCode::SEND, 789);
+    auto other = std::async(std::launch::async, [&] {
+      BurstParams* result = nullptr;
+      return engine.get_rx_burst(&result, reinterpret_cast<uintptr_t>(&id), server);
+    });
+    require(other.get() == Status::NOT_READY, "direct connection accepted a second owner thread");
+    std::future<void> closer;
+    {
+      RdmaDirectLease active(state);
+      require(bool(active), "could not acquire direct lifetime guard");
+      closer = std::async(std::launch::async, [&] { state->close(); });
+      while (!(state->gate.load() & RdmaDirectState::kClosed)) std::this_thread::yield();
+      require(closer.wait_for(std::chrono::milliseconds(10)) == std::future_status::timeout,
+              "disconnect did not wait for active direct reader");
+    }
+    closer.get();
+    require(engine.send_tx_burst(&send) == Status::NOT_READY,
+            "closed direct connection accepted work");
+    // Reuse the control-plane slot while retaining the closed incarnation.
+    rdma_cm_id next = id;
+    params.client_id = &next;
+    require(engine.publish_direct(&params), "could not republish reused server slot");
+    require(engine.send_tx_burst(&send) == Status::NOT_READY,
+            "old cached handle entered reused connection");
+    params.client_id = &id;
+    params.direct_state->close();
+  }
+
   void run(bool direct_rx, bool direct_tx, bool server) {
     engine.launch_worker(&params, server);
     // Repeated launch events must not create a second worker or reset state.
@@ -308,6 +476,11 @@ daqiri:
       require(engine.rdma_get_server_conn_id("127.0.0.1", 9999, &connection) == Status::SUCCESS &&
                   connection == reinterpret_cast<uintptr_t>(&id),
               "server connection was not discoverable");
+    }
+
+    if (direct_rx && direct_tx) {
+      fully_direct(server);
+      return;
     }
 
     // Pause the worker for deterministic posting and completion assertions.
