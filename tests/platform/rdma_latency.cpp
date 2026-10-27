@@ -35,6 +35,12 @@ int main(int argc, char** argv) {
         samples > std::numeric_limits<int>::max() - warmup || cpu < 0 || cpu >= CPU_SETSIZE) {
       throw std::runtime_error("invalid message size, sample counts, or CPU index");
     }
+    // One ping is outstanding, and each buffer is reused after SEND completion.
+    // An unsignaled first SEND cannot be released by a later request in this test.
+    const char* signal_every = std::getenv("DAQIRI_RDMA_SEND_SIGNAL_EVERY");
+    if (signal_every && std::string(signal_every) != "1") {
+      throw std::runtime_error("rdma_latency requires DAQIRI_RDMA_SEND_SIGNAL_EVERY=1 (or unset)");
+    }
     const int total = warmup + samples;
     daqiri::NetworkConfig config;
     check(daqiri::parse_network_config_from_yaml_file(argv[1], config), "parse config");

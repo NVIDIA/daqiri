@@ -50,6 +50,7 @@ struct RdmaDirectState {
   uint64_t sends_completed = 0;
   uint64_t receives_posted = 0;
   uint32_t receive_count = 0;
+  bool poll_tx_first = false;
   std::array<BurstParams*, kReady> ready{};
   uint64_t ready_head = 0;
   uint64_t ready_tail = 0;

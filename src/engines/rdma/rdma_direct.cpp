@@ -259,20 +259,22 @@ Status RdmaEngine::get_direct(RdmaDirectState& state, BurstParams** burst, bool 
   if (rdma_force_quit.load(std::memory_order_relaxed) || state.params->ready_to_exit.load()) {
     return Status::NOT_READY;
   }
-  // Return already decoded completions without a producer/consumer ring. With
-  // no pending result, inspect each CQ at most once; empty polls do no allocation.
+  // Drain decoded completions first. Alternate CQ priority on each refill so
+  // a continuously ready direction cannot starve the other. Inspect each needed
+  // CQ at most once, stopping as soon as a completion is available.
   if (state.ready_head == state.ready_tail) {
-    auto status = Status::NOT_READY;
-    if (state.receive_count != 0) {
-      status = poll_direct(state, false, server);
-    }
-    if (status == Status::GENERIC_FAILURE) {
-      return status;
-    }
-    if (state.ready_head == state.ready_tail && state.sends_completed != state.sends_posted) {
-      status = poll_direct(state, true, server);
+    const bool tx_first = state.poll_tx_first;
+    state.poll_tx_first = !tx_first;
+    for (bool tx : {tx_first, !tx_first}) {
+      if (tx ? state.sends_completed == state.sends_posted : state.receive_count == 0) {
+        continue;
+      }
+      const auto status = poll_direct(state, tx, server);
       if (status == Status::GENERIC_FAILURE) {
         return status;
+      }
+      if (state.ready_head != state.ready_tail) {
+        break;
       }
     }
     if (state.ready_head == state.ready_tail) {

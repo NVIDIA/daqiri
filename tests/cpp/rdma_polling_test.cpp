@@ -335,6 +335,41 @@ daqiri:
       complete(receive);
       require(receive.transport_hdr.wr_id == i % 13, "application RECEIVE ID changed");
     }
+    // RX stays ready across every call by reposting each returned receive.
+    // SEND must still complete promptly, even beyond the request-table capacity.
+    // Run the mirror case too: a busy TX CQ must not starve receives.
+    for (bool busy_tx : {false, true}) {
+      auto& busy = busy_tx ? send : receive;
+      auto& target = busy_tx ? receive : send;
+      const auto busy_opcode = busy_tx ? RDMAOpCode::SEND : RDMAOpCode::RECEIVE;
+      const auto target_opcode = busy_tx ? RDMAOpCode::RECEIVE : RDMAOpCode::SEND;
+      prepare(busy, busy_opcode, 1);
+      require(engine.send_tx_burst(&busy) == Status::SUCCESS, "busy CQ posting failed");
+      for (uint64_t i = 0; i < RdmaDirectState::kRequests + 17; ++i) {
+        prepare(target, target_opcode, 2 + i);
+        require(engine.send_tx_burst(&target) == Status::SUCCESS, "target CQ posting failed");
+        bool completed = false;
+        for (int poll = 0; poll < 2 && !completed; ++poll) {
+          BurstParams* result = nullptr;
+          require(engine.get_rx_burst(&result, reinterpret_cast<uintptr_t>(&id), server) ==
+                          Status::SUCCESS &&
+                      (result == &busy || result == &target) &&
+                      result->transport_hdr.status == Status::SUCCESS,
+                  "busy CQ progress failed");
+          if (result == &target) {
+            completed = true;
+          } else {
+            prepare(busy, busy_opcode, 1);
+            require(engine.send_tx_burst(&busy) == Status::SUCCESS, "busy CQ repost failed");
+          }
+        }
+        require(completed, "continuously ready CQ starved the other direction");
+      }
+      complete(busy);
+      require(state->receive_count == 0 && state->sends_posted == state->sends_completed &&
+                  state->ready_head == state->ready_tail,
+              "fair CQ polling lost completions or request credits");
+    }
     for (auto kind :
          {MemoryKind::HOST_PINNED, MemoryKind::HUGE, MemoryKind::HOST, MemoryKind::DEVICE}) {
       engine.mrs_["data"].params_.kind_ = kind;

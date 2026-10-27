@@ -117,7 +117,9 @@ named `TX` and `RX`, each with at least 64 buffers and a `buf_size` covering the
 message size. Use `host_pinned` for CPU payload checks. Configure one paired RX/TX
 queue, a local `roce://` address, and RC transport. The server local URI must use
 port `18491`. Select `poll_mode` independently for each direction; fully direct
-connections use one application thread for both directions. Choose distinct
+connections use one application thread for both directions. Leave
+`DAQIRI_RDMA_SEND_SIGNAL_EVERY` unset or set it to `1`; the test rejects other
+values before initialization because it waits for every SEND completion. Choose distinct
 application, CM (`master_core`), and indirect worker cores on the same CPU topology
 for each comparison. Run as root in the privileged GPU/NIC container:
 
