@@ -352,18 +352,27 @@ function per lcore; such configurations are rejected during validation.
 In **direct mode**, there is no worker between the application and the queue.
 The application thread performs the queue work as part of its normal API calls:
 
-- Direct RX returns all packets currently ready, up to 256, without waiting.
+- Raw ibverbs direct RX returns all packets currently ready, up to 256, without waiting.
   An empty poll returns `Status::NOT_READY`.
 - Direct TX accepts exactly one packet per `BurstParams`. A successful
   `send_tx_burst()` means the packet was submitted; the application must not
   access that burst afterward.
-- Exactly one application thread must own each direct queue. A direct TX queue
+- Exactly one application thread must own each direct queue. A raw ibverbs direct TX queue
   may have only one acquired-but-unsubmitted packet at a time.
 
-Direct mode is available only for the raw `ibverbs` engine. A direct queue must
-omit `cpu_core`, `batch_size`, and, for RX, `timeout_us`. Direct RX does not
-support reorder configurations. Direct and indirect queues may be mixed on the
-same interface.
+Direct mode is available for the raw `ibverbs` engine and the RDMA engine
+(`roce://` endpoints). A direct queue must omit `cpu_core`, `batch_size`, and,
+for RX, `timeout_us`. Raw direct RX does not support reorder configurations.
+Direct and indirect queues may be mixed on the same interface.
+
+RDMA pairs RX and TX queues by list position and supports selecting their modes
+independently. Direct RECEIVE postings and SEND submissions contain one packet.
+`get_rx_burst(&burst, conn_id, server)` polls the direct completion queues and
+returns one RX or TX completion per successful call. The application retains
+buffers until their completion and then frees them using the usual RDMA burst
+APIs. When both directions are direct, no data-path worker is created.
+Small direct SENDs from `huge` or `host_pinned` memory use inline payloads when
+they fit the QP's inline capacity (128 bytes requested); GPU payloads use DMA.
 
 Direct mode removes the cross-thread handoff that can add latency, but it also
 makes application scheduling part of packet I/O. If the application thread is

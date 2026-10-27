@@ -32,6 +32,7 @@
 #include "src/daqiri_pool.h"
 #include <daqiri/daqiri.h>
 #include <mutex>
+#include <map>
 
 namespace daqiri::detail {
 struct RdmaCmApi;
@@ -71,6 +72,16 @@ struct rdma_thread_params {
   // elements in place via resize() / try_emplace(), so this is fine.
   std::atomic<bool> ready_to_exit{false};
   std::atomic<bool> worker_started{false};
+  bool direct_rx = false;
+  bool direct_tx = false;
+  uint32_t max_inline_data = 0;
+  uint64_t inline_wqes = 0;
+  // Serialize caller-driven progress, the optional worker, and disconnect cleanup.
+  std::mutex progress_mutex;
+  std::map<uint64_t, BurstParams*> outstanding_send_wr_ids;
+  std::unordered_map<uint64_t, BurstParams*> outstanding_receive_wr_ids;
+  int send_signal_every = 1;
+  uint64_t sends_since_signal = 0;
 };
 
 // Used to spawn a new server thread for a particular client
@@ -178,6 +189,7 @@ class RdmaEngine : public Engine {
   void poll_cm_events();
 
  private:
+  friend class RdmaEnginePollingTestPeer;
   const detail::RdmaCmApi* verbs_ = nullptr;
   static constexpr int MAX_RDMA_CONNECTIONS = 128;
   static constexpr int MAX_CQ = 1024;
@@ -216,6 +228,10 @@ class RdmaEngine : public Engine {
   std::mutex threads_mutex_;
   std::mutex client_params_mutex_;
   std::thread main_thread_;
+  std::unordered_map<struct rdma_cm_id*, rdma_thread_params*> connection_params_;
+  void initialize_progress(bool is_server, rdma_thread_params* params);
+  void poll_completions(bool is_server, rdma_thread_params* params, bool poll_rx, bool poll_tx);
+  Status post_burst(rdma_thread_params* params, BurstParams* burst);
   void rdma_thread(bool is_server, rdma_thread_params* tparams);
   int setup_pools_and_rings();
   int rdma_register_mr(const MemoryRegionConfig& mr, void* ptr);
@@ -225,7 +241,7 @@ class RdmaEngine : public Engine {
   void server_tx(int if_idx, int q);
   void server_rx(int if_idx, int q);
   bool ack_event(rdma_cm_event* cm_event);
-  void launch_server_worker(rdma_thread_params* params);
+  void launch_worker(rdma_thread_params* params, bool is_server);
   int mr_access_to_ibv(uint32_t access);
   bool get_ip_from_interface(const std::string_view& if_name, sockaddr_in& addr);
   int setup_thread_params(rdma_thread_params* params, bool is_server);

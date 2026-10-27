@@ -46,6 +46,22 @@ endif()
 
 add_test(NAME daqiri_socket_rx_queue_test COMMAND daqiri_socket_rx_queue_test)
 
+if(TARGET daqiri_rdma)
+  add_executable(daqiri_rdma_polling_test rdma_polling_test.cpp)
+  target_compile_features(daqiri_rdma_polling_test PRIVATE cxx_std_17)
+  target_include_directories(daqiri_rdma_polling_test PRIVATE ${PROJECT_SOURCE_DIR})
+  if(NOT BUILD_SHARED_LIBS AND UNIX AND NOT APPLE)
+    target_link_libraries(daqiri_rdma_polling_test PRIVATE
+      "-Wl,--start-group" ${DAQIRI_TEST_STATIC_LIBS} "-Wl,--end-group" ${DAQIRI_YAML_TARGET})
+  else()
+    if(UNIX AND NOT APPLE)
+      target_link_options(daqiri_rdma_polling_test PRIVATE "LINKER:--no-as-needed")
+    endif()
+    target_link_libraries(daqiri_rdma_polling_test PRIVATE daqiri_rdma daqiri::daqiri ${DAQIRI_YAML_TARGET})
+  endif()
+  add_test(NAME daqiri_rdma_polling_test COMMAND daqiri_rdma_polling_test)
+endif()
+
 if(TARGET daqiri_ibverbs)
   add_executable(daqiri_ibverbs_tx_segments_test ibverbs_tx_segments_test.cpp)
   target_compile_features(daqiri_ibverbs_tx_segments_test PRIVATE cxx_std_17)

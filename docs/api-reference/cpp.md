@@ -136,12 +136,22 @@ daqiri::get_rx_burst(&burst, 0);
 daqiri::get_rx_burst(&burst);
 ```
 
-For an ibverbs RX queue configured with `poll_mode: direct`, the calling thread performs one
+For a raw ibverbs RX queue configured with `poll_mode: direct`, the calling thread performs one
 bounded check for ready packets inside `get_rx_burst()`. A successful call returns the packets
 currently ready, up to 256, without a DAQIRI RX worker or handoff ring. Exactly one thread may
 poll each direct queue. Continue using the normal burst-free APIs; released packet buffers are
 recycled by a subsequent direct poll. An empty direct poll returns `Status::NOT_READY`. Indirect
 mode remains the default.
+
+For RDMA (`roce://`), the connection overload `get_rx_burst(&burst, conn_id, server)`
+also drives direct RX and TX completion queues. Direct RECEIVE postings and SENDs
+use one packet each. A successful poll returns one completion; check
+`rdma_get_opcode(burst)` to distinguish SEND from RECEIVE. The original burst remains
+owned by DAQIRI until returned as a completion, including for inline SENDs;
+free it using the normal RDMA completion workflow. Keep polling for TX
+completions even when the application only sends. Each direction can independently
+use indirect mode; a fully direct connection has no data-path worker. A failed direct
+RDMA posting retains caller ownership so the burst can be retried or freed.
 
 ### RX Step 2: Access packet data
 
@@ -918,7 +928,7 @@ workflow sections above show the common call order and ownership rules.
 | `get_rx_burst(&burst, port, q)` | Dequeue a burst from a specific port and queue. |
 | `get_rx_burst(&burst, port)` | Dequeue from any queue on a specific port. |
 | `get_rx_burst(&burst)` | Dequeue from any queue on any port. |
-| `get_rx_burst(&burst, conn_id, server)` | Dequeue from an RDMA/socket connection ring. |
+| `get_rx_burst(&burst, conn_id, server)` | Retrieve a connection completion; for RDMA, also poll any direct RX/TX completion queues. |
 | `get_connection_id(burst)` | Read the transport connection ID recorded on an RX burst. |
 | `set_reorder_cuda_stream(interface_name, reorder_name, stream)` | Set the CUDA stream for a configured GPU reorder plan. |
 | `get_reorder_burst_info(burst, &info)` | Read metadata for a reordered aggregate burst. |

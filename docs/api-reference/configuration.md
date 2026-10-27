@@ -269,7 +269,9 @@ TX queues on that interface are already in use.
   - type: `integer`
 - **`poll_mode`**: `indirect` uses the current DAQIRI RX worker and application handoff ring.
   `direct` makes the thread calling `get_rx_burst()` poll the NIC synchronously and is supported
-  only by the raw ibverbs engine.
+  by the raw ibverbs engine and the RDMA engine (`roce://` endpoints). For RDMA,
+  it also posts RECEIVE work requests on the calling thread; the connection completion API
+  polls direct RX and TX completion queues.
   - type: `string`
   - values: `indirect`, `direct`
   - default: `indirect`
@@ -283,8 +285,8 @@ TX queues on that interface are already in use.
   increase throughput, and smaller values reduce latency. For `udp://` socket endpoints, one
   `recvmmsg()` call returns up to this many datagrams; valid values are 1-32. UDP servers without
   a configured `remote_addr` are limited to one datagram per burst. Required in indirect mode and
-  forbidden in direct mode. A direct poll returns the packets currently ready, up to 256, without
-  waiting.
+  forbidden in direct mode. A raw ibverbs direct poll returns the packets currently ready,
+  up to 256, without waiting; RDMA returns one connection completion per successful call.
   - type: `integer`
   - C++ or Python callers constructing an indirect UDP RX queue programmatically must set this
     field explicitly. The default `CommonQueueConfig` value of `0` is not a valid UDP batch size.
@@ -610,8 +612,15 @@ without an epoch field, an old late packet is indistinguishable from the same sl
 - **`id`**: Integer ID used for burst submission.
   - type: `integer`
 - **`poll_mode`**: `indirect` hands bursts to a DAQIRI TX worker. `direct` makes the calling
-  thread submit one packet immediately and manage transmit progress; it is supported only by
-  the raw ibverbs engine.
+  thread submit one packet immediately and manage transmit progress; it is supported by
+  the raw ibverbs and RDMA engines. Direct RDMA TX posts an `IBV_WR_SEND` immediately;
+  `get_rx_burst(&burst, conn_id, server)` drives its completions. Single-packet messages in
+  `huge` or `host_pinned` memory are inlined when they fit the QP's returned inline capacity
+  (128 bytes requested). Device-memory messages remain DMA-based. RDMA requires one packet
+  per direct SEND or RECEIVE posting. Connections pair RX and TX queues by list position;
+  configure both directions for a direct connection. Polling modes may differ. The worker
+  uses the TX `cpu_core` when TX is indirect, otherwise the RX `cpu_core`. When both directions
+  are direct, no data-path worker is created.
   - type: `string`
   - values: `indirect`, `direct`
   - default: `indirect`
