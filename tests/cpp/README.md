@@ -10,3 +10,8 @@ unset, including relative executable launches followed by a working-directory
 change before initialization, concurrent cached loads, missing DSOs and entry
 points, incompatible/incomplete tables, and Linux socket operation without RDMA
 glue. These checks require RDMA userspace libraries but do not require a NIC.
+
+The ibverbs TX test also covers shared segment pool exhaustion, reference-count
+overflow, concurrent final release, private header isolation, delayed clones,
+clone-of-clone, metadata recycling, arbitrary cancellation, cumulative completion,
+send-credit exhaustion, and CQ-error retention for one through four segments.

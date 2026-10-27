@@ -102,3 +102,17 @@ def test_oversized_tx_region_list(reproducer):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "PASS: oversized TX region list rejected" in result.stdout
     assert "5 memory regions; at most 4 are supported" in result.stderr
+
+
+@pytest.mark.platform
+@pytest.mark.parametrize("regions,headers", [(1, "endpoint"), (2, "raw"), (2, "endpoint"),
+                                            (3, "raw"), (3, "endpoint"),
+                                            (4, "raw"), (4, "endpoint")])
+def test_shared_tx_lifetime(reproducer, regions, headers):
+    binary, env = reproducer
+    result = subprocess.run(
+        [str(binary), "2", "5142", "indirect", str(regions), "indirect", headers, "shared"],
+        env=env, capture_output=True, text=True, timeout=90,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PASS: shared TX private headers, GPU payload lifetime" in result.stdout

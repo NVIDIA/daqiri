@@ -624,13 +624,31 @@ without an epoch field, an old late packet is indistinguishable from the same sl
   - type: `integer`
 - **`memory_regions`**: List of memory region names. Same segment mapping rules as RX.
   Raw ibverbs supports one to four CPU/GPU regions in both polling modes. Each packet
-  uses one buffer from every region; the smallest `num_bufs` bounds packet capacity.
+  uses one buffer from every region. With the default cyclic allocator, the smallest
+  `num_bufs` bounds packet capacity.
   Set each segment's actual length before sending. The NIC concatenates the segments
   into one wire packet, for example CPU network headers, CPU message headers, and a
   GPU payload. Keep the Ethernet/IPv4/UDP header in segment 0 when using the header
   helpers; its IP/UDP lengths must include the later segments. Named endpoints instead
   insert the network header inline and treat all configured regions as UDP payload.
   - type: `list`
+- **`buffer_mode`**: `cyclic` (default) retains cyclic packet-slot allocation. `shared`
+  enables independent segment pools and `clone_tx_burst()` on raw ibverbs indirect TX
+  queues. Selected segments are reference counted through local TX completion; CPU
+  segments outside the clone mask receive private copies. A shared queue's MRs must
+  belong exclusively to that queue, with no repeated region or RX/reorder alias.
+  Direct polling and other engines reject shared mode. Shared mode uses ordinary
+  SEND WQEs; eMPW packing is disabled.
+- **`max_inflight_sends`**: Shared-mode send-credit limit, independent of storage pool
+  sizes. `0`/omitted selects twice the smallest region's `num_bufs`. The effective
+  limit, whether explicit or automatically derived, must fit the device capacity and
+  be at least `batch_size`. Queued, worker-pending, and NIC-posted packets all consume
+  credits until completion. This field requires `buffer_mode: shared` when nonzero.
+  For two sends with private header segments and one shared payload buffer, use
+  `batch_size: 1`, two buffers in each header MR, one in the payload MR, and at least
+  two send credits. Acquire a one-packet burst, clone it, and submit the two bursts
+  separately. Acquiring a fresh two-packet burst would require two buffers in every
+  region. A clone allocates no new buffer in a selected shared segment.
 - **`offloads`**: List of hardware offloads to enable. Each offload installs an RTE Flow rule
   during `daqiri_init()`; initialization fails if the NIC cannot program the rule.
   - type: `list`

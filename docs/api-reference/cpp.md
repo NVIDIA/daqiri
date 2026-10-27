@@ -634,9 +634,54 @@ temporarily exhausted. In direct mode, `SUCCESS` means the packet has been submi
 the packet buffer is reclaimed by a later caller-driven operation. On
 `NO_SPACE_AVAILABLE` it has already freed the packet reservation and metadata. In both
 cases the application must **not** free or otherwise access the burst afterwards.
-`NO_SPACE_AVAILABLE` is the only failure a correctly-configured endpoint encounters
-at submission time. A second direct acquisition before the pending packet is sent or freed
+Other failures leave ownership with the caller, who must retry or free the burst.
+A second direct acquisition before the pending packet is sent or freed
 returns `NOT_READY`; zero- or multi-packet direct requests return `INVALID_PARAMETER`.
+
+### Shared TX segments
+
+Raw ibverbs indirect queues with `buffer_mode: shared` can clone a complete,
+application-owned TX burst before either copy is submitted:
+
+```cpp
+daqiri::BurstParams* second = nullptr;
+auto status = daqiri::clone_tx_burst(original, 1u << 2, &second);
+// [network header A][message header A][payload P]
+// [network header B][message header B][payload P]
+```
+
+Bit `s` retains segment `s`; other segments receive private CPU copies with the
+same lengths. The example supports independent IP and message headers and one
+shared CPU/GPU payload. Four segments use `1u << 3` to share the final payload.
+Masks may select several segments. Endpoint sends can share segment 0 of a
+payload-only burst; the endpoint supplies each send's inline network header.
+Clone-of-clone references point directly to storage, so the original metadata
+may be recycled independently. Source and clone must use the same TX queue.
+RX, cross-queue references, private GPU copies, and byte-range slices are unsupported.
+
+Finish producing the payload and synchronize GPU writes before cloning. Shared
+bytes are immutable while multiple descriptors or sends retain them. Header
+helpers reject shared segment-0 writes with `RESOURCE_IN_USE`; raw pointer
+writes remain the caller's responsibility. Each burst has independent lengths
+and scheduling; clones start without a TX timestamp or custom application metadata.
+
+On clone failure, the output is null and the source is unchanged. Invalid masks,
+released segments, edited packet pointers, and excessive lengths are rejected.
+Private GPU segments return `NOT_SUPPORTED`. Submit or cancel each resulting
+burst separately. `SUCCESS` and `NO_SPACE_AVAILABLE` consume a submitted burst;
+other send failures retain caller ownership. `free_all_packets_and_burst_tx()`
+cancels in any allocation order. Segment and packet frees clear the corresponding
+references; an incomplete burst cannot be submitted. For shared queues,
+`free_tx_metadata()` and `free_tx_burst()` also release any unsent references
+still attached to that metadata.
+
+Storage returns to its segment pool only after the last descriptor or locally
+completed send releases it. An unsent clone pins the payload even after the
+original send completes. `wait_for_tx_idle()` waits for accepted sends, not
+unsent clones; runtime queue deletion waits for both. A CQ error pins possibly
+DMA-visible buffers until successful QP destruction during shutdown. Shutdown
+invalidates all outstanding application handles. Keep the queue's existing
+single-producer discipline for allocation, cloning, and submission.
 
 ### Timed Transmission
 
@@ -931,6 +976,7 @@ workflow sections above show the common call order and ownership rules.
 | `is_tx_burst_available(burst)` | Check whether buffers are available for a TX burst. |
 | `get_tx_packet_burst(burst)` | Populate a TX burst with packet buffers. |
 | `set_connection_id(burst, conn_id)` | Attach a transport connection ID to a TX burst (socket/RDMA). |
+| `clone_tx_burst(source, mask, &clone)` | Retain selected TX segments and privately copy CPU segments on shared-mode raw ibverbs queues. |
 | `send_tx_burst(burst)` | Enqueue a populated TX burst. |
 | `send_tx_burst(endpoint_id, queue_id, burst)` | Inline cached raw-UDP headers, gather payload pointers, and enqueue an ibverbs burst on the selected queue. |
 | `add_endpoint(config, &endpoint_id)` | Add a named raw-UDP endpoint to the active ibverbs engine. |

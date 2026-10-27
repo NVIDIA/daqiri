@@ -146,8 +146,7 @@ path, and select the TX queue when submitting each burst.
 Named endpoints are distinct from the `udp://`, `tcp://`, and `roce://` URI
 endpoints used by `stream_type: "socket"`. They apply only to raw Ethernet with
 the `ibverbs` engine. Their packet buffers contain only the UDP payload; DAQIRI
-inlines the cached Ethernet/IPv4/UDP header into the mlx5 send WQE. The current
-implementation requires a single-segment TX queue and burst.
+inlines the cached Ethernet/IPv4/UDP header into the mlx5 send WQE. The queue may gather one through four segments after that inline network header.
 
 Endpoint IDs remain valid until deletion or DAQIRI shutdown. Stale IDs are
 rejected, including IDs retained across shutdown and reinitialization. See the
@@ -514,6 +513,15 @@ Applications must free RX bursts after processing and free or send TX
 bursts after allocation. Holding bursts indefinitely drains DAQIRI's
 buffer pools and can lead to `NO_FREE_BURST_BUFFERS`,
 `NO_FREE_PACKET_BUFFERS`, queue drops, or stalled TX.
+
+Raw ibverbs indirect TX can opt into **shared segment storage**. A cloned burst
+owns private CPU header segments and references selected existing segments,
+such as one GPU payload. Each send owns its references until local TX completion;
+cancelling an unsent descriptor releases its references too. Storage is reusable
+only after its last reference is released. This permits two different network and
+message headers followed by the same final payload, across up to four segments.
+Shared bytes are immutable while referenced. See
+[Shared TX segments](api-reference/cpp.md#shared-tx-segments).
 
 When to call each `free_*` function is documented in the
 [C++ API Usage page](api-reference/cpp.md#rx-step-3-free-buffers).

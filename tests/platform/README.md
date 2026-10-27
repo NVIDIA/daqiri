@@ -85,3 +85,8 @@ rejected. Run just these cases with the same environment and executable override
 ```bash
 python3 -m pytest tests/platform/test_multi_region_rx.py -m platform -k tx
 ```
+
+`test_multi_region_rx.py::test_shared_tx_lifetime` exercises raw and endpoint
+shared TX with one GPU payload slot and two slots per private CPU segment. It
+checks delayed clones, clone-of-clone, original cancellation, full gathered
+checksums, and queue/MR deletion while an unsent descriptor retains storage.
