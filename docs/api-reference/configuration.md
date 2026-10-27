@@ -640,12 +640,15 @@ without an epoch field, an old late packet is indistinguishable from the same sl
   Direct polling and other engines reject shared mode. Shared mode uses ordinary
   SEND WQEs; eMPW packing is disabled.
 - **`max_inflight_sends`**: Shared-mode send-credit limit, independent of storage pool
-  sizes. `0`/omitted selects twice the smallest region's `num_bufs`; an explicit
-  value must fit the device capacity and be at least `batch_size`. Queued, worker-pending,
-  and NIC-posted packets all consume credits until completion. This field requires
-  `buffer_mode: shared` when nonzero. For two private headers plus one reused payload,
-  configure two buffers in each header MR and one in the payload MR, with at least
-  two send credits. A clone allocates no new buffer in a selected shared segment.
+  sizes. `0`/omitted selects twice the smallest region's `num_bufs`. The effective
+  limit, whether explicit or automatically derived, must fit the device capacity and
+  be at least `batch_size`. Queued, worker-pending, and NIC-posted packets all consume
+  credits until completion. This field requires `buffer_mode: shared` when nonzero.
+  For two sends with private header segments and one shared payload buffer, use
+  `batch_size: 1`, two buffers in each header MR, one in the payload MR, and at least
+  two send credits. Acquire a one-packet burst, clone it, and submit the two bursts
+  separately. Acquiring a fresh two-packet burst would require two buffers in every
+  region. A clone allocates no new buffer in a selected shared segment.
 - **`offloads`**: List of hardware offloads to enable. Each offload installs an RTE Flow rule
   during `daqiri_init()`; initialization fails if the NIC cannot program the rule.
   - type: `list`
