@@ -63,6 +63,17 @@ if(TARGET daqiri_rdma)
 endif()
 
 if(TARGET daqiri_ibverbs)
+  add_executable(daqiri_null_memory_region_test null_memory_region_test.cpp)
+  target_compile_features(daqiri_null_memory_region_test PRIVATE cxx_std_17)
+  target_include_directories(daqiri_null_memory_region_test PRIVATE ${PROJECT_SOURCE_DIR})
+  if(NOT BUILD_SHARED_LIBS AND UNIX AND NOT APPLE)
+    target_link_libraries(daqiri_null_memory_region_test PRIVATE
+      "-Wl,--start-group" ${DAQIRI_TEST_STATIC_LIBS} "-Wl,--end-group" ${DAQIRI_YAML_TARGET})
+  else()
+    target_link_libraries(daqiri_null_memory_region_test PRIVATE daqiri::daqiri ${DAQIRI_YAML_TARGET})
+  endif()
+  add_test(NAME daqiri_null_memory_region_test COMMAND daqiri_null_memory_region_test)
+
   add_executable(daqiri_ibverbs_tx_segments_test ibverbs_tx_segments_test.cpp)
   target_compile_features(daqiri_ibverbs_tx_segments_test PRIVATE cxx_std_17)
   target_include_directories(daqiri_ibverbs_tx_segments_test PRIVATE ${PROJECT_SOURCE_DIR})

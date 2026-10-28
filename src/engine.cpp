@@ -501,6 +501,10 @@ Status Engine::set_external_memory_regions(const NetworkConfig& cfg,
                        name);
       return Status::INVALID_PARAMETER;
     }
+    if (mr_it->second.kind_ == MemoryKind::NULL_MR) {
+      DAQIRI_LOG_ERROR("Null memory region '{}' cannot have an external binding", name);
+      return Status::INVALID_PARAMETER;
+    }
     if (binding.data == nullptr || binding.capacity == 0) {
       DAQIRI_LOG_ERROR("External memory binding '{}' has a null pointer or zero capacity", name);
       return Status::INVALID_PARAMETER;
@@ -590,7 +594,8 @@ Status Engine::set_external_memory_regions(const NetworkConfig& cfg,
     external_mrs_.emplace(name, resolved);
   }
   for (const auto& [name, mr] : cfg.mrs_) {
-    if (!mr.owned_ && external_mrs_.find(name) == external_mrs_.end()) {
+    if (mr.kind_ != MemoryKind::NULL_MR && !mr.owned_ &&
+        external_mrs_.find(name) == external_mrs_.end()) {
       DAQIRI_LOG_ERROR("Memory region '{}' has owned=false but no external binding", name);
       external_mrs_.clear();
       return Status::INVALID_PARAMETER;
@@ -870,6 +875,13 @@ Status Engine::allocate_memory_regions() {
   // overflow, this lets raw ibverbs aggregate many small HUGE regions into the
   // minimum number of hugetlb mappings.
   for (auto& [name, mr] : cfg_.mrs_) {
+    if (mr.kind_ == MemoryKind::NULL_MR) {
+      mr.buf_size_ = mr.num_bufs_ = mr.adj_size_ = mr.ttl_size_ = 0;
+      mr.affinity_ = 0;
+      mr.access_ = 0;
+      mr.owned_ = true;
+      continue;
+    }
     if (mr.num_bufs_ != 0 && mr.adj_size_ > std::numeric_limits<size_t>::max() / mr.num_bufs_) {
       DAQIRI_LOG_ERROR("Memory region '{}' size overflows", name);
       return Status::INVALID_PARAMETER;
@@ -941,6 +953,9 @@ Status Engine::allocate_memory_regions() {
   }
 
   for (auto& mr : cfg_.mrs_) {
+    if (mr.second.kind_ == MemoryKind::NULL_MR) {
+      continue;  // No allocation: each RX queue creates a null MR in its own PD.
+    }
     void* ptr = nullptr;
     AllocRegion ar;
     ar.mr_name_ = mr.second.name_;
@@ -1169,6 +1184,37 @@ int Engine::get_port_id(const std::string& key) {
   return -1;
 }
 
+bool validate_queue_memory_regions(const NetworkConfig& config, const CommonQueueConfig& queue,
+                                   bool rx) {
+  bool pass = true;
+  if (!queue.mr_lengths_.empty() && queue.mr_lengths_.size() != queue.mrs_.size()) {
+    DAQIRI_LOG_ERROR("Queue '{}' scatter lengths must match its memory regions", queue.name_);
+    return false;
+  }
+  for (size_t i = 0; i < queue.mrs_.size(); ++i) {
+    const auto region = config.mrs_.find(queue.mrs_[i]);
+    if (region == config.mrs_.end()) {
+      DAQIRI_LOG_ERROR("Queue references unknown memory region '{}'", queue.mrs_[i]);
+      pass = false;
+      continue;
+    }
+    const uint32_t length = queue.mr_lengths_.empty() ? 0 : queue.mr_lengths_[i];
+    if (region->second.kind_ == MemoryKind::NULL_MR) {
+      if (!rx || (length == 0 && i + 1 != queue.mrs_.size())) {
+        DAQIRI_LOG_ERROR(
+            "Null region '{}' requires RX and an explicit length before another "
+            "scatter element",
+            queue.mrs_[i]);
+        pass = false;
+      }
+    } else if (length != 0) {
+      DAQIRI_LOG_ERROR("Queue scatter length is supported only for null memory regions");
+      pass = false;
+    }
+  }
+  return pass;
+}
+
 bool validate_network_config(const NetworkConfig& config) {
   bool pass = true;
   std::set<std::string> mr_names;
@@ -1188,6 +1234,12 @@ bool validate_network_config(const NetworkConfig& config) {
   // Verify all memory regions are used in queues and all queue MRs are listed in the MR section
   for (const auto& mr : config.mrs_) {
     mr_names.emplace(mr.second.name_);
+    if (mr.second.kind_ == MemoryKind::NULL_MR &&
+        (config.common_.stream_type != StreamType::RAW ||
+         config.common_.engine_type != EngineType::IBVERBS)) {
+      DAQIRI_LOG_ERROR("Null memory regions require the raw ibverbs engine");
+      pass = false;
+    }
   }
 
   // Shared TX owns the entire slot allocator for each of its MRs. Aliasing a
@@ -1205,6 +1257,7 @@ bool validate_network_config(const NetworkConfig& config) {
     std::set<uint16_t> direct_rx_queue_ids;
     std::unordered_set<FlowId> interface_rx_flow_ids;
     for (const auto& rxq : intf.rx_.queues_) {
+      if (!validate_queue_memory_regions(config, rxq.common_, true)) pass = false;
       rx_queue_ids.insert(rxq.common_.id_);
       if (rxq.poll_mode_ == QueuePollMode::DIRECT) {
         direct_rx_queue_ids.insert(rxq.common_.id_);
@@ -1238,6 +1291,7 @@ bool validate_network_config(const NetworkConfig& config) {
       }
     }
     for (const auto& txq : intf.tx_.queues_) {
+      if (!validate_queue_memory_regions(config, txq.common_, false)) pass = false;
       if (txq.buffer_mode_ != TxBufferMode::CYCLIC && txq.buffer_mode_ != TxBufferMode::SHARED) {
         DAQIRI_LOG_ERROR("TX queue '{}' has an invalid buffer mode", txq.common_.name_);
         pass = false;
@@ -1325,10 +1379,12 @@ bool validate_network_config(const NetworkConfig& config) {
     size_t max_tx_payload_frame = 0;
     auto queue_frame_size = [&](const CommonQueueConfig& queue) {
       size_t total = 0;
-      for (const auto& mr_name : queue.mrs_) {
-        auto it = config.mrs_.find(mr_name);
+      for (size_t i = 0; i < queue.mrs_.size(); ++i) {
+        auto it = config.mrs_.find(queue.mrs_[i]);
         if (it != config.mrs_.end()) {
-          total += it->second.buf_size_;
+          total += it->second.kind_ == MemoryKind::NULL_MR
+                       ? (i < queue.mr_lengths_.size() ? queue.mr_lengths_[i] : 0)
+                       : it->second.buf_size_;
         }
       }
       return total;
@@ -1343,6 +1399,11 @@ bool validate_network_config(const NetworkConfig& config) {
     }
     for (const auto& reorder : intf.rx_.reorder_configs_) {
       q_mr_names.emplace(reorder.memory_region_);
+      auto output = config.mrs_.find(reorder.memory_region_);
+      if (output != config.mrs_.end() && output->second.kind_ == MemoryKind::NULL_MR) {
+        DAQIRI_LOG_ERROR("Reorder output cannot be a null memory region");
+        pass = false;
+      }
     }
 
     for (const auto& flow : intf.rx_.flows_) {
@@ -1438,6 +1499,16 @@ bool validate_network_config(const NetworkConfig& config) {
           continue;
         }
         for (const uint16_t queue_id : queues_it->second) {
+          for (const auto& queue : intf.rx_.queues_) {
+            if (queue.common_.id_ != queue_id) continue;
+            for (const auto& name : queue.common_.mrs_) {
+              const auto region = config.mrs_.find(name);
+              if (region != config.mrs_.end() && region->second.kind_ == MemoryKind::NULL_MR) {
+                DAQIRI_LOG_ERROR("Reorder does not support RX queues with null scatter elements");
+                pass = false;
+              }
+            }
+          }
           if (direct_rx_queue_ids.find(queue_id) != direct_rx_queue_ids.end()) {
             DAQIRI_LOG_WARN(
                 "Reorder config '{}' targets direct RX queue {} on interface '{}'; direct "

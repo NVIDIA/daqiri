@@ -116,3 +116,27 @@ def test_shared_tx_lifetime(reproducer, regions, headers):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "PASS: shared TX private headers, GPU payload lifetime" in result.stdout
+
+
+@pytest.mark.platform
+@pytest.mark.parametrize("mode", ["indirect", "direct"])
+@pytest.mark.parametrize("layout,regions,frame_size", [
+    ("head", 2, 5142),
+    ("head", 3, 5142),
+    ("middle", 3, 5142),
+    ("tail", 2, 5142),
+    ("head-tail", 3, 5142),
+    ("head", 3, 100),
+    ("middle", 3, 100),
+    ("tail", 3, 100),
+    ("all", 1, 5142),
+])
+def test_null_region_rx(reproducer, mode, layout, regions, frame_size):
+    binary, environment = reproducer
+    env = environment.copy()
+    env["DAQIRI_PLATFORM_NULL_LAYOUT"] = layout
+    env["DAQIRI_IBV_STRIDING"] = "1"  # Null regions must always use a regular RQ.
+    result = subprocess.run([str(binary), str(regions), str(frame_size), mode],
+                            env=env, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PASS: null scatter discard and retained byte integrity across 1100 packets" in result.stdout

@@ -313,6 +313,7 @@ template <typename Config> EngineType get_engine_type(const Config &config);
  * @param idx Index of packet
  * @return Pointer to packet data
  */
+// Raw ibverbs null-MR segments return nullptr; their length counts discarded bytes.
 void *get_segment_packet_ptr(BurstParams *burst, int seg, int idx);
 
 /**

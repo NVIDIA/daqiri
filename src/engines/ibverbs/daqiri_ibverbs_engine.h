@@ -282,6 +282,7 @@ struct IbvRxQueue {
   };
   std::vector<RxRegion> regions;
   std::vector<struct ibv_mr*> registrations;
+  std::vector<uint32_t> mr_lengths;   // optional null-region scatter lengths
   std::vector<std::string> mr_names;  // configured MR list for this queue
   std::string mr_name;
   uint8_t* mr_base = nullptr;  // base VA of the stride pool (striding path)

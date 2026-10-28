@@ -37,6 +37,8 @@ namespace daqiri {
 // Apply the common semantic checks used before engine initialization. This path
 // does not allocate packet memory, initialize an engine, or access a NIC.
 bool validate_network_config(const NetworkConfig& config);
+bool validate_queue_memory_regions(const NetworkConfig& config, const CommonQueueConfig& queue,
+                                   bool rx);
 
 struct AllocRegion {
   enum class Deallocator {

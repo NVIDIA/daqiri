@@ -109,6 +109,9 @@ runtime binding.
       the integrated GPU in a hybrid-GPU system such as IGX Thor. On discrete-GPU systems,
       prefer `device` for high-throughput RX/TX paths.
     - `host`: Regular CPU memory (not recommended)
+    - `null`: No backing allocation. Raw ibverbs RX scatter entries use a verbs null MR
+      to discard bytes in the NIC. `buf_size`, `num_bufs`, `affinity`, and `access` may
+      be omitted and are ignored with a warning when supplied. No external binding is allowed.
   With the raw ibverbs engine, DAQIRI-owned `huge` regions declared in the startup configuration
   and having the same NUMA affinity share a hugetlb arena. DAQIRI chooses the available page size
   that can back the regions with the least rounding, while registering every region separately.
@@ -168,6 +171,45 @@ runtime binding.
 - **`buf_size`**: Size of each buffer in bytes. Should match the expected packet size, or
   the segment size when using header-data split.
   - type: `integer`
+
+### Example: Discard headers before retaining the payload
+
+Declare a null region with only its name and kind:
+
+```yaml
+memory_regions:
+  - name: DISCARD
+    kind: "null"
+  - name: PAYLOAD
+    kind: device
+    affinity: 0
+    access: [local]
+    num_bufs: 8192
+    buf_size: 4096
+```
+
+Use a queue entry with `name` and `length` to discard a fixed number of bytes before
+another segment. Here the NIC discards the first 42 bytes and writes the payload directly
+to GPU memory:
+
+```yaml
+memory_regions:
+  - {name: DISCARD, length: 42}
+  - PAYLOAD
+```
+
+`length` is a positive 32-bit byte count on the queue entry, independent of region size.
+It is supported only for null RX entries. A final bare `DISCARD` entry discards all
+remaining bytes; a non-final null entry must specify `length`. The same named null region
+can appear more than once with different lengths. Null entries count toward the four-segment
+limit and force a regular RQ even on a discard-only queue. RX queue depth comes from the
+smallest retained region's buffer count; a discard-only queue uses 256 receive slots.
+
+Discarded segments report a null packet pointer and their consumed byte count, including
+zero when the packet ends earlier. Free each burst as usual. Null regions cannot be used
+for TX, reorder input/output, or socket/RDMA/DPDK queues. Fixed discard lengths contribute
+to automatic MTU sizing; an unbounded final discard does not describe a maximum wire size,
+so configure the netdev MTU for the expected frames when there is no matching local TX queue.
 
 ### Example: Header-Data Split
 
@@ -290,7 +332,8 @@ TX queues on that interface are already in use.
   - type: `integer`
   - C++ or Python callers constructing an indirect UDP RX queue programmatically must set this
     field explicitly. The default `CommonQueueConfig` value of `0` is not a valid UDP batch size.
-- **`memory_regions`**: List of memory region names (defined in [Memory Regions](#memory-regions)).
+- **`memory_regions`**: List of memory region names (defined in [Memory Regions](#memory-regions)),
+  optionally using `{name: DISCARD, length: 42}` for null RX scatter elements.
   The order determines segment mapping: first region = segment 0, second = segment 1, etc.
   A single region means all packet data lands in one place, while two regions enables header-data
   split.

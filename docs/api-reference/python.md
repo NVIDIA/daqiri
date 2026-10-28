@@ -806,7 +806,7 @@ encapsulation/push rules are configured in YAML under `tx.flows`.
 | `EngineType` | `UNKNOWN`, `DEFAULT`, `DPDK`, `SOCKET`, `RDMA` |
 | `Direction` | `RX`, `TX`, `TX_RX` |
 | `BufferLocation` | `CPU`, `GPU`, `CPU_GPU_SPLIT` |
-| `MemoryKind` | `HOST`, `HOST_PINNED`, `HUGE`, `DEVICE`, `INVALID` |
+| `MemoryKind` | `HOST`, `HOST_PINNED`, `HUGE`, `DEVICE`, `NULL_MR`, `INVALID` |
 | `StreamType` | `RAW`, `SOCKET`, `INVALID` |
 | `QueuePollMode` | `INDIRECT`, `DIRECT`, `INVALID` |
 | `TxBufferMode` | `CYCLIC`, `SHARED` |
@@ -875,3 +875,11 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 compatible hugepage pool cannot satisfy a DAQIRI-owned region; DAQIRI does not silently use
 regular pages or transparent hugepages. Select `MemoryKind.HOST` when regular host memory is
 intended.
+
+`MemoryKind.NULL_MR` represents a raw ibverbs RX discard region with no backing storage.
+For typed configurations, set `CommonQueueConfig.memory_region_lengths` parallel to
+`memory_regions`, for example `[42, 0]` for `["DISCARD", "PAYLOAD"]`. A zero length
+uses the region default; for null regions it is allowed only in the final position and
+discards the remainder. YAML and dictionary configs use `{"name": "DISCARD", "length": 42}`
+in the queue's `memory_regions` list. See the
+[null-region example](configuration.md#example-discard-headers-before-retaining-the-payload).

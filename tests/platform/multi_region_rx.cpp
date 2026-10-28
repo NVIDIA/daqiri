@@ -230,7 +230,7 @@ void run_shared(const std::vector<int>& sizes, bool endpoint, daqiri::EndpointId
 
 void run(int regions, int frame_size, bool direct, int tx_regions = 0, bool tx_direct = false,
          bool endpoint = false, bool shared = false) {
-  require(regions >= 2 && regions <= 5, "RX region count must be 2..5");
+  require(regions >= 1 && regions <= 5, "RX region count must be 1..5");
   require(frame_size >= 64 && frame_size <= kPrefix + kPayload, "Invalid frame size");
   const int gpu = std::stoi(setting("DAQIRI_PLATFORM_GPU", "0"));
   const int numa = std::stoi(setting("DAQIRI_PLATFORM_NUMA", "0"));
@@ -250,6 +250,20 @@ void run(int regions, int frame_size, bool direct, int tx_regions = 0, bool tx_d
                            : regions == 3 ? std::vector<int>{kHeader, 1000, kPayload}
                            : regions == 4 ? std::vector<int>{kHeader, 1000, 2000, 2100}
                                           : std::vector<int>{kHeader, 1000, 1000, 1000, 2100};
+  const std::string null_layout = setting("DAQIRI_PLATFORM_NULL_LAYOUT", "");
+  std::vector<bool> null_segments(regions, false);
+  if (!null_layout.empty()) {
+    if (null_layout == "all") {
+      require(regions == 1, "Discard-only layout requires one region");
+      sizes = {frame_size};
+      null_segments[0] = true;
+    } else {
+      require(regions >= 2, "Null scatter requires multiple regions");
+      if (null_layout == "head" || null_layout == "head-tail") null_segments[0] = true;
+      if (null_layout == "middle") null_segments[1] = true;
+      if (null_layout == "tail" || null_layout == "head-tail") null_segments[regions - 1] = true;
+    }
+  }
   const int gpu_start = regions == 2 ? 1 : 2;
   std::vector<int> tx_sizes;
   if (tx_regions == 0) {
@@ -310,7 +324,18 @@ void run(int regions, int frame_size, bool direct, int tx_regions = 0, bool tx_d
     add_region(config, name, sizes[seg],
                seg < gpu_start ? daqiri::MemoryKind::HUGE : daqiri::MemoryKind::DEVICE,
                seg < gpu_start ? numa : gpu);
+    if (null_segments[seg]) {
+      auto& region = config.mrs_.at(name);
+      region.kind_ = daqiri::MemoryKind::NULL_MR;
+      // These fields must never affect allocation, registration, or queue depth.
+      region.buf_size_ = static_cast<size_t>(-1);
+      region.num_bufs_ = 0;
+      region.affinity_ = UINT16_MAX;
+      region.access_ = UINT32_MAX;
+      region.owned_ = false;
+    }
     rx.common_.mrs_.push_back(name);
+    rx.common_.mr_lengths_.push_back(null_segments[seg] && seg + 1 < regions ? sizes[seg] : 0);
   }
   intf.rx_.queues_.push_back(rx);
   daqiri::FlowConfig flow{};
@@ -358,7 +383,7 @@ void run(int regions, int frame_size, bool direct, int tx_regions = 0, bool tx_d
   }
 
   // TX cases cross slot and SQ wraparound with distinct bytes per packet.
-  const int packets = tx_regions ? 1100 : 8;
+  const int packets = tx_regions || !null_layout.empty() ? 1100 : 8;
   for (int packet = 0; packet < packets; ++packet) {
     std::vector<unsigned char> expected(frame_size);
     for (int i = kHeader; i < frame_size; ++i) {
@@ -419,6 +444,11 @@ void run(int regions, int frame_size, bool direct, int tx_regions = 0, bool tx_d
       require(daqiri::get_segment_packet_length(incoming.burst, seg, 0) == length,
               "Incorrect segment length: " + std::to_string(seg));
       void* ptr = daqiri::get_segment_packet_ptr(incoming.burst, seg, 0);
+      if (null_segments[seg]) {
+        require(ptr == nullptr, "Discarded scatter element has a backing pointer");
+        offset += length;
+        continue;
+      }
       require(ptr != nullptr, "Missing segment buffer");
       std::vector<unsigned char> actual(length);
       if (seg >= gpu_start) {
@@ -448,7 +478,46 @@ void run(int regions, int frame_size, bool direct, int tx_regions = 0, bool tx_d
               "Incorrect UDP checksum over gathered segments");
     }
   }
-  std::cout << "PASS: exact CPU/GPU byte integrity across " << packets << " packets\n";
+  if (null_layout == "all") {
+    auto completed = [&](daqiri::ResourceOpId operation) {
+      daqiri::ResourceOpResult result{};
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+      while (daqiri::poll_resource_op(&result) != daqiri::Status::SUCCESS) {
+        require(std::chrono::steady_clock::now() < deadline, "Resource operation timed out");
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
+      }
+      require(result.op_id_ == operation && result.status_ == daqiri::Status::SUCCESS,
+              "Null resource operation failed");
+    };
+    daqiri::MemoryRegionConfig runtime{};
+    runtime.name_ = "runtime-discard";
+    runtime.kind_ = daqiri::MemoryKind::NULL_MR;
+    daqiri::ResourceOpId operation = 0;
+    require(daqiri::add_memory_region_async(runtime, &operation) == daqiri::Status::SUCCESS,
+            "Runtime null MR addition rejected");
+    completed(operation);
+    daqiri::RxQueueConfig runtime_queue{};
+    runtime_queue.common_.id_ = 2;
+    runtime_queue.common_.mrs_ = {runtime.name_};
+    runtime_queue.poll_mode_ = daqiri::QueuePollMode::DIRECT;
+    require(daqiri::add_rx_queue_async(port, runtime_queue, &operation) == daqiri::Status::SUCCESS,
+            "Runtime null RX queue addition rejected");
+    completed(operation);
+    require(daqiri::delete_memory_region_async(runtime.name_, &operation) ==
+                daqiri::Status::RESOURCE_IN_USE,
+            "Deleted a null MR while its queue was active");
+    require(daqiri::delete_rx_queue_async(port, 2, &operation) == daqiri::Status::SUCCESS,
+            "Runtime null RX queue deletion rejected");
+    completed(operation);
+    require(
+        daqiri::delete_memory_region_async(runtime.name_, &operation) == daqiri::Status::SUCCESS,
+        "Runtime null MR deletion rejected");
+    completed(operation);
+  }
+  std::cout << "PASS: "
+            << (null_layout.empty() ? "exact CPU/GPU byte integrity"
+                                    : "null scatter discard and retained byte integrity")
+            << " across " << packets << " packets\n";
 }
 }  // namespace
 

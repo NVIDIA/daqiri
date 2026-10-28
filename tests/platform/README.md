@@ -91,6 +91,18 @@ shared TX with one GPU payload slot and two slots per private CPU segment. It
 checks delayed clones, clone-of-clone, original cancellation, full gathered
 checksums, and queue/MR deletion while an unsent descriptor retains storage.
 
+`test_multi_region_rx.py::test_null_region_rx` verifies leading, middle, trailing,
+combined, and discard-only null regions in direct and indirect polling. It compares every
+retained CPU/GPU byte over 1100 packets, checks null pointers and discarded lengths,
+exercises short packets and slot reuse, and supplies deliberately unusable allocation
+fields to ensure null regions ignore them. Discard-only cases also create and delete a
+null region and RX queue at runtime, including the in-use deletion guard. Run with the
+same fixture settings:
+
+```bash
+python3 -m pytest tests/platform/test_multi_region_rx.py -m platform -k null_region
+```
+
 ## RDMA application round-trip latency
 
 `rdma_latency.cpp` runs RC SEND ping-pong between two existing, physically

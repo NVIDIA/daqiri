@@ -200,7 +200,7 @@ struct RawUdpEndpointConfig {
   uint32_t mtu_ = 1514;  // Maximum L2 frame bytes, excluding Ethernet FCS.
 };
 
-enum class MemoryKind { HOST, HOST_PINNED, HUGE, DEVICE, INVALID };
+enum class MemoryKind { HOST, HOST_PINNED, HUGE, DEVICE, INVALID, NULL_MR };
 
 struct ExternalMemoryRegion {
   void* data = nullptr;
@@ -295,6 +295,8 @@ inline MemoryKind GetMemoryKindFromString(const std::string& mode_str) {
     return MemoryKind::HUGE;
   } else if (mode_str == "device") {
     return MemoryKind::DEVICE;
+  } else if (mode_str == "null") {
+    return MemoryKind::NULL_MR;
   }
 
   return MemoryKind::INVALID;
@@ -673,6 +675,9 @@ struct CommonQueueConfig {
   int split_boundary_ = 0;
   std::string cpu_core_;
   std::vector<std::string> mrs_;
+  // Optional scatter lengths parallel to mrs_; zero uses the region default.
+  // A null region needs an explicit length unless it is the final RX segment.
+  std::vector<uint32_t> mr_lengths_;
   std::vector<std::string> offloads_;
   EngineExtraQueueConfig* extra_queue_config_ = nullptr;
 };

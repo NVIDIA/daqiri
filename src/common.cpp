@@ -1011,6 +1011,10 @@ Status get_memory_region_requirements(const NetworkConfig& config,
   for (const auto& [name, mr] : config.mrs_) {
     MemoryRegionRequirement req;
     req.kind = mr.kind_;
+    if (mr.kind_ == MemoryKind::NULL_MR) {
+      requirements.emplace(name, req);
+      continue;
+    }
     req.num_bufs = mr.num_bufs_;
     switch (engine) {
       case EngineType::DPDK:
@@ -1779,8 +1783,20 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_memory_region_config(
     }
     if (tmr.kind_ == daqiri::MemoryKind::INVALID) {
       DAQIRI_LOG_ERROR(
-          "Invalid memory-region kind; valid values are huge, device, host_pinned, and host");
+          "Invalid memory-region kind; valid values are huge, device, host_pinned, host, and null");
       return false;
+    }
+    if (tmr.kind_ == daqiri::MemoryKind::NULL_MR) {
+      for (const char* field : {"buf_size", "num_bufs", "affinity", "access"}) {
+        if (mr[field].IsDefined()) {
+          DAQIRI_LOG_WARN("Null memory region '{}' ignores {}", tmr.name_, field);
+        }
+      }
+      tmr.buf_size_ = tmr.num_bufs_ = tmr.adj_size_ = tmr.ttl_size_ = 0;
+      tmr.affinity_ = 0;
+      tmr.access_ = 0;
+      tmr.owned_ = true;
+      return true;
     }
     if (!daqiri::detail::parse_yaml_integer(mr["buf_size"], tmr.buf_size_) ||
         !daqiri::detail::parse_yaml_integer(mr["num_bufs"], tmr.num_bufs_) ||
@@ -2251,7 +2267,21 @@ bool parse_common_queue_config(const YAML::Node& q_item, daqiri::CommonQueueConf
       }
       else {
         common.mrs_.reserve(mrs.size());
-        for (const auto& mr : mrs) { common.mrs_.push_back(mr.as<std::string>()); }
+        for (const auto& mr : mrs) {
+          uint32_t length = 0;
+          if (mr.IsMap()) {
+            if (!daqiri::detail::validate_yaml_mapping_keys(mr, {"name", "length"},
+                                                            "queue memory region") ||
+                !daqiri::detail::parse_yaml_integer(mr["length"], length) || length == 0) {
+              DAQIRI_LOG_ERROR("Queue memory-region length must be a positive 32-bit integer");
+              return false;
+            }
+            common.mrs_.push_back(mr["name"].as<std::string>());
+          } else {
+            common.mrs_.push_back(mr.as<std::string>());
+          }
+          common.mr_lengths_.push_back(length);
+        }
       }
     }
   } catch (const std::exception& e) {

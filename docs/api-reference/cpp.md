@@ -56,6 +56,14 @@ substitute regular or transparent-hugepage memory when the requested hugetlb all
 unavailable; initialization fails instead. Use `MemoryKind::HOST` or `MemoryKind::HOST_PINNED` when regular host memory is
 intended. Callers supplying an external memory binding remain responsible for its backing.
 
+`MemoryKind::NULL_MR` (`kind: "null"` in YAML) discards raw ibverbs RX scatter bytes
+without allocating packet storage. Set `CommonQueueConfig::mr_lengths_` parallel to `mrs_`
+(e.g. `mrs_ = {"DISCARD", "PAYLOAD"}` and `mr_lengths_ = {42, 0}`). Zero uses the region
+default; a null entry may use zero only in the final position, to discard the remainder.
+A discarded segment returns `nullptr` from `get_segment_packet_ptr()` and its consumed
+byte count from `get_segment_packet_length()`. Release the burst normally. See the
+[null-region configuration example](configuration.md#example-discard-headers-before-retaining-the-payload).
+
 Only one engine may be active in a process. Calling `daqiri_init()` again before
 `shutdown()` returns `Status::INTERNAL_ERROR` and leaves the running engine unchanged.
 After `shutdown()` completes, a later `daqiri_init()` creates a fresh engine instance and

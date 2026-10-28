@@ -494,6 +494,12 @@ the CPU or the GPU:
   Recommended on integrated GPUs (NVIDIA GB10 / DGX Spark), where the
   NIC cannot peer-DMA into device memory.
 - `host`: regular CPU memory (not recommended for hot paths).
+- `null`: no backing memory. In raw ibverbs RX scatter lists, the NIC discards this
+  segment's bytes. Give a non-final null entry a queue-local `length` to skip headers
+  or an unwanted span before retained data; a final bare null entry drops the remainder.
+  Region size, buffer count, access, and affinity are ignored. The application receives
+  a null segment pointer and the discarded byte count, and still releases the burst.
+
 
 The size of the memory region (`buf_size`) dictates the largest
 contiguous chunk that can be stored in a single *segment*. For example,
