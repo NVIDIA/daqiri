@@ -877,9 +877,8 @@ regular pages or transparent hugepages. Select `MemoryKind.HOST` when regular ho
 intended.
 
 `MemoryKind.NULL_MR` represents a raw ibverbs RX discard region with no backing storage.
-For typed configurations, set `CommonQueueConfig.memory_region_lengths` parallel to
-`memory_regions`, for example `[42, 0]` for `["DISCARD", "PAYLOAD"]`. A zero length
-uses the region default; for null regions it is allowed only in the final position and
-discards the remainder. YAML and dictionary configs use `{"name": "DISCARD", "length": 42}`
-in the queue's `memory_regions` list. See the
+Set `MemoryRegionConfig.buf_size` to the discard span and reference the region by name
+in `CommonQueueConfig.memory_regions`, just as in YAML and dictionary configurations.
+A positive `buf_size` is required only when another MR follows. The final null MR may
+omit `buf_size` in YAML/dictionary configs or use `0` to discard the remainder. See the
 [null-region example](configuration.md#example-discard-headers-before-retaining-the-payload).

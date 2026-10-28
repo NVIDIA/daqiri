@@ -52,17 +52,15 @@ daqiri::NetworkConfig parse(const std::string& text) {
 
 void run() {
   using namespace daqiri;
-  // Ignore even values of the wrong type, without requiring any allocation fields.
-  auto config = parse(yaml("[{name: DISCARD, length: 42}, DATA]",
-                           "        buf_size: invalid\n        num_bufs: -1\n"
+  // Allocation-only fields are ignored; buf_size defines the discard span.
+  auto config = parse(yaml("[DISCARD, DATA]",
+                           "        buf_size: 42\n        num_bufs: -1\n"
                            "        affinity: [invalid]\n        access: invalid\n"));
   require(validate_network_config(config), "valid leading null rejected");
   const auto& discard = config.mrs_.at("DISCARD");
-  require(discard.kind_ == MemoryKind::NULL_MR && discard.buf_size_ == 0 &&
+  require(discard.kind_ == MemoryKind::NULL_MR && discard.buf_size_ == 42 &&
               discard.num_bufs_ == 0 && discard.access_ == 0 && discard.affinity_ == 0,
-          "null region allocation fields were not ignored");
-  auto& queue = config.ifs_[0].rx_.queues_[0].common_;
-  require(queue.mr_lengths_ == std::vector<uint32_t>({42, 0}), "scatter length lost");
+          "null region did not preserve buf_size or ignore allocation fields");
   MemoryRegionRequirements requirements;
   require(get_memory_region_requirements(config, requirements) == Status::SUCCESS,
           "requirements failed");
@@ -71,18 +69,26 @@ void run() {
               req.slot_size == 0 && req.alignment == 0,
           "null region requires backing memory");
   require(validate_network_config(parse(yaml("[DATA, DISCARD]"))), "tail discard rejected");
+  require(validate_network_config(parse(yaml("[DATA, DISCARD]", "        buf_size: 128\n"))),
+          "bounded tail discard rejected");
+  require(validate_network_config(parse(yaml("[DATA, DISCARD]", "        buf_size: 0\n"))),
+          "zero-size tail discard rejected");
   require(validate_network_config(parse(yaml("[DISCARD]", "", "null"))),
           "unquoted null or discard-only queue rejected");
-  require(validate_network_config(parse(yaml("[{name: DISCARD, length: 42}, DATA, DISCARD]"))),
-          "same null region at different scatter positions rejected");
+  require(
+      validate_network_config(parse(yaml("[DISCARD, DATA, DISCARD]", "        buf_size: 42\n"))),
+      "same null region at different scatter positions rejected");
+  require(!validate_network_config(parse(yaml("[DISCARD, DATA]"))),
+          "leading null accepted without buf_size");
+  require(!validate_network_config(parse(yaml("[DISCARD, DATA]", "        buf_size: 0\n"))),
+          "zero-size leading null accepted");
+  require(!validate_network_config(parse(yaml("[DATA, DISCARD, DATA]"))),
+          "middle null accepted without buf_size");
 
-  queue.mr_lengths_.clear();
-  require(!validate_network_config(config), "unbounded leading null accepted");
-  queue.mr_lengths_ = {42};
-  require(!validate_network_config(config), "mismatched length count accepted");
-  queue.mr_lengths_ = {42, 100};
-  require(!validate_network_config(config), "length on real memory accepted");
-  queue.mr_lengths_ = {42, 0};
+  auto& queue = config.ifs_[0].rx_.queues_[0].common_;
+  config.mrs_.at("DISCARD").buf_size_ = static_cast<size_t>(UINT32_MAX) + 1;
+  require(!validate_network_config(config), "oversized typed null buf_size accepted");
+  config.mrs_.at("DISCARD").buf_size_ = 42;
   TxQueueConfig tx{};
   tx.common_ = queue;
   config.ifs_[0].tx_.queues_ = {tx};
@@ -94,14 +100,17 @@ void run() {
   config.common_.stream_type = StreamType::SOCKET;
   require(!validate_network_config(config), "null socket accepted");
 
-  for (const auto* entry : {"{name: DISCARD, length: 0}", "{name: DISCARD, length: -1}",
-                            "{name: DISCARD, length: 4294967296}",
-                            "{name: DISCARD, length: 42, typo: true}", "{name: DISCARD}"}) {
+  for (const auto* size : {"invalid", "-1", "4294967296", "[42]"}) {
     NetworkConfig invalid{};
-    require(parse_network_config_from_yaml_string(yaml(std::string("[") + entry + ", DATA]"),
-                                                  invalid) != Status::SUCCESS,
-            "malformed scatter entry accepted");
+    require(parse_network_config_from_yaml_string(
+                yaml("[DATA, DISCARD]", std::string("        buf_size: ") + size + "\n"),
+                invalid) != Status::SUCCESS,
+            "malformed null buf_size accepted");
   }
+  NetworkConfig invalid{};
+  require(parse_network_config_from_yaml_string(yaml("[{name: DISCARD, length: 42}, DATA]"),
+                                                invalid) != Status::SUCCESS,
+          "queue-level discard length accepted");
 }
 }  // namespace
 

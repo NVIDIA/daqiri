@@ -756,7 +756,6 @@ void bind_config_types(py::module_ &m) {
       .def_readwrite("split_boundary", &CommonQueueConfig::split_boundary_)
       .def_readwrite("cpu_core", &CommonQueueConfig::cpu_core_)
       .def_readwrite("memory_regions", &CommonQueueConfig::mrs_)
-      .def_readwrite("memory_region_lengths", &CommonQueueConfig::mr_lengths_)
       .def_readwrite("offloads", &CommonQueueConfig::offloads_);
 
   py::class_<MemoryRegionConfig>(m, "MemoryRegionConfig")

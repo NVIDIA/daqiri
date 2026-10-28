@@ -495,10 +495,11 @@ the CPU or the GPU:
   NIC cannot peer-DMA into device memory.
 - `host`: regular CPU memory (not recommended for hot paths).
 - `null`: no backing memory. In raw ibverbs RX scatter lists, the NIC discards this
-  segment's bytes. Give a non-final null entry a queue-local `length` to skip headers
-  or an unwanted span before retained data; a final bare null entry drops the remainder.
-  Region size, buffer count, access, and affinity are ignored. The application receives
-  a null segment pointer and the discarded byte count, and still releases the burst.
+  segment's bytes. Set the region's `buf_size` to skip headers or an unwanted span before
+  retained data. `buf_size` is required only when another MR follows; the final null MR
+  can omit it or use `0` to discard the remainder. Buffer count, access, and affinity are
+  ignored. The application receives a null segment pointer and the discarded byte count,
+  and still releases the burst.
 
 
 The size of the memory region (`buf_size`) dictates the largest

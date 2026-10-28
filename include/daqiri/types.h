@@ -675,9 +675,6 @@ struct CommonQueueConfig {
   int split_boundary_ = 0;
   std::string cpu_core_;
   std::vector<std::string> mrs_;
-  // Optional scatter lengths parallel to mrs_; zero uses the region default.
-  // A null region needs an explicit length unless it is the final RX segment.
-  std::vector<uint32_t> mr_lengths_;
   std::vector<std::string> offloads_;
   EngineExtraQueueConfig* extra_queue_config_ = nullptr;
 };
@@ -687,7 +684,8 @@ struct MemoryRegionConfig {
   MemoryKind kind_;
   uint16_t affinity_;
   uint32_t access_;
-  size_t buf_size_;
+  // Null MR: discard span; zero discards the remainder and requires the final RX segment.
+  size_t buf_size_ = 0;
   size_t adj_size_ = 0;  // Populated by driver
   size_t ttl_size_ = 0;  // Populated by driver
   size_t num_bufs_;

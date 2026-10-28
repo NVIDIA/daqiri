@@ -110,8 +110,11 @@ runtime binding.
       prefer `device` for high-throughput RX/TX paths.
     - `host`: Regular CPU memory (not recommended)
     - `null`: No backing allocation. Raw ibverbs RX scatter entries use a verbs null MR
-      to discard bytes in the NIC. `buf_size`, `num_bufs`, `affinity`, and `access` may
-      be omitted and are ignored with a warning when supplied. No external binding is allowed.
+      to discard bytes in the NIC. `buf_size` specifies how many bytes to discard and is
+      required only when another memory region follows in the queue. If the null region
+      is last, omitting `buf_size` (or setting it to `0`) discards the remainder.
+      `num_bufs`, `affinity`, and `access` may be omitted and are ignored with a warning
+      when supplied. No external binding is allowed.
   With the raw ibverbs engine, DAQIRI-owned `huge` regions declared in the startup configuration
   and having the same NUMA affinity share a hugetlb arena. DAQIRI chooses the available page size
   that can back the regions with the least rounding, while registering every region separately.
@@ -169,17 +172,20 @@ runtime binding.
   reported by the demonstrated ConnectX-7 device.
   - type: `integer`
 - **`buf_size`**: Size of each buffer in bytes. Should match the expected packet size, or
-  the segment size when using header-data split.
+  the segment size when using header-data split. For `kind: "null"`, this is the discard
+  span in bytes, with no backing allocation. A positive value is required only if another
+  MR follows in the queue; the final null MR may omit it or use `0` to discard the remainder.
   - type: `integer`
 
 ### Example: Discard headers before retaining the payload
 
-Declare a null region with only its name and kind:
+Set the null region's `buf_size` to the number of bytes to discard before the payload:
 
 ```yaml
 memory_regions:
   - name: DISCARD
     kind: "null"
+    buf_size: 42
   - name: PAYLOAD
     kind: device
     affinity: 0
@@ -188,22 +194,21 @@ memory_regions:
     buf_size: 4096
 ```
 
-Use a queue entry with `name` and `length` to discard a fixed number of bytes before
-another segment. Here the NIC discards the first 42 bytes and writes the payload directly
-to GPU memory:
+Reference the regions by name in the RX queue. The NIC discards the first 42 bytes
+and writes the payload directly to GPU memory:
 
 ```yaml
 memory_regions:
-  - {name: DISCARD, length: 42}
+  - DISCARD
   - PAYLOAD
 ```
 
-`length` is a positive 32-bit byte count on the queue entry, independent of region size.
-It is supported only for null RX entries. A final bare `DISCARD` entry discards all
-remaining bytes; a non-final null entry must specify `length`. The same named null region
-can appear more than once with different lengths. Null entries count toward the four-segment
-limit and force a regular RQ even on a discard-only queue. RX queue depth comes from the
-smallest retained region's buffer count; a discard-only queue uses 256 receive slots.
+For a null region, `buf_size` is a 32-bit unsigned byte count. It must be positive if
+another MR follows in any queue using the region. When the null MR is last, `buf_size`
+is optional: omit it or use `0` to discard all remaining bytes, or supply a positive
+value for a fixed discard span. Null entries count toward the four-segment limit and
+force a regular RQ even on a discard-only queue. RX queue depth comes from the smallest
+retained region's buffer count; a discard-only queue uses 256 receive slots.
 
 Discarded segments report a null packet pointer and their consumed byte count, including
 zero when the packet ends earlier. Free each burst as usual. Null regions cannot be used
@@ -332,8 +337,7 @@ TX queues on that interface are already in use.
   - type: `integer`
   - C++ or Python callers constructing an indirect UDP RX queue programmatically must set this
     field explicitly. The default `CommonQueueConfig` value of `0` is not a valid UDP batch size.
-- **`memory_regions`**: List of memory region names (defined in [Memory Regions](#memory-regions)),
-  optionally using `{name: DISCARD, length: 42}` for null RX scatter elements.
+- **`memory_regions`**: List of memory region names (defined in [Memory Regions](#memory-regions)).
   The order determines segment mapping: first region = segment 0, second = segment 1, etc.
   A single region means all packet data lands in one place, while two regions enables header-data
   split.

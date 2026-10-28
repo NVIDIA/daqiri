@@ -1303,9 +1303,8 @@ Status IbverbsEngine::register_rx_mr(IbvRxQueue& q) {
     q.registrations.push_back(registration);
     const auto& mr = cfg_.mrs_[name];
     r.slot_size = static_cast<uint32_t>(mr.adj_size_);
-    const size_t index = q.regions.size();
-    r.seg_len = mr.kind_ == MemoryKind::NULL_MR
-                    ? (q.mr_lengths[index] ? q.mr_lengths[index] : UINT16_MAX)
+    r.seg_len = mr.kind_ == MemoryKind::NULL_MR && mr.buf_size_ == 0
+                    ? UINT16_MAX
                     : static_cast<uint32_t>(mr.buf_size_);
     q.regions.push_back(r);
   }
@@ -4149,8 +4148,6 @@ Status IbverbsEngine::setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf,
     return Status::INVALID_PARAMETER;
   }
   q.mr_names = qcfg.common_.mrs_;
-  q.mr_lengths = qcfg.common_.mr_lengths_;
-  if (q.mr_lengths.empty()) q.mr_lengths.resize(q.mr_names.size(), 0);
   q.mr_name = qcfg.common_.mrs_[0];
   if (q.mr_names.size() > MAX_NUM_SEGS) {
     DAQIRI_LOG_CRITICAL("RX queue {} configures {} memory regions; at most {} are supported",
@@ -6195,12 +6192,10 @@ void IbverbsEngine::ensure_port_mtus() {
     size_t rx_frame = 0, tx_frame = 0;
     auto queue_frame = [&](const CommonQueueConfig& c) {
       size_t sum = 0;
-      for (size_t i = 0; i < c.mrs_.size(); ++i) {
-        auto it = cfg_.mrs_.find(c.mrs_[i]);
+      for (const auto& name : c.mrs_) {
+        auto it = cfg_.mrs_.find(name);
         if (it != cfg_.mrs_.end()) {
-          sum += it->second.kind_ == MemoryKind::NULL_MR
-                     ? (i < c.mr_lengths_.size() ? c.mr_lengths_[i] : 0)
-                     : it->second.buf_size_;
+          sum += it->second.buf_size_;
         }
       }
       return sum;
@@ -6751,8 +6746,8 @@ Status IbverbsEngine::add_tx_queue_async(int port, const TxQueueConfig& config,
 Status IbverbsEngine::allocate_runtime_mr(MemoryRegionConfig config,
                                           const ExternalMemoryRegion* binding) {
   if (!config.name_.empty() && config.kind_ == MemoryKind::NULL_MR) {
-    if (binding != nullptr) return Status::INVALID_PARAMETER;
-    config.buf_size_ = config.num_bufs_ = config.adj_size_ = config.ttl_size_ = 0;
+    if (binding != nullptr || config.buf_size_ > UINT32_MAX) return Status::INVALID_PARAMETER;
+    config.num_bufs_ = config.adj_size_ = config.ttl_size_ = 0;
     config.access_ = config.affinity_ = 0;
     config.owned_ = true;
     cfg_.mrs_.emplace(config.name_, config);

@@ -125,11 +125,13 @@ def test_shared_tx_lifetime(reproducer, regions, headers):
     ("head", 3, 5142),
     ("middle", 3, 5142),
     ("tail", 2, 5142),
+    ("tail-fixed", 2, 5142),
     ("head-tail", 3, 5142),
     ("head", 3, 100),
     ("middle", 3, 100),
     ("tail", 3, 100),
     ("all", 1, 5142),
+    ("all-fixed", 1, 5142),
 ])
 def test_null_region_rx(reproducer, mode, layout, regions, frame_size):
     binary, environment = reproducer

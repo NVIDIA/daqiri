@@ -1787,12 +1787,19 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_memory_region_config(
       return false;
     }
     if (tmr.kind_ == daqiri::MemoryKind::NULL_MR) {
-      for (const char* field : {"buf_size", "num_bufs", "affinity", "access"}) {
+      for (const char* field : {"num_bufs", "affinity", "access"}) {
         if (mr[field].IsDefined()) {
           DAQIRI_LOG_WARN("Null memory region '{}' ignores {}", tmr.name_, field);
         }
       }
-      tmr.buf_size_ = tmr.num_bufs_ = tmr.adj_size_ = tmr.ttl_size_ = 0;
+      uint32_t buf_size = 0;
+      if (mr["buf_size"].IsDefined() &&
+          !daqiri::detail::parse_yaml_integer(mr["buf_size"], buf_size)) {
+        DAQIRI_LOG_ERROR("Null memory-region buf_size must be a 32-bit unsigned integer");
+        return false;
+      }
+      tmr.buf_size_ = buf_size;
+      tmr.num_bufs_ = tmr.adj_size_ = tmr.ttl_size_ = 0;
       tmr.affinity_ = 0;
       tmr.access_ = 0;
       tmr.owned_ = true;
@@ -2268,19 +2275,7 @@ bool parse_common_queue_config(const YAML::Node& q_item, daqiri::CommonQueueConf
       else {
         common.mrs_.reserve(mrs.size());
         for (const auto& mr : mrs) {
-          uint32_t length = 0;
-          if (mr.IsMap()) {
-            if (!daqiri::detail::validate_yaml_mapping_keys(mr, {"name", "length"},
-                                                            "queue memory region") ||
-                !daqiri::detail::parse_yaml_integer(mr["length"], length) || length == 0) {
-              DAQIRI_LOG_ERROR("Queue memory-region length must be a positive 32-bit integer");
-              return false;
-            }
-            common.mrs_.push_back(mr["name"].as<std::string>());
-          } else {
-            common.mrs_.push_back(mr.as<std::string>());
-          }
-          common.mr_lengths_.push_back(length);
+          common.mrs_.push_back(mr.as<std::string>());
         }
       }
     }

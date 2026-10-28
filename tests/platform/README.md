@@ -92,9 +92,10 @@ checks delayed clones, clone-of-clone, original cancellation, full gathered
 checksums, and queue/MR deletion while an unsent descriptor retains storage.
 
 `test_multi_region_rx.py::test_null_region_rx` verifies leading, middle, trailing,
-combined, and discard-only null regions in direct and indirect polling. It compares every
+combined, and discard-only null regions in direct and indirect polling, with both fixed
+`buf_size` discard spans and omitted/zero `buf_size` for final null MRs. It compares every
 retained CPU/GPU byte over 1100 packets, checks null pointers and discarded lengths,
-exercises short packets and slot reuse, and supplies deliberately unusable allocation
+exercises short packets and slot reuse, and supplies deliberately unusable allocation-only
 fields to ensure null regions ignore them. Discard-only cases also create and delete a
 null region and RX queue at runtime, including the in-use deletion guard. Run with the
 same fixture settings:

@@ -253,7 +253,7 @@ void run(int regions, int frame_size, bool direct, int tx_regions = 0, bool tx_d
   const std::string null_layout = setting("DAQIRI_PLATFORM_NULL_LAYOUT", "");
   std::vector<bool> null_segments(regions, false);
   if (!null_layout.empty()) {
-    if (null_layout == "all") {
+    if (null_layout == "all" || null_layout == "all-fixed") {
       require(regions == 1, "Discard-only layout requires one region");
       sizes = {frame_size};
       null_segments[0] = true;
@@ -261,7 +261,8 @@ void run(int regions, int frame_size, bool direct, int tx_regions = 0, bool tx_d
       require(regions >= 2, "Null scatter requires multiple regions");
       if (null_layout == "head" || null_layout == "head-tail") null_segments[0] = true;
       if (null_layout == "middle") null_segments[1] = true;
-      if (null_layout == "tail" || null_layout == "head-tail") null_segments[regions - 1] = true;
+      if (null_layout == "tail" || null_layout == "tail-fixed" || null_layout == "head-tail")
+        null_segments[regions - 1] = true;
     }
   }
   const int gpu_start = regions == 2 ? 1 : 2;
@@ -327,15 +328,18 @@ void run(int regions, int frame_size, bool direct, int tx_regions = 0, bool tx_d
     if (null_segments[seg]) {
       auto& region = config.mrs_.at(name);
       region.kind_ = daqiri::MemoryKind::NULL_MR;
+      // buf_size selects the discard span; zero on the final MR discards the remainder.
+      region.buf_size_ =
+          seg + 1 < regions || null_layout == "tail-fixed" || null_layout == "all-fixed"
+              ? sizes[seg]
+              : 0;
       // These fields must never affect allocation, registration, or queue depth.
-      region.buf_size_ = static_cast<size_t>(-1);
       region.num_bufs_ = 0;
       region.affinity_ = UINT16_MAX;
       region.access_ = UINT32_MAX;
       region.owned_ = false;
     }
     rx.common_.mrs_.push_back(name);
-    rx.common_.mr_lengths_.push_back(null_segments[seg] && seg + 1 < regions ? sizes[seg] : 0);
   }
   intf.rx_.queues_.push_back(rx);
   daqiri::FlowConfig flow{};

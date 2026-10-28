@@ -876,7 +876,7 @@ Status Engine::allocate_memory_regions() {
   // minimum number of hugetlb mappings.
   for (auto& [name, mr] : cfg_.mrs_) {
     if (mr.kind_ == MemoryKind::NULL_MR) {
-      mr.buf_size_ = mr.num_bufs_ = mr.adj_size_ = mr.ttl_size_ = 0;
+      mr.num_bufs_ = mr.adj_size_ = mr.ttl_size_ = 0;
       mr.affinity_ = 0;
       mr.access_ = 0;
       mr.owned_ = true;
@@ -1187,10 +1187,6 @@ int Engine::get_port_id(const std::string& key) {
 bool validate_queue_memory_regions(const NetworkConfig& config, const CommonQueueConfig& queue,
                                    bool rx) {
   bool pass = true;
-  if (!queue.mr_lengths_.empty() && queue.mr_lengths_.size() != queue.mrs_.size()) {
-    DAQIRI_LOG_ERROR("Queue '{}' scatter lengths must match its memory regions", queue.name_);
-    return false;
-  }
   for (size_t i = 0; i < queue.mrs_.size(); ++i) {
     const auto region = config.mrs_.find(queue.mrs_[i]);
     if (region == config.mrs_.end()) {
@@ -1198,18 +1194,14 @@ bool validate_queue_memory_regions(const NetworkConfig& config, const CommonQueu
       pass = false;
       continue;
     }
-    const uint32_t length = queue.mr_lengths_.empty() ? 0 : queue.mr_lengths_[i];
     if (region->second.kind_ == MemoryKind::NULL_MR) {
-      if (!rx || (length == 0 && i + 1 != queue.mrs_.size())) {
+      if (!rx || (region->second.buf_size_ == 0 && i + 1 != queue.mrs_.size()) ||
+          region->second.buf_size_ > UINT32_MAX) {
         DAQIRI_LOG_ERROR(
-            "Null region '{}' requires RX and an explicit length before another "
-            "scatter element",
+            "Null region '{}' requires RX and a positive 32-bit buf_size when another MR follows",
             queue.mrs_[i]);
         pass = false;
       }
-    } else if (length != 0) {
-      DAQIRI_LOG_ERROR("Queue scatter length is supported only for null memory regions");
-      pass = false;
     }
   }
   return pass;
@@ -1379,12 +1371,10 @@ bool validate_network_config(const NetworkConfig& config) {
     size_t max_tx_payload_frame = 0;
     auto queue_frame_size = [&](const CommonQueueConfig& queue) {
       size_t total = 0;
-      for (size_t i = 0; i < queue.mrs_.size(); ++i) {
-        auto it = config.mrs_.find(queue.mrs_[i]);
+      for (const auto& name : queue.mrs_) {
+        auto it = config.mrs_.find(name);
         if (it != config.mrs_.end()) {
-          total += it->second.kind_ == MemoryKind::NULL_MR
-                       ? (i < queue.mr_lengths_.size() ? queue.mr_lengths_[i] : 0)
-                       : it->second.buf_size_;
+          total += it->second.buf_size_;
         }
       }
       return total;
