@@ -411,6 +411,14 @@ bounded by `tx_depth`. For 4 KiB SEND-style stress tests, set the RX/TX
 memory-region `num_bufs` high enough for the chosen windows, for example at
 least `rx_depth` receive buffers and `tx_depth` transmit buffers per side.
 
+To use caller-driven RDMA polling, set `poll_mode: direct` on the interface's
+RX and/or TX queue and remove that queue's `cpu_core`, `batch_size`, and RX
+`timeout_us` fields. The benchmark already submits one packet per request and
+polls both RX and TX completions through the connection API. When both directions
+are direct, only the benchmark role thread services data-path work. Small SENDs
+from `huge` or `host_pinned` memory are inlined when they fit the QP's returned
+inline capacity (128 bytes requested); GPU messages use DMA.
+
 For namespace testing, split the file by role just as in the Linux socket test:
 
 - The server YAML keeps the server memory regions, the server interface with `socket_config.mode: server`, and `rdma_bench_server`.

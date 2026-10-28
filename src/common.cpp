@@ -2326,9 +2326,9 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_rx_queue_config(
     }
 
     if (q.poll_mode_ == daqiri::QueuePollMode::DIRECT) {
-      if (_engine_type != daqiri::EngineType::IBVERBS) {
+      if (_engine_type != daqiri::EngineType::IBVERBS && _engine_type != daqiri::EngineType::RDMA) {
         DAQIRI_LOG_WARN(
-            "RX poll_mode direct is supported only by the raw ibverbs engine; "
+            "RX poll_mode direct is supported only by the raw ibverbs and RDMA engines; "
             "configured engine is {}",
             daqiri::engine_type_to_string(_engine_type));
         return false;
@@ -2460,9 +2460,9 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_tx_queue_config(
     }
 
     if (q.poll_mode_ == daqiri::QueuePollMode::DIRECT) {
-      if (_engine_type != daqiri::EngineType::IBVERBS) {
+      if (_engine_type != daqiri::EngineType::IBVERBS && _engine_type != daqiri::EngineType::RDMA) {
         DAQIRI_LOG_WARN(
-            "TX poll_mode direct is supported only by the raw ibverbs engine; "
+            "TX poll_mode direct is supported only by the raw ibverbs and RDMA engines; "
             "configured engine is {}",
             daqiri::engine_type_to_string(_engine_type));
         return false;

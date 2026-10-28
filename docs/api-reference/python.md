@@ -251,8 +251,10 @@ nanoseconds before returning them.
 configuration. Timestamp values are invalid if the clocks are not PTP-synchronized.
 
 `RxQueueConfig.poll_mode` accepts `QueuePollMode.INDIRECT` (the default) or
-`QueuePollMode.DIRECT`. Direct mode is available only on raw ibverbs RX queues and makes the
-Python thread calling `get_rx_burst()` check for ready packets while the GIL is released.
+`QueuePollMode.DIRECT`. Direct mode is available on raw ibverbs and RDMA (`roce://`)
+queues. The Python thread calling `get_rx_burst()` checks for ready packets while the GIL is
+released. For RDMA, use `get_rx_burst_for_connection(conn_id, server)` to drive direct RX and TX completions;
+direct SEND and RECEIVE postings contain exactly one packet each.
 
 ### RX Step 3: Free buffers
 
@@ -458,6 +460,14 @@ copies. Shared bytes must remain immutable. Submit or cancel each burst separate
 storage is recycled only after all references complete or cancel. See
 [Shared TX segments](cpp.md#shared-tx-segments) for ownership and limitations.
 Python packet-copy helpers expose raw writes and require the same immutability discipline.
+
+For RDMA (`roce://`), direct TX posts the SEND on the Python thread and
+`get_rx_burst_for_connection(conn_id, server)` drives its completion. A successful submission
+retains the burst until DAQIRI returns it as a completion. Keep polling even
+for send-only applications, then free completed bursts as usual. Direct SENDs
+from `huge` or `host_pinned` memory use inline payloads when they fit the QP's
+inline capacity (128 bytes requested); GPU payloads use DMA. A failed direct
+RDMA posting retains caller ownership so it can be retried or freed.
 
 ### Timed Transmission
 

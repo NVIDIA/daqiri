@@ -1208,11 +1208,13 @@ bool validate_network_config(const NetworkConfig& config) {
       rx_queue_ids.insert(rxq.common_.id_);
       if (rxq.poll_mode_ == QueuePollMode::DIRECT) {
         direct_rx_queue_ids.insert(rxq.common_.id_);
-        if (config.common_.stream_type != StreamType::RAW ||
-            config.common_.engine_type != EngineType::IBVERBS) {
+        if (!((config.common_.stream_type == StreamType::RAW &&
+               config.common_.engine_type == EngineType::IBVERBS) ||
+              (config.common_.stream_type == StreamType::SOCKET &&
+               config.common_.engine_type == EngineType::RDMA))) {
           DAQIRI_LOG_WARN(
               "RX queue '{}' requests direct polling, which is supported only by the raw "
-              "ibverbs engine",
+              "ibverbs and RDMA engines",
               rxq.common_.name_);
           pass = false;
         }
@@ -1277,11 +1279,13 @@ bool validate_network_config(const NetworkConfig& config) {
         pass = false;
       }
       if (txq.poll_mode_ == QueuePollMode::DIRECT) {
-        if (config.common_.stream_type != StreamType::RAW ||
-            config.common_.engine_type != EngineType::IBVERBS) {
+        if (!((config.common_.stream_type == StreamType::RAW &&
+               config.common_.engine_type == EngineType::IBVERBS) ||
+              (config.common_.stream_type == StreamType::SOCKET &&
+               config.common_.engine_type == EngineType::RDMA))) {
           DAQIRI_LOG_WARN(
               "TX queue '{}' requests direct polling, which is supported only by the raw "
-              "ibverbs engine",
+              "ibverbs and RDMA engines",
               txq.common_.name_);
           pass = false;
         }
@@ -1299,6 +1303,19 @@ bool validate_network_config(const NetworkConfig& config) {
         }
       } else {
         DAQIRI_LOG_ERROR("TX queue '{}' has an invalid poll mode", txq.common_.name_);
+        pass = false;
+      }
+    }
+    if (config.common_.engine_type == EngineType::RDMA) {
+      for (size_t q = 0; q < intf.tx_.queues_.size(); ++q) {
+        if (intf.tx_.queues_[q].poll_mode_ == QueuePollMode::DIRECT &&
+            q >= intf.rx_.queues_.size()) {
+          DAQIRI_LOG_ERROR("Direct RDMA TX requires a paired RX queue configuration");
+          pass = false;
+        }
+      }
+      if (intf.rx_.queues_.size() > intf.tx_.queues_.size()) {
+        DAQIRI_LOG_ERROR("RDMA RX queues require paired TX queue configurations");
         pass = false;
       }
     }
