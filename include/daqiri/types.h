@@ -43,6 +43,8 @@ static inline constexpr uint32_t MAX_NUM_RX_QUEUES = 32;
 static inline constexpr uint32_t MAX_NUM_TX_QUEUES = 32;
 static inline constexpr uint32_t MAX_INTERFACES = 4;
 static inline constexpr int MAX_NUM_SEGS = 4;
+// Bits 16..19 mark RX segments backed by a null MR rather than packet storage.
+static inline constexpr uint32_t DAQIRI_BURST_FLAG_NULL_SEGMENT_SHIFT = 16;
 static inline constexpr uint32_t DAQIRI_BURST_FLAG_REORDERED = (1U << 28);
 static inline constexpr uint32_t DAQIRI_BURST_FLAG_REORDER_TIMEOUT = (1U << 29);
 static inline constexpr uint32_t DAQIRI_BURST_FLAG_DIRECT_PLACED = (1U << 30);

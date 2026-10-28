@@ -142,3 +142,28 @@ def test_null_region_rx(reproducer, mode, layout, regions, frame_size):
                             env=env, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "PASS: null scatter discard and retained byte integrity across 1100 packets" in result.stdout
+
+
+@pytest.mark.platform
+def test_discard_only_large_batch(reproducer):
+    binary, environment = reproducer
+    env = environment.copy()
+    env.update(DAQIRI_PLATFORM_NULL_LAYOUT="all", DAQIRI_PLATFORM_RX_REGRESSION="large-batch")
+    result = subprocess.run([str(binary), "1", "100", "indirect"], env=env,
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "across 1539 packets" in result.stdout
+
+
+@pytest.mark.platform
+@pytest.mark.parametrize("mode", ["direct", "indirect"])
+def test_oversized_frame_recovers(reproducer, mode):
+    binary, environment = reproducer
+    env = environment.copy()
+    env.update(DAQIRI_PLATFORM_NULL_LAYOUT="all-fixed", DAQIRI_PLATFORM_RX_REGRESSION="oversize")
+    result = subprocess.run([str(binary), "1", "5142", mode], env=env,
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "RX CQE error" in result.stderr
+    assert "syndrome 0x01" in result.stderr
+    assert "across 1101 packets" in result.stdout

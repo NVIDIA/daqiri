@@ -251,6 +251,8 @@ void run(int regions, int frame_size, bool direct, int tx_regions = 0, bool tx_d
                            : regions == 4 ? std::vector<int>{kHeader, 1000, 2000, 2100}
                                           : std::vector<int>{kHeader, 1000, 1000, 1000, 2100};
   const std::string null_layout = setting("DAQIRI_PLATFORM_NULL_LAYOUT", "");
+  const std::string regression = setting("DAQIRI_PLATFORM_RX_REGRESSION", "");
+  const int receive_batch = regression == "large-batch" ? 513 : 1;
   std::vector<bool> null_segments(regions, false);
   if (!null_layout.empty()) {
     if (null_layout == "all" || null_layout == "all-fixed") {
@@ -264,6 +266,10 @@ void run(int regions, int frame_size, bool direct, int tx_regions = 0, bool tx_d
       if (null_layout == "tail" || null_layout == "tail-fixed" || null_layout == "head-tail")
         null_segments[regions - 1] = true;
     }
+  }
+  if (regression == "oversize") {
+    require(null_layout == "all-fixed" && regions == 1, "Invalid oversize test layout");
+    sizes = {100};
   }
   const int gpu_start = regions == 2 ? 1 : 2;
   std::vector<int> tx_sizes;
@@ -281,6 +287,7 @@ void run(int regions, int frame_size, bool direct, int tx_regions = 0, bool tx_d
                    ? std::vector<int>{endpoint ? 19 : kHeader, 499, endpoint ? 482 : 501, kPayload}
                    : std::vector<int>{kHeader, 249, 250, 501, kPayload};
   }
+  if (regression == "oversize") tx_sizes = {frame_size};
   daqiri::NetworkConfig config{};
   config.common_.version = 1;
   config.common_.dir = daqiri::Direction::TX_RX;
@@ -317,7 +324,7 @@ void run(int regions, int frame_size, bool direct, int tx_regions = 0, bool tx_d
   rx.common_.id_ = kQueue;
   if (!direct) {
     rx.common_.cpu_core_ = setting("DAQIRI_PLATFORM_RX_CPU", "5");
-    rx.common_.batch_size_ = 1;
+    rx.common_.batch_size_ = receive_batch;
   }
   rx.poll_mode_ = direct ? daqiri::QueuePollMode::DIRECT : daqiri::QueuePollMode::INDIRECT;
   for (int seg = 0; seg < regions; ++seg) {
@@ -387,17 +394,34 @@ void run(int regions, int frame_size, bool direct, int tx_regions = 0, bool tx_d
   }
 
   // TX cases cross slot and SQ wraparound with distinct bytes per packet.
-  const int packets = tx_regions || !null_layout.empty() ? 1100 : 8;
+  const int packets = regression == "large-batch"          ? receive_batch * 3
+                      : regression == "oversize"           ? 1101
+                      : tx_regions || !null_layout.empty() ? 1100
+                                                           : 8;
   for (int packet = 0; packet < packets; ++packet) {
     std::vector<unsigned char> expected(frame_size);
     for (int i = kHeader; i < frame_size; ++i) {
       expected[i] = static_cast<unsigned char>(i * 37 + packet * 13);
     }
-    TxLoan outgoing{daqiri::create_tx_burst_params()};
-    require(outgoing.burst != nullptr, "TX metadata allocation failed");
+    TxLoan outgoing;
+    const auto metadata_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while ((outgoing.burst = daqiri::create_tx_burst_params()) == nullptr) {
+      require(std::chrono::steady_clock::now() < metadata_deadline,
+              "TX metadata allocation timeout");
+      std::this_thread::sleep_for(std::chrono::microseconds(20));
+    }
     daqiri::set_header(outgoing.burst, port, kQueue, 1, tx.common_.mrs_.size());
-    require(daqiri::get_tx_packet_burst(outgoing.burst) == daqiri::Status::SUCCESS,
-            "TX packet acquisition failed");
+    const auto tx_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    daqiri::Status acquired;
+    while (true) {
+      acquired = daqiri::get_tx_packet_burst(outgoing.burst);
+      if (acquired != daqiri::Status::NO_FREE_PACKET_BUFFERS &&
+          acquired != daqiri::Status::NO_FREE_BURST_BUFFERS)
+        break;
+      require(std::chrono::steady_clock::now() < tx_deadline, "TX acquisition timeout");
+      std::this_thread::sleep_for(std::chrono::microseconds(20));
+    }
+    require(acquired == daqiri::Status::SUCCESS, "TX packet acquisition failed");
     outgoing.acquired = true;
     int tx_offset = endpoint ? kHeader : 0;
     for (size_t seg = 0; seg < tx_sizes.size(); ++seg) {
@@ -432,18 +456,46 @@ void run(int regions, int frame_size, bool direct, int tx_regions = 0, bool tx_d
     }
     require(sent == daqiri::Status::SUCCESS, "TX submission failed");
 
+    if (regression == "oversize" && packet == 0) {
+      require(daqiri::wait_for_tx_idle(2000) == daqiri::Status::SUCCESS,
+              "Oversize TX drain failed");
+      // Acknowledge the bad completion before checking subsequent traffic;
+      // frames sent while the NIC's error is pending may legitimately drop.
+      const auto drain_until = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+      while (std::chrono::steady_clock::now() < drain_until) {
+        RxLoan dropped;
+        require(daqiri::get_rx_burst(&dropped.burst, port, kQueue) == daqiri::Status::NOT_READY,
+                "Oversized frame was returned as a valid packet");
+        std::this_thread::sleep_for(std::chrono::microseconds(20));
+      }
+      frame_size = 100;
+      tx_sizes = {100};
+      continue;
+    }
+    if ((packet + 1) % receive_batch != 0) continue;
     RxLoan incoming;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (daqiri::get_rx_burst(&incoming.burst, port, kQueue) != daqiri::Status::SUCCESS) {
       require(std::chrono::steady_clock::now() < deadline, "RX timeout");
       std::this_thread::sleep_for(std::chrono::microseconds(50));
     }
-    require(incoming.burst && daqiri::get_num_packets(incoming.burst) == 1, "Invalid RX burst");
+    require(incoming.burst && daqiri::get_num_packets(incoming.burst) == receive_batch,
+            "Invalid RX burst or incomplete zero-timeout batch");
+    if (receive_batch > 1) {
+      for (int i = 0; i < receive_batch; ++i) {
+        require(incoming.burst->pkts[0][i] == nullptr &&
+                    incoming.burst->pkt_lens[0][i] == static_cast<uint32_t>(frame_size),
+                "Discard-only batch metadata differs");
+      }
+    }
     require(incoming.burst->hdr.hdr.num_segs == regions, "Incorrect RX segment count");
     int offset = 0;
     std::vector<unsigned char> received(frame_size);
     for (int seg = 0; seg < regions; ++seg) {
       require(incoming.burst->pkts[seg] && incoming.burst->pkt_lens[seg], "Missing segment arrays");
+      const bool marked_null = (incoming.burst->hdr.hdr.burst_flags &
+                                (1U << (daqiri::DAQIRI_BURST_FLAG_NULL_SEGMENT_SHIFT + seg))) != 0;
+      require(marked_null == null_segments[seg], "Incorrect null-region burst marker");
       const int length = std::min(sizes[seg], frame_size - offset);
       require(daqiri::get_segment_packet_length(incoming.burst, seg, 0) == length,
               "Incorrect segment length: " + std::to_string(seg));

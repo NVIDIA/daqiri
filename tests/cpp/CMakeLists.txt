@@ -88,6 +88,30 @@ if(TARGET daqiri_ibverbs)
       daqiri_ibverbs daqiri::daqiri ${DAQIRI_YAML_TARGET})
   endif()
   add_test(NAME daqiri_ibverbs_tx_segments_test COMMAND daqiri_ibverbs_tx_segments_test)
+
+  foreach(test IN ITEMS ibverbs_rx null_burst_writer)
+    add_executable(daqiri_${test}_test ${test}_test.cpp)
+    target_compile_features(daqiri_${test}_test PRIVATE cxx_std_17)
+    target_include_directories(daqiri_${test}_test PRIVATE ${PROJECT_SOURCE_DIR})
+    if(NOT BUILD_SHARED_LIBS AND UNIX AND NOT APPLE)
+      target_link_libraries(daqiri_${test}_test PRIVATE
+        "-Wl,--start-group" ${DAQIRI_TEST_STATIC_LIBS} "-Wl,--end-group" ${DAQIRI_YAML_TARGET})
+    else()
+      if(UNIX AND NOT APPLE)
+        target_link_options(daqiri_${test}_test PRIVATE "LINKER:--no-as-needed")
+      endif()
+      target_link_libraries(daqiri_${test}_test PRIVATE
+        daqiri_ibverbs daqiri::daqiri ${DAQIRI_YAML_TARGET})
+    endif()
+    add_test(NAME daqiri_${test}_test COMMAND daqiri_${test}_test)
+  endforeach()
+  if(DAQIRI_ENABLE_S3)
+    find_program(DAQIRI_TEST_PYTHON python3 REQUIRED)
+    add_test(NAME daqiri_null_s3_writer_test
+      COMMAND ${DAQIRI_TEST_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/run_s3_writer_test.py
+        $<TARGET_FILE:daqiri_null_burst_writer_test>)
+    set_tests_properties(daqiri_null_s3_writer_test PROPERTIES TIMEOUT 90)
+  endif()
 endif()
 
 if(DAQIRI_IBVERBS_DLOPEN AND TARGET daqiri_raw_verbs_glue)

@@ -1775,6 +1775,11 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_memory_region_config(
   }
   try {
     tmr.name_ = mr["name"].as<std::string>();
+    if (!mr["kind"].IsScalar() || mr["kind"].Tag() == "tag:yaml.org,2002:null") {
+      DAQIRI_LOG_ERROR(
+          "Memory-region kind must be a string; quote kind: \"null\" for discard regions");
+      return false;
+    }
     tmr.kind_ =
         daqiri::GetMemoryKindFromString(mr["kind"].template as<std::string>());
     if (tmr.name_.empty()) {

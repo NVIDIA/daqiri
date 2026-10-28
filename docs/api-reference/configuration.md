@@ -114,7 +114,8 @@ runtime binding.
       required only when another memory region follows in the queue. If the null region
       is last, omitting `buf_size` (or setting it to `0`) discards the remainder.
       `num_bufs`, `affinity`, and `access` may be omitted and are ignored with a warning
-      when supplied. No external binding is allowed.
+      when supplied. No external binding is allowed. The kind must be quoted as
+      `"null"`; YAML null values such as a blank value, `~`, or unquoted `null` are invalid.
   With the raw ibverbs engine, DAQIRI-owned `huge` regions declared in the startup configuration
   and having the same NUMA affinity share a hugetlb arena. DAQIRI chooses the available page size
   that can back the regions with the least rounding, while registering every region separately.
@@ -208,11 +209,18 @@ another MR follows in any queue using the region. When the null MR is last, `buf
 is optional: omit it or use `0` to discard all remaining bytes, or supply a positive
 value for a fixed discard span. Null entries count toward the four-segment limit and
 force a regular RQ even on a discard-only queue. RX queue depth comes from the smallest
-retained region's buffer count; a discard-only queue uses 256 receive slots.
+retained region's buffer count. A discard-only queue uses at least 256 receive slots,
+rounded up to a power of two large enough for `batch_size`, up to 32768 slots.
+An indirect regular RQ with `timeout_us: 0` rejects a batch larger than its slot count
+rather than waiting for a burst it cannot fill. A positive timeout allows partial bursts.
+A regular-RQ error drops the affected packet and returns its receive credit. It can
+also publish a partial indirect burst even with `timeout_us: 0`, so earlier buffers
+can be released and cyclic refill can progress.
 
 Discarded segments report a null packet pointer and their consumed byte count, including
-zero when the packet ends earlier. Free each burst as usual. Null regions cannot be used
-for TX, reorder input/output, or socket/RDMA/DPDK queues. Fixed discard lengths contribute
+zero when the packet ends earlier. Raw, pcap, and S3 writers represent discarded spans
+with zero-filled bytes, preserving packet lengths and offsets. Free each burst as usual.
+Null regions cannot be used for TX, reorder input/output, or socket/RDMA/DPDK queues. Fixed discard lengths contribute
 to automatic MTU sizing; an unbounded final discard does not describe a maximum wire size,
 so configure the netdev MTU for the expected frames when there is no matching local TX queue.
 

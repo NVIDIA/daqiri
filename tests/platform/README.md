@@ -104,6 +104,11 @@ same fixture settings:
 python3 -m pytest tests/platform/test_multi_region_rx.py -m platform -k null_region
 ```
 
+`test_discard_only_large_batch` fills three 513-packet zero-timeout bursts to exercise
+RQ sizing and credit reuse. `test_oversized_frame_recovers` injects one frame larger than
+a fixed null span, requires the local-length-error CQE, then receives 1100 valid packets
+in direct and indirect mode to prove the queue continues across multiple RQ wraps.
+
 ## RDMA application round-trip latency
 
 `rdma_latency.cpp` runs RC SEND ping-pong between two existing, physically

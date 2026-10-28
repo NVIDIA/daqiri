@@ -73,8 +73,15 @@ void run() {
           "bounded tail discard rejected");
   require(validate_network_config(parse(yaml("[DATA, DISCARD]", "        buf_size: 0\n"))),
           "zero-size tail discard rejected");
-  require(validate_network_config(parse(yaml("[DISCARD]", "", "null"))),
-          "unquoted null or discard-only queue rejected");
+  require(validate_network_config(parse(yaml("[DISCARD]"))), "discard-only queue rejected");
+  require(validate_network_config(parse(yaml("[DISCARD]", "", "'null'"))),
+          "single-quoted null kind rejected");
+  for (const auto* kind : {"", "~", "null", "Null", "NULL", "!!null null"}) {
+    NetworkConfig invalid{};
+    require(parse_network_config_from_yaml_string(yaml("[DISCARD]", "", kind), invalid) !=
+                Status::SUCCESS,
+            "YAML null kind accepted as a discard region");
+  }
   require(
       validate_network_config(parse(yaml("[DISCARD, DATA, DISCARD]", "        buf_size: 42\n"))),
       "same null region at different scatter positions rejected");

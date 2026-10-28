@@ -18,6 +18,7 @@
 #include <daqiri/daqiri.h>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
@@ -268,7 +269,8 @@ Status preflight_device_segments(BurstParams *burst,
       }
 
       void *seg_ptr = get_segment_packet_ptr(burst, seg, pkt);
-      if (seg_ptr == nullptr) {
+      if (seg_ptr == nullptr && (burst->hdr.hdr.burst_flags &
+                                 (1U << (DAQIRI_BURST_FLAG_NULL_SEGMENT_SHIFT + seg))) == 0) {
         DAQIRI_LOG_ERROR("Null packet segment pointer for packet {} segment {}",
                          pkt, seg);
         return Status::NULL_PTR;
@@ -279,7 +281,7 @@ Status preflight_device_segments(BurstParams *burst,
         continue;
       }
 
-      if (classify_segment_pointer(seg_ptr) == SegmentPointerKind::DEVICE) {
+      if (seg_ptr != nullptr && classify_segment_pointer(seg_ptr) == SegmentPointerKind::DEVICE) {
         has_device_segment = true;
       }
       bytes_to_skip = 0;
@@ -673,6 +675,20 @@ Status queue_or_write_segment(FileWriteHandle &handle, FileResource &file,
                               uint32_t packet_index, void *seg_ptr,
                               off_t seg_offset, size_t write_len,
                               off_t file_offset) {
+  if (seg_ptr == nullptr) {
+    // The caller validated that this segment is an intentional null-MR span.
+    // Preserve logical packet offsets without dereferencing discarded bytes.
+    static constexpr std::array<uint8_t, 4096> zeroes{};
+    while (write_len != 0) {
+      const size_t chunk = std::min(write_len, zeroes.size());
+      const Status status = pwrite_all(file, zeroes.data(), chunk, file_offset);
+      if (status != Status::SUCCESS) return status;
+      handle.status.bytes_written += chunk;
+      file_offset += chunk;
+      write_len -= chunk;
+    }
+    return Status::SUCCESS;
+  }
   if (classify_segment_pointer(seg_ptr) == SegmentPointerKind::HOST) {
     const auto *host_ptr = static_cast<const uint8_t *>(seg_ptr) + seg_offset;
     const Status status = pwrite_all(file, host_ptr, write_len, file_offset);
@@ -885,7 +901,8 @@ Status build_raw_write_handle(BurstParams *burst,
       }
 
       void *seg_ptr = get_segment_packet_ptr(burst, seg, pkt);
-      if (seg_ptr == nullptr) {
+      if (seg_ptr == nullptr && (burst->hdr.hdr.burst_flags &
+                                 (1U << (DAQIRI_BURST_FLAG_NULL_SEGMENT_SHIFT + seg))) == 0) {
         DAQIRI_LOG_ERROR("Null packet segment pointer for packet {} segment {}",
                          pkt, seg);
         handle->files.push_back(std::move(file));
@@ -1018,7 +1035,8 @@ Status build_pcap_write_handle(BurstParams *burst,
       }
 
       void *seg_ptr = get_segment_packet_ptr(burst, seg, pkt);
-      if (seg_ptr == nullptr) {
+      if (seg_ptr == nullptr && (burst->hdr.hdr.burst_flags &
+                                 (1U << (DAQIRI_BURST_FLAG_NULL_SEGMENT_SHIFT + seg))) == 0) {
         DAQIRI_LOG_ERROR("Null packet segment pointer for packet {} segment {}",
                          pkt, seg);
         handle->files.push_back(std::move(file));
