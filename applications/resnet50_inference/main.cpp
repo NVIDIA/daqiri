@@ -127,11 +127,16 @@ int main(int argc, char** argv) {
     try {
       const std::filesystem::path catalog_path =
           std::filesystem::path(argv[1]).parent_path().parent_path() / "model_catalog.json";
-      const app::ModelProfile profile =
-          app::load_model_profile(catalog_path.string(), model);
+      const app::ModelProfile profile = app::load_model_profile(catalog_path.string(), model);
       cfg.trt.onnx_path = profile.onnx_path;
       cfg.trt.engine_path = profile.engine_path;
       cfg.trt.feature_dim = profile.feature_dim;
+      if (profile.enable_dual_context.has_value()) {
+        cfg.trt.enable_dual_context = *profile.enable_dual_context;
+      }
+      if (profile.enable_cuda_graph.has_value()) {
+        cfg.trt.enable_cuda_graph = *profile.enable_cuda_graph;
+      }
       if (profile.input_type != cfg.trt_input_type()) {
         std::cerr << "Model " << profile.name << " expects " << profile.input_type
                   << " input but the configured TensorRT path expects " << cfg.trt_input_type()
@@ -196,8 +201,7 @@ int main(int argc, char** argv) {
       expected_images = std::stoull(ei);
     } else if (!labels.empty()) {
       expected_images = labels.size();
-    } else if (cfg.role == app::AppRole::Both && cfg.example_mode() &&
-               cfg.packets_per_image > 0) {
+    } else if (cfg.role == app::AppRole::Both && cfg.example_mode() && cfg.packets_per_image > 0) {
       expected_images = frames.size() / cfg.packets_per_image;
     }
   }
@@ -233,8 +237,8 @@ int main(int argc, char** argv) {
       }
       std::cerr << "set_reorder_cuda_stream OK (" << cfg.reorder_name << ")\n";
     }
-    std::cerr << "RX reorder ready (" << cfg.reorder_name
-              << ", engine=" << cfg.reorder_engine << ")\n";
+    std::cerr << "RX reorder ready (" << cfg.reorder_name << ", engine=" << cfg.reorder_engine
+              << ")\n";
   }
 
   const bool example_stats =
@@ -261,9 +265,8 @@ int main(int argc, char** argv) {
     while (!rx_ready.load() && !stop.load()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    producer_thread =
-        std::thread(app::rx_producer_worker, std::cref(cfg), std::ref(inf_queue), expected_images,
-                    std::ref(producer_done), std::ref(stop));
+    producer_thread = std::thread(app::rx_producer_worker, std::cref(cfg), std::ref(inf_queue),
+                                  expected_images, std::ref(producer_done), std::ref(stop));
   } else {
     rx_ready.store(true);
   }
@@ -324,10 +327,18 @@ int main(int argc, char** argv) {
   if (cfg.role != app::AppRole::Tx) {
     sink.log_final_summary(summary_seconds);
   }
+  bool tx_drained = true;
+  if (cfg.role != app::AppRole::Rx) {
+    const daqiri::Status drain_status = daqiri::wait_for_tx_idle(5000);
+    tx_drained = drain_status == daqiri::Status::SUCCESS;
+    if (!tx_drained) {
+      std::cerr << "TX completion drain failed: status=" << static_cast<int>(drain_status) << "\n";
+    }
+  }
   daqiri::print_stats();
   daqiri::shutdown();
   if (reorder_stream != nullptr) {
     cudaStreamDestroy(reorder_stream);
   }
-  return 0;
+  return tx_drained ? 0 : 1;
 }

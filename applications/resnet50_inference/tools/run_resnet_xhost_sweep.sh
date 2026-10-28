@@ -27,13 +27,13 @@ pacing_for() {
     return
   fi
   case "${model}" in
-    resnet18) echo 26000 ;;
-    resnet34) echo 13000 ;;
+    resnet18) echo 23000 ;;
+    resnet34) echo 12200 ;;
     resnet50) echo 9500 ;;
-    resnet101) echo 5700 ;;
-    resnet152) echo 3900 ;;
-    mobilenet_v3_small) echo 48000 ;;
-    mobilenet_v3_large) echo 30000 ;;
+    resnet101) echo 5400 ;;
+    resnet152) echo 3700 ;;
+    mobilenet_v3_small) echo 39000 ;;
+    mobilenet_v3_large) echo 25600 ;;
     *) echo "ERROR: no campaign pacing for ${model}" >&2; return 1 ;;
   esac
 }

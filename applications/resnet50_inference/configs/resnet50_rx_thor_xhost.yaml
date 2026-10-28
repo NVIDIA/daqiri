@@ -66,6 +66,7 @@ inference:
   onnx_path: "models/resnet50_features.onnx"
   engine_path: "models/resnet50_features.fp16in.engine"
   enable_fp16: true
+  enable_dual_context: true
   channels: 3
   height: 224
   width: 224

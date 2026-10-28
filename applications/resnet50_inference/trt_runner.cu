@@ -81,7 +81,9 @@ class Int8EntropyCalibrator : public nvinfer1::IInt8EntropyCalibrator2 {
     if (device_) cudaFree(device_);
   }
 
-  int getBatchSize() const noexcept override { return batch_; }
+  int getBatchSize() const noexcept override {
+    return batch_;
+  }
 
   bool getBatch(void* bindings[], const char* names[], int nbBindings) noexcept override {
     if (done_ >= n_batches_) return false;
@@ -279,6 +281,13 @@ void TrtRunner::initialize() {
   }
 
   allocate_buffers_();
+  if (cfg_.enable_cuda_graph) {
+    // Capture and warm the fixed-shape graph before the consumer advertises
+    // readiness. First-use TensorRT/Myelin initialization can occasionally
+    // take long enough to fill the inference queue if capture is deferred
+    // until the first received batch.
+    ensure_cuda_graph_(static_cast<uint32_t>(cfg_.opt_avg));
+  }
   std::cerr << "TrtRunner ready (n_contexts=" << n_contexts_ << ")\n";
 }
 
@@ -333,9 +342,9 @@ void TrtRunner::build_or_load_engine_() {
         std::cerr << "TrtRunner: platformHasFastInt8() is false; INT8 build may be slow/fail\n";
       }
       config->setFlag(nvinfer1::BuilderFlag::kINT8);
-      calibrator = std::make_unique<Int8EntropyCalibrator>(
-          cfg_.input_name, cfg_.opt_avg, cfg_.channels, cfg_.height, cfg_.width,
-          /*n_batches=*/64, cfg_.calib_cache_path);
+      calibrator = std::make_unique<Int8EntropyCalibrator>(cfg_.input_name, cfg_.opt_avg,
+                                                           cfg_.channels, cfg_.height, cfg_.width,
+                                                           /*n_batches=*/64, cfg_.calib_cache_path);
       config->setInt8Calibrator(calibrator.get());
     }
 
@@ -437,9 +446,9 @@ void TrtRunner::allocate_buffers_() {
     cuda_check(cudaEventCreate(&start_evt_[i]), "cudaEventCreate start_evt_");
   }
   std::cerr << "TrtRunner buffers: 2x" << max_out_float_bytes
-            << " bytes pinned host + GPU float output"
-            << (out_is_half_ ? " + GPU half raw" : "") << " (engine [" << cfg_.opt_max << ","
-            << per_image << "] " << (out_is_half_ ? "FP16" : "FP32") << ")\n";
+            << " bytes pinned host + GPU float output" << (out_is_half_ ? " + GPU half raw" : "")
+            << " (engine [" << cfg_.opt_max << "," << per_image << "] "
+            << (out_is_half_ ? "FP16" : "FP32") << ")\n";
 }
 
 void TrtRunner::ensure_cuda_graph_(uint32_t batch) {
@@ -447,8 +456,7 @@ void TrtRunner::ensure_cuda_graph_(uint32_t batch) {
 
   const size_t in_elem = cfg_.enable_int8 ? sizeof(int8_t) : sizeof(__half);
   graph_input_bytes_ = static_cast<size_t>(batch) * static_cast<size_t>(cfg_.channels) *
-                       static_cast<size_t>(cfg_.height) * static_cast<size_t>(cfg_.width) *
-                       in_elem;
+                       static_cast<size_t>(cfg_.height) * static_cast<size_t>(cfg_.width) * in_elem;
   if (graph_input_bytes_ == 0) {
     std::cerr << "TrtRunner: ensure_cuda_graph_ got zero input bytes; disabling graphs\n";
     graph_capture_failed_ = true;
@@ -564,8 +572,8 @@ bool TrtRunner::infer(void* dev_input, uint32_t batch, cudaEvent_t input_ready,
   if (try_graph) {
     ensure_cuda_graph_(batch);
     if (graph_ready_) {
-      cudaMemcpyAsync(graph_input_staging_, dev_input, graph_input_bytes_,
-                      cudaMemcpyDeviceToDevice, stream);
+      cudaMemcpyAsync(graph_input_staging_, dev_input, graph_input_bytes_, cudaMemcpyDeviceToDevice,
+                      stream);
       if (cudaGraphLaunch(graph_exec_, stream) != cudaSuccess) {
         std::cerr << "cudaGraphLaunch failed; falling back to eager for this batch\n";
       } else {

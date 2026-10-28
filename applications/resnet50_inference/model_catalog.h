@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <optional>
 #include <string>
 
 namespace daqiri::apps::resnet {
@@ -28,6 +29,8 @@ struct ModelProfile {
   std::string engine_path;
   int feature_dim = 0;
   std::string input_type;
+  std::optional<bool> enable_dual_context;
+  std::optional<bool> enable_cuda_graph;
 };
 
 ModelProfile load_model_profile(const std::string& catalog_path, const std::string& name);

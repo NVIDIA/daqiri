@@ -43,8 +43,9 @@ cmake --build build -j --target daqiri_resnet50_inference
 ## Models, data + ONNX
 
 `model_catalog.json` is the single source of truth for model architecture, ONNX and
-engine-cache paths, feature dimension, and input type. The default catalog includes
-ResNet-18/34/50/101/152 plus MobileNetV3 Small and Large. The app and
+engine-cache paths, feature dimension, input type, and optional TensorRT execution
+overrides (`enable_dual_context` and `enable_cuda_graph`). The default catalog
+includes ResNet-18/34/50/101/152 plus MobileNetV3 Small and Large. The app and
 `run_resnet_bench.sh` both resolve `--model` through it.
 
 ```bash

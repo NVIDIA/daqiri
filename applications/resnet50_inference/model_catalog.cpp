@@ -37,6 +37,12 @@ ModelProfile load_model_profile(const std::string& catalog_path, const std::stri
   profile.engine_path = entry["engine_path"].as<std::string>();
   profile.feature_dim = entry["feature_dim"].as<int>();
   profile.input_type = entry["input_type"].as<std::string>();
+  if (entry["enable_dual_context"]) {
+    profile.enable_dual_context = entry["enable_dual_context"].as<bool>();
+  }
+  if (entry["enable_cuda_graph"]) {
+    profile.enable_cuda_graph = entry["enable_cuda_graph"].as<bool>();
+  }
   if (profile.input_type != "fp16" && profile.input_type != "int8") {
     throw std::runtime_error("model '" + name + "' has unsupported input_type '" +
                              profile.input_type + "'");

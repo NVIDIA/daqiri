@@ -85,6 +85,6 @@ class InferenceQueue {
   alignas(64) std::atomic<std::size_t> tail_{0};
 };
 
-inline constexpr std::size_t kInferenceQueueCap = 8;
+inline constexpr std::size_t kInferenceQueueCap = 16;
 
 }  // namespace daqiri::apps::resnet
