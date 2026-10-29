@@ -1858,7 +1858,7 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_memory_region_config(
         }
       }
     } else {
-      tmr.access_ = daqiri::MEM_ACCESS_LOCAL;
+      tmr.access_ = daqiri::MEM_ACCESS_DEFAULT;
     }
     if (!daqiri::detail::parse_optional_yaml_scalar(mr, "owned", true, tmr.owned_,
                                                     "memory region")) {

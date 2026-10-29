@@ -138,9 +138,14 @@ runtime binding.
   index. On the tested IGX Thor privileged-container setup, UUID-based selection prevents the
   integrated GPU from remaining selected.
   - type: `integer`
-- **`access`**: Memory access permissions.
+- **`access`**: Optional memory access permissions.
   - type: `list`
   - values: `local`, `rdma_read`, `rdma_write`, `relaxed_ordering`
+  - default: `[local, rdma_read, rdma_write]`
+
+  Omit `access` to allow all local and remote data access. An explicit list
+  replaces the default. For RoCE, `[local]` disallows peer READ/WRITE, while `[]`
+  permits only local reads.
 
   For RC RoCE one-sided access, `rdma_read` and `rdma_write` authorize peers to
   access this region. `rdma_write` also enables the local write permission

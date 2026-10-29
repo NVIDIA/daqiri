@@ -107,16 +107,6 @@ enum class RDMAOpCode {
   INVALID
 };
 
-/** Connection-specific registered memory descriptor. Exchange fields explicitly;
- * this host-layout struct is not a wire format. Valid until engine shutdown.
- */
-struct RdmaMemoryRegion {
-  uint64_t address = 0;
-  uint64_t length = 0;
-  uint32_t rkey = 0;
-  uint32_t access = 0;  // MEM_ACCESS_* flags
-};
-
 enum class RDMACompletionType { RX, TX, INVALID };
 
 struct BurstTransportHeader {
@@ -241,6 +231,20 @@ enum MemoryAccess {
   // raise GPUDirect bandwidth on discrete-GPU hosts, but has caused receive-side
   // local protection errors on some aarch64/Tegra platforms.
   MEM_ACCESS_RELAXED_ORDERING = 1U << 3
+};
+
+// Full local and remote data access; DMA ordering remains a separate opt-in.
+inline constexpr uint32_t MEM_ACCESS_DEFAULT =
+    MEM_ACCESS_LOCAL | MEM_ACCESS_RDMA_READ | MEM_ACCESS_RDMA_WRITE;
+
+/** Connection-specific registered memory descriptor. Exchange fields explicitly;
+ * this host-layout struct is not a wire format. Valid until engine shutdown.
+ */
+struct RdmaMemoryRegion {
+  uint64_t address = 0;
+  uint64_t length = 0;
+  uint32_t rkey = 0;
+  uint32_t access = MEM_ACCESS_DEFAULT;  // Explicit masks replace the default
 };
 
 enum class StreamType {
@@ -697,7 +701,7 @@ struct MemoryRegionConfig {
   std::string name_;
   MemoryKind kind_;
   uint16_t affinity_;
-  uint32_t access_;
+  uint32_t access_ = MEM_ACCESS_DEFAULT;
   // Null MR: discard span; zero discards the remainder and requires the final RX segment.
   size_t buf_size_ = 0;
   size_t adj_size_ = 0;  // Populated by driver

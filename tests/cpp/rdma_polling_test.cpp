@@ -189,7 +189,6 @@ class RdmaEnginePollingTestPeer {
     auto& memory = engine.mrs_["data"];
     memory.params_.kind_ = MemoryKind::HOST_PINNED;
     memory.params_.buf_size_ = 4096;
-    memory.params_.access_ = MEM_ACCESS_LOCAL | MEM_ACCESS_RDMA_READ | MEM_ACCESS_RDMA_WRITE;
     memory.ptr_ = registered_bytes.data();
     memory.ctx_mr_map_[&pd] = &mr;
     require(engine.setup_thread_params(&params, false) == 0, "QP setup failed");
@@ -230,6 +229,27 @@ daqiri:
         tx:
           queues: [{name: tx, id: 0, poll_mode: direct}]
 )yaml";
+    const uint32_t full_access = MEM_ACCESS_LOCAL | MEM_ACCESS_RDMA_READ | MEM_ACCESS_RDMA_WRITE;
+    require(MemoryRegionConfig{}.access_ == full_access && RdmaMemoryRegion{}.access == full_access,
+            "native memory configuration or descriptor defaults restrict data access");
+    const std::vector<std::pair<std::vector<std::string>, uint32_t>> access_cases = {
+        {{}, 0},
+        {{"local"}, MEM_ACCESS_LOCAL},
+        {{"rdma_read"}, MEM_ACCESS_RDMA_READ},
+        {{"rdma_write"}, MEM_ACCESS_RDMA_WRITE},
+        {{"local", "rdma_read"}, MEM_ACCESS_LOCAL | MEM_ACCESS_RDMA_READ},
+        {{"local", "rdma_read", "rdma_write"}, full_access},
+        {{"relaxed_ordering"}, MEM_ACCESS_RELAXED_ORDERING}};
+    for (const auto& [flags, expected] : access_cases) {
+      auto yaml = YAML::Load(text);
+      auto memory = yaml["daqiri"]["cfg"]["memory_regions"][0];
+      memory["access"] = YAML::Node(YAML::NodeType::Sequence);
+      for (const auto& flag : flags) memory["access"].push_back(flag);
+      NetworkConfig config;
+      require(parse_network_config_from_yaml_string(YAML::Dump(yaml), config) == Status::SUCCESS &&
+                  config.mrs_.at("data").access_ == expected,
+              "explicit YAML access does not replace default permissions");
+    }
     for (bool rx : {false, true}) {
       for (bool tx : {false, true}) {
         auto yaml = YAML::Load(text);
@@ -245,6 +265,8 @@ daqiri:
         NetworkConfig config;
         require(parse_network_config_from_yaml_string(YAML::Dump(yaml), config) == Status::SUCCESS,
                 "RDMA poll modes rejected by parser");
+        require(config.mrs_.at("data").access_ == full_access,
+                "omitted YAML access restricts data permissions or enables relaxed ordering");
         require(validate_network_config(config), "RDMA poll modes rejected by shared validation");
       }
     }
@@ -521,6 +543,10 @@ daqiri:
     error.opcode = IBV_WC_RECV;  // Undefined on failure; completion routing must ignore it.
     fake.tx_completions.push_back(error);
     complete(Status::GENERIC_FAILURE);
+    const int default_verbs_access = engine.mr_access_to_ibv(MemoryRegionConfig{}.access_);
+    require(default_verbs_access ==
+                (IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE),
+            "default registration does not grant all data access or enables relaxed ordering");
     require(engine.mr_access_to_ibv(MEM_ACCESS_RDMA_WRITE) & IBV_ACCESS_LOCAL_WRITE,
             "remote write registration lacks required local write access");
   }

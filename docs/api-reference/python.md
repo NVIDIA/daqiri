@@ -573,6 +573,9 @@ if status == daqiri.Status.SUCCESS:
 
 For one-sided RC operations, export a descriptor with
 `status, region = daqiri.rdma_get_local_memory_region(conn_id, "shared")`.
+`MemoryRegionConfig.access` and `RdmaMemoryRegion.access` default to
+`MEM_ACCESS_DEFAULT` (local + remote READ/WRITE). Set an explicit mask only when
+stricter permissions are needed; `MEM_ACCESS_RELAXED_ORDERING` remains opt-in.
 Exchange its integer fields (`address`, `length`, `rkey`, `access`) through your
 application's control channel. The peer reconstructs a `daqiri.RdmaMemoryRegion`
 and calls `rdma_set_remote_memory(burst, region, offset=0)` after
@@ -809,6 +812,7 @@ encapsulation/push rules are configured in YAML under `tx.flows`.
 | `DAQIRI_BURST_FLAG_REORDERED` | Burst flag indicating a reordered aggregate. |
 | `DAQIRI_BURST_FLAG_REORDER_TIMEOUT` | Burst flag indicating a reorder timeout aggregate. |
 | `DAQIRI_BURST_FLAG_DIRECT_PLACED` | Burst flag indicating an ibverbs hardware-placed aggregate. |
+| `MEM_ACCESS_DEFAULT` | Default local and remote READ/WRITE permissions; excludes relaxed ordering. |
 | `MEM_ACCESS_LOCAL` | Local memory access flag. |
 | `MEM_ACCESS_RDMA_WRITE` | RDMA write memory access flag. |
 | `MEM_ACCESS_RDMA_READ` | RDMA read memory access flag. |

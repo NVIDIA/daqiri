@@ -751,9 +751,13 @@ check(daqiri::rdma_get_local_memory_region(conn_id, "shared", &local));
 // through your application's control channel, using an agreed wire format.
 ```
 
-Configure the exported MR with `access: [local, rdma_read, rdma_write]`, or
-only the permissions needed by the peer. `rdma_write` also enables the local
-write permission required by verbs. A READ destination needs `local` access.
+Omit `access` to allow local access and peer READ/WRITE by default. An explicit
+list replaces that default when stricter permissions are needed, for example
+`access: [local, rdma_read]` to disable peer WRITE. C++ `MemoryRegionConfig` and
+`RdmaMemoryRegion` also default to `MEM_ACCESS_DEFAULT` (local + remote READ/WRITE);
+assigning an explicit access mask replaces it. PCIe relaxed ordering stays opt-in.
+`rdma_write` also enables the local write permission required by verbs.
+A READ destination needs writable local access.
 The exported length covers the entire registered allocation, including padded
 buffer strides. Use offsets based on that layout. A descriptor is valid for
 its connection's protection domain until engine shutdown; exchange a new one
