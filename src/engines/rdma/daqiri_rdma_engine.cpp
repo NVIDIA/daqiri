@@ -254,6 +254,16 @@ int RdmaEngine::mr_access_to_ibv(uint32_t access) {
   return ibv_access;
 }
 
+// GPU buffers keep GPU-page alignment. CPU buffers only need cache-line alignment,
+// which lets small buffers share pages; giving each receive buffer its own page
+// adds measurable round-trip latency.
+size_t RdmaEngine::buffer_stride(MemoryKind kind, size_t buf_size) {
+  const size_t alignment = kind == MemoryKind::DEVICE
+                               ? std::max<size_t>(get_alignment(kind), GPU_PAGE_SIZE)
+                               : get_alignment(kind);
+  return (buf_size + alignment - 1) & ~(alignment - 1);
+}
+
 int RdmaEngine::rdma_register_mr(const MemoryRegionConfig& mr, void* ptr) {
   rdma_mr_params params{};
   params.params_ = mr;
@@ -1846,10 +1856,9 @@ void RdmaEngine::initialize() {
     intf.port_id_ = if_num++;
   }
 
-  // Set up memory region sizes (round buf_size up to the RDMA/GPU alignment).
+  // Set up memory region sizes (round buf_size up to the memory kind's buffer alignment).
   for (auto& mr : cfg_.mrs_) {
-    const size_t rdma_alignment = std::max<size_t>(get_alignment(mr.second.kind_), GPU_PAGE_SIZE);
-    mr.second.adj_size_ = (mr.second.buf_size_ + rdma_alignment - 1) & ~(rdma_alignment - 1);
+    mr.second.adj_size_ = buffer_stride(mr.second.kind_, mr.second.buf_size_);
   }
 
   for (const auto& intf : cfg_.ifs_) {

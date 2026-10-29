@@ -1035,7 +1035,8 @@ Status get_memory_region_requirements(const NetworkConfig& config,
         req.slot_size = ceil_power_of_two(mr.buf_size_);
         break;
       case EngineType::RDMA:
-        req.slot_size = ceil_to(mr.buf_size_, gpu_page_size);
+        // Matches RdmaEngine::buffer_stride(): only GPU buffers keep GPU-page alignment.
+        req.slot_size = ceil_to(mr.buf_size_, mr.kind_ == MemoryKind::DEVICE ? gpu_page_size : 128);
         break;
       default:
         DAQIRI_LOG_ERROR("Cannot compute memory requirements for engine {}",
