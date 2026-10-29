@@ -3,6 +3,8 @@
 
 #include <array>
 #include <chrono>
+#include <cstring>
+#include <limits>
 #include <future>
 #include <mutex>
 #include <vector>
@@ -31,6 +33,9 @@ struct FakeVerbs {
   bool auto_complete = false;
   uint64_t last_send_id = 0, last_receive_id = 0;
   unsigned last_flags = 0;
+  ibv_wr_opcode last_opcode = IBV_WR_SEND;
+  uint64_t last_remote_address = 0;
+  uint32_t last_rkey = 0, last_lkey = 0;
   int send_result = 0, recv_result = 0;
   uint32_t requested_inline = 0;
   int created_cqs = 0;
@@ -58,16 +63,35 @@ struct FakeVerbs {
   }
   static int post_send(ibv_qp*, ibv_send_wr* wr, ibv_send_wr**) {
     std::lock_guard<std::mutex> lock(current->mutex);
-    require(wr->opcode == IBV_WR_SEND && wr->num_sge == 1, "incorrect SEND encoding");
+    require((wr->opcode == IBV_WR_SEND || wr->opcode == IBV_WR_RDMA_READ ||
+             wr->opcode == IBV_WR_RDMA_WRITE) &&
+                wr->num_sge == 1,
+            "incorrect SQ encoding");
     if (current->send_result) {
       return current->send_result;
+    }
+    current->last_opcode = wr->opcode;
+    current->last_lkey = wr->sg_list->lkey;
+    if (wr->opcode == IBV_WR_RDMA_READ || wr->opcode == IBV_WR_RDMA_WRITE) {
+      current->last_remote_address = wr->wr.rdma.remote_addr;
+      current->last_rkey = wr->wr.rdma.rkey;
+      auto* local = reinterpret_cast<void*>(wr->sg_list->addr);
+      auto* remote = reinterpret_cast<void*>(wr->wr.rdma.remote_addr);
+      if (wr->opcode == IBV_WR_RDMA_READ) {
+        require(!(wr->send_flags & IBV_SEND_INLINE), "READ was posted inline");
+        std::memcpy(local, remote, wr->sg_list->length);
+      } else {
+        std::memcpy(remote, local, wr->sg_list->length);
+      }
     }
     current->last_send_id = wr->wr_id;
     if (current->auto_complete && (wr->send_flags & IBV_SEND_SIGNALED)) {
       ibv_wc wc{};
       wc.wr_id = wr->wr_id;
       wc.status = IBV_WC_SUCCESS;
-      wc.opcode = IBV_WC_SEND;
+      wc.opcode = wr->opcode == IBV_WR_RDMA_READ    ? IBV_WC_RDMA_READ
+                  : wr->opcode == IBV_WR_RDMA_WRITE ? IBV_WC_RDMA_WRITE
+                                                    : IBV_WC_SEND;
       current->tx_completions.push_back(wc);
     }
     current->last_flags = wr->send_flags;
@@ -117,6 +141,7 @@ class RdmaEnginePollingTestPeer {
   ibv_context context{};
   ibv_pd pd{};
   ibv_mr mr{};
+  std::array<char, 4096> registered_bytes{};
   Ring* tx_ring = nullptr;
   Ring* rx_ring = nullptr;
 
@@ -157,10 +182,15 @@ class RdmaEnginePollingTestPeer {
     params.pd = &pd;
     params.if_idx = params.queue_idx = 0;
     mr.lkey = 123;
+    mr.rkey = 456;
+    mr.addr = registered_bytes.data();
+    mr.length = registered_bytes.size();
     engine.pd_map_[&context] = &pd;
     auto& memory = engine.mrs_["data"];
     memory.params_.kind_ = MemoryKind::HOST_PINNED;
     memory.params_.buf_size_ = 4096;
+    memory.params_.access_ = MEM_ACCESS_LOCAL | MEM_ACCESS_RDMA_READ | MEM_ACCESS_RDMA_WRITE;
+    memory.ptr_ = registered_bytes.data();
     memory.ctx_mr_map_[&pd] = &mr;
     require(engine.setup_thread_params(&params, false) == 0, "QP setup failed");
     require(fake.requested_inline == (direct_tx ? 128u : 0u), "incorrect inline request");
@@ -290,6 +320,209 @@ daqiri:
     params.ready_to_exit.store(true);
     for (auto& [id, thread] : engine.worker_threads_) thread.join();
     engine.worker_threads_.clear();
+  }
+
+  void one_sided(bool server) {
+    const auto connection = reinterpret_cast<uintptr_t>(&id);
+    engine.initialize_progress(server, &params);
+    engine.connection_params_[&id] = &params;
+    const bool fully_direct = params.direct_rx && params.direct_tx;
+    if (fully_direct) {
+      require(engine.publish_direct(&params), "cannot publish direct connection");
+    }
+    params.send_signal_every = 32;  // One-sided operations must still signal every WR.
+    RdmaMemoryRegion remote{};
+    require(engine.rdma_get_local_memory_region(connection, "data", &remote) == Status::SUCCESS &&
+                remote.address == reinterpret_cast<uintptr_t>(mr.addr) &&
+                remote.length == mr.length && remote.rkey == mr.rkey,
+            "exported descriptor does not match connection registration");
+    require(engine.rdma_get_local_memory_region(connection, "missing", &remote) ==
+                    Status::INVALID_PARAMETER &&
+                remote.address == 0,
+            "missing region exported a stale descriptor");
+    require(
+        engine.rdma_get_local_memory_region(connection + 1, "data", &remote) == Status::NOT_READY,
+        "unknown connection exported a descriptor");
+    require(engine.rdma_get_local_memory_region(connection, "data", nullptr) ==
+                Status::INVALID_PARAMETER,
+            "null descriptor accepted");
+    require(engine.rdma_get_local_memory_region(connection, "data", &remote) == Status::SUCCESS,
+            "cannot re-export descriptor");
+    // Export must select this connection's PD, even with multiple registrations.
+    ibv_pd other_pd{};
+    ibv_mr other_mr = mr;
+    other_mr.rkey = 999;
+    engine.mrs_["data"].ctx_mr_map_[&other_pd] = &other_mr;
+    require(remote.rkey != other_mr.rkey, "wrong PD selected");
+
+    BurstParams burst{};
+    void* pointer = registered_bytes.data();
+    uint32_t length = 64;
+    auto prepare = [&](RDMAOpCode opcode, uint64_t wr_id) {
+      require(engine.rdma_set_header(&burst, opcode, connection, server, 1, wr_id, "data") ==
+                  Status::SUCCESS,
+              "one-sided header failed");
+      burst.pkts[0] = &pointer;
+      burst.pkt_lens[0] = &length;
+      require(engine.rdma_set_remote_memory(&burst, remote, 512) == Status::SUCCESS,
+              "remote descriptor rejected");
+    };
+    auto worker_post = [&] {
+      BurstParams* pending = nullptr;
+      if (tx_ring->dequeue(reinterpret_cast<void**>(&pending))) {
+        require(pending == &burst, "wrong queued operation");
+        return engine.post_burst(&params, pending);
+      }
+      return Status::SUCCESS;
+    };
+    auto complete = [&](Status status) {
+      if (!fully_direct) {
+        engine.poll_completions(server, &params, !params.direct_rx, !params.direct_tx);
+      }
+      BurstParams* result = nullptr;
+      require(engine.get_rx_burst(&result, connection, server) == Status::SUCCESS &&
+                  result == &burst && result->transport_hdr.status == status &&
+                  result->transport_hdr.tx && result->transport_hdr.server == server,
+              "one-sided completion lost original buffer, status, or direction");
+      require(engine.get_rx_burst(&result, connection, server) == Status::NOT_READY,
+              "one-sided completion returned twice");
+      require(params.outstanding_send_wr_ids.empty(), "one-sided request leaked credits");
+    };
+    fake.auto_complete = true;
+    for (auto opcode : {RDMAOpCode::RDMA_WRITE, RDMAOpCode::RDMA_READ}) {
+      const bool read = opcode == RDMAOpCode::RDMA_READ;
+      std::memset(registered_bytes.data(), read ? 0 : 42, length);
+      std::memset(registered_bytes.data() + 512, read ? 75 : 0, length);
+      prepare(opcode, read ? 20 : 10);
+      require(engine.send_tx_burst(&burst) == Status::SUCCESS && worker_post() == Status::SUCCESS,
+              "one-sided submission failed");
+      require(fake.last_opcode == (read ? IBV_WR_RDMA_READ : IBV_WR_RDMA_WRITE) &&
+                  fake.last_remote_address == remote.address + 512 &&
+                  fake.last_rkey == remote.rkey && fake.last_lkey == mr.lkey &&
+                  (fake.last_flags & IBV_SEND_SIGNALED) && (fake.last_flags & IBV_SEND_FENCE),
+              "incorrect one-sided WR encoding");
+      require(registered_bytes[read ? 0 : 512] == (read ? 75 : 42), "wrong transfer direction");
+      complete(Status::SUCCESS);
+      require(burst.transport_hdr.opcode == opcode &&
+                  burst.transport_hdr.wr_id == (read ? 20 : 10) && length == 64 &&
+                  fake.receives == 0,
+              "completion changed metadata or used RQ");
+    }
+    // A later fenced SEND completion retires preceding READs by posting order,
+    // independently of the application's numeric WR IDs.
+    prepare(RDMAOpCode::RDMA_READ, 900);
+    fake.auto_complete = false;
+    require(engine.send_tx_burst(&burst) == Status::SUCCESS && worker_post() == Status::SUCCESS,
+            "mixed READ submission failed");
+    BurstParams send{};
+    require(engine.rdma_set_header(&send, RDMAOpCode::SEND, connection, server, 1, 2, "data") ==
+                Status::SUCCESS,
+            "mixed SEND header failed");
+    send.pkts[0] = &pointer;
+    send.pkt_lens[0] = &length;
+    fake.auto_complete = true;
+    params.send_signal_every = 1;
+    require(engine.send_tx_burst(&send) == Status::SUCCESS, "mixed SEND submission failed");
+    if (!params.direct_tx) {
+      BurstParams* pending = nullptr;
+      require(tx_ring->dequeue(reinterpret_cast<void**>(&pending)) && pending == &send &&
+                  engine.post_burst(&params, pending) == Status::SUCCESS,
+              "mixed SEND worker posting failed");
+    }
+    require(fake.last_opcode == IBV_WR_SEND && (fake.last_flags & IBV_SEND_FENCE),
+            "SEND after READ has wrong opcode or lacks fence");
+    if (!fully_direct) {
+      engine.poll_completions(server, &params, !params.direct_rx, !params.direct_tx);
+    }
+    for (auto* expected : {&burst, &send}) {
+      BurstParams* result = nullptr;
+      require(engine.get_rx_burst(&result, connection, server) == Status::SUCCESS &&
+                  result == expected && result->transport_hdr.status == Status::SUCCESS,
+              "mixed SQ completion retired operations in numeric ID order");
+    }
+    require(params.outstanding_send_wr_ids.empty() && params.send_wr_order.empty(),
+            "mixed SQ leaked requests");
+    params.send_signal_every = 32;
+    // Rejected submissions retain the original buffers and never reach the provider.
+    prepare(RDMAOpCode::RDMA_READ, 30);
+    const unsigned posted = fake.sends;
+    auto rejected = [&](Status status) {
+      require(engine.send_tx_burst(&burst) == status && fake.sends == posted &&
+                  tx_ring->count() == 0 && burst.pkts[0] == &pointer,
+              "invalid operation was accepted or consumed caller buffer");
+    };
+    length = 0;
+    rejected(Status::INVALID_PARAMETER);
+    length = 65;
+    burst.transport_hdr.remote_length = 64;
+    rejected(Status::INVALID_PARAMETER);
+    length = 64;
+    prepare(RDMAOpCode::RDMA_READ, 30);
+    pointer = registered_bytes.data() + registered_bytes.size() - 32;
+    rejected(Status::INVALID_PARAMETER);
+    pointer = registered_bytes.data();
+    engine.mrs_["data"].params_.access_ = MEM_ACCESS_RDMA_READ;
+    rejected(Status::INVALID_PARAMETER);
+    engine.mrs_["data"].params_.access_ = remote.access;
+    auto denied = remote;
+    denied.access = 0;
+    require(engine.rdma_set_remote_memory(&burst, denied) == Status::INVALID_PARAMETER,
+            "remote permissions ignored");
+    rejected(Status::INVALID_PARAMETER);
+    auto overflow = remote;
+    overflow.address = UINT64_MAX - 4;
+    require(engine.rdma_set_remote_memory(&burst, overflow) == Status::INVALID_PARAMETER,
+            "overflowing remote descriptor accepted");
+    require(
+        engine.rdma_set_remote_memory(&burst, remote, remote.length) == Status::INVALID_PARAMETER,
+        "out-of-bounds remote offset accepted");
+    prepare(RDMAOpCode::RDMA_READ, 30);
+    params.qp_params.qp_attr.qp_type = IBV_QPT_UC;
+    rejected(Status::NOT_SUPPORTED);
+    params.qp_params.qp_attr.qp_type = IBV_QPT_RC;
+    for (auto opcode : {RDMAOpCode::CONNECT, RDMAOpCode::RDMA_WRITE_IMM, RDMAOpCode::RDMA_READ_IMM,
+                        RDMAOpCode::INVALID}) {
+      burst.transport_hdr.opcode = opcode;
+      rejected(Status::NOT_SUPPORTED);
+    }
+    require(engine.rdma_set_header(nullptr, RDMAOpCode::RDMA_READ, connection, server, 1, 1,
+                                   "data") == Status::INVALID_PARAMETER,
+            "null header accepted");
+    require(engine.rdma_set_header(&burst, RDMAOpCode::RDMA_READ, connection, server, 2, 1,
+                                   "data") == Status::INVALID_PARAMETER,
+            "multi-packet one-sided operation accepted");
+    prepare(RDMAOpCode::RDMA_WRITE, 30);
+    require(engine.rdma_set_header(&burst, RDMAOpCode::RDMA_READ, connection, server, 1, 30,
+                                   "data") == Status::SUCCESS,
+            "header reuse failed");
+    rejected(Status::INVALID_PARAMETER);  // Reused header must not keep the old remote target.
+
+    // Provider posting errors retain ownership for direct TX and return a failed
+    // original burst for work already accepted by the indirect worker.
+    prepare(RDMAOpCode::RDMA_READ, 40);
+    fake.send_result = ENOMEM;
+    const auto submit = engine.send_tx_burst(&burst);
+    if (params.direct_tx) {
+      require(submit == Status::GENERIC_FAILURE && params.outstanding_send_wr_ids.empty(),
+              "failed direct post consumed ownership or leaked credits");
+    } else {
+      require(submit == Status::SUCCESS && worker_post() == Status::GENERIC_FAILURE,
+              "worker did not report posting failure");
+      complete(Status::GENERIC_FAILURE);
+    }
+    fake.send_result = 0;
+    fake.auto_complete = false;
+    prepare(RDMAOpCode::RDMA_WRITE, 50);
+    require(engine.send_tx_burst(&burst) == Status::SUCCESS && worker_post() == Status::SUCCESS,
+            "completion-error submission failed");
+    ibv_wc error{};
+    error.wr_id = fake.last_send_id;
+    error.status = IBV_WC_REM_ACCESS_ERR;
+    error.opcode = IBV_WC_RECV;  // Undefined on failure; completion routing must ignore it.
+    fake.tx_completions.push_back(error);
+    complete(Status::GENERIC_FAILURE);
+    require(engine.mr_access_to_ibv(MEM_ACCESS_RDMA_WRITE) & IBV_ACCESS_LOCAL_WRITE,
+            "remote write registration lacks required local write access");
   }
 
   void fully_direct(bool server) {
@@ -596,6 +829,7 @@ daqiri:
     send.transport_hdr.wr_id = 30;
     receive.transport_hdr.wr_id = 40;
     params.outstanding_send_wr_ids[30] = &send;
+    params.send_wr_order.push_back(30);
     params.outstanding_receive_wr_ids[40] = &receive;
     tx_wc.wr_id = 30;
     tx_wc.status = IBV_WC_LOC_PROT_ERR;
@@ -629,6 +863,7 @@ daqiri:
           require(bool(fake.last_flags & IBV_SEND_INLINE) == expected,
                   "inline capacity/memory-kind selection wrong");
           params.outstanding_send_wr_ids.clear();
+          params.send_wr_order.clear();
         }
       }
       const unsigned posted = fake.sends;
@@ -670,6 +905,8 @@ int main() {
         for (bool server : {false, true}) {
           daqiri::RdmaEnginePollingTestPeer test(rx, tx);
           test.run(rx, tx, server);
+          daqiri::RdmaEnginePollingTestPeer one_sided(rx, tx);
+          one_sided.one_sided(server);
           if (!rx || !tx) {
             daqiri::RdmaEnginePollingTestPeer concurrent(rx, tx);
             concurrent.concurrent_worker(server);
@@ -677,7 +914,8 @@ int main() {
         }
       }
     }
-    std::cout << "PASS: RDMA direct/indirect RX/TX, inline selection, and completions\n";
+    std::cout << "PASS: RDMA direct/indirect SEND/RECEIVE/READ/WRITE, inline selection, and "
+                 "completions\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "FAIL: " << error.what() << '\n';

@@ -107,6 +107,16 @@ enum class RDMAOpCode {
   INVALID
 };
 
+/** Connection-specific registered memory descriptor. Exchange fields explicitly;
+ * this host-layout struct is not a wire format. Valid until engine shutdown.
+ */
+struct RdmaMemoryRegion {
+  uint64_t address = 0;
+  uint64_t length = 0;
+  uint32_t rkey = 0;
+  uint32_t access = 0;  // MEM_ACCESS_* flags
+};
+
 enum class RDMACompletionType { RX, TX, INVALID };
 
 struct BurstTransportHeader {
@@ -128,6 +138,8 @@ struct BurstTransportHeader {
   uint32_t imm;
   uint32_t server_addr;
   uint16_t server_port;
+  uint64_t remote_length;  // Bytes available starting at raddr
+  uint32_t remote_access;
 };
 
 /**

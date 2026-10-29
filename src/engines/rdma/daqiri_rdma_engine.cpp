@@ -34,8 +34,7 @@
 
 /* The ordering of most RDMA/CM setup follows the ordering specified here:
    https://man7.org/linux/man-pages/man7/rdma_cm.7.html
-   The exception is that there is no standard way to pass around keys, so we use standard
-   sends and receives.
+   Applications exchange memory descriptors through their own control channel.
 */
 
 #include "src/rdma/cm_api.h"
@@ -243,7 +242,9 @@ int RdmaEngine::mr_access_to_ibv(uint32_t access) {
 
   if (access & MEM_ACCESS_LOCAL) { ibv_access |= IBV_ACCESS_LOCAL_WRITE; }
   if (access & MEM_ACCESS_RDMA_READ) { ibv_access |= IBV_ACCESS_REMOTE_READ; }
-  if (access & MEM_ACCESS_RDMA_WRITE) { ibv_access |= IBV_ACCESS_REMOTE_WRITE; }
+  if (access & MEM_ACCESS_RDMA_WRITE) {
+    ibv_access |= IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_LOCAL_WRITE;
+  }
   // IBV_ACCESS_RELAXED_ORDERING is an rdma-core enum value, not a macro, so an
   // #ifdef guard compiled it out. Keep it opt-in per memory region: it has caused
   // local protection errors on some aarch64/Tegra platforms.
@@ -414,6 +415,18 @@ int RdmaEngine::setup_thread_params(rdma_thread_params* params, bool is_server) 
     return -1;
   }
 
+  if (qp_params.qp_attr.qp_type == IBV_QPT_RC) {
+    ibv_qp_attr access{};
+    access.qp_access_flags = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
+    if (verbs_->modify_qp(params->client_id->qp, &access, IBV_QP_ACCESS_FLAGS) != 0) {
+      DAQIRI_LOG_ERROR("Failed to enable RDMA READ/WRITE on QP: {}", strerror(errno));
+      verbs_->cm_destroy_qp(params->client_id);
+      verbs_->destroy_cq(qp_params.rx_cq);
+      verbs_->destroy_cq(qp_params.tx_cq);
+      return -1;
+    }
+  }
+
   params->max_inline_data = qp_params.qp_attr.cap.max_inline_data;
   params->inline_wqes = 0;
   // qp_params.rx_ring = rx_ring;
@@ -498,6 +511,17 @@ Status RdmaEngine::send_tx_burst(BurstParams* burst) {
   if (rdma_force_quit.load() || params->ready_to_exit.load()) {
     return Status::NOT_READY;
   }
+  const auto opcode = burst->transport_hdr.opcode;
+  if (opcode != RDMAOpCode::SEND && opcode != RDMAOpCode::RECEIVE &&
+      opcode != RDMAOpCode::RDMA_READ && opcode != RDMAOpCode::RDMA_WRITE) {
+    return Status::NOT_SUPPORTED;
+  }
+  if (opcode == RDMAOpCode::RDMA_READ || opcode == RDMAOpCode::RDMA_WRITE) {
+    const auto status = validate_one_sided(*params, burst);
+    if (status != Status::SUCCESS) {
+      return status;
+    }
+  }
   const bool receive = burst->transport_hdr.opcode == RDMAOpCode::RECEIVE;
   if (receive ? params->direct_rx : params->direct_tx) {
     if (burst->transport_hdr.num_pkts != 1 || burst->transport_hdr.num_segs != 1) {
@@ -513,7 +537,6 @@ Status RdmaEngine::send_tx_burst(BurstParams* burst) {
     const auto dropped_packets =
         burst->transport_hdr.num_pkts > 0 ? burst->transport_hdr.num_pkts : 1;
     metrics::add_dropped(counters, "tx_enqueue_failure", dropped_packets);
-    free_tx_burst(burst);
     DAQIRI_LOG_CRITICAL("Failed to enqueue TX work");
     return Status::NO_SPACE_AVAILABLE;
   }
@@ -704,18 +727,17 @@ void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, b
   }
 
   auto complete_send_wrs = [&](uint64_t wr_id, Status status) -> bool {
-    auto completed_end = outstanding_send_wr_ids.upper_bound(wr_id);
-    if (completed_end == outstanding_send_wr_ids.begin()) {
-      DAQIRI_LOG_CRITICAL("WR ID {} not found in outstanding SEND WR IDs", wr_id);
+    const auto last =
+        std::find(tparams->send_wr_order.begin(), tparams->send_wr_order.end(), wr_id);
+    if (last == tparams->send_wr_order.end()) {
+      DAQIRI_LOG_CRITICAL("WR ID {} not found in outstanding SQ work", wr_id);
       metrics::add_dropped(counters, "tx_unknown_wr_id", 1);
       return true;
     }
-    if (outstanding_send_wr_ids.find(wr_id) == outstanding_send_wr_ids.end()) {
-      DAQIRI_LOG_CRITICAL("WR ID {} not found in outstanding SEND WR IDs", wr_id);
-      metrics::add_dropped(counters, "tx_unknown_wr_id", 1);
-    }
-
-    for (auto completed_it = outstanding_send_wr_ids.begin(); completed_it != completed_end;) {
+    const size_t count = std::distance(tparams->send_wr_order.begin(), last) + 1;
+    for (size_t i = 0; i < count; ++i) {
+      const auto completed_it = outstanding_send_wr_ids.find(tparams->send_wr_order.front());
+      tparams->send_wr_order.pop_front();
       msg = completed_it->second;
       if (status == Status::SUCCESS) {
         metrics::add_tx(counters, 1, packet_length_for_wr(msg, completed_it->first));
@@ -728,7 +750,7 @@ void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, b
                             completed_it->first, conn_id, expected_conn_id);
       }
 
-      completed_it = outstanding_send_wr_ids.erase(completed_it);
+      outstanding_send_wr_ids.erase(completed_it);
 
       msg->transport_hdr.tx = true;
       msg->transport_hdr.status = status;
@@ -777,7 +799,8 @@ void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, b
       continue;
     }
 
-    if (wc.opcode == IBV_WC_SEND) {
+    if (wc.opcode == IBV_WC_SEND || wc.opcode == IBV_WC_RDMA_READ ||
+        wc.opcode == IBV_WC_RDMA_WRITE) {
       if (!complete_send_wrs(wc.wr_id, Status::SUCCESS)) {
         return;
       }
@@ -862,12 +885,21 @@ Status RdmaEngine::post_burst(rdma_thread_params* tparams, BurstParams* burst) {
         wr.sg_list = &sge;
         wr.num_sge = 1;
         wr.opcode = IBV_WR_SEND;
+        if (outstanding_send_wr_ids.count(wr.wr_id)) {
+          if (!posted_any && !caller_owned) {
+            free_tx_burst(burst);
+          }
+          return Status::INVALID_PARAMETER;
+        }
         // Keep signaled completions frequent enough for callers that use SEND
         // completions as their credit to refill the outstanding window.
         const bool signal_send = send_signal_every == 1 ||
                                  sends_since_signal + 1 >= send_signal_every ||
                                  outstanding_send_wr_ids.size() >= 15;
         wr.send_flags = signal_send ? IBV_SEND_SIGNALED : 0;
+        if (tparams->qp_params.qp_attr.qp_type == IBV_QPT_RC) {
+          wr.send_flags |= IBV_SEND_FENCE;
+        }
         const auto kind = local_mr->second.params_.kind_;
         if (tparams->direct_tx && burst->transport_hdr.num_pkts == 1 &&
             burst->transport_hdr.num_segs == 1 &&
@@ -898,6 +930,7 @@ Status RdmaEngine::post_burst(rdma_thread_params* tparams, BurstParams* burst) {
         }
 
         outstanding_send_wr_ids[burst->transport_hdr.wr_id + p] = burst;
+        tparams->send_wr_order.push_back(wr.wr_id);
       }
 
       break;
@@ -965,13 +998,59 @@ Status RdmaEngine::post_burst(rdma_thread_params* tparams, BurstParams* burst) {
       break;
     }
     case RDMAOpCode::RDMA_WRITE:
-      [[fallthrough]];
-    case RDMAOpCode::RDMA_WRITE_IMM: {
-      break;
-    }
     case RDMAOpCode::RDMA_READ: {
+      auto fail = [&](Status status) {
+        if (!caller_owned) {
+          // The worker owns an accepted operation; return the original buffer
+          // exactly once even when posting fails, with no invented CQE.
+          burst->transport_hdr.status = status;
+          burst->transport_hdr.tx = true;
+          if (!tparams->qp_params.rx_ring->enqueue(burst)) {
+            free_tx_burst(burst);
+          }
+        }
+        return status;
+      };
+      auto status = validate_one_sided(*tparams, burst);
+      if (status != Status::SUCCESS) {
+        return fail(status);
+      }
+      if (outstanding_send_wr_ids.size() >= MAX_OUSTANDING_WR) {
+        return fail(Status::NO_SPACE_AVAILABLE);
+      }
+      if (outstanding_send_wr_ids.count(burst->transport_hdr.wr_id)) {
+        return fail(Status::INVALID_PARAMETER);
+      }
+      const auto registration = local_mr->second.ctx_mr_map_.find(tparams->pd);
+      if (registration == local_mr->second.ctx_mr_map_.end()) {
+        return fail(Status::INVALID_PARAMETER);
+      }
+      ibv_sge sge{};
+      sge.addr = reinterpret_cast<uintptr_t>(burst->pkts[0][0]);
+      sge.length = burst->pkt_lens[0][0];
+      sge.lkey = registration->second->lkey;
+      ibv_send_wr wr{};
+      wr.wr_id = burst->transport_hdr.wr_id;
+      wr.sg_list = &sge;
+      wr.num_sge = 1;
+      wr.opcode = burst->transport_hdr.opcode == RDMAOpCode::RDMA_READ ? IBV_WR_RDMA_READ
+                                                                       : IBV_WR_RDMA_WRITE;
+      // Fence against earlier READs before returning preceding SQ buffers.
+      wr.send_flags = IBV_SEND_SIGNALED | IBV_SEND_FENCE;
+      wr.wr.rdma.remote_addr = reinterpret_cast<uintptr_t>(burst->transport_hdr.raddr);
+      wr.wr.rdma.rkey = static_cast<uint32_t>(burst->transport_hdr.dst_key);
+      ibv_send_wr* bad = nullptr;
+      if (verbs_->post_send(tparams->client_id->qp, &wr, &bad)) {
+        metrics::add_dropped(counters, "tx_post_failure", 1);
+        return fail(Status::GENERIC_FAILURE);
+      }
+      outstanding_send_wr_ids.emplace(wr.wr_id, burst);
+      tparams->send_wr_order.push_back(wr.wr_id);
+      sends_since_signal = 0;
       break;
     }
+    default:
+      return Status::NOT_SUPPORTED;
   }
 
   return Status::SUCCESS;
@@ -1009,6 +1088,22 @@ RDMAOpCode RdmaEngine::rdma_get_opcode(BurstParams* burst) {
 Status RdmaEngine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id,
                                 bool is_server, int num_pkts, uint64_t wr_id,
                                 const std::string& local_mr_name) {
+  if (!burst || num_pkts <= 0 || num_pkts > MAX_RDMA_BATCH || local_mr_name.empty() ||
+      local_mr_name.size() >= sizeof(burst->transport_hdr.local_mr_name) ||
+      local_mr_name.find('\0') != std::string::npos) {
+    return Status::INVALID_PARAMETER;
+  }
+  if (op_code != RDMAOpCode::SEND && op_code != RDMAOpCode::RECEIVE &&
+      op_code != RDMAOpCode::RDMA_READ && op_code != RDMAOpCode::RDMA_WRITE) {
+    return Status::NOT_SUPPORTED;
+  }
+  if ((op_code == RDMAOpCode::RDMA_READ || op_code == RDMAOpCode::RDMA_WRITE) && num_pkts != 1) {
+    return Status::INVALID_PARAMETER;
+  }
+  burst->transport_hdr.raddr = nullptr;
+  burst->transport_hdr.dst_key = 0;
+  burst->transport_hdr.remote_length = 0;
+  burst->transport_hdr.remote_access = 0;
   burst->transport_hdr.opcode = op_code;
   set_connection_id(burst, conn_id);
   burst->transport_hdr.server = is_server;
@@ -1036,6 +1131,97 @@ Status RdmaEngine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintp
            sizeof(burst->transport_hdr.local_mr_name),
            "%s",
            local_mr_name.c_str());
+  return Status::SUCCESS;
+}
+
+Status RdmaEngine::rdma_get_local_memory_region(uintptr_t conn_id, const std::string& name,
+                                                RdmaMemoryRegion* region) {
+  if (!region) {
+    return Status::INVALID_PARAMETER;
+  }
+  *region = {};
+  std::unique_lock<std::mutex> registry_lock(threads_mutex_);
+  const auto connection = connection_params_.find(reinterpret_cast<rdma_cm_id*>(conn_id));
+  if (connection == connection_params_.end()) {
+    return Status::NOT_READY;
+  }
+  auto& params = *connection->second;
+  std::lock_guard<std::mutex> progress_lock(params.progress_mutex);
+  if (params.ready_to_exit.load() || rdma_force_quit.load()) {
+    return Status::NOT_READY;
+  }
+  if (params.qp_params.qp_attr.qp_type != IBV_QPT_RC) {
+    return Status::NOT_SUPPORTED;
+  }
+  const auto local = mrs_.find(name);
+  if (local == mrs_.end()) {
+    return Status::INVALID_PARAMETER;
+  }
+  const auto registration = local->second.ctx_mr_map_.find(params.pd);
+  if (registration == local->second.ctx_mr_map_.end() || !registration->second) {
+    return Status::INVALID_PARAMETER;
+  }
+  const auto* mr = registration->second;
+  *region = {reinterpret_cast<uintptr_t>(mr->addr), mr->length, mr->rkey,
+             local->second.params_.access_};
+  return Status::SUCCESS;
+}
+
+Status RdmaEngine::rdma_set_remote_memory(BurstParams* burst, const RdmaMemoryRegion& region,
+                                          uint64_t offset) {
+  if (!burst) {
+    return Status::INVALID_PARAMETER;
+  }
+  auto& hdr = burst->transport_hdr;
+  // Clear the old target even if the replacement is invalid.
+  hdr.raddr = nullptr;
+  hdr.dst_key = hdr.remote_length = hdr.remote_access = 0;
+  if (hdr.opcode != RDMAOpCode::RDMA_READ && hdr.opcode != RDMAOpCode::RDMA_WRITE) {
+    return Status::NOT_SUPPORTED;
+  }
+  const uint32_t required =
+      hdr.opcode == RDMAOpCode::RDMA_READ ? MEM_ACCESS_RDMA_READ : MEM_ACCESS_RDMA_WRITE;
+  if (!region.address || !region.length || offset >= region.length ||
+      region.length > UINT64_MAX - region.address || !(region.access & required)) {
+    return Status::INVALID_PARAMETER;
+  }
+  hdr.raddr = reinterpret_cast<void*>(region.address + offset);
+  hdr.dst_key = region.rkey;
+  hdr.remote_length = region.length - offset;
+  hdr.remote_access = region.access;
+  return Status::SUCCESS;
+}
+
+Status RdmaEngine::validate_one_sided(const rdma_thread_params& params, BurstParams* burst) const {
+  if (params.qp_params.qp_attr.qp_type != IBV_QPT_RC) {
+    return Status::NOT_SUPPORTED;
+  }
+  const auto& hdr = burst->transport_hdr;
+  if (hdr.num_pkts != 1 || hdr.num_segs != 1 || !burst->pkts[0] || !burst->pkt_lens[0] ||
+      !burst->pkts[0][0] || !hdr.raddr || hdr.dst_key > UINT32_MAX ||
+      !memchr(hdr.local_mr_name, '\0', sizeof(hdr.local_mr_name))) {
+    return Status::INVALID_PARAMETER;
+  }
+  const auto local = mrs_.find(hdr.local_mr_name);
+  if (local == mrs_.end()) {
+    return Status::INVALID_PARAMETER;
+  }
+  const auto registration = local->second.ctx_mr_map_.find(params.pd);
+  if (registration == local->second.ctx_mr_map_.end() || !registration->second) {
+    return Status::INVALID_PARAMETER;
+  }
+  const auto* mr = registration->second;
+  const uint64_t address = reinterpret_cast<uintptr_t>(burst->pkts[0][0]);
+  const uint64_t base = reinterpret_cast<uintptr_t>(mr->addr);
+  const uint64_t length = burst->pkt_lens[0][0];
+  const bool read = hdr.opcode == RDMAOpCode::RDMA_READ;
+  if (!length || length > local->second.params_.buf_size_ || address < base ||
+      address - base > mr->length || length > mr->length - (address - base) ||
+      length > hdr.remote_length || length > UINT64_MAX - reinterpret_cast<uintptr_t>(hdr.raddr) ||
+      !(hdr.remote_access & (read ? MEM_ACCESS_RDMA_READ : MEM_ACCESS_RDMA_WRITE)) ||
+      (read && !(local->second.params_.access_ & (MEM_ACCESS_LOCAL | MEM_ACCESS_RDMA_WRITE)))) {
+    return Status::INVALID_PARAMETER;
+  }
   return Status::SUCCESS;
 }
 
@@ -1661,6 +1847,7 @@ void RdmaEngine::run() {
           }
           std::lock_guard<std::mutex> progress_lock(tparams_to_clear->progress_mutex);
           tparams_to_clear->outstanding_send_wr_ids.clear();
+          tparams_to_clear->send_wr_order.clear();
           tparams_to_clear->outstanding_receive_wr_ids.clear();
           if (tparams_to_clear->qp_params.tx_ring != nullptr) {
             tx_rings_.push(tparams_to_clear->qp_params.tx_ring);

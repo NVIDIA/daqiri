@@ -571,6 +571,22 @@ if status == daqiri.Status.SUCCESS:
     )
 ```
 
+For one-sided RC operations, export a descriptor with
+`status, region = daqiri.rdma_get_local_memory_region(conn_id, "shared")`.
+Exchange its integer fields (`address`, `length`, `rkey`, `access`) through your
+application's control channel. The peer reconstructs a `daqiri.RdmaMemoryRegion`
+and calls `rdma_set_remote_memory(burst, region, offset=0)` after
+`rdma_set_header()` with `RDMAOpCode.RDMA_READ` or `RDMAOpCode.RDMA_WRITE`.
+Both polling modes support one packet and one segment per operation. Poll
+`get_rx_burst_for_connection()` for the original burst's local completion
+and free it with `free_tx_burst()` after checking `burst.rdma_status`.
+`burst.rdma_tx` is true for READ/WRITE completions, which originate on the SQ. READ/WRITE do not
+consume peer RECEIVE buffers or generate peer completions; immediate-data
+opcodes remain unsupported. The calls keep the GIL.
+See [one-sided RDMA ownership and configuration](cpp.md#one-sided-rdma-read-and-write)
+for permissions, descriptor lifetime, remote buffer reservation, GPU ordering,
+and work-request ID requirements.
+
 Look up server-side connection IDs:
 
 ```python
@@ -702,6 +718,8 @@ The workflow sections above show the common call order and ownership rules.
 | `set_udp_header(burst, idx, udp_len, src_port, dst_port)` | Fill a UDP header. |
 | `set_udp_payload(burst, idx, data)` | Copy UDP payload bytes. |
 | `rdma_set_header(burst, op_code, conn_id, is_server, num_pkts, wr_id, local_mr_name)` | Fill RDMA TX metadata. |
+| `rdma_get_local_memory_region(conn_id, name)` | Return `(status, RdmaMemoryRegion)` for the connection's PD. |
+| `rdma_set_remote_memory(burst, region, offset=0)` | Set a remote READ/WRITE target after setting the header. |
 | `rdma_get_opcode(burst)` | Return the RDMA operation code for a burst. |
 
 ### Buffer Release
@@ -836,7 +854,7 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 
 | Class | Purpose |
 | --- | --- |
-| `BurstParams` | Opaque burst handle used by RX, TX, free, and packet-access helpers. Exposes `hdr`, `connection_id`, and `rdma_wr_id`. |
+| `BurstParams` | Opaque burst handle used by RX, TX, free, and packet-access helpers. Exposes `hdr`, `connection_id`, `rdma_wr_id`, and read-only completion fields `rdma_status` and `rdma_tx`. |
 | `BurstHeader` | Wrapper for `BurstHeaderParams`. |
 | `BurstHeaderParams` | Burst metadata: packet count, port, queue, segment count, byte totals, and reorder flags. |
 | `ReorderBurstInfo` | Metadata for reordered aggregate bursts. |
@@ -864,6 +882,7 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `FlexItemMatch` | Flexible parser match value and mask. |
 | `SocketConfig` | Socket client/server endpoint URI, legacy IP/port, and timing settings. |
 | `RoCEConfig` | RoCE transport settings. |
+| `RdmaMemoryRegion` | Connection-specific remote memory descriptor: `address`, `length`, `rkey`, `access`. |
 | `RDMAConfig` | RDMA mode, transport mode, and port. |
 | `ReorderConfig` | Reorder engine/cyclic-sequence contract, type, memory region, payload offset, flows, method, and data type conversion. |
 | `ReorderBitFieldConfig` | Bit offset and width for extracting reorder fields. |

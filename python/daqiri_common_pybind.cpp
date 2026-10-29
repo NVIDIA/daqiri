@@ -663,6 +663,13 @@ void bind_enums(py::module_ &m) {
 }
 
 void bind_config_types(py::module_ &m) {
+  py::class_<RdmaMemoryRegion>(m, "RdmaMemoryRegion")
+      .def(py::init<>())
+      .def_readwrite("address", &RdmaMemoryRegion::address)
+      .def_readwrite("length", &RdmaMemoryRegion::length)
+      .def_readwrite("rkey", &RdmaMemoryRegion::rkey)
+      .def_readwrite("access", &RdmaMemoryRegion::access);
+
   py::class_<ReorderBurstInfo>(m, "ReorderBurstInfo")
       .def(py::init<>())
       .def_readwrite("batch_id", &ReorderBurstInfo::batch_id)
@@ -695,17 +702,15 @@ void bind_config_types(py::module_ &m) {
       .def(py::init<>())
       .def_readwrite("hdr", &BurstParams::hdr)
       .def_property(
-          "connection_id",
-          [](const BurstParams &burst) { return get_connection_id(&burst); },
-          [](BurstParams &burst, uintptr_t conn_id) {
-            set_connection_id(&burst, conn_id);
-          })
+          "connection_id", [](const BurstParams& burst) { return get_connection_id(&burst); },
+          [](BurstParams& burst, uintptr_t conn_id) { set_connection_id(&burst, conn_id); })
+      .def_property_readonly("rdma_status",
+                             [](const BurstParams& burst) { return burst.transport_hdr.status; })
+      .def_property_readonly("rdma_tx",
+                             [](const BurstParams& burst) { return burst.transport_hdr.tx; })
       .def_property(
-          "rdma_wr_id",
-          [](const BurstParams &burst) { return burst.transport_hdr.wr_id; },
-          [](BurstParams &burst, uint64_t wr_id) {
-            burst.transport_hdr.wr_id = wr_id;
-          });
+          "rdma_wr_id", [](const BurstParams& burst) { return burst.transport_hdr.wr_id; },
+          [](BurstParams& burst, uint64_t wr_id) { burst.transport_hdr.wr_id = wr_id; });
 
   py::class_<S3WriterConfig>(m, "S3WriterConfig")
       .def(py::init<>())
@@ -1621,6 +1626,15 @@ PYBIND11_MODULE(_daqiri, m) {
       "server_addr"_a, "server_port"_a);
   m.def("rdma_set_header", &rdma_set_header, "burst"_a, "op_code"_a,
         "conn_id"_a, "is_server"_a, "num_pkts"_a, "wr_id"_a, "local_mr_name"_a);
+  m.def(
+      "rdma_get_local_memory_region",
+      [](uintptr_t conn_id, const std::string& name) {
+        RdmaMemoryRegion region{};
+        const Status status = rdma_get_local_memory_region(conn_id, name, &region);
+        return py::make_tuple(status, region);
+      },
+      "conn_id"_a, "name"_a);
+  m.def("rdma_set_remote_memory", &rdma_set_remote_memory, "burst"_a, "region"_a, "offset"_a = 0);
   m.def("rdma_get_opcode", &rdma_get_opcode, "burst"_a);
 
   m.def("shutdown", &shutdown, "Shut down the active DAQIRI engine");

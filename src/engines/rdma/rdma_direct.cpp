@@ -146,7 +146,15 @@ Status RdmaEngine::send_direct(RdmaDirectState& state, BurstParams* burst) {
   if (state.sge.length > region->region->params_.buf_size_) {
     return Status::INVALID_PARAMETER;
   }
-  if (burst->transport_hdr.opcode == RDMAOpCode::SEND) {
+  const auto opcode = burst->transport_hdr.opcode;
+  const bool one_sided = opcode == RDMAOpCode::RDMA_READ || opcode == RDMAOpCode::RDMA_WRITE;
+  if (one_sided) {
+    const auto status = validate_one_sided(params, burst);
+    if (status != Status::SUCCESS) {
+      return status;
+    }
+  }
+  if (opcode == RDMAOpCode::SEND || one_sided) {
     if (state.sends_posted - state.sends_completed == RdmaDirectState::kRequests) {
       return Status::NO_SPACE_AVAILABLE;
     }
@@ -154,12 +162,21 @@ Status RdmaEngine::send_direct(RdmaDirectState& state, BurstParams* burst) {
     auto& slot = state.sends[(tag - 1) & (RdmaDirectState::kRequests - 1)];
     state.send.wr_id = tag;
     const bool signal =
-        params.send_signal_every == 1 ||
+        one_sided || params.send_signal_every == 1 ||
         params.sends_since_signal + 1 >= static_cast<uint64_t>(params.send_signal_every) ||
         state.sends_posted - state.sends_completed >= 15;
+    state.send.opcode = opcode == RDMAOpCode::RDMA_READ    ? IBV_WR_RDMA_READ
+                        : opcode == RDMAOpCode::RDMA_WRITE ? IBV_WR_RDMA_WRITE
+                                                           : IBV_WR_SEND;
+    state.send.wr.rdma.remote_addr = reinterpret_cast<uintptr_t>(burst->transport_hdr.raddr);
+    state.send.wr.rdma.rkey = static_cast<uint32_t>(burst->transport_hdr.dst_key);
     state.send.send_flags = signal ? IBV_SEND_SIGNALED : 0;
+    if (params.qp_params.qp_attr.qp_type == IBV_QPT_RC) {
+      state.send.send_flags |= IBV_SEND_FENCE;
+    }
     const auto kind = region->region->params_.kind_;
-    if ((kind == MemoryKind::HUGE || kind == MemoryKind::HOST_PINNED) &&
+    if (opcode != RDMAOpCode::RDMA_READ &&
+        (kind == MemoryKind::HUGE || kind == MemoryKind::HOST_PINNED) &&
         state.sge.length <= params.max_inline_data) {
       state.send.send_flags |= IBV_SEND_INLINE;
     }

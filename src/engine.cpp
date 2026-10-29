@@ -1910,6 +1910,14 @@ Status Engine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t
   return Status::NOT_SUPPORTED;
 }
 
+Status Engine::rdma_get_local_memory_region(uintptr_t, const std::string&, RdmaMemoryRegion*) {
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::rdma_set_remote_memory(BurstParams*, const RdmaMemoryRegion&, uint64_t) {
+  return Status::NOT_SUPPORTED;
+}
+
 RDMAOpCode Engine::rdma_get_opcode(BurstParams* burst) {
   DAQIRI_LOG_CRITICAL("RDMA get opcode not implemented");
   return RDMAOpCode::INVALID;

@@ -518,6 +518,17 @@ all queues and reorder outputs that reference it have been removed. This makes
 live migration explicit: create the replacement region and queue, redirect
 dynamic flows, drain the old queue, and then remove the old region.
 
+### One-sided RDMA memory access
+
+On RC `roce://` connections, RDMA READ copies bytes from peer registered
+memory into a local buffer; RDMA WRITE copies bytes from a local buffer into
+peer registered memory. Both use the connection's send queue and return the
+original burst as a local completion. They require no posted peer RECEIVE and
+produce no peer completion. Applications exchange connection-specific memory
+descriptors and coordinate ownership of exported buffers through their own
+control channel. See the [C++ workflow](api-reference/cpp.md#one-sided-rdma-read-and-write)
+for permissions, bounds, and completion handling.
+
 ## Zero-Copy Ownership
 
 DAQIRI is designed around zero-copy packet delivery. When a receive API

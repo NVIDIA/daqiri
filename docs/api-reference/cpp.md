@@ -153,9 +153,9 @@ recycled by a subsequent direct poll. An empty direct poll returns `Status::NOT_
 mode remains the default.
 
 For RDMA (`roce://`), the connection overload `get_rx_burst(&burst, conn_id, server)`
-also drives direct RX and TX completion queues. Direct RECEIVE postings and SENDs
-use one packet each. A successful poll returns one completion; check
-`rdma_get_opcode(burst)` to distinguish SEND from RECEIVE. The original burst remains
+also drives direct RX and TX completion queues. Direct RECEIVE, SEND, READ, and
+WRITE postings use one packet each. A successful poll returns one completion;
+check `rdma_get_opcode(burst)` to identify its operation. The original burst remains
 owned by DAQIRI until returned as a completion, including for inline SENDs;
 free it using the normal RDMA completion workflow. Keep polling for TX
 completions even when the application only sends. Each direction can independently
@@ -172,7 +172,7 @@ completions before retrying. Mixed-mode connections retain their synchronized
 worker path.
 
 After a completion returns a burst, its registered buffers and metadata may be
-reused: call `rdma_set_header()` for the next SEND or RECEIVE, restore the packet
+reused: call `rdma_set_header()` for the next operation, restore the packet
 lengths, and submit it again. Do not call `get_tx_packet_burst()` again on that
 handle, and free it with `free_tx_burst()` only when finished. A RECEIVE buffer
 can be sent as a zero-copy echo using the same local MR name. Repost it for
@@ -732,6 +732,72 @@ domain as a PTP-synchronized `CLOCK_REALTIME`. Device-clock ticks are not accept
 **WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or system clock
 configuration. Scheduled transmission is invalid if the clocks are not PTP-synchronized.
 
+## One-sided RDMA READ and WRITE
+
+RC `roce://` connections support `RDMAOpCode::RDMA_READ` and
+`RDMAOpCode::RDMA_WRITE` with either direct or indirect polling. Each operation
+uses one packet and one segment, up to the local MR's configured `buf_size`.
+READ copies peer memory into the local buffer; WRITE copies the local buffer
+into peer memory. Neither operation consumes a peer RECEIVE or generates a
+peer completion. The immediate-data opcodes remain unsupported and return
+`NOT_SUPPORTED`.
+
+After connecting, the owner exports a connection-specific descriptor:
+
+```cpp
+daqiri::RdmaMemoryRegion local{};
+check(daqiri::rdma_get_local_memory_region(conn_id, "shared", &local));
+// Send local.address, local.length, local.rkey, and local.access to the peer
+// through your application's control channel, using an agreed wire format.
+```
+
+Configure the exported MR with `access: [local, rdma_read, rdma_write]`, or
+only the permissions needed by the peer. `rdma_write` also enables the local
+write permission required by verbs. A READ destination needs `local` access.
+The exported length covers the entire registered allocation, including padded
+buffer strides. Use offsets based on that layout. A descriptor is valid for
+its connection's protection domain until engine shutdown; exchange a new one
+when reconnecting. DAQIRI does not automatically exchange descriptors.
+
+On the initiator, use the received descriptor to select the remote byte offset:
+
+```cpp
+// peer_region was received from the peer's rdma_get_local_memory_region().
+auto* op = daqiri::create_tx_burst_params();
+check(daqiri::rdma_set_header(op, daqiri::RDMAOpCode::RDMA_WRITE,
+                            conn_id, false, 1, next_wr_id++, "TX"));
+check(daqiri::get_tx_packet_burst(op));
+check(daqiri::set_packet_lengths(op, 0, {64}));
+// Populate the local buffer before WRITE (or consume it after READ completion).
+check(daqiri::rdma_set_remote_memory(op, peer_region, 128));
+check(daqiri::send_tx_burst(op));
+```
+
+`rdma_set_header()` clears the previous remote target, so call
+`rdma_set_remote_memory()` after each header reset. DAQIRI checks remote bounds
+and permissions and the local registered range before accepting the operation.
+Invalid requests retain caller ownership. Work-request IDs must be unique among
+outstanding SQ operations on indirect or mixed connections; their numeric order
+does not affect completion ordering. Fully direct connections track requests
+with internal IDs and preserve arbitrary application IDs.
+
+Keep polling `get_rx_burst(&done, conn_id, is_server)` for local completions,
+including in applications that only initiate READ/WRITE. Successful retrieval
+returns the original burst; inspect `done->transport_hdr.status` for the
+operation's result and `rdma_get_opcode(done)` for its operation. READ/WRITE
+completions have `transport_hdr.tx == true` because they originate on the SQ.
+Free the returned burst with `free_tx_burst(done)`, or reuse it after completion.
+Indirect posting failures also return the original burst with a failure status.
+One-sided operations always request completion signaling, independently of
+`DAQIRI_RDMA_SEND_SIGNAL_EVERY`.
+
+The owner must reserve exported target buffers from its local pool and
+coordinate peer access before reusing or freeing them. Exporting a descriptor
+does not reserve buffers or signal that remote memory is ready. For GPU memory,
+coordinate CUDA work and GPUDirect visibility before consuming a READ result or
+memory updated by a peer WRITE. Use an application control message to tell the
+peer when data is ready and when it can release the target.
+
 ## Writing Bursts to Storage
 
 Received bursts can be written to local storage either as raw packet data or as a classic
@@ -1028,6 +1094,8 @@ workflow sections above show the common call order and ownership rules.
 | `set_udp_header(burst, idx, udp_len, src_port, dst_port)` | Fill a UDP header. |
 | `set_udp_payload(burst, idx, data, len)` | Copy UDP payload bytes. |
 | `rdma_set_header(burst, op_code, conn_id, is_server, num_pkts, wr_id, local_mr_name)` | Fill RDMA TX metadata. |
+| `rdma_get_local_memory_region(conn_id, name, &region)` | Export a connection-specific `RdmaMemoryRegion` (address, length, rkey, access). |
+| `rdma_set_remote_memory(burst, region, offset = 0)` | Set the remote READ/WRITE target after setting the header. |
 | `rdma_get_opcode(burst)` | Return the RDMA operation code recorded on a burst. |
 
 ### Buffer Release

@@ -40,6 +40,10 @@ Raw-ibverbs applications can likewise create runtime named Ethernet/IPv4/UDP
 endpoints after initialization, resolve their opaque `EndpointId` handles, and
 select a configured TX queue for each submission. These endpoints provide
 payload-only TX buffers and are separate from socket endpoint URIs.
+RC RoCE connections also support one-sided RDMA READ/WRITE against peer
+registered memory. Applications exchange memory descriptors through a control
+channel and use the normal burst submission and local completion APIs; see
+[One-sided RDMA READ and WRITE](cpp.md#one-sided-rdma-read-and-write).
 
 The configuration format is documented in the
 [Configuration YAML Reference](configuration.md). For an annotated

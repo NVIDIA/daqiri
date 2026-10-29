@@ -1233,6 +1233,17 @@ Status rdma_get_server_conn_id(const std::string &server_addr,
 Status rdma_set_header(BurstParams *burst, RDMAOpCode op_code,
                        uintptr_t conn_id, bool is_server, int num_pkts,
                        uint64_t wr_id, const std::string &local_mr_name);
+/** Export the MR registered on this connection's protection domain.
+ * Exchange this descriptor with the peer through an application control channel.
+ */
+Status rdma_get_local_memory_region(uintptr_t conn_id, const std::string& name,
+                                    RdmaMemoryRegion* region);
+/** Select the remote byte offset for a single-packet RC READ/WRITE.
+ * Call after rdma_set_header(), which clears any previous remote target.
+ * Bounds and access permissions are checked again at submission.
+ */
+Status rdma_set_remote_memory(BurstParams* burst, const RdmaMemoryRegion& region,
+                              uint64_t offset = 0);
 RDMAOpCode rdma_get_opcode(BurstParams *burst);
 
 }; // namespace daqiri
