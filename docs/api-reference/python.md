@@ -586,6 +586,9 @@ and free it with `free_tx_burst()` after checking `burst.rdma_status`.
 `burst.rdma_tx` is true for READ/WRITE completions, which originate on the SQ. READ/WRITE do not
 consume peer RECEIVE buffers or generate peer completions; immediate-data
 opcodes remain unsupported. The calls keep the GIL.
+An indirect RDMA work-ring overflow returns `NO_SPACE_AVAILABLE` after freeing
+the burst and its buffers; do not reuse or free the handle. Failed direct posts
+retain caller ownership.
 See [one-sided RDMA ownership and configuration](cpp.md#one-sided-rdma-read-and-write)
 for permissions, descriptor lifetime, remote buffer reservation, GPU ordering,
 and work-request ID requirements.

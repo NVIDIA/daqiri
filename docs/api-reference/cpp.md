@@ -780,7 +780,10 @@ check(daqiri::send_tx_burst(op));
 `rdma_set_header()` clears the previous remote target, so call
 `rdma_set_remote_memory()` after each header reset. DAQIRI checks remote bounds
 and permissions and the local registered range before accepting the operation.
-Invalid requests retain caller ownership. Work-request IDs must be unique among
+Invalid requests retain caller ownership. If an indirect work ring is full,
+`send_tx_burst()` returns `NO_SPACE_AVAILABLE` and frees the burst and its buffers;
+do not reuse or free that handle. Failed direct postings retain caller ownership.
+Work-request IDs must be unique among
 outstanding SQ operations on indirect or mixed connections; their numeric order
 does not affect completion ordering. Fully direct connections track requests
 with internal IDs and preserve arbitrary application IDs.

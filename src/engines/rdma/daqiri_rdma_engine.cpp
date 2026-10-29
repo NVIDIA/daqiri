@@ -537,6 +537,7 @@ Status RdmaEngine::send_tx_burst(BurstParams* burst) {
     const auto dropped_packets =
         burst->transport_hdr.num_pkts > 0 ? burst->transport_hdr.num_pkts : 1;
     metrics::add_dropped(counters, "tx_enqueue_failure", dropped_packets);
+    free_tx_burst(burst);
     DAQIRI_LOG_CRITICAL("Failed to enqueue TX work");
     return Status::NO_SPACE_AVAILABLE;
   }

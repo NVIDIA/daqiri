@@ -287,6 +287,82 @@ daqiri:
             "UDP unexpectedly accepted direct polling");
   }
 
+  void indirect_overflow(bool server) {
+    require(!params.direct_tx, "overflow test requires indirect TX");
+    const auto connection = reinterpret_cast<uintptr_t>(&id);
+    engine.connection_params_[&id] = &params;
+    engine.tx_meta = ObjectPool::create("overflow_metadata", 1, sizeof(BurstParams));
+    engine.tx_burst_pool_ = ObjectPool::create("overflow_pointers", 1, sizeof(void*));
+    engine.pkt_len_pool_ = ObjectPool::create("overflow_lengths", 1, sizeof(uint32_t));
+    auto* packets = Ring::create("overflow_packets", 2, RingMode::MPMC);
+    engine.mem_pools_["data"] = packets;
+    require(engine.tx_meta && engine.tx_burst_pool_ && engine.pkt_len_pool_ && packets,
+            "cannot allocate overflow test pools");
+    require(packets->enqueue(registered_bytes.data()), "cannot populate overflow packet pool");
+    RdmaMemoryRegion remote{};
+    require(engine.rdma_get_local_memory_region(connection, "data", &remote) == Status::SUCCESS,
+            "cannot export overflow test memory");
+    int sentinel = 0;
+    unsigned queued = 0;
+    while (tx_ring->enqueue(&sentinel)) ++queued;
+    require(queued != 0, "cannot fill work ring");
+
+    auto allocate = [&](RDMAOpCode opcode, uint64_t wr_id) {
+      auto* burst = engine.create_tx_burst_params();
+      require(burst != nullptr, "overflow drained the metadata pool");
+      require(engine.rdma_set_header(burst, opcode, connection, server, 1, wr_id, "data") ==
+                  Status::SUCCESS,
+              "overflow test header failed");
+      require(engine.get_tx_packet_burst(burst) == Status::SUCCESS,
+              "overflow drained a packet or metadata pool");
+      burst->pkt_lens[0][0] = 64;
+      if (opcode == RDMAOpCode::RDMA_READ || opcode == RDMAOpCode::RDMA_WRITE) {
+        require(engine.rdma_set_remote_memory(burst, remote, 512) == Status::SUCCESS,
+                "overflow test remote target failed");
+      }
+      return burst;
+    };
+    auto reclaimed = [&] {
+      require(engine.tx_meta->avail_count() == 1 && engine.tx_burst_pool_->avail_count() == 1 &&
+                  engine.pkt_len_pool_->avail_count() == 1 && packets->count() == 1,
+              "indirect overflow leaked a burst, packet, pointer array, or length array");
+    };
+    // One slot in each pool makes any missing free visible on the first failure.
+    // Repeated reallocation verifies that rejection never drains any pool.
+    for (auto opcode :
+         {RDMAOpCode::SEND, RDMAOpCode::RECEIVE, RDMAOpCode::RDMA_READ, RDMAOpCode::RDMA_WRITE}) {
+      if (opcode == RDMAOpCode::RECEIVE && params.direct_rx) continue;
+      for (uint64_t wr_id = 0; wr_id < 3; ++wr_id) {
+        auto* burst = allocate(opcode, wr_id);
+        require(engine.send_tx_burst(burst) == Status::NO_SPACE_AVAILABLE,
+                "full indirect work ring accepted a burst");
+        // NO_SPACE_AVAILABLE consumes the burst; do not access or free it here.
+        reclaimed();
+      }
+    }
+    require(fake.sends == 0 && fake.receives == 0 && rx_ring->count() == 0 &&
+                tx_ring->count() == queued,
+            "overflow posted work or returned a completion for a freed request");
+    void* entry = nullptr;
+    while (tx_ring->dequeue(&entry)) require(entry == &sentinel, "overflow changed queued work");
+
+    fake.auto_complete = true;
+    auto* burst = allocate(RDMAOpCode::SEND, 100);
+    require(engine.send_tx_burst(burst) == Status::SUCCESS,
+            "submission did not recover after work-ring overflow");
+    BurstParams* pending = nullptr;
+    require(tx_ring->dequeue(reinterpret_cast<void**>(&pending)) && pending == burst &&
+                engine.post_burst(&params, pending) == Status::SUCCESS,
+            "recovered work-ring submission was lost");
+    engine.poll_completions(server, &params, false, true);
+    BurstParams* completed = nullptr;
+    require(engine.get_rx_burst(&completed, connection, server) == Status::SUCCESS &&
+                completed == burst && completed->transport_hdr.status == Status::SUCCESS,
+            "recovered submission did not complete with its original burst");
+    engine.free_tx_burst(completed);
+    reclaimed();
+  }
+
   void concurrent_worker(bool server) {
     fake.auto_complete = true;
     engine.launch_worker(&params, server);
@@ -933,6 +1009,10 @@ int main() {
           test.run(rx, tx, server);
           daqiri::RdmaEnginePollingTestPeer one_sided(rx, tx);
           one_sided.one_sided(server);
+          if (!tx) {
+            daqiri::RdmaEnginePollingTestPeer overflow(rx, tx);
+            overflow.indirect_overflow(server);
+          }
           if (!rx || !tx) {
             daqiri::RdmaEnginePollingTestPeer concurrent(rx, tx);
             concurrent.concurrent_worker(server);
