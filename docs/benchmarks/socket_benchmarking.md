@@ -419,7 +419,7 @@ are direct, only the benchmark role thread services data-path work. Small SENDs
 from `huge` or `host_pinned` memory are inlined when they fit the QP's returned
 inline capacity (128 bytes requested); GPU messages use DMA.
 
-RDMA RC applications can enable `tx.accurate_send: true` and call
+RDMA applications can enable `tx.accurate_send: true` and call
 `set_packet_tx_time()` before submitting a SEND to schedule it on supported mlx5
 hardware. Both TX polling modes are supported. This requires a PTP-synchronized
 real-time NIC clock and a timestamp submitted ahead of its deadline, within the
