@@ -12,6 +12,7 @@
 #include <sched.h>
 #include <stdexcept>
 #include <thread>
+#include <tuple>
 
 #include "src/engines/rdma/daqiri_rdma_engine.h"
 #include "src/rdma/cm_api.h"
@@ -181,6 +182,18 @@ class RdmaEnginePollingTestPeer {
     Ring::free(rx_ring);
   }
 
+  static void buffer_strides() {
+    RdmaEngine engine;
+    for (auto kind : {MemoryKind::HOST, MemoryKind::HOST_PINNED, MemoryKind::HUGE}) {
+      require(engine.buffer_stride(kind, 64) == 128 && engine.buffer_stride(kind, 4096) == 4096 &&
+                  engine.buffer_stride(kind, 4097) == 4224,
+              "CPU buffers not packed at cache-line alignment");
+    }
+    require(engine.buffer_stride(MemoryKind::DEVICE, 64) == 65536 &&
+                engine.buffer_stride(MemoryKind::DEVICE, 65537) == 131072,
+            "GPU buffers lost GPU-page alignment");
+  }
+
   static void configuration() {
     const std::string text = R"yaml(
 daqiri:
@@ -233,6 +246,21 @@ daqiri:
     NetworkConfig config;
     require(parse_network_config_from_yaml_string(YAML::Dump(yaml), config) != Status::SUCCESS,
             "UDP unexpectedly accepted direct polling");
+    // Application-owned regions must be sized with the engine's buffer stride.
+    for (const auto& [kind, slot, capacity] :
+         {std::tuple{"host_pinned", size_t{512}, size_t{65536}},
+          std::tuple{"device", size_t{65536}, size_t{16 * 65536}}}) {
+      auto region_yaml = YAML::Load(text);
+      region_yaml["daqiri"]["cfg"]["memory_regions"][0]["kind"] = kind;
+      NetworkConfig region_config;
+      MemoryRegionRequirements requirements;
+      require(parse_network_config_from_yaml_string(YAML::Dump(region_yaml), region_config) ==
+                      Status::SUCCESS &&
+                  get_memory_region_requirements(region_config, requirements) == Status::SUCCESS &&
+                  requirements.at("data").slot_size == slot &&
+                  requirements.at("data").capacity == capacity,
+              "RDMA memory requirements disagree with the engine buffer stride");
+    }
   }
 
   void concurrent_worker(bool server) {
@@ -665,6 +693,7 @@ daqiri:
 int main() {
   try {
     daqiri::RdmaEnginePollingTestPeer::configuration();
+    daqiri::RdmaEnginePollingTestPeer::buffer_strides();
     for (bool rx : {false, true}) {
       for (bool tx : {false, true}) {
         for (bool server : {false, true}) {
@@ -677,7 +706,8 @@ int main() {
         }
       }
     }
-    std::cout << "PASS: RDMA direct/indirect RX/TX, inline selection, and completions\n";
+    std::cout << "PASS: RDMA direct/indirect RX/TX, inline selection, buffer strides, and "
+                 "completions\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "FAIL: " << error.what() << '\n';

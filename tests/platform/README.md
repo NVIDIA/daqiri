@@ -114,8 +114,9 @@ c++ -std=c++17 -O3 -pthread tests/platform/rdma_latency.cpp \
 
 Supply a separate DAQIRI YAML for each endpoint. Each config needs memory regions
 named `TX` and `RX`, each with at least 64 buffers and a `buf_size` covering the
-message size. Use `host_pinned` for CPU payload checks. Configure one paired RX/TX
-queue, a local `roce://` address, and RC transport. The server local URI must use
+message size; keep `buf_size` near the message size so small receive buffers share
+pages. Use `host_pinned` for CPU payload checks. Configure one paired RX/TX queue, a
+local `roce://` address, and RC transport. The server local URI must use
 port `18491`. Select `poll_mode` independently for each direction; fully direct
 connections use one application thread for both directions. Leave
 `DAQIRI_RDMA_SEND_SIGNAL_EVERY` unset or set it to `1`; the test rejects other

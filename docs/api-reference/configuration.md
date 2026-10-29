@@ -166,7 +166,10 @@ runtime binding.
   reported by the demonstrated ConnectX-7 device.
   - type: `integer`
 - **`buf_size`**: Size of each buffer in bytes. Should match the expected packet size, or
-  the segment size when using header-data split.
+  the segment size when using header-data split. For RDMA (`roce://`), buffers in CPU
+  memory (`host`, `host_pinned`, `huge`) are packed at 128-byte alignment and `device`
+  buffers at 64 KiB alignment, so a small `buf_size` lets receive buffers share pages,
+  which lowers small-message latency.
   - type: `integer`
 
 ### Example: Header-Data Split
