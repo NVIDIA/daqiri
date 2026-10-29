@@ -178,6 +178,10 @@ runtime binding.
   the segment size when using header-data split. For `kind: "null"`, `buf_size` is an
   unsigned 32-bit discard length. It must be positive when another region follows;
   a final null region may omit it or use `0` to discard the remainder.
+  For RDMA (`roce://`), buffers in CPU
+  memory (`host`, `host_pinned`, `huge`) are packed at 128-byte alignment and `device`
+  buffers at 64 KiB alignment, so a small `buf_size` lets receive buffers share pages,
+  which lowers small-message latency.
   - type: `integer`
 
 ### Example: Discard headers before retaining the payload
