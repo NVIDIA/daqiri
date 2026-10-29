@@ -60,6 +60,7 @@ void reset_rdma_burst_metadata(BurstParams* burst) {
   if (burst == nullptr) { return; }
 
   burst->transport_hdr = BurstTransportHeader{};
+  rdma_burst_cache(burst) = {};
   burst->pkts.fill(nullptr);
   burst->pkt_lens.fill(nullptr);
   burst->pkt_extra_info = nullptr;
@@ -108,6 +109,39 @@ Status RdmaEngine::set_packet_lengths(BurstParams* burst, int idx,
   assert(lens.size() == 1);  // Split not supported yet
   burst->pkt_lens[0][idx] = lens.begin()[0];
   return Status::SUCCESS;
+}
+
+Status RdmaEngine::set_packet_tx_time(BurstParams* burst, int idx, uint64_t timestamp) {
+  if (!burst || idx < 0 || static_cast<size_t>(idx) >= burst->transport_hdr.num_pkts ||
+      burst->transport_hdr.num_pkts > kRdmaBatch || !burst->pkt_lens[0] ||
+      burst->transport_hdr.opcode != RDMAOpCode::SEND) {
+    return Status::INVALID_PARAMETER;
+  }
+  const auto conn_id = get_connection_id(burst);
+  auto store = [&](rdma_thread_params* params) {
+    if (rdma_force_quit.load(std::memory_order_relaxed) || params->ready_to_exit.load()) {
+      return Status::NOT_READY;
+    }
+    if (!params->accurate_send) return Status::NOT_SUPPORTED;
+    auto& cache = rdma_burst_cache(burst);
+    if (!cache.scheduled) {
+      std::fill_n(rdma_tx_timestamps(burst), burst->transport_hdr.num_pkts, uint64_t{0});
+      cache.scheduled = true;
+    }
+    rdma_tx_timestamps(burst)[idx] = timestamp;
+    return Status::SUCCESS;
+  };
+  if (auto* direct = find_direct(conn_id)) {
+    RdmaDirectLease lease(direct);
+    return lease ? store(direct->params) : Status::NOT_READY;
+  }
+  std::unique_lock<std::mutex> registry_lock(threads_mutex_);
+  auto connection = connection_params_.find(reinterpret_cast<rdma_cm_id*>(conn_id));
+  if (connection == connection_params_.end()) return Status::NOT_READY;
+  auto* params = connection->second;
+  std::unique_lock<std::mutex> progress_lock(params->progress_mutex);
+  registry_lock.unlock();
+  return store(params);
 }
 
 void* RdmaEngine::get_segment_packet_ptr(BurstParams* burst, int seg, int idx) {
@@ -361,6 +395,7 @@ int RdmaEngine::setup_thread_params(rdma_thread_params* params, bool is_server) 
     return -1;
   }
   params->direct_state = nullptr;
+  params->accurate_send = intf.tx_.accurate_send_;
   params->direct_tx = intf.tx_.queues_[params->queue_idx].poll_mode_ == QueuePollMode::DIRECT;
   params->direct_rx = params->queue_idx < static_cast<int>(intf.rx_.queues_.size()) &&
                       intf.rx_.queues_[params->queue_idx].poll_mode_ == QueuePollMode::DIRECT;
@@ -373,9 +408,18 @@ int RdmaEngine::setup_thread_params(rdma_thread_params* params, bool is_server) 
     return -1;
   }
 
-  qp_params.tx_cq = verbs_->create_cq(params->client_id->verbs, MAX_CQ, nullptr, nullptr, 0);
+  if (params->accurate_send) {
+    ibv_cq_init_attr_ex attr{};
+    attr.cqe = MAX_CQ;
+    attr.wc_flags = IBV_WC_EX_WITH_COMPLETION_TIMESTAMP_WALLCLOCK;
+    auto* cq = verbs_->create_cq_ex(params->client_id->verbs, &attr);
+    qp_params.tx_cq = cq ? ibv_cq_ex_to_cq(cq) : nullptr;
+  } else {
+    qp_params.tx_cq = verbs_->create_cq(params->client_id->verbs, MAX_CQ, nullptr, nullptr, 0);
+  }
   if (qp_params.tx_cq == nullptr) {
     DAQIRI_LOG_CRITICAL("Failed to create TX queue pair! {}", strerror(errno));
+    verbs_->destroy_cq(qp_params.rx_cq);
     return -1;
   } else {
     DAQIRI_LOG_INFO("Successfully created TX CQ for client ID {}", (void*)params->client_id);
@@ -385,7 +429,8 @@ int RdmaEngine::setup_thread_params(rdma_thread_params* params, bool is_server) 
   qp_params.qp_attr.cap.max_recv_sge = 1;  // No header-data split in RDMA right now
   qp_params.qp_attr.cap.max_recv_wr = MAX_OUSTANDING_WR;
   qp_params.qp_attr.cap.max_send_sge = 1;
-  qp_params.qp_attr.cap.max_send_wr = MAX_OUSTANDING_WR;
+  // Every scheduled SEND needs an additional unsignaled WAIT work request.
+  qp_params.qp_attr.cap.max_send_wr = MAX_OUSTANDING_WR * (params->accurate_send ? 2 : 1);
   if (params->direct_tx) {
     qp_params.qp_attr.cap.max_inline_data = 128;
   }
@@ -399,6 +444,8 @@ int RdmaEngine::setup_thread_params(rdma_thread_params* params, bool is_server) 
   } else {
     DAQIRI_LOG_ERROR("RDMA transport mode {} not supported!",
                      static_cast<int>(cfg_.ifs_[static_cast<int>(params->if_idx)].rdma_.xmode_));
+    verbs_->destroy_cq(qp_params.tx_cq);
+    verbs_->destroy_cq(qp_params.rx_cq);
     return -1;
   }
 
@@ -408,9 +455,14 @@ int RdmaEngine::setup_thread_params(rdma_thread_params* params, bool is_server) 
 
   DAQIRI_LOG_INFO("Creating QP for client ID {} with PD {}", (void*)params->client_id,
                   (void*)params->pd);
-  int ret = verbs_->cm_create_qp(params->client_id, params->pd, &qp_params.qp_attr);
+  int ret = params->accurate_send
+                ? verbs_->create_timed_qp(params->client_id, params->pd, &qp_params.qp_attr)
+                : verbs_->cm_create_qp(params->client_id, params->pd, &qp_params.qp_attr);
   if (ret != 0) {
-    DAQIRI_LOG_CRITICAL("Failed to create QP: {}", strerror(errno));
+    DAQIRI_LOG_CRITICAL("Failed to create QP (accurate_send={}): {}", params->accurate_send,
+                        strerror(errno));
+    verbs_->destroy_cq(qp_params.tx_cq);
+    verbs_->destroy_cq(qp_params.rx_cq);
     return -1;
   }
 
@@ -876,7 +928,9 @@ Status RdmaEngine::post_burst(rdma_thread_params* tparams, BurstParams* burst) {
           wr.send_flags |= IBV_SEND_INLINE;
         }
 
-        int ret = verbs_->post_send(tparams->client_id->qp, &wr, &bad_wr);
+        const uint64_t time = rdma_tx_time(burst, p);
+        int ret = time ? verbs_->post_timed_send(tparams->client_id->qp, &wr, time)
+                       : verbs_->post_send(tparams->client_id->qp, &wr, &bad_wr);
         if (ret != 0) {
           DAQIRI_LOG_CRITICAL("Failed to post SEND request, errno: {}", strerror(errno));
           metrics::add_dropped(counters, "tx_post_failure", 1);
@@ -1016,6 +1070,8 @@ Status RdmaEngine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintp
   burst->transport_hdr.num_segs = 1;
   burst->transport_hdr.wr_id = wr_id;
   auto& cache = rdma_burst_cache(burst);
+  // Reusing a completed burst starts a new operation without scheduling.
+  cache.scheduled = false;
   if (cache.magic != RdmaBurstCache::kMagic || cache.engine != this || !cache.state ||
       cache.state->connection_id != conn_id || !cache.region ||
       cache.region->name != local_mr_name) {
@@ -1370,6 +1426,7 @@ Status RdmaEngine::get_tx_packet_burst(BurstParams* burst) {
     return Status::NO_FREE_PACKET_BUFFERS;
   }
 
+  rdma_burst_cache(burst).scheduled = false;
   return Status::SUCCESS;
 }
 
@@ -1734,8 +1791,11 @@ int RdmaEngine::setup_pools_and_rings() {
 
   // Packet length buffers
   DAQIRI_LOG_DEBUG("Setting up RX meta pool");
-  pkt_len_pool_ = daqiri::ObjectPool::create("PKT_LEN_POOL", (1U << 11) - 1U,
-                                             sizeof(uint32_t) * MAX_RDMA_BATCH, numa_node);
+  const bool timed = std::any_of(cfg_.ifs_.begin(), cfg_.ifs_.end(),
+                                 [](const auto& intf) { return intf.tx_.accurate_send_; });
+  pkt_len_pool_ = daqiri::ObjectPool::create(
+      "PKT_LEN_POOL", (1U << 11) - 1U,
+      timed ? kRdmaPacketMetadataBytes : sizeof(uint32_t) * MAX_RDMA_BATCH, numa_node);
   if (pkt_len_pool_ == nullptr) {
     DAQIRI_LOG_CRITICAL("Failed to allocate packet length pool!");
     return -1;

@@ -75,6 +75,7 @@ struct rdma_thread_params {
   std::atomic<bool> worker_started{false};
   bool direct_rx = false;
   bool direct_tx = false;
+  bool accurate_send = false;
   uint32_t max_inline_data = 0;
   std::atomic<uint64_t> inline_wqes{0};
   RdmaDirectState* direct_state = nullptr;
@@ -163,9 +164,7 @@ class RdmaEngine : public Engine {
     return Status::NOT_SUPPORTED;
   };
   Status get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server) override;
-  Status set_packet_tx_time(BurstParams* burst, int idx, uint64_t timestamp) override {
-    return Status::NOT_SUPPORTED;
-  };
+  Status set_packet_tx_time(BurstParams* burst, int idx, uint64_t timestamp) override;
   void free_rx_metadata(BurstParams* burst) override;
   void free_tx_metadata(BurstParams* burst) override;
   Status send_tx_burst(BurstParams* burst) override;
@@ -200,7 +199,7 @@ class RdmaEngine : public Engine {
   static constexpr int MAX_NUM_MR = 16;  // Maximum number of memory registers to exchange
   static constexpr int MAX_OUSTANDING_WR = 1024;
   static constexpr int MAX_NUM_PORTS = 4;
-  static constexpr int MAX_RDMA_BATCH = 1024;
+  static constexpr int MAX_RDMA_BATCH = kRdmaBatch;
 
   bool initialized_ = false;
   std::unordered_map<struct rdma_cm_id*, std::vector<rdma_thread_params>> server_q_params_;

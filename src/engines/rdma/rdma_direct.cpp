@@ -110,7 +110,9 @@ const RdmaDirectMr* RdmaEngine::direct_region(RdmaDirectState& state, BurstParam
   }
   for (const auto& region : state.regions) {
     if (region.name == burst->transport_hdr.local_mr_name) {
-      cache = {RdmaBurstCache::kMagic, this, &state, &region};
+      const bool scheduled =
+          cache.magic == RdmaBurstCache::kMagic && cache.engine == this && cache.scheduled;
+      cache = {RdmaBurstCache::kMagic, this, &state, &region, scheduled};
       return &region;
     }
   }
@@ -164,7 +166,9 @@ Status RdmaEngine::send_direct(RdmaDirectState& state, BurstParams* burst) {
       state.send.send_flags |= IBV_SEND_INLINE;
     }
     ibv_send_wr* bad = nullptr;
-    const int status = verbs_->post_send(params.client_id->qp, &state.send, &bad);
+    const uint64_t time = rdma_tx_time(burst, 0);
+    const int status = time ? verbs_->post_timed_send(params.client_id->qp, &state.send, time)
+                            : verbs_->post_send(params.client_id->qp, &state.send, &bad);
     if (status) {
       metrics::add_dropped(state.counters, "tx_post_failure", 1);
       return Status::GENERIC_FAILURE;

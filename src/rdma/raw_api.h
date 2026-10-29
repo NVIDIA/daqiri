@@ -13,6 +13,7 @@ namespace daqiri::detail {
 
 // Private glue ABI. Bump the version when the function table changes.
 struct RawVerbsApi {
+  static constexpr uint32_t kAbiVersion = 1;
   uint32_t abi_version;
   size_t struct_size;
 #define DAQIRI_RDMA_FUNCTION(symbol, member) decltype(&::symbol) member;

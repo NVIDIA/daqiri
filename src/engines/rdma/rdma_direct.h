@@ -70,12 +70,25 @@ struct RdmaBurstCache {
   const RdmaEngine* engine = nullptr;
   RdmaDirectState* state = nullptr;
   const RdmaDirectMr* region = nullptr;
+  bool scheduled = false;
 };
 static_assert(sizeof(BurstTransportHeader) <=
               ADV_NETWORK_HEADER_SIZE_BYTES - sizeof(RdmaBurstCache));
 inline RdmaBurstCache& rdma_burst_cache(BurstParams* burst) {
   return *reinterpret_cast<RdmaBurstCache*>(reinterpret_cast<uint8_t*>(burst) +
                                             ADV_NETWORK_HEADER_SIZE_BYTES - sizeof(RdmaBurstCache));
+}
+
+// The length-pool allocation includes a timestamp array after the lengths.
+// It is initialized lazily on the first scheduling call for each burst.
+inline constexpr size_t kRdmaBatch = 1024;
+inline constexpr size_t kRdmaPacketMetadataBytes =
+    kRdmaBatch * (sizeof(uint32_t) + sizeof(uint64_t));
+inline uint64_t* rdma_tx_timestamps(BurstParams* burst) {
+  return reinterpret_cast<uint64_t*>(burst->pkt_lens[0] + kRdmaBatch);
+}
+inline uint64_t rdma_tx_time(BurstParams* burst, int index) {
+  return rdma_burst_cache(burst).scheduled ? rdma_tx_timestamps(burst)[index] : 0;
 }
 
 class RdmaDirectLease {
