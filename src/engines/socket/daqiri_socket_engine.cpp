@@ -1846,6 +1846,25 @@ Status SocketEngine::rdma_set_remote_memory(BurstParams* burst, const RdmaMemory
   return Status::NOT_SUPPORTED;
 }
 
+Status SocketEngine::rdma_set_immediate(BurstParams* burst, uint32_t value) {
+#if DAQIRI_ENGINE_RDMA
+  if (is_roce_protocol() && roce_engine_) {
+    return roce_engine_->rdma_set_immediate(burst, value);
+  }
+#endif
+  return Status::NOT_SUPPORTED;
+}
+
+Status SocketEngine::rdma_get_immediate(BurstParams* burst, uint32_t* value,
+                                        uint32_t* write_length) {
+#if DAQIRI_ENGINE_RDMA
+  if (is_roce_protocol() && roce_engine_) {
+    return roce_engine_->rdma_get_immediate(burst, value, write_length);
+  }
+#endif
+  return Status::NOT_SUPPORTED;
+}
+
 RDMAOpCode SocketEngine::rdma_get_opcode(BurstParams* burst) {
 #if DAQIRI_ENGINE_RDMA
   if (!is_roce_protocol() || roce_engine_ == nullptr) {

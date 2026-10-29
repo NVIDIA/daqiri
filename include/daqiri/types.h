@@ -130,6 +130,8 @@ struct BurstTransportHeader {
   uint16_t server_port;
   uint64_t remote_length;  // Bytes available starting at raddr
   uint32_t remote_access;
+  uint32_t rdma_write_length;
+  bool immediate_valid;
 };
 
 /**

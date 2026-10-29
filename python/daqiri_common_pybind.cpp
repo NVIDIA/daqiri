@@ -1636,6 +1636,15 @@ PYBIND11_MODULE(_daqiri, m) {
       },
       "conn_id"_a, "name"_a);
   m.def("rdma_set_remote_memory", &rdma_set_remote_memory, "burst"_a, "region"_a, "offset"_a = 0);
+  m.def("rdma_set_immediate", &rdma_set_immediate, "burst"_a, "value"_a);
+  m.def(
+      "rdma_get_immediate",
+      [](BurstParams* burst) {
+        uint32_t value = 0, length = 0;
+        const auto status = rdma_get_immediate(burst, &value, &length);
+        return py::make_tuple(status, value, length);
+      },
+      "burst"_a);
   m.def("rdma_get_opcode", &rdma_get_opcode, "burst"_a);
 
   m.def("shutdown", &shutdown, "Shut down the active DAQIRI engine");

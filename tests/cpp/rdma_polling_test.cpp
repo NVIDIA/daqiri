@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+#include <arpa/inet.h>
 #include <array>
 #include <chrono>
 #include <cstring>
@@ -35,7 +36,7 @@ struct FakeVerbs {
   unsigned last_flags = 0;
   ibv_wr_opcode last_opcode = IBV_WR_SEND;
   uint64_t last_remote_address = 0;
-  uint32_t last_rkey = 0, last_lkey = 0;
+  uint32_t last_rkey = 0, last_lkey = 0, last_immediate = 0;
   int send_result = 0, recv_result = 0;
   uint32_t requested_inline = 0;
   int created_cqs = 0;
@@ -64,7 +65,7 @@ struct FakeVerbs {
   static int post_send(ibv_qp*, ibv_send_wr* wr, ibv_send_wr**) {
     std::lock_guard<std::mutex> lock(current->mutex);
     require((wr->opcode == IBV_WR_SEND || wr->opcode == IBV_WR_RDMA_READ ||
-             wr->opcode == IBV_WR_RDMA_WRITE) &&
+             wr->opcode == IBV_WR_RDMA_WRITE || wr->opcode == IBV_WR_RDMA_WRITE_WITH_IMM) &&
                 wr->num_sge == 1,
             "incorrect SQ encoding");
     if (current->send_result) {
@@ -72,7 +73,9 @@ struct FakeVerbs {
     }
     current->last_opcode = wr->opcode;
     current->last_lkey = wr->sg_list->lkey;
-    if (wr->opcode == IBV_WR_RDMA_READ || wr->opcode == IBV_WR_RDMA_WRITE) {
+    if (wr->opcode == IBV_WR_RDMA_READ || wr->opcode == IBV_WR_RDMA_WRITE ||
+        wr->opcode == IBV_WR_RDMA_WRITE_WITH_IMM) {
+      current->last_immediate = wr->imm_data;
       current->last_remote_address = wr->wr.rdma.remote_addr;
       current->last_rkey = wr->wr.rdma.rkey;
       auto* local = reinterpret_cast<void*>(wr->sg_list->addr);
@@ -89,9 +92,10 @@ struct FakeVerbs {
       ibv_wc wc{};
       wc.wr_id = wr->wr_id;
       wc.status = IBV_WC_SUCCESS;
-      wc.opcode = wr->opcode == IBV_WR_RDMA_READ    ? IBV_WC_RDMA_READ
-                  : wr->opcode == IBV_WR_RDMA_WRITE ? IBV_WC_RDMA_WRITE
-                                                    : IBV_WC_SEND;
+      wc.opcode = wr->opcode == IBV_WR_RDMA_READ ? IBV_WC_RDMA_READ
+                  : (wr->opcode == IBV_WR_RDMA_WRITE || wr->opcode == IBV_WR_RDMA_WRITE_WITH_IMM)
+                      ? IBV_WC_RDMA_WRITE
+                      : IBV_WC_SEND;
       current->tx_completions.push_back(wc);
     }
     current->last_flags = wr->send_flags;
@@ -316,7 +320,8 @@ daqiri:
       require(engine.get_tx_packet_burst(burst) == Status::SUCCESS,
               "overflow drained a packet or metadata pool");
       burst->pkt_lens[0][0] = 64;
-      if (opcode == RDMAOpCode::RDMA_READ || opcode == RDMAOpCode::RDMA_WRITE) {
+      if (opcode == RDMAOpCode::RDMA_READ || opcode == RDMAOpCode::RDMA_WRITE ||
+          opcode == RDMAOpCode::RDMA_WRITE_IMM) {
         require(engine.rdma_set_remote_memory(burst, remote, 512) == Status::SUCCESS,
                 "overflow test remote target failed");
       }
@@ -329,8 +334,8 @@ daqiri:
     };
     // One slot in each pool makes any missing free visible on the first failure.
     // Repeated reallocation verifies that rejection never drains any pool.
-    for (auto opcode :
-         {RDMAOpCode::SEND, RDMAOpCode::RECEIVE, RDMAOpCode::RDMA_READ, RDMAOpCode::RDMA_WRITE}) {
+    for (auto opcode : {RDMAOpCode::SEND, RDMAOpCode::RECEIVE, RDMAOpCode::RDMA_READ,
+                        RDMAOpCode::RDMA_WRITE, RDMAOpCode::RDMA_WRITE_IMM}) {
       if (opcode == RDMAOpCode::RECEIVE && params.direct_rx) continue;
       for (uint64_t wr_id = 0; wr_id < 3; ++wr_id) {
         auto* burst = allocate(opcode, wr_id);
@@ -487,18 +492,29 @@ daqiri:
       require(params.outstanding_send_wr_ids.empty(), "one-sided request leaked credits");
     };
     fake.auto_complete = true;
-    for (auto opcode : {RDMAOpCode::RDMA_WRITE, RDMAOpCode::RDMA_READ}) {
+    for (auto opcode :
+         {RDMAOpCode::RDMA_WRITE, RDMAOpCode::RDMA_READ, RDMAOpCode::RDMA_WRITE_IMM}) {
       const bool read = opcode == RDMAOpCode::RDMA_READ;
       std::memset(registered_bytes.data(), read ? 0 : 42, length);
       std::memset(registered_bytes.data() + 512, read ? 75 : 0, length);
       prepare(opcode, read ? 20 : 10);
+      if (opcode == RDMAOpCode::RDMA_WRITE_IMM) {
+        require(engine.rdma_set_immediate(&burst, 0x12345678) == Status::SUCCESS,
+                "cannot set immediate value");
+      }
       require(engine.send_tx_burst(&burst) == Status::SUCCESS && worker_post() == Status::SUCCESS,
               "one-sided submission failed");
-      require(fake.last_opcode == (read ? IBV_WR_RDMA_READ : IBV_WR_RDMA_WRITE) &&
+      const auto expected_opcode = read ? IBV_WR_RDMA_READ
+                                   : opcode == RDMAOpCode::RDMA_WRITE_IMM
+                                       ? IBV_WR_RDMA_WRITE_WITH_IMM
+                                       : IBV_WR_RDMA_WRITE;
+      require(fake.last_opcode == expected_opcode &&
                   fake.last_remote_address == remote.address + 512 &&
                   fake.last_rkey == remote.rkey && fake.last_lkey == mr.lkey &&
                   (fake.last_flags & IBV_SEND_SIGNALED) && (fake.last_flags & IBV_SEND_FENCE),
               "incorrect one-sided WR encoding");
+      if (opcode == RDMAOpCode::RDMA_WRITE_IMM)
+        require(fake.last_immediate == htonl(0x12345678), "immediate is not network order");
       require(registered_bytes[read ? 0 : 512] == (read ? 75 : 42), "wrong transfer direction");
       complete(Status::SUCCESS);
       require(burst.transport_hdr.opcode == opcode &&
@@ -578,8 +594,7 @@ daqiri:
     params.qp_params.qp_attr.qp_type = IBV_QPT_UC;
     rejected(Status::NOT_SUPPORTED);
     params.qp_params.qp_attr.qp_type = IBV_QPT_RC;
-    for (auto opcode : {RDMAOpCode::CONNECT, RDMAOpCode::RDMA_WRITE_IMM, RDMAOpCode::RDMA_READ_IMM,
-                        RDMAOpCode::INVALID}) {
+    for (auto opcode : {RDMAOpCode::CONNECT, RDMAOpCode::RDMA_READ_IMM, RDMAOpCode::INVALID}) {
       burst.transport_hdr.opcode = opcode;
       rejected(Status::NOT_SUPPORTED);
     }
@@ -625,6 +640,89 @@ daqiri:
             "default registration does not grant all data access or enables relaxed ordering");
     require(engine.mr_access_to_ibv(MEM_ACCESS_RDMA_WRITE) & IBV_ACCESS_LOCAL_WRITE,
             "remote write registration lacks required local write access");
+  }
+
+  void write_notifications(bool server) {
+    const auto connection = reinterpret_cast<uintptr_t>(&id);
+    engine.initialize_progress(server, &params);
+    engine.connection_params_[&id] = &params;
+    const bool fully_direct = params.direct_rx && params.direct_tx;
+    if (fully_direct)
+      require(engine.publish_direct(&params), "cannot publish notification connection");
+    BurstParams receive{};
+    void* pointer = registered_bytes.data();
+    uint32_t length = 64;
+    uint32_t value = 99, written = 99;
+    require(engine.rdma_set_immediate(nullptr, 1) == Status::INVALID_PARAMETER &&
+                engine.rdma_get_immediate(nullptr, &value, &written) == Status::INVALID_PARAMETER &&
+                value == 0 && written == 0,
+            "null immediate arguments accepted");
+    require(engine.rdma_get_immediate(&receive, nullptr) == Status::INVALID_PARAMETER,
+            "null immediate destination accepted");
+    uint64_t external_id = 100;
+    for (auto status : {IBV_WC_SUCCESS, IBV_WC_LOC_PROT_ERR}) {
+      for (uint32_t expected : {0u, 0x12345678u, UINT32_MAX}) {
+        require(engine.rdma_set_header(&receive, RDMAOpCode::RECEIVE, connection, server, 1,
+                                       external_id++, "data") == Status::SUCCESS,
+                "notification receive header failed");
+        require(!receive.transport_hdr.immediate_valid && receive.transport_hdr.imm == 0 &&
+                    receive.transport_hdr.rdma_write_length == 0,
+                "header kept stale immediate data");
+        require(engine.rdma_set_immediate(&receive, expected) == Status::NOT_SUPPORTED,
+                "RECEIVE accepted TX immediate data");
+        receive.pkts[0] = &pointer;
+        receive.pkt_lens[0] = &length;
+        length = 64;
+        std::memset(pointer, 0xd3, length);
+        require(engine.send_tx_burst(&receive) == Status::SUCCESS,
+                "notification credit submission failed");
+        if (!params.direct_rx) {
+          BurstParams* queued = nullptr;
+          require(tx_ring->dequeue(reinterpret_cast<void**>(&queued)) && queued == &receive &&
+                      engine.post_burst(&params, queued) == Status::SUCCESS,
+                  "notification credit worker post failed");
+        }
+        ibv_wc wc{};
+        wc.wr_id = fake.last_receive_id;
+        wc.status = status;
+        wc.opcode = IBV_WC_RECV_RDMA_WITH_IMM;
+        wc.wc_flags = IBV_WC_WITH_IMM;
+        wc.imm_data = htonl(expected);
+        // A write can be larger than the unrelated receive-credit buffer.
+        wc.byte_len = 2048;
+        fake.rx_completions.push_back(wc);
+        if (!fully_direct)
+          engine.poll_completions(server, &params, !params.direct_rx, !params.direct_tx);
+        BurstParams* done = nullptr;
+        require(engine.get_rx_burst(&done, connection, server) == Status::SUCCESS &&
+                    done == &receive && !done->transport_hdr.tx &&
+                    done->transport_hdr.server == server &&
+                    done->transport_hdr.wr_id == external_id - 1,
+                "notification lost receive identity or direction");
+        const auto result = engine.rdma_get_immediate(done, &value, &written);
+        if (status == IBV_WC_SUCCESS) {
+          require(done->transport_hdr.status == Status::SUCCESS &&
+                      done->transport_hdr.opcode == RDMAOpCode::RDMA_WRITE_IMM && length == 0 &&
+                      result == Status::SUCCESS && value == expected && written == wc.byte_len,
+                  "notification lost immediate, write length, or payload separation");
+        } else {
+          require(done->transport_hdr.status == Status::GENERIC_FAILURE &&
+                      result == Status::NOT_READY && value == 0 && written == 0,
+                  "failed WC exposed invalid immediate data");
+        }
+        require(registered_bytes[0] == char(0xd3) && registered_bytes[63] == char(0xd3),
+                "notification modified receive-credit buffer");
+        require(engine.get_rx_burst(&done, connection, server) == Status::NOT_READY &&
+                    params.outstanding_receive_wr_ids.empty(),
+                "notification leaked or duplicated credits");
+      }
+    }
+    require(engine.rdma_set_header(&receive, RDMAOpCode::RDMA_WRITE_IMM, connection, server, 1, 1,
+                                   "data") == Status::SUCCESS &&
+                receive.transport_hdr.imm == 0 && !receive.transport_hdr.immediate_valid,
+            "WRITE_IMM default value is not zero");
+    require(engine.rdma_get_immediate(&receive, &value) == Status::NOT_READY,
+            "uncompleted operation exposed an immediate notification");
   }
 
   void fully_direct(bool server) {
@@ -1009,6 +1107,8 @@ int main() {
           test.run(rx, tx, server);
           daqiri::RdmaEnginePollingTestPeer one_sided(rx, tx);
           one_sided.one_sided(server);
+          daqiri::RdmaEnginePollingTestPeer notifications(rx, tx);
+          notifications.write_notifications(server);
           if (!tx) {
             daqiri::RdmaEnginePollingTestPeer overflow(rx, tx);
             overflow.indirect_overflow(server);
@@ -1020,8 +1120,9 @@ int main() {
         }
       }
     }
-    std::cout << "PASS: RDMA direct/indirect SEND/RECEIVE/READ/WRITE, inline selection, and "
-                 "completions\n";
+    std::cout
+        << "PASS: RDMA direct/indirect SEND/RECEIVE/READ/WRITE/WRITE_IMM, inline selection, and "
+           "completions\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "FAIL: " << error.what() << '\n';

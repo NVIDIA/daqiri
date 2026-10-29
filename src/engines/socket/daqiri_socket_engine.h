@@ -114,6 +114,9 @@ class SocketEngine : public Engine {
                                       RdmaMemoryRegion* region) override;
   Status rdma_set_remote_memory(BurstParams* burst, const RdmaMemoryRegion& region,
                                 uint64_t offset = 0) override;
+  Status rdma_set_immediate(BurstParams* burst, uint32_t value) override;
+  Status rdma_get_immediate(BurstParams* burst, uint32_t* value,
+                            uint32_t* write_length = nullptr) override;
   RDMAOpCode rdma_get_opcode(BurstParams* burst) override;
 
  private:

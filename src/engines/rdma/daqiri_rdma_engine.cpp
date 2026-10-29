@@ -513,10 +513,12 @@ Status RdmaEngine::send_tx_burst(BurstParams* burst) {
   }
   const auto opcode = burst->transport_hdr.opcode;
   if (opcode != RDMAOpCode::SEND && opcode != RDMAOpCode::RECEIVE &&
-      opcode != RDMAOpCode::RDMA_READ && opcode != RDMAOpCode::RDMA_WRITE) {
+      opcode != RDMAOpCode::RDMA_READ && opcode != RDMAOpCode::RDMA_WRITE &&
+      opcode != RDMAOpCode::RDMA_WRITE_IMM) {
     return Status::NOT_SUPPORTED;
   }
-  if (opcode == RDMAOpCode::RDMA_READ || opcode == RDMAOpCode::RDMA_WRITE) {
+  if (opcode == RDMAOpCode::RDMA_READ || opcode == RDMAOpCode::RDMA_WRITE ||
+      opcode == RDMAOpCode::RDMA_WRITE_IMM) {
     const auto status = validate_one_sided(*params, burst);
     if (status != Status::SUCCESS) {
       return status;
@@ -675,7 +677,9 @@ void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, b
       metrics::add_dropped(counters, "rx_completion_error", 1);
     }
 
-    if (wc.opcode == IBV_WC_RECV || wc.status != IBV_WC_SUCCESS) {
+    const bool write_notification =
+        wc.status == IBV_WC_SUCCESS && wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM;
+    if (wc.opcode == IBV_WC_RECV || write_notification || wc.status != IBV_WC_SUCCESS) {
       auto it = outstanding_receive_wr_ids.find(wc.wr_id);
       if (it == outstanding_receive_wr_ids.end()) {
         DAQIRI_LOG_CRITICAL("WR ID {} not found in outstanding RECEIVE WR IDs", wc.wr_id);
@@ -684,10 +688,15 @@ void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, b
       }
 
       msg = it->second;
+      msg->transport_hdr.immediate_valid = write_notification && (wc.wc_flags & IBV_WC_WITH_IMM);
+      msg->transport_hdr.imm = msg->transport_hdr.immediate_valid ? ntohl(wc.imm_data) : 0;
+      msg->transport_hdr.rdma_write_length = write_notification ? wc.byte_len : 0;
+      if (write_notification) msg->transport_hdr.opcode = RDMAOpCode::RDMA_WRITE_IMM;
       const auto packet = wc.wr_id - msg->transport_hdr.wr_id;
       if (wc.status == IBV_WC_SUCCESS && msg->pkt_lens[0] != nullptr &&
           packet < msg->transport_hdr.num_pkts) {
-        msg->pkt_lens[0][packet] = wc.byte_len;
+        // This RQ buffer supplied a credit, not storage for the remote write.
+        msg->pkt_lens[0][packet] = write_notification ? 0 : wc.byte_len;
       }
       if (wc.status == IBV_WC_SUCCESS) {
         metrics::add_rx(counters, 1, static_cast<uint64_t>(wc.byte_len));
@@ -704,7 +713,8 @@ void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, b
     } else {
       msg = create_burst_params();
     }
-    const bool msg_owns_packets = wc.opcode == IBV_WC_RECV || wc.status != IBV_WC_SUCCESS;
+    const bool msg_owns_packets =
+        wc.opcode == IBV_WC_RECV || write_notification || wc.status != IBV_WC_SUCCESS;
 
     // Only populate a header to indicate which burst needs to be freed
     // msg->transport_hdr.opcode  = ibv_opcode_to_daqiri_opcode(wc.opcode);
@@ -999,6 +1009,7 @@ Status RdmaEngine::post_burst(rdma_thread_params* tparams, BurstParams* burst) {
       break;
     }
     case RDMAOpCode::RDMA_WRITE:
+    case RDMAOpCode::RDMA_WRITE_IMM:
     case RDMAOpCode::RDMA_READ: {
       auto fail = [&](Status status) {
         if (!caller_owned) {
@@ -1035,7 +1046,10 @@ Status RdmaEngine::post_burst(rdma_thread_params* tparams, BurstParams* burst) {
       wr.sg_list = &sge;
       wr.num_sge = 1;
       wr.opcode = burst->transport_hdr.opcode == RDMAOpCode::RDMA_READ ? IBV_WR_RDMA_READ
-                                                                       : IBV_WR_RDMA_WRITE;
+                  : burst->transport_hdr.opcode == RDMAOpCode::RDMA_WRITE_IMM
+                      ? IBV_WR_RDMA_WRITE_WITH_IMM
+                      : IBV_WR_RDMA_WRITE;
+      wr.imm_data = htonl(burst->transport_hdr.imm);
       // Fence against earlier READs before returning preceding SQ buffers.
       wr.send_flags = IBV_SEND_SIGNALED | IBV_SEND_FENCE;
       wr.wr.rdma.remote_addr = reinterpret_cast<uintptr_t>(burst->transport_hdr.raddr);
@@ -1095,12 +1109,18 @@ Status RdmaEngine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintp
     return Status::INVALID_PARAMETER;
   }
   if (op_code != RDMAOpCode::SEND && op_code != RDMAOpCode::RECEIVE &&
-      op_code != RDMAOpCode::RDMA_READ && op_code != RDMAOpCode::RDMA_WRITE) {
+      op_code != RDMAOpCode::RDMA_READ && op_code != RDMAOpCode::RDMA_WRITE &&
+      op_code != RDMAOpCode::RDMA_WRITE_IMM) {
     return Status::NOT_SUPPORTED;
   }
-  if ((op_code == RDMAOpCode::RDMA_READ || op_code == RDMAOpCode::RDMA_WRITE) && num_pkts != 1) {
+  if ((op_code == RDMAOpCode::RDMA_READ || op_code == RDMAOpCode::RDMA_WRITE ||
+       op_code == RDMAOpCode::RDMA_WRITE_IMM) &&
+      num_pkts != 1) {
     return Status::INVALID_PARAMETER;
   }
+  burst->transport_hdr.imm = 0;
+  burst->transport_hdr.immediate_valid = false;
+  burst->transport_hdr.rdma_write_length = 0;
   burst->transport_hdr.raddr = nullptr;
   burst->transport_hdr.dst_key = 0;
   burst->transport_hdr.remote_length = 0;
@@ -1177,7 +1197,8 @@ Status RdmaEngine::rdma_set_remote_memory(BurstParams* burst, const RdmaMemoryRe
   // Clear the old target even if the replacement is invalid.
   hdr.raddr = nullptr;
   hdr.dst_key = hdr.remote_length = hdr.remote_access = 0;
-  if (hdr.opcode != RDMAOpCode::RDMA_READ && hdr.opcode != RDMAOpCode::RDMA_WRITE) {
+  if (hdr.opcode != RDMAOpCode::RDMA_READ && hdr.opcode != RDMAOpCode::RDMA_WRITE &&
+      hdr.opcode != RDMAOpCode::RDMA_WRITE_IMM) {
     return Status::NOT_SUPPORTED;
   }
   const uint32_t required =
@@ -1190,6 +1211,26 @@ Status RdmaEngine::rdma_set_remote_memory(BurstParams* burst, const RdmaMemoryRe
   hdr.dst_key = region.rkey;
   hdr.remote_length = region.length - offset;
   hdr.remote_access = region.access;
+  return Status::SUCCESS;
+}
+
+Status RdmaEngine::rdma_set_immediate(BurstParams* burst, uint32_t value) {
+  if (!burst) return Status::INVALID_PARAMETER;
+  if (burst->transport_hdr.opcode != RDMAOpCode::RDMA_WRITE_IMM) return Status::NOT_SUPPORTED;
+  burst->transport_hdr.imm = value;
+  return Status::SUCCESS;
+}
+
+Status RdmaEngine::rdma_get_immediate(BurstParams* burst, uint32_t* value, uint32_t* write_length) {
+  if (value) *value = 0;
+  if (write_length) *write_length = 0;
+  if (!burst || !value) return Status::INVALID_PARAMETER;
+  const auto& hdr = burst->transport_hdr;
+  if (hdr.status != Status::SUCCESS || hdr.tx || !hdr.immediate_valid ||
+      hdr.opcode != RDMAOpCode::RDMA_WRITE_IMM)
+    return Status::NOT_READY;
+  *value = hdr.imm;
+  if (write_length) *write_length = hdr.rdma_write_length;
   return Status::SUCCESS;
 }
 

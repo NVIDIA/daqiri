@@ -58,6 +58,7 @@ set(DAQIRI_BENCH_CONFIGS
   daqiri_example_pcap_writer_sw_loopback.yaml
   daqiri_example_pcap_writer_tx_rx.yaml
   daqiri_bench_rdma_tx_rx.yaml
+  daqiri_example_rdma_read_write.yaml
   daqiri_bench_socket_udp_tx_rx.yaml
   daqiri_bench_socket_tcp_tx_rx.yaml
 )
@@ -129,6 +130,11 @@ add_daqiri_raw_bench(daqiri_example_named_endpoints named_endpoints_example.cpp)
 add_daqiri_raw_bench(daqiri_example_gds_write gds_write_example.cpp)
 add_daqiri_raw_bench(daqiri_example_pcap_writer pcap_writer_example.cpp)
 
+add_executable(daqiri_example_rdma_read_write rdma_read_write_example.cpp)
+link_daqiri_bench(daqiri_example_rdma_read_write)
+set_target_properties(daqiri_example_rdma_read_write PROPERTIES
+  BUILD_RPATH "$ORIGIN/../src;$ORIGIN/../src/third_party/yaml-cpp")
+
 add_executable(daqiri_bench_rdma rdma_bench.cpp raw_bench_common.cpp
                bench_workload.cu bench_pipeline.cu)
 link_daqiri_bench(daqiri_bench_rdma)
@@ -191,6 +197,7 @@ install(TARGETS
         daqiri_example_gds_write
         daqiri_example_pcap_writer
         daqiri_bench_rdma
+        daqiri_example_rdma_read_write
         daqiri_bench_socket
         daqiri_pool_ring_bench
         RUNTIME DESTINATION bin)

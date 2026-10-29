@@ -67,6 +67,9 @@ those variants the primary teaching examples.
     - **TCP**: [`daqiri_bench_socket_tcp_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_socket_tcp_tx_rx.yaml).
     - **DGX Spark netns or cross-host**: use the corresponding UDP or TCP example above to understand the socket configuration, then adapt the endpoint addresses, cores, and per-host roles. Generate one concrete file per role with `socket-pair --transport udp` or `--transport tcp`. The socket engine binds every interface in a file, so each host runs only its generated role. See [configuration generation](../config-generation.md#generate-udp-tcp-or-roce-roles).
 
+??? question "I need RDMA READ/WRITE with peer notification"
+    - **RDMA READ/WRITE with peer notification**: [`daqiri_example_rdma_read_write.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_example_rdma_read_write.yaml) (runs on `daqiri_example_rdma_read_write`). Exchanges descriptors, verifies WRITE with READ, and uses WRITE_IMM to identify the updated slot. See the [run instructions](../benchmarks/socket_benchmarking.md#rdma-readwrite-example).
+
 ??? question "I want to measure direct-polling packet latency"
     Use [`daqiri_bench_raw_latency_ibverbs.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_latency_ibverbs.yaml) with `daqiri_bench_raw_latency`. It sweeps one outstanding packet at a time from 64 through 8192 L2 bytes, using powers of two, with both queues in caller-driven `poll_mode: direct`.
 

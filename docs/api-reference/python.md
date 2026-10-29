@@ -584,8 +584,16 @@ Both polling modes support one packet and one segment per operation. Poll
 `get_rx_burst_for_connection()` for the original burst's local completion
 and free it with `free_tx_burst()` after checking `burst.rdma_status`.
 `burst.rdma_tx` is true for READ/WRITE completions, which originate on the SQ. READ/WRITE do not
-consume peer RECEIVE buffers or generate peer completions; immediate-data
-opcodes remain unsupported. The calls keep the GIL.
+consume peer RECEIVE buffers or generate peer completions.
+For notification, use `RDMAOpCode.RDMA_WRITE_IMM`, set the remote target, and call
+`rdma_set_immediate(burst, value)` with a host-order 32-bit application value (zero
+by default). The receiver must post one single-packet RECEIVE per notification.
+Its successful completion has opcode `RDMA_WRITE_IMM`, `rdma_tx == False`, and
+packet length zero: the write payload is in the exported target, separate from
+the RECEIVE buffer. `status, value, written_bytes = rdma_get_immediate(done)`
+returns the host-order application value and transferred length. Other or failed
+completions return `NOT_READY` with zero outputs. `RDMA_READ_IMM` remains
+unsupported. These descriptor and immediate-data calls keep the GIL.
 An indirect RDMA work-ring overflow returns `NO_SPACE_AVAILABLE` after freeing
 the burst and its buffers; do not reuse or free the handle. Failed direct posts
 retain caller ownership.
@@ -725,7 +733,9 @@ The workflow sections above show the common call order and ownership rules.
 | `set_udp_payload(burst, idx, data)` | Copy UDP payload bytes. |
 | `rdma_set_header(burst, op_code, conn_id, is_server, num_pkts, wr_id, local_mr_name)` | Fill RDMA TX metadata. |
 | `rdma_get_local_memory_region(conn_id, name)` | Return `(status, RdmaMemoryRegion)` for the connection's PD. |
-| `rdma_set_remote_memory(burst, region, offset=0)` | Set a remote READ/WRITE target after setting the header. |
+| `rdma_set_remote_memory(burst, region, offset=0)` | Set a remote READ/WRITE/WRITE_IMM target after setting the header. |
+| `rdma_set_immediate(burst, value)` | Set a host-order 32-bit WRITE_IMM application value; returns `Status`. |
+| `rdma_get_immediate(burst)` | Return `(Status, value, written_bytes)` for a successful WRITE_IMM receive notification. |
 | `rdma_get_opcode(burst)` | Return the RDMA operation code for a burst. |
 
 ### Buffer Release

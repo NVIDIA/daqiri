@@ -739,8 +739,8 @@ RC `roce://` connections support `RDMAOpCode::RDMA_READ` and
 uses one packet and one segment, up to the local MR's configured `buf_size`.
 READ copies peer memory into the local buffer; WRITE copies the local buffer
 into peer memory. Neither operation consumes a peer RECEIVE or generates a
-peer completion. The immediate-data opcodes remain unsupported and return
-`NOT_SUPPORTED`.
+peer completion. `RDMAOpCode::RDMA_WRITE_IMM` adds a peer notification as
+described below. `RDMA_READ_IMM` remains unsupported and returns `NOT_SUPPORTED`.
 
 After connecting, the owner exports a connection-specific descriptor:
 
@@ -804,6 +804,55 @@ does not reserve buffers or signal that remote memory is ready. For GPU memory,
 coordinate CUDA work and GPUDirect visibility before consuming a READ result or
 memory updated by a peer WRITE. Use an application control message to tell the
 peer when data is ready and when it can release the target.
+
+### WRITE with immediate notification
+
+Use `RDMAOpCode::RDMA_WRITE_IMM` to notify the peer when a write arrives. It uses
+one packet and one segment on RC, with either polling mode. Set its remote target
+with `rdma_set_remote_memory()` and its application value with
+`rdma_set_immediate(burst, uint32_t_value)` after `rdma_set_header()`. The value is
+host byte order at the API boundary; DAQIRI converts it to the verbs wire format.
+Omitting the setter sends zero. Resetting the header clears both the remote target
+and immediate value.
+
+```cpp
+check(daqiri::rdma_set_header(op, daqiri::RDMAOpCode::RDMA_WRITE_IMM,
+                            conn_id, false, 1, next_wr_id++, "TX"));
+check(daqiri::get_tx_packet_burst(op));
+check(daqiri::set_packet_lengths(op, 0, {64}));
+// Fill op's local source, then select byte offset 128 in the exported target.
+check(daqiri::rdma_set_remote_memory(op, peer_region, 128));
+check(daqiri::rdma_set_immediate(op, 128));
+check(daqiri::send_tx_burst(op));
+```
+
+Before the write, the receiver must post a single-packet `RECEIVE` through
+`send_tx_burst()`. That RECEIVE supplies a notification credit; its buffer does
+not receive the write payload. The payload goes to the exported remote address.
+Poll `get_rx_burst()` and inspect the returned burst's status. A successful
+notification returns that original RECEIVE burst with `rdma_get_opcode(done)`
+equal to `RDMA_WRITE_IMM`, `transport_hdr.tx == false`, and packet length zero:
+
+```cpp
+uint32_t application_value = 0, written_bytes = 0;
+check(daqiri::rdma_get_immediate(done, &application_value, &written_bytes));
+// For the protocol above, application_value is byte offset 128.
+// Read written_bytes from the reserved exported buffer at that offset.
+daqiri::free_tx_burst(done);  // Reclaims the RECEIVE credit buffer.
+```
+
+`rdma_get_immediate(burst, &value, &write_length)` returns the host-order value and
+optional transferred byte count. It returns `NOT_READY` for ordinary SEND/RECEIVE,
+local TX completions, pending operations, and failed completions, and clears its
+outputs on failure. The application defines the 32-bit value: use a slot ID, byte
+offset, or packed message type and index. It does not automatically encode an
+address or select the write destination, and the receiver should validate it
+before indexing its exported allocation. Repost a RECEIVE for each notification.
+Local WRITE_IMM completions follow the same ownership rules as WRITE.
+
+The complete [READ/WRITE example](../benchmarks/socket_benchmarking.md#rdma-readwrite-example)
+exchanges descriptors with SEND/RECEIVE, reserves exported storage, verifies a
+WRITE with READ, and acknowledges WRITE_IMM using its byte-offset notification.
 
 ## Writing Bursts to Storage
 

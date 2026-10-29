@@ -670,11 +670,11 @@ without an epoch field, an old late packet is indistinguishable from the same sl
   - type: `integer`
 - **`poll_mode`**: `indirect` hands bursts to a DAQIRI TX worker. `direct` makes the calling
   thread submit one packet immediately and manage transmit progress; it is supported by
-  the raw ibverbs and RDMA engines. Direct RDMA TX posts SEND, READ, or WRITE immediately;
+  the raw ibverbs and RDMA engines. Direct RDMA TX posts SEND, READ, WRITE, or WRITE_IMM immediately;
   `get_rx_burst(&burst, conn_id, server)` drives its completions. SEND messages in
   `huge` or `host_pinned` memory are inlined when they fit the QP's returned inline capacity
   (128 bytes requested). Device-memory messages remain DMA-based. RDMA requires one packet
-  per direct posting; READ/WRITE also require one packet in indirect mode.
+  per direct posting; READ/WRITE/WRITE_IMM also require one packet in indirect mode.
   Connections pair RX and TX queues by list position;
   configure both directions for a direct connection. Polling modes may differ. The worker
   uses the TX `cpu_core` when TX is indirect, otherwise the RX `cpu_core`. When both directions

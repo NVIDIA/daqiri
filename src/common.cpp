@@ -1169,6 +1169,16 @@ Status rdma_set_remote_memory(BurstParams* burst, const RdmaMemoryRegion& region
   return g_daqiri_engine->rdma_set_remote_memory(burst, region, offset);
 }
 
+Status rdma_set_immediate(BurstParams* burst, uint32_t value) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->rdma_set_immediate(burst, value);
+}
+
+Status rdma_get_immediate(BurstParams* burst, uint32_t* value, uint32_t* write_length) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->rdma_get_immediate(burst, value, write_length);
+}
+
 RDMAOpCode rdma_get_opcode(BurstParams* burst) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
   return g_daqiri_engine->rdma_get_opcode(burst);
