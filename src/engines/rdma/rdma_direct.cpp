@@ -110,7 +110,10 @@ const RdmaDirectMr* RdmaEngine::direct_region(RdmaDirectState& state, BurstParam
   }
   for (const auto& region : state.regions) {
     if (region.name == burst->transport_hdr.local_mr_name) {
-      cache = {RdmaBurstCache::kMagic, this, &state, &region};
+      cache.magic = RdmaBurstCache::kMagic;
+      cache.engine = this;
+      cache.state = &state;
+      cache.region = &region;
       return &region;
     }
   }
@@ -183,6 +186,7 @@ Status RdmaEngine::send_direct(RdmaDirectState& state, BurstParams* burst) {
     if (slot.burst) {
       return Status::NO_SPACE_AVAILABLE;
     }
+    rdma_clear_rx_timestamps(burst);
     state.receive.wr_id = tag;
     ibv_recv_wr* bad = nullptr;
     if (verbs_->post_recv(params.client_id->qp, &state.receive, &bad)) {
@@ -200,8 +204,10 @@ Status RdmaEngine::send_direct(RdmaDirectState& state, BurstParams* burst) {
 
 Status RdmaEngine::poll_direct(RdmaDirectState& state, bool tx, bool server) {
   ibv_wc wc{};
+  uint64_t timestamp_ns = UINT64_MAX;
   auto& params = *state.params;
-  const int count = verbs_->poll_cq(tx ? params.qp_params.tx_cq : params.qp_params.rx_cq, 1, &wc);
+  const int count = tx ? verbs_->poll_cq(params.qp_params.tx_cq, 1, &wc)
+                       : poll_rx_completion(&params, &wc, &timestamp_ns);
   if (count <= 0) {
     return count == 0 ? Status::NOT_READY : Status::GENERIC_FAILURE;
   }
@@ -217,6 +223,7 @@ Status RdmaEngine::poll_direct(RdmaDirectState& state, bool tx, bool server) {
         metrics::add_tx(state.counters, 1, burst->pkt_lens[0][0]);
       } else {
         burst->pkt_lens[0][0] = wc.byte_len;
+        rdma_set_rx_timestamp(burst, 0, timestamp_ns);
         metrics::add_rx(state.counters, 1, wc.byte_len);
       }
     } else {

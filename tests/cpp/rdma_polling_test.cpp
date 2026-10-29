@@ -24,6 +24,13 @@ void require(bool value, const char* message) {
 
 struct FakeVerbs {
   ibv_cq rx{}, tx{};
+  ibv_cq_ex rx_ex{};
+  ibv_wc current_wc{};
+  static constexpr uint64_t kTimestamp = 1780000000123456789ULL;
+  bool timestamps = false;
+  bool fail_create_cq_ex = false;
+  int poll_error = 0;
+  unsigned ended_polls = 0;
   ibv_qp qp{};
   std::deque<ibv_wc> rx_completions, tx_completions;
   std::atomic<unsigned> rx_polls{0}, tx_polls{0}, sends{0}, receives{0};
@@ -38,6 +45,40 @@ struct FakeVerbs {
 
   static ibv_cq* create_cq(ibv_context*, int, void*, ibv_comp_channel*, int) {
     return current->created_cqs++ == 0 ? &current->rx : &current->tx;
+  }
+  static ibv_cq_ex* create_cq_ex(ibv_context*, ibv_cq_init_attr_ex* attr) {
+    require(
+        attr->wc_flags == (IBV_WC_EX_WITH_BYTE_LEN | IBV_WC_EX_WITH_COMPLETION_TIMESTAMP_WALLCLOCK),
+        "RX CQ did not request hardware wall-clock timestamps and byte lengths");
+    if (current->fail_create_cq_ex) {
+      errno = EOPNOTSUPP;
+      return nullptr;
+    }
+    ++current->created_cqs;
+    current->timestamps = true;
+    return &current->rx_ex;
+  }
+  static int start_poll(ibv_cq_ex* cq, ibv_poll_cq_attr*) {
+    if (current->poll_error) return current->poll_error;
+    if (poll_cq(&current->rx, 1, &current->current_wc) == 0) return ENOENT;
+    cq->wr_id = current->current_wc.wr_id;
+    cq->status = current->current_wc.status;
+    return 0;
+  }
+  static void end_poll(ibv_cq_ex*) {
+    ++current->ended_polls;
+  }
+  static ibv_wc_opcode read_opcode(ibv_cq_ex*) {
+    require(current->current_wc.status == IBV_WC_SUCCESS, "read opcode on failed CQE");
+    return current->current_wc.opcode;
+  }
+  static uint32_t read_byte_len(ibv_cq_ex*) {
+    require(current->current_wc.status == IBV_WC_SUCCESS, "read length on failed CQE");
+    return current->current_wc.byte_len;
+  }
+  static uint64_t read_timestamp(ibv_cq_ex*) {
+    require(current->current_wc.status == IBV_WC_SUCCESS, "read timestamp on failed CQE");
+    return kTimestamp + current->current_wc.wr_id;
   }
   static int create_qp(rdma_cm_id* id, ibv_pd*, ibv_qp_init_attr* attr) {
     current->requested_inline = attr->cap.max_inline_data;
@@ -121,10 +162,16 @@ class RdmaEnginePollingTestPeer {
   Ring* rx_ring = nullptr;
 
  public:
-  RdmaEnginePollingTestPeer(bool direct_rx, bool direct_tx)
+  RdmaEnginePollingTestPeer(bool direct_rx, bool direct_tx, bool timestamps = false)
       : params(engine.server_q_params_.try_emplace(&listener, 1).first->second[0]) {
     FakeVerbs::current = &fake;
     api.create_cq = &FakeVerbs::create_cq;
+    api.create_cq_ex = &FakeVerbs::create_cq_ex;
+    api.start_poll = &FakeVerbs::start_poll;
+    api.end_poll = &FakeVerbs::end_poll;
+    api.wc_read_opcode = &FakeVerbs::read_opcode;
+    api.wc_read_byte_len = &FakeVerbs::read_byte_len;
+    api.wc_read_completion_wallclock_ns = &FakeVerbs::read_timestamp;
     api.cm_create_qp = &FakeVerbs::create_qp;
     api.poll_cq = &FakeVerbs::poll_cq;
     api.post_send = &FakeVerbs::post_send;
@@ -135,6 +182,7 @@ class RdmaEnginePollingTestPeer {
     engine.verbs_ = &api;
     engine.cfg_.ifs_.resize(1);
     auto& intf = engine.cfg_.ifs_[0];
+    intf.rx_.hardware_timestamps_ = timestamps;
     intf.rdma_.xmode_ = RDMATransportMode::RC;
     intf.rx_.queues_.resize(1);
     intf.tx_.queues_.resize(1);
@@ -164,6 +212,7 @@ class RdmaEnginePollingTestPeer {
     memory.ctx_mr_map_[&pd] = &mr;
     require(engine.setup_thread_params(&params, false) == 0, "QP setup failed");
     require(fake.requested_inline == (direct_tx ? 128u : 0u), "incorrect inline request");
+    require(fake.timestamps == timestamps, "timestamp CQ selection incorrect");
   }
 
   ~RdmaEnginePollingTestPeer() {
@@ -179,6 +228,89 @@ class RdmaEnginePollingTestPeer {
     engine.tx_rings_map_.clear();
     Ring::free(tx_ring);
     Ring::free(rx_ring);
+  }
+
+  void timestamp_errors() {
+    if (!fake.timestamps) return;
+    ibv_wc wc{};
+    uint64_t timestamp_ns = 1;
+    const auto ends = fake.ended_polls;
+    require(engine.poll_rx_completion(&params, &wc, &timestamp_ns) == 0 &&
+                timestamp_ns == UINT64_MAX && fake.ended_polls == ends,
+            "empty extended CQ was not handled correctly");
+    fake.poll_error = EIO;
+    require(engine.poll_rx_completion(&params, &wc, &timestamp_ns) < 0 && fake.ended_polls == ends,
+            "extended CQ poll error was ignored or ended an inactive poll");
+    fake.poll_error = 0;
+    fake.fail_create_cq_ex = true;
+    rdma_thread_params unsupported{};
+    unsupported.client_id = &id;
+    unsupported.if_idx = unsupported.queue_idx = 0;
+    require(engine.setup_thread_params(&unsupported, false) != 0,
+            "unsupported hardware timestamps silently fell back to ordinary CQ");
+    fake.fail_create_cq_ex = false;
+    BurstParams burst{};
+    require(engine.get_packet_rx_timestamp(nullptr, 0, &timestamp_ns) == Status::NULL_PTR &&
+                engine.get_packet_rx_timestamp(&burst, 0, nullptr) == Status::NULL_PTR,
+            "timestamp getter did not validate null pointers");
+    require(engine.get_packet_rx_timestamp(&burst, 0, &timestamp_ns) == Status::INVALID_PARAMETER,
+            "timestamp getter accepted an empty burst");
+  }
+
+  void check_timestamp(BurstParams* burst, bool receive, uint64_t wr_id) {
+    uint64_t timestamp_ns = 1;
+    const auto status = engine.get_packet_rx_timestamp(burst, 0, &timestamp_ns);
+    const bool supported =
+        fake.timestamps && receive && burst->transport_hdr.status == Status::SUCCESS;
+    require(status == (supported ? Status::SUCCESS : Status::NOT_SUPPORTED),
+            "incorrect timestamp availability");
+    require(timestamp_ns == (supported ? FakeVerbs::kTimestamp + wr_id : 0),
+            "hardware timestamp was lost, changed, or reused from an earlier completion");
+    require(
+        engine.get_packet_rx_timestamp(burst, -1, &timestamp_ns) == Status::INVALID_PARAMETER &&
+            engine.get_packet_rx_timestamp(burst, 1, &timestamp_ns) == Status::INVALID_PARAMETER,
+        "timestamp getter accepted an out-of-range index");
+  }
+
+  void batched_timestamps() {
+    if (params.direct_rx && params.direct_tx) return;
+    BurstParams burst{};
+    std::array<uint64_t, 2> timestamps{};
+    std::array<uint32_t, 2> lengths{512, 512};
+    require(engine.rdma_set_header(&burst, RDMAOpCode::RECEIVE, reinterpret_cast<uintptr_t>(&id),
+                                   false, 2, 500, "data") == Status::SUCCESS,
+            "batched RECEIVE header failed");
+    burst.pkt_lens[0] = lengths.data();
+    rdma_burst_cache(&burst).rx_timestamps = timestamps.data();
+    rdma_clear_rx_timestamps(&burst);
+    for (unsigned i = 0; i < 2; ++i) {
+      params.outstanding_receive_wr_ids[500 + i] = &burst;
+      ibv_wc wc{};
+      wc.wr_id = 500 + i;
+      wc.status = IBV_WC_SUCCESS;
+      wc.opcode = IBV_WC_RECV;
+      wc.byte_len = 37 + i;
+      fake.rx_completions.push_back(wc);
+    }
+    engine.poll_completions(false, &params, true, false);
+    for (unsigned i = 0; i < 2; ++i) {
+      uint64_t timestamp_ns = 1;
+      require(engine.get_packet_rx_timestamp(&burst, i, &timestamp_ns) ==
+                      (fake.timestamps ? Status::SUCCESS : Status::NOT_SUPPORTED) &&
+                  timestamp_ns == (fake.timestamps ? FakeVerbs::kTimestamp + 500 + i : 0) &&
+                  lengths[i] == 37 + i,
+              "batched CQE timestamp/length did not use the packet's WR ID");
+      BurstParams* result = nullptr;
+      require(rx_ring->dequeue(reinterpret_cast<void**>(&result)) && result == &burst,
+              "batched completion lost its burst");
+    }
+    require(engine.rdma_set_header(&burst, RDMAOpCode::RECEIVE, reinterpret_cast<uintptr_t>(&id),
+                                   false, 2, 600, "data") == Status::SUCCESS,
+            "reused batched RECEIVE header failed");
+    uint64_t timestamp_ns = 1;
+    require(engine.get_packet_rx_timestamp(&burst, 1, &timestamp_ns) == Status::NOT_SUPPORTED &&
+                timestamp_ns == 0,
+            "reused burst retained an old timestamp");
   }
 
   static void configuration() {
@@ -318,6 +450,7 @@ daqiri:
                       Status::SUCCESS &&
                   result == &expected,
               "direct completion not returned");
+      check_timestamp(result, !result->transport_hdr.tx, fake.current_wc.wr_id);
       require(rx_ring->count() == 0 && params.outstanding_send_wr_ids.empty() &&
                   params.outstanding_receive_wr_ids.empty(),
               "direct path used a handoff ring or request map");
@@ -580,10 +713,12 @@ daqiri:
           "completion missing");
       if (result == &send) {
         require(result->transport_hdr.tx, "TX completion mislabeled");
+        check_timestamp(result, false, 10);
         got_tx = true;
       } else if (result == &receive) {
         require(!result->transport_hdr.tx && recv_len == 37,
                 "RX completion length/ownership incorrect");
+        check_timestamp(result, true, 20);
         got_rx = true;
       } else {
         require(false, "unexpected completion object");
@@ -611,6 +746,7 @@ daqiri:
                       Status::SUCCESS &&
                   result->transport_hdr.status == Status::GENERIC_FAILURE,
               "failed work request did not return its buffer with error status");
+      check_timestamp(result, result == &receive, 40);
     }
     require(params.outstanding_send_wr_ids.empty() && params.outstanding_receive_wr_ids.empty(),
             "failed work request leaked completion credits");
@@ -665,14 +801,18 @@ daqiri:
 int main() {
   try {
     daqiri::RdmaEnginePollingTestPeer::configuration();
-    for (bool rx : {false, true}) {
-      for (bool tx : {false, true}) {
-        for (bool server : {false, true}) {
-          daqiri::RdmaEnginePollingTestPeer test(rx, tx);
-          test.run(rx, tx, server);
-          if (!rx || !tx) {
-            daqiri::RdmaEnginePollingTestPeer concurrent(rx, tx);
-            concurrent.concurrent_worker(server);
+    for (bool timestamps : {false, true}) {
+      for (bool rx : {false, true}) {
+        for (bool tx : {false, true}) {
+          for (bool server : {false, true}) {
+            daqiri::RdmaEnginePollingTestPeer test(rx, tx, timestamps);
+            test.timestamp_errors();
+            test.batched_timestamps();
+            test.run(rx, tx, server);
+            if (!rx || !tx) {
+              daqiri::RdmaEnginePollingTestPeer concurrent(rx, tx, timestamps);
+              concurrent.concurrent_worker(server);
+            }
           }
         }
       }
