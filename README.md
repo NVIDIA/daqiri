@@ -108,6 +108,23 @@ Reference material for the DAQIRI codebase:
 - [Python API Usage](https://nvidia.github.io/daqiri/api-reference/python/) — Python bindings, workflow examples, enums, config classes, and helper functions
 - [Contributing](CONTRIBUTING.md) — Contribution guidelines, coding standards, DCO sign-off
 
+### Agent-assisted onboarding
+
+The [Bartender onboarding skill](.agents/skills/bartender/SKILL.md) is
+included under `.agents/skills/bartender/`. In a skill-enabled agent
+session opened in this checkout, start with:
+
+```text
+Use $bartender to help me generate and validate my first DAQIRI configuration.
+```
+
+The skill resumes from an existing setup and uses this checkout's documentation,
+configuration generator and native validator. If the agent does not discover
+repository skills, provide the linked `SKILL.md` path explicitly. A local
+customer-demo package is optional and is not included with the skill; ordinary
+onboarding does not require it. Host changes and hardware traffic follow the
+session's authorization requirements.
+
 ## Tutorials
 
 Step-by-step walkthroughs to get hands-on:
