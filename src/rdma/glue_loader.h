@@ -20,7 +20,8 @@ inline void rdma_glue_anchor() {}
 template <typename Api>
 class GlueLibrary {
  public:
-  const Api* load(const char* filename, const char* symbol, std::string& error) {
+  const Api* load(const char* filename, const char* symbol, std::string& error,
+                  uint32_t abi_version = 1) {
     std::lock_guard<std::mutex> lock(mutex_);
     error.clear();
     if (api_ != nullptr) {
@@ -75,7 +76,7 @@ class GlueLibrary {
       dlclose(handle);
       return nullptr;
     }
-    const Api* candidate = getter(1, sizeof(Api));
+    const Api* candidate = getter(abi_version, sizeof(Api));
     if (candidate == nullptr || !candidate->valid()) {
       error = "Incompatible or incomplete RDMA glue API in " + path;
       dlclose(handle);
