@@ -778,8 +778,10 @@ PTP-synchronized. DAQIRI requires ConnectX-7 or later for send-on-timestamp.
 - type: `boolean`
 - default: `false`
 
-Accurate send also supports RDMA RC `SEND` operations on `roce://` endpoints,
-in direct and indirect TX modes. Set `accurate_send: true` under the sending
+Accurate send also supports RDMA `SEND` operations on `roce://` endpoints,
+in direct and indirect TX modes. The WAIT gates the QP send queue without an
+RC-only restriction; normal transport connection and addressing requirements apply.
+Set `accurate_send: true` under the sending
 interface's `tx` section before connecting. Connection setup fails if the mlx5
 device lacks wait-on-time or a real-time clock; there is no software timing fallback.
 Call `set_packet_tx_time()` after setting the RDMA header and acquiring buffers.

@@ -20,6 +20,9 @@ uint64_t wait_id = 0, send_id = 0;
 unsigned send_flags = 0;
 int post_result = 0;
 ibv_qp created_qp{};
+ibv_ah destination{};
+ibv_qp_type requested_type = IBV_QPT_RC;
+std::vector<ibv_qp_state> transitions;
 uint32_t remote_vendor = 0, negotiated_options = 0, advertised_vendor = 0;
 int creations = 0, destructions = 0, init_result = 0;
 bool wait_supported = true, realtime = true;
@@ -43,6 +46,10 @@ void send(ibv_qp_ex* qp) {
 void sge(ibv_qp_ex*, uint32_t key, uint64_t addr, uint32_t length) {
   require(key == 123 && addr == 456 && length == 64, "DMA descriptor changed");
   steps.push_back(4);
+}
+void ud_addr(ibv_qp_ex*, ibv_ah* ah, uint32_t qpn, uint32_t qkey) {
+  require(ah == &destination && qpn == 321 && qkey == 654, "UD destination changed");
+  steps.push_back(7);
 }
 void inline_data(ibv_qp_ex*, void* addr, size_t length) {
   require(addr == reinterpret_cast<void*>(456) && length == 64, "inline data changed");
@@ -77,6 +84,8 @@ extern "C" ibv_qp* __wrap_mlx5dv_create_qp(ibv_context*, ibv_qp_init_attr_ex* at
               (attr->comp_mask & IBV_QP_INIT_ATTR_SEND_OPS_FLAGS) &&
               dv_attr->send_ops_flags == MLX5DV_QP_EX_WITH_RAW_WQE,
           "timed QP did not enable extended SEND and raw WQEs");
+  require(attr->qp_type == requested_type, "timed QP changed the transport type");
+  created_qp.qp_type = attr->qp_type;
   ++creations;
   return &created_qp;
 }
@@ -106,8 +115,18 @@ extern "C" int __wrap_rdma_init_qp_attr(rdma_cm_id*, ibv_qp_attr* attr, int* mas
   *mask = IBV_QP_STATE | IBV_QP_PORT;
   return 0;
 }
-extern "C" int __wrap_ibv_modify_qp(ibv_qp*, ibv_qp_attr*, int mask) {
-  require(mask == (IBV_QP_STATE | IBV_QP_PORT), "CM INIT attributes were not applied");
+extern "C" int __wrap_ibv_modify_qp(ibv_qp* qp, ibv_qp_attr* attr, int mask) {
+  if (attr->qp_state == IBV_QPS_INIT) {
+    require(mask == (IBV_QP_STATE | IBV_QP_PORT), "CM INIT attributes were not applied");
+  } else {
+    require(qp->qp_type == IBV_QPT_UD, "connected QP transitioned before CM establishment");
+    require(attr->qp_state == IBV_QPS_RTR
+                ? mask == IBV_QP_STATE
+                : attr->qp_state == IBV_QPS_RTS && mask == (IBV_QP_STATE | IBV_QP_SQ_PSN) &&
+                      attr->sq_psn == 0,
+            "UD RTR/RTS attributes changed");
+  }
+  transitions.push_back(attr->qp_state);
   return init_result;
 }
 extern "C" int __wrap_ibv_destroy_qp(ibv_qp*) {
@@ -124,18 +143,26 @@ int main() {
     rdma_cm_id id{};
     id.verbs = &context;
     ibv_qp_init_attr attr{};
-    attr.qp_type = IBV_QPT_RC;
-    for (uint32_t vendor : {0u, 0x2c9u, 0x1234u}) {
-      remote_vendor = vendor;
-      advertised_vendor = 0;
-      negotiated_options = 99;
-      require(daqiri::detail::create_timed_qp(&id, &pd, &attr) == 0 && id.qp == &created_qp &&
-                  id.pd == &pd && advertised_vendor == 0x2c9 &&
-                  negotiated_options == (vendor == 0       ? 99u
-                                         : vendor == 0x2c9 ? 5u
-                                                           : 0u),
-              "timed QP lost CM ECE interoperability");
-      id.qp = nullptr;
+    for (auto type : {IBV_QPT_RC, IBV_QPT_UC, IBV_QPT_UD}) {
+      attr.qp_type = requested_type = type;
+      for (uint32_t vendor : {0u, 0x2c9u, 0x1234u}) {
+        remote_vendor = vendor;
+        advertised_vendor = 0;
+        negotiated_options = 99;
+        transitions.clear();
+        require(daqiri::detail::create_timed_qp(&id, &pd, &attr) == 0 && id.qp == &created_qp &&
+                    id.pd == &pd && advertised_vendor == 0x2c9 &&
+                    negotiated_options == (vendor == 0       ? 99u
+                                           : vendor == 0x2c9 ? 5u
+                                                             : 0u),
+                "timed QP lost CM ECE interoperability");
+        require(
+            transitions == (type == IBV_QPT_UD
+                                ? std::vector<ibv_qp_state>{IBV_QPS_INIT, IBV_QPS_RTR, IBV_QPS_RTS}
+                                : std::vector<ibv_qp_state>{IBV_QPS_INIT}),
+            "timed QP changed transport-specific state transitions");
+        id.qp = nullptr;
+      }
     }
     const int before = creations;
     for (bool no_wait : {false, true}) {
@@ -154,6 +181,7 @@ int main() {
     extended.wr_start = start;
     extended.wr_send = send;
     extended.wr_set_sge = sge;
+    extended.wr_set_ud_addr = ud_addr;
     extended.wr_set_inline_data = inline_data;
     extended.wr_complete = complete;
     dv.wr_raw_wqe = raw;
@@ -165,34 +193,47 @@ int main() {
     wr.opcode = IBV_WR_SEND;
     wr.sg_list = &data;
     wr.num_sge = 1;
+    wr.wr.ud.ah = &destination;
+    wr.wr.ud.remote_qpn = 321;
+    wr.wr.ud.remote_qkey = 654;
     constexpr uint64_t time = 1793275200123456789ULL;
-    for (bool inlined : {false, true}) {
-      for (int result : {0, ENOMEM}) {
-        steps.clear();
-        post_result = result;
-        wr.send_flags = IBV_SEND_SIGNALED | (inlined ? IBV_SEND_INLINE : 0);
-        require(daqiri::detail::post_timed_send(&qp, &wr, time) == result,
-                "posting failure was not propagated");
-        require(steps == std::vector<int>{1, 2, 3, inlined ? 5 : 4, 6},
-                "WAIT and SEND did not share one builder transaction");
-        require(wait_id == 987 && send_id == 987 && send_flags == wr.send_flags,
-                "completion ID or signaling policy changed");
-        mlx5_wqe_ctrl_seg ctrl{};
-        mlx5_wqe_wseg wait{};
-        std::memcpy(&ctrl, wait_bytes.data(), sizeof(ctrl));
-        std::memcpy(&wait, wait_bytes.data() + sizeof(ctrl), sizeof(wait));
-        require(be32toh(ctrl.opmod_idx_opcode) == ((2u << 24) | 0x0f) &&
-                    be32toh(ctrl.qpn_ds) == ((qp.qp_num << 8) | 3) && ctrl.fm_ce_se == 4,
-                "incorrect WAIT control encoding");
-        require(
-            be32toh(wait.operation) == 5 && wait.lkey == 0 && wait.va_high == 0 &&
-                wait.va_low == 0 &&
-                be64toh(wait.value) == (((time / 1000000000ULL) << 32) | (time % 1000000000ULL)) &&
-                be64toh(wait.mask) == ((8ULL << 32) - 1),
-            "incorrect real-time clock conversion or comparison mask");
+    for (auto type : {IBV_QPT_RC, IBV_QPT_UC, IBV_QPT_UD}) {
+      qp.qp_type = type;
+      for (bool inlined : {false, true}) {
+        for (int result : {0, ENOMEM}) {
+          steps.clear();
+          post_result = result;
+          wr.send_flags = IBV_SEND_SIGNALED | (inlined ? IBV_SEND_INLINE : 0);
+          require(daqiri::detail::post_timed_send(&qp, &wr, time) == result,
+                  "posting failure was not propagated");
+          require(steps == (type == IBV_QPT_UD ? std::vector<int>{1, 2, 3, 7, inlined ? 5 : 4, 6}
+                                               : std::vector<int>{1, 2, 3, inlined ? 5 : 4, 6}),
+                  "WAIT and SEND did not share one builder transaction");
+          require(wait_id == 987 && send_id == 987 && send_flags == wr.send_flags,
+                  "completion ID or signaling policy changed");
+          mlx5_wqe_ctrl_seg ctrl{};
+          mlx5_wqe_wseg wait{};
+          std::memcpy(&ctrl, wait_bytes.data(), sizeof(ctrl));
+          std::memcpy(&wait, wait_bytes.data() + sizeof(ctrl), sizeof(wait));
+          require(be32toh(ctrl.opmod_idx_opcode) == ((2u << 24) | 0x0f) &&
+                      be32toh(ctrl.qpn_ds) == ((qp.qp_num << 8) | 3) && ctrl.fm_ce_se == 4,
+                  "incorrect WAIT control encoding");
+          require(be32toh(wait.operation) == 5 && wait.lkey == 0 && wait.va_high == 0 &&
+                      wait.va_low == 0 &&
+                      be64toh(wait.value) ==
+                          (((time / 1000000000ULL) << 32) | (time % 1000000000ULL)) &&
+                      be64toh(wait.mask) == ((8ULL << 32) - 1),
+                  "incorrect real-time clock conversion or comparison mask");
+        }
       }
     }
-    std::cout << "PASS: RDMA timing capabilities, CM ECE, WAIT encoding, posting, and failures\n";
+    qp.qp_type = IBV_QPT_UD;
+    wr.wr.ud.ah = nullptr;
+    steps.clear();
+    require(daqiri::detail::post_timed_send(&qp, &wr, time) == EINVAL && steps.empty(),
+            "UD SEND without a destination started a WAIT transaction");
+    std::cout
+        << "PASS: RC/UC/UD timing capabilities, QP setup, WAIT encoding, posting, and failures\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "FAIL: " << error.what() << '\n';

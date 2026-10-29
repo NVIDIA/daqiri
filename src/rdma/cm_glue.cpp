@@ -11,7 +11,7 @@ namespace daqiri::detail {
 int create_timed_qp(rdma_cm_id* id, ibv_pd* pd, ibv_qp_init_attr* attr) {
   // Keep ordinary RDMA independent of mlx5 hardware; this path is opt-in and
   // must never silently fall back to immediate transmission.
-  if (id->qp || attr->qp_type != IBV_QPT_RC || !mlx5dv_is_supported(id->verbs->device)) {
+  if (id->qp || !mlx5dv_is_supported(id->verbs->device)) {
     errno = EOPNOTSUPP;
     return -1;
   }
@@ -31,6 +31,7 @@ int create_timed_qp(rdma_cm_id* id, ibv_pd* pd, ibv_qp_init_attr* attr) {
   extended.qp_context = attr->qp_context;
   extended.send_cq = attr->send_cq;
   extended.recv_cq = attr->recv_cq;
+  extended.srq = attr->srq;
   extended.cap = attr->cap;
   extended.qp_type = attr->qp_type;
   extended.sq_sig_all = attr->sq_sig_all;
@@ -62,6 +63,17 @@ int create_timed_qp(rdma_cm_id* id, ibv_pd* pd, ibv_qp_init_attr* attr) {
   int mask = 0;
   if (!ret) ret = rdma_init_qp_attr(id, &initial, &mask);
   if (!ret) ret = ibv_modify_qp(qp, &initial, mask);
+  // As in rdma_create_qp, a UD QP is ready to send after creation. Connected
+  // QPs leave their RTR/RTS transitions to CM connection establishment.
+  if (!ret && attr->qp_type == IBV_QPT_UD) {
+    initial.qp_state = IBV_QPS_RTR;
+    ret = ibv_modify_qp(qp, &initial, IBV_QP_STATE);
+    if (!ret) {
+      initial.qp_state = IBV_QPS_RTS;
+      initial.sq_psn = 0;
+      ret = ibv_modify_qp(qp, &initial, IBV_QP_STATE | IBV_QP_SQ_PSN);
+    }
+  }
   if (!ret && remote.vendor_id) {
     ret = ibv_query_ece(qp, &local);
     if (ret == EOPNOTSUPP) ret = 0;
@@ -85,6 +97,7 @@ int post_timed_send(ibv_qp* qp, ibv_send_wr* wr, uint64_t timestamp_ns) {
   auto* dv = mlx5dv_qp_ex_from_ibv_qp_ex(extended);
   // Only SEND is supported by the RDMA engine's public submission path.
   if (!dv || wr->opcode != IBV_WR_SEND || wr->num_sge != 1 || wr->next) return EINVAL;
+  if (qp->qp_type == IBV_QPT_UD && !wr->wr.ud.ah) return EINVAL;
   struct {
     mlx5_wqe_ctrl_seg ctrl;
     mlx5_wqe_wseg wait;
@@ -107,6 +120,9 @@ int post_timed_send(ibv_qp* qp, ibv_send_wr* wr, uint64_t timestamp_ns) {
   extended->wr_id = wr->wr_id;
   extended->wr_flags = wr->send_flags;
   ibv_wr_send(extended);
+  if (qp->qp_type == IBV_QPT_UD) {
+    ibv_wr_set_ud_addr(extended, wr->wr.ud.ah, wr->wr.ud.remote_qpn, wr->wr.ud.remote_qkey);
+  }
   if (wr->send_flags & IBV_SEND_INLINE) {
     ibv_wr_set_inline_data(extended, reinterpret_cast<void*>(wr->sg_list->addr),
                            wr->sg_list->length);

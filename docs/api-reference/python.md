@@ -487,7 +487,7 @@ precise timed transmission require ConnectX-7 or later:
 daqiri.set_packet_tx_time(burst, idx, ptp_timestamp_ns)
 ```
 
-RDMA RC `SEND` operations also support timed transmission with
+RDMA `SEND` operations also support timed transmission with
 `tx.accurate_send: true` in either TX polling mode on supported mlx5 hardware.
 Set the RDMA header and acquire buffers before setting timestamps. Zero clears a
 timestamp, and `rdma_set_header()` clears scheduling on reuse. Submit ahead of the

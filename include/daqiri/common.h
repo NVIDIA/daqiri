@@ -630,7 +630,7 @@ Status set_all_packet_lengths(BurstParams *burst,
  * transmitted after this one in the same queue will be transmitted no earlier
  * than the time listed in the function call. This feature is only available on
  * ConnectX-7 or BlueField 3 and higher cards.
- * RDMA RC SENDs support this API with tx.accurate_send enabled, in either TX
+ * RDMA SENDs support this API with tx.accurate_send enabled, in either TX
  * polling mode. Set the RDMA header and acquire buffers before scheduling;
  * rdma_set_header clears old timestamps, and time=0 clears one timestamp.
  * Submit ahead of the target time within the NIC's approximately eight-second
