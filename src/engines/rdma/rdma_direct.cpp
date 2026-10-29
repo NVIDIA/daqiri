@@ -17,6 +17,18 @@ const void* caller_identity() {
 size_t direct_hash(uintptr_t id) {
   return (id >> 4) ^ (id >> 16);
 }
+// Payloads small enough to send inline from CPU memory; the CPU copies them into the WQE.
+bool inline_eligible(const RdmaDirectMr& region, uint32_t length, uint32_t max_inline) {
+  const auto kind = region.region->params_.kind_;
+  return (kind == MemoryKind::HUGE || kind == MemoryKind::HOST_PINNED) && length <= max_inline;
+}
+constexpr uint32_t kCacheLineBytes = 64;
+void prefetch_payload(const void* data, uint32_t bytes) {
+  const auto* payload = static_cast<const char*>(data);
+  for (uint32_t offset = 0; offset < bytes; offset += kCacheLineBytes) {
+    __builtin_prefetch(payload + offset);
+  }
+}
 }  // namespace
 
 void RdmaDirectState::close() {
@@ -207,10 +219,8 @@ Status RdmaEngine::send_direct(RdmaDirectState& state, BurstParams* burst) {
     if (params.client_id->qp->qp_type == IBV_QPT_RC) {
       state.send.send_flags |= IBV_SEND_FENCE;
     }
-    const auto kind = region->region->params_.kind_;
     if (opcode == RDMAOpCode::SEND &&
-        (kind == MemoryKind::HUGE || kind == MemoryKind::HOST_PINNED) &&
-        state.sge.length <= params.max_inline_data) {
+        inline_eligible(*region, state.sge.length, params.max_inline_data)) {
       state.send.send_flags |= IBV_SEND_INLINE;
     }
     ibv_send_wr* bad = nullptr;
@@ -317,6 +327,15 @@ Status RdmaEngine::poll_direct(RdmaDirectState& state, bool tx, bool server) {
           }
         }
         rdma_set_rx_timestamp(burst, 0, timestamp_ns);
+        const auto* region = rdma_burst_cache(burst).region;
+        if (wc.opcode == IBV_WC_RECV && region &&
+            inline_eligible(*region, wc.byte_len, params.max_inline_data)) {
+          // The CPU reads small payloads next, whether it parses them or echoes them
+          // inline, and the NIC wrote them by DMA. Start fetching them while the
+          // completion is returned. Larger payloads are usually forwarded by DMA,
+          // where lines already in the CPU cache slow the NIC's read.
+          prefetch_payload(burst->pkts[0][0], wc.byte_len);
+        }
         metrics::add_rx(state.counters, 1, wc.byte_len);
       }
     } else {
