@@ -255,7 +255,7 @@ class RdmaEngine : public Engine {
   int mr_access_to_ibv(uint32_t access);
   bool get_ip_from_interface(const std::string_view& if_name, sockaddr_in& addr);
   int setup_thread_params(rdma_thread_params* params, bool is_server);
-  int destroy_thread_params(rdma_thread_params* params);
+  int destroy_thread_params(rdma_thread_params* params, bool is_server = false);
   RDMAOpCode ibv_opcode_to_daqiri_opcode(ibv_wc_opcode opcode);
 };
 

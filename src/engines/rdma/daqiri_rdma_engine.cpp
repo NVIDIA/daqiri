@@ -228,12 +228,13 @@ bool RdmaEngine::get_ip_from_interface(const std::string_view& if_name, sockaddr
 }
 
 inline bool RdmaEngine::ack_event(rdma_cm_event* cm_event) {
+  const auto event_type = cm_event->event;
   int ret = verbs_->cm_ack_cm_event(cm_event);
   if (ret != 0) {
     DAQIRI_LOG_ERROR("Failed to acknowledge CM event: {}", ret);
     return false;
   } else {
-    DAQIRI_LOG_INFO("Acknowledged CM event: {}", verbs_->cm_event_str(cm_event->event));
+    DAQIRI_LOG_INFO("Acknowledged CM event: {}", verbs_->cm_event_str(event_type));
   }
   return true;
 }
@@ -471,7 +472,8 @@ int RdmaEngine::setup_thread_params(rdma_thread_params* params, bool is_server) 
   return 0;
 }
 
-int RdmaEngine::destroy_thread_params(rdma_thread_params* params) {
+int RdmaEngine::destroy_thread_params(rdma_thread_params* params, bool is_server) {
+  auto* client_id = params->client_id;
   DAQIRI_LOG_INFO("Destroying thread params for client {}", (void*)params->client_id);
   // First destroy the QP
   if (params->client_id->qp) {
@@ -490,9 +492,23 @@ int RdmaEngine::destroy_thread_params(rdma_thread_params* params) {
     params->qp_params.rx_cq_ex = nullptr;
   }
 
-  client_params_mutex_.lock();
-  client_q_params_.erase(params->client_id);
-  client_params_mutex_.unlock();
+  if (params->qp_params.tx_ring) {
+    tx_rings_.push(params->qp_params.tx_ring);
+    tx_rings_map_.erase(client_id);
+  }
+  if (params->qp_params.rx_ring) {
+    rx_rings_.push(params->qp_params.rx_ring);
+    rx_rings_map_.erase(client_id);
+  }
+  params->qp_params = {};
+  params->client_id = nullptr;
+  params->active = false;
+  params->worker_started.store(false);
+
+  if (!is_server) {
+    std::lock_guard<std::mutex> lock(client_params_mutex_);
+    client_q_params_.erase(client_id);
+  }
 
   return 0;
 }
@@ -1339,7 +1355,12 @@ Status RdmaEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t 
     verbs_->cm_destroy_event_channel(ec);
     return queue_exhausted ? Status::NO_SPACE_AVAILABLE : Status::CONNECT_FAILURE;
   }
-  setup_thread_params(params, false);
+  if (setup_thread_params(params, false) != 0) {
+    destroy_thread_params(params);
+    verbs_->cm_destroy_id(cm_id);
+    verbs_->cm_destroy_event_channel(ec);
+    return Status::CONNECT_FAILURE;
+  }
 
   // Set up connection parameters
   memset(&conn_param, 0, sizeof(conn_param));
@@ -1351,6 +1372,7 @@ Status RdmaEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t 
   if (verbs_->cm_connect(cm_id, &conn_param) != 0) {
     DAQIRI_LOG_CRITICAL("Failed to connect to server");
     destroy_thread_params(params);
+    verbs_->cm_destroy_id(cm_id);
     verbs_->cm_destroy_event_channel(ec);
     return Status::CONNECT_FAILURE;
   } else {
@@ -1361,6 +1383,7 @@ Status RdmaEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t 
   if (verbs_->cm_get_cm_event(ec, &event)) {
     DAQIRI_LOG_CRITICAL("Failed to get CM event");
     destroy_thread_params(params);
+    verbs_->cm_destroy_id(cm_id);
     verbs_->cm_destroy_event_channel(ec);
     return Status::CONNECT_FAILURE;
   }
@@ -1373,8 +1396,9 @@ Status RdmaEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t 
       DAQIRI_LOG_CRITICAL("Unexpected event: {}", (int)event->event);
     }
     verbs_->cm_ack_cm_event(event);
-    verbs_->cm_destroy_event_channel(ec);
     destroy_thread_params(params);
+    verbs_->cm_destroy_id(cm_id);
+    verbs_->cm_destroy_event_channel(ec);
     return Status::CONNECT_FAILURE;
   } else {
     DAQIRI_LOG_INFO("Client {} established connection to server", (void*)cm_id);
@@ -1642,9 +1666,17 @@ void RdmaEngine::run() {
           params.if_idx = listen_iter->second.if_idx;
           params.queue_idx = queue_idx;
 
-          setup_thread_params(&params, true);
+          if (setup_thread_params(&params, true) != 0) {
+            auto* client_id = params.client_id;
+            params.client_id = nullptr;
+            verbs_->cm_reject(client_id, nullptr, 0);
+            ack_event(cm_event);
+            verbs_->cm_destroy_id(client_id);
+            break;
+          }
           DAQIRI_LOG_INFO("Configured queues for client {}", (void*)cm_event->id);
 
+          auto* client_id = params.client_id;
           ack_event(cm_event);
 
           struct rdma_conn_param conn_param = {};
@@ -1655,6 +1687,8 @@ void RdmaEngine::run() {
           if (verbs_->cm_accept(params.client_id, &conn_param) != 0) {
             DAQIRI_LOG_CRITICAL("Failed to accept connection: {}", strerror(errno));
             verbs_->cm_reject(params.client_id, nullptr, 0);
+            destroy_thread_params(&params, true);
+            verbs_->cm_destroy_id(client_id);
             continue;
           }
 
