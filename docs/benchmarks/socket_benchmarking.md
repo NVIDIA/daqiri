@@ -524,3 +524,51 @@ mlxconfig -d <device> set FORCE_LOOPBACK_DISABLE=1
 ```
 
 Treat firmware settings as maintenance-window changes: query first, set only with the proper Mellanox tooling available, then reset or reboot as required and rerun the same `rx_packets_phy` proof.
+
+## RDMA READ/WRITE example
+
+`daqiri_example_rdma_read_write` is a CPU-buffer correctness example for RC
+connections. It shares SEND/RECEIVE control messages with the regular RDMA API:
+
+1. The server reserves an exported target slot, posts a notification RECEIVE,
+   and SENDs its address, length, rkey, and access mask in an explicit wire format.
+2. The client WRITEs 64 bytes to offset 0 and READs them back to verify the data.
+3. The client WRITEs another 64 bytes to offset 64 using `RDMA_WRITE_IMM` with
+   immediate value 64. The server checks the offset, transferred length, both
+   payloads, and that the unrelated RECEIVE buffer was unchanged.
+4. The server SENDs an acknowledgment before releasing the exported target.
+   Both roles consume their completions and return their buffers.
+
+Build the executable alongside the benchmarks:
+
+```bash
+cmake --build build-socket-rdma --target daqiri_example_rdma_read_write -j
+```
+
+Copy `examples/daqiri_example_rdma_read_write.yaml` and replace the two IP
+placeholders with addresses on your RDMA-capable netdevs, and the master CPU
+placeholder with an allowed CPU ID. Both processes read the same configuration;
+`--mode` selects their interface before initialization. Start the server first,
+then the client on its host:
+
+```bash
+# Server host
+./build-socket-rdma/examples/daqiri_example_rdma_read_write /tmp/rdma-rw.yaml --mode server
+# Client host
+./build-socket-rdma/examples/daqiri_example_rdma_read_write /tmp/rdma-rw.yaml --mode client
+```
+
+Leave `DAQIRI_RDMA_SEND_SIGNAL_EVERY` unset or set to `1`: control SENDs need
+individual completions. Each role must print `PASS` and exit zero.
+The example has a 20-second connection
+and completion timeout. It demonstrates correctness, not throughput. Direct
+polling is the template default. To exercise indirect or mixed polling, change
+RX and/or TX `poll_mode` to `indirect` and add `cpu_core` plus `batch_size: 1` to
+each indirect queue. Keep direct queues free of those worker-only fields.
+
+The 32-bit immediate value is an application convention, not an automatic remote
+address. Ordinary WRITE and READ only produce local completions. WRITE_IMM
+requires a posted peer RECEIVE for each notification; the receiver reads the
+actual payload from its reserved exported memory, not the RECEIVE buffer.
+See the [C++ API](../api-reference/cpp.md#write-with-immediate-notification) for
+notification metadata and ownership rules.

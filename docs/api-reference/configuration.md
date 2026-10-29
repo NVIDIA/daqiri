@@ -138,9 +138,19 @@ runtime binding.
   index. On the tested IGX Thor privileged-container setup, UUID-based selection prevents the
   integrated GPU from remaining selected.
   - type: `integer`
-- **`access`**: Memory access permissions.
+- **`access`**: Optional memory access permissions.
   - type: `list`
   - values: `local`, `rdma_read`, `rdma_write`, `relaxed_ordering`
+  - default: `[local, rdma_read, rdma_write]`
+
+  Omit `access` to allow all local and remote data access. An explicit list
+  replaces the default. For RoCE, `[local]` disallows peer READ/WRITE, while `[]`
+  permits only local reads.
+
+  For RC RoCE one-sided access, `rdma_read` and `rdma_write` authorize peers to
+  access this region. `rdma_write` also enables the local write permission
+  required for registration. Initiator READ destinations need `local` access.
+  See [RDMA READ/WRITE](cpp.md#one-sided-rdma-read-and-write).
 
   `relaxed_ordering` requests PCIe relaxed ordering for NIC DMA into the region and is honored
   by the raw `ibverbs` engine and the RoCE (`roce://`) engine. It can raise GPUDirect RX
@@ -660,11 +670,12 @@ without an epoch field, an old late packet is indistinguishable from the same sl
   - type: `integer`
 - **`poll_mode`**: `indirect` hands bursts to a DAQIRI TX worker. `direct` makes the calling
   thread submit one packet immediately and manage transmit progress; it is supported by
-  the raw ibverbs and RDMA engines. Direct RDMA TX posts an `IBV_WR_SEND` immediately;
-  `get_rx_burst(&burst, conn_id, server)` drives its completions. Single-packet messages in
+  the raw ibverbs and RDMA engines. Direct RDMA TX posts SEND, READ, WRITE, or WRITE_IMM immediately;
+  `get_rx_burst(&burst, conn_id, server)` drives its completions. SEND messages in
   `huge` or `host_pinned` memory are inlined when they fit the QP's returned inline capacity
   (128 bytes requested). Device-memory messages remain DMA-based. RDMA requires one packet
-  per direct SEND or RECEIVE posting. Connections pair RX and TX queues by list position;
+  per direct posting; READ/WRITE/WRITE_IMM also require one packet in indirect mode.
+  Connections pair RX and TX queues by list position;
   configure both directions for a direct connection. Polling modes may differ. The worker
   uses the TX `cpu_core` when TX is indirect, otherwise the RX `cpu_core`. When both directions
   are direct, no data-path worker is created and one application thread must own the

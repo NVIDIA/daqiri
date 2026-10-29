@@ -1826,6 +1826,45 @@ Status SocketEngine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uin
 #endif
 }
 
+Status SocketEngine::rdma_get_local_memory_region(uintptr_t conn_id, const std::string& name,
+                                                  RdmaMemoryRegion* region) {
+#if DAQIRI_ENGINE_RDMA
+  if (is_roce_protocol() && roce_engine_) {
+    return roce_engine_->rdma_get_local_memory_region(conn_id, name, region);
+  }
+#endif
+  return Status::NOT_SUPPORTED;
+}
+
+Status SocketEngine::rdma_set_remote_memory(BurstParams* burst, const RdmaMemoryRegion& region,
+                                            uint64_t offset) {
+#if DAQIRI_ENGINE_RDMA
+  if (is_roce_protocol() && roce_engine_) {
+    return roce_engine_->rdma_set_remote_memory(burst, region, offset);
+  }
+#endif
+  return Status::NOT_SUPPORTED;
+}
+
+Status SocketEngine::rdma_set_immediate(BurstParams* burst, uint32_t value) {
+#if DAQIRI_ENGINE_RDMA
+  if (is_roce_protocol() && roce_engine_) {
+    return roce_engine_->rdma_set_immediate(burst, value);
+  }
+#endif
+  return Status::NOT_SUPPORTED;
+}
+
+Status SocketEngine::rdma_get_immediate(BurstParams* burst, uint32_t* value,
+                                        uint32_t* write_length) {
+#if DAQIRI_ENGINE_RDMA
+  if (is_roce_protocol() && roce_engine_) {
+    return roce_engine_->rdma_get_immediate(burst, value, write_length);
+  }
+#endif
+  return Status::NOT_SUPPORTED;
+}
+
 RDMAOpCode SocketEngine::rdma_get_opcode(BurstParams* burst) {
 #if DAQIRI_ENGINE_RDMA
   if (!is_roce_protocol() || roce_engine_ == nullptr) {

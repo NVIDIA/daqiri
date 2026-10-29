@@ -5,6 +5,7 @@
 #include "src/rdma/cm_api.h"
 #include "src/metrics.h"
 #include <cstring>
+#include <arpa/inet.h>
 
 namespace daqiri {
 extern std::atomic<bool> rdma_force_quit;
@@ -146,7 +147,16 @@ Status RdmaEngine::send_direct(RdmaDirectState& state, BurstParams* burst) {
   if (state.sge.length > region->region->params_.buf_size_) {
     return Status::INVALID_PARAMETER;
   }
-  if (burst->transport_hdr.opcode == RDMAOpCode::SEND) {
+  const auto opcode = burst->transport_hdr.opcode;
+  const bool one_sided = opcode == RDMAOpCode::RDMA_READ || opcode == RDMAOpCode::RDMA_WRITE ||
+                         opcode == RDMAOpCode::RDMA_WRITE_IMM;
+  if (one_sided) {
+    const auto status = validate_one_sided(params, burst);
+    if (status != Status::SUCCESS) {
+      return status;
+    }
+  }
+  if (opcode == RDMAOpCode::SEND || one_sided) {
     if (state.sends_posted - state.sends_completed == RdmaDirectState::kRequests) {
       return Status::NO_SPACE_AVAILABLE;
     }
@@ -154,12 +164,23 @@ Status RdmaEngine::send_direct(RdmaDirectState& state, BurstParams* burst) {
     auto& slot = state.sends[(tag - 1) & (RdmaDirectState::kRequests - 1)];
     state.send.wr_id = tag;
     const bool signal =
-        params.send_signal_every == 1 ||
+        one_sided || params.send_signal_every == 1 ||
         params.sends_since_signal + 1 >= static_cast<uint64_t>(params.send_signal_every) ||
         state.sends_posted - state.sends_completed >= 15;
+    state.send.opcode = opcode == RDMAOpCode::RDMA_READ        ? IBV_WR_RDMA_READ
+                        : opcode == RDMAOpCode::RDMA_WRITE     ? IBV_WR_RDMA_WRITE
+                        : opcode == RDMAOpCode::RDMA_WRITE_IMM ? IBV_WR_RDMA_WRITE_WITH_IMM
+                                                               : IBV_WR_SEND;
+    state.send.imm_data = htonl(burst->transport_hdr.imm);
+    state.send.wr.rdma.remote_addr = reinterpret_cast<uintptr_t>(burst->transport_hdr.raddr);
+    state.send.wr.rdma.rkey = static_cast<uint32_t>(burst->transport_hdr.dst_key);
     state.send.send_flags = signal ? IBV_SEND_SIGNALED : 0;
+    if (params.qp_params.qp_attr.qp_type == IBV_QPT_RC) {
+      state.send.send_flags |= IBV_SEND_FENCE;
+    }
     const auto kind = region->region->params_.kind_;
-    if ((kind == MemoryKind::HUGE || kind == MemoryKind::HOST_PINNED) &&
+    if (opcode != RDMAOpCode::RDMA_READ &&
+        (kind == MemoryKind::HUGE || kind == MemoryKind::HOST_PINNED) &&
         state.sge.length <= params.max_inline_data) {
       state.send.send_flags |= IBV_SEND_INLINE;
     }
@@ -209,6 +230,11 @@ Status RdmaEngine::poll_direct(RdmaDirectState& state, bool tx, bool server) {
   auto deliver = [&](RdmaDirectState::Request& slot, bool transmit) {
     auto* burst = slot.burst;
     slot.burst = nullptr;
+    if (!transmit) {
+      burst->transport_hdr.immediate_valid = false;
+      burst->transport_hdr.rdma_write_length = 0;
+      burst->transport_hdr.imm = 0;
+    }
     burst->transport_hdr.status = status;
     burst->transport_hdr.tx = transmit;
     burst->transport_hdr.server = server;
@@ -216,7 +242,12 @@ Status RdmaEngine::poll_direct(RdmaDirectState& state, bool tx, bool server) {
       if (transmit) {
         metrics::add_tx(state.counters, 1, burst->pkt_lens[0][0]);
       } else {
-        burst->pkt_lens[0][0] = wc.byte_len;
+        const bool notification = wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM;
+        burst->transport_hdr.immediate_valid = notification && (wc.wc_flags & IBV_WC_WITH_IMM);
+        burst->transport_hdr.imm = burst->transport_hdr.immediate_valid ? ntohl(wc.imm_data) : 0;
+        burst->transport_hdr.rdma_write_length = notification ? wc.byte_len : 0;
+        if (notification) burst->transport_hdr.opcode = RDMAOpCode::RDMA_WRITE_IMM;
+        burst->pkt_lens[0][0] = notification ? 0 : wc.byte_len;
         metrics::add_rx(state.counters, 1, wc.byte_len);
       }
     } else {

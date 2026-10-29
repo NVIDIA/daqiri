@@ -1,0 +1,61 @@
+%YAML 1.2
+---
+# Both processes use this file. --mode selects the local interface before init.
+# Replace IP and CPU placeholders; the IPs must belong to RDMA-capable netdevs.
+daqiri:
+  cfg:
+    version: 1
+    stream_type: socket
+    master_core: <master-cpu-core>
+    log_level: info
+    memory_regions:
+    - name: control
+      kind: host
+      affinity: 0
+      num_bufs: 4
+      buf_size: 64
+    - name: io
+      kind: host
+      affinity: 0
+      num_bufs: 2
+      buf_size: 64
+    - name: target
+      kind: host
+      affinity: 0
+      num_bufs: 1
+      buf_size: 128
+    interfaces:
+    - name: client
+      address: <client-ip>
+      socket_config:
+        mode: client
+        local_addr: "roce://<client-ip>"
+      roce_config:
+        transport_mode: RC
+      rx:
+        queues:
+        - name: rx
+          id: 0
+          poll_mode: direct
+      tx:
+        queues:
+        - name: tx
+          id: 0
+          poll_mode: direct
+    - name: server
+      address: <server-ip>
+      socket_config:
+        mode: server
+        local_addr: "roce://<server-ip>:4096"
+      roce_config:
+        transport_mode: RC
+      rx:
+        queues:
+        - name: rx
+          id: 0
+          poll_mode: direct
+      tx:
+        queues:
+        - name: tx
+          id: 0
+          poll_mode: direct

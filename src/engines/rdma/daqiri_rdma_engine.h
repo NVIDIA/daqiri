@@ -24,6 +24,7 @@
 #include <thread>
 #include <set>
 #include <queue>
+#include <deque>
 #include <mqueue.h>
 #include <unordered_map>
 #include <infiniband/verbs.h>
@@ -81,6 +82,7 @@ struct rdma_thread_params {
   // Serialize caller-driven progress, the optional worker, and disconnect cleanup.
   std::mutex progress_mutex;
   std::map<uint64_t, BurstParams*> outstanding_send_wr_ids;
+  std::deque<uint64_t> send_wr_order;
   std::unordered_map<uint64_t, BurstParams*> outstanding_receive_wr_ids;
   int send_signal_every = 1;
   uint64_t sends_since_signal = 0;
@@ -185,6 +187,13 @@ class RdmaEngine : public Engine {
                                  uintptr_t* conn_id) override;
   Status rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id, bool is_server,
                          int num_pkts, uint64_t wr_id, const std::string& local_mr_name) override;
+  Status rdma_get_local_memory_region(uintptr_t conn_id, const std::string& name,
+                                      RdmaMemoryRegion* region) override;
+  Status rdma_set_remote_memory(BurstParams* burst, const RdmaMemoryRegion& region,
+                                uint64_t offset = 0) override;
+  Status rdma_set_immediate(BurstParams* burst, uint32_t value) override;
+  Status rdma_get_immediate(BurstParams* burst, uint32_t* value,
+                            uint32_t* write_length = nullptr) override;
   RDMAOpCode rdma_get_opcode(BurstParams* burst) override;
   Status register_mr(std::string name, int intf, void* addr, size_t len, int flags);
   Status wait_on_key_xchg();
@@ -243,6 +252,7 @@ class RdmaEngine : public Engine {
   Ring* burst_pool(BurstParams* burst);
   void initialize_progress(bool is_server, rdma_thread_params* params);
   void poll_completions(bool is_server, rdma_thread_params* params, bool poll_rx, bool poll_tx);
+  Status validate_one_sided(const rdma_thread_params& params, BurstParams* burst) const;
   Status post_burst(rdma_thread_params* params, BurstParams* burst);
   void rdma_thread(bool is_server, rdma_thread_params* tparams);
   int setup_pools_and_rings();

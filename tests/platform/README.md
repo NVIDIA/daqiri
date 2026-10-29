@@ -156,3 +156,25 @@ prints RTT percentiles, completion totals, payload verification, and allocation
 counts. The CSV contains measured client RTT samples in microseconds. There are
 no timed handle allocations or server payload copies. Repeat runs and alternate
 mode order. `ib_send_lat` reports half RTT, so double its latency before comparison.
+
+## RDMA READ/WRITE and immediate notifications
+
+`test_rdma_read_write.py` runs both roles of the checked-in READ/WRITE example
+on one existing RoCE IPv4 address, covering all four RX/TX direct/indirect polling
+combinations. It verifies WRITE → READ data, WRITE_IMM offset and byte count,
+separation of the notification credit from the target payload, and acknowledgment.
+It uses local NIC loopback and does not change host addresses or routes.
+
+Build `daqiri_example_rdma_read_write` with the ibverbs engine and examples enabled.
+Run in the privileged GPU/NIC container with host networking and hugepages mounted:
+
+```bash
+DAQIRI_PLATFORM_RDMA_ADDRESS=<existing-roce-ipv4> \
+DAQIRI_RDMA_READ_WRITE_EXAMPLE=$PWD/build/examples/daqiri_example_rdma_read_write \
+DAQIRI_PLATFORM_REQUIRE_RDMA_READ_WRITE=1 \
+python3 -m pytest tests/platform/test_rdma_read_write.py -m platform -p no:cacheprovider
+```
+
+Without the required-mode variable, a missing address or executable skips the test.
+The configured address must support same-host RC connections. This is a correctness
+check; it does not measure cable throughput or exercise a remote host.
