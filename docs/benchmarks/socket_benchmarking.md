@@ -419,6 +419,14 @@ are direct, only the benchmark role thread services data-path work. Small SENDs
 from `huge` or `host_pinned` memory are inlined when they fit the QP's returned
 inline capacity (128 bytes requested); GPU messages use DMA.
 
+For application round-trip latency, `tests/platform/rdma_latency.cpp` provides a
+hardware-only RC SEND ping-pong test. It preallocates registered handles, echoes
+from the receive buffer without copying, and validates server payloads after SEND
+completion. Build and invocation details are in `tests/platform/README.md`.
+Compare identical message sizes, memory kinds, CPU placement, and timing boundaries.
+`ib_send_lat` reports half of its measured round trip; double its reported value
+when comparing against this test's application RTT.
+
 For namespace testing, split the file by role just as in the Linux socket test:
 
 - The server YAML keeps the server memory regions, the server interface with `socket_config.mode: server`, and `rdma_bench_server`.

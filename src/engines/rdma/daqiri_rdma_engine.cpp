@@ -160,6 +160,7 @@ BurstParams* RdmaEngine::create_tx_burst_params() {
   }
 
   reset_rdma_burst_metadata(burst);
+  rdma_burst_cache(burst) = {};
   return burst;
 }
 
@@ -224,6 +225,11 @@ void RdmaEngine::launch_worker(rdma_thread_params* params, bool is_server) {
   initialize_progress(is_server, params);
   connection_params_[params->client_id] = params;
   if (params->direct_rx && params->direct_tx) {
+    if (!publish_direct(params)) {
+      connection_params_.erase(params->client_id);
+      params->ready_to_exit.store(true);
+      return;
+    }
     params->worker_started.store(true);
     return;
   }
@@ -354,6 +360,7 @@ int RdmaEngine::setup_thread_params(rdma_thread_params* params, bool is_server) 
     DAQIRI_LOG_ERROR("RDMA connections require a paired TX queue");
     return -1;
   }
+  params->direct_state = nullptr;
   params->direct_tx = intf.tx_.queues_[params->queue_idx].poll_mode_ == QueuePollMode::DIRECT;
   params->direct_rx = params->queue_idx < static_cast<int>(intf.rx_.queues_.size()) &&
                       intf.rx_.queues_[params->queue_idx].poll_mode_ == QueuePollMode::DIRECT;
@@ -471,6 +478,15 @@ Status RdmaEngine::send_tx_burst(BurstParams* burst) {
   daqiri::Ring* ring;
 
   const auto conn_id = get_connection_id(burst);
+  auto& cache = rdma_burst_cache(burst);
+  auto* direct = cache.magic == RdmaBurstCache::kMagic && cache.engine == this && cache.state &&
+                         cache.state->connection_id == conn_id
+                     ? cache.state
+                     : find_direct(conn_id);
+  if (direct) {
+    RdmaDirectLease lease(direct);
+    return lease ? send_direct(*direct, burst) : Status::NOT_READY;
+  }
   std::unique_lock<std::mutex> registry_lock(threads_mutex_);
   const auto connection = connection_params_.find(reinterpret_cast<struct rdma_cm_id*>(conn_id));
   if (connection == connection_params_.end()) {
@@ -999,6 +1015,23 @@ Status RdmaEngine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintp
   burst->transport_hdr.num_pkts = num_pkts;
   burst->transport_hdr.num_segs = 1;
   burst->transport_hdr.wr_id = wr_id;
+  auto& cache = rdma_burst_cache(burst);
+  if (cache.magic != RdmaBurstCache::kMagic || cache.engine != this || !cache.state ||
+      cache.state->connection_id != conn_id || !cache.region ||
+      cache.region->name != local_mr_name) {
+    cache = {};
+    cache.magic = RdmaBurstCache::kMagic;
+    cache.engine = this;
+    cache.state = find_direct(conn_id);
+    if (cache.state) {
+      for (const auto& region : cache.state->regions) {
+        if (region.name == local_mr_name) {
+          cache.region = &region;
+          break;
+        }
+      }
+    }
+  }
   snprintf(burst->transport_hdr.local_mr_name,
            sizeof(burst->transport_hdr.local_mr_name),
            "%s",
@@ -1307,8 +1340,8 @@ Status RdmaEngine::get_tx_packet_burst(BurstParams* burst) {
   // RDMA isn't allowing split segments yet
   assert(burst->transport_hdr.num_segs == 1);
   assert(burst->transport_hdr.num_pkts <= MAX_RDMA_BATCH);
-  auto burst_pool = mem_pools_.find(burst->transport_hdr.local_mr_name);
-  if (burst_pool == mem_pools_.end()) {
+  auto* pool = burst_pool(burst);
+  if (pool == nullptr) {
     DAQIRI_LOG_ERROR("Failed to look up burst pool name for MR {}",
                        burst->transport_hdr.local_mr_name);
     return Status::INVALID_PARAMETER;
@@ -1320,8 +1353,7 @@ Status RdmaEngine::get_tx_packet_burst(BurstParams* burst) {
   }
 
   const unsigned num_pkts = static_cast<unsigned>(burst->transport_hdr.num_pkts);
-  const unsigned rx =
-      burst_pool->second->dequeue_bulk(reinterpret_cast<void**>(burst->pkts[0]), num_pkts);
+  const unsigned rx = pool->dequeue_bulk(reinterpret_cast<void**>(burst->pkts[0]), num_pkts);
   if (rx != num_pkts) {
     DAQIRI_LOG_ERROR("Asked for {} packets, got {}", num_pkts, rx);
     tx_burst_pool_->put(reinterpret_cast<void*>(burst->pkts[0]));
@@ -1332,7 +1364,7 @@ Status RdmaEngine::get_tx_packet_burst(BurstParams* burst) {
   // Allocate packet length buffer
   if (!pkt_len_pool_->get(reinterpret_cast<void**>(&burst->pkt_lens[0]))) {
     DAQIRI_LOG_ERROR("Failed to get packet length buffer");
-    burst_pool->second->enqueue_bulk(reinterpret_cast<void**>(burst->pkts[0]), num_pkts);
+    pool->enqueue_bulk(reinterpret_cast<void**>(burst->pkts[0]), num_pkts);
     tx_burst_pool_->put(reinterpret_cast<void*>(burst->pkts[0]));
     burst->pkts[0] = nullptr;
     return Status::NO_FREE_PACKET_BUFFERS;
@@ -1342,14 +1374,14 @@ Status RdmaEngine::get_tx_packet_burst(BurstParams* burst) {
 }
 
 bool RdmaEngine::is_tx_burst_available(BurstParams* burst) {
-  auto burst_pool = mem_pools_.find(burst->transport_hdr.local_mr_name);
-  if (burst_pool == mem_pools_.end()) {
+  auto* pool = burst_pool(burst);
+  if (pool == nullptr) {
     DAQIRI_LOG_ERROR("Failed to look up burst pool name for MR {}",
                        burst->transport_hdr.local_mr_name);
     return false;
   }
 
-  if ((burst_pool->second)->count() < burst->transport_hdr.num_pkts) {
+  if (pool->count() < burst->transport_hdr.num_pkts) {
     return false;
   }
 
@@ -1624,6 +1656,9 @@ void RdmaEngine::run() {
         }
 
         if (tparams_to_clear != nullptr) {
+          if (tparams_to_clear->direct_state) {
+            tparams_to_clear->direct_state->close();
+          }
           std::lock_guard<std::mutex> progress_lock(tparams_to_clear->progress_mutex);
           tparams_to_clear->outstanding_send_wr_ids.clear();
           tparams_to_clear->outstanding_receive_wr_ids.clear();
@@ -1742,11 +1777,10 @@ void RdmaEngine::free_rx_burst(BurstParams* burst) {
 void RdmaEngine::free_tx_burst(BurstParams* burst) {
   if (burst == nullptr) { return; }
 
-  auto burst_pool = mem_pools_.find(burst->transport_hdr.local_mr_name);
-  if (burst->transport_hdr.num_pkts > 0 && burst->pkts[0] != nullptr &&
-      burst_pool != mem_pools_.end()) {
-    unsigned ret = burst_pool->second->enqueue_bulk(reinterpret_cast<void**>(burst->pkts[0]),
-                                                    burst->transport_hdr.num_pkts);
+  auto* pool = burst_pool(burst);
+  if (burst->transport_hdr.num_pkts > 0 && burst->pkts[0] != nullptr && pool != nullptr) {
+    unsigned ret =
+        pool->enqueue_bulk(reinterpret_cast<void**>(burst->pkts[0]), burst->transport_hdr.num_pkts);
     if (ret != burst->transport_hdr.num_pkts) {
       DAQIRI_LOG_CRITICAL(
           "Asked to free {} packets, only enqueued {}", burst->transport_hdr.num_pkts, ret);
@@ -1862,6 +1896,9 @@ void RdmaEngine::shutdown() {
       (void)id;
       std::lock_guard<std::mutex> progress_lock(params->progress_mutex);
       params->ready_to_exit.store(true);
+      if (params->direct_state) {
+        params->direct_state->close();
+      }
     }
     connection_params_.clear();
   }
@@ -1920,6 +1957,10 @@ Status RdmaEngine::get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool ser
     return Status::INVALID_PARAMETER;
   }
   *burst = nullptr;
+  if (auto* direct = find_direct(conn_id)) {
+    RdmaDirectLease lease(direct);
+    return lease ? get_direct(*direct, burst, server) : Status::NOT_READY;
+  }
   std::unique_lock<std::mutex> registry_lock(threads_mutex_);
   const auto connection = connection_params_.find(reinterpret_cast<struct rdma_cm_id*>(conn_id));
   if (connection == connection_params_.end()) {
@@ -2001,7 +2042,7 @@ void RdmaEngine::print_stats() {
       DAQIRI_LOG_INFO("  conn={} rx_poll={} tx_poll={} max_inline_data={} inline_wqes={}",
                       (void*)id, params->direct_rx ? "direct" : "indirect",
                       params->direct_tx ? "direct" : "indirect", params->max_inline_data,
-                      params->inline_wqes);
+                      params->inline_wqes.load());
     }
   }
 
@@ -2040,6 +2081,9 @@ void RdmaEngine::print_stats() {
 
 // Also need destructor implementation
 RdmaEngine::~RdmaEngine() {
+  for (auto& state : direct_states_) {
+    state->close();
+  }
   // Ensure all threads are joined
   {
     std::lock_guard<std::mutex> lock(threads_mutex_);
