@@ -59,8 +59,6 @@ The typical DAQIRI application lifecycle has six steps:
    the engine is running.
 4. **Access packet data** through `BurstParams` helper functions
    (`get_packet_ptr`, `get_segment_packet_ptr`, ...).
-   Raw ibverbs RX may use a [null scatter region](configuration.md#example-discard-headers-before-retaining-the-payload)
-   to discard bytes in the NIC; that segment has a null pointer and reports the discarded length.
 5. **Explicitly release packet and burst buffers** when the
    application is done with them (the `free_*` family).
 6. **Shut down DAQIRI** before process exit (`shutdown`).

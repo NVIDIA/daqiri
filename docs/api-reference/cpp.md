@@ -740,11 +740,8 @@ pcap capture. Raw writes create one output file per packet named
 packets to `<file_prefix>.pcap`; DAQIRI writes the pcap headers directly and does not
 depend on `libpcap`.
 
-Null-MR spans are written as zero-filled bytes in raw, pcap, and S3 output. The discarded
-length remains part of the logical packet, so raw/S3 `packet_data_offset` counts those bytes
-and pcap included/original lengths preserve the packet's full logical size. Writers use
-the per-segment null-MR bits in `burst_flags`; an unexpected unmarked null pointer remains
-an error. Bytes discarded by the NIC cannot be recovered from this output.
+Raw, pcap, and S3 writers zero-fill discarded spans while preserving logical packet lengths
+and offsets. Discarded data cannot be recovered.
 
 Host-backed packet segments use standard POSIX file writes and do not require GPUDirect
 Storage. CUDA device-backed packet segments require `DAQIRI_ENABLE_GDS=ON` and working

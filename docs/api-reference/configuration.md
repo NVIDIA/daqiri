@@ -109,10 +109,7 @@ runtime binding.
       the integrated GPU in a hybrid-GPU system such as IGX Thor. On discrete-GPU systems,
       prefer `device` for high-throughput RX/TX paths.
     - `host`: Regular CPU memory (not recommended)
-    - `null`: No backing allocation. Raw ibverbs RX scatter entries use a verbs null MR
-      to discard bytes in the NIC. `buf_size` specifies how many bytes to discard and is
-      required only when another memory region follows in the queue. If the null region
-      is last, omitting `buf_size` (or setting it to `0`) discards the remainder.
+    - `null`: Discards bytes in raw ibverbs RX without allocating storage.
       `num_bufs`, `affinity`, and `access` may be omitted and are ignored with a warning
       when supplied. No external binding is allowed. The kind must be quoted as
       `"null"`; YAML null values such as a blank value, `~`, or unquoted `null` are invalid.
@@ -173,9 +170,9 @@ runtime binding.
   reported by the demonstrated ConnectX-7 device.
   - type: `integer`
 - **`buf_size`**: Size of each buffer in bytes. Should match the expected packet size, or
-  the segment size when using header-data split. For `kind: "null"`, this is the discard
-  span in bytes, with no backing allocation. A positive value is required only if another
-  MR follows in the queue; the final null MR may omit it or use `0` to discard the remainder.
+  the segment size when using header-data split. For `kind: "null"`, `buf_size` is an
+  unsigned 32-bit discard length. It must be positive when another region follows;
+  a final null region may omit it or use `0` to discard the remainder.
   - type: `integer`
 
 ### Example: Discard headers before retaining the payload
@@ -204,18 +201,13 @@ memory_regions:
   - PAYLOAD
 ```
 
-For a null region, `buf_size` is a 32-bit unsigned byte count. It must be positive if
-another MR follows in any queue using the region. When the null MR is last, `buf_size`
-is optional: omit it or use `0` to discard all remaining bytes, or supply a positive
-value for a fixed discard span. Null entries count toward the four-segment limit and
-force a regular RQ even on a discard-only queue. RX queue depth comes from the smallest
-retained region's buffer count. A discard-only queue uses at least 256 receive slots,
+Null entries count toward the four-segment limit and force a regular RQ. Its slot count
+comes from the smallest retained region's `num_bufs`, rounded down to a power of two and
+capped at 32768. A discard-only queue uses at least 256 receive slots,
 rounded up to a power of two large enough for `batch_size`, up to 32768 slots.
-An indirect regular RQ with `timeout_us: 0` rejects a batch larger than its slot count
-rather than waiting for a burst it cannot fill. A positive timeout allows partial bursts.
-A regular-RQ error drops the affected packet and returns its receive credit. It can
-also publish a partial indirect burst even with `timeout_us: 0`, so earlier buffers
-can be released and cyclic refill can progress.
+An indirect regular RQ with `timeout_us: 0` rejects a batch larger than its slot count.
+A positive timeout allows partial bursts. Receive errors may produce partial indirect
+bursts even with `timeout_us: 0`.
 
 Discarded segments report a null packet pointer and their consumed byte count, including
 zero when the packet ends earlier. Raw, pcap, and S3 writers represent discarded spans

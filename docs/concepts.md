@@ -494,12 +494,9 @@ the CPU or the GPU:
   Recommended on integrated GPUs (NVIDIA GB10 / DGX Spark), where the
   NIC cannot peer-DMA into device memory.
 - `host`: regular CPU memory (not recommended for hot paths).
-- `null`: no backing memory. In raw ibverbs RX scatter lists, the NIC discards this
-  segment's bytes. Set the region's `buf_size` to skip headers or an unwanted span before
-  retained data. `buf_size` is required only when another MR follows; the final null MR
-  can omit it or use `0` to discard the remainder. Buffer count, access, and affinity are
-  ignored. The application receives a null segment pointer and the discarded byte count,
-  and still releases the burst.
+- `null`: discards a packet span in raw ibverbs RX without allocating storage. The segment
+  reports a null pointer and the discarded length; release the burst normally. See the
+  [configuration details](api-reference/configuration.md#example-discard-headers-before-retaining-the-payload).
 
 
 The size of the memory region (`buf_size`) dictates the largest
