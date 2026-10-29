@@ -12,7 +12,7 @@ extern "C" const daqiri::detail::RawVerbsApi* daqiri_get_raw_verbs_api_v1(uint32
   static const daqiri::detail::RawVerbsApi api{1, sizeof(daqiri::detail::RawVerbsApi)};
   return &api;
 }
-extern "C" const daqiri::detail::RdmaCmApi* daqiri_get_cm_verbs_api_v1(uint32_t, size_t) {
+extern "C" const daqiri::detail::RdmaCmApi* daqiri_get_cm_verbs_api_v2(uint32_t, size_t) {
   return nullptr;  // Models a glue DSO that rejects the requested ABI.
 }
 #endif

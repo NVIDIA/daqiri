@@ -75,6 +75,7 @@ struct RdmaBurstCache {
   // timestamp storage in the tail of the pooled packet-length allocation.
   uint64_t rx_timestamp_ns = UINT64_MAX;
   uint64_t* rx_timestamps = nullptr;
+  bool scheduled = false;
 };
 static_assert(sizeof(BurstTransportHeader) <=
               ADV_NETWORK_HEADER_SIZE_BYTES - sizeof(RdmaBurstCache));
@@ -100,6 +101,18 @@ inline void rdma_set_rx_timestamp(BurstParams* burst, size_t packet, uint64_t ti
       cache.rx_timestamp_ns = timestamp_ns;
     }
   }
+}
+
+// The length-pool allocation includes a timestamp array after the lengths.
+// It is initialized lazily on the first scheduling call for each burst.
+inline constexpr size_t kRdmaBatch = 1024;
+inline constexpr size_t kRdmaPacketMetadataBytes =
+    kRdmaBatch * (sizeof(uint32_t) + sizeof(uint64_t));
+inline uint64_t* rdma_tx_timestamps(BurstParams* burst) {
+  return reinterpret_cast<uint64_t*>(burst->pkt_lens[0] + kRdmaBatch);
+}
+inline uint64_t rdma_tx_time(BurstParams* burst, int index) {
+  return rdma_burst_cache(burst).scheduled ? rdma_tx_timestamps(burst)[index] : 0;
 }
 
 class RdmaDirectLease {

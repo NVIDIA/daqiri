@@ -1770,7 +1770,7 @@ YAML settings:
 
 | Feature | DAQIRI configuration | System requirement |
 |---|---|---|
-| Scheduled packet transmission, either raw engine | `tx.accurate_send: true` and `set_packet_tx_time()` | Hardware timestamp scheduler, real-time NIC clock, and PTP synchronization with `CLOCK_REALTIME` |
+| Scheduled transmission, raw engines or RDMA RC SEND | `tx.accurate_send: true` and `set_packet_tx_time()` | Hardware timestamp scheduler, real-time NIC clock, and PTP synchronization with `CLOCK_REALTIME` |
 | DPDK packet pacing | Per-queue `pacing_mbps` greater than zero | `SEND_ON_TIMESTAMP` offload; uses the hardware timestamp scheduler |
 | ibverbs packet pacing | Per-queue `pacing_mbps` greater than zero | `RAW_PACKET` QP packet-pacing support and an accepted hardware rate limit; operates independently of timestamp scheduling |
 | Hardware RX timestamps in real-time format | `rx.hardware_timestamps: true` | `REAL_TIME_CLOCK_ENABLE=1` on the receiving adapter and PTP synchronization with `CLOCK_REALTIME` |

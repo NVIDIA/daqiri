@@ -35,6 +35,7 @@ struct FakeVerbs {
   bool fail_create_cq_ex = false;
   int poll_error = 0;
   unsigned ended_polls = 0;
+  ibv_cq_ex timed_tx{};
   ibv_qp qp{};
   std::deque<ibv_wc> rx_completions, tx_completions;
   std::atomic<unsigned> rx_polls{0}, tx_polls{0}, sends{0}, receives{0};
@@ -54,6 +55,9 @@ struct FakeVerbs {
   std::vector<rdma_cm_event> cm_events;
   size_t next_cm_event = 0;
   bool stop_when_events_drained = false;
+  bool wallclock_requested = false, timed_qp = false;
+  uint32_t requested_send_wr = 0;
+  std::vector<uint64_t> send_times;
   static FakeVerbs* current;
 
   static rdma_event_channel* create_event_channel() {
@@ -135,6 +139,11 @@ struct FakeVerbs {
     return current->created_cqs++ == 0 ? &current->rx : &current->tx;
   }
   static ibv_cq_ex* create_cq_ex(ibv_context*, ibv_cq_init_attr_ex* attr) {
+    if (!(attr->wc_flags & IBV_WC_EX_WITH_BYTE_LEN)) {
+      ++current->created_cqs;
+      current->wallclock_requested = true;
+      return &current->timed_tx;
+    }
     require((attr->wc_flags &
              (IBV_WC_EX_WITH_BYTE_LEN | IBV_WC_EX_WITH_COMPLETION_TIMESTAMP_WALLCLOCK)) ==
                 (IBV_WC_EX_WITH_BYTE_LEN | IBV_WC_EX_WITH_COMPLETION_TIMESTAMP_WALLCLOCK),
@@ -176,6 +185,10 @@ struct FakeVerbs {
       return ((timestamp / 1000000000ULL) << 32) | (timestamp % 1000000000ULL);
     }
     return timestamp;
+}
+  static int create_timed_qp(rdma_cm_id* id, ibv_pd* pd, ibv_qp_init_attr* attr) {
+    current->timed_qp = true;
+    return create_qp(id, pd, attr);
   }
   static int create_qp(rdma_cm_id* id, ibv_pd*, ibv_qp_init_attr* attr) {
     // A real-time RX CQ cannot share a QP with the legacy, device-clock TX CQ.
@@ -185,6 +198,7 @@ struct FakeVerbs {
       return -1;
     }
     current->requested_inline = attr->cap.max_inline_data;
+    current->requested_send_wr = attr->cap.max_send_wr;
     // The provider can return more capacity than requested.
     attr->cap.max_inline_data = attr->cap.max_inline_data ? 160 : 0;
     id->qp = &current->qp;
@@ -217,6 +231,11 @@ struct FakeVerbs {
     current->last_flags = wr->send_flags;
     ++current->sends;
     return 0;
+  }
+  static int post_timed_send(ibv_qp* qp, ibv_send_wr* wr, uint64_t time) {
+    const int result = post_send(qp, wr, nullptr);
+    if (!result) current->send_times.push_back(time);
+    return result;
   }
   static int post_recv(ibv_qp*, ibv_recv_wr* wr, ibv_recv_wr**) {
     std::lock_guard<std::mutex> lock(current->mutex);
@@ -265,7 +284,7 @@ class RdmaEnginePollingTestPeer {
   Ring* rx_ring = nullptr;
 
  public:
-  RdmaEnginePollingTestPeer(bool direct_rx, bool direct_tx, bool timestamps = false,
+  RdmaEnginePollingTestPeer(bool direct_rx, bool direct_tx, bool accurate_send = false, bool timestamps = false,
                             bool realtime_supported = true)
       : params(engine.server_q_params_.try_emplace(&listener, 1).first->second[0]) {
     FakeVerbs::current = &fake;
@@ -277,6 +296,7 @@ class RdmaEnginePollingTestPeer {
     api.wc_read_opcode = &FakeVerbs::read_opcode;
     api.wc_read_byte_len = &FakeVerbs::read_byte_len;
     api.wc_read_completion_wallclock_ns = &FakeVerbs::read_timestamp;
+    api.create_timed_qp = &FakeVerbs::create_timed_qp;
     api.cm_create_qp = &FakeVerbs::create_qp;
     api.destroy_cq = &FakeVerbs::destroy_cq;
     api.cm_destroy_qp = &FakeVerbs::destroy_qp;
@@ -297,6 +317,7 @@ class RdmaEnginePollingTestPeer {
     api.cm_listen = &FakeVerbs::listen;
     api.poll_cq = &FakeVerbs::poll_cq;
     api.post_send = &FakeVerbs::post_send;
+    api.post_timed_send = &FakeVerbs::post_timed_send;
     api.post_recv = &FakeVerbs::post_recv;
     api.modify_qp = &FakeVerbs::modify_qp;
     api.query_qp = &FakeVerbs::query_qp;
@@ -305,6 +326,7 @@ class RdmaEnginePollingTestPeer {
     engine.cfg_.ifs_.resize(1);
     auto& intf = engine.cfg_.ifs_[0];
     intf.rx_.hardware_timestamps_ = timestamps;
+    intf.tx_.accurate_send_ = accurate_send;
     intf.rdma_.xmode_ = RDMATransportMode::RC;
     intf.rx_.queues_.resize(1);
     intf.tx_.queues_.resize(1);
@@ -337,6 +359,9 @@ class RdmaEnginePollingTestPeer {
     require(fake.timestamps == timestamps, "timestamp CQ selection incorrect");
     require(!timestamps || (fake.rx_cq_flags & IBV_WC_EX_WITH_COMPLETION_TIMESTAMP),
             "timestamp-enabled RX must retain the legacy TX CQ's device-clock format");
+    require(fake.timed_qp == accurate_send && fake.wallclock_requested == accurate_send &&
+                fake.requested_send_wr == (accurate_send ? 2048u : 1024u),
+            "accurate SEND did not request a wall-clock CQ and WAIT capacity");
   }
 
   ~RdmaEnginePollingTestPeer() {
@@ -516,6 +541,99 @@ class RdmaEnginePollingTestPeer {
     require(engine.get_packet_rx_timestamp(&burst, 1, &timestamp_ns) == Status::NOT_SUPPORTED &&
                 timestamp_ns == 0,
             "reused burst retained an old timestamp");
+}
+
+  void timed(bool server, bool enabled) {
+    engine.launch_worker(&params, server);
+    params.ready_to_exit.store(true);
+    for (auto& [id, thread] : engine.worker_threads_) thread.join();
+    engine.worker_threads_.clear();
+    params.ready_to_exit.store(false);
+    const bool fully_direct = params.direct_rx && params.direct_tx;
+    std::array<uint64_t, kRdmaPacketMetadataBytes / sizeof(uint64_t)> metadata{};
+    std::array<char, 512> data{};
+    std::array<void*, 2> pointers{data.data(), data.data()};
+    auto* lengths = reinterpret_cast<uint32_t*>(metadata.data());
+    lengths[0] = lengths[1] = 64;
+    BurstParams burst{};
+    auto prepare = [&](RDMAOpCode opcode = RDMAOpCode::SEND, int count = 1) {
+      engine.rdma_set_header(&burst, opcode, reinterpret_cast<uintptr_t>(&id), server, count, 123,
+                             "data");
+      burst.pkts[0] = pointers.data();
+      burst.pkt_lens[0] = lengths;
+    };
+    prepare();
+    require(engine.set_packet_tx_time(nullptr, 0, 1) == Status::INVALID_PARAMETER &&
+                engine.set_packet_tx_time(&burst, -1, 1) == Status::INVALID_PARAMETER &&
+                engine.set_packet_tx_time(&burst, 1, 1) == Status::INVALID_PARAMETER,
+            "invalid timestamp arguments accepted");
+    require(engine.set_packet_tx_time(&burst, 0, 1) ==
+                (enabled ? Status::SUCCESS : Status::NOT_SUPPORTED),
+            "accurate_send option not honored");
+    if (!enabled) return;
+    constexpr uint64_t when = 1793275200123456789ULL;
+    auto submit = [&] {
+      require(engine.send_tx_burst(&burst) == Status::SUCCESS, "timed SEND failed");
+      BurstParams* pending = nullptr;
+      while (tx_ring->dequeue(reinterpret_cast<void**>(&pending))) {
+        require(engine.post_burst(&params, pending) == Status::SUCCESS, "worker timed SEND failed");
+      }
+      // One SEND CQE reclaims the operation; no WAIT success CQE is expected.
+      for (size_t p = 0; p < burst.transport_hdr.num_pkts; ++p) {
+        ibv_wc wc{};
+        wc.wr_id = fully_direct ? fake.last_send_id : burst.transport_hdr.wr_id + p;
+        wc.status = IBV_WC_SUCCESS;
+        wc.opcode = IBV_WC_SEND;
+        fake.tx_completions.push_back(wc);
+      }
+      engine.poll_completions(server, &params, false, !params.direct_tx);
+      for (size_t p = 0; p < burst.transport_hdr.num_pkts; ++p) {
+        BurstParams* result = nullptr;
+        require(engine.get_rx_burst(&result, reinterpret_cast<uintptr_t>(&id), server) ==
+                        Status::SUCCESS &&
+                    result == &burst,
+                "scheduled SEND lost its completion");
+      }
+    };
+    require(engine.set_packet_tx_time(&burst, 0, when) == Status::SUCCESS,
+            "timestamp assignment failed");
+    submit();
+    require(fake.send_times == std::vector<uint64_t>{when}, "timestamp was not posted intact");
+    // Header reuse must discard old timestamps, including a cached direct MR.
+    prepare();
+    submit();
+    require(fake.send_times.size() == 1, "reused burst retained a timestamp");
+    require(engine.set_packet_tx_time(&burst, 0, when) == Status::SUCCESS &&
+                engine.set_packet_tx_time(&burst, 0, 0) == Status::SUCCESS,
+            "timestamp clearing failed");
+    submit();
+    require(fake.send_times.size() == 1, "zero timestamp emitted a WAIT");
+    if (!params.direct_tx) {
+      prepare(RDMAOpCode::SEND, 2);
+      require(engine.set_packet_tx_time(&burst, 1, when + 1) == Status::SUCCESS &&
+                  rdma_tx_time(&burst, 0) == 0,
+              "setting one packet did not initialize the other timestamps");
+      submit();
+      require(fake.send_times.back() == when + 1 && fake.send_times.size() == 2,
+              "indirect per-packet timestamp lost");
+    } else {
+      prepare();
+      engine.set_packet_tx_time(&burst, 0, when);
+      fake.send_result = ENOMEM;
+      require(engine.send_tx_burst(&burst) == Status::GENERIC_FAILURE &&
+                  fake.send_times.size() == 1 && burst.pkts[0] == pointers.data(),
+              "failed timed post consumed ownership or committed the WAIT");
+      fake.send_result = 0;
+      submit();
+      require(fake.send_times.back() == when, "retry lost its timestamp");
+    }
+    prepare(RDMAOpCode::RECEIVE);
+    require(engine.set_packet_tx_time(&burst, 0, when) == Status::INVALID_PARAMETER,
+            "RECEIVE accepted a TX timestamp");
+    prepare();
+    params.ready_to_exit.store(true);
+    require(engine.set_packet_tx_time(&burst, 0, when) == Status::NOT_READY,
+            "disconnected connection accepted scheduling");
   }
 
   static void configuration() {
@@ -1007,20 +1125,30 @@ int main() {
   try {
     daqiri::RdmaEnginePollingTestPeer::configuration();
     {
-      daqiri::RdmaEnginePollingTestPeer failures(true, true, true);
+      daqiri::RdmaEnginePollingTestPeer failures(true, true, false, true);
       failures.connection_setup_failures();
+    }
+    for (bool rx : {false, true}) {
+      for (bool tx : {false, true}) {
+        for (bool server : {false, true}) {
+          for (bool enabled : {false, true}) {
+            daqiri::RdmaEnginePollingTestPeer timed(rx, tx, enabled);
+            timed.timed(server, enabled);
+          }
+        }
+      }
     }
     for (bool realtime_supported : {false, true}) {
       for (bool timestamps : {false, true}) {
         for (bool rx : {false, true}) {
           for (bool tx : {false, true}) {
             for (bool server : {false, true}) {
-              daqiri::RdmaEnginePollingTestPeer test(rx, tx, timestamps, realtime_supported);
+              daqiri::RdmaEnginePollingTestPeer test(rx, tx, false, timestamps, realtime_supported);
               test.timestamp_errors();
               test.batched_timestamps();
               test.run(rx, tx, server);
               if (!rx || !tx) {
-                daqiri::RdmaEnginePollingTestPeer concurrent(rx, tx, timestamps,
+                daqiri::RdmaEnginePollingTestPeer concurrent(rx, tx, false, timestamps,
                                                              realtime_supported);
                 concurrent.concurrent_worker(server);
               }

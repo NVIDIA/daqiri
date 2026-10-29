@@ -324,7 +324,7 @@ cmake --install build --prefix /opt/daqiri
 Run these build commands in the project container. The build still requires
 RDMA development headers and shared libraries to compile the glue libraries.
 Installation includes `libdaqiri_raw_verbs_glue.so.1` (verbs/mlx5) and
-`libdaqiri_cm_verbs_glue.so.1` (verbs/RDMA CM) in the library directory. Deploy
+`libdaqiri_cm_verbs_glue.so.2` (verbs/RDMA CM/mlx5) in the library directory. Deploy
 these with compatible system RDMA shared libraries. The application executable
 can link DAQIRI archives, but is not a fully static, self-contained deployment.
 
