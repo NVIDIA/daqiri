@@ -540,6 +540,7 @@ void bind_enums(py::module_ &m) {
       .value("HOST_PINNED", MemoryKind::HOST_PINNED)
       .value("HUGE", MemoryKind::HUGE)
       .value("DEVICE", MemoryKind::DEVICE)
+      .value("NULL_MR", MemoryKind::NULL_MR)
       .value("INVALID", MemoryKind::INVALID);
 
   py::enum_<StreamType>(m, "StreamType")

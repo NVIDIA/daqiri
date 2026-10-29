@@ -313,6 +313,7 @@ template <typename Config> EngineType get_engine_type(const Config &config);
  * @param idx Index of packet
  * @return Pointer to packet data
  */
+// Raw ibverbs null-MR segments return nullptr; their length counts discarded bytes.
 void *get_segment_packet_ptr(BurstParams *burst, int seg, int idx);
 
 /**
@@ -647,7 +648,8 @@ uint64_t get_burst_tot_byte(BurstParams *burst);
  * files are truncated. packet_data_offset skips bytes from the logical packet
  * data before writing, walking across all packet segments in order. Host-backed
  * packet segments are written with POSIX file APIs. CUDA device-backed segments
- * require DAQIRI_ENABLE_GDS=ON and cuFile support.
+ * require DAQIRI_ENABLE_GDS=ON and cuFile support. Null-MR spans are zero-filled,
+ * preserving logical packet offsets.
  *
  * @param burst Burst structure containing packets
  * @param absolute_path Existing absolute directory path to write into
@@ -689,7 +691,8 @@ Status daqiri_write_raw_to_file_async(BurstParams *burst,
  * exist or is empty, a classic pcap v2.4 global header is written first. If the
  * file exists, it must already contain a compatible Ethernet,
  * microsecond-resolution pcap header. PCAP writes always include full logical
- * packets across all segments; no packet-data offset is applied.
+ * packets across all segments; no packet-data offset is applied. Null-MR spans
+ * are zero-filled and included in both captured and original packet lengths.
  *
  * @param burst Burst structure containing packets
  * @param absolute_path Existing absolute directory path to write into
@@ -770,6 +773,7 @@ Status daqiri_s3_writer_create(const S3WriterConfig &config,
  * packet's logical bytes into DAQIRI-owned host memory before returning, so the
  * caller may free the burst after successful submission. No multipart upload is
  * performed; objects larger than the S3 single-PUT limit are not supported.
+ * Null-MR spans are zero-filled; packet_data_offset counts their logical bytes.
  *
  * @param writer Writer returned by daqiri_s3_writer_create()
  * @param burst Burst structure containing packets

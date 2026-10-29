@@ -43,6 +43,8 @@ static inline constexpr uint32_t MAX_NUM_RX_QUEUES = 32;
 static inline constexpr uint32_t MAX_NUM_TX_QUEUES = 32;
 static inline constexpr uint32_t MAX_INTERFACES = 4;
 static inline constexpr int MAX_NUM_SEGS = 4;
+// Bits 16..19 mark RX segments backed by a null MR rather than packet storage.
+static inline constexpr uint32_t DAQIRI_BURST_FLAG_NULL_SEGMENT_SHIFT = 16;
 static inline constexpr uint32_t DAQIRI_BURST_FLAG_REORDERED = (1U << 28);
 static inline constexpr uint32_t DAQIRI_BURST_FLAG_REORDER_TIMEOUT = (1U << 29);
 static inline constexpr uint32_t DAQIRI_BURST_FLAG_DIRECT_PLACED = (1U << 30);
@@ -200,7 +202,7 @@ struct RawUdpEndpointConfig {
   uint32_t mtu_ = 1514;  // Maximum L2 frame bytes, excluding Ethernet FCS.
 };
 
-enum class MemoryKind { HOST, HOST_PINNED, HUGE, DEVICE, INVALID };
+enum class MemoryKind { HOST, HOST_PINNED, HUGE, DEVICE, INVALID, NULL_MR };
 
 struct ExternalMemoryRegion {
   void* data = nullptr;
@@ -295,6 +297,8 @@ inline MemoryKind GetMemoryKindFromString(const std::string& mode_str) {
     return MemoryKind::HUGE;
   } else if (mode_str == "device") {
     return MemoryKind::DEVICE;
+  } else if (mode_str == "null") {
+    return MemoryKind::NULL_MR;
   }
 
   return MemoryKind::INVALID;
@@ -682,7 +686,8 @@ struct MemoryRegionConfig {
   MemoryKind kind_;
   uint16_t affinity_;
   uint32_t access_;
-  size_t buf_size_;
+  // Null MR: discard span; zero discards the remainder and requires the final RX segment.
+  size_t buf_size_ = 0;
   size_t adj_size_ = 0;  // Populated by driver
   size_t ttl_size_ = 0;  // Populated by driver
   size_t num_bufs_;

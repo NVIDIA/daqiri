@@ -494,6 +494,10 @@ the CPU or the GPU:
   Recommended on integrated GPUs (NVIDIA GB10 / DGX Spark), where the
   NIC cannot peer-DMA into device memory.
 - `host`: regular CPU memory (not recommended for hot paths).
+- `null`: discards a packet span in raw ibverbs RX without allocating storage. The segment
+  reports a null pointer and the discarded length; release the burst normally. See the
+  [configuration details](api-reference/configuration.md#example-discard-headers-before-retaining-the-payload).
+
 
 The size of the memory region (`buf_size`) dictates the largest
 contiguous chunk that can be stored in a single *segment*. For example,

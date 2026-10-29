@@ -15,3 +15,10 @@ The ibverbs TX test also covers shared segment pool exhaustion, reference-count
 overflow, concurrent final release, private header isolation, delayed clones,
 clone-of-clone, metadata recycling, arbitrary cancellation, cumulative completion,
 send-credit exhaustion, and CQ-error retention for one through four segments.
+
+
+`daqiri_ibverbs_rx_test` exercises regular-RQ sizing, failed RX/TX add cleanup, and
+error-CQE credit recovery with synthetic CQ/WQ memory. `daqiri_null_burst_writer_test`
+checks raw/pcap bytes, offsets, lengths, completion counts, and unmarked-pointer rejection.
+When S3 is enabled, `daqiri_null_s3_writer_test` checks real AWS SDK PutObject requests
+against a localhost HTTP fixture using dummy credentials; it does not contact AWS.

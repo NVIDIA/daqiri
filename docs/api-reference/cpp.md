@@ -56,6 +56,15 @@ substitute regular or transparent-hugepage memory when the requested hugetlb all
 unavailable; initialization fails instead. Use `MemoryKind::HOST` or `MemoryKind::HOST_PINNED` when regular host memory is
 intended. Callers supplying an external memory binding remain responsible for its backing.
 
+`MemoryKind::NULL_MR` (`kind: "null"` in YAML) discards raw ibverbs RX scatter bytes
+without allocating packet storage. Set the null `MemoryRegionConfig::buf_size_` to the
+discard span and reference its name in `CommonQueueConfig::mrs_`. A positive `buf_size_`
+is required only when another MR follows. A final null MR may use `buf_size_ = 0` to
+discard the remainder.
+A discarded segment returns `nullptr` from `get_segment_packet_ptr()` and its consumed
+byte count from `get_segment_packet_length()`. Release the burst normally. See the
+[null-region configuration example](configuration.md#example-discard-headers-before-retaining-the-payload).
+
 Only one engine may be active in a process. Calling `daqiri_init()` again before
 `shutdown()` returns `Status::INTERNAL_ERROR` and leaves the running engine unchanged.
 After `shutdown()` completes, a later `daqiri_init()` creates a fresh engine instance and
@@ -730,6 +739,9 @@ pcap capture. Raw writes create one output file per packet named
 `<file_prefix>_<packet_index>` and truncate existing files. PCAP writes append full
 packets to `<file_prefix>.pcap`; DAQIRI writes the pcap headers directly and does not
 depend on `libpcap`.
+
+Raw, pcap, and S3 writers zero-fill discarded spans while preserving logical packet lengths
+and offsets. Discarded data cannot be recovered.
 
 Host-backed packet segments use standard POSIX file writes and do not require GPUDirect
 Storage. CUDA device-backed packet segments require `DAQIRI_ENABLE_GDS=ON` and working

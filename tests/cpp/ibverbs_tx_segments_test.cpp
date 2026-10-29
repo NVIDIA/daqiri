@@ -24,6 +24,7 @@ class IbverbsEngineTxTestPeer {
   static void gathered_send(int segments, bool endpoint, bool direct, bool wait) {
     IbverbsEngine engine;
     IbvTxQueue q;
+    q.port_id = q.queue_id = 0;
     constexpr uint32_t kBlocks = 16;
     constexpr uint32_t kBlockBytes = 64;
     alignas(64) std::array<uint8_t, kBlocks * kBlockBytes> sq;
@@ -182,6 +183,7 @@ class IbverbsEngineTxTestPeer {
     engine.cfg_.tx_meta_buffers_ = engine.cfg_.rx_meta_buffers_ = 16;
     require(engine.initialize_burst_pools(), "metadata setup failed");
     IbvTxQueue q;
+    q.port_id = q.queue_id = 0;
     q.num_segs = segments;
     q.num_slots = 4;
     q.state = ResourceState::ACTIVE;
@@ -250,6 +252,7 @@ class IbverbsEngineTxTestPeer {
     // its metadata without releasing the source queue's references.
     {
       IbvTxQueue cyclic;
+      cyclic.port_id = 0;
       cyclic.queue_id = 1;
       cyclic.num_segs = segments;
       cyclic.num_slots = 4;
@@ -512,6 +515,7 @@ class IbverbsEngineTxTestPeer {
   static void validation() {
     IbverbsEngine engine;
     IbvTxQueue q;
+    q.port_id = q.queue_id = 0;
     q.num_segs = 3;
     q.regions.resize(3);
     for (auto& region : q.regions) region.slot_size = 65536;

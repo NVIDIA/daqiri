@@ -109,6 +109,10 @@ runtime binding.
       the integrated GPU in a hybrid-GPU system such as IGX Thor. On discrete-GPU systems,
       prefer `device` for high-throughput RX/TX paths.
     - `host`: Regular CPU memory (not recommended)
+    - `null`: Discards bytes in raw ibverbs RX without allocating storage.
+      `num_bufs`, `affinity`, and `access` may be omitted and are ignored with a warning
+      when supplied. No external binding is allowed. The kind must be quoted as
+      `"null"`; YAML null values such as a blank value, `~`, or unquoted `null` are invalid.
   With the raw ibverbs engine, DAQIRI-owned `huge` regions declared in the startup configuration
   and having the same NUMA affinity share a hugetlb arena. DAQIRI chooses the available page size
   that can back the regions with the least rounding, while registering every region separately.
@@ -166,8 +170,51 @@ runtime binding.
   reported by the demonstrated ConnectX-7 device.
   - type: `integer`
 - **`buf_size`**: Size of each buffer in bytes. Should match the expected packet size, or
-  the segment size when using header-data split.
+  the segment size when using header-data split. For `kind: "null"`, `buf_size` is an
+  unsigned 32-bit discard length. It must be positive when another region follows;
+  a final null region may omit it or use `0` to discard the remainder.
   - type: `integer`
+
+### Example: Discard headers before retaining the payload
+
+Set the null region's `buf_size` to the number of bytes to discard before the payload:
+
+```yaml
+memory_regions:
+  - name: DISCARD
+    kind: "null"
+    buf_size: 42
+  - name: PAYLOAD
+    kind: device
+    affinity: 0
+    access: [local]
+    num_bufs: 8192
+    buf_size: 4096
+```
+
+Reference the regions by name in the RX queue. The NIC discards the first 42 bytes
+and writes the payload directly to GPU memory:
+
+```yaml
+memory_regions:
+  - DISCARD
+  - PAYLOAD
+```
+
+Null entries count toward the four-segment limit and force a regular RQ. Its slot count
+comes from the smallest retained region's `num_bufs`, rounded down to a power of two and
+capped at 32768. A discard-only queue uses at least 256 receive slots,
+rounded up to a power of two large enough for `batch_size`, up to 32768 slots.
+An indirect regular RQ with `timeout_us: 0` rejects a batch larger than its slot count.
+A positive timeout allows partial bursts. Receive errors may produce partial indirect
+bursts even with `timeout_us: 0`.
+
+Discarded segments report a null packet pointer and their consumed byte count, including
+zero when the packet ends earlier. Raw, pcap, and S3 writers represent discarded spans
+with zero-filled bytes, preserving packet lengths and offsets. Free each burst as usual.
+Null regions cannot be used for TX, reorder input/output, or socket/RDMA/DPDK queues. Fixed discard lengths contribute
+to automatic MTU sizing; an unbounded final discard does not describe a maximum wire size,
+so configure the netdev MTU for the expected frames when there is no matching local TX queue.
 
 ### Example: Header-Data Split
 

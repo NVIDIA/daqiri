@@ -1131,6 +1131,19 @@ int IbverbsEngine::mr_access_to_ibv(uint32_t access) {
 Status IbverbsEngine::register_mr(struct ibv_pd* pd, const std::string& mr_name, uint8_t** out_base,
                                   uint32_t* out_lkey, struct ibv_mr** out_mr) {
   const auto& mr = cfg_.mrs_[mr_name];
+  if (mr.kind_ == MemoryKind::NULL_MR) {
+    auto* null_mr = verbs_->alloc_null_mr(pd);
+    if (null_mr == nullptr) {
+      DAQIRI_LOG_ERROR("Could not allocate null MR '{}': {}", mr_name, strerror(errno));
+      return Status::NOT_SUPPORTED;
+    }
+    registered_mrs_.push_back(null_mr);
+    registered_mrs_by_name_[mr_name].push_back(null_mr);
+    *out_base = nullptr;
+    *out_lkey = null_mr->lkey;
+    *out_mr = null_mr;
+    return Status::SUCCESS;
+  }
   void* base = ar_[mr_name].ptr_;
   if (base == nullptr) {
     DAQIRI_LOG_CRITICAL("MR {} was not allocated", mr_name);
@@ -1290,7 +1303,9 @@ Status IbverbsEngine::register_rx_mr(IbvRxQueue& q) {
     q.registrations.push_back(registration);
     const auto& mr = cfg_.mrs_[name];
     r.slot_size = static_cast<uint32_t>(mr.adj_size_);
-    r.seg_len = static_cast<uint32_t>(mr.buf_size_);
+    r.seg_len = mr.kind_ == MemoryKind::NULL_MR && mr.buf_size_ == 0
+                    ? UINT16_MAX
+                    : static_cast<uint32_t>(mr.buf_size_);
     q.regions.push_back(r);
   }
   q.mr_base = q.regions[0].base;
@@ -1403,7 +1418,13 @@ Status IbverbsEngine::create_regular_rq(IbvRxQueue& q) {
   // CQE wqe_counter recovers the slot via `& (num_wqe - 1)`.
   uint64_t fit = UINT64_MAX;
   for (const std::string& name : q.mr_names) {
-    fit = std::min<uint64_t>(fit, cfg_.mrs_[name].num_bufs_);
+    if (cfg_.mrs_[name].kind_ != MemoryKind::NULL_MR) {
+      fit = std::min<uint64_t>(fit, cfg_.mrs_[name].num_bufs_);
+    }
+  }
+  // A discard-only queue needs receive credits but no backing buffer pool.
+  if (fit == UINT64_MAX) {
+    fit = next_power_of_two(static_cast<size_t>(std::max(256, q.batch_size)));
   }
   // The regular RQ holds one packet per WQE (unlike MPRQ's hundreds of strides
   // per WQE), so deep buffering needs many WQEs -- allow up to 64K so the RQ
@@ -1415,6 +1436,14 @@ Status IbverbsEngine::create_regular_rq(IbvRxQueue& q) {
   if (q.num_wqe < MIN_NUM_WQE) {
     DAQIRI_LOG_CRITICAL("Regular RQ q{}: too few buffers ({} < {})", q.queue_id, q.num_wqe,
                         MIN_NUM_WQE);
+    return Status::INVALID_PARAMETER;
+  }
+  if (q.poll_mode == QueuePollMode::INDIRECT && q.timeout_us == 0 &&
+      static_cast<uint64_t>(q.batch_size) > q.num_wqe) {
+    DAQIRI_LOG_ERROR(
+        "Regular RQ q{} has {} slots but batch_size is {}; lower batch_size, "
+        "increase retained-region num_bufs, or configure timeout_us",
+        q.queue_id, q.num_wqe, q.batch_size);
     return Status::INVALID_PARAMETER;
   }
   q.strides_per_wqe = 1;  // one packet per WQE; reuses the stride-free reclaim
@@ -4114,6 +4143,9 @@ Status IbverbsEngine::setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf,
                                      const RxQueueConfig& qcfg) {
   q.port_id = intf.port_id_;
   q.queue_id = qcfg.common_.id_;
+  if (!validate_queue_memory_regions(cfg_, qcfg.common_, true)) {
+    return Status::INVALID_PARAMETER;
+  }
   q.poll_mode = qcfg.poll_mode_;
   q.batch_size = q.poll_mode == QueuePollMode::DIRECT ? static_cast<int>(kDirectPollMaxBatch)
                                                       : std::max(1, qcfg.common_.batch_size_);
@@ -4135,10 +4167,12 @@ Status IbverbsEngine::setup_rx_queue(IbvRxQueue& q, const InterfaceConfig& intf,
   q.num_segs = static_cast<int>(q.mr_names.size());
   // Separate destinations require a regular RQ scatter list. MPRQ can only
   // receive into one region, even when DAQIRI_IBV_STRIDING requests it.
-  q.striding = q.num_segs == 1;
+  const bool single_stored_region =
+      q.num_segs == 1 && cfg_.mrs_[q.mr_name].kind_ != MemoryKind::NULL_MR;
+  q.striding = single_stored_region;
   q.split_boundary = q.num_segs > 1 ? static_cast<int>(cfg_.mrs_[q.mr_name].buf_size_) : 0;
   if (const char* s = getenv("DAQIRI_IBV_STRIDING")) {
-    if (q.num_segs == 1) {
+    if (single_stored_region) {
       q.striding = (s[0] != '0');
     } else if (s[0] != '0') {
       DAQIRI_LOG_WARN(
@@ -4254,7 +4288,8 @@ void IbverbsEngine::initialize() {
   for (auto& mr : cfg_.mrs_) {
     // MR registrations need a page-rounded allocation span, but individual packet
     // slots do not. Keep slot spacing close to the configured packet/segment size.
-    mr.second.adj_size_ = next_power_of_two(mr.second.buf_size_);
+    mr.second.adj_size_ =
+        mr.second.kind_ == MemoryKind::NULL_MR ? 0 : next_power_of_two(mr.second.buf_size_);
   }
 
   if (allocate_memory_regions() != Status::SUCCESS) {
@@ -4451,6 +4486,11 @@ bool IbverbsEngine::rx_alloc_burst(IbvRxQueue* q) {
   b->hdr.hdr.num_pkts = 0;
   b->hdr.hdr.num_segs = q->num_segs;
   b->hdr.hdr.burst_flags = 0;
+  for (size_t seg = 0; seg < q->regions.size(); ++seg) {
+    if (q->regions[seg].base == nullptr) {
+      b->hdr.hdr.burst_flags |= 1U << (DAQIRI_BURST_FLAG_NULL_SEGMENT_SHIFT + seg);
+    }
+  }
   init_burst_segment_arrays(b);
   q->cur_n = 0;
   return true;
@@ -4515,6 +4555,7 @@ Status IbverbsEngine::rx_poll_queue(IbvRxQueue* q, BurstParams** direct_burst) {
   const uint32_t start_ci = q->cq_ci;
   uint32_t published_ci = start_ci;
   uint32_t processed = 0;
+  bool regular_error = false;
   auto cqe_at = [&](uint32_t ci) {
     // For 128B CQEs the 64B CQE is in the second half.
     return reinterpret_cast<struct mlx5_cqe64*>(cq_buf + (ci & (cqe_cnt - 1)) * cqe_size +
@@ -4603,6 +4644,14 @@ Status IbverbsEngine::rx_poll_queue(IbvRxQueue* q, BurstParams** direct_burst) {
                            q->queue_id, opcode, ecqe->syndrome, ecqe->vendor_err_synd);
         }
         q->dbg_err++;
+        if (!q->striding) {
+          regular_error = true;
+          // An error CQE consumes one regular-RQ WQE without handing a packet
+          // to the caller. Return that credit so cyclic refill cannot stick.
+          const uint32_t slot = be16toh(cqe64->wqe_counter) & wqe_mask;
+          release_strides(*q, slot, 1, false);
+          devx_advance_producer(*q);
+        }
         continue;
       }
 
@@ -4653,7 +4702,8 @@ Status IbverbsEngine::rx_poll_queue(IbvRxQueue* q, BurstParams** direct_burst) {
       for (int seg = 0; seg < q->num_segs; ++seg) {
         const auto& reg = q->regions[seg];
         const uint32_t seg_len = std::min(remaining, reg.seg_len);
-        q->cur_burst->pkts[seg][n] = reg.base + static_cast<size_t>(region) * reg.slot_size;
+        q->cur_burst->pkts[seg][n] =
+            reg.base ? reg.base + static_cast<size_t>(region) * reg.slot_size : nullptr;
         q->cur_burst->pkt_lens[seg][n] = seg_len;
         remaining -= seg_len;
       }
@@ -4703,6 +4753,11 @@ Status IbverbsEngine::rx_poll_queue(IbvRxQueue* q, BurstParams** direct_burst) {
       devx_advance_producer(*q);
     }
   }
+
+  // A failed WQE can sit behind valid packets retained in this unfinished
+  // burst. Publish those packets even with timeout_us=0, so the caller can
+  // release the earlier slots and cyclic refill can reach the failed WQE.
+  if (!direct && regular_error) rx_flush_burst(q);
 
   // Publish the CQ consumer index for any CQEs drained this pass.
   if (q->cq_ci != published_ci) {
@@ -6719,6 +6774,14 @@ Status IbverbsEngine::add_tx_queue_async(int port, const TxQueueConfig& config,
 
 Status IbverbsEngine::allocate_runtime_mr(MemoryRegionConfig config,
                                           const ExternalMemoryRegion* binding) {
+  if (!config.name_.empty() && config.kind_ == MemoryKind::NULL_MR) {
+    if (binding != nullptr || config.buf_size_ > UINT32_MAX) return Status::INVALID_PARAMETER;
+    config.num_bufs_ = config.adj_size_ = config.ttl_size_ = 0;
+    config.access_ = config.affinity_ = 0;
+    config.owned_ = true;
+    cfg_.mrs_.emplace(config.name_, config);
+    return Status::SUCCESS;
+  }
   if (config.name_.empty() || config.buf_size_ == 0 || config.num_bufs_ == 0 ||
       config.kind_ == MemoryKind::INVALID) {
     return Status::INVALID_PARAMETER;
@@ -8447,14 +8510,17 @@ Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
 
 Status IbverbsEngine::setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf,
                                      const TxQueueConfig& qcfg) {
+  q.port_id = intf.port_id_;
+  q.queue_id = qcfg.common_.id_;
+  if (!validate_queue_memory_regions(cfg_, qcfg.common_, false)) {
+    return Status::INVALID_PARAMETER;
+  }
   if ((qcfg.buffer_mode_ != TxBufferMode::SHARED && qcfg.buffer_mode_ != TxBufferMode::CYCLIC) ||
       (qcfg.buffer_mode_ == TxBufferMode::SHARED && qcfg.poll_mode_ != QueuePollMode::INDIRECT) ||
       (qcfg.buffer_mode_ == TxBufferMode::CYCLIC && qcfg.max_inflight_sends_ != 0))
     return Status::INVALID_PARAMETER;
   if (qcfg.buffer_mode_ == TxBufferMode::SHARED)
     q.shared_tx = std::make_unique<detail::SharedTxState>();
-  q.port_id = intf.port_id_;
-  q.queue_id = qcfg.common_.id_;
   q.accurate_send = intf.tx_.accurate_send_;
   q.poll_mode = qcfg.poll_mode_;
   q.batch_size = q.poll_mode == QueuePollMode::DIRECT ? 1 : std::max(1, qcfg.common_.batch_size_);

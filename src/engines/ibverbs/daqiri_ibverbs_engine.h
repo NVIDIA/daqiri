@@ -239,8 +239,8 @@ struct IbvRxQueue {
   std::atomic<ResourceState> state{ResourceState::CREATING};
   std::atomic<uint64_t> active_users{0};
   int if_idx = 0;
-  int port_id = 0;
-  int queue_id = 0;
+  int port_id = -1;
+  int queue_id = -1;
   int cpu_core = -1;
   int batch_size = 1;
   uint64_t timeout_us = 0;
@@ -392,8 +392,8 @@ struct IbvRxQueue {
 struct IbvTxQueue {
   std::atomic<ResourceState> state{ResourceState::CREATING};
   std::atomic<uint64_t> active_users{0};
-  int port_id = 0;
-  int queue_id = 0;
+  int port_id = -1;
+  int queue_id = -1;
   QueuePollMode poll_mode = QueuePollMode::INDIRECT;
   int cpu_core = -1;
   int batch_size = 1;
@@ -584,6 +584,7 @@ class IbverbsEngine : public Engine {
 
  private:
   friend class IbverbsEngineTxTestPeer;
+  friend class IbverbsEngineRxTestPeer;
 
   const detail::RawVerbsApi* verbs_ = nullptr;
   struct PortSteering;
