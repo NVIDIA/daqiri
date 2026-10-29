@@ -101,12 +101,12 @@ Reference material for the DAQIRI codebase:
 
 ### Agent-assisted onboarding
 
-The [DAQIRI onboarding skill](.agents/skills/daqiri-onboarding/SKILL.md) is
-included under `.agents/skills/daqiri-onboarding/`. In a skill-enabled agent
+The [Bartender onboarding skill](.agents/skills/bartender/SKILL.md) is
+included under `.agents/skills/bartender/`. In a skill-enabled agent
 session opened in this checkout, start with:
 
 ```text
-Use $daqiri-onboarding to help me generate and validate my first DAQIRI configuration.
+Use $bartender to help me generate and validate my first DAQIRI configuration.
 ```
 
 The skill resumes from an existing setup and uses this checkout's documentation,
