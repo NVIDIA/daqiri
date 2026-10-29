@@ -75,7 +75,7 @@ class GlueLibrary {
       dlclose(handle);
       return nullptr;
     }
-    const Api* candidate = getter(1, sizeof(Api));
+    const Api* candidate = getter(Api::kAbiVersion, sizeof(Api));
     if (candidate == nullptr || !candidate->valid()) {
       error = "Incompatible or incomplete RDMA glue API in " + path;
       dlclose(handle);

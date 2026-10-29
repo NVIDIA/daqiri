@@ -164,6 +164,9 @@ if(DAQIRI_IBVERBS_DLOPEN AND TARGET daqiri_raw_verbs_glue)
       set_target_properties(${fixture_target} PROPERTIES
         OUTPUT_NAME daqiri_${kind}_verbs_glue SOVERSION 1
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${fixture}")
+      if(kind STREQUAL "cm")
+        set_target_properties(${fixture_target} PROPERTIES SOVERSION 2)
+      endif()
       add_dependencies(daqiri_rdma_glue_test ${fixture_target})
     endforeach()
     if(fixture STREQUAL "incompatible")

@@ -4,6 +4,9 @@
 // Define DAQIRI_RDMA_FUNCTION(symbol, member) before including this file.
 DAQIRI_RDMA_FUNCTION(ibv_alloc_pd, alloc_pd)
 DAQIRI_RDMA_FUNCTION(ibv_create_cq, create_cq)
+DAQIRI_RDMA_FUNCTION(ibv_create_cq_ex, create_cq_ex)
+DAQIRI_RDMA_FUNCTION(daqiri::detail::create_timed_qp, create_timed_qp)
+DAQIRI_RDMA_FUNCTION(daqiri::detail::post_timed_send, post_timed_send)
 DAQIRI_RDMA_FUNCTION(ibv_dealloc_pd, dealloc_pd)
 DAQIRI_RDMA_FUNCTION(ibv_dereg_mr, dereg_mr)
 DAQIRI_RDMA_FUNCTION(ibv_destroy_cq, destroy_cq)

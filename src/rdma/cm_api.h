@@ -11,8 +11,14 @@
 
 namespace daqiri::detail {
 
+// Provider-specific operations stay behind the glue boundary, including in
+// builds that do not link the engines to libmlx5/libibverbs.
+int create_timed_qp(rdma_cm_id* id, ibv_pd* pd, ibv_qp_init_attr* attr);
+int post_timed_send(ibv_qp* qp, ibv_send_wr* wr, uint64_t timestamp_ns);
+
 // Private glue ABI. Bump the version when the function table changes.
 struct RdmaCmApi {
+  static constexpr uint32_t kAbiVersion = 2;
   uint32_t abi_version;
   size_t struct_size;
 #define DAQIRI_RDMA_FUNCTION(symbol, member) decltype(&::symbol) member;
@@ -20,7 +26,7 @@ struct RdmaCmApi {
 #undef DAQIRI_RDMA_FUNCTION
 
   bool valid() const {
-    if (abi_version != 1 || struct_size != sizeof(RdmaCmApi)) {
+    if (abi_version != kAbiVersion || struct_size != sizeof(RdmaCmApi)) {
       return false;
     }
 #define DAQIRI_RDMA_FUNCTION(symbol, member) \
@@ -38,5 +44,5 @@ const RdmaCmApi* load_cm_api(std::string& error);
 
 }  // namespace daqiri::detail
 
-extern "C" const daqiri::detail::RdmaCmApi* daqiri_get_cm_verbs_api_v1(uint32_t abi_version,
+extern "C" const daqiri::detail::RdmaCmApi* daqiri_get_cm_verbs_api_v2(uint32_t abi_version,
                                                                        size_t struct_size);

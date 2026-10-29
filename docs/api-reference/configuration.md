@@ -778,6 +778,20 @@ PTP-synchronized. DAQIRI requires ConnectX-7 or later for send-on-timestamp.
 - type: `boolean`
 - default: `false`
 
+Accurate send also supports RDMA `SEND` operations on `roce://` endpoints,
+in direct and indirect TX modes. The WAIT gates the QP send queue without an
+RC-only restriction; normal transport connection and addressing requirements apply.
+Set `accurate_send: true` under the sending
+interface's `tx` section before connecting. Connection setup fails if the mlx5
+device lacks wait-on-time or a real-time clock; there is no software timing fallback.
+Call `set_packet_tx_time()` after setting the RDMA header and acquiring buffers.
+Zero clears a packet's timestamp; setting a new RDMA header clears all timestamps
+on that burst. Timestamps must be within the hardware's approximately eight-second
+cyclic window and submitted early enough to reach the NIC before the target time.
+A scheduled SEND gates subsequent SENDs on the same connection. RC flow control,
+receiver readiness, and retransmissions can delay delivery beyond that time.
+Linux UDP/TCP sockets do not support this scheduling API.
+
 ## Complete Example (Raw Ethernet, Header-Data Split)
 
 ```yaml

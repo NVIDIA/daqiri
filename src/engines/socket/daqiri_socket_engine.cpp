@@ -508,6 +508,12 @@ void SocketEngine::free_tx_burst(BurstParams* burst) {
 }
 
 Status SocketEngine::set_packet_tx_time(BurstParams* burst, int idx, uint64_t time) {
+#if DAQIRI_ENGINE_RDMA
+  if (is_roce_protocol()) {
+    return roce_engine_ != nullptr ? roce_engine_->set_packet_tx_time(burst, idx, time)
+                                   : roce_not_initialized("set_packet_tx_time");
+  }
+#endif
   return Status::NOT_SUPPORTED;
 }
 

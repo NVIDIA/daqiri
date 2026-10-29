@@ -727,6 +727,14 @@ precise timed transmission require ConnectX-7 or later:
 daqiri::set_packet_tx_time(burst, idx, ptp_timestamp_ns);
 ```
 
+RDMA `SEND` operations also support timed transmission with
+`tx.accurate_send: true`, for both direct and indirect TX queues on supported
+mlx5 hardware. Set the RDMA header and acquire buffers before setting timestamps.
+Passing zero clears a timestamp; `rdma_set_header()` clears scheduling when reusing
+a burst. Schedule within the NIC's approximately eight-second cyclic window and
+submit ahead of the target time. Subsequent SENDs on that connection wait behind
+the scheduled SEND. RC backpressure and retries can delay transmission further.
+
 `ptp_timestamp_ns` is an unsigned 64-bit PTP epoch-nanosecond value in the same clock
 domain as a PTP-synchronized `CLOCK_REALTIME`. Device-clock ticks are not accepted.
 **WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or system clock

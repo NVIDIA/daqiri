@@ -419,6 +419,15 @@ are direct, only the benchmark role thread services data-path work. Small SENDs
 from `huge` or `host_pinned` memory are inlined when they fit the QP's returned
 inline capacity (128 bytes requested); GPU messages use DMA.
 
+RDMA applications can enable `tx.accurate_send: true` and call
+`set_packet_tx_time()` before submitting a SEND to schedule it on supported mlx5
+hardware. Both TX polling modes are supported. This requires a PTP-synchronized
+real-time NIC clock and a timestamp submitted ahead of its deadline, within the
+approximately eight-second hardware window. RC backpressure or retries can delay
+the SEND beyond its scheduled time. The benchmark sends immediately unless the
+application explicitly assigns timestamps; enabling the option alone does not pace
+traffic. See [Accurate Send](../api-reference/configuration.md#accurate-send).
+
 For application round-trip latency, `tests/platform/rdma_latency.cpp` provides a
 hardware-only RC SEND ping-pong test. It preallocates registered handles, echoes
 from the receive buffer without copying, and validates server payloads after SEND
