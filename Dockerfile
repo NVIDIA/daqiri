@@ -197,6 +197,8 @@ RUN curl -fsSL https://fast.dpdk.org/rel/dpdk-${DPDK_VERSION}.tar.xz -o /tmp/dpd
 RUN apt-get update && apt-get install -y --no-install-recommends \
     mlnx-ofed-kernel-utils \
     mft \
+    ethtool \
+    iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
 ARG DAQIRI_ENABLE_OTEL_METRICS
@@ -321,9 +323,14 @@ RUN cmake -S . -B build \
       -DDAQIRI_ENABLE_S3=${DAQIRI_ENABLE_S3} \
       -DDAQIRI_ENGINE="${DAQIRI_ENGINE}" \
     && cmake --build build -j "$(nproc)" \
-    && python3 scripts/check_daqiri_configs.py \
+    && mkdir -p build/driver-stubs \
+    && ln -s /usr/local/cuda/lib64/stubs/libcuda.so \
+         build/driver-stubs/libcuda.so.1 \
+    && env LD_LIBRARY_PATH="/workspace/daqiri/build/driver-stubs:${LD_LIBRARY_PATH:-}" \
+       python3 scripts/check_daqiri_configs.py \
          --validator build/tools/daqiri_config_validate \
-    && python3 scripts/check_generated_configs.py \
+    && env LD_LIBRARY_PATH="/workspace/daqiri/build/driver-stubs:${LD_LIBRARY_PATH:-}" \
+       python3 scripts/check_generated_configs.py \
          --validator build/tools/daqiri_config_validate \
     && cmake --install build
 

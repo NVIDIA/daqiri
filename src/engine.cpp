@@ -1279,6 +1279,13 @@ bool validate_network_config(const NetworkConfig& config) {
     }
 
     for (const auto& flow : intf.rx_.flows_) {
+      if (config.common_.engine_type == EngineType::IBVERBS && flow.id_ == 0) {
+        DAQIRI_LOG_ERROR(
+            "RX flow '{}' on interface '{}' must use a nonzero ID with the raw "
+            "ibverbs engine",
+            flow.name_, intf.name_);
+        pass = false;
+      }
       if (!interface_rx_flow_ids.insert(flow.id_).second) {
         DAQIRI_LOG_ERROR("Duplicate flow ID {} in interface '{}'", flow.id_, intf.name_);
         pass = false;

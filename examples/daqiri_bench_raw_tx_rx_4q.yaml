@@ -128,7 +128,7 @@ daqiri:
             - "Data_RX_GPU_3"
         flows:
         - name: "flow_0"
-          id: 0
+          id: 1
           action:
             type: queue
             id: 0
@@ -136,7 +136,7 @@ daqiri:
             udp_src: 4096
             udp_dst: 4096
         - name: "flow_1"
-          id: 1
+          id: 2
           action:
             type: queue
             id: 1
@@ -144,7 +144,7 @@ daqiri:
             udp_src: 4097
             udp_dst: 4097
         - name: "flow_2"
-          id: 2
+          id: 3
           action:
             type: queue
             id: 2
@@ -152,7 +152,7 @@ daqiri:
             udp_src: 4098
             udp_dst: 4098
         - name: "flow_3"
-          id: 3
+          id: 4
           action:
             type: queue
             id: 3

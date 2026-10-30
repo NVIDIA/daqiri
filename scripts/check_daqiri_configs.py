@@ -36,6 +36,7 @@ SEMANTIC_FIXTURE = "examples/daqiri_bench_raw_rx_reorder_seq_batch.yaml"
 ZERO_ID_FIXTURE = "examples/daqiri_bench_raw_tx_rx.yaml"
 PARSER_FIXTURE = "examples/daqiri_bench_socket_udp_tx_rx.yaml"
 FLOW_ID_DEFINITION = "          id: 100\n"
+ZERO_ID_FLOW_DEFINITION = '        - name: "flow_0"\n          id: 1\n'
 REORDER_SECTION = "        reorder_configs:\n"
 DUPLICATE_FLOW = """\
         - name: "duplicate_flow_id"
@@ -83,8 +84,17 @@ def zero_id_multi_interface_case() -> str:
     stream_type = '    stream_type: "raw"\n'
     rx_interface = '    - name: "rx_port"\n'
     bench_rx = "\nbench_rx:"
-    if source.count(stream_type) != 1 or source.count(rx_interface) != 1:
+    if (
+        source.count(stream_type) != 1
+        or source.count(rx_interface) != 1
+        or source.count(ZERO_ID_FLOW_DEFINITION) != 1
+    ):
         raise ValueError(f"{ZERO_ID_FIXTURE}: compatibility fixture markers changed")
+    source = source.replace(
+        ZERO_ID_FLOW_DEFINITION,
+        '        - name: "flow_0"\n          id: 0\n',
+        1,
+    )
     start = source.index(rx_interface)
     end = source.index(bench_rx)
     first = source[start:end].replace('"rx_port"', '"rx_port_0"')
@@ -105,6 +115,11 @@ def semantic_invalid_cases() -> dict[str, str]:
     if source.count(FLOW_ID_DEFINITION) != 1 or source.count(REORDER_SECTION) != 1:
         raise ValueError(f"{SEMANTIC_FIXTURE}: semantic fixture markers changed")
     return {
+        "zero-ibverbs-flow-id.yaml": source.replace(
+            FLOW_ID_DEFINITION,
+            "          id: 0 # INVALID_IBVERBS_FLOW_ID\n",
+            1,
+        ),
         "unknown-reorder-flow.yaml": source.replace(
             FLOW_ID_DEFINITION, "          id: 999\n", 1
         ),

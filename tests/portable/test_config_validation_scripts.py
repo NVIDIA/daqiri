@@ -45,6 +45,7 @@ invalid_markers = (
     "missing-region",
     "id: 999",
     "duplicate_flow_id",
+    "INVALID_IBVERBS_FLOW_ID",
     "UNSUPPORTED_MARKER",
 )
 return_code = 0

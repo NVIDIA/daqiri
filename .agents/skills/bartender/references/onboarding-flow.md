@@ -21,6 +21,12 @@ For configuration inputs, distinguish discovered values from user estimates or e
 | Concrete config | Run native semantic validation, then verify hardware/path prerequisites |
 | Prior benchmark output | Interpret or diagnose that run before proposing another |
 
+Before treating an existing runtime as compatible, compare its available provenance, library ABI,
+compiled engines and required installed tools with the selected checkout. If that checkout installs
+`daqiri_config_validate` but the runtime lacks it, or its ABI or provenance does not match, flag the
+runtime as stale or incompatible and propose rebuilding from the selected checkout. Do not silently
+switch to a newer branch, borrow a validator from another release, or rebuild without authorization.
+
 Do not build or launch another container when an adequate existing runtime already satisfies the request.
 
 ## Choose the path
@@ -50,6 +56,10 @@ Discover the actual validator in the build/install/runtime, show its command, ou
 Read only the selected raw or socket/RDMA benchmark guide. Show concrete commands with host/container roles, configured inputs and a bounded duration. Start RX/server before TX/client where the roles are separate. For UDP/TCP/RoCE wire tests, verify the route and namespace path rather than assume same-host endpoints cross the cable.
 
 Use the existing namespace/cross-host setup scripts only for a matching topology after reading their help and current behavior. Explain changes before applying them and plan cleanup for resources created by this run. A pre-existing namespace or container is not owned merely because its name matches an example. Do not delete namespaces containing moved interfaces without following the documented restoration procedure.
+
+Before a measured run, verify the benchmark, monitor and their direct command dependencies inside
+the actual execution context. Treat monitor diagnostics or missing samples as failure even when the
+monitor exits successfully; do not report performance from an incomplete measurement pipeline.
 
 Keep first-smoke success separate from optional performance tuning. Do not change firmware, boot settings, MTU, pause policy, clocks or routes solely because a tutorial lists an optimization. Resolve applicability, authorization and restoration before changes.
 
