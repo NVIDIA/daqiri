@@ -33,3 +33,7 @@ __pycache__/
 
 # ResNet xhost benchmark run artifacts (run_resnet_xhost.sh --results-dir)
 resnet-results/
+
+# Local onboarding profiles and durable customer-run evidence
+/demos/onboarding/local/
+/.demo-runs/

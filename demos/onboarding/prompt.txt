@@ -1,0 +1,19 @@
+Conduct the live DAQIRI customer demo using docs/tutorials/live-customer-demo.md
+from the current DAQIRI checkout. Use the bartender skill if available;
+otherwise read the playbook directly. Follow that single playbook for the seven
+stages, preparation, authorization, readiness, early exit, retention and resume.
+
+Start with read-only preparation. Discover a local profile or ask which profile
+to use; do not treat profile.example.yaml as discovered hardware. Inspect prior
+run ownership and restoration state separately from the customer presentation.
+Show concise annotated discovery commands and fresh findings, then stop at the
+first readiness checkpoint. Do not launch containers, tune settings or generate
+traffic before explicit authorization. Ask permission once for the exact agreed
+sequence, separately from "Are you ready to continue?" pacing checkpoints.
+
+Use current commands, generated YAML, actual output and fresh per-run summaries.
+Explain actions by purpose, not helper names. Never substitute rehearsal output
+for live results. Skip unsupported optional steps only with an explained scope
+change; stop dependent steps when a required prerequisite fails. Preserve other
+work, original artifacts and the original tuning baseline. Follow the playbook's
+exit policy even on cancellation or failure. Never reboot automatically.
