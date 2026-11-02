@@ -203,6 +203,16 @@ On the raw ibverbs engine, DAQIRI requests mlx5 real-time CQ timestamps only whe
 the device advertises that format. Devices without that capability stay on the
 default mlx5 device-clock CQ format, and DAQIRI converts those raw ticks to
 nanoseconds before returning them.
+For RDMA/RoCE, DAQIRI requests both device-clock and wall-clock completion
+fields so mlx5 preserves the ordinary TX CQ's clock format and converts receive
+timestamps to epoch nanoseconds. The getter never exposes packed seconds/nanoseconds.
+This works with direct, indirect, and mixed RX/TX polling modes without enabling
+accurate TX scheduling.
+Enabling `rx.hardware_timestamps` fails connection setup if the NIC or driver
+cannot create a timestamp-capable receive CQ. Timestamps are available on
+successful `RECEIVE` completions; TX completions return `NOT_SUPPORTED`.
+An RDMA timestamp describes the receive completion of the message, which may
+span multiple wire packets.
 **WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or system clock
 configuration. Timestamp values are invalid if the clocks are not PTP-synchronized.
 For reordered aggregate bursts,

@@ -42,6 +42,7 @@ struct RdmaCmApi;
 namespace daqiri {
 
 struct rdma_qp_params {
+  struct ibv_cq_ex* rx_cq_ex = nullptr;
   struct ibv_cq* rx_cq;
   struct ibv_cq* tx_cq;
   daqiri::Ring* rx_ring;
@@ -132,12 +133,7 @@ class RdmaEngine : public Engine {
   void* get_packet_ptr(BurstParams* burst, int idx) override;
   uint32_t get_packet_length(BurstParams* burst, int idx) override;
   FlowId get_packet_flow_id(BurstParams* burst, int idx) override { return 0; }
-  Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) override {
-    (void)burst;
-    (void)idx;
-    (void)timestamp_ns;
-    return Status::NOT_SUPPORTED;
-  }
+  Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) override;
   void* get_packet_extra_info(BurstParams* burst, int idx) override { return nullptr; }
   void* get_segment_packet_ptr(BurstParams* burst, int seg, int idx) override;
   uint32_t get_segment_packet_length(BurstParams* burst, int seg, int idx) override;
@@ -220,6 +216,7 @@ class RdmaEngine : public Engine {
   daqiri::ObjectPool* rx_meta = nullptr;
   daqiri::ObjectPool* tx_meta = nullptr;
   daqiri::ObjectPool* pkt_len_pool_ = nullptr;
+  bool rx_timestamp_storage_ = false;
   std::queue<daqiri::Ring*> tx_rings_;
   std::queue<daqiri::Ring*> rx_rings_;
   std::unordered_map<struct rdma_cm_id*, daqiri::Ring*> tx_rings_map_;
@@ -239,6 +236,7 @@ class RdmaEngine : public Engine {
   Status send_direct(RdmaDirectState& state, BurstParams* burst);
   Status get_direct(RdmaDirectState& state, BurstParams** burst, bool server);
   Status poll_direct(RdmaDirectState& state, bool tx, bool server);
+  int poll_rx_completion(rdma_thread_params* params, ibv_wc* wc, uint64_t* timestamp_ns);
   const RdmaDirectMr* direct_region(RdmaDirectState& state, BurstParams* burst);
   Ring* burst_pool(BurstParams* burst);
   void initialize_progress(bool is_server, rdma_thread_params* params);
@@ -257,7 +255,7 @@ class RdmaEngine : public Engine {
   int mr_access_to_ibv(uint32_t access);
   bool get_ip_from_interface(const std::string_view& if_name, sockaddr_in& addr);
   int setup_thread_params(rdma_thread_params* params, bool is_server);
-  int destroy_thread_params(rdma_thread_params* params);
+  int destroy_thread_params(rdma_thread_params* params, bool is_server = false);
   RDMAOpCode ibv_opcode_to_daqiri_opcode(ibv_wc_opcode opcode);
 };
 

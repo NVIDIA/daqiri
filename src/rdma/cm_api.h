@@ -13,6 +13,7 @@ namespace daqiri::detail {
 
 // Private glue ABI. Bump the version when the function table changes.
 struct RdmaCmApi {
+  static constexpr uint32_t kAbiVersion = 2;
   uint32_t abi_version;
   size_t struct_size;
 #define DAQIRI_RDMA_FUNCTION(symbol, member) decltype(&::symbol) member;
@@ -20,7 +21,7 @@ struct RdmaCmApi {
 #undef DAQIRI_RDMA_FUNCTION
 
   bool valid() const {
-    if (abi_version != 1 || struct_size != sizeof(RdmaCmApi)) {
+    if (abi_version != kAbiVersion || struct_size != sizeof(RdmaCmApi)) {
       return false;
     }
 #define DAQIRI_RDMA_FUNCTION(symbol, member) \

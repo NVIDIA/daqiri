@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -70,12 +71,35 @@ struct RdmaBurstCache {
   const RdmaEngine* engine = nullptr;
   RdmaDirectState* state = nullptr;
   const RdmaDirectMr* region = nullptr;
+  // Single-packet bursts need no additional allocation. Batched bursts use
+  // timestamp storage in the tail of the pooled packet-length allocation.
+  uint64_t rx_timestamp_ns = UINT64_MAX;
+  uint64_t* rx_timestamps = nullptr;
 };
 static_assert(sizeof(BurstTransportHeader) <=
               ADV_NETWORK_HEADER_SIZE_BYTES - sizeof(RdmaBurstCache));
 inline RdmaBurstCache& rdma_burst_cache(BurstParams* burst) {
   return *reinterpret_cast<RdmaBurstCache*>(reinterpret_cast<uint8_t*>(burst) +
                                             ADV_NETWORK_HEADER_SIZE_BYTES - sizeof(RdmaBurstCache));
+}
+
+inline void rdma_clear_rx_timestamps(BurstParams* burst) {
+  auto& cache = rdma_burst_cache(burst);
+  cache.rx_timestamp_ns = UINT64_MAX;
+  if (cache.rx_timestamps) {
+    std::fill_n(cache.rx_timestamps, burst->transport_hdr.num_pkts, UINT64_MAX);
+  }
+}
+
+inline void rdma_set_rx_timestamp(BurstParams* burst, size_t packet, uint64_t timestamp_ns) {
+  auto& cache = rdma_burst_cache(burst);
+  if (packet < burst->transport_hdr.num_pkts) {
+    if (cache.rx_timestamps) {
+      cache.rx_timestamps[packet] = timestamp_ns;
+    } else if (packet == 0) {
+      cache.rx_timestamp_ns = timestamp_ns;
+    }
+  }
 }
 
 class RdmaDirectLease {

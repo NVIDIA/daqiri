@@ -297,6 +297,14 @@ FlowId SocketEngine::get_packet_flow_id(BurstParams* burst, int idx) {
 }
 
 Status SocketEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) {
+  if (is_roce_protocol()) {
+#if DAQIRI_ENGINE_RDMA
+    return roce_engine_ != nullptr ? roce_engine_->get_packet_rx_timestamp(burst, idx, timestamp_ns)
+                                   : roce_not_initialized("get_packet_rx_timestamp");
+#else
+    return roce_not_initialized("get_packet_rx_timestamp");
+#endif
+  }
   (void)burst;
   (void)idx;
   (void)timestamp_ns;
