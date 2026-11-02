@@ -60,10 +60,10 @@ struct rdma_thread_params {
   // claimed connection can be overwritten by a later CONNECT_REQUEST.
   bool active = false;
   struct rdma_cm_id* client_id = nullptr;
-  struct ibv_pd* pd;
-  rdma_qp_params qp_params;
-  int if_idx;
-  int queue_idx;
+  struct ibv_pd* pd = nullptr;
+  rdma_qp_params qp_params{};
+  int if_idx = -1;
+  int queue_idx = -1;
   // Per-connection exit flag, set by the DISCONNECTED CM handler and polled
   // by rdma_thread() in its hot loop. std::atomic so the worker actually
   // observes the write (a plain bool would race under the C++ memory model
@@ -76,6 +76,7 @@ struct rdma_thread_params {
   std::atomic<bool> worker_started{false};
   bool direct_rx = false;
   bool direct_tx = false;
+  bool accurate_send = false;
   uint32_t max_inline_data = 0;
   std::atomic<uint64_t> inline_wqes{0};
   RdmaDirectState* direct_state = nullptr;
@@ -159,9 +160,7 @@ class RdmaEngine : public Engine {
     return Status::NOT_SUPPORTED;
   };
   Status get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server) override;
-  Status set_packet_tx_time(BurstParams* burst, int idx, uint64_t timestamp) override {
-    return Status::NOT_SUPPORTED;
-  };
+  Status set_packet_tx_time(BurstParams* burst, int idx, uint64_t timestamp) override;
   void free_rx_metadata(BurstParams* burst) override;
   void free_tx_metadata(BurstParams* burst) override;
   Status send_tx_burst(BurstParams* burst) override;
@@ -196,7 +195,7 @@ class RdmaEngine : public Engine {
   static constexpr int MAX_NUM_MR = 16;  // Maximum number of memory registers to exchange
   static constexpr int MAX_OUSTANDING_WR = 1024;
   static constexpr int MAX_NUM_PORTS = 4;
-  static constexpr int MAX_RDMA_BATCH = 1024;
+  static constexpr int MAX_RDMA_BATCH = kRdmaBatch;
 
   bool initialized_ = false;
   std::unordered_map<struct rdma_cm_id*, std::vector<rdma_thread_params>> server_q_params_;
@@ -251,11 +250,12 @@ class RdmaEngine : public Engine {
   void server_tx(int if_idx, int q);
   void server_rx(int if_idx, int q);
   bool ack_event(rdma_cm_event* cm_event);
+  void handle_connect_request(rdma_cm_event* event);
   void launch_worker(rdma_thread_params* params, bool is_server);
   int mr_access_to_ibv(uint32_t access);
   bool get_ip_from_interface(const std::string_view& if_name, sockaddr_in& addr);
   int setup_thread_params(rdma_thread_params* params, bool is_server);
-  int destroy_thread_params(rdma_thread_params* params, bool is_server = false);
+  int destroy_thread_params(rdma_thread_params* params);
   RDMAOpCode ibv_opcode_to_daqiri_opcode(ibv_wc_opcode opcode);
 };
 

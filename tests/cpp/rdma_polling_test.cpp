@@ -13,6 +13,7 @@
 #include <sched.h>
 #include <stdexcept>
 #include <thread>
+#include <arpa/inet.h>
 
 #include "src/engines/rdma/daqiri_rdma_engine.h"
 #include "src/rdma/cm_api.h"
@@ -29,12 +30,11 @@ struct FakeVerbs {
   ibv_cq_ex rx_ex{};
   ibv_wc current_wc{};
   static constexpr uint64_t kTimestamp = 1780000000123456789ULL;
-  bool timestamps = false;
-  bool realtime_supported = true;
+  bool timestamps = false, realtime_supported = true, fail_create_cq_ex = false;
   uint64_t rx_cq_flags = 0;
-  bool fail_create_cq_ex = false;
   int poll_error = 0;
   unsigned ended_polls = 0;
+  ibv_cq_ex timed_rx{}, timed_tx{};
   ibv_qp qp{};
   std::deque<ibv_wc> rx_completions, tx_completions;
   std::atomic<unsigned> rx_polls{0}, tx_polls{0}, sends{0}, receives{0};
@@ -44,32 +44,32 @@ struct FakeVerbs {
   unsigned last_flags = 0;
   int send_result = 0, recv_result = 0;
   uint32_t requested_inline = 0;
-  int created_cqs = 0;
-  unsigned destroyed_cqs = 0, destroyed_qps = 0;
-  unsigned connects = 0, accepts = 0, rejects = 0, destroyed_ids = 0, destroyed_channels = 0;
-  unsigned acknowledged_events = 0, server_setup_failures = 0;
+  int created_cqs = 0, destroyed_cqs = 0, fail_cq = -1;
+  bool fail_qp = false;
+  bool wallclock_requested = false, timed_qp = false;
+  uint32_t requested_send_wr = 0;
+  std::vector<uint64_t> send_times;
   rdma_event_channel channel{};
-  rdma_cm_id* created_id = nullptr;
-  sockaddr_in local_address{};
-  std::vector<rdma_cm_event> cm_events;
-  size_t next_cm_event = 0;
-  bool stop_when_events_drained = false;
+  rdma_cm_id client{};
+  rdma_cm_event event{};
+  sockaddr_in local{};
+  int events = 0, pending_events = 0, ids_destroyed = 0, channels_destroyed = 0;
+  int connects = 0, accepts = 0, rejects = 0;
+  bool fail_connect = false, unexpected_event = false;
   static FakeVerbs* current;
-
-  static rdma_event_channel* create_event_channel() {
-    current->channel.fd = -1;
+  static rdma_event_channel* create_channel() {
     return &current->channel;
   }
-  static void destroy_event_channel(rdma_event_channel*) {
-    ++current->destroyed_channels;
+  static void destroy_channel(rdma_event_channel*) {
+    ++current->channels_destroyed;
   }
   static int create_id(rdma_event_channel*, rdma_cm_id** id, void*, rdma_port_space) {
-    *id = current->created_id;
+    *id = &current->client;
     return 0;
   }
   static int destroy_id(rdma_cm_id* id) {
-    require(id->qp == nullptr, "destroyed CM ID before its QP");
-    ++current->destroyed_ids;
+    require(!id->qp && current->pending_events == 0, "CM ID destroyed before QP/event cleanup");
+    ++current->ids_destroyed;
     return 0;
   }
   static int resolve_addr(rdma_cm_id*, sockaddr*, sockaddr*, int) {
@@ -78,36 +78,29 @@ struct FakeVerbs {
   static int resolve_route(rdma_cm_id*, int) {
     return 0;
   }
-  static int get_cm_event(rdma_event_channel*, rdma_cm_event** event) {
-    if (current->next_cm_event == current->cm_events.size()) {
-      if (current->stop_when_events_drained) rdma_force_quit.store(true);
-      errno = EAGAIN;
-      return -1;
-    }
-    *event = &current->cm_events[current->next_cm_event++];
-    if ((*event)->event == RDMA_CM_EVENT_CONNECT_REQUEST) {
-      current->fail_create_cq_ex = current->server_setup_failures > 0;
-      if (current->server_setup_failures > 0) --current->server_setup_failures;
-    }
+  static sockaddr* local_addr(rdma_cm_id*) {
+    return reinterpret_cast<sockaddr*>(&current->local);
+  }
+  static int get_event(rdma_event_channel*, rdma_cm_event** event) {
+    const int n = current->events++;
+    current->event.event = n == 0                      ? RDMA_CM_EVENT_ADDR_RESOLVED
+                           : n == 1                    ? RDMA_CM_EVENT_ROUTE_RESOLVED
+                           : current->unexpected_event ? RDMA_CM_EVENT_REJECTED
+                                                       : RDMA_CM_EVENT_ESTABLISHED;
+    *event = &current->event;
+    ++current->pending_events;
     return 0;
   }
-  static int ack_cm_event(rdma_cm_event* event) {
-    ++current->acknowledged_events;
-    // A real acknowledgement frees the event. Poison its type to catch any
-    // production logging that still reads it after acknowledgement.
-    event->event = static_cast<rdma_cm_event_type>(-1);
+  static int ack(rdma_cm_event*) {
+    --current->pending_events;
     return 0;
   }
-  static const char* event_str(rdma_cm_event_type type) {
-    require(static_cast<int>(type) != -1, "read CM event after acknowledgement");
-    return "test CM event";
-  }
-  static sockaddr* get_local_addr(rdma_cm_id*) {
-    return reinterpret_cast<sockaddr*>(&current->local_address);
+  static const char* event_str(rdma_cm_event_type) {
+    return "test event";
   }
   static int connect(rdma_cm_id*, rdma_conn_param*) {
     ++current->connects;
-    return -1;
+    return current->fail_connect ? -1 : 0;
   }
   static int accept(rdma_cm_id*, rdma_conn_param*) {
     ++current->accepts;
@@ -117,11 +110,26 @@ struct FakeVerbs {
     ++current->rejects;
     return 0;
   }
-  static int bind_addr(rdma_cm_id*, sockaddr*) {
-    return 0;
+
+  static ibv_cq* create_cq(ibv_context*, int, void*, ibv_comp_channel*, int) {
+    const int n = current->created_cqs++;
+    if (n == current->fail_cq) return nullptr;
+    return n % 2 == 0 ? &current->rx : &current->tx;
   }
-  static int listen(rdma_cm_id*, int) {
-    return 0;
+  static ibv_cq_ex* create_cq_ex(ibv_context*, ibv_cq_init_attr_ex* attr) {
+    if (current->fail_create_cq_ex) {
+      errno = EOPNOTSUPP;
+      return nullptr;
+    }
+    current->wallclock_requested = !(attr->wc_flags & IBV_WC_EX_WITH_COMPLETION_TIMESTAMP);
+    const int n = current->created_cqs++;
+    if (n == current->fail_cq) return nullptr;
+    if (attr->wc_flags & IBV_WC_EX_WITH_BYTE_LEN) {
+      current->timestamps = true;
+      current->rx_cq_flags = attr->wc_flags;
+    }
+    if (attr->wc_flags & IBV_WC_EX_WITH_COMPLETION_TIMESTAMP) return &current->rx_ex;
+    return n % 2 == 0 ? &current->timed_rx : &current->timed_tx;
   }
   static int destroy_cq(ibv_cq*) {
     ++current->destroyed_cqs;
@@ -129,24 +137,6 @@ struct FakeVerbs {
   }
   static void destroy_qp(rdma_cm_id* id) {
     id->qp = nullptr;
-    ++current->destroyed_qps;
-  }
-  static ibv_cq* create_cq(ibv_context*, int, void*, ibv_comp_channel*, int) {
-    return current->created_cqs++ == 0 ? &current->rx : &current->tx;
-  }
-  static ibv_cq_ex* create_cq_ex(ibv_context*, ibv_cq_init_attr_ex* attr) {
-    require((attr->wc_flags &
-             (IBV_WC_EX_WITH_BYTE_LEN | IBV_WC_EX_WITH_COMPLETION_TIMESTAMP_WALLCLOCK)) ==
-                (IBV_WC_EX_WITH_BYTE_LEN | IBV_WC_EX_WITH_COMPLETION_TIMESTAMP_WALLCLOCK),
-            "RX CQ did not request hardware wall-clock timestamps and byte lengths");
-    if (current->fail_create_cq_ex) {
-      errno = EOPNOTSUPP;
-      return nullptr;
-    }
-    ++current->created_cqs;
-    current->timestamps = true;
-    current->rx_cq_flags = attr->wc_flags;
-    return &current->rx_ex;
   }
   static int start_poll(ibv_cq_ex* cq, ibv_poll_cq_attr*) {
     if (current->poll_error) return current->poll_error;
@@ -177,14 +167,20 @@ struct FakeVerbs {
     }
     return timestamp;
   }
+  static int create_timed_qp(rdma_cm_id* id, ibv_pd* pd, ibv_qp_init_attr* attr) {
+    require(attr->recv_cq == ibv_cq_ex_to_cq(&current->timed_rx) &&
+                attr->send_cq == ibv_cq_ex_to_cq(&current->timed_tx),
+            "timed QP requires matching wall-clock RX and TX CQs");
+    current->timed_qp = true;
+    return create_qp(id, pd, attr);
+  }
   static int create_qp(rdma_cm_id* id, ibv_pd*, ibv_qp_init_attr* attr) {
-    // A real-time RX CQ cannot share a QP with the legacy, device-clock TX CQ.
-    if (current->timestamps && current->realtime_supported &&
-        !(current->rx_cq_flags & IBV_WC_EX_WITH_COMPLETION_TIMESTAMP)) {
-      errno = EOPNOTSUPP;
+    if (current->fail_qp) return -1;
+    if (!current->timed_qp && current->timestamps && current->realtime_supported &&
+        !(current->rx_cq_flags & IBV_WC_EX_WITH_COMPLETION_TIMESTAMP))
       return -1;
-    }
     current->requested_inline = attr->cap.max_inline_data;
+    current->requested_send_wr = attr->cap.max_send_wr;
     // The provider can return more capacity than requested.
     attr->cap.max_inline_data = attr->cap.max_inline_data ? 160 : 0;
     id->qp = &current->qp;
@@ -192,7 +188,7 @@ struct FakeVerbs {
   }
   static int poll_cq(ibv_cq* cq, int, ibv_wc* wc) {
     std::lock_guard<std::mutex> lock(current->mutex);
-    const bool rx = cq == &current->rx;
+    const bool rx = cq == &current->rx || cq == ibv_cq_ex_to_cq(&current->timed_rx);
     ++(rx ? current->rx_polls : current->tx_polls);
     auto& completions = rx ? current->rx_completions : current->tx_completions;
     if (completions.empty()) return 0;
@@ -217,6 +213,11 @@ struct FakeVerbs {
     current->last_flags = wr->send_flags;
     ++current->sends;
     return 0;
+  }
+  static int post_timed_send(ibv_qp* qp, ibv_send_wr* wr, uint64_t time) {
+    const int result = post_send(qp, wr, nullptr);
+    if (!result) current->send_times.push_back(time);
+    return result;
   }
   static int post_recv(ibv_qp*, ibv_recv_wr* wr, ibv_recv_wr**) {
     std::lock_guard<std::mutex> lock(current->mutex);
@@ -265,10 +266,23 @@ class RdmaEnginePollingTestPeer {
   Ring* rx_ring = nullptr;
 
  public:
-  RdmaEnginePollingTestPeer(bool direct_rx, bool direct_tx, bool timestamps = false,
-                            bool realtime_supported = true)
+  RdmaEnginePollingTestPeer(bool direct_rx, bool direct_tx, bool accurate_send = false,
+                            bool timestamps = false, bool realtime_supported = true)
       : params(engine.server_q_params_.try_emplace(&listener, 1).first->second[0]) {
     FakeVerbs::current = &fake;
+    api.cm_create_event_channel = &FakeVerbs::create_channel;
+    api.cm_destroy_event_channel = &FakeVerbs::destroy_channel;
+    api.cm_create_id = &FakeVerbs::create_id;
+    api.cm_destroy_id = &FakeVerbs::destroy_id;
+    api.cm_resolve_addr = &FakeVerbs::resolve_addr;
+    api.cm_resolve_route = &FakeVerbs::resolve_route;
+    api.cm_get_local_addr = &FakeVerbs::local_addr;
+    api.cm_get_cm_event = &FakeVerbs::get_event;
+    api.cm_ack_cm_event = &FakeVerbs::ack;
+    api.cm_event_str = &FakeVerbs::event_str;
+    api.cm_connect = &FakeVerbs::connect;
+    api.cm_accept = &FakeVerbs::accept;
+    api.cm_reject = &FakeVerbs::reject;
     fake.realtime_supported = realtime_supported;
     api.create_cq = &FakeVerbs::create_cq;
     api.create_cq_ex = &FakeVerbs::create_cq_ex;
@@ -277,26 +291,13 @@ class RdmaEnginePollingTestPeer {
     api.wc_read_opcode = &FakeVerbs::read_opcode;
     api.wc_read_byte_len = &FakeVerbs::read_byte_len;
     api.wc_read_completion_wallclock_ns = &FakeVerbs::read_timestamp;
+    api.create_timed_qp = &FakeVerbs::create_timed_qp;
     api.cm_create_qp = &FakeVerbs::create_qp;
     api.destroy_cq = &FakeVerbs::destroy_cq;
     api.cm_destroy_qp = &FakeVerbs::destroy_qp;
-    api.cm_create_event_channel = &FakeVerbs::create_event_channel;
-    api.cm_destroy_event_channel = &FakeVerbs::destroy_event_channel;
-    api.cm_create_id = &FakeVerbs::create_id;
-    api.cm_destroy_id = &FakeVerbs::destroy_id;
-    api.cm_resolve_addr = &FakeVerbs::resolve_addr;
-    api.cm_resolve_route = &FakeVerbs::resolve_route;
-    api.cm_get_cm_event = &FakeVerbs::get_cm_event;
-    api.cm_ack_cm_event = &FakeVerbs::ack_cm_event;
-    api.cm_event_str = &FakeVerbs::event_str;
-    api.cm_get_local_addr = &FakeVerbs::get_local_addr;
-    api.cm_connect = &FakeVerbs::connect;
-    api.cm_accept = &FakeVerbs::accept;
-    api.cm_reject = &FakeVerbs::reject;
-    api.cm_bind_addr = &FakeVerbs::bind_addr;
-    api.cm_listen = &FakeVerbs::listen;
     api.poll_cq = &FakeVerbs::poll_cq;
     api.post_send = &FakeVerbs::post_send;
+    api.post_timed_send = &FakeVerbs::post_timed_send;
     api.post_recv = &FakeVerbs::post_recv;
     api.modify_qp = &FakeVerbs::modify_qp;
     api.query_qp = &FakeVerbs::query_qp;
@@ -305,6 +306,7 @@ class RdmaEnginePollingTestPeer {
     engine.cfg_.ifs_.resize(1);
     auto& intf = engine.cfg_.ifs_[0];
     intf.rx_.hardware_timestamps_ = timestamps;
+    intf.tx_.accurate_send_ = accurate_send;
     intf.rdma_.xmode_ = RDMATransportMode::RC;
     intf.rx_.queues_.resize(1);
     intf.tx_.queues_.resize(1);
@@ -335,8 +337,12 @@ class RdmaEnginePollingTestPeer {
     require(engine.setup_thread_params(&params, false) == 0, "QP setup failed");
     require(fake.requested_inline == (direct_tx ? 128u : 0u), "incorrect inline request");
     require(fake.timestamps == timestamps, "timestamp CQ selection incorrect");
-    require(!timestamps || (fake.rx_cq_flags & IBV_WC_EX_WITH_COMPLETION_TIMESTAMP),
-            "timestamp-enabled RX must retain the legacy TX CQ's device-clock format");
+    require(
+        !timestamps || accurate_send || (fake.rx_cq_flags & IBV_WC_EX_WITH_COMPLETION_TIMESTAMP),
+        "timestamp-enabled RX must retain the legacy TX CQ's device-clock format");
+    require(fake.timed_qp == accurate_send && fake.wallclock_requested == accurate_send &&
+                fake.requested_send_wr == (accurate_send ? 2048u : 1024u) && fake.created_cqs == 2,
+            "accurate SEND did not request a wall-clock CQ and WAIT capacity");
   }
 
   ~RdmaEnginePollingTestPeer() {
@@ -356,83 +362,9 @@ class RdmaEnginePollingTestPeer {
     while (!engine.tx_rings_.empty()) engine.tx_rings_.pop();
     while (!engine.rx_rings_.empty()) engine.rx_rings_.pop();
     engine.cm_event_channel_ = nullptr;
+    engine.initialized_ = false;
     Ring::free(tx_ring);
     Ring::free(rx_ring);
-  }
-
-  void connection_setup_failures() {
-    // Return the fixture's rings so the real client/server callers can reserve
-    // the sole queue, fail, and retry using the same capacity.
-    engine.destroy_thread_params(&params, true);
-    auto& intf = engine.cfg_.ifs_[0];
-    intf.address_ = "127.0.0.1";
-    fake.local_address.sin_family = AF_INET;
-    inet_pton(AF_INET, intf.address_.c_str(), &fake.local_address.sin_addr);
-    rdma_cm_id client{};
-    client.verbs = &context;
-    fake.created_id = &client;
-    const auto destroyed_cqs = fake.destroyed_cqs;
-    const auto destroyed_qps = fake.destroyed_qps;
-    for (bool fail_setup : {true, false}) {
-      fake.fail_create_cq_ex = fail_setup;
-      for (unsigned attempt = 0; attempt < 2; ++attempt) {
-        fake.cm_events.assign(2, {});
-        fake.cm_events[0].event = RDMA_CM_EVENT_ADDR_RESOLVED;
-        fake.cm_events[1].event = RDMA_CM_EVENT_ROUTE_RESOLVED;
-        fake.next_cm_event = 0;
-        uintptr_t connection = 123;
-        engine.initialized_ = true;
-        const auto status = engine.rdma_connect_to_server("127.0.0.1", 9999, &connection);
-        engine.initialized_ = false;
-        require(status == Status::CONNECT_FAILURE && connection == 0,
-                "failed client setup published a connection or consumed its queue slot");
-        require(engine.client_q_params_.empty() && engine.connection_params_.empty() &&
-                    engine.worker_threads_.empty() && engine.tx_rings_map_.empty() &&
-                    engine.rx_rings_map_.empty() && engine.tx_rings_.size() == 1 &&
-                    engine.rx_rings_.size() == 1,
-                "failed client connection retained reserved state or handoff rings");
-        require(fake.connects == (fail_setup ? 0u : attempt + 1),
-                "client attempted to connect after failed CQ setup");
-      }
-    }
-    require(fake.destroyed_ids == 4 && fake.destroyed_channels == 4 &&
-                fake.acknowledged_events == 8 && fake.destroyed_cqs == destroyed_cqs + 4 &&
-                fake.destroyed_qps == destroyed_qps + 2,
-            "failed client connections leaked CM IDs, channels, QPs, or CQs");
-
-    // Two rejected timestamp CQs followed by two failed accepts must all reuse
-    // the server's one slot; no failed request may launch progress.
-    std::array<rdma_cm_id, 4> requests{};
-    fake.created_id = &listener;
-    fake.cm_events.assign(requests.size(), {});
-    fake.next_cm_event = 0;
-    fake.server_setup_failures = 2;
-    fake.stop_when_events_drained = true;
-    for (size_t i = 0; i < requests.size(); ++i) {
-      requests[i].verbs = &context;
-      fake.cm_events[i].event = RDMA_CM_EVENT_CONNECT_REQUEST;
-      fake.cm_events[i].id = &requests[i];
-      fake.cm_events[i].listen_id = &listener;
-    }
-    intf.rdma_.mode_ = RDMAMode::SERVER;
-    cpu_set_t previous_affinity;
-    require(sched_getaffinity(0, sizeof(previous_affinity), &previous_affinity) == 0,
-            "cannot save CM test CPU affinity");
-    engine.cfg_.common_.master_core_ = std::stoi(intf.rx_.queues_[0].common_.cpu_core_);
-    rdma_force_quit.store(false);
-    engine.run();
-    rdma_force_quit.store(false);
-    require(sched_setaffinity(0, sizeof(previous_affinity), &previous_affinity) == 0,
-            "cannot restore CM test CPU affinity");
-    require(fake.accepts == 2 && fake.rejects == 4 && fake.destroyed_ids == 8 &&
-                fake.acknowledged_events == 12 && fake.destroyed_cqs == destroyed_cqs + 8 &&
-                fake.destroyed_qps == destroyed_qps + 4,
-            "failed server setup attempted accept, leaked resources, or prevented retries");
-    require(params.client_id == nullptr && !params.active && !params.worker_started.load() &&
-                engine.connection_params_.empty() && engine.worker_threads_.empty() &&
-                engine.tx_rings_map_.empty() && engine.rx_rings_map_.empty() &&
-                engine.tx_rings_.size() == 1 && engine.rx_rings_.size() == 1,
-            "failed server connection left its slot or handoff rings reserved");
   }
 
   void timestamp_errors() {
@@ -516,6 +448,160 @@ class RdmaEnginePollingTestPeer {
     require(engine.get_packet_rx_timestamp(&burst, 1, &timestamp_ns) == Status::NOT_SUPPORTED &&
                 timestamp_ns == 0,
             "reused burst retained an old timestamp");
+  }
+
+  void setup_failures() {
+    engine.destroy_thread_params(&params);
+    params.client_id = nullptr;
+    engine.initialized_ = true;
+    engine.cfg_.ifs_[0].address_ = "127.0.0.1";
+    engine.cfg_.ifs_[0].port_id_ = 0;
+    engine.pd_params_[&listener].if_idx = 0;
+    fake.client.verbs = &context;
+    fake.local.sin_family = AF_INET;
+    inet_pton(AF_INET, "127.0.0.1", &fake.local.sin_addr);
+    // Each phase is retried more often than there are queue slots. Neither
+    // client reservations nor server slots may be consumed by a failed setup.
+    for (bool server : {false, true}) {
+      for (int phase = 0; phase < 5; ++phase) {
+        for (int retry = 0; retry < 3; ++retry) {
+          fake.created_cqs = fake.destroyed_cqs = 0;
+          fake.fail_cq = phase < 2 ? phase : -1;
+          fake.fail_qp = phase == 2;
+          fake.fail_connect = phase == 3;
+          fake.unexpected_event = phase == 4;
+          fake.events = fake.connects = fake.accepts = fake.rejects = 0;
+          const int destroyed = fake.ids_destroyed;
+          const int channels = fake.channels_destroyed;
+          if (server) {
+            rdma_cm_event event{};
+            event.event = RDMA_CM_EVENT_CONNECT_REQUEST;
+            event.id = &fake.client;
+            event.listen_id = &listener;
+            ++fake.pending_events;
+            engine.handle_connect_request(&event);
+            require(!params.client_id && !params.worker_started && fake.rejects == 1 &&
+                        fake.accepts == (phase >= 3 ? 1 : 0),
+                    "failed server setup accepted work or retained its queue slot");
+          } else {
+            uintptr_t conn_id = 123;
+            require(engine.rdma_connect_to_server("127.0.0.2", 18515, &conn_id) ==
+                            Status::CONNECT_FAILURE &&
+                        conn_id == 0 && engine.client_q_params_.empty() &&
+                        fake.connects == (phase >= 3 ? 1 : 0) &&
+                        fake.channels_destroyed == channels + 1,
+                    "failed client setup connected or leaked its reservation/channel");
+          }
+          require(fake.ids_destroyed == destroyed + 1 && fake.pending_events == 0 &&
+                      fake.destroyed_cqs == fake.created_cqs - (phase < 2 ? 1 : 0) &&
+                      engine.tx_rings_.size() == 1 && engine.rx_rings_.size() == 1 &&
+                      engine.tx_rings_map_.empty() && engine.rx_rings_map_.empty() &&
+                      engine.connection_params_.empty() && engine.worker_threads_.empty(),
+                  "failed setup leaked CQ/ring/CM resources or published a connection");
+        }
+      }
+    }
+    engine.initialized_ = false;
+  }
+
+  void timed(bool server, bool enabled) {
+    engine.launch_worker(&params, server);
+    params.ready_to_exit.store(true);
+    for (auto& [id, thread] : engine.worker_threads_) thread.join();
+    engine.worker_threads_.clear();
+    params.ready_to_exit.store(false);
+    const bool fully_direct = params.direct_rx && params.direct_tx;
+    std::array<uint64_t, kRdmaPacketMetadataBytes / sizeof(uint64_t)> metadata{};
+    std::array<char, 512> data{};
+    std::array<void*, 2> pointers{data.data(), data.data()};
+    auto* lengths = reinterpret_cast<uint32_t*>(metadata.data());
+    lengths[0] = lengths[1] = 64;
+    BurstParams burst{};
+    auto prepare = [&](RDMAOpCode opcode = RDMAOpCode::SEND, int count = 1) {
+      engine.rdma_set_header(&burst, opcode, reinterpret_cast<uintptr_t>(&id), server, count, 123,
+                             "data");
+      burst.pkts[0] = pointers.data();
+      burst.pkt_lens[0] = lengths;
+    };
+    prepare();
+    require(engine.set_packet_tx_time(nullptr, 0, 1) == Status::INVALID_PARAMETER &&
+                engine.set_packet_tx_time(&burst, -1, 1) == Status::INVALID_PARAMETER &&
+                engine.set_packet_tx_time(&burst, 1, 1) == Status::INVALID_PARAMETER,
+            "invalid timestamp arguments accepted");
+    require(engine.set_packet_tx_time(&burst, 0, 0) ==
+                (enabled ? Status::SUCCESS : Status::NOT_SUPPORTED),
+            "accurate_send option not honored");
+    if (!enabled) return;
+    const uint64_t when = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                              std::chrono::system_clock::now().time_since_epoch())
+                              .count() +
+                          100000000ULL;
+    require(
+        engine.set_packet_tx_time(&burst, 0, when + 4100000000ULL) == Status::INVALID_PARAMETER &&
+            engine.set_packet_tx_time(&burst, 0, when - 4200000000ULL) == Status::INVALID_PARAMETER,
+        "setter accepted targets outside the cyclic half-window");
+    auto submit = [&] {
+      require(engine.send_tx_burst(&burst) == Status::SUCCESS, "timed SEND failed");
+      BurstParams* pending = nullptr;
+      while (tx_ring->dequeue(reinterpret_cast<void**>(&pending))) {
+        require(engine.post_burst(&params, pending) == Status::SUCCESS, "worker timed SEND failed");
+      }
+      // One SEND CQE reclaims the operation; no WAIT success CQE is expected.
+      for (size_t p = 0; p < burst.transport_hdr.num_pkts; ++p) {
+        ibv_wc wc{};
+        wc.wr_id = fully_direct ? fake.last_send_id : burst.transport_hdr.wr_id + p;
+        wc.status = IBV_WC_SUCCESS;
+        wc.opcode = IBV_WC_SEND;
+        fake.tx_completions.push_back(wc);
+      }
+      engine.poll_completions(server, &params, false, !params.direct_tx);
+      for (size_t p = 0; p < burst.transport_hdr.num_pkts; ++p) {
+        BurstParams* result = nullptr;
+        require(engine.get_rx_burst(&result, reinterpret_cast<uintptr_t>(&id), server) ==
+                        Status::SUCCESS &&
+                    result == &burst,
+                "scheduled SEND lost its completion");
+      }
+    };
+    require(engine.set_packet_tx_time(&burst, 0, when) == Status::SUCCESS,
+            "timestamp assignment failed");
+    submit();
+    require(fake.send_times == std::vector<uint64_t>{when}, "timestamp was not posted intact");
+    // Header reuse must discard old timestamps, including a cached direct MR.
+    prepare();
+    submit();
+    require(fake.send_times.size() == 1, "reused burst retained a timestamp");
+    require(engine.set_packet_tx_time(&burst, 0, when) == Status::SUCCESS &&
+                engine.set_packet_tx_time(&burst, 0, 0) == Status::SUCCESS,
+            "timestamp clearing failed");
+    submit();
+    require(fake.send_times.size() == 1, "zero timestamp emitted a WAIT");
+    if (!params.direct_tx) {
+      prepare(RDMAOpCode::SEND, 2);
+      require(engine.set_packet_tx_time(&burst, 1, when + 1) == Status::SUCCESS &&
+                  rdma_tx_time(&burst, 0) == 0,
+              "setting one packet did not initialize the other timestamps");
+      submit();
+      require(fake.send_times.back() == when + 1 && fake.send_times.size() == 2,
+              "indirect per-packet timestamp lost");
+    } else {
+      prepare();
+      engine.set_packet_tx_time(&burst, 0, when);
+      fake.send_result = ENOMEM;
+      require(engine.send_tx_burst(&burst) == Status::GENERIC_FAILURE &&
+                  fake.send_times.size() == 1 && burst.pkts[0] == pointers.data(),
+              "failed timed post consumed ownership or committed the WAIT");
+      fake.send_result = 0;
+      submit();
+      require(fake.send_times.back() == when, "retry lost its timestamp");
+    }
+    prepare(RDMAOpCode::RECEIVE);
+    require(engine.set_packet_tx_time(&burst, 0, when) == Status::INVALID_PARAMETER,
+            "RECEIVE accepted a TX timestamp");
+    prepare();
+    params.ready_to_exit.store(true);
+    require(engine.set_packet_tx_time(&burst, 0, when) == Status::NOT_READY,
+            "disconnected connection accepted scheduling");
   }
 
   static void configuration() {
@@ -1006,23 +1092,37 @@ daqiri:
 int main() {
   try {
     daqiri::RdmaEnginePollingTestPeer::configuration();
-    {
-      daqiri::RdmaEnginePollingTestPeer failures(true, true, true);
-      failures.connection_setup_failures();
+    for (bool rx : {false, true}) {
+      for (bool tx : {false, true}) {
+        for (bool enabled : {false, true}) {
+          daqiri::RdmaEnginePollingTestPeer failures(rx, tx, enabled);
+          failures.setup_failures();
+        }
+        for (bool server : {false, true}) {
+          for (bool enabled : {false, true}) {
+            daqiri::RdmaEnginePollingTestPeer timed(rx, tx, enabled);
+            timed.timed(server, enabled);
+          }
+        }
+      }
     }
-    for (bool realtime_supported : {false, true}) {
-      for (bool timestamps : {false, true}) {
-        for (bool rx : {false, true}) {
-          for (bool tx : {false, true}) {
-            for (bool server : {false, true}) {
-              daqiri::RdmaEnginePollingTestPeer test(rx, tx, timestamps, realtime_supported);
-              test.timestamp_errors();
-              test.batched_timestamps();
-              test.run(rx, tx, server);
-              if (!rx || !tx) {
-                daqiri::RdmaEnginePollingTestPeer concurrent(rx, tx, timestamps,
-                                                             realtime_supported);
-                concurrent.concurrent_worker(server);
+    for (bool accurate : {false, true}) {
+      for (bool realtime_supported : {false, true}) {
+        if (accurate && !realtime_supported) continue;
+        for (bool timestamps : {false, true}) {
+          for (bool rx : {false, true}) {
+            for (bool tx : {false, true}) {
+              for (bool server : {false, true}) {
+                daqiri::RdmaEnginePollingTestPeer test(rx, tx, accurate, timestamps,
+                                                       realtime_supported);
+                test.timestamp_errors();
+                test.batched_timestamps();
+                test.run(rx, tx, server);
+                if (!rx || !tx) {
+                  daqiri::RdmaEnginePollingTestPeer concurrent(rx, tx, accurate, timestamps,
+                                                               realtime_supported);
+                  concurrent.concurrent_worker(server);
+                }
               }
             }
           }

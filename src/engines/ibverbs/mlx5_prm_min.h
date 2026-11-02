@@ -57,6 +57,7 @@ enum {
 enum {
   MLX5_HCA_CAP_OPMOD_GENERAL_MAX = (0x0 << 1) | 0x0,
   MLX5_HCA_CAP_OPMOD_GENERAL_CUR = (0x0 << 1) | 0x1,
+  MLX5_HCA_CAP_OPMOD_ROCE_CUR = (0x4 << 1) | 0x1,
   MLX5_HCA_CAP_OPMOD_FLOW_TABLE_MAX = (0x7 << 1) | 0x0,
   MLX5_HCA_CAP_OPMOD_FLOW_TABLE_CUR = (0x7 << 1) | 0x1,
 };
@@ -85,6 +86,13 @@ struct mlx5_ifc_cmd_hca_cap_min_bits {
   // Pad to the full HCA-cap blob size (0x8000 bits) so the QUERY_HCA_CAP output
   // buffer is large enough for the firmware to write the whole capability.
   uint8_t reserved_at_68d[0x7973];
+};
+
+// RoCE timestamp-format capability: 0 is free-running only, 1 is real-time
+// only, and 2 supports both. The field occupies PRM bits 0x1e..0x1f.
+struct mlx5_ifc_roce_cap_min_bits {
+  uint8_t reserved_at_0[0x1e];
+  uint8_t qp_ts_format[0x2];
 };
 
 struct mlx5_ifc_query_hca_cap_out_bits {

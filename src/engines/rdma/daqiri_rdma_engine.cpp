@@ -26,10 +26,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <memory>
 #include "src/daqiri_ring.h"
 #include "src/daqiri_pool.h"
 #include "src/metrics.h"
 #include "daqiri_rdma_engine.h"
+#include "src/rdma/timed_send.h"
 #include "rdma_queue_index.h"
 
 /* The ordering of most RDMA/CM setup follows the ordering specified here:
@@ -109,6 +111,40 @@ Status RdmaEngine::set_packet_lengths(BurstParams* burst, int idx,
   assert(lens.size() == 1);  // Split not supported yet
   burst->pkt_lens[0][idx] = lens.begin()[0];
   return Status::SUCCESS;
+}
+
+Status RdmaEngine::set_packet_tx_time(BurstParams* burst, int idx, uint64_t timestamp) {
+  if (!burst || idx < 0 || static_cast<size_t>(idx) >= burst->transport_hdr.num_pkts ||
+      burst->transport_hdr.num_pkts > kRdmaBatch || !burst->pkt_lens[0] ||
+      burst->transport_hdr.opcode != RDMAOpCode::SEND) {
+    return Status::INVALID_PARAMETER;
+  }
+  const auto conn_id = get_connection_id(burst);
+  auto store = [&](rdma_thread_params* params) {
+    if (rdma_force_quit.load(std::memory_order_relaxed) || params->ready_to_exit.load()) {
+      return Status::NOT_READY;
+    }
+    if (!params->accurate_send) return Status::NOT_SUPPORTED;
+    if (detail::validate_rdma_tx_time(timestamp)) return Status::INVALID_PARAMETER;
+    auto& cache = rdma_burst_cache(burst);
+    if (!cache.scheduled) {
+      std::fill_n(rdma_tx_timestamps(burst), burst->transport_hdr.num_pkts, uint64_t{0});
+      cache.scheduled = true;
+    }
+    rdma_tx_timestamps(burst)[idx] = timestamp;
+    return Status::SUCCESS;
+  };
+  if (auto* direct = find_direct(conn_id)) {
+    RdmaDirectLease lease(direct);
+    return lease ? store(direct->params) : Status::NOT_READY;
+  }
+  std::unique_lock<std::mutex> registry_lock(threads_mutex_);
+  auto connection = connection_params_.find(reinterpret_cast<rdma_cm_id*>(conn_id));
+  if (connection == connection_params_.end()) return Status::NOT_READY;
+  auto* params = connection->second;
+  std::unique_lock<std::mutex> progress_lock(params->progress_mutex);
+  registry_lock.unlock();
+  return store(params);
 }
 
 void* RdmaEngine::get_segment_packet_ptr(BurstParams* burst, int seg, int idx) {
@@ -386,36 +422,38 @@ int RdmaEngine::setup_thread_params(rdma_thread_params* params, bool is_server) 
     return -1;
   }
   params->direct_state = nullptr;
+  params->accurate_send = intf.tx_.accurate_send_;
   params->direct_tx = intf.tx_.queues_[params->queue_idx].poll_mode_ == QueuePollMode::DIRECT;
   params->direct_rx = params->queue_idx < static_cast<int>(intf.rx_.queues_.size()) &&
                       intf.rx_.queues_[params->queue_idx].poll_mode_ == QueuePollMode::DIRECT;
   const int port_id = cfg_.ifs_[static_cast<int>(params->if_idx)].port_id_;
 
   DAQIRI_LOG_INFO("Creating RX and TX CQs for client ID {}", (void*)params->client_id);
-  if (intf.rx_.hardware_timestamps_) {
+  // Accurate TX requires real-time format on both CQs. RX timestamps without
+  // accurate TX request both timestamp fields to retain legacy device format.
+  auto create_cq = [&](bool receive) -> ibv_cq* {
+    const bool timestamps = receive && intf.rx_.hardware_timestamps_;
+    if (!params->accurate_send && !timestamps)
+      return verbs_->create_cq(params->client_id->verbs, MAX_CQ, nullptr, nullptr, 0);
     ibv_cq_init_attr_ex attr{};
     attr.cqe = MAX_CQ;
-    // Request both timestamp fields: mlx5 then keeps the CQ in device-clock
-    // format, matching the legacy TX CQ, and its wall-clock reader converts
-    // ticks to epoch nanoseconds. WALLCLOCK alone selects real-time CQEs on
-    // capable devices: those contain packed seconds/nanoseconds and cannot be
-    // paired with a legacy TX CQ on the same QP.
-    attr.wc_flags = IBV_WC_EX_WITH_BYTE_LEN | IBV_WC_EX_WITH_COMPLETION_TIMESTAMP |
-                    IBV_WC_EX_WITH_COMPLETION_TIMESTAMP_WALLCLOCK;
-    qp_params.rx_cq_ex = verbs_->create_cq_ex(params->client_id->verbs, &attr);
-    if (qp_params.rx_cq_ex) {
-      qp_params.rx_cq = ibv_cq_ex_to_cq(qp_params.rx_cq_ex);
+    attr.wc_flags = IBV_WC_EX_WITH_COMPLETION_TIMESTAMP_WALLCLOCK;
+    if (timestamps) {
+      attr.wc_flags |= IBV_WC_EX_WITH_BYTE_LEN;
+      if (!params->accurate_send) attr.wc_flags |= IBV_WC_EX_WITH_COMPLETION_TIMESTAMP;
     }
-  } else {
-    qp_params.rx_cq = verbs_->create_cq(params->client_id->verbs, MAX_CQ, nullptr, nullptr, 0);
-  }
+    auto* cq = verbs_->create_cq_ex(params->client_id->verbs, &attr);
+    if (timestamps) qp_params.rx_cq_ex = cq;
+    return cq ? ibv_cq_ex_to_cq(cq) : nullptr;
+  };
+  qp_params.rx_cq = create_cq(true);
   if (qp_params.rx_cq == nullptr) {
     DAQIRI_LOG_CRITICAL("Failed to create RDMA RX CQ (rx.hardware_timestamps={}): {}",
                         intf.rx_.hardware_timestamps_, strerror(errno));
     return -1;
   }
 
-  qp_params.tx_cq = verbs_->create_cq(params->client_id->verbs, MAX_CQ, nullptr, nullptr, 0);
+  qp_params.tx_cq = create_cq(false);
   if (qp_params.tx_cq == nullptr) {
     DAQIRI_LOG_CRITICAL("Failed to create TX queue pair! {}", strerror(errno));
     verbs_->destroy_cq(qp_params.rx_cq);
@@ -428,7 +466,8 @@ int RdmaEngine::setup_thread_params(rdma_thread_params* params, bool is_server) 
   qp_params.qp_attr.cap.max_recv_sge = 1;  // No header-data split in RDMA right now
   qp_params.qp_attr.cap.max_recv_wr = MAX_OUSTANDING_WR;
   qp_params.qp_attr.cap.max_send_sge = 1;
-  qp_params.qp_attr.cap.max_send_wr = MAX_OUSTANDING_WR;
+  // Every scheduled SEND needs an additional unsignaled WAIT work request.
+  qp_params.qp_attr.cap.max_send_wr = MAX_OUSTANDING_WR * (params->accurate_send ? 2 : 1);
   if (params->direct_tx) {
     qp_params.qp_attr.cap.max_inline_data = 128;
   }
@@ -447,15 +486,18 @@ int RdmaEngine::setup_thread_params(rdma_thread_params* params, bool is_server) 
     return -1;
   }
 
-  // Share the CQ between TX and RX
+  // Attach the paired CQs to the QP.
   qp_params.qp_attr.recv_cq = qp_params.rx_cq;
   qp_params.qp_attr.send_cq = qp_params.tx_cq;
 
   DAQIRI_LOG_INFO("Creating QP for client ID {} with PD {}", (void*)params->client_id,
                   (void*)params->pd);
-  int ret = verbs_->cm_create_qp(params->client_id, params->pd, &qp_params.qp_attr);
+  int ret = params->accurate_send
+                ? verbs_->create_timed_qp(params->client_id, params->pd, &qp_params.qp_attr)
+                : verbs_->cm_create_qp(params->client_id, params->pd, &qp_params.qp_attr);
   if (ret != 0) {
-    DAQIRI_LOG_CRITICAL("Failed to create QP: {}", strerror(errno));
+    DAQIRI_LOG_CRITICAL("Failed to create QP (accurate_send={}): {}", params->accurate_send,
+                        strerror(errno));
     verbs_->destroy_cq(qp_params.tx_cq);
     verbs_->destroy_cq(qp_params.rx_cq);
     return -1;
@@ -463,7 +505,13 @@ int RdmaEngine::setup_thread_params(rdma_thread_params* params, bool is_server) 
 
   params->max_inline_data = qp_params.qp_attr.cap.max_inline_data;
   params->inline_wqes = 0;
-  // qp_params.rx_ring = rx_ring;
+  std::lock_guard<std::mutex> lock(threads_mutex_);
+  if (tx_rings_.empty() || rx_rings_.empty()) {
+    verbs_->cm_destroy_qp(params->client_id);
+    verbs_->destroy_cq(qp_params.tx_cq);
+    verbs_->destroy_cq(qp_params.rx_cq);
+    return -1;
+  }
   qp_params.tx_ring = tx_rings_.front();
   tx_rings_.pop();
   tx_rings_map_[params->client_id] = qp_params.tx_ring;
@@ -478,8 +526,7 @@ int RdmaEngine::setup_thread_params(rdma_thread_params* params, bool is_server) 
   return 0;
 }
 
-int RdmaEngine::destroy_thread_params(rdma_thread_params* params, bool is_server) {
-  auto* client_id = params->client_id;
+int RdmaEngine::destroy_thread_params(rdma_thread_params* params) {
   DAQIRI_LOG_INFO("Destroying thread params for client {}", (void*)params->client_id);
   // First destroy the QP
   if (params->client_id->qp) {
@@ -498,23 +545,13 @@ int RdmaEngine::destroy_thread_params(rdma_thread_params* params, bool is_server
     params->qp_params.rx_cq_ex = nullptr;
   }
 
-  if (params->qp_params.tx_ring) {
-    tx_rings_.push(params->qp_params.tx_ring);
-    tx_rings_map_.erase(client_id);
-  }
-  if (params->qp_params.rx_ring) {
-    rx_rings_.push(params->qp_params.rx_ring);
-    rx_rings_map_.erase(client_id);
-  }
+  // Return reservations only after the QP can no longer access their buffers.
+  std::lock_guard<std::mutex> lock(threads_mutex_);
+  if (params->qp_params.tx_ring) tx_rings_.push(params->qp_params.tx_ring);
+  if (params->qp_params.rx_ring) rx_rings_.push(params->qp_params.rx_ring);
+  tx_rings_map_.erase(params->client_id);
+  rx_rings_map_.erase(params->client_id);
   params->qp_params = {};
-  params->client_id = nullptr;
-  params->active = false;
-  params->worker_started.store(false);
-
-  if (!is_server) {
-    std::lock_guard<std::mutex> lock(client_params_mutex_);
-    client_q_params_.erase(client_id);
-  }
 
   return 0;
 }
@@ -678,6 +715,11 @@ int RdmaEngine::poll_rx_completion(rdma_thread_params* params, ibv_wc* wc, uint6
     wc->opcode = verbs_->wc_read_opcode(cq);
     wc->byte_len = verbs_->wc_read_byte_len(cq);
     *timestamp_ns = verbs_->wc_read_completion_wallclock_ns(cq);
+    if (params->accurate_send) {
+      // With real-time CQEs mlx5 exposes packed seconds/nanoseconds. The
+      // device-format path above uses the provider's epoch conversion instead.
+      *timestamp_ns = (*timestamp_ns >> 32) * 1000000000ULL + (*timestamp_ns & UINT32_MAX);
+    }
   }
   verbs_->end_poll(cq);
   return 1;
@@ -965,9 +1007,11 @@ Status RdmaEngine::post_burst(rdma_thread_params* tparams, BurstParams* burst) {
           wr.send_flags |= IBV_SEND_INLINE;
         }
 
-        int ret = verbs_->post_send(tparams->client_id->qp, &wr, &bad_wr);
+        const uint64_t time = rdma_tx_time(burst, p);
+        int ret = time ? verbs_->post_timed_send(tparams->client_id->qp, &wr, time)
+                       : verbs_->post_send(tparams->client_id->qp, &wr, &bad_wr);
         if (ret != 0) {
-          DAQIRI_LOG_CRITICAL("Failed to post SEND request, errno: {}", strerror(errno));
+          DAQIRI_LOG_CRITICAL("Failed to post SEND request: {}", strerror(ret));
           metrics::add_dropped(counters, "tx_post_failure", 1);
           if (!posted_any) {
             if (!caller_owned) {
@@ -1111,6 +1155,8 @@ Status RdmaEngine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintp
   auto& cache = rdma_burst_cache(burst);
   auto* timestamps =
       cache.magic == RdmaBurstCache::kMagic && cache.engine == this ? cache.rx_timestamps : nullptr;
+  // Reusing a completed burst starts a new operation without scheduling.
+  cache.scheduled = false;
   if (cache.magic != RdmaBurstCache::kMagic || cache.engine != this || !cache.state ||
       cache.state->connection_id != conn_id || !cache.region ||
       cache.region->name != local_mr_name) {
@@ -1203,6 +1249,7 @@ Status RdmaEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t 
 
   DAQIRI_LOG_INFO("Connecting to server {} on port {}", dst_addr, dst_port);
 
+  if (!conn_id) return Status::INVALID_PARAMETER;
   *conn_id = 0;
 
   ec = verbs_->cm_create_event_channel();
@@ -1211,14 +1258,32 @@ Status RdmaEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t 
     return Status::CONNECT_FAILURE;
   }
 
+  auto channel_cleanup = [this](rdma_event_channel* channel) {
+    verbs_->cm_destroy_event_channel(channel);
+  };
+  std::unique_ptr<rdma_event_channel, decltype(channel_cleanup)> channel_guard(ec, channel_cleanup);
+  rdma_thread_params* params = nullptr;
+  auto id_cleanup = [this, &params](rdma_cm_id* id) {
+    if (params) {
+      destroy_thread_params(params);
+      std::lock_guard<std::mutex> lock(client_params_mutex_);
+      client_q_params_.erase(id);
+    }
+    verbs_->cm_destroy_id(id);
+  };
+  std::unique_ptr<rdma_cm_id, decltype(id_cleanup)> id_guard(nullptr, id_cleanup);
+  auto event_cleanup = [this](rdma_cm_event* pending) { verbs_->cm_ack_cm_event(pending); };
+  std::unique_ptr<rdma_cm_event, decltype(event_cleanup)> event_guard(nullptr, event_cleanup);
+
   // Create RDMA id
   if (verbs_->cm_create_id(ec, &cm_id, nullptr, RDMA_PS_TCP)) {
     DAQIRI_LOG_CRITICAL("Failed to create ID");
-    verbs_->cm_destroy_event_channel(ec);
     return Status::CONNECT_FAILURE;
   } else {
     DAQIRI_LOG_INFO("Created ID for client: {}", (void*)cm_id);
   }
+
+  id_guard.reset(cm_id);
 
   // Always bind to the source address, even if not explicitly provided
   struct sockaddr_in src_addr_in;
@@ -1247,45 +1312,42 @@ Status RdmaEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t 
   // Resolve the server's address
   if (verbs_->cm_resolve_addr(cm_id, src_addr_p, (struct sockaddr*)&addr, 2000)) {
     DAQIRI_LOG_CRITICAL("Failed to resolve address");
-    verbs_->cm_destroy_event_channel(ec);
     return Status::CONNECT_FAILURE;
   }
 
   // Wait for address resolution event
   if (verbs_->cm_get_cm_event(ec, &event)) {
     DAQIRI_LOG_CRITICAL("Failed to get CM event");
-    verbs_->cm_destroy_event_channel(ec);
     return Status::CONNECT_FAILURE;
   }
 
+  event_guard.reset(event);
   if (event->event != RDMA_CM_EVENT_ADDR_RESOLVED) {
     if (event->event == RDMA_CM_EVENT_ADDR_ERROR) {
       DAQIRI_LOG_CRITICAL("Failed to resolve address");
     } else {
       DAQIRI_LOG_CRITICAL("Unexpected event from rdma_resolve_addr: {}", (int)event->event);
     }
-    verbs_->cm_destroy_event_channel(ec);
     return Status::CONNECT_FAILURE;
   } else {
     DAQIRI_LOG_INFO("Client resolved server address: {}", (void*)cm_id);
   }
 
-  verbs_->cm_ack_cm_event(event);
+  event_guard.reset();
 
   // Resolve route to server
   if (verbs_->cm_resolve_route(cm_id, 2000)) {
     DAQIRI_LOG_CRITICAL("Failed to resolve route");
-    verbs_->cm_destroy_event_channel(ec);
     return Status::CONNECT_FAILURE;
   }
 
   // Wait for route resolution event
   if (verbs_->cm_get_cm_event(ec, &event)) {
     DAQIRI_LOG_CRITICAL("Failed to get CM event");
-    verbs_->cm_destroy_event_channel(ec);
     return Status::CONNECT_FAILURE;
   }
 
+  event_guard.reset(event);
   if (event->event != RDMA_CM_EVENT_ROUTE_RESOLVED) {
     if (event->event == RDMA_CM_EVENT_REJECTED) {
       DAQIRI_LOG_WARN(
@@ -1294,11 +1356,10 @@ Status RdmaEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t 
       DAQIRI_LOG_CRITICAL("Unexpected event: {}", (int)event->event);
     }
 
-    verbs_->cm_destroy_event_channel(ec);
     return Status::CONNECT_FAILURE;
   } else {
     DAQIRI_LOG_INFO("Client {} resolved route for server", (void*)cm_id);
-    verbs_->cm_ack_cm_event(event);
+    event_guard.reset();
   }
 
   struct sockaddr* source_addr = verbs_->cm_get_local_addr(cm_id);
@@ -1318,12 +1379,9 @@ Status RdmaEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t 
 
   if (client_port < 0) {
     DAQIRI_LOG_ERROR("No configured interface matches source address {}", source_addr_str);
-    verbs_->cm_destroy_id(cm_id);
-    verbs_->cm_destroy_event_channel(ec);
     return Status::INVALID_PARAMETER;
   }
 
-  rdma_thread_params* params = nullptr;
   bool queue_exhausted = false;
   {
     std::lock_guard<std::mutex> lock(client_params_mutex_);
@@ -1357,16 +1415,9 @@ Status RdmaEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t 
     } else {
       DAQIRI_LOG_CRITICAL("Failed to insert client params into map");
     }
-    verbs_->cm_destroy_id(cm_id);
-    verbs_->cm_destroy_event_channel(ec);
     return queue_exhausted ? Status::NO_SPACE_AVAILABLE : Status::CONNECT_FAILURE;
   }
-  if (setup_thread_params(params, false) != 0) {
-    destroy_thread_params(params);
-    verbs_->cm_destroy_id(cm_id);
-    verbs_->cm_destroy_event_channel(ec);
-    return Status::CONNECT_FAILURE;
-  }
+  if (setup_thread_params(params, false) != 0) return Status::CONNECT_FAILURE;
 
   // Set up connection parameters
   memset(&conn_param, 0, sizeof(conn_param));
@@ -1377,9 +1428,6 @@ Status RdmaEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t 
   // Connect to server
   if (verbs_->cm_connect(cm_id, &conn_param) != 0) {
     DAQIRI_LOG_CRITICAL("Failed to connect to server");
-    destroy_thread_params(params);
-    verbs_->cm_destroy_id(cm_id);
-    verbs_->cm_destroy_event_channel(ec);
     return Status::CONNECT_FAILURE;
   } else {
     DAQIRI_LOG_INFO("Client {} connected to server", (void*)cm_id);
@@ -1388,12 +1436,10 @@ Status RdmaEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t 
   // Wait for connection established event
   if (verbs_->cm_get_cm_event(ec, &event)) {
     DAQIRI_LOG_CRITICAL("Failed to get CM event");
-    destroy_thread_params(params);
-    verbs_->cm_destroy_id(cm_id);
-    verbs_->cm_destroy_event_channel(ec);
     return Status::CONNECT_FAILURE;
   }
 
+  event_guard.reset(event);
   if (event->event != RDMA_CM_EVENT_ESTABLISHED) {
     if (event->event == RDMA_CM_EVENT_REJECTED) {
       DAQIRI_LOG_WARN(
@@ -1401,16 +1447,13 @@ Status RdmaEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t 
     } else {
       DAQIRI_LOG_CRITICAL("Unexpected event: {}", (int)event->event);
     }
-    verbs_->cm_ack_cm_event(event);
-    destroy_thread_params(params);
-    verbs_->cm_destroy_id(cm_id);
-    verbs_->cm_destroy_event_channel(ec);
+    event_guard.reset();
     return Status::CONNECT_FAILURE;
   } else {
     DAQIRI_LOG_INFO("Client {} established connection to server", (void*)cm_id);
   }
 
-  verbs_->cm_ack_cm_event(event);
+  event_guard.reset();
 
   DAQIRI_LOG_INFO("Launching client thread for {}", (void*)cm_id);
 
@@ -1420,7 +1463,8 @@ Status RdmaEngine::rdma_connect_to_server(const std::string& dst_addr, uint16_t 
   *conn_id = reinterpret_cast<uintptr_t>(cm_id);
   DAQIRI_LOG_INFO("Successfully connected to server {} on port {}", dst_addr, dst_port);
 
-  // rdma_destroy_event_channel(ec);
+  id_guard.release();
+  channel_guard.release();
 
   return Status::SUCCESS;
 }
@@ -1481,6 +1525,7 @@ Status RdmaEngine::get_tx_packet_burst(BurstParams* burst) {
                             : nullptr;
   rdma_clear_rx_timestamps(burst);
 
+  rdma_burst_cache(burst).scheduled = false;
   return Status::SUCCESS;
 }
 
@@ -1497,6 +1542,68 @@ bool RdmaEngine::is_tx_burst_available(BurstParams* burst) {
   }
 
   return true;
+}
+
+void RdmaEngine::handle_connect_request(rdma_cm_event* event) {
+  auto* id = event->id;
+  auto* listener = event->listen_id;
+  DAQIRI_LOG_INFO("Connection request for client {} on listener {}", (void*)id, (void*)listener);
+  // No event-owned data is used after acknowledging it, including on failures.
+  ack_event(event);
+  rdma_thread_params* params = nullptr;
+  auto reject = [&]() {
+    verbs_->cm_reject(id, nullptr, 0);
+    if (params) {
+      destroy_thread_params(params);
+      params->client_id = nullptr;
+      params->active = false;
+      params->worker_started.store(false);
+    }
+    verbs_->cm_destroy_id(id);
+  };
+  const auto listen = pd_params_.find(listener);
+  const auto server = server_q_params_.find(listener);
+  if (listen == pd_params_.end() || server == server_q_params_.end()) {
+    DAQIRI_LOG_ERROR("Unknown RDMA listener {}", (void*)listener);
+    reject();
+    return;
+  }
+  for (const auto& slot : server->second) {
+    // Do not destroy an already accepted connection on a duplicate event.
+    if (slot.client_id == id) return;
+  }
+  for (size_t i = 0; i < server->second.size(); ++i) {
+    if (!server->second[i].client_id) {
+      params = &server->second[i];
+      params->queue_idx = i;
+      break;
+    }
+  }
+  if (!params) {
+    DAQIRI_LOG_ERROR("No free RDMA connection slots on listener {}", (void*)listener);
+    reject();
+    return;
+  }
+  params->active = false;
+  params->ready_to_exit.store(false);
+  params->worker_started.store(false);
+  params->client_id = id;
+  params->pd = pd_map_[id->verbs];
+  params->if_idx = listen->second.if_idx;
+  if (setup_thread_params(params, true) != 0) {
+    reject();
+    return;
+  }
+  rdma_conn_param conn{};
+  conn.responder_resources = 1;
+  conn.initiator_depth = 1;
+  conn.rnr_retry_count = 7;
+  if (verbs_->cm_accept(id, &conn) != 0) {
+    DAQIRI_LOG_ERROR("Failed to accept RDMA connection: {}", strerror(errno));
+    reject();
+    return;
+  }
+  launch_worker(params, true);
 }
 
 void RdmaEngine::run() {
@@ -1612,98 +1719,9 @@ void RdmaEngine::run() {
     }
 
     switch (cm_event->event) {
-      case RDMA_CM_EVENT_CONNECT_REQUEST: {
-        DAQIRI_LOG_INFO("Received new connection request for client ID {} on listener {}",
-                        (void*)cm_event->id, (void*)cm_event->listen_id);
-
-        const auto listen_iter = pd_params_.find(cm_event->listen_id);
-        if (listen_iter == pd_params_.end()) {
-          DAQIRI_LOG_ERROR("Failed to find server ID for {}", (void*)cm_event->listen_id);
-          break;
-        } else {
-          const auto server_iter = server_q_params_.find(cm_event->listen_id);
-          if (server_iter == server_q_params_.end()) {
-            DAQIRI_LOG_ERROR("Failed to find server ID for {}", (void*)cm_event->listen_id);
-            break;
-          }
-
-          bool duplicate_client = false;
-          for (const auto& slot : server_iter->second) {
-            if (cm_event->id == slot.client_id) {
-              DAQIRI_LOG_CRITICAL("Client ID {} already exists in server ID {}",
-                                  (void*)cm_event->id, (void*)listen_iter->second.server_id);
-              verbs_->cm_reject(cm_event->id, nullptr, 0);
-              duplicate_client = true;
-              break;
-            }
-          }
-          if (duplicate_client) {
-            break;
-          }
-
-          // A slot is free only when no client occupies it. Testing !active
-          // would reuse a slot that was already accepted but not yet claimed by
-          // the app (client_id set, active still false), clobbering the first
-          // connection's params/rings while its worker is still running.
-          int queue_idx = -1;
-          for (int i = 0; i < server_iter->second.size(); i++) {
-            if (server_iter->second[i].client_id == nullptr) {
-              queue_idx = i;
-              break;
-            }
-          }
-
-          if (queue_idx == -1) {
-            DAQIRI_LOG_CRITICAL(
-                "No free queues on server ID {}. Close at least one connection first.",
-                (void*)cm_event->listen_id);
-            verbs_->cm_reject(cm_event->id, nullptr, 0);
-            break;
-          }
-
-          auto& params = server_iter->second[queue_idx];
-          params.active = false;
-          params.ready_to_exit.store(false);
-          params.worker_started.store(false);
-          params.client_id = cm_event->id;
-          params.pd = pd_map_[cm_event->id->verbs];
-          // Use the listener's cfg-interface index, not cm_event->id->port_num
-          // (IB hardware port, different domain than cfg_.ifs_ indices)
-          params.if_idx = listen_iter->second.if_idx;
-          params.queue_idx = queue_idx;
-
-          if (setup_thread_params(&params, true) != 0) {
-            auto* client_id = params.client_id;
-            params.client_id = nullptr;
-            verbs_->cm_reject(client_id, nullptr, 0);
-            ack_event(cm_event);
-            verbs_->cm_destroy_id(client_id);
-            break;
-          }
-          DAQIRI_LOG_INFO("Configured queues for client {}", (void*)cm_event->id);
-
-          auto* client_id = params.client_id;
-          ack_event(cm_event);
-
-          struct rdma_conn_param conn_param = {};
-          conn_param.responder_resources = 1;
-          conn_param.initiator_depth = 1;
-          conn_param.rnr_retry_count = 7;
-
-          if (verbs_->cm_accept(params.client_id, &conn_param) != 0) {
-            DAQIRI_LOG_CRITICAL("Failed to accept connection: {}", strerror(errno));
-            verbs_->cm_reject(params.client_id, nullptr, 0);
-            destroy_thread_params(&params, true);
-            verbs_->cm_destroy_id(client_id);
-            continue;
-          }
-
-          DAQIRI_LOG_INFO("Server accepted connection for client ID {}", (void*)params.client_id);
-          launch_worker(&params, true);
-        }
-
+      case RDMA_CM_EVENT_CONNECT_REQUEST:
+        handle_connect_request(cm_event);
         break;
-      }
       case RDMA_CM_EVENT_ESTABLISHED: {
         bool found = false;
         DAQIRI_LOG_INFO("Received established event for client ID {}", (void*)cm_event->id);
@@ -1783,14 +1801,7 @@ void RdmaEngine::run() {
           std::lock_guard<std::mutex> progress_lock(tparams_to_clear->progress_mutex);
           tparams_to_clear->outstanding_send_wr_ids.clear();
           tparams_to_clear->outstanding_receive_wr_ids.clear();
-          if (tparams_to_clear->qp_params.tx_ring != nullptr) {
-            tx_rings_.push(tparams_to_clear->qp_params.tx_ring);
-            tx_rings_map_.erase(cm_event->id);
-          }
-          if (tparams_to_clear->qp_params.rx_ring != nullptr) {
-            rx_rings_.push(tparams_to_clear->qp_params.rx_ring);
-            rx_rings_map_.erase(cm_event->id);
-          }
+          destroy_thread_params(tparams_to_clear);
           tparams_to_clear->client_id = nullptr;
           tparams_to_clear->active = false;
           tparams_to_clear->worker_started.store(false);
@@ -1858,10 +1869,13 @@ int RdmaEngine::setup_pools_and_rings() {
     return intf.rx_.hardware_timestamps_;
   });
   DAQIRI_LOG_DEBUG("Setting up RX meta pool");
-  pkt_len_pool_ = daqiri::ObjectPool::create(
-      "PKT_LEN_POOL", (1U << 11) - 1U,
-      (sizeof(uint32_t) + (rx_timestamp_storage_ ? sizeof(uint64_t) : 0)) * MAX_RDMA_BATCH,
-      numa_node);
+  const bool timed = std::any_of(cfg_.ifs_.begin(), cfg_.ifs_.end(),
+                                 [](const auto& intf) { return intf.tx_.accurate_send_; });
+  pkt_len_pool_ = daqiri::ObjectPool::create("PKT_LEN_POOL", (1U << 11) - 1U,
+                                             (timed || rx_timestamp_storage_)
+                                                 ? kRdmaPacketMetadataBytes
+                                                 : sizeof(uint32_t) * MAX_RDMA_BATCH,
+                                             numa_node);
   if (pkt_len_pool_ == nullptr) {
     DAQIRI_LOG_CRITICAL("Failed to allocate packet length pool!");
     return -1;
