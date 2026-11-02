@@ -536,14 +536,18 @@ The raw ibverbs engine requests the mlx5 real-time CQ timestamp format only when
 the device advertises it; otherwise it uses the default mlx5 device-clock CQ
 format and converts those ticks to nanoseconds internally. Device-clock ticks are
 not exposed by the public API.
-For RDMA/RoCE, the flag requests both device-clock and wall-clock timestamp
-fields on receive completions in all polling modes. On mlx5 this keeps the RX CQ
+For RDMA/RoCE without accurate TX, the flag requests both device-clock and
+wall-clock timestamp fields on receive completions in all polling modes. On mlx5
+this keeps the RX CQ
 compatible with the ordinary TX CQ and enables the provider's device-clock-to-epoch
-conversion; packed real-time CQE values are not returned by the API. RX timestamps
+conversion. With accurate TX, both CQs use real-time format, and DAQIRI normalizes
+packed seconds/nanoseconds before returning timestamps. RX timestamps
 work without accurate TX scheduling enabled. Connection setup fails if the provider
 cannot create the timestamp-capable receive CQ. Each timestamp describes
-a completed RDMA message, which may span multiple wire packets; TX
-completions do not expose RX timestamps.
+a completed RDMA message, which may span multiple wire packets. Successful
+`RDMA_WRITE_IMM` receiver notifications also expose timestamps, including zero-byte
+notifications. Plain READ/WRITE operations generate no receiver CQ event; neither
+their remote targets nor local TX completions expose RX timestamps.
 **WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or system clock
 configuration. Timestamp values are invalid if the clocks are not PTP-synchronized.
 
@@ -673,8 +677,9 @@ without an epoch field, an old late packet is indistinguishable from the same sl
   - type: `integer`
 - **`poll_mode`**: `indirect` hands bursts to a DAQIRI TX worker. `direct` makes the calling
   thread submit one packet immediately and manage transmit progress; it is supported by
-  the raw ibverbs and RDMA engines. Direct RDMA TX posts an `IBV_WR_SEND` immediately;
-  `get_rx_burst(&burst, conn_id, server)` drives its completions. Single-packet messages in
+  the raw ibverbs and RDMA engines. Direct RDMA TX posts
+  SEND/READ/WRITE/WRITE_IMM work from the caller;
+  `get_rx_burst(&burst, conn_id, server)` drives its completions. Single-packet SEND messages in
   `huge` or `host_pinned` memory are inlined when they fit the QP's returned inline capacity
   (128 bytes requested). Device-memory messages remain DMA-based. RDMA requires one packet
   per direct SEND or RECEIVE posting. Connections pair RX and TX queues by list position;
@@ -791,9 +796,10 @@ PTP-synchronized. DAQIRI requires ConnectX-7 or later for send-on-timestamp.
 - type: `boolean`
 - default: `false`
 
-Accurate send also supports RDMA `SEND` operations on `roce://` endpoints,
-in direct and indirect TX modes. The WAIT gates the QP send queue without an
-RC-only restriction; normal transport connection and addressing requirements apply.
+Accurate send supports RDMA `SEND`, `RDMA_READ`, `RDMA_WRITE`, and
+`RDMA_WRITE_IMM` operations on `roce://` endpoints,
+in direct and indirect TX modes. SEND retains its normal transport support;
+one-sided READ/WRITE/WRITE_IMM operations require RC, as for immediate submission.
 Set `accurate_send: true` under the sending
 interface's `tx` section before connecting. Connection setup fails if the mlx5
 device lacks wait-on-time, a 1 GHz clock, or a RoCE QP timestamp format that supports
@@ -807,7 +813,9 @@ on that burst. Timestamps must be strictly less than four seconds ahead of or be
 PTP-synchronized `CLOCK_REALTIME`. DAQIRI checks this when setting a timestamp and
 again when posting it; the eight-second cyclic comparison is ambiguous outside
 this half-cycle. Submit early enough to reach the NIC before the target time.
-A scheduled SEND gates subsequent SENDs on the same connection. RC flow control,
+A scheduled operation gates subsequent SQ operations on the same connection.
+For READ, the target gates request issuance, not response arrival. Zero-byte
+WRITE_IMM notifications can also be scheduled. RC flow control,
 receiver readiness, and retransmissions can delay delivery beyond that time.
 Linux UDP/TCP sockets do not support this scheduling API.
 

@@ -129,7 +129,10 @@ Status RdmaEngine::set_packet_lengths(BurstParams* burst, int idx,
 Status RdmaEngine::set_packet_tx_time(BurstParams* burst, int idx, uint64_t timestamp) {
   if (!burst || idx < 0 || static_cast<size_t>(idx) >= burst->transport_hdr.num_pkts ||
       burst->transport_hdr.num_pkts > kRdmaBatch || !burst->pkt_lens[0] ||
-      burst->transport_hdr.opcode != RDMAOpCode::SEND) {
+      (burst->transport_hdr.opcode != RDMAOpCode::SEND &&
+       burst->transport_hdr.opcode != RDMAOpCode::RDMA_READ &&
+       burst->transport_hdr.opcode != RDMAOpCode::RDMA_WRITE &&
+       burst->transport_hdr.opcode != RDMAOpCode::RDMA_WRITE_IMM)) {
     return Status::INVALID_PARAMETER;
   }
   const auto conn_id = get_connection_id(burst);
@@ -178,7 +181,8 @@ Status RdmaEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t
   }
   const auto& cache = rdma_burst_cache(burst);
   if (cache.magic != RdmaBurstCache::kMagic || cache.engine != this || burst->transport_hdr.tx ||
-      burst->transport_hdr.opcode != RDMAOpCode::RECEIVE ||
+      (burst->transport_hdr.opcode != RDMAOpCode::RECEIVE &&
+       burst->transport_hdr.opcode != RDMAOpCode::RDMA_WRITE_IMM) ||
       burst->transport_hdr.status != Status::SUCCESS) {
     return Status::NOT_SUPPORTED;
   }
@@ -481,7 +485,7 @@ int RdmaEngine::setup_thread_params(rdma_thread_params* params, bool is_server) 
   qp_params.qp_attr.cap.max_recv_sge = 1;  // No header-data split in RDMA right now
   qp_params.qp_attr.cap.max_recv_wr = MAX_OUSTANDING_WR;
   qp_params.qp_attr.cap.max_send_sge = 1;
-  // Every scheduled SEND needs an additional unsignaled WAIT work request.
+  // Every scheduled SQ operation needs an additional unsignaled WAIT work request.
   qp_params.qp_attr.cap.max_send_wr = MAX_OUSTANDING_WR * (params->accurate_send ? 2 : 1);
   if (params->direct_tx) {
     qp_params.qp_attr.cap.max_inline_data = 128;
@@ -890,8 +894,7 @@ void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, b
           msg->transport_hdr.status = Status::GENERIC_FAILURE;
         }
       }
-      rdma_set_rx_timestamp(msg, 0,
-                            successful && wc.opcode == IBV_WC_RECV ? timestamp_ns : UINT64_MAX);
+      rdma_set_rx_timestamp(msg, 0, successful ? timestamp_ns : UINT64_MAX);
       msg->transport_hdr.server = is_server;
       msg->transport_hdr.tx = false;
       if (successful) {

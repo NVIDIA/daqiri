@@ -13,7 +13,6 @@
 #include <sched.h>
 #include <stdexcept>
 #include <thread>
-#include <arpa/inet.h>
 
 #include "src/engines/rdma/daqiri_rdma_engine.h"
 #include "src/rdma/cm_api.h"
@@ -152,6 +151,14 @@ struct FakeVerbs {
     require(current->current_wc.status == IBV_WC_SUCCESS, "read opcode on failed CQE");
     return current->current_wc.opcode;
   }
+  static unsigned int read_wc_flags(ibv_cq_ex*) {
+    require(current->current_wc.status == IBV_WC_SUCCESS, "read flags on failed CQE");
+    return current->current_wc.wc_flags;
+  }
+  static uint32_t read_imm_data(ibv_cq_ex*) {
+    require(current->current_wc.status == IBV_WC_SUCCESS, "read immediate on failed CQE");
+    return current->current_wc.imm_data;
+  }
   static uint32_t read_byte_len(ibv_cq_ex*) {
     require(current->current_wc.status == IBV_WC_SUCCESS, "read length on failed CQE");
     return current->current_wc.byte_len;
@@ -183,6 +190,7 @@ struct FakeVerbs {
     current->requested_send_wr = attr->cap.max_send_wr;
     // The provider can return more capacity than requested.
     attr->cap.max_inline_data = attr->cap.max_inline_data ? 160 : 0;
+    current->qp.qp_type = attr->qp_type;
     id->qp = &current->qp;
     return 0;
   }
@@ -198,7 +206,17 @@ struct FakeVerbs {
   }
   static int post_send(ibv_qp*, ibv_send_wr* wr, ibv_send_wr**) {
     std::lock_guard<std::mutex> lock(current->mutex);
-    require(wr->opcode == IBV_WR_SEND && wr->num_sge == 1, "incorrect SEND encoding");
+    const bool one_sided = wr->opcode == IBV_WR_RDMA_READ || wr->opcode == IBV_WR_RDMA_WRITE ||
+                           wr->opcode == IBV_WR_RDMA_WRITE_WITH_IMM;
+    require((one_sided || wr->opcode == IBV_WR_SEND) &&
+                ((wr->num_sge == 1 && wr->sg_list) ||
+                 (wr->opcode == IBV_WR_RDMA_WRITE_WITH_IMM && wr->num_sge == 0 && !wr->sg_list)),
+            "incorrect SQ encoding");
+    if (one_sided) {
+      require(wr->wr.rdma.remote_addr >= 4096 && wr->wr.rdma.rkey == 456 &&
+                  (wr->send_flags & IBV_SEND_FENCE),
+              "one-sided descriptor or fence lost");
+    }
     if (current->send_result) {
       return current->send_result;
     }
@@ -291,6 +309,8 @@ class RdmaEnginePollingTestPeer {
     api.end_poll = &FakeVerbs::end_poll;
     api.wc_read_opcode = &FakeVerbs::read_opcode;
     api.wc_read_byte_len = &FakeVerbs::read_byte_len;
+    api.wc_read_wc_flags = &FakeVerbs::read_wc_flags;
+    api.wc_read_imm_data = &FakeVerbs::read_imm_data;
     api.wc_read_completion_wallclock_ns = &FakeVerbs::read_timestamp;
     api.create_timed_qp = &FakeVerbs::create_timed_qp;
     api.cm_create_qp = &FakeVerbs::create_qp;
@@ -334,6 +354,7 @@ class RdmaEnginePollingTestPeer {
     auto& memory = engine.mrs_["data"];
     memory.params_.kind_ = MemoryKind::HOST_PINNED;
     memory.params_.buf_size_ = 4096;
+    memory.params_.access_ = MEM_ACCESS_LOCAL;
     memory.ptr_ = reinterpret_cast<void*>(1);
     memory.params_.adj_size_ = UINT64_MAX - 1;
     memory.params_.num_bufs_ = 1;
@@ -504,24 +525,79 @@ class RdmaEnginePollingTestPeer {
     engine.initialized_ = false;
   }
 
-  void timed(bool server, bool enabled) {
+  void immediate_timestamps(bool server) {
     engine.launch_worker(&params, server);
     params.ready_to_exit.store(true);
     for (auto& [id, thread] : engine.worker_threads_) thread.join();
     engine.worker_threads_.clear();
     params.ready_to_exit.store(false);
-    const bool fully_direct = params.direct_rx && params.direct_tx;
+    BurstParams burst{};
+    std::array<uint64_t, kRdmaPacketMetadataBytes / sizeof(uint64_t)> metadata{};
+    auto* length = reinterpret_cast<uint32_t*>(metadata.data());
+    char data[512]{};
+    void* pointer = data;
+    for (int outcome : {0, 1, 2}) {
+      require(engine.rdma_set_header(&burst, RDMAOpCode::RECEIVE, reinterpret_cast<uintptr_t>(&id),
+                                     server, 1, 777, "data") == Status::SUCCESS,
+              "header failed");
+      burst.pkts[0] = &pointer;
+      burst.pkt_lens[0] = length;
+      *length = 0;
+      uint64_t timestamp = 1;
+      require(engine.get_packet_rx_timestamp(&burst, 0, &timestamp) == Status::NOT_SUPPORTED &&
+                  timestamp == 0,
+              "reused notification retained a timestamp");
+      require(engine.send_tx_burst(&burst) == Status::SUCCESS, "receive credit failed");
+      BurstParams* pending = nullptr;
+      while (tx_ring->dequeue(reinterpret_cast<void**>(&pending)))
+        require(engine.post_burst(&params, pending) == Status::SUCCESS, "receive posting failed");
+      ibv_wc wc{};
+      wc.wr_id = fake.last_receive_id;
+      wc.status = outcome == 2 ? IBV_WC_LOC_PROT_ERR : IBV_WC_SUCCESS;
+      wc.opcode = IBV_WC_RECV_RDMA_WITH_IMM;
+      wc.wc_flags = outcome == 1 ? 0 : IBV_WC_WITH_IMM;
+      wc.imm_data = htonl(0x12345678u);
+      wc.byte_len = 4096;
+      fake.rx_completions.push_back(wc);
+      engine.poll_completions(server, &params, !params.direct_rx, false);
+      BurstParams* result = nullptr;
+      require(engine.get_rx_burst(&result, reinterpret_cast<uintptr_t>(&id), server) ==
+                      Status::SUCCESS &&
+                  result == &burst && *length == 0 && !result->transport_hdr.tx,
+              "notification lost its credit or fabricated local payload");
+      require(result->transport_hdr.status == (outcome ? Status::GENERIC_FAILURE : Status::SUCCESS),
+              "notification completion status changed");
+      check_timestamp(result, true, wc.wr_id);
+      uint32_t immediate = 0;
+      require(engine.rdma_get_immediate_data(result, &immediate) ==
+                  (outcome == 2   ? Status::NOT_SUPPORTED
+                   : outcome == 1 ? Status::GENERIC_FAILURE
+                                  : Status::SUCCESS),
+              "immediate getter accepted a failed notification");
+      if (!outcome) require(immediate == 0x12345678u, "immediate byte order changed");
+    }
+  }
+
+  void timed(bool server, bool enabled, RDMAOpCode operation, bool empty = false) {
+    engine.launch_worker(&params, server);
+    params.ready_to_exit.store(true);
+    for (auto& [id, thread] : engine.worker_threads_) thread.join();
+    engine.worker_threads_.clear();
+    params.ready_to_exit.store(false);
     std::array<uint64_t, kRdmaPacketMetadataBytes / sizeof(uint64_t)> metadata{};
     std::array<char, 512> data{};
     std::array<void*, 2> pointers{data.data(), data.data()};
     auto* lengths = reinterpret_cast<uint32_t*>(metadata.data());
-    lengths[0] = lengths[1] = 64;
+    lengths[0] = lengths[1] = empty ? 0 : 64;
     BurstParams burst{};
-    auto prepare = [&](RDMAOpCode opcode = RDMAOpCode::SEND, int count = 1) {
+    auto prepare = [&](RDMAOpCode opcode = RDMAOpCode::INVALID, int count = 1) {
+      if (opcode == RDMAOpCode::INVALID) opcode = operation;
       engine.rdma_set_header(&burst, opcode, reinterpret_cast<uintptr_t>(&id), server, count, 123,
                              "data");
       burst.pkts[0] = pointers.data();
       burst.pkt_lens[0] = lengths;
+      burst.transport_hdr.raddr = reinterpret_cast<void*>(4096);
+      burst.transport_hdr.dst_key = 456;
     };
     prepare();
     require(engine.set_packet_tx_time(nullptr, 0, 1) == Status::INVALID_PARAMETER &&
@@ -549,13 +625,13 @@ class RdmaEnginePollingTestPeer {
       // One SEND CQE reclaims the operation; no WAIT success CQE is expected.
       for (size_t p = 0; p < burst.transport_hdr.num_pkts; ++p) {
         ibv_wc wc{};
-        wc.wr_id = fully_direct ? fake.last_send_id : burst.transport_hdr.wr_id + p;
+        wc.wr_id = fake.last_send_id - burst.transport_hdr.num_pkts + 1 + p;
         wc.status = IBV_WC_SUCCESS;
         wc.opcode = IBV_WC_SEND;
         fake.tx_completions.push_back(wc);
       }
       engine.poll_completions(server, &params, false, !params.direct_tx);
-      for (size_t p = 0; p < burst.transport_hdr.num_pkts; ++p) {
+      {
         BurstParams* result = nullptr;
         require(engine.get_rx_burst(&result, reinterpret_cast<uintptr_t>(&id), server) ==
                         Status::SUCCESS &&
@@ -577,7 +653,7 @@ class RdmaEnginePollingTestPeer {
     submit();
     require(fake.send_times.size() == 1, "zero timestamp emitted a WAIT");
     if (!params.direct_tx) {
-      prepare(RDMAOpCode::SEND, 2);
+      prepare(operation, 2);
       require(engine.set_packet_tx_time(&burst, 1, when + 1) == Status::SUCCESS &&
                   rdma_tx_time(&burst, 0) == 0,
               "setting one packet did not initialize the other timestamps");
@@ -1101,8 +1177,14 @@ int main() {
         }
         for (bool server : {false, true}) {
           for (bool enabled : {false, true}) {
-            daqiri::RdmaEnginePollingTestPeer timed(rx, tx, enabled);
-            timed.timed(server, enabled);
+            for (auto opcode :
+                 {daqiri::RDMAOpCode::SEND, daqiri::RDMAOpCode::RDMA_READ,
+                  daqiri::RDMAOpCode::RDMA_WRITE, daqiri::RDMAOpCode::RDMA_WRITE_IMM}) {
+              daqiri::RdmaEnginePollingTestPeer timed(rx, tx, enabled);
+              timed.timed(server, enabled, opcode);
+            }
+            daqiri::RdmaEnginePollingTestPeer empty(rx, tx, enabled);
+            empty.timed(server, enabled, daqiri::RDMAOpCode::RDMA_WRITE_IMM, true);
           }
         }
       }
@@ -1114,6 +1196,11 @@ int main() {
           for (bool rx : {false, true}) {
             for (bool tx : {false, true}) {
               for (bool server : {false, true}) {
+                {
+                  daqiri::RdmaEnginePollingTestPeer notification(rx, tx, accurate, timestamps,
+                                                                 realtime_supported);
+                  notification.immediate_timestamps(server);
+                }
                 daqiri::RdmaEnginePollingTestPeer test(rx, tx, accurate, timestamps,
                                                        realtime_supported);
                 test.timestamp_errors();

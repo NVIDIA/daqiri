@@ -37,6 +37,11 @@ def completion(daqiri, conn, server):
     while time.monotonic() < deadline:
         status, burst = daqiri.get_rx_burst_for_connection(conn, server)
         if status == daqiri.Status.SUCCESS:
+            timestamp_status, timestamp_ns = daqiri.get_packet_rx_timestamp(burst, 0)
+            expected = (os.environ.get("DAQIRI_PLATFORM_RDMA_TIMESTAMPS") == "1" and
+                        not burst.rdma_is_tx and burst.rdma_status == daqiri.Status.SUCCESS)
+            assert timestamp_status == (daqiri.Status.SUCCESS if expected else daqiri.Status.NOT_SUPPORTED)
+            assert timestamp_ns > 0 if expected else timestamp_ns == 0
             return burst
         assert status == daqiri.Status.NOT_READY, str(status)
         time.sleep(0.0001)
@@ -60,18 +65,23 @@ def endpoints():
         unavailable(f"DAQIRI Python bindings unavailable: {error}")
     port = int(os.environ.get("DAQIRI_PLATFORM_RDMA_PORT", "19485"))
     poll_mode = os.environ.get("DAQIRI_PLATFORM_RDMA_POLL_MODE", "indirect")
+    rx_mode = os.environ.get("DAQIRI_PLATFORM_RDMA_RX_POLL_MODE", poll_mode)
+    tx_mode = os.environ.get("DAQIRI_PLATFORM_RDMA_TX_POLL_MODE", poll_mode)
+    accurate_send = os.environ.get("DAQIRI_PLATFORM_RDMA_ACCURATE_SEND") == "1"
     interfaces = []
     for index, (mode, ip) in enumerate((("client", client_ip), ("server", server_ip))):
-        queue = {"name": mode, "id": 0, "poll_mode": poll_mode,
-                 "memory_regions": ["LOCAL", "TARGET"]}
-        if poll_mode != "direct":
-            queue.update(batch_size=4, cpu_core=cpus[index + 1])
+        def queue(direction_mode):
+            result = {"name": mode, "id": 0, "poll_mode": direction_mode,
+                      "memory_regions": ["LOCAL", "TARGET"]}
+            if direction_mode != "direct":
+                result.update(batch_size=4, cpu_core=cpus[index + 1])
+            return result
         interfaces.append({"name": mode, "address": ip,
                            "socket_config": {"mode": mode, "local_addr": f"roce://{ip}:{port}"},
                            "roce_config": {"transport_mode": "RC"},
-                           "rx": {"queues": [queue], "hardware_timestamps":
+                           "rx": {"queues": [queue(rx_mode)], "hardware_timestamps":
                                   os.environ.get("DAQIRI_PLATFORM_RDMA_TIMESTAMPS") == "1"},
-                           "tx": {"queues": [queue]}})
+                           "tx": {"queues": [queue(tx_mode)], "accurate_send": accurate_send}})
     config = {"daqiri": {"cfg": {
         "version": 1, "stream_type": "socket", "master_core": cpus[0], "log_level": "info",
         "memory_regions": [
@@ -331,6 +341,80 @@ def test_batched_send_receive(endpoints, server_request):
     assert sent.rdma_status == daqiri.Status.SUCCESS and sent.rdma_wr_id == 11000
     assert daqiri.rdma_get_opcode(sent) == daqiri.RDMAOpCode.SEND
     daqiri.free_tx_burst(sent)
+
+
+@pytest.mark.parametrize("server_request", [False, True])
+@pytest.mark.parametrize("operation,length", [("RDMA_READ", 64), ("RDMA_WRITE", 64),
+                                             ("RDMA_WRITE_IMM", 64), ("RDMA_WRITE_IMM", 0)])
+def test_scheduled_one_sided(endpoints, server_request, operation, length):
+    if os.environ.get("DAQIRI_PLATFORM_RDMA_ACCURATE_SEND") != "1":
+        pytest.skip("requires accurate TX scheduling")
+    if os.environ.get("DAQIRI_PLATFORM_RDMA_TIMESTAMPS") != "1":
+        pytest.skip("requires RX timestamps for hardware timing verification")
+    daqiri, client, server = endpoints
+    conn, peer = (server, client) if server_request else (client, server)
+    opcode = getattr(daqiri.RDMAOpCode, operation)
+    status, remote = daqiri.rdma_get_memory_region(peer, "TARGET")
+    success(daqiri, status)
+    target = allocate(daqiri, peer, not server_request, daqiri.RDMAOpCode.SEND, [128], 0, "TARGET")
+    address = daqiri.get_packet_ptr(target, 0)
+    expected = bytes(range(length))
+    ctypes.memset(address, 0xCC, 128)
+    if operation == "RDMA_READ":
+        ctypes.memmove(address + 16, expected, length)
+    request = allocate(daqiri, conn, server_request, opcode, [length], 12000, "LOCAL")
+    if length and operation != "RDMA_READ":
+        ctypes.memmove(daqiri.get_packet_ptr(request, 0), expected, length)
+    success(daqiri, daqiri.rdma_set_remote_memory(request, remote, address + 16 - remote.address))
+    notify = None
+    if operation == "RDMA_WRITE_IMM":
+        notify = allocate(daqiri, peer, not server_request, daqiri.RDMAOpCode.RECEIVE, [0], 12001, "LOCAL")
+    # A baseline SEND samples the same NIC clock used by WAIT and RX CQEs.
+    # On unsynchronized qualification hosts, test the 8-second cyclic hardware
+    # comparison using an equivalent host-window target. This does not qualify
+    # PTP alignment or absolute epoch scheduling accuracy.
+    receive = allocate(daqiri, peer, not server_request, daqiri.RDMAOpCode.RECEIVE, [1], 12002, "LOCAL")
+    send = allocate(daqiri, conn, server_request, daqiri.RDMAOpCode.SEND, [1], 12003, "LOCAL")
+    success(daqiri, daqiri.send_tx_burst(receive))
+    success(daqiri, daqiri.send_tx_burst(send))
+    baseline = completion(daqiri, peer, not server_request)
+    sent = completion(daqiri, conn, server_request)
+    status, nic_time = daqiri.get_packet_rx_timestamp(baseline, 0)
+    success(daqiri, status)
+    observed = time.monotonic_ns()
+    daqiri.free_tx_burst(baseline)
+    daqiri.free_tx_burst(sent)
+    if notify is not None:
+        success(daqiri, daqiri.send_tx_burst(notify))
+    target_nic = nic_time + 100_000_000
+    host_now = time.time_ns()
+    cycle = 8_000_000_000
+    target_host = host_now + (target_nic - host_now + cycle // 2) % cycle - cycle // 2
+    success(daqiri, daqiri.set_packet_tx_time(request, 0, target_host))
+    submitted = time.monotonic_ns()
+    success(daqiri, daqiri.send_tx_burst(request))
+    done = completion(daqiri, conn, server_request)
+    finished = time.monotonic_ns()
+    assert done.rdma_status == daqiri.Status.SUCCESS and done.rdma_wr_id == 12000
+    assert daqiri.rdma_get_opcode(done) == opcode
+    assert submitted - observed < 50_000_000, "test missed its scheduling lead time"
+    assert finished - observed >= 90_000_000, "scheduled work completed before its NIC target"
+    assert finished - observed < 1_000_000_000, "scheduled work missed the cyclic target"
+    if operation == "RDMA_READ":
+        assert ctypes.string_at(daqiri.get_packet_ptr(done, 0), length) == expected
+    else:
+        assert ctypes.string_at(address + 16, length) == expected
+    assert ctypes.string_at(address, 16) == b"\xCC" * 16
+    assert ctypes.string_at(address + 16 + length, 16) == b"\xCC" * 16
+    if notify is not None:
+        notification = completion(daqiri, peer, not server_request)
+        assert daqiri.rdma_get_opcode(notification) == daqiri.RDMAOpCode.RDMA_WRITE_IMM
+        status, arrived = daqiri.get_packet_rx_timestamp(notification, 0)
+        success(daqiri, status)
+        assert 0 <= arrived - target_nic < 100_000_000
+        daqiri.free_tx_burst(notification)
+    daqiri.free_tx_burst(done)
+    daqiri.free_tx_burst(target)
 
 
 def test_invalid_rkey_completion(endpoints):

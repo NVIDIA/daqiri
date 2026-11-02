@@ -210,7 +210,8 @@ This works with direct, indirect, and mixed RX/TX polling modes without enabling
 accurate TX scheduling.
 Enabling `rx.hardware_timestamps` fails connection setup if the NIC or driver
 cannot create a timestamp-capable receive CQ. Timestamps are available on
-successful `RECEIVE` completions; TX completions return `NOT_SUPPORTED`.
+successful `RECEIVE` and receiver-side `RDMA_WRITE_IMM` completions;
+TX completions return `NOT_SUPPORTED`.
 An RDMA timestamp describes the receive completion of the message, which may
 span multiple wire packets.
 **WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or system clock
@@ -737,14 +738,16 @@ precise timed transmission require ConnectX-7 or later:
 daqiri::set_packet_tx_time(burst, idx, ptp_timestamp_ns);
 ```
 
-RDMA `SEND` operations also support timed transmission with
-`tx.accurate_send: true`, for both direct and indirect TX queues on supported
+RDMA `SEND`, `RDMA_READ`, `RDMA_WRITE`, and `RDMA_WRITE_IMM` support timed
+transmission with `tx.accurate_send: true`, for both direct and indirect TX queues on supported
 mlx5 hardware. Set the RDMA header and acquire buffers before setting timestamps.
 Passing zero clears a timestamp; `rdma_set_header()` clears scheduling when reusing
 a burst. RDMA targets must be strictly less than four seconds from the current
 PTP-synchronized `CLOCK_REALTIME` at assignment and posting; submit ahead of the
-target time. Subsequent SENDs on that connection wait behind
-the scheduled SEND. RC backpressure and retries can delay transmission further.
+target time. Subsequent SQ operations on that connection wait behind
+the scheduled operation. A scheduled READ gates issuance of the READ request;
+it does not set the response arrival time. Zero-byte WRITE_IMM notifications
+can also be scheduled. RC backpressure and retries can delay transmission further.
 
 `ptp_timestamp_ns` is an unsigned 64-bit PTP epoch-nanosecond value in the same clock
 domain as a PTP-synchronized `CLOCK_REALTIME`. Device-clock ticks are not accepted.
@@ -1155,7 +1158,10 @@ is zero, including when the remote write carried payload. A batched `RECEIVE`
 yields one independently owned completion per credit with caller WR IDs
 `wr_id + packet_index`. Release each completion once with `free_tx_burst`.
 This also applies to normal SEND/RECEIVE completion ownership; normal receives
-report the actual received length.
+report the actual received length. With `rx.hardware_timestamps: true`,
+`get_packet_rx_timestamp(notification, 0, &timestamp_ns)` reports the notification's
+hardware completion time, including zero-byte notifications. Plain READ/WRITE
+operations have no receiver CQ event and therefore no receiver timestamp.
 
 The notification identifies arrived data, not application consumption. Retain
 the registered target and return an application buffer credit only after the

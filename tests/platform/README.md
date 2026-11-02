@@ -178,14 +178,23 @@ batched receive credits, both directions, immediate values 0 / 0x12345678 /
 followed by zero-byte `WRITE_IMM` verify data readiness without a sender-side
 wait. Receive-credit exhaustion tests require both completions to remain pending
 until a receive is posted, then verify recovery. Batched SEND/RECEIVE also checks exact bytes and actual receive lengths.
-The suite contains 34 cases.
+The suite contains 34 transfer/notification cases and eight scheduled one-sided cases.
 
 The default `DAQIRI_PLATFORM_RDMA_POLL_MODE=indirect` exercises all 34 cases.
 Set it to `direct` for caller-driven progress, selecting single-packet cases with
 `-k 'not (rdma_byte_integrity and lengths1) and not lengths2 and not batched'`;
 direct queues submit one packet per burst and omit worker/batch settings. Repeat either profile with
 `DAQIRI_PLATFORM_RDMA_TIMESTAMPS=1` to exercise the extended RX CQ used for
-hardware timestamps, including immediate-data decoding.
+hardware timestamps, including immediate-data decoding. Set
+`DAQIRI_PLATFORM_RDMA_RX_POLL_MODE` and `DAQIRI_PLATFORM_RDMA_TX_POLL_MODE`
+to select mixed polling; when either is direct, use the single-packet filter.
+Set `DAQIRI_PLATFORM_RDMA_ACCURATE_SEND=1` to create accurate-send QPs and repeat
+the transfer cases with their matching real-time CQs. With timestamps enabled too,
+eight additional cases verify scheduled READ, WRITE, payload WRITE_IMM, and zero-byte
+WRITE_IMM in both directions. They measure a 100 ms hardware WAIT against a baseline
+receive's NIC timestamp. For hosts without PTP synchronization, they use the same
+8-second cyclic target phase within the setter's host-time window. This verifies
+hardware gating and RX timestamp decoding, not PHC/PTP epoch alignment or wire timing.
 
 Set `DAQIRI_PLATFORM_RDMA_CLIENT_IP` and `DAQIRI_PLATFORM_RDMA_SERVER_IP` to
 unused IPv4 addresses already configured on a local RDMA interface.
@@ -204,6 +213,7 @@ docker run --rm --network host --ulimit memlock=-1 \
   --device=/dev/infiniband/rdma_cm \
   -v "$PWD:/workspace/daqiri:ro" -w /workspace/daqiri \
   -e PYTHONPATH=/workspace/daqiri/build/python \
+  -e DAQIRI_RDMA_GLUE_DIR=/workspace/daqiri/build/lib \
   -e DAQIRI_PLATFORM_RDMA_CLIENT_IP=<client-ip> \
   -e DAQIRI_PLATFORM_RDMA_SERVER_IP=<server-ip> \
   -e DAQIRI_PLATFORM_REQUIRE_RDMA_READ_WRITE=1 \

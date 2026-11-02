@@ -630,12 +630,14 @@ Status set_all_packet_lengths(BurstParams *burst,
  * transmitted after this one in the same queue will be transmitted no earlier
  * than the time listed in the function call. This feature is only available on
  * ConnectX-7 or BlueField 3 and higher cards.
- * RDMA SENDs support this API with tx.accurate_send enabled, in either TX
+ * RDMA SEND, READ, WRITE, and WRITE_IMM support this API with tx.accurate_send
+ * enabled, in either TX
  * polling mode. Set the RDMA header and acquire buffers before scheduling;
  * rdma_set_header clears old timestamps, and time=0 clears one timestamp.
  * RDMA targets must be strictly less than four seconds from CLOCK_REALTIME at
  * assignment and posting. Submit ahead of the target time. RC backpressure and
- * retries can delay transmission further.
+ * retries can delay transmission further. READ schedules request issuance,
+ * not response arrival. Zero-byte WRITE_IMM notifications can be scheduled.
  *
  * @param burst Burst structure containing packet lists
  * @param idx Index of packet

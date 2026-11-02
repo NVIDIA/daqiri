@@ -272,7 +272,7 @@ Status RdmaEngine::poll_direct(RdmaDirectState& state, bool tx, bool server) {
             burst->transport_hdr.status = Status::GENERIC_FAILURE;
           }
         }
-        rdma_set_rx_timestamp(burst, 0, wc.opcode == IBV_WC_RECV ? timestamp_ns : UINT64_MAX);
+        rdma_set_rx_timestamp(burst, 0, timestamp_ns);
         metrics::add_rx(state.counters, 1, wc.byte_len);
       }
     } else {

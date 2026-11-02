@@ -254,7 +254,8 @@ This works with direct, indirect, and mixed RX/TX polling modes without enabling
 accurate TX scheduling.
 Enabling `rx.hardware_timestamps` fails connection setup if the NIC or driver
 cannot create a timestamp-capable receive CQ. Timestamps are available on
-successful `RECEIVE` completions; TX completions return `NOT_SUPPORTED`.
+successful `RECEIVE` and receiver-side `RDMA_WRITE_IMM` completions;
+TX completions return `NOT_SUPPORTED`.
 An RDMA timestamp describes the receive completion of the message, which may
 span multiple wire packets.
 **WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or system clock
@@ -497,13 +498,14 @@ precise timed transmission require ConnectX-7 or later:
 daqiri.set_packet_tx_time(burst, idx, ptp_timestamp_ns)
 ```
 
-RDMA `SEND` operations also support timed transmission with
-`tx.accurate_send: true` in either TX polling mode on supported mlx5 hardware.
+RDMA `SEND`, `RDMA_READ`, `RDMA_WRITE`, and `RDMA_WRITE_IMM` support timed
+transmission with `tx.accurate_send: true` in either TX polling mode on supported mlx5 hardware.
 Set the RDMA header and acquire buffers before setting timestamps. Zero clears a
 timestamp, and `rdma_set_header()` clears scheduling on reuse. Submit ahead of the
 target time. RDMA targets must be strictly less than four seconds from the current
-PTP-synchronized `CLOCK_REALTIME` at assignment and posting. Subsequent
-SENDs on the connection wait behind scheduled work; RC backpressure and retries
+PTP-synchronized `CLOCK_REALTIME` at assignment and posting. A scheduled READ
+gates request issuance, and zero-byte WRITE_IMM notifications can be scheduled.
+Subsequent SQ operations on the connection wait behind scheduled work; RC backpressure and retries
 can delay transmission further.
 
 `ptp_timestamp_ns` is an unsigned 64-bit PTP epoch-nanosecond value in the same clock
@@ -633,7 +635,10 @@ and opcode. `status, slot_id = daqiri.rdma_get_immediate_data(notification)`
 returns the host-order value. The notification has `rdma_is_tx == False` and
 local packet length zero; written data resides in the separately registered
 target. Batched receive credits produce independently owned completions, each
-released once with `free_tx_burst`. See the
+released once with `free_tx_burst`. With `rx.hardware_timestamps: true`,
+`status, timestamp_ns = daqiri.get_packet_rx_timestamp(notification, 0)` returns
+the notification completion time, including for zero-byte notifications.
+Plain READ/WRITE operations have no receiver completion or RX timestamp. See the
 [C++ notification semantics](cpp.md#explicit-write-with-immediate-notifications).
 
 Look up server-side connection IDs:

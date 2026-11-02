@@ -18,7 +18,7 @@ int post_timed_send(ibv_qp* qp, ibv_send_wr* wr, uint64_t timestamp_ns);
 
 // Private glue ABI. Bump the version when the function table changes.
 struct RdmaCmApi {
-  static constexpr uint32_t kAbiVersion = 3;
+  static constexpr uint32_t kAbiVersion = 4;
   uint32_t abi_version;
   size_t struct_size;
 #define DAQIRI_RDMA_FUNCTION(symbol, member) decltype(&::symbol) member;
