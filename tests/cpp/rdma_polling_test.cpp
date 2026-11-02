@@ -30,6 +30,8 @@ struct FakeVerbs {
   ibv_wc current_wc{};
   static constexpr uint64_t kTimestamp = 1780000000123456789ULL;
   bool timestamps = false;
+  bool realtime_supported = true;
+  uint64_t rx_cq_flags = 0;
   bool fail_create_cq_ex = false;
   int poll_error = 0;
   unsigned ended_polls = 0;
@@ -133,15 +135,17 @@ struct FakeVerbs {
     return current->created_cqs++ == 0 ? &current->rx : &current->tx;
   }
   static ibv_cq_ex* create_cq_ex(ibv_context*, ibv_cq_init_attr_ex* attr) {
-    require(
-        attr->wc_flags == (IBV_WC_EX_WITH_BYTE_LEN | IBV_WC_EX_WITH_COMPLETION_TIMESTAMP_WALLCLOCK),
-        "RX CQ did not request hardware wall-clock timestamps and byte lengths");
+    require((attr->wc_flags &
+             (IBV_WC_EX_WITH_BYTE_LEN | IBV_WC_EX_WITH_COMPLETION_TIMESTAMP_WALLCLOCK)) ==
+                (IBV_WC_EX_WITH_BYTE_LEN | IBV_WC_EX_WITH_COMPLETION_TIMESTAMP_WALLCLOCK),
+            "RX CQ did not request hardware wall-clock timestamps and byte lengths");
     if (current->fail_create_cq_ex) {
       errno = EOPNOTSUPP;
       return nullptr;
     }
     ++current->created_cqs;
     current->timestamps = true;
+    current->rx_cq_flags = attr->wc_flags;
     return &current->rx_ex;
   }
   static int start_poll(ibv_cq_ex* cq, ibv_poll_cq_attr*) {
@@ -164,9 +168,22 @@ struct FakeVerbs {
   }
   static uint64_t read_timestamp(ibv_cq_ex*) {
     require(current->current_wc.status == IBV_WC_SUCCESS, "read timestamp on failed CQE");
-    return kTimestamp + current->current_wc.wr_id;
+    const uint64_t timestamp = kTimestamp + current->current_wc.wr_id;
+    // Match mlx5: WALLCLOCK alone on a real-time-capable device exposes packed
+    // seconds/nanoseconds; requesting raw ticks too selects provider conversion.
+    if (current->realtime_supported &&
+        !(current->rx_cq_flags & IBV_WC_EX_WITH_COMPLETION_TIMESTAMP)) {
+      return ((timestamp / 1000000000ULL) << 32) | (timestamp % 1000000000ULL);
+    }
+    return timestamp;
   }
   static int create_qp(rdma_cm_id* id, ibv_pd*, ibv_qp_init_attr* attr) {
+    // A real-time RX CQ cannot share a QP with the legacy, device-clock TX CQ.
+    if (current->timestamps && current->realtime_supported &&
+        !(current->rx_cq_flags & IBV_WC_EX_WITH_COMPLETION_TIMESTAMP)) {
+      errno = EOPNOTSUPP;
+      return -1;
+    }
     current->requested_inline = attr->cap.max_inline_data;
     // The provider can return more capacity than requested.
     attr->cap.max_inline_data = attr->cap.max_inline_data ? 160 : 0;
@@ -248,9 +265,11 @@ class RdmaEnginePollingTestPeer {
   Ring* rx_ring = nullptr;
 
  public:
-  RdmaEnginePollingTestPeer(bool direct_rx, bool direct_tx, bool timestamps = false)
+  RdmaEnginePollingTestPeer(bool direct_rx, bool direct_tx, bool timestamps = false,
+                            bool realtime_supported = true)
       : params(engine.server_q_params_.try_emplace(&listener, 1).first->second[0]) {
     FakeVerbs::current = &fake;
+    fake.realtime_supported = realtime_supported;
     api.create_cq = &FakeVerbs::create_cq;
     api.create_cq_ex = &FakeVerbs::create_cq_ex;
     api.start_poll = &FakeVerbs::start_poll;
@@ -316,6 +335,8 @@ class RdmaEnginePollingTestPeer {
     require(engine.setup_thread_params(&params, false) == 0, "QP setup failed");
     require(fake.requested_inline == (direct_tx ? 128u : 0u), "incorrect inline request");
     require(fake.timestamps == timestamps, "timestamp CQ selection incorrect");
+    require(!timestamps || (fake.rx_cq_flags & IBV_WC_EX_WITH_COMPLETION_TIMESTAMP),
+            "timestamp-enabled RX must retain the legacy TX CQ's device-clock format");
   }
 
   ~RdmaEnginePollingTestPeer() {
@@ -989,17 +1010,20 @@ int main() {
       daqiri::RdmaEnginePollingTestPeer failures(true, true, true);
       failures.connection_setup_failures();
     }
-    for (bool timestamps : {false, true}) {
-      for (bool rx : {false, true}) {
-        for (bool tx : {false, true}) {
-          for (bool server : {false, true}) {
-            daqiri::RdmaEnginePollingTestPeer test(rx, tx, timestamps);
-            test.timestamp_errors();
-            test.batched_timestamps();
-            test.run(rx, tx, server);
-            if (!rx || !tx) {
-              daqiri::RdmaEnginePollingTestPeer concurrent(rx, tx, timestamps);
-              concurrent.concurrent_worker(server);
+    for (bool realtime_supported : {false, true}) {
+      for (bool timestamps : {false, true}) {
+        for (bool rx : {false, true}) {
+          for (bool tx : {false, true}) {
+            for (bool server : {false, true}) {
+              daqiri::RdmaEnginePollingTestPeer test(rx, tx, timestamps, realtime_supported);
+              test.timestamp_errors();
+              test.batched_timestamps();
+              test.run(rx, tx, server);
+              if (!rx || !tx) {
+                daqiri::RdmaEnginePollingTestPeer concurrent(rx, tx, timestamps,
+                                                             realtime_supported);
+                concurrent.concurrent_worker(server);
+              }
             }
           }
         }

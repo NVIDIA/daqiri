@@ -395,7 +395,13 @@ int RdmaEngine::setup_thread_params(rdma_thread_params* params, bool is_server) 
   if (intf.rx_.hardware_timestamps_) {
     ibv_cq_init_attr_ex attr{};
     attr.cqe = MAX_CQ;
-    attr.wc_flags = IBV_WC_EX_WITH_BYTE_LEN | IBV_WC_EX_WITH_COMPLETION_TIMESTAMP_WALLCLOCK;
+    // Request both timestamp fields: mlx5 then keeps the CQ in device-clock
+    // format, matching the legacy TX CQ, and its wall-clock reader converts
+    // ticks to epoch nanoseconds. WALLCLOCK alone selects real-time CQEs on
+    // capable devices: those contain packed seconds/nanoseconds and cannot be
+    // paired with a legacy TX CQ on the same QP.
+    attr.wc_flags = IBV_WC_EX_WITH_BYTE_LEN | IBV_WC_EX_WITH_COMPLETION_TIMESTAMP |
+                    IBV_WC_EX_WITH_COMPLETION_TIMESTAMP_WALLCLOCK;
     qp_params.rx_cq_ex = verbs_->create_cq_ex(params->client_id->verbs, &attr);
     if (qp_params.rx_cq_ex) {
       qp_params.rx_cq = ibv_cq_ex_to_cq(qp_params.rx_cq_ex);
