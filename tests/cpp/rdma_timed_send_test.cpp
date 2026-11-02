@@ -9,6 +9,7 @@
 #include <vector>
 #include <infiniband/mlx5dv.h>
 #include "src/rdma/cm_api.h"
+#include "src/rdma/timed_send.h"
 #include "src/engines/ibverbs/mlx5_prm_min.h"
 
 namespace {
@@ -26,6 +27,8 @@ std::vector<ibv_qp_state> transitions;
 uint32_t remote_vendor = 0, negotiated_options = 0, advertised_vendor = 0;
 int creations = 0, destructions = 0, init_result = 0;
 bool wait_supported = true, realtime = true;
+unsigned qp_format = 2;
+uint64_t fake_now = 1793275200023456789ULL;
 void require(bool value, const char* message) {
   if (!value) throw std::runtime_error(message);
 }
@@ -61,6 +64,13 @@ int complete(ibv_qp_ex*) {
 }
 }  // namespace
 
+extern "C" int __wrap_clock_gettime(clockid_t clock, timespec* now) {
+  require(clock == CLOCK_REALTIME, "scheduled send used the wrong host clock");
+  now->tv_sec = fake_now / 1000000000ULL;
+  now->tv_nsec = fake_now % 1000000000ULL;
+  return 0;
+}
+
 // Test the production glue's builder transaction without requiring a device.
 extern "C" ibv_qp_ex* __wrap_ibv_qp_to_qp_ex(ibv_qp*) {
   return &extended;
@@ -71,9 +81,13 @@ extern "C" mlx5dv_qp_ex* __wrap_mlx5dv_qp_ex_from_ibv_qp_ex(ibv_qp_ex*) {
 extern "C" bool __wrap_mlx5dv_is_supported(ibv_device*) {
   return true;
 }
-extern "C" int __wrap_mlx5dv_devx_general_cmd(ibv_context*, const void*, size_t, void* out,
+extern "C" int __wrap_mlx5dv_devx_general_cmd(ibv_context*, const void* in, size_t, void* out,
                                               size_t) {
   void* cap = DEVX_ADDR_OF(query_hca_cap_out, out, capability);
+  if (DEVX_GET(query_hca_cap_in, in, op_mod) == MLX5_HCA_CAP_OPMOD_ROCE_CUR) {
+    DEVX_SET(roce_cap_min, cap, qp_ts_format, qp_format);
+    return 0;
+  }
   DEVX_SET(cmd_hca_cap_min, cap, wait_on_time, wait_supported);
   DEVX_SET(cmd_hca_cap_min, cap, device_frequency_khz, realtime ? 1000000 : 156250);
   return 0;
@@ -173,6 +187,14 @@ int main() {
               "unsupported timing capabilities did not reject QP setup");
     }
     wait_supported = realtime = true;
+    for (unsigned format : {0u, 3u, 1u, 2u}) {
+      qp_format = format;
+      const int result = daqiri::detail::create_timed_qp(&id, &pd, &attr);
+      require(format == 0 || format == 3 ? result == -1 && errno == EOPNOTSUPP && !id.qp
+                                         : result == 0 && id.qp == &created_qp,
+              "RoCE timestamp format capability was not enforced");
+      id.qp = nullptr;
+    }
     init_result = EIO;
     require(daqiri::detail::create_timed_qp(&id, &pd, &attr) != 0 && errno == EIO &&
                 destructions == 1 && id.qp == nullptr,
@@ -227,10 +249,24 @@ int main() {
         }
       }
     }
+    post_result = 0;
+    for (uint64_t now : {fake_now, uint64_t{1793275207999999999ULL}}) {
+      fake_now = now;
+      for (uint64_t distance : {3900000000ULL, 4000000000ULL, 4100000000ULL, 7900000000ULL}) {
+        for (bool future : {false, true}) {
+          const auto target = future ? now + distance : now - distance;
+          steps.clear();
+          const int result = daqiri::detail::post_timed_send(&qp, &wr, target);
+          require(distance < 4000000000ULL ? result == 0 && !steps.empty()
+                                           : result == EINVAL && steps.empty(),
+                  "cyclic WAIT accepted an ambiguous target or rejected a valid boundary");
+        }
+      }
+    }
     qp.qp_type = IBV_QPT_UD;
     wr.wr.ud.ah = nullptr;
     steps.clear();
-    require(daqiri::detail::post_timed_send(&qp, &wr, time) == EINVAL && steps.empty(),
+    require(daqiri::detail::post_timed_send(&qp, &wr, fake_now) == EINVAL && steps.empty(),
             "UD SEND without a destination started a WAIT transaction");
     std::cout
         << "PASS: RC/UC/UD timing capabilities, QP setup, WAIT encoding, posting, and failures\n";

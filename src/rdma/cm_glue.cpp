@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cm_api.h"
+#include "timed_send.h"
 #include <cerrno>
 #include <infiniband/mlx5dv.h>
 #include "../engines/ibverbs/mlx5_prm_min.h"
@@ -23,6 +24,14 @@ int create_timed_qp(rdma_cm_id* id, ibv_pd* pd, ibv_qp_init_attr* attr) {
   const void* cap = DEVX_ADDR_OF(query_hca_cap_out, out, capability);
   if (!DEVX_GET(cmd_hca_cap_min, cap, wait_on_time) ||
       DEVX_GET(cmd_hca_cap_min, cap, device_frequency_khz) != 1000000u) {
+    errno = EOPNOTSUPP;
+    return -1;
+  }
+
+  DEVX_SET(query_hca_cap_in, in, op_mod, MLX5_HCA_CAP_OPMOD_ROCE_CUR);
+  if (mlx5dv_devx_general_cmd(id->verbs, in, sizeof(in), out, sizeof(out))) return -1;
+  const auto format = DEVX_GET(roce_cap_min, cap, qp_ts_format);
+  if (format != 1 && format != 2) {
     errno = EOPNOTSUPP;
     return -1;
   }
@@ -92,6 +101,7 @@ int create_timed_qp(rdma_cm_id* id, ibv_pd* pd, ibv_qp_init_attr* attr) {
 }
 
 int post_timed_send(ibv_qp* qp, ibv_send_wr* wr, uint64_t timestamp_ns) {
+  if (const int error = validate_rdma_tx_time(timestamp_ns)) return error;
   auto* extended = ibv_qp_to_qp_ex(qp);
   if (!extended) return EOPNOTSUPP;
   auto* dv = mlx5dv_qp_ex_from_ibv_qp_ex(extended);

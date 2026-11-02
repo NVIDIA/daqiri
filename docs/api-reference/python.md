@@ -501,7 +501,8 @@ RDMA `SEND` operations also support timed transmission with
 `tx.accurate_send: true` in either TX polling mode on supported mlx5 hardware.
 Set the RDMA header and acquire buffers before setting timestamps. Zero clears a
 timestamp, and `rdma_set_header()` clears scheduling on reuse. Submit ahead of the
-target time within the NIC's approximately eight-second cyclic window. Subsequent
+target time. RDMA targets must be strictly less than four seconds from the current
+PTP-synchronized `CLOCK_REALTIME` at assignment and posting. Subsequent
 SENDs on the connection wait behind scheduled work; RC backpressure and retries
 can delay transmission further.
 

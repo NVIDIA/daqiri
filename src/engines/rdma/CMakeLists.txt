@@ -101,7 +101,7 @@ if(BUILD_TESTING AND UNIX AND NOT APPLE)
         ${IBVERBS_LIBRARIES} ${RDMACM_LIBRARIES} ${RDMA_MLX5_LIBRARIES})
     target_link_options(daqiri_rdma_timed_send_test PRIVATE
         "LINKER:--wrap=ibv_qp_to_qp_ex" "LINKER:--wrap=mlx5dv_qp_ex_from_ibv_qp_ex")
-    foreach(symbol IN ITEMS mlx5dv_is_supported mlx5dv_devx_general_cmd mlx5dv_create_qp
+    foreach(symbol IN ITEMS clock_gettime mlx5dv_is_supported mlx5dv_devx_general_cmd mlx5dv_create_qp
             ibv_query_ece ibv_set_ece rdma_get_remote_ece rdma_set_local_ece
             rdma_init_qp_attr ibv_modify_qp ibv_destroy_qp)
         target_link_options(daqiri_rdma_timed_send_test PRIVATE "LINKER:--wrap=${symbol}")

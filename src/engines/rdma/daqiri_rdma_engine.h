@@ -60,10 +60,10 @@ struct rdma_thread_params {
   // claimed connection can be overwritten by a later CONNECT_REQUEST.
   bool active = false;
   struct rdma_cm_id* client_id = nullptr;
-  struct ibv_pd* pd;
-  rdma_qp_params qp_params;
-  int if_idx;
-  int queue_idx;
+  struct ibv_pd* pd = nullptr;
+  rdma_qp_params qp_params{};
+  int if_idx = -1;
+  int queue_idx = -1;
   // Per-connection exit flag, set by the DISCONNECTED CM handler and polled
   // by rdma_thread() in its hot loop. std::atomic so the worker actually
   // observes the write (a plain bool would race under the C++ memory model
@@ -250,11 +250,12 @@ class RdmaEngine : public Engine {
   void server_tx(int if_idx, int q);
   void server_rx(int if_idx, int q);
   bool ack_event(rdma_cm_event* cm_event);
+  void handle_connect_request(rdma_cm_event* event);
   void launch_worker(rdma_thread_params* params, bool is_server);
   int mr_access_to_ibv(uint32_t access);
   bool get_ip_from_interface(const std::string_view& if_name, sockaddr_in& addr);
   int setup_thread_params(rdma_thread_params* params, bool is_server);
-  int destroy_thread_params(rdma_thread_params* params, bool is_server = false);
+  int destroy_thread_params(rdma_thread_params* params);
   RDMAOpCode ibv_opcode_to_daqiri_opcode(ibv_wc_opcode opcode);
 };
 
