@@ -33,6 +33,7 @@
 #include <daqiri/daqiri.h>
 #include <mutex>
 #include <map>
+#include <optional>
 #include "rdma_direct.h"
 #include "rdma_work_tracking.h"
 
@@ -90,6 +91,13 @@ struct rdma_thread_params {
   };
   std::unordered_map<uint64_t, ReceiveWork> outstanding_receive_wr_ids;
   std::unordered_map<BurstParams*, size_t> pending_receives;
+  struct ReceiveCompletion {
+    ibv_wc wc;
+    uint64_t timestamp_ns;
+  };
+  // Backpressure never discards a CQE or its independently owned notification.
+  std::optional<ReceiveCompletion> pending_receive_completion;
+  BurstParams* pending_rx_burst = nullptr;
   uint64_t next_receive_id = 1;
   int send_signal_every = 1;
   uint64_t sends_since_signal = 0;

@@ -564,6 +564,11 @@ int RdmaEngine::destroy_thread_params(rdma_thread_params* params) {
     params->qp_params.rx_cq_ex = nullptr;
   }
 
+  params->pending_receive_completion.reset();
+  if (params->pending_rx_burst) {
+    free_tx_burst(params->pending_rx_burst);
+    params->pending_rx_burst = nullptr;
+  }
   // Return reservations only after the QP can no longer access their buffers.
   std::lock_guard<std::mutex> lock(threads_mutex_);
   if (params->qp_params.tx_ring) tx_rings_.push(params->qp_params.tx_ring);
@@ -827,33 +832,29 @@ void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, b
   auto& outstanding_receive_wr_ids = tparams->outstanding_receive_wr_ids;
   auto& pending_receives = tparams->pending_receives;
   auto counters = get_rdma_metrics(cfg_, *tparams);
+  // Drain a completed notification before consuming another RX CQE.
+  if (poll_rx && tparams->pending_rx_burst) {
+    if (rx_ring->enqueue(tparams->pending_rx_burst)) {
+      tparams->pending_rx_burst = nullptr;
+    } else {
+      poll_rx = false;
+    }
+  }
   // Check RQ first to reduce latency
   for (int polled = 0; poll_rx && polled < MAX_CQ; ++polled) {
-    num_comp = poll_rx_completion(tparams, &wc, &timestamp_ns);
+    if (tparams->pending_receive_completion) {
+      wc = tparams->pending_receive_completion->wc;
+      timestamp_ns = tparams->pending_receive_completion->timestamp_ns;
+      tparams->pending_receive_completion.reset();
+      num_comp = 1;
+    } else {
+      num_comp = poll_rx_completion(tparams, &wc, &timestamp_ns);
+    }
     if (num_comp <= 0) {
       break;
     }
     DAQIRI_LOG_DEBUG("GOT RX COMPLETION on connection {} queue {} wrid {}",
                      (void*)tparams->client_id, tparams->queue_idx, (int64_t)wc.wr_id);
-    if (wc.status != IBV_WC_SUCCESS) {
-      // WR_FLUSH_ERR / RETRY_EXC_ERR are the expected statuses for in-flight
-      // WRs when the QP moves to ERR state during teardown (peer disconnect or
-      // local shutdown). Demote to DEBUG only while shutting down, so a clean
-      // teardown doesn't spam while an unexpected mid-run flush (e.g. abrupt
-      // peer disconnect before CM teardown is observed) still surfaces.
-      const bool shutting_down = rdma_force_quit.load() || tparams->ready_to_exit.load();
-      const bool benign_teardown =
-          shutting_down && (wc.status == IBV_WC_WR_FLUSH_ERR || wc.status == IBV_WC_RETRY_EXC_ERR);
-      if (benign_teardown) {
-        DAQIRI_LOG_DEBUG("RX CQ teardown status {} ({}) for WRID {}",
-                         verbs_->wc_status_str(wc.status), (int)wc.status, (int64_t)wc.wr_id);
-      } else {
-        DAQIRI_LOG_ERROR("CQ error {} ({}) for WRID {}", verbs_->wc_status_str(wc.status),
-                         (int)wc.status, (int64_t)wc.wr_id);
-      }
-      metrics::add_dropped(counters, "rx_completion_error", 1);
-    }
-
     auto it = outstanding_receive_wr_ids.find(wc.wr_id);
     if (it == outstanding_receive_wr_ids.end()) {
       DAQIRI_LOG_ERROR("Unknown RQ completion WR ID {}", wc.wr_id);
@@ -867,7 +868,8 @@ void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, b
     if (split) {
       // Each posted receive credit produces its own completion, including
       // its immediate value. Transfer exactly one packet's ownership.
-      msg = create_tx_burst_params();
+      msg = nullptr;
+      if (tx_meta->get(reinterpret_cast<void**>(&msg))) reset_rdma_burst_metadata(msg);
       if (msg != nullptr && tx_burst_pool_->get(reinterpret_cast<void**>(&msg->pkts[0]))) {
         msg->pkts[0][0] = nullptr;
         if (pkt_len_pool_->get(reinterpret_cast<void**>(&msg->pkt_lens[0]))) {
@@ -888,6 +890,31 @@ void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, b
         msg = nullptr;
       }
     }
+    if (msg == nullptr) {
+      // Pool pressure is temporary: keep the CQE, timestamp and original credit
+      // mapped until the application returns enough metadata to split it.
+      tparams->pending_receive_completion = rdma_thread_params::ReceiveCompletion{wc, timestamp_ns};
+      break;
+    }
+    if (wc.status != IBV_WC_SUCCESS) {
+      // WR_FLUSH_ERR / RETRY_EXC_ERR are the expected statuses for in-flight
+      // WRs when the QP moves to ERR state during teardown (peer disconnect or
+      // local shutdown). Demote to DEBUG only while shutting down, so a clean
+      // teardown doesn't spam while an unexpected mid-run flush (e.g. abrupt
+      // peer disconnect before CM teardown is observed) still surfaces.
+      const bool shutting_down = rdma_force_quit.load() || tparams->ready_to_exit.load();
+      const bool benign_teardown =
+          shutting_down && (wc.status == IBV_WC_WR_FLUSH_ERR || wc.status == IBV_WC_RETRY_EXC_ERR);
+      if (benign_teardown) {
+        DAQIRI_LOG_DEBUG("RX CQ teardown status {} ({}) for WRID {}",
+                         verbs_->wc_status_str(wc.status), (int)wc.status, (int64_t)wc.wr_id);
+      } else {
+        DAQIRI_LOG_ERROR("CQ error {} ({}) for WRID {}", verbs_->wc_status_str(wc.status),
+                         (int)wc.status, (int64_t)wc.wr_id);
+      }
+      metrics::add_dropped(counters, "rx_completion_error", 1);
+    }
+
     if (msg != nullptr) {
       const bool successful = wc.status == IBV_WC_SUCCESS;
       msg->transport_hdr.status = successful ? Status::SUCCESS : Status::GENERIC_FAILURE;
@@ -911,8 +938,6 @@ void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, b
       if (successful) {
         metrics::add_rx(counters, 1, static_cast<uint64_t>(wc.byte_len));
       }
-    } else {
-      metrics::add_dropped(counters, "rx_completion_allocation_failure", 1);
     }
     outstanding_receive_wr_ids.erase(it);
     if (--pending_receives.at(parent) == 0) {
@@ -921,13 +946,9 @@ void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, b
         free_tx_burst(parent);
       }
     }
-    if (msg == nullptr) {
-      continue;
-    }
     if (!rx_ring->enqueue(msg)) {
-      metrics::add_dropped(counters, "rx_completion_enqueue_failure", 1);
-      free_tx_burst(msg);
-      return;
+      tparams->pending_rx_burst = msg;
+      break;
     }
   }
 
@@ -1215,6 +1236,7 @@ Status RdmaEngine::rdma_get_memory_region(uintptr_t conn_id, const std::string& 
   if (region == nullptr || conn_id == 0) {
     return Status::INVALID_PARAMETER;
   }
+  std::lock_guard<std::mutex> lock(threads_mutex_);
   auto* connection = reinterpret_cast<rdma_cm_id*>(conn_id);
   if (tx_rings_map_.find(connection) == tx_rings_map_.end()) {
     return Status::INVALID_PARAMETER;

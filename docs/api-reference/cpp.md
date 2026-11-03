@@ -1091,8 +1091,17 @@ if (daqiri::set_packet_lengths(request, 0, {4096}) != daqiri::Status::SUCCESS ||
   daqiri::free_tx_burst(request);
   throw std::runtime_error("Invalid RDMA range");
 }
-// Submission consumes the request on both success and failure.
+// Set this flag to match this connection's configured TX poll_mode.
+const bool tx_is_direct = true;  // false for indirect TX.
 auto status = daqiri::send_tx_burst(request);
+if (status != daqiri::Status::SUCCESS) {
+  if (tx_is_direct || status == daqiri::Status::NOT_READY) {
+    // Direct failures and pre-submission NOT_READY retain ownership.
+    // Retry when ready, or free on cancellation.
+    daqiri::free_tx_burst(request);
+  }
+  // Other errors on this valid indirect request already consumed it.
+}
 ```
 
 For writes, choose `RDMA_WRITE` and fill the local buffers before submission.
@@ -1108,8 +1117,15 @@ per submitted batch, after all successfully posted work has completed. Check
 `transport_hdr.status` before consuming READ data, then call
 `free_tx_burst(completion)` once. Failed verbs posts or CQEs yield
 `GENERIC_FAILURE`; a partially posted batch may have transferred some data.
-Synchronous submission failures consume the burst and return an error without
-queuing a completion. Plain reads/writes do not notify the remote application;
+A successful submission transfers ownership until its completion. In direct TX
+mode, every synchronous failure retains caller ownership, including
+`NO_SPACE_AVAILABLE` and failed verbs posts: retry the request or free it on
+cancellation. In indirect TX mode, work-ring overflow (`NO_SPACE_AVAILABLE`)
+consumes and frees the request. Validation errors after finding a live connection
+also consume indirect requests. Connection readiness failures (`NOT_READY`,
+including a missing/disconnected connection) retain ownership before work is
+accepted. Neither path queues a completion for a synchronous failure. Check the returned status and do not free
+an already consumed request. Plain reads/writes do not notify the remote application;
 use a control message when the peer needs a notification. GPU destinations
 also require application synchronization before launching GPU work.
 
@@ -1158,7 +1174,11 @@ is zero, including when the remote write carried payload. A batched `RECEIVE`
 yields one independently owned completion per credit with caller WR IDs
 `wr_id + packet_index`. Release each completion once with `free_tx_burst`.
 This also applies to normal SEND/RECEIVE completion ownership; normal receives
-report the actual received length. With `rx.hardware_timestamps: true`,
+report the actual received length. If splitting a batch exhausts metadata pools,
+DAQIRI retains the completed credit and retries after the application returns
+storage. A full completion handoff ring similarly retains the notification until
+it can be dequeued; applications must keep draining and freeing completions.
+With `rx.hardware_timestamps: true`,
 `get_packet_rx_timestamp(notification, 0, &timestamp_ns)` reports the notification's
 hardware completion time, including zero-byte notifications. Plain READ/WRITE
 operations have no receiver CQ event and therefore no receiver timestamp.

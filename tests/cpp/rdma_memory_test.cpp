@@ -7,6 +7,7 @@
 #include <cstring>
 #include <deque>
 #include <chrono>
+#include <future>
 #include <sched.h>
 #include <arpa/inet.h>
 #include "src/daqiri_ring.h"
@@ -51,6 +52,21 @@ class RdmaMemoryTestPeer {
   }
   static void worker(RdmaEngine& engine, rdma_thread_params& params) {
     engine.rdma_thread(false, &params);
+  }
+  static bool export_waits_for_registry(RdmaEngine& engine, uintptr_t connection) {
+    std::promise<void> started;
+    auto ready = started.get_future();
+    std::unique_lock<std::mutex> lock(engine.threads_mutex_);
+    auto lookup = std::async(std::launch::async, [&] {
+      started.set_value();
+      RDMAMemoryRegion exported;
+      return engine.rdma_get_memory_region(connection, "memory", &exported);
+    });
+    ready.wait();
+    const bool blocked =
+        lookup.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout;
+    lock.unlock();
+    return lookup.get() == Status::SUCCESS && blocked;
   }
   static int access(RdmaEngine& engine, uint32_t flags) {
     return engine.mr_access_to_ibv(flags);
@@ -219,6 +235,7 @@ int main() {
   require(engine.rdma_get_memory_region(conn_id, "memory", &exported) == Status::SUCCESS);
   require(exported.address == reinterpret_cast<uintptr_t>(memory));
   require(exported.length == 128 && exported.rkey == mr.rkey);
+  require(RdmaMemoryTestPeer::export_waits_for_registry(engine, conn_id));
   require(engine.rdma_get_memory_region(conn_id, "missing", &exported) ==
           Status::INVALID_PARAMETER);
   require(engine.rdma_get_memory_region(123, "memory", &exported) == Status::INVALID_PARAMETER);

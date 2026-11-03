@@ -525,6 +525,125 @@ class RdmaEnginePollingTestPeer {
     engine.initialized_ = false;
   }
 
+  void receive_ring_pressure(bool server) {
+    BurstParams burst{};
+    std::array<uint64_t, kRdmaPacketMetadataBytes / sizeof(uint64_t)> metadata{};
+    char byte = 0;
+    void* pointer = &byte;
+    require(engine.rdma_set_header(&burst, RDMAOpCode::RECEIVE, reinterpret_cast<uintptr_t>(&id),
+                                   server, 1, 900, "data") == Status::SUCCESS,
+            "header failed");
+    burst.pkts[0] = &pointer;
+    burst.pkt_lens[0] = reinterpret_cast<uint32_t*>(metadata.data());
+    require(engine.post_burst(&params, &burst) == Status::SUCCESS, "receive posting failed");
+    int sentinel = 0;
+    while (rx_ring->enqueue(&sentinel)) {
+    }
+    ibv_wc wc{};
+    wc.wr_id = fake.last_receive_id;
+    wc.status = IBV_WC_SUCCESS;
+    wc.opcode = IBV_WC_RECV_RDMA_WITH_IMM;
+    wc.wc_flags = IBV_WC_WITH_IMM;
+    wc.imm_data = htonl(123);
+    wc.byte_len = 64;
+    fake.rx_completions.push_back(wc);
+    engine.poll_completions(server, &params, true, false);
+    require(params.pending_rx_burst == &burst && params.outstanding_receive_wr_ids.empty(),
+            "a full completion ring discarded the notification");
+    engine.poll_completions(server, &params, true, false);
+    require(params.pending_rx_burst == &burst, "retry lost a blocked notification");
+    void* entry = nullptr;
+    while (rx_ring->dequeue(&entry)) require(entry == &sentinel, "ring contents changed");
+    engine.poll_completions(server, &params, true, false);
+    BurstParams* result = nullptr;
+    uint32_t immediate = 0, length = 0;
+    require(!params.pending_rx_burst && rx_ring->dequeue(reinterpret_cast<void**>(&result)) &&
+                result == &burst &&
+                engine.rdma_get_immediate_data(result, &immediate, &length) == Status::SUCCESS &&
+                immediate == 123 && length == 64 && rx_ring->count() == 0,
+            "completion ring did not recover with exactly one notification");
+    check_timestamp(result, true, wc.wr_id);
+  }
+
+  void batched_receive_pressure(bool server, int pressured_pool, bool receive_error) {
+    require(!params.direct_rx, "batched receive test needs indirect RX");
+    engine.connection_params_[&id] = &params;
+    constexpr size_t count = 3;
+    const size_t metadata_count = pressured_pool == 0 ? 2 : 3;
+    const size_t pointer_count = pressured_pool == 1 ? 2 : 3;
+    const size_t length_count = pressured_pool == 2 ? 2 : 3;
+    engine.tx_meta = ObjectPool::create("pressure_metadata", metadata_count, sizeof(BurstParams));
+    engine.tx_burst_pool_ =
+        ObjectPool::create("pressure_pointers", pointer_count, count * sizeof(void*));
+    engine.pkt_len_pool_ =
+        ObjectPool::create("pressure_lengths", length_count, kRdmaPacketMetadataBytes);
+    auto* packets = Ring::create("pressure_packets", 4, RingMode::MPMC);
+    std::array<std::array<char, 64>, count> storage{};
+    for (auto& packet : storage)
+      require(packets->enqueue(packet.data()), "packet pool setup failed");
+    engine.mem_pools_["data"] = packets;
+    auto* parent = engine.create_tx_burst_params();
+    require(
+        parent &&
+            engine.rdma_set_header(parent, RDMAOpCode::RECEIVE, reinterpret_cast<uintptr_t>(&id),
+                                   server, count, 700, "data") == Status::SUCCESS &&
+            engine.get_tx_packet_burst(parent) == Status::SUCCESS,
+        "batch allocation failed");
+    for (size_t p = 0; p < count; ++p) parent->pkt_lens[0][p] = 0;
+    require(engine.post_burst(&params, parent) == Status::SUCCESS, "batch posting failed");
+    const uint64_t first_id = fake.last_receive_id - count + 1;
+    for (size_t p = 0; p < count; ++p) {
+      ibv_wc wc{};
+      wc.wr_id = first_id + p;
+      wc.status = receive_error && p == 1 ? IBV_WC_LOC_PROT_ERR : IBV_WC_SUCCESS;
+      wc.opcode = IBV_WC_RECV_RDMA_WITH_IMM;
+      wc.wc_flags = IBV_WC_WITH_IMM;
+      wc.imm_data = htonl(100 + p);
+      wc.byte_len = 64 + p;
+      fake.rx_completions.push_back(wc);
+    }
+    for (size_t p = 0; p < count; ++p) {
+      engine.poll_completions(server, &params, true, false);
+      if (p + 1 < count) {
+        require(params.pending_receive_completion.has_value() &&
+                    params.outstanding_receive_wr_ids.size() == count - p - 1,
+                "metadata pressure discarded a completed receive credit");
+        // Retrying while still exhausted must leave the CQE and ownership intact.
+        engine.poll_completions(server, &params, true, false);
+        require(params.pending_receive_completion->wc.wr_id == first_id + p + 1,
+                "pool exhaustion lost or replaced the saved CQE");
+      }
+      BurstParams* result = nullptr;
+      require(rx_ring->dequeue(reinterpret_cast<void**>(&result)) && result != parent &&
+                  result->transport_hdr.wr_id == 700 + p && result->transport_hdr.num_pkts == 1 &&
+                  result->pkts[0][0] == storage[p].data() && result->pkt_lens[0][0] == 0,
+              "split receive ownership or application ID was lost under pressure");
+      const bool failed = receive_error && p == 1;
+      require(result->transport_hdr.status == (failed ? Status::GENERIC_FAILURE : Status::SUCCESS),
+              "saved receive CQE lost its error status");
+      check_timestamp(result, !failed, first_id + p);
+      if (!failed) {
+        uint32_t immediate = 0, written = 0;
+        require(engine.rdma_get_immediate_data(result, &immediate, &written) == Status::SUCCESS &&
+                    immediate == 100 + p && written == 64 + p,
+                "saved CQE lost its immediate or write length");
+      }
+      engine.free_tx_burst(result);
+    }
+    require(!params.pending_receive_completion && params.outstanding_receive_wr_ids.empty() &&
+                params.pending_receives.empty() && rx_ring->count() == 0 &&
+                packets->count() == count && engine.tx_meta->avail_count() == metadata_count &&
+                engine.tx_burst_pool_->avail_count() == pointer_count &&
+                engine.pkt_len_pool_->avail_count() == length_count,
+            "pool-pressure recovery leaked or duplicated a notification or buffer");
+    engine.mem_pools_.erase("data");
+    Ring::free(packets);
+    ObjectPool::free(engine.tx_meta);
+    ObjectPool::free(engine.tx_burst_pool_);
+    ObjectPool::free(engine.pkt_len_pool_);
+    engine.tx_meta = engine.tx_burst_pool_ = engine.pkt_len_pool_ = nullptr;
+  }
+
   void indirect_overflow(bool server) {
     std::array<char, 4096> registered_bytes{};
     require(!params.direct_tx, "overflow test requires indirect TX");
@@ -1266,6 +1385,22 @@ int main() {
           failures.setup_failures();
         }
         for (bool server : {false, true}) {
+          if (!rx) {
+            {
+              daqiri::RdmaEnginePollingTestPeer full_ring(rx, tx, true, true);
+              full_ring.receive_ring_pressure(server);
+            }
+            for (int pool : {0, 1, 2}) {
+              for (bool timestamps : {false, true}) {
+                for (bool accurate : {false, true}) {
+                  for (bool error : {false, true}) {
+                    daqiri::RdmaEnginePollingTestPeer pressure(rx, tx, accurate, timestamps);
+                    pressure.batched_receive_pressure(server, pool, error);
+                  }
+                }
+              }
+            }
+          }
           if (!tx) {
             daqiri::RdmaEnginePollingTestPeer overflow(rx, tx);
             overflow.indirect_overflow(server);
