@@ -1053,7 +1053,7 @@ workflow sections above show the common call order and ownership rules.
 | `rdma_get_memory_region(conn_id, mr_name, &region)` | Export the registered address, byte length, and remote key for this connection. |
 | `rdma_set_remote_memory(burst, region, offset = 0)` | Set a checked remote range for RDMA read/write. Call after setting packet lengths. |
 | `rdma_set_header(burst, RDMA_WRITE_IMM, conn_id, is_server, num_pkts, wr_id, local_mr_name, immediate_data)` | Create an explicit write-with-immediate operation using a host-order 32-bit value. |
-| `rdma_get_immediate_data(burst, &value)` | Read a successful write-with-immediate request/completion's host-order value. |
+| `rdma_get_immediate_data(burst, &value[, &written_bytes])` | Read a successful write-with-immediate request/completion's host-order value. |
 | `rdma_get_opcode(burst)` | Return the RDMA operation code recorded on a burst. |
 
 ### RDMA reads and writes
@@ -1067,7 +1067,7 @@ peer must register its target with `access: [rdma_read]` for reads or
 by verbs when registering a remote-write MR.
 
 The peer calls `rdma_get_memory_region(conn_id, mr_name, &region)` and exchanges
-`RDMAMemoryRegion` fields (`address`, `length`, `rkey`) through an application
+`RDMAMemoryRegion` fields (`address`, `length`, `rkey`, `access`) through an application
 control channel. Serialize those fields explicitly with an agreed byte order;
 the C++ struct is not a wire format. Export the descriptor for the connection
 that will use it, and retain its registration until all remote work completes.
@@ -1167,6 +1167,19 @@ The notification identifies arrived data, not application consumption. Retain
 the registered target and return an application buffer credit only after the
 receiver finishes consuming it. For GPU targets, perform the required GPU
 visibility synchronization before consuming data.
+
+
+The `RDMAMemoryRegion.access` field carries the exported MR's access mask. Exchange
+it with the address, length, and rkey; explicit masks are checked before submission.
+Memory-region defaults remain local-only, so exported targets must explicitly enable
+`rdma_read` and/or `rdma_write` in their configuration. The NIC still enforces access.
+
+For notification byte counts, use
+`rdma_get_immediate_data(notification, &immediate, &written_bytes)`. This overload
+accepts successful receiver notifications and reports bytes written to the remote
+target while the receive-credit packet length stays zero. The existing two-argument
+form continues to return just the immediate value. A complete descriptor-exchange
+example is documented in [RDMA READ/WRITE example](../benchmarks/socket_benchmarking.md#rdma-readwrite-example).
 
 ### Buffer Release
 

@@ -1918,7 +1918,7 @@ Status Engine::rdma_set_remote_memory(BurstParams*, const RDMAMemoryRegion&, uin
   return Status::NOT_SUPPORTED;
 }
 
-Status Engine::rdma_get_immediate_data(BurstParams*, uint32_t*) {
+Status Engine::rdma_get_immediate_data(BurstParams*, uint32_t*, uint32_t*) {
   return Status::NOT_SUPPORTED;
 }
 

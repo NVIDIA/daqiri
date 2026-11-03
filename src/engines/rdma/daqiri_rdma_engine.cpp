@@ -668,6 +668,15 @@ Status RdmaEngine::send_tx_burst(BurstParams* burst) {
       return Status::INVALID_PARAMETER;
     }
     if (one_sided) {
+      const uint32_t permission =
+          op == RDMAOpCode::RDMA_READ ? MEM_ACCESS_RDMA_READ : MEM_ACCESS_RDMA_WRITE;
+      const auto consumed = remote - reinterpret_cast<uintptr_t>(burst->transport_hdr.raddr);
+      if (!(burst->transport_hdr.remote_access & permission) ||
+          consumed > burst->transport_hdr.remote_length ||
+          length > burst->transport_hdr.remote_length - consumed) {
+        if (!caller_owned) free_tx_burst(burst);
+        return Status::INVALID_PARAMETER;
+      }
       remote += length;
     }
   }
@@ -885,11 +894,13 @@ void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, b
       msg->transport_hdr.opcode =
           successful ? ibv_opcode_to_daqiri_opcode(wc.opcode) : RDMAOpCode::RECEIVE;
       msg->transport_hdr.imm = 0;
+      msg->transport_hdr.rdma_write_length = 0;
       // WRITE_IMM writes to the registered remote target, not the receive SGE.
       msg->pkt_lens[0][0] = successful && wc.opcode == IBV_WC_RECV ? wc.byte_len : 0;
       if (successful && wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
         if ((wc.wc_flags & IBV_WC_WITH_IMM) != 0) {
           msg->transport_hdr.imm = ntohl(wc.imm_data);
+          msg->transport_hdr.rdma_write_length = wc.byte_len;
         } else {
           msg->transport_hdr.status = Status::GENERIC_FAILURE;
         }
@@ -1223,6 +1234,7 @@ Status RdmaEngine::rdma_get_memory_region(uintptr_t conn_id, const std::string& 
   region->address = reinterpret_cast<uintptr_t>(registration->second->addr);
   region->length = registration->second->length;
   region->rkey = registration->second->rkey;
+  region->access = mr->second.params_.access_;
   return Status::SUCCESS;
 }
 
@@ -1238,6 +1250,10 @@ Status RdmaEngine::rdma_set_remote_memory(BurstParams* burst, const RDMAMemoryRe
       burst->transport_hdr.opcode != RDMAOpCode::RDMA_WRITE_IMM) {
     return Status::NOT_SUPPORTED;
   }
+  const uint32_t permission = burst->transport_hdr.opcode == RDMAOpCode::RDMA_READ
+                                  ? MEM_ACCESS_RDMA_READ
+                                  : MEM_ACCESS_RDMA_WRITE;
+  if (!(region.access & permission)) return Status::INVALID_PARAMETER;
   uint64_t address = region.address + offset;
   for (size_t p = 0; p < burst->transport_hdr.num_pkts; ++p) {
     const uint64_t length = burst->pkt_lens[0][p];
@@ -1249,10 +1265,15 @@ Status RdmaEngine::rdma_set_remote_memory(BurstParams* burst, const RDMAMemoryRe
   }
   burst->transport_hdr.raddr = reinterpret_cast<void*>(region.address + offset);
   burst->transport_hdr.dst_key = region.rkey;
+  burst->transport_hdr.remote_length = region.length - offset;
+  burst->transport_hdr.remote_access = region.access;
   return Status::SUCCESS;
 }
 
-Status RdmaEngine::rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data) {
+Status RdmaEngine::rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data,
+                                           uint32_t* write_length) {
+  if (immediate_data) *immediate_data = 0;
+  if (write_length) *write_length = 0;
   if (burst == nullptr || immediate_data == nullptr) {
     return Status::INVALID_PARAMETER;
   }
@@ -1262,7 +1283,9 @@ Status RdmaEngine::rdma_get_immediate_data(BurstParams* burst, uint32_t* immedia
   if (burst->transport_hdr.status != Status::SUCCESS) {
     return burst->transport_hdr.status;
   }
+  if (write_length && burst->transport_hdr.tx) return Status::NOT_SUPPORTED;
   *immediate_data = burst->transport_hdr.imm;
+  if (write_length) *write_length = burst->transport_hdr.rdma_write_length;
   return Status::SUCCESS;
 }
 
@@ -1290,6 +1313,9 @@ Status RdmaEngine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintp
   burst->transport_hdr.raddr = nullptr;
   burst->transport_hdr.dst_key = 0;
   burst->transport_hdr.imm = immediate_data;
+  burst->transport_hdr.remote_length = 0;
+  burst->transport_hdr.remote_access = 0;
+  burst->transport_hdr.rdma_write_length = 0;
   burst->transport_hdr.status = Status::SUCCESS;
   burst->transport_hdr.opcode = op_code;
   set_connection_id(burst, conn_id);

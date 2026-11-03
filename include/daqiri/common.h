@@ -1251,6 +1251,11 @@ Status rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id
                        uint32_t immediate_data);
 /** Read the host-order immediate value from a successful RDMA_WRITE_IMM request/completion. */
 Status rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data);
+/** Read a successful receiver notification's immediate and remote write byte count.
+ * The byte count describes the remote target, not the receive-credit buffer.
+ */
+Status rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data,
+                               uint32_t* write_length);
 /** Return the local MR descriptor registered for this connection's protection domain. */
 Status rdma_get_memory_region(uintptr_t conn_id, const std::string& mr_name,
                               RDMAMemoryRegion* region);

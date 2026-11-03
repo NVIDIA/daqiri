@@ -37,6 +37,7 @@ if(NOT DAQIRI_YAML_TARGET)
 endif()
 
 set(DAQIRI_BENCH_CONFIGS
+  daqiri_example_rdma_read_write.yaml
   daqiri_bench_raw_tx_rx.yaml
   daqiri_bench_raw_tx_rx_4q.yaml
   daqiri_bench_raw_tx_rx_pacing.yaml
@@ -201,3 +202,7 @@ install(FILES ${DAQIRI_PYTHON_EXAMPLES}
         PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
                     GROUP_EXECUTE GROUP_READ
                     WORLD_EXECUTE WORLD_READ)
+
+add_executable(daqiri_example_rdma_read_write rdma_read_write_example.cpp)
+link_daqiri_bench(daqiri_example_rdma_read_write)
+install(TARGETS daqiri_example_rdma_read_write RUNTIME DESTINATION bin)

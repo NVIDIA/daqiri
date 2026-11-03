@@ -220,6 +220,9 @@ def test_write_with_immediate(endpoints, server_request, lengths, immediate):
         status, value = daqiri.rdma_get_immediate_data(received)
         success(daqiri, status)
         assert value == immediate
+        status, value, written = daqiri.rdma_get_immediate_data(received, with_length=True)
+        success(daqiri, status)
+        assert value == immediate and written == lengths[index]
         assert daqiri.get_packet_length(received, 0) == 0
         # Returning one completion must not release another receive credit's packet.
         daqiri.free_tx_burst(received)

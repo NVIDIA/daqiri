@@ -109,15 +109,6 @@ enum class RDMAOpCode {
 
 enum class RDMACompletionType { RX, TX, INVALID };
 
-/** Registered memory descriptor to exchange with a connected RDMA peer.
- * Values are valid only while the owning engine and registration remain alive.
- */
-struct RDMAMemoryRegion {
-  uint64_t address = 0;
-  uint64_t length = 0;
-  uint32_t rkey = 0;
-};
-
 struct BurstTransportHeader {
   uint8_t version;
   RDMAOpCode opcode;
@@ -137,6 +128,9 @@ struct BurstTransportHeader {
   uint32_t imm;
   uint32_t server_addr;
   uint16_t server_port;
+  uint64_t remote_length;
+  uint32_t remote_access;
+  uint32_t rdma_write_length;
 };
 
 /**
@@ -238,6 +232,16 @@ enum MemoryAccess {
   // raise GPUDirect bandwidth on discrete-GPU hosts, but has caused receive-side
   // local protection errors on some aarch64/Tegra platforms.
   MEM_ACCESS_RELAXED_ORDERING = 1U << 3
+};
+
+/** Registered memory descriptor to exchange with a connected RDMA peer.
+ * Values are valid only while the owning engine and registration remain alive.
+ */
+struct RDMAMemoryRegion {
+  uint64_t address = 0;
+  uint64_t length = 0;
+  uint32_t rkey = 0;
+  uint32_t access = MEM_ACCESS_LOCAL | MEM_ACCESS_RDMA_READ | MEM_ACCESS_RDMA_WRITE;
 };
 
 enum class StreamType {

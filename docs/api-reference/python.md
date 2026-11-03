@@ -641,6 +641,13 @@ the notification completion time, including for zero-byte notifications.
 Plain READ/WRITE operations have no receiver completion or RX timestamp. See the
 [C++ notification semantics](cpp.md#explicit-write-with-immediate-notifications).
 
+`RDMAMemoryRegion.access` carries the exported access mask and must be exchanged
+with the address, length, and rkey. Exported target MRs explicitly configure remote
+read/write access. To retrieve a notification's remote write byte count, call
+`status, immediate, written_bytes = daqiri.rdma_get_immediate_data(notification, with_length=True)`.
+Without `with_length`, the existing `(status, immediate)` return shape is preserved.
+The notification's local packet length remains zero.
+
 Look up server-side connection IDs:
 
 ```python
@@ -775,7 +782,7 @@ The workflow sections above show the common call order and ownership rules.
 | `rdma_get_memory_region(conn_id, mr_name)` | Return `(Status, RDMAMemoryRegion)` for the connection's registration. |
 | `rdma_set_remote_memory(burst, region, offset=0)` | Set a checked remote range for RDMA read/write after setting packet lengths. |
 | `rdma_set_header(burst, RDMAOpCode.RDMA_WRITE_IMM, conn_id, is_server, num_pkts, wr_id, local_mr_name, immediate_data)` | Create an explicit write-with-immediate request. |
-| `rdma_get_immediate_data(burst)` | Return `(Status, value)` in host byte order for a successful write-with-immediate request/completion. |
+| `rdma_get_immediate_data(burst, with_length=False)` | Return `(Status, value)`; `with_length=True` returns `(Status, value, written_bytes)` for receiver notifications. |
 | `rdma_get_opcode(burst)` | Return the RDMA operation code for a burst. |
 
 ### Buffer Release
@@ -922,7 +929,7 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `CommonQueueConfig` | Shared queue fields: name, ID, batch size, split boundary, CPU core, memory regions, and offloads. |
 | `RxQueueConfig` | RX queue wrapper with common queue fields, timeout, `QueuePollMode`, and the raw ibverbs `cqe_compression` flag. |
 | `TxQueueConfig` | TX queue wrapper with common fields, `QueuePollMode`, `TxBufferMode`, and `max_inflight_sends`. |
-| `RDMAMemoryRegion` | Registered `address`, `length`, and `rkey` to exchange with a connected RDMA peer. |
+| `RDMAMemoryRegion` | Registered `address`, `length`, `rkey`, and `access` to exchange with a connected RDMA peer. |
 | `MemoryRegionConfig` | Memory region kind, affinity, access flags, sizes, counts, and ownership. |
 | `ExternalMemoryRegion` | Non-owning integer address and byte capacity. |
 | `MemoryRegionRequirement` | Effective kind, slot size, buffer count, capacity, and alignment. |

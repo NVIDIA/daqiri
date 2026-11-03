@@ -677,7 +677,8 @@ void bind_config_types(py::module_ &m) {
       .def(py::init<>())
       .def_readwrite("address", &RDMAMemoryRegion::address)
       .def_readwrite("length", &RDMAMemoryRegion::length)
-      .def_readwrite("rkey", &RDMAMemoryRegion::rkey);
+      .def_readwrite("rkey", &RDMAMemoryRegion::rkey)
+      .def_readwrite("access", &RDMAMemoryRegion::access);
 
   py::class_<BurstHeaderParams>(m, "BurstHeaderParams")
       .def(py::init<>())
@@ -1635,12 +1636,15 @@ PYBIND11_MODULE(_daqiri, m) {
         "local_mr_name"_a, "immediate_data"_a);
   m.def(
       "rdma_get_immediate_data",
-      [](BurstParams* burst) {
-        uint32_t immediate_data = 0;
-        const auto status = rdma_get_immediate_data(burst, &immediate_data);
+      [](BurstParams* burst, bool with_length) -> py::tuple {
+        uint32_t immediate_data = 0, write_length = 0;
+        const auto status = with_length
+                                ? rdma_get_immediate_data(burst, &immediate_data, &write_length)
+                                : rdma_get_immediate_data(burst, &immediate_data);
+        if (with_length) return py::make_tuple(status, immediate_data, write_length);
         return py::make_tuple(status, immediate_data);
       },
-      "burst"_a);
+      "burst"_a, "with_length"_a = false);
   m.def(
       "rdma_get_memory_region",
       [](uintptr_t conn_id, const std::string& mr_name) {

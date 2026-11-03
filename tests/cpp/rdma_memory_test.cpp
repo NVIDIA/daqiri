@@ -24,7 +24,7 @@ class RdmaMemoryTestPeer {
     params.params_.buf_size_ = mr->length;
     params.params_.adj_size_ = mr->length;
     params.params_.num_bufs_ = 1;
-    params.params_.access_ = MEM_ACCESS_LOCAL;
+    params.params_.access_ = MEM_ACCESS_LOCAL | MEM_ACCESS_RDMA_READ | MEM_ACCESS_RDMA_WRITE;
     engine.mrs_["memory"] = params;
   }
   static void release_synthetic_resources(RdmaEngine& engine) {
@@ -232,6 +232,9 @@ int main() {
   burst.pkt_lens[0] = lengths;
   for (auto op : {RDMAOpCode::RDMA_READ, RDMAOpCode::RDMA_WRITE, RDMAOpCode::RDMA_WRITE_IMM}) {
     require(engine.rdma_set_header(&burst, op, conn_id, false, 2, 42, "memory") == Status::SUCCESS);
+    auto denied = exported;
+    denied.access = MEM_ACCESS_LOCAL;
+    require(engine.rdma_set_remote_memory(&burst, denied, 32) == Status::INVALID_PARAMETER);
     require(engine.rdma_set_remote_memory(&burst, exported, 32) == Status::SUCCESS);
     require(burst.transport_hdr.raddr == memory + 32 && burst.transport_hdr.dst_key == mr.rkey);
     require(engine.rdma_set_remote_memory(&burst, exported, 33) == Status::INVALID_PARAMETER);

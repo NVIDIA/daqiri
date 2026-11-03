@@ -11,6 +11,8 @@ def test_rdma_memory_descriptor():
     region.address = 0x100000000
     region.length = 8192
     region.rkey = 0xDEADBEEF
+    region.access = 7
+    assert region.access == 7
     assert (region.address, region.length, region.rkey) == (0x100000000, 8192, 0xDEADBEEF)
     burst = daqiri.BurstParams()
     burst.rdma_wr_id = 42

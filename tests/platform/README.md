@@ -237,3 +237,13 @@ Counters increased by 1,001 read requests, 1,042 write requests (including 40
 explicit immediate notifications), and the one intentional invalid-rkey error.
 Both directions passed same-QP write-then-notify ordering and delayed receive
 credit recovery. Temporary test IPv4 addresses were removed after each run.
+
+## Descriptor-exchange example
+
+`test_rdma_read_write_example.py` runs the client/server example in all four RX/TX
+polling combinations. Set `DAQIRI_PLATFORM_RDMA_ADDRESS` to an existing local RoCE
+IPv4 address and build `daqiri_example_rdma_read_write`. It verifies descriptor
+exchange, WRITE followed by READ, WRITE_IMM offset and byte count, untouched receive
+credit storage, and acknowledgment before releasing the remote target. Set
+`DAQIRI_RDMA_READ_WRITE_EXAMPLE` to override the executable path. Run with
+`python3 -m pytest tests/platform/test_rdma_read_write_example.py -m platform`.

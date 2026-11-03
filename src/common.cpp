@@ -1174,6 +1174,12 @@ Status rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data) {
   return g_daqiri_engine->rdma_get_immediate_data(burst, immediate_data);
 }
 
+Status rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data,
+                               uint32_t* write_length) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->rdma_get_immediate_data(burst, immediate_data, write_length);
+}
+
 Status rdma_get_memory_region(uintptr_t conn_id, const std::string& mr_name,
                               RDMAMemoryRegion* region) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();

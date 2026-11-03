@@ -159,6 +159,11 @@ Status RdmaEngine::send_direct(RdmaDirectState& state, BurstParams* burst) {
     if (params.client_id->qp->qp_type != IBV_QPT_RC) {
       return Status::NOT_SUPPORTED;
     }
+    const uint32_t permission =
+        opcode == RDMAOpCode::RDMA_READ ? MEM_ACCESS_RDMA_READ : MEM_ACCESS_RDMA_WRITE;
+    if (!(burst->transport_hdr.remote_access & permission) ||
+        state.sge.length > burst->transport_hdr.remote_length)
+      return Status::INVALID_PARAMETER;
     if ((state.sge.length == 0 && opcode != RDMAOpCode::RDMA_WRITE_IMM) || remote == 0 ||
         state.sge.length > UINT64_MAX - remote || burst->transport_hdr.dst_key > UINT32_MAX ||
         !detail::rdma_range_valid(state.sge.addr, state.sge.length,
@@ -264,10 +269,12 @@ Status RdmaEngine::poll_direct(RdmaDirectState& state, bool tx, bool server) {
       } else {
         burst->transport_hdr.opcode = ibv_opcode_to_daqiri_opcode(wc.opcode);
         burst->transport_hdr.imm = 0;
+        burst->transport_hdr.rdma_write_length = 0;
         burst->pkt_lens[0][0] = wc.opcode == IBV_WC_RECV ? wc.byte_len : 0;
         if (wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
           if (wc.wc_flags & IBV_WC_WITH_IMM) {
             burst->transport_hdr.imm = ntohl(wc.imm_data);
+            burst->transport_hdr.rdma_write_length = wc.byte_len;
           } else {
             burst->transport_hdr.status = Status::GENERIC_FAILURE;
           }

@@ -1864,12 +1864,13 @@ Status SocketEngine::rdma_set_remote_memory(BurstParams* burst, const RDMAMemory
 #endif
 }
 
-Status SocketEngine::rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data) {
+Status SocketEngine::rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data,
+                                             uint32_t* write_length) {
 #if DAQIRI_ENGINE_RDMA
   if (!is_roce_protocol() || roce_engine_ == nullptr) {
     return roce_not_initialized("rdma_get_immediate_data");
   }
-  return roce_engine_->rdma_get_immediate_data(burst, immediate_data);
+  return roce_engine_->rdma_get_immediate_data(burst, immediate_data, write_length);
 #else
   return roce_not_initialized("rdma_get_immediate_data");
 #endif

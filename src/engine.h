@@ -242,7 +242,8 @@ class Engine {
                                         RDMAMemoryRegion* region);
   virtual Status rdma_set_remote_memory(BurstParams* burst, const RDMAMemoryRegion& region,
                                         uint64_t offset);
-  virtual Status rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data);
+  virtual Status rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data,
+                                         uint32_t* write_length = nullptr);
   virtual RDMAOpCode rdma_get_opcode(BurstParams* burst);
   int numa_from_mem(const MemoryRegionConfig& mr) const;
   // mbuf/extmem-based helpers used only by the DPDK engine. Their definitions
