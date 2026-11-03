@@ -1120,8 +1120,8 @@ per submitted batch, after all successfully posted work has completed. Check
 A successful submission transfers ownership until its completion. In direct TX
 mode, every synchronous failure retains caller ownership, including
 `NO_SPACE_AVAILABLE` and failed verbs posts: retry the request or free it on
-cancellation. In indirect TX mode, work-ring overflow (`NO_SPACE_AVAILABLE`)
-consumes and frees the request. Validation errors after finding a live connection
+cancellation. In indirect TX mode, work-ring overflow or insufficient receive completion
+reservations (`NO_SPACE_AVAILABLE`) consumes and frees the request. Validation errors after finding a live connection
 also consume indirect requests. Connection readiness failures (`NOT_READY`,
 including a missing/disconnected connection) retain ownership before work is
 accepted. Neither path queues a completion for a synchronous failure. Check the returned status and do not free
@@ -1174,10 +1174,13 @@ is zero, including when the remote write carried payload. A batched `RECEIVE`
 yields one independently owned completion per credit with caller WR IDs
 `wr_id + packet_index`. Release each completion once with `free_tx_burst`.
 This also applies to normal SEND/RECEIVE completion ownership; normal receives
-report the actual received length. If splitting a batch exhausts metadata pools,
-DAQIRI retains the completed credit and retries after the application returns
-storage. A full completion handoff ring similarly retains the notification until
-it can be dequeued; applications must keep draining and freeing completions.
+report the actual received length. DAQIRI reserves every split completion before
+accepting an indirect receive batch. If metadata, pointer, or length storage is
+insufficient, submission returns `NO_SPACE_AVAILABLE` and frees the indirect
+request without posting receive credits. Accepted batches finish even when their
+reservations occupy every metadata item. A full completion handoff ring retains
+the notification until it can be dequeued; applications must keep draining and
+freeing completions.
 With `rx.hardware_timestamps: true`,
 `get_packet_rx_timestamp(notification, 0, &timestamp_ns)` reports the notification's
 hardware completion time, including zero-byte notifications. Plain READ/WRITE

@@ -33,7 +33,6 @@
 #include <daqiri/daqiri.h>
 #include <mutex>
 #include <map>
-#include <optional>
 #include "rdma_direct.h"
 #include "rdma_work_tracking.h"
 
@@ -88,15 +87,12 @@ struct rdma_thread_params {
   struct ReceiveWork {
     BurstParams* burst;
     size_t packet;
+    BurstParams* completion = nullptr;
   };
   std::unordered_map<uint64_t, ReceiveWork> outstanding_receive_wr_ids;
   std::unordered_map<BurstParams*, size_t> pending_receives;
-  struct ReceiveCompletion {
-    ibv_wc wc;
-    uint64_t timestamp_ns;
-  };
-  // Backpressure never discards a CQE or its independently owned notification.
-  std::optional<ReceiveCompletion> pending_receive_completion;
+  // Reserve every split completion before accepting an indirect receive batch.
+  std::unordered_map<BurstParams*, std::vector<BurstParams*>> queued_receive_completions;
   BurstParams* pending_rx_burst = nullptr;
   uint64_t next_receive_id = 1;
   int send_signal_every = 1;
@@ -263,6 +259,8 @@ class RdmaEngine : public Engine {
   Ring* burst_pool(BurstParams* burst);
   void initialize_progress(bool is_server, rdma_thread_params* params);
   void poll_completions(bool is_server, rdma_thread_params* params, bool poll_rx, bool poll_tx);
+  bool reserve_receive_completions(rdma_thread_params* params, BurstParams* burst);
+  void release_receive_completions(rdma_thread_params* params, BurstParams* burst);
   Status post_burst(rdma_thread_params* params, BurstParams* burst);
   void rdma_thread(bool is_server, rdma_thread_params* tparams);
   int setup_pools_and_rings();

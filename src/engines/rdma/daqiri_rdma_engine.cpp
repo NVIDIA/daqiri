@@ -564,7 +564,25 @@ int RdmaEngine::destroy_thread_params(rdma_thread_params* params) {
     params->qp_params.rx_cq_ex = nullptr;
   }
 
-  params->pending_receive_completion.reset();
+  // The QP is gone: reclaim engine-owned receive reservations before slot reuse.
+  for (auto& [id, work] : params->outstanding_receive_wr_ids) {
+    if (work.completion) free_tx_burst(work.completion);
+  }
+  for (auto& [parent, count] : params->pending_receives) free_tx_burst(parent);
+  params->outstanding_receive_wr_ids.clear();
+  params->pending_receives.clear();
+  while (!params->queued_receive_completions.empty()) {
+    release_receive_completions(params, params->queued_receive_completions.begin()->first);
+  }
+  BurstParams* queued = nullptr;
+  if (params->qp_params.tx_ring) {
+    while (params->qp_params.tx_ring->dequeue(reinterpret_cast<void**>(&queued)))
+      free_tx_burst(queued);
+  }
+  if (params->qp_params.rx_ring) {
+    while (params->qp_params.rx_ring->dequeue(reinterpret_cast<void**>(&queued)))
+      free_tx_burst(queued);
+  }
   if (params->pending_rx_burst) {
     free_tx_burst(params->pending_rx_burst);
     params->pending_rx_burst = nullptr;
@@ -695,12 +713,17 @@ Status RdmaEngine::send_tx_burst(BurstParams* burst) {
     return post_burst(params, burst);
   }
   ring = params->qp_params.tx_ring;
+  if (receive && burst->transport_hdr.num_pkts > 1 && !reserve_receive_completions(params, burst)) {
+    free_tx_burst(burst);
+    return Status::NO_SPACE_AVAILABLE;
+  }
 
   if (!ring->enqueue(reinterpret_cast<void*>(burst))) {
     auto counters = get_rdma_metrics(cfg_, *params);
     const auto dropped_packets =
         burst->transport_hdr.num_pkts > 0 ? burst->transport_hdr.num_pkts : 1;
     metrics::add_dropped(counters, "tx_enqueue_failure", dropped_packets);
+    release_receive_completions(params, burst);
     free_tx_burst(burst);
     DAQIRI_LOG_CRITICAL("Failed to enqueue TX work");
     return Status::NO_SPACE_AVAILABLE;
@@ -842,14 +865,7 @@ void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, b
   }
   // Check RQ first to reduce latency
   for (int polled = 0; poll_rx && polled < MAX_CQ; ++polled) {
-    if (tparams->pending_receive_completion) {
-      wc = tparams->pending_receive_completion->wc;
-      timestamp_ns = tparams->pending_receive_completion->timestamp_ns;
-      tparams->pending_receive_completion.reset();
-      num_comp = 1;
-    } else {
-      num_comp = poll_rx_completion(tparams, &wc, &timestamp_ns);
-    }
+    num_comp = poll_rx_completion(tparams, &wc, &timestamp_ns);
     if (num_comp <= 0) {
       break;
     }
@@ -866,35 +882,11 @@ void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, b
     const bool split = parent->transport_hdr.num_pkts > 1;
     msg = parent;
     if (split) {
-      // Each posted receive credit produces its own completion, including
-      // its immediate value. Transfer exactly one packet's ownership.
-      msg = nullptr;
-      if (tx_meta->get(reinterpret_cast<void**>(&msg))) reset_rdma_burst_metadata(msg);
-      if (msg != nullptr && tx_burst_pool_->get(reinterpret_cast<void**>(&msg->pkts[0]))) {
-        msg->pkts[0][0] = nullptr;
-        if (pkt_len_pool_->get(reinterpret_cast<void**>(&msg->pkt_lens[0]))) {
-          msg->transport_hdr = parent->transport_hdr;
-          msg->transport_hdr.num_pkts = 1;
-          msg->transport_hdr.wr_id += received.packet;
-          msg->pkts[0][0] = parent->pkts[0][received.packet];
-          parent->pkts[0][received.packet] = nullptr;
-          auto& cache = rdma_burst_cache(msg);
-          cache.magic = RdmaBurstCache::kMagic;
-          cache.engine = this;
-        } else {
-          free_tx_burst(msg);
-          msg = nullptr;
-        }
-      } else if (msg != nullptr) {
-        free_tx_burst(msg);
-        msg = nullptr;
-      }
-    }
-    if (msg == nullptr) {
-      // Pool pressure is temporary: keep the CQE, timestamp and original credit
-      // mapped until the application returns enough metadata to split it.
-      tparams->pending_receive_completion = rdma_thread_params::ReceiveCompletion{wc, timestamp_ns};
-      break;
+      msg = received.completion;
+      // Submission reserved this storage before any work reached the NIC.
+      assert(msg != nullptr);
+      msg->pkts[0][0] = parent->pkts[0][received.packet];
+      parent->pkts[0][received.packet] = nullptr;
     }
     if (wc.status != IBV_WC_SUCCESS) {
       // WR_FLUSH_ERR / RETRY_EXC_ERR are the expected statuses for in-flight
@@ -1012,6 +1004,46 @@ void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, b
   }
 }
 
+bool RdmaEngine::reserve_receive_completions(rdma_thread_params* params, BurstParams* burst) {
+  auto& reserved = params->queued_receive_completions[burst];
+  reserved.reserve(burst->transport_hdr.num_pkts);
+  for (size_t p = 0; p < burst->transport_hdr.num_pkts; ++p) {
+    BurstParams* child = nullptr;
+    if (!tx_meta->get(reinterpret_cast<void**>(&child))) {
+      release_receive_completions(params, burst);
+      return false;
+    }
+    reset_rdma_burst_metadata(child);
+    child->transport_hdr = burst->transport_hdr;
+    child->transport_hdr.num_pkts = 1;
+    child->transport_hdr.wr_id += p;
+    auto& cache = rdma_burst_cache(child);
+    cache.magic = RdmaBurstCache::kMagic;
+    cache.engine = this;
+    reserved.push_back(child);
+    if (!tx_burst_pool_->get(reinterpret_cast<void**>(&child->pkts[0]))) {
+      release_receive_completions(params, burst);
+      return false;
+    }
+    child->pkts[0][0] = nullptr;
+    if (!pkt_len_pool_->get(reinterpret_cast<void**>(&child->pkt_lens[0]))) {
+      release_receive_completions(params, burst);
+      return false;
+    }
+    child->pkt_lens[0][0] = 0;
+  }
+  return true;
+}
+
+void RdmaEngine::release_receive_completions(rdma_thread_params* params, BurstParams* burst) {
+  auto it = params->queued_receive_completions.find(burst);
+  if (it == params->queued_receive_completions.end()) return;
+  for (auto* child : it->second) {
+    if (child) free_tx_burst(child);
+  }
+  params->queued_receive_completions.erase(it);
+}
+
 Status RdmaEngine::post_burst(rdma_thread_params* tparams, BurstParams* burst) {
   using ReceiveWork = rdma_thread_params::ReceiveWork;
   auto& outstanding_send_wr_ids = tparams->outstanding_send_wr_ids;
@@ -1026,6 +1058,7 @@ Status RdmaEngine::post_burst(rdma_thread_params* tparams, BurstParams* burst) {
   auto counters = get_rdma_metrics(cfg_, *tparams);
   const auto local_mr = mrs_.find(burst->transport_hdr.local_mr_name);
   if (local_mr == mrs_.end()) {
+    release_receive_completions(tparams, burst);
     if (!caller_owned) {
       free_tx_burst(burst);
     }
@@ -1142,6 +1175,7 @@ Status RdmaEngine::post_burst(rdma_thread_params* tparams, BurstParams* burst) {
       if (pd == pd_map_.end()) {
         DAQIRI_LOG_CRITICAL("Couldn't find PD for client");
         metrics::add_dropped(counters, "missing_protection_domain", burst->transport_hdr.num_pkts);
+        release_receive_completions(tparams, burst);
         if (!caller_owned) {
           free_tx_burst(burst);
         }
@@ -1154,12 +1188,16 @@ Status RdmaEngine::post_burst(rdma_thread_params* tparams, BurstParams* burst) {
         DAQIRI_LOG_CRITICAL("Couldn't find MR with name {} in registry",
                             burst->transport_hdr.local_mr_name);
         metrics::add_dropped(counters, "missing_memory_key", burst->transport_hdr.num_pkts);
+        release_receive_completions(tparams, burst);
         if (!caller_owned) {
           free_tx_burst(burst);
         }
         return Status::INVALID_PARAMETER;
       }
 
+      auto reserved = tparams->queued_receive_completions.find(burst);
+      assert(burst->transport_hdr.num_pkts == 1 ||
+             reserved != tparams->queued_receive_completions.end());
       bool posted_any = false;
       for (int p = 0; p < burst->transport_hdr.num_pkts; p++) {
         struct ibv_recv_wr recv_wr;
@@ -1185,6 +1223,7 @@ Status RdmaEngine::post_burst(rdma_thread_params* tparams, BurstParams* burst) {
         if (ret) {
           DAQIRI_LOG_CRITICAL("ibv_post_recv failed: {}", strerror(errno));
           metrics::add_dropped(counters, "rx_post_failure", 1);
+          release_receive_completions(tparams, burst);
           if (!posted_any) {
             if (!caller_owned) free_tx_burst(burst);
             return Status::GENERIC_FAILURE;
@@ -1193,10 +1232,14 @@ Status RdmaEngine::post_burst(rdma_thread_params* tparams, BurstParams* burst) {
         }
         posted_any = true;
 
+        auto* completion =
+            reserved == tparams->queued_receive_completions.end() ? nullptr : reserved->second[p];
         outstanding_receive_wr_ids.emplace(next_receive_id++,
-                                           ReceiveWork{burst, static_cast<size_t>(p)});
+                                           ReceiveWork{burst, static_cast<size_t>(p), completion});
+        if (completion) reserved->second[p] = nullptr;
         ++pending_receives[burst];
       }
+      release_receive_completions(tparams, burst);
       break;
     }
     default:
@@ -1994,8 +2037,6 @@ void RdmaEngine::run() {
           }
           std::lock_guard<std::mutex> progress_lock(tparams_to_clear->progress_mutex);
           tparams_to_clear->outstanding_send_wr_ids.clear();
-          tparams_to_clear->outstanding_receive_wr_ids.clear();
-          tparams_to_clear->pending_receives.clear();
           destroy_thread_params(tparams_to_clear);
           tparams_to_clear->client_id = nullptr;
           tparams_to_clear->active = false;
