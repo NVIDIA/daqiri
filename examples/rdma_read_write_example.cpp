@@ -273,7 +273,10 @@ int main(int argc, char** argv) {
           is_server ? d::rdma_get_server_conn_id(server_address, port, &connection)
                     : d::rdma_connect_to_server(server_address, port, intf.address_, &connection);
       if (status != d::Status::SUCCESS) {
-        require(status == d::Status::NOT_READY || status == d::Status::CONNECT_FAILURE,
+        // A server slot can exist before its worker is ready for connection lookup.
+        const bool server_starting = is_server && status == d::Status::NO_SPACE_AVAILABLE;
+        require(status == d::Status::NOT_READY || status == d::Status::CONNECT_FAILURE ||
+                    server_starting,
                 "cannot establish RC connection");
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
       }
