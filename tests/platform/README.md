@@ -156,3 +156,94 @@ prints RTT percentiles, completion totals, payload verification, and allocation
 counts. The CSV contains measured client RTT samples in microseconds. There are
 no timed handle allocations or server payload copies. Repeat runs and alternate
 mode order. `ib_send_lat` reports half RTT, so double its latency before comparison.
+
+## RC RDMA reads and writes
+
+`test_rdma_read_write.py` creates a client and server in one process on real
+RDMA-capable local IPv4 addresses. It uses the Python bindings and CPU `host`
+memory. Both addresses may belong to one mlx5 port for same-host NIC loopback;
+this is a correctness test, not a cable-throughput benchmark.
+
+The test reserves peer target buffers, exports their registered descriptors,
+and checks exact bytes and guard ranges for 1,000 READs and 1,000 WRITEs across
+both connection directions, single-packet requests, and four-packet batches
+with lengths 1, 64, 257, and 4096 bytes. It checks preserved opcodes, caller
+WR IDs, pointers, and one completion per batch, then verifies SEND/RECEIVE
+coexistence. The final invalid-rkey test requires a `GENERIC_FAILURE` completion;
+that deliberate remote-access violation puts the client QP into error.
+
+Additional `RDMA_WRITE_IMM` cases cover zero-byte notifications, payload writes,
+batched receive credits, both directions, immediate values 0 / 0x12345678 /
+0xFFFFFFFF, and independent receive-completion ownership. Separate plain writes
+followed by zero-byte `WRITE_IMM` verify data readiness without a sender-side
+wait. Receive-credit exhaustion tests require both completions to remain pending
+until a receive is posted, then verify recovery. Batched SEND/RECEIVE also checks exact bytes and actual receive lengths.
+The suite contains 34 transfer/notification cases and eight scheduled one-sided cases.
+
+The default `DAQIRI_PLATFORM_RDMA_POLL_MODE=indirect` exercises all 34 cases.
+Set it to `direct` for caller-driven progress, selecting single-packet cases with
+`-k 'not (rdma_byte_integrity and lengths1) and not lengths2 and not batched'`;
+direct queues submit one packet per burst and omit worker/batch settings. Repeat either profile with
+`DAQIRI_PLATFORM_RDMA_TIMESTAMPS=1` to exercise the extended RX CQ used for
+hardware timestamps, including immediate-data decoding. Set
+`DAQIRI_PLATFORM_RDMA_RX_POLL_MODE` and `DAQIRI_PLATFORM_RDMA_TX_POLL_MODE`
+to select mixed polling; when either is direct, use the single-packet filter.
+Set `DAQIRI_PLATFORM_RDMA_ACCURATE_SEND=1` to create accurate-send QPs and repeat
+the transfer cases with their matching real-time CQs. With timestamps enabled too,
+eight additional cases verify scheduled READ, WRITE, payload WRITE_IMM, and zero-byte
+WRITE_IMM in both directions. They measure a 100 ms hardware WAIT against a baseline
+receive's NIC timestamp. For hosts without PTP synchronization, they use the same
+8-second cyclic target phase within the setter's host-time window. This verifies
+hardware gating and RX timestamp decoding, not PHC/PTP epoch alignment or wire timing.
+
+Set `DAQIRI_PLATFORM_RDMA_CLIENT_IP` and `DAQIRI_PLATFORM_RDMA_SERVER_IP` to
+unused IPv4 addresses already configured on a local RDMA interface.
+`DAQIRI_PLATFORM_RDMA_PORT` defaults to 19485 and
+`DAQIRI_PLATFORM_RDMA_ITERATIONS` defaults to 100 per case.
+Set `DAQIRI_PLATFORM_REQUIRE_RDMA_READ_WRITE=1` in qualification jobs so missing
+addresses, devices, bindings, or CPU cores fail instead of skipping.
+The test does not modify networking. If adding temporary addresses, remove
+only those addresses after the test, including on failure.
+
+Run against the freshly built bindings in a project container:
+
+```bash
+docker run --rm --network host --ulimit memlock=-1 \
+  --device=/dev/infiniband/uverbs0 --device=/dev/infiniband/uverbs1 \
+  --device=/dev/infiniband/rdma_cm \
+  -v "$PWD:/workspace/daqiri:ro" -w /workspace/daqiri \
+  -e PYTHONPATH=/workspace/daqiri/build/python \
+  -e DAQIRI_RDMA_GLUE_DIR=/workspace/daqiri/build/lib \
+  -e DAQIRI_PLATFORM_RDMA_CLIENT_IP=<client-ip> \
+  -e DAQIRI_PLATFORM_RDMA_SERVER_IP=<server-ip> \
+  -e DAQIRI_PLATFORM_REQUIRE_RDMA_READ_WRITE=1 \
+  <daqiri-test-image> \
+  python3 -m pytest tests/platform/test_rdma_read_write.py -m platform -p no:cacheprovider
+```
+
+Expose the CUDA driver library using the container's GPU runtime or a read-only
+host-library mount; the test uses CPU buffers but the shared SDK links CUDA.
+Select the actual `uverbs` device paths present on the runner. For evidence of
+hardware execution, record before/after `rx_read_requests`, `rx_write_requests`,
+and `req_remote_access_errors` under
+`/sys/class/infiniband/<device>/ports/1/hw_counters`.
+
+Initial READ/WRITE verification on mlx5_0 (vendor part ID 4129, firmware 28.50.1002): all 10 initial cases passed,
+with counter deltas of 1,001 read requests (including the rejected invalid-key
+request), 1,000 write requests, and one expected requester remote-access error.
+
+Explicit write-with-immediate verification passed all 34 cases on the same NIC.
+Counters increased by 1,001 read requests, 1,042 write requests (including 40
+explicit immediate notifications), and the one intentional invalid-rkey error.
+Both directions passed same-QP write-then-notify ordering and delayed receive
+credit recovery. Temporary test IPv4 addresses were removed after each run.
+
+## Descriptor-exchange example
+
+`test_rdma_read_write_example.py` runs the client/server example in all four RX/TX
+polling combinations. Set `DAQIRI_PLATFORM_RDMA_ADDRESS` to an existing local RoCE
+IPv4 address and build `daqiri_example_rdma_read_write`. It verifies descriptor
+exchange, WRITE followed by READ, WRITE_IMM offset and byte count, untouched receive
+credit storage, and acknowledgment before releasing the remote target. Set
+`DAQIRI_RDMA_READ_WRITE_EXAMPLE` to override the executable path. Run with
+`python3 -m pytest tests/platform/test_rdma_read_write_example.py -m platform`.

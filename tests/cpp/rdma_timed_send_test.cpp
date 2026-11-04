@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <array>
+#include <arpa/inet.h>
 #include <cerrno>
 #include <cstring>
 #include <iostream>
@@ -45,6 +46,25 @@ void send(ibv_qp_ex* qp) {
   steps.push_back(3);
   send_id = qp->wr_id;
   send_flags = qp->wr_flags;
+}
+void rdma_read(ibv_qp_ex* qp, uint32_t key, uint64_t address) {
+  require(key == 789 && address == 123456, "remote READ descriptor changed");
+  send(qp);
+  steps.back() = 8;
+}
+void rdma_write(ibv_qp_ex* qp, uint32_t key, uint64_t address) {
+  require(key == 789 && address == 123456, "remote WRITE descriptor changed");
+  send(qp);
+  steps.back() = 9;
+}
+void rdma_write_imm(ibv_qp_ex* qp, uint32_t key, uint64_t address, uint32_t immediate) {
+  require(immediate == htonl(0x12345678u), "immediate byte order changed");
+  rdma_write(qp, key, address);
+  steps.back() = 10;
+}
+void empty_sges(ibv_qp_ex*, size_t count, const ibv_sge* entries) {
+  require(count == 0 && entries == nullptr, "empty notification carries a local buffer");
+  steps.push_back(11);
 }
 void sge(ibv_qp_ex*, uint32_t key, uint64_t addr, uint32_t length) {
   require(key == 123 && addr == 456 && length == 64, "DMA descriptor changed");
@@ -94,7 +114,12 @@ extern "C" int __wrap_mlx5dv_devx_general_cmd(ibv_context*, const void* in, size
 }
 extern "C" ibv_qp* __wrap_mlx5dv_create_qp(ibv_context*, ibv_qp_init_attr_ex* attr,
                                            mlx5dv_qp_init_attr* dv_attr) {
-  require(attr->send_ops_flags == IBV_QP_EX_WITH_SEND && (attr->comp_mask & IBV_QP_INIT_ATTR_PD) &&
+  const uint64_t expected =
+      IBV_QP_EX_WITH_SEND |
+      (attr->qp_type == IBV_QPT_RC ? IBV_QP_EX_WITH_RDMA_READ | IBV_QP_EX_WITH_RDMA_WRITE |
+                                         IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM
+                                   : 0);
+  require(attr->send_ops_flags == expected && (attr->comp_mask & IBV_QP_INIT_ATTR_PD) &&
               (attr->comp_mask & IBV_QP_INIT_ATTR_SEND_OPS_FLAGS) &&
               dv_attr->send_ops_flags == MLX5DV_QP_EX_WITH_RAW_WQE,
           "timed QP did not enable extended SEND and raw WQEs");
@@ -202,6 +227,10 @@ int main() {
     init_result = 0;
     extended.wr_start = start;
     extended.wr_send = send;
+    extended.wr_rdma_read = rdma_read;
+    extended.wr_rdma_write = rdma_write;
+    extended.wr_rdma_write_imm = rdma_write_imm;
+    extended.wr_set_sge_list = empty_sges;
     extended.wr_set_sge = sge;
     extended.wr_set_ud_addr = ud_addr;
     extended.wr_set_inline_data = inline_data;
@@ -249,6 +278,54 @@ int main() {
         }
       }
     }
+    // A timed one-sided operation is still one WAIT + data transaction.
+    // Preserve remote addressing, the network-order immediate, fences and
+    // zero-SGE notifications through successful and failed atomic posting.
+    for (auto opcode : {IBV_WR_RDMA_READ, IBV_WR_RDMA_WRITE, IBV_WR_RDMA_WRITE_WITH_IMM}) {
+      wr.opcode = opcode;
+      wr.wr.rdma.remote_addr = 123456;
+      wr.wr.rdma.rkey = 789;
+      wr.imm_data = htonl(0x12345678u);
+      for (bool empty : {false, true}) {
+        if (empty && opcode != IBV_WR_RDMA_WRITE_WITH_IMM) continue;
+        wr.num_sge = empty ? 0 : 1;
+        wr.sg_list = empty ? nullptr : &data;
+        for (auto type : {IBV_QPT_RC, IBV_QPT_UC, IBV_QPT_UD}) {
+          qp.qp_type = type;
+          for (int result : {0, ENOMEM}) {
+            steps.clear();
+            post_result = result;
+            wr.send_flags = IBV_SEND_SIGNALED | IBV_SEND_FENCE;
+            const int actual = daqiri::detail::post_timed_send(&qp, &wr, time);
+            if (type != IBV_QPT_RC) {
+              require(actual == EINVAL && steps.empty(), "non-RC one-sided WAIT was posted");
+              continue;
+            }
+            const int operation = opcode == IBV_WR_RDMA_READ    ? 8
+                                  : opcode == IBV_WR_RDMA_WRITE ? 9
+                                                                : 10;
+            require(
+                actual == result && steps == std::vector<int>{1, 2, operation, empty ? 11 : 4, 6},
+                "one-sided WAIT and data did not share one builder transaction");
+            require(wait_id == wr.wr_id && send_id == wr.wr_id && send_flags == wr.send_flags,
+                    "one-sided completion ID, fence or signal was lost");
+          }
+        }
+      }
+    }
+    qp.qp_type = IBV_QPT_RC;
+    wr.opcode = IBV_WR_RDMA_READ;
+    wr.num_sge = 1;
+    wr.sg_list = &data;
+    wr.send_flags = IBV_SEND_INLINE;
+    steps.clear();
+    require(daqiri::detail::post_timed_send(&qp, &wr, time) == EINVAL && steps.empty(),
+            "inline READ started a builder transaction");
+    wr.opcode = IBV_WR_SEND;
+    wr.send_flags = IBV_SEND_SIGNALED;
+    wr.wr.ud.ah = &destination;
+    wr.wr.ud.remote_qpn = 321;
+    wr.wr.ud.remote_qkey = 654;
     post_result = 0;
     for (uint64_t now : {fake_now, uint64_t{1793275207999999999ULL}}) {
       fake_now = now;

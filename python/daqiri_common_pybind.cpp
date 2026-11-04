@@ -673,6 +673,13 @@ void bind_config_types(py::module_ &m) {
       .def_readwrite("aggregate_len", &ReorderBurstInfo::aggregate_len)
       .def_readwrite("burst_flags", &ReorderBurstInfo::burst_flags);
 
+  py::class_<RDMAMemoryRegion>(m, "RDMAMemoryRegion")
+      .def(py::init<>())
+      .def_readwrite("address", &RDMAMemoryRegion::address)
+      .def_readwrite("length", &RDMAMemoryRegion::length)
+      .def_readwrite("rkey", &RDMAMemoryRegion::rkey)
+      .def_readwrite("access", &RDMAMemoryRegion::access);
+
   py::class_<BurstHeaderParams>(m, "BurstHeaderParams")
       .def(py::init<>())
       .def_readwrite("num_pkts", &BurstHeaderParams::num_pkts)
@@ -695,17 +702,15 @@ void bind_config_types(py::module_ &m) {
       .def(py::init<>())
       .def_readwrite("hdr", &BurstParams::hdr)
       .def_property(
-          "connection_id",
-          [](const BurstParams &burst) { return get_connection_id(&burst); },
-          [](BurstParams &burst, uintptr_t conn_id) {
-            set_connection_id(&burst, conn_id);
-          })
+          "connection_id", [](const BurstParams& burst) { return get_connection_id(&burst); },
+          [](BurstParams& burst, uintptr_t conn_id) { set_connection_id(&burst, conn_id); })
+      .def_property_readonly("rdma_status",
+                             [](const BurstParams& burst) { return burst.transport_hdr.status; })
+      .def_property_readonly("rdma_is_tx",
+                             [](const BurstParams& burst) { return burst.transport_hdr.tx; })
       .def_property(
-          "rdma_wr_id",
-          [](const BurstParams &burst) { return burst.transport_hdr.wr_id; },
-          [](BurstParams &burst, uint64_t wr_id) {
-            burst.transport_hdr.wr_id = wr_id;
-          });
+          "rdma_wr_id", [](const BurstParams& burst) { return burst.transport_hdr.wr_id; },
+          [](BurstParams& burst, uint64_t wr_id) { burst.transport_hdr.wr_id = wr_id; });
 
   py::class_<S3WriterConfig>(m, "S3WriterConfig")
       .def(py::init<>())
@@ -1619,8 +1624,36 @@ PYBIND11_MODULE(_daqiri, m) {
         return py::make_tuple(status, conn_id);
       },
       "server_addr"_a, "server_port"_a);
-  m.def("rdma_set_header", &rdma_set_header, "burst"_a, "op_code"_a,
-        "conn_id"_a, "is_server"_a, "num_pkts"_a, "wr_id"_a, "local_mr_name"_a);
+  m.def("rdma_set_header",
+        py::overload_cast<BurstParams*, RDMAOpCode, uintptr_t, bool, int, uint64_t,
+                          const std::string&>(&rdma_set_header),
+        "burst"_a, "op_code"_a, "conn_id"_a, "is_server"_a, "num_pkts"_a, "wr_id"_a,
+        "local_mr_name"_a);
+  m.def("rdma_set_header",
+        py::overload_cast<BurstParams*, RDMAOpCode, uintptr_t, bool, int, uint64_t,
+                          const std::string&, uint32_t>(&rdma_set_header),
+        "burst"_a, "op_code"_a, "conn_id"_a, "is_server"_a, "num_pkts"_a, "wr_id"_a,
+        "local_mr_name"_a, "immediate_data"_a);
+  m.def(
+      "rdma_get_immediate_data",
+      [](BurstParams* burst, bool with_length) -> py::tuple {
+        uint32_t immediate_data = 0, write_length = 0;
+        const auto status = with_length
+                                ? rdma_get_immediate_data(burst, &immediate_data, &write_length)
+                                : rdma_get_immediate_data(burst, &immediate_data);
+        if (with_length) return py::make_tuple(status, immediate_data, write_length);
+        return py::make_tuple(status, immediate_data);
+      },
+      "burst"_a, "with_length"_a = false);
+  m.def(
+      "rdma_get_memory_region",
+      [](uintptr_t conn_id, const std::string& mr_name) {
+        RDMAMemoryRegion region;
+        const auto status = rdma_get_memory_region(conn_id, mr_name, &region);
+        return py::make_tuple(status, region);
+      },
+      "conn_id"_a, "mr_name"_a);
+  m.def("rdma_set_remote_memory", &rdma_set_remote_memory, "burst"_a, "region"_a, "offset"_a = 0);
   m.def("rdma_get_opcode", &rdma_get_opcode, "burst"_a);
 
   m.def("shutdown", &shutdown, "Shut down the active DAQIRI engine");

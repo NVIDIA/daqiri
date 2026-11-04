@@ -1904,9 +1904,21 @@ Status Engine::get_reorder_missing_info(BurstParams* burst, ReorderMissingInfo* 
 }
 
 Status Engine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id,
-                                bool is_server, int num_pkts, uint64_t wr_id,
-                                const std::string& local_mr_name) {
+                               bool is_server, int num_pkts, uint64_t wr_id,
+                               const std::string& local_mr_name, uint32_t immediate_data) {
   DAQIRI_LOG_CRITICAL("RDMA set header not implemented");
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::rdma_get_memory_region(uintptr_t, const std::string&, RDMAMemoryRegion*) {
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::rdma_set_remote_memory(BurstParams*, const RDMAMemoryRegion&, uint64_t) {
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::rdma_get_immediate_data(BurstParams*, uint32_t*, uint32_t*) {
   return Status::NOT_SUPPORTED;
 }
 

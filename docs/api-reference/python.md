@@ -254,7 +254,8 @@ This works with direct, indirect, and mixed RX/TX polling modes without enabling
 accurate TX scheduling.
 Enabling `rx.hardware_timestamps` fails connection setup if the NIC or driver
 cannot create a timestamp-capable receive CQ. Timestamps are available on
-successful `RECEIVE` completions; TX completions return `NOT_SUPPORTED`.
+successful `RECEIVE` and receiver-side `RDMA_WRITE_IMM` completions;
+TX completions return `NOT_SUPPORTED`.
 An RDMA timestamp describes the receive completion of the message, which may
 span multiple wire packets.
 **WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or system clock
@@ -497,13 +498,14 @@ precise timed transmission require ConnectX-7 or later:
 daqiri.set_packet_tx_time(burst, idx, ptp_timestamp_ns)
 ```
 
-RDMA `SEND` operations also support timed transmission with
-`tx.accurate_send: true` in either TX polling mode on supported mlx5 hardware.
+RDMA `SEND`, `RDMA_READ`, `RDMA_WRITE`, and `RDMA_WRITE_IMM` support timed
+transmission with `tx.accurate_send: true` in either TX polling mode on supported mlx5 hardware.
 Set the RDMA header and acquire buffers before setting timestamps. Zero clears a
 timestamp, and `rdma_set_header()` clears scheduling on reuse. Submit ahead of the
 target time. RDMA targets must be strictly less than four seconds from the current
-PTP-synchronized `CLOCK_REALTIME` at assignment and posting. Subsequent
-SENDs on the connection wait behind scheduled work; RC backpressure and retries
+PTP-synchronized `CLOCK_REALTIME` at assignment and posting. A scheduled READ
+gates request issuance, and zero-byte WRITE_IMM notifications can be scheduled.
+Subsequent SQ operations on the connection wait behind scheduled work; RC backpressure and retries
 can delay transmission further.
 
 `ptp_timestamp_ns` is an unsigned 64-bit PTP epoch-nanosecond value in the same clock
@@ -589,6 +591,62 @@ if status == daqiri.Status.SUCCESS:
         "TX_GPU",
     )
 ```
+
+For RC one-sided reads and writes, the peer exports its registration with
+`status, region = daqiri.rdma_get_memory_region(conn_id, "REMOTE_MEMORY")`.
+Exchange the descriptor's integer `address`, `length`, and `rkey` through your
+application's control channel. The requester selects `RDMAOpCode.RDMA_READ`
+or `RDMAOpCode.RDMA_WRITE` in `rdma_set_header`, allocates local buffers with
+`get_tx_packet_burst`, sets every packet length, then calls
+`rdma_set_remote_memory(burst, region, offset=0)` before `send_tx_burst`.
+A batch transfers consecutive remote ranges using the packet lengths.
+
+Poll `get_rx_burst_for_connection(conn_id, is_server)` for the original request. Check
+`completion.rdma_status == daqiri.Status.SUCCESS` before consuming READ data,
+then call `free_tx_burst(completion)` once. `completion.rdma_is_tx` is `True`
+for both reads and writes. The peer does not need to post receives for these
+operations. Registration permissions, descriptor lifetime, ownership, and
+partial failure behavior follow the
+[C++ read/write API](cpp.md#rdma-reads-and-writes).
+`RDMA_READ_IMM` returns `NOT_SUPPORTED`.
+
+Select `RDMAOpCode.RDMA_WRITE_IMM` explicitly to write with a notification,
+providing the immediate value in the creation call:
+
+```python
+daqiri.rdma_set_header(
+    request, daqiri.RDMAOpCode.RDMA_WRITE_IMM,
+    conn_id, False, 1, wr_id, "LOCAL_MEMORY",
+    immediate_data=slot_id,
+)
+```
+
+Only `RDMA_WRITE_IMM` accepts the `immediate_data` argument. Omitting it on
+`RDMA_WRITE_IMM` uses zero, which is a valid notification value. Allocate and
+submit the request normally; a packet length of zero sends only the immediate
+notification. Submit it after plain writes on the same RC connection when you
+need a separate notification. Plain writes do not automatically notify.
+Each packet in a write-with-immediate burst consumes one peer receive credit
+and produces one peer notification with the supplied value.
+
+The receiver pre-posts `RECEIVE` credits; lengths may be zero for notification
+use. Poll `get_rx_burst_for_connection(conn_id, is_server)` and check the status
+and opcode. `status, slot_id = daqiri.rdma_get_immediate_data(notification)`
+returns the host-order value. The notification has `rdma_is_tx == False` and
+local packet length zero; written data resides in the separately registered
+target. Batched receive credits produce independently owned completions, each
+released once with `free_tx_burst`. With `rx.hardware_timestamps: true`,
+`status, timestamp_ns = daqiri.get_packet_rx_timestamp(notification, 0)` returns
+the notification completion time, including for zero-byte notifications.
+Plain READ/WRITE operations have no receiver completion or RX timestamp. See the
+[C++ notification semantics](cpp.md#explicit-write-with-immediate-notifications).
+
+`RDMAMemoryRegion.access` carries the exported access mask and must be exchanged
+with the address, length, and rkey. Exported target MRs explicitly configure remote
+read/write access. To retrieve a notification's remote write byte count, call
+`status, immediate, written_bytes = daqiri.rdma_get_immediate_data(notification, with_length=True)`.
+Without `with_length`, the existing `(status, immediate)` return shape is preserved.
+The notification's local packet length remains zero.
 
 Look up server-side connection IDs:
 
@@ -721,6 +779,10 @@ The workflow sections above show the common call order and ownership rules.
 | `set_udp_header(burst, idx, udp_len, src_port, dst_port)` | Fill a UDP header. |
 | `set_udp_payload(burst, idx, data)` | Copy UDP payload bytes. |
 | `rdma_set_header(burst, op_code, conn_id, is_server, num_pkts, wr_id, local_mr_name)` | Fill RDMA TX metadata. |
+| `rdma_get_memory_region(conn_id, mr_name)` | Return `(Status, RDMAMemoryRegion)` for the connection's registration. |
+| `rdma_set_remote_memory(burst, region, offset=0)` | Set a checked remote range for RDMA read/write after setting packet lengths. |
+| `rdma_set_header(burst, RDMAOpCode.RDMA_WRITE_IMM, conn_id, is_server, num_pkts, wr_id, local_mr_name, immediate_data)` | Create an explicit write-with-immediate request. |
+| `rdma_get_immediate_data(burst, with_length=False)` | Return `(Status, value)`; `with_length=True` returns `(Status, value, written_bytes)` for receiver notifications. |
 | `rdma_get_opcode(burst)` | Return the RDMA operation code for a burst. |
 
 ### Buffer Release
@@ -733,7 +795,7 @@ The workflow sections above show the common call order and ownership rules.
 | `free_segment_packets_and_burst(burst, seg)` | Free one segment across all packets and free burst metadata. |
 | `free_all_packets_and_burst_rx(burst)` | Free all RX packets and RX burst metadata. |
 | `free_all_packets_and_burst_tx(burst)` | Free all TX packets and TX burst metadata. |
-| `free_rx_burst(burst)` / `free_tx_burst(burst)` | Free burst metadata only. |
+| `free_rx_burst(burst)` / `free_tx_burst(burst)` | Free burst metadata. For RDMA request completions, `free_tx_burst` also returns the packet buffers. |
 | `free_rx_metadata(burst)` / `free_tx_metadata(burst)` | Free only RX or TX metadata. |
 
 ### File I/O
@@ -855,7 +917,7 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 
 | Class | Purpose |
 | --- | --- |
-| `BurstParams` | Opaque burst handle used by RX, TX, free, and packet-access helpers. Exposes `hdr`, `connection_id`, and `rdma_wr_id`. |
+| `BurstParams` | Opaque burst handle used by RX, TX, free, and packet-access helpers. Exposes `hdr`, `connection_id`, `rdma_wr_id`, and read-only `rdma_status` / `rdma_is_tx`. |
 | `BurstHeader` | Wrapper for `BurstHeaderParams`. |
 | `BurstHeaderParams` | Burst metadata: packet count, port, queue, segment count, byte totals, and reorder flags. |
 | `ReorderBurstInfo` | Metadata for reordered aggregate bursts. |
@@ -867,6 +929,7 @@ names that mostly omit the trailing underscore from the C++ member name (e.g.
 | `CommonQueueConfig` | Shared queue fields: name, ID, batch size, split boundary, CPU core, memory regions, and offloads. |
 | `RxQueueConfig` | RX queue wrapper with common queue fields, timeout, `QueuePollMode`, and the raw ibverbs `cqe_compression` flag. |
 | `TxQueueConfig` | TX queue wrapper with common fields, `QueuePollMode`, `TxBufferMode`, and `max_inflight_sends`. |
+| `RDMAMemoryRegion` | Registered `address`, `length`, `rkey`, and `access` to exchange with a connected RDMA peer. |
 | `MemoryRegionConfig` | Memory region kind, affinity, access flags, sizes, counts, and ownership. |
 | `ExternalMemoryRegion` | Non-owning integer address and byte capacity. |
 | `MemoryRegionRequirement` | Effective kind, slot size, buffer count, capacity, and alignment. |

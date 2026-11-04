@@ -47,6 +47,10 @@ int create_timed_qp(rdma_cm_id* id, ibv_pd* pd, ibv_qp_init_attr* attr) {
   extended.pd = pd;
   extended.comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_SEND_OPS_FLAGS;
   extended.send_ops_flags = IBV_QP_EX_WITH_SEND;
+  if (attr->qp_type == IBV_QPT_RC) {
+    extended.send_ops_flags |=
+        IBV_QP_EX_WITH_RDMA_READ | IBV_QP_EX_WITH_RDMA_WRITE | IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM;
+  }
   mlx5dv_qp_init_attr dv{};
   dv.comp_mask = MLX5DV_QP_INIT_ATTR_MASK_SEND_OPS_FLAGS;
   dv.send_ops_flags = MLX5DV_QP_EX_WITH_RAW_WQE;
@@ -105,8 +109,14 @@ int post_timed_send(ibv_qp* qp, ibv_send_wr* wr, uint64_t timestamp_ns) {
   auto* extended = ibv_qp_to_qp_ex(qp);
   if (!extended) return EOPNOTSUPP;
   auto* dv = mlx5dv_qp_ex_from_ibv_qp_ex(extended);
-  // Only SEND is supported by the RDMA engine's public submission path.
-  if (!dv || wr->opcode != IBV_WR_SEND || wr->num_sge != 1 || wr->next) return EINVAL;
+  const bool one_sided = wr->opcode == IBV_WR_RDMA_READ || wr->opcode == IBV_WR_RDMA_WRITE ||
+                         wr->opcode == IBV_WR_RDMA_WRITE_WITH_IMM;
+  if (!dv || (!one_sided && wr->opcode != IBV_WR_SEND) || wr->next || wr->num_sge < 0 ||
+      wr->num_sge > 1 || (wr->num_sge && !wr->sg_list) ||
+      (!wr->num_sge && wr->opcode != IBV_WR_RDMA_WRITE_WITH_IMM) ||
+      (one_sided && qp->qp_type != IBV_QPT_RC) ||
+      (wr->opcode == IBV_WR_RDMA_READ && (wr->send_flags & IBV_SEND_INLINE)))
+    return EINVAL;
   if (qp->qp_type == IBV_QPT_UD && !wr->wr.ud.ah) return EINVAL;
   struct {
     mlx5_wqe_ctrl_seg ctrl;
@@ -121,7 +131,7 @@ int post_timed_send(ibv_qp* qp, ibv_send_wr* wr, uint64_t timestamp_ns) {
   wqe.wait.mask = htobe64((8ULL << 32) - 1);
 
   // A single builder transaction either posts both requests or rolls back
-  // both. Only the SEND requests successful completions; its CQE reclaims the
+  // both. Only the data operation requests successful completions; its CQE reclaims the
   // preceding unsignaled WAIT as well. The provider maintains WQE indices.
   ibv_wr_start(extended);
   extended->wr_id = wr->wr_id;
@@ -129,11 +139,26 @@ int post_timed_send(ibv_qp* qp, ibv_send_wr* wr, uint64_t timestamp_ns) {
   mlx5dv_wr_raw_wqe(dv, &wqe);
   extended->wr_id = wr->wr_id;
   extended->wr_flags = wr->send_flags;
-  ibv_wr_send(extended);
+  switch (wr->opcode) {
+    case IBV_WR_RDMA_READ:
+      ibv_wr_rdma_read(extended, wr->wr.rdma.rkey, wr->wr.rdma.remote_addr);
+      break;
+    case IBV_WR_RDMA_WRITE:
+      ibv_wr_rdma_write(extended, wr->wr.rdma.rkey, wr->wr.rdma.remote_addr);
+      break;
+    case IBV_WR_RDMA_WRITE_WITH_IMM:
+      ibv_wr_rdma_write_imm(extended, wr->wr.rdma.rkey, wr->wr.rdma.remote_addr, wr->imm_data);
+      break;
+    default:
+      ibv_wr_send(extended);
+      break;
+  }
   if (qp->qp_type == IBV_QPT_UD) {
     ibv_wr_set_ud_addr(extended, wr->wr.ud.ah, wr->wr.ud.remote_qpn, wr->wr.ud.remote_qkey);
   }
-  if (wr->send_flags & IBV_SEND_INLINE) {
+  if (!wr->num_sge) {
+    ibv_wr_set_sge_list(extended, 0, nullptr);
+  } else if (wr->send_flags & IBV_SEND_INLINE) {
     ibv_wr_set_inline_data(extended, reinterpret_cast<void*>(wr->sg_list->addr),
                            wr->sg_list->length);
   } else {

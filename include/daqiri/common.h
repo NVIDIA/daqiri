@@ -630,12 +630,14 @@ Status set_all_packet_lengths(BurstParams *burst,
  * transmitted after this one in the same queue will be transmitted no earlier
  * than the time listed in the function call. This feature is only available on
  * ConnectX-7 or BlueField 3 and higher cards.
- * RDMA SENDs support this API with tx.accurate_send enabled, in either TX
+ * RDMA SEND, READ, WRITE, and WRITE_IMM support this API with tx.accurate_send
+ * enabled, in either TX
  * polling mode. Set the RDMA header and acquire buffers before scheduling;
  * rdma_set_header clears old timestamps, and time=0 clears one timestamp.
  * RDMA targets must be strictly less than four seconds from CLOCK_REALTIME at
  * assignment and posting. Submit ahead of the target time. RC backpressure and
- * retries can delay transmission further.
+ * retries can delay transmission further. READ schedules request issuance,
+ * not response arrival. Zero-byte WRITE_IMM notifications can be scheduled.
  *
  * @param burst Burst structure containing packet lists
  * @param idx Index of packet
@@ -1241,6 +1243,28 @@ Status rdma_get_server_conn_id(const std::string &server_addr,
 Status rdma_set_header(BurstParams *burst, RDMAOpCode op_code,
                        uintptr_t conn_id, bool is_server, int num_pkts,
                        uint64_t wr_id, const std::string &local_mr_name);
+/** Create an explicit RDMA_WRITE_IMM operation with a host-order 32-bit immediate value.
+ * Each packet produces one peer notification; a zero-length packet is notification-only.
+ */
+Status rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id, bool is_server,
+                       int num_pkts, uint64_t wr_id, const std::string& local_mr_name,
+                       uint32_t immediate_data);
+/** Read the host-order immediate value from a successful RDMA_WRITE_IMM request/completion. */
+Status rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data);
+/** Read a successful receiver notification's immediate and remote write byte count.
+ * The byte count describes the remote target, not the receive-credit buffer.
+ */
+Status rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data,
+                               uint32_t* write_length);
+/** Return the local MR descriptor registered for this connection's protection domain. */
+Status rdma_get_memory_region(uintptr_t conn_id, const std::string& mr_name,
+                              RDMAMemoryRegion* region);
+/** Set a contiguous remote range for RDMA_READ/WRITE/WRITE_IMM after setting packet lengths.
+ * Packet p transfers at offset + sum(lengths[0..p-1]). Do not change lengths afterward.
+ * Exchange the descriptor through an application control channel before calling this.
+ */
+Status rdma_set_remote_memory(BurstParams* burst, const RDMAMemoryRegion& region,
+                              uint64_t offset = 0);
 RDMAOpCode rdma_get_opcode(BurstParams *burst);
 
 }; // namespace daqiri
