@@ -3,31 +3,38 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Sweep wrapper for DAQIRI benchmarks on DGX Spark. Runs the bench across a
+# Sweep wrapper for DAQIRI loopback benchmarks. Runs the bench across a
 # matrix of (payload/message size, batch size, target-gbps), captures per-run
 # CPU/GPU/NIC counters, and emits one CSV row per cell into bench-results/.
 #
 # Drop sources per backend (per the report methodology):
 #   DPDK    : grep imissed/ierrors/rx_nombuf from bench log (DAQIRI_LOG_INFO).
+#   ibverbs : sum CQ errors and application/TX-ring packet drops from engine stats.
 #   RDMA    : grep "CQ error" lines from bench log (DAQIRI_LOG_ERROR).
 #   socket  : diff /proc/net/udp drops column (UDP, read inside the server netns);
 #             nstat retrans/inerrs (TCP, read inside the client netns).
 #
 # Usage:
-#   ./run_spark_bench.sh <backend> [mode]
-#     backend ∈ {dpdk, rdma, socket-udp, socket-tcp}
-#     mode    ∈ {smoke, sweep, drop-curve, drop-curve-matrix}  (default: smoke)
+#   ./run_cabled_loopback_bench.sh --platform dgx-spark|igx-thor [options] <backend> [mode]
+#   ./run_cabled_loopback_bench.sh --platform dgx-spark|igx-thor --show-hardware
+#     backend ∈ {dpdk, ibverbs, rdma, socket-udp, socket-tcp}
+#     mode    ∈ {smoke, sweep, drop-curve, drop-curve-matrix, latency}  (default: smoke)
 #
-# Required environment in current shell:
+# Options:
+#   --payload-size BYTES — select a payload/message size; repeat to build a sweep.
+#   --pairs COUNT        — select concurrent socket pairs; repeat to build a sweep.
+#                          CLI values take precedence over the legacy env overrides.
+#   --help               — show usage without discovering hardware.
+#
+# Environment in current shell:
 #   DAQIRI_BUILD_DIR — path to the cmake build dir (defaults to ../build).
-#   ETH_DST_ADDR     — required for dpdk backend (the RX iface MAC).
 #   REPEATS          — repeats per cell for error bars (default 1; use 3 for the
 #                      published re-run). Each rep is an independent run + CSV row.
 #   WORKLOAD         — representative GPU workload run on the REAL received data
 #                      in the receive path (preceded by a reorder/gather step):
 #                      none (default) | fft | gemm (FP32) | gemm_fp16 (FP16
-#                      tensor-core matmul). Honoured by all backends (dpdk, rdma,
-#                      socket-udp, socket-tcp); recorded in the CSV post_process
+#                      tensor-core matmul). Honoured by all backends (dpdk,
+#                      ibverbs, rdma, socket-udp, socket-tcp); recorded in the CSV post_process
 #                      column.
 #   GEMM_DIM         — the square GEMM side length n (--workload-gemm-dim; default
 #                      1024), held fixed so FLOPs/call (2·n³) is constant. The
@@ -40,22 +47,31 @@
 #                      (--workload-sync-interval; default 2). Sweep it (1 2 4 8 16 32)
 #                      to see how much of the receive+compute ceiling is single-thread
 #                      GPU sync-stall. Recorded in post_process_sync.
-#   SOCKET_RX_IO_CORES — optional space-separated UDP receive I/O cores, one
+#   SOCKET_RX_IO_CORES — optional space-separated socket receive I/O cores, one
 #                      per concurrent pair. These override the server RX queue
 #                      core independently of the socket_bench worker core.
 #   BATCHES_OVERRIDE   — optional space-separated batch sizes for one-off runs.
+#   PAYLOADS_OVERRIDE  — optional space-separated payload sizes for one-off runs.
+#   DROP_CURVE_TARGETS_OVERRIDE — optional space-separated pacing targets in Gbps.
+#                      Fractional Gbps supported; raw rates must resolve to whole Mbps.
+#                      For example, 2.25 Gbps becomes 2250 Mbps; 0 means unpaced.
+#   DAQIRI_IBVERBS_NUM_BUFS — optional raw ibverbs TX/RX slot-count override.
 #   PAIRS_OVERRIDE     — optional space-separated socket pair counts. For example,
 #                      PAIRS_OVERRIDE=1 selects the pair-0 CPU placement only.
 #
-# Optional (dpdk only): DPDK_{TX,RX}_PCI / DPDK_{TX,RX}_NETDEV override the p0/p1
-# ports used for the per-cell *_phy wire-transit check (defaults p0 0000:01:00.0 /
-# p1 0002:01:00.1). Each dpdk cell warns if rx_packets_phy did not advance -- i.e.
-# traffic stayed on the on-chip eswitch instead of crossing the cable.
+# Latency mode (ibverbs only): LATENCY_SAMPLES=10000, LATENCY_WARMUP=1000,
+# LATENCY_TIMEOUT_MS=1000, LATENCY_REALTIME_PRIORITY=90, REPEATS=3, and
+# LATENCY_MEMORY="host_pinned device". LATENCY_GENERATE_ONLY=1 writes configs only.
+# It compares direct and indirect polling across 64–8192-byte L2 frames.
+#
+# Hardware defaults live in scripts/resolve_benchmark_hardware.py. DAQIRI_GPU_UUID,
+# DPDK_{TX,RX}_PCI, DPDK_{TX,RX}_NETDEV, ETH_{SRC,DST}_ADDR, and the DAQIRI_*_CORE
+# variables override resolved values for one-off experiments.
 #
 # rdma and socket-{udp,tcp} run split server/client processes inside the
 # dq_wire_server / dq_wire_client namespaces, so bring up the netns wire loopback
-# first (scripts/setup_spark_wire_loopback_netns.sh up). dpdk runs in the default
-# namespace and needs the netns torn down so the PMD can bind the physical ports.
+# first (`scripts/setup_cabled_loopback_netns.sh --platform <platform> up`). Raw
+# dpdk/ibverbs runs use the default namespace and need the netns torn down.
 #
 # Run inside the project container as root (per AGENTS.md).
 
@@ -66,14 +82,158 @@ set -o pipefail
 # Configuration
 # --------------------------------------------------------------------------
 
-BACKEND="${1:-}"
-MODE="${2:-smoke}"
-if [[ -z "$BACKEND" ]]; then
-  echo "Usage: $0 <dpdk|rdma|socket-udp|socket-tcp> [smoke|sweep|drop-curve|drop-curve-matrix]" >&2
+usage() {
+  cat <<'USAGE'
+Usage: run_cabled_loopback_bench.sh --platform dgx-spark|igx-thor [options] <backend> [mode]
+       run_cabled_loopback_bench.sh --platform dgx-spark|igx-thor --show-hardware
+
+Backends: dpdk, ibverbs, rdma, socket-udp, socket-tcp
+Modes: smoke (default), sweep, drop-curve, drop-curve-matrix, latency (ibverbs only)
+
+Options may appear before or after the backend/mode:
+  --payload-size BYTES  Payload bytes for raw; message bytes for socket/RoCE.
+                       Repeat this flag to select multiple sweep sizes.
+  --pairs COUNT        Concurrent socket client/server pairs; repeat for a sweep.
+  --show-hardware      Print resolved hardware and exit.
+  -h, --help           Show this help.
+
+CLI payload/pair selections replace PAYLOADS_OVERRIDE/PAIRS_OVERRIDE values.
+Latency mode uses its fixed L2-frame sweep and does not accept these selections.
+Raw pacing accepts fractional Gbps at whole-Mbps resolution (2.25 Gbps = 2250 Mbps).
+A target of 0 disables pacing.
+See this script's header for build, duration, workload, and pacing environment settings.
+USAGE
+}
+
+PLATFORM=""
+SHOW_HARDWARE=0
+PAYLOAD_SIZES=()
+PAIR_COUNTS=()
+POSITIONAL_ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --platform)
+      [[ $# -ge 2 ]] || { echo "--platform requires a value" >&2; exit 1; }
+      PLATFORM="$2"
+      shift 2
+      ;;
+    --payload-size|--pairs)
+      option="$1"
+      [[ $# -ge 2 && "$2" =~ ^[1-9][0-9]*$ ]] || {
+        echo "$option requires a positive integer" >&2
+        exit 1
+      }
+      if [[ "$option" == "--payload-size" ]]; then
+        PAYLOAD_SIZES+=("$2")
+      else
+        PAIR_COUNTS+=("$2")
+      fi
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --show-hardware)
+      SHOW_HARDWARE=1
+      shift
+      ;;
+    --)
+      shift
+      POSITIONAL_ARGS+=("$@")
+      break
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      exit 1
+      ;;
+    *)
+      POSITIONAL_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if (( ${#POSITIONAL_ARGS[@]} > 2 )); then
+  echo "Expected a backend and optional mode" >&2
+  usage >&2
+  exit 1
+fi
+BACKEND="${POSITIONAL_ARGS[0]:-}"
+MODE="${POSITIONAL_ARGS[1]:-smoke}"
+if (( ${#PAYLOAD_SIZES[@]} > 0 )); then
+  PAYLOADS_OVERRIDE="${PAYLOAD_SIZES[*]}"
+fi
+if (( ${#PAIR_COUNTS[@]} > 0 )); then
+  PAIRS_OVERRIDE="${PAIR_COUNTS[*]}"
+  if [[ ! "$BACKEND" =~ ^socket- ]]; then
+    echo "--pairs is supported only for socket backends" >&2
+    exit 1
+  fi
+fi
+if [[ "$MODE" == "latency" ]] && (( ${#PAYLOAD_SIZES[@]} > 0 )); then
+  echo "--payload-size does not apply to latency mode's fixed L2-frame sweep" >&2
+  exit 1
+fi
+if [[ "$MODE" == "latency" && "$BACKEND" != "ibverbs" ]]; then
+  echo "Latency mode supports the raw ibverbs engine only" >&2
+  exit 1
+fi
+if [[ -z "$PLATFORM" ]]; then
+  echo "--platform is required (dgx-spark or igx-thor)" >&2
+  exit 1
+fi
+if [[ "$SHOW_HARDWARE" -eq 0 && -z "$BACKEND" ]]; then
+  usage >&2
   exit 1
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+HARDWARE_RESOLVER="$REPO_DIR/scripts/resolve_benchmark_hardware.py"
+CLIENT_NS="${CLIENT_NS:-dq_wire_client}"
+SERVER_NS="${SERVER_NS:-dq_wire_server}"
+resolver_args=(--platform "$PLATFORM")
+if [[ "$SHOW_HARDWARE" -eq 1 ]]; then
+  python3 "$HARDWARE_RESOLVER" "${resolver_args[@]}"
+  exit $?
+fi
+if [[ "$BACKEND" == "rdma" || "$BACKEND" =~ ^socket- ]]; then
+  resolver_args+=(--client-namespace "$CLIENT_NS" --server-namespace "$SERVER_NS")
+fi
+resolved_hardware="$(python3 "$HARDWARE_RESOLVER" "${resolver_args[@]}" --format shell)" || exit 1
+eval "$resolved_hardware"
+
+GPU_MONITOR_ID="${DAQIRI_GPU_UUID:-$DEFAULT_GPU_UUID}"
+export CUDA_VISIBLE_DEVICES="$GPU_MONITOR_ID"
+
+MASTER_CORE="${DAQIRI_MASTER_CORE:-$DEFAULT_MASTER_CORE}"
+DPDK_TX_QUEUE_CORE="${DAQIRI_DPDK_TX_QUEUE_CORE:-$DEFAULT_DPDK_TX_QUEUE_CORE}"
+DPDK_RX_QUEUE_CORE="${DAQIRI_DPDK_RX_QUEUE_CORE:-$DEFAULT_DPDK_RX_QUEUE_CORE}"
+DPDK_TX_WORKER_CORE="${DAQIRI_DPDK_TX_WORKER_CORE:-$DEFAULT_DPDK_TX_WORKER_CORE}"
+DPDK_RX_WORKER_CORE="${DAQIRI_DPDK_RX_WORKER_CORE:-$DEFAULT_DPDK_RX_WORKER_CORE}"
+RDMA_CLIENT_RX_CORE="${DAQIRI_RDMA_CLIENT_RX_CORE:-$DEFAULT_RDMA_CLIENT_RX_CORE}"
+RDMA_CLIENT_TX_CORE="${DAQIRI_RDMA_CLIENT_TX_CORE:-$DEFAULT_RDMA_CLIENT_TX_CORE}"
+RDMA_SERVER_RX_CORE="${DAQIRI_RDMA_SERVER_RX_CORE:-$DEFAULT_RDMA_SERVER_RX_CORE}"
+RDMA_SERVER_TX_CORE="${DAQIRI_RDMA_SERVER_TX_CORE:-$DEFAULT_RDMA_SERVER_TX_CORE}"
+DPDK_MEMORY_KIND="${DAQIRI_DPDK_MEMORY_KIND:-$DEFAULT_DPDK_MEMORY_KIND}"
+DPDK_PAYLOAD_BATCHES="${DAQIRI_DPDK_PAYLOAD_BATCHES:-$DEFAULT_DPDK_PAYLOAD_BATCHES}"
+DPDK_PAYLOAD_PACING_GBPS="${DAQIRI_DPDK_PAYLOAD_PACING_GBPS:-$DEFAULT_DPDK_PAYLOAD_PACING_GBPS}"
+IBVERBS_MEMORY_KIND="${DAQIRI_IBVERBS_MEMORY_KIND:-$DEFAULT_IBVERBS_MEMORY_KIND}"
+IBVERBS_BATCH_SIZE="${DAQIRI_IBVERBS_BATCH_SIZE:-$DEFAULT_IBVERBS_BATCH_SIZE}"
+IBVERBS_NUM_BUFS="${DAQIRI_IBVERBS_NUM_BUFS:-$DEFAULT_IBVERBS_NUM_BUFS}"
+IBVERBS_PAYLOAD_BATCHES="${DAQIRI_IBVERBS_PAYLOAD_BATCHES:-$DEFAULT_IBVERBS_PAYLOAD_BATCHES}"
+IBVERBS_PAYLOAD_PACING_GBPS="${DAQIRI_IBVERBS_PAYLOAD_PACING_GBPS:-$DEFAULT_IBVERBS_PAYLOAD_PACING_GBPS}"
+RDMA_MEMORY_KIND="${DAQIRI_RDMA_MEMORY_KIND:-$DEFAULT_RDMA_MEMORY_KIND}"
+read -r -a SRV_PIN_CORES <<< "${DAQIRI_SOCKET_SERVER_CORES:-$DEFAULT_SOCKET_SERVER_CORES}"
+read -r -a CLI_PIN_CORES <<< "${DAQIRI_SOCKET_CLIENT_CORES:-$DEFAULT_SOCKET_CLIENT_CORES}"
+read -r -a DEFAULT_SOCKET_PAIR_COUNTS_ARRAY <<< "$DEFAULT_SOCKET_PAIR_COUNTS"
+read -r -a DEFAULT_SOCKET_HEADLINE_PAIRS_ARRAY <<< "$DEFAULT_SOCKET_HEADLINE_PAIRS"
+if (( ${#SRV_PIN_CORES[@]} == 0 || ${#SRV_PIN_CORES[@]} != ${#CLI_PIN_CORES[@]} )); then
+  echo "Socket server/client core lists must be non-empty and have equal length" >&2
+  exit 1
+fi
+
 BUILD_DIR="${DAQIRI_BUILD_DIR:-$SCRIPT_DIR/../build}"
 # Shared production/benchmark configuration generator. It emits complete,
 # independently runnable role configs from the cell's actual parameters.
@@ -86,23 +246,223 @@ TS="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT_DIR="$SCRIPT_DIR/../bench-results/$TS-$BACKEND-$MODE"
 mkdir -p "$OUT_DIR"
 
+python3 "$HARDWARE_RESOLVER" "${resolver_args[@]}" > "$OUT_DIR/resolved-hardware.json"
+
+# Share hardware resolution, GPU selection, build paths, and environment capture.
+"$SCRIPT_DIR/bench_capture_environment.sh" "$OUT_DIR"
+if [[ "$MODE" == "latency" ]]; then
+  DAQIRI_ETH_DST_ADDR="${ETH_DST_ADDR:-$DEFAULT_ETH_DST_ADDR}" \
+  DAQIRI_RX_NETDEV="${DPDK_RX_NETDEV:-$DEFAULT_DPDK_RX_NETDEV}" \
+  DAQIRI_MASTER_CORE="$MASTER_CORE" \
+  DAQIRI_DPDK_TX_QUEUE_CORE="$DPDK_TX_QUEUE_CORE" \
+  DAQIRI_DPDK_RX_QUEUE_CORE="$DPDK_RX_QUEUE_CORE" \
+  DAQIRI_DPDK_TX_WORKER_CORE="$DPDK_TX_WORKER_CORE" \
+    python3 - "$REPO_DIR" "$BUILD_DIR" "$OUT_DIR" <<'LATENCY_PY'
+import csv
+import json
+import math
+import os
+from pathlib import Path
+import re
+import statistics
+import subprocess
+import sys
+
+REPO = Path(sys.argv[1]).resolve()
+build_dir = Path(sys.argv[2]).resolve()
+output = Path(sys.argv[3]).resolve()
+sys.path.insert(0, str(REPO / "scripts"))
+from daqiri_config import load_document, render_document
+
+SIZES = tuple(2**power for power in range(6, 14))
+METRICS = ("tx_call_to_app_ns", "rx_hw_to_app_ns")
+
+def make_config(hardware: dict, mode: str, memory: str, ptp: str) -> dict:
+    config = load_document(REPO / "examples/daqiri_bench_raw_latency_ibverbs.yaml")
+    cfg = config["daqiri"]["cfg"]
+    cfg["master_core"] = int(os.environ["DAQIRI_MASTER_CORE"])
+    for region in cfg["memory_regions"]:
+        region["kind"] = memory
+    for interface, direction in zip(cfg["interfaces"], ("tx", "rx")):
+        interface["address"] = hardware[f"DEFAULT_DPDK_{direction.upper()}_PCI"]
+        queue = interface[direction]["queues"][0]
+        queue["poll_mode"] = mode
+        if mode == "indirect":
+            queue["batch_size"] = 1
+            queue["cpu_core"] = int(os.environ[f"DAQIRI_DPDK_{direction.upper()}_QUEUE_CORE"])
+    bench = config["bench_latency"]
+    bench["cpu_core"] = int(os.environ["DAQIRI_DPDK_TX_WORKER_CORE"])
+    bench["eth_dst_addr"] = os.environ["DAQIRI_ETH_DST_ADDR"]
+    bench["ptp_device"] = ptp
+    return config
+
+
+def nic_counters(netdev: str) -> dict[str, int]:
+    text = subprocess.check_output(["ethtool", "-S", netdev], text=True)
+    return {
+        name: int(value)
+        for name, value in re.findall(r"^\s*(\w+):\s*(\d+)\s*$", text, re.M)
+        if name in {"rx_packets_phy", "tx_packets_phy", "rx_discards_phy",
+                    "rx_out_of_buffer", "rx_buff_alloc_err"}
+        or re.fullmatch(r"rx_prio[0-7]_(?:discards|buf_discard(?:_packets)?)", name)
+    }
+
+
+def percentile(values: list[int], fraction: float) -> int:
+    values = sorted(values)
+    return values[min(len(values) - 1, math.ceil(fraction * len(values)) - 1)]
+
+
+def main():
+    hardware = json.loads((output / "resolved-hardware.json").read_text())
+    sample_count = int(os.environ.get("LATENCY_SAMPLES", "10000"))
+    warmup = int(os.environ.get("LATENCY_WARMUP", "1000"))
+    timeout_ms = int(os.environ.get("LATENCY_TIMEOUT_MS", "1000"))
+    repeats = int(os.environ.get("REPEATS", "3"))
+    realtime_priority = int(os.environ.get("LATENCY_REALTIME_PRIORITY", "90"))
+    memory_kinds = list(dict.fromkeys(os.environ.get("LATENCY_MEMORY", "host_pinned device").split()))
+    generate_only = os.environ.get("LATENCY_GENERATE_ONLY", "0") == "1"
+    if min(sample_count, timeout_ms, repeats) <= 0 or warmup < 0:
+        raise ValueError("latency samples, timeout, repeats must be positive; warmup nonnegative")
+    if not 0 <= realtime_priority <= 99:
+        raise ValueError("LATENCY_REALTIME_PRIORITY must be 0–99")
+    if not memory_kinds or any(memory not in {"host_pinned", "device"} for memory in memory_kinds):
+        raise ValueError("LATENCY_MEMORY must contain host_pinned and/or device")
+    netdev = os.environ["DAQIRI_RX_NETDEV"]
+    clocks = sorted((Path("/sys/class/net") / netdev / "device/ptp").glob("ptp*"))
+    if len(clocks) != 1:
+        raise RuntimeError(f"expected one RX PHC for {netdev}, found {clocks}")
+    ptp = f"/dev/{clocks[0].name}"
+    configs = {}
+    for memory in memory_kinds:
+        for mode in ("direct", "indirect"):
+            path = output / f"{memory}-{mode}.yaml"
+            path.write_text(render_document(make_config(hardware, mode, memory, ptp)))
+            configs[memory, mode] = path
+    print(f"Results: {output}", flush=True)
+    if generate_only:
+        return 0
+    settings = {
+        "samples_per_size": sample_count, "warmup_per_size": warmup,
+        "repeats": repeats, "realtime_priority": realtime_priority,
+        "timeout_ms": timeout_ms,
+        "ptp_device": ptp, "memory": memory_kinds,
+    }
+    (output / "settings.json").write_text(json.dumps(settings, indent=2) + "\n")
+    binary = build_dir / "examples/daqiri_bench_raw_latency"
+    validator = build_dir / "tools/daqiri_config_validate"
+    for config in configs.values():
+        subprocess.run([str(validator), str(config)], check=True)
+    env = dict(os.environ, CUDA_VISIBLE_DEVICES=hardware["DEFAULT_GPU_UUID"])
+    env["LD_LIBRARY_PATH"] = str(build_dir / "src") + ":" + env.get("LD_LIBRARY_PATH", "")
+    summaries = []
+    uncertainties = []
+    # Alternate modes between repetitions to reduce ordering bias.
+    for rep in range(1, repeats + 1):
+        for memory in memory_kinds:
+            for mode in (("direct", "indirect") if rep % 2 else ("indirect", "direct")):
+                label = f"{memory}-{mode}-r{rep}"
+                print(f"Running {label}", flush=True)
+                before = nic_counters(netdev)
+                command = [str(binary), str(configs[memory, mode]), "--samples", str(sample_count),
+                           "--warmup", str(warmup), "--timeout-ms", str(timeout_ms),
+                           "--csv", str(output / f"{label}.csv")]
+                if realtime_priority:
+                    command += ["--realtime-priority", str(realtime_priority)]
+                with (output / f"{label}.stdout").open("w") as stdout, \
+                     (output / f"{label}.stderr").open("w") as stderr:
+                    subprocess.run(command, env=env, stdout=stdout, stderr=stderr,
+                                   check=True, timeout=600)
+                after = nic_counters(netdev)
+                delta = {key: after[key] - value for key, value in before.items()}
+                (output / f"{label}-nic.json").write_text(json.dumps(delta, indent=2) + "\n")
+                if delta.get("rx_packets_phy", 0) < len(SIZES) * sample_count:
+                    raise RuntimeError(f"{label}: physical RX counters do not confirm cable transit")
+                if any(value for key, value in delta.items()
+                       if key not in {"rx_packets_phy", "tx_packets_phy"}):
+                    raise RuntimeError(f"{label}: NIC receive errors: {delta}")
+                stdout = (output / f"{label}.stdout").read_text()
+                stderr = (output / f"{label}.stderr").read_text()
+                if "warning:" in stderr.lower():
+                    raise RuntimeError(f"{label}: benchmark warning; inspect stderr")
+                errors = re.findall(
+                    r"\b(?:cqe_errors|app_ring_full_drops|handoff_full_drops|"
+                    r"direct_poll_conflicts|direct_conflicts|direct_no_space)=(\d+)", stderr)
+                if len(errors) < 6 or any(int(value) for value in errors):
+                    raise RuntimeError(f"{label}: missing or nonzero engine error counters")
+                summary_lines = [line for line in stdout.splitlines()
+                                 if line.startswith("packet_size,") or re.match(r"^\d+,", line)]
+                rows = list(csv.DictReader(summary_lines))
+                if (len(rows) != len(SIZES)
+                    or {int(row["packet_size"]) for row in rows} != set(SIZES)
+                    or any(int(row["timeouts"]) or int(row["samples"]) != sample_count
+                           for row in rows)):
+                    raise RuntimeError(f"{label}: incomplete sweep or sample timeouts")
+                calibration = re.search(r"maximum measured uncertainty \+/- (\d+) ns", stderr)
+                if calibration is None:
+                    raise RuntimeError(f"{label}: missing clock calibration uncertainty")
+                uncertainty = int(calibration[1])
+                uncertainties.append(uncertainty)
+                with (output / f"{label}.csv").open() as stream:
+                    samples = list(csv.DictReader(stream))
+                for size in SIZES:
+                    selected = [row for row in samples if int(row["packet_size"]) == size]
+                    if len(selected) != sample_count:
+                        raise RuntimeError(f"{label}: incomplete samples for frame size {size}")
+                    item = dict(memory=memory, mode=mode, rep=rep, frame_bytes=size,
+                                clock_uncertainty_ns=uncertainty)
+                    for metric in METRICS:
+                        values = [int(row[metric]) for row in selected]
+                        if min(values) < 0:
+                            raise RuntimeError(f"{label}: negative {metric}")
+                        for quantile in (50, 99):
+                            item[f"{metric}_p{quantile}"] = percentile(values, quantile / 100)
+                    summaries.append(item)
+    with (output / "summary.csv").open("w") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(summaries[0]))
+        writer.writeheader()
+        writer.writerows(summaries)
+    with (output / "comparison.csv").open("w") as stream:
+        fields = [key for key in summaries[0] if key != "rep"]
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        for memory, mode in configs:
+            for size in SIZES:
+                selected = [row for row in summaries if row["memory"] == memory
+                            and row["mode"] == mode and row["frame_bytes"] == size]
+                item = dict(memory=memory, mode=mode, frame_bytes=size)
+                for key in fields[3:]:
+                    item[key] = (max(row[key] for row in selected) if key == "clock_uncertainty_ns"
+                                 else statistics.mean(row[key] for row in selected))
+                writer.writerow(item)
+    settings["max_clock_uncertainty_ns"] = max(uncertainties)
+    (output / "settings.json").write_text(json.dumps(settings, indent=2) + "\n")
+    return 0
+
+
+sys.exit(main())
+LATENCY_PY
+  latency_status=$?
+  [[ "$latency_status" -eq 0 ]] || exit "$latency_status"
+  echo "Results in: $OUT_DIR"
+  [[ "${LATENCY_GENERATE_ONLY:-0}" == "1" ]] || echo "CSV: $OUT_DIR/comparison.csv"
+  exit 0
+fi
+
 CSV="$OUT_DIR/runs.csv"
 # `pairs` = number of concurrent client/server process pairs (socket backends sweep
-# this; dpdk/rdma are always 1). `gbps` is aggregate App TX, `rx_gbps` aggregate App RX
+# this; raw/RDMA are always 1). `gbps` is aggregate App TX, `rx_gbps` aggregate App RX
 # (summed across pairs); App-level loss is (gbps - rx_gbps) / gbps.
 # post_process_gemm_dim = GEMM_DIM pinned dimension (default 1024).
 # CPU core/percentage columns identify the actual sampled cores. For a multi-pair
 # socket run, TX and RX are pair-0 samples rather than aggregate utilization.
 # post_process_sync (last column) = SYNC_INTERVAL, or "default" (2) when unset.
-CSV_HEADER="lang,backend,post_process,payload,batch,observed_max_rx_burst,pairs"
+CSV_HEADER="platform,lang,backend,post_process,payload,batch,observed_max_rx_burst,pairs"
 CSV_HEADER+=",target_gbps,rep,seconds,packets,bytes,pps,gbps,rx_gbps,drops,drops_kind"
 CSV_HEADER+=",cpu_master_core,cpu_tx_core,cpu_rx_core"
 CSV_HEADER+=",cpu_master_pct,cpu_tx_pct,cpu_rx_pct,gpu_sm_pct,gpu_mem_pct"
 CSV_HEADER+=",post_process_gemm_dim,post_process_sync"
 echo "$CSV_HEADER" > "$CSV"
-
-# Capture slow-moving environment state once per result set.
-"$SCRIPT_DIR/bench_capture_environment.sh" "$OUT_DIR"
 
 RUN_SECONDS="${RUN_SECONDS:-30}"
 if [[ ! "$RUN_SECONDS" =~ ^[0-9]+$ || "$RUN_SECONDS" -lt 1 ]]; then
@@ -115,8 +475,8 @@ REPEATS="${REPEATS:-1}"
 # Representative GPU workload run on the REAL received data (after a reorder/
 # gather step) in the receive path: none | fft | gemm (FP32 SGEMM) | gemm_fp16
 # (mixed-precision FP16/tensor-core matmul, the inference-style GEMM). Recorded in
-# the CSV post_process column. Honoured by ALL backends (dpdk, rdma, socket-udp,
-# socket-tcp). Default none = bare loopback (no GPU compute).
+# the CSV post_process column. Honoured by ALL backends (dpdk, ibverbs, rdma,
+# socket-udp, socket-tcp). Default none = bare loopback (no GPU compute).
 WORKLOAD="${WORKLOAD:-none}"
 case "$WORKLOAD" in
   none|fft|gemm|gemm_fp16) ;;
@@ -192,28 +552,34 @@ fi
 DRIVER_LOG="$OUT_DIR/last_run.stderr"
 FAILURES=0
 
-# Per-backend sweep matrices (see docs/performance-dgx-spark.md methodology).
+# Per-backend sweep matrices (see the platform performance reports).
 # Native-shape sizes are the leftmost entry; "matched 8K" cell is also included.
 case "$BACKEND" in
-  dpdk)
+  dpdk|ibverbs)
     PAYLOADS_SWEEP=(8000 4096 1024 256 64)
-    BATCHES_SWEEP=(10240 4096 1024 256)
     PAYLOADS_HEADLINE=(8000)
-    BATCHES_HEADLINE=(10240)
+    if [[ "$BACKEND" == "ibverbs" ]]; then
+      BATCHES_SWEEP=("$IBVERBS_BATCH_SIZE")
+      BATCHES_HEADLINE=("$IBVERBS_BATCH_SIZE")
+    else
+      BATCHES_SWEEP=(10240 4096 1024 256)
+      BATCHES_HEADLINE=(10240)
+    fi
     PAIRS_SWEEP=(1)
     PAIRS_HEADLINE=(1)
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_raw_gpudirect"
-    CPU_MASTER=8; CPU_TX=17; CPU_RX=18
-    : "${ETH_DST_ADDR:?ETH_DST_ADDR must be set for dpdk backend (cat /sys/class/net/<rx-iface>/address)}"
+    CPU_MASTER="$MASTER_CORE"; CPU_TX="$DPDK_TX_QUEUE_CORE"; CPU_RX="$DPDK_RX_QUEUE_CORE"
+    ETH_DST_ADDR="${ETH_DST_ADDR:-$DEFAULT_ETH_DST_ADDR}"
+    ETH_SRC_ADDR="${ETH_SRC_ADDR:-$DEFAULT_ETH_SRC_ADDR}"
     # Resolve the tx_port (p0) / rx_port (p1) netdevs so each cell can assert wire
     # transit via their *_phy SerDes counters -- the MLX5 bifurcated driver keeps
     # these live even while the DPDK PMD owns the port, so a non-advancing
     # rx_packets_phy flags the on-chip eswitch short-cut instead of a true cable
     # loopback. Override DPDK_{TX,RX}_PCI / DPDK_{TX,RX}_NETDEV if auto-detect fails.
-    DPDK_TX_PCI="${DPDK_TX_PCI:-0000:01:00.0}"
-    DPDK_RX_PCI="${DPDK_RX_PCI:-0002:01:00.1}"
-    DPDK_TX_NETDEV="${DPDK_TX_NETDEV:-$(ls "/sys/bus/pci/devices/$DPDK_TX_PCI/net" 2>/dev/null | head -n1 || true)}"
-    DPDK_RX_NETDEV="${DPDK_RX_NETDEV:-$(ls "/sys/bus/pci/devices/$DPDK_RX_PCI/net" 2>/dev/null | head -n1 || true)}"
+    DPDK_TX_PCI="${DPDK_TX_PCI:-$DEFAULT_DPDK_TX_PCI}"
+    DPDK_RX_PCI="${DPDK_RX_PCI:-$DEFAULT_DPDK_RX_PCI}"
+    DPDK_TX_NETDEV="${DPDK_TX_NETDEV:-$DEFAULT_DPDK_TX_NETDEV}"
+    DPDK_RX_NETDEV="${DPDK_RX_NETDEV:-$DEFAULT_DPDK_RX_NETDEV}"
     ;;
   rdma)
     PAYLOADS_SWEEP=(8000000 1048576 65536 8192 4096)
@@ -223,12 +589,9 @@ case "$BACKEND" in
     PAIRS_SWEEP=(1)
     PAIRS_HEADLINE=(1)
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_rdma"
-    # One-way roles: the client (send-only) drives the TX-queue core 17; the server
-    # (receive-only) runs its RX-queue poller AND bench worker on core 19. Measure
-    # the sender core as cpu_tx and the SERVER RECEIVE core (19, not the idle
-    # client-RX core 18) as cpu_rx, so cpu_rx_pct reflects the true RoCE RC
-    # receiver cost.
-    CPU_MASTER=8; CPU_TX=17; CPU_RX=19
+    # One-way roles: sample the client TX queue and the server RX queue/worker so
+    # cpu_tx_pct and cpu_rx_pct reflect the active RoCE RC data path.
+    CPU_MASTER="$MASTER_CORE"; CPU_TX="$RDMA_CLIENT_TX_CORE"; CPU_RX="$RDMA_SERVER_RX_CORE"
     # Resolve the server (RX) / client (TX) netdevs inside the wire-loopback
     # namespaces so each cell can assert wire transit via *_phy SerDes counters,
     # exactly like the dpdk path. RoCE loops over the SAME cable, so a non-advancing
@@ -236,8 +599,8 @@ case "$BACKEND" in
     # over-the-cable loopback -- the tell for a RoCE number above the ~99 Gb/s
     # 100GbE line-rate ceiling. Empty if the netns is not up yet (the per-cell check
     # then just skips with a WARN). Override RDMA_{SERVER,CLIENT}_NETDEV if needed.
-    RDMA_SERVER_NS="${RDMA_SERVER_NS:-dq_wire_server}"
-    RDMA_CLIENT_NS="${RDMA_CLIENT_NS:-dq_wire_client}"
+    RDMA_SERVER_NS="${RDMA_SERVER_NS:-$SERVER_NS}"
+    RDMA_CLIENT_NS="${RDMA_CLIENT_NS:-$CLIENT_NS}"
     RDMA_SERVER_NETDEV="${RDMA_SERVER_NETDEV:-$(ip netns exec "$RDMA_SERVER_NS" ls /sys/class/net 2>/dev/null | grep -vx lo | head -n1 || true)}"
     RDMA_CLIENT_NETDEV="${RDMA_CLIENT_NETDEV:-$(ip netns exec "$RDMA_CLIENT_NS" ls /sys/class/net 2>/dev/null | grep -vx lo | head -n1 || true)}"
     ;;
@@ -253,12 +616,12 @@ case "$BACKEND" in
     BATCHES_HEADLINE=(32)
     # Concurrent client/server pairs. A single pair is core-bound well below line
     # rate; the published matrix scales aggregate throughput with four pairs.
-    PAIRS_SWEEP=(1 2 4)
-    PAIRS_HEADLINE=(4)
+    PAIRS_SWEEP=("${DEFAULT_SOCKET_PAIR_COUNTS_ARRAY[@]}")
+    PAIRS_HEADLINE=("${DEFAULT_SOCKET_HEADLINE_PAIRS_ARRAY[@]}")
     SRV_PORT_BASE=5001; CLI_PORT_BASE=5101
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_socket"
     # Final pair-0 TX/RX attribution is derived from the structured pinning below.
-    CPU_MASTER=8; CPU_TX=17; CPU_RX=16
+    CPU_MASTER="$MASTER_CORE"; CPU_TX="${CLI_PIN_CORES[0]}"; CPU_RX="${SRV_PIN_CORES[0]}"
     ;;
   socket-tcp)
     # 1 MiB / 8000 / 1000 to mirror the published TCP matrix. The bench memsets a full
@@ -269,27 +632,58 @@ case "$BACKEND" in
     BATCHES_SWEEP=(1)
     PAYLOADS_HEADLINE=(8000)
     BATCHES_HEADLINE=(1)
-    PAIRS_SWEEP=(1 2 4)
-    PAIRS_HEADLINE=(4)
+    PAIRS_SWEEP=("${DEFAULT_SOCKET_PAIR_COUNTS_ARRAY[@]}")
+    PAIRS_HEADLINE=("${DEFAULT_SOCKET_HEADLINE_PAIRS_ARRAY[@]}")
     SRV_PORT_BASE=6001; CLI_PORT_BASE=6101
     BENCH_BIN="$BUILD_DIR/examples/daqiri_bench_socket"
     # Final pair-0 TX/RX attribution is derived from the structured pinning below.
-    CPU_MASTER=8; CPU_TX=17; CPU_RX=16
+    CPU_MASTER="$MASTER_CORE"; CPU_TX="${CLI_PIN_CORES[0]}"; CPU_RX="${SRV_PIN_CORES[0]}"
     ;;
   *) echo "Unknown backend: $BACKEND" >&2; exit 1 ;;
 esac
+
+if [[ "$BACKEND" == "rdma" || "$BACKEND" =~ ^socket- ]]; then
+  ip netns list 2>/dev/null | grep -qw "$CLIENT_NS" || {
+    echo "Missing namespace $CLIENT_NS; run scripts/setup_cabled_loopback_netns.sh --platform $BENCH_PLATFORM up" >&2
+    exit 1
+  }
+  ip netns list 2>/dev/null | grep -qw "$SERVER_NS" || {
+    echo "Missing namespace $SERVER_NS; run scripts/setup_cabled_loopback_netns.sh --platform $BENCH_PLATFORM up" >&2
+    exit 1
+  }
+  NETNS_CLIENT_NETDEV="$DEFAULT_DPDK_TX_NETDEV"
+  NETNS_SERVER_NETDEV="$DEFAULT_DPDK_RX_NETDEV"
+  [[ -n "$NETNS_CLIENT_NETDEV" && -n "$NETNS_SERVER_NETDEV" ]] || {
+    echo "Could not resolve cabled netdevs in $CLIENT_NS and $SERVER_NS" >&2
+    exit 1
+  }
+fi
 
 # When a GPU workload is active, its pinned GEMM operand (n·n·elem_size, from
 # GEMM_DIM) must fit inside each received I/O unit -- the small entries in the
 # default payload sweep can't hold it. Restrict the sweep to the headline
 # (native-shape) size so the fixed-n comparison is a single clean point per
 # backend instead of silently disabling the workload on the small cells.
-# e.g. WORKLOAD=gemm_fp16 GEMM_DIM=1024 REPEATS=3 ./run_spark_bench.sh rdma sweep
+# e.g. WORKLOAD=gemm_fp16 GEMM_DIM=1024 REPEATS=3 ./run_cabled_loopback_bench.sh --platform igx-thor rdma sweep
 if [[ "$WORKLOAD" != "none" ]]; then
   PAYLOADS_SWEEP=("${PAYLOADS_HEADLINE[@]}")
 fi
 # Optional space-separated overrides for one-off experiments. Apply them to both
 # sweep and headline modes so smoke and drop-curve runs use the requested values.
+if [[ -n "${PAYLOADS_OVERRIDE:-}" ]]; then
+  read -r -a PAYLOADS_SWEEP <<< "$PAYLOADS_OVERRIDE"
+  if (( ${#PAYLOADS_SWEEP[@]} == 0 )); then
+    echo "PAYLOADS_OVERRIDE must contain at least one payload size" >&2
+    exit 1
+  fi
+  PAYLOADS_HEADLINE=("${PAYLOADS_SWEEP[@]}")
+  for payload in "${PAYLOADS_SWEEP[@]}"; do
+    if [[ ! "$payload" =~ ^[1-9][0-9]*$ ]]; then
+      echo "Invalid PAYLOADS_OVERRIDE entry '$payload' (expected a positive integer)" >&2
+      exit 1
+    fi
+  done
+fi
 if [[ -n "${BATCHES_OVERRIDE:-}" ]]; then
   read -r -a BATCHES_SWEEP <<< "$BATCHES_OVERRIDE"
   if (( ${#BATCHES_SWEEP[@]} == 0 )); then
@@ -333,6 +727,73 @@ fi
 WORKLOAD_EFF="$WORKLOAD"
 
 DROP_CURVE_TARGETS=(1 5 10 25 50 75 100 0)  # 0 means unpaced (line rate)
+if [[ -n "${DROP_CURVE_TARGETS_OVERRIDE:-}" ]]; then
+  read -r -a DROP_CURVE_TARGETS <<< "$DROP_CURVE_TARGETS_OVERRIDE"
+fi
+
+preflight_core() {
+  local core="$1"
+  [[ -d "/sys/devices/system/cpu/cpu$core" ]] || {
+    echo "Configured CPU $core does not exist" >&2
+    return 1
+  }
+  if [[ -r "/sys/devices/system/cpu/cpu$core/online" ]] &&
+      [[ "$(cat "/sys/devices/system/cpu/cpu$core/online")" != "1" ]]; then
+    echo "Configured CPU $core is offline" >&2
+    return 1
+  fi
+}
+
+preflight_netdev() {
+  local namespace="$1" netdev="$2"
+  local command_prefix=()
+  [[ -n "$namespace" ]] && command_prefix=(ip netns exec "$namespace")
+  local carrier mtu speed pause
+  carrier="$("${command_prefix[@]}" cat "/sys/class/net/$netdev/carrier" 2>/dev/null || echo 0)"
+  mtu="$("${command_prefix[@]}" cat "/sys/class/net/$netdev/mtu" 2>/dev/null || echo 0)"
+  speed="$("${command_prefix[@]}" ethtool "$netdev" 2>/dev/null | awk '/Speed:/ {gsub(/Mb\/s/, "", $2); print $2}')"
+  pause="$("${command_prefix[@]}" ethtool --show-pause "$netdev" 2>/dev/null || true)"
+  [[ "$carrier" == "1" ]] || { echo "$netdev has no carrier" >&2; return 1; }
+  [[ "$mtu" == "9000" ]] || { echo "$netdev MTU is $mtu, expected 9000" >&2; return 1; }
+  [[ "$speed" == "$EXPECTED_LINK_MBPS" ]] || {
+    echo "$netdev link speed is ${speed:-unknown} Mb/s, expected $EXPECTED_LINK_MBPS" >&2
+    return 1
+  }
+  if grep -Eq '^(RX|TX):[[:space:]]+on$' <<< "$pause"; then
+    echo "$netdev has Ethernet pause enabled" >&2
+    return 1
+  fi
+}
+
+preflight_hardware() {
+  [[ "$(id -u)" -eq 0 ]] || { echo "Run the benchmark harness as root" >&2; return 1; }
+  nvidia-smi -L | grep -Fq "$GPU_MONITOR_ID" || {
+    echo "Selected GPU UUID $GPU_MONITOR_ID is not visible" >&2
+    return 1
+  }
+  local cores=("$MASTER_CORE")
+  case "$BACKEND" in
+    dpdk|ibverbs)
+      cores+=("$DPDK_TX_QUEUE_CORE" "$DPDK_RX_QUEUE_CORE" "$DPDK_TX_WORKER_CORE" "$DPDK_RX_WORKER_CORE")
+      preflight_netdev "" "$DPDK_TX_NETDEV" || return 1
+      preflight_netdev "" "$DPDK_RX_NETDEV" || return 1
+      ;;
+    rdma)
+      cores+=("$RDMA_CLIENT_RX_CORE" "$RDMA_CLIENT_TX_CORE" "$RDMA_SERVER_RX_CORE" "$RDMA_SERVER_TX_CORE")
+      preflight_netdev "$CLIENT_NS" "$NETNS_CLIENT_NETDEV" || return 1
+      preflight_netdev "$SERVER_NS" "$NETNS_SERVER_NETDEV" || return 1
+      ;;
+    socket-udp|socket-tcp)
+      cores+=("${SRV_PIN_CORES[@]}" "${CLI_PIN_CORES[@]}")
+      preflight_netdev "$CLIENT_NS" "$NETNS_CLIENT_NETDEV" || return 1
+      preflight_netdev "$SERVER_NS" "$NETNS_SERVER_NETDEV" || return 1
+      ;;
+  esac
+  local core
+  for core in "${cores[@]}"; do
+    preflight_core "$core" || return 1
+  done
+}
 
 # --------------------------------------------------------------------------
 # Helpers
@@ -356,6 +817,26 @@ parse_dpdk_drops() {
   echo "$sum"
 }
 
+parse_ibverbs_drops() {
+  local log="$1"
+  awk '
+    /ibverbs RX/ {
+      if (match($0, /cqe_errors=[0-9]+/)) {
+        value = substr($0, RSTART + 11, RLENGTH - 11); sum += value
+      }
+      if (match($0, /app_ring_full_drops=[0-9]+ bursts \([0-9]+ pkts\)/)) {
+        text = substr($0, RSTART, RLENGTH)
+        sub(/^.*\(/, "", text); sub(/ pkts\)$/, "", text); sum += text
+      }
+    }
+    /ibverbs TX/ && match($0, /handoff_full_drops=[0-9]+ bursts \([0-9]+ pkts\)/) {
+      text = substr($0, RSTART, RLENGTH)
+      sub(/^.*\(/, "", text); sub(/ pkts\)$/, "", text); sum += text
+    }
+    END { print sum + 0 }
+  ' "$log"
+}
+
 # Count RDMA CQ errors in the engine log.
 parse_rdma_drops() {
   local log="$1"
@@ -366,22 +847,17 @@ parse_rdma_drops() {
   echo "${n:-0}"
 }
 
-# Snapshot socket drops on the kernel side.
-# /proc/net/udp column 13 ("drops") is printed in decimal (%lu in
-# net/ipv4/udp.c). The local_address / rem_address columns are hex.
-# Both helpers take an optional namespace: in the netns wire-loopback setup the
-# UDP receiver lives in the server netns and TCP retransmits are counted in the
-# client (sender) netns, so the counters must be read inside the right namespace
-# rather than the default one.
-snapshot_proc_net_udp() {
+# Snapshot persistent kernel protocol counters. Reading /proc/net/udp after the
+# benchmark is invalid because the server socket has already closed and its row,
+# including the per-socket drop count, no longer exists. Namespace nstat counters
+# survive socket teardown and can be differenced around the complete cell.
+snapshot_udp_nstat() {
   local ns="${1:-}"
-  if [[ -n "$ns" ]]; then
-    ip netns exec "$ns" cat /proc/net/udp 2>/dev/null | awk 'NR>1 { sum += $13 } END { print sum+0 }' || echo 0
-  else
-    awk 'NR>1 { sum += $13 } END { print sum+0 }' /proc/net/udp 2>/dev/null || echo 0
-  fi
+  local pre=()
+  [[ -n "$ns" ]] && pre=(ip netns exec "$ns")
+  "${pre[@]}" nstat -a 2>/dev/null | awk '$1 == "UdpInErrors" { print $2+0; found=1 } END { if (!found) print 0 }' || echo 0
 }
-snapshot_nstat() {
+snapshot_tcp_nstat() {
   local ns="${1:-}"
   local pre=()
   [[ -n "$ns" ]] && pre=(ip netns exec "$ns")
@@ -429,21 +905,64 @@ phy_counter() {
     | awk -F'[: ]+' -v k="$key" '$2 == k { s += $3 } END { printf "%d", s+0 }'
 }
 
-# Generate a complete config from the cell parameters (DPDK + RoCE; sockets use
+priority_buffer_discards() {
+  local netdev="$1"
+  ethtool -S "$netdev" 2>/dev/null \
+    | awk -F'[: ]+' '$2 ~ /^rx_prio[0-9]+_buf_discard(_packets)?$/ { s += $3 } END { printf "%d", s+0 }'
+}
+
+# Convert decimal Gbps exactly; rejecting sub-Mbps values avoids silently disabling pacing.
+gbps_to_mbps() {
+  python3 - "$1" <<'PACING_PY'
+from decimal import Decimal, InvalidOperation
+import sys
+
+try:
+    rate = Decimal(sys.argv[1])
+    if not rate.is_finite() or rate < 0:
+        raise ValueError
+    mbps = rate * 1000
+    if mbps != mbps.to_integral_value():
+        raise ValueError
+except (InvalidOperation, ValueError):
+    sys.exit("Raw pacing target must be nonnegative Gbps resolving to whole Mbps (e.g. 2.25)")
+print(int(mbps))
+PACING_PY
+}
+
+# Generate a complete config from the cell parameters (raw + RoCE; sockets use
 # generate_socket_yaml so each concurrent pair gets unique ports/cores).
 generate_yaml() {
-  local out="$1" payload="$2" batch="$3"
+  local out="$1" payload="$2" batch="$3" target_gbps="$4"
   case "$BACKEND" in
-    dpdk)
-      # Keep packet buffers at the report's original 8064-byte capacity so
-      # payload size remains the only memory-layout variable in this sweep.
+    dpdk|ibverbs)
+      # DPDK retains the report's 8064-byte capacity; ibverbs right-sizes MPRQ strides.
+      local raw_memory_kind="$DPDK_MEMORY_KIND"
+      local raw_num_bufs=51200
+      local raw_buffer_size=8064
+      local raw_source_args=()
+      local raw_pacing_args=()
+      local raw_pacing_mbps
+      raw_pacing_mbps="$(gbps_to_mbps "$target_gbps")" || return 1
+      if [[ "$raw_pacing_mbps" != "0" ]]; then
+        raw_pacing_args=(--pacing-mbps "$raw_pacing_mbps")
+      fi
+      if [[ "$BACKEND" == "ibverbs" ]]; then
+        raw_memory_kind="$IBVERBS_MEMORY_KIND"
+        raw_num_bufs="$IBVERBS_NUM_BUFS"
+        raw_buffer_size=$((payload + 64))
+        (( raw_buffer_size < 256 )) && raw_buffer_size=256
+        raw_source_args=(--eth-src-addr "$ETH_SRC_ADDR")
+      fi
       python3 "$CONFIG_GEN" raw-pair \
         --tx-address "$DPDK_TX_PCI" --rx-address "$DPDK_RX_PCI" \
-        --master-core 8 --engine dpdk --memory-kind host_pinned \
-        --tx-queue-cores 17 --rx-queue-cores 18 \
-        --tx-worker-cores 16 --rx-worker-cores 19 \
-        --payload-size "$payload" --buffer-size 8064 \
-        --batch-size "$batch" --num-bufs 51200 \
+        --master-core "$MASTER_CORE" --engine "$BACKEND" --memory-kind "$raw_memory_kind" \
+        --tx-queue-cores "$DPDK_TX_QUEUE_CORE" --rx-queue-cores "$DPDK_RX_QUEUE_CORE" \
+        --tx-worker-cores "$DPDK_TX_WORKER_CORE" --rx-worker-cores "$DPDK_RX_WORKER_CORE" \
+        --payload-size "$payload" --buffer-size "$raw_buffer_size" \
+        --batch-size "$batch" --num-bufs "$raw_num_bufs" \
+        "${raw_pacing_args[@]}" \
+        "${raw_source_args[@]}" \
         --eth-dst-addr "$ETH_DST_ADDR" \
         --ip-src-addr 1.1.1.1 --ip-dst-addr 2.2.2.2 \
         --output "$out" || return 1
@@ -467,24 +986,24 @@ generate_yaml() {
       python3 "$CONFIG_GEN" socket-pair --transport roce \
         --client-address 10.250.0.1 --server-address 10.250.0.2 \
         --client-port 4096 --server-port 4096 \
-        --client-master-core 8 --server-master-core 8 \
-        --client-rx-core 18 --client-tx-core 17 \
-        --server-rx-core 19 --server-tx-core 16 \
-        --client-worker-core 18 --server-worker-core 19 \
+        --client-master-core "$MASTER_CORE" --server-master-core "$MASTER_CORE" \
+        --client-rx-core "$RDMA_CLIENT_RX_CORE" --client-tx-core "$RDMA_CLIENT_TX_CORE" \
+        --server-rx-core "$RDMA_SERVER_RX_CORE" --server-tx-core "$RDMA_SERVER_TX_CORE" \
+        --client-worker-core "$RDMA_CLIENT_RX_CORE" --server-worker-core "$RDMA_SERVER_RX_CORE" \
         --message-size "$payload" --buffer-size "$payload" --num-bufs 1 \
         --rx-num-bufs "$rx_nb" --tx-num-bufs "$tx_nb" \
-        --rx-depth "$rx_nb" --tx-depth "$tx_nb" --memory-kind host_pinned \
+        --rx-depth "$rx_nb" --tx-depth "$tx_nb" --memory-kind "$RDMA_MEMORY_KIND" \
         --role rx --output "$out" || return 1
       python3 "$CONFIG_GEN" socket-pair --transport roce \
         --client-address 10.250.0.1 --server-address 10.250.0.2 \
         --client-port 4096 --server-port 4096 \
-        --client-master-core 8 --server-master-core 8 \
-        --client-rx-core 18 --client-tx-core 17 \
-        --server-rx-core 19 --server-tx-core 16 \
-        --client-worker-core 18 --server-worker-core 19 \
+        --client-master-core "$MASTER_CORE" --server-master-core "$MASTER_CORE" \
+        --client-rx-core "$RDMA_CLIENT_RX_CORE" --client-tx-core "$RDMA_CLIENT_TX_CORE" \
+        --server-rx-core "$RDMA_SERVER_RX_CORE" --server-tx-core "$RDMA_SERVER_TX_CORE" \
+        --client-worker-core "$RDMA_CLIENT_RX_CORE" --server-worker-core "$RDMA_SERVER_RX_CORE" \
         --message-size "$payload" --buffer-size "$payload" --num-bufs 1 \
         --rx-num-bufs "$rx_nb" --tx-num-bufs "$tx_nb" \
-        --rx-depth "$rx_nb" --tx-depth "$tx_nb" --memory-kind host_pinned \
+        --rx-depth "$rx_nb" --tx-depth "$tx_nb" --memory-kind "$RDMA_MEMORY_KIND" \
         --role tx --output "${out%.yaml}_client.yaml" || return 1
       ;;
   esac
@@ -497,18 +1016,11 @@ generate_yaml() {
 # it locks into an efficient (~30 Gb/s) or a serialized (~15 Gb/s) mode for a whole
 # run, producing bimodal, high-variance results.
 #
-# CRITICAL: keep each pair's two cores in the SAME CPU cluster. GB10's ten big X925
-# cores are two clusters of five (5-9 and 15-19); straddling a pair across clusters
-# makes every payload pay cross-cluster cache-coherence latency and *regresses* large
-# messages (1 MiB 4-pair dropped ~90 -> ~77 Gb/s in testing). So pairs 0-1 sit in the
-# 15-19 cluster and pairs 2-3 in the 5-9 cluster, each send/recv intra-cluster
-# (master 8, spare 15). NOTE: separating send/recv also lets the UDP sender outrun the
-# receiver (no shared-core self-pacing), so UDP loss rises vs the co-pinned setup --
-# the more representative behaviour for an unpaced sender.
-SRV_PIN_CORES=(16 18 5 7)
-CLI_PIN_CORES=(17 19 6 9)
-pair_server_core() { echo "${SRV_PIN_CORES[$(( $1 % 4 ))]}"; }
-pair_client_core() { echo "${CLI_PIN_CORES[$(( $1 % 4 ))]}"; }
+# Keep each pair's two cores in the same CPU cluster when the platform has more
+# than one. The platform profile supplies the default pair ordering; environment
+# overrides support additional systems without changing the benchmark matrix.
+pair_server_core() { echo "${SRV_PIN_CORES[$(( $1 % ${#SRV_PIN_CORES[@]} ))]}"; }
+pair_client_core() { echo "${CLI_PIN_CORES[$(( $1 % ${#CLI_PIN_CORES[@]} ))]}"; }
 pair_server_io_core() {
   local idx="$1" fallback="$2"
   if (( ${#SOCKET_RX_IO_PIN_CORES[@]} == 0 )); then
@@ -519,18 +1031,15 @@ pair_server_io_core() {
 }
 
 # Socket CSV utilization samples pair 0. Attribute TX to the client application
-# worker and RX to the actual server receive role: UDP's recvmmsg() I/O thread,
-# or TCP's server application worker. An unpinned run has no meaningful core sample.
+# worker and RX to the actual server TCP recv()/UDP recvmmsg() I/O thread. An
+# unpinned run has no meaningful core sample.
 if [[ "$BACKEND" =~ ^socket- ]]; then
   if [[ -n "${SOCKET_NOPIN:-}" ]]; then
     CPU_TX=-1
     CPU_RX=-1
   else
     CPU_TX="$(pair_client_core 0)"
-    CPU_RX="$(pair_server_core 0)"
-    if [[ "$BACKEND" == "socket-udp" ]]; then
-      CPU_RX="$(pair_server_io_core 0 "$CPU_RX")"
-    fi
+    CPU_RX="$(pair_server_io_core 0 "$(pair_server_core 0)")"
   fi
 fi
 
@@ -549,10 +1058,7 @@ generate_socket_yaml() {
   else
     server_core="$(pair_server_core "$idx")"
     client_core="$(pair_client_core "$idx")"
-    server_io_core="$server_core"
-    if [[ "$BACKEND" == "socket-udp" ]]; then
-      server_io_core="$(pair_server_io_core "$idx" "$server_core")"
-    fi
+    server_io_core="$(pair_server_io_core "$idx" "$server_core")"
   fi
   local transport="${BACKEND#socket-}"
   local buffer_size=65536 num_bufs=1024
@@ -564,7 +1070,7 @@ generate_socket_yaml() {
     --transport "$transport"
     --client-address 10.250.0.1 --server-address 10.250.0.2
     --client-port "$cli_port" --server-port "$srv_port"
-    --client-master-core 8 --server-master-core 8
+    --client-master-core "$MASTER_CORE" --server-master-core "$MASTER_CORE"
     --client-rx-core "$client_core" --client-tx-core "$client_core"
     --server-rx-core "$server_io_core" --server-tx-core "$server_core"
     --client-worker-core "$client_core" --server-worker-core "$server_core"
@@ -578,6 +1084,24 @@ generate_socket_yaml() {
 }
 
 # Run one cell. Echoes the CSV row to stdout.
+# Track monitors in the driver shell so cancellation also stops captures.
+dmon_pid=""
+mlnx_perf_pid=""
+cleanup_monitors() {
+  local pid
+  for pid in "$mlnx_perf_pid" "$dmon_pid"; do
+    if [[ -n "$pid" ]]; then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    fi
+  done
+  mlnx_perf_pid=""
+  dmon_pid=""
+}
+trap cleanup_monitors EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 run_cell() {
   local lang="$1" payload="$2" batch="$3" pairs="$4" target_gbps="$5" rep="${6:-1}"
   local cell="$lang-$BACKEND-p$payload-b$batch-n$pairs-g$target_gbps-r$rep"
@@ -598,7 +1122,7 @@ run_cell() {
     done
   else
     yaml="$cell_dir/config.yaml"
-    if ! generate_yaml "$yaml" "$payload" "$batch"; then
+    if ! generate_yaml "$yaml" "$payload" "$batch" "$target_gbps"; then
       echo "ERROR: $cell configuration generation failed" >&2
       return 1
     fi
@@ -608,27 +1132,47 @@ run_cell() {
   # receiver lives in the server netns and TCP retransmits are counted on the
   # client (sender) netns, so read each counter inside the relevant namespace.
   local udp_ns="" tcp_ns=""
-  [[ "$BACKEND" == "socket-udp" ]] && udp_ns="dq_wire_server"
-  [[ "$BACKEND" == "socket-tcp" ]] && tcp_ns="dq_wire_client"
+  [[ "$BACKEND" == "socket-udp" ]] && udp_ns="$SERVER_NS"
+  [[ "$BACKEND" == "socket-tcp" ]] && tcp_ns="$CLIENT_NS"
   local udp_before tcp_before
-  udp_before="$(snapshot_proc_net_udp "$udp_ns")"
-  tcp_before="$(snapshot_nstat "$tcp_ns")"
+  udp_before="$(snapshot_udp_nstat "$udp_ns")"
+  tcp_before="$(snapshot_tcp_nstat "$tcp_ns")"
+  local raw_priority_drop_before=0 raw_priority_drops=0
+  if [[ "$BACKEND" == "dpdk" || "$BACKEND" == "ibverbs" ]]; then
+    raw_priority_drop_before="$(priority_buffer_discards "$DPDK_RX_NETDEV")"
+  fi
 
   # Snapshot per-cpu stats just before the bench starts.
   snapshot_cpu_stat "$cell_dir/cpu_stat.before"
 
   # Background GPU dmon (1-sec sample, RUN_SECONDS samples).
-  ( nvidia-smi dmon -s pucvmet -c "$RUN_SECONDS" > "$cell_dir/nvidia_smi_dmon.txt" 2>&1 ) &
-  local dmon_pid=$!
+  local dmon_args=(-s pucvmet -c "$RUN_SECONDS")
+  [[ -n "$GPU_MONITOR_ID" ]] && dmon_args+=(-i "$GPU_MONITOR_ID")
+  ( nvidia-smi dmon "${dmon_args[@]}" > "$cell_dir/nvidia_smi_dmon.txt" 2>&1 ) &
+  dmon_pid=$!
+
+  local perf_netdev=""
+  local perf_prefix=()
+  if [[ "$BACKEND" == "rdma" || "$BACKEND" =~ ^socket- ]]; then
+    perf_netdev="$NETNS_SERVER_NETDEV"
+    perf_prefix=(ip netns exec "$SERVER_NS")
+  else
+    perf_netdev="$DPDK_RX_NETDEV"
+  fi
+  ( exec "${perf_prefix[@]}" mlnx_perf -i "$perf_netdev" -t 1 \
+      > "$cell_dir/mlnx_perf_rx.txt" 2>&1 ) &
+  mlnx_perf_pid=$!
 
   # Run the bench. Stderr captures DAQIRI_LOG_* output (DPDK/RDMA drop sources).
   local stdout="$cell_dir/stdout.txt"
   local stderr="$cell_dir/stderr.txt"
   local bench_rc=0
-  local pkts="" bytes="" secs="" rx_bytes="" observed_max_rx_burst=0
+  local pkts="" bytes="" secs="" rx_pkts="" rx_bytes="" observed_max_rx_burst=0
 
   local bench_extra=()
-  [[ "$target_gbps" != "0" ]] && bench_extra+=(--target-gbps "$target_gbps")
+  if [[ "$target_gbps" != "0" && "$BACKEND" != "dpdk" && "$BACKEND" != "ibverbs" ]]; then
+    bench_extra+=(--target-gbps "$target_gbps")
+  fi
   # Every backend honours --workload (runs it on real received data); none = skip.
   if [[ "$WORKLOAD_EFF" != "none" ]]; then
     bench_extra+=(--workload "$WORKLOAD_EFF")
@@ -649,18 +1193,21 @@ run_cell() {
   if [[ "$BACKEND" =~ ^socket- ]]; then
     # `pairs` independent client/server processes, each in the wire-loopback
     # namespaces with unique ports and cores. A single pair is core-bound below line
-    # rate; the published Spark matrix scales aggregate throughput with four pairs.
+    # rate; the published matrix scales aggregate throughput with four pairs.
     # App TX (client sent) and App RX (server recv) are summed across pairs.
+    local wire_tx_before wire_rx_before
+    wire_tx_before="$(phy_counter "$NETNS_CLIENT_NETDEV" tx_bytes_phy "$CLIENT_NS")"
+    wire_rx_before="$(phy_counter "$NETNS_SERVER_NETDEV" rx_bytes_phy "$SERVER_NS")"
     local server_pids=() client_pids=()
     for ((i = 0; i < pairs; i++)); do
-      ip netns exec dq_wire_server "$BENCH_BIN" "$cell_dir/server_p$i.yaml" \
+      ip netns exec "$SERVER_NS" "$BENCH_BIN" "$cell_dir/server_p$i.yaml" \
           --seconds "$server_seconds" "${bench_extra[@]}" --mode server \
           > "$cell_dir/server_p$i.stdout" 2> "$cell_dir/server_p$i.stderr" &
       server_pids+=("$!")
     done
     sleep "$startup_sleep"
     for ((i = 0; i < pairs; i++)); do
-      ip netns exec dq_wire_client "$BENCH_BIN" "$cell_dir/client_p$i.yaml" \
+      ip netns exec "$CLIENT_NS" "$BENCH_BIN" "$cell_dir/client_p$i.yaml" \
           --seconds "$RUN_SECONDS" "${bench_extra[@]}" --mode client \
           > "$cell_dir/client_p$i.stdout" 2> "$cell_dir/client_p$i.stderr" &
       client_pids+=("$!")
@@ -668,24 +1215,36 @@ run_cell() {
     for i in "${client_pids[@]}"; do wait "$i" || bench_rc=$?; done
     for i in "${server_pids[@]}"; do wait "$i" 2>/dev/null || true; done
 
-    local tx_pkts=0 tx_bytes=0 agg_rx_bytes=0 max_secs=0
+    local tx_pkts=0 tx_bytes=0 agg_rx_pkts=0 agg_rx_bytes=0 max_secs=0
     for ((i = 0; i < pairs; i++)); do
-      local sp sb se rb max_burst
+      local sp sb se rp rb max_burst
       sp="$(extract_field 'Client complete' sent_packets "$cell_dir/client_p$i.stdout")"
       sb="$(extract_field 'Client complete' sent_bytes   "$cell_dir/client_p$i.stdout")"
       se="$(extract_field 'Client complete' seconds      "$cell_dir/client_p$i.stdout")"
+      rp="$(extract_field 'Server complete' recv_packets "$cell_dir/server_p$i.stdout")"
       rb="$(extract_field 'Server complete' recv_bytes   "$cell_dir/server_p$i.stdout")"
       max_burst="$(extract_field 'Server complete' max_rx_burst \
         "$cell_dir/server_p$i.stdout")"
       tx_pkts=$(( tx_pkts + ${sp:-0} ))
       tx_bytes=$(( tx_bytes + ${sb:-0} ))
+      agg_rx_pkts=$(( agg_rx_pkts + ${rp:-0} ))
       agg_rx_bytes=$(( agg_rx_bytes + ${rb:-0} ))
       if (( ${max_burst:-0} > observed_max_rx_burst )); then
         observed_max_rx_burst="${max_burst:-0}"
       fi
       max_secs="$(awk -v a="$max_secs" -v b="${se:-0}" 'BEGIN { print (b+0>a+0)?b:a }')"
     done
-    pkts="$tx_pkts"; bytes="$tx_bytes"; rx_bytes="$agg_rx_bytes"; secs="$max_secs"
+    pkts="$tx_pkts"; bytes="$tx_bytes"; rx_pkts="$agg_rx_pkts"; rx_bytes="$agg_rx_bytes"; secs="$max_secs"
+    local wire_tx_delta wire_rx_delta wire_min
+    wire_tx_delta=$(( $(phy_counter "$NETNS_CLIENT_NETDEV" tx_bytes_phy "$CLIENT_NS") - wire_tx_before ))
+    wire_rx_delta=$(( $(phy_counter "$NETNS_SERVER_NETDEV" rx_bytes_phy "$SERVER_NS") - wire_rx_before ))
+    wire_min=$(( agg_rx_bytes / 2 ))
+    if [[ "$wire_rx_delta" -lt "$wire_min" || "$wire_rx_delta" -le 0 ]]; then
+      echo "ERROR: $cell rx_bytes_phy advanced only +$wire_rx_delta on $NETNS_SERVER_NETDEV (expected >= ~$wire_min)" >&2
+      bench_rc=90
+    else
+      echo "INFO: $cell wire OK -- client tx_bytes_phy +$wire_tx_delta, server rx_bytes_phy +$wire_rx_delta" >&2
+    fi
     cat "$cell_dir"/server_p*.stderr "$cell_dir"/client_p*.stderr > "$stderr" 2>/dev/null || true
     cat "$cell_dir"/client_p*.stdout "$cell_dir"/server_p*.stdout > "$stdout" 2>/dev/null || true
   elif [[ "$BACKEND" == "rdma" ]]; then
@@ -704,12 +1263,12 @@ run_cell() {
     local phy_tx_before phy_rx_before
     phy_tx_before="$(phy_counter "$RDMA_CLIENT_NETDEV" tx_packets_phy "$RDMA_CLIENT_NS")"
     phy_rx_before="$(phy_counter "$RDMA_SERVER_NETDEV" rx_packets_phy "$RDMA_SERVER_NS")"
-    ip netns exec dq_wire_server "${nsys_pre[@]}" "$BENCH_BIN" "$yaml" \
+    ip netns exec "$SERVER_NS" "${nsys_pre[@]}" "$BENCH_BIN" "$yaml" \
         --seconds "$server_seconds" "${bench_extra[@]}" --mode server \
         > "$cell_dir/server_stdout.txt" 2> "$cell_dir/server_stderr.txt" &
     local server_pid=$!
     sleep "$startup_sleep"
-    ip netns exec dq_wire_client "$BENCH_BIN" "${yaml%.yaml}_client.yaml" \
+    ip netns exec "$CLIENT_NS" "$BENCH_BIN" "${yaml%.yaml}_client.yaml" \
         --seconds "$RUN_SECONDS" "${bench_extra[@]}" --mode client \
         > "$stdout" 2> "$stderr" || bench_rc=$?
     wait "$server_pid" 2>/dev/null || true
@@ -742,9 +1301,11 @@ run_cell() {
     # slack) before certifying wire transit.
     local phy_min=$(( ${pkts:-0} / 2 ))
     if [[ -z "$RDMA_SERVER_NETDEV" ]]; then
-      echo "WARN: $cell could not resolve server netdev in $RDMA_SERVER_NS (netns up?); skipped wire (*_phy) check" >&2
+      echo "ERROR: $cell could not resolve server netdev in $RDMA_SERVER_NS" >&2
+      bench_rc=90
     elif [[ "$phy_rx_delta" -lt "$phy_min" || "$phy_rx_delta" -le 0 ]]; then
-      echo "WARN: $cell rx_packets_phy advanced only +$phy_rx_delta on $RDMA_SERVER_NETDEV (expected >= ~$phy_min, one per message) -- traffic likely did NOT cross the wire (on-chip eswitch short-cut?)" >&2
+      echo "ERROR: $cell rx_packets_phy advanced only +$phy_rx_delta on $RDMA_SERVER_NETDEV (expected >= ~$phy_min, one per message)" >&2
+      bench_rc=90
     else
       echo "INFO: $cell wire OK -- client tx_packets_phy +$phy_tx_delta, server rx_packets_phy +$phy_rx_delta (>= $phy_min msgs)" >&2
     fi
@@ -759,6 +1320,13 @@ run_cell() {
     local phy_tx_delta phy_rx_delta
     phy_tx_delta=$(( $(phy_counter "$DPDK_TX_NETDEV" tx_packets_phy) - phy_tx_before ))
     phy_rx_delta=$(( $(phy_counter "$DPDK_RX_NETDEV" rx_packets_phy) - phy_rx_before ))
+    local raw_priority_drop_after
+    raw_priority_drop_after="$(priority_buffer_discards "$DPDK_RX_NETDEV")"
+    if (( raw_priority_drop_after >= raw_priority_drop_before )); then
+      raw_priority_drops=$((raw_priority_drop_after - raw_priority_drop_before))
+    else
+      raw_priority_drops="$raw_priority_drop_after"
+    fi
     # For RX-bearing benches "RX complete" is authoritative; fall back to "TX complete".
     pkts="$(extract_field 'RX complete' packets "$stdout")"
     bytes="$(extract_field 'RX complete' bytes   "$stdout")"
@@ -776,9 +1344,11 @@ run_cell() {
     # (the same hole the RoCE check had).
     local phy_min=$(( ${pkts:-0} / 2 ))
     if [[ -z "$DPDK_RX_NETDEV" ]]; then
-      echo "WARN: $cell could not resolve rx_port netdev ($DPDK_RX_PCI); skipped wire (*_phy) check" >&2
+      echo "ERROR: $cell could not resolve rx_port netdev ($DPDK_RX_PCI)" >&2
+      bench_rc=90
     elif [[ "$phy_rx_delta" -lt "$phy_min" || "$phy_rx_delta" -le 0 ]]; then
-      echo "WARN: $cell rx_packets_phy advanced only +$phy_rx_delta on $DPDK_RX_NETDEV (expected >= ~$phy_min) -- traffic likely did NOT cross the wire (on-chip eswitch short-cut?)" >&2
+      echo "ERROR: $cell rx_packets_phy advanced only +$phy_rx_delta on $DPDK_RX_NETDEV (expected >= ~$phy_min)" >&2
+      bench_rc=90
     else
       echo "INFO: $cell wire OK -- p0 tx_packets_phy +$phy_tx_delta, p1 rx_packets_phy +$phy_rx_delta (>= $phy_min)" >&2
     fi
@@ -789,8 +1359,12 @@ run_cell() {
   # captures finish reaping, to bound the window).
   snapshot_cpu_stat "$cell_dir/cpu_stat.after"
 
-  # Stop background captures (they self-terminate at -c <N>, but reap if needed).
+  # Stop the open-ended NIC capture and reap both monitors.
+  kill "$mlnx_perf_pid" 2>/dev/null || true
+  wait "$mlnx_perf_pid" 2>/dev/null || true
+  mlnx_perf_pid=""
   wait "$dmon_pid"  2>/dev/null || true
+  dmon_pid=""
 
   local stats_missing=0
   if [[ -z "${pkts:-}" || -z "${bytes:-}" || -z "${secs:-}" ]]; then
@@ -817,20 +1391,30 @@ run_cell() {
   local drops drops_kind
   case "$BACKEND" in
     dpdk)
-      drops="$(parse_dpdk_drops "$stderr")"
-      drops_kind="dpdk-imissed+ierrors+nombuf"
+      drops=$(( $(parse_dpdk_drops "$stderr") + raw_priority_drops ))
+      drops_kind="dpdk-imissed+ierrors+nombuf+priority-buffer"
+      ;;
+    ibverbs)
+      drops=$(( $(parse_ibverbs_drops "$stderr") + raw_priority_drops ))
+      drops_kind="ibverbs-cqe+ring+priority-buffer"
       ;;
     rdma)
       drops="$(parse_rdma_drops "$stderr")"
       drops_kind="rdma-cqe-error"
       ;;
     socket-udp)
-      local udp_after; udp_after="$(snapshot_proc_net_udp "$udp_ns")"
-      drops="$((udp_after - udp_before))"
-      drops_kind="udp-proc-net-udp-drops"
+      local udp_after; udp_after="$(snapshot_udp_nstat "$udp_ns")"
+      local udp_nstat_drops=$((udp_after - udp_before))
+      local udp_app_drops=$(( ${pkts:-0} - ${rx_pkts:-0} ))
+      (( udp_app_drops < 0 )) && udp_app_drops=0
+      drops="$udp_app_drops"
+      drops_kind="udp-app-tx-minus-rx"
+      if (( udp_nstat_drops > udp_app_drops )); then
+        echo "WARN: $cell UdpInErrors delta $udp_nstat_drops exceeds app TX-RX gap $udp_app_drops" >&2
+      fi
       ;;
     socket-tcp)
-      local tcp_after; tcp_after="$(snapshot_nstat "$tcp_ns")"
+      local tcp_after; tcp_after="$(snapshot_tcp_nstat "$tcp_ns")"
       drops="$((tcp_after - tcp_before))"
       drops_kind="tcp-nstat-retrans+inerrs"
       ;;
@@ -855,7 +1439,7 @@ run_cell() {
   local pp_gemm_dim="$GEMM_DIM"
   local pp_sync="${SYNC_INTERVAL:-default}"
   [[ -z "$pp_sync" ]] && pp_sync="default"
-  local row="$lang,$BACKEND,$WORKLOAD_EFF,$payload,$batch,$observed_max_rx_burst,$pairs"
+  local row="$BENCH_PLATFORM,$lang,$BACKEND,$WORKLOAD_EFF,$payload,$batch,$observed_max_rx_burst,$pairs"
   row+=",$target_gbps,$rep,$secs,$pkts,$bytes,$pps,$gbps,$rx_gbps,$drops,$drops_kind"
   row+=",$CPU_MASTER,$CPU_TX,$CPU_RX,$cpu_master_pct,$cpu_tx_pct,$cpu_rx_pct"
   row+=",$gpu_sm,$gpu_mem,$pp_gemm_dim,$pp_sync"
@@ -871,9 +1455,22 @@ run_cell_or_record_failure() {
   done
 }
 
+payload_setting() {
+  local settings="$1" payload="$2" fallback="$3" entry
+  for entry in $settings; do
+    if [[ "${entry%%:*}" == "$payload" ]]; then
+      echo "${entry#*:}"
+      return
+    fi
+  done
+  echo "$fallback"
+}
+
 # --------------------------------------------------------------------------
 # Driver
 # --------------------------------------------------------------------------
+
+preflight_hardware || exit 1
 
 case "$MODE" in
   smoke)
@@ -889,9 +1486,21 @@ case "$MODE" in
   sweep)
     # Full payload × batch × pairs matrix at line rate.
     for p in "${PAYLOADS_SWEEP[@]}"; do
-      for b in "${BATCHES_SWEEP[@]}"; do
+      cell_batches=("${BATCHES_SWEEP[@]}")
+      cell_target=0
+      if [[ "$BACKEND" == "dpdk" && -z "${BATCHES_OVERRIDE:-}" ]]; then
+        payload_batch="$(payload_setting "$DPDK_PAYLOAD_BATCHES" "$p" "")"
+        if [[ -n "$payload_batch" ]]; then
+          cell_batches=("$payload_batch")
+        fi
+        cell_target="$(payload_setting "$DPDK_PAYLOAD_PACING_GBPS" "$p" 0)"
+      elif [[ "$BACKEND" == "ibverbs" && -z "${BATCHES_OVERRIDE:-}" ]]; then
+        cell_batches=("$(payload_setting "$IBVERBS_PAYLOAD_BATCHES" "$p" "$IBVERBS_BATCH_SIZE")")
+        cell_target="$(payload_setting "$IBVERBS_PAYLOAD_PACING_GBPS" "$p" 0)"
+      fi
+      for b in "${cell_batches[@]}"; do
         for n in "${PAIRS_SWEEP[@]}"; do
-          run_cell_or_record_failure cpp "$p" "$b" "$n" 0
+          run_cell_or_record_failure cpp "$p" "$b" "$n" "$cell_target"
         done
       done
     done

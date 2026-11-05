@@ -54,6 +54,13 @@ At build time, `DAQIRI_ENGINE` selects which optional engines are
 compiled in (`dpdk`, `ibverbs`); Linux sockets are always available. See
 [Getting Started](getting-started.md) for the build options.
 
+With `DAQIRI_IBVERBS_DLOPEN=ON` (default `OFF`), raw ibverbs and RoCE load
+versioned DAQIRI glue libraries and their system RDMA dependencies when the
+engine initializes. Deploy the glue libraries alongside compatible RDMA shared
+libraries; Linux UDP/TCP sockets do not need them. See
+[runtime RDMA library deployment](tutorials/bare-metal-cmake-build.md#daqiri_ibverbs_dlopen-runtime-rdma-libraries)
+for build requirements and library search paths.
+
 ### Raw Ethernet
 
 *YAML:* `stream_type: "raw"`.
@@ -114,10 +121,11 @@ URI schemes:
 - **`udp://`** / **`tcp://`**: Linux kernel UDP and TCP sockets. No NIC
   privileges required, no special hardware. Useful
   as a comparison baseline against the kernel-bypass paths and as a way
-  to get first results on a system without an NVIDIA NIC. TCP RX queues use
-  the smallest referenced memory-region `num_bufs` as their internal burst
-  limit; when full, DAQIRI stops consuming socket data so kernel TCP flow
-  control reaches the sender. See [TCP receive backpressure and queue sizing](benchmarks/socket_benchmarking.md#tcp-receive-backpressure-and-queue-sizing).
+  to get first results on a system without an NVIDIA NIC. TCP and UDP RX queues
+  use the smallest referenced memory-region `num_bufs` as their internal packet
+  limit. When full, DAQIRI stops consuming socket data: TCP flow control reaches
+  the sender, while UDP overflow is dropped by the kernel. See
+  [Receive backpressure and queue sizing](benchmarks/socket_benchmarking.md#receive-backpressure-and-queue-sizing).
 - **`roce://` endpoints**: RDMA over Converged Ethernet, using the
   open-source [`rdma-core`](https://github.com/linux-rdma/rdma-core)
   library. A server/client connection model, NIC-level reliable
@@ -126,6 +134,20 @@ URI schemes:
   instrument, or another customer-supplied black box) that already
   speaks RoCE. When both peers run DAQIRI, prefer an upper-layer
   library such as MPI, NCCL, or UCX rather than wiring RoCE directly.
+
+A **one-sided RDMA operation** addresses a peer's registered memory using its
+address and remote key (`rkey`). `RDMA_READ` places remote data into the caller's
+local burst buffers; `RDMA_WRITE` places local data into remote memory. Neither
+requires the peer to post a receive. Applications exchange memory descriptors
+and coordinate buffer ownership explicitly. DAQIRI returns a local completion
+for each read/write batch; plain reads/writes do not generate a peer receive
+completion. **Write with immediate** (`RDMA_WRITE_IMM`) explicitly adds a 32-bit
+receiver notification, consuming a posted receive credit. A zero-byte
+write-with-immediate can notify after earlier plain writes on the same RC
+connection. Arrival notification does not acknowledge application consumption;
+buffer ownership still requires application coordination. See
+[RDMA reads and writes](api-reference/cpp.md#rdma-reads-and-writes) and
+[explicit notifications](api-reference/cpp.md#explicit-write-with-immediate-notifications).
 
 ### Runtime Named Endpoints
 
@@ -138,8 +160,7 @@ path, and select the TX queue when submitting each burst.
 Named endpoints are distinct from the `udp://`, `tcp://`, and `roce://` URI
 endpoints used by `stream_type: "socket"`. They apply only to raw Ethernet with
 the `ibverbs` engine. Their packet buffers contain only the UDP payload; DAQIRI
-inlines the cached Ethernet/IPv4/UDP header into the mlx5 send WQE. The current
-implementation requires a single-segment TX queue and burst.
+inlines the cached Ethernet/IPv4/UDP header into the mlx5 send WQE. The queue may gather one through four segments after that inline network header.
 
 Endpoint IDs remain valid until deletion or DAQIRI shutdown. Stale IDs are
 rejected, including IDs retained across shutdown and reinitialization. See the
@@ -279,6 +300,12 @@ region's recorded context only for the duration of the corresponding free.
 
 ### Header-Data Split (HDS)
 
+The raw ibverbs RX engine supports up to four separate memory regions per packet,
+including two CPU regions followed by a GPU region. Regions receive bytes in queue
+list order, with each split defined by the region's configured buffer size. Buffer
+alignment padding changes allocation strides, not packet boundaries. Short packets
+report zero length for any unused trailing segments.
+
 **Header-data split** is the canonical multi-segment configuration:
 headers go to CPU memory (segment 0), payload goes to GPU memory
 (segment 1). This keeps the GPU payload path zero-copy for downstream
@@ -338,18 +365,30 @@ function per lcore; such configurations are rejected during validation.
 In **direct mode**, there is no worker between the application and the queue.
 The application thread performs the queue work as part of its normal API calls:
 
-- Direct RX returns all packets currently ready, up to 256, without waiting.
+- Raw ibverbs direct RX returns all packets currently ready, up to 256, without waiting.
   An empty poll returns `Status::NOT_READY`.
 - Direct TX accepts exactly one packet per `BurstParams`. A successful
   `send_tx_burst()` means the packet was submitted; the application must not
   access that burst afterward.
-- Exactly one application thread must own each direct queue. A direct TX queue
+- Exactly one application thread must own each direct queue. A raw ibverbs direct TX queue
   may have only one acquired-but-unsubmitted packet at a time.
 
-Direct mode is available only for the raw `ibverbs` engine. A direct queue must
-omit `cpu_core`, `batch_size`, and, for RX, `timeout_us`. Direct RX does not
-support reorder configurations. Direct and indirect queues may be mixed on the
-same interface.
+Direct mode is available for the raw `ibverbs` engine and the RDMA engine
+(`roce://` endpoints). A direct queue must omit `cpu_core`, `batch_size`, and,
+for RX, `timeout_us`. Raw direct RX does not support reorder configurations.
+Direct and indirect queues may be mixed on the same interface.
+
+RDMA pairs RX and TX queues by list position and supports selecting their modes
+independently. Direct RECEIVE postings and SEND submissions contain one packet.
+`get_rx_burst(&burst, conn_id, server)` polls the direct completion queues and
+returns one RX or TX completion per successful call. The application retains
+buffers until their completion and then frees them using the usual RDMA burst
+APIs. When both directions are direct, no data-path worker is created and the
+same application thread must own both directions. Returned completion handles
+can be reused with their existing registered buffers; retain them until SEND or
+RECEIVE completion and free them only when finished.
+Small direct SENDs from `huge` or `host_pinned` memory use inline payloads when
+they fit the QP's inline capacity (128 bytes requested); GPU payloads use DMA.
 
 Direct mode removes the cross-thread handoff that can add latency, but it also
 makes application scheduling part of packet I/O. If the application thread is
@@ -469,6 +508,10 @@ the CPU or the GPU:
   Recommended on integrated GPUs (NVIDIA GB10 / DGX Spark), where the
   NIC cannot peer-DMA into device memory.
 - `host`: regular CPU memory (not recommended for hot paths).
+- `null`: discards a packet span in raw ibverbs RX without allocating storage. The segment
+  reports a null pointer and the discarded length; release the burst normally. See the
+  [configuration details](api-reference/configuration.md#example-discard-headers-before-retaining-the-payload).
+
 
 The size of the memory region (`buf_size`) dictates the largest
 contiguous chunk that can be stored in a single *segment*. For example,
@@ -500,6 +543,15 @@ Applications must free RX bursts after processing and free or send TX
 bursts after allocation. Holding bursts indefinitely drains DAQIRI's
 buffer pools and can lead to `NO_FREE_BURST_BUFFERS`,
 `NO_FREE_PACKET_BUFFERS`, queue drops, or stalled TX.
+
+Raw ibverbs indirect TX can opt into **shared segment storage**. A cloned burst
+owns private CPU header segments and references selected existing segments,
+such as one GPU payload. Each send owns its references until local TX completion;
+cancelling an unsent descriptor releases its references too. Storage is reusable
+only after its last reference is released. This permits two different network and
+message headers followed by the same final payload, across up to four segments.
+Shared bytes are immutable while referenced. See
+[Shared TX segments](api-reference/cpp.md#shared-tx-segments).
 
 When to call each `free_*` function is documented in the
 [C++ API Usage page](api-reference/cpp.md#rx-step-3-free-buffers).

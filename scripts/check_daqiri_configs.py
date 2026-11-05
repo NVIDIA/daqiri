@@ -149,6 +149,14 @@ def parser_invalid_cases() -> dict[str, str]:
             "      rx:\n        queues:\n",
             "      rx:\n        dynamic_flow_capacity: 4294967296\n        queues:\n",
         ),
+        "invalid-tx-buffer-mode.yaml": replace(
+            "invalid TX buffer mode", "          batch_size: 1\n          memory_regions:\n",
+            "          batch_size: 1\n          buffer_mode: shareed\n          memory_regions:\n",
+        ),
+        "tx-send-credit-overflow.yaml": replace(
+            "TX send credit overflow", "          batch_size: 1\n          memory_regions:\n",
+            "          batch_size: 1\n          max_inflight_sends: 4294967296\n          memory_regions:\n",
+        ),
         "unknown-offload.yaml": replace(
             "unknown offload",
             "          batch_size: 1\n          memory_regions:\n",

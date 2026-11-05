@@ -147,12 +147,13 @@ def test_raw_pair_can_split_for_cross_host_deployment() -> None:
 
 def test_raw_buffer_size_and_tx_source_offload_are_configurable() -> None:
     document = generate_raw_pair(
-        raw_spec(payload_size=64, buffer_size=8064, tx_eth_src=False)
+        raw_spec(payload_size=64, buffer_size=8064, pacing_mbps=100000, tx_eth_src=False)
     )
     config = document["daqiri"]["cfg"]
     assert {region["buf_size"] for region in config["memory_regions"]} == {8064}
     tx_queue = config["interfaces"][0]["tx"]["queues"][0]
     assert "offloads" not in tx_queue
+    assert tx_queue["pacing_mbps"] == 100000
 
 
 def test_raw_batch_size_defaults_follow_backend_and_preserve_explicit_values() -> None:

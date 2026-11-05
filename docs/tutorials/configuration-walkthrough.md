@@ -12,12 +12,19 @@ hide:
 DAQIRI exposes a single API on top of multiple packet I/O stacks, selected at runtime with `stream_type` and endpoint URI schemes such as `udp://`, `tcp://`, and `roce://`. Pick the row that matches your hardware and the role of the other endpoint:
 
 - **Raw Ethernet**: `stream_type: "raw"`. Kernel-bypass with GPUDirect zero-copy. Highest performance. Requires an [NVIDIA ConnectX-class NIC](https://www.nvidia.com/en-us/networking/ethernet-adapters/). `tx_port` and `rx_port` can share one physical NIC for a single-host closed-loop bench, or be split across two hosts.
-- **Socket (UDP / TCP)**: `stream_type: "socket"` with `udp://` or `tcp://` endpoints. Plain Linux kernel sockets. No NIC, no privileges, no special CMake flags. Useful as a comparison baseline and as a path to first results on a system without an NVIDIA NIC. Socket options are runtime API calls: resolve a connection ID, then pass native Linux constants to `socket_setsockopt()` rather than adding option names to YAML. For TCP RX, the smallest memory-region `num_bufs` referenced by the queue bounds DAQIRI's internal backlog and determines when [TCP backpressure](../benchmarks/socket_benchmarking.md#tcp-receive-backpressure-and-queue-sizing) begins.
+- **Socket (UDP / TCP)**: `stream_type: "socket"` with `udp://` or `tcp://` endpoints. Plain Linux kernel sockets. No NIC, no privileges, no special CMake flags. Useful as a comparison baseline and as a path to first results on a system without an NVIDIA NIC. Socket options are runtime API calls: resolve a connection ID, then pass native Linux constants to `socket_setsockopt()` rather than adding option names to YAML. For TCP and UDP RX, the smallest memory-region `num_bufs` referenced by the queue bounds DAQIRI's internal packet backlog. At the limit, [TCP applies backpressure and UDP drops overflow in the kernel](../benchmarks/socket_benchmarking.md#receive-backpressure-and-queue-sizing).
 - **Socket (RoCE / RDMA)**: `stream_type: "socket"` and `roce://` endpoints. RDMA verbs over Ethernet, with a server/client connection model and a NIC-level reliable transport. Primarily intended for setups where **one** endpoint is a third-party RoCE implementation (FPGA, instrument, customer black box). When both peers run DAQIRI, prefer an upper-layer library such as MPI / NCCL / UCX instead.
 
 If you don't have any NIC at all, the `*_sw_loopback*` variants of the Raw Ethernet configs need no hardware, which is useful for first-time build verification.
 
 (`DAQIRI_ENGINE` at the CMake layer selects which optional engine implementations to compile in. `dpdk` enables the default raw engine, while `ibverbs` enables both the pure-DevX raw engine and `roce://` endpoints. Linux UDP/TCP sockets are always built in. The default build is `dpdk ibverbs`.)
+
+If your build enables `DAQIRI_IBVERBS_DLOPEN` (default `OFF`), raw ibverbs and
+`roce://` configurations also require the versioned DAQIRI glue libraries and
+compatible system RDMA shared libraries when the engine initializes. Deploy
+these before running the examples; missing runtime libraries fail initialization.
+See [runtime RDMA library deployment](bare-metal-cmake-build.md#daqiri_ibverbs_dlopen-runtime-rdma-libraries)
+for the required files and library search paths.
 
 The example configs show the DAQIRI fields and application settings used for different transport
 and hardware setups.
@@ -36,7 +43,7 @@ those variants the primary teaching examples.
 
     - **Generic discrete GPU** (template, replace `<placeholders>`): [`daqiri_bench_raw_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx.yaml). This is the file annotated line-by-line in the [walkthrough below](#annotated-walkthrough).
     - **Four queue closed-loop TX+RX** (template, replace `<placeholders>`): [`daqiri_bench_raw_tx_rx_4q.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_tx_rx_4q.yaml). Uses one application worker per TX/RX queue, with each `bench_tx` entry sending a different UDP flow.
-    - **DGX Spark / GB10**: use the generic single-queue example above as the guide, replacing its NIC addresses and cores, using `kind: host_pinned`, and setting `eth_dst_addr` to the RX port's MAC. [`gen_daqiri_config.py`](../config-generation.md#generate-a-raw-ethernet-pair) can apply those Spark parameters; `examples/run_spark_bench.sh` does this for every benchmark cell.
+    - **DGX Spark / GB10 or IGX Thor**: use the generic single-queue example above as the guide. [`gen_daqiri_config.py`](../config-generation.md#generate-a-raw-ethernet-pair) applies concrete parameters; `examples/run_cabled_loopback_bench.sh` resolves the checked-in hardware defaults and generates every benchmark cell.
     - **DGX Spark multi-queue core-scaling matrix**: use the four-queue example above to understand the queue, memory-region, flow, and application-worker relationships. `examples/run_spark_mq_bench.sh` then generates the 1×1, 1×2, 2×1, and 2×2 cells from the Spark topology.
     - **DGX Spark cross-host**: the generic raw example shows the complete TX/RX shape; a cross-host deployment splits it so each host owns one interface and role. Generate independent files with `raw-pair --role both`, copy each file to its host, and start RX before TX. See [configuration generation](../config-generation.md#generate-a-raw-ethernet-pair) and the [cross-host network setup](../tutorials/system_configuration.md#cross-host-variant-two-sparks).
     - **ConnectX NIC, no cable** (template, replace `<placeholders>`): [`daqiri_bench_raw_hw_loopback_ibverbs.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_hw_loopback_ibverbs.yaml). Uses `engine: "ibverbs"` and `loopback: "hw"` to return TX through the same port's hardware RX steering path. The NIC must remain enumerated without a link and `eth_dst_addr` must be that port's own MAC.
@@ -49,10 +56,10 @@ those variants the primary teaching examples.
     counters, use the Grafana compose stack described in
     [Watch live OpenTelemetry metrics in Grafana](../benchmarks/raw_benchmarking.md#watch-live-opentelemetry-metrics-in-grafana).
 
-    **Socket (RoCE / RDMA)** (`stream_type: "socket"`, `roce://` endpoints) runs on `daqiri_bench_rdma` (use `--mode {server,client,both}`). Configs use `kind: host_pinned` regardless of platform.
+    **Socket (RoCE / RDMA)** (`stream_type: "socket"`, `roce://` endpoints) runs on `daqiri_bench_rdma` (use `--mode {server,client,both}`). Use the memory kind appropriate for the platform; the shared cabled-loopback harness resolves it from `scripts/resolve_benchmark_hardware.py`.
 
     - **Generic** (template, replace IPs): [`daqiri_bench_rdma_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_rdma_tx_rx.yaml).
-    - **DGX Spark netns or cross-host**: use the generic RoCE example above to understand the client/server configuration, then adapt the endpoint addresses, cores, host-pinned memory, and per-host roles. Generate the concrete files with `socket-pair --transport roce --role both`; `examples/run_spark_bench.sh` uses this path for its namespace sweep. See [configuration generation](../config-generation.md#generate-udp-tcp-or-roce-roles) and [Socket and RDMA Benchmarking](../benchmarks/socket_benchmarking.md#run-the-rdma-roce-benchmark).
+    - **Same-host cabled loopback or cross-host**: use the generic RoCE example above to understand the client/server configuration, then adapt endpoint addresses, cores, memory, and per-host roles. Generate concrete files with `socket-pair --transport roce --role both`; `examples/run_cabled_loopback_bench.sh` uses this path for its namespace sweep. See [configuration generation](../config-generation.md#generate-udp-tcp-or-roce-roles) and [Socket and RDMA Benchmarking](../benchmarks/socket_benchmarking.md#run-the-rdma-roce-benchmark).
 
     **Socket (UDP / TCP)** (`stream_type: "socket"` with `udp://` or `tcp://` endpoints) runs on `daqiri_bench_socket`. The shipped smoke-test configs bind to `127.0.0.1`. See [Socket and RDMA Benchmarking](../benchmarks/socket_benchmarking.md) for namespace-based wire tests.
 
@@ -60,10 +67,13 @@ those variants the primary teaching examples.
     - **TCP**: [`daqiri_bench_socket_tcp_tx_rx.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_socket_tcp_tx_rx.yaml).
     - **DGX Spark netns or cross-host**: use the corresponding UDP or TCP example above to understand the socket configuration, then adapt the endpoint addresses, cores, and per-host roles. Generate one concrete file per role with `socket-pair --transport udp` or `--transport tcp`. The socket engine binds every interface in a file, so each host runs only its generated role. See [configuration generation](../config-generation.md#generate-udp-tcp-or-roce-roles).
 
+??? question "I need RDMA READ/WRITE with peer notification"
+    - **RDMA READ/WRITE with peer notification**: [`daqiri_example_rdma_read_write.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_example_rdma_read_write.yaml) (runs on `daqiri_example_rdma_read_write`). Exchanges descriptors, verifies WRITE with READ, and uses WRITE_IMM to identify the updated slot. See the [run instructions](../benchmarks/socket_benchmarking.md#rdma-readwrite-example).
+
 ??? question "I want to measure direct-polling packet latency"
     Use [`daqiri_bench_raw_latency_ibverbs.yaml`](https://github.com/nvidia/daqiri/blob/main/examples/daqiri_bench_raw_latency_ibverbs.yaml) with `daqiri_bench_raw_latency`. It sweeps one outstanding packet at a time from 64 through 8192 L2 bytes, using powers of two, with both queues in caller-driven `poll_mode: direct`.
 
-    The benchmark reports direct `send_tx_burst()` call-to-return time, submit-to-hardware-RX time, hardware-RX-to-`get_rx_burst()` return time, and total submit-to-application time. It requires a physical loopback path, raw `ibverbs`, RX hardware timestamps, host-pinned buffers, and PTP synchronization between the NIC and `CLOCK_REALTIME`. See [Direct-polling latency sweep](../benchmarks/raw_benchmarking.md#direct-polling-latency-sweep) for the measurement boundaries and run command.
+    The benchmark reports `send_tx_burst()` call-to-return time, submit-to-hardware-RX time, hardware-RX-to-`get_rx_burst()` return time, and total submit-to-application time. It supports host-pinned and GPU buffers; set `bench_latency.ptp_device` to calibrate the NIC clock against `CLOCK_REALTIME`. See [Direct-polling latency sweep](../benchmarks/raw_benchmarking.md#direct-polling-latency-sweep) for the measurement boundaries and the runner that compares direct and indirect polling.
 
 ??? question "2. I have out-of-order UDP packets that need to be reordered on the GPU"
     DAQIRI's reorder pipeline places packet payloads at the correct offset in a GPU buffer, so a downstream consumer sees a fully ordered stream. Software reorder uses a CUDA kernel and remains the default. On ConnectX-7 or newer hardware, the ibverbs engine can instead use the flex parser for first-DMA placement when the sequence value cycles over a finite ring (`reorder_engine: hw`, `cyclic_sequence: true`). Configs run on `daqiri_bench_raw_reorder_seq` unless 2.4 applies. Sub-questions:
@@ -372,6 +382,29 @@ The HDS bench runs on `daqiri_bench_raw_hds`:
 ```bash
 ./build/examples/daqiri_bench_raw_hds ./build/examples/daqiri_bench_raw_tx_rx_hds.yaml --seconds 10
 ```
+
+With `engine: "ibverbs"`, raw RX also supports three or four separate regions.
+For example, declare `Headers_CPU` (`kind: huge`, `buf_size: 42`), `Metadata_CPU`
+(`kind: huge`, `buf_size: 1000`), and `Payload_GPU` (`kind: device`, `buf_size: 4100`),
+then reference them in receive order:
+
+```yaml
+rx:
+  queues:
+  - name: "rx_split"
+    id: 0
+    cpu_core: <9>
+    batch_size: 1
+    memory_regions: [Headers_CPU, Metadata_CPU, Payload_GPU]
+```
+
+A 5142-byte frame arrives as 42 header bytes, 1000 CPU metadata bytes, and 4100
+GPU payload bytes. Padding used to align allocations does not move those boundaries.
+Shorter frames can leave later segments with zero length. Each multi-region RX
+queue uses a regular scatter RQ, even if `DAQIRI_IBV_STRIDING=1` is set. Raw ibverbs
+RX and TX support up to four regions per queue; TX gathers them in order. See the
+[RX queue configuration](../api-reference/configuration.md#receive-configuration-rx)
+for the complete field reference.
 
 ### Hardware packet reordering
 

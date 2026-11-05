@@ -82,13 +82,20 @@ all four 1×1, 1×2, 2×1, and 2×2 cells.
 
 Raw memory-region `buf_size` defaults to `header_size + payload_size`. Set
 `--buffer-size` (also accepted as `--buf-size`) to keep packet-buffer capacity
-fixed across a payload sweep; both Spark DPDK harnesses use `8064` bytes to
-preserve their published methodology.
+fixed across a payload sweep. The shared cabled-loopback harness keeps DPDK at
+`8064` bytes and right-sizes raw ibverbs buffers so MPRQ does not retain an
+8-KiB stride for small packets.
 
 When `--batch-size` is omitted, DPDK profiles use `10240` packets per burst and
 ibverbs or engine-default profiles use `1024`. The ibverbs engine also checks
 the NIC's `max_qp_wr` during initialization and permits at most half that value;
 pass a smaller explicit batch size if the runtime reports a lower limit.
+
+Set `--pacing-mbps` to emit a raw TX queue hardware-rate cap. The shared
+cabled-loopback harness uses this instead of application sleep-based pacing for
+raw DPDK and ibverbs drop curves. The harness accepts fractional Gbps targets
+that resolve to whole Mbps: `DROP_CURVE_TARGETS_OVERRIDE=2.25` emits
+`pacing_mbps: 2250`; `0` disables pacing.
 
 Add one of `--transform vlan`, `--transform vxlan`, `--transform gre`, or
 `--transform nvgre` to generate the corresponding raw hardware encap/decap
@@ -172,8 +179,23 @@ python3 scripts/gen_daqiri_config.py socket-pair \
   --role both --output-dir generated/roce
 ```
 
-`examples/run_spark_bench.sh` uses these profiles directly for its namespace
-and benchmark matrix. It does not maintain or mutate Spark-specific base YAMLs.
+`examples/run_cabled_loopback_bench.sh` uses these profiles directly for its
+namespace and benchmark matrix. `scripts/resolve_benchmark_hardware.py` supplies
+platform defaults and resolves live NIC and GPU identities. For a manual raw
+benchmark, fill the existing generic TX/RX template in place:
+
+```bash
+hardware=$(python3 scripts/resolve_benchmark_hardware.py --platform igx-thor \
+  --engine ibverbs --write-config --format shell)
+eval "$hardware"
+CUDA_VISIBLE_DEVICES="$DEFAULT_GPU_UUID" ./build/examples/daqiri_bench_raw_gpudirect \
+  examples/daqiri_bench_raw_tx_rx.yaml --seconds 30
+```
+
+`--write-config` replaces the template's PCI addresses, CPU placement, memory
+kind, and destination MAC; raw header IP placeholders become `192.0.2.1` and
+`192.0.2.2`. Pass a path after `--write-config` to fill a copy instead. The matrix
+runner continues to generate each cell's configs without editing the template.
 
 ## Render any DAQIRI configuration
 
@@ -244,28 +266,37 @@ selecting their default cases. Files passed explicitly to
 `scripts/check_daqiri_configs.py` are always checked, including files that require
 an unavailable engine.
 
-## Spark verification checklist
+## Cabled-loopback verification checklist
 
-After copying this branch to a Spark and rebuilding the container, first run the
-standard pull-request check:
+After rebuilding the container on DGX Spark or IGX Thor, first run the standard
+pull-request check:
 
 ```bash
 scripts/check_pr.sh
 ```
 
-Then run one generated cell per transport. Bring the namespace wire loopback up
-for RoCE/TCP/UDP and down for DPDK as described by each harness:
+Inspect the detected hardware defaults, then run one generated cell per
+transport. Bring the namespace wire loopback up for RoCE/TCP/UDP and down for
+DPDK:
 
 ```bash
+examples/run_cabled_loopback_bench.sh --platform igx-thor --show-hardware
+
 # Default namespace, physical p0-to-p1 cable
-ETH_DST_ADDR="$(cat /sys/class/net/enP2p1s0f1np1/address)" \
-  RUN_SECONDS=10 examples/run_spark_bench.sh dpdk smoke
+sudo scripts/setup_cabled_loopback_netns.sh --platform igx-thor down
+RUN_SECONDS=10 examples/run_cabled_loopback_bench.sh --platform igx-thor dpdk smoke
 
 # dq_wire_client / dq_wire_server namespaces
-RUN_SECONDS=10 examples/run_spark_bench.sh rdma smoke
-RUN_SECONDS=10 PAIRS_OVERRIDE=1 examples/run_spark_bench.sh socket-udp smoke
-RUN_SECONDS=10 PAIRS_OVERRIDE=1 examples/run_spark_bench.sh socket-tcp smoke
+sudo scripts/setup_cabled_loopback_netns.sh --platform igx-thor up
+RUN_SECONDS=10 examples/run_cabled_loopback_bench.sh --platform igx-thor rdma smoke
+RUN_SECONDS=10 examples/run_cabled_loopback_bench.sh --platform igx-thor --pairs 1 socket-udp smoke
+RUN_SECONDS=10 examples/run_cabled_loopback_bench.sh --platform igx-thor --pairs 1 socket-tcp smoke
 ```
+
+Use `--payload-size 8000` to select a payload/message size and `--pairs 3` to
+select concurrent socket pairs. Repeat either flag to select a sweep; flags may
+appear before or after the engine/mode and take precedence over the corresponding
+environment overrides. Run the harness with `--help` for usage.
 
 Finally, exercise every raw multi-queue topology at one payload:
 

@@ -1,0 +1,378 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+#include <array>
+#include <arpa/inet.h>
+#include <cerrno>
+#include <cstring>
+#include <iostream>
+#include <stdexcept>
+#include <vector>
+#include <infiniband/mlx5dv.h>
+#include "src/rdma/cm_api.h"
+#include "src/rdma/timed_send.h"
+#include "src/engines/ibverbs/mlx5_prm_min.h"
+
+namespace {
+ibv_qp_ex extended{};
+mlx5dv_qp_ex dv{};
+std::vector<int> steps;
+std::array<uint8_t, 48> wait_bytes{};
+uint64_t wait_id = 0, send_id = 0;
+unsigned send_flags = 0;
+int post_result = 0;
+ibv_qp created_qp{};
+ibv_ah destination{};
+ibv_qp_type requested_type = IBV_QPT_RC;
+std::vector<ibv_qp_state> transitions;
+uint32_t remote_vendor = 0, negotiated_options = 0, advertised_vendor = 0;
+int creations = 0, destructions = 0, init_result = 0;
+bool wait_supported = true, realtime = true;
+bool preparing_uc = false;
+unsigned qp_format = 2;
+uint64_t fake_now = 1793275200023456789ULL;
+void require(bool value, const char* message) {
+  if (!value) throw std::runtime_error(message);
+}
+void start(ibv_qp_ex*) {
+  steps.push_back(1);
+}
+void raw(mlx5dv_qp_ex*, const void* wqe) {
+  steps.push_back(2);
+  require(extended.wr_flags == 0, "WAIT requested successful completions");
+  wait_id = extended.wr_id;
+  std::memcpy(wait_bytes.data(), wqe, wait_bytes.size());
+}
+void send(ibv_qp_ex* qp) {
+  steps.push_back(3);
+  send_id = qp->wr_id;
+  send_flags = qp->wr_flags;
+}
+void rdma_read(ibv_qp_ex* qp, uint32_t key, uint64_t address) {
+  require(key == 789 && address == 123456, "remote READ descriptor changed");
+  send(qp);
+  steps.back() = 8;
+}
+void rdma_write(ibv_qp_ex* qp, uint32_t key, uint64_t address) {
+  require(key == 789 && address == 123456, "remote WRITE descriptor changed");
+  send(qp);
+  steps.back() = 9;
+}
+void rdma_write_imm(ibv_qp_ex* qp, uint32_t key, uint64_t address, uint32_t immediate) {
+  require(immediate == htonl(0x12345678u), "immediate byte order changed");
+  rdma_write(qp, key, address);
+  steps.back() = 10;
+}
+void empty_sges(ibv_qp_ex*, size_t count, const ibv_sge* entries) {
+  require(count == 0 && entries == nullptr, "empty notification carries a local buffer");
+  steps.push_back(11);
+}
+void sge(ibv_qp_ex*, uint32_t key, uint64_t addr, uint32_t length) {
+  require(key == 123 && addr == 456 && length == 64, "DMA descriptor changed");
+  steps.push_back(4);
+}
+void ud_addr(ibv_qp_ex*, ibv_ah* ah, uint32_t qpn, uint32_t qkey) {
+  require(ah == &destination && qpn == 321 && qkey == 654, "UD destination changed");
+  steps.push_back(7);
+}
+void inline_data(ibv_qp_ex*, void* addr, size_t length) {
+  require(addr == reinterpret_cast<void*>(456) && length == 64, "inline data changed");
+  steps.push_back(5);
+}
+int complete(ibv_qp_ex*) {
+  steps.push_back(6);
+  return post_result;
+}
+}  // namespace
+
+extern "C" int __wrap_clock_gettime(clockid_t clock, timespec* now) {
+  require(clock == CLOCK_REALTIME, "scheduled send used the wrong host clock");
+  now->tv_sec = fake_now / 1000000000ULL;
+  now->tv_nsec = fake_now % 1000000000ULL;
+  return 0;
+}
+
+// Test the production glue's builder transaction without requiring a device.
+extern "C" ibv_qp_ex* __wrap_ibv_qp_to_qp_ex(ibv_qp*) {
+  return &extended;
+}
+extern "C" mlx5dv_qp_ex* __wrap_mlx5dv_qp_ex_from_ibv_qp_ex(ibv_qp_ex*) {
+  return &dv;
+}
+extern "C" bool __wrap_mlx5dv_is_supported(ibv_device*) {
+  return true;
+}
+extern "C" int __wrap_mlx5dv_devx_general_cmd(ibv_context*, const void* in, size_t, void* out,
+                                              size_t) {
+  void* cap = DEVX_ADDR_OF(query_hca_cap_out, out, capability);
+  if (DEVX_GET(query_hca_cap_in, in, op_mod) == MLX5_HCA_CAP_OPMOD_ROCE_CUR) {
+    DEVX_SET(roce_cap_min, cap, qp_ts_format, qp_format);
+    return 0;
+  }
+  DEVX_SET(cmd_hca_cap_min, cap, wait_on_time, wait_supported);
+  DEVX_SET(cmd_hca_cap_min, cap, device_frequency_khz, realtime ? 1000000 : 156250);
+  return 0;
+}
+extern "C" ibv_qp* __wrap_mlx5dv_create_qp(ibv_context*, ibv_qp_init_attr_ex* attr,
+                                           mlx5dv_qp_init_attr* dv_attr) {
+  const uint64_t expected =
+      IBV_QP_EX_WITH_SEND | (attr->qp_type == IBV_QPT_RC ? IBV_QP_EX_WITH_RDMA_READ : 0) |
+      (attr->qp_type != IBV_QPT_UD ? IBV_QP_EX_WITH_RDMA_WRITE | IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM
+                                   : 0);
+  require(attr->send_ops_flags == expected && (attr->comp_mask & IBV_QP_INIT_ATTR_PD) &&
+              (attr->comp_mask & IBV_QP_INIT_ATTR_SEND_OPS_FLAGS) &&
+              dv_attr->send_ops_flags == MLX5DV_QP_EX_WITH_RAW_WQE,
+          "timed QP did not enable extended SEND and raw WQEs");
+  require(attr->qp_type == requested_type, "timed QP changed the transport type");
+  created_qp.qp_type = attr->qp_type;
+  ++creations;
+  return &created_qp;
+}
+extern "C" int __wrap_ibv_query_ece(ibv_qp*, ibv_ece* ece) {
+  ece->vendor_id = 0x2c9;
+  ece->options = 7;
+  return 0;
+}
+extern "C" int __wrap_ibv_set_ece(ibv_qp*, ibv_ece* ece) {
+  require(ece->vendor_id == 0x2c9, "ECE vendor was not normalized to the local vendor");
+  negotiated_options = ece->options;
+  return 0;
+}
+extern "C" int __wrap_rdma_get_remote_ece(rdma_cm_id* id, ibv_ece* ece) {
+  require(id->qp == nullptr, "CM ECE queried after QP publication");
+  ece->vendor_id = remote_vendor;
+  ece->options = 5;
+  return 0;
+}
+extern "C" int __wrap_rdma_set_local_ece(rdma_cm_id* id, ibv_ece* ece) {
+  require(id->qp == nullptr, "CM ECE advertised after QP publication");
+  advertised_vendor = ece->vendor_id;
+  return 0;
+}
+extern "C" int __wrap_rdma_init_qp_attr(rdma_cm_id*, ibv_qp_attr* attr, int* mask) {
+  if (preparing_uc) {
+    *mask = IBV_QP_STATE | IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER | IBV_QP_TIMEOUT |
+            IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY | IBV_QP_MAX_QP_RD_ATOMIC;
+    attr->qp_access_flags = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
+    return 0;
+  }
+  require(attr->qp_state == IBV_QPS_INIT, "missing CM INIT transition");
+  *mask = IBV_QP_STATE | IBV_QP_PORT;
+  return 0;
+}
+extern "C" int __wrap_ibv_modify_qp(ibv_qp* qp, ibv_qp_attr* attr, int mask) {
+  if (preparing_uc) {
+    require(qp->qp_type == IBV_QPT_UC && mask == IBV_QP_STATE &&
+                attr->qp_access_flags == IBV_ACCESS_REMOTE_WRITE,
+            "UC transition retained RC-only attributes or read permission");
+  } else if (attr->qp_state == IBV_QPS_INIT) {
+    require(mask == (IBV_QP_STATE | IBV_QP_PORT), "CM INIT attributes were not applied");
+  } else {
+    require(qp->qp_type == IBV_QPT_UD, "connected QP transitioned before CM establishment");
+    require(attr->qp_state == IBV_QPS_RTR
+                ? mask == IBV_QP_STATE
+                : attr->qp_state == IBV_QPS_RTS && mask == (IBV_QP_STATE | IBV_QP_SQ_PSN) &&
+                      attr->sq_psn == 0,
+            "UD RTR/RTS attributes changed");
+  }
+  transitions.push_back(attr->qp_state);
+  return init_result;
+}
+extern "C" int __wrap_ibv_destroy_qp(ibv_qp*) {
+  ++destructions;
+  return 0;
+}
+
+int main() {
+  try {
+    ibv_device device{};
+    ibv_context context{};
+    context.device = &device;
+    ibv_pd pd{};
+    rdma_cm_id id{};
+    id.verbs = &context;
+    ibv_qp_init_attr attr{};
+    preparing_uc = true;
+    created_qp.qp_type = IBV_QPT_UC;
+    id.qp = &created_qp;
+    require(daqiri::detail::prepare_uc_qp(&id) == 0 &&
+                transitions == std::vector<ibv_qp_state>{IBV_QPS_INIT, IBV_QPS_RTR, IBV_QPS_RTS},
+            "UC did not apply filtered CM transitions");
+    transitions.clear();
+    init_result = EIO;
+    require(daqiri::detail::prepare_uc_qp(&id) == -1 && errno == EIO && transitions.size() == 1,
+            "UC transition failure was ignored");
+    init_result = 0;
+    preparing_uc = false;
+    id.qp = nullptr;
+    for (auto type : {IBV_QPT_RC, IBV_QPT_UC, IBV_QPT_UD}) {
+      attr.qp_type = requested_type = type;
+      for (uint32_t vendor : {0u, 0x2c9u, 0x1234u}) {
+        remote_vendor = vendor;
+        advertised_vendor = 0;
+        negotiated_options = 99;
+        transitions.clear();
+        require(daqiri::detail::create_timed_qp(&id, &pd, &attr) == 0 && id.qp == &created_qp &&
+                    id.pd == &pd && advertised_vendor == 0x2c9 &&
+                    negotiated_options == (vendor == 0       ? 99u
+                                           : vendor == 0x2c9 ? 5u
+                                                             : 0u),
+                "timed QP lost CM ECE interoperability");
+        require(
+            transitions == (type == IBV_QPT_UD
+                                ? std::vector<ibv_qp_state>{IBV_QPS_INIT, IBV_QPS_RTR, IBV_QPS_RTS}
+                                : std::vector<ibv_qp_state>{IBV_QPS_INIT}),
+            "timed QP changed transport-specific state transitions");
+        id.qp = nullptr;
+      }
+    }
+    const int before = creations;
+    for (bool no_wait : {false, true}) {
+      wait_supported = !no_wait;
+      realtime = no_wait;
+      require(daqiri::detail::create_timed_qp(&id, &pd, &attr) != 0 && errno == EOPNOTSUPP &&
+                  creations == before && id.qp == nullptr,
+              "unsupported timing capabilities did not reject QP setup");
+    }
+    wait_supported = realtime = true;
+    for (unsigned format : {0u, 3u, 1u, 2u}) {
+      qp_format = format;
+      const int result = daqiri::detail::create_timed_qp(&id, &pd, &attr);
+      require(format == 0 || format == 3 ? result == -1 && errno == EOPNOTSUPP && !id.qp
+                                         : result == 0 && id.qp == &created_qp,
+              "RoCE timestamp format capability was not enforced");
+      id.qp = nullptr;
+    }
+    init_result = EIO;
+    require(daqiri::detail::create_timed_qp(&id, &pd, &attr) != 0 && errno == EIO &&
+                destructions == 1 && id.qp == nullptr,
+            "failed INIT leaked or published the timed QP");
+    init_result = 0;
+    extended.wr_start = start;
+    extended.wr_send = send;
+    extended.wr_rdma_read = rdma_read;
+    extended.wr_rdma_write = rdma_write;
+    extended.wr_rdma_write_imm = rdma_write_imm;
+    extended.wr_set_sge_list = empty_sges;
+    extended.wr_set_sge = sge;
+    extended.wr_set_ud_addr = ud_addr;
+    extended.wr_set_inline_data = inline_data;
+    extended.wr_complete = complete;
+    dv.wr_raw_wqe = raw;
+    ibv_qp qp{};
+    qp.qp_num = 0x123456;
+    ibv_sge data{456, 64, 123};
+    ibv_send_wr wr{};
+    wr.wr_id = 987;
+    wr.opcode = IBV_WR_SEND;
+    wr.sg_list = &data;
+    wr.num_sge = 1;
+    wr.wr.ud.ah = &destination;
+    wr.wr.ud.remote_qpn = 321;
+    wr.wr.ud.remote_qkey = 654;
+    constexpr uint64_t time = 1793275200123456789ULL;
+    for (auto type : {IBV_QPT_RC, IBV_QPT_UC, IBV_QPT_UD}) {
+      qp.qp_type = type;
+      for (bool inlined : {false, true}) {
+        for (int result : {0, ENOMEM}) {
+          steps.clear();
+          post_result = result;
+          wr.send_flags = IBV_SEND_SIGNALED | (inlined ? IBV_SEND_INLINE : 0);
+          require(daqiri::detail::post_timed_send(&qp, &wr, time) == result,
+                  "posting failure was not propagated");
+          require(steps == (type == IBV_QPT_UD ? std::vector<int>{1, 2, 3, 7, inlined ? 5 : 4, 6}
+                                               : std::vector<int>{1, 2, 3, inlined ? 5 : 4, 6}),
+                  "WAIT and SEND did not share one builder transaction");
+          require(wait_id == 987 && send_id == 987 && send_flags == wr.send_flags,
+                  "completion ID or signaling policy changed");
+          mlx5_wqe_ctrl_seg ctrl{};
+          mlx5_wqe_wseg wait{};
+          std::memcpy(&ctrl, wait_bytes.data(), sizeof(ctrl));
+          std::memcpy(&wait, wait_bytes.data() + sizeof(ctrl), sizeof(wait));
+          require(be32toh(ctrl.opmod_idx_opcode) == ((2u << 24) | 0x0f) &&
+                      be32toh(ctrl.qpn_ds) == ((qp.qp_num << 8) | 3) && ctrl.fm_ce_se == 4,
+                  "incorrect WAIT control encoding");
+          require(be32toh(wait.operation) == 5 && wait.lkey == 0 && wait.va_high == 0 &&
+                      wait.va_low == 0 &&
+                      be64toh(wait.value) ==
+                          (((time / 1000000000ULL) << 32) | (time % 1000000000ULL)) &&
+                      be64toh(wait.mask) == ((8ULL << 32) - 1),
+                  "incorrect real-time clock conversion or comparison mask");
+        }
+      }
+    }
+    // A timed one-sided operation is still one WAIT + data transaction.
+    // Preserve remote addressing, the network-order immediate, fences and
+    // zero-SGE notifications through successful and failed atomic posting.
+    for (auto opcode : {IBV_WR_RDMA_READ, IBV_WR_RDMA_WRITE, IBV_WR_RDMA_WRITE_WITH_IMM}) {
+      wr.opcode = opcode;
+      wr.wr.rdma.remote_addr = 123456;
+      wr.wr.rdma.rkey = 789;
+      wr.imm_data = htonl(0x12345678u);
+      for (bool empty : {false, true}) {
+        if (empty && opcode != IBV_WR_RDMA_WRITE_WITH_IMM) continue;
+        wr.num_sge = empty ? 0 : 1;
+        wr.sg_list = empty ? nullptr : &data;
+        for (auto type : {IBV_QPT_RC, IBV_QPT_UC, IBV_QPT_UD}) {
+          qp.qp_type = type;
+          for (int result : {0, ENOMEM}) {
+            steps.clear();
+            post_result = result;
+            wr.send_flags = IBV_SEND_SIGNALED | (type == IBV_QPT_RC ? IBV_SEND_FENCE : 0);
+            const int actual = daqiri::detail::post_timed_send(&qp, &wr, time);
+            if (type == IBV_QPT_UD || (type == IBV_QPT_UC && opcode == IBV_WR_RDMA_READ)) {
+              require(actual == EINVAL && steps.empty(), "unsupported one-sided WAIT was posted");
+              continue;
+            }
+            const int operation = opcode == IBV_WR_RDMA_READ    ? 8
+                                  : opcode == IBV_WR_RDMA_WRITE ? 9
+                                                                : 10;
+            require(
+                actual == result && steps == std::vector<int>{1, 2, operation, empty ? 11 : 4, 6},
+                "one-sided WAIT and data did not share one builder transaction");
+            require(wait_id == wr.wr_id && send_id == wr.wr_id && send_flags == wr.send_flags,
+                    "one-sided completion ID, fence or signal was lost");
+          }
+        }
+      }
+    }
+    qp.qp_type = IBV_QPT_RC;
+    wr.opcode = IBV_WR_RDMA_READ;
+    wr.num_sge = 1;
+    wr.sg_list = &data;
+    wr.send_flags = IBV_SEND_INLINE;
+    steps.clear();
+    require(daqiri::detail::post_timed_send(&qp, &wr, time) == EINVAL && steps.empty(),
+            "inline READ started a builder transaction");
+    wr.opcode = IBV_WR_SEND;
+    wr.send_flags = IBV_SEND_SIGNALED;
+    wr.wr.ud.ah = &destination;
+    wr.wr.ud.remote_qpn = 321;
+    wr.wr.ud.remote_qkey = 654;
+    post_result = 0;
+    for (uint64_t now : {fake_now, uint64_t{1793275207999999999ULL}}) {
+      fake_now = now;
+      for (uint64_t distance : {3900000000ULL, 4000000000ULL, 4100000000ULL, 7900000000ULL}) {
+        for (bool future : {false, true}) {
+          const auto target = future ? now + distance : now - distance;
+          steps.clear();
+          const int result = daqiri::detail::post_timed_send(&qp, &wr, target);
+          require(distance < 4000000000ULL ? result == 0 && !steps.empty()
+                                           : result == EINVAL && steps.empty(),
+                  "cyclic WAIT accepted an ambiguous target or rejected a valid boundary");
+        }
+      }
+    }
+    qp.qp_type = IBV_QPT_UD;
+    wr.wr.ud.ah = nullptr;
+    steps.clear();
+    require(daqiri::detail::post_timed_send(&qp, &wr, fake_now) == EINVAL && steps.empty(),
+            "UD SEND without a destination started a WAIT transaction");
+    std::cout
+        << "PASS: RC/UC/UD timing capabilities, QP setup, WAIT encoding, posting, and failures\n";
+    return 0;
+  } catch (const std::exception& error) {
+    std::cerr << "FAIL: " << error.what() << '\n';
+    return 1;
+  }
+}

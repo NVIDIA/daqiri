@@ -32,10 +32,19 @@
 #include "src/daqiri_pool.h"
 #include <daqiri/daqiri.h>
 #include <mutex>
+#include <map>
+#include "rdma_direct.h"
+#include "rdma_work_tracking.h"
+#include "rdma_transport.h"
+
+namespace daqiri::detail {
+struct RdmaCmApi;
+}
 
 namespace daqiri {
 
 struct rdma_qp_params {
+  struct ibv_cq_ex* rx_cq_ex = nullptr;
   struct ibv_cq* rx_cq;
   struct ibv_cq* tx_cq;
   daqiri::Ring* rx_ring;
@@ -53,10 +62,10 @@ struct rdma_thread_params {
   // claimed connection can be overwritten by a later CONNECT_REQUEST.
   bool active = false;
   struct rdma_cm_id* client_id = nullptr;
-  struct ibv_pd* pd;
-  rdma_qp_params qp_params;
-  int if_idx;
-  int queue_idx;
+  struct ibv_pd* pd = nullptr;
+  rdma_qp_params qp_params{};
+  int if_idx = -1;
+  int queue_idx = -1;
   // Per-connection exit flag, set by the DISCONNECTED CM handler and polled
   // by rdma_thread() in its hot loop. std::atomic so the worker actually
   // observes the write (a plain bool would race under the C++ memory model
@@ -67,6 +76,37 @@ struct rdma_thread_params {
   // elements in place via resize() / try_emplace(), so this is fine.
   std::atomic<bool> ready_to_exit{false};
   std::atomic<bool> worker_started{false};
+  bool direct_rx = false;
+  bool direct_tx = false;
+  bool accurate_send = false;
+  ibv_ah* ud_ah = nullptr;
+  uint32_t ud_qpn = 0;
+  uint32_t ud_qkey = 0;
+  uint32_t ud_mtu = 0;
+  // UD always reserves 40 bytes for a GRH. Discard it into a separate SGE so
+  // application buffers (including GPU memory) contain only payload bytes.
+  // All receives may share this scratch area because its contents are ignored.
+  std::array<uint8_t, sizeof(ibv_grh)> ud_grh{};
+  ibv_mr* ud_grh_mr = nullptr;
+  uint32_t max_inline_data = 0;
+  std::atomic<uint64_t> inline_wqes{0};
+  RdmaDirectState* direct_state = nullptr;
+  // Serialize caller-driven progress, the optional worker, and disconnect cleanup.
+  std::mutex progress_mutex;
+  detail::RdmaWorkTracking<BurstParams> outstanding_send_wr_ids;
+  struct ReceiveWork {
+    BurstParams* burst;
+    size_t packet;
+    BurstParams* completion = nullptr;
+  };
+  std::unordered_map<uint64_t, ReceiveWork> outstanding_receive_wr_ids;
+  std::unordered_map<BurstParams*, size_t> pending_receives;
+  // Reserve every split completion before accepting an indirect receive batch.
+  std::unordered_map<BurstParams*, std::vector<BurstParams*>> queued_receive_completions;
+  BurstParams* pending_rx_burst = nullptr;
+  uint64_t next_receive_id = 1;
+  int send_signal_every = 1;
+  uint64_t sends_since_signal = 0;
 };
 
 // Used to spawn a new server thread for a particular client
@@ -115,12 +155,7 @@ class RdmaEngine : public Engine {
   void* get_packet_ptr(BurstParams* burst, int idx) override;
   uint32_t get_packet_length(BurstParams* burst, int idx) override;
   FlowId get_packet_flow_id(BurstParams* burst, int idx) override { return 0; }
-  Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) override {
-    (void)burst;
-    (void)idx;
-    (void)timestamp_ns;
-    return Status::NOT_SUPPORTED;
-  }
+  Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) override;
   void* get_packet_extra_info(BurstParams* burst, int idx) override { return nullptr; }
   void* get_segment_packet_ptr(BurstParams* burst, int seg, int idx) override;
   uint32_t get_segment_packet_length(BurstParams* burst, int seg, int idx) override;
@@ -146,9 +181,7 @@ class RdmaEngine : public Engine {
     return Status::NOT_SUPPORTED;
   };
   Status get_rx_burst(BurstParams** burst, uintptr_t conn_id, bool server) override;
-  Status set_packet_tx_time(BurstParams* burst, int idx, uint64_t timestamp) override {
-    return Status::NOT_SUPPORTED;
-  };
+  Status set_packet_tx_time(BurstParams* burst, int idx, uint64_t timestamp) override;
   void free_rx_metadata(BurstParams* burst) override;
   void free_tx_metadata(BurstParams* burst) override;
   Status send_tx_burst(BurstParams* burst) override;
@@ -167,13 +200,23 @@ class RdmaEngine : public Engine {
   Status rdma_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
                                  uintptr_t* conn_id) override;
   Status rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id, bool is_server,
-                         int num_pkts, uint64_t wr_id, const std::string& local_mr_name) override;
+                         int num_pkts, uint64_t wr_id, const std::string& local_mr_name,
+                         uint32_t immediate_data = 0) override;
+  Status rdma_get_memory_region(uintptr_t conn_id, const std::string& mr_name,
+                                RDMAMemoryRegion* region) override;
+  Status rdma_set_remote_memory(BurstParams* burst, const RDMAMemoryRegion& region,
+                                uint64_t offset) override;
+  Status rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data,
+                                 uint32_t* write_length = nullptr) override;
   RDMAOpCode rdma_get_opcode(BurstParams* burst) override;
   Status register_mr(std::string name, int intf, void* addr, size_t len, int flags);
   Status wait_on_key_xchg();
   void poll_cm_events();
 
  private:
+  friend class RdmaEnginePollingTestPeer;
+  const detail::RdmaCmApi* verbs_ = nullptr;
+  friend class RdmaMemoryTestPeer;
   static constexpr int MAX_RDMA_CONNECTIONS = 128;
   static constexpr int MAX_CQ = 1024;
   static constexpr int NUM_SGE_ELS = 1024;
@@ -181,7 +224,7 @@ class RdmaEngine : public Engine {
   static constexpr int MAX_NUM_MR = 16;  // Maximum number of memory registers to exchange
   static constexpr int MAX_OUSTANDING_WR = 1024;
   static constexpr int MAX_NUM_PORTS = 4;
-  static constexpr int MAX_RDMA_BATCH = 1024;
+  static constexpr int MAX_RDMA_BATCH = kRdmaBatch;
 
   bool initialized_ = false;
   std::unordered_map<struct rdma_cm_id*, std::vector<rdma_thread_params>> server_q_params_;
@@ -198,19 +241,38 @@ class RdmaEngine : public Engine {
   std::queue<struct ibv_sge*> sge_bufs_;
   std::array<rdma_work_req, MAX_OUSTANDING_WR> out_wr_;
   uint64_t cur_wc_id_ = 0;
-  daqiri::ObjectPool* rx_meta;
-  daqiri::ObjectPool* tx_meta;
-  daqiri::ObjectPool* pkt_len_pool_;
+  daqiri::ObjectPool* rx_meta = nullptr;
+  daqiri::ObjectPool* tx_meta = nullptr;
+  daqiri::ObjectPool* pkt_len_pool_ = nullptr;
+  bool rx_timestamp_storage_ = false;
   std::queue<daqiri::Ring*> tx_rings_;
   std::queue<daqiri::Ring*> rx_rings_;
   std::unordered_map<struct rdma_cm_id*, daqiri::Ring*> tx_rings_map_;
   std::unordered_map<struct rdma_cm_id*, daqiri::Ring*> rx_rings_map_;
   std::unordered_map<std::string, daqiri::Ring*> mem_pools_;
-  daqiri::ObjectPool* tx_burst_pool_;
-  rdma_event_channel* cm_event_channel_;
+  daqiri::ObjectPool* tx_burst_pool_ = nullptr;
+  rdma_event_channel* cm_event_channel_ = nullptr;
   std::mutex threads_mutex_;
   std::mutex client_params_mutex_;
   std::thread main_thread_;
+  std::unordered_map<struct rdma_cm_id*, rdma_thread_params*> connection_params_;
+  static constexpr size_t kDirectConnections = 1024;
+  std::array<std::atomic<RdmaDirectState*>, kDirectConnections> direct_connections_{};
+  std::vector<std::unique_ptr<RdmaDirectState>> direct_states_;
+  RdmaDirectState* find_direct(uintptr_t connection_id) const;
+  bool publish_direct(rdma_thread_params* params);
+  Status send_direct(RdmaDirectState& state, BurstParams* burst);
+  Status get_direct(RdmaDirectState& state, BurstParams** burst, bool server);
+  Status poll_direct(RdmaDirectState& state, bool tx, bool server);
+  int poll_rx_completion(rdma_thread_params* params, ibv_wc* wc, uint64_t* timestamp_ns);
+  bool setup_ud_peer(rdma_thread_params* params, const rdma_ud_param& peer);
+  const RdmaDirectMr* direct_region(RdmaDirectState& state, BurstParams* burst);
+  Ring* burst_pool(BurstParams* burst);
+  void initialize_progress(bool is_server, rdma_thread_params* params);
+  void poll_completions(bool is_server, rdma_thread_params* params, bool poll_rx, bool poll_tx);
+  bool reserve_receive_completions(rdma_thread_params* params, BurstParams* burst);
+  void release_receive_completions(rdma_thread_params* params, BurstParams* burst);
+  Status post_burst(rdma_thread_params* params, BurstParams* burst);
   void rdma_thread(bool is_server, rdma_thread_params* tparams);
   int setup_pools_and_rings();
   int rdma_register_mr(const MemoryRegionConfig& mr, void* ptr);
@@ -220,7 +282,8 @@ class RdmaEngine : public Engine {
   void server_tx(int if_idx, int q);
   void server_rx(int if_idx, int q);
   bool ack_event(rdma_cm_event* cm_event);
-  void launch_server_worker(rdma_thread_params* params);
+  void handle_connect_request(rdma_cm_event* event);
+  void launch_worker(rdma_thread_params* params, bool is_server);
   int mr_access_to_ibv(uint32_t access);
   bool get_ip_from_interface(const std::string_view& if_name, sockaddr_in& addr);
   int setup_thread_params(rdma_thread_params* params, bool is_server);

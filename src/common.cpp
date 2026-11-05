@@ -645,6 +645,12 @@ void shutdown() {
   metrics::shutdown();
 }
 
+Status clone_tx_burst(const BurstParams* source, uint32_t shared_segment_mask,
+                      BurstParams** clone) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->clone_tx_burst(source, shared_segment_mask, clone);
+}
+
 Status send_tx_burst(BurstParams* burst) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
   return g_daqiri_engine->send_tx_burst(burst);
@@ -1005,6 +1011,10 @@ Status get_memory_region_requirements(const NetworkConfig& config,
   for (const auto& [name, mr] : config.mrs_) {
     MemoryRegionRequirement req;
     req.kind = mr.kind_;
+    if (mr.kind_ == MemoryKind::NULL_MR) {
+      requirements.emplace(name, req);
+      continue;
+    }
     req.num_bufs = mr.num_bufs_;
     switch (engine) {
       case EngineType::DPDK:
@@ -1146,6 +1156,39 @@ Status rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
   return g_daqiri_engine->rdma_set_header(
       burst, op_code, conn_id, is_server, num_pkts, wr_id, local_mr_name);
+}
+
+Status rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id, bool is_server,
+                       int num_pkts, uint64_t wr_id, const std::string& local_mr_name,
+                       uint32_t immediate_data) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  if (op_code != RDMAOpCode::RDMA_WRITE_IMM) {
+    return Status::INVALID_PARAMETER;
+  }
+  return g_daqiri_engine->rdma_set_header(burst, op_code, conn_id, is_server, num_pkts, wr_id,
+                                          local_mr_name, immediate_data);
+}
+
+Status rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->rdma_get_immediate_data(burst, immediate_data);
+}
+
+Status rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data,
+                               uint32_t* write_length) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->rdma_get_immediate_data(burst, immediate_data, write_length);
+}
+
+Status rdma_get_memory_region(uintptr_t conn_id, const std::string& mr_name,
+                              RDMAMemoryRegion* region) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->rdma_get_memory_region(conn_id, mr_name, region);
+}
+
+Status rdma_set_remote_memory(BurstParams* burst, const RDMAMemoryRegion& region, uint64_t offset) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->rdma_set_remote_memory(burst, region, offset);
 }
 
 RDMAOpCode rdma_get_opcode(BurstParams* burst) {
@@ -1765,6 +1808,11 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_memory_region_config(
   }
   try {
     tmr.name_ = mr["name"].as<std::string>();
+    if (!mr["kind"].IsScalar() || mr["kind"].Tag() == "tag:yaml.org,2002:null") {
+      DAQIRI_LOG_ERROR(
+          "Memory-region kind must be a string; quote kind: \"null\" for discard regions");
+      return false;
+    }
     tmr.kind_ =
         daqiri::GetMemoryKindFromString(mr["kind"].template as<std::string>());
     if (tmr.name_.empty()) {
@@ -1773,8 +1821,27 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_memory_region_config(
     }
     if (tmr.kind_ == daqiri::MemoryKind::INVALID) {
       DAQIRI_LOG_ERROR(
-          "Invalid memory-region kind; valid values are huge, device, host_pinned, and host");
+          "Invalid memory-region kind; valid values are huge, device, host_pinned, host, and null");
       return false;
+    }
+    if (tmr.kind_ == daqiri::MemoryKind::NULL_MR) {
+      for (const char* field : {"num_bufs", "affinity", "access"}) {
+        if (mr[field].IsDefined()) {
+          DAQIRI_LOG_WARN("Null memory region '{}' ignores {}", tmr.name_, field);
+        }
+      }
+      uint32_t buf_size = 0;
+      if (mr["buf_size"].IsDefined() &&
+          !daqiri::detail::parse_yaml_integer(mr["buf_size"], buf_size)) {
+        DAQIRI_LOG_ERROR("Null memory-region buf_size must be a 32-bit unsigned integer");
+        return false;
+      }
+      tmr.buf_size_ = buf_size;
+      tmr.num_bufs_ = tmr.adj_size_ = tmr.ttl_size_ = 0;
+      tmr.affinity_ = 0;
+      tmr.access_ = 0;
+      tmr.owned_ = true;
+      return true;
     }
     if (!daqiri::detail::parse_yaml_integer(mr["buf_size"], tmr.buf_size_) ||
         !daqiri::detail::parse_yaml_integer(mr["num_bufs"], tmr.num_bufs_) ||
@@ -1805,6 +1872,8 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_memory_region_config(
           tmr.access_ |= daqiri::MEM_ACCESS_RDMA_WRITE;
         } else if (access == "rdma_read") {
           tmr.access_ |= daqiri::MEM_ACCESS_RDMA_READ;
+        } else if (access == "relaxed_ordering") {
+          tmr.access_ |= daqiri::MEM_ACCESS_RELAXED_ORDERING;
         } else {
           DAQIRI_LOG_ERROR("Unknown memory-region access value '{}'", access);
           return false;
@@ -2243,7 +2312,9 @@ bool parse_common_queue_config(const YAML::Node& q_item, daqiri::CommonQueueConf
       }
       else {
         common.mrs_.reserve(mrs.size());
-        for (const auto& mr : mrs) { common.mrs_.push_back(mr.as<std::string>()); }
+        for (const auto& mr : mrs) {
+          common.mrs_.push_back(mr.as<std::string>());
+        }
       }
     }
   } catch (const std::exception& e) {
@@ -2285,7 +2356,8 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_rx_queue_config(
     daqiri::RxQueueConfig& q, bool parse_memory_regions) {
   if (!daqiri::detail::validate_yaml_mapping_keys(
           q_item,
-          {"name", "id", "poll_mode", "cpu_core", "batch_size", "memory_regions", "timeout_us"},
+          {"name", "id", "poll_mode", "cpu_core", "batch_size", "memory_regions", "timeout_us",
+           "cqe_compression"},
           "RX queue")) {
     return false;
   }
@@ -2304,10 +2376,22 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_rx_queue_config(
       }
     }
 
+    if (!daqiri::detail::parse_optional_yaml_scalar(q_item, "cqe_compression", false,
+                                                    q.cqe_compression_, "RX queue")) {
+      return false;
+    }
+    if (q.cqe_compression_ && _engine_type != daqiri::EngineType::IBVERBS) {
+      DAQIRI_LOG_ERROR(
+          "RX cqe_compression is supported only by the raw ibverbs engine; configured engine "
+          "is {}",
+          daqiri::engine_type_to_string(_engine_type));
+      return false;
+    }
+
     if (q.poll_mode_ == daqiri::QueuePollMode::DIRECT) {
-      if (_engine_type != daqiri::EngineType::IBVERBS) {
+      if (_engine_type != daqiri::EngineType::IBVERBS && _engine_type != daqiri::EngineType::RDMA) {
         DAQIRI_LOG_WARN(
-            "RX poll_mode direct is supported only by the raw ibverbs engine; "
+            "RX poll_mode direct is supported only by the raw ibverbs and RDMA engines; "
             "configured engine is {}",
             daqiri::engine_type_to_string(_engine_type));
         return false;
@@ -2378,6 +2462,20 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_tx_queue_common_config(
         return false;
       }
     }
+    if (q_item["buffer_mode"].IsDefined()) {
+      const auto mode = q_item["buffer_mode"].as<std::string>();
+      if (mode == "shared")
+        q.buffer_mode_ = daqiri::TxBufferMode::SHARED;
+      else if (mode == "cyclic")
+        q.buffer_mode_ = daqiri::TxBufferMode::CYCLIC;
+      else {
+        DAQIRI_LOG_ERROR("Invalid TX buffer_mode '{}'", mode);
+        return false;
+      }
+    }
+    if (!daqiri::detail::parse_optional_yaml_integer(q_item, "max_inflight_sends", uint32_t{0},
+                                                     q.max_inflight_sends_, "TX queue"))
+      return false;
     uint64_t ignored_timeout_us = 0;
     if (!daqiri::detail::parse_optional_yaml_integer(q_item, "timeout_us", uint64_t{0},
                                                      ignored_timeout_us, "TX queue")) {
@@ -2404,7 +2502,7 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_tx_queue_config(
   if (!daqiri::detail::validate_yaml_mapping_keys(
           q_item,
           {"name", "id", "poll_mode", "cpu_core", "batch_size", "memory_regions", "offloads",
-           "pacing_mbps", "timeout_us"},
+           "pacing_mbps", "timeout_us", "buffer_mode", "max_inflight_sends"},
           "TX queue")) {
     return false;
   }
@@ -2425,9 +2523,9 @@ bool YAML::convert<daqiri::NetworkConfig>::parse_tx_queue_config(
     }
 
     if (q.poll_mode_ == daqiri::QueuePollMode::DIRECT) {
-      if (_engine_type != daqiri::EngineType::IBVERBS) {
+      if (_engine_type != daqiri::EngineType::IBVERBS && _engine_type != daqiri::EngineType::RDMA) {
         DAQIRI_LOG_WARN(
-            "TX poll_mode direct is supported only by the raw ibverbs engine; "
+            "TX poll_mode direct is supported only by the raw ibverbs and RDMA engines; "
             "configured engine is {}",
             daqiri::engine_type_to_string(_engine_type));
         return false;

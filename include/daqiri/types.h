@@ -43,6 +43,8 @@ static inline constexpr uint32_t MAX_NUM_RX_QUEUES = 32;
 static inline constexpr uint32_t MAX_NUM_TX_QUEUES = 32;
 static inline constexpr uint32_t MAX_INTERFACES = 4;
 static inline constexpr int MAX_NUM_SEGS = 4;
+// Bits 16..19 mark RX segments backed by a null MR rather than packet storage.
+static inline constexpr uint32_t DAQIRI_BURST_FLAG_NULL_SEGMENT_SHIFT = 16;
 static inline constexpr uint32_t DAQIRI_BURST_FLAG_REORDERED = (1U << 28);
 static inline constexpr uint32_t DAQIRI_BURST_FLAG_REORDER_TIMEOUT = (1U << 29);
 static inline constexpr uint32_t DAQIRI_BURST_FLAG_DIRECT_PLACED = (1U << 30);
@@ -126,6 +128,9 @@ struct BurstTransportHeader {
   uint32_t imm;
   uint32_t server_addr;
   uint16_t server_port;
+  uint64_t remote_length;
+  uint32_t remote_access;
+  uint32_t rdma_write_length;
 };
 
 /**
@@ -200,7 +205,7 @@ struct RawUdpEndpointConfig {
   uint32_t mtu_ = 1514;  // Maximum L2 frame bytes, excluding Ethernet FCS.
 };
 
-enum class MemoryKind { HOST, HOST_PINNED, HUGE, DEVICE, INVALID };
+enum class MemoryKind { HOST, HOST_PINNED, HUGE, DEVICE, INVALID, NULL_MR };
 
 struct ExternalMemoryRegion {
   void* data = nullptr;
@@ -222,7 +227,21 @@ using MemoryRegionRequirements = std::unordered_map<std::string, MemoryRegionReq
 enum MemoryAccess {
   MEM_ACCESS_LOCAL = 1U,
   MEM_ACCESS_RDMA_WRITE = 1U << 1,
-  MEM_ACCESS_RDMA_READ = 1U << 2
+  MEM_ACCESS_RDMA_READ = 1U << 2,
+  // Request PCIe relaxed ordering for NIC DMA into this region. Opt-in: it can
+  // raise GPUDirect bandwidth on discrete-GPU hosts, but has caused receive-side
+  // local protection errors on some aarch64/Tegra platforms.
+  MEM_ACCESS_RELAXED_ORDERING = 1U << 3
+};
+
+/** Registered memory descriptor to exchange with a connected RDMA peer.
+ * Values are valid only while the owning engine and registration remain alive.
+ */
+struct RDMAMemoryRegion {
+  uint64_t address = 0;
+  uint64_t length = 0;
+  uint32_t rkey = 0;
+  uint32_t access = MEM_ACCESS_LOCAL | MEM_ACCESS_RDMA_READ | MEM_ACCESS_RDMA_WRITE;
 };
 
 enum class StreamType {
@@ -291,6 +310,8 @@ inline MemoryKind GetMemoryKindFromString(const std::string& mode_str) {
     return MemoryKind::HUGE;
   } else if (mode_str == "device") {
     return MemoryKind::DEVICE;
+  } else if (mode_str == "null") {
+    return MemoryKind::NULL_MR;
   }
 
   return MemoryKind::INVALID;
@@ -307,6 +328,8 @@ uint32_t GetMemoryAccessPropertiesFromList(const T& list) {
       access |= MEM_ACCESS_RDMA_WRITE;
     } else if (str == "rdma_read") {
       access |= MEM_ACCESS_RDMA_READ;
+    } else if (str == "relaxed_ordering") {
+      access |= MEM_ACCESS_RELAXED_ORDERING;
     } else {
       return 0;
     }
@@ -676,7 +699,8 @@ struct MemoryRegionConfig {
   MemoryKind kind_;
   uint16_t affinity_;
   uint32_t access_;
-  size_t buf_size_;
+  // Null MR: discard span; zero discards the remainder and requires the final RX segment.
+  size_t buf_size_ = 0;
   size_t adj_size_ = 0;  // Populated by driver
   size_t ttl_size_ = 0;  // Populated by driver
   size_t num_bufs_;
@@ -710,7 +734,13 @@ struct RxQueueConfig {
   CommonQueueConfig common_;
   uint64_t timeout_us_ = 0;
   QueuePollMode poll_mode_ = QueuePollMode::INDIRECT;
+  // Opt-in RX CQE compression (raw ibverbs engine, single-region queues). Cuts
+  // completion PCIe traffic for small packets; per-packet hardware timestamps
+  // are unavailable on a compressed queue.
+  bool cqe_compression_ = false;
 };
+
+enum class TxBufferMode { CYCLIC, SHARED };
 
 struct TxQueueConfig {
   CommonQueueConfig common_;
@@ -719,6 +749,10 @@ struct TxQueueConfig {
   // disables pacing (line-rate). Honored only by engines/devices with hardware
   // packet-pacing support.
   uint64_t pacing_mbps_ = 0;
+  // Shared storage is supported by raw ibverbs indirect TX queues only.
+  TxBufferMode buffer_mode_ = TxBufferMode::CYCLIC;
+  // 0 selects twice the smallest region pool; otherwise a fixed send-credit limit.
+  uint32_t max_inflight_sends_ = 0;
 };
 
 // struct FlowConfig {

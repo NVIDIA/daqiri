@@ -311,6 +311,9 @@ WORKDIR /workspace/daqiri
 COPY . .
 RUN rm -rf build
 
+# Docker builds have no NVIDIA driver injection. The config checks use no CUDA
+# calls, but their linked libdaqiri still requires the driver library to load.
+# Expose the toolkit stub under its SONAME only for these checks, then remove it.
 RUN cmake -S . -B build \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX=/opt/daqiri \
@@ -321,10 +324,15 @@ RUN cmake -S . -B build \
       -DDAQIRI_ENABLE_S3=${DAQIRI_ENABLE_S3} \
       -DDAQIRI_ENGINE="${DAQIRI_ENGINE}" \
     && cmake --build build -j "$(nproc)" \
-    && python3 scripts/check_daqiri_configs.py \
+    && cuda_stub_dir="$(mktemp -d)" \
+    && ln -s /usr/local/cuda/lib64/stubs/libcuda.so "${cuda_stub_dir}/libcuda.so.1" \
+    && LD_LIBRARY_PATH="${cuda_stub_dir}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
+       python3 scripts/check_daqiri_configs.py \
          --validator build/tools/daqiri_config_validate \
-    && python3 scripts/check_generated_configs.py \
+    && LD_LIBRARY_PATH="${cuda_stub_dir}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
+       python3 scripts/check_generated_configs.py \
          --validator build/tools/daqiri_config_validate \
+    && rm -rf "${cuda_stub_dir}" \
     && cmake --install build
 
 # ==============================

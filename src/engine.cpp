@@ -501,6 +501,10 @@ Status Engine::set_external_memory_regions(const NetworkConfig& cfg,
                        name);
       return Status::INVALID_PARAMETER;
     }
+    if (mr_it->second.kind_ == MemoryKind::NULL_MR) {
+      DAQIRI_LOG_ERROR("Null memory region '{}' cannot have an external binding", name);
+      return Status::INVALID_PARAMETER;
+    }
     if (binding.data == nullptr || binding.capacity == 0) {
       DAQIRI_LOG_ERROR("External memory binding '{}' has a null pointer or zero capacity", name);
       return Status::INVALID_PARAMETER;
@@ -590,7 +594,8 @@ Status Engine::set_external_memory_regions(const NetworkConfig& cfg,
     external_mrs_.emplace(name, resolved);
   }
   for (const auto& [name, mr] : cfg.mrs_) {
-    if (!mr.owned_ && external_mrs_.find(name) == external_mrs_.end()) {
+    if (mr.kind_ != MemoryKind::NULL_MR && !mr.owned_ &&
+        external_mrs_.find(name) == external_mrs_.end()) {
       DAQIRI_LOG_ERROR("Memory region '{}' has owned=false but no external binding", name);
       external_mrs_.clear();
       return Status::INVALID_PARAMETER;
@@ -870,6 +875,13 @@ Status Engine::allocate_memory_regions() {
   // overflow, this lets raw ibverbs aggregate many small HUGE regions into the
   // minimum number of hugetlb mappings.
   for (auto& [name, mr] : cfg_.mrs_) {
+    if (mr.kind_ == MemoryKind::NULL_MR) {
+      mr.num_bufs_ = mr.adj_size_ = mr.ttl_size_ = 0;
+      mr.affinity_ = 0;
+      mr.access_ = 0;
+      mr.owned_ = true;
+      continue;
+    }
     if (mr.num_bufs_ != 0 && mr.adj_size_ > std::numeric_limits<size_t>::max() / mr.num_bufs_) {
       DAQIRI_LOG_ERROR("Memory region '{}' size overflows", name);
       return Status::INVALID_PARAMETER;
@@ -941,6 +953,9 @@ Status Engine::allocate_memory_regions() {
   }
 
   for (auto& mr : cfg_.mrs_) {
+    if (mr.second.kind_ == MemoryKind::NULL_MR) {
+      continue;  // No allocation: each RX queue creates a null MR in its own PD.
+    }
     void* ptr = nullptr;
     AllocRegion ar;
     ar.mr_name_ = mr.second.name_;
@@ -1169,6 +1184,29 @@ int Engine::get_port_id(const std::string& key) {
   return -1;
 }
 
+bool validate_queue_memory_regions(const NetworkConfig& config, const CommonQueueConfig& queue,
+                                   bool rx) {
+  bool pass = true;
+  for (size_t i = 0; i < queue.mrs_.size(); ++i) {
+    const auto region = config.mrs_.find(queue.mrs_[i]);
+    if (region == config.mrs_.end()) {
+      DAQIRI_LOG_ERROR("Queue references unknown memory region '{}'", queue.mrs_[i]);
+      pass = false;
+      continue;
+    }
+    if (region->second.kind_ == MemoryKind::NULL_MR) {
+      if (!rx || (region->second.buf_size_ == 0 && i + 1 != queue.mrs_.size()) ||
+          region->second.buf_size_ > UINT32_MAX) {
+        DAQIRI_LOG_ERROR(
+            "Null region '{}' requires RX and a positive 32-bit buf_size when another MR follows",
+            queue.mrs_[i]);
+        pass = false;
+      }
+    }
+  }
+  return pass;
+}
+
 bool validate_network_config(const NetworkConfig& config) {
   bool pass = true;
   std::set<std::string> mr_names;
@@ -1188,21 +1226,40 @@ bool validate_network_config(const NetworkConfig& config) {
   // Verify all memory regions are used in queues and all queue MRs are listed in the MR section
   for (const auto& mr : config.mrs_) {
     mr_names.emplace(mr.second.name_);
+    if (mr.second.kind_ == MemoryKind::NULL_MR &&
+        (config.common_.stream_type != StreamType::RAW ||
+         config.common_.engine_type != EngineType::IBVERBS)) {
+      DAQIRI_LOG_ERROR("Null memory regions require the raw ibverbs engine");
+      pass = false;
+    }
   }
 
+  // Shared TX owns the entire slot allocator for each of its MRs. Aliasing a
+  // region through another queue (including a reorder output) would bypass it.
+  std::unordered_map<std::string, size_t> region_users;
+  for (const auto& intf : config.ifs_) {
+    for (const auto& q : intf.rx_.queues_)
+      for (const auto& name : q.common_.mrs_) ++region_users[name];
+    for (const auto& q : intf.tx_.queues_)
+      for (const auto& name : q.common_.mrs_) ++region_users[name];
+    for (const auto& r : intf.rx_.reorder_configs_) ++region_users[r.memory_region_];
+  }
   for (const auto& intf : config.ifs_) {
     std::set<uint16_t> rx_queue_ids;
     std::set<uint16_t> direct_rx_queue_ids;
     std::unordered_set<FlowId> interface_rx_flow_ids;
     for (const auto& rxq : intf.rx_.queues_) {
+      if (!validate_queue_memory_regions(config, rxq.common_, true)) pass = false;
       rx_queue_ids.insert(rxq.common_.id_);
       if (rxq.poll_mode_ == QueuePollMode::DIRECT) {
         direct_rx_queue_ids.insert(rxq.common_.id_);
-        if (config.common_.stream_type != StreamType::RAW ||
-            config.common_.engine_type != EngineType::IBVERBS) {
+        if (!((config.common_.stream_type == StreamType::RAW &&
+               config.common_.engine_type == EngineType::IBVERBS) ||
+              (config.common_.stream_type == StreamType::SOCKET &&
+               config.common_.engine_type == EngineType::RDMA))) {
           DAQIRI_LOG_WARN(
               "RX queue '{}' requests direct polling, which is supported only by the raw "
-              "ibverbs engine",
+              "ibverbs and RDMA engines",
               rxq.common_.name_);
           pass = false;
         }
@@ -1226,12 +1283,55 @@ bool validate_network_config(const NetworkConfig& config) {
       }
     }
     for (const auto& txq : intf.tx_.queues_) {
-      if (txq.poll_mode_ == QueuePollMode::DIRECT) {
+      if (!validate_queue_memory_regions(config, txq.common_, false)) pass = false;
+      if (txq.buffer_mode_ != TxBufferMode::CYCLIC && txq.buffer_mode_ != TxBufferMode::SHARED) {
+        DAQIRI_LOG_ERROR("TX queue '{}' has an invalid buffer mode", txq.common_.name_);
+        pass = false;
+      }
+      if (txq.buffer_mode_ == TxBufferMode::SHARED) {
         if (config.common_.stream_type != StreamType::RAW ||
-            config.common_.engine_type != EngineType::IBVERBS) {
+            config.common_.engine_type != EngineType::IBVERBS ||
+            txq.poll_mode_ != QueuePollMode::INDIRECT || txq.common_.mrs_.empty() ||
+            txq.common_.mrs_.size() > MAX_NUM_SEGS) {
+          DAQIRI_LOG_ERROR("Shared TX requires a raw ibverbs indirect queue with 1–4 regions");
+          pass = false;
+        }
+        uint64_t smallest_pool = UINT32_MAX;
+        for (const auto& name : txq.common_.mrs_) {
+          auto region = config.mrs_.find(name);
+          if (region != config.mrs_.end()) {
+            const auto& mr = region->second;
+            if (mr.num_bufs_ == 0 || mr.num_bufs_ >= UINT32_MAX || mr.buf_size_ == 0 ||
+                mr.buf_size_ > UINT32_MAX)
+              pass = false;
+            smallest_pool = std::min<uint64_t>(smallest_pool, mr.num_bufs_);
+          }
+          if (region_users[name] != 1) {
+            DAQIRI_LOG_ERROR("Shared TX memory region '{}' must belong to only one segment/queue",
+                             name);
+            pass = false;
+          }
+        }
+        const uint64_t credits =
+            txq.max_inflight_sends_ ? txq.max_inflight_sends_ : smallest_pool * 2;
+        if (credits == 0 || credits > UINT32_MAX ||
+            (txq.common_.batch_size_ > 0 &&
+             static_cast<uint64_t>(txq.common_.batch_size_) > credits)) {
+          DAQIRI_LOG_ERROR("Shared TX send-credit limit is invalid or smaller than batch_size");
+          pass = false;
+        }
+      } else if (txq.max_inflight_sends_ != 0) {
+        DAQIRI_LOG_ERROR("max_inflight_sends requires buffer_mode: shared");
+        pass = false;
+      }
+      if (txq.poll_mode_ == QueuePollMode::DIRECT) {
+        if (!((config.common_.stream_type == StreamType::RAW &&
+               config.common_.engine_type == EngineType::IBVERBS) ||
+              (config.common_.stream_type == StreamType::SOCKET &&
+               config.common_.engine_type == EngineType::RDMA))) {
           DAQIRI_LOG_WARN(
               "TX queue '{}' requests direct polling, which is supported only by the raw "
-              "ibverbs engine",
+              "ibverbs and RDMA engines",
               txq.common_.name_);
           pass = false;
         }
@@ -1252,14 +1352,27 @@ bool validate_network_config(const NetworkConfig& config) {
         pass = false;
       }
     }
+    if (config.common_.engine_type == EngineType::RDMA) {
+      for (size_t q = 0; q < intf.tx_.queues_.size(); ++q) {
+        if (intf.tx_.queues_[q].poll_mode_ == QueuePollMode::DIRECT &&
+            q >= intf.rx_.queues_.size()) {
+          DAQIRI_LOG_ERROR("Direct RDMA TX requires a paired RX queue configuration");
+          pass = false;
+        }
+      }
+      if (intf.rx_.queues_.size() > intf.tx_.queues_.size()) {
+        DAQIRI_LOG_ERROR("RDMA RX queues require paired TX queue configurations");
+        pass = false;
+      }
+    }
     std::set<FlowId> rss_flow_ids;
     std::unordered_map<FlowId, std::vector<uint16_t>> flow_rx_queue_ids;
     size_t max_rx_payload_frame = 0;
     size_t max_tx_payload_frame = 0;
     auto queue_frame_size = [&](const CommonQueueConfig& queue) {
       size_t total = 0;
-      for (const auto& mr_name : queue.mrs_) {
-        auto it = config.mrs_.find(mr_name);
+      for (const auto& name : queue.mrs_) {
+        auto it = config.mrs_.find(name);
         if (it != config.mrs_.end()) {
           total += it->second.buf_size_;
         }
@@ -1276,6 +1389,11 @@ bool validate_network_config(const NetworkConfig& config) {
     }
     for (const auto& reorder : intf.rx_.reorder_configs_) {
       q_mr_names.emplace(reorder.memory_region_);
+      auto output = config.mrs_.find(reorder.memory_region_);
+      if (output != config.mrs_.end() && output->second.kind_ == MemoryKind::NULL_MR) {
+        DAQIRI_LOG_ERROR("Reorder output cannot be a null memory region");
+        pass = false;
+      }
     }
 
     for (const auto& flow : intf.rx_.flows_) {
@@ -1371,6 +1489,16 @@ bool validate_network_config(const NetworkConfig& config) {
           continue;
         }
         for (const uint16_t queue_id : queues_it->second) {
+          for (const auto& queue : intf.rx_.queues_) {
+            if (queue.common_.id_ != queue_id) continue;
+            for (const auto& name : queue.common_.mrs_) {
+              const auto region = config.mrs_.find(name);
+              if (region != config.mrs_.end() && region->second.kind_ == MemoryKind::NULL_MR) {
+                DAQIRI_LOG_ERROR("Reorder does not support RX queues with null scatter elements");
+                pass = false;
+              }
+            }
+          }
           if (direct_rx_queue_ids.find(queue_id) != direct_rx_queue_ids.end()) {
             DAQIRI_LOG_WARN(
                 "Reorder config '{}' targets direct RX queue {} on interface '{}'; direct "
@@ -1574,6 +1702,12 @@ Status Engine::get_tx_packet_burst_checked(BurstParams* burst) {
   return get_tx_packet_burst(burst);
 }
 
+Status Engine::clone_tx_burst(const BurstParams*, uint32_t, BurstParams** clone) {
+  if (clone == nullptr) return Status::NULL_PTR;
+  *clone = nullptr;
+  return Status::NOT_SUPPORTED;
+}
+
 Status Engine::send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst) {
   (void)endpoint_id;
   (void)queue_id;
@@ -1770,9 +1904,21 @@ Status Engine::get_reorder_missing_info(BurstParams* burst, ReorderMissingInfo* 
 }
 
 Status Engine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id,
-                                bool is_server, int num_pkts, uint64_t wr_id,
-                                const std::string& local_mr_name) {
+                               bool is_server, int num_pkts, uint64_t wr_id,
+                               const std::string& local_mr_name, uint32_t immediate_data) {
   DAQIRI_LOG_CRITICAL("RDMA set header not implemented");
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::rdma_get_memory_region(uintptr_t, const std::string&, RDMAMemoryRegion*) {
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::rdma_set_remote_memory(BurstParams*, const RDMAMemoryRegion&, uint64_t) {
+  return Status::NOT_SUPPORTED;
+}
+
+Status Engine::rdma_get_immediate_data(BurstParams*, uint32_t*, uint32_t*) {
   return Status::NOT_SUPPORTED;
 }
 

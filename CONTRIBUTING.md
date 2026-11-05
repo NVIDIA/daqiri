@@ -142,7 +142,7 @@ What Greptile is configured to flag (non-exhaustive — see `.greptile/config.js
 - New engine logic that branches on engine type or reaches into engine-specific structs from `src/common*` instead of going through the `daqiri::Engine` virtual interface.
 - Changes to the `DAQIRI_ENGINE` socket → rdma rule in `src/CMakeLists.txt` that break the invariant.
 - New optional features wrapped in whole-file `#ifdef` blocks instead of being gated behind a CMake option (per the rule above in this file).
-- Code changes under `src/`, `examples/`, or `mkdocs.yml` that do not also update the matching docs (the mapping comes from `.claude/rules/docs-sync.md`).
+- Changed user-facing behavior that leaves a specific documented statement, example, or command stale, or lacks a needed API/configuration reference entry. Apply the page scopes and conditional checks in `.claude/rules/docs-sync.md`; source paths identify docs to inspect, not files that must always be edited.
 
 Workflow expectations:
 

@@ -249,7 +249,8 @@ Status copy_packet_to_staging(BurstParams *burst, uint32_t packet_index,
     auto *seg_ptr =
         static_cast<const uint8_t *>(get_segment_packet_ptr(burst, seg,
                                                            packet_index));
-    if (seg_ptr == nullptr) {
+    if (seg_ptr == nullptr &&
+        (burst->hdr.hdr.burst_flags & (1U << (DAQIRI_BURST_FLAG_NULL_SEGMENT_SHIFT + seg))) == 0) {
       DAQIRI_LOG_ERROR("Null packet segment pointer for packet {} segment {}",
                        packet_index, seg);
       return Status::NULL_PTR;
@@ -259,10 +260,14 @@ Status copy_packet_to_staging(BurstParams *burst, uint32_t packet_index,
     const auto copy_len = static_cast<size_t>(seg_len - bytes_to_skip);
     bytes_to_skip = 0;
 
-    const Status status = copy_segment_to_host(seg_ptr + seg_offset, copy_len,
-                                               staging.data + dst_offset);
-    if (status != Status::SUCCESS) {
-      return status;
+    if (seg_ptr == nullptr) {
+      std::memset(staging.data + dst_offset, 0, copy_len);
+    } else {
+      const Status status =
+          copy_segment_to_host(seg_ptr + seg_offset, copy_len, staging.data + dst_offset);
+      if (status != Status::SUCCESS) {
+        return status;
+      }
     }
     dst_offset += copy_len;
   }

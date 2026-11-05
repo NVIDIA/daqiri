@@ -34,6 +34,7 @@ invalid_markers = (
     "batch_sise",
     "4294967296",
     "tx_eth_scr",
+    "shareed",
     "flows: typo",
     "ecpri_typo",
     "ipv4_src:\\n",

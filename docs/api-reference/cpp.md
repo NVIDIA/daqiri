@@ -56,6 +56,15 @@ substitute regular or transparent-hugepage memory when the requested hugetlb all
 unavailable; initialization fails instead. Use `MemoryKind::HOST` or `MemoryKind::HOST_PINNED` when regular host memory is
 intended. Callers supplying an external memory binding remain responsible for its backing.
 
+`MemoryKind::NULL_MR` (`kind: "null"` in YAML) discards raw ibverbs RX scatter bytes
+without allocating packet storage. Set the null `MemoryRegionConfig::buf_size_` to the
+discard span and reference its name in `CommonQueueConfig::mrs_`. A positive `buf_size_`
+is required only when another MR follows. A final null MR may use `buf_size_ = 0` to
+discard the remainder.
+A discarded segment returns `nullptr` from `get_segment_packet_ptr()` and its consumed
+byte count from `get_segment_packet_length()`. Release the burst normally. See the
+[null-region configuration example](configuration.md#example-discard-headers-before-retaining-the-payload).
+
 Only one engine may be active in a process. Calling `daqiri_init()` again before
 `shutdown()` returns `Status::INTERNAL_ERROR` and leaves the running engine unchanged.
 After `shutdown()` completes, a later `daqiri_init()` creates a fresh engine instance and
@@ -136,12 +145,38 @@ daqiri::get_rx_burst(&burst, 0);
 daqiri::get_rx_burst(&burst);
 ```
 
-For an ibverbs RX queue configured with `poll_mode: direct`, the calling thread performs one
+For a raw ibverbs RX queue configured with `poll_mode: direct`, the calling thread performs one
 bounded check for ready packets inside `get_rx_burst()`. A successful call returns the packets
 currently ready, up to 256, without a DAQIRI RX worker or handoff ring. Exactly one thread may
 poll each direct queue. Continue using the normal burst-free APIs; released packet buffers are
 recycled by a subsequent direct poll. An empty direct poll returns `Status::NOT_READY`. Indirect
 mode remains the default.
+
+For RDMA (`roce://`), the connection overload `get_rx_burst(&burst, conn_id, server)`
+also drives direct RX and TX completion queues. Direct RECEIVE postings and SENDs
+use one packet each. A successful poll returns one completion; check
+`rdma_get_opcode(burst)` to distinguish SEND from RECEIVE. The original burst remains
+owned by DAQIRI until returned as a completion, including for inline SENDs;
+free it using the normal RDMA completion workflow. Keep polling for TX
+completions even when the application only sends. Each direction can independently
+use indirect mode; a fully direct connection has no data-path worker. A failed direct
+RDMA posting retains caller ownership so the burst can be retried or freed.
+
+When both RDMA directions are direct, one application thread must own the entire
+connection. Calls from another thread return `NOT_READY`. This path uses fixed
+request tables and returns completions without a worker handoff ring. Internal
+request tags preserve the application's `wr_id`, which need not be monotonic.
+Each direction supports at most 1,024 outstanding requests. Exhausting these
+credits returns `NO_SPACE_AVAILABLE` and retains caller ownership; poll
+completions before retrying. Mixed-mode connections retain their synchronized
+worker path.
+
+After a completion returns a burst, its registered buffers and metadata may be
+reused: call `rdma_set_header()` for the next SEND or RECEIVE, restore the packet
+lengths, and submit it again. Do not call `get_tx_packet_burst()` again on that
+handle, and free it with `free_tx_burst()` only when finished. A RECEIVE buffer
+can be sent as a zero-copy echo using the same local MR name. Repost it for
+RECEIVE only after its SEND completion, including for inline SENDs.
 
 ### RX Step 2: Access packet data
 
@@ -168,6 +203,17 @@ On the raw ibverbs engine, DAQIRI requests mlx5 real-time CQ timestamps only whe
 the device advertises that format. Devices without that capability stay on the
 default mlx5 device-clock CQ format, and DAQIRI converts those raw ticks to
 nanoseconds before returning them.
+For RDMA/RoCE, DAQIRI requests both device-clock and wall-clock completion
+fields so mlx5 preserves the ordinary TX CQ's clock format and converts receive
+timestamps to epoch nanoseconds. The getter never exposes packed seconds/nanoseconds.
+This works with direct, indirect, and mixed RX/TX polling modes without enabling
+accurate TX scheduling.
+Enabling `rx.hardware_timestamps` fails connection setup if the NIC or driver
+cannot create a timestamp-capable receive CQ. Timestamps are available on
+successful `RECEIVE` and receiver-side `RDMA_WRITE_IMM` completions;
+TX completions return `NOT_SUPPORTED`.
+An RDMA timestamp describes the receive completion of the message, which may
+span multiple wire packets.
 **WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or system clock
 configuration. Timestamp values are invalid if the clocks are not PTP-synchronized.
 For reordered aggregate bursts,
@@ -572,6 +618,23 @@ for (int i = 0; i < daqiri::get_num_packets(burst); i++) {
 Or construct raw packets by writing directly into the packet buffer returned by
 `get_packet_ptr()`.
 
+Raw ibverbs TX supports one to four segments, in both direct and indirect mode.
+The NIC gathers them in queue memory-region order into one packet. For example,
+use segment 0 for Ethernet/IPv4/UDP, segment 1 for an application header, and
+segment 2 for a CPU/GPU payload:
+
+```cpp
+// Fill each segment through get_segment_packet_ptr(burst, segment, packet).
+daqiri::set_packet_lengths(burst, i, {42, message_header_bytes, payload_bytes});
+```
+
+Keep the network header together in segment 0 for the existing header helpers.
+Set its IPv4 and UDP lengths to include every following segment. Segment buffers
+remain owned by their TX packet until completion; gathering does not share an
+allocation between different packets. `get_packet_length()` returns segment 0's
+length; use the segment-length getters or `get_burst_tot_byte()` for all data
+segments.
+
 ### TX Step 3: Send
 
 ```cpp
@@ -590,20 +653,16 @@ The burst must have been acquired from the same queue, so its existing
 checked overload copies the endpoint's cached 42-byte Ethernet/IPv4/UDP template
 directly into each mlx5 SEND WQE. It patches the IPv4 and UDP lengths there and
 leaves both checksum fields zero for the existing mlx5 hardware-checksum flags.
-One registered data segment gathers the UDP payload from segment 0. Packet
-buffers therefore contain payload only; applications do not reserve or
-populate header bytes.
+One to four registered data segments gather the UDP payload in segment order.
+Packet buffers therefore contain payload only; applications do not reserve or
+populate Ethernet/IP/UDP header bytes. Separate segments can hold application
+headers, metadata, and a GPU payload.
 
-!!! warning "Single-segment limitation"
-    Named endpoints currently support only a one-segment raw-ibverbs TX queue and
-    a one-segment burst. Segment 0 is the payload. HDS/two-region queues and all
-    other multi-segment bursts are rejected with `INVALID_PARAMETER`; this path
-    does not support header-data gather.
-
-Set segment 0's payload length before submission. Each endpoint-aware SEND WQE
-occupies two 64-byte WQEBBs; enhanced MPW is bypassed for these bursts. The
-payload length must fit both the endpoint MTU and the selected TX queue's
-packet-buffer slot.
+Set every segment's length before submission. Each segment must fit its queue's
+packet-buffer slot, and the sum of segment lengths plus the inline network header
+must fit the endpoint MTU and IPv4/UDP length limits. Endpoint-aware SEND WQEs
+occupy two 64-byte WQEBBs for one to three gathered segments, or three WQEBBs for
+four segments; enhanced MPW is bypassed for these bursts.
 
 The overload returns `INVALID_PARAMETER` without consuming the burst when the
 endpoint, interface, queue, header reservation, or frame length is invalid. A
@@ -616,14 +675,59 @@ to be omitted and `num_pkts == 1`. The calling thread submits the packet synchro
 manages transmit progress. `BurstParams` is only an ownership handle; neither the metadata nor
 packet data is handed to another core.
 
-`send_tx_burst()` takes ownership of the burst on success and when transmit capacity is
-temporarily exhausted. In direct mode, `SUCCESS` means the packet has been submitted to the NIC;
+For raw ibverbs, `send_tx_burst()` takes ownership of the burst on success and when
+transmit capacity is temporarily exhausted. In direct mode, `SUCCESS` means the packet has been submitted to the NIC;
 the packet buffer is reclaimed by a later caller-driven operation. On
 `NO_SPACE_AVAILABLE` it has already freed the packet reservation and metadata. In both
 cases the application must **not** free or otherwise access the burst afterwards.
-`NO_SPACE_AVAILABLE` is the only failure a correctly-configured endpoint encounters
-at submission time. A second direct acquisition before the pending packet is sent or freed
+Other failures leave ownership with the caller, who must retry or free the burst.
+A second direct acquisition before the pending packet is sent or freed
 returns `NOT_READY`; zero- or multi-packet direct requests return `INVALID_PARAMETER`.
+
+### Shared TX segments
+
+Raw ibverbs indirect queues with `buffer_mode: shared` can clone a complete,
+application-owned TX burst before either copy is submitted:
+
+```cpp
+daqiri::BurstParams* second = nullptr;
+auto status = daqiri::clone_tx_burst(original, 1u << 2, &second);
+// [network header A][message header A][payload P]
+// [network header B][message header B][payload P]
+```
+
+Bit `s` retains segment `s`; other segments receive private CPU copies with the
+same lengths. The example supports independent IP and message headers and one
+shared CPU/GPU payload. Four segments use `1u << 3` to share the final payload.
+Masks may select several segments. Endpoint sends can share segment 0 of a
+payload-only burst; the endpoint supplies each send's inline network header.
+Clone-of-clone references point directly to storage, so the original metadata
+may be recycled independently. Source and clone must use the same TX queue.
+RX, cross-queue references, private GPU copies, and byte-range slices are unsupported.
+
+Finish producing the payload and synchronize GPU writes before cloning. Shared
+bytes are immutable while multiple descriptors or sends retain them. Header
+helpers reject shared segment-0 writes with `RESOURCE_IN_USE`; raw pointer
+writes remain the caller's responsibility. Each burst has independent lengths
+and scheduling; clones start without a TX timestamp or custom application metadata.
+
+On clone failure, the output is null and the source is unchanged. Invalid masks,
+released segments, edited packet pointers, and excessive lengths are rejected.
+Private GPU segments return `NOT_SUPPORTED`. Submit or cancel each resulting
+burst separately. `SUCCESS` and `NO_SPACE_AVAILABLE` consume a submitted burst;
+other send failures retain caller ownership. `free_all_packets_and_burst_tx()`
+cancels in any allocation order. Segment and packet frees clear the corresponding
+references; an incomplete burst cannot be submitted. For shared queues,
+`free_tx_metadata()` and `free_tx_burst()` also release any unsent references
+still attached to that metadata.
+
+Storage returns to its segment pool only after the last descriptor or locally
+completed send releases it. An unsent clone pins the payload even after the
+original send completes. `wait_for_tx_idle()` waits for accepted sends, not
+unsent clones; runtime queue deletion waits for both. A CQ error pins possibly
+DMA-visible buffers until successful QP destruction during shutdown. Shutdown
+invalidates all outstanding application handles. Keep the queue's existing
+single-producer discipline for allocation, cloning, and submission.
 
 ### Timed Transmission
 
@@ -633,6 +737,17 @@ precise timed transmission require ConnectX-7 or later:
 ```cpp
 daqiri::set_packet_tx_time(burst, idx, ptp_timestamp_ns);
 ```
+
+RDMA `SEND`, `RDMA_READ`, `RDMA_WRITE`, and `RDMA_WRITE_IMM` support timed
+transmission with `tx.accurate_send: true`, for both direct and indirect TX queues on supported
+mlx5 hardware. Set the RDMA header and acquire buffers before setting timestamps.
+Passing zero clears a timestamp; `rdma_set_header()` clears scheduling when reusing
+a burst. RDMA targets must be strictly less than four seconds from the current
+PTP-synchronized `CLOCK_REALTIME` at assignment and posting; submit ahead of the
+target time. Subsequent SQ operations on that connection wait behind
+the scheduled operation. A scheduled READ gates issuance of the READ request;
+it does not set the response arrival time. Zero-byte WRITE_IMM notifications
+can also be scheduled. RC backpressure and retries can delay transmission further.
 
 `ptp_timestamp_ns` is an unsigned 64-bit PTP epoch-nanosecond value in the same clock
 domain as a PTP-synchronized `CLOCK_REALTIME`. Device-clock ticks are not accepted.
@@ -646,6 +761,9 @@ pcap capture. Raw writes create one output file per packet named
 `<file_prefix>_<packet_index>` and truncate existing files. PCAP writes append full
 packets to `<file_prefix>.pcap`; DAQIRI writes the pcap headers directly and does not
 depend on `libpcap`.
+
+Raw, pcap, and S3 writers zero-fill discarded spans while preserving logical packet lengths
+and offsets. Discarded data cannot be recovered.
 
 Host-backed packet segments use standard POSIX file writes and do not require GPUDirect
 Storage. CUDA device-backed packet segments require `DAQIRI_ENABLE_GDS=ON` and working
@@ -905,7 +1023,7 @@ workflow sections above show the common call order and ownership rules.
 | `get_rx_burst(&burst, port, q)` | Dequeue a burst from a specific port and queue. |
 | `get_rx_burst(&burst, port)` | Dequeue from any queue on a specific port. |
 | `get_rx_burst(&burst)` | Dequeue from any queue on any port. |
-| `get_rx_burst(&burst, conn_id, server)` | Dequeue from an RDMA/socket connection ring. |
+| `get_rx_burst(&burst, conn_id, server)` | Retrieve a connection completion; for RDMA, also poll any direct RX/TX completion queues. |
 | `get_connection_id(burst)` | Read the transport connection ID recorded on an RX burst. |
 | `set_reorder_cuda_stream(interface_name, reorder_name, stream)` | Set the CUDA stream for a configured GPU reorder plan. |
 | `get_reorder_burst_info(burst, &info)` | Read metadata for a reordered aggregate burst. |
@@ -918,6 +1036,7 @@ workflow sections above show the common call order and ownership rules.
 | `is_tx_burst_available(burst)` | Check whether buffers are available for a TX burst. |
 | `get_tx_packet_burst(burst)` | Populate a TX burst with packet buffers. |
 | `set_connection_id(burst, conn_id)` | Attach a transport connection ID to a TX burst (socket/RDMA). |
+| `clone_tx_burst(source, mask, &clone)` | Retain selected TX segments and privately copy CPU segments on shared-mode raw ibverbs queues. |
 | `send_tx_burst(burst)` | Enqueue a populated TX burst. |
 | `send_tx_burst(endpoint_id, queue_id, burst)` | Inline cached raw-UDP headers, gather payload pointers, and enqueue an ibverbs burst on the selected queue. |
 | `add_endpoint(config, &endpoint_id)` | Add a named raw-UDP endpoint to the active ibverbs engine. |
@@ -931,7 +1050,168 @@ workflow sections above show the common call order and ownership rules.
 | `set_udp_header(burst, idx, udp_len, src_port, dst_port)` | Fill a UDP header. |
 | `set_udp_payload(burst, idx, data, len)` | Copy UDP payload bytes. |
 | `rdma_set_header(burst, op_code, conn_id, is_server, num_pkts, wr_id, local_mr_name)` | Fill RDMA TX metadata. |
+| `rdma_get_memory_region(conn_id, mr_name, &region)` | Export the registered address, byte length, and remote key for this connection. |
+| `rdma_set_remote_memory(burst, region, offset = 0)` | Set a checked remote range for RDMA read/write. Call after setting packet lengths. |
+| `rdma_set_header(burst, RDMA_WRITE_IMM, conn_id, is_server, num_pkts, wr_id, local_mr_name, immediate_data)` | Create an explicit write-with-immediate operation using a host-order 32-bit value. |
+| `rdma_get_immediate_data(burst, &value[, &written_bytes])` | Read a successful write-with-immediate request/completion's host-order value. |
 | `rdma_get_opcode(burst)` | Return the RDMA operation code recorded on a burst. |
+
+### RDMA reads and writes
+
+On an established `roce://` RC connection, `RDMA_READ` fetches remote memory
+into the local burst buffers and `RDMA_WRITE` copies local burst buffers into
+remote memory. Neither operation requires a posted receive on the peer. The
+peer must register its target with `access: [rdma_read]` for reads or
+`access: [local, rdma_write]` for writes. A local READ destination needs
+`local` access. Writes automatically enable the local-write permission required
+by verbs when registering a remote-write MR.
+
+The peer calls `rdma_get_memory_region(conn_id, mr_name, &region)` and exchanges
+`RDMAMemoryRegion` fields (`address`, `length`, `rkey`, `access`) through an application
+control channel. Serialize those fields explicitly with an agreed byte order;
+the C++ struct is not a wire format. Export the descriptor for the connection
+that will use it, and retain its registration until all remote work completes.
+DAQIRI does not automatically exchange keys. The application must reserve the
+remote target buffers and coordinate ownership so its peer does not reuse them
+while an operation is in flight. The descriptor covers the entire registered
+allocation, including padding between configured buffer slots.
+
+```cpp
+// remote was received from the peer's control channel; conn_id is connected.
+auto* request = daqiri::create_tx_burst_params();
+if (request == nullptr) throw std::runtime_error("No RDMA metadata");
+if (daqiri::rdma_set_header(request, daqiri::RDMAOpCode::RDMA_READ,
+                           conn_id, false, 1, 42, "LOCAL_MEMORY") != daqiri::Status::SUCCESS ||
+    daqiri::get_tx_packet_burst(request) != daqiri::Status::SUCCESS) {
+  daqiri::free_tx_metadata(request);
+  throw std::runtime_error("RDMA allocation failed");
+}
+if (daqiri::set_packet_lengths(request, 0, {4096}) != daqiri::Status::SUCCESS ||
+    daqiri::rdma_set_remote_memory(request, remote, 0) != daqiri::Status::SUCCESS) {
+  daqiri::free_tx_burst(request);
+  throw std::runtime_error("Invalid RDMA range");
+}
+// Set this flag to match this connection's configured TX poll_mode.
+const bool tx_is_direct = true;  // false for indirect TX.
+auto status = daqiri::send_tx_burst(request);
+if (status != daqiri::Status::SUCCESS) {
+  if (tx_is_direct || status == daqiri::Status::NOT_READY) {
+    // Direct failures and pre-submission NOT_READY retain ownership.
+    // Retry when ready, or free on cancellation.
+    daqiri::free_tx_burst(request);
+  }
+  // Other errors on this valid indirect request already consumed it.
+}
+```
+
+For writes, choose `RDMA_WRITE` and fill the local buffers before submission.
+For a batch, packet `p` transfers at `offset + sum(lengths[0..p-1])` in the
+remote region. Set every packet length before `rdma_set_remote_memory` and
+retain those lengths until completion. Each packet length must fit the local
+MR's configured `buf_size`.
+
+Poll `get_rx_burst(&completion, conn_id, is_server)` for the original request
+burst. Read/write completions have `transport_hdr.tx == true` and preserve the
+opcode, caller WR ID, packet pointers, and lengths. There is one completion
+per submitted batch, after all successfully posted work has completed. Check
+`transport_hdr.status` before consuming READ data, then call
+`free_tx_burst(completion)` once. Failed verbs posts or CQEs yield
+`GENERIC_FAILURE`; a partially posted batch may have transferred some data.
+A successful submission transfers ownership until its completion. In direct TX
+mode, every synchronous failure retains caller ownership, including
+`NO_SPACE_AVAILABLE` and failed verbs posts: retry the request or free it on
+cancellation. In indirect TX mode, work-ring overflow or insufficient receive completion
+reservations (`NO_SPACE_AVAILABLE`) consumes and frees the request. Validation errors after finding a live connection
+also consume indirect requests. Connection readiness failures (`NOT_READY`,
+including a missing/disconnected connection) retain ownership before work is
+accepted. Neither path queues a completion for a synchronous failure. Check the returned status and do not free
+an already consumed request. Plain reads/writes do not notify the remote application;
+use a control message when the peer needs a notification. GPU destinations
+also require application synchronization before launching GPU work.
+
+READ requires RC. WRITE and WRITE_IMM support RC and UC. UD supports only
+SEND/RECEIVE, with SEND payloads limited to the active port MTU; received
+buffers and lengths exclude the UD GRH. Unsupported operations return
+`NOT_SUPPORTED`. `RDMA_READ_IMM` returns `NOT_SUPPORTED`.
+
+### Explicit write-with-immediate notifications
+
+Select `RDMAOpCode::RDMA_WRITE_IMM` to write and notify the peer. Supply the
+32-bit immediate value in the `rdma_set_header` creation call:
+
+```cpp
+daqiri::rdma_set_header(request, daqiri::RDMAOpCode::RDMA_WRITE_IMM,
+                        conn_id, false, 1, wr_id, "LOCAL_MEMORY", slot_id);
+```
+
+The overload with `immediate_data` accepts only `RDMA_WRITE_IMM`. The existing
+overload without the immediate argument also accepts `RDMA_WRITE_IMM` with
+value zero. Both the creation argument and `rdma_get_immediate_data` use host
+byte order; DAQIRI performs the verbs network-byte-order conversion.
+
+Allocate local packet buffers with `get_tx_packet_burst`, set their lengths,
+set the remote range with `rdma_set_remote_memory`, and submit normally.
+A zero-length `RDMA_WRITE_IMM` packet is a notification-only operation: it
+writes no payload bytes and can follow earlier plain writes on the same RC
+connection without waiting for their sender completions. The peer still needs
+a valid registered target descriptor with remote-write permission. Plain
+`RDMA_WRITE` never appends an automatic notification.
+
+Every packet/work request in a `RDMA_WRITE_IMM` burst generates one peer
+notification using the burst's immediate value. The sender receives one batch
+completion after all posted work finishes, preserving `RDMA_WRITE_IMM` as its
+opcode. The immediate value can identify a destination slot or sequence;
+the application defines its meaning and tracks the target's payload length.
+
+The receiver must post one `RECEIVE` credit per notification using the normal
+request allocation/submission path. Zero-length receive credits are supported
+for notification-only use. If there is no available receive credit, the RC
+operation waits/retries according to the connection's RNR policy. Receive
+buffers are not the write destination: DMA targets the remote address supplied
+by the sender, while the credit supplies a notification completion.
+
+UC also supports payload and zero-byte WRITE_IMM, but provides no RNR retry or
+delivery guarantee. Post receive credits before the peer sends notifications.
+A UC sender completion only releases local buffers; use a peer acknowledgment
+to confirm delivery. A notification after plain UC writes does not prove that
+earlier writes arrived; applications must detect loss themselves.
+
+Poll `get_rx_burst(&notification, conn_id, is_server)`. A successful notification
+has `transport_hdr.tx == false`, opcode `RDMA_WRITE_IMM`, and a value retrievable
+with `rdma_get_immediate_data(notification, &slot_id)`. Its local packet length
+is zero, including when the remote write carried payload. A batched `RECEIVE`
+yields one independently owned completion per credit with caller WR IDs
+`wr_id + packet_index`. Release each completion once with `free_tx_burst`.
+This also applies to normal SEND/RECEIVE completion ownership; normal receives
+report the actual received length. DAQIRI reserves every split completion before
+accepting an indirect receive batch. If metadata, pointer, or length storage is
+insufficient, submission returns `NO_SPACE_AVAILABLE` and frees the indirect
+request without posting receive credits. Accepted batches finish even when their
+reservations occupy every metadata item. A full completion handoff ring retains
+the notification until it can be dequeued; applications must keep draining and
+freeing completions.
+With `rx.hardware_timestamps: true`,
+`get_packet_rx_timestamp(notification, 0, &timestamp_ns)` reports the notification's
+hardware completion time, including zero-byte notifications. Plain READ/WRITE
+operations have no receiver CQ event and therefore no receiver timestamp.
+
+The notification identifies arrived data, not application consumption. Retain
+the registered target and return an application buffer credit only after the
+receiver finishes consuming it. For GPU targets, perform the required GPU
+visibility synchronization before consuming data.
+
+
+The `RDMAMemoryRegion.access` field carries the exported MR's access mask. Exchange
+it with the address, length, and rkey; explicit masks are checked before submission.
+Memory-region defaults remain local-only, so exported targets must explicitly enable
+`rdma_read` and/or `rdma_write` in their configuration. The NIC still enforces access.
+
+For notification byte counts, use
+`rdma_get_immediate_data(notification, &immediate, &written_bytes)`. This overload
+accepts successful receiver notifications and reports bytes written to the remote
+target while the receive-credit packet length stays zero. The existing two-argument
+form continues to return just the immediate value. A complete descriptor-exchange
+example is documented in [RDMA READ/WRITE example](../benchmarks/socket_benchmarking.md#rdma-readwrite-example).
 
 ### Buffer Release
 
@@ -943,7 +1223,7 @@ workflow sections above show the common call order and ownership rules.
 | `free_segment_packets_and_burst(burst, seg)` | Free one segment across all packets and free burst metadata. |
 | `free_all_packets_and_burst_rx(burst)` | Free all RX packet buffers and RX burst metadata. |
 | `free_all_packets_and_burst_tx(burst)` | Free all TX packet buffers and TX burst metadata. |
-| `free_rx_burst(burst)` / `free_tx_burst(burst)` | Free burst metadata only. |
+| `free_rx_burst(burst)` / `free_tx_burst(burst)` | Free burst metadata. For RDMA request completions, `free_tx_burst` also returns the packet buffers. |
 | `free_rx_metadata(burst)` / `free_tx_metadata(burst)` | Free RX or TX metadata only. |
 
 ### File I/O

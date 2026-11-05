@@ -65,4 +65,6 @@ pages below.
 
 - [Socket and RDMA Benchmarking](socket_benchmarking.md) covers Linux TCP/UDP and RoCE/RDMA runs with matching client/server namespace setup.
 - [Raw Ethernet Benchmarking](raw_benchmarking.md) covers the DPDK/raw Ethernet examples, hugepage sizing, physical loopback configuration, and raw benchmark troubleshooting.
+- [Performance: IGX Thor](performance-igx-thor.md) reports 200 GbE cabled-loopback DPDK, raw ibverbs, RoCE, TCP, UDP, and GPU-workload measurements.
+- [Performance: DGX Spark](performance-dgx-spark.md) reports cross-host and single-host cabled-loopback measurements on DGX Spark.
 - [Understanding the Configuration File](../tutorials/configuration-walkthrough.md) explains the YAML fields once you have selected the stream type and example config.

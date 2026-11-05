@@ -107,9 +107,15 @@ class SocketEngine : public Engine {
   Status rdma_get_port_queue(uintptr_t conn_id, uint16_t* port, uint16_t* queue) override;
   Status rdma_get_server_conn_id(const std::string& server_addr, uint16_t server_port,
                                  uintptr_t* conn_id) override;
-  Status rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id,
-                         bool is_server, int num_pkts, uint64_t wr_id,
-                         const std::string& local_mr_name) override;
+  Status rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id, bool is_server,
+                         int num_pkts, uint64_t wr_id, const std::string& local_mr_name,
+                         uint32_t immediate_data = 0) override;
+  Status rdma_get_memory_region(uintptr_t conn_id, const std::string& mr_name,
+                                RDMAMemoryRegion* region) override;
+  Status rdma_set_remote_memory(BurstParams* burst, const RDMAMemoryRegion& region,
+                                uint64_t offset) override;
+  Status rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data,
+                                 uint32_t* write_length = nullptr) override;
   RDMAOpCode rdma_get_opcode(BurstParams* burst) override;
 
  private:
@@ -118,8 +124,9 @@ class SocketEngine : public Engine {
   struct RxQueueState {
     uint16_t port = 0;
     uint16_t queue = 0;
-    size_t max_bursts = 1;
-    size_t reserved_bursts = 0;
+    size_t max_packets = 1;
+    size_t queued_packets = 0;
+    size_t reserved_packets = 0;
     std::mutex mutex;
     std::condition_variable capacity_cv;
     std::queue<BurstParams*> bursts;
@@ -135,6 +142,10 @@ class SocketEngine : public Engine {
     bool is_udp = false;
     std::atomic<bool> running{false};
     std::thread rx_thread;
+    std::mutex rx_start_mutex;
+    std::condition_variable rx_start_cv;
+    bool rx_start_complete = false;
+    bool rx_start_success = false;
     std::shared_ptr<RxQueueState> rx_queue;
     std::shared_ptr<metrics::CounterSet> rx_metrics;
   };
@@ -207,11 +218,12 @@ class SocketEngine : public Engine {
   uint32_t select_batch_size(const std::vector<TxQueueConfig>& queues) const;
 
   Status pop_rx_burst(const std::shared_ptr<RxQueueState>& qstate, BurstParams** burst);
-  bool reserve_rx_burst(const std::shared_ptr<RxQueueState>& qstate,
-                        const std::atomic<bool>& connection_running);
-  void cancel_rx_burst_reservation(const std::shared_ptr<RxQueueState>& qstate);
+  size_t reserve_rx_packets(const std::shared_ptr<RxQueueState>& qstate, size_t requested_packets,
+                            const std::atomic<bool>* connection_running = nullptr);
+  void cancel_rx_packet_reservation(const std::shared_ptr<RxQueueState>& qstate,
+                                    size_t reserved_packets);
   void push_rx_burst(const std::shared_ptr<RxQueueState>& qstate, BurstParams* burst,
-                     bool reserved = false);
+                     size_t reserved_packets = 0);
 
   void free_packet_arrays(BurstParams* burst);
   void close_fd(int& fd);

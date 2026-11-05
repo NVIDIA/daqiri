@@ -24,12 +24,12 @@ daqiri:
     - name: "Data_TX_GPU_0"
       kind: "device"
       affinity: 0
-      num_bufs: 16384
+      num_bufs: 8192
       buf_size: 8192
     - name: "Data_TX_GPU_1"
       kind: "device"
       affinity: 0
-      num_bufs: 16384
+      num_bufs: 8192
       buf_size: 8192
     - name: "Data_RX_GPU_0"
       kind: "device"
@@ -49,7 +49,7 @@ daqiri:
         queues:
         - name: "tx_q_0"
           id: 0
-          batch_size: 10240
+          batch_size: 1024
           cpu_core: <11>
           memory_regions:
             - "Data_TX_GPU_0"
@@ -57,7 +57,7 @@ daqiri:
             - "tx_eth_src"
         - name: "tx_q_1"
           id: 1
-          batch_size: 10240
+          batch_size: 1024
           cpu_core: <10>
           memory_regions:
             - "Data_TX_GPU_1"
@@ -80,7 +80,7 @@ daqiri:
             - "Data_RX_GPU_1"
         flows:
         - name: "flow_0"
-          id: 0
+          id: 1
           action:
             type: queue
             id: 0
@@ -88,7 +88,7 @@ daqiri:
             udp_src: 4096
             udp_dst: 4096
         - name: "flow_1"
-          id: 1
+          id: 2
           action:
             type: queue
             id: 1
@@ -108,7 +108,7 @@ bench_tx:
 - interface_name: "loopback_port"
   queue_id: 0
   cpu_core: <5>
-  batch_size: 10240
+  batch_size: 1024
   payload_size: 8000
   header_size: 64
   eth_dst_addr: <00:00:00:00:00:00>
@@ -119,7 +119,7 @@ bench_tx:
 - interface_name: "loopback_port"
   queue_id: 1
   cpu_core: <4>
-  batch_size: 10240
+  batch_size: 1024
   payload_size: 8000
   header_size: 64
   eth_dst_addr: <00:00:00:00:00:00>

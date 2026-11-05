@@ -37,6 +37,8 @@ namespace daqiri {
 // Apply the common semantic checks used before engine initialization. This path
 // does not allocate packet memory, initialize an engine, or access a NIC.
 bool validate_network_config(const NetworkConfig& config);
+bool validate_queue_memory_regions(const NetworkConfig& config, const CommonQueueConfig& queue,
+                                   bool rx);
 
 struct AllocRegion {
   enum class Deallocator {
@@ -184,6 +186,8 @@ class Engine {
   virtual Status get_reorder_missing_info(BurstParams* burst, ReorderMissingInfo* info);
   virtual void free_rx_metadata(BurstParams* burst) = 0;
   virtual void free_tx_metadata(BurstParams* burst) = 0;
+  virtual Status clone_tx_burst(const BurstParams* source, uint32_t shared_segment_mask,
+                                BurstParams** clone);
   virtual Status send_tx_burst(BurstParams* burst) = 0;
   virtual Status send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst);
   virtual Status add_endpoint(const RawUdpEndpointConfig& config, EndpointId* endpoint_id);
@@ -233,7 +237,13 @@ class Engine {
                                          uintptr_t* conn_id);
   virtual Status rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id,
                                  bool is_server, int num_pkts, uint64_t wr_id,
-                                 const std::string& local_mr_name);
+                                 const std::string& local_mr_name, uint32_t immediate_data = 0);
+  virtual Status rdma_get_memory_region(uintptr_t conn_id, const std::string& mr_name,
+                                        RDMAMemoryRegion* region);
+  virtual Status rdma_set_remote_memory(BurstParams* burst, const RDMAMemoryRegion& region,
+                                        uint64_t offset);
+  virtual Status rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data,
+                                         uint32_t* write_length = nullptr);
   virtual RDMAOpCode rdma_get_opcode(BurstParams* burst);
   int numa_from_mem(const MemoryRegionConfig& mr) const;
   // mbuf/extmem-based helpers used only by the DPDK engine. Their definitions

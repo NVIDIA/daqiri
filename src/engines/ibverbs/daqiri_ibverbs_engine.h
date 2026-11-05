@@ -41,6 +41,11 @@
 
 #include "src/daqiri_ring.h"
 #include "src/daqiri_pool.h"
+#include "shared_tx.h"
+
+namespace daqiri::detail {
+struct RawVerbsApi;
+}
 
 namespace daqiri {
 
@@ -234,8 +239,8 @@ struct IbvRxQueue {
   std::atomic<ResourceState> state{ResourceState::CREATING};
   std::atomic<uint64_t> active_users{0};
   int if_idx = 0;
-  int port_id = 0;
-  int queue_id = 0;
+  int port_id = -1;
+  int queue_id = -1;
   int cpu_core = -1;
   int batch_size = 1;
   uint64_t timeout_us = 0;
@@ -267,8 +272,8 @@ struct IbvRxQueue {
 
   // Backing memory region(s). The striding path uses the single mr_base/lkey;
   // the regular path scatters across `regions` (one data seg per region, in
-  // order -- for HDS, region 0 = CPU header (seg_len = split_boundary), region
-  // 1 = GPU payload).
+  // order). Scatter lengths are configured buf_size values; slot_size retains
+  // allocation padding. HDS is the two-region CPU-header/GPU-payload case.
   struct RxRegion {
     uint8_t* base = nullptr;
     uint32_t lkey = 0;
@@ -352,6 +357,18 @@ struct IbvRxQueue {
   int cur_n = 0;
   uint64_t last_flush_tsc = 0;
   uint64_t dbg_cqe = 0, dbg_data = 0, dbg_filler = 0, dbg_err = 0;
+  // Opt-in CQE compression. zip_* describe the compressed session currently
+  // being decoded (zip_cnt == 0 when none); cq_ci stays on the session header
+  // until every mini-CQE is consumed so the CQ doorbell never releases slots
+  // that still hold mini-CQE arrays.
+  bool cqe_compression = false;
+  uint32_t zip_start = 0;
+  uint32_t zip_cnt = 0;
+  uint32_t zip_ai = 0;
+  uint32_t zip_tag = 0;
+  uint64_t zip_ts = 0;
+  uint64_t compressed_sessions = 0;
+  uint64_t compressed_cqes = 0;
   // App-ring-full drops: the worker assembled a burst but get_rx_burst wasn't
   // draining fast enough, so the burst was dropped (strides released, metadata
   // returned). Worker-written, read by print_stats.
@@ -375,15 +392,15 @@ struct IbvRxQueue {
 struct IbvTxQueue {
   std::atomic<ResourceState> state{ResourceState::CREATING};
   std::atomic<uint64_t> active_users{0};
-  int port_id = 0;
-  int queue_id = 0;
+  int port_id = -1;
+  int queue_id = -1;
   QueuePollMode poll_mode = QueuePollMode::INDIRECT;
   int cpu_core = -1;
   int batch_size = 1;
   int num_segs = 1;
   // One TX region per packet segment. Single-region (normal) TX uses region 0
-  // only; HDS TX scatters segment s from regions[s] (region 0 = CPU header MR,
-  // region 1 = GPU payload MR), each with its own lkey. mr_base/lkey/slot_size
+  // only; multi-segment TX gathers segment s from regions[s], each with its own
+  // lkey. HDS is the two-region CPU-header/GPU-payload case. mr_base/lkey/slot_size
   // mirror region 0.
   struct TxRegion {
     uint8_t* base = nullptr;
@@ -462,6 +479,8 @@ struct IbvTxQueue {
   daqiri::Ring* send_ring = nullptr;  // bursts handed off for posting
   std::thread compl_worker;
   std::atomic<bool> running{false};
+  // Optional ownership state; keep the cyclic queue fields at their existing offsets.
+  std::unique_ptr<detail::SharedTxState> shared_tx;
 };
 
 /**
@@ -512,6 +531,8 @@ class IbverbsEngine : public Engine {
 
   // Free family
   void free_all_segment_packets(BurstParams* burst, int seg) override;
+  Status clone_tx_burst(const BurstParams* source, uint32_t shared_segment_mask,
+                        BurstParams** clone) override;
   void free_all_packets(BurstParams* burst) override;
   void free_packet_segment(BurstParams* burst, int seg, int pkt) override;
   void free_packet(BurstParams* burst, int pkt) override;
@@ -562,6 +583,10 @@ class IbverbsEngine : public Engine {
   Status get_reorder_missing_info(BurstParams* burst, ReorderMissingInfo* info) override;
 
  private:
+  friend class IbverbsEngineTxTestPeer;
+  friend class IbverbsEngineRxTestPeer;
+
+  const detail::RawVerbsApi* verbs_ = nullptr;
   struct PortSteering;
 
   bool use_hugepage_arenas() const override {
@@ -682,13 +707,24 @@ class IbverbsEngine : public Engine {
   // Release `strd` strides belonging to `wqe_idx`; repost the region if fully
   // released. This is the per-burst free hot path.
   void release_strides(IbvRxQueue& q, uint32_t wqe_idx, uint32_t strd, bool tracked_packet = true);
+  // Releases a burst's packets, coalescing consecutive packets from the same WQE
+  // into one atomic update.
+  void release_stride_runs(IbvRxQueue& q, const uint16_t* wqe_arr, const uint16_t* strd_arr,
+                           size_t num);
 
   // ---- TX path ----
+  bool initialize_burst_pools();
+  Status validate_shared_tx_burst(const IbvTxQueue& q, const BurstParams* burst) const;
+  Status clone_shared_tx_burst(IbvTxQueue& q, const BurstParams* source, uint32_t mask,
+                               BurstParams** clone);
+  bool shared_mr_conflict(const std::vector<std::string>& names, bool shared) const;
   Status setup_tx_queue(IbvTxQueue& q, const InterfaceConfig& intf, const TxQueueConfig& qcfg);
   Status create_tx_raw_qp(IbvTxQueue& q);  // IBV_QPT_RAW_PACKET, RESET->RTS
   Status configure_tx_pacing(IbvTxQueue& q, uint64_t pacing_mbps);
   void post_tx_burst(IbvTxQueue& q, BurstParams* burst);  // build send WQEs + ring doorbell
   void post_endpoint_inline_burst(IbvTxQueue& q, BurstParams* burst);
+  Status prepare_endpoint_tx_burst(const IbvTxQueue& q, const EndpointFastPath& endpoint,
+                                   BurstParams* burst);
   void post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst, uint16_t first_packet = 0);
   // Build a WAIT-on-time WQE (ctrl + wseg = 1 WQEBB, no slot) at q.sq_pi that
   // holds the following send(s) until the NIC real-time clock reaches when_ns,
@@ -777,25 +813,30 @@ class IbverbsEngine : public Engine {
   std::vector<struct ibv_mr*> registered_mrs_;
   std::unordered_map<std::string, std::vector<struct ibv_mr*>> registered_mrs_by_name_;
 
-  // Cached mlx5 clock-info per device for converting the CQE's free-running HW
-  // timestamp to nanoseconds (mlx5dv_ts_to_ns). Refreshed lazily (the HW clock
-  // wraps), guarded because app RX-consume threads may convert concurrently.
-  struct ClockCache {
-    uint64_t refresh_tsc = 0;  // rte timer cycles at last refresh
-    bool valid = false;
-    struct mlx5dv_clock_info info {};
-  };
-  std::unordered_map<struct ibv_context*, ClockCache> clock_cache_;
-  std::mutex clock_mtx_;
+  // Converts the CQE's free-running HW timestamp to nanoseconds
+  // (mlx5dv_ts_to_ns) using a per-thread clock-info cache.
   uint64_t ts_to_ns(struct ibv_context* ctx, uint64_t raw_ts);
 
   // RX/TX queues, owned here. Pointers handed to worker threads are stable.
   std::vector<std::unique_ptr<IbvRxQueue>> rx_queues_;
   std::vector<std::unique_ptr<IbvTxQueue>> tx_queues_;
 
+  // Lock-free [port][queue] lookup used by acquire_rx_queue/acquire_tx_queue so
+  // the data-path API does not serialize on resource_lock_. Entries are set when
+  // a queue becomes ACTIVE and cleared when it is destroyed; removed queue
+  // objects are kept in retired_*_queues_ until shutdown because a reader may
+  // still hold a pointer it loaded just before the entry was cleared.
+  std::array<std::array<std::atomic<IbvRxQueue*>, MAX_NUM_RX_QUEUES>, MAX_INTERFACES>
+      rx_queue_table_{};
+  std::array<std::array<std::atomic<IbvTxQueue*>, MAX_NUM_TX_QUEUES>, MAX_INTERFACES>
+      tx_queue_table_{};
+  std::vector<std::unique_ptr<IbvRxQueue>> retired_rx_queues_;
+  std::vector<std::unique_ptr<IbvTxQueue>> retired_tx_queues_;
+
   // When both lifecycle locks are needed, acquire flow_lock_ before
-  // resource_lock_. Queue-use references are acquired under resource_lock_ so
-  // DRAINING and active_users form one atomic lifetime transition.
+  // resource_lock_. Control-path lookups run under resource_lock_; data-path
+  // queue-use references are taken lock-free from the queue tables, and
+  // DRAINING/REMOVED transitions pair with active_users via seq_cst ordering.
   mutable std::recursive_mutex resource_lock_;
   std::mutex resource_operation_lock_;
   ResourceOpId next_resource_op_id_ = 1;
@@ -930,6 +971,7 @@ class IbverbsEngine : public Engine {
   // /stride arrays; see the .cpp for the layout.
   daqiri::ObjectPool* rx_meta_pool_ = nullptr;
   daqiri::ObjectPool* tx_meta_pool_ = nullptr;
+  std::vector<BurstParams*> tx_metadata_objects_;
   size_t rx_meta_pool_size_ = 0;
   uint32_t max_batch_ = 0;  // largest batch_size across RX+TX queues
   static constexpr uint32_t kDirectPollMaxBatch = 256;

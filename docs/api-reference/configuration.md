@@ -57,6 +57,11 @@ These settings apply globally to both TX and RX:
   `roce://` endpoint URIs by default.
   - type: `string`
   - values: `dpdk`, `socket`, `ibverbs`
+  - Builds with `DAQIRI_IBVERBS_DLOPEN=ON` require the selected raw ibverbs or
+    RoCE engine's glue library and compatible system RDMA shared libraries at
+    initialization. This is a CMake option; YAML engine selection uses the same
+    values. See [runtime RDMA library deployment](../tutorials/bare-metal-cmake-build.md#daqiri_ibverbs_dlopen-runtime-rdma-libraries)
+    for installation and `DAQIRI_RDMA_GLUE_DIR` search-path guidance.
 - **`log_level`**: Engine log level.
   - type: `string`
   - values: `trace`, `debug`, `info`, `warn` (default), `error`, `critical`, `off`
@@ -104,6 +109,10 @@ runtime binding.
       the integrated GPU in a hybrid-GPU system such as IGX Thor. On discrete-GPU systems,
       prefer `device` for high-throughput RX/TX paths.
     - `host`: Regular CPU memory (not recommended)
+    - `null`: Discards bytes in raw ibverbs RX without allocating storage.
+      `num_bufs`, `affinity`, and `access` may be omitted and are ignored with a warning
+      when supplied. No external binding is allowed. The kind must be quoted as
+      `"null"`; YAML null values such as a blank value, `~`, or unquoted `null` are invalid.
   With the raw ibverbs engine, DAQIRI-owned `huge` regions declared in the startup configuration
   and having the same NUMA affinity share a hugetlb arena. DAQIRI chooses the available page size
   that can back the regions with the least rounding, while registering every region separately.
@@ -131,14 +140,26 @@ runtime binding.
   - type: `integer`
 - **`access`**: Memory access permissions.
   - type: `list`
-  - values: `local`, `rdma_read`, `rdma_write`
+  - values: `local`, `rdma_read`, `rdma_write`, `relaxed_ordering`
+
+  `relaxed_ordering` requests PCIe relaxed ordering for NIC DMA into the region and is honored
+  by the raw `ibverbs` engine and the RoCE (`roce://`) engine. It can raise GPUDirect RX
+  bandwidth on discrete-GPU hosts, but leave it off on Tegra/IGX: it has caused receive-side
+  local protection errors there. If the device rejects the flag, DAQIRI retries the
+  registration without it and logs a warning.
+  - For one-sided RDMA, `rdma_read` permits a peer to read this region and
+    `rdma_write` permits a peer to write it. A local READ destination requires
+    `local`. The RDMA engine also enables local-write registration permission
+    whenever `rdma_write` is selected. See
+    [RDMA reads and writes](cpp.md#rdma-reads-and-writes).
 - **`num_bufs`**: Number of buffers in this region. Higher values give more processing
   headroom but consume more memory (GPU BAR1 for `device`). Too low risks dropped packets
-  on RX or a TX stall. For socket TCP RX queues, the smallest `num_bufs` among the queue's
-  memory regions bounds the number of bursts DAQIRI holds internally. When that queue fills,
-  DAQIRI stops calling `recv()`, allowing TCP flow control to backpressure the sender. UDP RX
-  does not wait for this internal queue capacity. See
-  [TCP receive backpressure and queue sizing](../benchmarks/socket_benchmarking.md#tcp-receive-backpressure-and-queue-sizing)
+  on RX or a TX stall. For socket TCP and UDP RX queues, the smallest `num_bufs` among the
+  queue's memory regions bounds the number of packets DAQIRI holds internally. When that
+  queue fills, DAQIRI stops consuming from the socket. TCP flow control backpressures the
+  sender; UDP fills the bounded kernel receive buffer and drops excess datagrams. A UDP burst
+  may contain up to `batch_size` datagrams, but every datagram counts against the limit. See
+  [Receive backpressure and queue sizing](../benchmarks/socket_benchmarking.md#receive-backpressure-and-queue-sizing)
   for sizing guidance and ownership details. Raw DPDK queue regions use a floor of
   `max(1.5 * ring, ring + 2 * batch_size)`. DAQIRI bumps values below that floor to
   `max(3 * ring, ring + 4 * batch_size)` and warns with the exact `num_bufs` to configure.
@@ -154,8 +175,51 @@ runtime binding.
   reported by the demonstrated ConnectX-7 device.
   - type: `integer`
 - **`buf_size`**: Size of each buffer in bytes. Should match the expected packet size, or
-  the segment size when using header-data split.
+  the segment size when using header-data split. For `kind: "null"`, `buf_size` is an
+  unsigned 32-bit discard length. It must be positive when another region follows;
+  a final null region may omit it or use `0` to discard the remainder.
   - type: `integer`
+
+### Example: Discard headers before retaining the payload
+
+Set the null region's `buf_size` to the number of bytes to discard before the payload:
+
+```yaml
+memory_regions:
+  - name: DISCARD
+    kind: "null"
+    buf_size: 42
+  - name: PAYLOAD
+    kind: device
+    affinity: 0
+    access: [local]
+    num_bufs: 8192
+    buf_size: 4096
+```
+
+Reference the regions by name in the RX queue. The NIC discards the first 42 bytes
+and writes the payload directly to GPU memory:
+
+```yaml
+memory_regions:
+  - DISCARD
+  - PAYLOAD
+```
+
+Null entries count toward the four-segment limit and force a regular RQ. Its slot count
+comes from the smallest retained region's `num_bufs`, rounded down to a power of two and
+capped at 32768. A discard-only queue uses at least 256 receive slots,
+rounded up to a power of two large enough for `batch_size`, up to 32768 slots.
+An indirect regular RQ with `timeout_us: 0` rejects a batch larger than its slot count.
+A positive timeout allows partial bursts. Receive errors may produce partial indirect
+bursts even with `timeout_us: 0`.
+
+Discarded segments report a null packet pointer and their consumed byte count, including
+zero when the packet ends earlier. Raw, pcap, and S3 writers represent discarded spans
+with zero-filled bytes, preserving packet lengths and offsets. Free each burst as usual.
+Null regions cannot be used for TX, reorder input/output, or socket/RDMA/DPDK queues. Fixed discard lengths contribute
+to automatic MTU sizing; an unbounded final discard does not describe a maximum wire size,
+so configure the netdev MTU for the expected frames when there is no matching local TX queue.
 
 ### Example: Header-Data Split
 
@@ -233,7 +297,19 @@ engine.
 
 - **`roce_config.transport_mode`**: RDMA transport type.
   - type: `string`
-  - values: `RC` (Reliable Connected), `UC` (Unreliable Connected)
+  - values: `RC` (Reliable Connected, default), `UC` (Unreliable Connected),
+    `UD` (Unreliable Datagram)
+
+Both peers must select the same transport. RC supports SEND/RECEIVE, RDMA READ,
+WRITE, and WRITE_IMM. UC supports SEND/RECEIVE, WRITE, and WRITE_IMM; READ requires
+RC. UD supports SEND/RECEIVE only, with each SEND limited to the active RDMA
+port MTU. DAQIRI supplies the UD destination address and discards the 40-byte
+GRH into a separate registered receive SGE, keeping application buffers and
+reported packet lengths payload-only. UC and UD do not retry lost packets or
+receive-credit underruns; coordinate receive posting with the sender. Successful
+local send completions do not guarantee peer delivery on these transports.
+UD uses RoCEv2 over IPv4. When configured interfaces use different transport
+modes, pass an explicit source address to `rdma_connect_to_server`.
 
 Each RoCE client connection uses one TX queue from the interface whose `address`
 field matches the connection's local IP address. An application can choose that
@@ -257,21 +333,24 @@ TX queues on that interface are already in use.
   - type: `integer`
 - **`poll_mode`**: `indirect` uses the current DAQIRI RX worker and application handoff ring.
   `direct` makes the thread calling `get_rx_burst()` poll the NIC synchronously and is supported
-  only by the raw ibverbs engine.
+  by the raw ibverbs engine and the RDMA engine (`roce://` endpoints). For RDMA,
+  it also posts RECEIVE work requests on the calling thread; the connection completion API
+  polls direct RX and TX completion queues.
   - type: `string`
   - values: `indirect`, `direct`
   - default: `indirect`
 - **`cpu_core`**: CPU core ID for the RX worker thread. Required in indirect mode and forbidden
-  in direct mode. For `udp://` socket endpoints, this pins the thread that calls `recvmmsg()`;
+  in direct mode. For `udp://` and `tcp://` socket endpoints, this pins the receive thread
+  that calls `recvmmsg()` or `recv()`, respectively;
   application threads use their own affinity settings. Should be an isolated core for best
-  performance. Use `-1` to leave a socket UDP receive thread unpinned.
+  performance. Use `-1` to leave a socket receive thread unpinned.
   - type: `string`
 - **`batch_size`**: Maximum number of packets per batch passed to the application. Larger values
   increase throughput, and smaller values reduce latency. For `udp://` socket endpoints, one
   `recvmmsg()` call returns up to this many datagrams; valid values are 1-32. UDP servers without
   a configured `remote_addr` are limited to one datagram per burst. Required in indirect mode and
-  forbidden in direct mode. A direct poll returns the packets currently ready, up to 256, without
-  waiting.
+  forbidden in direct mode. A raw ibverbs direct poll returns the packets currently ready,
+  up to 256, without waiting; RDMA returns one connection completion per successful call.
   - type: `integer`
   - C++ or Python callers constructing an indirect UDP RX queue programmatically must set this
     field explicitly. The default `CommonQueueConfig` value of `0` is not a valid UDP batch size.
@@ -279,12 +358,27 @@ TX queues on that interface are already in use.
   The order determines segment mapping: first region = segment 0, second = segment 1, etc.
   A single region means all packet data lands in one place, while two regions enables header-data
   split.
+  For raw ibverbs RX, up to four regions are supported. Each region receives up to
+  its configured `buf_size` bytes, in list order; allocation padding does not change
+  the split boundaries. A short packet can leave later segments with zero length.
+  Multi-region queues always use a regular scatter RQ, including when
+  `DAQIRI_IBV_STRIDING=1` is set. Raw ibverbs TX also supports up to four regions,
+  gathered in list order using the per-packet segment lengths set by the application.
   - type: `list`
 - **`timeout_us`**: Timeout in microseconds. A partial batch is delivered if this time elapses
   before `batch_size` packets are collected. Set to `0` to disable (wait for full batch only).
   Forbidden in direct mode.
   - type: `integer`
   - default: `0`
+- **`cqe_compression`**: Raw `ibverbs` engine only. Enables mlx5 RX CQE compression on a
+  single-region (striding) queue: the NIC packs up to eight completions into one 64-byte CQ
+  entry, cutting completion PCIe traffic for small packets. On a compressed queue,
+  `get_packet_rx_timestamp()` returns `NOT_SUPPORTED`, and a packet's flow tag comes from the
+  first completion of its compressed group. DAQIRI ignores the option (with a warning) on
+  multi-region queues, when `rx.hardware_timestamps` is enabled, or when the interface has a
+  reorder configuration, and falls back to an uncompressed CQ if the NIC rejects it.
+  - type: `boolean`
+  - default: `false`
 
 Direct queues must be polled by exactly one user thread per queue. They do not create an RX
 worker or handoff ring, so an application stall also stops packet reception and buffer recycling.
@@ -454,6 +548,18 @@ The raw ibverbs engine requests the mlx5 real-time CQ timestamp format only when
 the device advertises it; otherwise it uses the default mlx5 device-clock CQ
 format and converts those ticks to nanoseconds internally. Device-clock ticks are
 not exposed by the public API.
+For RDMA/RoCE without accurate TX, the flag requests both device-clock and
+wall-clock timestamp fields on receive completions in all polling modes. On mlx5
+this keeps the RX CQ
+compatible with the ordinary TX CQ and enables the provider's device-clock-to-epoch
+conversion. With accurate TX, both CQs use real-time format, and DAQIRI normalizes
+packed seconds/nanoseconds before returning timestamps. RX timestamps
+work without accurate TX scheduling enabled. Connection setup fails if the provider
+cannot create the timestamp-capable receive CQ. Each timestamp describes
+a completed RDMA message, which may span multiple wire packets. Successful
+`RDMA_WRITE_IMM` receiver notifications also expose timestamps, including zero-byte
+notifications. Plain READ/WRITE operations generate no receiver CQ event; neither
+their remote targets nor local TX completions expose RX timestamps.
 **WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or system clock
 configuration. Timestamp values are invalid if the clocks are not PTP-synchronized.
 
@@ -582,8 +688,18 @@ without an epoch field, an old late packet is indistinguishable from the same sl
 - **`id`**: Integer ID used for burst submission.
   - type: `integer`
 - **`poll_mode`**: `indirect` hands bursts to a DAQIRI TX worker. `direct` makes the calling
-  thread submit one packet immediately and manage transmit progress; it is supported only by
-  the raw ibverbs engine.
+  thread submit one packet immediately and manage transmit progress; it is supported by
+  the raw ibverbs and RDMA engines. Direct RDMA TX posts
+  SEND/READ/WRITE/WRITE_IMM work from the caller;
+  `get_rx_burst(&burst, conn_id, server)` drives its completions. Single-packet SEND messages in
+  `huge` or `host_pinned` memory are inlined when they fit the QP's returned inline capacity
+  (128 bytes requested). Device-memory messages remain DMA-based. RDMA requires one packet
+  per direct SEND or RECEIVE posting. Connections pair RX and TX queues by list position;
+  configure both directions for a direct connection. Polling modes may differ. The worker
+  uses the TX `cpu_core` when TX is indirect, otherwise the RX `cpu_core`. When both directions
+  are direct, no data-path worker is created and one application thread must own the
+  entire connection. Fully direct progress avoids the connection mutex, request maps,
+  and handoff ring; mixed modes keep the synchronized worker path.
   - type: `string`
   - values: `indirect`, `direct`
   - default: `indirect`
@@ -595,7 +711,32 @@ without an epoch field, an old late packet is indistinguishable from the same sl
   direct mode; direct TX requires exactly one packet per API submission.
   - type: `integer`
 - **`memory_regions`**: List of memory region names. Same segment mapping rules as RX.
+  Raw ibverbs supports one to four CPU/GPU regions in both polling modes. Each packet
+  uses one buffer from every region. With the default cyclic allocator, the smallest
+  `num_bufs` bounds packet capacity.
+  Set each segment's actual length before sending. The NIC concatenates the segments
+  into one wire packet, for example CPU network headers, CPU message headers, and a
+  GPU payload. Keep the Ethernet/IPv4/UDP header in segment 0 when using the header
+  helpers; its IP/UDP lengths must include the later segments. Named endpoints instead
+  insert the network header inline and treat all configured regions as UDP payload.
   - type: `list`
+- **`buffer_mode`**: `cyclic` (default) retains cyclic packet-slot allocation. `shared`
+  enables independent segment pools and `clone_tx_burst()` on raw ibverbs indirect TX
+  queues. Selected segments are reference counted through local TX completion; CPU
+  segments outside the clone mask receive private copies. A shared queue's MRs must
+  belong exclusively to that queue, with no repeated region or RX/reorder alias.
+  Direct polling and other engines reject shared mode. Shared mode uses ordinary
+  SEND WQEs; eMPW packing is disabled.
+- **`max_inflight_sends`**: Shared-mode send-credit limit, independent of storage pool
+  sizes. `0`/omitted selects twice the smallest region's `num_bufs`. The effective
+  limit, whether explicit or automatically derived, must fit the device capacity and
+  be at least `batch_size`. Queued, worker-pending, and NIC-posted packets all consume
+  credits until completion. This field requires `buffer_mode: shared` when nonzero.
+  For two sends with private header segments and one shared payload buffer, use
+  `batch_size: 1`, two buffers in each header MR, one in the payload MR, and at least
+  two send credits. Acquire a one-packet burst, clone it, and submit the two bursts
+  separately. Acquiring a fresh two-packet burst would require two buffers in every
+  region. A clone allocates no new buffer in a selected shared segment.
 - **`offloads`**: List of hardware offloads to enable. Each offload installs an RTE Flow rule
   during `daqiri_init()`; initialization fails if the NIC cannot program the rule.
   - type: `list`
@@ -666,6 +807,29 @@ PTP-synchronized. DAQIRI requires ConnectX-7 or later for send-on-timestamp.
 
 - type: `boolean`
 - default: `false`
+
+Accurate send supports RDMA `SEND`, `RDMA_READ`, `RDMA_WRITE`, and
+`RDMA_WRITE_IMM` operations on `roce://` endpoints,
+in direct and indirect TX modes. SEND retains its normal transport support;
+READ requires RC, while WRITE and WRITE_IMM support RC and UC, as for immediate submission.
+Set `accurate_send: true` under the sending
+interface's `tx` section before connecting. Connection setup fails if the mlx5
+device lacks wait-on-time, a 1 GHz clock, or a RoCE QP timestamp format that supports
+real time. Accurate-send connections use matching wall-clock RX and TX CQs;
+free-running-only QPs are rejected even when wait-on-time is available. There is
+no software timing fallback. This can be combined with `rx.hardware_timestamps: true`;
+returned RX timestamps remain epoch nanoseconds.
+Call `set_packet_tx_time()` after setting the RDMA header and acquiring buffers.
+Zero clears a packet's timestamp; setting a new RDMA header clears all timestamps
+on that burst. Timestamps must be strictly less than four seconds ahead of or behind the current
+PTP-synchronized `CLOCK_REALTIME`. DAQIRI checks this when setting a timestamp and
+again when posting it; the eight-second cyclic comparison is ambiguous outside
+this half-cycle. Submit early enough to reach the NIC before the target time.
+A scheduled operation gates subsequent SQ operations on the same connection.
+For READ, the target gates request issuance, not response arrival. Zero-byte
+WRITE_IMM notifications can also be scheduled. RC flow control,
+receiver readiness, and retransmissions can delay delivery beyond that time.
+Linux UDP/TCP sockets do not support this scheduling API.
 
 ## Complete Example (Raw Ethernet, Header-Data Split)
 

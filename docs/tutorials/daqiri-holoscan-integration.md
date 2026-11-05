@@ -3,18 +3,18 @@ hide:
   - navigation
 ---
 
-# DAQIRI + Holoscan Integration
+# DAQIRI + Holoscan SDK (HSDK) Integration
 
 This tutorial demonstrates how the DAQIRI library can be integrated into an NVIDIA
-Holoscan application. The [Holoscan SDK](https://developer.nvidia.com/holoscan-sdk)
+HSDK application. The [Holoscan SDK (HSDK)](https://developer.nvidia.com/holoscan-sdk)
 is NVIDIA's sensor-processing platform optimized for real-time GPU processing and
 AI inferencing, with applications in scientific computing, healthcare, medical
 robotics, and more.
 
 This tutorial shows a minimal C++ example demonstrating the main principles of
-using DAQIRI in a Holoscan application: it ingests a raw Ethernet stream, uses
+using DAQIRI in an HSDK application: it ingests a raw Ethernet stream, uses
 DAQIRI's GPU reorder/quantize plan to turn it into sequence-ordered, quantized
-batches, and emits each batch as a GPU tensor into a Holoscan pipeline. The snippets
+batches, and emits each batch as a GPU tensor into an HSDK pipeline. The snippets
 below link against both `libdaqiri` and `libholoscan`; a complete, build-tested
 project with a working CMake setup lives in Holohub (see [References](#references)).
 
@@ -23,20 +23,20 @@ To achieve peak IO performance, be sure to review the
 confirm the DAQIRI YAML works with the standalone benchmarks in
 [Raw Ethernet Benchmarking](../benchmarks/raw_benchmarking.md) and to review the
 [configuration walkthrough](configuration-walkthrough.md) before wiring DAQIRI into
-Holoscan.
+HSDK.
 
 ## Application Lifecycle
 
-A Holoscan application is a directed acyclic graph of operators (the fundamental
+An HSDK application is a directed acyclic graph of operators (the fundamental
 units of work) connected by data flows and run by a scheduler. DAQIRI owns NIC
 setup, packet memory, and RX burst lifetimes. The operators in the graph pull
 received data from DAQIRI and pass it downstream as tensors.
 
-The recommended Holoscan pattern is to pass one YAML file into the application
-with `app->config(...)`, read Holoscan operator parameters with `from_config(...)`,
+The recommended HSDK pattern is to pass one YAML file into the application
+with `app->config(...)`, read HSDK operator parameters with `from_config(...)`,
 and initialize DAQIRI from the same YAML during graph composition before any
 DAQIRI-backed operators run. DAQIRI handles any configured GPU reorder/quantize
-plan internally. The Holoscan source operator is just the adapter that polls DAQIRI
+plan internally. The HSDK source operator is just the adapter that polls DAQIRI
 and emits completed batches to downstream operators.
 
 ```cpp
@@ -111,9 +111,9 @@ int main(int argc, char** argv) {
 }
 ```
 
-The shared YAML file carries Holoscan parameters (the `scheduler` block and each
+The shared YAML file carries HSDK parameters (the `scheduler` block and each
 operator's parameter block) alongside the `daqiri` block passed to
-`daqiri_init(...)`. DAQIRI ignores Holoscan-only keys, and Holoscan operators read
+`daqiri_init(...)`. DAQIRI ignores HSDK-only keys, and HSDK operators read
 their own parameter blocks with `from_config(...)`.
 
 ```yaml
@@ -382,7 +382,7 @@ The source operator emits a `holoscan::TensorMap` on port `out` with a single en
 named `rx_tensor`. `holoscan::Tensor` interoperates through
 [DLPack](https://dmlc.github.io/dlpack/latest/), so `wrap_reorder_output_as_tensor`
 describes the reordered device buffer with a `DLManagedTensor` and constructs a tensor
-from it (`DLPack` types come from `dlpack/dlpack.h`, bundled with the Holoscan SDK):
+from it (`DLPack` types come from `dlpack/dlpack.h`, bundled with the HSDK):
 
 ```cpp
 std::shared_ptr<holoscan::Tensor> DaqiriRxOp::wrap_reorder_output_as_tensor(
@@ -426,7 +426,7 @@ std::shared_ptr<holoscan::Tensor> DaqiriRxOp::wrap_reorder_output_as_tensor(
 
 Downstream operators receive an fp32 `[packets_per_batch, elements_per_packet]` tensor
 on the GPU, ready for inference or further processing with no host copy. The exact
-DLPack and tensor-construction details track the Holoscan SDK version. A complete,
+DLPack and tensor-construction details track the HSDK version. A complete,
 build-tested implementation lives in the Holohub example (see [References](#references)).
 
 ## Sink Operator Skeleton
@@ -477,7 +477,7 @@ class TensorSinkOp : public holoscan::Operator {
 - The standalone `daqiri_bench_raw_reorder_quantize` benchmark
   (`examples/raw_reorder_quantize_bench.cpp`, config
   `daqiri_bench_raw_tx_rx_reorder_quantize_seq_batch.yaml`) exercises the same
-  reorder/quantize path outside Holoscan, a good way to validate the DAQIRI config
+  reorder/quantize path outside HSDK, a good way to validate the DAQIRI config
   first. See [Raw Ethernet Benchmarking](../benchmarks/raw_benchmarking.md).
 - The landed Holohub reference app is
   [`applications/daqiri_raw_ethernet_bench`](https://github.com/nvidia-holoscan/holohub/tree/main/applications/daqiri_raw_ethernet_bench).

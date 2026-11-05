@@ -313,6 +313,7 @@ template <typename Config> EngineType get_engine_type(const Config &config);
  * @param idx Index of packet
  * @return Pointer to packet data
  */
+// Raw ibverbs null-MR segments return nullptr; their length counts discarded bytes.
 void *get_segment_packet_ptr(BurstParams *burst, int seg, int idx);
 
 /**
@@ -629,12 +630,22 @@ Status set_all_packet_lengths(BurstParams *burst,
  * transmitted after this one in the same queue will be transmitted no earlier
  * than the time listed in the function call. This feature is only available on
  * ConnectX-7 or BlueField 3 and higher cards.
+ * RDMA SEND, READ, WRITE, and WRITE_IMM support this API with tx.accurate_send
+ * enabled, in either TX
+ * polling mode. Set the RDMA header and acquire buffers before scheduling;
+ * rdma_set_header clears old timestamps, and time=0 clears one timestamp.
+ * RDMA targets must be strictly less than four seconds from CLOCK_REALTIME at
+ * assignment and posting. Submit ahead of the target time. RC backpressure and
+ * retries can delay transmission further. READ schedules request issuance,
+ * not response arrival. Zero-byte WRITE_IMM notifications can be scheduled.
  *
  * @param burst Burst structure containing packet lists
  * @param idx Index of packet
  * @param time PTP time to transmit
  * @return Status indicating status. Valid values are:
  *    SUCCESS: Time set successfully
+ *    NOT_SUPPORTED: Scheduling is disabled or unsupported
+ *    INVALID_PARAMETER: Invalid burst, index, or RDMA operation
  */
 Status set_packet_tx_time(BurstParams *burst, int idx, uint64_t time);
 
@@ -647,7 +658,8 @@ uint64_t get_burst_tot_byte(BurstParams *burst);
  * files are truncated. packet_data_offset skips bytes from the logical packet
  * data before writing, walking across all packet segments in order. Host-backed
  * packet segments are written with POSIX file APIs. CUDA device-backed segments
- * require DAQIRI_ENABLE_GDS=ON and cuFile support.
+ * require DAQIRI_ENABLE_GDS=ON and cuFile support. Null-MR spans are zero-filled,
+ * preserving logical packet offsets.
  *
  * @param burst Burst structure containing packets
  * @param absolute_path Existing absolute directory path to write into
@@ -689,7 +701,8 @@ Status daqiri_write_raw_to_file_async(BurstParams *burst,
  * exist or is empty, a classic pcap v2.4 global header is written first. If the
  * file exists, it must already contain a compatible Ethernet,
  * microsecond-resolution pcap header. PCAP writes always include full logical
- * packets across all segments; no packet-data offset is applied.
+ * packets across all segments; no packet-data offset is applied. Null-MR spans
+ * are zero-filled and included in both captured and original packet lengths.
  *
  * @param burst Burst structure containing packets
  * @param absolute_path Existing absolute directory path to write into
@@ -770,6 +783,7 @@ Status daqiri_s3_writer_create(const S3WriterConfig &config,
  * packet's logical bytes into DAQIRI-owned host memory before returning, so the
  * caller may free the burst after successful submission. No multipart upload is
  * performed; objects larger than the S3 single-PUT limit are not supported.
+ * Null-MR spans are zero-filled; packet_data_offset counts their logical bytes.
  *
  * @param writer Writer returned by daqiri_s3_writer_create()
  * @param burst Burst structure containing packets
@@ -1008,36 +1022,47 @@ void set_num_packets(BurstParams *burst, int64_t num);
 /**
  * @brief Send a TX burst.
  *
- * Takes ownership of @p burst on SUCCESS and on NO_SPACE_AVAILABLE. Indirect
- * mode hands a successful burst to the TX worker; raw ibverbs direct mode has
- * already submitted its single packet before returning SUCCESS. On
- * NO_SPACE_AVAILABLE it has already freed the packets and burst internally.
- * In all ownership-consuming cases the caller must
- * NOT free or otherwise access @p burst afterwards. NO_SPACE_AVAILABLE is the
- * only failure a correctly-configured sender hits at runtime.
+ * Takes ownership of @p burst on SUCCESS. Indirect mode hands it to a TX
+ * worker; direct mode posts it synchronously. The caller must not access the
+ * submitted burst until RDMA returns it as a completion (raw TX reclaims it
+ * internally). A returned RDMA completion may be reused or freed.
+ *
+ * Raw/socket TX and an indirect RDMA work-ring overflow also consume and free
+ * the burst on NO_SPACE_AVAILABLE. Fully direct RDMA instead retains caller
+ * ownership on queue-credit exhaustion: poll completions before retrying.
+ * Failed direct RDMA posts retain caller ownership on every error status.
  *
  * @param burst Burst structure
  * @return Status indicating result. Valid values are:
  *    SUCCESS: burst enqueued or directly posted (ownership transferred)
- *    NO_SPACE_AVAILABLE: No transmit capacity; burst already freed (ownership consumed)
- *    INVALID_PARAMETER: bad port/queue; burst NOT consumed (see issue #164)
- *    NOT_READY: direct queue called concurrently or from a non-owner thread; burst not consumed
+ *    NO_SPACE_AVAILABLE: No transmit capacity; see the ownership rules above
+ *    INVALID_PARAMETER: bad port/queue or invalid direct request; burst not consumed
+ *    NOT_READY: direct queue stopped or called by a non-owner thread; burst not consumed
+ *    GENERIC_FAILURE: direct RDMA posting failed; burst not consumed
  */
 Status send_tx_burst(BurstParams* burst);
+
+/**
+ * Clone an application-owned raw ibverbs shared-mode TX burst. Bit s shares
+ * segment s; other segments receive private CPU copies. Clone before submission.
+ * Shared bytes must remain immutable until all owners complete or cancel.
+ * Failure leaves source unchanged and sets *clone to nullptr. Scheduling and
+ * custom application metadata are not copied. Other engines return NOT_SUPPORTED.
+ */
+Status clone_tx_burst(const BurstParams* source, uint32_t shared_segment_mask, BurstParams** clone);
 
 /**
  * @brief Send a TX burst through a named endpoint on an explicitly selected queue.
  *
  * The burst must have been allocated from @p queue_id on the endpoint's
- * interface. Named endpoints currently require a one-segment TX queue and burst;
- * segment 0 is treated as the UDP payload. HDS and other multi-segment bursts
- * are rejected with INVALID_PARAMETER; header-data gather is not supported.
- * DAQIRI
- * copies the cached endpoint template into an inline mlx5 SEND WQE, patches its
- * IPv4 and UDP lengths, and gathers the payload through one registered data
- * segment. Packet buffers contain payload only; checksum fields remain zero
- * for NIC offload. Each payload must fit both the endpoint MTU and the selected
- * TX queue's packet-buffer slot. Validation failures do not consume the burst.
+ * interface. Named endpoints support one to four TX segments, gathered in order
+ * as the UDP payload. Application header and payload segments do not include
+ * Ethernet/IP/UDP header bytes.
+ * DAQIRI copies the cached endpoint template into an inline mlx5 SEND WQE and patches its
+ * IPv4 and UDP lengths from the sum of all segment lengths. Checksum fields
+ * remain zero for NIC offload. Each segment must fit its TX region's slot, and
+ * the aggregate frame must fit the endpoint MTU and IPv4/UDP length limits.
+ * Validation failures do not consume the burst.
  */
 Status send_tx_burst(EndpointId endpoint_id, uint16_t queue_id, BurstParams* burst);
 
@@ -1218,6 +1243,28 @@ Status rdma_get_server_conn_id(const std::string &server_addr,
 Status rdma_set_header(BurstParams *burst, RDMAOpCode op_code,
                        uintptr_t conn_id, bool is_server, int num_pkts,
                        uint64_t wr_id, const std::string &local_mr_name);
+/** Create an explicit RDMA_WRITE_IMM operation with a host-order 32-bit immediate value.
+ * Each packet produces one peer notification; a zero-length packet is notification-only.
+ */
+Status rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id, bool is_server,
+                       int num_pkts, uint64_t wr_id, const std::string& local_mr_name,
+                       uint32_t immediate_data);
+/** Read the host-order immediate value from a successful RDMA_WRITE_IMM request/completion. */
+Status rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data);
+/** Read a successful receiver notification's immediate and remote write byte count.
+ * The byte count describes the remote target, not the receive-credit buffer.
+ */
+Status rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data,
+                               uint32_t* write_length);
+/** Return the local MR descriptor registered for this connection's protection domain. */
+Status rdma_get_memory_region(uintptr_t conn_id, const std::string& mr_name,
+                              RDMAMemoryRegion* region);
+/** Set a contiguous remote range for RDMA_READ/WRITE/WRITE_IMM after setting packet lengths.
+ * Packet p transfers at offset + sum(lengths[0..p-1]). Do not change lengths afterward.
+ * Exchange the descriptor through an application control channel before calling this.
+ */
+Status rdma_set_remote_memory(BurstParams* burst, const RDMAMemoryRegion& region,
+                              uint64_t offset = 0);
 RDMAOpCode rdma_get_opcode(BurstParams *burst);
 
 }; // namespace daqiri

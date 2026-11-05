@@ -1,0 +1,51 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <infiniband/verbs.h>
+#include <rdma/rdma_cma.h>
+
+namespace daqiri::detail {
+
+// Provider-specific operations stay behind the glue boundary, including in
+// builds that do not link the engines to libmlx5/libibverbs.
+int create_timed_qp(rdma_cm_id* id, ibv_pd* pd, ibv_qp_init_attr* attr);
+int post_timed_send(ibv_qp* qp, ibv_send_wr* wr, uint64_t timestamp_ns);
+int prepare_uc_qp(rdma_cm_id* id);
+int query_rdma_port(ibv_context* context, uint8_t port, ibv_port_attr* attr);
+ibv_ah* create_ud_reply_ah(rdma_cm_id* id, ibv_pd* pd);
+
+// Private glue ABI. Bump the version when the function table changes.
+struct RdmaCmApi {
+  static constexpr uint32_t kAbiVersion = 5;
+  uint32_t abi_version;
+  size_t struct_size;
+#define DAQIRI_RDMA_FUNCTION(symbol, member) decltype(&::symbol) member;
+#include "cm_functions.inc"
+#undef DAQIRI_RDMA_FUNCTION
+
+  bool valid() const {
+    if (abi_version != kAbiVersion || struct_size != sizeof(RdmaCmApi)) {
+      return false;
+    }
+#define DAQIRI_RDMA_FUNCTION(symbol, member) \
+  if (member == nullptr) {                   \
+    return false;                            \
+  }
+#include "cm_functions.inc"
+#undef DAQIRI_RDMA_FUNCTION
+    return true;
+  }
+};
+
+// Returns nullptr with a diagnostic on failure. Only successful loads are cached.
+const RdmaCmApi* load_cm_api(std::string& error);
+
+}  // namespace daqiri::detail
+
+extern "C" const daqiri::detail::RdmaCmApi* daqiri_get_cm_verbs_api_v2(uint32_t abi_version,
+                                                                       size_t struct_size);

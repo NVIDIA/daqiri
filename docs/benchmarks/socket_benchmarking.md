@@ -172,13 +172,15 @@ The shipped configs run both endpoints on `127.0.0.1` and are useful for a smoke
   --seconds 10 --mode both
 ```
 
-### TCP receive backpressure and queue sizing
+### Receive backpressure and queue sizing
 
-DAQIRI bounds each TCP RX queue by the smallest `num_bufs` value among the
-memory regions referenced by that queue. Each successful TCP `recv()` becomes
-one DAQIRI burst and consumes one slot until the application calls
-`get_rx_burst()` to remove it from the internal queue. For example, this queue
-allows at most 64 received bursts to wait inside DAQIRI:
+DAQIRI bounds each TCP or UDP RX queue by the smallest `num_bufs` value among
+the memory regions referenced by that queue. The limit counts packets, not
+bursts. Each successful TCP `recv()` becomes one DAQIRI packet; each UDP
+datagram is one packet even when `recvmmsg()` coalesces several datagrams into
+one burst. A packet consumes capacity until the application calls
+`get_rx_burst()` to remove its containing burst from the internal queue. For
+example, this queue allows at most 64 received packets to wait inside DAQIRI:
 
 ```yaml
 memory_regions:
@@ -203,30 +205,37 @@ interfaces:
       memory_regions: ["TCP_RX"]
 ```
 
-When all slots are occupied, the receive threads stop consuming bytes from the
-kernel sockets. The kernel TCP receive window then contracts and eventually
-slows or blocks the sender. This is normal TCP flow control: a sustained slow
+When all slots are occupied, the receive thread stops consuming from the kernel
+socket. For TCP, the kernel receive window contracts and eventually slows or
+blocks the sender. This is normal TCP flow control: a sustained slow
 GPU/application consumer should reduce achieved throughput instead of causing
 DAQIRI's internal queue to grow until the process runs out of memory. An idle
-connection waits for readable data without reserving a slot, so it does not
+TCP connection waits for readable data without reserving a slot, so it does not
 prevent an active connection sharing the endpoint queue from receiving.
+
+UDP has no sender backpressure. When its DAQIRI queue is full, the receive thread
+stops calling `recvmmsg()`. The bounded kernel socket receive buffer then fills
+and the kernel drops excess datagrams. If only part of a configured UDP
+`batch_size` remains available, DAQIRI passes that smaller count to `recvmmsg()`;
+the internal packet backlog therefore never exceeds `num_bufs`.
 
 Choose `num_bufs` according to the amount of receive jitter to absorb:
 
 - Increase it to tolerate longer temporary compute stalls, at the cost of more
   queued payload memory and later backpressure.
-- Decrease it to apply backpressure sooner and reduce the maximum internal
-  backlog. A value of `1` permits one waiting burst.
+- Decrease it to apply TCP backpressure or UDP kernel dropping sooner and reduce
+  the maximum internal backlog. A value of `1` permits one waiting packet.
 - Size from observed `recv()` chunks, not application message count. TCP is a
   byte stream, so one application write is not guaranteed to equal one DAQIRI
   burst.
 
-The bound covers bursts waiting inside DAQIRI. It does not include bytes still
-in the kernel socket receive buffer or bursts already returned to and retained
-by the application. The application must continue to free every received burst
-after processing it. TCP `rx.queues[].batch_size` does not change this bound;
-the socket TCP path surfaces one packet per `recv()` chunk. UDP retains its
-existing datagram receive behavior and does not wait for this TCP queue capacity.
+The bound covers packets waiting inside DAQIRI. It does not include bytes or
+datagrams still in the kernel socket receive buffer, or bursts already returned
+to and retained by the application. The application must continue to free every
+received burst after processing it. TCP `rx.queues[].batch_size` does not change
+this bound; the socket TCP path surfaces one packet per `recv()` chunk. UDP
+`rx.queues[].batch_size` controls coalescing only and does not multiply the
+`num_bufs` limit.
 
 For an on-wire namespace test, generate separate server and client YAML files
 with [`gen_daqiri_config.py socket-pair`](../config-generation.md#generate-udp-tcp-or-roce-roles).
@@ -402,6 +411,32 @@ bounded by `tx_depth`. For 4 KiB SEND-style stress tests, set the RX/TX
 memory-region `num_bufs` high enough for the chosen windows, for example at
 least `rx_depth` receive buffers and `tx_depth` transmit buffers per side.
 
+To use caller-driven RDMA polling, set `poll_mode: direct` on the interface's
+RX and/or TX queue and remove that queue's `cpu_core`, `batch_size`, and RX
+`timeout_us` fields. The benchmark already submits one packet per request and
+polls both RX and TX completions through the connection API. When both directions
+are direct, only the benchmark role thread services data-path work. Small SENDs
+from `huge` or `host_pinned` memory are inlined when they fit the QP's returned
+inline capacity (128 bytes requested); GPU messages use DMA.
+
+RDMA applications can enable `tx.accurate_send: true` and call
+`set_packet_tx_time()` before submitting a SEND to schedule it on supported mlx5
+hardware. Both TX polling modes are supported. This requires a PTP-synchronized
+real-time NIC clock, RoCE QP real-time timestamp support, and matching wall-clock
+RX/TX CQs. The timestamp must be submitted ahead of its deadline and remain strictly
+less than four seconds from `CLOCK_REALTIME` at assignment and posting. RC backpressure or retries can delay
+the SEND beyond its scheduled time. The benchmark sends immediately unless the
+application explicitly assigns timestamps; enabling the option alone does not pace
+traffic. See [Accurate Send](../api-reference/configuration.md#accurate-send).
+
+For application round-trip latency, `tests/platform/rdma_latency.cpp` provides a
+hardware-only RC SEND ping-pong test. It preallocates registered handles, echoes
+from the receive buffer without copying, and validates server payloads after SEND
+completion. Build and invocation details are in `tests/platform/README.md`.
+Compare identical message sizes, memory kinds, CPU placement, and timing boundaries.
+`ib_send_lat` reports half of its measured round trip; double its reported value
+when comparing against this test's application RTT.
+
 For namespace testing, split the file by role just as in the Linux socket test:
 
 - The server YAML keeps the server memory regions, the server interface with `socket_config.mode: server`, and `rdma_bench_server`.
@@ -499,3 +534,51 @@ mlxconfig -d <device> set FORCE_LOOPBACK_DISABLE=1
 ```
 
 Treat firmware settings as maintenance-window changes: query first, set only with the proper Mellanox tooling available, then reset or reboot as required and rerun the same `rx_packets_phy` proof.
+
+## RDMA READ/WRITE example
+
+`daqiri_example_rdma_read_write` is a CPU-buffer correctness example for RC
+connections. It shares SEND/RECEIVE control messages with the regular RDMA API:
+
+1. The server reserves an exported target slot, posts a notification RECEIVE,
+   and SENDs its address, length, rkey, and access mask in an explicit wire format.
+2. The client WRITEs 64 bytes to offset 0 and READs them back to verify the data.
+3. The client WRITEs another 64 bytes to offset 64 using `RDMA_WRITE_IMM` with
+   immediate value 64. The server checks the offset, transferred length, both
+   payloads, and that the unrelated RECEIVE buffer was unchanged.
+4. The server SENDs an acknowledgment before releasing the exported target.
+   Both roles consume their completions and return their buffers.
+
+Build the executable alongside the benchmarks:
+
+```bash
+cmake --build build-socket-rdma --target daqiri_example_rdma_read_write -j
+```
+
+Copy `examples/daqiri_example_rdma_read_write.yaml` and replace the two IP
+placeholders with addresses on your RDMA-capable netdevs, and the master CPU
+placeholder with an allowed CPU ID. Both processes read the same configuration;
+`--mode` selects their interface before initialization. Start the server first,
+then the client on its host:
+
+```bash
+# Server host
+./build-socket-rdma/examples/daqiri_example_rdma_read_write /tmp/rdma-rw.yaml --mode server
+# Client host
+./build-socket-rdma/examples/daqiri_example_rdma_read_write /tmp/rdma-rw.yaml --mode client
+```
+
+Leave `DAQIRI_RDMA_SEND_SIGNAL_EVERY` unset or set to `1`: control SENDs need
+individual completions. Each role must print `PASS` and exit zero.
+The example has a 20-second connection
+and completion timeout. It demonstrates correctness, not throughput. Direct
+polling is the template default. To exercise indirect or mixed polling, change
+RX and/or TX `poll_mode` to `indirect` and add `cpu_core` plus `batch_size: 1` to
+each indirect queue. Keep direct queues free of those worker-only fields.
+
+The 32-bit immediate value is an application convention, not an automatic remote
+address. Ordinary WRITE and READ only produce local completions. WRITE_IMM
+requires a posted peer RECEIVE for each notification; the receiver reads the
+actual payload from its reserved exported memory, not the RECEIVE buffer.
+See the [C++ API](../api-reference/cpp.md#explicit-write-with-immediate-notifications) for
+notification metadata and ownership rules.

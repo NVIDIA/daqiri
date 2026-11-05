@@ -76,12 +76,13 @@ std::string sockaddr_to_ip(const sockaddr_in& addr) {
   return std::string(ip_buf);
 }
 
-bool pin_udp_rx_thread(int cpu_core, uint16_t port) {
+bool pin_socket_rx_thread(int cpu_core, uint16_t port, const char* transport) {
   if (cpu_core < 0) {
     return true;
   }
   if (cpu_core >= CPU_SETSIZE) {
-    DAQIRI_LOG_ERROR("UDP RX I/O thread for port {} requested invalid CPU {}", port, cpu_core);
+    DAQIRI_LOG_ERROR("{} RX I/O thread for port {} requested invalid CPU {}", transport, port,
+                     cpu_core);
     return false;
   }
 
@@ -90,12 +91,12 @@ bool pin_udp_rx_thread(int cpu_core, uint16_t port) {
   CPU_SET(cpu_core, &cpuset);
   const int status = pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
   if (status != 0) {
-    DAQIRI_LOG_ERROR("Failed to pin UDP RX I/O thread for port {} to CPU {}: {}", port, cpu_core,
-                     strerror(status));
+    DAQIRI_LOG_ERROR("Failed to pin {} RX I/O thread for port {} to CPU {}: {}", transport, port,
+                     cpu_core, strerror(status));
     return false;
   }
 
-  DAQIRI_LOG_INFO("UDP RX I/O thread for port {} pinned to CPU {}", port, cpu_core);
+  DAQIRI_LOG_INFO("{} RX I/O thread for port {} pinned to CPU {}", transport, port, cpu_core);
   return true;
 }
 
@@ -204,8 +205,8 @@ void SocketEngine::initialize() {
       ep->socket_cfg = if_cfg.socket_;
       ep->rx_queue = select_queue_id(if_cfg.rx_.queues_);
       ep->tx_queue = select_queue_id(if_cfg.tx_.queues_);
+      ep->rx_cpu_core = select_cpu_core(if_cfg.rx_.queues_);
       if (cfg_.common_.protocol == SocketProtocol::UDP) {
-        ep->rx_cpu_core = select_cpu_core(if_cfg.rx_.queues_);
         ep->rx_batch_size = select_batch_size(if_cfg.rx_.queues_);
         if (ep->socket_cfg.mode_ == SocketMode::SERVER && ep->socket_cfg.remote_ip_.empty() &&
             ep->rx_batch_size > 1) {
@@ -218,12 +219,12 @@ void SocketEngine::initialize() {
       ep->tx_batch_size = select_batch_size(if_cfg.tx_.queues_);
       ep->max_packet_size = static_cast<size_t>(std::max(1, select_max_packet_size(if_cfg)));
       ep->rx_queue_state = get_or_create_rx_queue(ep->port, ep->rx_queue);
-      ep->rx_queue_state->max_bursts = select_rx_queue_capacity(if_cfg);
-      if (cfg_.common_.protocol == SocketProtocol::TCP) {
-        DAQIRI_LOG_INFO("TCP RX queue port={} queue={} capacity={} bursts",
-                        ep->port,
-                        ep->rx_queue,
-                        ep->rx_queue_state->max_bursts);
+      ep->rx_queue_state->max_packets = select_rx_queue_capacity(if_cfg);
+      if (cfg_.common_.protocol == SocketProtocol::TCP ||
+          cfg_.common_.protocol == SocketProtocol::UDP) {
+        DAQIRI_LOG_INFO("{} RX queue port={} queue={} capacity={} packets",
+                        socket_protocol_to_string(cfg_.common_.protocol), ep->port, ep->rx_queue,
+                        ep->rx_queue_state->max_packets);
       }
       ep->rx_metrics = metrics::get_or_create_queue("socket",
                                                      if_cfg.name_.empty() ? if_cfg.address_
@@ -296,6 +297,14 @@ FlowId SocketEngine::get_packet_flow_id(BurstParams* burst, int idx) {
 }
 
 Status SocketEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) {
+  if (is_roce_protocol()) {
+#if DAQIRI_ENGINE_RDMA
+    return roce_engine_ != nullptr ? roce_engine_->get_packet_rx_timestamp(burst, idx, timestamp_ns)
+                                   : roce_not_initialized("get_packet_rx_timestamp");
+#else
+    return roce_not_initialized("get_packet_rx_timestamp");
+#endif
+  }
   (void)burst;
   (void)idx;
   (void)timestamp_ns;
@@ -507,6 +516,12 @@ void SocketEngine::free_tx_burst(BurstParams* burst) {
 }
 
 Status SocketEngine::set_packet_tx_time(BurstParams* burst, int idx, uint64_t time) {
+#if DAQIRI_ENGINE_RDMA
+  if (is_roce_protocol()) {
+    return roce_engine_ != nullptr ? roce_engine_->set_packet_tx_time(burst, idx, time)
+                                   : roce_not_initialized("set_packet_tx_time");
+  }
+#endif
   return Status::NOT_SUPPORTED;
 }
 
@@ -563,6 +578,8 @@ void SocketEngine::clear_rx_queues() {
         free_rx_burst(burst);
       }
     }
+    ep->rx_queue_state->queued_packets = 0;
+    ep->rx_queue_state->reserved_packets = 0;
   }
 }
 
@@ -654,41 +671,53 @@ Status SocketEngine::pop_rx_burst(const std::shared_ptr<RxQueueState>& qstate, B
 
   *burst = qstate->bursts.front();
   qstate->bursts.pop();
+  qstate->queued_packets -= (*burst)->hdr.hdr.num_pkts;
   lock.unlock();
   qstate->capacity_cv.notify_one();
   return Status::SUCCESS;
 }
 
-bool SocketEngine::reserve_rx_burst(const std::shared_ptr<RxQueueState>& qstate,
-                                    const std::atomic<bool>& connection_running) {
-  if (qstate == nullptr) { return false; }
+size_t SocketEngine::reserve_rx_packets(const std::shared_ptr<RxQueueState>& qstate,
+                                        size_t requested_packets,
+                                        const std::atomic<bool>* connection_running) {
+  if (qstate == nullptr || requested_packets == 0) {
+    return 0;
+  }
 
   std::unique_lock<std::mutex> lock(qstate->mutex);
   qstate->capacity_cv.wait(lock, [&] {
-    if (!running_.load() || !connection_running.load()) { return true; }
-    return qstate->reserved_bursts < qstate->max_bursts &&
-           qstate->bursts.size() < qstate->max_bursts - qstate->reserved_bursts;
+    if (!running_.load() || (connection_running != nullptr && !connection_running->load())) {
+      return true;
+    }
+    return qstate->queued_packets + qstate->reserved_packets < qstate->max_packets;
   });
-  if (!running_.load() || !connection_running.load()) { return false; }
+  if (!running_.load() || (connection_running != nullptr && !connection_running->load())) {
+    return 0;
+  }
 
-  ++qstate->reserved_bursts;
-  return true;
+  const size_t available = qstate->max_packets - qstate->queued_packets - qstate->reserved_packets;
+  const size_t reserved = std::min(requested_packets, available);
+  qstate->reserved_packets += reserved;
+  return reserved;
 }
 
-void SocketEngine::cancel_rx_burst_reservation(const std::shared_ptr<RxQueueState>& qstate) {
-  if (qstate == nullptr) { return; }
+void SocketEngine::cancel_rx_packet_reservation(const std::shared_ptr<RxQueueState>& qstate,
+                                                size_t reserved_packets) {
+  if (qstate == nullptr || reserved_packets == 0) {
+    return;
+  }
 
   {
     std::lock_guard<std::mutex> lock(qstate->mutex);
-    if (qstate->reserved_bursts > 0) { --qstate->reserved_bursts; }
+    qstate->reserved_packets -= reserved_packets;
   }
   qstate->capacity_cv.notify_one();
 }
 
 void SocketEngine::push_rx_burst(const std::shared_ptr<RxQueueState>& qstate, BurstParams* burst,
-                                 bool reserved) {
+                                 size_t reserved_packets) {
   if (burst == nullptr) {
-    if (reserved) { cancel_rx_burst_reservation(qstate); }
+    cancel_rx_packet_reservation(qstate, reserved_packets);
     return;
   }
   if (qstate == nullptr) {
@@ -698,7 +727,8 @@ void SocketEngine::push_rx_burst(const std::shared_ptr<RxQueueState>& qstate, Bu
     return;
   }
   std::lock_guard<std::mutex> lock(qstate->mutex);
-  if (reserved && qstate->reserved_bursts > 0) { --qstate->reserved_bursts; }
+  qstate->reserved_packets -= reserved_packets;
+  qstate->queued_packets += burst->hdr.hdr.num_pkts;
   qstate->bursts.push(burst);
 }
 
@@ -1155,15 +1185,26 @@ std::shared_ptr<SocketEngine::ConnectionState> SocketEngine::register_connection
                                                      std::to_string(queue));
   }
 
-  {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    connections_[conn->conn_id] = conn;
+  // Keep startup private and serialize publication with shutdown's registry
+  // snapshot. Until publication, this path alone owns cleanup of the thread.
+  std::unique_lock<std::mutex> state_lock(state_mutex_);
+  if (!running_.load()) {
+    close_fd(conn->fd);
+    return nullptr;
   }
 
   if (start_rx_thread) {
     conn->rx_thread = std::thread(&SocketEngine::tcp_rx_loop, this, conn);
+    std::unique_lock<std::mutex> lock(conn->rx_start_mutex);
+    conn->rx_start_cv.wait(lock, [&conn] { return conn->rx_start_complete; });
+    if (!conn->rx_start_success) {
+      lock.unlock();
+      conn->rx_thread.join();
+      return nullptr;
+    }
   }
 
+  connections_[conn->conn_id] = conn;
   return conn;
 }
 
@@ -1205,6 +1246,9 @@ std::shared_ptr<SocketEngine::ConnectionState> SocketEngine::create_tcp_client_c
     if (::connect(fd, reinterpret_cast<sockaddr*>(&dst), sizeof(dst)) == 0) {
       auto conn = register_connection(
           fd, ep.port, ep.rx_queue, ep.if_index, false, false, ep.rx_queue_state, true);
+      if (conn == nullptr) {
+        return nullptr;
+      }
       if (set_as_primary) {
         std::lock_guard<std::mutex> lock(state_mutex_);
         default_connection_by_port_[ep.port] = conn->conn_id;
@@ -1396,6 +1440,10 @@ void SocketEngine::tcp_accept_loop(int if_index) {
     auto conn = register_connection(
         fd, ep->port, ep->rx_queue, ep->if_index, true, false, ep->rx_queue_state, true);
 
+    if (conn == nullptr) {
+      continue;
+    }
+
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       if (ep->primary_conn_id == 0) {
@@ -1419,7 +1467,23 @@ void SocketEngine::tcp_rx_loop(std::shared_ptr<ConnectionState> conn) {
   if (conn == nullptr) { return; }
 
   size_t max_size = 65536;
-  if (const auto* ep = endpoint_for_port(conn->port)) { max_size = ep->max_packet_size; }
+  int rx_cpu_core = -1;
+  if (const auto* ep = endpoint_for_port(conn->port)) {
+    max_size = ep->max_packet_size;
+    rx_cpu_core = ep->rx_cpu_core;
+  }
+  const bool startup_ok = pin_socket_rx_thread(rx_cpu_core, conn->port, "TCP");
+  {
+    std::lock_guard<std::mutex> lock(conn->rx_start_mutex);
+    conn->rx_start_success = startup_ok;
+    conn->rx_start_complete = true;
+  }
+  conn->rx_start_cv.notify_one();
+  if (!startup_ok) {
+    conn->running.store(false);
+    close_fd(conn->fd);
+    return;
+  }
 
   std::vector<uint8_t> tmp(max_size);
 
@@ -1439,15 +1503,18 @@ void SocketEngine::tcp_rx_loop(std::shared_ptr<ConnectionState> conn) {
 
     // Once the application falls behind, stop draining the kernel socket so
     // TCP flow control can propagate backpressure without growing DAQIRI's heap.
-    if (!reserve_rx_burst(conn->rx_queue, conn->running)) { break; }
+    const size_t reserved_packets = reserve_rx_packets(conn->rx_queue, 1, &conn->running);
+    if (reserved_packets == 0) {
+      break;
+    }
 
     const ssize_t rx = ::recv(conn->fd, tmp.data(), tmp.size(), 0);
     if (rx == 0) {
-      cancel_rx_burst_reservation(conn->rx_queue);
+      cancel_rx_packet_reservation(conn->rx_queue, reserved_packets);
       break;
     }
     if (rx < 0) {
-      cancel_rx_burst_reservation(conn->rx_queue);
+      cancel_rx_packet_reservation(conn->rx_queue, reserved_packets);
       if (errno == EINTR) { continue; }
       if (!running_.load()) { break; }
       DAQIRI_LOG_WARN("TCP recv failed on conn_id={}: {}", conn->conn_id, strerror(errno));
@@ -1468,7 +1535,7 @@ void SocketEngine::tcp_rx_loop(std::shared_ptr<ConnectionState> conn) {
     burst->pkt_lens[0][0] = static_cast<uint32_t>(rx);
     set_connection_id(burst, conn->conn_id);
 
-    push_rx_burst(conn->rx_queue, burst, true);
+    push_rx_burst(conn->rx_queue, burst, reserved_packets);
     rx_pkts_.fetch_add(1);
     rx_bytes_.fetch_add(static_cast<uint64_t>(rx));
     metrics::add_rx(conn->rx_metrics, 1, static_cast<uint64_t>(rx));
@@ -1487,7 +1554,7 @@ void SocketEngine::udp_rx_loop(int if_index) {
   if (!startup_ok) {
     DAQIRI_LOG_ERROR("UDP RX I/O thread for port {} has no socket", ep->port);
   } else {
-    startup_ok = pin_udp_rx_thread(ep->rx_cpu_core, ep->port);
+    startup_ok = pin_socket_rx_thread(ep->rx_cpu_core, ep->port, "UDP");
   }
   {
     std::lock_guard<std::mutex> lock(ep->io_start_mutex);
@@ -1516,22 +1583,36 @@ void SocketEngine::udp_rx_loop(int if_index) {
   }
 
   while (running_.load()) {
+    // Reserve packet capacity before consuming datagrams. Once the application
+    // falls behind, leave excess UDP traffic in the kernel socket so its bounded
+    // receive buffer drops overflow instead of growing DAQIRI's heap queue.
+    const size_t reserved_packets = reserve_rx_packets(ep->rx_queue_state, rx_batch_size);
+    if (reserved_packets == 0) {
+      break;
+    }
+
     for (size_t i = 0; i < rx_batch_size; ++i) {
       msgs[i].msg_hdr.msg_namelen = sizeof(sockaddr_in);
     }
 
-    const int received = ::recvmmsg(
-        ep->udp_fd, msgs.data(), static_cast<unsigned int>(rx_batch_size), MSG_WAITFORONE, nullptr);
+    const int received =
+        ::recvmmsg(ep->udp_fd, msgs.data(), static_cast<unsigned int>(reserved_packets),
+                   MSG_WAITFORONE, nullptr);
     if (received < 0) {
+      cancel_rx_packet_reservation(ep->rx_queue_state, reserved_packets);
       if (errno == EINTR) { continue; }
       if (!running_.load()) { break; }
       DAQIRI_LOG_WARN("UDP recvmmsg failed on port {}: {}", ep->port, strerror(errno));
       continue;
     }
     if (!running_.load()) {
+      cancel_rx_packet_reservation(ep->rx_queue_state, reserved_packets);
       break;
     }
-    if (received == 0) { continue; }
+    if (received == 0) {
+      cancel_rx_packet_reservation(ep->rx_queue_state, reserved_packets);
+      continue;
+    }
 
     if (ep->socket_cfg.mode_ == SocketMode::SERVER && !ep->udp_peer_configured) {
       std::lock_guard<std::mutex> lock(state_mutex_);
@@ -1560,7 +1641,7 @@ void SocketEngine::udp_rx_loop(int if_index) {
     }
     set_connection_id(burst, ep->primary_conn_id);
 
-    push_rx_burst(ep->rx_queue_state, burst);
+    push_rx_burst(ep->rx_queue_state, burst, reserved_packets);
     rx_pkts_.fetch_add(static_cast<uint64_t>(received));
     rx_bytes_.fetch_add(received_bytes);
     metrics::add_rx(ep->rx_metrics, static_cast<uint64_t>(received), received_bytes);
@@ -1746,16 +1827,52 @@ Status SocketEngine::rdma_get_server_conn_id(const std::string& server_addr, uin
 }
 
 Status SocketEngine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintptr_t conn_id,
-                                  bool is_server, int num_pkts, uint64_t wr_id,
-                                  const std::string& local_mr_name) {
+                                     bool is_server, int num_pkts, uint64_t wr_id,
+                                     const std::string& local_mr_name, uint32_t immediate_data) {
 #if DAQIRI_ENGINE_RDMA
   if (!is_roce_protocol() || roce_engine_ == nullptr) {
     return roce_not_initialized("rdma_set_header");
   }
-  return roce_engine_->rdma_set_header(
-      burst, op_code, conn_id, is_server, num_pkts, wr_id, local_mr_name);
+  return roce_engine_->rdma_set_header(burst, op_code, conn_id, is_server, num_pkts, wr_id,
+                                       local_mr_name, immediate_data);
 #else
   return roce_not_initialized("rdma_set_header");
+#endif
+}
+
+Status SocketEngine::rdma_get_memory_region(uintptr_t conn_id, const std::string& mr_name,
+                                            RDMAMemoryRegion* region) {
+#if DAQIRI_ENGINE_RDMA
+  if (!is_roce_protocol() || roce_engine_ == nullptr) {
+    return roce_not_initialized("rdma_get_memory_region");
+  }
+  return roce_engine_->rdma_get_memory_region(conn_id, mr_name, region);
+#else
+  return roce_not_initialized("rdma_get_memory_region");
+#endif
+}
+
+Status SocketEngine::rdma_set_remote_memory(BurstParams* burst, const RDMAMemoryRegion& region,
+                                            uint64_t offset) {
+#if DAQIRI_ENGINE_RDMA
+  if (!is_roce_protocol() || roce_engine_ == nullptr) {
+    return roce_not_initialized("rdma_set_remote_memory");
+  }
+  return roce_engine_->rdma_set_remote_memory(burst, region, offset);
+#else
+  return roce_not_initialized("rdma_set_remote_memory");
+#endif
+}
+
+Status SocketEngine::rdma_get_immediate_data(BurstParams* burst, uint32_t* immediate_data,
+                                             uint32_t* write_length) {
+#if DAQIRI_ENGINE_RDMA
+  if (!is_roce_protocol() || roce_engine_ == nullptr) {
+    return roce_not_initialized("rdma_get_immediate_data");
+  }
+  return roce_engine_->rdma_get_immediate_data(burst, immediate_data, write_length);
+#else
+  return roce_not_initialized("rdma_get_immediate_data");
 #endif
 }
 
