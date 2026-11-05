@@ -15,10 +15,13 @@ namespace daqiri::detail {
 // builds that do not link the engines to libmlx5/libibverbs.
 int create_timed_qp(rdma_cm_id* id, ibv_pd* pd, ibv_qp_init_attr* attr);
 int post_timed_send(ibv_qp* qp, ibv_send_wr* wr, uint64_t timestamp_ns);
+int prepare_uc_qp(rdma_cm_id* id);
+int query_rdma_port(ibv_context* context, uint8_t port, ibv_port_attr* attr);
+ibv_ah* create_ud_reply_ah(rdma_cm_id* id, ibv_pd* pd);
 
 // Private glue ABI. Bump the version when the function table changes.
 struct RdmaCmApi {
-  static constexpr uint32_t kAbiVersion = 4;
+  static constexpr uint32_t kAbiVersion = 5;
   uint32_t abi_version;
   size_t struct_size;
 #define DAQIRI_RDMA_FUNCTION(symbol, member) decltype(&::symbol) member;

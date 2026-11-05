@@ -1129,7 +1129,10 @@ an already consumed request. Plain reads/writes do not notify the remote applica
 use a control message when the peer needs a notification. GPU destinations
 also require application synchronization before launching GPU work.
 
-Read/write operations require RC. `RDMA_READ_IMM` returns `NOT_SUPPORTED`.
+READ requires RC. WRITE and WRITE_IMM support RC and UC. UD supports only
+SEND/RECEIVE, with SEND payloads limited to the active port MTU; received
+buffers and lengths exclude the UD GRH. Unsupported operations return
+`NOT_SUPPORTED`. `RDMA_READ_IMM` returns `NOT_SUPPORTED`.
 
 ### Explicit write-with-immediate notifications
 
@@ -1166,6 +1169,12 @@ for notification-only use. If there is no available receive credit, the RC
 operation waits/retries according to the connection's RNR policy. Receive
 buffers are not the write destination: DMA targets the remote address supplied
 by the sender, while the credit supplies a notification completion.
+
+UC also supports payload and zero-byte WRITE_IMM, but provides no RNR retry or
+delivery guarantee. Post receive credits before the peer sends notifications.
+A UC sender completion only releases local buffers; use a peer acknowledgment
+to confirm delivery. A notification after plain UC writes does not prove that
+earlier writes arrived; applications must detect loss themselves.
 
 Poll `get_rx_burst(&notification, conn_id, is_server)`. A successful notification
 has `transport_hdr.tx == false`, opcode `RDMA_WRITE_IMM`, and a value retrievable
