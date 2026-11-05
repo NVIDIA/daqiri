@@ -1,0 +1,43 @@
+# Copy to demos/onboarding/local/profile.yaml and fill from fresh discovery.
+# No setting changes unless explicitly listed under tuning and authorized.
+schema: 1
+platform: dgx-spark
+image: '<local-image-sha256-digest>'
+gpu_uuid: '<GPU-uuid>'
+master_core: 19
+cable_confirmed: false
+ports:
+  - netdev: '<tx-netdev>'
+    bdf: '<tx-bdf>'
+    mac: '<tx-mac>'
+    physical_port: p0
+  - netdev: '<rx-netdev>'
+    bdf: '<rx-bdf>'
+    mac: '<rx-mac>'
+    physical_port: p1
+paths:
+  - tx: '<tx-netdev>'
+    rx: '<rx-netdev>'
+    tx_core: 5
+    rx_core: 6
+    tx_worker: 7
+    rx_worker: 8
+raw:
+  seconds: 15
+  payload_size: 8000
+  batch_size: 1024
+  tx_buffers: 4096
+  rx_buffers: 32768
+# For example, after checking applicability and confirming permission:
+# tuning:
+#   enp1s0f0np0: {mtu: 9000, mrrs: 4096}
+#   enp1s0f1np1: {mtu: 9000}
+# Pause, if requested, needs explicit autoneg/rx/tx string values ("on"/"off").
+# GPU tuning is skipped unless an explicit before/target policy is supplied:
+#   gpu: {before: default, target: "3003,3003"}
+tuning: {}
+inference:
+  enabled: false
+  cpu_core: 15
+  images: 256
+  manifest: null  # Absolute path to prepared artifacts manifest when enabled.

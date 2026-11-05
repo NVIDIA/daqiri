@@ -131,6 +131,8 @@ Step-by-step walkthroughs to get hands-on:
 - [DAQIRI + Holoscan Integration](https://nvidia.github.io/daqiri/tutorials/daqiri-holoscan-integration/) — use DAQIRI RX bursts from a Holoscan source operator
 - [DAQIRI + TensorRT Inference](https://nvidia.github.io/daqiri/tutorials/daqiri-resnet-inference/) — packet ingest → ResNet-50 feature extraction with TensorRT
 
+- [Live Customer Demo (Spark)](https://nvidia.github.io/daqiri/tutorials/live-customer-demo/) — Seven-stage live demo with local profiles, reversible tuning, evidence capture and resume
+
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE) for details.
