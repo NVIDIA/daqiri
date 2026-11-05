@@ -306,6 +306,7 @@ class RdmaEngine : public Engine {
   void handle_connect_request(rdma_cm_event* event);
   void launch_worker(rdma_thread_params* params, bool is_server);
   int mr_access_to_ibv(uint32_t access);
+  size_t buffer_stride(MemoryKind kind, size_t buf_size);
   bool get_ip_from_interface(const std::string_view& if_name, sockaddr_in& addr);
   int setup_thread_params(rdma_thread_params* params, bool is_server);
   int destroy_thread_params(rdma_thread_params* params);

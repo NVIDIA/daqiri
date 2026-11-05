@@ -13,6 +13,7 @@
 #include <sched.h>
 #include <stdexcept>
 #include <thread>
+#include <tuple>
 
 #include "src/engines/rdma/daqiri_rdma_engine.h"
 #include "src/rdma/cm_api.h"
@@ -1150,7 +1151,9 @@ class RdmaEnginePollingTestPeer {
     auto* length = reinterpret_cast<uint32_t*>(metadata.data());
     char data[512]{};
     void* pointer = data;
-    for (int outcome : {0, 1, 2}) {
+    for (const auto& [outcome, written_length] :
+         {std::pair{0, 0u}, std::pair{0, 64u}, std::pair{0, 4096u}, std::pair{1, 4096u},
+          std::pair{2, 4096u}}) {
       require(engine.rdma_set_header(&burst, RDMAOpCode::RECEIVE, reinterpret_cast<uintptr_t>(&id),
                                      server, 1, 777, "data") == Status::SUCCESS,
               "header failed");
@@ -1171,7 +1174,7 @@ class RdmaEnginePollingTestPeer {
       wc.opcode = IBV_WC_RECV_RDMA_WITH_IMM;
       wc.wc_flags = outcome == 1 ? 0 : IBV_WC_WITH_IMM;
       wc.imm_data = htonl(0x12345678u);
-      wc.byte_len = 4096;
+      wc.byte_len = written_length;
       fake.rx_completions.push_back(wc);
       engine.poll_completions(server, &params, !params.direct_rx, false);
       BurstParams* result = nullptr;
@@ -1192,7 +1195,7 @@ class RdmaEnginePollingTestPeer {
         require(immediate == 0x12345678u, "immediate byte order changed");
         uint32_t written = 0;
         require(engine.rdma_get_immediate_data(result, &immediate, &written) == Status::SUCCESS &&
-                    written == 4096,
+                    written == written_length,
                 "notification write length was confused with local packet length");
       }
     }
@@ -1244,6 +1247,10 @@ class RdmaEnginePollingTestPeer {
       while (tx_ring->dequeue(reinterpret_cast<void**>(&pending))) {
         require(engine.post_burst(&params, pending) == Status::SUCCESS, "worker timed SEND failed");
       }
+      require(bool(fake.last_flags & IBV_SEND_INLINE) ==
+                  (operation == RDMAOpCode::SEND && params.direct_tx),
+              "scheduled operation changed the SEND-only inline policy");
+      require(fake.last_flags & IBV_SEND_FENCE, "scheduled RC operation lost its fence");
       // One SEND CQE reclaims the operation; no WAIT success CQE is expected.
       for (size_t p = 0; p < burst.transport_hdr.num_pkts; ++p) {
         ibv_wc wc{};
@@ -1302,6 +1309,18 @@ class RdmaEnginePollingTestPeer {
             "disconnected connection accepted scheduling");
   }
 
+  static void buffer_strides() {
+    RdmaEngine engine;
+    for (auto kind : {MemoryKind::HOST, MemoryKind::HOST_PINNED, MemoryKind::HUGE}) {
+      require(engine.buffer_stride(kind, 64) == 128 && engine.buffer_stride(kind, 4096) == 4096 &&
+                  engine.buffer_stride(kind, 4097) == 4224,
+              "CPU buffers not packed at cache-line alignment");
+    }
+    require(engine.buffer_stride(MemoryKind::DEVICE, 64) == 65536 &&
+                engine.buffer_stride(MemoryKind::DEVICE, 65537) == 131072,
+            "GPU buffers lost GPU-page alignment");
+  }
+
   static void configuration() {
     const std::string text = R"yaml(
 daqiri:
@@ -1354,6 +1373,21 @@ daqiri:
     NetworkConfig config;
     require(parse_network_config_from_yaml_string(YAML::Dump(yaml), config) != Status::SUCCESS,
             "UDP unexpectedly accepted direct polling");
+    // Application-owned regions must be sized with the engine's buffer stride.
+    for (const auto& [kind, slot, capacity] :
+         {std::tuple{"host_pinned", size_t{512}, size_t{65536}},
+          std::tuple{"device", size_t{65536}, size_t{16 * 65536}}}) {
+      auto region_yaml = YAML::Load(text);
+      region_yaml["daqiri"]["cfg"]["memory_regions"][0]["kind"] = kind;
+      NetworkConfig region_config;
+      MemoryRegionRequirements requirements;
+      require(parse_network_config_from_yaml_string(YAML::Dump(region_yaml), region_config) ==
+                      Status::SUCCESS &&
+                  get_memory_region_requirements(region_config, requirements) == Status::SUCCESS &&
+                  requirements.at("data").slot_size == slot &&
+                  requirements.at("data").capacity == capacity,
+              "RDMA memory requirements disagree with the engine buffer stride");
+    }
   }
 
   void concurrent_worker(bool server) {
@@ -1803,6 +1837,7 @@ daqiri:
 int main() {
   try {
     daqiri::RdmaEnginePollingTestPeer::configuration();
+    daqiri::RdmaEnginePollingTestPeer::buffer_strides();
     for (auto transport : {daqiri::RDMATransportMode::UC, daqiri::RDMATransportMode::UD}) {
       for (bool rx : {false, true}) {
         for (bool tx : {false, true}) {
@@ -1899,7 +1934,8 @@ int main() {
                                                       daqiri::RDMATransportMode::RC, false);
         unsupported.tx_timestamps(false, daqiri::RDMAOpCode::SEND);
       }
-    std::cout << "PASS: RDMA direct/indirect RX/TX, inline selection, and completions\n";
+    std::cout << "PASS: RDMA direct/indirect RX/TX, inline selection, buffer strides, and "
+                 "completions\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "FAIL: " << error.what() << '\n';
