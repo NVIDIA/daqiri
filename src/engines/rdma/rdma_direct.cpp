@@ -199,7 +199,8 @@ Status RdmaEngine::send_direct(RdmaDirectState& state, BurstParams* burst) {
       state.send.wr.ud.remote_qkey = params.ud_qkey;
     }
     const bool signal =
-        one_sided || params.send_signal_every == 1 ||
+        rdma_packet_tx_timestamp_id(burst, 0) != INVALID_TX_TIMESTAMP_ID || one_sided ||
+        params.send_signal_every == 1 ||
         params.sends_since_signal + 1 >= static_cast<uint64_t>(params.send_signal_every) ||
         state.sends_posted - state.sends_completed >= 15;
     state.send.send_flags = signal ? IBV_SEND_SIGNALED : 0;
@@ -221,6 +222,10 @@ Status RdmaEngine::send_direct(RdmaDirectState& state, BurstParams* burst) {
       return Status::GENERIC_FAILURE;
     }
     slot = {burst, tag};
+    if (rdma_packet_tx_timestamp_id(burst, 0) != INVALID_TX_TIMESTAMP_ID) {
+      ++params.tx_timestamp_outstanding;
+      rdma_burst_cache(burst).tx_timestamp_submitted = true;
+    }
     state.sends_posted = tag;
     params.sends_since_signal = signal ? 0 : params.sends_since_signal + 1;
     if (state.send.send_flags & IBV_SEND_INLINE) {
@@ -263,7 +268,7 @@ Status RdmaEngine::poll_direct(RdmaDirectState& state, bool tx, bool server) {
   ibv_wc wc{};
   uint64_t timestamp_ns = UINT64_MAX;
   auto& params = *state.params;
-  const int count = tx ? verbs_->poll_cq(params.qp_params.tx_cq, 1, &wc)
+  const int count = tx ? poll_tx_completion(&params, &wc, &timestamp_ns)
                        : poll_rx_completion(&params, &wc, &timestamp_ns);
   if (count <= 0) {
     return count == 0 ? Status::NOT_READY : Status::GENERIC_FAILURE;
@@ -281,6 +286,20 @@ Status RdmaEngine::poll_direct(RdmaDirectState& state, bool tx, bool server) {
     burst->transport_hdr.status = status;
     burst->transport_hdr.tx = transmit;
     burst->transport_hdr.server = server;
+    if (transmit) {
+      const auto id = rdma_packet_tx_timestamp_id(burst, 0);
+      if (id != INVALID_TX_TIMESTAMP_ID) {
+        if (params.tx_timestamp_outstanding) --params.tx_timestamp_outstanding;
+        // A later signaled completion may reclaim preceding unsignaled sends,
+        // but its timestamp belongs only to its own work request.
+        finish_tx_timestamp(
+            id,
+            status == Status::SUCCESS && slot.tag == wc.wr_id && timestamp_ns != UINT64_MAX
+                ? Status::SUCCESS
+                : Status::GENERIC_FAILURE,
+            timestamp_ns);
+      }
+    }
     if (status == Status::SUCCESS) {
       if (transmit) {
         metrics::add_tx(state.counters, 1, burst->pkt_lens[0][0]);

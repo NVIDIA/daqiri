@@ -480,11 +480,12 @@ Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_
 /**
  * @brief Request a NIC TX completion timestamp before submitting a packet.
  *
- * Supported by raw ibverbs, with direct/indirect queues, gathered segments,
- * named endpoints, and scheduled sends. No YAML option is required. Call after
- * allocating packet buffers and before send_tx_burst. Each requested packet
- * gets its own signaled SEND WQE; bursts with requests bypass multi-packet WQEs.
- * Clones need their own requests. The ID remains valid after burst recycling.
+ * Supported by raw ibverbs and RDMA/RoCE with direct/indirect TX. No YAML option
+ * is required. Call after allocating packet buffers and before send_tx_burst.
+ * RDMA idx identifies one SEND, READ, WRITE, or WRITE_IMM work request, which may
+ * span multiple wire packets. Each requested operation gets its own signaled
+ * WQE. Raw bursts with requests bypass multi-packet WQEs; clones need separate
+ * requests. IDs remain valid after burst recycling or freeing an RDMA completion.
  *
  * @return SUCCESS, NULL_PTR, INVALID_PARAMETER, ALREADY_EXISTS (packet already
  * has a request), NOT_SUPPORTED (engine/clock unavailable), or NO_SPACE_AVAILABLE
@@ -496,7 +497,7 @@ Status request_packet_tx_timestamp(BurstParams* burst, int idx, TxTimestampId* i
 /**
  * @brief Read a requested packet's hardware TX completion time in nanoseconds.
  *
- * Returns the timestamp sampled by the NIC for that packet's SEND CQE, converted
+ * Returns the timestamp sampled by the NIC for the requested TX CQE, converted
  * to PTP epoch nanoseconds, rather than its requested send time or a CPU clock
  * sample. The NIC defines the completion measurement point; this is not a
  * calibrated wire-departure timestamp. The NIC clock must be PTP-synchronized
@@ -508,6 +509,9 @@ Status request_packet_tx_timestamp(BurstParams* burst, int idx, TxTimestampId* i
  * engines. Output is zero on failure.
  * Reading does not release the request. For direct TX, call from the queue's
  * owner thread to drive completion polling, even if no more packets are sent.
+ * RDMA's normal get_rx_burst/free_tx_burst completion ownership still applies;
+ * the timestamp getter preserves those completions. READ timestamps describe
+ * completion of the READ, including response arrival, rather than request issuance.
  */
 Status get_packet_tx_timestamp(TxTimestampId id, uint64_t* timestamp_ns);
 

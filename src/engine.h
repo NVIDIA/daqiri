@@ -34,6 +34,11 @@ struct rte_pktmbuf_extmem;
 
 namespace daqiri {
 
+namespace detail {
+// Shared across engine instances so shutdown/reinitialization cannot reuse IDs.
+TxTimestampId next_tx_timestamp_id();
+}  // namespace detail
+
 // Apply the common semantic checks used before engine initialization. This path
 // does not allocate packet memory, initialize an engine, or access a NIC.
 bool validate_network_config(const NetworkConfig& config);

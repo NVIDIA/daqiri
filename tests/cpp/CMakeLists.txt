@@ -47,6 +47,11 @@ endif()
 add_test(NAME daqiri_socket_rx_queue_test COMMAND daqiri_socket_rx_queue_test)
 
 if(TARGET daqiri_rdma)
+  # The RoCE forwarding regression injects an internal RDMA engine subclass.
+  target_link_libraries(daqiri_socket_rx_queue_test PRIVATE daqiri_rdma)
+endif()
+
+if(TARGET daqiri_rdma)
   add_executable(daqiri_rdma_polling_test rdma_polling_test.cpp)
   target_compile_features(daqiri_rdma_polling_test PRIVATE cxx_std_17)
   target_include_directories(daqiri_rdma_polling_test PRIVATE ${PROJECT_SOURCE_DIR})

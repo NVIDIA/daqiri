@@ -73,7 +73,6 @@ std::atomic<uint64_t> g_clock_cache_epoch{1};
 constexpr FlowId kMaxIbverbsFlowTag = 0x00ffffffU;
 constexpr int kIbverbsCatchAllPriority = 1'000'000;
 std::atomic<uint32_t> g_next_endpoint_generation{1};
-std::atomic<TxTimestampId> g_next_tx_timestamp_id{1};
 
 uint32_t next_endpoint_generation() {
   uint32_t generation = g_next_endpoint_generation.fetch_add(1, std::memory_order_relaxed);
@@ -6186,7 +6185,7 @@ Status IbverbsEngine::request_packet_tx_timestamp(BurstParams* burst, int idx, T
   std::lock_guard<std::mutex> guard(tx_timestamp_mutex_);
   if (packet_id != INVALID_TX_TIMESTAMP_ID) return Status::ALREADY_EXISTS;
   if (tx_timestamp_requests_.size() >= kMaxTxTimestampRequests) return Status::NO_SPACE_AVAILABLE;
-  const auto next = g_next_tx_timestamp_id.fetch_add(1, std::memory_order_relaxed);
+  const auto next = detail::next_tx_timestamp_id();
   if (next == INVALID_TX_TIMESTAMP_ID) return Status::NO_SPACE_AVAILABLE;
   tx_timestamp_requests_.emplace(next, TxTimestampRequest{q.get()});
   packet_id = *id = next;
