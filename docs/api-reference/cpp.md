@@ -757,11 +757,10 @@ configuration. Scheduled transmission is invalid if the clocks are not PTP-synch
 ### Transmit Completion Timestamps
 
 Raw ibverbs and RDMA/RoCE support requesting a hardware TX completion timestamp for an
-individual packet. This timestamp provides the most accurate estimate of when the packet 
-went on the wire. It differs from the accurate TX timestamp provided by the user in that 
-the accurate TX timestamp is the desired timestamp, while the completion timestamp is the 
-actual timestamp. Due to factors like scheduling delays and fixed latencies in the NIC, 
-the completion timestamp is always later than the desired timestamp. No YAML option is needed. 
+individual packet. The timestamp records the NIC's completion time, independently of
+the desired send time supplied through `set_packet_tx_time()`. The NIC defines the
+measurement point; this is not a calibrated wire-departure timestamp and does not
+guarantee ordering against the desired send time. No YAML option is needed.
 After acquiring packet buffers, request the timestamp before submitting the burst:
 
 ```cpp
