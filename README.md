@@ -108,6 +108,20 @@ Reference material for the DAQIRI codebase:
 - [Python API Usage](https://nvidia.github.io/daqiri/api-reference/python/) — Python bindings, workflow examples, enums, config classes, and helper functions
 - [Contributing](CONTRIBUTING.md) — Contribution guidelines, coding standards, DCO sign-off
 
+### Agent-assisted onboarding
+
+The [DAQIRI onboarding skill](skills/daqiri-onboarding/SKILL.md) helps you
+set up DAQIRI, generate and validate configurations, and run your first benchmark.
+Open your local DAQIRI repository in an agent that supports skills and ask:
+
+```text
+Use $daqiri-onboarding to help me generate and validate my first DAQIRI configuration.
+```
+
+The skill resumes from your existing setup and uses the repository's
+documentation, configuration generator and native validator. If your agent
+does not discover the skill automatically, provide the linked `SKILL.md` path.
+
 ## Tutorials
 
 Step-by-step walkthroughs to get hands-on:
