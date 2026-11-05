@@ -28,6 +28,7 @@ std::vector<ibv_qp_state> transitions;
 uint32_t remote_vendor = 0, negotiated_options = 0, advertised_vendor = 0;
 int creations = 0, destructions = 0, init_result = 0;
 bool wait_supported = true, realtime = true;
+bool preparing_uc = false;
 unsigned qp_format = 2;
 uint64_t fake_now = 1793275200023456789ULL;
 void require(bool value, const char* message) {
@@ -115,9 +116,8 @@ extern "C" int __wrap_mlx5dv_devx_general_cmd(ibv_context*, const void* in, size
 extern "C" ibv_qp* __wrap_mlx5dv_create_qp(ibv_context*, ibv_qp_init_attr_ex* attr,
                                            mlx5dv_qp_init_attr* dv_attr) {
   const uint64_t expected =
-      IBV_QP_EX_WITH_SEND |
-      (attr->qp_type == IBV_QPT_RC ? IBV_QP_EX_WITH_RDMA_READ | IBV_QP_EX_WITH_RDMA_WRITE |
-                                         IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM
+      IBV_QP_EX_WITH_SEND | (attr->qp_type == IBV_QPT_RC ? IBV_QP_EX_WITH_RDMA_READ : 0) |
+      (attr->qp_type != IBV_QPT_UD ? IBV_QP_EX_WITH_RDMA_WRITE | IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM
                                    : 0);
   require(attr->send_ops_flags == expected && (attr->comp_mask & IBV_QP_INIT_ATTR_PD) &&
               (attr->comp_mask & IBV_QP_INIT_ATTR_SEND_OPS_FLAGS) &&
@@ -150,12 +150,22 @@ extern "C" int __wrap_rdma_set_local_ece(rdma_cm_id* id, ibv_ece* ece) {
   return 0;
 }
 extern "C" int __wrap_rdma_init_qp_attr(rdma_cm_id*, ibv_qp_attr* attr, int* mask) {
+  if (preparing_uc) {
+    *mask = IBV_QP_STATE | IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER | IBV_QP_TIMEOUT |
+            IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY | IBV_QP_MAX_QP_RD_ATOMIC;
+    attr->qp_access_flags = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
+    return 0;
+  }
   require(attr->qp_state == IBV_QPS_INIT, "missing CM INIT transition");
   *mask = IBV_QP_STATE | IBV_QP_PORT;
   return 0;
 }
 extern "C" int __wrap_ibv_modify_qp(ibv_qp* qp, ibv_qp_attr* attr, int mask) {
-  if (attr->qp_state == IBV_QPS_INIT) {
+  if (preparing_uc) {
+    require(qp->qp_type == IBV_QPT_UC && mask == IBV_QP_STATE &&
+                attr->qp_access_flags == IBV_ACCESS_REMOTE_WRITE,
+            "UC transition retained RC-only attributes or read permission");
+  } else if (attr->qp_state == IBV_QPS_INIT) {
     require(mask == (IBV_QP_STATE | IBV_QP_PORT), "CM INIT attributes were not applied");
   } else {
     require(qp->qp_type == IBV_QPT_UD, "connected QP transitioned before CM establishment");
@@ -182,6 +192,19 @@ int main() {
     rdma_cm_id id{};
     id.verbs = &context;
     ibv_qp_init_attr attr{};
+    preparing_uc = true;
+    created_qp.qp_type = IBV_QPT_UC;
+    id.qp = &created_qp;
+    require(daqiri::detail::prepare_uc_qp(&id) == 0 &&
+                transitions == std::vector<ibv_qp_state>{IBV_QPS_INIT, IBV_QPS_RTR, IBV_QPS_RTS},
+            "UC did not apply filtered CM transitions");
+    transitions.clear();
+    init_result = EIO;
+    require(daqiri::detail::prepare_uc_qp(&id) == -1 && errno == EIO && transitions.size() == 1,
+            "UC transition failure was ignored");
+    init_result = 0;
+    preparing_uc = false;
+    id.qp = nullptr;
     for (auto type : {IBV_QPT_RC, IBV_QPT_UC, IBV_QPT_UD}) {
       attr.qp_type = requested_type = type;
       for (uint32_t vendor : {0u, 0x2c9u, 0x1234u}) {
@@ -295,10 +318,10 @@ int main() {
           for (int result : {0, ENOMEM}) {
             steps.clear();
             post_result = result;
-            wr.send_flags = IBV_SEND_SIGNALED | IBV_SEND_FENCE;
+            wr.send_flags = IBV_SEND_SIGNALED | (type == IBV_QPT_RC ? IBV_SEND_FENCE : 0);
             const int actual = daqiri::detail::post_timed_send(&qp, &wr, time);
-            if (type != IBV_QPT_RC) {
-              require(actual == EINVAL && steps.empty(), "non-RC one-sided WAIT was posted");
+            if (type == IBV_QPT_UD || (type == IBV_QPT_UC && opcode == IBV_WR_RDMA_READ)) {
+              require(actual == EINVAL && steps.empty(), "unsupported one-sided WAIT was posted");
               continue;
             }
             const int operation = opcode == IBV_WR_RDMA_READ    ? 8

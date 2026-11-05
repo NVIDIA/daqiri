@@ -151,14 +151,15 @@ Status RdmaEngine::send_direct(RdmaDirectState& state, BurstParams* burst) {
     return Status::INVALID_PARAMETER;
   }
   const auto opcode = burst->transport_hdr.opcode;
+  const auto type = params.client_id->qp->qp_type;
+  if (!detail::rdma_operation_supported(type, opcode)) return Status::NOT_SUPPORTED;
+  if (type == IBV_QPT_UD && opcode == RDMAOpCode::SEND && state.sge.length > params.ud_mtu)
+    return Status::INVALID_PARAMETER;
   const bool one_sided = opcode == RDMAOpCode::RDMA_READ || opcode == RDMAOpCode::RDMA_WRITE ||
                          opcode == RDMAOpCode::RDMA_WRITE_IMM;
   if (one_sided) {
     const auto& mr = *region->region;
     const auto remote = reinterpret_cast<uintptr_t>(burst->transport_hdr.raddr);
-    if (params.client_id->qp->qp_type != IBV_QPT_RC) {
-      return Status::NOT_SUPPORTED;
-    }
     const uint32_t permission =
         opcode == RDMAOpCode::RDMA_READ ? MEM_ACCESS_RDMA_READ : MEM_ACCESS_RDMA_WRITE;
     if (!(burst->transport_hdr.remote_access & permission) ||
@@ -192,6 +193,10 @@ Status RdmaEngine::send_direct(RdmaDirectState& state, BurstParams* burst) {
     if (one_sided) {
       state.send.wr.rdma.remote_addr = reinterpret_cast<uintptr_t>(burst->transport_hdr.raddr);
       state.send.wr.rdma.rkey = static_cast<uint32_t>(burst->transport_hdr.dst_key);
+    } else if (type == IBV_QPT_UD) {
+      state.send.wr.ud.ah = params.ud_ah;
+      state.send.wr.ud.remote_qpn = params.ud_qpn;
+      state.send.wr.ud.remote_qkey = params.ud_qkey;
     }
     const bool signal =
         one_sided || params.send_signal_every == 1 ||
@@ -233,6 +238,13 @@ Status RdmaEngine::send_direct(RdmaDirectState& state, BurstParams* burst) {
     state.receive.wr_id = tag;
     state.receive.sg_list = state.sge.length == 0 ? nullptr : &state.sge;
     state.receive.num_sge = state.sge.length == 0 ? 0 : 1;
+    if (type == IBV_QPT_UD) {
+      state.ud_receive_sges[0] = {reinterpret_cast<uintptr_t>(params.ud_grh.data()),
+                                  sizeof(ibv_grh), params.ud_grh_mr->lkey};
+      state.ud_receive_sges[1] = state.sge;
+      state.receive.sg_list = state.ud_receive_sges.data();
+      state.receive.num_sge = state.sge.length ? 2 : 1;
+    }
     ibv_recv_wr* bad = nullptr;
     if (verbs_->post_recv(params.client_id->qp, &state.receive, &bad)) {
       metrics::add_dropped(state.counters, "rx_post_failure", 1);
@@ -255,6 +267,12 @@ Status RdmaEngine::poll_direct(RdmaDirectState& state, bool tx, bool server) {
                        : poll_rx_completion(&params, &wc, &timestamp_ns);
   if (count <= 0) {
     return count == 0 ? Status::NOT_READY : Status::GENERIC_FAILURE;
+  }
+  if (!tx && wc.status == IBV_WC_SUCCESS && params.client_id->qp->qp_type == IBV_QPT_UD) {
+    if (wc.byte_len < sizeof(ibv_grh))
+      wc.status = IBV_WC_LOC_LEN_ERR;
+    else
+      wc.byte_len -= sizeof(ibv_grh);
   }
   const Status status = wc.status == IBV_WC_SUCCESS ? Status::SUCCESS : Status::GENERIC_FAILURE;
   auto deliver = [&](RdmaDirectState::Request& slot, bool transmit) {

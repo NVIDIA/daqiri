@@ -58,6 +58,7 @@ struct RdmaDirectState {
   ibv_sge sge{};
   ibv_send_wr send{};
   ibv_recv_wr receive{};
+  std::array<ibv_sge, 2> ud_receive_sges{};
 
   void close();
 };

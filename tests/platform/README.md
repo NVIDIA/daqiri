@@ -178,7 +178,8 @@ batched receive credits, both directions, immediate values 0 / 0x12345678 /
 followed by zero-byte `WRITE_IMM` verify data readiness without a sender-side
 wait. Receive-credit exhaustion tests require both completions to remain pending
 until a receive is posted, then verify recovery. Batched SEND/RECEIVE also checks exact bytes and actual receive lengths.
-The suite contains 34 transfer/notification cases and eight scheduled one-sided cases.
+The suite contains 34 transfer/notification cases and ten scheduled operation cases,
+plus transport-specific rejection checks.
 
 The default `DAQIRI_PLATFORM_RDMA_POLL_MODE=indirect` exercises all 34 cases.
 Set it to `direct` for caller-driven progress, selecting single-packet cases with
@@ -190,7 +191,7 @@ hardware timestamps, including immediate-data decoding. Set
 to select mixed polling; when either is direct, use the single-packet filter.
 Set `DAQIRI_PLATFORM_RDMA_ACCURATE_SEND=1` to create accurate-send QPs and repeat
 the transfer cases with their matching real-time CQs. With timestamps enabled too,
-eight additional cases verify scheduled READ, WRITE, payload WRITE_IMM, and zero-byte
+ten additional cases verify scheduled SEND, READ, WRITE, payload WRITE_IMM, and zero-byte
 WRITE_IMM in both directions. They measure a 100 ms hardware WAIT against a baseline
 receive's NIC timestamp. For hosts without PTP synchronization, they use the same
 8-second cyclic target phase within the setter's host-time window. This verifies
@@ -200,6 +201,17 @@ Set `DAQIRI_PLATFORM_RDMA_CLIENT_IP` and `DAQIRI_PLATFORM_RDMA_SERVER_IP` to
 unused IPv4 addresses already configured on a local RDMA interface.
 `DAQIRI_PLATFORM_RDMA_PORT` defaults to 19485 and
 `DAQIRI_PLATFORM_RDMA_ITERATIONS` defaults to 100 per case.
+
+Set `DAQIRI_PLATFORM_RDMA_TRANSPORT=UC` to repeat WRITE, WRITE_IMM (including
+zero-byte notifications), and SEND/RECEIVE cases with UC. READ and the RC-only
+RNR-wait tests are skipped. Set it to `UD` for SEND/RECEIVE, GRH isolation, and
+MTU-limit checks; the 4096-byte SEND cases require an active port MTU of 4096.
+Both modes verify rejection of unsupported one-sided operations. Use the same
+direct/mixed single-packet filter above when either queue direction is direct.
+Unreliable tests pre-post receives and allow the RX worker to consume them
+before sending; they do not assume retransmission or peer-delivery guarantees.
+UC credit-underrun tests also confirm local WRITE_IMM completion without a peer
+notification, followed by recovery with a pre-posted receive credit.
 Set `DAQIRI_PLATFORM_REQUIRE_RDMA_READ_WRITE=1` in qualification jobs so missing
 addresses, devices, bindings, or CPU cores fail instead of skipping.
 The test does not modify networking. If adding temporary addresses, remove

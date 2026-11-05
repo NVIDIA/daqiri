@@ -297,7 +297,19 @@ engine.
 
 - **`roce_config.transport_mode`**: RDMA transport type.
   - type: `string`
-  - values: `RC` (Reliable Connected), `UC` (Unreliable Connected)
+  - values: `RC` (Reliable Connected, default), `UC` (Unreliable Connected),
+    `UD` (Unreliable Datagram)
+
+Both peers must select the same transport. RC supports SEND/RECEIVE, RDMA READ,
+WRITE, and WRITE_IMM. UC supports SEND/RECEIVE, WRITE, and WRITE_IMM; READ requires
+RC. UD supports SEND/RECEIVE only, with each SEND limited to the active RDMA
+port MTU. DAQIRI supplies the UD destination address and discards the 40-byte
+GRH into a separate registered receive SGE, keeping application buffers and
+reported packet lengths payload-only. UC and UD do not retry lost packets or
+receive-credit underruns; coordinate receive posting with the sender. Successful
+local send completions do not guarantee peer delivery on these transports.
+UD uses RoCEv2 over IPv4. When configured interfaces use different transport
+modes, pass an explicit source address to `rdma_connect_to_server`.
 
 Each RoCE client connection uses one TX queue from the interface whose `address`
 field matches the connection's local IP address. An application can choose that
@@ -799,7 +811,7 @@ PTP-synchronized. DAQIRI requires ConnectX-7 or later for send-on-timestamp.
 Accurate send supports RDMA `SEND`, `RDMA_READ`, `RDMA_WRITE`, and
 `RDMA_WRITE_IMM` operations on `roce://` endpoints,
 in direct and indirect TX modes. SEND retains its normal transport support;
-one-sided READ/WRITE/WRITE_IMM operations require RC, as for immediate submission.
+READ requires RC, while WRITE and WRITE_IMM support RC and UC, as for immediate submission.
 Set `accurate_send: true` under the sending
 interface's `tx` section before connecting. Connection setup fails if the mlx5
 device lacks wait-on-time, a 1 GHz clock, or a RoCE QP timestamp format that supports

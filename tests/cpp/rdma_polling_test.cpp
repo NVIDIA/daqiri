@@ -35,6 +35,9 @@ struct FakeVerbs {
   unsigned ended_polls = 0;
   ibv_cq_ex timed_rx{}, timed_tx{};
   ibv_qp qp{};
+  ibv_mr grh{};
+  ibv_ah ah{};
+  unsigned destroyed_ahs = 0, deregistered_grhs = 0;
   std::deque<ibv_wc> rx_completions, tx_completions;
   std::atomic<unsigned> rx_polls{0}, tx_polls{0}, sends{0}, receives{0};
   std::mutex mutex;
@@ -204,7 +207,7 @@ struct FakeVerbs {
     completions.pop_front();
     return 1;
   }
-  static int post_send(ibv_qp*, ibv_send_wr* wr, ibv_send_wr**) {
+  static int post_send(ibv_qp* qp, ibv_send_wr* wr, ibv_send_wr**) {
     std::lock_guard<std::mutex> lock(current->mutex);
     const bool one_sided = wr->opcode == IBV_WR_RDMA_READ || wr->opcode == IBV_WR_RDMA_WRITE ||
                            wr->opcode == IBV_WR_RDMA_WRITE_WITH_IMM;
@@ -214,8 +217,13 @@ struct FakeVerbs {
             "incorrect SQ encoding");
     if (one_sided) {
       require(wr->wr.rdma.remote_addr >= 4096 && wr->wr.rdma.rkey == 456 &&
-                  (wr->send_flags & IBV_SEND_FENCE),
+                  bool(wr->send_flags & IBV_SEND_FENCE) == (qp->qp_type == IBV_QPT_RC),
               "one-sided descriptor or fence lost");
+    }
+    if (qp->qp_type == IBV_QPT_UD) {
+      require(wr->wr.ud.ah == &current->ah && wr->wr.ud.remote_qpn == 321 &&
+                  wr->wr.ud.remote_qkey == 654 && !(wr->send_flags & IBV_SEND_FENCE),
+              "UD SEND lost its destination or used an RC fence");
     }
     if (current->send_result) {
       return current->send_result;
@@ -237,9 +245,11 @@ struct FakeVerbs {
     if (!result) current->send_times.push_back(time);
     return result;
   }
-  static int post_recv(ibv_qp*, ibv_recv_wr* wr, ibv_recv_wr**) {
+  static int post_recv(ibv_qp* qp, ibv_recv_wr* wr, ibv_recv_wr**) {
     std::lock_guard<std::mutex> lock(current->mutex);
-    require((wr->num_sge == 1 && wr->sg_list) || (wr->num_sge == 0 && !wr->sg_list),
+    const bool ud = qp->qp_type == IBV_QPT_UD;
+    require((ud && wr->num_sge == 2 && wr->sg_list[0].length == sizeof(ibv_grh)) ||
+                (wr->num_sge == 1 && wr->sg_list) || (wr->num_sge == 0 && !wr->sg_list),
             "incorrect RECEIVE encoding");
     if (current->recv_result) {
       return current->recv_result;
@@ -250,7 +260,9 @@ struct FakeVerbs {
       wc.wr_id = wr->wr_id;
       wc.status = IBV_WC_SUCCESS;
       wc.opcode = IBV_WC_RECV;
-      wc.byte_len = wr->num_sge ? wr->sg_list->length : 0;
+      wc.byte_len = ud            ? sizeof(ibv_grh) + wr->sg_list[1].length
+                    : wr->num_sge ? wr->sg_list->length
+                                  : 0;
       current->rx_completions.push_back(wc);
     }
     ++current->receives;
@@ -261,6 +273,24 @@ struct FakeVerbs {
   }
   static int query_qp(ibv_qp*, ibv_qp_attr*, int, ibv_qp_init_attr*) {
     return -1;
+  }
+  static ibv_mr* reg_mr(ibv_pd*, void*, size_t, int) {
+    return &current->grh;
+  }
+  static int dereg_mr(ibv_mr*) {
+    ++current->deregistered_grhs;
+    return 0;
+  }
+  static int query_port(ibv_context*, uint8_t, ibv_port_attr* attr) {
+    attr->active_mtu = IBV_MTU_1024;
+    return 0;
+  }
+  static ibv_ah* create_ah(ibv_pd*, ibv_ah_attr*) {
+    return &current->ah;
+  }
+  static int destroy_ah(ibv_ah*) {
+    ++current->destroyed_ahs;
+    return 0;
   }
   static const char* wc_status_str(ibv_wc_status) {
     return "test completion";
@@ -286,7 +316,8 @@ class RdmaEnginePollingTestPeer {
 
  public:
   RdmaEnginePollingTestPeer(bool direct_rx, bool direct_tx, bool accurate_send = false,
-                            bool timestamps = false, bool realtime_supported = true)
+                            bool timestamps = false, bool realtime_supported = true,
+                            RDMATransportMode transport = RDMATransportMode::RC)
       : params(engine.server_q_params_.try_emplace(&listener, 1).first->second[0]) {
     FakeVerbs::current = &fake;
     api.cm_create_event_channel = &FakeVerbs::create_channel;
@@ -323,12 +354,17 @@ class RdmaEnginePollingTestPeer {
     api.modify_qp = &FakeVerbs::modify_qp;
     api.query_qp = &FakeVerbs::query_qp;
     api.wc_status_str = &FakeVerbs::wc_status_str;
+    api.reg_mr = &FakeVerbs::reg_mr;
+    api.dereg_mr = &FakeVerbs::dereg_mr;
+    api.query_port = &FakeVerbs::query_port;
+    api.create_ah = &FakeVerbs::create_ah;
+    api.destroy_ah = &FakeVerbs::destroy_ah;
     engine.verbs_ = &api;
     engine.cfg_.ifs_.resize(1);
     auto& intf = engine.cfg_.ifs_[0];
     intf.rx_.hardware_timestamps_ = timestamps;
     intf.tx_.accurate_send_ = accurate_send;
-    intf.rdma_.xmode_ = RDMATransportMode::RC;
+    intf.rdma_.xmode_ = transport;
     intf.rx_.queues_.resize(1);
     intf.tx_.queues_.resize(1);
     intf.rx_.queues_[0].poll_mode_ = direct_rx ? QueuePollMode::DIRECT : QueuePollMode::INDIRECT;
@@ -360,6 +396,12 @@ class RdmaEnginePollingTestPeer {
     memory.params_.num_bufs_ = 1;
     memory.ctx_mr_map_[&pd] = &mr;
     require(engine.setup_thread_params(&params, false) == 0, "QP setup failed");
+    if (transport == RDMATransportMode::UD) {
+      rdma_ud_param peer{};
+      peer.qp_num = 321;
+      peer.qkey = 654;
+      require(engine.setup_ud_peer(&params, peer), "UD destination setup failed");
+    }
     require(fake.requested_inline == (direct_tx ? 128u : 0u), "incorrect inline request");
     require(fake.timestamps == timestamps, "timestamp CQ selection incorrect");
     require(
@@ -417,6 +459,71 @@ class RdmaEnginePollingTestPeer {
             "timestamp getter did not validate null pointers");
     require(engine.get_packet_rx_timestamp(&burst, 0, &timestamp_ns) == Status::INVALID_PARAMETER,
             "timestamp getter accepted an empty burst");
+  }
+
+  void transport_operations(bool server) {
+    engine.launch_worker(&params, server);
+    params.ready_to_exit.store(true);
+    for (auto& [id, thread] : engine.worker_threads_) thread.join();
+    engine.worker_threads_.clear();
+    params.ready_to_exit.store(false);
+    fake.auto_complete = true;
+    std::array<char, 2048> bytes{};
+    void* pointer = bytes.data();
+    uint32_t length = 64;
+    for (auto op : {RDMAOpCode::SEND, RDMAOpCode::RECEIVE, RDMAOpCode::RDMA_READ,
+                    RDMAOpCode::RDMA_WRITE, RDMAOpCode::RDMA_WRITE_IMM}) {
+      BurstParams burst{};
+      engine.rdma_set_header(&burst, op, reinterpret_cast<uintptr_t>(&id), server, 1, 9, "data");
+      burst.pkts[0] = &pointer;
+      burst.pkt_lens[0] = &length;
+      burst.transport_hdr.raddr = reinterpret_cast<void*>(4096);
+      burst.transport_hdr.dst_key = 456;
+      burst.transport_hdr.remote_length = 4096;
+      burst.transport_hdr.remote_access = MEM_ACCESS_RDMA_READ | MEM_ACCESS_RDMA_WRITE;
+      const bool supported = op == RDMAOpCode::SEND || op == RDMAOpCode::RECEIVE ||
+                             (fake.qp.qp_type == IBV_QPT_UC &&
+                              (op == RDMAOpCode::RDMA_WRITE || op == RDMAOpCode::RDMA_WRITE_IMM));
+      if (!supported) {
+        // Keep this stack-backed request caller-owned on synchronous rejection.
+        const bool direct = params.direct_tx;
+        params.direct_tx = true;
+        require(engine.send_tx_burst(&burst) == Status::NOT_SUPPORTED,
+                "unsupported transport operation accepted");
+        params.direct_tx = direct;
+        continue;
+      }
+      require(engine.send_tx_burst(&burst) == Status::SUCCESS, "supported operation rejected");
+      BurstParams* pending = nullptr;
+      while (tx_ring->dequeue(reinterpret_cast<void**>(&pending)))
+        require(engine.post_burst(&params, pending) == Status::SUCCESS, "transport post failed");
+      engine.poll_completions(server, &params, !params.direct_rx, !params.direct_tx);
+      BurstParams* result = nullptr;
+      require(engine.get_rx_burst(&result, reinterpret_cast<uintptr_t>(&id), server) ==
+                      Status::SUCCESS &&
+                  result == &burst && length == 64 &&
+                  result->transport_hdr.status == Status::SUCCESS,
+              "transport completion lost payload length or ownership");
+    }
+    if (fake.qp.qp_type == IBV_QPT_UD) {
+      BurstParams burst{};
+      engine.rdma_set_header(&burst, RDMAOpCode::SEND, reinterpret_cast<uintptr_t>(&id), server, 1,
+                             10, "data");
+      burst.pkts[0] = &pointer;
+      burst.pkt_lens[0] = &length;
+      length = params.ud_mtu + 1;
+      params.direct_tx = true;
+      const auto posted = fake.sends.load();
+      require(engine.send_tx_burst(&burst) == Status::INVALID_PARAMETER && fake.sends == posted,
+              "oversize UD SEND reached the NIC");
+    }
+    if (params.direct_state) params.direct_state->close();
+    engine.destroy_thread_params(&params);
+    require(!params.ud_ah && !params.ud_grh_mr &&
+                fake.destroyed_ahs == (fake.qp.qp_type == IBV_QPT_UD ? 1u : 0u) &&
+                fake.deregistered_grhs == fake.destroyed_ahs && engine.tx_rings_.size() == 1 &&
+                engine.rx_rings_.size() == 1,
+            "transport teardown leaked AHs, registrations, or queue reservations");
   }
 
   void check_timestamp(BurstParams* burst, bool receive, uint64_t wr_id) {
@@ -1422,6 +1529,16 @@ daqiri:
 int main() {
   try {
     daqiri::RdmaEnginePollingTestPeer::configuration();
+    for (auto transport : {daqiri::RDMATransportMode::UC, daqiri::RDMATransportMode::UD}) {
+      for (bool rx : {false, true}) {
+        for (bool tx : {false, true}) {
+          for (bool server : {false, true}) {
+            daqiri::RdmaEnginePollingTestPeer test(rx, tx, false, true, true, transport);
+            test.transport_operations(server);
+          }
+        }
+      }
+    }
     for (bool rx : {false, true}) {
       for (bool tx : {false, true}) {
         for (bool enabled : {false, true}) {

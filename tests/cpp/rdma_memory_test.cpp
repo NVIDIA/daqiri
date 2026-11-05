@@ -113,8 +113,8 @@ int post_send(ibv_qp* qp, ibv_send_wr* wr, ibv_send_wr** bad_wr) {
           (wr->num_sge == 0 && wr->sg_list == nullptr));
   const auto length = wr->num_sge == 0 ? 0 : wr->sg_list->length;
   require(wr->wr.rdma.rkey == provider->remote_key);
-  require((wr->send_flags & (IBV_SEND_SIGNALED | IBV_SEND_FENCE)) ==
-          (IBV_SEND_SIGNALED | IBV_SEND_FENCE));
+  require(wr->send_flags & IBV_SEND_SIGNALED);
+  require(bool(wr->send_flags & IBV_SEND_FENCE) == (qp->qp_type == IBV_QPT_RC));
   auto* local = wr->num_sge == 0 ? nullptr : reinterpret_cast<void*>(wr->sg_list->addr);
   auto* remote = reinterpret_cast<void*>(wr->wr.rdma.remote_addr);
   ibv_wc completion{};
@@ -139,7 +139,7 @@ int post_send(ibv_qp* qp, ibv_send_wr* wr, ibv_send_wr** bad_wr) {
 }
 
 void test_worker(daqiri::RDMAOpCode opcode, int fail_packet = -1, bool cq_error = false,
-                 bool zero = false) {
+                 bool zero = false, ibv_qp_type type = IBV_QPT_RC) {
   using namespace daqiri;
   RdmaEngine engine;
   SimulatedVerbs provider;
@@ -152,7 +152,7 @@ void test_worker(daqiri::RDMAOpCode opcode, int fail_packet = -1, bool cq_error 
   ibv_pd pd{};
   ibv_qp qp{};
   qp.context = &context;
-  qp.qp_type = IBV_QPT_RC;
+  qp.qp_type = type;
   qp.qp_context = &provider;
   rdma_cm_id connection{};
   connection.verbs = &context;
@@ -173,7 +173,7 @@ void test_worker(daqiri::RDMAOpCode opcode, int fail_packet = -1, bool cq_error 
   params.if_idx = params.queue_idx = 0;
   params.qp_params.tx_cq = &tx_cq;
   params.qp_params.rx_cq = &rx_cq;
-  params.qp_params.qp_attr.qp_type = IBV_QPT_RC;
+  params.qp_params.qp_attr.qp_type = type;
   params.qp_params.tx_ring = Ring::create("test_tx", 8, RingMode::SPSC);
   params.qp_params.rx_ring = Ring::create("test_rx", 8, RingMode::SPSC);
   require(params.qp_params.tx_ring && params.qp_params.rx_ring);
@@ -296,5 +296,10 @@ int main() {
   test_worker(RDMAOpCode::RDMA_WRITE_IMM, -1, false, true);
   test_worker(RDMAOpCode::RDMA_WRITE_IMM, 1);
   test_worker(RDMAOpCode::RDMA_WRITE_IMM, -1, true);
+  for (auto op : {RDMAOpCode::RDMA_WRITE, RDMAOpCode::RDMA_WRITE_IMM}) {
+    test_worker(op, -1, false, false, IBV_QPT_UC);
+    test_worker(op, 1, false, false, IBV_QPT_UC);
+  }
+  test_worker(RDMAOpCode::RDMA_WRITE_IMM, -1, false, true, IBV_QPT_UC);
   return 0;
 }

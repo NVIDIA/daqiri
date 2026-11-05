@@ -592,7 +592,7 @@ if status == daqiri.Status.SUCCESS:
     )
 ```
 
-For RC one-sided reads and writes, the peer exports its registration with
+For one-sided reads and writes, the peer exports its registration with
 `status, region = daqiri.rdma_get_memory_region(conn_id, "REMOTE_MEMORY")`.
 Exchange the descriptor's integer `address`, `length`, and `rkey` through your
 application's control channel. The requester selects `RDMAOpCode.RDMA_READ`
@@ -609,6 +609,9 @@ operations. Registration permissions, descriptor lifetime, ownership, and
 partial failure behavior follow the
 [C++ read/write API](cpp.md#rdma-reads-and-writes).
 `RDMA_READ_IMM` returns `NOT_SUPPORTED`.
+READ requires RC; WRITE and WRITE_IMM support RC and UC. UD supports SEND/RECEIVE
+only, with SEND payloads limited to the active port MTU. Receive pointers and
+lengths exclude the UD GRH. UC and UD provide no delivery or RNR retry guarantee.
 
 Select `RDMAOpCode.RDMA_WRITE_IMM` explicitly to write with a notification,
 providing the immediate value in the creation call:
@@ -628,6 +631,8 @@ notification. Submit it after plain writes on the same RC connection when you
 need a separate notification. Plain writes do not automatically notify.
 Each packet in a write-with-immediate burst consumes one peer receive credit
 and produces one peer notification with the supplied value.
+On UC, post those credits before sending: missing credits or lost packets can
+drop notifications, and a successful local completion does not confirm delivery.
 
 The receiver pre-posts `RECEIVE` credits; lengths may be zero for notification
 use. Poll `get_rx_burst_for_connection(conn_id, is_server)` and check the status

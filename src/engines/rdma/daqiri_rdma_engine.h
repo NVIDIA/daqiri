@@ -35,6 +35,7 @@
 #include <map>
 #include "rdma_direct.h"
 #include "rdma_work_tracking.h"
+#include "rdma_transport.h"
 
 namespace daqiri::detail {
 struct RdmaCmApi;
@@ -78,6 +79,15 @@ struct rdma_thread_params {
   bool direct_rx = false;
   bool direct_tx = false;
   bool accurate_send = false;
+  ibv_ah* ud_ah = nullptr;
+  uint32_t ud_qpn = 0;
+  uint32_t ud_qkey = 0;
+  uint32_t ud_mtu = 0;
+  // UD always reserves 40 bytes for a GRH. Discard it into a separate SGE so
+  // application buffers (including GPU memory) contain only payload bytes.
+  // All receives may share this scratch area because its contents are ignored.
+  std::array<uint8_t, sizeof(ibv_grh)> ud_grh{};
+  ibv_mr* ud_grh_mr = nullptr;
   uint32_t max_inline_data = 0;
   std::atomic<uint64_t> inline_wqes{0};
   RdmaDirectState* direct_state = nullptr;
@@ -255,6 +265,7 @@ class RdmaEngine : public Engine {
   Status get_direct(RdmaDirectState& state, BurstParams** burst, bool server);
   Status poll_direct(RdmaDirectState& state, bool tx, bool server);
   int poll_rx_completion(rdma_thread_params* params, ibv_wc* wc, uint64_t* timestamp_ns);
+  bool setup_ud_peer(rdma_thread_params* params, const rdma_ud_param& peer);
   const RdmaDirectMr* direct_region(RdmaDirectState& state, BurstParams* burst);
   Ring* burst_pool(BurstParams* burst);
   void initialize_progress(bool is_server, rdma_thread_params* params);

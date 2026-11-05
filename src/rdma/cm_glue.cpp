@@ -4,10 +4,68 @@
 #include "cm_api.h"
 #include "timed_send.h"
 #include <cerrno>
+#include <cstring>
+#include <netinet/in.h>
 #include <infiniband/mlx5dv.h>
 #include "../engines/ibverbs/mlx5_prm_min.h"
 
 namespace daqiri::detail {
+int query_rdma_port(ibv_context* context, uint8_t port, ibv_port_attr* attr) {
+  return ibv_query_port(context, port, attr);
+}
+
+ibv_ah* create_ud_reply_ah(rdma_cm_id* id, ibv_pd* pd) {
+  // A SIDR request supplies neither an AH nor the sender's QPN/QKey. Build
+  // the reverse RoCEv2 IPv4 route; QPN/QKey travel in DAQIRI private data.
+  const auto* local = reinterpret_cast<const sockaddr_in*>(rdma_get_local_addr(id));
+  const auto* remote = reinterpret_cast<const sockaddr_in*>(rdma_get_peer_addr(id));
+  if (local->sin_family != AF_INET || remote->sin_family != AF_INET) {
+    errno = EAFNOSUPPORT;
+    return nullptr;
+  }
+  ibv_gid sgid{}, dgid{};
+  sgid.raw[10] = dgid.raw[10] = 0xff;
+  sgid.raw[11] = dgid.raw[11] = 0xff;
+  std::memcpy(sgid.raw + 12, &local->sin_addr, 4);
+  std::memcpy(dgid.raw + 12, &remote->sin_addr, 4);
+  ibv_port_attr port{};
+  if (ibv_query_port(id->verbs, id->port_num, &port)) return nullptr;
+  for (int index = 0; index < port.gid_tbl_len; ++index) {
+    ibv_gid_entry entry{};
+    if (ibv_query_gid_ex(id->verbs, id->port_num, index, &entry, 0) ||
+        entry.gid_type != IBV_GID_TYPE_ROCE_V2 || std::memcmp(&entry.gid, &sgid, sizeof(sgid)))
+      continue;
+    ibv_ah_attr attr{};
+    attr.port_num = id->port_num;
+    attr.is_global = 1;
+    attr.grh.dgid = dgid;
+    attr.grh.sgid_index = index;
+    attr.grh.hop_limit = 64;
+    return ibv_create_ah(pd, &attr);
+  }
+  errno = EADDRNOTAVAIL;
+  return nullptr;
+}
+
+int prepare_uc_qp(rdma_cm_id* id) {
+  // CM negotiates the route, QPN and PSNs using its connected service. Its
+  // automatic RC transitions include attributes that are illegal on a UC QP.
+  for (auto state : {IBV_QPS_INIT, IBV_QPS_RTR, IBV_QPS_RTS}) {
+    ibv_qp_attr attr{};
+    attr.qp_state = state;
+    int mask = 0;
+    if (rdma_init_qp_attr(id, &attr, &mask)) return -1;
+    mask &= ~(IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
+              IBV_QP_RNR_RETRY | IBV_QP_MAX_QP_RD_ATOMIC);
+    attr.qp_access_flags &= IBV_ACCESS_REMOTE_WRITE;
+    const int result = ibv_modify_qp(id->qp, &attr, mask);
+    if (result) {
+      errno = result;
+      return -1;
+    }
+  }
+  return 0;
+}
 
 int create_timed_qp(rdma_cm_id* id, ibv_pd* pd, ibv_qp_init_attr* attr) {
   // Keep ordinary RDMA independent of mlx5 hardware; this path is opt-in and
@@ -48,8 +106,10 @@ int create_timed_qp(rdma_cm_id* id, ibv_pd* pd, ibv_qp_init_attr* attr) {
   extended.comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_SEND_OPS_FLAGS;
   extended.send_ops_flags = IBV_QP_EX_WITH_SEND;
   if (attr->qp_type == IBV_QPT_RC) {
-    extended.send_ops_flags |=
-        IBV_QP_EX_WITH_RDMA_READ | IBV_QP_EX_WITH_RDMA_WRITE | IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM;
+    extended.send_ops_flags |= IBV_QP_EX_WITH_RDMA_READ;
+  }
+  if (attr->qp_type == IBV_QPT_RC || attr->qp_type == IBV_QPT_UC) {
+    extended.send_ops_flags |= IBV_QP_EX_WITH_RDMA_WRITE | IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM;
   }
   mlx5dv_qp_init_attr dv{};
   dv.comp_mask = MLX5DV_QP_INIT_ATTR_MASK_SEND_OPS_FLAGS;
@@ -114,7 +174,9 @@ int post_timed_send(ibv_qp* qp, ibv_send_wr* wr, uint64_t timestamp_ns) {
   if (!dv || (!one_sided && wr->opcode != IBV_WR_SEND) || wr->next || wr->num_sge < 0 ||
       wr->num_sge > 1 || (wr->num_sge && !wr->sg_list) ||
       (!wr->num_sge && wr->opcode != IBV_WR_RDMA_WRITE_WITH_IMM) ||
-      (one_sided && qp->qp_type != IBV_QPT_RC) ||
+      (one_sided && qp->qp_type != IBV_QPT_RC &&
+       (qp->qp_type != IBV_QPT_UC || wr->opcode == IBV_WR_RDMA_READ)) ||
+      (qp->qp_type != IBV_QPT_RC && (wr->send_flags & IBV_SEND_FENCE)) ||
       (wr->opcode == IBV_WR_RDMA_READ && (wr->send_flags & IBV_SEND_INLINE)))
     return EINVAL;
   if (qp->qp_type == IBV_QPT_UD && !wr->wr.ud.ah) return EINVAL;
