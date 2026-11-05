@@ -30,12 +30,12 @@ Inspect the selected script before execution; some setup helpers mutate network 
 | Task | Existing tool | Boundary |
 |---|---|---|
 | Container build | `scripts/build-container.sh` | Reuse a compatible existing image before proposing a build |
-| Hardware/system checks | `python/tune_system.py --check all` | Diagnostics and individual checks; does not supply a complete reversible tuning transaction |
+| Hardware/system checks | `python/tune_system.py --check <property>` | Select relevant diagnostics. `--check all` also writes a topology image; use a fresh `--schematic-output` path. Does not supply a complete reversible tuning transaction |
 | Config generation | `scripts/gen_daqiri_config.py` | `raw-pair`, `socket-pair`, generic rendering; inspect `--help` |
 | Native semantic validation | `daqiri_config_validate` in the actual build/install | Hardware-free; `--list-engines` discovers compiled engines; successful validation is not a hardware test |
-| Spark namespace wire setup | `scripts/setup_spark_wire_loopback_netns.sh` | Only for the documented topology; preserve existing networking |
+| Cabled namespace setup | `scripts/setup_cabled_loopback_netns.sh --platform <platform>` | Choose `dgx-spark` or `igx-thor` for the documented topology; preserve existing networking |
 | Spark RDMA setup | `scripts/setup_spark_rdma_loopback.sh` | Read requirements and namespace behavior first |
 | Spark cross-host networking | `scripts/setup_spark_xhost_net.sh` | Confirm role, peer and interface selection |
-| Optional performance sweeps | `examples/run_spark_bench.sh`, `examples/run_spark_mq_bench.sh` | Platform/transport-specific; not required for one first-run test |
+| Optional performance sweeps | `examples/run_cabled_loopback_bench.sh --platform <platform>`, `examples/run_spark_mq_bench.sh` | Choose `dgx-spark` or `igx-thor` for the cabled harness; the multi-queue harness remains Spark-specific. Not required for one first-run test |
 
 Use current benchmark executables and shipped example configs described by the selected guide. Avoid adding skill-private clones of configuration, validation or setup scripts. If a checkout lacks a mapped tool, inspect that version's documented alternative or report the prerequisite; do not silently pull another release's script into it.
