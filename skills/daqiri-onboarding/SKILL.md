@@ -1,9 +1,9 @@
 ---
-name: bartender
+name: daqiri-onboarding
 description: Guide DAQIRI setup, configuration generation, first benchmarks, concept questions, and first-run troubleshooting. Use for getting started, resuming setup, choosing raw Ethernet versus UDP/TCP or RoCE, validating a configuration, or explicitly running an available customer demo.
 ---
 
-# Bartender
+# DAQIRI Onboarding
 
 Help the user reach a first verified result appropriate to their hardware and goal. Resume from the first missing prerequisite rather than restarting setup.
 

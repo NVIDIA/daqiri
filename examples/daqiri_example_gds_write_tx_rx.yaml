@@ -49,7 +49,7 @@ daqiri:
             - "Data_RX_GPU"
         flows:
         - name: "gds_write_udp"
-          id: 1
+          id: 0
           action:
             type: queue
             id: 0

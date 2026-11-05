@@ -21,11 +21,11 @@ For configuration inputs, distinguish discovered values from user estimates or e
 | Concrete config | Run native semantic validation, then verify hardware/path prerequisites |
 | Prior benchmark output | Interpret or diagnose that run before proposing another |
 
-Before treating an existing runtime as compatible, compare its available provenance, library ABI,
-compiled engines and required installed tools with the selected checkout. If that checkout installs
-`daqiri_config_validate` but the runtime lacks it, or its ABI or provenance does not match, flag the
-runtime as stale or incompatible and propose rebuilding from the selected checkout. Do not silently
-switch to a newer branch, borrow a validator from another release, or rebuild without authorization.
+Before reusing a runtime, compare available source provenance, library ABI, compiled engines and
+required tools with the selected checkout. Distinguish confirmed incompatibility from unknown
+provenance. A missing required validator or incompatible ABI blocks validation; a different source
+revision requires assessing whether the relevant interfaces and behavior match. Propose a compatible
+runtime or authorized rebuild without switching branches or borrowing another release's validator.
 
 Do not build or launch another container when an adequate existing runtime already satisfies the request.
 
@@ -49,6 +49,21 @@ Use the config-generation guide's netdev-to-BDF/MAC discovery and the system-che
 
 Generate with `raw-pair` or `socket-pair` where applicable. For an existing/custom configuration, preserve application-owned sections and consult the generator's generic rendering support. Write new configs to a fresh user-appropriate directory rather than overwrite originals.
 
+Treat shipped configurations as starting points. Resolve the selected engine explicitly and inspect
+its requirements using matching documentation, generator behavior and native diagnostics. Apply
+required adaptations to a fresh output through the existing generator or renderer; preserve the
+source configuration.
+
+For raw ibverbs, static RX flow IDs must be positive and unique. Preserve valid IDs where possible
+and allocate unused positive IDs for zero-valued flows. Keep queue IDs and queue-action destinations
+unchanged. Update corresponding reorder references and any understood application references
+together. If duplicate IDs or unknown application consumers make the mapping ambiguous, report the
+ambiguity before changing it.
+
+Preserve application-owned sections except for identified adaptations and their dependent
+references. Show the resolved rendering command, resulting YAML and flow-ID mapping before native
+validation.
+
 Discover the actual validator in the build/install/runtime, show its command, output and exit status, and resolve errors before traffic. If unavailable, report generation as unvalidated and identify the missing build/runtime prerequisite. Do not substitute YAML parsing or stub validation for native semantic validation.
 
 ## Execute the first test
@@ -57,9 +72,14 @@ Read only the selected raw or socket/RDMA benchmark guide. Show concrete command
 
 Use the existing namespace/cross-host setup scripts only for a matching topology after reading their help and current behavior. Explain changes before applying them and plan cleanup for resources created by this run. A pre-existing namespace or container is not owned merely because its name matches an example. Do not delete namespaces containing moved interfaces without following the documented restoration procedure.
 
-Before a measured run, verify the benchmark, monitor and their direct command dependencies inside
-the actual execution context. Treat monitor diagnostics or missing samples as failure even when the
-monitor exits successfully; do not report performance from an incomplete measurement pipeline.
+Before a measured run, verify the benchmark, monitor and their direct dependencies inside the actual
+execution context. For `mlnx_perf`, check `ethtool`; verify link tools such as `ip` when the planned
+discovery or restoration commands require them. If prerequisites are missing, report the missing
+commands, required packages and affected steps before proposing installation or a rebuild.
+
+Evaluate exit status, error diagnostics and usable counter samples together. An exit status of zero
+with a dependency error or no samples is a failed measurement. Distinguish benchmark delivery
+evidence from throughput measurement evidence.
 
 Keep first-smoke success separate from optional performance tuning. Do not change firmware, boot settings, MTU, pause policy, clocks or routes solely because a tutorial lists an optimization. Resolve applicability, authorization and restoration before changes.
 

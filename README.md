@@ -101,20 +101,17 @@ Reference material for the DAQIRI codebase:
 
 ### Agent-assisted onboarding
 
-The [Bartender onboarding skill](.agents/skills/bartender/SKILL.md) is
-included under `.agents/skills/bartender/`. In a skill-enabled agent
-session opened in this checkout, start with:
+The [DAQIRI onboarding skill](skills/daqiri-onboarding/SKILL.md) helps you
+set up DAQIRI, generate and validate configurations, and run your first benchmark.
+Open your local DAQIRI repository in an agent that supports skills and ask:
 
 ```text
-Use $bartender to help me generate and validate my first DAQIRI configuration.
+Use $daqiri-onboarding to help me generate and validate my first DAQIRI configuration.
 ```
 
-The skill resumes from an existing setup and uses this checkout's documentation,
-configuration generator and native validator. If the agent does not discover
-repository skills, provide the linked `SKILL.md` path explicitly. A local
-customer-demo package is optional and is not included with the skill; ordinary
-onboarding does not require it. Host changes and hardware traffic follow the
-session's authorization requirements.
+The skill resumes from your existing setup and uses the repository's
+documentation, configuration generator and native validator. If your agent
+does not discover the skill automatically, provide the linked `SKILL.md` path.
 
 ## Tutorials
 

@@ -56,7 +56,7 @@ daqiri:
           - "Latency_RX"
         flows:
         - name: "latency_flow"
-          id: 1
+          id: 0
           action:
             type: queue
             id: 0
