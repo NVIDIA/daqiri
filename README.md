@@ -20,7 +20,6 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 ## Table of Contents
 
 - [Features](#features)
-- [Benchmarking](#benchmarking)
 - [Documentation](#documentation)
 - [Tutorials](#tutorials)
 - [Releases](#releases)
@@ -28,72 +27,11 @@ DAQIRI provides direct NIC hardware access in userspace, bypassing the Linux ker
 
 ## Features
 
-- **High Throughput** — Sustained line rate with proper hardware and tuning.
-- **Low Latency** — Direct access to NIC ring buffers; most latency is PCIe transit only.
-- **Explicit hugepage allocation** — `kind: huge` always means hugetlb-backed memory for
-  DAQIRI-owned regions and fails initialization when the pool is unavailable. Raw ibverbs packs
-  same-NUMA startup regions into shared arenas so, for example, many 32 MiB regions can use one
-  1 GiB page without regular-page fallback.
-- **GPUDirect** — Receive data directly into GPU memory via two modes:
-  - *Header-Data Split*: Headers to CPU, payload to GPU (recommended for most workloads).
-  - *Batched GPU*: Entire packets to GPU memory (maximum bandwidth, GPU-side parsing required).
-- **Multi-region RX** — The raw ibverbs engine supports up to four CPU/GPU regions
-  per packet, such as separate CPU headers, CPU metadata, and GPU payload. Each
-  region's configured `buf_size` defines its scatter span; short packets leave
-  unused trailing segments at zero length. Raw ibverbs TX gathers up to four regions
-  into one packet, including separate CPU headers and GPU payloads.
-- **Hardware RX reorder** — On ConnectX-7 or newer NICs, the raw ibverbs engine can use the mlx5
-  flex parser for first-DMA placement into ordered CPU or GPU aggregates while the host polls CQEs.
-- **Burst file writes** — Write received bursts as raw packet files or appendable PCAP
-  captures. Host-backed buffers use POSIX writes; CUDA device-backed buffers can use cuFile/GDS.
-- **AI/ML integration** — Optional `daqiri_resnet50_inference` application
-  (`-DDAQIRI_BUILD_APPLICATIONS=ON`, TensorRT): GPUDirect RX → reorder → ResNet-50
-  feature extraction with headless PC1/PC2 output. See
-  [DAQIRI + TensorRT Inference](https://nvidia.github.io/daqiri/tutorials/daqiri-resnet-inference/).
-- **S3 raw object writes** — Optionally upload raw burst packets to Amazon S3 or an
-  S3-compatible object store through the AWS SDK for C++.
-- **Flow Steering** — Configure the NIC's hardware flow engine to route packets by UDP
-  source/destination port or flex-item payload fields. Raw RX flows can be configured
-  statically in YAML or added/deleted dynamically after `daqiri_init()`. A scalar
-  queue target steers directly to one queue; `ids: [0, 1, ...]` automatically enables
-  flow-affine IPv4/UDP Toeplitz RSS across the listed queues on the raw DPDK and
-  ibverbs engines. One unchanged five-tuple remains on one queue, so balanced packet
-  counts require varied tuples. Per RX interface, use standard UDP/IP flows or
-  flex-item flows, not both. Raw DPDK and raw ibverbs flows can also use hardware-only
-  VLAN push/pop and VXLAN, GRE, or NVGRE encap/decap actions; socket/RDMA streams reject
-  those tunnel actions.
-- **Runtime ibverbs resources** — Add and remove raw-ibverbs RX/TX queues and owned or
-  application-backed memory regions after initialization. Queue removal drains outstanding
-  zero-copy ownership, and dynamic RX flows can be redirected to newly created queues before
-  old queues and regions are retired.
-- **Runtime named endpoints** — Register raw-ibverbs Ethernet/IPv4/UDP destinations once, resolve
-  them to opaque IDs, and select a TX queue per submission. DAQIRI inlines each cached header in
-  the mlx5 send WQE, so application packet buffers contain only the UDP payload.
-- **Optional runtime RDMA loading** — Build with `DAQIRI_IBVERBS_DLOPEN=ON` to load
-  verbs/mlx5/RDMA CM through glue libraries at engine initialization, including for
-  static DAQIRI consumers. See the [build option](https://nvidia.github.io/daqiri/tutorials/bare-metal-cmake-build/#daqiri_ibverbs_dlopen-runtime-rdma-libraries).
-- **RDMA** — RDMA verbs (READ, WRITE, SEND) over RoCE on Ethernet NICs or InfiniBand.
-- **Linux socket control** — TCP/UDP socket streams expose connection IDs and
-  `socket_setsockopt()` for native Linux `setsockopt` tuning without YAML option
-  name mappings. TCP and UDP RX queues bound their internal backlog using the
-  smallest referenced memory-region `num_bufs`. A slow TCP consumer propagates
-  backpressure; a slow UDP consumer leaves overflow for the kernel to drop. See
-  [Receive backpressure and queue sizing](https://nvidia.github.io/daqiri/benchmarks/socket_benchmarking/#receive-backpressure-and-queue-sizing).
-- **Flow-control telemetry** — Raw Ethernet streams warn at `daqiri_init()` when 802.3x
-  pause is enabled on a port and report the pause frames exchanged during the run with the
-  shutdown stats. A paused link throttles the sender instead of dropping, so it caps
-  throughput with every drop counter at zero. Check a host up front with
-  `python/tune_system.py --check pause`.
-- **Optional OpenTelemetry metrics** — Expose per-interface or per-queue packet,
-  byte, and drop counters when built with `DAQIRI_ENABLE_OTEL_METRICS=ON`.
-
-## Benchmarking
-
-Consult the [Benchmarking overview](https://nvidia.github.io/daqiri/benchmarks/) to learn more about generating and optimizing benchmarking on the NVIDIA platform, including:
-- [Socket and RDMA Benchmarking](https://nvidia.github.io/daqiri/benchmarks/socket_benchmarking/) for the full namespace setup and YAML templates
-- [Raw Ethernet Benchmarking](https://nvidia.github.io/daqiri/benchmarks/raw_benchmarking/) for DPDK/raw Ethernet loopback tests
-- [Performance: DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/) for measured cross-host and single-host cabled-loopback benchmarks on DGX Spark (GB10)
-- [Performance: IGX Thor](https://nvidia.github.io/daqiri/benchmarks/performance-igx-thor/) for measured 200 GbE cabled-loopback benchmarks on the IGX Thor Developer Kit
+- **High-throughput, low-latency I/O** — Kernel-bypass raw Ethernet and GPUDirect transfers into CPU and GPU memory on compatible hardware.
+- **Common C++ and Python APIs** — Build applications using raw Ethernet, RoCE/RDMA, or Linux UDP/TCP sockets.
+- **Flexible packet handling** — Hardware flow steering, header-data split, and multi-region CPU/GPU buffers.
+- **Packet reordering** — CPU and GPU reordering for downstream processing, with hardware-assisted placement on supported NICs.
+- **Configuration-driven setup** — Define interfaces, queues, flows, and memory regions in YAML, with tools to generate and validate configurations.
 
 ## Documentation
 
@@ -108,6 +46,10 @@ Reference material for the DAQIRI codebase:
 - [Python API Usage](https://nvidia.github.io/daqiri/api-reference/python/) — Python bindings, workflow examples, enums, config classes, and helper functions
 - [Contributing](CONTRIBUTING.md) — Contribution guidelines, coding standards, DCO sign-off
 
+> **Benchmarking and performance**
+>
+> Use the [Benchmarking overview](https://nvidia.github.io/daqiri/benchmarks/) to select a transport, configure benchmarks, and tune performance. See measured results for [DGX Spark](https://nvidia.github.io/daqiri/benchmarks/performance-dgx-spark/) and [IGX Thor](https://nvidia.github.io/daqiri/benchmarks/performance-igx-thor/).
+
 ### Agent-assisted onboarding
 
 The [DAQIRI onboarding skill](skills/daqiri-onboarding/SKILL.md) helps you
@@ -118,24 +60,12 @@ Open your local DAQIRI repository in an agent that supports skills and ask:
 Use $daqiri-onboarding to help me generate and validate my first DAQIRI configuration.
 ```
 
-The skill resumes from your existing setup and uses the repository's
-documentation, configuration generator and native validator. If your agent
-does not discover the skill automatically, provide the linked `SKILL.md` path.
-
 ## Tutorials
 
-Step-by-step walkthroughs to get hands-on:
-
-- [System Configuration](https://nvidia.github.io/daqiri/tutorials/system_configuration/) — NIC drivers, link layers, GPUDirect, hugepages, CPU isolation, GPU clocks
-- [Benchmarking Overview](https://nvidia.github.io/daqiri/benchmarks/) — choose between Linux sockets, RoCE/RDMA, and raw Ethernet benchmarks
-- [Socket and RDMA Benchmarking](https://nvidia.github.io/daqiri/benchmarks/socket_benchmarking/) — run TCP/UDP sockets and RoCE/RDMA with matching namespace isolation
-- [Raw Ethernet Benchmarking](https://nvidia.github.io/daqiri/benchmarks/raw_benchmarking/) — run `daqiri_bench_raw_gpudirect` with a physical loopback test
-- [Dynamic RX Flow Example](https://nvidia.github.io/daqiri/tutorials/configuration-walkthrough/#choosing-an-example-config) — start with RX queues only, then add and delete flow-steering rules at runtime
-- `daqiri_example_dynamic_resource` — exercise raw-ibverbs first-RX-queue steering, repeated dynamic-flow add/delete, and runtime memory-region and RX/TX queue creation and drain-based deletion
-- [`daqiri_example_named_endpoints`](https://nvidia.github.io/daqiri/benchmarks/raw_benchmarking/#runtime-named-endpoints-example) — create named raw-UDP destinations at runtime and transmit payload-only GPU buffers with cached inline headers
-- [Understanding the Configuration File](https://nvidia.github.io/daqiri/tutorials/configuration-walkthrough/) — annotated YAML walkthrough
-- [DAQIRI + Holoscan SDK (HSDK) Integration](https://nvidia.github.io/daqiri/tutorials/daqiri-holoscan-integration/) — use DAQIRI RX bursts from an HSDK source operator
-- [DAQIRI + TensorRT Inference](https://nvidia.github.io/daqiri/tutorials/daqiri-resnet-inference/) — packet ingest → ResNet-50 feature extraction with TensorRT
+- [System Configuration](https://nvidia.github.io/daqiri/tutorials/system_configuration/) — Prepare the host, NIC, and GPU.
+- [Understanding the Configuration File](https://nvidia.github.io/daqiri/tutorials/configuration-walkthrough/) — Walk through a DAQIRI YAML configuration.
+- [Holoscan SDK Integration](https://nvidia.github.io/daqiri/tutorials/daqiri-holoscan-integration/) — Consume DAQIRI bursts in an HSDK application.
+- [TensorRT Inference](https://nvidia.github.io/daqiri/tutorials/daqiri-resnet-inference/) — Build a packet-to-inference pipeline.
 
 ## Releases
 
