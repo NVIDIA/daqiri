@@ -322,6 +322,19 @@ class SocketEngineQueueTestPeer {
 }  // namespace daqiri
 
 int main() {
+  {
+    daqiri::SocketEngine engine;
+    daqiri::BurstParams burst{};
+    daqiri::TxTimestampId id = 123;
+    uint64_t timestamp_ns = 123;
+    if (engine.request_packet_tx_timestamp(&burst, 0, &id) != daqiri::Status::NOT_SUPPORTED ||
+        id != daqiri::INVALID_TX_TIMESTAMP_ID ||
+        engine.get_packet_tx_timestamp(123, &timestamp_ns) != daqiri::Status::NOT_SUPPORTED ||
+        timestamp_ns != 0 || engine.release_tx_timestamp(123) != daqiri::Status::NOT_SUPPORTED) {
+      std::cerr << "unsupported engine returned a TX timestamp\n";
+      return 1;
+    }
+  }
   cpu_set_t allowed;
   CPU_ZERO(&allowed);
   if (sched_getaffinity(0, sizeof(allowed), &allowed) != 0) {

@@ -73,6 +73,7 @@ std::atomic<uint64_t> g_clock_cache_epoch{1};
 constexpr FlowId kMaxIbverbsFlowTag = 0x00ffffffU;
 constexpr int kIbverbsCatchAllPriority = 1'000'000;
 std::atomic<uint32_t> g_next_endpoint_generation{1};
+std::atomic<TxTimestampId> g_next_tx_timestamp_id{1};
 
 uint32_t next_endpoint_generation() {
   uint32_t generation = g_next_endpoint_generation.fetch_add(1, std::memory_order_relaxed);
@@ -271,6 +272,7 @@ static constexpr uint32_t IBV_TX_SCHEDULED_FLAG = 1u << 26;
 static constexpr uint32_t IBV_TX_ENDPOINT_INLINE_FLAG = 1u << 25;
 static constexpr uint32_t IBV_TX_SHARED_FLAG = 1u << 24;
 static constexpr uint32_t IBV_TX_SHARED_OWNED_FLAG = 1u << 23;
+static constexpr uint32_t IBV_TX_TIMESTAMP_FLAG = 1u << 22;
 
 static constexpr uint32_t EMPW_MAX_PACKETS = 32;
 static_assert(EMPW_MAX_PACKETS <= MLX5_EMPW_MAX_DSEG);
@@ -784,6 +786,7 @@ struct IbvBurstLayout {
   size_t off_strd;     // uint16_t[max_batch] -- strides per packet
   size_t off_ts;       // uint64_t[max_batch] -- raw HW RX timestamp per packet
   size_t off_flowtag;  // uint32_t[max_batch] -- per-packet flow tag (MARK)
+  size_t off_tx_timestamp_ids;  // TxTimestampId[max_batch] -- requested TX completions
   std::array<size_t, MAX_NUM_SEGS> off_shared;
   size_t total;
 };
@@ -808,6 +811,7 @@ IbvBurstLayout compute_layout(uint32_t max_batch) {
   for (int seg = 0; seg < MAX_NUM_SEGS; ++seg) {
     l.off_shared[seg] = place(sizeof(detail::SharedTxBuffer*) * max_batch);
   }
+  l.off_tx_timestamp_ids = place(sizeof(TxTimestampId) * max_batch);
   l.total = (off + 63) & ~static_cast<size_t>(63);
   return l;
 }
@@ -837,6 +841,16 @@ inline const uint64_t* burst_ts_arr(const BurstParams* b) {
 }
 inline uint32_t* burst_flowtag_arr(BurstParams* b) {
   return reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(b) + g_layout.off_flowtag);
+}
+TxTimestampId* burst_tx_timestamp_ids(BurstParams* burst) {
+  return reinterpret_cast<TxTimestampId*>(reinterpret_cast<uint8_t*>(burst) +
+                                          g_layout.off_tx_timestamp_ids);
+}
+
+TxTimestampId packet_tx_timestamp_id(BurstParams* burst, int packet) {
+  return (burst->hdr.hdr.burst_flags & IBV_TX_TIMESTAMP_FLAG) != 0
+             ? burst_tx_timestamp_ids(burst)[packet]
+             : INVALID_TX_TIMESTAMP_ID;
 }
 detail::SharedTxBuffer** burst_shared_arr(const BurstParams* burst, int segment) {
   return reinterpret_cast<detail::SharedTxBuffer**>(
@@ -6145,6 +6159,99 @@ Status IbverbsEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint6
   return Status::SUCCESS;
 }
 
+Status IbverbsEngine::request_packet_tx_timestamp(BurstParams* burst, int idx, TxTimestampId* id) {
+  if (id == nullptr) return Status::NULL_PTR;
+  *id = INVALID_TX_TIMESTAMP_ID;
+  if (burst == nullptr) return Status::NULL_PTR;
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_BURST_FLAG) == 0 || idx < 0 ||
+      static_cast<size_t>(idx) >= burst->hdr.hdr.num_pkts || burst->hdr.hdr.num_pkts > max_batch_)
+    return Status::INVALID_PARAMETER;
+  if (force_quit_.load(std::memory_order_relaxed)) return Status::NOT_READY;
+  QueueUse<IbvTxQueue> q(acquire_tx_queue(burst->hdr.hdr.port_id, burst->hdr.hdr.q_id));
+  if (!q) return Status::INVALID_PARAMETER;
+  if (q->poll_mode == QueuePollMode::DIRECT &&
+      (!owns_direct_tx_queue(*q) || q->direct_pending != burst))
+    return Status::INVALID_PARAMETER;
+  // Ordinary send CQs carry free-running ticks. Check that the provider can
+  // convert them before accepting a request; accurate-send CQs use real time.
+  if (!q->accurate_send) {
+    mlx5dv_clock_info info{};
+    if (verbs_->dv_get_clock_info(q->ctx, &info) != 0) return Status::NOT_SUPPORTED;
+  }
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_TIMESTAMP_FLAG) == 0) {
+    std::fill_n(burst_tx_timestamp_ids(burst), burst->hdr.hdr.num_pkts, INVALID_TX_TIMESTAMP_ID);
+    burst->hdr.hdr.burst_flags |= IBV_TX_TIMESTAMP_FLAG;
+  }
+  auto& packet_id = burst_tx_timestamp_ids(burst)[idx];
+  std::lock_guard<std::mutex> guard(tx_timestamp_mutex_);
+  if (packet_id != INVALID_TX_TIMESTAMP_ID) return Status::ALREADY_EXISTS;
+  if (tx_timestamp_requests_.size() >= kMaxTxTimestampRequests) return Status::NO_SPACE_AVAILABLE;
+  const auto next = g_next_tx_timestamp_id.fetch_add(1, std::memory_order_relaxed);
+  if (next == INVALID_TX_TIMESTAMP_ID) return Status::NO_SPACE_AVAILABLE;
+  tx_timestamp_requests_.emplace(next, TxTimestampRequest{q.get()});
+  packet_id = *id = next;
+  return Status::SUCCESS;
+}
+
+Status IbverbsEngine::get_packet_tx_timestamp(TxTimestampId id, uint64_t* timestamp_ns) {
+  if (timestamp_ns == nullptr) return Status::NULL_PTR;
+  *timestamp_ns = 0;
+  IbvTxQueue* queue = nullptr;
+  {
+    std::lock_guard<std::mutex> guard(tx_timestamp_mutex_);
+    auto it = tx_timestamp_requests_.find(id);
+    if (it == tx_timestamp_requests_.end()) return Status::INVALID_PARAMETER;
+    if (it->second.status == Status::NOT_READY && force_quit_.load(std::memory_order_relaxed))
+      it->second.status = Status::GENERIC_FAILURE;
+    if (it->second.status != Status::NOT_READY) {
+      *timestamp_ns = it->second.timestamp_ns;
+      return it->second.status;
+    }
+    queue = it->second.queue;
+  }
+  // Queue objects are retained until shutdown. Acquiring through the published
+  // table protects the CQ against concurrent removal, including ID reuse.
+  if (queue->poll_mode == QueuePollMode::DIRECT) {
+    QueueUse<IbvTxQueue> q(acquire_tx_queue(queue->port_id, queue->queue_id));
+    if (q && q.get() == queue && owns_direct_tx_queue(*q)) poll_tx_completions(*q);
+  }
+  std::lock_guard<std::mutex> guard(tx_timestamp_mutex_);
+  const auto it = tx_timestamp_requests_.find(id);
+  if (it == tx_timestamp_requests_.end()) return Status::INVALID_PARAMETER;
+  *timestamp_ns = it->second.timestamp_ns;
+  return it->second.status;
+}
+
+Status IbverbsEngine::release_tx_timestamp(TxTimestampId id) {
+  std::lock_guard<std::mutex> guard(tx_timestamp_mutex_);
+  return tx_timestamp_requests_.erase(id) != 0 ? Status::SUCCESS : Status::INVALID_PARAMETER;
+}
+
+void IbverbsEngine::finish_tx_timestamp(TxTimestampId id, Status status, uint64_t timestamp_ns) {
+  if (id == INVALID_TX_TIMESTAMP_ID) return;
+  std::lock_guard<std::mutex> guard(tx_timestamp_mutex_);
+  const auto it = tx_timestamp_requests_.find(id);
+  if (it != tx_timestamp_requests_.end() && it->second.status == Status::NOT_READY) {
+    it->second.status = status;
+    it->second.timestamp_ns = status == Status::SUCCESS ? timestamp_ns : 0;
+  }
+}
+
+void IbverbsEngine::fail_tx_timestamps(BurstParams* burst) {
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_TIMESTAMP_FLAG) == 0) return;
+  for (size_t i = 0; i < burst->hdr.hdr.num_pkts; ++i)
+    finish_tx_timestamp(burst_tx_timestamp_ids(burst)[i], Status::GENERIC_FAILURE);
+  burst->hdr.hdr.burst_flags &= ~IBV_TX_TIMESTAMP_FLAG;
+}
+
+void IbverbsEngine::fail_queue_tx_timestamps(IbvTxQueue& q) {
+  std::lock_guard<std::mutex> guard(tx_timestamp_mutex_);
+  for (auto& [id, request] : tx_timestamp_requests_) {
+    if (request.queue == &q && request.status == Status::NOT_READY)
+      request.status = Status::GENERIC_FAILURE;
+  }
+}
+
 void* IbverbsEngine::get_packet_extra_info(BurstParams* burst, int idx) {
   (void)burst;
   (void)idx;
@@ -7183,6 +7290,7 @@ void IbverbsEngine::destroy_rx_queue(IbvRxQueue& q) {
 }
 
 void IbverbsEngine::destroy_tx_queue(IbvTxQueue& q) {
+  fail_queue_tx_timestamps(q);
   void* raw = nullptr;
   while (q.send_ring != nullptr && q.send_ring->dequeue(&raw)) {
     auto* burst = static_cast<BurstParams*>(raw);
@@ -7827,6 +7935,10 @@ void IbverbsEngine::shutdown() {
     if (q->compl_worker.joinable()) {
       q->compl_worker.join();
     }
+  }
+  {
+    std::lock_guard<std::mutex> guard(tx_timestamp_mutex_);
+    tx_timestamp_requests_.clear();
   }
   {
     std::lock_guard<std::mutex> guard(flow_lock_);
@@ -8502,6 +8614,7 @@ Status IbverbsEngine::create_tx_raw_qp(IbvTxQueue& q) {
   q.slots_posted = 0;
   q.wqe_slot_cum.assign(q.dv_qp.sq.wqe_cnt, 0);
   q.wqe_wqebb_cum.assign(q.dv_qp.sq.wqe_cnt, 0);
+  q.wqe_timestamp_ids.assign(q.dv_qp.sq.wqe_cnt, INVALID_TX_TIMESTAMP_ID);
   DAQIRI_LOG_INFO("TX SQ mapped q{}: sqn {}, wqe_cnt {}, stride {}, bf.size {}, cqe_cnt {}",
                   q.queue_id, q.sqn, q.dv_qp.sq.wqe_cnt, q.dv_qp.sq.stride, q.dv_qp.bf.size,
                   q.dv_txcq.cqe_cnt);
@@ -8661,6 +8774,7 @@ void IbverbsEngine::poll_tx_completions(IbvTxQueue& q) {
     }
     cqe_read_barrier();
     if (opcode == MLX5_CQE_REQ_ERR || opcode == MLX5_CQE_RESP_ERR) {
+      fail_queue_tx_timestamps(q);
       DAQIRI_LOG_ERROR("TX CQE error q{} opcode {}", q.queue_id, opcode);
       force_quit_.store(true, std::memory_order_relaxed);
       if (q.shared_tx) {
@@ -8670,6 +8784,16 @@ void IbverbsEngine::poll_tx_completions(IbvTxQueue& q) {
     }
     const uint16_t wc_idx = be16toh(cqe64->wqe_counter);
     const uint32_t map_idx = wc_idx & (wqe_cnt - 1);
+    if (!q.wqe_timestamp_ids.empty()) {
+      const auto id = q.wqe_timestamp_ids[map_idx];
+      if (id != INVALID_TX_TIMESTAMP_ID && opcode == MLX5_CQE_REQ) {
+        const uint64_t raw = be64toh(cqe64->timestamp);
+        const uint64_t ns = q.accurate_send ? (raw >> 32) * 1000000000ULL + (raw & UINT32_MAX)
+                                            : ts_to_ns(q.ctx, raw);
+        finish_tx_timestamp(id, ns != 0 ? Status::SUCCESS : Status::GENERIC_FAILURE, ns);
+      }
+      q.wqe_timestamp_ids[map_idx] = INVALID_TX_TIMESTAMP_ID;
+    }
     tail = q.wqe_slot_cum[map_idx];
     sq_tail = q.wqe_wqebb_cum[map_idx];
     q.tx_cq_ci++;
@@ -8704,7 +8828,7 @@ bool IbverbsEngine::owns_direct_tx_queue(IbvTxQueue& q) {
 static bool empw_compatible_burst(const BurstParams* burst) {
   // A one-packet enhanced MPW session is not valid; use an ordinary SEND WQE
   // for single-packet bursts (including queue primers).
-  if ((burst->hdr.hdr.burst_flags & IBV_TX_ENDPOINT_INLINE_FLAG) != 0 ||
+  if ((burst->hdr.hdr.burst_flags & (IBV_TX_ENDPOINT_INLINE_FLAG | IBV_TX_TIMESTAMP_FLAG)) != 0 ||
       burst->hdr.hdr.num_segs != 1 || burst->hdr.hdr.num_pkts < 2) {
     return false;
   }
@@ -8812,6 +8936,7 @@ bool IbverbsEngine::emit_direct_drain_nop(IbvTxQueue& q) {
   ctrl->qpn_ds = htobe32((q.sqn << 8) | 1u);
   ctrl->fm_ce_se = tx_completion_mode(true);
   q.wqe_slot_cum[idx] = q.slots_posted;
+  if (!q.wqe_timestamp_ids.empty()) q.wqe_timestamp_ids[idx] = INVALID_TX_TIMESTAMP_ID;
   ++q.sq_pi;
   q.wqe_wqebb_cum[idx] = q.sq_pi;
 
@@ -9257,6 +9382,7 @@ void* IbverbsEngine::emit_wait_wqe(IbvTxQueue& q, uint64_t when_ns) {
   ws->value = htobe64(v);
   ws->mask = htobe64(q.rt_timemask);
   q.wqe_slot_cum[widx] = q.slots_posted;
+  if (!q.wqe_timestamp_ids.empty()) q.wqe_timestamp_ids[widx] = INVALID_TX_TIMESTAMP_ID;
   q.sq_pi++;
   q.wqe_wqebb_cum[widx] = q.sq_pi;
   return wctrl;
@@ -9310,6 +9436,7 @@ void IbverbsEngine::post_tx_burst_empw(IbvTxQueue& q, BurstParams* burst, uint16
 
     q.slots_posted += part;
     q.wqe_slot_cum[widx] = q.slots_posted;
+    if (!q.wqe_timestamp_ids.empty()) q.wqe_timestamp_ids[widx] = INVALID_TX_TIMESTAMP_ID;
     q.sq_pi += wqebbs;
     q.wqe_wqebb_cum[widx] = q.sq_pi;
     last_ctrl = ctrl;
@@ -9357,8 +9484,10 @@ void IbverbsEngine::post_endpoint_inline_burst(IbvTxQueue& q, BurstParams* burst
     const uint32_t first_idx = q.sq_pi & (wqe_cnt - 1);
     alignas(16) std::array<uint8_t, WQE_BYTES> wqe{};
     auto* ctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(wqe.data());
-    const bool signaled =
-        ((packet % SIGNAL_EVERY) == (SIGNAL_EVERY - 1)) || (packet == packets - 1);
+    const auto timestamp_id = packet_tx_timestamp_id(burst, packet);
+    const bool signaled = timestamp_id != INVALID_TX_TIMESTAMP_ID ||
+                          ((packet % SIGNAL_EVERY) == (SIGNAL_EVERY - 1)) ||
+                          (packet == packets - 1);
     ctrl->opmod_idx_opcode = htobe32(((q.sq_pi & 0xffff) << 8) | MLX5_OPCODE_SEND);
     ctrl->qpn_ds = htobe32((q.sqn << 8) | ds);
     ctrl->fm_ce_se = tx_completion_mode(signaled);
@@ -9391,6 +9520,7 @@ void IbverbsEngine::post_endpoint_inline_burst(IbvTxQueue& q, BurstParams* burst
 
     ++q.slots_posted;
     q.wqe_slot_cum[first_idx] = q.slots_posted;
+    if (!q.wqe_timestamp_ids.empty()) q.wqe_timestamp_ids[first_idx] = timestamp_id;
     q.sq_pi += wqebbs;
     q.wqe_wqebb_cum[first_idx] = q.sq_pi;
     last_ctrl = first;
@@ -9425,6 +9555,7 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
   if (q.shared_tx) record_shared_sends(q, burst);
   if ((burst->hdr.hdr.burst_flags & IBV_TX_ENDPOINT_INLINE_FLAG) != 0) {
     post_endpoint_inline_burst(q, burst);
+    burst->hdr.hdr.burst_flags &= ~IBV_TX_TIMESTAMP_FLAG;
     return;
   }
   const bool scheduled = (burst->hdr.hdr.burst_flags & IBV_TX_SCHEDULED_FLAG) != 0;
@@ -9454,6 +9585,7 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
       dseg->addr = htobe64(reinterpret_cast<uint64_t>(burst->pkts[0][0]));
       ++q.slots_posted;
       q.wqe_slot_cum[idx] = q.slots_posted;
+      if (!q.wqe_timestamp_ids.empty()) q.wqe_timestamp_ids[idx] = INVALID_TX_TIMESTAMP_ID;
       ++q.sq_pi;
       q.wqe_wqebb_cum[idx] = q.sq_pi;
       post_tx_burst_empw(q, burst, 1);
@@ -9482,9 +9614,11 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
     const uint32_t idx = q.sq_pi & (wqe_cnt - 1);
     uint8_t* seg = sq_buf + static_cast<size_t>(idx) * stride;
     auto* ctrl = reinterpret_cast<struct mlx5_wqe_ctrl_seg*>(seg);
-    const bool signaled = q.poll_mode == QueuePollMode::DIRECT
-                              ? ((q.slots_posted + 1) % 16 == 0)
-                              : (((i % SIGNAL_EVERY) == (SIGNAL_EVERY - 1)) || (i == n - 1));
+    const auto timestamp_id = packet_tx_timestamp_id(burst, i);
+    const bool signaled = timestamp_id != INVALID_TX_TIMESTAMP_ID ||
+                          (q.poll_mode == QueuePollMode::DIRECT
+                               ? ((q.slots_posted + 1) % 16 == 0)
+                               : (((i % SIGNAL_EVERY) == (SIGNAL_EVERY - 1)) || (i == n - 1)));
     const uint32_t frame_len = burst->pkt_lens[0][i];
     const bool inline_frame = q.cpu_inline_enabled && n == 1 && segs == 1 && !scheduled &&
                               frame_len >= MLX5_RAW_ETH_INLINE_HEADER &&
@@ -9538,11 +9672,13 @@ void IbverbsEngine::post_tx_burst(IbvTxQueue& q, BurstParams* burst) {
       }
     }
     q.wqe_slot_cum[idx] = q.slots_posted;
+    if (!q.wqe_timestamp_ids.empty()) q.wqe_timestamp_ids[idx] = timestamp_id;
     last_ctrl = ctrl;
     last_wqebbs = wqebbs;
     q.sq_pi += wqebbs;
     q.wqe_wqebb_cum[idx] = q.sq_pi;
   }
+  burst->hdr.hdr.burst_flags &= ~IBV_TX_TIMESTAMP_FLAG;
 
   // Ring the SQ doorbell once for the whole burst: publish the WQEs, bump the
   // doorbell record, then write the last ctrl segment to the BlueFlame register.
@@ -9627,6 +9763,14 @@ Status IbverbsEngine::send_tx_burst(BurstParams* burst) {
   if (burst->hdr.hdr.num_segs != q->num_segs) {
     return Status::INVALID_PARAMETER;
   }
+  if ((burst->hdr.hdr.burst_flags & IBV_TX_TIMESTAMP_FLAG) != 0) {
+    std::lock_guard<std::mutex> guard(tx_timestamp_mutex_);
+    for (size_t i = 0; i < burst->hdr.hdr.num_pkts; ++i) {
+      const auto it = tx_timestamp_requests_.find(burst_tx_timestamp_ids(burst)[i]);
+      if (it != tx_timestamp_requests_.end() && it->second.queue != q.get())
+        return Status::INVALID_PARAMETER;
+    }
+  }
   // Shared storage must stay on a queue that validates and retires its references.
   if ((burst->hdr.hdr.burst_flags & IBV_TX_SHARED_FLAG) != 0 && !q->shared_tx) {
     return Status::INVALID_PARAMETER;
@@ -9638,6 +9782,7 @@ Status IbverbsEngine::send_tx_burst(BurstParams* burst) {
     const uint64_t n = burst->hdr.hdr.num_pkts;
     const uint64_t outstanding = q->alloc_head - q->completed_tail.load(std::memory_order_acquire);
     if (n > q->num_slots - outstanding) {
+      fail_tx_timestamps(burst);
       burst->hdr.hdr.burst_flags &= ~IBV_TX_SHARED_OWNED_FLAG;
       release_shared_burst(burst);
       tx_meta_pool_->put(burst);
@@ -9648,6 +9793,7 @@ Status IbverbsEngine::send_tx_burst(BurstParams* burst) {
     q->alloc_head += n;
     burst->hdr.hdr.burst_flags &= ~IBV_TX_SHARED_OWNED_FLAG;
     if (!q->send_ring->enqueue(burst)) {
+      fail_tx_timestamps(burst);
       q->alloc_head -= n;  // Undo admission only; never a storage allocation index.
       release_shared_burst(burst);
       tx_meta_pool_->put(burst);
@@ -9672,6 +9818,7 @@ Status IbverbsEngine::send_tx_burst(BurstParams* burst) {
     return Status::SUCCESS;
   }
   if (!q->send_ring->enqueue(burst)) {
+    fail_tx_timestamps(burst);
     // Worker is behind: roll back this (most-recent, unposted) allocation and
     // drop the metadata; caller moves on. Safe because get/send are paired on
     // the fill thread, so these are the last slots handed out and the worker
@@ -9692,6 +9839,7 @@ void IbverbsEngine::free_tx_burst(BurstParams* burst) {
       release_shared_burst(burst);
       burst->hdr.hdr.burst_flags &= ~IBV_TX_SHARED_OWNED_FLAG;
     }
+    fail_tx_timestamps(burst);
     tx_meta_pool_->put(burst);
   }
 }
@@ -9703,6 +9851,7 @@ void IbverbsEngine::free_tx_metadata(BurstParams* burst) {
       release_shared_burst(burst);
       burst->hdr.hdr.burst_flags &= ~IBV_TX_SHARED_OWNED_FLAG;
     }
+    fail_tx_timestamps(burst);
     tx_meta_pool_->put(burst);
   }
 }

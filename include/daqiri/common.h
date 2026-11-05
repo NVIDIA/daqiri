@@ -478,6 +478,49 @@ Status poll_resource_op(ResourceOpResult* result);
 Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns);
 
 /**
+ * @brief Request a NIC TX completion timestamp before submitting a packet.
+ *
+ * Supported by raw ibverbs, with direct/indirect queues, gathered segments,
+ * named endpoints, and scheduled sends. No YAML option is required. Call after
+ * allocating packet buffers and before send_tx_burst. Each requested packet
+ * gets its own signaled SEND WQE; bursts with requests bypass multi-packet WQEs.
+ * Clones need their own requests. The ID remains valid after burst recycling.
+ *
+ * @return SUCCESS, NULL_PTR, INVALID_PARAMETER, ALREADY_EXISTS (packet already
+ * has a request), NOT_SUPPORTED (engine/clock unavailable), or NO_SPACE_AVAILABLE
+ * (4096 unreleased requests per engine), or NOT_READY (engine stopped).
+ * On failure *id is zero.
+ */
+Status request_packet_tx_timestamp(BurstParams* burst, int idx, TxTimestampId* id);
+
+/**
+ * @brief Read a requested packet's hardware TX completion time in nanoseconds.
+ *
+ * Returns the timestamp sampled by the NIC for that packet's SEND CQE, converted
+ * to PTP epoch nanoseconds, rather than its requested send time or a CPU clock
+ * sample. The NIC defines the completion measurement point; this is not a
+ * calibrated wire-departure timestamp. The NIC clock must be PTP-synchronized
+ * to compare against CLOCK_REALTIME or other devices.
+ *
+ * Nonblocking: NOT_READY until completion; SUCCESS once available; GENERIC_FAILURE
+ * on a CQE/clock error, cancelled burst, or removed queue; INVALID_PARAMETER for
+ * an unknown/released ID; NULL_PTR for a null output; NOT_SUPPORTED on other
+ * engines. Output is zero on failure.
+ * Reading does not release the request. For direct TX, call from the queue's
+ * owner thread to drive completion polling, even if no more packets are sent.
+ */
+Status get_packet_tx_timestamp(TxTimestampId id, uint64_t* timestamp_ns);
+
+/**
+ * @brief Release a pending or completed TX timestamp request.
+ *
+ * Does not cancel transmission. Late completions for released IDs are ignored.
+ * Returns SUCCESS, INVALID_PARAMETER for an unknown/released ID, or NOT_SUPPORTED.
+ * Release every successful request; shutdown invalidates all outstanding IDs.
+ */
+Status release_tx_timestamp(TxTimestampId id);
+
+/**
  * @brief Populate a TX packet burst buffer
  *
  * Populates a transmit packet burst buffer with allocated packets. The user can

@@ -436,6 +436,21 @@ Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_
   return g_daqiri_engine->get_packet_rx_timestamp(burst, idx, timestamp_ns);
 }
 
+Status request_packet_tx_timestamp(BurstParams* burst, int idx, TxTimestampId* id) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->request_packet_tx_timestamp(burst, idx, id);
+}
+
+Status get_packet_tx_timestamp(TxTimestampId id, uint64_t* timestamp_ns) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->get_packet_tx_timestamp(id, timestamp_ns);
+}
+
+Status release_tx_timestamp(TxTimestampId id) {
+  ASSERT_DAQIRI_ENGINE_INITIALIZED();
+  return g_daqiri_engine->release_tx_timestamp(id);
+}
+
 uint64_t get_burst_tot_byte(BurstParams* burst) {
   ASSERT_DAQIRI_ENGINE_INITIALIZED();
   return g_daqiri_engine->get_burst_tot_byte(burst);

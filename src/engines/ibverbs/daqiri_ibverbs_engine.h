@@ -446,6 +446,8 @@ struct IbvTxQueue {
   // progress are tracked independently at each WQE's first WQEBB.
   std::vector<uint64_t> wqe_slot_cum;
   std::vector<uint64_t> wqe_wqebb_cum;
+  // Only requested SENDs carry an ID. WAIT/NOP and untracked SENDs carry zero.
+  std::vector<TxTimestampId> wqe_timestamp_ids;
   uint64_t slots_posted = 0;
   uint64_t last_signaled_slots = 0;
   bool accurate_send = false;    // request wall-clock CQ for timed transmission
@@ -512,6 +514,9 @@ class IbverbsEngine : public Engine {
   uint32_t get_segment_packet_length(BurstParams* burst, int seg, int idx) override;
   FlowId get_packet_flow_id(BurstParams* burst, int idx) override;
   Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) override;
+  Status request_packet_tx_timestamp(BurstParams* burst, int idx, TxTimestampId* id) override;
+  Status get_packet_tx_timestamp(TxTimestampId id, uint64_t* timestamp_ns) override;
+  Status release_tx_timestamp(TxTimestampId id) override;
   void* get_packet_extra_info(BurstParams* burst, int idx) override;
 
   // TX construction / header fill (implemented in the TX milestone)
@@ -587,6 +592,17 @@ class IbverbsEngine : public Engine {
   friend class IbverbsEngineRxTestPeer;
 
   const detail::RawVerbsApi* verbs_ = nullptr;
+  struct TxTimestampRequest {
+    IbvTxQueue* queue = nullptr;
+    Status status = Status::NOT_READY;
+    uint64_t timestamp_ns = 0;
+  };
+  static constexpr size_t kMaxTxTimestampRequests = 4096;
+  std::mutex tx_timestamp_mutex_;
+  std::unordered_map<TxTimestampId, TxTimestampRequest> tx_timestamp_requests_;
+  void finish_tx_timestamp(TxTimestampId id, Status status, uint64_t timestamp_ns = 0);
+  void fail_tx_timestamps(BurstParams* burst);
+  void fail_queue_tx_timestamps(IbvTxQueue& q);
   struct PortSteering;
 
   bool use_hugepage_arenas() const override {

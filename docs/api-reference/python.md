@@ -513,6 +513,45 @@ domain as a PTP-synchronized `CLOCK_REALTIME`. Device-clock ticks are not accept
 **WARNING: PTP synchronization is required.** DAQIRI does not validate the NIC or system clock
 configuration. Scheduled transmission is invalid if the clocks are not PTP-synchronized.
 
+### Transmit Completion Timestamps
+
+Raw ibverbs exposes hardware TX completion timestamps without a YAML option:
+
+```python
+import time
+
+# After acquiring packet buffers, before submitting the burst:
+status, request_id = daqiri.request_packet_tx_timestamp(burst, packet_index)
+if status == daqiri.Status.SUCCESS:
+    daqiri.send_tx_burst(burst)  # Consumes the burst metadata.
+    try:
+        deadline = time.monotonic() + 1.0
+        while True:
+            status, tx_ns = daqiri.get_packet_tx_timestamp(request_id)
+            if status != daqiri.Status.NOT_READY or time.monotonic() >= deadline:
+                break
+        if status == daqiri.Status.SUCCESS:
+            print(tx_ns)  # NIC completion timestamp in PTP epoch ns.
+    finally:
+        daqiri.release_tx_timestamp(request_id)
+```
+
+The request ID remains valid after the burst metadata is recycled. Reads are
+nonblocking and repeatable; release every ID, even when abandoning a pending
+request. There are 4096 request slots per engine. Direct TX requires the queue's
+owner thread to call the getter to poll completions. Indirect TX uses the worker.
+The API also supports gathered segments, named endpoints, and scheduled sends;
+clones need separate requests. Requested packets get individual signaled SEND
+WQEs, which increases CQ traffic and bypasses multi-packet packing for that burst.
+Other engines, including RoCE/RDMA, return `NOT_SUPPORTED`.
+
+Cancelled/dropped packets, CQ errors, and queue removal return `GENERIC_FAILURE`;
+shutdown invalidates all IDs. The value is sampled by the NIC for the SEND CQE,
+independently of the requested send time. The hardware defines its measurement
+point, so it is not a calibrated wire-departure timestamp. PTP synchronization is
+required for comparisons with system time or another device. See the
+[C++ timestamp contract](cpp.md#transmit-completion-timestamps) for details.
+
 ## Writing Bursts to Storage
 
 Received bursts can be written to local storage as raw packet data or as a
@@ -696,6 +735,9 @@ currently includes:
 - `daqiri_write_raw_to_file`, `daqiri_write_pcap_to_file`
 - `synchronize_burst_event`
 
+The TX timestamp request, getter, and release calls keep the GIL held. The getter
+does not wait for completion; direct queues poll their CQ during the call.
+
 Python code still needs its own synchronization for shared Python objects used
 by worker threads.
 
@@ -748,6 +790,9 @@ The workflow sections above show the common call order and ownership rules.
 | `get_packet_length(burst, idx)` / `get_segment_packet_length(burst, seg, idx)` | Read packet or segment length. |
 | `get_packet_flow_id(burst, idx)` | Read matched flow ID, or `0` when no flow matched. |
 | `get_packet_rx_timestamp(burst, idx)` | Return `(Status, timestamp_ns)` with a PTP epoch-nanosecond timestamp. |
+| `request_packet_tx_timestamp(burst, idx)` | Return `(Status, request_id)` for a packet before TX submission (raw ibverbs). |
+| `get_packet_tx_timestamp(request_id)` | Return `(Status, timestamp_ns)` from the packet's NIC SEND CQE, or `NOT_READY`. |
+| `release_tx_timestamp(request_id)` | Release a pending or completed timestamp request; return `Status`. |
 | `copy_buffer_to_packet(burst, idx, data, nbytes=None, src_offset=0, dst_offset=0)` | Copy a Python buffer into segment 0. |
 | `copy_buffer_to_segment_packet(burst, seg, idx, data, nbytes=None, src_offset=0, dst_offset=0)` | Copy a Python buffer into a specific segment. |
 | `get_packet_bytes(burst, idx, nbytes=None, src_offset=0)` | Return `(Status, bytes)` from segment 0. |
