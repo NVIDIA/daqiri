@@ -49,7 +49,10 @@ std::atomic<bool> rdma_force_quit = false;
 namespace {
 
 constexpr std::array<detail::RdmaClientQueueAssignment, 1> kQueueOnInterfaceZero{{{0, 0}}};
+// DAQIRI-specific, versioned RDMA CM private_data markers.
+// UC identifies the transport so the server can reject RC/UC mismatches.
 constexpr char kUcConnectionTag[] = "DAQIRI-UC-1";
+// "DQU1": prefixes the client's QPN/QKey metadata needed for UD replies.
 constexpr uint32_t kUdConnectionTag = 0x44515531;
 static_assert(detail::first_available_rdma_client_queue(1, 1, kQueueOnInterfaceZero) == 0);
 static_assert(detail::first_available_rdma_client_queue(0, 2, kQueueOnInterfaceZero) == 1);
