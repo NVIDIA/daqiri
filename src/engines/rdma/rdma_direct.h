@@ -77,6 +77,9 @@ struct RdmaBurstCache {
   uint64_t rx_timestamp_ns = UINT64_MAX;
   uint64_t* rx_timestamps = nullptr;
   bool scheduled = false;
+  TxTimestampId* tx_timestamp_ids = nullptr;
+  uint16_t tx_timestamp_count = 0;
+  bool tx_timestamp_submitted = false;
 };
 static_assert(sizeof(BurstTransportHeader) <=
               ADV_NETWORK_HEADER_SIZE_BYTES - sizeof(RdmaBurstCache));
@@ -114,6 +117,13 @@ inline uint64_t* rdma_tx_timestamps(BurstParams* burst) {
 }
 inline uint64_t rdma_tx_time(BurstParams* burst, int index) {
   return rdma_burst_cache(burst).scheduled ? rdma_tx_timestamps(burst)[index] : 0;
+}
+
+inline TxTimestampId rdma_packet_tx_timestamp_id(BurstParams* burst, size_t packet) {
+  const auto& cache = rdma_burst_cache(burst);
+  return cache.tx_timestamp_ids && packet < cache.tx_timestamp_count
+             ? cache.tx_timestamp_ids[packet]
+             : INVALID_TX_TIMESTAMP_ID;
 }
 
 class RdmaDirectLease {

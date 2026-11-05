@@ -52,6 +52,9 @@ class SocketEngine : public Engine {
   uint32_t get_segment_packet_length(BurstParams* burst, int seg, int idx) override;
   FlowId get_packet_flow_id(BurstParams* burst, int idx) override;
   Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) override;
+  Status request_packet_tx_timestamp(BurstParams* burst, int idx, TxTimestampId* id) override;
+  Status get_packet_tx_timestamp(TxTimestampId id, uint64_t* timestamp_ns) override;
+  Status release_tx_timestamp(TxTimestampId id) override;
   void* get_packet_extra_info(BurstParams* burst, int idx) override;
 
   Status get_tx_packet_burst(BurstParams* burst) override;

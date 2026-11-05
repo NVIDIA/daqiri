@@ -200,6 +200,150 @@ Status RdmaEngine::get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t
   return Status::SUCCESS;
 }
 
+Status RdmaEngine::request_packet_tx_timestamp(BurstParams* burst, int idx, TxTimestampId* id) {
+  if (!id) return Status::NULL_PTR;
+  *id = INVALID_TX_TIMESTAMP_ID;
+  if (!burst) return Status::NULL_PTR;
+  auto& cache = rdma_burst_cache(burst);
+  if (cache.magic != RdmaBurstCache::kMagic || cache.engine != this || idx < 0 ||
+      static_cast<size_t>(idx) >= burst->transport_hdr.num_pkts ||
+      burst->transport_hdr.num_pkts > kRdmaBatch || !burst->pkts[0] || !burst->pkt_lens[0])
+    return Status::INVALID_PARAMETER;
+  const auto opcode = burst->transport_hdr.opcode;
+  if (opcode != RDMAOpCode::SEND && opcode != RDMAOpCode::RDMA_READ &&
+      opcode != RDMAOpCode::RDMA_WRITE && opcode != RDMAOpCode::RDMA_WRITE_IMM)
+    return Status::NOT_SUPPORTED;
+  const auto conn_id = get_connection_id(burst);
+  auto store = [&](rdma_thread_params* params) {
+    if (rdma_force_quit.load(std::memory_order_relaxed) || params->ready_to_exit.load())
+      return Status::NOT_READY;
+    if (!params->qp_params.tx_cq_ex) return Status::NOT_SUPPORTED;
+    if (cache.tx_timestamp_submitted ||
+        (cache.tx_timestamp_ids && cache.tx_timestamp_count != burst->transport_hdr.num_pkts))
+      return Status::INVALID_PARAMETER;
+    std::lock_guard<std::mutex> guard(tx_timestamp_mutex_);
+    if (rdma_packet_tx_timestamp_id(burst, idx) != INVALID_TX_TIMESTAMP_ID)
+      return Status::ALREADY_EXISTS;
+    if (tx_timestamp_requests_.size() >= kMaxTxTimestampRequests) return Status::NO_SPACE_AVAILABLE;
+    const auto next = detail::next_tx_timestamp_id();
+    if (next == INVALID_TX_TIMESTAMP_ID) return Status::NO_SPACE_AVAILABLE;
+    if (!cache.tx_timestamp_ids) {
+      auto [it, inserted] = tx_timestamp_bursts_.emplace(
+          burst,
+          std::vector<TxTimestampId>(burst->transport_hdr.num_pkts, INVALID_TX_TIMESTAMP_ID));
+      cache.tx_timestamp_ids = it->second.data();
+      cache.tx_timestamp_count = it->second.size();
+    }
+    tx_timestamp_requests_.emplace(
+        next, TxTimestampRequest{conn_id, params, burst->transport_hdr.server});
+    cache.tx_timestamp_ids[idx] = *id = next;
+    return Status::SUCCESS;
+  };
+  if (auto* direct = find_direct(conn_id)) {
+    RdmaDirectLease lease(direct);
+    return lease ? store(direct->params) : Status::NOT_READY;
+  }
+  std::unique_lock<std::mutex> registry_lock(threads_mutex_);
+  const auto it = connection_params_.find(reinterpret_cast<rdma_cm_id*>(conn_id));
+  if (it == connection_params_.end()) return Status::NOT_READY;
+  auto* params = it->second;
+  std::unique_lock<std::mutex> progress_lock(params->progress_mutex);
+  registry_lock.unlock();
+  return store(params);
+}
+
+Status RdmaEngine::get_packet_tx_timestamp(TxTimestampId id, uint64_t* timestamp_ns) {
+  if (!timestamp_ns) return Status::NULL_PTR;
+  *timestamp_ns = 0;
+  TxTimestampRequest request;
+  {
+    std::lock_guard<std::mutex> guard(tx_timestamp_mutex_);
+    auto it = tx_timestamp_requests_.find(id);
+    if (it == tx_timestamp_requests_.end()) return Status::INVALID_PARAMETER;
+    if (it->second.status == Status::NOT_READY && rdma_force_quit.load(std::memory_order_relaxed))
+      it->second.status = Status::GENERIC_FAILURE;
+    request = it->second;
+  }
+  if (request.status == Status::NOT_READY) {
+    if (auto* direct = find_direct(request.connection_id)) {
+      RdmaDirectLease lease(direct);
+      if (direct->params != request.connection ||
+          (direct->gate.load(std::memory_order_acquire) & RdmaDirectState::kClosed)) {
+        finish_tx_timestamp(id, Status::GENERIC_FAILURE);
+      } else if (lease && !direct->params->ready_to_exit.load()) {
+        // Preserve normal completion delivery. A timestamp getter must not
+        // consume a CQE unless the ready array can hold every retired burst.
+        const auto pending = direct->sends_posted - direct->sends_completed;
+        const auto available = RdmaDirectState::kReady - (direct->ready_tail - direct->ready_head);
+        if (pending && pending <= available) poll_direct(*direct, true, request.server);
+      } else if (lease) {
+        finish_tx_timestamp(id, Status::GENERIC_FAILURE);
+      }
+    } else {
+      std::unique_lock<std::mutex> registry_lock(threads_mutex_);
+      const auto it = connection_params_.find(reinterpret_cast<rdma_cm_id*>(request.connection_id));
+      if (it == connection_params_.end() || it->second != request.connection) {
+        finish_tx_timestamp(id, Status::GENERIC_FAILURE);
+      } else {
+        auto* params = it->second;
+        std::unique_lock<std::mutex> progress_lock(params->progress_mutex);
+        registry_lock.unlock();
+        if (params->ready_to_exit.load()) {
+          finish_tx_timestamp(id, Status::GENERIC_FAILURE);
+        } else if (params->direct_tx) {
+          poll_completions(request.server, params, false, true);
+        }
+      }
+    }
+  }
+  std::lock_guard<std::mutex> guard(tx_timestamp_mutex_);
+  const auto it = tx_timestamp_requests_.find(id);
+  if (it == tx_timestamp_requests_.end()) return Status::INVALID_PARAMETER;
+  *timestamp_ns = it->second.timestamp_ns;
+  return it->second.status;
+}
+
+Status RdmaEngine::release_tx_timestamp(TxTimestampId id) {
+  std::lock_guard<std::mutex> guard(tx_timestamp_mutex_);
+  return tx_timestamp_requests_.erase(id) ? Status::SUCCESS : Status::INVALID_PARAMETER;
+}
+
+void RdmaEngine::finish_tx_timestamp(TxTimestampId id, Status status, uint64_t timestamp_ns) {
+  if (id == INVALID_TX_TIMESTAMP_ID) return;
+  std::lock_guard<std::mutex> guard(tx_timestamp_mutex_);
+  const auto it = tx_timestamp_requests_.find(id);
+  if (it != tx_timestamp_requests_.end() && it->second.status == Status::NOT_READY) {
+    it->second.status = status;
+    it->second.timestamp_ns = status == Status::SUCCESS ? timestamp_ns : 0;
+  }
+}
+
+void RdmaEngine::clear_burst_tx_timestamps(BurstParams* burst) {
+  auto& cache = rdma_burst_cache(burst);
+  if (cache.magic != RdmaBurstCache::kMagic || cache.engine != this || !cache.tx_timestamp_ids)
+    return;
+  std::lock_guard<std::mutex> guard(tx_timestamp_mutex_);
+  const auto ids = tx_timestamp_bursts_.find(burst);
+  if (ids != tx_timestamp_bursts_.end()) {
+    for (auto id : ids->second) {
+      const auto it = tx_timestamp_requests_.find(id);
+      if (it != tx_timestamp_requests_.end() && it->second.status == Status::NOT_READY)
+        it->second.status = Status::GENERIC_FAILURE;
+    }
+    tx_timestamp_bursts_.erase(ids);
+  }
+  cache.tx_timestamp_ids = nullptr;
+  cache.tx_timestamp_count = 0;
+  cache.tx_timestamp_submitted = false;
+}
+
+void RdmaEngine::fail_connection_tx_timestamps(rdma_thread_params* params) {
+  std::lock_guard<std::mutex> guard(tx_timestamp_mutex_);
+  for (auto& [id, request] : tx_timestamp_requests_)
+    if (request.connection == params && request.status == Status::NOT_READY)
+      request.status = Status::GENERIC_FAILURE;
+}
+
 uint32_t RdmaEngine::get_segment_packet_length(BurstParams* burst, int seg, int idx) {
   return burst->pkt_lens[seg][idx];
 }
@@ -453,21 +597,29 @@ int RdmaEngine::setup_thread_params(rdma_thread_params* params, bool is_server) 
   const int port_id = cfg_.ifs_[static_cast<int>(params->if_idx)].port_id_;
 
   DAQIRI_LOG_INFO("Creating RX and TX CQs for client ID {}", (void*)params->client_id);
-  // Accurate TX requires real-time format on both CQs. RX timestamps without
-  // accurate TX request both timestamp fields to retain legacy device format.
+  // Accurate TX requires real-time format on both CQs. Otherwise request both
+  // timestamp fields to retain the device format and provider epoch conversion.
   auto create_cq = [&](bool receive) -> ibv_cq* {
     const bool timestamps = receive && intf.rx_.hardware_timestamps_;
-    if (!params->accurate_send && !timestamps)
+    if (receive && !params->accurate_send && !timestamps)
       return verbs_->create_cq(params->client_id->verbs, MAX_CQ, nullptr, nullptr, 0);
     ibv_cq_init_attr_ex attr{};
     attr.cqe = MAX_CQ;
     attr.wc_flags = IBV_WC_EX_WITH_COMPLETION_TIMESTAMP_WALLCLOCK;
     if (timestamps) {
       attr.wc_flags |= IBV_WC_EX_WITH_BYTE_LEN | IBV_WC_EX_WITH_IMM;
-      if (!params->accurate_send) attr.wc_flags |= IBV_WC_EX_WITH_COMPLETION_TIMESTAMP;
     }
+    if (!params->accurate_send) attr.wc_flags |= IBV_WC_EX_WITH_COMPLETION_TIMESTAMP;
     auto* cq = verbs_->create_cq_ex(params->client_id->verbs, &attr);
     if (timestamps) qp_params.rx_cq_ex = cq;
+    if (!receive) {
+      qp_params.tx_cq_ex = cq;
+      // Timestamping is optional for ordinary TX. Unsupported providers retain
+      // the existing CQ path; requests explicitly report NOT_SUPPORTED.
+      if (!cq && !params->accurate_send &&
+          (errno == EOPNOTSUPP || errno == EINVAL || errno == ENOSYS))
+        return verbs_->create_cq(params->client_id->verbs, MAX_CQ, nullptr, nullptr, 0);
+    }
     return cq ? ibv_cq_ex_to_cq(cq) : nullptr;
   };
   qp_params.rx_cq = create_cq(true);
@@ -579,6 +731,7 @@ bool RdmaEngine::setup_ud_peer(rdma_thread_params* params, const rdma_ud_param& 
 }
 
 int RdmaEngine::destroy_thread_params(rdma_thread_params* params) {
+  fail_connection_tx_timestamps(params);
   DAQIRI_LOG_INFO("Destroying thread params for client {}", (void*)params->client_id);
   // First destroy the QP
   if (params->client_id->qp) {
@@ -598,6 +751,7 @@ int RdmaEngine::destroy_thread_params(rdma_thread_params* params) {
   if (params->qp_params.tx_cq) {
     verbs_->destroy_cq(params->qp_params.tx_cq);
     params->qp_params.tx_cq = nullptr;
+    params->qp_params.tx_cq_ex = nullptr;
   }
 
   if (params->qp_params.rx_cq) {
@@ -636,6 +790,7 @@ int RdmaEngine::destroy_thread_params(rdma_thread_params* params) {
   tx_rings_map_.erase(params->client_id);
   rx_rings_map_.erase(params->client_id);
   params->qp_params = {};
+  params->tx_timestamp_outstanding = 0;
 
   return 0;
 }
@@ -663,6 +818,9 @@ Status RdmaEngine::send_tx_burst(BurstParams* burst) {
 
   const auto conn_id = get_connection_id(burst);
   auto& cache = rdma_burst_cache(burst);
+  if (cache.tx_timestamp_ids &&
+      (cache.tx_timestamp_submitted || cache.tx_timestamp_count != burst->transport_hdr.num_pkts))
+    return Status::INVALID_PARAMETER;
   auto* direct = cache.magic == RdmaBurstCache::kMagic && cache.engine == this && cache.state &&
                          cache.state->connection_id == conn_id
                      ? cache.state
@@ -772,6 +930,9 @@ Status RdmaEngine::send_tx_burst(BurstParams* burst) {
     DAQIRI_LOG_CRITICAL("Failed to enqueue TX work");
     return Status::NO_SPACE_AVAILABLE;
   }
+
+  // The progress mutex prevents the worker from posting before this publication.
+  if (cache.tx_timestamp_ids) cache.tx_timestamp_submitted = true;
 
   return Status::SUCCESS;
 }
@@ -889,6 +1050,30 @@ int RdmaEngine::poll_rx_completion(rdma_thread_params* params, ibv_wc* wc, uint6
   return 1;
 }
 
+int RdmaEngine::poll_tx_completion(rdma_thread_params* params, ibv_wc* wc, uint64_t* timestamp_ns) {
+  *timestamp_ns = UINT64_MAX;
+  auto* cq = params->qp_params.tx_cq_ex;
+  if (!cq || params->tx_timestamp_outstanding == 0)
+    return verbs_->poll_cq(params->qp_params.tx_cq, 1, wc);
+  ibv_poll_cq_attr attr{};
+  const int result = verbs_->start_poll(cq, &attr);
+  if (result != 0) {
+    if (result != ENOENT) fail_connection_tx_timestamps(params);
+    return result == ENOENT ? 0 : -1;
+  }
+  *wc = {};
+  wc->wr_id = cq->wr_id;
+  wc->status = cq->status;
+  // Error CQEs define only wr_id and status, including flushed work requests.
+  if (wc->status == IBV_WC_SUCCESS) {
+    *timestamp_ns = verbs_->wc_read_completion_wallclock_ns(cq);
+    if (params->accurate_send)
+      *timestamp_ns = (*timestamp_ns >> 32) * 1000000000ULL + (*timestamp_ns & UINT32_MAX);
+  }
+  verbs_->end_poll(cq);
+  return 1;
+}
+
 void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, bool poll_rx,
                                   bool poll_tx) {
   ibv_wc wc{};
@@ -997,9 +1182,22 @@ void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, b
 
   auto complete_send_wrs = [&](uint64_t wr_id, Status status) -> bool {
     bool enqueue_failed = false;
+    const auto timestamp_work =
+        tparams->tx_timestamp_outstanding ? outstanding_send_wr_ids.find(wr_id) : std::nullopt;
     const bool found = outstanding_send_wr_ids.complete_through(
         wr_id, status != Status::SUCCESS,
         [&](BurstParams* completed, uint32_t packet, bool failed) {
+          const auto id = rdma_packet_tx_timestamp_id(completed, packet);
+          if (id != INVALID_TX_TIMESTAMP_ID) {
+            if (tparams->tx_timestamp_outstanding) --tparams->tx_timestamp_outstanding;
+            const bool exact = timestamp_work && timestamp_work->burst == completed &&
+                               timestamp_work->packet == packet;
+            finish_tx_timestamp(id,
+                                !failed && exact && timestamp_ns != UINT64_MAX
+                                    ? Status::SUCCESS
+                                    : Status::GENERIC_FAILURE,
+                                timestamp_ns);
+          }
           if (!failed) {
             metrics::add_tx(counters, 1, completed->pkt_lens[0][packet]);
           }
@@ -1023,7 +1221,7 @@ void RdmaEngine::poll_completions(bool is_server, rdma_thread_params* tparams, b
 
   // Check TX CQ for completion
   for (int polled = 0; poll_tx && polled < MAX_CQ; ++polled) {
-    num_comp = verbs_->poll_cq(tparams->qp_params.tx_cq, 1, &wc);
+    num_comp = poll_tx_completion(tparams, &wc, &timestamp_ns);
     if (num_comp <= 0) {
       break;
     }
@@ -1178,7 +1376,8 @@ Status RdmaEngine::post_burst(rdma_thread_params* tparams, BurstParams* burst) {
         // Signal every one-sided or multi-packet WR so partial posting can
         // always retire its buffers. Preserve single-packet SEND batching.
         const bool signal_send =
-            one_sided || burst->transport_hdr.num_pkts > 1 || send_signal_every == 1 ||
+            rdma_packet_tx_timestamp_id(burst, p) != INVALID_TX_TIMESTAMP_ID || one_sided ||
+            burst->transport_hdr.num_pkts > 1 || send_signal_every == 1 ||
             sends_since_signal + 1 >= send_signal_every || outstanding_send_wr_ids.size() >= 15;
         wr.send_flags = signal_send ? IBV_SEND_SIGNALED : 0;
         const auto kind = local_mr->second.params_.kind_;
@@ -1202,6 +1401,9 @@ Status RdmaEngine::post_burst(rdma_thread_params* tparams, BurstParams* burst) {
           if (caller_owned) {
             return Status::GENERIC_FAILURE;
           }
+          for (size_t unposted = p; unposted < burst->transport_hdr.num_pkts; ++unposted)
+            finish_tx_timestamp(rdma_packet_tx_timestamp_id(burst, unposted),
+                                Status::GENERIC_FAILURE);
           if (!posted_any) {
             burst->transport_hdr.tx = true;
             burst->transport_hdr.status = Status::GENERIC_FAILURE;
@@ -1214,6 +1416,10 @@ Status RdmaEngine::post_burst(rdma_thread_params* tparams, BurstParams* burst) {
           break;
         }
         posted_any = true;
+        if (rdma_packet_tx_timestamp_id(burst, p) != INVALID_TX_TIMESTAMP_ID) {
+          ++tparams->tx_timestamp_outstanding;
+          rdma_burst_cache(burst).tx_timestamp_submitted = true;
+        }
         if (wr.send_flags & IBV_SEND_INLINE) {
           ++tparams->inline_wqes;
         }
@@ -1438,6 +1644,7 @@ Status RdmaEngine::rdma_set_header(BurstParams* burst, RDMAOpCode op_code, uintp
   if (op_code != RDMAOpCode::RDMA_WRITE_IMM && immediate_data != 0) {
     return Status::INVALID_PARAMETER;
   }
+  clear_burst_tx_timestamps(burst);
   burst->transport_hdr.raddr = nullptr;
   burst->transport_hdr.dst_key = 0;
   burst->transport_hdr.imm = immediate_data;
@@ -2297,6 +2504,7 @@ void RdmaEngine::free_rx_burst(BurstParams* burst) {
 
 void RdmaEngine::free_tx_burst(BurstParams* burst) {
   if (burst == nullptr) { return; }
+  clear_burst_tx_timestamps(burst);
 
   auto* pool = burst_pool(burst);
   if (burst->transport_hdr.num_pkts > 0 && burst->pkts[0] != nullptr && pool != nullptr) {
@@ -2438,6 +2646,11 @@ void RdmaEngine::shutdown() {
       if (params.client_id) destroy_thread_params(&params);
     }
   }
+  {
+    std::lock_guard<std::mutex> guard(tx_timestamp_mutex_);
+    tx_timestamp_requests_.clear();
+    tx_timestamp_bursts_.clear();
+  }
 
   // Release the rings and pools (plain heap allocations now, no EAL memzones).
   while (!rx_rings_.empty()) {
@@ -2524,6 +2737,7 @@ void RdmaEngine::free_rx_metadata(BurstParams* burst) {
 
 void RdmaEngine::free_tx_metadata(BurstParams* burst) {
   if (burst == nullptr) { return; }
+  clear_burst_tx_timestamps(burst);
   reset_rdma_burst_metadata(burst);
   tx_meta->put(burst);
 }

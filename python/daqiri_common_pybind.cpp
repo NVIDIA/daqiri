@@ -1181,6 +1181,25 @@ PYBIND11_MODULE(_daqiri, m) {
       },
       "burst"_a, "idx"_a,
       "Return (Status, RX timestamp nanoseconds) for a packet");
+
+  m.def(
+      "request_packet_tx_timestamp",
+      [](BurstParams* burst, int idx) {
+        TxTimestampId id = INVALID_TX_TIMESTAMP_ID;
+        const auto status = request_packet_tx_timestamp(burst, idx, &id);
+        return py::make_tuple(status, id);
+      },
+      "burst"_a, "idx"_a, "Return (Status, request ID) before submitting a TX packet");
+  m.def(
+      "get_packet_tx_timestamp",
+      [](TxTimestampId id) {
+        uint64_t timestamp_ns = 0;
+        const auto status = get_packet_tx_timestamp(id, &timestamp_ns);
+        return py::make_tuple(status, timestamp_ns);
+      },
+      "id"_a, "Return (Status, NIC TX completion timestamp nanoseconds)");
+  m.def("release_tx_timestamp", &release_tx_timestamp, "id"_a,
+        "Release a pending or completed TX timestamp request");
   m.def("get_burst_tot_byte", &get_burst_tot_byte, "burst"_a);
   m.def("daqiri_write_raw_to_file", &daqiri_write_raw_to_file, "burst"_a,
         "absolute_path"_a, "file_prefix"_a, "packet_data_offset"_a,

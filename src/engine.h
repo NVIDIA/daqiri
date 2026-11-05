@@ -34,6 +34,11 @@ struct rte_pktmbuf_extmem;
 
 namespace daqiri {
 
+namespace detail {
+// Shared across engine instances so shutdown/reinitialization cannot reuse IDs.
+TxTimestampId next_tx_timestamp_id();
+}  // namespace detail
+
 // Apply the common semantic checks used before engine initialization. This path
 // does not allocate packet memory, initialize an engine, or access a NIC.
 bool validate_network_config(const NetworkConfig& config);
@@ -148,6 +153,20 @@ class Engine {
   virtual uint32_t get_segment_packet_length(BurstParams* burst, int seg, int idx) = 0;
   virtual FlowId get_packet_flow_id(BurstParams* burst, int idx) = 0;
   virtual Status get_packet_rx_timestamp(BurstParams* burst, int idx, uint64_t* timestamp_ns) = 0;
+  virtual Status request_packet_tx_timestamp(BurstParams* burst, int, TxTimestampId* id) {
+    if (id == nullptr) return Status::NULL_PTR;
+    *id = INVALID_TX_TIMESTAMP_ID;
+    if (burst == nullptr) return Status::NULL_PTR;
+    return Status::NOT_SUPPORTED;
+  }
+  virtual Status get_packet_tx_timestamp(TxTimestampId, uint64_t* timestamp_ns) {
+    if (timestamp_ns == nullptr) return Status::NULL_PTR;
+    *timestamp_ns = 0;
+    return Status::NOT_SUPPORTED;
+  }
+  virtual Status release_tx_timestamp(TxTimestampId) {
+    return Status::NOT_SUPPORTED;
+  }
   virtual void* get_packet_extra_info(BurstParams* burst, int idx) = 0;
   virtual Status get_tx_packet_burst(BurstParams* burst) = 0;
   // Engines with richer availability states can override this checked entrypoint.

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <optional>
 #include <unordered_map>
 
 namespace daqiri::detail {
@@ -20,6 +21,14 @@ inline bool rdma_range_valid(uint64_t address, uint64_t length, uint64_t base, u
 template <typename Burst>
 class RdmaWorkTracking {
  public:
+  struct Entry {
+    Burst* burst;
+    uint32_t packet;
+  };
+  std::optional<Entry> find(uint64_t id) const {
+    const auto it = entries_.find(id);
+    return it == entries_.end() ? std::nullopt : std::optional<Entry>(it->second);
+  }
   bool empty() const {
     return entries_.empty();
   }
@@ -67,10 +76,6 @@ class RdmaWorkTracking {
   }
 
  private:
-  struct Entry {
-    Burst* burst;
-    uint32_t packet;
-  };
   struct Pending {
     size_t count = 0;
     bool failed = false;

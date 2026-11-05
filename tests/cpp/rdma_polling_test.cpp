@@ -26,11 +26,13 @@ void require(bool value, const char* message) {
 
 struct FakeVerbs {
   ibv_cq rx{}, tx{};
-  ibv_cq_ex rx_ex{};
+  ibv_cq_ex rx_ex{}, tx_ex{};
   ibv_wc current_wc{};
   static constexpr uint64_t kTimestamp = 1780000000123456789ULL;
   bool timestamps = false, realtime_supported = true, fail_create_cq_ex = false;
   uint64_t rx_cq_flags = 0;
+  uint64_t tx_cq_flags = 0;
+  bool tx_timestamps_supported = true, fallback_tx = false;
   int poll_error = 0;
   unsigned ended_polls = 0;
   ibv_cq_ex timed_rx{}, timed_tx{};
@@ -45,6 +47,7 @@ struct FakeVerbs {
   uint64_t last_send_id = 0, last_receive_id = 0;
   unsigned last_flags = 0;
   int send_result = 0, recv_result = 0;
+  int fail_send_after = -1;
   uint32_t requested_inline = 0;
   int created_cqs = 0, destroyed_cqs = 0, fail_cq = -1;
   bool fail_qp = false;
@@ -115,7 +118,14 @@ struct FakeVerbs {
 
   static ibv_cq* create_cq(ibv_context*, int, void*, ibv_comp_channel*, int) {
     const int n = current->created_cqs++;
-    if (n == current->fail_cq) return nullptr;
+    if (n == current->fail_cq) {
+      errno = ENOMEM;
+      return nullptr;
+    }
+    if (current->fallback_tx) {
+      current->fallback_tx = false;
+      return &current->tx;
+    }
     return n % 2 == 0 ? &current->rx : &current->tx;
   }
   static ibv_cq_ex* create_cq_ex(ibv_context*, ibv_cq_init_attr_ex* attr) {
@@ -125,12 +135,24 @@ struct FakeVerbs {
     }
     current->wallclock_requested = !(attr->wc_flags & IBV_WC_EX_WITH_COMPLETION_TIMESTAMP);
     const int n = current->created_cqs++;
-    if (n == current->fail_cq) return nullptr;
+    if (n == current->fail_cq) {
+      errno = ENOMEM;
+      return nullptr;
+    }
+    if (n % 2 == 1) {
+      if (!current->tx_timestamps_supported) {
+        current->fallback_tx = true;
+        errno = EOPNOTSUPP;
+        return nullptr;
+      }
+      current->tx_cq_flags = attr->wc_flags;
+    }
     if (attr->wc_flags & IBV_WC_EX_WITH_BYTE_LEN) {
       current->timestamps = true;
       current->rx_cq_flags = attr->wc_flags;
     }
-    if (attr->wc_flags & IBV_WC_EX_WITH_COMPLETION_TIMESTAMP) return &current->rx_ex;
+    if (attr->wc_flags & IBV_WC_EX_WITH_COMPLETION_TIMESTAMP)
+      return n % 2 == 0 ? &current->rx_ex : &current->tx_ex;
     return n % 2 == 0 ? &current->timed_rx : &current->timed_tx;
   }
   static int destroy_cq(ibv_cq*) {
@@ -142,7 +164,8 @@ struct FakeVerbs {
   }
   static int start_poll(ibv_cq_ex* cq, ibv_poll_cq_attr*) {
     if (current->poll_error) return current->poll_error;
-    if (poll_cq(&current->rx, 1, &current->current_wc) == 0) return ENOENT;
+    const bool rx = cq == &current->rx_ex || cq == &current->timed_rx;
+    if (poll_cq(rx ? &current->rx : &current->tx, 1, &current->current_wc) == 0) return ENOENT;
     cq->wr_id = current->current_wc.wr_id;
     cq->status = current->current_wc.status;
     return 0;
@@ -166,13 +189,14 @@ struct FakeVerbs {
     require(current->current_wc.status == IBV_WC_SUCCESS, "read length on failed CQE");
     return current->current_wc.byte_len;
   }
-  static uint64_t read_timestamp(ibv_cq_ex*) {
+  static uint64_t read_timestamp(ibv_cq_ex* cq) {
     require(current->current_wc.status == IBV_WC_SUCCESS, "read timestamp on failed CQE");
     const uint64_t timestamp = kTimestamp + current->current_wc.wr_id;
     // Match mlx5: WALLCLOCK alone on a real-time-capable device exposes packed
     // seconds/nanoseconds; requesting raw ticks too selects provider conversion.
-    if (current->realtime_supported &&
-        !(current->rx_cq_flags & IBV_WC_EX_WITH_COMPLETION_TIMESTAMP)) {
+    const bool rx = cq == &current->rx_ex || cq == &current->timed_rx;
+    const auto flags = rx ? current->rx_cq_flags : current->tx_cq_flags;
+    if (current->realtime_supported && !(flags & IBV_WC_EX_WITH_COMPLETION_TIMESTAMP)) {
       return ((timestamp / 1000000000ULL) << 32) | (timestamp % 1000000000ULL);
     }
     return timestamp;
@@ -199,7 +223,8 @@ struct FakeVerbs {
   }
   static int poll_cq(ibv_cq* cq, int, ibv_wc* wc) {
     std::lock_guard<std::mutex> lock(current->mutex);
-    const bool rx = cq == &current->rx || cq == ibv_cq_ex_to_cq(&current->timed_rx);
+    const bool rx = cq == &current->rx || cq == ibv_cq_ex_to_cq(&current->rx_ex) ||
+                    cq == ibv_cq_ex_to_cq(&current->timed_rx);
     ++(rx ? current->rx_polls : current->tx_polls);
     auto& completions = rx ? current->rx_completions : current->tx_completions;
     if (completions.empty()) return 0;
@@ -225,7 +250,9 @@ struct FakeVerbs {
                   wr->wr.ud.remote_qkey == 654 && !(wr->send_flags & IBV_SEND_FENCE),
               "UD SEND lost its destination or used an RC fence");
     }
-    if (current->send_result) {
+    if (current->send_result &&
+        (current->fail_send_after < 0 ||
+         current->sends >= static_cast<unsigned>(current->fail_send_after))) {
       return current->send_result;
     }
     current->last_send_id = wr->wr_id;
@@ -317,7 +344,8 @@ class RdmaEnginePollingTestPeer {
  public:
   RdmaEnginePollingTestPeer(bool direct_rx, bool direct_tx, bool accurate_send = false,
                             bool timestamps = false, bool realtime_supported = true,
-                            RDMATransportMode transport = RDMATransportMode::RC)
+                            RDMATransportMode transport = RDMATransportMode::RC,
+                            bool tx_timestamps_supported = true)
       : params(engine.server_q_params_.try_emplace(&listener, 1).first->second[0]) {
     FakeVerbs::current = &fake;
     api.cm_create_event_channel = &FakeVerbs::create_channel;
@@ -334,6 +362,7 @@ class RdmaEnginePollingTestPeer {
     api.cm_accept = &FakeVerbs::accept;
     api.cm_reject = &FakeVerbs::reject;
     fake.realtime_supported = realtime_supported;
+    fake.tx_timestamps_supported = tx_timestamps_supported;
     api.create_cq = &FakeVerbs::create_cq;
     api.create_cq_ex = &FakeVerbs::create_cq_ex;
     api.start_poll = &FakeVerbs::start_poll;
@@ -408,7 +437,8 @@ class RdmaEnginePollingTestPeer {
         !timestamps || accurate_send || (fake.rx_cq_flags & IBV_WC_EX_WITH_COMPLETION_TIMESTAMP),
         "timestamp-enabled RX must retain the legacy TX CQ's device-clock format");
     require(fake.timed_qp == accurate_send && fake.wallclock_requested == accurate_send &&
-                fake.requested_send_wr == (accurate_send ? 2048u : 1024u) && fake.created_cqs == 2,
+                fake.requested_send_wr == (accurate_send ? 2048u : 1024u) &&
+                fake.created_cqs == (tx_timestamps_supported ? 2 : 3),
             "accurate SEND did not request a wall-clock CQ and WAIT capacity");
   }
 
@@ -432,6 +462,238 @@ class RdmaEnginePollingTestPeer {
     engine.initialized_ = false;
     Ring::free(tx_ring);
     Ring::free(rx_ring);
+  }
+
+  void tx_timestamps(bool server, RDMAOpCode operation, bool empty = false) {
+    engine.initialize_progress(server, &params);
+    engine.connection_params_[&id] = &params;
+    if (params.direct_rx && params.direct_tx)
+      require(engine.publish_direct(&params), "timestamp direct-state publication failed");
+    params.send_signal_every = 16;
+    const size_t count = params.direct_tx ? 1 : 3;
+    BurstParams burst{};
+    std::array<std::array<char, 64>, 3> data{};
+    std::array<void*, 3> pointers{data[0].data(), data[1].data(), data[2].data()};
+    std::array<uint64_t, kRdmaPacketMetadataBytes / sizeof(uint64_t)> metadata{};
+    auto* lengths = reinterpret_cast<uint32_t*>(metadata.data());
+    auto prepare = [&](RDMAOpCode opcode) {
+      require(engine.rdma_set_header(&burst, opcode, reinterpret_cast<uintptr_t>(&id), server,
+                                     count, 777, "data") == Status::SUCCESS,
+              "TX timestamp header failed");
+      burst.pkts[0] = pointers.data();
+      burst.pkt_lens[0] = lengths;
+      std::fill_n(lengths, count, empty ? 0 : 64);
+      burst.transport_hdr.raddr = reinterpret_cast<void*>(4096);
+      burst.transport_hdr.dst_key = 456;
+      burst.transport_hdr.remote_length = 4096;
+      burst.transport_hdr.remote_access = MEM_ACCESS_RDMA_READ | MEM_ACCESS_RDMA_WRITE;
+    };
+    auto submit = [&]() {
+      require(engine.send_tx_burst(&burst) == Status::SUCCESS, "timestamp submission failed");
+      BurstParams* pending = nullptr;
+      while (tx_ring->dequeue(reinterpret_cast<void**>(&pending)))
+        require(engine.post_burst(&params, pending) == Status::SUCCESS, "timestamp posting failed");
+    };
+    auto inject = [&](uint64_t wr_id, bool error = false) {
+      ibv_wc wc{};
+      wc.wr_id = wr_id;
+      wc.status = error ? IBV_WC_LOC_PROT_ERR : IBV_WC_SUCCESS;
+      wc.opcode = IBV_WC_SEND;
+      fake.tx_completions.push_back(wc);
+    };
+    auto progress = [&]() {
+      if (!params.direct_tx) engine.poll_completions(server, &params, false, true);
+    };
+    auto drain = [&]() {
+      BurstParams* result = nullptr;
+      require(engine.get_rx_burst(&result, reinterpret_cast<uintptr_t>(&id), server) ==
+                      Status::SUCCESS &&
+                  result == &burst && burst.transport_hdr.wr_id == 777,
+              "timestamp getter consumed or changed the normal completion");
+      require(params.tx_timestamp_outstanding == 0, "timestamp polling credits leaked");
+    };
+    prepare(operation);
+    TxTimestampId request = 999;
+    if (!params.qp_params.tx_cq_ex) {
+      require(engine.request_packet_tx_timestamp(&burst, 0, &request) == Status::NOT_SUPPORTED &&
+                  request == 0,
+              "provider without TX timestamps accepted a request");
+      return;
+    }
+    require(
+        engine.request_packet_tx_timestamp(nullptr, 0, &request) == Status::NULL_PTR &&
+            request == 0 &&
+            engine.request_packet_tx_timestamp(&burst, -1, &request) == Status::INVALID_PARAMETER &&
+            engine.request_packet_tx_timestamp(&burst, count, &request) ==
+                Status::INVALID_PARAMETER &&
+            engine.request_packet_tx_timestamp(&burst, 0, nullptr) == Status::NULL_PTR &&
+            engine.get_packet_tx_timestamp(0, nullptr) == Status::NULL_PTR,
+        "TX timestamp arguments were not checked");
+    const unsigned iterations = params.direct_rx && params.direct_tx &&
+                                        operation == RDMAOpCode::SEND && !params.accurate_send &&
+                                        !server
+                                    ? RdmaDirectState::kRequests + 4
+                                    : 3;
+    for (unsigned iteration = 0; iteration < iterations; ++iteration) {
+      prepare(operation);
+      std::array<TxTimestampId, 3> ids{};
+      for (size_t p = 0; p < count; ++p) {
+        if (p == 1) continue;
+        require(engine.request_packet_tx_timestamp(&burst, p, &ids[p]) == Status::SUCCESS,
+                "TX timestamp request failed");
+        uint64_t ns = 999;
+        require(engine.get_packet_tx_timestamp(ids[p], &ns) == Status::NOT_READY && ns == 0,
+                "unposted WR has a timestamp");
+      }
+      require(engine.request_packet_tx_timestamp(&burst, 0, &request) == Status::ALREADY_EXISTS &&
+                  request == 0,
+              "duplicate timestamp request accepted");
+      if (params.accurate_send) {
+        const auto when = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                              std::chrono::system_clock::now().time_since_epoch())
+                              .count() +
+                          100000000ULL;
+        require(engine.set_packet_tx_time(&burst, 0, when) == Status::SUCCESS,
+                "TX completion timestamp conflicted with scheduling");
+      }
+      submit();
+      require(fake.last_flags & IBV_SEND_SIGNALED, "requested WR was left unsignaled");
+      require(engine.request_packet_tx_timestamp(&burst, 0, &request) == Status::INVALID_PARAMETER,
+              "submitted WR accepted another timestamp request");
+      const auto first = fake.last_send_id - count + 1;
+      if (iteration == 1)
+        require(engine.release_tx_timestamp(ids[0]) == Status::SUCCESS, "pending release failed");
+      for (size_t p = 0; p < count; ++p) inject(first + p);
+      if (iteration == 0 && params.direct_state) {
+        auto& state = *params.direct_state;
+        const auto saved_tail = state.ready_tail;
+        state.ready_tail = state.ready_head + RdmaDirectState::kReady;
+        const auto queued = fake.tx_completions.size();
+        uint64_t ns = 999;
+        require(engine.get_packet_tx_timestamp(ids[0], &ns) == Status::NOT_READY && ns == 0 &&
+                    fake.tx_completions.size() == queued,
+                "timestamp getter consumed a CQE while normal completions were full");
+        state.ready_tail = saved_tail;
+      }
+      progress();
+      for (size_t p = 0; p < count; ++p) {
+        if (p == 1) continue;
+        uint64_t ns = 999;
+        const auto status = engine.get_packet_tx_timestamp(ids[p], &ns);
+        if (iteration == 1 && p == 0) {
+          require(status == Status::INVALID_PARAMETER && ns == 0, "released ID resurrected");
+        } else {
+          require(status == Status::SUCCESS && ns == FakeVerbs::kTimestamp + first + p,
+                  "TX timestamp did not match its exact CQE or clock representation");
+          uint64_t repeated = 0;
+          require(engine.get_packet_tx_timestamp(ids[p], &repeated) == Status::SUCCESS &&
+                      repeated == ns,
+                  "timestamp read consumed the result");
+          require(engine.release_tx_timestamp(ids[p]) == Status::SUCCESS,
+                  "timestamp release failed");
+        }
+      }
+      // A released direct request is progressed through the normal completion API.
+      drain();
+    }
+    prepare(operation);
+    require(engine.request_packet_tx_timestamp(&burst, 0, &request) == Status::SUCCESS,
+            "cancelled request setup failed");
+    prepare(operation);  // Reusing the header cancels the previous unsent request.
+    uint64_t ns = 999;
+    require(engine.get_packet_tx_timestamp(request, &ns) == Status::GENERIC_FAILURE && ns == 0,
+            "reused header retained a pending timestamp");
+    require(engine.release_tx_timestamp(request) == Status::SUCCESS, "cancelled release failed");
+    require(engine.request_packet_tx_timestamp(&burst, 0, &request) == Status::SUCCESS,
+            "error request setup failed");
+    submit();
+    const auto first = fake.last_send_id - count + 1;
+    for (size_t p = 0; p < count; ++p) inject(first + p, p == 0);
+    progress();
+    require(engine.get_packet_tx_timestamp(request, &ns) == Status::GENERIC_FAILURE && ns == 0,
+            "error CQE yielded a timestamp");
+    drain();
+    require(engine.release_tx_timestamp(request) == Status::SUCCESS, "failed release failed");
+    prepare(operation);
+    require(engine.request_packet_tx_timestamp(&burst, 0, &request) == Status::SUCCESS,
+            "poll-error request failed");
+    submit();
+    fake.poll_error = EIO;
+    const auto ended = fake.ended_polls;
+    progress();
+    require(engine.get_packet_tx_timestamp(request, &ns) == Status::GENERIC_FAILURE && ns == 0 &&
+                fake.ended_polls == ended,
+            "TX poll error left a pending timestamp or ended an inactive poll");
+    fake.poll_error = 0;
+    const auto poll_error_first = fake.last_send_id - count + 1;
+    for (size_t p = 0; p < count; ++p) inject(poll_error_first + p);
+    progress();
+    drain();
+    require(engine.release_tx_timestamp(request) == Status::SUCCESS, "poll-error release failed");
+    if (params.direct_tx) {
+      prepare(operation);
+      require(engine.request_packet_tx_timestamp(&burst, 0, &request) == Status::SUCCESS,
+              "retry request setup failed");
+      fake.send_result = ENOMEM;
+      require(engine.send_tx_burst(&burst) == Status::GENERIC_FAILURE &&
+                  engine.get_packet_tx_timestamp(request, &ns) == Status::NOT_READY && ns == 0,
+              "failed direct post consumed its timestamp request");
+      fake.send_result = 0;
+      submit();
+      inject(fake.last_send_id);
+      require(engine.get_packet_tx_timestamp(request, &ns) == Status::SUCCESS &&
+                  ns == FakeVerbs::kTimestamp + fake.last_send_id,
+              "retry lost the requested timestamp");
+      drain();
+      engine.release_tx_timestamp(request);
+    }
+    if (!params.direct_tx) {
+      prepare(operation);
+      TxTimestampId first_id = 0, last_id = 0;
+      require(engine.request_packet_tx_timestamp(&burst, 0, &first_id) == Status::SUCCESS &&
+                  engine.request_packet_tx_timestamp(&burst, 2, &last_id) == Status::SUCCESS,
+              "partial-post requests failed");
+      fake.fail_send_after = fake.sends.load() + 1;
+      fake.send_result = ENOMEM;
+      submit();
+      fake.send_result = 0;
+      fake.fail_send_after = -1;
+      require(engine.get_packet_tx_timestamp(last_id, &ns) == Status::GENERIC_FAILURE && ns == 0 &&
+                  engine.get_packet_tx_timestamp(first_id, &ns) == Status::NOT_READY,
+              "partial posting confused posted and unposted requests");
+      inject(fake.last_send_id);
+      progress();
+      require(engine.get_packet_tx_timestamp(first_id, &ns) == Status::SUCCESS &&
+                  ns == FakeVerbs::kTimestamp + fake.last_send_id,
+              "partial posting lost a successfully transmitted WR's timestamp");
+      drain();
+      require(burst.transport_hdr.status == Status::GENERIC_FAILURE,
+              "partial posting changed the batch's completion status");
+      engine.release_tx_timestamp(first_id);
+      engine.release_tx_timestamp(last_id);
+    }
+    prepare(RDMAOpCode::RECEIVE);
+    require(engine.request_packet_tx_timestamp(&burst, 0, &request) == Status::NOT_SUPPORTED,
+            "RECEIVE accepted a TX timestamp request");
+    prepare(operation);
+    if (operation == RDMAOpCode::SEND && !server && !params.direct_rx && !params.direct_tx &&
+        !params.accurate_send && !fake.timestamps && fake.realtime_supported) {
+      for (size_t i = 0; i < RdmaEngine::kMaxTxTimestampRequests; ++i)
+        engine.tx_timestamp_requests_.emplace((uint64_t{1} << 63) + i,
+                                              RdmaEngine::TxTimestampRequest{});
+      require(
+          engine.request_packet_tx_timestamp(&burst, 0, &request) == Status::NO_SPACE_AVAILABLE &&
+              request == INVALID_TX_TIMESTAMP_ID,
+          "unbounded RDMA timestamp requests");
+      engine.tx_timestamp_requests_.clear();
+    }
+    require(engine.request_packet_tx_timestamp(&burst, 0, &request) == Status::SUCCESS,
+            "disconnect request setup failed");
+    engine.fail_connection_tx_timestamps(&params);
+    require(engine.get_packet_tx_timestamp(request, &ns) == Status::GENERIC_FAILURE && ns == 0,
+            "disconnect left a timestamp request pending");
+    engine.release_tx_timestamp(request);
+    prepare(operation);
   }
 
   void timestamp_errors() {
@@ -1107,6 +1369,7 @@ daqiri:
     std::array<void*, 2 * count> pointers{};
     std::array<uint32_t, 2 * count> lengths{};
     std::array<bool, 2 * count> seen{};
+    std::array<TxTimestampId, 2 * count> timestamp_ids{};
     std::array<uint64_t, 2 * count> data{};
     size_t completed = 0;
     for (size_t i = 0; i < bursts.size(); ++i) {
@@ -1118,6 +1381,9 @@ daqiri:
                              reinterpret_cast<uintptr_t>(&id), server, 1, 10000 + i, "data");
       burst.pkts[0] = &pointers[i];
       burst.pkt_lens[0] = &lengths[i];
+      if (!receive)
+        require(engine.request_packet_tx_timestamp(&burst, 0, &timestamp_ids[i]) == Status::SUCCESS,
+                "live-worker timestamp request failed");
       require(engine.send_tx_burst(&burst) == Status::SUCCESS, "concurrent submission failed");
       BurstParams* result = nullptr;
       while (engine.get_rx_burst(&result, reinterpret_cast<uintptr_t>(&id), server) ==
@@ -1146,6 +1412,14 @@ daqiri:
     }
     require(completed == bursts.size() && fake.sends == count && fake.receives == count,
             "caller and live worker did not complete all mixed-mode work");
+    for (size_t i = 1; i < bursts.size(); i += 2) {
+      uint64_t ns = 0;
+      require(engine.get_packet_tx_timestamp(timestamp_ids[i], &ns) == Status::SUCCESS &&
+                  ns == FakeVerbs::kTimestamp + i / 2 + 1,
+              "caller and live worker lost or mismatched a TX timestamp");
+      require(engine.release_tx_timestamp(timestamp_ids[i]) == Status::SUCCESS,
+              "live-worker timestamp release failed");
+    }
     params.ready_to_exit.store(true);
     for (auto& [id, thread] : engine.worker_threads_) thread.join();
     engine.worker_threads_.clear();
@@ -1591,6 +1865,18 @@ int main() {
                                                                  realtime_supported);
                   notification.immediate_timestamps(server);
                 }
+                for (auto operation :
+                     {daqiri::RDMAOpCode::SEND, daqiri::RDMAOpCode::RDMA_READ,
+                      daqiri::RDMAOpCode::RDMA_WRITE, daqiri::RDMAOpCode::RDMA_WRITE_IMM}) {
+                  daqiri::RdmaEnginePollingTestPeer transmit(rx, tx, accurate, timestamps,
+                                                             realtime_supported);
+                  transmit.tx_timestamps(server, operation);
+                }
+                {
+                  daqiri::RdmaEnginePollingTestPeer empty(rx, tx, accurate, timestamps,
+                                                          realtime_supported);
+                  empty.tx_timestamps(server, daqiri::RDMAOpCode::RDMA_WRITE_IMM, true);
+                }
                 daqiri::RdmaEnginePollingTestPeer test(rx, tx, accurate, timestamps,
                                                        realtime_supported);
                 test.timestamp_errors();
@@ -1607,6 +1893,12 @@ int main() {
         }
       }
     }
+    for (bool rx : {false, true})
+      for (bool tx : {false, true}) {
+        daqiri::RdmaEnginePollingTestPeer unsupported(rx, tx, false, false, true,
+                                                      daqiri::RDMATransportMode::RC, false);
+        unsupported.tx_timestamps(false, daqiri::RDMAOpCode::SEND);
+      }
     std::cout << "PASS: RDMA direct/indirect RX/TX, inline selection, and completions\n";
     return 0;
   } catch (const std::exception& error) {

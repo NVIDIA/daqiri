@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <array>
+#include <cerrno>
 #include <cstring>
 #include <endian.h>
 #include <iostream>
@@ -9,6 +10,7 @@
 #include <string>
 
 #include "src/engines/ibverbs/daqiri_ibverbs_engine.h"
+#include "src/rdma/raw_api.h"
 
 namespace daqiri {
 namespace {
@@ -21,6 +23,199 @@ void require(bool condition, const char* message) {
 // CQ, and doorbell memory. No NIC, GPU, CUDA context, or verbs calls are needed.
 class IbverbsEngineTxTestPeer {
  public:
+  static void tx_timestamps(int segments, bool endpoint, bool direct, bool scheduled,
+                            bool realtime) {
+    IbverbsEngine engine;
+    engine.max_batch_ = 4;
+    engine.cfg_.rx_meta_buffers_ = engine.cfg_.tx_meta_buffers_ = 8;
+    require(engine.initialize_burst_pools(), "timestamp metadata setup failed");
+    detail::RawVerbsApi verbs{};
+    verbs.dv_get_clock_info = [](ibv_context*, mlx5dv_clock_info*) { return 0; };
+    verbs.dv_ts_to_ns = [](mlx5dv_clock_info*, uint64_t ticks) { return ticks + 1000; };
+    engine.verbs_ = &verbs;
+    IbvTxQueue q;
+    q.port_id = q.queue_id = 0;
+    q.state = ResourceState::ACTIVE;
+    q.poll_mode = direct ? QueuePollMode::DIRECT : QueuePollMode::INDIRECT;
+    q.accurate_send = realtime;
+    q.send_scheduling = scheduled;
+    q.empw_enabled = true;  // Requests must bypass packing, even on a capable NIC.
+    q.num_slots = 8;
+    q.num_segs = segments;
+    q.send_ring = Ring::create("timestamp_test", 8, RingMode::SPSC);
+    engine.tx_queue_table_[0][0].store(&q);
+    alignas(64) std::array<uint8_t, 32 * 64> sq{};
+    alignas(64) std::array<uint8_t, 512> bf{};
+    alignas(64) std::array<mlx5_cqe64, 8> cq{};
+    std::array<uint32_t, 2> sq_db{};
+    uint32_t cq_db = 0;
+    for (auto& cqe : cq) cqe.op_own = MLX5_CQE_INVALID << 4;
+    q.dv_qp.sq.buf = sq.data();
+    q.dv_qp.sq.wqe_cnt = 32;
+    q.dv_qp.sq.stride = 64;
+    q.dv_qp.dbrec = sq_db.data();
+    q.dv_qp.bf.reg = bf.data();
+    q.dv_qp.bf.size = 256;
+    q.dv_txcq.buf = cq.data();
+    q.dv_txcq.cqe_cnt = cq.size();
+    q.dv_txcq.cqe_size = sizeof(mlx5_cqe64);
+    q.dv_txcq.dbrec = &cq_db;
+    q.sq_capacity_wqebbs = 32;
+    q.sq_pi = q.sq_completed = 65534;  // Exercise SQ, CQ, and 16-bit counter wraps.
+    q.wqe_slot_cum.resize(32);
+    q.wqe_wqebb_cum.resize(32);
+    q.wqe_timestamp_ids.resize(32);
+    std::array<std::array<uint8_t, 8 * 128>, MAX_NUM_SEGS> storage{};
+    for (int s = 0; s < segments; ++s)
+      q.regions.push_back({storage[s].data(), static_cast<uint32_t>(0x100 + s), 128});
+    auto allocate = [&]() {
+      auto* burst = engine.create_tx_burst_params();
+      require(burst != nullptr, "timestamp burst allocation failed");
+      burst->hdr.hdr.port_id = burst->hdr.hdr.q_id = 0;
+      burst->hdr.hdr.num_pkts = direct ? 1 : 3;
+      require(engine.get_tx_packet_burst(burst) == Status::SUCCESS, "packet allocation failed");
+      for (int s = 0; s < segments; ++s)
+        for (size_t i = 0; i < burst->hdr.hdr.num_pkts; ++i) burst->pkt_lens[s][i] = 42;
+      return burst;
+    };
+    auto inject_completion = [&](uint64_t wqe, uint64_t raw, bool error = false) {
+      const auto ci = q.tx_cq_ci;
+      auto& cqe = cq[ci & 7];
+      cqe.op_own = ((error ? MLX5_CQE_REQ_ERR : MLX5_CQE_REQ) << 4) | ((ci & 8) ? 1 : 0);
+      cqe.wqe_counter = htobe16(static_cast<uint16_t>(wqe));
+      cqe.timestamp = htobe64(raw);
+    };
+    for (unsigned iteration = 0; iteration < 40; ++iteration) {
+      auto* burst = allocate();
+      const int packets = burst->hdr.hdr.num_pkts;
+      std::array<TxTimestampId, 3> ids{};
+      uint64_t ns = 999;
+      for (int i = 0; i < packets; ++i) {
+        if (i == 1) continue;  // An untracked packet between two tracked sends.
+        require(engine.request_packet_tx_timestamp(burst, i, &ids[i]) == Status::SUCCESS,
+                "timestamp request failed");
+        require(engine.get_packet_tx_timestamp(ids[i], &ns) == Status::NOT_READY && ns == 0,
+                "unposted packet has a timestamp");
+      }
+      TxTimestampId duplicate = 999;
+      require(engine.request_packet_tx_timestamp(burst, 0, &duplicate) == Status::ALREADY_EXISTS &&
+                  duplicate == 0,
+              "duplicate request accepted");
+      if (scheduled)
+        require(engine.set_packet_tx_time(burst, 0, 123456789) == Status::SUCCESS,
+                "schedule assignment failed");
+      if (endpoint) {
+        IbverbsEngine::EndpointFastPath destination;
+        destination.mtu = 1500;
+        require(engine.prepare_endpoint_tx_burst(q, destination, burst) == Status::SUCCESS,
+                "timestamp endpoint preparation failed");
+      }
+      const uint32_t blocks = endpoint ? (segments == 4 ? 3 : 2) : (segments > 2 ? 2 : 1);
+      require(engine.tx_burst_wqebbs(q, burst) == blocks * packets + (scheduled ? 1 : 0),
+              "timestamp requests did not bypass eMPW SQ accounting");
+      const uint64_t first_send = q.sq_pi + (scheduled ? 1 : 0);
+      // Release while in flight must not affect a later request or transmission.
+      if (iteration == 1)
+        require(engine.release_tx_timestamp(ids[0]) == Status::SUCCESS,
+                "pending timestamp release failed");
+      require(engine.send_tx_burst(burst) == Status::SUCCESS, "timestamp send failed");
+      if (!direct) {
+        void* raw = nullptr;
+        require(q.send_ring->dequeue(&raw), "missing timestamp handoff");
+        engine.post_tx_burst(q, static_cast<BurstParams*>(raw));
+        engine.tx_meta_pool_->put(raw);
+      }
+      // The production send path has already recycled the burst metadata.
+      for (int i = 0; i < packets; ++i) {
+        if (i == 1) continue;
+        const uint64_t wqe = first_send + blocks * i;
+        const auto* ctrl = reinterpret_cast<mlx5_wqe_ctrl_seg*>(sq.data() + (wqe & 31) * 64);
+        require((be32toh(ctrl->opmod_idx_opcode) & 0xff) == MLX5_OPCODE_SEND &&
+                    ctrl->fm_ce_se == MLX5_WQE_CTRL_CQ_UPDATE,
+                "timestamp packet did not get its own signaled SEND");
+        const uint64_t raw = realtime ? (uint64_t{100} << 32) | (42 + i) : 100 + i;
+        inject_completion(wqe, raw);
+        if (!direct) engine.poll_tx_completions(q);
+        const auto status = engine.get_packet_tx_timestamp(ids[i], &ns);
+        if (iteration == 1 && i == 0) {
+          // Explicitly drain a direct CQ when querying a released ID cannot poll it.
+          if (direct) engine.poll_tx_completions(q);
+          require(status == Status::INVALID_PARAMETER && ns == 0, "released ID resurrected");
+        } else {
+          require(status == Status::SUCCESS && ns == (realtime ? 100000000042ULL + i : 1100 + i),
+                  "CQE timestamp conversion/correlation failed");
+          uint64_t repeated = 0;
+          require(engine.get_packet_tx_timestamp(ids[i], &repeated) == Status::SUCCESS &&
+                      repeated == ns,
+                  "timestamp read consumed the result");
+          require(engine.release_tx_timestamp(ids[i]) == Status::SUCCESS, "release failed");
+        }
+      }
+      require(q.completed_tail.load() == q.alloc_head, "timestamp sends leaked credits");
+    }
+    // Cancellation, capacity exhaustion, and invalid arguments never yield success.
+    auto* burst = allocate();
+    TxTimestampId id = 999;
+    require(engine.request_packet_tx_timestamp(nullptr, 0, &id) == Status::NULL_PTR && id == 0,
+            "null burst accepted");
+    require(
+        engine.request_packet_tx_timestamp(burst, -1, &id) == Status::INVALID_PARAMETER && id == 0,
+        "negative packet index accepted");
+    require(engine.request_packet_tx_timestamp(burst, 0, nullptr) == Status::NULL_PTR,
+            "null ID output accepted");
+    require(engine.get_packet_tx_timestamp(0, nullptr) == Status::NULL_PTR,
+            "null timestamp output accepted");
+    if (!realtime) {
+      verbs.dv_get_clock_info = [](ibv_context*, mlx5dv_clock_info*) { return EOPNOTSUPP; };
+      require(engine.request_packet_tx_timestamp(burst, 0, &id) == Status::NOT_SUPPORTED,
+              "unavailable clock accepted");
+      verbs.dv_get_clock_info = [](ibv_context*, mlx5dv_clock_info*) { return 0; };
+    }
+    for (size_t i = 0; i < IbverbsEngine::kMaxTxTimestampRequests; ++i)
+      engine.tx_timestamp_requests_.emplace(1000000 + i, IbverbsEngine::TxTimestampRequest{&q});
+    require(
+        engine.request_packet_tx_timestamp(burst, 0, &id) == Status::NO_SPACE_AVAILABLE && id == 0,
+        "unbounded timestamp requests");
+    engine.tx_timestamp_requests_.clear();
+    require(engine.request_packet_tx_timestamp(burst, 0, &id) == Status::SUCCESS,
+            "request capacity did not recover");
+    engine.free_all_packets(burst);
+    engine.free_tx_burst(burst);
+    uint64_t ns = 999;
+    require(engine.get_packet_tx_timestamp(id, &ns) == Status::GENERIC_FAILURE && ns == 0,
+            "cancelled packet has a timestamp");
+    require(engine.release_tx_timestamp(id) == Status::SUCCESS, "cancelled release failed");
+    // A CQE error also fails requests which have not produced their CQEs yet.
+    burst = allocate();
+    require(engine.request_packet_tx_timestamp(burst, 0, &id) == Status::SUCCESS,
+            "error-case request failed");
+    engine.fail_queue_tx_timestamps(q);
+    require(engine.get_packet_tx_timestamp(id, &ns) == Status::GENERIC_FAILURE,
+            "queue removal left request pending");
+    engine.free_all_packets(burst);
+    engine.free_tx_burst(burst);
+    require(engine.release_tx_timestamp(id) == Status::SUCCESS, "failed release failed");
+    burst = allocate();
+    require(engine.request_packet_tx_timestamp(burst, 0, &id) == Status::SUCCESS,
+            "CQ-error request failed");
+    const auto error_wqe = q.sq_pi;
+    require(engine.send_tx_burst(burst) == Status::SUCCESS, "CQ-error send failed");
+    if (!direct) {
+      void* raw = nullptr;
+      require(q.send_ring->dequeue(&raw), "missing CQ-error handoff");
+      engine.post_tx_burst(q, static_cast<BurstParams*>(raw));
+      engine.tx_meta_pool_->put(raw);
+    }
+    inject_completion(error_wqe, (uint64_t{100} << 32) | 42, true);
+    engine.poll_tx_completions(q);
+    require(engine.get_packet_tx_timestamp(id, &ns) == Status::GENERIC_FAILURE && ns == 0,
+            "error CQE was reported as a successful transmit");
+    require(engine.release_tx_timestamp(id) == Status::SUCCESS, "CQ-error release failed");
+    engine.tx_queue_table_[0][0].store(nullptr);
+    Ring::free(q.send_ring);
+    q.send_ring = nullptr;
+  }
+
   static void gathered_send(int segments, bool endpoint, bool direct, bool wait) {
     IbverbsEngine engine;
     IbvTxQueue q;
@@ -188,6 +383,7 @@ class IbverbsEngineTxTestPeer {
     q.num_slots = 4;
     q.state = ResourceState::ACTIVE;
     q.shared_tx = std::make_unique<detail::SharedTxState>();
+    q.accurate_send = true;
     q.shared_tx->ledger.resize(4);
     q.send_ring = Ring::create("shared_test", 8, RingMode::SPSC);
     engine.tx_queue_table_[0][0].store(&q);
@@ -219,6 +415,7 @@ class IbverbsEngineTxTestPeer {
     q.sq_capacity_wqebbs = 32;
     q.wqe_slot_cum.resize(32);
     q.wqe_wqebb_cum.resize(32);
+    q.wqe_timestamp_ids.resize(32);
     IbverbsEngine::EndpointFastPath destination;
     destination.mtu = 1500;
     auto allocate = [&]() {
@@ -245,6 +442,7 @@ class IbverbsEngineTxTestPeer {
       const uint32_t ci = q.tx_cq_ci;
       cq[ci & 7].op_own = (ci & 8) ? 1 : 0;
       cq[ci & 7].wqe_counter = htobe16(static_cast<uint16_t>(wqe));
+      cq[ci & 7].timestamp = htobe64((uint64_t{100} << 32) | 42);
       engine.poll_tx_completions(q);
     };
     const uint32_t mask = 1u << (segments - 1);
@@ -308,8 +506,14 @@ class IbverbsEngineTxTestPeer {
         std::memset(original->pkts[seg][0], 0x30 + seg, original->pkt_lens[seg][0]);
       }
       auto* payload = original->pkts[segments - 1][0];
+      TxTimestampId original_id = 0, clone_id = 0;
+      require(engine.request_packet_tx_timestamp(original, 0, &original_id) == Status::SUCCESS,
+              "shared timestamp request failed");
       BurstParams* second = nullptr;
       require(engine.clone_tx_burst(original, mask, &second) == Status::SUCCESS, "clone failed");
+      require(engine.request_packet_tx_timestamp(second, 0, &clone_id) == Status::SUCCESS &&
+                  clone_id != original_id,
+              "clone inherited source timestamp request");
       require(second->pkts[segments - 1][0] == payload, "clone copied shared payload");
       for (int seg = 0; seg + 1 < segments; ++seg) {
         require(second->pkts[seg][0] != original->pkts[seg][0], "private header aliases source");
@@ -345,12 +549,25 @@ class IbverbsEngineTxTestPeer {
         BurstParams* third = nullptr;
         require(engine.clone_tx_burst(second, mask, &third) == Status::SUCCESS,
                 "clone of retained storage failed");
-        post(second);
+        const auto second_wqe = post(second);
         const auto last = post(third);
-        complete(last);  // Retire both sends with one cumulative completion.
+        complete(second_wqe);  // A requested packet's timestamp needs its own CQE.
+        complete(last);        // Retire the remaining send and its shared references.
       }
       require(q.shared_tx->idle_storage(), "storage reference leaked");
       require(q.completed_tail.load() == q.alloc_head, "send credits leaked");
+      uint64_t ns = 999;
+      require(engine.get_packet_tx_timestamp(original_id, &ns) ==
+                      (iteration % 2 == 0 ? Status::SUCCESS : Status::GENERIC_FAILURE) &&
+                  ns == (iteration % 2 == 0 ? 100000000042ULL : 0),
+              "shared source timestamp did not survive recycling/cancellation");
+      require(engine.get_packet_tx_timestamp(clone_id, &ns) ==
+                      (iteration % 2 == 0 ? Status::GENERIC_FAILURE : Status::SUCCESS) &&
+                  ns == (iteration % 2 == 0 ? 0 : 100000000042ULL),
+              "shared clone timestamp correlated with wrong send");
+      require(engine.release_tx_timestamp(original_id) == Status::SUCCESS &&
+                  engine.release_tx_timestamp(clone_id) == Status::SUCCESS,
+              "shared timestamp release failed");
     }
     // A failed clone unwinds every allocation/retain, including private headers.
     auto* original = allocate();
@@ -392,12 +609,21 @@ class IbverbsEngineTxTestPeer {
     BurstParams *b = nullptr, *c = nullptr;
     require(engine.clone_tx_burst(a, mask, &b) == Status::SUCCESS, "admission clone failed");
     require(engine.clone_tx_burst(a, mask, &c) == Status::SUCCESS, "second admission clone failed");
+    TxTimestampId rejected_id = 0;
+    require(engine.request_packet_tx_timestamp(c, 0, &rejected_id) == Status::SUCCESS,
+            "admission timestamp request failed");
     require(engine.send_tx_burst(a) == Status::SUCCESS, "first admission failed");
     require(
         engine.clone_tx_burst(a, mask, &invalid) == Status::INVALID_PARAMETER && invalid == nullptr,
         "accepted burst remained cloneable");
     require(engine.send_tx_burst(b) == Status::SUCCESS, "second admission failed");
     require(engine.send_tx_burst(c) == Status::NO_SPACE_AVAILABLE, "send-credit limit ignored");
+    uint64_t rejected_ns = 999;
+    require(engine.get_packet_tx_timestamp(rejected_id, &rejected_ns) == Status::GENERIC_FAILURE &&
+                rejected_ns == 0,
+            "admission rejection left a timestamp pending");
+    require(engine.release_tx_timestamp(rejected_id) == Status::SUCCESS,
+            "rejected request release failed");
     require(q.shared_tx->pools.back()->available() == 0, "rejection freed admitted payload");
     void* raw = nullptr;
     require(q.send_ring->dequeue(&raw), "missing admitted send");
@@ -557,6 +783,13 @@ class IbverbsEngineTxTestPeer {
 
 int main() {
   try {
+    for (int segments : {1, 4})
+      for (bool endpoint : {false, true})
+        for (bool direct : {false, true})
+          for (bool scheduled : {false, true})
+            for (bool realtime : {false, true})
+              daqiri::IbverbsEngineTxTestPeer::tx_timestamps(segments, endpoint, direct, scheduled,
+                                                             realtime);
     for (int segments = 1; segments <= daqiri::MAX_NUM_SEGS; ++segments) {
       for (bool endpoint : {false, true}) {
         for (bool direct : {false, true}) {
