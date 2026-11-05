@@ -757,8 +757,12 @@ configuration. Scheduled transmission is invalid if the clocks are not PTP-synch
 ### Transmit Completion Timestamps
 
 Raw ibverbs supports requesting a hardware TX completion timestamp for an
-individual packet. No YAML option is needed. After acquiring packet buffers,
-request the timestamp before submitting the burst:
+individual packet. This timestamp provides the most accurate estimate of when the packet 
+went on the wire. It differs from the accurate TX timestamp provided by the user in that 
+the accurate TX timestamp is the desired timestamp, while the completion timestamp is the 
+actual timestamp. Due to factors like scheduling delays and fixed latencies in the NIC, 
+the completion timestamp is always later than the desired timestamp. No YAML option is needed. 
+After acquiring packet buffers, request the timestamp before submitting the burst:
 
 ```cpp
 #include <chrono>
