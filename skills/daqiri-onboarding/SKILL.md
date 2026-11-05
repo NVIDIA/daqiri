@@ -32,6 +32,7 @@ When a prompt exists, read it and the documents it requests before beginning. Fo
 
 ## Example requests
 
+- “Use $daqiri-onboarding to generate and validate a configuration for this checkout.”
 - “Onboard me to DAQIRI.”
 - “Explain GPUDirect before we start.”
 - “Generate and validate a raw Ethernet config for this machine.”
