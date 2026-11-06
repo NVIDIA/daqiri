@@ -143,7 +143,6 @@ done
 The following complete example uses both PCIe attachments concurrently, with
 p0 transmitting to p1 through the cable. Replace the illustrated PCI/MAC values
 with the lookup results and choose available CPU cores (`lscpu -e=CPU,MAXMHZ`).
-Host-pinned memory also works when GB10 DMA-BUF export is unavailable.
 
 ```bash
 python3 scripts/gen_daqiri_config.py raw-pair \
