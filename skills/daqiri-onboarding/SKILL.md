@@ -1,5 +1,6 @@
 ---
 name: daqiri-onboarding
+license: Apache-2.0
 description: Guide DAQIRI setup, configuration generation, first benchmarks, concept questions, and first-run troubleshooting. Use for getting started, resuming setup, choosing raw Ethernet versus UDP/TCP or RoCE, validating a configuration, or explicitly running an available customer demo.
 ---
 
