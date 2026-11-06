@@ -13,6 +13,7 @@ from .profiles import (
     RawPairSpec,
     SocketPairSpec,
     generate_raw_pair,
+    generate_raw_pairs,
     generate_raw_roles,
     generate_socket_pair,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "SocketPairSpec",
     "apply_overrides",
     "generate_raw_pair",
+    "generate_raw_pairs",
     "generate_raw_roles",
     "generate_socket_pair",
     "load_document",

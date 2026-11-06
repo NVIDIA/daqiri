@@ -25,6 +25,7 @@ from daqiri_config import (
     RawPairSpec,
     SocketPairSpec,
     generate_raw_pair,
+    generate_raw_pairs,
     generate_raw_roles,
     generate_socket_pair,
     render_document,
@@ -87,6 +88,16 @@ def generated_matrix() -> dict[str, dict[str, Any]]:
             documents[f"raw-{engine}-{transform}"] = generate_raw_pair(
                 _raw_spec(engine=engine, transform=transform)
             )
+
+    for engine in ("dpdk", "ibverbs"):
+        for include_benchmark in (True, False):
+            documents[f"raw-{engine}-two-pairs-{include_benchmark}"] = generate_raw_pairs([
+                _raw_spec(engine=engine, include_benchmark=include_benchmark),
+                _raw_spec(engine=engine, include_benchmark=include_benchmark,
+                          tx_address="0002:01:00.0", rx_address="0002:01:00.1",
+                          tx_queue_cores=(10,), rx_queue_cores=(11,),
+                          tx_worker_cores=(12,), rx_worker_cores=(13,)),
+            ])
 
     for tx_count, rx_count in ((1, 1), (1, 2), (2, 1), (2, 2)):
         documents[f"raw-mq-{tx_count}x{rx_count}"] = generate_raw_pair(

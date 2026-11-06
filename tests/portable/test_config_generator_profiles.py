@@ -10,6 +10,7 @@ from scripts.daqiri_config import (
     RawPairSpec,
     SocketPairSpec,
     generate_raw_pair,
+    generate_raw_pairs,
     generate_raw_roles,
     generate_socket_pair,
     render_document,
@@ -291,3 +292,72 @@ def test_production_profiles_do_not_require_benchmark_worker_cores() -> None:
         )
     )
     assert all(not any(key.startswith("socket_bench") for key in doc) for doc in socket.values())
+
+
+@pytest.mark.parametrize("engine", ["dpdk", "ibverbs"])
+@pytest.mark.parametrize("include_benchmark", [True, False])
+def test_multiple_raw_pairs_references_and_determinism(engine, include_benchmark):
+    specs = [
+        raw_spec(engine=engine, include_benchmark=include_benchmark),
+        raw_spec(
+            engine=engine, include_benchmark=include_benchmark,
+            tx_address="0002:01:00.0", rx_address="0002:01:00.1",
+            eth_src_addr="02:00:00:00:00:03", eth_dst_addr="02:00:00:00:00:04",
+            tx_queue_cores=(10, 11), rx_queue_cores=(12, 13),
+            tx_worker_cores=(14, 15), rx_worker_cores=(16, 17),
+        ),
+    ]
+    document = generate_raw_pairs(specs)
+    assert render_document(document) == render_document(generate_raw_pairs(specs))
+    assert render_document(generate_raw_pairs(specs[:1])) == render_document(generate_raw_pair(specs[0]))
+    config = document["daqiri"]["cfg"]
+    regions = {region["name"] for region in config["memory_regions"]}
+    assert len(regions) == len(config["memory_regions"]) == 6
+    interfaces = {interface["name"]: interface for interface in config["interfaces"]}
+    assert len(interfaces) == 4
+    flow_ids = [flow["id"] for interface in interfaces.values()
+                for flow in interface.get("rx", {}).get("flows", [])]
+    assert len(set(flow_ids)) == len(flow_ids)
+    for interface in interfaces.values():
+        direction = "tx" if "tx" in interface else "rx"
+        queues = interface[direction]["queues"]
+        assert all(set(queue["memory_regions"]) <= regions for queue in queues)
+        if direction == "rx":
+            assert all(flow["action"]["id"] in {q["id"] for q in queues}
+                       for flow in interface[direction]["flows"])
+    if include_benchmark:
+        for direction in ("tx", "rx"):
+            assert len(document[f"bench_{direction}"]) == 3
+            for entry in document[f"bench_{direction}"]:
+                interface = interfaces[entry["interface_name"]]
+                assert entry["queue_id"] in {q["id"] for q in interface[direction]["queues"]}
+        assert document["bench_tx"][1]["eth_dst_addr"] == "02:00:00:00:00:04"
+        assert document["bench_tx"][1]["cpu_core"] == 14
+    else:
+        assert set(document) == {"daqiri"}
+
+
+@pytest.mark.parametrize("overrides,error", [
+    ({}, "duplicate interface"),
+    ({"master_core": 9}, "master_core must be shared"),
+    ({"engine": "dpdk"}, "engine must be shared"),
+    ({"include_benchmark": False}, "include_benchmark must be shared"),
+    ({"tx_address": " "}, "non-empty string"),
+])
+def test_multiple_raw_pairs_reject_ambiguous_topology(overrides, error):
+    with pytest.raises(ConfigError, match=error):
+        generate_raw_pairs([raw_spec(), raw_spec(**overrides)])
+    with pytest.raises(ConfigError, match="at least one"):
+        generate_raw_pairs([])
+
+
+def test_multiple_raw_pairs_preserve_case_sensitive_interface_names():
+    document = generate_raw_pairs([raw_spec(tx_address="PortA", rx_address="porta")])
+    assert [interface["address"] for interface in document["daqiri"]["cfg"]["interfaces"]] == [
+        "PortA", "porta",
+    ]
+
+
+def test_multiple_raw_pairs_reject_duplicate_pci_addresses_ignoring_case():
+    with pytest.raises(ConfigError, match="duplicate interface address"):
+        generate_raw_pairs([raw_spec(tx_address="0000:AB:00.0", rx_address="0000:ab:00.0")])
